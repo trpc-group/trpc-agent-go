@@ -34,7 +34,7 @@ CGO_ENABLED=1 TRPC_AGENT_REPLAY_REPORT_PATH="$PWD/replay-report.json" \
 1. `single_turn`：一条 user event 和一条 assistant event。
 2. `multi_turn`：按顺序追加三轮 user/assistant 对话。
 3. `tool_call_and_response`：工具调用、JSON 参数、工具响应和 tool-call-args extension。
-4. `state_update_overwrite_delete`：App、User State 删除，以及 Session State 更新、覆盖和显式 null。
+4. `state_update_overwrite_delete`：App、User State 的写入与删除（残留键参与比较），以及 Session State 更新、覆盖和显式 null。
 5. `session_state_direct_round_trip`：不依赖 Event，直接创建、覆盖并读回 Session State。
 6. `memory_search_order_and_score`：检索事实与情景 Memory，并比较 rank 和量化后的 score。
 7. `memory_update_and_delete`：持久化更新与删除语义。
@@ -48,24 +48,25 @@ CGO_ENABLED=1 TRPC_AGENT_REPLAY_REPORT_PATH="$PWD/replay-report.json" \
 
 ## 归一化与报告
 
-框架克隆 Session 后再归一化事件。自动生成的 event、invocation 与 tool-call ID 会映射为稳定别名；时间戳、request ID 和响应创建时间会被移除。StateDelta、工具参数与响应、extensions 和 Track payload 均按保留数字精度的 JSON 解码。
+框架克隆 Session 后再归一化事件。自动生成的 event、invocation、tool-call 与 request ID 会映射为稳定别名，空值和相等关系（如 request ID 分组）保持可观测；时间戳和响应创建时间会被移除。同一快照内重复出现的 event 或 memory ID 会列入 `duplicate_ids`，单侧重复持久化缺陷不会被相同别名掩盖。StateDelta、工具参数与响应、extensions 和 Track payload 均按保留数字精度的 JSON 解码。State 比较覆盖 Session、App（`app_state`）和 User（`user_state`）三个作用域。
 
 Memory 默认保留后端读取顺序，以及 `rank`、六位小数量化后的 `score`、App/User 作用域、内容和元数据，稳定 ID 在归一化后分配。只有场景契约明确不关心顺序时，Case 才可设置 `UnorderedMemories`；此时按语义排序，并将 rank 设为 `-1`。并发事件 case 可显式设置 `OrderEventsByTimestamp`，用输入中的逻辑时间恢复确定顺序。
 
 Summary 快照报告 App、User 和 Session 归属，map 与 boundary filter-key、边界是否存在及版本、正文与主题，以及更新时间、截断时间和 `LastEventID` 对应的 event 下标。Track 快照保留 track name、事件顺序与规范化载荷，只移除配置为易变的 duration、latency 等字段。
 
-`CaseReport.capabilities` 保存各后端完整能力表。不支持的内置 section 不会被捕获或参与语义比较，但必须填写原因。能力健康度以当前 case 为边界：既非当前 case 必需能力、也未导致当前 case 跳过的 unsupported capability 不会使报告失败；被跳过的必需能力必须显式设置 `allowed_diff: true`，否则报告不健康。
+`CaseReport.capabilities` 保存各后端完整能力表。不支持的内置 section 不会被捕获或参与语义比较，但必须填写原因；当任一侧仍持有内容时，被跳过的 section 会记录为一条 allowed 提示性 diff，保证缺失的比较在报告中可见。能力健康度以当前 case 为边界：既非当前 case 必需能力、也未导致当前 case 跳过的 unsupported capability 不会使报告失败；被跳过的必需能力必须显式设置 `allowed_diff: true`，否则报告不健康。
 
-每个公开 Case 通过 `RequiredCapabilities` 声明执行所必需的能力。Harness 要求所有后端显式填写这些 capability；漏填会直接报错，而不是沿用默认支持并产生假通过。基准后端必须支持全部必需能力；对比后端若显式 unsupported，则不执行该 case，并把能力名写入 `skipped_backends`。若没有任何候选后端实际完成比较，报告设置 `inconclusive: true`，`HasUnexpectedDiff` 不会把它当成健康结果。像 `event_state_delta_null` 这样仍需运行后观察差异的细粒度语义不列为硬前置能力。
+每个公开 Case 通过 `RequiredCapabilities` 声明执行所必需的能力。Harness 要求所有后端显式填写这些 capability；漏填会直接报错，而不是沿用默认支持并产生假通过。基准后端必须支持全部必需能力；对比后端若显式 unsupported，则不执行该 case，并把能力名写入 `skipped_backends`。若没有任何候选后端实际完成比较，报告设置 `inconclusive: true`。inconclusive 是与 `HasUnexpectedDiff` 相互独立的结果——后者只报告非白名单差异和未授权的跳过，矩阵测试对两者分别断言。像 `event_state_delta_null` 这样仍需运行后观察差异的细粒度语义不列为硬前置能力。
 
 子能力可以描述 section 内的部分语义，而不跳过整个 section。`Event.StateDelta` 中的 nil 表示显式 JSON null（回放 tombstone），不是物理删除；真正删除键由 `Session.DeleteState` 完成。真实 Redis HashIdx 会保存该 null，但 miniredis 的 Lua/cjson 模拟会保留旧值，因此只有 `miniredis` fixture 将 `event_state_delta_null` 标记为 unsupported/allowed。State 继续完整参与比较，只在对应场景中精确允许 `$.state.remove_me` 和 `$.state.pending`；测试还要求两个差异实际出现，避免失效或过宽的白名单。
 
 缺失路径与显式 JSON `null` 不同。报告通过 `baseline_present` 和 `compared_present` 标记存在性：缺失侧写为 `{"missing": true}`，存在的 null 仍写为 `null`。
 
-`AllowedDiff` 必须指定双方后端、一个 section、一个精确路径和原因。通配符会被拒绝，路径也必须属于声明的 section。例如：
+`AllowedDiff` 必须指定其适用的 replay case、双方后端、一个 section、一个精确路径和原因。通配符会被拒绝，路径也必须属于声明的 section，且规则不会匹配其他 case 的差异，因此一个 Harness 可以安全地携带多个 case 的白名单。例如：
 
 ```go
 replaytest.AllowedDiff{
+	Case:     "track_status_and_error",
 	Section:  "tracks",
 	Path:     "$.tracks.tool[0].payload.backend_note",
 	BackendA: "inmemory",
@@ -73,6 +74,8 @@ replaytest.AllowedDiff{
 	Reason:   "SQLite exposes a backend-only diagnostic note",
 }
 ```
+
+零值 `Normalizer` 在所有入口（`Normalize`、`Capture`、`Harness.Run`）都会应用 `DefaultNormalizer()`；如需关闭易变字段剥离，显式传入非 nil 的空 `VolatilePayloadKeys` map。
 
 ## 可选外部后端
 
@@ -97,4 +100,4 @@ PostgreSQL、MySQL 和 ClickHouse 使用对应表格变量和相同的测试名�
 
 ## 设计说明
 
-框架克隆 Session 后，将事件、StateDelta、工具参数、扩展和 Track 载荷解码为保留数字精度的 JSON，并把自动 ID 映射为稳定别名。Memory 默认保留顺序、rank、量化 score 和作用域，仅在 Case 声明无序时排序。Summary 比较归属、filter-key、边界版本和 event 下标；Track 保留名称、顺序及载荷，只移除耗时字段。allowed_diff 必须指定后端、section、精确路径和原因，并区分缺失与 null。能力表可跳过完整 section，也可记录部分语义并继续比较；外部服务未配置时逐项跳过。
+框架克隆 Session 后，将事件、StateDelta、工具参数、扩展和 Track 载荷解码为保留数字精度的 JSON，并把自动 ID 映射为稳定别名。Memory 默认保留顺序、rank、量化 score 和作用域，仅在 Case 声明无序时排序。Summary 比较归属、filter-key、边界版本和 event 下标；Track 保留名称、顺序及载荷，只移除耗时字段。allowed_diff 必须指定 case、后端、section、精确路径和原因，并区分缺失与 null。能力表可跳过完整 section，也可记录部分语义并继续比较；外部服务未配置时逐项跳过。

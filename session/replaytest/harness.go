@@ -21,6 +21,8 @@ import (
 )
 
 // Harness executes cases and compares every backend with the first backend.
+// Allowed rules only apply to the replay case named by their Case field, so
+// one Harness may be reused across cases with a combined rule list.
 type Harness struct {
 	Backends   []Backend
 	Normalizer Normalizer
@@ -52,9 +54,6 @@ func (h Harness) Run(ctx context.Context, replayCase Case) (CaseReport, error) {
 		return CaseReport{}, err
 	}
 	normalizer := h.Normalizer
-	if normalizer.VolatilePayloadKeys == nil {
-		normalizer = DefaultNormalizer()
-	}
 	report := CaseReport{
 		Name: replayCase.Name, SessionID: h.Backends[0].SessionKey.SessionID,
 		RequiredCapabilities: append([]string(nil), replayCase.RequiredCapabilities...),
@@ -156,26 +155,47 @@ func validateRequiredCapabilities(replayCase Case, backends []Backend) error {
 	return nil
 }
 
-// Capture loads and normalizes the replay-visible state of one backend.
+// Capture loads and normalizes the replay-visible state of one backend. It
+// reads the session and memory view, then records app-scope and user-scope
+// state through the session service so cross-backend regressions in those
+// scopes are compared as well. Backends may declare the app_state or
+// user_state capability unsupported to skip the corresponding section.
 func Capture(ctx context.Context, backend Backend, options CaptureOptions) (Snapshot, error) {
 	if err := validateBackend(backend); err != nil {
 		return Snapshot{}, err
-	}
-	normalizer := options.Normalizer
-	if normalizer.VolatilePayloadKeys == nil {
-		normalizer = DefaultNormalizer()
 	}
 	sess, memories, err := loadBackend(ctx, backend)
 	if err != nil {
 		return Snapshot{}, err
 	}
-	return normalizer.normalize(
+	snapshot, err := options.Normalizer.normalize(
 		sess,
 		memories,
 		backend.Capabilities,
 		options.OrderEventsByTimestamp,
 		options.UnorderedMemories,
 	)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if capabilitySupported(backend.Capabilities, CapabilityAppState) {
+		appState, err := backend.Session.ListAppStates(ctx, backend.SessionKey.AppName)
+		if err != nil {
+			return Snapshot{}, fmt.Errorf("capture app state from %s: %w", backend.Name, err)
+		}
+		snapshot.AppState = normalizeState(appState)
+	}
+	if capabilitySupported(backend.Capabilities, CapabilityUserState) {
+		userState, err := backend.Session.ListUserStates(ctx, session.UserKey{
+			AppName: backend.SessionKey.AppName,
+			UserID:  backend.SessionKey.UserID,
+		})
+		if err != nil {
+			return Snapshot{}, fmt.Errorf("capture user state from %s: %w", backend.Name, err)
+		}
+		snapshot.UserState = normalizeState(userState)
+	}
+	return snapshot, nil
 }
 
 // Supports reports whether a backend advertises one capability.
@@ -245,11 +265,12 @@ func cloneCapabilities(capabilities map[string]Capability) map[string]Capability
 	return result
 }
 
-// HasUnexpectedDiff reports whether a case contains a non-allowlisted mismatch.
+// HasUnexpectedDiff reports whether a case contains a non-allowlisted
+// mismatch or skipped a backend without an explicit allowance. An
+// inconclusive report is a separate outcome, not a diff: inspect
+// CaseReport.Inconclusive and CaseReport.SkippedBackends for it instead of
+// relying on this function.
 func HasUnexpectedDiff(report CaseReport) bool {
-	if report.Inconclusive {
-		return true
-	}
 	for _, diff := range report.Diffs {
 		if !diff.Allowed {
 			return true

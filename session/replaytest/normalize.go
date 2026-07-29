@@ -24,7 +24,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
-// Normalize builds a stable snapshot from one backend read.
+// Normalize builds a stable snapshot from one backend read. The snapshot
+// covers session-scope state only; Capture additionally records app-scope and
+// user-scope state read through the session service.
 func (n Normalizer) Normalize(sess *session.Session, memories []*memory.Entry, capabilities map[string]Capability) (Snapshot, error) {
 	return n.normalize(sess, memories, capabilities, false, false)
 }
@@ -39,6 +41,9 @@ func (n Normalizer) normalize(
 	if sess == nil {
 		return Snapshot{}, fmt.Errorf("session is nil")
 	}
+	if n.VolatilePayloadKeys == nil {
+		n = DefaultNormalizer()
+	}
 	sess = sess.Clone()
 	if orderEventsByTimestamp {
 		sort.SliceStable(sess.Events, func(i, j int) bool {
@@ -46,6 +51,7 @@ func (n Normalizer) normalize(
 		})
 	}
 	var events []map[string]any
+	var eventDuplicates []string
 	eventIDs := make(map[string]int)
 	for i := range sess.Events {
 		if sess.Events[i].ID != "" {
@@ -56,18 +62,20 @@ func (n Normalizer) normalize(
 	toolCalls := make(map[string]string)
 	eventAliases := make(map[string]string)
 	responseAliases := make(map[string]string)
+	requestAliases := make(map[string]string)
 	var err error
 	if capabilitySupported(capabilities, CapabilityEvents) {
-		events, err = n.normalizeEvents(
-			sess.Events, eventAliases, responseAliases, invocations, toolCalls,
+		events, eventDuplicates, err = n.normalizeEvents(
+			sess.Events, eventAliases, responseAliases, requestAliases, invocations, toolCalls,
 		)
 	}
 	if err != nil {
 		return Snapshot{}, err
 	}
 	var normalizedMemories []MemorySnapshot
+	var memoryDuplicates []string
 	if capabilitySupported(capabilities, CapabilityMemory) {
-		normalizedMemories, err = normalizeMemories(memories, unorderedMemories)
+		normalizedMemories, memoryDuplicates, err = normalizeMemories(memories, unorderedMemories)
 		if err != nil {
 			return Snapshot{}, err
 		}
@@ -80,6 +88,7 @@ func (n Normalizer) normalize(
 		Memories:    normalizedMemories,
 		Unsupported: unsupportedCapabilities(capabilities),
 	}
+	snapshot.DuplicateIDs = append(eventDuplicates, memoryDuplicates...)
 	if capabilitySupported(capabilities, CapabilityState) {
 		snapshot.State = normalizeState(sess.State)
 	}
@@ -92,26 +101,39 @@ func (n Normalizer) normalize(
 	return snapshot, nil
 }
 
+// normalizeEvents normalizes every event and reports the aliases of non-empty
+// raw event IDs that identify more than one event in this snapshot. Equal raw
+// IDs still share one alias so equality relationships remain comparable, and
+// the duplicate list keeps a within-snapshot collision observable.
 func (n Normalizer) normalizeEvents(
 	events []event.Event,
 	eventAliases map[string]string,
 	responseAliases map[string]string,
+	requestAliases map[string]string,
 	invocations map[string]string,
 	toolCalls map[string]string,
-) ([]map[string]any, error) {
+) ([]map[string]any, []string, error) {
 	result := make([]map[string]any, 0, len(events))
+	idOccurrences := make(map[string]int)
+	idOrder := make([]string, 0, len(events))
 	for i := range events {
 		raw, err := json.Marshal(events[i])
 		if err != nil {
-			return nil, fmt.Errorf("marshal event %d: %w", i, err)
+			return nil, nil, fmt.Errorf("marshal event %d: %w", i, err)
 		}
 		var value map[string]any
 		if err := decodeJSON(raw, &value); err != nil {
-			return nil, fmt.Errorf("decode event %d: %w", i, err)
+			return nil, nil, fmt.Errorf("decode event %d: %w", i, err)
+		}
+		if events[i].ID != "" {
+			if idOccurrences[events[i].ID] == 0 {
+				idOrder = append(idOrder, events[i].ID)
+			}
+			idOccurrences[events[i].ID]++
 		}
 		value["id"] = stableAliasOrEmpty(events[i].ID, eventAliases, "event")
 		delete(value, "timestamp")
-		delete(value, "requestID")
+		value["requestID"] = stableAliasOrEmpty(events[i].RequestID, requestAliases, "request")
 		delete(value, "created")
 		normalizeResponseMetadata(value, events[i].Response, responseAliases)
 		normalizeEventToolData(value, toolCalls)
@@ -132,7 +154,13 @@ func (n Normalizer) normalizeEvents(
 		normalizeKnownIdentifiers(value, invocations, toolCalls)
 		result = append(result, normalizeJSONMap(value, nil))
 	}
-	return result, nil
+	duplicates := make([]string, 0)
+	for _, rawID := range idOrder {
+		if idOccurrences[rawID] > 1 {
+			duplicates = append(duplicates, eventAliases[rawID])
+		}
+	}
+	return result, duplicates, nil
 }
 
 func normalizeResponseMetadata(
@@ -191,7 +219,9 @@ func normalizeBytes(raw []byte) any {
 	return string(raw)
 }
 
-func normalizeMemories(entries []*memory.Entry, unordered bool) ([]MemorySnapshot, error) {
+// normalizeMemories normalizes entries and reports the aliases of non-empty
+// raw memory IDs that identify more than one entry in this snapshot.
+func normalizeMemories(entries []*memory.Entry, unordered bool) ([]MemorySnapshot, []string, error) {
 	type normalizedMemory struct {
 		rawID    string
 		snapshot MemorySnapshot
@@ -199,10 +229,10 @@ func normalizeMemories(entries []*memory.Entry, unordered bool) ([]MemorySnapsho
 	normalized := make([]normalizedMemory, 0, len(entries))
 	for rank, entry := range entries {
 		if entry == nil {
-			return nil, fmt.Errorf("memory %d is nil", rank)
+			return nil, nil, fmt.Errorf("memory %d is nil", rank)
 		}
 		if entry.Memory == nil {
-			return nil, fmt.Errorf("memory %d content is nil", rank)
+			return nil, nil, fmt.Errorf("memory %d content is nil", rank)
 		}
 		item := MemorySnapshot{
 			AppName:      entry.AppName,
@@ -232,11 +262,26 @@ func normalizeMemories(entries []*memory.Entry, unordered bool) ([]MemorySnapsho
 	}
 	result := make([]MemorySnapshot, len(normalized))
 	aliases := make(map[string]string)
+	idOccurrences := make(map[string]int)
+	idOrder := make([]string, 0, len(normalized))
 	for i := range normalized {
 		normalized[i].snapshot.ID = stableAliasOrEmpty(normalized[i].rawID, aliases, "memory")
 		result[i] = normalized[i].snapshot
+		if normalized[i].rawID == "" {
+			continue
+		}
+		if idOccurrences[normalized[i].rawID] == 0 {
+			idOrder = append(idOrder, normalized[i].rawID)
+		}
+		idOccurrences[normalized[i].rawID]++
 	}
-	return result, nil
+	duplicates := make([]string, 0)
+	for _, rawID := range idOrder {
+		if idOccurrences[rawID] > 1 {
+			duplicates = append(duplicates, aliases[rawID])
+		}
+	}
+	return result, duplicates, nil
 }
 
 func normalizeMemoryScore(score float64) float64 {

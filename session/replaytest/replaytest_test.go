@@ -128,6 +128,54 @@ func TestNormalizerPreservesEventAndMemoryIdentity(t *testing.T) {
 			requireDiffAtPath(t, diffs, "$.memories[1].id")
 		})
 	}
+
+	duplicated := normalize([]string{"event-x", "event-x"}, []string{"memory-x", "memory-x"})
+	require.Equal(t, []string{"event-000", "memory-000"}, duplicated.DuplicateIDs)
+	diffs, err := Compare("identity", "baseline", "candidate", baseline, duplicated, nil)
+	require.NoError(t, err)
+	requireDiffAtPath(t, diffs, "$.duplicate_ids")
+}
+
+func TestNormalizerPreservesRequestGrouping(t *testing.T) {
+	normalize := func(requestIDs []string) Snapshot {
+		events := make([]event.Event, len(requestIDs))
+		for i, requestID := range requestIDs {
+			events[i] = event.Event{
+				ID: fmt.Sprintf("event-%d", i), Author: "assistant", RequestID: requestID,
+			}
+		}
+		sess := session.NewSession("app", "user", "request-grouping",
+			session.WithSessionEvents(events),
+		)
+		snapshot, err := DefaultNormalizer().Normalize(sess, nil, nil)
+		require.NoError(t, err)
+		return snapshot
+	}
+	requestID := func(snapshot Snapshot, index int) any { return snapshot.Events[index]["requestID"] }
+
+	baseline := normalize([]string{"request-a", "request-a", "request-b"})
+	require.Equal(t, "request-000", requestID(baseline, 0))
+	require.Equal(t, "request-000", requestID(baseline, 1))
+	require.Equal(t, "request-001", requestID(baseline, 2))
+
+	tests := []struct {
+		name string
+		ids  []string
+		want any
+	}{
+		{name: "missing request IDs", ids: []string{"request-a", "", ""}, want: ""},
+		{name: "merged request groups", ids: []string{"request-a", "request-a", "request-a"}, want: "request-000"},
+		{name: "split request groups", ids: []string{"request-a", "request-c", "request-d"}, want: "request-002"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			candidate := normalize(tt.ids)
+			require.Equal(t, tt.want, requestID(candidate, 2))
+			diffs, err := Compare("request grouping", "baseline", "candidate", baseline, candidate, nil)
+			require.NoError(t, err)
+			requireDiffAtPath(t, diffs, "$.events[2].requestID")
+		})
+	}
 }
 
 func TestNormalizerPreservesResponseIdentity(t *testing.T) {
@@ -379,7 +427,7 @@ func TestNormalizeMemoriesOrderedAndUnordered(t *testing.T) {
 		},
 	}
 
-	ordered, err := normalizeMemories(entries, false)
+	ordered, _, err := normalizeMemories(entries, false)
 	require.NoError(t, err)
 	require.Equal(t, []string{"z memory", "a memory"}, []string{ordered[0].Content, ordered[1].Content})
 	require.Equal(t, []int{0, 1}, []int{ordered[0].Rank, ordered[1].Rank})
@@ -389,13 +437,13 @@ func TestNormalizeMemoriesOrderedAndUnordered(t *testing.T) {
 	require.Equal(t, []string{"a", "z"}, ordered[0].Topics)
 
 	reversed := []*memory.Entry{entries[1], entries[0]}
-	orderedReversed, err := normalizeMemories(reversed, false)
+	orderedReversed, _, err := normalizeMemories(reversed, false)
 	require.NoError(t, err)
 	require.NotEqual(t, ordered, orderedReversed)
 
-	unordered, err := normalizeMemories(entries, true)
+	unordered, _, err := normalizeMemories(entries, true)
 	require.NoError(t, err)
-	unorderedReversed, err := normalizeMemories(reversed, true)
+	unorderedReversed, _, err := normalizeMemories(reversed, true)
 	require.NoError(t, err)
 	require.Equal(t, unordered, unorderedReversed)
 	for _, item := range unordered {
@@ -425,7 +473,7 @@ func TestNormalizeMemoryScore(t *testing.T) {
 		})
 	}
 
-	memories, err := normalizeMemories([]*memory.Entry{{
+	memories, _, err := normalizeMemories([]*memory.Entry{{
 		Score: 0.33333349, Memory: &memory.Memory{Memory: "rounded"},
 	}}, false)
 	require.NoError(t, err)
@@ -526,7 +574,7 @@ func TestNormalizeStateSkipsReservedTracksKey(t *testing.T) {
 func TestCompareAndAllowedDiffValidation(t *testing.T) {
 	left := Snapshot{SessionID: "s", State: map[string]any{"value": 1}, Memories: []MemorySnapshot{{ID: "memory-000", Content: "left"}}, Tracks: map[string][]TrackSnapshot{"tool": {{Track: "tool", Payload: map[string]any{"status": "ok"}}}}}
 	right := Snapshot{SessionID: "s", State: map[string]any{"value": 2}, Memories: []MemorySnapshot{{ID: "memory-000", Content: "right"}}, Tracks: map[string][]TrackSnapshot{"tool": {{Track: "tool", Payload: map[string]any{"status": "failed"}}}}}
-	rules := []AllowedDiff{{Section: "state", Path: "$.state.value", BackendA: "sqlite", BackendB: "inmemory", Reason: "documented conversion"}}
+	rules := []AllowedDiff{{Case: "case", Section: "state", Path: "$.state.value", BackendA: "sqlite", BackendB: "inmemory", Reason: "documented conversion"}}
 	diffs, err := Compare("case", "inmemory", "sqlite", left, right, rules)
 	require.NoError(t, err)
 	require.Len(t, diffs, 3)
@@ -534,10 +582,97 @@ func TestCompareAndAllowedDiffValidation(t *testing.T) {
 	require.Equal(t, "memory-000", diffs[0].MemoryID)
 	require.Equal(t, "tool", diffs[2].TrackName)
 
-	_, err = Compare("case", "a", "b", left, right, []AllowedDiff{{Section: "*", Path: "$.*", BackendA: "a", BackendB: "b", Reason: "broad"}})
+	_, err = Compare("case", "a", "b", left, right, []AllowedDiff{{Case: "case", Section: "*", Path: "$.*", BackendA: "a", BackendB: "b", Reason: "broad"}})
 	require.ErrorContains(t, err, "exact")
 	_, err = Compare("case", "a", "b", left, right, []AllowedDiff{{Section: "state"}})
 	require.ErrorContains(t, err, "requires")
+}
+
+func TestCompareScopesAllowedDiffToCase(t *testing.T) {
+	left := Snapshot{SessionID: "s", State: map[string]any{"value": int64(1)}}
+	right := Snapshot{SessionID: "s", State: map[string]any{"value": int64(2)}}
+	rule := AllowedDiff{
+		Case: "case-a", Section: "state", Path: "$.state.value",
+		BackendA: "x", BackendB: "y", Reason: "documented difference for case-a",
+	}
+	diffsA, err := Compare("case-a", "x", "y", left, right, []AllowedDiff{rule})
+	require.NoError(t, err)
+	require.Len(t, diffsA, 1)
+	require.True(t, diffsA[0].Allowed)
+
+	diffsB, err := Compare("case-b", "x", "y", left, right, []AllowedDiff{rule})
+	require.NoError(t, err)
+	require.Len(t, diffsB, 1)
+	require.False(t, diffsB[0].Allowed, "an allowance for case-a must not leak into case-b")
+
+	_, err = Compare("case-a", "x", "y", left, right, []AllowedDiff{{
+		Section: "state", Path: "$.state.value", BackendA: "x", BackendB: "y", Reason: "no case",
+	}})
+	require.ErrorContains(t, err, "requires case")
+}
+
+func TestZeroValueNormalizerIsConsistentAcrossEntryPoints(t *testing.T) {
+	ctx := context.Background()
+	sess := session.NewSession("app", "user", "zero-value")
+	sess.Tracks = map[session.Track]*session.TrackEvents{"tool": {
+		Track: "tool",
+		Events: []session.TrackEvent{{
+			Track: "tool", Payload: json.RawMessage(`{"status":"ok","duration_ms":12}`),
+		}},
+	}}
+	backend := Backend{
+		Name: "zero", Session: stubSessionService{sess: sess}, Memory: stubMemoryService{},
+		SessionKey: session.Key{AppName: "app", UserID: "user", SessionID: "zero-value"},
+	}
+	trackPayload := func(snapshot Snapshot) map[string]any {
+		return snapshot.Tracks["tool"][0].Payload.(map[string]any)
+	}
+
+	direct, err := Normalizer{}.Normalize(sess, nil, nil)
+	require.NoError(t, err)
+	captured, err := Capture(ctx, backend, CaptureOptions{})
+	require.NoError(t, err)
+	require.Equal(t, direct.Tracks, captured.Tracks)
+	require.NotContains(t, trackPayload(direct), "duration_ms",
+		"zero-value Normalize must apply the same default stripping as Capture")
+
+	keep := Normalizer{VolatilePayloadKeys: map[string]struct{}{}}
+	directKeep, err := keep.Normalize(sess, nil, nil)
+	require.NoError(t, err)
+	capturedKeep, err := Capture(ctx, backend, CaptureOptions{Normalizer: keep})
+	require.NoError(t, err)
+	require.Equal(t, directKeep.Tracks, capturedKeep.Tracks)
+	require.Equal(t, int64(12), trackPayload(directKeep)["duration_ms"],
+		"an explicit empty map disables volatile-key stripping")
+}
+
+func TestCaptureComparesAppAndUserState(t *testing.T) {
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "scopes"}
+	sess := session.NewSession("app", "user", "scopes")
+	makeBackend := func(name string, appState, userState session.StateMap) Backend {
+		return Backend{
+			Name: name, Session: stubSessionService{sess: sess, appState: appState, userState: userState},
+			Memory: stubMemoryService{}, SessionKey: key,
+		}
+	}
+	baseline := makeBackend("baseline",
+		session.StateMap{"tier": []byte(`"gold"`)}, session.StateMap{"region": []byte(`"sz"`)})
+	matching := makeBackend("matching",
+		session.StateMap{"tier": []byte(`"gold"`)}, session.StateMap{"region": []byte(`"sz"`)})
+	diverged := makeBackend("diverged",
+		session.StateMap{"tier": []byte(`"silver"`)}, session.StateMap{"region": []byte(`"gz"`)})
+	runCase := Case{Name: "scopes", Run: func(context.Context, Backend) error { return nil }}
+
+	healthy, err := (Harness{Backends: []Backend{baseline, matching}}).Run(ctx, runCase)
+	require.NoError(t, err)
+	require.False(t, HasUnexpectedDiff(healthy))
+
+	report, err := (Harness{Backends: []Backend{baseline, diverged}}).Run(ctx, runCase)
+	require.NoError(t, err)
+	require.True(t, HasUnexpectedDiff(report))
+	requireDiffAtPath(t, report.Diffs, "$.app_state.tier")
+	requireDiffAtPath(t, report.Diffs, "$.user_state.region")
 }
 
 func TestCompareMissingNullEventAndSpecialKeyContext(t *testing.T) {
@@ -636,15 +771,31 @@ func TestCompareIgnoresUnsupportedSections(t *testing.T) {
 
 	diffs, err := Compare("unsupported", "left", "right", left, right, nil)
 	require.NoError(t, err)
-	require.Empty(t, diffs)
+	require.Len(t, diffs, 5, "content-bearing skipped sections must stay visible")
+	for _, diff := range diffs {
+		require.True(t, diff.Allowed)
+		require.Equal(t, "$."+diff.Section, diff.Path)
+		require.Contains(t, diff.Explanation, "section not compared")
+		require.Contains(t, diff.Explanation, "left")
+	}
+
+	bothEmpty := Snapshot{SessionID: "session", Unsupported: left.Unsupported}
+	empty := Snapshot{SessionID: "session"}
+	diffs, err = Compare("silent", "left", "right", bothEmpty, empty, nil)
+	require.NoError(t, err)
+	require.Empty(t, diffs, "sections empty on both sides stay silent")
 
 	left.Unsupported = map[string]string{"custom": "not supported"}
 	diffs, err = Compare("custom", "left", "right", left, right, nil)
 	require.NoError(t, err)
 	require.NotEmpty(t, diffs)
+	for _, diff := range diffs {
+		require.False(t, diff.Allowed, "unknown capabilities must not silence real diffs")
+	}
 
 	expectedSections := map[string]string{
 		CapabilityEvents: "events", CapabilityState: "state",
+		CapabilityAppState: "app_state", CapabilityUserState: "user_state",
 		CapabilityMemory: "memories", CapabilitySummary: "summaries",
 		CapabilityTracks: "tracks", CapabilityEventStateDeltaNull: "", "custom": "",
 	}
@@ -684,7 +835,7 @@ func TestFineGrainedCapabilityRequiresExactAllowedDiff(t *testing.T) {
 	}))
 
 	rules := []AllowedDiff{{
-		Section: "state", Path: "$.state.pending",
+		Case: "recovery", Section: "state", Path: "$.state.pending",
 		BackendA: "inmemory", BackendB: "redis", Reason: reason,
 	}}
 	diffs, err = Compare("recovery", "inmemory", "redis", left, right, rules)
@@ -922,7 +1073,8 @@ func TestSnapshotCloneCaptureAndBackendValidation(t *testing.T) {
 			},
 		},
 	}))
-	require.True(t, HasUnexpectedDiff(CaseReport{Inconclusive: true}))
+	require.False(t, HasUnexpectedDiff(CaseReport{Inconclusive: true}),
+		"inconclusive is a separate outcome, not an unexpected diff")
 	require.True(t, HasUnexpectedDiff(CaseReport{
 		SkippedBackends: map[string][]string{"missing": {CapabilityTracks}},
 	}))
@@ -1130,7 +1282,8 @@ func TestLoadBackendAndHarnessErrorCases(t *testing.T) {
 	require.Zero(t, runs["b"])
 	require.Equal(t, []string{CapabilityEvents}, skippedReport.SkippedBackends["b"])
 	require.True(t, skippedReport.Inconclusive)
-	require.True(t, HasUnexpectedDiff(skippedReport))
+	require.False(t, HasUnexpectedDiff(skippedReport),
+		"an explicitly allowed skip is not an unexpected diff")
 	baselineUnsupported := append([]Backend(nil), skippedBackends...)
 	baselineUnsupported[0], baselineUnsupported[1] = baselineUnsupported[1], baselineUnsupported[0]
 	_, err = (Harness{Backends: baselineUnsupported}).Run(ctx, Case{
@@ -1166,7 +1319,7 @@ func TestLoadBackendAndHarnessErrorCases(t *testing.T) {
 		Backends:   backends,
 		Normalizer: Normalizer{VolatilePayloadKeys: map[string]struct{}{}},
 		Allowed: []AllowedDiff{{
-			Section: "*", Path: "$.*", BackendA: "a", BackendB: "b", Reason: "too broad",
+			Case: "compare-error", Section: "*", Path: "$.*", BackendA: "a", BackendB: "b", Reason: "too broad",
 		}},
 	}).Run(ctx, Case{Name: "compare-error", Run: runOK})
 	require.ErrorContains(t, err, "exact")
@@ -1254,8 +1407,10 @@ func requireDiffAtPath(t *testing.T, diffs []Diff, path string) Diff {
 
 type stubSessionService struct {
 	session.Service
-	sess *session.Session
-	err  error
+	sess      *session.Session
+	err       error
+	appState  session.StateMap
+	userState session.StateMap
 }
 
 func (s stubSessionService) GetSession(context.Context, session.Key, ...session.Option) (*session.Session, error) {
@@ -1266,6 +1421,20 @@ func (s stubSessionService) GetSession(context.Context, session.Key, ...session.
 		return nil, nil
 	}
 	return s.sess.Clone(), nil
+}
+
+func (s stubSessionService) ListAppStates(context.Context, string) (session.StateMap, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.appState, nil
+}
+
+func (s stubSessionService) ListUserStates(context.Context, session.UserKey) (session.StateMap, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.userState, nil
 }
 
 type stubMemoryService struct {

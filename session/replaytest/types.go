@@ -23,6 +23,8 @@ import (
 const (
 	CapabilityEvents              = "events"
 	CapabilityState               = "state"
+	CapabilityAppState            = "app_state"
+	CapabilityUserState           = "user_state"
 	CapabilityEventStateDeltaNull = "event_state_delta_null"
 	CapabilityMemory              = "memory"
 	CapabilitySummary             = "summary"
@@ -59,15 +61,18 @@ type Case struct {
 
 // Snapshot is the normalized, replay-visible state of one backend.
 type Snapshot struct {
-	SessionID   string                     `json:"session_id"`
-	AppName     string                     `json:"app_name"`
-	UserID      string                     `json:"user_id"`
-	Events      []map[string]any           `json:"events"`
-	State       map[string]any             `json:"state"`
-	Memories    []MemorySnapshot           `json:"memories"`
-	Summaries   map[string]SummarySnapshot `json:"summaries"`
-	Tracks      map[string][]TrackSnapshot `json:"tracks"`
-	Unsupported map[string]string          `json:"unsupported,omitempty"`
+	SessionID    string                     `json:"session_id"`
+	AppName      string                     `json:"app_name"`
+	UserID       string                     `json:"user_id"`
+	Events       []map[string]any           `json:"events"`
+	State        map[string]any             `json:"state"`
+	AppState     map[string]any             `json:"app_state"`
+	UserState    map[string]any             `json:"user_state"`
+	Memories     []MemorySnapshot           `json:"memories"`
+	Summaries    map[string]SummarySnapshot `json:"summaries"`
+	Tracks       map[string][]TrackSnapshot `json:"tracks"`
+	DuplicateIDs []string                   `json:"duplicate_ids,omitempty"`
+	Unsupported  map[string]string          `json:"unsupported,omitempty"`
 }
 
 // Clone returns a deep copy suitable for drift injection in tests.
@@ -127,8 +132,12 @@ type MissingValue struct {
 	Missing bool `json:"missing"`
 }
 
-// AllowedDiff documents one intentional backend difference.
+// AllowedDiff documents one intentional backend difference. Every rule is
+// bound to a single replay case: it only matches diffs whose Diff.Case equals
+// the rule's Case, so reusing one rule list across cases cannot let an
+// allowance leak into an unrelated case.
 type AllowedDiff struct {
+	Case     string `json:"case"`
 	Section  string `json:"section"`
 	Path     string `json:"path"`
 	BackendA string `json:"backend_a"`
@@ -175,6 +184,10 @@ type CaseReport struct {
 }
 
 // Normalizer configures volatile payload fields that have no replay semantics.
+// A nil VolatilePayloadKeys selects the DefaultNormalizer policy; a non-nil
+// map is used exactly as given, so an explicit empty map disables volatile-key
+// stripping. Every public entry point (Normalize, Capture, Harness.Run)
+// applies this rule, keeping the zero value consistent across call sites.
 type Normalizer struct {
 	VolatilePayloadKeys map[string]struct{}
 }

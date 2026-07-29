@@ -54,16 +54,21 @@ func (deterministicSummarizer) Metadata() map[string]any {
 
 func TestReplayConsistencyMatrix(t *testing.T) {
 	ctx := context.Background()
-	var reports []replaytest.CaseReport
-	for _, replayCase := range publicReplayCases(t) {
-		replayCase := replayCase
+	replayCases := publicReplayCases(t)
+	// Each subtest writes its own index, so the shared slice stays race-free
+	// even if subtests are later marked parallel.
+	reports := make([]replaytest.CaseReport, len(replayCases))
+	for i, replayCase := range replayCases {
+		i, replayCase := i, replayCase
 		t.Run(replayCase.Name, func(t *testing.T) {
 			backends := newReplayBackends(t, replayCase.Name)
 			harness := replaytest.Harness{Backends: backends, Normalizer: replaytest.DefaultNormalizer()}
 			report, err := harness.Run(ctx, replayCase)
 			require.NoError(t, err)
+			require.False(t, report.Inconclusive, "replay comparison was inconclusive: %+v", report)
+			require.Empty(t, report.SkippedBackends, "replay backends were skipped: %+v", report.SkippedBackends)
 			require.False(t, replaytest.HasUnexpectedDiff(report), "diffs: %+v", report.Diffs)
-			reports = append(reports, report)
+			reports[i] = report
 		})
 	}
 	if path := os.Getenv("TRPC_AGENT_REPLAY_REPORT_PATH"); path != "" {
@@ -375,9 +380,6 @@ func TestReplaySummaryBackendFaultsAreDetectedAfterNormalization(t *testing.T) {
 		{"overwrite", `$.summaries["agent/tool"].text`, replaySummaryFilter, "", func(sess *session.Session) {
 			sess.Summaries[replaySummaryFilter].Summary = "stale summary"
 		}},
-		{"wrong session ownership", `$.summaries["agent/tool"].session_id`, replaySummaryFilter, "wrong-session", func(sess *session.Session) {
-			sess.ID = "wrong-session"
-		}},
 		{"wrong filter key", `$.summaries["agent/tool"]`, replaySummaryFilter, "", func(sess *session.Session) {
 			summary := sess.Summaries[replaySummaryFilter]
 			delete(sess.Summaries, replaySummaryFilter)
@@ -422,6 +424,74 @@ func TestReplaySummaryBackendFaultsAreDetectedAfterNormalization(t *testing.T) {
 	}
 }
 
+func TestReplaySummaryForeignSessionAttachmentIsDetected(t *testing.T) {
+	ctx := context.Background()
+	backends := newReplayBackends(t, "summary-foreign-attachment")
+	for _, backend := range backends {
+		require.NoError(t, replaySummaryUpdate(ctx, backend))
+	}
+	// Seed a neighboring session whose one-event summary differs from the
+	// target session's four-event summary.
+	neighborKey := session.Key{
+		AppName: backends[0].SessionKey.AppName, UserID: backends[0].SessionKey.UserID, SessionID: "neighbor",
+	}
+	for _, backend := range backends {
+		neighbor, err := backend.Session.CreateSession(ctx, neighborKey, nil)
+		require.NoError(t, err)
+		neighborEvent := replayEvent("user", model.RoleUser, "neighbor turn")
+		neighborEvent.FilterKey = replaySummaryFilter
+		require.NoError(t, backend.Session.AppendEvent(ctx, neighbor, neighborEvent))
+		require.NoError(t, backend.Session.CreateSessionSummary(ctx, neighbor, replaySummaryFilter, true))
+	}
+
+	baseline, err := replaytest.Capture(ctx, backends[0], replaytest.CaptureOptions{})
+	require.NoError(t, err)
+	// A healthy backend never attaches the neighbor summary to the target session.
+	baselineText := baseline.Summaries[replaySummaryFilter].Text
+	require.NotEmpty(t, baselineText)
+	neighborSess, err := backends[1].Session.GetSession(ctx, neighborKey)
+	require.NoError(t, err)
+	foreignText := neighborSess.Summaries[replaySummaryFilter].Summary
+	require.NotEmpty(t, foreignText)
+	require.NotEqual(t, baselineText, foreignText)
+
+	injected := backends[1]
+	injected.Load = func(
+		ctx context.Context,
+		backend replaytest.Backend,
+	) (*session.Session, []*memory.Entry, error) {
+		sess, memories, err := loadReplayForInjection(ctx, backend, nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		neighbor, err := backend.Session.GetSession(ctx, neighborKey)
+		if err != nil {
+			return nil, nil, err
+		}
+		foreign := neighbor.Summaries[replaySummaryFilter]
+		if foreign == nil {
+			return nil, nil, fmt.Errorf("neighbor summary was not persisted")
+		}
+		// Attach the foreign summary while keeping the parent session intact.
+		sess.Summaries[replaySummaryFilter] = foreign
+		return sess, memories, nil
+	}
+	compared, err := replaytest.Capture(ctx, injected, replaytest.CaptureOptions{})
+	require.NoError(t, err)
+	require.Equal(t, baseline.SessionID, compared.SessionID)
+
+	diffs, err := replaytest.Compare("summary ownership", "inmemory", "sqlite", baseline, compared, nil)
+	require.NoError(t, err)
+	diff := requireReplayDiff(t, diffs, "summaries", `$.summaries["agent/tool"].text`)
+	require.False(t, diff.Allowed)
+	require.Equal(t, baselineText, diff.Baseline)
+	require.Equal(t, foreignText, diff.Compared)
+	for _, item := range diffs {
+		require.NotEqual(t, "$.session_id", item.Path,
+			"the parent session identity must stay intact in this fault")
+	}
+}
+
 func TestReplayConsistencySkipsAllowedUnsupportedSections(t *testing.T) {
 	tests := []struct {
 		capability string
@@ -457,7 +527,8 @@ func TestReplayConsistencySkipsAllowedUnsupportedSections(t *testing.T) {
 			)
 			require.NoError(t, err)
 			require.True(t, report.Inconclusive)
-			require.True(t, replaytest.HasUnexpectedDiff(report))
+			require.False(t, replaytest.HasUnexpectedDiff(report),
+				"an explicitly allowed skip is not an unexpected diff")
 			require.False(t, report.Capabilities["sqlite"][test.capability].Supported)
 			require.True(t, report.Capabilities["sqlite"][test.capability].AllowedDiff)
 			require.Equal(t, []string{test.capability}, report.SkippedBackends["sqlite"])
@@ -511,7 +582,7 @@ func TestReplayConsistencyAllowedDiffAndReport(t *testing.T) {
 	right := cloneReplaySnapshot(t, left)
 	right.Tracks["tool"][0].Payload = map[string]any{"status": "ok", "backend_note": "sqlite"}
 	rules := []replaytest.AllowedDiff{{
-		Section: "tracks", Path: "$.tracks.tool[0].payload.backend_note", BackendA: "inmemory", BackendB: "sqlite",
+		Case: "allowed", Section: "tracks", Path: "$.tracks.tool[0].payload.backend_note", BackendA: "inmemory", BackendB: "sqlite",
 		Reason: "SQLite exposes a backend-only diagnostic note",
 	}}
 	diffs, err := replaytest.Compare("allowed", "inmemory", "sqlite", left, right, rules)
@@ -605,11 +676,13 @@ func replayStateLifecycle(ctx context.Context, backend replaytest.Backend) error
 	if !replaytest.Supports(backend, replaytest.CapabilityState) {
 		return nil
 	}
-	if err := backend.Session.UpdateAppState(ctx, backend.SessionKey.AppName, session.StateMap{"temporary": []byte(`true`)}); err != nil {
+	if err := backend.Session.UpdateAppState(ctx, backend.SessionKey.AppName, session.StateMap{
+		"temporary": []byte(`true`), "profile": []byte(`{"theme":"dark","level":2}`),
+	}); err != nil {
 		return err
 	}
 	appState, err := backend.Session.ListAppStates(ctx, backend.SessionKey.AppName)
-	if err != nil || string(appState["temporary"]) != "true" {
+	if err != nil || string(appState["temporary"]) != "true" || string(appState["profile"]) == "" {
 		return fmt.Errorf("app state update was not observable: %w", err)
 	}
 	if err := backend.Session.DeleteAppState(ctx, backend.SessionKey.AppName, "temporary"); err != nil {
@@ -623,11 +696,13 @@ func replayStateLifecycle(ctx context.Context, backend replaytest.Backend) error
 		return fmt.Errorf("app state delete left temporary key")
 	}
 	userKey := session.UserKey{AppName: backend.SessionKey.AppName, UserID: backend.SessionKey.UserID}
-	if err := backend.Session.UpdateUserState(ctx, userKey, session.StateMap{"temporary": []byte(`true`)}); err != nil {
+	if err := backend.Session.UpdateUserState(ctx, userKey, session.StateMap{
+		"temporary": []byte(`true`), "preferences": []byte(`{"lang":"zh","notifications":true}`),
+	}); err != nil {
 		return err
 	}
 	userState, err := backend.Session.ListUserStates(ctx, userKey)
-	if err != nil || string(userState["temporary"]) != "true" {
+	if err != nil || string(userState["temporary"]) != "true" || string(userState["preferences"]) == "" {
 		return fmt.Errorf("user state update was not observable: %w", err)
 	}
 	if err := backend.Session.DeleteUserState(ctx, userKey, "temporary"); err != nil {

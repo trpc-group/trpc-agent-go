@@ -209,7 +209,7 @@ func replayExternalAllowedDiffs(
 		return nil
 	}
 	return []replaytest.AllowedDiff{{
-		Section: "state", Path: path, BackendA: "inmemory", BackendB: backendName,
+		Case: caseName, Section: "state", Path: path, BackendA: "inmemory", BackendB: backendName,
 		Reason: backend.Capabilities[replaytest.CapabilityEventStateDeltaNull].Reason,
 	}}
 }

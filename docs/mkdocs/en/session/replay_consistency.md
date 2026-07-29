@@ -34,7 +34,7 @@ The public matrix runs these 12 cases against real InMemory and SQLite services:
 1. `single_turn`: one user event followed by one assistant event.
 2. `multi_turn`: three ordered user/assistant turns.
 3. `tool_call_and_response`: tool call, JSON arguments, tool response, and tool-call-args extension.
-4. `state_update_overwrite_delete`: app and user state deletion, plus session state updates, overwrites, and explicit null values.
+4. `state_update_overwrite_delete`: app and user state writes and deletes (residual keys are compared), plus session state updates, overwrites, and explicit null values.
 5. `session_state_direct_round_trip`: creates, overwrites, and reads Session State without depending on Events.
 6. `memory_search_order_and_score`: searches fact and episodic memories and compares rank plus normalized score.
 7. `memory_update_and_delete`: persistent update and deletion semantics.
@@ -48,24 +48,25 @@ Every public case injects a corresponding backend drift after SQLite load but be
 
 ## Normalization and reports
 
-Events are normalized after cloning the Session. Event, invocation, and tool-call IDs become stable aliases; generated timestamps, request IDs, and response creation times are removed. StateDelta values, tool arguments and responses, extensions, and Track payloads are decoded as JSON with number precision preserved.
+Events are normalized after cloning the Session. Event, invocation, tool-call, and request IDs become stable aliases, so empty values and equality relationships (such as request-ID grouping) stay observable; generated timestamps and response creation times are removed. Repeated event or memory IDs inside one snapshot are listed under `duplicate_ids`, so one-sided duplicate-persistence bugs cannot pass as equal aliases. StateDelta values, tool arguments and responses, extensions, and Track payloads are decoded as JSON with number precision preserved. State is compared across all three scopes: session, application (`app_state`), and user (`user_state`).
 
 Memory keeps backend read order by default, including `rank`, `score` quantized to six decimal places, application/user scope, content, and metadata. Stable memory IDs are assigned after normalization. A case may set `UnorderedMemories` only when its contract explicitly treats memory order as irrelevant; that case receives semantic sorting and rank `-1`. The concurrent event case explicitly sets `OrderEventsByTimestamp` to restore logical order.
 
 Summary snapshots report application, user, and session ownership; map and boundary filter keys; boundary presence and version; text and topics; and normalized event indexes for update time, cutoff time, and `LastEventID`. Track snapshots retain the track name, event order, and normalized payload. Only payload keys configured as volatile, such as duration or latency, are removed.
 
-`CaseReport.capabilities` records every backend's capability map. An unsupported built-in section is omitted from capture and semantic comparison, but it must have a reason. Capability health is scoped to the current case: an unrelated unsupported capability does not fail a case that neither requires nor skips it. A skipped required capability must explicitly set `allowed_diff: true`; otherwise the report is unhealthy.
+`CaseReport.capabilities` records every backend's capability map. An unsupported built-in section is omitted from capture and semantic comparison, but it must have a reason, and when either side still holds content the skipped section is recorded as an allowed informational diff so the missing comparison stays visible. Capability health is scoped to the current case: an unrelated unsupported capability does not fail a case that neither requires nor skips it. A skipped required capability must explicitly set `allowed_diff: true`; otherwise the report is unhealthy.
 
-Each public Case declares the capabilities required for execution through `RequiredCapabilities`. The Harness requires every backend to declare those capabilities explicitly. A missing declaration is an error instead of silently inheriting the default-supported behavior. The baseline must support every requirement; a comparison backend with an explicitly unsupported requirement is not executed and records the capability name in `skipped_backends`. If no candidate backend completes a comparison, the report sets `inconclusive: true`, and `HasUnexpectedDiff` does not treat it as healthy. Fine-grained semantics that must still run and produce a diff, such as `event_state_delta_null`, are not hard prerequisites.
+Each public Case declares the capabilities required for execution through `RequiredCapabilities`. The Harness requires every backend to declare those capabilities explicitly. A missing declaration is an error instead of silently inheriting the default-supported behavior. The baseline must support every requirement; a comparison backend with an explicitly unsupported requirement is not executed and records the capability name in `skipped_backends`. If no candidate backend completes a comparison, the report sets `inconclusive: true`. Inconclusive is a separate outcome from `HasUnexpectedDiff`, which reports only non-allowlisted diffs and disallowed skips; the matrix asserts both. Fine-grained semantics that must still run and produce a diff, such as `event_state_delta_null`, are not hard prerequisites.
 
 A sub-capability can describe partial semantics without suppressing its whole section. A nil value in `Event.StateDelta` is an explicit JSON null (a replay tombstone), not physical key deletion; `Session.DeleteState` performs deletion. Real Redis HashIdx preserves that null, while miniredis's Lua/cjson emulation keeps the previous value. Only the `miniredis` fixture therefore advertises `event_state_delta_null` as unsupported/allowed. State is still compared in full, with exact allowances only for `$.state.remove_me` and `$.state.pending`; tests require both differences to occur so the allowance cannot become stale or broad.
 
 A missing path and an explicit JSON `null` are different. Reports use `baseline_present` and `compared_present`; an absent side contains `{"missing": true}`, while a present null remains `null`.
 
-An `AllowedDiff` must name both backends, one section, one exact path, and a reason. Wildcards are rejected, and the path must belong to the declared section. For example:
+An `AllowedDiff` must name the replay case it applies to, both backends, one section, one exact path, and a reason. Wildcards are rejected, the path must belong to the declared section, and a rule never matches diffs from another case, so one Harness can carry allowances for many cases safely. For example:
 
 ```go
 replaytest.AllowedDiff{
+	Case:     "track_status_and_error",
 	Section:  "tracks",
 	Path:     "$.tracks.tool[0].payload.backend_note",
 	BackendA: "inmemory",
@@ -73,6 +74,8 @@ replaytest.AllowedDiff{
 	Reason:   "SQLite exposes a backend-only diagnostic note",
 }
 ```
+
+A zero-value `Normalizer` applies `DefaultNormalizer()` at every entry point (`Normalize`, `Capture`, and `Harness.Run`); pass an explicit empty `VolatilePayloadKeys` map to disable volatile-key stripping.
 
 ## Optional external backends
 
@@ -97,4 +100,4 @@ PostgreSQL, MySQL, and ClickHouse use the corresponding table variable and test-
 
 ## Design summary
 
-The framework clones a Session, decodes replay data as precision-preserving JSON, and maps generated IDs to stable aliases. Memory keeps order, rank, quantized score, and scope unless a Case explicitly declares it unordered. Summary compares ownership, filter keys, boundary versions, and event indexes; Track keeps its name, order, and payload while timing fields are removed. An allowed difference requires both backends, a section, an exact path, and a reason, while missing and null remain distinct. Capabilities can skip a whole unsupported section or record partial semantics while comparison continues. External tests construct real Backends from environment variables and skip each unconfigured service independently.
+The framework clones a Session, decodes replay data as precision-preserving JSON, and maps generated IDs to stable aliases. Memory keeps order, rank, quantized score, and scope unless a Case explicitly declares it unordered. Summary compares ownership, filter keys, boundary versions, and event indexes; Track keeps its name, order, and payload while timing fields are removed. An allowed difference requires the case, both backends, a section, an exact path, and a reason, while missing and null remain distinct. Capabilities can skip a whole unsupported section or record partial semantics while comparison continues. External tests construct real Backends from environment variables and skip each unconfigured service independently.

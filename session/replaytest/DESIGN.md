@@ -7,11 +7,16 @@ operations so the same scenarios can exercise in-memory, SQLite, Redis, or a
 custom store without importing the repository's end-to-end test package.
 
 Each case writes deterministic events, state, memory, summaries, or tracks.
-`Capture` reads the resulting session and memory view, then `Normalizer`
-removes volatile timestamps and maps backend-generated identifiers to
-snapshot-scoped aliases. Empty identifiers and equality relationships remain
-observable. `Compare` reports exact JSON paths and permits differences only
-when a capability and a narrow `AllowedDiff` rule both document them.
+`Capture` reads the session, memory, app-state, and user-state view, then
+`Normalizer` removes volatile timestamps and maps backend-generated
+identifiers, including request IDs, to snapshot-scoped aliases. Empty
+identifiers and equality relationships remain observable, and repeated event
+or memory IDs surface under `duplicate_ids`. `Compare` reports exact JSON
+paths and permits differences only through an `AllowedDiff` rule bound to the
+case, both backends, section, path, and reason. A section skipped for a
+one-sided unsupported capability still yields a visible allowed diff whenever
+either side holds content, and an `inconclusive` report stays a separate
+outcome from unexpected diffs.
 
 The injected anomaly matrix proves the four required summary failures:
 `summary loss` detects a missing summary, `summary overwrite` detects incorrect

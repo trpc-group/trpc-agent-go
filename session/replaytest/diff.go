@@ -17,11 +17,15 @@ import (
 )
 
 // Compare returns every semantic mismatch between two normalized snapshots.
+// A section whose capability is unsupported on either side is not walked;
+// instead, when the section carries content on at least one side, Compare
+// emits one allowed informational diff so the skipped comparison stays
+// visible in the report instead of silently hiding divergence.
 func Compare(caseName, backendA, backendB string, left, right Snapshot, allowed []AllowedDiff) ([]Diff, error) {
 	if err := validateAllowedDiffs(allowed); err != nil {
 		return nil, err
 	}
-	ignoredSections := unsupportedSections(left.Unsupported, right.Unsupported)
+	ignoredSections := unsupportedSections(left.Unsupported, right.Unsupported, backendA, backendB)
 	left.Unsupported = nil
 	right.Unsupported = nil
 	leftValue, err := toGeneric(left)
@@ -56,7 +60,63 @@ func Compare(caseName, backendA, backendB string, left, right Snapshot, allowed 
 		}
 		diffs = append(diffs, diff)
 	})
+	diffs = append(diffs, skippedSectionDiffs(caseName, backendA, backendB, left, leftValue, rightValue, ignoredSections)...)
 	return diffs, nil
+}
+
+// skippedSectionDiffs reports one allowed diff per ignored section that still
+// holds content on at least one side. Both sides empty means the section was
+// irrelevant to the case, so those skips stay silent.
+func skippedSectionDiffs(
+	caseName, backendA, backendB string,
+	left Snapshot,
+	leftValue, rightValue any,
+	ignoredSections map[string][]string,
+) []Diff {
+	sections := make([]string, 0, len(ignoredSections))
+	for section := range ignoredSections {
+		sections = append(sections, section)
+	}
+	sort.Strings(sections)
+	leftMap, _ := leftValue.(map[string]any)
+	rightMap, _ := rightValue.(map[string]any)
+	var diffs []Diff
+	for _, section := range sections {
+		baseline, baselineOK := leftMap[section]
+		compared, comparedOK := rightMap[section]
+		if emptySectionValue(baseline) && emptySectionValue(compared) {
+			continue
+		}
+		if !baselineOK {
+			baseline = MissingValue{Missing: true}
+		}
+		if !comparedOK {
+			compared = MissingValue{Missing: true}
+		}
+		diffs = append(diffs, Diff{
+			Case: caseName, SessionID: left.SessionID, BackendA: backendA, BackendB: backendB,
+			Section: section, Path: "$." + section, Baseline: baseline, Compared: compared,
+			BaselinePresent: baselineOK, ComparedPresent: comparedOK,
+			Allowed: true,
+			Explanation: fmt.Sprintf(
+				"section not compared: capability unsupported on %s",
+				strings.Join(ignoredSections[section], ", "),
+			),
+		})
+	}
+	return diffs
+}
+
+func emptySectionValue(value any) bool {
+	switch typed := value.(type) {
+	case nil:
+		return true
+	case map[string]any:
+		return len(typed) == 0
+	case []any:
+		return len(typed) == 0
+	}
+	return false
 }
 
 func walkDiff(path string, left, right any, add func(string, any, any)) {
@@ -136,10 +196,10 @@ func sectionForPath(path string) string {
 
 func validateAllowedDiffs(rules []AllowedDiff) error {
 	for i, rule := range rules {
-		if strings.TrimSpace(rule.Section) == "" || strings.TrimSpace(rule.Path) == "" ||
-			strings.TrimSpace(rule.BackendA) == "" || strings.TrimSpace(rule.BackendB) == "" ||
-			strings.TrimSpace(rule.Reason) == "" {
-			return fmt.Errorf("allowed diff %d requires section, path, both backends, and reason", i)
+		if strings.TrimSpace(rule.Case) == "" || strings.TrimSpace(rule.Section) == "" ||
+			strings.TrimSpace(rule.Path) == "" || strings.TrimSpace(rule.BackendA) == "" ||
+			strings.TrimSpace(rule.BackendB) == "" || strings.TrimSpace(rule.Reason) == "" {
+			return fmt.Errorf("allowed diff %d requires case, section, path, both backends, and reason", i)
 		}
 		if strings.Contains(rule.Path, "*") || strings.Contains(rule.Section, "*") {
 			return fmt.Errorf("allowed diff %d must use an exact section and path", i)
@@ -152,6 +212,9 @@ func validateAllowedDiffs(rules []AllowedDiff) error {
 }
 
 func ruleMatches(rule AllowedDiff, diff Diff) bool {
+	if rule.Case != diff.Case {
+		return false
+	}
 	backendMatch := (rule.BackendA == diff.BackendA && rule.BackendB == diff.BackendB) ||
 		(rule.BackendA == diff.BackendB && rule.BackendB == diff.BackendA)
 	return backendMatch && rule.Section == diff.Section && rule.Path == diff.Path
@@ -245,16 +308,18 @@ func indexedPath(path, prefix string) (int, bool) {
 	return index, err == nil
 }
 
-func unsupportedSections(left, right map[string]string) map[string]struct{} {
-	result := make(map[string]struct{})
+// unsupportedSections maps each ignored section to the names of the backends
+// that declared the corresponding capability unsupported.
+func unsupportedSections(left, right map[string]string, backendA, backendB string) map[string][]string {
+	result := make(map[string][]string)
 	for capability := range left {
 		if section := sectionForCapability(capability); section != "" {
-			result[section] = struct{}{}
+			result[section] = append(result[section], backendA)
 		}
 	}
 	for capability := range right {
 		if section := sectionForCapability(capability); section != "" {
-			result[section] = struct{}{}
+			result[section] = append(result[section], backendB)
 		}
 	}
 	return result
@@ -266,6 +331,10 @@ func sectionForCapability(capability string) string {
 		return "events"
 	case CapabilityState:
 		return "state"
+	case CapabilityAppState:
+		return "app_state"
+	case CapabilityUserState:
+		return "user_state"
 	case CapabilityMemory:
 		return "memories"
 	case CapabilitySummary:
