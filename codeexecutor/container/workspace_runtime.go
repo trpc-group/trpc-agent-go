@@ -22,6 +22,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	tcontainer "github.com/docker/docker/api/types/container"
@@ -62,6 +63,8 @@ const (
 type workspaceRuntime struct {
 	ce         *CodeExecutor
 	cfg        runtimeConfig
+	mu         sync.Mutex
+	bound      bool
 	generation uint64
 }
 
@@ -69,7 +72,41 @@ func (r *workspaceRuntime) containerClient() (*client.Client, string, error) {
 	if r == nil || r.ce == nil {
 		return nil, "", fmt.Errorf("container executor not ready")
 	}
-	return r.ce.containerClientForGeneration(r.generation)
+	r.mu.Lock()
+	generation := r.generation
+	r.mu.Unlock()
+	return r.ce.containerClientForGeneration(generation)
+}
+
+// prepareContainer initializes an unbound runtime once, but never lets a
+// runtime whose container generation was invalidated recreate a replacement.
+func (r *workspaceRuntime) prepareContainer(ctx context.Context) error {
+	if r == nil || r.ce == nil {
+		return fmt.Errorf("container executor not ready")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.ce.containerMu.Lock()
+	defer r.ce.containerMu.Unlock()
+	if r.ce.closed {
+		return fmt.Errorf("container executor is closed")
+	}
+	if (r.bound || r.generation != 0) && r.generation != r.ce.generation {
+		return fmt.Errorf("%w: container generation %d replaced runtime generation %d", codeexecutor.ErrWorkspaceStale, r.ce.generation, r.generation)
+	}
+	if r.ce.container != nil {
+		r.bound = true
+		return nil
+	}
+	if r.ce.client == nil {
+		return fmt.Errorf("container not initialized")
+	}
+	if err := r.ce.ensureContainerLocked(ctx); err != nil {
+		return err
+	}
+	r.generation = r.ce.generation
+	r.bound = true
+	return nil
 }
 
 type runtimeConfig struct {
@@ -101,7 +138,7 @@ func newWorkspaceRuntime(c *CodeExecutor) (*workspaceRuntime, error) {
 		)
 		cfg.autoMapInputs = c.autoInputs
 	}
-	return &workspaceRuntime{ce: c, cfg: cfg, generation: c.generation}, nil
+	return &workspaceRuntime{ce: c, cfg: cfg, bound: c.container != nil, generation: c.generation}, nil
 }
 
 // findBindSource returns the host path whose bind dest equals dest.
@@ -429,15 +466,18 @@ func (r *workspaceRuntime) RunProgram(
 	if t <= 0 {
 		t = 10 * time.Second
 	}
+	runCtx, cancel := context.WithTimeout(ctx, t)
+	defer cancel()
 	// This runtime is bound to the generation that created its workspace. It
 	// must not recreate a container after a timeout invalidates that generation:
 	// the caller must reacquire and provision a new workspace through the
-	// registry instead. The generation-aware lookup also rejects unready direct
-	// runtime calls without performing a Docker operation.
-	if _, _, err := r.containerClient(); err != nil {
+	// registry instead. An unbound, newly constructed runtime may perform its
+	// first initialization within the command deadline; after it has a
+	// generation, an invalidated runtime is rejected rather than recreated.
+	if err := r.prepareContainer(runCtx); err != nil {
 		return codeexecutor.RunResult{}, err
 	}
-	_, span := atrace.Tracer.Start(ctx,
+	_, span := atrace.Tracer.Start(runCtx,
 		codeexecutor.SpanWorkspaceRun)
 	span.SetAttributes(
 		attribute.String(codeexecutor.AttrCmd, spec.Cmd),
@@ -495,7 +535,7 @@ func (r *workspaceRuntime) RunProgram(
 		execEnv = cleanWrapperEnv()
 	}
 	out, errOut, code, timed, stdoutCut, stderrCut, err := r.execCmdWithStdin(
-		ctx,
+		runCtx,
 		argv,
 		t,
 		spec.Stdin,
