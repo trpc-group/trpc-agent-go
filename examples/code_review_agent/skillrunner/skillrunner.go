@@ -25,6 +25,7 @@ import (
 	"time"
 
 	dockercontainer "github.com/docker/docker/api/types/container"
+	"golang.org/x/mod/modfile"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	containerexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/container"
 	e2bexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/e2b"
@@ -389,6 +390,8 @@ func buildScripts(cfg Config) []scriptSpec {
 		static.skipReason = "no --repo-path provided; static checks need a repository"
 	} else if absRepo, err := filepath.Abs(cfg.RepoPath); err != nil {
 		static.skipReason = err.Error()
+	} else if localReplaceEscapesRepo(absRepo) {
+		static.skipReason = "go.mod contains a local replacement outside --repo-path"
 	} else {
 		static.inputs = []codeexecutor.InputSpec{{
 			From: "host://" + absRepo,
@@ -398,6 +401,36 @@ func buildScripts(cfg Config) []scriptSpec {
 		static.env = goEnv(cfg.SandboxKind)
 	}
 	return append(specs, static)
+}
+
+// localReplaceEscapesRepo reports whether go.mod depends on a local path that
+// will not exist after only repoPath is staged into a remote workspace.
+func localReplaceEscapesRepo(repoPath string) bool {
+	goModPath := filepath.Join(repoPath, "go.mod")
+	data, err := os.ReadFile(goModPath)
+	if err != nil {
+		return false
+	}
+	parsed, err := modfile.Parse(goModPath, data, nil)
+	if err != nil {
+		// Let the sandboxed Go commands report malformed module files.
+		return false
+	}
+	for _, replacement := range parsed.Replace {
+		if replacement.New.Version != "" {
+			continue
+		}
+		target := filepath.FromSlash(replacement.New.Path)
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(repoPath, target)
+		}
+		rel, err := filepath.Rel(repoPath, filepath.Clean(target))
+		if err != nil || rel == ".." ||
+			strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
 }
 
 // repoStageMode picks a staging mode with consistent placement per runtime.

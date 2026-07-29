@@ -11,6 +11,8 @@ package skillrunner
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -214,6 +216,69 @@ func TestE2BSandboxTimeoutCoversRunnableScripts(t *testing.T) {
 				t.Fatalf("e2b sandbox timeout = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestBuildScriptsSkipsLocalReplaceOutsideRepo(t *testing.T) {
+	repo := t.TempDir()
+	writeGoMod(t, repo, `module example.com/review
+
+go 1.24
+
+replace example.com/dependency => ../dependency
+`)
+	spec := buildScripts(Config{RepoPath: repo, SandboxKind: "container"})[2]
+	if spec.skipReason != "go.mod contains a local replacement outside --repo-path" {
+		t.Fatalf("skip reason = %q", spec.skipReason)
+	}
+	if len(spec.inputs) != 0 {
+		t.Fatalf("skipped static check staged inputs: %#v", spec.inputs)
+	}
+}
+
+func TestBuildScriptsAllowsContainedAndVersionedReplaces(t *testing.T) {
+	tests := []struct {
+		name  string
+		goMod string
+	}{
+		{
+			name: "contained local replacement",
+			goMod: `module example.com/review
+
+go 1.24
+
+replace example.com/dependency => ./internal/dependency
+`,
+		},
+		{
+			name: "versioned module replacement",
+			goMod: `module example.com/review
+
+go 1.24
+
+replace example.com/dependency => example.com/fork v1.2.3
+`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := t.TempDir()
+			writeGoMod(t, repo, tt.goMod)
+			spec := buildScripts(Config{RepoPath: repo, SandboxKind: "container"})[2]
+			if spec.skipReason != "" {
+				t.Fatalf("unexpected skip reason %q", spec.skipReason)
+			}
+			if len(spec.inputs) != 1 || spec.inputs[0].To != repoStageTarget {
+				t.Fatalf("container staging inputs: %#v", spec.inputs)
+			}
+		})
+	}
+}
+
+func writeGoMod(t *testing.T, repo, content string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(repo, "go.mod"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 
