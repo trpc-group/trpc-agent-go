@@ -331,8 +331,8 @@ func untrackedFileDiffWithLimit(repoPath string, file string, maxBytes int64) (s
 		}
 	}
 
-	reader := bufio.NewReader(in)
-	lineCount, noNewline, binary, err := scanUntrackedFile(reader, info.Size())
+	reader := newUntrackedReader(in, maxBytes)
+	lineCount, noNewline, binary, err := scanUntrackedFile(reader, maxBytes)
 	if err != nil {
 		return "", 0, fmt.Errorf("read untracked file %s: %w", file, err)
 	}
@@ -352,7 +352,7 @@ func untrackedFileDiffWithLimit(repoPath string, file string, maxBytes int64) (s
 	if _, err := in.Seek(0, io.SeekStart); err != nil {
 		return "", 0, fmt.Errorf("rewind untracked file %s: %w", file, err)
 	}
-	reader.Reset(in)
+	reader = newUntrackedReader(in, maxBytes)
 	lineStart := true
 	for {
 		part, readErr := reader.ReadSlice('\n')
@@ -386,12 +386,24 @@ func untrackedFileDiffWithLimit(repoPath string, file string, maxBytes int64) (s
 	return b.String(), readBytes, nil
 }
 
-func scanUntrackedFile(reader *bufio.Reader, size int64) (int, bool, bool, error) {
+func newUntrackedReader(in *os.File, maxBytes int64) *bufio.Reader {
+	if maxBytes >= 0 {
+		return bufio.NewReader(io.LimitReader(in, maxBytes+1))
+	}
+	return bufio.NewReader(in)
+}
+
+func scanUntrackedFile(reader *bufio.Reader, maxBytes int64) (int, bool, bool, error) {
 	lineCount := 0
 	noNewline := false
+	var readBytes int64
 	for {
 		part, err := reader.ReadSlice('\n')
 		if len(part) > 0 {
+			readBytes += int64(len(part))
+			if maxBytes >= 0 && readBytes > maxBytes {
+				return 0, false, false, fmt.Errorf("untracked file exceeds %d bytes", maxBytes)
+			}
 			if bytes.Contains(part, []byte{0}) {
 				return 0, false, true, nil
 			}
@@ -411,7 +423,7 @@ func scanUntrackedFile(reader *bufio.Reader, size int64) (int, bool, bool, error
 		}
 		return 0, false, false, err
 	}
-	if size == 1 && lineCount == 1 && !noNewline {
+	if readBytes == 1 && lineCount == 1 && !noNewline {
 		lineCount = 0
 	}
 	return lineCount, noNewline, false, nil

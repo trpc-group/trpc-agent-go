@@ -946,13 +946,15 @@ func cleanupWorkspaceResources(ctx context.Context, manager codeexecutor.Workspa
 			return false
 		}
 	}
-	if manager != nil {
-		// Continue best-effort cleanup if a backend ignores its context; otherwise
-		// one stalled manager would retain every later resource indefinitely.
-		_ = cleanupStep(func(stepCtx context.Context) { _ = manager.Cleanup(stepCtx, ws) })
-	}
+	closeDone := true
+	var closeErr error
 	if closeFn != nil {
-		_ = cleanupStep(func(context.Context) { _ = closeFn() })
+		// Container/E2B Close destroys the backend workspace; never race it with
+		// manager cleanup. Fall back to manager cleanup only if Close fails.
+		closeDone = cleanupStep(func(context.Context) { closeErr = closeFn() })
+	}
+	if manager != nil && (closeFn == nil || (closeDone && closeErr != nil)) {
+		_ = cleanupStep(func(stepCtx context.Context) { _ = manager.Cleanup(stepCtx, ws) })
 	}
 	if snapshotCleanup != nil {
 		_ = cleanupStep(func(context.Context) { snapshotCleanup() })
