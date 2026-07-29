@@ -10,8 +10,9 @@ package tool
 
 // ConcurrencyConfig configures limits for parallel tool execution.
 //
-// MaxConcurrency limits all active tool calls that share the owning agent or
-// Tools node. A non-positive value leaves overall concurrency unlimited.
+// MaxConcurrency limits all active tool calls within one invocation of the
+// owning agent or Tools node. Concurrent invocations have independent limits.
+// A non-positive value leaves overall concurrency unlimited.
 //
 // Groups apply additional shared limits to the named tools. Tool names that do
 // not appear in a group are constrained only by MaxConcurrency. A tool name
@@ -19,15 +20,14 @@ package tool
 // reject configurations with duplicate group membership.
 //
 // Limits apply only to calls executed directly by the owning agent or Tools
-// node. If a tool runs a child agent, that child agent's tool calls use the
-// child's concurrency configuration instead. Concurrent invocations that
-// reuse the same child agent instance share its limits.
+// node invocation. If a tool runs a child agent, that child invocation uses a
+// new limiter built from the child's concurrency configuration.
 //
 // ConcurrencyConfig only affects execution when parallel tools are enabled.
 // Its zero value preserves unrestricted parallel execution.
 type ConcurrencyConfig struct {
-	// MaxConcurrency limits all active tool calls. A non-positive value leaves
-	// overall concurrency unlimited.
+	// MaxConcurrency limits all active tool calls within one invocation. A
+	// non-positive value leaves overall concurrency unlimited.
 	MaxConcurrency int
 	// Groups contains additional shared limits for selected tool names.
 	Groups []ConcurrencyGroup
@@ -36,8 +36,9 @@ type ConcurrencyConfig struct {
 // ConcurrencyGroup defines a shared concurrency limit for a set of tools.
 //
 // Limit is the maximum combined number of active calls for all ToolNames in
-// the group. A non-positive Limit and empty tool names are ignored. Tool names
-// may refer to tools that are resolved dynamically at runtime.
+// the group within one invocation. A non-positive Limit and empty tool names
+// are ignored. Tool names may refer to tools that are resolved dynamically at
+// runtime.
 type ConcurrencyGroup struct {
 	// ToolNames lists the effective tool names that share this group.
 	ToolNames []string

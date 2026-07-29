@@ -319,7 +319,7 @@ type Options struct {
 	// ToolCallRetryPolicy configures retry behavior for callable tool calls.
 	ToolCallRetryPolicy *tool.RetryPolicy
 	// ToolConcurrencyConfig limits active tool calls when parallel execution is enabled.
-	// Limits are shared by concurrent invocations of this agent instance.
+	// Each invocation of the agent has independent limits.
 	ToolConcurrencyConfig tool.ConcurrencyConfig
 	// Knowledge is the knowledge base for the agent.
 	// If provided, the knowledge search tool will be automatically added.
@@ -1549,8 +1549,9 @@ func WithEnableParallelTools(enable bool) Option {
 }
 
 // WithToolConcurrencyConfig configures overall and per-group limits for
-// parallel tool execution. The limits are shared by concurrent invocations of
-// the agent instance and only take effect with WithEnableParallelTools(true).
+// parallel tool execution. Each invocation of the agent has independent
+// limits. The configuration only takes effect with
+// WithEnableParallelTools(true).
 // It panics if a tool name appears in more than one positive-limit group.
 func WithToolConcurrencyConfig(config tool.ConcurrencyConfig) Option {
 	if err := toolcall.ValidateConcurrencyConfig(config); err != nil {

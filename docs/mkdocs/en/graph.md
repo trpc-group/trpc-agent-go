@@ -1555,10 +1555,11 @@ stateGraph.AddToolsNode(
 )
 ```
 
-The limits are shared across concurrent invocations of this Tools-node
-instance. Multiple names in one group consume the same capacity pool.
-Each tool name may appear in only one positive-limit group; duplicate
-membership causes `WithToolConcurrencyConfig` to panic.
+Each invocation of the Tools node gets independent limits, so concurrent Graph
+executions do not consume one another's capacity. Multiple names in one group
+consume the same capacity pool within one invocation. Each tool name may appear
+in only one positive-limit group; duplicate membership causes
+`WithToolConcurrencyConfig` to panic.
 
 Configure tool call retry for a ToolsNode:
 

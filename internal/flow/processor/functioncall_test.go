@@ -32,6 +32,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/sessionroute"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	knowledgedoc "trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	knowledgegraph "trpc.group/trpc-go/trpc-agent-go/knowledge/graph"
@@ -10667,7 +10668,7 @@ func (t *concurrencyBlockingTool) Call(
 	}
 }
 
-func TestFunctionCallResponseProcessor_ToolConcurrencySharedAcrossCalls(
+func TestFunctionCallResponseProcessor_ToolConcurrencyScopeLimitsCalls(
 	t *testing.T,
 ) {
 	started := make(chan struct{}, 4)
@@ -10681,7 +10682,10 @@ func TestFunctionCallResponseProcessor_ToolConcurrencySharedAcrossCalls(
 	processor := NewFunctionCallResponseProcessor(
 		true,
 		nil,
-		WithToolConcurrencyConfig(tool.ConcurrencyConfig{
+	)
+	ctx := toolcall.WithLimiter(
+		context.Background(),
+		toolcall.NewLimiter(tool.ConcurrencyConfig{
 			Groups: []tool.ConcurrencyGroup{{
 				ToolNames: []string{"subagent"},
 				Limit:     2,
@@ -10694,7 +10698,7 @@ func TestFunctionCallResponseProcessor_ToolConcurrencySharedAcrossCalls(
 		i := i
 		go func() {
 			_, _, _, _, _, err := processor.executeToolCall(
-				context.Background(),
+				ctx,
 				nil,
 				model.ToolCall{
 					ID: fmt.Sprintf("call-%d", i),

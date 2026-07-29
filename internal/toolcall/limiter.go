@@ -23,6 +23,37 @@ type Limiter struct {
 	groups map[string]*semaphore.Weighted
 }
 
+type limiterContextKey struct{}
+
+type limiterScope struct {
+	limiter *Limiter
+}
+
+// WithLimiter returns a context carrying the limiter for one tool-execution
+// scope. A nil limiter still shadows any limiter carried by the parent context.
+func WithLimiter(ctx context.Context, limiter *Limiter) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(
+		ctx,
+		limiterContextKey{},
+		limiterScope{limiter: limiter},
+	)
+}
+
+// LimiterFromContext returns the limiter for the current tool-execution scope.
+func LimiterFromContext(ctx context.Context) *Limiter {
+	if ctx == nil {
+		return nil
+	}
+	scope, ok := ctx.Value(limiterContextKey{}).(limiterScope)
+	if !ok {
+		return nil
+	}
+	return scope.limiter
+}
+
 // ValidateConcurrencyConfig validates concurrency group membership. It ignores
 // empty tool names and groups with non-positive limits, and returns an error
 // when a tool belongs to more than one positive-limit group.

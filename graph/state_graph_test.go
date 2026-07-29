@@ -458,7 +458,73 @@ func TestProcessToolCalls_SerialVsParallel(t *testing.T) {
 	})
 }
 
-func TestToolsNodeToolConcurrencySharedAcrossInvocations(t *testing.T) {
+func TestToolsNodeToolConcurrencyLimitsOneInvocation(t *testing.T) {
+	started := make(chan string, 4)
+	release := make(chan struct{})
+	tools := map[string]tool.Tool{
+		"subagent": &blockingTool{
+			name:       "subagent",
+			startedCh:  started,
+			proceedCh:  release,
+			result:     map[string]string{"status": "done"},
+			respectCtx: true,
+		},
+	}
+	nodeFunc := NewToolsNodeFunc(
+		tools,
+		WithEnableParallelTools(true),
+		WithToolConcurrencyConfig(tool.ConcurrencyConfig{
+			Groups: []tool.ConcurrencyGroup{{
+				ToolNames: []string{"subagent"},
+				Limit:     2,
+			}},
+		}),
+	)
+	toolCalls := make([]model.ToolCall, 4)
+	for i := range toolCalls {
+		toolCalls[i] = model.ToolCall{
+			ID: fmt.Sprintf("call-%d", i),
+			Function: model.FunctionDefinitionParam{
+				Name:      "subagent",
+				Arguments: []byte(`{}`),
+			},
+		}
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, err := nodeFunc(context.Background(), State{
+			StateKeyMessages: []model.Message{{
+				Role:      model.RoleAssistant,
+				ToolCalls: toolCalls,
+			}},
+		})
+		result <- err
+	}()
+
+	for i := 0; i < 2; i++ {
+		select {
+		case name := <-started:
+			require.Equal(t, "subagent", name)
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for limited tool call to start")
+		}
+	}
+	select {
+	case <-started:
+		t.Fatal("more tool calls started than the invocation limit")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case err := <-result:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for tool invocation to finish")
+	}
+}
+
+func TestToolsNodeToolConcurrencyIndependentAcrossInvocations(t *testing.T) {
 	started := make(chan string, 4)
 	release := make(chan struct{})
 	tools := map[string]tool.Tool{
@@ -501,18 +567,13 @@ func TestToolsNodeToolConcurrencySharedAcrossInvocations(t *testing.T) {
 		}()
 	}
 
-	for i := 0; i < 2; i++ {
+	for i := 0; i < 4; i++ {
 		select {
 		case name := <-started:
 			require.Equal(t, "subagent", name)
 		case <-time.After(time.Second):
-			t.Fatal("timed out waiting for limited tool call to start")
+			t.Fatal("timed out waiting for independent tool call to start")
 		}
-	}
-	select {
-	case <-started:
-		t.Fatal("more tool calls started than the configured group limit")
-	case <-time.After(50 * time.Millisecond):
 	}
 
 	close(release)

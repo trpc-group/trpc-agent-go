@@ -2595,6 +2595,14 @@ limits their combined active calls. When `MaxConcurrency` is non-positive,
 there is no overall limit: positive group limits still apply, and tools
 outside those groups have no limit from this configuration.
 
+Each `LLMAgent.Run` and each invocation of a Graph Tools node gets independent
+capacity. Concurrent runs of the same Agent do not consume one another's
+limits. For example, if `subagent` has `Limit: 3`, two concurrent runs of the
+same Agent may each execute up to three direct `subagent` calls. These limits
+control per-invocation fan-out; they do not protect capacity shared across
+multiple runs, Agent instances, processes, or service replicas. Put such a
+shared limit in the resource-owning tool or downstream client.
+
 Limits follow execution ownership. An owning Agent or Tools node limits only
 the tools it executes directly. If a tool named `subagent` runs a child Agent,
 the outer `subagent` call remains subject to the owner's limit while it is
@@ -2618,11 +2626,10 @@ child := llmagent.New(
 ```
 
 The separate groups make `search` and `fetch` individually serial while still
-allowing one of each to run at the same time. Each separately constructed
-child Agent instance has its own limits, so three concurrent child instances
-can run up to three `search` calls and three `fetch` calls in total.
-Concurrent invocations that reuse one child instance share that instance's
-limits. All limits are process-local.
+allowing one of each to run at the same time. Each child Agent invocation gets
+independent limits, even when concurrent invocations reuse the same child
+Agent instance. Therefore, three concurrent child invocations can run up to
+three `search` calls and three `fetch` calls in total.
 
 The configuration has no effect unless parallel tool execution is enabled.
 Non-positive group limits are ignored. Each tool name may appear in only one

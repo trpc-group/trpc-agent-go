@@ -181,8 +181,9 @@ func WithEnableParallelTools(enable bool) Option {
 }
 
 // WithToolConcurrencyConfig configures overall and per-group limits for
-// parallel tool execution. The limits are shared by concurrent invocations of
-// the Tools node and only take effect with WithEnableParallelTools(true).
+// parallel tool execution. Each invocation of the Tools node has independent
+// limits. The configuration only takes effect with
+// WithEnableParallelTools(true).
 // It panics if a tool name appears in more than one positive-limit group.
 func WithToolConcurrencyConfig(config tool.ConcurrencyConfig) Option {
 	if err := toolcall.ValidateConcurrencyConfig(config); err != nil {
@@ -2390,15 +2391,17 @@ func newToolsNodeRuntime(
 	}
 	// Capture whether to execute tools in parallel.
 	parallel := node.enableParallelTools
-	var concurrencyLimiter *toolcall.Limiter
-	if parallel {
-		concurrencyLimiter = toolcall.NewLimiter(node.toolConcurrencyConfig)
-	}
 	// Capture tool callbacks configured on the node.
 	configuredCallbacks := node.toolCallbacks
 	configuredRetryPolicy := node.toolCallRetryPolicy
 
 	return func(ctx context.Context, state State) (any, error) {
+		var concurrencyLimiter *toolcall.Limiter
+		if parallel {
+			concurrencyLimiter = toolcall.NewLimiter(
+				node.toolConcurrencyConfig,
+			)
+		}
 		ctx, span, startedSpan := startNodeSpan(ctx, itelemetry.NewWorkflowSpanName("execute_tools_node"))
 		var workflow *itelemetry.Workflow
 		if startedSpan {

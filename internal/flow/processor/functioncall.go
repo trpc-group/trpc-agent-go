@@ -147,7 +147,6 @@ type FunctionCallResponseProcessor struct {
 	enableParallelTools       bool
 	toolCallbacks             *tool.Callbacks
 	toolRetryPolicy           *tool.RetryPolicy
-	toolConcurrency           *toolcall.Limiter
 	postToolResultHooks       []PostToolResultHook
 	attachmentBudget          int
 	toolNameSuggestionOptions toolNameSuggestionOptions
@@ -176,15 +175,6 @@ func WithToolCallRetryPolicy(policy *tool.RetryPolicy) FunctionCallResponseProce
 			return
 		}
 		p.toolRetryPolicy = policy
-	}
-}
-
-// WithToolConcurrencyConfig configures limits for parallel tool execution.
-func WithToolConcurrencyConfig(
-	config tool.ConcurrencyConfig,
-) FunctionCallResponseProcessorOption {
-	return func(p *FunctionCallResponseProcessor) {
-		p.toolConcurrency = toolcall.NewLimiter(config)
 	}
 }
 
@@ -244,9 +234,6 @@ func NewFunctionCallResponseProcessor(
 		if opt != nil {
 			opt(processor)
 		}
-	}
-	if !enableParallelTools {
-		processor.toolConcurrency = nil
 	}
 	return processor
 }
@@ -1950,8 +1937,8 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 		return ctx, nil, toolCall.Function.Arguments, shouldIgnoreError,
 			false, err
 	}
-	if p.toolConcurrency != nil {
-		release, err := p.toolConcurrency.Acquire(
+	if limiter := toolcall.LimiterFromContext(ctx); limiter != nil {
+		release, err := limiter.Acquire(
 			ctx,
 			toolCall.Function.Name,
 		)

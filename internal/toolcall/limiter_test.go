@@ -188,3 +188,12 @@ func TestLimiterNilReceiverAndContext(t *testing.T) {
 	require.NoError(t, err)
 	release()
 }
+
+func TestLimiterContextScope(t *testing.T) {
+	limiter := NewLimiter(tool.ConcurrencyConfig{MaxConcurrency: 1})
+	parent := WithLimiter(nil, limiter)
+	require.Same(t, limiter, LimiterFromContext(parent))
+
+	child := WithLimiter(parent, nil)
+	require.Nil(t, LimiterFromContext(child))
+}
