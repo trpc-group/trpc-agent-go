@@ -1,0 +1,97 @@
+{
+  "schema_version": "trpc-agent-go/replay-diff/v1",
+  "generated_at": "2026-07-25T00:00:00Z",
+  "baseline_backend": "inmemory",
+  "cases": [
+    {
+      "case": "example_injected_differences",
+      "session_id": "example-session",
+      "backend": "sqlite",
+      "status": "failed",
+      "differences": [
+        {
+          "case": "example_injected_differences",
+          "source": "backend",
+          "baseline_backend": "inmemory",
+          "backend": "sqlite",
+          "session_id": "example-session",
+          "event_index": 0,
+          "field_path": "events[0].content",
+          "baseline_value": "Hello",
+          "compared_value": "Hello!",
+          "allowed_diff": false
+        },
+        {
+          "case": "example_injected_differences",
+          "source": "backend",
+          "baseline_backend": "inmemory",
+          "backend": "sqlite",
+          "session_id": "example-session",
+          "memory_id": "memory-6ab55c5132f145ab",
+          "field_path": "memories[\"memory-6ab55c5132f145ab\"].content",
+          "baseline_value": "User prefers Go",
+          "compared_value": "User prefers Rust",
+          "allowed_diff": false
+        },
+        {
+          "case": "example_injected_differences",
+          "source": "backend",
+          "baseline_backend": "inmemory",
+          "backend": "sqlite",
+          "session_id": "example-session",
+          "summary_id": "example-session:agent/research",
+          "summary_filter_key": "agent/research",
+          "field_path": "summaries[\"agent/research\"].text",
+          "baseline_value": "Research completed",
+          "compared_value": "Stale summary",
+          "allowed_diff": false
+        },
+        {
+          "case": "example_injected_differences",
+          "source": "backend",
+          "baseline_backend": "inmemory",
+          "backend": "sqlite",
+          "session_id": "example-session",
+          "track_name": "tools",
+          "field_path": "tracks[\"tools\"][1].error",
+          "baseline_value": "",
+          "compared_value": "timeout",
+          "allowed_diff": false
+        },
+        {
+          "case": "example_injected_differences",
+          "source": "backend",
+          "baseline_backend": "inmemory",
+          "backend": "sqlite",
+          "session_id": "example-session",
+          "field_path": "observed_event_order",
+          "baseline_value": [
+            "event-a",
+            "event-b"
+          ],
+          "compared_value": [
+            "event-b",
+            "event-a"
+          ],
+          "allowed_diff": true,
+          "explanation": "concurrent commit order is nondeterministic"
+        }
+      ],
+      "unsupported": [
+        {
+          "feature": "event_paging",
+          "reason": "sqlite backend does not implement event_paging",
+          "allowed_diff": true
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "case_comparisons": 1,
+    "passed": 0,
+    "failed": 1,
+    "unsupported": 0,
+    "allowed_diffs": 1,
+    "disallowed_diffs": 4
+  }
+}
