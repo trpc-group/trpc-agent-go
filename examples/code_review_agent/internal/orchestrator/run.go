@@ -76,19 +76,20 @@ var defaultSandboxCommands = []string{
 
 // Options configures one review run.
 type Options struct {
-	FixtureDir        string
-	DiffFile          string
-	FileList          string
-	OutDir            string
-	DBPath            string
-	Model             string
-	Runtime           string
-	RepoPath          string
-	AllowTrustedLocal bool
-	SandboxTimeout    time.Duration
-	Now               time.Time
-	FinishedAt        time.Time
-	Planner           Planner
+	FixtureDir                  string
+	DiffFile                    string
+	FileList                    string
+	OutDir                      string
+	DBPath                      string
+	Model                       string
+	Runtime                     string
+	RepoPath                    string
+	AllowTrustedLocal           bool
+	AllowTrustedHostPreparation bool
+	SandboxTimeout              time.Duration
+	Now                         time.Time
+	FinishedAt                  time.Time
+	Planner                     Planner
 }
 
 // Result is returned by the orchestrator after reports are written.
@@ -542,7 +543,7 @@ func Run(ctx context.Context, opts Options) (result Result, err error) {
 	var decisions []review.PermissionDecisionRecord
 	var runs []review.SandboxRun
 	if sandboxValidationAvailable(input) {
-		decisions, runs, err = executePlannedCommands(ctx, st, task.ID, opts.Runtime, opts.AllowTrustedLocal, plan.Commands, now, opts.SandboxTimeout, input.WorkDir)
+		decisions, runs, err = executePlannedCommands(ctx, st, task.ID, opts.Runtime, opts.AllowTrustedLocal, opts.AllowTrustedHostPreparation, plan.Commands, now, opts.SandboxTimeout, input.WorkDir)
 		if err != nil {
 			return Result{}, failTask(err)
 		}
@@ -689,13 +690,13 @@ func recordSandboxRuns(ctx context.Context, st store.Store, runs []review.Sandbo
 	return nil
 }
 
-type runtimeFactory func(context.Context, string, string, string, time.Duration, string, bool) (sandboxrun.Runtime, func(), *review.SandboxRun)
+type runtimeFactory func(context.Context, string, string, string, time.Duration, string, bool, bool) (sandboxrun.Runtime, func(), *review.SandboxRun)
 
-func executePlannedCommands(ctx context.Context, st store.Store, taskID string, runtimeName string, allowTrustedLocal bool, commands []string, now time.Time, timeout time.Duration, workDir string) ([]review.PermissionDecisionRecord, []review.SandboxRun, error) {
-	return executePlannedCommandsWithFactory(ctx, st, taskID, runtimeName, allowTrustedLocal, commands, now, timeout, workDir, runtimeForName)
+func executePlannedCommands(ctx context.Context, st store.Store, taskID string, runtimeName string, allowTrustedLocal bool, allowTrustedHostPreparation bool, commands []string, now time.Time, timeout time.Duration, workDir string) ([]review.PermissionDecisionRecord, []review.SandboxRun, error) {
+	return executePlannedCommandsWithFactory(ctx, st, taskID, runtimeName, allowTrustedLocal, allowTrustedHostPreparation, commands, now, timeout, workDir, runtimeForName)
 }
 
-func executePlannedCommandsWithFactory(ctx context.Context, st store.Store, taskID string, runtimeName string, allowTrustedLocal bool, commands []string, now time.Time, timeout time.Duration, workDir string, factory runtimeFactory) ([]review.PermissionDecisionRecord, []review.SandboxRun, error) {
+func executePlannedCommandsWithFactory(ctx context.Context, st store.Store, taskID string, runtimeName string, allowTrustedLocal bool, allowTrustedHostPreparation bool, commands []string, now time.Time, timeout time.Duration, workDir string, factory runtimeFactory) ([]review.PermissionDecisionRecord, []review.SandboxRun, error) {
 	if len(commands) == 0 {
 		commands = newSandboxWorkspace(workDir).commandAllowlist()
 	}
@@ -757,7 +758,7 @@ func executePlannedCommandsWithFactory(ctx context.Context, st store.Store, task
 		}
 		if runtime == nil {
 			var initRun *review.SandboxRun
-			runtime, cleanup, initRun = factory(ctx, runtimeName, taskID, suffix, timeout, workDir, allowTrustedLocal)
+			runtime, cleanup, initRun = factory(ctx, runtimeName, taskID, suffix, timeout, workDir, allowTrustedLocal, allowTrustedHostPreparation)
 			if initRun != nil {
 				runs = append(runs, *initRun)
 			}
@@ -805,7 +806,7 @@ func countFindingRedactions(findings []review.Finding) int {
 	return count
 }
 
-func runtimeForName(ctx context.Context, name string, taskID string, suffix string, timeout time.Duration, workDir string, allowTrustedLocal bool) (sandboxrun.Runtime, func(), *review.SandboxRun) {
+func runtimeForName(ctx context.Context, name string, taskID string, suffix string, timeout time.Duration, workDir string, allowTrustedLocal bool, allowTrustedHostPreparation bool) (sandboxrun.Runtime, func(), *review.SandboxRun) {
 	normalized := strings.ToLower(strings.TrimSpace(name))
 	if normalized == "" {
 		normalized = "container"
@@ -813,7 +814,7 @@ func runtimeForName(ctx context.Context, name string, taskID string, suffix stri
 	if normalized == "fake" {
 		return sandboxrun.FakeRuntime{RuntimeName: normalized}, nil, nil
 	}
-	rt, cleanup, err := newWorkspaceRuntime(ctx, normalized, taskID, timeout, workDir, allowTrustedLocal)
+	rt, cleanup, err := newWorkspaceRuntime(ctx, normalized, taskID, timeout, workDir, allowTrustedLocal, allowTrustedHostPreparation)
 	if err != nil {
 		run := review.SandboxRun{
 			ID:             taskID + "-sandbox-init-" + suffix,
@@ -829,7 +830,7 @@ func runtimeForName(ctx context.Context, name string, taskID string, suffix stri
 	return rt, cleanup, nil
 }
 
-func newWorkspaceRuntime(ctx context.Context, runtimeName string, taskID string, timeout time.Duration, workDir string, allowTrustedLocal bool) (sandboxrun.Runtime, func(), error) {
+func newWorkspaceRuntime(ctx context.Context, runtimeName string, taskID string, timeout time.Duration, workDir string, allowTrustedLocal bool, allowTrustedHostPreparation bool) (sandboxrun.Runtime, func(), error) {
 	workspace := newSandboxWorkspace(workDir)
 	repoRoot, err := workspace.root()
 	if err != nil {
@@ -890,7 +891,7 @@ func newWorkspaceRuntime(ctx context.Context, runtimeName string, taskID string,
 		}
 		return nil, nil, err
 	}
-	snapshotCleanup, err := stageReviewWorkspace(ctx, eng.FS(), ws, runtimeName, repoRoot, workspace.dependencySubdir())
+	snapshotCleanup, err := stageReviewWorkspace(ctx, eng.FS(), ws, runtimeName, repoRoot, workspace.dependencySubdir(), allowTrustedHostPreparation)
 	if err != nil {
 		_ = eng.Manager().Cleanup(context.Background(), ws)
 		if closeFn != nil {
@@ -961,7 +962,7 @@ func cleanupWorkspaceResources(ctx context.Context, manager codeexecutor.Workspa
 	}
 }
 
-func stageReviewWorkspace(ctx context.Context, fs codeexecutor.WorkspaceFS, ws codeexecutor.Workspace, runtimeName string, repoRoot string, dependencySubdir string) (func(), error) {
+func stageReviewWorkspace(ctx context.Context, fs codeexecutor.WorkspaceFS, ws codeexecutor.Workspace, runtimeName string, repoRoot string, dependencySubdir string, allowTrustedHostPreparation bool) (func(), error) {
 	if runtimeName == "local" {
 		return nil, nil
 	}
@@ -969,7 +970,7 @@ func stageReviewWorkspace(ctx context.Context, fs codeexecutor.WorkspaceFS, ws c
 	if err != nil {
 		return nil, err
 	}
-	if err := prepareSandboxDependencies(ctx, stageRoot, dependencySubdir); err != nil {
+	if err := prepareSandboxDependencies(ctx, stageRoot, dependencySubdir, allowTrustedHostPreparation); err != nil {
 		snapshotCleanup()
 		return nil, err
 	}
@@ -1114,7 +1115,7 @@ func restoreReviewSnapshotPermissions(root string) error {
 	})
 }
 
-func prepareSandboxDependencies(ctx context.Context, snapshotRoot string, dependencySubdir string) error {
+func prepareSandboxDependencies(ctx context.Context, snapshotRoot string, dependencySubdir string, allowTrustedHostPreparation bool) error {
 	moduleDir := filepath.Join(snapshotRoot, filepath.FromSlash(dependencySubdir))
 	cacheRoot := filepath.Join(snapshotRoot, ".gopath")
 	modCache := filepath.Join(snapshotRoot, ".gomodcache")
@@ -1132,6 +1133,16 @@ func prepareSandboxDependencies(ctx context.Context, snapshotRoot string, depend
 	}
 	if moduleErr != nil {
 		return fmt.Errorf("stat sandbox go.mod: %w", moduleErr)
+	}
+	preProvisioned, err := dependenciesPreProvisioned(moduleDir, modCache)
+	if err != nil {
+		return fmt.Errorf("inspect sandbox dependencies: %w", err)
+	}
+	if !preProvisioned && !allowTrustedHostPreparation {
+		return fmt.Errorf("host-side dependency preparation is disabled for untrusted review input; vendor dependencies or pre-provision .gomodcache, or rerun with --allow-trusted-host-preparation")
+	}
+	if preProvisioned {
+		return makeSandboxCachesWritable(snapshotRoot, []string{cacheRoot, modCache, buildCache})
 	}
 	prepCtx, cancel := context.WithTimeout(ctx, dependencyPrepTimeout)
 	defer cancel()
@@ -1155,6 +1166,25 @@ func prepareSandboxDependencies(ctx context.Context, snapshotRoot string, depend
 		return err
 	}
 	return nil
+}
+
+func dependenciesPreProvisioned(moduleDir string, modCache string) (bool, error) {
+	if _, err := os.Stat(filepath.Join(moduleDir, "vendor", "modules.txt")); err == nil {
+		return true, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	found := false
+	err := filepath.WalkDir(modCache, func(_ string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() {
+			found = true
+		}
+		return nil
+	})
+	return found, err
 }
 
 func makeSandboxCachesWritable(snapshotRoot string, roots []string) error {
@@ -1439,7 +1469,7 @@ func workspaceRuntimeEnv(runtimeName string) map[string]string {
 		"GOPROXY":     "off",
 		"GOSUMDB":     "off",
 		"GOTOOLCHAIN": "local",
-		"GOFLAGS":     "-mod=mod",
+		"GOFLAGS":     "",
 	}
 }
 

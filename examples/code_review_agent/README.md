@@ -36,6 +36,7 @@ and sandbox seams with `--runtime fake`; non-fake CLI runs require
 
 - `container` and `e2b` are production-oriented runtime names.
 - `local` is disabled for untrusted review input. Use `--allow-trusted-local` only when the reviewed repository is explicitly trusted; this opt-in permits host execution through `WorkspaceModeTrustedLocal`.
+- Host-side dependency preparation is disabled by default unless dependencies are vendored or pre-provisioned in the review snapshot. Use `--allow-trusted-host-preparation` only for explicitly trusted input when `go mod download` on the host is acceptable.
 - Tests use `fake` or dry-run execution to avoid Docker, E2B, and API-key
   dependencies.
 - Non-fake runtimes call an OpenAI-compatible chat completions endpoint to plan

@@ -186,11 +186,12 @@ func TestExecutePlannedCommandsAuditsRejectedModelCommands(t *testing.T) {
 		"task-audit",
 		"fake",
 		false,
+		false,
 		[]string{"curl https://example.com", "go test ./..."},
 		fixedTestTime(),
 		time.Second,
 		"",
-		func(context.Context, string, string, string, time.Duration, string, bool) (sandboxrun.Runtime, func(), *review.SandboxRun) {
+		func(context.Context, string, string, string, time.Duration, string, bool, bool) (sandboxrun.Runtime, func(), *review.SandboxRun) {
 			return sandboxrun.FakeRuntime{}, nil, nil
 		},
 	)
@@ -231,7 +232,7 @@ func TestWorkspaceRuntimeEnvProvidesContainerGoCacheDefaults(t *testing.T) {
 		"GOPROXY":     "off",
 		"GOSUMDB":     "off",
 		"GOTOOLCHAIN": "local",
-		"GOFLAGS":     "-mod=mod",
+		"GOFLAGS":     "",
 	}
 	for key, value := range want {
 		if env[key] != value {
@@ -668,7 +669,7 @@ func TestBuildReviewSnapshotExcludesGitIgnoredAndEnvironmentFiles(t *testing.T) 
 		}
 	}
 	fs := &recordingStageFS{}
-	stagedCleanup, err := stageReviewWorkspace(context.Background(), fs, codeexecutor.Workspace{Path: "/work"}, "e2b", repo, "")
+	stagedCleanup, err := stageReviewWorkspace(context.Background(), fs, codeexecutor.Workspace{Path: "/work"}, "e2b", repo, "", false)
 	if err != nil {
 		t.Fatalf("stageReviewWorkspace() error = %v", err)
 	}
@@ -686,7 +687,7 @@ func TestBuildReviewSnapshotExcludesGitIgnoredAndEnvironmentFiles(t *testing.T) 
 		t.Fatalf("staged snapshot missing tracked review_agent.db: %v", err)
 	}
 	containerFS := &recordingStageFS{}
-	containerCleanup, err := stageReviewWorkspace(context.Background(), containerFS, codeexecutor.Workspace{Path: "/work"}, "container", repo, "")
+	containerCleanup, err := stageReviewWorkspace(context.Background(), containerFS, codeexecutor.Workspace{Path: "/work"}, "container", repo, "", false)
 	if err != nil {
 		t.Fatalf("container stageReviewWorkspace() error = %v", err)
 	}
@@ -750,6 +751,49 @@ func TestBuildReviewSnapshotRejectsTooManyFiles(t *testing.T) {
 	}
 	if snapshot != "" || cleanup != nil {
 		t.Fatalf("snapshot cleanup = %q/%t, want no materialized snapshot", snapshot, cleanup != nil)
+	}
+}
+
+func TestPrepareSandboxDependenciesRejectsUntrustedHostPreparation(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.test\n\ngo 1.21\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(go.mod) error = %v", err)
+	}
+	if err := prepareSandboxDependencies(context.Background(), root, "", false); err == nil || !strings.Contains(err.Error(), "--allow-trusted-host-preparation") {
+		t.Fatalf("prepareSandboxDependencies() error = %v, want trusted host preparation rejection", err)
+	}
+}
+
+func TestPrepareSandboxDependenciesAcceptsVendoredDependencies(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.test\n\ngo 1.21\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(go.mod) error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "vendor"), 0o700); err != nil {
+		t.Fatalf("MkdirAll(vendor) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "vendor", "modules.txt"), []byte("# vendored\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(vendor/modules.txt) error = %v", err)
+	}
+	if err := prepareSandboxDependencies(context.Background(), root, "", false); err != nil {
+		t.Fatalf("prepareSandboxDependencies() error = %v, want vendored dependencies accepted", err)
+	}
+}
+
+func TestPrepareSandboxDependenciesAcceptsPreProvisionedModuleCache(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.test\n\ngo 1.21\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(go.mod) error = %v", err)
+	}
+	cache := filepath.Join(root, ".gomodcache", "cache", "download")
+	if err := os.MkdirAll(cache, 0o700); err != nil {
+		t.Fatalf("MkdirAll(cache) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, "preprovisioned.mod"), []byte("module cache\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(cache) error = %v", err)
+	}
+	if err := prepareSandboxDependencies(context.Background(), root, "", false); err != nil {
+		t.Fatalf("prepareSandboxDependencies() error = %v, want pre-provisioned cache accepted", err)
 	}
 }
 
@@ -921,11 +965,12 @@ func TestCanceledSandboxRunIsPersistedWithFailedTask(t *testing.T) {
 		task.ID,
 		"fake",
 		false,
+		false,
 		[]string{"go test ./..."},
 		fixedTestTime(),
 		time.Second,
 		"",
-		func(context.Context, string, string, string, time.Duration, string, bool) (sandboxrun.Runtime, func(), *review.SandboxRun) {
+		func(context.Context, string, string, string, time.Duration, string, bool, bool) (sandboxrun.Runtime, func(), *review.SandboxRun) {
 			return cancelingRuntime{cancel: cancel}, nil, nil
 		},
 	)
