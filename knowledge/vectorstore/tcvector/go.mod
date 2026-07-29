@@ -8,7 +8,7 @@ replace (
 )
 
 require (
-	github.com/stretchr/testify v1.10.0
+	github.com/stretchr/testify v1.11.1
 	github.com/tencent/vectordatabase-sdk-go v1.8.0
 	trpc.group/trpc-go/trpc-agent-go v0.2.0
 	trpc.group/trpc-go/trpc-agent-go/storage/tcvector v0.0.4

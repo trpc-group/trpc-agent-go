@@ -9,7 +9,7 @@ replace (
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
-	github.com/stretchr/testify v1.10.0
+	github.com/stretchr/testify v1.11.1
 	trpc.group/trpc-go/trpc-agent-go v0.2.0
 	trpc.group/trpc-go/trpc-agent-go/storage/postgres v0.0.0-20251126064502-c8c2594d2519
 )

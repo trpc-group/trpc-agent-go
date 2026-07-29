@@ -135,6 +135,7 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	// Initialize ZSet config
 	zsetCfg := zset.Config{
 		SessionTTL:         sessionTTL,
+		TrackEventTTL:      opts.trackEventTTL,
 		AppStateTTL:        appStateTTL,
 		UserStateTTL:       userStateTTL,
 		SessionEventLimit:  opts.sessionEventLimit,
@@ -145,6 +146,7 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	// Initialize HashIdx config
 	hashidxCfg := hashidx.Config{
 		SessionTTL:             sessionTTL,
+		TrackEventTTL:          opts.trackEventTTL,
 		AppStateTTL:            appStateTTL,
 		UserStateTTL:           userStateTTL,
 		SessionEventLimit:      opts.sessionEventLimit,

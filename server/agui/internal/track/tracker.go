@@ -38,6 +38,10 @@ type Tracker interface {
 	Close(ctx context.Context, key session.Key) error
 }
 
+type trackEventReader interface {
+	GetTrackEvents(ctx context.Context, key session.Key, track session.Track, opts ...session.Option) (*session.TrackEvents, error)
+}
+
 // tracker is the implementation of the Tracker interface.
 type tracker struct {
 	sessionService    session.Service               // sessionService handles session lifecycle.
@@ -93,6 +97,13 @@ func (t *tracker) AppendEvent(ctx context.Context, key session.Key, event aguiev
 func (t *tracker) GetEvents(ctx context.Context, key session.Key, opts ...session.Option) (*session.TrackEvents, error) {
 	if err := key.CheckSessionKey(); err != nil {
 		return nil, fmt.Errorf("session key: %w", err)
+	}
+	if reader, ok := t.sessionService.(trackEventReader); ok {
+		trackEvents, err := reader.GetTrackEvents(ctx, key, TrackAGUI, opts...)
+		if err != nil {
+			return nil, fmt.Errorf("get track events: %w", err)
+		}
+		return trackEvents, nil
 	}
 	sess, err := t.sessionService.GetSession(ctx, key, opts...)
 	if err != nil {
