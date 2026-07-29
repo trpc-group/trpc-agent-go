@@ -203,7 +203,8 @@ func TestDefaultEventConverterStreamingBranches(t *testing.T) {
 		}
 		update, ok := result.(*protocol.TaskArtifactUpdateEvent)
 		if !ok || update.TaskID != "task" || update.ContextID != "context" ||
-			update.Metadata[ia2a.MessageMetadataTagKey] != "state" {
+			update.Metadata[ia2a.MessageMetadataTagKey] != "state" ||
+			update.Artifact.Metadata[ia2a.MessageMetadataTagKey] != "state" {
 			t.Fatalf("metadata-only result = %#v", result)
 		}
 	})

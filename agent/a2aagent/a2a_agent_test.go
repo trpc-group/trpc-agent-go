@@ -2929,6 +2929,7 @@ func TestA2AAgent_aggregateEventContent_IgnoresErrorResponses(t *testing.T) {
 		},
 		"resp-1",
 		builder,
+		nil,
 	)
 
 	require.Equal(t, "resp-1", responseID)
@@ -2962,6 +2963,7 @@ func TestA2AAgent_aggregateEventContent_HandlerError(t *testing.T) {
 		},
 		"",
 		builder,
+		nil,
 	)
 
 	require.Equal(t, "resp-2", responseID)
@@ -2974,6 +2976,38 @@ func TestA2AAgent_aggregateEventContent_HandlerError(t *testing.T) {
 	require.NotNil(t, evt.Response)
 	require.NotNil(t, evt.Response.Error)
 	require.Equal(t, model.ErrorTypeRunError, evt.Response.Error.Type)
+}
+
+func TestA2AAgent_aggregateEventContent_ContentParts(t *testing.T) {
+	builder := &strings.Builder{}
+	var contentParts []model.ContentPart
+	image := model.ContentPart{
+		Type: model.ContentTypeImage,
+		Image: &model.Image{
+			Data:   []byte("image"),
+			Format: "image/png",
+		},
+	}
+	responseID, terminalError := (&A2AAgent{}).aggregateEventContent(
+		context.Background(),
+		nil,
+		nil,
+		&event.Event{
+			Response: &model.Response{
+				ID: "resp-file",
+				Choices: []model.Choice{{
+					Delta: model.Message{ContentParts: []model.ContentPart{image}},
+				}},
+			},
+		},
+		"",
+		builder,
+		&contentParts,
+	)
+
+	require.Equal(t, "resp-file", responseID)
+	require.Nil(t, terminalError)
+	require.Equal(t, []model.ContentPart{image}, contentParts)
 }
 
 // TestValidateA2ARequestOptions tests validation logic for A2A request options

@@ -428,6 +428,7 @@ func (r *A2AAgent) executeStreaming(ctx context.Context, invocation *agent.Invoc
 		eventChan,
 		streamResult.responseID,
 		streamResult.aggregatedContent,
+		streamResult.aggregatedContentParts,
 	)
 }
 
@@ -456,9 +457,10 @@ func (r *A2AAgent) buildRequestOptions(ctx context.Context, invocation *agent.In
 }
 
 type streamingEventResult struct {
-	responseID        string
-	aggregatedContent string
-	terminalError     *model.ResponseError
+	responseID             string
+	aggregatedContent      string
+	aggregatedContentParts []model.ContentPart
+	terminalError          *model.ResponseError
 }
 
 // processStreamingEvents processes streaming events and aggregates content.
@@ -516,6 +518,7 @@ func (r *A2AAgent) processStreamingEvents(
 				evt,
 				result.responseID,
 				&contentBuilder,
+				&result.aggregatedContentParts,
 			)
 			if terminalError != nil {
 				result.aggregatedContent = contentBuilder.String()
@@ -590,6 +593,7 @@ func (r *A2AAgent) aggregateEventContent(
 	evt *event.Event,
 	responseID string,
 	contentBuilder *strings.Builder,
+	contentParts *[]model.ContentPart,
 ) (string, *model.ResponseError) {
 	if evt.Response == nil || evt.Response.Error != nil {
 		return responseID, nil
@@ -619,6 +623,12 @@ func (r *A2AAgent) aggregateEventContent(
 	} else if evt.Response.Choices[0].Delta.Content != "" {
 		contentBuilder.WriteString(evt.Response.Choices[0].Delta.Content)
 	}
+	if contentParts != nil {
+		*contentParts = append(
+			*contentParts,
+			evt.Response.Choices[0].Delta.ContentParts...,
+		)
+	}
 	return responseID, nil
 }
 
@@ -629,6 +639,7 @@ func (r *A2AAgent) emitFinalEvent(
 	eventChan chan<- *event.Event,
 	responseID string,
 	aggregatedContent string,
+	aggregatedContentParts []model.ContentPart,
 ) {
 	agent.EmitEvent(ctx, invocation, eventChan, event.New(
 		invocation.InvocationID,
@@ -642,8 +653,9 @@ func (r *A2AAgent) emitFinalEvent(
 			Created:   time.Now().Unix(),
 			Choices: []model.Choice{{
 				Message: model.Message{
-					Role:    model.RoleAssistant,
-					Content: aggregatedContent,
+					Role:         model.RoleAssistant,
+					Content:      aggregatedContent,
+					ContentParts: aggregatedContentParts,
 				},
 			}},
 		}),

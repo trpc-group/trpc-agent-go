@@ -46,7 +46,7 @@ func TestDefaultInvocationConverterContentPartsAndMetadata(t *testing.T) {
 					Name: "report.pdf", Data: []byte("file"), MimeType: "application/pdf",
 				}},
 				{Type: model.ContentTypeFile, File: &model.File{
-					URL: "https://example.com/file", MimeType: "application/pdf",
+					URL: "https://example.com/file", FileID: "ignored-file-id", MimeType: "application/pdf",
 				}},
 				{Type: model.ContentTypeFile, File: &model.File{FileID: "provider-file-id"}},
 				{Type: model.ContentTypeFile},
@@ -59,8 +59,8 @@ func TestDefaultInvocationConverterContentPartsAndMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ConvertToA2AMessage failed: %v", err)
 	}
-	if len(message.Parts) != 7 {
-		t.Fatalf("part count = %d, want 7", len(message.Parts))
+	if len(message.Parts) != 8 {
+		t.Fatalf("part count = %d, want 8", len(message.Parts))
 	}
 	if message.ContextID == nil || *message.ContextID != "context" ||
 		message.Metadata["invocation_id"] != "invocation" ||
@@ -76,6 +76,9 @@ func TestDefaultInvocationConverterContentPartsAndMetadata(t *testing.T) {
 	}
 	if got := message.Parts[6].URLContent(); got != "https://example.com/file" {
 		t.Fatalf("file URL = %q, want https://example.com/file", got)
+	}
+	if got := message.Parts[7].URLContent(); got != "provider-file-id" {
+		t.Fatalf("file ID fallback URL = %q, want provider-file-id", got)
 	}
 
 	empty, err := (&defaultEventA2AConverter{}).ConvertToA2AMessage(

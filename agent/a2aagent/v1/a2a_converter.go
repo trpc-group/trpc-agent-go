@@ -319,8 +319,12 @@ func appendFilePart(parts []*protocol.Part, cp model.ContentPart) []*protocol.Pa
 		fp.Metadata = metadata
 		return append(parts, fp)
 	}
-	if cp.File.URL != "" {
-		fp := protocol.NewFilePart(cp.File.URL, fileName, cp.File.MimeType)
+	fileURL := cp.File.URL
+	if fileURL == "" {
+		fileURL = cp.File.FileID
+	}
+	if fileURL != "" {
+		fp := protocol.NewFilePart(fileURL, fileName, cp.File.MimeType)
 		fp.Metadata = metadata
 		return append(parts, fp)
 	}
