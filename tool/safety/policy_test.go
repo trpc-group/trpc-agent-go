@@ -434,6 +434,40 @@ func TestCompileRejectsUnsupportedVersion(t *testing.T) {
 	if _, err := LoadPolicy(path); err == nil {
 		t.Errorf("LoadPolicy should reject version 2")
 	}
+
+	// An explicit "version: 0" in a file is an unsupported version, not an
+	// omission: it must fail as loudly as version 2, in both formats. Only a
+	// programmatically built policy may leave the field unset.
+	for name, body := range map[string]string{
+		"v0.yaml": "version: 0\n",
+		"v0.json": `{"version": 0}`,
+	} {
+		p := filepath.Join(t.TempDir(), name)
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatalf("write policy: %v", err)
+		}
+		_, err := LoadPolicy(p)
+		if err == nil {
+			t.Errorf("LoadPolicy(%s) should reject an explicit version 0", name)
+			continue
+		}
+		if !strings.Contains(err.Error(), "unsupported policy version 0") {
+			t.Errorf("LoadPolicy(%s) error = %v, want unsupported-version-0 error", name, err)
+		}
+	}
+
+	// A file that omits the key still loads and inherits the default version.
+	omitted := filepath.Join(t.TempDir(), "no-version.yaml")
+	if err := os.WriteFile(omitted, []byte("default_action: allow\n"), 0o644); err != nil {
+		t.Fatalf("write policy: %v", err)
+	}
+	loaded, err := LoadPolicy(omitted)
+	if err != nil {
+		t.Fatalf("LoadPolicy without a version key: %v", err)
+	}
+	if loaded.Version != 1 {
+		t.Errorf("version = %d, want 1", loaded.Version)
+	}
 }
 
 // TestForbiddenMatchNormalizesPaths pins the lexical normalization: dot

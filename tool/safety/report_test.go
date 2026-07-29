@@ -15,12 +15,16 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 var update = flag.Bool("update", false, "regenerate golden example files in testdata")
@@ -31,7 +35,7 @@ const fixedTime = "2026-06-30T00:00:00Z"
 func makeReport(t *testing.T, p *Policy, toolName, backend string, er execRequest) Report {
 	t.Helper()
 	findings, decision, risk := p.scan(er, backend)
-	r := buildReport(toolName, backend, er, findings, decision, risk, 250*time.Microsecond)
+	r := buildReport(toolName, "", backend, er, findings, decision, risk, 250*time.Microsecond)
 	p.redactReport(&r)
 	return r
 }
@@ -127,6 +131,112 @@ func TestAuditEventFields(t *testing.T) {
 	}
 	if ev.Decision != DecisionDeny || !ev.Blocked {
 		t.Errorf("rm -rf / audit = %+v, want deny+blocked", ev)
+	}
+}
+
+// TestToolCallIDPropagation pins that the framework's tool-call id survives
+// into the report, the audit event and the span, so parallel calls to the same
+// tool can be told apart and joined back to the originating tool event.
+func TestToolCallIDPropagation(t *testing.T) {
+	var mu sync.Mutex
+	reports := map[string]Report{}
+	var events []AuditEvent
+	var auditBuf bytes.Buffer
+
+	g, err := NewGuard(
+		WithPolicyFile(filepath.Join("testdata", "tool_safety_policy.yaml")),
+		WithAuditWriter(&auditBuf),
+		WithReportSink(func(r Report) {
+			mu.Lock()
+			defer mu.Unlock()
+			reports[r.ToolCallID] = r
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewGuard: %v", err)
+	}
+
+	// Identical concurrent calls to the same tool: only the id distinguishes
+	// their reports and audit events.
+	const n = 8
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, err := g.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+				ToolName:   "workspace_exec",
+				ToolCallID: "call_" + strconv.Itoa(i),
+				Arguments:  []byte(`{"command":"rm -rf /"}`),
+			})
+			if err != nil {
+				t.Errorf("CheckToolPermission: %v", err)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	if len(reports) != n {
+		t.Fatalf("got %d distinct report ids, want %d", len(reports), n)
+	}
+	for i := 0; i < n; i++ {
+		id := "call_" + strconv.Itoa(i)
+		if r, ok := reports[id]; !ok || r.ToolCallID != id {
+			t.Errorf("missing report for %q", id)
+		}
+	}
+
+	for _, line := range strings.Split(strings.TrimRight(auditBuf.String(), "\n"), "\n") {
+		var ev AuditEvent
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			t.Fatalf("audit line not JSON: %v", err)
+		}
+		events = append(events, ev)
+	}
+	ids := map[string]bool{}
+	for _, ev := range events {
+		if ev.ToolCallID == "" {
+			t.Errorf("audit event dropped the tool call id: %+v", ev)
+		}
+		if ids[ev.ToolCallID] {
+			t.Errorf("duplicate tool call id in audit log: %q", ev.ToolCallID)
+		}
+		ids[ev.ToolCallID] = true
+	}
+	if len(ids) != n {
+		t.Errorf("got %d distinct audit ids, want %d", len(ids), n)
+	}
+
+	// A caller that leaves ToolCallID unset falls back to the context value the
+	// framework installs for the tool call.
+	ctx := context.WithValue(context.Background(), tool.ContextKeyToolCallID{}, "ctx_call")
+	if _, err := g.CheckToolPermission(ctx, &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"go test ./..."}`),
+	}); err != nil {
+		t.Fatalf("CheckToolPermission: %v", err)
+	}
+	mu.Lock()
+	_, ok := reports["ctx_call"]
+	mu.Unlock()
+	if !ok {
+		t.Errorf("tool call id was not taken from the context")
+	}
+
+	// The id also lands on the span, next to the decision attributes.
+	sr := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sr))
+	sctx, span := tp.Tracer("test").Start(context.Background(), "execute_tool")
+	writeSpanAttrs(sctx, Report{Decision: DecisionDeny, ToolCallID: "call_1"})
+	span.End()
+	var got string
+	for _, a := range sr.Ended()[0].Attributes() {
+		if string(a.Key) == AttrToolCallID {
+			got = a.Value.Emit()
+		}
+	}
+	if got != "call_1" {
+		t.Errorf("%s = %q, want call_1", AttrToolCallID, got)
 	}
 }
 

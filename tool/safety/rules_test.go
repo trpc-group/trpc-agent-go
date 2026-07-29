@@ -9,9 +9,12 @@
 package safety
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 // Synthetic secrets are assembled at runtime so no PAT-shaped or auth-header
@@ -36,6 +39,16 @@ func scanCmd(t *testing.T, p *Policy, backend, command string) ([]Finding, Decis
 	t.Helper()
 	findings, decision, _ := p.scan(execRequest{Command: command}, backend)
 	return findings, decision
+}
+
+// hasEvidence reports whether any finding's evidence contains sub.
+func hasEvidence(findings []Finding, sub string) bool {
+	for _, f := range findings {
+		if strings.Contains(f.Evidence, sub) {
+			return true
+		}
+	}
+	return false
 }
 
 func hasRule(findings []Finding, ruleID string) bool {
@@ -414,6 +427,76 @@ func TestRequireRedirectFree(t *testing.T) {
 		findings, decision := scanCmd(t, pOn, BackendWorkspace, cmd)
 		if decision != DecisionAllow {
 			t.Errorf("knob on: %q should allow (redirect-free), got %q: %+v", cmd, decision, findings)
+		}
+	}
+}
+
+// TestWgetRedirectOptionOrder pins that the EFFECTIVE --max-redirect decides,
+// not the first one seen: wget applies repeated options in order, so a later
+// non-zero budget re-enables redirects and must fail closed under
+// require_redirect_free. Everything after the "--" terminator is an operand,
+// not an option, and an unresolvable value fails closed too.
+func TestWgetRedirectOptionOrder(t *testing.T) {
+	p := loadExamplePolicy(t)
+	p.Network.RequireRedirectFree = true
+
+	deny := []string{
+		// The last option wins: redirects end up enabled.
+		`wget --max-redirect=0 --max-redirect=5 https://github.com/a`,
+		`wget --max-redirect 0 --max-redirect 5 https://github.com/a`,
+		// After "--" the token is a filename operand, not an option.
+		`wget https://github.com/a -- --max-redirect=0`,
+		// Values the guard cannot resolve to a number.
+		`wget --max-redirect=none https://github.com/a`,
+		`wget https://github.com/a --max-redirect`,
+	}
+	for _, cmd := range deny {
+		findings, decision := scanCmd(t, p, BackendWorkspace, cmd)
+		if decision != DecisionDeny {
+			t.Errorf("%q should deny, got %q: %+v", cmd, decision, findings)
+		}
+		if !hasRule(findings, ruleNetworkID) {
+			t.Errorf("missing R-NET-001 for %q: %+v", cmd, findings)
+		}
+	}
+
+	// The reverse order really is redirect-free and stays allowed.
+	for _, cmd := range []string{
+		`wget --max-redirect=5 --max-redirect=0 https://github.com/a`,
+		`wget --max-redirect 5 --max-redirect 0 https://github.com/a`,
+	} {
+		findings, decision := scanCmd(t, p, BackendWorkspace, cmd)
+		if decision != DecisionAllow {
+			t.Errorf("%q should allow (effective --max-redirect=0), got %q: %+v",
+				cmd, decision, findings)
+		}
+	}
+}
+
+// TestWgetRedirectsDisabledUnit exercises the option parser directly, including
+// the cases that never reach a full command scan.
+func TestWgetRedirectsDisabledUnit(t *testing.T) {
+	cases := []struct {
+		args []string
+		want bool
+	}{
+		{[]string{"--max-redirect=0", "https://x"}, true},
+		{[]string{"--max-redirect", "0", "https://x"}, true},
+		{[]string{"--max-redirect=0", "--max-redirect=5"}, false},
+		{[]string{"--max-redirect=5", "--max-redirect=0"}, true},
+		{[]string{"--max-redirect", "0", "--max-redirect", "3"}, false},
+		{[]string{"--max-redirect=0", "--", "--max-redirect=5"}, true},
+		{[]string{"--", "--max-redirect=0"}, false},
+		{[]string{"--max-redirect"}, false},
+		{[]string{"--max-redirect=abc"}, false},
+		{[]string{"https://x"}, false},
+		// "--max-redirect 0" must consume the value, so a stray "0" cannot be
+		// re-read as another option token.
+		{[]string{"--max-redirect", "--max-redirect=0"}, false},
+	}
+	for _, c := range cases {
+		if got := wgetRedirectsDisabled(c.args); got != c.want {
+			t.Errorf("wgetRedirectsDisabled(%q) = %v, want %v", c.args, got, c.want)
 		}
 	}
 }
@@ -870,6 +953,54 @@ func TestCodeBlockShellFullScan(t *testing.T) {
 	}
 }
 
+// TestPowerShellCodeBlockFailsClosed pins that a shell the guard has no parser
+// for is never demoted to the generic code checks. codeexecutor/jupyter accepts
+// pwsh / powershell / ps1 (and codeexec.WithLanguages can expose them), so a
+// destructive PowerShell block must fail closed via unparsable_action instead
+// of slipping past the command, forbidden-path and destructive-operation rules.
+func TestPowerShellCodeBlockFailsClosed(t *testing.T) {
+	p := loadExamplePolicy(t)
+	for _, lang := range []string{"powershell", "pwsh", "ps1", "PowerShell", "cmd", "bat"} {
+		t.Run(lang, func(t *testing.T) {
+			findings, decision := scanCode(t, p, []codeBlock{{
+				Language: lang,
+				Code:     `Remove-Item -Recurse -Force C:\Windows\System32`,
+			}})
+			if decision != DecisionDeny {
+				t.Errorf("decision = %q, want deny (findings: %+v)", decision, findings)
+			}
+			if !hasRule(findings, ruleShellID) {
+				t.Errorf("missing R-SHELL-001 for %s block: %+v", lang, findings)
+			}
+		})
+	}
+
+	// The language classification itself: these are shells, not "code", so they
+	// must never fall through to the non-shell branch.
+	for _, lang := range []string{"pwsh", "powershell", "ps1", " PS1 ", "cmd", "batch"} {
+		if !isShellLanguage(lang) || !isNonPOSIXShellLanguage(lang) {
+			t.Errorf("%q must classify as a non-POSIX shell language", lang)
+		}
+	}
+	for _, lang := range []string{"python", "javascript", "go"} {
+		if isNonPOSIXShellLanguage(lang) {
+			t.Errorf("%q must not classify as a shell language", lang)
+		}
+	}
+
+	// unparsable_action is what drives the decision, exactly like an unparsable
+	// POSIX block: relaxing it relaxes the PowerShell block too.
+	relaxed := loadExamplePolicy(t)
+	relaxed.UnparsableAction = ActionAsk
+	_, decision := scanCode(t, relaxed, []codeBlock{{
+		Language: "powershell",
+		Code:     `Get-ChildItem`,
+	}})
+	if decision != DecisionReview {
+		t.Errorf("relaxed unparsable_action decision = %q, want needs_human_review", decision)
+	}
+}
+
 // TestCodeBlockBridgeAndURLs covers non-shell code: bridging into shell
 // execution routes to review, and URLs embedded in the source are checked
 // against the network whitelist.
@@ -1008,15 +1139,25 @@ func TestChmodRecursiveReview(t *testing.T) {
 }
 
 // TestWindowsSystemPaths pins that Windows drive roots and system directories
-// count as system paths for the rm escalation.
+// count as system paths for the rm / del escalation, including the environment
+// variables cmd.exe expands and the separator loss caused by POSIX word
+// splitting ("del /s C:\Windows\System32" reaches the rules as
+// "C:WindowsSystem32").
 func TestWindowsSystemPaths(t *testing.T) {
-	yes := []string{`C:\Windows`, `c:/windows/system32`, `C:\Program Files\App`, `C:`, `D:/`}
+	yes := []string{
+		`C:\Windows`, `c:/windows/system32`, `C:\Program Files\App`, `C:`, `D:/`,
+		`C:WindowsSystem32`, `C:ProgramData`,
+		`%SystemRoot%`, `%WINDIR%/System32`, `%WINDIR%System32`, `%ProgramFiles%`,
+	}
 	for _, p := range yes {
 		if !isRootOrSystem(p) {
 			t.Errorf("isRootOrSystem(%q) = false, want true", p)
 		}
 	}
-	no := []string{`C:\Users\dev\project`, `d:/work/repo`, "build", "./out"}
+	no := []string{
+		`C:\Users\dev\project`, `d:/work/repo`, "build", "./out",
+		`C:projects`, `%GOPATH%/src`,
+	}
 	for _, p := range no {
 		if isRootOrSystem(p) {
 			t.Errorf("isRootOrSystem(%q) = true, want false", p)
@@ -1165,6 +1306,83 @@ func TestDefaultPolicyProtectiveBaseline(t *testing.T) {
 	findings, _ := scanCmd(t, &p, BackendWorkspace, "curl -H 'X-Key: sk-"+strings.Repeat("a", 20)+"' https://api.example.com")
 	if !hasRule(findings, ruleSecretID) {
 		t.Errorf("missing R-SECRET-001 for sk- token under defaults: %+v", findings)
+	}
+}
+
+// TestWindowsDestructiveDefaults pins that the default policy protects a
+// Windows host too: hostexec runs commands through cmd.exe there, so the native
+// destructive utilities are denied by name and R-DEL-001 understands del /
+// erase / rd / rmdir argument semantics against a system path.
+func TestWindowsDestructiveDefaults(t *testing.T) {
+	p := DefaultPolicy()
+	if err := p.compile(); err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+
+	// Denied binaries: disk/volume destruction, boot config, shadow copies,
+	// ownership rewriting and privilege escalation.
+	for _, cmd := range []string{
+		`format C: /q`,
+		`diskpart /s script.txt`,
+		`vssadmin delete shadows /all /quiet`,
+		`wbadmin delete catalog -quiet`,
+		`bcdedit /set safeboot minimal`,
+		`takeown /f C:/Windows /r`,
+		`icacls C:/Windows /grant everyone:F`,
+		`runas /user:Administrator cmd`,
+	} {
+		findings, decision := scanCmd(t, &p, BackendHost, cmd)
+		if decision != DecisionDeny {
+			t.Errorf("%q: decision = %q, want deny: %+v", cmd, decision, findings)
+		}
+		if !hasRule(findings, ruleDangerousID) {
+			t.Errorf("%q: missing %s: %+v", cmd, ruleDangerousID, findings)
+		}
+	}
+
+	// Recursive deletes: a system target is critical, an unattended recursive
+	// delete of a project path is still flagged. The backslash spellings are
+	// included because the POSIX word splitter eats the separators, and the
+	// quoted form because that is what survives it intact.
+	for _, cmd := range []string{
+		`del /s /q C:\Windows\System32`,
+		`del /s /q "C:\Windows\System32"`,
+		`rmdir /s /q "C:\Windows"`,
+		`rd /s /q C:/Windows`,
+		`del /f /s /q %SystemRoot%`,
+		`rmdir /s /q C:/`,
+		`del /s /q build`,
+		`erase /s /q dist`,
+		`del "C:\Windows\System32\ntoskrnl.exe"`,
+	} {
+		findings, decision := scanCmd(t, &p, BackendHost, cmd)
+		if decision != DecisionDeny {
+			t.Errorf("%q: decision = %q, want deny: %+v", cmd, decision, findings)
+		}
+		if !hasRule(findings, ruleDangerousID) {
+			t.Errorf("%q: missing %s: %+v", cmd, ruleDangerousID, findings)
+		}
+	}
+
+	// The POSIX rmdir (no switches, empty directories only) and ordinary
+	// single-file deletes stay allowed: no over-blocking.
+	for _, cmd := range []string{
+		`rmdir build/tmp`,
+		`del build/out.txt`,
+		`erase notes.txt`,
+	} {
+		findings, decision := scanCmd(t, &p, BackendHost, cmd)
+		if decision != DecisionAllow {
+			t.Errorf("%q should allow, got %q: %+v", cmd, decision, findings)
+		}
+	}
+
+	// A relative recursive delete is resolved against the request's workdir,
+	// exactly like the rm rule.
+	findings, decision, _ := p.scan(
+		execRequest{Command: `rd /s /q ..`, Cwd: "C:/Windows/System32"}, BackendHost)
+	if decision != DecisionDeny || !hasRule(findings, ruleDangerousID) {
+		t.Errorf("relative windows delete under a system cwd = %q: %+v", decision, findings)
 	}
 }
 
@@ -1444,6 +1662,154 @@ func TestProxyEnvRedirectDeny(t *testing.T) {
 	findings, _, _ = p.scan(er, BackendWorkspace)
 	if hasRule(findings, ruleNetworkID) {
 		t.Errorf("non-download command must not trip R-NET-001: %+v", findings)
+	}
+}
+
+// setEnviron installs a fixed inherited environment for one test.
+func setEnviron(t *testing.T, kv ...string) {
+	t.Helper()
+	prev := osEnviron
+	osEnviron = func() []string { return kv }
+	t.Cleanup(func() { osEnviron = prev })
+}
+
+// TestInheritedProxyEnvRedirectDeny pins that the proxy check covers the
+// environment the command really runs with, not just the model-supplied
+// overrides: hostexec passes the guard process environment through to every
+// command (and layers WithBaseEnv on top), so an ambient or base HTTPS_PROXY
+// must be whitelist-checked exactly like a request override.
+func TestInheritedProxyEnvRedirectDeny(t *testing.T) {
+	// Inherited from the guard process.
+	t.Run("inherited", func(t *testing.T) {
+		p := loadExamplePolicy(t)
+		setEnviron(t, "PATH=/usr/bin", "HTTPS_PROXY=http://evil.io:8080")
+		findings, decision, _ := p.scan(
+			execRequest{Command: `curl https://github.com/a`}, BackendHost)
+		if decision != DecisionDeny || !hasRule(findings, ruleNetworkID) {
+			t.Errorf("inherited proxy decision = %q, want deny: %+v", decision, findings)
+		}
+		// The evidence names the source so an operator can tell it apart from a
+		// model-supplied override.
+		if !hasEvidence(findings, "inherited") {
+			t.Errorf("evidence should name the inherited source: %+v", findings)
+		}
+	})
+
+	// Supplied by the executor's base env (hostexec.WithBaseEnv, mirrored via
+	// WithExecutorEnv).
+	t.Run("executor base env", func(t *testing.T) {
+		p := loadExamplePolicy(t)
+		findings, decision, _ := p.scan(execRequest{
+			Command: `curl https://github.com/a`,
+			BaseEnv: map[string]string{"HTTPS_PROXY": "http://evil.io:8080"},
+		}, BackendHost)
+		if decision != DecisionDeny || !hasRule(findings, ruleNetworkID) {
+			t.Errorf("base-env proxy decision = %q, want deny: %+v", decision, findings)
+		}
+	})
+
+	// Precedence mirrors hostexec's mergedEnv: request beats base env beats the
+	// inherited value. A whitelisted override of a hostile inherited proxy
+	// allows, and a hostile override of a whitelisted base env denies.
+	t.Run("precedence", func(t *testing.T) {
+		p := loadExamplePolicy(t)
+		p.Env.AllowedKeys = nil // isolate from the opt-in R-ENV-001 key rule
+		setEnviron(t, "HTTPS_PROXY=http://evil.io:8080")
+		findings, decision, _ := p.scan(execRequest{
+			Command: `curl https://github.com/a`,
+			Env:     map[string]string{"HTTPS_PROXY": "http://github.com:8080"},
+		}, BackendHost)
+		if decision != DecisionAllow {
+			t.Errorf("request override should win, got %q: %+v", decision, findings)
+		}
+		findings, decision, _ = p.scan(execRequest{
+			Command: `curl https://github.com/a`,
+			BaseEnv: map[string]string{"HTTPS_PROXY": "http://github.com:8080"},
+			Env:     map[string]string{"HTTPS_PROXY": "http://evil.io:8080"},
+		}, BackendHost)
+		if decision != DecisionDeny || !hasRule(findings, ruleNetworkID) {
+			t.Errorf("request override of a clean base env should deny, got %q: %+v",
+				decision, findings)
+		}
+		// An empty override disables the proxy, so the inherited value no
+		// longer applies.
+		_, decision, _ = p.scan(execRequest{
+			Command: `curl https://github.com/a`,
+			Env:     map[string]string{"HTTPS_PROXY": ""},
+		}, BackendHost)
+		if decision != DecisionAllow {
+			t.Errorf("emptied proxy override should allow, got %q", decision)
+		}
+	})
+
+	// Backends that do not run in the guard's process environment must not be
+	// judged by it: the code executor has its own runtime, and an explicitly
+	// isolated workspace does not inherit it either.
+	t.Run("non-inheriting backends", func(t *testing.T) {
+		p := loadExamplePolicy(t)
+		setEnviron(t, "HTTPS_PROXY=http://evil.io:8080")
+		findings, decision := scanCode(t, p,
+			[]codeBlock{{Language: "bash", Code: `curl https://github.com/a`}})
+		if decision != DecisionAllow {
+			t.Errorf("code backend should not inherit the guard env, got %q: %+v",
+				decision, findings)
+		}
+		p.WorkspaceIsolated = true
+		findings, decision, _ = p.scan(
+			execRequest{Command: `curl https://github.com/a`}, BackendWorkspace)
+		if decision != DecisionAllow {
+			t.Errorf("isolated workspace should not inherit the guard env, got %q: %+v",
+				decision, findings)
+		}
+		// A non-isolated workspace does run on the host, so it fails closed.
+		p.WorkspaceIsolated = false
+		findings, decision, _ = p.scan(
+			execRequest{Command: `curl https://github.com/a`}, BackendWorkspace)
+		if decision != DecisionDeny || !hasRule(findings, ruleNetworkID) {
+			t.Errorf("non-isolated workspace should deny, got %q: %+v", decision, findings)
+		}
+	})
+
+	// Unrelated inherited variables are none of the network rule's business.
+	t.Run("unrelated env", func(t *testing.T) {
+		p := loadExamplePolicy(t)
+		setEnviron(t, "PATH=/usr/bin", "HOME=/home/dev", "NO_PROXY=evil.io")
+		findings, decision, _ := p.scan(
+			execRequest{Command: `curl https://github.com/a`}, BackendHost)
+		if decision != DecisionAllow {
+			t.Errorf("clean inherited env should allow, got %q: %+v", decision, findings)
+		}
+	})
+}
+
+// TestWithExecutorEnvMirrorsBaseEnv pins the guard-level wiring: the executor's
+// base env reaches the scan, and the guard copies it so a later mutation of the
+// caller's map cannot change the verdict.
+func TestWithExecutorEnvMirrorsBaseEnv(t *testing.T) {
+	base := map[string]string{"HTTPS_PROXY": "http://evil.io:8080"}
+	var last Report
+	g, err := NewGuard(
+		WithPolicyFile(filepath.Join("testdata", "tool_safety_policy.yaml")),
+		WithExecutorEnv(base),
+		WithReportSink(func(r Report) { last = r }),
+	)
+	if err != nil {
+		t.Fatalf("NewGuard: %v", err)
+	}
+	base["HTTPS_PROXY"] = "http://github.com:8080" // must not affect the guard
+
+	dec, err := g.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "exec_command",
+		Arguments: []byte(`{"command":"curl https://github.com/a"}`),
+	})
+	if err != nil {
+		t.Fatalf("CheckToolPermission: %v", err)
+	}
+	if dec.Action != tool.PermissionActionDeny {
+		t.Errorf("action = %q, want deny (findings: %+v)", dec.Action, last.Findings)
+	}
+	if !hasRule(last.Findings, ruleNetworkID) {
+		t.Errorf("missing R-NET-001 for the executor base env: %+v", last.Findings)
 	}
 }
 

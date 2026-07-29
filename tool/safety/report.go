@@ -18,7 +18,13 @@ import (
 // Report is the structured scan result for one tool call. It is emitted as
 // tool_safety_report.json and projected into an audit event.
 type Report struct {
-	ToolName   string    `json:"tool_name"`
+	ToolName string `json:"tool_name"`
+	// ToolCallID is the framework's identifier for this tool call
+	// (tool.PermissionRequest.ToolCallID). It joins the report and its audit
+	// event back to the originating tool event and execution span, which is the
+	// only way to tell apart parallel calls to the same tool. Empty when the
+	// caller supplied none.
+	ToolCallID string    `json:"tool_call_id,omitempty"`
 	Backend    string    `json:"backend"`
 	Command    string    `json:"command"`
 	Decision   Decision  `json:"decision"`
@@ -34,6 +40,7 @@ type Report struct {
 // AuditEvent is the compact projection of a Report written to the audit log.
 type AuditEvent struct {
 	ToolName   string    `json:"tool_name"`
+	ToolCallID string    `json:"tool_call_id,omitempty"`
 	Decision   Decision  `json:"decision"`
 	RiskLevel  RiskLevel `json:"risk_level"`
 	Backend    string    `json:"backend"`
@@ -47,7 +54,7 @@ type AuditEvent struct {
 // buildReport assembles a Report from a scan result. Redaction is applied
 // separately by redactReport before the report is emitted.
 func buildReport(
-	toolName, backend string,
+	toolName, toolCallID, backend string,
 	er execRequest,
 	findings []Finding,
 	decision Decision,
@@ -59,6 +66,7 @@ func buildReport(
 	}
 	r := Report{
 		ToolName:   toolName,
+		ToolCallID: toolCallID,
 		Backend:    backend,
 		Command:    er.Command,
 		Decision:   decision,
@@ -124,6 +132,7 @@ func (r Report) summary() string {
 func (r Report) toAudit() AuditEvent {
 	return AuditEvent{
 		ToolName:   r.ToolName,
+		ToolCallID: r.ToolCallID,
 		Decision:   r.Decision,
 		RiskLevel:  r.RiskLevel,
 		Backend:    r.Backend,

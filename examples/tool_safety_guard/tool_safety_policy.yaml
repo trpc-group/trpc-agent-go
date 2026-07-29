@@ -29,7 +29,14 @@ workspace_isolated: false
 commands:
   allowed: [go, git, ls, cat, echo, grep, sed, awk, jq, python3,
             curl, wget, pip, pip3, sleep, yes]
-  denied: [dd, mkfs, shutdown, reboot, chmod, chown]
+  # Unix destructive tools, then their native Windows equivalents: hostexec
+  # runs commands through cmd.exe on Windows, so disk/volume destruction,
+  # boot configuration, shadow-copy deletion, ownership rewriting and
+  # privilege escalation are denied there too. Recursive del / rd / rmdir
+  # are handled by their arguments (R-DEL-001), not by name.
+  denied: [dd, mkfs, shutdown, reboot, chmod, chown,
+           format, diskpart, fsutil, vssadmin, wbadmin,
+           bcdedit, bootrec, cipher, takeown, icacls, runas]
   # Opt-in: route any multi-segment pipeline / command chain to human review.
   # Off so legitimate pipes (cat a | grep b) stay allowed.
   review_pipelines: false

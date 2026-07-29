@@ -28,6 +28,9 @@ const (
 	AttrBackend = "tool.safety.backend"
 	// AttrBlocked reports whether execution was prevented.
 	AttrBlocked = "tool.safety.blocked"
+	// AttrToolCallID is the framework tool-call id the decision belongs to, so
+	// a span can be correlated with the matching report and audit event.
+	AttrToolCallID = "tool.safety.tool_call_id"
 )
 
 // writeSpanAttrs records the guard decision on the active span. When there is
@@ -45,4 +48,7 @@ func writeSpanAttrs(ctx context.Context, r Report) {
 		attribute.StringSlice(AttrRuleID, r.ruleIDs()),
 		attribute.Bool(AttrBlocked, r.Blocked),
 	)
+	if r.ToolCallID != "" {
+		span.SetAttributes(attribute.String(AttrToolCallID, r.ToolCallID))
+	}
 }

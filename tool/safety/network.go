@@ -677,23 +677,40 @@ func curlFollowsRedirects(args []string) bool {
 // --max-redirect=0 (or "--max-redirect 0") disables it, so under the opt-in
 // network.require_redirect_free posture every other wget invocation fails
 // closed.
+//
+// wget applies repeated options in order, so only the LAST --max-redirect wins:
+// "wget --max-redirect=0 --max-redirect=5 URL" follows redirects and must not
+// be reported as redirect-free. Everything after the "--" terminator is an
+// operand, not an option, so a trailing "-- --max-redirect=0" does not count
+// either. Anything the guard cannot resolve to a number (a dangling option, a
+// non-numeric value) fails closed by reporting "not disabled".
 func wgetRedirectsDisabled(args []string) bool {
-	for i, a := range args {
+	seen, disabled := false, false
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			break
+		}
 		flag, val, hasInline := splitFlagValue(a)
 		if flag != "--max-redirect" {
 			continue
 		}
 		if !hasInline {
 			if i+1 >= len(args) {
-				continue
+				// Dangling option: wget would reject the invocation, and the
+				// effective value is unknowable here.
+				return false
 			}
 			val = args[i+1]
+			i++
 		}
-		if n, err := strconv.Atoi(strings.TrimSpace(val)); err == nil && n == 0 {
-			return true
+		n, err := strconv.Atoi(strings.TrimSpace(val))
+		if err != nil {
+			return false
 		}
+		seen, disabled = true, n == 0
 	}
-	return false
+	return seen && disabled
 }
 
 // curlDefaultConfigDisabled reports whether curl's implicit default config is

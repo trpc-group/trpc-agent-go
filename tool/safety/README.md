@@ -41,9 +41,9 @@ second gate.
 
 | # | Category | Rule id | What it catches | Risk |
 |---|----------|---------|-----------------|------|
-| 1 | dangerous_command | `R-DEL-001` | denied destructive commands; recursive `rm` (all flag spellings) with force **or aimed at a root/system path even without force** (`rm -r /etc`); recursive `chmod -R` → review. System paths include the Windows drive roots, `C:\Windows`, `C:\Program Files`, `C:\ProgramData` | medium → critical |
+| 1 | dangerous_command | `R-DEL-001` | denied destructive commands; recursive `rm` (all flag spellings) with force **or aimed at a root/system path even without force** (`rm -r /etc`); recursive `chmod -R` → review. **Windows is covered natively**, because hostexec runs commands through `cmd.exe` there: the `del`/`erase`/`rd`/`rmdir` switch semantics (`/s` recursive, `/q`/`/f` unattended) are understood, and the destructive Windows binaries (`format`, `diskpart`, `fsutil`, `vssadmin`, `wbadmin`, `bcdedit`, `bootrec`, `cipher`, `takeown`, `icacls`, `runas`) are in the default denied list. System paths include the Windows drive roots, `C:\Windows`, `C:\Program Files`, `C:\ProgramData`, the environment spellings `%SystemRoot%`/`%WINDIR%`/`%ProgramFiles%`/... and the separator-free form left behind when the POSIX word splitter eats the backslashes (`C:\Windows\System32` → `C:WindowsSystem32`) | medium → critical |
 | 2 | credential_access | `R-CRED-001` | argv/cwd hitting `~/.ssh`, `**/.env`, `**/id_rsa`, credentials; `file:` URIs are decoded to their filesystem path first so `curl file:///etc/shadow` (any RFC 8089 spelling, incl. percent-encoded) cannot hide the path inside a URI. Path-bearing portions embedded in **option values** are extracted before matching, so a forbidden path cannot hide inline: `--upload-file=/etc/shadow`, `-T/etc/shadow`, and curl's read-from-file markers (`--data-binary=@/etc/shadow`, `-d @/etc/shadow`, `-F name=@/etc/shadow`, the `name@path` spelling `--data-urlencode` takes without an `=`, and the `-F story=</etc/shadow` form-field file read) are all matched | critical |
-| 3 | network | `R-NET-001` | download commands targeting a non-whitelisted host, including curl egress-redirect options (`--connect-to`, `--resolve`, `-x/--proxy`/`--preproxy` and the SOCKS/HTTP-1.0 proxy variants `--socks4/--socks4a/--socks5/--socks5-hostname/--proxy1.0`, `--url`, `--dns-servers`, `--doh-url`) parsed for their real target across `flag value`, `flag=value` and bundled/inline short-flag (`-sx`, `-xhost`) forms. `--resolve` uses an option-specific `[+]host:port:addr[,addr]` parser so an **unbracketed IPv6** rewrite target (`--resolve github.com:443:2001:db8::1`) is extracted whole instead of being shattered on its colons. Fails closed on the opaque `-K/--config` file (incl. `-sK`) and on the Unix-socket destination overrides `--unix-socket`/`--abstract-unix-socket` (the connection is rerouted to a local socket — e.g. `/var/run/docker.sock` — that a domain whitelist cannot vet); optionally fails closed on curl's **implicit default config** (see below). The non-curl download commands get the same treatment: host-bearing options (`ssh/scp -J` jump hosts, `ssh -W/-L/-R` forwarding specs, `nc -x` proxy) are parsed for their real targets across space/inline/bundled forms, and opaque egress controls (`wget -e/--execute/--config/-i/--input-file`, `ssh/scp -o/-F`, `ssh -D` dynamic SOCKS proxying — the tunnel's destinations are chosen per-connection at runtime, so there is nothing to whitelist-check — and `scp/sftp -S/-D`) **fail closed** because their config file / rc directive / URL list / tunnel / transport program can redirect egress invisibly. Raw and bracketed IPv6 operands (`nc 2001:db8::1`, `[2001:db8::1]:443`, `user@[2001:db8::1]:`) are parsed as whole addresses instead of being truncated at the first colon. scp operands are split into local paths and remote specs, so a dotted local filename (`scp release.tar.gz user@host:/tmp/`) is not mistaken for a host. **Proxy environment overrides** (`http_proxy`/`HTTPS_PROXY`/`ALL_PROXY`/... in the request env, matched case-insensitively) on a download command are whitelist-checked like a command-line proxy option, independently of the opt-in `env.allowed_keys` rule. A download command with **no extractable target at all** falls back to review instead of silently allowing. **Redirect contract:** by default `allowed_domains` is an *initial-target* check — a whitelisted server can still HTTP-redirect the client elsewhere at runtime (curl only with `-L`; wget by default); the opt-in `network.require_redirect_free` fails redirect-following invocations closed (curl `-L/--location/--location-trusted` denies; wget requires `--max-redirect=0`), see the trust-boundary section. URLs embedded in non-shell `execute_code` source are checked against the same whitelist **when the network policy is configured** (a domain whitelist or download commands); the built-in default policy has no whitelist and stays network-neutral on code, mirroring the shell side | medium → high |
+| 3 | network | `R-NET-001` | download commands targeting a non-whitelisted host, including curl egress-redirect options (`--connect-to`, `--resolve`, `-x/--proxy`/`--preproxy` and the SOCKS/HTTP-1.0 proxy variants `--socks4/--socks4a/--socks5/--socks5-hostname/--proxy1.0`, `--url`, `--dns-servers`, `--doh-url`) parsed for their real target across `flag value`, `flag=value` and bundled/inline short-flag (`-sx`, `-xhost`) forms. `--resolve` uses an option-specific `[+]host:port:addr[,addr]` parser so an **unbracketed IPv6** rewrite target (`--resolve github.com:443:2001:db8::1`) is extracted whole instead of being shattered on its colons. Fails closed on the opaque `-K/--config` file (incl. `-sK`) and on the Unix-socket destination overrides `--unix-socket`/`--abstract-unix-socket` (the connection is rerouted to a local socket — e.g. `/var/run/docker.sock` — that a domain whitelist cannot vet); optionally fails closed on curl's **implicit default config** (see below). The non-curl download commands get the same treatment: host-bearing options (`ssh/scp -J` jump hosts, `ssh -W/-L/-R` forwarding specs, `nc -x` proxy) are parsed for their real targets across space/inline/bundled forms, and opaque egress controls (`wget -e/--execute/--config/-i/--input-file`, `ssh/scp -o/-F`, `ssh -D` dynamic SOCKS proxying — the tunnel's destinations are chosen per-connection at runtime, so there is nothing to whitelist-check — and `scp/sftp -S/-D`) **fail closed** because their config file / rc directive / URL list / tunnel / transport program can redirect egress invisibly. Raw and bracketed IPv6 operands (`nc 2001:db8::1`, `[2001:db8::1]:443`, `user@[2001:db8::1]:`) are parsed as whole addresses instead of being truncated at the first colon. scp operands are split into local paths and remote specs, so a dotted local filename (`scp release.tar.gz user@host:/tmp/`) is not mistaken for a host. **Proxy environment overrides** (`http_proxy`/`HTTPS_PROXY`/`ALL_PROXY`/..., matched case-insensitively) on a download command are whitelist-checked like a command-line proxy option, independently of the opt-in `env.allowed_keys` rule. The check covers the **effective** environment, not just the model-supplied overrides: the guard process environment the command inherits (hostexec passes it through to every command), then the executor's base env mirrored in via `WithExecutorEnv` (`hostexec.WithBaseEnv`), then the request overrides — same precedence as hostexec. The inherited environment is consulted only for backends that really run in it (host, and workspace unless `workspace_isolated: true`; never `code`). A download command with **no extractable target at all** falls back to review instead of silently allowing. **Redirect contract:** by default `allowed_domains` is an *initial-target* check — a whitelisted server can still HTTP-redirect the client elsewhere at runtime (curl only with `-L`; wget by default); the opt-in `network.require_redirect_free` fails redirect-following invocations closed (curl `-L/--location/--location-trusted` denies; wget requires `--max-redirect=0`). For wget the **effective** option decides — options apply in order, so `--max-redirect=0 --max-redirect=5` still follows redirects and fails closed, and a value after the `--` terminator is an operand, not an option. See the trust-boundary section. URLs embedded in non-shell `execute_code` source are checked against the same whitelist **when the network policy is configured** (a domain whitelist or download commands); the built-in default policy has no whitelist and stays network-neutral on code, mirroring the shell side | medium → high |
 | 4 | shell_bypass | `R-SHELL-001` | unparsable commands (`$()`, backticks, `$VAR`, redirection, subshell) and shell wrappers / re-executing builtins (`bash -c`, `eval`, `xargs`, `env CMD`) that can bypass the allow/deny list; non-shell `execute_code` source that bridges into shell execution (`os.system`, `subprocess.`, `exec(`, `child_process`) → review | medium → high |
 | 4b | command_policy | `R-CMD-001` | a plain, parseable command that is simply **not in `commands.allowed`** (an allow-list miss, not a bypass); with the opt-in `commands.review_pipelines` knob, any multi-segment pipeline / chain → review | medium → high |
 | 5 | host_risk | `R-HOST-001` | background / PTY sessions and `sudo`/`su`/`nohup` on the host backend — **and on the workspace backend unless the policy declares `workspace_isolated: true`**, because workspace_exec can be backed by `codeexecutor/local`, which runs directly on the host | high → critical |
@@ -138,6 +138,31 @@ events, err := runner.Run(ctx, userID, sessionID, msg,
 agent.WithToolPermissionPolicy(guard))
 ```
 
+If the executor is configured with its own environment overrides, mirror them
+into the guard so the network rules judge the environment the command will
+really run with:
+
+```go
+baseEnv := map[string]string{"GOFLAGS": "-mod=mod"}
+hostTools, err := hostexec.NewToolSet(hostexec.WithBaseEnv(baseEnv))
+guard, err := safety.NewGuard(
+safety.WithPolicyFile("tool_safety_policy.yaml"),
+safety.WithExecutorEnv(baseEnv), // same map hostexec runs with
+)
+```
+
+The environment the **guard process itself** exports is always consulted for
+the host (and non-isolated workspace) backends, because hostexec passes it
+through to every command — an ambient `HTTPS_PROXY` therefore fails a
+whitelisted download closed unless the proxy host is itself whitelisted.
+
+`safety.WithExecutorBaseDir(dir)` does the same for the working directory: the
+tool arguments carry only what the model wrote, so tell the guard which
+directory the executor resolves a relative (or omitted) `workdir` against
+(`hostexec.WithBaseDir`, or the workspace root). With it, `"workdir":
+"../../../etc"` is matched as the `/etc` it resolves to; without it, relative
+working directories are matched as written.
+
 A runnable, offline demo lives in
 [`examples/tool_safety_guard`](../../examples/tool_safety_guard).
 
@@ -151,6 +176,7 @@ the guard sets:
 - `tool.safety.rule_id` (string slice)
 - `tool.safety.backend`
 - `tool.safety.blocked`
+- `tool.safety.tool_call_id` (when the call carries one)
 
 Without a tracer this is a cheap no-op.
 
@@ -180,6 +206,12 @@ Explicit limitations:
 - **`code` backend (`execute_code`) protection is narrower than shell.**
   Shell-language blocks (`bash`/`sh`/`zsh`/unlabeled) get the **full** rule set
   (they are parsed and scanned like commands; unparsable blocks fail closed).
+  Shells the guard has **no parser** for — `pwsh`/`powershell`/`ps1` (accepted by
+  `codeexecutor/jupyter` and exposable via `codeexec.WithLanguages`) and
+  `cmd`/`bat` — are still classified as shell, never as inert "code", and fail
+  closed via `unparsable_action`: parsing them as POSIX shell would mis-tokenize
+  the command, and treating them as code would drop the command, forbidden-path,
+  dependency and destructive-operation rules.
   Non-shell blocks get the secret/resource rules, a URL whitelist pass over the
   source (only when the network policy is configured — the default policy has
   no whitelist and stays network-neutral) and a shell-bridge check (`os.system`, `subprocess.`, `exec(`,
@@ -269,6 +301,7 @@ which is defense-in-depth, not duplication:
 ```json
 {
   "tool_name": "workspace_exec",
+  "tool_call_id": "call_a1b2c3",
   "backend": "workspace_exec",
   "command": "rm -rf /",
   "decision": "deny",
@@ -311,6 +344,12 @@ One compact JSONL line per scanned call — what a monitoring pipeline consumes:
 
 Each event carries tool name, decision, risk level, rule ids, backend, latency
 (`duration_us`), whether output was redacted, and whether execution was blocked.
+Both the report and the audit event also carry `tool_call_id`, the framework's
+identifier for the call (`tool.PermissionRequest.ToolCallID`, falling back to
+the context value): it is what joins a decision back to the originating tool
+event and execution span, and the only way to tell apart parallel calls to the
+same tool with identical arguments. The field is omitted when the caller
+supplied no id.
 
 ## Tests
 

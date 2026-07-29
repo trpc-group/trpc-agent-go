@@ -284,3 +284,82 @@ func TestAuditWriteFailureSurfaced(t *testing.T) {
 		t.Errorf("handler error = %v, want the writer failure", got)
 	}
 }
+
+// TestWithExecutorBaseDir pins that a relative (or omitted) working directory
+// is resolved the way the executor resolves it, so a workdir that escapes into
+// a system path cannot hide behind "..". Unset, the value is matched as
+// written, which keeps the previous behavior.
+func TestWithExecutorBaseDir(t *testing.T) {
+	newGuard := func(t *testing.T, base string, sink func(Report)) *Guard {
+		t.Helper()
+		opts := []Option{
+			WithPolicyFile(filepath.Join("testdata", "tool_safety_policy.yaml")),
+			WithReportSink(sink),
+		}
+		if base != "" {
+			opts = append(opts, WithExecutorBaseDir(base))
+		}
+		g, err := NewGuard(opts...)
+		if err != nil {
+			t.Fatalf("NewGuard: %v", err)
+		}
+		return g
+	}
+	check := func(t *testing.T, g *Guard, args string) tool.PermissionDecision {
+		t.Helper()
+		dec, err := g.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+			ToolName:  "exec_command",
+			Arguments: []byte(args),
+		})
+		if err != nil {
+			t.Fatalf("CheckToolPermission: %v", err)
+		}
+		return dec
+	}
+
+	// A relative workdir that climbs out of the base directory into /etc: the
+	// delete targets the system, and the guard must see that.
+	var last Report
+	g := newGuard(t, "/srv/agent/work", func(r Report) { last = r })
+	if dec := check(t, g, `{"command":"rm -rf .","workdir":"../../../etc"}`); dec.Action != tool.PermissionActionDeny {
+		t.Errorf("escaping workdir: action = %q, want deny (findings: %+v)", dec.Action, last.Findings)
+	}
+	if !hasRule(last.Findings, ruleDangerousID) {
+		t.Errorf("missing %s for the resolved workdir: %+v", ruleDangerousID, last.Findings)
+	}
+
+	// An omitted workdir means the executor's base directory.
+	g = newGuard(t, "/etc", func(r Report) { last = r })
+	if dec := check(t, g, `{"command":"rm -rf ."}`); dec.Action != tool.PermissionActionDeny {
+		t.Errorf("omitted workdir: action = %q, want deny (findings: %+v)", dec.Action, last.Findings)
+	}
+
+	// A workdir under the base directory stays allowed: no over-blocking.
+	g = newGuard(t, "/srv/agent/work", func(r Report) { last = r })
+	if dec := check(t, g, `{"command":"ls -la","workdir":"repo/sub"}`); dec.Action != tool.PermissionActionAllow {
+		t.Errorf("in-base workdir: action = %q, want allow (findings: %+v)", dec.Action, last.Findings)
+	}
+	if last.Command != "ls -la" {
+		t.Errorf("unexpected report command: %+v", last)
+	}
+
+	// Absolute and home-rooted workdirs are already what the executor uses.
+	for _, c := range []struct {
+		cwd  string
+		want string
+	}{
+		{"", "/base"},
+		{"sub/dir", "/base/sub/dir"},
+		{"/abs/dir", "/abs/dir"},
+		{"~/dir", "~/dir"},
+		{`C:\Windows`, `C:\Windows`},
+	} {
+		if got := resolveExecCwd(c.cwd, "/base"); got != c.want {
+			t.Errorf("resolveExecCwd(%q) = %q, want %q", c.cwd, got, c.want)
+		}
+	}
+	// Without a configured base directory nothing is rewritten.
+	if got := resolveExecCwd("sub/dir", ""); got != "sub/dir" {
+		t.Errorf("resolveExecCwd without a base dir = %q, want the value as written", got)
+	}
+}

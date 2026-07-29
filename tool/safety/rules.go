@@ -11,6 +11,7 @@ package safety
 import (
 	"fmt"
 	"net/url"
+	"os"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -194,6 +195,20 @@ func (p *Policy) scanCodeBlocks(blocks []codeBlock) ([]Finding, *shellsafe.Pipel
 			}
 			continue
 		}
+		if isNonPOSIXShellLanguage(b.Language) {
+			// A shell the guard has no parser for: the argv-level rules cannot
+			// be applied, so the block fails closed exactly like an unparsable
+			// POSIX command. The generic code checks still run so a policy that
+			// relaxes unparsable_action keeps some coverage.
+			f := nonPOSIXShellFinding(b.Language)
+			f.action = p.UnparsableAction
+			findings = append(findings, f)
+			findings = append(findings, codeBridgeFindings(b)...)
+			if p.codeNetworkActive() {
+				findings = append(findings, p.codeNetworkFindings(b.Code)...)
+			}
+			continue
+		}
 		parsed, err := shellsafe.Parse(b.Code)
 		if err != nil {
 			f := shellBypassFinding(err)
@@ -210,14 +225,49 @@ func (p *Policy) scanCodeBlocks(blocks []codeBlock) ([]Finding, *shellsafe.Pipel
 }
 
 // isShellLanguage reports whether a code block's language means the block is
-// really a shell command. An empty language is treated as shell so an
-// unlabeled block cannot dodge the argv-level rules.
+// really a shell command, whether or not the guard can parse that shell. An
+// empty language is treated as shell so an unlabeled block cannot dodge the
+// argv-level rules. The non-POSIX members (see isNonPOSIXShellLanguage) belong
+// here so they are never demoted to the generic code checks; scanCodeBlocks
+// fails them closed instead.
 func isShellLanguage(lang string) bool {
+	if isNonPOSIXShellLanguage(lang) {
+		return true
+	}
 	switch strings.ToLower(strings.TrimSpace(lang)) {
 	case "", "sh", "bash", "shell", "zsh":
 		return true
 	}
 	return false
+}
+
+// nonPOSIXShellLanguages are the shell languages an executor may accept
+// (codeexecutor/jupyter recognizes pwsh/powershell/ps1, and codeexec's
+// WithLanguages can expose them) whose grammar shellsafe does not implement.
+// Parsing them as POSIX shell would mis-tokenize the command, so they are
+// treated as shell — never as inert "code" — and failed closed.
+var nonPOSIXShellLanguages = map[string]bool{
+	"pwsh": true, "powershell": true, "ps1": true, "posh": true,
+	"cmd": true, "bat": true, "batch": true,
+}
+
+// isNonPOSIXShellLanguage reports whether lang names a shell the guard cannot
+// parse into argv.
+func isNonPOSIXShellLanguage(lang string) bool {
+	return nonPOSIXShellLanguages[strings.ToLower(strings.TrimSpace(lang))]
+}
+
+// nonPOSIXShellFinding fails a shell block closed because no parser exists for
+// its grammar. The caller sets the policy's unparsable_action on it.
+func nonPOSIXShellFinding(lang string) Finding {
+	return Finding{
+		RuleID:    ruleShellID,
+		Category:  catShellBypass,
+		RiskLevel: RiskHigh,
+		Evidence: strings.TrimSpace(lang) +
+			" code block: no parser for this shell, so the command-level rules cannot be applied",
+		Recommendation: recShellBypass,
+	}
 }
 
 // codeBridgePatterns are substrings of non-shell code that bridge into shell
@@ -405,7 +455,10 @@ func isAllowListMiss(err error) bool {
 // ruleDangerousArgs catches argument-level destructive patterns that shellsafe
 // does not see: recursive rm (with force, or aimed at the root / a system
 // directory even without force — "rm -r /etc" destroys the system just as
-// surely as "rm -rf /etc") and recursive chmod.
+// surely as "rm -rf /etc"), recursive chmod, and their cmd.exe equivalents
+// (del / erase / rd / rmdir with /s /q, or aimed at a Windows system path).
+// hostexec runs commands through cmd.exe on Windows, so the native spellings
+// have to be covered too, not just the Unix tools.
 func ruleDangerousArgs(c ruleCtx) []Finding {
 	if c.pipe == nil {
 		return nil
@@ -415,7 +468,14 @@ func ruleDangerousArgs(c ruleCtx) []Finding {
 		if len(argv) == 0 {
 			continue
 		}
-		switch lowerBase(argv[0]) {
+		name := lowerBase(argv[0])
+		if windowsDeleteCommands[name] {
+			if f, ok := windowsDeleteFinding(name, argv, c.er.Cwd); ok {
+				out = append(out, f)
+			}
+			continue
+		}
+		switch name {
 		case "rm":
 			if f, ok := rmFinding(argv, c.er.Cwd); ok {
 				out = append(out, f)
@@ -433,6 +493,86 @@ func ruleDangerousArgs(c ruleCtx) []Finding {
 		}
 	}
 	return out
+}
+
+// windowsDeleteCommands are the cmd.exe built-ins that delete files or whole
+// trees. "rmdir" also exists on POSIX, where it only removes empty directories
+// and takes no "/switches"; windowsDeleteFinding therefore requires the
+// Windows recursive switch before it treats rmdir/rd as destructive.
+var windowsDeleteCommands = map[string]bool{
+	"del": true, "erase": true, "rd": true, "rmdir": true,
+}
+
+// windowsDeleteFinding evaluates one cmd.exe delete invocation. It mirrors
+// rmFinding: a recursive+quiet/force delete is high risk, and anything aimed
+// at a drive root or system directory is critical when recursive and high
+// otherwise. A plain "del build\out.txt" produces no finding.
+func windowsDeleteFinding(name string, argv []string, cwd string) (Finding, bool) {
+	recursive, force := windowsDeleteSwitches(argv[1:])
+	if (name == "rmdir" || name == "rd") && !recursive {
+		// The POSIX rmdir: empty directories only, nothing to flag.
+		return Finding{}, false
+	}
+	system := false
+	for _, a := range argv[1:] {
+		if isWindowsSwitch(a) {
+			continue
+		}
+		if isRootOrSystem(a) {
+			system = true
+			break
+		}
+		if j := resolveAgainstCwd(cwd, a); j != "" && isRootOrSystem(j) {
+			system = true
+			break
+		}
+	}
+	if !system && !(recursive && force) {
+		return Finding{}, false
+	}
+	risk := RiskHigh
+	if system && recursive {
+		risk = RiskCritical
+	}
+	return Finding{
+		RuleID:         ruleDangerousID,
+		Category:       catDangerous,
+		RiskLevel:      risk,
+		Evidence:       strings.Join(argv, " "),
+		Recommendation: recDangerous,
+	}, true
+}
+
+// windowsDeleteSwitches reports which of recursive (/s) and unattended
+// deletion (/q quiet, /f force) the cmd.exe switches request. Switches are
+// case-insensitive and may carry a value ("/A:R").
+func windowsDeleteSwitches(args []string) (recursive, force bool) {
+	for _, a := range args {
+		if !isWindowsSwitch(a) {
+			continue
+		}
+		switch strings.ToLower(a[1:2]) {
+		case "s":
+			recursive = true
+		case "q", "f":
+			force = true
+		}
+	}
+	return recursive, force
+}
+
+// isWindowsSwitch reports whether a token is a cmd.exe switch ("/S", "/A:R")
+// rather than an operand. A POSIX absolute path ("/etc/passwd") is not one:
+// switches are a single letter, optionally followed by ":value".
+func isWindowsSwitch(a string) bool {
+	if len(a) < 2 || a[0] != '/' {
+		return false
+	}
+	c := a[1]
+	if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z') {
+		return false
+	}
+	return len(a) == 2 || a[2] == ':'
 }
 
 // rmFinding evaluates one rm invocation: recursive with force is high risk;
@@ -658,35 +798,21 @@ var proxyEnvVars = map[string]bool{
 	"ftp_proxy": true, "ftps_proxy": true,
 }
 
-// proxyEnvFindings whitelist-checks proxy destinations supplied through the
-// request's environment overrides. It runs only when the pipeline contains a
-// download command. A proxy value with no parseable host fails closed like
-// the no-target operand fallback, but at the on_non_whitelisted action: the
-// value demonstrably redirects egress somewhere the guard cannot check.
+// proxyEnvFindings whitelist-checks the proxy destinations the command will
+// actually see. It runs only when the pipeline contains a download command. A
+// proxy value with no parseable host fails closed like the no-target operand
+// fallback, but at the on_non_whitelisted action: the value demonstrably
+// redirects egress somewhere the guard cannot check.
 func proxyEnvFindings(c ruleCtx) []Finding {
-	if len(c.er.Env) == 0 {
-		return nil
-	}
-	keys := make([]string, 0, len(c.er.Env))
-	for k := range c.er.Env {
-		if proxyEnvVars[strings.ToLower(k)] {
-			keys = append(keys, k)
-		}
-	}
-	sort.Strings(keys)
 	var out []Finding
-	for _, k := range keys {
-		v := strings.TrimSpace(c.er.Env[k])
-		if v == "" {
-			continue
-		}
-		hosts := hostsFromCurlValue("--proxy", v)
+	for _, e := range effectiveProxyEnv(c) {
+		hosts := hostsFromCurlValue("--proxy", e.value)
 		if len(hosts) == 0 {
 			out = append(out, Finding{
 				RuleID:         ruleNetworkID,
 				Category:       catNetwork,
 				RiskLevel:      RiskHigh,
-				Evidence:       "env " + k + " (no parseable proxy host to check against the whitelist)",
+				Evidence:       e.label() + " (no parseable proxy host to check against the whitelist)",
 				Recommendation: recNetwork,
 				action:         c.policy.Network.OnNonWhitelisted,
 			})
@@ -700,13 +826,107 @@ func proxyEnvFindings(c ruleCtx) []Finding {
 				RuleID:         ruleNetworkID,
 				Category:       catNetwork,
 				RiskLevel:      RiskHigh,
-				Evidence:       "env " + k + " -> " + h,
+				Evidence:       e.label() + " -> " + h,
 				Recommendation: recNetwork,
 				action:         c.policy.Network.OnNonWhitelisted,
 			})
 		}
 	}
 	return out
+}
+
+// Sources of a proxy environment value, in increasing precedence. They mirror
+// how hostexec builds a command's environment: the guard process environment
+// the child inherits, then the executor's base env (hostexec.WithBaseEnv,
+// mirrored into the guard via WithExecutorEnv), then the per-request overrides
+// the model supplied.
+const (
+	proxySrcInherited = "inherited"
+	proxySrcBase      = "executor base env"
+	proxySrcRequest   = ""
+)
+
+// proxyEnvEntry is one proxy variable that will be in effect for the command.
+type proxyEnvEntry struct {
+	key    string
+	value  string
+	source string
+}
+
+// label renders the evidence prefix, naming the source for anything the model
+// did not pass itself so an operator can tell a request override from an
+// inherited one.
+func (e proxyEnvEntry) label() string {
+	if e.source == proxySrcRequest {
+		return "env " + e.key
+	}
+	return "env " + e.key + " (" + e.source + ")"
+}
+
+// osEnviron is os.Environ, indirected for tests.
+var osEnviron = os.Environ
+
+// effectiveProxyEnv resolves the proxy variables the executed command will see,
+// in sorted key order. Checking only the request overrides would leave the
+// boundary open: hostexec passes the guard process environment through to every
+// command (mergedEnv starts from os.Environ, and a command with no overrides
+// inherits it outright), so an ambient HTTPS_PROXY reroutes an otherwise
+// whitelisted "curl https://github.com/a" through an unapproved relay.
+//
+// The inherited environment is consulted only for backends that really run in
+// the guard's process environment: the code backend executes inside its own
+// runtime (container / e2b / jupyter kernel), and an explicitly isolated
+// workspace backend likewise does not inherit it.
+func effectiveProxyEnv(c ruleCtx) []proxyEnvEntry {
+	merged := map[string]proxyEnvEntry{}
+	add := func(k, v, src string) {
+		if !proxyEnvVars[strings.ToLower(k)] {
+			return
+		}
+		if v = strings.TrimSpace(v); v == "" {
+			// An empty value disables the proxy for that variable, and it also
+			// overrides a lower-precedence one.
+			delete(merged, k)
+			return
+		}
+		merged[k] = proxyEnvEntry{key: k, value: v, source: src}
+	}
+	if inheritsProcessEnv(c) {
+		for _, kv := range osEnviron() {
+			if i := strings.IndexByte(kv, '='); i > 0 {
+				add(kv[:i], kv[i+1:], proxySrcInherited)
+			}
+		}
+	}
+	for k, v := range c.er.BaseEnv {
+		add(k, v, proxySrcBase)
+	}
+	for k, v := range c.er.Env {
+		add(k, v, proxySrcRequest)
+	}
+	keys := make([]string, 0, len(merged))
+	for k := range merged {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make([]proxyEnvEntry, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, merged[k])
+	}
+	return out
+}
+
+// inheritsProcessEnv reports whether the backend runs the command in the guard
+// process's own environment.
+func inheritsProcessEnv(c ruleCtx) bool {
+	switch c.backend {
+	case BackendCode:
+		return false
+	case BackendWorkspace:
+		return !c.policy.WorkspaceIsolated
+	default:
+		return true
+	}
 }
 
 // hasNonOptionOperand reports whether any argument is a bare (non-option)
@@ -1097,6 +1317,14 @@ var windowsSystemDirs = []string{
 	"c:/windows", "c:/program files", "c:/program files (x86)", "c:/programdata",
 }
 
+// windowsSystemEnvDirs are the environment-variable spellings of the same
+// locations. cmd.exe expands them at run time, so "rmdir /s /q %SystemRoot%"
+// destroys the system just as surely as the literal path.
+var windowsSystemEnvDirs = []string{
+	"%systemroot%", "%windir%", "%systemdrive%",
+	"%programfiles%", "%programfiles(x86)%", "%programdata%",
+}
+
 func isRootOrSystem(p string) bool {
 	// Normalize separators explicitly: the scanned command may target a
 	// Windows path even when the guard runs on Linux, where filepath.ToSlash
@@ -1115,6 +1343,16 @@ func isRootOrSystem(p string) bool {
 			return true
 		}
 	}
+	if isWindowsSystemPath(clean) {
+		return true
+	}
+	return false
+}
+
+// isWindowsSystemPath reports whether an already slash-normalized path names a
+// Windows drive root or system directory, including the environment-variable
+// spellings cmd.exe expands ("%SystemRoot%", "%WINDIR%\System32").
+func isWindowsSystemPath(clean string) bool {
 	low := strings.ToLower(clean)
 	// A bare drive root ("C:", after the trailing slash was trimmed) is as
 	// destructive a target as "/".
@@ -1124,6 +1362,27 @@ func isRootOrSystem(p string) bool {
 	for _, sys := range windowsSystemDirs {
 		if low == sys || strings.HasPrefix(low, sys+"/") {
 			return true
+		}
+	}
+	for _, sys := range windowsSystemEnvDirs {
+		// A plain prefix test is enough: the "%" delimiters make the variable
+		// name unambiguous, and it also covers the spelling left behind when
+		// the POSIX word splitter eats the backslash ("%WINDIR%System32").
+		if strings.HasPrefix(low, sys) {
+			return true
+		}
+	}
+	// A command written for cmd.exe uses backslashes, which the POSIX word
+	// splitter consumes as escapes: "del /s C:\Windows\System32" reaches the
+	// rules as "C:WindowsSystem32". Compare the separator-free form of a
+	// drive-qualified path against the separator-free system directories so the
+	// mangled spelling is still recognized. Gated on the drive prefix so no
+	// POSIX path can match.
+	if len(low) >= 2 && low[1] == ':' && low[0] >= 'a' && low[0] <= 'z' {
+		for _, sys := range windowsSystemDirs {
+			if strings.HasPrefix(low, strings.ReplaceAll(sys, "/", "")) {
+				return true
+			}
 		}
 	}
 	return false

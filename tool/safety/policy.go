@@ -213,16 +213,19 @@ type domainMatcher struct {
 // whitelist. Note that a non-empty denied list activates shellsafe, which also
 // rejects shell wrappers (bash -c, eval, ...); a policy file can override
 // every list.
+//
+// The denied list covers both platforms: hostexec runs commands through
+// cmd.exe on Windows, so the native destructive utilities (format, diskpart,
+// vssadmin, ...) and the runas privilege escalation are denied alongside their
+// Unix counterparts, and R-DEL-001 additionally understands del / erase / rd /
+// rmdir argument semantics (see ruleDangerousArgs).
 func DefaultPolicy() Policy {
 	return Policy{
 		Version:          1,
 		UnparsableAction: ActionDeny,
 		DefaultAction:    ActionAllow,
 		Commands: CommandPolicy{
-			Denied: []string{
-				"dd", "mkfs", "mount", "umount", "shutdown", "reboot",
-				"halt", "poweroff", "sudo", "su", "doas",
-			},
+			Denied: append(unixDeniedCommands(), windowsDeniedCommands()...),
 		},
 		ForbiddenPaths: []string{
 			"~/.ssh", "**/id_rsa", "**/id_ed25519", "**/.env",
@@ -235,6 +238,27 @@ func DefaultPolicy() Policy {
 			BackendHost:      {"exec_command"},
 			BackendCode:      {"execute_code"},
 		},
+	}
+}
+
+// unixDeniedCommands are the destructive / privilege-escalating binaries
+// denied by default on Unix-like hosts.
+func unixDeniedCommands() []string {
+	return []string{
+		"dd", "mkfs", "mount", "umount", "shutdown", "reboot",
+		"halt", "poweroff", "sudo", "su", "doas",
+	}
+}
+
+// windowsDeniedCommands are their native Windows equivalents: disk and volume
+// destruction, boot configuration, shadow-copy deletion (the classic
+// ransomware step), ownership/ACL rewriting and privilege escalation. They are
+// denied by default so a policy inherited from DefaultPolicy protects a
+// Windows host as well as a Unix one.
+func windowsDeniedCommands() []string {
+	return []string{
+		"format", "diskpart", "fsutil", "vssadmin", "wbadmin",
+		"bcdedit", "bootrec", "cipher", "takeown", "icacls", "runas",
 	}
 }
 
@@ -266,11 +290,16 @@ func defaultSecretPatterns() []string {
 // network.download_command) is rejected at load time instead of silently
 // producing a weaker policy than the operator configured. A bad regex or glob
 // in the file also surfaces as an error here, at startup, rather than at
-// request time.
+// request time. An explicit "version: 0" is rejected as well: only a
+// programmatically built policy may leave the version unset, and in a file the
+// zero is an unsupported version, not an omission.
 func LoadPolicy(policyPath string) (*Policy, error) {
 	raw, err := os.ReadFile(policyPath)
 	if err != nil {
 		return nil, fmt.Errorf("read policy %q: %w", policyPath, err)
+	}
+	if err := checkExplicitVersion(policyPath, raw); err != nil {
+		return nil, err
 	}
 	p := DefaultPolicy()
 	switch ext := strings.ToLower(filepath.Ext(policyPath)); ext {
@@ -316,6 +345,31 @@ func LoadPolicy(policyPath string) (*Policy, error) {
 		return nil, err
 	}
 	return &p, nil
+}
+
+// checkExplicitVersion rejects a policy file that spells out "version: 0".
+// compile normalizes a zero version to the current one so a programmatically
+// built Policy can leave the field at its zero value, which would otherwise
+// make an explicit 0 in a file indistinguishable from an omitted key and let an
+// unsupported version load silently. Probing for the key restores the loud
+// failure an explicit version 2 already gets.
+func checkExplicitVersion(policyPath string, raw []byte) error {
+	var probe struct {
+		Version *int `yaml:"version" json:"version"`
+	}
+	switch strings.ToLower(filepath.Ext(policyPath)) {
+	case ".yaml", ".yml":
+		// Errors are ignored: the real decode below reports them with context.
+		_ = yaml.Unmarshal(raw, &probe)
+	case ".json":
+		_ = json.Unmarshal(raw, &probe)
+	}
+	if probe.Version != nil && *probe.Version == 0 {
+		return fmt.Errorf(
+			"parse policy %q: unsupported policy version 0 (want 1; omit the key to accept the default)",
+			policyPath)
+	}
+	return nil
 }
 
 // compile validates and precompiles the policy. It normalizes the action

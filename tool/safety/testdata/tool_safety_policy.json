@@ -11,7 +11,9 @@
   "commands": {
     "allowed": ["go", "git", "ls", "cat", "echo", "grep", "sed", "awk", "jq",
       "python3", "curl", "wget", "pip", "pip3", "sleep", "yes"],
-    "denied": ["dd", "mkfs", "shutdown", "reboot", "chmod", "chown"],
+    "denied": ["dd", "mkfs", "shutdown", "reboot", "chmod", "chown",
+      "format", "diskpart", "fsutil", "vssadmin", "wbadmin",
+      "bcdedit", "bootrec", "cipher", "takeown", "icacls", "runas"],
     "review_pipelines": false
   },
   "denied_subcommands": [

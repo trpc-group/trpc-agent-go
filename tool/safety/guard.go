@@ -24,6 +24,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"path"
+	"strings"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -37,6 +39,8 @@ type Guard struct {
 	audit        *AuditWriter
 	auditErrFunc func(error)
 	reportSink   func(Report)
+	execEnv      map[string]string
+	execBaseDir  string
 }
 
 // Option configures a Guard.
@@ -121,6 +125,49 @@ func WithAuditErrorHandler(fn func(error)) Option {
 	}
 }
 
+// WithExecutorEnv mirrors the executor's own environment overrides
+// (hostexec.WithBaseEnv) into the guard. The permission check sees only the
+// tool arguments, so without this the network rules would judge a download
+// command against the model-supplied env alone, while the command actually
+// runs with the base env layered on top. Pass the same map you pass to
+// hostexec.WithBaseEnv. The guard copies it; later mutations of the caller's
+// map do not affect scanning.
+//
+// The environment the guard process itself exports is always consulted for
+// host (and non-isolated workspace) backends, because hostexec passes it
+// through to every command; WithExecutorEnv only adds what the guard cannot
+// observe.
+func WithExecutorEnv(env map[string]string) Option {
+	return func(g *Guard) error {
+		if len(env) == 0 {
+			g.execEnv = nil
+			return nil
+		}
+		cp := make(map[string]string, len(env))
+		for k, v := range env {
+			cp[k] = v
+		}
+		g.execEnv = cp
+		return nil
+	}
+}
+
+// WithExecutorBaseDir tells the guard which directory the executor resolves a
+// relative (or omitted) working directory against — hostexec.WithBaseDir, or
+// the workspace root. The tool arguments carry only what the model wrote, so
+// without this a relative "workdir": "../../etc" (and an omitted one, which
+// means the executor's base directory) cannot be resolved to the absolute path
+// the forbidden-path and destructive-delete rules match against.
+//
+// Pass the same directory you pass to the executor. Unset, relative working
+// directories are matched as written, which is the previous behavior.
+func WithExecutorBaseDir(dir string) Option {
+	return func(g *Guard) error {
+		g.execBaseDir = strings.TrimSpace(dir)
+		return nil
+	}
+}
+
 // WithReportSink registers a callback that receives the (redacted) report for
 // every scanned call, e.g. to print or persist the full report. The callback
 // may be invoked concurrently and must be safe for concurrent use.
@@ -170,15 +217,54 @@ func (g *Guard) CheckToolPermission(
 	if backend == "" {
 		return tool.AllowPermission(), nil
 	}
+	callID := toolCallID(ctx, req)
 	er, err := extract(req.Arguments, backend)
 	if err != nil {
 		findings := []Finding{argParseFinding(err, g.policy.UnparsableAction)}
-		return g.finalize(ctx, req.ToolName, backend, execRequest{},
+		return g.finalize(ctx, req.ToolName, callID, backend, execRequest{},
 			findings, actionToDecision(g.policy.UnparsableAction), RiskHigh, start)
 	}
 	er.ToolDestructive = req.Metadata.Destructive
+	er.BaseEnv = g.execEnv
+	er.Cwd = resolveExecCwd(er.Cwd, g.execBaseDir)
 	findings, decision, risk := g.policy.scan(er, backend)
-	return g.finalize(ctx, req.ToolName, backend, er, findings, decision, risk, start)
+	return g.finalize(ctx, req.ToolName, callID, backend, er, findings, decision, risk, start)
+}
+
+// resolveExecCwd resolves the request's working directory the way the executor
+// will: an omitted one means the executor's base directory, and a relative one
+// is joined onto it (hostexec.resolveWorkdir). Absolute, home-rooted and
+// drive-qualified paths are already what the executor uses. Without a
+// configured base directory the value is left as written.
+func resolveExecCwd(cwd, baseDir string) string {
+	if baseDir == "" {
+		return cwd
+	}
+	c := strings.TrimSpace(cwd)
+	if c == "" {
+		return baseDir
+	}
+	if strings.HasPrefix(c, "/") || strings.HasPrefix(c, "~") ||
+		(len(c) >= 2 && c[1] == ':') {
+		return c
+	}
+	return path.Join(strings.ReplaceAll(baseDir, "\\", "/"),
+		strings.ReplaceAll(c, "\\", "/"))
+}
+
+// toolCallID returns the framework's identifier for this tool call, so a
+// report and its audit event can be joined back to the originating event and
+// execution span even when several calls to the same tool run in parallel. The
+// request carries it; the context is the fallback for callers that invoke the
+// policy directly.
+func toolCallID(ctx context.Context, req *tool.PermissionRequest) string {
+	if req.ToolCallID != "" {
+		return req.ToolCallID
+	}
+	if id, ok := tool.ToolCallIDFromContext(ctx); ok {
+		return id
+	}
+	return ""
 }
 
 // finalize builds the report, redacts it, emits the audit event and span
@@ -188,14 +274,14 @@ func (g *Guard) CheckToolPermission(
 // so a broken audit trail cannot go unnoticed.
 func (g *Guard) finalize(
 	ctx context.Context,
-	toolName, backend string,
+	toolName, callID, backend string,
 	er execRequest,
 	findings []Finding,
 	decision Decision,
 	risk RiskLevel,
 	start time.Time,
 ) (tool.PermissionDecision, error) {
-	report := buildReport(toolName, backend, er, findings, decision, risk, time.Since(start))
+	report := buildReport(toolName, callID, backend, er, findings, decision, risk, time.Since(start))
 	g.policy.redactReport(&report)
 	if g.audit != nil {
 		if err := g.audit.Write(report); err != nil {

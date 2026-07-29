@@ -25,6 +25,11 @@ type execRequest struct {
 	Cwd string
 	// Env holds environment overrides supplied by the model.
 	Env map[string]string
+	// BaseEnv holds the executor's own environment overrides (hostexec's
+	// WithBaseEnv), mirrored into the guard via WithExecutorEnv. It is not part
+	// of the tool arguments; the guard fills it in before the scan so the
+	// network rules see the environment the command will really run with.
+	BaseEnv map[string]string
 	// Background is true when the command is started detached.
 	Background bool
 	// PTY is true when a TTY/PTY is requested (tty or pty alias).
