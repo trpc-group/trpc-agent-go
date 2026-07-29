@@ -584,7 +584,7 @@ func (r *A2AAgent) flushBufferedContent(
 	agent.EmitEvent(ctx, invocation, eventChan, evt)
 }
 
-// aggregateEventContent aggregates content from event delta.
+// aggregateEventContent aggregates content from a streaming event.
 // Returns updated responseID and any terminal error that occurred.
 func (r *A2AAgent) aggregateEventContent(
 	ctx context.Context,
@@ -606,6 +606,7 @@ func (r *A2AAgent) aggregateEventContent(
 		responseID = evt.Response.ID
 	}
 
+	choice := evt.Response.Choices[0]
 	if r.streamingRespHandler != nil {
 		content, err := r.streamingRespHandler(evt.Response)
 		if err != nil {
@@ -620,14 +621,20 @@ func (r *A2AAgent) aggregateEventContent(
 		if content != "" {
 			contentBuilder.WriteString(content)
 		}
-	} else if evt.Response.Choices[0].Delta.Content != "" {
-		contentBuilder.WriteString(evt.Response.Choices[0].Delta.Content)
+	} else if choice.Delta.Content != "" {
+		contentBuilder.WriteString(choice.Delta.Content)
 	}
 	if contentParts != nil {
 		*contentParts = append(
 			*contentParts,
-			evt.Response.Choices[0].Delta.ContentParts...,
+			choice.Delta.ContentParts...,
 		)
+		if !evt.Response.IsPartial {
+			*contentParts = append(
+				*contentParts,
+				choice.Message.ContentParts...,
+			)
+		}
 	}
 	return responseID, nil
 }
