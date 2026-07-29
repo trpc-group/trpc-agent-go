@@ -144,6 +144,23 @@ func (panicAuditor) Record(context.Context, AuditEvent) error {
 	panic("audit panic")
 }
 
+type namedTestToolSet struct {
+	name  string
+	tools []tool.Tool
+}
+
+func (set namedTestToolSet) Tools(context.Context) []tool.Tool {
+	return set.tools
+}
+
+func (set namedTestToolSet) Close() error {
+	return nil
+}
+
+func (set namedTestToolSet) Name() string {
+	return set.name
+}
+
 func newWrapperGuard(
 	t *testing.T,
 	configure func(*Policy),
@@ -200,6 +217,29 @@ func TestWrapOutputGuardDelegatesSkipSummarization(t *testing.T) {
 	skipper, ok := wrapped.(interface{ SkipSummarization() bool })
 	require.True(t, ok)
 	require.True(t, skipper.SkipSummarization())
+}
+
+func TestWrapOutputGuardPreservesNamedToolSetIdentity(t *testing.T) {
+	guard, _ := newWrapperGuard(t, nil)
+	namedTools := itool.NewNamedToolSet(namedTestToolSet{
+		name:  "workspace",
+		tools: []tool.Tool{newFakeCallable(safePayload{Status: "ok"})},
+	}).Tools(context.Background())
+	require.Len(t, namedTools, 1)
+	sourceNamed, ok := namedTools[0].(interface{ ToolSetName() string })
+	require.True(t, ok)
+	require.Equal(t, "workspace", sourceNamed.ToolSetName())
+
+	wrapped, err := WrapOutputGuard(
+		guard,
+		namedTools[0],
+		BindWorkspaceExec(namedTools[0].Declaration().Name),
+	)
+
+	require.NoError(t, err)
+	named, ok := wrapped.(interface{ ToolSetName() string })
+	require.True(t, ok)
+	require.Equal(t, "workspace", named.ToolSetName())
 }
 
 func TestWrapOutputGuardDoesNotRepeatPermissionPrecheck(t *testing.T) {

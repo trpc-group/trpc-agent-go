@@ -19,6 +19,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/safety"
 )
 
 const (
@@ -60,6 +61,26 @@ func (t testTool) ToolSetName() string {
 
 func (t testTool) KnowledgeIndexName() string {
 	return t.knowledgeIndexName
+}
+
+type credentialTestCallable struct {
+	testTool
+}
+
+func (credentialTestCallable) Call(
+	context.Context,
+	[]byte,
+) (any, error) {
+	return "ok", nil
+}
+
+type credentialTestAuditor struct{}
+
+func (credentialTestAuditor) Record(
+	context.Context,
+	safety.AuditEvent,
+) error {
+	return nil
 }
 
 func TestMapResolver(t *testing.T) {
@@ -595,6 +616,41 @@ func TestRunOptionsFiltersProfileCredentialRefs(t *testing.T) {
 		map[string]string{"crm": "secret://tenant/crm"},
 		runOpts.RuntimeState[RuntimeStateToolCredentialRefs],
 	)
+}
+
+func TestRunOptionsFiltersWrappedToolSetCredentialRefs(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	inner := credentialTestCallable{testTool{
+		name:        "crm_search",
+		toolSetName: "crm",
+	}}
+	guard, err := safety.NewGuard(
+		safety.DefaultPolicy(),
+		safety.WithAuditor(credentialTestAuditor{}),
+	)
+	require.NoError(t, err)
+	wrapped, err := safety.WrapOutputGuard(
+		guard,
+		inner,
+		safety.BindWorkspaceExec(inner.Declaration().Name),
+	)
+	require.NoError(t, err)
+
+	runOpts := agent.NewRunOptions(RunOptions(Profile{
+		Tools: ToolPolicy{
+			CredentialRefs: map[string]string{
+				"crm": "secret://tenant/admin",
+			},
+		},
+		Credentials: CredentialPolicy{
+			AllowedRefs: []string{"secret://tenant/crm"},
+		},
+	})...)
+
+	require.False(t, runOpts.ToolFilter(ctx, inner))
+	require.False(t, runOpts.ToolFilter(ctx, wrapped))
 }
 
 func TestRunOptionsDropsReservedUserRuntimeState(t *testing.T) {

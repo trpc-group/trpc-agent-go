@@ -140,6 +140,16 @@ func (wrapper *outputGuard) ToolMetadata() tool.ToolMetadata {
 	return tool.MetadataOf(wrapper.semantic)
 }
 
+// ToolSetName preserves the model-visible wrapped tool's source ToolSet
+// identity for runtime policy checks.
+func (wrapper *outputGuard) ToolSetName() string {
+	named, ok := wrapper.inner.(interface{ ToolSetName() string })
+	if !ok {
+		return ""
+	}
+	return named.ToolSetName()
+}
+
 // CheckPermission preserves the semantic tool's own permission checks.
 func (wrapper *outputGuard) CheckPermission(
 	ctx context.Context,
