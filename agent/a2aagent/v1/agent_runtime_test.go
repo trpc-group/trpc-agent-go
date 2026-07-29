@@ -61,13 +61,13 @@ func (f *responseConverterFunc) ConvertStreamingToEvents(
 	return f.stream(response, name, invocation)
 }
 
-func TestNewFetchesCardAndInstallsDefaultMapper(t *testing.T) {
+func TestNewDiscoversCardAndInstallsDefaultMapper(t *testing.T) {
 	card := protocolserver.AgentCard{
 		Name:        "remote",
 		Description: "description",
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/custom-card.json" {
+		if r.URL.Path != protocol.AgentCardPath {
 			http.NotFound(w, r)
 			return
 		}
@@ -83,7 +83,7 @@ func TestNewFetchesCardAndInstallsDefaultMapper(t *testing.T) {
 		return false, nil
 	}
 	remote, err := New(
-		WithAgentCardURL(server.URL+"/custom-card.json"),
+		WithAgentCardURL(server.URL),
 		WithA2ADataPartMapper(mapper),
 	)
 	if err != nil {

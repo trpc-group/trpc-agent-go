@@ -67,7 +67,7 @@ type A2AAgent struct {
 	name                string
 	description         string
 	agentCard           *server.AgentCard      // Agent card and resolution state
-	agentCardURL        string                 // URL used to discover the remote agent
+	agentURL            string                 // Base URL used to discover the remote agent card
 	eventConverter      A2AEventConverter      // Custom A2A event converters
 	dataPartMappers     []A2ADataPartMapper    // Lightweight inbound DataPart mappers for default converter
 	a2aMessageConverter InvocationA2AConverter // Custom A2A message converters for requests
@@ -109,14 +109,12 @@ func New(opts ...Option) (*A2AAgent, error) {
 	}
 
 	var agentURL string
-	var agentCardURL string
 	if agent.agentCard != nil {
 		// v1.0 cards advertise endpoints via supportedInterfaces; the top-level
 		// URL is deprecated. PrimaryURL prefers the former and falls back.
 		agentURL = agent.agentCard.PrimaryURL()
-	} else if agent.agentCardURL != "" {
-		agentCardURL = ia2a.NormalizeURL(agent.agentCardURL)
-		agentURL = agentCardURL
+	} else if agent.agentURL != "" {
+		agentURL = agent.agentURL
 	} else {
 		log.Info("agent card or agent card url not set")
 	}
@@ -133,16 +131,9 @@ func New(opts ...Option) (*A2AAgent, error) {
 
 	// If agent card is not set, fetch it using A2A client's GetAgentCard method
 	if agent.agentCard == nil {
-		agentCard, err := a2aClient.GetAgentCard(
-			context.Background(),
-			agentCardURL,
-		)
+		agentCard, err := a2aClient.GetAgentCard(context.Background(), "")
 		if err != nil {
-			return nil, fmt.Errorf(
-				"failed to fetch agent card from %s: %w",
-				agentCardURL,
-				err,
-			)
+			return nil, fmt.Errorf("failed to fetch agent card from %s: %w", agentURL, err)
 		}
 
 		agent.agentCard = agentCard
