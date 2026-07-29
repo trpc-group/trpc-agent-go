@@ -12,6 +12,30 @@ Redis storage is suitable for production environments and distributed applicatio
 - Async session summary generation
 - AppendEvent / GetSession hook extension points
 
+## Redis Compatibility
+
+The Redis Session service is command-compatible with Redis OSS 4.0 and later. Redis 4.0 is the documented compatibility floor, not a production recommendation; use a release that is still maintained by your Redis vendor in production.
+
+The service currently relies on the following data-path commands:
+
+| Capability | Commands |
+| --- | --- |
+| Keys and strings | `DEL`, `EXISTS`, `EXPIRE`, `GET`, `PERSIST`, `PEXPIRE`, `PTTL`, `SCAN`, `SET`, `SETNX` |
+| Hashes | `HDEL`, `HEXISTS`, `HGET`, `HGETALL`, `HINCRBY`, `HMGET`, `HSCAN`, `HSET` |
+| Sets | `SADD`, `SMEMBERS` |
+| Sorted sets | `ZADD`, `ZRANGE`, `ZRANGEBYSCORE`, `ZRANK`, `ZREM`, `ZREVRANGE`, `ZREVRANGEBYSCORE` |
+| Scripting and transactions | `EVAL`, `EVALSHA`, `WATCH`, `UNWATCH`, `MULTI`, `EXEC` |
+
+Only the command forms used by this service are required; optional modifiers introduced in later Redis releases are not prerequisites. The Lua scripts use the Redis Lua 5.1 environment and `cjson`.
+
+Redis Standalone, Sentinel, and Cluster deployments are compatible when the client builder returns the corresponding `go-redis` client. The default builder used by `WithRedisClientURL` creates a single-node client from one address. Configure Sentinel or Cluster with a custom builder through `storage/redis.SetClientBuilder`.
+
+In Cluster mode, all keys used by a multi-key Lua script or transaction must be in the same hash slot. The built-in key formats use `{userID}` or `{appName}` hash tags to satisfy this requirement, and the user-scoped `SCAN` pattern contains the same fixed hash tag so that the cluster client can route it to the slot owner.
+
+For Redis-compatible proxies or alternative backends, validate `SCAN`/`HSCAN`, Lua 5.1 with `cjson`, transactions, and script-cache behavior separately. Use `WithDisableScriptCache(true)` to execute scripts with `EVAL` only when `EVALSHA` caching is unreliable. Depending on the connection URL, the bundled `go-redis` client may also issue `AUTH`, `SELECT`, and `CLIENT SETNAME`, and probe newer commands such as `HELLO` and `CLIENT SETINFO`. Redis OSS 4.0 returns normal errors for unsupported probes and the client falls back or continues, while proxies that close connections on unknown commands require separate validation.
+
+Redis 4.x and 5.x do not support ACL usernames. When authentication is enabled on these versions, use password-only authentication, for example `redis://:password@127.0.0.1:6379/0`. Username-and-password authentication requires Redis 6.0 or later.
+
 ## Configuration Options
 
 **Connection:**
