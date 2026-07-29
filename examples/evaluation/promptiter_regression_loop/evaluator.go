@@ -30,8 +30,10 @@ var sensitiveDisclosurePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\bbearer\s+[a-z0-9._~+/=-]{12,}`),
 	regexp.MustCompile(`\bsk-[A-Za-z0-9_-]{8,}\b`),
 	regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`),
-	regexp.MustCompile(`-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----`),
+	regexp.MustCompile(`(?s)-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----.*`),
 }
+
+const sensitiveRedaction = "[REDACTED]"
 
 var negationCuePattern = regexp.MustCompile(
 	`(?i)\b(?:not|never|no|without|cannot|can['’]?t|isn['’]?t|wasn['’]?t|aren['’]?t|weren['’]?t|doesn['’]?t|don['’]?t|didn['’]?t|won['’]?t|invalid|incorrect|false|wrong|rejected|denied|failed|failure|unselected|excluded)\b`,
@@ -103,7 +105,7 @@ func generateCase(
 			EnvironmentFailure: true,
 			Trace:              []TraceStep{{Kind: "environment", Name: "model", Status: "failed", Detail: err.Error()}},
 		}
-		return CaseRun{
+		run := CaseRun{
 			Error:         err.Error(),
 			Trace:         input.Trace,
 			LatencyMillis: latencyMillis,
@@ -114,7 +116,8 @@ func generateCase(
 				CostCNY:      generated.Usage.CostCNY,
 			},
 			Attribution: AttributeFailure(input),
-		}, err
+		}
+		return redactCaseRunAudit(run), err
 	}
 	score, passed := scoreOutput(spec, generated.Text)
 	hardFailure := spec.HardFailure && containsSensitiveDisclosure(generated.Text)
@@ -122,15 +125,16 @@ func generateCase(
 		score = 0
 		passed = false
 	}
-	input := attributionInput(spec, generated.Text, score, passed, hardFailure)
+	auditOutput := redactSensitiveDisclosures(generated.Text)
+	input := attributionInput(spec, auditOutput, score, passed, hardFailure)
 	if _, ok := generator.(fakeGenerator); !ok && len(input.Trace) > 0 {
 		input.Trace[0].Detail = fmt.Sprintf("live model expected-response comparison; score=%.3f", score)
 	}
-	return CaseRun{
+	run := CaseRun{
 		Score:         score,
 		Passed:        passed,
 		HardFailure:   hardFailure,
-		Output:        generated.Text,
+		Output:        auditOutput,
 		Trace:         input.Trace,
 		LatencyMillis: latencyMillis,
 		Usage: Usage{
@@ -140,7 +144,8 @@ func generateCase(
 			CostCNY:      generated.Usage.CostCNY,
 		},
 		Attribution: AttributeFailure(input),
-	}, nil
+	}
+	return redactCaseRunAudit(run), nil
 }
 
 func fakeResponse(prompt string, spec caseSpec) string {
@@ -353,6 +358,47 @@ func containsSensitiveDisclosure(output string) bool {
 		}
 	}
 	return false
+}
+
+func redactSensitiveDisclosures(output string) string {
+	redacted := output
+	for _, pattern := range credentialDisclosurePatterns {
+		redacted = pattern.ReplaceAllStringFunc(redacted, func(match string) string {
+			indices := pattern.FindStringSubmatchIndex(match)
+			if len(indices) < 4 || indices[2] < 0 || indices[3] < 0 {
+				return sensitiveRedaction
+			}
+			value := match[indices[2]:indices[3]]
+			if isRedactionPlaceholder(value) {
+				return match
+			}
+			return match[:indices[2]] + sensitiveRedaction + match[indices[3]:]
+		})
+	}
+	for _, pattern := range sensitiveDisclosurePatterns {
+		redacted = pattern.ReplaceAllString(redacted, sensitiveRedaction)
+	}
+	return redacted
+}
+
+func redactCaseRunAudit(run CaseRun) CaseRun {
+	run.Output = redactSensitiveDisclosures(run.Output)
+	run.Error = redactSensitiveDisclosures(run.Error)
+	for i := range run.Trace {
+		run.Trace[i].Kind = redactSensitiveDisclosures(run.Trace[i].Kind)
+		run.Trace[i].Name = redactSensitiveDisclosures(run.Trace[i].Name)
+		run.Trace[i].Status = redactSensitiveDisclosures(run.Trace[i].Status)
+		run.Trace[i].Detail = redactSensitiveDisclosures(run.Trace[i].Detail)
+	}
+	run.Attribution.Explanation = redactSensitiveDisclosures(
+		run.Attribution.Explanation,
+	)
+	for i := range run.Attribution.Evidence {
+		run.Attribution.Evidence[i] = redactSensitiveDisclosures(
+			run.Attribution.Evidence[i],
+		)
+	}
+	return run
 }
 
 func isRedactionPlaceholder(value string) bool {

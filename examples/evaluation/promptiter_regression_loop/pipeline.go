@@ -101,8 +101,10 @@ func runPipeline(ctx context.Context, configPath, mode string) error {
 	evaluationAPIKey := ""
 	optimizerAPIKey := ""
 	if mode == modeLive {
-		evaluationAPIKey = strings.TrimSpace(os.Getenv(cfg.Live.APIKeyEnv))
-		optimizerAPIKey = strings.TrimSpace(os.Getenv(cfg.Live.Optimizer.APIKeyEnv))
+		evaluationAPIKey, optimizerAPIKey, err = loadLiveAPIKeys(cfg.Live)
+		if err != nil {
+			return err
+		}
 		budget = newLiveBudget(cfg.Gate, cfg.Live.Optimizer.Budget)
 		live, liveErr := newLiveGeneratorWithBudget(
 			cfg.Live,
@@ -458,6 +460,19 @@ func budgetUsage(budget *liveBudget) generationUsage {
 		return generationUsage{}
 	}
 	return budget.snapshot("")
+}
+
+func loadLiveAPIKeys(cfg liveConfig) (string, string, error) {
+	evaluationAPIKey := strings.TrimSpace(os.Getenv(cfg.APIKeyEnv))
+	optimizerAPIKey := strings.TrimSpace(os.Getenv(cfg.Optimizer.APIKeyEnv))
+	switch {
+	case evaluationAPIKey == "":
+		return "", "", fmt.Errorf("%s is empty", cfg.APIKeyEnv)
+	case optimizerAPIKey == "":
+		return "", "", fmt.Errorf("%s is empty", cfg.Optimizer.APIKeyEnv)
+	default:
+		return evaluationAPIKey, optimizerAPIKey, nil
+	}
 }
 
 func evaluationsUsage(evaluations []CaseEvaluation) Usage {

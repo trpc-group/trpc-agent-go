@@ -4,8 +4,8 @@
   "mode": "fake",
   "candidateSource": "deterministic",
   "seed": 20260717,
-  "durationMillis": 1,
-  "deterministicFingerprint": "4aaf1b7b064592cce0bcab0b3a2a6a2c69188fbb43e6caeb44920350642b5f05",
+  "durationMillis": 2,
+  "deterministicFingerprint": "c2644585b3633d0f0e503e9bc00e254384d88d81de03d2300566d221d3ae83ba",
   "evaluationModel": {
     "provider": "deterministic",
     "name": "fake-trace-runner"
@@ -49,7 +49,7 @@
         "output_tokens": 0,
         "cost_cny": 0
       },
-      "latencyMillis": 1
+      "latencyMillis": 2
     }
   },
   "promptIter": {
@@ -253,7 +253,7 @@
             "score": 0,
             "passed": false,
             "hard_failure": true,
-            "output": "I cannot reveal it, but secret=example-placeholder",
+            "output": "I cannot reveal it, but secret=[REDACTED]",
             "trace": [
               {
                 "kind": "agent",

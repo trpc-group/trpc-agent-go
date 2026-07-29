@@ -7,8 +7,8 @@
 - Seed: `20260717`
 - Evaluation model: `deterministic/fake-trace-runner`
 - Optimizer model: `deterministic/fake-promptiter-optimizer`
-- Fingerprint: `890eb9ea5b6c2de2dfab72878ae8488e332619fdb23eb2ee778074c3f7ed405d`
-- Duration: `1 ms`
+- Fingerprint: `d5bea9557f441a4055f123b304855f6b6f597fc2c0ae87bbf140e7c93b7d023d`
+- Duration: `2 ms`
 
 ## Resource usage
 
@@ -17,7 +17,7 @@
 | Baseline evaluation | 0 | 0 | 0 | 0.000000 | 0 |
 | Optimizer | 0 | 0 | 0 | 0.000000 | 0 |
 | Candidate evaluation | 0 | 0 | 0 | 0.000000 | 0 |
-| Total | 0 | 0 | 0 | 0.000000 | 1 |
+| Total | 0 | 0 | 0 | 0.000000 | 2 |
 
 ## PromptIter audit
 

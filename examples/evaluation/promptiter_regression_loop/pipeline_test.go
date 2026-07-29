@@ -180,6 +180,50 @@ func TestRunPipelineLiveOptimizerFailsClosedWithAuditReport(t *testing.T) {
 	assert.Greater(t, calls.Load(), int32(1))
 }
 
+func TestRunPipelineValidatesAllLiveCredentialsBeforeRequests(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		_ *http.Request,
+	) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"error":{"message":"must not be called"}}`))
+	}))
+	defer server.Close()
+
+	dataDir, err := filepath.Abs("data")
+	require.NoError(t, err)
+	configData, err := os.ReadFile(filepath.Join(dataDir, "config.json"))
+	require.NoError(t, err)
+	var cfg pipelineConfig
+	require.NoError(t, json.Unmarshal(configData, &cfg))
+	cfg.PromptFile = filepath.Join(dataDir, "prompts", "baseline_prompt.md")
+	cfg.TrainEvalSet = filepath.Join(dataDir, "train.evalset.json")
+	cfg.ValidationEvalSet = filepath.Join(dataDir, "validation.evalset.json")
+	cfg.MetricsFile = filepath.Join(dataDir, "metrics.json")
+	cfg.PromptIterFile = filepath.Join(dataDir, "promptiter.json")
+	cfg.OutputDir = filepath.Join(t.TempDir(), "must-not-be-created")
+	cfg.Live.Model = "test-model"
+	cfg.Live.BaseURL = server.URL
+	cfg.Live.APIKeyEnv = "PROMPTITER_EVALUATION_TEST_API_KEY"
+	cfg.Live.MaxRetries = 0
+	cfg.Live.Optimizer.APIKeyEnv = "PROMPTITER_MISSING_OPTIMIZER_TEST_API_KEY"
+	cfg.Live.Optimizer.MaxRetries = 0
+	configData, err = json.Marshal(cfg)
+	require.NoError(t, err)
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	require.NoError(t, os.WriteFile(configPath, configData, 0o600))
+	t.Setenv(cfg.Live.APIKeyEnv, "evaluation-test-key")
+	t.Setenv(cfg.Live.Optimizer.APIKeyEnv, "")
+
+	err = runPipeline(context.Background(), configPath, modeLive)
+
+	assert.ErrorContains(t, err, cfg.Live.Optimizer.APIKeyEnv+" is empty")
+	assert.Zero(t, calls.Load())
+	assert.NoDirExists(t, cfg.OutputDir)
+}
+
 func TestRunPipelineRejectsUndersizedCallBudgetBeforeEvaluation(t *testing.T) {
 	dataDir, err := filepath.Abs("data")
 	require.NoError(t, err)
