@@ -149,6 +149,14 @@ func (a *LLMAgent) InvocationSkillRepository(
 	return a.skillRepositoryForInvocation(ctx, inv)
 }
 
+// SupportsInvocationSkillLoads reports that LLMAgent consumes invocation
+// skill load declarations before its first model request.
+func (a *LLMAgent) SupportsInvocationSkillLoads() bool {
+	return a != nil
+}
+
+var _ agent.InvocationSkillLoadSupport = (*LLMAgent)(nil)
+
 // InvocationCodeExecutor returns the effective code executor for the
 // invocation, honoring a per-run override when present. It implements
 // agent.InvocationCodeExecutorProvider so callers can check executor

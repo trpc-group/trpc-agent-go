@@ -640,6 +640,17 @@ func (r *runner) Run(
 		execCancel()
 		return nil, fmt.Errorf("select agent: %w", err)
 	}
+	if len(ro.SkillLoads) > 0 {
+		support, ok := ag.(agent.InvocationSkillLoadSupport)
+		if !ok || !support.SupportsInvocationSkillLoads() {
+			execCancel()
+			return nil, fmt.Errorf(
+				"%w: %s",
+				agent.ErrSkillLoadingUnsupported,
+				ag.Info().Name,
+			)
+		}
+	}
 	resolveCtx, resolveSpan, resolveStarted := startRunnerRunOptionsLatencySpan(
 		execCtx,
 		ro,

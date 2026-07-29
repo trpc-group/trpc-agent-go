@@ -58,6 +58,49 @@ type mockAgent struct {
 	name string
 }
 
+type repositoryOnlyAgent struct {
+	*mockAgent
+}
+
+func (a *repositoryOnlyAgent) InvocationSkillRepository(
+	context.Context,
+	*agent.Invocation,
+) skill.Repository {
+	return nil
+}
+
+func TestRunnerRejectsSkillLoadsForUnsupportedAgent(t *testing.T) {
+	r := NewRunner("app", &mockAgent{name: "plain"})
+
+	events, err := r.Run(
+		context.Background(),
+		"user",
+		"session",
+		model.NewUserMessage("hello"),
+		agent.WithSkillLoads(skill.LoadRequest{Name: "review"}),
+	)
+
+	require.Nil(t, events)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, agent.ErrSkillLoadingUnsupported))
+}
+
+func TestRunnerRejectsRepositoryProviderWithoutSkillLoadSupport(t *testing.T) {
+	ag := &repositoryOnlyAgent{mockAgent: &mockAgent{name: "repository-only"}}
+	r := NewRunner("app", ag)
+
+	events, err := r.Run(
+		context.Background(),
+		"user",
+		"session",
+		model.NewUserMessage("hello"),
+		agent.WithSkillLoads(skill.LoadRequest{Name: "review"}),
+	)
+
+	require.Nil(t, events)
+	require.ErrorIs(t, err, agent.ErrSkillLoadingUnsupported)
+}
+
 type staticSessionRouter struct {
 	sess *session.Session
 }
@@ -280,6 +323,7 @@ type realStructuredOutputMapPayload struct {
 type capturedModelRequest struct {
 	messages         []model.Message
 	structuredOutput *model.StructuredOutput
+	toolNames        []string
 }
 
 type sequentialModel struct {
@@ -381,6 +425,10 @@ func cloneCapturedModelRequest(req *model.Request) *capturedModelRequest {
 	cloned := &capturedModelRequest{
 		messages: append([]model.Message(nil), req.Messages...),
 	}
+	for name := range req.Tools {
+		cloned.toolNames = append(cloned.toolNames, name)
+	}
+	sort.Strings(cloned.toolNames)
 	if req.StructuredOutput != nil {
 		structuredOutput := *req.StructuredOutput
 		if req.StructuredOutput.JSONSchema != nil {
@@ -390,6 +438,380 @@ func cloneCapturedModelRequest(req *model.Request) *capturedModelRequest {
 		cloned.structuredOutput = &structuredOutput
 	}
 	return cloned
+}
+
+func TestRunnerRunWithSkillLoadsMaterializesFirstRequest(t *testing.T) {
+	repo := createRunnerDeclaredSkillRepository(t)
+	modelStub := &sequentialModel{
+		name: "declared-skill",
+		responses: []*model.Response{{
+			ID:   "declared-skill-response",
+			Done: true,
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("done"),
+			}},
+		}},
+	}
+	activatedTool := &callCountingTool{
+		name:   "review_inspect",
+		result: "ok",
+	}
+	activatedSet := &candidateToolSet{
+		name:  "review-tools",
+		tools: []tool.Tool{activatedTool},
+	}
+	agt := llmagent.New(
+		"reviewer",
+		llmagent.WithModel(modelStub),
+		llmagent.WithSkills(repo),
+		llmagent.WithActivatableToolSets([]tool.ToolSet{activatedSet}),
+		llmagent.WithToolActivationOnSkillLoad(
+			"review",
+			[]string{"review-tools"},
+		),
+	)
+	r := NewRunner("app", agt)
+
+	events, err := r.Run(
+		context.Background(),
+		"user",
+		"session",
+		model.NewUserMessage("review this"),
+		agent.WithSkillLoads(skill.LoadRequest{
+			Name: "review",
+			Docs: []string{"guide.md"},
+		}),
+	)
+	require.NoError(t, err)
+	for range events {
+	}
+
+	requests := modelStub.Requests()
+	require.Len(t, requests, 1)
+	system := firstSystemMessageContent(requests[0].messages)
+	require.Contains(t, system, "REVIEW BODY")
+	require.Contains(t, system, "GUIDE BODY")
+	require.Contains(t, requests[0].toolNames, "review-tools_review_inspect")
+}
+
+func TestRunnerWrappersPreserveSkillLoads(t *testing.T) {
+	tests := []struct {
+		name      string
+		runnerOpt Option
+		response  string
+		requests  int
+	}{
+		{
+			name: "ralph loop",
+			runnerOpt: WithRalphLoop(RalphLoopConfig{
+				CompletionPromise: "DONE",
+			}),
+			response: "<promise>DONE</promise>",
+			requests: 1,
+		},
+		{
+			name: "candidate selector",
+			runnerOpt: WithCandidateSelector(
+				&fixedCandidateSelector{winner: 0},
+				WithCandidateAttempts(2),
+			),
+			response: "done",
+			requests: 2,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			responses := make([]*model.Response, test.requests)
+			for i := range responses {
+				responses[i] = &model.Response{
+					ID:   fmt.Sprintf("%s-%d", test.name, i),
+					Done: true,
+					Choices: []model.Choice{{
+						Message: model.NewAssistantMessage(test.response),
+					}},
+				}
+			}
+			modelStub := &sequentialModel{
+				name:      test.name,
+				responses: responses,
+			}
+			agt := llmagent.New(
+				"reviewer",
+				llmagent.WithModel(modelStub),
+				llmagent.WithSkills(createRunnerDeclaredSkillRepository(t)),
+			)
+			r := NewRunner("app", agt, test.runnerOpt)
+
+			events, err := r.Run(
+				context.Background(),
+				"user",
+				"session",
+				model.NewUserMessage("review"),
+				agent.WithSkillLoads(skill.LoadRequest{Name: "review"}),
+			)
+			require.NoError(t, err)
+			for range events {
+			}
+
+			requests := modelStub.Requests()
+			require.Len(t, requests, test.requests)
+			for _, request := range requests {
+				require.Contains(
+					t,
+					firstSystemMessageContent(request.messages),
+					"REVIEW BODY",
+				)
+			}
+		})
+	}
+}
+
+func TestRunnerRalphLoopPreservesSkillLoadsAcrossIterations(t *testing.T) {
+	modelStub := &sequentialModel{
+		name: "ralph-multi-iteration",
+		responses: []*model.Response{
+			{
+				ID:   "ralph-working",
+				Done: true,
+				Choices: []model.Choice{{
+					Message: model.NewAssistantMessage("still working"),
+				}},
+			},
+			{
+				ID:   "ralph-done",
+				Done: true,
+				Choices: []model.Choice{{
+					Message: model.NewAssistantMessage(
+						"<promise>DONE</promise>",
+					),
+				}},
+			},
+		},
+	}
+	agt := llmagent.New(
+		"reviewer",
+		llmagent.WithModel(modelStub),
+		llmagent.WithSkills(createRunnerDeclaredSkillRepository(t)),
+	)
+	r := NewRunner(
+		"app",
+		agt,
+		WithRalphLoop(RalphLoopConfig{
+			MaxIterations:     2,
+			CompletionPromise: "DONE",
+		}),
+	)
+
+	events, err := r.Run(
+		context.Background(),
+		"user",
+		"session",
+		model.NewUserMessage("review"),
+		agent.WithSkillLoads(skill.LoadRequest{Name: "review"}),
+	)
+	require.NoError(t, err)
+	for range events {
+	}
+
+	requests := modelStub.Requests()
+	require.Len(t, requests, 2)
+	for _, request := range requests {
+		require.Contains(
+			t,
+			firstSystemMessageContent(request.messages),
+			"REVIEW BODY",
+		)
+	}
+}
+
+func TestRunnerNestedCandidateAndRalphPreserveSkillLoads(t *testing.T) {
+	const attempts = 2
+	responses := make([]*model.Response, 0, attempts*2)
+	for i := 0; i < attempts; i++ {
+		responses = append(
+			responses,
+			&model.Response{
+				ID:   fmt.Sprintf("candidate-%d-working", i),
+				Done: true,
+				Choices: []model.Choice{{
+					Message: model.NewAssistantMessage("still working"),
+				}},
+			},
+			&model.Response{
+				ID:   fmt.Sprintf("candidate-%d-done", i),
+				Done: true,
+				Choices: []model.Choice{{
+					Message: model.NewAssistantMessage(
+						"<promise>DONE</promise>",
+					),
+				}},
+			},
+		)
+	}
+	modelStub := &sequentialModel{
+		name:      "candidate-ralph",
+		responses: responses,
+	}
+	agt := llmagent.New(
+		"reviewer",
+		llmagent.WithModel(modelStub),
+		llmagent.WithSkills(createRunnerDeclaredSkillRepository(t)),
+	)
+	r := NewRunner(
+		"app",
+		agt,
+		WithRalphLoop(RalphLoopConfig{
+			MaxIterations:     2,
+			CompletionPromise: "DONE",
+		}),
+		WithCandidateSelector(
+			&fixedCandidateSelector{winner: 0},
+			WithCandidateAttempts(attempts),
+		),
+	)
+
+	events, err := r.Run(
+		context.Background(),
+		"user",
+		"session",
+		model.NewUserMessage("review"),
+		agent.WithSkillLoads(skill.LoadRequest{Name: "review"}),
+	)
+	require.NoError(t, err)
+	for range events {
+	}
+
+	requests := modelStub.Requests()
+	require.Len(t, requests, attempts*2)
+	for _, request := range requests {
+		require.Contains(
+			t,
+			firstSystemMessageContent(request.messages),
+			"REVIEW BODY",
+		)
+	}
+}
+
+func TestRunnerWrappersRejectInvalidSkillBeforeModelRequest(t *testing.T) {
+	tests := []struct {
+		name      string
+		runnerOpt Option
+	}{
+		{
+			name: "ralph loop",
+			runnerOpt: WithRalphLoop(RalphLoopConfig{
+				CompletionPromise: "DONE",
+			}),
+		},
+		{
+			name: "candidate selector",
+			runnerOpt: WithCandidateSelector(
+				&fixedCandidateSelector{winner: 0},
+				WithCandidateAttempts(2),
+			),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			modelStub := &sequentialModel{name: test.name}
+			agt := llmagent.New(
+				"reviewer",
+				llmagent.WithModel(modelStub),
+				llmagent.WithSkills(createRunnerDeclaredSkillRepository(t)),
+			)
+			r := NewRunner("app", agt, test.runnerOpt)
+
+			events, err := r.Run(
+				context.Background(),
+				"user",
+				"session",
+				model.NewUserMessage("review"),
+				agent.WithSkillLoads(skill.LoadRequest{Name: "missing"}),
+			)
+			require.NoError(t, err)
+			for range events {
+			}
+
+			require.Empty(t, modelStub.Requests())
+		})
+	}
+}
+
+func TestRunnerRejectsSkillLoadsForLazyRootBeforeFactoryRun(t *testing.T) {
+	factoryCalled := false
+	lazy := agent.NewLazyAgent(
+		agent.Info{Name: "lazy-root"},
+		func(
+			context.Context,
+			agent.RunOptions,
+		) (agent.Agent, error) {
+			factoryCalled = true
+			return llmagent.New(
+				"lazy-root",
+				llmagent.WithModel(&sequentialModel{name: "lazy-root"}),
+				llmagent.WithSkills(createRunnerDeclaredSkillRepository(t)),
+			), nil
+		},
+	)
+	r := NewRunner("app", lazy)
+
+	events, err := r.Run(
+		context.Background(),
+		"user",
+		"session",
+		model.NewUserMessage("review"),
+		agent.WithSkillLoads(skill.LoadRequest{Name: "review"}),
+	)
+
+	require.Nil(t, events)
+	require.ErrorIs(t, err, agent.ErrSkillLoadingUnsupported)
+	require.False(t, factoryCalled)
+}
+
+func TestRunnerAgentFactorySupportsSkillLoads(t *testing.T) {
+	modelStub := &sequentialModel{
+		name: "factory-root",
+		responses: []*model.Response{{
+			ID:   "factory-root-response",
+			Done: true,
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("done"),
+			}},
+		}},
+	}
+	r := NewRunnerWithAgentFactory(
+		"app",
+		"factory-root",
+		func(
+			context.Context,
+			agent.RunOptions,
+		) (agent.Agent, error) {
+			return llmagent.New(
+				"factory-root",
+				llmagent.WithModel(modelStub),
+				llmagent.WithSkills(createRunnerDeclaredSkillRepository(t)),
+			), nil
+		},
+	)
+
+	events, err := r.Run(
+		context.Background(),
+		"user",
+		"session",
+		model.NewUserMessage("review"),
+		agent.WithSkillLoads(skill.LoadRequest{Name: "review"}),
+	)
+	require.NoError(t, err)
+	for range events {
+	}
+
+	requests := modelStub.Requests()
+	require.Len(t, requests, 1)
+	require.Contains(
+		t,
+		firstSystemMessageContent(requests[0].messages),
+		"REVIEW BODY",
+	)
 }
 
 func firstSystemMessageContent(messages []model.Message) string {
@@ -11111,6 +11533,29 @@ func createNamedRunnerTestSkillRepository(
 			0o644,
 		),
 	)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	return repo
+}
+
+func createRunnerDeclaredSkillRepository(t *testing.T) skill.Repository {
+	t.Helper()
+	root := t.TempDir()
+	skillDir := filepath.Join(root, "review")
+	require.NoError(t, os.MkdirAll(skillDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(skillDir, skill.SkillFile),
+		[]byte(
+			"---\nname: review\ndescription: review changes\n---\n"+
+				"REVIEW BODY\n",
+		),
+		0o644,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(skillDir, "guide.md"),
+		[]byte("GUIDE BODY\n"),
+		0o644,
+	))
 	repo, err := skill.NewFSRepository(root)
 	require.NoError(t, err)
 	return repo

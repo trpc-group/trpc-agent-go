@@ -1140,6 +1140,13 @@ type RunOptions struct {
 	// (e.g., room ID, user context) without modifying the agent's base initial state.
 	RuntimeState map[string]any
 
+	// SkillLoads declares skills that the selected agent must load before its
+	// first model request. The declarations are validated and applied
+	// atomically against the invocation's effective skill repository.
+	//
+	// Use WithSkillLoads to avoid retaining caller-owned slices.
+	SkillLoads []skill.LoadRequest
+
 	// EventFilterKey overrides the invocation's event filter key used for
 	// scoping session events (event.FilterKey) included in LLM context.
 	//
@@ -1551,13 +1558,15 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 	if inv == nil {
 		return nil
 	}
+	childRunOptions := inv.RunOptions
+	childRunOptions.SkillLoads = nil
 	newInv := &Invocation{
 		InvocationID:    uuid.NewString(),
 		ParentMetadata:  inv.ParentMetadata,
 		Session:         inv.Session,
 		SessionService:  inv.SessionService,
 		Message:         inv.Message,
-		RunOptions:      inv.RunOptions,
+		RunOptions:      childRunOptions,
 		MemoryService:   inv.MemoryService,
 		MemoryReader:    inv.MemoryReader,
 		ArtifactService: inv.ArtifactService,
