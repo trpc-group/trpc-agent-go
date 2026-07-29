@@ -87,7 +87,7 @@ docker run --rm -v $(pwd)/repo:/workspace cr-sandbox:latest -mode test -timeout 
 | 类别 | 规则数 | 示例 |
 |------|--------|------|
 | 安全风险 | 1 | `exec.Command` 命令注入 |
-| Goroutine/Context | 2 | goroutine 无 context 传播 |
+| Goroutine/Context | 1 | goroutine 无 context 传播 |
 | 资源生命周期 | 2 | `os.Open` 无 `defer Close` |
 | 数据库连接 | 1 | `sql.Open` 无连接池管理 |
 | 错误处理 | 2 | 忽略 error、裸 panic |

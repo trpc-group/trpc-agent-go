@@ -12,6 +12,7 @@
 package input
 
 import (
+	"fmt"
 	"os"
 	"strings"
 )
@@ -35,10 +36,34 @@ func LoadFromDiffFile(path string) (*Input, error) {
 	}, nil
 }
 
-// LoadFromRepoPath loads a diff from a repository working directory.
-// For now it returns a placeholder; full git integration uses the git CLI.
+// LoadFromRepoPath loads input from a repository working directory.
+// It generates a synthetic unified diff from the Go source files.
 func LoadFromRepoPath(path string) (*Input, error) {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return nil, err
+	}
+	var diffBuilder string
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") {
+			continue
+		}
+		data, err := os.ReadFile(path + "/" + entry.Name())
+		if err != nil {
+			continue
+		}
+		content := string(data)
+		diffBuilder += "diff --git a/" + entry.Name() + " b/" + entry.Name() + "\n"
+		diffBuilder += "--- a/" + entry.Name() + "\n"
+		diffBuilder += "+++ b/" + entry.Name() + "\n"
+		lines := strings.Split(content, "\n")
+		diffBuilder += "@@ -0,0 +1," + fmt.Sprintf("%d", len(lines)) + " @@\n"
+		for _, l := range lines {
+			diffBuilder += "+" + l + "\n"
+		}
+	}
 	return &Input{
+		DiffText:   diffBuilder,
 		RepoPath:   path,
 		SourceType: "repo_path",
 	}, nil

@@ -37,7 +37,6 @@ go run . --diff-file fixtures/diffs/security.diff --dry-run
 | Security | GO-SECURITY-001 | Command injection via unsanitized exec.Command |
 | Secret | GO-SECRET-001 | Hardcoded credentials, tokens, API keys |
 | Goroutine | GO-GOROUTINE-001 | Goroutine without context propagation |
-| Goroutine | GO-GOROUTINE-002 | Missing context in function with goroutine |
 | Resource | GO-RESOURCE-001 | File opened without defer close |
 | Resource | GO-RESOURCE-002 | HTTP response body not closed |
 | Database | GO-DB-001 | sql.Open without connection lifecycle management |

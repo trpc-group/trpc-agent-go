@@ -99,6 +99,7 @@ func (e *Executor) containerRun(
 		timeoutSec = 1
 	}
 
+	//nolint:gosec // intentional: repoPath mount is the sandbox's core function
 	cmd := exec.CommandContext(ctx, "docker", "run", "--rm",
 		"-v", repoPath+":/workspace",
 		e.containerImage,

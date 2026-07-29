@@ -36,10 +36,15 @@ func TestLoadFromDiffFileNotFound(t *testing.T) {
 }
 
 func TestLoadFromRepoPath(t *testing.T) {
-	in, err := LoadFromRepoPath("/some/repo")
+	tmpDir := t.TempDir()
+	err := os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte("package main\nfunc main(){}\n"), 0o644)
+	require.NoError(t, err)
+
+	in, err := LoadFromRepoPath(tmpDir)
 	require.NoError(t, err)
 	assert.Equal(t, "repo_path", in.SourceType)
-	assert.Equal(t, "/some/repo", in.RepoPath)
+	assert.Contains(t, in.DiffText, "main.go")
+	assert.Contains(t, in.DiffText, "+package main")
 }
 
 func TestSnapshot(t *testing.T) {

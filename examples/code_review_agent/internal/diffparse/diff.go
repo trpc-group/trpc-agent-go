@@ -96,9 +96,7 @@ func (p *parser) processLine(line string) {
 }
 
 func (p *parser) handleFileHeader(line string) {
-	if p.cur != nil {
-		p.result.Files = append(p.result.Files, *p.cur)
-	}
+	p.finalizeCurrent()
 	matches := fileHeaderRE.FindStringSubmatch(line)
 	if matches != nil {
 		p.cur = &ChangedFile{
@@ -219,6 +217,27 @@ func (p *parser) handleHunkLine(line string) {
 		p.newLine++
 	}
 	p.cur.Hunks[len(p.cur.Hunks)-1] = *p.curHunk
+}
+
+func (p *parser) finalizeCurrent() {
+	if p.cur == nil {
+		return
+	}
+	if p.cur.Deleted {
+		p.cur.NewPath = "/dev/null"
+	}
+	if p.cur.NewFile {
+		p.cur.OldPath = "/dev/null"
+	}
+	if !p.cur.Deleted && !p.cur.NewFile && p.cur.OldPath != p.cur.NewPath {
+		extended := strings.Join(p.cur.Extended, "\n")
+		if !strings.Contains(extended, "copy from") && !strings.Contains(extended, "copy to") {
+			p.cur.Renamed = true
+		}
+	}
+	p.result.Files = append(p.result.Files, *p.cur)
+	p.cur = nil
+	p.curHunk = nil
 }
 
 func (p *parser) finalize() {

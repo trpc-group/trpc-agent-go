@@ -187,15 +187,6 @@ func defaultRules() []Rule {
 			Confidence:     0.7,
 		},
 		{
-			ID:             "GO-GOROUTINE-002",
-			Category:       reviewmodel.CategoryGoroutine,
-			Severity:       reviewmodel.SeverityHigh,
-			Title:          "Missing context.Context in function signature",
-			Pattern:        `func\s+\w+\s*\([^)]*\)\s*\{.*go\s+`,
-			Recommendation: "Add context.Context as the first parameter and propagate cancellation.",
-			Confidence:     0.65,
-		},
-		{
 			ID:             "GO-SECURITY-001",
 			Category:       reviewmodel.CategorySecurity,
 			Severity:       reviewmodel.SeverityCritical,

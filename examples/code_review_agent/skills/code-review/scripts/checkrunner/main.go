@@ -19,6 +19,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -124,11 +125,15 @@ func runCheck(mode, dir string, timeout time.Duration) checkResult {
 
 	done := make(chan struct{})
 	var stdoutBuf, stderrBuf []byte
+	var wg sync.WaitGroup
 
+	wg.Add(2)
 	go func() {
+		defer wg.Done()
 		stdoutBuf, _ = io.ReadAll(io.LimitReader(stdout, maxOutputBytes/2))
 	}()
 	go func() {
+		defer wg.Done()
 		stderrBuf, _ = io.ReadAll(io.LimitReader(stderr, maxOutputBytes/2))
 	}()
 
@@ -148,6 +153,7 @@ func runCheck(mode, dir string, timeout time.Duration) checkResult {
 
 	stdout.Close()
 	stderr.Close()
+	wg.Wait()
 	result.DurationMs = time.Since(start).Milliseconds()
 
 	if result.TimedOut {

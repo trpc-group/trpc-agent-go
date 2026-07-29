@@ -19,15 +19,6 @@
       "confidence": 0.7
     },
     {
-      "id": "GO-GOROUTINE-002",
-      "category": "goroutine_context",
-      "severity": "high",
-      "title": "Missing context.Context in function signature",
-      "pattern": "func\\s+\\w+\\s*\\([^)]*\\)\\s*\\{.*go\\s+",
-      "recommendation": "Add context.Context as the first parameter and propagate cancellation.",
-      "confidence": 0.65
-    },
-    {
       "id": "GO-RESOURCE-001",
       "category": "resource_lifecycle",
       "severity": "high",
