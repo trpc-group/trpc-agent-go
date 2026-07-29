@@ -2313,6 +2313,12 @@ func (f *Flow) callLLM(
 		invocation,
 		llmLimitReached,
 	)
+	if finalizing {
+		appendCallLimitFinalizationMessage(
+			llmRequest,
+			finalizationInstruction,
+		)
+	}
 	// Run before model callbacks if they exist.
 	ctx, customResp, err := f.runBeforeModelCallbacks(ctx, invocation, llmRequest)
 	if err != nil {
@@ -2326,13 +2332,6 @@ func (f *Flow) callLLM(
 	if llmRequest == nil || len(llmRequest.Messages) == 0 {
 		err = errors.New(errMsgNoLLMMessages)
 		return ctx, nil, false, err
-	}
-	if finalizing {
-		prepareCallLimitFinalizationRequest(
-			llmRequest,
-			finalizationInstruction,
-		)
-		ctx = imodelrequest.WithToolsDisabled(ctx)
 	}
 	if invocation != nil && invocation.RunOptions.ExecutionTraceEnabled {
 		traceCtx := agent.NewInvocationContext(ctx, invocation)
@@ -2354,33 +2353,38 @@ func (f *Flow) callLLM(
 	return ctx, seq, true, nil
 }
 
-func prepareCallLimitFinalizationRequest(
+// appendCallLimitFinalizationMessage adds the request-scoped instruction as
+// the final user message. The request is not the session event history, so this
+// does not create or persist a user event.
+func appendCallLimitFinalizationMessage(
 	req *model.Request,
 	instruction string,
 ) {
 	if req == nil {
 		return
 	}
+	req.Messages = append(
+		req.Messages,
+		model.NewUserMessage(instruction),
+	)
+}
+
+// enforceCallLimitFinalizationToolFree keeps finalization requests tool-free
+// across callback groups and retry callbacks. It is intentionally idempotent.
+func enforceCallLimitFinalizationToolFree(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	req *model.Request,
+) context.Context {
+	if !calllimit.Active(invocation) {
+		return ctx
+	}
+	if req == nil {
+		return imodelrequest.WithToolsDisabled(ctx)
+	}
 	req.Tools = nil
 	imodelrequest.DeleteToolControlFields(req.ExtraFields)
-	for i := range req.Messages {
-		if req.Messages[i].Role != model.RoleSystem {
-			continue
-		}
-		if len(req.Messages[i].ContentParts) > 0 {
-			break
-		}
-		if req.Messages[i].Content == "" {
-			req.Messages[i].Content = instruction
-		} else {
-			req.Messages[i].Content += "\n\n" + instruction
-		}
-		return
-	}
-	req.Messages = append(
-		[]model.Message{model.NewSystemMessage(instruction)},
-		req.Messages...,
-	)
+	return imodelrequest.WithToolsDisabled(ctx)
 }
 
 func (f *Flow) runBeforeModelCallbacks(
@@ -2388,6 +2392,11 @@ func (f *Flow) runBeforeModelCallbacks(
 	invocation *agent.Invocation,
 	llmRequest *model.Request,
 ) (context.Context, *model.Response, error) {
+	ctx = enforceCallLimitFinalizationToolFree(
+		ctx,
+		invocation,
+		llmRequest,
+	)
 	ctx, span, started := startLatencySpan(
 		ctx,
 		invocation,
@@ -2487,15 +2496,30 @@ func wrapBeforeModelCallbacksWithInvocation(
 			args *model.BeforeModelArgs,
 		) (*model.BeforeModelResult, error) {
 			ctx = withInvocationContextIfMissing(ctx, invocation)
+			ctx = enforceCallLimitFinalizationToolFree(
+				ctx,
+				invocation,
+				args.Request,
+			)
 			result, err := callback(ctx, args)
 			if result != nil && result.Context != nil {
 				clonedResult := *result
-				clonedResult.Context = withInvocationContextIfMissing(
+				resultCtx := withInvocationContextIfMissing(
 					result.Context,
 					invocationFromContextOrFallback(ctx, invocation),
 				)
+				clonedResult.Context = enforceCallLimitFinalizationToolFree(
+					resultCtx,
+					invocation,
+					args.Request,
+				)
 				return &clonedResult, err
 			}
+			enforceCallLimitFinalizationToolFree(
+				ctx,
+				invocation,
+				args.Request,
+			)
 			return result, err
 		}
 	}

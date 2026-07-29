@@ -475,7 +475,8 @@ agent := llmagent.New(
 - 两个 finalization option 相互独立，且都需要显式选择。传入 `""` 时使用框架默认的收尾 instruction；传入非空字符串时使用调用方提供的 instruction。
 - LLM 上限收尾会占用 `MaxLLMCalls` 内的最后一次调用；工具迭代上限收尾会在最后一轮允许的工具调用后使用下一次 LLM 调用。
 - `MaxLLMCalls` 始终是严格的外层硬预算，收尾调用也计入其中。因此组合使用工具上限收尾和 `WithMaxLLMCalls` 时，需要预留一次 LLM 调用。
-- 收尾期间，框架会从模型请求中移除工具及强制工具选择字段。如果模型仍然返回工具调用，框架会拒绝该调用且不会执行工具。
+- 最后一次模型请求会在消息尾部追加一条临时 user instruction，而不会修改已有 system prompt。`BeforeModel` callback 可以看到该消息，但它不会作为真实 user event 发送或持久化。
+- 收尾期间，框架会在 `BeforeModel` callback 前移除工具及强制工具选择字段，并在 callback 后再次清理。如果模型仍然返回工具调用，框架会拒绝该调用且不会执行工具。
 - 如果两个收尾策略在同一次 LLM 调用上同时满足条件，优先使用 LLM 上限对应的 instruction。
 - 两个限制相互独立，可以单独使用或组合使用。
 - 这些限制是每次调用级别的，不同的 `runner.Run()` 调用会各自独立计数。

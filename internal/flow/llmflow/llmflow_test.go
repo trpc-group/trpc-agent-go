@@ -3126,20 +3126,49 @@ func TestFlow_CallLLM_MaxLLMCallsExceeded(t *testing.T) {
 }
 
 func TestFlow_CallLLM_FinalizesOnLastAllowedCall(t *testing.T) {
-	callbacks := model.NewCallbacks().RegisterBeforeModel(
-		func(
-			ctx context.Context,
-			args *model.BeforeModelArgs,
-		) (*model.BeforeModelResult, error) {
-			_ = ctx
-			args.Request.Tools = map[string]tool.Tool{
-				"lookup": &mockLongRunnerTool{name: "lookup"},
-			}
-			args.Request.ExtraFields["tool_choice"] = "required"
-			args.Request.ExtraFields["keep"] = "value"
-			return nil, nil
-		},
-	)
+	instruction := "finish with the available context"
+	callbacks := model.NewCallbacks().
+		RegisterBeforeModel(
+			func(
+				ctx context.Context,
+				args *model.BeforeModelArgs,
+			) (*model.BeforeModelResult, error) {
+				require.True(t, imodelrequest.ToolsDisabled(ctx))
+				require.Nil(t, args.Request.Tools)
+				require.NotContains(t, args.Request.ExtraFields, "tool_choice")
+				require.Equal(t, "value", args.Request.ExtraFields["keep"])
+				require.Len(t, args.Request.Messages, 3)
+				require.Equal(t, "base instruction", args.Request.Messages[0].Content)
+				require.Equal(t, model.RoleUser, args.Request.Messages[2].Role)
+				require.Equal(t, instruction, args.Request.Messages[2].Content)
+
+				// Finalization remains tool-free even if a callback attempts
+				// to restore tools and replaces the callback context.
+				args.Request.Tools = map[string]tool.Tool{
+					"lookup": &mockLongRunnerTool{name: "lookup"},
+				}
+				args.Request.ExtraFields["tool_choice"] = "required"
+				return &model.BeforeModelResult{
+					Context: context.Background(),
+				}, nil
+			},
+		).
+		RegisterBeforeModel(
+			func(
+				ctx context.Context,
+				args *model.BeforeModelArgs,
+			) (*model.BeforeModelResult, error) {
+				require.True(t, imodelrequest.ToolsDisabled(ctx))
+				require.Nil(t, args.Request.Tools)
+				require.NotContains(t, args.Request.ExtraFields, "tool_choice")
+
+				args.Request.Tools = map[string]tool.Tool{
+					"lookup": &mockLongRunnerTool{name: "lookup"},
+				}
+				args.Request.ExtraFields["tool_choice"] = "required"
+				return nil, nil
+			},
+		)
 	f := New(nil, nil, Options{ModelCallbacks: callbacks})
 	modelStub := &mockModel{
 		responses: []*model.Response{{
@@ -3151,14 +3180,19 @@ func TestFlow_CallLLM_FinalizesOnLastAllowedCall(t *testing.T) {
 	}
 	inv := agent.NewInvocation(agent.WithInvocationModel(modelStub))
 	inv.MaxLLMCalls = 1
-	instruction := "finish with the available context"
 	calllimit.Configure(inv, &instruction, nil)
 	req := &model.Request{
 		Messages: []model.Message{
 			model.NewSystemMessage("base instruction"),
 			model.NewUserMessage("question"),
 		},
-		ExtraFields: map[string]any{},
+		Tools: map[string]tool.Tool{
+			"lookup": &mockLongRunnerTool{name: "lookup"},
+		},
+		ExtraFields: map[string]any{
+			"tool_choice": "required",
+			"keep":        "value",
+		},
 	}
 
 	gotCtx, seq, modelCalled, err := f.callLLM(
@@ -3175,11 +3209,14 @@ func TestFlow_CallLLM_FinalizesOnLastAllowedCall(t *testing.T) {
 	require.Nil(t, req.Tools)
 	require.NotContains(t, req.ExtraFields, "tool_choice")
 	require.Equal(t, "value", req.ExtraFields["keep"])
-	require.Contains(t, req.Messages[0].Content, instruction)
+	require.Equal(t, "base instruction", req.Messages[0].Content)
+	require.Len(t, req.Messages, 3)
+	require.Equal(t, model.RoleUser, req.Messages[2].Role)
+	require.Equal(t, instruction, req.Messages[2].Content)
 	require.True(t, calllimit.Active(inv))
 }
 
-func TestPrepareCallLimitFinalizationRequest_PreservesSystemContentParts(
+func TestAppendCallLimitFinalizationMessage_PreservesSystemContentParts(
 	t *testing.T,
 ) {
 	partText := "existing content part"
@@ -3197,15 +3234,15 @@ func TestPrepareCallLimitFinalizationRequest_PreservesSystemContentParts(
 		},
 	}
 
-	prepareCallLimitFinalizationRequest(req, "finalize now")
+	appendCallLimitFinalizationMessage(req, "finalize now")
 
 	require.Len(t, req.Messages, 3)
 	require.Equal(t, model.RoleSystem, req.Messages[0].Role)
-	require.Equal(t, "finalize now", req.Messages[0].Content)
-	require.Empty(t, req.Messages[0].ContentParts)
-	require.Equal(t, "existing content", req.Messages[1].Content)
-	require.Len(t, req.Messages[1].ContentParts, 1)
-	require.Equal(t, partText, *req.Messages[1].ContentParts[0].Text)
+	require.Equal(t, "existing content", req.Messages[0].Content)
+	require.Len(t, req.Messages[0].ContentParts, 1)
+	require.Equal(t, partText, *req.Messages[0].ContentParts[0].Text)
+	require.Equal(t, model.RoleUser, req.Messages[2].Role)
+	require.Equal(t, "finalize now", req.Messages[2].Content)
 }
 
 func TestRunOneStep_LLMCallLimitFinalizationEndsInvocation(t *testing.T) {
@@ -3235,8 +3272,11 @@ func TestRunOneStep_LLMCallLimitFinalizationEndsInvocation(t *testing.T) {
 	require.False(t, calllimit.Active(inv))
 	req := modelStub.LastRequest()
 	require.NotNil(t, req)
-	require.Equal(t, model.RoleSystem, req.Messages[0].Role)
-	require.Contains(t, req.Messages[0].Content, calllimit.DefaultInstruction)
+	require.Len(t, req.Messages, 2)
+	require.Equal(t, model.RoleUser, req.Messages[0].Role)
+	require.Equal(t, "test", req.Messages[0].Content)
+	require.Equal(t, model.RoleUser, req.Messages[len(req.Messages)-1].Role)
+	require.Equal(t, calllimit.DefaultInstruction, req.Messages[len(req.Messages)-1].Content)
 }
 
 func TestFlow_CallLLM_LLMFinalizationPrecedesPendingToolFinalization(t *testing.T) {
@@ -3266,9 +3306,10 @@ func TestFlow_CallLLM_LLMFinalizationPrecedesPendingToolFinalization(t *testing.
 	)
 
 	require.NoError(t, err)
-	require.Equal(t, model.RoleSystem, req.Messages[0].Role)
-	require.Contains(t, req.Messages[0].Content, llmInstruction)
-	require.NotContains(t, req.Messages[0].Content, toolInstruction)
+	require.Len(t, req.Messages, 2)
+	require.Equal(t, model.RoleUser, req.Messages[1].Role)
+	require.Equal(t, llmInstruction, req.Messages[1].Content)
+	require.NotEqual(t, toolInstruction, req.Messages[1].Content)
 }
 
 func TestFlow_CallLLM_ToolFinalizationDoesNotExceedLLMBudget(t *testing.T) {

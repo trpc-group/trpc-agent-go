@@ -18,8 +18,10 @@ const stateKey = "__trpc_agent_internal_call_limit_finalization__"
 // DefaultInstruction is used when finalization is enabled without a custom
 // instruction.
 const DefaultInstruction = "The call limit has been reached. Do not call " +
-	"tools. Use the available conversation and tool results to provide the " +
-	"best possible final answer. Clearly state any unresolved limitations."
+	"tools or emit simulated tool calls, tool-call markup, or tool-call " +
+	"protocol data. Use the available conversation and tool results to " +
+	"provide the best possible final answer. Clearly state any unresolved " +
+	"limitations."
 
 type phase uint8
 

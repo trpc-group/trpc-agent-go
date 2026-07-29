@@ -521,7 +521,8 @@ agent := llmagent.New(
 - Each finalization option is independent and opt-in. Pass `""` to use the framework's default finalization instruction, or pass a non-empty string to provide a custom instruction.
 - LLM-limit finalization uses the final call inside `MaxLLMCalls`. Tool-limit finalization uses the next LLM call after the final allowed tool iteration.
 - `MaxLLMCalls` remains a strict outer budget. Finalization calls count toward it, so reserve an LLM call when combining tool-limit finalization with `WithMaxLLMCalls`.
-- During finalization, tools and forced tool-choice fields are removed from the model request. If a tool call is still produced, the framework rejects it without executing the tool.
+- For the final model request, the instruction is appended as a transient tail user message without changing the existing system prompt. It is visible to before-model callbacks but is not emitted or persisted as a user event.
+- During finalization, tools and forced tool-choice fields are removed before before-model callbacks and scrubbed again after callbacks. If a tool call is still produced, the framework rejects it without executing the tool.
 - If both finalization policies become eligible on the same LLM call, the LLM-limit instruction takes precedence.
 - Both limits are independent and can be used separately or together.
 - These limits are per-invocation; different `runner.Run()` calls maintain independent counts.

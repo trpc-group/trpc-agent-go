@@ -827,6 +827,9 @@ func WithMaxToolIterations(limit int) Option {
 // to request one tool-free final model response. The finalization call counts
 // toward the configured limit. An empty instruction uses the framework
 // default. This option has no effect when the LLM call limit is not positive.
+// The instruction is appended as a transient tail user message for the final
+// model request; it is not emitted or persisted as a user event. Before-model
+// callbacks observe the tool-free finalization request.
 //
 // When this option is not set, exceeding MaxLLMCalls preserves the default
 // terminal StopError behavior.
@@ -842,6 +845,9 @@ func WithLLMCallLimitFinalization(instruction string) Option {
 // and is not attempted if that budget is exhausted. An empty instruction uses
 // the framework default. This option has no effect when the tool iteration
 // limit is not positive.
+// The instruction is appended as a transient tail user message for the final
+// model request; it is not emitted or persisted as a user event. Before-model
+// callbacks observe the tool-free finalization request.
 //
 // When this option is not set, exceeding MaxToolIterations preserves the
 // default terminal flow_error behavior.
