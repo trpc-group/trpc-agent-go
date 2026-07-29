@@ -43,8 +43,9 @@ type ReviewStore interface {
 	// GetPermissionDecisions retrieves all governance decisions for a task.
 	GetPermissionDecisions(ctx context.Context, taskID string) ([]reviewmodel.PermissionDecision, error)
 
-	// Finalize marks a task as completed. Status must be StatusCompleted or
-	// StatusCompletedWithWarnings; any other value returns ErrInvalidTransition.
+	// Finalize marks a task as terminated. Status must be StatusCompleted,
+	// StatusCompletedWithWarnings, or StatusFailed; any other value returns
+	// ErrInvalidTransition.
 	Finalize(ctx context.Context, taskID string, task *reviewmodel.ReviewTask) error
 
 	// Close releases resources held by the store.

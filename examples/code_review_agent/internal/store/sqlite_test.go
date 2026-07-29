@@ -186,6 +186,29 @@ func TestFinalizeInvalidStatus(t *testing.T) {
 	assert.ErrorIs(t, err, ErrInvalidTransition)
 }
 
+func TestFinalizeFailedStatus(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	task := &reviewmodel.ReviewTask{
+		ID:          "task-fail-001",
+		Status:      reviewmodel.StatusRunning,
+		SandboxType: "local",
+		CreatedAt:   time.Now(),
+	}
+	require.NoError(t, s.CreateTask(ctx, task))
+
+	task.Status = reviewmodel.StatusFailed
+	task.ErrorMessage = "something went wrong"
+	require.NoError(t, s.Finalize(ctx, "task-fail-001", task))
+
+	got, err := s.GetTask(ctx, "task-fail-001")
+	require.NoError(t, err)
+	assert.Equal(t, reviewmodel.StatusFailed, got.Status)
+	assert.Equal(t, "something went wrong", got.ErrorMessage)
+	assert.NotNil(t, got.CompletedAt)
+}
+
 func TestStoreClose(t *testing.T) {
 	s := newTestStore(t)
 	assert.NoError(t, s.Close())

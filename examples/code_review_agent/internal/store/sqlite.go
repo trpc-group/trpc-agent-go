@@ -27,7 +27,7 @@ import (
 var _ ReviewStore = (*SQLiteStore)(nil)
 
 // ErrInvalidTransition is returned when Finalize is called with a non-terminal status.
-var ErrInvalidTransition = fmt.Errorf("finalize requires StatusCompleted or StatusCompletedWithWarnings")
+var ErrInvalidTransition = fmt.Errorf("finalize requires StatusCompleted, StatusCompletedWithWarnings, or StatusFailed")
 
 // SQLiteStore implements ReviewStore backed by SQLite.
 type SQLiteStore struct {
@@ -246,11 +246,13 @@ func (s *SQLiteStore) GetFindings(ctx context.Context, taskID string) ([]reviewm
 	return findings, rows.Err()
 }
 
-// Finalize marks a task as completed. Status must be StatusCompleted or
-// StatusCompletedWithWarnings; any other value returns ErrInvalidTransition.
+// Finalize marks a task as terminated. Status must be StatusCompleted,
+// StatusCompletedWithWarnings, or StatusFailed; any other value returns
+// ErrInvalidTransition.
 func (s *SQLiteStore) Finalize(ctx context.Context, taskID string, task *reviewmodel.ReviewTask) error {
 	if task.Status != reviewmodel.StatusCompleted &&
-		task.Status != reviewmodel.StatusCompletedWithWarnings {
+		task.Status != reviewmodel.StatusCompletedWithWarnings &&
+		task.Status != reviewmodel.StatusFailed {
 		return ErrInvalidTransition
 	}
 	now := time.Now().Unix()
