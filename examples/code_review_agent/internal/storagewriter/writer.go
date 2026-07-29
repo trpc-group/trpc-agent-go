@@ -1,3 +1,11 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
 // Package storagewriter implements the StorageWriter GraphAgent node.
 // Persists all review data to the database.
 package storagewriter
@@ -109,24 +117,24 @@ func Run(ctx context.Context, gs graph.State) (any, error) {
 	sevJSON, _ := json.Marshal(sevDist)
 	catJSON, _ := json.Marshal(catDist)
 	if err := store.InsertReport(ctx, storage.ReportRow{
-		ID:                    uuid.New().String(),
-		TaskID:                taskID,
-		FindingsCount:         len(findings),
-		WarningsCount:         len(warnings),
-		SeverityDistribution:  string(sevJSON),
-		CategoryDistribution:  string(catJSON),
-		JSONReportPath:        jsonPath,
-		MDReportPath:          mdPath,
-		Summary:               fmt.Sprintf("Reviewed %d findings (%d warnings).", len(findings), len(warnings)),
-		CreatedAt:             now,
+		ID:                   uuid.New().String(),
+		TaskID:               taskID,
+		FindingsCount:        len(findings),
+		WarningsCount:        len(warnings),
+		SeverityDistribution: string(sevJSON),
+		CategoryDistribution: string(catJSON),
+		JSONReportPath:       jsonPath,
+		MDReportPath:         mdPath,
+		Summary:              fmt.Sprintf("Reviewed %d findings (%d warnings).", len(findings), len(warnings)),
+		CreatedAt:            now,
 	}); err != nil {
 		return nil, fmt.Errorf("insert report: %w", err)
 	}
 
 	// 7. Insert metrics
 	metric := storage.MetricRow{
-		ID:      uuid.New().String(),
-		TaskID:  taskID,
+		ID:        uuid.New().String(),
+		TaskID:    taskID,
 		CreatedAt: now,
 	}
 	if v, ok := gs[state.StateKeyNodeDiffParserMs].(int64); ok {
@@ -224,19 +232,19 @@ func toFindingRow(f types.Finding) storage.FindingRow {
 
 func toSandboxRow(taskID string, r types.SandboxResult) storage.SandboxRunRow {
 	return storage.SandboxRunRow{
-		ID:        uuid.New().String(),
-		TaskID:    taskID,
-		ExecutorType: "local",
-		CommandName:  r.Command,
-		Command:      r.Command,
-		ExitCode:     r.ExitCode,
-		Stdout:       r.Stdout,
-		Stderr:       r.Stderr,
-		DurationMs:   r.DurationMs,
-		TimedOut:     r.TimedOut,
+		ID:              uuid.New().String(),
+		TaskID:          taskID,
+		ExecutorType:    "local",
+		CommandName:     r.Command,
+		Command:         r.Command,
+		ExitCode:        r.ExitCode,
+		Stdout:          r.Stdout,
+		Stderr:          r.Stderr,
+		DurationMs:      r.DurationMs,
+		TimedOut:        r.TimedOut,
 		OutputTruncated: false,
-		ErrorType:    r.ErrorType,
-		CreatedAt:    time.Now().UTC().Format(time.RFC3339),
+		ErrorType:       r.ErrorType,
+		CreatedAt:       time.Now().UTC().Format(time.RFC3339),
 	}
 }
 

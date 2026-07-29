@@ -1,3 +1,11 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
 // Package config loads and validates code-review-agent YAML configuration.
 package config
 
@@ -11,24 +19,24 @@ import (
 
 // Config is the root configuration for the code review agent.
 type Config struct {
-	Mode        string            `yaml:"mode"`         // live | dry_run
-	DryRunTimeout time.Duration   `yaml:"dry_run_timeout"` // max 2 min for dry-run
-	Input       InputConfig       `yaml:"input"`
-	Output      OutputConfig      `yaml:"output"`
-	Executor    ExecutorConfig    `yaml:"executor"`
-	LLM         LLMConfig         `yaml:"llm"`
-	Dedup       DedupConfig       `yaml:"dedup"`
-	Sanitize    SanitizeConfig    `yaml:"sanitize"`
-	Database    DatabaseConfig    `yaml:"database"`
-	Skill       SkillConfig       `yaml:"skill"`
-	Permissions PermissionsConfig `yaml:"permissions"`
-	Telemetry   TelemetryConfig   `yaml:"telemetry"`
+	Mode          string            `yaml:"mode"`            // live | dry_run
+	DryRunTimeout time.Duration     `yaml:"dry_run_timeout"` // max 2 min for dry-run
+	Input         InputConfig       `yaml:"input"`
+	Output        OutputConfig      `yaml:"output"`
+	Executor      ExecutorConfig    `yaml:"executor"`
+	LLM           LLMConfig         `yaml:"llm"`
+	Dedup         DedupConfig       `yaml:"dedup"`
+	Sanitize      SanitizeConfig    `yaml:"sanitize"`
+	Database      DatabaseConfig    `yaml:"database"`
+	Skill         SkillConfig       `yaml:"skill"`
+	Permissions   PermissionsConfig `yaml:"permissions"`
+	Telemetry     TelemetryConfig   `yaml:"telemetry"`
 }
 
 // InputConfig configures input source.
 type InputConfig struct {
-	Type    string `yaml:"type"`    // diff_file | diff_text | repo_path
-	Source  string `yaml:"source"`  // file path or "stdin"
+	Type    string `yaml:"type"`     // diff_file | diff_text | repo_path
+	Source  string `yaml:"source"`   // file path or "stdin"
 	BaseRef string `yaml:"base_ref"` // default "origin/main"
 }
 
@@ -40,9 +48,9 @@ type OutputConfig struct {
 
 // ExecutorConfig configures the sandbox executor.
 type ExecutorConfig struct {
-	Type          string          `yaml:"type"`           // local | cube | container | e2b
-	TimeoutSec    int             `yaml:"timeout_sec"`    // per-command timeout (seconds)
-	MaxOutputMB   int             `yaml:"max_output_mb"`  // output size limit (MB)
+	Type          string          `yaml:"type"`            // local | cube | container | e2b
+	TimeoutSec    int             `yaml:"timeout_sec"`     // per-command timeout (seconds)
+	MaxOutputMB   int             `yaml:"max_output_mb"`   // output size limit (MB)
 	MaxArtifactMB int             `yaml:"max_artifact_mb"` // artifact file size limit (MB, default 10)
 	EnvWhitelist  []string        `yaml:"env_whitelist"`
 	Commands      []CommandConfig `yaml:"commands"`
@@ -67,7 +75,7 @@ type LLMConfig struct {
 
 // DedupConfig configures deduplication.
 type DedupConfig struct {
-	ConfidenceThreshold float64 `yaml:"confidence_threshold"` // default 0.6
+	ConfidenceThreshold float64 `yaml:"confidence_threshold"`  // default 0.6
 	MaxFindingsPerFile  int     `yaml:"max_findings_per_file"` // default 20
 	MaxTotalFindings    int     `yaml:"max_total_findings"`    // default 100
 }

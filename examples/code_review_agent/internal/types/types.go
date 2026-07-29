@@ -1,3 +1,11 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
 // Package types defines shared data types used across all GraphAgent nodes.
 package types
 
@@ -37,10 +45,10 @@ type Line struct {
 
 // SandboxCommand is a command to be executed in the sandbox.
 type SandboxCommand struct {
-	Name      string   `json:"name"`      // "go_vet" | "staticcheck" | "go_test" | "go_build"
-	Cmd       string   `json:"cmd"`       // "go"
-	Args      []string `json:"args"`      // ["vet", "./..."]
-	Timeout   int      `json:"timeout"`   // ms, default 30000
+	Name      string   `json:"name"`       // "go_vet" | "staticcheck" | "go_test" | "go_build"
+	Cmd       string   `json:"cmd"`        // "go"
+	Args      []string `json:"args"`       // ["vet", "./..."]
+	Timeout   int      `json:"timeout"`    // ms, default 30000
 	RiskLevel string   `json:"risk_level"` // low|medium|high (for PermissionFilter)
 }
 
@@ -71,44 +79,44 @@ type PermissionDecision struct {
 
 // Rule is a single check rule loaded from skills/code-review/rules/.
 type Rule struct {
-	ID          string `json:"id"`       // "SEC-001"
-	Category    string `json:"category"` // security|error_handling|sensitive_info|db_lifecycle|missing_test|goroutine_leak|resource_leak
-	Severity    string `json:"severity"` // critical|high|medium|low
-	RuleType    string `json:"rule_type"` // token|tool|ast
-	Pattern     string `json:"pattern"`
-	Message     string `json:"message"`
-	Fix         string `json:"fix"`
+	ID       string `json:"id"`        // "SEC-001"
+	Category string `json:"category"`  // security|error_handling|sensitive_info|db_lifecycle|missing_test|goroutine_leak|resource_leak
+	Severity string `json:"severity"`  // critical|high|medium|low
+	RuleType string `json:"rule_type"` // token|tool|ast
+	Pattern  string `json:"pattern"`
+	Message  string `json:"message"`
+	Fix      string `json:"fix"`
 }
 
 // ── Findings ──
 
 // Finding is the unified review finding produced by all analysis nodes.
 type Finding struct {
-	ID             string  `json:"id"`              // ULID
+	ID             string  `json:"id"` // ULID
 	TaskID         string  `json:"task_id"`
-	Severity       string  `json:"severity"`        // critical|high|medium|low|warning
-	Category       string  `json:"category"`        // security|error_handling|...
+	Severity       string  `json:"severity"` // critical|high|medium|low|warning
+	Category       string  `json:"category"` // security|error_handling|...
 	File           string  `json:"file"`
-	Line           int     `json:"line"`            // 0 = file-level
+	Line           int     `json:"line"` // 0 = file-level
 	Title          string  `json:"title"`
-	Evidence       string  `json:"evidence"`        // ≤2000 chars
+	Evidence       string  `json:"evidence"` // ≤2000 chars
 	Recommendation string  `json:"recommendation"`
-	Confidence     float64 `json:"confidence"`      // 0.0 ~ 1.0
-	Source         string  `json:"source"`          // "rule_engine" | "llm" | "go_vet" | "staticcheck"
-	DecisionKind   string  `json:"decision_kind"`   // "deterministic" | "heuristic"
-	RuleID         string  `json:"rule_id"`         // rule engine only
+	Confidence     float64 `json:"confidence"`    // 0.0 ~ 1.0
+	Source         string  `json:"source"`        // "rule_engine" | "llm" | "go_vet" | "staticcheck"
+	DecisionKind   string  `json:"decision_kind"` // "deterministic" | "heuristic"
+	RuleID         string  `json:"rule_id"`       // rule engine only
 }
 
 // ── Config ──
 
 // ExecutorConfig configures the sandbox executor.
 type ExecutorConfig struct {
-	Type          string            `json:"type"`           // "local" | "cube" | "container" | "e2b"
-	TimeoutSec    int               `json:"timeout_sec"`    // per-command
-	MaxOutputMB   int               `json:"max_output_mb"`  // output size limit
-	MaxArtifactMB int               `json:"max_artifact_mb"` // artifact file size limit (default 10)
-	EnvWhitelist  []string          `json:"env_whitelist"`
-	Commands      []SandboxCommand  `json:"commands"`
+	Type          string           `json:"type"`            // "local" | "cube" | "container" | "e2b"
+	TimeoutSec    int              `json:"timeout_sec"`     // per-command
+	MaxOutputMB   int              `json:"max_output_mb"`   // output size limit
+	MaxArtifactMB int              `json:"max_artifact_mb"` // artifact file size limit (default 10)
+	EnvWhitelist  []string         `json:"env_whitelist"`
+	Commands      []SandboxCommand `json:"commands"`
 }
 
 // LLMConfig configures the LLM analyzer.
@@ -123,7 +131,7 @@ type LLMConfig struct {
 
 // DedupConfig configures deduplication and noise reduction.
 type DedupConfig struct {
-	ConfidenceThreshold float64 `json:"confidence_threshold"` // default 0.6
+	ConfidenceThreshold float64 `json:"confidence_threshold"`  // default 0.6
 	MaxFindingsPerFile  int     `json:"max_findings_per_file"` // default 20
 	MaxTotalFindings    int     `json:"max_total_findings"`    // default 100
 }
@@ -150,8 +158,8 @@ type SkillConfig struct {
 
 // PermConfig configures permission policy.
 type PermConfig struct {
-	DefaultPolicy map[string]string   `json:"default_policy"` // risk_level -> decision
-	Overrides     []PermOverride      `json:"overrides"`
+	DefaultPolicy map[string]string `json:"default_policy"` // risk_level -> decision
+	Overrides     []PermOverride    `json:"overrides"`
 }
 
 // PermOverride is a command-level permission override.
@@ -185,10 +193,10 @@ type ReviewReport struct {
 
 // PermissionSummary aggregates permission decisions for the report.
 type PermissionSummary struct {
-	Total    int `json:"total"`
-	Allowed  int `json:"allowed"`
-	Denied   int `json:"denied"`
-	NeedsHR  int `json:"needs_human_review"`
+	Total   int `json:"total"`
+	Allowed int `json:"allowed"`
+	Denied  int `json:"denied"`
+	NeedsHR int `json:"needs_human_review"`
 }
 
 // SandboxSummary is the per-command sandbox execution summary.

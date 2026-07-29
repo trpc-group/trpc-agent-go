@@ -1,3 +1,11 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
 // Package llmanalyzer implements the LLMAnalyzer GraphAgent node.
 // Uses model.GenerateContent() for semantic code review analysis.
 package llmanalyzer
@@ -12,6 +20,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/sanitize"
 	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/state"
 	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/types"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
@@ -150,6 +159,7 @@ func analyzeWithLLM(ctx context.Context, llm model.Model, cfg types.LLMConfig,
 }
 
 func buildSystemPrompt(cfg types.LLMConfig, results []types.SandboxResult, ruleFindings []types.Finding) string {
+
 	if cfg.SystemPrompt != "" {
 		return cfg.SystemPrompt
 	}
@@ -182,6 +192,7 @@ func buildSystemPrompt(cfg types.LLMConfig, results []types.SandboxResult, ruleF
 }
 
 func buildUserPrompt(changes []types.FileChange, maxTokens int) string {
+	redactor := sanitize.NewRedactor(nil, "***REDACTED***")
 	var sb strings.Builder
 	for _, fc := range changes {
 		sb.WriteString(fmt.Sprintf("### %s\n", fc.FilePath))
@@ -193,7 +204,7 @@ func buildUserPrompt(changes []types.FileChange, maxTokens int) string {
 			}
 		}
 	}
-	result := sb.String()
+	result := redactor.RedactReport(sb.String())
 	// Rough truncation: ~4 chars per token
 	if maxTokens > 0 && len(result) > maxTokens*4 {
 		result = result[:maxTokens*4] + "\n... (truncated)"

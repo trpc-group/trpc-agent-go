@@ -1,3 +1,11 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
 // Package graphagent assembles the Code Review Agent GraphAgent from its 8 nodes.
 package graphagent
 
@@ -35,23 +43,23 @@ func Build() (*graph.StateGraph, error) {
 	sg := graph.NewStateGraph(schema)
 
 	// Wire 8 nodes in serial order
-	sg.AddNode("DiffParser",       diffparser.Run)
+	sg.AddNode("DiffParser", diffparser.Run)
 	sg.AddNode("PermissionFilter", permission.Run)
-	sg.AddNode("SandboxRunner",    sandbox.Run)
-	sg.AddNode("RuleEngine",       ruleengine.Run)
-	sg.AddNode("LLMAnalyzer",      llmanalyzer.Run)
-	sg.AddNode("DedupEngine",      dedup.Run)
-	sg.AddNode("ReportGenerator",  report.Run)
-	sg.AddNode("StorageWriter",    storagewriter.Run)
+	sg.AddNode("SandboxRunner", sandbox.Run)
+	sg.AddNode("RuleEngine", ruleengine.Run)
+	sg.AddNode("LLMAnalyzer", llmanalyzer.Run)
+	sg.AddNode("DedupEngine", dedup.Run)
+	sg.AddNode("ReportGenerator", report.Run)
+	sg.AddNode("StorageWriter", storagewriter.Run)
 
 	sg.SetEntryPoint("DiffParser")
-	sg.AddEdge("DiffParser",       "PermissionFilter")
+	sg.AddEdge("DiffParser", "PermissionFilter")
 	sg.AddEdge("PermissionFilter", "SandboxRunner")
-	sg.AddEdge("SandboxRunner",    "RuleEngine")
-	sg.AddEdge("RuleEngine",       "LLMAnalyzer")
-	sg.AddEdge("LLMAnalyzer",      "DedupEngine")
-	sg.AddEdge("DedupEngine",      "ReportGenerator")
-	sg.AddEdge("ReportGenerator",  "StorageWriter")
+	sg.AddEdge("SandboxRunner", "RuleEngine")
+	sg.AddEdge("RuleEngine", "LLMAnalyzer")
+	sg.AddEdge("LLMAnalyzer", "DedupEngine")
+	sg.AddEdge("DedupEngine", "ReportGenerator")
+	sg.AddEdge("ReportGenerator", "StorageWriter")
 	sg.SetFinishPoint("StorageWriter")
 
 	return sg, nil

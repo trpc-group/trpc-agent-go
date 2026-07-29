@@ -1,3 +1,11 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
 // Package dedup implements the DedupEngine GraphAgent node.
 // Merges findings from RuleEngine and LLMAnalyzer, deduplicates by
 // confidence-based selection, and splits into findings / warnings.
