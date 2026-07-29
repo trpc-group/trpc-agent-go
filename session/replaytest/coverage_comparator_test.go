@@ -7,6 +7,7 @@ package replaytest
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -344,9 +345,9 @@ func TestHarness_AppendEventFromCacheAndDefaults(t *testing.T) {
 				StepKey: "init", Scope: "session", SessionKey: key,
 				State: session.StateMap{"k": []byte("v")},
 			},
-			// GetSession sets snapshot.SessionID
+			// GetSession sets a full snapshot.Session.
 			GetSessionStep{StepKey: "g", SessionKey: key},
-			// empty SessionKey should reuse snapshot.SessionID
+			// empty SessionKey should reuse full snapshot session key.
 			AppendEventStep{StepKey: "e2", Event: UserEvent("e2", "from-cache")},
 			// zero timestamp event
 			AppendEventStep{StepKey: "e3", SessionKey: key, Event: &event.Event{
@@ -367,6 +368,56 @@ func TestHarness_AppendEventFromCacheAndDefaults(t *testing.T) {
 	}
 	if snap.Session == nil {
 		t.Fatal("nil session")
+	}
+}
+
+func TestHarness_AppendEventEmptyKeyReusesFullSnapshotSessionKey(t *testing.T) {
+	b := openInMemoryBackend(t)
+	key := session.Key{AppName: "appX", UserID: "userY", SessionID: "sessionZ"}
+	tc := ReplayCase{
+		Name: "non_default_empty_key",
+		Steps: []Step{
+			AppendEventStep{StepKey: "first", SessionKey: key, Event: UserEvent("first", "one")},
+			GetSessionStep{StepKey: "get", SessionKey: key},
+			AppendEventStep{StepKey: "second", Event: UserEvent("second", "two")},
+			GetSessionStep{StepKey: "get2", SessionKey: key},
+		},
+	}
+	snap, err := executeCase(context.Background(), tc, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.Session == nil || len(snap.Session.Events) != 2 {
+		t.Fatalf("expected two events on non-default key, got %+v", snap.Session)
+	}
+	wrongKey := session.Key{AppName: DefaultApp, UserID: DefaultUser, SessionID: key.SessionID}
+	wrong, err := b.SessionService.GetSession(context.Background(), wrongKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wrong != nil && len(wrong.Events) > 0 {
+		t.Fatalf("empty key append wrote default tenant: %+v", wrong)
+	}
+}
+
+func TestHarness_AppendEventEmptyKeyRejectsAmbiguousCachedSessions(t *testing.T) {
+	b := openInMemoryBackend(t)
+	keyA := SessionKeyFor("ambiguous-a")
+	keyB := SessionKeyFor("ambiguous-b")
+	tc := ReplayCase{
+		Name: "ambiguous_empty_key",
+		Steps: []Step{
+			AppendEventStep{StepKey: "a", SessionKey: keyA, Event: UserEvent("a", "a")},
+			AppendEventStep{StepKey: "b", SessionKey: keyB, Event: UserEvent("b", "b")},
+			AppendEventStep{StepKey: "empty", Event: UserEvent("empty", "bad")},
+		},
+	}
+	_, err := executeCase(context.Background(), tc, b)
+	if err == nil {
+		t.Fatal("expected ambiguous empty SessionKey error")
+	}
+	if !strings.Contains(err.Error(), "empty session key is ambiguous") || !strings.Contains(err.Error(), "empty") {
+		t.Fatalf("err=%v", err)
 	}
 }
 

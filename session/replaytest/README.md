@@ -35,20 +35,12 @@ cd session/replaytest/sqlite
 CGO_ENABLED=1 go test . -count=1
 ```
 
-## Integration backends (env-gated)
+## Integration backends
 
-Factories skip when the env var is unset (safe for default CI):
-
-| Backend    | Env var                     | Factory                 |
-|------------|-----------------------------|-------------------------|
-| Redis      | `REPLAYTEST_REDIS_ADDR`      | `RedisEnvFactory()`     |
-| PostgreSQL | `REPLAYTEST_POSTGRES_DSN`    | `PostgresEnvFactory()`  |
-| MySQL      | `REPLAYTEST_MYSQL_DSN`       | `MySQLEnvFactory()`     |
-| ClickHouse | `REPLAYTEST_CLICKHOUSE_DSN`  | `ClickHouseEnvFactory()`|
-
-Wire a real adapter into the factory body when enabling integration runs.
-Unset env ⇒ factory returns a skip/unavailable error; do not treat that as a
-product failure in lightweight mode.
+External backends can be registered directly with `NamedBackend` once their
+adapter modules provide concrete `session.Service` / `memory.Service` values.
+Vendor-specific env factories are intentionally not exposed from this generic
+package until they have real success paths.
 
 ## Public cases
 

@@ -273,3 +273,54 @@ func TestNormalizer_CanonicalizesMemoryAuditTimestamps(t *testing.T) {
 		t.Fatalf("EventTime absolute changed: got %v want %v", out.Memories[0].Memory.EventTime, eventT.UTC())
 	}
 }
+
+func TestNormalizer_MemorySemanticKeyIncludesEventTimeAndOwnership(t *testing.T) {
+	n := NewNormalizer()
+	t1 := time.Date(2025, 1, 1, 10, 0, 0, 0, time.FixedZone("CST", 8*3600))
+	t2 := time.Date(2025, 1, 2, 10, 0, 0, 0, time.UTC)
+	mk := func(app, user string, eventTime time.Time) *memory.Entry {
+		return &memory.Entry{
+			ID:      "raw-" + app + "-" + user + "-" + eventTime.Format("20060102"),
+			AppName: app,
+			UserID:  user,
+			Memory:  &memory.Memory{Memory: "same text", EventTime: &eventTime},
+		}
+	}
+	left := &Snapshot{Backend: "a", Memories: []*memory.Entry{
+		mk("app", "u1", t1),
+		mk("app", "u1", t2),
+		mk("app", "u2", t1),
+	}}
+	right := &Snapshot{Backend: "b", Memories: []*memory.Entry{
+		mk("app", "u2", t1),
+		mk("app", "u1", t2),
+		mk("app", "u1", t1),
+	}}
+	nl, err := n.Normalize(left)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nr, err := n.Normalize(right)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, m := range nl.Memories {
+		if seen[m.ID] {
+			t.Fatalf("duplicate semantic memory ID after event_time/ownership keying: %s", m.ID)
+		}
+		seen[m.ID] = true
+	}
+	if len(seen) != 3 {
+		t.Fatalf("semantic ids=%v", seen)
+	}
+	for i := range nl.Memories {
+		if nl.Memories[i].ID != nr.Memories[i].ID {
+			t.Fatalf("normalized order mismatch at %d: %s vs %s", i, nl.Memories[i].ID, nr.Memories[i].ID)
+		}
+	}
+	diffs := NewComparator().Compare(ReplayCase{Name: "memory_event_time_owner"}, nl, nr, InMemoryProfile(), InMemoryProfile())
+	if ErrorDiffCount(diffs) != 0 {
+		t.Fatalf("expected reversed memory order to align without diffs: %+v", diffs)
+	}
+}

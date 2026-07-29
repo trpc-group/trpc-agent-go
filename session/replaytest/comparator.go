@@ -8,7 +8,6 @@ package replaytest
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"math"
 	"path"
@@ -104,25 +103,31 @@ func toolCalls(e event.Event) any {
 	return e.Response.Choices[0].Message.ToolCalls
 }
 
-func encodeStateDelta(m map[string][]byte) []byte {
-	if m == nil {
-		return nil
+func compareEventStateDelta(index int, a, b map[string][]byte, add func(string, any, any, string)) {
+	keys := map[string]struct{}{}
+	for k := range a {
+		keys[k] = struct{}{}
 	}
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
+	for k := range b {
+		keys[k] = struct{}{}
 	}
-	sort.Strings(keys)
-	type pair struct {
-		K string `json:"k"`
-		V string `json:"v"`
+	ordered := make([]string, 0, len(keys))
+	for k := range keys {
+		ordered = append(ordered, k)
 	}
-	var pairs []pair
-	for _, k := range keys {
-		pairs = append(pairs, pair{K: k, V: string(m[k])})
+	sort.Strings(ordered)
+	for _, k := range ordered {
+		av, aok := a[k]
+		bv, bok := b[k]
+		path := fmt.Sprintf("events[%d].state_delta[%q]", index, k)
+		if aok != bok {
+			add(path, aok, bok, "state delta key presence mismatch")
+			continue
+		}
+		if !bytes.Equal(av, bv) {
+			add(path, av, bv, "state delta value mismatch")
+		}
 	}
-	b, _ := json.Marshal(pairs)
-	return b
 }
 
 func compareStateMap(prefix string, a, b session.StateMap, sessionID string) []Diff {
@@ -161,6 +166,38 @@ func compareStateMap(prefix string, a, b session.StateMap, sessionID string) []D
 				Explanation: "state value mismatch",
 			})
 		}
+	}
+	return diffs
+}
+
+func compareStateCaptures(prefix string, a, b map[string]session.StateMap, sessionID string) []Diff {
+	var diffs []Diff
+	keys := map[string]struct{}{}
+	for k := range a {
+		keys[k] = struct{}{}
+	}
+	for k := range b {
+		keys[k] = struct{}{}
+	}
+	sorted := make([]string, 0, len(keys))
+	for k := range keys {
+		sorted = append(sorted, k)
+	}
+	sort.Strings(sorted)
+	for _, stepKey := range sorted {
+		stateA, okA := a[stepKey]
+		stateB, okB := b[stepKey]
+		if okA != okB {
+			diffs = append(diffs, Diff{
+				SessionID:   sessionID,
+				Path:        fmt.Sprintf("%s[%q]", prefix, stepKey),
+				Baseline:    okA,
+				Actual:      okB,
+				Explanation: "state capture presence mismatch",
+			})
+			continue
+		}
+		diffs = append(diffs, compareStateMap(fmt.Sprintf("%s[%q]", prefix, stepKey), stateA, stateB, sessionID)...)
 	}
 	return diffs
 }

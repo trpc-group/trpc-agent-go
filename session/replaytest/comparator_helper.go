@@ -159,6 +159,8 @@ func compareSnapshotStates(tc ReplayCase, backendA, backendB, sessionID string, 
 	diffs = append(diffs, annotateDiffs(compareStateMap("session.state", stateA, stateB, sessionID), tc.Name, backendA, backendB)...)
 	diffs = append(diffs, annotateDiffs(compareStateMap("app_state", a.AppState, b.AppState, sessionID), tc.Name, backendA, backendB)...)
 	diffs = append(diffs, annotateDiffs(compareStateMap("user_state", a.UserState, b.UserState, sessionID), tc.Name, backendA, backendB)...)
+	diffs = append(diffs, annotateDiffs(compareStateCaptures("app_state_captures", a.AppStateCaptures, b.AppStateCaptures, sessionID), tc.Name, backendA, backendB)...)
+	diffs = append(diffs, annotateDiffs(compareStateCaptures("user_state_captures", a.UserStateCaptures, b.UserStateCaptures, sessionID), tc.Name, backendA, backendB)...)
 	return diffs
 }
 
@@ -361,9 +363,7 @@ func compareEventPayload(index int, ea, eb event.Event, add func(string, any, an
 	if !responseResidualEqual(ea, eb) {
 		add(fmt.Sprintf("events[%d].response", index), responseResidual(ea), responseResidual(eb), "response residual fields mismatch")
 	}
-	if !bytes.Equal(encodeStateDelta(ea.StateDelta), encodeStateDelta(eb.StateDelta)) {
-		add(fmt.Sprintf("events[%d].state_delta", index), ea.StateDelta, eb.StateDelta, "state delta mismatch")
-	}
+	compareEventStateDelta(index, ea.StateDelta, eb.StateDelta, add)
 	if !reflect.DeepEqual(ea.Extensions, eb.Extensions) {
 		add(fmt.Sprintf("events[%d].extensions", index), ea.Extensions, eb.Extensions, "event extensions mismatch")
 	}

@@ -7,6 +7,7 @@ package replaytest
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"testing"
 )
@@ -52,5 +53,33 @@ func TestBuildReportAndJSONFields(t *testing.T) {
 		if _, ok := d0[k]; !ok {
 			t.Fatalf("diff missing %s", k)
 		}
+	}
+}
+
+func TestAllPairsReportReferenceEmpty(t *testing.T) {
+	h := NewHarness(HarnessOpts{ComparisonMode: ComparisonAllPairs, ReferenceBackend: "ignored-ref"})
+	a := openInMemoryBackend(t)
+	a.Name = "alpha"
+	b := openInMemoryBackend(t)
+	b.Name = "beta"
+	h.AddBackend(a)
+	h.AddBackend(b)
+	report, err := h.Run(context.Background(), []ReplayCase{CaseSingleTurnText()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Reference != "" {
+		t.Fatalf("reference=%q want empty in all-pairs", report.Reference)
+	}
+	var buf bytes.Buffer
+	if err := WriteReportJSON(&buf, report); err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &m); err != nil {
+		t.Fatal(err)
+	}
+	if got := m["reference"]; got != "" {
+		t.Fatalf("json reference=%v want empty", got)
 	}
 }

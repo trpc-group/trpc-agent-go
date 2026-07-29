@@ -40,7 +40,7 @@ type UpdateStateStep struct {
 	UserKey    session.UserKey
 	AppName    string
 	State      session.StateMap
-	DeleteKey  string // when set, delete instead of update
+	DeleteKey  string // app/user only; session scope rejects DeleteKey
 }
 
 // Type implements Step.
@@ -49,12 +49,21 @@ func (s UpdateStateStep) Type() string { return "update_state" }
 // Key implements Step.
 func (s UpdateStateStep) Key() string { return s.StepKey }
 
+// MemoryMetadata configures episodic memory fields for add/update steps.
+type MemoryMetadata struct {
+	Kind         memory.Kind
+	EventTime    *time.Time
+	Participants []string
+	Location     string
+}
+
 // AddMemoryStep adds a memory entry.
 type AddMemoryStep struct {
-	StepKey string
-	UserKey memory.UserKey
-	Memory  string
-	Topics  []string
+	StepKey  string
+	UserKey  memory.UserKey
+	Memory   string
+	Topics   []string
+	Metadata *MemoryMetadata
 }
 
 // Type implements Step.
@@ -73,6 +82,7 @@ type UpdateMemoryStep struct {
 	MatchContent string
 	Memory       string
 	Topics       []string
+	Metadata     *MemoryMetadata
 }
 
 // Type implements Step.

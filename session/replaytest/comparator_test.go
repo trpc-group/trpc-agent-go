@@ -105,6 +105,138 @@ func TestComparator_EmptyAllowedRuleNotIgnored(t *testing.T) {
 	}
 }
 
+func TestComparator_StateDeltaBytes(t *testing.T) {
+	c := NewComparator()
+	tc := ReplayCase{Name: "state_delta_bytes"}
+	mk := func(delta map[string][]byte) *Snapshot {
+		return &Snapshot{
+			Backend: "x",
+			Session: &session.Session{Events: []event.Event{{
+				ID:         "e1",
+				StateDelta: delta,
+			}}},
+		}
+	}
+	n := NewNormalizer()
+
+	// Different non-UTF-8 bytes must not collapse through JSON string encoding.
+	a := mk(map[string][]byte{"bad": {0xff}})
+	b := mk(map[string][]byte{"bad": {0xfe}})
+	a, _ = n.Normalize(a)
+	b, _ = n.Normalize(b)
+	diffs := c.Compare(tc, a, b, InMemoryProfile(), InMemoryProfile())
+	found := false
+	for _, d := range diffs {
+		if !d.Allowed && d.Path == `events[0].state_delta["bad"]` {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected state delta byte diff, got %+v", diffs)
+	}
+
+	// Identical non-UTF-8 bytes should not produce a state_delta diff.
+	a2 := mk(map[string][]byte{"bad": {0xff}})
+	b2 := mk(map[string][]byte{"bad": {0xff}})
+	a2, _ = n.Normalize(a2)
+	b2, _ = n.Normalize(b2)
+	for _, d := range c.Compare(tc, a2, b2, InMemoryProfile(), InMemoryProfile()) {
+		if !d.Allowed && d.Path == `events[0].state_delta["bad"]` {
+			t.Fatalf("unexpected state delta diff for equal bytes: %+v", d)
+		}
+	}
+
+	// Key presence remains explicit.
+	a3 := mk(map[string][]byte{"bad": {0xff}})
+	b3 := mk(nil)
+	a3, _ = n.Normalize(a3)
+	b3, _ = n.Normalize(b3)
+	foundPresence := false
+	for _, d := range c.Compare(tc, a3, b3, InMemoryProfile(), InMemoryProfile()) {
+		if !d.Allowed && d.Path == `events[0].state_delta["bad"]` && d.Explanation == "state delta key presence mismatch" {
+			foundPresence = true
+		}
+	}
+	if !foundPresence {
+		t.Fatalf("expected state delta presence diff")
+	}
+}
+
+func TestComparator_AppUserStateCapturesDetectMissingUpdates(t *testing.T) {
+	c := NewComparator()
+	tc := ReplayCase{Name: "app_user_state_boundary"}
+	a := &Snapshot{
+		Backend:   "a",
+		AppState:  session.StateMap{},
+		UserState: session.StateMap{},
+		AppStateCaptures: map[string]session.StateMap{
+			"c12.app.list.initial": {"app_k": []byte("app-v1")},
+		},
+		UserStateCaptures: map[string]session.StateMap{
+			"c12.user.list.initial": {"user_k": []byte("user-v1")},
+		},
+	}
+	b := &Snapshot{
+		Backend:   "b",
+		AppState:  session.StateMap{},
+		UserState: session.StateMap{},
+	}
+	n := NewNormalizer()
+	a, _ = n.Normalize(a)
+	b, _ = n.Normalize(b)
+	diffs := c.Compare(tc, a, b, InMemoryProfile(), InMemoryProfile())
+	want := map[string]bool{
+		`app_state_captures["c12.app.list.initial"]`:   false,
+		`user_state_captures["c12.user.list.initial"]`: false,
+	}
+	for _, d := range diffs {
+		if _, ok := want[d.Path]; ok && !d.Allowed {
+			want[d.Path] = true
+		}
+	}
+	for path, found := range want {
+		if !found {
+			t.Fatalf("missing capture diff %s in %+v", path, diffs)
+		}
+	}
+}
+
+func TestComparator_EpisodicMemoryMetadataDiffs(t *testing.T) {
+	t1 := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
+	t2 := t1.Add(time.Hour)
+	mk := func(kind memory.Kind, eventTime *time.Time, participants []string, location string) *Snapshot {
+		return &Snapshot{Backend: "x", Memories: []*memory.Entry{{
+			ID: "raw", AppName: "app", UserID: "user",
+			Memory: &memory.Memory{
+				Memory: "visited Tokyo", Topics: []string{"travel"},
+				Kind: kind, EventTime: eventTime, Participants: participants, Location: location,
+			},
+		}}}
+	}
+	a := mk(memory.KindEpisode, &t1, []string{"Alice", "User"}, "Tokyo")
+	b := mk(memory.KindFact, &t2, []string{"Bob"}, "Kyoto")
+	n := NewNormalizer()
+	a, _ = n.Normalize(a)
+	b, _ = n.Normalize(b)
+	diffs := NewComparator().Compare(ReplayCase{Name: "episodic_metadata"}, a, b, InMemoryProfile(), InMemoryProfile())
+	want := map[string]bool{
+		"memories[0].kind":         false,
+		"memories[0].event_time":   false,
+		"memories[0].participants": false,
+		"memories[0].location":     false,
+	}
+	for _, d := range diffs {
+		if _, ok := want[d.Path]; ok && !d.Allowed {
+			want[d.Path] = true
+		}
+	}
+	for path, found := range want {
+		if !found {
+			t.Fatalf("missing episodic metadata diff %s in %+v", path, diffs)
+		}
+	}
+}
+
 func TestComparator_MemoryAndTrack(t *testing.T) {
 	c := NewComparator()
 	tc := ReplayCase{Name: "track_events"}

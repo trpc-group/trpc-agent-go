@@ -57,8 +57,10 @@ func buildComparisonPairs(
 	switch mode {
 	case ComparisonAllPairs:
 		return allPairs(snaps), nil
-	default:
+	case ComparisonReference:
 		return referencePairs(reference, snaps)
+	default:
+		return nil, fmt.Errorf("unknown comparison mode %q (want %q or %q)", mode, ComparisonReference, ComparisonAllPairs)
 	}
 }
 

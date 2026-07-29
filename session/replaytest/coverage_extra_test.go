@@ -136,14 +136,29 @@ func TestRun_RejectsEmptyBackendNameAndUnknownRule(t *testing.T) {
 	h2.opts.ReferenceBackend = b2.Name
 	h2.AddBackend(b2)
 	_, err = h2.Run(context.Background(), []ReplayCase{{
-		Name:         "bad-rule",
-		AllowedDiffs: []AllowedDiff{{PathPattern: "x", Rule: "mystery"}},
+		Name:         "bad_allowed",
+		AllowedDiffs: []AllowedDiff{{PathPattern: "*", Rule: "mystery"}},
+		Steps:        []Step{},
 	}})
 	if err == nil || !strings.Contains(err.Error(), "unknown rule") {
 		t.Fatalf("err=%v", err)
 	}
 }
 
+func TestRun_RejectsUnknownComparisonMode(t *testing.T) {
+	h := NewHarness(HarnessOpts{ComparisonMode: ComparisonMode("all-pair")})
+	b := openInMemoryBackend(t)
+	h.AddBackend(b)
+	_, err := h.Run(context.Background(), []ReplayCase{CaseSingleTurnText()})
+	if err == nil {
+		t.Fatal("expected error for unknown comparison mode")
+	}
+	for _, want := range []string{"unknown comparison mode", "all-pair", string(ComparisonReference), string(ComparisonAllPairs)} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("err=%v missing %q", err, want)
+		}
+	}
+}
 func TestRun_RejectsEmptyBackends(t *testing.T) {
 	h := NewHarness(DefaultHarnessOpts())
 	// No AddBackend: must not produce a green report of "passed" cases.
@@ -249,6 +264,42 @@ func TestExecuteCase_UnknownStateScopeReturnsError(t *testing.T) {
 	}
 	if got != nil {
 		t.Fatalf("expected no session write on unknown scope, got %+v", got)
+	}
+}
+
+func TestExecuteCase_SessionDeleteKeyReturnsError(t *testing.T) {
+	for _, scope := range []string{"", "session"} {
+		t.Run("scope_"+scope, func(t *testing.T) {
+			b := openInMemoryBackend(t)
+			key := SessionKeyFor("session-delete-key-" + scope)
+			tc := ReplayCase{
+				Name: "session_delete_key",
+				Steps: []Step{
+					UpdateStateStep{
+						StepKey:    "bad_session_delete",
+						Scope:      scope,
+						SessionKey: key,
+						DeleteKey:  "sess_k",
+					},
+				},
+			}
+			_, err := executeCase(context.Background(), tc, b)
+			if err == nil {
+				t.Fatal("expected error for session DeleteKey")
+			}
+			for _, want := range []string{"DeleteKey", "session", "bad_session_delete"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("err=%v missing %q", err, want)
+				}
+			}
+			got, gerr := b.SessionService.GetSession(context.Background(), key)
+			if gerr != nil {
+				t.Fatalf("GetSession: %v", gerr)
+			}
+			if got != nil {
+				t.Fatalf("expected no session write on rejected DeleteKey, got %+v", got)
+			}
+		})
 	}
 }
 
@@ -1036,7 +1087,6 @@ func TestCaptureMemory_DefaultLimit(t *testing.T) {
 
 func TestWaitSummary_Timeout(t *testing.T) {
 	b := openInMemoryBackend(t)
-	// No summarizer events / create — wait should timeout quickly.
 	// Use a fresh session without summary.
 	key := SessionKeyFor("wait_to")
 	_, err := executeCase(context.Background(), ReplayCase{
@@ -1048,15 +1098,5 @@ func TestWaitSummary_Timeout(t *testing.T) {
 	}, b)
 	if err == nil || !strings.Contains(err.Error(), "timeout") {
 		t.Fatalf("err=%v", err)
-	}
-}
-
-func TestItoAZero(t *testing.T) {
-	// cases.go itoa(0) branch
-	// AllCases construction already exercises positive; call CaseConcurrent uses itoa indirectly.
-	// Direct: recovery of zero via exporting? itoa is unexported — exercise via cases that use index 0 if any.
-	// Fallback: ensure package tests compile with errors import used.
-	if !errors.Is(ErrBackendNotConfigured, ErrBackendNotConfigured) {
-		t.Fatal("sanity")
 	}
 }

@@ -70,14 +70,9 @@ at least one non-allowed diff.
 
 ## Optional backends
 
-Env placeholders:
-
-- `REPLAYTEST_REDIS_ADDR`
-- `REPLAYTEST_POSTGRES_DSN`
-- `REPLAYTEST_MYSQL_DSN`
-- `REPLAYTEST_CLICKHOUSE_DSN`
-
 Adapters can register through `NamedBackend` without changing this package.
+Vendor-specific env factories should live in dedicated adapter modules once they
+can create real services successfully.
 
 ## Event comparison modes
 

@@ -55,11 +55,13 @@ type Snapshot struct {
 	// Sessions accumulates every GetSession/ListSessions capture keyed by
 	// SessionID so multi-session isolation cases can compare more than the
 	// last primary Session pointer.
-	Sessions  map[string]*session.Session
-	AppState  session.StateMap
-	UserState session.StateMap
-	Memories  []*memory.Entry
-	Errors    []string
+	Sessions          map[string]*session.Session
+	AppState          session.StateMap
+	UserState         session.StateMap
+	AppStateCaptures  map[string]session.StateMap
+	UserStateCaptures map[string]session.StateMap
+	Memories          []*memory.Entry
+	Errors            []string
 }
 
 // Diff records one semantic difference between two snapshots.

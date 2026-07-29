@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
@@ -45,6 +46,8 @@ func (n *Normalizer) Normalize(snapshot *Snapshot) (*Snapshot, error) {
 	}
 	normalizeState(out.AppState)
 	normalizeState(out.UserState)
+	normalizeStateCaptures(out.AppStateCaptures)
+	normalizeStateCaptures(out.UserStateCaptures)
 	for _, entry := range out.Memories {
 		normalizeMemory(entry)
 	}
@@ -163,6 +166,8 @@ func cloneSnapshot(in *Snapshot) *Snapshot {
 	if in.UserState != nil {
 		out.UserState = cloneState(in.UserState)
 	}
+	out.AppStateCaptures = cloneStateCaptures(in.AppStateCaptures)
+	out.UserStateCaptures = cloneStateCaptures(in.UserStateCaptures)
 	if len(in.Memories) > 0 {
 		out.Memories = make([]*memory.Entry, len(in.Memories))
 		for i, m := range in.Memories {
@@ -269,6 +274,17 @@ func cloneState(in session.StateMap) session.StateMap {
 	return out
 }
 
+func cloneStateCaptures(in map[string]session.StateMap) map[string]session.StateMap {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]session.StateMap, len(in))
+	for stepKey, state := range in {
+		out[stepKey] = cloneState(state)
+	}
+	return out
+}
+
 func cloneMemory(in *memory.Entry) *memory.Entry {
 	if in == nil {
 		return nil
@@ -292,6 +308,12 @@ func normalizeState(state session.StateMap) {
 	// (e.g. _node_metadata, __trpc_agent_await_user_reply_route__). Callers that
 	// need to ignore backend-specific nondeterministic keys should use AllowedDiff.
 	_ = state
+}
+
+func normalizeStateCaptures(captures map[string]session.StateMap) {
+	for _, state := range captures {
+		normalizeState(state)
+	}
 }
 
 func eventLogicalKey(e *event.Event, index int) string {
@@ -378,9 +400,14 @@ func memorySemanticKey(entry *memory.Entry) string {
 		return ""
 	}
 	m := entry.Memory
-	payload := m.Memory + "\x00" + strings.Join(append([]string(nil), m.Topics...), ",") +
+	eventTime := ""
+	if m.EventTime != nil && !m.EventTime.IsZero() {
+		eventTime = m.EventTime.UTC().Format(time.RFC3339Nano)
+	}
+	payload := entry.AppName + "\x00" + entry.UserID + "\x00" + m.Memory +
+		"\x00" + strings.Join(append([]string(nil), m.Topics...), ",") +
 		"\x00" + strings.Join(append([]string(nil), m.Participants...), ",") +
-		"\x00" + m.Location + "\x00" + string(m.Kind)
+		"\x00" + m.Location + "\x00" + string(m.Kind) + "\x00" + eventTime
 	// sha256 for a stable non-security fingerprint (gosec G401/G505).
 	sum := sha256.Sum256([]byte(payload))
 	return "mem-" + hex.EncodeToString(sum[:8])

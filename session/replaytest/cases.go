@@ -7,7 +7,10 @@
 package replaytest
 
 import (
+	"time"
+
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -28,6 +31,7 @@ func AllCases() []ReplayCase {
 		CaseAppUserStateBoundary(),
 		CaseSummaryFilterKeyIsolation(),
 		CaseMemoryLifecycle(),
+		CaseEpisodicMemoryLifecycle(),
 		CaseMultiSessionIsolation(),
 	}
 }
@@ -141,9 +145,14 @@ func CaseSummaryWithTruncation() ReplayCase {
 	key := SessionKeyFor("summary_with_truncation")
 	steps := []Step{}
 	for i := 1; i <= 5; i++ {
+		userText := "u" + itoa(i)
+		assistantText := "a" + itoa(i)
+		if i == 5 {
+			assistantText = "多语言摘要边界🙂多语言摘要边界🙂多语言摘要边界🙂多语言摘要边界🙂多语言摘要边界🙂"
+		}
 		steps = append(steps,
-			AppendEventStep{StepKey: "c7.user." + itoa(i), SessionKey: key, Event: UserEvent("c7.user."+itoa(i), "u"+itoa(i))},
-			AppendEventStep{StepKey: "c7.assistant." + itoa(i), SessionKey: key, Event: AssistantEvent("c7.assistant."+itoa(i), "a"+itoa(i))},
+			AppendEventStep{StepKey: "c7.user." + itoa(i), SessionKey: key, Event: UserEvent("c7.user."+itoa(i), userText)},
+			AppendEventStep{StepKey: "c7.assistant." + itoa(i), SessionKey: key, Event: AssistantEvent("c7.assistant."+itoa(i), assistantText)},
 		)
 	}
 	steps = append(steps,
@@ -271,8 +280,8 @@ func CaseAppUserStateBoundary() ReplayCase {
 			},
 			// Seed a session event so GetSession always returns a session body.
 			AppendEventStep{StepKey: "c12.user.1", SessionKey: key, Event: UserEvent("c12.user.1", "state boundary")},
-			ListAppStatesStep{StepKey: "c12.app.list1", AppName: DefaultApp},
-			ListUserStatesStep{StepKey: "c12.user.list1", UserKey: uk},
+			ListAppStatesStep{StepKey: "c12.app.list.initial", AppName: DefaultApp},
+			ListUserStatesStep{StepKey: "c12.user.list.initial", UserKey: uk},
 			GetSessionStep{StepKey: "c12.get1", SessionKey: key},
 			// Overwrite app/user without touching the other layers' keys.
 			UpdateStateStep{
@@ -287,6 +296,8 @@ func CaseAppUserStateBoundary() ReplayCase {
 				StepKey: "c12.sess.overwrite", Scope: "session", SessionKey: key,
 				State: session.StateMap{"sess_k": []byte("sess-v2")},
 			},
+			ListAppStatesStep{StepKey: "c12.app.list.overwritten", AppName: DefaultApp},
+			ListUserStatesStep{StepKey: "c12.user.list.overwritten", UserKey: uk},
 			// Delete app/user keys; session key remains until final get.
 			UpdateStateStep{
 				StepKey: "c12.app.del", Scope: "app", AppName: DefaultApp, DeleteKey: "app_k",
@@ -294,8 +305,8 @@ func CaseAppUserStateBoundary() ReplayCase {
 			UpdateStateStep{
 				StepKey: "c12.user.del", Scope: "user", UserKey: uk, DeleteKey: "user_k",
 			},
-			ListAppStatesStep{StepKey: "c12.app.list2", AppName: DefaultApp},
-			ListUserStatesStep{StepKey: "c12.user.list2", UserKey: uk},
+			ListAppStatesStep{StepKey: "c12.app.list.deleted", AppName: DefaultApp},
+			ListUserStatesStep{StepKey: "c12.user.list.deleted", UserKey: uk},
 			GetSessionStep{StepKey: "c12.get2", SessionKey: key},
 		},
 	}
@@ -374,6 +385,44 @@ func CaseMemoryLifecycle() ReplayCase {
 	}
 }
 
+// CaseEpisodicMemoryLifecycle covers episodic memory metadata persistence
+// through add, update, and capture.
+func CaseEpisodicMemoryLifecycle() ReplayCase {
+	key := SessionKeyFor("episodic_memory_lifecycle")
+	muk := MemoryUserKeyDefault()
+	addTime := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
+	updateTime := time.Date(2025, 1, 3, 3, 4, 5, 0, time.UTC)
+	return ReplayCase{
+		Name:         "episodic_memory_lifecycle",
+		Description:  "episodic memory metadata survives add, update, and read",
+		RequiredCaps: Caps{NeedsMemory: true},
+		Steps: []Step{
+			AppendEventStep{StepKey: "c15.user.1", SessionKey: key, Event: UserEvent("c15.user.1", "remember trip")},
+			AddMemoryStep{
+				StepKey: "c15.mem.add.trip", UserKey: muk,
+				Memory: "visited Tokyo with Alice", Topics: []string{"travel"},
+				Metadata: &MemoryMetadata{
+					Kind: memory.KindEpisode, EventTime: &addTime,
+					Participants: []string{"User", "Alice"}, Location: "Tokyo",
+				},
+			},
+			CaptureMemoryStep{StepKey: "c15.mem.read1", UserKey: muk, Limit: 10},
+			UpdateMemoryStep{
+				StepKey: "c15.mem.update.trip", UserKey: muk,
+				MatchContent: "visited Tokyo with Alice",
+				Memory:       "visited Kyoto with Alice",
+				Topics:       []string{"travel", "kyoto"},
+				Metadata: &MemoryMetadata{
+					Kind: memory.KindEpisode, EventTime: &updateTime,
+					Participants: []string{"User", "Alice"}, Location: "Kyoto",
+				},
+			},
+			CaptureMemoryStep{StepKey: "c15.mem.read2", UserKey: muk, Limit: 10},
+			GetSessionStep{StepKey: "c15.get", SessionKey: key},
+		},
+	}
+}
+
 // CaseMultiSessionIsolation writes two sessions under the same dedicated user and
 // verifies events/state do not cross session IDs after get+list.
 // Uses a non-default UserID so AllCases runs do not pick up sessions from other cases.
@@ -382,8 +431,9 @@ func CaseMultiSessionIsolation() ReplayCase {
 	keyA := session.Key{AppName: uk.AppName, UserID: uk.UserID, SessionID: "session-msi-a"}
 	keyB := session.Key{AppName: uk.AppName, UserID: uk.UserID, SessionID: "session-msi-b"}
 	return ReplayCase{
-		Name:        "multi_session_isolation",
-		Description: "two sessions under same user stay isolated on list and get",
+		Name:         "multi_session_isolation",
+		Description:  "two sessions under same user stay isolated on list and get",
+		RequiredCaps: Caps{NeedsSessionState: true},
 		Steps: []Step{
 			AppendEventStep{StepKey: "c15.a.user", SessionKey: keyA, Event: UserEvent("c15.a.user", "session-a-hello")},
 			UpdateStateStep{

@@ -9,8 +9,8 @@
 //
 // Lightweight mode runs InMemory by default. SQLite adapters live in the
 // separate session/replaytest/sqlite module so the root module does not force
-// a CGO dependency. Optional backends can be gated by environment variables
-// such as REPLAYTEST_REDIS_ADDR.
+// a CGO dependency. External backends can be registered through NamedBackend
+// once their adapter modules provide concrete services.
 //
 // One-command lightweight matrix (preferred):
 //

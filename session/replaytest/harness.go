@@ -31,11 +31,11 @@ func NewHarness(opts HarnessOpts) *Harness {
 	if opts.ComparisonMode == "" {
 		opts.ComparisonMode = d.ComparisonMode
 	}
-	if opts.ReferenceBackend == "" {
-		opts.ReferenceBackend = d.ReferenceBackend
-	}
 	if opts.Mode == "" {
 		opts.Mode = d.Mode
+	}
+	if opts.ComparisonMode == ComparisonReference && opts.ReferenceBackend == "" {
+		opts.ReferenceBackend = d.ReferenceBackend
 	}
 	return &Harness{
 		opts:       opts,
@@ -54,6 +54,9 @@ func (h *Harness) AddBackend(b NamedBackend) {
 
 // Run executes cases and returns an aggregated report.
 func (h *Harness) Run(ctx context.Context, cases []ReplayCase) (*Report, error) {
+	if err := validateComparisonMode(h.opts.ComparisonMode); err != nil {
+		return nil, err
+	}
 	if err := validateBackends(h.backends); err != nil {
 		return nil, err
 	}
@@ -151,6 +154,15 @@ func containsString(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func validateComparisonMode(mode ComparisonMode) error {
+	switch mode {
+	case ComparisonReference, ComparisonAllPairs:
+		return nil
+	default:
+		return fmt.Errorf("unknown comparison mode %q (want %q or %q)", mode, ComparisonReference, ComparisonAllPairs)
+	}
 }
 
 func validateBackends(backends []NamedBackend) error {
@@ -410,22 +422,9 @@ func (e *caseExecutor) appendEvent(ctx context.Context, step AppendEventStep) er
 	if step.Event == nil {
 		return fmt.Errorf("append_event %q: Event is nil", step.StepKey)
 	}
-	key := step.SessionKey
-	if key.SessionID == "" {
-		if sid := e.getSnapshotSessionID(); sid != "" {
-			key = session.Key{AppName: DefaultApp, UserID: DefaultUser, SessionID: sid}
-		} else {
-			e.mu.Lock()
-			if len(e.sessions) > 0 {
-				for k := range e.sessions {
-					key = k
-					break
-				}
-			} else {
-				key = session.Key{AppName: DefaultApp, UserID: DefaultUser, SessionID: "session-auto"}
-			}
-			e.mu.Unlock()
-		}
+	key, err := e.resolveAppendSessionKey(step)
+	if err != nil {
+		return err
 	}
 	sess, err := e.ensureSession(ctx, key)
 	if err != nil {
@@ -450,6 +449,26 @@ func (e *caseExecutor) appendEvent(ctx context.Context, step AppendEventStep) er
 	return e.backend.SessionService.AppendEvent(ctx, sess, &evt)
 }
 
+func (e *caseExecutor) resolveAppendSessionKey(step AppendEventStep) (session.Key, error) {
+	if step.SessionKey.SessionID != "" {
+		return step.SessionKey, nil
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if sess := e.snapshot.Session; sess != nil && sess.ID != "" && sess.AppName != "" && sess.UserID != "" {
+		return session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}, nil
+	}
+	if len(e.sessions) == 1 {
+		for key := range e.sessions {
+			return key, nil
+		}
+	}
+	if len(e.sessions) > 1 {
+		return session.Key{}, fmt.Errorf("append_event %q: empty session key is ambiguous across %d cached sessions", step.StepKey, len(e.sessions))
+	}
+	return session.Key{AppName: DefaultApp, UserID: DefaultUser, SessionID: "session-auto"}, nil
+}
+
 func (e *caseExecutor) updateState(ctx context.Context, step UpdateStateStep) error {
 	switch step.Scope {
 	case "app":
@@ -464,6 +483,9 @@ func (e *caseExecutor) updateState(ctx context.Context, step UpdateStateStep) er
 		return e.backend.SessionService.UpdateUserState(ctx, step.UserKey, step.State)
 	case "", "session":
 		// Empty scope keeps zero-value compatibility; "session" is explicit.
+		if step.DeleteKey != "" {
+			return fmt.Errorf("update_state %q: DeleteKey is not supported for session scope", step.StepKey)
+		}
 		if _, err := e.ensureSession(ctx, step.SessionKey); err != nil {
 			return err
 		}
@@ -483,7 +505,7 @@ func (e *caseExecutor) addMemory(ctx context.Context, step AddMemoryStep) error 
 	if e.backend.MemoryService == nil {
 		return fmt.Errorf("memory service required")
 	}
-	return e.backend.MemoryService.AddMemory(ctx, step.UserKey, step.Memory, step.Topics)
+	return e.backend.MemoryService.AddMemory(ctx, step.UserKey, step.Memory, step.Topics, addMemoryOptions(step.Metadata)...)
 }
 
 func (e *caseExecutor) updateMemory(ctx context.Context, step UpdateMemoryStep) error {
@@ -494,7 +516,37 @@ func (e *caseExecutor) updateMemory(ctx context.Context, step UpdateMemoryStep) 
 	if err != nil {
 		return err
 	}
-	return e.backend.MemoryService.UpdateMemory(ctx, key, step.Memory, step.Topics)
+	return e.backend.MemoryService.UpdateMemory(ctx, key, step.Memory, step.Topics, updateMemoryOptions(step.Metadata)...)
+}
+
+func addMemoryOptions(md *MemoryMetadata) []memory.AddOption {
+	if md == nil {
+		return nil
+	}
+	return []memory.AddOption{memory.WithMetadata(toMemoryMetadata(md))}
+}
+
+func updateMemoryOptions(md *MemoryMetadata) []memory.UpdateOption {
+	if md == nil {
+		return nil
+	}
+	return []memory.UpdateOption{memory.WithUpdateMetadata(toMemoryMetadata(md))}
+}
+
+func toMemoryMetadata(md *MemoryMetadata) *memory.Metadata {
+	if md == nil {
+		return nil
+	}
+	out := &memory.Metadata{
+		Kind:         md.Kind,
+		Participants: append([]string(nil), md.Participants...),
+		Location:     md.Location,
+	}
+	if md.EventTime != nil {
+		t := md.EventTime.UTC()
+		out.EventTime = &t
+	}
+	return out
 }
 
 func (e *caseExecutor) deleteMemory(ctx context.Context, step DeleteMemoryStep) error {
@@ -725,6 +777,12 @@ func (e *caseExecutor) listAppStates(ctx context.Context, step ListAppStatesStep
 	}
 	e.mu.Lock()
 	e.snapshot.AppState = st
+	if step.StepKey != "" {
+		if e.snapshot.AppStateCaptures == nil {
+			e.snapshot.AppStateCaptures = map[string]session.StateMap{}
+		}
+		e.snapshot.AppStateCaptures[step.StepKey] = cloneState(st)
+	}
 	e.mu.Unlock()
 	return nil
 }
@@ -736,6 +794,12 @@ func (e *caseExecutor) listUserStates(ctx context.Context, step ListUserStatesSt
 	}
 	e.mu.Lock()
 	e.snapshot.UserState = st
+	if step.StepKey != "" {
+		if e.snapshot.UserStateCaptures == nil {
+			e.snapshot.UserStateCaptures = map[string]session.StateMap{}
+		}
+		e.snapshot.UserStateCaptures[step.StepKey] = cloneState(st)
+	}
 	e.mu.Unlock()
 	return nil
 }

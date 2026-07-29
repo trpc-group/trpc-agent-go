@@ -17,7 +17,7 @@ func BuildReport(results []CaseResult, flatDiffs []Diff, backends []string, opts
 	report := &Report{
 		GeneratedAt: time.Now().UTC(),
 		Mode:        opts.Mode,
-		Reference:   opts.ReferenceBackend,
+		Reference:   reportReference(opts),
 		Backends:    append([]string(nil), backends...),
 		TotalCases:  len(results),
 		Results:     append([]CaseResult(nil), results...),
@@ -34,6 +34,13 @@ func BuildReport(results []CaseResult, flatDiffs []Diff, backends []string, opts
 		}
 	}
 	return report
+}
+
+func reportReference(opts HarnessOpts) string {
+	if opts.ComparisonMode == ComparisonAllPairs {
+		return ""
+	}
+	return opts.ReferenceBackend
 }
 
 // WriteReportJSON writes indented JSON to w.

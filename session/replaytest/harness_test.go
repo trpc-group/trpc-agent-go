@@ -12,6 +12,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 var inMemoryBackendSeq atomic.Int64
@@ -108,13 +111,14 @@ func TestReplayLightweightMatrix(t *testing.T) {
 
 func TestAllCasesCount(t *testing.T) {
 	cases := AllCases()
-	if n := len(cases); n < 15 {
-		t.Fatalf("expected >=15 cases, got %d", n)
+	if n := len(cases); n < 16 {
+		t.Fatalf("expected >=16 cases, got %d", n)
 	}
 	want := map[string]bool{
 		"app_user_state_boundary":      false,
 		"summary_filter_key_isolation": false,
 		"memory_lifecycle":             false,
+		"episodic_memory_lifecycle":    false,
 		"multi_session_isolation":      false,
 	}
 	for _, c := range cases {
@@ -130,6 +134,18 @@ func TestAllCasesCount(t *testing.T) {
 }
 
 func TestAppUserStateBoundary_InMemorySelfConsistency(t *testing.T) {
+	fresh := openInMemoryBackend(t)
+	snap, err := executeCase(context.Background(), CaseAppUserStateBoundary(), fresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertStateValue(t, snap.AppStateCaptures, "c12.app.list.initial", "app_k", "app-v1")
+	assertStateValue(t, snap.UserStateCaptures, "c12.user.list.initial", "user_k", "user-v1")
+	assertStateValue(t, snap.AppStateCaptures, "c12.app.list.overwritten", "app_k", "app-v2")
+	assertStateValue(t, snap.UserStateCaptures, "c12.user.list.overwritten", "user_k", "user-v2")
+	assertStateMissing(t, snap.AppStateCaptures, "c12.app.list.deleted", "app_k")
+	assertStateMissing(t, snap.UserStateCaptures, "c12.user.list.deleted", "user_k")
+
 	h := NewHarness(DefaultHarnessOpts())
 	b1 := openInMemoryBackend(t)
 	b1.Name = "inmemory-a"
@@ -148,6 +164,32 @@ func TestAppUserStateBoundary_InMemorySelfConsistency(t *testing.T) {
 				t.Fatalf("app_user_state_boundary failed: %+v", r.Diffs)
 			}
 		}
+	}
+}
+
+func assertStateValue(t *testing.T, captures map[string]session.StateMap, stepKey, key, want string) {
+	t.Helper()
+	state, ok := captures[stepKey]
+	if !ok {
+		t.Fatalf("missing capture %q in %v", stepKey, captures)
+	}
+	got, ok := state[key]
+	if !ok {
+		t.Fatalf("capture %q missing key %q: %v", stepKey, key, state)
+	}
+	if string(got) != want {
+		t.Fatalf("capture %q key %q=%q want %q", stepKey, key, string(got), want)
+	}
+}
+
+func assertStateMissing(t *testing.T, captures map[string]session.StateMap, stepKey, key string) {
+	t.Helper()
+	state, ok := captures[stepKey]
+	if !ok {
+		t.Fatalf("missing capture %q in %v", stepKey, captures)
+	}
+	if _, ok := state[key]; ok {
+		t.Fatalf("capture %q unexpectedly has key %q: %v", stepKey, key, state)
 	}
 }
 
@@ -227,6 +269,74 @@ func TestMemoryLifecycle_InMemorySelfConsistency(t *testing.T) {
 	}
 }
 
+func TestEpisodicMemoryLifecycle_InMemorySelfConsistency(t *testing.T) {
+	fresh := openInMemoryBackend(t)
+	snap, err := executeCase(context.Background(), CaseEpisodicMemoryLifecycle(), fresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(snap.Memories); n != 1 {
+		t.Fatalf("memories=%d want 1: %+v", n, snap.Memories)
+	}
+	m := snap.Memories[0]
+	if m == nil || m.Memory == nil {
+		t.Fatalf("nil memory entry: %+v", snap.Memories)
+	}
+	if got := m.Memory.Memory; got != "visited Kyoto with Alice" {
+		t.Fatalf("memory=%q", got)
+	}
+	if m.Memory.Kind != memory.KindEpisode {
+		t.Fatalf("kind=%q", m.Memory.Kind)
+	}
+	wantTime := time.Date(2025, 1, 3, 3, 4, 5, 0, time.UTC)
+	if m.Memory.EventTime == nil || !m.Memory.EventTime.Equal(wantTime) {
+		t.Fatalf("event_time=%v want %v", m.Memory.EventTime, wantTime)
+	}
+	if !stringSetEqual(m.Memory.Participants, []string{"Alice", "User"}) {
+		t.Fatalf("participants=%v", m.Memory.Participants)
+	}
+	if m.Memory.Location != "Kyoto" {
+		t.Fatalf("location=%q", m.Memory.Location)
+	}
+
+	h := NewHarness(DefaultHarnessOpts())
+	b1 := openInMemoryBackend(t)
+	b1.Name = "inmemory-a"
+	b2 := openInMemoryBackend(t)
+	b2.Name = "inmemory-b"
+	h.opts.ReferenceBackend = "inmemory-a"
+	h.AddBackend(b1)
+	h.AddBackend(b2)
+	report, err := h.Run(context.Background(), []ReplayCase{CaseEpisodicMemoryLifecycle()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.FailedCases != 0 {
+		for _, r := range report.Results {
+			if r.Status == StatusFailed {
+				t.Fatalf("episodic_memory_lifecycle failed: %+v", r.Diffs)
+			}
+		}
+	}
+}
+
+func stringSetEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := map[string]int{}
+	for _, x := range a {
+		seen[x]++
+	}
+	for _, x := range b {
+		seen[x]--
+		if seen[x] < 0 {
+			return false
+		}
+	}
+	return true
+}
+
 func TestRunCase_PreservesSkippedWhenSingleBackendRuns(t *testing.T) {
 	// Single backend missing memory -> entire case skipped.
 	h := NewHarness(DefaultHarnessOpts())
@@ -284,6 +394,12 @@ func TestRunCase_StateCapabilitiesSkip(t *testing.T) {
 		{
 			name:   "session_state",
 			caseFn: func() ReplayCase { return CaseStateCRUD() },
+			edit:   func(p *BackendProfile) { p.SupportsSessionState = false },
+			want:   "session_state",
+		},
+		{
+			name:   "multi_session_session_state",
+			caseFn: func() ReplayCase { return CaseMultiSessionIsolation() },
 			edit:   func(p *BackendProfile) { p.SupportsSessionState = false },
 			want:   "session_state",
 		},

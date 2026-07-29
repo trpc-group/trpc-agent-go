@@ -9,6 +9,7 @@ package replaytest
 import (
 	"context"
 	"fmt"
+	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -109,8 +110,15 @@ func extractEventText(e event.Event) string {
 }
 
 func truncateText(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
 	if len(s) <= n {
 		return s
 	}
-	return s[:n] + "..."
+	cut := n
+	for cut > 0 && !utf8.ValidString(s[:cut]) {
+		cut--
+	}
+	return s[:cut] + "..."
 }
