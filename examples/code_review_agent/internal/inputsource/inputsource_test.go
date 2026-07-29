@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -224,6 +225,28 @@ func TestUntrackedFileDiffRendersSymlinkWithoutReadingTarget(t *testing.T) {
 	}
 	if !strings.Contains(diff, "+"+linkTarget) {
 		t.Fatalf("symlink diff did not include link target %q:\n%s", linkTarget, diff)
+	}
+}
+
+func TestUntrackedFileDiffWithLimitRejectsOversizeBeforeRead(t *testing.T) {
+	repo := t.TempDir()
+	path := filepath.Join(repo, "large.txt")
+	if err := os.WriteFile(path, []byte("0123456789"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if _, _, err := untrackedFileDiffWithLimit(repo, "large.txt", 4); err == nil || !strings.Contains(err.Error(), "exceeds 4 bytes") {
+		t.Fatalf("untrackedFileDiffWithLimit() error = %v, want size rejection", err)
+	}
+}
+
+func TestUntrackedFileDiffsRejectsTooManyFiles(t *testing.T) {
+	paths := make([]string, maxUntrackedFileCount+1)
+	for i := range paths {
+		paths[i] = "file-" + strconv.Itoa(i)
+	}
+	_, err := untrackedFileDiffs(t.TempDir(), []byte(strings.Join(paths, "\x00")+"\x00"))
+	if err == nil || !strings.Contains(err.Error(), "file count exceeded") {
+		t.Fatalf("untrackedFileDiffs() error = %v, want file-count rejection", err)
 	}
 }
 

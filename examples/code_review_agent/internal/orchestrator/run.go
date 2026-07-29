@@ -9,6 +9,7 @@
 package orchestrator
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -59,9 +60,12 @@ const (
 	dependencyPrepMaxBytes  = int64(512 << 20)
 	dependencyPrepMaxOutput = 32 << 10
 	reviewSnapshotMaxBytes  = int64(512 << 20)
+	maxReviewSnapshotFiles  = 100_000
 	reviewAgentModuleDir    = "examples/code_review_agent"
 	rootModuleDecl          = "module trpc.group/trpc-go/trpc-agent-go"
 )
+
+var workspaceCleanupTimeout = 2 * time.Second
 
 var defaultSandboxCommands = []string{
 	"go test ./...",
@@ -100,6 +104,11 @@ type bindMount struct {
 	HostPath      string
 	ContainerPath string
 	Mode          string
+}
+
+type reviewSnapshotFile struct {
+	Path    string
+	Tracked bool
 }
 
 // Planner produces the model-coordinated review plan.
@@ -264,7 +273,7 @@ func chatCompletionsURL(baseURL string) string {
 func buildPlanningPrompt(req PlanRequest) string {
 	var files []string
 	for _, file := range req.Files {
-		files = append(files, file.NewPath)
+		files = append(files, redact.Text(file.NewPath).Text)
 	}
 	sort.Strings(files)
 	payload := map[string]any{
@@ -889,18 +898,7 @@ func newWorkspaceRuntime(ctx context.Context, runtimeName string, taskID string,
 		}
 		return nil, nil, err
 	}
-	var cleanupOnce sync.Once
-	cleanup := func() {
-		cleanupOnce.Do(func() {
-			_ = eng.Manager().Cleanup(context.Background(), ws)
-			if closeFn != nil {
-				_ = closeFn()
-			}
-			if snapshotCleanup != nil {
-				snapshotCleanup()
-			}
-		})
-	}
+	cleanup := newWorkspaceCleanup(eng.Manager(), ws, closeFn, snapshotCleanup)
 	return sandboxrun.WorkspaceRuntime{
 		RuntimeName: runtimeName,
 		Engine:      eng,
@@ -909,8 +907,58 @@ func newWorkspaceRuntime(ctx context.Context, runtimeName string, taskID string,
 		Timeout:     timeout,
 		OutputLimit: defaultMaxSandboxOutput,
 		Env:         workspaceRuntimeEnv(runtimeName),
-		TerminateFn: func(context.Context) { cleanup() },
-	}, cleanup, nil
+		TerminateFn: cleanup,
+	}, func() { cleanup(context.Background()) }, nil
+}
+
+func newWorkspaceCleanup(manager codeexecutor.WorkspaceManager, ws codeexecutor.Workspace, closeFn func() error, snapshotCleanup func()) func(context.Context) {
+	var cleanupOnce sync.Once
+	cleanupDone := make(chan struct{})
+	return func(ctx context.Context) {
+		cleanupOnce.Do(func() {
+			go func() {
+				defer close(cleanupDone)
+				cleanupWorkspaceResources(ctx, manager, ws, closeFn, snapshotCleanup)
+			}()
+		})
+		waitCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), workspaceCleanupTimeout)
+		defer cancel()
+		select {
+		case <-cleanupDone:
+		case <-waitCtx.Done():
+		}
+	}
+}
+
+func cleanupWorkspaceResources(ctx context.Context, manager codeexecutor.WorkspaceManager, ws codeexecutor.Workspace, closeFn func() error, snapshotCleanup func()) {
+	cleanupStep := func(fn func(context.Context)) bool {
+		stepCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), workspaceCleanupTimeout)
+		defer cancel()
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			fn(stepCtx)
+		}()
+		select {
+		case <-done:
+			return true
+		case <-stepCtx.Done():
+			return false
+		}
+	}
+	if manager != nil {
+		if !cleanupStep(func(stepCtx context.Context) { _ = manager.Cleanup(stepCtx, ws) }) {
+			return
+		}
+	}
+	if closeFn != nil {
+		if !cleanupStep(func(context.Context) { _ = closeFn() }) {
+			return
+		}
+	}
+	if snapshotCleanup != nil {
+		_ = cleanupStep(func(context.Context) { snapshotCleanup() })
+	}
 }
 
 func stageReviewWorkspace(ctx context.Context, fs codeexecutor.WorkspaceFS, ws codeexecutor.Workspace, runtimeName string, repoRoot string, dependencySubdir string) (func(), error) {
@@ -947,7 +995,11 @@ func buildReviewSnapshot(ctx context.Context, repoRoot string) (string, func(), 
 }
 
 func buildReviewSnapshotWithLimit(ctx context.Context, repoRoot string, maxBytes int64) (string, func(), error) {
-	files, err := trackedReviewFiles(ctx, repoRoot)
+	return buildReviewSnapshotWithLimits(ctx, repoRoot, maxBytes, maxReviewSnapshotFiles)
+}
+
+func buildReviewSnapshotWithLimits(ctx context.Context, repoRoot string, maxBytes int64, maxFiles int) (string, func(), error) {
+	files, err := trackedReviewFiles(ctx, repoRoot, maxFiles)
 	if err != nil {
 		return "", nil, err
 	}
@@ -955,17 +1007,17 @@ func buildReviewSnapshotWithLimit(ctx context.Context, repoRoot string, maxBytes
 	if err != nil {
 		return "", nil, fmt.Errorf("create review snapshot: %w", err)
 	}
-	cleanup := func() { _ = os.RemoveAll(snapshot) }
+	cleanup := func() { cleanupReviewSnapshot(snapshot) }
 	var snapshotBytes int64
 	for _, file := range files {
-		if excludedReviewSnapshotPath(file) {
+		if excludedReviewSnapshotPath(file.Path) && (!file.Tracked || sensitiveReviewSnapshotPath(file.Path)) {
 			continue
 		}
-		rel := filepath.FromSlash(file)
+		rel := filepath.FromSlash(file.Path)
 		clean := filepath.Clean(rel)
 		if filepath.IsAbs(clean) || clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(os.PathSeparator)) {
 			cleanup()
-			return "", nil, fmt.Errorf("unsafe review snapshot path %q", file)
+			return "", nil, fmt.Errorf("unsafe review snapshot path %q", file.Path)
 		}
 		src := filepath.Join(repoRoot, clean)
 		info, err := os.Lstat(src)
@@ -974,22 +1026,22 @@ func buildReviewSnapshotWithLimit(ctx context.Context, repoRoot string, maxBytes
 				continue
 			}
 			cleanup()
-			return "", nil, fmt.Errorf("stat review snapshot file %s: %w", file, err)
+			return "", nil, fmt.Errorf("stat review snapshot file %s: %w", file.Path, err)
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
 			target, readErr := os.Readlink(src)
 			cleanup()
 			if readErr != nil {
-				return "", nil, fmt.Errorf("read review snapshot symlink %s: %w", file, readErr)
+				return "", nil, fmt.Errorf("read review snapshot symlink %s: %w", file.Path, readErr)
 			}
-			return "", nil, fmt.Errorf("unsupported review snapshot symlink %q -> %q", file, target)
+			return "", nil, fmt.Errorf("unsupported review snapshot symlink %q -> %q", file.Path, target)
 		}
 		if !info.Mode().IsRegular() {
 			continue
 		}
 		if maxBytes >= 0 && info.Size() > maxBytes-snapshotBytes {
 			cleanup()
-			return "", nil, fmt.Errorf("review snapshot exceeds %d bytes at %s", maxBytes, file)
+			return "", nil, fmt.Errorf("review snapshot exceeds %d bytes at %s", maxBytes, file.Path)
 		}
 		dest := filepath.Join(snapshot, clean)
 		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
@@ -999,7 +1051,7 @@ func buildReviewSnapshotWithLimit(ctx context.Context, repoRoot string, maxBytes
 		written, err := copyReviewSnapshotFile(src, dest, info.Mode().Perm(), maxBytes-snapshotBytes)
 		if err != nil {
 			cleanup()
-			return "", nil, fmt.Errorf("copy review snapshot file %s: %w", file, err)
+			return "", nil, fmt.Errorf("copy review snapshot file %s: %w", file.Path, err)
 		}
 		snapshotBytes += written
 	}
@@ -1030,6 +1082,36 @@ func copyReviewSnapshotFile(src string, dest string, mode os.FileMode, maxBytes 
 		return written, fmt.Errorf("review snapshot exceeds %d bytes", maxBytes)
 	}
 	return written, nil
+}
+
+func cleanupReviewSnapshot(root string) {
+	if root == "" {
+		return
+	}
+	_ = restoreReviewSnapshotPermissions(root)
+	_ = os.RemoveAll(root)
+}
+
+func restoreReviewSnapshotPermissions(root string) error {
+	return filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		mode := info.Mode().Perm()
+		if entry.IsDir() {
+			mode |= 0o700
+		} else {
+			mode |= 0o600
+		}
+		return os.Chmod(path, mode)
+	})
 }
 
 func prepareSandboxDependencies(ctx context.Context, snapshotRoot string, dependencySubdir string) error {
@@ -1210,22 +1292,66 @@ func ensureDependencyCacheWithinLimit(roots []string, limit int64) error {
 	return nil
 }
 
-func trackedReviewFiles(ctx context.Context, repoRoot string) ([]string, error) {
-	cmd := exec.CommandContext(ctx, "git", "-C", repoRoot, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
-	raw, err := cmd.Output()
-	if err != nil {
+func trackedReviewFiles(ctx context.Context, repoRoot string, maxFiles int) ([]reviewSnapshotFile, error) {
+	files := make([]reviewSnapshotFile, 0, minInt(maxFiles, 1024))
+	if err := appendReviewFiles(ctx, repoRoot, maxFiles, true, &files, "ls-files", "-z", "--cached"); err != nil {
 		return nil, fmt.Errorf("list tracked review files: %w", err)
 	}
-	parts := bytes.Split(raw, []byte{0})
-	files := make([]string, 0, len(parts))
-	for _, part := range parts {
-		if len(part) == 0 {
-			continue
-		}
-		files = append(files, filepath.ToSlash(string(part)))
+	if err := appendReviewFiles(ctx, repoRoot, maxFiles, false, &files, "ls-files", "-z", "--others", "--exclude-standard"); err != nil {
+		return nil, fmt.Errorf("list untracked review files: %w", err)
 	}
-	sort.Strings(files)
 	return files, nil
+}
+
+func appendReviewFiles(ctx context.Context, repoRoot string, maxFiles int, tracked bool, files *[]reviewSnapshotFile, args ...string) error {
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", repoRoot}, args...)...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	reader := bufio.NewReader(stdout)
+	for {
+		part, readErr := reader.ReadBytes(0)
+		if len(part) > 0 {
+			part = bytes.TrimSuffix(part, []byte{0})
+			if len(part) > 0 {
+				if maxFiles >= 0 && len(*files) >= maxFiles {
+					_ = cmd.Process.Kill()
+					_ = cmd.Wait()
+					return fmt.Errorf("review snapshot file count exceeded %d", maxFiles)
+				}
+				*files = append(*files, reviewSnapshotFile{Path: filepath.ToSlash(string(part)), Tracked: tracked})
+			}
+		}
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				break
+			}
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			return readErr
+		}
+	}
+	if err := cmd.Wait(); err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg != "" {
+			return fmt.Errorf("%w: %s", err, msg)
+		}
+		return err
+	}
+	return nil
+}
+
+func minInt(a int, b int) int {
+	if a >= 0 && a < b {
+		return a
+	}
+	return b
 }
 
 func excludedReviewSnapshotPath(file string) bool {
@@ -1235,9 +1361,14 @@ func excludedReviewSnapshotPath(file string) bool {
 		}
 	}
 	base := strings.ToLower(filepath.Base(file))
-	return base == ".env" || strings.HasPrefix(base, ".env.") ||
+	return sensitiveReviewSnapshotPath(file) ||
 		base == "review_agent.db" || base == "review_agent.db.lock" ||
 		strings.HasPrefix(base, "review_report_")
+}
+
+func sensitiveReviewSnapshotPath(file string) bool {
+	base := strings.ToLower(filepath.Base(file))
+	return base == ".env" || strings.HasPrefix(base, ".env.")
 }
 
 func validateRuntimePolicy(runtimeName string, allowTrustedLocal bool) error {

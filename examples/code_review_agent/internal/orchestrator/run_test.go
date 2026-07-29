@@ -102,6 +102,12 @@ func TestRunRecordsConfiguredModelPlan(t *testing.T) {
 		if body.Model != "gpt-review" {
 			t.Fatalf("request model = %q, want gpt-review", body.Model)
 		}
+		if len(body.Messages) < 2 {
+			t.Fatalf("model planning request missing user message: %#v", body.Messages)
+		}
+		if strings.Contains(body.Messages[1].Content, "supersecretvalue") {
+			t.Fatalf("model planning request leaked secret-bearing path: %s", body.Messages[1].Content)
+		}
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"{\"commands\":[\"go test ./...\"],\"rule_sources\":[\"skills/code-review/SKILL.md\",\"skills/code-review/docs/rules.md\"]}"}}]}`))
 	}))
 	defer modelServer.Close()
@@ -130,13 +136,20 @@ func TestRunRecordsConfiguredModelPlan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile(markdown) error = %v", err)
 	}
-	if !strings.Contains(string(raw), "## Model Plan") || !strings.Contains(string(raw), "- model: gpt-review") {
+	if !strings.Contains(string(raw), "## Model Plan") || !strings.Contains(string(raw), "- model: `gpt-review`") {
 		t.Fatalf("markdown report does not contain configured model plan:\n%s", raw)
 	}
 }
 
 func TestPlanReviewPreservesModelPlannedCommandsForAudit(t *testing.T) {
 	modelServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body chatCompletionRequest
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode model request: %v", err)
+		}
+		if len(body.Messages) < 2 || strings.Contains(body.Messages[1].Content, "supersecretvalue") {
+			t.Fatalf("model planning request leaked secret-bearing path: %#v", body.Messages)
+		}
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"{\"commands\":[\"go test ./...\",\"go env\",\"curl https://example.com\",\" go vet ./... \",\"go test ./...\"],\"rule_sources\":[\"skills/code-review/SKILL.md\"]}"}}]}`))
 	}))
 	defer modelServer.Close()
@@ -148,6 +161,7 @@ func TestPlanReviewPreservesModelPlannedCommandsForAudit(t *testing.T) {
 		Model:   "gpt-review",
 		Runtime: "container",
 		Skill:   defaultSkillName,
+		Files:   []review.DiffFile{{NewPath: "token=supersecretvalue.go"}},
 	})
 	if err != nil {
 		t.Fatalf("PlanReview() error = %v", err)
@@ -631,7 +645,10 @@ func TestBuildReviewSnapshotExcludesGitIgnoredAndEnvironmentFiles(t *testing.T) 
 	if err := os.WriteFile(filepath.Join(repo, "review_agent.db"), []byte("local store\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile(store) error = %v", err)
 	}
-	runGitCommand(t, repo, "add", ".gitignore", "tracked.go", ".env")
+	if err := os.WriteFile(filepath.Join(repo, "review_report_fixture.json"), []byte("tracked report fixture\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(tracked report) error = %v", err)
+	}
+	runGitCommand(t, repo, "add", ".gitignore", ".env", "tracked.go", "review_agent.db", "review_report_fixture.json")
 	snapshot, cleanup, err := buildReviewSnapshot(context.Background(), repo)
 	if err != nil {
 		t.Fatalf("buildReviewSnapshot() error = %v", err)
@@ -640,9 +657,14 @@ func TestBuildReviewSnapshotExcludesGitIgnoredAndEnvironmentFiles(t *testing.T) 
 	if _, err := os.Stat(filepath.Join(snapshot, "tracked.go")); err != nil {
 		t.Fatalf("tracked.go missing from snapshot: %v", err)
 	}
-	for _, excluded := range []string{".git", ".env", "ignored.txt", "review_agent.db"} {
+	for _, excluded := range []string{".git", ".env", "ignored.txt"} {
 		if _, err := os.Stat(filepath.Join(snapshot, excluded)); !os.IsNotExist(err) {
 			t.Fatalf("excluded %s present in snapshot, stat err=%v", excluded, err)
+		}
+	}
+	for _, included := range []string{"review_agent.db", "review_report_fixture.json"} {
+		if _, err := os.Stat(filepath.Join(snapshot, included)); err != nil {
+			t.Fatalf("tracked %s missing from snapshot: %v", included, err)
 		}
 	}
 	fs := &recordingStageFS{}
@@ -660,6 +682,9 @@ func TestBuildReviewSnapshotExcludesGitIgnoredAndEnvironmentFiles(t *testing.T) 
 	if _, err := os.Stat(filepath.Join(fs.src, ".env")); !os.IsNotExist(err) {
 		t.Fatalf("staged snapshot contains .env, stat err=%v", err)
 	}
+	if _, err := os.Stat(filepath.Join(fs.src, "review_agent.db")); err != nil {
+		t.Fatalf("staged snapshot missing tracked review_agent.db: %v", err)
+	}
 	containerFS := &recordingStageFS{}
 	containerCleanup, err := stageReviewWorkspace(context.Background(), containerFS, codeexecutor.Workspace{Path: "/work"}, "container", repo, "")
 	if err != nil {
@@ -674,6 +699,9 @@ func TestBuildReviewSnapshotExcludesGitIgnoredAndEnvironmentFiles(t *testing.T) 
 	}
 	if _, err := os.Stat(filepath.Join(containerFS.src, ".env")); !os.IsNotExist(err) {
 		t.Fatalf("container staged snapshot contains .env, stat err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(containerFS.src, "review_report_fixture.json")); err != nil {
+		t.Fatalf("container staged snapshot missing tracked report fixture: %v", err)
 	}
 }
 
@@ -696,10 +724,32 @@ func TestBuildReviewSnapshotRejectsOversizeFileBeforeCopy(t *testing.T) {
 		t.Fatal("buildReviewSnapshotWithLimit() error = nil, want snapshot size rejection")
 	}
 	if snapshot != "" || cleanup != nil {
-		t.Fatalf("snapshot cleanup = %q/%v, want no materialized snapshot", snapshot, cleanup)
+		t.Fatalf("snapshot cleanup = %q/%t, want no materialized snapshot", snapshot, cleanup != nil)
 	}
 	if !strings.Contains(err.Error(), "exceeds 4 bytes") {
 		t.Fatalf("error = %q, want snapshot size message", err)
+	}
+}
+
+func TestBuildReviewSnapshotRejectsTooManyFiles(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	repo := t.TempDir()
+	runGitCommand(t, repo, "init")
+	for _, name := range []string{"a.txt", "b.txt", "c.txt"} {
+		if err := os.WriteFile(filepath.Join(repo, name), []byte(name), 0o600); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", name, err)
+		}
+	}
+	runGitCommand(t, repo, "add", "a.txt", "b.txt", "c.txt")
+
+	snapshot, cleanup, err := buildReviewSnapshotWithLimits(context.Background(), repo, -1, 2)
+	if err == nil || !strings.Contains(err.Error(), "file count exceeded 2") {
+		t.Fatalf("buildReviewSnapshotWithLimits() error = %v, want file-count rejection", err)
+	}
+	if snapshot != "" || cleanup != nil {
+		t.Fatalf("snapshot cleanup = %q/%t, want no materialized snapshot", snapshot, cleanup != nil)
 	}
 }
 
@@ -737,6 +787,10 @@ func TestReviewSnapshotKeepsSourceReadOnlyAndCachesWritable(t *testing.T) {
 	if cacheInfo.Mode().Perm()&0o222 == 0 {
 		t.Fatalf("cache mode = %o, want writable", cacheInfo.Mode().Perm())
 	}
+	cleanupReviewSnapshot(root)
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Fatalf("snapshot root still exists after cleanup, stat err=%v", err)
+	}
 }
 
 func TestSkippedOnlySandboxPlanNeedsHumanReview(t *testing.T) {
@@ -753,6 +807,40 @@ func TestSkippedOnlySandboxPlanNeedsHumanReview(t *testing.T) {
 
 type recordingStageFS struct {
 	src string
+}
+
+type blockingWorkspaceManager struct{}
+
+func (blockingWorkspaceManager) CreateWorkspace(context.Context, string, codeexecutor.WorkspacePolicy) (codeexecutor.Workspace, error) {
+	return codeexecutor.Workspace{}, nil
+}
+
+func (blockingWorkspaceManager) Cleanup(context.Context, codeexecutor.Workspace) error {
+	select {}
+}
+
+func TestWorkspaceCleanupBoundsBlockingManager(t *testing.T) {
+	previous := workspaceCleanupTimeout
+	workspaceCleanupTimeout = 20 * time.Millisecond
+	defer func() { workspaceCleanupTimeout = previous }()
+
+	cleanup := newWorkspaceCleanup(blockingWorkspaceManager{}, codeexecutor.Workspace{}, nil, nil)
+	start := time.Now()
+	cleanup(context.Background())
+	if elapsed := time.Since(start); elapsed < 20*time.Millisecond || elapsed > 200*time.Millisecond {
+		t.Fatalf("cleanup returned after %s, want bounded wait around 20ms", elapsed)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		cleanup(context.Background())
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("second cleanup call blocked indefinitely")
+	}
 }
 
 func (f *recordingStageFS) PutFiles(context.Context, codeexecutor.Workspace, []codeexecutor.PutFile) error {

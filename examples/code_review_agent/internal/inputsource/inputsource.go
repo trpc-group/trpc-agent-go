@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,7 +23,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/review"
 )
 
-const emptyTreeHash = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+const (
+	emptyTreeHash          = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+	maxUntrackedInputBytes = int64(512 << 20)
+	maxUntrackedFileCount  = 100_000
+	maxUntrackedListBytes  = int64(16 << 20)
+)
 
 // Options describes all supported review input sources.
 type Options struct {
@@ -159,7 +165,7 @@ func readRepoDiff(ctx context.Context, repoPath string) (Source, error) {
 	if err != nil {
 		return Source{}, fmt.Errorf("read git diff: %w", err)
 	}
-	untracked, err := gitOutput(ctx, abs, "ls-files", "--others", "--exclude-standard", "-z")
+	untracked, err := gitOutputLimited(ctx, abs, maxUntrackedListBytes, "ls-files", "--others", "--exclude-standard", "-z")
 	if err != nil {
 		return Source{}, fmt.Errorf("read untracked files: %w", err)
 	}
@@ -189,11 +195,35 @@ func repoDiffBase(ctx context.Context, repoPath string) (string, error) {
 }
 
 func gitOutput(ctx context.Context, repoPath string, args ...string) ([]byte, error) {
+	return gitOutputLimited(ctx, repoPath, -1, args...)
+}
+
+func gitOutputLimited(ctx context.Context, repoPath string, maxBytes int64, args ...string) ([]byte, error) {
 	cmdArgs := append([]string{"-C", repoPath}, args...)
 	cmd := exec.CommandContext(ctx, "git", cmdArgs...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	raw, err := cmd.Output()
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	reader := io.Reader(stdout)
+	if maxBytes >= 0 {
+		reader = io.LimitReader(stdout, maxBytes+1)
+	}
+	raw, readErr := io.ReadAll(reader)
+	if maxBytes >= 0 && int64(len(raw)) > maxBytes {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return nil, fmt.Errorf("git output exceeded %d bytes", maxBytes)
+	}
+	err = cmd.Wait()
+	if readErr != nil {
+		return nil, readErr
+	}
 	if err != nil {
 		msg := strings.TrimSpace(stderr.String())
 		if msg != "" {
@@ -206,13 +236,19 @@ func gitOutput(ctx context.Context, repoPath string, args ...string) ([]byte, er
 
 func untrackedFileDiffs(repoPath string, raw []byte) (string, error) {
 	files := splitNUL(raw)
+	if len(files) > maxUntrackedFileCount {
+		return "", fmt.Errorf("untracked file count exceeded %d", maxUntrackedFileCount)
+	}
 	sort.Strings(files)
 	var b strings.Builder
+	var inputBytes int64
 	for _, file := range files {
-		diff, err := untrackedFileDiff(repoPath, file)
+		remaining := maxUntrackedInputBytes - inputBytes
+		diff, readBytes, err := untrackedFileDiffWithLimit(repoPath, file, remaining)
 		if err != nil {
 			return "", err
 		}
+		inputBytes += readBytes
 		if diff == "" {
 			continue
 		}
@@ -237,21 +273,46 @@ func splitNUL(raw []byte) []string {
 }
 
 func untrackedFileDiff(repoPath string, file string) (string, error) {
+	diff, _, err := untrackedFileDiffWithLimit(repoPath, file, maxUntrackedInputBytes)
+	return diff, err
+}
+
+func untrackedFileDiffWithLimit(repoPath string, file string, maxBytes int64) (string, int64, error) {
 	abs := filepath.Join(repoPath, filepath.FromSlash(file))
 	info, err := os.Lstat(abs)
 	if err != nil {
-		return "", fmt.Errorf("stat untracked file %s: %w", file, err)
+		return "", 0, fmt.Errorf("stat untracked file %s: %w", file, err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		return untrackedSymlinkDiff(abs, file)
+		diff, err := untrackedSymlinkDiff(abs, file)
+		return diff, 0, err
 	}
 	if info.IsDir() {
-		return "", nil
+		return "", 0, nil
 	}
-	raw, err := os.ReadFile(abs)
+	if !info.Mode().IsRegular() {
+		return "", 0, fmt.Errorf("unsupported untracked file type %s: %s", file, info.Mode().String())
+	}
+	if maxBytes >= 0 && info.Size() > maxBytes {
+		return "", 0, fmt.Errorf("untracked file %s exceeds %d bytes", file, maxBytes)
+	}
+	in, err := os.Open(abs)
 	if err != nil {
-		return "", fmt.Errorf("read untracked file %s: %w", file, err)
+		return "", 0, fmt.Errorf("read untracked file %s: %w", file, err)
 	}
+	defer in.Close()
+	reader := io.Reader(in)
+	if maxBytes >= 0 {
+		reader = io.LimitReader(in, maxBytes+1)
+	}
+	raw, err := io.ReadAll(reader)
+	if err != nil {
+		return "", 0, fmt.Errorf("read untracked file %s: %w", file, err)
+	}
+	if maxBytes >= 0 && int64(len(raw)) > maxBytes {
+		return "", 0, fmt.Errorf("untracked file %s exceeds %d bytes", file, maxBytes)
+	}
+	readBytes := int64(len(raw))
 	var b strings.Builder
 	fmt.Fprintf(&b, "diff --git %s %s\n", gitQuotePath("a/"+file), gitQuotePath("b/"+file))
 	fmt.Fprintf(&b, "new file mode 100644\n")
@@ -259,11 +320,11 @@ func untrackedFileDiff(repoPath string, file string) (string, error) {
 	fmt.Fprintf(&b, "+++ %s\n", gitQuotePath("b/"+file))
 	if bytes.Contains(raw, []byte{0}) {
 		fmt.Fprintf(&b, "Binary files /dev/null and %s differ\n", gitQuotePath("b/"+file))
-		return b.String(), nil
+		return b.String(), readBytes, nil
 	}
 	lines, noNewline := diffLines(string(raw))
 	if len(lines) == 0 {
-		return b.String(), nil
+		return b.String(), readBytes, nil
 	}
 	fmt.Fprintf(&b, "@@ -0,0 +1,%d @@\n", len(lines))
 	for _, line := range lines {
@@ -273,7 +334,7 @@ func untrackedFileDiff(repoPath string, file string) (string, error) {
 		b.WriteString(`\ No newline at end of file`)
 		b.WriteString("\n")
 	}
-	return b.String(), nil
+	return b.String(), readBytes, nil
 }
 
 func untrackedSymlinkDiff(abs string, file string) (string, error) {

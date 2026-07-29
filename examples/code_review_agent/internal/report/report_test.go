@@ -80,6 +80,12 @@ json={"note":"quoted-value"}`,
 			t.Fatalf("JSON report leaked quoted secret %q: %s", secret, jsonBytes)
 		}
 	}
+	mdBytes := Markdown(r)
+	for _, secret := range secrets {
+		if strings.Contains(string(mdBytes), secret) {
+			t.Fatalf("Markdown report leaked quoted secret %q: %s", secret, mdBytes)
+		}
+	}
 
 	outDir := t.TempDir()
 	artifacts, err := Write(outDir, r, time.Unix(1, 0))

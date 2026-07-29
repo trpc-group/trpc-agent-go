@@ -168,6 +168,7 @@ func markdownCode(value string) string {
 
 // Markdown renders a redacted Markdown report.
 func Markdown(r review.Report) []byte {
+	r = redactedReport(r)
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Code Review Report\n\n")
 	fmt.Fprintf(&b, "Task %s finished with status %s.\n\n", markdownCode(r.Task.ID), markdownCode(r.Task.Status))

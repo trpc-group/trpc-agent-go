@@ -11,6 +11,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"flag"
 	"os"
 	"path/filepath"
@@ -71,6 +72,9 @@ func checkGolden(t *testing.T, name string, gotPath string) {
 	if err != nil {
 		t.Fatalf("ReadFile(got %s) error = %v", name, err)
 	}
+	if name == "review_report.json" {
+		got = normalizeGoldenReportPaths(got, gotPath)
+	}
 	goldenPath := filepath.Join("testdata", "golden", name)
 	if *updateGolden {
 		if err := os.MkdirAll(filepath.Dir(goldenPath), 0o755); err != nil {
@@ -87,6 +91,14 @@ func checkGolden(t *testing.T, name string, gotPath string) {
 	if !bytes.Equal(normalizeNewlines(got), normalizeNewlines(want)) {
 		t.Fatalf("%s does not match checked-in golden", name)
 	}
+}
+
+func normalizeGoldenReportPaths(data []byte, reportPath string) []byte {
+	prefix, err := json.Marshal(filepath.Dir(reportPath) + string(os.PathSeparator))
+	if err != nil || len(prefix) < 2 {
+		return data
+	}
+	return bytes.ReplaceAll(data, prefix[1:len(prefix)-1], nil)
 }
 
 func normalizeNewlines(in []byte) []byte {
