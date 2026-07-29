@@ -4129,6 +4129,7 @@
 <p><strong>支持的 TTL 类型：</strong></p>
 <ul>
 <li><strong>SessionTTL</strong>：会话状态和事件的过期时间</li>
+<li><strong>TrackEventTTL</strong>：支持的存储后端中 Track event 的过期时间。默认继承 SessionTTL，显式设置为非正数表示 Track event 不过期</li>
 <li><strong>AppStateTTL</strong>：应用级状态的过期时间</li>
 <li><strong>UserStateTTL</strong>：用户级状态的过期时间</li>
 </ul>
@@ -4682,14 +4683,15 @@
 <h2 id="track">Track 事件</h2>
 <p>Track 事件是 Session 中独立于主对话事件的轨迹存储机制，目前主要用于 AGUI 场景下的事件存储。它允许在会话中记录特定类型的事件，而不影响主对话流程。</p>
 <p><strong>接口说明</strong>：</p>
-<p>Track 事件的 API 定义在 <code>session.TrackService</code> 接口上，它独立于 <code>session.Service</code>：</p>
+<p>Track 事件写入定义在可选的 <code>session.TrackService</code> 接口上。支持 Track
+历史的存储后端会随 session 数据持久化这些事件。</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-17-1">1</a></span>
 <span class="normal"><a href="#__codelineno-17-2">2</a></span>
 <span class="normal"><a href="#__codelineno-17-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">TrackService</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2"></a><span class="w">    </span><span class="nx">AppendTrackEvent</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">sess</span><span class="w"> </span><span class="o">*</span><span class="nx">Session</span><span class="p">,</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="o">*</span><span class="nx">TrackEvent</span><span class="p">,</span><span class="w"> </span><span class="nx">opts</span><span class="w"> </span><span class="o">...</span><span class="nx">Option</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
 </span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p>并非所有存储后端都实现了 <code>TrackService</code>。使用时需要通过类型断言获取：</p>
+<p>并非所有存储后端都实现了 Track event 写入。使用时需要通过类型断言获取：</p>
 <table>
 <thead>
 <tr>
@@ -4762,9 +4764,12 @@
 </span><span id="__span-18-12"><a id="__codelineno-18-12" name="__codelineno-18-12"></a><span class="w">    </span><span class="nx">Timestamp</span><span class="p">:</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Now</span><span class="p">(),</span>
 </span><span id="__span-18-13"><a id="__codelineno-18-13" name="__codelineno-18-13"></a><span class="p">})</span>
 </span><span id="__span-18-14"><a id="__codelineno-18-14" name="__codelineno-18-14"></a>
-</span><span id="__span-18-15"><a id="__codelineno-18-15" name="__codelineno-18-15"></a><span class="c1">// 从会话中获取 Track 事件</span>
+</span><span id="__span-18-15"><a id="__codelineno-18-15" name="__codelineno-18-15"></a><span class="c1">// 读取当前内存中 session 快照里的 Track 事件</span>
 </span><span id="__span-18-16"><a id="__codelineno-18-16" name="__codelineno-18-16"></a><span class="nx">trackEvents</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">sess</span><span class="p">.</span><span class="nx">GetTrackEvents</span><span class="p">(</span><span class="s">&quot;ui-events&quot;</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
+<p><code>Session.GetTrackEvents</code> 只读取已经加载到 session 快照中的 Track 事件。
+把 session 当作历史快照使用前，需要先重新加载 session。AG-UI 历史记录会在配置的
+session service 支持时内部使用持久化 Track 历史，否则回退到 session 快照。</p>
 <h2 id="pgvector">语义召回（仅 PGVector）</h2>
 <p><code>session/pgvector</code> 后端额外实现了 <code>session.SearchableService</code>，可以按语义相似度在某个用户的一个或多个会话里检索历史消息。只有已持久化的用户/助手文本事件会被建立索引；工具调用、工具结果、partial 事件和空内容不会进入检索索引。</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-19-1"> 1</a></span>
@@ -4841,7 +4846,7 @@ system prompt 中。</p>
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年7月17日 08:55:02 UTC">2026-07-17 08:55:02</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年7月29日 08:07:20 UTC">2026-07-29 08:07:20</span>
   </span>
 
     

@@ -4125,6 +4125,9 @@
 <p><strong>Supported TTL types:</strong></p>
 <ul>
 <li><strong>SessionTTL</strong>: Expiration time for session state and events</li>
+<li><strong>TrackEventTTL</strong>: Expiration time for track events where supported. Defaults
+  to SessionTTL unless configured; setting it to a non-positive value disables
+  track event expiry</li>
 <li><strong>AppStateTTL</strong>: Expiration time for app-level state</li>
 <li><strong>UserStateTTL</strong>: Expiration time for user-level state</li>
 </ul>
@@ -4660,14 +4663,16 @@
 <h2 id="track-events">Track Events</h2>
 <p>Track events are a trajectory storage mechanism in Session that is independent of the main conversation events. They are primarily used for event storage in AGUI scenarios, allowing specific types of events to be recorded in a session without affecting the main conversation flow.</p>
 <p><strong>Interface</strong>:</p>
-<p>The Track event API is defined on the <code>session.TrackService</code> interface, which is separate from <code>session.Service</code>:</p>
+<p>Track event writes are exposed through the optional <code>session.TrackService</code>
+interface. Storage backends that support track history persist these events with
+the session data.</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-17-1">1</a></span>
 <span class="normal"><a href="#__codelineno-17-2">2</a></span>
 <span class="normal"><a href="#__codelineno-17-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">TrackService</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2"></a><span class="w">    </span><span class="nx">AppendTrackEvent</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">sess</span><span class="w"> </span><span class="o">*</span><span class="nx">Session</span><span class="p">,</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="o">*</span><span class="nx">TrackEvent</span><span class="p">,</span><span class="w"> </span><span class="nx">opts</span><span class="w"> </span><span class="o">...</span><span class="nx">Option</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
 </span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p>Not all storage backends implement <code>TrackService</code>. A type assertion is required:</p>
+<p>Not all storage backends implement track event writes. A type assertion is required:</p>
 <table>
 <thead>
 <tr>
@@ -4740,9 +4745,13 @@
 </span><span id="__span-18-12"><a id="__codelineno-18-12" name="__codelineno-18-12"></a><span class="w">    </span><span class="nx">Timestamp</span><span class="p">:</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Now</span><span class="p">(),</span>
 </span><span id="__span-18-13"><a id="__codelineno-18-13" name="__codelineno-18-13"></a><span class="p">})</span>
 </span><span id="__span-18-14"><a id="__codelineno-18-14" name="__codelineno-18-14"></a>
-</span><span id="__span-18-15"><a id="__codelineno-18-15" name="__codelineno-18-15"></a><span class="c1">// Retrieve track events from session</span>
+</span><span id="__span-18-15"><a id="__codelineno-18-15" name="__codelineno-18-15"></a><span class="c1">// Read track events from this in-memory session snapshot</span>
 </span><span id="__span-18-16"><a id="__codelineno-18-16" name="__codelineno-18-16"></a><span class="nx">trackEvents</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">sess</span><span class="p">.</span><span class="nx">GetTrackEvents</span><span class="p">(</span><span class="s">&quot;ui-events&quot;</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
+<p><code>Session.GetTrackEvents</code> reads only the track events already loaded into a
+session object. Reload the session before treating it as a history snapshot.
+AG-UI history uses persisted track history internally when the configured
+session service supports it, and falls back to the session snapshot otherwise.</p>
 <h2 id="semantic-recall-pgvector-only">Semantic Recall (PGVector Only)</h2>
 <p>The <code>session/pgvector</code> backend also implements <code>session.SearchableService</code>, so you can search a user's historical messages across one or more sessions by semantic similarity. Only persisted user/assistant text events are indexed; tool calls, tool results, partial events, and empty content are skipped.</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-19-1"> 1</a></span>
@@ -4819,7 +4828,7 @@ also preload cross-session recall into the system prompt via
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="July 17, 2026 08:55:02 UTC">2026-07-17 08:55:02</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="July 29, 2026 08:07:20 UTC">2026-07-29 08:07:20</span>
   </span>
 
     

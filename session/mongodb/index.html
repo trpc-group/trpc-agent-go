@@ -3271,6 +3271,12 @@ state and append history in one transaction.</p>
 <td>Session TTL</td>
 </tr>
 <tr>
+<td><code>WithTrackEventTTL(ttl time.Duration)</code></td>
+<td><code>time.Duration</code></td>
+<td>Inherits SessionTTL</td>
+<td>Track event TTL. Non-positive values disable track event expiry</td>
+</tr>
+<tr>
 <td><code>WithAppStateTTL(ttl time.Duration)</code></td>
 <td><code>time.Duration</code></td>
 <td><code>0</code> (no expiry)</td>
@@ -3286,7 +3292,7 @@ state and append history in one transaction.</p>
 <td><code>WithCleanupInterval(interval time.Duration)</code></td>
 <td><code>time.Duration</code></td>
 <td><code>0</code> (auto)</td>
-<td>Event and track cleanup interval; defaults to 5 minutes if session TTL is configured</td>
+<td>Event and track cleanup interval; defaults to 5 minutes if session or track event TTL is configured</td>
 </tr>
 <tr>
 <td><code>WithSoftDelete(enable bool)</code></td>
@@ -3474,10 +3480,11 @@ database scenarios:</p>
 <h2 id="expiration-and-cleanup">Expiration and Cleanup</h2>
 <p>Session state, app state, and user state use MongoDB TTL indexes on <code>expires_at</code>.
 Summaries do not have an independent TTL and follow the session lifecycle.</p>
-<p>Session events and track events intentionally do not use TTL indexes. They are
-cleaned by the service as whole session groups so a session's history does not
-partially disappear while the session is still active. Dedicated cleanup indexes
-on <code>updated_at</code> support these grouped cleanup scans.</p>
+<p>Session events and track events intentionally do not use TTL indexes. By default,
+they are cleaned by the service as whole session groups so a session's history
+does not partially disappear while the session is still active. If
+<code>WithTrackEventTTL</code> is configured, track events use that TTL independently.
+Dedicated cleanup indexes on <code>updated_at</code> support these cleanup scans.</p>
 <h2 id="storage-structure">Storage Structure</h2>
 <p>MongoDB uses these collections:</p>
 <ul>
@@ -3517,7 +3524,7 @@ by the <code>integration</code> build tag and <code>MONGODB_INTEGRATION_URI</cod
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="June 23, 2026 09:46:58 UTC">2026-06-23 09:46:58</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="July 29, 2026 08:07:20 UTC">2026-07-29 08:07:20</span>
   </span>
 
     

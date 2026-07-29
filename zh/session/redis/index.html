@@ -3195,7 +3195,7 @@
 <ul>
 <li>基于 Redis 的会话、事件、状态持久化存储</li>
 <li>支持 Redis Standalone / Sentinel / Cluster 部署模式</li>
-<li>Session、AppState、UserState 独立 TTL 控制</li>
+<li>Session、TrackEvent、AppState、UserState 独立 TTL 控制</li>
 <li>异步持久化（可选），降低写入延迟</li>
 <li>OpenTelemetry 链路追踪（可选）</li>
 <li>会话摘要（Summary）异步生成</li>
@@ -3255,6 +3255,12 @@
 <td><code>time.Duration</code></td>
 <td><code>0</code>（不过期）</td>
 <td>会话状态和事件的 TTL，负值等同于 0</td>
+</tr>
+<tr>
+<td><code>WithTrackEventTTL(ttl time.Duration)</code></td>
+<td><code>time.Duration</code></td>
+<td>继承 SessionTTL</td>
+<td>Track event TTL。非正数表示 Track event 不过期</td>
 </tr>
 <tr>
 <td><code>WithAppStateTTL(ttl time.Duration)</code></td>
@@ -3711,7 +3717,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年7月28日 06:17:45 UTC">2026-07-28 06:17:45</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年7月29日 08:07:20 UTC">2026-07-29 08:07:20</span>
   </span>
 
     
