@@ -170,7 +170,7 @@ type TrackEventSnapshot struct {
 	InvocationID string         `json:"invocation_id,omitempty"`
 	Payload      map[string]any `json:"payload,omitempty"`
 	Error        string         `json:"error,omitempty"`
-	Duration     time.Duration  `json:"duration,omitempty"`
+	Duration     time.Duration  `json:"duration"`
 	Timestamp    time.Time      `json:"timestamp,omitempty"`
 }
 
@@ -186,7 +186,7 @@ type MemorySnapshot struct {
 	Content   string         `json:"content"`
 	Topics    []string       `json:"topics,omitempty"`
 	Metadata  map[string]any `json:"metadata,omitempty"`
-	Score     float64        `json:"score,omitempty"`
+	Score     float64        `json:"score"`
 	CreatedAt time.Time      `json:"created_at,omitempty"`
 	UpdatedAt time.Time      `json:"updated_at,omitempty"`
 }

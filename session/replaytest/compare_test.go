@@ -322,6 +322,19 @@ func TestCompareSnapshotsUsesAbsoluteScoreTolerance(t *testing.T) {
 		t.Fatalf("differences = %#v, want none", differences)
 	}
 
+	baseline = Snapshot{Memories: []MemorySnapshot{{Score: 0}}}
+	actual = Snapshot{Memories: []MemorySnapshot{{Score: 1e-7}}}
+	differences, err = CompareSnapshots(CompareInput{
+		Case: "zero-score", Backend: "sqlite", Baseline: baseline, Actual: actual, Options: options,
+	})
+	if err != nil {
+		t.Fatalf("CompareSnapshots() zero score error = %v", err)
+	}
+	if len(differences) != 0 {
+		t.Fatalf("zero score differences within tolerance = %#v", differences)
+	}
+
+	baseline.Memories[0].Score = 0.5000009
 	actual.Memories[0].Score = 0.500002
 	differences, err = CompareSnapshots(CompareInput{
 		Case: "score", Backend: "sqlite", Baseline: baseline, Actual: actual, Options: options,
@@ -352,6 +365,23 @@ func TestCompareSnapshotsUsesAbsoluteDurationTolerance(t *testing.T) {
 		t.Fatalf("duration differences within tolerance = %#v", differences)
 	}
 
+	baseline = Snapshot{Sessions: []SessionSnapshot{{Tracks: []TrackSnapshot{{
+		Events: []TrackEventSnapshot{{Duration: 500 * time.Microsecond}},
+	}}}}}
+	actual = Snapshot{Sessions: []SessionSnapshot{{Tracks: []TrackSnapshot{{
+		Events: []TrackEventSnapshot{{Duration: 0}},
+	}}}}}
+	differences, err = CompareSnapshots(CompareInput{
+		Case: "zero-duration", Backend: "sqlite", Baseline: baseline, Actual: actual, Options: options,
+	})
+	if err != nil {
+		t.Fatalf("CompareSnapshots() zero duration error = %v", err)
+	}
+	if len(differences) != 0 {
+		t.Fatalf("zero duration differences within tolerance = %#v", differences)
+	}
+
+	baseline.Sessions[0].Tracks[0].Events[0].Duration = 1900 * time.Microsecond
 	actual.Sessions[0].Tracks[0].Events[0].Duration = 3 * time.Millisecond
 	differences, err = CompareSnapshots(CompareInput{
 		Case: "duration", Backend: "sqlite", Baseline: baseline, Actual: actual, Options: options,

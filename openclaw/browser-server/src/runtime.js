@@ -17,6 +17,27 @@ function withPageURL(result, page) {
   };
 }
 
+function rejectChromeRelayTargetOnly(request = {}) {
+  const targetOnly = `${request.element || request.target || ""}`.trim() &&
+    !`${request.ref || ""}`.trim();
+  const dragTargetOnly =
+    (`${request.startElement || request.startTarget || ""}`.trim() &&
+      !`${request.startRef || ""}`.trim()) ||
+    (`${request.endElement || request.endTarget || ""}`.trim() &&
+      !`${request.endRef || ""}`.trim());
+  const fillTargetOnly = Array.isArray(request.fields) &&
+    request.fields.some((field) =>
+      `${field?.element || field?.target || ""}`.trim() &&
+      !`${field?.ref || ""}`.trim()
+    );
+  if (targetOnly || dragTargetOnly || fillTargetOnly) {
+    throw new Error(
+      "chrome relay actions require snapshot refs; element targets are " +
+      "supported only by the host browser profile"
+    );
+  }
+}
+
 export class BrowserRuntime {
   constructor(config) {
     this.config = config;
@@ -378,10 +399,12 @@ export class BrowserRuntime {
 
   async act(profile, payload) {
     if (profile === "chrome") {
+      const request = payload.request || payload;
+      rejectChromeRelayTargetOnly(request);
       return this.chromeRelay.execute(
         payload.targetId || payload.request?.targetId,
         normalizeActKind(payload.request?.kind || payload.kind),
-        payload.request || payload
+        request
       );
     }
     const result = await this.hostProfile.act(

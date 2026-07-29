@@ -181,6 +181,62 @@ server, err := agui.New(
 }
 ```
 
+## 用户输入 forwardedProps 元数据
+
+如果业务在 AG-UI 请求的 `forwardedProps` 中携带附件、表单上下文或其他请求侧信息，并希望刷新页面后仍能通过历史接口恢复这些信息，可以开启事件来源元数据：
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/server/agui"
+)
+
+server, err := agui.New(
+    runner,
+    agui.WithAppName(appName),
+    agui.WithSessionService(sessionService),
+    agui.WithMessagesSnapshotEnabled(true),
+    agui.WithEventSourceMetadataEnabled(true),
+)
+```
+
+开启后，实时对话请求在持久化用户输入事件时，会把 AG-UI 请求体中的 `forwardedProps` 字段写入该用户输入事件的 `rawEvent.forwardedProps`；在 Go API 中，该字段对应 `RunAgentInput.ForwardedProps`。读取历史时，消息快照路由会把它聚合到 `MESSAGES_SNAPSHOT.rawEvent.runs[runId].forwardedProps`：
+
+```json
+{
+  "type": "MESSAGES_SNAPSHOT",
+  "messages": [
+    {
+      "id": "user-1",
+      "role": "user",
+      "content": "请看附件"
+    }
+  ],
+  "rawEvent": {
+    "runs": {
+      "run-1": {
+        "author": "demo-user",
+        "forwardedProps": {
+          "file_url": "https://example.com/demo.png",
+          "attachments": [
+            {
+              "id": "file-1",
+              "mimeType": "image/png"
+            }
+          ]
+        },
+        "timestamp": 1781258400000
+      }
+    },
+    "messages": {
+      "user-1": {
+        "author": "demo-user",
+        "timestamp": 1781258400000
+      }
+    }
+  }
+}
+```
+
 ## 消息快照续传
 
 默认情况下，消息快照路由只返回一次性快照并立即结束连接。当用户在实时对话运行期间刷新或重连时，快照生成之后可能还有新的 AG-UI 事件继续产生。此时可以开启消息快照续传，让同一条 SSE 连接在返回快照后继续接收后续事件。

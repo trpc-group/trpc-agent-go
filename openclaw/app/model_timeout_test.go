@@ -155,6 +155,13 @@ func TestModelTimeoutModel_DeliversTimeoutAfterQueuedResponses(t *testing.T) {
 	require.Contains(t, timeout.Error.Message, "model request timeout")
 }
 
+func TestIsModelTimeoutResponse_Guards(t *testing.T) {
+	t.Parallel()
+
+	require.False(t, isModelTimeoutResponse(nil))
+	require.False(t, isModelTimeoutResponse(&model.Response{}))
+}
+
 func TestModelTimeoutIterModel_StopsBlockedCreation(t *testing.T) {
 	t.Parallel()
 

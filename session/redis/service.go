@@ -134,21 +134,25 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 
 	// Initialize ZSet config
 	zsetCfg := zset.Config{
-		SessionTTL:        sessionTTL,
-		AppStateTTL:       appStateTTL,
-		UserStateTTL:      userStateTTL,
-		SessionEventLimit: opts.sessionEventLimit,
-		KeyPrefix:         opts.keyPrefix,
+		SessionTTL:         sessionTTL,
+		TrackEventTTL:      opts.trackEventTTL,
+		AppStateTTL:        appStateTTL,
+		UserStateTTL:       userStateTTL,
+		SessionEventLimit:  opts.sessionEventLimit,
+		KeyPrefix:          opts.keyPrefix,
+		DisableScriptCache: opts.disableScriptCache,
 	}
 
 	// Initialize HashIdx config
 	hashidxCfg := hashidx.Config{
 		SessionTTL:             sessionTTL,
+		TrackEventTTL:          opts.trackEventTTL,
 		AppStateTTL:            appStateTTL,
 		UserStateTTL:           userStateTTL,
 		SessionEventLimit:      opts.sessionEventLimit,
 		KeyPrefix:              opts.keyPrefix,
 		EnableUserSessionIndex: opts.enableUserSessionIndex,
+		DisableScriptCache:     opts.disableScriptCache,
 	}
 
 	s := &Service{

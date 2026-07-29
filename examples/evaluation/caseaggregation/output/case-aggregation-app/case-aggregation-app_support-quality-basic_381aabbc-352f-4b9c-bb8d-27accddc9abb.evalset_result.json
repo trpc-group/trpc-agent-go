@@ -1,0 +1,199 @@
+{
+  "evalSetResultId": "case-aggregation-app_support-quality-basic_381aabbc-352f-4b9c-bb8d-27accddc9abb",
+  "evalSetResultName": "case-aggregation-app_support-quality-basic_381aabbc-352f-4b9c-bb8d-27accddc9abb",
+  "evalSetId": "support-quality-basic",
+  "evalCaseResults": [
+    {
+      "evalSetId": "support-quality-basic",
+      "evalId": "support_weighted_tradeoff",
+      "runId": 1,
+      "score": 0.8,
+      "finalEvalStatus": "passed",
+      "overallEvalMetricResults": [
+        {
+          "metricName": "answer_is_substantive",
+          "score": 1,
+          "evalStatus": "passed",
+          "threshold": 1,
+          "criterion": {
+            "finalResponse": {
+              "text": {
+                "matchStrategy": "skip",
+                "length": {
+                  "min": 40
+                }
+              }
+            }
+          },
+          "details": {
+            "score": 1
+          }
+        },
+        {
+          "metricName": "max_six_chars",
+          "evalStatus": "failed",
+          "threshold": 1,
+          "criterion": {
+            "finalResponse": {
+              "text": {
+                "matchStrategy": "skip",
+                "length": {
+                  "max": 6
+                }
+              }
+            }
+          },
+          "details": {
+            "reason": "final response mismatch: text mismatch: length mismatch: actual length 137 is greater than max 6, expected range [0, 6]"
+          }
+        }
+      ],
+      "evalMetricResultPerInvocation": [
+        {
+          "actualInvocation": {
+            "invocationId": "07b2c059-bc47-4678-b293-a93623c919f1",
+            "userContent": {
+              "role": "user",
+              "content": "My workspace account is locked."
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "Your workspace account is locked; please contact your IT administrator or use the \"Forgot Password\" option to reset it and regain access."
+            }
+          },
+          "expectedInvocation": {
+            "invocationId": "support_weighted_tradeoff-1",
+            "userContent": {
+              "role": "user",
+              "content": "My workspace account is locked."
+            }
+          },
+          "evalMetricResults": [
+            {
+              "metricName": "answer_is_substantive",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 1,
+              "criterion": {
+                "finalResponse": {
+                  "text": {
+                    "matchStrategy": "skip",
+                    "length": {
+                      "min": 40
+                    }
+                  }
+                }
+              },
+              "details": {
+                "score": 1
+              }
+            },
+            {
+              "metricName": "max_six_chars",
+              "evalStatus": "failed",
+              "threshold": 1,
+              "criterion": {
+                "finalResponse": {
+                  "text": {
+                    "matchStrategy": "skip",
+                    "length": {
+                      "max": 6
+                    }
+                  }
+                }
+              },
+              "details": {
+                "reason": "final response mismatch: text mismatch: length mismatch: actual length 137 is greater than max 6, expected range [0, 6]"
+              }
+            }
+          ]
+        }
+      ],
+      "sessionId": "fbbc32b5-a0b5-4c03-b5ba-43a0f5131314",
+      "userId": "demo-user"
+    }
+  ],
+  "summary": {
+    "overallStatus": "passed",
+    "numRuns": 1,
+    "runStatusCounts": {
+      "passed": 1
+    },
+    "runSummaries": [
+      {
+        "runId": 1,
+        "overallStatus": "passed",
+        "caseStatusCounts": {
+          "passed": 1
+        },
+        "metricSummaries": [
+          {
+            "metricName": "answer_is_substantive",
+            "averageScore": 1,
+            "evalStatus": "passed",
+            "threshold": 1,
+            "statusCounts": {
+              "passed": 1
+            }
+          },
+          {
+            "metricName": "max_six_chars",
+            "evalStatus": "failed",
+            "threshold": 1,
+            "statusCounts": {
+              "failed": 1
+            }
+          }
+        ]
+      }
+    ],
+    "evalCaseSummaries": [
+      {
+        "evalId": "support_weighted_tradeoff",
+        "overallStatus": "passed",
+        "runStatusCounts": {
+          "passed": 1
+        },
+        "metricSummaries": [
+          {
+            "metricName": "answer_is_substantive",
+            "averageScore": 1,
+            "evalStatus": "passed",
+            "threshold": 1,
+            "statusCounts": {
+              "passed": 1
+            }
+          },
+          {
+            "metricName": "max_six_chars",
+            "evalStatus": "failed",
+            "threshold": 1,
+            "statusCounts": {
+              "failed": 1
+            }
+          }
+        ],
+        "runSummaries": [
+          {
+            "runId": 1,
+            "finalEvalStatus": "passed",
+            "metricResults": [
+              {
+                "metricName": "answer_is_substantive",
+                "score": 1,
+                "evalStatus": "passed",
+                "threshold": 1
+              },
+              {
+                "metricName": "max_six_chars",
+                "evalStatus": "failed",
+                "threshold": 1
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "creationTimestamp": 1784776035.293141
+}

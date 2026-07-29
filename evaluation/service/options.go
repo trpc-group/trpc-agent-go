@@ -31,6 +31,7 @@ type Options struct {
 	EvalResultManager                 evalresult.Manager               // EvalResultManager is used to store and retrieve eval results.
 	Registry                          registry.Registry                // Registry is used to store and retrieve evaluator.
 	MetricRegistry                    metricregistry.Registry          // MetricRegistry resolves runtime metric extensions.
+	EvalCaseResultAggregator          EvalCaseResultAggregator         // EvalCaseResultAggregator computes eval case score and status.
 	SessionIDSupplier                 func(ctx context.Context) string // SessionIDSupplier is used to generate session IDs.
 	ExpectedRunner                    runner.Runner                    // ExpectedRunner is used to generate dynamic expected outputs.
 	ToolMockRunner                    runner.Runner                    // ToolMockRunner generates dynamic tool mock results.
@@ -48,10 +49,11 @@ type Option func(*Options)
 // NewOptions creates a new Options with the default values.
 func NewOptions(opt ...Option) *Options {
 	opts := &Options{
-		EvalSetManager:    evalsetinmemory.New(),
-		EvalResultManager: evalresultinmemory.New(),
-		Registry:          registry.New(),
-		MetricRegistry:    metricregistry.New(),
+		EvalSetManager:           evalsetinmemory.New(),
+		EvalResultManager:        evalresultinmemory.New(),
+		Registry:                 registry.New(),
+		MetricRegistry:           metricregistry.New(),
+		EvalCaseResultAggregator: defaultEvalCaseResultAggregator{},
 		SessionIDSupplier: func(ctx context.Context) string {
 			return uuid.New().String()
 		},
@@ -93,6 +95,13 @@ func WithRegistry(r registry.Registry) Option {
 func WithMetricRegistry(r metricregistry.Registry) Option {
 	return func(o *Options) {
 		o.MetricRegistry = r
+	}
+}
+
+// WithEvalCaseResultAggregator sets the eval case result aggregator.
+func WithEvalCaseResultAggregator(aggregator EvalCaseResultAggregator) Option {
+	return func(o *Options) {
+		o.EvalCaseResultAggregator = aggregator
 	}
 }
 
