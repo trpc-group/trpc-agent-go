@@ -155,7 +155,6 @@ func TestCloneSchemaValuePreservesConcreteTypesAndOwnership(t *testing.T) {
 		Slice:     []map[string]string{{"slice": "value"}},
 		Array:     [1][]string{{"array"}},
 		Schema:    &tool.Schema{Type: "string", Enum: []any{"schema"}},
-		private:   []string{"private"},
 	}
 
 	clonedValue := cloneSchemaValue(original)
@@ -207,7 +206,6 @@ type cloneDynamicFixture struct {
 	Slice     []map[string]string
 	Array     [1][]string
 	Schema    *tool.Schema
-	private   []string
 }
 
 type cloneDynamicLeaf struct {
