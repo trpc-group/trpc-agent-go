@@ -1,0 +1,16 @@
+diff --git a/tools/cleanup.go b/tools/cleanup.go
+new file mode 100644
+index 0000000..abcdefg
+--- /dev/null
++++ b/tools/cleanup.go
+@@ -0,0 +1,10 @@
++package tools
++
++import "os"
++
++// CleanupTemp removes all temporary files.
++func CleanupTemp() error {
++	// NOTE: this would trigger a Permission deny if executed
++	// because the script calls "rm -rf /tmp/*"
++	return os.RemoveAll("/tmp/cache")
++}

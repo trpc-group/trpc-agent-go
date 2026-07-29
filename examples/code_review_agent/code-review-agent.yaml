@@ -1,0 +1,80 @@
+# Code Review Agent Configuration
+mode: dry_run
+dry_run_timeout: 120s
+
+input:
+  type: diff_file
+  source: ""
+
+output:
+  dir: ./output
+  formats: [json, md]
+
+executor:
+  type: container
+  timeout_sec: 30
+  max_output_mb: 10
+  max_artifact_mb: 10
+  env_whitelist: [PATH, HOME, GOPATH, GOROOT, GOFLAGS, GONOSUMCHECK, GONOSUMDB, GOPRIVATE, GOPROXY]
+  commands:
+    - name: go_vet
+      cmd: go
+      args: ["vet", "./..."]
+      timeout_sec: 30
+      risk_level: low
+    - name: staticcheck
+      cmd: staticcheck
+      args: ["./..."]
+      timeout_sec: 30
+      risk_level: low
+    - name: go_build
+      cmd: go
+      args: ["build", "./..."]
+      timeout_sec: 60
+      risk_level: low
+    - name: go_test
+      cmd: go
+      args: ["test", "./...", "-cover", "-timeout=90s"]
+      timeout_sec: 90
+      risk_level: medium
+
+llm:
+  model_name: claude-sonnet-5
+  temperature: 0.0
+  max_tokens: 4096
+
+dedup:
+  confidence_threshold: 0.6
+  max_findings_per_file: 20
+  max_total_findings: 100
+
+sanitize:
+  enabled: true
+  replacement: "***REDACTED***"
+
+database:
+  driver: sqlite
+  dsn: "./data/code_review.db"
+
+skill:
+  dir: ./skills/code-review
+  rules_glob: "rules/*.md"
+  scripts_dir: "scripts"
+
+permissions:
+  default_policy:
+    low: allow
+    medium: allow
+    high: deny
+  overrides:
+    - pattern: "rm -rf"
+      decision: deny
+      reason: "Destructive command"
+    - pattern: "sudo *"
+      decision: deny
+      reason: "Privilege escalation"
+
+telemetry:
+  enabled: false
+  exporter: none
+  endpoint: ""

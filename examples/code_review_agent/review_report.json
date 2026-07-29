@@ -1,0 +1,41 @@
+{
+  "task_id": "dc611cbd-7b43-4055-919a-79d14cbafa9b",
+  "findings_count": 3,
+  "warnings_count": 0,
+  "severity_distribution": {
+    "critical": 1,
+    "high": 0,
+    "low": 0,
+    "medium": 2,
+    "warning": 0
+  },
+  "category_distribution": {
+    "db_lifecycle": 1,
+    "missing_test": 1,
+    "security": 1
+  },
+  "summary": "Reviewed 3 findings (0 warnings).",
+  "node_timings_ms": {
+    "node_dedupengine_ms": 0,
+    "node_diffparser_ms": 0,
+    "node_llmanalyzer_ms": 0,
+    "node_permissionfilter_ms": 0,
+    "node_ruleengine_ms": 0,
+    "node_sandboxrunner_ms": 0
+  },
+  "permission_summary": {
+    "total": 4,
+    "allowed": 4,
+    "denied": 0,
+    "needs_human_review": 0
+  },
+  "sandbox_summary": [
+    {
+      "command": "skipped (dry-run)",
+      "exit_code": 0,
+      "duration_ms": 0,
+      "timed_out": false,
+      "error_type": ""
+    }
+  ]
+}
