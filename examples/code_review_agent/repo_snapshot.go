@@ -219,6 +219,9 @@ func resolveExistingPath(path string) (string, error) {
 	if inspectErr != nil || hasSymlink {
 		return "", err
 	}
+	// A component-by-component check can still prove that an existing path has
+	// no symlinks after EvalSymlinks fails. Only in that case is absPath used for
+	// containment checks; symlinks and inspection failures fail closed above.
 	return absPath, nil
 }
 
