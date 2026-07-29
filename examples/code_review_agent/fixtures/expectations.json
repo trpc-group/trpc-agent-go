@@ -1,0 +1,31 @@
+{
+  "fixtures": {
+    "clean.diff": {
+      "expected_findings": 0
+    },
+    "security.diff": {
+      "expected_findings": {"min": 2, "categories": ["security", "secret_redaction"]}
+    },
+    "goroutine_context.diff": {
+      "expected_findings": {"min": 1, "categories": ["goroutine_context"]}
+    },
+    "resource_lifecycle.diff": {
+      "expected_findings": {"min": 1, "categories": ["resource_lifecycle"]}
+    },
+    "database_lifecycle.diff": {
+      "expected_findings": {"min": 1, "categories": ["database_lifecycle"]}
+    },
+    "missing_tests.diff": {
+      "expected_findings": {"min": 1, "categories": ["missing_tests"]}
+    },
+    "duplicate_finding.diff": {
+      "expected_findings": {"min": 1, "max": 2}
+    },
+    "secret_redaction.diff": {
+      "expected_findings": {"min": 3, "categories": ["secret_redaction"]}
+    },
+    "sandbox_failure.diff": {
+      "expected_findings": {"min": 0}
+    }
+  }
+}

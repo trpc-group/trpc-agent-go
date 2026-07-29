@@ -1,0 +1,17 @@
+diff --git a/worker.go b/worker.go
+new file mode 100644
+--- /dev/null
++++ b/worker.go
+@@ -0,0 +1,12 @@
++package main
++
++func processItems(items []string) {
++	for _, item := range items {
++		go func() {
++			handle(item)
++		}()
++	}
++}
++
++func handle(item string) {
++}

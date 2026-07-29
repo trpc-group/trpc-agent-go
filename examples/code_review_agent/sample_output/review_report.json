@@ -1,0 +1,95 @@
+{
+  "task": {
+    "id": "5f26e551-ac97-41f1-9c0b-5437a2e908d2",
+    "diff_file": "fixtures/diffs/security.diff",
+    "diff_summary": "{\"files\":1,\"hunks\":1}",
+    "status": "completed_with_warnings",
+    "dry_run": true,
+    "sandbox_type": "fake",
+    "total_duration_ms": 15,
+    "sandbox_duration_ms": 0,
+    "tool_call_count": 0,
+    "permission_deny_count": 0,
+    "findings_total": 3,
+    "findings_critical": 2,
+    "findings_high": 0,
+    "findings_medium": 1,
+    "findings_low": 0,
+    "findings_warning": 0,
+    "need_human_review_count": 0,
+    "created_at": "2026-07-29T14:24:27.0996488+08:00"
+  },
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "security",
+      "file": "handler.go",
+      "line": 10,
+      "title": "Use of os/exec.Command with unsanitized input",
+      "evidence": "\texec.Command(\"/bin/sh\", \"-c\", cmd).Run()",
+      "recommendation": "Validate and sanitize all inputs to exec.Command. Consider using exec.CommandContext for timeout support.",
+      "confidence": 0.8,
+      "source": "rule",
+      "rule_id": "GO-SECURITY-001"
+    },
+    {
+      "severity": "critical",
+      "category": "secret_redaction",
+      "file": "handler.go",
+      "line": 14,
+      "title": "Potential secret or credential in code",
+      "evidence": "\tapiKey := \"[REDACTED:OPENAI_KEY]\"",
+      "recommendation": "Move secrets to environment variables or a secret management service. Never hardcode credentials.",
+      "confidence": 0.9,
+      "source": "rule",
+      "rule_id": "GO-SECRET-001"
+    },
+    {
+      "severity": "medium",
+      "category": "missing_tests",
+      "file": "handler.go",
+      "line": 0,
+      "title": "New or modified functions without corresponding tests",
+      "evidence": "File handler.go has added functions but no corresponding test file (handler_test.go) found in diff.",
+      "recommendation": "Add unit tests for new functions in handler_test.go.",
+      "confidence": 0.7,
+      "source": "rule",
+      "rule_id": "GO-TEST-001"
+    }
+  ],
+  "sandbox_runs": null,
+  "permission_decisions": [
+    {
+      "tool_name": "go_vet",
+      "action": "allow",
+      "reason": "dry_run: governance recorded"
+    },
+    {
+      "tool_name": "go_test",
+      "action": "allow",
+      "reason": "dry_run: governance recorded"
+    }
+  ],
+  "summary": {
+    "total_files": 1,
+    "total_hunks": 1,
+    "severity_counts": {
+      "critical": 2,
+      "medium": 1
+    },
+    "category_counts": {
+      "missing_tests": 1,
+      "secret_redaction": 1,
+      "security": 1
+    },
+    "governance_summary": "All commands allowed",
+    "sandbox_summary": "No sandbox executions",
+    "monitoring": {
+      "total_duration_ms": 15,
+      "sandbox_duration_ms": 0,
+      "tool_call_count": 0,
+      "permission_deny_count": 0
+    }
+  },
+  "generated_at": "2026-07-29T14:24:27.1136126+08:00"
+}
