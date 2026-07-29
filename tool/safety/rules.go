@@ -244,7 +244,7 @@ func isShellLanguage(lang string) bool {
 // nonPOSIXShellLanguages are the shell languages an executor may accept
 // (codeexecutor/jupyter recognizes pwsh/powershell/ps1, and codeexec's
 // WithLanguages can expose them) whose grammar shellsafe does not implement.
-// Parsing them as POSIX shell would mis-tokenize the command, so they are
+// Parsing them as POSIX shell would incorrectly tokenize the command, so they are
 // treated as shell — never as inert "code" — and failed closed.
 var nonPOSIXShellLanguages = map[string]bool{
 	"pwsh": true, "powershell": true, "ps1": true, "posh": true,

@@ -209,8 +209,8 @@ Explicit limitations:
   Shells the guard has **no parser** for — `pwsh`/`powershell`/`ps1` (accepted by
   `codeexecutor/jupyter` and exposable via `codeexec.WithLanguages`) and
   `cmd`/`bat` — are still classified as shell, never as inert "code", and fail
-  closed via `unparsable_action`: parsing them as POSIX shell would mis-tokenize
-  the command, and treating them as code would drop the command, forbidden-path,
+  closed via `unparsable_action`: parsing them as POSIX shell would incorrectly
+  tokenize the command, and treating them as code would drop the command, forbidden-path,
   dependency and destructive-operation rules.
   Non-shell blocks get the secret/resource rules, a URL whitelist pass over the
   source (only when the network policy is configured — the default policy has
