@@ -676,3 +676,159 @@ func TestWorkspaceRegistry_Release_CallerCancelDoesNotAbortCleanup(t *testing.T)
 	_, ok := r.Get("cancel-rel")
 	require.False(t, ok)
 }
+
+func TestWorkspaceRegistry_ReleaseHandle_NilAndInvalidHandle(t *testing.T) {
+	ctx := context.Background()
+	wm := &fakeWM{}
+
+	// nil receiver is a safe no-op.
+	var nilReg *WorkspaceRegistry
+	require.NoError(t, nilReg.ReleaseHandle(ctx, wm, WorkspaceHandle{}))
+
+	r := NewWorkspaceRegistry()
+
+	// Handle owned by a different registry is a no-op.
+	other := NewWorkspaceRegistry()
+	h, err := other.AcquireHandle(ctx, wm, "foreign")
+	require.NoError(t, err)
+	require.NoError(t, r.ReleaseHandle(ctx, wm, h))
+
+	// Zero entryToken is a no-op even when registry matches.
+	require.NoError(t, r.ReleaseHandle(ctx, wm, WorkspaceHandle{
+		registry:   r,
+		registryID: "zero-token",
+	}))
+}
+
+func TestWorkspaceRegistry_ReleaseHandle_RestoresEntryOnCleanupFailure(t *testing.T) {
+	r := NewWorkspaceRegistry()
+	wm := &countingCleanupWM{fail: errors.New("cleanup boom")}
+	ctx := context.Background()
+
+	handle, err := r.AcquireHandle(ctx, wm, "fail-clean")
+	require.NoError(t, err)
+
+	require.Error(t, r.ReleaseHandle(ctx, wm, handle))
+	// Entry restored after failed cleanup so Release is retryable.
+	got, ok := r.Get("fail-clean")
+	require.True(t, ok)
+	require.Equal(t, handle.Workspace.Path, got.Path)
+
+	// Retry succeeds once cleanup stops failing.
+	wm.fail = nil
+	require.NoError(t, r.ReleaseHandle(ctx, wm, handle))
+	_, ok = r.Get("fail-clean")
+	require.False(t, ok)
+}
+
+func TestWorkspaceRegistry_ReleaseHandle_CoalescesInflightRelease(t *testing.T) {
+	r := NewWorkspaceRegistry()
+	entered := make(chan struct{})
+	block := make(chan struct{})
+	wm := &countingCleanupWM{entered: entered, block: block}
+	ctx := context.Background()
+
+	handle, err := r.AcquireHandle(ctx, wm, "coalesce")
+	require.NoError(t, err)
+
+	// Start a ReleaseHandle that blocks inside Cleanup. By the time
+	// entered is closed, releasing[id] is set and the first caller is
+	// blocked in waitWorkspaceRelease.
+	firstErr := make(chan error, 1)
+	go func() { firstErr <- r.ReleaseHandle(ctx, wm, handle) }()
+	<-entered
+
+	// Unblock the cleanup shortly so the synchronous second call below
+	// has a window to find releasing[id] and coalesce.
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		close(block)
+	}()
+
+	// If the second call coalesces, it blocks in waitWorkspaceRelease until
+	// close(block) unblocks the cleanup goroutine. If it does NOT coalesce,
+	// it returns nil immediately (the entry was already deleted) — the test
+	// timeout would then fire because the first caller is still blocked.
+	require.NoError(t, r.ReleaseHandle(ctx, wm, handle))
+	require.NoError(t, <-firstErr)
+
+	wm.mu.Lock()
+	require.Equal(t, 1, wm.cleans, "concurrent ReleaseHandle must coalesce")
+	wm.mu.Unlock()
+}
+
+// secondCallBlocksWM lets the first CreateWorkspace succeed immediately and
+// blocks subsequent calls until release is closed. This lets a test hold a
+// second create in-flight while exercising ReleaseHandle.
+type secondCallBlocksWM struct {
+	mu            sync.Mutex
+	creates       int
+	secondEntered chan struct{}
+	releaseSecond chan struct{}
+	once          sync.Once
+}
+
+func (m *secondCallBlocksWM) CreateWorkspace(
+	ctx context.Context, id string, _ WorkspacePolicy,
+) (Workspace, error) {
+	m.mu.Lock()
+	m.creates++
+	call := m.creates
+	m.mu.Unlock()
+
+	if call == 1 {
+		return Workspace{ID: id, Path: "/tmp/" + id}, nil
+	}
+	m.once.Do(func() { close(m.secondEntered) })
+	select {
+	case <-m.releaseSecond:
+		return Workspace{ID: id, Path: "/tmp/" + id + "-v2"}, nil
+	case <-ctx.Done():
+		return Workspace{}, ctx.Err()
+	}
+}
+
+func (*secondCallBlocksWM) Cleanup(context.Context, Workspace) error {
+	return nil
+}
+
+func TestWorkspaceRegistry_ReleaseHandle_WaitsInflightCreate(t *testing.T) {
+	r := NewWorkspaceRegistry()
+	wm := &secondCallBlocksWM{
+		secondEntered: make(chan struct{}),
+		releaseSecond: make(chan struct{}),
+	}
+	ctx := context.Background()
+
+	// First acquire succeeds immediately.
+	h1, err := r.AcquireHandle(ctx, wm, "inflight-create")
+	require.NoError(t, err)
+	require.True(t, r.Invalidate(h1))
+
+	// Start a second acquire that blocks in CreateWorkspace. By the time
+	// secondEntered is closed, inflight[id] is set.
+	acqDone := make(chan error, 1)
+	go func() {
+		_, err := r.AcquireHandle(ctx, wm, "inflight-create")
+		acqDone <- err
+	}()
+	<-wm.secondEntered
+
+	// ReleaseHandle with the stale handle waits for the in-flight create,
+	// then finds a newer token and returns without cleaning up.
+	relDone := make(chan error, 1)
+	go func() { relDone <- r.ReleaseHandle(ctx, wm, h1) }()
+
+	// Give ReleaseHandle time to lock, find inflight[id], and enter
+	// waitWorkspaceCreate before the create completes and deletes it.
+	time.Sleep(50 * time.Millisecond)
+
+	close(wm.releaseSecond)
+	require.NoError(t, <-acqDone)
+	require.NoError(t, <-relDone)
+
+	// The newer workspace survives because ReleaseHandle is token-scoped.
+	got, ok := r.Get("inflight-create")
+	require.True(t, ok)
+	require.NotEqual(t, h1.Workspace.Path, got.Path)
+}

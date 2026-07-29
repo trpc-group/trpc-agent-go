@@ -215,3 +215,30 @@ func TestPreauthorizeSkillCommand_BeforeMutation(t *testing.T) {
 	rt2 := &RunTool{deniedCmds: map[string]struct{}{"rm": {}}}
 	require.Error(t, preauthorizeSkillCommand(rt2, "rm -rf /"))
 }
+
+func TestPreauthorizeSkillCommand_NilAndEdgeCases(t *testing.T) {
+	// nil RunTool is a safe no-op.
+	require.NoError(t, preauthorizeSkillCommand(nil, "echo hi"))
+
+	rt := &RunTool{allowedCmds: map[string]struct{}{"echo": {}}}
+
+	// Shell metacharacters are rejected by splitCommandLine.
+	require.Error(t, preauthorizeSkillCommand(rt, "echo; ls"))
+
+	// A bare backslash produces no argv tokens.
+	require.Error(t, preauthorizeSkillCommand(rt, `\`))
+}
+
+func TestPreauthorizeSkillCommand_DenyOnlyAllowsNonDenied(t *testing.T) {
+	// deniedCmds set, allowedCmds empty: a non-denied command passes.
+	rt := &RunTool{deniedCmds: map[string]struct{}{"rm": {}}}
+	require.NoError(t, preauthorizeSkillCommand(rt, "echo hi"))
+}
+
+func TestPreauthorizeSkillCommand_BaseNameMatch(t *testing.T) {
+	// An allowed entry stored as a full path (e.g. /usr/bin/echo) must
+	// still permit the bare command name "echo" via base-name matching.
+	rt := &RunTool{allowedCmds: map[string]struct{}{"/usr/bin/echo": {}}}
+	require.NoError(t, preauthorizeSkillCommand(rt, "echo hi"))
+	require.Error(t, preauthorizeSkillCommand(rt, "curl http://x"))
+}
