@@ -843,6 +843,30 @@ func TestWorkspaceCleanupBoundsBlockingManager(t *testing.T) {
 	}
 }
 
+func TestWorkspaceCleanupContinuesAfterBlockingManager(t *testing.T) {
+	previous := workspaceCleanupTimeout
+	workspaceCleanupTimeout = 20 * time.Millisecond
+	defer func() { workspaceCleanupTimeout = previous }()
+
+	closed := make(chan struct{})
+	snapshotCleaned := make(chan struct{})
+	cleanup := newWorkspaceCleanup(blockingWorkspaceManager{}, codeexecutor.Workspace{}, func() error {
+		close(closed)
+		return nil
+	}, func() { close(snapshotCleaned) })
+	cleanup(context.Background())
+	select {
+	case <-closed:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("closeFn was skipped after manager cleanup timed out")
+	}
+	select {
+	case <-snapshotCleaned:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("snapshot cleanup was skipped after manager cleanup timed out")
+	}
+}
+
 func (f *recordingStageFS) PutFiles(context.Context, codeexecutor.Workspace, []codeexecutor.PutFile) error {
 	return nil
 }

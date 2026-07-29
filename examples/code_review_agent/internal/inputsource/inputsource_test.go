@@ -239,6 +239,17 @@ func TestUntrackedFileDiffWithLimitRejectsOversizeBeforeRead(t *testing.T) {
 	}
 }
 
+func TestUntrackedFileDiffWithLimitBoundsGeneratedDiff(t *testing.T) {
+	repo := t.TempDir()
+	path := filepath.Join(repo, "lines.txt")
+	if err := os.WriteFile(path, []byte(strings.Repeat("x\n", 32)), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if _, _, err := untrackedFileDiffWithLimit(repo, "lines.txt", 128); err == nil || !strings.Contains(err.Error(), "diff for lines.txt exceeds 128 bytes") {
+		t.Fatalf("untrackedFileDiffWithLimit() error = %v, want generated-diff limit rejection", err)
+	}
+}
+
 func TestUntrackedFileDiffsRejectsTooManyFiles(t *testing.T) {
 	paths := make([]string, maxUntrackedFileCount+1)
 	for i := range paths {

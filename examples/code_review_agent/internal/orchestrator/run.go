@@ -947,14 +947,12 @@ func cleanupWorkspaceResources(ctx context.Context, manager codeexecutor.Workspa
 		}
 	}
 	if manager != nil {
-		if !cleanupStep(func(stepCtx context.Context) { _ = manager.Cleanup(stepCtx, ws) }) {
-			return
-		}
+		// Continue best-effort cleanup if a backend ignores its context; otherwise
+		// one stalled manager would retain every later resource indefinitely.
+		_ = cleanupStep(func(stepCtx context.Context) { _ = manager.Cleanup(stepCtx, ws) })
 	}
 	if closeFn != nil {
-		if !cleanupStep(func(context.Context) { _ = closeFn() }) {
-			return
-		}
+		_ = cleanupStep(func(context.Context) { _ = closeFn() })
 	}
 	if snapshotCleanup != nil {
 		_ = cleanupStep(func(context.Context) { snapshotCleanup() })

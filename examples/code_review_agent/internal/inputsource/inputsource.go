@@ -10,8 +10,10 @@
 package inputsource
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -243,7 +245,7 @@ func untrackedFileDiffs(repoPath string, raw []byte) (string, error) {
 	var b strings.Builder
 	var inputBytes int64
 	for _, file := range files {
-		remaining := maxUntrackedInputBytes - inputBytes
+		remaining := minInt64(maxUntrackedInputBytes-inputBytes, maxUntrackedInputBytes-int64(b.Len()))
 		diff, readBytes, err := untrackedFileDiffWithLimit(repoPath, file, remaining)
 		if err != nil {
 			return "", err
@@ -253,7 +255,13 @@ func untrackedFileDiffs(repoPath string, raw []byte) (string, error) {
 			continue
 		}
 		if b.Len() > 0 && !strings.HasSuffix(b.String(), "\n") {
+			if int64(b.Len()+1+len(diff)) > maxUntrackedInputBytes {
+				return "", fmt.Errorf("untracked diff exceeds %d bytes", maxUntrackedInputBytes)
+			}
 			b.WriteString("\n")
+		}
+		if int64(b.Len()+len(diff)) > maxUntrackedInputBytes {
+			return "", fmt.Errorf("untracked diff exceeds %d bytes", maxUntrackedInputBytes)
 		}
 		b.WriteString(diff)
 	}
@@ -285,6 +293,9 @@ func untrackedFileDiffWithLimit(repoPath string, file string, maxBytes int64) (s
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
 		diff, err := untrackedSymlinkDiff(abs, file)
+		if err == nil && maxBytes >= 0 && int64(len(diff)) > maxBytes {
+			return "", 0, fmt.Errorf("untracked diff for %s exceeds %d bytes", file, maxBytes)
+		}
 		return diff, 0, err
 	}
 	if info.IsDir() {
@@ -301,40 +312,109 @@ func untrackedFileDiffWithLimit(repoPath string, file string, maxBytes int64) (s
 		return "", 0, fmt.Errorf("read untracked file %s: %w", file, err)
 	}
 	defer in.Close()
-	reader := io.Reader(in)
-	if maxBytes >= 0 {
-		reader = io.LimitReader(in, maxBytes+1)
+	var b strings.Builder
+	write := func(text string) error {
+		if maxBytes >= 0 && int64(b.Len()+len(text)) > maxBytes {
+			return fmt.Errorf("untracked diff for %s exceeds %d bytes", file, maxBytes)
+		}
+		b.WriteString(text)
+		return nil
 	}
-	raw, err := io.ReadAll(reader)
+	for _, line := range []string{
+		fmt.Sprintf("diff --git %s %s\n", gitQuotePath("a/"+file), gitQuotePath("b/"+file)),
+		"new file mode 100644\n",
+		"--- /dev/null\n",
+		fmt.Sprintf("+++ %s\n", gitQuotePath("b/"+file)),
+	} {
+		if err := write(line); err != nil {
+			return "", 0, err
+		}
+	}
+
+	reader := bufio.NewReader(in)
+	lineCount, noNewline, binary, err := scanUntrackedFile(reader, info.Size())
 	if err != nil {
 		return "", 0, fmt.Errorf("read untracked file %s: %w", file, err)
 	}
-	if maxBytes >= 0 && int64(len(raw)) > maxBytes {
-		return "", 0, fmt.Errorf("untracked file %s exceeds %d bytes", file, maxBytes)
-	}
-	readBytes := int64(len(raw))
-	var b strings.Builder
-	fmt.Fprintf(&b, "diff --git %s %s\n", gitQuotePath("a/"+file), gitQuotePath("b/"+file))
-	fmt.Fprintf(&b, "new file mode 100644\n")
-	fmt.Fprintf(&b, "--- /dev/null\n")
-	fmt.Fprintf(&b, "+++ %s\n", gitQuotePath("b/"+file))
-	if bytes.Contains(raw, []byte{0}) {
-		fmt.Fprintf(&b, "Binary files /dev/null and %s differ\n", gitQuotePath("b/"+file))
+	readBytes := info.Size()
+	if binary {
+		if err := write(fmt.Sprintf("Binary files /dev/null and %s differ\n", gitQuotePath("b/"+file))); err != nil {
+			return "", 0, err
+		}
 		return b.String(), readBytes, nil
 	}
-	lines, noNewline := diffLines(string(raw))
-	if len(lines) == 0 {
+	if lineCount == 0 {
 		return b.String(), readBytes, nil
 	}
-	fmt.Fprintf(&b, "@@ -0,0 +1,%d @@\n", len(lines))
-	for _, line := range lines {
-		fmt.Fprintf(&b, "+%s\n", line)
+	if err := write(fmt.Sprintf("@@ -0,0 +1,%d @@\n", lineCount)); err != nil {
+		return "", 0, err
+	}
+	if _, err := in.Seek(0, io.SeekStart); err != nil {
+		return "", 0, fmt.Errorf("rewind untracked file %s: %w", file, err)
+	}
+	reader.Reset(in)
+	lineStart := true
+	for {
+		part, readErr := reader.ReadSlice('\n')
+		if len(part) > 0 {
+			if lineStart {
+				if err := write("+"); err != nil {
+					return "", 0, err
+				}
+				lineStart = false
+			}
+			if err := write(string(part)); err != nil {
+				return "", 0, err
+			}
+			if part[len(part)-1] == '\n' {
+				lineStart = true
+			}
+		}
+		if readErr == nil || errors.Is(readErr, bufio.ErrBufferFull) {
+			continue
+		}
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+		return "", 0, fmt.Errorf("read untracked file %s: %w", file, readErr)
 	}
 	if noNewline {
-		b.WriteString(`\ No newline at end of file`)
-		b.WriteString("\n")
+		if err := write("\n\\ No newline at end of file\n"); err != nil {
+			return "", 0, err
+		}
 	}
 	return b.String(), readBytes, nil
+}
+
+func scanUntrackedFile(reader *bufio.Reader, size int64) (int, bool, bool, error) {
+	lineCount := 0
+	noNewline := false
+	for {
+		part, err := reader.ReadSlice('\n')
+		if len(part) > 0 {
+			if bytes.Contains(part, []byte{0}) {
+				return 0, false, true, nil
+			}
+			if part[len(part)-1] == '\n' {
+				lineCount++
+				noNewline = false
+			} else if errors.Is(err, io.EOF) {
+				lineCount++
+				noNewline = true
+			}
+		}
+		if err == nil || errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		return 0, false, false, err
+	}
+	if size == 1 && lineCount == 1 && !noNewline {
+		lineCount = 0
+	}
+	return lineCount, noNewline, false, nil
 }
 
 func untrackedSymlinkDiff(abs string, file string) (string, error) {
@@ -351,18 +431,6 @@ func untrackedSymlinkDiff(abs string, file string) (string, error) {
 	fmt.Fprintf(&b, "@@ -0,0 +1 @@\n")
 	fmt.Fprintf(&b, "+%s\n", target)
 	return b.String(), nil
-}
-
-func diffLines(text string) ([]string, bool) {
-	if text == "" {
-		return nil, false
-	}
-	noNewline := !strings.HasSuffix(text, "\n")
-	text = strings.TrimSuffix(text, "\n")
-	if text == "" {
-		return nil, noNewline
-	}
-	return strings.Split(text, "\n"), noNewline
 }
 
 func readFileList(path string, repoPath string) (Source, error) {
@@ -395,6 +463,13 @@ func readFileList(path string, repoPath string) (Source, error) {
 		WorkDir:  absRepo,
 		Summary:  summary,
 	}, nil
+}
+
+func minInt64(a int64, b int64) int64 {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func resolveRepoPath(repoPath string) (string, error) {
