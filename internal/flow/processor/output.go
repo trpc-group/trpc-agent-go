@@ -12,7 +12,11 @@ package processor
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"reflect"
+	"strconv"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -94,11 +98,11 @@ func (p *OutputResponseProcessor) emitStructuredOutput(
 		} else {
 			instance = reflect.New(invocation.StructuredOutputType).Interface()
 		}
-		if err := json.Unmarshal([]byte(jsonObject), instance); err != nil {
+		if err := unmarshalLenient(jsonObject, instance); err != nil {
 			log.ErrorfContext(
 				ctx,
-				"Structured output unmarshal failed: %v",
-				err,
+				"Structured output unmarshal failed: %v; payload: %s",
+				err, truncateJSON(jsonObject, 600),
 			)
 			return
 		}
@@ -118,11 +122,11 @@ func (p *OutputResponseProcessor) emitStructuredOutput(
 		return
 	}
 	var parsed any
-	if err := json.Unmarshal([]byte(jsonObject), &parsed); err != nil {
+	if err := unmarshalLenient(jsonObject, &parsed); err != nil {
 		log.ErrorfContext(
 			ctx,
-			"Structured output unmarshal failed: %v",
-			err,
+			"Structured output unmarshal failed: %v; payload: %s",
+			err, truncateJSON(jsonObject, 600),
 		)
 		return
 	}
@@ -149,7 +153,7 @@ func (p *OutputResponseProcessor) handleOutputKey(ctx context.Context, invocatio
 			return
 		}
 		var parsedJSON any
-		if err := json.Unmarshal([]byte(jsonObject), &parsedJSON); err != nil {
+		if err := unmarshalLenient(jsonObject, &parsedJSON); err != nil {
 			log.WarnfContext(
 				ctx,
 				"Failed to parse output as JSON for output_schema "+
@@ -158,8 +162,8 @@ func (p *OutputResponseProcessor) handleOutputKey(ctx context.Context, invocatio
 			)
 			return
 		}
-		// Store the original JSON string.
-		result = jsonObject
+		// Store the (possibly repaired) JSON string.
+		result = sanitizeJSONControlChars(jsonObject)
 	}
 	// Create a state delta event instead of directly modifying session.
 	stateDelta := map[string][]byte{
@@ -193,6 +197,281 @@ func (p *OutputResponseProcessor) handleOutputKey(ctx context.Context, invocatio
 			err,
 		)
 	}
+}
+
+// unmarshalLenient unmarshals JSON into v. It applies three best-effort repairs
+// for common LLM output defects, retrying after each:
+//
+//  1. Raw (unescaped) control characters inside string literals, e.g. literal
+//     newlines in a string value.
+//  2. String values emitted without surrounding quotes, e.g.
+//     {"reason": 回复结构完整}. This is typical of models running under
+//     response_format=json_object (DeepSeek variants), which are not
+//     schema-validated by the API.
+//  3. A stray token that appears where only a delimiter (',' '}' ']') is valid,
+//     i.e. right after a completed value, e.g. {"score":1 2}.
+//
+// Repairs only run when strict parsing fails, so already-valid JSON is never
+// touched.
+func unmarshalLenient(jsonObject string, v any) error {
+	strictErr := json.Unmarshal([]byte(jsonObject), v)
+	if strictErr == nil {
+		return nil
+	}
+	if repaired := sanitizeJSONControlChars(jsonObject); repaired != jsonObject {
+		if err := json.Unmarshal([]byte(repaired), v); err == nil {
+			return nil
+		}
+	}
+	if quoted := quoteUnquotedStrings(jsonObject); quoted != jsonObject {
+		if err := json.Unmarshal([]byte(sanitizeJSONControlChars(quoted)), v); err == nil {
+			return nil
+		}
+	}
+	// Final fallback: drop a stray token sitting where only a delimiter is valid
+	// (e.g. {"score":1 2}). Retry a few times in case several such tokens exist.
+	s := jsonObject
+	for attempt := 0; attempt < 4; attempt++ {
+		repaired, ok := repairStrayTokenAtSyntaxError(s)
+		if !ok {
+			break
+		}
+		s = repaired
+		if err := json.Unmarshal([]byte(sanitizeJSONControlChars(s)), v); err == nil {
+			return nil
+		}
+	}
+	return strictErr
+}
+
+// repairStrayTokenAtSyntaxError inspects the first JSON syntax error in s and,
+// when the error is a stray token appearing where only a delimiter is expected
+// (immediately after a completed value), deletes that token and returns the
+// repaired string.
+//
+// Go's json.SyntaxError.Offset points at the delimiter (or char) the parser
+// choked on, while the offending token sits immediately before it. We therefore
+// walk backwards from the offset to locate the stray run and remove it.
+// Object-key positions (right after '{' or ',') and missing-comma cases
+// (the run contains ':' or '"') are intentionally left untouched, so genuinely
+// malformed input still fails as before.
+func repairStrayTokenAtSyntaxError(s string) (string, bool) {
+	var syntaxErr *json.SyntaxError
+	// Use json.RawMessage purely to surface the syntax error offset.
+	if err := json.Unmarshal([]byte(s), new(json.RawMessage)); err == nil {
+		return "", false
+	} else if !errors.As(err, &syntaxErr) {
+		return "", false
+	}
+	off := int(syntaxErr.Offset)
+	if off <= 0 || off >= len(s) {
+		return "", false
+	}
+	// End of the junk: skip whitespace backwards from the choking position.
+	e := off
+	for e > 0 && isJSONSpace(s[e-1]) {
+		e--
+	}
+	// Walk backwards to the start of the junk: it begins right after a value
+	// boundary ('}', ']', '"', ')', a digit/letter ending a literal) or a
+	// structural delimiter, or after the whitespace that separates it from the
+	// preceding value.
+	start := e
+	for start > 0 {
+		c := s[start-1]
+		if c == '}' || c == ']' || c == '"' || c == ')' ||
+			c == ',' || c == ':' || c == '{' || c == '[' {
+			break
+		}
+		if isJSONSpace(c) {
+			break
+		}
+		start--
+	}
+	if start >= e {
+		return "", false
+	}
+	// Refuse to delete a run that sits at an object-key or array-element
+	// position (right after '{', ',' or '['): that is an unquoted key, not a
+	// stray token following a value. Deleting it would silently turn invalid
+	// input into "{}".
+	if start > 0 {
+		pb := s[start-1]
+		if pb == '{' || pb == ',' || pb == '[' {
+			return "", false
+		}
+	}
+	junk := s[start:e]
+	// Refuse to touch runs that look like a missing comma between fields
+	// (e.g. {"a":1 "b":3}); deleting them would drop real data.
+	if strings.ContainsAny(junk, `:"`) {
+		return "", false
+	}
+	return s[:start] + s[e:], true
+}
+
+// isJSONSpace reports whether c is JSON insignificant whitespace.
+func isJSONSpace(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r'
+}
+
+// quoteUnquotedStrings best-effort repairs a common LLM JSON defect where
+// string values are emitted without surrounding double quotes, for example
+// {"reason": 回复结构完整}. Only bare values that are not already valid JSON
+// literals (string/number/true/false/null/object/array) are quoted. Non-ASCII
+// bytes (e.g. UTF-8 CJK text) are never interpreted as structural characters,
+// so this is effectively a no-op for already-valid JSON.
+func quoteUnquotedStrings(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	inString := false
+	escaped := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if inString {
+			b.WriteByte(c)
+			switch {
+			case escaped:
+				escaped = false
+			case c == '\\':
+				escaped = true
+			case c == '"':
+				inString = false
+			}
+			continue
+		}
+		if c == '"' {
+			inString = true
+			b.WriteByte(c)
+			continue
+		}
+		if c == ':' {
+			b.WriteByte(c)
+			// Locate the value start, copying any whitespace between ':' and
+			// the value so positions stay aligned.
+			j := i + 1
+			for j < len(s) && (s[j] == ' ' || s[j] == '\t' || s[j] == '\n' || s[j] == '\r') {
+				b.WriteByte(s[j])
+				j++
+			}
+			if j < len(s) {
+				vc := s[j]
+				if vc != '"' && vc != '{' && vc != '[' && vc != '}' && vc != ']' && vc != ',' {
+					// Collect the bare token up to the next top-level delimiter.
+					k := j
+					abort := false
+					for k < len(s) {
+						d := s[k]
+						if d == ',' || d == '}' || d == ']' {
+							break
+						}
+						if d == '"' || d == '{' || d == '[' {
+							// A structural char inside the "value" means this is
+							// not a simple unquoted value (e.g. a missing comma
+							// between fields). Leave it untouched.
+							abort = true
+							break
+						}
+						k++
+					}
+					if abort {
+						b.WriteString(s[j:k])
+						i = k - 1
+						continue
+					}
+					token := s[j:k]
+					if !isValidJSONLiteral(token) {
+						b.WriteByte('"')
+						for m := 0; m < len(token); m++ {
+							if token[m] == '"' || token[m] == '\\' {
+								b.WriteByte('\\')
+							}
+							b.WriteByte(token[m])
+						}
+						b.WriteByte('"')
+						i = k - 1
+						continue
+					}
+					// Already a valid literal (number/true/false/null): keep it.
+					b.WriteString(token)
+					i = k - 1
+					continue
+				}
+			}
+			continue
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
+}
+
+// isValidJSONLiteral reports whether tok is a valid JSON literal: a JSON number
+// or one of true/false/null. Surrounding whitespace is ignored.
+func isValidJSONLiteral(tok string) bool {
+	t := strings.TrimSpace(tok)
+	if t == "" {
+		return false
+	}
+	if t == "true" || t == "false" || t == "null" {
+		return true
+	}
+	if _, err := strconv.ParseFloat(t, 64); err == nil {
+		return true
+	}
+	return false
+}
+
+// sanitizeJSONControlChars escapes raw control characters (U+0000..U+001F)
+// that appear inside JSON string literals, which strict JSON parsers reject.
+// Characters outside string literals are left untouched.
+func sanitizeJSONControlChars(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	inString := false
+	escaped := false
+	changed := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if inString {
+			switch {
+			case escaped:
+				escaped = false
+			case c == '\\':
+				escaped = true
+			case c == '"':
+				inString = false
+			case c < 0x20:
+				switch c {
+				case '\n':
+					b.WriteString(`\n`)
+				case '\r':
+					b.WriteString(`\r`)
+				case '\t':
+					b.WriteString(`\t`)
+				default:
+					fmt.Fprintf(&b, `\u%04x`, c)
+				}
+				changed = true
+				continue
+			}
+		} else if c == '"' {
+			inString = true
+		}
+		b.WriteByte(c)
+	}
+	if !changed {
+		return s
+	}
+	return b.String()
+}
+
+// truncateJSON returns s unchanged if it is short enough, otherwise a prefix of
+// at most n bytes followed by an ellipsis. Used to keep diagnostic logs bounded.
+func truncateJSON(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "...(truncated)"
 }
 
 // extractFirstJSONObject tries to extract the first balanced top-level JSON object from s.

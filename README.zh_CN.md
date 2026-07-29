@@ -290,7 +290,9 @@ export OPENAI_API_KEY="your-api-key-here"
 export OPENAI_BASE_URL="your-base-url-here"  # 可选
 
 # 3. 运行您的第一个 agent！
+
 cd examples/runner
+export GOPROXY=https://goproxy.cn  #配置go代理
 go run . -model="gpt-4o-mini" -streaming=true
 ```
 

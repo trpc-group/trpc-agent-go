@@ -926,7 +926,7 @@ func TestRunner_Run_WithRunStructuredOutputJSON_SupportsPointerSliceAndArrayFiel
 	if baseURL != "" {
 		modelOptions = append(modelOptions, openai.WithBaseURL(baseURL))
 	}
-	modelInstance := openai.New("gpt-4o-mini", modelOptions...)
+	modelInstance := openai.New("deepseek-v4-flash", modelOptions...)
 	ag := llmagent.New(
 		"real-complex-structured-output-agent",
 		llmagent.WithModel(modelInstance),
@@ -992,7 +992,7 @@ func TestRunner_Run_WithRunStructuredOutputJSON_SupportsPointerSliceAndArrayFiel
 	if baseURL != "" {
 		modelOptions = append(modelOptions, openai.WithBaseURL(baseURL))
 	}
-	modelInstance := openai.New("gpt-4o-mini", modelOptions...)
+	modelInstance := openai.New("deepseek-v4-flash", modelOptions...)
 	ag := llmagent.New(
 		"real-complex-structured-output-nonstrict-agent",
 		llmagent.WithModel(modelInstance),
@@ -1058,7 +1058,7 @@ func TestRunner_Run_WithRunStructuredOutputJSONSchema_LegacyNonStrictPointerSlic
 	if baseURL != "" {
 		modelOptions = append(modelOptions, openai.WithBaseURL(baseURL))
 	}
-	modelInstance := openai.New("gpt-4o-mini", modelOptions...)
+	modelInstance := openai.New("deepseek-v4-flash", modelOptions...)
 	ag := llmagent.New(
 		"real-legacy-complex-structured-output-nonstrict-agent",
 		llmagent.WithModel(modelInstance),
@@ -1153,7 +1153,7 @@ func TestRunner_Run_WithRunStructuredOutputJSON_SupportsStringMap_RealOpenAI(
 	if baseURL != "" {
 		modelOptions = append(modelOptions, openai.WithBaseURL(baseURL))
 	}
-	modelInstance := openai.New("gpt-4o-mini", modelOptions...)
+	modelInstance := openai.New("deepseek-v4-flash", modelOptions...)
 	ag := llmagent.New(
 		"real-map-structured-output-agent",
 		llmagent.WithModel(modelInstance),

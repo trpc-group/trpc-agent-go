@@ -374,6 +374,181 @@ func TestOutputResponseProcessor_HandleOutputKey_AddNoticeError(t *testing.T) {
 	close(ch)
 }
 
+func TestUnmarshalLenient_UnquotedStrings(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{
+			name:    "valid_json_untouched",
+			input:   `{"reason":"回复结构完整"}`,
+			wantErr: false,
+		},
+		{
+			name:    "unquoted_cjk_value",
+			input:   `{"reason": 回复结构完整、数据详实，满足评分维度。}`,
+			wantErr: false,
+		},
+		{
+			name:    "unquoted_value_with_fullwidth_punct",
+			input:   `{"Gradient": 候选回复应补充【数据面板】与【战术分析】结构化板块，并保证字数在 350-850 之间。}`,
+			wantErr: false,
+		},
+		{
+			name:    "nested_unquoted_value",
+			input:   `{"rubricScores":[{"id":"source_grounding","reason": 回复结构完整}]}`,
+			wantErr: false,
+		},
+		{
+			name:    "unquoted_value_in_array",
+			input:   `[{"id":"x","reason": 回复}]`,
+			wantErr: false,
+		},
+		{
+			name:    "keeps_valid_number_literal",
+			input:   `{"score": 1}`,
+			wantErr: false,
+		},
+		{
+			name:    "keeps_valid_bool_literal",
+			input:   `{"pass": true}`,
+			wantErr: false,
+		},
+		{
+			name:    "truly_malformed_still_fails",
+			input:   `{not-valid-json}`,
+			wantErr: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var out any
+			err := unmarshalLenient(tc.input, &out)
+			if tc.wantErr && err == nil {
+				t.Fatalf("expected error for %q, got nil", tc.input)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("expected no error for %q, got %v", tc.input, err)
+			}
+		})
+	}
+}
+
+func TestUnmarshalLenient_StrayToken(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{
+			name:    "stray_digit_after_value",
+			input:   `{"score":1 2}`,
+			wantErr: false,
+		},
+		{
+			name:    "stray_digit_before_comma",
+			input:   `{"a":1 2, "b":3}`,
+			wantErr: false,
+		},
+		{
+			name:    "stray_token_in_array",
+			input:   `[1 2, 3]`,
+			wantErr: false,
+		},
+		{
+			name:    "unquoted_key_still_fails",
+			input:   `{not-valid-json}`,
+			wantErr: true,
+		},
+		{
+			name:    "missing_comma_not_destructive",
+			input:   `{"a":1 "b":3}`,
+			wantErr: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var out any
+			err := unmarshalLenient(tc.input, &out)
+			if tc.wantErr && err == nil {
+				t.Fatalf("expected error for %q, got nil", tc.input)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("expected no error for %q, got %v", tc.input, err)
+			}
+		})
+	}
+}
+
+func TestRepairStrayTokenAtSyntaxError(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		want      string
+		wantOK    bool
+	}{
+		{
+			name:   "drops_stray_digit",
+			input:  `{"score":1 2}`,
+			want:   `{"score":1 }`,
+			wantOK: true,
+		},
+		{
+			name:   "keeps_missing_comma_intact",
+			input:  `{"a":1 "b":3}`,
+			wantOK: false,
+		},
+		{
+			name:   "keeps_unquoted_key_intact",
+			input:  `{not-valid-json}`,
+			wantOK: false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := repairStrayTokenAtSyntaxError(tc.input)
+			if ok != tc.wantOK {
+				t.Fatalf("expected ok=%v, got %v", tc.wantOK, ok)
+			}
+			if tc.wantOK && got != tc.want {
+				t.Fatalf("expected %q, got %q", tc.want, got)
+			}
+		})
+	}
+}
+
+func TestQuoteUnquotedStrings(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "cjk_value",
+			input: `{"reason": 回复结构完整}`,
+			want:  `{"reason": "回复结构完整"}`,
+		},
+		{
+			name:  "valid_json_unchanged",
+			input: `{"reason":"回复结构完整"}`,
+			want:  `{"reason":"回复结构完整"}`,
+		},
+		{
+			name:  "number_value_unchanged",
+			input: `{"score": 1}`,
+			want:  `{"score": 1}`,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := quoteUnquotedStrings(tc.input); got != tc.want {
+				t.Fatalf("expected %q, got %q", tc.want, got)
+			}
+		})
+	}
+}
+
 func TestOutputResponseProcessor_ExtractFinalContent(t *testing.T) {
 	p := NewOutputResponseProcessor("", nil)
 	if _, ok := p.extractFinalContent(nil); ok {

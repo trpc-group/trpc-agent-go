@@ -53,6 +53,72 @@ func TestOutputResponseProcessor_StructuredOutputTypedEvent(t *testing.T) {
 	}
 }
 
+func TestOutputResponseProcessor_StructuredOutputTypedEvent_RawNewlineInString(t *testing.T) {
+	ctx := context.Background()
+	proc := NewOutputResponseProcessor("", nil)
+
+	inv := &agent.Invocation{InvocationID: "inv", AgentName: "agent"}
+	inv.StructuredOutputType = reflect.TypeOf((*sampleOut)(nil))
+
+	// LLM output defect: raw newline and tab inside a JSON string literal.
+	content := "{\"a\": \"line1\nline2\tend\"}"
+	rsp := &model.Response{
+		Done:    true,
+		Choices: []model.Choice{{Message: model.Message{Content: content}}},
+	}
+
+	ch := make(chan *event.Event, 1)
+	proc.ProcessResponse(ctx, inv, &model.Request{}, rsp, ch)
+
+	select {
+	case evt := <-ch:
+		out, ok := evt.StructuredOutput.(*sampleOut)
+		if !ok {
+			t.Fatalf("expected *sampleOut, got %T", evt.StructuredOutput)
+		}
+		if out.A != "line1\nline2\tend" {
+			t.Fatalf("unexpected value: %q", out.A)
+		}
+	default:
+		t.Fatalf("expected an event to be emitted despite raw control chars")
+	}
+}
+
+func TestUnmarshalLenient(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantA   string
+		wantErr bool
+	}{
+		{name: "strict valid", input: `{"a":"ok"}`, wantA: "ok"},
+		{name: "raw newline repaired", input: "{\"a\":\"x\ny\"}", wantA: "x\ny"},
+		{name: "raw carriage return repaired", input: "{\"a\":\"x\r\ny\"}", wantA: "x\r\ny"},
+		{name: "other control char repaired", input: "{\"a\":\"x\x01y\"}", wantA: "x\x01y"},
+		{name: "escaped newline untouched", input: `{"a":"x\ny"}`, wantA: "x\ny"},
+		{name: "newline outside string untouched", input: "{\n\"a\":\"ok\"\n}", wantA: "ok"},
+		{name: "still invalid after repair", input: "{\"a\":\"x\n", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var out sampleOut
+			err := unmarshalLenient(tt.input, &out)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if out.A != tt.wantA {
+				t.Fatalf("got %q, want %q", out.A, tt.wantA)
+			}
+		})
+	}
+}
+
 func TestOutputResponseProcessor_StructuredOutputUntypedEvent(t *testing.T) {
 	ctx := context.Background()
 	proc := NewOutputResponseProcessor("", nil)

@@ -1,0 +1,210 @@
+{
+  "evalSetResultId": "promptiter-sports-recap-agent_sports-recap-validation_581f21f4-3c4f-4d8a-a30e-78ce7f07bd16",
+  "evalSetResultName": "promptiter-sports-recap-agent_sports-recap-validation_581f21f4-3c4f-4d8a-a30e-78ce7f07bd16",
+  "evalSetId": "sports-recap-validation",
+  "evalCaseResults": [
+    {
+      "evalSetId": "sports-recap-validation",
+      "evalId": "validation_01_nba_empty_48",
+      "runId": 1,
+      "finalEvalStatus": "failed",
+      "errorMessage": "run evaluation for metric llm_rubric_critic: judge response: event: Post \"https://api.openai.com/v1/chat/completions\": dial tcp 202.160.128.40:443: i/o timeout",
+      "sessionId": "52f494af-4c04-480d-a028-bd7105fccbf8",
+      "userId": "promptiter-demo-user"
+    },
+    {
+      "evalSetId": "sports-recap-validation",
+      "evalId": "validation_02_football_penalties",
+      "runId": 1,
+      "finalEvalStatus": "failed",
+      "errorMessage": "run evaluation for metric llm_rubric_critic: judge response: event: Post \"https://api.openai.com/v1/chat/completions\": dial tcp 98.159.108.61:443: i/o timeout",
+      "sessionId": "48bca922-ad55-47f6-93fe-972c8f099dde",
+      "userId": "promptiter-demo-user"
+    },
+    {
+      "evalSetId": "sports-recap-validation",
+      "evalId": "validation_03_f1_rain_safety_car",
+      "runId": 1,
+      "finalEvalStatus": "failed",
+      "errorMessage": "run evaluation for metric llm_rubric_critic: judge response: event: Post \"https://api.openai.com/v1/chat/completions\": dial tcp 199.59.148.8:443: i/o timeout",
+      "sessionId": "fb354f5e-4caf-435b-a73c-0e9c152d26c2",
+      "userId": "promptiter-demo-user"
+    },
+    {
+      "evalSetId": "sports-recap-validation",
+      "evalId": "validation_04_badminton_match_point",
+      "runId": 1,
+      "finalEvalStatus": "failed",
+      "errorMessage": "run evaluation for metric llm_rubric_critic: judge response: event: Post \"https://api.openai.com/v1/chat/completions\": dial tcp 202.160.128.40:443: i/o timeout",
+      "sessionId": "455efc2a-2b93-4a09-925c-064605171bcc",
+      "userId": "promptiter-demo-user"
+    },
+    {
+      "evalSetId": "sports-recap-validation",
+      "evalId": "validation_05_ice_hockey_overtime",
+      "runId": 1,
+      "finalEvalStatus": "failed",
+      "errorMessage": "run evaluation for metric llm_rubric_critic: judge response: event: Post \"https://api.openai.com/v1/chat/completions\": dial tcp 202.160.128.40:443: i/o timeout",
+      "sessionId": "fd3cb8a4-c164-477a-816a-33d4a1b90527",
+      "userId": "promptiter-demo-user"
+    },
+    {
+      "evalSetId": "sports-recap-validation",
+      "evalId": "validation_06_tennis_tiebreak",
+      "runId": 1,
+      "finalEvalStatus": "failed",
+      "errorMessage": "run evaluation for metric llm_rubric_critic: judge response: event: Post \"https://api.openai.com/v1/chat/completions\": dial tcp 98.159.108.61:443: i/o timeout",
+      "sessionId": "aa128805-2a3b-45a6-944c-80213967de7f",
+      "userId": "promptiter-demo-user"
+    },
+    {
+      "evalSetId": "sports-recap-validation",
+      "evalId": "validation_07_road_cycling_breakaway",
+      "runId": 1,
+      "finalEvalStatus": "failed",
+      "errorMessage": "run evaluation for metric llm_rubric_critic: judge response: event: Post \"https://api.openai.com/v1/chat/completions\": dial tcp 199.59.148.8:443: i/o timeout",
+      "sessionId": "a92764ea-6889-475e-9acb-4af32f6a6fe4",
+      "userId": "promptiter-demo-user"
+    },
+    {
+      "evalSetId": "sports-recap-validation",
+      "evalId": "validation_08_cricket_t20_chase",
+      "runId": 1,
+      "finalEvalStatus": "failed",
+      "errorMessage": "run evaluation for metric llm_rubric_critic: judge response: event: Post \"https://api.openai.com/v1/chat/completions\": dial tcp 98.159.108.61:443: i/o timeout",
+      "sessionId": "ad87500a-2e7d-47ab-8aea-d69afddaeceb",
+      "userId": "promptiter-demo-user"
+    }
+  ],
+  "summary": {
+    "overallStatus": "failed",
+    "numRuns": 1,
+    "runStatusCounts": {
+      "failed": 1
+    },
+    "runSummaries": [
+      {
+        "runId": 1,
+        "overallStatus": "failed",
+        "caseStatusCounts": {
+          "failed": 8
+        }
+      }
+    ],
+    "evalCaseSummaries": [
+      {
+        "evalId": "validation_01_nba_empty_48",
+        "overallStatus": "failed",
+        "runStatusCounts": {
+          "failed": 1
+        },
+        "runSummaries": [
+          {
+            "runId": 1,
+            "finalEvalStatus": "failed",
+            "errorMessage": "run evaluation for metric llm_rubric_critic: judge response: event: Post \"https://api.openai.com/v1/chat/completions\": dial tcp 202.160.128.40:443: i/o timeout"
+          }
+        ]
+      },
+      {
+        "evalId": "validation_02_football_penalties",
+        "overallStatus": "failed",
+        "runStatusCounts": {
+          "failed": 1
+        },
+        "runSummaries": [
+          {
+            "runId": 1,
+            "finalEvalStatus": "failed",
+            "errorMessage": "run evaluation for metric llm_rubric_critic: judge response: event: Post \"https://api.openai.com/v1/chat/completions\": dial tcp 98.159.108.61:443: i/o timeout"
+          }
+        ]
+      },
+      {
+        "evalId": "validation_03_f1_rain_safety_car",
+        "overallStatus": "failed",
+        "runStatusCounts": {
+          "failed": 1
+        },
+        "runSummaries": [
+          {
+            "runId": 1,
+            "finalEvalStatus": "failed",
+            "errorMessage": "run evaluation for metric llm_rubric_critic: judge response: event: Post \"https://api.openai.com/v1/chat/completions\": dial tcp 199.59.148.8:443: i/o timeout"
+          }
+        ]
+      },
+      {
+        "evalId": "validation_04_badminton_match_point",
+        "overallStatus": "failed",
+        "runStatusCounts": {
+          "failed": 1
+        },
+        "runSummaries": [
+          {
+            "runId": 1,
+            "finalEvalStatus": "failed",
+            "errorMessage": "run evaluation for metric llm_rubric_critic: judge response: event: Post \"https://api.openai.com/v1/chat/completions\": dial tcp 202.160.128.40:443: i/o timeout"
+          }
+        ]
+      },
+      {
+        "evalId": "validation_05_ice_hockey_overtime",
+        "overallStatus": "failed",
+        "runStatusCounts": {
+          "failed": 1
+        },
+        "runSummaries": [
+          {
+            "runId": 1,
+            "finalEvalStatus": "failed",
+            "errorMessage": "run evaluation for metric llm_rubric_critic: judge response: event: Post \"https://api.openai.com/v1/chat/completions\": dial tcp 202.160.128.40:443: i/o timeout"
+          }
+        ]
+      },
+      {
+        "evalId": "validation_06_tennis_tiebreak",
+        "overallStatus": "failed",
+        "runStatusCounts": {
+          "failed": 1
+        },
+        "runSummaries": [
+          {
+            "runId": 1,
+            "finalEvalStatus": "failed",
+            "errorMessage": "run evaluation for metric llm_rubric_critic: judge response: event: Post \"https://api.openai.com/v1/chat/completions\": dial tcp 98.159.108.61:443: i/o timeout"
+          }
+        ]
+      },
+      {
+        "evalId": "validation_07_road_cycling_breakaway",
+        "overallStatus": "failed",
+        "runStatusCounts": {
+          "failed": 1
+        },
+        "runSummaries": [
+          {
+            "runId": 1,
+            "finalEvalStatus": "failed",
+            "errorMessage": "run evaluation for metric llm_rubric_critic: judge response: event: Post \"https://api.openai.com/v1/chat/completions\": dial tcp 199.59.148.8:443: i/o timeout"
+          }
+        ]
+      },
+      {
+        "evalId": "validation_08_cricket_t20_chase",
+        "overallStatus": "failed",
+        "runStatusCounts": {
+          "failed": 1
+        },
+        "runSummaries": [
+          {
+            "runId": 1,
+            "finalEvalStatus": "failed",
+            "errorMessage": "run evaluation for metric llm_rubric_critic: judge response: event: Post \"https://api.openai.com/v1/chat/completions\": dial tcp 98.159.108.61:443: i/o timeout"
+          }
+        ]
+      }
+    ]
+  },
+  "creationTimestamp": 1785220632.2084012
+}
