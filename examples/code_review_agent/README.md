@@ -23,11 +23,17 @@ The default path is `rule-only` and does not require a model API key.
   `--model` or the `TRPC_AGENT_MODEL` environment variable. `MODEL_NAME`
   remains supported for compatibility with other examples.
 
-Model findings are validated before they are trusted: confidence is clamped,
-severity/category are normalized, evidence is redacted, and findings that
-reference files or lines outside the diff are downgraded to the human-review
-bucket. A model failure never fails the review task; the run degrades to
-rule-only results and records a `model_error` exception in the metrics.
+Model findings are validated before they are trusted: confidence is calibrated,
+severity and category are normalized to a stable taxonomy, evidence is
+redacted, and findings that reference files or lines outside the diff are
+downgraded. An uncorroborated real-model finding cannot become a
+high-confidence result solely from provider-reported confidence; it is routed
+to human review or warnings. Missing-test and speculative API-misuse claims
+have stricter caps. When a deterministic rule and the model report the same
+defect at the same location, the deterministic finding wins and the model
+duplicate remains visible as a `drop_duplicate` filter decision. A model
+failure never fails the review task; the run degrades to rule-only results and
+records a `model_error` exception in the metrics.
 
 ## Run
 

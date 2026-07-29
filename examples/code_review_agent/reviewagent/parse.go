@@ -22,6 +22,12 @@ import (
 // needs-human-review bucket instead of high-confidence findings.
 const downgradedConfidence = 0.5
 
+const (
+	maxStandaloneModelConfidence = 0.74
+	maxMissingTestConfidence     = 0.60
+	maxSpeculativeConfidence     = 0.40
+)
+
 // ParsedReview is the validated payload extracted from a model reply.
 type ParsedReview struct {
 	Summary  string
@@ -61,17 +67,26 @@ func ParseModelReview(content string, files []review.ChangedFile, source string)
 		if strings.TrimSpace(f.Title) == "" {
 			continue
 		}
+		category := normalizeCategory(f.Category)
+		ruleID := normalizeRuleID(f.RuleID)
+		if source == ModeLLM {
+			category = normalizeModelCategory(f)
+			ruleID = modelRuleID(category)
+		}
 		finding := review.Finding{
 			Severity:       normalizeSeverity(f.Severity),
-			Category:       normalizeCategory(f.Category),
+			Category:       category,
 			File:           strings.TrimSpace(f.File),
 			Line:           f.Line,
 			Title:          redaction.RedactText(strings.TrimSpace(f.Title)),
 			Evidence:       redaction.RedactText(strings.TrimSpace(f.Evidence)),
 			Recommendation: redaction.RedactText(strings.TrimSpace(f.Recommendation)),
-			Confidence:     clampConfidence(f.Confidence),
+			Confidence:     calibratedConfidence(f, category, source),
 			Source:         source,
-			RuleID:         normalizeRuleID(f.RuleID),
+			RuleID:         ruleID,
+		}
+		if category == "missing_test" {
+			finding.File, finding.Line = firstAddedGoLine(files)
 		}
 		if !locationInDiff(finding.File, finding.Line, files) {
 			// The model referenced a file or line that is not part of the
@@ -128,13 +143,100 @@ func normalizeCategory(s string) string {
 	return s
 }
 
-// normalizeRuleID trims the rule ID, defaulting to LLM-GENERIC.
 func normalizeRuleID(s string) string {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return "LLM-GENERIC"
 	}
 	return s
+}
+
+// normalizeModelCategory maps provider-specific labels onto a stable taxonomy.
+func normalizeModelCategory(f modelFinding) string {
+	category := strings.NewReplacer("-", "_", " ", "_").Replace(
+		strings.ToLower(strings.TrimSpace(f.Category)))
+	switch category {
+	case "hardcoded_secret", "dynamic_sql", "goroutine_lifecycle",
+		"context_propagation", "resource_lifecycle", "ignored_error",
+		"transaction_lifecycle", "process_termination", "missing_test",
+		"compile_diagnostic":
+		return category
+	}
+	text := strings.ToLower(strings.Join([]string{
+		f.Category, f.Title, f.Evidence, f.Recommendation, f.RuleID,
+	}, " "))
+	switch {
+	case strings.Contains(text, "missing test") || strings.Contains(text, "test coverage"):
+		return "missing_test"
+	case strings.Contains(text, "hard-coded") || strings.Contains(text, "hardcoded"):
+		return "hardcoded_secret"
+	case strings.Contains(text, "sql") &&
+		(strings.Contains(text, "inject") || strings.Contains(text, "interpol")):
+		return "dynamic_sql"
+	case strings.Contains(text, "goroutine"):
+		return "goroutine_lifecycle"
+	case strings.Contains(text, "context"):
+		return "context_propagation"
+	case strings.Contains(text, "transaction") || strings.Contains(text, "rollback"):
+		return "transaction_lifecycle"
+	case strings.Contains(text, "ignored error") || strings.Contains(text, "unchecked error"):
+		return "ignored_error"
+	case strings.Contains(text, "panic") || strings.Contains(text, "fatal"):
+		return "process_termination"
+	case strings.Contains(text, "compile") || strings.Contains(text, "undefined"):
+		return "compile_diagnostic"
+	case strings.Contains(text, "leak") || strings.Contains(text, "ticker") ||
+		strings.Contains(text, "close"):
+		return "resource_lifecycle"
+	default:
+		return "other"
+	}
+}
+
+// modelRuleID returns a stable identifier controlled by the application.
+func modelRuleID(category string) string {
+	return "LLM-" + strings.ToUpper(strings.ReplaceAll(category, "_", "-"))
+}
+
+// calibratedConfidence treats provider confidence as an input, not a verdict.
+// Standalone model findings require human review unless corroborated later by a
+// deterministic rule, while speculative API-misuse claims remain warnings.
+func calibratedConfidence(f modelFinding, category, source string) float64 {
+	confidence := clampConfidence(f.Confidence)
+	if source != ModeLLM {
+		return confidence
+	}
+	confidence = minConfidence(confidence, maxStandaloneModelConfidence)
+	if category == "missing_test" {
+		confidence = minConfidence(confidence, maxMissingTestConfidence)
+	}
+	text := strings.ToLower(strings.Join([]string{
+		f.Title, f.Evidence, f.Recommendation,
+	}, " "))
+	if speculativeEnvironmentClaim(text) || speculativeTickerDrainClaim(text) ||
+		strings.TrimSpace(f.Evidence) == "" {
+		confidence = minConfidence(confidence, maxSpeculativeConfidence)
+	}
+	return confidence
+}
+
+func speculativeEnvironmentClaim(text string) bool {
+	return (strings.Contains(text, "environment variable") ||
+		strings.Contains(text, "os.getenv")) &&
+		(strings.HasPrefix(text, "if ") || strings.Contains(text, " if ") ||
+			strings.Contains(text, "could") ||
+			strings.Contains(text, "may"))
+}
+
+func speculativeTickerDrainClaim(text string) bool {
+	return strings.Contains(text, "ticker") && strings.Contains(text, "drain")
+}
+
+func minConfidence(value, maximum float64) float64 {
+	if value > maximum {
+		return maximum
+	}
+	return value
 }
 
 // clampConfidence bounds a confidence value to the [0, 1] range.
@@ -163,4 +265,20 @@ func locationInDiff(file string, line int, files []review.ChangedFile) bool {
 		}
 	}
 	return false
+}
+
+func firstAddedGoLine(files []review.ChangedFile) (string, int) {
+	for _, file := range files {
+		if file.Language != "go" || strings.HasSuffix(file.NewPath, "_test.go") {
+			continue
+		}
+		for _, hunk := range file.Hunks {
+			for _, line := range hunk.Lines {
+				if line.Kind == "added" {
+					return file.NewPath, line.NewLine
+				}
+			}
+		}
+	}
+	return "", 0
 }

@@ -277,7 +277,9 @@ func Merge(res Result, extra []review.Finding) Result {
 	return merged
 }
 
-// Deduplicate keeps the highest-confidence finding for the same file/line/rule.
+// Deduplicate keeps the best-supported finding for the same file, line, and
+// stable defect class. This collapses model restatements of deterministic
+// rules without using fuzzy title or evidence matching.
 func Deduplicate(in []review.Finding) []review.Finding {
 	best := map[string]review.Finding{}
 	for _, f := range in {
@@ -304,7 +306,35 @@ func Deduplicate(in []review.Finding) []review.Finding {
 
 // dedupKey identifies findings that describe the same defect.
 func dedupKey(f review.Finding) string {
-	return f.File + "\x00" + f.RuleID + "\x00" + f.Category + "\x00" + itoa(f.Line)
+	return f.File + "\x00" + semanticClass(f) + "\x00" + itoa(f.Line)
+}
+
+func semanticClass(f review.Finding) string {
+	switch f.RuleID {
+	case "SEC001", "LLM-HARDCODED-SECRET":
+		return "hardcoded_secret"
+	case "SEC002", "LLM-DYNAMIC-SQL":
+		return "dynamic_sql"
+	case "GOR001", "LLM-GOROUTINE-LIFECYCLE":
+		return "goroutine_lifecycle"
+	case "CTX001", "LLM-CONTEXT-PROPAGATION":
+		return "context_propagation"
+	case "RES001", "GOR002", "LLM-RESOURCE-LIFECYCLE":
+		return "resource_lifecycle"
+	case "ERR001", "LLM-IGNORED-ERROR":
+		return "ignored_error"
+	case "DB001", "LLM-TRANSACTION-LIFECYCLE":
+		return "transaction_lifecycle"
+	case "PANIC001", "LLM-PROCESS-TERMINATION":
+		return "process_termination"
+	case "TEST001", "LLM-MISSING-TEST":
+		return "missing_test"
+	case "DIAG-GOTEST", "DIAG-GOVET", "DIAG-STATICCHECK",
+		"DIAG-TOOL", "LLM-COMPILE-DIAGNOSTIC":
+		return "compile_diagnostic:" + f.Title
+	default:
+		return f.RuleID + "\x00" + f.Category
+	}
 }
 
 // dedupDropDecisions records one drop decision per finding that loses
@@ -385,6 +415,9 @@ func splitByConfidence(in []review.Finding) Result {
 
 // better reports whether finding a should win deduplication over b.
 func better(a, b review.Finding) bool {
+	if deterministicSource(a.Source) != deterministicSource(b.Source) {
+		return deterministicSource(a.Source)
+	}
 	if severityRank(a.Severity) != severityRank(b.Severity) {
 		return severityRank(a.Severity) > severityRank(b.Severity)
 	}
@@ -392,6 +425,10 @@ func better(a, b review.Finding) bool {
 		return a.Confidence > b.Confidence
 	}
 	return len(a.Evidence) > len(b.Evidence)
+}
+
+func deterministicSource(source string) bool {
+	return source != "llm" && source != "fake-model"
 }
 
 // severityRank orders severities so higher values indicate worse defects.

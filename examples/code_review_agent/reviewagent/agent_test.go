@@ -145,6 +145,15 @@ func TestBuildPromptContainsFileAndLines(t *testing.T) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
 		}
 	}
+	for _, want := range []string{
+		"hypothetical caller misuse are not findings",
+		"environment variable or secret manager is not itself a leak",
+		"time.Ticker.Stop does not require draining ticker.C",
+	} {
+		if !strings.Contains(instruction, want) {
+			t.Fatalf("instruction missing %q", want)
+		}
+	}
 }
 
 // TestBuildPromptEnforcesHardByteCap verifies one untrusted line cannot exceed

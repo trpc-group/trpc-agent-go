@@ -244,7 +244,7 @@ func TestLLMModeOpenAICompatibleEndpoint(t *testing.T) {
 			t.Errorf("read request: %v", err)
 		}
 		content := `{"summary":"model endpoint review succeeded","findings":[` +
-			`{"severity":"high","category":"security","file":"security/secret.go",` +
+			`{"severity":"high","category":"hardcoded_secret","file":"security/secret.go",` +
 			`"line":3,"title":"Avoid committed credentials","evidence":"redacted credential",` +
 			`"recommendation":"Load the value from a secret store","confidence":0.95,` +
 			`"rule_id":"LLM-SECRET"}]}`
@@ -284,8 +284,19 @@ func TestLLMModeOpenAICompatibleEndpoint(t *testing.T) {
 	if report.Metrics.ModelCallCount != 1 || report.Metrics.ExceptionCounts["model_error"] != 0 {
 		t.Fatalf("unexpected model metrics: %+v", report.Metrics)
 	}
-	if !hasRule(report, "LLM-SECRET") {
-		t.Fatal("parsed model finding is missing")
+	if !hasRule(report, "SEC001") {
+		t.Fatal("deterministic secret finding is missing")
+	}
+	foundModelDrop := false
+	for _, decision := range report.FilterDecisions {
+		if decision.RuleID == "LLM-HARDCODED-SECRET" &&
+			decision.Decision == review.FilterDecisionDropDuplicate {
+			foundModelDrop = true
+			break
+		}
+	}
+	if !foundModelDrop {
+		t.Fatal("model duplicate is missing an auditable filter decision")
 	}
 	if !strings.Contains(report.Summary, "model endpoint review succeeded") {
 		t.Fatalf("model summary is missing: %q", report.Summary)

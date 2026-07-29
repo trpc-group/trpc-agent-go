@@ -67,8 +67,16 @@ one JSON object and nothing else:
 {"summary":"...","findings":[{"severity":"critical|high|medium|low",
 "category":"...","file":"...","line":1,"title":"...","evidence":"...",
 "recommendation":"...","confidence":0.0,"rule_id":"LLM-..."}]}
-Use an empty findings array when the diff looks clean. Confidence must be
-between 0 and 1 and reflect how certain you are.`
+Use exactly one of these categories: hardcoded_secret, dynamic_sql,
+goroutine_lifecycle, context_propagation, resource_lifecycle, ignored_error,
+transaction_lifecycle, process_termination, missing_test, compile_diagnostic,
+or other. Use an empty findings array when the diff looks clean. A finding must
+identify a concrete failure path caused by the added code; style preferences,
+defensive suggestions, and hypothetical caller misuse are not findings. Reading
+a secret from an environment variable or secret manager is not itself a leak.
+time.Ticker.Stop does not require draining ticker.C. Missing-test observations
+must identify meaningful untested behavior and must not use confidence above
+0.6. Confidence must be between 0 and 1 and reflect how certain you are.`
 
 // Review runs the review agent and returns validated model findings.
 // Failures are returned as errors so the caller can degrade to rule-only

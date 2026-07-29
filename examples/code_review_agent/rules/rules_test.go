@@ -90,6 +90,46 @@ func TestMergeReclassifiesModelFindings(t *testing.T) {
 	}
 }
 
+// TestMergeDeduplicatesSemanticModelFinding verifies a model restatement uses
+// the deterministic rule as the stable report entry and records the drop.
+func TestMergeDeduplicatesSemanticModelFinding(t *testing.T) {
+	base := Result{Findings: []review.Finding{{
+		File: "a.go", Line: 3, Category: "security", RuleID: "SEC001",
+		Severity: review.SeverityCritical, Confidence: 0.96, Source: "rule-only",
+	}}}
+	merged := Merge(base, []review.Finding{{
+		File: "a.go", Line: 3, Category: "hardcoded_secret",
+		RuleID: "LLM-HARDCODED-SECRET", Severity: review.SeverityHigh,
+		Confidence: 0.74, Source: "llm",
+	}})
+	if len(merged.Findings) != 1 || merged.Findings[0].RuleID != "SEC001" {
+		t.Fatalf("semantic duplicate was not collapsed: %+v", merged.Findings)
+	}
+	for _, decision := range merged.FilterDecisions {
+		if decision.RuleID == "LLM-HARDCODED-SECRET" &&
+			decision.Decision == review.FilterDecisionDropDuplicate {
+			return
+		}
+	}
+	t.Fatal("model duplicate is missing an auditable drop decision")
+}
+
+// TestMergeDoesNotDeduplicateDifferentLines protects distinct defects in the
+// same semantic class from being merged.
+func TestMergeDoesNotDeduplicateDifferentLines(t *testing.T) {
+	base := Result{Findings: []review.Finding{{
+		File: "a.go", Line: 3, RuleID: "RES001", Source: "rule-only",
+		Severity: review.SeverityHigh, Confidence: 0.82,
+	}}}
+	merged := Merge(base, []review.Finding{{
+		File: "a.go", Line: 9, RuleID: "LLM-RESOURCE-LIFECYCLE", Source: "llm",
+		Severity: review.SeverityMedium, Confidence: 0.74,
+	}})
+	if len(merged.Findings) != 1 || len(merged.NeedsHumanReview) != 1 {
+		t.Fatalf("distinct defects were merged: %+v", merged)
+	}
+}
+
 // TestFilterPipelineRecordsDecisions verifies every keep, demote, and drop is recorded.
 func TestFilterPipelineRecordsDecisions(t *testing.T) {
 	in := []review.Finding{

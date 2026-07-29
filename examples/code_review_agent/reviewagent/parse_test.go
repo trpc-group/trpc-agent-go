@@ -17,7 +17,7 @@ import (
 // TestParseModelReviewFencedJSON verifies fenced JSON model replies are parsed.
 func TestParseModelReviewFencedJSON(t *testing.T) {
 	content := "Here is my review:\n```json\n" +
-		`{"summary":"one issue","findings":[{"severity":"HIGH","category":"Concurrency",` +
+		`{"summary":"one issue","findings":[{"severity":"HIGH","category":"goroutine_lifecycle",` +
 		`"file":"pkg/service/service.go","line":11,"title":"leak","evidence":"go func",` +
 		`"recommendation":"add ctx","confidence":1.7,"rule_id":"LLM-CONC"}]}` +
 		"\n```\nthanks"
@@ -29,14 +29,49 @@ func TestParseModelReviewFencedJSON(t *testing.T) {
 		t.Fatalf("unexpected parse result: %+v", parsed)
 	}
 	f := parsed.Findings[0]
-	if f.Severity != "high" || f.Category != "concurrency" {
+	if f.Severity != "high" || f.Category != "goroutine_lifecycle" ||
+		f.RuleID != "LLM-GOROUTINE-LIFECYCLE" {
 		t.Fatalf("normalization failed: %+v", f)
 	}
-	if f.Confidence != 1 {
-		t.Fatalf("confidence not clamped: %v", f.Confidence)
+	if f.Confidence != maxStandaloneModelConfidence {
+		t.Fatalf("confidence not calibrated: %v", f.Confidence)
 	}
 	if f.Source != ModeLLM {
 		t.Fatalf("source = %q", f.Source)
+	}
+}
+
+// TestParseModelReviewCalibratesNoise verifies provider certainty cannot turn
+// speculative API advice or missing tests into high-confidence defects.
+func TestParseModelReviewCalibratesNoise(t *testing.T) {
+	content := `{"summary":"","findings":[` +
+		`{"severity":"medium","category":"resource-leak","file":"pkg/service/service.go",` +
+		`"line":11,"title":"Stopped ticker may retain a tick",` +
+		`"evidence":"ticker may need draining after Stop","recommendation":"drain ticker.C",` +
+		`"confidence":0.99,"rule_id":"provider-1"},` +
+		`{"severity":"low","category":"missing-test","file":"pkg/service/service.go",` +
+		`"line":11,"title":"Missing test","evidence":"new behavior has no test",` +
+		`"recommendation":"add a test","confidence":1,"rule_id":"provider-2"},` +
+		`{"severity":"low","category":"security","file":"pkg/service/service.go",` +
+		`"line":11,"title":"Environment variable may leak",` +
+		`"evidence":"os.Getenv could be logged by a caller","recommendation":"wrap it",` +
+		`"confidence":0.9,"rule_id":"provider-3"}]}`
+	parsed, err := ParseModelReview(content, testFiles(), ModeLLM)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if len(parsed.Findings) != 3 {
+		t.Fatalf("findings=%d, want 3", len(parsed.Findings))
+	}
+	want := map[string]float64{
+		"LLM-RESOURCE-LIFECYCLE": maxSpeculativeConfidence,
+		"LLM-MISSING-TEST":       maxMissingTestConfidence,
+		"LLM-OTHER":              maxSpeculativeConfidence,
+	}
+	for _, finding := range parsed.Findings {
+		if finding.Confidence != want[finding.RuleID] {
+			t.Fatalf("finding %+v has unexpected calibrated confidence", finding)
+		}
 	}
 }
 
