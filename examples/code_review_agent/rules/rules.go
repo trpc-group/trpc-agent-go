@@ -329,9 +329,12 @@ func semanticClass(f review.Finding) string {
 		return "process_termination"
 	case "TEST001", "LLM-MISSING-TEST":
 		return "missing_test"
-	case "DIAG-GOTEST", "DIAG-GOVET", "DIAG-STATICCHECK",
-		"DIAG-TOOL", "LLM-COMPILE-DIAGNOSTIC":
-		return "compile_diagnostic:" + f.Title
+	case "LLM-COMPILE-DIAGNOSTIC":
+		return "model_compile_diagnostic"
+	case "DIAG-GOTEST", "DIAG-GOVET", "DIAG-STATICCHECK", "DIAG-TOOL":
+		// Each command is independent acceptance evidence. Preserve its
+		// stable rule ID even when multiple tools report the same location.
+		return f.RuleID
 	default:
 		return f.RuleID + "\x00" + f.Category
 	}

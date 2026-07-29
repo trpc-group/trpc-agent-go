@@ -130,6 +130,22 @@ func TestMergeDoesNotDeduplicateDifferentLines(t *testing.T) {
 	}
 }
 
+// TestDeduplicatePreservesCommandDiagnostics verifies independent sandbox
+// commands remain visible when they report the same compiler error.
+func TestDeduplicatePreservesCommandDiagnostics(t *testing.T) {
+	findings := Deduplicate([]review.Finding{
+		{File: "broken.go", Line: 4, RuleID: "DIAG-GOTEST",
+			Title: "Sandbox diagnostic: undefined: missingSymbol", Source: "sandbox"},
+		{File: "broken.go", Line: 4, RuleID: "DIAG-GOVET",
+			Title: "Sandbox diagnostic: undefined: missingSymbol", Source: "sandbox"},
+		{File: "broken.go", Line: 4, RuleID: "DIAG-STATICCHECK",
+			Title: "Sandbox diagnostic: undefined: missingSymbol", Source: "sandbox"},
+	})
+	if len(findings) != 3 {
+		t.Fatalf("diagnostics=%d, want 3: %+v", len(findings), findings)
+	}
+}
+
 // TestFilterPipelineRecordsDecisions verifies every keep, demote, and drop is recorded.
 func TestFilterPipelineRecordsDecisions(t *testing.T) {
 	in := []review.Finding{
