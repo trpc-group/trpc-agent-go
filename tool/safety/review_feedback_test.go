@@ -233,8 +233,8 @@ func TestPolicyRejectsUnsupportedVersionsAndUnknownRules(t *testing.T) {
 	}{
 		{format: "json", data: `{"version":"2"}`},
 		{format: "yaml", data: "version: '10'\n"},
-		{format: "json", data: `{"rules":{"TSG-NETWORK-DOMAIN-ALLOWD":{"action":"deny"}}}`},
-		{format: "yaml", data: "rules:\n  TSG-NETWORK-DOMAIN-ALLOWD:\n    action: deny\n"},
+		{format: "json", data: `{"rules":{"TSG-UNKNOWN-RULE-ID":{"action":"deny"}}}`},
+		{format: "yaml", data: "rules:\n  TSG-UNKNOWN-RULE-ID:\n    action: deny\n"},
 	} {
 		if _, err := ParsePolicy([]byte(tc.data), tc.format); err == nil {
 			t.Fatalf("%s policy accepted %s", tc.format, tc.data)
@@ -244,7 +244,7 @@ func TestPolicyRejectsUnsupportedVersionsAndUnknownRules(t *testing.T) {
 		t.Fatal("NewScanner accepted unsupported policy version")
 	}
 	if _, err := NewScanner(Policy{Rules: map[string]RulePolicyOverride{
-		"TSG-NETWORK-DOMAIN-ALLOWD": {Action: DecisionDeny},
+		"TSG-UNKNOWN-RULE-ID": {Action: DecisionDeny},
 	}}); err == nil {
 		t.Fatal("NewScanner accepted unknown rule override")
 	}
