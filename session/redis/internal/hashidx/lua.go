@@ -371,49 +371,6 @@ end
 return 1
 `)
 
-// luaCloseSessionForDelete makes a session unavailable to appends while
-// retaining discovered track names for the cleanup phase.
-// The first five keys are session meta, event data, event time index, summary,
-// and the track-name index.
-// The optional sixth key is the per-user session index hash.
-// The arguments are sessionID, track TTL seconds, whether TrackEventTTL is
-// explicitly set, and discovered track names.
-var luaCloseSessionForDelete = redis.NewScript(`
-local metaKey = KEYS[1]
-local eventDataKey = KEYS[2]
-local eventTimeKey = KEYS[3]
-local summaryKey = KEYS[4]
-local trackNamesKey = KEYS[5]
-local sessionID = ARGV[1]
-local ttl = tonumber(ARGV[2])
-local trackTTLSet = tonumber(ARGV[3]) == 1
-local seededTrack = false
-
-for i = 4, #ARGV do
-    local trackName = ARGV[i]
-    if trackName and trackName ~= '' then
-        redis.call('SADD', trackNamesKey, trackName)
-        seededTrack = true
-    end
-end
-
-if seededTrack then
-    if ttl > 0 then
-        redis.call('EXPIRE', trackNamesKey, ttl)
-    elseif trackTTLSet then
-        redis.call('PERSIST', trackNamesKey)
-    end
-end
-
-redis.call('DEL', metaKey, eventDataKey, eventTimeKey, summaryKey)
-
-if #KEYS >= 6 and sessionID and sessionID ~= '' then
-    redis.call('HDEL', KEYS[6], sessionID)
-end
-
-return 1
-`)
-
 // luaDeleteSession deletes all session data including any track keys,
 // and removes the session from the session index Hash.
 // KEYS[1..N-1] = keys to delete (meta, evtdata, evtidx:time, summary, track keys...)
