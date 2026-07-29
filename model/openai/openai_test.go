@@ -1105,6 +1105,21 @@ func TestWithContextWindowResolver(t *testing.T) {
 	m = New("unknown-model", WithContextWindowResolver(resolver))
 	require.Zero(t, m.Info().ContextWindow)
 
+	const registeredModelName = "gpt-4o"
+	m = New(
+		registeredModelName,
+		WithContextWindowResolver(func(model.ContextWindowRequest) (int, bool) {
+			return 0, false
+		}),
+	)
+	registeredWindow := imodel.ResolveContextWindow(registeredModelName)
+	require.Positive(t, registeredWindow)
+	require.Equal(
+		t,
+		imodel.CalculateMaxInputTokens(registeredWindow),
+		m.InputTokenBudget(context.Background(), nil),
+	)
+
 	m = New(
 		modelName,
 		WithContextWindowResolver(func(model.ContextWindowRequest) (int, bool) {
