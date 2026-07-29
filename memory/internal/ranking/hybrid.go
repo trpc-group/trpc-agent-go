@@ -32,10 +32,12 @@ func MergeHybrid(
 	if len(keywordResults) > 0 {
 		rankings = append(rankings, keywordResults)
 	}
-	if focused := rankResultsByFocusedPassage(
-		query, vectorResults,
-	); len(focused) > 0 {
-		rankings = append(rankings, focused)
+	if asksForAssistantResult(query) {
+		if focused := rankResultsByFocusedPassage(
+			query, vectorResults,
+		); len(focused) > 0 {
+			rankings = append(rankings, focused)
+		}
 	}
 	if provenance := rankResultsByAssistantResultIntent(
 		query, vectorResults, keywordResults,

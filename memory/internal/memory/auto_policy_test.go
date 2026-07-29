@@ -193,6 +193,61 @@ func TestAssistantResultPolicy_StrictEnrichmentUpdates(t *testing.T) {
 	assert.Contains(t, out[0].Topics, "time")
 }
 
+func TestAssistantResultPolicy_StrictEnrichmentRespectsUpdatePolicy(
+	t *testing.T,
+) {
+	oldTime := time.Date(2025, 12, 1, 0, 0, 0, 0, time.UTC)
+	newTime := time.Date(2025, 12, 1, 16, 0, 0, 0, time.UTC)
+	existing := []*memory.Entry{{
+		ID: "alice-visit",
+		Memory: &memory.Memory{
+			Memory:    "Alice visited Bob on December 1st, 2025.",
+			Topics:    []string{"Alice", "Bob", "visit"},
+			Kind:      memory.KindEpisode,
+			EventTime: &oldTime,
+		},
+	}}
+	in := []*extractor.Operation{{
+		Type:       extractor.OperationAdd,
+		Memory:     "Alice visited Bob at 4pm on December 1st, 2025.",
+		Topics:     []string{"Alice", "Bob", "visit", "time"},
+		MemoryKind: memory.KindEpisode,
+		EventTime:  &newTime,
+	}}
+
+	t.Run("history preserving permits lossless enrichment", func(t *testing.T) {
+		worker := NewAutoMemoryWorker(
+			AutoMemoryConfig{}, newMockOperator(),
+		)
+		worker.updatePolicy = extractor.UpdatePolicyHistoryPreserving
+
+		out := worker.applyAssistantResultPolicy(
+			context.Background(), reconcileUserKey(), in, existing,
+		)
+
+		require.Len(t, out, 1)
+		assert.Equal(t, extractor.OperationUpdate, out[0].Type)
+		assert.Equal(t, "alice-visit", out[0].MemoryID)
+		assert.Equal(t, &newTime, out[0].EventTime)
+	})
+
+	t.Run("add only remains additive", func(t *testing.T) {
+		worker := NewAutoMemoryWorker(
+			AutoMemoryConfig{}, newMockOperator(),
+		)
+		worker.updatePolicy = extractor.UpdatePolicyAddOnly
+
+		out := worker.applyAssistantResultPolicy(
+			context.Background(), reconcileUserKey(), in, existing,
+		)
+
+		require.Len(t, out, 1)
+		assert.Equal(t, extractor.OperationAdd, out[0].Type)
+		assert.Empty(t, out[0].MemoryID)
+		assert.Equal(t, &newTime, out[0].EventTime)
+	})
+}
+
 func TestAssistantResultPolicy_KeepsCoveredSubset(t *testing.T) {
 	existing := []*memory.Entry{{
 		ID: "existing-result",

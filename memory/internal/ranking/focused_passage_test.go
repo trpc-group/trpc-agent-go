@@ -61,6 +61,25 @@ func TestRankResultsByFocusedPassagePrefersRequestedRelation(t *testing.T) {
 	assert.Same(t, resources, got[0])
 }
 
+func TestRankResultsByFocusedPassageWorksOutsideSoftwareDomain(t *testing.T) {
+	t.Parallel()
+
+	restaurant := focusedPassageEntry(
+		"Assistant result: Evening restaurant recommendation: Noodle House.",
+	)
+	activity := focusedPassageEntry(
+		"Assistant result: Evening activity recommendation: Jazz Hall.",
+	)
+
+	got := rankResultsByFocusedPassage(
+		"Which evening restaurant did you recommend?",
+		[]*memory.Entry{activity, restaurant},
+	)
+
+	require.NotEmpty(t, got)
+	assert.Same(t, restaurant, got[0])
+}
+
 func TestRankResultsByFocusedPassageSkipsWeakFocus(t *testing.T) {
 	t.Parallel()
 	entry := focusedPassageEntry("Visited Kyoto during spring.")

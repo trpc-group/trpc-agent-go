@@ -15,29 +15,67 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory/internal/assistantresult"
 )
 
-var assistantResultDirectRecallPhrases = []string{
+type assistantResultRecallVerb struct {
+	base string
+	past string
+}
+
+var assistantResultRecallVerbs = []assistantResultRecallVerb{
+	{base: "list", past: "listed"},
+	{base: "mention", past: "mentioned"},
+	{base: "recommend", past: "recommended"},
+	{base: "say", past: "said"},
+	{base: "suggest", past: "suggested"},
+	{base: "tell", past: "told"},
+}
+
+var assistantResultPastReferencePhrases = []string{
+	"earlier",
+	"last time",
+	"previous",
+	"prior",
+}
+
+var assistantResultOwners = []string{
+	"your",
 	"assistant's",
-	"earlier you",
-	"did you mention",
-	"did you recommend",
-	"did you say",
-	"did you suggest",
-	"the assistant",
-	"you listed",
-	"you mentioned",
-	"you recommended",
-	"you said",
-	"you suggested",
-	"you told me",
-	"your earlier answer",
-	"your earlier recommendation",
-	"your earlier response",
-	"your last answer",
-	"your last recommendation",
-	"your last response",
-	"your previous answer",
-	"your previous recommendation",
-	"your previous response",
+	"the assistant's",
+}
+
+var assistantResultResponseNouns = []string{
+	"answer",
+	"recommendation",
+	"reply",
+	"response",
+}
+
+var assistantResultCJKSubjects = []string{
+	"你",
+	"助手",
+	"助理",
+}
+
+var assistantResultCJKPastReferences = []string{
+	"上次",
+	"之前",
+	"此前",
+	"先前",
+	"刚才",
+	"前面",
+	"上一轮",
+}
+
+var assistantResultCJKActions = []string{
+	"推荐",
+	"建议",
+	"提到",
+	"说",
+	"列出",
+	"回答",
+	"回复",
+	"给出",
+	"告诉",
+	"总结",
 }
 
 var assistantResultConversationPhrases = []string{
@@ -85,15 +123,68 @@ func rankResultsByAssistantResultIntent(
 
 func asksForAssistantResult(query string) bool {
 	query = strings.ToLower(strings.Join(strings.Fields(query), " "))
-	for _, phrase := range assistantResultDirectRecallPhrases {
-		if strings.Contains(query, phrase) {
-			return true
-		}
+	if asksForEnglishAssistantResult(query) {
+		return true
+	}
+	if containsAssistantResultPhrase(
+		query, assistantResultPastReferencePhrases,
+	) && containsAssistantResultPhrase(
+		query, assistantResultOwners,
+	) && containsAssistantResultPhrase(
+		query, assistantResultResponseNouns,
+	) {
+		return true
+	}
+	if asksForCJKAssistantResult(query) {
+		return true
 	}
 	if !strings.Contains(query, "remind me") {
 		return false
 	}
 	for _, phrase := range assistantResultConversationPhrases {
+		if strings.Contains(query, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
+func asksForEnglishAssistantResult(query string) bool {
+	for _, verb := range assistantResultRecallVerbs {
+		for _, subject := range []string{"you", "the assistant"} {
+			if strings.Contains(
+				query, "did "+subject+" "+verb.base,
+			) || strings.Contains(
+				query, subject+" "+verb.past,
+			) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func asksForCJKAssistantResult(query string) bool {
+	if !containsAssistantResultPhrase(query, assistantResultCJKSubjects) ||
+		!containsAssistantResultPhrase(query, assistantResultCJKActions) {
+		return false
+	}
+	return containsAssistantResultPhrase(
+		query, assistantResultCJKPastReferences,
+	) || containsCompletedCJKAssistantResultAction(query)
+}
+
+func containsCompletedCJKAssistantResultAction(query string) bool {
+	for _, action := range assistantResultCJKActions {
+		if strings.Contains(query, action+"了") {
+			return true
+		}
+	}
+	return false
+}
+
+func containsAssistantResultPhrase(query string, phrases []string) bool {
+	for _, phrase := range phrases {
 		if strings.Contains(query, phrase) {
 			return true
 		}

@@ -54,7 +54,7 @@ func TestMergeHybridUsesFocusedRanking(t *testing.T) {
 		},
 	}
 	results := MergeHybrid(
-		"Which back-end languages were recommended?",
+		"Which back-end languages did you recommend?",
 		[]*memory.Entry{resources, languages},
 		nil,
 		0,
@@ -63,4 +63,32 @@ func TestMergeHybridUsesFocusedRanking(t *testing.T) {
 
 	require.Len(t, results, 2)
 	assert.Equal(t, "languages", results[0].ID)
+}
+
+func TestMergeHybridDoesNotFocusAssistantResultForUserRecall(t *testing.T) {
+	t.Parallel()
+
+	assistant := &memory.Entry{
+		ID: "assistant",
+		Memory: &memory.Memory{
+			Memory: "Assistant result: Suggested the evening train.",
+		},
+	}
+	user := &memory.Entry{
+		ID: "user",
+		Memory: &memory.Memory{
+			Memory: "User chose Express 7 for the evening departure.",
+		},
+	}
+
+	results := MergeHybrid(
+		"Which evening train did I choose?",
+		[]*memory.Entry{assistant, user},
+		nil,
+		0,
+		2,
+	)
+
+	require.Len(t, results, 2)
+	assert.Equal(t, "user", results[0].ID)
 }

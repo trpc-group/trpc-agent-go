@@ -60,6 +60,28 @@ func TestRankResultsByAssistantResultIntentRequiresMixedProvenance(t *testing.T)
 	))
 }
 
+func TestRankResultsByAssistantResultIntentPrefersUserChoice(
+	t *testing.T,
+) {
+	user := &memory.Entry{
+		ID: "user",
+		Memory: &memory.Memory{
+			Memory: "User chose the morning train.",
+		},
+	}
+	assistant := assistantResultEntry(
+		"assistant", "Suggested the evening train.",
+	)
+
+	actual := rankResultsByAssistantResultIntent(
+		"Which train did I choose?",
+		[]*memory.Entry{assistant, user},
+	)
+
+	require.Len(t, actual, 1)
+	assert.Same(t, user, actual[0])
+}
+
 func TestAsksForAssistantResult(t *testing.T) {
 	for _, query := range []string{
 		"What did you recommend?",
@@ -67,6 +89,9 @@ func TestAsksForAssistantResult(t *testing.T) {
 		"Following up on our previous conversation, can you remind me who was mentioned?",
 		"What did the assistant say?",
 		"What was your previous answer?",
+		"Which options came from your earlier reply?",
+		"你上次推荐了哪些选项？",
+		"你推荐了什么？",
 	} {
 		assert.True(t, asksForAssistantResult(query), query)
 	}
@@ -79,6 +104,9 @@ func TestAsksForAssistantResult(t *testing.T) {
 		"What did I buy?",
 		"What did I mention in our previous conversation?",
 		"What is your recommendation?",
+		"What can the assistant do?",
+		"Summarize the assistant's capabilities.",
+		"你了解哪些推荐系统？",
 	} {
 		assert.False(t, asksForAssistantResult(query), query)
 	}
