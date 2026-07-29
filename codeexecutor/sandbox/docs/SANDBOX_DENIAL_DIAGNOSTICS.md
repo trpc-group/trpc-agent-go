@@ -155,7 +155,7 @@ disjunctive (any matching rule suppresses a denial). Within a rule, configured
 constraints are conjunctive. Within one `DenialTargetMatcher`, non-empty fields
 are alternatives. A rule with no constraints is ignored.
 
-Set `DisableAutomatic: true` to keep the three default daemon filters visible.
+Set `DisableAutomatic: true` to make the three default daemon denials visible.
 
 ## Scope and Limits
 
