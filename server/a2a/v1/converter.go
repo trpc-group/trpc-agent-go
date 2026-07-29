@@ -496,6 +496,7 @@ func (c *defaultEventToA2AMessage) convertPartsToA2AStreamingResultWithMetadata(
 		protocol.Artifact{
 			ArtifactID: evt.Response.ID,
 			Parts:      parts,
+			Metadata:   cloneMetadata(metadata),
 		},
 		false,
 	)

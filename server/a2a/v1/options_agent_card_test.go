@@ -218,6 +218,7 @@ func TestServerContextAuthenticationAndOptions(t *testing.T) {
 		}),
 		WithUserIDHeader("X-Custom-User"),
 		WithExtraA2AOptions(),
+		WithV0Compatibility(),
 		WithTaskManagerBuilder(managerBuilder),
 		WithRunOptions(agent.WithRuntimeState(map[string]any{"key": "value"})),
 		WithA2AToAgentConverter(messageConverter),
@@ -240,6 +241,7 @@ func TestServerContextAuthenticationAndOptions(t *testing.T) {
 		opts.eventToA2AConverter != eventConverter ||
 		len(opts.graphEventObjectAllowlist) != 1 ||
 		opts.responseRewriter == nil || !opts.adkCompatibility ||
+		!opts.v0Compatibility ||
 		len(opts.eventPartMappers) != 1 || !opts.debugLogging ||
 		opts.errorHandler == nil {
 		t.Fatalf("options not applied: %#v", opts)

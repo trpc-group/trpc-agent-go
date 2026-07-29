@@ -46,7 +46,7 @@ func TestDefaultInvocationConverterContentPartsAndMetadata(t *testing.T) {
 					Name: "report.pdf", Data: []byte("file"), MimeType: "application/pdf",
 				}},
 				{Type: model.ContentTypeFile, File: &model.File{
-					URL: "https://example.com/file", MimeType: "application/pdf",
+					URL: "https://example.com/file", FileID: "ignored-file-id", MimeType: "application/pdf",
 				}},
 				{Type: model.ContentTypeFile, File: &model.File{FileID: "provider-file-id"}},
 				{Type: model.ContentTypeFile},
@@ -76,6 +76,11 @@ func TestDefaultInvocationConverterContentPartsAndMetadata(t *testing.T) {
 	}
 	if got := message.Parts[6].URLContent(); got != "https://example.com/file" {
 		t.Fatalf("file URL = %q, want https://example.com/file", got)
+	}
+	for _, part := range message.Parts {
+		if got := part.URLContent(); got == "provider-file-id" {
+			t.Fatal("provider file ID was serialized as an A2A URI")
+		}
 	}
 
 	empty, err := (&defaultEventA2AConverter{}).ConvertToA2AMessage(

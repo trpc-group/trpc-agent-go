@@ -43,7 +43,7 @@ var (
 	pollInterval = flag.Duration(
 		"poll-interval",
 		200*time.Millisecond,
-		"Interval between tasks/get requests",
+		"Interval between GetTask requests",
 	)
 	timeout = flag.Duration(
 		"timeout",
@@ -109,7 +109,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("marshal task: %v", err)
 	}
-	fmt.Printf("Retained task from tasks/get:\n%s\n", taskJSON)
+	fmt.Printf("Retained task from GetTask:\n%s\n", taskJSON)
 
 	tasks, err := a2aClient.ListTasks(
 		ctx,
@@ -119,7 +119,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("list tasks: %v", err)
 	}
-	fmt.Printf("tasks/list returned %d task(s) for context %s\n", len(tasks.Tasks), ctxID)
+	fmt.Printf("ListTasks returned %d task(s) for context %s\n", len(tasks.Tasks), ctxID)
 }
 
 func waitForTask(

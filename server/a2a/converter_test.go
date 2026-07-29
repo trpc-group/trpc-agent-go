@@ -627,6 +627,37 @@ func TestDefaultEventToA2AMessage_ConvertStreamingToA2AMessage(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "non-partial streaming event with message content",
+			event: &event.Event{
+				Response: &model.Response{
+					ID:        "resp-final",
+					IsPartial: false,
+					Choices: []model.Choice{
+						{
+							Message: model.Message{
+								Content: "Final",
+							},
+						},
+					},
+				},
+			},
+			expected: func() protocol.StreamingMessageResult {
+				taskEvent := protocol.NewTaskArtifactUpdateEvent(
+					"test-task-id",
+					"test-ctx-id",
+					protocol.Artifact{
+						ArtifactID: "resp-final",
+						Parts: []protocol.Part{
+							protocol.NewTextPart("Final"),
+						},
+					},
+					false,
+				)
+				return &taskEvent
+			}(),
+			wantErr: false,
+		},
+		{
 			name: "streaming event with error response",
 			event: &event.Event{
 				ID: "error-event-456",
