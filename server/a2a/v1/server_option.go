@@ -305,6 +305,9 @@ func WithDebugLogging(debug bool) Option {
 // WithErrorHandler sets a custom error handler.
 func WithErrorHandler(handler ErrorHandler) Option {
 	return func(opts *options) {
+		if handler == nil {
+			return
+		}
 		opts.errorHandler = handler
 	}
 }

@@ -123,7 +123,7 @@ func buildSkillsFromCardTools(
 
 	skills := make([]a2aprotocolserver.AgentSkill, 0, len(tools)+1)
 	skills = append(skills, defaultSkill)
-	skillIDCounts := make(map[string]int)
+	usedSkillIDs := map[string]struct{}{defaultSkill.ID: {}}
 
 	for _, t := range tools {
 		if t == nil {
@@ -133,11 +133,15 @@ func buildSkillsFromCardTools(
 		if decl == nil {
 			continue
 		}
-		skillID := "tool-" + decl.Name
-		skillIDCounts[skillID]++
-		if count := skillIDCounts[skillID]; count > 1 {
-			skillID = fmt.Sprintf("%s-%d", skillID, count)
+		baseSkillID := "tool-" + decl.Name
+		skillID := baseSkillID
+		for suffix := 2; ; suffix++ {
+			if _, exists := usedSkillIDs[skillID]; !exists {
+				break
+			}
+			skillID = fmt.Sprintf("%s-%d", baseSkillID, suffix)
 		}
+		usedSkillIDs[skillID] = struct{}{}
 		toolDesc := decl.Description
 		skills = append(skills, a2aprotocolserver.AgentSkill{
 			ID:          skillID,

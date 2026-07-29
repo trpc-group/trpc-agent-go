@@ -421,10 +421,11 @@ func TestProcessStreamingEventsReplacesArtifactSnapshot(t *testing.T) {
 	stream <- protocol.NewStreamResponseStatusUpdate(&completed)
 	close(stream)
 
+	eventChan := make(chan *event.Event, 4)
 	result := remote.processStreamingEvents(
 		context.Background(),
 		&agent.Invocation{InvocationID: "invocation"},
-		make(chan *event.Event, 4),
+		eventChan,
 		stream,
 	)
 	if result.terminalError != nil {
@@ -432,6 +433,23 @@ func TestProcessStreamingEventsReplacesArtifactSnapshot(t *testing.T) {
 	}
 	if result.aggregatedContent != "replacement" {
 		t.Fatalf("aggregated content = %q, want replacement", result.aggregatedContent)
+	}
+	if len(eventChan) != 2 {
+		t.Fatalf("emitted event count = %d, want 2", len(eventChan))
+	}
+	staleEvent := <-eventChan
+	if got := staleEvent.Response.Choices[0].Delta.Content; got != "stale" {
+		t.Fatalf("initial artifact delta = %q, want stale", got)
+	}
+	replacementEvent := <-eventChan
+	replacementChoice := replacementEvent.Response.Choices[0]
+	if !replacementEvent.Response.IsPartial ||
+		replacementChoice.Message.Content != "replacement" ||
+		replacementChoice.Delta.Content != "" {
+		t.Fatalf(
+			"replacement event = %#v, want partial Message snapshot",
+			replacementEvent,
+		)
 	}
 }
 

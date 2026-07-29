@@ -368,6 +368,7 @@ func TestDefaultEventConverterForwardsContentParts(t *testing.T) {
 func TestDefaultEventConverterToolAndCodeEvents(t *testing.T) {
 	converter := &defaultEventToA2AMessage{adkCompatibility: true}
 	options := EventToA2AStreamingOptions{CtxID: "context", TaskID: "task"}
+	toolResultText := "content-parts-only result"
 
 	toolEvent := event.New("inv", "agent", event.WithResponse(&model.Response{
 		ID: "tool-response",
@@ -387,7 +388,10 @@ func TestDefaultEventConverterToolAndCodeEvents(t *testing.T) {
 				Role:     model.RoleTool,
 				ToolID:   "call",
 				ToolName: "lookup",
-				Content:  `{"temperature":30}`,
+				ContentParts: []model.ContentPart{{
+					Type: model.ContentTypeText,
+					Text: &toolResultText,
+				}},
 			}},
 		},
 	}))
@@ -404,6 +408,18 @@ func TestDefaultEventConverterToolAndCodeEvents(t *testing.T) {
 			part.Metadata[ia2a.GetADKMetadataKey(ia2a.DataPartMetadataTypeKey)] == nil {
 			t.Fatalf("tool part metadata = %#v", part.Metadata)
 		}
+	}
+	responseData, ok := message.Parts[1].DataContent().(map[string]any)
+	if !ok {
+		t.Fatalf("tool response data = %#v", message.Parts[1].DataContent())
+	}
+	contentParts, ok := responseData[ia2a.ToolCallFieldContentParts].([]model.ContentPart)
+	if !ok || len(contentParts) != 1 || contentParts[0].Text == nil ||
+		*contentParts[0].Text != toolResultText {
+		t.Fatalf("tool response content parts = %#v", responseData)
+	}
+	if _, exists := responseData[ia2a.ToolCallFieldResponse]; exists {
+		t.Fatalf("empty tool response content was serialized: %#v", responseData)
 	}
 	deltaToolEvent := event.New("inv", "agent", event.WithResponse(&model.Response{
 		ID:        "delta-tool-response",
