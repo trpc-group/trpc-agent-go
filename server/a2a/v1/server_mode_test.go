@@ -452,6 +452,63 @@ func TestResponseRewriterRunsBeforeTaskAggregation(t *testing.T) {
 	}
 }
 
+func TestResponseRewriterCanEmptyArtifactParts(t *testing.T) {
+	runner := &modeTestRunner{events: []*event.Event{
+		{
+			Response: &model.Response{
+				ID:        "response",
+				IsPartial: true,
+				Choices: []model.Choice{{
+					Delta: model.Message{Content: "secret"},
+				}},
+			},
+		},
+		{
+			Response: &model.Response{
+				Object: model.ObjectTypeRunnerCompletion,
+				Done:   true,
+			},
+		},
+	}}
+	processor, err := buildProcessor("agent", &options{
+		runner:       runner,
+		errorHandler: defaultErrorHandler,
+		responseRewriter: func(
+			_ context.Context,
+			result protocol.StreamEvent,
+		) protocol.StreamEvent {
+			if update, ok := result.(*protocol.TaskArtifactUpdateEvent); ok {
+				update.Artifact.Parts = nil
+			}
+			return result
+		},
+	})
+	if err != nil {
+		t.Fatalf("buildProcessor failed: %v", err)
+	}
+	manager, err := stateless.NewTaskManager(processor)
+	if err != nil {
+		t.Fatalf("stateless.NewTaskManager failed: %v", err)
+	}
+	response, err := manager.OnSendMessage(
+		NewContextWithUserID(context.Background(), "user"),
+		protocol.SendMessageParams{Message: protocol.NewMessage(
+			protocol.MessageRoleUser,
+			[]*protocol.Part{protocol.NewTextPart("hi")},
+		)},
+	)
+	if err != nil {
+		t.Fatalf("OnSendMessage failed: %v", err)
+	}
+	task := response.GetTask()
+	if task == nil {
+		t.Fatal("response did not contain a Task")
+	}
+	if task.Status.State != protocol.TaskStateCompleted {
+		t.Fatalf("task state = %s, want completed", task.Status.State)
+	}
+}
+
 func TestTaskManagerBuilderPropagatesError(t *testing.T) {
 	wantErr := errors.New("task manager unavailable")
 	_, err := New(

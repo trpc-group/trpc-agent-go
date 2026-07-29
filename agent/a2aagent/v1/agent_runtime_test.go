@@ -67,6 +67,10 @@ func TestNewFetchesCardAndInstallsDefaultMapper(t *testing.T) {
 		Description: "description",
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/custom-card.json" {
+			http.NotFound(w, r)
+			return
+		}
 		card.URL = "http://" + r.Host
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(card); err != nil {
@@ -79,7 +83,7 @@ func TestNewFetchesCardAndInstallsDefaultMapper(t *testing.T) {
 		return false, nil
 	}
 	remote, err := New(
-		WithAgentCardURL(server.URL),
+		WithAgentCardURL(server.URL+"/custom-card.json"),
 		WithA2ADataPartMapper(mapper),
 	)
 	if err != nil {

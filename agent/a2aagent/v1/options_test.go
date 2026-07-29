@@ -140,7 +140,7 @@ func TestA2AAgentOptions(t *testing.T) {
 		option(a)
 	}
 	if a.name != "agent" || a.description != "description" ||
-		a.agentURL != "http://localhost:8080" || a.agentCard != card ||
+		a.agentCardURL != "http://localhost:8080" || a.agentCard != card ||
 		a.eventConverter != eventConverter || len(a.dataPartMappers) != 1 ||
 		a.a2aMessageConverter != messageConverter ||
 		a.streamingBufSize != defaultStreamingChannelSize ||

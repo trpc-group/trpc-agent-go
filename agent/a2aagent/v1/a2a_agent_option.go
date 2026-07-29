@@ -212,10 +212,10 @@ func WithDescription(description string) Option {
 	}
 }
 
-// WithAgentCardURL set the agent card URL
+// WithAgentCardURL sets the complete URL used to fetch the agent card.
 func WithAgentCardURL(url string) Option {
 	return func(a *A2AAgent) {
-		a.agentURL = strings.TrimSpace(url)
+		a.agentCardURL = strings.TrimSpace(url)
 	}
 }
 
