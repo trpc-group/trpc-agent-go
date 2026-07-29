@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -363,13 +364,15 @@ func writeReviewReportFiles(report *reviewReport, outputDir string) error {
 	if err := os.MkdirAll(taskDir, 0o700); err != nil {
 		return fmt.Errorf("create report directory: %w", err)
 	}
+	actualJSONPath := filepath.Join(taskDir, "review_report.json")
+	actualMarkdownPath := filepath.Join(taskDir, "review_report.md")
 	report.ReportPaths = reportPaths{
-		JSON:     filepath.ToSlash(filepath.Join(taskDir, "review_report.json")),
-		Markdown: filepath.ToSlash(filepath.Join(taskDir, "review_report.md")),
+		JSON:     path.Join(report.TaskID, "review_report.json"),
+		Markdown: path.Join(report.TaskID, "review_report.md"),
 	}
 
 	markdownBytes := []byte(renderMarkdownReport(*report))
-	if err := os.WriteFile(filepath.FromSlash(report.ReportPaths.Markdown), markdownBytes, 0o600); err != nil {
+	if err := os.WriteFile(actualMarkdownPath, markdownBytes, 0o600); err != nil {
 		return fmt.Errorf("write markdown report: %w", err)
 	}
 	markdownArtifact := reportArtifactFromBytes(
@@ -387,7 +390,7 @@ func writeReviewReportFiles(report *reviewReport, outputDir string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.FromSlash(report.ReportPaths.JSON), jsonBytes, 0o600); err != nil {
+	if err := os.WriteFile(actualJSONPath, jsonBytes, 0o600); err != nil {
 		return fmt.Errorf("write json report: %w", err)
 	}
 	report.Artifacts[0] = reportArtifactFromBytes(

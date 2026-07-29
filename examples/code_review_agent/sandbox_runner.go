@@ -21,7 +21,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	e2bexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/e2b"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
-	rootskill "trpc.group/trpc-go/trpc-agent-go/skill"
 	toolskill "trpc.group/trpc-go/trpc-agent-go/tool/skill"
 )
 
@@ -125,12 +124,11 @@ func newSkillRunSandboxRunner(
 	meta codeReviewSkill,
 	executor codeexecutor.CodeExecutor,
 ) (*skillRunSandboxRunner, error) {
-	repo, err := rootskill.NewFSRepository(meta.Root)
-	if err != nil {
-		return nil, fmt.Errorf("open skill repository: %w", err)
+	if meta.Repository == nil {
+		return nil, fmt.Errorf("open skill repository: repository is not configured")
 	}
 	runTool := toolskill.NewRunTool(
-		repo,
+		meta.Repository,
 		executor,
 		toolskill.WithAllowedCommands("go", "bash"),
 		toolskill.WithRunOutputLimits(toolskill.RunOutputLimits{

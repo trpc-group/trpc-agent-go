@@ -18,6 +18,12 @@ The default output directory is `./output`. Each review writes
 `<output-dir>/<task-id>/review_report.md`, and a SQLite database at
 `<output-dir>/reviews.db`.
 
+The `report_paths` fields, artifact paths, and stdout summary use
+output-directory-relative identifiers such as
+`<task-id>/review_report.json`. Resolve a report file by joining the configured
+`<output-dir>` with that identifier. The absolute or configured output
+directory is never embedded into those persistent path fields.
+
 When `--output-dir` is set without `--db-path`, the database follows the output
 directory automatically. An explicit `--db-path` always takes precedence.
 
@@ -32,11 +38,13 @@ go run ./code_review_agent --repo-path ../ --files pkg/a.go --files pkg/b.go --r
 ```
 
 `--repo-path` runs `git diff HEAD -- <files>` through a fixed argument array.
-The `--files` values must be relative paths and cannot escape the repository.
-They are interpreted as literal Git paths. A scoped review does not upload
-files outside that scope, so repository test, vet, and staticcheck commands are
-skipped with a human-review warning instead of running against an incomplete Go
-module.
+Git execution disables external diff, textconv, fsmonitor, pagers, inherited
+`GIT_*` configuration, and interactive prompting before repository
+configuration is consulted. The `--files` values must be relative paths and
+cannot escape the repository. They are interpreted as literal Git paths. A
+scoped review does not upload files outside that scope, so repository test,
+vet, and staticcheck commands are skipped with a human-review warning instead
+of running against an incomplete Go module.
 
 ## Runtime Modes
 
@@ -94,18 +102,21 @@ it does not require the report files to still exist.
 ## Design Notes
 
 The agent is a governed, deterministic code review orchestrator rather than a
-free-form LLM reviewer. A filesystem Skill named `code-review` defines the
-review workflow, rule catalog, and sandbox script entrypoint, while the Go
-example owns all command selection. Inputs are normalized from a unified diff,
-fixture, or read-only `git diff` invocation, then parsed into changed files,
-hunks, candidate new lines, and package metadata. Deterministic rules inspect
-added lines and available Go context for hardcoded secrets, command injection,
-disabled TLS verification, goroutine and context leaks, unclosed files, HTTP
-bodies, SQL rows, ignored errors, database handle and transaction lifecycle
-issues, and missing tests. Confidence is fixed by rule type and context quality:
-high-confidence matches become findings, lower-confidence inferences become
-warnings that require human review. Dedupe uses file, line, and category, keeping
-the strongest result and counting suppressed matches.
+free-form LLM reviewer. A trusted, embedded Skill named `code-review` defines
+the review workflow, rule catalog, and sandbox script entrypoint, while the Go
+example owns all command selection. Each review materializes the verified Skill
+into a private temporary directory and removes it when the review finishes;
+working-directory Skill overrides are not loaded. Inputs are normalized from a
+unified diff, fixture, or read-only `git diff` invocation, then parsed into
+changed files, hunks, candidate new lines, and package metadata. Deterministic
+rules inspect added lines and available Go context for hardcoded secrets,
+command injection, disabled TLS verification, goroutine and context leaks,
+unclosed files, HTTP bodies, SQL rows, ignored errors, database handle and
+transaction lifecycle issues, and missing tests. Confidence is fixed by rule
+type and context quality: high-confidence matches become findings,
+lower-confidence inferences become warnings that require human review. Dedupe
+uses file, line, and category, keeping the strongest result and counting
+suppressed matches.
 
 Sandbox execution is advisory evidence. The agent builds private command specs
 from a closed enum, validates them through a command gate, then calls a
@@ -117,8 +128,12 @@ an explicit development fallback. Complete repository snapshots resolve changed
 Go files to their nearest `go.mod` and run checks once per affected module. The
 snapshot root contains a reserved `.trpc-agent-review-modules` manifest with
 sorted, repository-relative module directories separated by NUL bytes; `.` names
-the root module. All evidence, sandbox output, governance reasons, reports, and
-stored fields pass through redaction before persistence.
+the root module. Snapshot enumeration and copying share a 30-second deadline and
+enforce fixed limits for tracked entries, unique directories, path bytes, and
+actual copied content. A timeout or limit failure skips repository-dependent
+checks and produces a human-review warning. All evidence, sandbox output,
+governance reasons, reports, and stored fields pass through redaction before
+persistence.
 SQLite stores a review task, diff summary, decisions, sandbox runs, findings,
 warnings, metrics, artifacts, and final report metadata, but not the raw diff.
 The normalized schema deliberately separates repeated child records from the

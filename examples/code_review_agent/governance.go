@@ -12,13 +12,13 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"embed"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	rootskill "trpc.group/trpc-go/trpc-agent-go/skill"
@@ -62,19 +62,39 @@ var commandEnvAllowlist = map[string]bool{
 	"REVIEW_REPO_DIR": true,
 }
 
+var codeReviewSkillRequiredFiles = []string{
+	"SKILL.md",
+	"rules.md",
+	path.Join("scripts", "run_checks.sh"),
+}
+
+//go:embed skills/code-review/SKILL.md skills/code-review/rules.md skills/code-review/scripts/run_checks.sh
+var embeddedCodeReviewSkill embed.FS
+
+type codeReviewSkillLoader func() (codeReviewSkill, error)
+
 type runtimeHooks struct {
-	permissionPolicy tool.PermissionPolicy
-	sandboxRunner    sandboxRunner
-	skillRoot        string
-	reviewStore      reviewStore
-	taskID           string
+	permissionPolicy       tool.PermissionPolicy
+	sandboxRunner          sandboxRunner
+	skillLoader            codeReviewSkillLoader
+	snapshotLimitsOverride *snapshotLimits
+	reviewStore            reviewStore
+	taskID                 string
 }
 
 type codeReviewSkill struct {
-	Name   string
-	Digest string
-	Dir    string
-	Root   string
+	Name       string
+	Digest     string
+	Dir        string
+	Repository rootskill.Repository
+	cleanup    func() error
+}
+
+func (s codeReviewSkill) Close() error {
+	if s.cleanup == nil {
+		return nil
+	}
+	return s.cleanup()
 }
 
 type commandKind string
@@ -152,10 +172,15 @@ func runGovernance(
 	parsed parsedDiff,
 	hooks runtimeHooks,
 ) (governanceResult, error) {
-	meta, err := loadCodeReviewSkill(hooks.skillRoot)
+	loader := hooks.skillLoader
+	if loader == nil {
+		loader = loadCodeReviewSkill
+	}
+	meta, err := loader()
 	if err != nil {
 		return governanceResult{}, fmt.Errorf("load code-review skill: %w", err)
 	}
+	defer func() { _ = meta.Close() }()
 	result := governanceResult{
 		SkillName:   meta.Name,
 		SkillDigest: meta.Digest,
@@ -173,16 +198,20 @@ func runGovernance(
 			)
 		} else {
 			snapshotCtx, cancel := context.WithTimeout(ctx, gitDiffTimeout)
+			limits := defaultSandboxSnapshotLimits()
+			if hooks.snapshotLimitsOverride != nil {
+				limits = *hooks.snapshotLimitsOverride
+			}
 			snapshot, snapshotErr := prepareSandboxRepoSnapshot(
 				snapshotCtx,
 				input.repoRoot,
 				nil,
-				maxSandboxSnapshotBytes,
+				limits,
 			)
-			cancel()
 			if snapshotErr == nil {
-				_, snapshotErr = prepareAffectedModuleManifest(snapshot.Root, parsed)
+				_, snapshotErr = prepareAffectedModuleManifest(snapshotCtx, snapshot.Root, parsed)
 			}
+			cancel()
 			if snapshotErr != nil {
 				if snapshot.Root != "" {
 					_ = os.RemoveAll(snapshot.Root)
@@ -366,74 +395,129 @@ func (r *governanceResult) addGovernanceWarning(
 	r.Warnings = append(r.Warnings, governanceWarning(stage, spec, ruleID, title, redacted.Text))
 }
 
-func loadCodeReviewSkill(rootOverride string) (codeReviewSkill, error) {
-	var lastErr error
-	for _, root := range skillRootCandidates(rootOverride) {
-		repo, err := rootskill.NewFSRepository(root)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		loaded, err := repo.Get(codeReviewSkillName)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		dir, err := repo.Path(codeReviewSkillName)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		digest, err := digestCodeReviewSkill(dir)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		name := strings.TrimSpace(loaded.Summary.Name)
-		if name == "" {
-			name = codeReviewSkillName
-		}
-		return codeReviewSkill{Name: name, Digest: digest, Dir: dir, Root: root}, nil
+func loadCodeReviewSkill() (codeReviewSkill, error) {
+	expectedDigest, err := digestEmbeddedCodeReviewSkill()
+	if err != nil {
+		return codeReviewSkill{}, err
 	}
-	if lastErr != nil {
-		return codeReviewSkill{}, lastErr
+	root, err := materializeEmbeddedCodeReviewSkill()
+	if err != nil {
+		return codeReviewSkill{}, err
 	}
-	return codeReviewSkill{}, fmt.Errorf("skill %q not found", codeReviewSkillName)
+	cleanupOnError := true
+	defer func() {
+		if cleanupOnError {
+			_ = os.RemoveAll(root)
+		}
+	}()
+
+	loaded, err := loadCodeReviewSkillFromRoot(root)
+	if err != nil {
+		return codeReviewSkill{}, err
+	}
+	if loaded.Digest != expectedDigest {
+		return codeReviewSkill{}, fmt.Errorf(
+			"materialized code-review skill digest %q does not match embedded digest %q",
+			loaded.Digest,
+			expectedDigest,
+		)
+	}
+	loaded.cleanup = func() error { return os.RemoveAll(root) }
+	cleanupOnError = false
+	return loaded, nil
 }
 
-func skillRootCandidates(rootOverride string) []string {
-	if strings.TrimSpace(rootOverride) != "" {
-		return []string{rootOverride}
+func loadCodeReviewSkillFromRoot(root string) (codeReviewSkill, error) {
+	repo, err := rootskill.NewFSRepository(root)
+	if err != nil {
+		return codeReviewSkill{}, err
 	}
-	candidates := []string{
-		filepath.Join("skills"),
-		filepath.Join("code_review_agent", "skills"),
+	loaded, err := repo.Get(codeReviewSkillName)
+	if err != nil {
+		return codeReviewSkill{}, err
 	}
-	_, file, _, ok := runtime.Caller(0)
-	if ok {
-		candidates = append(candidates, filepath.Join(filepath.Dir(file), "skills"))
+	name := loaded.Summary.Name
+	if name != codeReviewSkillName {
+		return codeReviewSkill{}, fmt.Errorf(
+			"skill name %q does not match %q",
+			name,
+			codeReviewSkillName,
+		)
 	}
-	return candidates
+	dir, err := repo.Path(codeReviewSkillName)
+	if err != nil {
+		return codeReviewSkill{}, err
+	}
+	digest, err := digestCodeReviewSkill(dir)
+	if err != nil {
+		return codeReviewSkill{}, err
+	}
+	return codeReviewSkill{
+		Name:       name,
+		Digest:     digest,
+		Dir:        dir,
+		Repository: repo,
+	}, nil
+}
+
+func materializeEmbeddedCodeReviewSkill() (string, error) {
+	root, err := os.MkdirTemp("", "code-review-skill-*")
+	if err != nil {
+		return "", fmt.Errorf("create embedded skill root: %w", err)
+	}
+	cleanupOnError := true
+	defer func() {
+		if cleanupOnError {
+			_ = os.RemoveAll(root)
+		}
+	}()
+	for _, rel := range codeReviewSkillRequiredFiles {
+		embeddedPath := path.Join("skills", codeReviewSkillName, rel)
+		data, err := embeddedCodeReviewSkill.ReadFile(embeddedPath)
+		if err != nil {
+			return "", fmt.Errorf("read embedded skill file %q: %w", rel, err)
+		}
+		dst := filepath.Join(root, codeReviewSkillName, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+			return "", fmt.Errorf("create embedded skill directory: %w", err)
+		}
+		if err := os.WriteFile(dst, data, 0o600); err != nil {
+			return "", fmt.Errorf("write embedded skill file %q: %w", rel, err)
+		}
+	}
+	cleanupOnError = false
+	return root, nil
+}
+
+func digestEmbeddedCodeReviewSkill() (string, error) {
+	hash := sha256.New()
+	for _, rel := range codeReviewSkillRequiredFiles {
+		data, err := embeddedCodeReviewSkill.ReadFile(path.Join("skills", codeReviewSkillName, rel))
+		if err != nil {
+			return "", fmt.Errorf("read embedded skill file %q: %w", rel, err)
+		}
+		writeCodeReviewSkillDigestEntry(hash, rel, data)
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 func digestCodeReviewSkill(skillDir string) (string, error) {
-	required := []string{
-		"SKILL.md",
-		"rules.md",
-		filepath.Join("scripts", "run_checks.sh"),
-	}
 	hash := sha256.New()
-	for _, rel := range required {
-		data, err := os.ReadFile(filepath.Join(skillDir, rel))
+	for _, rel := range codeReviewSkillRequiredFiles {
+		data, err := os.ReadFile(filepath.Join(skillDir, filepath.FromSlash(rel)))
 		if err != nil {
 			return "", err
 		}
-		hash.Write([]byte(filepath.ToSlash(rel)))
-		hash.Write([]byte{0})
-		hash.Write(data)
-		hash.Write([]byte{0})
+		writeCodeReviewSkillDigestEntry(hash, rel, data)
 	}
 	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func writeCodeReviewSkillDigestEntry(hash interface{ Write([]byte) (int, error) }, rel string, data []byte) {
+	_, _ = hash.Write([]byte(path.Clean(filepath.ToSlash(rel))))
+	_, _ = hash.Write([]byte{0})
+	_, _ = hash.Write(data)
+	_, _ = hash.Write([]byte{0})
 }
 
 func planCommands(cfg config, input reviewInput, parsed parsedDiff) []commandSpec {

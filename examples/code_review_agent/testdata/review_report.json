@@ -122,17 +122,17 @@
   "artifacts": [
     {
       "kind": "review_report_json",
-      "path": "output/review-sample-secret-leak/review_report.json"
+      "path": "review-sample-secret-leak/review_report.json"
     },
     {
       "kind": "review_report_markdown",
-      "path": "output/review-sample-secret-leak/review_report.md",
-      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
-      "bytes": 917
+      "path": "review-sample-secret-leak/review_report.md",
+      "sha256": "1ae0d4a391298df56b009afb002ace9be9c75ebfd3d6c33a44f02982ca801c5e",
+      "bytes": 903
     }
   ],
   "report_paths": {
-    "json": "output/review-sample-secret-leak/review_report.json",
-    "markdown": "output/review-sample-secret-leak/review_report.md"
+    "json": "review-sample-secret-leak/review_report.json",
+    "markdown": "review-sample-secret-leak/review_report.md"
   }
 }

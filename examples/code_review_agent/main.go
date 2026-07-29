@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"runtime"
@@ -445,7 +444,7 @@ func loadReviewInput(
 	case cfg.repoPath != "":
 		runCtx, cancel := context.WithTimeout(ctx, gitDiffTimeout)
 		defer cancel()
-		args := append([]string{"--literal-pathspecs", "diff", "HEAD", "--"}, []string(cfg.files)...)
+		args := append([]string{"diff", "--no-ext-diff", "--no-textconv", "HEAD", "--"}, []string(cfg.files)...)
 		stdout, stderr, err := gitRunner(runCtx, cfg.repoPath, args)
 		if err != nil {
 			msg := strings.TrimSpace(string(stderr))
@@ -540,8 +539,10 @@ func readLimited(r io.Reader, limit int64) ([]byte, error) {
 }
 
 func runGitDiff(ctx context.Context, repoPath string, args []string) ([]byte, []byte, error) {
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Dir = repoPath
+	cmd, err := newHardenedGitCommand(ctx, repoPath, args...)
+	if err != nil {
+		return nil, nil, err
+	}
 	var stdout limitBuffer
 	var stderr limitBuffer
 	stdout.limit = int(maxDiffBytes)
@@ -549,7 +550,7 @@ func runGitDiff(ctx context.Context, repoPath string, args []string) ([]byte, []
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	err := cmd.Run()
+	err = cmd.Run()
 	if ctx.Err() != nil {
 		return stdout.Bytes(), stderr.Bytes(), fmt.Errorf("git diff timed out after %s", gitDiffTimeout)
 	}

@@ -19,6 +19,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -237,7 +238,10 @@ func TestReportFilesAndSummaryBoundary(t *testing.T) {
 		len(report.Governance.SandboxRuns) == 0 {
 		t.Fatalf("full report missing detailed fields: %+v", report)
 	}
-	markdown, err := os.ReadFile(filepath.FromSlash(summary.ReportPaths.Markdown))
+	markdown, err := os.ReadFile(filepath.Join(
+		filepath.FromSlash(summary.OutputDir),
+		filepath.FromSlash(summary.ReportPaths.Markdown),
+	))
 	if err != nil {
 		t.Fatalf("read markdown report: %v", err)
 	}
@@ -345,6 +349,11 @@ func TestSampleReviewReports(t *testing.T) {
 	if markdownArtifact.Bytes != int64(len(normalizedMarkdownBytes)) {
 		t.Fatalf("sample markdown artifact bytes = %d, want %d",
 			markdownArtifact.Bytes, len(normalizedMarkdownBytes))
+	}
+	markdownHash := sha256.Sum256(normalizedMarkdownBytes)
+	if markdownArtifact.SHA256 != hex.EncodeToString(markdownHash[:]) {
+		t.Fatalf("sample markdown artifact sha256 = %q, want %x",
+			markdownArtifact.SHA256, markdownHash)
 	}
 }
 
@@ -581,7 +590,7 @@ func TestShowTaskRebuildsReportFromSQLite(t *testing.T) {
 	var summary reviewSummary
 	mustUnmarshalSummary(t, stdout, &summary)
 
-	if err := os.Remove(filepath.FromSlash(summary.ReportPaths.JSON)); err != nil {
+	if err := os.Remove(filepath.Join(outputDir, filepath.FromSlash(summary.ReportPaths.JSON))); err != nil {
 		t.Fatalf("remove json report: %v", err)
 	}
 	code, stdout, stderr = runRawForTest(t, []string{
@@ -635,6 +644,115 @@ func TestSQLiteAndShowTaskDoNotPersistRawSecret(t *testing.T) {
 	}
 }
 
+func TestReportPathsAreRelativeAndDoNotPersistOutputDirectorySecrets(t *testing.T) {
+	requireSQLiteDriver(t)
+
+	const secret = "supersecret123"
+	const taskID = "task-relative-paths"
+	outputDir := filepath.Join(t.TempDir(), "audit-token="+secret)
+	dbPath := filepath.Join(outputDir, "reviews.db")
+	code, stdout, stderr := runRawForTest(t, []string{
+		"--fixture", "clean",
+		"--dry-run",
+		"--db-path", dbPath,
+		"--output-dir", outputDir,
+	}, nil, nil, runtimeHooks{taskID: taskID})
+	if code != 0 {
+		t.Fatalf("review exit code = %d, want 0; stderr: %s", code, stderr)
+	}
+
+	wantJSONPath := taskID + "/review_report.json"
+	wantMarkdownPath := taskID + "/review_report.md"
+	var summary reviewSummary
+	mustUnmarshalSummary(t, stdout, &summary)
+	if summary.ReportPaths.JSON != wantJSONPath || summary.ReportPaths.Markdown != wantMarkdownPath {
+		t.Fatalf("summary report paths = %+v", summary.ReportPaths)
+	}
+	actualJSONPath := filepath.Join(outputDir, filepath.FromSlash(wantJSONPath))
+	actualMarkdownPath := filepath.Join(outputDir, filepath.FromSlash(wantMarkdownPath))
+	jsonBytes, err := os.ReadFile(actualJSONPath)
+	if err != nil {
+		t.Fatalf("read actual json report: %v", err)
+	}
+	markdownBytes, err := os.ReadFile(actualMarkdownPath)
+	if err != nil {
+		t.Fatalf("read actual markdown report: %v", err)
+	}
+	var report reviewReport
+	if err := json.Unmarshal(jsonBytes, &report); err != nil {
+		t.Fatalf("unmarshal report: %v", err)
+	}
+	if report.ReportPaths != (reportPaths{JSON: wantJSONPath, Markdown: wantMarkdownPath}) {
+		t.Fatalf("json report paths = %+v", report.ReportPaths)
+	}
+	wantArtifactPaths := []string{wantJSONPath, wantMarkdownPath}
+	if len(report.Artifacts) != len(wantArtifactPaths) {
+		t.Fatalf("artifacts = %+v", report.Artifacts)
+	}
+	for i, want := range wantArtifactPaths {
+		if report.Artifacts[i].Path != want {
+			t.Fatalf("artifact %d path = %q, want %q", i, report.Artifacts[i].Path, want)
+		}
+	}
+
+	db, err := sql.Open(sqliteDriverName, dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reportPathsJSON string
+	if err := db.QueryRow(
+		"SELECT report_paths_json FROM review_tasks WHERE task_id = ?",
+		taskID,
+	).Scan(&reportPathsJSON); err != nil {
+		t.Fatalf("read persisted report paths: %v", err)
+	}
+	rows, err := db.Query(
+		"SELECT path FROM artifacts WHERE task_id = ? ORDER BY ordinal",
+		taskID,
+	)
+	if err != nil {
+		t.Fatalf("read persisted artifacts: %v", err)
+	}
+	var artifactPaths []string
+	for rows.Next() {
+		var artifactPath string
+		if err := rows.Scan(&artifactPath); err != nil {
+			_ = rows.Close()
+			t.Fatal(err)
+		}
+		artifactPaths = append(artifactPaths, artifactPath)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(artifactPaths, wantArtifactPaths) {
+		t.Fatalf("persisted artifact paths = %#v, want %#v", artifactPaths, wantArtifactPaths)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	dbBytes, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{
+		"stdout":            stdout,
+		"json":              string(jsonBytes),
+		"markdown":          string(markdownBytes),
+		"report_paths_json": reportPathsJSON,
+		"artifacts.path":    strings.Join(artifactPaths, "\n"),
+		"sqlite":            string(dbBytes),
+	} {
+		if strings.Contains(content, secret) {
+			t.Fatalf("%s persisted output directory secret %q", name, secret)
+		}
+	}
+}
+
 func TestFilesAreNormalizedAndPassedToGit(t *testing.T) {
 	var gotRepo string
 	var gotArgs []string
@@ -656,7 +774,7 @@ func TestFilesAreNormalizedAndPassedToGit(t *testing.T) {
 	if gotRepo != "repo" {
 		t.Fatalf("repo path = %q, want repo", gotRepo)
 	}
-	wantArgs := []string{"--literal-pathspecs", "diff", "HEAD", "--", "a.go", "b.go", "pkg/c.go"}
+	wantArgs := []string{"diff", "--no-ext-diff", "--no-textconv", "HEAD", "--", "a.go", "b.go", "pkg/c.go"}
 	if !reflect.DeepEqual(gotArgs, wantArgs) {
 		t.Fatalf("git args = %#v, want %#v", gotArgs, wantArgs)
 	}
@@ -953,10 +1071,15 @@ func TestRepoPathLocalRunnerStagesRepositoryOnce(t *testing.T) {
 	if err := preflightLocalRuntime(); err != nil {
 		t.Skipf("local runtime unavailable: %v", err)
 	}
-	meta, err := loadCodeReviewSkill("")
+	meta, err := loadCodeReviewSkill()
 	if err != nil {
 		t.Fatalf("load skill: %v", err)
 	}
+	t.Cleanup(func() {
+		if err := meta.Close(); err != nil {
+			t.Errorf("close skill: %v", err)
+		}
+	})
 	runner, err := newLocalSandboxRunner(meta)
 	if err != nil {
 		t.Fatalf("new local runner: %v", err)
@@ -1003,14 +1126,14 @@ func TestRepoPathLocalRunnerStagesRepositoryOnce(t *testing.T) {
 		context.Background(),
 		repoRoot,
 		nil,
-		maxSandboxSnapshotBytes,
+		defaultSandboxSnapshotLimits(),
 	)
 	if err != nil {
 		t.Fatalf("prepare snapshot: %v", err)
 	}
 	defer os.RemoveAll(snapshot.Root)
 	parsed := parseUnifiedDiff([]byte(minimalDiff()))
-	if _, err := prepareAffectedModuleManifest(snapshot.Root, parsed); err != nil {
+	if _, err := prepareAffectedModuleManifest(context.Background(), snapshot.Root, parsed); err != nil {
 		t.Fatalf("prepare affected module manifest: %v", err)
 	}
 
@@ -1035,10 +1158,15 @@ func TestLocalRunnerCloseRemovesWorkRoot(t *testing.T) {
 	if err := preflightLocalRuntime(); err != nil {
 		t.Skipf("local runtime unavailable: %v", err)
 	}
-	meta, err := loadCodeReviewSkill("")
+	meta, err := loadCodeReviewSkill()
 	if err != nil {
 		t.Fatalf("load skill: %v", err)
 	}
+	t.Cleanup(func() {
+		if err := meta.Close(); err != nil {
+			t.Errorf("close skill: %v", err)
+		}
+	})
 	runner, err := newLocalSandboxRunner(meta)
 	if err != nil {
 		t.Fatalf("new local runner: %v", err)
@@ -1072,7 +1200,7 @@ func TestRepositorySnapshotCopiesOnlyTrackedRegularFiles(t *testing.T) {
 		context.Background(),
 		repoRoot,
 		nil,
-		maxSandboxSnapshotBytes,
+		defaultSandboxSnapshotLimits(),
 	)
 	if err != nil {
 		t.Fatalf("prepare snapshot: %v", err)
@@ -1105,7 +1233,7 @@ func TestRepositorySnapshotHonorsLiteralFileScope(t *testing.T) {
 		context.Background(),
 		repoRoot,
 		[]string{"pkg/review.go"},
-		maxSandboxSnapshotBytes,
+		defaultSandboxSnapshotLimits(),
 	)
 	if err != nil {
 		t.Fatalf("prepare scoped snapshot: %v", err)
@@ -1126,7 +1254,7 @@ func TestRepositorySnapshotHonorsLiteralFileScope(t *testing.T) {
 		context.Background(),
 		repoRoot,
 		[]string{":(glob)**"},
-		maxSandboxSnapshotBytes,
+		defaultSandboxSnapshotLimits(),
 	)
 	if err != nil {
 		t.Fatalf("prepare literal pathspec snapshot: %v", err)
@@ -1233,7 +1361,7 @@ func TestPrepareAffectedModuleManifest(t *testing.T) {
 	if len(parsed.Warnings) != 0 {
 		t.Fatalf("parse warnings = %+v", parsed.Warnings)
 	}
-	modules, err := prepareAffectedModuleManifest(snapshotRoot, parsed)
+	modules, err := prepareAffectedModuleManifest(context.Background(), snapshotRoot, parsed)
 	if err != nil {
 		t.Fatalf("prepare manifest: %v", err)
 	}
@@ -1258,7 +1386,7 @@ func TestPrepareAffectedModuleManifest(t *testing.T) {
 			t.Fatalf("manifest mode = %o, want 600", got)
 		}
 	}
-	if _, err := prepareAffectedModuleManifest(snapshotRoot, parsed); err == nil ||
+	if _, err := prepareAffectedModuleManifest(context.Background(), snapshotRoot, parsed); err == nil ||
 		!strings.Contains(err.Error(), "create affected module manifest") {
 		t.Fatalf("reserved manifest collision err = %v, want create failure", err)
 	}
@@ -1275,7 +1403,7 @@ func TestPrepareAffectedModuleManifestRequiresModule(t *testing.T) {
 		"-package oldorphan",
 		"+package orphan",
 	}, "\n")))
-	if _, err := prepareAffectedModuleManifest(snapshotRoot, parsed); err == nil ||
+	if _, err := prepareAffectedModuleManifest(context.Background(), snapshotRoot, parsed); err == nil ||
 		!strings.Contains(err.Error(), "no go.mod") {
 		t.Fatalf("prepare manifest err = %v, want missing module", err)
 	}
@@ -1308,7 +1436,7 @@ func TestRunChecksUsesChangedNestedModule(t *testing.T) {
 		"-package oldspace",
 		"+package space",
 	}, "\n")))
-	if _, err := prepareAffectedModuleManifest(repoRoot, parsed); err != nil {
+	if _, err := prepareAffectedModuleManifest(context.Background(), repoRoot, parsed); err != nil {
 		t.Fatalf("prepare manifest: %v", err)
 	}
 
@@ -1432,7 +1560,9 @@ func TestRepositorySnapshotLimitSkipsRepositoryChecks(t *testing.T) {
 	mustRunGit(t, repoRoot, "init")
 	mustWriteFile(t, filepath.Join(repoRoot, "go.mod"), "module example.com/large\n\ngo 1.21\n")
 	mustRunGit(t, repoRoot, "add", "go.mod")
-	if _, err := prepareSandboxRepoSnapshot(context.Background(), repoRoot, nil, 1); err == nil ||
+	limits := defaultSandboxSnapshotLimits()
+	limits.maxBytes = 1
+	if _, err := prepareSandboxRepoSnapshot(context.Background(), repoRoot, nil, limits); err == nil ||
 		!strings.Contains(err.Error(), "exceeds") {
 		t.Fatalf("prepare snapshot err = %v, want size limit", err)
 	}
@@ -1505,7 +1635,9 @@ func TestGovernanceStaticcheckIsOptIn(t *testing.T) {
 
 func TestSkillLoadFailureIsFatal(t *testing.T) {
 	code, stdout, stderr := runForTestWithHooks(t, []string{"--fixture", "clean", "--dry-run"}, nil, nil, runtimeHooks{
-		skillRoot: t.TempDir(),
+		skillLoader: func() (codeReviewSkill, error) {
+			return codeReviewSkill{}, errors.New("test skill load failure")
+		},
 	})
 	if code != 1 {
 		t.Fatalf("exit code = %d, want 1", code)
@@ -1519,12 +1651,51 @@ func TestSkillLoadFailureIsFatal(t *testing.T) {
 }
 
 func TestLoadCodeReviewSkillDigestAndRequiredFiles(t *testing.T) {
-	loaded, err := loadCodeReviewSkill("")
+	loaded, err := loadCodeReviewSkill()
 	if err != nil {
 		t.Fatalf("load skill: %v", err)
 	}
+	skillRoot := filepath.Dir(loaded.Dir)
+	t.Cleanup(func() {
+		_ = os.RemoveAll(skillRoot)
+	})
 	if loaded.Name != codeReviewSkillName || loaded.Digest == "" {
 		t.Fatalf("loaded skill = %+v", loaded)
+	}
+	expectedDigest, err := digestEmbeddedCodeReviewSkill()
+	if err != nil {
+		t.Fatalf("digest embedded skill: %v", err)
+	}
+	if loaded.Digest != expectedDigest {
+		t.Fatalf("loaded digest = %q, want %q", loaded.Digest, expectedDigest)
+	}
+	for _, rel := range codeReviewSkillRequiredFiles {
+		want, err := embeddedCodeReviewSkill.ReadFile(path.Join("skills", codeReviewSkillName, rel))
+		if err != nil {
+			t.Fatalf("read embedded %s: %v", rel, err)
+		}
+		actualPath := filepath.Join(loaded.Dir, filepath.FromSlash(rel))
+		got, err := os.ReadFile(actualPath)
+		if err != nil {
+			t.Fatalf("read materialized %s: %v", rel, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("materialized %s differs from embedded content", rel)
+		}
+		if runtime.GOOS != "windows" {
+			assertPathMode(t, actualPath, 0o600)
+		}
+	}
+	if runtime.GOOS != "windows" {
+		assertPathMode(t, skillRoot, 0o700)
+		assertPathMode(t, loaded.Dir, 0o700)
+		assertPathMode(t, filepath.Join(loaded.Dir, "scripts"), 0o700)
+	}
+	if err := loaded.Close(); err != nil {
+		t.Fatalf("close loaded skill: %v", err)
+	}
+	if _, err := os.Stat(skillRoot); !os.IsNotExist(err) {
+		t.Fatalf("skill root after close stat err = %v, want not exist", err)
 	}
 
 	root := t.TempDir()
@@ -1535,8 +1706,94 @@ func TestLoadCodeReviewSkillDigestAndRequiredFiles(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("---\nname: code-review\n---\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := loadCodeReviewSkill(root); err == nil {
-		t.Fatalf("loadCodeReviewSkill succeeded with missing required files")
+	if _, err := loadCodeReviewSkillFromRoot(root); err == nil {
+		t.Fatalf("loadCodeReviewSkillFromRoot succeeded with missing required files")
+	}
+}
+
+func TestEmbeddedSkillIgnoresWorkingDirectoryOverride(t *testing.T) {
+	workingDir := t.TempDir()
+	maliciousDir := filepath.Join(workingDir, "skills", codeReviewSkillName)
+	for _, rel := range codeReviewSkillRequiredFiles {
+		content := "malicious working-directory skill\n"
+		if rel == "SKILL.md" {
+			content = "---\nname: code-review\ndescription: malicious working-directory skill\n---\n"
+		}
+		mustWriteFile(t, filepath.Join(maliciousDir, filepath.FromSlash(rel)), content)
+	}
+	originalDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(workingDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(originalDir) })
+
+	loaded, err := loadCodeReviewSkill()
+	if err != nil {
+		t.Fatalf("load embedded skill: %v", err)
+	}
+	t.Cleanup(func() { _ = loaded.Close() })
+	if pathStaysWithin(workingDir, loaded.Dir) {
+		t.Fatalf("loaded skill dir %q came from working directory %q", loaded.Dir, workingDir)
+	}
+	expectedDigest, err := digestEmbeddedCodeReviewSkill()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Digest != expectedDigest {
+		t.Fatalf("loaded digest = %q, want embedded %q", loaded.Digest, expectedDigest)
+	}
+}
+
+func TestExternalSkillLoaderRequiresExactSkillName(t *testing.T) {
+	root := t.TempDir()
+	for _, rel := range codeReviewSkillRequiredFiles {
+		data, err := embeddedCodeReviewSkill.ReadFile(path.Join("skills", codeReviewSkillName, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rel == "SKILL.md" {
+			data = bytes.Replace(data, []byte("name: code-review"), []byte("name: code-review-override"), 1)
+		}
+		actualPath := filepath.Join(root, codeReviewSkillName, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(actualPath), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(actualPath, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := loadCodeReviewSkillFromRoot(root); err == nil {
+		t.Fatal("load external skill succeeded with a mismatched skill name")
+	}
+}
+
+func TestRunGovernanceCleansMaterializedSkill(t *testing.T) {
+	var skillRoot string
+	loader := func() (codeReviewSkill, error) {
+		loaded, err := loadCodeReviewSkill()
+		if err == nil {
+			skillRoot = filepath.Dir(loaded.Dir)
+		}
+		return loaded, err
+	}
+	code, _, stderr := runForTestWithHooks(
+		t,
+		[]string{"--fixture", "clean", "--dry-run"},
+		nil,
+		nil,
+		runtimeHooks{skillLoader: loader},
+	)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr: %s", code, stderr)
+	}
+	if skillRoot == "" {
+		t.Fatal("skill loader did not record a materialized root")
+	}
+	if _, err := os.Stat(skillRoot); !os.IsNotExist(err) {
+		t.Fatalf("materialized skill root after review stat err = %v, want not exist", err)
 	}
 }
 
@@ -1849,7 +2106,7 @@ func TestRepoPathUsesGitDiffArgumentArray(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0; stderr: %s", code, stderr)
 	}
-	wantArgs := []string{"--literal-pathspecs", "diff", "HEAD", "--"}
+	wantArgs := []string{"diff", "--no-ext-diff", "--no-textconv", "HEAD", "--"}
 	if !reflect.DeepEqual(gotArgs, wantArgs) {
 		t.Fatalf("git args = %#v, want %#v", gotArgs, wantArgs)
 	}
@@ -2629,12 +2886,12 @@ func TestResourceCleanupShadowedBindingDoesNotSuppressFinding(t *testing.T) {
 		"func shadowed(outer string, inner string) error {",
 		"\tf, err := os.Open(outer)",
 		"\tif err != nil { return err }",
+		"\tdefer f.Close()",
 		"\t{",
 		"\t\tf, err := os.Open(inner)",
 		"\t\tif err != nil { return err }",
 		"\t\t_ = f",
 		"\t}",
-		"\tdefer f.Close()",
 		"\treturn nil",
 		"}",
 	}, "\n")
@@ -2643,14 +2900,14 @@ func TestResourceCleanupShadowedBindingDoesNotSuppressFinding(t *testing.T) {
 		"diff --git a/shadowed.go b/shadowed.go",
 		"--- a/shadowed.go",
 		"+++ b/shadowed.go",
-		"@@ -9,0 +9,3 @@ func shadowed(outer string, inner string) error {",
+		"@@ -10,0 +10,3 @@ func shadowed(outer string, inner string) error {",
 		"+\t\tf, err := os.Open(inner)",
 		"+\t\tif err != nil { return err }",
 		"+\t\t_ = f",
 	}, "\n")
 	finalized := finalizeRuleMatches(runRules(parseUnifiedDiff([]byte(diff)), repoRoot))
 	if len(finalized.Findings) != 1 || finalized.Findings[0].RuleID != ruleUnclosedFile ||
-		finalized.Findings[0].Line != 9 {
+		finalized.Findings[0].Line != 10 {
 		t.Fatalf("finalized = %+v, want shadowed unclosed file finding", finalized)
 	}
 }
@@ -2665,12 +2922,12 @@ func TestDiffOnlyResourceCleanupUsesLexicalBinding(t *testing.T) {
 		"+func shadowed(outer string, inner string) error {",
 		"+\tf, err := os.Open(outer)",
 		"+\tif err != nil { return err }",
+		"+\tdefer f.Close()",
 		"+\t{",
 		"+\t\tf, err := os.Open(inner)",
 		"+\t\tif err != nil { return err }",
 		"+\t\t_ = f",
 		"+\t}",
-		"+\tdefer f.Close()",
 		"+\treturn nil",
 		"+}",
 	}, "\n")
@@ -2980,10 +3237,13 @@ func mustUnmarshalSummary(t *testing.T, stdout string, got *reviewSummary) {
 
 func readReportFromSummary(t *testing.T, summary reviewSummary) reviewReport {
 	t.Helper()
-	if summary.ReportPaths.JSON == "" {
+	if summary.OutputDir == "" || summary.ReportPaths.JSON == "" {
 		t.Fatalf("summary has no json report path: %+v", summary)
 	}
-	data, err := os.ReadFile(filepath.FromSlash(summary.ReportPaths.JSON))
+	data, err := os.ReadFile(filepath.Join(
+		filepath.FromSlash(summary.OutputDir),
+		filepath.FromSlash(summary.ReportPaths.JSON),
+	))
 	if err != nil {
 		t.Fatalf("read report: %v", err)
 	}

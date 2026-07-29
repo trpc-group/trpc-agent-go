@@ -45,5 +45,5 @@ None.
 
 ## Reports
 
-- JSON: output/review\-sample\-secret\-leak/review\_report\.json
-- Markdown: output/review\-sample\-secret\-leak/review\_report\.md
+- JSON: review\-sample\-secret\-leak/review\_report\.json
+- Markdown: review\-sample\-secret\-leak/review\_report\.md
