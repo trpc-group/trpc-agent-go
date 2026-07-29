@@ -1229,6 +1229,11 @@ func normalizeStreamingResult(
 			return normalized
 		}
 		return nil
+	case *protocol.Task:
+		if v == nil {
+			return nil
+		}
+		return v
 	default:
 		return result
 	}

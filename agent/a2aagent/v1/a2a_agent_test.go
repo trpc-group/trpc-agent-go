@@ -519,7 +519,8 @@ func TestProcessStreamingEventsPreservesCustomReplacementMessage(t *testing.T) {
 	<-eventChan
 	replacementEvent := <-eventChan
 	replacementChoice := replacementEvent.Response.Choices[0]
-	if replacementChoice.Message.Content != "custom-message" ||
+	if replacementChoice.Message.Role != model.RoleAssistant ||
+		replacementChoice.Message.Content != "custom-message" ||
 		model.HasPayload(replacementChoice.Delta) {
 		t.Fatalf(
 			"replacement event = %#v, want preserved custom Message",
