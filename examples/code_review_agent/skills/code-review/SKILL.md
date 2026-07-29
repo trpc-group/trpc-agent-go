@@ -35,7 +35,10 @@ Exactly one input mode must already be configured by the caller:
 - `--repo-path`: staged, unstaged, untracked, renamed, and deleted changes from
   a local Git worktree. The execution snapshot contains tracked plus
   non-ignored untracked files; an optional validated file list may opt in an
-  otherwise ignored file.
+  otherwise ignored file. With a usable `HEAD`, that list filters the real
+  tracked diff against `HEAD`; selected untracked or ignored files are
+  whole-file additions. Without `HEAD`, every selected file is a whole-file
+  addition.
 - `--fixture`: bundled deterministic acceptance data.
 
 Runtime policy:

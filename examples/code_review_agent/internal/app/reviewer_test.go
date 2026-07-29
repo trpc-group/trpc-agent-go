@@ -64,6 +64,19 @@ func TestReviewerFakeFullRoundTrip(t *testing.T) {
 	removeWritten(t, result)
 }
 
+func TestSandboxErrorTypePrefersTimeoutAfterSpecialErrors(t *testing.T) {
+	run := sandbox.Run{Status: "timeout", TimedOut: true}
+	if got := sandboxErrorType(run, errors.New("stream failed")); got != "sandbox_timeout" {
+		t.Fatalf("sandboxErrorType(timeout) = %q, want sandbox_timeout", got)
+	}
+	if got := sandboxErrorType(run, fmt.Errorf("%w: stopped", sandbox.ErrLifecycle)); got != "sandbox_lifecycle" {
+		t.Fatalf("sandboxErrorType(lifecycle) = %q, want sandbox_lifecycle", got)
+	}
+	if got := sandboxErrorType(run, fmt.Errorf("%w: unavailable", sandbox.ErrDependencyCache)); got != "dependency_cache" {
+		t.Fatalf("sandboxErrorType(dependency) = %q, want dependency_cache", got)
+	}
+}
+
 func TestRunFakeModelLoadsSkillThenRunsReview(t *testing.T) {
 	root := enterExampleRoot(t)
 	database := openAppStore(t)

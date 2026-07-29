@@ -1236,7 +1236,8 @@ func (r *workspaceRuntime) execCmdWithStdin(
 		}
 	}
 	if err != nil {
-		return "", "", 0, false, err
+		timed := errors.Is(tctx.Err(), context.DeadlineExceeded)
+		return "", "", 0, timed, err
 	}
 	insp, err := dockerClient.ContainerExecInspect(tctx, ex.ID)
 	if err != nil {

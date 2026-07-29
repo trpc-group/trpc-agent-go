@@ -55,9 +55,11 @@ return, and test assertions that already verify the failure.
 
 ### `GO-DB-001` — database lifecycle
 
-Detect transactions without rollback fallback, rows without close, and `sql.Open`
-inside the reviewed scope. Injected long-lived pools are not treated as newly
-opened handles.
+Detect transactions without rollback fallback and database handles opened with
+`sql.Open` without a reliable same-scope cleanup. SQL rows are covered by
+`GO-RES-001`. Exclude a new handle when an unconditional `Close` or deferred
+`Close` appears after the acquisition in that scope. Injected long-lived pools
+are not treated as newly opened handles.
 
 ### `GO-TEST-001` — missing tests
 

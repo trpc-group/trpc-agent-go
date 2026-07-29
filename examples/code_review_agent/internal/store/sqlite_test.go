@@ -14,6 +14,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -421,6 +423,86 @@ func TestTaskIDRoundTripsWithoutRedaction(t *testing.T) {
 	review, err := database.GetReview(ctx, taskID)
 	if err != nil || review.Task.ID != taskID || len(review.Runs) != 1 {
 		t.Fatalf("GetReview() = %#v, %v", review, err)
+	}
+}
+
+func TestDataSourceNameEscapesLiteralPath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "review ?#% 世界.db")
+	dsn, err := dataSourceName(path)
+	if err != nil {
+		t.Fatalf("dataSourceName() error = %v", err)
+	}
+	parsed, err := url.Parse(dsn)
+	if err != nil {
+		t.Fatalf("url.Parse(%q) error = %v", dsn, err)
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		t.Fatalf("filepath.Abs() error = %v", err)
+	}
+	wantPath := filepath.ToSlash(abs)
+	if filepath.VolumeName(abs) != "" && !strings.HasPrefix(wantPath, "/") {
+		wantPath = "/" + wantPath
+	}
+	if got, want := parsed.Path, wantPath; got != want {
+		t.Fatalf("DSN path = %q, want %q (DSN %q)", got, want, dsn)
+	}
+	query := parsed.Query()
+	if got := query.Get("_foreign_keys"); got != foreignKeysFlag {
+		t.Fatalf("_foreign_keys = %q, want %q", got, foreignKeysFlag)
+	}
+	if got := query.Get("_busy_timeout"); got != busyTimeoutMS {
+		t.Fatalf("_busy_timeout = %q, want %q", got, busyTimeoutMS)
+	}
+	if len(query) != 2 {
+		t.Fatalf("DSN query contains injected parameters: %#v", query)
+	}
+}
+
+func TestDataSourceNameEscapesWindowsUNCPath(t *testing.T) {
+	if filepath.Separator != '\\' {
+		t.Skip("Windows UNC path semantics")
+	}
+	path := `\\server\share\review ?#%.db`
+	dsn, err := dataSourceName(path)
+	if err != nil {
+		t.Fatalf("dataSourceName() error = %v", err)
+	}
+	parsed, err := url.Parse(dsn)
+	if err != nil {
+		t.Fatalf("url.Parse(%q) error = %v", dsn, err)
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		t.Fatalf("filepath.Abs() error = %v", err)
+	}
+	gotPath := parsed.Path
+	if parsed.Host != "" {
+		gotPath = "//" + parsed.Host + parsed.Path
+	}
+	if got, want := gotPath, filepath.ToSlash(abs); got != want {
+		t.Fatalf("UNC DSN path = %q, want %q (DSN %q)", got, want, dsn)
+	}
+	query := parsed.Query()
+	if query.Get("_foreign_keys") != foreignKeysFlag ||
+		query.Get("_busy_timeout") != busyTimeoutMS ||
+		len(query) != 2 {
+		t.Fatalf("UNC DSN query = %#v", query)
+	}
+}
+
+func TestOpenDatabaseWithLiteralSpecialCharacters(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "review#%.db")
+	database, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("database was not created at literal path %q: %v", path, err)
 	}
 }
 

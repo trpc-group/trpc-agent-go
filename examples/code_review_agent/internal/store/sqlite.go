@@ -462,8 +462,16 @@ func dataSourceName(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve database path: %w", err)
 	}
+	dsnPath := filepath.ToSlash(abs)
+	if filepath.VolumeName(abs) != "" && !strings.HasPrefix(dsnPath, "/") {
+		dsnPath = "/" + dsnPath
+	}
 	query := url.Values{"_foreign_keys": {foreignKeysFlag}, "_busy_timeout": {busyTimeoutMS}}
-	return "file:" + filepath.ToSlash(abs) + "?" + query.Encode(), nil
+	return (&url.URL{
+		Scheme:   "file",
+		Path:     dsnPath,
+		RawQuery: query.Encode(),
+	}).String(), nil
 }
 func (s *SQLiteStore) initialize(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, migrations.InitialSchema); err != nil {

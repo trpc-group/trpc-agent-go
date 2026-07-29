@@ -12,6 +12,7 @@ package input
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -278,6 +279,217 @@ func TestNewFilesDiff(t *testing.T) {
 		})
 	}
 }
+
+func TestCollectFilesDiffFiltersTrackedPaths(t *testing.T) {
+	requireTestGit(t)
+	root := t.TempDir()
+	runTestGit(t, root, "init", "--quiet")
+	runTestGit(t, root, "config", "user.email", "review@example.com")
+	runTestGit(t, root, "config", "user.name", "Review Test")
+	magic := "[literal].go"
+	writeTestFile(
+		t,
+		filepath.Join(root, magic),
+		[]byte("package demo\n\nconst old = 1\n"),
+	)
+	writeTestFile(
+		t,
+		filepath.Join(root, "unchanged.go"),
+		[]byte("package demo\n"),
+	)
+	writeTestFile(
+		t,
+		filepath.Join(root, ".gitignore"),
+		[]byte("ignored.go\n"),
+	)
+	runTestGit(
+		t,
+		root,
+		"--literal-pathspecs",
+		"add",
+		"--",
+		magic,
+		"unchanged.go",
+		".gitignore",
+	)
+	runTestGit(t, root, "commit", "--quiet", "-m", "initial")
+	writeTestFile(
+		t,
+		filepath.Join(root, magic),
+		[]byte("package demo\n\nconst old = 1\nconst added = 2\n"),
+	)
+	writeTestFile(
+		t,
+		filepath.Join(root, "untracked.go"),
+		[]byte("package demo\n"),
+	)
+	writeTestFile(
+		t,
+		filepath.Join(root, "ignored.go"),
+		[]byte("package ignored\n"),
+	)
+
+	selected := []string{
+		"untracked.go",
+		"unchanged.go",
+		"ignored.go",
+		magic,
+		magic,
+	}
+	data, err := collectFilesDiff(
+		context.Background(),
+		root,
+		selected,
+		testLimits(),
+	)
+	if err != nil {
+		t.Fatalf("collectFilesDiff() error = %v", err)
+	}
+	second, err := collectFilesDiff(
+		context.Background(),
+		root,
+		selected,
+		testLimits(),
+	)
+	if err != nil || !bytes.Equal(data, second) {
+		t.Fatalf("collectFilesDiff() unstable: error=%v", err)
+	}
+	raw := string(data)
+	for _, expected := range []string{
+		"diff --git a/[literal].go b/[literal].go",
+		"--- a/[literal].go",
+		"+const added = 2",
+		"diff --git a/untracked.go b/untracked.go",
+		"diff --git a/ignored.go b/ignored.go",
+		"--- /dev/null",
+	} {
+		if !strings.Contains(raw, expected) {
+			t.Fatalf("diff missing %q:\n%s", expected, raw)
+		}
+	}
+	for _, unexpected := range []string{
+		"unchanged.go",
+		"+const old = 1",
+	} {
+		if strings.Contains(raw, unexpected) {
+			t.Fatalf("diff unexpectedly contains %q:\n%s", unexpected, raw)
+		}
+	}
+	if strings.Index(raw, magic) > strings.Index(raw, "untracked.go") {
+		t.Fatalf("tracked diff must precede untracked additions:\n%s", raw)
+	}
+	limited := testLimits()
+	limited.MaxDiffBytes = int64(len(data) - 1)
+	if _, err := collectFilesDiff(
+		context.Background(),
+		root,
+		selected,
+		limited,
+	); err == nil || !strings.Contains(err.Error(), "diff exceeds") {
+		t.Fatalf("combined diff limit error = %v", err)
+	}
+}
+
+func TestCollectFilesDiffUsesFinalTrackedWorktree(t *testing.T) {
+	requireTestGit(t)
+	root := t.TempDir()
+	runTestGit(t, root, "init", "--quiet")
+	runTestGit(t, root, "config", "user.email", "review@example.com")
+	runTestGit(t, root, "config", "user.name", "Review Test")
+	path := filepath.Join(root, "state.go")
+	initial := []byte("package demo\n\nconst state = \"safe\"\n")
+	writeTestFile(t, path, initial)
+	runTestGit(t, root, "add", "state.go")
+	runTestGit(t, root, "commit", "--quiet", "-m", "initial")
+	writeTestFile(
+		t,
+		path,
+		[]byte("package demo\n\nconst state = \"staged\"\n"),
+	)
+	runTestGit(t, root, "add", "state.go")
+	writeTestFile(t, path, initial)
+
+	data, err := collectFilesDiff(
+		context.Background(),
+		root,
+		[]string{"state.go"},
+		testLimits(),
+	)
+	if err != nil {
+		t.Fatalf("collectFilesDiff() error = %v", err)
+	}
+	if len(data) != 0 {
+		t.Fatalf("intermediate index state leaked into diff:\n%s", data)
+	}
+}
+
+func TestCollectFilesDiffFallsBackWithoutHead(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		initGit bool
+	}{
+		{name: "non git"},
+		{name: "unborn head", initGit: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			if test.initGit {
+				runTestGit(t, root, "init", "--quiet")
+			}
+			writeTestFile(
+				t,
+				filepath.Join(root, "selected.go"),
+				[]byte("package final\n"),
+			)
+			if test.initGit {
+				runTestGit(t, root, "add", "selected.go")
+			}
+			data, err := collectFilesDiff(
+				context.Background(),
+				root,
+				[]string{"selected.go"},
+				testLimits(),
+			)
+			if err != nil {
+				t.Fatalf("collectFilesDiff() error = %v", err)
+			}
+			if !bytes.Contains(data, []byte("--- /dev/null")) ||
+				!bytes.Contains(data, []byte("+package final")) {
+				t.Fatalf("fallback diff = %s", data)
+			}
+		})
+	}
+}
+
+func TestCollectFilesDiffPropagatesGitProbeFailures(t *testing.T) {
+	requireTestGit(t)
+	t.Run("canceled context", func(t *testing.T) {
+		root := t.TempDir()
+		runTestGit(t, root, "init", "--quiet")
+		writeTestFile(t, filepath.Join(root, "selected.go"), []byte("package demo\n"))
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		_, err := collectFilesDiff(ctx, root, []string{"selected.go"}, testLimits())
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("collectFilesDiff() error = %v, want context.Canceled", err)
+		}
+	})
+	t.Run("invalid head", func(t *testing.T) {
+		root := t.TempDir()
+		runTestGit(t, root, "init", "--quiet")
+		writeTestFile(t, filepath.Join(root, "selected.go"), []byte("package demo\n"))
+		writeTestFile(t, filepath.Join(root, ".git", "HEAD"), []byte("invalid head\n"))
+		if _, err := collectFilesDiff(
+			context.Background(),
+			root,
+			[]string{"selected.go"},
+			testLimits(),
+		); err == nil {
+			t.Fatal("collectFilesDiff() error = nil, want invalid HEAD error")
+		}
+	})
+}
+
 func TestPureHelpers(t *testing.T) {
 	tests := []struct {
 		input string

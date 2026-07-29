@@ -55,7 +55,7 @@ var rules = []rule{{"GO-SECRET-001", "sensitive_information", "critical", "Hard-
 	return dynamicShell.MatchString(line.text) || strings.Contains(line.text, "0777")
 }}, {"GO-CTX-001", "context_leak", "high", "Context or ticker cleanup missing", "Call cancel or Stop with defer immediately after successful creation.", 0.86, "", matchContextLeak}, {"GO-GOR-001", "goroutine_leak", "medium", "Goroutine has no clear exit path", "Add context/done cancellation and prove every blocking path can exit.", 0.70, reviewmodel.BucketHumanReview, matchGoroutineLeak}, {"GO-RES-001", "resource_lifecycle", "high", "Resource may not be closed", "Check creation error, then defer Close on the acquired resource.", 0.86, "", matchResourceLeak}, {"GO-ERR-001", "error_handling", "medium", "Error result discarded", "Handle and wrap the error with operation context.", 0.82, "", func(line addedLine, _ string) bool {
 	return ignoredError.MatchString(line.text)
-}}, {"GO-DB-001", "database_lifecycle", "high", "Database lifecycle incomplete", "Defer rollback after Begin and close rows; commit only after all operations succeed.", 0.86, "", matchDatabaseLeak}}
+}}, {"GO-DB-001", "database_lifecycle", "high", "Database lifecycle incomplete", "Defer rollback after Begin, close database handles after their last use, and commit only after all operations succeed.", 0.86, "", matchDatabaseLeak}}
 
 // Analyze evaluates deterministic rules against added lines only.
 func Analyze(files []diffparse.ChangedFile) []reviewmodel.Finding {
@@ -283,7 +283,7 @@ type lifecycle struct {
 
 var (
 	errorFinding        = astFinding{"GO-ERR-001", "Error result discarded", "Handle and wrap the error with operation context.", "error_handling", "medium", 0.90}
-	databaseOpenFinding = astFinding{"GO-DB-001", "Database opened in review scope", "Reuse an injected database handle and close it at application shutdown.", "database_lifecycle", "medium", 0.81}
+	databaseOpenFinding = astFinding{"GO-DB-001", "Database handle is not closed", "Close the database handle after its last use.", "database_lifecycle", "medium", 0.81}
 	permissionFinding   = astFinding{"GO-SEC-001", "World-writable permission", "Use least-privilege file permissions.", "security", "high", 0.95}
 	shellFinding        = astFinding{"GO-SEC-001", "Dynamic shell execution", "Use a fixed executable and fixed argv without a shell.", "security", "high", 0.96}
 	cancelFinding       = astFinding{"GO-CTX-001", "Context cancel function is not called", "Defer the cancel function immediately after creation.", "context_leak", "high", 0.92}
@@ -500,8 +500,7 @@ func (s *astState) trackAssignment(name string, assign *ast.AssignStmt, call *as
 	case "os.Open", "os.Create", "http.Get":
 		s.track(lineData, resourceFinding, name+".Close", name+".Body.Close")
 	case "sql.Open":
-		s.track(lineData, resourceFinding, name+".Close")
-		s.addLine(lineData, databaseOpenFinding)
+		s.track(lineData, databaseOpenFinding, name+".Close")
 	default:
 		called := calledName(call.Fun)
 		if strings.HasSuffix(called, ".Query") || strings.HasSuffix(called, ".QueryContext") {

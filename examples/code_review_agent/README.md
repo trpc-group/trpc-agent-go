@@ -39,9 +39,13 @@ table-driven evaluator instead of duplicating repository trees. The
 Exactly one of `--diff-file`, `--repo-path`, or `--fixture composite` is
 required. Repository mode supports staged, unstaged, untracked, rename,
 delete, binary, and no-HEAD repositories. `--files-file` accepts only validated
-repository-relative paths. Repository snapshots contain tracked files plus
-non-ignored untracked files; ignored files and `.git` metadata are excluded.
-An explicit file list may opt in an otherwise ignored file.
+repository-relative paths. With a usable Git `HEAD`, it filters the comparison:
+selected tracked files use their real diff against `HEAD`, while selected
+untracked files are represented as whole-file additions. In a non-Git or
+no-HEAD directory, all selected files are whole-file additions. Repository
+snapshots contain tracked files plus non-ignored untracked files; ignored files
+and `.git` metadata are excluded. An explicit file list may opt in an otherwise
+ignored file, which is also represented as a whole-file addition.
 
 Each run writes `review_report.json`, `review_report.md`, and SQLite state.
 Use a fresh, caller-private `--output-dir` for each run; report files are

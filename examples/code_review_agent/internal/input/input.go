@@ -185,6 +185,144 @@ func newFilesDiff(root string, paths []string, limits Limits) ([]byte, error) {
 	}
 	return result.Bytes(), nil
 }
+
+const maxGitPathArgumentsBytes = 16 << 10
+
+func collectFilesDiff(
+	ctx context.Context,
+	root string,
+	paths []string,
+	limits Limits,
+) ([]byte, error) {
+	selected := append([]string(nil), paths...)
+	slices.Sort(selected)
+	selected = slices.Compact(selected)
+	hasHead, err := gitHasHead(ctx, root)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, err
+		}
+		if _, statErr := os.Lstat(filepath.Join(root, ".git")); !errors.Is(statErr, os.ErrNotExist) {
+			return nil, err
+		}
+		return newFilesDiff(root, selected, limits)
+	}
+	if !hasHead {
+		return newFilesDiff(root, selected, limits)
+	}
+	tracked, err := selectedTrackedPaths(ctx, root, selected)
+	if err != nil {
+		return nil, err
+	}
+	trackedSet := make(map[string]struct{}, len(tracked))
+	for _, path := range tracked {
+		trackedSet[path] = struct{}{}
+	}
+	untracked := make([]string, 0, len(selected)-len(tracked))
+	for _, path := range selected {
+		if _, ok := trackedSet[path]; !ok {
+			untracked = append(untracked, path)
+		}
+	}
+	var result bytes.Buffer
+	for _, batch := range gitPathBatches(tracked) {
+		remaining := limits.MaxDiffBytes - int64(result.Len())
+		gitLimit := remaining
+		if gitLimit <= 0 {
+			gitLimit = 1
+		}
+		args := []string{
+			"diff",
+			"HEAD",
+			"--binary",
+			"--no-ext-diff",
+			"--no-textconv",
+			"--ignore-submodules=all",
+			"--",
+		}
+		data, diffErr := runGit(
+			ctx,
+			root,
+			gitLimit,
+			append(args, batch...)...,
+		)
+		if diffErr != nil {
+			return nil, diffErr
+		}
+		if int64(len(data)) > remaining {
+			return nil, fmt.Errorf(
+				"generated diff exceeds %d bytes",
+				limits.MaxDiffBytes,
+			)
+		}
+		result.Write(data)
+	}
+	if len(untracked) == 0 {
+		return result.Bytes(), nil
+	}
+	remaining := limits
+	remaining.MaxDiffBytes -= int64(result.Len())
+	additions, err := newFilesDiff(root, untracked, remaining)
+	if err != nil {
+		return nil, err
+	}
+	result.Write(additions)
+	return result.Bytes(), nil
+}
+
+func selectedTrackedPaths(
+	ctx context.Context,
+	root string,
+	paths []string,
+) ([]string, error) {
+	seen := make(map[string]struct{}, len(paths))
+	for _, batch := range gitPathBatches(paths) {
+		args := append(
+			[]string{"ls-files", "--cached", "-z", "--"},
+			batch...,
+		)
+		data, err := runGit(ctx, root, maxGitInventoryBytes, args...)
+		if err != nil {
+			return nil, err
+		}
+		for _, rawPath := range bytes.Split(data, []byte{0}) {
+			if len(rawPath) == 0 {
+				continue
+			}
+			path, cleanErr := cleanRelativePath(root, string(rawPath))
+			if cleanErr != nil {
+				return nil, cleanErr
+			}
+			seen[path] = struct{}{}
+		}
+	}
+	result := make([]string, 0, len(seen))
+	for path := range seen {
+		result = append(result, path)
+	}
+	sort.Strings(result)
+	return result, nil
+}
+
+func gitPathBatches(paths []string) [][]string {
+	var result [][]string
+	for len(paths) > 0 {
+		size := 0
+		end := 0
+		for end < len(paths) {
+			next := len(paths[end]) + 1
+			if end > 0 && size+next > maxGitPathArgumentsBytes {
+				break
+			}
+			size += next
+			end++
+		}
+		result = append(result, paths[:end])
+		paths = paths[end:]
+	}
+	return result
+}
+
 func gitDiffPath(prefix, path string) string {
 	value := []byte(prefix + path)
 	if bytes.IndexFunc(value, func(r rune) bool { return r < 0x21 || r > 0x7e || r == '"' || r == '\\' }) < 0 {
@@ -312,7 +450,21 @@ func runGit(ctx context.Context, root string, limit int64, args ...string) ([]by
 	}
 	// args are selected only by the fixed callers in this package.
 	//nolint:gosec
-	cmd := exec.CommandContext(ctx, "git", append([]string{"--no-pager", "-c", "safe.directory=*", "-C", root}, args...)...)
+	cmd := exec.CommandContext(
+		ctx,
+		"git",
+		append(
+			[]string{
+				"--no-pager",
+				"-c",
+				"safe.directory=*",
+				"-C",
+				root,
+				"--literal-pathspecs",
+			},
+			args...,
+		)...,
+	)
 	cmd.Env = gitEnvironment()
 	var out, errOut boundedBuffer
 	out.limit, errOut.limit = limit, maxGitErrorBytes
@@ -708,7 +860,12 @@ func loadRaw(ctx context.Context, config Config, explicitPaths []string) (string
 			return "", "", nil, err
 		}
 		if config.FilesFile != "" {
-			data, diffErr := newFilesDiff(root, explicitPaths, config.Limits)
+			data, diffErr := collectFilesDiff(
+				ctx,
+				root,
+				explicitPaths,
+				config.Limits,
+			)
 			return "files", root, data, diffErr
 		}
 		data, gitErr := collectGitDiff(ctx, root, config.Limits)

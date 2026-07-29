@@ -196,11 +196,11 @@ func sandboxErrorType(run sandbox.Run, runErr error) string {
 	if errors.Is(runErr, sandbox.ErrDependencyCache) {
 		return "dependency_cache"
 	}
-	if runErr != nil {
-		return fmt.Sprintf("%T", runErr)
-	}
 	if run.TimedOut || run.Status == "timeout" {
 		return "sandbox_timeout"
+	}
+	if runErr != nil {
+		return fmt.Sprintf("%T", runErr)
 	}
 	if run.Status == "failed" {
 		return "sandbox_failed"

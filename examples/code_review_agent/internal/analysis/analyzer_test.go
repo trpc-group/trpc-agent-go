@@ -77,6 +77,94 @@ func update(db *sql.DB) error {
 	}
 }
 
+func TestASTTracksSQLDatabaseHandleLifecycle(t *testing.T) {
+	tests := []struct {
+		name   string
+		body   string
+		report bool
+	}{
+		{
+			name: "defer close",
+			body: `db, _ := sql.Open("sqlite3", "review.db")
+ defer db.Close()`,
+		},
+		{
+			name: "explicit close",
+			body: `db, _ := sql.Open("sqlite3", "review.db")
+ db.Close()`,
+		},
+		{
+			name: "unclosed",
+			body: `db, _ := sql.Open("sqlite3", "review.db")
+ _ = db`,
+			report: true,
+		},
+		{
+			name: "wrong receiver",
+			body: `db, _ := sql.Open("sqlite3", "review.db")
+ other.Close()
+ _ = db`,
+			report: true,
+		},
+		{
+			name: "close before open",
+			body: `var db *sql.DB
+ db.Close()
+ db, err := sql.Open("sqlite3", "review.db")
+ _ = db
+ _ = err`,
+			report: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			source := "package database\nimport \"database/sql\"\n" +
+				"type closer interface { Close() error }\n" +
+				"func review(other closer) {\n " + test.body + "\n}"
+			findings := Analyze(newFile(t, "database.go", source))
+			want := 0
+			if test.report {
+				want = 1
+			}
+			if got := countRule(findings, "GO-DB-001"); got != want {
+				t.Fatalf("GO-DB-001 findings = %d, want %d: %#v", got, want, findings)
+			}
+			if got := countRule(findings, "GO-RES-001"); got != 0 {
+				t.Fatalf("GO-RES-001 findings = %d, want 0: %#v", got, findings)
+			}
+			if test.report {
+				var finding reviewmodel.Finding
+				for _, candidate := range findings {
+					if candidate.RuleID == "GO-DB-001" {
+						finding = candidate
+						break
+					}
+				}
+				if finding.Title != "Database handle is not closed" ||
+					finding.Recommendation != "Close the database handle after its last use." {
+					t.Fatalf("unexpected database finding: %#v", finding)
+				}
+			}
+		})
+	}
+}
+
+func TestPatchFallbackRecommendsClosingSQLDatabaseHandle(t *testing.T) {
+	findings := Analyze(newFile(t, "broken.go", `package broken
+func open() {
+ db, _ := sql.Open("sqlite3", "review.db")`))
+	for _, finding := range findings {
+		if finding.RuleID != "GO-DB-001" {
+			continue
+		}
+		if !strings.Contains(finding.Recommendation, "close database handles") {
+			t.Fatalf("fallback recommendation = %q", finding.Recommendation)
+		}
+		return
+	}
+	t.Fatalf("GO-DB-001 fallback finding missing: %#v", findings)
+}
+
 func TestAnalyzeConfiguredUsesSkillMetadataAndModes(t *testing.T) {
 	files := newFile(t, "config.go", `package config
 var key = "sk-abcdefghijklmnopqrstuvwxyz123456"`)
