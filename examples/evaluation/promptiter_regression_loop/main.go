@@ -14,7 +14,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/examples/evaluation/promptiter_regression_loop/internal/regression"
 )
@@ -51,15 +50,25 @@ func executeConfig(cfg *config) error {
 	if cfg == nil {
 		return errors.New("config is nil")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.Timeout))
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout.duration())
 	defer cancel()
 	report, pipelineErr := runPipeline(ctx, cfg)
 	if report == nil {
 		return pipelineErr
 	}
-	writeErr := regression.WriteReports(cfg.OutputDir, report)
+	var writeErr error
+	if pipelineErr == nil && report.ShouldWriteBack {
+		writeErr = regression.WritePromptAndReports(
+			cfg.BaselinePromptSource,
+			cfg.OutputDir,
+			cfg.TargetSurfaceID,
+			report,
+		)
+	} else {
+		writeErr = regression.WriteReports(cfg.OutputDir, report)
+	}
 	if writeErr != nil {
-		writeErr = fmt.Errorf("write reports: %w", writeErr)
+		writeErr = fmt.Errorf("publish pipeline artifacts: %w", writeErr)
 	}
 	return errors.Join(pipelineErr, writeErr)
 }

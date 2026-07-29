@@ -147,26 +147,26 @@ func TestWriteReportsJoinsPublishAndRollbackFailures(t *testing.T) {
 	report := completeReport(t)
 	require.NoError(t, WriteReports(outputDir, report))
 	oldJSON := readReportFile(t, outputDir, jsonReportName)
+	oldMarkdown := readReportFile(t, outputDir, markdownReportName)
 	report.Run.Seed = 99
 	ops := reportOpsWithRenameFailures(map[int]error{
 		4: errors.New("forced JSON publish failure"),
-		5: errors.New("forced Markdown restore failure"),
+		6: errors.New("forced Markdown restore failure"),
 	})
 
 	err := writeReports(outputDir, report, ops)
 	require.ErrorContains(t, err, "forced JSON publish failure")
 	require.ErrorContains(t, err, "forced Markdown restore failure")
-	assertReportFileMissing(t, outputDir, jsonReportName)
+	assert.Equal(t, oldJSON, readReportFile(t, outputDir, jsonReportName))
 	assertReportFileMissing(t, outputDir, markdownReportName)
-	jsonBackups, globErr := filepath.Glob(
-		filepath.Join(outputDir, "."+jsonReportName+".backup-*"),
+	markdownBackups, globErr := filepath.Glob(
+		filepath.Join(outputDir, "."+markdownReportName+".backup-*"),
 	)
 	require.NoError(t, globErr)
-	require.Len(t, jsonBackups, 1)
-	backupJSON, readErr := os.ReadFile(jsonBackups[0])
+	require.Len(t, markdownBackups, 1)
+	backupMarkdown, readErr := os.ReadFile(markdownBackups[0])
 	require.NoError(t, readErr)
-	assert.Equal(t, oldJSON, backupJSON)
-	assert.NotContains(t, string(backupJSON), `"seed":99`)
+	assert.Equal(t, oldMarkdown, backupMarkdown)
 }
 
 func TestWriteReportsJoinsPublishedMarkdownRemovalFailure(t *testing.T) {
@@ -222,7 +222,7 @@ func TestWriteReportsKeepsCommittedPairWhenBackupCleanupFails(t *testing.T) {
 	}
 
 	err := writeReports(outputDir, report, ops)
-	require.ErrorContains(t, err, "reports committed but backup cleanup failed")
+	require.ErrorContains(t, err, "artifacts committed but backup cleanup failed")
 	assert.Contains(t, string(readReportFile(t, outputDir, jsonReportName)), `"seed":99`)
 	assert.Contains(t, string(readReportFile(t, outputDir, markdownReportName)), "Seed: 99")
 }
@@ -234,6 +234,234 @@ func TestWriteReportsRejectsNonRegularExistingTarget(t *testing.T) {
 	err := WriteReports(outputDir, completeReport(t))
 	require.ErrorContains(t, err, "existing JSON report is not a regular file")
 	assertReportFileMissing(t, outputDir, markdownReportName)
+	assertNoReportTransactionFiles(t, outputDir)
+}
+
+func TestWritePromptAndReportsPublishesCompleteSet(t *testing.T) {
+	promptDir := t.TempDir()
+	promptPath := filepath.Join(promptDir, "baseline_prompt.txt")
+	require.NoError(t, os.WriteFile(promptPath, []byte("baseline\n"), 0o600))
+	outputDir := t.TempDir()
+	report := completeWritebackReport(t, "candidate")
+
+	require.NoError(t, WritePromptAndReports(
+		promptPath, outputDir, "instruction", report,
+	))
+	assert.Equal(t, "candidate\n", string(readFile(t, promptPath)))
+	assert.Contains(t, string(readReportFile(t, outputDir, jsonReportName)),
+		`"shouldWriteBack":true`)
+	assert.Contains(t, string(readReportFile(t, outputDir, markdownReportName)),
+		"Should write back accepted prompt: true")
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(promptPath)
+		require.NoError(t, err)
+		assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	}
+	assertNoTransactionFiles(t, promptDir)
+	assertNoReportTransactionFiles(t, outputDir)
+
+	require.NoError(t, WritePromptAndReports(
+		promptPath, outputDir, "instruction", report,
+	))
+	assert.Equal(t, "candidate\n", string(readFile(t, promptPath)))
+	assertNoTransactionFiles(t, promptDir)
+	assertNoReportTransactionFiles(t, outputDir)
+}
+
+func TestWritePromptAndReportsValidatesWritebackContract(t *testing.T) {
+	promptPath := filepath.Join(t.TempDir(), "baseline_prompt.txt")
+	require.NoError(t, os.WriteFile(promptPath, []byte("baseline\n"), 0o600))
+	outputDir := t.TempDir()
+
+	running := completeWritebackReport(t, "candidate")
+	running.Run.Status = RunStatusRunning
+	require.ErrorContains(t, WritePromptAndReports(
+		promptPath, outputDir, "instruction", running,
+	), "completed run")
+
+	notAuthorized := completeWritebackReport(t, "candidate")
+	notAuthorized.ShouldWriteBack = false
+	require.ErrorContains(t, WritePromptAndReports(
+		promptPath, outputDir, "instruction", notAuthorized,
+	), "does not authorize")
+
+	missingProfile := completeWritebackReport(t, "candidate")
+	missingProfile.WritebackProfile = nil
+	require.ErrorContains(t, WritePromptAndReports(
+		promptPath, outputDir, "instruction", missingProfile,
+	), "profile is nil")
+
+	wrongSurface := completeWritebackReport(t, "candidate")
+	require.ErrorContains(t, WritePromptAndReports(
+		promptPath, outputDir, "other", wrongSurface,
+	), "surface id does not match")
+
+	emptyPrompt := completeWritebackReport(t, "candidate")
+	emptyPrompt.WritebackProfile.Text = " "
+	require.ErrorContains(t, WritePromptAndReports(
+		promptPath, outputDir, "instruction", emptyPrompt,
+	), "text is empty")
+
+	missingPath := filepath.Join(t.TempDir(), "missing.txt")
+	require.ErrorContains(t, WritePromptAndReports(
+		missingPath, outputDir, "instruction",
+		completeWritebackReport(t, "candidate"),
+	), "accepted prompt does not exist")
+
+	directoryPath := filepath.Join(t.TempDir(), "prompt")
+	require.NoError(t, os.Mkdir(directoryPath, directoryMode))
+	require.ErrorContains(t, WritePromptAndReports(
+		directoryPath, outputDir, "instruction",
+		completeWritebackReport(t, "candidate"),
+	), "accepted prompt is not a regular file")
+
+	conflictingPath := filepath.Join(outputDir, jsonReportName)
+	require.NoError(t, os.WriteFile(conflictingPath, []byte("baseline\n"), 0o600))
+	require.ErrorContains(t, WritePromptAndReports(
+		conflictingPath, outputDir, "instruction",
+		completeWritebackReport(t, "candidate"),
+	), "target conflicts")
+}
+
+func TestWritePromptAndReportsRejectsHardlinkTargetAlias(t *testing.T) {
+	outputDir := t.TempDir()
+	promptPath := filepath.Join(outputDir, "baseline_prompt.txt")
+	require.NoError(t, os.WriteFile(promptPath, []byte("baseline\n"), 0o600))
+	if err := os.Link(
+		promptPath,
+		filepath.Join(outputDir, jsonReportName),
+	); err != nil {
+		t.Skipf("hardlinks are unavailable: %v", err)
+	}
+
+	err := WritePromptAndReports(
+		promptPath,
+		outputDir,
+		"instruction",
+		completeWritebackReport(t, "candidate"),
+	)
+	require.ErrorContains(t, err, "target conflicts")
+	assert.Equal(t, "baseline\n", string(readFile(t, promptPath)))
+}
+
+func TestWritePromptAndReportsRejectsParentSymlinkTargetAlias(t *testing.T) {
+	realOutputDir := t.TempDir()
+	promptPath := filepath.Join(realOutputDir, jsonReportName)
+	require.NoError(t, os.WriteFile(promptPath, []byte("baseline\n"), 0o600))
+	aliasOutputDir := filepath.Join(t.TempDir(), "output-alias")
+	if err := os.Symlink(realOutputDir, aliasOutputDir); err != nil {
+		t.Skipf("directory symlinks are unavailable: %v", err)
+	}
+
+	err := WritePromptAndReports(
+		promptPath,
+		aliasOutputDir,
+		"instruction",
+		completeWritebackReport(t, "candidate"),
+	)
+	require.ErrorContains(t, err, "target conflicts")
+	assert.Equal(t, "baseline\n", string(readFile(t, promptPath)))
+}
+
+func TestWritePromptAndReportsRollsBackCompleteSet(t *testing.T) {
+	promptPath := filepath.Join(t.TempDir(), "baseline_prompt.txt")
+	oldPrompt := []byte("baseline\n")
+	require.NoError(t, os.WriteFile(promptPath, oldPrompt, 0o600))
+	outputDir := t.TempDir()
+	oldReport := completeWritebackReport(t, "old candidate")
+	require.NoError(t, WritePromptAndReports(
+		promptPath, outputDir, "instruction", oldReport,
+	))
+	oldPrompt = readFile(t, promptPath)
+	oldJSON := readReportFile(t, outputDir, jsonReportName)
+	oldMarkdown := readReportFile(t, outputDir, markdownReportName)
+	newReport := completeWritebackReport(t, "new candidate")
+	newReport.Run.Seed = 99
+	ops := reportOpsWithRenameFailures(map[int]error{
+		6: errors.New("forced JSON publish failure"),
+	})
+
+	err := writePromptAndReports(
+		promptPath, outputDir, "instruction", newReport, ops,
+	)
+	require.ErrorContains(t, err, "forced JSON publish failure")
+	assert.Equal(t, oldPrompt, readFile(t, promptPath))
+	assert.Equal(t, oldJSON, readReportFile(t, outputDir, jsonReportName))
+	assert.Equal(t, oldMarkdown, readReportFile(t, outputDir, markdownReportName))
+	assertNoTransactionFiles(t, filepath.Dir(promptPath))
+	assertNoReportTransactionFiles(t, outputDir)
+}
+
+func TestWritePromptAndReportsReportsRollbackFailure(t *testing.T) {
+	promptDir := t.TempDir()
+	promptPath := filepath.Join(promptDir, "baseline_prompt.txt")
+	require.NoError(t, os.WriteFile(promptPath, []byte("baseline\n"), 0o600))
+	outputDir := t.TempDir()
+	require.NoError(t, WritePromptAndReports(
+		promptPath, outputDir, "instruction",
+		completeWritebackReport(t, "old candidate"),
+	))
+	ops := reportOpsWithRenameFailures(map[int]error{
+		6: errors.New("forced JSON publish failure"),
+		9: errors.New("forced prompt restore failure"),
+	})
+
+	err := writePromptAndReports(
+		promptPath, outputDir, "instruction",
+		completeWritebackReport(t, "new candidate"),
+		ops,
+	)
+	require.ErrorContains(t, err, "forced JSON publish failure")
+	require.ErrorContains(t, err, "forced prompt restore failure")
+	_, statErr := os.Stat(promptPath)
+	require.ErrorIs(t, statErr, os.ErrNotExist)
+	backups, globErr := filepath.Glob(
+		filepath.Join(promptDir, ".baseline_prompt.txt.backup-*"),
+	)
+	require.NoError(t, globErr)
+	require.Len(t, backups, 1)
+	assert.Equal(t, "old candidate\n", string(readFile(t, backups[0])))
+}
+
+func TestWritePromptAndReportsSerializesCompleteSets(t *testing.T) {
+	promptPath := filepath.Join(t.TempDir(), "baseline_prompt.txt")
+	require.NoError(t, os.WriteFile(promptPath, []byte("baseline\n"), 0o600))
+	outputDir := t.TempDir()
+	const writers = 8
+	start := make(chan struct{})
+	errs := make(chan error, writers)
+	var wait sync.WaitGroup
+	for i := 0; i < writers; i++ {
+		report := completeWritebackReport(t, fmt.Sprintf("candidate-%d", i))
+		report.Run.Seed = int64(i)
+		report.Rounds[0].CandidatePrompt.Text = report.WritebackProfile.Text
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			<-start
+			errs <- WritePromptAndReports(
+				promptPath, outputDir, "instruction", report,
+			)
+		}()
+	}
+	close(start)
+	wait.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+
+	var decoded Report
+	require.NoError(t, json.Unmarshal(
+		readReportFile(t, outputDir, jsonReportName),
+		&decoded,
+	))
+	require.NotNil(t, decoded.WritebackProfile)
+	assert.Equal(t, decoded.WritebackProfile.Text+"\n", string(readFile(t, promptPath)))
+	markdown := readReportFile(t, outputDir, markdownReportName)
+	assert.Contains(t, string(markdown), decoded.WritebackProfile.Text)
+	assert.Contains(t, string(markdown), fmt.Sprintf("- Seed: %d", decoded.Run.Seed))
+	assertNoTransactionFiles(t, filepath.Dir(promptPath))
 	assertNoReportTransactionFiles(t, outputDir)
 }
 
@@ -347,6 +575,19 @@ func completeReport(t *testing.T) *Report {
 	return report
 }
 
+func completeWritebackReport(t *testing.T, prompt string) *Report {
+	t.Helper()
+	report := completeReport(t)
+	report.Run.Status = RunStatusCompleted
+	report.Candidate.Text = prompt
+	require.NoError(t, SetWriteback(
+		report,
+		PromptRecord{SurfaceID: "instruction", Text: "baseline"},
+		PromptRecord{SurfaceID: "instruction", Text: prompt},
+	))
+	return report
+}
+
 func reportOpsWithRenameFailures(failures map[int]error) reportFileOps {
 	ops := osReportFileOps
 	renameCalls := 0
@@ -362,7 +603,12 @@ func reportOpsWithRenameFailures(failures map[int]error) reportFileOps {
 
 func readReportFile(t *testing.T, outputDir, name string) []byte {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(outputDir, name))
+	return readFile(t, filepath.Join(outputDir, name))
+}
+
+func readFile(t *testing.T, path string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
 	require.NoError(t, err)
 	return data
 }
@@ -375,7 +621,12 @@ func assertReportFileMissing(t *testing.T, outputDir, name string) {
 
 func assertNoReportTransactionFiles(t *testing.T, outputDir string) {
 	t.Helper()
-	entries, err := os.ReadDir(outputDir)
+	assertNoTransactionFiles(t, outputDir)
+}
+
+func assertNoTransactionFiles(t *testing.T, directory string) {
+	t.Helper()
+	entries, err := os.ReadDir(directory)
 	require.NoError(t, err)
 	for _, entry := range entries {
 		assert.NotContains(t, entry.Name(), ".tmp-")

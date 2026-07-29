@@ -27,13 +27,27 @@ cd examples/evaluation/promptiter_regression_loop
 go run . -config ./data/promptiter-regression-app/promptiter.json
 ```
 
-The default two-minute timeout is below the three-minute acceptance limit.
-Outputs are written to `./output` relative to this directory unless
-`outputDir` is changed in `promptiter.json`:
+When `timeout` is omitted, it defaults to two minutes, below the three-minute
+acceptance limit. An explicit null, empty, zero, negative, non-string, or
+malformed timeout is rejected instead of receiving the default.
+
+Reports are written to `./output` relative to this directory unless `outputDir`
+is changed in `promptiter.json`:
 
 ```text
 optimization_report.json
 optimization_report.md
+```
+
+When a complete run accepts a changed prompt, the same publication also updates
+`baselinePromptSource` (by default `baseline_prompt.txt`). Rejected, unchanged,
+failed, and incomplete runs leave the prompt source unchanged. Running the
+bundled configuration therefore changes the tracked baseline prompt. To replay
+the demonstration from its original starting point in a Git checkout, restore
+that fixture after inspecting the result:
+
+```bash
+git restore -- data/promptiter-regression-app/baseline_prompt.txt
 ```
 
 ## Input Files
@@ -50,10 +64,13 @@ data/promptiter-regression-app/
 - `baseline_prompt.txt` is the initial `candidate#instruction` surface.
 - `train.evalset.json` has three optimization cases.
 - `validation.evalset.json` has three independent regression cases.
+- The normalized train and validation evalset IDs must be different; using the
+  training set as its own validation set is rejected.
 - `metrics.json` combines local deterministic exact-response and tool-trajectory
   evaluators.
 - `promptiter.json` fixes the seed, timeout, three candidate prompts, gate,
-  budgets, target surface, and output path.
+  budgets, target surface, and output path. If `baselinePromptSource` is
+  omitted, it resolves to `baseline_prompt.txt` beside this configuration.
 
 The fake model maps the exact natural-language business questions and complete
 prompt instructions to deterministic behavior. Prompts and user messages contain
@@ -96,6 +113,8 @@ failures, and allows no regression in `validation_account_security`. Validation
 budgets cap tokens, model calls, and tool calls. Candidate results are compared
 with both the current
 accepted profile and the original baseline, preventing accumulated regression.
+Only a completed pipeline with an accepted, changed profile is eligible for
+prompt persistence.
 
 ## Audit Reports
 
@@ -109,14 +128,22 @@ omitted because aggregate usage and failure evidence are already retained.
 all attempted and rejected candidates remain under `rounds`.
 
 Run metadata includes the source configuration SHA-256 and deterministic fake
-engine version. JSON duration fields use the explicit `durationNanos` name.
+engine version. Configuration line endings are normalized before hashing so
+LF and CRLF checkouts produce the same provenance value. JSON duration fields
+use the explicit `durationNanos` name.
 Typed metric criteria determine failure categories; trace errors remain attached
 as evidence and classify trace-only or untyped failures. A run that fails after
 report initialization clears writeback and records a rejecting final decision.
 
 Configuration parsing rejects unknown fields and trailing JSON values so a
-misspelled budget cannot silently disable a gate. Report write failures are
-returned explicitly.
+misspelled budget cannot silently disable a gate. For accepted changes, the
+prompt, JSON report, and Markdown report are staged in their respective target
+directories and published as one process-serialized set. Publication failures
+restore the previous files; rollback failures return all causes and may require
+manual recovery from retained backups. A backup-cleanup failure after the set is
+committed returns an error and retains the backup without rolling back the new
+set. This is best-effort consistency, not atomicity across crashes, power loss,
+or independent processes.
 
 Fake-model token usage is a deterministic whitespace-delimited estimate, not a
 provider tokenizer. It makes relative cost and budget checks reproducible
@@ -126,12 +153,20 @@ The Markdown report presents the same decision in a compact human-readable
 form. For the bundled data, candidate 1 remains the writeback profile after the
 later no-effect and overfitting attempts are rejected.
 
+The committed reports are a snapshot of one successful writeback run. The
+tracked baseline fixture is then restored only so a fresh checkout can reproduce
+the full optimization loop. To regenerate the snapshot, run the example from
+the original fixture, verify the report's `configSha256`, retain both reports,
+and restore only the baseline prompt.
+
 ## Verify
 
 From `examples/evaluation`:
 
 ```bash
-go test ./promptiter_regression_loop/... -coverprofile=coverage.out
+go test ./promptiter_regression_loop/... -count=1
+go test -race ./promptiter_regression_loop/... -count=1
+go test ./promptiter_regression_loop/... -count=1 -coverprofile=coverage.out
 go tool cover -func=coverage.out
 golangci-lint run --config ../../.golangci.yml --timeout=10m ./promptiter_regression_loop/...
 ```

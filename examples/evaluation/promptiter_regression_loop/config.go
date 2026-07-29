@@ -29,9 +29,15 @@ const (
 	defaultTimeout    = 2 * time.Minute
 )
 
-type durationValue time.Duration
+type durationValue struct {
+	value time.Duration
+	set   bool
+}
 
 func (d *durationValue) UnmarshalJSON(data []byte) error {
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		return errors.New("duration must not be null")
+	}
 	var value string
 	if err := json.Unmarshal(data, &value); err != nil {
 		return fmt.Errorf("decode duration string: %w", err)
@@ -40,8 +46,17 @@ func (d *durationValue) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return fmt.Errorf("parse duration %q: %w", value, err)
 	}
-	*d = durationValue(parsed)
+	d.value = parsed
+	d.set = true
 	return nil
+}
+
+func newDurationValue(value time.Duration) durationValue {
+	return durationValue{value: value, set: true}
+}
+
+func (d durationValue) duration() time.Duration {
+	return d.value
 }
 
 type config struct {
@@ -80,10 +95,11 @@ func loadConfig(path string) (*config, error) {
 	}
 	cleanPath := filepath.Clean(path)
 	cfg.ConfigPath = filepath.ToSlash(cleanPath)
-	cfg.ConfigSHA256 = fmt.Sprintf("%x", sha256.Sum256(data))
+	canonicalData := bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
+	cfg.ConfigSHA256 = fmt.Sprintf("%x", sha256.Sum256(canonicalData))
 	cfg.DataDir = filepath.Dir(cleanPath)
-	if cfg.Timeout == 0 {
-		cfg.Timeout = durationValue(defaultTimeout)
+	if !cfg.Timeout.set {
+		cfg.Timeout.value = defaultTimeout
 	}
 	if cfg.BaselinePromptSource == "" {
 		cfg.BaselinePromptSource = filepath.Join(cfg.DataDir, "baseline_prompt.txt")
@@ -119,6 +135,9 @@ func validateConfig(cfg *config) error {
 		strings.TrimSpace(cfg.ValidationEvalSetID) == "" {
 		return errors.New("app name and eval set ids must be non-empty")
 	}
+	if strings.TrimSpace(cfg.TrainEvalSetID) == strings.TrimSpace(cfg.ValidationEvalSetID) {
+		return errors.New("train and validation eval set ids must be different")
+	}
 	if strings.TrimSpace(cfg.TargetSurfaceID) == "" || strings.TrimSpace(cfg.BaselinePromptSource) == "" ||
 		strings.TrimSpace(cfg.OutputDir) == "" {
 		return errors.New("target surface, prompt source, and output directory must be non-empty")
@@ -129,7 +148,7 @@ func validateConfig(cfg *config) error {
 	if cfg.MaxAttempts != len(cfg.CandidatePrompts) {
 		return errors.New("max attempts must equal candidate prompt count")
 	}
-	if time.Duration(cfg.Timeout) <= 0 {
+	if cfg.Timeout.duration() <= 0 {
 		return errors.New("timeout must be greater than zero")
 	}
 	if err := regression.ValidateGateConfig(cfg.Gate); err != nil {

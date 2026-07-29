@@ -82,4 +82,4 @@ Handle 7-day returns, return shipping, order tracking, delivery updates, and inv
 - Total tokens: 1670
 - Model calls: 35
 - Tool calls: 7
-- Aggregate evaluation latency: 16 ms
+- Aggregate evaluation latency: 15 ms

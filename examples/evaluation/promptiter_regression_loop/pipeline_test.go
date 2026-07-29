@@ -157,11 +157,43 @@ func TestConfiguredEntryPointRunsAndHandlesErrors(t *testing.T) {
 	cfg, err := loadConfig(defaultConfigPath)
 	require.NoError(t, err)
 	cfg.OutputDir = t.TempDir()
+	cfg.BaselinePromptSource = filepath.Join(t.TempDir(), "baseline_prompt.txt")
+	require.NoError(t, os.WriteFile(
+		cfg.BaselinePromptSource,
+		[]byte(baselineInstruction+"\n"),
+		0o600,
+	))
 	require.NoError(t, executeConfig(cfg))
 	_, err = os.Stat(filepath.Join(cfg.OutputDir, "optimization_report.json"))
 	require.NoError(t, err)
+	writtenPrompt, err := loadBaselinePrompt(cfg.BaselinePromptSource)
+	require.NoError(t, err)
+	assert.Equal(t, candidateOneInstruction, writtenPrompt)
 	assert.Error(t, executeConfig(nil))
 	assert.Error(t, runConfigured(filepath.Join(t.TempDir(), "missing.json")))
+}
+
+func TestExecuteConfigDoesNotWriteRejectedPrompt(t *testing.T) {
+	cfg, err := loadConfig(defaultConfigPath)
+	require.NoError(t, err)
+	cfg.OutputDir = t.TempDir()
+	cfg.BaselinePromptSource = filepath.Join(t.TempDir(), "baseline_prompt.txt")
+	require.NoError(t, os.WriteFile(
+		cfg.BaselinePromptSource,
+		[]byte(baselineInstruction+"\n"),
+		0o600,
+	))
+	cfg.Gate.MinValidationScoreGain = 2
+
+	require.NoError(t, executeConfig(cfg))
+	writtenPrompt, err := loadBaselinePrompt(cfg.BaselinePromptSource)
+	require.NoError(t, err)
+	assert.Equal(t, baselineInstruction, writtenPrompt)
+	jsonReport, err := os.ReadFile(
+		filepath.Join(cfg.OutputDir, "optimization_report.json"),
+	)
+	require.NoError(t, err)
+	assert.Contains(t, string(jsonReport), `"shouldWriteBack":false`)
 }
 
 func TestRunParsesFlagsAndReturnsConfigError(t *testing.T) {
@@ -179,9 +211,10 @@ func TestRunParsesFlagsAndReturnsConfigError(t *testing.T) {
 func TestConfigValidationAndDuration(t *testing.T) {
 	var duration durationValue
 	require.NoError(t, json.Unmarshal([]byte(`"3s"`), &duration))
-	assert.Equal(t, 3*time.Second, time.Duration(duration))
+	assert.Equal(t, 3*time.Second, duration.duration())
 	assert.Error(t, json.Unmarshal([]byte(`"bad"`), &duration))
 	assert.Error(t, json.Unmarshal([]byte(`1`), &duration))
+	assert.Error(t, json.Unmarshal([]byte(`null`), &duration))
 	assert.Error(t, validateConfig(nil))
 	cfg := validTestConfig()
 	cfg.MaxAttempts = 0
@@ -202,11 +235,20 @@ func TestConfigValidationAndDuration(t *testing.T) {
 	cfg.TargetSurfaceID = ""
 	assert.Error(t, validateConfig(cfg))
 	cfg = validTestConfig()
-	cfg.Timeout = 0
+	cfg.Timeout = durationValue{}
 	assert.Error(t, validateConfig(cfg))
 	cfg = validTestConfig()
 	cfg.MaxAttempts = 2
 	assert.Error(t, validateConfig(cfg))
+	for _, ids := range [][2]string{
+		{"same", "same"},
+		{" same ", "same"},
+	} {
+		cfg = validTestConfig()
+		cfg.TrainEvalSetID = ids[0]
+		cfg.ValidationEvalSetID = ids[1]
+		assert.ErrorContains(t, validateConfig(cfg), "must be different")
+	}
 }
 
 func TestLoadConfigAndPromptErrors(t *testing.T) {
@@ -244,11 +286,89 @@ func TestLoadConfigAppliesDefaults(t *testing.T) {
 
 	cfg, err := loadConfig(configPath)
 	require.NoError(t, err)
-	assert.Equal(t, defaultTimeout, time.Duration(cfg.Timeout))
+	assert.Equal(t, defaultTimeout, cfg.Timeout.duration())
 	assert.Equal(t, filepath.ToSlash(filepath.Clean(configPath)), cfg.ConfigPath)
 	assert.Equal(t, filepath.Dir(filepath.Clean(configPath)), cfg.DataDir)
 	assert.Equal(t, filepath.Join(filepath.Dir(configPath), "baseline_prompt.txt"), cfg.BaselinePromptSource)
 	assert.Len(t, cfg.ConfigSHA256, 64)
+}
+
+func TestLoadConfigDistinguishesOmittedAndExplicitTimeouts(t *testing.T) {
+	const configPrefix = `{
+		"appName":"app","trainEvalSetID":"train","validationEvalSetID":"validation",
+		"maxAttempts":1,"targetSurfaceID":"candidate#instruction",
+		"candidatePrompts":["prompt"],"outputDir":"output","timeout":`
+	const configSuffix = `}`
+	tests := []struct {
+		name        string
+		value       string
+		want        time.Duration
+		wantErrText string
+	}{
+		{name: "positive", value: `"3s"`, want: 3 * time.Second},
+		{name: "zero", value: `"0s"`, wantErrText: "timeout must be greater than zero"},
+		{name: "negative", value: `"-1s"`, wantErrText: "timeout must be greater than zero"},
+		{name: "null", value: `null`, wantErrText: "duration must not be null"},
+		{name: "empty", value: `""`, wantErrText: "parse duration"},
+		{name: "number", value: `1`, wantErrText: "decode duration string"},
+		{name: "malformed", value: `"not-a-duration"`, wantErrText: "parse duration"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			configPath := filepath.Join(t.TempDir(), "promptiter.json")
+			data := []byte(configPrefix + test.value + configSuffix)
+			require.NoError(t, os.WriteFile(configPath, data, 0o600))
+			cfg, err := loadConfig(configPath)
+			if test.wantErrText != "" {
+				require.ErrorContains(t, err, test.wantErrText)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, test.want, cfg.Timeout.duration())
+		})
+	}
+}
+
+func TestLoadConfigHashNormalizesLineEndings(t *testing.T) {
+	lfData := []byte(`{
+		"appName":"app",
+		"trainEvalSetID":"train",
+		"validationEvalSetID":"validation",
+		"maxAttempts":1,
+		"targetSurfaceID":"candidate#instruction",
+		"candidatePrompts":["prompt"],
+		"outputDir":"output"
+	}`)
+	crlfData := bytes.ReplaceAll(lfData, []byte("\n"), []byte("\r\n"))
+	loadHash := func(data []byte) string {
+		configPath := filepath.Join(t.TempDir(), "promptiter.json")
+		require.NoError(t, os.WriteFile(configPath, data, 0o600))
+		cfg, err := loadConfig(configPath)
+		require.NoError(t, err)
+		return cfg.ConfigSHA256
+	}
+
+	assert.Equal(t, loadHash(lfData), loadHash(crlfData))
+}
+
+func TestCommittedAuditReportMatchesCurrentConfig(t *testing.T) {
+	cfg, err := loadConfig(defaultConfigPath)
+	require.NoError(t, err)
+	data, err := os.ReadFile(filepath.Join(
+		cfg.OutputDir,
+		"optimization_report.json",
+	))
+	require.NoError(t, err)
+	var report regression.Report
+	require.NoError(t, json.Unmarshal(data, &report))
+
+	assert.Equal(t, regression.SchemaVersion, report.SchemaVersion)
+	assert.Equal(t, cfg.ConfigSHA256, report.Run.ConfigSHA256)
+	assert.Equal(t, regression.RunStatusCompleted, report.Run.Status)
+	assert.True(t, report.ShouldWriteBack)
+	assert.Len(t, report.Rounds, cfg.MaxAttempts)
+	assert.Len(t, report.BaselineTrain.Cases, expectedCaseCount)
+	assert.Len(t, report.BaselineValidation.Cases, expectedCaseCount)
 }
 
 func TestDeterministicModelErrorsAndMatrix(t *testing.T) {
@@ -599,7 +719,7 @@ func assertRound(t *testing.T, round regression.RoundReport, expected roundExpec
 func validTestConfig() *config {
 	return &config{
 		AppName: "app", TrainEvalSetID: "train", ValidationEvalSetID: "validation",
-		Timeout: durationValue(time.Second), MaxAttempts: 1,
+		Timeout: newDurationValue(time.Second), MaxAttempts: 1,
 		TargetSurfaceID: "candidate#instruction", CandidatePrompts: []string{"prompt"},
 		OutputDir: "output", BaselinePromptSource: "baseline.txt",
 	}
