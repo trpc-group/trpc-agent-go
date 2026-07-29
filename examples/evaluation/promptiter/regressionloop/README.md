@@ -18,12 +18,13 @@ optimization config, the pipeline:
    optimize) to produce a candidate instruction.
 3. **Validation regression** — re-scores the candidate and computes a per-case
    delta vs baseline (newly passed / newly failed / score up / score down; a
-   metric present in only one phase is flagged as missing/unexpected and makes
-   the pair non-comparable).
+   metric present in only one phase is flagged as missing/unexpected, a
+   non-terminal status as incomparable — either makes the pair non-comparable).
 4. **Failure attribution** — classifies baseline failures by root cause.
 5. **Release gate** — decides whether the engine-accepted candidate is safe to
-   publish (score gain threshold, no new hard fails, protected cases, budget,
-   comparable metric sets, and the accepted profile artifact actually present).
+   publish (score gain threshold, no new hard fails, protected cases scoped by
+   eval set, budget, comparable metric evidence, the expected validation shape
+   fully present, and the accepted profile artifact actually available).
 6. **Audit report** — writes `optimization_report.json` (machine truth) and
    `optimization_report.md` (human summary).
 
@@ -97,9 +98,10 @@ under [`output/`](./output).
 > **Metric naming gotcha:** `metricName` must equal a registered evaluator name
 > (`final_response_avg_score`, `tool_trajectory_avg_score`, …). The evaluator is
 > resolved by name, not by criterion type; a custom name is silently skipped.
-> The pipeline passes the configured metric names to the analysis as
-> `expectedMetrics`, so a silently-skipped metric now fails the release gate
-> ("missing expected metric") instead of shrinking the evidence unnoticed.
+> The pipeline declares an expected validation shape (every requested case and
+> configured metric, loaded from the eval set and metrics files), so a
+> silently-skipped metric — or a case vanishing from both phases — now fails
+> the release gate instead of shrinking the evidence unnoticed.
 
 ## How the deterministic (fake) mode works
 

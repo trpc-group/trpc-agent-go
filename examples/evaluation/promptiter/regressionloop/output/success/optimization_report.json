@@ -98,7 +98,8 @@
       "scoreDown": 0,
       "unchanged": 0,
       "missingMetrics": 0,
-      "unexpectedMetrics": 0
+      "unexpectedMetrics": 0,
+      "incomparableMetrics": 0
     }
   },
   "failureAttribution": {
@@ -251,7 +252,8 @@
           "scoreDown": 0,
           "unchanged": 0,
           "missingMetrics": 0,
-          "unexpectedMetrics": 0
+          "unexpectedMetrics": 0,
+          "incomparableMetrics": 0
         }
       }
     }

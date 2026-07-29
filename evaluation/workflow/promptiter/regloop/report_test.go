@@ -10,6 +10,7 @@ package regloop
 
 import (
 	"encoding/json"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -41,12 +42,26 @@ func acceptedRunFixture() *engine.RunResult {
 	}
 }
 
+// fixtureShape is the expected validation shape matching acceptedRunFixture,
+// required for a release.
+func fixtureShape(caseIDs ...string) []ExpectedEvalSet {
+	if len(caseIDs) == 0 {
+		caseIDs = []string{"c1"}
+	}
+	return []ExpectedEvalSet{{
+		EvalSetID: "validation",
+		CaseIDs:   caseIDs,
+		Metrics:   []string{"final_response_avg_score"},
+	}}
+}
+
 func TestAnalyzeAcceptedRun(t *testing.T) {
 	result := acceptedRunFixture()
 	report, err := Analyze(result, Options{
-		AppName: "eval-optimization-app",
-		Mode:    "fake",
-		Gate:    ReleaseGate{MinTotalGain: 0.5, MaxRounds: 4},
+		AppName:  "eval-optimization-app",
+		Mode:     "fake",
+		Gate:     ReleaseGate{MinTotalGain: 0.5, MaxRounds: 4},
+		Expected: fixtureShape(),
 	})
 	if err != nil {
 		t.Fatalf("analyze: %v", err)
@@ -205,6 +220,10 @@ func TestAnalyzeRedactsSensitiveConfig(t *testing.T) {
 			},
 			"headers": map[string]string{"Authorization": "Bearer xyz"},
 			"list":    []any{map[string]any{"password": "hunter2", "name": "ok"}},
+			// Named/typed containers and structs must be normalized before the walk;
+			// separator-styled keys like X-Api-Key must still match.
+			"httpHeaders": http.Header{"X-Api-Key": {"sk-header-secret"}},
+			"model":       modelConfig{Endpoint: "https://api.example.com", APIKey: "sk-struct-secret"},
 		},
 	})
 	if err != nil {
@@ -214,16 +233,22 @@ func TestAnalyzeRedactsSensitiveConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("json: %v", err)
 	}
-	for _, secret := range []string{"sk-super-secret", "tok-abc", "Bearer xyz", "hunter2"} {
+	for _, secret := range []string{"sk-super-secret", "tok-abc", "Bearer xyz", "hunter2", "sk-header-secret", "sk-struct-secret"} {
 		if strings.Contains(string(payload), secret) {
 			t.Fatalf("secret %q leaked into report JSON", secret)
 		}
 	}
-	for _, kept := range []string{"success", "visible", `"name": "ok"`, "[redacted]"} {
+	for _, kept := range []string{"success", "visible", `"name": "ok"`, "[redacted]", "https://api.example.com"} {
 		if !strings.Contains(string(payload), kept) {
 			t.Fatalf("expected %q in report JSON", kept)
 		}
 	}
+}
+
+// modelConfig is a struct-typed config value for the redaction test.
+type modelConfig struct {
+	Endpoint string `json:"endpoint"`
+	APIKey   string `json:"apiKey"`
 }
 
 func TestAnalyzeFailsClosedOnNonTerminalMetric(t *testing.T) {
@@ -255,9 +280,11 @@ func TestAnalyzeFailsClosedOnMissingExpectedMetric(t *testing.T) {
 	// A metric name that matches no registered evaluator is silently omitted from
 	// BOTH phases, so the key-set comparison cannot see it; only the expected
 	// shape can. The run itself is otherwise releasable.
+	shape := fixtureShape()
+	shape[0].Metrics = append(shape[0].Metrics, "tool_trajectory_avg_score")
 	report, err := Analyze(acceptedRunFixture(), Options{
-		Gate:            ReleaseGate{MinTotalGain: 0.5},
-		ExpectedMetrics: []string{"final_response_avg_score", "tool_trajectory_avg_score"},
+		Gate:     ReleaseGate{MinTotalGain: 0.5},
+		Expected: shape,
 	})
 	if err != nil {
 		t.Fatalf("analyze: %v", err)
@@ -267,6 +294,41 @@ func TestAnalyzeFailsClosedOnMissingExpectedMetric(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(report.Gate.Reasons, " "), "missing expected metric") {
 		t.Fatalf("reason must flag the missing metric, got %v", report.Gate.Reasons)
+	}
+}
+
+func TestAnalyzeFailsClosedWithoutExpectedShape(t *testing.T) {
+	// The expected shape is the external truth about which cases were requested;
+	// without it a case omitted from both phases is invisible, so an otherwise
+	// releasable run must fail closed.
+	report, err := Analyze(acceptedRunFixture(), Options{Gate: ReleaseGate{MinTotalGain: 0.5}})
+	if err != nil {
+		t.Fatalf("analyze: %v", err)
+	}
+	if report.Gate.Released {
+		t.Fatalf("release without an expected shape must fail closed, reasons=%v", report.Gate.Reasons)
+	}
+	if !strings.Contains(strings.Join(report.Gate.Reasons, " "), "expected validation shape unavailable") {
+		t.Fatalf("reason must flag the missing shape, got %v", report.Gate.Reasons)
+	}
+}
+
+func TestAnalyzeFailsClosedWhenExpectedCaseVanishes(t *testing.T) {
+	// Two cases were requested but both phases only report c1: c2 vanished from
+	// BOTH phases, which the phase-vs-phase comparison cannot see. Only the
+	// expected shape catches it.
+	report, err := Analyze(acceptedRunFixture(), Options{
+		Gate:     ReleaseGate{MinTotalGain: 0.5},
+		Expected: fixtureShape("c1", "c2"),
+	})
+	if err != nil {
+		t.Fatalf("analyze: %v", err)
+	}
+	if report.Gate.Released {
+		t.Fatalf("a case missing from both phases must not release, reasons=%v", report.Gate.Reasons)
+	}
+	if !strings.Contains(strings.Join(report.Gate.Reasons, " "), `missing expected case "c2"`) {
+		t.Fatalf("reason must flag the vanished case, got %v", report.Gate.Reasons)
 	}
 }
 
@@ -377,14 +439,36 @@ func TestAnalyzeBudgetFailsClosedWithoutCost(t *testing.T) {
 
 func TestAnalyzeBudgetWithKnownCalls(t *testing.T) {
 	report, err := Analyze(acceptedRunFixture(), Options{
-		Gate: ReleaseGate{MinTotalGain: 0.5, MaxModelCalls: 100},
-		Cost: CostInput{ModelCalls: map[string]int{"candidate": 5}},
+		Gate:     ReleaseGate{MinTotalGain: 0.5, MaxModelCalls: 100},
+		Cost:     CostInput{ModelCalls: map[string]int{"candidate": 5}},
+		Expected: fixtureShape(),
 	})
 	if err != nil {
 		t.Fatalf("analyze: %v", err)
 	}
 	if !report.Gate.Released {
 		t.Fatalf("known calls under budget must release, reasons=%v", report.Gate.Reasons)
+	}
+}
+
+func TestAnalyzeSnapshotsModelCalls(t *testing.T) {
+	// The serialized per-role counts must not drift if the caller keeps mutating
+	// its instrumentation map after Analyze returned.
+	calls := map[string]int{"candidate": 5}
+	report, err := Analyze(acceptedRunFixture(), Options{
+		Gate: ReleaseGate{MinTotalGain: 0.5},
+		Cost: CostInput{ModelCalls: calls},
+	})
+	if err != nil {
+		t.Fatalf("analyze: %v", err)
+	}
+	calls["candidate"] = 999
+	calls["judge"] = 1
+	if report.Cost.ModelCalls["candidate"] != 5 || report.Cost.TotalModelCalls != 5 {
+		t.Fatalf("cost must snapshot the call map at Analyze time, got %+v", report.Cost)
+	}
+	if !strings.Contains(report.Markdown(), "candidate: 5") {
+		t.Fatalf("markdown must render the snapshotted count")
 	}
 }
 
@@ -413,7 +497,7 @@ func TestReportJSONRoundTrips(t *testing.T) {
 }
 
 func TestReportMarkdownAndWriteFiles(t *testing.T) {
-	report, err := Analyze(acceptedRunFixture(), Options{AppName: "app", Mode: "fake", Gate: ReleaseGate{MinTotalGain: 0.5}})
+	report, err := Analyze(acceptedRunFixture(), Options{AppName: "app", Mode: "fake", Gate: ReleaseGate{MinTotalGain: 0.5}, Expected: fixtureShape()})
 	if err != nil {
 		t.Fatalf("analyze: %v", err)
 	}

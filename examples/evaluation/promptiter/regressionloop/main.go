@@ -56,7 +56,7 @@ func run(ctx context.Context, dataDir, outputDir string, sc scenario, stableCost
 	if err != nil {
 		return err
 	}
-	expectedMetrics, err := loadMetricNames(dataDir, sc.metricFileID)
+	expected, err := loadExpectedShape(dataDir, sc)
 	if err != nil {
 		return err
 	}
@@ -83,10 +83,11 @@ func run(ctx context.Context, dataDir, outputDir string, sc scenario, stableCost
 		AppName: appName,
 		Mode:    "fake",
 		Gate:    gate,
-		// Every configured metric must carry terminal evidence in both phases; a
-		// silently-skipped metric (see the README metric-naming gotcha) now fails
-		// the gate instead of shrinking the evidence unnoticed.
-		ExpectedMetrics: expectedMetrics,
+		// Every requested validation case must carry every configured metric with
+		// terminal evidence in both phases; a silently-skipped metric or a case
+		// vanishing from both phases (see the README metric-naming gotcha) now
+		// fails the gate instead of shrinking the evidence unnoticed.
+		Expected: expected,
 		Cost: regloop.CostInput{
 			DurationMs: durationMs,
 			ModelCalls: rt.calls.snapshot(),

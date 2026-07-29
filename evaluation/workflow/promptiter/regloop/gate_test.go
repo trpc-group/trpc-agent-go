@@ -97,14 +97,41 @@ func TestGateNewlyFailedCountsDistinctCases(t *testing.T) {
 }
 
 func TestGateRejectsProtectedRegression(t *testing.T) {
-	gate := ReleaseGate{MinTotalGain: 0.0, ProtectedCaseIDs: []string{"vip"}}
+	// An empty EvalSetID protects the case ID in every eval set.
+	gate := ReleaseGate{MinTotalGain: 0.0, ProtectedCases: []ProtectedCase{{EvalCaseID: "vip"}}}
 	delta := deltaWith(
 		DeltaSummary{ScoreDown: 1},
-		CaseDelta{EvalCaseID: "vip", MetricName: "m", Kind: DeltaScoreDown},
+		CaseDelta{EvalSetID: "validation", EvalCaseID: "vip", MetricName: "m", Kind: DeltaScoreDown},
 	)
 	got := gate.evaluate(gi(true, 0.3, 1, delta))
 	if got.Released {
 		t.Fatalf("expected rejected for protected case regression")
+	}
+	if !strings.Contains(strings.Join(got.Reasons, " "), "validation/vip") {
+		t.Fatalf("reason must identify the set-scoped case, got %v", got.Reasons)
+	}
+}
+
+// TestGateProtectedCaseScopedByEvalSet: the same case ID exists in two eval
+// sets; protecting it in one set must not trip on the other set's regression,
+// and must trip on its own.
+func TestGateProtectedCaseScopedByEvalSet(t *testing.T) {
+	gate := ReleaseGate{MinTotalGain: 0.0, AllowNewHardFail: true,
+		ProtectedCases: []ProtectedCase{{EvalSetID: "set-a", EvalCaseID: "case-1"}}}
+	otherSet := deltaWith(
+		DeltaSummary{ScoreDown: 1, Unchanged: 1},
+		CaseDelta{EvalSetID: "set-b", EvalCaseID: "case-1", MetricName: "m", Kind: DeltaScoreDown},
+		CaseDelta{EvalSetID: "set-a", EvalCaseID: "case-1", MetricName: "m", Kind: DeltaUnchanged},
+	)
+	if got := gate.evaluate(gi(true, 0.3, 1, otherSet)); !got.Released {
+		t.Fatalf("set-b regression must not trip a set-a protection, reasons=%v", got.Reasons)
+	}
+	ownSet := deltaWith(
+		DeltaSummary{ScoreDown: 1},
+		CaseDelta{EvalSetID: "set-a", EvalCaseID: "case-1", MetricName: "m", Kind: DeltaScoreDown},
+	)
+	if got := gate.evaluate(gi(true, 0.3, 1, ownSet)); got.Released {
+		t.Fatalf("set-a regression must trip the set-a protection")
 	}
 }
 

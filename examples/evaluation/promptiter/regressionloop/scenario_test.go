@@ -36,16 +36,16 @@ func analyzeScenario(t *testing.T, name string) *regloop.Report {
 	if err != nil {
 		t.Fatalf("engine run: %v", err)
 	}
-	expectedMetrics, err := loadMetricNames("./data", sc.metricFileID)
+	expected, err := loadExpectedShape("./data", sc)
 	if err != nil {
-		t.Fatalf("load metric names: %v", err)
+		t.Fatalf("load expected shape: %v", err)
 	}
 	report, err := regloop.Analyze(result, regloop.Options{
-		AppName:         appName,
-		Mode:            "fake",
-		Gate:            resolveGate(cfg, sc),
-		ExpectedMetrics: expectedMetrics,
-		Cost:            regloop.CostInput{ModelCalls: rt.calls.snapshot()},
+		AppName:  appName,
+		Mode:     "fake",
+		Gate:     resolveGate(cfg, sc),
+		Expected: expected,
+		Cost:     regloop.CostInput{ModelCalls: rt.calls.snapshot()},
 	})
 	if err != nil {
 		t.Fatalf("analyze: %v", err)
@@ -71,7 +71,7 @@ func TestResolveThresholdsUseConfigByDefault(t *testing.T) {
 	if got.MinTotalGain != want.MinTotalGain ||
 		got.AllowNewHardFail != want.AllowNewHardFail ||
 		got.MaxRounds != want.MaxRounds ||
-		len(got.ProtectedCaseIDs) != len(want.ProtectedCaseIDs) {
+		len(got.ProtectedCases) != len(want.ProtectedCases) {
 		t.Fatalf("success gate=%+v must come from config %+v", got, want)
 	}
 	overfit, _ := scenarioByName(scenarioOverfit)

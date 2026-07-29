@@ -8,6 +8,6 @@
     "allowNewHardFail": false,
     "maxRounds": 4,
     "maxModelCalls": 100,
-    "protectedCaseIds": []
+    "protectedCases": []
   }
 }

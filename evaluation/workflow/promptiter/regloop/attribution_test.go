@@ -31,6 +31,8 @@ func TestCategorize(t *testing.T) {
 		{"knowledge recall", "final_response_avg_score", "missing knowledge recall / grounding", CategoryKnowledgeRecall},
 		{"tool error", "tool_trajectory_avg_score", "expected tool call missing", CategoryToolError},
 		{"tool arg error", "tool_trajectory_avg_score", "argument mismatch on query", CategoryToolArgError},
+		{"explicit tool arg without tool metric", "custom_metric", "invalid tool argument for search", CategoryToolArgError},
+		{"argument word without tool context", "final_response_avg_score", "answer omits a supporting argument", CategoryResponseMismatch},
 		{"route error", "tool_trajectory_avg_score", "wrong agent route", CategoryRouteError},
 		{"other", "custom_metric", "something else", CategoryOther},
 	}
@@ -101,6 +103,7 @@ func TestAttributionBenchmarkAccuracy(t *testing.T) {
 		{"final_response_avg_score", "模型凭空编造了事实", CategoryKnowledgeRecall},
 		{"custom_metric", "unexpected internal error during scoring", CategoryOther},
 		{"custom_metric", "评测超时", CategoryOther},
+		{"final_response_avg_score", "the answer omits a supporting argument", CategoryResponseMismatch},
 		// Deliberately ambiguous (heuristic likely misclassifies these):
 		{"final_response_avg_score", "response format looks fine but the number is wrong", CategoryResponseMismatch},
 		{"tool_trajectory_avg_score", "参数没问题，但工具选错了", CategoryToolError},

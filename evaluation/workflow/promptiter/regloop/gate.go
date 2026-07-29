@@ -20,12 +20,20 @@ type ReleaseGate struct {
 	MinTotalGain float64
 	// AllowNewHardFail permits releasing even when the candidate newly fails a case.
 	AllowNewHardFail bool
-	// ProtectedCaseIDs must never regress (no NewlyFailed and no ScoreDown).
-	ProtectedCaseIDs []string
+	// ProtectedCases must never regress (no NewlyFailed and no ScoreDown).
+	ProtectedCases []ProtectedCase
 	// MaxRounds caps the optimization round budget; 0 disables the check.
 	MaxRounds int
 	// MaxModelCalls caps the total model-call budget; 0 disables the check.
 	MaxModelCalls int
+}
+
+// ProtectedCase pins one case by its full engine identity (EvalSetID,
+// EvalCaseID), since one run may evaluate multiple sets that reuse a case ID.
+// An empty EvalSetID protects the case ID in every eval set.
+type ProtectedCase struct {
+	EvalSetID  string `json:"evalSetId,omitempty"`
+	EvalCaseID string `json:"evalCaseId"`
 }
 
 // gateInput carries everything the gate needs to decide on one run. It is
@@ -72,13 +80,16 @@ func (g ReleaseGate) evaluate(in gateInput) GateResult {
 		reasons = append(reasons, fmt.Sprintf("total gain %.3f < threshold %.3f", in.TotalGain, g.MinTotalGain))
 	}
 
-	// Fail closed when the compared metric sets differ: a metric present in only
-	// one phase means the phases are not comparable, and a candidate that stopped
-	// reporting a failing metric would otherwise inflate its aggregate gain.
-	if miss, unexpected := in.Delta.Summary.MissingMetrics, in.Delta.Summary.UnexpectedMetrics; miss > 0 || unexpected > 0 {
+	// Fail closed when the metric evidence is not comparable: a metric present in
+	// only one phase, or one whose status is non-terminal on either side, means
+	// part of the validation never ran — a candidate that stopped reporting a
+	// failing metric would otherwise inflate its aggregate gain.
+	miss, unexpected, incomparable := in.Delta.Summary.MissingMetrics, in.Delta.Summary.UnexpectedMetrics, in.Delta.Summary.IncomparableMetrics
+	if miss > 0 || unexpected > 0 || incomparable > 0 {
 		released = false
 		reasons = append(reasons, fmt.Sprintf(
-			"metric sets not comparable: %d baseline metric(s) missing from candidate, %d candidate-only metric(s)", miss, unexpected))
+			"metric evidence not comparable: %d baseline metric(s) missing from candidate, %d candidate-only metric(s), %d non-terminal pair(s)",
+			miss, unexpected, incomparable))
 	}
 
 	// Count distinct cases with a newly-failed metric, so the reason text ("cases")
@@ -93,10 +104,10 @@ func (g ReleaseGate) evaluate(in gateInput) GateResult {
 		reasons = append(reasons, fmt.Sprintf("%d newly failed cases", newlyFailedCases))
 	}
 
-	if regressed := protectedRegressions(g.ProtectedCaseIDs, in.Delta); len(regressed) > 0 {
+	if regressed := protectedRegressions(g.ProtectedCases, in.Delta); len(regressed) > 0 {
 		released = false
 		reasons = append(reasons, fmt.Sprintf("protected cases regressed: %v", regressed))
-	} else if len(g.ProtectedCaseIDs) > 0 {
+	} else if len(g.ProtectedCases) > 0 {
 		reasons = append(reasons, "protected cases intact")
 	}
 
@@ -126,41 +137,47 @@ func (g ReleaseGate) evaluate(in gateInput) GateResult {
 	return GateResult{Released: released, Reasons: reasons}
 }
 
-// newlyFailedCaseCount returns the number of distinct eval cases that have at
-// least one newly-failed metric.
+// newlyFailedCaseCount returns the number of distinct eval cases — identified
+// by (evalSetID, evalCaseID) — that have at least one newly-failed metric.
 func newlyFailedCaseCount(delta DeltaReport) int {
 	seen := map[string]struct{}{}
 	for _, d := range delta.CaseDeltas {
 		if d.Kind == DeltaNewlyFailed {
-			seen[d.EvalCaseID] = struct{}{}
+			seen[d.EvalSetID+"/"+d.EvalCaseID] = struct{}{}
 		}
 	}
 	return len(seen)
 }
 
-// protectedRegressions returns the protected case IDs that regressed.
-func protectedRegressions(protectedIDs []string, delta DeltaReport) []string {
-	if len(protectedIDs) == 0 {
+// protectedRegressions returns the regressed protected cases, each rendered as
+// "evalSetID/evalCaseID" so gate reasons identify which set's case moved.
+func protectedRegressions(protected []ProtectedCase, delta DeltaReport) []string {
+	if len(protected) == 0 {
 		return nil
 	}
-	protectedSet := make(map[string]struct{}, len(protectedIDs))
-	for _, id := range protectedIDs {
-		protectedSet[id] = struct{}{}
+	matches := func(d CaseDelta) bool {
+		for _, p := range protected {
+			if p.EvalCaseID == d.EvalCaseID && (p.EvalSetID == "" || p.EvalSetID == d.EvalSetID) {
+				return true
+			}
+		}
+		return false
 	}
 	seen := map[string]struct{}{}
 	regressed := make([]string, 0)
 	for _, d := range delta.CaseDeltas {
-		if _, ok := protectedSet[d.EvalCaseID]; !ok {
-			continue
-		}
 		if d.Kind != DeltaNewlyFailed && d.Kind != DeltaScoreDown {
 			continue
 		}
-		if _, ok := seen[d.EvalCaseID]; ok {
+		if !matches(d) {
 			continue
 		}
-		seen[d.EvalCaseID] = struct{}{}
-		regressed = append(regressed, d.EvalCaseID)
+		key := d.EvalSetID + "/" + d.EvalCaseID
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		regressed = append(regressed, key)
 	}
 	return regressed
 }

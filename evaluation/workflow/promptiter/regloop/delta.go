@@ -148,6 +148,8 @@ func addToSummary(summary *DeltaSummary, kind DeltaKind) {
 		summary.ScoreUp++
 	case DeltaScoreDown:
 		summary.ScoreDown++
+	case DeltaIncomparable:
+		summary.IncomparableMetrics++
 	default:
 		summary.Unchanged++
 	}
@@ -178,7 +180,15 @@ func unionKeys(baseline, candidate map[metricKey]engine.MetricResult) []metricKe
 	return keys
 }
 
+// classifyDelta compares one metric pair. Status flips are asserted only for
+// exact terminal (passed/failed) transitions: a non-terminal status (e.g.
+// not_evaluated) means the metric did not run, so the pair is Incomparable —
+// reporting it as NewlyPassed/NewlyFailed would assert a transition that never
+// occurred.
 func classifyDelta(base, cand engine.MetricResult) DeltaKind {
+	if !terminalStatus(base.Status) || !terminalStatus(cand.Status) {
+		return DeltaIncomparable
+	}
 	basePassed := base.Status == status.EvalStatusPassed
 	candPassed := cand.Status == status.EvalStatusPassed
 	switch {
@@ -193,6 +203,11 @@ func classifyDelta(base, cand engine.MetricResult) DeltaKind {
 	default:
 		return DeltaUnchanged
 	}
+}
+
+// terminalStatus reports whether a metric status is a terminal verdict.
+func terminalStatus(s status.EvalStatus) bool {
+	return s == status.EvalStatusPassed || s == status.EvalStatusFailed
 }
 
 func indexMetrics(result *engine.EvaluationResult) map[metricKey]engine.MetricResult {

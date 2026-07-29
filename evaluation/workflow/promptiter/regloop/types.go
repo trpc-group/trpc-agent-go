@@ -31,6 +31,10 @@ const (
 	// different metric sets, so the pair is not comparable (it is neither a
 	// preserved score nor a regression).
 	DeltaMissing DeltaKind = "Missing"
+	// DeltaIncomparable marks a metric present in both phases where at least one
+	// side carries a non-terminal status (e.g. not_evaluated): the metric did not
+	// actually run there, so no pass/fail transition can be asserted.
+	DeltaIncomparable DeltaKind = "Incomparable"
 )
 
 // FailureCategory groups one failed metric by its likely root cause.
@@ -147,6 +151,9 @@ type DeltaSummary struct {
 	MissingMetrics int `json:"missingMetrics"`
 	// UnexpectedMetrics counts candidate metrics absent from the baseline.
 	UnexpectedMetrics int `json:"unexpectedMetrics"`
+	// IncomparableMetrics counts metric pairs where at least one side carries a
+	// non-terminal status, so no transition could be asserted.
+	IncomparableMetrics int `json:"incomparableMetrics"`
 }
 
 // AttributionReport summarizes baseline validation failures by category

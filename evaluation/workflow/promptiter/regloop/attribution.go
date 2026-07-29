@@ -70,7 +70,11 @@ func categorize(metricName, reason string) FailureCategory {
 	toolMetric := containsAny(name, "tool_trajectory", "trajectory", "tool")
 
 	// Tool called with wrong arguments (before the generic tool-call check).
-	if containsAny(why, "argument", "参数", "arg ", "wrong parameter", "错误参数", "invalid arg") {
+	// Requires tool context — a tool-family metric or an explicit tool-argument
+	// phrase — so a response metric whose reason merely mentions an "argument"
+	// (e.g. "omits a supporting argument") is not misattributed to a tool call.
+	argSignal := containsAny(why, "argument", "参数", "arg ", "wrong parameter", "错误参数", "invalid arg")
+	if (toolMetric && argSignal) || containsAny(why, "tool argument", "tool arg", "工具参数") {
 		return CategoryToolArgError
 	}
 	// Routing / wrong-agent / transfer failures.

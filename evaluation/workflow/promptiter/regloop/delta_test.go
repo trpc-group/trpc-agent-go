@@ -137,3 +137,29 @@ func TestComputeDeltaDroppedPassingMetricIsMissing(t *testing.T) {
 		t.Fatalf("expected one delta with candidate status %q, got %+v", statusAbsent, got.CaseDeltas)
 	}
 }
+
+func TestComputeDeltaNonTerminalIsIncomparable(t *testing.T) {
+	// A non-terminal status means the metric did not run in that phase: the pair
+	// must be Incomparable, never a NewlyPassed/NewlyFailed transition that did
+	// not actually occur.
+	baseline := evalR(0.5,
+		caseR("c1", metricR("m", 1.0, status.EvalStatusPassed, "")),
+		caseR("c2", metricR("m", 0.0, status.EvalStatusNotEvaluated, "")),
+	)
+	candidate := evalR(0.5,
+		caseR("c1", metricR("m", 0.0, status.EvalStatusNotEvaluated, "")), // passed -> not run
+		caseR("c2", metricR("m", 1.0, status.EvalStatusPassed, "")),       // not run -> passed
+	)
+	got := ComputeDelta(baseline, candidate)
+	if got.Summary.NewlyFailed != 0 || got.Summary.NewlyPassed != 0 {
+		t.Fatalf("non-terminal pairs must not assert transitions, summary=%+v", got.Summary)
+	}
+	if got.Summary.IncomparableMetrics != 2 {
+		t.Fatalf("incomparable=%d want 2, summary=%+v", got.Summary.IncomparableMetrics, got.Summary)
+	}
+	for _, d := range got.CaseDeltas {
+		if d.Kind != DeltaIncomparable {
+			t.Fatalf("kind=%s want Incomparable for %s", d.Kind, d.EvalCaseID)
+		}
+	}
+}

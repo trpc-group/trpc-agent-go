@@ -9,7 +9,7 @@ P0–P3 汇总训练集终端损失的严重度分布。
 
 **接受策略。** 采用两层门禁。引擎层沿用 PromptIter 的 `AcceptancePolicy.MinScoreGain`，
 控制候选是否被 commit 进下一轮；harness 层再叠加可配置的 `ReleaseGate` 决定候选是否
-值得回写生产：验证集总增益 ≥ 阈值、不得新增 hard fail、关键 case 不得退化、轮数不超预算。
+值得回写生产：验证集总增益 ≥ 阈值、不得新增 hard fail、关键 case 不得退化、预算与证据完整。
 两者的默认阈值来自 `promptiter.json`（`minScoreGain` 与 `gate` 块），示例的 overfit
 场景显式下调引擎阈值以演示"引擎接受、门禁拒绝"的分歧。任一条不满足即拒绝发布，理由逐条落盘。
 

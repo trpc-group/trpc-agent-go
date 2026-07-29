@@ -19,12 +19,14 @@ import (
 )
 
 // gateConfig mirrors regloop.ReleaseGate in the on-disk configuration.
+// Protected cases are scoped by (evalSetId, evalCaseId); an empty evalSetId
+// protects the case ID in every eval set.
 type gateConfig struct {
-	MinTotalGain     float64  `json:"minTotalGain"`
-	AllowNewHardFail bool     `json:"allowNewHardFail"`
-	MaxRounds        int      `json:"maxRounds"`
-	MaxModelCalls    int      `json:"maxModelCalls"`
-	ProtectedCaseIDs []string `json:"protectedCaseIds"`
+	MinTotalGain     float64                 `json:"minTotalGain"`
+	AllowNewHardFail bool                    `json:"allowNewHardFail"`
+	MaxRounds        int                     `json:"maxRounds"`
+	MaxModelCalls    int                     `json:"maxModelCalls"`
+	ProtectedCases   []regloop.ProtectedCase `json:"protectedCases"`
 }
 
 // loopConfig is the reproducible run configuration loaded from promptiter.json
@@ -121,8 +123,48 @@ func (c *loopConfig) releaseGate() regloop.ReleaseGate {
 	return regloop.ReleaseGate{
 		MinTotalGain:     c.Gate.MinTotalGain,
 		AllowNewHardFail: c.Gate.AllowNewHardFail,
-		ProtectedCaseIDs: c.Gate.ProtectedCaseIDs,
+		ProtectedCases:   c.Gate.ProtectedCases,
 		MaxRounds:        c.Gate.MaxRounds,
 		MaxModelCalls:    c.Gate.MaxModelCalls,
 	}
+}
+
+// loadExpectedShape reads the scenario's validation eval set and metrics
+// config to declare the shape a release must fully evidence: every requested
+// validation case, carrying every configured metric, in both phases. This is
+// the external truth that catches cases or metrics omitted from BOTH phases
+// (e.g. a metric name matching no registered evaluator).
+func loadExpectedShape(dataDir string, sc scenario) ([]regloop.ExpectedEvalSet, error) {
+	metrics, err := loadMetricNames(dataDir, sc.metricFileID)
+	if err != nil {
+		return nil, err
+	}
+	path := filepath.Join(dataDir, appName, sc.validationEvalSetID+".evalset.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read validation eval set: %w", err)
+	}
+	var set struct {
+		EvalSetID string `json:"evalSetId"`
+		EvalCases []struct {
+			EvalID string `json:"evalId"`
+		} `json:"evalCases"`
+	}
+	if err := json.Unmarshal(raw, &set); err != nil {
+		return nil, fmt.Errorf("parse validation eval set: %w", err)
+	}
+	caseIDs := make([]string, 0, len(set.EvalCases))
+	for _, evalCase := range set.EvalCases {
+		if evalCase.EvalID != "" {
+			caseIDs = append(caseIDs, evalCase.EvalID)
+		}
+	}
+	if set.EvalSetID == "" || len(caseIDs) == 0 {
+		return nil, fmt.Errorf("validation eval set %s declares no cases", path)
+	}
+	return []regloop.ExpectedEvalSet{{
+		EvalSetID: set.EvalSetID,
+		CaseIDs:   caseIDs,
+		Metrics:   metrics,
+	}}, nil
 }

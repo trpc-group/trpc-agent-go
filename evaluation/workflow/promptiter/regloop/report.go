@@ -39,11 +39,25 @@ type Options struct {
 	Config map[string]any
 	// Cost carries runtime cost facts the pure package cannot observe.
 	Cost CostInput
-	// ExpectedMetrics lists the metric names every case in both compared phases
-	// must carry. It catches metrics that were silently skipped (e.g. a name not
-	// matching any registered evaluator) in both phases, which the key-set
-	// comparison alone cannot see. Empty disables the shape check.
-	ExpectedMetrics []string
+	// Expected declares, per validation eval set, the cases and metrics that
+	// must carry terminal evidence in both phases before a release. It is the
+	// external truth the result alone cannot provide: a case or metric silently
+	// omitted from BOTH phases (e.g. a metric name matching no registered
+	// evaluator) is invisible to the result-only comparison. A release fails
+	// closed when Expected is empty.
+	Expected []ExpectedEvalSet
+}
+
+// ExpectedEvalSet declares the shape one validation eval set must show in both
+// compared phases for a release: every listed case must be present, and every
+// listed metric must carry a terminal result on every case.
+type ExpectedEvalSet struct {
+	// EvalSetID targets one validation eval set.
+	EvalSetID string
+	// CaseIDs lists the eval case IDs that must be present.
+	CaseIDs []string
+	// Metrics lists the metric names every case must carry.
+	Metrics []string
 }
 
 // CostInput carries caller-measured cost facts (wall-clock, model calls) that
@@ -87,7 +101,7 @@ func Analyze(result *engine.RunResult, opts Options) (*Report, error) {
 	// or failed run may retain an accepted round, and a slimmed RunResult that
 	// omits evaluation cases would hide regressions and release on aggregate gain
 	// alone — both must be rejected rather than released.
-	gate = applyReleasePreconditions(gate, result, candidateValidation, acceptedRound, opts.ExpectedMetrics)
+	gate = applyReleasePreconditions(gate, result, candidateValidation, acceptedRound, opts.Expected)
 
 	// Project the accepted candidate's surfaces only when a round was actually
 	// accepted; the engine keeps the initial profile as AcceptedProfile when every
@@ -127,33 +141,51 @@ func Analyze(result *engine.RunResult, opts Options) (*Report, error) {
 }
 
 // sensitiveKeyFragments flags config keys whose values must never be
-// serialized into the audit report.
+// serialized into the audit report. Keys are normalized (lowercased,
+// separators stripped) before matching, so "X-API-Key", "api_key", and
+// "ApiKey" all match "apikey".
 var sensitiveKeyFragments = []string{
-	"apikey", "api_key", "secret", "token", "password", "credential",
-	"authorization", "bearer",
+	"apikey", "secret", "token", "password", "credential", "authorization", "bearer",
 }
 
 // isSensitiveKey reports whether a config key looks like it carries a secret.
 func isSensitiveKey(key string) bool {
-	lower := strings.ToLower(key)
+	normalized := make([]rune, 0, len(key))
+	for _, r := range strings.ToLower(key) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			normalized = append(normalized, r)
+		}
+	}
+	flat := string(normalized)
 	for _, fragment := range sensitiveKeyFragments {
-		if strings.Contains(lower, fragment) {
+		if strings.Contains(flat, fragment) {
 			return true
 		}
 	}
 	return false
 }
 
-// sanitizeConfig deep-copies an audit config, replacing every value stored
-// under a sensitive-looking key with a redaction marker. The report is designed
-// to be persisted (and often committed), so unlike the typed surface
-// projection, an arbitrary caller-provided map must be scrubbed before it is
-// serialized.
+// sanitizeConfig scrubs an audit config at the serialization boundary. The
+// value is first normalized through JSON so named map types (e.g.
+// http.Header), structs, and typed containers all become generic maps/slices
+// the redaction walk can see; every value under a sensitive-looking key is
+// then replaced with a redaction marker. The report is designed to be
+// persisted (and often committed), so an arbitrary caller-provided config must
+// never carry secrets into it.
 func sanitizeConfig(config map[string]any) map[string]any {
 	if config == nil {
 		return nil
 	}
-	return sanitizeMap(config)
+	payload, err := json.Marshal(config)
+	if err != nil {
+		// Fail visible, not open: an unserializable config must not skip redaction.
+		return map[string]any{"sanitizeError": fmt.Sprintf("config not serializable: %v", err)}
+	}
+	generic := map[string]any{}
+	if err := json.Unmarshal(payload, &generic); err != nil {
+		return map[string]any{"sanitizeError": fmt.Sprintf("config not serializable: %v", err)}
+	}
+	return sanitizeMap(generic)
 }
 
 func sanitizeMap(m map[string]any) map[string]any {
@@ -172,16 +204,6 @@ func sanitizeValue(value any) any {
 	switch v := value.(type) {
 	case map[string]any:
 		return sanitizeMap(v)
-	case map[string]string:
-		out := make(map[string]string, len(v))
-		for key, s := range v {
-			if isSensitiveKey(key) {
-				out[key] = "[redacted]"
-				continue
-			}
-			out[key] = s
-		}
-		return out
 	case []any:
 		out := make([]any, len(v))
 		for i, item := range v {
@@ -260,9 +282,9 @@ func totalModelCalls(calls map[string]int) int {
 // applyReleasePreconditions forces the gate closed when the result cannot
 // support a trustworthy release decision: the run must have completed
 // successfully, both phases must carry comparable per-case data with terminal
-// metric evidence, and an accepted round must come with the actual accepted
-// profile artifact.
-func applyReleasePreconditions(gate GateResult, result *engine.RunResult, candidate *engine.EvaluationResult, acceptedRound int, expectedMetrics []string) GateResult {
+// metric evidence matching the expected validation shape, and an accepted
+// round must come with the actual accepted profile artifact.
+func applyReleasePreconditions(gate GateResult, result *engine.RunResult, candidate *engine.EvaluationResult, acceptedRound int, expected []ExpectedEvalSet) GateResult {
 	if result.Status != engine.RunStatusSucceeded {
 		gate.Released = false
 		gate.Reasons = append(gate.Reasons, fmt.Sprintf("run did not complete successfully (status %q)", result.Status))
@@ -284,7 +306,21 @@ func applyReleasePreconditions(gate GateResult, result *engine.RunResult, candid
 		result *engine.EvaluationResult
 	}{{"baseline", result.BaselineValidation}, {"candidate", candidate}}
 	for _, phase := range phases {
-		if issue := metricEvidenceIssue(phase.name, phase.result, expectedMetrics); issue != "" {
+		if issue := nonTerminalIssue(phase.name, phase.result); issue != "" {
+			gate.Released = false
+			gate.Reasons = append(gate.Reasons, issue)
+		}
+	}
+	// The expected shape is the external truth about which cases/metrics were
+	// requested; without it a case omitted from BOTH phases is invisible, so a
+	// release without a shape fails closed.
+	if len(expected) == 0 {
+		gate.Released = false
+		gate.Reasons = append(gate.Reasons, "expected validation shape unavailable; cannot verify evidence completeness")
+		return gate
+	}
+	for _, phase := range phases {
+		if issue := shapeIssue(phase.name, phase.result, expected); issue != "" {
 			gate.Released = false
 			gate.Reasons = append(gate.Reasons, issue)
 		}
@@ -292,30 +328,64 @@ func applyReleasePreconditions(gate GateResult, result *engine.RunResult, candid
 	return gate
 }
 
-// metricEvidenceIssue reports the first incomplete-evidence problem in one
-// phase, or "" when every case carries a terminal (passed/failed) result for
-// every metric — including every expected metric name. A metric retained as
-// not_evaluated is excluded from aggregate scoring, and a name that matches no
-// registered evaluator is silently omitted from both phases; either way part of
-// the validation never ran and an aggregate gain cannot be trusted.
-func metricEvidenceIssue(phase string, result *engine.EvaluationResult, expectedMetrics []string) string {
+// nonTerminalIssue reports the first metric in the phase whose status is not
+// terminal (passed/failed), or "". A metric retained as not_evaluated is
+// excluded from aggregate scoring, so part of the validation never ran and an
+// aggregate gain cannot be trusted.
+func nonTerminalIssue(phase string, result *engine.EvaluationResult) string {
 	if result == nil {
 		return ""
 	}
 	for _, set := range result.EvalSets {
 		for _, evalCase := range set.Cases {
-			present := make(map[string]bool, len(evalCase.Metrics))
 			for _, m := range evalCase.Metrics {
-				present[m.MetricName] = true
 				if m.Status != status.EvalStatusPassed && m.Status != status.EvalStatusFailed {
 					return fmt.Sprintf("%s metric %q on case %q has non-terminal status %q; evidence incomplete",
 						phase, m.MetricName, evalCase.EvalCaseID, m.Status)
 				}
 			}
-			for _, name := range expectedMetrics {
+		}
+	}
+	return ""
+}
+
+// shapeIssue reports the first departure of one phase from the expected
+// validation shape, or "": every expected eval set and case must be present,
+// and every expected metric must be measured on every expected case. This
+// catches cases and metrics omitted from BOTH phases (e.g. a metric name
+// matching no registered evaluator), which the phase key-set comparison cannot
+// see.
+func shapeIssue(phase string, result *engine.EvaluationResult, expected []ExpectedEvalSet) string {
+	if result == nil {
+		return fmt.Sprintf("%s result unavailable; cannot verify the expected shape", phase)
+	}
+	sets := make(map[string]engine.EvalSetResult, len(result.EvalSets))
+	for _, set := range result.EvalSets {
+		sets[set.EvalSetID] = set
+	}
+	for _, want := range expected {
+		set, ok := sets[want.EvalSetID]
+		if !ok {
+			return fmt.Sprintf("%s is missing expected eval set %q; evidence incomplete", phase, want.EvalSetID)
+		}
+		cases := make(map[string]engine.CaseResult, len(set.Cases))
+		for _, evalCase := range set.Cases {
+			cases[evalCase.EvalCaseID] = evalCase
+		}
+		for _, caseID := range want.CaseIDs {
+			evalCase, ok := cases[caseID]
+			if !ok {
+				return fmt.Sprintf("%s eval set %q is missing expected case %q; evidence incomplete",
+					phase, want.EvalSetID, caseID)
+			}
+			present := make(map[string]bool, len(evalCase.Metrics))
+			for _, m := range evalCase.Metrics {
+				present[m.MetricName] = true
+			}
+			for _, name := range want.Metrics {
 				if !present[name] {
 					return fmt.Sprintf("%s case %q is missing expected metric %q; evidence incomplete",
-						phase, evalCase.EvalCaseID, name)
+						phase, caseID, name)
 				}
 			}
 		}
@@ -348,11 +418,21 @@ func costReport(result *engine.RunResult, cost CostInput) CostReport {
 	for _, round := range result.Rounds {
 		evaluatedCases += caseCount(round.Train) + caseCount(round.Validation)
 	}
+	// Snapshot the caller's call map: the gate decision and total are computed
+	// now, and the serialized per-role counts must not drift if instrumentation
+	// keeps mutating the map after Analyze returns.
+	var calls map[string]int
+	if cost.ModelCalls != nil {
+		calls = make(map[string]int, len(cost.ModelCalls))
+		for role, n := range cost.ModelCalls {
+			calls[role] = n
+		}
+	}
 	return CostReport{
 		Rounds:         rounds,
 		EvaluatedCases: evaluatedCases,
 		DurationMs:     cost.DurationMs,
-		ModelCalls:     cost.ModelCalls,
+		ModelCalls:     calls,
 		// A nil map means the caller did not instrument calls; the audit must not
 		// present that as a measured zero-call run.
 		ModelCallsKnown: cost.ModelCalls != nil,
