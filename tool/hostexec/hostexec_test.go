@@ -56,6 +56,54 @@ func TestNewToolSet_Foreground(t *testing.T) {
 	require.Empty(t, mgr.sessions)
 }
 
+func TestNewToolSet_ForegroundHonorsMaxLines(t *testing.T) {
+	if _, _, err := shellSpec(); err != nil {
+		t.Skip(err.Error())
+	}
+
+	cases := []struct {
+		name    string
+		command string
+	}{
+		{
+			name:    "trailing newline",
+			command: "printf 'l1\\nl2\\nl3\\nl4\\nl5\\n'",
+		},
+		{
+			// The last line arrives as a partial that markDone
+			// appends after the readers stop; it must be trimmed
+			// like any other line.
+			name:    "no trailing newline",
+			command: "printf 'l1\\nl2\\nl3\\nl4\\nl5'",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			set, err := NewToolSet(WithMaxLines(3))
+			require.NoError(t, err)
+			defer set.Close()
+
+			execTool, _, _, _ := toolSetTools(t, set)
+			out, err := execTool.Call(
+				context.Background(),
+				mustJSON(t, map[string]any{
+					"command": tc.command,
+					"yieldMs": 0,
+				}),
+			)
+			require.NoError(t, err)
+
+			res := out.(map[string]any)
+			require.Equal(t, programStatusExited, res["status"])
+			require.Equal(
+				t, "l3\nl4\nl5", outputField(res),
+				"foreground output must be exactly the "+
+					"configured tail",
+			)
+		})
+	}
+}
+
 func TestNewToolSet_BaseDirAndRelativeWorkdir(t *testing.T) {
 	if _, _, err := shellSpec(); err != nil {
 		t.Skip(err.Error())
@@ -569,6 +617,7 @@ func TestRunForeground_ContextCancel(t *testing.T) {
 		execParams{Command: "sleep 5"},
 		5*time.Second,
 		nil,
+		defaultMaxLines,
 	)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Empty(t, output)
@@ -1079,8 +1128,10 @@ func TestSession_HelpersAndBranches(t *testing.T) {
 	require.False(t, doneAt.IsZero())
 	sess.markDone(9)
 
+	// markDone trims the appended partial like any other line, so the
+	// one-line cap keeps only the final line.
 	out, code := sess.allOutput()
-	require.Equal(t, "third\ntail", out)
+	require.Equal(t, "tail", out)
 	require.Equal(t, 7, code)
 
 	exited := sess.poll(nil)
