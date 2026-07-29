@@ -174,6 +174,51 @@ func TestNewToolSet_WriteStdin(t *testing.T) {
 	require.Contains(t, all, "got:hi")
 }
 
+func TestNewToolSet_WriteStdin_ReturnsWhenProcessExits(t *testing.T) {
+	if _, _, err := shellSpec(); err != nil {
+		t.Skip(err.Error())
+	}
+
+	set, err := NewToolSet(WithJobTTL(10 * time.Second))
+	require.NoError(t, err)
+	defer set.Close()
+
+	execTool, writeTool, _, _ := toolSetTools(t, set)
+	out, err := execTool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"command":    "sleep 0.3; echo finished",
+			"background": true,
+		}),
+	)
+	require.NoError(t, err)
+
+	sessionID := out.(map[string]any)["session_id"].(string)
+	require.NotEmpty(t, sessionID)
+
+	// A yield far longer than the command: the wait must end when the
+	// process exits, not when the yield timer fires.
+	start := time.Now()
+	writeOut, err := writeTool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"session_id":    sessionID,
+			"chars":         "",
+			"yield_time_ms": 30_000,
+		}),
+	)
+	require.NoError(t, err)
+	elapsed := time.Since(start)
+
+	res := writeOut.(map[string]any)
+	require.Equal(t, programStatusExited, res["status"])
+	require.Contains(t, outputField(res), "finished")
+	require.Less(
+		t, elapsed, 10*time.Second,
+		"write_stdin slept out its yield instead of returning on exit",
+	)
+}
+
 func TestNewToolSet_WriteStdin_NoRepeatedInitialOutput(t *testing.T) {
 	if _, _, err := shellSpec(); err != nil {
 		t.Skip(err.Error())
@@ -794,6 +839,18 @@ func TestToolCalls_NotConfigured(t *testing.T) {
 		mustJSON(t, map[string]any{"session_id": "x"}),
 	)
 	require.EqualError(t, err, errKillToolNotConfigured)
+}
+
+func TestWriteStdin_UnknownSession(t *testing.T) {
+	tool := &writeStdinTool{mgr: newManager()}
+	_, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"session_id": "missing",
+			"chars":      "hello",
+		}),
+	)
+	require.ErrorIs(t, err, errUnknownSession)
 }
 
 func TestWriteStdin_CanceledBeforePoll(t *testing.T) {
