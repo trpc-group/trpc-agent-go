@@ -172,17 +172,17 @@ func TestOfflineGoDepsPolicy(t *testing.T) {
 	noDeps := writeRepo(t, map[string]string{
 		"go.mod": "module example.com/plain\n\ngo 1.24\n",
 	})
-	if deps := offlineGoDeps(noDeps); !deps.ok || deps.goFlags != "" {
+	if deps := OfflineGoDeps(noDeps); !deps.OK || deps.GoFlags != "" {
 		t.Fatalf("dependency-free module should run directly: %+v", deps)
 	}
 	vendored := writeRepo(t, map[string]string{
 		"go.mod":             "module example.com/app\n\ngo 1.24\n\nrequire github.com/google/uuid v1.6.0\n",
 		"vendor/modules.txt": "# github.com/google/uuid v1.6.0\n",
 	})
-	if deps := offlineGoDeps(vendored); !deps.ok || deps.goFlags != "-mod=vendor" {
+	if deps := OfflineGoDeps(vendored); !deps.OK || deps.GoFlags != "-mod=vendor" {
 		t.Fatalf("vendored module should run with -mod=vendor: %+v", deps)
 	}
-	if deps := offlineGoDeps(t.TempDir()); !deps.ok {
+	if deps := OfflineGoDeps(t.TempDir()); !deps.OK {
 		t.Fatalf("missing go.mod should defer to the go tool: %+v", deps)
 	}
 }

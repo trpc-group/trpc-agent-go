@@ -25,3 +25,24 @@ func TestRedactText(t *testing.T) {
 		t.Fatalf("missing placeholder: %s", out)
 	}
 }
+
+// TestRedactTextQuotedMultiwordValue verifies a quoted passphrase with
+// spaces is removed completely, not just its first word.
+func TestRedactTextQuotedMultiwordValue(t *testing.T) {
+	cases := []string{
+		`password = "correct horse battery staple"`,
+		`token: 'multi word token value'`,
+		`API_KEY="spaced out key material"`,
+	}
+	for _, in := range cases {
+		out := RedactText(in)
+		for _, leak := range []string{"correct horse", "battery staple", "multi word", "spaced out"} {
+			if strings.Contains(out, leak) {
+				t.Fatalf("partial secret survived %q -> %q", in, out)
+			}
+		}
+		if !strings.Contains(out, "[REDACTED_SECRET]") {
+			t.Fatalf("missing placeholder for %q: %q", in, out)
+		}
+	}
+}

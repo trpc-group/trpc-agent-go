@@ -11,6 +11,8 @@ package skillrunner
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -28,6 +30,42 @@ const testDiff = `diff --git a/config.go b/config.go
 `
 
 const skillsRoot = "../skills"
+
+// TestRunScriptsSkipsUnvendoredGoChecksInSandbox verifies the offline
+// dependency policy also guards the skill-script static check path: an
+// unvendored module in an isolated sandbox yields an explicit skip.
+func TestRunScriptsSkipsUnvendoredGoChecksInSandbox(t *testing.T) {
+	repo := t.TempDir()
+	gomod := "module example.com/app\n\ngo 1.24\n\nrequire github.com/google/uuid v1.6.0\n"
+	if err := os.WriteFile(filepath.Join(repo, "go.mod"), []byte(gomod), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result := RunScripts(context.Background(), Config{
+		TaskID:      "test-offline-skill",
+		SkillsRoot:  skillsRoot,
+		RepoPath:    repo,
+		SandboxKind: "managed",
+		DryRun:      true,
+		Timeout:     10 * time.Second,
+		DiffText:    testDiff,
+	})
+	if result.Err != nil {
+		t.Fatalf("RunScripts error: %v", result.Err)
+	}
+	found := false
+	for _, run := range result.Runs {
+		if !strings.Contains(run.Command, "go_static_checks.sh") {
+			continue
+		}
+		found = true
+		if run.Status != "skipped" || !strings.Contains(run.Error, "vendor") {
+			t.Fatalf("static check should skip with vendor hint: %+v", run)
+		}
+	}
+	if !found {
+		t.Fatalf("go_static_checks.sh run missing: %+v", result.Runs)
+	}
+}
 
 // TestRunScriptsLocalDev runs the bundled skill scripts on the host.
 func TestRunScriptsLocalDev(t *testing.T) {

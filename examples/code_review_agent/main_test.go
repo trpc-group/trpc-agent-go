@@ -11,7 +11,9 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -288,6 +290,139 @@ func TestSkillsRootIgnoresWorkingDirectory(t *testing.T) {
 	// An explicit flag still wins so users can opt into custom skills.
 	if got := resolveSkillsRoot(forgedSkill); got != forgedSkill {
 		t.Fatalf("explicit skills root = %q, want %q", got, forgedSkill)
+	}
+}
+
+// failingStore wraps a real store and fails on SaveFindings so tests
+// can drive the persistence failure path of runOne.
+type failingStore struct{ store.Store }
+
+// SaveFindings always fails to simulate a mid-persistence outage.
+func (f *failingStore) SaveFindings(ctx context.Context, taskID string, findings []review.Finding) error {
+	return errors.New("injected findings insert failure")
+}
+
+// TestPersistenceFailureUnpublishesReport verifies a store failure both
+// fails the task and removes the already-written report artifacts, so
+// published output never claims success for a failed audit trail.
+func TestPersistenceFailureUnpublishesReport(t *testing.T) {
+	oldOpen := openStoreFn
+	openStoreFn = func(ctx context.Context, path string) (store.Store, error) {
+		real, err := store.Open(ctx, path)
+		if err != nil {
+			return nil, err
+		}
+		return &failingStore{Store: real}, nil
+	}
+	t.Cleanup(func() { openStoreFn = oldOpen })
+
+	dir := t.TempDir()
+	cfg := config{
+		fixture:     "security_secret",
+		outDir:      filepath.Join(dir, "out"),
+		dbPath:      filepath.Join(dir, "review.db"),
+		mode:        "rule-only",
+		sandboxKind: "mock",
+		dryRun:      true,
+		timeout:     5 * time.Second,
+	}
+	err := runOne(context.Background(), cfg)
+	if err == nil || !strings.Contains(err.Error(), "injected findings insert failure") {
+		t.Fatalf("expected injected store error, got %v", err)
+	}
+	for _, name := range []string{"review_report.json", "review_report.md"} {
+		if _, statErr := os.Stat(filepath.Join(cfg.outDir, name)); !os.IsNotExist(statErr) {
+			t.Fatalf("artifact %s still published after store failure", name)
+		}
+	}
+	db, err := sql.Open("sqlite3", cfg.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var status string
+	if err := db.QueryRow("SELECT status FROM review_tasks").Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "failed" {
+		t.Fatalf("task status = %q, want failed", status)
+	}
+}
+
+// TestPathBearingFieldsRedactedEverywhere reviews a diff whose file name
+// carries a credential and verifies neither the JSON artifact nor the
+// raw database rows retain the raw values.
+func TestPathBearingFieldsRedactedEverywhere(t *testing.T) {
+	const rawKey = "AKIA1234567890ABCDEF"
+	const rawPass = "correct horse battery staple"
+	diff := "diff --git a/cfg/" + rawKey + ".go b/cfg/" + rawKey + ".go\n" +
+		"--- a/cfg/" + rawKey + ".go\n" +
+		"+++ b/cfg/" + rawKey + ".go\n" +
+		"@@ -0,0 +1,2 @@\n" +
+		"+package cfg\n" +
+		"+var password = \"" + rawPass + "\"\n"
+	dir := t.TempDir()
+	diffPath := filepath.Join(dir, "leak.diff")
+	if err := os.WriteFile(diffPath, []byte(diff), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outDir := filepath.Join(dir, "out")
+	dbPath := filepath.Join(dir, "review.db")
+	cfg := config{
+		diffFile:    diffPath,
+		outDir:      outDir,
+		dbPath:      dbPath,
+		mode:        "rule-only",
+		sandboxKind: "mock",
+		dryRun:      true,
+		timeout:     5 * time.Second,
+	}
+	if err := runOne(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"review_report.json", "review_report.md"} {
+		data, err := os.ReadFile(filepath.Join(outDir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, leak := range []string{rawKey, rawPass} {
+			if strings.Contains(string(data), leak) {
+				t.Fatalf("%s leaks %q", name, leak)
+			}
+		}
+	}
+	// Inspect the raw rows, not the redacting read path.
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, query := range []string{
+		"SELECT file FROM review_findings",
+		"SELECT file FROM filter_decisions",
+	} {
+		rows, err := db.Query(query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		count := 0
+		for rows.Next() {
+			var file string
+			if err := rows.Scan(&file); err != nil {
+				t.Fatal(err)
+			}
+			count++
+			if strings.Contains(file, rawKey) {
+				t.Fatalf("%s row leaks the raw path: %q", query, file)
+			}
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		rows.Close()
+		if count == 0 {
+			t.Fatalf("%s returned no rows to verify", query)
+		}
 	}
 }
 

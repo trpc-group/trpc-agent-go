@@ -35,8 +35,6 @@ type Store interface {
 	SaveArtifacts(ctx context.Context, taskID string, artifacts []review.Artifact) error
 	// SaveReport stores the final report metadata and summary.
 	SaveReport(ctx context.Context, taskID string, report review.ReviewReport, jsonPath, markdownPath string) error
-	// CountFindings returns the number of stored findings.
-	CountFindings(ctx context.Context, taskID string) (int, error)
 	// GetTask returns a full persisted snapshot for one task ID.
 	GetTask(ctx context.Context, taskID string) (review.TaskSnapshot, error)
 	// Close releases the underlying storage resources.

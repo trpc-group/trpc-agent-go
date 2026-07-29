@@ -146,15 +146,21 @@ func writeFindings(b *strings.Builder, title string, findings []review.Finding) 
 	}
 }
 
-// redactReport applies secret redaction to every report field.
+// redactReport applies secret redaction to every report field,
+// including path-bearing fields, so a secret-carrying file name can
+// never reach the published artifacts.
 func redactReport(r review.ReviewReport) review.ReviewReport {
 	out := r
 	out.Task.InputSummary = redaction.RedactText(out.Task.InputSummary)
+	out.Task.RepoPath = redaction.RedactText(out.Task.RepoPath)
 	out.Task.Error = redaction.RedactText(out.Task.Error)
 	out.Summary = redaction.RedactText(out.Summary)
 	out.Files = make([]review.ChangedFile, len(r.Files))
 	copy(out.Files, r.Files)
 	for i := range out.Files {
+		out.Files[i].OldPath = redaction.RedactText(out.Files[i].OldPath)
+		out.Files[i].NewPath = redaction.RedactText(out.Files[i].NewPath)
+		out.Files[i].PackageName = redaction.RedactText(out.Files[i].PackageName)
 		out.Files[i].Hunks = make([]review.Hunk, len(r.Files[i].Hunks))
 		copy(out.Files[i].Hunks, r.Files[i].Hunks)
 		for j := range out.Files[i].Hunks {
@@ -185,6 +191,7 @@ func redactReport(r review.ReviewReport) review.ReviewReport {
 	out.FilterDecisions = make([]review.FilterDecision, len(r.FilterDecisions))
 	copy(out.FilterDecisions, r.FilterDecisions)
 	for i := range out.FilterDecisions {
+		out.FilterDecisions[i].File = redaction.RedactText(out.FilterDecisions[i].File)
 		out.FilterDecisions[i].Reason = redaction.RedactText(out.FilterDecisions[i].Reason)
 	}
 	out.Artifacts = make([]review.Artifact, len(r.Artifacts))
@@ -200,6 +207,7 @@ func redactFindings(in []review.Finding) []review.Finding {
 	out := make([]review.Finding, len(in))
 	copy(out, in)
 	for i := range out {
+		out[i].File = redaction.RedactText(out[i].File)
 		out[i].Title = redaction.RedactText(out[i].Title)
 		out[i].Evidence = redaction.RedactText(out[i].Evidence)
 		out[i].Recommendation = redaction.RedactText(out[i].Recommendation)

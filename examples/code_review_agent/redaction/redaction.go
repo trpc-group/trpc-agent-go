@@ -13,6 +13,13 @@ package redaction
 import "regexp"
 
 var patterns = []*regexp.Regexp{
+	// Quoted values are matched through the closing quote first, so a
+	// multiword passphrase such as password = "correct horse battery
+	// staple" is removed as a whole instead of only its first word.
+	regexp.MustCompile("(?i)([A-Za-z_][A-Za-z0-9_]*(?:api[_-]?key|token|password|passwd|secret)[A-Za-z0-9_]*)(\\s*[:=]\\s*)\\\\?[\"'`][^\"'`]*(?:\\\\?[\"'`])?"),
+	regexp.MustCompile("(?i)(api[_-]?key|token|password|passwd|secret)(\\s*[:=]\\s*)\\\\?[\"'`][^\"'`]*(?:\\\\?[\"'`])?"),
+	regexp.MustCompile("(?i)(tencentcloud_secret(?:id|key))(\\s*[:=]\\s*)\\\\?[\"'`][^\"'`]*(?:\\\\?[\"'`])?"),
+	// Unquoted values stop at the first delimiter as before.
 	regexp.MustCompile(`(?i)([A-Za-z_][A-Za-z0-9_]*(?:api[_-]?key|token|password|passwd|secret)[A-Za-z0-9_]*)(\s*[:=]\s*)(?:\\?["'])?[^\\"',;\s]+(?:\\?["'])?`),
 	regexp.MustCompile(`(?i)(api[_-]?key|token|password|passwd|secret)(\s*[:=]\s*)(?:\\?["'])?[^\\"',;\s]+(?:\\?["'])?`),
 	regexp.MustCompile(`sk-[A-Za-z0-9_-]{16,}`),

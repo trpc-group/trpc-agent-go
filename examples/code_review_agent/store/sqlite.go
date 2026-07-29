@@ -93,7 +93,7 @@ func (s *SQLiteStore) SaveFindings(ctx context.Context, taskID string, findings 
 			if _, err := tx.ExecContext(ctx, `
 INSERT INTO review_findings(task_id, severity, category, file, line, title, evidence, recommendation, confidence, source, rule_id)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				taskID, f.Severity, f.Category, f.File, f.Line, redaction.RedactText(f.Title),
+				taskID, f.Severity, f.Category, redaction.RedactText(f.File), f.Line, redaction.RedactText(f.Title),
 				redaction.RedactText(f.Evidence), redaction.RedactText(f.Recommendation),
 				f.Confidence, f.Source, f.RuleID); err != nil {
 				return err
@@ -143,7 +143,7 @@ func (s *SQLiteStore) SaveFilterDecisions(ctx context.Context, taskID string, de
 			if _, err := tx.ExecContext(ctx, `
 INSERT INTO filter_decisions(task_id, rule_id, file, line, source, confidence, stage, decision, reason, created_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				taskID, d.RuleID, d.File, d.Line, d.Source, d.Confidence,
+				taskID, d.RuleID, redaction.RedactText(d.File), d.Line, d.Source, d.Confidence,
 				d.Stage, d.Decision, redaction.RedactText(d.Reason),
 				d.CreatedAt.Format(time.RFC3339Nano)); err != nil {
 				return err

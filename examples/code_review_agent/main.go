@@ -160,6 +160,10 @@ func openStore(ctx context.Context, path string) (store.Store, error) {
 	return store.Open(ctx, path)
 }
 
+// openStoreFn indirects store construction so tests can inject a
+// failing implementation and exercise the unpublish-on-failure path.
+var openStoreFn = openStore
+
 // runAllFixtures reviews every bundled fixture in sequence.
 func runAllFixtures(ctx context.Context, cfg config) error {
 	fixtures, err := filepath.Glob(filepath.Join(fixturesDir(), "*.diff"))
@@ -202,7 +206,7 @@ func runOne(ctx context.Context, cfg config) (err error) {
 	if err := os.MkdirAll(filepath.Dir(cfg.dbPath), 0o755); err != nil {
 		return err
 	}
-	db, err := openStore(ctx, cfg.dbPath)
+	db, err := openStoreFn(ctx, cfg.dbPath)
 	if err != nil {
 		return err
 	}
@@ -287,11 +291,16 @@ func runOne(ctx context.Context, cfg config) (err error) {
 	}
 
 	// fail finalizes the task so persistence errors never leave it in
-	// the "running" state without an audit trail.
+	// the "running" state without an audit trail, and unpublishes any
+	// already-written artifacts so a failed audit record is never
+	// paired with reports that still claim the review completed.
 	fail := func(err error) error {
 		task.Status = review.StatusFailed
 		task.Error = err.Error()
 		_ = db.FinishTask(ctx, task)
+		for _, a := range report.Artifacts {
+			_ = os.Remove(a.Path)
+		}
 		return err
 	}
 

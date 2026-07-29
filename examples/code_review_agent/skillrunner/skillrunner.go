@@ -30,6 +30,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/permission"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/redaction"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/review"
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/sandboxrunner"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	toolskill "trpc.group/trpc-go/trpc-agent-go/tool/skill"
 )
@@ -262,6 +263,11 @@ func buildScripts(cfg Config) []scriptSpec {
 		static.skipReason = "no --repo-path provided; static checks need a repository"
 	} else if absRepo, err := filepath.Abs(cfg.RepoPath); err != nil {
 		static.skipReason = err.Error()
+	} else if deps := sandboxrunner.OfflineGoDeps(absRepo); sandboxrunner.IsolatedSandbox(cfg.SandboxKind) && !deps.OK {
+		// Same offline dependency policy as the direct check path: an
+		// unvendored module cannot resolve dependencies in a
+		// network-isolated sandbox, so record an explicit skip.
+		static.skipReason = deps.Reason
 	} else {
 		static.inputs = []codeexecutor.InputSpec{{
 			From: "host://" + absRepo,
@@ -269,6 +275,12 @@ func buildScripts(cfg Config) []scriptSpec {
 			Mode: repoStageMode(cfg.SandboxKind),
 		}}
 		static.env = goEnv(cfg.SandboxKind)
+		if sandboxrunner.IsolatedSandbox(cfg.SandboxKind) {
+			static.env["GOPROXY"] = "off"
+			if deps.GoFlags != "" {
+				static.env["GOFLAGS"] = deps.GoFlags
+			}
+		}
 	}
 	return append(specs, static)
 }

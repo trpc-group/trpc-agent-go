@@ -64,8 +64,8 @@ func RunChecks(ctx context.Context, cfg Config) Result {
 	if cfg.EnableStaticcheck {
 		commands = append(commands, "staticcheck ./...")
 	}
-	deps := offlineGoDeps(cfg.RepoPath)
-	cfg.goFlags = deps.goFlags
+	deps := OfflineGoDeps(cfg.RepoPath)
+	cfg.goFlags = deps.GoFlags
 	var out Result
 	for _, command := range commands {
 		decision := permission.Decide(command)
@@ -89,11 +89,11 @@ func RunChecks(ctx context.Context, cfg Config) Result {
 		// Network-isolated sandboxes cannot download modules, so an
 		// unvendored dependency set is an explicit skipped condition
 		// rather than a misleading resolution failure.
-		if isolatedSandbox(cfg.SandboxKind) && !deps.ok {
+		if IsolatedSandbox(cfg.SandboxKind) && !deps.OK {
 			out.Runs = append(out.Runs, review.SandboxRun{
 				Command: command,
 				Status:  "skipped",
-				Error:   deps.reason,
+				Error:   deps.Reason,
 			})
 			continue
 		}
@@ -238,9 +238,9 @@ func engineRun(command string, start time.Time, res codeexecutor.RunResult, err 
 	return run
 }
 
-// isolatedSandbox reports whether the sandbox kind blocks network access
+// IsolatedSandbox reports whether the sandbox kind blocks network access
 // and therefore cannot download Go module dependencies on demand.
-func isolatedSandbox(kind string) bool {
+func IsolatedSandbox(kind string) bool {
 	switch kind {
 	case "managed", "sandbox", "container", "e2b":
 		return true
@@ -249,32 +249,35 @@ func isolatedSandbox(kind string) bool {
 	}
 }
 
-// offlineDeps describes how sandboxed Go checks resolve dependencies.
-type offlineDeps struct {
-	ok      bool   // checks can resolve dependencies offline
-	reason  string // why checks are skipped when !ok
-	goFlags string // GOFLAGS applied to sandboxed go commands
+// OfflineDeps describes how sandboxed Go checks resolve dependencies.
+type OfflineDeps struct {
+	// OK reports that checks can resolve dependencies offline.
+	OK bool
+	// Reason explains why checks are skipped when !OK.
+	Reason string
+	// GoFlags is the GOFLAGS value applied to sandboxed go commands.
+	GoFlags string
 }
 
-// offlineGoDeps decides the offline dependency policy for the repo:
+// OfflineGoDeps decides the offline dependency policy for the repo:
 // vendored modules run with -mod=vendor, dependency-free modules run
 // directly, and everything else becomes an explicit skipped condition
 // because the isolated sandboxes cannot reach a module proxy.
-func offlineGoDeps(repoPath string) offlineDeps {
+func OfflineGoDeps(repoPath string) OfflineDeps {
 	data, err := os.ReadFile(filepath.Join(repoPath, "go.mod"))
 	if err != nil {
 		// No module file: run the go tool so it reports the real error.
-		return offlineDeps{ok: true}
+		return OfflineDeps{OK: true}
 	}
 	if !hasRequire(data) {
-		return offlineDeps{ok: true}
+		return OfflineDeps{OK: true}
 	}
 	if _, err := os.Stat(filepath.Join(repoPath, "vendor", "modules.txt")); err == nil {
-		return offlineDeps{ok: true, goFlags: "-mod=vendor"}
+		return OfflineDeps{OK: true, GoFlags: "-mod=vendor"}
 	}
-	return offlineDeps{
-		ok: false,
-		reason: "module declares external dependencies without a vendor " +
+	return OfflineDeps{
+		OK: false,
+		Reason: "module declares external dependencies without a vendor " +
 			"directory; the sandbox runs offline, so vendor the module " +
 			"or use --sandbox local-dev",
 	}
