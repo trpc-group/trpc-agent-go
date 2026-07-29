@@ -1,0 +1,17 @@
+diff --git a/cmd/server/main.go b/cmd/server/main.go
+index 1234567..abcdefg 100644
+--- a/cmd/server/main.go
++++ b/cmd/server/main.go
+@@ -3,8 +3,10 @@ package main
+ import (
+ 	"context"
+ 	"fmt"
+-	"log"
+ 	"net/http"
+ 	"os"
++
++	"github.com/example/middleware"
++	"golang.org/x/sync/errgroup"
+ )
+
+ func main() {

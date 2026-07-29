@@ -1,0 +1,16 @@
+diff --git a/handler/login.go b/handler/login.go
+index 1234567..abcdefg 100644
+--- a/handler/login.go
++++ b/handler/login.go
+@@ -8,6 +8,12 @@ func Login(w http.ResponseWriter, r *http.Request) {
+ 	username := r.FormValue("username")
+ 	password := r.FormValue("password")
+
++	// validate input
++	_ = validateUsername(username)
++
++	hash, _ := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
++	_ = hash
++
+ 	fmt.Fprintf(w, "ok")
+ }

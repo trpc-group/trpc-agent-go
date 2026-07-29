@@ -1,0 +1,21 @@
+diff --git a/service/order.go b/service/order.go
+new file mode 100644
+index 0000000..abcdefg
+--- /dev/null
++++ b/service/order.go
+@@ -0,0 +1,15 @@
++package service
++
++import "context"
++
++type Order struct {
++	ID     string
++	Amount float64
++}
++
++// CalculateTotal 计算订单总价（含税）。
++func CalculateTotal(ctx context.Context, items []Order, taxRate float64) (float64, error) {
++	var total float64
++	// ... 计算逻辑
++	return total, nil
++}

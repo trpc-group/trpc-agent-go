@@ -1,0 +1,21 @@
+diff --git a/worker/pool.go b/worker/pool.go
+index 1234567..abcdefg 100644
+--- a/worker/pool.go
++++ b/worker/pool.go
+@@ -10,6 +10,16 @@ func (p *Pool) Start() {
+ 	}
+ }
+
++func (p *Pool) ProcessAsync(data []byte) {
++	go func() {
++		for {
++			// 处理数据，无退出条件
++			result := heavyProcess(data)
++			p.results <- result
++		}
++	}()
++}
++
+ func heavyProcess(data []byte) string {
+ 	return string(data)
+ }

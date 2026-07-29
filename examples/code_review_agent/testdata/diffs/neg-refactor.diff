@@ -1,0 +1,12 @@
+diff --git a/pkg/util/string.go b/pkg/util/string.go
+index 1234567..abcdefg 100644
+--- a/pkg/util/string.go
++++ b/pkg/util/string.go
+@@ -3,7 +3,7 @@ package util
+ import "strings"
+
+ // TrimAndLower trims whitespace and converts to lowercase.
+-func TrimAndLower(s string) string {
++func NormalizeString(s string) string {
+ 	return strings.ToLower(strings.TrimSpace(s))
+ }
