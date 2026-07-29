@@ -1,0 +1,782 @@
+{
+  "generatedAt": "2026-07-29T15:22:10Z",
+  "durationMs": 187,
+  "appName": "promptiter-nba-commentary-app",
+  "model": "deepseek-v4-flash",
+  "rounds": 3,
+  "roundRecords": [
+    {
+      "round": 1,
+      "trainScore": 0.25,
+      "validationScore": 0,
+      "accepted": false,
+      "reason": "candidate score gain does not satisfy acceptance policy",
+      "candidatePrompt": "你是一名体育评论员。请用极简一句话概括比赛，不要展开任何细节。"
+    },
+    {
+      "round": 2,
+      "trainScore": 0.25,
+      "validationScore": 0,
+      "accepted": false,
+      "reason": "candidate score gain does not satisfy acceptance policy",
+      "candidatePrompt": "你是一名体育评论员。请用极简一句话概括比赛，不要展开任何细节。"
+    },
+    {
+      "round": 3,
+      "trainScore": 0.25,
+      "validationScore": 0,
+      "accepted": false,
+      "reason": "candidate score gain does not satisfy acceptance policy",
+      "candidatePrompt": "你是一名体育评论员。请用极简一句话概括比赛，不要展开任何细节。"
+    }
+  ],
+  "baselineScore": 0.25,
+  "candidateScore": 0,
+  "scoreDelta": -0.25,
+  "accepted": false,
+  "gateReason": "candidate validation score regressed below baseline",
+  "gateRejectedBy": "validation_regression",
+  "attribution": {
+    "totalCases": 8,
+    "failedCases": 8,
+    "failures": [
+      {
+        "evalSetId": "nba-commentary-validation",
+        "evalCaseId": "validation_01_nba_empty_48",
+        "metricName": "final_response_avg_score",
+        "score": 0,
+        "reason": "final response mismatch: text mismatch: length mismatch: actual length 72 is less than min 350, expected range [350, 850]",
+        "category": "response_mismatch"
+      },
+      {
+        "evalSetId": "nba-commentary-validation",
+        "evalCaseId": "validation_01_nba_empty_48",
+        "metricName": "llm_rubric_critic",
+        "score": 0.5,
+        "reason": "回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。",
+        "category": "response_mismatch"
+      },
+      {
+        "evalSetId": "nba-commentary-validation",
+        "evalCaseId": "validation_02_football_penalties",
+        "metricName": "final_response_avg_score",
+        "score": 0,
+        "reason": "final response mismatch: text mismatch: length mismatch: actual length 72 is less than min 350, expected range [350, 850]",
+        "category": "response_mismatch"
+      },
+      {
+        "evalSetId": "nba-commentary-validation",
+        "evalCaseId": "validation_02_football_penalties",
+        "metricName": "llm_rubric_critic",
+        "score": 0.5,
+        "reason": "回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。",
+        "category": "response_mismatch"
+      },
+      {
+        "evalSetId": "nba-commentary-validation",
+        "evalCaseId": "validation_03_f1_rain_safety_car",
+        "metricName": "final_response_avg_score",
+        "score": 0,
+        "reason": "final response mismatch: text mismatch: length mismatch: actual length 72 is less than min 350, expected range [350, 850]",
+        "category": "response_mismatch"
+      },
+      {
+        "evalSetId": "nba-commentary-validation",
+        "evalCaseId": "validation_03_f1_rain_safety_car",
+        "metricName": "llm_rubric_critic",
+        "score": 0.5,
+        "reason": "回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。",
+        "category": "response_mismatch"
+      },
+      {
+        "evalSetId": "nba-commentary-validation",
+        "evalCaseId": "validation_04_badminton_match_point",
+        "metricName": "final_response_avg_score",
+        "score": 0,
+        "reason": "final response mismatch: text mismatch: length mismatch: actual length 72 is less than min 350, expected range [350, 850]",
+        "category": "response_mismatch"
+      },
+      {
+        "evalSetId": "nba-commentary-validation",
+        "evalCaseId": "validation_04_badminton_match_point",
+        "metricName": "llm_rubric_critic",
+        "score": 0.5,
+        "reason": "回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。",
+        "category": "response_mismatch"
+      },
+      {
+        "evalSetId": "nba-commentary-validation",
+        "evalCaseId": "validation_05_ice_hockey_overtime",
+        "metricName": "final_response_avg_score",
+        "score": 0,
+        "reason": "final response mismatch: text mismatch: length mismatch: actual length 72 is less than min 350, expected range [350, 850]",
+        "category": "response_mismatch"
+      },
+      {
+        "evalSetId": "nba-commentary-validation",
+        "evalCaseId": "validation_05_ice_hockey_overtime",
+        "metricName": "llm_rubric_critic",
+        "score": 0.5,
+        "reason": "回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。",
+        "category": "response_mismatch"
+      },
+      {
+        "evalSetId": "nba-commentary-validation",
+        "evalCaseId": "validation_06_tennis_tiebreak",
+        "metricName": "final_response_avg_score",
+        "score": 0,
+        "reason": "final response mismatch: text mismatch: length mismatch: actual length 72 is less than min 350, expected range [350, 850]",
+        "category": "response_mismatch"
+      },
+      {
+        "evalSetId": "nba-commentary-validation",
+        "evalCaseId": "validation_06_tennis_tiebreak",
+        "metricName": "llm_rubric_critic",
+        "score": 0.5,
+        "reason": "回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。",
+        "category": "response_mismatch"
+      },
+      {
+        "evalSetId": "nba-commentary-validation",
+        "evalCaseId": "validation_07_road_cycling_breakaway",
+        "metricName": "final_response_avg_score",
+        "score": 0,
+        "reason": "final response mismatch: text mismatch: length mismatch: actual length 72 is less than min 350, expected range [350, 850]",
+        "category": "response_mismatch"
+      },
+      {
+        "evalSetId": "nba-commentary-validation",
+        "evalCaseId": "validation_07_road_cycling_breakaway",
+        "metricName": "llm_rubric_critic",
+        "score": 0.5,
+        "reason": "回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。",
+        "category": "response_mismatch"
+      },
+      {
+        "evalSetId": "nba-commentary-validation",
+        "evalCaseId": "validation_08_cricket_t20_chase",
+        "metricName": "final_response_avg_score",
+        "score": 0,
+        "reason": "final response mismatch: text mismatch: length mismatch: actual length 72 is less than min 350, expected range [350, 850]",
+        "category": "response_mismatch"
+      },
+      {
+        "evalSetId": "nba-commentary-validation",
+        "evalCaseId": "validation_08_cricket_t20_chase",
+        "metricName": "llm_rubric_critic",
+        "score": 0.5,
+        "reason": "回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。",
+        "category": "response_mismatch"
+      }
+    ],
+    "byCategory": {
+      "response_mismatch": 16
+    },
+    "method": "rule",
+    "clusters": [
+      {
+        "category": "response_mismatch",
+        "count": 8,
+        "reason": "final response mismatch: text mismatch: length mismatch: actual length 72 is less than min 350, expected range [350, 850]",
+        "caseIds": [
+          "nba-commentary-validation/validation_01_nba_empty_48",
+          "nba-commentary-validation/validation_02_football_penalties",
+          "nba-commentary-validation/validation_03_f1_rain_safety_car",
+          "nba-commentary-validation/validation_04_badminton_match_point",
+          "nba-commentary-validation/validation_05_ice_hockey_overtime"
+        ]
+      },
+      {
+        "category": "response_mismatch",
+        "count": 8,
+        "reason": "回复基本完整但信息密度不足。",
+        "caseIds": [
+          "nba-commentary-validation/validation_01_nba_empty_48",
+          "nba-commentary-validation/validation_02_football_penalties",
+          "nba-commentary-validation/validation_03_f1_rain_safety_car",
+          "nba-commentary-validation/validation_04_badminton_match_point",
+          "nba-commentary-validation/validation_05_ice_hockey_overtime"
+        ]
+      }
+    ],
+    "insights": {
+      "method": "rule",
+      "summary": "全部 16 个失败均集中在 response_mismatch。",
+      "patterns": [
+        {
+          "category": "response_mismatch",
+          "count": 16,
+          "ratio": 1,
+          "example": "final response mismatch: text mismatch: length mismatch: actual length 72 is less than min 350, expected range [350, 850]"
+        }
+      ]
+    }
+  },
+  "narrative": "本次优化候选在验证集上得分为 0.0000（基线 0.2500，变化 -0.2500），gate 决策为已拒绝。拒绝理由：candidate validation score regressed below baseline（validation_regression）。 全部 16 个失败均集中在 response_mismatch。",
+  "llmCalls": 0,
+  "llmErrors": 0,
+  "perCaseDelta": [
+    {
+      "evalSetId": "nba-commentary-validation",
+      "evalCaseId": "validation_03_f1_rain_safety_car",
+      "baselineScore": 0.25,
+      "candidateScore": 0,
+      "delta": -0.25,
+      "trend": "down",
+      "baselinePassed": false,
+      "candidatePassed": false,
+      "transition": "score_down"
+    },
+    {
+      "evalSetId": "nba-commentary-validation",
+      "evalCaseId": "validation_05_ice_hockey_overtime",
+      "baselineScore": 0.25,
+      "candidateScore": 0,
+      "delta": -0.25,
+      "trend": "down",
+      "baselinePassed": false,
+      "candidatePassed": false,
+      "transition": "score_down"
+    },
+    {
+      "evalSetId": "nba-commentary-validation",
+      "evalCaseId": "validation_07_road_cycling_breakaway",
+      "baselineScore": 0.25,
+      "candidateScore": 0,
+      "delta": -0.25,
+      "trend": "down",
+      "baselinePassed": false,
+      "candidatePassed": false,
+      "transition": "score_down"
+    },
+    {
+      "evalSetId": "nba-commentary-validation",
+      "evalCaseId": "validation_08_cricket_t20_chase",
+      "baselineScore": 0.25,
+      "candidateScore": 0,
+      "delta": -0.25,
+      "trend": "down",
+      "baselinePassed": false,
+      "candidatePassed": false,
+      "transition": "score_down"
+    },
+    {
+      "evalSetId": "nba-commentary-validation",
+      "evalCaseId": "validation_04_badminton_match_point",
+      "baselineScore": 0.25,
+      "candidateScore": 0,
+      "delta": -0.25,
+      "trend": "down",
+      "baselinePassed": false,
+      "candidatePassed": false,
+      "transition": "score_down"
+    },
+    {
+      "evalSetId": "nba-commentary-validation",
+      "evalCaseId": "validation_06_tennis_tiebreak",
+      "baselineScore": 0.25,
+      "candidateScore": 0,
+      "delta": -0.25,
+      "trend": "down",
+      "baselinePassed": false,
+      "candidatePassed": false,
+      "transition": "score_down"
+    },
+    {
+      "evalSetId": "nba-commentary-validation",
+      "evalCaseId": "validation_01_nba_empty_48",
+      "baselineScore": 0.25,
+      "candidateScore": 0,
+      "delta": -0.25,
+      "trend": "down",
+      "baselinePassed": false,
+      "candidatePassed": false,
+      "transition": "score_down"
+    },
+    {
+      "evalSetId": "nba-commentary-validation",
+      "evalCaseId": "validation_02_football_penalties",
+      "baselineScore": 0.25,
+      "candidateScore": 0,
+      "delta": -0.25,
+      "trend": "down",
+      "baselinePassed": false,
+      "candidatePassed": false,
+      "transition": "score_down"
+    }
+  ],
+  "baselineEvaluation": {
+    "evalSets": [
+      {
+        "role": "validation",
+        "evalSetId": "nba-commentary-validation",
+        "caseCount": 8,
+        "passed": 0,
+        "failed": 8,
+        "cases": [
+          {
+            "evalSetId": "nba-commentary-validation",
+            "evalCaseId": "validation_01_nba_empty_48",
+            "sessionId": "44d0fe27-1b28-4e93-9137-1b80350f3e33",
+            "passed": false,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 0,
+                "status": "fail",
+                "reason": "final response mismatch: text mismatch: length mismatch: actual length 72 is less than min 350, expected range [350, 850]"
+              },
+              {
+                "name": "llm_rubric_critic",
+                "score": 0.5,
+                "status": "fail",
+                "reason": "回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。"
+              }
+            ],
+            "trace": {
+              "hasTrace": true,
+              "nodeCount": 1,
+              "toolCalls": 0,
+              "stepErrors": null
+            }
+          },
+          {
+            "evalSetId": "nba-commentary-validation",
+            "evalCaseId": "validation_02_football_penalties",
+            "sessionId": "2e68bdbf-1429-4ab5-9828-a6715ae62a86",
+            "passed": false,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 0,
+                "status": "fail",
+                "reason": "final response mismatch: text mismatch: length mismatch: actual length 72 is less than min 350, expected range [350, 850]"
+              },
+              {
+                "name": "llm_rubric_critic",
+                "score": 0.5,
+                "status": "fail",
+                "reason": "回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。"
+              }
+            ],
+            "trace": {
+              "hasTrace": true,
+              "nodeCount": 1,
+              "toolCalls": 0,
+              "stepErrors": null
+            }
+          },
+          {
+            "evalSetId": "nba-commentary-validation",
+            "evalCaseId": "validation_03_f1_rain_safety_car",
+            "sessionId": "7215945a-5955-4d8f-a99e-54f20449c75a",
+            "passed": false,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 0,
+                "status": "fail",
+                "reason": "final response mismatch: text mismatch: length mismatch: actual length 72 is less than min 350, expected range [350, 850]"
+              },
+              {
+                "name": "llm_rubric_critic",
+                "score": 0.5,
+                "status": "fail",
+                "reason": "回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。"
+              }
+            ],
+            "trace": {
+              "hasTrace": true,
+              "nodeCount": 1,
+              "toolCalls": 0,
+              "stepErrors": null
+            }
+          },
+          {
+            "evalSetId": "nba-commentary-validation",
+            "evalCaseId": "validation_04_badminton_match_point",
+            "sessionId": "4732b747-25bf-4e42-a4d1-76f060c90a78",
+            "passed": false,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 0,
+                "status": "fail",
+                "reason": "final response mismatch: text mismatch: length mismatch: actual length 72 is less than min 350, expected range [350, 850]"
+              },
+              {
+                "name": "llm_rubric_critic",
+                "score": 0.5,
+                "status": "fail",
+                "reason": "回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。"
+              }
+            ],
+            "trace": {
+              "hasTrace": true,
+              "nodeCount": 1,
+              "toolCalls": 0,
+              "stepErrors": null
+            }
+          },
+          {
+            "evalSetId": "nba-commentary-validation",
+            "evalCaseId": "validation_05_ice_hockey_overtime",
+            "sessionId": "3e416f21-8b35-40c0-9e07-7741264cd697",
+            "passed": false,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 0,
+                "status": "fail",
+                "reason": "final response mismatch: text mismatch: length mismatch: actual length 72 is less than min 350, expected range [350, 850]"
+              },
+              {
+                "name": "llm_rubric_critic",
+                "score": 0.5,
+                "status": "fail",
+                "reason": "回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。"
+              }
+            ],
+            "trace": {
+              "hasTrace": true,
+              "nodeCount": 1,
+              "toolCalls": 0,
+              "stepErrors": null
+            }
+          },
+          {
+            "evalSetId": "nba-commentary-validation",
+            "evalCaseId": "validation_06_tennis_tiebreak",
+            "sessionId": "1842c4c3-5bfc-487c-8240-585af9e07f9c",
+            "passed": false,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 0,
+                "status": "fail",
+                "reason": "final response mismatch: text mismatch: length mismatch: actual length 72 is less than min 350, expected range [350, 850]"
+              },
+              {
+                "name": "llm_rubric_critic",
+                "score": 0.5,
+                "status": "fail",
+                "reason": "回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。"
+              }
+            ],
+            "trace": {
+              "hasTrace": true,
+              "nodeCount": 1,
+              "toolCalls": 0,
+              "stepErrors": null
+            }
+          },
+          {
+            "evalSetId": "nba-commentary-validation",
+            "evalCaseId": "validation_07_road_cycling_breakaway",
+            "sessionId": "b3087ca2-2e29-40e0-82f6-6edcb09e59c6",
+            "passed": false,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 0,
+                "status": "fail",
+                "reason": "final response mismatch: text mismatch: length mismatch: actual length 72 is less than min 350, expected range [350, 850]"
+              },
+              {
+                "name": "llm_rubric_critic",
+                "score": 0.5,
+                "status": "fail",
+                "reason": "回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。"
+              }
+            ],
+            "trace": {
+              "hasTrace": true,
+              "nodeCount": 1,
+              "toolCalls": 0,
+              "stepErrors": null
+            }
+          },
+          {
+            "evalSetId": "nba-commentary-validation",
+            "evalCaseId": "validation_08_cricket_t20_chase",
+            "sessionId": "80813091-8a18-4bd4-8044-ac7d64a488ef",
+            "passed": false,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 0,
+                "status": "fail",
+                "reason": "final response mismatch: text mismatch: length mismatch: actual length 72 is less than min 350, expected range [350, 850]"
+              },
+              {
+                "name": "llm_rubric_critic",
+                "score": 0.5,
+                "status": "fail",
+                "reason": "回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。"
+              }
+            ],
+            "trace": {
+              "hasTrace": true,
+              "nodeCount": 1,
+              "toolCalls": 0,
+              "stepErrors": null
+            }
+          }
+        ]
+      },
+      {
+        "role": "train",
+        "evalSetId": "nba-commentary-train",
+        "caseCount": 8,
+        "passed": 0,
+        "failed": 8,
+        "cases": [
+          {
+            "evalSetId": "nba-commentary-train",
+            "evalCaseId": "train_01_nba_nuggets_blowout",
+            "sessionId": "0d923a5f-8892-4de2-9229-2135498fd23f",
+            "passed": false,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 0,
+                "status": "fail",
+                "reason": "final response mismatch: text mismatch: length mismatch: actual length 72 is less than min 350, expected range [350, 850]"
+              },
+              {
+                "name": "llm_rubric_critic",
+                "score": 0.5,
+                "status": "fail",
+                "reason": "回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。"
+              }
+            ],
+            "trace": {
+              "hasTrace": true,
+              "nodeCount": 1,
+              "toolCalls": 0,
+              "stepErrors": null
+            }
+          },
+          {
+            "evalSetId": "nba-commentary-train",
+            "evalCaseId": "train_02_football_penalty_advancement",
+            "sessionId": "4fef18d0-1bec-4c0b-b320-5d48c2cbf01a",
+            "passed": false,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 0,
+                "status": "fail",
+                "reason": "final response mismatch: text mismatch: length mismatch: actual length 72 is less than min 350, expected range [350, 850]"
+              },
+              {
+                "name": "llm_rubric_critic",
+                "score": 0.5,
+                "status": "fail",
+                "reason": "回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。"
+              }
+            ],
+            "trace": {
+              "hasTrace": true,
+              "nodeCount": 1,
+              "toolCalls": 0,
+              "stepErrors": null
+            }
+          },
+          {
+            "evalSetId": "nba-commentary-train",
+            "evalCaseId": "train_03_football_late_header",
+            "sessionId": "edcc4959-503f-4801-9bf1-34ba26ccf46a",
+            "passed": false,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 0,
+                "status": "fail",
+                "reason": "final response mismatch: text mismatch: length mismatch: actual length 72 is less than min 350, expected range [350, 850]"
+              },
+              {
+                "name": "llm_rubric_critic",
+                "score": 0.5,
+                "status": "fail",
+                "reason": "回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。"
+              }
+            ],
+            "trace": {
+              "hasTrace": true,
+              "nodeCount": 1,
+              "toolCalls": 0,
+              "stepErrors": null
+            }
+          },
+          {
+            "evalSetId": "nba-commentary-train",
+            "evalCaseId": "train_04_mlb_walkoff_single",
+            "sessionId": "93cd6d35-ffc1-419e-bd50-270ac2f0fb17",
+            "passed": false,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 0,
+                "status": "fail",
+                "reason": "final response mismatch: text mismatch: length mismatch: actual length 72 is less than min 350, expected range [350, 850]"
+              },
+              {
+                "name": "llm_rubric_critic",
+                "score": 0.5,
+                "status": "fail",
+                "reason": "回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。"
+              }
+            ],
+            "trace": {
+              "hasTrace": true,
+              "nodeCount": 1,
+              "toolCalls": 0,
+              "stepErrors": null
+            }
+          },
+          {
+            "evalSetId": "nba-commentary-train",
+            "evalCaseId": "train_05_tennis_five_set_comeback",
+            "sessionId": "899026af-e593-4162-84be-81ea18566296",
+            "passed": false,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 0,
+                "status": "fail",
+                "reason": "final response mismatch: text mismatch: length mismatch: actual length 72 is less than min 350, expected range [350, 850]"
+              },
+              {
+                "name": "llm_rubric_critic",
+                "score": 0.5,
+                "status": "fail",
+                "reason": "回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。"
+              }
+            ],
+            "trace": {
+              "hasTrace": true,
+              "nodeCount": 1,
+              "toolCalls": 0,
+              "stepErrors": null
+            }
+          },
+          {
+            "evalSetId": "nba-commentary-train",
+            "evalCaseId": "train_06_badminton_saved_match_point",
+            "sessionId": "08491326-dc49-4169-9eff-4a97b634266e",
+            "passed": false,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 0,
+                "status": "fail",
+                "reason": "final response mismatch: text mismatch: length mismatch: actual length 72 is less than min 350, expected range [350, 850]"
+              },
+              {
+                "name": "llm_rubric_critic",
+                "score": 0.5,
+                "status": "fail",
+                "reason": "回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。"
+              }
+            ],
+            "trace": {
+              "hasTrace": true,
+              "nodeCount": 1,
+              "toolCalls": 0,
+              "stepErrors": null
+            }
+          },
+          {
+            "evalSetId": "nba-commentary-train",
+            "evalCaseId": "train_07_ice_hockey_overtime",
+            "sessionId": "9e9c3d75-62d3-4ad8-8ee7-41306f078905",
+            "passed": false,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 0,
+                "status": "fail",
+                "reason": "final response mismatch: text mismatch: length mismatch: actual length 72 is less than min 350, expected range [350, 850]"
+              },
+              {
+                "name": "llm_rubric_critic",
+                "score": 0.5,
+                "status": "fail",
+                "reason": "回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。"
+              }
+            ],
+            "trace": {
+              "hasTrace": true,
+              "nodeCount": 1,
+              "toolCalls": 0,
+              "stepErrors": null
+            }
+          },
+          {
+            "evalSetId": "nba-commentary-train",
+            "evalCaseId": "train_08_cricket_last_over_chase",
+            "sessionId": "6f05b5b3-6319-4c7d-bf74-9c7a3239c15f",
+            "passed": false,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 0,
+                "status": "fail",
+                "reason": "final response mismatch: text mismatch: length mismatch: actual length 72 is less than min 350, expected range [350, 850]"
+              },
+              {
+                "name": "llm_rubric_critic",
+                "score": 0.5,
+                "status": "fail",
+                "reason": "回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。\n回复基本完整但信息密度不足。"
+              }
+            ],
+            "trace": {
+              "hasTrace": true,
+              "nodeCount": 1,
+              "toolCalls": 0,
+              "stepErrors": null
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "candidatePrompt": "你是一名体育评论员。请用极简一句话概括比赛，不要展开任何细节。",
+  "cost": {
+    "evalUnits": 56,
+    "workerUnits": 30,
+    "unitEvalCost": 0.01,
+    "unitWorkerCost": 0.05,
+    "total": 2.06
+  },
+  "config": {
+    "appName": "promptiter-nba-commentary-app",
+    "candidateAgentName": "candidate",
+    "promptType": "agent",
+    "targetSurfaces": null,
+    "trainEvalSetIDs": [
+      "nba-commentary-train"
+    ],
+    "validationEvalSetIDs": [
+      "nba-commentary-validation"
+    ],
+    "metricFileID": "sports-commentary",
+    "candidateModelName": "deepseek-v4-flash",
+    "judgeModelName": "deepseek-v4-flash",
+    "workerModelName": "deepseek-v4-flash",
+    "minScoreGain": 0.01,
+    "maxRounds": 4,
+    "targetScore": 1,
+    "keyCaseIDs": [],
+    "costPerEval": 0.01,
+    "costPerWorker": 0.05,
+    "costBudget": 0,
+    "seed": 42,
+    "fake": true,
+    "fakeScenario": "regression",
+    "dataDir": "./data",
+    "outputDir": "./output"
+  }
+}
