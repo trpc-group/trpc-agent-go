@@ -23,6 +23,9 @@ SIGTERM 后 SIGKILL。
 沙箱默认使用 container runtime（Docker），通过两阶段 Dockerfile 构建：Stage 1
 用 golang:1.22-alpine 编译 checkrunner，Stage 2 用 alpine:3.19 安装 Go toolchain
 并复用编译产物。镜像中 USER 0:0 配合 CAP_SETUID/SETGID 实现运行时降权。
+RuntimeContainer 模式通过 `docker run cr-sandbox:latest -mode vet|test` 执行，
+executor 解析 checkrunner 返回的结构化 JSON（exit_code/stdout/stderr/timed_out），
+Docker 不可用时不静默 fallback 到 host，而是记录错误继续报告。
 
 sandbox/modproxy.go 提供离线 Go module 代理，将 go mod download 的缓存目录注入
 沙箱环境变量（GOMODCACHE、GOPROXY=off），避免沙箱内网络访问。
@@ -49,7 +52,8 @@ permission_decisions（治理决策，含 action 和 reason）。
 使用 SQLite（modernc.org/sqlite，纯 Go 无 CGO）作为默认实现，通过
 ReviewStore 接口保留切换 SQL 后端的空间。接口包含 CreateTask、SaveFinding、
 SaveSandboxRun、SavePermissionDecision、GetTask、GetFindings、
-GetSandboxRuns、GetPermissionDecisions、Finalize。所有敏感字段
+GetSandboxRuns、GetPermissionDecisions、Finalize。Finalize 接受 StatusCompleted、
+StatusCompletedWithWarnings 和 StatusFailed 三种终态，拒绝中间态。所有敏感字段
 （evidence、stdout/stderr）在落库前经过 redact 模块脱敏。
 
 ### 6. 去重和降噪
