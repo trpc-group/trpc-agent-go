@@ -183,6 +183,22 @@ func TestGuardScansCommandExecutionIndirection(t *testing.T) {
 			safety.DecisionDeny, "git.shell_alias",
 		},
 		{
+			"git config env unresolved executable", safety.Request{
+				Command: `git --config-env=core.editor=MISSING status`,
+			},
+			safety.DecisionNeedsHumanReview, "git.execution_config",
+		},
+		{
+			"git config env benign key", safety.Request{
+				Command: `git --config-env=user.name=MISSING status`,
+			},
+			safety.DecisionAllow, "safety.no_findings",
+		},
+		{
+			"git non-shell alias", safety.Request{Command: `git -c alias.co=checkout co`},
+			safety.DecisionNeedsHumanReview, "git.execution_config",
+		},
+		{
 			"git executable selector", safety.Request{Command: `git -c core.fsmonitor='rm -rf .' status`},
 			safety.DecisionDeny, "dangerous.rm_rf",
 		},
@@ -191,7 +207,19 @@ func TestGuardScansCommandExecutionIndirection(t *testing.T) {
 			safety.DecisionNeedsHumanReview, "git.execution_config",
 		},
 		{
+			"git denied hooks path", safety.Request{Command: `git -c core.hooksPath=/etc status`},
+			safety.DecisionDeny, "sensitive.path",
+		},
+		{
 			"git included config", safety.Request{Command: `git -c include.path=.git/evil pwn`},
+			safety.DecisionNeedsHumanReview, "git.execution_config",
+		},
+		{
+			"git credential shell helper", safety.Request{Command: `git -c credential.helper='!rm -rf .' status`},
+			safety.DecisionDeny, "dangerous.rm_rf",
+		},
+		{
+			"git credential named helper", safety.Request{Command: `git -c credential.helper=store status`},
 			safety.DecisionNeedsHumanReview, "git.execution_config",
 		},
 		{
@@ -199,7 +227,27 @@ func TestGuardScansCommandExecutionIndirection(t *testing.T) {
 			safety.DecisionDeny, "dangerous.rm_rf",
 		},
 		{
+			"git diff text converter", safety.Request{Command: `git -c diff.audit.textconv='rm -rf .' diff`},
+			safety.DecisionDeny, "dangerous.rm_rf",
+		},
+		{
 			"git merge driver command", safety.Request{Command: `git -c merge.audit.driver='rm -rf .' merge branch`},
+			safety.DecisionDeny, "dangerous.rm_rf",
+		},
+		{
+			"git difftool command", safety.Request{Command: `git -c difftool.audit.cmd='rm -rf .' difftool`},
+			safety.DecisionDeny, "dangerous.rm_rf",
+		},
+		{
+			"git mergetool command", safety.Request{Command: `git -c mergetool.audit.cmd='rm -rf .' mergetool`},
+			safety.DecisionDeny, "dangerous.rm_rf",
+		},
+		{
+			"git filter command", safety.Request{Command: `git -c filter.audit.process='rm -rf .' status`},
+			safety.DecisionDeny, "dangerous.rm_rf",
+		},
+		{
+			"git gpg program", safety.Request{Command: `git -c gpg.openpgp.program='rm -rf .' status`},
 			safety.DecisionDeny, "dangerous.rm_rf",
 		},
 		{
@@ -211,11 +259,31 @@ func TestGuardScansCommandExecutionIndirection(t *testing.T) {
 			safety.DecisionDeny, "dangerous.rm_rf",
 		},
 		{
+			"tar separate checkpoint exec", safety.Request{Command: `tar --checkpoint=1 --checkpoint-action 'exec=rm -rf .' -cf out.tar .`},
+			safety.DecisionDeny, "dangerous.rm_rf",
+		},
+		{
 			"tar to command", safety.Request{Command: `tar -xf in.tar --to-command='rm -rf .'`},
 			safety.DecisionDeny, "dangerous.rm_rf",
 		},
 		{
+			"tar separate to command", safety.Request{Command: `tar -xf in.tar --to-command 'rm -rf .'`},
+			safety.DecisionDeny, "dangerous.rm_rf",
+		},
+		{
 			"tar compressor command", safety.Request{Command: `tar -I 'rm -rf .' -cf out.tar .`},
+			safety.DecisionDeny, "dangerous.rm_rf",
+		},
+		{
+			"tar attached compressor command", safety.Request{Command: `tar -I'rm -rf .' -cf out.tar .`},
+			safety.DecisionDeny, "dangerous.rm_rf",
+		},
+		{
+			"tar long compressor command", safety.Request{Command: `tar --use-compress-program 'rm -rf .' -cf out.tar .`},
+			safety.DecisionDeny, "dangerous.rm_rf",
+		},
+		{
+			"tar attached long compressor command", safety.Request{Command: `tar --use-compress-program='rm -rf .' -cf out.tar .`},
 			safety.DecisionDeny, "dangerous.rm_rf",
 		},
 		{
