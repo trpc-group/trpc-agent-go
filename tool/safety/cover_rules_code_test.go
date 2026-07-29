@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 // --- rules_code.go ---
@@ -245,7 +247,7 @@ func TestCoverrules_RuleMetadata_NoFlags(t *testing.T) {
 }
 
 func TestCoverrules_RuleMetadata_Destructive(t *testing.T) {
-	in := ScanInput{Metadata: ToolMetadata{Destructive: true}}
+	in := ScanInput{Metadata: tool.ToolMetadata{Destructive: true}}
 
 	// Default policy: dangerous_commands action is deny.
 	p := DefaultPolicy()
@@ -266,7 +268,7 @@ func TestCoverrules_RuleMetadata_Destructive(t *testing.T) {
 }
 
 func TestCoverrules_RuleMetadata_OpenWorld(t *testing.T) {
-	in := ScanInput{Metadata: ToolMetadata{OpenWorld: true}}
+	in := ScanInput{Metadata: tool.ToolMetadata{OpenWorld: true}}
 
 	p := DefaultPolicy()
 	findings := ruleMetadata(in, p)
@@ -275,10 +277,12 @@ func TestCoverrules_RuleMetadata_OpenWorld(t *testing.T) {
 	require.Equal(t, DecisionDeny, findings[0].Decision)
 
 	// Read-only/search tools are exempt.
-	readIn := ScanInput{Metadata: ToolMetadata{OpenWorld: true, SearchOrRead: true}}
+	readIn := ScanInput{
+		Metadata: tool.ToolMetadata{OpenWorld: true, SearchOrRead: true},
+	}
 	require.Empty(t, ruleMetadata(readIn, p))
 	mcpReadOnly := ScanInput{
-		Metadata: ToolMetadata{OpenWorld: true, ReadOnly: true},
+		Metadata: tool.ToolMetadata{OpenWorld: true, ReadOnly: true},
 	}
 	require.Empty(t, ruleMetadata(mcpReadOnly, p))
 

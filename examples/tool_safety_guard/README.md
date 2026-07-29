@@ -165,6 +165,10 @@ or kernel boundary. Each backend has different isolation guarantees:
 - **`codeexec` / `codeexecutor`**: code blocks are decoded and scanned
   before execution. Local, container, E2B, and sandbox backends have
   different guarantees. `ToolProfile` must describe enforced capabilities.
+  When a profile has no executor default timeout, permission checks and wrapped
+  calls use the execution context's deadline as the actual cancellation bound.
+  Direct `Guard.Scan` callers must set `ScanInput.Timeout` explicitly because a
+  scan-only context does not prove how later execution will be bounded.
 - **MCP**: the guard sees request arguments and metadata. Remote server
   behavior remains outside the local process boundary.
 - **Telemetry**: safety attributes are bounded metadata. Deployments that

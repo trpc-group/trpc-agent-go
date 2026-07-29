@@ -13,14 +13,67 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	codeact "trpc.group/trpc-go/trpc-agent-go/codeexecutor/codeact"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/dynamicworkflow"
+	"trpc.group/trpc-go/trpc-agent-go/tool/toolcode"
 )
+
+type safetyCodeRuntime struct{}
+
+func (safetyCodeRuntime) ExecuteCodeAct(
+	context.Context,
+	codeact.Request,
+	codeact.ToolCallHandler,
+) (codeact.Result, error) {
+	return codeact.Result{}, nil
+}
+
+type safetyWorkflowRuntime struct{}
+
+func (safetyWorkflowRuntime) ExecuteWorkflow(
+	context.Context,
+	dynamicworkflow.Request,
+	dynamicworkflow.CallHandler,
+) (dynamicworkflow.Result, error) {
+	return dynamicworkflow.Result{}, nil
+}
+
+type safetyWorkflowAgent struct{}
+
+func (safetyWorkflowAgent) Run(
+	context.Context,
+	*agent.Invocation,
+) (<-chan *event.Event, error) {
+	events := make(chan *event.Event)
+	close(events)
+	return events, nil
+}
+
+func (safetyWorkflowAgent) Tools() []tool.Tool {
+	return nil
+}
+
+func (safetyWorkflowAgent) Info() agent.Info {
+	return agent.Info{Name: "reviewer"}
+}
+
+func (safetyWorkflowAgent) SubAgents() []agent.Agent {
+	return nil
+}
+
+func (safetyWorkflowAgent) FindSubAgent(string) agent.Agent {
+	return nil
+}
 
 func newTestGuard(t *testing.T, opts ...Option) *Guard {
 	t.Helper()
@@ -442,14 +495,24 @@ func TestGuard_PostExecuteEventPopulatesSessionHash(t *testing.T) {
 		Arguments: []byte(`{"session_id":"sess-123","chars":"ls"}`),
 	}
 	// Fallback path: no stashed preflight event.
-	ev := guard.postExecuteEvent(args, false, false)
+	ev := guard.postExecuteEvent(
+		context.Background(),
+		args,
+		false,
+		false,
+	)
 	require.Equal(t, hashSessionID("sess-123"), ev.SessionHash)
 
 	// Stashed path: a preflight event without a hash still gets the
 	// current session digest.
 	guard.stashScanEvent("call-1", scanEvent{ScanID: "scan-1"})
 	args.ToolCallID = "call-1"
-	ev = guard.postExecuteEvent(args, true, false)
+	ev = guard.postExecuteEvent(
+		context.Background(),
+		args,
+		true,
+		false,
+	)
 	require.Equal(t, "scan-1", ev.ScanID)
 	require.Equal(t, hashSessionID("sess-123"), ev.SessionHash)
 	require.True(t, ev.Redacted)
@@ -743,6 +806,41 @@ func TestGuard_EmptyToolCallIDCannotBypassConcurrency(t *testing.T) {
 	require.Equal(t, int64(0), guard.concurrency.activeCount())
 }
 
+func TestGuard_DuplicateToolCallIDsAreScopedByInvocation(t *testing.T) {
+	guard := newTestGuard(t)
+	arguments := []byte(`{"command":"ls","timeout":10}`)
+	invocationA := agent.NewInvocation()
+	invocationB := agent.NewInvocation()
+	ctxA := agent.NewInvocationContext(
+		context.Background(),
+		invocationA,
+	)
+	ctxB := agent.NewInvocationContext(
+		context.Background(),
+		invocationB,
+	)
+	for _, ctx := range []context.Context{ctxA, ctxB} {
+		decision, err := guard.checkToolCall(
+			ctx,
+			&tool.PermissionRequest{
+				ToolName:   "workspace_exec",
+				ToolCallID: "auto_call_0",
+				Arguments:  arguments,
+			},
+		)
+		require.NoError(t, err)
+		require.Equal(
+			t,
+			tool.PermissionActionAllow,
+			decision.Action,
+		)
+	}
+	require.Len(t, guard.activeCalls, 2)
+	guard.finishCall(ctxA, "auto_call_0")
+	guard.finishCall(ctxB, "auto_call_0")
+	require.Empty(t, guard.activeCalls)
+}
+
 func TestGuard_CanceledContextPropagatesBeforeDecision(t *testing.T) {
 	guard := newTestGuard(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -768,6 +866,127 @@ func TestGuard_CanceledContextPropagatesBeforeDecision(t *testing.T) {
 		_, err = guard.CheckToolPermission(ctx, request)
 		require.ErrorIs(t, err, context.Canceled)
 	}
+}
+
+func TestGuard_ScanPropagatesCanceledContext(t *testing.T) {
+	guard := newTestGuard(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := guard.Scan(ctx, ScanInput{
+		ToolName: "execute_code",
+		Backend:  BackendCodeExec,
+		CodeBlocks: []CodeBlock{{
+			Language: "python",
+			Code:     strings.Repeat("print('safe')\n", 500),
+		}},
+	})
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestGuard_ScanDoesNotTreatDeadlineAsExecutionBound(t *testing.T) {
+	guard := newTestGuard(t)
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		10*time.Second,
+	)
+	defer cancel()
+
+	report, err := guard.Scan(ctx, ScanInput{
+		ToolName: "execute_tool_code",
+		CodeBlocks: []CodeBlock{{
+			Language: "python",
+			Code:     "return 1",
+		}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, DecisionDeny, report.Decision)
+	require.Contains(
+		t,
+		ruleIDSet(report.Findings),
+		"resource.timeout_unknown",
+	)
+}
+
+func TestGuard_DefaultCodeProfilesUseContextDeadline(t *testing.T) {
+	codeTool, err := toolcode.NewTool(safetyCodeRuntime{}, nil)
+	require.NoError(t, err)
+	workflowTool, err := dynamicworkflow.NewTool(
+		safetyWorkflowRuntime{},
+		[]agent.Agent{safetyWorkflowAgent{}},
+	)
+	require.NoError(t, err)
+
+	guard := newTestGuard(t)
+	for _, candidate := range []tool.Tool{codeTool, workflowTool} {
+		name := candidate.Declaration().Name
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				10*time.Second,
+			)
+			defer cancel()
+
+			request := func(code string) *tool.PermissionRequest {
+				return &tool.PermissionRequest{
+					Tool:        candidate,
+					ToolName:    name,
+					ToolCallID:  name + "-call",
+					Declaration: candidate.Declaration(),
+					Arguments: []byte(
+						fmt.Sprintf(`{"code":%q}`, code),
+					),
+					Metadata: tool.MetadataOf(candidate),
+				}
+			}
+
+			decision, err := guard.CheckToolPermission(
+				ctx,
+				request("return 1"),
+			)
+			require.NoError(t, err)
+			require.Equal(t, tool.PermissionActionAllow, decision.Action)
+
+			decision, err = guard.CheckToolPermission(
+				ctx,
+				request(`import os; os.system("rm -rf /")`),
+			)
+			require.NoError(t, err)
+			require.Equal(t, tool.PermissionActionDeny, decision.Action)
+		})
+	}
+}
+
+func TestGuard_ExecutionDeadlineUsesShorterProfileDefault(t *testing.T) {
+	policy := testPolicy(t)
+	policy.MaxTimeout = 2 * time.Second
+	guard := newTestGuard(
+		t,
+		WithPolicy(policy),
+		WithToolProfile(ToolProfile{
+			Name:            "bounded_code",
+			Backend:         BackendCodeExec,
+			DefaultTimeout:  time.Second,
+			CodeField:       "code",
+			DefaultLanguage: "python",
+		}),
+	)
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		10*time.Second,
+	)
+	defer cancel()
+
+	decision, err := guard.CheckToolPermission(
+		ctx,
+		&tool.PermissionRequest{
+			ToolName:   "bounded_code",
+			ToolCallID: "bounded-code-call",
+			Arguments:  []byte(`{"code":"return 1"}`),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionAllow, decision.Action)
 }
 
 func TestGuard_UnknownSessionInputStillEnforcesSizeLimit(t *testing.T) {

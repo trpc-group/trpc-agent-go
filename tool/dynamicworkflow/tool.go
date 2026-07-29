@@ -387,7 +387,16 @@ func (g *workflowGateway) callTool(ctx context.Context, call Call) (json.RawMess
 	if err := json.Unmarshal(call.Args, &args); err != nil || args == nil {
 		return nil, fmt.Errorf("dynamicworkflow: tool %q requires a JSON object argument", call.Name)
 	}
-	permissionResult, err := g.checkToolPermission(ctx, call, candidate)
+	callCtx := context.WithValue(
+		ctx,
+		tool.ContextKeyToolCallID{},
+		call.ID,
+	)
+	permissionResult, err := g.checkToolPermission(
+		callCtx,
+		call,
+		candidate,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("dynamicworkflow: check permission for tool %q: %w", call.Name, err)
 	}
@@ -398,7 +407,7 @@ func (g *workflowGateway) callTool(ctx context.Context, call Call) (json.RawMess
 		}
 		return raw, nil
 	}
-	value, err := candidate.Call(ctx, call.Args)
+	value, err := candidate.Call(callCtx, call.Args)
 	if err != nil {
 		return nil, fmt.Errorf("dynamicworkflow: call tool %q: %w", call.Name, err)
 	}

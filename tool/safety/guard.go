@@ -16,7 +16,9 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	internaltool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -175,10 +177,26 @@ type Guard struct {
 	closing                   bool
 	closed                    bool
 	closeErr                  error
-	scanEvents                map[string]scanEvent // keyed by tool call id
-	releases                  map[string]func()    // keyed by tool call id
-	activeCalls               map[string]struct{}  // model tool call ids currently in flight
+	scanEvents                map[guardCallKey]scanEvent
+	releases                  map[guardCallKey]func()
+	activeCalls               map[guardCallKey]struct{}
 	callbackFinalizerCleanups []func()
+}
+
+type guardCallKey struct {
+	invocation *agent.Invocation
+	toolCallID string
+}
+
+func newGuardCallKey(
+	ctx context.Context,
+	toolCallID string,
+) guardCallKey {
+	invocation, _ := agent.InvocationFromContext(ctx)
+	return guardCallKey{
+		invocation: invocation,
+		toolCallID: toolCallID,
+	}
 }
 
 var _ tool.PermissionPolicy = (*Guard)(nil)
@@ -219,9 +237,9 @@ func NewGuard(opts ...Option) (*Guard, error) {
 		profiles:    newProfileRegistry(),
 		sessions:    newSessionTracker(),
 		concurrency: newConcurrencyLimiter(o.concurrency),
-		scanEvents:  make(map[string]scanEvent),
-		releases:    make(map[string]func()),
-		activeCalls: make(map[string]struct{}),
+		scanEvents:  make(map[guardCallKey]scanEvent),
+		releases:    make(map[guardCallKey]func()),
+		activeCalls: make(map[guardCallKey]struct{}),
 	}
 	g.cond = sync.NewCond(&g.mu)
 	// Inject the guard's session tracker into the scanner so
@@ -386,7 +404,13 @@ func (g *Guard) checkToolCall(
 		return tool.PermissionDecision{}, err
 	}
 	release := combineReleases(sessionRelease, concurrencyRelease)
-	release, reserved := g.reserveAllowedCall(req, &report, release)
+	callKey := newGuardCallKey(ctx, req.ToolCallID)
+	release, reserved := g.reserveAllowedCall(
+		callKey,
+		req,
+		&report,
+		release,
+	)
 	transferred := false
 	defer func() {
 		if transferred {
@@ -396,7 +420,7 @@ func (g *Guard) checkToolCall(
 			release()
 		}
 		if reserved {
-			g.releaseToolCallID(req.ToolCallID)
+			g.releaseToolCallID(callKey)
 		}
 	}()
 	if denied := g.auditPreflightOrDeny(&report); denied && release != nil {
@@ -404,7 +428,7 @@ func (g *Guard) checkToolCall(
 		release = nil
 	}
 	if report.Decision != DecisionAllow && reserved {
-		g.releaseToolCallID(req.ToolCallID)
+		g.releaseToolCallID(callKey)
 		reserved = false
 	}
 
@@ -413,10 +437,10 @@ func (g *Guard) checkToolCall(
 	}
 
 	if report.Decision == DecisionAllow {
-		g.stashRelease(req.ToolCallID, release)
+		g.stashReleaseFor(callKey, release)
 		// Stash the scan event so wrapper completion can reuse the scan
 		// id, decision, risk level, and rule ids.
-		g.stashScanEvent(req.ToolCallID, fromReport(report))
+		g.stashScanEventFor(callKey, fromReport(report))
 		transferred = true
 	}
 
@@ -569,6 +593,8 @@ func (g *Guard) scanPermission(
 	req *tool.PermissionRequest,
 	in ScanInput,
 ) ScanReport {
+	in = g.scanner.applyProfileDefaults(in)
+	in = applyExecutionContextDeadline(ctx, in)
 	report, err := g.scanner.Scan(ctx, in)
 	if err == nil {
 		report.Backend = coalesceBackend(report.Backend, in.Backend)
@@ -593,7 +619,24 @@ func (g *Guard) scanPermission(
 	}
 }
 
+func applyExecutionContextDeadline(
+	ctx context.Context,
+	in ScanInput,
+) ScanInput {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return in
+	}
+	remaining := time.Until(deadline)
+	if remaining > 0 &&
+		(in.Timeout <= 0 || remaining < in.Timeout) {
+		in.Timeout = remaining
+	}
+	return in
+}
+
 func (g *Guard) reserveAllowedCall(
+	callKey guardCallKey,
 	req *tool.PermissionRequest,
 	report *ScanReport,
 	release func(),
@@ -601,7 +644,7 @@ func (g *Guard) reserveAllowedCall(
 	if report.Decision != DecisionAllow || req.ToolCallID == "" {
 		return release, false
 	}
-	if g.reserveToolCallID(req.ToolCallID) {
+	if g.reserveToolCallID(callKey) {
 		return release, true
 	}
 	if release != nil {
@@ -759,28 +802,46 @@ func (g *Guard) maybeAuditPreflight(report ScanReport) error {
 // so wrapper completion can correlate the two phases. The event is
 // evicted by popScanEvent or by Close.
 func (g *Guard) stashScanEvent(toolCallID string, ev scanEvent) {
-	if g == nil || toolCallID == "" {
+	g.stashScanEventFor(
+		newGuardCallKey(context.Background(), toolCallID),
+		ev,
+	)
+}
+
+func (g *Guard) stashScanEventFor(
+	callKey guardCallKey,
+	ev scanEvent,
+) {
+	if g == nil || callKey.toolCallID == "" {
 		return
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.scanEvents == nil {
-		g.scanEvents = make(map[string]scanEvent)
+		g.scanEvents = make(map[guardCallKey]scanEvent)
 	}
-	g.scanEvents[toolCallID] = ev
+	g.scanEvents[callKey] = ev
 }
 
 // popScanEvent returns and removes the preflight scan event for
 // toolCallID. Returns a zero scanEvent when no event was stashed.
 func (g *Guard) popScanEvent(toolCallID string) scanEvent {
-	if g == nil || toolCallID == "" {
+	return g.popScanEventFor(
+		newGuardCallKey(context.Background(), toolCallID),
+	)
+}
+
+func (g *Guard) popScanEventFor(
+	callKey guardCallKey,
+) scanEvent {
+	if g == nil || callKey.toolCallID == "" {
 		return scanEvent{}
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	ev, ok := g.scanEvents[toolCallID]
+	ev, ok := g.scanEvents[callKey]
 	if ok {
-		delete(g.scanEvents, toolCallID)
+		delete(g.scanEvents, callKey)
 	}
 	return ev
 }
@@ -791,71 +852,93 @@ func (g *Guard) popScanEvent(toolCallID string) scanEvent {
 // is invoked before the new one is stored, so a re-stash never leaks the
 // earlier slot.
 func (g *Guard) stashRelease(toolCallID string, release func()) {
-	if g == nil || toolCallID == "" || release == nil {
+	g.stashReleaseFor(
+		newGuardCallKey(context.Background(), toolCallID),
+		release,
+	)
+}
+
+func (g *Guard) stashReleaseFor(
+	callKey guardCallKey,
+	release func(),
+) {
+	if g == nil || callKey.toolCallID == "" || release == nil {
 		return
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.releases == nil {
-		g.releases = make(map[string]func())
+		g.releases = make(map[guardCallKey]func())
 	}
-	if prev := g.releases[toolCallID]; prev != nil {
-		delete(g.releases, toolCallID)
+	if prev := g.releases[callKey]; prev != nil {
+		delete(g.releases, callKey)
 		prev()
 	}
-	g.releases[toolCallID] = release
+	g.releases[callKey] = release
 }
 
 // reserveToolCallID reserves id for one active execution. It returns
 // false when another execution is already using the same model-issued
 // id, because correlation and concurrency state would otherwise be
 // ambiguous.
-func (g *Guard) reserveToolCallID(id string) bool {
-	if g == nil || id == "" {
+func (g *Guard) reserveToolCallID(callKey guardCallKey) bool {
+	if g == nil || callKey.toolCallID == "" {
 		return true
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.activeCalls == nil {
-		g.activeCalls = make(map[string]struct{})
+		g.activeCalls = make(map[guardCallKey]struct{})
 	}
-	if _, exists := g.activeCalls[id]; exists {
+	if _, exists := g.activeCalls[callKey]; exists {
 		return false
 	}
-	g.activeCalls[id] = struct{}{}
+	g.activeCalls[callKey] = struct{}{}
 	return true
 }
 
 // releaseToolCallID releases an active execution id.
-func (g *Guard) releaseToolCallID(id string) {
-	if g == nil || id == "" {
+func (g *Guard) releaseToolCallID(callKey guardCallKey) {
+	if g == nil || callKey.toolCallID == "" {
 		return
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	delete(g.activeCalls, id)
+	delete(g.activeCalls, callKey)
 }
 
 // finishCall releases concurrency and correlation state for one
 // completed tool call.
-func (g *Guard) finishCall(id string) {
-	if r := g.popRelease(id); r != nil {
+func (g *Guard) finishCall(
+	ctx context.Context,
+	id string,
+) {
+	callKey := newGuardCallKey(ctx, id)
+	if r := g.popReleaseFor(callKey); r != nil {
 		r()
 	}
-	g.popScanEvent(id)
-	g.releaseToolCallID(id)
+	g.popScanEventFor(callKey)
+	g.releaseToolCallID(callKey)
 }
 
 // popRelease returns and removes the release function for toolCallID.
 func (g *Guard) popRelease(toolCallID string) func() {
-	if g == nil || toolCallID == "" {
+	return g.popReleaseFor(
+		newGuardCallKey(context.Background(), toolCallID),
+	)
+}
+
+func (g *Guard) popReleaseFor(
+	callKey guardCallKey,
+) func() {
+	if g == nil || callKey.toolCallID == "" {
 		return nil
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	r, ok := g.releases[toolCallID]
+	r, ok := g.releases[callKey]
 	if ok {
-		delete(g.releases, toolCallID)
+		delete(g.releases, callKey)
 	}
 	return r
 }
@@ -894,7 +977,7 @@ func (g *Guard) finalizeCall(
 	// scan event, even when redaction is disabled, so the limiter
 	// does not leak slots and the side table does not grow without
 	// bound.
-	defer g.finishCall(args.ToolCallID)
+	defer g.finishCall(ctx, args.ToolCallID)
 	originalResult := args.Result
 
 	// Step 1: Handle error redaction FIRST, before computing
@@ -936,7 +1019,7 @@ func (g *Guard) finalizeCall(
 	// Build the post_execute audit event. Execution already
 	// happened, so an audit failure cannot deny anything; with a
 	// required writer it is surfaced as a warning instead.
-	ev := g.postExecuteEvent(args, redacted, truncated)
+	ev := g.postExecuteEvent(ctx, args, redacted, truncated)
 	if err := g.maybeAuditPostExecute(
 		ev, resultSize, truncated, execution,
 	); err != nil {
@@ -1170,9 +1253,15 @@ func replaceMetadata(
 // event in a side table keyed by tool call id so completion can
 // correlate the two phases. When no preflight event is found, a minimal
 // standalone event is produced.
-func (g *Guard) postExecuteEvent(args *tool.AfterToolArgs, redacted, truncated bool) scanEvent {
+func (g *Guard) postExecuteEvent(
+	ctx context.Context,
+	args *tool.AfterToolArgs,
+	redacted, truncated bool,
+) scanEvent {
 	sessionHash := g.postExecuteSessionHash(args)
-	if pre := g.popScanEvent(args.ToolCallID); pre.ScanID != "" {
+	if pre := g.popScanEventFor(
+		newGuardCallKey(ctx, args.ToolCallID),
+	); pre.ScanID != "" {
 		pre.Redacted = redacted
 		if pre.SessionHash == "" {
 			pre.SessionHash = sessionHash

@@ -9,6 +9,7 @@
 package safety
 
 import (
+	"errors"
 	"fmt"
 	"path"
 	"path/filepath"
@@ -68,11 +69,12 @@ func ruleCommand(a *analysis, p Policy) []Finding {
 				if isShellsafeImplicitDeny(err) {
 					risk = RiskHigh
 				}
-				if !dependencyRuleOverridesCommand(a, p) {
+				if !dependencyRuleOverridesCommand(a, p) ||
+					!isShellsafeAllowlistMiss(err) {
 					out = append(out, Finding{
 						RuleID:         "command.not_allowed",
 						RiskLevel:      risk,
-						Decision:       ruleDecision(p.Rules.DangerousCommands.Action, risk, p),
+						Decision:       DecisionDeny,
 						Evidence:       evidence,
 						Recommendation: "Use a command from the allowed_commands list or extend the policy explicitly",
 					})
@@ -89,6 +91,10 @@ func ruleCommand(a *analysis, p Policy) []Finding {
 				RiskHigh,
 				p,
 			)
+			var policyErr *explicitCommandPolicyError
+			if errors.As(err, &policyErr) {
+				decision = DecisionDeny
+			}
 			out = append(out, Finding{
 				RuleID:         "command.not_allowed",
 				RiskLevel:      RiskHigh,
@@ -108,6 +114,18 @@ func ruleCommand(a *analysis, p Policy) []Finding {
 	}
 
 	return out
+}
+
+type explicitCommandPolicyError struct {
+	err error
+}
+
+func (e *explicitCommandPolicyError) Error() string {
+	return e.err.Error()
+}
+
+func (e *explicitCommandPolicyError) Unwrap() error {
+	return e.err
 }
 
 // nestedCommandPolicyError applies the executable policy to command
@@ -135,7 +153,10 @@ func nestedCommandPolicyError(
 				if err := policy.Check(&shellsafe.Pipeline{
 					Commands: [][]string{payload},
 				}); err != nil {
-					return fmt.Errorf("nested find command is not allowed: %w", err)
+					return &explicitCommandPolicyError{err: fmt.Errorf(
+						"nested find command is not allowed: %w",
+						err,
+					)}
 				}
 				if !checkGitEscapes {
 					i += len(payload)
@@ -1485,6 +1506,13 @@ func isShellsafeImplicitDeny(err error) bool {
 		return false
 	}
 	return strings.Contains(err.Error(), "shell wrapper or re-executing builtin")
+}
+
+func isShellsafeAllowlistMiss(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "not in allowed_commands")
 }
 
 // ruleDecision applies the rule action override first, then the risk

@@ -124,9 +124,6 @@ type ScanInput struct {
 	sessionTerminates    bool
 }
 
-// ToolMetadata is an alias for the canonical tool metadata contract.
-type ToolMetadata = tool.ToolMetadata
-
 // Finding is one rule result. Decision is the action contributed by this
 // finding after rule overrides and risk thresholds are applied.
 type Finding struct {

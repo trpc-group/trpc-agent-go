@@ -565,6 +565,47 @@ func TestWorkflowCallToolHonorsPermissionBoundaries(t *testing.T) {
 		require.JSONEq(t, `{"status":"approval_required","tool":"sensitive","reason":"needs approval"}`, string(result.Value))
 		require.False(t, sensitive.called)
 	})
+
+	t.Run("nested call id reaches execution context", func(t *testing.T) {
+		sensitive := &permissionTestTool{
+			name:     "sensitive",
+			decision: tool.AllowPermission(),
+		}
+		workflow, err := NewTool(
+			scriptedRuntime{run: func(
+				ctx context.Context,
+				handler CallHandler,
+			) (Result, error) {
+				raw, err := handler.HandleWorkflowCall(ctx, Call{
+					ID:   "tool-1",
+					Kind: CallKindTool,
+					Name: "sensitive",
+					Args: json.RawMessage(`{"id":"42"}`),
+				})
+				return Result{Value: raw}, err
+			}},
+			[]agent.Agent{reviewer},
+			WithCodeCallableTools(sensitive),
+		)
+		require.NoError(t, err)
+
+		parent := agent.NewInvocation(
+			agent.WithInvocationSession(&session.Session{
+				ID: "session-1", AppName: "app", UserID: "user",
+			}),
+		)
+		_, err = workflow.Call(
+			agent.NewInvocationContext(
+				context.Background(),
+				parent,
+			),
+			[]byte(`{"code":"return None"}`),
+		)
+		require.NoError(t, err)
+		require.True(t, sensitive.called)
+		require.Equal(t, "tool-1", sensitive.checkToolCallID)
+		require.Equal(t, "tool-1", sensitive.callToolCallID)
+	})
 }
 
 func TestWorkflowChildAgentToolsHonorParentPermissionPolicy(t *testing.T) {
@@ -2613,25 +2654,32 @@ func (a *schemaTestAgent) SubAgents() []agent.Agent { return nil }
 func (a *schemaTestAgent) FindSubAgent(string) agent.Agent { return nil }
 
 type permissionTestTool struct {
-	name     string
-	decision tool.PermissionDecision
-	err      error
-	called   bool
+	name            string
+	decision        tool.PermissionDecision
+	err             error
+	called          bool
+	checkToolCallID string
+	callToolCallID  string
 }
 
 func (t *permissionTestTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{Name: t.name, Description: t.name + " tool"}
 }
 
-func (t *permissionTestTool) Call(context.Context, []byte) (any, error) {
+func (t *permissionTestTool) Call(
+	ctx context.Context,
+	_ []byte,
+) (any, error) {
 	t.called = true
+	t.callToolCallID, _ = tool.ToolCallIDFromContext(ctx)
 	return map[string]any{"ok": true}, nil
 }
 
 func (t *permissionTestTool) CheckPermission(
-	context.Context,
-	*tool.PermissionRequest,
+	_ context.Context,
+	req *tool.PermissionRequest,
 ) (tool.PermissionDecision, error) {
+	t.checkToolCallID = req.ToolCallID
 	return t.decision, t.err
 }
 

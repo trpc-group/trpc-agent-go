@@ -299,8 +299,7 @@ func (p Policy) Validate() error {
 		p.DecisionThreshold.Critical == DecisionAsk {
 		return errors.New("decision_threshold.critical must be deny")
 	}
-	if p.Rules.DangerousCommands.Enabled &&
-		p.Rules.DangerousCommands.Action == DecisionAllow {
+	if p.Rules.DangerousCommands.Action == DecisionAllow {
 		return errors.New("rules.dangerous_commands.action cannot be allow")
 	}
 	if p.Rules.SecretLeak.Enabled &&

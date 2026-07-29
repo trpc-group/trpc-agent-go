@@ -113,8 +113,14 @@ func (s *scanner) Scan(ctx context.Context, in ScanInput) (ScanReport, error) {
 	if s == nil {
 		return ScanReport{}, errors.New("scanner is nil")
 	}
+	if err := ctx.Err(); err != nil {
+		return ScanReport{}, err
+	}
 	in = s.applyProfileDefaults(in)
 	in = s.applySessionInputBuffer(in)
+	if err := ctx.Err(); err != nil {
+		return ScanReport{}, err
+	}
 	start := s.clock()
 	report := ScanReport{
 		SchemaVersion: "1",
@@ -128,8 +134,14 @@ func (s *scanner) Scan(ctx context.Context, in ScanInput) (ScanReport, error) {
 	// parse it via shellsafe. When the input only has code blocks or
 	// explicit argv, do not fabricate a shell parse failure.
 	analysis := buildAnalysis(in, s.policy)
+	if err := ctx.Err(); err != nil {
+		return ScanReport{}, err
+	}
 	if sessionAnalysis := s.sessionInputAnalysis(in); sessionAnalysis != nil {
 		mergeAnalysis(&analysis, sessionAnalysis)
+	}
+	if err := ctx.Err(); err != nil {
+		return ScanReport{}, err
 	}
 	report.Command = analysis.CommandSummary
 	report.CommandHash = analysis.CommandHash
@@ -139,18 +151,30 @@ func (s *scanner) Scan(ctx context.Context, in ScanInput) (ScanReport, error) {
 	findings = append(findings, ruleCommand(&analysis, s.policy)...)
 	findings = append(findings, rulePath(&analysis, s.policy, in.Cwd)...)
 	findings = append(findings, ruleNetwork(&analysis, s.policy)...)
+	if err := ctx.Err(); err != nil {
+		return ScanReport{}, err
+	}
 	findings = append(findings, ruleSessionInputBoundary(in, s.sessions)...)
 	findings = append(findings, ruleHost(in, &analysis, s.policy, s.sessions)...)
 	findings = append(findings, ruleDependency(&analysis, s.policy)...)
 	findings = append(findings, ruleResource(in, &analysis, s.policy)...)
+	if err := ctx.Err(); err != nil {
+		return ScanReport{}, err
+	}
 	findings = append(findings, ruleSecret(in, s.policy)...)
 	findings = append(findings, ruleEnvName(in, s.policy)...)
 	findings = append(findings, ruleCwd(in, s.policy)...)
 	findings = append(findings, ruleCodeInput(in)...)
 	findings = append(findings, codeRuleFindings(&analysis, s.policy)...)
+	if err := ctx.Err(); err != nil {
+		return ScanReport{}, err
+	}
 	findings = append(findings, ruleMetadata(in, s.policy)...)
 	findings = append(findings, ruleCapability(in, s.policy, s.profiles)...)
 	findings = append(findings, ruleUnknownTool(in, &analysis, s.policy, s.profiles)...)
+	if err := ctx.Err(); err != nil {
+		return ScanReport{}, err
+	}
 
 	// Stable sort: risk descending, then rule id, then evidence.
 	sortFindings(findings)

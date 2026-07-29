@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"runtime"
 	"strings"
 	"sync"
@@ -224,6 +225,33 @@ func newWrapperTestGuard(
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, guard.Close()) })
 	return guard, audit
+}
+
+func requireWrappedPrecheck(
+	t *testing.T,
+	ctx context.Context,
+	wrapped tool.CallableTool,
+	toolCallID string,
+	arguments []byte,
+	declaration *tool.Declaration,
+) {
+	t.Helper()
+	if declaration == nil {
+		declaration = wrapped.Declaration()
+	}
+	decision, err := wrapped.(tool.PermissionChecker).CheckPermission(
+		ctx,
+		&tool.PermissionRequest{
+			Tool:        wrapped,
+			ToolName:    declaration.Name,
+			ToolCallID:  toolCallID,
+			Declaration: declaration,
+			Arguments:   arguments,
+			Metadata:    tool.MetadataOf(wrapped),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionAllow, decision.Action)
 }
 
 func TestWrapTool_DeniesBeforeExecution(t *testing.T) {
@@ -643,6 +671,207 @@ func TestWrapTool_FrameworkPermissionPrecheck(t *testing.T) {
 	)
 }
 
+func TestWrapTool_OuterPermissionDenialsDoNotRetainFinalizerBindings(
+	t *testing.T,
+) {
+	guard, _ := newWrapperTestGuard(t)
+	inner := &wrapperTestTool{
+		decision: tool.AllowPermission(),
+		result:   "ok",
+	}
+	wrapped, err := WrapTool(inner, guard)
+	require.NoError(t, err)
+	checker := wrapped.(tool.PermissionChecker)
+	arguments := []byte(`{"command":"ls","timeout":10}`)
+
+	for i := 0; i < 2048; i++ {
+		overlay := &tool.Declaration{
+			Name:        "workspace_exec",
+			InputSchema: &tool.Schema{Type: "object"},
+		}
+		decision, err := checker.CheckPermission(
+			context.Background(),
+			&tool.PermissionRequest{
+				Tool:        wrapped,
+				ToolName:    overlay.Name,
+				ToolCallID:  fmt.Sprintf("outer-denied-%d", i),
+				Declaration: overlay,
+				Arguments:   arguments,
+			},
+		)
+		require.NoError(t, err)
+		require.Equal(t, tool.PermissionActionAllow, decision.Action)
+	}
+
+	overlay := &tool.Declaration{
+		Name:        "workspace_exec",
+		InputSchema: &tool.Schema{Type: "object"},
+	}
+	const executedCallID = "executed-after-outer-denials"
+	decision, err := checker.CheckPermission(
+		context.Background(),
+		&tool.PermissionRequest{
+			Tool:        wrapped,
+			ToolName:    overlay.Name,
+			ToolCallID:  executedCallID,
+			Declaration: overlay,
+			Arguments:   arguments,
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionAllow, decision.Action)
+
+	ctx := context.WithValue(
+		context.Background(),
+		tool.ContextKeyToolCallID{},
+		executedCallID,
+	)
+	result, err := wrapped.Call(ctx, arguments)
+	require.NoError(t, err)
+
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterAfterTool(func(
+		context.Context,
+		*tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		return &tool.AfterToolResult{
+			CustomResult: map[string]any{"password": "hunter2"},
+		}, nil
+	})
+	finalized, err := callbacks.RunAfterTool(
+		ctx,
+		&tool.AfterToolArgs{
+			ToolCallID:  executedCallID,
+			ToolName:    overlay.Name,
+			Declaration: overlay,
+			Arguments:   arguments,
+			Result:      result,
+		},
+	)
+	require.NoError(t, err)
+	raw, err := json.Marshal(finalized.CustomResult)
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), "hunter2")
+}
+
+func TestWrapTool_DuplicatePrecheckCorrelationFailsClosed(t *testing.T) {
+	guard, _ := newWrapperTestGuard(t)
+	inner := &wrapperTestTool{
+		decision: tool.AllowPermission(),
+		result:   "ok",
+	}
+	wrapped, err := WrapTool(inner, guard)
+	require.NoError(t, err)
+	checker := wrapped.(tool.PermissionChecker)
+	arguments := []byte(`{"command":"ls","timeout":10}`)
+	const toolCallID = "duplicate-id"
+
+	for i := 0; i < 2; i++ {
+		overlay := &tool.Declaration{
+			Name:        "workspace_exec",
+			InputSchema: &tool.Schema{Type: "object"},
+		}
+		decision, err := checker.CheckPermission(
+			context.Background(),
+			&tool.PermissionRequest{
+				Tool:        wrapped,
+				ToolName:    overlay.Name,
+				ToolCallID:  toolCallID,
+				Declaration: overlay,
+				Arguments:   arguments,
+			},
+		)
+		require.NoError(t, err)
+		require.Equal(t, tool.PermissionActionAllow, decision.Action)
+	}
+
+	ctx := context.WithValue(
+		context.Background(),
+		tool.ContextKeyToolCallID{},
+		toolCallID,
+	)
+	_, err = wrapped.Call(ctx, arguments)
+	require.ErrorContains(t, err, "precheck is ambiguous")
+	require.False(t, inner.called)
+}
+
+func TestWrapTool_FrameworkRetriesReusePrecheckAndBinding(t *testing.T) {
+	guard, _ := newWrapperTestGuard(t)
+	inner := &wrapperTestTool{
+		decision: tool.AllowPermission(),
+		result:   "ok",
+	}
+	wrapped, err := WrapTool(inner, guard)
+	require.NoError(t, err)
+	arguments := []byte(`{"command":"ls","timeout":10}`)
+	overlay := &tool.Declaration{
+		Name:        "workspace_exec",
+		InputSchema: &tool.Schema{Type: "object"},
+	}
+	const toolCallID = "retry-call"
+	ctx := context.WithValue(
+		context.Background(),
+		tool.ContextKeyToolCallID{},
+		toolCallID,
+	)
+	requireWrappedPrecheck(
+		t,
+		ctx,
+		wrapped,
+		toolCallID,
+		arguments,
+		overlay,
+	)
+
+	var result any
+	for i := 0; i < 2; i++ {
+		result, err = wrapped.Call(ctx, arguments)
+		require.NoError(t, err)
+	}
+	require.Equal(t, 1, inner.permissionCalls)
+
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterAfterTool(func(
+		context.Context,
+		*tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		return &tool.AfterToolResult{
+			CustomResult: map[string]any{"password": "hunter2"},
+		}, nil
+	})
+	finalized, err := callbacks.RunAfterTool(
+		ctx,
+		&tool.AfterToolArgs{
+			ToolCallID:  toolCallID,
+			ToolName:    overlay.Name,
+			Declaration: overlay,
+			Arguments:   arguments,
+			Result:      result,
+		},
+	)
+	require.NoError(t, err)
+	raw, err := json.Marshal(finalized.CustomResult)
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), "hunter2")
+}
+
+func TestWrapTool_DirectCallsDoNotConsumeCallBindings(t *testing.T) {
+	guard, _ := newWrapperTestGuard(t)
+	inner := &wrapperTestTool{
+		decision: tool.AllowPermission(),
+		result:   "ok",
+	}
+	wrapped, err := WrapTool(inner, guard)
+	require.NoError(t, err)
+	arguments := []byte(`{"command":"ls","timeout":10}`)
+
+	for i := 0; i < 2048; i++ {
+		result, err := wrapped.Call(context.Background(), arguments)
+		require.NoError(t, err)
+		require.Equal(t, "ok", result)
+	}
+}
+
 func TestWrapTool_FrameworkPermissionPrecheckDeniesSafetyResult(t *testing.T) {
 	guard, _ := newWrapperTestGuard(t)
 	inner := &wrapperTestTool{
@@ -790,9 +1019,18 @@ func TestWrapTool_UsesFrameworkToolCallID(t *testing.T) {
 		tool.ContextKeyToolCallID{},
 		"framework-call-id",
 	)
+	arguments := []byte(`{"command":"ls","timeout":10}`)
+	requireWrappedPrecheck(
+		t,
+		ctx,
+		wrapped,
+		"framework-call-id",
+		arguments,
+		nil,
+	)
 	_, err = wrapped.Call(
 		ctx,
-		[]byte(`{"command":"ls","timeout":10}`),
+		arguments,
 	)
 	require.NoError(t, err)
 	require.Equal(t, "framework-call-id", inner.gotToolCallID)
@@ -919,7 +1157,7 @@ func TestWrapTool_PanicCompletionParticipatesInClose(t *testing.T) {
 	require.NoError(t, <-closeDone)
 }
 
-func TestWrapTool_UnownedPanicDoesNotReleaseDuplicateCall(t *testing.T) {
+func TestWrapTool_UnownedFailureDoesNotReleaseDuplicateCall(t *testing.T) {
 	guard, _ := newWrapperTestGuard(t,
 		WithConcurrencyPolicy(
 			ConcurrencyPolicy{MaxActiveCalls: 1},
@@ -939,29 +1177,40 @@ func TestWrapTool_UnownedPanicDoesNotReleaseDuplicateCall(t *testing.T) {
 		tool.ContextKeyToolCallID{},
 		"shared-id",
 	)
+	arguments := []byte(`{"command":"ls","timeout":10}`)
+	requireWrappedPrecheck(
+		t,
+		ctx,
+		first,
+		"shared-id",
+		arguments,
+		nil,
+	)
 	firstDone := make(chan error, 1)
 	go func() {
 		_, callErr := first.Call(
 			ctx,
-			[]byte(`{"command":"ls","timeout":10}`),
+			arguments,
 		)
 		firstDone <- callErr
 	}()
 	<-started
 	require.Equal(t, int64(1), guard.concurrency.activeCount())
 
-	secondInner := &wrapperTestTool{
-		permissionPanic: "checker panic",
-	}
+	secondInner := &wrapperTestTool{}
 	second, err := WrapTool(secondInner, guard)
 	require.NoError(t, err)
 	_, err = second.Call(
 		ctx,
-		[]byte(`{"command":"ls","timeout":10}`),
+		arguments,
 	)
-	require.ErrorContains(t, err, "wrapped tool panicked")
+	require.ErrorContains(t, err, "precheck is required")
 	require.Equal(t, int64(1), guard.concurrency.activeCount())
-	require.Contains(t, guard.activeCalls, "shared-id")
+	require.Contains(
+		t,
+		guard.activeCalls,
+		newGuardCallKey(ctx, "shared-id"),
+	)
 
 	close(unblock)
 	require.NoError(t, <-firstDone)
@@ -1305,10 +1554,19 @@ func TestWrapTool_FinalizesCallbackReplacementAfterNilResult(t *testing.T) {
 		tool.ContextKeyToolCallID{},
 		"call-nil-result",
 	)
+	arguments := []byte(`{"command":"ls","timeout":10}`)
+	requireWrappedPrecheck(
+		t,
+		ctx,
+		wrapped,
+		"call-nil-result",
+		arguments,
+		nil,
+	)
 	callCtx := tool.WithoutToolResultAttachmentBudget(ctx)
 	result, err := wrapped.Call(
 		callCtx,
-		[]byte(`{"command":"ls","timeout":10}`),
+		arguments,
 	)
 	require.NoError(t, err)
 	require.Nil(t, result)
@@ -1328,7 +1586,7 @@ func TestWrapTool_FinalizesCallbackReplacementAfterNilResult(t *testing.T) {
 			ToolCallID:  "call-nil-result",
 			ToolName:    "workspace_exec",
 			Declaration: wrapped.Declaration(),
-			Arguments:   []byte(`{"command":"ls","timeout":10}`),
+			Arguments:   arguments,
 			Result:      result,
 		},
 	)
@@ -1349,9 +1607,18 @@ func TestWrapTool_FinalizesInPlaceCallbackMutation(t *testing.T) {
 		tool.ContextKeyToolCallID{},
 		"call-in-place-mutation",
 	)
+	arguments := []byte(`{"command":"ls","timeout":10}`)
+	requireWrappedPrecheck(
+		t,
+		ctx,
+		wrapped,
+		"call-in-place-mutation",
+		arguments,
+		nil,
+	)
 	result, err := wrapped.Call(
 		tool.WithoutToolResultAttachmentBudget(ctx),
-		[]byte(`{"command":"ls","timeout":10}`),
+		arguments,
 	)
 	require.NoError(t, err)
 
@@ -1369,7 +1636,7 @@ func TestWrapTool_FinalizesInPlaceCallbackMutation(t *testing.T) {
 			ToolCallID:  "call-in-place-mutation",
 			ToolName:    "workspace_exec",
 			Declaration: wrapped.Declaration(),
-			Arguments:   []byte(`{"command":"ls","timeout":10}`),
+			Arguments:   arguments,
 			Result:      result,
 		},
 	)
@@ -1396,9 +1663,18 @@ func TestWrapTool_FinalizerPreservesCallbackCapability(t *testing.T) {
 		tool.ContextKeyToolCallID{},
 		"call-callback-capability",
 	)
+	arguments := []byte(`{"command":"ls","timeout":10}`)
+	requireWrappedPrecheck(
+		t,
+		ctx,
+		wrapped,
+		"call-callback-capability",
+		arguments,
+		nil,
+	)
 	result, err := wrapped.Call(
 		tool.WithoutToolResultAttachmentBudget(ctx),
-		[]byte(`{"command":"ls","timeout":10}`),
+		arguments,
 	)
 	require.NoError(t, err)
 
@@ -1417,7 +1693,7 @@ func TestWrapTool_FinalizerPreservesCallbackCapability(t *testing.T) {
 			ToolCallID:  "call-callback-capability",
 			ToolName:    "workspace_exec",
 			Declaration: wrapped.Declaration(),
-			Arguments:   []byte(`{"command":"ls","timeout":10}`),
+			Arguments:   arguments,
 			Result:      result,
 		},
 	)
@@ -1441,9 +1717,18 @@ func TestWrapTool_CompletionPanicRetainsCallbackFinalizer(t *testing.T) {
 		tool.ContextKeyToolCallID{},
 		"call-completion-panic",
 	)
+	arguments := []byte(`{"command":"ls","timeout":10}`)
+	requireWrappedPrecheck(
+		t,
+		ctx,
+		wrapped,
+		"call-completion-panic",
+		arguments,
+		nil,
+	)
 	_, err = wrapped.Call(
 		tool.WithoutToolResultAttachmentBudget(ctx),
-		[]byte(`{"command":"ls","timeout":10}`),
+		arguments,
 	)
 	require.ErrorContains(t, err, "safety completion panicked")
 
@@ -1462,7 +1747,7 @@ func TestWrapTool_CompletionPanicRetainsCallbackFinalizer(t *testing.T) {
 			ToolCallID:  "call-completion-panic",
 			ToolName:    "workspace_exec",
 			Declaration: wrapped.Declaration(),
-			Arguments:   []byte(`{"command":"ls","timeout":10}`),
+			Arguments:   arguments,
 		},
 	)
 	require.NoError(t, err)
@@ -1484,10 +1769,15 @@ func TestWrapTool_PrecheckRetainsFinalizerAfterContextReplacement(
 		wrapperTestContextKey{},
 		"replacement",
 	)
+	overlay := &tool.Declaration{
+		Name:        "workspace_exec",
+		InputSchema: &tool.Schema{Type: "object"},
+	}
 	req := &tool.PermissionRequest{
-		ToolName:   "workspace_exec",
-		ToolCallID: "call-replaced-context",
-		Arguments:  []byte(`{"command":"ls","timeout":10}`),
+		ToolName:    overlay.Name,
+		ToolCallID:  "call-replaced-context",
+		Declaration: overlay,
+		Arguments:   []byte(`{"command":"ls","timeout":10}`),
 	}
 	decision, err := wrapped.(tool.PermissionChecker).CheckPermission(
 		replacedCtx,
@@ -1516,7 +1806,7 @@ func TestWrapTool_PrecheckRetainsFinalizerAfterContextReplacement(
 		&tool.AfterToolArgs{
 			ToolCallID:  req.ToolCallID,
 			ToolName:    req.ToolName,
-			Declaration: wrapped.Declaration(),
+			Declaration: overlay,
 			Arguments:   req.Arguments,
 			Result:      result,
 		},
@@ -1525,6 +1815,96 @@ func TestWrapTool_PrecheckRetainsFinalizerAfterContextReplacement(
 	raw, err := json.Marshal(finalResult.CustomResult)
 	require.NoError(t, err)
 	require.NotContains(t, string(raw), "hunter2")
+}
+
+func TestWrapTool_PrecheckResolvesNestedToolCallID(t *testing.T) {
+	guard, _ := newWrapperTestGuard(t)
+	wrapped, err := WrapTool(&wrapperTestTool{
+		result: "original",
+	}, guard)
+	require.NoError(t, err)
+	ctx := context.WithValue(
+		context.Background(),
+		tool.ContextKeyToolCallID{},
+		"outer-workflow-call",
+	)
+	overlay := &tool.Declaration{
+		Name:        "workspace_exec",
+		InputSchema: &tool.Schema{Type: "object"},
+	}
+	arguments := []byte(`{"command":"ls","timeout":10}`)
+	const nestedToolCallID = "nested-tool-call"
+	requireWrappedPrecheck(
+		t,
+		ctx,
+		wrapped,
+		nestedToolCallID,
+		arguments,
+		overlay,
+	)
+
+	result, err := wrapped.Call(ctx, arguments)
+	require.NoError(t, err)
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterAfterTool(func(
+		context.Context,
+		*tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		return &tool.AfterToolResult{
+			CustomResult: map[string]any{"password": "hunter2"},
+		}, nil
+	})
+	finalized, err := callbacks.RunAfterTool(
+		ctx,
+		&tool.AfterToolArgs{
+			ToolCallID:  nestedToolCallID,
+			ToolName:    overlay.Name,
+			Declaration: overlay,
+			Arguments:   arguments,
+			Result:      result,
+		},
+	)
+	require.NoError(t, err)
+	raw, err := json.Marshal(finalized.CustomResult)
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), "hunter2")
+}
+
+func TestWrapTool_PrecheckRejectsAmbiguousContextFallback(
+	t *testing.T,
+) {
+	guard, _ := newWrapperTestGuard(t)
+	wrapped, err := WrapTool(&wrapperTestTool{
+		result: "original",
+	}, guard)
+	require.NoError(t, err)
+	ctx := context.WithValue(
+		context.Background(),
+		tool.ContextKeyToolCallID{},
+		"outer-workflow-call",
+	)
+	arguments := []byte(`{"command":"ls","timeout":10}`)
+	first := &tool.Declaration{Name: "workspace_exec"}
+	second := &tool.Declaration{Name: "workspace_exec"}
+	requireWrappedPrecheck(
+		t,
+		ctx,
+		wrapped,
+		"nested-call-1",
+		arguments,
+		first,
+	)
+	requireWrappedPrecheck(
+		t,
+		ctx,
+		wrapped,
+		"nested-call-2",
+		arguments,
+		second,
+	)
+
+	_, err = wrapped.Call(ctx, arguments)
+	require.ErrorContains(t, err, "precheck is ambiguous")
 }
 
 func TestWrapTool_PropagatesCanceledContext(t *testing.T) {
@@ -1578,20 +1958,22 @@ func TestWrapTool_CloseRemovesCallbackFinalizer(t *testing.T) {
 		Name:        "overlay",
 		InputSchema: &tool.Schema{Type: "object"},
 	}
-	require.NoError(
-		t,
-		tool.PropagateAfterToolResultFinalizer(
-			wrapped.Declaration(),
-			overlay,
-		),
+	complete, err := tool.BindAfterToolResultFinalizer(
+		wrapped.Declaration(),
+		overlay,
+		"before-close",
 	)
+	require.NoError(t, err)
+	complete()
 	require.NoError(t, guard.Close())
+	_, err = tool.BindAfterToolResultFinalizer(
+		wrapped.Declaration(),
+		overlay,
+		"after-close",
+	)
 	require.ErrorContains(
 		t,
-		tool.PropagateAfterToolResultFinalizer(
-			wrapped.Declaration(),
-			&tool.Declaration{Name: "after-close"},
-		),
+		err,
 		"no after-tool result finalizer",
 	)
 }

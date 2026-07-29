@@ -218,8 +218,20 @@ type wrappedCallableTool struct {
 	callable tool.CallableTool
 
 	precheckMu    sync.Mutex
-	prechecks     map[string][sha256.Size]byte
-	precheckOrder []string
+	prechecks     map[wrappedToolPrecheckKey]wrappedToolPrecheck
+	precheckOrder []wrappedToolPrecheckKey
+}
+
+type wrappedToolPrecheckKey struct {
+	invocation    *agent.Invocation
+	toolCallID    string
+	argumentsHash [sha256.Size]byte
+}
+
+type wrappedToolPrecheck struct {
+	innerChecked        bool
+	callbackDeclaration *tool.Declaration
+	ambiguous           bool
 }
 
 const maxWrapperPrechecks = 1024
@@ -286,18 +298,19 @@ func (w *wrappedCallableTool) CheckPermission(
 		if callbackDeclaration == nil {
 			callbackDeclaration = w.Declaration()
 		}
-		if propagateErr := tool.PropagateAfterToolResultFinalizer(
-			w.Declaration(),
+		if req.ToolCallID == "" &&
+			callbackDeclaration != w.Declaration() {
+			return tool.DenyPermission(
+				"tool call id is required for a declaration overlay",
+			), nil
+		}
+		w.rememberPrecheck(
+			ctx,
+			req.ToolCallID,
+			req.Arguments,
+			innerChecked,
 			callbackDeclaration,
-		); propagateErr != nil {
-			return tool.PermissionDecision{}, w.sanitizeError(
-				"propagate after-tool result finalizer",
-				propagateErr,
-			)
-		}
-		if innerChecked {
-			w.rememberPrecheck(req.ToolCallID, req.Arguments)
-		}
+		)
 	}
 	return decision, err
 }
@@ -329,7 +342,7 @@ func (w *wrappedCallableTool) Call(
 			return
 		}
 		if finishing {
-			w.guard.finishCall(toolCallID)
+			w.guard.finishCall(ctx, toolCallID)
 			result = nil
 			err = panicErr
 			return
@@ -347,10 +360,12 @@ func (w *wrappedCallableTool) Call(
 		return nil, err
 	}
 
-	var ok bool
-	toolCallID, ok = tool.ToolCallIDFromContext(ctx)
-	if !ok || toolCallID == "" {
-		toolCallID = "tool-safety-" + newScanID()
+	var precheck wrappedToolPrecheck
+	var hasPrecheck bool
+	toolCallID, precheck, hasPrecheck, err =
+		w.resolveCallPrecheck(ctx, jsonArgs)
+	if err != nil {
+		return nil, err
 	}
 	req := &tool.PermissionRequest{
 		Tool:        w.tool,
@@ -361,7 +376,7 @@ func (w *wrappedCallableTool) Call(
 		Metadata:    w.metadata,
 	}
 	if checker, ok := w.tool.(tool.PermissionChecker); ok &&
-		!w.consumePrecheck(toolCallID, jsonArgs) {
+		(!hasPrecheck || !precheck.innerChecked) {
 		decision, err := checker.CheckPermission(ctx, req)
 		if contextErr := ctx.Err(); contextErr != nil {
 			return nil, contextErr
@@ -395,6 +410,21 @@ func (w *wrappedCallableTool) Call(
 	if decision.Action != tool.PermissionActionAllow {
 		return w.permissionResult(decision), nil
 	}
+	completeBinding, err := w.bindCallbackFinalizer(
+		toolCallID,
+		precheck,
+		hasPrecheck,
+	)
+	if err != nil {
+		w.guard.finishCall(ctx, toolCallID)
+		return nil, w.sanitizeError(
+			"bind after-tool result finalizer",
+			err,
+		)
+	}
+	if completeBinding != nil {
+		defer completeBinding()
+	}
 	lifecycleOwned = true
 
 	originalResult, callErr := w.callable.Call(ctx, jsonArgs)
@@ -409,9 +439,68 @@ func (w *wrappedCallableTool) Call(
 	)
 }
 
+func (w *wrappedCallableTool) resolveCallPrecheck(
+	ctx context.Context,
+	arguments []byte,
+) (
+	toolCallID string,
+	precheck wrappedToolPrecheck,
+	hasPrecheck bool,
+	err error,
+) {
+	contextToolCallID, hasFrameworkToolCallID :=
+		tool.ToolCallIDFromContext(ctx)
+	if contextToolCallID == "" {
+		hasFrameworkToolCallID = false
+	}
+	precheck, resolvedToolCallID, hasPrecheck :=
+		w.lookupPrecheck(
+			ctx,
+			contextToolCallID,
+			arguments,
+		)
+	if hasPrecheck {
+		if precheck.ambiguous {
+			return "", wrappedToolPrecheck{}, false, errors.New(
+				"wrapped tool precheck is ambiguous for tool call id and arguments",
+			)
+		}
+		return resolvedToolCallID, precheck, true, nil
+	}
+	if hasFrameworkToolCallID {
+		return "", wrappedToolPrecheck{}, false, errors.New(
+			"wrapped tool precheck is required for framework tool call id",
+		)
+	}
+	return "tool-safety-" + newScanID(),
+		wrappedToolPrecheck{}, false, nil
+}
+
+func (w *wrappedCallableTool) bindCallbackFinalizer(
+	toolCallID string,
+	precheck wrappedToolPrecheck,
+	hasPrecheck bool,
+) (func(), error) {
+	callbackDeclaration := w.Declaration()
+	if hasPrecheck && precheck.callbackDeclaration != nil {
+		callbackDeclaration = precheck.callbackDeclaration
+	}
+	if callbackDeclaration == w.Declaration() {
+		return nil, nil
+	}
+	return tool.BindAfterToolResultFinalizer(
+		w.Declaration(),
+		callbackDeclaration,
+		toolCallID,
+	)
+}
+
 func (w *wrappedCallableTool) rememberPrecheck(
+	ctx context.Context,
 	toolCallID string,
 	arguments []byte,
+	innerChecked bool,
+	callbackDeclaration *tool.Declaration,
 ) {
 	if toolCallID == "" {
 		return
@@ -419,12 +508,32 @@ func (w *wrappedCallableTool) rememberPrecheck(
 	w.precheckMu.Lock()
 	defer w.precheckMu.Unlock()
 	if w.prechecks == nil {
-		w.prechecks = make(map[string][sha256.Size]byte)
+		w.prechecks = make(
+			map[wrappedToolPrecheckKey]wrappedToolPrecheck,
+		)
 	}
-	if _, exists := w.prechecks[toolCallID]; !exists {
-		w.precheckOrder = append(w.precheckOrder, toolCallID)
+	key := wrappedPrecheckKey(
+		ctx,
+		toolCallID,
+		arguments,
+	)
+	if current, exists := w.prechecks[key]; exists {
+		if current.callbackDeclaration != callbackDeclaration {
+			current.callbackDeclaration = nil
+			current.innerChecked = false
+			current.ambiguous = true
+			w.prechecks[key] = current
+			return
+		}
+		current.innerChecked = current.innerChecked || innerChecked
+		w.prechecks[key] = current
+		return
 	}
-	w.prechecks[toolCallID] = sha256.Sum256(arguments)
+	w.precheckOrder = append(w.precheckOrder, key)
+	w.prechecks[key] = wrappedToolPrecheck{
+		innerChecked:        innerChecked,
+		callbackDeclaration: callbackDeclaration,
+	}
 	for len(w.precheckOrder) > maxWrapperPrechecks {
 		oldest := w.precheckOrder[0]
 		w.precheckOrder = w.precheckOrder[1:]
@@ -432,30 +541,56 @@ func (w *wrappedCallableTool) rememberPrecheck(
 	}
 }
 
-func (w *wrappedCallableTool) consumePrecheck(
+func (w *wrappedCallableTool) lookupPrecheck(
+	ctx context.Context,
 	toolCallID string,
 	arguments []byte,
-) bool {
-	if toolCallID == "" {
-		return false
-	}
+) (wrappedToolPrecheck, string, bool) {
 	w.precheckMu.Lock()
 	defer w.precheckMu.Unlock()
-	expected, ok := w.prechecks[toolCallID]
-	if !ok {
-		return false
-	}
-	delete(w.prechecks, toolCallID)
-	for i, id := range w.precheckOrder {
-		if id == toolCallID {
-			w.precheckOrder = append(
-				w.precheckOrder[:i],
-				w.precheckOrder[i+1:]...,
-			)
-			break
+	key := wrappedPrecheckKey(ctx, toolCallID, arguments)
+	if toolCallID != "" {
+		if precheck, ok := w.prechecks[key]; ok {
+			return precheck, toolCallID, true
 		}
 	}
-	return expected == sha256.Sum256(arguments)
+	var matched wrappedToolPrecheck
+	var matchedToolCallID string
+	matches := 0
+	for i := len(w.precheckOrder) - 1; i >= 0; i-- {
+		candidate := w.precheckOrder[i]
+		if candidate.invocation != key.invocation ||
+			candidate.argumentsHash != key.argumentsHash {
+			continue
+		}
+		precheck, exists := w.prechecks[candidate]
+		if !exists {
+			continue
+		}
+		matched = precheck
+		matchedToolCallID = candidate.toolCallID
+		matches++
+	}
+	if matches == 1 {
+		return matched, matchedToolCallID, true
+	}
+	if matches > 1 {
+		return wrappedToolPrecheck{ambiguous: true}, "", true
+	}
+	return wrappedToolPrecheck{}, "", false
+}
+
+func wrappedPrecheckKey(
+	ctx context.Context,
+	toolCallID string,
+	arguments []byte,
+) wrappedToolPrecheckKey {
+	invocation, _ := agent.InvocationFromContext(ctx)
+	return wrappedToolPrecheckKey{
+		invocation:    invocation,
+		toolCallID:    toolCallID,
+		argumentsHash: sha256.Sum256(arguments),
+	}
 }
 
 func (w *wrappedCallableTool) completeCallSafely(
@@ -467,7 +602,7 @@ func (w *wrappedCallableTool) completeCallSafely(
 ) (safeResult any, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			w.guard.finishCall(toolCallID)
+			w.guard.finishCall(ctx, toolCallID)
 			safeResult = nil
 			err = fmt.Errorf(
 				"safety completion panicked (type %T)",

@@ -46,6 +46,22 @@ func TestCoverrules_RuleCommand_AllowlistEnforcedWhenHeuristicDisabled(t *testin
 	require.Equal(t, DecisionDeny, findings[0].Decision)
 }
 
+func TestCoverrules_RuleCommand_ExplicitListsAlwaysDeny(t *testing.T) {
+	p := DefaultPolicy()
+	p.Rules.DangerousCommands.Action = DecisionAsk
+
+	for _, command := range []string{
+		"chmod 600 file",
+		`find . -exec chmod 600 {} \;`,
+	} {
+		a := analyzeShell(command)
+		findings := ruleCommand(&a, p)
+		require.NotEmpty(t, findings)
+		require.Equal(t, DecisionDeny, findings[0].Decision)
+		require.Equal(t, "command.not_allowed", findings[0].RuleID)
+	}
+}
+
 func TestCoverrules_RuleCommand_DependencyAskSuppressesNotAllowed(t *testing.T) {
 	p := DefaultPolicy()
 	// npm is not in allowed_commands; with the dependency rule on Ask
@@ -60,6 +76,17 @@ func TestCoverrules_RuleCommand_DependencyAskSuppressesNotAllowed(t *testing.T) 
 	p.Rules.Dependencies.Action = DecisionDeny
 	ids := ruleIDSet(ruleCommand(&a, p))
 	require.Contains(t, ids, "command.not_allowed")
+}
+
+func TestCoverrules_RuleCommand_DependencyAskKeepsExplicitDeny(t *testing.T) {
+	p := DefaultPolicy()
+	p.DeniedCommands = append(p.DeniedCommands, "npm")
+	a := analyzeShell("npm install left-pad")
+
+	findings := ruleCommand(&a, p)
+	require.NotEmpty(t, findings)
+	require.Equal(t, "command.not_allowed", findings[0].RuleID)
+	require.Equal(t, DecisionDeny, findings[0].Decision)
 }
 
 func TestCoverrules_DependencyRuleOverridesCommand(t *testing.T) {

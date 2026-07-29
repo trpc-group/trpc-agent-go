@@ -195,6 +195,19 @@ func TestPolicyValidate_RejectsDangerousAllow(t *testing.T) {
 		"err=%v", err)
 }
 
+func TestLoadPolicy_RejectsDisabledDangerousAllow(t *testing.T) {
+	_, err := LoadPolicyFromBytes([]byte(`
+version: 1
+rules:
+  dangerous_commands: {enabled: false, action: allow}
+`))
+	require.ErrorContains(
+		t,
+		err,
+		"rules.dangerous_commands.action cannot be allow",
+	)
+}
+
 func TestCommandPolicyLists_CleansBlanks(t *testing.T) {
 	p := DefaultPolicy()
 	p.AllowedCommands = []string{"go", "  ", "", "git"}
