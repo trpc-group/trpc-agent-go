@@ -35,6 +35,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 	"trpc.group/trpc-go/trpc-a2a-go/v2/auth"
+	v0 "trpc.group/trpc-go/trpc-a2a-go/v2/compat/v0"
 	"trpc.group/trpc-go/trpc-a2a-go/v2/protocol"
 	a2a "trpc.group/trpc-go/trpc-a2a-go/v2/server"
 	"trpc.group/trpc-go/trpc-a2a-go/v2/taskmanager"
@@ -177,6 +178,12 @@ func buildA2AServer(options *options) (*a2a.A2AServer, error) {
 		a2a.WithAuthProvider(&defaultAuthProvider{userIDHeader: userIDHeader}),
 		a2a.WithBasePath(basePath),
 		a2a.WithMiddleware(&traceContextMiddleware{}),
+	}
+	if options.v0Compatibility {
+		opts = append(opts, a2a.WithCompatHandler(v0.NewJSONRPCHandler(
+			taskManager,
+			v0.WithDefaultBlocking(),
+		)))
 	}
 	opts = append([]a2a.Option{a2a.WithAgentCard(agentCard)}, opts...)
 	opts = append(opts, options.extraOptions...)
