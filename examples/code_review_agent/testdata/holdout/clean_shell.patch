@@ -1,0 +1,22 @@
+diff --git a/command/command.go b/command/command.go
+new file mode 100644
+--- /dev/null
++++ b/command/command.go
+@@ -0,0 +1,7 @@
++package command
++
++import "os/exec"
++
++func Status() *exec.Cmd {
++	return exec.Command("git", "status", "--short")
++}
+diff --git a/command/command_test.go b/command/command_test.go
+new file mode 100644
+--- /dev/null
++++ b/command/command_test.go
+@@ -0,0 +1,5 @@
++package command
++
++import "testing"
++
++func TestStatus(t *testing.T) {}

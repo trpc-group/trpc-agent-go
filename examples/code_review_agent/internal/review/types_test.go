@@ -22,17 +22,19 @@ func TestFindingValidateAcceptsValidFinding(t *testing.T) {
 		SchemaVersion:  SchemaVersion,
 		Severity:       SeverityHigh,
 		Category:       "security",
+		Layer:          ChangeLayerUnified,
 		File:           "internal/server/server.go",
 		Line:           42,
+		SemanticAnchor: "authorization-before-use",
 		Title:          "unchecked authorization",
 		Evidence:       "the handler uses the request before authorization",
 		Recommendation: "authorize the request before using it",
 		Confidence:     ConfidenceHigh,
 		Source:         SourceRule,
-		RuleID:         "security/authorization",
-		Fingerprint:    "review/v1:example",
+		RuleID:         "security/authorization/v1",
 		Disposition:    DispositionFinding,
 	}
+	f.Fingerprint = f.ExpectedFingerprint()
 
 	require.NoError(t, f.Validate())
 }
@@ -45,6 +47,7 @@ func TestFindingValidateRejectsUnknownEnums(t *testing.T) {
 		{name: "severity", mutate: func(f *Finding) { f.Severity = "urgent" }},
 		{name: "confidence", mutate: func(f *Finding) { f.Confidence = "certain" }},
 		{name: "source", mutate: func(f *Finding) { f.Source = "scanner" }},
+		{name: "layer", mutate: func(f *Finding) { f.Layer = "index" }},
 		{name: "disposition", mutate: func(f *Finding) { f.Disposition = "accepted" }},
 	}
 
@@ -57,6 +60,29 @@ func TestFindingValidateRejectsUnknownEnums(t *testing.T) {
 	}
 }
 
+func TestFindingValidateRejectsInvalidCanonicalIdentityWithoutEcho(t *testing.T) {
+	tests := []struct {
+		name   string
+		secret string
+		mutate func(*Finding, string)
+	}{
+		{name: "schema", secret: "password=hunter2", mutate: func(f *Finding, secret string) { f.SchemaVersion = secret }},
+		{name: "severity", secret: "password=hunter2", mutate: func(f *Finding, secret string) { f.Severity = Severity(secret) }},
+		{name: "rule id", secret: "sk-test-secret-rule-1234567890", mutate: func(f *Finding, secret string) { f.RuleID = secret }},
+		{name: "semantic anchor", secret: "password=hunter2", mutate: func(f *Finding, secret string) { f.SemanticAnchor = secret }},
+		{name: "fingerprint", secret: "sk-test-secret-fingerprint-1234567890", mutate: func(f *Finding, secret string) { f.Fingerprint = secret }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			finding := validFinding()
+			tt.mutate(&finding, tt.secret)
+			err := finding.Validate()
+			require.Error(t, err)
+			require.NotContains(t, err.Error(), tt.secret)
+		})
+	}
+}
+
 func TestTaskValidateUsesClosedStatusAndPhaseEnums(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -65,6 +91,7 @@ func TestTaskValidateUsesClosedStatusAndPhaseEnums(t *testing.T) {
 		{name: "unknown status", mutate: func(task *Task) { task.Status = "paused" }},
 		{name: "unknown phase", mutate: func(task *Task) { task.Phase = "publishing" }},
 		{name: "unknown mode", mutate: func(task *Task) { task.Mode = "automatic" }},
+		{name: "unsafe id", mutate: func(task *Task) { task.ID = "sk-test-secret/value" }},
 	}
 
 	for _, tt := range tests {
@@ -140,6 +167,7 @@ func TestTaskValidateAcceptsSupportedModesAndTerminalStates(t *testing.T) {
 func TestGovernanceDecisionValidateUsesClosedEnums(t *testing.T) {
 	decision := GovernanceDecision{
 		SchemaVersion: SchemaVersion,
+		DecisionID:    "permission:call-1",
 		Kind:          DecisionKindPermission,
 		Tool:          "go_test",
 		Action:        DecisionActionAllow,
@@ -401,6 +429,7 @@ func validReport() Report {
 	decision := GovernanceDecision{
 		SchemaVersion: SchemaVersion,
 		TaskID:        task.ID,
+		DecisionID:    "permission:call-1",
 		Kind:          DecisionKindPermission,
 		Tool:          "go_test",
 		Action:        DecisionActionAllow,
@@ -448,19 +477,22 @@ func intPointer(value int) *int {
 }
 
 func validFinding() Finding {
-	return Finding{
+	finding := Finding{
 		SchemaVersion:  SchemaVersion,
 		Severity:       SeverityHigh,
 		Category:       "security",
+		Layer:          ChangeLayerUnified,
 		File:           "internal/server/server.go",
 		Line:           42,
+		SemanticAnchor: "authorization-before-use",
 		Title:          "unchecked authorization",
 		Evidence:       "the handler uses the request before authorization",
 		Recommendation: "authorize the request before using it",
 		Confidence:     ConfidenceHigh,
 		Source:         SourceRule,
-		RuleID:         "security/authorization",
-		Fingerprint:    "review/v1:example",
+		RuleID:         "security/authorization/v1",
 		Disposition:    DispositionFinding,
 	}
+	finding.Fingerprint = finding.ExpectedFingerprint()
+	return finding
 }

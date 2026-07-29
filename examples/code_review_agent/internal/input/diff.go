@@ -19,11 +19,15 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode/utf8"
+
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/review"
 )
 
 const (
 	defaultMaxInputBytes   = 10 << 20
 	defaultMaxLineBytes    = 1 << 20
+	defaultMaxLines        = 1_000_000
 	defaultMaxFiles        = 1_000
 	defaultMaxHunks        = 10_000
 	defaultMaxChangedLines = 100_000
@@ -59,6 +63,18 @@ const (
 	LineAdded LineKind = "added"
 )
 
+// DiffLayer identifies which Git state transition produced a file diff.
+type DiffLayer = review.ChangeLayer
+
+const (
+	// DiffLayerUnified identifies a standalone diff without repository-layer metadata.
+	DiffLayerUnified DiffLayer = review.ChangeLayerUnified
+	// DiffLayerStaged identifies the HEAD-to-index transition.
+	DiffLayerStaged DiffLayer = review.ChangeLayerStaged
+	// DiffLayerWorktree identifies the index-to-working-tree transition.
+	DiffLayerWorktree DiffLayer = review.ChangeLayerWorktree
+)
+
 // Diff is a parsed unified diff in source order.
 type Diff struct {
 	// Files contains changed files in source order.
@@ -67,6 +83,8 @@ type Diff struct {
 
 // File describes one changed file and its hunks.
 type File struct {
+	// Layer identifies the repository state transition represented by this file.
+	Layer DiffLayer
 	// OldPath is the normalized path before the change, or empty for an added file.
 	OldPath string
 	// NewPath is the normalized path after the change, or empty for a deleted file.
@@ -112,6 +130,9 @@ type Limits struct {
 	MaxInputBytes int
 	// MaxLineBytes limits one line excluding its line ending.
 	MaxLineBytes int
+	// MaxLines limits physical input lines, including a final line without a
+	// line ending.
+	MaxLines int
 	// MaxFiles limits changed files.
 	MaxFiles int
 	// MaxHunks limits hunks across all files.
@@ -135,6 +156,9 @@ func WithLimits(limits Limits) Option {
 }
 
 // Parse reads a Git-style unified diff without invoking external commands.
+// Git C-quoted paths are decoded before validation. Accepted paths are relative,
+// slash-separated, canonical paths without NUL, backslash, empty, dot, or parent
+// components.
 func Parse(reader io.Reader, opts ...Option) (Diff, error) {
 	if reader == nil {
 		return Diff{}, errors.New("parse diff: nil reader")
@@ -158,25 +182,39 @@ func Parse(reader io.Reader, opts ...Option) (Diff, error) {
 }
 
 type diffParser struct {
-	lines          *boundedLineReader
-	limits         Limits
-	diff           Diff
-	current        *File
-	hunk           *hunkState
-	hunks          int
-	changedLines   int
-	seenOld        bool
-	seenNew        bool
-	headerOld      string
-	headerNew      string
-	headerPaths    []filePaths
-	operation      ChangeKind
-	seenFrom       bool
-	seenTo         bool
-	contentStarted bool
-	lastOldEnd     int
-	lastNewEnd     int
+	lines        *boundedLineReader
+	limits       Limits
+	diff         Diff
+	current      *File
+	hunk         *hunkState
+	hunks        int
+	changedLines int
+	seenOld      bool
+	seenNew      bool
+	headerOld    string
+	headerNew    string
+	headerPaths  []filePaths
+	operation    ChangeKind
+	seenFrom     bool
+	seenTo       bool
+	phase        filePhase
+	lastOldEnd   int
+	lastNewEnd   int
+	lastOldEmpty bool
+	lastNewEmpty bool
+	oldEOF       bool
+	newEOF       bool
 }
+
+type filePhase uint8
+
+const (
+	filePhaseMetadata filePhase = iota
+	filePhaseMarkers
+	filePhaseText
+	filePhaseBinarySummary
+	filePhaseBinaryPatch
+)
 
 type hunkState struct {
 	hunk          Hunk
@@ -247,7 +285,7 @@ func (p *diffParser) consume(line string) error {
 			return p.startFile(line)
 		}
 		if p.current == nil {
-			return fmt.Errorf("parse diff: unexpected line %q", line)
+			return errors.New("parse diff: unexpected top-level line")
 		}
 		return p.consumeFileLine(line)
 	}
@@ -269,9 +307,13 @@ func (p *diffParser) startFile(line string) error {
 	p.operation = ""
 	p.seenFrom = false
 	p.seenTo = false
-	p.contentStarted = false
+	p.phase = filePhaseMetadata
 	p.lastOldEnd = 0
 	p.lastNewEnd = 0
+	p.lastOldEmpty = false
+	p.lastNewEmpty = false
+	p.oldEOF = false
+	p.newEOF = false
 	return nil
 }
 
@@ -280,6 +322,9 @@ func (p *diffParser) consumeFileLine(line string) error {
 	case strings.HasPrefix(line, "index "), strings.HasPrefix(line, "old mode "),
 		strings.HasPrefix(line, "new mode "), strings.HasPrefix(line, "similarity index "),
 		strings.HasPrefix(line, "dissimilarity index "):
+		if p.phase != filePhaseMetadata {
+			return errors.New("parse diff: structural metadata after content")
+		}
 		return nil
 	case strings.HasPrefix(line, "new file mode "):
 		return p.consumeModeMetadata(ChangeAdded)
@@ -297,6 +342,9 @@ func (p *diffParser) consumeFileLine(line string) error {
 		if p.seenOld || p.seenNew {
 			return errors.New("parse diff: duplicate or out-of-order file marker")
 		}
+		if p.phase != filePhaseMetadata {
+			return errors.New("parse diff: structural metadata after content")
+		}
 		value, err := normalizeMarkerPath(strings.TrimPrefix(line, "--- "), "a/")
 		if err != nil {
 			return err
@@ -305,11 +353,14 @@ func (p *diffParser) consumeFileLine(line string) error {
 			return fmt.Errorf("parse diff: file marker: %w", err)
 		}
 		p.seenOld = true
-		p.contentStarted = true
+		p.phase = filePhaseMarkers
 		return nil
 	case strings.HasPrefix(line, "+++ "):
 		if !p.seenOld || p.seenNew {
 			return errors.New("parse diff: duplicate or out-of-order file marker")
+		}
+		if p.phase != filePhaseMarkers {
+			return errors.New("parse diff: structural metadata after content")
 		}
 		value, err := normalizeMarkerPath(strings.TrimPrefix(line, "+++ "), "b/")
 		if err != nil {
@@ -323,24 +374,25 @@ func (p *diffParser) consumeFileLine(line string) error {
 	case strings.HasPrefix(line, "Binary files ") && strings.HasSuffix(line, " differ"):
 		return p.consumeBinaryLine(line)
 	case line == "GIT binary patch":
-		p.current.Binary = true
-		p.contentStarted = true
-		return nil
+		return p.startBinaryContent(filePhaseBinaryPatch)
 	case strings.HasPrefix(line, "@@ "):
 		if !p.seenOld || !p.seenNew {
 			return errors.New("parse diff: hunk missing file markers")
 		}
 		return p.startHunk(line)
 	default:
-		if p.current.Binary {
+		if p.phase == filePhaseBinaryPatch {
 			return nil
 		}
-		return fmt.Errorf("parse diff: unexpected file line %q", line)
+		if p.phase == filePhaseBinarySummary {
+			return errors.New("parse diff: content after binary summary")
+		}
+		return errors.New("parse diff: unexpected file line")
 	}
 }
 
 func (p *diffParser) consumeModeMetadata(kind ChangeKind) error {
-	if p.contentStarted {
+	if p.phase != filePhaseMetadata || p.seenOld || p.seenNew {
 		return errors.New("parse diff: operation metadata after content started")
 	}
 	if p.operation != "" {
@@ -357,10 +409,10 @@ func (p *diffParser) consumeModeMetadata(kind ChangeKind) error {
 }
 
 func (p *diffParser) consumeOperationMetadata(kind ChangeKind, from bool, rawPath string) error {
-	if p.contentStarted {
+	if p.phase != filePhaseMetadata || p.seenOld || p.seenNew {
 		return errors.New("parse diff: operation metadata after content started")
 	}
-	value, err := validatePath(rawPath)
+	value, err := decodeAndValidatePath(rawPath)
 	if err != nil {
 		return err
 	}
@@ -392,23 +444,23 @@ func (p *diffParser) consumeOperationMetadata(kind ChangeKind, from bool, rawPat
 }
 
 func (p *diffParser) consumeBinaryLine(line string) error {
+	if err := p.startBinaryContent(filePhaseBinarySummary); err != nil {
+		return err
+	}
 	paths := strings.TrimSuffix(strings.TrimPrefix(line, "Binary files "), " differ")
+	separators, separatorErr := binaryPathSeparators(paths)
+	if separatorErr != nil {
+		return separatorErr
+	}
 	var pathErr error
 	foundSafePair := false
-	for offset := 0; offset < len(paths); {
-		separator := strings.Index(paths[offset:], " and ")
-		if separator < 0 {
-			break
-		}
-		separator += offset
-		oldPath, oldErr := normalizeMarkerPath(paths[:separator], "a/")
-		newPath, newErr := normalizeMarkerPath(paths[separator+len(" and "):], "b/")
+	for _, separator := range separators {
+		oldPath, oldErr := normalizeMarkerPath(paths[:separator.start], "a/")
+		newPath, newErr := normalizeMarkerPath(paths[separator.end:], "b/")
 		if oldErr == nil && newErr == nil {
 			foundSafePair = true
 			if p.binaryPathsMatch(oldPath, newPath) {
 				p.selectBinaryPaths(oldPath, newPath)
-				p.current.Binary = true
-				p.contentStarted = true
 				return nil
 			}
 		} else if pathErr == nil {
@@ -418,7 +470,6 @@ func (p *diffParser) consumeBinaryLine(line string) error {
 				pathErr = newErr
 			}
 		}
-		offset = separator + len(" and ")
 	}
 	if foundSafePair {
 		return errors.New("parse diff: binary paths mismatch")
@@ -427,6 +478,15 @@ func (p *diffParser) consumeBinaryLine(line string) error {
 		return pathErr
 	}
 	return errors.New("parse diff: malformed binary paths")
+}
+
+func (p *diffParser) startBinaryContent(phase filePhase) error {
+	if p.phase != filePhaseMetadata {
+		return errors.New("parse diff: conflicting file content")
+	}
+	p.phase = phase
+	p.current.Binary = true
+	return nil
 }
 
 func (p *diffParser) matchOldHeaderPath(value string) error {
@@ -513,6 +573,9 @@ func (p *diffParser) selectBinaryPaths(oldPath, newPath string) {
 }
 
 func (p *diffParser) startHunk(line string) error {
+	if p.phase != filePhaseMarkers && p.phase != filePhaseText {
+		return errors.New("parse diff: conflicting file content")
+	}
 	if p.hunks >= p.limits.MaxHunks {
 		return errors.New("parse diff: hunk limit exceeded")
 	}
@@ -523,15 +586,27 @@ func (p *diffParser) startHunk(line string) error {
 	if hunk.OldLines == 0 && hunk.NewLines == 0 {
 		return errors.New("parse diff: empty hunk")
 	}
+	if p.oldEOF {
+		return errors.New("parse diff: old side after end of file")
+	}
+	if p.newEOF {
+		return errors.New("parse diff: new side after end of file")
+	}
 	if len(p.current.Hunks) > 0 && (hunk.OldStart < p.lastOldEnd || hunk.NewStart < p.lastNewEnd) {
 		return errors.New("parse diff: overlapping hunk")
+	}
+	if p.lastOldEmpty && hunk.OldLines == 0 && hunk.OldStart == p.lastOldEnd {
+		return errors.New("parse diff: repeated old empty-range anchor")
+	}
+	if p.lastNewEmpty && hunk.NewLines == 0 && hunk.NewStart == p.lastNewEnd {
+		return errors.New("parse diff: repeated new empty-range anchor")
 	}
 	p.hunk = &hunkState{
 		hunk:    hunk,
 		oldNext: hunk.OldStart,
 		newNext: hunk.NewStart,
 	}
-	p.contentStarted = true
+	p.phase = filePhaseText
 	p.hunks++
 	return nil
 }
@@ -546,6 +621,12 @@ func (p *diffParser) consumeHunkLine(line string) error {
 	parsed := Line{Text: line[1:]}
 	switch line[0] {
 	case ' ':
+		if p.oldEOF {
+			return errors.New("parse diff: old side after end of file")
+		}
+		if p.newEOF {
+			return errors.New("parse diff: new side after end of file")
+		}
 		parsed.Kind = LineContext
 		parsed.OldNumber = numberPointer(p.hunk.oldNext)
 		parsed.NewNumber = numberPointer(p.hunk.newNext)
@@ -554,6 +635,9 @@ func (p *diffParser) consumeHunkLine(line string) error {
 		p.hunk.oldSeen++
 		p.hunk.newSeen++
 	case '-':
+		if p.oldEOF {
+			return errors.New("parse diff: old side after end of file")
+		}
 		parsed.Kind = LineDeleted
 		parsed.OldNumber = numberPointer(p.hunk.oldNext)
 		p.hunk.oldNext++
@@ -562,6 +646,9 @@ func (p *diffParser) consumeHunkLine(line string) error {
 			return err
 		}
 	case '+':
+		if p.newEOF {
+			return errors.New("parse diff: new side after end of file")
+		}
 		parsed.Kind = LineAdded
 		parsed.NewNumber = numberPointer(p.hunk.newNext)
 		p.hunk.newNext++
@@ -589,10 +676,20 @@ func (p *diffParser) consumeNoNewlineMarker() error {
 	switch p.hunk.previousKind {
 	case LineDeleted:
 		valid = p.hunk.oldSeen == p.hunk.hunk.OldLines
+		if valid {
+			p.oldEOF = true
+		}
 	case LineAdded:
 		valid = p.hunk.newSeen == p.hunk.hunk.NewLines
+		if valid {
+			p.newEOF = true
+		}
 	case LineContext:
 		valid = p.hunk.oldSeen == p.hunk.hunk.OldLines && p.hunk.newSeen == p.hunk.hunk.NewLines
+		if valid {
+			p.oldEOF = true
+			p.newEOF = true
+		}
 	}
 	if !valid {
 		return errors.New("parse diff: early no-newline marker")
@@ -619,6 +716,8 @@ func (p *diffParser) finishHunk() error {
 	p.current.Hunks = append(p.current.Hunks, p.hunk.hunk)
 	p.lastOldEnd = rangeEnd(p.hunk.hunk.OldStart, p.hunk.hunk.OldLines)
 	p.lastNewEnd = rangeEnd(p.hunk.hunk.NewStart, p.hunk.hunk.NewLines)
+	p.lastOldEmpty = p.hunk.hunk.OldLines == 0
+	p.lastNewEmpty = p.hunk.hunk.NewLines == 0
 	p.hunk = nil
 	return nil
 }
@@ -643,16 +742,29 @@ func (p *diffParser) finishFile() error {
 }
 
 func parseDiffPaths(value string) ([]filePaths, error) {
+	tokens, tokenErr := lexGitTokens(value, 2)
+	if tokenErr == nil && len(tokens) == 2 {
+		oldPath, oldErr := normalizeDecodedPrefixedPath(tokens[0], "a/")
+		newPath, newErr := normalizeDecodedPrefixedPath(tokens[1], "b/")
+		if oldErr == nil && newErr == nil {
+			return []filePaths{{old: oldPath, new: newPath}}, nil
+		}
+		if oldErr != nil {
+			return nil, oldErr
+		}
+		return nil, newErr
+	}
 	var candidates []filePaths
 	var pathErr error
-	for offset := 0; offset < len(value); {
-		separator := strings.Index(value[offset:], " b/")
-		if separator < 0 {
-			break
-		}
-		separator += offset
-		oldPath, oldErr := normalizePrefixedPath(value[:separator], "a/")
-		newPath, newErr := normalizePrefixedPath(value[separator+1:], "b/")
+	separators, separatorErr := diffHeaderSeparators(value)
+	if separatorErr != nil {
+		return nil, separatorErr
+	}
+	for _, separator := range separators {
+		oldRaw := strings.TrimRight(value[:separator.start], " \t")
+		newRaw := strings.TrimLeft(value[separator.end:], " \t")
+		oldPath, oldErr := normalizePrefixedPath(oldRaw, "a/")
+		newPath, newErr := normalizePrefixedPath(newRaw, "b/")
 		if oldErr == nil && newErr == nil {
 			candidates = append(candidates, filePaths{old: oldPath, new: newPath})
 		} else if pathErr == nil {
@@ -662,7 +774,6 @@ func parseDiffPaths(value string) ([]filePaths, error) {
 				pathErr = newErr
 			}
 		}
-		offset = separator + len(" b/")
 	}
 	if len(candidates) > 0 {
 		return candidates, nil
@@ -673,30 +784,257 @@ func parseDiffPaths(value string) ([]filePaths, error) {
 	return nil, errors.New("parse diff: malformed diff header")
 }
 
+type headerSeparator struct {
+	start int
+	end   int
+}
+
+func diffHeaderSeparators(value string) ([]headerSeparator, error) {
+	const maxCandidates = 16
+	var separators []headerSeparator
+	quoted := false
+	escaped := false
+	for offset := 0; offset < len(value); {
+		character := value[offset]
+		if quoted {
+			offset++
+			if escaped {
+				escaped = false
+				continue
+			}
+			switch character {
+			case '\\':
+				escaped = true
+			case '"':
+				quoted = false
+			}
+			continue
+		}
+		if character == '"' {
+			quoted = true
+			offset++
+			continue
+		}
+		if character != ' ' && character != '\t' {
+			offset++
+			continue
+		}
+		start := offset
+		for offset < len(value) && (value[offset] == ' ' || value[offset] == '\t') {
+			offset++
+		}
+		right := value[offset:]
+		if !strings.HasPrefix(right, "b/") && !strings.HasPrefix(right, `"b/`) {
+			continue
+		}
+		if len(separators) == maxCandidates {
+			return nil, errors.New("parse diff: too many ambiguous header paths")
+		}
+		separators = append(separators, headerSeparator{start: start, end: offset})
+	}
+	return separators, nil
+}
+
+func binaryPathSeparators(value string) ([]headerSeparator, error) {
+	const maxCandidates = 16
+	var separators []headerSeparator
+	quoted := false
+	escaped := false
+	for offset := 0; offset < len(value); offset++ {
+		character := value[offset]
+		if quoted {
+			if escaped {
+				escaped = false
+				continue
+			}
+			switch character {
+			case '\\':
+				escaped = true
+			case '"':
+				quoted = false
+			}
+			continue
+		}
+		if character == '"' {
+			quoted = true
+			continue
+		}
+		if !strings.HasPrefix(value[offset:], " and ") {
+			continue
+		}
+		end := offset + len(" and ")
+		right := value[end:]
+		if !strings.HasPrefix(right, "b/") && !strings.HasPrefix(right, `"b/`) {
+			continue
+		}
+		if len(separators) == maxCandidates {
+			return nil, errors.New("parse diff: too many ambiguous binary paths")
+		}
+		separators = append(separators, headerSeparator{start: offset, end: end})
+		offset = end - 1
+	}
+	return separators, nil
+}
+
 func normalizeMarkerPath(value, prefix string) (string, error) {
+	decoded, err := decodeGitPath(value)
+	if err != nil {
+		return "", err
+	}
+	return normalizeDecodedMarkerPath(decoded, prefix)
+}
+
+func normalizeDecodedMarkerPath(value, prefix string) (string, error) {
 	if value == "/dev/null" {
 		return "", nil
 	}
-	return normalizePrefixedPath(value, prefix)
+	return normalizeDecodedPrefixedPath(value, prefix)
 }
 
 func normalizePrefixedPath(value, prefix string) (string, error) {
+	decoded, err := decodeGitPath(value)
+	if err != nil {
+		return "", err
+	}
+	return normalizeDecodedPrefixedPath(decoded, prefix)
+}
+
+func normalizeDecodedPrefixedPath(value, prefix string) (string, error) {
 	if !strings.HasPrefix(value, prefix) {
-		return "", fmt.Errorf("parse diff: unsafe path %q", value)
+		return "", errors.New("parse diff: unsafe path prefix")
 	}
 	return validatePath(strings.TrimPrefix(value, prefix))
 }
 
+func decodeAndValidatePath(value string) (string, error) {
+	decoded, err := decodeGitPath(value)
+	if err != nil {
+		return "", err
+	}
+	return validatePath(decoded)
+}
+
+func decodeGitPath(value string) (string, error) {
+	if !strings.HasPrefix(value, `"`) {
+		if strings.ContainsRune(value, '"') {
+			return "", errors.New("parse diff: malformed quoted path")
+		}
+		return value, nil
+	}
+	tokens, err := lexGitTokens(value, 1)
+	if err != nil || len(tokens) != 1 {
+		return "", errors.New("parse diff: malformed quoted path")
+	}
+	return tokens[0], nil
+}
+
+func lexGitTokens(value string, maxTokens int) ([]string, error) {
+	if maxTokens <= 0 {
+		return nil, errors.New("parse diff: invalid token limit")
+	}
+	tokens := make([]string, 0, maxTokens)
+	for offset := 0; ; {
+		for offset < len(value) && (value[offset] == ' ' || value[offset] == '\t') {
+			offset++
+		}
+		if offset == len(value) {
+			return tokens, nil
+		}
+		if len(tokens) == maxTokens {
+			return nil, errors.New("parse diff: too many path tokens")
+		}
+
+		var token strings.Builder
+		if value[offset] != '"' {
+			start := offset
+			for offset < len(value) && value[offset] != ' ' && value[offset] != '\t' {
+				if value[offset] == '"' {
+					return nil, errors.New("parse diff: malformed quoted path")
+				}
+				offset++
+			}
+			tokens = append(tokens, value[start:offset])
+			continue
+		}
+
+		offset++
+		closed := false
+		for offset < len(value) {
+			character := value[offset]
+			offset++
+			switch character {
+			case '"':
+				closed = true
+			case '\\':
+				if offset == len(value) {
+					return nil, errors.New("parse diff: malformed quoted path")
+				}
+				escaped := value[offset]
+				offset++
+				switch escaped {
+				case 'a':
+					token.WriteByte('\a')
+				case 'b':
+					token.WriteByte('\b')
+				case 'f':
+					token.WriteByte('\f')
+				case 'n':
+					token.WriteByte('\n')
+				case 'r':
+					token.WriteByte('\r')
+				case 't':
+					token.WriteByte('\t')
+				case 'v':
+					token.WriteByte('\v')
+				case '\\', '"':
+					token.WriteByte(escaped)
+				case '0', '1', '2', '3', '4', '5', '6', '7':
+					decoded := int(escaped - '0')
+					for digits := 1; digits < 3 && offset < len(value); digits++ {
+						next := value[offset]
+						if next < '0' || next > '7' {
+							break
+						}
+						decoded = decoded*8 + int(next-'0')
+						offset++
+					}
+					if decoded > 255 {
+						return nil, errors.New("parse diff: malformed quoted path")
+					}
+					token.WriteByte(byte(decoded))
+				default:
+					return nil, errors.New("parse diff: malformed quoted path")
+				}
+			default:
+				token.WriteByte(character)
+			}
+			if closed {
+				break
+			}
+		}
+		if !closed || (offset < len(value) && value[offset] != ' ' && value[offset] != '\t') {
+			return nil, errors.New("parse diff: malformed quoted path")
+		}
+		tokens = append(tokens, token.String())
+	}
+}
+
 func validatePath(value string) (string, error) {
+	if !utf8.ValidString(value) {
+		return "", errors.New("parse diff: unsafe path encoding")
+	}
 	if strings.ContainsRune(value, '\x00') || strings.Contains(value, `\`) {
-		return "", fmt.Errorf("parse diff: unsafe path %q", value)
+		return "", errors.New("parse diff: unsafe path content")
 	}
 	if value == "" || path.IsAbs(value) {
-		return "", fmt.Errorf("parse diff: unsafe path %q", value)
+		return "", errors.New("parse diff: unsafe path form")
+	}
+	if path.Clean(value) != value {
+		return "", errors.New("parse diff: unsafe path form")
 	}
 	for _, component := range strings.Split(value, "/") {
-		if component == ".." {
-			return "", fmt.Errorf("parse diff: unsafe path %q", value)
+		if component == "" || component == "." || component == ".." {
+			return "", errors.New("parse diff: unsafe path component")
 		}
 	}
 	return value, nil
@@ -786,6 +1124,7 @@ func defaultLimits() Limits {
 	return Limits{
 		MaxInputBytes:   defaultMaxInputBytes,
 		MaxLineBytes:    defaultMaxLineBytes,
+		MaxLines:        defaultMaxLines,
 		MaxFiles:        defaultMaxFiles,
 		MaxHunks:        defaultMaxHunks,
 		MaxChangedLines: defaultMaxChangedLines,
@@ -799,6 +1138,9 @@ func mergeLimits(destination *Limits, source Limits) {
 	if source.MaxLineBytes != 0 {
 		destination.MaxLineBytes = source.MaxLineBytes
 	}
+	if source.MaxLines != 0 {
+		destination.MaxLines = source.MaxLines
+	}
 	if source.MaxFiles != 0 {
 		destination.MaxFiles = source.MaxFiles
 	}
@@ -811,7 +1153,7 @@ func mergeLimits(destination *Limits, source Limits) {
 }
 
 func validateLimits(limits Limits) error {
-	if limits.MaxInputBytes <= 0 || limits.MaxLineBytes <= 0 || limits.MaxFiles <= 0 ||
+	if limits.MaxInputBytes <= 0 || limits.MaxLineBytes <= 0 || limits.MaxLines <= 0 || limits.MaxFiles <= 0 ||
 		limits.MaxHunks <= 0 || limits.MaxChangedLines <= 0 {
 		return errors.New("parse diff: limits must be positive")
 	}
@@ -827,6 +1169,8 @@ type boundedLineReader struct {
 	inputLimit    int64
 	maxInputBytes int64
 	maxLineBytes  int
+	maxLines      int
+	lines         int
 }
 
 func newBoundedLineReader(reader io.Reader, limits Limits) *boundedLineReader {
@@ -839,6 +1183,7 @@ func newBoundedLineReader(reader io.Reader, limits Limits) *boundedLineReader {
 		inputLimit:    inputLimit,
 		maxInputBytes: maxInputBytes,
 		maxLineBytes:  limits.MaxLineBytes,
+		maxLines:      limits.MaxLines,
 	}
 }
 
@@ -855,16 +1200,24 @@ func (r *boundedLineReader) next() (string, error) {
 		line.Write(fragment)
 		if err != nil {
 			if errors.Is(err, io.EOF) && line.Len() > 0 {
-				return line.String(), nil
+				return r.finishLine(line.String())
 			}
 			return "", err
 		}
 		if !prefix {
 			value := line.String()
-			if strings.ContainsRune(value, '\x00') {
-				return "", errors.New("parse diff: unsafe path or content contains nul byte")
-			}
-			return value, nil
+			return r.finishLine(value)
 		}
 	}
+}
+
+func (r *boundedLineReader) finishLine(line string) (string, error) {
+	if strings.ContainsRune(line, '\x00') {
+		return "", errors.New("parse diff: unsafe path or content contains nul byte")
+	}
+	r.lines++
+	if r.lines > r.maxLines {
+		return "", errors.New("parse diff: line limit exceeded")
+	}
+	return line, nil
 }

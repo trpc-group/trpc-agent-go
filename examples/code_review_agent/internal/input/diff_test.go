@@ -98,12 +98,236 @@ func TestParseDiffPreservesUnprefixedRenameAndCopyPaths(t *testing.T) {
 	}
 }
 
+func TestParseDiffDecodesGitCQuotedPaths(t *testing.T) {
+	const (
+		quotedOld = `"a/\344\270\255\346\226\207 old\t\"name\".txt"`
+		quotedNew = `"b/\344\270\255\346\226\207 new\t\"name\".txt"`
+		oldPath   = "中文 old\t\"name\".txt"
+		newPath   = "中文 new\t\"name\".txt"
+	)
+
+	tests := []struct {
+		name  string
+		patch string
+	}{
+		{
+			name: "diff header and file markers",
+			patch: "diff --git " + quotedOld + " " + quotedNew + "\n" +
+				"--- " + quotedOld + "\n" +
+				"+++ " + quotedNew + "\n" +
+				"@@ -1 +1 @@\n-old\n+new\n",
+		},
+		{
+			name: "rename metadata",
+			patch: "diff --git " + quotedOld + " " + quotedNew + "\n" +
+				"similarity index 100%\n" +
+				`rename from "\344\270\255\346\226\207 old\t\"name\".txt"` + "\n" +
+				`rename to "\344\270\255\346\226\207 new\t\"name\".txt"` + "\n",
+		},
+		{
+			name: "copy metadata",
+			patch: "diff --git " + quotedOld + " " + quotedNew + "\n" +
+				"similarity index 100%\n" +
+				`copy from "\344\270\255\346\226\207 old\t\"name\".txt"` + "\n" +
+				`copy to "\344\270\255\346\226\207 new\t\"name\".txt"` + "\n",
+		},
+		{
+			name: "binary files summary",
+			patch: "diff --git " + quotedOld + " " + quotedNew + "\n" +
+				"index 1111111..2222222 100644\n" +
+				"Binary files " + quotedOld + " and " + quotedNew + " differ\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			diff, err := Parse(strings.NewReader(tt.patch))
+			require.NoError(t, err)
+			require.Equal(t, oldPath, diff.Files[0].OldPath)
+			require.Equal(t, newPath, diff.Files[0].NewPath)
+		})
+	}
+}
+
+func TestParseDiffAcceptsMixedQuotedAndUnquotedHeaderPaths(t *testing.T) {
+	tests := []struct {
+		name    string
+		header  string
+		oldPath string
+		newPath string
+	}{
+		{
+			name:    "quoted new path",
+			header:  `a/old name.txt "b/new\tname.txt"`,
+			oldPath: "old name.txt",
+			newPath: "new\tname.txt",
+		},
+		{
+			name:    "quoted old path",
+			header:  `"a/old\tname.txt" b/new name.txt`,
+			oldPath: "old\tname.txt",
+			newPath: "new name.txt",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			patch := "diff --git " + tt.header + "\n" +
+				"--- a/old name.txt\n+++ b/new name.txt\n" +
+				"@@ -1 +1 @@\n-old\n+new\n"
+			if strings.Contains(tt.oldPath, "\t") {
+				patch = "diff --git " + tt.header + "\n" +
+					`--- "a/old\tname.txt"` + "\n+++ b/new name.txt\n" +
+					"@@ -1 +1 @@\n-old\n+new\n"
+			}
+			if strings.Contains(tt.newPath, "\t") {
+				patch = "diff --git " + tt.header + "\n--- a/old name.txt\n" +
+					`+++ "b/new\tname.txt"` + "\n" +
+					"@@ -1 +1 @@\n-old\n+new\n"
+			}
+			diff, err := Parse(strings.NewReader(patch))
+			require.NoError(t, err)
+			require.Equal(t, tt.oldPath, diff.Files[0].OldPath)
+			require.Equal(t, tt.newPath, diff.Files[0].NewPath)
+		})
+	}
+}
+
+func TestParseDiffAcceptsMixedQuotedAndUnquotedBinaryPaths(t *testing.T) {
+	patch := "diff --git a/old name.bin \"b/new\\tname.bin\"\n" +
+		"Binary files a/old name.bin and \"b/new\\tname.bin\" differ\n"
+	diff, err := Parse(strings.NewReader(patch))
+	require.NoError(t, err)
+	require.Len(t, diff.Files, 1)
+	require.True(t, diff.Files[0].Binary)
+	require.Equal(t, "old name.bin", diff.Files[0].OldPath)
+	require.Equal(t, "new\tname.bin", diff.Files[0].NewPath)
+}
+
+func TestParseDiffRejectsInvalidUTF8QuotedPath(t *testing.T) {
+	patch := "diff --git a/file.go \"b/\\376.go\"\n" +
+		"--- a/file.go\n+++ \"b/\\376.go\"\n@@ -1 +1 @@\n-old\n+new\n"
+	_, err := Parse(strings.NewReader(patch))
+	require.ErrorContains(t, err, "path encoding")
+}
+
+func TestParseDiffBoundsAmbiguousPathCandidates(t *testing.T) {
+	header := "a/old" + strings.Repeat(" b/ambiguous", 17) + " b/new"
+	_, err := Parse(strings.NewReader("diff --git " + header + "\n"))
+	require.ErrorContains(t, err, "too many ambiguous")
+}
+
+func TestParseDiffErrorsDoNotEchoUntrustedContent(t *testing.T) {
+	const secret = "password=correct-horse-battery-staple"
+	_, err := Parse(strings.NewReader(secret + "\n"))
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), secret)
+}
+
+func TestParseDiffRejectsDangerousGitCQuotedPathsAfterDecoding(t *testing.T) {
+	tests := []struct {
+		name   string
+		quoted string
+	}{
+		{name: "nul", quoted: `"b/file\000.txt"`},
+		{name: "backslash", quoted: `"b/dir\134file.txt"`},
+		{name: "absolute", quoted: `"\057etc/passwd"`},
+		{name: "traversal", quoted: `"b/dir/..\057file.txt"`},
+		{name: "dot component", quoted: `"b/dir/\056/file.txt"`},
+		{name: "repeated separator", quoted: `"b/dir\057\057file.txt"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			patch := "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ " + tt.quoted +
+				"\n@@ -1 +1 @@\n-old\n+new\n"
+			_, err := Parse(strings.NewReader(patch))
+			require.ErrorContains(t, err, "unsafe path")
+		})
+	}
+}
+
 func TestParseDiffAcceptsNoNewlineMarkers(t *testing.T) {
 	diff, err := parseFixture(t, "no-newline.patch")
 	require.NoError(t, err)
 	require.Len(t, diff.Files[0].Hunks[0].Lines, 2)
 	require.Equal(t, "old", diff.Files[0].Hunks[0].Lines[0].Text)
 	require.Equal(t, "new", diff.Files[0].Hunks[0].Lines[1].Text)
+}
+
+func TestParseDiffPermitsOtherSideAfterNoNewlineMarker(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "old side reaches eof first",
+			body: "@@ -1 +1,2 @@\n-old\n\\ No newline at end of file\n+new1\n+new2\n",
+		},
+		{
+			name: "new side reaches eof first",
+			body: "@@ -1,2 +1 @@\n+new\n\\ No newline at end of file\n-old1\n-old2\n",
+		},
+		{
+			name: "both sides reach eof separately",
+			body: "@@ -1 +1 @@\n-old\n\\ No newline at end of file\n+new\n\\ No newline at end of file\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse(strings.NewReader(oneFile(tt.body)))
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestParseDiffRejectsContentAfterSideEOF(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "old line later in same hunk",
+			body: "@@ -1 +1,2 @@\n-old\n\\ No newline at end of file\n-old2\n+new1\n+new2\n",
+			want: "old side after end of file",
+		},
+		{
+			name: "new line later in same hunk",
+			body: "@@ -1,2 +1 @@\n+new\n\\ No newline at end of file\n+new2\n-old1\n-old2\n",
+			want: "new side after end of file",
+		},
+		{
+			name: "old side in later hunk",
+			body: "@@ -1 +1 @@\n-old\n\\ No newline at end of file\n+new\n@@ -2 +2 @@\n-old2\n+new2\n",
+			want: "old side after end of file",
+		},
+		{
+			name: "new side in later hunk",
+			body: "@@ -1 +1 @@\n-old\n+new\n\\ No newline at end of file\n@@ -2 +2 @@\n-old2\n+new2\n",
+			want: "new side after end of file",
+		},
+		{
+			name: "both sides in later hunk",
+			body: "@@ -1 +1 @@\n old\n\\ No newline at end of file\n@@ -2 +2 @@\n old2\n",
+			want: "old side after end of file",
+		},
+		{
+			name: "new-only later hunk after old eof",
+			body: "@@ -1 +1 @@\n-old\n\\ No newline at end of file\n+new\n" +
+				"@@ -2,0 +3 @@\n+later\n",
+			want: "old side after end of file",
+		},
+		{
+			name: "old-only later hunk after new eof",
+			body: "@@ -1 +1 @@\n-old\n+new\n\\ No newline at end of file\n" +
+				"@@ -3 +2,0 @@\n-later\n",
+			want: "new side after end of file",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse(strings.NewReader(oneFile(tt.body)))
+			require.ErrorContains(t, err, tt.want)
+		})
+	}
 }
 
 func TestParseDiffAcceptsZeroCountAtNonzeroStart(t *testing.T) {
@@ -334,6 +558,105 @@ func TestParseDiffRejectsFileOperationsAfterContentStarts(t *testing.T) {
 	}
 }
 
+func TestParseDiffRejectsMixedFileContentKinds(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{
+			name: "binary summary after text hunk",
+			content: "--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+new\n" +
+				"Binary files a/file.txt and b/file.txt differ\n",
+		},
+		{
+			name: "binary patch after text hunk",
+			content: "--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+new\n" +
+				"GIT binary patch\n",
+		},
+		{
+			name: "text hunk after binary summary",
+			content: "Binary files a/file.txt and b/file.txt differ\n" +
+				"--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+new\n",
+		},
+		{
+			name: "text hunk after binary patch",
+			content: "GIT binary patch\nliteral 0\nHcmV?d00001\n" +
+				"--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+new\n",
+		},
+		{
+			name:    "binary patch after binary summary",
+			content: "Binary files a/file.txt and b/file.txt differ\nGIT binary patch\n",
+		},
+		{
+			name:    "binary summary after binary patch",
+			content: "GIT binary patch\nliteral 0\nHcmV?d00001\nBinary files a/file.txt and b/file.txt differ\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse(strings.NewReader("diff --git a/file.txt b/file.txt\n" + tt.content))
+			require.ErrorContains(t, err, "content")
+		})
+	}
+}
+
+func TestParseDiffRejectsStructuralMetadataAfterContent(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{
+			name: "index after text hunk",
+			content: "--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+new\n" +
+				"index 1111111..2222222 100644\n",
+		},
+		{
+			name:    "mode after binary summary",
+			content: "Binary files a/file.txt and b/file.txt differ\nold mode 100644\n",
+		},
+		{
+			name:    "file marker after binary patch",
+			content: "GIT binary patch\nliteral 0\nHcmV?d00001\n--- a/file.txt\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse(strings.NewReader("diff --git a/file.txt b/file.txt\n" + tt.content))
+			require.ErrorContains(t, err, "structural metadata after content")
+		})
+	}
+}
+
+func TestParseDiffRejectsStructuralMetadataAfterFileMarkersStart(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{
+			name:    "between markers",
+			content: "--- a/file.txt\nindex 1111111..2222222 100644\n+++ b/file.txt\n",
+		},
+		{
+			name:    "after markers",
+			content: "--- a/file.txt\n+++ b/file.txt\nold mode 100644\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse(strings.NewReader("diff --git a/file.txt b/file.txt\n" + tt.content))
+			require.ErrorContains(t, err, "structural metadata after content")
+		})
+	}
+}
+
+func TestParseDiffRejectsTrailingTextAfterBinarySummary(t *testing.T) {
+	patch := "diff --git a/file.txt b/file.txt\n" +
+		"Binary files a/file.txt and b/file.txt differ\n" +
+		"unexpected trailing text\n"
+	_, err := Parse(strings.NewReader(patch))
+	require.ErrorContains(t, err, "content after binary summary")
+}
+
 func TestParseDiffReconcilesHeaderPathsContainingBPrefix(t *testing.T) {
 	patch := "diff --git a/old b/part.txt b/new b/part.txt\n" +
 		"similarity index 100%\n" +
@@ -355,6 +678,31 @@ func TestParseDiffRejectsDuplicateOrOverlappingHunks(t *testing.T) {
 	duplicate := strings.ReplaceAll(readFixture(t, "overlap.patch"), "@@ -2,2 +2,2 @@", "@@ -1,2 +1,2 @@")
 	_, err = Parse(strings.NewReader(duplicate))
 	require.ErrorContains(t, err, "overlapping hunk")
+}
+
+func TestParseDiffRejectsRepeatedEmptyRangeAnchors(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "old side",
+			body: "@@ -1,0 +1 @@\n+one\n@@ -1,0 +3 @@\n+two\n",
+			want: "repeated old empty-range anchor",
+		},
+		{
+			name: "new side",
+			body: "@@ -1 +1,0 @@\n-one\n@@ -3 +1,0 @@\n-two\n",
+			want: "repeated new empty-range anchor",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse(strings.NewReader(oneFile(tt.body)))
+			require.ErrorContains(t, err, tt.want)
+		})
+	}
 }
 
 func TestParseDiffRejectsEmptyHunks(t *testing.T) {
@@ -403,6 +751,9 @@ func TestParseDiffRejectsUnsafePaths(t *testing.T) {
 		{name: "absolute", path: "/etc/passwd"},
 		{name: "backslash", path: `dir\file.go`},
 		{name: "parent traversal", path: "dir/../file.go"},
+		{name: "dot component", path: "dir/./file.go"},
+		{name: "repeated separator", path: "dir//file.go"},
+		{name: "trailing separator", path: "dir/"},
 		{name: "nul", path: "file\x00.go"},
 	}
 	for _, tt := range tests {
@@ -412,6 +763,12 @@ func TestParseDiffRejectsUnsafePaths(t *testing.T) {
 			require.ErrorContains(t, err, "unsafe path")
 		})
 	}
+}
+
+func TestParseDiffRejectsNULInFinalLineWithoutNewline(t *testing.T) {
+	patch := strings.TrimSuffix(oneFile("@@ -1 +1 @@\n-old\n+new\n"), "\n") + "\x00"
+	_, err := Parse(strings.NewReader(patch))
+	require.ErrorContains(t, err, "nul byte")
 }
 
 func TestParseDiffRejectsMalformedCountsAndMismatches(t *testing.T) {
@@ -444,6 +801,7 @@ func TestParseDiffEnforcesLimits(t *testing.T) {
 	}{
 		{name: "input bytes", patch: oneFile("@@ -1 +1 @@\n-old\n+new\n"), limits: Limits{MaxInputBytes: 32}, want: "input byte limit"},
 		{name: "line length", patch: oneFile("@@ -1 +1 @@\n-old\n+" + strings.Repeat("x", 81) + "\n"), limits: Limits{MaxLineBytes: 80}, want: "line length limit"},
+		{name: "physical lines", patch: strings.TrimSuffix(oneFile("@@ -1 +1 @@\n-old\n+new\n"), "\n"), limits: Limits{MaxLines: 5}, want: "line limit"},
 		{name: "files", patch: twoFiles(), limits: Limits{MaxFiles: 1}, want: "file limit"},
 		{name: "hunks", patch: oneFile("@@ -1 +1 @@\n-old\n+new\n@@ -3 +3 @@\n-old\n+new\n"), limits: Limits{MaxHunks: 1}, want: "hunk limit"},
 		{name: "changed lines", patch: oneFile("@@ -1,2 +1,2 @@\n-old1\n-old2\n+new1\n+new2\n"), limits: Limits{MaxChangedLines: 3}, want: "changed line limit"},
@@ -465,6 +823,50 @@ func TestParseDiffRejectsMaxInt64InputByteLimit(t *testing.T) {
 		WithLimits(Limits{MaxInputBytes: int(^uint(0) >> 1)}),
 	)
 	require.ErrorContains(t, err, "input byte limit too large")
+}
+
+func TestParseDiffRejectsNonPositiveMaxLines(t *testing.T) {
+	_, err := Parse(
+		strings.NewReader(oneFile("@@ -1 +1 @@\n-old\n+new\n")),
+		WithLimits(Limits{MaxLines: -1}),
+	)
+	require.ErrorContains(t, err, "limits must be positive")
+}
+
+func TestLexGitTokensRejectsMalformedQuoting(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		limit int
+	}{
+		{name: "unterminated", value: `"a/file.txt`, limit: 1},
+		{name: "unknown escape", value: `"a/file\x2e"`, limit: 1},
+		{name: "octal overflow", value: `"a/file\400"`, limit: 1},
+		{name: "suffix after quote", value: `"a/file.txt"suffix`, limit: 1},
+		{name: "too many tokens", value: `a/one b/two extra`, limit: 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := lexGitTokens(tt.value, tt.limit)
+			require.Error(t, err)
+		})
+	}
+}
+
+func FuzzParseDiff(f *testing.F) {
+	f.Add(oneFile("@@ -1 +1 @@\n-old\n+new\n"))
+	f.Add(`diff --git "a/\344\270\255\told.txt" "b/\344\270\255\tnew.txt"` + "\n")
+	f.Add("diff --git a/file.txt b/file.txt\nBinary files a/file.txt and b/file.txt differ\n")
+	f.Fuzz(func(t *testing.T, patch string) {
+		_, _ = Parse(strings.NewReader(patch), WithLimits(Limits{
+			MaxInputBytes:   4 << 10,
+			MaxLineBytes:    512,
+			MaxLines:        128,
+			MaxFiles:        16,
+			MaxHunks:        32,
+			MaxChangedLines: 128,
+		}))
+	})
 }
 
 func parseFixture(t *testing.T, name string) (Diff, error) {

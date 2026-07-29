@@ -1,0 +1,23 @@
+diff --git a/worker/worker.go b/worker/worker.go
+new file mode 100644
+--- /dev/null
++++ b/worker/worker.go
+@@ -0,0 +1,8 @@
++package worker
++
++import "context"
++
++func Start(parent context.Context) {
++	ctx, _ := context.WithCancel(parent)
++	go func() { <-ctx.Done() }()
++}
+diff --git a/worker/worker_test.go b/worker/worker_test.go
+new file mode 100644
+--- /dev/null
++++ b/worker/worker_test.go
+@@ -0,0 +1,5 @@
++package worker
++
++import "testing"
++
++func TestStart(t *testing.T) {}

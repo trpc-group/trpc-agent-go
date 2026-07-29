@@ -1,0 +1,28 @@
+diff --git a/commit/commit.go b/commit/commit.go
+new file mode 100644
+--- /dev/null
++++ b/commit/commit.go
+@@ -0,0 +1,13 @@
++package commit
++
++import (
++	"context"
++	"database/sql"
++)
++
++func Save(ctx context.Context, db *sql.DB) error {
++	tx, err := db.BeginTx(ctx, nil)
++	if err != nil { return err }
++	defer tx.Rollback()
++	return tx.Commit()
++}
+diff --git a/commit/commit_test.go b/commit/commit_test.go
+new file mode 100644
+--- /dev/null
++++ b/commit/commit_test.go
+@@ -0,0 +1,5 @@
++package commit
++
++import "testing"
++
++func TestSave(t *testing.T) {}

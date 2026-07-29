@@ -11,9 +11,14 @@
 package review
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"path"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -144,6 +149,18 @@ const (
 	SourceModel Source = "model"
 )
 
+// ChangeLayer identifies the source-state transition containing a finding.
+type ChangeLayer string
+
+const (
+	// ChangeLayerUnified identifies a standalone unified diff.
+	ChangeLayerUnified ChangeLayer = "unified"
+	// ChangeLayerStaged identifies the HEAD-to-index transition.
+	ChangeLayerStaged ChangeLayer = "staged"
+	// ChangeLayerWorktree identifies the index-to-working-tree transition.
+	ChangeLayerWorktree ChangeLayer = "worktree"
+)
+
 // Disposition identifies how a validated finding is presented.
 type Disposition string
 
@@ -195,7 +212,7 @@ func (t Task) Validate() error {
 	if err := validateSchema(t.SchemaVersion); err != nil {
 		return fmt.Errorf("validate task: %w", err)
 	}
-	if err := requireString("id", t.ID); err != nil {
+	if err := requireIdentifier("id", t.ID); err != nil {
 		return fmt.Errorf("validate task: %w", err)
 	}
 	if !t.Status.valid() {
@@ -320,6 +337,7 @@ func (r SandboxRun) Validate() error {
 type GovernanceDecision struct {
 	SchemaVersion string         `json:"schema_version"`
 	TaskID        string         `json:"task_id,omitempty"`
+	DecisionID    string         `json:"decision_id"`
 	Kind          DecisionKind   `json:"kind"`
 	Tool          string         `json:"tool"`
 	Action        DecisionAction `json:"action"`
@@ -345,6 +363,9 @@ func (d GovernanceDecision) Validate() error {
 	); err != nil {
 		return fmt.Errorf("validate governance decision: %w", err)
 	}
+	if err := requireIdentifier("decision id", d.DecisionID); err != nil {
+		return fmt.Errorf("validate governance decision: %w", err)
+	}
 	return nil
 }
 
@@ -354,9 +375,11 @@ type Finding struct {
 	TaskID         string      `json:"task_id,omitempty"`
 	Severity       Severity    `json:"severity"`
 	Category       string      `json:"category"`
+	Layer          ChangeLayer `json:"layer"`
 	File           string      `json:"file"`
 	Line           int         `json:"line"`
 	EndLine        int         `json:"end_line,omitempty"`
+	SemanticAnchor string      `json:"semantic_anchor"`
 	Title          string      `json:"title"`
 	Evidence       string      `json:"evidence"`
 	Recommendation string      `json:"recommendation"`
@@ -373,16 +396,24 @@ func (f Finding) Validate() error {
 		return fmt.Errorf("validate finding: %w", err)
 	}
 	if !f.Severity.valid() {
-		return fmt.Errorf("validate finding severity %q: %w", f.Severity, errInvalidValue)
+		return fmt.Errorf("validate finding severity: %w", errInvalidValue)
 	}
 	if !f.Confidence.valid() {
-		return fmt.Errorf("validate finding confidence %q: %w", f.Confidence, errInvalidValue)
+		return fmt.Errorf("validate finding confidence: %w", errInvalidValue)
 	}
 	if !f.Source.valid() {
-		return fmt.Errorf("validate finding source %q: %w", f.Source, errInvalidValue)
+		return fmt.Errorf("validate finding source: %w", errInvalidValue)
 	}
 	if !f.Disposition.valid() {
-		return fmt.Errorf("validate finding disposition %q: %w", f.Disposition, errInvalidValue)
+		return fmt.Errorf("validate finding disposition: %w", errInvalidValue)
+	}
+	if !f.Layer.valid() {
+		return fmt.Errorf("validate finding layer: %w", errInvalidValue)
+	}
+	if f.TaskID != "" {
+		if err := requireIdentifier("task id", f.TaskID); err != nil {
+			return fmt.Errorf("validate finding: %w", err)
+		}
 	}
 	if err := requireStrings(
 		namedString{name: "category", value: f.Category},
@@ -391,6 +422,7 @@ func (f Finding) Validate() error {
 		namedString{name: "evidence", value: f.Evidence},
 		namedString{name: "recommendation", value: f.Recommendation},
 		namedString{name: "rule id", value: f.RuleID},
+		namedString{name: "semantic anchor", value: f.SemanticAnchor},
 		namedString{name: "fingerprint", value: f.Fingerprint},
 	); err != nil {
 		return fmt.Errorf("validate finding: %w", err)
@@ -401,7 +433,32 @@ func (f Finding) Validate() error {
 	if f.EndLine != 0 && f.EndLine < f.Line {
 		return fmt.Errorf("validate finding end line %d: %w", f.EndLine, errInvalidValue)
 	}
+	if path.IsAbs(f.File) || path.Clean(f.File) != f.File || strings.ContainsAny(f.File, "\\\x00") {
+		return fmt.Errorf("validate finding file: %w", errInvalidValue)
+	}
+	if !validVersionedName(f.RuleID) {
+		return fmt.Errorf("validate finding rule id: %w", errInvalidValue)
+	}
+	if !validSemanticAnchor(f.SemanticAnchor) {
+		return fmt.Errorf("validate finding semantic anchor: %w", errInvalidValue)
+	}
+	if len(f.Fingerprint) != 64 || f.Fingerprint != f.ExpectedFingerprint() {
+		return fmt.Errorf("validate finding fingerprint: %w", errInvalidValue)
+	}
 	return nil
+}
+
+// ExpectedFingerprint returns the canonical SHA-256 finding identity.
+func (f Finding) ExpectedFingerprint() string {
+	material := strings.Join([]string{
+		SchemaVersion,
+		f.RuleID,
+		string(f.Layer) + ":" + f.File,
+		strconv.Itoa(f.Line),
+		f.SemanticAnchor,
+	}, "\x00")
+	digest := sha256.Sum256([]byte(material))
+	return hex.EncodeToString(digest[:])
 }
 
 // ArtifactRecord identifies a pinned artifact and its integrity metadata.
@@ -519,14 +576,14 @@ func (r Report) Validate() error {
 		return fmt.Errorf("validate report: %w", err)
 	}
 	if r.Input.TaskID != r.Task.ID {
-		return fmt.Errorf("validate report input task id %q: %w", r.Input.TaskID, errInvalidValue)
+		return fmt.Errorf("validate report input task id: %w", errInvalidValue)
 	}
 	for index, run := range r.SandboxRuns {
 		if err := run.Validate(); err != nil {
 			return fmt.Errorf("validate report sandbox run %d: %w", index, err)
 		}
 		if run.TaskID != r.Task.ID {
-			return fmt.Errorf("validate report sandbox run %d task id %q: %w", index, run.TaskID, errInvalidValue)
+			return fmt.Errorf("validate report sandbox run %d task id: %w", index, errInvalidValue)
 		}
 	}
 	for index, decision := range r.GovernanceDecisions {
@@ -534,7 +591,7 @@ func (r Report) Validate() error {
 			return fmt.Errorf("validate report governance decision %d: %w", index, err)
 		}
 		if decision.TaskID != r.Task.ID {
-			return fmt.Errorf("validate report governance decision %d task id %q: %w", index, decision.TaskID, errInvalidValue)
+			return fmt.Errorf("validate report governance decision %d task id: %w", index, errInvalidValue)
 		}
 	}
 	severityCounts := make(map[Severity]int)
@@ -545,7 +602,7 @@ func (r Report) Validate() error {
 			return fmt.Errorf("validate report finding %d: %w", index, err)
 		}
 		if finding.TaskID != r.Task.ID {
-			return fmt.Errorf("validate report finding %d task id %q: %w", index, finding.TaskID, errInvalidValue)
+			return fmt.Errorf("validate report finding %d task id: %w", index, errInvalidValue)
 		}
 		severityCounts[finding.Severity]++
 		switch finding.Disposition {
@@ -594,14 +651,72 @@ func (r Report) Validate() error {
 
 func validateSchema(version string) error {
 	if version != SchemaVersion {
-		return fmt.Errorf("schema version %q: %w", version, errInvalidValue)
+		return fmt.Errorf("schema version: %w", errInvalidValue)
 	}
 	return nil
+}
+
+func validVersionedName(value string) bool {
+	separator := strings.LastIndex(value, "/v")
+	if separator < 1 || separator+2 >= len(value) {
+		return false
+	}
+	if first := value[0]; !((first >= 'a' && first <= 'z') || (first >= '0' && first <= '9')) {
+		return false
+	}
+	for _, character := range value[:separator] {
+		if !(character >= 'a' && character <= 'z' || character >= '0' && character <= '9' ||
+			character == '.' || character == '_' || character == '/' || character == '-') {
+			return false
+		}
+	}
+	for _, character := range value[separator+2:] {
+		if character < '0' || character > '9' {
+			return false
+		}
+	}
+	return value[separator+2] != '0'
+}
+
+func validSemanticAnchor(value string) bool {
+	if len(value) == 0 || len(value) > 128 {
+		return false
+	}
+	for _, character := range value {
+		if !(character >= 'a' && character <= 'z' || character >= '0' && character <= '9' ||
+			character == '.' || character == '_' || character == ':' || character == '/' || character == '-') {
+			return false
+		}
+	}
+	return true
 }
 
 func requireString(name, value string) error {
 	if value == "" {
 		return fmt.Errorf("%s is required: %w", name, errInvalidValue)
+	}
+	return nil
+}
+
+func requireIdentifier(name, value string) error {
+	if err := requireString(name, value); err != nil {
+		return err
+	}
+	if len(value) > 128 {
+		return fmt.Errorf("%s: %w", name, errInvalidValue)
+	}
+	for index, character := range value {
+		valid := character >= 'a' && character <= 'z' ||
+			character >= 'A' && character <= 'Z' ||
+			character >= '0' && character <= '9' ||
+			(index > 0 && (character == '.' || character == '_' || character == ':' || character == '-'))
+		if !valid {
+			return fmt.Errorf("%s: %w", name, errInvalidValue)
+		}
+	}
+	lower := strings.ToLower(value)
+	if strings.HasPrefix(lower, "sk-") || strings.Contains(lower, "-sk-") {
+		return fmt.Errorf("%s: %w", name, errInvalidValue)
 	}
 	return nil
 }
@@ -704,6 +819,15 @@ func (c Confidence) valid() bool {
 func (s Source) valid() bool {
 	switch s {
 	case SourceRule, SourceTool, SourceModel:
+		return true
+	default:
+		return false
+	}
+}
+
+func (l ChangeLayer) valid() bool {
+	switch l {
+	case ChangeLayerUnified, ChangeLayerStaged, ChangeLayerWorktree:
 		return true
 	default:
 		return false
