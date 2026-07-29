@@ -92,7 +92,7 @@ func NewService(db *sql.DB, options ...ServiceOpt) (*Service, error) {
 
 	if opts.cleanupInterval <= 0 {
 		if opts.sessionTTL > 0 || opts.appStateTTL > 0 ||
-			opts.userStateTTL > 0 {
+			opts.userStateTTL > 0 || opts.effectiveTrackEventTTL() > 0 {
 			opts.cleanupInterval = defaultCleanupInterval
 		}
 	}

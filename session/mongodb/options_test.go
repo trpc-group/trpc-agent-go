@@ -65,11 +65,23 @@ func TestWithExtraOptions_Appends(t *testing.T) {
 func TestTTLOptions(t *testing.T) {
 	o := defaultOptions
 	WithSessionTTL(time.Hour)(&o)
+	WithTrackEventTTL(30 * time.Minute)(&o)
 	WithAppStateTTL(2 * time.Hour)(&o)
 	WithUserStateTTL(3 * time.Hour)(&o)
 	assert.Equal(t, time.Hour, o.sessionTTL)
+	require.NotNil(t, o.trackEventTTL)
+	assert.Equal(t, 30*time.Minute, o.effectiveTrackEventTTL())
 	assert.Equal(t, 2*time.Hour, o.appStateTTL)
 	assert.Equal(t, 3*time.Hour, o.userStateTTL)
+}
+
+func TestTrackEventTTLDefaultsToSessionTTL(t *testing.T) {
+	o := defaultOptions
+	WithSessionTTL(time.Hour)(&o)
+	assert.Equal(t, time.Hour, o.effectiveTrackEventTTL())
+	WithTrackEventTTL(0)(&o)
+	require.NotNil(t, o.trackEventTTL)
+	assert.Equal(t, time.Duration(0), o.effectiveTrackEventTTL())
 }
 
 func TestWithEnableAsyncPersist(t *testing.T) {

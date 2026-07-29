@@ -93,6 +93,12 @@ func (b *keyBuilder) TrackTimeIndexKey(key session.Key, track session.Track) str
 	return fmt.Sprintf("%s:trkidx:time:%s:%s:%s:%s", b.fullPrefix(), key.AppName, b.hashTag(key.UserID), key.SessionID, track)
 }
 
+// TrackIndexKey returns the key for the session track name index.
+// Format: [userPrefix:]hashidx:trkidx:names:appName:{userID}:sessionID
+func (b *keyBuilder) TrackIndexKey(key session.Key) string {
+	return fmt.Sprintf("%s:trkidx:names:%s:%s:%s", b.fullPrefix(), key.AppName, b.hashTag(key.UserID), key.SessionID)
+}
+
 // TrackKeys returns all track-related keys for a given session and track.
 func (b *keyBuilder) TrackKeys(key session.Key, track session.Track) []string {
 	return []string{
