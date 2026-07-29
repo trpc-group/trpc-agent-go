@@ -559,10 +559,108 @@ func stageCandidateRemovals(outputDir string) []stagedFile {
 	}
 }
 
+// Inter-process publication lock. Snapshot, apply, and rollback must not
+// interleave with another process publishing to the same paths: two runs (or a
+// run and a -promote) that each succeed can otherwise leave a mixed state, such
+// as a candidate prompt without the candidate profile it was published with.
+const (
+	// publishLockFileName is created inside every directory a publication
+	// touches. Exclusive creation is the atomic primitive; it works on every
+	// platform this example builds for.
+	publishLockFileName = ".promptiter-publish.lock"
+	// publishLockPollInterval is how often a waiter retries.
+	publishLockPollInterval = 20 * time.Millisecond
+)
+
+// publishLockTimeout bounds the wait for a concurrent publication. The
+// critical section is a handful of small file writes, so a wait this long
+// means the holder is stuck or died. It is a variable so tests can shorten it.
+var publishLockTimeout = 30 * time.Second
+
 // publishFiles applies every staged operation. When any step fails, files
 // already touched are restored to their prior content (or removed when they
-// did not exist) so an error never leaves a partially published state.
+// did not exist) so an error never leaves a partially published state. Every
+// directory it touches is locked against other processes for the whole
+// snapshot-apply-rollback sequence.
 func publishFiles(files []stagedFile) error {
+	release, err := lockPublishDirs(files)
+	if err != nil {
+		return err
+	}
+	defer release()
+	return publishLockedFiles(files)
+}
+
+// lockPublishDirs takes the publication lock of every directory the staged
+// files live in and returns the release function. Locks are acquired in a
+// stable order (sorted by absolute path) so two processes publishing to the
+// same pair of directories can never deadlock against each other.
+func lockPublishDirs(files []stagedFile) (func(), error) {
+	dirs := make([]string, 0, len(files))
+	seen := make(map[string]struct{}, len(files))
+	for _, file := range files {
+		dir := filepath.Dir(file.path)
+		if absolute, err := filepath.Abs(dir); err == nil {
+			dir = absolute
+		}
+		if _, ok := seen[dir]; ok {
+			continue
+		}
+		seen[dir] = struct{}{}
+		dirs = append(dirs, dir)
+	}
+	sort.Strings(dirs)
+	held := make([]string, 0, len(dirs))
+	release := func() {
+		for i := len(held) - 1; i >= 0; i-- {
+			_ = os.Remove(held[i])
+		}
+	}
+	for _, dir := range dirs {
+		lockPath := filepath.Join(dir, publishLockFileName)
+		if err := acquirePublishLock(lockPath); err != nil {
+			release()
+			return nil, err
+		}
+		held = append(held, lockPath)
+	}
+	return release, nil
+}
+
+// acquirePublishLock creates the lock file exclusively, retrying while another
+// process holds it. The holder's pid and start time are recorded so a lock left
+// behind by a killed process can be identified and removed by hand.
+func acquirePublishLock(lockPath string) error {
+	deadline := time.Now().Add(publishLockTimeout)
+	for {
+		file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+		if err == nil {
+			_, writeErr := fmt.Fprintf(file, "pid=%d since=%s\n", os.Getpid(), time.Now().Format(time.RFC3339Nano))
+			closeErr := file.Close()
+			if writeErr != nil || closeErr != nil {
+				// The lock is held; the diagnostic content is best effort.
+				return nil
+			}
+			return nil
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("acquire publication lock %q: %w", lockPath, err)
+		}
+		if time.Now().After(deadline) {
+			holder, _ := os.ReadFile(lockPath)
+			return fmt.Errorf(
+				"publication lock %q is held by another run (%s) after %s; "+
+					"wait for it to finish, or delete the lock file if that process died",
+				lockPath, strings.TrimSpace(string(holder)), publishLockTimeout,
+			)
+		}
+		time.Sleep(publishLockPollInterval)
+	}
+}
+
+// publishLockedFiles performs the staged operations. It assumes the caller
+// holds the publication lock of every directory involved.
+func publishLockedFiles(files []stagedFile) error {
 	type priorState struct {
 		path    string
 		content []byte
@@ -637,12 +735,27 @@ func stageCandidateArtifacts(opts Options, inputs *resolvedInputs, result *Resul
 	if err != nil {
 		return nil, err
 	}
-	promptText := ""
+	rawPromptText := ""
 	for _, override := range profile.Overrides {
 		if override.SurfaceID == instructionSurfaceID && override.Value.Text != nil {
-			promptText = *override.Value.Text
+			rawPromptText = *override.Value.Text
 			break
 		}
+	}
+	// Every artifact carries the canonical (trimmed) instruction text, matching
+	// how resolveInputs loads the baseline prompt, so the prompt file, the
+	// effective profile, and a later promotion cannot disagree over surrounding
+	// whitespace. An override that is *only* whitespace passes the optimizer
+	// sanitizer but is not a publishable baseline: writing it would leave the
+	// next run rejecting its own baseline prompt as empty (and -promote
+	// rejecting the profile), so it fails closed here instead.
+	promptText := strings.TrimSpace(rawPromptText)
+	if rawPromptText != "" && promptText == "" {
+		return nil, fmt.Errorf(
+			"selected round %d overrides instruction surface %q with whitespace only; "+
+				"refusing to publish a baseline the next run would reject as empty",
+			decision.SelectedRound, instructionSurfaceID,
+		)
 	}
 	effective := effectiveProfile(inputs, profile, instructionSurfaceID, promptText)
 	profileContent, err := json.MarshalIndent(effective, "", "  ")

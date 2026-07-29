@@ -60,7 +60,10 @@ Finishes in well under a second and produces:
   removes the prompt artifact of an earlier acceptance in the same output dir
   instead of leaving unevaluated text on the stable prompt path, and a failure
   anywhere in the publication rolls everything back, so the stable paths never
-  show reports that disagree with the candidate state next to them.
+  show reports that disagree with the candidate state next to them. The
+  transaction also holds a lock file (`.promptiter-publish.lock`) in every
+  directory it touches, so a concurrent run or `-promote` in another process
+  waits instead of interleaving its own snapshot and writes.
 - With `-write-back`, acceptance also updates the on-disk baseline:
   `baseline_prompt.txt` receives the instruction text, and
   `baseline_profile.json` (next to it) receives the **merged effective
@@ -260,6 +263,9 @@ override 注入引擎；引擎每轮事件由 Observer 流式落盘。
 轨迹做结构化 diff，区分错调、漏调与参数错误；format/knowledge 由 criterion
 结构与 rubric 类型推导，metric 名映射仅作补充。配置的 metricCategoryHints
 在加载后与实际 metric 名集合比对，未知 metric 名直接报错（fail closed）：
+报告中的前后对比只在 validation 上进行——候选侧归因来自验证集逐 case
+delta，把 train baseline 失败混进去会得到"baseline 4 例 vs 候选 1 例"这类
+跨数据集的假象；train baseline 归因单列，仅作优化输入的解释。
 拼错的 hint 若被静默忽略，对应 metric 会回落到 final_response_mismatch，
 可能让本应触发 hard-fail 红线的失败漏过门禁。多信号按 route→tool→response
 传播序折叠：下游症状标记 derivedFrom，仅根因转为 LossHints（P0–P2）反哺引擎。
@@ -286,5 +292,8 @@ override 注入引擎；引擎每轮事件由 Observer 流式落盘。
 回滚，稳定路径上不会出现报告与候选状态不一致的中间态。人工晋升同样由
 `-promote` 子命令完成：先校验 prompt 与 effective profile 一致，再在一个
 回滚单元内回写基线，避免"prompt 已更新、profile 仍是旧版"这种从未过闸的
-基线组合；路径以参数传入，不经 shell 拼接。fake 模式下评测分数、归因与 gate 决策完全确定：同输入必得同结论；
+基线组合；路径以参数传入，不经 shell 拼接。发布期对涉及的每个目录持有
+文件锁，跨进程串行，避免两次发布交错出后写覆盖前写的混合态。指令产物统一
+按 trim 后的规范文本落盘（与 baseline prompt 的加载方式一致），只含空白的
+指令 override 直接拒绝发布，不会写出下轮自己都判为空的基线。fake 模式下评测分数、归因与 gate 决策完全确定：同输入必得同结论；
 runId、时间戳、耗时等审计字段随每次运行变化。

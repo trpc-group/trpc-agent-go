@@ -83,15 +83,27 @@ type ReportCandidate struct {
 	TrainScoreKnown bool    `json:"trainScoreKnown"`
 }
 
-// ReportAttribution aggregates failure root causes before and after.
+// ReportAttribution aggregates failure root causes before and after. The
+// before/after comparison is scoped to the validation set: that is the only
+// set both sides are attributed on, since candidate-side attribution is
+// derived from the validation deltas. Baseline train failures are reported
+// separately instead of being mixed into the comparison, where they would
+// inflate the baseline side against a candidate side that never covered them.
 type ReportAttribution struct {
-	// BaselineCounts and CandidateCounts count root causes by category.
+	// BaselineCounts and CandidateCounts count validation root causes by
+	// category, before and after.
 	BaselineCounts  map[FailureCategory]int `json:"baselineCounts"`
 	CandidateCounts map[FailureCategory]int `json:"candidateCounts"`
-	// PerCase lists every attributed failure with its causal chain: baseline
-	// failures first, then candidate-side failures.
+	// BaselineTrainCounts counts baseline train root causes by category. It
+	// has no candidate counterpart and never enters the comparison.
+	BaselineTrainCounts map[FailureCategory]int `json:"baselineTrainCounts"`
+	// Baseline and Candidate list every attributed validation failure with its
+	// causal chain, before and after.
 	Baseline  []CaseAttribution `json:"baseline"`
 	Candidate []CaseAttribution `json:"candidate"`
+	// BaselineTrain lists the attributed baseline train failures — the input
+	// the optimizer worked from, reported for explainability only.
+	BaselineTrain []CaseAttribution `json:"baselineTrain"`
 }
 
 // ReportDelta carries the per-case movements of the reported candidate.
@@ -158,7 +170,7 @@ func BuildReport(opts Options, result *Result) *Report {
 			Summary:    Summarize(reported.Deltas),
 		}
 	}
-	report.Attribution = buildReportAttribution(result, reported)
+	report.Attribution = buildReportAttribution(result, reported, opts.Config.EvalSets.Validation)
 	report.Rounds = buildReportRounds(result)
 	report.NextSteps = buildNextSteps(opts, result)
 	return report
@@ -207,10 +219,20 @@ func summarizeSet(cases []CaseSnapshot, score float64) ReportSetSummary {
 	return summary
 }
 
-func buildReportAttribution(result *Result, reported *Candidate) ReportAttribution {
-	attribution := ReportAttribution{
-		Baseline:       result.BaselineAttributions,
-		BaselineCounts: AttributionStats(result.BaselineAttributions),
+// buildReportAttribution splits the baseline attributions by eval set so the
+// before/after comparison covers one dataset. The candidate side is derived
+// from the validation deltas, so baseline train failures — which have no
+// candidate counterpart — are reported on their own instead of being counted
+// against it.
+func buildReportAttribution(result *Result, reported *Candidate, validationSetID string) ReportAttribution {
+	baselineValidation := make([]CaseAttribution, 0, len(result.BaselineAttributions))
+	baselineTrain := make([]CaseAttribution, 0, len(result.BaselineAttributions))
+	for _, attribution := range result.BaselineAttributions {
+		if attribution.EvalSetID == validationSetID {
+			baselineValidation = append(baselineValidation, attribution)
+			continue
+		}
+		baselineTrain = append(baselineTrain, attribution)
 	}
 	candidateAttributions := make([]CaseAttribution, 0)
 	if reported != nil {
@@ -220,9 +242,14 @@ func buildReportAttribution(result *Result, reported *Candidate) ReportAttributi
 			}
 		}
 	}
-	attribution.Candidate = candidateAttributions
-	attribution.CandidateCounts = AttributionStats(candidateAttributions)
-	return attribution
+	return ReportAttribution{
+		Baseline:            baselineValidation,
+		BaselineCounts:      AttributionStats(baselineValidation),
+		BaselineTrain:       baselineTrain,
+		BaselineTrainCounts: AttributionStats(baselineTrain),
+		Candidate:           candidateAttributions,
+		CandidateCounts:     AttributionStats(candidateAttributions),
+	}
 }
 
 func buildReportRounds(result *Result) []ReportRound {
@@ -465,23 +492,32 @@ const markdownTemplate = `# Prompt 优化报告
 {{ end }}
 ## 失败归因
 
+前后对比只在 **validation** 上进行（候选侧归因来自验证集逐 case delta）：
 baseline 失败 {{ len .Attribution.Baseline }} 例，候选失败 {{ len .Attribution.Candidate }} 例。
+train baseline 失败 {{ len .Attribution.BaselineTrain }} 例，是优化的输入，候选侧无对应归因，
+单列在下表末列，不参与对比。
 
-| 类别 | baseline | 候选 |
-|---|---|---|
+| 类别 | validation baseline | validation 候选 | train baseline |
+|---|---|---|---|
 {{- range $category := attributionCategories .Attribution }}
-| {{ $category }} | {{ index $.Attribution.BaselineCounts $category }} | {{ index $.Attribution.CandidateCounts $category }} |
+| {{ $category }} | {{ index $.Attribution.BaselineCounts $category }} | {{ index $.Attribution.CandidateCounts $category }} | {{ index $.Attribution.BaselineTrainCounts $category }} |
 {{- end }}
 
 因果链明细：
 {{ range .Attribution.Baseline }}
-- [baseline] {{ md .EvalSetID }}/{{ md .EvalCaseID }}：{{ md (chainSummary .) }}
+- [baseline/validation] {{ md .EvalSetID }}/{{ md .EvalCaseID }}：{{ md (chainSummary .) }}
   {{- range .Chain }}
   - {{ md .Category }}{{ if .DerivedFrom }}（由 {{ md .DerivedFrom }} 级联）{{ end }}：{{ md .Evidence }}
   {{- end }}
 {{- end }}
 {{- range .Attribution.Candidate }}
-- [候选] {{ md .EvalSetID }}/{{ md .EvalCaseID }}：{{ md (chainSummary .) }}
+- [候选/validation] {{ md .EvalSetID }}/{{ md .EvalCaseID }}：{{ md (chainSummary .) }}
+  {{- range .Chain }}
+  - {{ md .Category }}{{ if .DerivedFrom }}（由 {{ md .DerivedFrom }} 级联）{{ end }}：{{ md .Evidence }}
+  {{- end }}
+{{- end }}
+{{- range .Attribution.BaselineTrain }}
+- [baseline/train] {{ md .EvalSetID }}/{{ md .EvalCaseID }}：{{ md (chainSummary .) }}
   {{- range .Chain }}
   - {{ md .Category }}{{ if .DerivedFrom }}（由 {{ md .DerivedFrom }} 级联）{{ end }}：{{ md .Evidence }}
   {{- end }}
@@ -588,7 +624,9 @@ func RenderMarkdown(report *Report) (string, error) {
 		"attributionCategories": func(attribution ReportAttribution) []FailureCategory {
 			present := make([]FailureCategory, 0, len(knownFailureCategories))
 			for _, category := range knownFailureCategories {
-				if attribution.BaselineCounts[category] > 0 || attribution.CandidateCounts[category] > 0 {
+				if attribution.BaselineCounts[category] > 0 ||
+					attribution.CandidateCounts[category] > 0 ||
+					attribution.BaselineTrainCounts[category] > 0 {
 					present = append(present, category)
 				}
 			}

@@ -711,6 +711,171 @@ func TestAcceptedRunWithReportFailurePublishesNothing(t *testing.T) {
 	assert.NoFileExists(t, inputs.baselineProfilePath)
 }
 
+// stagingFixture builds the minimal config/inputs/result trio needed to stage
+// the artifacts of one accepted candidate whose instruction override is the
+// given text.
+func stagingFixture(t *testing.T, instruction string) (Options, *resolvedInputs, *Result, *GateDecision) {
+	t.Helper()
+	baselineDir := t.TempDir()
+	promptSourcePath := filepath.Join(baselineDir, "baseline_prompt.txt")
+	require.NoError(t, os.WriteFile(promptSourcePath, []byte("基线指令\n"), 0o644))
+	config := &Config{
+		AppName:        dataAppName,
+		EvalSets:       EvalSetsConfig{Train: "train", Validation: "validation"},
+		PromptSource:   promptSourcePath,
+		TargetSurfaces: []TargetSurface{{Node: "candidate", Type: "instruction"}},
+	}
+	config.applyDefaults()
+	require.NoError(t, config.Validate())
+	inputs := &resolvedInputs{
+		promptSourcePath:    promptSourcePath,
+		baselinePrompt:      "基线指令",
+		baselineProfilePath: filepath.Join(baselineDir, baselineProfileFileName),
+	}
+	result := &Result{Candidates: []Candidate{{
+		Round: 1,
+		Profile: &promptiter.Profile{Overrides: []promptiter.SurfaceOverride{
+			{SurfaceID: "candidate#instruction", Value: astructureTextValue(instruction)},
+		}},
+	}}}
+	opts := Options{Config: config, OutputDir: t.TempDir(), WriteBack: true}
+	return opts, inputs, result, &GateDecision{Accepted: true, SelectedRound: 1}
+}
+
+// TestStagingRejectsWhitespaceOnlyInstruction locks the fail-closed rule for
+// degenerate instruction overrides: whitespace survives the optimizer
+// sanitizer, but publishing it (and writing it back) would leave the next run
+// rejecting its own baseline prompt as empty while -promote rejects the same
+// profile. Nothing may be published for such a candidate.
+func TestStagingRejectsWhitespaceOnlyInstruction(t *testing.T) {
+	opts, inputs, result, decision := stagingFixture(t, "  \n\t ")
+
+	_, err := stageCandidateArtifacts(opts, inputs, result, decision)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "whitespace only")
+	assert.NoFileExists(t, filepath.Join(opts.OutputDir, candidatePromptFileName))
+	assert.NoFileExists(t, filepath.Join(opts.OutputDir, candidateProfileFileName))
+	assert.NoFileExists(t, inputs.baselineProfilePath)
+	promptAfter, err := os.ReadFile(inputs.promptSourcePath)
+	require.NoError(t, err)
+	assert.Equal(t, "基线指令\n", string(promptAfter))
+}
+
+// TestStagingCanonicalizesInstructionWhitespace: surrounding whitespace is
+// trimmed once, so the prompt artifact, the effective profile, and the
+// write-back baseline all carry the identical canonical text — the form
+// resolveInputs loads and -promote compares.
+func TestStagingCanonicalizesInstructionWhitespace(t *testing.T) {
+	opts, inputs, result, decision := stagingFixture(t, "\n\n  优化后的指令  \n\n")
+
+	staged, err := stageCandidateArtifacts(opts, inputs, result, decision)
+	require.NoError(t, err)
+	require.NoError(t, publishFiles(staged))
+	assert.Equal(t, "优化后的指令", result.CandidatePrompt)
+
+	for _, path := range []string{
+		filepath.Join(opts.OutputDir, candidatePromptFileName),
+		inputs.promptSourcePath,
+	} {
+		content, err := os.ReadFile(path)
+		require.NoError(t, err)
+		assert.Equal(t, "优化后的指令\n", string(content), path)
+	}
+	profileContent, err := os.ReadFile(inputs.baselineProfilePath)
+	require.NoError(t, err)
+	profile := &promptiter.Profile{}
+	require.NoError(t, json.Unmarshal(profileContent, profile))
+	require.Len(t, profile.Overrides, 1)
+	require.NotNil(t, profile.Overrides[0].Value.Text)
+	assert.Equal(t, "优化后的指令", *profile.Overrides[0].Value.Text)
+
+	// The canonical artifacts promote without tripping the consistency check.
+	promotion, err := promoteCandidate(opts.Config, opts.OutputDir)
+	require.NoError(t, err)
+	assert.True(t, promotion.PromptPromoted)
+}
+
+// TestPublishFilesSerializesAcrossProcesses locks the inter-process contract:
+// a publication holds a lock on every directory it touches, so a second
+// publication (another run, or -promote) cannot interleave its own snapshot,
+// writes, and rollback with the first and leave a mixed state such as a
+// candidate prompt without the profile it was published with.
+func TestPublishFilesSerializesAcrossProcesses(t *testing.T) {
+	outputDir := t.TempDir()
+	promptPath := filepath.Join(outputDir, candidatePromptFileName)
+	profilePath := filepath.Join(outputDir, candidateProfileFileName)
+
+	// Hold the lock the way a concurrent process would.
+	release, err := lockPublishDirs([]stagedFile{{path: promptPath}})
+	require.NoError(t, err)
+	assert.FileExists(t, filepath.Join(outputDir, publishLockFileName))
+
+	published := make(chan error, 1)
+	go func() {
+		published <- publishFiles([]stagedFile{
+			{path: promptPath, content: []byte("prompt\n")},
+			{path: profilePath, content: []byte("{}\n")},
+		})
+	}()
+	select {
+	case err := <-published:
+		t.Fatalf("publication must wait for the lock holder, got %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	assert.NoFileExists(t, promptPath, "a blocked publication must not have written anything")
+
+	release()
+	select {
+	case err := <-published:
+		require.NoError(t, err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("publication did not proceed after the lock was released")
+	}
+	assert.FileExists(t, promptPath)
+	assert.FileExists(t, profilePath)
+	// The lock is released with the publication, leaving no file behind.
+	assert.NoFileExists(t, filepath.Join(outputDir, publishLockFileName))
+}
+
+// TestPublishFilesReportsStuckLockHolder: a lock left behind by a killed run
+// fails the publication with an actionable message instead of hanging or
+// publishing over the other process.
+func TestPublishFilesReportsStuckLockHolder(t *testing.T) {
+	previous := publishLockTimeout
+	publishLockTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { publishLockTimeout = previous })
+
+	outputDir := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(outputDir, publishLockFileName), []byte("pid=424242 since=earlier\n"), 0o644))
+	err := publishFiles([]stagedFile{
+		{path: filepath.Join(outputDir, candidateProfileFileName), content: []byte("{}\n")},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pid=424242")
+	assert.Contains(t, err.Error(), "delete the lock file")
+	assert.NoFileExists(t, filepath.Join(outputDir, candidateProfileFileName))
+}
+
+// TestPublishFilesLocksEveryDirectoryOnce: a publication spanning the output
+// dir and the baseline dir locks both, and takes one lock per directory even
+// when several files share it.
+func TestPublishFilesLocksEveryDirectoryOnce(t *testing.T) {
+	outputDir := t.TempDir()
+	baselineDir := t.TempDir()
+	release, err := lockPublishDirs([]stagedFile{
+		{path: filepath.Join(outputDir, candidatePromptFileName)},
+		{path: filepath.Join(outputDir, candidateProfileFileName)},
+		{path: filepath.Join(baselineDir, baselineProfileFileName)},
+	})
+	require.NoError(t, err)
+	assert.FileExists(t, filepath.Join(outputDir, publishLockFileName))
+	assert.FileExists(t, filepath.Join(baselineDir, publishLockFileName))
+	release()
+	assert.NoFileExists(t, filepath.Join(outputDir, publishLockFileName))
+	assert.NoFileExists(t, filepath.Join(baselineDir, publishLockFileName))
+}
+
 // selectedRoundProfileJSON serializes the gate-selected round's raw engine
 // profile — the round-relative override set before the pipeline merges it
 // with the inherited baseline profile for publication.

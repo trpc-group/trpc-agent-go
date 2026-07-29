@@ -113,6 +113,11 @@ func reportFixture(t *testing.T, accepted bool) (Options, *Result) {
 					{Category: CauseFinalResponseMismatch, Metric: "final_response_avg_score", Evidence: "多行\n证据\n文本", DerivedFrom: CauseToolCallError},
 				},
 			},
+			{
+				EvalSetID: "validation", EvalCaseID: "val_gen",
+				RootCauses: []FailureCause{{Category: CauseFinalResponseMismatch, Metric: "final_response_avg_score", Evidence: "回复缺少订单金额"}},
+				Chain:      []FailureCause{{Category: CauseFinalResponseMismatch, Metric: "final_response_avg_score", Evidence: "回复缺少订单金额"}},
+			},
 		},
 		Candidates:           []Candidate{candidate},
 		CandidatePrompt:      prompt,
@@ -195,9 +200,16 @@ func TestReportJSONKeyFields(t *testing.T) {
 		assert.Contains(t, rule, key)
 	}
 
+	// Attribution counts are per dataset: the comparison pair covers
+	// validation, the train baseline stands on its own.
 	attribution := decoded["attribution"].(map[string]any)
 	baselineCounts := attribution["baselineCounts"].(map[string]any)
-	assert.EqualValues(t, 1, baselineCounts[string(CauseToolCallError)])
+	assert.EqualValues(t, 1, baselineCounts[string(CauseFinalResponseMismatch)])
+	assert.NotContains(t, baselineCounts, string(CauseToolCallError))
+	baselineTrainCounts := attribution["baselineTrainCounts"].(map[string]any)
+	assert.EqualValues(t, 1, baselineTrainCounts[string(CauseToolCallError)])
+	candidateCounts := attribution["candidateCounts"].(map[string]any)
+	assert.EqualValues(t, 1, candidateCounts[string(CauseFinalResponseMismatch)])
 
 	cost := decoded["cost"].(map[string]any)
 	total := cost["total"].(map[string]any)
@@ -299,6 +311,39 @@ func TestMarkdownCodeContainsBacktickRuns(t *testing.T) {
 	assert.Equal(t, `'/tmp/out'\''x'`, strings.Trim(markdownCode(shellQuote("/tmp/out'x")), "`"))
 	// Newlines would end the list item carrying the command.
 	assert.Equal(t, "`a b`", markdownCode("a\nb"))
+}
+
+// TestReportAttributionComparesOneDataset locks the comparison scope: the
+// before/after pair covers validation, the only set both sides are attributed
+// on. Baseline train failures have no candidate counterpart, so mixing them in
+// would show an inflated baseline against an unchanged candidate side; they are
+// reported on their own instead.
+func TestReportAttributionComparesOneDataset(t *testing.T) {
+	opts, result := reportFixture(t, true)
+	report := BuildReport(opts, result)
+
+	require.Len(t, report.Attribution.Baseline, 1)
+	assert.Equal(t, "validation", report.Attribution.Baseline[0].EvalSetID)
+	require.Len(t, report.Attribution.Candidate, 1)
+	assert.Equal(t, "validation", report.Attribution.Candidate[0].EvalSetID)
+	require.Len(t, report.Attribution.BaselineTrain, 1)
+	assert.Equal(t, "train", report.Attribution.BaselineTrain[0].EvalSetID)
+	// Same dataset, same size on both sides of the comparison.
+	assert.Equal(t, 1, report.Attribution.BaselineCounts[CauseFinalResponseMismatch])
+	assert.Equal(t, 1, report.Attribution.CandidateCounts[CauseFinalResponseMismatch])
+	assert.Zero(t, report.Attribution.BaselineCounts[CauseToolCallError],
+		"a train-only root cause must not count against the candidate")
+	assert.Equal(t, 1, report.Attribution.BaselineTrainCounts[CauseToolCallError])
+
+	markdown, err := RenderMarkdown(report)
+	require.NoError(t, err)
+	assert.Contains(t, markdown, "| 类别 | validation baseline | validation 候选 | train baseline |")
+	// The train-only category still renders, with an empty candidate column.
+	assert.Contains(t, markdown, "| tool_call_error | 0 | 0 | 1 |")
+	assert.Contains(t, markdown, "| final_response_mismatch | 1 | 1 | 0 |")
+	assert.Contains(t, markdown, "[baseline/validation] validation/val_gen")
+	assert.Contains(t, markdown, "[候选/validation] validation/val_protected")
+	assert.Contains(t, markdown, "[baseline/train] train/train_fix")
 }
 
 // TestReportMarkdownRejectPath asserts the reject wording, overfitting call

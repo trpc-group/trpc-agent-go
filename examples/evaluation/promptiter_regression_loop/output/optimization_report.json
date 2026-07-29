@@ -1,10 +1,10 @@
 {
-  "runId": "run-20260709-192920.108723000",
+  "runId": "run-20260729-231250.471085000",
   "mode": "fake",
   "seed": 20260705,
-  "startedAt": "2026-07-09T19:29:20.1233451+08:00",
-  "finishedAt": "2026-07-09T19:29:20.1574186+08:00",
-  "duration": "34ms",
+  "startedAt": "2026-07-29T23:12:50.471304+08:00",
+  "finishedAt": "2026-07-29T23:12:50.492345+08:00",
+  "duration": "21ms",
   "models": {
     "aggregator": "fake pass-through aggregator",
     "backwarder": "fake deterministic backwarder",
@@ -213,14 +213,63 @@
   },
   "attribution": {
     "baselineCounts": {
-      "final_response_mismatch": 1,
-      "tool_argument_error": 1,
-      "tool_call_error": 2
+      "tool_call_error": 1
     },
     "candidateCounts": {
       "final_response_mismatch": 1
     },
+    "baselineTrainCounts": {
+      "final_response_mismatch": 1,
+      "tool_argument_error": 1,
+      "tool_call_error": 1
+    },
     "baseline": [
+      {
+        "evalSetId": "validation",
+        "evalCaseId": "val_01_generalize_tool_and_format",
+        "rootCauses": [
+          {
+            "category": "tool_call_error",
+            "metric": "tool_trajectory_avg_score",
+            "evidence": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)"
+          }
+        ],
+        "chain": [
+          {
+            "category": "tool_call_error",
+            "metric": "tool_trajectory_avg_score",
+            "evidence": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)"
+          },
+          {
+            "category": "final_response_mismatch",
+            "metric": "final_response_avg_score",
+            "evidence": "final response mismatch: text mismatch: source 您的订单 ORD-1004 已收到，我们会尽快安排。 and target 订单查询结果：订单 ORD-1004 当前状态为运输中，订单金额 449.00 元，预计送达时间 2026-07-09。 do not match",
+            "derivedFrom": "tool_call_error"
+          }
+        ]
+      }
+    ],
+    "candidate": [
+      {
+        "evalSetId": "validation",
+        "evalCaseId": "val_02_protected_format",
+        "rootCauses": [
+          {
+            "category": "final_response_mismatch",
+            "metric": "final_response_avg_score",
+            "evidence": "final response mismatch: text mismatch: source 订单查询结果：**订单 ORD-1005**\n- 状态：已取消\n- 退款金额：199.00 元 and target 订单 ORD-1005 已取消，退款 199.00 元将在 3 个工作日内原路退回。 do not match"
+          }
+        ],
+        "chain": [
+          {
+            "category": "final_response_mismatch",
+            "metric": "final_response_avg_score",
+            "evidence": "final response mismatch: text mismatch: source 订单查询结果：**订单 ORD-1005**\n- 状态：已取消\n- 退款金额：199.00 元 and target 订单 ORD-1005 已取消，退款 199.00 元将在 3 个工作日内原路退回。 do not match"
+          }
+        ]
+      }
+    ],
+    "baselineTrain": [
       {
         "evalSetId": "train",
         "evalCaseId": "train_01_response_completeness",
@@ -286,50 +335,6 @@
             "derivedFrom": "tool_argument_error"
           }
         ]
-      },
-      {
-        "evalSetId": "validation",
-        "evalCaseId": "val_01_generalize_tool_and_format",
-        "rootCauses": [
-          {
-            "category": "tool_call_error",
-            "metric": "tool_trajectory_avg_score",
-            "evidence": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)"
-          }
-        ],
-        "chain": [
-          {
-            "category": "tool_call_error",
-            "metric": "tool_trajectory_avg_score",
-            "evidence": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)"
-          },
-          {
-            "category": "final_response_mismatch",
-            "metric": "final_response_avg_score",
-            "evidence": "final response mismatch: text mismatch: source 您的订单 ORD-1004 已收到，我们会尽快安排。 and target 订单查询结果：订单 ORD-1004 当前状态为运输中，订单金额 449.00 元，预计送达时间 2026-07-09。 do not match",
-            "derivedFrom": "tool_call_error"
-          }
-        ]
-      }
-    ],
-    "candidate": [
-      {
-        "evalSetId": "validation",
-        "evalCaseId": "val_02_protected_format",
-        "rootCauses": [
-          {
-            "category": "final_response_mismatch",
-            "metric": "final_response_avg_score",
-            "evidence": "final response mismatch: text mismatch: source 订单查询结果：**订单 ORD-1005**\n- 状态：已取消\n- 退款金额：199.00 元 and target 订单 ORD-1005 已取消，退款 199.00 元将在 3 个工作日内原路退回。 do not match"
-          }
-        ],
-        "chain": [
-          {
-            "category": "final_response_mismatch",
-            "metric": "final_response_avg_score",
-            "evidence": "final response mismatch: text mismatch: source 订单查询结果：**订单 ORD-1005**\n- 状态：已取消\n- 退款金额：199.00 元 and target 订单 ORD-1005 已取消，退款 199.00 元将在 3 个工作日内原路退回。 do not match"
-          }
-        ]
       }
     ]
   },
@@ -343,7 +348,31 @@
         "baselineScore": 0,
         "candidatePass": true,
         "candidateScore": 1,
-        "scoreDelta": 1
+        "scoreDelta": 1,
+        "baselineAttribution": {
+          "evalSetId": "validation",
+          "evalCaseId": "val_01_generalize_tool_and_format",
+          "rootCauses": [
+            {
+              "category": "tool_call_error",
+              "metric": "tool_trajectory_avg_score",
+              "evidence": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)"
+            }
+          ],
+          "chain": [
+            {
+              "category": "tool_call_error",
+              "metric": "tool_trajectory_avg_score",
+              "evidence": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)"
+            },
+            {
+              "category": "final_response_mismatch",
+              "metric": "final_response_avg_score",
+              "evidence": "final response mismatch: text mismatch: source 您的订单 ORD-1004 已收到，我们会尽快安排。 and target 订单查询结果：订单 ORD-1004 当前状态为运输中，订单金额 449.00 元，预计送达时间 2026-07-09。 do not match",
+              "derivedFrom": "tool_call_error"
+            }
+          ]
+        }
       },
       {
         "evalSetId": "validation",
@@ -475,7 +504,7 @@
       {
         "name": "max_wall_clock",
         "passed": true,
-        "observed": "34ms",
+        "observed": "21ms",
         "threshold": "\u003c= 3m0s",
         "reason": "整个 pipeline 运行的墙钟预算"
       }
@@ -485,7 +514,7 @@
         "round": 1,
         "validationScore": 0.8333333333333334,
         "modelCalls": 11,
-        "wallClock": 11547400,
+        "wallClock": 4286458,
         "gatePassed": false,
         "selected": false,
         "rules": [
@@ -527,7 +556,7 @@
           {
             "name": "max_wall_clock",
             "passed": true,
-            "observed": "34ms",
+            "observed": "21ms",
             "threshold": "\u003c= 3m0s",
             "reason": "整个 pipeline 运行的墙钟预算"
           }
@@ -537,7 +566,7 @@
         "round": 2,
         "validationScore": 0.8333333333333334,
         "modelCalls": 11,
-        "wallClock": 8523300,
+        "wallClock": 7819083,
         "gatePassed": false,
         "selected": false,
         "rules": [
@@ -579,7 +608,7 @@
           {
             "name": "max_wall_clock",
             "passed": true,
-            "observed": "34ms",
+            "observed": "21ms",
             "threshold": "\u003c= 3m0s",
             "reason": "整个 pipeline 运行的墙钟预算"
           }
@@ -597,7 +626,7 @@
       "engineAccepted": true,
       "engineReason": "candidate score gain satisfies acceptance policy",
       "modelCalls": 11,
-      "wallClock": "12ms"
+      "wallClock": "4ms"
     },
     {
       "round": 2,
@@ -606,7 +635,7 @@
       "engineAccepted": false,
       "engineReason": "candidate score gain does not satisfy acceptance policy",
       "modelCalls": 11,
-      "wallClock": "9ms",
+      "wallClock": "8ms",
       "stopReason": "max rounds reached"
     }
   ],
@@ -626,9 +655,9 @@
       "completionTokens": 611
     },
     "stageDurations": {
-      "s1_baseline_train": "8ms",
+      "s1_baseline_train": "4ms",
       "s2_attribution": "0s",
-      "s3_optimization": "23ms",
+      "s3_optimization": "14ms",
       "s4_delta": "0s",
       "s5_gate": "0s"
     }
