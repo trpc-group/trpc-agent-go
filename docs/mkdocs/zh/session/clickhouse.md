@@ -11,6 +11,7 @@ ClickHouse 存储适用于生产环境和海量数据场景，利用 ClickHouse 
 - ✅ 数据压缩
 - ✅ 支持批量写入
 - ✅ 支持表前缀
+- ✅ 持久化 Track 事件
 
 ## 配置选项
 
@@ -160,6 +161,7 @@ CREATE TABLE IF NOT EXISTS session_events (
     session_id  String,
     event_id    String,
     event       JSON COMMENT 'Event data in JSON format',
+    event_raw   String COMMENT '用于无损回放元数据的原始事件 JSON',
     extra_data  JSON COMMENT 'Additional metadata',
     created_at  DateTime64(6),
     updated_at  DateTime64(6),
@@ -171,6 +173,35 @@ ORDER BY (app_name, user_id, session_id, event_id)
 SETTINGS allow_nullable_key = 1
 COMMENT 'Session events table';
 ```
+
+服务会为已有的 `session_events` 表自动添加 `event_raw`。该列保留原始扩展 key 与 metadata，避免 ClickHouse JSON 路径规范化改写它们。
+
+### session_track_events
+
+```sql
+CREATE TABLE IF NOT EXISTS session_track_events (
+    app_name    String,
+    user_id     String,
+    session_id  String,
+    track       String,
+    event_index UInt64,
+    event_id    String COMMENT '并发追加时保持行唯一的不可变标识',
+    event       String COMMENT '以 JSON 文本编码的 track 事件',
+    created_at  DateTime64(6),
+    updated_at  DateTime64(6),
+    deleted_at  Nullable(DateTime64(6)) COMMENT '软删除时间'
+) ENGINE = ReplacingMergeTree(updated_at)
+PARTITION BY (app_name, cityHash64(user_id) % 64)
+ORDER BY (app_name, user_id, session_id, track, event_index, event_id)
+SETTINGS allow_nullable_key = 1
+COMMENT 'Session track events table';
+```
+
+`event_index` 保留同一 track 内串行追加的写入顺序。多个独立 Service 实例
+同时追加时可能得到相同的下一个索引；`event_id` 保证每一行互不覆盖，并提供
+确定性的并列排序。此类跨实例并发追加不保证严格的实时先后顺序。Track 事件与
+session 共用生命周期：删除或过期 session 时会写入墓碑版本，之后可由
+`WithDeletedRetention` 配置的清理任务执行物理删除。
 
 ### session_summaries
 

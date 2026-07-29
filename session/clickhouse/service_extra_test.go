@@ -151,16 +151,24 @@ func TestService_Cleanup_SoftDelete_Errors(t *testing.T) {
 
 	// Case 2: Batch Error
 	expAt := now.Add(-time.Hour)
+	queryCount := 0
 	mockCli.queryFunc = func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+		queryCount++
 		return newMockRows([][]any{
 			{"app", "user", "sess", "{}", now, &expAt},
 		}), nil
+	}
+	execCount := 0
+	mockCli.execFunc = func(context.Context, string, ...any) error {
+		execCount++
+		return nil
 	}
 	mockCli.batchInsertFunc = func(ctx context.Context, query string, fn storage.BatchFn, opts ...driver.PrepareBatchOption) error {
 		return assert.AnError
 	}
 	s.softDeleteExpiredSessions(ctx, now)
-	// Should log error
+	assert.Equal(t, 1, queryCount)
+	assert.Zero(t, execCount)
 }
 
 func TestNewService_InitDB_Error(t *testing.T) {

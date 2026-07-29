@@ -31,7 +31,7 @@ func (s *Service) getSession(
 	// Query session state using FINAL for deduplication
 	var sessState *SessionState
 	rows, err := s.chClient.Query(ctx,
-		fmt.Sprintf(`SELECT state, created_at, updated_at FROM %s FINAL 
+		fmt.Sprintf(`SELECT toJSONString(state), created_at, updated_at FROM %s FINAL
 			WHERE app_name = ? AND user_id = ? AND session_id = ? 
 			AND (expires_at IS NULL OR expires_at > ?) AND deleted_at IS NULL`, s.tableSessionStates),
 		key.AppName, key.UserID, key.SessionID, time.Now())
@@ -48,7 +48,7 @@ func (s *Service) getSession(
 			return nil, err
 		}
 		sessState = &SessionState{}
-		if err := json.Unmarshal([]byte(stateStr), sessState); err != nil {
+		if err := unmarshalStoredJSON(stateStr, sessState); err != nil {
 			return nil, fmt.Errorf("unmarshal session state failed: %w", err)
 		}
 		sessState.CreatedAt = createdAt
@@ -101,6 +101,13 @@ func (s *Service) getSession(
 		session.WithSessionCreatedAt(sessState.CreatedAt),
 		session.WithSessionUpdatedAt(sessState.UpdatedAt),
 	)
+	tracks, err := s.getTrackEvents(ctx, key, sessState.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	if len(tracks) > 0 {
+		sess.Tracks = tracks
+	}
 
 	return mergeState(appState, userState, sess), nil
 }
@@ -128,7 +135,7 @@ func (s *Service) listSessions(
 
 	// Query all session states for this user using FINAL
 	var sessStates []*SessionState
-	listQuery := fmt.Sprintf(`SELECT session_id, state, created_at, updated_at FROM %s FINAL
+	listQuery := fmt.Sprintf(`SELECT session_id, toJSONString(state), created_at, updated_at FROM %s FINAL
 			WHERE app_name = ? AND user_id = ?
 			AND (expires_at IS NULL OR expires_at > ?)
 			AND deleted_at IS NULL
@@ -154,7 +161,7 @@ func (s *Service) listSessions(
 			return nil, err
 		}
 		var state SessionState
-		if err := json.Unmarshal([]byte(stateStr), &state); err != nil {
+		if err := unmarshalStoredJSON(stateStr, &state); err != nil {
 			return nil, fmt.Errorf("unmarshal session state failed: %w", err)
 		}
 		state.ID = sessionID
@@ -196,6 +203,12 @@ func (s *Service) listSessions(
 		return nil, fmt.Errorf("get events list failed: %w", err)
 	}
 
+	// Batch load track events for all sessions
+	tracksList, err := s.getTrackEventsList(ctx, sessionKeys, sessionCreatedAts)
+	if err != nil {
+		return nil, fmt.Errorf("get track events list failed: %w", err)
+	}
+
 	// Batch load summaries for all sessions
 	summariesList, err := s.getSummariesList(ctx, sessionKeys, sessionCreatedAts)
 	if err != nil {
@@ -216,6 +229,9 @@ func (s *Service) listSessions(
 			session.WithSessionCreatedAt(sessState.CreatedAt),
 			session.WithSessionUpdatedAt(sessState.UpdatedAt),
 		)
+		if len(tracksList[i]) > 0 {
+			sess.Tracks = tracksList[i]
+		}
 		sessions = append(sessions, mergeState(appState, userState, sess))
 	}
 
@@ -230,7 +246,7 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, evt *event.Even
 	var stateStr string
 	var createdAt time.Time
 	rows, err := s.chClient.Query(ctx,
-		fmt.Sprintf(`SELECT state, created_at FROM %s FINAL
+		fmt.Sprintf(`SELECT toJSONString(state), created_at FROM %s FINAL
 		WHERE app_name = ? AND user_id = ? AND session_id = ?
 		AND deleted_at IS NULL`, s.tableSessionStates),
 		key.AppName, key.UserID, key.SessionID)
@@ -248,7 +264,7 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, evt *event.Even
 	}
 
 	var sessState SessionState
-	if err := json.Unmarshal([]byte(stateStr), &sessState); err != nil {
+	if err := unmarshalStoredJSON(stateStr, &sessState); err != nil {
 		return fmt.Errorf("unmarshal session state failed: %w", err)
 	}
 
@@ -285,9 +301,9 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, evt *event.Even
 	if evt.Response != nil && !evt.IsPartial && evt.IsValidContent() {
 		eventNowMicro := time.Now().UnixMicro()
 		err = s.chClient.Exec(ctx,
-			fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, event_id, event, extra_data, created_at, updated_at)
-				VALUES (?, ?, ?, ?, ?, ?, fromUnixTimestamp64Micro(?), fromUnixTimestamp64Micro(?))`, s.tableSessionEvents),
-			key.AppName, key.UserID, key.SessionID, evt.ID, string(eventBytes), "{}", eventNowMicro, eventNowMicro)
+			fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, event_id, event, event_raw, extra_data, created_at, updated_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, fromUnixTimestamp64Micro(?), fromUnixTimestamp64Micro(?))`, s.tableSessionEvents),
+			key.AppName, key.UserID, key.SessionID, evt.ID, string(eventBytes), string(eventBytes), "{}", eventNowMicro, eventNowMicro)
 		if err != nil {
 			return fmt.Errorf("insert event failed: %w", err)
 		}
@@ -306,7 +322,7 @@ func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error
 	var createdAt, updatedAt time.Time
 	var expiresAt *time.Time
 	rows, err := s.chClient.Query(ctx,
-		fmt.Sprintf(`SELECT state, created_at, updated_at, expires_at FROM %s FINAL
+		fmt.Sprintf(`SELECT toJSONString(state), created_at, updated_at, expires_at FROM %s FINAL
 			WHERE app_name = ? AND user_id = ? AND session_id = ?
 			AND deleted_at IS NULL`, s.tableSessionStates),
 		key.AppName, key.UserID, key.SessionID)
@@ -337,8 +353,8 @@ func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error
 	// Soft delete session events
 	// Use INSERT INTO ... SELECT ... for batch soft delete
 	err = s.chClient.Exec(ctx,
-		fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, event_id, event, extra_data, created_at, updated_at, expires_at, deleted_at)
-			SELECT app_name, user_id, session_id, event_id, event, extra_data, created_at, ? AS updated_at, expires_at, ? AS deleted_at
+		fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, event_id, event, event_raw, extra_data, created_at, updated_at, expires_at, deleted_at)
+			SELECT app_name, user_id, session_id, event_id, event, event_raw, extra_data, created_at, ? AS updated_at, expires_at, ? AS deleted_at
 			FROM %s FINAL
 			WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
 			s.tableSessionEvents, s.tableSessionEvents),
@@ -360,6 +376,30 @@ func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error
 		return fmt.Errorf("soft delete session summaries failed: %w", err)
 	}
 
+	if err := s.softDeleteSessionTrackEvents(ctx, key, now); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (s *Service) softDeleteSessionTrackEvents(
+	ctx context.Context,
+	key session.Key,
+	now time.Time,
+) error {
+	nowMicro := now.UTC().UnixMicro()
+	err := s.chClient.Exec(ctx,
+		fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, track, event_index, event_id, event, created_at, updated_at, deleted_at)
+			SELECT app_name, user_id, session_id, track, event_index, event_id, event, created_at,
+				fromUnixTimestamp64Micro(?) AS updated_at, fromUnixTimestamp64Micro(?) AS deleted_at
+			FROM %s FINAL
+			WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
+			s.tableSessionTrackEvents, s.tableSessionTrackEvents),
+		nowMicro, nowMicro, key.AppName, key.UserID, key.SessionID)
+	if err != nil {
+		return fmt.Errorf("soft delete session track events failed: %w", err)
+	}
 	return nil
 }
 
@@ -387,7 +427,7 @@ func (s *Service) getEventsList(
 		args = append(args, key.AppName, key.UserID, key.SessionID, sessionCreatedAts[i])
 	}
 
-	query := fmt.Sprintf(`SELECT app_name, user_id, session_id, event FROM %s FINAL
+	query := fmt.Sprintf(`SELECT app_name, user_id, session_id, if(event_raw != '', event_raw, toJSONString(event)) FROM %s FINAL
 		WHERE (%s)
 		AND deleted_at IS NULL
 		ORDER BY app_name, user_id, session_id, created_at ASC`,
@@ -409,7 +449,7 @@ func (s *Service) getEventsList(
 			return nil, err
 		}
 		var evt event.Event
-		if err := json.Unmarshal([]byte(eventStr), &evt); err != nil {
+		if err := unmarshalStoredJSON(eventStr, &evt); err != nil {
 			return nil, fmt.Errorf("unmarshal event failed: %w", err)
 		}
 		key := fmt.Sprintf("%s:%s:%s", appName, userID, sessionID)
@@ -443,7 +483,7 @@ func (s *Service) getSummary(
 	summaries := make(map[string]*session.Summary)
 
 	rows, err := s.chClient.Query(ctx,
-		fmt.Sprintf(`SELECT filter_key, summary FROM %s FINAL
+		fmt.Sprintf(`SELECT filter_key, toJSONString(summary) FROM %s FINAL
 			WHERE app_name = ? AND user_id = ? AND session_id = ?
 			AND updated_at >= ?
 			AND (expires_at IS NULL OR expires_at > ?)
@@ -462,7 +502,7 @@ func (s *Service) getSummary(
 			return nil, err
 		}
 		var sum session.Summary
-		if err := json.Unmarshal([]byte(summaryStr), &sum); err != nil {
+		if err := unmarshalStoredJSON(summaryStr, &sum); err != nil {
 			return nil, fmt.Errorf("unmarshal summary failed: %w", err)
 		}
 		summaries[filterKey] = &sum
@@ -497,7 +537,7 @@ func (s *Service) getSummariesList(
 
 	// Query all summaries for this user, filter by session createdAt in memory
 	rows, err := s.chClient.Query(ctx,
-		fmt.Sprintf(`SELECT session_id, filter_key, summary, updated_at FROM %s FINAL
+		fmt.Sprintf(`SELECT session_id, filter_key, toJSONString(summary), updated_at FROM %s FINAL
 			WHERE app_name = ? AND user_id = ?
 			AND (expires_at IS NULL OR expires_at > ?)
 			AND deleted_at IS NULL`, s.tableSessionSummaries),
@@ -526,7 +566,7 @@ func (s *Service) getSummariesList(
 		}
 
 		var sum session.Summary
-		if err := json.Unmarshal([]byte(summaryStr), &sum); err != nil {
+		if err := unmarshalStoredJSON(summaryStr, &sum); err != nil {
 			return nil, fmt.Errorf("unmarshal summary failed: %w", err)
 		}
 		if summariesMap[sessionID] == nil {

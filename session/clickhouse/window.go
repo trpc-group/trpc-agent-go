@@ -11,7 +11,6 @@ package clickhouse
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -149,7 +148,7 @@ func (s *Service) loadWindowAnchor(
 	rows, err := s.chClient.Query(
 		ctx,
 		fmt.Sprintf(
-			`SELECT event_id, event, created_at FROM %s FINAL
+			`SELECT event_id, if(event_raw != '', event_raw, toJSONString(event)), created_at FROM %s FINAL
 WHERE app_name = ? AND user_id = ? AND session_id = ?
 AND created_at >= ?
 AND event_id = ?
@@ -254,7 +253,7 @@ func (s *Service) queryWindowNeighborBatch(
 	rows, err := s.chClient.Query(
 		ctx,
 		fmt.Sprintf(
-			`SELECT event_id, event, created_at FROM %s FINAL
+			`SELECT event_id, if(event_raw != '', event_raw, toJSONString(event)), created_at FROM %s FINAL
 WHERE app_name = ? AND user_id = ? AND session_id = ?
 AND created_at >= ?
 AND deleted_at IS NULL
@@ -305,7 +304,7 @@ func scanWindowRow(rows interface {
 		return nil, fmt.Errorf("scan event window entry: %w", err)
 	}
 	var evt event.Event
-	if err := json.Unmarshal([]byte(eventString), &evt); err != nil {
+	if err := unmarshalStoredJSON(eventString, &evt); err != nil {
 		return nil, fmt.Errorf("unmarshal event window entry: %w", err)
 	}
 	return &persistedWindowEntry{

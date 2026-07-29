@@ -212,7 +212,10 @@ func (s *Service) CreateSession(
 		key.SessionID = uuid.New().String()
 	}
 
-	now := time.Now()
+	// PostgreSQL stores timestamps without timezone information. Persist session
+	// lifecycle timestamps in UTC so they remain comparable with event and
+	// summary timestamps after a database round trip.
+	now := time.Now().UTC()
 	sessState := &SessionState{
 		ID:        key.SessionID,
 		State:     make(session.StateMap),

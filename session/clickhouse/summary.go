@@ -124,7 +124,7 @@ func (s *Service) getPersistedSummary(
 	sessionCreatedAt time.Time,
 ) (*session.Summary, error) {
 	rows, err := s.chClient.Query(ctx,
-		fmt.Sprintf(`SELECT summary FROM %s FINAL
+		fmt.Sprintf(`SELECT toJSONString(summary) FROM %s FINAL
 			WHERE app_name = ? AND user_id = ? AND session_id = ? AND filter_key = ?
 			AND updated_at >= ?
 			AND (expires_at IS NULL OR expires_at > ?)
@@ -138,12 +138,12 @@ func (s *Service) getPersistedSummary(
 	if !rows.Next() {
 		return nil, nil
 	}
-	var summaryBytes []byte
-	if err := rows.Scan(&summaryBytes); err != nil {
+	var summaryData string
+	if err := rows.Scan(&summaryData); err != nil {
 		return nil, err
 	}
 	var sum session.Summary
-	if err := json.Unmarshal(summaryBytes, &sum); err != nil {
+	if err := unmarshalStoredJSON(summaryData, &sum); err != nil {
 		return nil, err
 	}
 	return &sum, nil
@@ -255,7 +255,7 @@ func (s *Service) GetSessionSummaryText(
 
 	var summaryText string
 	rows, err := s.chClient.Query(ctx,
-		fmt.Sprintf(`SELECT summary FROM %s FINAL
+		fmt.Sprintf(`SELECT toJSONString(summary) FROM %s FINAL
 		WHERE app_name = ? AND user_id = ? AND session_id = ? AND filter_key = ?
 		AND updated_at >= ?
 		AND (expires_at IS NULL OR expires_at > ?)
@@ -268,12 +268,12 @@ func (s *Service) GetSessionSummaryText(
 	defer rows.Close()
 
 	if rows.Next() {
-		var summaryBytes []byte
-		if err := rows.Scan(&summaryBytes); err != nil {
+		var summaryData string
+		if err := rows.Scan(&summaryData); err != nil {
 			return "", false
 		}
 		var sum session.Summary
-		if err := json.Unmarshal(summaryBytes, &sum); err != nil {
+		if err := unmarshalStoredJSON(summaryData, &sum); err != nil {
 			return "", false
 		}
 		summaryText = sum.Summary
@@ -282,7 +282,7 @@ func (s *Service) GetSessionSummaryText(
 	// If requested filterKey not found, try fallback to full-session summary.
 	if summaryText == "" && filterKey != session.SummaryFilterKeyAllContents {
 		rows2, err := s.chClient.Query(ctx,
-			fmt.Sprintf(`SELECT summary FROM %s FINAL
+			fmt.Sprintf(`SELECT toJSONString(summary) FROM %s FINAL
 			WHERE app_name = ? AND user_id = ? AND session_id = ? AND filter_key = ?
 			AND updated_at >= ?
 			AND (expires_at IS NULL OR expires_at > ?)
@@ -295,12 +295,12 @@ func (s *Service) GetSessionSummaryText(
 		defer rows2.Close()
 
 		if rows2.Next() {
-			var summaryBytes []byte
-			if err := rows2.Scan(&summaryBytes); err != nil {
+			var summaryData string
+			if err := rows2.Scan(&summaryData); err != nil {
 				return "", false
 			}
 			var sum session.Summary
-			if err := json.Unmarshal(summaryBytes, &sum); err != nil {
+			if err := unmarshalStoredJSON(summaryData, &sum); err != nil {
 				return "", false
 			}
 			summaryText = sum.Summary

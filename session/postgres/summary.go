@@ -166,7 +166,7 @@ func (s *Service) GetSessionSummaryText(
 		AND (expires_at IS NULL OR expires_at > $5)
 		AND updated_at >= $6
 		AND deleted_at IS NULL`, s.tableSessionSummaries),
-		key.AppName, key.UserID, key.SessionID, filterKey, time.Now(), sess.CreatedAt)
+		key.AppName, key.UserID, key.SessionID, filterKey, time.Now(), sess.CreatedAt.UTC())
 
 	if err == nil && summaryText != "" {
 		return summaryText, true
@@ -192,7 +192,7 @@ func (s *Service) GetSessionSummaryText(
 			AND (expires_at IS NULL OR expires_at > $5)
 			AND updated_at >= $6
 			AND deleted_at IS NULL`, s.tableSessionSummaries),
-			key.AppName, key.UserID, key.SessionID, session.SummaryFilterKeyAllContents, time.Now(), sess.CreatedAt)
+			key.AppName, key.UserID, key.SessionID, session.SummaryFilterKeyAllContents, time.Now(), sess.CreatedAt.UTC())
 		if err == nil && summaryText != "" {
 			return summaryText, true
 		}

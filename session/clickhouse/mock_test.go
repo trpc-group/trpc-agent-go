@@ -88,6 +88,7 @@ type mockRows struct {
 	data     [][]any
 	current  int
 	scanFunc func(dest ...any) error
+	err      error
 }
 
 func newMockRows(data [][]any) *mockRows {
@@ -139,7 +140,7 @@ func (m *mockRows) Close() error {
 }
 
 func (m *mockRows) Err() error {
-	return nil
+	return m.err
 }
 
 // mockBatch is a mock implementation of driver.Batch.
