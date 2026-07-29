@@ -532,10 +532,9 @@ func readConfiguredMetricNames(dataDir string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read configured metrics %s: %w", path, err)
 	}
-	var entries []struct {
-		MetricName string `json:"metricName"`
-	}
+	var entries []*metric.EvalMetric
 	decoder := json.NewDecoder(bytes.NewReader(content))
+	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&entries); err != nil {
 		return nil, fmt.Errorf("decode configured metrics %s: %w", path, err)
 	}
@@ -552,6 +551,9 @@ func readConfiguredMetricNames(dataDir string) ([]string, error) {
 	names := make([]string, 0, len(entries))
 	seen := make(map[string]struct{}, len(entries))
 	for i, entry := range entries {
+		if entry == nil {
+			return nil, fmt.Errorf("configured metric at index %d in %s is null", i, path)
+		}
 		name := strings.TrimSpace(entry.MetricName)
 		if name == "" {
 			return nil, fmt.Errorf("configured metric at index %d in %s has empty metricName", i, path)

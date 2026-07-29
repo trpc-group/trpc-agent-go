@@ -254,12 +254,70 @@ func TestReadConfiguredMetricNames(t *testing.T) {
   {
     "metricName": "final_response_avg_score",
     "evaluatorName": "final_response_avg_score",
-    "threshold": 1
+    "threshold": 1,
+    "criterion": {
+      "finalResponse": {
+        "text": {
+          "matchStrategy": "exact"
+        }
+      }
+    }
   }
 ]`))
 		names, err := readConfiguredMetricNames(dataDir)
 		require.NoError(t, err)
 		require.Equal(t, []string{"tool_trajectory_avg_score", "final_response_avg_score"}, names)
+	})
+
+	t.Run("misspelled threshold", func(t *testing.T) {
+		dataDir := t.TempDir()
+		writeMetricsFile(t, dataDir, []byte(`[
+  {
+    "metricName": "final_response_avg_score",
+    "evaluatorName": "final_response_avg_score",
+    "threshhold": 1
+  }
+]`))
+		_, err := readConfiguredMetricNames(dataDir)
+		require.ErrorContains(t, err, `unknown field "threshhold"`)
+	})
+
+	t.Run("unknown top-level field", func(t *testing.T) {
+		dataDir := t.TempDir()
+		writeMetricsFile(t, dataDir, []byte(`[
+  {
+    "metricName": "final_response_avg_score",
+    "unexpected": true
+  }
+]`))
+		_, err := readConfiguredMetricNames(dataDir)
+		require.ErrorContains(t, err, `unknown field "unexpected"`)
+	})
+
+	t.Run("unknown nested criterion field", func(t *testing.T) {
+		dataDir := t.TempDir()
+		writeMetricsFile(t, dataDir, []byte(`[
+  {
+    "metricName": "final_response_avg_score",
+    "criterion": {
+      "finalResponse": {
+        "text": {
+          "matchStrategyy": "exact"
+        }
+      }
+    }
+  }
+]`))
+		_, err := readConfiguredMetricNames(dataDir)
+		require.ErrorContains(t, err, `unknown field "matchStrategyy"`)
+	})
+
+	t.Run("null metric", func(t *testing.T) {
+		dataDir := t.TempDir()
+		writeMetricsFile(t, dataDir, []byte(`[null]`))
+		_, err := readConfiguredMetricNames(dataDir)
+		require.ErrorContains(t, err, "configured metric at index 0")
+		require.ErrorContains(t, err, "is null")
 	})
 
 	t.Run("missing file", func(t *testing.T) {
@@ -304,6 +362,42 @@ func TestReadConfiguredMetricNames(t *testing.T) {
 		_, err := readConfiguredMetricNames(dataDir)
 		require.ErrorContains(t, err, "decode configured metrics")
 	})
+
+	t.Run("multiple json values", func(t *testing.T) {
+		dataDir := t.TempDir()
+		writeMetricsFile(t, dataDir, []byte(`[] []`))
+		_, err := readConfiguredMetricNames(dataDir)
+		require.ErrorContains(t, err, "multiple JSON values")
+	})
+}
+
+func TestPipelinesRejectUnknownMetricFieldsBeforeRuntime(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "")
+	for _, mode := range []string{fakeMode, traceSmokeMode} {
+		t.Run(mode, func(t *testing.T) {
+			dataDir := t.TempDir()
+			copyDir(t, "./data", dataDir)
+			metricsPath := filepath.Join(dataDir, appName, sharedMetricFileName)
+			content, err := os.ReadFile(metricsPath)
+			require.NoError(t, err)
+			updated := bytes.Replace(content, []byte(`"threshold": 1`), []byte(`"threshhold": 1`), 1)
+			require.NotEqual(t, content, updated)
+			require.NoError(t, os.WriteFile(metricsPath, updated, 0o644))
+
+			outputDir := t.TempDir()
+			result, err := runPipeline(context.Background(), RunConfig{
+				Mode:       mode,
+				DataDir:    dataDir,
+				OutputDir:  outputDir,
+				PromptPath: "./config/baseline_prompt.txt",
+				ConfigPath: "./config/promptiter.json",
+			})
+			require.Nil(t, result)
+			require.ErrorContains(t, err, `unknown field "threshhold"`)
+			require.NoFileExists(t, filepath.Join(outputDir, "optimization_report.json"))
+			require.NoFileExists(t, filepath.Join(outputDir, "optimization_report.md"))
+		})
+	}
 }
 
 func TestRunFakePipelineFailsClosedWhenConfiguredMetricIsSkipped(t *testing.T) {
