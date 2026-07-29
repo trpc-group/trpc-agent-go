@@ -606,6 +606,57 @@ func TestWorkflowCallToolHonorsPermissionBoundaries(t *testing.T) {
 		require.Equal(t, "tool-1", sensitive.checkToolCallID)
 		require.Equal(t, "tool-1", sensitive.callToolCallID)
 	})
+
+	t.Run("empty nested id preserves inherited context id", func(t *testing.T) {
+		sensitive := &permissionTestTool{
+			name:     "sensitive",
+			decision: tool.AllowPermission(),
+		}
+		workflow, err := NewTool(
+			scriptedRuntime{run: func(
+				ctx context.Context,
+				handler CallHandler,
+			) (Result, error) {
+				raw, err := handler.HandleWorkflowCall(ctx, Call{
+					Kind: CallKindTool,
+					Name: "sensitive",
+					Args: json.RawMessage(`{"id":"42"}`),
+				})
+				return Result{Value: raw}, err
+			}},
+			[]agent.Agent{reviewer},
+			WithCodeCallableTools(sensitive),
+		)
+		require.NoError(t, err)
+
+		parent := agent.NewInvocation(
+			agent.WithInvocationSession(&session.Session{
+				ID: "session-1", AppName: "app", UserID: "user",
+			}),
+		)
+		const inheritedToolCallID = "outer-tool-call"
+		parentCtx := context.WithValue(
+			context.Background(),
+			tool.ContextKeyToolCallID{},
+			inheritedToolCallID,
+		)
+		_, err = workflow.Call(
+			agent.NewInvocationContext(parentCtx, parent),
+			[]byte(`{"code":"return None"}`),
+		)
+		require.NoError(t, err)
+		require.True(t, sensitive.called)
+		require.Equal(
+			t,
+			inheritedToolCallID,
+			sensitive.checkToolCallID,
+		)
+		require.Equal(
+			t,
+			inheritedToolCallID,
+			sensitive.callToolCallID,
+		)
+	})
 }
 
 func TestWorkflowChildAgentToolsHonorParentPermissionPolicy(t *testing.T) {

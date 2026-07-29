@@ -135,9 +135,10 @@ type AfterToolResultFinalizer func(
 ) (*AfterToolResult, error)
 
 const (
-	maxAfterToolResultFinalizers     = 1024
-	maxAfterToolResultFinalizerCalls = 1024
-	afterToolResultFinalizerCallTTL  = time.Minute
+	maxAfterToolResultFinalizers           = 1024
+	maxAfterToolResultFinalizerCalls       = 1024
+	afterToolResultFinalizerReservationTTL = 24 * time.Hour
+	afterToolResultFinalizerCompletionTTL  = time.Minute
 )
 
 type afterToolResultFinalizerEntry struct {
@@ -153,6 +154,8 @@ type afterToolResultFinalizerCallKey struct {
 type afterToolResultFinalizerCallBinding struct {
 	entry      afterToolResultFinalizerEntry
 	generation uint64
+	timerEpoch uint64
+	completed  bool
 	timer      *time.Timer
 }
 
@@ -163,6 +166,7 @@ var afterToolResultFinalizers = struct {
 	callsByToken  map[uint64]map[afterToolResultFinalizerCallKey]struct{}
 	next          uint64
 	nextCall      uint64
+	nextTimer     uint64
 	callCount     int
 }{
 	byDeclaration: make(map[*Declaration]afterToolResultFinalizerEntry),
@@ -262,16 +266,15 @@ func afterToolResultFinalizerFor(
 		index := completedAfterToolResultFinalizerCallBinding(
 			bindings,
 		)
-		if index < 0 {
-			return nil, false
+		if index >= 0 {
+			binding := bindings[index]
+			removeAfterToolResultFinalizerCallBindingLocked(
+				key,
+				binding.entry.token,
+				binding.generation,
+			)
+			return binding.entry.finalizer, true
 		}
-		binding := bindings[index]
-		removeAfterToolResultFinalizerCallBindingLocked(
-			key,
-			binding.entry.token,
-			binding.generation,
-		)
-		return binding.entry.finalizer, true
 	}
 	entry, ok :=
 		afterToolResultFinalizers.byDeclaration[args.Declaration]
@@ -284,6 +287,10 @@ func afterToolResultFinalizerFor(
 // expiry window for paths that do not run any after-tool callback. A retry may
 // bind the same source, target, and tool call id again, which refreshes the
 // reservation.
+//
+// A reservation is invisible to afterToolResultFinalizerFor until complete is
+// called. An abandoned reservation expires after a longer backstop TTL; complete
+// replaces that timer with the shorter post-execution TTL.
 //
 // The first after-tool callback chain consumes the binding and carries the
 // finalizer in its returned context, so later plugin or local callback chains
@@ -328,12 +335,23 @@ func BindAfterToolResultFinalizer(
 	}
 	afterToolResultFinalizers.nextCall++
 	generation := afterToolResultFinalizers.nextCall
+	afterToolResultFinalizers.nextTimer++
+	timerEpoch := afterToolResultFinalizers.nextTimer
+	binding := afterToolResultFinalizerCallBinding{
+		entry:      entry,
+		generation: generation,
+		timerEpoch: timerEpoch,
+	}
+	binding.timer = newAfterToolResultFinalizerCallTimer(
+		key,
+		entry.token,
+		generation,
+		timerEpoch,
+		afterToolResultFinalizerReservationTTL,
+	)
 	afterToolResultFinalizers.byCall[key] = append(
 		bindings,
-		afterToolResultFinalizerCallBinding{
-			entry:      entry,
-			generation: generation,
-		},
+		binding,
 	)
 	afterToolResultFinalizers.callCount++
 	afterToolResultFinalizers.callsByToken[entry.token][key] =
@@ -364,21 +382,68 @@ func afterToolResultFinalizerCompletion(
 				return
 			}
 			bindings := afterToolResultFinalizers.byCall[key]
-			bindings[index].timer = time.AfterFunc(
-				afterToolResultFinalizerCallTTL,
-				func() {
-					afterToolResultFinalizers.Lock()
-					defer afterToolResultFinalizers.Unlock()
-					removeAfterToolResultFinalizerCallBindingLocked(
-						key,
-						token,
-						generation,
-					)
-				},
-			)
+			if bindings[index].timer != nil {
+				bindings[index].timer.Stop()
+			}
+			afterToolResultFinalizers.nextTimer++
+			timerEpoch := afterToolResultFinalizers.nextTimer
+			bindings[index].completed = true
+			bindings[index].timerEpoch = timerEpoch
+			bindings[index].timer =
+				newAfterToolResultFinalizerCallTimer(
+					key,
+					token,
+					generation,
+					timerEpoch,
+					afterToolResultFinalizerCompletionTTL,
+				)
 			afterToolResultFinalizers.byCall[key] = bindings
 		})
 	}
+}
+
+func newAfterToolResultFinalizerCallTimer(
+	key afterToolResultFinalizerCallKey,
+	token uint64,
+	generation uint64,
+	timerEpoch uint64,
+	ttl time.Duration,
+) *time.Timer {
+	return time.AfterFunc(
+		ttl,
+		func() {
+			afterToolResultFinalizers.Lock()
+			defer afterToolResultFinalizers.Unlock()
+			expireAfterToolResultFinalizerCallBindingLocked(
+				key,
+				token,
+				generation,
+				timerEpoch,
+			)
+		},
+	)
+}
+
+func expireAfterToolResultFinalizerCallBindingLocked(
+	key afterToolResultFinalizerCallKey,
+	token uint64,
+	generation uint64,
+	timerEpoch uint64,
+) {
+	bindings := afterToolResultFinalizers.byCall[key]
+	index := afterToolResultFinalizerCallBindingIndex(
+		bindings,
+		token,
+		generation,
+	)
+	if index < 0 || bindings[index].timerEpoch != timerEpoch {
+		return
+	}
+	removeAfterToolResultFinalizerCallBindingLocked(
+		key,
+		token,
+		generation,
+	)
 }
 
 func removeAfterToolResultFinalizerCallLocked(
@@ -450,7 +515,7 @@ func completedAfterToolResultFinalizerCallBinding(
 	bindings []afterToolResultFinalizerCallBinding,
 ) int {
 	for i := len(bindings) - 1; i >= 0; i-- {
-		if bindings[i].timer != nil {
+		if bindings[i].completed {
 			return i
 		}
 	}

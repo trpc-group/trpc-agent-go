@@ -1031,6 +1031,55 @@ func TestRunAfterTool_DoesNotConsumeActiveDuplicateLease(
 	require.Equal(t, int64(2), finalizerCalls.Load())
 }
 
+func TestRunAfterTool_PendingBindingFallsBackToRegisteredDeclaration(
+	t *testing.T,
+) {
+	callbacks := tool.NewCallbacks()
+	source := &tool.Declaration{Name: "source"}
+	target := &tool.Declaration{Name: "target"}
+	register := func(
+		declaration *tool.Declaration,
+		value string,
+	) func() {
+		cleanup, err := tool.RegisterAfterToolResultFinalizer(
+			declaration,
+			func(
+				_ context.Context,
+				_ *tool.AfterToolArgs,
+				result *tool.AfterToolResult,
+			) (*tool.AfterToolResult, error) {
+				out := *result
+				out.CustomResult = value
+				return &out, nil
+			},
+		)
+		require.NoError(t, err)
+		return cleanup
+	}
+	cleanupSource := register(source, "source-finalizer")
+	defer cleanupSource()
+	cleanupTarget := register(target, "target-finalizer")
+	defer cleanupTarget()
+	_, err := tool.BindAfterToolResultFinalizer(
+		source,
+		target,
+		"call-1",
+	)
+	require.NoError(t, err)
+
+	result, err := callbacks.RunAfterTool(
+		context.Background(),
+		&tool.AfterToolArgs{
+			ToolCallID:  "call-1",
+			ToolName:    target.Name,
+			Declaration: target,
+			Result:      "original",
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "target-finalizer", result.CustomResult)
+}
+
 func TestRunAfterTool_BoundFinalizersIsolateDuplicateCallIDs(
 	t *testing.T,
 ) {
