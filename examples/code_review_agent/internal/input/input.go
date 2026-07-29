@@ -14,6 +14,7 @@ package input
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -48,7 +49,7 @@ func LoadFromRepoPath(path string) (*Input, error) {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") {
 			continue
 		}
-		data, err := os.ReadFile(path + "/" + entry.Name())
+		data, err := os.ReadFile(filepath.Join(path, entry.Name()))
 		if err != nil {
 			continue
 		}
@@ -87,7 +88,7 @@ func Snapshot(repoPath string) (map[string]string, error) {
 			continue
 		}
 		if strings.HasSuffix(entry.Name(), ".go") {
-			data, err := os.ReadFile(repoPath + "/" + entry.Name())
+			data, err := os.ReadFile(filepath.Join(repoPath, entry.Name()))
 			if err != nil {
 				continue
 			}

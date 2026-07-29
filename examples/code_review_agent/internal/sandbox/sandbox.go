@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os/exec"
 	"time"
 
@@ -79,8 +80,11 @@ func (e *Executor) runCheck(ctx context.Context, repoPath, mode string) *reviewm
 		return e.fakeRun(run)
 	case RuntimeContainer:
 		return e.containerRun(ctx, repoPath, mode, run)
-	default:
+	case RuntimeLocal:
 		return e.localRun(ctx, repoPath, "go", run, mode, "./...")
+	default:
+		run.Error = fmt.Sprintf("unsupported sandbox runtime: %s", e.runtime)
+		return run
 	}
 }
 
@@ -101,7 +105,11 @@ func (e *Executor) containerRun(
 
 	//nolint:gosec // intentional: repoPath mount is the sandbox's core function
 	cmd := exec.CommandContext(ctx, "docker", "run", "--rm",
-		"-v", repoPath+":/workspace",
+		"--network=none",
+		"--cap-drop=ALL",
+		"--read-only",
+		"--tmpfs", "/tmp:exec",
+		"-v", repoPath+":/workspace:ro",
 		e.containerImage,
 		"-mode", mode,
 		"-timeout", fmt.Sprintf("%d", timeoutSec),
@@ -153,24 +161,38 @@ func (e *Executor) localRun(
 	cmd := exec.CommandContext(ctx, command, args...)
 	cmd.Dir = repoPath
 
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		run.Error = fmt.Sprintf("stdout pipe: %v", err)
+		return run
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		run.Error = fmt.Sprintf("stderr pipe: %v", err)
+		return run
+	}
+	if err := cmd.Start(); err != nil {
+		run.Error = fmt.Sprintf("start: %v", err)
+		return run
+	}
+
 	start := time.Now()
-	output, err := cmd.CombinedOutput()
+	stdoutBytes, _ := io.ReadAll(io.LimitReader(stdout, e.outputLimit/2))
+	stderrBytes, _ := io.ReadAll(io.LimitReader(stderr, e.outputLimit/2))
+	_ = cmd.Wait()
 	run.Duration = time.Since(start)
 	run.DurationMs = run.Duration.Milliseconds()
 
-	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			run.TimedOut = true
-			run.Stderr = fmt.Sprintf("timeout after %s: %s", e.timeout, string(output))
-		} else if exitErr, ok := err.(*exec.ExitError); ok {
-			run.ExitCode = exitErr.ExitCode()
-			run.Stderr = string(output)
-		} else {
-			run.Error = err.Error()
-			run.Stderr = string(output)
-		}
-	} else {
-		run.Stdout = e.truncate(string(output))
+	if ctx.Err() == context.DeadlineExceeded {
+		run.TimedOut = true
+		run.Stderr = fmt.Sprintf("timeout after %s", e.timeout)
+		return run
+	}
+
+	run.Stdout = e.truncate(string(stdoutBytes))
+	run.Stderr = e.truncate(string(stderrBytes))
+	if cmd.ProcessState != nil {
+		run.ExitCode = cmd.ProcessState.ExitCode()
 	}
 	return run
 }
