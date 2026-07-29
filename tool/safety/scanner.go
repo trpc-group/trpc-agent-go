@@ -95,6 +95,7 @@ func (s *Scanner) Scan(_ context.Context, in ScanInput) ScanReport {
 	findings = append(findings, s.checkEnv(in)...)
 	findings = append(findings, s.checkTimeout(in)...)
 	findings = append(findings, s.checkStdin(in)...)
+	findings = append(findings, s.checkSessionMode(in)...)
 	findings = append(findings, s.checkInlineSecrets(in)...)
 
 	// Redact any secret that leaked into evidence so no plaintext survives.
@@ -114,13 +115,15 @@ func (s *Scanner) Scan(_ context.Context, in ScanInput) ScanReport {
 }
 
 // denyAllReport is returned by a fail-closed scanner: it denies every call.
+// The command text is omitted entirely rather than redacted: the REJECTED
+// policy's own secret patterns never compiled, so redacting with the default
+// patterns could echo exactly the organisation-specific secrets that policy
+// was written to mask.
 func (s *Scanner) denyAllReport(in ScanInput, start time.Time) ScanReport {
-	cmd, redacted := redactSecrets(commandText(in), s.policy.secrets)
 	report := ScanReport{
 		ToolName: in.ToolName,
 		Backend:  in.Backend,
-		Command:  cmd,
-		Redacted: redacted,
+		Redacted: strings.TrimSpace(commandText(in)) != "",
 		Findings: []Finding{{
 			RuleID:         RulePolicyInvalid,
 			Category:       CategoryShellBypass,
@@ -276,6 +279,31 @@ func (s *Scanner) checkStdin(in ScanInput) []Finding {
 	}
 	return []Finding{s.finding(RuleStdinProvided, CategoryShellBypass,
 		RiskMedium, decision, "stdin provided", "", rec)}
+}
+
+// checkSessionMode flags execution modes that return a live session instead of
+// a bounded result: background execution and interactive TTY/PTY. The session
+// outlives the static scan and can receive further input the guard never sees
+// (write_stdin is denied separately), so it requires review; the risk is
+// bumped on the host backend where the session lives on the real machine.
+func (s *Scanner) checkSessionMode(in ScanInput) []Finding {
+	var modes []string
+	if in.Background {
+		modes = append(modes, "background")
+	}
+	if in.TTY {
+		modes = append(modes, "tty")
+	}
+	if len(modes) == 0 {
+		return nil
+	}
+	risk := RiskMedium
+	if in.Backend == BackendHostExec {
+		risk = bumpRisk(risk)
+	}
+	return []Finding{s.finding(RuleHostLongSession, CategoryHostExecRisk,
+		risk, DecisionAsk, "mode="+strings.Join(modes, ","), "",
+		"Background/PTY execution returns a live session that outlives the static scan; review it and ensure cleanup.")}
 }
 
 // checkTimeout flags a requested timeout larger than the policy maximum.

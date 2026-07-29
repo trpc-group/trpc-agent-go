@@ -28,7 +28,7 @@ denied_path_patterns:
 network:
   # git counts as egress only for its remote subcommands (clone, fetch, pull,
   # push, ls-remote); local ones such as `git status` are left alone.
-  commands: [curl, wget, nc, ncat, ssh, scp, sftp, telnet, socat, git]
+  commands: [curl, wget, nc, ncat, ssh, scp, sftp, telnet, socat, git, rsync]
   allowed_domains: [github.com, proxy.golang.org, goproxy.cn, pkg.go.dev]
 
 dependency_install:

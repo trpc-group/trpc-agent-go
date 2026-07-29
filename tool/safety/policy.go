@@ -289,9 +289,10 @@ func DefaultPolicy() *Policy {
 // defaultNetworkCommands lists the executables treated as network clients. git
 // is included because its remote subcommands (clone/fetch/pull/push/ls-remote)
 // are egress just like curl; the network rule exempts git's purely local
-// subcommands so `git status` is unaffected (see gitIsNetworkOp).
+// subcommands so `git status` is unaffected (see gitIsNetworkOp). rsync is a
+// network client with a remote-shell escape (-e/--rsh) the guard must see.
 func defaultNetworkCommands() []string {
-	return []string{"curl", "wget", "nc", "ncat", "ssh", "scp", "sftp", "telnet", "socat", "git"}
+	return []string{"curl", "wget", "nc", "ncat", "ssh", "scp", "sftp", "telnet", "socat", "git", "rsync"}
 }
 
 func defaultDeniedCommands() []string {

@@ -34,7 +34,7 @@ point, it does not fork the stack:
 |---|---|
 | `internal/shellsafe` | The conservative command parser. `parsePipeline` calls `shellsafe.Parse` to get pipeline segments and to reject unsafe constructs (`$()`, redirection, subshells); the guard's command-runner deny set mirrors shellsafe's implicit-deny wrappers so both agree on what can smuggle execution past argv[0]. |
 | `tool.PermissionPolicy` | The integration seam. `safety.PermissionPolicy.CheckToolPermission` implements this interface, and the framework calls it in `internal/flow/processor/functioncall.go` **before** running any tool. A deny/ask verdict skips execution. |
-| `tool/workspaceexec` (`workspace_exec`) | A guarded backend: commands run in an isolated executor workspace with a scrubbed env. The guard scans its `command` argument; findings use the baseline risk weight. |
+| `tool/workspaceexec` (`workspace_exec`) | A guarded backend: commands run in an executor-defined workspace with a scrubbed env (container/e2b confine execution; the local executor does not). The guard scans its `command` argument; findings use the baseline risk weight. |
 | `tool/hostexec` (`exec_command`) | A guarded backend that runs on the **real host** shell (PTY, long sessions). The guard scans its `command`/`workdir` and weights host-risk rules one level higher because the blast radius is the machine, not a workspace. |
 | `codeexecutor` (local/container/e2b) | The isolation layer the guard complements. The guard runs *before* execution; the executor (ideally container/e2b) provides isolation, resource limits and syscall confinement *during* execution. The guard never replaces it. |
 | `telemetry` / OpenTelemetry | The observability sink. `SetSpanAttributes` records `tool.safety.decision`, `tool.safety.risk_level`, `tool.safety.rule_id` and `tool.safety.backend` on the active span; the JSONL audit trail is the post-hoc record. |
@@ -128,14 +128,18 @@ duplicating that enforcement. Use executor-level limits for real ceilings.
 
 | Aspect | `workspace_exec` | `exec_command` (hostexec) |
 |---|---|---|
-| Isolation | shared executor workspace (local/container/e2b) | **real host shell** in a base dir |
+| Isolation | **executor-defined**: container/e2b confine execution; the `local` executor is a plain host process (workdir-scoped only) | **real host shell** in a base dir |
 | Env hardening | scrubbed env + `CleanEnv` under policy mode | inherits host env |
 | PTY / long sessions | interactive sessions in the workspace | PTY on the host — process residue risk |
 | Guard weighting | baseline | host-risk rules bumped one level |
-| Blast radius | workspace files | host files/processes/network |
+| Blast radius | container/e2b: workspace files; `local`: host filesystem/processes/network | host files/processes/network |
 
+A "workspace" is a logical scope, not a sandbox: only the executor decides what
+is confined. `codeexecutor/local` runs an ordinary host process whose working
+directory is scoped but whose filesystem, process and network reach are not.
 Prefer `workspace_exec` on an isolating runtime (container/e2b) for untrusted
-work; reserve `exec_command` for trusted local automation.
+work; reserve `exec_command` — and the local executor — for trusted local
+automation.
 
 ## Why this is not a sandbox replacement
 

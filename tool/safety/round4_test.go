@@ -291,8 +291,11 @@ func TestWriteStdinSubmitAndWhitespaceGuarded(t *testing.T) {
 		`{"chars":"","submit":true}`,         // "submit" is an alias for append_newline
 		`{"chars":"  ","submit":true}`,
 	}
+	// Registered writers only: skill_write_stdin is NOT here — its launching
+	// skill_exec is not a recognised backend, so its writer passes through
+	// unclaimed too (see TestWriteStdinClaimsOnlyRegisteredWriters).
 	for _, args := range denied {
-		for _, name := range []string{"workspace_write_stdin", "hostexec_write_stdin", "skill_write_stdin"} {
+		for _, name := range []string{"write_stdin", "workspace_write_stdin", "hostexec_write_stdin"} {
 			d, _ := p.CheckToolPermission(context.Background(), &tool.PermissionRequest{
 				ToolName: name, Arguments: []byte(args),
 			})

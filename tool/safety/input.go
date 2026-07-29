@@ -23,12 +23,15 @@ package safety
 
 // Backend identifies which execution surface a scan targets. Some rules are
 // weighted more severely on the host backend, which runs on the real machine
-// rather than an isolated workspace.
+// rather than a workspace-scoped executor.
 type Backend string
 
 // Backend values.
 const (
-	// BackendWorkspaceExec is the isolated workspace_exec tool.
+	// BackendWorkspaceExec is the workspace_exec tool. Its confinement is
+	// whatever the configured executor provides: container/e2b isolate
+	// execution, while the local executor is a plain host process whose
+	// working directory — not its filesystem or network reach — is scoped.
 	BackendWorkspaceExec Backend = "workspace_exec"
 	// BackendHostExec is the hostexec exec_command tool (real host shell).
 	BackendHostExec Backend = "hostexec"
@@ -66,6 +69,11 @@ type ScanInput struct {
 	Env map[string]string
 	// TimeoutSec is the requested timeout in seconds (0 if unset).
 	TimeoutSec int
+	// Background reports the call requests background execution, which returns
+	// a live session rather than a bounded result.
+	Background bool
+	// TTY reports the call requests an interactive TTY/PTY session.
+	TTY bool
 }
 
 // Decision is the guard's verdict for a rule or an overall report. The zero

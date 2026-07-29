@@ -28,6 +28,8 @@ const (
 	RuleNetAllowedDomain   = "net.allowed_domain"
 	RuleNetUnknownTarget   = "net.unknown_target"
 	RuleNetRoutingOverride = "net.routing_override"
+	RuleNetConfigFile      = "net.config_file"
+	RuleNetCommandExec     = "net.command_exec"
 	RuleReverseShell       = "net.reverse_shell"
 	RuleUnsafeConstruct    = "shell.unsafe_construct"
 	RuleInterpreterInline  = "shell.interpreter_inline"
@@ -386,12 +388,28 @@ func (s *Scanner) network(base string, argv []string, seg, line string, in ScanI
 	if base == "git" && !gitIsNetworkOp(argv) {
 		return nil
 	}
-	// A connection-routing override (--connect-to/--resolve) decouples the URL
-	// from the peer actually contacted, so host allowlisting cannot be trusted.
-	if hasRoutingOverride(argv) {
+	// An option whose value is a command the client executes (ssh -o
+	// ProxyCommand=..., scp -S prog, rsync -e ...) hides an unscanned local
+	// command behind an allowlisted destination.
+	if opt, ok := sshCommandOption(base, argv); ok {
+		return []Finding{s.finding(RuleNetCommandExec, CategoryNetworkExfil,
+			RiskCritical, DecisionDeny, "option="+opt, line,
+			"This option makes the network client execute a hidden command the guard cannot scan; remove it or wrap the intent in an audited script.")}
+	}
+	// A config/input file (curl -K, wget -i/--config) can add URLs, proxies or
+	// routing overrides the scanner cannot see.
+	if flag, ok := netConfigFile(base, argv); ok {
+		return []Finding{s.finding(RuleNetConfigFile, CategoryNetworkExfil,
+			RiskHigh, DecisionDeny, "flag="+flag, line,
+			"A request config/input file can add network targets the guard cannot inspect; pass targets on the command line instead.")}
+	}
+	// A connection-routing override (curl --connect-to/--resolve, wget -e with a
+	// non-proxy wgetrc command) decouples the URL from the peer actually
+	// contacted, so host allowlisting cannot be trusted.
+	if opt, ok := netRoutingOverride(base, argv); ok {
 		return []Finding{s.finding(RuleNetRoutingOverride, CategoryNetworkExfil,
-			RiskCritical, DecisionDeny, seg, line,
-			"Connection-routing override (--connect-to/--resolve) redirects the request to a peer the allowlisted URL does not name; remove it or wrap the intent in an audited script.")}
+			RiskCritical, DecisionDeny, "option="+opt, line,
+			"Connection-routing override redirects the request to a peer the allowlisted URL does not name; remove it or wrap the intent in an audited script.")}
 	}
 	hosts := extractHosts(argv)
 	if len(hosts) == 0 {

@@ -72,7 +72,20 @@ func normalizePathArg(s string) string {
 	s = strings.ReplaceAll(s, "$HOME", "~")
 	// Collapse dot segments. URLs are left alone: path.Clean would corrupt the
 	// scheme's "//" and a URL never matches a filesystem denied path anyway.
-	if !strings.Contains(s, "://") {
+	switch {
+	case strings.Contains(s, "://"):
+	case strings.HasPrefix(s, "~"):
+		// A ~ or ~user prefix is a directory the shell expands BEFORE resolving
+		// "..", so it must clean like one path element, not a relative segment
+		// (plain Clean turns ~root/../etc/shadow into etc/shadow and loses the
+		// real target /etc/shadow). Anchoring at "/" folds the home away when
+		// ".." climbs out of it, leaving the absolute remainder to match.
+		if c := path.Clean("/" + s); strings.HasPrefix(c, "/~") {
+			s = c[1:]
+		} else {
+			s = c
+		}
+	default:
 		s = path.Clean(s)
 	}
 	return s
@@ -189,10 +202,14 @@ func extractHosts(argv []string) []string {
 		return ncHosts(argv)
 	case "ssh":
 		return dedupHosts(sshHosts(argv))
-	case "scp", "sftp", "rsync":
+	case "sftp":
+		return dedupHosts(sftpHosts(argv))
+	case "scp", "rsync":
 		return dedupHosts(scpHosts(argv))
-	case "curl", "wget":
+	case "curl":
 		return dedupHosts(curlHosts(argv))
+	case "wget":
+		return dedupHosts(wgetHosts(argv))
 	case "git":
 		return dedupHosts(gitHosts(argv))
 	default:
@@ -265,38 +282,139 @@ var sshValueFlags = map[string]struct{}{
 	"-p": {}, "-Q": {}, "-R": {}, "-S": {}, "-W": {}, "-w": {},
 }
 
+// sftpValueFlags are sftp short flags that consume the next argv token, so an
+// option value is not mistaken for the host operand.
+var sftpValueFlags = map[string]struct{}{
+	"-B": {}, "-b": {}, "-c": {}, "-D": {}, "-F": {}, "-i": {}, "-l": {},
+	"-o": {}, "-P": {}, "-R": {}, "-S": {}, "-s": {}, "-X": {},
+}
+
+// scpValueFlags are scp/rsync short flags that consume the next argv token.
+var scpValueFlags = map[string]struct{}{
+	"-c": {}, "-D": {}, "-F": {}, "-i": {}, "-l": {}, "-o": {}, "-P": {},
+	"-S": {}, "-X": {},
+}
+
 // sshHosts handles ssh: after skipping option values, the first operand is the
-// target host (scheme-less and single-label forms accepted).
+// target host (scheme-less and single-label forms accepted). -J jump hosts are
+// egress peers too and are collected alongside the destination.
 func sshHosts(argv []string) []string {
-	skipNext := false
+	return firstOperandHost(argv, sshValueFlags)
+}
+
+// sftpHosts handles sftp, whose grammar is ssh-like: the first operand is the
+// target ([user@]host, host:path, or an sftp:// URL), NOT scp-like — a plain
+// `sftp evil.example.com` carries no colon and must still be a host.
+func sftpHosts(argv []string) []string {
+	return firstOperandHost(argv, sftpValueFlags)
+}
+
+// firstOperandHost walks an ssh-style argv: option values are skipped, -J jump
+// hosts are collected as egress peers, and the first operand is the target
+// host. Single-label operands are accepted (conservative: an unknown name must
+// fail the allowlist, not vanish).
+func firstOperandHost(argv []string, valueFlags map[string]struct{}) []string {
+	var hosts []string
+	skipNext, isJump := false, false
 	for _, a := range argv[1:] {
 		if skipNext {
-			skipNext = false
+			if isJump {
+				hosts = append(hosts, jumpHosts(a)...)
+			}
+			skipNext, isJump = false, false
 			continue
 		}
 		if a == "" {
 			continue
 		}
 		if isFlag(a) {
-			if _, ok := sshValueFlags[a]; ok {
+			if a == "-J" {
+				skipNext, isJump = true, true
+				continue
+			}
+			if strings.HasPrefix(a, "-J") && len(a) > 2 {
+				hosts = append(hosts, jumpHosts(a[2:])...)
+				continue
+			}
+			if _, ok := valueFlags[a]; ok {
 				skipNext = true
 			}
 			continue
 		}
-		if h := bareHost(a); h != "" {
-			return []string{h}
+		if h := hostOperand(a); h != "" {
+			return append(hosts, h)
 		}
-		return []string{strings.ToLower(strings.Trim(a, `"'`))}
+		return hosts
 	}
-	return nil
+	return hosts
 }
 
-// scpHosts handles scp/sftp/rsync: a remote operand carries a colon
-// ([user@]host:path); local files have none, so they are not read as hosts.
+// hostOperand reads a known host-position operand: URL / user@host / dotted
+// name via hostFromToken, with a raw lower-cased fallback for single-label
+// hosts, and the :path/:port suffix stripped (sftp host:path).
+func hostOperand(a string) string {
+	if h := bareHost(a); h != "" {
+		return h
+	}
+	a = strings.Trim(a, `"'`)
+	if i := strings.IndexByte(a, ':'); i >= 0 {
+		a = a[:i]
+	}
+	return strings.ToLower(strings.TrimSpace(a))
+}
+
+// jumpHosts splits a -J value (host[,host...], each [user@]host[:port]) into
+// its egress peers.
+func jumpHosts(v string) []string {
+	var out []string
+	for _, part := range strings.Split(v, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if h := hostOperand(part); h != "" {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
+// scpHosts handles scp/rsync: a remote operand carries a colon
+// ([user@]host:path) or a scheme URL (rsync://h/m); local files have neither,
+// so they are not read as hosts. Option values are skipped and -J jump hosts
+// are collected as egress peers.
 func scpHosts(argv []string) []string {
 	var hosts []string
+	skipNext, isJump := false, false
 	for _, a := range argv[1:] {
-		if a == "" || isFlag(a) {
+		if skipNext {
+			if isJump {
+				hosts = append(hosts, jumpHosts(a)...)
+			}
+			skipNext, isJump = false, false
+			continue
+		}
+		if a == "" {
+			continue
+		}
+		if isFlag(a) {
+			if a == "-J" {
+				skipNext, isJump = true, true
+				continue
+			}
+			if strings.HasPrefix(a, "-J") && len(a) > 2 {
+				hosts = append(hosts, jumpHosts(a[2:])...)
+				continue
+			}
+			if _, ok := scpValueFlags[a]; ok {
+				skipNext = true
+			}
+			continue
+		}
+		if strings.Contains(a, "://") {
+			if h, explicit := hostFromToken(a); explicit && h != "" {
+				hosts = append(hosts, h)
+			}
 			continue
 		}
 		i := strings.IndexByte(a, ':')
@@ -314,7 +432,7 @@ func scpHosts(argv []string) []string {
 	return hosts
 }
 
-// curlFileFlags are curl/wget flags whose value is a local file (an output or
+// curlFileFlags are curl flags whose value is a local file (an output or
 // config path), not a URL, so the value must not be read as a host.
 var curlFileFlags = map[string]struct{}{
 	"-o": {}, "--output": {}, "--output-dir": {}, "-T": {}, "--upload-file": {},
@@ -342,18 +460,6 @@ var curlRoutingFlags = map[string]struct{}{
 	"--connect-to": {}, "--resolve": {},
 }
 
-// hasRoutingOverride reports whether argv carries a connection-routing flag
-// whose effect cannot be modelled safely (see curlRoutingFlags).
-func hasRoutingOverride(argv []string) bool {
-	for _, a := range argv[1:] {
-		flag, _, _ := splitFlagValue(a)
-		if _, ok := curlRoutingFlags[flag]; ok {
-			return true
-		}
-	}
-	return false
-}
-
 // pendingValue records what the token following a flag means when that flag
 // took its value in separate form.
 type pendingValue int
@@ -367,8 +473,8 @@ const (
 	pendingSkip
 )
 
-// curlHosts handles curl/wget. Positional operands are URLs (scheme-less
-// accepted) and so are the values of host-bearing options, in both the separate
+// curlHosts handles curl. Positional operands are URLs (scheme-less accepted)
+// and so are the values of host-bearing options, in both the separate
 // (--proxy URL) and attached (--proxy=URL, -xURL) forms. @file uploads and the
 // values of file-valued flags are excluded.
 func curlHosts(argv []string) []string {
@@ -510,6 +616,226 @@ func gitHosts(argv []string) []string {
 		}
 	}
 	return hosts
+}
+
+// wgetFileFlags are wget flags whose value is a local file or directory, never
+// a host. (-i/--input-file and --config are also unscannable-input flags — see
+// netConfigFile — but must still not be read as hosts.)
+var wgetFileFlags = map[string]struct{}{
+	"-O": {}, "--output-document": {}, "-o": {}, "--output-file": {},
+	"-a": {}, "--append-output": {}, "-P": {}, "--directory-prefix": {},
+	"-i": {}, "--input-file": {}, "--config": {},
+	"--load-cookies": {}, "--save-cookies": {},
+}
+
+// wgetHosts handles wget, which differs from curl: there are no proxy flags
+// (proxies arrive via -e key=value wgetrc commands), and its file-valued flags
+// are its own set. Positional operands are URLs (scheme-less accepted); -e
+// proxy assignments contribute the proxy as an egress host.
+func wgetHosts(argv []string) []string {
+	var hosts []string
+	pending := pendingNone
+	pendingExec := false
+	for _, a := range argv[1:] {
+		if pending != pendingNone || pendingExec {
+			if pendingExec {
+				if _, v, ok := proxyAssignment(a); ok {
+					hosts = appendHost(hosts, v)
+				}
+			}
+			pending, pendingExec = pendingNone, false
+			continue
+		}
+		if a == "" {
+			continue
+		}
+		if !isFlag(a) {
+			hosts = appendHost(hosts, a)
+			continue
+		}
+		flag, val, attached := wgetFlag(a)
+		switch {
+		case flag == "-e" || flag == "--execute":
+			if !attached {
+				pendingExec = true
+				continue
+			}
+			if _, v, ok := proxyAssignment(val); ok {
+				hosts = appendHost(hosts, v)
+			}
+		case isWgetFileFlag(flag) && !attached:
+			pending = pendingSkip
+		}
+	}
+	return hosts
+}
+
+func isWgetFileFlag(flag string) bool {
+	_, ok := wgetFileFlags[flag]
+	return ok
+}
+
+// wgetFlag splits one wget option token into flag/value/attached. A short flag
+// with an attached value is recognised BEFORE the '=' split, because -e values
+// are themselves key=value wgetrc commands: -ehttps_proxy=URL means -e with
+// value "https_proxy=URL", which a plain '='-split would misread.
+func wgetFlag(a string) (flag, value string, attached bool) {
+	if len(a) > 2 && !strings.HasPrefix(a, "--") {
+		if short := a[:2]; short == "-e" || isWgetFileFlag(short) {
+			return short, a[2:], true
+		}
+	}
+	return splitFlagValue(a)
+}
+
+// proxyAssignment reports whether a wget -e value is a proxy assignment
+// (http_proxy=URL / https_proxy=URL / ftp_proxy=URL), returning its key and
+// URL. Any other -e value rewrites arbitrary wgetrc configuration and is
+// handled as an unmodellable routing override instead (see netRoutingOverride).
+func proxyAssignment(v string) (key, value string, ok bool) {
+	k, val, found := strings.Cut(v, "=")
+	if !found || val == "" {
+		return "", "", false
+	}
+	if !strings.HasSuffix(strings.ToLower(strings.TrimSpace(k)), "_proxy") {
+		return "", "", false
+	}
+	return k, val, true
+}
+
+// netRoutingOverride reports a per-command option that reroutes where the
+// connection actually goes in a way a static host check cannot model: curl's
+// --connect-to/--resolve, and wget's -e/--execute with a non-proxy wgetrc
+// command (a proxy assignment is modelled by wgetHosts instead). The offending
+// flag is returned as evidence.
+func netRoutingOverride(base string, argv []string) (string, bool) {
+	switch base {
+	case "curl":
+		for _, a := range argv[1:] {
+			flag, _, _ := splitFlagValue(a)
+			if _, ok := curlRoutingFlags[flag]; ok {
+				return flag, true
+			}
+		}
+	case "wget":
+		return wgetRoutingOverride(argv)
+	}
+	return "", false
+}
+
+// wgetRoutingOverride flags -e/--execute values that are not plain proxy
+// assignments: they inject arbitrary wgetrc commands (use_proxy, no_proxy,
+// http_proxy indirection, output redirection, ...) that the scanner cannot
+// model.
+func wgetRoutingOverride(argv []string) (string, bool) {
+	pendingExec := false
+	for _, a := range argv[1:] {
+		if pendingExec {
+			pendingExec = false
+			if _, _, ok := proxyAssignment(a); !ok {
+				return "-e " + a, true
+			}
+			continue
+		}
+		flag, val, attached := wgetFlag(a)
+		if flag != "-e" && flag != "--execute" {
+			continue
+		}
+		if !attached {
+			pendingExec = true
+			continue
+		}
+		if _, _, ok := proxyAssignment(val); !ok {
+			return a, true
+		}
+	}
+	return "", false
+}
+
+// netConfigFileFlags name per-command options that read additional request
+// configuration from a local file the scanner cannot see: the file can add
+// URLs, proxies or routing overrides to arbitrary peers, so its presence
+// defeats static host analysis.
+var netConfigFileFlags = map[string]map[string]struct{}{
+	"curl": {"-K": {}, "--config": {}},
+	"wget": {"-i": {}, "--input-file": {}, "--config": {}},
+}
+
+// netConfigFile reports whether argv supplies such a config/input file,
+// returning the offending flag as evidence. Both the separate and attached
+// (--config=FILE, -Kfile) forms are detected.
+func netConfigFile(base string, argv []string) (string, bool) {
+	set, ok := netConfigFileFlags[base]
+	if !ok {
+		return "", false
+	}
+	for _, a := range argv[1:] {
+		flag, _, _ := splitFlagValue(a)
+		if _, hit := set[flag]; hit {
+			return flag, true
+		}
+		if len(flag) > 2 && !strings.HasPrefix(flag, "--") {
+			if _, hit := set[flag[:2]]; hit {
+				return flag[:2], true
+			}
+		}
+	}
+	return "", false
+}
+
+// sshCommandOptionKeys are ssh_config options whose VALUE is a command the
+// client executes (ProxyCommand and LocalCommand run locally, RemoteCommand on
+// the remote, KnownHostsCommand locally). An allowlisted destination says
+// nothing about that hidden command, so their presence is denied.
+var sshCommandOptionKeys = map[string]struct{}{
+	"proxycommand": {}, "localcommand": {}, "permitlocalcommand": {},
+	"remotecommand": {}, "knownhostscommand": {},
+}
+
+// sshCommandOption reports an option that makes ssh/scp/sftp/rsync execute a
+// hidden command: -o ProxyCommand=... (separate or attached), scp/sftp's
+// -S program, and rsync's -e/--rsh remote-shell command. The offending token is
+// returned as evidence.
+func sshCommandOption(base string, argv []string) (string, bool) {
+	switch base {
+	case "ssh", "scp", "sftp", "rsync":
+	default:
+		return "", false
+	}
+	expectOValue := false
+	for _, a := range argv[1:] {
+		if expectOValue {
+			expectOValue = false
+			if sshOptionExecutes(a) {
+				return "-o " + a, true
+			}
+			continue
+		}
+		switch {
+		case a == "-o":
+			expectOValue = true
+		case strings.HasPrefix(a, "-o") && len(a) > 2 && !strings.HasPrefix(a, "--"):
+			if sshOptionExecutes(a[2:]) {
+				return a, true
+			}
+		case (base == "scp" || base == "sftp") && (a == "-S" || (strings.HasPrefix(a, "-S") && len(a) > 2)):
+			return a, true
+		case base == "rsync" && (a == "-e" || a == "--rsh" || strings.HasPrefix(a, "--rsh=")):
+			return a, true
+		}
+	}
+	return "", false
+}
+
+// sshOptionExecutes reports whether an -o value names a command-executing
+// ssh_config option ("ProxyCommand=..." or "ProxyCommand ...").
+func sshOptionExecutes(v string) bool {
+	v = strings.TrimSpace(strings.Trim(v, `"'`))
+	if i := strings.IndexAny(v, "= \t"); i >= 0 {
+		v = v[:i]
+	}
+	_, ok := sshCommandOptionKeys[strings.ToLower(v)]
+	return ok
 }
 
 // explicitHosts accepts only operands that explicitly mark a host position (a

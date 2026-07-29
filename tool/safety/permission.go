@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -23,10 +24,12 @@ import (
 // A deny/ask verdict skips execution and returns a structured result to the
 // model. Wire it via agent.WithToolPermissionPolicyFunc(p.CheckToolPermission).
 type PermissionPolicy struct {
-	scanner   *Scanner
-	audit     *AuditWriter
-	telemetry bool
-	backends  map[string]Backend
+	scanner      *Scanner
+	audit        *AuditWriter
+	telemetry    bool
+	backends     map[string]Backend
+	stdinWriters map[string]Backend
+	baseDirs     map[Backend]string
 }
 
 // PolicyOption configures a PermissionPolicy.
@@ -48,6 +51,22 @@ func WithToolBackend(toolName string, backend Backend) PolicyOption {
 	return func(p *PermissionPolicy) { p.backends[toolName] = backend }
 }
 
+// WithStdinWriterTool registers an additional interactive stdin-writer tool
+// (see scanStdinWrite) and the backend its session belongs to, for a custom
+// toolset name or an exec family the defaults do not cover.
+func WithStdinWriterTool(toolName string, backend Backend) PolicyOption {
+	return func(p *PermissionPolicy) { p.stdinWriters[toolName] = backend }
+}
+
+// WithBackendBaseDir registers the executor's configured base directory for a
+// backend (e.g. the value given to hostexec.WithBaseDir). The scan then
+// resolves an omitted or relative workdir against it, matching the directory
+// the executor will actually use — without this, `{"command":"cat shadow"}`
+// under a base dir of /etc is scanned with no cwd and misses /etc/shadow.
+func WithBackendBaseDir(backend Backend, dir string) PolicyOption {
+	return func(p *PermissionPolicy) { p.baseDirs[backend] = dir }
+}
+
 // defaultBackends maps the built-in exec tool names to their backend. The
 // codeexec tool's default Declaration name is "execute_code"
 // (tool/codeexec/codeexec.go); a custom name can be registered with
@@ -60,15 +79,33 @@ func defaultBackends() map[string]Backend {
 	}
 }
 
+// defaultStdinWriters maps the built-in interactive stdin-writer tool names to
+// the backend whose sessions they feed: workspaceexec's workspace_write_stdin
+// and hostexec's write_stdin (bare and under its default toolset prefix). The
+// set is EXACT names, not a "_write_stdin" suffix match: an unrelated tool that
+// merely shares the suffix (e.g. skill_write_stdin, whose launching skill_exec
+// is not a recognised backend either) must pass through unclaimed rather than
+// be denied for a session the guard never scanned. Register additional writers
+// with WithStdinWriterTool.
+func defaultStdinWriters() map[string]Backend {
+	return map[string]Backend{
+		"write_stdin":           BackendHostExec,
+		"hostexec_write_stdin":  BackendHostExec,
+		"workspace_write_stdin": BackendWorkspaceExec,
+	}
+}
+
 // NewPermissionPolicy returns a PermissionPolicy backed by sc.
 func NewPermissionPolicy(sc *Scanner, opts ...PolicyOption) *PermissionPolicy {
 	if sc == nil {
 		sc = NewScanner(nil)
 	}
 	p := &PermissionPolicy{
-		scanner:   sc,
-		telemetry: true,
-		backends:  defaultBackends(),
+		scanner:      sc,
+		telemetry:    true,
+		backends:     defaultBackends(),
+		stdinWriters: defaultStdinWriters(),
+		baseDirs:     make(map[Backend]string),
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -109,8 +146,14 @@ type execArgs struct {
 	// AppendNewline and its "submit" alias make the session run whatever it has
 	// buffered, so they are a write even when Chars is empty
 	// (tool/hostexec, tool/workspaceexec, tool/skill).
-	AppendNewline *bool           `json:"append_newline"`
-	Submit        *bool           `json:"submit"`
+	AppendNewline *bool `json:"append_newline"`
+	Submit        *bool `json:"submit"`
+	// Background and TTY/PTY request a live session instead of a bounded
+	// result (tool/hostexec, tool/workspaceexec); the scan must see them or a
+	// backgrounded call is indistinguishable from a foreground one.
+	Background    bool            `json:"background"`
+	TTY           *bool           `json:"tty"`
+	PTY           *bool           `json:"pty"`
 	Timeout       int             `json:"timeout"`
 	TimeoutSec    *int            `json:"timeout_sec"`
 	TimeoutSecOld *int            `json:"timeoutSec"`
@@ -127,11 +170,11 @@ func anyTrue(vals ...*bool) bool {
 	return false
 }
 
-// isStdinWriteTool reports whether a tool name is a follow-up stdin writer for
-// an interactive session (workspace_write_stdin, hostexec's write_stdin, or any
-// named-toolset-prefixed form).
-func isStdinWriteTool(name string) bool {
-	return name == "write_stdin" || strings.HasSuffix(name, "_write_stdin")
+// stdinWriterBackend reports whether a tool name is a registered interactive
+// stdin writer, and for which backend (see defaultStdinWriters).
+func (p *PermissionPolicy) stdinWriterBackend(name string) (Backend, bool) {
+	b, ok := p.stdinWriters[name]
+	return b, ok
 }
 
 // decodeCodeBlocks flexibly decodes code_blocks, mirroring codeexec's
@@ -175,8 +218,8 @@ func decodeCodeBlocks(raw json.RawMessage) ([]CodeBlock, error) {
 // ScanRequest builds a ScanInput from a permission request and scans it. It is
 // exported so callers can reuse the guard outside the permission path.
 func (p *PermissionPolicy) ScanRequest(ctx context.Context, req *tool.PermissionRequest) (ScanReport, bool) {
-	if isStdinWriteTool(req.ToolName) {
-		return p.scanStdinWrite(req)
+	if wb, ok := p.stdinWriterBackend(req.ToolName); ok {
+		return p.scanStdinWrite(req, wb)
 	}
 	backend := p.backendFor(req.ToolName)
 	if backend == BackendUnknown {
@@ -209,12 +252,33 @@ func (p *PermissionPolicy) ScanRequest(ctx context.Context, req *tool.Permission
 		Backend:    backend,
 		Command:    a.Command,
 		CodeBlocks: blocks,
-		Cwd:        firstNonEmptyStr(a.Cwd, a.Workdir),
+		Cwd:        effectiveCwd(p.baseDirs[backend], firstNonEmptyStr(a.Cwd, a.Workdir)),
 		Env:        a.Env,
 		Stdin:      a.Stdin,
 		TimeoutSec: firstTimeout(a.TimeoutSec, a.TimeoutSecOld, a.Timeout),
+		Background: a.Background,
+		TTY:        anyTrue(a.TTY, a.PTY),
 	}
 	return p.scanner.Scan(ctx, in), true
+}
+
+// effectiveCwd resolves the requested working directory the way the executor
+// will: an omitted workdir means the registered base directory itself, and a
+// relative one is joined onto it (see WithBackendBaseDir). Absolute, ~-based
+// and URL-like values are used as given; with no base directory registered the
+// raw value passes through.
+func effectiveCwd(base, cwd string) string {
+	if base == "" {
+		return cwd
+	}
+	if cwd == "" {
+		return base
+	}
+	n := normalizePathArg(cwd)
+	if strings.HasPrefix(n, "/") || strings.HasPrefix(n, "~") || strings.Contains(n, "://") {
+		return cwd
+	}
+	return path.Clean(normalizePathArg(base) + "/" + n)
 }
 
 // scanStdinWrite guards follow-up input to an interactive session. Any write is
@@ -223,7 +287,7 @@ func (p *PermissionPolicy) ScanRequest(ctx context.Context, req *tool.Permission
 // command line, and a submit (append_newline, or its "submit" alias) makes the
 // session RUN what it has buffered even when chars is empty. Only a genuine poll
 // — no characters and no submit — is left to the tool.
-func (p *PermissionPolicy) scanStdinWrite(req *tool.PermissionRequest) (ScanReport, bool) {
+func (p *PermissionPolicy) scanStdinWrite(req *tool.PermissionRequest, backend Backend) (ScanReport, bool) {
 	var a execArgs
 	_ = json.Unmarshal(req.Arguments, &a)
 	if a.Chars == "" && !anyTrue(a.AppendNewline, a.Submit) {
@@ -231,6 +295,7 @@ func (p *PermissionPolicy) scanStdinWrite(req *tool.PermissionRequest) (ScanRepo
 	}
 	r := ScanReport{
 		ToolName: req.ToolName,
+		Backend:  backend,
 		Findings: []Finding{{
 			RuleID:         RuleStdinWrite,
 			Category:       CategoryShellBypass,
