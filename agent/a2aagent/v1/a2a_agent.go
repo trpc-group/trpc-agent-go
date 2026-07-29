@@ -623,8 +623,12 @@ func markArtifactReplacementSnapshot(evt *event.Event, replacement bool) {
 		return
 	}
 	for i := range evt.Response.Choices {
-		evt.Response.Choices[i].Message = evt.Response.Choices[i].Delta
-		evt.Response.Choices[i].Delta = model.Message{}
+		choice := &evt.Response.Choices[i]
+		if !model.HasPayload(choice.Delta) {
+			continue
+		}
+		choice.Message = choice.Delta
+		choice.Delta = model.Message{}
 	}
 }
 

@@ -453,6 +453,81 @@ func TestProcessStreamingEventsReplacesArtifactSnapshot(t *testing.T) {
 	}
 }
 
+func TestProcessStreamingEventsPreservesCustomReplacementMessage(t *testing.T) {
+	remote := &A2AAgent{
+		name: "remote",
+		eventConverter: &responseConverterFunc{stream: func(
+			response protocol.StreamResponse,
+			_ string,
+			_ *agent.Invocation,
+		) ([]*event.Event, error) {
+			if _, ok := response.Result.(*protocol.TaskArtifactUpdateEvent); !ok {
+				return nil, nil
+			}
+			return []*event.Event{{
+				Response: &model.Response{
+					IsPartial: true,
+					Choices: []model.Choice{{
+						Message: model.Message{
+							Role:    model.RoleAssistant,
+							Content: "custom-message",
+						},
+					}},
+				},
+			}}, nil
+		}},
+	}
+	stream := make(chan protocol.StreamResponse, 3)
+	stream <- protocol.NewStreamResponseArtifactUpdate(&protocol.TaskArtifactUpdateEvent{
+		TaskID: "task",
+		Artifact: protocol.Artifact{
+			ArtifactID: "artifact",
+			Parts:      []*protocol.Part{protocol.NewTextPart("stale")},
+		},
+	})
+	appendChunk := false
+	stream <- protocol.NewStreamResponseArtifactUpdate(&protocol.TaskArtifactUpdateEvent{
+		TaskID: "task",
+		Artifact: protocol.Artifact{
+			ArtifactID: "artifact",
+			Parts:      []*protocol.Part{protocol.NewTextPart("replacement")},
+		},
+		Append: &appendChunk,
+	})
+	completed := protocol.NewTaskStatusUpdateEvent(
+		"task",
+		"context",
+		protocol.TaskStatus{State: protocol.TaskStateCompleted},
+		true,
+	)
+	stream <- protocol.NewStreamResponseStatusUpdate(&completed)
+	close(stream)
+
+	eventChan := make(chan *event.Event, 3)
+	result := remote.processStreamingEvents(
+		context.Background(),
+		&agent.Invocation{InvocationID: "invocation"},
+		eventChan,
+		stream,
+	)
+	if result.terminalError != nil {
+		t.Fatalf("terminal error = %v, want nil", result.terminalError)
+	}
+	if len(eventChan) != 2 {
+		t.Fatalf("emitted event count = %d, want 2", len(eventChan))
+	}
+	<-eventChan
+	replacementEvent := <-eventChan
+	replacementChoice := replacementEvent.Response.Choices[0]
+	if replacementChoice.Message.Content != "custom-message" ||
+		model.HasPayload(replacementChoice.Delta) {
+		t.Fatalf(
+			"replacement event = %#v, want preserved custom Message",
+			replacementEvent,
+		)
+	}
+}
+
 func TestNewUsesSuppliedAgentCardIdentityAndPrimaryURL(t *testing.T) {
 	card := &protocolserver.AgentCard{
 		Name:        "remote",
