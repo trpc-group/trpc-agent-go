@@ -40,9 +40,10 @@ state and append history in one transaction.
 | --- | --- | --- | --- |
 | `WithSessionEventLimit(limit int)` | `int` | `1000` | Maximum events per session in context-window mode |
 | `WithSessionTTL(ttl time.Duration)` | `time.Duration` | `0` (no expiry) | Session TTL |
+| `WithTrackEventTTL(ttl time.Duration)` | `time.Duration` | Inherits SessionTTL | Track event TTL. Non-positive values disable track event expiry |
 | `WithAppStateTTL(ttl time.Duration)` | `time.Duration` | `0` (no expiry) | App state TTL |
 | `WithUserStateTTL(ttl time.Duration)` | `time.Duration` | `0` (no expiry) | User state TTL |
-| `WithCleanupInterval(interval time.Duration)` | `time.Duration` | `0` (auto) | Event and track cleanup interval; defaults to 5 minutes if session TTL is configured |
+| `WithCleanupInterval(interval time.Duration)` | `time.Duration` | `0` (auto) | Event and track cleanup interval; defaults to 5 minutes if session or track event TTL is configured |
 | `WithSoftDelete(enable bool)` | `bool` | `true` | Enable or disable soft delete |
 
 ### Async Persistence Configuration
@@ -123,10 +124,11 @@ sessionService, err := mongodb.NewService(
 Session state, app state, and user state use MongoDB TTL indexes on `expires_at`.
 Summaries do not have an independent TTL and follow the session lifecycle.
 
-Session events and track events intentionally do not use TTL indexes. They are
-cleaned by the service as whole session groups so a session's history does not
-partially disappear while the session is still active. Dedicated cleanup indexes
-on `updated_at` support these grouped cleanup scans.
+Session events and track events intentionally do not use TTL indexes. By default,
+they are cleaned by the service as whole session groups so a session's history
+does not partially disappear while the session is still active. If
+`WithTrackEventTTL` is configured, track events use that TTL independently.
+Dedicated cleanup indexes on `updated_at` support these cleanup scans.
 
 ## Storage Structure
 
