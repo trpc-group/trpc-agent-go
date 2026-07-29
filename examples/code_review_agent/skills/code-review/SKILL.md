@@ -12,9 +12,17 @@ arbitrary shell commands or arguments.
 Allowed checks:
 
 - `go version` to confirm the toolchain.
-- `bash scripts/run_checks.sh test` for `go test ./...`.
-- `bash scripts/run_checks.sh vet` for `go vet ./...`.
-- `bash scripts/run_checks.sh staticcheck` only when explicitly enabled.
+- `bash scripts/run_checks.sh test` for `go test ./...` in each affected Go
+  module declared by the staged repository manifest.
+- `bash scripts/run_checks.sh vet` for `go vet ./...` in each affected Go
+  module.
+- `bash scripts/run_checks.sh staticcheck` for each affected Go module only
+  when explicitly enabled.
+
+Repository checks consume `.trpc-agent-review-modules` from the staged snapshot
+root. It contains sorted, repository-relative module directories separated by
+NUL bytes, with `.` representing the root module. Missing, empty, absolute, or
+parent-escaping entries must fail closed.
 
 Rules prioritize security issues, goroutine and context lifecycle risks,
 resource leaks, ignored errors, database lifecycle problems, and missing tests.
@@ -24,3 +32,5 @@ policy before execution.
 Outputs should be treated as advisory sandbox evidence. Deterministic diff and
 AST rules remain the primary source of findings, and low-confidence or blocked
 governance events must be routed to warnings that require human review.
+Malformed or incomplete diffs must also require human review and cannot produce
+a pass conclusion.

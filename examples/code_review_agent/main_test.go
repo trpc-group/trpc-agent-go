@@ -21,6 +21,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -360,6 +361,17 @@ func TestSQLiteReviewStoreSaveLoadAndSchema(t *testing.T) {
 	if err := store.SaveReview(ctx, report); err != nil {
 		t.Fatalf("save review: %v", err)
 	}
+	sqliteStore, ok := store.(*sqliteReviewStore)
+	if !ok {
+		t.Fatalf("store = %T, want sqliteReviewStore", store)
+	}
+	var journalMode string
+	if err := sqliteStore.db.QueryRow("PRAGMA journal_mode").Scan(&journalMode); err != nil {
+		t.Fatalf("read journal mode: %v", err)
+	}
+	if !strings.EqualFold(journalMode, "delete") {
+		t.Fatalf("journal mode = %q, want delete", journalMode)
+	}
 	loaded, err := store.LoadReview(ctx, "task-1")
 	if err != nil {
 		t.Fatalf("load review: %v", err)
@@ -380,6 +392,132 @@ func TestSQLiteReviewStoreSaveLoadAndSchema(t *testing.T) {
 	if err := reopened.Close(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestSQLiteFilesUsePrivatePermissions(t *testing.T) {
+	requireSQLiteDriver(t)
+
+	parent := filepath.Join(t.TempDir(), "private")
+	dbPath := filepath.Join(parent, "reviews.db")
+	store, err := openSQLiteReviewStore(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("open sqlite store: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close sqlite store: %v", err)
+	}
+	if runtime.GOOS == "windows" {
+		return
+	}
+	assertPathMode(t, parent, 0o700)
+	assertPathMode(t, dbPath, 0o600)
+	for _, suffix := range []string{"-journal", "-wal", "-shm"} {
+		path := dbPath + suffix
+		if _, err := os.Lstat(path); os.IsNotExist(err) {
+			continue
+		} else if err != nil {
+			t.Fatal(err)
+		}
+		assertPathMode(t, path, 0o600)
+	}
+}
+
+func TestSQLiteExistingFilesAreTightened(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX file modes are unavailable on Windows")
+	}
+	parent := t.TempDir()
+	dbPath := filepath.Join(parent, "reviews.db")
+	for _, path := range []string{dbPath, dbPath + "-journal", dbPath + "-wal", dbPath + "-shm"} {
+		mustWriteFile(t, path, "")
+		if err := os.Chmod(path, 0o666); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := prepareSQLitePath(dbPath); err != nil {
+		t.Fatalf("prepare sqlite path: %v", err)
+	}
+	for _, path := range []string{dbPath, dbPath + "-journal", dbPath + "-wal", dbPath + "-shm"} {
+		assertPathMode(t, path, 0o600)
+	}
+}
+
+func TestSecureSQLiteArtifactsRequiresMainDatabase(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "reviews.db")
+	mustWriteFile(t, dbPath, "")
+	if err := os.Remove(dbPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := secureSQLiteArtifacts(dbPath); err == nil || !strings.Contains(err.Error(), "inspect sqlite database") {
+		t.Fatalf("secure sqlite artifacts err = %v, want missing database rejection", err)
+	}
+}
+
+func TestSQLiteRejectsUnsafePaths(t *testing.T) {
+	t.Run("database is a directory", func(t *testing.T) {
+		dbPath := filepath.Join(t.TempDir(), "reviews.db")
+		if err := os.Mkdir(dbPath, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := prepareSQLitePath(dbPath); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+			t.Fatalf("prepare sqlite path err = %v, want non-regular rejection", err)
+		}
+	})
+
+	t.Run("database is a symlink", func(t *testing.T) {
+		parent := t.TempDir()
+		target := filepath.Join(parent, "target.db")
+		mustWriteFile(t, target, "")
+		link := filepath.Join(parent, "reviews.db")
+		if err := os.Symlink(target, link); err != nil {
+			t.Skipf("file symlink unavailable: %v", err)
+		}
+		if err := prepareSQLitePath(link); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+			t.Fatalf("prepare sqlite path err = %v, want symlink rejection", err)
+		}
+	})
+
+	t.Run("sidecar is a symlink", func(t *testing.T) {
+		parent := t.TempDir()
+		dbPath := filepath.Join(parent, "reviews.db")
+		mustWriteFile(t, dbPath, "")
+		target := filepath.Join(parent, "target-wal")
+		mustWriteFile(t, target, "")
+		if err := os.Symlink(target, dbPath+"-wal"); err != nil {
+			t.Skipf("file symlink unavailable: %v", err)
+		}
+		if err := prepareSQLitePath(dbPath); err == nil || !strings.Contains(err.Error(), "sidecar") {
+			t.Fatalf("prepare sqlite path err = %v, want sidecar rejection", err)
+		}
+	})
+
+	t.Run("parent is group writable", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("POSIX directory modes are unavailable on Windows")
+		}
+		parent := t.TempDir()
+		if err := os.Chmod(parent, 0o770); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(parent, 0o700) })
+		err := prepareSQLitePath(filepath.Join(parent, "reviews.db"))
+		if err == nil || !strings.Contains(err.Error(), "group or other writes") {
+			t.Fatalf("prepare sqlite path err = %v, want writable-parent rejection", err)
+		}
+	})
+}
+
+func TestReportDirectoriesUsePrivatePermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX directory modes are unavailable on Windows")
+	}
+	outputDir := filepath.Join(t.TempDir(), "reports")
+	report := sampleReviewReport("private-task")
+	if err := writeReviewReportFiles(&report, outputDir); err != nil {
+		t.Fatalf("write report files: %v", err)
+	}
+	assertPathMode(t, outputDir, 0o700)
+	assertPathMode(t, filepath.Join(outputDir, report.TaskID), 0o700)
 }
 
 func TestSQLiteReviewStoreRollsBackOnChildInsertFailure(t *testing.T) {
@@ -840,8 +978,8 @@ func TestRepoPathLocalRunnerStagesRepositoryOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(
-		filepath.Join(repoRoot, "review.go"),
-		[]byte("package reviewtarget\n\nfunc value() int { return 1 }\n"),
+		filepath.Join(repoRoot, "hello.go"),
+		[]byte("package hello\n\nfunc value() int { return 1 }\n"),
 		0o600,
 	); err != nil {
 		t.Fatal(err)
@@ -860,7 +998,7 @@ func TestRepoPathLocalRunnerStagesRepositoryOnce(t *testing.T) {
 		_ = os.Chmod(objectDir, 0o755)
 	})
 	mustRunGit(t, repoRoot, "init")
-	mustRunGit(t, repoRoot, "add", "go.mod", "review.go")
+	mustRunGit(t, repoRoot, "add", "go.mod", "hello.go")
 	snapshot, err := prepareSandboxRepoSnapshot(
 		context.Background(),
 		repoRoot,
@@ -871,6 +1009,10 @@ func TestRepoPathLocalRunnerStagesRepositoryOnce(t *testing.T) {
 		t.Fatalf("prepare snapshot: %v", err)
 	}
 	defer os.RemoveAll(snapshot.Root)
+	parsed := parseUnifiedDiff([]byte(minimalDiff()))
+	if _, err := prepareAffectedModuleManifest(snapshot.Root, parsed); err != nil {
+		t.Fatalf("prepare affected module manifest: %v", err)
+	}
 
 	commands := planCommands(
 		config{},
@@ -879,7 +1021,7 @@ func TestRepoPathLocalRunnerStagesRepositoryOnce(t *testing.T) {
 			repoRoot:        repoRoot,
 			sandboxRepoRoot: snapshot.Root,
 		},
-		parseUnifiedDiff([]byte(minimalDiff())),
+		parsed,
 	)
 	for _, command := range commands {
 		run := runner.RunSandboxCommand(context.Background(), command)
@@ -1015,17 +1157,14 @@ func TestRepositorySnapshotRejectsUnsafeScope(t *testing.T) {
 	}
 }
 
-func TestGovernancePassesFileScopeToRepositorySnapshot(t *testing.T) {
+func TestGovernanceScopedFilesSkipRepositoryChecks(t *testing.T) {
 	repoRoot := t.TempDir()
 	mustRunGit(t, repoRoot, "init")
 	mustWriteFile(t, filepath.Join(repoRoot, "hello.go"), "package hello\n")
 	mustWriteFile(t, filepath.Join(repoRoot, "outside.go"), "package hello\n")
 	mustRunGit(t, repoRoot, "add", "hello.go", "outside.go")
 
-	runner := &snapshotInspectingRunner{
-		included: "hello.go",
-		excluded: "outside.go",
-	}
+	runner := &recordingSandboxRunner{}
 	gitRunner := func(_ context.Context, _ string, _ []string) ([]byte, []byte, error) {
 		return []byte(minimalDiff()), nil, nil
 	}
@@ -1039,16 +1178,198 @@ func TestGovernancePassesFileScopeToRepositorySnapshot(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0; stderr: %s", code, stderr)
 	}
-	if runner.inspectErr != nil {
-		t.Fatal(runner.inspectErr)
-	}
-	if !runner.inspected {
-		t.Fatal("repository snapshot was not inspected")
+	if len(runner.calls) != 1 || runner.calls[0].Kind != commandCheckGoVersion {
+		t.Fatalf("runner calls = %+v, want only go version", runner.calls)
 	}
 	var summary reviewSummary
 	mustUnmarshalSummary(t, stdout, &summary)
-	if summary.Warnings != 0 {
-		t.Fatalf("summary = %+v, want no warnings", summary)
+	if summary.Warnings != 1 || summary.Conclusion != reviewConclusionNeedsHumanReview ||
+		!summary.NeedsHumanReview {
+		t.Fatalf("summary = %+v, want scoped repository warning", summary)
+	}
+	report := readReportFromSummary(t, summary)
+	if len(report.Warnings) != 1 || report.Warnings[0].RuleID != ruleSandboxSnapshotUnavailable ||
+		!strings.Contains(report.Warnings[0].Evidence, "scoped --files") {
+		t.Fatalf("warnings = %+v, want scoped snapshot warning", report.Warnings)
+	}
+}
+
+func TestPrepareAffectedModuleManifest(t *testing.T) {
+	snapshotRoot := t.TempDir()
+	mustWriteFile(t, filepath.Join(snapshotRoot, "go.mod"), "module example.com/root\n\ngo 1.21\n")
+	mustWriteFile(t, filepath.Join(snapshotRoot, "root.go"), "package root\n")
+	mustWriteFile(t, filepath.Join(snapshotRoot, "nested", "go.mod"), "module example.com/nested\n\ngo 1.21\n")
+	mustWriteFile(t, filepath.Join(snapshotRoot, "nested", "one.go"), "package nested\n")
+	mustWriteFile(t, filepath.Join(snapshotRoot, "nested", "two.go"), "package nested\n")
+	mustWriteFile(t, filepath.Join(snapshotRoot, "with space", "go.mod"), "module example.com/space\n\ngo 1.21\n")
+	mustWriteFile(t, filepath.Join(snapshotRoot, "with space", "space.go"), "package space\n")
+
+	parsed := parseUnifiedDiff([]byte(strings.Join([]string{
+		"diff --git a/root.go b/root.go",
+		"--- a/root.go",
+		"+++ b/root.go",
+		"@@ -1 +1 @@",
+		"-package oldroot",
+		"+package root",
+		"diff --git a/nested/one.go b/nested/one.go",
+		"--- a/nested/one.go",
+		"+++ b/nested/one.go",
+		"@@ -1 +1 @@",
+		"-package oldnested",
+		"+package nested",
+		"diff --git a/nested/two.go b/nested/two.go",
+		"--- a/nested/two.go",
+		"+++ b/nested/two.go",
+		"@@ -1 +1 @@",
+		"-package oldnested",
+		"+package nested",
+		`diff --git "a/with space/space.go" "b/with space/space.go"`,
+		`--- "a/with space/space.go"`,
+		`+++ "b/with space/space.go"`,
+		"@@ -1 +1 @@",
+		"-package oldspace",
+		"+package space",
+	}, "\n")))
+	if len(parsed.Warnings) != 0 {
+		t.Fatalf("parse warnings = %+v", parsed.Warnings)
+	}
+	modules, err := prepareAffectedModuleManifest(snapshotRoot, parsed)
+	if err != nil {
+		t.Fatalf("prepare manifest: %v", err)
+	}
+	wantModules := []string{".", "nested", "with space"}
+	if !reflect.DeepEqual(modules, wantModules) {
+		t.Fatalf("modules = %#v, want %#v", modules, wantModules)
+	}
+	manifestPath := filepath.Join(snapshotRoot, reviewModuleManifestName)
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []byte(".\x00nested\x00with space\x00"); !bytes.Equal(data, want) {
+		t.Fatalf("manifest = %q, want %q", data, want)
+	}
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(manifestPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Fatalf("manifest mode = %o, want 600", got)
+		}
+	}
+	if _, err := prepareAffectedModuleManifest(snapshotRoot, parsed); err == nil ||
+		!strings.Contains(err.Error(), "create affected module manifest") {
+		t.Fatalf("reserved manifest collision err = %v, want create failure", err)
+	}
+}
+
+func TestPrepareAffectedModuleManifestRequiresModule(t *testing.T) {
+	snapshotRoot := t.TempDir()
+	mustWriteFile(t, filepath.Join(snapshotRoot, "orphan.go"), "package orphan\n")
+	parsed := parseUnifiedDiff([]byte(strings.Join([]string{
+		"diff --git a/orphan.go b/orphan.go",
+		"--- a/orphan.go",
+		"+++ b/orphan.go",
+		"@@ -1 +1 @@",
+		"-package oldorphan",
+		"+package orphan",
+	}, "\n")))
+	if _, err := prepareAffectedModuleManifest(snapshotRoot, parsed); err == nil ||
+		!strings.Contains(err.Error(), "no go.mod") {
+		t.Fatalf("prepare manifest err = %v, want missing module", err)
+	}
+}
+
+func TestRunChecksUsesChangedNestedModule(t *testing.T) {
+	for _, toolName := range []string{"bash", "go"} {
+		if _, err := exec.LookPath(toolName); err != nil {
+			t.Skipf("%s unavailable: %v", toolName, err)
+		}
+	}
+	repoRoot := t.TempDir()
+	mustWriteFile(t, filepath.Join(repoRoot, "go.mod"), "module example.com/root\n\ngo 1.21\n")
+	mustWriteFile(t, filepath.Join(repoRoot, "root.go"), "package root\n")
+	mustWriteFile(t, filepath.Join(repoRoot, "nested", "go.mod"), "module example.com/nested\n\ngo 1.21\n")
+	mustWriteFile(t, filepath.Join(repoRoot, "nested", "broken.go"), "package nested\n\nfunc broken(\n")
+	mustWriteFile(t, filepath.Join(repoRoot, "with space", "go.mod"), "module example.com/space\n\ngo 1.21\n")
+	mustWriteFile(t, filepath.Join(repoRoot, "with space", "space.go"), "package space\n")
+	parsed := parseUnifiedDiff([]byte(strings.Join([]string{
+		"diff --git a/nested/broken.go b/nested/broken.go",
+		"--- a/nested/broken.go",
+		"+++ b/nested/broken.go",
+		"@@ -1 +1,2 @@",
+		" package nested",
+		"+func broken(",
+		`diff --git "a/with space/space.go" "b/with space/space.go"`,
+		`--- "a/with space/space.go"`,
+		`+++ "b/with space/space.go"`,
+		"@@ -1 +1 @@",
+		"-package oldspace",
+		"+package space",
+	}, "\n")))
+	if _, err := prepareAffectedModuleManifest(repoRoot, parsed); err != nil {
+		t.Fatalf("prepare manifest: %v", err)
+	}
+
+	rootCheck := exec.Command("go", "test", "./...")
+	rootCheck.Dir = repoRoot
+	if output, err := rootCheck.CombinedOutput(); err != nil {
+		t.Fatalf("root module should pass while skipping nested module: %v\n%s", err, output)
+	}
+	scriptPath, err := filepath.Abs(filepath.Join("skills", "code-review", "scripts", "run_checks.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"test", "vet"} {
+		t.Run(mode, func(t *testing.T) {
+			cmd := exec.Command("bash", filepath.ToSlash(scriptPath), mode)
+			cmd.Env = append(os.Environ(), "REVIEW_REPO_DIR="+filepath.ToSlash(repoRoot))
+			output, err := cmd.CombinedOutput()
+			if err == nil {
+				t.Fatalf("%s succeeded, want nested module failure\n%s", mode, output)
+			}
+			outputText := string(output)
+			nestedMarker := "==> " + mode + " nested"
+			spaceMarker := "==> " + mode + " with space"
+			nestedIndex := strings.Index(outputText, nestedMarker)
+			spaceIndex := strings.Index(outputText, spaceMarker)
+			if nestedIndex < 0 || spaceIndex <= nestedIndex {
+				t.Fatalf("%s output = %s, want ordered module markers", mode, output)
+			}
+		})
+	}
+}
+
+func TestRunChecksRejectsUnsafeModuleManifest(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skipf("bash unavailable: %v", err)
+	}
+	scriptPath, err := filepath.Abs(filepath.Join("skills", "code-review", "scripts", "run_checks.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name     string
+		manifest []byte
+	}{
+		{name: "empty", manifest: []byte{0}},
+		{name: "absolute", manifest: []byte("/tmp/escape\x00")},
+		{name: "parent escape", manifest: []byte("../escape\x00")},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			repoRoot := t.TempDir()
+			manifestPath := filepath.Join(repoRoot, reviewModuleManifestName)
+			if err := os.WriteFile(manifestPath, tt.manifest, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command("bash", filepath.ToSlash(scriptPath), "test")
+			cmd.Env = append(os.Environ(), "REVIEW_REPO_DIR="+filepath.ToSlash(repoRoot))
+			output, err := cmd.CombinedOutput()
+			if err == nil || !strings.Contains(string(output), "unsafe module path") {
+				t.Fatalf("run_checks err = %v, output = %s, want unsafe-path rejection", err, output)
+			}
+		})
 	}
 }
 
@@ -1557,7 +1878,7 @@ func TestParseUnifiedDiffLineNumbersAndNoNewlineMarker(t *testing.T) {
 		"index 1111111..2222222 100644",
 		"--- a/pkg/foo.go",
 		"+++ b/pkg/foo.go",
-		"@@ -1,3 +1,4 @@",
+		"@@ -1,2 +1,3 @@",
 		" package pkg",
 		"-func oldName() {}",
 		"+func newName() {}",
@@ -1714,6 +2035,170 @@ func TestParseUnifiedDiffMalformedHunkWarning(t *testing.T) {
 	}
 }
 
+func TestParseUnifiedDiffValidatesHunkLengths(t *testing.T) {
+	tests := []struct {
+		name         string
+		diff         string
+		wantWarnings int
+		wantMessage  string
+	}{
+		{
+			name: "valid empty hunk",
+			diff: strings.Join([]string{
+				"diff --git a/empty.go b/empty.go",
+				"--- a/empty.go",
+				"+++ b/empty.go",
+				"@@ -1,0 +1,0 @@",
+			}, "\n"),
+		},
+		{
+			name: "zero count with content",
+			diff: strings.Join([]string{
+				"diff --git a/empty.go b/empty.go",
+				"--- a/empty.go",
+				"+++ b/empty.go",
+				"@@ -1,0 +1,0 @@",
+				"+package empty",
+			}, "\n"),
+			wantWarnings: 1,
+			wantMessage:  "declared old=0 new=0, consumed old=0 new=1",
+		},
+		{
+			name: "truncated at eof",
+			diff: strings.Join([]string{
+				"diff --git a/truncated.go b/truncated.go",
+				"--- a/truncated.go",
+				"+++ b/truncated.go",
+				"@@ -1 +1,2 @@",
+				" package truncated",
+			}, "\n"),
+			wantWarnings: 1,
+			wantMessage:  "declared old=1 new=2, consumed old=1 new=1",
+		},
+		{
+			name: "truncated before next hunk",
+			diff: strings.Join([]string{
+				"diff --git a/two.go b/two.go",
+				"--- a/two.go",
+				"+++ b/two.go",
+				"@@ -1 +1,2 @@",
+				" package two",
+				"@@ -10 +10 @@",
+				"-var old = 1",
+				"+var current = 1",
+			}, "\n"),
+			wantWarnings: 1,
+			wantMessage:  "declared old=1 new=2, consumed old=1 new=1",
+		},
+		{
+			name: "truncated before next file",
+			diff: strings.Join([]string{
+				"diff --git a/first.go b/first.go",
+				"--- a/first.go",
+				"+++ b/first.go",
+				"@@ -1 +1,2 @@",
+				" package first",
+				"diff --git a/second.go b/second.go",
+				"--- a/second.go",
+				"+++ b/second.go",
+				"@@ -1 +1 @@",
+				"-package old",
+				"+package second",
+			}, "\n"),
+			wantWarnings: 1,
+			wantMessage:  "declared old=1 new=2, consumed old=1 new=1",
+		},
+		{
+			name: "old side overrun",
+			diff: strings.Join([]string{
+				"diff --git a/overrun.go b/overrun.go",
+				"--- a/overrun.go",
+				"+++ b/overrun.go",
+				"@@ -1 +1 @@",
+				" package overrun",
+				"-var removed = true",
+			}, "\n"),
+			wantWarnings: 1,
+			wantMessage:  "declared old=1 new=1, consumed old=2 new=1",
+		},
+		{
+			name: "overflow",
+			diff: strings.Join([]string{
+				"diff --git a/overflow.go b/overflow.go",
+				"--- a/overflow.go",
+				"+++ b/overflow.go",
+				"@@ -999999999999999999999999 +1 @@",
+			}, "\n"),
+			wantWarnings: 1,
+			wantMessage:  "invalid old start",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parsed := parseUnifiedDiff([]byte(tt.diff))
+			if len(parsed.Warnings) != tt.wantWarnings {
+				t.Fatalf("warnings = %+v, want %d", parsed.Warnings, tt.wantWarnings)
+			}
+			if tt.wantMessage != "" && !strings.Contains(parsed.Warnings[0].Message, tt.wantMessage) {
+				t.Fatalf("warning = %+v, want message containing %q", parsed.Warnings[0], tt.wantMessage)
+			}
+		})
+	}
+}
+
+func TestParseWarningsRequireHumanReview(t *testing.T) {
+	tests := []struct {
+		name string
+		diff string
+	}{
+		{
+			name: "malformed header",
+			diff: strings.Join([]string{
+				"diff --git a/bad.go b/bad.go",
+				"--- a/bad.go",
+				"+++ b/bad.go",
+				"@@ broken",
+				"+package bad",
+			}, "\n"),
+		},
+		{
+			name: "truncated hunk",
+			diff: strings.Join([]string{
+				"diff --git a/truncated.go b/truncated.go",
+				"--- a/truncated.go",
+				"+++ b/truncated.go",
+				"@@ -1 +1,2 @@",
+				" package truncated",
+			}, "\n"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			diffPath := filepath.Join(t.TempDir(), "review.diff")
+			mustWriteFile(t, diffPath, tt.diff)
+			code, stdout, stderr := runForTest(t, []string{
+				"--diff-file", diffPath,
+				"--dry-run",
+			}, nil, nil)
+			if code != 0 {
+				t.Fatalf("exit code = %d, want 0; stderr: %s", code, stderr)
+			}
+			var summary reviewSummary
+			mustUnmarshalSummary(t, stdout, &summary)
+			if summary.Conclusion != reviewConclusionNeedsHumanReview ||
+				!summary.NeedsHumanReview || summary.ParseWarnings == 0 {
+				t.Fatalf("summary = %+v, want parse warning requiring human review", summary)
+			}
+			report := readReportFromSummary(t, summary)
+			if report.Parse.Warnings == 0 || len(report.Parse.WarningMessages) == 0 {
+				t.Fatalf("report parse section = %+v, want warning details", report.Parse)
+			}
+		})
+	}
+}
+
 func TestRulesFromFixtures(t *testing.T) {
 	tests := []struct {
 		fixture      string
@@ -1744,7 +2229,11 @@ func TestRulesFromFixtures(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			matches := runRules(parseUnifiedDiff(diff), "")
+			parsed := parseUnifiedDiff(diff)
+			if len(parsed.Warnings) != 0 {
+				t.Fatalf("fixture parse warnings = %+v, want none", parsed.Warnings)
+			}
+			matches := runRules(parsed, "")
 			findings, warnings := splitRuleIDs(matches)
 			assertRuleIDs(t, findings, tt.wantFindings)
 			assertRuleIDs(t, warnings, tt.wantWarnings)
@@ -2028,7 +2517,7 @@ func TestLifecycleConfidenceRouting(t *testing.T) {
 		"diff --git a/leak.go b/leak.go",
 		"--- a/leak.go",
 		"+++ b/leak.go",
-		"@@ -1,3 +1,8 @@",
+		"@@ -1 +1,7 @@",
 		" package leak",
 		"+func open(name string) error {",
 		"+\tf, err := os.Open(name)",
@@ -2046,12 +2535,12 @@ func TestLifecycleConfidenceRouting(t *testing.T) {
 		"diff --git a/boundary.go b/boundary.go",
 		"--- a/boundary.go",
 		"+++ b/boundary.go",
-		"@@ -1,3 +1,6 @@",
+		"@@ -1 +1,4 @@",
 		" package boundary",
 		"+func open(name string) error {",
 		"+\tf, err := os.Open(name)",
 		"+\tif err != nil { return err }",
-		"@@ -20,3 +23,5 @@ func open(name string) error {",
+		"@@ -20,0 +23,3 @@ func open(name string) error {",
 		"+\t_ = f",
 		"+\treturn nil",
 		"+}",
@@ -2089,7 +2578,7 @@ func TestResourceCleanupIsScopedToFunction(t *testing.T) {
 		"diff --git a/scoped.go b/scoped.go",
 		"--- a/scoped.go",
 		"+++ b/scoped.go",
-		"@@ -12,3 +12,6 @@ func leaksHere(name string) error {",
+		"@@ -12,0 +12,3 @@ func leaksHere(name string) error {",
 		"+\tf, err := os.Open(name)",
 		"+\tif err != nil { return err }",
 		"+\t_ = f",
@@ -2119,7 +2608,7 @@ func TestResourceCleanupSameFunctionSuppressesFinding(t *testing.T) {
 		"diff --git a/safe.go b/safe.go",
 		"--- a/safe.go",
 		"+++ b/safe.go",
-		"@@ -6,3 +6,6 @@ func safe(name string) error {",
+		"@@ -6,0 +6,3 @@ func safe(name string) error {",
 		"+\tf, err := os.Open(name)",
 		"+\tif err != nil { return err }",
 		"+\tdefer f.Close()",
@@ -2217,7 +2706,7 @@ func TestDiffOnlyResourceCleanupUsesHunkFunctionWindow(t *testing.T) {
 		"diff --git a/window.go b/window.go",
 		"--- a/window.go",
 		"+++ b/window.go",
-		"@@ -1,3 +1,14 @@",
+		"@@ -1 +1,13 @@",
 		" package window",
 		"+func closesOther(name string) error {",
 		"+\tf, err := os.Open(name)",
@@ -2482,38 +2971,6 @@ func (r *recordingSandboxRunner) RunSandboxCommand(_ context.Context, spec comma
 	}
 }
 
-type snapshotInspectingRunner struct {
-	included   string
-	excluded   string
-	inspected  bool
-	inspectErr error
-}
-
-func (r *snapshotInspectingRunner) RunSandboxCommand(_ context.Context, spec commandSpec) sandboxRun {
-	if spec.Kind == commandCheckGoTest {
-		if len(spec.Inputs) != 1 {
-			r.inspectErr = errors.New("repository command has no snapshot input")
-		} else {
-			root := filepath.FromSlash(strings.TrimPrefix(spec.Inputs[0].From, "host://"))
-			if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(r.included))); err != nil {
-				r.inspectErr = err
-			} else if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(r.excluded))); !os.IsNotExist(err) {
-				r.inspectErr = errors.New("out-of-scope file was staged")
-			} else {
-				r.inspected = true
-			}
-		}
-	}
-	return sandboxRun{
-		Runtime:    runtimeFake,
-		Command:    string(spec.Kind),
-		ExitCode:   0,
-		Stdout:     "ok",
-		TimedOut:   false,
-		DurationMS: 1,
-	}
-}
-
 func mustUnmarshalSummary(t *testing.T, stdout string, got *reviewSummary) {
 	t.Helper()
 	if err := json.Unmarshal([]byte(stdout), got); err != nil {
@@ -2633,7 +3090,7 @@ func minimalDiff() string {
 		"index 1111111..2222222 100644",
 		"--- a/hello.go",
 		"+++ b/hello.go",
-		"@@ -1,3 +1,4 @@",
+		"@@ -1 +1,2 @@",
 		" package hello",
 		"+func message() string { return \"hello\" }",
 		"",
@@ -2647,6 +3104,17 @@ func mustWriteFile(t *testing.T, path string, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func assertPathMode(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != want {
+		t.Fatalf("%s mode = %04o, want %04o", path, got, want)
 	}
 }
 

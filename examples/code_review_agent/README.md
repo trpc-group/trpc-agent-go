@@ -33,6 +33,10 @@ go run ./code_review_agent --repo-path ../ --files pkg/a.go --files pkg/b.go --r
 
 `--repo-path` runs `git diff HEAD -- <files>` through a fixed argument array.
 The `--files` values must be relative paths and cannot escape the repository.
+They are interpreted as literal Git paths. A scoped review does not upload
+files outside that scope, so repository test, vet, and staticcheck commands are
+skipped with a human-review warning instead of running against an incomplete Go
+module.
 
 ## Runtime Modes
 
@@ -72,6 +76,11 @@ The template value can also be provided through `TRPC_AGENT_CODE_REVIEW_E2B_TEMP
 SQLite storage uses `github.com/mattn/go-sqlite3`, which requires CGO and a C
 compiler at runtime. Non-CGO builds still compile, but opening a SQLite store
 returns a clear error. Use `--db-path` to select the database location.
+New database files are created with owner-only permissions. On POSIX systems,
+existing database and SQLite sidecar files are tightened to `0600`; symlinks,
+non-regular files, and group- or other-writable parent directories are rejected.
+New output directories use `0700`. Windows retains the file-type checks but
+does not claim POSIX mode-bit enforcement.
 
 Query a stored task:
 
@@ -104,8 +113,12 @@ from a closed enum, validates them through a command gate, then calls a
 and reported without invoking the runner. Allowed commands run with clean
 environment settings, timeout and output limits, and restricted artifacts. E2B is
 the production-style runtime; fake mode is deterministic for tests; local mode is
-an explicit development fallback. All evidence, sandbox output, governance
-reasons, reports, and stored fields pass through redaction before persistence.
+an explicit development fallback. Complete repository snapshots resolve changed
+Go files to their nearest `go.mod` and run checks once per affected module. The
+snapshot root contains a reserved `.trpc-agent-review-modules` manifest with
+sorted, repository-relative module directories separated by NUL bytes; `.` names
+the root module. All evidence, sandbox output, governance reasons, reports, and
+stored fields pass through redaction before persistence.
 SQLite stores a review task, diff summary, decisions, sandbox runs, findings,
 warnings, metrics, artifacts, and final report metadata, but not the raw diff.
 The normalized schema deliberately separates repeated child records from the
@@ -114,14 +127,16 @@ contract without changing the report model. Report files are restricted to the
 two declared artifact kinds and are written with owner-only permissions.
 
 The diff parser treats Git-quoted paths as structured tokens, including paths
-with spaces and C-style escaped UTF-8 bytes. Rules use line-oriented evidence
-where that is deterministic, while syntax-sensitive checks such as shell
-execution inspect a small Go AST to distinguish a fixed literal command from a
-payload assembled from variables or concatenation. Missing-test warnings are
-matched to the changed file's directory instead of being suppressed by an
-unrelated test elsewhere in the patch. These choices keep dry-run behavior
-stable while reducing the false positives and false negatives that matter for
-hidden evaluation samples.
+with spaces and C-style escaped UTF-8 bytes. Hunk counts are validated when a
+new hunk or file starts and at end of input; any malformed or incomplete diff
+requires human review and cannot receive a pass conclusion. Rules use
+line-oriented evidence where that is deterministic, while syntax-sensitive
+checks such as shell execution inspect a small Go AST to distinguish a fixed
+literal command from a payload assembled from variables or concatenation.
+Missing-test warnings are matched to the changed file's directory instead of
+being suppressed by an unrelated test elsewhere in the patch. These choices
+keep dry-run behavior stable while reducing the false positives and false
+negatives that matter for hidden evaluation samples.
 
 ## Test Data
 

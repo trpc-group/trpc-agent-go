@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -42,7 +43,8 @@ type reviewStore interface {
 }
 
 type sqliteReviewStore struct {
-	db *sql.DB
+	db     *sql.DB
+	dbPath string
 }
 
 type memoryReviewStore struct {
@@ -142,22 +144,117 @@ func openSQLiteReviewStore(ctx context.Context, dbPath string) (reviewStore, err
 	if !sqlDriverAvailable(sqliteDriverName) {
 		return nil, errors.New("sqlite storage unavailable: sqlite3 driver is not registered; enable CGO to use github.com/mattn/go-sqlite3")
 	}
-	dir := filepath.Dir(dbPath)
-	if dir != "." && dir != "" {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return nil, fmt.Errorf("create sqlite directory: %w", err)
-		}
+	dbPath = filepath.Clean(dbPath)
+	if err := prepareSQLitePath(dbPath); err != nil {
+		return nil, err
 	}
 	db, err := sql.Open(sqliteDriverName, dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite database: %w", err)
 	}
-	store := &sqliteReviewStore{db: db}
+	store := &sqliteReviewStore{db: db, dbPath: dbPath}
 	if err := store.init(ctx); err != nil {
-		_ = db.Close()
-		return nil, err
+		closeErr := db.Close()
+		secureErr := secureSQLiteArtifacts(dbPath)
+		return nil, errors.Join(err, closeErr, secureErr)
+	}
+	if err := secureSQLiteArtifacts(dbPath); err != nil {
+		closeErr := db.Close()
+		afterCloseErr := secureSQLiteArtifacts(dbPath)
+		return nil, errors.Join(err, closeErr, afterCloseErr)
 	}
 	return store, nil
+}
+
+func prepareSQLitePath(dbPath string) error {
+	dir := filepath.Dir(dbPath)
+	if dir == "" {
+		dir = "."
+	}
+	info, err := os.Lstat(dir)
+	if os.IsNotExist(err) {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return fmt.Errorf("create sqlite directory: %w", err)
+		}
+		info, err = os.Lstat(dir)
+	}
+	if err != nil {
+		return fmt.Errorf("inspect sqlite directory: %w", err)
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("sqlite directory is not a regular directory")
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0o022 != 0 {
+		return fmt.Errorf("sqlite directory permissions %04o allow group or other writes", info.Mode().Perm())
+	}
+
+	if err := secureSQLiteFile(dbPath, true); err != nil {
+		return fmt.Errorf("secure sqlite database: %w", err)
+	}
+	for _, suffix := range []string{"-journal", "-wal", "-shm"} {
+		if err := secureSQLiteFile(dbPath+suffix, false); err != nil {
+			return fmt.Errorf("secure sqlite sidecar %q: %w", suffix, err)
+		}
+	}
+	return nil
+}
+
+func secureSQLiteArtifacts(dbPath string) error {
+	if _, err := os.Lstat(dbPath); err != nil {
+		return fmt.Errorf("inspect sqlite database: %w", err)
+	}
+	if err := secureSQLiteFile(dbPath, false); err != nil {
+		return fmt.Errorf("secure sqlite database: %w", err)
+	}
+	for _, suffix := range []string{"-journal", "-wal", "-shm"} {
+		if err := secureSQLiteFile(dbPath+suffix, false); err != nil {
+			return fmt.Errorf("secure sqlite sidecar %q: %w", suffix, err)
+		}
+	}
+	return nil
+}
+
+func secureSQLiteFile(path string, create bool) error {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		if !create {
+			return nil
+		}
+		file, createErr := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if createErr != nil {
+			if os.IsExist(createErr) {
+				return secureSQLiteFile(path, false)
+			}
+			return createErr
+		}
+		if closeErr := file.Close(); closeErr != nil {
+			return closeErr
+		}
+		info, err = os.Lstat(path)
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return fmt.Errorf("path is not a regular file")
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		return err
+	}
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	verified, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if verified.Mode()&os.ModeSymlink != 0 || !verified.Mode().IsRegular() {
+		return fmt.Errorf("path changed while securing permissions")
+	}
+	if mode := verified.Mode().Perm(); mode != 0o600 {
+		return fmt.Errorf("permissions are %04o, want 0600", mode)
+	}
+	return nil
 }
 
 func sqlDriverAvailable(name string) bool {
@@ -170,6 +267,13 @@ func sqlDriverAvailable(name string) bool {
 }
 
 func (s *sqliteReviewStore) init(ctx context.Context) error {
+	var journalMode string
+	if err := s.db.QueryRowContext(ctx, "PRAGMA journal_mode=DELETE").Scan(&journalMode); err != nil {
+		return fmt.Errorf("set sqlite journal mode: %w", err)
+	}
+	if !strings.EqualFold(strings.TrimSpace(journalMode), "delete") {
+		return fmt.Errorf("set sqlite journal mode: got %q, want delete", journalMode)
+	}
 	if _, err := s.db.ExecContext(ctx, "PRAGMA foreign_keys=ON"); err != nil {
 		return fmt.Errorf("enable sqlite foreign keys: %w", err)
 	}
@@ -281,6 +385,9 @@ INSERT INTO review_tasks (
 		return fmt.Errorf("commit review transaction: %w", err)
 	}
 	committed = true
+	if err := secureSQLiteArtifacts(s.dbPath); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -607,7 +714,9 @@ ORDER BY ordinal`, taskID)
 }
 
 func (s *sqliteReviewStore) Close() error {
-	return s.db.Close()
+	closeErr := s.db.Close()
+	secureErr := secureSQLiteArtifacts(s.dbPath)
+	return errors.Join(closeErr, secureErr)
 }
 
 func newMemoryReviewStore() *memoryReviewStore {

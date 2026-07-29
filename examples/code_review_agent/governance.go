@@ -163,25 +163,41 @@ func runGovernance(
 
 	plannedInput := input
 	if shouldRunRepositoryChecks(input, parsed) && strings.TrimSpace(plannedInput.sandboxRepoRoot) == "" {
-		snapshotCtx, cancel := context.WithTimeout(ctx, gitDiffTimeout)
-		snapshot, snapshotErr := prepareSandboxRepoSnapshot(
-			snapshotCtx,
-			input.repoRoot,
-			input.repoFiles,
-			maxSandboxSnapshotBytes,
-		)
-		cancel()
-		if snapshotErr != nil {
+		if len(input.repoFiles) > 0 {
 			result.addGovernanceWarning(
 				"sandbox",
 				commandSpec{Kind: commandCheckGoTest},
 				ruleSandboxSnapshotUnavailable,
-				"Repository snapshot is unavailable",
-				snapshotErr.Error(),
+				"Repository checks require a complete snapshot",
+				"scoped --files reviews do not upload the complete module needed for repository checks",
 			)
 		} else {
-			plannedInput.sandboxRepoRoot = snapshot.Root
-			defer os.RemoveAll(snapshot.Root)
+			snapshotCtx, cancel := context.WithTimeout(ctx, gitDiffTimeout)
+			snapshot, snapshotErr := prepareSandboxRepoSnapshot(
+				snapshotCtx,
+				input.repoRoot,
+				nil,
+				maxSandboxSnapshotBytes,
+			)
+			cancel()
+			if snapshotErr == nil {
+				_, snapshotErr = prepareAffectedModuleManifest(snapshot.Root, parsed)
+			}
+			if snapshotErr != nil {
+				if snapshot.Root != "" {
+					_ = os.RemoveAll(snapshot.Root)
+				}
+				result.addGovernanceWarning(
+					"sandbox",
+					commandSpec{Kind: commandCheckGoTest},
+					ruleSandboxSnapshotUnavailable,
+					"Repository snapshot is unavailable",
+					snapshotErr.Error(),
+				)
+			} else {
+				plannedInput.sandboxRepoRoot = snapshot.Root
+				defer os.RemoveAll(snapshot.Root)
+			}
 		}
 	}
 

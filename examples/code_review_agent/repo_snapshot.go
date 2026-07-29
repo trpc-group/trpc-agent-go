@@ -18,10 +18,13 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
 const maxSandboxSnapshotBytes = int64(128 * 1024 * 1024)
+
+const reviewModuleManifestName = ".trpc-agent-review-modules"
 
 type repoSnapshot struct {
 	Root  string
@@ -137,6 +140,105 @@ func cleanSnapshotScope(raw []string) ([]string, error) {
 		cleaned = append(cleaned, rel)
 	}
 	return cleaned, nil
+}
+
+func prepareAffectedModuleManifest(snapshotRoot string, parsed parsedDiff) ([]string, error) {
+	root, err := filepath.Abs(snapshotRoot)
+	if err != nil {
+		return nil, fmt.Errorf("resolve snapshot root: %w", err)
+	}
+	modules := make(map[string]bool)
+	for _, file := range parsed.Files {
+		if !file.isGoFile() || file.IsDeleted || file.IsBinary {
+			continue
+		}
+		rel, err := cleanTrackedPath(file.reviewPath())
+		if err != nil {
+			return nil, fmt.Errorf("resolve affected module for %q: %w", file.reviewPath(), err)
+		}
+		module, err := nearestGoModule(root, rel)
+		if err != nil {
+			return nil, fmt.Errorf("resolve affected module for %q: %w", rel, err)
+		}
+		modules[module] = true
+	}
+	if len(modules) == 0 {
+		return nil, fmt.Errorf("no affected Go modules were found")
+	}
+
+	ordered := make([]string, 0, len(modules))
+	for module := range modules {
+		ordered = append(ordered, module)
+	}
+	sort.Strings(ordered)
+
+	manifestPath := filepath.Join(root, reviewModuleManifestName)
+	manifest, err := os.OpenFile(manifestPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("create affected module manifest: %w", err)
+	}
+	removeOnError := true
+	defer func() {
+		if removeOnError {
+			_ = os.Remove(manifestPath)
+		}
+	}()
+	for _, module := range ordered {
+		if _, err := io.WriteString(manifest, module); err != nil {
+			_ = manifest.Close()
+			return nil, fmt.Errorf("write affected module manifest: %w", err)
+		}
+		if _, err := manifest.Write([]byte{0}); err != nil {
+			_ = manifest.Close()
+			return nil, fmt.Errorf("write affected module manifest delimiter: %w", err)
+		}
+	}
+	if err := manifest.Close(); err != nil {
+		return nil, fmt.Errorf("close affected module manifest: %w", err)
+	}
+	removeOnError = false
+	return ordered, nil
+}
+
+func nearestGoModule(snapshotRoot string, changedFile string) (string, error) {
+	changedPath := filepath.Join(snapshotRoot, filepath.FromSlash(changedFile))
+	if !pathStaysWithin(snapshotRoot, changedPath) {
+		return "", fmt.Errorf("changed file escapes the snapshot")
+	}
+	info, err := os.Lstat(changedPath)
+	if err != nil {
+		return "", fmt.Errorf("stat changed file: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("changed file is not regular")
+	}
+
+	dir := filepath.Dir(filepath.FromSlash(changedFile))
+	for {
+		moduleFile := filepath.Join(snapshotRoot, dir, "go.mod")
+		moduleInfo, err := os.Lstat(moduleFile)
+		switch {
+		case err == nil:
+			if !moduleInfo.Mode().IsRegular() {
+				return "", fmt.Errorf("module file %q is not regular", filepath.ToSlash(moduleFile))
+			}
+			if dir == "." {
+				return ".", nil
+			}
+			return filepath.ToSlash(dir), nil
+		case !os.IsNotExist(err):
+			return "", fmt.Errorf("stat module file %q: %w", filepath.ToSlash(moduleFile), err)
+		}
+		if dir == "." {
+			break
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir || parent == ".." || strings.HasPrefix(parent, ".."+string(filepath.Separator)) {
+			break
+		}
+		dir = parent
+	}
+	return "", fmt.Errorf("no go.mod found in snapshot ancestors")
 }
 
 func gitTrackedFiles(ctx context.Context, repoRoot string, filesScope []string) ([]string, error) {

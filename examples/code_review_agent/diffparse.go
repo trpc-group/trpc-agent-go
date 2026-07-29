@@ -88,6 +88,7 @@ func parseUnifiedDiff(raw []byte) parsedDiff {
 		}
 		parser.consumeLine(line, i+1)
 	}
+	parser.finalizeCurrentHunk()
 
 	derivePackageNames(&parser.parsed)
 	return parser.parsed
@@ -99,6 +100,7 @@ type diffParser struct {
 	currentHunk int
 	oldCursor   int
 	newCursor   int
+	hunkLine    int
 }
 
 func (p *diffParser) consumeLine(line string, inputLine int) {
@@ -126,6 +128,7 @@ func (p *diffParser) consumeLine(line string, inputLine int) {
 }
 
 func (p *diffParser) startFile(line string, inputLine int) {
+	p.finalizeCurrentHunk()
 	oldPath, newPath, warning := parseGitDiffPaths(line)
 	p.parsed.Files = append(p.parsed.Files, changedFile{
 		OldPath: oldPath,
@@ -193,6 +196,7 @@ func (p *diffParser) consumeNewPath(file *changedFile, line string) {
 }
 
 func (p *diffParser) consumeHunkHeader(file *changedFile, line string, inputLine int) {
+	p.finalizeCurrentHunk()
 	hunk, err := parseHunkHeader(line)
 	if err != nil {
 		p.currentHunk = -1
@@ -203,6 +207,32 @@ func (p *diffParser) consumeHunkHeader(file *changedFile, line string, inputLine
 	p.currentHunk = len(file.Hunks) - 1
 	p.oldCursor = hunk.OldStart
 	p.newCursor = hunk.NewStart
+	p.hunkLine = inputLine
+}
+
+func (p *diffParser) finalizeCurrentHunk() {
+	if p.currentFile < 0 || p.currentHunk < 0 {
+		return
+	}
+	file := &p.parsed.Files[p.currentFile]
+	hunk := &file.Hunks[p.currentHunk]
+	oldActual := p.oldCursor - hunk.OldStart
+	newActual := p.newCursor - hunk.NewStart
+	if oldActual != hunk.OldCount || newActual != hunk.NewCount {
+		p.addWarning(
+			file.reviewPath(),
+			p.hunkLine,
+			fmt.Sprintf(
+				"hunk line count mismatch: declared old=%d new=%d, consumed old=%d new=%d",
+				hunk.OldCount,
+				hunk.NewCount,
+				oldActual,
+				newActual,
+			),
+		)
+	}
+	p.currentHunk = -1
+	p.hunkLine = 0
 }
 
 func (p *diffParser) consumeHunkLine(file *changedFile, line string, inputLine int) {
@@ -344,15 +374,27 @@ func parseHunkHeader(line string) (diffHunk, error) {
 		return diffHunk{}, fmt.Errorf("malformed hunk header %q", line)
 	}
 
-	oldStart, _ := strconv.Atoi(matches[1])
+	oldStart, err := parseHunkNumber(matches[1], 0, "old start", line)
+	if err != nil {
+		return diffHunk{}, err
+	}
 	oldCount := 1
 	if matches[2] != "" {
-		oldCount, _ = strconv.Atoi(matches[2])
+		oldCount, err = parseHunkNumber(matches[2], 1, "old count", line)
+		if err != nil {
+			return diffHunk{}, err
+		}
 	}
-	newStart, _ := strconv.Atoi(matches[3])
+	newStart, err := parseHunkNumber(matches[3], 0, "new start", line)
+	if err != nil {
+		return diffHunk{}, err
+	}
 	newCount := 1
 	if matches[4] != "" {
-		newCount, _ = strconv.Atoi(matches[4])
+		newCount, err = parseHunkNumber(matches[4], 1, "new count", line)
+		if err != nil {
+			return diffHunk{}, err
+		}
 	}
 	return diffHunk{
 		Header:   line,
@@ -361,6 +403,17 @@ func parseHunkHeader(line string) (diffHunk, error) {
 		NewStart: newStart,
 		NewCount: newCount,
 	}, nil
+}
+
+func parseHunkNumber(value string, defaultValue int, label string, header string) (int, error) {
+	if value == "" {
+		return defaultValue, nil
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, fmt.Errorf("malformed hunk header %q: invalid %s", header, label)
+	}
+	return parsed, nil
 }
 
 func isKnownDiffMetadata(line string) bool {

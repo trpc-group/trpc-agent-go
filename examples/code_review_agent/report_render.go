@@ -269,7 +269,7 @@ func reportFileSummaries(parsed parsedDiff, redact func(string) string) []report
 }
 
 func determineConclusion(report reviewReport) string {
-	if report.Rules.NeedsHumanReview || report.Governance.CommandsBlocked > 0 ||
+	if report.Parse.Warnings > 0 || report.Rules.NeedsHumanReview || report.Governance.CommandsBlocked > 0 ||
 		report.Governance.PermissionBlocks > 0 {
 		return reviewConclusionNeedsHumanReview
 	}
@@ -347,7 +347,7 @@ func (r reviewReport) summary() reviewSummary {
 		PermissionBlocks:  r.Governance.PermissionBlocks,
 		Findings:          len(r.Findings),
 		Warnings:          len(r.Warnings),
-		NeedsHumanReview:  r.Rules.NeedsHumanReview,
+		NeedsHumanReview:  r.Conclusion == reviewConclusionNeedsHumanReview,
 		SuppressedMatches: r.Rules.SuppressedMatches,
 		Redactions:        r.Metrics.Redactions,
 		FindingRuleIDs:    append([]string(nil), r.Rules.FindingRuleIDs...),
@@ -360,7 +360,7 @@ func (r reviewReport) summary() reviewSummary {
 
 func writeReviewReportFiles(report *reviewReport, outputDir string) error {
 	taskDir := filepath.Join(outputDir, report.TaskID)
-	if err := os.MkdirAll(taskDir, 0o755); err != nil {
+	if err := os.MkdirAll(taskDir, 0o700); err != nil {
 		return fmt.Errorf("create report directory: %w", err)
 	}
 	report.ReportPaths = reportPaths{
