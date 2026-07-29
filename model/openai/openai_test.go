@@ -1090,8 +1090,10 @@ func TestWithContextWindowResolver(t *testing.T) {
 		modelName = "provider-model"
 		window    = 65536
 	)
-	var resolver model.ContextWindowResolver = func(name string) (int, bool) {
-		if name == modelName {
+	var resolver model.ContextWindowResolver = func(
+		request model.ContextWindowRequest,
+	) (int, bool) {
+		if request.ModelName == modelName {
 			return window, true
 		}
 		return 0, false
@@ -1105,7 +1107,7 @@ func TestWithContextWindowResolver(t *testing.T) {
 
 	m = New(
 		modelName,
-		WithContextWindowResolver(func(string) (int, bool) {
+		WithContextWindowResolver(func(model.ContextWindowRequest) (int, bool) {
 			return 0, true
 		}),
 	)

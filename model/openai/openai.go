@@ -484,7 +484,8 @@ func New(name string, opts ...Option) *Model {
 	}
 	contextWindow := o.ContextWindow
 	if contextWindow <= 0 && o.ContextWindowResolver != nil {
-		if resolved, ok := o.ContextWindowResolver(name); ok && resolved > 0 {
+		request := model.ContextWindowRequest{ModelName: name}
+		if resolved, ok := o.ContextWindowResolver(request); ok && resolved > 0 {
 			contextWindow = resolved
 		}
 	}

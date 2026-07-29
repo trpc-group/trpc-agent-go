@@ -56,10 +56,17 @@ type Model interface {
 	Info() Info
 }
 
-// ContextWindowResolver resolves context-window metadata for a model name.
+// ContextWindowRequest contains model metadata used to resolve a context
+// window.
+type ContextWindowRequest struct {
+	// ModelName is the model identifier used by the provider.
+	ModelName string
+}
+
+// ContextWindowResolver resolves context-window metadata for a model.
 // It returns ok=false when the model is unknown.
 type ContextWindowResolver func(
-	modelName string,
+	request ContextWindowRequest,
 ) (tokens int, ok bool)
 
 // Seq is a callback-based sequence that yields values.
