@@ -4666,6 +4666,87 @@ func TestA2AAgentRunStreamingPreservesResponseID(t *testing.T) {
 	})
 }
 
+func TestA2AAgentRunStreamingPreservesTerminalMessageContentParts(
+	t *testing.T,
+) {
+	filePart := protocol.NewFilePartWithURI(
+		"report.pdf",
+		"application/pdf",
+		"https://example.com/report.pdf",
+	)
+	sseBody := mustBuildSSEBody(t, []sseEvent{
+		{
+			eventType: protocol.EventArtifactUpdate,
+			payload: protocol.TaskArtifactUpdateEvent{
+				Kind:      protocol.KindTaskArtifactUpdate,
+				TaskID:    "task-1",
+				ContextID: "ctx-1",
+				Artifact: protocol.Artifact{
+					ArtifactID: "resp-1",
+					Parts: []protocol.Part{
+						&filePart,
+						buildToolCallDataPart(
+							"call-1",
+							"tool-1",
+							`{"a":1}`,
+						),
+					},
+				},
+			},
+		},
+		{
+			eventType: protocol.EventStatusUpdate,
+			payload: protocol.TaskStatusUpdateEvent{
+				Kind:      protocol.KindTaskStatusUpdate,
+				TaskID:    "task-1",
+				ContextID: "ctx-1",
+				Final:     true,
+				Status: protocol.TaskStatus{
+					State: protocol.TaskStateCompleted,
+				},
+			},
+		},
+	})
+
+	a := &A2AAgent{
+		name:                "test-agent",
+		agentCard:           &server.AgentCard{URL: "http://stream.test/"},
+		eventConverter:      &defaultA2AEventConverter{},
+		a2aMessageConverter: stubInvocationConverter{},
+		streamingBufSize:    4,
+		a2aClient:           newTestStreamClient(t, sseBody),
+	}
+	invocation := &agent.Invocation{
+		InvocationID: "inv-test",
+		Message:      model.Message{Role: model.RoleUser, Content: "hello"},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	eventCh, err := a.runStreaming(ctx, invocation)
+	require.NoError(t, err)
+
+	var finalResponse *model.Response
+	for evt := range eventCh {
+		if evt.Response != nil && evt.Response.Done {
+			finalResponse = evt.Response
+		}
+	}
+
+	require.NotNil(t, finalResponse)
+	require.Len(t, finalResponse.Choices, 1)
+	contentParts := finalResponse.Choices[0].Message.ContentParts
+	require.Len(t, contentParts, 1)
+	require.Equal(t, model.ContentTypeFile, contentParts[0].Type)
+	require.NotNil(t, contentParts[0].File)
+	require.Equal(
+		t,
+		"https://example.com/report.pdf",
+		contentParts[0].File.URL,
+	)
+}
+
 func TestA2AAgentRunStreaming_SkipsSyntheticFinalOnTaskError(
 	t *testing.T,
 ) {
@@ -5222,6 +5303,38 @@ func TestA2AAgent_aggregateEventContent_HandlerError(t *testing.T) {
 	require.NotNil(t, evt.Response)
 	require.NotNil(t, evt.Response.Error)
 	require.Equal(t, model.ErrorTypeRunError, evt.Response.Error.Type)
+}
+
+func TestA2AAgent_aggregateEventContent_ContentParts(t *testing.T) {
+	builder := &strings.Builder{}
+	var contentParts []model.ContentPart
+	image := model.ContentPart{
+		Type: model.ContentTypeImage,
+		Image: &model.Image{
+			Data:   []byte("image"),
+			Format: "image/png",
+		},
+	}
+	responseID, terminalError := (&A2AAgent{}).aggregateEventContent(
+		context.Background(),
+		nil,
+		nil,
+		&event.Event{
+			Response: &model.Response{
+				ID: "resp-file",
+				Choices: []model.Choice{{
+					Delta: model.Message{ContentParts: []model.ContentPart{image}},
+				}},
+			},
+		},
+		"",
+		builder,
+		&contentParts,
+	)
+
+	require.Equal(t, "resp-file", responseID)
+	require.Nil(t, terminalError)
+	require.Equal(t, []model.ContentPart{image}, contentParts)
 }
 
 // TestValidateA2ARequestOptions tests validation logic for A2A request options

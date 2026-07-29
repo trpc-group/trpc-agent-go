@@ -1417,11 +1417,20 @@ func normalizeStreamingResult(
 ) protocol.StreamingMessageResult {
 	switch v := result.(type) {
 	case *protocol.Message:
-		return normalizeProtocolMessage(v)
+		if normalized := normalizeProtocolMessage(v); normalized != nil {
+			return normalized
+		}
+		return nil
 	case *protocol.TaskArtifactUpdateEvent:
-		return normalizeTaskArtifactUpdateEvent(v)
+		if normalized := normalizeTaskArtifactUpdateEvent(v); normalized != nil {
+			return normalized
+		}
+		return nil
 	case *protocol.TaskStatusUpdateEvent:
-		return normalizeTaskStatusUpdateEvent(v)
+		if normalized := normalizeTaskStatusUpdateEvent(v); normalized != nil {
+			return normalized
+		}
+		return nil
 	default:
 		return result
 	}
@@ -1432,9 +1441,15 @@ func normalizeUnaryResult(
 ) protocol.UnaryMessageResult {
 	switch v := result.(type) {
 	case *protocol.Message:
-		return normalizeProtocolMessage(v)
+		if normalized := normalizeProtocolMessage(v); normalized != nil {
+			return normalized
+		}
+		return nil
 	case *protocol.Task:
-		return normalizeTask(v)
+		if normalized := normalizeTask(v); normalized != nil {
+			return normalized
+		}
+		return nil
 	default:
 		return result
 	}

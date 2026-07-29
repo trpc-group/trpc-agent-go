@@ -5911,6 +5911,23 @@ func TestNormalizeResponseResults(t *testing.T) {
 		assert.Nil(t, normalizeArtifact(nil))
 	})
 
+	t.Run("typed nil results", func(t *testing.T) {
+		var message *protocol.Message
+		var artifact *protocol.TaskArtifactUpdateEvent
+		var status *protocol.TaskStatusUpdateEvent
+		var task *protocol.Task
+		assert.Nil(t, normalizeStreamingResult(message))
+		assert.Nil(t, normalizeStreamingResult(artifact))
+		assert.Nil(t, normalizeStreamingResult(status))
+		assert.Nil(t, normalizeUnaryResult(message))
+		assert.Nil(t, normalizeUnaryResult(task))
+		assert.Nil(t, normalizeStreamingResult(&protocol.Message{}))
+		assert.Nil(t, normalizeStreamingResult(
+			&protocol.TaskArtifactUpdateEvent{},
+		))
+		assert.Nil(t, normalizeUnaryResult(&protocol.Message{}))
+	})
+
 	t.Run("empty message with only response id is dropped", func(t *testing.T) {
 		msg := &protocol.Message{
 			Metadata: map[string]any{

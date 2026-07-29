@@ -105,6 +105,7 @@ func (m *manager) exec(
 			params,
 			timeout,
 			m.baseEnv,
+			m.maxLines,
 		)
 		if err != nil {
 			return execResult{}, err
@@ -174,13 +175,14 @@ func runForeground(
 	params execParams,
 	timeout time.Duration,
 	baseEnv map[string]string,
+	maxLines int,
 ) (string, int, error) {
 	sess, err := startSession(
 		"",
 		params,
 		timeout,
 		baseEnv,
-		0,
+		maxLines,
 	)
 	if err != nil {
 		return "", 0, err

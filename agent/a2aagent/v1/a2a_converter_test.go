@@ -311,6 +311,7 @@ func TestConvertResponseFileParts(t *testing.T) {
 }
 
 func TestConvertPackedToolRoundPreservesFinalAssistantMessage(t *testing.T) {
+	toolResultText := "content-parts result"
 	toolCall := protocol.NewDataPart(map[string]any{
 		ia2a.ToolCallFieldID:   "call-1",
 		ia2a.ToolCallFieldName: "lookup",
@@ -323,6 +324,10 @@ func TestConvertPackedToolRoundPreservesFinalAssistantMessage(t *testing.T) {
 		ia2a.ToolCallFieldID:       "call-1",
 		ia2a.ToolCallFieldName:     "lookup",
 		ia2a.ToolCallFieldResponse: map[string]any{"temperature": 30},
+		ia2a.ToolCallFieldContentParts: []map[string]any{{
+			"type": "text",
+			"text": toolResultText,
+		}},
 	})
 	toolResponse.Metadata = map[string]any{
 		ia2a.DataPartMetadataTypeKey: ia2a.DataPartMetadataTypeFunctionResp,
@@ -354,7 +359,10 @@ func TestConvertPackedToolRoundPreservesFinalAssistantMessage(t *testing.T) {
 		t.Fatalf("tool call choice = %#v", choices[0])
 	}
 	if choices[1].Message.Role != model.RoleTool ||
-		choices[1].Message.Content != `{"temperature":30}` {
+		choices[1].Message.Content != `{"temperature":30}` ||
+		len(choices[1].Message.ContentParts) != 1 ||
+		choices[1].Message.ContentParts[0].Text == nil ||
+		*choices[1].Message.ContentParts[0].Text != toolResultText {
 		t.Fatalf("tool response choice = %#v", choices[1])
 	}
 	if choices[2].Message.Role != model.RoleAssistant ||

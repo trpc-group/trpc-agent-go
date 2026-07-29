@@ -7,7 +7,19 @@
 //
 //
 
-// Package a2a provides utilities for creating a2a servers.
+// Package a2a exposes a runner.Runner as an A2A Protocol v1.0 server.
+//
+// The Runner and its session service own agent execution and conversation
+// context. The A2A task manager is a separate protocol concern. By default,
+// New installs a stateless task manager: the current request can return or
+// stream a task lifecycle, but task state is not retained for later lookup,
+// listing, cancellation, or resubscription. Use WithTaskManagerBuilder with a
+// memory, Redis, or custom manager when the retained A2A task control plane is
+// required; doing so does not replace Runner session storage.
+//
+// The /v1 import-path suffix identifies the A2A Protocol v1.0 integration; it
+// does not require a v1 module tag for trpc-agent-go. The trpc-a2a-go/v2 module
+// version is independent of the A2A protocol version.
 package a2a
 
 import (
@@ -23,6 +35,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 	"trpc.group/trpc-go/trpc-a2a-go/v2/auth"
+	v0 "trpc.group/trpc-go/trpc-a2a-go/v2/compat/v0"
 	"trpc.group/trpc-go/trpc-a2a-go/v2/protocol"
 	a2a "trpc.group/trpc-go/trpc-a2a-go/v2/server"
 	"trpc.group/trpc-go/trpc-a2a-go/v2/taskmanager"
@@ -165,6 +178,12 @@ func buildA2AServer(options *options) (*a2a.A2AServer, error) {
 		a2a.WithAuthProvider(&defaultAuthProvider{userIDHeader: userIDHeader}),
 		a2a.WithBasePath(basePath),
 		a2a.WithMiddleware(&traceContextMiddleware{}),
+	}
+	if options.v0Compatibility {
+		opts = append(opts, a2a.WithCompatHandler(v0.NewJSONRPCHandler(
+			taskManager,
+			v0.WithDefaultBlocking(),
+		)))
 	}
 	opts = append([]a2a.Option{a2a.WithAgentCard(agentCard)}, opts...)
 	opts = append(opts, options.extraOptions...)
@@ -1112,12 +1131,21 @@ func recordTaskOutputEvent(
 ) {
 	switch converted := outbound.(type) {
 	case *protocol.TaskArtifactUpdateEvent:
+		if converted == nil {
+			return
+		}
 		artifactID := converted.Artifact.ArtifactID
 		state.seenArtifactIDs[artifactID] = struct{}{}
 		state.lastArtifactID = artifactID
 	case *protocol.TaskStatusUpdateEvent:
+		if converted == nil {
+			return
+		}
 		state.roundEnded = taskStateEndsRound(converted.Status.State)
 	case *protocol.Message:
+		if converted == nil {
+			return
+		}
 		if state.finalMessage == nil {
 			message := protocol.NewMessageWithContext(
 				protocol.MessageRoleAgent,
@@ -1194,11 +1222,20 @@ func normalizeStreamingResult(
 ) protocol.StreamEvent {
 	switch v := result.(type) {
 	case *protocol.Message:
-		return normalizeProtocolMessage(v)
+		if normalized := normalizeProtocolMessage(v); normalized != nil {
+			return normalized
+		}
+		return nil
 	case *protocol.TaskArtifactUpdateEvent:
-		return normalizeTaskArtifactUpdateEvent(v)
+		if normalized := normalizeTaskArtifactUpdateEvent(v); normalized != nil {
+			return normalized
+		}
+		return nil
 	case *protocol.TaskStatusUpdateEvent:
-		return normalizeTaskStatusUpdateEvent(v)
+		if normalized := normalizeTaskStatusUpdateEvent(v); normalized != nil {
+			return normalized
+		}
+		return nil
 	default:
 		return result
 	}
