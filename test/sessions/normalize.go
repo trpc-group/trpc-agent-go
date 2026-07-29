@@ -10,8 +10,10 @@
 package sessions
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 )
 
@@ -97,17 +99,8 @@ func NormalizeSnapshot(input Snapshot, opts NormalizeOptions) (CanonicalSnapshot
 	if opts.NilEqualsEmpty && copy.Memories == nil {
 		copy.Memories = []MemorySnapshot{}
 	}
-	sort.Slice(copy.Memories, func(i, j int) bool {
-		if copy.Memories[i].Content == copy.Memories[j].Content {
-			return copy.Memories[i].ID < copy.Memories[j].ID
-		}
-		return copy.Memories[i].Content < copy.Memories[j].Content
-	})
 	for i := range copy.Memories {
 		item := &copy.Memories[i]
-		if opts.NormalizeGeneratedMemoryIDs {
-			item.ID = fmt.Sprintf("memory-%03d", i+1)
-		}
 		if item.EventTime != nil {
 			t := item.EventTime.UTC()
 			item.EventTime = &t
@@ -123,7 +116,48 @@ func NormalizeSnapshot(input Snapshot, opts NormalizeOptions) (CanonicalSnapshot
 		sort.Strings(item.Topics)
 		sort.Strings(item.Participants)
 	}
+	sort.SliceStable(copy.Memories, func(i, j int) bool {
+		comparison := compareMemoryBusinessTuple(copy.Memories[i], copy.Memories[j])
+		if comparison != 0 {
+			return comparison < 0
+		}
+		if opts.NormalizeGeneratedMemoryIDs {
+			return false
+		}
+		return copy.Memories[i].ID < copy.Memories[j].ID
+	})
+	if opts.NormalizeGeneratedMemoryIDs {
+		for i := range copy.Memories {
+			copy.Memories[i].ID = fmt.Sprintf("memory-%03d", i+1)
+		}
+	}
 	return CanonicalSnapshot{Snapshot: copy}, nil
+}
+
+func compareMemoryBusinessTuple(left, right MemorySnapshot) int {
+	if result := cmp.Compare(left.Content, right.Content); result != 0 {
+		return result
+	}
+	if result := cmp.Compare(string(left.Kind), string(right.Kind)); result != 0 {
+		return result
+	}
+	switch {
+	case left.EventTime == nil && right.EventTime != nil:
+		return -1
+	case left.EventTime != nil && right.EventTime == nil:
+		return 1
+	case left.EventTime != nil && right.EventTime != nil:
+		if result := left.EventTime.Compare(*right.EventTime); result != 0 {
+			return result
+		}
+	}
+	if result := slices.Compare(left.Participants, right.Participants); result != 0 {
+		return result
+	}
+	if result := cmp.Compare(left.Location, right.Location); result != 0 {
+		return result
+	}
+	return slices.Compare(left.Topics, right.Topics)
 }
 
 func canonicalJSON(input json.RawMessage) json.RawMessage {

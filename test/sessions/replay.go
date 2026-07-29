@@ -96,17 +96,28 @@ type TrackInput struct {
 
 // EventInput describes a stable event without exposing backend details.
 type EventInput struct {
-	ID           string                     `json:"id"`
-	InvocationID string                     `json:"invocation_id,omitempty"`
-	Author       string                     `json:"author,omitempty"`
-	Role         model.Role                 `json:"role"`
-	Content      string                     `json:"content,omitempty"`
-	Timestamp    string                     `json:"timestamp"`
-	FilterKey    string                     `json:"filter_key,omitempty"`
-	ToolCalls    []ToolCallInput            `json:"tool_calls,omitempty"`
-	ToolID       string                     `json:"tool_id,omitempty"`
-	ToolName     string                     `json:"tool_name,omitempty"`
-	StateDelta   map[string]json.RawMessage `json:"state_delta,omitempty"`
+	ID                 string                     `json:"id"`
+	InvocationID       string                     `json:"invocation_id,omitempty"`
+	ParentInvocationID string                     `json:"parent_invocation_id,omitempty"`
+	ParentMetadata     *ReplayParentMetadata      `json:"parent_metadata,omitempty"`
+	Author             string                     `json:"author,omitempty"`
+	Role               model.Role                 `json:"role"`
+	Content            string                     `json:"content,omitempty"`
+	Timestamp          string                     `json:"timestamp"`
+	FilterKey          string                     `json:"filter_key,omitempty"`
+	ToolCalls          []ToolCallInput            `json:"tool_calls,omitempty"`
+	ToolID             string                     `json:"tool_id,omitempty"`
+	ToolName           string                     `json:"tool_name,omitempty"`
+	StateDelta         map[string]json.RawMessage `json:"state_delta,omitempty"`
+}
+
+// ReplayParentMetadata is the replay DTO for one immediate parent edge.
+// TriggerID binds a child invocation to the exact parent action that spawned
+// it, which is required when one parent invokes the same sub-agent in parallel.
+type ReplayParentMetadata struct {
+	TriggerType string `json:"trigger_type"`
+	TriggerID   string `json:"trigger_id"`
+	TriggerName string `json:"trigger_name"`
 }
 
 // ToolCallInput is the fixture representation of a model tool call.
@@ -167,13 +178,22 @@ type SummaryInput struct {
 // These assertions complement cross-backend comparison: they also catch a bug
 // that happens in exactly the same way on every backend.
 type SessionExpectation struct {
-	EventIDs       []string                           `json:"event_ids,omitempty"`
-	UniqueEventIDs bool                               `json:"unique_event_ids,omitempty"`
-	State          map[string]json.RawMessage         `json:"state,omitempty"`
-	SummaryCount   *int                               `json:"summary_count,omitempty"`
-	Summary        *SummaryExpectation                `json:"summary,omitempty"`
-	Context        *ContextExpectation                `json:"context,omitempty"`
-	Tracks         map[string][]TrackEventExpectation `json:"tracks,omitempty"`
+	EventIDs          []string                               `json:"event_ids,omitempty"`
+	UniqueEventIDs    bool                                   `json:"unique_event_ids,omitempty"`
+	EventCorrelations map[string]EventCorrelationExpectation `json:"event_correlations,omitempty"`
+	State             map[string]json.RawMessage             `json:"state,omitempty"`
+	SummaryCount      *int                                   `json:"summary_count,omitempty"`
+	Summary           *SummaryExpectation                    `json:"summary,omitempty"`
+	Context           *ContextExpectation                    `json:"context,omitempty"`
+	Tracks            map[string][]TrackEventExpectation     `json:"tracks,omitempty"`
+}
+
+// EventCorrelationExpectation checks the execution-graph identity of one
+// persisted event. The map key in SessionExpectation is the event ID.
+type EventCorrelationExpectation struct {
+	InvocationID       string                `json:"invocation_id,omitempty"`
+	ParentInvocationID string                `json:"parent_invocation_id,omitempty"`
+	ParentMetadata     *ReplayParentMetadata `json:"parent_metadata,omitempty"`
 }
 
 // TrackEventExpectation checks the ordered payload and optional timestamp of
@@ -188,7 +208,6 @@ type TrackEventExpectation struct {
 type SummaryExpectation struct {
 	FilterKey             string   `json:"filter_key,omitempty"`
 	Version               int      `json:"version,omitempty"`
-	Revision              int      `json:"revision,omitempty"`
 	UpdatedAtNonZero      bool     `json:"updated_at_non_zero,omitempty"`
 	UpdatedAtEqualsCutoff bool     `json:"updated_at_equals_cutoff,omitempty"`
 	LastEventID           string   `json:"last_event_id,omitempty"`
@@ -334,6 +353,12 @@ func (a ReplayAction) Validate() error {
 		if !a.Event.Role.IsValid() {
 			return fmt.Errorf("invalid event role %q", a.Event.Role)
 		}
+		if err := validateReplayParentCorrelation(
+			a.Event.ParentInvocationID,
+			a.Event.ParentMetadata,
+		); err != nil {
+			return fmt.Errorf("append_event %q: %w", a.Event.ID, err)
+		}
 	case ActionAppendTrack:
 		if a.Track == nil || strings.TrimSpace(a.Track.Name) == "" ||
 			a.Track.Timestamp == "" || !json.Valid(a.Track.Payload) {
@@ -354,6 +379,25 @@ func (a ReplayAction) Validate() error {
 	case ActionAssertSession:
 		if a.Expected == nil {
 			return errors.New("assert_session requires expected")
+		}
+		for eventID, expected := range a.Expected.EventCorrelations {
+			if strings.TrimSpace(eventID) == "" {
+				return errors.New("event correlation requires an event ID")
+			}
+			if expected.InvocationID == "" &&
+				expected.ParentInvocationID == "" &&
+				expected.ParentMetadata == nil {
+				return fmt.Errorf(
+					"event correlation %q has no expected fields",
+					eventID,
+				)
+			}
+			if err := validateReplayParentCorrelation(
+				expected.ParentInvocationID,
+				expected.ParentMetadata,
+			); err != nil {
+				return fmt.Errorf("event correlation %q: %w", eventID, err)
+			}
 		}
 		if a.Expected.Context != nil {
 			for i, message := range a.Expected.Context.Messages {
@@ -415,6 +459,26 @@ func (a ReplayAction) Validate() error {
 		}
 	default:
 		return fmt.Errorf("unsupported replay action %q", a.Action)
+	}
+	return nil
+}
+
+func validateReplayParentCorrelation(
+	parentInvocationID string,
+	metadata *ReplayParentMetadata,
+) error {
+	if metadata == nil {
+		return nil
+	}
+	if strings.TrimSpace(parentInvocationID) == "" {
+		return errors.New("parent_metadata requires parent_invocation_id")
+	}
+	if strings.TrimSpace(metadata.TriggerType) == "" ||
+		strings.TrimSpace(metadata.TriggerID) == "" ||
+		strings.TrimSpace(metadata.TriggerName) == "" {
+		return errors.New(
+			"parent_metadata requires trigger_type, trigger_id, and trigger_name",
+		)
 	}
 	return nil
 }
@@ -622,7 +686,7 @@ func Replay(ctx context.Context, backend Backend, tc ReplayCase, appName, userID
 		}
 		result.ActionResults = append(result.ActionResults, ar)
 	}
-	final, err := CollectSnapshot(ctx, backend, state, "final")
+	final, err := collectSnapshot(ctx, backend, state, "final")
 	if err != nil {
 		return result, fmt.Errorf("collect final snapshot: %w", err)
 	}
@@ -687,21 +751,43 @@ func executeReplayAction(ctx context.Context, backend Backend, state *replayStat
 			if err != nil {
 				return err
 			}
-			if err := backend.MemoryService().AddMemory(ctx, userKey,
-				action.Memory.Content, action.Memory.Topics, opts...); err != nil {
-				return err
-			}
-			entries, err := backend.MemoryService().ReadMemories(ctx, userKey, 0)
+			beforeIDs, err := readReplayMemoryIDs(ctx, backend, userKey)
 			if err != nil {
 				return err
 			}
-			for _, entry := range entries {
-				if entry.Memory != nil && entry.Memory.Memory == action.Memory.Content {
-					state.memoryIDs[action.Memory.Ref] = entry.ID
-					return nil
-				}
+
+			if err := backend.MemoryService().AddMemory(
+				ctx,
+				userKey,
+				action.Memory.Content,
+				action.Memory.Topics,
+				opts...,
+			); err != nil {
+				return err
 			}
-			return fmt.Errorf("added memory %q was not found", action.Memory.Ref)
+
+			afterIDs, err := readReplayMemoryIDs(ctx, backend, userKey)
+			if err != nil {
+				return err
+			}
+
+			memoryID, err := resolveAddedMemoryID(beforeIDs, afterIDs)
+			if err != nil {
+				if existingID, ok := state.memoryIDs[action.Memory.Ref]; ok &&
+					memoryIDSetsEqual(beforeIDs, afterIDs) {
+					if _, exists := afterIDs[existingID]; exists {
+						return nil
+					}
+				}
+				return fmt.Errorf(
+					"resolve added memory %q: %w",
+					action.Memory.Ref,
+					err,
+				)
+			}
+
+			state.memoryIDs[action.Memory.Ref] = memoryID
+			return nil
 		case ActionUpdateMemory:
 			memoryID, ok := state.memoryIDs[action.Memory.Ref]
 			if !ok {
@@ -781,7 +867,7 @@ func executeReplayAction(ctx context.Context, backend Backend, state *replayStat
 				action.ExpectedMemory,
 			)
 		case ActionCheckpoint:
-			snapshot, err := CollectSnapshot(ctx, backend, state, action.Checkpoint)
+			snapshot, err := collectSnapshot(ctx, backend, state, action.Checkpoint)
 			if err == nil {
 				state.checkpoints = append(state.checkpoints, snapshot)
 			}
@@ -828,6 +914,81 @@ func executeReplayAction(ctx context.Context, backend Backend, state *replayStat
 		}
 	}
 	return executeWithFailure(op, action.Failure, confirm)
+}
+
+// readReplayMemoryIDs reads the complete ID set for one replay user.
+func readReplayMemoryIDs(
+	ctx context.Context,
+	backend Backend,
+	userKey memory.UserKey,
+) (map[string]struct{}, error) {
+	entries, err := backend.MemoryService().ReadMemories(ctx, userKey, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	ids := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		if entry == nil {
+			continue
+		}
+		if entry.ID == "" {
+			return nil, errors.New("memory entry has empty ID")
+		}
+		ids[entry.ID] = struct{}{}
+	}
+	return ids, nil
+}
+
+// resolveAddedMemoryID requires an add to introduce exactly one ID.
+func resolveAddedMemoryID(
+	before map[string]struct{},
+	after map[string]struct{},
+) (string, error) {
+	added := make([]string, 0, 1)
+	for id := range after {
+		if _, existed := before[id]; !existed {
+			added = append(added, id)
+		}
+	}
+
+	removed := make([]string, 0)
+	for id := range before {
+		if _, exists := after[id]; !exists {
+			removed = append(removed, id)
+		}
+	}
+	sort.Strings(removed)
+	if len(removed) > 0 {
+		return "", fmt.Errorf("add memory removed existing IDs: %v", removed)
+	}
+
+	sort.Strings(added)
+
+	switch len(added) {
+	case 1:
+		return added[0], nil
+	case 0:
+		return "", errors.New("add memory produced no new ID")
+	default:
+		return "", fmt.Errorf(
+			"add memory produced multiple new IDs: %v",
+			added,
+		)
+	}
+}
+
+// 识别幂等重试前后ID集合未变化
+func memoryIDSetsEqual(left, right map[string]struct{}) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for id := range left {
+		if _, ok := right[id]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func executeWithFailure(
@@ -1101,9 +1262,17 @@ func assertReplaySession(
 	events := append([]event.Event(nil), sess.Events...)
 	sess.EventMu.RUnlock()
 	eventIDs := make([]string, 0, len(events))
-	seen := make(map[string]struct{}, len(events))
-	for _, evt := range events {
+	seen := make(map[string]struct{}, len(events)) //增加一个seen分组，用于
+	eventsByID := make(map[string]*event.Event, len(events))
+	duplicateEventIDs := make(map[string]struct{})
+	for i := range events {
+		evt := &events[i]
 		eventIDs = append(eventIDs, evt.ID)
+		if _, ok := eventsByID[evt.ID]; ok {
+			duplicateEventIDs[evt.ID] = struct{}{}
+		} else {
+			eventsByID[evt.ID] = evt
+		}
 		if expected.UniqueEventIDs {
 			if _, ok := seen[evt.ID]; ok {
 				return fmt.Errorf("duplicate event id %q", evt.ID)
@@ -1113,6 +1282,50 @@ func assertReplaySession(
 	}
 	if expected.EventIDs != nil && !equalStrings(eventIDs, expected.EventIDs) {
 		return fmt.Errorf("event ids: got %v, want %v", eventIDs, expected.EventIDs)
+	}
+	correlationEventIDs := make([]string, 0, len(expected.EventCorrelations))
+	for eventID := range expected.EventCorrelations {
+		correlationEventIDs = append(correlationEventIDs, eventID)
+	}
+	sort.Strings(correlationEventIDs)
+	for _, eventID := range correlationEventIDs {
+		if _, duplicated := duplicateEventIDs[eventID]; duplicated {
+			return fmt.Errorf(
+				"event correlation %q is ambiguous because the ID is duplicated",
+				eventID,
+			)
+		}
+		got, ok := eventsByID[eventID]
+		if !ok {
+			return fmt.Errorf("event correlation %q is missing", eventID)
+		}
+		want := expected.EventCorrelations[eventID]
+		if want.InvocationID != "" && got.InvocationID != want.InvocationID {
+			return fmt.Errorf(
+				"event %q invocation id: got %q, want %q",
+				eventID, got.InvocationID, want.InvocationID,
+			)
+		}
+		if want.ParentInvocationID != "" &&
+			got.ParentInvocationID != want.ParentInvocationID {
+			return fmt.Errorf(
+				"event %q parent invocation id: got %q, want %q",
+				eventID, got.ParentInvocationID, want.ParentInvocationID,
+			)
+		}
+		if want.ParentMetadata != nil {
+			if got.ParentMetadata == nil {
+				return fmt.Errorf("event %q parent metadata is missing", eventID)
+			}
+			if got.ParentMetadata.TriggerType != want.ParentMetadata.TriggerType ||
+				got.ParentMetadata.TriggerID != want.ParentMetadata.TriggerID ||
+				got.ParentMetadata.TriggerName != want.ParentMetadata.TriggerName {
+				return fmt.Errorf(
+					"event %q parent metadata: got %+v, want %+v",
+					eventID, got.ParentMetadata, want.ParentMetadata,
+				)
+			}
+		}
 	}
 	actualState := sess.SnapshotState()
 	for key, want := range expected.State {
@@ -1172,12 +1385,6 @@ func assertReplaySession(
 	if wantSummary.Version > 0 &&
 		(boundary == nil || boundary.Version != wantSummary.Version) {
 		return fmt.Errorf("summary version: got %v, want %d", boundary, wantSummary.Version)
-	}
-	if wantSummary.Revision > 0 && summary.Revision != wantSummary.Revision {
-		return fmt.Errorf(
-			"summary revision: got %d, want %d",
-			summary.Revision, wantSummary.Revision,
-		)
 	}
 	if wantSummary.UpdatedAtNonZero && summary.UpdatedAt.IsZero() {
 		return errors.New("summary updated_at is zero")
@@ -1367,8 +1574,23 @@ func buildEvent(input *EventInput) (*event.Event, error) {
 	}
 	evt := event.NewResponseEvent(invocationID, author, response)
 	evt.ID, evt.Timestamp, evt.FilterKey = input.ID, timestamp.UTC(), input.FilterKey
+	evt.ParentInvocationID = input.ParentInvocationID
+	evt.ParentMetadata = eventParentMetadata(input.ParentMetadata)
 	evt.StateDelta = rawState(input.StateDelta)
 	return evt, nil
+}
+
+func eventParentMetadata(
+	input *ReplayParentMetadata,
+) *event.ParentInvocationMetadata {
+	if input == nil {
+		return nil
+	}
+	return &event.ParentInvocationMetadata{
+		TriggerType: input.TriggerType,
+		TriggerID:   input.TriggerID,
+		TriggerName: input.TriggerName,
+	}
 }
 
 func buildTrackEvent(input *TrackInput) (*session.TrackEvent, error) {
@@ -1449,18 +1671,20 @@ type TrackEventSnapshot struct {
 
 // EventSnapshot contains comparable event fields.
 type EventSnapshot struct {
-	ID             string                     `json:"id"`
-	Index          int                        `json:"index"`
-	InvocationID   string                     `json:"invocation_id"`
-	Author         string                     `json:"author"`
-	Role           string                     `json:"role"`
-	Content        string                     `json:"content"`
-	ToolCalls      []ToolCallSnapshot         `json:"tool_calls"`
-	ToolResponseID string                     `json:"tool_response_id,omitempty"`
-	ToolName       string                     `json:"tool_name,omitempty"`
-	StateDelta     map[string]json.RawMessage `json:"state_delta"`
-	Timestamp      time.Time                  `json:"timestamp"`
-	FilterKey      string                     `json:"filter_key,omitempty"`
+	ID                 string                     `json:"id"`
+	Index              int                        `json:"index"`
+	InvocationID       string                     `json:"invocation_id"`
+	ParentInvocationID string                     `json:"parent_invocation_id,omitempty"`
+	ParentMetadata     *ReplayParentMetadata      `json:"parent_metadata,omitempty"`
+	Author             string                     `json:"author"`
+	Role               string                     `json:"role"`
+	Content            string                     `json:"content"`
+	ToolCalls          []ToolCallSnapshot         `json:"tool_calls"`
+	ToolResponseID     string                     `json:"tool_response_id,omitempty"`
+	ToolName           string                     `json:"tool_name,omitempty"`
+	StateDelta         map[string]json.RawMessage `json:"state_delta"`
+	Timestamp          time.Time                  `json:"timestamp"`
+	FilterKey          string                     `json:"filter_key,omitempty"`
 }
 
 // ToolCallSnapshot contains comparable tool-call fields.
@@ -1476,7 +1700,6 @@ type SummarySnapshot struct {
 	FilterKey   string    `json:"filter_key"`
 	Content     string    `json:"content"`
 	Topics      []string  `json:"topics"`
-	Revision    int       `json:"revision"`
 	UpdatedAt   time.Time `json:"updated_at"`
 	Version     int       `json:"version"`
 	CutoffAt    time.Time `json:"cutoff_at"`
@@ -1494,8 +1717,8 @@ type MemorySnapshot struct {
 	Location     string      `json:"location,omitempty"`
 }
 
-// CollectSnapshot reads back all state using public service APIs.
-func CollectSnapshot(ctx context.Context, backend Backend, state *replayState, checkpoint string) (Snapshot, error) {
+// collectSnapshot reads back all state using public service APIs.
+func collectSnapshot(ctx context.Context, backend Backend, state *replayState, checkpoint string) (Snapshot, error) {
 	snapshot := Snapshot{
 		Backend: backend.Name(), Checkpoint: checkpoint,
 		Sessions: make([]SessionSnapshot, 0, len(state.sessions)),
@@ -1556,8 +1779,11 @@ func snapshotSession(sess *session.Session) SessionSnapshot {
 	sess.EventMu.RLock()
 	for i, evt := range sess.Events {
 		item := EventSnapshot{
-			ID: evt.ID, Index: i, InvocationID: evt.InvocationID, Author: evt.Author,
-			Timestamp: evt.Timestamp.UTC(), FilterKey: evt.FilterKey,
+			ID: evt.ID, Index: i, InvocationID: evt.InvocationID,
+			ParentInvocationID: evt.ParentInvocationID,
+			ParentMetadata:     replayParentMetadata(evt.ParentMetadata),
+			Author:             evt.Author,
+			Timestamp:          evt.Timestamp.UTC(), FilterKey: evt.FilterKey,
 			ToolCalls: []ToolCallSnapshot{}, StateDelta: make(map[string]json.RawMessage),
 		}
 		for key, value := range evt.StateDelta {
@@ -1584,8 +1810,8 @@ func snapshotSession(sess *session.Session) SessionSnapshot {
 		}
 		item := SummarySnapshot{
 			SessionID: sess.ID, FilterKey: filterKey, Content: summary.Summary,
-			Topics:   append([]string(nil), summary.Topics...),
-			Revision: summary.Revision, UpdatedAt: summary.UpdatedAt.UTC(),
+			Topics:    append([]string(nil), summary.Topics...),
+			UpdatedAt: summary.UpdatedAt.UTC(),
 		}
 		if boundary := summary.CutoffBoundary(); boundary != nil {
 			item.Version, item.CutoffAt = boundary.Version, boundary.CutoffTime()
@@ -1616,6 +1842,19 @@ func snapshotSession(sess *session.Session) SessionSnapshot {
 	}
 	sess.TracksMu.RUnlock()
 	return result
+}
+
+func replayParentMetadata(
+	input *event.ParentInvocationMetadata,
+) *ReplayParentMetadata {
+	if input == nil {
+		return nil
+	}
+	return &ReplayParentMetadata{
+		TriggerType: input.TriggerType,
+		TriggerID:   input.TriggerID,
+		TriggerName: input.TriggerName,
+	}
 }
 
 // deterministicSummarizer removes model nondeterminism from storage tests.

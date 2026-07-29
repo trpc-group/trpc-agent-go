@@ -161,6 +161,9 @@ func TestWriteFileAtomically_ReadonlyDir(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("chmod semantics differ on Windows")
 	}
+	if os.Geteuid() == 0 {
+		t.Skip("root can bypass directory permission bits")
+	}
 	dir := t.TempDir()
 	// Create a readonly subdirectory.
 	roDir := filepath.Join(dir, "readonly")

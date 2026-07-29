@@ -1,0 +1,8 @@
+{"action":"metadata","version":1,"id":"20_memory_same_content_identity","description":"same-content episodes keep distinct refs across update and delete"}
+{"action":"create_session","session_id":"session-20"}
+{"action":"add_memory","memory":{"ref":"morning-episode","content":"参加项目同步会","topics":["meeting"],"kind":"episode","event_time":"2026-01-20T09:00:00Z","participants":["alice"],"location":"shenzhen"}}
+{"action":"add_memory","memory":{"ref":"afternoon-episode","content":"参加项目同步会","topics":["release","meeting"],"kind":"episode","event_time":"2026-01-20T15:00:00Z","participants":["bob","alice"],"location":"beijing"}}
+{"action":"update_memory","memory":{"ref":"afternoon-episode","content":"参加项目同步会并确认发布计划","topics":["release","meeting"],"kind":"episode","event_time":"2026-01-20T15:00:00Z","participants":["alice","bob"],"location":"beijing"}}
+{"action":"delete_memory","memory":{"ref":"morning-episode"}}
+{"action":"assert_memory","expected_memory":{"count":1,"contains":[{"ref":"afternoon-episode","content":"参加项目同步会并确认发布计划","topics":["meeting","release"],"kind":"episode","event_time":"2026-01-20T15:00:00Z","participants":["bob","alice"],"location":"beijing"}],"excludes":[{"content":"参加项目同步会","event_time":"2026-01-20T09:00:00Z","participants":["alice"],"location":"shenzhen"}]}}
+{"action":"checkpoint","checkpoint":"same-content-memory-identity"}

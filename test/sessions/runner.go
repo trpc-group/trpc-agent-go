@@ -11,6 +11,8 @@ package sessions
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -89,26 +91,42 @@ func RunReplayConsistency(ctx context.Context, cfg RunnerConfig) (*RunnerResult,
 		result := &RunnerResult{Report: report, ReportPath: cfg.ReportPath}
 		return result, errors.Join(err, writeErr)
 	}
+	runID, err := newReplayRunID()
+	if err != nil {
+		report := BuildReport(started, nil)
+		report.Error = err.Error()
+		report.Status = "failed"
+		writeErr := WriteReport(cfg.ReportPath, report)
+		result := &RunnerResult{Report: report, ReportPath: cfg.ReportPath}
+		return result, errors.Join(err, writeErr)
+	}
 	caseReports := make([]CaseReport, 0, len(cases))
+	var caseErrors []error
 	for _, tc := range cases {
-		caseReport, err := runReplayCase(ctx, cfg, tempDir, tc)
-		if err != nil {
-			caseReport.Error = err.Error()
-			caseReports = append(caseReports, caseReport)
-			report := BuildReport(started, caseReports)
-			report.Error = err.Error()
-			report.Status = "failed"
-			writeErr := WriteReport(cfg.ReportPath, report)
-			result := &RunnerResult{Report: report, ReportPath: cfg.ReportPath}
-			return result, errors.Join(err, writeErr)
+		caseReport, caseErr := runReplayCase(ctx, cfg, tempDir, runID, tc)
+		if caseErr != nil {
+			caseReport.Error = caseErr.Error()
+			caseErrors = append(caseErrors, fmt.Errorf(
+				"case %s: %w", tc.ID, caseErr,
+			))
 		}
 		caseReports = append(caseReports, caseReport)
+		if isContextTermination(caseErr) {
+			break
+		}
 	}
+	runErr := errors.Join(caseErrors...)
 	report := BuildReport(started, caseReports)
-	if err := WriteReport(cfg.ReportPath, report); err != nil {
-		return nil, err
+	if runErr != nil {
+		report.Error = runErr.Error()
+		report.Status = "failed"
+	} else if report.Status != "passed" {
+		runErr = errors.New("replay consistency report contains failures")
+		report.Error = runErr.Error()
 	}
-	return &RunnerResult{Report: report, ReportPath: cfg.ReportPath}, nil
+	writeErr := WriteReport(cfg.ReportPath, report)
+	result := &RunnerResult{Report: report, ReportPath: cfg.ReportPath}
+	return result, errors.Join(runErr, writeErr)
 }
 
 // BackendFactoriesFromEnv selects the backend matrix for lightweight or
@@ -173,56 +191,98 @@ func runReplayCase(
 	ctx context.Context,
 	cfg RunnerConfig,
 	tempDir string,
+	runID string,
 	tc ReplayCase,
 ) (CaseReport, error) {
 	var err error
+	caseReport := CaseReport{
+		CaseID: tc.ID, Description: tc.Description,
+		Runs: []ReplayResult{}, Comparisons: []ComparisonResult{},
+	}
 	// Fixture timestamps express ordering, not wall clock time. Rebase them
 	// after service creation time because persistent summary stores reject a
 	// summary whose cutoff predates the session's CreatedAt.
 	tc, err = rebaseReplayCaseTimes(tc, time.Now().UTC().Add(24*time.Hour))
 	if err != nil {
-		return CaseReport{}, fmt.Errorf("rebase case %s timestamps: %w", tc.ID, err)
-	}
-	caseReport := CaseReport{
-		CaseID: tc.ID, Description: tc.Description,
-		Runs: []ReplayResult{}, Comparisons: []ComparisonResult{},
+		return caseReport, fmt.Errorf("rebase case %s timestamps: %w", tc.ID, err)
 	}
 	canonical := make([]CanonicalSnapshot, 0, len(cfg.BackendFactories))
 	backendNames := make([]string, 0, len(cfg.BackendFactories))
+	var backendErrors []error
 	userID := cfg.UserIDPrefix + "-" + tc.ID
 	for _, factory := range cfg.BackendFactories {
+		backendName := factory.Name()
 		backendDir := filepath.Join(tempDir, tc.ID, factory.Name())
 		if err := os.MkdirAll(backendDir, 0o755); err != nil {
-			return caseReport, fmt.Errorf("create backend temp dir: %w", err)
+			backendErr := fmt.Errorf(
+				"backend %s create temp dir: %w", backendName, err,
+			)
+			caseReport.Runs = append(caseReport.Runs, failedReplayResult(
+				tc.ID, backendName, backendErr,
+			))
+			backendErrors = append(backendErrors, backendErr)
+			continue
 		}
 		backend, err := factory.Create(ctx, BackendConfig{
 			CaseID: tc.ID, AppName: cfg.AppName, UserID: userID,
 			TempDir: backendDir, RedisURL: cfg.RedisURL,
-			KeyPrefix: "replay:" + tc.ID,
+			//将redis的命名空间改为 —— replay:<run-id>:<case-id>
+			KeyPrefix: fmt.Sprintf("replay:%s:%s", runID, tc.ID),
 		})
 		if err != nil {
-			return caseReport, fmt.Errorf("create %s backend: %w", factory.Name(), err)
+			backendErr := fmt.Errorf("create %s backend: %w", backendName, err)
+			caseReport.Runs = append(caseReport.Runs, failedReplayResult(
+				tc.ID, backendName, backendErr,
+			))
+			backendErrors = append(backendErrors, backendErr)
+			if isContextTermination(err) {
+				return caseReport, errors.Join(backendErrors...)
+			}
+			continue
 		}
 		run, runErr := Replay(ctx, backend, tc, cfg.AppName, userID)
 		closeErr := backend.Close()
-		if run != nil {
-			caseReport.Runs = append(caseReport.Runs, *run)
+		if run == nil {
+			run = &ReplayResult{CaseID: tc.ID, Backend: backendName}
 		}
 		if runErr != nil {
-			return caseReport, runErr
+			if run.Error == "" {
+				run.Error = runErr.Error()
+			}
+			backendErrors = append(backendErrors, runErr)
 		}
 		if closeErr != nil {
-			return caseReport, fmt.Errorf("close %s backend: %w", factory.Name(), closeErr)
+			closeBackendErr := fmt.Errorf("close %s backend: %w", backendName, closeErr)
+			run.Error = joinErrorText(run.Error, closeBackendErr)
+			backendErrors = append(backendErrors, closeBackendErr)
+		}
+		if runErr != nil {
+			caseReport.Runs = append(caseReport.Runs, *run)
+			if isContextTermination(runErr) {
+				return caseReport, errors.Join(backendErrors...)
+			}
+			continue
 		}
 		normalized, err := NormalizeSnapshot(run.FinalSnapshot, cfg.NormalizeOptions)
 		if err != nil {
-			return caseReport, fmt.Errorf("normalize %s: %w", factory.Name(), err)
+			normalizeErr := fmt.Errorf("normalize %s: %w", backendName, err)
+			run.Error = joinErrorText(run.Error, normalizeErr)
+			backendErrors = append(backendErrors, normalizeErr)
+			caseReport.Runs = append(caseReport.Runs, *run)
+			continue
 		}
+		caseReport.Runs = append(caseReport.Runs, *run)
 		canonical = append(canonical, normalized)
-		backendNames = append(backendNames, factory.Name())
+		backendNames = append(backendNames, backendName)
 	}
 	if len(canonical) == 0 {
-		return caseReport, fmt.Errorf("case %s has no backend results", tc.ID)
+		backendErrors = append(backendErrors,
+			fmt.Errorf("case %s has no successful backend results", tc.ID))
+	} else if len(cfg.BackendFactories) > 1 && len(canonical) < 2 {
+		backendErrors = append(backendErrors, fmt.Errorf(
+			"case %s has insufficient successful backends: got %d, need at least 2",
+			tc.ID, len(canonical),
+		))
 	}
 	for i := 1; i < len(canonical); i++ {
 		comparison := CompareSnapshots(
@@ -230,28 +290,64 @@ func runReplayCase(
 		)
 		caseReport.Comparisons = append(caseReport.Comparisons, comparison)
 	}
-	if cfg.RunMutations {
+	if cfg.RunMutations && len(canonical) > 0 {
 		mutated, err := cloneSnapshot(canonical[0].Snapshot)
 		if err != nil {
-			return caseReport, err
+			backendErrors = append(backendErrors,
+				fmt.Errorf("clone mutation snapshot for case %s: %w", tc.ID, err))
+		} else {
+			mutation, mutationErr := applyCaseMutation(&mutated, tc.ID)
+			if mutationErr != nil {
+				backendErrors = append(backendErrors,
+					fmt.Errorf("mutate case %s: %w", tc.ID, mutationErr))
+			} else {
+				normalized, normalizeErr := NormalizeSnapshot(
+					mutated, cfg.NormalizeOptions,
+				)
+				if normalizeErr != nil {
+					backendErrors = append(backendErrors, fmt.Errorf(
+						"normalize mutation for case %s: %w", tc.ID, normalizeErr,
+					))
+				} else {
+					comparison := CompareSnapshots(
+						canonical[0], normalized, backendNames[0], "mutated", nil,
+					)
+					caseReport.Mutations = append(caseReport.Mutations, MutationResult{
+						Name: mutation.Name, Path: mutation.Path,
+						Detected: !comparison.Equal, Differences: comparison.Differences,
+					})
+				}
+			}
 		}
-		mutation, err := applyCaseMutation(&mutated, tc.ID)
-		if err != nil {
-			return caseReport, fmt.Errorf("mutate case %s: %w", tc.ID, err)
-		}
-		normalized, err := NormalizeSnapshot(mutated, cfg.NormalizeOptions)
-		if err != nil {
-			return caseReport, err
-		}
-		comparison := CompareSnapshots(
-			canonical[0], normalized, backendNames[0], "mutated", nil,
-		)
-		caseReport.Mutations = append(caseReport.Mutations, MutationResult{
-			Name: mutation.Name, Path: mutation.Path,
-			Detected: !comparison.Equal, Differences: comparison.Differences,
-		})
 	}
-	return caseReport, nil
+	return caseReport, errors.Join(backendErrors...)
+}
+
+func failedReplayResult(caseID, backend string, err error) ReplayResult {
+	return ReplayResult{CaseID: caseID, Backend: backend, Error: err.Error()}
+}
+
+func joinErrorText(existing string, err error) string {
+	if err == nil {
+		return existing
+	}
+	if existing == "" {
+		return err.Error()
+	}
+	return existing + "; " + err.Error()
+}
+
+func isContextTermination(err error) bool {
+	return errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded)
+}
+
+func newReplayRunID() (string, error) {
+	var id [16]byte
+	if _, err := rand.Read(id[:]); err != nil {
+		return "", fmt.Errorf("generate replay run ID: %w", err)
+	}
+	return hex.EncodeToString(id[:]), nil
 }
 
 func applyCaseMutation(snapshot *Snapshot, caseID string) (Mutation, error) {
@@ -276,53 +372,89 @@ func applyCaseMutation(snapshot *Snapshot, caseID string) (Mutation, error) {
 func rebaseReplayCaseTimes(tc ReplayCase, base time.Time) (ReplayCase, error) {
 	var earliest time.Time
 	for _, action := range tc.Actions {
-		if action.Event == nil && action.Track == nil {
-			continue
-		}
-		raw := ""
 		if action.Event != nil {
-			raw = action.Event.Timestamp
-		} else {
-			raw = action.Track.Timestamp
+			timestamp, err := time.Parse(time.RFC3339Nano, action.Event.Timestamp)
+			if err != nil {
+				return tc, err
+			}
+			if earliest.IsZero() || timestamp.Before(earliest) {
+				earliest = timestamp
+			}
 		}
-		timestamp, err := time.Parse(time.RFC3339Nano, raw)
-		if err != nil {
-			return tc, err
-		}
-		if earliest.IsZero() || timestamp.Before(earliest) {
-			earliest = timestamp
+		if action.Track != nil {
+			timestamp, err := time.Parse(time.RFC3339Nano, action.Track.Timestamp)
+			if err != nil {
+				return tc, err
+			}
+			if earliest.IsZero() || timestamp.Before(earliest) {
+				earliest = timestamp
+			}
 		}
 	}
 	if earliest.IsZero() {
 		return tc, nil
 	}
+	//统一计算offset
+	offset := base.Sub(earliest)
 	for i := range tc.Actions {
-		if tc.Actions[i].Event == nil && tc.Actions[i].Track == nil {
-			continue
-		}
-		raw := ""
-		if tc.Actions[i].Event != nil {
-			raw = tc.Actions[i].Event.Timestamp
-		} else {
-			raw = tc.Actions[i].Track.Timestamp
-		}
-		timestamp, err := time.Parse(
-			time.RFC3339Nano,
-			raw,
-		)
-		if err != nil {
-			return tc, err
-		}
-		rebased := base.Add(timestamp.Sub(earliest)).Format(time.RFC3339Nano)
-		if tc.Actions[i].Event != nil {
-			copy := *tc.Actions[i].Event
+		action := tc.Actions[i]
+		if action.Event != nil {
+			rebased, err := rebaseReplayTimestamp(action.Event.Timestamp, offset)
+			if err != nil {
+				return tc, err
+			}
+			copy := *action.Event
 			copy.Timestamp = rebased
-			tc.Actions[i].Event = &copy
-		} else {
-			copy := *tc.Actions[i].Track
-			copy.Timestamp = rebased
-			tc.Actions[i].Track = &copy
+			action.Event = &copy
 		}
+		if action.Track != nil {
+			rebased, err := rebaseReplayTimestamp(action.Track.Timestamp, offset)
+			if err != nil {
+				return tc, err
+			}
+			copy := *action.Track
+			copy.Timestamp = rebased
+			action.Track = &copy
+		}
+		if action.Expected != nil && len(action.Expected.Tracks) > 0 {
+			expected := *action.Expected
+			expected.Tracks = make(
+				map[string][]TrackEventExpectation,
+				len(action.Expected.Tracks),
+			)
+			for trackName, events := range action.Expected.Tracks {
+				copiedEvents := append([]TrackEventExpectation(nil), events...)
+				for eventIndex := range copiedEvents {
+					if copiedEvents[eventIndex].Timestamp == "" {
+						continue
+					}
+					rebased, err := rebaseReplayTimestamp(
+						copiedEvents[eventIndex].Timestamp,
+						offset,
+					)
+					if err != nil {
+						return tc, fmt.Errorf(
+							"rebase expected track %q event %d timestamp: %w",
+							trackName,
+							eventIndex,
+							err,
+						)
+					}
+					copiedEvents[eventIndex].Timestamp = rebased
+				}
+				expected.Tracks[trackName] = copiedEvents
+			}
+			action.Expected = &expected
+		}
+		tc.Actions[i] = action
 	}
 	return tc, nil
+}
+
+func rebaseReplayTimestamp(raw string, offset time.Duration) (string, error) {
+	timestamp, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return "", err
+	}
+	return timestamp.Add(offset).UTC().Format(time.RFC3339Nano), nil
 }

@@ -111,8 +111,27 @@ func compareValue(path string, left, right any, out *[]Difference) {
 			ordered = append(ordered, key)
 		}
 		sort.Strings(ordered)
+
 		for _, key := range ordered {
-			compareValue(path+"."+key, leftMap[key], rightMap[key], out)
+			childPath := path + "." + key
+			leftValue, leftExists := leftMap[key]
+			rightValue, rightExists := rightMap[key]
+			if leftExists != rightExists {
+				explanation := "map key presence differs"
+				if leftExists {
+					explanation = "map key is missing from actual snapshot"
+				} else {
+					explanation = "map key is missing from reference snapshot"
+				}
+				*out = append(*out, Difference{
+					Path:        childPath,
+					Reference:   comparisonValue(leftValue, leftExists),
+					Actual:      comparisonValue(rightValue, rightExists),
+					Explanation: explanation,
+				})
+				continue
+			}
+			compareValue(childPath, leftValue, rightValue, out)
 		}
 		return
 	}
@@ -124,18 +143,46 @@ func compareValue(path string, left, right any, out *[]Difference) {
 			max = len(rightSlice)
 		}
 		for i := 0; i < max; i++ {
-			var lv, rv any
-			if i < len(leftSlice) {
-				lv = leftSlice[i]
+			childPath := fmt.Sprintf("%s[%d]", path, i)
+			leftExists := i < len(leftSlice)
+			rightExists := i < len(rightSlice)
+
+			var leftValue, rightValue any
+			if leftExists {
+				leftValue = leftSlice[i]
 			}
-			if i < len(rightSlice) {
-				rv = rightSlice[i]
+			if rightExists {
+				rightValue = rightSlice[i]
 			}
-			compareValue(fmt.Sprintf("%s[%d]", path, i), lv, rv, out)
+			if leftExists != rightExists {
+				explanation := "array element presence differs"
+				if leftExists {
+					explanation = "array element is missing from actual snapshot"
+				} else {
+					explanation = "array element is missing from reference snapshot"
+				}
+				*out = append(*out, Difference{
+					Path:        childPath,
+					Reference:   comparisonValue(leftValue, leftExists),
+					Actual:      comparisonValue(rightValue, rightExists),
+					Explanation: explanation,
+				})
+				continue
+			}
+			compareValue(childPath, leftValue, rightValue, out)
 		}
 		return
 	}
 	*out = append(*out, Difference{Path: path, Reference: left, Actual: right})
+}
+
+func comparisonValue(value any, exists bool) any {
+	if exists {
+		return value
+	}
+	return map[string]bool{
+		"$missing": true,
+	}
 }
 
 func categoryForPath(path string) string {

@@ -13,12 +13,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 func TestReplayConsistency(t *testing.T) {
@@ -42,7 +47,7 @@ func TestReplayConsistency(t *testing.T) {
 		RunMutations: true,
 	})
 	require.NoError(t, err)
-	require.GreaterOrEqual(t, result.Report.Summary.CaseCount, 19)
+	require.GreaterOrEqual(t, result.Report.Summary.CaseCount, 20)
 	wantFactories, err := BackendFactoriesFromEnv()
 	require.NoError(t, err)
 	require.Equal(t, len(wantFactories), result.Report.Summary.BackendCount)
@@ -101,6 +106,293 @@ func TestReplayConsistency(t *testing.T) {
 			"required mutation case %q was not loaded or executed",
 			caseID,
 		)
+	}
+}
+
+func TestRunReplayConsistencyUsesUniqueRedisNamespace(t *testing.T) {
+	redisServer := miniredis.RunT(t)
+	factory := &emptyNamespaceRedisFactory{redis: redisServer}
+	caseDir := t.TempDir()
+	fixture := []byte(
+		"{\"action\":\"metadata\",\"version\":1,\"id\":\"redis-namespace\"}\n" +
+			"{\"action\":\"create_session\",\"session_id\":\"session-redis\"}\n",
+	)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(caseDir, "redis-namespace.jsonl"), fixture, 0o600,
+	))
+
+	cfg := RunnerConfig{
+		CaseDir: caseDir, ReportPath: filepath.Join(t.TempDir(), "report.json"),
+		TempDir: t.TempDir(), RedisURL: "redis://" + redisServer.Addr(),
+		BackendFactories: []BackendFactory{factory},
+	}
+	for run := 1; run <= 2; run++ {
+		result, err := RunReplayConsistency(context.Background(), cfg)
+		require.NoErrorf(t, err, "shared Redis run %d failed", run)
+		require.Equal(t, "passed", result.Report.Status)
+	}
+	require.Len(t, factory.prefixes, 2)
+	require.NotEqual(t, factory.prefixes[0], factory.prefixes[1])
+	for _, prefix := range factory.prefixes {
+		require.Regexp(t, `^replay:[0-9a-f]{32}:redis-namespace$`, prefix)
+	}
+}
+
+func TestReplayParentCorrelationRoundTripAndAssertion(t *testing.T) {
+	input := &EventInput{
+		ID: "event-child", InvocationID: "inv-child",
+		ParentInvocationID: "inv-root",
+		ParentMetadata: &ReplayParentMetadata{
+			TriggerType: "tool_call",
+			TriggerID:   "call-a",
+			TriggerName: "research-agent",
+		},
+		Author: "research-agent", Role: "assistant",
+		Content: "child response", Timestamp: "2026-01-01T00:00:00Z",
+	}
+	evt, err := buildEvent(input)
+	require.NoError(t, err)
+	require.Equal(t, "inv-root", evt.ParentInvocationID)
+	require.Equal(t, "tool_call", evt.ParentMetadata.TriggerType)
+	require.Equal(t, "call-a", evt.ParentMetadata.TriggerID)
+	require.Equal(t, "research-agent", evt.ParentMetadata.TriggerName)
+
+	sess := &session.Session{
+		ID:     "session-parent-correlation",
+		Events: []event.Event{*evt},
+	}
+	expected := &SessionExpectation{
+		EventCorrelations: map[string]EventCorrelationExpectation{
+			"event-child": {
+				InvocationID:       "inv-child",
+				ParentInvocationID: "inv-root",
+				ParentMetadata: &ReplayParentMetadata{
+					TriggerType: "tool_call",
+					TriggerID:   "call-a",
+					TriggerName: "research-agent",
+				},
+			},
+		},
+	}
+	require.NoError(t, assertReplaySession(
+		context.Background(), nil, sess, expected,
+	))
+
+	snapshot := snapshotSession(sess)
+	require.Len(t, snapshot.Events, 1)
+	require.Equal(t, "inv-root", snapshot.Events[0].ParentInvocationID)
+	require.Equal(t, &ReplayParentMetadata{
+		TriggerType: "tool_call",
+		TriggerID:   "call-a",
+		TriggerName: "research-agent",
+	}, snapshot.Events[0].ParentMetadata)
+
+	evt.ParentMetadata.TriggerID = "changed-after-snapshot"
+	require.Equal(t, "call-a", snapshot.Events[0].ParentMetadata.TriggerID,
+		"the canonical snapshot must own a deep copy of parent metadata")
+}
+
+func TestReplayParentCorrelationAssertionDetectsDroppedFields(t *testing.T) {
+	expected := &SessionExpectation{
+		EventCorrelations: map[string]EventCorrelationExpectation{
+			"event-child": {
+				InvocationID:       "inv-child",
+				ParentInvocationID: "inv-root",
+				ParentMetadata: &ReplayParentMetadata{
+					TriggerType: "tool_call",
+					TriggerID:   "call-a",
+					TriggerName: "research-agent",
+				},
+			},
+		},
+	}
+	newSession := func() *session.Session {
+		return &session.Session{
+			ID: "session-parent-correlation",
+			Events: []event.Event{{
+				ID:                 "event-child",
+				InvocationID:       "inv-child",
+				ParentInvocationID: "inv-root",
+				ParentMetadata: &event.ParentInvocationMetadata{
+					TriggerType: "tool_call",
+					TriggerID:   "call-a",
+					TriggerName: "research-agent",
+				},
+			}},
+		}
+	}
+	tests := []struct {
+		name      string
+		mutate    func(*event.Event)
+		wantError string
+	}{
+		{
+			name: "dropped parent invocation id",
+			mutate: func(evt *event.Event) {
+				evt.ParentInvocationID = ""
+			},
+			wantError: "parent invocation id",
+		},
+		{
+			name: "dropped parent metadata",
+			mutate: func(evt *event.Event) {
+				evt.ParentMetadata = nil
+			},
+			wantError: "parent metadata is missing",
+		},
+		{
+			name: "dropped trigger id",
+			mutate: func(evt *event.Event) {
+				evt.ParentMetadata.TriggerID = ""
+			},
+			wantError: "parent metadata",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sess := newSession()
+			tt.mutate(&sess.Events[0])
+			err := assertReplaySession(
+				context.Background(), nil, sess, expected,
+			)
+			require.ErrorContains(t, err, tt.wantError)
+		})
+	}
+}
+
+func TestReplayParentCorrelationValidation(t *testing.T) {
+	validEvent := func() *EventInput {
+		return &EventInput{
+			ID: "event-child", Role: "assistant",
+			Timestamp:          "2026-01-01T00:00:00Z",
+			ParentInvocationID: "inv-root",
+			ParentMetadata: &ReplayParentMetadata{
+				TriggerType: "tool_call",
+				TriggerID:   "call-a",
+				TriggerName: "research-agent",
+			},
+		}
+	}
+
+	require.NoError(t, (ReplayAction{
+		Action: ActionAppendEvent, SessionID: "session", Event: validEvent(),
+	}).Validate())
+
+	withoutParent := validEvent()
+	withoutParent.ParentInvocationID = ""
+	require.ErrorContains(t, (ReplayAction{
+		Action: ActionAppendEvent, SessionID: "session", Event: withoutParent,
+	}).Validate(), "parent_metadata requires parent_invocation_id")
+
+	withoutTriggerID := validEvent()
+	withoutTriggerID.ParentMetadata.TriggerID = ""
+	require.ErrorContains(t, (ReplayAction{
+		Action: ActionAppendEvent, SessionID: "session", Event: withoutTriggerID,
+	}).Validate(), "requires trigger_type, trigger_id, and trigger_name")
+}
+
+func TestRebaseReplayCaseTimesRebasesTrackExpectations(t *testing.T) {
+	base := time.Date(2030, time.January, 2, 3, 4, 5, 0, time.UTC)
+	testCase := ReplayCase{Actions: []ReplayAction{
+		{
+			Action: ActionAppendEvent,
+			Event: &EventInput{
+				Timestamp: "2026-01-01T00:00:01Z",
+			},
+		},
+		{
+			Action: ActionAppendTrack,
+			Track: &TrackInput{
+				Name:      "tool.execution",
+				Timestamp: "2026-01-01T00:00:03Z",
+			},
+		},
+		{
+			Action: ActionAssertSession,
+			Expected: &SessionExpectation{
+				Tracks: map[string][]TrackEventExpectation{
+					"tool.execution": {
+						{Timestamp: "2026-01-01T00:00:03Z"},
+						{},
+					},
+				},
+			},
+		},
+	}}
+
+	rebased, err := rebaseReplayCaseTimes(testCase, base)
+	require.NoError(t, err)
+	require.Equal(
+		t,
+		base.Format(time.RFC3339Nano),
+		rebased.Actions[0].Event.Timestamp,
+	)
+	wantTrackTime := base.Add(2 * time.Second).Format(time.RFC3339Nano)
+	require.Equal(t, wantTrackTime, rebased.Actions[1].Track.Timestamp)
+	require.Equal(
+		t,
+		wantTrackTime,
+		rebased.Actions[2].Expected.Tracks["tool.execution"][0].Timestamp,
+	)
+	require.Empty(
+		t,
+		rebased.Actions[2].Expected.Tracks["tool.execution"][1].Timestamp,
+		"an omitted exact timestamp must remain optional",
+	)
+}
+
+// ID差集单元测试
+func TestResolveAddedMemoryID(t *testing.T) {
+	idSet := func(ids ...string) map[string]struct{} {
+		result := make(map[string]struct{}, len(ids))
+		for _, id := range ids {
+			result[id] = struct{}{}
+		}
+		return result
+	}
+	tests := []struct {
+		name      string
+		before    map[string]struct{}
+		after     map[string]struct{}
+		want      string
+		wantError string
+	}{
+		{
+			name:   "one new ID among existing records",
+			before: idSet("episode-a"),
+			after:  idSet("episode-b", "episode-a"),
+			want:   "episode-b",
+		},
+		{
+			name:      "no new ID",
+			before:    idSet("episode-a"),
+			after:     idSet("episode-a"),
+			wantError: "no new ID",
+		},
+		{
+			name:      "multiple new IDs",
+			before:    idSet("episode-a"),
+			after:     idSet("episode-c", "episode-a", "episode-b"),
+			wantError: "multiple new IDs",
+		},
+		{
+			name:      "existing ID removed",
+			before:    idSet("episode-a"),
+			after:     idSet("episode-b"),
+			wantError: "removed existing IDs",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := resolveAddedMemoryID(tt.before, tt.after)
+			if tt.wantError != "" {
+				require.ErrorContains(t, err, tt.wantError)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got)
+		})
 	}
 }
 
@@ -210,11 +502,75 @@ func factoryNames(factories []BackendFactory) []string {
 	return names
 }
 
+type emptyNamespaceRedisFactory struct {
+	redis    *miniredis.Miniredis
+	prefixes []string
+}
+
+func (f *emptyNamespaceRedisFactory) Name() string { return "redis" }
+func (f *emptyNamespaceRedisFactory) Create(
+	ctx context.Context,
+	cfg BackendConfig,
+) (Backend, error) {
+	f.prefixes = append(f.prefixes, cfg.KeyPrefix)
+	for _, key := range f.redis.Keys() {
+		if strings.HasPrefix(key, cfg.KeyPrefix+":") {
+			return nil, fmt.Errorf(
+				"redis namespace %q is not empty: found key %q",
+				cfg.KeyPrefix, key,
+			)
+		}
+	}
+	return (RedisBackendFactory{}).Create(ctx, cfg)
+}
+
 type failingBackendFactory struct{}
 
 func (failingBackendFactory) Name() string { return "failing" }
 func (failingBackendFactory) Create(context.Context, BackendConfig) (Backend, error) {
 	return nil, errors.New("injected backend creation failure")
+}
+
+type appendFailingSessionService struct {
+	session.Service
+}
+
+func (s *appendFailingSessionService) AppendEvent(
+	context.Context,
+	*session.Session,
+	*event.Event,
+	...session.Option,
+) error {
+	return errors.New("injected append event failure")
+}
+
+type appendFailingBackend struct {
+	Backend
+	sessionService session.Service
+}
+
+func (b *appendFailingBackend) Name() string { return "append-failing" }
+func (b *appendFailingBackend) SessionService() session.Service {
+	return b.sessionService
+}
+
+type appendFailingBackendFactory struct{}
+
+func (appendFailingBackendFactory) Name() string { return "append-failing" }
+func (appendFailingBackendFactory) Create(
+	ctx context.Context,
+	cfg BackendConfig,
+) (Backend, error) {
+	backend, err := (InMemoryBackendFactory{}).Create(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return &appendFailingBackend{
+		Backend: backend,
+		sessionService: &appendFailingSessionService{
+			Service: backend.SessionService(),
+		},
+	}, nil
 }
 
 func TestRunReplayConsistencyWritesFailureReport(t *testing.T) {
@@ -296,6 +652,107 @@ func TestRunReplayConsistencyWritesActionFailureReport(t *testing.T) {
 	require.NoError(t, json.Unmarshal(raw, &persisted))
 	require.Equal(t, "failed", persisted.Status)
 	require.Contains(t, persisted.Error, "injected failure before write")
+}
+
+func TestRunReplayConsistencyContinuesWithNextBackend(t *testing.T) {
+	caseDir := t.TempDir()
+	fixture := []byte(
+		"{\"action\":\"metadata\",\"version\":1," +
+			"\"id\":\"backend-continuation\"}\n" +
+			"{\"action\":\"create_session\"," +
+			"\"session_id\":\"session-backend\"}\n" +
+			"{\"action\":\"append_event\"," +
+			"\"session_id\":\"session-backend\",\"event\":{" +
+			"\"id\":\"event-01\",\"role\":\"user\"," +
+			"\"content\":\"continue\"," +
+			"\"timestamp\":\"2026-01-01T00:00:00Z\"}}\n" +
+			"{\"action\":\"checkpoint\",\"checkpoint\":\"after-event\"}\n",
+	)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(caseDir, "backend-continuation.jsonl"), fixture, 0o600,
+	))
+
+	result, err := RunReplayConsistency(context.Background(), RunnerConfig{
+		CaseDir: caseDir, ReportPath: filepath.Join(t.TempDir(), "report.json"),
+		TempDir: t.TempDir(),
+		BackendFactories: []BackendFactory{
+			appendFailingBackendFactory{},
+			InMemoryBackendFactory{},
+			SQLiteBackendFactory{},
+		},
+	})
+
+	require.ErrorContains(t, err, "injected append event failure")
+	require.Len(t, result.Report.Cases, 1)
+	runs := result.Report.Cases[0].Runs
+	require.Len(t, runs, 3)
+	require.Equal(t, "append-failing", runs[0].Backend)
+	require.Contains(t, runs[0].Error, "injected append event failure")
+	require.Len(t, runs[0].ActionResults, 2,
+		"the failed trajectory must stop before the checkpoint")
+	require.Equal(t, "inmemory", runs[1].Backend)
+	require.Empty(t, runs[1].Error)
+	require.Len(t, runs[1].ActionResults, 3,
+		"the next backend must execute the complete trajectory")
+	require.Len(t, runs[1].Checkpoints, 1)
+	require.Equal(t, "sqlite", runs[2].Backend)
+	require.Empty(t, runs[2].Error)
+	require.Len(t, runs[2].ActionResults, 3)
+	require.Len(t, result.Report.Cases[0].Comparisons, 1,
+		"the two successful backends must still be compared")
+	require.Equal(t, "inmemory",
+		result.Report.Cases[0].Comparisons[0].ReferenceBackend)
+	require.Equal(t, "sqlite",
+		result.Report.Cases[0].Comparisons[0].ActualBackend)
+	require.True(t, result.Report.Cases[0].Comparisons[0].Equal)
+}
+
+func TestRunReplayConsistencyContinuesWithNextCase(t *testing.T) {
+	caseDir := t.TempDir()
+	failingFixture := []byte(
+		"{\"action\":\"metadata\",\"version\":1,\"id\":\"01-failing\"}\n" +
+			"{\"action\":\"create_session\",\"session_id\":\"session-failing\"}\n" +
+			"{\"action\":\"append_event\",\"session_id\":\"session-failing\"," +
+			"\"failure\":{\"fail_before\":true},\"event\":{" +
+			"\"id\":\"event-failing\",\"role\":\"user\",\"content\":\"fail\"," +
+			"\"timestamp\":\"2026-01-01T00:00:00Z\"}}\n" +
+			"{\"action\":\"checkpoint\",\"checkpoint\":\"must-not-run\"}\n",
+	)
+	successFixture := []byte(
+		"{\"action\":\"metadata\",\"version\":1,\"id\":\"02-success\"}\n" +
+			"{\"action\":\"create_session\",\"session_id\":\"session-success\"}\n" +
+			"{\"action\":\"checkpoint\",\"checkpoint\":\"completed\"}\n",
+	)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(caseDir, "01-failing.jsonl"), failingFixture, 0o600,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(caseDir, "02-success.jsonl"), successFixture, 0o600,
+	))
+	reportPath := filepath.Join(t.TempDir(), "complete-report.json")
+
+	result, err := RunReplayConsistency(context.Background(), RunnerConfig{
+		CaseDir: caseDir, ReportPath: reportPath, TempDir: t.TempDir(),
+		BackendFactories: []BackendFactory{InMemoryBackendFactory{}},
+	})
+
+	require.ErrorContains(t, err, "injected failure before write")
+	require.Len(t, result.Report.Cases, 2)
+	require.Equal(t, "failed", result.Report.Cases[0].Status)
+	require.Len(t, result.Report.Cases[0].Runs[0].ActionResults, 2,
+		"the failed trajectory must stop before its checkpoint")
+	require.Equal(t, "passed", result.Report.Cases[1].Status)
+	require.Len(t, result.Report.Cases[1].Runs, 1)
+	require.Len(t, result.Report.Cases[1].Runs[0].Checkpoints, 1,
+		"the case after the failure must still run")
+
+	raw, readErr := os.ReadFile(reportPath)
+	require.NoError(t, readErr)
+	var persisted ReplayReport
+	require.NoError(t, json.Unmarshal(raw, &persisted))
+	require.Len(t, persisted.Cases, 2,
+		"the persisted report must include all executable cases")
+	require.Equal(t, "failed", persisted.Status)
 }
 
 func TestExecuteWithFailureFailBeforeRetry(t *testing.T) {

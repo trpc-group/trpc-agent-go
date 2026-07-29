@@ -289,9 +289,6 @@ func persistCopiedSummary(base *session.Session, filterKey string) {
 	base.SummariesMu.Lock()
 	defer base.SummariesMu.Unlock()
 	if base.Summaries != nil && base.Summaries[filterKey] != nil {
-		if base.Summaries[filterKey].Revision < 1 {
-			base.Summaries[filterKey].Revision = 1
-		}
 		base.Summaries[filterKey].UpdatedAt = updatedAt.UTC()
 		base.Summaries[filterKey].Boundary = boundary
 	}
@@ -483,16 +480,8 @@ func writeSummary(
 	if base.Summaries == nil {
 		base.Summaries = make(map[string]*session.Summary)
 	}
-	revision := 1
-	if current := base.Summaries[filterKey]; current != nil {
-		revision = current.Revision + 1
-		if revision < 2 {
-			revision = 2
-		}
-	}
 	base.Summaries[filterKey] = &session.Summary{
 		Summary:   text,
-		Revision:  revision,
 		UpdatedAt: updatedAt,
 		Boundary:  boundary,
 	}

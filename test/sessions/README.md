@@ -32,7 +32,8 @@ Replay harness 主要回答以下问题：
 1. 同一组业务操作写入不同后端后，重新读取的 Session、Event、State、Memory、Summary 和 Track 是否一致。
 2. Event 与 Track 的写入顺序是否得到保留。
 3. 工具调用、工具响应、`state_delta`、`filter_key` 等字段是否完整持久化。
-4. Memory 的新增、更新、删除与后端生成 ID 是否能够稳定比较。
+4. Memory 的新增、更新、删除与后端生成 ID 是否能够稳定比较，
+   以及相同正文、不同事件身份的 Memory 是否保持正确 ref 绑定。
 5. Summary 的内容、版本、修订号、更新时间、截断边界和 Session 归属是否正确。
 6. Summary 与未压缩 Event tail 能否恢复出预期的模型上下文。
 7. 对无法完全一致的字段，是否存在明确且可审计的归一化策略或 `allowed_diff` 解释。
@@ -61,7 +62,7 @@ flowchart TD
     E --> F1[Session Service\nSession / Event / State / Summary / Track]
     E --> F2[Memory Service\nAdd / Update / Delete / Read]
 
-    F1 --> G[CollectSnapshot]
+    F1 --> G[collectSnapshot]
     F2 --> G
     G --> H[NormalizeSnapshot]
     H --> I[CompareSnapshots]
@@ -129,7 +130,8 @@ Fixture 时间戳主要表达事件顺序，而不是测试运行时的真实墙
     └── redis/
 ```
 
-SQLite 分别创建 Session DB 和 Memory DB；Redis 使用 `replay:<case-id>` 前缀，避免不同 case 相互污染。
+SQLite 分别创建 Session DB 和 Memory DB；Redis 使用
+`replay:<run-id>:<case-id>` 前缀，避免不同运行和不同 case 相互污染。
 
 ### 4. 顺序执行 Replay Action
 
@@ -141,7 +143,10 @@ SQLite 分别创建 Session DB 和 Memory DB；Redis 使用 `replay:<case-id>` �
 - 执行耗时；
 - 错误信息。
 
-动作失败时会返回带 case、backend、action index 和 action type 的上下文错误。
+动作失败时会返回带 case、backend、action index 和 action type 的上下文错误，
+并停止当前 `case × backend` 轨迹。Runner 会保留已经完成的 action，继续执行
+同一 case 的其他 backend 以及后续 case，最后统一生成报告并返回聚合错误。
+fixture 加载、全局配置、临时目录以及 context 取消等无法继续执行的错误仍会提前终止。
 
 ### 5. 从后端重新读取
 
@@ -169,7 +174,7 @@ Event 和单个 Track 内部的事件顺序不会被重排，因为顺序本身�
 
 ### 7. 跨后端比较
 
-默认以第一个选中的后端为 reference，依次比较其他后端：
+默认以第一个成功生成规范化快照的后端为 reference，依次比较其他成功后端：
 
 ```text
 reference vs backend-2
@@ -202,6 +207,7 @@ $.memories[1].participants[0]
 - 总体通过或失败状态。
 
 报告先写入临时文件，再通过 rename 原子发布，避免产生不完整 JSON。
+backend 或 case 执行失败不会触发中途发布；所有可执行轨迹结束后只发布一次完整报告。
 
 <a id="data-model"></a>
 
@@ -560,11 +566,15 @@ cd test && \
     -v
 ```
 
-每个 case 使用独立 key prefix：
+每次 Runner 调用和每个 case 使用独立 key prefix：
 
 ```text
-replay:<case-id>
+replay:<run-id>:<case-id>
 ```
+
+`run-id` 在每次 `RunReplayConsistency` 调用时随机生成一次。同一测试矩阵连接
+同一个 Redis 实例连续运行时，不会复用上一次运行留下的 Session、Event、Summary、
+Track 或 Memory。可将上述命令的 `-count=1` 改为 `-count=2` 验证连续运行。
 
 集成环境应使用独立测试实例或专用 DB，避免与业务数据混用。
 
@@ -826,13 +836,13 @@ Mutation 检测不是业务 case 本身，而是对比较器有效性的自检�
   "status": "passed",
   "generated_at": "...",
   "summary": {
-    "case_count": 18,
+    "case_count": 20,
     "backend_count": 3,
-    "comparison_count": 36,
+    "comparison_count": 40,
     "unexpected_diff_count": 0,
     "allowed_diff_count": 0,
-    "mutation_count": 18,
-    "detected_mutation_count": 18,
+    "mutation_count": 20,
+    "detected_mutation_count": 20,
     "mutation_detection_rate": 1.0,
     "duration_ms": 1234
   },
@@ -851,7 +861,7 @@ Mutation 检测不是业务 case 本身，而是对比较器有效性的自检�
 命令行可使用 `FormatReportSummary` 输出紧凑摘要：
 
 ```text
-status=passed cases=18 backends=3 unexpected_diffs=0 mutations=18/18 duration=1234ms
+status=passed cases=20 backends=3 unexpected_diffs=0 mutations=20/20 duration=1234ms
 ```
 
 ---

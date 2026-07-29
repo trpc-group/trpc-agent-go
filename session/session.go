@@ -586,9 +586,9 @@ func applyOptions(opts ...Option) *Options {
 // Summary represents a concise, structured summary of a conversation branch.
 // It is stored on the session object rather than in the StateMap.
 type Summary struct {
-	Summary   string           `json:"summary"`            // Summary is the concise conversation summary.
-	Topics    []string         `json:"topics,omitempty"`   // Topics is the optional topics list.
-	Revision  int              `json:"revision,omitempty"` // Revision increases whenever this summary scope is regenerated.
+	Summary string   `json:"summary"`          // Summary is the concise conversation summary.
+	Topics  []string `json:"topics,omitempty"` // Topics is the optional topics list.
+
 	UpdatedAt time.Time        `json:"updated_at"`         // UpdatedAt is the legacy cutoff timestamp in UTC.
 	Boundary  *SummaryBoundary `json:"boundary,omitempty"` // Boundary records the summarized history cutoff.
 }
