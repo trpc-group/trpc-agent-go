@@ -1,972 +1,725 @@
 # tRPC-Agent-Go A2A Integration Guide
 
-## Overview
+This guide introduces the A2A protocol, `trpc-a2a-go`, and the tRPC-Agent-Go integration architecture from an application developer's perspective. It then covers the recommended A2A v1.0 integration, Task and multi-node deployment boundaries, the legacy A2A v0.2.x integration, and migration.
 
-tRPC-Agent-Go provides a complete A2A (Agent-to-Agent) solution with two core components:
+## A2A protocol overview
 
-- **A2A Server**: Exposes local Agents as A2A services for other Agents to call
-- **A2AAgent**: A client proxy for calling remote A2A services, allowing you to use remote Agents as if they were local
+A2A (Agent-to-Agent) is a protocol for discovering and calling remote AI agents. The caller does not need to know which framework, model, or tools the remote agent uses.
 
-### Core Capabilities
+The main protocol concepts are:
 
-- **Zero Protocol Awareness**: Developers only need to focus on Agent business logic without understanding A2A protocol details
-- **Automatic Adaptation**: The framework automatically converts Agent information to A2A AgentCard
-- **Message Conversion**: Automatically handles conversion between A2A protocol messages and Agent message formats
+| Concept | Meaning |
+|---|---|
+| Agent Card | Public description of an Agent's identity, capabilities, and how to invoke it |
+| Message | One message exchanged between a user and an Agent |
+| Part | Text, file, or structured data carried by a Message or Artifact |
+| Task | One observable unit of work with a lifecycle and follow-up operations |
+| Artifact | Output produced by a Task |
+| Context ID | Conversation identity shared by multiple Messages or Tasks |
+| Task ID | Identity of one Task lifecycle |
 
-## A2A Server: Exposing Agents as Services
+A typical A2A v1.0 interaction has two steps:
 
-### Concept Introduction
+1. Fetch the remote **Agent Card** to learn its address, identity, skills, input/output modes, streaming support, and authentication requirements.
+2. Send a message to an endpoint advertised by the Agent Card and receive either a direct `Message` or a tracked `Task`.
 
-A2A Server is a server-side component provided by tRPC-Agent-Go for quickly converting any local Agent into a network service that complies with the A2A protocol.
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Card as A2A v1 Agent Card endpoint
+    participant Server as A2A v1 endpoint
 
-### Core Features
-
-- **One-Click Conversion**: Expose Agents as A2A services through simple configuration
-- **Automatic Protocol Adaptation**: Automatically handles conversion between A2A protocol and Agent interfaces
-- **AgentCard Generation**: Automatically generates AgentCards required for service discovery
-- **Streaming Support**: Supports both streaming and non-streaming response modes
-
-### Automatic Conversion from Agent to A2A
-
-tRPC-Agent-Go implements seamless conversion from Agent to A2A service through the `server/a2a` package:
-
-```go
-func New(opts ...Option) (*a2a.A2AServer, error) {}
+    Client->>Card: GET /.well-known/agent-card.json
+    Card-->>Client: v1 Agent Card
+    Client->>Server: SendMessage / SendStreamingMessage
+    alt Simple Message result
+        Server-->>Client: Message
+    else Task workflow
+        Server-->>Client: Task or Task update events
+        opt Server retains the Task
+            Client->>Server: GetTask / ListTasks / CancelTask / SubscribeToTask
+            Server-->>Client: Task snapshot or subsequent event stream
+        end
+    end
 ```
 
-### Automatic AgentCard Generation
+A short question may return a plain `Message`. Work that needs progress, Artifacts, interruption, cancellation, or later lookup may use a `Task`. Both are protocol results, and a Task is not a replacement for a conversation session.
 
-The framework automatically extracts Agent metadata (name, description, tools, etc.) to generate an AgentCard that complies with the A2A protocol, including:
-- Basic Agent information (name, description, URL)
-- Capability declarations (streaming support)
-- Skill lists (automatically generated based on Agent tools)
+A2A v1.0 supports blocking `SendMessage`, live `SendStreamingMessage`, and workflows that start work and later query, cancel, or resubscribe through the Task API. Continuing a suspended Task instead requires sending another Message with the original Task ID. The choice depends on whether the server retains the Task after the request; the [protocol usage guide](#protocol-usage-guide) summarizes the options.
 
-It is important to distinguish these two layers:
+### From v0.x to v1.0
 
-- The `streaming` flag in `WithAgent(agent, streaming)` is primarily used to declare `AgentCard.Capabilities.Streaming`.
-- It is not the global execution switch for the `runner`, and it does not directly control the internal message processing pipeline.
-- If you use `WithRunner(...) + WithAgentCard(...)`, the streaming capability should be declared directly on the `AgentCard`, for example via `NewAgentCard(..., streaming)`.
-- In `WithRunner(...) + WithAgentCard(...)` mode, `skills` are owned by the caller. `NewAgentCard(...)` only gives you a default structure and default skill; it does not infer the full tool list from a custom `runner`.
+The A2A protocol has evolved from the v0.x line to v1.0. The [official v1.0 announcement](https://a2a-protocol.org/latest/announcing-1.0/) explicitly states that the interaction protocol includes breaking changes. The [official migration guide](https://a2a-protocol.org/latest/whats-new-v1/) uses v0.3.0 as its comparison baseline and documents the core changes below. The legacy tRPC-Agent-Go integration implements the earlier v0.2.x protocol, which belongs to the same v0.x line that requires migration, but exact fields remain specific to each protocol version.
 
-### Message Protocol Conversion
+| Area | v0.3.0 (official migration baseline) | v1.0 |
+|---|---|---|
+| Part content model | `TextPart`, `FilePart`, and `DataPart` are separate types selected by `kind` | One unified `Part` carries content in its `text`, `raw`, `url`, or `data` member |
+| Streaming events | Events carry `kind`, and `TaskStatusUpdateEvent` uses `final` to indicate completion | The enclosing member identifies the event type; `kind` and `final` are removed, and stream closure indicates completion |
+| Enum values | Lowercase values such as `user` and `completed` | Type-prefixed values such as `ROLE_USER` and `TASK_STATE_COMPLETED` |
+| Agent Card | Top-level fields primarily describe the endpoint, transport, and protocol version | `supportedInterfaces` declares the URL, binding, and protocol version and can advertise multiple interfaces |
+| Operations and Tasks | Slash-delimited methods such as `message/send` and `tasks/get`, no `ListTasks`, and looser definitions for some Task behavior | Operations such as `SendMessage` and `GetTask`, a new `ListTasks` operation, and precise Message/Task return, subscription, and cancellation semantics |
+| Protocol bindings | `a2a.proto` is closer to a gRPC implementation definition, with weaker equivalence guarantees across bindings | Treats `a2a.proto` as the protocol-neutral normative source and formally defines equivalent JSON-RPC, HTTP+JSON/REST, and gRPC mappings |
 
-The framework includes a built-in `messageProcessor` that implements bidirectional conversion between A2A protocol messages and Agent message formats, so users don't need to worry about message format conversion details.
+A2A v1.0 is therefore more than a method rename: it changes the serialization model, event discrimination, Agent discovery structure, and Task interaction semantics. Without a compatibility layer, a v1.0 server cannot directly process a v0.x client's request.
 
-## A2A Server Quick Start
+## trpc-a2a-go overview
 
-### Exposing Agent Services with A2A Server
+[`trpc-a2a-go`](https://github.com/trpc-group/trpc-a2a-go) is the tRPC Go implementation of the A2A protocol. It provides protocol types and the foundations for both clients and servers.
 
-With just a few lines of code, you can convert any Agent into an A2A service:
+To support incremental migration, `trpc-a2a-go` implements A2A v1.0 in a new `/v2` Go module while the original module continues to carry v0.2.x. tRPC-Agent-Go correspondingly adds `server/a2a/v1` and `agent/a2aagent/v1`; the existing `server/a2a` and `agent/a2aagent` packages will remain maintained until most users have migrated to v1.
 
-#### Basic Example: Creating A2A Server
+For legacy clients that must remain operational during migration, `trpc-a2a-go/v2` provides the `compat/v0` translation layer, which tRPC-Agent-Go can explicitly enable on a new v1 server.
+
+The package and protocol versions map as follows:
+
+| A2A protocol | tRPC-Agent-Go Server | tRPC-Agent-Go remote Agent | `trpc-a2a-go` module |
+|---|---|---|---|
+| v1.0 | `server/a2a/v1` | `agent/a2aagent/v1` | `trpc-a2a-go/v2` |
+| v0.2.x | `server/a2a` | `agent/a2aagent` | `trpc-a2a-go` |
+
+The tRPC-Agent-Go `/v1` suffix means A2A protocol v1.0. The `/v2` in `trpc-a2a-go/v2` is the Go module major version. These are version names from different repositories; `/v2` does not mean A2A protocol v2.
+
+The main layers of `trpc-a2a-go/v2` are:
+
+| Layer | Responsibility |
+|---|---|
+| `protocol` | Agent Card, Message, Task, Artifact, events, and request types |
+| `client` | Agent discovery, JSON-RPC calls, and SSE streams |
+| `server` | Agent Card endpoints, authentication, JSON-RPC dispatch, and SSE |
+| `taskmanager` | Request execution policy, Task lifecycle, retention, and event fan-out |
+| `compat/v0` | Translation between the v0.2.x wire protocol and v1.0 core |
+
+The server delegates concrete work to a `MessageProcessor`, which reads an `ExecContext` and emits one protocol event stream. The `TaskManager` consumes that stream, decides whether execution is request-bound or retained, and implements blocking, streaming, lookup, and subscription behavior. The server itself owns the Agent Card, wire protocol, routing, and middleware. The tRPC-Agent-Go integration builds on these extension boundaries.
+
+`trpc-a2a-go` creates Tasks lazily: a `MessageProcessor` that emits only a Message creates no Task, while the first status or artifact event causes the TaskManager to create an execution-local Task. A retaining TaskManager preserves that Task after the request; the stateless TaskManager handles it only within the current request.
+
+## tRPC-Agent-Go integration architecture
+
+tRPC-Agent-Go supplies adapters around `trpc-a2a-go`; it does not implement a second A2A transport or Task system. This integration is a protocol boundary between local Agents and remote services, not a third local execution engine alongside LLMAgent and GraphAgent.
+
+On the server side, the adapter turns an A2A request into a Runner invocation and converts Runner events back into A2A events, so the Runner can execute an LLMAgent, GraphAgent, or any other Agent. On the client side, `A2AAgent` presents a remote A2A service through the standard tRPC-Agent-Go Agent interface, allowing a Runner, parent Agent, or Graph node to invoke it like a local Agent.
+
+```mermaid
+flowchart LR
+    subgraph Remote["Remote service"]
+        SA["server/a2a/v1"]
+        MP["MessageProcessor adapter"]
+        TM["A2A TaskManager<br/>stateless by default / optional retaining TaskManager"]
+        R1["Runner<br/>server session"]
+        LA["LLMAgent / GraphAgent / other Agent"]
+        SA <--> TM
+        TM <--> MP
+        MP <--> R1
+        R1 <--> LA
+    end
+
+    subgraph Caller["Calling application"]
+        CA["agent/a2aagent/v1"]
+        CA <--> R2["Runner<br/>caller session"]
+        R2 <--> APP["Application / parent Agent"]
+        TC["trpc-a2a-go/v2/client<br/>complete Task API"]
+    end
+
+    CA -->|"SendMessage / SendStreamingMessage"| SA
+    SA -->|"Task / event stream"| CA
+    TC -->|"Task API (cross-request only with a retaining TaskManager)"| SA
+    SA -->|"Task snapshot / event stream"| TC
+```
+
+### Capabilities provided by the A2A integration
+
+The integration provides three groups of capabilities:
+
+- **Publish a local Agent as an A2A service:** `server/a2a/v1` publishes the Agent Card, converts the A2A Message, context ID, user identity, and metadata into a Runner invocation, and converts Runner text, multimodal content, tool calls, status, and errors into A2A events. W3C trace context crosses the protocol boundary in HTTP headers. An LLMAgent, GraphAgent, or custom Agent can use the same Runner integration.
+- **Invoke a remote service like a local Agent:** `agent/a2aagent/v1` discovers the remote Agent Card and implements the common `agent.Agent` interface. It converts a local invocation into a blocking or streaming A2A request and converts remote Messages, Tasks, Artifacts, tool calls, and errors back into tRPC-Agent-Go events.
+- **Use the complete A2A Task API when needed:** `A2AAgent` wraps normal Agent invocation only. Use `GetTasks`, `ListTasks`, `CancelTasks`, `ResubscribeTask`, and the push-notification methods from `trpc-a2a-go/v2/client` directly when the application needs Task lookup, listing, cancellation, resubscription, or push notifications.
+
+The server adapter joins the `trpc-a2a-go` middleware chain and reads the Runner user ID from the `X-User-ID` request header by default. This is identity propagation, not business authorization. Production services must still authenticate callers, authorize operations, and verify Task ownership in a gateway or underlying A2A server middleware.
+
+One `server/a2a/v1` instance binds one Agent Card and one Runner. Configuring tenant Agent Cards in the underlying `trpc-a2a-go` server does not make this adapter dispatch tenants to different Runners automatically. To host multiple Agents, route to separate service instances outside the adapter or let the Agent behind the bound Runner perform application-level routing. The latter approach does not read or preserve the protocol-level dispatch semantics of the A2A `tenant`.
+
+### Differences from LLMAgent and GraphAgent
+
+A2AAgent differs from local Agents as follows:
+
+| Agent type | Primary role | Execution location | Primary state |
+|---|---|---|---|
+| LLMAgent | Model reasoning, tool selection, and multi-turn interaction | Current process | Runner session |
+| GraphAgent | Controlled workflow execution through nodes, edges, and state transitions | Current process | Runner session plus Graph state/checkpoint |
+| A2AAgent | Forwards an Agent invocation to a remote A2A service | Remote service | Caller-side Runner session; other state is managed by the remote implementation |
+
+LLMAgent directly owns its Model, Tool, and SubAgent configuration. GraphAgent owns the workflow structure and supports checkpoints, interruption, and resume. A2AAgent does not own the remote model or tool configuration locally; its `Tools()` and `SubAgents()` are empty, and the remote service advertises its capabilities through the Agent Card. Whether the remote service retains A2A Tasks depends on its implementation; with `trpc-a2a-go`, the TaskManager makes that decision. These types compose with each other: an LLMAgent or GraphAgent can be exposed through a Runner and A2A Server, while an A2AAgent can be used as a parent Agent's SubAgent or as an Agent node in a Graph.
+
+The distinction is not relative capability but whether execution is local or remote and whether the invocation crosses an A2A protocol boundary. A2A solves remote discovery and interoperability; LLMAgent and GraphAgent solve local reasoning and orchestration.
+
+### State boundaries
+
+From the server integration point of view, the default stateless TaskManager does not retain A2A Tasks across requests, so Runner sessions are the only category of cross-request state by default. A retaining memory, Redis, or custom TaskManager adds a second, independent category of state for complete A2A Task management.
+
+When one tRPC-Agent-Go application calls another, the caller and server usually own separate Runner session stores. The A2A context ID correlates the two sides of an invocation but does not merge those stores. The following sections describe the optional A2A Task state and multi-node deployment requirements.
+
+## A2A v1.0 integration
+
+Use the v1 packages for new applications.
+
+### Create a v1 Server
+
+The v1 server takes a caller-owned Runner and an explicit Agent Card. This makes Runner ownership, session configuration, and the public A2A identity visible when the server is constructed.
 
 ```go
-package main
-
 import (
-	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
-	"trpc.group/trpc-go/trpc-agent-go/model/openai"
-	a2aserver "trpc.group/trpc-go/trpc-agent-go/server/a2a"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+    "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+    a2aserver "trpc.group/trpc-go/trpc-agent-go/server/a2a/v1"
 )
 
-func main() {
-	// 1. Create a regular Agent
-	model := openai.New("gpt-4o-mini")
-	agent := llmagent.New("MyAgent",
-		llmagent.WithModel(model),
-		llmagent.WithDescription("An intelligent assistant"),
-	)
+agentRunner := runner.NewRunner(
+    "my-app",
+    llmAgent,
+    runner.WithSessionService(inmemory.NewSessionService()),
+)
+defer agentRunner.Close()
 
-	// 2. Convert to A2A service with one click
-	server, _ := a2aserver.New(
-		a2aserver.WithHost("localhost:8080"),
-		a2aserver.WithAgent(agent, true), // Enable streaming
-	)
+card, err := a2aserver.NewAgentCard(
+    llmAgent.Info().Name,
+    llmAgent.Info().Description,
+    "1.0.0",                  // Agent implementation version.
+    "agent.example.com:8888", // Address advertised to clients.
+    true,                     // Advertise streaming support.
+    a2aserver.WithCardTools(llmAgent.Tools()...),
+)
+if err != nil {
+    return err
+}
 
-	// 3. Start the service to accept A2A requests
-	server.Start(":8080")
+server, err := a2aserver.New(
+    a2aserver.WithRunner(agentRunner),
+    a2aserver.WithAgentCard(card),
+)
+if err != nil {
+    return err
+}
+return server.Start("0.0.0.0:8888")
+```
+
+The Agent Card address is used for discovery and routing. It may differ from the listen address passed to `Start`.
+
+The built-in converters support multimodal image, audio, and file content, but `NewAgentCard` advertises only `text` input and output modes by default. To make multimodal support discoverable, explicitly declare the applicable input/output modes in the Agent Card passed to `WithAgentCard`.
+
+The caller owns the Runner lifecycle. It must close the Runner if server construction fails or after the server stops.
+
+### Call a remote A2A Agent
+
+`agent/a2aagent/v1` discovers the remote Agent Card and implements the normal tRPC-Agent-Go Agent interface:
+
+```go
+import (
+    "context"
+
+    a2aagent "trpc.group/trpc-go/trpc-agent-go/agent/a2aagent/v1"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+    "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+)
+
+remoteAgent, err := a2aagent.New(
+    a2aagent.WithAgentCardURL("https://agent.example.com"),
+)
+if err != nil {
+    return err
+}
+
+remoteRunner := runner.NewRunner(
+    "a2a-client",
+    remoteAgent,
+    runner.WithSessionService(inmemory.NewSessionService()),
+)
+defer remoteRunner.Close()
+
+events, err := remoteRunner.Run(
+    context.Background(),
+    "user-1",
+    "session-1",
+    model.NewUserMessage("What time is it?"),
+)
+if err != nil {
+    return err
+}
+for event := range events {
+    // Handle the same tRPC-Agent-Go events produced by a local Agent.
+    _ = event
 }
 ```
 
-#### Streaming output event type (Message vs Artifact)
+The adapter maps:
 
-When streaming is enabled, A2A allows the server to emit incremental output in
-different ways:
+- local session ID to A2A context ID;
+- local user ID to the `X-User-ID` request header;
+- local text and multimodal `ContentPart` input to A2A Parts;
+- tool calls and results produced by the remote Runner to structured data Parts on the server, then back to local events in A2AAgent;
+- remote A2A Messages, Tasks, and events back to tRPC-Agent-Go events.
 
-- **TaskArtifactUpdateEvent (default)**: ADK-style streaming. Chunks are sent
-  as task artifact updates (`artifact-update`).
-- **Message**: Lightweight streaming. Chunks are sent as `message`, so clients
-  can render `Message.parts` directly without treating output as a persisted
-  artifact.
+Unless explicitly overridden, A2AAgent selects streaming or blocking invocation from the Agent Card. It handles one normal Agent invocation; applications that need Task lookup, cancellation, or resubscription should use the underlying `trpc-a2a-go/v2/client` directly.
 
-To stream agent output as `message` instead of `artifact-update`, configure the
-server with:
+### Run the normal Agent invocation example
 
-```go
-server, _ := a2aserver.New(
-	a2aserver.WithHost("localhost:8080"),
-	a2aserver.WithAgent(agent, true),
-	a2aserver.WithStreamingEventType(
-		a2aserver.StreamingEventTypeMessage,
-	),
-)
-```
-
-Task state updates (`submitted`, `completed`) are still emitted as
-`TaskStatusUpdateEvent`. If `WithStructuredTaskErrors(true)` is enabled,
-terminal failures are also emitted as failed task status updates, with
-machine-readable fields preferred on the outer metadata, mirrored into
-`status.message.metadata` for `0.1` compatibility, and display text in
-`status.message.parts`.
-
-#### Direct A2A Protocol Client Call
-
-```go
-import (
-	"trpc.group/trpc-go/trpc-a2a-go/client"
-	"trpc.group/trpc-go/trpc-a2a-go/protocol"
-)
-
-func main() {
-	// Connect to A2A service
-	client, _ := client.NewA2AClient("http://localhost:8080/")
-
-	// Send message to Agent
-	message := protocol.NewMessage(
-		protocol.MessageRoleUser,
-		[]protocol.Part{protocol.NewTextPart("Hello, please help me analyze this code")},
-	)
-
-	// Agent will automatically process and return results
-	response, _ := client.SendMessage(context.Background(),
-		protocol.SendMessageParams{Message: message})
-}
-```
-
-### Advanced Configuration
-
-#### Custom Runner (WithRunner)
-
-By default, A2A Server automatically creates a Runner for you. If you need finer control, such as injecting a MemoryService or customizing SessionService, use `WithRunner`.
-
-Note: `WithRunner` is mutually exclusive with `WithAgent`. When you provide `WithRunner`, you must also provide the public agent identity explicitly via `WithAgentCard`:
-
-```go
-import (
-	"trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
-	"trpc.group/trpc-go/trpc-agent-go/runner"
-	sessionmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
-	"trpc.group/trpc-go/trpc-agent-go/server/a2a"
-)
-
-memoryService := inmemory.NewMemoryService()
-sessionService := sessionmemory.NewSessionService()
-streaming := true
-
-r := runner.NewRunner(
-	agent.Info().Name,
-	agent,
-	runner.WithSessionService(sessionService),
-	runner.WithMemoryService(memoryService),
-)
-
-card, _ := a2a.NewAgentCard(agent.Info().Name, agent.Info().Description, "localhost:8080", streaming)
-
-server, _ := a2a.New(
-	a2a.WithRunner(r),
-	a2a.WithAgentCard(card),
-)
-```
-
-In this `runner-only` mode, streaming capability is no longer passed through `WithAgent(...)`; it is declared directly by the `AgentCard.Capabilities.Streaming` field provided via `WithAgentCard(...)`.
-
-`examples/a2aagent` also includes an explicit example. Use `-server-mode runner-card` to switch the server construction path to `WithRunner(...) + WithAgentCard(...)`:
+The example uses a session-aware LLMAgent with a `current_time` tool. Configure a model first:
 
 ```bash
-cd examples/a2aagent
-go run . -server-mode runner-card
+export OPENAI_API_KEY="<your-api-key>"
+export MODEL_NAME="<your-model>"
+# Set OPENAI_BASE_URL when using an OpenAI-compatible service.
 ```
 
-If you only need a default-compliant card quickly, prefer `NewAgentCard(...)` instead of manually filling in `Name`, `Description`, `Capabilities`, and the default skill. If your `runner` needs a more accurate `skills` list, populate and maintain it in your own code.
+Start the server:
 
-#### Dynamically Updating AgentCard
+```bash
+cd examples
+go run ./a2aagent/v1/server
+```
 
-If you need to update the exposed `AgentCard` at runtime, wire the underlying `a2aprotocolserver.WithAgentCardHandler(...)` through `WithExtraA2AOptions(...)`, and use `NewAgentCardHandler(...)` to serve the current snapshot:
+In another terminal, start the client:
+
+```bash
+cd examples
+go run ./a2aagent/v1/client
+```
+
+Ask for the current time to observe the tool call and result crossing the A2A boundary. Keeping the same session ID continues the same remote Runner session; use `/new` or `/use` to switch sessions. Add `-streaming=false` to the server to exercise blocking `SendMessage`.
+
+### Request lifecycle
+
+The built-in adapter implements the `trpc-a2a-go` `MessageProcessor` interface. Non-streaming and streaming requests follow the same path:
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Server as A2A server
+    participant TM as TaskManager
+    participant Adapter as tRPC-Agent-Go processor
+    participant Runner
+
+    Client->>Server: SendMessage / SendStreamingMessage
+    Server->>TM: execute request
+    TM->>Adapter: ProcessMessage(ExecContext)
+    Adapter->>Runner: Run(userID, contextID, message)
+    Runner-->>Adapter: Agent events
+    Adapter-->>TM: status / artifact events
+    TM-->>Server: Task or event stream
+    Server-->>Client: JSON-RPC response or SSE
+```
+
+The adapter always converts Runner output through one event pipeline rather than implementing separate `MessageProcessor` paths for streaming and non-streaming requests. A successful execution typically moves through `submitted → output → completed`; a failure moves to `failed`, while suspended states such as `input-required` and `auth-required` use the same event stream.
+
+### Default stateless TaskManager
+
+The v1 server uses `taskmanager/stateless` by default. More precisely, the **TaskManager is stateless**; the `MessageProcessor` still executes the Runner and emits a complete Task lifecycle.
+
+The default TaskManager:
+
+- runs the `MessageProcessor` within the lifetime of the incoming HTTP request;
+- builds an execution-local Task from status and artifact events;
+- returns the terminal Task or forwards events in real time;
+- discards the Task, event log, and protocol history when the request ends;
+- rejects operations that must continue beyond the current request, read Task state from a later request, or suspend in `input-required` or `auth-required` while waiting for a continuation.
+
+The underlying stateless TaskManager allows a custom `MessageProcessor` to return a direct Message, but the built-in tRPC-Agent-Go adapter starts every Runner invocation with a `submitted` Task state and ends successful invocations with `completed`. A blocking call to the default server therefore returns a terminal Task that exists only for that request. Stateless means that Tasks are not retained across requests; it does not mean that only Messages are returned.
+
+This default is suitable for ordinary request/response Agent calls: it has no Task cleanup cost, no storage dependency, and no cross-request Task affinity. `returnImmediately=true` is rejected not because A2A cannot return an immediate Message, but because the stateless TaskManager binds execution to the current request and cannot reliably continue after the HTTP response ends. Conversation continuity still comes from the Runner session service.
+
+### Retained Task management
+
+Configure a retaining TaskManager when clients need asynchronous execution, Task lookup, or cancellation, resubscription, and continuation of unfinished Tasks. Push notifications must also be enabled separately on the selected TaskManager; retaining a Task does not enable push delivery automatically.
+
+For a single-process service, use the memory TaskManager:
 
 ```go
 import (
-	"sync"
-
-	a2aprotocolserver "trpc.group/trpc-go/trpc-a2a-go/server"
-	"trpc.group/trpc-go/trpc-agent-go/runner"
-	"trpc.group/trpc-go/trpc-agent-go/server/a2a"
+    "trpc.group/trpc-go/trpc-a2a-go/v2/taskmanager"
+    memorytaskmanager "trpc.group/trpc-go/trpc-a2a-go/v2/taskmanager/memory"
 )
 
-card, _ := a2a.NewAgentCard(agent.Info().Name, agent.Info().Description, "localhost:8080", true)
-var (
-	cardMu      sync.RWMutex
-	currentCard = card
-)
-
-server, _ := a2a.New(
-	a2a.WithRunner(runner.NewRunner(agent.Info().Name, agent)),
-	a2a.WithAgentCard(currentCard),
-	a2a.WithExtraA2AOptions(
-		a2aprotocolserver.WithAgentCardHandler(
-			a2a.NewAgentCardHandler(func() a2aprotocolserver.AgentCard {
-				cardMu.RLock()
-				defer cardMu.RUnlock()
-				return currentCard
-			}),
-		),
-	),
-)
-
-cardMu.Lock()
-updated := currentCard
-updated.Description = "new description"
-currentCard = updated
-cardMu.Unlock()
-```
-
-This only updates the exposed metadata. It does not modify the underlying `runner`, `taskManager`, or message processing pipeline. The caller remains responsible for where `currentCard` is stored and how it is updated.
-
-Treat fields such as `Name` and `URL` as startup-time invariants, because they also participate in identity, routing, or discovery semantics. If those fields must change, rebuilding the server is safer than only updating the card endpoint.
-
-#### Server-Side Message Processing Hook (WithProcessMessageHook)
-
-`WithProcessMessageHook` allows you to insert custom logic before/after the A2A Server processes messages. It uses a middleware pattern, wrapping the underlying `MessageProcessor`:
-
-```go
-import "trpc.group/trpc-go/trpc-a2a-go/taskmanager"
-
-// Custom hook processor
-type hookProcessor struct {
-	next taskmanager.MessageProcessor
-}
-
-func (h *hookProcessor) ProcessMessage(
-	ctx context.Context,
-	message protocol.Message,
-	options taskmanager.ProcessOptions,
-	handler taskmanager.TaskHandler,
-) (*taskmanager.MessageProcessingResult, error) {
-	// Before processing: read custom metadata injected by the client
-	if traceID, ok := message.Metadata["trace_id"]; ok {
-		fmt.Printf("received trace_id: %v\n", traceID)
-	}
-	// Delegate to the next processor
-	return h.next.ProcessMessage(ctx, message, options, handler)
-}
-
-server, _ := a2a.New(
-	a2a.WithHost("localhost:8080"),
-	a2a.WithAgent(agent, true),
-	a2a.WithProcessMessageHook(
-		func(next taskmanager.MessageProcessor) taskmanager.MessageProcessor {
-			return &hookProcessor{next: next}
-		},
-	),
+server, err := a2aserver.New(
+    a2aserver.WithRunner(agentRunner),
+    a2aserver.WithAgentCard(card),
+    a2aserver.WithTaskManagerBuilder(func(
+        processor taskmanager.MessageProcessor,
+    ) (taskmanager.TaskManager, error) {
+        return memorytaskmanager.NewTaskManager(processor)
+    }),
 )
 ```
 
-**Typical use cases**:
-- Read custom metadata injected by the client via `BuildMessageHook`
-- Add logging, monitoring, or auditing before/after message processing
-- Modify or validate inbound messages
+Memory Task state is process-local and is lost on restart. Terminal Tasks are not cleaned up automatically by default; production services should set a retention duration with `memorytaskmanager.WithTaskTTL(...)` when appropriate.
 
-#### Client-Side Message Build Hook (WithBuildMessageHook)
+A retaining TaskManager gives the system two independent state categories:
 
-`WithBuildMessageHook` is a Hook on the A2AAgent (client) side that allows injecting custom data before sending messages to a remote A2A Server. It also uses a middleware pattern:
+| State system | Owner | Used for |
+|---|---|---|
+| Runner session | Each tRPC-Agent-Go application's own session service | Conversation history, application state, and multi-turn Agent context |
+| A2A Task | `trpc-a2a-go` TaskManager | Protocol Task status, Artifacts, lookup, cancel, resubscribe, and push configuration |
 
-```go
-import "trpc.group/trpc-go/trpc-agent-go/agent/a2aagent"
+Keeping an A2A Task does not replace the Runner session. Likewise, a durable Runner session does not make `GetTask` work after the originating request. Choose storage for conversation continuity and protocol Task operations independently.
 
-a2aAgent, _ := a2aagent.New(
-	a2aagent.WithAgentCardURL("http://remote-agent:8888"),
-	a2aagent.WithBuildMessageHook(
-		func(next a2aagent.ConvertToA2AMessageFunc) a2aagent.ConvertToA2AMessageFunc {
-			return func(isStream bool, agentName string, inv *agent.Invocation) (*protocol.Message, error) {
-				// Call the default converter
-				msg, err := next(isStream, agentName, inv)
-				if err != nil {
-					return nil, err
-				}
-				// Inject custom metadata
-				if msg.Metadata == nil {
-					msg.Metadata = make(map[string]any)
-				}
-				msg.Metadata["trace_id"] = "my-trace-123"
-				msg.Metadata["business_tag"] = "order-service"
-				return msg, nil
-			}
-		},
-	),
-)
+### Multi-node deployment
+
+The v1 adapter can run behind a load balancer, but the correct topology depends on which state features the application uses.
+
+| Deployment | What works across replicas | Additional requirement |
+|---|---|---|
+| Stateless TaskManager | Blocking and streaming requests | Share the Runner session store or use session affinity when conversation context must survive node changes |
+| Memory TaskManager | No Task operation crosses replicas | Route all operations for a Task to the node that owns it |
+| Redis TaskManager | Shared Task snapshots, protocol history, lookup, and listing | Use the separate Redis TaskManager module and a shared Redis deployment |
+| Redis with cross-node resubscribe | `SubscribeToTask` may reconnect through another replica | Enable `WithCrossNodeResubscribe(true)` on every replica |
+
+Example Redis builder:
+
+The Redis TaskManager is a separate Go module. Add `trpc.group/trpc-go/trpc-a2a-go/taskmanager/redis/v2` to the application first:
+
+```bash
+go get trpc.group/trpc-go/trpc-a2a-go/taskmanager/redis/v2
 ```
-
-**BuildMessageHook + ProcessMessageHook interaction**:
-
-```text
-┌──────────────────┐                    ┌───────────────────┐
-│    A2AAgent      │   A2A protocol     │    A2A Server     │
-│                  │                    │                   │
-│ BuildMessageHook │── metadata ──────→ │ProcessMessageHook │
-│ (inject data)    │                    │ (read data)       │
-└──────────────────┘                    └───────────────────┘
-```
-
-The client injects custom data (such as trace_id, business tags) into the A2A message's `metadata` field via `BuildMessageHook`, and the server reads and processes this data via `ProcessMessageHook`.
-
-#### Append RunOptions (WithRunOptions)
-
-`WithRunOptions` allows appending additional `RunOption` to every Agent invocation in the A2A Server:
-
-```go
-server, _ := a2a.New(
-	a2a.WithHost("localhost:8080"),
-	a2a.WithAgent(agent, true),
-	a2a.WithRunOptions(
-		agent.WithRequestID("custom-req-id"),
-	),
-)
-```
-
-#### Graph internal event forwarding
-
-By default, A2A Server filters most internal `graph.*` runtime events (for
-example `graph.node.start`, `graph.node.complete`, `graph.pregel.*`, and
-`graph.checkpoint.*`) to avoid exposing low-level execution details to
-downstream consumers.
-
-The terminal `graph.execution` event is still preserved by default (together
-with normal message/error events), so final state reconstruction and
-`state_delta` handoff continue to work.
-
-If you need node-level traces for debugging, extend the graph object allowlist:
-
-```go
-server, _ := a2aserver.New(
-	a2aserver.WithHost("localhost:8080"),
-	a2aserver.WithAgent(agent, true),
-	a2aserver.WithGraphEventObjectAllowlist(
-		"graph.execution", // keep terminal event
-		"graph.node.*",    // include node lifecycle events
-	),
-)
-```
-
-Notes:
-
-- If this option is not set, the default allowlist is `["graph.execution"]`.
-- If you explicitly call `WithGraphEventObjectAllowlist()` with no arguments,
-  all `graph.*` events will be filtered out (including `graph.execution`).
-
-Use this in debug/diagnostic scenarios. Keeping it off by default reduces noise
-and transport overhead in production.
-
-#### Rewrite outbound A2A responses
-
-`WithResponseRewriter` lets the server rewrite outbound A2A results immediately
-before they are returned to the caller or sent to the streaming subscriber. It is
-useful when you want to hide internal metadata, redact debug fields, or drop
-server-generated events that are not part of your public A2A contract.
-
-The rewriter sees the final unary result after server-side aggregation. In
-streaming mode, it sees every outbound streaming result, including converted
-agent events, task status updates, final artifact updates, structured task
-errors, and messages returned by the error handler. The request context is
-passed to each rewrite call so you can use request-scoped values in logs.
-
-Returning `nil` from the rewriter drops that outbound result.
 
 ```go
 import (
-	"context"
-
-	"trpc.group/trpc-go/trpc-a2a-go/protocol"
-	a2aserver "trpc.group/trpc-go/trpc-agent-go/server/a2a"
+    redisclient "github.com/redis/go-redis/v9"
+    "trpc.group/trpc-go/trpc-a2a-go/v2/taskmanager"
+    redistaskmanager "trpc.group/trpc-go/trpc-a2a-go/taskmanager/redis/v2"
 )
 
-server, _ := a2aserver.New(
-	a2aserver.WithHost("localhost:8080"),
-	a2aserver.WithAgent(agent, true),
-	a2aserver.WithResponseRewriter(a2aserver.ResponseRewriterFuncs{
-		Unary: func(ctx context.Context, result protocol.UnaryMessageResult) protocol.UnaryMessageResult {
-			if msg, ok := result.(*protocol.Message); ok {
-				delete(msg.Metadata, "debug_trace")
-			}
-			return result
-		},
-		Streaming: func(ctx context.Context, result protocol.StreamingMessageResult) protocol.StreamingMessageResult {
-			if msg, ok := result.(*protocol.Message); ok {
-				delete(msg.Metadata, "debug_trace")
-			}
-			return result
-		},
-	}),
+redisClient := redisclient.NewClient(&redisclient.Options{
+    Addr: "redis.example.com:6379",
+})
+
+server, err := a2aserver.New(
+    a2aserver.WithRunner(agentRunner),
+    a2aserver.WithAgentCard(card),
+    a2aserver.WithTaskManagerBuilder(func(
+        processor taskmanager.MessageProcessor,
+    ) (taskmanager.TaskManager, error) {
+        return redistaskmanager.NewTaskManager(
+            processor,
+            redisClient,
+            redistaskmanager.WithCrossNodeResubscribe(true),
+        )
+    }),
 )
 ```
 
-### Hosting multiple A2A agents on one HTTP port (base paths)
+Cross-node resubscription is not distributed execution. When every replica uses an equivalent `MessageProcessor` and there is no concurrent continuation, any node that can read a suspended Task from Redis can begin its next execution round. Redis TaskManager does not provide exactly-once coordination across replicas, a global live-execution registry, or cross-node routing for live cancellation. Applications that need those guarantees still require sticky routing or a separate execution-coordination design.
 
-Sometimes you want **one service (one port)** to expose multiple A2A Agents.
-The idiomatic A2A approach is to give each Agent its own **base URL**, and let
-the client select the Agent by choosing the URL (not by passing an `agent_name`
-parameter).
+Runner sessions are independent of A2A Task storage. If the server uses an in-memory session service, moving the next request to a different replica loses conversation context even when A2A Tasks are stored in Redis. Use a shared session service for a genuinely stateless service tier.
 
-In tRPC-Agent-Go, `a2a.WithHost(...)` supports URLs with a path segment.
-When the host URL contains a path (for example `http://localhost:8888/agents/math`),
-the A2A server will automatically use that path as its **base path** for routing.
+### Common v1 configuration
 
-Key idea:
+Common Server adapter options are:
 
-- Create **one** A2A server per Agent (each with a different base path)
-- Mount all A2A servers onto **one** shared `http.Server` via `server.Handler()`
+| Option | Purpose |
+|---|---|
+| `WithRunner` | Set the caller-owned Runner |
+| `WithAgentCard` | Set the public Agent identity and capabilities |
+| `WithTaskManagerBuilder` | Replace the default stateless TaskManager |
+| `WithV0Compatibility` | Serve v0.2.x methods on the v1 endpoint |
+| `WithUserIDHeader` | Change the user identity header |
+| `WithRunOptions` | Add Runner options to every invocation |
+| `WithProcessMessageHook` | Wrap inbound A2A message processing |
+| `WithResponseRewriter` | Rewrite outbound A2A events |
+| `WithExtraA2AOptions` | Pass authentication, middleware, and other options to the underlying A2A server |
 
-Example:
+Common A2AAgent options are:
+
+| Option | Purpose |
+|---|---|
+| `WithAgentCardURL`, `WithAgentCard` | Discover the remote Agent Card by URL or provide it directly |
+| `WithEnableStreaming` | Override streaming selection from the Agent Card |
+| `WithUserIDHeader` | Change the request header carrying the user identity |
+| `WithTransferStateKey` | Select invocation `RuntimeState` values to transfer in Message metadata |
+| `WithA2AClientExtraOptions` | Pass options to the underlying A2A client |
+| `WithBuildMessageHook` | Rewrite the outbound A2A Message before sending |
+
+Use custom converters, Part mappers, hooks, or response rewriters only when the built-in text, multimodal, tool, code-execution, and metadata mappings are insufficient.
+
+## Legacy protocol v0.2.x integration
+
+Existing applications can continue to use `server/a2a` and `agent/a2aagent` without the `/v1` suffix. These packages depend on the `trpc-a2a-go` root module and implement A2A v0.2.x.
+
+These packages are in compatibility maintenance, but they remain standalone A2A adapters rather than compatibility aliases for v1. New applications should use the v1 packages directly; users who still maintain v0.2.x services or clients can continue to use the capabilities below.
+
+### v0.2.x capability scope
+
+| Capability | Legacy integration behavior |
+|---|---|
+| Publish a local Agent | `server/a2a` publishes a legacy Agent Card, handles JSON-RPC and SSE, and passes A2A requests to a Runner |
+| Call a remote Agent | `agent/a2aagent` discovers the legacy Agent Card and exposes blocking or streaming calls through the standard `agent.Agent` interface |
+| Runner and session | Applications can use an implicit Runner or provide an application-owned Runner; the A2A context ID becomes the server-side Runner session ID |
+| Identity, state, and tracing | The user ID and W3C trace context propagate through HTTP headers, while invocation `RuntimeState` propagates through Message metadata |
+| Content and event conversion | Supports text, image, audio, and file input, together with extended events for text, reasoning, tool calls, tool results, code execution, and state updates |
+| Extension points | Supports hooks, custom converters, Part mappers, response rewriting, a Graph event allowlist, ADK metadata, dynamic Agent Cards, and underlying A2A options |
+
+An `A2AAgent` does not hold the remote Model, Tools, or SubAgents locally, so its `Tools()` and `SubAgents()` are empty; the Agent Card continues to describe the remote capabilities. It can run behind a Runner, serve as a SubAgent of a parent Agent, or act as an Agent node in a Graph.
+
+`NewAgentCard` advertises only `text` input and output modes by default, even though the built-in converter can process images, audio, and files. When a legacy service actually accepts these types, the application should provide an accurate custom Agent Card so clients do not infer the wrong capabilities from the default Card.
+
+### Create a legacy A2A Server
+
+The legacy server retains the convenience entry point that accepts an Agent directly. When the caller supplies neither a Runner nor a session service, the server creates a default Runner and in-memory session service:
 
 ```go
-mathServer, err := a2a.New(
-	a2a.WithHost("http://localhost:8888/agents/math"),
-	a2a.WithAgent(mathAgent, false),
+import a2aserver "trpc.group/trpc-go/trpc-agent-go/server/a2a"
+
+server, err := a2aserver.New(
+    a2aserver.WithHost("127.0.0.1:8888"),
+    a2aserver.WithAgent(llmAgent, true),
 )
 if err != nil {
-	panic(err)
+    return err
 }
+return server.Start("127.0.0.1:8888")
+```
 
-weatherServer, err := a2a.New(
-	a2a.WithHost("http://localhost:8888/agents/weather"),
-	a2a.WithAgent(weatherAgent, false),
+The Boolean argument in `WithAgent(llmAgent, true)` only declares streaming support on the generated Agent Card; it does not control Runner execution. Whether the server handles a streaming request is determined by the client's use of `message/stream`.
+
+When the application needs to configure the session service, memory service, or Runner lifecycle itself, it can instead provide an explicit Runner and Agent Card:
+
+```go
+sessionService := sessionmemory.NewSessionService()
+agentRunner := runner.NewRunner(
+    llmAgent.Info().Name,
+    llmAgent,
+    runner.WithSessionService(sessionService),
+)
+defer agentRunner.Close()
+
+card, err := a2aserver.NewAgentCard(
+    llmAgent.Info().Name,
+    llmAgent.Info().Description,
+    "127.0.0.1:8888",
+    true,
+    a2aserver.WithCardTools(llmAgent.Tools()...),
 )
 if err != nil {
-	panic(err)
+    return err
 }
 
-mux := http.NewServeMux()
-mux.Handle("/agents/math/", mathServer.Handler())
-mux.Handle("/agents/weather/", weatherServer.Handler())
-
-if err := http.ListenAndServe(":8888", mux); err != nil {
-	panic(err)
-}
-```
-
-After the server starts, each Agent has its own AgentCard endpoint:
-
-- `http://localhost:8888/agents/math/.well-known/agent-card.json`
-- `http://localhost:8888/agents/weather/.well-known/agent-card.json`
-
-Full runnable example: `examples/a2amultipath`.
-
-## A2AAgent: Calling Remote A2A Services
-
-Corresponding to A2A Server, tRPC-Agent-Go also provides `A2AAgent` for calling remote A2A services, enabling communication between Agents.
-
-### Concept Introduction
-
-`A2AAgent` is a special Agent implementation that doesn't directly handle user requests but forwards them to remote A2A services. From the user's perspective, `A2AAgent` looks like a regular Agent, but it's actually a local proxy for a remote Agent.
-
-**Simple Understanding**:
-- **A2A Server**: I have an Agent and want others to call it → Expose as A2A service
-- **A2AAgent**: I want to call someone else's Agent → Call through A2AAgent proxy
-
-### Core Features
-
-- **Transparent Proxy**: Use remote Agents as if they were local Agents
-- **Automatic Discovery**: Automatically discover remote Agent capabilities through AgentCard
-- **Protocol Conversion**: Automatically handle conversion between local message formats and A2A protocol
-- **Streaming Support**: Support both streaming and non-streaming communication modes
-- **State Transfer**: Support transferring local state to remote Agents
-- **Error Handling**: Comprehensive error handling and retry mechanisms
-
-For the recommended structured task-error convention between A2A server and
-`A2AAgent`, see [Error Handling](error-handling.md).
-
-### Use Cases
-
-1. **Distributed Agent Systems**: Call Agents from other services in microservice architectures
-2. **Agent Orchestration**: Combine multiple specialized Agents into complex workflows
-3. **Cross-Team Collaboration**: Call Agent services provided by other teams
-
-### A2AAgent Quick Start
-
-#### Basic Usage
-
-```go
-package main
-
-import (
-	"context"
-	"fmt"
-	
-	"trpc.group/trpc-go/trpc-agent-go/agent/a2aagent"
-	"trpc.group/trpc-go/trpc-agent-go/runner"
-	"trpc.group/trpc-go/trpc-agent-go/model"
-	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
-)
-
-func main() {
-	// 1. Create A2AAgent pointing to remote A2A service
-	a2aAgent, err := a2aagent.New(
-		a2aagent.WithAgentCardURL("http://localhost:8888"),
-	)
-	if err != nil {
-		panic(err)
-	}
-
-	// 2. Use it like a regular Agent
-	sessionService := inmemory.NewSessionService()
-	runner := runner.NewRunner("test", a2aAgent, 
-		runner.WithSessionService(sessionService))
-
-	// 3. Send message
-	events, err := runner.Run(
-		context.Background(),
-		"user1",
-		"session1", 
-		model.NewUserMessage("Please tell me a joke"),
-	)
-	if err != nil {
-		panic(err)
-	}
-
-	// 4. Handle response
-	for event := range events {
-		if event.Response != nil && len(event.Response.Choices) > 0 {
-			fmt.Print(event.Response.Choices[0].Message.Content)
-		}
-	}
-}
-```
-
-In multi-agent systems, `A2AAgent` is often used as a SubAgent of a
-local coordinator Agent (for example an `LLMAgent`). You can combine
-`A2AAgent` with `LLMAgent.SetSubAgents` to dynamically load and refresh
-remote SubAgents from a registry without recreating the coordinator.
-
-#### Advanced Configuration
-
-```go
-// Create A2AAgent with advanced configuration
-a2aAgent, err := a2aagent.New(
-	// Specify remote service address
-	a2aagent.WithAgentCardURL("http://remote-agent:8888"),
-	
-	// Set streaming buffer size
-	a2aagent.WithStreamingChannelBufSize(2048),
-
-	// Custom protocol conversion
-	a2aagent.WithCustomEventConverter(customEventConverter),
-
-	a2aagent.WithCustomA2AConverter(customA2AConverter),
-
-	// Explicitly control streaming mode (overrides AgentCard capability declaration)
-	a2aagent.WithEnableStreaming(true),
+server, err := a2aserver.New(
+    a2aserver.WithRunner(agentRunner),
+    a2aserver.WithAgentCard(card),
 )
 ```
 
-Whether the client sends a streaming request follows this priority:
+`WithAgent` and `WithRunner` are mutually exclusive. With an explicit Runner, the application manages Runner shutdown, sessions, and memory, and it also maintains the Agent Card address, streaming capability, and skills. `WithSessionService` applies only to the legacy path in which the server creates an implicit Runner.
 
-1. Per-call override via `agent.WithStream(...)`
-2. `a2aagent.WithEnableStreaming(...)`
-3. Remote `AgentCard.Capabilities.Streaming`
-4. Default false
+`WithHost` accepts a URL with a path, which becomes the base path of that A2A Server. To host multiple legacy Agents on one port, create a separate Server and Agent Card for each Runner, then attach each `Handler()` to the same HTTP mux.
 
-In other words, the server-side streaming declaration mainly tells the client whether the remote A2A service supports streaming requests. The client then decides whether to send streaming or non-streaming requests based on that capability.  
-If the client explicitly sets `agent.WithStream(...)` or `a2aagent.WithEnableStreaming(...)`, that explicit choice overrides the `AgentCard` declaration.
+### Call a legacy A2A service
 
-### Complete Example: A2A Server + A2AAgent Combined Usage
-
-Here's a complete example showing how to run both A2A Server (exposing local Agent) and A2AAgent (calling remote service) in the same program:
+The legacy remote Agent uses the package without `/v1` and can discover an Agent Card automatically from a URL:
 
 ```go
-package main
+import a2aagent "trpc.group/trpc-go/trpc-agent-go/agent/a2aagent"
 
-import (
-	"context"
-	"fmt"
-	"time"
-
-	"trpc.group/trpc-go/trpc-agent-go/agent/a2aagent"
-	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
-	"trpc.group/trpc-go/trpc-agent-go/model/openai"
-	"trpc.group/trpc-go/trpc-agent-go/runner"
-	"trpc.group/trpc-go/trpc-agent-go/server/a2a"
-	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
-)
-
-func main() {
-	// 1. Create and start remote Agent service
-	remoteAgent := createRemoteAgent()
-	startA2AServer(remoteAgent, "localhost:8888")
-	
-	time.Sleep(1 * time.Second) // Wait for service to start
-
-	// 2. Create A2AAgent connecting to remote service
-	a2aAgent, err := a2aagent.New(
-		a2aagent.WithAgentCardURL("http://localhost:8888"),
-		a2aagent.WithTransferStateKey("user_context"),
-	)
-	if err != nil {
-		panic(err)
-	}
-
-	// 3. Create local Agent
-	localAgent := createLocalAgent()
-
-	// 4. Compare local and remote Agent responses
-	compareAgents(localAgent, a2aAgent)
-}
-
-func createRemoteAgent() agent.Agent {
-	model := openai.New("gpt-4o-mini")
-	return llmagent.New("JokeAgent",
-		llmagent.WithModel(model),
-		llmagent.WithDescription("I am a joke-telling agent"),
-		llmagent.WithInstruction("Always respond with a funny joke"),
-	)
-}
-
-func createLocalAgent() agent.Agent {
-	model := openai.New("gpt-4o-mini") 
-	return llmagent.New("LocalAgent",
-		llmagent.WithModel(model),
-		llmagent.WithDescription("I am a local assistant"),
-	)
-}
-
-func startA2AServer(agent agent.Agent, host string) {
-	server, err := a2a.New(
-		a2a.WithHost(host),
-		a2a.WithAgent(agent, true), // Enable streaming
-	)
-	if err != nil {
-		panic(err)
-	}
-	
-	go func() {
-		server.Start(host)
-	}()
-}
-
-func compareAgents(localAgent, remoteAgent agent.Agent) {
-	sessionService := inmemory.NewSessionService()
-	
-	localRunner := runner.NewRunner("local", localAgent,
-		runner.WithSessionService(sessionService))
-	remoteRunner := runner.NewRunner("remote", remoteAgent,
-		runner.WithSessionService(sessionService))
-
-	userMessage := "Please tell me a joke"
-	
-	// Call local Agent
-	fmt.Println("=== Local Agent Response ===")
-	processAgent(localRunner, userMessage)
-	
-	// Call remote Agent (via A2AAgent)
-	fmt.Println("\n=== Remote Agent Response (via A2AAgent) ===")
-	processAgent(remoteRunner, userMessage)
-}
-
-func processAgent(runner runner.Runner, message string) {
-	events, err := runner.Run(
-		context.Background(),
-		"user1",
-		"session1",
-		model.NewUserMessage(message),
-		agent.WithRuntimeState(map[string]any{
-			"user_context": "test_context",
-		}),
-	)
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		return
-	}
-
-	for event := range events {
-		if event.Response != nil && len(event.Response.Choices) > 0 {
-			content := event.Response.Choices[0].Message.Content
-			if content == "" {
-				content = event.Response.Choices[0].Delta.Content
-			}
-			if content != "" {
-				fmt.Print(content)
-			}
-		}
-	}
-	fmt.Println()
-}
-```
-
-### AgentCard Automatic Discovery
-
-`A2AAgent` supports automatically obtaining remote Agent information through the standard AgentCard discovery mechanism:
-
-```go
-// A2AAgent automatically retrieves AgentCard from the following path
-// http://remote-agent:8888/.well-known/agent.json
-
-type AgentCard struct {
-    Name         string                 `json:"name"`
-    Description  string                 `json:"description"`
-    URL          string                 `json:"url"`
-    Capabilities AgentCardCapabilities  `json:"capabilities"`
-}
-
-type AgentCardCapabilities struct {
-    Streaming *bool `json:"streaming,omitempty"`
-}
-```
-
-### State Transfer
-
-`A2AAgent` supports transferring local runtime state to remote Agents:
-
-```go
-a2aAgent, _ := a2aagent.New(
-	a2aagent.WithAgentCardURL("http://remote-agent:8888"),
-	// Specify state keys to transfer
-	a2aagent.WithTransferStateKey("user_id", "session_context", "preferences"),
-)
-
-// Runtime state is passed to remote Agent through A2A protocol metadata field
-events, _ := runner.Run(ctx, userID, sessionID, message,
-	agent.WithRuntimeState(map[string]any{
-		"user_id":         "12345",
-		"session_context": "shopping_cart",
-		"preferences":     map[string]string{"language": "en"},
-	}),
+remoteAgent, err := a2aagent.New(
+    a2aagent.WithAgentCardURL("http://127.0.0.1:8888"),
 )
 ```
 
-### Custom HTTP Headers
-
-You can pass custom HTTP headers to A2A agent for each request using `WithA2ARequestOptions`:
+After creation, invoke it through a Runner like any other Agent:
 
 ```go
-import "trpc.group/trpc-go/trpc-a2a-go/client"
+clientRunner := runner.NewRunner(
+    "caller-app",
+    remoteAgent,
+    runner.WithSessionService(sessionmemory.NewSessionService()),
+)
+defer clientRunner.Close()
 
-events, err := runner.Run(
-	context.Background(),
-	userID,
-	sessionID,
-	model.NewUserMessage("your question"),
-	// Pass custom HTTP headers for this request
-	agent.WithA2ARequestOptions(
-		client.WithRequestHeader("X-Custom-Header", "custom-value"),
-		client.WithRequestHeader("X-Request-ID", fmt.Sprintf("req-%d", time.Now().UnixNano())),
-		client.WithRequestHeader("Authorization", "Bearer your-token"),
-	),
+events, err := clientRunner.Run(
+    ctx,
+    "user-1",
+    "session-1",
+    model.NewUserMessage("What tasks can you help me with?"),
 )
 ```
 
-**Common Use Cases:**
+The legacy `A2AAgent` chooses between `message/send` and `message/stream` in the following priority order:
 
-1. **Authentication**: Pass authentication tokens
-   ```go
-   agent.WithA2ARequestOptions(
-       client.WithRequestHeader("Authorization", "Bearer "+token),
-   )
-   ```
+1. `agent.WithStream(...)` on the current Runner invocation.
+2. `WithEnableStreaming(...)` supplied when creating the A2AAgent.
+3. The remote Agent Card's streaming capability.
+4. Non-streaming when none of the above declares a preference.
 
-2. **Distributed Tracing**: Add request/trace IDs
-   ```go
-   agent.WithA2ARequestOptions(
-       client.WithRequestHeader("X-Request-ID", requestID),
-       client.WithRequestHeader("X-Trace-ID", traceID),
-   )
-   ```
+The Agent Card declares a server capability, while the caller can still override the choice for an individual call through either of the first two levels. If the caller forces streaming, the remote server must actually support `message/stream`.
 
+### State, identity, and request extensions
 
-**Configuring UserID Header:**
+The legacy call path writes the caller's session ID into the A2A context ID, and the server then uses that context ID as its own Runner session ID. The caller and server still have independent session stores: the protocol transfers only the identifier and does not merge conversation history between the two sides.
 
-Both client and server support configuring which HTTP header to use for UserID, default is X-User-ID:
+The caller's session user ID is sent through `X-User-ID` by default, and the server uses it as the Runner user ID. Both sides can change the header name with `WithUserIDHeader`. When the user ID is absent, the legacy server derives a stable `A2A_USER_<contextID>` value from the context ID. This header propagates identity; it does not provide authentication or authorization.
+
+`WithTransferStateKey` selects values to copy from the current invocation `RuntimeState` into Message metadata. It supports exact keys, `*`, and prefix or suffix wildcards. The server merges the Message metadata into the new invocation `RuntimeState`, with metadata values overriding values of the same name supplied through `WithRunOptions`.
 
 ```go
-// Client side: Configure which header to send UserID in
-a2aAgent, _ := a2aagent.New(
-	a2aagent.WithAgentCardURL("http://remote-agent:8888"),
-	// Default is "X-User-ID", can be customized
-	a2aagent.WithUserIDHeader("X-Custom-User-ID"),
-)
-
-// Server side: Configure which header to read UserID from
-server, _ := a2a.New(
-	a2a.WithHost("localhost:8888"),
-	a2a.WithAgent(agent, true),
-	// Default is "X-User-ID", can be customized
-	a2a.WithUserIDHeader("X-Custom-User-ID"),
-)
-```
-
-The UserID from `invocation.Session.UserID` will be automatically sent via the configured header to the A2A server.
-
-### ADK Compatibility Mode
-
-If you need to interoperate with Google ADK (Agent Development Kit) Python clients, you can enable ADK compatibility mode. When enabled, the Server will write additional `adk_`-prefixed keys (such as `adk_type`, `adk_thought`) in metadata to be compatible with ADK's part converter parsing logic:
-
-```go
-server, _ := a2a.New(
-	a2a.WithHost("localhost:8888"),
-	a2a.WithAgent(agent, true),
-	a2a.WithADKCompatibility(true), // Enabled by default
-)
-```
-
-### Custom Converters
-
-For special requirements, you can customize message and event converters:
-
-```go
-// Custom A2A message converter (Invocation -> A2A Message)
-// Implements the a2aagent.InvocationA2AConverter interface
-type CustomA2AConverter struct{}
-
-func (c *CustomA2AConverter) ConvertToA2AMessage(
-	isStream bool, 
-	agentName string, 
-	invocation *agent.Invocation,
-) (*protocol.Message, error) {
-	// Custom message conversion logic
-	msg := protocol.NewMessage(protocol.MessageRoleUser, []protocol.Part{
-		protocol.NewTextPart(invocation.Message.Content),
-	})
-	return &msg, nil
-}
-
-// Custom event converter (A2A Response -> Event)
-// Implements the a2aagent.A2AEventConverter interface
-type CustomEventConverter struct{}
-
-func (c *CustomEventConverter) ConvertToEvents(
-	result protocol.MessageResult,
-	agentName string,
-	invocation *agent.Invocation,
-) ([]*event.Event, error) {
-	// Custom non-streaming event conversion logic
-	return []*event.Event{event.New(invocation.InvocationID, agentName)}, nil
-}
-
-func (c *CustomEventConverter) ConvertStreamingToEvents(
-	result protocol.StreamingMessageEvent,
-	agentName string,
-	invocation *agent.Invocation,
-) ([]*event.Event, error) {
-	// Custom streaming event conversion logic
-	return []*event.Event{event.New(invocation.InvocationID, agentName)}, nil
-}
-
-// Use custom converters
-a2aAgent, _ := a2aagent.New(
-	a2aagent.WithAgentCardURL("http://remote-agent:8888"),
-	a2aagent.WithCustomA2AConverter(&CustomA2AConverter{}),
-	a2aagent.WithCustomEventConverter(&CustomEventConverter{}),
-)
-```
-
-### Graph Interrupt and Resume via A2A
-
-When the remote A2A Server runs a Graph Agent that uses `graph.Interrupt`, extra configuration is needed:
-
-- **Server-side**: Allow at least `graph.execution` and `graph.pregel.step`; the former preserves the graph's terminal completion event, while the latter lets interrupt events carry resume metadata such as `state_delta` and `pregel_metadata` back through A2A. If you do not want to maintain a narrow allowlist, use `WithGraphEventObjectAllowlist("*")` instead.
-- **Client-side**: Forward at least `graph.CfgKeyLineageID`, `graph.CfgKeyCheckpointID`, `graph.CfgKeyCheckpointNS`, and `graph.StateKeyCommand`, so resume requests can send lineage/checkpoint/command data back to the remote graph. If you want to forward the full RuntimeState, use `WithTransferStateKey("*")` instead.
-
-```go
-// Server
-server, _ := a2aserver.New(
-    a2aserver.WithAgent(graphAgent, true),
-    a2aserver.WithGraphEventObjectAllowlist(
-        "graph.execution",
-        "graph.pregel.step",
-    ),
-)
-
-// Client
-subAgent, _ := a2aagent.New(
-    a2aagent.WithAgentCardURL("http://remote:8888"),
+remoteAgent, err := a2aagent.New(
+    a2aagent.WithAgentCardURL("http://127.0.0.1:8888"),
     a2aagent.WithEnableStreaming(true),
-    a2aagent.WithTransferStateKey(
-        graph.CfgKeyLineageID,
-        graph.CfgKeyCheckpointID,
-        graph.CfgKeyCheckpointNS,
-        graph.StateKeyCommand,
+    a2aagent.WithTransferStateKey("tenant_id", "workflow.*"),
+    a2aagent.WithA2AClientExtraOptions(
+        client.WithTimeout(30*time.Second),
+    ),
+)
+
+events, err := clientRunner.Run(
+    ctx,
+    userID,
+    sessionID,
+    message,
+    agent.WithRuntimeState(map[string]any{
+        "tenant_id":      "tenant-a",
+        "workflow.stage": "review",
+    }),
+    agent.WithA2ARequestOptions(
+        client.WithRequestHeader("Authorization", "Bearer "+token),
     ),
 )
 ```
 
-Notes:
+W3C trace context propagates automatically through HTTP headers. In production, use authentication settings on the underlying client and server, or a gateway, to enforce authentication, authorization, and resource ownership; do not treat `X-User-ID` as a trusted credential.
 
-- `graph.execution` preserves the graph's terminal completion event.
-- `graph.pregel.step` is the key graph event object used to carry interrupt/resume metadata.
-- `graph.StateKeyCommand` carries `Resume` / `ResumeMap`, which the remote graph uses to continue from the interrupted node.
-- `"*"` remains a convenient catch-all option for debugging or when full state forwarding is acceptable.
+Common legacy extension points include:
 
-> Full example: [examples/graph/a2a_interrupt](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/graph/a2a_interrupt)
+| Scenario | Configuration |
+|---|---|
+| Inbound and outbound metadata | `WithProcessMessageHook`, `WithBuildMessageHook` |
+| Every server-side Runner invocation | `WithRunOptions` |
+| Request headers, timeouts, and underlying authentication | `agent.WithA2ARequestOptions`, `WithA2AClientExtraOptions` |
+| Custom Message and event conversion | `WithA2AToAgentConverter`, `WithEventToA2AConverter`, `WithCustomA2AConverter`, `WithCustomEventConverter` |
+| Extended DataPart or Event Part mappings | `WithA2ADataPartMapper`, `WithEventToA2APartMapper` |
+| Outbound filtering or rewriting | `WithResponseRewriter`, `WithErrorHandler` |
+| Graph and ADK compatibility | `WithGraphEventObjectAllowlist`, `WithADKCompatibility` |
+| Dynamic Agent Cards, authentication, and middleware | `WithExtraA2AOptions` |
 
-## Protocol Interaction Specification
+The legacy packages also retain compatibility extension points such as `WithProcessorBuilder`, `WithTaskManagerBuilder`, `WithStreamingEventType`, `WithStreamingRespHandler`, and `WithStructuredTaskErrors`. They preserve existing v0 application behavior and do not represent the recommended v1 design. New code should prefer the unified v1 MessageProcessor, TaskManager, and converter extension boundaries.
 
-For detailed specifications on how tool calls, code execution, reasoning content, and other events are transmitted through the A2A protocol, as well as Metadata field definitions, ADK compatibility mode, and distributed tracing, please refer to the dedicated document:
+For the v0.2.x encoding conventions for tool calls, code execution, reasoning, metadata, and `state_delta`, see [A2A v0.2.x protocol interactions](a2a-interaction.md). That document describes the legacy wire model and should not be used as a reference for v1.0 Parts or event structures.
 
-**[A2A Protocol Interaction Specification](a2a-interaction.md)**
+### v0 Task management boundaries
 
-This document defines the extension specification of trpc-agent-go on top of the A2A protocol, serving as the standard reference for Client and Server implementations.
+The legacy server creates a memory TaskManager internally by default, but this is not equivalent to retaining Task management in v1. The built-in non-streaming adapter waits for the Runner event channel to close: it returns a Message directly when there is one result and combines multiple results into a completed Task. That completed Task is not registered as a retained Task that can later be queried through `tasks/get`.
 
-## Summary: A2A Server vs A2AAgent
+The streaming adapter creates a Task for the current `message/stream` request, emits submitted, artifact, and completed events, and removes the Task when the event stream ends. It therefore primarily provides a Task envelope for the current SSE stream and does not promise that the Task remains queryable, cancellable, or resubscribable after the request.
 
-| Component | Role | Use Case | Core Functions |
-|-----------|------|----------|----------------|
-| **A2A Server** | Service Provider | Expose local Agent for other systems to call | • Protocol conversion<br>• AgentCard generation<br>• Message routing<br>• Streaming support |
-| **A2AAgent** | Service Consumer | Call remote A2A services | • Transparent proxy<br>• Automatic discovery<br>• State transfer<br>• Protocol adaptation |
+The protocol client in the `trpc-a2a-go` root module still provides `GetTasks`, `CancelTasks`, `ResubscribeTask`, and push notification methods, but these operations are meaningful only when the server's processor and TaskManager actually retain and manage the corresponding Task. v0.2.x does not provide `ListTasks`. For reliable cross-request queries, continuation, multi-node storage, or cancellation, prefer migrating to v1 and configuring a memory, Redis, or custom retaining TaskManager.
 
-### Typical Architecture Pattern
+The v0 wire protocol defaults `blocking` to false for `message/send`, but the built-in tRPC-Agent-Go v0 adapter's unary path still waits for the Runner to complete within the current request. Do not rely on this adapter-specific behavior when using the underlying v0 protocol client against another implementation; explicitly set `blocking=true` when the caller needs the final result.
 
+### Legacy examples
+
+| Example | Demonstrates |
+|---|---|
+| `examples/a2aagent` | Complete Server/A2AAgent setup, implicit or explicit Runner, sessions, and tool calls |
+| `examples/a2aagent/customdatapart` | Custom DataPart and Event extensions |
+| `examples/a2amultipath` | Hosting multiple Agents on one port with base paths |
+| `examples/a2asubagent` | Using a remote A2AAgent as a coordinating Agent's SubAgent |
+| `examples/a2aadk` | Interoperability with ADK tool and code-execution events |
+| `examples/a2acodeexecution` | Transporting code-execution events through legacy extensions |
+| `examples/graph/a2a_agent` | A remote Graph Agent and `state_delta` |
+
+These examples support maintenance of v0.2.x applications. Do not copy their legacy-specific configuration directly into a v1 integration.
+
+## v1.0 and v0.2.x integration differences
+
+| Area | v0.2.x | v1.0 |
+|---|---|---|
+| Server input | Agent or Runner | Explicit caller-owned Runner |
+| Runner lifecycle | Created implicitly by the server when given an Agent, so the caller cannot manage it directly | Created and closed by the caller |
+| Agent Card | Usually derived from Agent and host | Explicit public identity and implementation version |
+| Event processing | Multiple result shapes and callback-style `TaskHandler` | One `ExecContext` to one event channel |
+| Streaming selection | `MessageProcessor`/API branches can select response shape | TaskManager derives non-streaming and streaming responses from the same events |
+| Task lifecycle | The built-in adapter creates request-local Task envelopes and does not retain them across requests by default | TaskManager owns lazy creation, retention, and fan-out |
+| Default `message/send` timing | Wire `blocking` defaults to false, while the built-in adapter's unary path still waits for the Runner | `returnImmediately` defaults to false, so send blocks |
+| Wire method names | Slash-delimited, such as `message/send` | PascalCase, such as `SendMessage` |
+| Task listing | Not provided | `ListTasks` |
+| Multi-node Task storage | The default path does not retain Tasks; applications must supply their own processor and backend | Explicit stateless, memory, or Redis strategy |
+
+### Serve v0 clients from a v1 Server
+
+The v1 `trpc-a2a-go` module contains `compat/v0`, which parses the frozen v0.2.x wire types, translates them into v1 requests, calls the same TaskManager, and translates the result back.
+
+tRPC-Agent-Go exposes this as an opt-in server option:
+
+```go
+server, err := a2aserver.New(
+    a2aserver.WithRunner(agentRunner),
+    a2aserver.WithAgentCard(card),
+    a2aserver.WithV0Compatibility(),
+)
 ```
-┌─────────────┐ A2A protocol  ┌───────────────┐
-│   Client    │──────────────→│ A2A Server    │
-│ (A2AAgent)  │               │ (local Agent) │
-└─────────────┘               └───────────────┘
-      ↑                              ↑
-      │                              │
-   Call remote                   Expose local
-   Agent service                 Agent service
+
+Both protocol generations use the same endpoint, authentication chain, `MessageProcessor`, and TaskManager.
+
+The raw `compat/v0` converter preserves the v0 default: an omitted `blocking` means non-blocking. The tRPC-Agent-Go compatibility option deliberately adapts only that omitted value to blocking so unchanged v0 clients can use the default request-bound TaskManager. Explicit `blocking=false` remains non-blocking.
+
+| v0.2.x client operation | Default stateless TaskManager | Retaining TaskManager |
+|---|---:|---:|
+| Agent Card discovery | Supported | Supported |
+| `message/send` with omitted or true `blocking` | Supported, blocks | Supported, blocks |
+| `message/stream` | Supported | Supported |
+| `message/send` with explicit `blocking=false` | Not supported | Supported |
+| Look up a retained Task after the request | Not supported | Supported |
+| Cancel a non-terminal Task | Not supported | Supported; live cancellation must reach the execution owner |
+| Resubscribe to a non-terminal Task | Not supported | Supported; cross-node reconnect requires Redis resubscribe configuration |
+| Push notification configuration | Not supported | Supported after push is enabled separately on the TaskManager |
+
+The stateless TaskManager rejects an explicit non-blocking request because request-bound execution cannot continue reliably after the HTTP response ends. A streaming request must also reach a terminal state within the current request; `input-required` and `auth-required` states that need a later continuation require a retaining TaskManager.
+
+The compatibility layer lets a legacy wire request enter the new execution path, but it does not guarantee lossless field-by-field conversion between the two data models. For example, `filename` and `mediaType` on v1 text/data Parts cannot be preserved in v0, the v0 `final` value in a streaming response is derived from v1 events, and only the first authentication scheme from a multi-scheme v0 push-notification configuration is retained in v1. Migration tests should cover real text, multimodal, tool-call, error, and Task workflows rather than checking only whether a request succeeds.
+
+### Migration checklist
+
+- [ ] Change server and remote Agent imports to the `/v1` packages.
+- [ ] Construct and own the Runner explicitly.
+- [ ] Publish a reachable Agent Card address and implementation version.
+- [ ] Keep conversation state in the Runner's session service.
+- [ ] Choose stateless, memory, or Redis Task management based on client needs.
+- [ ] Enable `WithV0Compatibility` while v0.2.x clients remain.
+- [ ] Test blocking, streaming, asynchronous, and retained Task flows separately.
+
+## Protocol usage guide
+
+Choose the simplest interaction that satisfies the client:
+
+| Client need | Protocol operation | State requirement |
+|---|---|---|
+| Wait for one answer | Blocking `SendMessage` | Stateless is sufficient |
+| Render tokens or progress live | `SendStreamingMessage` | Stateless is sufficient |
+| Start work and disconnect | `SendMessage` with `returnImmediately=true` | Retaining TaskManager |
+| Poll later | `GetTask` or `ListTasks` | Retaining TaskManager; terminal Tasks remain queryable |
+| Reconnect to updates | `SubscribeToTask` | Non-terminal Task; Redis configuration for cross-node reconnect |
+| Stop running work | `CancelTask` | Cancelable non-terminal Task and routing to the execution owner |
+| Answer an Agent's follow-up question | Send a Message with the same Task ID | Retained suspended Task |
+
+Identifier rules:
+
+- The A2A context ID becomes the server Runner's session ID.
+- `X-User-ID` becomes the Runner user ID. If it is absent, the server derives a stable user ID from the context ID.
+- A Task ID identifies one A2A Task lifecycle, not a conversation session; the same Task can span multiple continuation rounds.
+- A continuation for `input-required` or `auth-required` must carry the original Task ID.
+
+Task retention alone does not make an Agent interruptible. The `MessageProcessor` or converter must emit `input-required` or `auth-required`, and the application must preserve any state needed to continue.
+
+## More examples
+
+The earlier v1 example uses A2AAgent for a normal Agent invocation. To observe asynchronous Task creation, lookup, and listing, run the server with the memory TaskManager and start `taskclient`:
+
+```bash
+cd examples
+go run ./a2aagent/v1/server -retain-tasks
+
+# In another terminal.
+cd examples
+go run ./a2aagent/v1/taskclient
 ```
 
-Through the combined use of A2A Server and A2AAgent, you can easily build distributed Agent systems.
+The "Legacy examples" section above lists v0.2.x Server, A2AAgent, multi-Agent hosting, and extension-event examples.
 
-### A2A Server Configuration Reference
-
-| Option | Description |
-|--------|-------------|
-| `WithAgent(agent, streaming)` | Set the Agent and declare whether the generated AgentCard supports streaming; mutually exclusive with `WithRunner` |
-| `WithHost(host)` | Set the service address, supports URLs with path |
-| `WithAgentCard(card)` | Custom AgentCard (overrides auto-generation) |
-| `WithRunner(runner)` | Custom Runner (inject Memory, Session, etc.); requires `WithAgentCard` |
-| `WithSessionService(service)` | Set the session service used by the default Runner |
-| `WithProcessMessageHook(hook)` | Server-side message processing Hook (middleware pattern) |
-| `WithProcessorBuilder(builder)` | Fully custom message processor |
-| `WithTaskManagerBuilder(builder)` | Custom task manager |
-| `WithGraphEventObjectAllowlist(types...)` | Limit graph object types emitted by Event converters |
-| `WithResponseRewriter(rewriter)` | Rewrite or drop outbound A2A unary/streaming results |
-| `WithRunOptions(opts...)` | Append RunOptions to every invocation |
-| `WithStreamingEventType(type)` | Streaming output event type (Artifact/Message) |
-| `WithUserIDHeader(header)` | Custom UserID HTTP Header |
-| `WithADKCompatibility(enabled)` | ADK compatibility mode (default: enabled) |
-| `WithErrorHandler(handler)` | Custom error handler |
-| `WithA2AToAgentConverter(conv)` | Custom A2A→Agent message converter |
-| `WithEventToA2AConverter(conv)` | Custom Event→A2A message converter |
-| `WithExtraA2AOptions(opts...)` | Pass-through options for underlying A2A Server |
-| `WithDebugLogging(enabled)` | Enable debug logging |
-
-### A2AAgent Configuration Reference
-
-| Option | Description |
-|--------|-------------|
-| `WithAgentCardURL(url)` | Remote A2A service address |
-| `WithBuildMessageHook(hook)` | Client-side message build Hook (middleware pattern) |
-| `WithTransferStateKey(keys...)` | Specify RuntimeState keys to transfer |
-| `WithEnableStreaming(enabled)` | Explicitly control streaming mode |
-| `WithStreamingChannelBufSize(size)` | Streaming buffer size |
-| `WithUserIDHeader(header)` | Custom UserID HTTP Header |
-| `WithCustomA2AConverter(conv)` | Custom Invocation→A2A message converter |
-| `WithCustomEventConverter(conv)` | Custom A2A Response→Event converter |
+For lower-level protocol examples, including Redis, authentication, push notifications, input-required continuation, and direct `MessageProcessor` implementations, see the [`trpc-a2a-go` examples](https://github.com/trpc-group/trpc-a2a-go/tree/v2/examples).

@@ -1,8 +1,8 @@
-# A2A 协议交互规范
+# A2A v0.2.x 协议交互规范
 
 > **说明**
 >
-> 本文档定义了 trpc-agent-go 框架内部对 A2A 协议的扩展实现规范。普通用户在使用 A2A Client/Server 时无需关注此文档内容，框架已自动处理所有协议转换细节。仅当您需要开发非 trpc-agent-go 的 A2A Client/Server 对接本框架时，才需参考此规范。
+> 本文档定义 `server/a2a` 与 `agent/a2aagent` 对 A2A v0.2.x 的扩展编码规范。普通用户使用旧版 A2A Client/Server 时无需关注这些转换细节；只有开发非 tRPC-Agent-Go 的 v0.2.x Client/Server 并与旧版包互通时才需要参考。A2A v1.0 接入请以 [A2A 集成指南](a2a.md) 的 v1 章节为准。
 
 ## 背景
 
@@ -23,7 +23,7 @@
 
 然而在实际的多 Agent 编排场景中，部分用户希望能够看到远程 Agent 的执行路径，以便进行调试、审计或更精细的协同。考虑到这一需求，trpc-agent-go 利用 A2A 协议预留的扩展机制（`DataPart`、`Message.metadata` 等），在不违背协议规范的前提下支持了这些数据的传递。
 
-本文档定义了 trpc-agent-go 在 A2A 协议之上的**交互规范**，作为 Client 和 Server 实现的标准参考。当 A2A 协议升级时，本文档将同步更新。
+本文档记录 tRPC-Agent-Go 旧版 v0.2.x Client 和 Server 之间的**交互规范**，用于维护既有实现；其中的 `TextPart`、`FilePart`、`DataPart`、小写 wire method 和流式事件约定不适用于 A2A v1.0。
 
 > **后续规划**
 >

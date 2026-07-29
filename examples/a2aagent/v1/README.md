@@ -57,7 +57,7 @@ The client keeps using the same session ID until you switch it:
 Ask for the current time (for example, "What time is it in Asia/Shanghai?")
 to see the `current_time` tool call and tool result cross the A2A boundary.
 
-Use `-streaming=false` on the server to exercise blocking `message/send`.
+Use `-streaming=false` on the server to exercise blocking `SendMessage`.
 The client discovers the streaming capability from the Agent Card.
 
 The example uses in-memory session storage, so restarting the server clears its
@@ -80,12 +80,6 @@ go run ./a2aagent/v1/taskclient \
   -prompt "Explain the A2A task lifecycle."
 ```
 
-The task client sends `message/send` with `returnImmediately=true`, receives an
-immediate Task snapshot, polls it with `tasks/get`, and finally verifies it with
-`tasks/list`. The memory TaskManager also enables retained lookup, cancellation,
-and resubscription. Continuation still requires a processor that emits an
-interrupted state, and push delivery requires additional push configuration.
+The task client sends `SendMessage` with `returnImmediately=true`, receives an immediate Task snapshot, polls it with `GetTask`, and finally verifies it with `ListTasks`. The memory TaskManager also retains the state required by `CancelTask` and `SubscribeToTask`, but those operations only apply to eligible non-terminal Tasks and are not exercised by this client. Continuation still requires a processor that emits an interrupted state, and push delivery requires additional push configuration.
 
-Session state and A2A Task state remain independent: the Runner's session
-service owns conversation context, while the memory TaskManager retains A2A
-Task lifecycle state. Both are cleared when the server process restarts.
+Session state and A2A Task state remain independent: the Runner's session service owns conversation context, while the memory TaskManager retains A2A Task lifecycle state. Both are cleared when the server process restarts.
