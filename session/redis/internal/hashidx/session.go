@@ -411,34 +411,67 @@ func boolToInt(b bool) int {
 // including track keys discovered from session state and the track index.
 // When EnableUserSessionIndex is true, also removes the session index entry.
 func (c *Client) DeleteSession(ctx context.Context, key session.Key) error {
-	keys := c.keys.SessionKeys(key)
-	tracks, err := c.listTracksForDelete(ctx, key)
+	tracks, _ := c.ListTracksForSession(ctx, key)
+	if err := c.closeSessionForDelete(ctx, key, tracks); err != nil {
+		return fmt.Errorf("delete session: %w", err)
+	}
+	indexedTracks, err := c.listTracksFromIndex(ctx, key)
 	if err != nil {
 		return fmt.Errorf("delete session: list tracks: %w", err)
 	}
-	for _, t := range tracks {
-		keys = append(keys, c.keys.TrackKeys(key, t)...)
+	tracks = mergeTrackNames(tracks, indexedTracks)
+	return c.deleteTrackStorage(ctx, key, tracks)
+}
+
+func (c *Client) closeSessionForDelete(ctx context.Context, key session.Key, tracks []session.Track) error {
+	keys := []string{
+		c.keys.SessionMetaKey(key),
+		c.keys.EventDataKey(key),
+		c.keys.EventTimeIndexKey(key),
+		c.keys.SummaryKey(key),
+		c.keys.TrackIndexKey(key),
 	}
-	keys = append(keys, c.keys.TrackIndexKey(key))
 	if c.cfg.EnableUserSessionIndex {
-		if err := c.removeSessionFromUserIndex(ctx, keys, key); err != nil {
-			return err
-		}
-	} else {
-		if _, err := c.runScript(ctx, luaDeleteSessionLegacy, keys).Result(); err != nil {
-			return fmt.Errorf("delete session: %w", err)
-		}
+		userKey := session.UserKey{AppName: key.AppName, UserID: key.UserID}
+		keys = append(keys, c.keys.SessionIndexKey(userKey))
+	}
+	ttlSeconds := int64(0)
+	trackTTL := c.cfg.effectiveTrackEventTTL()
+	if trackTTL > 0 {
+		ttlSeconds = ttlSecondsCeil(trackTTL)
+	}
+	args := []any{
+		key.SessionID,
+		ttlSeconds,
+		boolToInt(c.cfg.TrackEventTTL != nil),
+	}
+	for _, track := range tracks {
+		args = append(args, string(track))
+	}
+	if _, err := c.runScript(ctx, luaCloseSessionForDelete, keys, args...).Result(); err != nil {
+		return err
 	}
 	return nil
 }
 
-func (c *Client) listTracksForDelete(ctx context.Context, key session.Key) ([]session.Track, error) {
-	tracks, _ := c.ListTracksForSession(ctx, key)
+func (c *Client) deleteTrackStorage(ctx context.Context, key session.Key, tracks []session.Track) error {
+	keys := make([]string, 0, len(tracks)*2+1)
+	for _, t := range tracks {
+		keys = append(keys, c.keys.TrackKeys(key, t)...)
+	}
+	keys = append(keys, c.keys.TrackIndexKey(key))
+	if _, err := c.runScript(ctx, luaDeleteSessionLegacy, keys).Result(); err != nil {
+		return fmt.Errorf("delete session: %w", err)
+	}
+	return nil
+}
+
+func (c *Client) listTracksFromIndex(ctx context.Context, key session.Key) ([]string, error) {
 	indexedTracks, err := c.client.SMembers(ctx, c.keys.TrackIndexKey(key)).Result()
 	if err != nil && err != redis.Nil {
 		return nil, err
 	}
-	return mergeTrackNames(tracks, indexedTracks), nil
+	return indexedTracks, nil
 }
 
 func mergeTrackNames(tracks []session.Track, indexedTracks []string) []session.Track {

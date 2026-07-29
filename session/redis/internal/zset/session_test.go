@@ -454,6 +454,50 @@ func TestDeleteSession_WithRetainedTracksAfterSessionStateExpired(t *testing.T) 
 	assert.False(t, mr.Exists(trackIndexKey))
 }
 
+func TestDeleteSession_DeletesTrackAppendedAfterInitialDiscovery(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "late-track-delete"}
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	require.NoError(t, c.AppendTrackEvent(ctx, key, &session.TrackEvent{
+		Track:     "alpha",
+		Payload:   json.RawMessage(`"alpha"`),
+		Timestamp: time.Now(),
+	}))
+	discoveredTracks, err := c.listTracksForSession(ctx, key)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []session.Track{"alpha"}, discoveredTracks)
+	require.NoError(t, c.AppendTrackEvent(ctx, key, &session.TrackEvent{
+		Track:     "beta",
+		Payload:   json.RawMessage(`"beta"`),
+		Timestamp: time.Now(),
+	}))
+	require.NoError(t, c.closeSessionForDelete(ctx, key, discoveredTracks))
+	err = c.AppendTrackEvent(ctx, key, &session.TrackEvent{
+		Track:     "gamma",
+		Payload:   json.RawMessage(`"gamma"`),
+		Timestamp: time.Now(),
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "session not found")
+	indexedTracks, err := c.listTracksFromIndex(ctx, key)
+	require.NoError(t, err)
+	tracks := mergeTrackNames(discoveredTracks, indexedTracks)
+	require.ElementsMatch(t, []session.Track{"alpha", "beta"}, tracks)
+	require.NoError(t, c.deleteTrackStorage(ctx, key, tracks))
+	got, err := c.GetTrackEvents(ctx, key, []session.Track{"alpha", "beta", "gamma"}, 0, time.Time{})
+	require.NoError(t, err)
+	assert.Empty(t, got["alpha"])
+	assert.Empty(t, got["beta"])
+	assert.Empty(t, got["gamma"])
+	assert.False(t, mr.Exists(c.trackKey(key, "alpha")))
+	assert.False(t, mr.Exists(c.trackKey(key, "beta")))
+	assert.False(t, mr.Exists(c.trackKey(key, "gamma")))
+	assert.False(t, mr.Exists(c.trackIndexKey(key)))
+}
+
 // =============================================================================
 // UpdateSessionState
 // =============================================================================

@@ -419,6 +419,59 @@ func TestClient_DeleteSession_WithRetainedTracksAfterSessionMetaExpired(t *testi
 	assert.False(t, mr.Exists(trackNamesKey))
 }
 
+func TestClient_DeleteSession_DeletesTrackAppendedAfterInitialDiscovery(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "late-track-delete"}
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	alphaTracks, err := json.Marshal([]string{"alpha"})
+	require.NoError(t, err)
+	require.NoError(t, c.AppendTrackEvent(ctx, key, &session.TrackEvent{
+		Track:     "alpha",
+		Payload:   json.RawMessage(`"alpha"`),
+		Timestamp: time.Now(),
+	}, alphaTracks))
+	discoveredTracks, err := c.ListTracksForSession(ctx, key)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []session.Track{"alpha"}, discoveredTracks)
+	betaTracks, err := json.Marshal([]string{"alpha", "beta"})
+	require.NoError(t, err)
+	require.NoError(t, c.AppendTrackEvent(ctx, key, &session.TrackEvent{
+		Track:     "beta",
+		Payload:   json.RawMessage(`"beta"`),
+		Timestamp: time.Now(),
+	}, betaTracks))
+	require.NoError(t, c.closeSessionForDelete(ctx, key, discoveredTracks))
+	gammaTracks, err := json.Marshal([]string{"alpha", "beta", "gamma"})
+	require.NoError(t, err)
+	err = c.AppendTrackEvent(ctx, key, &session.TrackEvent{
+		Track:     "gamma",
+		Payload:   json.RawMessage(`"gamma"`),
+		Timestamp: time.Now(),
+	}, gammaTracks)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "session not found")
+	indexedTracks, err := c.listTracksFromIndex(ctx, key)
+	require.NoError(t, err)
+	tracks := mergeTrackNames(discoveredTracks, indexedTracks)
+	require.ElementsMatch(t, []session.Track{"alpha", "beta"}, tracks)
+	require.NoError(t, c.deleteTrackStorage(ctx, key, tracks))
+	got, err := c.GetTrackEvents(ctx, key, []session.Track{"alpha", "beta", "gamma"}, 0, time.Time{})
+	require.NoError(t, err)
+	assert.Empty(t, got["alpha"])
+	assert.Empty(t, got["beta"])
+	assert.Empty(t, got["gamma"])
+	assert.False(t, mr.Exists(c.keys.TrackDataKey(key, "alpha")))
+	assert.False(t, mr.Exists(c.keys.TrackTimeIndexKey(key, "alpha")))
+	assert.False(t, mr.Exists(c.keys.TrackDataKey(key, "beta")))
+	assert.False(t, mr.Exists(c.keys.TrackTimeIndexKey(key, "beta")))
+	assert.False(t, mr.Exists(c.keys.TrackDataKey(key, "gamma")))
+	assert.False(t, mr.Exists(c.keys.TrackTimeIndexKey(key, "gamma")))
+	assert.False(t, mr.Exists(c.keys.TrackIndexKey(key)))
+}
+
 func TestClient_DeleteEvent(t *testing.T) {
 	_, rdb := setupMiniredis(t)
 	c := NewClient(rdb, defaultConfig())

@@ -362,20 +362,50 @@ func (c *Client) UpdateSessionState(ctx context.Context, key session.Key, state 
 
 // DeleteSession deletes a session in ZSet.
 func (c *Client) DeleteSession(ctx context.Context, key session.Key) error {
-	txPipe := c.client.TxPipeline()
-	txPipe.HDel(ctx, c.sessionStateKey(key), key.SessionID)
-	txPipe.HDel(ctx, c.sessionSummaryKey(key), key.SessionID)
-	txPipe.Del(ctx, c.eventKey(key))
-	tracks, err := c.listTracksForDelete(ctx, key)
+	tracks, err := c.listTracksForSession(ctx, key)
 	if err != nil {
 		return fmt.Errorf("list tracks: %w", err)
 	}
+	if err := c.closeSessionForDelete(ctx, key, tracks); err != nil {
+		return err
+	}
+	indexedTracks, err := c.listTracksFromIndex(ctx, key)
+	if err != nil {
+		return fmt.Errorf("list track index: %w", err)
+	}
+	tracks = mergeTrackNames(tracks, indexedTracks)
+	return c.deleteTrackStorage(ctx, key, tracks)
+}
+
+func (c *Client) closeSessionForDelete(ctx context.Context, key session.Key, tracks []session.Track) error {
+	txPipe := c.client.TxPipeline()
+	if len(tracks) > 0 {
+		trackIndexKey := c.trackIndexKey(key)
+		txPipe.SAdd(ctx, trackIndexKey, trackNameValues(tracks)...)
+		trackTTL := c.cfg.effectiveTrackEventTTL()
+		if trackTTL > 0 {
+			txPipe.Expire(ctx, trackIndexKey, trackTTL)
+		} else if c.cfg.TrackEventTTL != nil {
+			txPipe.Persist(ctx, trackIndexKey)
+		}
+	}
+	txPipe.HDel(ctx, c.sessionStateKey(key), key.SessionID)
+	txPipe.HDel(ctx, c.sessionSummaryKey(key), key.SessionID)
+	txPipe.Del(ctx, c.eventKey(key))
+	if _, err := txPipe.Exec(ctx); err != nil && err != redis.Nil {
+		return fmt.Errorf("delete session state failed: %w", err)
+	}
+	return nil
+}
+
+func (c *Client) deleteTrackStorage(ctx context.Context, key session.Key, tracks []session.Track) error {
+	txPipe := c.client.TxPipeline()
 	for _, track := range tracks {
 		txPipe.Del(ctx, c.trackKey(key, track))
 	}
 	txPipe.Del(ctx, c.trackIndexKey(key))
 	if _, err := txPipe.Exec(ctx); err != nil && err != redis.Nil {
-		return fmt.Errorf("delete session state failed: %w", err)
+		return fmt.Errorf("delete track events failed: %w", err)
 	}
 	return nil
 }
@@ -615,16 +645,12 @@ func (c *Client) listTracksForSession(ctx context.Context, key session.Key) ([]s
 	return session.TracksFromState(sessState.State)
 }
 
-func (c *Client) listTracksForDelete(ctx context.Context, key session.Key) ([]session.Track, error) {
-	tracks, err := c.listTracksForSession(ctx, key)
-	if err != nil {
-		return nil, err
-	}
+func (c *Client) listTracksFromIndex(ctx context.Context, key session.Key) ([]string, error) {
 	indexedTracks, err := c.client.SMembers(ctx, c.trackIndexKey(key)).Result()
 	if err != nil && err != redis.Nil {
 		return nil, err
 	}
-	return mergeTrackNames(tracks, indexedTracks), nil
+	return indexedTracks, nil
 }
 
 func mergeTrackNames(tracks []session.Track, indexedTracks []string) []session.Track {
@@ -649,6 +675,14 @@ func mergeTrackNames(tracks []session.Track, indexedTracks []string) []session.T
 		result = append(result, track)
 	}
 	return result
+}
+
+func trackNameValues(tracks []session.Track) []any {
+	values := make([]any, 0, len(tracks))
+	for _, track := range tracks {
+		values = append(values, string(track))
+	}
+	return values
 }
 
 func (c *Client) getTrackEvents(
