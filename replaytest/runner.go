@@ -28,41 +28,94 @@ func RunSpec(ctx context.Context, spec *Spec, dbURL string) (*DiffReport, error)
 		return nil, fmt.Errorf("setup: %w", err)
 	}
 	// Update report to reflect only backends that actually initialized.
-	report.BackendsTested = spec.Backends
+	report.BackendsTested = BackendConfig{
+		Session: harness.ActiveSessionBackends,
+		Memory:  harness.ActiveMemoryBackends,
+	}
+	report.SkippedBackends = harness.SkippedBackends
 
 	if err := harness.Execute(ctx); err != nil {
 		return nil, fmt.Errorf("execute: %w", err)
 	}
 
-	sessionSnapshots, memorySnapshots, err := harness.Verify(ctx)
+	// Determine search query from spec verifications (memory_search).
+	searchQuery := "test"
+	for _, vs := range spec.Verifies {
+		if vs.What == "memory_search" && len(vs.Params) > 0 {
+			var sq struct {
+				Query string `json:"query"`
+			}
+			if json.Unmarshal(vs.Params, &sq) == nil && sq.Query != "" {
+				searchQuery = sq.Query
+				break
+			}
+		}
+	}
+	sessionSnapshots, memorySnapshots, err := harness.Verify(ctx, searchQuery)
 	if err != nil {
 		return nil, fmt.Errorf("verify: %w", err)
 	}
 
 	normChain := DefaultNormalizerChain()
-	// For concurrent specs, add an event-order normalizer so that goroutine scheduling differences across backends do not produce false order-mismatch diffs.
-	if spec.HasTag("concurrent") {
-		normChain.Append(&concurrentEventSorter{})
-	}
 	rules := MergeDiffRules(DefaultDiffRules(), spec.AllowedDiffs)
 	comp := NewComparator(rules)
 
-	if len(spec.Backends.Session) == 0 {
+	// Select reference backends from the actually-initialized list, not the spec list.
+	if len(harness.ActiveSessionBackends) == 0 {
+		report.Finalize()
 		return report, nil
 	}
-	refBackend := spec.Backends.Session[0]
+	refBackend := harness.ActiveSessionBackends[0]
 	refMemBackend := refBackend
-	if len(spec.Backends.Memory) > 0 {
-		refMemBackend = spec.Backends.Memory[0]
+	if len(harness.ActiveMemoryBackends) > 0 {
+		refMemBackend = harness.ActiveMemoryBackends[0]
 	}
+
+	// If there are not enough active backends to perform cross-backend
+	// comparison, record skip results so the report does not silently pass.
+	if len(harness.ActiveSessionBackends) < 2 {
+		for _, vs := range spec.Verifies {
+			switch vs.What {
+			case "session_full", "events", "state", "summary", "tracks":
+				report.AddVerification(VerificationResult{
+					What: vs.What, ReferenceBackend: refBackend,
+					ComparedBackend: "", Status: StatusSkip,
+					Diffs: []DiffResult{{Path: "$",
+						Kind: DiffMissingEntry, Severity: SeverityInfo,
+						Message: "only one active session backend, cannot cross-compare",
+					}},
+				})
+			}
+		}
+	}
+	if len(harness.ActiveMemoryBackends) < 2 {
+		for _, vs := range spec.Verifies {
+			switch vs.What {
+			case "memories", "memory_search":
+				report.AddVerification(VerificationResult{
+					What: vs.What, ReferenceBackend: refMemBackend,
+					ComparedBackend: "", Status: StatusSkip,
+					Diffs: []DiffResult{{Path: "$",
+						Kind: DiffMissingEntry, Severity: SeverityInfo,
+						Message: "only one active memory backend, cannot cross-compare",
+					}},
+				})
+			}
+		}
+	}
+
 	// ---- session-scoped verifications (compute once, filter by path) ----
-	if err := runSessionVerifications(report, harness, comp, normChain, spec, sessionSnapshots, refBackend); err != nil {
-		return nil, err
+	if len(harness.ActiveSessionBackends) >= 2 {
+		if err := runSessionVerifications(report, harness, comp, normChain, spec, sessionSnapshots, refBackend); err != nil {
+			return nil, err
+		}
 	}
 
 	// ---- non-session verifications (memories, memory_search) ----
-	if err := runMemoryVerifications(report, harness, comp, normChain, spec, memorySnapshots, refMemBackend); err != nil {
-		return nil, err
+	if len(harness.ActiveMemoryBackends) >= 2 {
+		if err := runMemoryVerifications(report, harness, comp, normChain, spec, memorySnapshots, refMemBackend); err != nil {
+			return nil, err
+		}
 	}
 
 	report.Finalize()
@@ -91,7 +144,7 @@ func runMemoryVerifications(
 			if err != nil {
 				return fmt.Errorf("normalize reference memory %s: %w", refMemBackend, err)
 			}
-			for _, backendName := range spec.Backends.Memory {
+			for _, backendName := range harness.ActiveMemoryBackends {
 				if backendName == refMemBackend {
 					continue
 				}
@@ -124,6 +177,7 @@ func runMemoryVerifications(
 					rightEntries = cmpSearchNorm.SearchResults
 				}
 				diffs := comp.CompareMemories(leftEntries, rightEntries, basePath)
+				diffs = comp.filterAllowed(diffs, refMemBackend, backendName)
 				vr := VerificationResult{
 					What:             verifySpec.What,
 					ReferenceBackend: refMemBackend,
@@ -233,13 +287,24 @@ func checkSummaryExpectations(snap *SessionSnapshot, vs VerifySpec) []DiffResult
 	return diffs
 }
 
+// scopePrefix maps a verification "what" tag to the JSONPath prefix used by the Comparator.
+var scopePrefix = map[string]string{
+	"events":  "$.events",
+	"state":   "$.state",
+	"summary": "$.summaries",
+	"tracks":  "$.tracks",
+}
+
 // filterDiffsByScope returns the subset of diffs whose path starts with the scope prefix matching the given what tag.
-// session_full returns all diffs; events/state/summary/tracks return only diffs under $.events/$.state/etc.
+// session_full returns all diffs; events/state/summary/tracks return only diffs under the corresponding prefix.
 func filterDiffsByScope(diffs []DiffResult, what string) []DiffResult {
 	if what == "session_full" {
 		return diffs
 	}
-	prefix := "$." + what
+	prefix, ok := scopePrefix[what]
+	if !ok {
+		prefix = "$." + what
+	}
 	var out []DiffResult
 	for _, d := range diffs {
 		if strings.HasPrefix(d.Path, prefix) {
@@ -249,9 +314,7 @@ func filterDiffsByScope(diffs []DiffResult, what string) []DiffResult {
 	return out
 }
 
-// runSessionVerifications computes CompareSessions once per backend pair and
-// distributes diffs by scope prefix (events/state/summary/tracks) to avoid
-// duplicate reporting across multiple what tags.
+// runSessionVerifications computes CompareSessions once per backend pair and distributes diffs by scope prefix (events/state/summary/tracks) to avoid duplicate reporting across multiple what tags.
 func runSessionVerifications(
 	report *DiffReport,
 	harness *Harness,

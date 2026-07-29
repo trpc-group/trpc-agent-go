@@ -65,19 +65,66 @@ func NewComparator(allowedDiffs []DiffRule) *Comparator {
 	return &Comparator{AllowedDiffs: allowedDiffs}
 }
 
-// isAllowed reports whether a diff at the given path with the given kind is covered by an allowed-diff rule.
-func (c *Comparator) isAllowed(path string, _ string) (*DiffRule, bool) {
+// isAllowed reports whether a diff is covered by an allowed-diff rule.
+func (c *Comparator) isAllowed(d *DiffResult) (*DiffRule, bool) {
 	for _, rule := range c.AllowedDiffs {
-		if rule.MatchPath(path) {
-			if rule.Strategy == "ignore" {
+		if !rule.MatchPath(d.Path) {
+			continue
+		}
+		switch rule.Strategy {
+		case "ignore":
+			return &rule, true
+		case "allow_drift":
+			if drift, ok := numericDiff(d.Left, d.Right); ok && rule.MaxDrift != nil {
+				if rule.MaxDrift.IsDriftAllowed(rule.Kind, drift) {
+					return &rule, true
+				}
+			}
+		case "allow_extra_keys":
+			if d.Kind == DiffExtraKey {
 				return &rule, true
 			}
-			if rule.Strategy == "allow_drift" {
+		case "allow_missing_keys":
+			if d.Kind == DiffMissingKey {
 				return &rule, true
 			}
 		}
 	}
 	return nil, false
+}
+
+// numericDiff returns the absolute difference between two numeric values
+// (int, int64, float64) and true; otherwise (0, false).
+func numericDiff(a, b any) (float64, bool) {
+	af, ok := toFloat(a)
+	if !ok {
+		return 0, false
+	}
+	bf, ok := toFloat(b)
+	if !ok {
+		return 0, false
+	}
+	diff := af - bf
+	if diff < 0 {
+		diff = -diff
+	}
+	return diff, true
+}
+
+func toFloat(v any) (float64, bool) {
+	switch x := v.(type) {
+	case float64:
+		return x, true
+	case float32:
+		return float64(x), true
+	case int:
+		return float64(x), true
+	case int64:
+		return float64(x), true
+	case int32:
+		return float64(x), true
+	}
+	return 0, false
 }
 
 // CompareSessions compares two session snapshots and returns diffs.
@@ -220,6 +267,19 @@ func (c *Comparator) compareEvent(left, right *event.Event, basePath string) []D
 	// StateDelta.
 	diffs = append(diffs, c.compareStateMaps(left.StateDelta, right.StateDelta, basePath+".stateDelta")...)
 
+	// Timestamp (normalized to second precision). Report numeric drift so that allow_drift rules can evaluate tolerances.
+	if !left.Timestamp.Equal(right.Timestamp) {
+		drift := left.Timestamp.Sub(right.Timestamp)
+		if drift < 0 {
+			drift = -drift
+		}
+		diffs = append(diffs, DiffResult{
+			Path: basePath + ".timestamp", Kind: DiffValueMismatch, Severity: SeverityInfo,
+			Left: float64(left.Timestamp.UnixMilli()), Right: float64(right.Timestamp.UnixMilli()),
+			Message: fmt.Sprintf("timestamp drift: %v", drift),
+		})
+	}
+
 	// Extensions.
 	diffs = append(diffs, c.compareExtensions(left.Extensions, right.Extensions, basePath+".extensions")...)
 
@@ -339,6 +399,12 @@ func (c *Comparator) compareMessage(left, right *model.Message, basePath string)
 		tcPath := fmt.Sprintf("%s.toolCalls[%d]", basePath, i)
 		ltc := left.ToolCalls[i]
 		rtc := right.ToolCalls[i]
+		if ltc.ID != rtc.ID {
+			diffs = append(diffs, DiffResult{
+				Path: tcPath + ".id", Kind: DiffValueMismatch, Severity: SeverityError,
+				Left: ltc.ID, Right: rtc.ID, Message: "tool call id mismatch",
+			})
+		}
 		if ltc.Type != rtc.Type {
 			diffs = append(diffs, DiffResult{
 				Path: tcPath + ".type", Kind: DiffValueMismatch, Severity: SeverityError,
@@ -588,6 +654,13 @@ func (c *Comparator) compareTracks(left, right map[session.Track]*session.TrackE
 
 		for i := 0; i < len(lev) && i < len(rev); i++ {
 			evPath := fmt.Sprintf("%s.events[%d]", keyPath, i)
+			if !lev[i].Timestamp.Equal(rev[i].Timestamp) {
+				diffs = append(diffs, DiffResult{
+					Path: evPath + ".timestamp", Kind: DiffValueMismatch, Severity: SeverityInfo,
+					Left: float64(lev[i].Timestamp.UnixMilli()), Right: float64(rev[i].Timestamp.UnixMilli()),
+					Message: "track event timestamp mismatch",
+				})
+			}
 			// Compare payload.
 			if string(lev[i].Payload) != string(rev[i].Payload) {
 				diffs = append(diffs, DiffResult{
@@ -815,13 +888,14 @@ func (c *Comparator) compareExtensions(left, right map[string]json.RawMessage, b
 // filterAllowed removes diffs that are covered by allowed-diff rules.
 func (c *Comparator) filterAllowed(diffs []DiffResult, leftBackend, rightBackend string) []DiffResult {
 	var filtered []DiffResult
-	for _, d := range diffs {
-		if rule, ok := c.isAllowed(d.Path, d.RuleKind); ok {
+	for i := range diffs {
+		d := &diffs[i]
+		if rule, ok := c.isAllowed(d); ok {
 			if rule.MatchBackend(leftBackend) || rule.MatchBackend(rightBackend) {
 				continue
 			}
 		}
-		filtered = append(filtered, d)
+		filtered = append(filtered, *d)
 	}
 	return filtered
 }

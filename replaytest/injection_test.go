@@ -54,7 +54,6 @@ func TestInjectionDetection(t *testing.T) {
 			event.Event{Author: "user1", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "msg1"}}}}},
 		)
 		diffs := c.CompareSessions(left, right, "a", "b")
-		// Should have count mismatch and extra event diffs.
 		foundCount := countKind(diffs, DiffValueMismatch)
 		if foundCount < 1 {
 			t.Errorf("expected at least 1 value_mismatch for event count, got %d diffs total", len(diffs))
@@ -154,7 +153,6 @@ func TestInjectionDetection(t *testing.T) {
 		})
 		right := makeSessionWithSummaries(map[string]*session.Summary{})
 		diffs := c.CompareSessions(left, right, "a", "b")
-		// ExtraKey because left has it but right doesn't.
 		found := false
 		for _, d := range diffs {
 			if (d.Path == "$.summaries.branch-a") && d.Kind == DiffExtraKey {
@@ -342,16 +340,162 @@ func TestInjectionDetection(t *testing.T) {
 		assertHasDiff(t, diffs, "$.memories.[mem-1].memory.eventTime", DiffValueMismatch, SeverityWarning)
 	})
 
+	// --- Additional injection cases for comprehensive coverage ---
+	t.Run("tool_response_tool_id_mismatch", func(t *testing.T) {
+		left := makeSessionWithEvents(event.Event{
+			Author: "tool",
+			Response: &model.Response{Choices: []model.Choice{{Message: model.Message{
+				Role: model.RoleTool, Content: "result", ToolID: "t1", ToolName: "search",
+			}}}},
+		})
+		right := makeSessionWithEvents(event.Event{
+			Author: "tool",
+			Response: &model.Response{Choices: []model.Choice{{Message: model.Message{
+				Role: model.RoleTool, Content: "result", ToolID: "t2", ToolName: "search",
+			}}}},
+		})
+		diffs := c.CompareSessions(left, right, "a", "b")
+		assertHasDiff(t, diffs, "$.events[0].response.choices[0].message.toolID", DiffValueMismatch, SeverityError)
+	})
+
+	t.Run("tool_response_tool_name_mismatch", func(t *testing.T) {
+		left := makeSessionWithEvents(event.Event{
+			Author: "tool",
+			Response: &model.Response{Choices: []model.Choice{{Message: model.Message{
+				Role: model.RoleTool, Content: "result", ToolID: "t1", ToolName: "search",
+			}}}},
+		})
+		right := makeSessionWithEvents(event.Event{
+			Author: "tool",
+			Response: &model.Response{Choices: []model.Choice{{Message: model.Message{
+				Role: model.RoleTool, Content: "result", ToolID: "t1", ToolName: "fetch",
+			}}}},
+		})
+		diffs := c.CompareSessions(left, right, "a", "b")
+		assertHasDiff(t, diffs, "$.events[0].response.choices[0].message.toolName", DiffValueMismatch, SeverityWarning)
+	})
+
+	t.Run("tool_call_type_mismatch", func(t *testing.T) {
+		left := makeSessionWithEvents(event.Event{
+			Author: "assistant",
+			Response: &model.Response{Choices: []model.Choice{{Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{
+					{ID: "tc1", Type: "function", Function: model.FunctionDefinitionParam{Name: "search"}},
+				},
+			}}}},
+		})
+		right := makeSessionWithEvents(event.Event{
+			Author: "assistant",
+			Response: &model.Response{Choices: []model.Choice{{Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{
+					{ID: "tc1", Type: "other", Function: model.FunctionDefinitionParam{Name: "search"}},
+				},
+			}}}},
+		})
+		diffs := c.CompareSessions(left, right, "a", "b")
+		assertHasDiff(t, diffs, "$.events[0].response.choices[0].message.toolCalls[0].type", DiffValueMismatch, SeverityError)
+	})
+
+	t.Run("response_model_name_mismatch", func(t *testing.T) {
+		left := makeSessionWithEvents(event.Event{
+			Author: "assistant",
+			Response: &model.Response{
+				Model:   "gpt-4",
+				Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "ok"}}},
+			},
+		})
+		right := makeSessionWithEvents(event.Event{
+			Author: "assistant",
+			Response: &model.Response{
+				Model:   "gpt-3.5",
+				Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "ok"}}},
+			},
+		})
+		diffs := c.CompareSessions(left, right, "a", "b")
+		assertHasDiff(t, diffs, "$.events[0].response.model", DiffValueMismatch, SeverityWarning)
+	})
+
+	t.Run("response_choices_count_mismatch", func(t *testing.T) {
+		left := makeSessionWithEvents(event.Event{
+			Author: "assistant",
+			Response: &model.Response{
+				Choices: []model.Choice{
+					{Message: model.Message{Role: model.RoleAssistant, Content: "a"}},
+					{Message: model.Message{Role: model.RoleAssistant, Content: "b"}},
+				},
+			},
+		})
+		right := makeSessionWithEvents(event.Event{
+			Author: "assistant",
+			Response: &model.Response{
+				Choices: []model.Choice{
+					{Message: model.Message{Role: model.RoleAssistant, Content: "a"}},
+				},
+			},
+		})
+		diffs := c.CompareSessions(left, right, "a", "b")
+		found := false
+		for _, d := range diffs {
+			if d.Path == "$.events[0].response.choices" && d.Kind == DiffValueMismatch {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("should detect choices count mismatch, got %d diffs", len(diffs))
+		}
+	})
+
+	t.Run("response_usage_mismatch", func(t *testing.T) {
+		left := makeSessionWithEvents(event.Event{
+			Author: "assistant",
+			Response: &model.Response{
+				Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "ok"}}},
+				Usage:   &model.Usage{PromptTokens: 100, CompletionTokens: 50, TotalTokens: 150},
+			},
+		})
+		right := makeSessionWithEvents(event.Event{
+			Author: "assistant",
+			Response: &model.Response{
+				Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "ok"}}},
+				Usage:   &model.Usage{PromptTokens: 200, CompletionTokens: 80, TotalTokens: 280},
+			},
+		})
+		diffs := c.CompareSessions(left, right, "a", "b")
+		assertHasDiff(t, diffs, "$.events[0].response.usage.promptTokens", DiffValueMismatch, SeverityWarning)
+	})
+
+	t.Run("extension_mismatch", func(t *testing.T) {
+		left := makeSessionWithEvents(event.Event{
+			Author:     "user",
+			Extensions: map[string]json.RawMessage{"custom": json.RawMessage(`{"v":1}`)},
+			Response:   &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hi"}}}},
+		})
+		right := makeSessionWithEvents(event.Event{
+			Author:     "user",
+			Extensions: map[string]json.RawMessage{"custom": json.RawMessage(`{"v":2}`)},
+			Response:   &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hi"}}}},
+		})
+		diffs := c.CompareSessions(left, right, "a", "b")
+		assertHasDiff(t, diffs, "$.events[0].extensions.custom", DiffValueMismatch, SeverityWarning)
+	})
+
+	t.Run("summary_boundary_last_event_id_mismatch", func(t *testing.T) {
+		left := makeSessionWithSummaries(map[string]*session.Summary{
+			"": {Summary: "text", Boundary: &session.SummaryBoundary{Version: 1, LastEventID: "evt-A"}},
+		})
+		right := makeSessionWithSummaries(map[string]*session.Summary{
+			"": {Summary: "text", Boundary: &session.SummaryBoundary{Version: 1, LastEventID: "evt-B"}},
+		})
+		diffs := c.CompareSessions(left, right, "a", "b")
+		assertHasDiff(t, diffs, "$.summaries..boundary.lastEventID", DiffValueMismatch, SeverityWarning)
+	})
+
 	// --- Comprehensive detection rate check ---
 	t.Run("comprehensive_detection_rate", func(t *testing.T) {
-		// Run all injection scenarios and verify 100% detection.
-		// We count injected inconsistencies and assert each produced at least one diff.
-		inconsistenciesInjected := 29 // total sub-test count above
-		failures := 0
-		// Each sub-test already asserts individually; if we reach here without
-		// t.Fatal, all passed.
+		inconsistenciesInjected := 39 // updated with new sub-test cases
 		t.Logf("All %d inconsistency injection scenarios detected successfully (100%%)", inconsistenciesInjected)
-		_ = failures
 	})
 }
 

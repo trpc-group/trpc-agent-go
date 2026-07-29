@@ -245,7 +245,7 @@ func TestJSONFieldOrderNormalizer_NormalizesNestedJSON(t *testing.T) {
 	}
 }
 
-func TestJSONFieldOrderNormalizer_SkipsToolCallArgsExtension(t *testing.T) {
+func TestJSONFieldOrderNormalizer_PreservesToolCallArgsExtension(t *testing.T) {
 	n := &jsonFieldOrderNormalizer{}
 	sess := session.NewSession("app", "u1", "s1")
 	sess.Events = []event.Event{{
@@ -259,8 +259,10 @@ func TestJSONFieldOrderNormalizer_SkipsToolCallArgsExtension(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := result.Session.Events[0].Extensions[event.ToolCallArgsExtensionKey]; ok {
-		t.Error("ToolCallArgsExtensionKey should be skipped")
+	// ToolCallArgsExtensionKey should now be preserved (not deleted) so that
+	// tool-call-to-response association is compared across backends.
+	if _, ok := result.Session.Events[0].Extensions[event.ToolCallArgsExtensionKey]; !ok {
+		t.Error("ToolCallArgsExtensionKey should be preserved (was previously skipped)")
 	}
 	if _, ok := result.Session.Events[0].Extensions["custom_ext"]; !ok {
 		t.Error("custom_ext should be preserved")
@@ -444,8 +446,8 @@ func TestNormalizerChain_RunsInOrder(t *testing.T) {
 		t.Fatal("DefaultNormalizerChain should not be nil")
 	}
 	// Chain should contain all normalizers.
-	if len(chain.normalizers) != 8 {
-		t.Errorf("expected 8 normalizers in default chain, got %d", len(chain.normalizers))
+	if len(chain.normalizers) != 9 {
+		t.Errorf("expected 9 normalizers in default chain, got %d", len(chain.normalizers))
 	}
 }
 
@@ -455,33 +457,50 @@ func TestConcurrentEventSorter_SortsByStableKey(t *testing.T) {
 	n := &concurrentEventSorter{}
 	sess := session.NewSession("app", "u1", "s1")
 	sess.Events = []event.Event{
-		{Author: "tool", Tag: "b", FilterKey: "main",
-			Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "result B"}}}},
+		{Author: "tool", Tag: "x", FilterKey: "dev",
+			Response: &model.Response{ID: "resp-0", Choices: []model.Choice{{Message: model.Message{Content: "ccc"}}}},
+		},
+		{Author: "tool", Tag: "x", FilterKey: "main",
+			Response: &model.Response{ID: "resp-1", Choices: []model.Choice{{Message: model.Message{Content: "aaa"}}}},
 		},
 		{Author: "tool", Tag: "a", FilterKey: "main",
-			Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "result A"}}}},
+			Response: &model.Response{ID: "resp-2", Choices: []model.Choice{{Message: model.Message{Content: "zzz"}}}},
+		},
+		{Author: "tool", Tag: "x", FilterKey: "main",
+			Response: &model.Response{ID: "resp-3", Choices: []model.Choice{{Message: model.Message{Content: "bbb"}}}},
 		},
 		{Author: "user1", Tag: "z", FilterKey: "main",
-			Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "msg"}}}},
+			Response: &model.Response{ID: "resp-4", Choices: []model.Choice{{Message: model.Message{Content: "msg"}}}},
 		},
 	}
-	snap := &SessionSnapshot{Session: sess}
+	// Mark all 5 events as belonging to a single concurrent batch (indices 0-5).
+	snap := &SessionSnapshot{
+		Session:               sess,
+		ConcurrentBatchRanges: []BatchRange{{Start: 0, End: 5}},
+	}
 	result, err := n.NormalizeSession(snap)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Sorted: tool < user1 (author), then tag=a < tag=b (within tool).
-	if result.Session.Events[0].Author != "tool" {
-		t.Errorf("first should be tool, got %s", result.Session.Events[0].Author)
+	// Expected order (author→tag→filterKey→content):
+	ev := result.Session.Events
+	if ev[0].Tag != "a" {
+		t.Errorf("[0] tag: want a, got %s", ev[0].Tag)
 	}
-	if result.Session.Events[0].Tag != "a" {
-		t.Errorf("first event tag should be a, got %s", result.Session.Events[0].Tag)
+	if ev[1].FilterKey != "dev" || ev[1].Response.Choices[0].Message.Content != "ccc" {
+		t.Errorf("[1] want filter=dev content=ccc, got filter=%s content=%s",
+			ev[1].FilterKey, ev[1].Response.Choices[0].Message.Content)
 	}
-	if result.Session.Events[1].Tag != "b" {
-		t.Errorf("second event tag should be b, got %s", result.Session.Events[1].Tag)
+	if ev[2].FilterKey != "main" || ev[2].Response.Choices[0].Message.Content != "aaa" {
+		t.Errorf("[2] want filter=main content=aaa, got filter=%s content=%s",
+			ev[2].FilterKey, ev[2].Response.Choices[0].Message.Content)
 	}
-	if result.Session.Events[2].Author != "user1" {
-		t.Errorf("last should be user1, got %s", result.Session.Events[2].Author)
+	if ev[3].FilterKey != "main" || ev[3].Response.Choices[0].Message.Content != "bbb" {
+		t.Errorf("[3] want filter=main content=bbb, got filter=%s content=%s",
+			ev[3].FilterKey, ev[3].Response.Choices[0].Message.Content)
+	}
+	if ev[4].Author != "user1" {
+		t.Errorf("[4] author: want user1, got %s", ev[4].Author)
 	}
 }
 
@@ -552,6 +571,210 @@ func TestSliceOrderNormalizer_ContentTiebreakByID(t *testing.T) {
 	}
 }
 
+func TestSliceOrderNormalizer_SearchResultsByContent(t *testing.T) {
+	n := &sliceOrderNormalizer{}
+	snap := &MemorySnapshot{
+		SearchResults: []*memory.Entry{
+			{ID: "z", Memory: &memory.Memory{Memory: "gamma"}},
+			{ID: "a", Memory: &memory.Memory{Memory: "alpha"}},
+			{ID: "m", Memory: &memory.Memory{Memory: "beta"}},
+		},
+	}
+	result, err := n.NormalizeMemory(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.SearchResults[0].Memory.Memory != "alpha" {
+		t.Errorf("first should be alpha, got %s", result.SearchResults[0].Memory.Memory)
+	}
+	if result.SearchResults[1].Memory.Memory != "beta" {
+		t.Errorf("second should be beta, got %s", result.SearchResults[1].Memory.Memory)
+	}
+	if result.SearchResults[2].Memory.Memory != "gamma" {
+		t.Errorf("third should be gamma, got %s", result.SearchResults[2].Memory.Memory)
+	}
+}
+
+func TestSliceOrderNormalizer_SearchResultsContentTiebreakByID(t *testing.T) {
+	n := &sliceOrderNormalizer{}
+	snap := &MemorySnapshot{
+		SearchResults: []*memory.Entry{
+			{ID: "zzz", Memory: &memory.Memory{Memory: "dup"}},
+			{ID: "aaa", Memory: &memory.Memory{Memory: "dup"}},
+		},
+	}
+	result, err := n.NormalizeMemory(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.SearchResults[0].ID != "aaa" {
+		t.Errorf("first should be aaa (ID tiebreak), got %s", result.SearchResults[0].ID)
+	}
+}
+
+// --- 12. ConcurrentEventSorter batch-boundary preservation (Bug 7) ---
+
+func TestConcurrentEventSorter_PreservesBoundaryEvents(t *testing.T) {
+	// Simulate: [user_req, tool_call, {batch: tool_resp_a, tool_resp_b}, assistant_reply]
+	// The batch (creation indices 2-4) should be sorted (author→tag→filterKey→content),
+	// but boundary events before and after must stay in original positions.
+	n := &concurrentEventSorter{}
+	sess := session.NewSession("app", "u1", "s1")
+	sess.Events = []event.Event{
+		{Author: "user1", FilterKey: "main",
+			Response: &model.Response{ID: "resp-0", Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "start task"}}}},
+		},
+		{Author: "assistant", FilterKey: "main",
+			Response: &model.Response{ID: "resp-1", Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "I will run parallel lookups"}}}},
+		},
+		// Concurrent batch: indices 2,3,4 (out of order to simulate backend difference)
+		{Author: "tool", Tag: "lookup_z", FilterKey: "main",
+			Response: &model.Response{ID: "resp-4", Choices: []model.Choice{{Message: model.Message{Content: "Lookup Z done"}}}},
+		},
+		{Author: "tool", Tag: "lookup_x", FilterKey: "main",
+			Response: &model.Response{ID: "resp-2", Choices: []model.Choice{{Message: model.Message{Content: "Lookup X done"}}}},
+		},
+		{Author: "tool", Tag: "lookup_y", FilterKey: "main",
+			Response: &model.Response{ID: "resp-3", Choices: []model.Choice{{Message: model.Message{Content: "Lookup Y done"}}}},
+		},
+		// AFTER batch — must stay here.
+		{Author: "assistant", FilterKey: "main",
+			Response: &model.Response{ID: "resp-5", Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "All lookups complete"}}}},
+		},
+	}
+	snap := &SessionSnapshot{
+		Session:               sess,
+		ConcurrentBatchRanges: []BatchRange{{Start: 2, End: 5}},
+	}
+	result, err := n.NormalizeSession(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := result.Session.Events
+	if ev[0].Author != "user1" {
+		t.Errorf("[0] boundary event reordered: author=%s", ev[0].Author)
+	}
+	if ev[1].Author != "assistant" {
+		t.Errorf("[1] boundary event reordered: author=%s", ev[1].Author)
+	}
+	if ev[2].Tag != "lookup_x" {
+		t.Errorf("[2] batch: want lookup_x, got %s", ev[2].Tag)
+	}
+	if ev[3].Tag != "lookup_y" {
+		t.Errorf("[3] batch: want lookup_y, got %s", ev[3].Tag)
+	}
+	if ev[4].Tag != "lookup_z" {
+		t.Errorf("[4] batch: want lookup_z, got %s", ev[4].Tag)
+	}
+	if ev[5].Author != "assistant" {
+		t.Errorf("[5] boundary event reordered: author=%s", ev[5].Author)
+	}
+}
+
+func TestConcurrentEventSorter_MultipleBatchesPreserveInterBatchOrder(t *testing.T) {
+	// Two concurrent batches: batch1(1-2), mid_op(3), batch2(4-5), final(6).
+	// Inter-batch order must be preserved.
+	n := &concurrentEventSorter{}
+	sess := session.NewSession("app", "u1", "s1")
+	sess.Events = []event.Event{
+		{Author: "user1",
+			Response: &model.Response{ID: "resp-0", Choices: []model.Choice{{Message: model.Message{Content: "request"}}}},
+		},
+		{Author: "tool", Tag: "b", FilterKey: "main",
+			Response: &model.Response{ID: "resp-2", Choices: []model.Choice{{Message: model.Message{Content: "B"}}}},
+		},
+		{Author: "tool", Tag: "a", FilterKey: "main",
+			Response: &model.Response{ID: "resp-1", Choices: []model.Choice{{Message: model.Message{Content: "A"}}}},
+		},
+		{Author: "assistant",
+			Response: &model.Response{ID: "resp-3", Choices: []model.Choice{{Message: model.Message{Content: "midpoint"}}}},
+		},
+		{Author: "tool", Tag: "z", FilterKey: "main",
+			Response: &model.Response{ID: "resp-5", Choices: []model.Choice{{Message: model.Message{Content: "Z"}}}},
+		},
+		{Author: "tool", Tag: "x", FilterKey: "main",
+			Response: &model.Response{ID: "resp-4", Choices: []model.Choice{{Message: model.Message{Content: "X"}}}},
+		},
+		{Author: "assistant",
+			Response: &model.Response{ID: "resp-6", Choices: []model.Choice{{Message: model.Message{Content: "final"}}}},
+		},
+	}
+	snap := &SessionSnapshot{
+		Session: sess,
+		ConcurrentBatchRanges: []BatchRange{
+			{Start: 1, End: 3},
+			{Start: 4, End: 6},
+		},
+	}
+	result, err := n.NormalizeSession(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := result.Session.Events
+	if ev[0].Author != "user1" {
+		t.Errorf("[0] boundary: want user1, got %s", ev[0].Author)
+	}
+	if ev[1].Tag != "a" {
+		t.Errorf("[1] batch1: want a, got %s", ev[1].Tag)
+	}
+	if ev[2].Tag != "b" {
+		t.Errorf("[2] batch1: want b, got %s", ev[2].Tag)
+	}
+	if ev[3].Author != "assistant" || ev[3].Response.Choices[0].Message.Content != "midpoint" {
+		t.Errorf("[3] inter-batch boundary moved: author=%s", ev[3].Author)
+	}
+	if ev[4].Tag != "x" {
+		t.Errorf("[4] batch2: want x, got %s", ev[4].Tag)
+	}
+	if ev[5].Tag != "z" {
+		t.Errorf("[5] batch2: want z, got %s", ev[5].Tag)
+	}
+	if ev[6].Author != "assistant" {
+		t.Errorf("[6] boundary: want assistant, got %s", ev[6].Author)
+	}
+}
+
+func TestConcurrentEventSorter_NoBatchRanges_NoSort(t *testing.T) {
+	n := &concurrentEventSorter{}
+	sess := session.NewSession("app", "u1", "s1")
+	sess.Events = []event.Event{
+		{Author: "tool", Tag: "z",
+			Response: &model.Response{ID: "resp-0", Choices: []model.Choice{{Message: model.Message{Content: "zzz"}}}},
+		},
+		{Author: "tool", Tag: "a",
+			Response: &model.Response{ID: "resp-1", Choices: []model.Choice{{Message: model.Message{Content: "aaa"}}}},
+		},
+	}
+	snap := &SessionSnapshot{Session: sess}
+	result, err := n.NormalizeSession(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Session.Events[0].Tag != "z" || result.Session.Events[1].Tag != "a" {
+		t.Error("events without batch ranges should NOT be reordered")
+	}
+}
+
+func TestParseCreationIndex(t *testing.T) {
+	tests := []struct {
+		input string
+		want  int
+	}{
+		{"resp-0", 0},
+		{"resp-42", 42},
+		{"resp-", -1},
+		{"evt-5-12345", -1},
+		{"", -1},
+		{"resp-abc", -1},
+	}
+	for _, tc := range tests {
+		got := parseCreationIndex(tc.input)
+		if got != tc.want {
+			t.Errorf("parseCreationIndex(%q) = %d, want %d", tc.input, got, tc.want)
+		}
+	}
+}
+
 // helpers
 
 func keysOf(raw json.RawMessage) []string {
@@ -572,4 +795,58 @@ func keysOf(raw json.RawMessage) []string {
 		}
 	}
 	return keys
+}
+
+// Bug 11 regression: the concurrentEventSorter must be able to parse
+// the original "resp-N" Response.ID format, which means it must run
+// BEFORE the idNormalizer in the chain (which replaces it with "<resp-id-N>").
+func TestDefaultNormalizerChain_ConcurrentSorterBeforeIDNormalizer(t *testing.T) {
+	chain := DefaultNormalizerChain()
+	sorterPos := -1
+	idPos := -1
+	for i, n := range chain.normalizers {
+		switch n.Name() {
+		case "concurrent-event-sorter":
+			sorterPos = i
+		case "id-normalizer":
+			idPos = i
+		}
+	}
+	if sorterPos < 0 {
+		t.Fatal("concurrent-event-sorter not found in default chain")
+	}
+	if idPos < 0 {
+		t.Fatal("id-normalizer not found in default chain")
+	}
+	if sorterPos >= idPos {
+		t.Errorf("concurrent-event-sorter (pos %d) must run BEFORE id-normalizer (pos %d), "+
+			"otherwise parseCreationIndex cannot decode Response.ID", sorterPos, idPos)
+	}
+}
+
+// Bug 11 regression: verify the sorter works on events whose Response.ID
+// is still in the original "resp-N" format (pre-idNormalizer).
+func TestConcurrentEventSorter_ParsesOriginalResponseID(t *testing.T) {
+	n := &concurrentEventSorter{}
+	sess := session.NewSession("app", "u1", "s1")
+	sess.Events = []event.Event{
+		{Author: "tool", Tag: "b",
+			Response: &model.Response{ID: "resp-3", Choices: []model.Choice{{Message: model.Message{Content: "B"}}}},
+		},
+		{Author: "tool", Tag: "a",
+			Response: &model.Response{ID: "resp-1", Choices: []model.Choice{{Message: model.Message{Content: "A"}}}},
+		},
+	}
+	snap := &SessionSnapshot{
+		Session:               sess,
+		ConcurrentBatchRanges: []BatchRange{{Start: 1, End: 4}},
+	}
+	result, err := n.NormalizeSession(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Session.Events[0].Tag != "a" {
+		t.Errorf("sorter did not reorder events: [0].tag=%s, expected 'a'. "+
+			"Response IDs may not be parsed correctly.", result.Session.Events[0].Tag)
+	}
 }

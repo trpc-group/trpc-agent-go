@@ -2,9 +2,9 @@
   "reports": [
     {
       "spec_name": "concurrent_writes",
-      "started_at": "2026-07-28T07:54:08.3473674Z",
-      "completed_at": "2026-07-28T07:54:08.361585Z",
-      "duration_ms": 14,
+      "started_at": "2026-07-29T08:39:11.6408249Z",
+      "completed_at": "2026-07-29T08:39:11.6710684Z",
+      "duration_ms": 30,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -21,7 +21,7 @@
       "diff_count": 0,
       "verifications": [
         {
-          "what": "session_full",
+          "what": "events",
           "reference_backend": "inmemory",
           "compared_backend": "sqlite",
           "status": "pass",
@@ -33,7 +33,7 @@
           }
         },
         {
-          "what": "events",
+          "what": "session_full",
           "reference_backend": "inmemory",
           "compared_backend": "sqlite",
           "status": "pass",
@@ -49,9 +49,9 @@
     },
     {
       "spec_name": "error_recovery",
-      "started_at": "2026-07-28T07:54:08.361585Z",
-      "completed_at": "2026-07-28T07:54:08.387365Z",
-      "duration_ms": 25,
+      "started_at": "2026-07-29T08:39:11.6713744Z",
+      "completed_at": "2026-07-29T08:39:11.7158725Z",
+      "duration_ms": 44,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -111,9 +111,9 @@
     },
     {
       "spec_name": "memory_writes",
-      "started_at": "2026-07-28T07:54:08.387365Z",
-      "completed_at": "2026-07-28T07:54:08.3915523Z",
-      "duration_ms": 4,
+      "started_at": "2026-07-29T08:39:11.7158725Z",
+      "completed_at": "2026-07-29T08:39:11.7215947Z",
+      "duration_ms": 5,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -170,9 +170,9 @@
     },
     {
       "spec_name": "multi_turn",
-      "started_at": "2026-07-28T07:54:08.3920711Z",
-      "completed_at": "2026-07-28T07:54:08.3984872Z",
-      "duration_ms": 6,
+      "started_at": "2026-07-29T08:39:11.7215947Z",
+      "completed_at": "2026-07-29T08:39:11.7320039Z",
+      "duration_ms": 10,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -205,8 +205,8 @@
     },
     {
       "spec_name": "out_of_order",
-      "started_at": "2026-07-28T07:54:08.3984872Z",
-      "completed_at": "2026-07-28T07:54:08.4058856Z",
+      "started_at": "2026-07-29T08:39:11.732513Z",
+      "completed_at": "2026-07-29T08:39:11.7397367Z",
       "duration_ms": 7,
       "backends_tested": {
         "session": [
@@ -257,9 +257,9 @@
     },
     {
       "spec_name": "single_turn",
-      "started_at": "2026-07-28T07:54:08.4058856Z",
-      "completed_at": "2026-07-28T07:54:08.4111331Z",
-      "duration_ms": 5,
+      "started_at": "2026-07-29T08:39:11.7397367Z",
+      "completed_at": "2026-07-29T08:39:11.7516962Z",
+      "duration_ms": 11,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -276,7 +276,7 @@
       "diff_count": 0,
       "verifications": [
         {
-          "what": "state",
+          "what": "events",
           "reference_backend": "inmemory",
           "compared_backend": "sqlite",
           "status": "pass",
@@ -288,7 +288,7 @@
           }
         },
         {
-          "what": "events",
+          "what": "state",
           "reference_backend": "inmemory",
           "compared_backend": "sqlite",
           "status": "pass",
@@ -304,8 +304,8 @@
     },
     {
       "spec_name": "state_updates",
-      "started_at": "2026-07-28T07:54:08.4111331Z",
-      "completed_at": "2026-07-28T07:54:08.4143558Z",
+      "started_at": "2026-07-29T08:39:11.7656587Z",
+      "completed_at": "2026-07-29T08:39:11.7696482Z",
       "duration_ms": 3,
       "backends_tested": {
         "session": [
@@ -351,9 +351,9 @@
     },
     {
       "spec_name": "summary_generation",
-      "started_at": "2026-07-28T07:54:08.4148626Z",
-      "completed_at": "2026-07-28T07:54:08.4238646Z",
-      "duration_ms": 9,
+      "started_at": "2026-07-29T08:39:11.7696482Z",
+      "completed_at": "2026-07-29T08:39:11.7808381Z",
+      "duration_ms": 11,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -381,7 +381,6 @@
             "SessionID": "sess-summary-1"
           },
           "summary_filter_keys": [
-            "",
             "dev",
             "main"
           ]
@@ -398,7 +397,6 @@
             "SessionID": "sess-summary-1"
           },
           "summary_filter_keys": [
-            "",
             "dev",
             "main"
           ]
@@ -408,9 +406,9 @@
     },
     {
       "spec_name": "summary_truncation",
-      "started_at": "2026-07-28T07:54:08.4238646Z",
-      "completed_at": "2026-07-28T07:54:08.4324843Z",
-      "duration_ms": 8,
+      "started_at": "2026-07-29T08:39:11.7818301Z",
+      "completed_at": "2026-07-29T08:39:11.8047274Z",
+      "duration_ms": 22,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -426,6 +424,21 @@
       "skip_count": 0,
       "diff_count": 0,
       "verifications": [
+        {
+          "what": "state",
+          "reference_backend": "inmemory",
+          "compared_backend": "sqlite",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-trunc-1"
+          },
+          "summary_filter_keys": [
+            "main"
+          ]
+        },
         {
           "what": "summary",
           "reference_backend": "inmemory",
@@ -443,21 +456,6 @@
         },
         {
           "what": "events",
-          "reference_backend": "inmemory",
-          "compared_backend": "sqlite",
-          "status": "pass",
-          "diffs": null,
-          "session_key": {
-            "AppName": "test-app",
-            "UserID": "user1",
-            "SessionID": "sess-trunc-1"
-          },
-          "summary_filter_keys": [
-            "main"
-          ]
-        },
-        {
-          "what": "state",
           "reference_backend": "inmemory",
           "compared_backend": "sqlite",
           "status": "pass",
@@ -476,9 +474,9 @@
     },
     {
       "spec_name": "tool_calls",
-      "started_at": "2026-07-28T07:54:08.4324843Z",
-      "completed_at": "2026-07-28T07:54:08.4395311Z",
-      "duration_ms": 7,
+      "started_at": "2026-07-29T08:39:11.8071945Z",
+      "completed_at": "2026-07-29T08:39:11.8156464Z",
+      "duration_ms": 8,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -495,7 +493,7 @@
       "diff_count": 0,
       "verifications": [
         {
-          "what": "state",
+          "what": "events",
           "reference_backend": "inmemory",
           "compared_backend": "sqlite",
           "status": "pass",
@@ -507,7 +505,7 @@
           }
         },
         {
-          "what": "events",
+          "what": "state",
           "reference_backend": "inmemory",
           "compared_backend": "sqlite",
           "status": "pass",
@@ -523,9 +521,9 @@
     },
     {
       "spec_name": "track_events",
-      "started_at": "2026-07-28T07:54:08.4395311Z",
-      "completed_at": "2026-07-28T07:54:08.4454346Z",
-      "duration_ms": 5,
+      "started_at": "2026-07-29T08:39:11.8156464Z",
+      "completed_at": "2026-07-29T08:39:11.8218884Z",
+      "duration_ms": 6,
       "backends_tested": {
         "session": [
           "inmemory",

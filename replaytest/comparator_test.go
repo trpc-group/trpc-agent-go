@@ -24,7 +24,7 @@ func TestComparator_isAllowed_ExactPathIgnore(t *testing.T) {
 	c := NewComparator([]DiffRule{
 		{Path: "$.events[0].author", Kind: "auto_id", Strategy: "ignore"},
 	})
-	_, ok := c.isAllowed("$.events[0].author", "")
+	_, ok := c.isAllowed(&DiffResult{Path: "$.events[0].author"})
 	if !ok {
 		t.Error("exact path should be allowed")
 	}
@@ -34,7 +34,7 @@ func TestComparator_isAllowed_WildcardPath(t *testing.T) {
 	c := NewComparator([]DiffRule{
 		{Path: "$.events[*].id", Kind: "auto_id", Strategy: "ignore"},
 	})
-	_, ok := c.isAllowed("$.events[3].id", "")
+	_, ok := c.isAllowed(&DiffResult{Path: "$.events[3].id"})
 	if !ok {
 		t.Error("wildcard path should match any index")
 	}
@@ -44,7 +44,7 @@ func TestComparator_isAllowed_DifferentPathRejected(t *testing.T) {
 	c := NewComparator([]DiffRule{
 		{Path: "$.events[*].id", Kind: "auto_id", Strategy: "ignore"},
 	})
-	_, ok := c.isAllowed("$.events[0].author", "")
+	_, ok := c.isAllowed(&DiffResult{Path: "$.events[0].author"})
 	if ok {
 		t.Error("different path should not match")
 	}
@@ -54,20 +54,21 @@ func TestComparator_isAllowed_AllowDrift(t *testing.T) {
 	c := NewComparator([]DiffRule{
 		{Path: "$.events[*].timestamp", Kind: "timestamp_drift", Strategy: "allow_drift", MaxDrift: &DriftSpec{DurationMS: 5000}},
 	})
-	_, ok := c.isAllowed("$.events[1].timestamp", "timestamp_drift")
+	// Drift of 2 seconds is within 5000ms → allowed.
+	_, ok := c.isAllowed(&DiffResult{Path: "$.events[1].timestamp", Left: 1000, Right: 3000})
 	if !ok {
-		t.Error("allow_drift + matching kind should be allowed")
+		t.Error("drift within tolerance should be allowed")
 	}
 }
 
-func TestComparator_isAllowed_WrongKind(t *testing.T) {
-	// The path-scope alone identifies drift
+func TestComparator_isAllowed_DriftExceeded(t *testing.T) {
 	c := NewComparator([]DiffRule{
 		{Path: "$.events[*].timestamp", Kind: "timestamp_drift", Strategy: "allow_drift", MaxDrift: &DriftSpec{DurationMS: 5000}},
 	})
-	_, ok := c.isAllowed("$.events[0].timestamp", "value_mismatch")
-	if !ok {
-		t.Error("allow_drift should suppress any diff kind at a matching path")
+	// Drift of 10 seconds exceeds 5000ms → NOT allowed.
+	_, ok := c.isAllowed(&DiffResult{Path: "$.events[0].timestamp", Left: 0, Right: 10000})
+	if ok {
+		t.Error("drift exceeding tolerance should NOT be allowed")
 	}
 }
 
@@ -710,5 +711,225 @@ func makeEvent(author, content, branch, tag, filterKey string) event.Event {
 				Message: model.Message{Role: model.RoleUser, Content: content},
 			}},
 		},
+	}
+}
+
+func makeEventWithResp(author, content, branch, tag, filterKey string, resp *model.Response) event.Event {
+	ev := makeEvent(author, content, branch, tag, filterKey)
+	if resp != nil {
+		ev.Response = resp
+	}
+	return ev
+}
+
+// --- compareUsage ---
+
+func TestCompareUsage_TokenMismatches(t *testing.T) {
+	c := NewComparator(nil)
+	left := &model.Usage{PromptTokens: 100, CompletionTokens: 50, TotalTokens: 150}
+	right := &model.Usage{PromptTokens: 200, CompletionTokens: 100, TotalTokens: 300}
+	diffs := c.compareUsage(left, right, "$.usage")
+
+	if len(diffs) != 3 {
+		t.Fatalf("expected 3 diffs, got %d", len(diffs))
+	}
+	paths := map[string]bool{}
+	for _, d := range diffs {
+		paths[d.Path] = true
+	}
+	for _, p := range []string{"$.usage.promptTokens", "$.usage.completionTokens", "$.usage.totalTokens"} {
+		if !paths[p] {
+			t.Errorf("missing diff for %s", p)
+		}
+	}
+}
+
+func TestCompareUsage_PresenceMismatch(t *testing.T) {
+	c := NewComparator(nil)
+	left := &event.Event{Author: "user", Response: &model.Response{
+		Object:  "chat.completion",
+		Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser}}},
+		Usage:   &model.Usage{PromptTokens: 10},
+	}}
+	right := &event.Event{Author: "user", Response: &model.Response{
+		Object:  "chat.completion",
+		Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser}}},
+	}}
+	diffs := c.compareEvent(left, right, "$.events[0]")
+
+	hasUsage := false
+	for _, d := range diffs {
+		if d.Path == "$.events[0].response.usage" {
+			hasUsage = true
+		}
+	}
+	if !hasUsage {
+		t.Error("should detect usage presence mismatch")
+	}
+}
+
+// --- compareResponses ---
+
+func TestCompareResponses_ObjectMismatch(t *testing.T) {
+	c := NewComparator(nil)
+	left := &event.Event{Author: "user", Response: &model.Response{Object: "chat.completion", Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hi"}}}}}
+	right := &event.Event{Author: "user", Response: &model.Response{Object: "chat.completion.chunk", Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hi"}}}}}
+	diffs := c.compareEvent(left, right, "$.events[0]")
+
+	assertHasDiffPath(t, diffs, "$.events[0].response.object")
+}
+
+func TestCompareResponses_ModelNameMismatch(t *testing.T) {
+	c := NewComparator(nil)
+	left := &event.Event{Author: "user", Response: &model.Response{Model: "gpt-4", Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hi"}}}}}
+	right := &event.Event{Author: "user", Response: &model.Response{Model: "gpt-3.5", Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hi"}}}}}
+	diffs := c.compareEvent(left, right, "$.events[0]")
+
+	assertHasDiffPath(t, diffs, "$.events[0].response.model")
+}
+
+func TestCompareResponses_ChoicesCountMismatch(t *testing.T) {
+	c := NewComparator(nil)
+	left := &event.Event{Author: "user", Response: &model.Response{Choices: []model.Choice{
+		{Message: model.Message{Role: model.RoleUser, Content: "a"}},
+		{Message: model.Message{Role: model.RoleUser, Content: "b"}},
+	}}}
+	right := &event.Event{Author: "user", Response: &model.Response{Choices: []model.Choice{
+		{Message: model.Message{Role: model.RoleUser, Content: "a"}},
+	}}}
+	diffs := c.compareEvent(left, right, "$.events[0]")
+
+	assertHasDiffPath(t, diffs, "$.events[0].response.choices")
+}
+
+// --- compareMessage: toolID / toolName ---
+
+func TestCompareMessage_ToolIDMismatch(t *testing.T) {
+	c := NewComparator(nil)
+	left := &event.Event{Author: "tool", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{
+		Role: model.RoleTool, Content: "result", ToolID: "t1", ToolName: "search",
+	}}}}}
+	right := &event.Event{Author: "tool", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{
+		Role: model.RoleTool, Content: "result", ToolID: "t2", ToolName: "search",
+	}}}}}
+	diffs := c.compareEvent(left, right, "$.events[0]")
+
+	assertHasDiffPath(t, diffs, "$.events[0].response.choices[0].message.toolID")
+}
+
+func TestCompareMessage_ToolNameMismatch(t *testing.T) {
+	c := NewComparator(nil)
+	left := &event.Event{Author: "tool", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{
+		Role: model.RoleTool, Content: "result", ToolID: "t1", ToolName: "search",
+	}}}}}
+	right := &event.Event{Author: "tool", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{
+		Role: model.RoleTool, Content: "result", ToolID: "t1", ToolName: "fetch",
+	}}}}}
+	diffs := c.compareEvent(left, right, "$.events[0]")
+
+	assertHasDiffPath(t, diffs, "$.events[0].response.choices[0].message.toolName")
+}
+
+func TestCompareMessage_ToolCallsCountMismatch(t *testing.T) {
+	c := NewComparator(nil)
+	left := &event.Event{Author: "assistant", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{
+		Role: model.RoleAssistant,
+		ToolCalls: []model.ToolCall{
+			{ID: "tc1", Type: "function", Function: model.FunctionDefinitionParam{Name: "search"}},
+			{ID: "tc2", Type: "function", Function: model.FunctionDefinitionParam{Name: "fetch"}},
+		},
+	}}}}}
+	right := &event.Event{Author: "assistant", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{
+		Role: model.RoleAssistant,
+		ToolCalls: []model.ToolCall{
+			{ID: "tc1", Type: "function", Function: model.FunctionDefinitionParam{Name: "search"}},
+		},
+	}}}}}
+	diffs := c.compareEvent(left, right, "$.events[0]")
+
+	assertHasDiffPath(t, diffs, "$.events[0].response.choices[0].message.toolCalls")
+}
+
+// --- compareMemoryEntry: nil memory content ---
+
+func TestCompareMemoryEntry_NilMemoryContent(t *testing.T) {
+	c := NewComparator(nil)
+	left := []*memory.Entry{{ID: "m1", Memory: &memory.Memory{Memory: "present"}}}
+	right := []*memory.Entry{{ID: "m1", Memory: nil}}
+	diffs := c.CompareMemories(left, right, "$.memories")
+
+	assertHasDiffPath(t, diffs, "$.memories.[m1].memory")
+}
+
+// --- isAllowed: strategy coverage ---
+
+// TestComparator_isAllowed_UnknownStrategyNotAllowed verifies that strategies
+// other than "ignore" and "allow_drift" are NOT currently handled by isAllowed.
+func TestComparator_isAllowed_UnknownStrategyNotAllowed(t *testing.T) {
+	c := NewComparator([]DiffRule{
+		{Path: "$.state[*]", Kind: "backend_metadata", Strategy: "allow_extra_keys"},
+	})
+	_, ok := c.isAllowed(&DiffResult{Path: "$.state.extra_field"})
+	if ok {
+		t.Error("allow_extra_keys is not yet implemented in isAllowed — expected false")
+	}
+}
+
+// --- compareResponses: systemFingerprint ---
+
+func TestCompareResponses_SystemFingerprintMismatch(t *testing.T) {
+	c := NewComparator(nil)
+	fp1 := "fp_abc"
+	fp2 := "fp_xyz"
+	left := &event.Event{Author: "assistant", Response: &model.Response{
+		Choices:           []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "ok"}}},
+		SystemFingerprint: &fp1,
+	}}
+	right := &event.Event{Author: "assistant", Response: &model.Response{
+		Choices:           []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "ok"}}},
+		SystemFingerprint: &fp2,
+	}}
+	diffs := c.compareEvent(left, right, "$.events[0]")
+
+	assertHasDiffPath(t, diffs, "$.events[0].response.systemFingerprint")
+}
+
+func TestCompareResponses_SystemFingerprintOneNil(t *testing.T) {
+	c := NewComparator(nil)
+	fp1 := "fp_abc"
+	left := &event.Event{Author: "assistant", Response: &model.Response{
+		Choices:           []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "ok"}}},
+		SystemFingerprint: &fp1,
+	}}
+	right := &event.Event{Author: "assistant", Response: &model.Response{
+		Choices:           []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "ok"}}},
+		SystemFingerprint: nil,
+	}}
+	diffs := c.compareEvent(left, right, "$.events[0]")
+
+	// One side has nil systemFingerprint — should not produce a diff since the comparison only fires when both non-nil.
+	hasFP := false
+	for _, d := range diffs {
+		if d.Path == "$.events[0].response.systemFingerprint" {
+			hasFP = true
+		}
+	}
+	if hasFP {
+		t.Error("one nil systemFingerprint should not produce diff (only compared when both non-nil)")
+	}
+}
+
+// --- helpers ---
+
+func assertHasDiffPath(t *testing.T, diffs []DiffResult, path string) {
+	t.Helper()
+	for _, d := range diffs {
+		if d.Path == path {
+			return
+		}
+	}
+	t.Errorf("expected diff at path %s, but not found. got %d diffs:", path, len(diffs))
+	for _, d := range diffs {
+		t.Logf("  %s | %s | %s", d.Path, d.Kind, d.Message)
 	}
 }

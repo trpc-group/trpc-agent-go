@@ -61,17 +61,30 @@ const (
 	VerifyMemorySearch = "memory_search"
 )
 
+// BatchRange describes the creation-index range of a single append_concurrent_events batch.
+// Start is inclusive, End is exclusive.
+type BatchRange struct {
+	Start int `json:"start"`
+	End   int `json:"end"`
+}
+
 // SessionSnapshot captures a backend's view of session data at verification time.
 type SessionSnapshot struct {
-	Session   *session.Session `json:"session,omitempty"`
-	AppState  session.StateMap `json:"app_state,omitempty"`
-	UserState session.StateMap `json:"user_state,omitempty"`
+	Session               *session.Session `json:"session,omitempty"`
+	AppState              session.StateMap `json:"app_state,omitempty"`
+	UserState             session.StateMap `json:"user_state,omitempty"`
+	ConcurrentBatchRanges []BatchRange     `json:"concurrent_batch_ranges,omitempty"`
 }
 
 // MemorySnapshot captures a backend's view of memory data at verification time.
 type MemorySnapshot struct {
 	Memories      []*memory.Entry `json:"memories,omitempty"`
 	SearchResults []*memory.Entry `json:"search_results,omitempty"`
+}
+
+// UnavailableError marks backend errors ,Setup skips only unavailable backends.
+type UnavailableError interface {
+	Unavailable() bool
 }
 
 var errNotHandled = errors.New("operation not handled by this dispatch group")
@@ -88,7 +101,7 @@ type Harness struct {
 	// Active backends after Setup.
 	ActiveSessionBackends []string
 	ActiveMemoryBackends  []string
-	SkippedBackends       map[string]string // name → reason
+	SkippedBackends       map[string]string // name �?reason
 
 	// TrackSupport records which session backends implement TrackService.
 	TrackSupported map[string]bool
@@ -101,6 +114,10 @@ type Harness struct {
 
 	// lastEventIndex tracks the number of events appended to help with event ID mapping during normalization.
 	lastEventIndex int
+
+	// concurrentBatchRanges records the creation-index ranges of each append_concurrent_events batch
+	// so that the concurrent event sorter can limit reordering to within-batch events only.
+	concurrentBatchRanges []BatchRange
 }
 
 // NewHarness creates a new Harness for the given spec.
@@ -135,6 +152,11 @@ func (h *Harness) Setup(ctx context.Context) error {
 	for _, name := range h.Spec.Backends.Session {
 		svc, err := NewSessionService(ctx, name, h.dbURL)
 		if err != nil {
+			var ue UnavailableError
+			if !errors.As(err, &ue) || !ue.Unavailable() {
+				h.Close()
+				return fmt.Errorf("session backend %q: %w", name, err)
+			}
 			h.SkippedBackends[name] = fmt.Sprintf("session: %v", err)
 			continue
 		}
@@ -148,21 +170,16 @@ func (h *Harness) Setup(ctx context.Context) error {
 		h.cleanAppState(ctx, svc)
 		h.cleanUserState(ctx, svc)
 
-		initState := make(session.StateMap)
-		for k, v := range h.Spec.Setup.InitState {
-			initState[k] = []byte(v)
-		}
-		if _, err := svc.CreateSession(ctx, h.sessionKey, initState); err != nil {
-			if !strings.Contains(err.Error(), "already exists") {
-				h.Close()
-				return fmt.Errorf("create session on %q: %w", name, err)
-			}
-		}
 	}
 
 	for _, name := range h.Spec.Backends.Memory {
 		svc, err := NewMemoryService(ctx, name, h.dbURL)
 		if err != nil {
+			var ue UnavailableError
+			if !errors.As(err, &ue) || !ue.Unavailable() {
+				h.Close()
+				return fmt.Errorf("memory backend %q: %w", name, err)
+			}
 			h.SkippedBackends[name] = fmt.Sprintf("memory: %v", err)
 			continue
 		}
@@ -201,7 +218,19 @@ func (h *Harness) executeSessionOp(ctx context.Context, op Operation) error {
 	switch op.Op {
 	case OpCreateSession:
 		return h.execSessionOp(ctx, op, func(ctx context.Context, svc session.Service) error {
-			_, err := svc.CreateSession(ctx, h.sessionKey, nil)
+			var args struct {
+				State map[string]string `json:"state"`
+			}
+			if len(op.Params) > 0 {
+				if err := json.Unmarshal(op.Params, &args); err != nil {
+					return fmt.Errorf("unmarshal create_session params: %w", err)
+				}
+			}
+			initState := make(session.StateMap)
+			for k, v := range args.State {
+				initState[k] = []byte(v)
+			}
+			_, err := svc.CreateSession(ctx, h.sessionKey, initState)
 			return err
 		})
 	case OpGetSession:
@@ -317,7 +346,7 @@ func (h *Harness) execMemoryOp(ctx context.Context, _ Operation, fn func(context
 }
 
 // Verify collects snapshots from all backends and returns them for comparison.
-func (h *Harness) Verify(ctx context.Context) (map[string]map[string]*SessionSnapshot, map[string]map[string]*MemorySnapshot, error) {
+func (h *Harness) Verify(ctx context.Context, searchQuery string) (map[string]map[string]*SessionSnapshot, map[string]map[string]*MemorySnapshot, error) {
 	sessionSnapshots := make(map[string]map[string]*SessionSnapshot)
 	memorySnapshots := make(map[string]map[string]*MemorySnapshot)
 
@@ -330,7 +359,7 @@ func (h *Harness) Verify(ctx context.Context) (map[string]map[string]*SessionSna
 	}
 
 	for _, name := range h.ActiveMemoryBackends {
-		snap, err := h.collectMemorySnapshot(ctx, name)
+		snap, err := h.collectMemorySnapshot(ctx, name, searchQuery)
 		if err != nil {
 			return nil, nil, fmt.Errorf("collect memory snapshot %q: %w", name, err)
 		}
@@ -362,10 +391,15 @@ func (h *Harness) collectSessionSnapshot(ctx context.Context, backendName string
 	}
 	result[VerifySessionFull].UserState = userState
 
+	if len(h.concurrentBatchRanges) > 0 {
+		result[VerifySessionFull].ConcurrentBatchRanges = make([]BatchRange, len(h.concurrentBatchRanges))
+		copy(result[VerifySessionFull].ConcurrentBatchRanges, h.concurrentBatchRanges)
+	}
+
 	return result, nil
 }
 
-func (h *Harness) collectMemorySnapshot(ctx context.Context, backendName string) (map[string]*MemorySnapshot, error) {
+func (h *Harness) collectMemorySnapshot(ctx context.Context, backendName string, query string) (map[string]*MemorySnapshot, error) {
 	svc := h.memoryServices[backendName]
 	result := make(map[string]*MemorySnapshot)
 
@@ -375,7 +409,7 @@ func (h *Harness) collectMemorySnapshot(ctx context.Context, backendName string)
 	}
 	result[VerifyMemories] = &MemorySnapshot{Memories: memories}
 
-	results, err := svc.SearchMemories(ctx, h.memoryUserKey, "test")
+	results, err := svc.SearchMemories(ctx, h.memoryUserKey, query)
 	if err != nil {
 		return nil, fmt.Errorf("search memories: %w", err)
 	}
@@ -491,6 +525,30 @@ func (h *Harness) appendToolResponseEvent(ctx context.Context, svc session.Servi
 	return h.getAndAppend(ctx, svc, ev)
 }
 
+func (h *Harness) newEventAt(author, content, branch, tag, filterKey string, idx int) *event.Event {
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	ev := &event.Event{
+		Response: &model.Response{
+			ID: fmt.Sprintf("resp-%d", idx),
+			Choices: []model.Choice{{
+				Index:   0,
+				Message: model.Message{Content: content},
+			}},
+		},
+		ID:        fmt.Sprintf("evt-%d-%d", idx, now.UnixNano()%1000000),
+		Author:    author,
+		Branch:    branch,
+		Tag:       tag,
+		FilterKey: filterKey,
+		Timestamp: now,
+		Version:   event.CurrentVersion,
+	}
+	if ev.FilterKey == "" {
+		ev.FilterKey = branch
+	}
+	return ev
+}
+
 func (h *Harness) newEvent(author, content, branch, tag, filterKey string) *event.Event {
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	ev := &event.Event{
@@ -570,9 +628,14 @@ func (h *Harness) appendConcurrentEvents(ctx context.Context, raw json.RawMessag
 	startIdx := h.lastEventIndex
 	h.lastEventIndex += len(params.Events)
 
+	// Record the batch range so the concurrent event sorter only reorders
+	// events within this batch, preserving order of boundary events.
+	h.concurrentBatchRanges = append(h.concurrentBatchRanges, BatchRange{Start: startIdx, End: h.lastEventIndex})
+
 	for _, name := range h.ActiveSessionBackends {
 		svc := h.sessionServices[name]
 
+		var mu sync.Mutex
 		var wg sync.WaitGroup
 		errCh := make(chan error, len(params.Events))
 
@@ -582,6 +645,8 @@ func (h *Harness) appendConcurrentEvents(ctx context.Context, raw json.RawMessag
 			wg.Add(1)
 			go func(a appendEventArgs, eventIdx int) {
 				defer wg.Done()
+				mu.Lock()
+				defer mu.Unlock()
 				sess, err := svc.GetSession(ctx, h.sessionKey)
 				if err != nil {
 					errCh <- fmt.Errorf("concurrent get session on %q: %w", name, err)
@@ -611,50 +676,32 @@ func (h *Harness) appendConcurrentEvents(ctx context.Context, raw json.RawMessag
 
 // buildConcurrentEventAt creates an event using the given stable index so that concurrent goroutines produce deterministic, non-colliding IDs.
 func (h *Harness) buildConcurrentEventAt(args appendEventArgs, idx int) *event.Event {
-	origIdx := h.lastEventIndex
-	h.lastEventIndex = idx
-	ev := h.buildConcurrentEvent(args)
-	h.lastEventIndex = origIdx
-	return ev
-}
-
-// buildConcurrentEvent creates an event from args for concurrent appends.
-// It determines the event type from the author field or tool data.
-func (h *Harness) buildConcurrentEvent(args appendEventArgs) *event.Event {
 	var ev *event.Event
 	if len(args.ToolCalls) > 0 {
-		// Tool call event.
-		ev = h.newEvent(args.Author, "", args.Branch, args.Tag, args.FilterKey)
+		ev = h.newEventAt(args.Author, "", args.Branch, args.Tag, args.FilterKey, idx)
 		ev.Response.Choices[0].Message.Role = model.RoleAssistant
 		toolCalls := make([]model.ToolCall, len(args.ToolCalls))
 		for i, tc := range args.ToolCalls {
 			toolCalls[i] = model.ToolCall{
-				ID:   tc.ID,
-				Type: "function",
-				Function: model.FunctionDefinitionParam{
-					Name:      tc.Name,
-					Arguments: json.RawMessage(tc.Arguments),
-				},
+				ID: tc.ID, Type: "function",
+				Function: model.FunctionDefinitionParam{Name: tc.Name, Arguments: json.RawMessage(tc.Arguments)},
 			}
 		}
 		ev.Response.Choices[0].Message.ToolCalls = toolCalls
 	} else if args.ToolID != "" {
-		// Tool response event.
-		ev = h.newEvent(args.Author, args.Content, args.Branch, args.Tag, args.FilterKey)
+		ev = h.newEventAt(args.Author, args.Content, args.Branch, args.Tag, args.FilterKey, idx)
 		ev.Response.Choices[0].Message.Role = model.RoleTool
 		ev.Response.Choices[0].Message.ToolID = args.ToolID
 		ev.Response.Choices[0].Message.ToolName = args.ToolName
 		if args.ToolCallID != "" && args.Extensions == nil {
 			tcArgs, _ := json.Marshal(map[string]string{"tool_call_id": args.ToolCallID})
-			ev.Extensions = map[string]json.RawMessage{
-				event.ToolCallArgsExtensionKey: tcArgs,
-			}
+			ev.Extensions = map[string]json.RawMessage{event.ToolCallArgsExtensionKey: tcArgs}
 		}
 	} else if args.Author == "user1" || args.Author == "user" {
-		ev = h.newEvent(args.Author, args.Content, args.Branch, args.Tag, args.FilterKey)
+		ev = h.newEventAt(args.Author, args.Content, args.Branch, args.Tag, args.FilterKey, idx)
 		ev.Response.Choices[0].Message.Role = model.RoleUser
 	} else {
-		ev = h.newEvent(args.Author, args.Content, args.Branch, args.Tag, args.FilterKey)
+		ev = h.newEventAt(args.Author, args.Content, args.Branch, args.Tag, args.FilterKey, idx)
 		ev.Response.Choices[0].Message.Role = model.RoleAssistant
 	}
 	h.setEventExtensions(ev, args)

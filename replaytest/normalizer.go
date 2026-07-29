@@ -93,6 +93,7 @@ func DefaultNormalizerChain() *NormalizerChain {
 	return NewNormalizerChain(
 		&backendMetadataStripper{},
 		&sliceOrderNormalizer{},
+		&concurrentEventSorter{},
 		&idNormalizer{idMap: make(map[string]string), nextSeq: 0},
 		&timestampNormalizer{},
 		&jsonFieldOrderNormalizer{},
@@ -115,6 +116,12 @@ func (n *backendMetadataStripper) NormalizeSession(snap *SessionSnapshot) (*Sess
 		return snap, nil
 	}
 	if snap.Session != nil {
+
+		// Some backends create a default summary entry with an empty filter key during session initialisation while others do not.
+		// Strip it so it does not cause spurious diffs.
+		if snap.Session.Summaries != nil {
+			delete(snap.Session.Summaries, "")
+		}
 		snap.Session.ServiceMeta = nil
 		snap.Session.Hash = 0
 
@@ -290,10 +297,6 @@ func (n *jsonFieldOrderNormalizer) normExtensions(ext map[string]json.RawMessage
 	}
 	out := make(map[string]json.RawMessage, len(ext))
 	for k, v := range ext {
-		// Skip internal keys like tool_call_args that may differ per backend.
-		if k == event.ToolCallArgsExtensionKey {
-			continue
-		}
 		out[k] = normalizeRawJSON(v)
 	}
 	return out
@@ -481,8 +484,8 @@ func (n *sliceOrderNormalizer) NormalizeMemory(snap *MemorySnapshot) (*MemorySna
 
 // --- 9. ConcurrentEventSorter ---
 
-// concurrentEventSorter sorts events by a stable composite key to provide order-independent comparison for concurrent write scenarios.
-// It is only added to the normalizer chain when a spec has the "concurrent" tag.
+// concurrentEventSorter sorts events within the same concurrent batch by a stable composite key.
+// Events that were NOT part of any append_concurrent_events batch keep their original positions;
 type concurrentEventSorter struct{}
 
 func (n *concurrentEventSorter) Name() string { return "concurrent-event-sorter" }
@@ -492,29 +495,88 @@ func (n *concurrentEventSorter) NormalizeSession(snap *SessionSnapshot) (*Sessio
 		return snap, nil
 	}
 	events := snap.Session.Events
-	sort.SliceStable(events, func(i, j int) bool {
-		ei, ej := &events[i], &events[j]
-		// Sort by author, then tag, then filterKey, then content.
-		if ei.Author != ej.Author {
-			return ei.Author < ej.Author
+	if len(events) <= 1 || len(snap.ConcurrentBatchRanges) == 0 {
+		return snap, nil
+	}
+
+	// Build a set of creation indices that belong to concurrent batches, keyed by batch ID.
+	batchForIdx := make(map[int]int) // creation index → batch id
+	for batchID, br := range snap.ConcurrentBatchRanges {
+		for idx := br.Start; idx < br.End; idx++ {
+			batchForIdx[idx] = batchID
 		}
-		if ei.Tag != ej.Tag {
-			return ei.Tag < ej.Tag
+	}
+
+	// Parse creation index from each event and map to batch.
+	// -1 means the event is not part of any concurrent batch.
+	eventBatch := make([]int, len(events))
+	creationIdx := make([]int, len(events))
+	for i := range events {
+		eventBatch[i] = -1
+		creationIdx[i] = -1
+		if events[i].Response != nil {
+			ci := parseCreationIndex(events[i].Response.ID)
+			creationIdx[i] = ci
+			if bid, ok := batchForIdx[ci]; ok {
+				eventBatch[i] = bid
+			}
 		}
-		if ei.FilterKey != ej.FilterKey {
-			return ei.FilterKey < ej.FilterKey
+	}
+
+	// Walk through events. For each run of events in the same concurrent batch,
+	// sort that sub-slice by the stable composite key.
+	i := 0
+	for i < len(events) {
+		if eventBatch[i] < 0 {
+			i++
+			continue
 		}
-		// Use response content as final tiebreaker.
-		ci, cj := "", ""
-		if ei.Response != nil && len(ei.Response.Choices) > 0 {
-			ci = ei.Response.Choices[0].Message.Content
+		batchID := eventBatch[i]
+		j := i + 1
+		for j < len(events) && eventBatch[j] == batchID {
+			j++
 		}
-		if ej.Response != nil && len(ej.Response.Choices) > 0 {
-			cj = ej.Response.Choices[0].Message.Content
-		}
-		return ci < cj
-	})
+		// Sort only the sub-range [i, j) belonging to the same batch.
+		sort.SliceStable(events[i:j], func(a, b int) bool {
+			ea, eb := &events[i+a], &events[i+b]
+			if ea.Author != eb.Author {
+				return ea.Author < eb.Author
+			}
+			if ea.Tag != eb.Tag {
+				return ea.Tag < eb.Tag
+			}
+			if ea.FilterKey != eb.FilterKey {
+				return ea.FilterKey < eb.FilterKey
+			}
+			ca, cb := "", ""
+			if ea.Response != nil && len(ea.Response.Choices) > 0 {
+				ca = ea.Response.Choices[0].Message.Content
+			}
+			if eb.Response != nil && len(eb.Response.Choices) > 0 {
+				cb = eb.Response.Choices[0].Message.Content
+			}
+			return ca < cb
+		})
+		i = j
+	}
+
 	return snap, nil
+}
+
+// parseCreationIndex extracts the numeric index from a response ID of the form "resp-N". Returns -1 when the format is unrecognized.
+func parseCreationIndex(respID string) int {
+	// Expected format: "resp-<int>"
+	if len(respID) < 6 || respID[:5] != "resp-" {
+		return -1
+	}
+	var n int
+	for _, c := range respID[5:] {
+		if c < '0' || c > '9' {
+			return -1
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n
 }
 
 func (n *concurrentEventSorter) NormalizeMemory(snap *MemorySnapshot) (*MemorySnapshot, error) {

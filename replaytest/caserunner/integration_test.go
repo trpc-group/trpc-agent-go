@@ -30,7 +30,8 @@ import (
 // errSkip signals the harness to skip an unavailable backend.
 type errSkip string
 
-func (e errSkip) Error() string { return string(e) }
+func (e errSkip) Error() string        { return string(e) }
+func (e errSkip) Unavailable() bool { return true }
 
 // Shared miniredis instance, lazily created once per test binary lifetime and explicitly closed by TestIntegration.
 // Cleanup to avoid leaking TCP listeners and goroutines.

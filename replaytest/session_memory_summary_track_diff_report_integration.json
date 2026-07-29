@@ -2,9 +2,9 @@
   "reports": [
     {
       "spec_name": "concurrent_writes",
-      "started_at": "2026-07-28T07:55:25.1994874Z",
-      "completed_at": "2026-07-28T07:55:25.3987806Z",
-      "duration_ms": 199,
+      "started_at": "2026-07-29T09:36:24.3224733Z",
+      "completed_at": "2026-07-29T09:36:24.3971244Z",
+      "duration_ms": 74,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -49,9 +49,9 @@
     },
     {
       "spec_name": "error_recovery",
-      "started_at": "2026-07-28T07:55:25.3992987Z",
-      "completed_at": "2026-07-28T07:55:25.4146911Z",
-      "duration_ms": 15,
+      "started_at": "2026-07-29T09:36:24.3971244Z",
+      "completed_at": "2026-07-29T09:36:24.4174266Z",
+      "duration_ms": 20,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -111,9 +111,9 @@
     },
     {
       "spec_name": "full_cycle",
-      "started_at": "2026-07-28T07:55:25.4146911Z",
-      "completed_at": "2026-07-28T07:55:25.4443183Z",
-      "duration_ms": 29,
+      "started_at": "2026-07-29T09:36:24.4174266Z",
+      "completed_at": "2026-07-29T09:36:24.5016477Z",
+      "duration_ms": 84,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -214,9 +214,9 @@
     },
     {
       "spec_name": "injection_comprehensive",
-      "started_at": "2026-07-28T07:55:25.4443183Z",
-      "completed_at": "2026-07-28T07:55:25.4579319Z",
-      "duration_ms": 13,
+      "started_at": "2026-07-29T09:36:24.5016477Z",
+      "completed_at": "2026-07-29T09:36:24.5183045Z",
+      "duration_ms": 16,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -232,6 +232,24 @@
       "skip_count": 0,
       "diff_count": 0,
       "verifications": [
+        {
+          "what": "summary",
+          "reference_backend": "inmemory",
+          "compared_backend": "redis",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-injection-1"
+          },
+          "summary_filter_keys": [
+            "main"
+          ],
+          "track_names": [
+            "search_timing"
+          ]
+        },
         {
           "what": "tracks",
           "reference_backend": "inmemory",
@@ -305,24 +323,6 @@
           ]
         },
         {
-          "what": "summary",
-          "reference_backend": "inmemory",
-          "compared_backend": "redis",
-          "status": "pass",
-          "diffs": null,
-          "session_key": {
-            "AppName": "test-app",
-            "UserID": "user1",
-            "SessionID": "sess-injection-1"
-          },
-          "summary_filter_keys": [
-            "main"
-          ],
-          "track_names": [
-            "search_timing"
-          ]
-        },
-        {
           "what": "memories",
           "reference_backend": "inmemory",
           "compared_backend": "redis",
@@ -343,9 +343,9 @@
     },
     {
       "spec_name": "memory_writes",
-      "started_at": "2026-07-28T07:55:25.4584449Z",
-      "completed_at": "2026-07-28T07:55:25.4657071Z",
-      "duration_ms": 7,
+      "started_at": "2026-07-29T09:36:24.5183045Z",
+      "completed_at": "2026-07-29T09:36:24.5267641Z",
+      "duration_ms": 8,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -402,9 +402,9 @@
     },
     {
       "spec_name": "multi_turn",
-      "started_at": "2026-07-28T07:55:25.4662268Z",
-      "completed_at": "2026-07-28T07:55:25.4796164Z",
-      "duration_ms": 13,
+      "started_at": "2026-07-29T09:36:24.5267641Z",
+      "completed_at": "2026-07-29T09:36:24.541746Z",
+      "duration_ms": 14,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -437,9 +437,9 @@
     },
     {
       "spec_name": "out_of_order",
-      "started_at": "2026-07-28T07:55:25.4796164Z",
-      "completed_at": "2026-07-28T07:55:25.5041084Z",
-      "duration_ms": 24,
+      "started_at": "2026-07-29T09:36:24.542863Z",
+      "completed_at": "2026-07-29T09:36:24.5574094Z",
+      "duration_ms": 14,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -489,9 +489,9 @@
     },
     {
       "spec_name": "single_turn",
-      "started_at": "2026-07-28T07:55:25.5046349Z",
-      "completed_at": "2026-07-28T07:55:25.5152312Z",
-      "duration_ms": 10,
+      "started_at": "2026-07-29T09:36:24.557935Z",
+      "completed_at": "2026-07-29T09:36:24.5666798Z",
+      "duration_ms": 8,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -508,7 +508,7 @@
       "diff_count": 0,
       "verifications": [
         {
-          "what": "events",
+          "what": "state",
           "reference_backend": "inmemory",
           "compared_backend": "redis",
           "status": "pass",
@@ -520,7 +520,7 @@
           }
         },
         {
-          "what": "state",
+          "what": "events",
           "reference_backend": "inmemory",
           "compared_backend": "redis",
           "status": "pass",
@@ -536,9 +536,9 @@
     },
     {
       "spec_name": "state_updates",
-      "started_at": "2026-07-28T07:55:25.5152312Z",
-      "completed_at": "2026-07-28T07:55:25.5229638Z",
-      "duration_ms": 7,
+      "started_at": "2026-07-29T09:36:24.5666798Z",
+      "completed_at": "2026-07-29T09:36:24.5749426Z",
+      "duration_ms": 8,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -583,9 +583,9 @@
     },
     {
       "spec_name": "summary_generation",
-      "started_at": "2026-07-28T07:55:25.5229638Z",
-      "completed_at": "2026-07-28T07:55:25.5389737Z",
-      "duration_ms": 16,
+      "started_at": "2026-07-29T09:36:24.5754603Z",
+      "completed_at": "2026-07-29T09:36:24.593302Z",
+      "duration_ms": 17,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -602,23 +602,6 @@
       "diff_count": 0,
       "verifications": [
         {
-          "what": "summary",
-          "reference_backend": "inmemory",
-          "compared_backend": "redis",
-          "status": "pass",
-          "diffs": null,
-          "session_key": {
-            "AppName": "test-app",
-            "UserID": "user1",
-            "SessionID": "sess-summary-1"
-          },
-          "summary_filter_keys": [
-            "",
-            "dev",
-            "main"
-          ]
-        },
-        {
           "what": "events",
           "reference_backend": "inmemory",
           "compared_backend": "redis",
@@ -630,7 +613,22 @@
             "SessionID": "sess-summary-1"
           },
           "summary_filter_keys": [
-            "",
+            "dev",
+            "main"
+          ]
+        },
+        {
+          "what": "summary",
+          "reference_backend": "inmemory",
+          "compared_backend": "redis",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-summary-1"
+          },
+          "summary_filter_keys": [
             "dev",
             "main"
           ]
@@ -640,9 +638,9 @@
     },
     {
       "spec_name": "summary_truncation",
-      "started_at": "2026-07-28T07:55:25.5394882Z",
-      "completed_at": "2026-07-28T07:55:25.5572021Z",
-      "duration_ms": 17,
+      "started_at": "2026-07-29T09:36:24.5938206Z",
+      "completed_at": "2026-07-29T09:36:24.6091851Z",
+      "duration_ms": 15,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -708,9 +706,9 @@
     },
     {
       "spec_name": "tool_calls",
-      "started_at": "2026-07-28T07:55:25.5572021Z",
-      "completed_at": "2026-07-28T07:55:25.569142Z",
-      "duration_ms": 11,
+      "started_at": "2026-07-29T09:36:24.6091851Z",
+      "completed_at": "2026-07-29T09:36:24.6177749Z",
+      "duration_ms": 8,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -755,9 +753,9 @@
     },
     {
       "spec_name": "track_events",
-      "started_at": "2026-07-28T07:55:25.569142Z",
-      "completed_at": "2026-07-28T07:55:25.5824474Z",
-      "duration_ms": 13,
+      "started_at": "2026-07-29T09:36:24.6183276Z",
+      "completed_at": "2026-07-29T09:36:24.6283078Z",
+      "duration_ms": 9,
       "backends_tested": {
         "session": [
           "inmemory",
