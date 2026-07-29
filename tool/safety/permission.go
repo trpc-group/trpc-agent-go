@@ -12,6 +12,7 @@ package safety
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -149,13 +150,28 @@ func WithAuditFile(path string) PermissionOption {
 }
 
 func recordingSink(sink AuditSink) AuditSink {
-	if sink == nil {
+	if !configuredAuditSink(sink) {
 		return nil
 	}
 	if _, ok := sink.(*recordingAuditSink); ok {
 		return sink
 	}
 	return newRecordingAuditSink(sink)
+}
+
+func configuredAuditSink(sink AuditSink) bool {
+	switch s := sink.(type) {
+	case nil:
+		return false
+	case *WriterAuditSink:
+		return s != nil && s.w != nil
+	case *FileAuditSink:
+		return s != nil && strings.TrimSpace(s.path) != ""
+	case *recordingAuditSink:
+		return s != nil && configuredAuditSink(s.sink)
+	default:
+		return true
+	}
 }
 
 func cloneScanner(scanner *Scanner) *Scanner {
@@ -273,8 +289,11 @@ func (p *PermissionPolicy) scan(ctx context.Context, req Request) (Report, error
 		sink.clear()
 	}
 	report := p.scanner.Scan(ctx, req)
-	if p.auditFailureMode != AuditFailClosed || p.scanner == nil || p.scanner.audit == nil {
+	if p.auditFailureMode != AuditFailClosed {
 		return report, nil
+	}
+	if p.scanner == nil || p.scanner.audit == nil {
+		return report, errors.New("audit sink unavailable")
 	}
 	if sink, ok := p.scanner.audit.(*recordingAuditSink); ok {
 		return report, sink.lastErr()
@@ -331,12 +350,23 @@ func RequestFromPermission(req *tool.PermissionRequest) (Request, bool, error) {
 		return r, true, err
 	case isMCPCommandTool(name):
 		r, err := parseWorkspaceExec(name, req.Arguments)
-		if err == nil && strings.TrimSpace(r.Command) == "" {
-			return Request{
-				ToolName: name,
-				Backend:  BackendUnknown,
-				RawArgs:  string(req.Arguments),
-			}, false, nil
+		if err == nil {
+			rawArgs := string(req.Arguments)
+			r.RawArgs = rawArgs
+			if mcpCommandHasUnsupportedFields(req.Arguments) {
+				return Request{
+					ToolName: name,
+					Backend:  BackendUnknown,
+					RawArgs:  rawArgs,
+				}, false, nil
+			}
+			if strings.TrimSpace(r.Command) == "" {
+				return Request{
+					ToolName: name,
+					Backend:  BackendUnknown,
+					RawArgs:  rawArgs,
+				}, false, nil
+			}
 		}
 		return r, true, err
 	default:
@@ -499,15 +529,16 @@ func parseSkillRun(name string, args []byte) (Request, error) {
 		return Request{}, err
 	}
 	return Request{
-		ToolName:   name,
-		Backend:    BackendWorkspaceExec,
-		Command:    in.Command,
-		Cwd:        in.Cwd,
-		Stdin:      in.Stdin,
-		Env:        in.Env,
-		TimeoutSec: in.Timeout,
-		Background: in.Background,
-		Metadata:   skillMetadata(in),
+		ToolName:       name,
+		Backend:        BackendWorkspaceExec,
+		Command:        in.Command,
+		Cwd:            in.Cwd,
+		Stdin:          in.Stdin,
+		Env:            in.Env,
+		TimeoutSec:     in.Timeout,
+		MaxOutputBytes: skillOutputMaxBytes(in.Outputs),
+		Background:     in.Background,
+		Metadata:       skillMetadata(in),
 	}, nil
 }
 
@@ -554,6 +585,19 @@ func skillMetadata(in skillArgs) map[string]string {
 		md["inputs"] = strings.Join(all, "\n")
 	}
 	return md
+}
+
+func skillOutputMaxBytes(outputs *codeexecutor.OutputSpec) int {
+	if outputs == nil || !outputs.Inline {
+		return 0
+	}
+	if outputs.MaxTotalBytes > 0 {
+		if outputs.MaxTotalBytes > int64(^uint(0)>>1) {
+			return int(^uint(0) >> 1)
+		}
+		return int(outputs.MaxTotalBytes)
+	}
+	return 64 * 1024 * 1024
 }
 
 func normalizeSkillInputSourceForScan(src string) string {
@@ -711,4 +755,21 @@ func isMCPCommandTool(name string) bool {
 
 func normalizedToolName(name string) string {
 	return strings.ToLower(strings.TrimSpace(name))
+}
+
+func mcpCommandHasUnsupportedFields(args []byte) bool {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(args, &fields); err != nil || len(fields) == 0 {
+		return false
+	}
+	for key := range fields {
+		switch strings.ToLower(strings.TrimSpace(key)) {
+		case "command", "cmd", "cwd", "workdir", "env", "stdin",
+			"yield_time_ms", "yieldms", "timeout", "timeout_sec",
+			"timeoutsec", "background", "tty", "pty":
+		default:
+			return true
+		}
+	}
+	return false
 }

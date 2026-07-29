@@ -42,6 +42,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/safety"
 )
 
 // RunTool lets the LLM execute commands inside a skill workspace.
@@ -61,6 +62,7 @@ type RunTool struct {
 	forceSaveArtifacts bool
 	requireSkillLoaded bool
 	outputLimits       RunOutputLimits
+	safetyScanner      *safety.Scanner
 }
 
 // RunOutputLimits controls how much inline text skill_run returns.
@@ -204,6 +206,15 @@ func WithForceSaveArtifacts(enable bool) func(*RunTool) {
 func WithRunOutputLimits(limits RunOutputLimits) func(*RunTool) {
 	return func(t *RunTool) {
 		t.outputLimits = limits
+	}
+}
+
+// WithSafetyScanner configures post-execution scanning for inline skill_run
+// output. Returned stdout, stderr, primary_output and output_files content are
+// scanned, redacted and truncated according to the scanner policy.
+func WithSafetyScanner(scanner *safety.Scanner) func(*RunTool) {
+	return func(t *RunTool) {
+		t.safetyScanner = scanner
 	}
 }
 
@@ -526,6 +537,7 @@ func (t *RunTool) Call(
 	if len(filteredOutputs.warnings) > 0 {
 		out.Warnings = append(out.Warnings, filteredOutputs.warnings...)
 	}
+	out = t.scanRunOutput(ctx, in, out)
 	if len(outputWarn) > 0 {
 		out.Warnings = append(out.Warnings, outputWarn...)
 	}
@@ -725,6 +737,119 @@ func (t *RunTool) buildRunOutput(
 	}
 	applyOmitInlineContent(ctx, &out, in.OmitInline)
 	return out, nil
+}
+
+func (t *RunTool) scanRunOutput(
+	ctx context.Context,
+	in runInput,
+	out runOutput,
+) runOutput {
+	if t == nil || t.safetyScanner == nil {
+		return out
+	}
+	policy := t.safetyScanner.Policy()
+	remaining := outputBudget(policy)
+	if out.Stdout != "" {
+		out.Stdout, _, remaining = t.scanRunOutputText(
+			ctx, in, "stdout", "", out.Stdout, policy, remaining)
+	}
+	if out.Stderr != "" {
+		out.Stderr, _, remaining = t.scanRunOutputText(
+			ctx, in, "stderr", "", out.Stderr, policy, remaining)
+	}
+	for i := range out.OutputFiles {
+		if out.OutputFiles[i].Content == "" {
+			continue
+		}
+		originalSize := out.OutputFiles[i].SizeBytes
+		if originalSize <= 0 {
+			originalSize = int64(len(out.OutputFiles[i].Content))
+		}
+		content, truncated, nextRemaining := t.scanRunOutputText(ctx, in, "output_file",
+			out.OutputFiles[i].Name, out.OutputFiles[i].Content, policy, remaining)
+		remaining = nextRemaining
+		out.OutputFiles[i].Content = content
+		if truncated {
+			if out.OutputFiles[i].SizeBytes <= 0 {
+				out.OutputFiles[i].SizeBytes = originalSize
+			}
+			out.OutputFiles[i].Truncated = true
+		}
+	}
+	if out.PrimaryOutput != nil && out.PrimaryOutput.Content != "" {
+		originalSize := out.PrimaryOutput.SizeBytes
+		if originalSize <= 0 {
+			originalSize = int64(len(out.PrimaryOutput.Content))
+		}
+		content, truncated, nextRemaining := t.scanRunOutputText(ctx, in, "primary_output",
+			out.PrimaryOutput.Name, out.PrimaryOutput.Content, policy, remaining)
+		remaining = nextRemaining
+		out.PrimaryOutput.Content = content
+		if truncated {
+			if out.PrimaryOutput.SizeBytes <= 0 {
+				out.PrimaryOutput.SizeBytes = originalSize
+			}
+			out.PrimaryOutput.Truncated = true
+		}
+	}
+	return out
+}
+
+func (t *RunTool) scanRunOutputText(
+	ctx context.Context,
+	in runInput,
+	kind string,
+	fileName string,
+	text string,
+	policy safety.Policy,
+	remaining int,
+) (string, bool, int) {
+	report := t.safetyScanner.ScanOutput(ctx, safety.Request{
+		ToolName: "skill_run",
+		Backend:  safety.BackendWorkspaceExec,
+		Command:  in.Command,
+		Metadata: map[string]string{
+			"skill":       in.Skill,
+			"output_kind": kind,
+			"file_name":   fileName,
+		},
+	}, text)
+	if report.Redacted {
+		text, _ = safety.RedactText(text, policy)
+	}
+	return truncateRunOutputForBudget(text, policy, remaining)
+}
+
+func outputBudget(policy safety.Policy) int {
+	p := policy.Normalize()
+	if p.MaxOutputBytes <= 0 {
+		return -1
+	}
+	return p.MaxOutputBytes
+}
+
+func truncateRunOutputForBudget(
+	text string,
+	policy safety.Policy,
+	remaining int,
+) (string, bool, int) {
+	if remaining == 0 {
+		return "", text != "", 0
+	}
+	if remaining < 0 {
+		truncated, ok := safety.TruncateOutput(text, policy)
+		return truncated, ok, remaining
+	}
+	p := policy
+	if p.MaxOutputBytes <= 0 || p.MaxOutputBytes > remaining {
+		p.MaxOutputBytes = remaining
+	}
+	truncated, ok := safety.TruncateOutput(text, p)
+	used := len(truncated)
+	if used > remaining {
+		used = remaining
+	}
+	return truncated, ok || len(truncated) < len(text), remaining - used
 }
 
 const (

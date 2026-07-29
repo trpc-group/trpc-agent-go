@@ -412,6 +412,7 @@ func scanArgv(argv []string, p Policy) []Finding {
 	var findings []Finding
 	findings = append(findings, scanCommandSegments([][]string{clean}, p)...)
 	findings = append(findings, scanNetworkCommandSegments([][]string{clean}, p)...)
+	findings = append(findings, scanSensitivePaths(clean, p)...)
 	pol := shellsafe.PolicyFromLists(p.AllowedCommands, p.DeniedCommands)
 	if err := pol.Check(&shellsafe.Pipeline{Commands: [][]string{clean}}); err != nil {
 		riskType, decision := commandPolicyFinding(err, p)
@@ -618,6 +619,7 @@ func scanCommandSegments(cmds [][]string, p Policy) []Finding {
 			findings = append(findings, scanCommandSegments([][]string{wrapped}, p)...)
 			findings = append(findings, scanNetworkText(strings.Join(wrapped, " "), p)...)
 		}
+		findings = append(findings, scanSensitivePaths(argv, p)...)
 		if isInlineInterpreter(cmd, argv) {
 			findings = append(findings, finding(ruleShellWrapper, "process_spawn",
 				RiskHigh, strings.Join(argv, " "),
@@ -858,14 +860,14 @@ func scanShellBypassText(text string, p Policy) []Finding {
 
 func scanResourceHints(req Request, texts []string, p Policy) []Finding {
 	var findings []Finding
-	if req.TimeoutSec > p.MaxTimeoutSec {
+	if p.MaxTimeoutSec > 0 && req.TimeoutSec > p.MaxTimeoutSec {
 		findings = append(findings, finding(ruleResourceRuntime,
 			"resource_abuse", RiskMedium,
 			fmt.Sprintf("timeout_sec=%d exceeds max_timeout_sec=%d", req.TimeoutSec, p.MaxTimeoutSec),
 			"lower timeout_sec or update policy after review",
 			DecisionAsk))
 	}
-	if req.MaxOutputBytes > p.MaxOutputBytes {
+	if p.MaxOutputBytes > 0 && req.MaxOutputBytes > p.MaxOutputBytes {
 		findings = append(findings, finding(ruleResourceOutput,
 			"resource_abuse", RiskMedium,
 			fmt.Sprintf("max_output_bytes=%d exceeds max_output_bytes=%d", req.MaxOutputBytes, p.MaxOutputBytes),
@@ -1132,6 +1134,9 @@ func looksLikeShellCommand(s string) bool {
 }
 
 func longSleep(argv []string, limit int) bool {
+	if limit <= 0 {
+		return false
+	}
 	for _, a := range argv[1:] {
 		n, ok := sleepSeconds(a)
 		if ok && n > limit {

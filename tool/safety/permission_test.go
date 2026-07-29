@@ -41,6 +41,36 @@ func TestPermissionPolicyMapsWorkspaceExec(t *testing.T) {
 	require.Contains(t, audit.String(), `"decision":"deny"`)
 }
 
+func TestPermissionPolicyScansEffectiveArgvSensitivePaths(t *testing.T) {
+	pp := NewPermissionPolicy(WithPolicy(DefaultPolicy()))
+
+	cases := []struct {
+		name string
+		args string
+	}{
+		{
+			name: "fragmented path",
+			args: `{"command":"cat /e'tc/passwd'"}`,
+		},
+		{
+			name: "fragmented file url",
+			args: `{"command":"curl file:///e'tc/passwd'"}`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			decision, err := pp.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+				ToolName:  "workspace_exec",
+				Arguments: []byte(tc.args),
+			})
+			require.NoError(t, err)
+			require.Equal(t, tool.PermissionActionDeny, decision.Action)
+			require.Contains(t, decision.Reason, ruleSensitivePath)
+		})
+	}
+}
+
 func TestPermissionPolicyScansWorkspaceStdin(t *testing.T) {
 	pp := NewPermissionPolicy(WithPolicy(DefaultPolicy()))
 	decision, err := pp.CheckToolPermission(context.Background(), &tool.PermissionRequest{
@@ -114,6 +144,23 @@ func TestPermissionPolicyScansUnknownToolArguments(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, tool.PermissionActionDeny, decision.Action)
 	require.Contains(t, decision.Reason, ruleDangerousDelete)
+}
+
+func TestPermissionPolicyHandlesHeuristicMCPWrappersWithExtraFields(t *testing.T) {
+	policy := DefaultPolicy()
+	policy.UnknownToolAction = DecisionAllow
+	pp := NewPermissionPolicy(WithPolicy(policy))
+
+	decision, err := pp.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName: "mcp_exec",
+		Arguments: []byte(`{
+			"command":"echo ok",
+			"input_file":"/etc/passwd"
+		}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.Contains(t, decision.Reason, ruleSensitivePath)
 }
 
 func TestPermissionPolicyCustomToolBackend(t *testing.T) {
@@ -392,6 +439,15 @@ func TestPermissionPolicyAuditFailureMode(t *testing.T) {
 	require.Equal(t, tool.PermissionActionDeny, decision.Action)
 	require.Contains(t, decision.Reason, "audit failed")
 
+	pp = NewPermissionPolicy(WithPolicy(ProductionPolicy()))
+	decision, err = pp.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"echo ok"}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.Contains(t, decision.Reason, "audit failed")
+
 	p := DefaultPolicy()
 	p.AuditFailureMode = AuditFailClosed
 	pp = NewPermissionPolicy(
@@ -429,6 +485,65 @@ func TestPermissionPolicyAuditFailureMode(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, tool.PermissionActionDeny, decision.Action)
 	require.Contains(t, decision.Reason, "audit failed")
+}
+
+func TestPermissionPolicyFailClosedRejectsUnusableConfiguredSinks(t *testing.T) {
+	tests := []struct {
+		name string
+		opt  PermissionOption
+	}{
+		{
+			name: "nil writer",
+			opt:  WithAuditWriter(nil),
+		},
+		{
+			name: "empty file path",
+			opt:  WithAuditFile(""),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			pp := NewPermissionPolicy(
+				WithPolicy(ProductionPolicy()),
+				tc.opt,
+			)
+			decision, err := pp.CheckToolPermission(
+				context.Background(),
+				&tool.PermissionRequest{
+					ToolName:  "workspace_exec",
+					Arguments: []byte(`{"command":"echo ok"}`),
+				},
+			)
+			require.NoError(t, err)
+			require.Equal(t, tool.PermissionActionDeny, decision.Action)
+			require.Contains(t, decision.Reason, "audit failed")
+		})
+	}
+}
+
+func TestPermissionPolicyScansStructuredSkillOutputLimits(t *testing.T) {
+	req, err := parseSkillRun("skill_run", []byte(`{
+		"command":"echo ok",
+		"outputs":{"inline":true}
+	}`))
+	require.NoError(t, err)
+	require.Equal(t, 64*1024*1024, req.MaxOutputBytes)
+
+	policy := DefaultPolicy()
+	policy.MaxOutputBytes = 1 << 20
+	pp := NewPermissionPolicy(WithPolicy(policy))
+
+	decision, err := pp.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName: "skill_run",
+		Arguments: []byte(`{
+			"command":"echo ok",
+			"outputs":{"inline":true}
+		}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionAsk, decision.Action)
+	require.Contains(t, decision.Reason, ruleResourceOutput)
 }
 
 func TestPermissionPolicyWithScannerDoesNotShareRecordingSink(t *testing.T) {

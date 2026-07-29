@@ -1374,6 +1374,14 @@ func buildSkillRunToolWithRepo(
 			options.skillRunOutputLimits,
 		),
 	)
+	if options.skillRunSafetyScanner != nil {
+		runOpts = append(
+			runOpts,
+			toolskill.WithSafetyScanner(
+				options.skillRunSafetyScanner,
+			),
+		)
+	}
 	if options.skillRunForceSaveArtifacts {
 		runOpts = append(runOpts, toolskill.WithForceSaveArtifacts(true))
 	}

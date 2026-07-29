@@ -153,8 +153,9 @@ func (p Policy) Normalize() Policy {
 }
 
 func normalizeLoadedPolicy(p Policy) Policy {
-	p = normalizePolicy(p, true, false)
+	p = normalizePolicy(p, true, true)
 	p.preserveBoolFalse = true
+	p.preserveZeroLimits = true
 	return p
 }
 

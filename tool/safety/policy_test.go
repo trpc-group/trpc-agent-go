@@ -10,6 +10,7 @@
 package safety
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -160,6 +161,61 @@ redact_sensitive_evidence: false
 	require.False(t, p.DenyDangerousRecursiveDelete)
 	require.False(t, p.DenySecretLeakage)
 	require.False(t, p.RedactSensitiveEvidence)
+}
+
+func TestLoadPolicyPreservesExplicitZeroLimits(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "policy.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+max_timeout_sec: 0
+max_output_bytes: 0
+long_sleep_seconds: 0
+`), 0o600))
+
+	p, err := LoadPolicy(path)
+	require.NoError(t, err)
+	require.Zero(t, p.MaxTimeoutSec)
+	require.Zero(t, p.MaxOutputBytes)
+	require.Zero(t, p.LongSleepSeconds)
+}
+
+func TestLoadPolicyStrictPreservesExplicitZeroLimits(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "policy.json")
+	require.NoError(t, os.WriteFile(path, []byte(`{
+  "max_timeout_sec": 0,
+  "max_output_bytes": 0,
+  "long_sleep_seconds": 0
+}`), 0o600))
+
+	p, err := LoadPolicyStrict(path)
+	require.NoError(t, err)
+	require.Zero(t, p.MaxTimeoutSec)
+	require.Zero(t, p.MaxOutputBytes)
+	require.Zero(t, p.LongSleepSeconds)
+}
+
+func TestLoadedZeroLimitsDisableResourceFindings(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "policy.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+max_timeout_sec: 0
+max_output_bytes: 0
+long_sleep_seconds: 0
+`), 0o600))
+
+	p, err := LoadPolicy(path)
+	require.NoError(t, err)
+	report := NewScanner(p).Scan(context.Background(), Request{
+		ToolName:       "workspace_exec",
+		Backend:        BackendWorkspaceExec,
+		Command:        "sleep 120",
+		TimeoutSec:     600,
+		MaxOutputBytes: 64 * 1024 * 1024,
+	})
+
+	require.Equal(t, DecisionAllow, report.Decision)
+	require.Empty(t, report.Findings)
 }
 
 func TestLoadPartialPolicyKeepsDefaultGuardrails(t *testing.T) {
