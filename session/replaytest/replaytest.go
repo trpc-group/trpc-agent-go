@@ -240,15 +240,22 @@ type AllowedDiffRule struct {
 }
 
 // Run executes a replay case against one backend and returns a normalized snapshot.
-func Run(ctx context.Context, backend Backend, tc Case) (Result, error) {
+// runNamespace must be non-empty, must not contain surrounding whitespace, and
+// must be shared by all backends participating in one comparison. Callers must
+// use a new namespace for every rerun. Run retains all persisted case data and
+// leaves any cleanup lifecycle to the caller.
+func Run(ctx context.Context, runNamespace string, backend Backend, tc Case) (Result, error) {
 	if err := validateBackend(backend); err != nil {
+		return Result{}, err
+	}
+	if err := validateRunNamespace(runNamespace); err != nil {
 		return Result{}, err
 	}
 	tracks, err := prepareTracks(backend, tc)
 	if err != nil {
 		return Result{}, err
 	}
-	key := replayKey(tc.Name)
+	key := replayKey(runNamespace, tc.Name)
 	if err := createSessionAndState(ctx, backend, key, tc); err != nil {
 		return Result{}, err
 	}
@@ -291,11 +298,23 @@ func validateBackend(backend Backend) error {
 	return nil
 }
 
-func replayKey(caseName string) session.Key {
+func validateRunNamespace(runNamespace string) error {
+	trimmed := strings.TrimSpace(runNamespace)
+	if trimmed == "" {
+		return fmt.Errorf("replay run namespace is empty")
+	}
+	if trimmed != runNamespace {
+		return fmt.Errorf("replay run namespace %q has surrounding whitespace", runNamespace)
+	}
+	return nil
+}
+
+func replayKey(runNamespace, caseName string) session.Key {
+	scope := fmt.Sprintf("%d-%s-%s", len(runNamespace), runNamespace, caseName)
 	return session.Key{
-		AppName:   "replay-matrix-" + caseName,
-		UserID:    "user-" + caseName,
-		SessionID: "session-" + caseName,
+		AppName:   "replay-matrix-" + scope,
+		UserID:    "user-" + scope,
+		SessionID: "session-" + scope,
 	}
 }
 
@@ -1540,7 +1559,7 @@ func allowedBracketSegmentIsConcrete(segment string) (bool, bool) {
 	}
 	var key string
 	if segment[0] == '"' && json.Unmarshal([]byte(segment), &key) == nil {
-		return true, true
+		return strings.Trim(key, "*") != "", true
 	}
 	return false, false
 }

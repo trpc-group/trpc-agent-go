@@ -11,7 +11,9 @@ package e2e
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -247,6 +249,14 @@ func completeReplayMemoryReader(service memory.Service) replaytest.ReadAllMemori
 	}
 }
 
+func newReplayRunNamespace(t testing.TB) string {
+	t.Helper()
+	var token [16]byte
+	_, err := rand.Read(token[:])
+	require.NoError(t, err)
+	return hex.EncodeToString(token[:])
+}
+
 func makeReplayBackends(t *testing.T) []backendBundle {
 	t.Helper()
 
@@ -386,11 +396,12 @@ func writeReplayDiffReport(path string, entries []diffEntry) error {
 func runReplayCaseOnBackend(
 	t *testing.T,
 	ctx context.Context,
+	runNamespace string,
 	backend backendBundle,
 	tc replayCase,
 ) replayCaseResult {
 	t.Helper()
-	result, err := replaytest.Run(ctx, toReplayTestBackend(backend), toReplayTestCase(tc))
+	result, err := replaytest.Run(ctx, runNamespace, toReplayTestBackend(backend), toReplayTestCase(tc))
 	require.NoError(t, err)
 	return replayCaseResult{
 		backend:  result.Backend,
@@ -548,9 +559,10 @@ func runReplayCaseWithBackendInjection(
 	t.Helper()
 
 	backends := makeReplayBackends(t)
+	runNamespace := newReplayRunNamespace(t)
 	results := make([]replayCaseResult, 0, len(backends))
 	for _, backend := range backends {
-		result := runReplayCaseOnBackend(t, ctx, backend, tc)
+		result := runReplayCaseOnBackend(t, ctx, runNamespace, backend, tc)
 		if backend.name == targetBackend {
 			inject(t, ctx, backend, result.key)
 			result = refreshReplayCaseResultSnapshot(t, ctx, backend, result.key)
@@ -769,6 +781,7 @@ func runReplayCaseWithRetry(
 ) []replayRetryComparison {
 	t.Helper()
 
+	runNamespace := newReplayRunNamespace(t)
 	baselineBackends := makeReplayBackends(t)
 	retryBackends := makeReplayBackends(t)
 	retryByName := make(map[string]backendBundle, len(retryBackends))
@@ -780,8 +793,8 @@ func runReplayCaseWithRetry(
 		retryBackend, ok := retryByName[baselineBackend.name]
 		require.Truef(t, ok, "missing retry backend %s", baselineBackend.name)
 		fault := &replayFailOnce{spec: spec}
-		baseline := runReplayCaseOnBackend(t, ctx, baselineBackend, tc)
-		retry := runReplayCaseOnBackend(t, ctx, wrapReplayBackendForRetry(retryBackend, fault), tc)
+		baseline := runReplayCaseOnBackend(t, ctx, runNamespace, baselineBackend, tc)
+		retry := runReplayCaseOnBackend(t, ctx, runNamespace, wrapReplayBackendForRetry(retryBackend, fault), tc)
 		diffs := diffReplaySnapshots(
 			tc.name,
 			baseline.key.SessionID,
@@ -1187,9 +1200,10 @@ func TestReplayConsistencyMatrix_BasicCases(t *testing.T) {
 	var allDiffs []diffEntry
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			runNamespace := newReplayRunNamespace(t)
 			results := make([]replayCaseResult, 0, len(backends))
 			for _, backend := range backends {
-				results = append(results, runReplayCaseOnBackend(t, ctx, backend, tc))
+				results = append(results, runReplayCaseOnBackend(t, ctx, runNamespace, backend, tc))
 			}
 			requireReplayCaseIsolation(t, tc, results)
 			requireReplayCaseSemantics(t, tc, results)
@@ -1207,6 +1221,112 @@ func TestReplayConsistencyMatrix_BasicCases(t *testing.T) {
 
 	require.Falsef(t, hasReplayUnallowedDiffs(allDiffs), "unexpected replay diffs: %+v", allDiffs)
 	require.NoError(t, writeReplayDiffReport("", allDiffs))
+}
+
+func TestReplayConsistencyRunNamespace_AllowsSQLiteRerun(t *testing.T) {
+	ctx := context.Background()
+	backends := makeReplayBackends(t)
+	var backend backendBundle
+	for _, candidate := range backends {
+		if candidate.name == "sqlite" {
+			backend = candidate
+			break
+		}
+	}
+	require.Equal(t, "sqlite", backend.name)
+
+	tc := replayCase{
+		name: "namespace_rerun",
+		initialState: session.StateMap{
+			"session:initial": []byte(`{"run":"initial"}`),
+		},
+		appState: session.StateMap{
+			session.StateAppPrefix + "feature": []byte(`{"enabled":true}`),
+		},
+		userState: session.StateMap{
+			session.StateUserPrefix + "locale": []byte(`"zh-CN"`),
+		},
+		sessionState: session.StateMap{
+			"session:mode": []byte(`"rerun"`),
+		},
+		events: []eventSpec{
+			replayUserEvent("rerun request", withReplayInvocation("rerun-root"), withReplayBranch("root")),
+			replayAssistantEvent("rerun response", withReplayInvocation("rerun-root"), withReplayBranch("root")),
+		},
+		memories: []memoryOpSpec{{
+			name: "rerun memory", op: "add", content: "Namespace keeps replay memory isolated.",
+			topics: []string{"namespace", "rerun"}, resultAlias: "rerun-memory",
+		}},
+		queries: []memoryQuerySpec{{
+			query:            "namespace replay memory",
+			expectedContents: []string{"Namespace keeps replay memory isolated."},
+		}},
+		summaries: []summaryStep{{
+			name: "rerun summary", force: true, text: "namespace rerun summary", wantText: "namespace rerun summary",
+		}},
+		tracks: []trackSpec{{
+			name: "namespace.track", payload: map[string]any{"run": "isolated"}, timestamp: replayBaseTime,
+		}},
+	}
+
+	first := runReplayCaseOnBackend(t, ctx, "first-run", backend, tc)
+	second := runReplayCaseOnBackend(t, ctx, "second-run", backend, tc)
+	require.NotEqual(t, first.key.AppName, second.key.AppName)
+	require.NotEqual(t, first.key.UserID, second.key.UserID)
+	require.NotEqual(t, first.key.SessionID, second.key.SessionID)
+
+	for _, result := range []replayCaseResult{first, second} {
+		gotSession, err := backend.sessionService.GetSession(ctx, result.key)
+		require.NoError(t, err)
+		require.NotNil(t, gotSession)
+		require.Len(t, gotSession.Events, 2)
+		require.Len(t, gotSession.Summaries, 1)
+		require.Len(t, gotSession.Tracks, 1)
+		require.Len(t, gotSession.State, 5)
+		require.Equal(t, []byte(`{"run":"initial"}`), gotSession.State["session:initial"])
+		require.Equal(t, []byte(`"rerun"`), gotSession.State["session:mode"])
+		trackNames, err := session.TracksFromState(gotSession.State)
+		require.NoError(t, err)
+		require.Equal(t, []session.Track{"namespace.track"}, trackNames)
+
+		sessions, err := backend.sessionService.ListSessions(ctx, session.UserKey{
+			AppName: result.key.AppName, UserID: result.key.UserID,
+		})
+		require.NoError(t, err)
+		require.Len(t, sessions, 1)
+		require.Equal(t, result.key.SessionID, sessions[0].ID)
+
+		appState, err := backend.sessionService.ListAppStates(ctx, result.key.AppName)
+		require.NoError(t, err)
+		require.Equal(t, session.StateMap{"feature": []byte(`{"enabled":true}`)}, appState)
+		userState, err := backend.sessionService.ListUserStates(ctx, session.UserKey{
+			AppName: result.key.AppName, UserID: result.key.UserID,
+		})
+		require.NoError(t, err)
+		require.Equal(t, session.StateMap{"locale": []byte(`"zh-CN"`)}, userState)
+
+		memories, complete, err := backend.readAllMemories(ctx, memory.UserKey{
+			AppName: result.key.AppName, UserID: result.key.UserID,
+		})
+		require.NoError(t, err)
+		require.True(t, complete)
+		require.Len(t, memories, 1)
+		require.NotNil(t, memories[0])
+		require.NotNil(t, memories[0].Memory)
+		require.Equal(t, "Namespace keeps replay memory isolated.", memories[0].Memory.Memory)
+	}
+
+	stripIdentity := func(snapshot replaySnapshot) replaySnapshot {
+		snapshot.Session = replaySessionSnapshot{}
+		for i := range snapshot.Memory {
+			snapshot.Memory[i].App = ""
+			snapshot.Memory[i].UserID = ""
+			snapshot.Memory[i].RawID = ""
+			snapshot.Memory[i].Key = ""
+		}
+		return snapshot
+	}
+	require.Equal(t, stripIdentity(first.snapshot), stripIdentity(second.snapshot))
 }
 
 func TestReplayConsistencyMatrix_AllowsExplicitAllowedDiff(t *testing.T) {
@@ -1255,6 +1375,11 @@ func requireReplayCaseIsolation(
 	results []replayCaseResult,
 ) {
 	t.Helper()
+	require.NotEmpty(t, results)
+	for _, result := range results[1:] {
+		require.Equal(t, results[0].key, result.key,
+			"case %s used different run identities across backends", tc.name)
+	}
 
 	if tc.name == "state_scopes" {
 		return
@@ -2323,14 +2448,15 @@ func TestReplayConsistencyAnomaly_ServiceContractMutationsDetected(t *testing.T)
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			runNamespace := newReplayRunNamespace(t)
 			baselineBackends := makeReplayBackends(t)
 			mutatedBackends := makeReplayBackends(t)
 			tc := replayCaseByName(t, tt.caseName)
 			for i, baselineBackend := range baselineBackends {
 				mutatedBackend := tt.wrap(mutatedBackends[i])
 				mutatedBackend.name += "_mutated"
-				baseline := runReplayCaseOnBackend(t, ctx, baselineBackend, tc)
-				mutated := runReplayCaseOnBackend(t, ctx, mutatedBackend, tc)
+				baseline := runReplayCaseOnBackend(t, ctx, runNamespace, baselineBackend, tc)
+				mutated := runReplayCaseOnBackend(t, ctx, runNamespace, mutatedBackend, tc)
 				diffs := replaytest.CompareSnapshots(
 					tc.name,
 					baseline.key.SessionID,

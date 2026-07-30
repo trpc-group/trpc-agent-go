@@ -4,6 +4,8 @@
 
 可复用的 case、runner、snapshot、normalize、compare 和 report 编码位于 `session/replaytest`。`test/replay_consistency_test.go` 只负责 InMemory/SQLite wiring、具体 cases、故障注入和断言，因此新增后端可以复用同一执行与比较逻辑，而不必复制 e2e 测试实现。
 
+`replaytest.Run` 要求传入非空且没有首尾空白的 run namespace。同一次逻辑比较中的所有后端必须复用同一个 namespace；重新运行同一个 case 时必须生成新的 namespace。namespace 与 case name 会共同写入 app、user 和 session 身份，从而在持久化服务上隔离 session state、memory、summary 和 track。`Run` 会刻意保留已持久化的回放数据，便于检查异常注入、刷新 snapshot 和比较重跑结果；如需清理，应由调用方管理该生命周期。
+
 ## 运行方式
 
 在仓库根目录下运行 targeted 测试：
@@ -47,7 +49,7 @@ CGO_ENABLED=1 TRPC_AGENT_REPLAY_REPORT_PATH=replay-report.json go test ./... -ru
 ```json
 {
   "case": "case_name",
-  "session_id": "session-case_name",
+  "session_id": "session-7-run_123-case_name",
   "backend_a": "in_memory",
   "backend_b": "sqlite",
   "section": "summary",
@@ -149,6 +151,7 @@ track 比较重点：
 - `section` 必填，不能是空字符串或 `*`
 - `path` 必填，必须从声明的 section 根路径开始，并且在该根路径之后包含具体字段、quoted key 或固定索引
 - `$`、`$*`、`$.*`、`$[*]` 等全局根模式，`*`、`**`、`***` 等纯通配符，以及 `$.memory`、`$.memory*`、`$.memory.*`、`$.memory[*]` 等 section 根模式均无效
+- quoted key 只有在解码后的值包含非 `*` 字面内容时才提供具体性；`"*"`、`"**"` 和 `"\u002a"` 等转义后的纯星号仍属于纯通配，不能使规则有效
 - `backend_a` 和 `backend_b` 必填，不能是空字符串或 `*`
 - `reason` 必填且不能为空白
 - backend pair 支持左右顺序互换

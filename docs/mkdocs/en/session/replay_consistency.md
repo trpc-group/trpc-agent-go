@@ -4,6 +4,8 @@ Replay consistency tests verify that the same session, memory, summary, and trac
 
 Reusable case, runner, snapshot, normalization, comparison, and report-encoding logic lives in `session/replaytest`. `test/replay_consistency_test.go` retains only InMemory/SQLite wiring, concrete cases, fault injection, and assertions, so another backend can reuse the same execution and comparison logic without copying the e2e implementation.
 
+`replaytest.Run` requires a non-empty run namespace with no surrounding whitespace. All backends in one logical comparison must receive the same namespace, while every rerun of the same case must use a new namespace. The namespace and case name are embedded in the app, user, and session identities, isolating session state, memory, summaries, and tracks on persistent services. `Run` intentionally leaves persisted replay data in place so callers can inspect injected anomalies, refresh snapshots, and compare reruns; callers that need cleanup own that lifecycle.
+
 ## Running
 
 Run the targeted tests from the repository root:
@@ -47,7 +49,7 @@ Each diff report entry contains:
 ```json
 {
   "case": "case_name",
-  "session_id": "session-case_name",
+  "session_id": "session-7-run_123-case_name",
   "backend_a": "in_memory",
   "backend_b": "sqlite",
   "section": "summary",
@@ -149,6 +151,7 @@ Rules:
 - `section` is required and cannot be empty or `*`
 - `path` is required, must start at the declared section root, and must contain a concrete field, quoted key, or fixed index below that root
 - global-root patterns such as `$`, `$*`, `$.*`, and `$[*]`, pure wildcards such as `*`, `**`, and `***`, and section-root patterns such as `$.memory`, `$.memory*`, `$.memory.*`, and `$.memory[*]` are rejected
+- a quoted key contributes specificity only when its decoded value contains a non-`*` literal; quoted `"*"`, `"**"`, and escaped equivalents such as `"\u002a"` are pure wildcards and do not make a rule concrete
 - `backend_a` and `backend_b` are required and cannot be empty or `*`
 - `reason` is required and cannot be blank
 - backend pairs match in either order

@@ -29,6 +29,8 @@ import (
 	sessinmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
 
+const testRunNamespace = "test-run"
+
 func completeMemoryReader(service memory.Service) ReadAllMemoriesFunc {
 	return func(ctx context.Context, userKey memory.UserKey) ([]*memory.Entry, bool, error) {
 		entries, err := service.ReadMemories(ctx, userKey, 0)
@@ -58,20 +60,85 @@ func TestRunRejectsInvalidBackendNames(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := Run(context.Background(), Backend{Name: test.name}, Case{Name: "invalid"})
+			_, err := Run(context.Background(), "", Backend{Name: test.name}, Case{Name: "invalid"})
 			require.EqualError(t, err, test.want)
 		})
 	}
 }
 
+func TestRunRejectsInvalidNamespaceBeforePersistence(t *testing.T) {
+	ctx := context.Background()
+	sessionService := sessinmemory.NewSessionService()
+	defer sessionService.Close()
+	memoryService := meminmemory.NewMemoryService()
+	defer memoryService.Close()
+	backend := Backend{
+		Name: "in_memory", SessionService: sessionService,
+		MemoryService: memoryService, ReadAllMemories: completeMemoryReader(memoryService),
+	}
+	tests := []struct {
+		name      string
+		namespace string
+		want      string
+	}{
+		{name: "empty", want: "replay run namespace is empty"},
+		{name: "whitespace", namespace: " \t", want: "replay run namespace is empty"},
+		{
+			name: "surrounding whitespace", namespace: " run ",
+			want: `replay run namespace " run " has surrounding whitespace`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tc := Case{
+				Name:   "invalid-namespace-" + strings.ReplaceAll(test.name, " ", "-"),
+				Tracks: []TrackSpec{{Name: "requires-track-preflight"}},
+			}
+			_, err := Run(ctx, test.namespace, backend, tc)
+			require.EqualError(t, err, test.want)
+
+			key := replayKey(test.namespace, tc.Name)
+			got, getErr := sessionService.GetSession(ctx, key)
+			require.NoError(t, getErr)
+			require.Nil(t, got)
+			memories, readErr := memoryService.ReadMemories(ctx, memory.UserKey{
+				AppName: key.AppName, UserID: key.UserID,
+			}, 0)
+			require.NoError(t, readErr)
+			require.Empty(t, memories)
+		})
+	}
+}
+
+func TestReplayKeyUsesRunNamespaceForEveryScope(t *testing.T) {
+	first := replayKey("run-a", "case")
+	same := replayKey("run-a", "case")
+	second := replayKey("run-b", "case")
+	boundaryA := replayKey("a", "b-c")
+	boundaryB := replayKey("a-b", "c")
+	unicode := replayKey("运行", "case")
+
+	require.Equal(t, first, same)
+	require.Equal(t, session.Key{
+		AppName:   "replay-matrix-5-run-a-case",
+		UserID:    "user-5-run-a-case",
+		SessionID: "session-5-run-a-case",
+	}, first)
+	require.NotEqual(t, first.AppName, second.AppName)
+	require.NotEqual(t, first.UserID, second.UserID)
+	require.NotEqual(t, first.SessionID, second.SessionID)
+	require.NotEqual(t, boundaryA, boundaryB)
+	require.Equal(t, "session-6-运行-case", unicode.SessionID)
+}
+
 func TestRunRejectsMissingServices(t *testing.T) {
 	ctx := context.Background()
-	_, err := Run(ctx, Backend{Name: "missing-session"}, Case{Name: "invalid"})
+	_, err := Run(ctx, testRunNamespace, Backend{Name: "missing-session"}, Case{Name: "invalid"})
 	require.EqualError(t, err, `replay backend "missing-session" has nil session service`)
 
 	sessionService := sessinmemory.NewSessionService()
 	defer sessionService.Close()
-	_, err = Run(ctx, Backend{
+	_, err = Run(ctx, testRunNamespace, Backend{
 		Name:           "missing-memory",
 		SessionService: sessionService,
 	}, Case{Name: "invalid"})
@@ -79,12 +146,12 @@ func TestRunRejectsMissingServices(t *testing.T) {
 
 	memoryService := meminmemory.NewMemoryService()
 	defer memoryService.Close()
-	_, err = Run(ctx, Backend{
+	_, err = Run(ctx, testRunNamespace, Backend{
 		Name: "missing-read-all", SessionService: sessionService,
 		MemoryService: memoryService,
 	}, Case{Name: "invalid"})
 	require.EqualError(t, err, `replay backend "missing-read-all" has nil ReadAllMemories`)
-	got, err := sessionService.GetSession(ctx, replayKey("invalid"))
+	got, err := sessionService.GetSession(ctx, replayKey(testRunNamespace, "invalid"))
 	require.NoError(t, err)
 	require.Nil(t, got)
 }
@@ -124,7 +191,7 @@ func TestRunUsesReadAllMemoriesForAliasAndFinalSnapshot(t *testing.T) {
 				return entries, err == nil, err
 			}
 
-			result, err := Run(context.Background(), Backend{
+			result, err := Run(context.Background(), testRunNamespace, Backend{
 				Name: "complete_read", SessionService: sessionService,
 				MemoryService: memoryService, ReadAllMemories: readAllMemories,
 			}, test.tc)
@@ -147,7 +214,7 @@ func TestRunRejectsMemoryReadWithoutCompletenessConfirmation(t *testing.T) {
 	defer memoryService.Close()
 	readCount := 0
 
-	_, err := Run(context.Background(), Backend{
+	_, err := Run(context.Background(), testRunNamespace, Backend{
 		Name: "limited", SessionService: sessionService,
 		MemoryService: memoryService,
 		ReadAllMemories: func(ctx context.Context, userKey memory.UserKey) ([]*memory.Entry, bool, error) {
@@ -190,13 +257,13 @@ func TestRunRejectsCorruptMemoryReads(t *testing.T) {
 				return test.entries, true, nil
 			}
 
-			_, err := Run(context.Background(), Backend{
+			_, err := Run(context.Background(), testRunNamespace, Backend{
 				Name: "corrupt", SessionService: sessionService,
 				MemoryService: memoryService, ReadAllMemories: readAllMemories,
 			}, Case{Name: "corrupt-final"})
 			require.EqualError(t, err, `read final memories for case "corrupt-final": `+test.want)
 
-			_, err = Run(context.Background(), Backend{
+			_, err = Run(context.Background(), testRunNamespace, Backend{
 				Name: "corrupt-alias", SessionService: sessionService,
 				MemoryService: memoryService, ReadAllMemories: readAllMemories,
 			}, Case{
@@ -284,7 +351,7 @@ func TestRunReportsInvalidCaseOperations(t *testing.T) {
 			if test.withoutTrackService {
 				trackService = nil
 			}
-			_, err := Run(context.Background(), Backend{
+			_, err := Run(context.Background(), testRunNamespace, Backend{
 				Name:            "in_memory",
 				SessionService:  sessionService,
 				TrackService:    trackService,
@@ -293,7 +360,7 @@ func TestRunReportsInvalidCaseOperations(t *testing.T) {
 			}, test.tc)
 			require.EqualError(t, err, test.want)
 			if len(test.tc.Tracks) > 0 {
-				got, getErr := sessionService.GetSession(context.Background(), replayKey(test.tc.Name))
+				got, getErr := sessionService.GetSession(context.Background(), replayKey(testRunNamespace, test.tc.Name))
 				require.NoError(t, getErr)
 				require.Nil(t, got)
 			}
@@ -386,7 +453,7 @@ func TestRunInterleavesEventsAndSummaries(t *testing.T) {
 	for i, id := range []string{"event-0", "event-1", "event-2", "event-3"} {
 		events = append(events, replayTimelineEvent(id, baseTime.Add(time.Duration(i)*time.Second)))
 	}
-	result, err := Run(context.Background(), Backend{
+	result, err := Run(context.Background(), testRunNamespace, Backend{
 		Name: "in_memory", SessionService: sessionService, MemoryService: memoryService,
 		ReadAllMemories: completeMemoryReader(memoryService),
 		SetSummaryText:  func(text string) { summarizer.text = text },
@@ -414,7 +481,7 @@ func TestRunAcceptsFullTrackPayloadDomain(t *testing.T) {
 	memoryService := meminmemory.NewMemoryService()
 	defer memoryService.Close()
 
-	result, err := Run(context.Background(), Backend{
+	result, err := Run(context.Background(), testRunNamespace, Backend{
 		Name: "in_memory", SessionService: sessionService,
 		TrackService: sessionService, MemoryService: memoryService,
 		ReadAllMemories: completeMemoryReader(memoryService),
@@ -490,7 +557,7 @@ func TestRunPropagatesBackendErrors(t *testing.T) {
 			memoryService := &failingMemoryService{Service: meminmemory.NewMemoryService()}
 			defer memoryService.Close()
 			test.wrap(memoryService)
-			_, err := Run(context.Background(), Backend{
+			_, err := Run(context.Background(), testRunNamespace, Backend{
 				Name:            "in_memory",
 				SessionService:  sessionService,
 				MemoryService:   memoryService,
@@ -507,7 +574,7 @@ func TestRunAddsAndDeletesAliasedMemory(t *testing.T) {
 	memoryService := meminmemory.NewMemoryService()
 	defer memoryService.Close()
 
-	result, err := Run(context.Background(), Backend{
+	result, err := Run(context.Background(), testRunNamespace, Backend{
 		Name:            "in_memory",
 		SessionService:  sessionService,
 		MemoryService:   memoryService,
@@ -534,7 +601,7 @@ func TestRunRefreshesUpdatedMemoryAlias(t *testing.T) {
 	memoryService := meminmemory.NewMemoryService()
 	defer memoryService.Close()
 
-	result, err := Run(context.Background(), Backend{
+	result, err := Run(context.Background(), testRunNamespace, Backend{
 		Name:            "in_memory",
 		SessionService:  sessionService,
 		MemoryService:   memoryService,
@@ -558,7 +625,7 @@ func TestRunRejectsEmptyUpdatedMemoryID(t *testing.T) {
 	memoryService := &emptyUpdateResultMemoryService{Service: meminmemory.NewMemoryService()}
 	defer memoryService.Close()
 
-	_, err := Run(context.Background(), Backend{
+	_, err := Run(context.Background(), testRunNamespace, Backend{
 		Name:            "empty_update_result",
 		SessionService:  sessionService,
 		MemoryService:   memoryService,
@@ -581,7 +648,7 @@ func TestRunResolvesAddAliasByCanonicalIdentity(t *testing.T) {
 	memoryService := &orderedReadMemoryService{Service: meminmemory.NewMemoryService()}
 	defer memoryService.Close()
 
-	result, err := Run(context.Background(), Backend{
+	result, err := Run(context.Background(), testRunNamespace, Backend{
 		Name:            "ordered_memory",
 		SessionService:  sessionService,
 		MemoryService:   memoryService,
@@ -620,7 +687,7 @@ func TestRunResolvesIdempotentAddAlias(t *testing.T) {
 	memoryService := meminmemory.NewMemoryService()
 	defer memoryService.Close()
 
-	result, err := Run(context.Background(), Backend{
+	result, err := Run(context.Background(), testRunNamespace, Backend{
 		Name:            "in_memory",
 		SessionService:  sessionService,
 		MemoryService:   memoryService,
@@ -803,12 +870,12 @@ func TestRunValidatesStateScopesAndCleansPeer(t *testing.T) {
 	memoryService := meminmemory.NewMemoryService()
 	defer memoryService.Close()
 
-	_, err := Run(ctx, Backend{
+	_, err := Run(ctx, testRunNamespace, Backend{
 		Name: "in_memory", SessionService: sessionService, MemoryService: memoryService,
 		ReadAllMemories: completeMemoryReader(memoryService),
 	}, tc)
 	require.NoError(t, err)
-	peerKey := replayKey(tc.Name)
+	peerKey := replayKey(testRunNamespace, tc.Name)
 	peerKey.SessionID += "-scope-peer"
 	peer, err := sessionService.GetSession(ctx, peerKey)
 	require.NoError(t, err)
@@ -855,7 +922,7 @@ func TestRunCleansStateScopePeerAfterCallerCancellation(t *testing.T) {
 				deleteContextValueKey:        traceKey,
 			}
 
-			_, err := Run(ctx, Backend{
+			_, err := Run(ctx, testRunNamespace, Backend{
 				Name: "scope_fake", SessionService: sessionService, MemoryService: memoryService,
 				ReadAllMemories: completeMemoryReader(memoryService),
 			}, tc)
@@ -871,7 +938,7 @@ func TestRunCleansStateScopePeerAfterCallerCancellation(t *testing.T) {
 			require.True(t, sessionService.deleteContextDeadlineActive)
 			require.Equal(t, traceValue, sessionService.deleteContextValue)
 
-			peerKey := replayKey(tc.Name)
+			peerKey := replayKey(testRunNamespace, tc.Name)
 			peerKey.SessionID += "-scope-peer"
 			peer, getErr := base.GetSession(context.Background(), peerKey)
 			require.NoError(t, getErr)
@@ -962,7 +1029,7 @@ func TestRunRejectsIncorrectStateScopes(t *testing.T) {
 			memoryService := meminmemory.NewMemoryService()
 			defer memoryService.Close()
 
-			_, err := Run(context.Background(), Backend{
+			_, err := Run(context.Background(), testRunNamespace, Backend{
 				Name: "scope_fake", SessionService: sessionService, MemoryService: memoryService,
 				ReadAllMemories: completeMemoryReader(memoryService),
 			}, replayStateScopeCase(strings.ReplaceAll(test.name, " ", "-")))
@@ -1390,7 +1457,7 @@ func TestRunReturnsWrappedSnapshotNormalizationError(t *testing.T) {
 	memoryService := meminmemory.NewMemoryService()
 	defer memoryService.Close()
 
-	_, err := Run(context.Background(), Backend{
+	_, err := Run(context.Background(), testRunNamespace, Backend{
 		Name: "in_memory", SessionService: sessionService,
 		MemoryService: memoryService, ReadAllMemories: completeMemoryReader(memoryService),
 	}, Case{Name: "malformed-event"})
@@ -1583,8 +1650,13 @@ func TestAllowedDiffRulesRequireConcreteSegmentBelowSectionRoot(t *testing.T) {
 	for _, path := range []string{
 		"$", "$*", "$**", "$.*", "$[*]", "*", "**", "***",
 		"$.memory[", "$.memory[abc]", "$.memory..content", "$.memory.content]",
+		`$.summary["*"].*`, `$.summary["**"].***`, `$.summary["\u002a"].*`,
 	} {
-		require.Falsef(t, allowedPathHasConcreteSegment("memory", path), "path=%q", path)
+		section := "memory"
+		if strings.HasPrefix(path, "$.summary") {
+			section = "summary"
+		}
+		require.Falsef(t, allowedPathHasConcreteSegment(section, path), "path=%q", path)
 	}
 	require.False(t, allowedPathHasConcreteSegment("summary", "$.memory[0].content"))
 	for _, test := range []struct {
@@ -1596,6 +1668,9 @@ func TestAllowedDiffRulesRequireConcreteSegmentBelowSectionRoot(t *testing.T) {
 		{section: "memory", path: "$.memory[*].content"},
 		{section: "state", path: "$.state.allowed"},
 		{section: "summary", path: `$.summary["filter]key"]`},
+		{section: "summary", path: `$.summary["*"].summary`},
+		{section: "summary", path: `$.summary[""].summary`},
+		{section: "summary", path: `$.summary["root/*"].*`},
 	} {
 		require.Truef(t, allowedPathHasConcreteSegment(test.section, test.path),
 			"section=%q path=%q", test.section, test.path)
@@ -1622,6 +1697,41 @@ func TestAllowedDiffRulesRequireConcreteSegmentBelowSectionRoot(t *testing.T) {
 	}})
 	require.True(t, partialWildcardEntries[0].Allowed)
 	require.False(t, partialWildcardEntries[1].Allowed)
+}
+
+func TestAllowedDiffRulesRejectWildcardOnlyQuotedSummaryKeys(t *testing.T) {
+	left := Snapshot{Summary: map[string]SummaryEntry{
+		"root/tools/weather": {Summary: "left weather"},
+		"other.domain":       {Summary: "left other"},
+	}}
+	right := Snapshot{Summary: map[string]SummaryEntry{
+		"root/tools/weather": {Summary: "right weather"},
+		"other.domain":       {Summary: "right other"},
+	}}
+	broadRule := []AllowedDiffRule{{
+		Section: "summary", Path: `$.summary["*"].*`,
+		BackendA: "left", BackendB: "right", Reason: "too broad",
+	}}
+	diffs := CompareSnapshots("quoted-wildcard", "session-1", "left", "right", left, right, broadRule)
+	require.Len(t, diffs, 2)
+	for _, diff := range diffs {
+		require.False(t, diff.Allowed, "diff=%+v", diff)
+	}
+
+	literalRule := []AllowedDiffRule{{
+		Section: "summary", Path: `$.summary["root/*"].summary`,
+		BackendA: "left", BackendB: "right", Reason: "known root summary drift",
+	}}
+	diffs = CompareSnapshots("quoted-literal", "session-1", "left", "right", left, right, literalRule)
+	require.Len(t, diffs, 2)
+	allowedByKey := make(map[string]bool, len(diffs))
+	for _, diff := range diffs {
+		key, ok := diff.Context["summary_filter_key"].(string)
+		require.True(t, ok)
+		allowedByKey[key] = diff.Allowed
+	}
+	require.True(t, allowedByKey["root/tools/weather"])
+	require.False(t, allowedByKey["other.domain"])
 }
 
 func TestWildcardMatchHandlesRepeatedAndMissingSegments(t *testing.T) {
