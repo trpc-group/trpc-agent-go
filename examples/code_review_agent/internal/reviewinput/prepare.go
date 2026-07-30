@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -66,7 +67,11 @@ func (p *Preparer) Prepare(ctx context.Context, scope TaskScope, spec Spec) (pre
 	if err != nil {
 		return nil, err
 	}
-	client := gitClient{timeout: p.config.Limits.GitTimeout}
+	client := gitClient{
+		timeout:        p.config.Limits.GitTimeout,
+		maxOutputBytes: p.config.Limits.MaxGitOutputBytes,
+		maxDiffBytes:   p.config.Limits.MaxDiffBytes,
+	}
 	rawDiff, snapshot, cleanup, err := p.loadSources(ctx, resolved, client)
 	if err != nil {
 		return nil, err
@@ -140,7 +145,10 @@ func (p *Preparer) loadSources(
 	client gitClient,
 ) (rawDiff []byte, snapshot string, cleanup func() error, err error) {
 	if resolved.diffFile != "" {
-		rawDiff, err = os.ReadFile(resolved.diffFile)
+		rawDiff, err = readFileLimited(
+			resolved.diffFile,
+			p.config.Limits.MaxDiffBytes,
+		)
 		if err != nil {
 			return nil, "", nil, fmt.Errorf("read diff file: %w", err)
 		}
@@ -153,7 +161,11 @@ func (p *Preparer) loadSources(
 		if absErr != nil {
 			return nil, "", nil, fmt.Errorf("resolve fixture repo: %w", absErr)
 		}
-		snapshot, cleanup, err = createDirectorySnapshot(root, p.config.TempRoot)
+		snapshot, cleanup, err = createDirectorySnapshot(
+			root,
+			p.config.TempRoot,
+			p.config.Limits,
+		)
 		return rawDiff, snapshot, cleanup, err
 	}
 
@@ -167,8 +179,35 @@ func (p *Preparer) loadSources(
 			return nil, "", nil, err
 		}
 	}
-	snapshot, cleanup, err = createGitSnapshot(ctx, client, root, p.config.TempRoot)
+	snapshot, cleanup, err = createGitSnapshot(
+		ctx,
+		client,
+		root,
+		p.config.TempRoot,
+		p.config.Limits,
+	)
 	return rawDiff, snapshot, cleanup, err
+}
+
+func readFileLimited(path string, maxBytes int64) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, maxBytes))
+	if err != nil {
+		return nil, err
+	}
+	var extra [1]byte
+	extraBytes, readErr := file.Read(extra[:])
+	if readErr != nil && readErr != io.EOF {
+		return nil, readErr
+	}
+	if extraBytes > 0 {
+		return nil, fmt.Errorf("%s exceeds the %d-byte limit", path, maxBytes)
+	}
+	return data, nil
 }
 
 // buildWorkspaceBootstrap uses framework-native sources for both inputs: the

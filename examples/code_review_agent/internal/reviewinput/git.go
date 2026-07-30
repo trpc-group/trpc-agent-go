@@ -21,7 +21,9 @@ import (
 )
 
 type gitClient struct {
-	timeout time.Duration
+	timeout        time.Duration
+	maxOutputBytes int64
+	maxDiffBytes   int64
 }
 
 type commandResult struct {
@@ -30,12 +32,37 @@ type commandResult struct {
 	exitCode int
 }
 
+type gitOutputBuffer struct {
+	buffer   bytes.Buffer
+	maxBytes int64
+	exceeded bool
+	cancel   context.CancelFunc
+}
+
+func (b *gitOutputBuffer) Write(data []byte) (int, error) {
+	accepted := len(data)
+	remaining := b.maxBytes - int64(b.buffer.Len())
+	if remaining > 0 {
+		keep := min(int64(len(data)), remaining)
+		_, _ = b.buffer.Write(data[:keep])
+	}
+	if int64(len(data)) > remaining {
+		b.exceeded = true
+		b.cancel()
+	}
+	return accepted, nil
+}
+
 // run treats an ordinary non-zero Git exit as data rather than immediately as
 // a Go error. Callers need to distinguish expected statuses such as
 // `git diff --no-index` returning 1 from genuine command failures.
 func (g gitClient) run(ctx context.Context, dir string, stdin []byte, args ...string) (result commandResult, err error) {
+	defaults := (Limits{}).withDefaults()
 	if g.timeout <= 0 {
-		g.timeout = 30 * time.Second
+		g.timeout = defaults.GitTimeout
+	}
+	if g.maxOutputBytes <= 0 {
+		g.maxOutputBytes = defaults.MaxGitOutputBytes
 	}
 	commandCtx, cancel := context.WithTimeout(ctx, g.timeout)
 	defer cancel()
@@ -44,11 +71,21 @@ func (g gitClient) run(ctx context.Context, dir string, stdin []byte, args ...st
 	if stdin != nil {
 		cmd.Stdin = bytes.NewReader(stdin)
 	}
-	var stdout, stderr bytes.Buffer
+	stdout := gitOutputBuffer{maxBytes: g.maxOutputBytes, cancel: cancel}
+	stderr := gitOutputBuffer{maxBytes: g.maxOutputBytes, cancel: cancel}
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err = cmd.Run()
-	result = commandResult{stdout: stdout.Bytes(), stderr: stderr.Bytes()}
+	result = commandResult{
+		stdout: stdout.buffer.Bytes(),
+		stderr: stderr.buffer.Bytes(),
+	}
+	if stdout.exceeded || stderr.exceeded {
+		return result, fmt.Errorf(
+			"git output exceeds the %d-byte limit",
+			g.maxOutputBytes,
+		)
+	}
 	if err == nil {
 		return result, nil
 	}
@@ -102,7 +139,9 @@ func (g gitClient) collectDiff(ctx context.Context, root string, paths []string)
 		if result.exitCode != 0 {
 			return nil, fmt.Errorf("read Git worktree diff: %s", conciseCommandError(result))
 		}
-		combined.Write(result.stdout)
+		if err := g.appendDiff(&combined, result.stdout); err != nil {
+			return nil, err
+		}
 	}
 
 	untracked, err := g.listUntracked(ctx, root, paths, !hasHead)
@@ -119,12 +158,28 @@ func (g gitClient) collectDiff(ctx context.Context, root string, paths []string)
 		if result.exitCode != 0 && result.exitCode != 1 {
 			return nil, fmt.Errorf("build diff for untracked file %s: %s", rel, conciseCommandError(result))
 		}
-		combined.Write(result.stdout)
+		if err := g.appendDiff(&combined, result.stdout); err != nil {
+			return nil, err
+		}
 	}
 	if len(bytes.TrimSpace(combined.Bytes())) == 0 {
 		return nil, errors.New("Git worktree has no changes in the requested review scope")
 	}
 	return combined.Bytes(), nil
+}
+
+func (g gitClient) appendDiff(combined *bytes.Buffer, data []byte) error {
+	if g.maxDiffBytes <= 0 {
+		g.maxDiffBytes = (Limits{}).withDefaults().MaxDiffBytes
+	}
+	if int64(len(data)) > g.maxDiffBytes-int64(combined.Len()) {
+		return fmt.Errorf(
+			"git diff exceeds the %d-byte limit",
+			g.maxDiffBytes,
+		)
+	}
+	_, _ = combined.Write(data)
+	return nil
 }
 
 // listUntracked normally returns only untracked files. includeTracked is used

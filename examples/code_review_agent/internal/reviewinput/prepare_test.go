@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
@@ -78,6 +79,129 @@ func TestPrepareDiffOnlyBuildsArtifactMessageAndBootstrap(t *testing.T) {
 	}
 	if store.info.SessionID != "task-1" {
 		t.Fatalf("artifact session = %#v", store.info)
+	}
+}
+
+func TestPrepareRejectsOversizedDiffFile(t *testing.T) {
+	diffPath := filepath.Join(t.TempDir(), "change.diff")
+	writeTestFile(t, diffPath, strings.Repeat("x", 65))
+	preparer, err := NewPreparer(
+		&memoryArtifactStore{},
+		redact.New(),
+		Config{Limits: Limits{MaxDiffBytes: 64}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = preparer.Prepare(context.Background(), TaskScope{
+		TaskID: "task-large-diff", AppName: "app", UserID: "user",
+	}, Spec{DiffFile: diffPath})
+	if err == nil || !strings.Contains(err.Error(), "64-byte limit") {
+		t.Fatalf("Prepare error = %v, want diff byte limit", err)
+	}
+}
+
+func TestPrepareRejectsOversizedGitOutput(t *testing.T) {
+	repo := newGitRepo(t)
+	writeTestFile(t, filepath.Join(repo, "go.mod"), "module example.com/review\n\ngo 1.25\n")
+	writeTestFile(t, filepath.Join(repo, "value.go"), "package review\n\nconst Value = 1\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "-c", "user.name=Review Test", "-c", "user.email=review@example.com", "commit", "-m", "base")
+	writeTestFile(t, filepath.Join(repo, "value.go"), "package review\n\nconst Value = \""+strings.Repeat("x", 256)+"\"\n")
+	if diff := runGit(t, repo, "diff", "--binary", "HEAD", "--"); len(diff) <= 64 {
+		t.Fatalf("test Git diff length = %d, want more than 64", len(diff))
+	}
+	_, err := (gitClient{
+		timeout:        time.Second,
+		maxOutputBytes: 64,
+		maxDiffBytes:   1024,
+	}).run(context.Background(), repo, nil, "diff", "--binary", "HEAD", "--")
+	if err == nil {
+		t.Fatal("bounded Git client accepted oversized output")
+	}
+
+	preparer, err := NewPreparer(
+		&memoryArtifactStore{},
+		redact.New(),
+		Config{
+			TempRoot: t.TempDir(),
+			Limits: Limits{
+				MaxDiffBytes:      1024,
+				MaxGitOutputBytes: 64,
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = preparer.Prepare(context.Background(), TaskScope{
+		TaskID: "task-large-git-output", AppName: "app", UserID: "user",
+	}, Spec{RepoPath: repo})
+	if err == nil || !strings.Contains(err.Error(), "git output exceeds the 64-byte limit") {
+		t.Fatalf("Prepare error = %v, want Git output byte limit", err)
+	}
+}
+
+func TestPrepareRejectsOversizedSnapshotFile(t *testing.T) {
+	repo := newGitRepo(t)
+	writeTestFile(t, filepath.Join(repo, "go.mod"), "module example.com/review\n\ngo 1.25\n")
+	writeTestFile(t, filepath.Join(repo, "value.go"), "package review\n\nconst Value = 1\n")
+	writeTestFile(t, filepath.Join(repo, "large.bin"), strings.Repeat("x", 65))
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "-c", "user.name=Review Test", "-c", "user.email=review@example.com", "commit", "-m", "base")
+	writeTestFile(t, filepath.Join(repo, "value.go"), "package review\n\nconst Value = 2\n")
+
+	preparer, err := NewPreparer(
+		&memoryArtifactStore{},
+		redact.New(),
+		Config{
+			TempRoot: t.TempDir(),
+			Limits: Limits{
+				MaxSnapshotFileBytes: 64,
+				MaxSnapshotBytes:     1024,
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = preparer.Prepare(context.Background(), TaskScope{
+		TaskID: "task-large-snapshot-file", AppName: "app", UserID: "user",
+	}, Spec{RepoPath: repo})
+	if err == nil || !strings.Contains(err.Error(), "large.bin exceeds the 64-byte snapshot file limit") {
+		t.Fatalf("Prepare error = %v, want snapshot file byte limit", err)
+	}
+}
+
+func TestPrepareRejectsOversizedSnapshotTotal(t *testing.T) {
+	repo := newGitRepo(t)
+	writeTestFile(t, filepath.Join(repo, "go.mod"), "module example.com/review\n\ngo 1.25\n")
+	writeTestFile(t, filepath.Join(repo, "value.go"), "package review\n\nconst Value = 1\n")
+	writeTestFile(t, filepath.Join(repo, "first.txt"), strings.Repeat("a", 40))
+	writeTestFile(t, filepath.Join(repo, "second.txt"), strings.Repeat("b", 40))
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "-c", "user.name=Review Test", "-c", "user.email=review@example.com", "commit", "-m", "base")
+	writeTestFile(t, filepath.Join(repo, "value.go"), "package review\n\nconst Value = 2\n")
+
+	preparer, err := NewPreparer(
+		&memoryArtifactStore{},
+		redact.New(),
+		Config{
+			TempRoot: t.TempDir(),
+			Limits: Limits{
+				MaxSnapshotFileBytes: 1024,
+				MaxSnapshotBytes:     100,
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = preparer.Prepare(context.Background(), TaskScope{
+		TaskID: "task-large-snapshot", AppName: "app", UserID: "user",
+	}, Spec{RepoPath: repo})
+	if err == nil || !strings.Contains(err.Error(), "100-byte snapshot limit") {
+		t.Fatalf("Prepare error = %v, want snapshot total byte limit", err)
 	}
 }
 

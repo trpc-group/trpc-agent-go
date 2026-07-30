@@ -158,14 +158,17 @@ type ArtifactStore interface {
 	SaveArtifact(context.Context, artifact.SessionInfo, string, *artifact.Artifact) (version int, err error)
 }
 
-// Limits bound model-visible context without limiting the complete masked diff
-// saved to Artifact Service and staged into the workspace.
+// Limits bound model-visible context and untrusted input resources
 type Limits struct {
-	MaxMessageBytes int
-	MaxFiles        int
-	MaxHunks        int
-	MaxHunkBytes    int
-	GitTimeout      time.Duration
+	MaxMessageBytes      int
+	MaxFiles             int
+	MaxHunks             int
+	MaxHunkBytes         int
+	MaxDiffBytes         int64
+	MaxGitOutputBytes    int64
+	MaxSnapshotFileBytes int64
+	MaxSnapshotBytes     int64
+	GitTimeout           time.Duration
 }
 
 // Close releases task-owned temporary snapshot files.
@@ -190,6 +193,18 @@ func (l Limits) withDefaults() Limits {
 	}
 	if l.MaxHunkBytes <= 0 {
 		l.MaxHunkBytes = 4 * 1024
+	}
+	if l.MaxDiffBytes <= 0 {
+		l.MaxDiffBytes = 64 * 1024 * 1024
+	}
+	if l.MaxGitOutputBytes <= 0 {
+		l.MaxGitOutputBytes = 64 * 1024 * 1024
+	}
+	if l.MaxSnapshotFileBytes <= 0 {
+		l.MaxSnapshotFileBytes = 64 * 1024 * 1024
+	}
+	if l.MaxSnapshotBytes <= 0 {
+		l.MaxSnapshotBytes = 512 * 1024 * 1024
 	}
 	if l.GitTimeout <= 0 {
 		l.GitTimeout = 30 * time.Second
