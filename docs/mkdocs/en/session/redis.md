@@ -6,7 +6,7 @@ Redis storage is suitable for production environments and distributed applicatio
 
 - Redis-based persistence for sessions, events, and state
 - Supports Redis Standalone / Sentinel / Cluster deployment modes
-- Independent TTL control for Session, AppState, and UserState
+- Independent TTL control for Session, TrackEvent, AppState, and UserState
 - Optional async persistence to reduce write latency
 - Optional OpenTelemetry tracing
 - Async session summary generation
@@ -28,11 +28,13 @@ Redis storage is suitable for production environments and distributed applicatio
 | --- | --- | --- | --- |
 | `WithSessionEventLimit(limit int)` | `int` | `1000` | Maximum events per session |
 | `WithSessionTTL(ttl time.Duration)` | `time.Duration` | `0` (no expiry) | TTL for session state and events; negative values are treated as 0 |
+| `WithTrackEventTTL(ttl time.Duration)` | `time.Duration` | Inherits SessionTTL | TTL for track events. Non-positive values disable track event expiry |
 | `WithAppStateTTL(ttl time.Duration)` | `time.Duration` | `0` (no expiry) | TTL for app-level state |
 | `WithUserStateTTL(ttl time.Duration)` | `time.Duration` | `0` (no expiry) | TTL for user-level state |
 | `WithKeyPrefix(prefix string)` | `string` | `""` | Redis key prefix; all keys will start with `prefix:`. Useful when multiple apps share one Redis instance |
 | `WithCompatMode(mode CompatMode)` | `CompatMode` | `CompatModeLegacy` | Storage compatibility mode. Options: `CompatModeNone`, `CompatModeLegacy`, `CompatModeTransition`. See [Storage Compatibility Mode (CompatMode)](#storage-compatibility-mode-compatmode) |
 | `WithEnableUserSessionIndex(enable bool)` | `bool` | `false` | Enable the per-user session index for HashIdx. See [User Session Index](#user-session-index) |
+| `WithDisableScriptCache(disable bool)` | `bool` | `false` | Keep `EVALSHA`-first execution by default. When enabled, run Lua scripts via `EVAL` only for backends with unreliable script caches, at the cost of sending the full script body on every call |
 
 **Async Persistence:**
 

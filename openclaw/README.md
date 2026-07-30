@@ -137,10 +137,13 @@ By default, browser navigation blocks:
 - loopback hosts such as `localhost`
 - private-network IPs
 - `file://` URLs
+- search-engine result pages such as Google, Google Scholar,
+  DuckDuckGo, Brave Search, Bing, and Yahoo search pages
 
 You can relax or refine that policy with:
 `allowed_domains`, `blocked_domains`, `allow_loopback`,
-`allow_private_networks`, and `allow_file_urls`.
+`allow_private_networks`, `allow_file_urls`, and
+`allow_search_result_pages`.
 
 Example config:
 

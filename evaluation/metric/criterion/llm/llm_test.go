@@ -109,7 +109,8 @@ func TestTemplateVariableSourceJSONSupportsExpandedFields(t *testing.T) {
   "field": "traceStepOutput",
   "selector": {
     "nodeID": "fetch_match"
-  }
+  },
+  "path": "$.payload.answer"
 }`
 	var source TemplateVariableSource
 	err := json.Unmarshal([]byte(payload), &source)
@@ -118,6 +119,7 @@ func TestTemplateVariableSourceJSONSupportsExpandedFields(t *testing.T) {
 	assert.Equal(t, TemplateVariableFieldTraceStepOutput, source.Field)
 	require.NotNil(t, source.Selector)
 	assert.Equal(t, "fetch_match", source.Selector.NodeID)
+	assert.Equal(t, "$.payload.answer", source.Path)
 	data, err := json.Marshal(source)
 	require.NoError(t, err)
 	assert.JSONEq(t, payload, string(data))
@@ -126,6 +128,32 @@ func TestTemplateVariableSourceJSONSupportsExpandedFields(t *testing.T) {
 func TestTemplateVariableSourceConstantsCoverTemplateEvaluatorSources(t *testing.T) {
 	assert.Equal(t, TemplateVariableField("traceStepInput"), TemplateVariableFieldTraceStepInput)
 	assert.Equal(t, TemplateVariableField("traceStepOutput"), TemplateVariableFieldTraceStepOutput)
+	assert.Equal(t, TemplateVariableScope("metric"), TemplateVariableScopeMetric)
+	assert.Equal(t, TemplateVariableField("rubrics"), TemplateVariableFieldRubrics)
+}
+
+func TestJudgeTemplateOptionsJSONSupportsResponseScorerOptions(t *testing.T) {
+	const payload = `{
+  "responseScorerName": "categorical",
+  "structuredOutputName": "categorical_schema",
+  "responseScorerOptions": {
+    "categories": [
+      { "label": "correct", "score": 1 },
+      { "label": "incorrect", "score": 0 }
+    ]
+  }
+}`
+	var options JudgeTemplateOptions
+	err := json.Unmarshal([]byte(payload), &options)
+	require.NoError(t, err)
+	assert.Equal(t, "categorical_schema", options.StructuredOutputName)
+	require.NotNil(t, options.ResponseScorerOptions)
+	require.Len(t, options.ResponseScorerOptions.Categories, 2)
+	assert.Equal(t, "correct", options.ResponseScorerOptions.Categories[0].Label)
+	assert.Equal(t, 1.0, options.ResponseScorerOptions.Categories[0].Score)
+	data, err := json.Marshal(options)
+	require.NoError(t, err)
+	assert.JSONEq(t, payload, string(data))
 }
 
 func TestTemplateVariableSourceOldJSONShapeRemainsStable(t *testing.T) {

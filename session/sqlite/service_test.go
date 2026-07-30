@@ -586,6 +586,32 @@ func TestSessionSQLite_AppendTrackEvent(t *testing.T) {
 	require.Len(t, got.Tracks[trk].Events, 1)
 }
 
+func TestSessionSQLite_GetTrackEvents_ReadsTrackStorage(t *testing.T) {
+	db, _, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+	svc, err := NewService(db)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "s1"}
+	sess, err := svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	trk := session.Track("t1")
+	require.NoError(t, svc.AppendTrackEvent(ctx, sess, newTrackEvent(trk, 1)))
+	require.NoError(t, svc.AppendTrackEvent(ctx, sess, newTrackEvent(trk, 2)))
+	require.NoError(t, svc.UpdateSessionState(ctx, key, session.StateMap{"tracks": []byte("[]")}))
+	got, err := svc.GetTrackEvents(ctx, key, trk, session.WithEventNum(1))
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Equal(t, trk, got.Track)
+	require.Len(t, got.Events, 1)
+	require.JSONEq(t, "2", string(got.Events[0].Payload))
+	missing, err := svc.GetTrackEvents(ctx, key, "missing")
+	require.NoError(t, err)
+	require.NotNil(t, missing)
+	require.Empty(t, missing.Events)
+}
+
 func TestSessionSQLite_AppendTrackEvent_AsyncPersist(t *testing.T) {
 	db, path, cleanup := openTempSQLiteDB(t)
 	defer cleanup()

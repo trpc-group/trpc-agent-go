@@ -417,6 +417,43 @@ func TestDeleteSession_WithTracks(t *testing.T) {
 	assert.Equal(t, int64(0), n)
 }
 
+func TestDeleteSession_WithRetainedTracksAfterSessionStateExpired(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	createCfg := defaultConfig()
+	createCfg.SessionTTL = time.Second
+	createClient := NewClient(rdb, createCfg)
+	trackTTL := time.Duration(0)
+	appendCfg := createCfg
+	appendCfg.TrackEventTTL = &trackTTL
+	appendClient := NewClient(rdb, appendCfg)
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "retained-track-delete"}
+	_, err := createClient.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	require.NoError(t, appendClient.AppendTrackEvent(ctx, key, &session.TrackEvent{
+		Track:     "tool_calls",
+		Payload:   json.RawMessage(`{"fn":"add"}`),
+		Timestamp: time.Now(),
+	}))
+	stateKey := createClient.sessionStateKey(key)
+	trackKey := createClient.trackKey(key, "tool_calls")
+	trackIndexKey := createClient.trackIndexKey(key)
+	assert.True(t, mr.Exists(stateKey))
+	assert.True(t, mr.Exists(trackKey))
+	assert.True(t, mr.Exists(trackIndexKey))
+	mr.FastForward(2 * time.Second)
+	assert.False(t, mr.Exists(stateKey))
+	got, err := appendClient.GetTrackEvents(ctx, key, []session.Track{"tool_calls"}, 0, time.Time{})
+	require.NoError(t, err)
+	require.Len(t, got["tool_calls"], 1)
+	require.NoError(t, createClient.DeleteSession(ctx, key))
+	got, err = appendClient.GetTrackEvents(ctx, key, []session.Track{"tool_calls"}, 0, time.Time{})
+	require.NoError(t, err)
+	assert.Empty(t, got["tool_calls"])
+	assert.False(t, mr.Exists(trackKey))
+	assert.False(t, mr.Exists(trackIndexKey))
+}
+
 // =============================================================================
 // UpdateSessionState
 // =============================================================================
@@ -729,6 +766,47 @@ func TestAppendTrackEvent(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "ensure track indexed")
 	})
+}
+
+func TestAppendTrackEvent_TrackTTLZeroPersistsTrackKey(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	createCfg := defaultConfig()
+	createCfg.SessionTTL = 10 * time.Second
+	createClient := NewClient(rdb, createCfg)
+	trackTTL := time.Duration(0)
+	appendCfg := createCfg
+	appendCfg.TrackEventTTL = &trackTTL
+	appendClient := NewClient(rdb, appendCfg)
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "track-ttl-zero"}
+	_, err := createClient.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	err = appendClient.AppendTrackEvent(ctx, key, &session.TrackEvent{
+		Track:     "tool_calls",
+		Payload:   json.RawMessage(`{"fn":"add"}`),
+		Timestamp: time.Now(),
+	})
+	require.NoError(t, err)
+	trackKey := createClient.trackKey(key, "tool_calls")
+	trackIndexKey := createClient.trackIndexKey(key)
+	assert.True(t, mr.Exists(trackKey))
+	assert.True(t, mr.Exists(trackIndexKey))
+	assert.Equal(t, time.Duration(0), mr.TTL(trackKey))
+	assert.Equal(t, time.Duration(0), mr.TTL(trackIndexKey))
+}
+
+func TestGetTrackEvents_EmptyAndMissingTracks(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "s1"}
+	empty, err := c.GetTrackEvents(ctx, key, nil, 0, time.Time{})
+	require.NoError(t, err)
+	require.Empty(t, empty)
+	missing, err := c.GetTrackEvents(ctx, key, []session.Track{"missing"}, 0, time.Time{})
+	require.NoError(t, err)
+	require.Contains(t, missing, session.Track("missing"))
+	require.Empty(t, missing["missing"])
 }
 
 func TestUpdateSessionStateCAS_RetriesOnConflict(t *testing.T) {

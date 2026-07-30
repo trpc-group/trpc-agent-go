@@ -35,6 +35,7 @@ import (
 	"time"
 	"unicode"
 
+	openaiopt "github.com/openai/openai-go/option"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/claudecode"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
@@ -312,10 +313,13 @@ const (
 		"browser only when a page requires JavaScript rendering, " +
 		"interaction, download handling, screenshots, or visual " +
 		"verification; do not drive Google, Bing, or DuckDuckGo " +
-		"result pages through browser when a search tool is " +
-		"available. If a public site repeatedly blocks access " +
+		"result pages, Google Scholar, Brave Search, or other " +
+		"search-engine result pages through browser when a search " +
+		"tool is available. If a public site repeatedly blocks access " +
 		"with sign-in, bot-check, CAPTCHA, or anti-automation " +
-		"errors and the user has not provided credentials, stop " +
+		"errors, Cloudflare or `Just a moment` challenges, or " +
+		"unusual traffic warnings and the user has not provided " +
+		"credentials, stop " +
 		"retrying that blocked path; use search, fetch, metadata, " +
 		"or the evidence already available to complete the task or " +
 		"state the exact blocker. When searches return no useful " +
@@ -490,7 +494,14 @@ const (
 		"Do not use browser as a substitute for web search or " +
 		"fetching known static URLs; if a worker needs those " +
 		"capabilities but they are unavailable, return the exact " +
-		"missing search/fetch blocker. " +
+		"missing search/fetch blocker. Do not use browser to drive " +
+		"DuckDuckGo, Google, Google Scholar, Brave Search, Bing, " +
+		"or other search-engine result pages when search or fetch " +
+		"tools are available. If browser content shows a CAPTCHA, " +
+		"Cloudflare or `Just a moment` challenge, unusual traffic " +
+		"warning, bot check, or anti-automation page, treat that " +
+		"route as blocked and switch tools or sources instead of " +
+		"waiting, screenshotting, or retrying it. " +
 		"Browser snapshots are for current page structure and " +
 		"interactive state, not bulk extraction of long static " +
 		"documents; when static page text is needed, prefer " +
@@ -512,10 +523,14 @@ const (
 
 	defaultExecResultOutputChars = 20_000
 
-	deepSeekAPIHost = "api.deepseek.com"
-	qwenAPIHost     = "dashscope.aliyuncs.com"
-	hunyuanAPIHost  = "api.hunyuan.cloud.tencent.com"
-	glmAPIHost      = "open.bigmodel.cn"
+	deepSeekAPIHost  = "api.deepseek.com"
+	qwenAPIHost      = "dashscope.aliyuncs.com"
+	hunyuanAPIHost   = "api.hunyuan.cloud.tencent.com"
+	glmAPIHost       = "open.bigmodel.cn"
+	miniMaxAPIHost   = "api.minimax.io"
+	miniMaxCNAPIHost = "api.minimaxi.com"
+	kimiAPIHost      = "api.moonshot.ai"
+	kimiCNAPIHost    = "api.moonshot.cn"
 
 	openAIAPIKeyEnvName  = "OPENAI_API_KEY"
 	openAIBaseURLEnvName = "OPENAI_BASE_URL"
@@ -800,6 +815,11 @@ type Runtime struct {
 	evolutionService  evolution.Service
 	toolSets          []tool.ToolSet
 	telemetryShutdown func(context.Context) error
+
+	modelCallBudgetLimit          int
+	modelCallBudgetFinalizeOnLast bool
+	modelCallBudgetDeadlineWindow time.Duration
+	modelCallBudgetFinalRequest   modelCallBudgetFinalRequestConfig
 }
 
 // Gateway provides the HTTP handler and routes served by OpenClaw.
@@ -1171,6 +1191,7 @@ func NewRuntimeWithOptions(
 		opts.HostExecDefaultTimeout,
 		opts.HostExecMaxTimeout,
 		opts.HostExecMaxYield,
+		opts.HostExecMaxIdleWait,
 	)
 	extraTools := memoryServiceTools(memSvc)
 	extraTools = append(extraTools, openClawTools.tools...)
@@ -1208,8 +1229,10 @@ func NewRuntimeWithOptions(
 			EnableContextCompaction: opts.EnableContextCompaction,
 			ContextCompactionOversizedToolResultMaxTokens: opts.
 				ContextCompactionOversizedToolResultMaxTokens,
-			MaxHistoryRuns:        opts.MaxHistoryRuns,
-			MaxLLMCalls:           opts.MaxLLMCalls,
+			MaxHistoryRuns: opts.MaxHistoryRuns,
+			MaxLLMCalls:    opts.MaxLLMCalls,
+			DeadlineFinalizationWindow: opts.
+				DeadlineFinalizationWindow,
 			MaxToolIterations:     opts.MaxToolIterations,
 			PreloadMemory:         opts.PreloadMemory,
 			GenerationConfig:      opts.GenerationConfig,
@@ -1298,6 +1321,12 @@ func NewRuntimeWithOptions(
 		prompts.Instruction,
 		prompts.SystemPrompt,
 	)
+	rt.modelCallBudgetLimit = opts.MaxLLMCalls
+	rt.modelCallBudgetFinalizeOnLast = opts.FinalizeBeforeMaxLLMCalls
+	rt.modelCallBudgetDeadlineWindow = opts.DeadlineFinalizationWindow
+	rt.modelCallBudgetFinalRequest = modelCallBudgetFinalRequestFromOptions(
+		opts,
+	)
 	rt.toolSets = toolSets
 	rt.tools = runtimeTools
 	rt.skillsWatch = skillsWatch
@@ -1370,6 +1399,9 @@ func NewRuntimeWithOptions(
 	gwOpts = appendModelCallBudgetGatewayOption(
 		gwOpts,
 		opts.MaxLLMCalls,
+		opts.FinalizeBeforeMaxLLMCalls,
+		opts.DeadlineFinalizationWindow,
+		modelCallBudgetFinalRequestFromOptions(opts),
 	)
 	if langfuseRT != nil && langfuseRT.runOptionResolver != nil {
 		gwOpts = append(
@@ -1574,6 +1606,18 @@ func (r *Runtime) Run(
 ) (<-chan *event.Event, error) {
 	if r == nil || r.runner == nil {
 		return nil, errors.New("openclaw runtime runner is not configured")
+	}
+	defaultRunOpts := modelCallBudgetRunOptions(
+		r.modelCallBudgetLimit,
+		r.modelCallBudgetFinalizeOnLast,
+		r.modelCallBudgetDeadlineWindow,
+		r.modelCallBudgetFinalRequest,
+	)
+	if len(defaultRunOpts) > 0 {
+		merged := make([]agent.RunOption, 0, len(defaultRunOpts)+len(runOpts))
+		merged = append(merged, defaultRunOpts...)
+		merged = append(merged, runOpts...)
+		runOpts = merged
 	}
 	return r.runner.Run(ctx, userID, sessionID, message, runOpts...)
 }
@@ -1795,6 +1839,7 @@ func run(
 		opts.HostExecDefaultTimeout,
 		opts.HostExecMaxTimeout,
 		opts.HostExecMaxYield,
+		opts.HostExecMaxIdleWait,
 	)
 	extraTools := memoryServiceTools(memSvc)
 	extraTools = append(extraTools, openClawTools.tools...)
@@ -1844,8 +1889,10 @@ func run(
 			EnableContextCompaction: opts.EnableContextCompaction,
 			ContextCompactionOversizedToolResultMaxTokens: opts.
 				ContextCompactionOversizedToolResultMaxTokens,
-			MaxHistoryRuns:        opts.MaxHistoryRuns,
-			MaxLLMCalls:           opts.MaxLLMCalls,
+			MaxHistoryRuns: opts.MaxHistoryRuns,
+			MaxLLMCalls:    opts.MaxLLMCalls,
+			DeadlineFinalizationWindow: opts.
+				DeadlineFinalizationWindow,
 			MaxToolIterations:     opts.MaxToolIterations,
 			PreloadMemory:         opts.PreloadMemory,
 			GenerationConfig:      opts.GenerationConfig,
@@ -2000,6 +2047,9 @@ func run(
 	gwOpts = appendModelCallBudgetGatewayOption(
 		gwOpts,
 		opts.MaxLLMCalls,
+		opts.FinalizeBeforeMaxLLMCalls,
+		opts.DeadlineFinalizationWindow,
+		modelCallBudgetFinalRequestFromOptions(opts),
 	)
 	if langfuseRT != nil && langfuseRT.runOptionResolver != nil {
 		gwOpts = append(
@@ -2598,6 +2648,11 @@ func validateAgentRunOptions(agentType string, opts runOptions) error {
 			"claude-code agent does not support max-llm-calls",
 		)
 	}
+	if opts.DeadlineFinalizationWindow != 0 {
+		return errors.New(
+			"claude-code agent does not support deadline-finalization-window",
+		)
+	}
 	if opts.PreloadMemory != 0 {
 		return errors.New(
 			"claude-code agent does not support preload-memory",
@@ -2923,6 +2978,7 @@ func newAgent(
 		callbacks,
 		os.Getenv(envBlockedToolArgumentSubstrings),
 	)
+	registerBlockedRouteToolCallback(callbacks)
 	callbacks.RegisterToolResultMessages(openClawToolResultMessages)
 
 	exec := cfg.codeExecutor
@@ -3375,6 +3431,7 @@ type agentConfig struct {
 	ContextCompactionOversizedToolResultMaxTokens int
 	MaxHistoryRuns                                int
 	MaxLLMCalls                                   int
+	DeadlineFinalizationWindow                    time.Duration
 	MaxToolIterations                             int
 	PreloadMemory                                 int
 	GenerationConfig                              *model.GenerationConfig
@@ -3505,6 +3562,7 @@ func buildOpenClawTools(
 	hostExecDefaultTimeout time.Duration,
 	hostExecMaxTimeout time.Duration,
 	hostExecMaxYield time.Duration,
+	hostExecMaxIdleWait time.Duration,
 ) openClawToolsBundle {
 	if !enabled {
 		return openClawToolsBundle{}
@@ -3524,7 +3582,11 @@ func buildOpenClawTools(
 
 	var mgr *octool.Manager
 	var execTool tool.Tool
-	commandPolicy := octool.NewChatCommandSafetyPolicy()
+	commandPolicy := octool.NewChatCommandSafetyPolicyWithOptions(
+		octool.ChatCommandSafetyPolicyOptions{
+			MaxIdleWait: hostExecMaxIdleWait,
+		},
+	)
 	outputRedactor := octool.NewChatCommandOutputRedactor()
 	if sandboxExecEngine != nil {
 		execTool = octool.NewSandboxExecCommandToolWithPolicy(
@@ -3808,6 +3870,25 @@ func newOpenAIModel(spec registry.ModelSpec) (model.Model, error) {
 	if apiKey := strings.TrimSpace(spec.APIKey); apiKey != "" {
 		opts = append(opts, openai.WithAPIKey(apiKey))
 	}
+	if spec.Timeout > 0 {
+		opts = append(
+			opts,
+			openai.WithHTTPClientOptions(
+				openai.WithHTTPClientTimeout(spec.Timeout),
+			),
+			openai.WithOpenAIOptions(
+				openaiopt.WithRequestTimeout(spec.Timeout),
+			),
+		)
+	}
+	if spec.MaxRetries != nil {
+		opts = append(
+			opts,
+			openai.WithOpenAIOptions(
+				openaiopt.WithMaxRetries(*spec.MaxRetries),
+			),
+		)
+	}
 	if len(spec.Headers) > 0 {
 		opts = append(opts, openai.WithHeaders(spec.Headers))
 	}
@@ -3846,11 +3927,27 @@ func modelFromOptions(opts runOptions) (model.Model, error) {
 		APIKey:                       apiKey,
 		OpenAIVariant:                opts.OpenAIVariant,
 		OpenAITextOnlyMessageContent: opts.OpenAITextOnlyMessageContent,
-		Headers:                      headers,
-		DebugRecorderEnabled:         opts.DebugRecorderEnabled,
-		Config:                       opts.ModelConfig,
+		Timeout:                      opts.OpenAITimeout,
+		MaxRetries: openAIMaxRetriesPtr(
+			opts.OpenAIMaxRetries,
+			opts.OpenAIMaxRetriesSet,
+		),
+		Headers:              headers,
+		DebugRecorderEnabled: opts.DebugRecorderEnabled,
+		Config:               opts.ModelConfig,
 	}
-	return f(spec)
+	mdl, err := f(spec)
+	if err != nil {
+		return nil, err
+	}
+	return newModelTimeoutModel(mdl, opts.OpenAITimeout), nil
+}
+
+func openAIMaxRetriesPtr(maxRetries int, set bool) *int {
+	if !set || maxRetries < 0 {
+		return nil
+	}
+	return &maxRetries
 }
 
 func resolveOpenAIHeaders(
@@ -3993,7 +4090,9 @@ func parseOpenAIVariant(
 		openai.VariantDeepSeek,
 		openai.VariantHunyuan,
 		openai.VariantQwen,
-		openai.VariantGLM:
+		openai.VariantGLM,
+		openai.VariantMiniMax,
+		openai.VariantKimi:
 		return variant, nil
 	default:
 		return "", fmt.Errorf("unsupported openai variant: %s", raw)
@@ -4031,6 +4130,42 @@ func modelCompatibilityRunOptions(
 	}
 	return []agent.RunOption{
 		agent.WithToolCallArgumentsJSONRepairEnabled(true),
+		agent.WithToolCallTextRepairEnabled(true),
+	}
+}
+
+const defaultReasoningFinalizationApproxRunesPerToken = 1.0
+
+func modelCallBudgetFinalRequestFromOptions(
+	opts runOptions,
+) modelCallBudgetFinalRequestConfig {
+	cfg := modelCallBudgetFinalRequestConfig{
+		MaxInputTokens: opts.DeadlineFinalizationMaxInputTokens,
+	}
+	if strings.TrimSpace(opts.ModelMode) != modeOpenAI {
+		return cfg
+	}
+	if opts.DeadlineFinalizationWindow <= 0 {
+		return cfg
+	}
+	variant, err := parseOpenAIVariant(opts.OpenAIVariant, opts.OpenAIBaseURL)
+	if err != nil {
+		return cfg
+	}
+	switch variant {
+	case openai.VariantDeepSeek,
+		openai.VariantHunyuan,
+		openai.VariantQwen,
+		openai.VariantGLM:
+		cfg.DisableThinking = true
+		cfg.DropReasoningContent = true
+		if cfg.ApproxRunesPerToken <= 0 {
+			cfg.ApproxRunesPerToken =
+				defaultReasoningFinalizationApproxRunesPerToken
+		}
+		return cfg
+	default:
+		return cfg
 	}
 }
 
@@ -4048,6 +4183,12 @@ func inferOpenAIVariant(baseURL string) openai.Variant {
 		return openai.VariantHunyuan
 	case strings.EqualFold(host, glmAPIHost):
 		return openai.VariantGLM
+	case strings.EqualFold(host, miniMaxAPIHost),
+		strings.EqualFold(host, miniMaxCNAPIHost):
+		return openai.VariantMiniMax
+	case strings.EqualFold(host, kimiAPIHost),
+		strings.EqualFold(host, kimiCNAPIHost):
+		return openai.VariantKimi
 	default:
 		return openai.VariantOpenAI
 	}

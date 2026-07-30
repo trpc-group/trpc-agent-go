@@ -625,6 +625,11 @@ func (at *Tool) childInvocationOptions(
 	if parentInv == nil {
 		return invocationOpts
 	}
+	invocationOpts = append(invocationOpts, func(inv *agent.Invocation) {
+		runOptions := inv.RunOptions
+		clearInheritedToolRunOptions(&runOptions)
+		inv.RunOptions = runOptions
+	})
 	if at.hasPinnedRunOptions() {
 		invocationOpts = append(invocationOpts, func(inv *agent.Invocation) {
 			runOptions := inv.RunOptions
@@ -641,6 +646,16 @@ func (at *Tool) childInvocationOptions(
 		)
 	}
 	return invocationOpts
+}
+
+func clearInheritedToolRunOptions(runOptions *agent.RunOptions) {
+	if runOptions == nil {
+		return
+	}
+	runOptions.ToolFilter = nil
+	runOptions.AdditionalTools = nil
+	runOptions.ExternalTools = nil
+	runOptions.ExternalToolNames = nil
 }
 
 func (at *Tool) hasPinnedRunOptions() bool {

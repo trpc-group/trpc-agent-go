@@ -404,22 +404,26 @@ return 1
 // KEYS[1] = trkdata key (Hash, field=eventID value=TrackEvent JSON, field="_seq" = counter)
 // KEYS[2] = trkidx:time key (ZSet, member=eventID, score=timestamp)
 // KEYS[3] = sessionMeta key (String, for existence check and track registration)
+// KEYS[4] = trkidx:names key (Set, member=trackName)
 // ARGV[1] = TrackEvent JSON
 // ARGV[2] = timestamp (UnixNano)
 // ARGV[3] = TTL (seconds, 0 = no TTL)
 // ARGV[4] = fallback tracks JSON array
-// ARGV[5] = track name to register
+// ARGV[5] = track TTL override set (1 or 0)
+// ARGV[6] = track name to register
 // Returns: generated eventID (integer) on success, 0 if session not found.
 var luaAppendTrackEvent = redis.NewScript(`
 local dataKey = KEYS[1]
 local idxKey = KEYS[2]
 local metaKey = KEYS[3]
+local trackNamesKey = KEYS[4]
 
 local payload = ARGV[1]
 local ts = tonumber(ARGV[2])
 local ttl = tonumber(ARGV[3])
 local fallbackTracksJSON = ARGV[4]
-local trackName = ARGV[5]
+local trackTTLSet = tonumber(ARGV[5]) == 1
+local trackName = ARGV[6]
 
 local function setPreserveTTL(key, value)
     local ttlMs = redis.call('PTTL', key)
@@ -544,6 +548,7 @@ local id = redis.call('HINCRBY', dataKey, '_seq', 1)
 -- Store event data and time index
 redis.call('HSET', dataKey, id, payload)
 redis.call('ZADD', idxKey, ts, id)
+redis.call('SADD', trackNamesKey, trackName)
 
 -- Update session meta's state.tracks from the latest meta value inside this
 -- script, so concurrent metadata writes do not force WATCH retries or drop the
@@ -555,6 +560,11 @@ setPreserveTTL(metaKey, cjson.encode(meta))
 if ttl > 0 then
     redis.call('EXPIRE', dataKey, ttl)
     redis.call('EXPIRE', idxKey, ttl)
+    redis.call('EXPIRE', trackNamesKey, ttl)
+elseif trackTTLSet then
+    redis.call('PERSIST', dataKey)
+    redis.call('PERSIST', idxKey)
+    redis.call('PERSIST', trackNamesKey)
 end
 
 return id

@@ -16,6 +16,7 @@ import (
 	"image/color"
 	"image/png"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -234,17 +235,21 @@ func TestRunOCRTimeout(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	cmd := writeShellScript(t, dir, "tesseract-slow", `
+	script := writeShellScript(t, dir, "tesseract-slow", `
 sleep 1
 `)
+	// Invoke the fresh script through sh to avoid Linux ETXTBSY races when a
+	// newly written file is executed directly.
+	shell, err := exec.LookPath("sh")
+	require.NoError(t, err)
 
 	tool, err := newInspector(Config{
 		AllowedDirs:      []string{dir},
-		TesseractCommand: cmd,
+		TesseractCommand: shell,
 		Timeout:          time.Millisecond,
 	})
 	require.NoError(t, err)
-	_, err = tool.runOCR(context.Background(), "sample.png", inspectRequest{})
+	_, err = tool.runOCR(context.Background(), script, inspectRequest{})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "timed out")
 }
@@ -350,6 +355,177 @@ func TestResolvePathRequiresPath(t *testing.T) {
 	_, err = tool.resolvePath(" ")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "path is required")
+}
+
+func TestResolvePathCorrectsDuplicatedAttachmentRoot(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	attachmentID := "attachment-12345"
+	actual := filepath.Join(root, attachmentID, attachmentID+".png")
+	require.NoError(t, os.MkdirAll(filepath.Dir(actual), 0o755))
+	writeTestPNG(t, actual, image.Rect(0, 0, 1, 1))
+
+	tool, err := newInspector(Config{AllowedDirs: []string{root}})
+	require.NoError(t, err)
+	raw := filepath.Join(root, attachmentID, attachmentID, attachmentID+".png")
+	got, err := tool.resolvePath(raw)
+	require.NoError(t, err)
+	require.Equal(t, actual, got)
+}
+
+func TestResolvePathCorrectsDuplicatedAllowedDirBase(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	attachmentID := "attachment-12345"
+	allowed := filepath.Join(root, attachmentID)
+	actual := filepath.Join(allowed, attachmentID+".png")
+	require.NoError(t, os.MkdirAll(filepath.Dir(actual), 0o755))
+	writeTestPNG(t, actual, image.Rect(0, 0, 1, 1))
+
+	tool, err := newInspector(Config{AllowedDirs: []string{allowed}})
+	require.NoError(t, err)
+	raw := filepath.Join(allowed, attachmentID, attachmentID+".png")
+	got, err := tool.resolvePath(raw)
+	require.NoError(t, err)
+	require.Equal(t, actual, got)
+}
+
+func TestResolvePathCorrectsDuplicatedPathThroughAllowedDirSymlink(t *testing.T) {
+	t.Parallel()
+
+	realRoot := t.TempDir()
+	aliasParent := t.TempDir()
+	aliasRoot := filepath.Join(aliasParent, "allowed-link")
+	require.NoError(t, os.Symlink(realRoot, aliasRoot))
+	attachmentID := "attachment-12345"
+	actual := filepath.Join(realRoot, attachmentID, attachmentID+".png")
+	require.NoError(t, os.MkdirAll(filepath.Dir(actual), 0o755))
+	writeTestPNG(t, actual, image.Rect(0, 0, 1, 1))
+
+	tool, err := newInspector(Config{AllowedDirs: []string{aliasRoot}})
+	require.NoError(t, err)
+	raw := filepath.Join(
+		aliasRoot,
+		attachmentID,
+		attachmentID,
+		attachmentID+".png",
+	)
+	got, err := tool.resolvePath(raw)
+	require.NoError(t, err)
+	require.Equal(t, actual, got)
+}
+
+func TestResolvePathCorrectsDuplicatedRelativeAttachment(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	attachmentID := "attachment-12345"
+	actual := filepath.Join(root, attachmentID, attachmentID+".png")
+	require.NoError(t, os.MkdirAll(filepath.Dir(actual), 0o755))
+	writeTestPNG(t, actual, image.Rect(0, 0, 1, 1))
+
+	tool, err := newInspector(Config{AllowedDirs: []string{root}})
+	require.NoError(t, err)
+	raw := filepath.Join(attachmentID, attachmentID, attachmentID+".png")
+	got, err := tool.resolvePath(raw)
+	require.NoError(t, err)
+	require.Equal(t, actual, got)
+}
+
+func TestResolvePathRejectsDuplicatedSymlinkEscape(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	outside := t.TempDir()
+	attachmentID := "attachment-12345"
+	inside := filepath.Join(root, attachmentID, attachmentID+".png")
+	outsidePath := filepath.Join(outside, attachmentID+".png")
+	writeTestPNG(t, outsidePath, image.Rect(0, 0, 1, 1))
+	require.NoError(t, os.MkdirAll(filepath.Dir(inside), 0o755))
+	require.NoError(t, os.Symlink(outsidePath, inside))
+
+	tool, err := newInspector(Config{AllowedDirs: []string{root}})
+	require.NoError(t, err)
+	raw := filepath.Join(root, attachmentID, attachmentID, attachmentID+".png")
+	_, err = tool.resolvePath(raw)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "outside allowed_dirs")
+}
+
+func TestResolvePathRejectsAmbiguousDuplicatedCandidates(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	allowed := filepath.Join(root, "attachment")
+	first := filepath.Join(allowed, "b", "b", "image.png")
+	second := filepath.Join(allowed, "attachment", "b", "image.png")
+	require.NoError(t, os.MkdirAll(filepath.Dir(first), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Dir(second), 0o755))
+	writeTestPNG(t, first, image.Rect(0, 0, 1, 1))
+	writeTestPNG(t, second, image.Rect(0, 0, 1, 1))
+
+	tool, err := newInspector(Config{AllowedDirs: []string{allowed}})
+	require.NoError(t, err)
+	raw := filepath.Join(allowed, "attachment", "b", "b", "image.png")
+	_, err = tool.resolvePath(raw)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "multiple corrected paths")
+}
+
+func TestResolvePathRejectsDuplicatedCandidatesAcrossAllowedDirs(t *testing.T) {
+	t.Parallel()
+
+	firstRoot := t.TempDir()
+	secondRoot := t.TempDir()
+	attachmentID := "attachment-12345"
+	first := filepath.Join(firstRoot, attachmentID, attachmentID+".png")
+	second := filepath.Join(secondRoot, attachmentID, attachmentID+".png")
+	require.NoError(t, os.MkdirAll(filepath.Dir(first), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Dir(second), 0o755))
+	writeTestPNG(t, first, image.Rect(0, 0, 1, 1))
+	writeTestPNG(t, second, image.Rect(0, 0, 1, 1))
+
+	tool, err := newInspector(Config{AllowedDirs: []string{
+		firstRoot,
+		secondRoot,
+	}})
+	require.NoError(t, err)
+	raw := filepath.Join(
+		attachmentID,
+		attachmentID,
+		attachmentID+".png",
+	)
+	_, err = tool.resolvePath(raw)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "multiple corrected paths")
+}
+
+func TestDuplicatedAllowedPathCandidatesRejectsNonDuplicatedPaths(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	require.Empty(t, duplicatedAllowedPathCandidates(root, root))
+	require.Empty(t, duplicatedAllowedPathCandidates(filepath.Dir(root), root))
+	require.Empty(t, duplicatedAllowedPathCandidates(
+		filepath.Join(root, "single"),
+		root,
+	))
+}
+
+func TestDuplicatedAllowedPathCandidatesBoundsLongInput(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	parts := make([]string, maxDuplicatePathParts+1)
+	for idx := range parts {
+		parts[idx] = "duplicate"
+	}
+	require.Empty(t, duplicatedAllowedPathCandidates(
+		filepath.Join(append([]string{root}, parts...)...),
+		root,
+	))
 }
 
 func TestInspectRejectsSymlinkEscapeFromAllowedDirs(t *testing.T) {

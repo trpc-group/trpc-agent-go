@@ -32,8 +32,9 @@ func (c *Client) AppendTrackEvent(ctx context.Context, key session.Key, trackEve
 	}
 
 	ttlSeconds := int64(0)
-	if c.cfg.SessionTTL > 0 {
-		ttlSeconds = int64(c.cfg.SessionTTL.Seconds())
+	trackTTL := c.cfg.effectiveTrackEventTTL()
+	if trackTTL > 0 {
+		ttlSeconds = ttlSecondsCeil(trackTTL)
 	}
 
 	track := trackEvent.Track
@@ -41,17 +42,18 @@ func (c *Client) AppendTrackEvent(ctx context.Context, key session.Key, trackEve
 		c.keys.TrackDataKey(key, track),
 		c.keys.TrackTimeIndexKey(key, track),
 		c.keys.SessionMetaKey(key),
+		c.keys.TrackIndexKey(key),
 	}
-	result, err := luaAppendTrackEvent.Eval(
-		ctx,
-		c.client,
-		keys,
+	args := []any{
 		string(eventJSON),
 		trackEvent.Timestamp.UnixNano(),
 		ttlSeconds,
 		string(tracksState),
+		boolToInt(c.cfg.TrackEventTTL != nil),
 		string(track),
-	).Int64()
+	}
+
+	result, err := c.runScript(ctx, luaAppendTrackEvent, keys, args...).Int64()
 	if err != nil {
 		return fmt.Errorf("append track event: %w", err)
 	}
@@ -59,6 +61,17 @@ func (c *Client) AppendTrackEvent(ctx context.Context, key session.Key, trackEve
 		return fmt.Errorf("session not found")
 	}
 	return nil
+}
+
+func ttlSecondsCeil(ttl time.Duration) int64 {
+	if ttl <= 0 {
+		return 0
+	}
+	seconds := ttl / time.Second
+	if ttl%time.Second != 0 {
+		seconds++
+	}
+	return int64(seconds)
 }
 
 // GetTrackEvents retrieves track events for a session using Hash+ZSet structure.
@@ -101,7 +114,7 @@ func (c *Client) loadTrackEventsViaLua(
 	minScore, maxScore string,
 	limit int,
 ) ([]session.TrackEvent, error) {
-	rawEvents, err := luaLoadTrackEvents.Run(ctx, c.client,
+	rawEvents, err := c.runScript(ctx, luaLoadTrackEvents,
 		[]string{
 			c.keys.TrackDataKey(key, track),
 			c.keys.TrackTimeIndexKey(key, track),

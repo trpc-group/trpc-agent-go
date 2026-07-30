@@ -136,6 +136,66 @@ func TestClient_AppendTrackEvent_MergesTrackState(t *testing.T) {
 	assert.ElementsMatch(t, []session.Track{"alpha", "beta"}, tracks)
 }
 
+func TestClient_AppendTrackEvent_TrackTTLZeroPersistsTrackKeys(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	createCfg := defaultConfig()
+	createCfg.SessionTTL = 10 * time.Second
+	createClient := NewClient(rdb, createCfg)
+	trackTTL := time.Duration(0)
+	appendCfg := createCfg
+	appendCfg.TrackEventTTL = &trackTTL
+	appendClient := NewClient(rdb, appendCfg)
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "trk-ttl-zero"}
+	_, err := createClient.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	tracksJSON, err := json.Marshal([]string{"alpha"})
+	require.NoError(t, err)
+	err = appendClient.AppendTrackEvent(ctx, key, &session.TrackEvent{
+		Track:     "alpha",
+		Payload:   json.RawMessage(`"payload"`),
+		Timestamp: time.Now(),
+	}, tracksJSON)
+	require.NoError(t, err)
+	trackDataKey := createClient.keys.TrackDataKey(key, "alpha")
+	trackTimeIndexKey := createClient.keys.TrackTimeIndexKey(key, "alpha")
+	trackNamesKey := createClient.keys.TrackIndexKey(key)
+	assert.True(t, mr.Exists(trackDataKey))
+	assert.True(t, mr.Exists(trackTimeIndexKey))
+	assert.True(t, mr.Exists(trackNamesKey))
+	assert.Equal(t, time.Duration(0), mr.TTL(trackDataKey))
+	assert.Equal(t, time.Duration(0), mr.TTL(trackTimeIndexKey))
+	assert.Equal(t, time.Duration(0), mr.TTL(trackNamesKey))
+}
+
+func TestClient_AppendTrackEvent_SubSecondTrackTTLExpiresTrackKeys(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	createCfg := defaultConfig()
+	createClient := NewClient(rdb, createCfg)
+	trackTTL := 500 * time.Millisecond
+	appendCfg := createCfg
+	appendCfg.TrackEventTTL = &trackTTL
+	appendClient := NewClient(rdb, appendCfg)
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "trk-ttl-sub-second"}
+	_, err := createClient.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	tracksJSON, err := json.Marshal([]string{"alpha"})
+	require.NoError(t, err)
+	err = appendClient.AppendTrackEvent(ctx, key, &session.TrackEvent{
+		Track:     "alpha",
+		Payload:   json.RawMessage(`"payload"`),
+		Timestamp: time.Now(),
+	}, tracksJSON)
+	require.NoError(t, err)
+	trackDataKey := createClient.keys.TrackDataKey(key, "alpha")
+	trackTimeIndexKey := createClient.keys.TrackTimeIndexKey(key, "alpha")
+	trackNamesKey := createClient.keys.TrackIndexKey(key)
+	assert.Equal(t, time.Second, mr.TTL(trackDataKey))
+	assert.Equal(t, time.Second, mr.TTL(trackTimeIndexKey))
+	assert.Equal(t, time.Second, mr.TTL(trackNamesKey))
+}
+
 func TestClient_GetTrackEvents(t *testing.T) {
 	_, rdb := setupMiniredis(t)
 	c := NewClient(rdb, defaultConfig())

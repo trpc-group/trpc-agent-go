@@ -186,6 +186,7 @@ func (t *translator) Translate(ctx context.Context, event *agentevent.Event) ([]
 		events = append(events, textMessageEvents...)
 	}
 	if rsp.IsToolCallResponse() {
+		events = append(events, t.closeTextStreamsBeforeToolEvent()...)
 		toolCallEvents, err := t.toolCallEvent(rsp)
 		if err != nil {
 			return nil, err
@@ -200,6 +201,7 @@ func (t *translator) Translate(ctx context.Context, event *agentevent.Event) ([]
 			}
 			events = append(events, toolResultActivityEvents...)
 		} else {
+			events = append(events, t.closeTextStreamsBeforeToolEvent()...)
 			toolResultEvents, err := t.toolResultEvent(rsp, event.ID)
 			if err != nil {
 				return nil, err

@@ -16,6 +16,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -68,15 +69,17 @@ type StagedInput struct {
 }
 
 // StageConversationFiles materializes conversation file inputs into
-// work/inputs/ for the current invocation workspace.
+// work/inputs/ for the current invocation workspace. Ordinary best-effort
+// failures are returned as warnings; ErrWorkspaceStale remains a typed error so
+// callers can invalidate the exact workspace handle before deciding to retry.
 func StageConversationFiles(
 	ctx context.Context,
 	eng codeexecutor.Engine,
 	ws codeexecutor.Workspace,
-) ([]StagedInput, []string) {
+) ([]StagedInput, []string, error) {
 	inv, ok := agent.InvocationFromContext(ctx)
 	if !ok || inv == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	files := filesFromSession(inv.Session)
@@ -84,26 +87,30 @@ func StageConversationFiles(
 		files = append(files, msgFiles...)
 	}
 	if len(files) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	var staged []StagedInput
 	var warnings []string
+	var stageErr error
 	if err := codeexecutor.WithWorkspaceMetadataLock(
 		ctx,
 		ws.Path,
 		func(ctx context.Context) error {
-			staged, warnings = stageConversationFilesLocked(
+			staged, warnings, stageErr = stageConversationFilesLocked(
 				ctx, eng, ws, files,
 			)
-			return nil
+			return stageErr
 		},
 	); err != nil {
+		if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+			return staged, warnings, err
+		}
 		return nil, []string{
 			fmt.Sprintf("%s lock metadata: %v", warnPrefix, err),
-		}
+		}, nil
 	}
-	return staged, warnings
+	return staged, warnings, nil
 }
 
 func stageConversationFilesLocked(
@@ -111,17 +118,20 @@ func stageConversationFilesLocked(
 	eng codeexecutor.Engine,
 	ws codeexecutor.Workspace,
 	files []model.File,
-) ([]StagedInput, []string) {
+) ([]StagedInput, []string, error) {
 	inv, ok := agent.InvocationFromContext(ctx)
 	if !ok || inv == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	stager := skillstage.New()
 	md, err := stager.LoadWorkspaceMetadata(ctx, eng, ws)
 	if err != nil {
+		if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+			return nil, nil, err
+		}
 		return nil, []string{
 			fmt.Sprintf("%s load metadata: %v", warnPrefix, err),
-		}
+		}, nil
 	}
 
 	existingTo := make(map[string]struct{})
@@ -167,21 +177,27 @@ func stageConversationFilesLocked(
 	}
 
 	if len(puts) == 0 {
-		return staged, warnings
+		return staged, warnings, nil
 	}
 	if err := eng.FS().PutFiles(ctx, ws, puts); err != nil {
+		if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+			return nil, nil, err
+		}
 		return nil, []string{
 			fmt.Sprintf("%s stage files: %v", warnPrefix, err),
-		}
+		}, nil
 	}
 	if err := stager.SaveWorkspaceMetadata(ctx, eng, ws, md); err != nil {
+		if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+			return staged, warnings, err
+		}
 		warnings = append(warnings, fmt.Sprintf(
 			"%s save metadata: %v",
 			warnPrefix,
 			err,
 		))
 	}
-	return staged, warnings
+	return staged, warnings, nil
 }
 
 // ArtifactBaseName extracts a stable basename from an artifact:// ref.
