@@ -10,7 +10,7 @@ package replayconsistency
 //
 // # Design
 //
-// The harness replayes identical sequences of operations (event append, state
+// The harness replays identical sequences of operations (event append, state
 // mutation, memory write, summary creation, track event recording) against a
 // baseline backend (typically InMemory) and one or more test backends (SQLite,
 // Redis, PostgreSQL, MySQL, or ClickHouse). After replay, each backend's
