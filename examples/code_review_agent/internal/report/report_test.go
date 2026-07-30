@@ -252,26 +252,50 @@ func TestRun_SensitiveDataRedaction(t *testing.T) {
 		t.Fatalf("Run failed: %v", err)
 	}
 	mdPath := filepath.Join(tmpDir, "task-redact_report.md")
-	mdData, _ := os.ReadFile(mdPath)
+	mdData, err := os.ReadFile(mdPath)
+	if err != nil {
+		t.Fatalf("read markdown report: %v", err)
+	}
 	if strings.Contains(string(mdData), "sk-proj-abc123xyz456") {
 		t.Error("secret key should be redacted in markdown report")
+	}
+	if !strings.Contains(string(mdData), "***REDACTED***") {
+		t.Error("redaction placeholder ***REDACTED*** not found in report")
 	}
 }
 
 func TestRun_TimingRecorded(t *testing.T) {
+	tmpDir := t.TempDir()
 	gs := graph.State{
 		state.StateKeyTaskID:              "task-timing",
 		state.StateKeyFindings:            []types.Finding{},
 		state.StateKeyWarnings:            []types.Finding{},
 		state.StateKeyPermissionDecisions: []types.PermissionDecision{},
 		state.StateKeySandboxResults:      []types.SandboxResult{},
-		state.StateKeyOutputDir:           t.TempDir(),
+		state.StateKeyOutputDir:           tmpDir,
 	}
-	result, _ := Run(context.Background(), gs)
+	result, err := Run(context.Background(), gs)
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	// Verify in-memory state
 	finalState := result.(graph.State)
 	ms, ok := finalState[state.StateKeyNodeReportGeneratorMs].(int64)
 	if !ok || ms < 0 {
-		t.Error("node timing not recorded")
+		t.Error("node timing not recorded in state")
+	}
+	// Verify serialized JSON report contains the timing
+	jsonPath := filepath.Join(tmpDir, "task-timing_report.json")
+	jsonData, err := os.ReadFile(jsonPath)
+	if err != nil {
+		t.Fatalf("read json report: %v", err)
+	}
+	var report types.ReviewReport
+	if err := json.Unmarshal(jsonData, &report); err != nil {
+		t.Fatalf("json report invalid: %v", err)
+	}
+	if report.NodeTimings[state.StateKeyNodeReportGeneratorMs] < 0 {
+		t.Error("serialized NodeTimings for report_generator should be non-negative")
 	}
 }
 

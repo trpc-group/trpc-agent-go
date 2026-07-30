@@ -33,15 +33,16 @@ func Run(ctx context.Context, gs graph.State) (any, error) {
 	changes, _ := gs[state.StateKeyFileChanges].([]types.FileChange)
 	cfg, _ := gs[state.StateKeyExecutorConfig].(types.ExecutorConfig)
 
-	// Read permission policy from config if wired; fall back to defaults.
+	// Build policy: start with secure defaults, overlay configured entries.
+	// Unknown risk levels default to deny (fail closed).
+	policy := map[string]string{
+		"low":    "allow",
+		"medium": "allow",
+		"high":   "deny",
+	}
 	permCfg, _ := gs[state.StateKeyPermissionConfig].(config.PermissionConfig)
-	defaultPolicy := permCfg.DefaultPolicy
-	if defaultPolicy == nil {
-		defaultPolicy = map[string]string{
-			"low":    "allow",
-			"medium": "allow",
-			"high":   "deny",
-		}
+	for level, decision := range permCfg.DefaultPolicy {
+		policy[level] = decision
 	}
 
 	var allowed []types.SandboxCommand
@@ -53,8 +54,8 @@ func Run(ctx context.Context, gs graph.State) (any, error) {
 			riskLevel = "low"
 		}
 
-		decision := "allow"
-		if d, ok := defaultPolicy[riskLevel]; ok {
+		decision := "deny" // fail closed: unknown risk → deny
+		if d, ok := policy[riskLevel]; ok {
 			decision = d
 		}
 

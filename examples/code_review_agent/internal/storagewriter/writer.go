@@ -213,9 +213,10 @@ func Run(ctx context.Context, gs graph.State) (any, error) {
 			excTypeSet[key]++
 		}
 	}
-	// Merge artifact errors so silent skips/oversized files are visible.
-	for _, ae := range artifactErrors {
-		excTypeSet["artifact_"+ae] = 1
+	// Merge artifact errors with stable, sanitized exception types so
+	// monitoring can aggregate across runs without path-specific keys.
+	if len(artifactErrors) > 0 {
+		excTypeSet["artifact_failed"] = len(artifactErrors)
 	}
 	for etype, count := range excTypeSet {
 		exceptions = append(exceptions, storage.ExceptionRow{

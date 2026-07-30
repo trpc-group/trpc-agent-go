@@ -40,9 +40,9 @@ func main() {
 	diffFile := flag.String("diff-file", "", "path to unified diff file")
 	diffText := flag.String("diff-text", "", "unified diff text (stdin)")
 	repoPath := flag.String("repo-path", "", "git repository path for sandbox execution + git diff")
-	baseRef := flag.String("base-ref", "origin/main", "base git ref for repo-path diff comparison")
+	baseRef := flag.String("base-ref", "", "base git ref for repo-path diff comparison (default: from config or origin/main)")
 	outputDir := flag.String("output-dir", "", "output directory for reports")
-	mode := flag.String("mode", "", "override mode: live|dry_run")
+	mode := flag.String("mode", "", "override mode: live|dry_run|rule_only")
 	flag.Parse()
 
 	ctx := context.Background()
@@ -60,6 +60,15 @@ func main() {
 	}
 	if *outputDir != "" {
 		cfg.Output.Dir = *outputDir
+	}
+
+	// Resolve effective base ref: CLI flag → config → default.
+	effectiveBaseRef := *baseRef
+	if effectiveBaseRef == "" {
+		effectiveBaseRef = cfg.Input.BaseRef
+	}
+	if effectiveBaseRef == "" {
+		effectiveBaseRef = "origin/main"
 	}
 
 	// Determine input
@@ -87,9 +96,9 @@ func main() {
 	// Read diff text (from file, stdin, or git repo)
 	var diffContent string
 	if inputType == "repo_path" && diffInput != "" {
-		diffText, err := input.FromRepo(diffInput, *baseRef)
+		diffText, err := input.FromRepo(diffInput, effectiveBaseRef)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error extracting git diff from %s (base=%s): %v\n", diffInput, *baseRef, err)
+			fmt.Fprintf(os.Stderr, "Error extracting git diff from %s (base=%s): %v\n", diffInput, effectiveBaseRef, err)
 			os.Exit(1)
 		}
 		diffContent = diffText
@@ -127,7 +136,7 @@ func main() {
 		InputType:     inputType,
 		InputSource:   diffInput,
 		InputDiffHash: diffHash,
-		BaseRef:       cfg.Input.BaseRef,
+		BaseRef:       effectiveBaseRef,
 		ModelMode:     cfg.Mode,
 		CreatedAt:     now,
 		StartedAt:     now,
@@ -140,8 +149,8 @@ func main() {
 	// 4. Load skill rules
 	rules, err := ruleengine.LoadRules(cfg.Skill.Dir, cfg.Skill.RulesGlob)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to load rules: %v\n", err)
-		rules = []types.Rule{}
+		fmt.Fprintf(os.Stderr, "Error loading skill rules from %s/%s: %v\n", cfg.Skill.Dir, cfg.Skill.RulesGlob, err)
+		os.Exit(1)
 	}
 
 	// 5. Build GraphAgent
@@ -157,11 +166,24 @@ func main() {
 	}
 
 	// 6. Prepare initial state
+	// Populate input state from resolved values, not raw CLI flags.
+	// When config provides the input (no CLI flags), raw flags are empty.
+	var inputDiffFile, inputDiffText, inputRepoPath string
+	switch inputType {
+	case "diff_file":
+		inputDiffFile = diffInput
+		inputDiffText = diffContent
+	case "diff_text":
+		inputDiffText = diffContent
+	case "repo_path":
+		inputRepoPath = diffInput
+	}
+
 	initialState := graph.State{
-		state.StateKeyInputDiffFile: *diffFile,
-		state.StateKeyInputDiffText: *diffText,
-		state.StateKeyInputRepoPath: *repoPath,
-		state.StateKeyInputBaseRef:  cfg.Input.BaseRef,
+		state.StateKeyInputDiffFile: inputDiffFile,
+		state.StateKeyInputDiffText: inputDiffText,
+		state.StateKeyInputRepoPath: inputRepoPath,
+		state.StateKeyInputBaseRef:  effectiveBaseRef,
 		state.StateKeyOutputDir:     cfg.Output.Dir,
 		state.StateKeyTaskID:        taskID,
 		state.StateKeyExecutorConfig: types.ExecutorConfig{
@@ -213,12 +235,15 @@ func main() {
 	if err != nil {
 		elapsed := time.Since(totalStart)
 		fmt.Fprintf(os.Stderr, "Execution error: %v\n", err)
-		store.UpdateTask(ctx, taskID, map[string]any{
+		// Use a live context for persistence — executor context may be canceled.
+		if uerr := store.UpdateTask(context.Background(), taskID, map[string]any{
 			"status":            "failed",
 			"completed_at":      time.Now().UTC().Format(time.RFC3339),
 			"total_duration_ms": elapsed.Milliseconds(),
 			"error_message":     err.Error(),
-		})
+		}); uerr != nil {
+			fmt.Fprintf(os.Stderr, "Error updating task status: %v\n", uerr)
+		}
 		os.Exit(1)
 	}
 
@@ -239,10 +264,12 @@ func main() {
 
 	totalDuration := time.Since(totalStart)
 
-	// Update total duration
-	store.UpdateTask(ctx, taskID, map[string]any{
+	// Update total duration with a live context (executor ctx may be canceled).
+	if err := store.UpdateTask(context.Background(), taskID, map[string]any{
 		"total_duration_ms": totalDuration.Milliseconds(),
-	})
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "Error updating task duration: %v\n", err)
+	}
 
 	// 8. Report results
 	jsonPath, _ := finalState[state.StateKeyJSONReportPath].(string)

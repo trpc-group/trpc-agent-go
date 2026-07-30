@@ -58,7 +58,8 @@ const (
 	StateKeyDedupConfig = "dedup_config"
 	// StateKeySkillRules holds the loaded Rule objects from skill rule files.
 	StateKeySkillRules = "skill_rules"
-	// StateKeyPermissionConfig holds the permission policy and overrides.
+	// StateKeyPermissionConfig is the string key identifying the graph-state
+	// entry that contains config.PermissionConfig (default policy + overrides).
 	StateKeyPermissionConfig = "permission_config"
 )
 
