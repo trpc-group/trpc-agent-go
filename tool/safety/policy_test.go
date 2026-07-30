@@ -134,6 +134,12 @@ func TestScenario_SafeGoTest(t *testing.T) {
 	})
 	assert.Equal(t, safety.DecisionAllow, report.Decision)
 	assert.Equal(t, safety.RiskNone, report.RiskLevel)
+	assert.Equal(t, "", report.RuleID)
+	assert.False(t, report.Blocked)
+	// All 7 checkers must pass for a safe command.
+	for _, c := range report.Checkers {
+		assert.Equal(t, "pass", c.Status, "checker %s should pass for safe command", c.Name)
+	}
 }
 
 // 2. Dangerous deletion → deny
@@ -191,7 +197,7 @@ func TestScenario_WhitelistedDomain(t *testing.T) {
 	// github.com is in the whitelist, so this should be allowed
 	// (shellsafe may still reject if no command policy configured,
 	// but our policy has allowed commands)
-	assert.NotEqual(t, safety.DecisionDeny, report.Decision)
+	assert.Equal(t, safety.DecisionAllow, report.Decision)
 }
 
 // 7. Shell wrapper bypass → deny
@@ -353,8 +359,51 @@ func TestScenario_HostexecBackgroundProcess(t *testing.T) {
 	})
 	// disown is not in shellsafe implicit deny, but is detected by host checker
 	// if shellsafe allows it (depends on allowlist)
-	assert.True(t, report.Decision == safety.DecisionAsk || report.Decision == safety.DecisionDeny,
-		"disown should be either asked or denied")
+	// disown is detected by host checker as background process risk.
+	// shellsafe does NOT block disown (not in implicit deny), so it passes
+	// through to the host checker which returns ask.
+	assert.Equal(t, safety.DecisionAsk, report.Decision)
+	assert.Equal(t, "HOST_BACKGROUND_PROC", report.RuleID)
+}
+
+// 20. Cwd path interception — denied working directory caught even
+// when the command itself does not mention the sensitive path.
+func TestScenario_CwdDeniedPath(t *testing.T) {
+	s := newTestScanner(t)
+	report := s.ScanCtx(context.Background(), &safety.ScanRequest{
+		Command: "ls",
+		Backend: "workspaceexec",
+		Cwd:     "~/.ssh",
+	})
+	assert.Equal(t, safety.DecisionDeny, report.Decision)
+	assert.Contains(t, report.RuleID, "PATH_SENSITIVE")
+	assert.Contains(t, report.Evidence, ".ssh")
+}
+
+// 21. PTY long session — requested timeout exceeds pty_max_duration_sec.
+func TestScenario_PTYLongSession(t *testing.T) {
+	s := newTestScanner(t)
+	report := s.ScanCtx(context.Background(), &safety.ScanRequest{
+		Command:    "echo hello",
+		Backend:    "hostexec",
+		ToolName:   "exec_command",
+		TimeoutSec: 999, // > 600s pty_max_duration_sec default
+	})
+	assert.Equal(t, safety.DecisionAsk, report.Decision)
+	assert.Equal(t, "RESOURCE_TIMEOUT", report.RuleID)
+	assert.Contains(t, report.Evidence, "999")
+}
+
+// 22. Output size exceeded — command requests unbounded raw output.
+func TestScenario_OutputSizeExceeded(t *testing.T) {
+	s := newTestScanner(t)
+	report := s.ScanCtx(context.Background(), &safety.ScanRequest{
+		Command: "cat /dev/urandom",
+		Backend: "workspaceexec",
+	})
+	// cat /dev/urandom is a heavy-output command, triggers output limit ask.
+	assert.Equal(t, safety.DecisionAsk, report.Decision)
+	assert.Equal(t, "RESOURCE_OUTPUT_LIMIT", report.RuleID)
 }
 
 // ─── Benchmark ───
