@@ -1,0 +1,135 @@
+# Tool Safety Guard — Example Policy
+# Changes take effect on the next LoadPolicy call without code changes.
+version: "1.0"
+
+commands:
+  # Commands that are always allowed. Bare names are matched strictly
+  # against argv[0]; "./echo" or "/usr/bin/echo" will NOT match "echo".
+  # Add explicit paths if you need them.
+  allowed:
+    - "go"
+    - "git"
+    - "npm"
+    - "python3"
+    - "node"
+    - "docker"
+    - "kubectl"
+    - "echo"
+    - "ls"
+    - "cat"
+    - "pwd"
+    - "wc"
+    - "curl"
+    - "wget"
+    - "nc"
+
+  # Commands that are always denied. The basename is matched
+  # case-insensitively on all platforms, so "RM", "Rm", "rm.exe"
+  # are all caught.
+  denied:
+    - "rm"
+    - "dd"
+    - "mkfs"
+    - "fdisk"
+    - "shutdown"
+    - "reboot"
+    - "kill"
+    - "chmod"
+    - "chown"
+
+  # Dependency installation commands trigger an ask (human review).
+  # Format: "executable subcommand". Multi-word entries match prefix:
+  # "npm install -g evil-pkg" matches "npm install -g".
+  denied_install:
+    - "pip install"
+    - "npm install -g"
+    - "npm install"
+    - "gem install"
+    - "go install"
+    - "apt-get"
+    - "apt"
+    - "yum"
+    - "brew"
+    - "cargo install"
+
+paths:
+  # Path patterns to deny. ~ is expanded to $HOME.
+  # ** matches any directory depth (like gitignore globs).
+  denied:
+    - "~/.ssh"
+    - "~/.aws"
+    - "~/.kube"
+    - "/etc/shadow"
+    - "/etc/passwd"
+    - ".env"
+    - "**/id_rsa"
+    - "**/*.pem"
+    - "**/credentials"
+    - "**/.git/config"
+
+network:
+  # Domains that are always allowed.
+  whitelist:
+    - "github.com"
+    - "api.github.com"
+    - "npmjs.com"
+    - "proxy.python.org"
+    - "pypi.org"
+
+  # Domains that are always blocked.
+  blacklist:
+    - "pastebin.com"
+    - "transfer.sh"
+    - "requestbin.net"
+    - "ngrok.io"
+    - "burpcollaborator.net"
+
+resources:
+  # Maximum execution timeout in seconds.
+  max_timeout_sec: 300
+  # Maximum expected output size in MB.
+  max_output_mb: 50
+  # Maximum concurrent tool executions. Exceeding this triggers an ask decision.
+  max_concurrent: 10
+
+# Environment variables that may be passed through to tool execution.
+# When the policy is active, variables not in this list are stripped.
+# Empty means use default policy-mode scrubbing (HOME, PATH, LD_PRELOAD, etc.).
+env:
+  # Environment variables explicitly permitted.
+  # Supports wildcard suffix: "*_TOKEN" matches "GITHUB_TOKEN".
+  allowed_keys:
+    - "LANG"
+    - "LC_ALL"
+    - "TZ"
+    - "EDITOR"
+    - "GIT_SSH_COMMAND"
+    - "DEBIAN_FRONTEND"
+  # Environment variables always blocked.
+  denied_keys:
+    - "AWS_ACCESS_KEY_ID"
+    - "AWS_SECRET_ACCESS_KEY"
+    - "DOCKER_AUTH_CONFIG"
+    - "*_TOKEN"
+  # Regex patterns for env values that are blocked.
+  deny_values:
+    - "sk-[a-zA-Z0-9]{20,}"
+    - "AKID[0-9a-zA-Z]{16,}"
+
+secrets:
+  # Regex patterns for detecting hard-coded secrets in command arguments
+  # and execution output. Matches trigger a deny (pre-execution) or
+  # desensitization (post-execution audit).
+  patterns:
+    - "sk-[a-zA-Z0-9]{20,}"
+    - "AKID[0-9a-zA-Z]{16,}"
+    - "Bearer\\s+[A-Za-z0-9\\-._~+/]+=*"
+    - "x-api-key[:\\s]*[A-Za-z0-9\\-._~+/]+"
+
+hostexec:
+  # Max duration for PTY sessions in seconds.
+  pty_max_duration_sec: 600
+  # Deny background processes (&, nohup, disown).
+  deny_background_processes: true
+  # Deny privilege escalation (sudo, su, doas, pkexec).
+  deny_privilege_escalation: true
