@@ -25,6 +25,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
+	iranking "trpc.group/trpc-go/trpc-agent-go/memory/internal/ranking"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -847,18 +848,16 @@ func (s *Service) SearchMemories(
 			userKey,
 			searchOpts,
 		)
-		if kwErr == nil && len(keywordResults) > 0 {
-			rrfK := searchOpts.HybridRRFK
-			if rrfK <= 0 {
-				rrfK = imemory.DefaultHybridRRFK
-			}
-			results = imemory.MergeHybridResults(
-				results,
-				keywordResults,
-				rrfK,
-				limit,
-			)
+		if kwErr != nil {
+			keywordResults = nil
 		}
+		results = iranking.MergeHybrid(
+			searchOpts.Query,
+			results,
+			keywordResults,
+			searchOpts.HybridRRFK,
+			limit,
+		)
 	}
 	if searchOpts.SimilarityThreshold > 0 &&
 		len(results) > 0 &&
@@ -1091,6 +1090,9 @@ func resolveSearchCandidateLimit(
 	opts memory.SearchOptions,
 ) int {
 	limit := resolveSearchLimit(defaultMax, override)
+	if opts.HybridSearch {
+		limit = iranking.HybridCandidateLimit(opts.Query, limit)
+	}
 	if opts.Kind != "" || opts.TimeAfter != nil || opts.TimeBefore != nil ||
 		opts.OrderByEventTime || opts.KindFallback || opts.Deduplicate {
 		if memoryLimit > limit {

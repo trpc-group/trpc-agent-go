@@ -23,6 +23,7 @@ import (
 	"github.com/pgvector/pgvector-go"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
+	iranking "trpc.group/trpc-go/trpc-agent-go/memory/internal/ranking"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/postgres"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -174,6 +175,17 @@ func buildConnString(opts ServiceOpts) string {
 	return conn.String()
 }
 
+func (s *Service) getEmbedding(
+	ctx context.Context,
+	text string,
+) ([]float64, error) {
+	return imemory.GetOrComputeRequestEmbedding(
+		ctx, s, text, func() ([]float64, error) {
+			return s.opts.embedder.GetEmbedding(ctx, text)
+		},
+	)
+}
+
 // AddMemory adds or updates a memory for a user (idempotent).
 // Options may include WithMetadata for episodic metadata.
 func (s *Service) AddMemory(
@@ -189,7 +201,7 @@ func (s *Service) AddMemory(
 	}
 
 	// Generate embedding for the memory content.
-	embedding, err := s.opts.embedder.GetEmbedding(ctx, memoryStr)
+	embedding, err := s.getEmbedding(ctx, memoryStr)
 	if err != nil {
 		return fmt.Errorf("generate embedding failed: %w", err)
 	}
@@ -360,7 +372,7 @@ func (s *Service) UpdateMemory(
 	}
 
 	// Generate new embedding for the updated memory content.
-	embedding, err := s.opts.embedder.GetEmbedding(ctx, memoryStr)
+	embedding, err := s.getEmbedding(ctx, memoryStr)
 	if err != nil {
 		return fmt.Errorf("generate embedding failed: %w", err)
 	}
@@ -714,10 +726,6 @@ func (s *Service) ReadMemories(
 	return entries, nil
 }
 
-// minKindFallbackResults is the threshold below which a kind-filtered
-// search triggers a fallback unfiltered search when KindFallback is enabled.
-const minKindFallbackResults = 3
-
 // SearchMemories searches memories for a user using vector similarity.
 // Options may include WithSearchOptions for advanced filtering
 // (kind, time range, hybrid search, etc.).
@@ -738,7 +746,7 @@ func (s *Service) SearchMemories(
 	}
 
 	// Generate embedding for the query (reused across fallback searches).
-	queryEmbedding, err := s.opts.embedder.GetEmbedding(ctx, query)
+	queryEmbedding, err := s.getEmbedding(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("generate query embedding failed: %w", err)
 	}
@@ -753,38 +761,45 @@ func (s *Service) SearchMemories(
 	if opts.MaxResults > 0 {
 		maxResults = opts.MaxResults
 	}
-
-	results, err := s.executeVectorSearch(ctx, userKey, opts, vector, maxResults)
+	candidateLimit := maxResults
+	if opts.HybridSearch {
+		candidateLimit = iranking.HybridCandidateLimit(query, maxResults)
+	}
+	results, err := s.executeVectorSearch(
+		ctx, userKey, opts, vector, candidateLimit,
+	)
 	if err != nil {
 		return nil, err
 	}
 
 	// Kind fallback: when kind filter was applied but returned too few
 	// results, retry without the kind filter and merge both result sets.
-	if opts.Kind != "" && opts.KindFallback && len(results) < minKindFallbackResults {
+	if opts.Kind != "" && opts.KindFallback &&
+		len(results) < imemory.MinKindFallbackResults {
 		fallbackOpts := opts
 		fallbackOpts.Kind = ""
 		fallbackOpts.KindFallback = false
 		fallbackResults, fallbackErr := s.executeVectorSearch(
-			ctx, userKey, fallbackOpts, vector, maxResults,
+			ctx, userKey, fallbackOpts, vector, candidateLimit,
 		)
 		if fallbackErr == nil && len(fallbackResults) > 0 {
-			results = mergeSearchResults(results, fallbackResults, opts.Kind, maxResults)
+			results = imemory.MergeSearchResults(
+				results, fallbackResults, opts.Kind, candidateLimit,
+			)
 		}
 	}
 
-	// Hybrid search: run keyword search and merge with vector results
-	// using Reciprocal Rank Fusion (RRF) to improve recall for exact
-	// entity names, book titles, etc.
+	// Hybrid search fuses vector, keyword, and focused-passage rankings.
 	if opts.HybridSearch {
-		keywordResults, kwErr := s.executeKeywordSearch(ctx, userKey, opts, maxResults)
-		if kwErr == nil && len(keywordResults) > 0 {
-			rrfK := opts.HybridRRFK
-			if rrfK <= 0 {
-				rrfK = defaultRRFK
-			}
-			results = mergeHybridResults(results, keywordResults, rrfK, maxResults)
+		keywordResults, kwErr := s.executeKeywordSearch(
+			ctx, userKey, opts, candidateLimit,
+		)
+		if kwErr != nil {
+			keywordResults = nil
 		}
+		results = iranking.MergeHybrid(
+			query, results, keywordResults, opts.HybridRRFK, maxResults,
+		)
 	}
 
 	// Apply similarity threshold filtering.
@@ -817,7 +832,7 @@ func (s *Service) SearchMemories(
 
 	// Content-based deduplication of near-identical memories.
 	if opts.Deduplicate && len(results) > 1 {
-		results = deduplicateResults(results)
+		results = imemory.DeduplicateResultsPreservingConflicts(results)
 	}
 	if maxResults > 0 && len(results) > maxResults {
 		results = results[:maxResults]
@@ -894,9 +909,6 @@ func (s *Service) executeVectorSearch(
 	return results, nil
 }
 
-// defaultRRFK is the standard Reciprocal Rank Fusion constant.
-const defaultRRFK = imemory.DefaultHybridRRFK
-
 // executeKeywordSearch runs a full-text search using PostgreSQL
 // tsvector/tsquery alongside the vector search results.
 func (s *Service) executeKeywordSearch(
@@ -968,128 +980,6 @@ func (s *Service) executeKeywordSearch(
 		return []*memory.Entry{}, nil
 	}
 	return results, nil
-}
-
-// mergeHybridResults combines vector and keyword search results using
-// Reciprocal Rank Fusion (RRF). Each result gets score = 1/(k+rank)
-// from each search method. Combined scores determine final ranking.
-func mergeHybridResults(
-	vectorResults []*memory.Entry,
-	keywordResults []*memory.Entry,
-	k int,
-	maxResults int,
-) []*memory.Entry {
-	return imemory.MergeHybridResults(
-		vectorResults,
-		keywordResults,
-		k,
-		maxResults,
-	)
-}
-
-// mergeSearchResults merges kind-filtered results with fallback results.
-// Results matching the preferred kind are ranked higher. Duplicates are
-// removed by memory ID.
-func mergeSearchResults(
-	primary, fallback []*memory.Entry,
-	preferredKind memory.Kind,
-	maxResults int,
-) []*memory.Entry {
-	seen := make(map[string]bool, len(primary))
-	for _, e := range primary {
-		seen[e.ID] = true
-	}
-
-	// Split fallback into matching-kind and other-kind.
-	var kindMatch, kindOther []*memory.Entry
-	for _, e := range fallback {
-		if seen[e.ID] {
-			continue
-		}
-		if e.Memory != nil && e.Memory.Kind == preferredKind {
-			kindMatch = append(kindMatch, e)
-		} else {
-			kindOther = append(kindOther, e)
-		}
-	}
-
-	// Build merged list: primary (kind-filtered) → fallback matching kind → fallback other kind.
-	merged := make([]*memory.Entry, 0, len(primary)+len(kindMatch)+len(kindOther))
-	merged = append(merged, primary...)
-	merged = append(merged, kindMatch...)
-	merged = append(merged, kindOther...)
-
-	if len(merged) > maxResults {
-		merged = merged[:maxResults]
-	}
-	return merged
-}
-
-// deduplicateResults removes near-duplicate memories based on word-level
-// Jaccard similarity. When two results have >80% word overlap, the
-// lower-scored one is dropped.
-func deduplicateResults(results []*memory.Entry) []*memory.Entry {
-	const jaccardThreshold = 0.80
-
-	type wordSet map[string]struct{}
-	sets := make([]wordSet, len(results))
-	for i, r := range results {
-		ws := make(wordSet)
-		for _, w := range strings.Fields(strings.ToLower(r.Memory.Memory)) {
-			ws[w] = struct{}{}
-		}
-		sets[i] = ws
-	}
-
-	keep := make([]bool, len(results))
-	for i := range keep {
-		keep[i] = true
-	}
-
-	for i := 0; i < len(results); i++ {
-		if !keep[i] {
-			continue
-		}
-		for j := i + 1; j < len(results); j++ {
-			if !keep[j] {
-				continue
-			}
-			if jaccardSimilarity(sets[i], sets[j]) >= jaccardThreshold {
-				// Drop the lower-scored duplicate.
-				if results[i].Score >= results[j].Score {
-					keep[j] = false
-				} else {
-					keep[i] = false
-					break
-				}
-			}
-		}
-	}
-
-	deduped := make([]*memory.Entry, 0, len(results))
-	for i, r := range results {
-		if keep[i] {
-			deduped = append(deduped, r)
-		}
-	}
-	return deduped
-}
-
-func jaccardSimilarity(a, b map[string]struct{}) float64 {
-	if len(a) == 0 && len(b) == 0 {
-		return 1.0
-	}
-	intersection := 0
-	for w := range a {
-		if _, ok := b[w]; ok {
-			intersection++
-		}
-	}
-	union := len(a) + len(b) - intersection
-	if union == 0 {
-		return 0
-	}
-	return float64(intersection) / float64(union)
 }
 
 // Tools returns the list of available memory tools.

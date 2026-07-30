@@ -1591,23 +1591,78 @@ func TestService_SearchMemories_HybridSearch(t *testing.T) {
 	// Vector search.
 	mock.ExpectQuery("SELECT memory_id").WillReturnRows(
 		sqlmock.NewRows(memColsWithEmbedding).
-			AddRow("m1", "app", "u1", "Vector result", `["t"]`, "fact", nil, nil, nil, now, now, emb),
+			AddRow("m1", "app", "u1", "Assistant result: Recommended Go.", `["t"]`, "fact", nil, nil, nil, now, now, emb).
+			AddRow("m2", "app", "u1", "User wants a recommendation.", `["t"]`, "fact", nil, nil, nil, now, now, emb),
 	)
 	// Keyword search.
 	mock.ExpectQuery("SELECT memory_id").WillReturnRows(
 		sqlmock.NewRows(memColsWithSimilarity).
-			AddRow("m2", "app", "u1", "Keyword result", `["t"]`, "fact", nil, nil, nil, now, now, 0.5),
+			AddRow("m2", "app", "u1", "User wants a recommendation.", `["t"]`, "fact", nil, nil, nil, now, now, 0.5),
 	)
 
-	results, err := svc.SearchMemories(context.Background(), memory.UserKey{AppName: "app", UserID: "u1"}, "coffee",
+	results, err := svc.SearchMemories(context.Background(), memory.UserKey{AppName: "app", UserID: "u1"}, "What did you recommend?",
 		memory.WithSearchOptions(memory.SearchOptions{
-			Query:        "coffee",
+			Query:        "What did you recommend?",
 			HybridSearch: true,
 		}),
 	)
 	require.NoError(t, err)
-	require.NotEmpty(t, results)
+	require.Len(t, results, 2)
+	require.Equal(t, "m1", results[0].ID)
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_SearchMemories_HybridSearchBackfillsTemporalTail(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	svc := setupMockServiceWithVector(
+		t,
+		db,
+		mock,
+		WithSimilarityThreshold(0),
+		WithMaxResults(2),
+	)
+	defer svc.Close()
+
+	const query = "What is the order of the sports events I watched in January?"
+	now := time.Now()
+	eventTime := time.Date(2023, time.January, 14, 0, 0, 0, 0, time.UTC)
+	mock.ExpectQuery("SELECT memory_id.*LIMIT 6").WillReturnRows(
+		sqlmock.NewRows(memColsWithSimilarity).
+			AddRow(
+				"m1", "app", "u1", "Watched an NBA game.", `["sports"]`,
+				"episode", now, nil, nil, now, now, 0.95,
+			).
+			AddRow(
+				"m2", "app", "u1", "Other memory.", `["other"]`,
+				"fact", nil, nil, nil, now, now, 0.90,
+			).
+			AddRow(
+				"m3", "app", "u1",
+				"Watched the College Football National Championship.",
+				`["sports"]`, "episode", eventTime, nil, nil, now, now, 0.85,
+			),
+	)
+	mock.ExpectQuery("SELECT memory_id.*LIMIT 6").WillReturnRows(
+		sqlmock.NewRows(memColsWithSimilarity),
+	)
+
+	results, err := svc.SearchMemories(
+		context.Background(),
+		memory.UserKey{AppName: "app", UserID: "u1"},
+		query,
+		memory.WithSearchOptions(memory.SearchOptions{
+			HybridSearch: true,
+			Query:        query,
+		}),
+	)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+	require.Len(t, results, 2)
+	require.Equal(t, []string{"m1", "m3"}, []string{
+		results[0].ID,
+		results[1].ID,
+	})
 }
 
 func TestService_SearchMemories_KindFilter(t *testing.T) {

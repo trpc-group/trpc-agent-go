@@ -23,6 +23,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
+	iranking "trpc.group/trpc-go/trpc-agent-go/memory/internal/ranking"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/mysql"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -642,10 +643,6 @@ func (s *Service) ReadMemories(
 	return entries, nil
 }
 
-// minKindFallbackResults triggers a fallback unfiltered search when
-// a kind-filtered search returns fewer results than this.
-const minKindFallbackResults = 3
-
 // SearchMemories searches memories for a user using vector similarity.
 func (s *Service) SearchMemories(
 	ctx context.Context,
@@ -676,14 +673,24 @@ func (s *Service) SearchMemories(
 	if opts.MaxResults > 0 {
 		maxResults = opts.MaxResults
 	}
+	candidateLimit := maxResults
+	if opts.HybridSearch {
+		candidateLimit = iranking.HybridCandidateLimit(query, maxResults)
+	}
 
-	results, err := s.doVectorOrBruteSearch(ctx, userKey, opts, queryEmbedding, maxResults)
+	results, err := s.doVectorOrBruteSearch(
+		ctx, userKey, opts, queryEmbedding, candidateLimit,
+	)
 	if err != nil {
 		return nil, err
 	}
 
-	results = s.applyKindFallback(ctx, results, userKey, opts, queryEmbedding, maxResults)
-	results = s.applyHybridSearch(ctx, results, userKey, opts, maxResults)
+	results = s.applyKindFallback(
+		ctx, results, userKey, opts, queryEmbedding, candidateLimit,
+	)
+	results = s.applyHybridSearch(
+		ctx, results, userKey, opts, candidateLimit, maxResults,
+	)
 	results = s.applyPostSearchFilters(results, opts, maxResults)
 
 	return results, nil
@@ -712,7 +719,8 @@ func (s *Service) applyKindFallback(
 	queryEmbedding []float64,
 	maxResults int,
 ) []*memory.Entry {
-	if opts.Kind == "" || !opts.KindFallback || len(results) >= minKindFallbackResults {
+	if opts.Kind == "" || !opts.KindFallback ||
+		len(results) >= imemory.MinKindFallbackResults {
 		return results
 	}
 	fallbackOpts := opts
@@ -731,20 +739,21 @@ func (s *Service) applyHybridSearch(
 	results []*memory.Entry,
 	userKey memory.UserKey,
 	opts memory.SearchOptions,
+	candidateLimit int,
 	maxResults int,
 ) []*memory.Entry {
 	if !opts.HybridSearch {
 		return results
 	}
-	keywordResults, kwErr := s.executeKeywordSearch(ctx, userKey, opts, maxResults)
-	if kwErr != nil || len(keywordResults) == 0 {
-		return results
+	keywordResults, kwErr := s.executeKeywordSearch(
+		ctx, userKey, opts, candidateLimit,
+	)
+	if kwErr != nil {
+		keywordResults = nil
 	}
-	rrfK := opts.HybridRRFK
-	if rrfK <= 0 {
-		rrfK = imemory.DefaultHybridRRFK
-	}
-	return imemory.MergeHybridResults(results, keywordResults, rrfK, maxResults)
+	return iranking.MergeHybrid(
+		opts.Query, results, keywordResults, opts.HybridRRFK, maxResults,
+	)
 }
 
 // applyPostSearchFilters applies threshold, sorting, dedup, and limit.

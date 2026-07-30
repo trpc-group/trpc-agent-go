@@ -11,6 +11,7 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"maps"
@@ -33,6 +34,8 @@ const (
 
 	memoryNotFoundErrSubstr = "memory with id"
 	memoryNotFoundErrMarker = "not found"
+
+	sessionStateKeyAutoMemoryLastError = "memory:last_extract_error"
 )
 
 // reconcile tuning constants.
@@ -96,6 +99,12 @@ const (
 	// SearchMemories so the backend can stop scanning once candidates
 	// drop below a clearly irrelevant band.
 	reconcileMinProbeScore = 0.30
+
+	// reconcileRetainedTokenCoverage is the minimum fraction of an
+	// existing memory's tokens that a new Add must retain before the Add
+	// may replace that memory. Similarity locates candidates; it must not
+	// by itself authorize a lossy rewrite.
+	reconcileRetainedTokenCoverage = 0.80
 )
 
 // Reconcile decision tiers. A higher tier is always preferred when
@@ -159,6 +168,28 @@ type EnabledToolsConfigurer interface {
 	SetEnabledTools(enabled map[string]struct{})
 }
 
+// stagedOperationExtractor is implemented by the built-in extractor when it
+// can distinguish ordinary user memories from assistant-produced results.
+// Keeping this capability internal avoids expanding MemoryExtractor for a
+// policy choice that custom extractors do not need to implement.
+type stagedOperationExtractor interface {
+	ExtractOperationStages(
+		ctx context.Context,
+		messages []model.Message,
+		existing []*memory.Entry,
+	) (primary, assistantResults []*extractor.Operation, err error)
+}
+
+// postPolicyOperationObserver is an internal capability implemented by
+// diagnostic extractor wrappers that need to distinguish model output from
+// the operations selected by reconciliation and update policy.
+type postPolicyOperationObserver interface {
+	ObservePostPolicyMemoryOperations(
+		ctx context.Context,
+		primary, assistantResults []*extractor.Operation,
+	)
+}
+
 // ConfigureExtractorEnabledTools passes enabled tool flags to the
 // extractor if it implements EnabledToolsConfigurer.
 func ConfigureExtractorEnabledTools(
@@ -193,12 +224,13 @@ type MemoryOperator interface {
 
 // AutoMemoryWorker manages async memory extraction workers.
 type AutoMemoryWorker struct {
-	config   AutoMemoryConfig
-	operator MemoryOperator
-	jobChans []chan *MemoryJob
-	wg       sync.WaitGroup
-	mu       sync.RWMutex
-	started  bool
+	config       AutoMemoryConfig
+	operator     MemoryOperator
+	updatePolicy extractor.UpdatePolicy
+	jobChans     []chan *MemoryJob
+	wg           sync.WaitGroup
+	mu           sync.RWMutex
+	started      bool
 }
 
 // NewAutoMemoryWorker creates a new auto memory worker.
@@ -210,8 +242,9 @@ func NewAutoMemoryWorker(
 ) *AutoMemoryWorker {
 	config.EnabledTools = maps.Clone(config.EnabledTools)
 	return &AutoMemoryWorker{
-		config:   config,
-		operator: operator,
+		config:       config,
+		operator:     operator,
+		updatePolicy: updatePolicyFromMetadata(config.Extractor),
 	}
 }
 
@@ -316,6 +349,7 @@ func (w *AutoMemoryWorker) EnqueueJob(ctx context.Context, sess *session.Session
 		LatestTs: latestTs,
 		Messages: messages,
 	}
+	clearLastExtractError(sess)
 	if w.tryEnqueueJob(ctx, userKey, job) {
 		return nil
 	}
@@ -333,8 +367,10 @@ func (w *AutoMemoryWorker) EnqueueJob(ctx context.Context, sess *session.Session
 	syncCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
 	defer cancel()
 	if err := w.createAutoMemory(syncCtx, userKey, messages); err != nil {
+		writeLastExtractError(sess, err)
 		return err
 	}
+	clearLastExtractError(sess)
 	writeLastExtractAt(sess, latestTs)
 	return nil
 }
@@ -372,9 +408,16 @@ func (w *AutoMemoryWorker) tryEnqueueJob(
 func (w *AutoMemoryWorker) processJob(job *MemoryJob) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.ErrorfContext(context.Background(), log.PanicPrefix+" panic in memory worker: %v", r)
+			err := fmt.Errorf("panic in memory worker: %v", r)
+			log.ErrorfContext(context.Background(), log.PanicPrefix+" %v", err)
+			if job != nil {
+				writeLastExtractError(job.Session, err)
+			}
 		}
 	}()
+	if job == nil {
+		return
+	}
 	ctx := job.Ctx
 	if ctx == nil {
 		ctx = context.Background()
@@ -394,8 +437,10 @@ func (w *AutoMemoryWorker) processJob(job *MemoryJob) {
 	if err := w.createAutoMemory(ctx, job.UserKey, job.Messages); err != nil {
 		log.WarnfContext(ctx, "auto_memory: job failed for user %s/%s: %v",
 			job.UserKey.AppName, job.UserKey.UserID, err)
+		writeLastExtractError(job.Session, err)
 		return
 	}
+	clearLastExtractError(job.Session)
 	writeLastExtractAt(job.Session, job.LatestTs)
 }
 
@@ -416,6 +461,7 @@ func (w *AutoMemoryWorker) createAutoMemory(
 	if w.config.Extractor == nil {
 		return nil
 	}
+	ctx = WithRequestEmbeddingCache(ctx)
 
 	// Search for existing memories relevant to the current conversation
 	// instead of loading all memories. This keeps the extractor prompt
@@ -428,8 +474,12 @@ func (w *AutoMemoryWorker) createAutoMemory(
 		return fmt.Errorf("auto_memory: prepare existing memories failed: %w", err)
 	}
 
-	// Extract memory operations.
-	ops, err := w.config.Extractor.Extract(ctx, messages, existing)
+	// Extract memory operations. The built-in extractor exposes assistant
+	// results as a separate stage so they can retain historical answers without
+	// changing reconciliation for ordinary user memories.
+	ops, assistantResults, err := extractOperationStages(
+		ctx, w.config.Extractor, messages, existing,
+	)
 	if err != nil {
 		log.WarnfContext(ctx, "auto_memory: extraction failed for user %s/%s: %v",
 			userKey.AppName, userKey.UserID, err)
@@ -441,14 +491,80 @@ func (w *AutoMemoryWorker) createAutoMemory(
 	// separate rows. Any failure inside reconcile is non-fatal: the
 	// original ops slice is used and the worker keeps its pre-reconcile
 	// behavior.
-	ops = w.reconcileOps(ctx, userKey, ops)
+	ops = w.applyUpdatePolicy(ctx, userKey, ops, existing)
+	assistantResults = w.applyAssistantResultPolicy(
+		ctx, userKey, assistantResults, existing,
+	)
+	observePostPolicyMemoryOperations(
+		ctx, w.config.Extractor, ops, assistantResults,
+	)
+	ops = append(ops, assistantResults...)
 
 	// Execute operations.
-	for _, op := range ops {
-		w.executeOperation(ctx, userKey, op)
+	var operationErrs []error
+	for i, op := range ops {
+		if err := w.executeOperation(ctx, userKey, op); err != nil {
+			operationErrs = append(operationErrs,
+				fmt.Errorf("operation %d: %w", i, err))
+		}
 	}
 
-	return nil
+	return errors.Join(operationErrs...)
+}
+
+func extractOperationStages(
+	ctx context.Context,
+	ext extractor.MemoryExtractor,
+	messages []model.Message,
+	existing []*memory.Entry,
+) ([]*extractor.Operation, []*extractor.Operation, error) {
+	if staged, ok := ext.(stagedOperationExtractor); ok {
+		return staged.ExtractOperationStages(ctx, messages, existing)
+	}
+	ops, err := ext.Extract(ctx, messages, existing)
+	return ops, nil, err
+}
+
+func observePostPolicyMemoryOperations(
+	ctx context.Context,
+	ext extractor.MemoryExtractor,
+	primary, assistantResults []*extractor.Operation,
+) {
+	observer, ok := ext.(postPolicyOperationObserver)
+	if !ok {
+		return
+	}
+	observer.ObservePostPolicyMemoryOperations(
+		ctx,
+		cloneMemoryOperations(primary),
+		cloneMemoryOperations(assistantResults),
+	)
+}
+
+func cloneMemoryOperations(
+	operations []*extractor.Operation,
+) []*extractor.Operation {
+	if operations == nil {
+		return nil
+	}
+	cloned := make([]*extractor.Operation, 0, len(operations))
+	for _, operation := range operations {
+		if operation == nil {
+			cloned = append(cloned, nil)
+			continue
+		}
+		item := *operation
+		item.Topics = append([]string(nil), operation.Topics...)
+		item.Participants = append(
+			[]string(nil), operation.Participants...,
+		)
+		if operation.EventTime != nil {
+			eventTime := *operation.EventTime
+			item.EventTime = &eventTime
+		}
+		cloned = append(cloned, &item)
+	}
+	return cloned
 }
 
 // searchRelevantMemories builds a query from the conversation messages
@@ -560,7 +676,10 @@ func (w *AutoMemoryWorker) executeOperation(
 	ctx context.Context,
 	userKey memory.UserKey,
 	op *extractor.Operation,
-) {
+) error {
+	if op == nil {
+		return errors.New("nil memory operation")
+	}
 	if et := w.config.EnabledTools; et != nil {
 		if name, ok := operationToolName[op.Type]; ok {
 			if _, enabled := et[name]; !enabled {
@@ -568,7 +687,7 @@ func (w *AutoMemoryWorker) executeOperation(
 					"auto_memory: skipping disabled %s "+
 						"operation for user %s/%s",
 					op.Type, userKey.AppName, userKey.UserID)
-				return
+				return nil
 			}
 		}
 	}
@@ -583,7 +702,9 @@ func (w *AutoMemoryWorker) executeOperation(
 				"auto_memory: add memory failed "+
 					"for user %s/%s: %v",
 				userKey.AppName, userKey.UserID, err)
+			return fmt.Errorf("add memory: %w", err)
 		}
+		return nil
 	case extractor.OperationUpdate:
 		memKey := memory.Key{
 			AppName:  userKey.AppName,
@@ -591,39 +712,44 @@ func (w *AutoMemoryWorker) executeOperation(
 			MemoryID: op.MemoryID,
 		}
 		ep := opToMetadata(op)
-		if err := w.operator.UpdateMemory(ctx, memKey,
+		err := w.operator.UpdateMemory(ctx, memKey,
 			op.Memory, op.Topics,
-			memory.WithUpdateMetadata(ep)); err != nil {
-			if isMemoryNotFoundError(err) {
-				if !w.isToolEnabled(memory.AddToolName) {
-					log.DebugfContext(ctx,
-						"auto_memory: update-not-found "+
-							"fallback skipped (add disabled)"+
-							" for user %s/%s, memory_id=%s",
-						userKey.AppName, userKey.UserID,
-						op.MemoryID)
-					return
-				}
-				if addErr := w.operator.AddMemory(
-					ctx, userKey, op.Memory, op.Topics,
-					memory.WithMetadata(ep),
-				); addErr != nil {
-					log.WarnfContext(ctx,
-						"auto_memory: update missing, "+
-							"add memory failed for user "+
-							"%s/%s, memory_id=%s: %v",
-						userKey.AppName, userKey.UserID,
-						op.MemoryID, addErr,
-					)
-				}
-				return
-			}
-			log.WarnfContext(ctx,
-				"auto_memory: update memory failed "+
-					"for user %s/%s, memory_id=%s: %v",
-				userKey.AppName, userKey.UserID,
-				op.MemoryID, err)
+			memory.WithUpdateMetadata(ep))
+		if err == nil {
+			return nil
 		}
+		if isMemoryNotFoundError(err) {
+			if !w.isToolEnabled(memory.AddToolName) {
+				log.DebugfContext(ctx,
+					"auto_memory: update-not-found "+
+						"fallback skipped (add disabled)"+
+						" for user %s/%s, memory_id=%s",
+					userKey.AppName, userKey.UserID,
+					op.MemoryID)
+				return nil
+			}
+			if addErr := w.operator.AddMemory(
+				ctx, userKey, op.Memory, op.Topics,
+				memory.WithMetadata(ep),
+			); addErr != nil {
+				log.WarnfContext(ctx,
+					"auto_memory: update missing, "+
+						"add memory failed for user "+
+						"%s/%s, memory_id=%s: %v",
+					userKey.AppName, userKey.UserID,
+					op.MemoryID, addErr,
+				)
+				return fmt.Errorf("update missing memory %s: add fallback: %w",
+					op.MemoryID, addErr)
+			}
+			return nil
+		}
+		log.WarnfContext(ctx,
+			"auto_memory: update memory failed "+
+				"for user %s/%s, memory_id=%s: %v",
+			userKey.AppName, userKey.UserID,
+			op.MemoryID, err)
+		return fmt.Errorf("update memory %s: %w", op.MemoryID, err)
 	case extractor.OperationDelete:
 		memKey := memory.Key{
 			AppName:  userKey.AppName,
@@ -633,15 +759,20 @@ func (w *AutoMemoryWorker) executeOperation(
 		if err := w.operator.DeleteMemory(ctx, memKey); err != nil {
 			log.WarnfContext(ctx, "auto_memory: delete memory failed for user %s/%s, memory_id=%s: %v",
 				userKey.AppName, userKey.UserID, op.MemoryID, err)
+			return fmt.Errorf("delete memory %s: %w", op.MemoryID, err)
 		}
+		return nil
 	case extractor.OperationClear:
 		if err := w.operator.ClearMemories(ctx, userKey); err != nil {
 			log.WarnfContext(ctx, "auto_memory: clear memories failed for user %s/%s: %v",
 				userKey.AppName, userKey.UserID, err)
+			return fmt.Errorf("clear memories: %w", err)
 		}
+		return nil
 	default:
 		log.WarnfContext(ctx, "auto_memory: unknown operation type '%s' for user %s/%s",
 			op.Type, userKey.AppName, userKey.UserID)
+		return nil
 	}
 }
 
@@ -687,8 +818,25 @@ func readLastExtractAt(sess *session.Session) time.Time {
 // writeLastExtractAt writes the last auto memory extraction timestamp to session state.
 // The timestamp represents the last included event's timestamp for incremental extraction.
 func writeLastExtractAt(sess *session.Session, ts time.Time) {
+	if sess == nil {
+		return
+	}
 	sess.SetState(memory.SessionStateKeyAutoMemoryLastExtractAt,
 		[]byte(ts.UTC().Format(time.RFC3339Nano)))
+}
+
+func writeLastExtractError(sess *session.Session, err error) {
+	if sess == nil || err == nil {
+		return
+	}
+	sess.SetState(sessionStateKeyAutoMemoryLastError, []byte(err.Error()))
+}
+
+func clearLastExtractError(sess *session.Session) {
+	if sess == nil {
+		return
+	}
+	sess.DeleteState(sessionStateKeyAutoMemoryLastError)
 }
 
 // scanDeltaSince scans session events since the given timestamp and extracts messages.
@@ -825,31 +973,7 @@ func (w *AutoMemoryWorker) decideAddOp(
 	if err != nil || len(candidates) == 0 {
 		return op
 	}
-	// Pick the candidate that produces the strongest reconcile
-	// decision tier, not the highest Jaccard alone. Otherwise a
-	// high-score duplicate could be shadowed by a candidate with
-	// slightly higher token overlap that still sits below all
-	// reconcile thresholds, causing the Add to be kept despite a
-	// clearly duplicate entry existing.
-	var best *memory.Entry
-	bestJaccard := 0.0
-	bestTier := -1
-	for _, c := range candidates {
-		if c == nil || c.Memory == nil {
-			continue
-		}
-		j := tokenJaccard(op.Memory, c.Memory.Memory)
-		tier := reconcileDecisionTier(c.Score, j)
-		if best == nil ||
-			tier > bestTier ||
-			(tier == bestTier &&
-				(c.Score > best.Score ||
-					(c.Score == best.Score && j > bestJaccard))) {
-			best = c
-			bestJaccard = j
-			bestTier = tier
-		}
-	}
+	best, bestJaccard, bestTier := selectReconcileCandidate(op, candidates)
 	if best == nil || best.Memory == nil || best.ID == "" {
 		return op
 	}
@@ -885,6 +1009,121 @@ func (w *AutoMemoryWorker) decideAddOp(
 	default:
 		return op
 	}
+}
+
+// selectReconcileCandidate prioritizes the strongest reconciliation decision
+// before backend score and lexical overlap. This prevents a high-overlap
+// non-match from shadowing a slightly lower-scored duplicate.
+func selectReconcileCandidate(
+	op *extractor.Operation,
+	candidates []*memory.Entry,
+) (*memory.Entry, float64, int) {
+	var best *memory.Entry
+	bestJaccard := 0.0
+	bestTier := -1
+	for _, candidate := range candidates {
+		if candidate == nil || candidate.Memory == nil ||
+			!reconcileMetadataCompatible(op, candidate.Memory) {
+			continue
+		}
+		jaccard := tokenJaccard(op.Memory, candidate.Memory.Memory)
+		tier := reconcileDecisionTier(candidate.Score, jaccard)
+		if tier != reconcileTierNone &&
+			!reconcileAddPreservesStoredMemory(op, candidate.Memory) {
+			tier = reconcileTierNone
+		}
+		if best == nil ||
+			tier > bestTier ||
+			(tier == bestTier &&
+				(candidate.Score > best.Score ||
+					(candidate.Score == best.Score &&
+						jaccard > bestJaccard))) {
+			best = candidate
+			bestJaccard = jaccard
+			bestTier = tier
+		}
+	}
+	return best, bestJaccard, bestTier
+}
+
+// reconcileAddPreservesStoredMemory prevents a similar but narrower Add from
+// erasing an existing fact. Explicit extractor Update operations bypass this
+// gate because they carry an intentional state transition.
+func reconcileAddPreservesStoredMemory(
+	op *extractor.Operation,
+	stored *memory.Memory,
+) bool {
+	if op == nil || stored == nil {
+		return false
+	}
+	if exactMemoryDuplicate(op, stored) {
+		return true
+	}
+	if retainedMemoryTokenCoverage(stored.Memory, op.Memory) <
+		reconcileRetainedTokenCoverage {
+		return false
+	}
+	if !memoryTokenOrderPreserved(stored.Memory, op.Memory) ||
+		!criticalValuesPreserved(stored.Memory, op.Memory) ||
+		negationSignature(stored.Memory) != negationSignature(op.Memory) {
+		return false
+	}
+	if changeMarkerPattern.MatchString(op.Memory) &&
+		!changeMarkerPattern.MatchString(stored.Memory) {
+		return false
+	}
+	return true
+}
+
+func retainedMemoryTokenCoverage(stored, fresh string) float64 {
+	storedTokens := textTokenSet(stored)
+	freshTokens := textTokenSet(fresh)
+	for _, role := range []string{"user", "assistant"} {
+		delete(storedTokens, role)
+		delete(freshTokens, role)
+	}
+	if len(storedTokens) == 0 {
+		return 0
+	}
+	var retained int
+	for token := range storedTokens {
+		if _, ok := freshTokens[token]; ok {
+			retained++
+		}
+	}
+	return float64(retained) / float64(len(storedTokens))
+}
+
+// reconcileMetadataCompatible rejects candidates whose explicit identity
+// metadata proves that they describe different memories. Missing metadata
+// keeps the legacy text-and-score reconciliation behavior unchanged.
+func reconcileMetadataCompatible(
+	op *extractor.Operation,
+	stored *memory.Memory,
+) bool {
+	if op == nil || stored == nil {
+		return true
+	}
+	if op.MemoryKind != "" && stored.Kind != "" &&
+		op.MemoryKind != EffectiveKind(stored) {
+		return false
+	}
+	if op.EventTime != nil && stored.EventTime != nil &&
+		!eventTimeCompatible(stored.EventTime, op.EventTime) {
+		return false
+	}
+	freshLocation := strings.TrimSpace(op.Location)
+	storedLocation := strings.TrimSpace(stored.Location)
+	if freshLocation != "" && storedLocation != "" &&
+		!strings.EqualFold(freshLocation, storedLocation) {
+		return false
+	}
+	if len(op.Participants) > 0 && len(stored.Participants) > 0 &&
+		!isStringSubset(op.Participants, stored.Participants) &&
+		!isStringSubset(stored.Participants, op.Participants) {
+		return false
+	}
+	return true
 }
 
 // tokenJaccard returns the token-level Jaccard similarity between two

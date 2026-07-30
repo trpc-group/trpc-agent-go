@@ -9,6 +9,8 @@
 package extractor
 
 import (
+	"strings"
+
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	memorytool "trpc.group/trpc-go/trpc-agent-go/memory/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -53,6 +55,33 @@ var backgroundTools = func() map[string]tool.Tool {
 	return tools
 }()
 
+const assistantResultAddToolName = "memory_add_assistant_result"
+
+var assistantResultAddTool = func() tool.Tool {
+	return &declarationOnlyTool{decl: &tool.Declaration{
+		Name: assistantResultAddToolName,
+		Description: "Store one concrete result from the assistant's direct " +
+			"reply to the user's request.",
+		InputSchema: &tool.Schema{
+			Type:                 "object",
+			Required:             []string{argKeyMemory},
+			AdditionalProperties: false,
+			Properties: map[string]*tool.Schema{
+				argKeyMemory: {
+					Type: "string",
+					Description: "Concise self-contained assistant result with " +
+						"exact names, values, and relationships.",
+				},
+				argKeyTopics: {
+					Type:        "array",
+					Description: "Optional concrete topics for retrieval.",
+					Items:       &tool.Schema{Type: "string"},
+				},
+			},
+		},
+	}}
+}()
+
 // declarationOnlyTool is a tool that only provides declaration, not callable.
 type declarationOnlyTool struct {
 	decl *tool.Declaration
@@ -77,15 +106,16 @@ const (
 // parseToolCallArgs parses tool call arguments and returns a memory operation.
 func parseToolCallArgs(toolName string, args map[string]any) *Operation {
 	switch toolName {
-	case memory.AddToolName:
+	case memory.AddToolName, assistantResultAddToolName:
 		mem, _ := args[argKeyMemory].(string)
 		if mem == "" {
 			return nil
 		}
 		op := &Operation{
-			Type:   OperationAdd,
-			Memory: mem,
-			Topics: toStringSlice(args[argKeyTopics]),
+			Type:            OperationAdd,
+			Memory:          mem,
+			Topics:          toStringSlice(args[argKeyTopics]),
+			assistantResult: toolName == assistantResultAddToolName,
 		}
 		parseEpisodicArgs(op, args)
 		return op
@@ -149,14 +179,33 @@ func toStringSlice(v any) []string {
 	if v == nil {
 		return []string{}
 	}
-	arr, ok := v.([]any)
-	if !ok {
+	switch values := v.(type) {
+	case []string:
+		return append([]string(nil), values...)
+	case []any:
+		result := make([]string, 0, len(values))
+		for _, item := range values {
+			if s, ok := item.(string); ok {
+				result = append(result, s)
+			}
+		}
+		return result
+	case string:
+		return splitStringList(values)
+	default:
 		return []string{}
 	}
-	result := make([]string, 0, len(arr))
-	for _, item := range arr {
-		if s, ok := item.(string); ok {
-			result = append(result, s)
+}
+
+func splitStringList(value string) []string {
+	parts := strings.FieldsFunc(value, func(r rune) bool {
+		return r == ',' || r == ';' || r == '\n'
+	})
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.Trim(part, " \t\r\n\"[]")
+		if part != "" {
+			result = append(result, part)
 		}
 	}
 	return result
