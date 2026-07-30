@@ -15,6 +15,21 @@ import (
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
 )
 
+const defaultHybridCandidateRatio = 3
+
+// HybridCandidateLimit returns the number of candidates each hybrid
+// sub-search should retrieve before ranking produces the final result limit.
+func HybridCandidateLimit(limit int) int {
+	if limit <= 0 {
+		return limit
+	}
+	maxInt := int(^uint(0) >> 1)
+	if limit > maxInt/defaultHybridCandidateRatio {
+		return maxInt
+	}
+	return limit * defaultHybridCandidateRatio
+}
+
 // MergeHybrid combines backend-provided vector and keyword rankings with
 // shared query-aware rankings. The latter only reorder candidates already
 // retrieved by the backend.

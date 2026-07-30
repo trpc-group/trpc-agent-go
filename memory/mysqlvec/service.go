@@ -673,14 +673,24 @@ func (s *Service) SearchMemories(
 	if opts.MaxResults > 0 {
 		maxResults = opts.MaxResults
 	}
+	candidateLimit := maxResults
+	if opts.HybridSearch {
+		candidateLimit = iranking.HybridCandidateLimit(maxResults)
+	}
 
-	results, err := s.doVectorOrBruteSearch(ctx, userKey, opts, queryEmbedding, maxResults)
+	results, err := s.doVectorOrBruteSearch(
+		ctx, userKey, opts, queryEmbedding, candidateLimit,
+	)
 	if err != nil {
 		return nil, err
 	}
 
-	results = s.applyKindFallback(ctx, results, userKey, opts, queryEmbedding, maxResults)
-	results = s.applyHybridSearch(ctx, results, userKey, opts, maxResults)
+	results = s.applyKindFallback(
+		ctx, results, userKey, opts, queryEmbedding, candidateLimit,
+	)
+	results = s.applyHybridSearch(
+		ctx, results, userKey, opts, candidateLimit, maxResults,
+	)
 	results = s.applyPostSearchFilters(results, opts, maxResults)
 
 	return results, nil
@@ -729,12 +739,15 @@ func (s *Service) applyHybridSearch(
 	results []*memory.Entry,
 	userKey memory.UserKey,
 	opts memory.SearchOptions,
+	candidateLimit int,
 	maxResults int,
 ) []*memory.Entry {
 	if !opts.HybridSearch {
 		return results
 	}
-	keywordResults, kwErr := s.executeKeywordSearch(ctx, userKey, opts, maxResults)
+	keywordResults, kwErr := s.executeKeywordSearch(
+		ctx, userKey, opts, candidateLimit,
+	)
 	if kwErr != nil {
 		keywordResults = nil
 	}

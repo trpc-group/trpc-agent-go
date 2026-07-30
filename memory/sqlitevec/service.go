@@ -1090,6 +1090,9 @@ func resolveSearchCandidateLimit(
 	opts memory.SearchOptions,
 ) int {
 	limit := resolveSearchLimit(defaultMax, override)
+	if opts.HybridSearch {
+		limit = iranking.HybridCandidateLimit(limit)
+	}
 	if opts.Kind != "" || opts.TimeAfter != nil || opts.TimeBefore != nil ||
 		opts.OrderByEventTime || opts.KindFallback || opts.Deduplicate {
 		if memoryLimit > limit {

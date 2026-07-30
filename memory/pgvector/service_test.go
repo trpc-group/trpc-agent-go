@@ -3162,7 +3162,7 @@ func TestService_SearchMemories_KindFallbackKeepsRequestedKindFirst(t *testing.T
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestService_SearchMemories_KindFallbackAndHybridSearchUsesRequestedLimit(t *testing.T) {
+func TestService_SearchMemories_KindFallbackAndHybridSearchOverfetches(t *testing.T) {
 	db, mock := setupMockDB(t)
 	defer db.Close()
 
@@ -3178,18 +3178,18 @@ func TestService_SearchMemories_KindFallbackAndHybridSearchUsesRequestedLimit(t 
 		)
 	}
 
-	mock.ExpectQuery("SELECT memory_id.*LIMIT 4").
+	mock.ExpectQuery("SELECT memory_id.*LIMIT 12").
 		WillReturnRows(rows().AddRow(
 			"mem-1", "test-app", "u1", "Alice hiked in Kyoto", pq.Array([]string{"travel"}),
 			"episode", now, pq.Array([]string{"Alice"}), "Kyoto", now, now, 0.95,
 		))
-	mock.ExpectQuery("SELECT memory_id.*LIMIT 4").
+	mock.ExpectQuery("SELECT memory_id.*LIMIT 12").
 		WillReturnRows(rows().
 			AddRow("mem-2", "test-app", "u1", "Alice planned a Kyoto trip", pq.Array([]string{"travel"}),
 				"episode", now, pq.Array([]string{"Alice"}), "Kyoto", now, now, 0.89).
 			AddRow("mem-3", "test-app", "u1", "Alice likes coffee", pq.Array([]string{"profile"}),
 				"fact", nil, pq.Array([]string{}), nil, now, now, 0.88))
-	mock.ExpectQuery("SELECT memory_id.*LIMIT 4").
+	mock.ExpectQuery("SELECT memory_id.*LIMIT 12").
 		WillReturnRows(rows().AddRow(
 			"mem-1", "test-app", "u1", "Alice hiked in Kyoto", pq.Array([]string{"travel"}),
 			"episode", now, pq.Array([]string{"Alice"}), "Kyoto", now, now, 0.50,

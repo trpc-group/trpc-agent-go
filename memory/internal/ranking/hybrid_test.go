@@ -16,6 +16,17 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 )
 
+func TestHybridCandidateLimit(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, 90, HybridCandidateLimit(30))
+	assert.Equal(t, 0, HybridCandidateLimit(0))
+	assert.Equal(t, -1, HybridCandidateLimit(-1))
+
+	maxInt := int(^uint(0) >> 1)
+	assert.Equal(t, maxInt, HybridCandidateLimit(maxInt))
+}
+
 func TestMergeHybridFusesBackendRankings(t *testing.T) {
 	t.Parallel()
 
