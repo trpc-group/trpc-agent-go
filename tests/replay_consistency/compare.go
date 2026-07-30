@@ -1,7 +1,17 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
 package replayconsistency
 
 import "fmt"
 
+// CompareSnapshots performs a field-level comparison between a baseline snapshot and a backend snapshot.
 func CompareSnapshots(caseName string, backend string, baseline, actual NormalizedSnapshot) []Diff {
 	baseline = NormalizeSnapshot(baseline)
 	actual = NormalizeSnapshot(actual)

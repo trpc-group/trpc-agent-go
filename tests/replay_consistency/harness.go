@@ -1,3 +1,12 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
 package replayconsistency
 
 import (
@@ -10,6 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
+// Run executes all replay cases against the configured backends and returns a diff report.
 func (h ReplayHarness) Run(ctx context.Context) (Report, error) {
 	if len(h.Cases) == 0 {
 		h.Cases = DefaultReplayCases()
@@ -70,6 +80,7 @@ func (h ReplayHarness) Run(ctx context.Context) (Report, error) {
 	return BuildReport(results), nil
 }
 
+// ValidateBackendConfig returns an error if the named configuration value is empty.
 func ValidateBackendConfig(name string, value string) error {
 	if value == "" {
 		return fmt.Errorf("%s is not configured", name)
@@ -121,18 +132,18 @@ func runReplayCase(ctx context.Context, replayCase ReplayCase, backend Backend) 
 			if op.MemoryAdd == nil {
 				continue
 			}
-			if err := backendMemoryService(backend).AddMemory(ctx, op.MemoryAdd.UserKey, op.MemoryAdd.Content, op.MemoryAdd.Topics, memory.WithMetadata(op.MemoryAdd.Metadata)); err != nil {
+			if err := backendMemoryService(backend).AddMemory(ctx, memoryUserKey, op.MemoryAdd.Content, op.MemoryAdd.Topics, memory.WithMetadata(op.MemoryAdd.Metadata)); err != nil {
 				return result, fmt.Errorf("add memory %s: %w", op.MemoryAdd.MemoryID, err)
 			}
 			// Read back to resolve the backend-generated memory ID.
-			if entries, err := backendMemoryService(backend).ReadMemories(ctx, op.MemoryAdd.UserKey, 100); err == nil && len(entries) > 0 {
+			if entries, err := backendMemoryService(backend).ReadMemories(ctx, memoryUserKey, 100); err == nil && len(entries) > 0 {
 				lastMemoryID = entries[len(entries)-1].ID
 			}
 		case OperationKindUpdateMemory:
 			if op.MemoryUpdate == nil {
 				continue
 			}
-			memoryKey := memory.Key{AppName: op.MemoryUpdate.UserKey.AppName, UserID: op.MemoryUpdate.UserKey.UserID, MemoryID: lastMemoryID}
+			memoryKey := memory.Key{AppName: memoryUserKey.AppName, UserID: memoryUserKey.UserID, MemoryID: lastMemoryID}
 			if memoryKey.MemoryID == "" {
 				memoryKey.MemoryID = op.MemoryUpdate.MemoryID
 			}
@@ -149,9 +160,9 @@ func runReplayCase(ctx context.Context, replayCase ReplayCase, backend Backend) 
 			if op.MemoryDelete == nil {
 				continue
 			}
-			memoryKey := *op.MemoryDelete
+			memoryKey := memory.Key{AppName: memoryUserKey.AppName, UserID: memoryUserKey.UserID, MemoryID: lastMemoryID}
 			if memoryKey.MemoryID == "" {
-				memoryKey.MemoryID = lastMemoryID
+				memoryKey.MemoryID = op.MemoryDelete.MemoryID
 			}
 			if err := backendMemoryService(backend).DeleteMemory(ctx, memoryKey); err != nil {
 				return result, fmt.Errorf("delete memory %s: %w", memoryKey.MemoryID, err)

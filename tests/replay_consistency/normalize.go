@@ -1,3 +1,8 @@
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
 package replayconsistency
 
 import (
@@ -14,6 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
+// NormalizedSnapshot is the canonical, backend-agnostic representation of session state, memory, summaries, and tracks.
 type NormalizedSnapshot struct {
 	Events    []NormalizedEvent   `json:"events,omitempty"`
 	State     []NormalizedState   `json:"state,omitempty"`
@@ -22,6 +28,7 @@ type NormalizedSnapshot struct {
 	Tracks    []NormalizedTrack   `json:"tracks,omitempty"`
 }
 
+// NormalizedEvent is the canonical representation of a session event for comparison.
 type NormalizedEvent struct {
 	Index      int            `json:"index"`
 	ID         string         `json:"id,omitempty"`
@@ -40,11 +47,13 @@ type NormalizedEvent struct {
 	Object     string         `json:"object,omitempty"`
 }
 
+// NormalizedState holds a single state key-value pair with a deterministic value representation.
 type NormalizedState struct {
 	Key   string `json:"key"`
 	Value string `json:"value,omitempty"`
 }
 
+// NormalizedMemory is the canonical representation of a memory entry for comparison.
 type NormalizedMemory struct {
 	ID        string   `json:"id"`
 	AppName   string   `json:"app_name,omitempty"`
@@ -56,6 +65,7 @@ type NormalizedMemory struct {
 	UpdatedAt string   `json:"updated_at,omitempty"`
 }
 
+// NormalizedSummary is the canonical representation of a session summary for comparison.
 type NormalizedSummary struct {
 	SessionID string `json:"session_id,omitempty"`
 	FilterKey string `json:"filter_key,omitempty"`
@@ -65,6 +75,7 @@ type NormalizedSummary struct {
 	Version   string `json:"version,omitempty"`
 }
 
+// NormalizedTrack is the canonical representation of a track event for comparison.
 type NormalizedTrack struct {
 	Track     string `json:"track"`
 	Timestamp string `json:"timestamp,omitempty"`
@@ -72,11 +83,13 @@ type NormalizedTrack struct {
 	Type      string `json:"type,omitempty"`
 }
 
+// NormalizedKV is a sorted, deterministic key-value pair used within normalized structures.
 type NormalizedKV struct {
 	Key   string `json:"key"`
 	Value string `json:"value,omitempty"`
 }
 
+// NormalizeSnapshot sorts all collections within a snapshot into a deterministic order.
 func NormalizeSnapshot(snapshot NormalizedSnapshot) NormalizedSnapshot {
 	snapshot.Events = append([]NormalizedEvent(nil), snapshot.Events...)
 	snapshot.State = append([]NormalizedState(nil), snapshot.State...)
@@ -102,6 +115,7 @@ func NormalizeSnapshot(snapshot NormalizedSnapshot) NormalizedSnapshot {
 	return snapshot
 }
 
+// NormalizeEvent converts a raw event.Event into its canonical NormalizedEvent form.
 func NormalizeEvent(evt *event.Event) NormalizedEvent {
 	if evt == nil {
 		return NormalizedEvent{}
@@ -138,6 +152,7 @@ func NormalizeEvent(evt *event.Event) NormalizedEvent {
 	return out
 }
 
+// NormalizeState converts a session.StateMap into a sorted slice of NormalizedState.
 func NormalizeState(state session.StateMap) []NormalizedState {
 	if len(state) == 0 {
 		return nil
@@ -154,6 +169,7 @@ func NormalizeState(state session.StateMap) []NormalizedState {
 	return out
 }
 
+// NormalizeMemoryEntry converts a raw memory.Entry into its canonical NormalizedMemory form.
 func NormalizeMemoryEntry(entry *memory.Entry) NormalizedMemory {
 	if entry == nil {
 		return NormalizedMemory{}
@@ -174,6 +190,7 @@ func NormalizeMemoryEntry(entry *memory.Entry) NormalizedMemory {
 	return out
 }
 
+// NormalizeSummary converts a raw session.Summary into its canonical NormalizedSummary form.
 func NormalizeSummary(sessionID string, filterKey string, sum *session.Summary) NormalizedSummary {
 	if sum == nil {
 		return NormalizedSummary{SessionID: sessionID, FilterKey: filterKey}
@@ -191,6 +208,7 @@ func NormalizeSummary(sessionID string, filterKey string, sum *session.Summary) 
 	return out
 }
 
+// NormalizeTrackEvent converts a raw session.TrackEvent into its canonical NormalizedTrack form.
 func NormalizeTrackEvent(trackEvent *session.TrackEvent) NormalizedTrack {
 	if trackEvent == nil {
 		return NormalizedTrack{}

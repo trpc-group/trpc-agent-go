@@ -1,3 +1,12 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
 package replayconsistency
 
 import (
@@ -5,6 +14,7 @@ import (
 	"time"
 )
 
+// BuildReport aggregates case results into a Report with summary counts.
 func BuildReport(results []CaseResult) Report {
 	var diffs []Diff
 	caseSet := make(map[string]struct{})
@@ -34,6 +44,7 @@ func BuildReport(results []CaseResult) Report {
 	}
 }
 
+// MarshalReport serializes a Report to indented JSON.
 func MarshalReport(report Report) ([]byte, error) {
 	return json.MarshalIndent(report, "", "  ")
 }

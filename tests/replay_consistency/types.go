@@ -1,3 +1,12 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
 package replayconsistency
 
 import (
@@ -8,6 +17,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
+// BackendKind classifies a backend as session-oriented, memory-oriented, or hybrid.
 type BackendKind string
 
 const (
@@ -15,6 +25,7 @@ const (
 	BackendKindMemory  BackendKind = "memory"
 )
 
+// OperationKind identifies the type of an operation within a replay case.
 type OperationKind string
 
 const (
@@ -30,6 +41,7 @@ const (
 	OperationKindReadBack         OperationKind = "read_back"
 )
 
+// StateScope indicates which storage scope a state operation targets.
 type StateScope string
 
 const (
@@ -38,6 +50,7 @@ const (
 	StateScopeUser    StateScope = "user"
 )
 
+// ReplayCase defines a replay consistency test case with an ordered sequence of operations.
 type ReplayCase struct {
 	Name                string
 	Description         string
@@ -46,6 +59,7 @@ type ReplayCase struct {
 	Tags                []string
 }
 
+// Operation represents a single mutating action within a replay case, such as appending an event or updating state.
 type Operation struct {
 	Kind  OperationKind
 	Scope StateScope
@@ -66,6 +80,7 @@ type Operation struct {
 	Note      string
 }
 
+// MemoryWrite carries the parameters for an AddMemory or UpdateMemory operation.
 type MemoryWrite struct {
 	UserKey  memory.UserKey
 	MemoryID string
@@ -74,6 +89,7 @@ type MemoryWrite struct {
 	Metadata *memory.Metadata
 }
 
+// HarnessOptions configures runtime behavior of the replay harness.
 type HarnessOptions struct {
 	BaselineBackend string
 	LightMode       bool
@@ -81,6 +97,7 @@ type HarnessOptions struct {
 	SkipEnv         bool
 }
 
+// Backend abstracts a session/memory backend under test.
 type Backend interface {
 	Name() string
 	Kind() BackendKind
@@ -88,12 +105,14 @@ type Backend interface {
 	Close() error
 }
 
+// ReplayHarness orchestrates replay consistency tests across one or more backends.
 type ReplayHarness struct {
 	Backends []Backend
 	Cases    []ReplayCase
 	Options  HarnessOptions
 }
 
+// Diff describes a single field-level difference between the baseline and a backend under test.
 type Diff struct {
 	CaseName    string    `json:"case_name"`
 	Backend     string    `json:"backend"`
@@ -110,6 +129,7 @@ type Diff struct {
 	OccurredAt  time.Time `json:"occurred_at,omitempty"`
 }
 
+// CaseResult holds the outcome of a single replay case executed against a backend.
 type CaseResult struct {
 	CaseName string
 	Backend  string
@@ -118,6 +138,7 @@ type CaseResult struct {
 	Error    string
 }
 
+// Report is the top-level result of a replay consistency run, suitable for JSON serialization.
 type Report struct {
 	GeneratedAt time.Time     `json:"generated_at"`
 	Cases       []string      `json:"cases"`
@@ -126,6 +147,7 @@ type Report struct {
 	Summary     ReportSummary `json:"summary"`
 }
 
+// ReportSummary provides aggregate counts for a replay consistency run.
 type ReportSummary struct {
 	CasesRun         int `json:"cases_run"`
 	BackendsRun      int `json:"backends_run"`
