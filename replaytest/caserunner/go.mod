@@ -67,4 +67,6 @@ replace (
 	trpc.group/trpc-go/trpc-agent-go/session/postgres => ../../session/postgres
 	trpc.group/trpc-go/trpc-agent-go/session/redis => ../../session/redis
 	trpc.group/trpc-go/trpc-agent-go/session/sqlite => ../../session/sqlite
+	trpc.group/trpc-go/trpc-agent-go/storage/postgres => ../../storage/postgres
+	trpc.group/trpc-go/trpc-agent-go/storage/redis => ../../storage/redis
 )
