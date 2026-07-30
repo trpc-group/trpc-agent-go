@@ -23,7 +23,8 @@ const (
 
 // Config contains model selection and sandbox settings for one reviewer instance.
 type Config struct {
-	// Mode selects provider-backed execution when empty or ModeFakeModel
+	// Mode selects provider-backed execution when empty and fixture-backed
+	// execution when set to ModeFakeModel
 	Mode string
 
 	Model    ModelConfig
@@ -41,7 +42,8 @@ type ModelConfig struct {
 
 // SandboxConfig selects the workspace execution backend.
 type SandboxConfig struct {
-	// Backend selects SandboxBackendContainer or SandboxBackendLocal
+	// Backend selects SandboxBackendContainer or SandboxBackendLocal and defaults
+	// to SandboxBackendContainer when empty
 	Backend string
 }
 
