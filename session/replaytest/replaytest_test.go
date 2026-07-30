@@ -460,6 +460,167 @@ func TestConcurrentStateWriteConflictIsRejected(t *testing.T) {
 	}
 }
 
+func TestMalformedReplayOperationsAreRejected(t *testing.T) {
+	key := baseKey("malformed")
+	tests := []struct {
+		name string
+		op   Operation
+		want string
+	}{
+		{
+			name: "unknown kind",
+			op:   Operation{Kind: OperationKind("append_evnt")},
+			want: "unknown operation kind",
+		},
+		{
+			name: "append event missing event",
+			op:   Operation{Kind: OpAppendEvent},
+			want: "requires event payload",
+		},
+		{
+			name: "retry event missing event",
+			op:   Operation{Kind: OpRetryEvent},
+			want: "requires event payload",
+		},
+		{
+			name: "set state missing state",
+			op:   Operation{Kind: OpSetState},
+			want: "requires state payload",
+		},
+		{
+			name: "delete state missing state",
+			op:   Operation{Kind: OpDeleteState},
+			want: "requires state payload",
+		},
+		{
+			name: "add memory missing memory",
+			op:   Operation{Kind: OpAddMemory},
+			want: "requires memory payload",
+		},
+		{
+			name: "update memory missing memory",
+			op:   Operation{Kind: OpUpdateMemory},
+			want: "requires memory payload",
+		},
+		{
+			name: "delete memory missing memory",
+			op:   Operation{Kind: OpDeleteMemory},
+			want: "requires memory payload",
+		},
+		{
+			name: "write summary missing summary",
+			op:   Operation{Kind: OpWriteSummary},
+			want: "requires summary payload",
+		},
+		{
+			name: "append track missing track",
+			op:   Operation{Kind: OpAppendTrack},
+			want: "requires track payload",
+		},
+		{
+			name: "concurrent missing children",
+			op:   Operation{Kind: OpConcurrent},
+			want: "requires concurrent payload",
+		},
+		{
+			name: "unsupported probe missing capability",
+			op:   Operation{Kind: OpUnsupportedProbe},
+			want: "requires unsupported capability",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateReplayCase(ReplayCase{
+				Name:       tc.name,
+				Key:        key,
+				Operations: []Operation{tc.op},
+			})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("validateReplayCase() error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestOrderDependentConcurrentOperationsAreRejected(t *testing.T) {
+	tests := []struct {
+		name   string
+		before []Operation
+		ops    []Operation
+		want   string
+	}{
+		{
+			name: "clear add memory",
+			ops: []Operation{
+				{Kind: OpClearMemory},
+				{Kind: OpAddMemory, Memory: &MemorySpec{ID: "after-clear", Content: "survives if add commits last"}},
+			},
+			want: "concurrent memory operations are order-dependent",
+		},
+		{
+			name: "event summary cutoff",
+			ops: []Operation{
+				appendMsg("concurrent-event", "user", model.RoleUser, "races summary cutoff"),
+				writeSummary(session.SummaryFilterKeyAllContents),
+			},
+			want: "concurrent event and summary operations are order-dependent",
+		},
+		{
+			name: "same track append order",
+			ops: []Operation{
+				track("same-track", map[string]any{"seq": 1}),
+				track("same-track", map[string]any{"seq": 2}),
+			},
+			want: "concurrent track operations conflict",
+		},
+		{
+			name: "delete add same stable memory",
+			before: []Operation{
+				{Kind: OpAddMemory, Memory: &MemorySpec{ID: "existing", Content: "same identity"}},
+			},
+			ops: []Operation{
+				{Kind: OpDeleteMemory, Memory: &MemorySpec{ID: "existing"}},
+				{Kind: OpAddMemory, Memory: &MemorySpec{ID: "replacement", Content: "same identity"}},
+			},
+			want: "concurrent memory operations conflict",
+		},
+		{
+			name: "track clear state",
+			ops: []Operation{
+				{Kind: OpClearState},
+				track("stateful-track", map[string]any{"seq": 1}),
+			},
+			want: "concurrent state mutations conflict",
+		},
+		{
+			name: "track index state write",
+			ops: []Operation{
+				setState("tracks", raw(`["manual"]`)),
+				track("stateful-track", map[string]any{"seq": 1}),
+			},
+			want: "concurrent track registration conflicts with state mutation",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ops := append([]Operation{}, tc.before...)
+			ops = append(ops, Operation{
+				Kind:       OpConcurrent,
+				Concurrent: tc.ops,
+			})
+			c := ReplayCase{
+				Name:       tc.name,
+				Key:        baseKey(tc.name),
+				Operations: ops,
+			}
+			_, err := NewInMemoryBackend().Apply(context.Background(), c)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Apply() error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
 func TestNormalizeEventPreservesCorrelationFields(t *testing.T) {
 	evt, err := eventFromSpec(EventSpec{
 		LogicalID:          "tool-response",
@@ -724,9 +885,6 @@ func TestMemoryNormalizationUsesReplayLogicalID(t *testing.T) {
 	ids := map[string]bool{}
 	for _, mem := range snapshot.Memories {
 		ids[mem.ID] = true
-		if mem.BackendID == "" {
-			t.Fatalf("backend memory id should be preserved: %+v", mem)
-		}
 	}
 	if !ids["pref"] || !ids["episode"] {
 		t.Fatalf("logical memory ids were not preserved: %+v", snapshot.Memories)
@@ -1139,14 +1297,11 @@ func TestCapabilityProbesReportUnsupportedEventPage(t *testing.T) {
 	}
 }
 
-func TestBackendsReplayMemoryLifecycleAndNilOperations(t *testing.T) {
+func TestBackendsReplayMemoryLifecycle(t *testing.T) {
 	c := ReplayCase{
 		Name: "memory_lifecycle",
 		Key:  baseKey("memory-lifecycle"),
 		Operations: []Operation{
-			{Kind: OpSetState},
-			{Kind: OpDeleteState},
-			{Kind: OpAddMemory},
 			{
 				Kind: OpAddMemory,
 				Memory: &MemorySpec{
@@ -1181,8 +1336,6 @@ func TestBackendsReplayMemoryLifecycleAndNilOperations(t *testing.T) {
 					Topics:  []string{"final"},
 				},
 			},
-			{Kind: OpWriteSummary},
-			{Kind: OpAppendTrack},
 			{Kind: OpUnsupportedProbe, Unsupported: CapabilityTTL},
 		},
 	}
@@ -1622,6 +1775,63 @@ func TestStoreAndHelperErrorBranches(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("findMemoryID returned unknown id %q from entries %+v", id, entries)
+	}
+	canonicalKey := baseKey("lookup-canonical-metadata")
+	canonicalWhen := time.Date(2026, 2, 3, 4, 5, 6, 0, time.UTC)
+	if err := lookupSvc.AddMemory(
+		context.Background(),
+		userKey(canonicalKey),
+		"canonical episode",
+		[]string{"topic"},
+		memory.WithMetadata(&memory.Metadata{
+			Kind:         memory.KindEpisode,
+			EventTime:    &canonicalWhen,
+			Participants: []string{" Alice ", "alice", "BOB"},
+			Location:     " Kyoto ",
+		}),
+	); err != nil {
+		t.Fatalf("AddMemory canonical metadata error = %v", err)
+	}
+	canonicalID, err := findMemoryID(context.Background(), lookupSvc, canonicalKey, &MemorySpec{
+		Content: "canonical episode",
+		Topics:  []string{"topic"},
+		Metadata: &memory.Metadata{
+			Kind:         memory.KindEpisode,
+			EventTime:    &canonicalWhen,
+			Participants: []string{"BOB", "Alice"},
+			Location:     "Kyoto",
+		},
+	})
+	if err != nil || canonicalID == "" {
+		t.Fatalf("findMemoryID canonical metadata result = %q, %v", canonicalID, err)
+	}
+	messyCanonicalID, err := findMemoryID(context.Background(), lookupSvc, canonicalKey, &MemorySpec{
+		Content: "canonical episode",
+		Topics:  []string{"topic"},
+		Metadata: &memory.Metadata{
+			Kind:         memory.KindEpisode,
+			EventTime:    &canonicalWhen,
+			Participants: []string{" Alice ", "alice", "BOB"},
+			Location:     " Kyoto ",
+		},
+	})
+	if err != nil || messyCanonicalID != canonicalID {
+		t.Fatalf("findMemoryID messy canonical metadata result = %q, %v; want %q", messyCanonicalID, err, canonicalID)
+	}
+	collisionA := stableMemorySpecID(canonicalKey, &MemorySpec{
+		Content: "delimiter",
+		Metadata: &memory.Metadata{
+			Participants: []string{"a,b", "c"},
+		},
+	})
+	collisionB := stableMemorySpecID(canonicalKey, &MemorySpec{
+		Content: "delimiter",
+		Metadata: &memory.Metadata{
+			Participants: []string{"a", "b,c"},
+		},
+	})
+	if collisionA == collisionB {
+		t.Fatalf("participant delimiter collision was not avoided: %q", collisionA)
 	}
 	if trackEvent, err := trackEventFromSpec(&TrackSpec{Name: "default", Payload: map[string]any{"ok": true}}); err != nil || trackEvent.Timestamp.IsZero() {
 		t.Fatalf("trackEventFromSpec default timestamp = %+v, %v", trackEvent, err)

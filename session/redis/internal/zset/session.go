@@ -41,7 +41,12 @@ type Client struct {
 	cfg    Config
 }
 
-var errSessionStateNotFound = errors.New("session not found")
+const maxSessionStateCASRetries = 8
+
+var (
+	errSessionStateNotFound       = errors.New("session not found")
+	errSessionStateUpdateConflict = errors.New("session state update conflict")
+)
 
 // NewClient creates a new ZSet client.
 func NewClient(client redis.UniversalClient, cfg Config) *Client {
@@ -399,6 +404,7 @@ func (c *Client) updateSessionStateCAS(
 ) error {
 	sessKey := c.sessionStateKey(key)
 	retryDelay := 5 * time.Millisecond
+	conflicts := 0
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -448,6 +454,10 @@ func (c *Client) updateSessionStateCAS(
 			return fmt.Errorf("session not found")
 		}
 		if err == redis.TxFailedErr {
+			if conflicts >= maxSessionStateCASRetries {
+				return fmt.Errorf("%w after %d retries", errSessionStateUpdateConflict, conflicts)
+			}
+			conflicts++
 			timer := time.NewTimer(retryDelay)
 			select {
 			case <-ctx.Done():

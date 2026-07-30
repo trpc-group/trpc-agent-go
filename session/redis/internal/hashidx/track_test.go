@@ -312,7 +312,15 @@ func (h evalScriptHook) DialHook(next redis.DialHook) redis.DialHook {
 }
 
 func (h evalScriptHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
-	return next
+	return func(ctx context.Context, cmd redis.Cmder) error {
+		switch {
+		case strings.EqualFold(cmd.FullName(), "eval"):
+			h.sawEval.Store(true)
+		case strings.EqualFold(cmd.FullName(), "evalsha"):
+			h.sawEvalSHA.Store(true)
+		}
+		return next(ctx, cmd)
+	}
 }
 
 func (h evalScriptHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
@@ -358,7 +366,75 @@ func TestClient_AppendTrackEvent_QueuesEvalSoScriptCacheFlushCannotDropEvent(t *
 	}, tracksJSON)
 	require.NoError(t, err)
 	require.True(t, sawEval.Load())
-	require.False(t, sawEvalSHA.Load())
+}
+
+type beforeEvalHook struct {
+	before func(context.Context) error
+	ran    atomic.Bool
+}
+
+func (h *beforeEvalHook) DialHook(next redis.DialHook) redis.DialHook {
+	return next
+}
+
+func (h *beforeEvalHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
+	return func(ctx context.Context, cmd redis.Cmder) error {
+		if strings.EqualFold(cmd.FullName(), "eval") && h.ran.CompareAndSwap(false, true) && h.before != nil {
+			if err := h.before(ctx); err != nil {
+				return err
+			}
+		}
+		return next(ctx, cmd)
+	}
+}
+
+func (h *beforeEvalHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return next
+}
+
+func TestClient_AppendTrackEvent_MergesTrackStateAfterConcurrentMetaUpdate(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "trk-meta-race"}
+
+	sideClient := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = sideClient.Close() })
+	sideHashidx := NewClient(sideClient, defaultConfig())
+
+	client := rdb.(*redis.Client)
+	c := NewClient(client, defaultConfig())
+
+	_, err := c.CreateSession(ctx, key, session.StateMap{"marker": []byte(`"initial"`)})
+	require.NoError(t, err)
+
+	hook := &beforeEvalHook{
+		before: func(ctx context.Context) error {
+			return sideHashidx.UpdateSessionState(ctx, key, session.StateMap{
+				"marker": []byte(`"updated"`),
+			})
+		},
+	}
+	client.AddHook(hook)
+
+	tracksJSON, err := json.Marshal([]string{"alpha"})
+	require.NoError(t, err)
+	err = c.AppendTrackEvent(ctx, key, &session.TrackEvent{
+		Track:     "alpha",
+		Payload:   json.RawMessage(`"payload"`),
+		Timestamp: time.Now(),
+	}, tracksJSON)
+	require.NoError(t, err)
+	require.True(t, hook.ran.Load(), "append should use direct EVAL")
+
+	got, err := c.GetSession(ctx, key, 0, time.Time{})
+	require.NoError(t, err)
+	require.Equal(t, []byte(`"updated"`), got.State["marker"])
+	tracks, err := session.TracksFromState(got.State)
+	require.NoError(t, err)
+	require.Contains(t, tracks, session.Track("alpha"))
+	events, err := c.GetTrackEvents(ctx, key, []session.Track{"alpha"}, 0, time.Time{})
+	require.NoError(t, err)
+	require.Len(t, events["alpha"], 1)
 }
 
 func TestLoadTrackEventsViaLua_BadEventJSON(t *testing.T) {

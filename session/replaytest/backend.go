@@ -1170,75 +1170,276 @@ func assignConcurrentSequences(ops []Operation, seq *int) []Operation {
 }
 
 func validateReplayCase(c ReplayCase) error {
-	if err := validateConcurrentStateMutations(c.Operations, "$.operations"); err != nil {
+	if err := validateReplayOperations(c.Operations, "$.operations", c.Key, map[string]string{}); err != nil {
 		return fmt.Errorf("invalid replay case %q: %w", c.Name, err)
 	}
 	return nil
 }
 
-func validateConcurrentStateMutations(ops []Operation, path string) error {
+func validateReplayOperations(ops []Operation, path string, key session.Key, memoryIDs map[string]string) error {
 	for i, op := range ops {
 		opPath := fmt.Sprintf("%s[%d]", path, i)
-		if op.Kind != OpConcurrent {
-			if err := validateConcurrentStateMutations(op.Concurrent, opPath+".concurrent"); err != nil {
-				return err
-			}
-			continue
+		if err := validateReplayOperation(op, opPath, key, memoryIDs); err != nil {
+			return err
 		}
-		seen := map[string]string{}
-		for j, child := range op.Concurrent {
-			childPath := fmt.Sprintf("%s.concurrent[%d]", opPath, j)
-			keys := operationStateMutationKeys(child)
-			for key := range keys {
-				if prev, ok := seen[key]; ok {
-					return fmt.Errorf("concurrent state mutations conflict on key %q between %s and %s", key, prev, childPath)
-				}
-				if prev, ok := seen["*"]; ok && key != "*" {
-					return fmt.Errorf("concurrent state mutation for key %q conflicts with clear_state at %s and %s", key, prev, childPath)
-				}
-				if key == "*" {
-					for seenKey, prev := range seen {
-						if seenKey != "*" {
-							return fmt.Errorf("concurrent clear_state conflicts with state mutation for key %q at %s and %s", seenKey, prev, childPath)
-						}
-					}
-				}
-				seen[key] = childPath
-			}
-			if err := validateConcurrentStateMutations(child.Concurrent, childPath+".concurrent"); err != nil {
-				return err
-			}
-		}
+		recordReplayOperationMemoryIDs(key, op, memoryIDs)
 	}
 	return nil
 }
 
-func operationStateMutationKeys(op Operation) map[string]struct{} {
-	keys := map[string]struct{}{}
-	collectStateMutationKeys(op, keys)
-	return keys
+func validateReplayOperation(op Operation, path string, key session.Key, memoryIDs map[string]string) error {
+	switch op.Kind {
+	case OpAppendEvent, OpRetryEvent:
+		if op.Event == nil {
+			return missingOperationPayload(path, op.Kind, "event")
+		}
+	case OpSetState, OpDeleteState:
+		if op.State == nil {
+			return missingOperationPayload(path, op.Kind, "state")
+		}
+		if op.State.Key == "" {
+			return fmt.Errorf("%s kind %q requires state.key", path, op.Kind)
+		}
+	case OpClearState:
+	case OpAddMemory:
+		if op.Memory == nil {
+			return missingOperationPayload(path, op.Kind, "memory")
+		}
+	case OpUpdateMemory, OpDeleteMemory:
+		if op.Memory == nil {
+			return missingOperationPayload(path, op.Kind, "memory")
+		}
+		if op.Memory.ID == "" {
+			return fmt.Errorf("%s kind %q requires memory.id", path, op.Kind)
+		}
+	case OpClearMemory:
+	case OpWriteSummary:
+		if op.Summary == nil {
+			return missingOperationPayload(path, op.Kind, "summary")
+		}
+	case OpAppendTrack:
+		if op.Track == nil {
+			return missingOperationPayload(path, op.Kind, "track")
+		}
+		if op.Track.Name == "" {
+			return fmt.Errorf("%s kind %q requires track.name", path, op.Kind)
+		}
+	case OpConcurrent:
+		if len(op.Concurrent) == 0 {
+			return missingOperationPayload(path, op.Kind, "concurrent")
+		}
+		childPath := path + ".concurrent"
+		if err := validateConcurrentOperationsAreIndependent(op.Concurrent, childPath, key, memoryIDs); err != nil {
+			return err
+		}
+		return validateReplayOperations(op.Concurrent, childPath, key, cloneStringMap(memoryIDs))
+	case OpUnsupportedProbe:
+		if op.Unsupported == "" {
+			return fmt.Errorf("%s kind %q requires unsupported capability", path, op.Kind)
+		}
+	case OpTTLProbe:
+	default:
+		return fmt.Errorf("%s has unknown operation kind %q", path, op.Kind)
+	}
+	return nil
 }
 
-func collectStateMutationKeys(op Operation, keys map[string]struct{}) {
+func missingOperationPayload(path string, kind OperationKind, field string) error {
+	return fmt.Errorf("%s kind %q requires %s payload", path, kind, field)
+}
+
+type replayOperationFootprint struct {
+	path              string
+	stateKeys         map[string]struct{}
+	stateClear        bool
+	memoryKeys        map[string]struct{}
+	memoryClear       bool
+	summaryKeys       map[string]struct{}
+	hasEvent          bool
+	trackNames        map[string]struct{}
+	trackRegistration bool
+}
+
+func validateConcurrentOperationsAreIndependent(
+	ops []Operation,
+	path string,
+	key session.Key,
+	memoryIDs map[string]string,
+) error {
+	footprints := make([]replayOperationFootprint, 0, len(ops))
+	for i, op := range ops {
+		childPath := fmt.Sprintf("%s[%d]", path, i)
+		footprint := newReplayOperationFootprint(childPath)
+		collectReplayOperationFootprint(key, op, memoryIDs, &footprint)
+		for _, prev := range footprints {
+			if err := validateConcurrentFootprints(prev, footprint); err != nil {
+				return err
+			}
+		}
+		footprints = append(footprints, footprint)
+	}
+	return nil
+}
+
+func newReplayOperationFootprint(path string) replayOperationFootprint {
+	return replayOperationFootprint{
+		path:        path,
+		stateKeys:   map[string]struct{}{},
+		memoryKeys:  map[string]struct{}{},
+		summaryKeys: map[string]struct{}{},
+		trackNames:  map[string]struct{}{},
+	}
+}
+
+func collectReplayOperationFootprint(
+	key session.Key,
+	op Operation,
+	memoryIDs map[string]string,
+	footprint *replayOperationFootprint,
+) {
 	switch op.Kind {
 	case OpAppendEvent, OpRetryEvent:
 		if op.Event == nil {
 			return
 		}
+		footprint.hasEvent = true
 		for key := range op.Event.StateDelta {
-			keys[key] = struct{}{}
+			if key != "" {
+				footprint.stateKeys[key] = struct{}{}
+			}
 		}
 	case OpSetState, OpDeleteState:
 		if op.State != nil && op.State.Key != "" {
-			keys[op.State.Key] = struct{}{}
+			footprint.stateKeys[op.State.Key] = struct{}{}
 		}
 	case OpClearState:
-		keys["*"] = struct{}{}
+		footprint.stateClear = true
+	case OpAddMemory:
+		collectMemoryMutationKeys(key, op.Memory, memoryIDs, footprint, true)
+	case OpUpdateMemory:
+		collectMemoryMutationKeys(key, op.Memory, memoryIDs, footprint, true)
+	case OpDeleteMemory:
+		collectMemoryMutationKeys(key, op.Memory, memoryIDs, footprint, false)
+	case OpClearMemory:
+		footprint.memoryClear = true
+	case OpWriteSummary:
+		if op.Summary != nil {
+			footprint.summaryKeys[op.Summary.FilterKey] = struct{}{}
+		}
+	case OpAppendTrack:
+		if op.Track != nil && op.Track.Name != "" {
+			footprint.trackNames[string(op.Track.Name)] = struct{}{}
+			footprint.trackRegistration = true
+		}
 	case OpConcurrent:
 		for _, child := range op.Concurrent {
-			collectStateMutationKeys(child, keys)
+			collectReplayOperationFootprint(key, child, memoryIDs, footprint)
 		}
 	}
+}
+
+func collectMemoryMutationKeys(
+	key session.Key,
+	spec *MemorySpec,
+	memoryIDs map[string]string,
+	footprint *replayOperationFootprint,
+	includeStable bool,
+) {
+	if spec == nil {
+		return
+	}
+	if spec.ID != "" {
+		footprint.memoryKeys["logical:"+spec.ID] = struct{}{}
+		if stable := memoryIDs[spec.ID]; stable != "" {
+			footprint.memoryKeys["stable:"+stable] = struct{}{}
+		}
+	}
+	if includeStable {
+		footprint.memoryKeys["stable:"+stableMemorySpecID(key, spec)] = struct{}{}
+	}
+}
+
+func validateConcurrentFootprints(left, right replayOperationFootprint) error {
+	if left.stateClear && (right.stateClear || len(right.stateKeys) > 0 || right.trackRegistration) {
+		return fmt.Errorf("concurrent state mutations conflict between %s and %s", left.path, right.path)
+	}
+	if right.stateClear && (left.stateClear || len(left.stateKeys) > 0 || left.trackRegistration) {
+		return fmt.Errorf("concurrent state mutations conflict between %s and %s", left.path, right.path)
+	}
+	for key := range left.stateKeys {
+		if _, ok := right.stateKeys[key]; ok {
+			return fmt.Errorf("concurrent state mutations conflict on key %q between %s and %s", key, left.path, right.path)
+		}
+	}
+	if left.trackRegistration {
+		if _, ok := right.stateKeys["tracks"]; ok {
+			return fmt.Errorf("concurrent track registration conflicts with state mutation for key %q between %s and %s", "tracks", left.path, right.path)
+		}
+	}
+	if right.trackRegistration {
+		if _, ok := left.stateKeys["tracks"]; ok {
+			return fmt.Errorf("concurrent track registration conflicts with state mutation for key %q between %s and %s", "tracks", left.path, right.path)
+		}
+	}
+	if left.memoryClear && (right.memoryClear || len(right.memoryKeys) > 0) {
+		return fmt.Errorf("concurrent memory operations are order-dependent between %s and %s", left.path, right.path)
+	}
+	if right.memoryClear && (left.memoryClear || len(left.memoryKeys) > 0) {
+		return fmt.Errorf("concurrent memory operations are order-dependent between %s and %s", left.path, right.path)
+	}
+	for key := range left.memoryKeys {
+		if _, ok := right.memoryKeys[key]; ok {
+			return fmt.Errorf("concurrent memory operations conflict on %q between %s and %s", key, left.path, right.path)
+		}
+	}
+	if left.hasEvent && len(right.summaryKeys) > 0 {
+		return fmt.Errorf("concurrent event and summary operations are order-dependent between %s and %s", left.path, right.path)
+	}
+	if right.hasEvent && len(left.summaryKeys) > 0 {
+		return fmt.Errorf("concurrent event and summary operations are order-dependent between %s and %s", left.path, right.path)
+	}
+	for key := range left.summaryKeys {
+		if _, ok := right.summaryKeys[key]; ok {
+			return fmt.Errorf("concurrent summary operations conflict on filter key %q between %s and %s", key, left.path, right.path)
+		}
+	}
+	for name := range left.trackNames {
+		if _, ok := right.trackNames[name]; ok {
+			return fmt.Errorf("concurrent track operations conflict on track %q between %s and %s", name, left.path, right.path)
+		}
+	}
+	return nil
+}
+
+func recordReplayOperationMemoryIDs(key session.Key, op Operation, memoryIDs map[string]string) {
+	switch op.Kind {
+	case OpAddMemory, OpUpdateMemory:
+		if op.Memory == nil || op.Memory.ID == "" {
+			return
+		}
+		memoryIDs[op.Memory.ID] = stableMemorySpecID(key, op.Memory)
+	case OpDeleteMemory:
+		if op.Memory == nil || op.Memory.ID == "" {
+			return
+		}
+		delete(memoryIDs, op.Memory.ID)
+	case OpClearMemory:
+		for id := range memoryIDs {
+			delete(memoryIDs, id)
+		}
+	case OpConcurrent:
+		for _, child := range op.Concurrent {
+			recordReplayOperationMemoryIDs(key, child, memoryIDs)
+		}
+	}
+}
+
+func cloneStringMap(in map[string]string) map[string]string {
+	out := make(map[string]string, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
 }
 
 func probeEventPage(
@@ -1632,6 +1833,9 @@ func fileMemoryEntry(key session.Key, spec *MemorySpec) *memory.Entry {
 		m.Kind = memory.KindFact
 	}
 	metadata := normalizedMemoryMetadata(m.Kind, m.EventTime, m.Participants, m.Location)
+	m.Kind = memory.Kind(metadata["kind"])
+	m.Participants = canonicalMemoryParticipants(m.Participants)
+	m.Location = strings.TrimSpace(m.Location)
 	return &memory.Entry{
 		ID:        stableMemoryID(key.AppName, key.UserID, spec.Content, topics, metadata),
 		AppName:   key.AppName,

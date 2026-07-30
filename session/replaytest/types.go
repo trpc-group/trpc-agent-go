@@ -109,9 +109,9 @@ const (
 	OpRetryEvent OperationKind = "retry_event"
 	// OpConcurrent runs child operations from separate goroutines. Child
 	// operations are released together, so their commit order is intentionally
-	// backend and scheduler dependent. State mutations inside the same
-	// concurrent group must be disjoint; conflicting state writes are rejected
-	// during replay validation.
+	// backend and scheduler dependent. State mutations must be disjoint, and
+	// replay validation also rejects order-dependent memory, summary, and track
+	// combinations.
 	OpConcurrent OperationKind = "concurrent"
 	// OpUnsupportedProbe records unsupported backend capability metadata.
 	OpUnsupportedProbe OperationKind = "unsupported_probe"
@@ -215,7 +215,6 @@ type Snapshot struct {
 	Tracks      []NormalizedTrack          `json:"tracks"`
 	Unsupported []UnsupportedFeature       `json:"unsupported,omitempty"`
 	EventOrder  []string                   `json:"event_order,omitempty"`
-	RawEventIDs map[string]int             `json:"-"`
 }
 
 // UnsupportedFeature records an unsupported backend capability.
@@ -265,7 +264,6 @@ type NormalizedToolCall struct {
 // NormalizedMemory is a stable memory representation.
 type NormalizedMemory struct {
 	ID        string            `json:"id"`
-	BackendID string            `json:"-"`
 	StableID  string            `json:"stable_id"`
 	Content   string            `json:"content"`
 	Topics    []string          `json:"topics,omitempty"`

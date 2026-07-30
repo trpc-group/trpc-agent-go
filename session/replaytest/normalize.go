@@ -46,7 +46,6 @@ func normalizeSession(
 		Backend:     backendName,
 		Unsupported: unsupported,
 		State:       make(map[string]NormalizedValue),
-		RawEventIDs: make(map[string]int),
 	}
 	if sess == nil {
 		return s
@@ -72,7 +71,6 @@ func normalizeSession(
 	eventRefs := make(map[string]normalizedEventRef, len(events))
 	for i, evt := range events {
 		if evt.ID != "" {
-			s.RawEventIDs[evt.ID] = i
 			eventRefs[evt.ID] = normalizedEventRef{Index: i, Time: evt.Timestamp}
 		}
 		s.Events = append(s.Events, normalizeEvent(i, evt))
@@ -211,7 +209,6 @@ func normalizeMemoryEntry(entry *memory.Entry, logicalIDs map[string]string) (No
 	}
 	return NormalizedMemory{
 		ID:        id,
-		BackendID: entry.ID,
 		StableID:  stable,
 		Content:   content,
 		Topics:    topics,
@@ -433,22 +430,65 @@ func normalizedMemoryMetadata(
 	participants []string,
 	location string,
 ) map[string]string {
-	metadata := map[string]string{}
-	if kind != "" {
-		metadata["kind"] = string(kind)
+	participants = canonicalMemoryParticipants(participants)
+	location = strings.TrimSpace(location)
+	if kind == "" {
+		kind = memory.KindFact
 	}
+	metadata := map[string]string{"kind": string(kind)}
 	if eventTime != nil && !eventTime.IsZero() {
 		metadata["event_time"] = eventTime.UTC().Format(time.RFC3339Nano)
 	}
 	if len(participants) > 0 {
-		sortedParticipants := append([]string{}, participants...)
-		sort.Strings(sortedParticipants)
-		metadata["participants"] = strings.Join(sortedParticipants, ",")
+		metadata["participants"] = canonicalStringList(participants)
 	}
 	if location != "" {
 		metadata["location"] = location
 	}
 	return metadata
+}
+
+func canonicalMemoryParticipants(participants []string) []string {
+	if len(participants) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(participants))
+	for _, participant := range participants {
+		participant = strings.TrimSpace(participant)
+		if participant != "" {
+			out = append(out, participant)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	sort.Slice(out, func(i, j int) bool {
+		left := strings.ToLower(out[i])
+		right := strings.ToLower(out[j])
+		if left != right {
+			return left < right
+		}
+		return out[i] < out[j]
+	})
+	deduped := out[:0]
+	var prevFolded string
+	for _, participant := range out {
+		folded := strings.ToLower(participant)
+		if len(deduped) > 0 && folded == prevFolded {
+			continue
+		}
+		deduped = append(deduped, participant)
+		prevFolded = folded
+	}
+	return deduped
+}
+
+func canonicalStringList(values []string) string {
+	data, err := json.Marshal(values)
+	if err != nil {
+		return strings.Join(values, "\x00")
+	}
+	return string(data)
 }
 
 func stableMemoryID(
@@ -458,6 +498,9 @@ func stableMemoryID(
 	topics []string,
 	metadata map[string]string,
 ) string {
+	if metadata == nil {
+		metadata = map[string]string{}
+	}
 	kind := metadata["kind"]
 	if kind == "" {
 		kind = string(memory.KindFact)
@@ -466,7 +509,7 @@ func stableMemoryID(
 		appName,
 		userID,
 		content,
-		strings.Join(topics, ","),
+		canonicalStringList(topics),
 		kind,
 		metadata["event_time"],
 		metadata["participants"],

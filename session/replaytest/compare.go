@@ -480,24 +480,18 @@ func expectedMemoryFromSpec(key session.Key, spec *MemorySpec) NormalizedMemory 
 	topics := append([]string{}, spec.Topics...)
 	sort.Strings(topics)
 	kind := memory.KindFact
-	metadata := map[string]string{"kind": string(kind)}
+	var eventTime *time.Time
+	var participants []string
+	var location string
 	if spec.Metadata != nil {
 		if spec.Metadata.Kind != "" {
 			kind = spec.Metadata.Kind
-			metadata["kind"] = string(kind)
 		}
-		if spec.Metadata.EventTime != nil && !spec.Metadata.EventTime.IsZero() {
-			metadata["event_time"] = spec.Metadata.EventTime.UTC().Format(time.RFC3339Nano)
-		}
-		if len(spec.Metadata.Participants) > 0 {
-			participants := append([]string{}, spec.Metadata.Participants...)
-			sort.Strings(participants)
-			metadata["participants"] = strings.Join(participants, ",")
-		}
-		if spec.Metadata.Location != "" {
-			metadata["location"] = spec.Metadata.Location
-		}
+		eventTime = spec.Metadata.EventTime
+		participants = spec.Metadata.Participants
+		location = spec.Metadata.Location
 	}
+	metadata := normalizedMemoryMetadata(kind, eventTime, participants, location)
 	stable := stableMemorySpecID(key, spec)
 	id := stable
 	if spec.ID != "" {

@@ -407,7 +407,8 @@ return 1
 // ARGV[1] = TrackEvent JSON
 // ARGV[2] = timestamp (UnixNano)
 // ARGV[3] = TTL (seconds, 0 = no TTL)
-// ARGV[4] = updated tracks value (base64-encoded JSON array, to set as state.tracks)
+// ARGV[4] = fallback tracks JSON array
+// ARGV[5] = track name to register
 // Returns: generated eventID (integer) on success, 0 if session not found.
 var luaAppendTrackEvent = redis.NewScript(`
 local dataKey = KEYS[1]
@@ -417,7 +418,8 @@ local metaKey = KEYS[3]
 local payload = ARGV[1]
 local ts = tonumber(ARGV[2])
 local ttl = tonumber(ARGV[3])
-local tracksVal = ARGV[4]
+local fallbackTracksJSON = ARGV[4]
+local trackName = ARGV[5]
 
 local function setPreserveTTL(key, value)
     local ttlMs = redis.call('PTTL', key)
@@ -427,10 +429,113 @@ local function setPreserveTTL(key, value)
     end
 end
 
+local b64chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+
+local function b64enc(data)
+    return ((data:gsub('.', function(x)
+        local r = ''
+        local byte = x:byte()
+        for i = 8, 1, -1 do
+            if byte % 2^i - byte % 2^(i - 1) > 0 then
+                r = r .. '1'
+            else
+                r = r .. '0'
+            end
+        end
+        return r
+    end) .. '0000'):gsub('%d%d%d?%d?%d?%d?', function(x)
+        if #x < 6 then
+            return ''
+        end
+        local c = 0
+        for i = 1, 6 do
+            if x:sub(i, i) == '1' then
+                c = c + 2^(6 - i)
+            end
+        end
+        return b64chars:sub(c + 1, c + 1)
+    end) .. ({ '', '==', '=' })[#data % 3 + 1])
+end
+
+local function b64dec(data)
+    data = string.gsub(data or '', '[^' .. b64chars .. '=]', '')
+    return (data:gsub('.', function(x)
+        if x == '=' then
+            return ''
+        end
+        local r = ''
+        local f = b64chars:find(x, 1, true) - 1
+        for i = 6, 1, -1 do
+            if f % 2^i - f % 2^(i - 1) > 0 then
+                r = r .. '1'
+            else
+                r = r .. '0'
+            end
+        end
+        return r
+    end):gsub('%d%d%d?%d?%d?%d?%d?%d?', function(x)
+        if #x ~= 8 then
+            return ''
+        end
+        local c = 0
+        for i = 1, 8 do
+            if x:sub(i, i) == '1' then
+                c = c + 2^(8 - i)
+            end
+        end
+        return string.char(c)
+    end))
+end
+
+local function decodeTracksFromState(encoded)
+    if not encoded or encoded == '' then
+        return nil
+    end
+    local decodedOK, decoded = pcall(b64dec, encoded)
+    if not decodedOK or decoded == '' then
+        return nil
+    end
+    local tracksOK, tracks = pcall(cjson.decode, decoded)
+    if not tracksOK or type(tracks) ~= 'table' then
+        return nil
+    end
+    return tracks
+end
+
+local function decodeFallbackTracks(raw)
+    if not raw or raw == '' then
+        return {}
+    end
+    local tracksOK, tracks = pcall(cjson.decode, raw)
+    if not tracksOK or type(tracks) ~= 'table' then
+        return {}
+    end
+    return tracks
+end
+
 -- Check session exists and read meta
 local metaJSON = redis.call('GET', metaKey)
 if not metaJSON then
     return 0
+end
+local meta = cjson.decode(metaJSON)
+if not meta.state or type(meta.state) ~= 'table' then
+    meta.state = {}
+end
+
+local tracks = decodeTracksFromState(meta.state['tracks'])
+if not tracks then
+    tracks = decodeFallbackTracks(fallbackTracksJSON)
+end
+local hasTrack = false
+for _, existing in ipairs(tracks) do
+    if existing == trackName then
+        hasTrack = true
+        break
+    end
+end
+if not hasTrack then
+    table.insert(tracks, trackName)
 end
 
 -- Generate auto-increment ID via reserved "_seq" field in the data Hash
@@ -440,12 +545,10 @@ local id = redis.call('HINCRBY', dataKey, '_seq', 1)
 redis.call('HSET', dataKey, id, payload)
 redis.call('ZADD', idxKey, ts, id)
 
--- Update session meta's state.tracks with the Go-provided value
-local meta = cjson.decode(metaJSON)
-if not meta.state or type(meta.state) ~= 'table' then
-    meta.state = {}
-end
-meta.state['tracks'] = tracksVal
+-- Update session meta's state.tracks from the latest meta value inside this
+-- script, so concurrent metadata writes do not force WATCH retries or drop the
+-- track event.
+meta.state['tracks'] = b64enc(cjson.encode(tracks))
 setPreserveTTL(metaKey, cjson.encode(meta))
 
 -- Refresh TTL for track data keys

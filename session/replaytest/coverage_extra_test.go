@@ -114,7 +114,7 @@ func TestNormalizeSearchAndSortExtraBranches(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("normalized search results = %d, want 2: %+v", len(got), got)
 	}
-	if got[0].BackendID != "b" || got[1].BackendID != "a" {
+	if got[0].ScoreBand != "0.95-1.00" || got[1].ScoreBand != "0.00-0.50" {
 		t.Fatalf("search result order was not preserved: %+v", got)
 	}
 	for _, mem := range got {
