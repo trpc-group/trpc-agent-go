@@ -64,14 +64,17 @@ type interactiveSession struct {
 	timedOut bool
 	duration time.Duration
 
-	lineBase   int
-	lines      []string
-	partial    string
-	pollCursor int
-	maxLines   int
-	closeOnce  sync.Once
-	stdout     strings.Builder
-	stderr     strings.Builder
+	lineBase       int
+	lines          []string
+	partial        string
+	pollCursor     int
+	maxLines       int
+	maxOutputBytes int
+	outputBytes    int
+	truncated      bool
+	closeOnce      sync.Once
+	stdout         strings.Builder
+	stderr         strings.Builder
 }
 
 func newInteractiveSession(
@@ -122,6 +125,7 @@ func (s *interactiveSession) Poll(limit *int) codeexecutor.ProgramPoll {
 		Output:     out,
 		Offset:     start,
 		NextOffset: end,
+		Truncated:  s.truncated,
 	}
 	if s.finished.IsZero() {
 		res.Status = codeexecutor.ProgramStatusRunning
@@ -171,6 +175,7 @@ func (s *interactiveSession) Log(
 		Output:     out,
 		Offset:     start,
 		NextOffset: end,
+		Truncated:  s.truncated,
 	}
 }
 
@@ -266,11 +271,12 @@ func (s *interactiveSession) RunResult() codeexecutor.RunResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return codeexecutor.RunResult{
-		Stdout:   s.stdout.String(),
-		Stderr:   s.stderr.String(),
-		ExitCode: s.exitCode,
-		Duration: s.duration,
-		TimedOut: s.timedOut,
+		Stdout:    s.stdout.String(),
+		Stderr:    s.stderr.String(),
+		ExitCode:  s.exitCode,
+		Duration:  s.duration,
+		TimedOut:  s.timedOut,
+		Truncated: s.truncated,
 	}
 }
 
@@ -323,6 +329,21 @@ func (s *interactiveSession) appendOutput(
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if s.maxOutputBytes > 0 {
+		remaining := s.maxOutputBytes - s.outputBytes
+		if remaining < len(text) {
+			if remaining < 0 {
+				remaining = 0
+			}
+			text = text[:remaining]
+			s.truncated = true
+		}
+		s.outputBytes += len(text)
+	}
+	if text == "" {
+		return
+	}
 
 	switch stream {
 	case "stderr":
@@ -392,6 +413,7 @@ func (r *Runtime) StartProgram(
 		formatInteractiveCommand(spec.Cmd, spec.Args),
 		defaultInteractiveMaxLines,
 	)
+	sess.maxOutputBytes = spec.MaxOutputBytes
 	sess.cmd = cmd
 	sess.cancel = cancel
 	startedAt := time.Now()

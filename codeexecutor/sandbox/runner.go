@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	"trpc.group/trpc-go/trpc-agent-go/internal/outputlimit"
 )
 
 // RunProgram executes a command in the workspace under the active sandbox
@@ -50,10 +51,14 @@ func (r *Runtime) RunProgram(
 	if cleanup != nil {
 		defer cleanup()
 	}
-	stdout := newLimitedBuffer(r.outputMaxBytes)
-	stderr := newLimitedBuffer(r.outputMaxBytes)
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
+	outputMaxBytes := r.outputMaxBytes
+	if spec.MaxOutputBytes > 0 &&
+		(outputMaxBytes <= 0 || spec.MaxOutputBytes < outputMaxBytes) {
+		outputMaxBytes = spec.MaxOutputBytes
+	}
+	output := outputlimit.New(outputMaxBytes)
+	cmd.Stdout = output.Writer(outputlimit.Stdout)
+	cmd.Stderr = output.Writer(outputlimit.Stderr)
 	if spec.Stdin != "" {
 		cmd.Stdin = strings.NewReader(spec.Stdin)
 	} else {
@@ -78,12 +83,14 @@ func (r *Runtime) RunProgram(
 	if err != nil {
 		return codeexecutor.RunResult{}, err
 	}
+	stdout, stderr := output.Strings()
 	result := codeexecutor.RunResult{
-		Stdout:   stdout.String(),
-		Stderr:   stderr.String(),
-		ExitCode: exitCode,
-		Duration: duration,
-		TimedOut: timedOut,
+		Stdout:    stdout,
+		Stderr:    stderr,
+		ExitCode:  exitCode,
+		Duration:  duration,
+		TimedOut:  timedOut,
+		Truncated: output.Truncated(),
 	}
 	if timedOut {
 		return result, &sandboxError{

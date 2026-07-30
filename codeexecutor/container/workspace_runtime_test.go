@@ -353,10 +353,13 @@ func TestWorkspaceRuntime_RunProgram_InsertsWorkspaceEnv(t *testing.T) {
 	require.NoError(t, err)
 
 	// Run without explicit WORKSPACE_DIR; runtime should inject it.
-	_, err = rt.RunProgram(context.Background(), ws,
+	res, err := rt.RunProgram(context.Background(), ws,
 		codeexecutor.RunProgramSpec{Cmd: "bash",
-			Args: []string{"-lc", "true"}})
+			Args:           []string{"-lc", "true"},
+			MaxOutputBytes: 2})
 	require.NoError(t, err)
+	require.Equal(t, "OU", res.Stdout)
+	require.True(t, res.Truncated)
 	require.NotEmpty(t, capturedCmd)
 	// Join the command string array; the env is embedded in -lc.
 	joined := strings.Join(capturedCmd, " ")

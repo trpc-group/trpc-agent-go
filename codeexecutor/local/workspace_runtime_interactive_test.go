@@ -52,6 +52,23 @@ func TestInteractiveSession_PollLogAndTrim(t *testing.T) {
 	require.True(t, result.TimedOut)
 }
 
+func TestInteractiveSession_MaxOutputBytes(t *testing.T) {
+	sess := newInteractiveSession("bounded", "printf", 20)
+	sess.maxOutputBytes = 5
+
+	sess.appendOutput("abc", "stdout")
+	sess.appendOutput("def", "stderr")
+
+	poll := sess.Poll(nil)
+	require.Equal(t, "abcde", poll.Output)
+	require.True(t, poll.Truncated)
+
+	result := sess.RunResult()
+	require.Equal(t, "abc", result.Stdout)
+	require.Equal(t, "de", result.Stderr)
+	require.True(t, result.Truncated)
+}
+
 func TestInteractiveSession_WriteKillAndClose(t *testing.T) {
 	sess := newInteractiveSession("s2", "cat", 5)
 

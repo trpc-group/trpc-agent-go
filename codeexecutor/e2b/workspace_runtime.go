@@ -34,6 +34,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	ci "trpc.group/trpc-go/trpc-agent-go/codeexecutor/e2b/internal/codeinterpreter"
+	"trpc.group/trpc-go/trpc-agent-go/internal/outputlimit"
 	atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 )
 
@@ -658,6 +659,10 @@ func (r *workspaceRuntime) RunProgram(
 	dur := time.Since(start)
 
 	stdout, stderr, exit := parseFramedOutput(stdoutRaw, stderrRaw)
+	output := outputlimit.New(spec.MaxOutputBytes)
+	output.Append(outputlimit.Stdout, []byte(stdout))
+	output.Append(outputlimit.Stderr, []byte(stderr))
+	stdout, stderr = output.Strings()
 
 	timedOut := false
 	if err != nil {
@@ -668,11 +673,12 @@ func (r *workspaceRuntime) RunProgram(
 	}
 
 	res := codeexecutor.RunResult{
-		Stdout:   stdout,
-		Stderr:   stderr,
-		ExitCode: exit,
-		Duration: dur,
-		TimedOut: timedOut,
+		Stdout:    stdout,
+		Stderr:    stderr,
+		ExitCode:  exit,
+		Duration:  dur,
+		TimedOut:  timedOut,
+		Truncated: output.Truncated(),
 	}
 	span.SetAttributes(
 		attribute.Int(codeexecutor.AttrExitCode, res.ExitCode),

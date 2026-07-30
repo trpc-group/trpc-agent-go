@@ -37,6 +37,7 @@ type ProgramPoll struct {
 	Offset     int
 	NextOffset int
 	ExitCode   *int
+	Truncated  bool
 }
 
 // ProgramLog returns output from a specific offset without mutating the
@@ -45,6 +46,7 @@ type ProgramLog struct {
 	Output     string
 	Offset     int
 	NextOffset int
+	Truncated  bool
 }
 
 // ProgramSession exposes a running interactive program session.
