@@ -47,7 +47,7 @@ const (
 	gitDiffTimeout = 30 * time.Second
 )
 
-type gitDiffRunner func(context.Context, string, []string) ([]byte, []byte, error)
+type gitCommandRunner func(context.Context, string, []string) ([]byte, []byte, error)
 
 type config struct {
 	diffFile          string
@@ -171,7 +171,7 @@ type fixtureSandboxRun struct {
 }
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr, os.Getenv, runGitDiff))
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr, os.Getenv, runGitCommand))
 }
 
 func run(
@@ -179,7 +179,7 @@ func run(
 	stdout io.Writer,
 	stderr io.Writer,
 	getenv func(string) string,
-	gitRunner gitDiffRunner,
+	gitRunner gitCommandRunner,
 ) int {
 	return runWithHooks(args, stdout, stderr, getenv, gitRunner, runtimeHooks{})
 }
@@ -189,14 +189,14 @@ func runWithHooks(
 	stdout io.Writer,
 	stderr io.Writer,
 	getenv func(string) string,
-	gitRunner gitDiffRunner,
+	gitRunner gitCommandRunner,
 	hooks runtimeHooks,
 ) int {
 	if getenv == nil {
 		getenv = os.Getenv
 	}
 	if gitRunner == nil {
-		gitRunner = runGitDiff
+		gitRunner = runGitCommand
 	}
 
 	cfg, code, err := parseConfig(args, getenv)
@@ -591,7 +591,7 @@ func hasWindowsDrive(value string) bool {
 func loadReviewInput(
 	ctx context.Context,
 	cfg config,
-	gitRunner gitDiffRunner,
+	gitRunner gitCommandRunner,
 ) (reviewInput, error) {
 	switch {
 	case cfg.diffFile != "":
@@ -614,14 +614,22 @@ func loadReviewInput(
 	case cfg.repoPath != "":
 		runCtx, cancel := context.WithTimeout(ctx, gitDiffTimeout)
 		defer cancel()
-		args := append([]string{"diff", "--no-ext-diff", "--no-textconv", "HEAD", "--"}, []string(cfg.files)...)
-		stdout, stderr, err := gitRunner(runCtx, cfg.repoPath, args)
+		rootStdout, rootStderr, err := gitRunner(
+			runCtx,
+			cfg.repoPath,
+			[]string{"rev-parse", "--show-toplevel"},
+		)
 		if err != nil {
-			msg := strings.TrimSpace(string(stderr))
-			if msg == "" {
-				return reviewInput{}, fmt.Errorf("run git diff: %w", err)
-			}
-			return reviewInput{}, fmt.Errorf("run git diff: %w: %s", err, msg)
+			return reviewInput{}, gitCommandError("resolve git worktree root", err, rootStderr)
+		}
+		repoRoot, err := validateGitWorktreeRoot(cfg.repoPath, rootStdout)
+		if err != nil {
+			return reviewInput{}, err
+		}
+		args := append([]string{"diff", "--no-ext-diff", "--no-textconv", "HEAD", "--"}, []string(cfg.files)...)
+		stdout, stderr, err := gitRunner(runCtx, repoRoot, args)
+		if err != nil {
+			return reviewInput{}, gitCommandError("run git diff", err, stderr)
 		}
 		if int64(len(stdout)) > maxDiffBytes {
 			return reviewInput{}, fmt.Errorf("git diff output exceeds %d bytes", maxDiffBytes)
@@ -630,7 +638,7 @@ func loadReviewInput(
 			kind:      inputKindRepoPath,
 			source:    cfg.repoPath,
 			diff:      stdout,
-			repoRoot:  cfg.repoPath,
+			repoRoot:  repoRoot,
 			repoFiles: append([]string(nil), cfg.files...),
 		}, nil
 	default:
@@ -781,31 +789,6 @@ func readLimited(r io.Reader, limit int64) ([]byte, error) {
 		return nil, fmt.Errorf("input exceeds %d bytes", limit)
 	}
 	return buf.Bytes(), nil
-}
-
-func runGitDiff(ctx context.Context, repoPath string, args []string) ([]byte, []byte, error) {
-	cmd, err := newHardenedGitCommand(ctx, repoPath, args...)
-	if err != nil {
-		return nil, nil, err
-	}
-	var stdout limitBuffer
-	var stderr limitBuffer
-	stdout.limit = int(maxDiffBytes)
-	stderr.limit = int(maxStderrBytes)
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err = cmd.Run()
-	if ctx.Err() != nil {
-		return stdout.Bytes(), stderr.Bytes(), fmt.Errorf("git diff timed out after %s", gitDiffTimeout)
-	}
-	if stdout.truncated {
-		return stdout.Bytes(), stderr.Bytes(), fmt.Errorf("git diff output exceeds %d bytes", maxDiffBytes)
-	}
-	if err != nil {
-		return stdout.Bytes(), stderr.Bytes(), err
-	}
-	return stdout.Bytes(), stderr.Bytes(), nil
 }
 
 type limitBuffer struct {

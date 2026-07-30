@@ -46,7 +46,7 @@ func TestHardenedGitDiffDoesNotExecuteConfiguredPrograms(t *testing.T) {
 	t.Setenv("GIT_CONFIG_VALUE_0", filepath.ToSlash(environmentProgram))
 	t.Setenv("PAGER", filepath.ToSlash(environmentProgram))
 
-	stdout, stderr, err := runGitDiff(context.Background(), repoRoot, []string{
+	stdout, stderr, err := runGitCommand(context.Background(), repoRoot, []string{
 		"diff", "--no-ext-diff", "--no-textconv", "HEAD", "--",
 	})
 	if err != nil {
@@ -108,6 +108,45 @@ func TestHardenedGitEnvironmentRemovesGitAndPagerVariables(t *testing.T) {
 	}
 }
 
+func TestHardenedGitCommandUsesWorktreeRootSafeDirectoryForNestedPath(t *testing.T) {
+	repoRoot := t.TempDir()
+	mustRunGit(t, repoRoot, "init")
+	nestedPath := filepath.Join(repoRoot, "pkg", "nested")
+	if err := os.MkdirAll(nestedPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	resolvedRoot, err := resolveExistingPath(repoRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolvedNested, err := resolveExistingPath(nestedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cmd, err := newHardenedGitCommand(
+		context.Background(),
+		nestedPath,
+		"rev-parse", "--show-toplevel",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd.Dir != resolvedNested {
+		t.Fatalf("git cwd = %q, want nested input %q", cmd.Dir, resolvedNested)
+	}
+	var safeDirectories []string
+	for i := 0; i+1 < len(cmd.Args); i++ {
+		if cmd.Args[i] == "-c" && strings.HasPrefix(cmd.Args[i+1], "safe.directory=") {
+			safeDirectories = append(safeDirectories, cmd.Args[i+1])
+		}
+	}
+	wantSafeDirectory := "safe.directory=" + filepath.ToSlash(resolvedRoot)
+	if len(safeDirectories) != 1 || safeDirectories[0] != wantSafeDirectory {
+		t.Fatalf("safe.directory args = %#v, want %q", safeDirectories, wantSafeDirectory)
+	}
+}
+
 func TestHardenedGitDiffUsesLiteralPathspecs(t *testing.T) {
 	repoRoot := t.TempDir()
 	mustRunGit(t, repoRoot, "init")
@@ -118,7 +157,7 @@ func TestHardenedGitDiffUsesLiteralPathspecs(t *testing.T) {
 	mustWriteFile(t, filepath.Join(repoRoot, "[ab].go"), "package literal\n\nconst value = 2\n")
 	mustWriteFile(t, filepath.Join(repoRoot, "a.go"), "package literal\n\nconst other = 2\n")
 
-	stdout, stderr, err := runGitDiff(context.Background(), repoRoot, []string{
+	stdout, stderr, err := runGitCommand(context.Background(), repoRoot, []string{
 		"diff", "--no-ext-diff", "--no-textconv", "HEAD", "--", "[ab].go",
 	})
 	if err != nil {
@@ -138,11 +177,11 @@ func TestHardenedGitDiffKeepsOutputLimit(t *testing.T) {
 	mustCommitGit(t, repoRoot)
 	mustWriteFile(t, filepath.Join(repoRoot, "large.txt"), strings.Repeat("x", int(maxDiffBytes)+1024)+"\n")
 
-	_, _, err := runGitDiff(context.Background(), repoRoot, []string{
+	_, _, err := runGitCommand(context.Background(), repoRoot, []string{
 		"diff", "--no-ext-diff", "--no-textconv", "HEAD", "--",
 	})
 	if err == nil || !strings.Contains(err.Error(), "output exceeds") {
-		t.Fatalf("runGitDiff error = %v, want output limit", err)
+		t.Fatalf("runGitCommand error = %v, want output limit", err)
 	}
 }
 

@@ -755,16 +755,31 @@ func TestReportPathsAreRelativeAndDoNotPersistOutputDirectorySecrets(t *testing.
 }
 
 func TestFilesAreNormalizedAndPassedToGit(t *testing.T) {
+	repoPath := t.TempDir()
+	repoRoot, err := resolveExistingPath(repoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var gotRepo string
 	var gotArgs []string
+	calls := 0
 	runner := func(_ context.Context, repoPath string, args []string) ([]byte, []byte, error) {
-		gotRepo = repoPath
-		gotArgs = append([]string(nil), args...)
-		return []byte(minimalDiff()), nil, nil
+		calls++
+		switch calls {
+		case 1:
+			return []byte(filepath.ToSlash(repoRoot) + "\n"), nil, nil
+		case 2:
+			gotRepo = repoPath
+			gotArgs = append([]string(nil), args...)
+			return []byte(minimalDiff()), nil, nil
+		default:
+			t.Fatalf("unexpected git call %d", calls)
+			return nil, nil, nil
+		}
 	}
 
 	code, stdout, stderr := runForTest(t, []string{
-		"--repo-path", "repo",
+		"--repo-path", repoPath,
 		"--files", "a.go,b.go",
 		"--files", `pkg\c.go`,
 		"--runtime", "fake",
@@ -772,8 +787,11 @@ func TestFilesAreNormalizedAndPassedToGit(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0; stderr: %s", code, stderr)
 	}
-	if gotRepo != "repo" {
-		t.Fatalf("repo path = %q, want repo", gotRepo)
+	if calls != 2 {
+		t.Fatalf("git calls = %d, want rev-parse and diff", calls)
+	}
+	if gotRepo != repoRoot {
+		t.Fatalf("diff repo path = %q, want canonical root %q", gotRepo, repoRoot)
 	}
 	wantArgs := []string{"diff", "--no-ext-diff", "--no-textconv", "HEAD", "--", "a.go", "b.go", "pkg/c.go"}
 	if !reflect.DeepEqual(gotArgs, wantArgs) {
@@ -1005,7 +1023,7 @@ func TestSkillRunBridgeArgumentsUseGovernedSpec(t *testing.T) {
 	}
 }
 
-func TestPlanCommandsStagesRepoOnlyOnce(t *testing.T) {
+func TestPlanCommandsStagesRepoForEveryRepositoryCheck(t *testing.T) {
 	input := reviewInput{
 		kind:            inputKindRepoPath,
 		repoRoot:        t.TempDir(),
@@ -1038,14 +1056,9 @@ func TestPlanCommandsStagesRepoOnlyOnce(t *testing.T) {
 		if command.Env["REVIEW_REPO_DIR"] != reviewRepoDirFromSkill {
 			t.Fatalf("command %d REVIEW_REPO_DIR = %q", i, command.Env["REVIEW_REPO_DIR"])
 		}
-		if i == 1 {
-			if len(command.Inputs) != 1 || command.Inputs[0].To != reviewRepoInputTarget {
-				t.Fatalf("go test inputs = %+v", command.Inputs)
-			}
-			continue
-		}
-		if len(command.Inputs) != 0 {
-			t.Fatalf("command %d inputs = %+v, want none", i, command.Inputs)
+		if len(command.Inputs) != 1 || command.Inputs[0].To != reviewRepoInputTarget ||
+			command.Inputs[0].Mode != "copy" {
+			t.Fatalf("command %d inputs = %+v, want one repository copy", i, command.Inputs)
 		}
 	}
 }
@@ -1294,8 +1307,25 @@ func TestGovernanceScopedFilesSkipRepositoryChecks(t *testing.T) {
 	mustRunGit(t, repoRoot, "add", "hello.go", "outside.go")
 
 	runner := &recordingSandboxRunner{}
-	gitRunner := func(_ context.Context, _ string, _ []string) ([]byte, []byte, error) {
-		return []byte(minimalDiff()), nil, nil
+	resolvedRoot, err := resolveExistingPath(repoRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitCalls := 0
+	gitRunner := func(_ context.Context, repoPath string, _ []string) ([]byte, []byte, error) {
+		gitCalls++
+		switch gitCalls {
+		case 1:
+			return []byte(filepath.ToSlash(resolvedRoot) + "\n"), nil, nil
+		case 2:
+			if repoPath != resolvedRoot {
+				t.Fatalf("diff repo path = %q, want canonical root %q", repoPath, resolvedRoot)
+			}
+			return []byte(minimalDiff()), nil, nil
+		default:
+			t.Fatalf("unexpected git call %d", gitCalls)
+			return nil, nil, nil
+		}
 	}
 	code, stdout, stderr := runForTestWithHooks(t, []string{
 		"--repo-path", repoRoot,
@@ -1306,6 +1336,9 @@ func TestGovernanceScopedFilesSkipRepositoryChecks(t *testing.T) {
 	})
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0; stderr: %s", code, stderr)
+	}
+	if gitCalls != 2 {
+		t.Fatalf("git calls = %d, want rev-parse and diff", gitCalls)
 	}
 	if len(runner.calls) != 1 || runner.calls[0].Kind != commandCheckGoVersion {
 		t.Fatalf("runner calls = %+v, want only go version", runner.calls)
@@ -2002,7 +2035,7 @@ func TestGovernanceBlockedPreflightSkipsLaterCommands(t *testing.T) {
 	}
 }
 
-func TestGovernanceSkipsRepoCommandsWhenStagingCommandBlocked(t *testing.T) {
+func TestGovernanceBlockedRepoCommandDoesNotSkipIndependentChecks(t *testing.T) {
 	permissionCalls := 0
 	runner := &recordingSandboxRunner{}
 	gov, err := runGovernance(context.Background(), config{}, reviewInput{
@@ -2025,12 +2058,13 @@ func TestGovernanceSkipsRepoCommandsWhenStagingCommandBlocked(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runGovernance: %v", err)
 	}
-	if len(runner.calls) != 1 || runner.calls[0].Kind != commandCheckGoVersion {
-		t.Fatalf("runner calls = %+v, want only go version", runner.calls)
+	if len(runner.calls) != 2 || runner.calls[0].Kind != commandCheckGoVersion ||
+		runner.calls[1].Kind != commandCheckGoVet {
+		t.Fatalf("runner calls = %+v, want version and independent vet", runner.calls)
 	}
-	if len(gov.SandboxRuns) != 2 || !gov.SandboxRuns[1].Skipped ||
+	if len(gov.SandboxRuns) != 2 || gov.SandboxRuns[1].Skipped ||
 		gov.SandboxRuns[1].Command != string(commandCheckGoVet) {
-		t.Fatalf("sandbox runs = %+v, want vet skipped after staging block", gov.SandboxRuns)
+		t.Fatalf("sandbox runs = %+v, want vet to run independently", gov.SandboxRuns)
 	}
 }
 
@@ -2091,21 +2125,40 @@ func TestDiffFileAndFixtureInputSummaries(t *testing.T) {
 }
 
 func TestRepoPathUsesGitDiffArgumentArray(t *testing.T) {
+	repoPath := t.TempDir()
+	repoRoot, err := resolveExistingPath(repoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var gotArgs []string
-	runner := func(_ context.Context, repoPath string, args []string) ([]byte, []byte, error) {
-		if repoPath != "repo" {
-			t.Fatalf("repo path = %q, want repo", repoPath)
+	calls := 0
+	runner := func(_ context.Context, gotRepoPath string, args []string) ([]byte, []byte, error) {
+		calls++
+		if calls == 1 {
+			if gotRepoPath != repoPath {
+				t.Fatalf("rev-parse repo path = %q, want %q", gotRepoPath, repoPath)
+			}
+			return []byte(filepath.ToSlash(repoRoot) + "\n"), nil, nil
+		}
+		if calls != 2 {
+			t.Fatalf("unexpected git call %d", calls)
+		}
+		if gotRepoPath != repoRoot {
+			t.Fatalf("diff repo path = %q, want canonical root %q", gotRepoPath, repoRoot)
 		}
 		gotArgs = append([]string(nil), args...)
 		return []byte(minimalDiff()), nil, nil
 	}
 
 	code, _, stderr := runForTest(t, []string{
-		"--repo-path", "repo",
+		"--repo-path", repoPath,
 		"--runtime", "fake",
 	}, nil, runner)
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0; stderr: %s", code, stderr)
+	}
+	if calls != 2 {
+		t.Fatalf("git calls = %d, want rev-parse and diff", calls)
 	}
 	wantArgs := []string{"diff", "--no-ext-diff", "--no-textconv", "HEAD", "--"}
 	if !reflect.DeepEqual(gotArgs, wantArgs) {
@@ -3116,7 +3169,7 @@ func runForTest(
 	t *testing.T,
 	args []string,
 	env map[string]string,
-	runner gitDiffRunner,
+	runner gitCommandRunner,
 ) (int, string, string) {
 	t.Helper()
 	return runForTestWithHooks(t, args, env, runner, runtimeHooks{})
@@ -3126,7 +3179,7 @@ func runForTestWithHooks(
 	t *testing.T,
 	args []string,
 	env map[string]string,
-	runner gitDiffRunner,
+	runner gitCommandRunner,
 	hooks runtimeHooks,
 ) (int, string, string) {
 	t.Helper()
@@ -3163,7 +3216,7 @@ func runRawForTest(
 	t *testing.T,
 	args []string,
 	env map[string]string,
-	runner gitDiffRunner,
+	runner gitCommandRunner,
 	hooks runtimeHooks,
 ) (int, string, string) {
 	t.Helper()

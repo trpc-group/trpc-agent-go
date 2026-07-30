@@ -74,9 +74,12 @@ var embeddedCodeReviewSkill embed.FS
 
 type codeReviewSkillLoader func() (codeReviewSkill, error)
 
+type sandboxRunnerFactory func(context.Context) (sandboxRunner, error)
+
 type runtimeHooks struct {
 	permissionPolicy       tool.PermissionPolicy
 	sandboxRunner          sandboxRunner
+	sandboxRunnerFactory   sandboxRunnerFactory
 	skillLoader            codeReviewSkillLoader
 	snapshotLimitsOverride *snapshotLimits
 	reviewStore            reviewStore
@@ -190,7 +193,7 @@ func runGovernance(
 	}
 
 	plannedInput := input
-	if shouldRunRepositoryChecks(input, parsed) && strings.TrimSpace(plannedInput.sandboxRepoRoot) == "" {
+	if shouldRunRepositoryChecks(input, parsed) && plannedInput.sandboxRepoRoot == "" {
 		if len(input.repoFiles) > 0 {
 			result.addGovernanceWarning(
 				"sandbox",
@@ -240,28 +243,14 @@ func runGovernance(
 	if policy == nil {
 		policy = tool.PermissionPolicyFunc(nil)
 	}
-	runner := hooks.sandboxRunner
-	ownsRunner := false
-	var preflightFailed bool
-	var preflightReason string
-	var repoStageFailed bool
-	var repoStageReason string
-	if runner == nil {
-		var createErr error
-		runner, createErr = newConfiguredSandboxRunner(ctx, cfg, meta, input)
-		ownsRunner = createErr == nil
-		if createErr != nil {
-			preflightFailed = true
-			preflightReason = createErr.Error()
-			result.addGovernanceWarning(
-				"sandbox",
-				commandSpec{Kind: commandCheckGoVersion},
-				ruleSandboxPreflightFailed,
-				"Sandbox runtime preflight failed",
-				preflightReason,
-			)
+	runnerFactory := hooks.sandboxRunnerFactory
+	if runnerFactory == nil && hooks.sandboxRunner == nil {
+		runnerFactory = func(runCtx context.Context) (sandboxRunner, error) {
+			return newConfiguredSandboxRunner(runCtx, cfg, meta, plannedInput)
 		}
 	}
+	var preflightFailed bool
+	var preflightReason string
 	for _, spec := range specs {
 		filterDecision := gateCommand(spec)
 		result.addFilterDecision(filterDecision)
@@ -277,10 +266,6 @@ func runGovernance(
 			if spec.Kind == commandCheckGoVersion {
 				preflightFailed = true
 				preflightReason = filterDecision.Reason
-			}
-			if stagesRepository(spec) {
-				repoStageFailed = true
-				repoStageReason = filterDecision.Reason
 			}
 			continue
 		}
@@ -300,29 +285,58 @@ func runGovernance(
 				preflightFailed = true
 				preflightReason = permissionDecision.Reason
 			}
-			if stagesRepository(spec) {
-				repoStageFailed = true
-				repoStageReason = permissionDecision.Reason
-			}
 			continue
 		}
 
 		result.CommandsAllowed++
-		if runner == nil || preflightFailed && spec.Kind != commandCheckGoVersion {
+		if preflightFailed && spec.Kind != commandCheckGoVersion {
 			run := skippedSandboxRun(cfg.effectiveRuntime, spec, preflightReason)
 			result.addSandboxRun(run)
 			result.addSandboxWarning(spec, run)
 			continue
 		}
-		if repoStageFailed && requiresStagedRepository(spec) && !stagesRepository(spec) {
-			run := skippedSandboxRun(cfg.effectiveRuntime, spec, repoStageReason)
-			result.addSandboxRun(run)
-			result.addSandboxWarning(spec, run)
-			continue
+
+		runner := hooks.sandboxRunner
+		ownsRunner := false
+		if runner == nil {
+			var createErr error
+			runner, createErr = runnerFactory(ctx)
+			if createErr != nil || runner == nil {
+				if createErr == nil {
+					createErr = fmt.Errorf("sandbox runner factory returned nil")
+				}
+				reason := fmt.Sprintf("create isolated sandbox: %v", createErr)
+				run := skippedSandboxRun(cfg.effectiveRuntime, spec, reason)
+				result.addSandboxRun(run)
+				result.addSandboxWarning(spec, run)
+				if spec.Kind == commandCheckGoVersion {
+					preflightFailed = true
+					preflightReason = reason
+					result.addGovernanceWarning(
+						"sandbox",
+						spec,
+						ruleSandboxPreflightFailed,
+						"Sandbox runtime preflight failed",
+						reason,
+					)
+				}
+				continue
+			}
+			ownsRunner = true
 		}
 
 		result.ToolCalls++
 		run := runner.RunSandboxCommand(ctx, spec)
+		if ownsRunner {
+			if closer, ok := runner.(interface{ Close() error }); ok {
+				if err := closer.Close(); err != nil {
+					run.Warnings = append(
+						run.Warnings,
+						fmt.Sprintf("sandbox cleanup failed: %v", err),
+					)
+				}
+			}
+		}
 		run = result.addSandboxRun(run)
 		if sandboxRunNeedsWarning(run) {
 			diagnostics := parseSandboxDiagnostics(spec, run, parsed)
@@ -334,24 +348,6 @@ func runGovernance(
 		if spec.Kind == commandCheckGoVersion && sandboxRunFailed(run) {
 			preflightFailed = true
 			preflightReason = sandboxRunFailureReason(run)
-		}
-		if stagesRepository(spec) && strings.TrimSpace(run.Error) != "" {
-			repoStageFailed = true
-			repoStageReason = sandboxRunFailureReason(run)
-		}
-	}
-	if ownsRunner {
-		closer, ok := runner.(interface{ Close() error })
-		if ok {
-			if err := closer.Close(); err != nil {
-				result.addGovernanceWarning(
-					"sandbox",
-					commandSpec{Kind: commandKind("runtimeClose")},
-					ruleSandboxRunFailed,
-					"Sandbox runtime cleanup failed",
-					err.Error(),
-				)
-			}
 		}
 	}
 	return result, nil
@@ -533,8 +529,7 @@ func planCommands(cfg config, input reviewInput, parsed parsedDiff) []commandSpe
 	commands := []commandSpec{
 		newCommandSpec(commandCheckGoVersion, nil, nil),
 	}
-	if !shouldRunRepositoryChecks(input, parsed) ||
-		strings.TrimSpace(input.sandboxRepoRoot) == "" {
+	if !shouldRunRepositoryChecks(input, parsed) || input.sandboxRepoRoot == "" {
 		return commands
 	}
 
@@ -542,10 +537,10 @@ func planCommands(cfg config, input reviewInput, parsed parsedDiff) []commandSpe
 	env := commandEnv(input)
 	commands = append(commands,
 		newCommandSpec(commandCheckGoTest, inputs, env),
-		newCommandSpec(commandCheckGoVet, nil, env),
+		newCommandSpec(commandCheckGoVet, inputs, env),
 	)
 	if cfg.enableStaticcheck {
-		commands = append(commands, newCommandSpec(commandCheckStaticcheck, nil, env))
+		commands = append(commands, newCommandSpec(commandCheckStaticcheck, inputs, env))
 	}
 	return commands
 }
@@ -578,7 +573,7 @@ func newCommandSpec(kind commandKind, inputs []inputMapping, env map[string]stri
 }
 
 func commandInputs(input reviewInput) []inputMapping {
-	if input.kind != inputKindRepoPath || strings.TrimSpace(input.sandboxRepoRoot) == "" {
+	if input.kind != inputKindRepoPath || input.sandboxRepoRoot == "" {
 		return nil
 	}
 	repoRoot, err := filepath.Abs(input.sandboxRepoRoot)
@@ -593,7 +588,7 @@ func commandInputs(input reviewInput) []inputMapping {
 }
 
 func commandEnv(input reviewInput) map[string]string {
-	if input.kind != inputKindRepoPath || strings.TrimSpace(input.sandboxRepoRoot) == "" {
+	if input.kind != inputKindRepoPath || input.sandboxRepoRoot == "" {
 		return nil
 	}
 	return map[string]string{"REVIEW_REPO_DIR": reviewRepoDirFromSkill}
@@ -601,21 +596,13 @@ func commandEnv(input reviewInput) map[string]string {
 
 func shouldRunRepositoryChecks(input reviewInput, parsed parsedDiff) bool {
 	return input.kind == inputKindRepoPath &&
-		strings.TrimSpace(input.repoRoot) != "" &&
+		input.repoRoot != "" &&
 		hasReviewableGoChange(parsed)
-}
-
-func stagesRepository(spec commandSpec) bool {
-	return len(spec.Inputs) > 0
-}
-
-func requiresStagedRepository(spec commandSpec) bool {
-	return strings.TrimSpace(spec.Env["REVIEW_REPO_DIR"]) != ""
 }
 
 func hasReviewableGoChange(parsed parsedDiff) bool {
 	for _, file := range parsed.Files {
-		if file.isGoFile() && !file.IsDeleted && !file.IsBinary {
+		if file.isGoFile() && !file.IsDeleted {
 			return true
 		}
 	}

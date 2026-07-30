@@ -11,6 +11,7 @@ package main
 
 import (
 	"fmt"
+	pathpkg "path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -41,10 +42,17 @@ type changedFile struct {
 	Hunks       []diffHunk
 
 	headerLine         int
+	headerOldPath      string
+	headerNewPath      string
 	hasNewFileMode     bool
 	hasDeletedFileMode bool
 	hasRenameFrom      bool
 	hasRenameTo        bool
+	renameFromPath     string
+	renameToPath       string
+	renameFromValid    bool
+	renameToValid      bool
+	binaryLine         int
 	hasOldMarker       bool
 	hasNewMarker       bool
 	oldIsDevNull       bool
@@ -144,9 +152,11 @@ func (p *diffParser) startFile(line string, inputLine int) {
 	p.finalizeCurrentFile()
 	oldPath, newPath, warning := parseGitDiffPaths(line)
 	p.parsed.Files = append(p.parsed.Files, changedFile{
-		OldPath:    oldPath,
-		NewPath:    newPath,
-		headerLine: inputLine,
+		OldPath:       oldPath,
+		NewPath:       newPath,
+		headerLine:    inputLine,
+		headerOldPath: oldPath,
+		headerNewPath: newPath,
 	})
 	p.currentFile = len(p.parsed.Files) - 1
 	p.currentHunk = -1
@@ -171,20 +181,19 @@ func (p *diffParser) consumeFileMetadata(file *changedFile, line string, inputLi
 		file.IsDeleted = true
 		file.hasDeletedFileMode = true
 	case strings.HasPrefix(line, "rename from "):
-		file.IsRename = true
-		file.hasRenameFrom = true
-		file.OldPath = cleanDiffPath(strings.TrimPrefix(line, "rename from "))
+		p.consumeRenameFrom(file, line, inputLine)
 	case strings.HasPrefix(line, "rename to "):
-		file.IsRename = true
-		file.hasRenameTo = true
-		file.NewPath = cleanDiffPath(strings.TrimPrefix(line, "rename to "))
+		p.consumeRenameTo(file, line, inputLine)
 	case strings.HasPrefix(line, "Binary files "), line == "GIT binary patch":
 		file.IsBinary = true
+		if file.binaryLine == 0 {
+			file.binaryLine = inputLine
+		}
 		p.currentHunk = -1
 	case strings.HasPrefix(line, "--- "):
-		p.consumeOldPath(file, line)
+		p.consumeOldPath(file, line, inputLine)
 	case strings.HasPrefix(line, "+++ "):
-		p.consumeNewPath(file, line)
+		p.consumeNewPath(file, line, inputLine)
 	case strings.HasPrefix(line, "@@"):
 		p.consumeHunkHeader(file, line, inputLine)
 	default:
@@ -193,9 +202,15 @@ func (p *diffParser) consumeFileMetadata(file *changedFile, line string, inputLi
 	return true
 }
 
-func (p *diffParser) consumeOldPath(file *changedFile, line string) {
+func (p *diffParser) consumeOldPath(file *changedFile, line string, inputLine int) {
 	file.hasOldMarker = true
-	oldPath := cleanDiffMetadataPath(strings.TrimPrefix(line, "--- "))
+	file.OldPath = file.headerOldPath
+	oldPath, err := parseDiffMarkerPath(strings.TrimPrefix(line, "--- "), 'a')
+	if err != nil {
+		file.oldIsDevNull = false
+		p.addWarning(file.reviewPath(), inputLine, "malformed old path metadata")
+		return
+	}
 	if oldPath == "/dev/null" {
 		file.OldPath = ""
 		file.IsNew = true
@@ -203,12 +218,20 @@ func (p *diffParser) consumeOldPath(file *changedFile, line string) {
 		return
 	}
 	file.oldIsDevNull = false
-	file.OldPath = oldPath
+	if oldPath != file.headerOldPath {
+		p.addWarning(file.reviewPath(), inputLine, "old path metadata does not match diff header")
+	}
 }
 
-func (p *diffParser) consumeNewPath(file *changedFile, line string) {
+func (p *diffParser) consumeNewPath(file *changedFile, line string, inputLine int) {
 	file.hasNewMarker = true
-	newPath := cleanDiffMetadataPath(strings.TrimPrefix(line, "+++ "))
+	file.NewPath = file.headerNewPath
+	newPath, err := parseDiffMarkerPath(strings.TrimPrefix(line, "+++ "), 'b')
+	if err != nil {
+		file.newIsDevNull = false
+		p.addWarning(file.reviewPath(), inputLine, "malformed new path metadata")
+		return
+	}
 	if newPath == "/dev/null" {
 		file.NewPath = ""
 		file.IsDeleted = true
@@ -216,11 +239,55 @@ func (p *diffParser) consumeNewPath(file *changedFile, line string) {
 		return
 	}
 	file.newIsDevNull = false
-	file.NewPath = newPath
+	if newPath != file.headerNewPath {
+		p.addWarning(file.reviewPath(), inputLine, "new path metadata does not match diff header")
+	}
+}
+
+func (p *diffParser) consumeRenameFrom(file *changedFile, line string, inputLine int) {
+	file.IsRename = true
+	file.hasRenameFrom = true
+	renamePath, err := parseRenamePath(strings.TrimPrefix(line, "rename from "))
+	if err != nil {
+		p.addWarning(file.reviewPath(), inputLine, "malformed rename from path")
+		return
+	}
+	file.renameFromPath = renamePath
+	file.renameFromValid = true
+	if renamePath != file.headerOldPath {
+		p.addWarning(file.reviewPath(), inputLine, "rename from path does not match diff header")
+	}
+	p.validateRenamePathPair(file, inputLine)
+}
+
+func (p *diffParser) consumeRenameTo(file *changedFile, line string, inputLine int) {
+	file.IsRename = true
+	file.hasRenameTo = true
+	renamePath, err := parseRenamePath(strings.TrimPrefix(line, "rename to "))
+	if err != nil {
+		p.addWarning(file.reviewPath(), inputLine, "malformed rename to path")
+		return
+	}
+	file.renameToPath = renamePath
+	file.renameToValid = true
+	if renamePath != file.headerNewPath {
+		p.addWarning(file.reviewPath(), inputLine, "rename to path does not match diff header")
+	}
+	p.validateRenamePathPair(file, inputLine)
+}
+
+func (p *diffParser) validateRenamePathPair(file *changedFile, inputLine int) {
+	if file.renameFromValid && file.renameToValid && file.renameFromPath == file.renameToPath {
+		p.addWarning(file.reviewPath(), inputLine, "rename paths must be different")
+	}
 }
 
 func (p *diffParser) consumeHunkHeader(file *changedFile, line string, inputLine int) {
 	p.finalizeCurrentHunk()
+	if file.IsBinary {
+		file.IsBinary = false
+		p.addWarning(file.reviewPath(), inputLine, "binary metadata conflicts with text hunk")
+	}
 	hunk, err := parseHunkHeader(line)
 	if err != nil {
 		p.currentHunk = -1
@@ -322,6 +389,78 @@ func (p *diffParser) validateCurrentFileStatus() {
 			warn("file mode metadata does not match the file status")
 		}
 	}
+
+	newStatusTrusted := !file.IsNew || trustedNewFileStatus(*file)
+	deletedStatusTrusted := !file.IsDeleted || trustedDeletedFileStatus(*file)
+	if file.IsNew && !newStatusTrusted {
+		file.IsNew = false
+		file.OldPath = file.headerOldPath
+	}
+	if file.IsDeleted && !deletedStatusTrusted {
+		file.IsDeleted = false
+		file.NewPath = file.headerNewPath
+	}
+	if file.IsBinary && file.isGoFile() {
+		line := file.binaryLine
+		if line == 0 {
+			line = file.headerLine
+		}
+		p.addWarning(file.reviewPath(), line, "Go source path is represented as binary")
+	}
+}
+
+func trustedNewFileStatus(file changedFile) bool {
+	if !file.hasNewFileMode || file.hasDeletedFileMode || file.IsDeleted || file.IsRename ||
+		file.headerNewPath == "" || file.hasOldMarker != file.hasNewMarker {
+		return false
+	}
+	if file.IsBinary {
+		return len(file.Hunks) == 0 && (!file.hasOldMarker || file.oldIsDevNull && !file.newIsDevNull)
+	}
+	if len(file.Hunks) == 0 && !file.hasOldMarker {
+		return true
+	}
+	if !file.hasOldMarker || !file.oldIsDevNull || !file.hasNewMarker || file.newIsDevNull {
+		return false
+	}
+	for _, hunk := range file.Hunks {
+		if hunk.OldStart != 0 || hunk.OldCount != 0 {
+			return false
+		}
+		for _, line := range hunk.Lines {
+			if line.Kind != diffLineAdded {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func trustedDeletedFileStatus(file changedFile) bool {
+	if !file.hasDeletedFileMode || file.hasNewFileMode || file.IsNew || file.IsRename ||
+		file.headerOldPath == "" || file.hasOldMarker != file.hasNewMarker {
+		return false
+	}
+	if file.IsBinary {
+		return len(file.Hunks) == 0 && (!file.hasOldMarker || !file.oldIsDevNull && file.newIsDevNull)
+	}
+	if len(file.Hunks) == 0 && !file.hasOldMarker {
+		return true
+	}
+	if !file.hasOldMarker || file.oldIsDevNull || !file.hasNewMarker || !file.newIsDevNull {
+		return false
+	}
+	for _, hunk := range file.Hunks {
+		if hunk.NewStart != 0 || hunk.NewCount != 0 {
+			return false
+		}
+		for _, line := range hunk.Lines {
+			if line.Kind != diffLineDeleted {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (p *diffParser) finalizeCurrentHunk() {
@@ -438,38 +577,109 @@ func parseGitDiffPaths(line string) (string, string, string) {
 	if err != nil || strings.TrimSpace(rest) != "" {
 		return "", "", "malformed diff header"
 	}
-	return cleanDiffPath(oldPath), cleanDiffPath(newPath), ""
+	if validateDiffPathValue(oldPath) != nil || validateDiffPathValue(newPath) != nil {
+		return "", "", "malformed diff header"
+	}
+	return normalizeDiffPath(oldPath, 'a'), normalizeDiffPath(newPath, 'b'), ""
 }
 
-func cleanDiffPath(value string) string {
-	value = strings.TrimSpace(value)
-	if strings.HasPrefix(value, `"`) {
+func normalizeDiffPath(value string, prefix byte) string {
+	if value == "/dev/null" {
+		return value
+	}
+	expectedPrefix := string([]byte{prefix, '/'})
+	if strings.HasPrefix(value, expectedPrefix) {
+		return value[len(expectedPrefix):]
+	}
+	return value
+}
+
+func parseDiffMarkerPath(value string, prefix byte) (string, error) {
+	pathValue, tail, err := parseMetadataPath(value)
+	if err != nil {
+		return "", err
+	}
+	if tail != "" {
+		if tail[0] != '\t' || len(tail) == 1 || containsInvalidDiffPathByte(tail[1:]) {
+			return "", fmt.Errorf("invalid diff path timestamp")
+		}
+	}
+	return normalizeDiffPath(pathValue, prefix), nil
+}
+
+func parseMetadataPath(value string) (string, string, error) {
+	if value == "" {
+		return "", "", fmt.Errorf("missing diff path")
+	}
+	if value[0] == '"' {
+		pathValue, tail, err := parseGitPathToken(value)
+		if err != nil {
+			return "", "", err
+		}
+		if err := validateDiffPathValue(pathValue); err != nil {
+			return "", "", err
+		}
+		return pathValue, tail, nil
+	}
+	if tab := strings.IndexByte(value, '\t'); tab >= 0 {
+		pathValue := value[:tab]
+		if strings.TrimSpace(pathValue) != pathValue {
+			return "", "", fmt.Errorf("unquoted diff path has surrounding whitespace")
+		}
+		if err := validateDiffPathValue(pathValue); err != nil {
+			return "", "", err
+		}
+		return pathValue, value[tab:], nil
+	}
+	if strings.TrimSpace(value) != value {
+		return "", "", fmt.Errorf("unquoted diff path has surrounding whitespace")
+	}
+	if err := validateDiffPathValue(value); err != nil {
+		return "", "", err
+	}
+	return value, "", nil
+}
+
+func parseRenamePath(value string) (string, error) {
+	if value == "" {
+		return "", fmt.Errorf("missing rename path")
+	}
+	pathValue := value
+	if value[0] == '"' {
 		decoded, rest, err := parseGitPathToken(value)
-		if err == nil && strings.TrimSpace(rest) == "" {
-			value = decoded
+		if err != nil {
+			return "", err
 		}
+		if rest != "" {
+			return "", fmt.Errorf("unexpected content after rename path")
+		}
+		pathValue = decoded
+	} else if strings.TrimSpace(value) != value {
+		return "", fmt.Errorf("unquoted rename path has surrounding whitespace")
 	}
-	switch {
-	case value == "/dev/null":
-		return value
-	case strings.HasPrefix(value, "a/"), strings.HasPrefix(value, "b/"):
-		return value[2:]
-	default:
-		return value
+	if err := validateDiffPathValue(pathValue); err != nil {
+		return "", err
 	}
+	if pathValue == "/dev/null" || strings.ContainsRune(pathValue, '\\') || hasWindowsDrive(pathValue) ||
+		pathpkg.IsAbs(pathValue) || pathpkg.Clean(pathValue) != pathValue ||
+		pathValue == "." || pathValue == ".." || strings.HasPrefix(pathValue, "../") {
+		return "", fmt.Errorf("rename path is not repository-relative")
+	}
+	return pathValue, nil
 }
 
-func cleanDiffMetadataPath(value string) string {
-	value = strings.TrimSpace(value)
-	if strings.HasPrefix(value, `"`) {
-		decoded, _, err := parseGitPathToken(value)
-		if err == nil {
-			return cleanDiffPath(decoded)
-		}
-	} else if tab := strings.IndexByte(value, '\t'); tab >= 0 {
-		value = value[:tab]
+func validateDiffPathValue(value string) error {
+	if value == "" {
+		return fmt.Errorf("empty diff path")
 	}
-	return cleanDiffPath(value)
+	if containsInvalidDiffPathByte(value) {
+		return fmt.Errorf("diff path contains an invalid byte")
+	}
+	return nil
+}
+
+func containsInvalidDiffPathByte(value string) bool {
+	return strings.ContainsAny(value, "\x00\r\n")
 }
 
 func parseGitPathToken(value string) (string, string, error) {

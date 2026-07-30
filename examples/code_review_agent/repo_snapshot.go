@@ -94,7 +94,7 @@ func prepareSandboxRepoSnapshot(
 	if err := ctx.Err(); err != nil {
 		return repoSnapshot{}, fmt.Errorf("prepare repository snapshot: %w", err)
 	}
-	root := strings.TrimSpace(repoRoot)
+	root := repoRoot
 	if root == "" {
 		return repoSnapshot{}, fmt.Errorf("repository path is empty")
 	}

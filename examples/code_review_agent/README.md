@@ -37,14 +37,15 @@ go run ./code_review_agent --diff-file ./change.diff --runtime fake
 go run ./code_review_agent --repo-path ../ --files pkg/a.go --files pkg/b.go --runtime fake
 ```
 
-`--repo-path` runs `git diff HEAD -- <files>` through a fixed argument array.
-Git execution disables external diff, textconv, fsmonitor, pagers, inherited
-`GIT_*` configuration, and interactive prompting before repository
-configuration is consulted. The `--files` values must be relative paths and
-cannot escape the repository. They are interpreted as literal Git paths. A
-scoped review does not upload files outside that scope, so repository test,
-vet, and staticcheck commands are skipped with a human-review warning instead
-of running against an incomplete Go module.
+`--repo-path` may name the worktree root or a directory below it. The agent first
+resolves `git rev-parse --show-toplevel`, then runs `git diff HEAD -- <files>`
+from that canonical root through a fixed argument array. Git execution disables
+external diff, textconv, fsmonitor, pagers, inherited `GIT_*` configuration,
+and interactive prompting before repository configuration is consulted. The
+`--files` values are repository-root-relative literal Git paths and cannot
+escape the repository. A scoped review does not upload files outside that
+scope, so repository test, vet, and staticcheck commands are skipped with a
+human-review warning instead of running against an incomplete Go module.
 
 ## Runtime Modes
 
@@ -61,6 +62,13 @@ Use local execution only for development:
 ```bash
 go run ./code_review_agent --repo-path ../ --runtime local --allow-local
 ```
+
+Local execution uses a fresh temporary work root for every sandbox command, but
+it is not an operating-system security boundary: reviewed code still runs as
+the current host user. Use it only with trusted development inputs. Production
+E2B repository reviews create an independent sandbox for `go version`,
+`go test`, `go vet`, and optional staticcheck, so enabling staticcheck creates
+four sandboxes instead of three.
 
 `--rule-only` disables advisory model behavior. The current example does not
 call a real model provider, so findings come from deterministic diff and Go rule
@@ -130,13 +138,17 @@ suppressed matches.
 
 Sandbox execution is advisory evidence. The agent builds private command specs
 from a closed enum, validates them through a command gate, then calls a
-`tool.PermissionPolicy` before any execution. Denied or ask decisions are stored
-and reported without invoking the runner. Allowed commands run with clean
-environment settings, timeout and output limits, and restricted artifacts. E2B is
-the production-style runtime; fake mode is deterministic for tests; local mode is
-an explicit development fallback. Complete repository snapshots resolve changed
-Go files to their nearest `go.mod` and run checks once per affected module. The
-snapshot root contains a reserved `.trpc-agent-review-modules` manifest with
+`tool.PermissionPolicy` before creating or invoking the command's runner. Denied
+or ask decisions are stored and reported without creating a sandbox. Every real
+repository-dependent command receives a fresh copy of the same host snapshot in
+an independent E2B sandbox or local temporary work root, so reviewed tests cannot
+rewrite the source later analyzers inspect. Allowed commands run with clean
+environment settings, timeout and output limits, and restricted artifacts. E2B
+is the production-style runtime; fake mode is deterministic for tests; local
+mode is an explicit development fallback rather than a hostile-code boundary.
+Complete repository snapshots resolve changed Go files to their nearest
+`go.mod` and run checks once per affected module. The snapshot root contains a
+reserved `.trpc-agent-review-modules` manifest with
 sorted, repository-relative module directories separated by NUL bytes; `.` names
 the root module. Snapshot enumeration and copying share a 30-second deadline and
 enforce fixed limits for tracked entries, unique directories, path bytes, and

@@ -78,7 +78,8 @@ func runRules(parsed parsedDiff, repoRoot string) []ruleMatch {
 		matches = append(matches, runCandidateRules(candidate, file, hunk, repoRoot)...)
 	}
 
-	matches = append(matches, runMissingTestsRule(parsed)...)
+	missingTestsIndex := newMissingTestsRuleIndex(parsed.Files, candidates)
+	matches = append(matches, runMissingTestsRule(parsed.Files, missingTestsIndex)...)
 	return matches
 }
 
@@ -1460,16 +1461,40 @@ func isExplicitIgnoredError(line string) bool {
 	return false
 }
 
-func runMissingTestsRule(parsed parsedDiff) []ruleMatch {
+type missingTestsRuleIndex struct {
+	changedTestDirs  map[string]struct{}
+	candidatesByFile map[int][]candidateLine
+}
+
+func newMissingTestsRuleIndex(files []changedFile, candidates []candidateLine) missingTestsRuleIndex {
+	index := missingTestsRuleIndex{
+		changedTestDirs:  make(map[string]struct{}),
+		candidatesByFile: make(map[int][]candidateLine),
+	}
+	for _, file := range files {
+		path := file.reviewPath()
+		if strings.HasSuffix(path, "_test.go") {
+			index.changedTestDirs[reviewPathDirectory(path)] = struct{}{}
+		}
+	}
+	for _, candidate := range candidates {
+		index.candidatesByFile[candidate.FileIndex] = append(
+			index.candidatesByFile[candidate.FileIndex], candidate,
+		)
+	}
+	return index
+}
+
+func runMissingTestsRule(files []changedFile, index missingTestsRuleIndex) []ruleMatch {
 	var matches []ruleMatch
-	for fileIndex, file := range parsed.Files {
+	for fileIndex, file := range files {
 		if !file.isGoFile() || file.IsDeleted || strings.HasSuffix(file.reviewPath(), "_test.go") {
 			continue
 		}
-		if hasRelatedTestFileChange(parsed, file) {
+		if _, ok := index.changedTestDirs[reviewPathDirectory(file.reviewPath())]; ok {
 			continue
 		}
-		candidates := candidatesForFile(parsed, fileIndex)
+		candidates := index.candidatesByFile[fileIndex]
 		if len(candidates) == 0 {
 			continue
 		}
@@ -1493,25 +1518,6 @@ func runMissingTestsRule(parsed parsedDiff) []ruleMatch {
 	return matches
 }
 
-func hasRelatedTestFileChange(parsed parsedDiff, changed changedFile) bool {
-	changedDir := filepath.ToSlash(filepath.Dir(filepath.FromSlash(changed.reviewPath())))
-	for _, file := range parsed.Files {
-		path := file.reviewPath()
-		if strings.HasSuffix(path, "_test.go") &&
-			filepath.ToSlash(filepath.Dir(filepath.FromSlash(path))) == changedDir {
-			return true
-		}
-	}
-	return false
-}
-
-func candidatesForFile(parsed parsedDiff, fileIndex int) []candidateLine {
-	allCandidates := parsed.candidateLines()
-	candidates := make([]candidateLine, 0, len(allCandidates))
-	for _, candidate := range allCandidates {
-		if candidate.FileIndex == fileIndex {
-			candidates = append(candidates, candidate)
-		}
-	}
-	return candidates
+func reviewPathDirectory(path string) string {
+	return filepath.ToSlash(filepath.Dir(filepath.FromSlash(path)))
 }
