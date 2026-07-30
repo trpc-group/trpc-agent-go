@@ -1190,56 +1190,102 @@ func validateReplayOperations(ops []Operation, path string, key session.Key, mem
 func validateReplayOperation(op Operation, path string, key session.Key, memoryIDs map[string]string) error {
 	switch op.Kind {
 	case OpAppendEvent, OpRetryEvent:
-		if op.Event == nil {
-			return missingOperationPayload(path, op.Kind, "event")
-		}
+		return validateEventOperationPayload(op, path)
 	case OpSetState, OpDeleteState:
-		if op.State == nil {
-			return missingOperationPayload(path, op.Kind, "state")
-		}
-		if op.State.Key == "" {
-			return fmt.Errorf("%s kind %q requires state.key", path, op.Kind)
-		}
+		return validateStateOperationPayload(op, path)
 	case OpClearState:
+		return nil
 	case OpAddMemory:
-		if op.Memory == nil {
-			return missingOperationPayload(path, op.Kind, "memory")
-		}
+		return validateAddMemoryOperationPayload(op, path)
 	case OpUpdateMemory, OpDeleteMemory:
-		if op.Memory == nil {
-			return missingOperationPayload(path, op.Kind, "memory")
-		}
-		if op.Memory.ID == "" {
-			return fmt.Errorf("%s kind %q requires memory.id", path, op.Kind)
-		}
+		return validateExistingMemoryOperationPayload(op, path)
 	case OpClearMemory:
+		return nil
 	case OpWriteSummary:
-		if op.Summary == nil {
-			return missingOperationPayload(path, op.Kind, "summary")
-		}
+		return validateSummaryOperationPayload(op, path)
 	case OpAppendTrack:
-		if op.Track == nil {
-			return missingOperationPayload(path, op.Kind, "track")
-		}
-		if op.Track.Name == "" {
-			return fmt.Errorf("%s kind %q requires track.name", path, op.Kind)
-		}
+		return validateTrackOperationPayload(op, path)
 	case OpConcurrent:
-		if len(op.Concurrent) == 0 {
-			return missingOperationPayload(path, op.Kind, "concurrent")
-		}
-		childPath := path + ".concurrent"
-		if err := validateConcurrentOperationsAreIndependent(op.Concurrent, childPath, key, memoryIDs); err != nil {
-			return err
-		}
-		return validateReplayOperations(op.Concurrent, childPath, key, cloneStringMap(memoryIDs))
+		return validateConcurrentOperationPayload(op, path, key, memoryIDs)
 	case OpUnsupportedProbe:
-		if op.Unsupported == "" {
-			return fmt.Errorf("%s kind %q requires unsupported capability", path, op.Kind)
-		}
+		return validateUnsupportedOperationPayload(op, path)
 	case OpTTLProbe:
+		return nil
 	default:
 		return fmt.Errorf("%s has unknown operation kind %q", path, op.Kind)
+	}
+}
+
+func validateEventOperationPayload(op Operation, path string) error {
+	if op.Event == nil {
+		return missingOperationPayload(path, op.Kind, "event")
+	}
+	return nil
+}
+
+func validateStateOperationPayload(op Operation, path string) error {
+	if op.State == nil {
+		return missingOperationPayload(path, op.Kind, "state")
+	}
+	if op.State.Key == "" {
+		return fmt.Errorf("%s kind %q requires state.key", path, op.Kind)
+	}
+	return nil
+}
+
+func validateAddMemoryOperationPayload(op Operation, path string) error {
+	if op.Memory == nil {
+		return missingOperationPayload(path, op.Kind, "memory")
+	}
+	return nil
+}
+
+func validateExistingMemoryOperationPayload(op Operation, path string) error {
+	if op.Memory == nil {
+		return missingOperationPayload(path, op.Kind, "memory")
+	}
+	if op.Memory.ID == "" {
+		return fmt.Errorf("%s kind %q requires memory.id", path, op.Kind)
+	}
+	return nil
+}
+
+func validateSummaryOperationPayload(op Operation, path string) error {
+	if op.Summary == nil {
+		return missingOperationPayload(path, op.Kind, "summary")
+	}
+	return nil
+}
+
+func validateTrackOperationPayload(op Operation, path string) error {
+	if op.Track == nil {
+		return missingOperationPayload(path, op.Kind, "track")
+	}
+	if op.Track.Name == "" {
+		return fmt.Errorf("%s kind %q requires track.name", path, op.Kind)
+	}
+	return nil
+}
+
+func validateConcurrentOperationPayload(
+	op Operation,
+	path string,
+	key session.Key,
+	memoryIDs map[string]string,
+) error {
+	if len(op.Concurrent) == 0 {
+		return missingOperationPayload(path, op.Kind, "concurrent")
+	}
+	childPath := path + ".concurrent"
+	if err := validateConcurrentOperationsAreIndependent(op.Concurrent, childPath, key, memoryIDs); err != nil {
+		return err
+	}
+	return validateReplayOperations(op.Concurrent, childPath, key, cloneStringMap(memoryIDs))
+}
+
+func validateUnsupportedOperationPayload(op Operation, path string) error {
+	if op.Unsupported == "" {
+		return fmt.Errorf("%s kind %q requires unsupported capability", path, op.Kind)
 	}
 	return nil
 }
@@ -1360,6 +1406,21 @@ func collectMemoryMutationKeys(
 }
 
 func validateConcurrentFootprints(left, right replayOperationFootprint) error {
+	validators := []func(replayOperationFootprint, replayOperationFootprint) error{
+		validateConcurrentStateFootprints,
+		validateConcurrentMemoryFootprints,
+		validateConcurrentSummaryFootprints,
+		validateConcurrentTrackFootprints,
+	}
+	for _, validate := range validators {
+		if err := validate(left, right); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateConcurrentStateFootprints(left, right replayOperationFootprint) error {
 	if left.stateClear && (right.stateClear || len(right.stateKeys) > 0 || right.trackRegistration) {
 		return fmt.Errorf("concurrent state mutations conflict between %s and %s", left.path, right.path)
 	}
@@ -1381,6 +1442,10 @@ func validateConcurrentFootprints(left, right replayOperationFootprint) error {
 			return fmt.Errorf("concurrent track registration conflicts with state mutation for key %q between %s and %s", "tracks", left.path, right.path)
 		}
 	}
+	return nil
+}
+
+func validateConcurrentMemoryFootprints(left, right replayOperationFootprint) error {
 	if left.memoryClear && (right.memoryClear || len(right.memoryKeys) > 0) {
 		return fmt.Errorf("concurrent memory operations are order-dependent between %s and %s", left.path, right.path)
 	}
@@ -1392,6 +1457,10 @@ func validateConcurrentFootprints(left, right replayOperationFootprint) error {
 			return fmt.Errorf("concurrent memory operations conflict on %q between %s and %s", key, left.path, right.path)
 		}
 	}
+	return nil
+}
+
+func validateConcurrentSummaryFootprints(left, right replayOperationFootprint) error {
 	if left.hasEvent && len(right.summaryKeys) > 0 {
 		return fmt.Errorf("concurrent event and summary operations are order-dependent between %s and %s", left.path, right.path)
 	}
@@ -1403,6 +1472,10 @@ func validateConcurrentFootprints(left, right replayOperationFootprint) error {
 			return fmt.Errorf("concurrent summary operations conflict on filter key %q between %s and %s", key, left.path, right.path)
 		}
 	}
+	return nil
+}
+
+func validateConcurrentTrackFootprints(left, right replayOperationFootprint) error {
 	for name := range left.trackNames {
 		if _, ok := right.trackNames[name]; ok {
 			return fmt.Errorf("concurrent track operations conflict on track %q between %s and %s", name, left.path, right.path)
