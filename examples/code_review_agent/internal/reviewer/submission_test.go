@@ -117,30 +117,27 @@ func TestCanonicalizeReviewSubmissionKeepsDistinctRulesLinesAndRuleIDCase(t *tes
 	}
 }
 
-func TestCanonicalizeReviewSubmissionSupportsStableAgentRuleIDs(t *testing.T) {
+func TestCanonicalizeReviewSubmissionTreatsRuleIDAsOpaque(t *testing.T) {
 	tests := []struct {
-		name      string
-		source    string
-		category  string
-		ruleID    string
-		wantError string
+		name     string
+		source   string
+		category string
+		ruleID   string
 	}{
 		{
-			name:   "agent direct rule matches category",
+			name:   "catalog rule from direct reasoning",
 			source: "agent", category: "resource_lifecycle",
-			ruleID: "AGENT-RESOURCE-LIFECYCLE",
+			ruleID: "GO-RES-001",
 		},
 		{
-			name:   "agent direct rule rejects another category",
+			name:   "agent-defined issue class",
 			source: "agent", category: "resource_lifecycle",
-			ruleID:    "AGENT-CORRECTNESS",
-			wantError: `requires reserved rule_id "AGENT-RESOURCE-LIFECYCLE"`,
+			ruleID: "AGENT-RESOURCE-LIFECYCLE-UNRELEASED-CUSTOM-LEASE",
 		},
 		{
-			name:   "reserved rule rejects another source",
+			name:   "non-catalog identity from another source",
 			source: "skill", category: "correctness",
-			ruleID:    "AGENT-CORRECTNESS",
-			wantError: `reserved agent rule_id requires source "agent"`,
+			ruleID: "TEAM-STABLE-RULE-42",
 		},
 	}
 	for _, test := range tests {
@@ -152,12 +149,6 @@ func TestCanonicalizeReviewSubmissionSupportsStableAgentRuleIDs(t *testing.T) {
 			submission, err := canonicalizeReviewSubmission(
 				[]store.ReviewResultRecord{result},
 			)
-			if test.wantError != "" {
-				if err == nil || !strings.Contains(err.Error(), test.wantError) {
-					t.Fatalf("canonicalize error = %v, want %q", err, test.wantError)
-				}
-				return
-			}
 			if err != nil {
 				t.Fatal(err)
 			}

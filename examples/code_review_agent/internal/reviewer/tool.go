@@ -57,7 +57,7 @@ type reviewResultInput struct {
 	Recommendation string  `json:"recommendation" jsonschema:"description=Actionable fix recommendation,required"`
 	Confidence     float64 `json:"confidence" jsonschema:"description=Confidence score from 0 to 1"`
 	Source         string  `json:"source" jsonschema:"description=Evidence source, such as agent, skill, static_rule, sandbox, go_test, go_vet"`
-	RuleID         string  `json:"rule_id" jsonschema:"description=Stable non-empty rule identity. Use a catalog rule ID when applicable. For source agent with no catalog match use AGENT- followed by the uppercase category with underscores replaced by hyphens"`
+	RuleID         string  `json:"rule_id" jsonschema:"description=Stable non-empty issue-class identity used for classification and deduplication"`
 }
 
 type submitReviewResultsOutput struct {

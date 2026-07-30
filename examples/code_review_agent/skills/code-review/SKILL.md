@@ -125,16 +125,19 @@ Include these fields in every item:
 - `confidence`: Number from `0` to `1`.
 - `source`: Primary evidence origin: `agent`, `skill`, `static_rule`,
   `go_test`, `go_vet`, `staticcheck`, or `sandbox`. Use `skill` when this
-  catalog supplies the primary rule, `agent` for direct reasoning outside the
-  catalog, and `static_rule` only for an explicitly observed deterministic rule
-  signal.
-- `rule_id`: A stable, non-empty identity used for classification and
-  deduplication. Use the applicable identifier from `references/rules.md` when
-  one exists. For `source=agent` with no catalog match, use
-  `AGENT-<CATEGORY>`, where `CATEGORY` is the uppercase category with
-  underscores replaced by hyphens, such as `AGENT-RESOURCE-LIFECYCLE`. Never
-  invent another identifier or use an unrelated catalog rule merely to satisfy
-  this field.
+  catalog guides the primary analysis, `agent` when direct reasoning about the
+  changed behavior supplies the primary evidence, and `static_rule` only for an
+  explicitly observed deterministic rule signal. Evidence origin is independent
+  of the rule identity.
+- `rule_id`: A stable, non-empty issue-class identity used for classification
+  and deduplication. Use the applicable identifier from `references/rules.md`
+  when one exists. When no catalog rule applies, use
+  `AGENT-<CATEGORY>-<ISSUE-CLASS>`. Convert the selected category to uppercase
+  with underscores replaced by hyphens. Describe `ISSUE-CLASS` as a concise,
+  uppercase, hyphenated root-cause or failure-mechanism class. The same root
+  cause, affected behavior, and minimal remediation must use the same identity;
+  different root causes must use different identities. Do not include file
+  names, line numbers, severity, or random values.
 
 ## Deduplication
 

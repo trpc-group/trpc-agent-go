@@ -34,53 +34,35 @@ func TestBuildReviewMessageHonorsUTF8ByteBudget(t *testing.T) {
 	}
 }
 
-func TestBuildReviewMessageUsesModeSpecificWorkspaceInstructions(t *testing.T) {
+func TestBuildReviewMessageDescribesWorkspaceWithoutWorkflowInstructions(t *testing.T) {
 	parsed := parsedInput{
 		ChangedFiles: []ChangedFile{{Path: "calculator.go"}},
 	}
 
 	patchOnly := buildReviewMessage(InputKindDiffFile, ReviewModePatchOnly, nil, parsed, Limits{})
-	if !strings.Contains(patchOnly, "Inspect the complete diff through workspace_exec before forming conclusions.") {
-		t.Fatalf("patch-only message does not contain diff-only instruction:\n%s", patchOnly)
-	}
-	if strings.Contains(patchOnly, "Inspect the complete diff and repository snapshot") {
-		t.Fatalf("patch-only message requires an unavailable repository snapshot:\n%s", patchOnly)
+	if !strings.Contains(
+		patchOnly,
+		"repository snapshot: unavailable; do not claim full-file or executable-repo evidence",
+	) {
+		t.Fatalf("patch-only message does not describe unavailable repository context:\n%s", patchOnly)
 	}
 
 	repoBacked := buildReviewMessage(InputKindRepoPath, ReviewModeRepoBacked, nil, parsed, Limits{})
-	if !strings.Contains(repoBacked, "Inspect the complete diff and relevant files in the repository snapshot through workspace_exec before forming conclusions.") {
-		t.Fatalf("repo-backed message does not contain scoped repository instruction:\n%s", repoBacked)
+	if !strings.Contains(repoBacked, "repository snapshot: work/inputs/repo") {
+		t.Fatalf("repo-backed message does not describe repository context:\n%s", repoBacked)
 	}
-}
-
-func TestBuildReviewMessagePreservesInstructionsWithinBudget(t *testing.T) {
-	parsed := parsedInput{
-		ChangedFiles: []ChangedFile{{Path: strings.Repeat("large-name-", 100) + ".go"}},
-		ChangedHunks: []ChangedHunk{{
-			ID:   "large.go:1:1",
-			File: "large.go",
-			Body: strings.Repeat("+oversized content\n", 100),
-		}},
-	}
-	limits := Limits{
-		MaxMessageBytes: 320,
-		MaxFiles:        1,
-		MaxHunks:        1,
-		MaxHunkBytes:    1024,
-	}
-	message := buildReviewMessage(
-		InputKindRepoPath,
-		ReviewModeRepoBacked,
-		nil,
-		parsed,
-		limits,
-	)
-	if len(message) > limits.MaxMessageBytes {
-		t.Fatalf("message length = %d, want at most %d", len(message), limits.MaxMessageBytes)
-	}
-	for _, want := range []string{"workspace_exec", "submit_review_results"} {
-		if !strings.Contains(message, want) {
-			t.Fatalf("message does not preserve %q instruction:\n%s", want, message)
+	for _, message := range []string{patchOnly, repoBacked} {
+		for _, workflowInstruction := range []string{
+			"workspace_exec",
+			"submit_review_results",
+		} {
+			if strings.Contains(message, workflowInstruction) {
+				t.Fatalf(
+					"review input duplicates system workflow instruction %q:\n%s",
+					workflowInstruction,
+					message,
+				)
+			}
 		}
 	}
 }
