@@ -305,6 +305,7 @@ func TestSampleReviewReports(t *testing.T) {
 		t.Fatalf("unmarshal sample report: %v\n%s", err, jsonBytes)
 	}
 	if report.TaskID != "review-sample-secret-leak" ||
+		report.Stage != reviewStageCompleted ||
 		report.Input.Kind != inputKindFixture ||
 		report.Input.Source != "secret_leak" ||
 		report.Runtime.Runtime != runtimeFake ||
@@ -1529,9 +1530,9 @@ func TestRepositorySnapshotRejectsSymlinkedParentEscape(t *testing.T) {
 	if len(runner.calls) != 1 || runner.calls[0].Kind != commandCheckGoVersion {
 		t.Fatalf("runner calls = %+v, want only go version", runner.calls)
 	}
-	if len(gov.Warnings) != 1 || gov.Warnings[0].RuleID != ruleSandboxSnapshotUnavailable ||
-		!strings.Contains(gov.Warnings[0].Evidence, "resolves outside the repository") {
-		t.Fatalf("warnings = %+v, want symlink snapshot warning", gov.Warnings)
+	if len(gov.Matches) != 1 || gov.Matches[0].RuleID != ruleSandboxSnapshotUnavailable ||
+		!strings.Contains(gov.Matches[0].Evidence, "resolves outside the repository") {
+		t.Fatalf("warnings = %+v, want symlink snapshot warning", gov.Matches)
 	}
 }
 
@@ -1550,8 +1551,8 @@ func TestSnapshotUnavailableSkipsRepositoryChecks(t *testing.T) {
 		runner.calls[0].Kind != commandCheckGoVersion {
 		t.Fatalf("governance = %+v runner calls = %+v, want only go version", gov, runner.calls)
 	}
-	if len(gov.Warnings) != 1 || gov.Warnings[0].RuleID != ruleSandboxSnapshotUnavailable {
-		t.Fatalf("warnings = %+v, want snapshot unavailable", gov.Warnings)
+	if len(gov.Matches) != 1 || gov.Matches[0].RuleID != ruleSandboxSnapshotUnavailable {
+		t.Fatalf("warnings = %+v, want snapshot unavailable", gov.Matches)
 	}
 }
 
@@ -1926,7 +1927,7 @@ func TestGovernancePermissionBlocksSkipRunner(t *testing.T) {
 			if len(runner.calls) != 0 {
 				t.Fatalf("runner calls = %d, want 0", len(runner.calls))
 			}
-			if gov.PermissionBlocks != gov.CommandsPlanned || len(gov.Warnings) != gov.CommandsPlanned {
+			if gov.PermissionBlocks != gov.CommandsPlanned || len(gov.Matches) != gov.CommandsPlanned {
 				t.Fatalf("governance result = %+v", gov)
 			}
 			for _, decision := range gov.PermissionDecisions {
@@ -1960,8 +1961,8 @@ func TestGovernanceAllowCallsRunner(t *testing.T) {
 	if len(runner.calls) != gov.CommandsPlanned || gov.CommandsAllowed != gov.CommandsPlanned {
 		t.Fatalf("runner calls = %d, governance = %+v", len(runner.calls), gov)
 	}
-	if len(gov.Warnings) != 0 {
-		t.Fatalf("warnings = %+v, want none", gov.Warnings)
+	if len(gov.Matches) != 0 {
+		t.Fatalf("warnings = %+v, want none", gov.Matches)
 	}
 }
 
@@ -2224,7 +2225,7 @@ func TestParseUnifiedDiffFileMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	parsed := parseUnifiedDiff(diff)
+	parsed := parseUnifiedDiff([]byte(diff.Diff))
 	if len(parsed.Warnings) != 0 {
 		t.Fatalf("warnings = %+v, want none", parsed.Warnings)
 	}
@@ -2486,7 +2487,7 @@ func TestRulesFromFixtures(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			parsed := parseUnifiedDiff(diff)
+			parsed := parseUnifiedDiff([]byte(diff.Diff))
 			if len(parsed.Warnings) != 0 {
 				t.Fatalf("fixture parse warnings = %+v, want none", parsed.Warnings)
 			}
@@ -3267,6 +3268,7 @@ func sampleReviewReport(taskID string) reviewReport {
 	return reviewReport{
 		TaskID:     taskID,
 		Status:     reviewStatusCompleted,
+		Stage:      reviewStageCompleted,
 		Conclusion: reviewConclusionFindings,
 		StartedAt:  started,
 		FinishedAt: finished,

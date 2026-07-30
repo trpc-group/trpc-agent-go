@@ -203,14 +203,14 @@ func TestSnapshotLimitProducesSingleGovernanceWarning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run governance: %v", err)
 	}
-	if len(governance.Warnings) != 1 ||
-		governance.Warnings[0].RuleID != ruleSandboxSnapshotUnavailable {
-		t.Fatalf("governance warnings = %+v, want one snapshot warning", governance.Warnings)
+	if len(governance.Matches) != 1 ||
+		governance.Matches[0].RuleID != ruleSandboxSnapshotUnavailable {
+		t.Fatalf("governance warnings = %+v, want one snapshot warning", governance.Matches)
 	}
 	if len(runner.calls) != 1 || runner.calls[0].Kind != commandCheckGoVersion {
 		t.Fatalf("sandbox calls = %+v, want no repository-dependent command", runner.calls)
 	}
-	finalized := finalizeRuleMatches(governance.Warnings)
+	finalized := finalizeRuleMatches(governance.Matches)
 	if !finalized.NeedsHumanReview || len(finalized.Warnings) != 1 {
 		t.Fatalf("finalized snapshot warning = %+v", finalized)
 	}

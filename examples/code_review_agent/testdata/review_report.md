@@ -2,6 +2,7 @@
 
 - Task ID: `review-sample-secret-leak`
 - Status: `completed`
+- Stage: `completed`
 - Conclusion: `findings`
 - Runtime: `fake`
 - Diff SHA-256: `45c28f3dbb83644041f9d5e7f039123ef45525bc85c4701bea82a8f75f05dce6`

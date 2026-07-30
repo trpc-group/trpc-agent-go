@@ -39,15 +39,26 @@ type changedFile struct {
 	IsBinary    bool
 	PackageName string
 	Hunks       []diffHunk
+
+	headerLine         int
+	hasNewFileMode     bool
+	hasDeletedFileMode bool
+	hasRenameFrom      bool
+	hasRenameTo        bool
+	hasOldMarker       bool
+	hasNewMarker       bool
+	oldIsDevNull       bool
+	newIsDevNull       bool
 }
 
 type diffHunk struct {
-	Header   string
-	OldStart int
-	OldCount int
-	NewStart int
-	NewCount int
-	Lines    []diffLine
+	Header    string
+	OldStart  int
+	OldCount  int
+	NewStart  int
+	NewCount  int
+	Lines     []diffLine
+	inputLine int
 }
 
 type diffLine struct {
@@ -88,7 +99,7 @@ func parseUnifiedDiff(raw []byte) parsedDiff {
 		}
 		parser.consumeLine(line, i+1)
 	}
-	parser.finalizeCurrentHunk()
+	parser.finalizeCurrentFile()
 
 	derivePackageNames(&parser.parsed)
 	return parser.parsed
@@ -100,6 +111,8 @@ type diffParser struct {
 	currentHunk int
 	oldCursor   int
 	newCursor   int
+	oldConsumed int
+	newConsumed int
 	hunkLine    int
 }
 
@@ -128,11 +141,12 @@ func (p *diffParser) consumeLine(line string, inputLine int) {
 }
 
 func (p *diffParser) startFile(line string, inputLine int) {
-	p.finalizeCurrentHunk()
+	p.finalizeCurrentFile()
 	oldPath, newPath, warning := parseGitDiffPaths(line)
 	p.parsed.Files = append(p.parsed.Files, changedFile{
-		OldPath: oldPath,
-		NewPath: newPath,
+		OldPath:    oldPath,
+		NewPath:    newPath,
+		headerLine: inputLine,
 	})
 	p.currentFile = len(p.parsed.Files) - 1
 	p.currentHunk = -1
@@ -152,13 +166,17 @@ func (p *diffParser) consumeFileMetadata(file *changedFile, line string, inputLi
 	switch {
 	case strings.HasPrefix(line, "new file mode "):
 		file.IsNew = true
+		file.hasNewFileMode = true
 	case strings.HasPrefix(line, "deleted file mode "):
 		file.IsDeleted = true
+		file.hasDeletedFileMode = true
 	case strings.HasPrefix(line, "rename from "):
 		file.IsRename = true
+		file.hasRenameFrom = true
 		file.OldPath = cleanDiffPath(strings.TrimPrefix(line, "rename from "))
 	case strings.HasPrefix(line, "rename to "):
 		file.IsRename = true
+		file.hasRenameTo = true
 		file.NewPath = cleanDiffPath(strings.TrimPrefix(line, "rename to "))
 	case strings.HasPrefix(line, "Binary files "), line == "GIT binary patch":
 		file.IsBinary = true
@@ -176,22 +194,28 @@ func (p *diffParser) consumeFileMetadata(file *changedFile, line string, inputLi
 }
 
 func (p *diffParser) consumeOldPath(file *changedFile, line string) {
+	file.hasOldMarker = true
 	oldPath := cleanDiffMetadataPath(strings.TrimPrefix(line, "--- "))
 	if oldPath == "/dev/null" {
 		file.OldPath = ""
 		file.IsNew = true
+		file.oldIsDevNull = true
 		return
 	}
+	file.oldIsDevNull = false
 	file.OldPath = oldPath
 }
 
 func (p *diffParser) consumeNewPath(file *changedFile, line string) {
+	file.hasNewMarker = true
 	newPath := cleanDiffMetadataPath(strings.TrimPrefix(line, "+++ "))
 	if newPath == "/dev/null" {
 		file.NewPath = ""
 		file.IsDeleted = true
+		file.newIsDevNull = true
 		return
 	}
+	file.newIsDevNull = false
 	file.NewPath = newPath
 }
 
@@ -203,11 +227,101 @@ func (p *diffParser) consumeHunkHeader(file *changedFile, line string, inputLine
 		p.addWarning(file.reviewPath(), inputLine, err.Error())
 		return
 	}
+	if err := validateHunkOrder(file.Hunks, hunk); err != nil {
+		p.currentHunk = -1
+		p.addWarning(file.reviewPath(), inputLine, err.Error())
+		return
+	}
+	hunk.inputLine = inputLine
 	file.Hunks = append(file.Hunks, hunk)
 	p.currentHunk = len(file.Hunks) - 1
 	p.oldCursor = hunk.OldStart
 	p.newCursor = hunk.NewStart
+	p.oldConsumed = 0
+	p.newConsumed = 0
 	p.hunkLine = inputLine
+}
+
+func (p *diffParser) finalizeCurrentFile() {
+	if p.currentFile < 0 {
+		return
+	}
+	p.finalizeCurrentHunk()
+	p.validateCurrentFileStatus()
+}
+
+func (p *diffParser) validateCurrentFileStatus() {
+	file := &p.parsed.Files[p.currentFile]
+	warn := func(message string) {
+		p.addWarning(file.reviewPath(), file.headerLine, message)
+	}
+	if file.hasNewFileMode && file.hasDeletedFileMode {
+		warn("file cannot be both new and deleted")
+	}
+	if file.IsNew && file.IsDeleted {
+		warn("file status is both new and deleted")
+	}
+	if file.IsRename && (file.IsNew || file.IsDeleted) {
+		warn("rename metadata conflicts with new or deleted file status")
+	}
+	if file.hasRenameFrom != file.hasRenameTo {
+		warn("rename metadata must include both rename from and rename to")
+	}
+
+	if file.IsNew {
+		if !file.hasNewFileMode {
+			warn("new file is missing new file mode metadata")
+		}
+		if file.hasOldMarker && !file.oldIsDevNull {
+			warn("new file old path must be /dev/null")
+		}
+		if file.hasNewMarker && file.newIsDevNull {
+			warn("new file new path must not be /dev/null")
+		}
+		if !file.IsBinary && (!file.hasOldMarker || !file.oldIsDevNull) {
+			warn("text new file must declare --- /dev/null")
+		}
+		if !file.IsBinary && (!file.hasNewMarker || file.newIsDevNull) {
+			warn("text new file must declare a non-null +++ path")
+		}
+		for _, hunk := range file.Hunks {
+			if hunk.OldStart != 0 || hunk.OldCount != 0 {
+				p.addWarning(file.reviewPath(), hunk.inputLine, "new file old hunk range must be 0,0")
+			}
+		}
+	}
+
+	if file.IsDeleted {
+		if !file.hasDeletedFileMode {
+			warn("deleted file is missing deleted file mode metadata")
+		}
+		if file.hasNewMarker && !file.newIsDevNull {
+			warn("deleted file new path must be /dev/null")
+		}
+		if file.hasOldMarker && file.oldIsDevNull {
+			warn("deleted file old path must not be /dev/null")
+		}
+		if !file.IsBinary && (!file.hasNewMarker || !file.newIsDevNull) {
+			warn("text deleted file must declare +++ /dev/null")
+		}
+		if !file.IsBinary && (!file.hasOldMarker || file.oldIsDevNull) {
+			warn("text deleted file must declare a non-null --- path")
+		}
+		for _, hunk := range file.Hunks {
+			if hunk.NewStart != 0 || hunk.NewCount != 0 {
+				p.addWarning(file.reviewPath(), hunk.inputLine, "deleted file new hunk range must be 0,0")
+			}
+		}
+	}
+
+	if !file.IsNew && !file.IsDeleted {
+		if file.oldIsDevNull || file.newIsDevNull {
+			warn("regular file paths must not use /dev/null")
+		}
+		if file.hasNewFileMode || file.hasDeletedFileMode {
+			warn("file mode metadata does not match the file status")
+		}
+	}
 }
 
 func (p *diffParser) finalizeCurrentHunk() {
@@ -216,8 +330,8 @@ func (p *diffParser) finalizeCurrentHunk() {
 	}
 	file := &p.parsed.Files[p.currentFile]
 	hunk := &file.Hunks[p.currentHunk]
-	oldActual := p.oldCursor - hunk.OldStart
-	newActual := p.newCursor - hunk.NewStart
+	oldActual := p.oldConsumed
+	newActual := p.newConsumed
 	if oldActual != hunk.OldCount || newActual != hunk.NewCount {
 		p.addWarning(
 			file.reviewPath(),
@@ -232,6 +346,8 @@ func (p *diffParser) finalizeCurrentHunk() {
 		)
 	}
 	p.currentHunk = -1
+	p.oldConsumed = 0
+	p.newConsumed = 0
 	p.hunkLine = 0
 }
 
@@ -250,6 +366,11 @@ func (p *diffParser) consumeHunkLine(file *changedFile, line string, inputLine i
 	content := line[1:]
 	switch marker {
 	case ' ':
+		if p.oldCursor == maxIntValue() || p.newCursor == maxIntValue() {
+			p.addWarning(file.reviewPath(), inputLine, "hunk line number overflow")
+			p.currentHunk = -1
+			return
+		}
 		hunk.Lines = append(hunk.Lines, diffLine{
 			Kind:    diffLineContext,
 			Text:    content,
@@ -258,20 +379,34 @@ func (p *diffParser) consumeHunkLine(file *changedFile, line string, inputLine i
 		})
 		p.oldCursor++
 		p.newCursor++
+		p.oldConsumed++
+		p.newConsumed++
 	case '+':
+		if p.newCursor == maxIntValue() {
+			p.addWarning(file.reviewPath(), inputLine, "new hunk line number overflow")
+			p.currentHunk = -1
+			return
+		}
 		hunk.Lines = append(hunk.Lines, diffLine{
 			Kind:    diffLineAdded,
 			Text:    content,
 			NewLine: p.newCursor,
 		})
 		p.newCursor++
+		p.newConsumed++
 	case '-':
+		if p.oldCursor == maxIntValue() {
+			p.addWarning(file.reviewPath(), inputLine, "old hunk line number overflow")
+			p.currentHunk = -1
+			return
+		}
 		hunk.Lines = append(hunk.Lines, diffLine{
 			Kind:    diffLineDeleted,
 			Text:    content,
 			OldLine: p.oldCursor,
 		})
 		p.oldCursor++
+		p.oldConsumed++
 	default:
 		p.addWarning(file.reviewPath(), inputLine, fmt.Sprintf("malformed hunk line with prefix %q", marker))
 	}
@@ -396,6 +531,12 @@ func parseHunkHeader(line string) (diffHunk, error) {
 			return diffHunk{}, err
 		}
 	}
+	if err := validateHunkRange(oldStart, oldCount, "old", line); err != nil {
+		return diffHunk{}, err
+	}
+	if err := validateHunkRange(newStart, newCount, "new", line); err != nil {
+		return diffHunk{}, err
+	}
 	return diffHunk{
 		Header:   line,
 		OldStart: oldStart,
@@ -403,6 +544,57 @@ func parseHunkHeader(line string) (diffHunk, error) {
 		NewStart: newStart,
 		NewCount: newCount,
 	}, nil
+}
+
+func validateHunkRange(start int, count int, side string, header string) error {
+	if start < 0 || count < 0 {
+		return fmt.Errorf("invalid %s hunk range in %q", side, header)
+	}
+	if start == 0 && count != 0 {
+		return fmt.Errorf("%s hunk range starting at 0 must be empty in %q", side, header)
+	}
+	if count > 0 && start < 1 {
+		return fmt.Errorf("non-empty %s hunk range must start at line 1 or later in %q", side, header)
+	}
+	if count > maxIntValue()-start {
+		return fmt.Errorf("%s hunk range overflows line numbers in %q", side, header)
+	}
+	return nil
+}
+
+func validateHunkOrder(previous []diffHunk, current diffHunk) error {
+	if len(previous) == 0 {
+		return nil
+	}
+	last := previous[len(previous)-1]
+	if err := validateOrderedRange(last.OldStart, last.OldCount, current.OldStart, current.OldCount, "old"); err != nil {
+		return err
+	}
+	return validateOrderedRange(last.NewStart, last.NewCount, current.NewStart, current.NewCount, "new")
+}
+
+func validateOrderedRange(
+	previousStart int,
+	previousCount int,
+	currentStart int,
+	currentCount int,
+	side string,
+) error {
+	previousEnd := previousStart + previousCount
+	if currentStart < previousStart {
+		return fmt.Errorf("%s hunk ranges are not ordered", side)
+	}
+	if currentStart < previousEnd {
+		return fmt.Errorf("%s hunk ranges overlap", side)
+	}
+	if currentStart == previousStart && (previousCount == 0 || currentCount == 0) {
+		return fmt.Errorf("%s hunk ranges reuse a zero-length anchor", side)
+	}
+	return nil
+}
+
+func maxIntValue() int {
+	return int(^uint(0) >> 1)
 }
 
 func parseHunkNumber(value string, defaultValue int, label string, header string) (int, error) {

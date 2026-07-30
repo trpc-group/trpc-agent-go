@@ -23,7 +23,17 @@ import (
 )
 
 const (
+	reviewStatusRunning   = "running"
 	reviewStatusCompleted = "completed"
+	reviewStatusFailed    = "failed"
+
+	reviewStageStorageOpen = "storage_open"
+	reviewStageInput       = "input"
+	reviewStageAnalysis    = "analysis"
+	reviewStageGovernance  = "governance"
+	reviewStageReportWrite = "report_write"
+	reviewStagePersistence = "persistence"
+	reviewStageCompleted   = "completed"
 
 	reviewConclusionPass             = "pass"
 	reviewConclusionFindings         = "findings"
@@ -38,9 +48,16 @@ type reportPaths struct {
 	Markdown string `json:"markdown,omitempty"`
 }
 
+type reviewFailure struct {
+	Stage   string `json:"stage"`
+	Message string `json:"message"`
+}
+
 type reviewReport struct {
 	TaskID      string           `json:"task_id"`
 	Status      string           `json:"status"`
+	Stage       string           `json:"stage"`
+	Failure     *reviewFailure   `json:"failure,omitempty"`
 	Conclusion  string           `json:"conclusion"`
 	StartedAt   time.Time        `json:"started_at"`
 	FinishedAt  time.Time        `json:"finished_at"`
@@ -175,6 +192,7 @@ func buildReviewReport(
 	report := reviewReport{
 		TaskID:     taskID,
 		Status:     reviewStatusCompleted,
+		Stage:      reviewStageCompleted,
 		StartedAt:  started,
 		FinishedAt: finished,
 		DurationMS: durationMS,
@@ -227,7 +245,7 @@ func buildReviewReport(
 		Warnings: append([]reviewFinding(nil), finalized.Warnings...),
 	}
 	report.Conclusion = determineConclusion(report)
-	report.Metrics = buildReportMetrics(report, totalRedactions)
+	report.Metrics = buildReportMetrics(report, totalRedactions, governance.ToolCalls)
 	return report
 }
 
@@ -274,18 +292,13 @@ func determineConclusion(report reviewReport) string {
 		report.Governance.PermissionBlocks > 0 {
 		return reviewConclusionNeedsHumanReview
 	}
-	for _, run := range report.Governance.SandboxRuns {
-		if sandboxRunNeedsWarning(run) {
-			return reviewConclusionNeedsHumanReview
-		}
-	}
 	if len(report.Findings) > 0 {
 		return reviewConclusionFindings
 	}
 	return reviewConclusionPass
 }
 
-func buildReportMetrics(report reviewReport, redactions int) reportMetrics {
+func buildReportMetrics(report reviewReport, redactions int, toolCalls int) reportMetrics {
 	sandboxDuration := int64(0)
 	exceptions := map[string]int{}
 	for _, run := range report.Governance.SandboxRuns {
@@ -309,7 +322,7 @@ func buildReportMetrics(report reviewReport, redactions int) reportMetrics {
 	return reportMetrics{
 		TotalDurationMS:   report.DurationMS,
 		SandboxDurationMS: sandboxDuration,
-		ToolCalls:         len(report.Governance.SandboxRuns),
+		ToolCalls:         toolCalls,
 		PermissionBlocks:  report.Governance.PermissionBlocks,
 		Findings:          len(report.Findings),
 		Warnings:          len(report.Warnings),
@@ -324,6 +337,8 @@ func (r reviewReport) summary() reviewSummary {
 	return reviewSummary{
 		TaskID:            r.TaskID,
 		Status:            r.Status,
+		Stage:             r.Stage,
+		Failure:           cloneReviewFailure(r.Failure),
 		Conclusion:        r.Conclusion,
 		InputKind:         r.Input.Kind,
 		Source:            r.Input.Source,
@@ -424,7 +439,12 @@ func renderMarkdownReport(report reviewReport) string {
 	fmt.Fprintf(&b, "# Code Review Report\n\n")
 	fmt.Fprintf(&b, "- Task ID: `%s`\n", report.TaskID)
 	fmt.Fprintf(&b, "- Status: `%s`\n", report.Status)
+	fmt.Fprintf(&b, "- Stage: `%s`\n", report.Stage)
 	fmt.Fprintf(&b, "- Conclusion: `%s`\n", report.Conclusion)
+	if report.Failure != nil {
+		fmt.Fprintf(&b, "- Failure: `%s`: %s\n",
+			markdownEscape(report.Failure.Stage), markdownEscape(report.Failure.Message))
+	}
 	fmt.Fprintf(&b, "- Runtime: `%s`\n", report.Runtime.Runtime)
 	fmt.Fprintf(&b, "- Diff SHA-256: `%s`\n", report.Input.DiffSHA256)
 	fmt.Fprintf(&b, "- Duration: %d ms\n\n", report.DurationMS)
@@ -557,4 +577,12 @@ func cloneIntMap(values map[string]int) map[string]int {
 		clone[key] = value
 	}
 	return clone
+}
+
+func cloneReviewFailure(failure *reviewFailure) *reviewFailure {
+	if failure == nil {
+		return nil
+	}
+	clone := *failure
+	return &clone
 }

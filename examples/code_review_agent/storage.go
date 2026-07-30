@@ -25,7 +25,7 @@ import (
 
 const (
 	sqliteDriverName    = "sqlite3"
-	reviewSchemaVersion = 1
+	reviewSchemaVersion = 2
 
 	decisionKindFilter     = "filter"
 	decisionKindPermission = "permission"
@@ -37,6 +37,7 @@ const (
 var errReviewTaskNotFound = errors.New("review task not found")
 
 type reviewStore interface {
+	CheckpointReview(context.Context, reviewReport) error
 	SaveReview(context.Context, reviewReport) error
 	LoadReview(context.Context, string) (reviewReport, error)
 	Close() error
@@ -48,15 +49,18 @@ type sqliteReviewStore struct {
 }
 
 type memoryReviewStore struct {
-	mu      sync.Mutex
-	reports map[string]reviewReport
-	saveErr error
+	mu            sync.Mutex
+	reports       map[string]reviewReport
+	checkpointErr error
+	saveErr       error
 }
 
 const reviewSchemaSQL = `
 CREATE TABLE IF NOT EXISTS review_tasks (
 	task_id TEXT PRIMARY KEY,
 	status TEXT NOT NULL,
+	stage TEXT NOT NULL DEFAULT 'completed',
+	failure_json TEXT,
 	conclusion TEXT NOT NULL CHECK (conclusion IN ('pass', 'findings', 'needs_human_review')),
 	started_at TEXT NOT NULL,
 	finished_at TEXT NOT NULL,
@@ -138,20 +142,24 @@ func openConfiguredReviewStore(ctx context.Context, cfg config, hooks runtimeHoo
 }
 
 func openSQLiteReviewStore(ctx context.Context, dbPath string) (reviewStore, error) {
-	if strings.TrimSpace(dbPath) == "" {
-		return nil, errors.New("sqlite db path must not be empty")
-	}
 	if !sqlDriverAvailable(sqliteDriverName) {
 		return nil, errors.New("sqlite storage unavailable: sqlite3 driver is not registered; enable CGO to use github.com/mattn/go-sqlite3")
 	}
-	dbPath = filepath.Clean(dbPath)
+	var err error
+	dbPath, err = normalizeSQLiteFilePath(dbPath)
+	if err != nil {
+		return nil, err
+	}
 	if err := prepareSQLitePath(dbPath); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open(sqliteDriverName, dbPath)
+	dsn := dbPath + "?_foreign_keys=1&_journal_mode=DELETE"
+	db, err := sql.Open(sqliteDriverName, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite database: %w", err)
 	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 	store := &sqliteReviewStore{db: db, dbPath: dbPath}
 	if err := store.init(ctx); err != nil {
 		closeErr := db.Close()
@@ -164,6 +172,29 @@ func openSQLiteReviewStore(ctx context.Context, dbPath string) (reviewStore, err
 		return nil, errors.Join(err, closeErr, afterCloseErr)
 	}
 	return store, nil
+}
+
+func normalizeSQLiteFilePath(dbPath string) (string, error) {
+	if strings.TrimSpace(dbPath) == "" {
+		return "", errors.New("sqlite db path must not be empty")
+	}
+	if strings.ContainsRune(dbPath, '\x00') {
+		return "", errors.New("sqlite db path contains a NUL byte")
+	}
+	if strings.ContainsRune(dbPath, '?') {
+		return "", errors.New("sqlite db path must not contain DSN query parameters")
+	}
+	if len(dbPath) >= len("file:") && strings.EqualFold(dbPath[:len("file:")], "file:") {
+		return "", errors.New("sqlite db path must be a filesystem path, not a file URI")
+	}
+	if strings.EqualFold(dbPath, ":memory:") {
+		return "", errors.New("sqlite in-memory databases are not supported")
+	}
+	absolute, err := filepath.Abs(filepath.Clean(dbPath))
+	if err != nil {
+		return "", fmt.Errorf("resolve sqlite db path: %w", err)
+	}
+	return absolute, nil
 }
 
 func prepareSQLitePath(dbPath string) error {
@@ -284,15 +315,58 @@ func (s *sqliteReviewStore) init(ctx context.Context) error {
 	if version > reviewSchemaVersion {
 		return fmt.Errorf("sqlite schema version %d is newer than supported version %d", version, reviewSchemaVersion)
 	}
-	if _, err := s.db.ExecContext(ctx, reviewSchemaSQL); err != nil {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin sqlite schema transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	if version == 1 {
+		if _, err := tx.ExecContext(ctx, "ALTER TABLE review_tasks ADD COLUMN stage TEXT NOT NULL DEFAULT 'completed'"); err != nil {
+			return fmt.Errorf("migrate sqlite review stage: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, "ALTER TABLE review_tasks ADD COLUMN failure_json TEXT"); err != nil {
+			return fmt.Errorf("migrate sqlite review failure: %w", err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, reviewSchemaSQL); err != nil {
 		return fmt.Errorf("initialize sqlite schema: %w", err)
 	}
-	if version == 0 {
-		if _, err := s.db.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version=%d", reviewSchemaVersion)); err != nil {
+	if version < reviewSchemaVersion {
+		if _, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version=%d", reviewSchemaVersion)); err != nil {
 			return fmt.Errorf("set sqlite schema version: %w", err)
 		}
 	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit sqlite schema transaction: %w", err)
+	}
+	committed = true
 	return nil
+}
+
+func (s *sqliteReviewStore) CheckpointReview(ctx context.Context, report reviewReport) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin review checkpoint transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	if err := upsertReviewTask(ctx, tx, report); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit review checkpoint transaction: %w", err)
+	}
+	committed = true
+	return secureSQLiteArtifacts(s.dbPath)
 }
 
 func (s *sqliteReviewStore) SaveReview(ctx context.Context, report reviewReport) error {
@@ -307,59 +381,18 @@ func (s *sqliteReviewStore) SaveReview(ctx context.Context, report reviewReport)
 		}
 	}()
 
-	inputJSON, err := marshalJSONText(report.Input)
-	if err != nil {
+	if err := upsertReviewTask(ctx, tx, report); err != nil {
 		return err
 	}
-	runtimeJSON, err := marshalJSONText(report.Runtime)
-	if err != nil {
-		return err
-	}
-	parseJSON, err := marshalJSONText(report.Parse)
-	if err != nil {
-		return err
-	}
-	rulesJSON, err := marshalJSONText(report.Rules)
-	if err != nil {
-		return err
-	}
-	metricsJSON, err := marshalJSONText(report.Metrics)
-	if err != nil {
-		return err
-	}
-	reportPathsJSON, err := marshalJSONText(report.ReportPaths)
-	if err != nil {
-		return err
-	}
-
-	_, err = tx.ExecContext(ctx, `
-INSERT INTO review_tasks (
-	task_id, status, conclusion, started_at, finished_at, duration_ms,
-	input_json, runtime_json, parse_json, rules_json, metrics_json, report_paths_json,
-	skill_name, skill_digest, commands_planned, commands_allowed, commands_blocked,
-	permission_blocks
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		report.TaskID,
-		report.Status,
-		report.Conclusion,
-		formatReportTime(report.StartedAt),
-		formatReportTime(report.FinishedAt),
-		report.DurationMS,
-		inputJSON,
-		runtimeJSON,
-		parseJSON,
-		rulesJSON,
-		metricsJSON,
-		reportPathsJSON,
-		report.Governance.SkillName,
-		report.Governance.SkillDigest,
-		report.Governance.CommandsPlanned,
-		report.Governance.CommandsAllowed,
-		report.Governance.CommandsBlocked,
-		report.Governance.PermissionBlocks,
-	)
-	if err != nil {
-		return fmt.Errorf("insert review task: %w", err)
+	for _, statement := range []string{
+		"DELETE FROM decisions WHERE task_id = ?",
+		"DELETE FROM sandbox_runs WHERE task_id = ?",
+		"DELETE FROM findings WHERE task_id = ?",
+		"DELETE FROM artifacts WHERE task_id = ?",
+	} {
+		if _, err := tx.ExecContext(ctx, statement, report.TaskID); err != nil {
+			return fmt.Errorf("replace review child records: %w", err)
+		}
 	}
 
 	if err := insertDecisions(ctx, tx, report.TaskID, decisionKindFilter, report.Governance.FilterDecisions); err != nil {
@@ -387,6 +420,94 @@ INSERT INTO review_tasks (
 	committed = true
 	if err := secureSQLiteArtifacts(s.dbPath); err != nil {
 		return err
+	}
+	return nil
+}
+
+func upsertReviewTask(ctx context.Context, tx *sql.Tx, report reviewReport) error {
+	inputJSON, err := marshalJSONText(report.Input)
+	if err != nil {
+		return err
+	}
+	runtimeJSON, err := marshalJSONText(report.Runtime)
+	if err != nil {
+		return err
+	}
+	parseJSON, err := marshalJSONText(report.Parse)
+	if err != nil {
+		return err
+	}
+	rulesJSON, err := marshalJSONText(report.Rules)
+	if err != nil {
+		return err
+	}
+	metricsJSON, err := marshalJSONText(report.Metrics)
+	if err != nil {
+		return err
+	}
+	reportPathsJSON, err := marshalJSONText(report.ReportPaths)
+	if err != nil {
+		return err
+	}
+	var failureJSON any
+	if report.Failure != nil {
+		failureJSON, err = marshalJSONText(report.Failure)
+		if err != nil {
+			return err
+		}
+	}
+
+	_, err = tx.ExecContext(ctx, `
+INSERT INTO review_tasks (
+	task_id, status, stage, failure_json, conclusion,
+	started_at, finished_at, duration_ms,
+	input_json, runtime_json, parse_json, rules_json, metrics_json, report_paths_json,
+	skill_name, skill_digest, commands_planned, commands_allowed, commands_blocked,
+	permission_blocks
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(task_id) DO UPDATE SET
+	status = excluded.status,
+	stage = excluded.stage,
+	failure_json = excluded.failure_json,
+	conclusion = excluded.conclusion,
+	started_at = excluded.started_at,
+	finished_at = excluded.finished_at,
+	duration_ms = excluded.duration_ms,
+	input_json = excluded.input_json,
+	runtime_json = excluded.runtime_json,
+	parse_json = excluded.parse_json,
+	rules_json = excluded.rules_json,
+	metrics_json = excluded.metrics_json,
+	report_paths_json = excluded.report_paths_json,
+	skill_name = excluded.skill_name,
+	skill_digest = excluded.skill_digest,
+	commands_planned = excluded.commands_planned,
+	commands_allowed = excluded.commands_allowed,
+	commands_blocked = excluded.commands_blocked,
+	permission_blocks = excluded.permission_blocks`,
+		report.TaskID,
+		report.Status,
+		report.Stage,
+		failureJSON,
+		report.Conclusion,
+		formatReportTime(report.StartedAt),
+		formatReportTime(report.FinishedAt),
+		report.DurationMS,
+		inputJSON,
+		runtimeJSON,
+		parseJSON,
+		rulesJSON,
+		metricsJSON,
+		reportPathsJSON,
+		report.Governance.SkillName,
+		report.Governance.SkillDigest,
+		report.Governance.CommandsPlanned,
+		report.Governance.CommandsAllowed,
+		report.Governance.CommandsBlocked,
+		report.Governance.PermissionBlocks,
+	)
+	if err != nil {
+		return fmt.Errorf("upsert review task: %w", err)
 	}
 	return nil
 }
@@ -490,6 +611,7 @@ VALUES (?, ?, ?, ?, ?, ?)`,
 
 func (s *sqliteReviewStore) LoadReview(ctx context.Context, taskID string) (reviewReport, error) {
 	var report reviewReport
+	var failureJSON sql.NullString
 	var startedAt string
 	var finishedAt string
 	var inputJSON string
@@ -499,7 +621,7 @@ func (s *sqliteReviewStore) LoadReview(ctx context.Context, taskID string) (revi
 	var metricsJSON string
 	var reportPathsJSON string
 	row := s.db.QueryRowContext(ctx, `
-SELECT task_id, status, conclusion, started_at, finished_at, duration_ms,
+SELECT task_id, status, stage, failure_json, conclusion, started_at, finished_at, duration_ms,
 	input_json, runtime_json, parse_json, rules_json, metrics_json, report_paths_json,
 	skill_name, skill_digest, commands_planned, commands_allowed, commands_blocked,
 	permission_blocks
@@ -508,6 +630,8 @@ WHERE task_id = ?`, taskID)
 	err := row.Scan(
 		&report.TaskID,
 		&report.Status,
+		&report.Stage,
+		&failureJSON,
 		&report.Conclusion,
 		&startedAt,
 		&finishedAt,
@@ -530,6 +654,12 @@ WHERE task_id = ?`, taskID)
 	}
 	if err != nil {
 		return reviewReport{}, fmt.Errorf("query review task: %w", err)
+	}
+	if failureJSON.Valid {
+		report.Failure = &reviewFailure{}
+		if err := unmarshalJSONText(failureJSON.String, report.Failure); err != nil {
+			return reviewReport{}, err
+		}
 	}
 	report.StartedAt, err = parseReportTime(startedAt)
 	if err != nil {
@@ -721,6 +851,16 @@ func (s *sqliteReviewStore) Close() error {
 
 func newMemoryReviewStore() *memoryReviewStore {
 	return &memoryReviewStore{reports: map[string]reviewReport{}}
+}
+
+func (s *memoryReviewStore) CheckpointReview(_ context.Context, report reviewReport) error {
+	if s.checkpointErr != nil {
+		return s.checkpointErr
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reports[report.TaskID] = cloneReviewReport(report)
+	return nil
 }
 
 func (s *memoryReviewStore) SaveReview(_ context.Context, report reviewReport) error {

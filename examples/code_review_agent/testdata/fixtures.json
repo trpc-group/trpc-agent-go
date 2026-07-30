@@ -58,7 +58,7 @@
       "diff": "diff --git a/leaky_resources.go b/leaky_resources.go\nindex 1111111..2222222 100644\n--- a/leaky_resources.go\n+++ b/leaky_resources.go\n@@ -1 +1,28 @@\n package review\n+\n+func leakResources(ctx context.Context, db *sql.DB, url string, name string) error {\n+\tf, err := os.Open(name)\n+\tif err != nil {\n+\t\treturn err\n+\t}\n+\tdata, err := io.ReadAll(f)\n+\tif err != nil {\n+\t\treturn err\n+\t}\n+\t_ = data\n+\tresp, err := http.Get(url)\n+\tif err != nil {\n+\t\treturn err\n+\t}\n+\tbody, err := io.ReadAll(resp.Body)\n+\tif err != nil {\n+\t\treturn err\n+\t}\n+\t_ = body\n+\trows, err := db.QueryContext(ctx, \"select id from users\")\n+\tif err != nil {\n+\t\treturn err\n+\t}\n+\tfor rows.Next() {}\n+\treturn nil\n+}\ndiff --git a/cross_hunk_resource.go b/cross_hunk_resource.go\nindex 3333333..4444444 100644\n--- a/cross_hunk_resource.go\n+++ b/cross_hunk_resource.go\n@@ -5,2 +5,4 @@ func safeOpen(name string) error {\n+\tf, err := os.Open(name)\n+\tif err != nil { return err }\n \treturn nil\n }\n@@ -20 +22,2 @@ func safeOpen(name string) error {\n+\tdefer f.Close()\n }\n",
       "expected": {
         "finding_rule_ids": ["resource.unclosed_file", "resource.unclosed_http_body", "resource.unclosed_sql_rows"],
-        "warning_rule_ids": []
+        "warning_rule_ids": ["resource.unclosed_file"]
       }
     },
     "ignored_error": {
@@ -114,7 +114,14 @@
       "diff": "diff --git a/hello.go b/hello.go\nindex 1111111..2222222 100644\n--- a/hello.go\n+++ b/hello.go\n@@ -1 +1,3 @@\n package hello\n+\n+func message() string { return \"hello\" }\n",
       "expected": {
         "finding_rule_ids": [],
-        "warning_rule_ids": ["sandbox.run_failed", "sandbox.run_skipped"]
+        "warning_rule_ids": ["sandbox.run_failed"]
+      },
+      "fake_sandbox": {
+        "go_version": {
+          "exit_code": 127,
+          "stderr": "go: command not found",
+          "duration_ms": 1
+        }
       }
     }
   }

@@ -87,11 +87,14 @@ type reviewInput struct {
 	repoRoot        string
 	repoFiles       []string
 	sandboxRepoRoot string
+	fixture         *fixtureItem
 }
 
 type reviewSummary struct {
 	TaskID            string         `json:"task_id"`
 	Status            string         `json:"status"`
+	Stage             string         `json:"stage"`
+	Failure           *reviewFailure `json:"failure,omitempty"`
 	Conclusion        string         `json:"conclusion"`
 	InputKind         string         `json:"input_kind"`
 	Source            string         `json:"source"`
@@ -138,8 +141,33 @@ type fixturesFile struct {
 }
 
 type fixtureItem struct {
-	Description string `json:"description"`
-	Diff        string `json:"diff"`
+	Description string               `json:"description"`
+	Diff        string               `json:"diff"`
+	Expected    *fixtureExpected     `json:"expected"`
+	FakeSandbox fixtureSandboxConfig `json:"fake_sandbox,omitempty"`
+}
+
+type fixtureExpected struct {
+	FindingRuleIDs *[]string `json:"finding_rule_ids"`
+	WarningRuleIDs *[]string `json:"warning_rule_ids"`
+}
+
+type fixtureSandboxConfig struct {
+	GoVersion   *fixtureSandboxRun `json:"go_version,omitempty"`
+	Test        *fixtureSandboxRun `json:"test,omitempty"`
+	Vet         *fixtureSandboxRun `json:"vet,omitempty"`
+	Staticcheck *fixtureSandboxRun `json:"staticcheck,omitempty"`
+}
+
+type fixtureSandboxRun struct {
+	ExitCode   int      `json:"exit_code"`
+	Stdout     string   `json:"stdout,omitempty"`
+	Stderr     string   `json:"stderr,omitempty"`
+	TimedOut   bool     `json:"timed_out,omitempty"`
+	DurationMS int64    `json:"duration_ms,omitempty"`
+	Error      string   `json:"error,omitempty"`
+	Warnings   []string `json:"warnings,omitempty"`
+	Skipped    bool     `json:"skipped,omitempty"`
 }
 
 func main() {
@@ -213,30 +241,65 @@ func runWithHooks(
 		return 0
 	}
 
-	started := time.Now().UTC()
-	input, err := loadReviewInput(ctx, cfg, gitRunner)
-	if err != nil {
-		fmt.Fprintf(stderr, "error: %v\n", err)
-		return 1
+	now := func() time.Time {
+		if hooks.now != nil {
+			return hooks.now().UTC()
+		}
+		return time.Now().UTC()
 	}
-	parsed := parseUnifiedDiff(input.diff)
-	ruleMatches := runRules(parsed, input.repoRoot)
-	highConfidenceRules, ruleWarnings := countRuleMatches(ruleMatches)
-	governance, err := runGovernance(ctx, cfg, input, parsed, hooks)
-	if err != nil {
-		fmt.Fprintf(stderr, "error: %v\n", err)
-		return 1
-	}
-	ruleMatches = append(ruleMatches, governance.Warnings...)
-	finalized := finalizeRuleMatches(ruleMatches)
-	parseWarningMessages, parseWarningRedactions := redactParseWarningMessages(parsed.Warnings)
-
 	taskID := strings.TrimSpace(hooks.taskID)
 	if taskID == "" {
 		taskID = newTaskID()
 	}
-	finished := time.Now().UTC()
-	report := buildReviewReport(
+	started := now()
+	store, ownsStore, err := openConfiguredReviewStore(ctx, cfg, hooks)
+	if err != nil {
+		writeReviewStageError(stderr, taskID, reviewStageStorageOpen, err)
+		return 1
+	}
+	if ownsStore {
+		defer store.Close()
+	}
+	report := newRunningReviewReport(taskID, cfg, started)
+	if err := store.CheckpointReview(ctx, report); err != nil {
+		writeReviewStageError(stderr, taskID, reviewStagePersistence, err)
+		return 1
+	}
+	fail := func(stage string, cause error, rewriteFiles bool) int {
+		markReviewFailed(&report, stage, cause, now())
+		if rewriteFiles {
+			_ = writeReviewReportFiles(&report, cfg.outputDir)
+		}
+		_ = store.CheckpointReview(ctx, report)
+		writeReviewStageError(stderr, taskID, stage, errors.New(report.Failure.Message))
+		return 1
+	}
+
+	input, err := loadReviewInput(ctx, cfg, gitRunner)
+	if err != nil {
+		return fail(reviewStageInput, err, false)
+	}
+	setReviewInputCheckpoint(&report, input)
+	markReviewRunning(&report, reviewStageAnalysis, now())
+	if err := store.CheckpointReview(ctx, report); err != nil {
+		return fail(reviewStagePersistence, err, false)
+	}
+	parsed := parseUnifiedDiff(input.diff)
+	ruleMatches := runRules(parsed, input.repoRoot)
+	highConfidenceRules, ruleWarnings := countRuleMatches(ruleMatches)
+	markReviewRunning(&report, reviewStageGovernance, now())
+	if err := store.CheckpointReview(ctx, report); err != nil {
+		return fail(reviewStagePersistence, err, false)
+	}
+	governance, err := runGovernance(ctx, cfg, input, parsed, hooks)
+	if err != nil {
+		return fail(reviewStageGovernance, err, false)
+	}
+	ruleMatches = append(ruleMatches, governance.Matches...)
+	finalized := finalizeRuleMatches(ruleMatches)
+	parseWarningMessages, parseWarningRedactions := redactParseWarningMessages(parsed.Warnings)
+
+	report = buildReviewReport(
 		taskID,
 		cfg,
 		input,
@@ -248,23 +311,28 @@ func runWithHooks(
 		ruleWarnings,
 		finalized.Redactions+parseWarningRedactions+governance.Redactions,
 		started,
-		finished,
+		started,
 	)
+	markReviewRunning(&report, reviewStageReportWrite, now())
+	if err := store.CheckpointReview(ctx, report); err != nil {
+		return fail(reviewStagePersistence, err, false)
+	}
 	if err := writeReviewReportFiles(&report, cfg.outputDir); err != nil {
-		fmt.Fprintf(stderr, "error: write review report: %v\n", err)
-		return 1
+		return fail(reviewStageReportWrite, fmt.Errorf("write review report: %w", err), true)
 	}
-	store, ownsStore, err := openConfiguredReviewStore(ctx, cfg, hooks)
-	if err != nil {
-		fmt.Fprintf(stderr, "error: open review store: %v\n", err)
-		return 1
-	}
-	if ownsStore {
-		defer store.Close()
+	markReviewRunning(&report, reviewStagePersistence, now())
+	if err := store.CheckpointReview(ctx, report); err != nil {
+		return fail(reviewStagePersistence, err, true)
 	}
 	if err := store.SaveReview(ctx, report); err != nil {
-		fmt.Fprintf(stderr, "error: save review: %v\n", err)
-		return 1
+		return fail(reviewStagePersistence, fmt.Errorf("save review: %w", err), true)
+	}
+	markReviewCompleted(&report, now())
+	if err := writeReviewReportFiles(&report, cfg.outputDir); err != nil {
+		return fail(reviewStageReportWrite, fmt.Errorf("finalize review report: %w", err), true)
+	}
+	if err := store.SaveReview(ctx, report); err != nil {
+		return fail(reviewStagePersistence, fmt.Errorf("finalize review persistence: %w", err), true)
 	}
 	response := report.summary()
 	if err := writeJSON(stdout, response); err != nil {
@@ -276,6 +344,103 @@ func runWithHooks(
 
 func newTaskID() string {
 	return "review-" + uuid.NewString()
+}
+
+func newRunningReviewReport(taskID string, cfg config, started time.Time) reviewReport {
+	redactions := 0
+	redact := func(value string) string {
+		result := redactText(value)
+		redactions += result.Count
+		return result.Text
+	}
+	report := reviewReport{
+		TaskID:     taskID,
+		Status:     reviewStatusRunning,
+		Stage:      reviewStageInput,
+		Conclusion: reviewConclusionNeedsHumanReview,
+		StartedAt:  started,
+		FinishedAt: started,
+		Runtime: reportRuntime{
+			Runtime:           cfg.effectiveRuntime,
+			DryRun:            cfg.dryRun,
+			RuleOnly:          cfg.ruleOnly,
+			E2BTemplate:       redact(cfg.e2bTemplate),
+			EnableStaticcheck: cfg.enableStaticcheck,
+			OutputDir:         redact(cfg.outputDir),
+			DBPath:            redact(cfg.dbPath),
+		},
+		Rules: reportRules{
+			NeedsHumanReview: true,
+			SeverityCounts:   map[string]int{},
+		},
+	}
+	report.Metrics = buildReportMetrics(report, redactions, 0)
+	return report
+}
+
+func setReviewInputCheckpoint(report *reviewReport, input reviewInput) {
+	source := redactText(input.source)
+	report.Metrics.Redactions += source.Count
+	report.Input = reportInput{
+		Kind:       input.kind,
+		Source:     source.Text,
+		DiffBytes:  len(input.diff),
+		DiffSHA256: diffSHA256(input.diff),
+	}
+}
+
+func markReviewRunning(report *reviewReport, stage string, current time.Time) {
+	report.Status = reviewStatusRunning
+	report.Stage = stage
+	report.Failure = nil
+	report.Conclusion = reviewConclusionNeedsHumanReview
+	setReviewTiming(report, current)
+}
+
+func markReviewCompleted(report *reviewReport, finished time.Time) {
+	report.Status = reviewStatusCompleted
+	report.Stage = reviewStageCompleted
+	report.Failure = nil
+	setReviewTiming(report, finished)
+	report.Conclusion = determineConclusion(*report)
+	report.Metrics = buildReportMetrics(*report, report.Metrics.Redactions, report.Metrics.ToolCalls)
+}
+
+func markReviewFailed(report *reviewReport, stage string, cause error, finished time.Time) {
+	message := "review failed"
+	if cause != nil && strings.TrimSpace(cause.Error()) != "" {
+		message = cause.Error()
+	}
+	redacted := redactText(message)
+	report.Status = reviewStatusFailed
+	report.Stage = stage
+	report.Failure = &reviewFailure{Stage: stage, Message: redacted.Text}
+	report.Conclusion = reviewConclusionNeedsHumanReview
+	report.Rules.NeedsHumanReview = true
+	setReviewTiming(report, finished)
+	report.Metrics = buildReportMetrics(
+		*report,
+		report.Metrics.Redactions+redacted.Count,
+		report.Metrics.ToolCalls,
+	)
+}
+
+func setReviewTiming(report *reviewReport, finished time.Time) {
+	report.FinishedAt = finished
+	report.DurationMS = finished.Sub(report.StartedAt).Milliseconds()
+	if report.DurationMS < 0 {
+		report.DurationMS = 0
+	}
+	report.Metrics.TotalDurationMS = report.DurationMS
+}
+
+func writeReviewStageError(stderr io.Writer, taskID string, stage string, cause error) {
+	message := "review failed"
+	if cause != nil && strings.TrimSpace(cause.Error()) != "" {
+		message = cause.Error()
+	}
+	redacted := redactText(message)
+	fmt.Fprintf(stderr, "error: task %s failed at %s: %s\n", taskID, stage, redacted.Text)
 }
 
 func parseConfig(args []string, getenv func(string) string) (config, int, error) {
@@ -436,11 +601,16 @@ func loadReviewInput(
 		}
 		return reviewInput{kind: inputKindDiffFile, source: cfg.diffFile, diff: diff}, nil
 	case cfg.fixture != "":
-		diff, err := readFixture(cfg.fixture)
+		fixture, err := readFixture(cfg.fixture)
 		if err != nil {
 			return reviewInput{}, err
 		}
-		return reviewInput{kind: inputKindFixture, source: cfg.fixture, diff: diff}, nil
+		return reviewInput{
+			kind:    inputKindFixture,
+			source:  cfg.fixture,
+			diff:    []byte(fixture.Diff),
+			fixture: &fixture,
+		}, nil
 	case cfg.repoPath != "":
 		runCtx, cancel := context.WithTimeout(ctx, gitDiffTimeout)
 		defer cancel()
@@ -481,23 +651,98 @@ func countRuleMatches(matches []ruleMatch) (int, int) {
 	return highConfidence, warnings
 }
 
-func readFixture(name string) ([]byte, error) {
+func readFixture(name string) (fixtureItem, error) {
 	data, err := readLimitedFile(fixturesPath(), maxDiffBytes)
 	if err != nil {
-		return nil, fmt.Errorf("read fixtures: %w", err)
+		return fixtureItem{}, fmt.Errorf("read fixtures: %w", err)
 	}
-	var fixtures fixturesFile
-	if err := json.Unmarshal(data, &fixtures); err != nil {
-		return nil, fmt.Errorf("parse fixtures: %w", err)
-	}
-	if fixtures.Version != 1 {
-		return nil, fmt.Errorf("fixtures version %d is not supported", fixtures.Version)
+	fixtures, err := parseFixtures(data)
+	if err != nil {
+		return fixtureItem{}, err
 	}
 	fixture, ok := fixtures.Fixtures[name]
 	if !ok {
-		return nil, fmt.Errorf("fixture %q not found", name)
+		return fixtureItem{}, fmt.Errorf("fixture %q not found", name)
 	}
-	return []byte(fixture.Diff), nil
+	return fixture, nil
+}
+
+func parseFixtures(data []byte) (fixturesFile, error) {
+	var fixtures fixturesFile
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&fixtures); err != nil {
+		return fixturesFile{}, fmt.Errorf("parse fixtures: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			err = errors.New("unexpected trailing JSON value")
+		}
+		return fixturesFile{}, fmt.Errorf("parse fixtures: %w", err)
+	}
+	if fixtures.Version != 1 {
+		return fixturesFile{}, fmt.Errorf("fixtures version %d is not supported", fixtures.Version)
+	}
+	for fixtureName, fixture := range fixtures.Fixtures {
+		if err := validateFixture(fixtureName, fixture); err != nil {
+			return fixturesFile{}, err
+		}
+	}
+	return fixtures, nil
+}
+
+func validateFixture(name string, fixture fixtureItem) error {
+	if fixture.Expected == nil {
+		return fmt.Errorf("fixture %q is missing expected results", name)
+	}
+	if fixture.Expected.FindingRuleIDs == nil {
+		return fmt.Errorf("fixture %q expected is missing finding_rule_ids", name)
+	}
+	if fixture.Expected.WarningRuleIDs == nil {
+		return fmt.Errorf("fixture %q expected is missing warning_rule_ids", name)
+	}
+	if err := validateFixtureRuleIDs(name, "finding_rule_ids", *fixture.Expected.FindingRuleIDs); err != nil {
+		return err
+	}
+	if err := validateFixtureRuleIDs(name, "warning_rule_ids", *fixture.Expected.WarningRuleIDs); err != nil {
+		return err
+	}
+	for command, run := range map[string]*fixtureSandboxRun{
+		"go_version":  fixture.FakeSandbox.GoVersion,
+		"test":        fixture.FakeSandbox.Test,
+		"vet":         fixture.FakeSandbox.Vet,
+		"staticcheck": fixture.FakeSandbox.Staticcheck,
+	} {
+		if run == nil {
+			continue
+		}
+		if run.ExitCode < -1 {
+			return fmt.Errorf("fixture %q fake_sandbox.%s exit_code must be at least -1", name, command)
+		}
+		if run.DurationMS < 0 {
+			return fmt.Errorf("fixture %q fake_sandbox.%s duration_ms must not be negative", name, command)
+		}
+		if run.Skipped && run.TimedOut {
+			return fmt.Errorf("fixture %q fake_sandbox.%s cannot be both skipped and timed out", name, command)
+		}
+	}
+	return nil
+}
+
+func validateFixtureRuleIDs(name string, field string, ruleIDs []string) error {
+	seen := map[string]bool{}
+	for _, ruleID := range ruleIDs {
+		trimmed := strings.TrimSpace(ruleID)
+		if trimmed == "" || trimmed != ruleID {
+			return fmt.Errorf("fixture %q %s contains an empty or padded rule id", name, field)
+		}
+		if seen[ruleID] {
+			return fmt.Errorf("fixture %q %s contains duplicate rule id %q", name, field, ruleID)
+		}
+		seen[ruleID] = true
+	}
+	return nil
 }
 
 func fixturesPath() string {

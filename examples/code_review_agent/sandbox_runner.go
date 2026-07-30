@@ -50,6 +50,7 @@ func newConfiguredSandboxRunner(
 	ctx context.Context,
 	cfg config,
 	meta codeReviewSkill,
+	input reviewInput,
 ) (sandboxRunner, error) {
 	runtimeName := cfg.effectiveRuntime
 	if strings.TrimSpace(runtimeName) == "" {
@@ -57,7 +58,7 @@ func newConfiguredSandboxRunner(
 	}
 	switch runtimeName {
 	case runtimeFake:
-		return fakeSandboxRunner{fixture: cfg.fixture}, nil
+		return newFakeSandboxRunner(input.fixture), nil
 	case runtimeE2B:
 		return newE2BSandboxRunner(ctx, cfg, meta)
 	case runtimeLocal:

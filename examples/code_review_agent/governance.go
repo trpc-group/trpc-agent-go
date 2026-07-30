@@ -20,6 +20,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 
 	rootskill "trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -80,6 +81,7 @@ type runtimeHooks struct {
 	snapshotLimitsOverride *snapshotLimits
 	reviewStore            reviewStore
 	taskID                 string
+	now                    func() time.Time
 }
 
 type codeReviewSkill struct {
@@ -144,7 +146,8 @@ type governanceResult struct {
 	FilterDecisions     []governanceDecision
 	PermissionDecisions []governanceDecision
 	SandboxRuns         []sandboxRun
-	Warnings            []ruleMatch
+	Matches             []ruleMatch
+	ToolCalls           int
 	Redactions          int
 }
 
@@ -153,7 +156,7 @@ type sandboxRunner interface {
 }
 
 type fakeSandboxRunner struct {
-	fixture string
+	runs map[commandKind]sandboxRun
 }
 
 type skillRunPermissionArguments struct {
@@ -245,7 +248,7 @@ func runGovernance(
 	var repoStageReason string
 	if runner == nil {
 		var createErr error
-		runner, createErr = newConfiguredSandboxRunner(ctx, cfg, meta)
+		runner, createErr = newConfiguredSandboxRunner(ctx, cfg, meta, input)
 		ownsRunner = createErr == nil
 		if createErr != nil {
 			preflightFailed = true
@@ -318,10 +321,15 @@ func runGovernance(
 			continue
 		}
 
+		result.ToolCalls++
 		run := runner.RunSandboxCommand(ctx, spec)
-		result.addSandboxRun(run)
+		run = result.addSandboxRun(run)
 		if sandboxRunNeedsWarning(run) {
-			result.addSandboxWarning(spec, run)
+			diagnostics := parseSandboxDiagnostics(spec, run, parsed)
+			result.Matches = append(result.Matches, diagnostics.Matches...)
+			if sandboxDiagnosticsNeedGenericWarning(run, diagnostics) {
+				result.addSandboxWarning(spec, run)
+			}
 		}
 		if spec.Kind == commandCheckGoVersion && sandboxRunFailed(run) {
 			preflightFailed = true
@@ -361,10 +369,11 @@ func (r *governanceResult) addPermissionDecision(decision governanceDecision) {
 	r.PermissionDecisions = append(r.PermissionDecisions, sanitized)
 }
 
-func (r *governanceResult) addSandboxRun(run sandboxRun) {
+func (r *governanceResult) addSandboxRun(run sandboxRun) sandboxRun {
 	sanitized, redactions := sanitizeSandboxRun(run)
 	r.Redactions += redactions
 	r.SandboxRuns = append(r.SandboxRuns, sanitized)
+	return sanitized
 }
 
 func (r *governanceResult) addSandboxWarning(spec commandSpec, run sandboxRun) {
@@ -392,7 +401,7 @@ func (r *governanceResult) addGovernanceWarning(
 ) {
 	redacted := redactText(reason)
 	r.Redactions += redacted.Count
-	r.Warnings = append(r.Warnings, governanceWarning(stage, spec, ruleID, title, redacted.Text))
+	r.Matches = append(r.Matches, governanceWarning(stage, spec, ruleID, title, redacted.Text))
 }
 
 func loadCodeReviewSkill() (codeReviewSkill, error) {
@@ -817,18 +826,49 @@ func sanitizeSandboxRun(run sandboxRun) (sandboxRun, int) {
 	return run, total
 }
 
+func newFakeSandboxRunner(fixture *fixtureItem) fakeSandboxRunner {
+	runner := fakeSandboxRunner{runs: map[commandKind]sandboxRun{}}
+	if fixture == nil {
+		return runner
+	}
+	for kind, configured := range map[commandKind]*fixtureSandboxRun{
+		commandCheckGoVersion:   fixture.FakeSandbox.GoVersion,
+		commandCheckGoTest:      fixture.FakeSandbox.Test,
+		commandCheckGoVet:       fixture.FakeSandbox.Vet,
+		commandCheckStaticcheck: fixture.FakeSandbox.Staticcheck,
+	} {
+		if configured == nil {
+			continue
+		}
+		runner.runs[kind] = sandboxRun{
+			Runtime:    runtimeFake,
+			Command:    string(kind),
+			ExitCode:   configured.ExitCode,
+			Stdout:     configured.Stdout,
+			Stderr:     configured.Stderr,
+			TimedOut:   configured.TimedOut,
+			DurationMS: configured.DurationMS,
+			Error:      configured.Error,
+			Skipped:    configured.Skipped,
+			Warnings:   append([]string(nil), configured.Warnings...),
+		}
+	}
+	return runner
+}
+
 func (r fakeSandboxRunner) RunSandboxCommand(_ context.Context, spec commandSpec) sandboxRun {
+	if configured, ok := r.runs[spec.Kind]; ok {
+		configured.Runtime = runtimeFake
+		configured.Command = string(spec.Kind)
+		configured.Warnings = append([]string(nil), configured.Warnings...)
+		return configured
+	}
 	run := sandboxRun{
 		Runtime:    runtimeFake,
 		Command:    string(spec.Kind),
 		ExitCode:   0,
 		TimedOut:   false,
 		DurationMS: 1,
-	}
-	if r.fixture == "sandbox_failure" && spec.Kind == commandCheckGoVersion {
-		run.ExitCode = 127
-		run.Stderr = "go: command not found"
-		return run
 	}
 	switch spec.Kind {
 	case commandCheckGoVersion:

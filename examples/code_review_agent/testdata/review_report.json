@@ -1,6 +1,7 @@
 {
   "task_id": "review-sample-secret-leak",
   "status": "completed",
+  "stage": "completed",
   "conclusion": "findings",
   "started_at": "2026-07-22T00:00:00Z",
   "finished_at": "2026-07-22T00:00:00.004Z",
@@ -127,8 +128,8 @@
     {
       "kind": "review_report_markdown",
       "path": "review-sample-secret-leak/review_report.md",
-      "sha256": "1ae0d4a391298df56b009afb002ace9be9c75ebfd3d6c33a44f02982ca801c5e",
-      "bytes": 903
+      "sha256": "5d05d397c6a4d139079743b3e6dda2386c7f0025b481ec4ca8d01064df794b12",
+      "bytes": 924
     }
   ],
   "report_paths": {

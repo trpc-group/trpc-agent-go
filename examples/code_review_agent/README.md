@@ -84,6 +84,11 @@ The template value can also be provided through `TRPC_AGENT_CODE_REVIEW_E2B_TEMP
 SQLite storage uses `github.com/mattn/go-sqlite3`, which requires CGO and a C
 compiler at runtime. Non-CGO builds still compile, but opening a SQLite store
 returns a clear error. Use `--db-path` to select the database location.
+The value is a filesystem path, not a SQLite DSN: `file:` URIs, `:memory:`, NUL
+bytes, and `?` query parameters are rejected. The accepted path is resolved to
+one absolute path before file checks and SQLite opening; the agent adds fixed
+foreign-key and DELETE-journal settings internally and uses a single database
+connection.
 New database files are created with owner-only permissions. On POSIX systems,
 existing database and SQLite sidecar files are tightened to `0600`; symlinks,
 non-regular files, and group- or other-writable parent directories are rejected.
@@ -97,7 +102,12 @@ go run ./code_review_agent --show-task review-123 --db-path ./reviews.db
 ```
 
 `--show-task` rebuilds the canonical JSON report from normalized SQLite tables;
-it does not require the report files to still exist.
+it does not require the report files to still exist. Tasks are checkpointed as
+`running` before input is read and end as `completed` or `failed`. The report's
+`stage` and optional redacted `failure` identify where a failure occurred, so
+input, governance, report-write, and persistence failures remain queryable.
+SQLite schema v2 adds those lifecycle fields and automatically migrates schema
+v1 databases while preserving existing task and child rows.
 
 ## Design Notes
 
@@ -134,6 +144,12 @@ actual copied content. A timeout or limit failure skips repository-dependent
 checks and produces a human-review warning. All evidence, sandbox output,
 governance reasons, reports, and stored fields pass through redaction before
 persistence.
+Standard Go diagnostics emitted by test, vet, and staticcheck are parsed from
+stdout and stderr. A diagnostic becomes a high-confidence finding only when its
+path uniquely maps to a changed file and its line is inside a new-side hunk;
+ambiguous, out-of-hunk, truncated, or otherwise incomplete output retains a
+governance warning for human review. Synthetic skipped runs remain visible but
+do not count as runner tool calls.
 SQLite stores a review task, diff summary, decisions, sandbox runs, findings,
 warnings, metrics, artifacts, and final report metadata, but not the raw diff.
 The normalized schema deliberately separates repeated child records from the
@@ -142,10 +158,13 @@ contract without changing the report model. Report files are restricted to the
 two declared artifact kinds and are written with owner-only permissions.
 
 The diff parser treats Git-quoted paths as structured tokens, including paths
-with spaces and C-style escaped UTF-8 bytes. Hunk counts are validated when a
-new hunk or file starts and at end of input; any malformed or incomplete diff
-requires human review and cannot receive a pass conclusion. Rules use
-line-oriented evidence where that is deterministic, while syntax-sensitive
+with spaces and C-style escaped UTF-8 bytes. Hunk ranges must use valid,
+non-overflowing line numbers and remain ordered and non-overlapping on both
+sides. New, deleted, rename, `/dev/null`, and mode metadata must agree; valid
+Git binary patches may omit text path markers. Hunk counts are validated when a
+new hunk or file starts and at end of input. Any malformed, impossible, or
+incomplete diff requires human review and cannot receive a pass conclusion.
+Rules use line-oriented evidence where that is deterministic, while syntax-sensitive
 checks such as shell execution inspect a small Go AST to distinguish a fixed
 literal command from a payload assembled from variables or concatenation.
 Missing-test warnings are matched to the changed file's directory instead of
@@ -157,6 +176,12 @@ negatives that matter for hidden evaluation samples.
 
 The public fixtures live in `testdata/fixtures.json`. Example sanitized report
 outputs are checked in as:
+
+Fixture JSON is parsed strictly. Every fixture declares expected finding and
+warning rule IDs, and optional fake sandbox results for go version, test, vet,
+and staticcheck. Missing command results use deterministic successful defaults;
+declared results are used exactly. Unknown fields, trailing JSON, invalid run
+values, and empty or duplicate expected rule IDs are rejected.
 
 - `testdata/review_report.json`
 - `testdata/review_report.md`
