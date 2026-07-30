@@ -447,6 +447,54 @@ func TestConcurrentBranchesMayShareFilterKey(t *testing.T) {
 	}
 }
 
+func TestCausalPlanKeepsEventsBeforeUserAnchor(t *testing.T) {
+	replayCase := Case{
+		Name:       "pre-user-event",
+		Requires:   []Capability{CapabilitySession, CapabilityConcurrent},
+		EventOrder: EventOrderCausal,
+		Steps: []Step{
+			messageStep("assistant", "assistant", 1, "assistant", model.RoleAssistant, "ready", ""),
+			messageStep("user", "user", 2, "user", model.RoleUser, "start", ""),
+			{
+				Name: "parallel",
+				Kind: StepConcurrent,
+				Concurrent: [][]Step{
+					{messageStep("a", "a", 3, "assistant", model.RoleAssistant, "a", "branch/a")},
+					{messageStep("b", "b", 4, "assistant", model.RoleAssistant, "b", "branch/b")},
+				},
+			},
+		},
+	}
+	if err := validateCase(replayCase); err != nil {
+		t.Fatalf("validateCase() error = %v", err)
+	}
+	plan := buildCausalOrderPlan(replayCase.Steps)
+	persistedEvent := func(step Step) event.Event {
+		evt := step.Event.Event.Clone()
+		evt.ID = "physical-" + step.Event.LogicalID
+		if err := event.SetExtension(evt, logicalEventIDExtension, step.Event.LogicalID); err != nil {
+			t.Fatalf("SetExtension() error = %v", err)
+		}
+		return *evt
+	}
+	events := []event.Event{
+		persistedEvent(replayCase.Steps[0]),
+		persistedEvent(replayCase.Steps[1]),
+		persistedEvent(replayCase.Steps[2].Concurrent[0][0]),
+		persistedEvent(replayCase.Steps[2].Concurrent[1][0]),
+	}
+	normalized, order, _, err := normalizeEvents(events, EventOrderCausal, plan, caseEpoch)
+	if err != nil {
+		t.Fatalf("normalizeEvents() error = %v", err)
+	}
+	if len(normalized) != 4 {
+		t.Fatalf("normalizeEvents() retained %d events, want 4", len(normalized))
+	}
+	if !reflect.DeepEqual(order["<root>"], []string{"assistant", "user"}) {
+		t.Fatalf("root event order = %v", order["<root>"])
+	}
+}
+
 func TestInMemoryBackendSupportsCustomSummaryFilter(t *testing.T) {
 	snapshot, err := Replay(context.Background(), summaryFilterKeyCase(), InMemoryBackend())
 	if err != nil {
@@ -1544,6 +1592,35 @@ func TestAnchoredSummaryCutoffRemainsSemantic(t *testing.T) {
 		map[string]string{evt.ID: "logical-event"},
 	); err == nil {
 		t.Fatal("normalizeSummaries() accepted a cutoff that disagrees with its event anchor")
+	}
+}
+
+func TestTimestampOnlySummaryCutoffRemainsSemantic(t *testing.T) {
+	normalize := func(backend string, cutoff time.Time) Snapshot {
+		sess := &session.Session{
+			CreatedAt: caseEpoch,
+			Summaries: map[string]*session.Summary{
+				customSummaryFilterKey: {
+					Summary:  "summary",
+					Boundary: session.NewSummaryBoundary(customSummaryFilterKey, cutoff),
+				},
+			},
+		}
+		summaries, err := normalizeSummaries(sess, nil, nil)
+		if err != nil {
+			t.Fatalf("normalizeSummaries() error = %v", err)
+		}
+		return Snapshot{Backend: backend, Case: "timestamp-cutoff", Summaries: summaries}
+	}
+	baseline := normalize("baseline", caseEpoch.Add(time.Second))
+	actual := normalize("actual", caseEpoch.Add(2*time.Second))
+	diffs, err := Compare("timestamp-cutoff", baseline, actual, nil)
+	if err != nil {
+		t.Fatalf("Compare() error = %v", err)
+	}
+	blocking, _ := countDiffs(diffs)
+	if blocking != 1 || len(diffs) != 1 || diffs[0].Path != "/summaries/agent~1custom/boundary/cutoff_at" {
+		t.Fatalf("Compare() blocking diffs = %d, want 1: %+v", blocking, diffs)
 	}
 }
 

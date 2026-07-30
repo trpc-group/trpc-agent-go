@@ -1448,18 +1448,11 @@ func buildCausalOrderPlan(steps []Step) *causalOrderPlan {
 		predecessors: make(map[string][]string),
 	}
 	frontier := make([]string, 0)
-	hasUserAnchor := false
 	for stepIndex, step := range steps {
 		switch step.Kind {
 		case StepAppendEvent:
 			if !replayEventIsPersistable(step.Event.Event) {
 				continue
-			}
-			if !hasUserAnchor {
-				if !step.Event.Event.IsUserMessage() {
-					continue
-				}
-				hasUserAnchor = true
 			}
 			plan.predecessors[step.Event.LogicalID] = append([]string(nil), frontier...)
 			frontier = []string{step.Event.LogicalID}

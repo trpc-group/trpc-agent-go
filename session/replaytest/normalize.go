@@ -514,7 +514,7 @@ func normalizeSummaries(
 		}
 		if boundary := summary.CutoffBoundary(); boundary != nil {
 			lastEventID := boundary.LastEventID
-			cutoffAt := normalizeTime(boundary.CutoffAt)
+			cutoffAt := normalizeTimeOffset(boundary.CutoffAt, sess.CreatedAt)
 			if lastEventID != "" {
 				logicalID := physicalToLogical[lastEventID]
 				anchor := eventByPhysicalID(events, lastEventID)
@@ -529,7 +529,6 @@ func normalizeSummaries(
 					)
 				}
 				lastEventID = logicalID
-				cutoffAt = normalizeTimeOffset(boundary.CutoffAt, sess.CreatedAt)
 			}
 			value["boundary"] = CanonicalMap{
 				"version":       boundary.Version,
