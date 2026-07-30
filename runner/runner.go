@@ -3943,7 +3943,7 @@ func (r *runner) persistCurrentTurnMessages(
 		return r.appendIncomingMessage(ctx, sess, invocation, message, ro, historySeeded)
 	}
 	if sess.GetEventCount() == 0 {
-		initialMessages := mergePendingCurrentTurnMessagesIntoSeed(
+		initialMessages := mergeCurrentTurnMessagesIntoSeed(
 			ro.Messages,
 			message,
 			persistedCurrentTurnMessages,
@@ -4003,23 +4003,6 @@ func pendingSeedMessages(
 }
 
 func mergeCurrentTurnMessagesIntoSeed(
-	seed []model.Message,
-	original model.Message,
-	currentTurn []model.Message,
-) []model.Message {
-	pending := mergePendingCurrentTurnMessagesIntoSeed(
-		seed,
-		original,
-		currentTurn,
-	)
-	merged := make([]model.Message, 0, len(pending))
-	for _, message := range pending {
-		merged = append(merged, message.message)
-	}
-	return merged
-}
-
-func mergePendingCurrentTurnMessagesIntoSeed(
 	seed []model.Message,
 	original model.Message,
 	currentTurn []model.Message,

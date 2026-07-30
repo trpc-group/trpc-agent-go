@@ -26,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/seedhistorykey"
 	"trpc.group/trpc-go/trpc-agent-go/internal/structuredoutput"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/internal/tracecapture"
@@ -68,10 +69,6 @@ const (
 	// streamHubStateKey is the invocation state key used by the graph to
 	// share ephemeral streams across node invocations within the same run.
 	streamHubStateKey = "__graph_stream_hub__"
-	// seedHistoryStateKey is the invocation state key used by internal
-	// seed-history provenance. Descendant invocations need the provenance to
-	// distinguish caller-supplied history that shares the request ID.
-	seedHistoryStateKey = "__seed_history_event_ids__"
 	// surfaceRootNodeIDStateKey stores one invocation's mounted surface root node id.
 	surfaceRootNodeIDStateKey = "__trpc_agent_internal_surface_root_node_id_state__"
 	// teamMemberTraceRootStateKey stores one invocation's mounted team member trace root.
@@ -1747,7 +1744,7 @@ func isCloneStateKey(key string) bool {
 		appenderStateKey,
 		liveSessionStateKey,
 		streamHubStateKey,
-		seedHistoryStateKey,
+		seedhistorykey.Key,
 		surfaceRootNodeIDStateKey,
 		teamMemberTraceRootStateKey:
 		return true

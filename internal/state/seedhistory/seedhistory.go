@@ -10,11 +10,10 @@
 // from caller-supplied conversation history.
 package seedhistory
 
-import "trpc.group/trpc-go/trpc-agent-go/agent"
-
-// Keep this value aligned with agent.seedHistoryStateKey so Invocation.Clone
-// carries the immutable provenance snapshot into descendant invocations.
-const stateKey = "__seed_history_event_ids__"
+import (
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/seedhistorykey"
+)
 
 type eventIDs map[string]struct{}
 
@@ -23,7 +22,7 @@ func Mark(inv *agent.Invocation, eventID string) {
 	if inv == nil || eventID == "" {
 		return
 	}
-	current, _ := agent.GetStateValue[eventIDs](inv, stateKey)
+	current, _ := agent.GetStateValue[eventIDs](inv, seedhistorykey.Key)
 	// Invocation.Clone shares this internal state value, so publish a new map
 	// instead of mutating a snapshot that a descendant may already be reading.
 	next := make(eventIDs, len(current)+1)
@@ -31,7 +30,7 @@ func Mark(inv *agent.Invocation, eventID string) {
 		next[id] = struct{}{}
 	}
 	next[eventID] = struct{}{}
-	inv.SetState(stateKey, next)
+	inv.SetState(seedhistorykey.Key, next)
 }
 
 // Contains reports whether an event originated from caller-supplied seed
@@ -40,7 +39,7 @@ func Contains(inv *agent.Invocation, eventID string) bool {
 	if inv == nil || eventID == "" {
 		return false
 	}
-	ids, ok := agent.GetStateValue[eventIDs](inv, stateKey)
+	ids, ok := agent.GetStateValue[eventIDs](inv, seedhistorykey.Key)
 	if !ok {
 		return false
 	}

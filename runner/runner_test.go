@@ -9107,11 +9107,17 @@ func TestMergeCurrentTurnMessagesIntoSeed_ReplacesLastUserMessageWhenItMatchesOr
 		model.NewUserMessage("current"),
 		currentTurn,
 	)
-	require.Equal(t, []model.Message{
-		model.NewUserMessage("first"),
-		model.NewUserMessage("ctx"),
-		model.NewUserMessage("rewritten"),
-		model.NewAssistantMessage("after"),
+	require.Equal(t, []pendingSessionMessage{
+		{
+			message:       model.NewUserMessage("first"),
+			seededHistory: true,
+		},
+		{message: model.NewUserMessage("ctx")},
+		{message: model.NewUserMessage("rewritten")},
+		{
+			message:       model.NewAssistantMessage("after"),
+			seededHistory: true,
+		},
 	}, merged)
 }
 
@@ -9130,12 +9136,21 @@ func TestMergeCurrentTurnMessagesIntoSeed_AppendsWhenOnlyOlderMessageMatchesOrig
 		model.NewUserMessage("current"),
 		currentTurn,
 	)
-	require.Equal(t, []model.Message{
-		model.NewUserMessage("current"),
-		model.NewAssistantMessage("after"),
-		model.NewUserMessage("latest"),
-		model.NewUserMessage("ctx"),
-		model.NewUserMessage("rewritten"),
+	require.Equal(t, []pendingSessionMessage{
+		{
+			message:       model.NewUserMessage("current"),
+			seededHistory: true,
+		},
+		{
+			message:       model.NewAssistantMessage("after"),
+			seededHistory: true,
+		},
+		{
+			message:       model.NewUserMessage("latest"),
+			seededHistory: true,
+		},
+		{message: model.NewUserMessage("ctx")},
+		{message: model.NewUserMessage("rewritten")},
 	}, merged)
 }
 
@@ -9153,11 +9168,17 @@ func TestMergeCurrentTurnMessagesIntoSeed_AppendsWhenOriginalMissing(t *testing.
 		model.NewUserMessage("current"),
 		currentTurn,
 	)
-	require.Equal(t, []model.Message{
-		model.NewUserMessage("first"),
-		model.NewAssistantMessage("after"),
-		model.NewUserMessage("ctx"),
-		model.NewUserMessage("rewritten"),
+	require.Equal(t, []pendingSessionMessage{
+		{
+			message:       model.NewUserMessage("first"),
+			seededHistory: true,
+		},
+		{
+			message:       model.NewAssistantMessage("after"),
+			seededHistory: true,
+		},
+		{message: model.NewUserMessage("ctx")},
+		{message: model.NewUserMessage("rewritten")},
 	}, merged)
 }
 
@@ -9171,7 +9192,16 @@ func TestMergeCurrentTurnMessagesIntoSeed_PreservesSeedWhenCurrentTurnIsEmpty(t 
 		model.NewUserMessage("current"),
 		nil,
 	)
-	require.Equal(t, seed, merged)
+	require.Equal(t, []pendingSessionMessage{
+		{
+			message:       model.NewUserMessage("first"),
+			seededHistory: true,
+		},
+		{
+			message:       model.NewUserMessage("current"),
+			seededHistory: true,
+		},
+	}, merged)
 }
 
 func TestFinalResponseIDFromStateDelta_Cases(t *testing.T) {
