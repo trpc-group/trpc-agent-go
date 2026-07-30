@@ -21,37 +21,23 @@ import (
 // When a finding exists, it returns a CheckResult with the
 // appropriate Decision and RiskLevel.
 type Checker interface {
-	// Name returns the checker's name for reporting (e.g. "command", "network").
 	Name() string
-	// Check inspects the request and returns a finding or nil.
 	Check(ctx context.Context, req *ScanRequest) (*CheckResult, error)
 }
 
 // ScanRequest is the normalized input to all checkers.
-// It abstracts over workspaceexec, hostexec, and codeexec backends.
 type ScanRequest struct {
-	// Command is the raw command or script to execute.
-	Command string
-	// Args are additional CLI arguments appended to Command.
-	Args []string
-	// Cwd is the working directory for the execution.
-	Cwd string
-	// Env contains environment variables (may be scrubbed by the policy layer).
-	Env map[string]string
-	// ToolName is the calling tool's name (e.g. "workspace_exec", "exec_command").
-	ToolName string
-	// Backend identifies the execution backend: "workspaceexec", "hostexec", or "codeexec".
-	Backend string
-	// TimeoutSec is the requested execution timeout (0 means no limit).
-	TimeoutSec int
-	// ConcurrentCount is the number of currently-executing tools.
-	// Set by the caller before calling Scan. A non-zero value exceeding
-	// the policy's MaxConcurrent triggers RESOURCE_CONCURRENCY.
+	Command         string
+	Args            []string
+	Cwd             string
+	Env             map[string]string
+	ToolName        string
+	Backend         string
+	TimeoutSec      int
 	ConcurrentCount int
 }
 
 // CheckResult is returned by each checker.
-// A nil CheckResult means "no issue found" (effectively allow).
 type CheckResult struct {
 	Decision       Decision
 	RiskLevel      RiskLevel
@@ -60,21 +46,10 @@ type CheckResult struct {
 	Recommendation string
 }
 
-// Scanner runs all registered checkers against a ScanRequest and
-// produces an aggregated SafetyReport.
+// Scanner runs all registered checkers and produces an aggregated SafetyReport.
 //
-// Aggregation strategy (Deny > Ask > Allow):
-//   - The first Deny finding is final; the report is immediately
-//     set to denied with that finding's details.
-//   - If no Deny is found but one or more Ask findings exist, the
-//     report is set to ask. The finding with the highest RiskLevel
-//     among the Ask results provides the details.
-//   - If all checkers return nil, the report is DecisionAllow
-//     with RiskLevel "none".
-//
-// Checker errors are logged but do not block the tool call;
-// in that case the decision becomes Ask so the operator can
-// decide manually.
+// Aggregation: Deny > Ask > Allow. First Deny wins. Highest-risk Ask
+// among multiple Ask findings provides the report details.
 type Scanner struct {
 	checkers []Checker
 	policy   *Policy
@@ -97,9 +72,6 @@ func NewScanner(policy *Policy, audit AuditLogger) *Scanner {
 }
 
 // Scan runs all checkers serially and returns the aggregated SafetyReport.
-// Serial execution is sufficient for the performance target of ≤1 second
-// for 500-line scripts; the Checker interface supports future parallelism
-// without changing the public API.
 func (s *Scanner) Scan(ctx context.Context, req *ScanRequest) *SafetyReport {
 	start := time.Now()
 	report := &SafetyReport{
@@ -108,30 +80,33 @@ func (s *Scanner) Scan(ctx context.Context, req *ScanRequest) *SafetyReport {
 		Backend:   req.Backend,
 		Decision:  DecisionAllow,
 		RiskLevel: RiskNone,
-		Checkers:  make([]string, 0),
+		Checkers:  make([]CheckerOutcome, 0),
 	}
 
 	for _, c := range s.checkers {
 		result, err := c.Check(ctx, req)
 		if err != nil {
-			// Checker errors are logged but don't block the tool call.
-			// The decision degrades to Ask so the operator can decide.
 			if report.Decision == DecisionAllow {
 				report.Decision = DecisionAsk
 				report.RiskLevel = RiskLow
 			}
-			report.Checkers = append(report.Checkers, c.Name()+":err:"+err.Error())
+			report.Checkers = append(report.Checkers, CheckerOutcome{
+				Name: c.Name(), Status: "err", Err: err.Error(),
+			})
 			continue
 		}
 		if result == nil {
-			report.Checkers = append(report.Checkers, c.Name()+":pass")
+			report.Checkers = append(report.Checkers, CheckerOutcome{
+				Name: c.Name(), Status: "pass",
+			})
 			continue
 		}
-		report.Checkers = append(report.Checkers, c.Name()+":"+string(result.Decision))
+		report.Checkers = append(report.Checkers, CheckerOutcome{
+			Name: c.Name(), Status: string(result.Decision),
+		})
 
 		switch result.Decision {
 		case DecisionDeny:
-			// Deny is final — first denial wins, do not overwrite.
 			if report.Decision == DecisionDeny {
 				continue
 			}
@@ -144,8 +119,6 @@ func (s *Scanner) Scan(ctx context.Context, req *ScanRequest) *SafetyReport {
 		case DecisionAsk:
 			if report.Decision != DecisionDeny {
 				report.Decision = DecisionAsk
-				// Keep the highest-risk Ask finding's details.
-				// Use numeric risk level for comparison (not string).
 				if riskPriority(result.RiskLevel) >= riskPriority(report.RiskLevel) {
 					report.RiskLevel = result.RiskLevel
 					report.RuleID = result.RuleID
@@ -165,8 +138,7 @@ func (s *Scanner) SetCheckers(checkers []Checker) {
 	s.checkers = checkers
 }
 
-// DesensitizeEvidence applies the policy's secret-detection patterns to mask
-// secrets in the evidence string before it is returned to the model.
+// DesensitizeEvidence applies the policy's secret-detection patterns.
 func (sc *Scanner) DesensitizeEvidence(evidence string) string {
 	if evidence == "" || sc.policy == nil {
 		return evidence
@@ -176,11 +148,10 @@ func (sc *Scanner) DesensitizeEvidence(evidence string) string {
 
 // NewTestScanner creates a Scanner without an audit logger for use in tests.
 func NewTestScanner(policy *Policy) *Scanner {
-	s := NewScanner(policy, nil)
-	return s
+	return NewScanner(policy, nil)
 }
 
-// ScanCtx is a convenience wrapper that passes the context through to Scan.
+// ScanCtx is a convenience wrapper for Scan.
 func (s *Scanner) ScanCtx(ctx context.Context, req *ScanRequest) *SafetyReport {
 	return s.Scan(ctx, req)
 }

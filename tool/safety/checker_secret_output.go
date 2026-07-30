@@ -14,14 +14,11 @@ import (
 	"regexp"
 )
 
-// secretOutputChecker is NOT a standard Checker. It is called
-// post-execution (through Desensitize) to scrub secrets from output
-// and evidence strings before they are written to audit logs or
-// returned to the model.
-//
-// It is registered in the scanner so the checker reporting shows
-// "secret_output:pass", but its Check method always returns nil
-// — the actual desensitization happens after Scan returns.
+// secretOutputChecker is NOT a standard Checker registered in the
+// scanner. It is invoked post-execution through the standalone
+// Desensitize function to scrub secrets from output and evidence
+// strings before they are written to audit logs or returned to the
+// model. Its Check method always returns nil.
 type secretOutputChecker struct {
 	policy *Policy
 }

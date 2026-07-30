@@ -79,16 +79,13 @@ func TestAuditLogger_DesensitizeSecret(t *testing.T) {
 // ─── Audit logger with trace ID from context ───
 
 func TestAuditLogger_TraceIDFromContext(t *testing.T) {
-	p, _ := safety.LoadPolicyBytes([]byte(defaultTestPolicyYAML()), "yaml")
+	p, err := safety.LoadPolicyBytes([]byte(defaultTestPolicyYAML()), "yaml")
 	tmp := filepath.Join(t.TempDir(), "audit.jsonl")
 	logger, err := safety.NewJSONLAuditLogger(tmp, p)
 	require.NoError(t, err)
 	defer logger.Close()
 
-	ctx := context.WithValue(context.Background(),
-		"trace_id", // contextKey
-		"test-trace-123",
-	)
+	ctx := safety.WithTraceID(context.Background(), "test-trace-123")
 	report := &safety.SafetyReport{
 		Decision:  safety.DecisionAllow,
 		RiskLevel: safety.RiskNone,
@@ -101,7 +98,8 @@ func TestAuditLogger_TraceIDFromContext(t *testing.T) {
 // ─── Scanner SetCheckers ───
 
 func TestScanner_SetCheckers_Nil(t *testing.T) {
-	p, _ := safety.LoadPolicyBytes([]byte(defaultTestPolicyYAML()), "yaml")
+	p, err := safety.LoadPolicyBytes([]byte(defaultTestPolicyYAML()), "yaml")
+	require.NoError(t, err)
 	s := safety.NewTestScanner(p)
 	s.SetCheckers(nil)
 	report := s.ScanCtx(context.Background(), &safety.ScanRequest{
@@ -215,7 +213,8 @@ func TestLoadPolicy_UnsupportedFormat(t *testing.T) {
 // ─── Policy: SecretRegexps ───
 
 func TestPolicy_SecretRegexps(t *testing.T) {
-	p, _ := safety.LoadPolicyBytes([]byte(defaultTestPolicyYAML()), "yaml")
+	p, err := safety.LoadPolicyBytes([]byte(defaultTestPolicyYAML()), "yaml")
+	require.NoError(t, err)
 	regexps := p.SecretRegexps()
 	assert.NotEmpty(t, regexps)
 	assert.True(t, regexps[0].MatchString("sk-abcdefghijklmnopqrstuv"))
@@ -224,7 +223,7 @@ func TestPolicy_SecretRegexps(t *testing.T) {
 // ─── Adapter: nil inner policy, safe command → allow ───
 
 func TestAdapter_NilInnerPolicy_SafeCommand(t *testing.T) {
-	p, _ := safety.LoadPolicyBytes([]byte(defaultTestPolicyYAML()), "yaml")
+	p, err := safety.LoadPolicyBytes([]byte(defaultTestPolicyYAML()), "yaml")
 	s := safety.NewTestScanner(p)
 	adapter := safety.NewSafetyPermissionPolicy(nil, s, nil)
 
@@ -240,7 +239,7 @@ func TestAdapter_NilInnerPolicy_SafeCommand(t *testing.T) {
 // ─── Adapter: deny dangerous command ───
 
 func TestAdapter_DenyDangerousCommand(t *testing.T) {
-	p, _ := safety.LoadPolicyBytes([]byte(defaultTestPolicyYAML()), "yaml")
+	p, err := safety.LoadPolicyBytes([]byte(defaultTestPolicyYAML()), "yaml")
 	s := safety.NewTestScanner(p)
 	adapter := safety.NewSafetyPermissionPolicy(nil, s, nil)
 
@@ -257,7 +256,7 @@ func TestAdapter_DenyDangerousCommand(t *testing.T) {
 // ─── Adapter: SetRequestMapper custom mapper ───
 
 func TestAdapter_SetRequestMapper(t *testing.T) {
-	p, _ := safety.LoadPolicyBytes([]byte(defaultTestPolicyYAML()), "yaml")
+	p, err := safety.LoadPolicyBytes([]byte(defaultTestPolicyYAML()), "yaml")
 	s := safety.NewTestScanner(p)
 	adapter := safety.NewSafetyPermissionPolicy(nil, s, nil)
 	called := false
@@ -344,7 +343,7 @@ func TestScenario_DD_HeavyOutput(t *testing.T) {
 // ─── Adapter: Ask path (dependency install via adapter) ───
 
 func TestAdapter_AskDecision(t *testing.T) {
-	p, _ := safety.LoadPolicyBytes([]byte(defaultTestPolicyYAML()), "yaml")
+	p, err := safety.LoadPolicyBytes([]byte(defaultTestPolicyYAML()), "yaml")
 	s := safety.NewTestScanner(p)
 	adapter := safety.NewSafetyPermissionPolicy(nil, s, nil)
 
@@ -360,7 +359,8 @@ func TestAdapter_AskDecision(t *testing.T) {
 // ─── ScanCtx and Scan equivalence ───
 
 func TestScanCtx_Equivalence(t *testing.T) {
-	p, _ := safety.LoadPolicyBytes([]byte(defaultTestPolicyYAML()), "yaml")
+	p, err := safety.LoadPolicyBytes([]byte(defaultTestPolicyYAML()), "yaml")
+	require.NoError(t, err)
 	s := safety.NewTestScanner(p)
 	req := &safety.ScanRequest{Command: "ls", Backend: "workspaceexec"}
 

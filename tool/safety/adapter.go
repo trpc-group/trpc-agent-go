@@ -12,7 +12,9 @@ package safety
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -41,11 +43,15 @@ type RequestMapper func(req *tool.PermissionRequest) *ScanRequest
 
 // NewSafetyPermissionPolicy creates a decorator that runs the safety
 // scanner before delegating to the inner policy.
+// Panics if scanner is nil.
 func NewSafetyPermissionPolicy(
 	inner tool.PermissionPolicy,
 	scanner *Scanner,
 	audit AuditLogger,
 ) *SafetyPermissionPolicy {
+	if scanner == nil {
+		panic(fmt.Sprintf("safety: NewSafetyPermissionPolicy called with nil scanner"))
+	}
 	return &SafetyPermissionPolicy{
 		inner:   inner,
 		scanner: scanner,
@@ -72,8 +78,9 @@ func (p *SafetyPermissionPolicy) CheckToolPermission(
 
 	// Always audit, regardless of decision.
 	if p.audit != nil {
-		// Best-effort audit; don't block the tool call on audit failure.
-		_ = p.audit.Log(ctx, report)
+		if err := p.audit.Log(ctx, report); err != nil {
+			log.Warnf("safety: audit log failed: %v", err)
+		}
 	}
 
 	switch report.Decision {

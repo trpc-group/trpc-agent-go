@@ -334,7 +334,8 @@ func TestAuditLogger_WrongTraceIDType(t *testing.T) {
 	require.NoError(t, err)
 	defer logger.Close()
 
-	ctx := context.WithValue(context.Background(), "trace_id", 12345) // int, not string
+	// Using an int value for TraceIDKey — traceIDFromContext only accepts strings.
+	ctx := context.WithValue(context.Background(), safety.TraceIDKey, 12345)
 	report := &safety.SafetyReport{
 		Decision:  safety.DecisionAllow,
 		RiskLevel: safety.RiskNone,

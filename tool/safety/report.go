@@ -67,20 +67,27 @@ func riskPriority(r RiskLevel) int {
 	}
 }
 
+// CheckerOutcome records one checker's execution result.
+type CheckerOutcome struct {
+	Name   string `json:"name"`
+	Status string `json:"status"` // "pass", "deny", "ask", "err"
+	Err    string `json:"err,omitempty"`
+}
+
 // SafetyReport is the structured output of a safety scan.
 // Every field required by the acceptance criteria is present:
 // decision, risk_level, rule_id, evidence, recommendation,
 // tool_name, command, backend, blocked.
 type SafetyReport struct {
-	Decision       Decision  `json:"decision"`
-	RiskLevel      RiskLevel `json:"risk_level"`
-	RuleID         string    `json:"rule_id"`
-	Evidence       string    `json:"evidence"`
-	Recommendation string    `json:"recommendation"`
-	ToolName       string    `json:"tool_name"`
-	Command        string    `json:"command"`
-	Backend        string    `json:"backend"`
-	Blocked        bool      `json:"blocked"`
-	DurationMs     int64     `json:"duration_ms"`
-	Checkers       []string  `json:"checkers"`
+	Decision       Decision         `json:"decision"`
+	RiskLevel      RiskLevel        `json:"risk_level"`
+	RuleID         string           `json:"rule_id"`
+	Evidence       string           `json:"evidence"`
+	Recommendation string           `json:"recommendation"`
+	ToolName       string           `json:"tool_name"`
+	Command        string           `json:"command"`
+	Backend        string           `json:"backend"`
+	Blocked        bool             `json:"blocked"`
+	DurationMs     int64            `json:"duration_ms"`
+	Checkers       []CheckerOutcome `json:"checkers"`
 }

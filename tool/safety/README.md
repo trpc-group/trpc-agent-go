@@ -18,11 +18,12 @@ Agent calls Tool.Call()
 SafetyPermissionPolicy (adapter.go)
    └─ Scanner.Scan()
         ├─ command checker     → shellsafe + dep-install detection
+        ├─ secret-cmd checker  → hard-coded API keys in arguments
+        ├─ env checker         → environment variable allow/deny/value patterns
         ├─ network checker     → domain whitelist/blacklist
         ├─ path checker        → sensitive file patterns
         ├─ host checker        → background proc, privilege esc, sessions
-        ├─ secret-cmd checker  → hard-coded API keys in arguments
-        └─ resource checker    → timeout, output limits, infinite loops
+        └─ resource checker    → timeout, output limits, infinite loops, concurrency
              │
              ▼
         SafetyReport { decision, risk_level, rule_id, evidence, ... }

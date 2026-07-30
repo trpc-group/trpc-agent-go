@@ -107,42 +107,37 @@ func LoadPolicy(path string) (*Policy, error) {
 	if err != nil {
 		return nil, fmt.Errorf("safety: read policy %s: %w", path, err)
 	}
-	p := &Policy{}
 	ext := strings.ToLower(filepath.Ext(path))
-	switch ext {
-	case ".yaml", ".yml":
-		if err := yaml.Unmarshal(data, p); err != nil {
-			return nil, fmt.Errorf("safety: parse policy %s: %w", path, err)
-		}
-	case ".json":
-		if err := json.Unmarshal(data, p); err != nil {
-			return nil, fmt.Errorf("safety: parse policy %s: %w", path, err)
-		}
-	default:
-		return nil, fmt.Errorf("safety: unsupported policy format %q (use .yaml, .yml, or .json)", ext)
-	}
-	p.applyDefaults()
-	if err := p.compile(); err != nil {
-		return nil, err
+	p, err := parsePolicy(data, ext)
+	if err != nil {
+		return nil, fmt.Errorf("safety: parse policy %s: %w", path, err)
 	}
 	return p, nil
 }
 
 // LoadPolicyBytes parses a Policy from in-memory YAML or JSON bytes.
-// Useful for testing without a temp file.
 func LoadPolicyBytes(data []byte, format string) (*Policy, error) {
+	p, err := parsePolicy(data, format)
+	if err != nil {
+		return nil, fmt.Errorf("safety: parse policy: %w", err)
+	}
+	return p, nil
+}
+
+// parsePolicy unmarshals, applies defaults, and compiles regexps.
+func parsePolicy(data []byte, format string) (*Policy, error) {
 	p := &Policy{}
 	switch format {
-	case "yaml", "yml":
+	case ".yaml", ".yml", "yaml", "yml":
 		if err := yaml.Unmarshal(data, p); err != nil {
-			return nil, fmt.Errorf("safety: parse policy: %w", err)
+			return nil, err
 		}
-	case "json":
+	case ".json", "json":
 		if err := json.Unmarshal(data, p); err != nil {
-			return nil, fmt.Errorf("safety: parse policy: %w", err)
+			return nil, err
 		}
 	default:
-		return nil, fmt.Errorf("safety: unsupported format %q", format)
+		return nil, fmt.Errorf("unsupported format %q (use .yaml, .yml, or .json)", format)
 	}
 	p.applyDefaults()
 	if err := p.compile(); err != nil {

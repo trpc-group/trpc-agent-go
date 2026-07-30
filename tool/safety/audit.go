@@ -50,7 +50,7 @@ type JSONLAuditLogger struct {
 
 // NewJSONLAuditLogger opens the audit file for append-only writing.
 func NewJSONLAuditLogger(path string, policy *Policy) (*JSONLAuditLogger, error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("audit: open %s: %w", path, err)
 	}
@@ -99,14 +99,12 @@ func (l *JSONLAuditLogger) Close() error {
 	return l.file.Close()
 }
 
-// traceIDFromContext extracts a trace identifier from the context.
-// It checks common keys used by OpenTelemetry and custom tracing.
+// traceIDFromContext extracts a trace identifier set via WithTraceID.
 func traceIDFromContext(ctx context.Context) string {
 	if ctx == nil {
 		return ""
 	}
-	// Check for standard trace ID context values.
-	if v := ctx.Value(traceIDKey); v != nil {
+	if v := ctx.Value(TraceIDKey); v != nil {
 		if s, ok := v.(string); ok {
 			return s
 		}
@@ -115,6 +113,9 @@ func traceIDFromContext(ctx context.Context) string {
 }
 
 // traceIDKey is the context key for trace identifiers.
-type contextKey string
+const TraceIDKey = "trace_id"
 
-const traceIDKey contextKey = "trace_id"
+// WithTraceID returns a context carrying a trace identifier for audit logging.
+func WithTraceID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, TraceIDKey, id)
+}
