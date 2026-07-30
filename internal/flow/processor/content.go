@@ -28,6 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	iflow "trpc.group/trpc-go/trpc-agent-go/internal/flow"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/seedhistory"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/toolresultround"
 	"trpc.group/trpc-go/trpc-agent-go/internal/util/message"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -2331,15 +2332,18 @@ func (p *ContentRequestProcessor) shouldIncludeEvent(
 	if !isEventEligibleForInclusion(evt) {
 		return false, false
 	}
+	// Caller-supplied seed history shares the current request and invocation
+	// identifiers, but remains ordinary history for summary-cutoff purposes.
+	seededHistory := seedhistory.Contains(inv, evt.ID)
 	// Exact invocation message match keeps existing semantics.
-	if isStrictInvocationMessage(evt, inv) {
+	if !seededHistory && isStrictInvocationMessage(evt, inv) {
 		return true, true
 	}
 	// Keep the current invocation user message even when the summary cutoff
 	// would otherwise exclude it. This preserves the original request while
 	// still allowing same-turn tool/assistant history already covered by the
 	// summary to be compacted out of the next prompt.
-	if isCurrentInvocationUserMessage(evt, inv) {
+	if !seededHistory && isCurrentInvocationUserMessage(evt, inv) {
 		return true, false
 	}
 	if cutoff.excludesEvent(eventIndex, evt) {
