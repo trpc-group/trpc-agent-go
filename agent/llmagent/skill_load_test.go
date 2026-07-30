@@ -288,7 +288,11 @@ func TestPrepareSkillLoadsRejectsInvalidRequests(t *testing.T) {
 			options := []Option{WithSkills(tt.repo)}
 			options = append(options, tt.options...)
 			agt := New("tester", options...)
-			original := append([]skill.LoadRequest(nil), tt.loads...)
+			original := make([]skill.LoadRequest, len(tt.loads))
+			for i, load := range tt.loads {
+				original[i] = load
+				original[i].Docs = append([]string(nil), load.Docs...)
+			}
 			inv := agent.NewInvocation(
 				agent.WithInvocationSession(tt.session),
 				agent.WithInvocationRunOptions(agent.RunOptions{
