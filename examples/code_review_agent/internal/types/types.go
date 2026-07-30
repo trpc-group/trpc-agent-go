@@ -37,10 +37,10 @@ type Line struct {
 
 // SandboxCommand is a command to be executed in the sandbox.
 type SandboxCommand struct {
-	Name      string   `json:"name"`      // "go_vet" | "staticcheck" | "go_test" | "go_build"
-	Cmd       string   `json:"cmd"`       // "go"
-	Args      []string `json:"args"`      // ["vet", "./..."]
-	Timeout   int      `json:"timeout"`   // ms, default 30000
+	Name      string   `json:"name"`       // "go_vet" | "staticcheck" | "go_test" | "go_build"
+	Cmd       string   `json:"cmd"`        // "go"
+	Args      []string `json:"args"`       // ["vet", "./..."]
+	Timeout   int      `json:"timeout"`    // ms, default 30000
 	RiskLevel string   `json:"risk_level"` // low|medium|high (for PermissionFilter)
 }
 
@@ -71,32 +71,32 @@ type PermissionDecision struct {
 
 // Rule is a single check rule loaded from skills/code-review/rules/.
 type Rule struct {
-	ID          string `json:"id"`          // "SEC-001"
-	Category    string `json:"category"`    // security|error_handling|sensitive_info|db_lifecycle|missing_test|goroutine_leak|resource_leak
-	Severity    string `json:"severity"`    // critical|high|medium|low
-	RuleType    string `json:"rule_type"`   // token|tool|ast
-	Pattern     string `json:"pattern"`     // search pattern for matching
-	Message     string `json:"message"`     // description of the issue
-	Fix         string `json:"fix"`         // suggested fix or remediation
+	ID       string `json:"id"`        // "SEC-001"
+	Category string `json:"category"`  // security|error_handling|sensitive_info|db_lifecycle|missing_test|goroutine_leak|resource_leak
+	Severity string `json:"severity"`  // critical|high|medium|low
+	RuleType string `json:"rule_type"` // token|tool|ast
+	Pattern  string `json:"pattern"`   // search pattern for matching
+	Message  string `json:"message"`   // description of the issue
+	Fix      string `json:"fix"`       // suggested fix or remediation
 }
 
 // ── Findings ──
 
 // Finding is the unified review finding produced by all analysis nodes.
 type Finding struct {
-	ID             string  `json:"id"`               // ULID
-	TaskID         string  `json:"task_id"`          // associated review task ID
-	Severity       string  `json:"severity"`         // critical|high|medium|low|warning
-	Category       string  `json:"category"`         // security|error_handling|...
-	File           string  `json:"file"`             // affected file path
-	Line           int     `json:"line"`             // 0 = file-level
-	Title          string  `json:"title"`            // short description of the finding
-	Evidence       string  `json:"evidence"`         // ≤2000 chars
-	Recommendation string  `json:"recommendation"`   // suggested action to address the issue
-	Confidence     float64 `json:"confidence"`       // 0.0 ~ 1.0
-	Source         string  `json:"source"`           // "rule_engine" | "llm" | "go_vet" | "staticcheck"
-	DecisionKind   string  `json:"decision_kind"`    // "deterministic" | "heuristic"
-	RuleID         string  `json:"rule_id"`          // rule engine only
+	ID             string  `json:"id"`             // ULID
+	TaskID         string  `json:"task_id"`        // associated review task ID
+	Severity       string  `json:"severity"`       // critical|high|medium|low|warning
+	Category       string  `json:"category"`       // security|error_handling|...
+	File           string  `json:"file"`           // affected file path
+	Line           int     `json:"line"`           // 0 = file-level
+	Title          string  `json:"title"`          // short description of the finding
+	Evidence       string  `json:"evidence"`       // ≤2000 chars
+	Recommendation string  `json:"recommendation"` // suggested action to address the issue
+	Confidence     float64 `json:"confidence"`     // 0.0 ~ 1.0
+	Source         string  `json:"source"`         // "rule_engine" | "llm" | "go_vet" | "staticcheck"
+	DecisionKind   string  `json:"decision_kind"`  // "deterministic" | "heuristic"
+	RuleID         string  `json:"rule_id"`        // rule engine only
 }
 
 // ── LLM Error Tracking ──
@@ -113,27 +113,27 @@ type LLMError struct {
 
 // ExecutorConfig configures the sandbox executor.
 type ExecutorConfig struct {
-	Type          string            `json:"type"`            // "local" | "cube" | "container" | "e2b"
-	TimeoutSec    int               `json:"timeout_sec"`     // per-command timeout in seconds
-	MaxOutputMB   int               `json:"max_output_mb"`   // output size limit in MB
-	MaxArtifactMB int               `json:"max_artifact_mb"` // artifact file size limit in MB (default 10)
-	EnvWhitelist  []string          `json:"env_whitelist"`   // allowed environment variable names
-	Commands      []SandboxCommand  `json:"commands"`        // commands to execute
+	Type          string           `json:"type"`            // "local" | "cube" | "container" | "e2b"
+	TimeoutSec    int              `json:"timeout_sec"`     // per-command timeout in seconds
+	MaxOutputMB   int              `json:"max_output_mb"`   // output size limit in MB
+	MaxArtifactMB int              `json:"max_artifact_mb"` // artifact file size limit in MB (default 10)
+	EnvWhitelist  []string         `json:"env_whitelist"`   // allowed environment variable names
+	Commands      []SandboxCommand `json:"commands"`        // commands to execute
 }
 
 // LLMConfig configures the LLM analyzer.
 type LLMConfig struct {
-	ModelName        string  `json:"model_name"`          // model identifier for LLM inference
-	Temperature      float64 `json:"temperature"`         // sampling temperature (0.0 ~ 2.0)
-	MaxTokens        int     `json:"max_tokens"`          // maximum tokens in the response
-	SystemPrompt     string  `json:"system_prompt"`       // system-level instruction prompt
-	MockMode         bool    `json:"mock_mode"`           // if true, use mock findings instead of real LLM
-	MockFindingsPath string  `json:"mock_findings_path"`  // testdata/mock_llm_findings.json
+	ModelName        string  `json:"model_name"`         // model identifier for LLM inference
+	Temperature      float64 `json:"temperature"`        // sampling temperature (0.0 ~ 2.0)
+	MaxTokens        int     `json:"max_tokens"`         // maximum tokens in the response
+	SystemPrompt     string  `json:"system_prompt"`      // system-level instruction prompt
+	MockMode         bool    `json:"mock_mode"`          // if true, use mock findings instead of real LLM
+	MockFindingsPath string  `json:"mock_findings_path"` // testdata/mock_llm_findings.json
 }
 
 // DedupConfig configures deduplication and noise reduction.
 type DedupConfig struct {
-	ConfidenceThreshold float64 `json:"confidence_threshold"` // default 0.6
+	ConfidenceThreshold float64 `json:"confidence_threshold"`  // default 0.6
 	MaxFindingsPerFile  int     `json:"max_findings_per_file"` // default 20
 	MaxTotalFindings    int     `json:"max_total_findings"`    // default 100
 }
@@ -160,8 +160,8 @@ type SkillConfig struct {
 
 // TelemetryConfig configures telemetry (reserved).
 type TelemetryConfig struct {
-	Enabled  bool   `json:"enabled"`   // whether telemetry is enabled
-	Exporter string `json:"exporter"`  // otlp|stdout|none
+	Enabled  bool   `json:"enabled"`  // whether telemetry is enabled
+	Exporter string `json:"exporter"` // otlp|stdout|none
 	Endpoint string `json:"endpoint"` // telemetry exporter endpoint URL
 }
 
@@ -169,23 +169,23 @@ type TelemetryConfig struct {
 
 // ReviewReport is the aggregate report generated after a review.
 type ReviewReport struct {
-	TaskID               string            `json:"task_id"`                 // unique review task identifier
-	FindingsCount        int               `json:"findings_count"`         // total number of findings
-	WarningsCount        int               `json:"warnings_count"`         // total number of warnings
-	SeverityDistribution map[string]int    `json:"severity_distribution"`  // count by severity level
-	CategoryDistribution map[string]int    `json:"category_distribution"`  // count by category
-	Summary              string            `json:"summary"`                // human-readable summary of the review
-	NodeTimings          map[string]int64  `json:"node_timings_ms"`        // per-node execution time in ms
-	PermissionSummary    PermissionSummary `json:"permission_summary"`     // aggregated permission decisions
-	SandboxSummary       []SandboxSummary  `json:"sandbox_summary"`        // per-command sandbox summaries
+	TaskID               string            `json:"task_id"`               // unique review task identifier
+	FindingsCount        int               `json:"findings_count"`        // total number of findings
+	WarningsCount        int               `json:"warnings_count"`        // total number of warnings
+	SeverityDistribution map[string]int    `json:"severity_distribution"` // count by severity level
+	CategoryDistribution map[string]int    `json:"category_distribution"` // count by category
+	Summary              string            `json:"summary"`               // human-readable summary of the review
+	NodeTimings          map[string]int64  `json:"node_timings_ms"`       // per-node execution time in ms
+	PermissionSummary    PermissionSummary `json:"permission_summary"`    // aggregated permission decisions
+	SandboxSummary       []SandboxSummary  `json:"sandbox_summary"`       // per-command sandbox summaries
 }
 
 // PermissionSummary aggregates permission decisions for the report.
 type PermissionSummary struct {
-	Total    int `json:"total"`              // total number of permission decisions
-	Allowed  int `json:"allowed"`            // count of allowed commands
-	Denied   int `json:"denied"`             // count of denied commands
-	NeedsHR  int `json:"needs_human_review"` // count of commands needing human review
+	Total   int `json:"total"`              // total number of permission decisions
+	Allowed int `json:"allowed"`            // count of allowed commands
+	Denied  int `json:"denied"`             // count of denied commands
+	NeedsHR int `json:"needs_human_review"` // count of commands needing human review
 }
 
 // SandboxSummary is the per-command sandbox execution summary.

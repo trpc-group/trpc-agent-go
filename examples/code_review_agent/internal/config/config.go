@@ -11,18 +11,18 @@ import (
 
 // Config is the root configuration for the code review agent.
 type Config struct {
-	Mode          string            `yaml:"mode"`             // live | dry_run
-	DryRunTimeout time.Duration     `yaml:"dry_run_timeout"`  // max 2 min for dry-run
-	Input         InputConfig       `yaml:"input"`            // input source configuration
-	Output        OutputConfig      `yaml:"output"`           // report output configuration
-	Executor      ExecutorConfig    `yaml:"executor"`         // sandbox executor configuration
-	LLM           LLMConfig         `yaml:"llm"`              // LLM analyzer configuration
-	Dedup         DedupConfig       `yaml:"dedup"`            // deduplication configuration
-	Sanitize      SanitizeConfig    `yaml:"sanitize"`         // sensitive data redaction configuration
-	Database      DatabaseConfig    `yaml:"database"`         // database backend configuration
-	Skill         SkillConfig       `yaml:"skill"`            // skill loading configuration
-	Permissions   PermissionConfig  `yaml:"permissions"`      // permission policy configuration
-	Telemetry     TelemetryConfig   `yaml:"telemetry"`        // telemetry configuration (reserved)
+	Mode          string           `yaml:"mode"`            // live | dry_run
+	DryRunTimeout time.Duration    `yaml:"dry_run_timeout"` // max 2 min for dry-run
+	Input         InputConfig      `yaml:"input"`           // input source configuration
+	Output        OutputConfig     `yaml:"output"`          // report output configuration
+	Executor      ExecutorConfig   `yaml:"executor"`        // sandbox executor configuration
+	LLM           LLMConfig        `yaml:"llm"`             // LLM analyzer configuration
+	Dedup         DedupConfig      `yaml:"dedup"`           // deduplication configuration
+	Sanitize      SanitizeConfig   `yaml:"sanitize"`        // sensitive data redaction configuration
+	Database      DatabaseConfig   `yaml:"database"`        // database backend configuration
+	Skill         SkillConfig      `yaml:"skill"`           // skill loading configuration
+	Permissions   PermissionConfig `yaml:"permissions"`     // permission policy configuration
+	Telemetry     TelemetryConfig  `yaml:"telemetry"`       // telemetry configuration (reserved)
 }
 
 // InputConfig configures input source.
@@ -59,15 +59,15 @@ type CommandConfig struct {
 
 // LLMConfig configures the LLM analyzer.
 type LLMConfig struct {
-	ModelName        string  `yaml:"model_name"`          // LLM model identifier (e.g., "gpt-4")
-	Temperature      float64 `yaml:"temperature"`         // response randomness (0.0–1.0)
-	MaxTokens        int     `yaml:"max_tokens"`          // maximum tokens in the response
-	SystemPromptPath string  `yaml:"system_prompt_path"`  // "" = use SKILL.md default
+	ModelName        string  `yaml:"model_name"`         // LLM model identifier (e.g., "gpt-4")
+	Temperature      float64 `yaml:"temperature"`        // response randomness (0.0–1.0)
+	MaxTokens        int     `yaml:"max_tokens"`         // maximum tokens in the response
+	SystemPromptPath string  `yaml:"system_prompt_path"` // "" = use SKILL.md default
 }
 
 // DedupConfig configures deduplication.
 type DedupConfig struct {
-	ConfidenceThreshold float64 `yaml:"confidence_threshold"` // minimum confidence for dedup match, default 0.6
+	ConfidenceThreshold float64 `yaml:"confidence_threshold"`  // minimum confidence for dedup match, default 0.6
 	MaxFindingsPerFile  int     `yaml:"max_findings_per_file"` // max findings per file, default 20
 	MaxTotalFindings    int     `yaml:"max_total_findings"`    // max total findings, default 100
 }

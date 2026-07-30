@@ -1,1 +1,0 @@
-tRPC-Agent-Go is a powerful Go framework for building intelligent agent systems that transforms how you create AI applications. Build autonomous agents that think, remember, collaborate, and act with unprecedented ease.

@@ -4,15 +4,15 @@ package graphagent
 import (
 	"reflect"
 
-	"github.com/dcdc4747/trpc-agent-go-cr-project/internal/dedup"
-	"github.com/dcdc4747/trpc-agent-go-cr-project/internal/diffparser"
-	"github.com/dcdc4747/trpc-agent-go-cr-project/internal/llmanalyzer"
-	"github.com/dcdc4747/trpc-agent-go-cr-project/internal/permission"
-	"github.com/dcdc4747/trpc-agent-go-cr-project/internal/report"
-	"github.com/dcdc4747/trpc-agent-go-cr-project/internal/ruleengine"
-	"github.com/dcdc4747/trpc-agent-go-cr-project/internal/sandbox"
-	"github.com/dcdc4747/trpc-agent-go-cr-project/internal/state"
-	storagewriter "github.com/dcdc4747/trpc-agent-go-cr-project/internal/storagewriter"
+	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/dedup"
+	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/diffparser"
+	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/llmanalyzer"
+	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/permission"
+	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/report"
+	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/ruleengine"
+	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/sandbox"
+	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/state"
+	storagewriter "github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/storagewriter"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 )
 
@@ -35,23 +35,23 @@ func Build() (*graph.StateGraph, error) {
 	sg := graph.NewStateGraph(schema)
 
 	// Wire 8 nodes in serial order
-	sg.AddNode("DiffParser",       diffparser.Run)
+	sg.AddNode("DiffParser", diffparser.Run)
 	sg.AddNode("PermissionFilter", permission.Run)
-	sg.AddNode("SandboxRunner",    sandbox.Run)
-	sg.AddNode("RuleEngine",       ruleengine.Run)
-	sg.AddNode("LLMAnalyzer",      llmanalyzer.Run)
-	sg.AddNode("DedupEngine",      dedup.Run)
-	sg.AddNode("ReportGenerator",  report.Run)
-	sg.AddNode("StorageWriter",    storagewriter.Run)
+	sg.AddNode("SandboxRunner", sandbox.Run)
+	sg.AddNode("RuleEngine", ruleengine.Run)
+	sg.AddNode("LLMAnalyzer", llmanalyzer.Run)
+	sg.AddNode("DedupEngine", dedup.Run)
+	sg.AddNode("ReportGenerator", report.Run)
+	sg.AddNode("StorageWriter", storagewriter.Run)
 
 	sg.SetEntryPoint("DiffParser")
-	sg.AddEdge("DiffParser",       "PermissionFilter")
+	sg.AddEdge("DiffParser", "PermissionFilter")
 	sg.AddEdge("PermissionFilter", "SandboxRunner")
-	sg.AddEdge("SandboxRunner",    "RuleEngine")
-	sg.AddEdge("RuleEngine",       "LLMAnalyzer")
-	sg.AddEdge("LLMAnalyzer",      "DedupEngine")
-	sg.AddEdge("DedupEngine",      "ReportGenerator")
-	sg.AddEdge("ReportGenerator",  "StorageWriter")
+	sg.AddEdge("SandboxRunner", "RuleEngine")
+	sg.AddEdge("RuleEngine", "LLMAnalyzer")
+	sg.AddEdge("LLMAnalyzer", "DedupEngine")
+	sg.AddEdge("DedupEngine", "ReportGenerator")
+	sg.AddEdge("ReportGenerator", "StorageWriter")
 	sg.SetFinishPoint("StorageWriter")
 
 	return sg, nil

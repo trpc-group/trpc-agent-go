@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dcdc4747/trpc-agent-go-cr-project/internal/sanitize"
-	"github.com/dcdc4747/trpc-agent-go-cr-project/internal/state"
-	"github.com/dcdc4747/trpc-agent-go-cr-project/internal/types"
+	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/sanitize"
+	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/state"
+	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/types"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 )
 

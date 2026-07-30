@@ -95,16 +95,16 @@ type ArtifactRow struct {
 
 // ReportRow maps to review_report table.
 type ReportRow struct {
-	ID                    string // Unique identifier for the report.
-	TaskID                string // Foreign key referencing review_task.id.
-	FindingsCount         int    // Total number of findings in the report.
-	WarningsCount         int    // Total number of warnings in the report.
-	SeverityDistribution  string // JSON-encoded map of severity to count.
-	CategoryDistribution  string // JSON-encoded map of category to count.
-	JSONReportPath        string // File path to the JSON-formatted report.
-	MDReportPath          string // File path to the Markdown-formatted report.
-	Summary               string // Natural language summary of the review.
-	CreatedAt             string // ISO 8601 timestamp of creation.
+	ID                   string // Unique identifier for the report.
+	TaskID               string // Foreign key referencing review_task.id.
+	FindingsCount        int    // Total number of findings in the report.
+	WarningsCount        int    // Total number of warnings in the report.
+	SeverityDistribution string // JSON-encoded map of severity to count.
+	CategoryDistribution string // JSON-encoded map of category to count.
+	JSONReportPath       string // File path to the JSON-formatted report.
+	MDReportPath         string // File path to the Markdown-formatted report.
+	Summary              string // Natural language summary of the review.
+	CreatedAt            string // ISO 8601 timestamp of creation.
 }
 
 // MetricRow maps to monitor_metric table.

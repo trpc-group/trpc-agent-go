@@ -14,14 +14,14 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/dcdc4747/trpc-agent-go-cr-project/internal/config"
-	"github.com/dcdc4747/trpc-agent-go-cr-project/internal/graphagent"
-	"github.com/dcdc4747/trpc-agent-go-cr-project/internal/input"
-	"github.com/dcdc4747/trpc-agent-go-cr-project/internal/ruleengine"
-	"github.com/dcdc4747/trpc-agent-go-cr-project/internal/state"
-	"github.com/dcdc4747/trpc-agent-go-cr-project/internal/storage"
-	storagewriter "github.com/dcdc4747/trpc-agent-go-cr-project/internal/storagewriter"
-	"github.com/dcdc4747/trpc-agent-go-cr-project/internal/types"
+	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/config"
+	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/graphagent"
+	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/input"
+	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/ruleengine"
+	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/state"
+	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/storage"
+	storagewriter "github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/storagewriter"
+	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/types"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 )
@@ -148,12 +148,12 @@ func main() {
 
 	// 6. Prepare initial state
 	initialState := graph.State{
-		state.StateKeyInputDiffFile:  *diffFile,
-		state.StateKeyInputDiffText:  *diffText,
-		state.StateKeyInputRepoPath:  *repoPath,
-		state.StateKeyInputBaseRef:   cfg.Input.BaseRef,
-		state.StateKeyOutputDir:      cfg.Output.Dir,
-		state.StateKeyTaskID:         taskID,
+		state.StateKeyInputDiffFile: *diffFile,
+		state.StateKeyInputDiffText: *diffText,
+		state.StateKeyInputRepoPath: *repoPath,
+		state.StateKeyInputBaseRef:  cfg.Input.BaseRef,
+		state.StateKeyOutputDir:     cfg.Output.Dir,
+		state.StateKeyTaskID:        taskID,
 		state.StateKeyExecutorConfig: types.ExecutorConfig{
 			Type:         cfg.Executor.Type,
 			TimeoutSec:   cfg.Executor.TimeoutSec,
