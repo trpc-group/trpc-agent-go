@@ -42,6 +42,6 @@ Code Review 业务记录依赖 Review Store 接口，而非直接依赖 SQLite �
 
 ## 安全边界
 
-`PermissionPolicy` 在审批前校验环境变量白名单、超时上限与参数合法性；Tool Callbacks 限制回传输出并记录截断/超时/失败；Artifact Service 限制对象大小。输入准备阶段还会在模型或沙箱访问前将 diff 文件和每个 Git 输出流限制为 64 MiB、单个快照文件限制为 64 MiB、完整快照限制为 512 MiB。这些约束不可被绕过，`sandbox_runs` 会记录所有实际执行的命令状态
+`PermissionPolicy` 在审批前校验环境变量白名单、超时上限与参数合法性；Tool Callbacks 限制回传输出并记录截断/超时/失败；Artifact Service 限制对象大小。这些约束不可被绕过，`sandbox_runs` 会记录所有实际执行的命令状态
 
 review 输入 diff 在进入模型前，Tool 参数、执行结果与审查结论在回传或落库前统一经 `Sanitizer` 脱敏；SQLite Session Service 通过 `WithAppendEventHook` 注入同一个 `Sanitizer`，作为持久化前的兜底

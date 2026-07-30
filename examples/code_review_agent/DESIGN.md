@@ -42,6 +42,6 @@ Results are submitted explicitly through the `submit_review_results` tool instea
 
 ## Security Boundaries
 
-`PermissionPolicy` validates the environment-variable allowlist, the timeout ceiling, and argument shape before approval; Tool Callbacks bound the returned output and record truncation, timeouts, and failures; the Artifact Service caps object size. Input preparation separately caps diff files and each Git output stream at 64 MiB, each snapshot file at 64 MiB, and the complete snapshot at 512 MiB before model or sandbox access. These constraints cannot be bypassed, and `sandbox_runs` records the status of every command actually executed
+`PermissionPolicy` validates the environment-variable allowlist, the timeout ceiling, and argument shape before approval; Tool Callbacks bound the returned output and record truncation, timeouts, and failures; the Artifact Service caps object size. These constraints cannot be bypassed, and `sandbox_runs` records the status of every command actually executed
 
 The input diff is redacted before it reaches the model, and tool arguments, execution results, and review conclusions all pass through the same `Sanitizer` before being returned or persisted; the SQLite Session Service injects that same `Sanitizer` via `WithAppendEventHook` as a last line of defense before persistence
