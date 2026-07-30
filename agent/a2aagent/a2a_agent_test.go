@@ -5257,6 +5257,7 @@ func TestA2AAgent_aggregateEventContent_IgnoresErrorResponses(t *testing.T) {
 		"resp-1",
 		builder,
 		nil,
+		nil,
 	)
 
 	require.Equal(t, "resp-1", responseID)
@@ -5290,6 +5291,7 @@ func TestA2AAgent_aggregateEventContent_HandlerError(t *testing.T) {
 		},
 		"",
 		builder,
+		nil,
 		nil,
 	)
 
@@ -5329,6 +5331,7 @@ func TestA2AAgent_aggregateEventContent_ContentParts(t *testing.T) {
 		},
 		"",
 		builder,
+		nil,
 		&contentParts,
 	)
 
