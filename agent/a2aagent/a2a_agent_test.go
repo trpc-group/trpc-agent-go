@@ -1679,6 +1679,200 @@ func TestAnonymousCookieStateRetainsCookieInLiveParentWithoutService(t *testing.
 	require.Equal(t, wantCookie, gotCookie.Value)
 }
 
+func TestAnonymousCookieStateBoundaryBranches(t *testing.T) {
+	t.Run("nil invocation and context helpers", func(t *testing.T) {
+		require.Nil(t, anonymousSessionServiceFromInvocation(nil))
+		require.Nil(t, anonymousCookieStateFromContext(nil))
+
+		state := newAnonymousCookieState(&session.Session{}, nil, nil, "state-key")
+		ctx := withAnonymousCookieState(nil, state)
+		require.Same(t, state, anonymousCookieStateFromContext(ctx))
+		_, ok := (&anonymousCookieState{}).initializationScope()
+		require.False(t, ok)
+		_, ok = newAnonymousCookieState(nil, nil, nil, "state-key").initializationScope()
+		require.False(t, ok)
+		require.False(t, anonymousCookieStatePresent(nil, ""))
+	})
+
+	t.Run("initialization cancellation and nil receiver", func(t *testing.T) {
+		var nilAgent *A2AAgent
+		release, err := nilAgent.acquireAnonymousCookieInitialization(context.Background(), nil)
+		require.NoError(t, err)
+		require.Nil(t, release)
+
+		a := &A2AAgent{}
+		state := newAnonymousCookieState(
+			&session.Session{AppName: "app", ID: "session-a"},
+			nil,
+			nil,
+			"state-key",
+		)
+		firstRelease, err := a.acquireAnonymousCookieInitialization(context.Background(), state)
+		require.NoError(t, err)
+		require.NotNil(t, firstRelease)
+		defer firstRelease()
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		release, err = a.acquireAnonymousCookieInitialization(ctx, state)
+		require.ErrorIs(t, err, context.Canceled)
+		require.Nil(t, release)
+	})
+
+	t.Run("reload and expired state", func(t *testing.T) {
+		service := sessionmemory.NewSessionService()
+		persisted, err := service.CreateSession(context.Background(), session.Key{
+			AppName:   "app",
+			UserID:    "user-1",
+			SessionID: "session-a",
+		}, session.StateMap{})
+		require.NoError(t, err)
+		state := newAnonymousCookieState(persisted, persisted, service, "state-key")
+		require.NoError(t, state.reload(nil))
+
+		persisted.SetState("state-key", []byte(anonymousTestCookieValue(12)))
+		persisted.SetState("state-key.expires", []byte(time.Now().Add(-time.Minute).Format(time.RFC3339Nano)))
+		_, ok := loadAnonymousCookieStateFromSession(persisted, "state-key")
+		require.False(t, ok)
+	})
+
+	t.Run("persist and clear report session errors", func(t *testing.T) {
+		persistErr := fmt.Errorf("session store unavailable")
+		service := &failingAnonymousCookieSessionService{err: persistErr}
+		persisted := &session.Session{AppName: "app", UserID: "user-1", ID: "session-a"}
+		state := newAnonymousCookieState(persisted, persisted, service, "state-key")
+		record := anonymousCookieRecord{value: anonymousTestCookieValue(13)}
+		require.ErrorIs(t, state.persist(nil, record), persistErr)
+		require.ErrorIs(t, state.clear(nil), persistErr)
+	})
+
+	t.Run("expired capture clears state", func(t *testing.T) {
+		state := newAnonymousCookieState(&session.Session{}, nil, nil, "state-key")
+		require.NoError(t, state.captureRecord(nil, anonymousCookieRecord{
+			value:   anonymousTestCookieValue(14),
+			expires: time.Now().Add(-time.Minute),
+		}))
+		_, ok := state.loadRecord()
+		require.False(t, ok)
+	})
+
+	t.Run("state map and send restrictions", func(t *testing.T) {
+		expires := time.Now().Add(time.Hour)
+		stateMap := anonymousCookieRecordStateMap("state-key", anonymousCookieRecord{
+			value:   anonymousTestCookieValue(15),
+			secure:  true,
+			path:    "/a2a",
+			domain:  "example.com",
+			expires: expires,
+		})
+		require.Equal(t, []byte("true"), stateMap["state-key.secure"])
+		require.Equal(t, []byte("/a2a"), stateMap["state-key.path"])
+		require.Equal(t, []byte("example.com"), stateMap["state-key.domain"])
+		require.NotEmpty(t, stateMap["state-key.expires"])
+
+		record := anonymousCookieRecord{value: anonymousTestCookieValue(15)}
+		require.False(t, record.matchesForSend(nil))
+		record.secure = true
+		require.False(t, record.matchesForSend(&url.URL{Scheme: "http", Host: "example.com"}))
+		record.secure = false
+		record.path = "/a2a"
+		require.False(t, record.matchesForSend(&url.URL{Scheme: "https", Host: "example.com", Path: "/other"}))
+		record.path = ""
+		record.domain = "example.com"
+		require.False(t, record.matchesForSend(&url.URL{Scheme: "https", Host: "other.example"}))
+		require.True(t, record.matchesForSend(&url.URL{Scheme: "https", Host: "example.com", Path: "/a2a"}))
+
+		require.False(t, anonymousCookieDomainMatchesURL(nil, "example.com"))
+		require.False(t, anonymousCookieDomainMatchesURL(&url.URL{Host: "example.com"}, ""))
+		require.True(t, anonymousCookieDomainMatchesURL(&url.URL{Host: "sub.example.com"}, "example.com"))
+	})
+
+	t.Run("capture and response boundaries", func(t *testing.T) {
+		var nilResult *anonymousCookieCaptureResult
+		require.Nil(t, nilResult.error())
+
+		state := newAnonymousCookieState(&session.Session{}, nil, nil, "state-key")
+		result := &anonymousCookieCaptureResult{}
+		result.capture(nil, state, anonymousTestCookieValue(16), false)
+		value, ok := state.load()
+		require.True(t, ok)
+		require.Equal(t, anonymousTestCookieValue(16), value)
+		result.captureRecord(nil, nil, anonymousCookieRecord{value: "invalid"})
+		result.captureCookie(nil, nil, nil, nil)
+
+		requestURL := &url.URL{Scheme: "https", Host: "example.com", Path: "/a2a/message"}
+		record, deleted, ok := anonymousCookieRecordFromResponse(nil, nil)
+		require.False(t, deleted)
+		require.False(t, ok)
+		require.Empty(t, record)
+		record, deleted, ok = anonymousCookieRecordFromResponse(requestURL, &http.Cookie{
+			Name:  anonymousUserIDCookieName,
+			Value: anonymousTestCookieValue(17),
+		})
+		require.True(t, ok)
+		require.False(t, deleted)
+		require.Equal(t, "/a2a", record.path)
+		record, deleted, ok = anonymousCookieRecordFromResponse(requestURL, &http.Cookie{
+			Name:  anonymousUserIDCookieName,
+			Value: anonymousTestCookieValue(18),
+			Path:  "/other",
+		})
+		require.False(t, ok)
+		require.False(t, deleted)
+		require.Empty(t, record)
+		_, _, ok = anonymousCookieRecordFromResponse(requestURL, &http.Cookie{
+			Name:   anonymousUserIDCookieName,
+			Value:  anonymousTestCookieValue(19),
+			Domain: "other.example",
+		})
+		require.False(t, ok)
+		_, _, ok = anonymousCookieRecordFromResponse(requestURL, &http.Cookie{
+			Name:  anonymousUserIDCookieName,
+			Value: "invalid",
+		})
+		require.False(t, ok)
+		record, deleted, ok = anonymousCookieRecordFromResponse(requestURL, &http.Cookie{
+			Name:   anonymousUserIDCookieName,
+			Path:   "/",
+			MaxAge: -1,
+		})
+		require.True(t, ok)
+		require.True(t, deleted)
+		require.Equal(t, "/", record.path)
+		record, deleted, ok = anonymousCookieRecordFromResponse(requestURL, &http.Cookie{
+			Name:   anonymousUserIDCookieName,
+			Value:  anonymousTestCookieValue(20),
+			MaxAge: 2,
+		})
+		require.True(t, ok)
+		require.False(t, deleted)
+		require.False(t, record.expires.IsZero())
+
+		state = newAnonymousCookieState(&session.Session{}, nil, nil, "state-key")
+		require.NoError(t, state.captureRecord(nil, anonymousCookieRecord{
+			value:  anonymousTestCookieValue(21),
+			path:   "/a2a",
+			domain: "example.com",
+		}))
+		require.NoError(t, state.clearForCookie(nil, anonymousCookieRecord{
+			path:   "/other",
+			domain: "example.com",
+		}))
+		_, ok = state.loadRecord()
+		require.True(t, ok)
+		require.NoError(t, state.clearForCookie(nil, anonymousCookieRecord{
+			path:   "/a2a",
+			domain: "other.example",
+		}))
+		_, ok = state.loadRecord()
+		require.True(t, ok)
+
+		deletion := &http.Cookie{Name: anonymousUserIDCookieName, Path: "/", MaxAge: -1}
+		result = &anonymousCookieCaptureResult{}
+		result.captureCookie(nil, state, &url.URL{Scheme: "https", Host: "example.com", Path: "/a2a"}, deletion)
+		result.captureCookie(nil, state, &url.URL{Scheme: "https", Host: "example.com", Path: "/a2a"}, deletion)
+	})
+}
+
 func TestAnonymousCookieJarHandlesCookieBoundaries(t *testing.T) {
 	parseURL := func(raw string) *url.URL {
 		parsed, err := url.Parse(raw)

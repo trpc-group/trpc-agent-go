@@ -1932,6 +1932,42 @@ func TestMessageProcessor_ProcessMessage_EmptyUserID(t *testing.T) {
 	}
 }
 
+func TestMessageProcessor_ProcessMessage_EmptyUserIDGenerationError(t *testing.T) {
+	origRandRead := anonymousRandRead
+	defer func() { anonymousRandRead = origRandRead }()
+	anonymousRandRead = func(_ []byte) (int, error) {
+		return 0, errors.New("entropy unavailable")
+	}
+
+	processor := &messageProcessor{
+		runner:              &mockRunner{},
+		a2aToAgentConverter: &defaultA2AMessageToAgentMessage{},
+		eventToA2AConverter: &defaultEventToA2AMessage{},
+		errorHandler:        defaultErrorHandler,
+	}
+	ctx := context.WithValue(
+		context.Background(),
+		auth.AuthUserKey,
+		&auth.User{},
+	)
+	contextID := "generation-error-context"
+	msg := protocol.Message{
+		ContextID: &contextID,
+		MessageID: "generation-error-message",
+		Role:      protocol.MessageRoleUser,
+		Parts:     []protocol.Part{protocol.NewTextPart("test")},
+	}
+
+	result, err := processor.ProcessMessage(
+		ctx,
+		msg,
+		taskmanager.ProcessOptions{Streaming: false},
+		&mockTaskHandler{},
+	)
+	require.Nil(t, result)
+	require.EqualError(t, err, "generate anonymous user ID: entropy unavailable")
+}
+
 // TestMessageProcessor_ProcessStreamingMessage_EmptyUserID tests anonymous userID generation in streaming mode.
 func TestMessageProcessor_ProcessStreamingMessage_EmptyUserID(t *testing.T) {
 	ctxID := "stream-context-789"

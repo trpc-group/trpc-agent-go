@@ -309,6 +309,113 @@ func TestAnonymousA2AClientRequestWaitHonorsContextCancellation(t *testing.T) {
 	}
 }
 
+func TestAnonymousA2AClientInitHandlerBoundaryInputs(t *testing.T) {
+	t.Run("nil handler", func(t *testing.T) {
+		var handler *anonymousA2AClientInitHandler
+		_, err := handler.Handle(context.Background(), nil, nil)
+		require.EqualError(t, err, "anonymous A2A client: initialization middleware is nil")
+	})
+
+	t.Run("nil middleware", func(t *testing.T) {
+		handler := &anonymousA2AClientInitHandler{
+			next: httpReqHandlerFunc(func(context.Context, *http.Client, *http.Request) (*http.Response, error) {
+				return nil, nil
+			}),
+		}
+		_, err := handler.Handle(context.Background(), nil, nil)
+		require.EqualError(t, err, "anonymous A2A client: initialization middleware is nil")
+	})
+
+	t.Run("nil next handler", func(t *testing.T) {
+		handler := &anonymousA2AClientInitHandler{
+			middleware: newAnonymousA2AClientInitMiddleware(),
+		}
+		_, err := handler.Handle(context.Background(), nil, nil)
+		require.EqualError(t, err, "anonymous A2A client: next HTTP request handler is nil")
+	})
+
+	t.Run("nil client or request passes through", func(t *testing.T) {
+		sentinel := fmt.Errorf("downstream sentinel")
+		var gotCtx context.Context
+		var gotClient *http.Client
+		var gotReq *http.Request
+		handler := &anonymousA2AClientInitHandler{
+			middleware: newAnonymousA2AClientInitMiddleware(),
+			next: httpReqHandlerFunc(func(
+				ctx context.Context,
+				httpClient *http.Client,
+				req *http.Request,
+			) (*http.Response, error) {
+				gotCtx, gotClient, gotReq = ctx, httpClient, req
+				return nil, sentinel
+			}),
+		}
+		_, err := handler.Handle(nil, nil, nil)
+		require.ErrorIs(t, err, sentinel)
+		require.NotNil(t, gotCtx)
+		require.Nil(t, gotClient)
+		require.Nil(t, gotReq)
+	})
+
+	t.Run("existing cookie bypasses initialization gate", func(t *testing.T) {
+		jar, err := cookiejar.New(nil)
+		require.NoError(t, err)
+		req, err := http.NewRequest(http.MethodGet, "http://example.com/a2a", nil)
+		require.NoError(t, err)
+		jar.SetCookies(req.URL, []*http.Cookie{{
+			Name:  anonymousUserIDCookieName,
+			Value: anonymousTestCookieValue(10),
+			Path:  "/",
+		}})
+		middleware := newAnonymousA2AClientInitMiddleware()
+		called := false
+		handler := middleware.Wrap(httpReqHandlerFunc(func(
+			_ context.Context,
+			httpClient *http.Client,
+			request *http.Request,
+		) (*http.Response, error) {
+			called = true
+			require.Same(t, jar, httpClient.Jar)
+			require.Equal(t, req.URL, request.URL)
+			return nil, nil
+		}))
+		_, err = handler.Handle(context.Background(), &http.Client{Jar: jar}, req)
+		require.NoError(t, err)
+		require.True(t, called)
+	})
+
+	t.Run("clientWithCookieJar accepts nil client", func(t *testing.T) {
+		client, err := newAnonymousA2AClientInitMiddleware().clientWithCookieJar(nil)
+		require.NoError(t, err)
+		require.Nil(t, client)
+	})
+}
+
+func TestAnonymousA2AClientJarNeedsInitializationBoundaries(t *testing.T) {
+	jar, err := cookiejar.New(nil)
+	require.NoError(t, err)
+	req, err := http.NewRequest(http.MethodGet, "http://example.com/a2a", nil)
+	require.NoError(t, err)
+
+	require.False(t, anonymousA2AClientJarNeedsInitialization(jar, nil))
+	require.False(t, anonymousA2AClientJarNeedsInitialization(jar, &http.Request{}))
+	require.True(t, anonymousA2AClientJarNeedsInitialization(nil, req))
+	require.True(t, anonymousA2AClientJarNeedsInitialization(jar, req))
+
+	jar.SetCookies(req.URL, []*http.Cookie{{
+		Name:  anonymousUserIDCookieName,
+		Value: "invalid",
+		Path:  "/",
+	}})
+	require.True(t, anonymousA2AClientJarNeedsInitialization(jar, req))
+	jar.SetCookies(req.URL, []*http.Cookie{{
+		Name:  anonymousUserIDCookieName,
+		Value: anonymousTestCookieValue(11),
+		Path:  "/",
+	}})
+	require.False(t, anonymousA2AClientJarNeedsInitialization(jar, req))
+}
+
 func TestNewAnonymousA2AClientInstallsCookieJar(t *testing.T) {
 	var (
 		mu              sync.Mutex

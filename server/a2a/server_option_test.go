@@ -932,6 +932,38 @@ func TestAnonymousUserCookieMiddleware_AuthenticatedContextBypassesCookie(t *tes
 	}
 }
 
+func TestPreAuthIdentityMiddleware_PreservesExistingAuthenticatedUser(t *testing.T) {
+	user := &auth.User{ID: "already-authenticated"}
+	called := false
+	handler := (preAuthIdentityMiddleware{userIDHeader: serverUserIDHeader}).Wrap(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			called = true
+			got, ok := r.Context().Value(auth.AuthUserKey).(*auth.User)
+			require.True(t, ok)
+			require.Same(t, user, got)
+			_, hasPreAuth := r.Context().Value(preAuthIdentityKey{}).(*auth.User)
+			require.False(t, hasPreAuth)
+		}),
+	)
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/test", nil)
+	req = req.WithContext(context.WithValue(req.Context(), auth.AuthUserKey, user))
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+	require.True(t, called)
+}
+
+func TestAnonymousRequestPathMiddleware_NilRequest(t *testing.T) {
+	called := false
+	handler := anonymousRequestPathMiddleware{}.Wrap(http.HandlerFunc(func(
+		_ http.ResponseWriter,
+		r *http.Request,
+	) {
+		called = true
+		require.Nil(t, r)
+	}))
+	handler.ServeHTTP(httptest.NewRecorder(), nil)
+	require.True(t, called)
+}
+
 func TestAnonymousCookieSecureForAgentURL(t *testing.T) {
 	tests := []struct {
 		name     string
