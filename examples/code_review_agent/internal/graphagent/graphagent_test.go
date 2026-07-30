@@ -219,8 +219,14 @@ func TestE2E_MinimumViableDryRun(t *testing.T) {
 		t.Fatalf("rules not available: %v", err)
 	}
 
-	sg, _ := Build()
-	compiled, _ := sg.Compile()
+	sg, err := Build()
+	if err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+	compiled, err := sg.Compile()
+	if err != nil {
+		t.Fatalf("Compile failed: %v", err)
+	}
 
 	initialState := graph.State{
 		state.StateKeyInputDiffFile: diffPath,
@@ -310,8 +316,14 @@ func TestE2E_MultipleDiffFixtures(t *testing.T) {
 				t.Fatalf("cannot read diff fixture: %v", err)
 			}
 
-			sg, _ := Build()
-			compiled, _ := sg.Compile()
+			sg, err := Build()
+			if err != nil {
+				t.Fatalf("Build failed: %v", err)
+			}
+			compiled, err := sg.Compile()
+			if err != nil {
+				t.Fatalf("Compile failed: %v", err)
+			}
 
 			initialState := graph.State{
 				state.StateKeyInputDiffFile: diffPath,
@@ -387,8 +399,14 @@ func TestE2E_RuleOnlyMode(t *testing.T) {
 		t.Fatalf("rules not available: %v", err)
 	}
 
-	sg, _ := Build()
-	compiled, _ := sg.Compile()
+	sg, err := Build()
+	if err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+	compiled, err := sg.Compile()
+	if err != nil {
+		t.Fatalf("Compile failed: %v", err)
+	}
 
 	initialState := graph.State{
 		state.StateKeyInputDiffFile: diffPath,

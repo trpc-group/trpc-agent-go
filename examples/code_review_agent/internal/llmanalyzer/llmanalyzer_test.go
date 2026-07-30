@@ -84,7 +84,9 @@ func TestLoadMockFindings_EmptyMatchFileAlwaysMatches(t *testing.T) {
 	tmpDir := t.TempDir()
 	tmpFile := filepath.Join(tmpDir, "mock.json")
 	data := `[{"id":"test","match_file":"","severity":"low","category":"other","file":"x.go","line":1,"title":"t","confidence":0.5}]`
-	os.WriteFile(tmpFile, []byte(data), 0644)
+	if err := os.WriteFile(tmpFile, []byte(data), 0644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
 	findings, err := loadMockFindings(tmpFile, changedFiles)
 	if err != nil {
 		t.Fatalf("loadMockFindings failed: %v", err)
@@ -104,7 +106,9 @@ func TestLoadMockFindings_FileNotFound(t *testing.T) {
 func TestLoadMockFindings_BadJSON(t *testing.T) {
 	tmpDir := t.TempDir()
 	tmpFile := filepath.Join(tmpDir, "bad.json")
-	os.WriteFile(tmpFile, []byte("not json"), 0644)
+	if err := os.WriteFile(tmpFile, []byte("not json"), 0644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
 	_, err := loadMockFindings(tmpFile, nil)
 	if err == nil {
 		t.Error("expected error for bad JSON")

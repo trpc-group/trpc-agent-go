@@ -93,32 +93,40 @@ func Run(ctx context.Context, gs graph.State) (any, error) {
 	}
 
 	// 5. Insert artifacts (with size limit — Issue #2004 security boundary)
+	// Track artifact failures for exception monitoring so silent skips are visible.
+	var artifactErrors []string
 	maxArtifactBytes := int64(10 * 1024 * 1024) // default 10 MB
 	if cfg, ok := gs[state.StateKeyExecutorConfig].(types.ExecutorConfig); ok && cfg.MaxArtifactMB > 0 {
 		maxArtifactBytes = int64(cfg.MaxArtifactMB) * 1024 * 1024
 	}
 	if jsonPath != "" {
-		if info, err := os.Stat(jsonPath); err == nil && info.Size() <= maxArtifactBytes {
-			if err := store.InsertArtifact(ctx, storage.ArtifactRow{
-				ID: uuid.New().String(), TaskID: taskID, ArtifactType: "json_report",
-				FilePath: jsonPath, SizeBytes: info.Size(), ContentHash: fileHash(jsonPath), CreatedAt: now,
-			}); err != nil {
-				// Artifact persistence failure is non-fatal — log and continue.
-				fmt.Fprintf(os.Stderr, "storagewriter: failed to insert json artifact: %v\n", err)
-			}
+		info, statErr := os.Stat(jsonPath)
+		if statErr != nil {
+			artifactErrors = append(artifactErrors, fmt.Sprintf("json_report_stat: %v", statErr))
+		} else if info.Size() > maxArtifactBytes {
+			artifactErrors = append(artifactErrors,
+				fmt.Sprintf("json_report_oversized: %d > %d bytes", info.Size(), maxArtifactBytes))
+		} else if err := store.InsertArtifact(ctx, storage.ArtifactRow{
+			ID: uuid.New().String(), TaskID: taskID, ArtifactType: "json_report",
+			FilePath: jsonPath, SizeBytes: info.Size(), ContentHash: fileHash(jsonPath), CreatedAt: now,
+		}); err != nil {
+			artifactErrors = append(artifactErrors, fmt.Sprintf("json_report_insert: %v", err))
 		}
 	}
 	if mdPath != "" {
-		if info, err := os.Stat(mdPath); err == nil && info.Size() <= maxArtifactBytes {
-			if err := store.InsertArtifact(ctx, storage.ArtifactRow{
-				ID: uuid.New().String(), TaskID: taskID, ArtifactType: "md_report",
-				FilePath: mdPath, SizeBytes: info.Size(), ContentHash: fileHash(mdPath), CreatedAt: now,
-			}); err != nil {
-				fmt.Fprintf(os.Stderr, "storagewriter: failed to insert md artifact: %v\n", err)
-			}
+		info, statErr := os.Stat(mdPath)
+		if statErr != nil {
+			artifactErrors = append(artifactErrors, fmt.Sprintf("md_report_stat: %v", statErr))
+		} else if info.Size() > maxArtifactBytes {
+			artifactErrors = append(artifactErrors,
+				fmt.Sprintf("md_report_oversized: %d > %d bytes", info.Size(), maxArtifactBytes))
+		} else if err := store.InsertArtifact(ctx, storage.ArtifactRow{
+			ID: uuid.New().String(), TaskID: taskID, ArtifactType: "md_report",
+			FilePath: mdPath, SizeBytes: info.Size(), ContentHash: fileHash(mdPath), CreatedAt: now,
+		}); err != nil {
+			artifactErrors = append(artifactErrors, fmt.Sprintf("md_report_insert: %v", err))
 		}
 	}
-
 	// 6. Insert report summary
 	sevDist := countSeverity(allFindings)
 	catDist := countCategory(allFindings)
@@ -204,6 +212,10 @@ func Run(ctx context.Context, gs graph.State) (any, error) {
 			key := "llm_" + e.ErrorType
 			excTypeSet[key]++
 		}
+	}
+	// Merge artifact errors so silent skips/oversized files are visible.
+	for _, ae := range artifactErrors {
+		excTypeSet["artifact_"+ae] = 1
 	}
 	for etype, count := range excTypeSet {
 		exceptions = append(exceptions, storage.ExceptionRow{

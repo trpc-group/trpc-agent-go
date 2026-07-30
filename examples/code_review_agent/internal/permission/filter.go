@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/config"
 	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/state"
 	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/types"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
@@ -32,11 +33,15 @@ func Run(ctx context.Context, gs graph.State) (any, error) {
 	changes, _ := gs[state.StateKeyFileChanges].([]types.FileChange)
 	cfg, _ := gs[state.StateKeyExecutorConfig].(types.ExecutorConfig)
 
-	// Default risk matrix
-	defaultPolicy := map[string]string{
-		"low":    "allow",
-		"medium": "allow",
-		"high":   "deny",
+	// Read permission policy from config if wired; fall back to defaults.
+	permCfg, _ := gs[state.StateKeyPermissionConfig].(config.PermissionConfig)
+	defaultPolicy := permCfg.DefaultPolicy
+	if defaultPolicy == nil {
+		defaultPolicy = map[string]string{
+			"low":    "allow",
+			"medium": "allow",
+			"high":   "deny",
+		}
 	}
 
 	var allowed []types.SandboxCommand
@@ -53,10 +58,19 @@ func Run(ctx context.Context, gs graph.State) (any, error) {
 			decision = d
 		}
 
-		// Check against deny-list patterns
+		// Check against deny-list patterns (token-level matching).
 		fullCmd := cmd.Cmd + " " + strings.Join(cmd.Args, " ")
 		if isBlocked(fullCmd) {
 			decision = "deny"
+		}
+
+		// Apply command-specific overrides (take precedence over default policy
+		// and deny-list). Override patterns are matched against the command text.
+		for _, o := range permCfg.Overrides {
+			if matchOverride(o.Pattern, fullCmd) {
+				decision = o.Decision
+				break
+			}
 		}
 
 		decisions = append(decisions, types.PermissionDecision{
@@ -186,4 +200,14 @@ func riskReason(decision, riskLevel string) string {
 		return "blocked by deny-list"
 	}
 	return "allowed by risk matrix (" + riskLevel + ")"
+}
+
+// matchOverride checks whether an override pattern matches a command string.
+// Supports wildcard patterns like "sudo *" (matches "sudo anything").
+func matchOverride(pattern, cmd string) bool {
+	if strings.HasSuffix(pattern, " *") {
+		prefix := strings.TrimSuffix(pattern, " *")
+		return strings.HasPrefix(cmd, prefix+" ")
+	}
+	return cmd == pattern
 }

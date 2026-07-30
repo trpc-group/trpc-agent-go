@@ -58,6 +58,8 @@ const (
 	StateKeyDedupConfig = "dedup_config"
 	// StateKeySkillRules holds the loaded Rule objects from skill rule files.
 	StateKeySkillRules = "skill_rules"
+	// StateKeyPermissionConfig holds the permission policy and overrides.
+	StateKeyPermissionConfig = "permission_config"
 )
 
 // Output state keys — populated by ReportGenerator and StorageWriter.

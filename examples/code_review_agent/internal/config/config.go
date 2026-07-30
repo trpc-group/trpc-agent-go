@@ -158,9 +158,9 @@ func (c *Config) Validate() error {
 	if c.Executor.Type == "" {
 		return fmt.Errorf("executor.type is required")
 	}
-	supportedExecutors := map[string]bool{"local": true, "container": true, "cube": true, "e2b": true}
+	supportedExecutors := map[string]bool{"local": true, "container": true, "cube": true}
 	if !supportedExecutors[c.Executor.Type] {
-		return fmt.Errorf("executor.type must be one of: local, container, cube, e2b; got %q", c.Executor.Type)
+		return fmt.Errorf("executor.type must be one of: local, container, cube; got %q", c.Executor.Type)
 	}
 	if c.LLM.ModelName == "" && c.Mode == "live" {
 		return fmt.Errorf("llm.model_name is required in live mode")

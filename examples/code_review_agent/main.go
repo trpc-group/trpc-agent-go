@@ -183,7 +183,8 @@ func main() {
 		state.StateKeyDedupConfig: types.DedupConfig{
 			ConfidenceThreshold: cfg.Dedup.ConfidenceThreshold,
 		},
-		state.StateKeySkillRules: rules,
+		state.StateKeySkillRules:       rules,
+		state.StateKeyPermissionConfig: cfg.Permissions,
 	}
 
 	// Pass storage via context (not state — *sql.DB can't survive deepCopy)

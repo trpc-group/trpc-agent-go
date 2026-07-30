@@ -42,11 +42,11 @@ func Run(ctx context.Context, gs graph.State) (any, error) {
 		outputDir = "./output"
 	}
 
-	// Set report generator timing before buildReport reads node timings from state.
-	// The defer above will overwrite this with the final elapsed time.
-	gs[state.StateKeyNodeReportGeneratorMs] = time.Since(start).Milliseconds()
-
 	report := buildReport(taskID, findings, warnings, permDecisions, sandboxResults, gs)
+
+	// Record report generation timing once, after buildReport, so the report
+	// includes it and the deferred metric agrees (single source of truth).
+	gs[state.StateKeyNodeReportGeneratorMs] = time.Since(start).Milliseconds()
 
 	// ── Sanitize sensitive data in findings before output ──
 	redactor := sanitize.NewRedactor(nil, "***REDACTED***")

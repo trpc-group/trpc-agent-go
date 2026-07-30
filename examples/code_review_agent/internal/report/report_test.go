@@ -304,9 +304,14 @@ func TestRun_MultipleFindingsMultipleCategories(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
-	jsonData, _ := os.ReadFile(filepath.Join(tmpDir, "task-full_report.json"))
+	jsonData, err := os.ReadFile(filepath.Join(tmpDir, "task-full_report.json"))
+	if err != nil {
+		t.Fatalf("read json report: %v", err)
+	}
 	var report types.ReviewReport
-	json.Unmarshal(jsonData, &report)
+	if err := json.Unmarshal(jsonData, &report); err != nil {
+		t.Fatalf("json report invalid: %v", err)
+	}
 	if report.FindingsCount != 3 || report.WarningsCount != 1 {
 		t.Errorf("counts wrong: f=%d w=%d", report.FindingsCount, report.WarningsCount)
 	}

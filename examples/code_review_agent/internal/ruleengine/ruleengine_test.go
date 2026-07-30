@@ -20,6 +20,20 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 )
 
+// runNode calls Run and fails the test if there is an error.
+func runNode(t *testing.T, gs graph.State) graph.State {
+	t.Helper()
+	result, err := Run(context.Background(), gs)
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	finalState, ok := result.(graph.State)
+	if !ok {
+		t.Fatalf("Run returned %T, want graph.State", result)
+	}
+	return finalState
+}
+
 // ── Helper unit tests ──
 
 func TestStripDiffPrefix(t *testing.T) {
@@ -395,8 +409,7 @@ func TestRun_TokenRuleMatchHardcodedSecret(t *testing.T) {
 		state.StateKeySandboxResults: []types.SandboxResult{},
 		state.StateKeyTaskID:         "task-secret",
 	}
-	result, _ := Run(context.Background(), gs)
-	finalState := result.(graph.State)
+	finalState := runNode(t, gs)
 	findings, _ := finalState[state.StateKeyRuleFindings].([]types.Finding)
 	if len(findings) < 1 {
 		t.Fatalf("expected at least 1 hardcoded secret finding, got %d", len(findings))
@@ -422,8 +435,7 @@ func TestRun_TokenRuleMatchIgnoredError(t *testing.T) {
 		state.StateKeySandboxResults: []types.SandboxResult{},
 		state.StateKeyTaskID:         "task-err",
 	}
-	result, _ := Run(context.Background(), gs)
-	finalState := result.(graph.State)
+	finalState := runNode(t, gs)
 	findings, _ := finalState[state.StateKeyRuleFindings].([]types.Finding)
 	if len(findings) < 1 {
 		t.Fatalf("expected at least 1 ignored-error finding, got %d", len(findings))
@@ -449,8 +461,7 @@ func TestRun_TokenRuleDoesNotMatchComments(t *testing.T) {
 		state.StateKeySandboxResults: []types.SandboxResult{},
 		state.StateKeyTaskID:         "task-comments",
 	}
-	result, _ := Run(context.Background(), gs)
-	finalState := result.(graph.State)
+	finalState := runNode(t, gs)
 	findings, _ := finalState[state.StateKeyRuleFindings].([]types.Finding)
 	if len(findings) != 0 {
 		t.Errorf("comments should be skipped, got %d findings", len(findings))
@@ -476,8 +487,7 @@ func TestRun_TokenRuleDoesNotMatchEmptyFunc(t *testing.T) {
 		state.StateKeySandboxResults: []types.SandboxResult{},
 		state.StateKeyTaskID:         "task-empty",
 	}
-	result, _ := Run(context.Background(), gs)
-	finalState := result.(graph.State)
+	finalState := runNode(t, gs)
 	findings, _ := finalState[state.StateKeyRuleFindings].([]types.Finding)
 	if len(findings) != 0 {
 		t.Errorf("trivial func with <4 code lines should NOT trigger TEST-001, got %d findings", len(findings))
@@ -507,8 +517,7 @@ func TestRun_TokenRuleMatchesFuncWithEnoughLines(t *testing.T) {
 		state.StateKeySandboxResults: []types.SandboxResult{},
 		state.StateKeyTaskID:         "task-test-001",
 	}
-	result, _ := Run(context.Background(), gs)
-	finalState := result.(graph.State)
+	finalState := runNode(t, gs)
 	findings, _ := finalState[state.StateKeyRuleFindings].([]types.Finding)
 	if len(findings) < 1 {
 		t.Errorf("expected TEST-001 finding for func with >=4 code lines, got %d", len(findings))
@@ -533,8 +542,7 @@ func TestRun_TokenRuleIgnoresImportLines(t *testing.T) {
 		state.StateKeySandboxResults: []types.SandboxResult{},
 		state.StateKeyTaskID:         "task-import",
 	}
-	result, _ := Run(context.Background(), gs)
-	finalState := result.(graph.State)
+	finalState := runNode(t, gs)
 	findings, _ := finalState[state.StateKeyRuleFindings].([]types.Finding)
 	if len(findings) != 0 {
 		t.Errorf("import path lines should be filtered, got %d findings", len(findings))
@@ -552,8 +560,7 @@ func TestRun_EmptyChanges(t *testing.T) {
 		state.StateKeySandboxResults: []types.SandboxResult{},
 		state.StateKeyTaskID:         "task-empty-changes",
 	}
-	result, _ := Run(context.Background(), gs)
-	finalState := result.(graph.State)
+	finalState := runNode(t, gs)
 	findings, _ := finalState[state.StateKeyRuleFindings].([]types.Finding)
 	if len(findings) != 0 {
 		t.Errorf("no changes should produce 0 findings, got %d", len(findings))
@@ -573,8 +580,7 @@ func TestRun_EmptyRules(t *testing.T) {
 		state.StateKeySandboxResults: []types.SandboxResult{},
 		state.StateKeyTaskID:         "task-no-rules",
 	}
-	result, _ := Run(context.Background(), gs)
-	finalState := result.(graph.State)
+	finalState := runNode(t, gs)
 	findings, _ := finalState[state.StateKeyRuleFindings].([]types.Finding)
 	if len(findings) != 0 {
 		t.Errorf("no rules should produce 0 findings, got %d", len(findings))
@@ -616,8 +622,7 @@ func TestRun_TimingRecorded(t *testing.T) {
 		state.StateKeySandboxResults: []types.SandboxResult{},
 		state.StateKeyTaskID:         "task-timing",
 	}
-	result, _ := Run(context.Background(), gs)
-	finalState := result.(graph.State)
+	finalState := runNode(t, gs)
 	ms, ok := finalState[state.StateKeyNodeRuleEngineMs].(int64)
 	if !ok {
 		t.Error("node timing not recorded in state")
@@ -647,8 +652,7 @@ func TestRun_FindingHasRequiredFields(t *testing.T) {
 		state.StateKeySandboxResults: []types.SandboxResult{},
 		state.StateKeyTaskID:         "task-fields",
 	}
-	result, _ := Run(context.Background(), gs)
-	finalState := result.(graph.State)
+	finalState := runNode(t, gs)
 	findings, _ := finalState[state.StateKeyRuleFindings].([]types.Finding)
 	if len(findings) < 1 {
 		t.Fatal("expected at least 1 finding")
@@ -688,8 +692,7 @@ func TestRun_LeakCategoryScansRemovedLines(t *testing.T) {
 		state.StateKeySandboxResults: []types.SandboxResult{},
 		state.StateKeyTaskID:         "task-leak",
 	}
-	result, _ := Run(context.Background(), gs)
-	finalState := result.(graph.State)
+	finalState := runNode(t, gs)
 	findings, _ := finalState[state.StateKeyRuleFindings].([]types.Finding)
 	if len(findings) < 1 {
 		t.Errorf("leak category should scan removed lines, got 0 findings")
@@ -713,8 +716,7 @@ func TestRun_NonLeakCategoryIgnoresRemovedLines(t *testing.T) {
 		state.StateKeySandboxResults: []types.SandboxResult{},
 		state.StateKeyTaskID:         "task-nonleak",
 	}
-	result, _ := Run(context.Background(), gs)
-	finalState := result.(graph.State)
+	finalState := runNode(t, gs)
 	findings, _ := finalState[state.StateKeyRuleFindings].([]types.Finding)
 	if len(findings) != 0 {
 		t.Errorf("non-leak category should ignore removed lines, got %d findings", len(findings))
@@ -739,8 +741,7 @@ func TestRun_ToolRuleIntegration(t *testing.T) {
 		state.StateKeySandboxResults: results,
 		state.StateKeyTaskID:         "task-tool",
 	}
-	result, _ := Run(context.Background(), gs)
-	finalState := result.(graph.State)
+	finalState := runNode(t, gs)
 	findings, _ := finalState[state.StateKeyRuleFindings].([]types.Finding)
 	if len(findings) != 1 {
 		t.Fatalf("expected 1 tool finding from go vet output, got %d", len(findings))
@@ -769,8 +770,7 @@ func TestRun_NegativeCommentsNotFlagged(t *testing.T) {
 		state.StateKeySandboxResults: []types.SandboxResult{},
 		state.StateKeyTaskID:         "task-neg-comments",
 	}
-	result, _ := Run(context.Background(), gs)
-	finalState := result.(graph.State)
+	finalState := runNode(t, gs)
 	findings, _ := finalState[state.StateKeyRuleFindings].([]types.Finding)
 	if len(findings) != 0 {
 		t.Errorf("comments should produce 0 findings with real rules, got %d", len(findings))
@@ -795,8 +795,7 @@ func TestRun_NegativeStringLiteralNotFlagged(t *testing.T) {
 		state.StateKeySandboxResults: []types.SandboxResult{},
 		state.StateKeyTaskID:         "task-neg-strings",
 	}
-	result, _ := Run(context.Background(), gs)
-	finalState := result.(graph.State)
+	finalState := runNode(t, gs)
 	findings, _ := finalState[state.StateKeyRuleFindings].([]types.Finding)
 	for _, f := range findings {
 		if f.Category == "sensitive_info" {

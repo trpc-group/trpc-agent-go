@@ -122,7 +122,7 @@ type LLMError struct {
 
 // ExecutorConfig configures the sandbox executor.
 type ExecutorConfig struct {
-	Type          string           `json:"type"`            // "local" | "cube" | "container" | "e2b"
+	Type          string           `json:"type"`            // "local" | "cube" | "container"
 	TimeoutSec    int              `json:"timeout_sec"`     // per-command timeout in seconds
 	MaxOutputMB   int              `json:"max_output_mb"`   // output size limit in MB
 	MaxArtifactMB int              `json:"max_artifact_mb"` // artifact file size limit in MB (default 10)
@@ -132,13 +132,16 @@ type ExecutorConfig struct {
 
 // LLMConfig configures the LLM analyzer.
 type LLMConfig struct {
-	ModelName        string  `json:"model_name"`         // model identifier for LLM inference
-	Temperature      float64 `json:"temperature"`        // sampling temperature (0.0 ~ 2.0)
-	MaxTokens        int     `json:"max_tokens"`         // maximum tokens in the response
-	SystemPrompt     string  `json:"system_prompt"`      // system-level instruction prompt
-	MockMode         bool    `json:"mock_mode"`          // if true, use mock findings instead of real LLM
-	RuleOnly         bool    `json:"rule_only"`          // if true, skip LLM entirely (deterministic rules only)
-	MockFindingsPath string  `json:"mock_findings_path"` // testdata/mock_llm_findings.json
+	ModelName    string  `json:"model_name"`    // model identifier for LLM inference
+	Temperature  float64 `json:"temperature"`   // sampling temperature (0.0 ~ 2.0)
+	MaxTokens    int     `json:"max_tokens"`    // maximum tokens in the response
+	SystemPrompt string  `json:"system_prompt"` // system-level instruction prompt
+	MockMode     bool    `json:"mock_mode"`     // if true, use mock findings instead of real LLM
+	// RuleOnly bypasses LLM analysis entirely. When true, LLMAnalyzer returns
+	// empty findings immediately, relying on RuleEngine and tool output alone.
+	// RuleOnly takes precedence over MockMode when both are configured.
+	RuleOnly         bool   `json:"rule_only"`          // if true, skip LLM entirely (deterministic rules only)
+	MockFindingsPath string `json:"mock_findings_path"` // testdata/mock_llm_findings.json
 }
 
 // DedupConfig configures deduplication and noise reduction.
