@@ -49,11 +49,16 @@ type JSONLAuditLogger struct {
 }
 
 // NewJSONLAuditLogger opens the audit file for append-only writing.
-// It returns an error if policy is nil — a policy with secret-detection
-// patterns is required for safe audit logging.
+// It returns an error if policy is nil or has no compiled secret patterns
+// — a policy with secret-detection patterns is required so that audit
+// records are always desensitized before writing.
 func NewJSONLAuditLogger(path string, policy *Policy) (*JSONLAuditLogger, error) {
 	if policy == nil {
 		return nil, fmt.Errorf("audit: policy must not be nil")
+	}
+	patterns := policy.SecretRegexps()
+	if len(patterns) == 0 {
+		return nil, fmt.Errorf("audit: policy must have at least one secret-detection pattern")
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
@@ -61,7 +66,7 @@ func NewJSONLAuditLogger(path string, policy *Policy) (*JSONLAuditLogger, error)
 	}
 	return &JSONLAuditLogger{
 		file:     f,
-		patterns: policy.SecretRegexps(),
+		patterns: patterns,
 	}, nil
 }
 

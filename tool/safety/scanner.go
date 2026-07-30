@@ -71,18 +71,37 @@ func allCheckers(policy *Policy) []Checker {
 	}
 }
 
-// NewScanner creates a Scanner with checkers filtered by the policy's
-// Checkers field. When policy.Checkers is empty, all built-in checkers
-// are enabled.
+// NewScanner creates a Scanner with safety checkers drawn from the
+// supplied Policy. When policy is nil, a default Policy with safe
+// built-in rules is used. The Policy is retained by the Scanner and
+// should not be modified concurrently after this call.
 //
-// Audit logging is handled externally by SafetyPermissionPolicy; Scan
-// itself is a pure function that returns a report without side effects.
+// Non-nil programmatic Policies are normalized and compiled at this
+// boundary so that every checker receives a fully-prepared policy.
+// Construction fails closed if compilation fails or no checkers are
+// active.
+//
+// Audit logging is handled externally (typically by
+// SafetyPermissionPolicy); Scan itself is a pure function that returns
+// a report without side effects.
 func NewScanner(policy *Policy) *Scanner {
 	if policy == nil {
 		policy = defaultPolicy()
+	} else {
+		// Non-nil programmatic Policy may not have been through
+		// parsePolicy; ensure defaults and compilation run.
+		policy.applyDefaults()
+		if err := policy.compile(); err != nil {
+			// Fail closed: a policy that can't compile its patterns
+			// should not produce a scanner.
+			panic("safety: NewScanner: policy compile failed: " + err.Error())
+		}
 	}
 	s := &Scanner{policy: policy}
 	s.checkers = filterCheckers(allCheckers(policy), policy)
+	if len(s.checkers) == 0 {
+		panic("safety: NewScanner: no active checkers after filtering")
+	}
 	return s
 }
 

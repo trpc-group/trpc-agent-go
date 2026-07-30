@@ -651,7 +651,7 @@ func TestMaskSecret_ShortSecret(t *testing.T) {
 		Command: `echo "sk-shortkey"`,
 		Backend: "workspaceexec",
 	})
-	// "sk-shortkey" is 12 chars — below the 20-char default threshold,
+	// "sk-shortkey" is 11 chars — below the 20-char default threshold,
 	// so no secret should be detected. Assert explicitly.
 	assert.Equal(t, safety.DecisionAllow, report.Decision)
 }
@@ -745,6 +745,18 @@ func TestPath_GlobStarPattern(t *testing.T) {
 	})
 	assert.Equal(t, safety.DecisionDeny, report.Decision)
 	assert.Contains(t, report.RuleID, "PATH_")
+}
+
+// ─── Audit: uninitialized Policy rejected ───
+
+func TestNewJSONLAuditLogger_EmptyPatterns(t *testing.T) {
+	// &Policy{} has no compiled patterns → rejected.
+	_, err := safety.NewJSONLAuditLogger(
+		filepath.Join(t.TempDir(), "audit.jsonl"),
+		&safety.Policy{},
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "at least one secret-detection pattern")
 }
 
 // ─── Policy: invalid checker name rejected ───
