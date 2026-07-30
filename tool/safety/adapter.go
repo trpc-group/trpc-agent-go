@@ -99,7 +99,7 @@ func defaultRequestMapper(req *tool.PermissionRequest) *ScanRequest {
 	if req.Arguments == nil {
 		return sr
 	}
-	var args map[string]interface{}
+	var args map[string]any
 	if err := json.Unmarshal(req.Arguments, &args); err != nil {
 		return sr
 	}
@@ -109,7 +109,7 @@ func defaultRequestMapper(req *tool.PermissionRequest) *ScanRequest {
 	if cwd, ok := args["cwd"].(string); ok {
 		sr.Cwd = cwd
 	}
-	if envRaw, ok := args["env"].(map[string]interface{}); ok {
+	if envRaw, ok := args["env"].(map[string]any); ok {
 		sr.Env = make(map[string]string)
 		for k, v := range envRaw {
 			if vs, ok := v.(string); ok {
