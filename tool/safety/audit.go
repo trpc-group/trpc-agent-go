@@ -112,7 +112,7 @@ func traceIDFromContext(ctx context.Context) string {
 	return ""
 }
 
-// traceIDKey is the context key for trace identifiers.
+// TraceIDKey is the context key set by WithTraceID for audit logging.
 const TraceIDKey = "trace_id"
 
 // WithTraceID returns a context carrying a trace identifier for audit logging.
