@@ -482,3 +482,32 @@ func TestAnalyzeWithLLM_ZeroMaxTokensDefaults(t *testing.T) {
 		t.Errorf("expected 0 findings from empty response, got %d", len(findings))
 	}
 }
+
+func TestRun_RuleOnlyModeSkipsLLM(t *testing.T) {
+	changes := []types.FileChange{
+		makeFileChange("a.go", []string{"func Foo() {}"}),
+	}
+	gs := graph.State{
+		state.StateKeyLLMConfig: types.LLMConfig{
+			RuleOnly: true,
+		},
+		state.StateKeyFileChanges:    changes,
+		state.StateKeySandboxResults: []types.SandboxResult{},
+		state.StateKeyRuleFindings:   []types.Finding{},
+		state.StateKeyTaskID:         "task-rule-only",
+	}
+	result, _ := Run(context.Background(), gs)
+	finalState := result.(graph.State)
+
+	// LLM findings must be empty
+	findings, _ := finalState[state.StateKeyLLMFindings].([]types.Finding)
+	if len(findings) != 0 {
+		t.Errorf("rule_only mode should produce 0 LLM findings, got %d", len(findings))
+	}
+
+	// No errors should be recorded (skip is intentional, not a failure)
+	errors, _ := finalState[state.StateKeyLLMErrors].([]types.LLMError)
+	if len(errors) != 0 {
+		t.Errorf("rule_only mode should not record errors, got %d", len(errors))
+	}
+}

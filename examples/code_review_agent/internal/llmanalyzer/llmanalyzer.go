@@ -49,6 +49,12 @@ func Run(ctx context.Context, gs graph.State) (any, error) {
 		return gs, nil
 	}
 
+	// ── Rule-only mode: skip LLM entirely, rely on RuleEngine only ──
+	if cfg.RuleOnly {
+		gs[state.StateKeyLLMFindings] = []types.Finding{}
+		return gs, nil
+	}
+
 	// ── Dry-run mode: load mock findings matching current diff files ──
 	if cfg.MockMode {
 		mockPath := cfg.MockFindingsPath

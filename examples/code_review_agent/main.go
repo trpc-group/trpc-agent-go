@@ -177,6 +177,7 @@ func main() {
 			MaxTokens:        cfg.LLM.MaxTokens,
 			SystemPrompt:     cfg.LLM.SystemPromptPath,
 			MockMode:         cfg.Mode == "dry_run",
+			RuleOnly:         cfg.Mode == "rule_only",
 			MockFindingsPath: "testdata/mock_llm_findings.json",
 		},
 		state.StateKeyDedupConfig: types.DedupConfig{

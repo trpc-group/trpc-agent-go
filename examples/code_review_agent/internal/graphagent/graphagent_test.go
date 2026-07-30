@@ -364,3 +364,82 @@ func TestE2E_MultipleDiffFixtures(t *testing.T) {
 		})
 	}
 }
+
+// TestE2E_RuleOnlyMode runs the full pipeline in rule_only mode — LLM is skipped
+// entirely, only RuleEngine + tools produce findings.
+func TestE2E_RuleOnlyMode(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping e2e test in short mode")
+	}
+
+	tmpDir := t.TempDir()
+	outputDir := filepath.Join(tmpDir, "output")
+
+	diffPath := resolveFixture(t, "testdata/diffs/02-sql-injection.diff")
+	diffData, err := os.ReadFile(diffPath)
+	if err != nil {
+		t.Fatalf("cannot read diff fixture: %v", err)
+	}
+
+	skillDir := resolveFixture(t, "skills/code-review")
+	rules, err := ruleengine.LoadRules(skillDir, "rules/*.md")
+	if err != nil || len(rules) == 0 {
+		t.Fatalf("rules not available: %v", err)
+	}
+
+	sg, _ := Build()
+	compiled, _ := sg.Compile()
+
+	initialState := graph.State{
+		state.StateKeyInputDiffFile: diffPath,
+		state.StateKeyInputDiffText: string(diffData),
+		state.StateKeyOutputDir:     outputDir,
+		state.StateKeyTaskID:        "e2e-rule-only",
+		state.StateKeyExecutorConfig: types.ExecutorConfig{
+			Type: "local", Commands: []types.SandboxCommand{},
+		},
+		state.StateKeyLLMConfig: types.LLMConfig{
+			RuleOnly: true,
+		},
+		state.StateKeyDedupConfig: types.DedupConfig{ConfidenceThreshold: 0.6},
+		state.StateKeySkillRules:  rules,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	executor, _ := graph.NewExecutor(compiled)
+	eventChan, err := executor.Execute(ctx, initialState, &agent.Invocation{
+		InvocationID: "e2e-rule-only",
+	})
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+	if eventChan == nil {
+		t.Fatal("eventChan is nil")
+	}
+
+	finalState := initialState
+	for evt := range eventChan {
+		if evt != nil && evt.Response != nil && evt.Response.Done &&
+			evt.Response.Object == graph.ObjectTypeGraphExecution {
+			if evt.StateDelta != nil {
+				finalState = decodeStateDelta(evt.StateDelta, finalState)
+			}
+		}
+	}
+
+	// Must still produce reports (from rule engine findings only)
+	jsonPath, _ := finalState[state.StateKeyJSONReportPath].(string)
+	mdPath, _ := finalState[state.StateKeyMDReportPath].(string)
+	if jsonPath == "" || mdPath == "" {
+		t.Errorf("reports not generated in rule_only mode: json=%q md=%q", jsonPath, mdPath)
+	}
+
+	// LLM findings must be empty (LLM was skipped)
+	checkStateOptional(t, finalState, state.StateKeyLLMFindings, "llm_findings")
+	// Rule engine should still produce findings
+	checkStateOptional(t, finalState, state.StateKeyRuleFindings, "rule_findings")
+	// Final findings must exist (from rule engine + tools)
+	checkStateExists(t, finalState, state.StateKeyFindings, "findings")
+}

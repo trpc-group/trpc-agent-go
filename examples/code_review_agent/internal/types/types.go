@@ -137,6 +137,7 @@ type LLMConfig struct {
 	MaxTokens        int     `json:"max_tokens"`         // maximum tokens in the response
 	SystemPrompt     string  `json:"system_prompt"`      // system-level instruction prompt
 	MockMode         bool    `json:"mock_mode"`          // if true, use mock findings instead of real LLM
+	RuleOnly         bool    `json:"rule_only"`          // if true, skip LLM entirely (deterministic rules only)
 	MockFindingsPath string  `json:"mock_findings_path"` // testdata/mock_llm_findings.json
 }
 

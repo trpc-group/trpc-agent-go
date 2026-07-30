@@ -137,12 +137,14 @@ func Load(path string) (*Config, error) {
 
 // Validate checks configuration sanity. Returns error for hard failures
 // (fail-fast principle), does not silently fall back to defaults.
+// Validate checks configuration sanity. Returns error for hard failures
+// (fail-fast principle), does not silently fall back to defaults.
 func (c *Config) Validate() error {
 	if c.Mode == "" {
-		return fmt.Errorf("mode is required (live or dry_run)")
+		return fmt.Errorf("mode is required (live, dry_run, or rule_only)")
 	}
-	if c.Mode != "live" && c.Mode != "dry_run" {
-		return fmt.Errorf("mode must be 'live' or 'dry_run', got %q", c.Mode)
+	if c.Mode != "live" && c.Mode != "dry_run" && c.Mode != "rule_only" {
+		return fmt.Errorf("mode must be 'live', 'dry_run', or 'rule_only', got %q", c.Mode)
 	}
 	if c.Input.Type == "" {
 		return fmt.Errorf("input.type is required (diff_file, diff_text, or repo_path)")
