@@ -25,11 +25,15 @@ import (
 )
 
 type skillLoadTestRepository struct {
-	skills map[string]*skill.Skill
-	err    error
+	skills    map[string]*skill.Skill
+	summaries []skill.Summary
+	err       error
 }
 
 func (r *skillLoadTestRepository) Summaries() []skill.Summary {
+	if r.summaries != nil {
+		return append([]skill.Summary(nil), r.summaries...)
+	}
 	var out []skill.Summary
 	for _, resolved := range r.skills {
 		out = append(out, resolved.Summary)
@@ -174,6 +178,135 @@ func TestPrepareSkillLoadsRejectsConflictingDocSelection(t *testing.T) {
 	require.Empty(t, inv.Session.SnapshotState())
 }
 
+func TestPrepareSkillLoadsRejectsInvalidRequests(t *testing.T) {
+	reviewSkill := &skill.Skill{
+		Summary: skill.Summary{Name: "review"},
+		Docs: []skill.Doc{{
+			Path: "guide.md",
+		}},
+	}
+	repo := &skillLoadTestRepository{
+		skills: map[string]*skill.Skill{"review": reviewSkill},
+	}
+	nilSkillRepo := &skillLoadTestRepository{
+		skills:    map[string]*skill.Skill{"review": nil},
+		summaries: []skill.Summary{{Name: "review"}},
+	}
+	tests := []struct {
+		name    string
+		repo    *skillLoadTestRepository
+		session *session.Session
+		loads   []skill.LoadRequest
+		options []Option
+		wantErr error
+	}{
+		{
+			name:    "missing session",
+			repo:    repo,
+			loads:   []skill.LoadRequest{{Name: "review"}},
+			wantErr: skill.ErrInvalidLoadRequest,
+		},
+		{
+			name:    "exceeds maximum",
+			repo:    repo,
+			session: &session.Session{},
+			loads: []skill.LoadRequest{
+				{Name: "review"},
+				{Name: "other"},
+			},
+			options: []Option{WithMaxLoadedSkills(1)},
+			wantErr: skill.ErrInvalidLoadRequest,
+		},
+		{
+			name:    "duplicate skill",
+			repo:    repo,
+			session: &session.Session{},
+			loads: []skill.LoadRequest{
+				{Name: "review"},
+				{Name: " review "},
+			},
+			wantErr: skill.ErrInvalidLoadRequest,
+		},
+		{
+			name:    "empty skill name",
+			repo:    repo,
+			session: &session.Session{},
+			loads:   []skill.LoadRequest{{Name: " "}},
+			wantErr: skill.ErrInvalidLoadRequest,
+		},
+		{
+			name:    "nil resolved skill",
+			repo:    nilSkillRepo,
+			session: &session.Session{},
+			loads:   []skill.LoadRequest{{Name: "review"}},
+			wantErr: skill.ErrSkillUnavailable,
+		},
+		{
+			name:    "empty document",
+			repo:    repo,
+			session: &session.Session{},
+			loads: []skill.LoadRequest{{
+				Name: "review",
+				Docs: []string{" "},
+			}},
+			wantErr: skill.ErrInvalidLoadRequest,
+		},
+		{
+			name:    "skill file document",
+			repo:    repo,
+			session: &session.Session{},
+			loads: []skill.LoadRequest{{
+				Name: "review",
+				Docs: []string{skill.SkillFile},
+			}},
+			wantErr: skill.ErrInvalidLoadRequest,
+		},
+		{
+			name:    "duplicate document",
+			repo:    repo,
+			session: &session.Session{},
+			loads: []skill.LoadRequest{{
+				Name: "review",
+				Docs: []string{"guide.md", " guide.md "},
+			}},
+			wantErr: skill.ErrInvalidLoadRequest,
+		},
+		{
+			name:    "unavailable document",
+			repo:    repo,
+			session: &session.Session{},
+			loads: []skill.LoadRequest{{
+				Name: "review",
+				Docs: []string{"missing.md"},
+			}},
+			wantErr: skill.ErrSkillUnavailable,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			options := []Option{WithSkills(tt.repo)}
+			options = append(options, tt.options...)
+			agt := New("tester", options...)
+			original := append([]skill.LoadRequest(nil), tt.loads...)
+			inv := agent.NewInvocation(
+				agent.WithInvocationSession(tt.session),
+				agent.WithInvocationRunOptions(agent.RunOptions{
+					SkillLoads: tt.loads,
+				}),
+			)
+			agt.setupInvocation(inv)
+
+			err := agt.prepareSkillLoads(context.Background(), inv)
+			require.ErrorIs(t, err, tt.wantErr)
+			require.Equal(t, original, inv.RunOptions.SkillLoads)
+			if inv.Session != nil {
+				require.Empty(t, inv.Session.SnapshotState())
+			}
+		})
+	}
+}
+
 func TestDeclaredSkillLoadIncludesAllDocs(t *testing.T) {
 	repo := &skillLoadTestRepository{skills: map[string]*skill.Skill{
 		"review": {
@@ -221,10 +354,16 @@ func TestDeclaredSkillLoadPreservesExistingDocs(t *testing.T) {
 		"review": {
 			Summary: skill.Summary{Name: "review"},
 			Body:    "Review body",
-			Docs: []skill.Doc{{
-				Path:    "old.md",
-				Content: "Old doc body",
-			}},
+			Docs: []skill.Doc{
+				{
+					Path:    "old.md",
+					Content: "Old doc body",
+				},
+				{
+					Path:    "other.md",
+					Content: "Other doc body",
+				},
+			},
 		},
 	}}
 	modelStub := &captureModel{}
@@ -252,11 +391,9 @@ func TestDeclaredSkillLoadPreservesExistingDocs(t *testing.T) {
 	}
 
 	require.NotNil(t, modelStub.got)
-	require.Contains(
-		t,
-		skillLoadTestSystemContent(modelStub.got),
-		"Old doc body",
-	)
+	system := skillLoadTestSystemContent(modelStub.got)
+	require.Contains(t, system, "Old doc body")
+	require.NotContains(t, system, "Other doc body")
 	docs, ok := inv.Session.GetState(skill.DocsKey("tester", "review"))
 	require.True(t, ok)
 	require.JSONEq(t, `["old.md"]`, string(docs))
