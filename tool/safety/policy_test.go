@@ -11,6 +11,7 @@ package safety_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -203,7 +204,7 @@ func TestScenario_ShellWrapperBypass(t *testing.T) {
 	assert.Equal(t, safety.DecisionDeny, report.Decision)
 }
 
-// 8. Pipe with leak → deny
+// 8. Pipe with leak → deny (must be caught by path or network checker)
 func TestScenario_PipeDataLeak(t *testing.T) {
 	s := newTestScanner(t)
 	report := s.ScanCtx(context.Background(), &safety.ScanRequest{
@@ -211,6 +212,10 @@ func TestScenario_PipeDataLeak(t *testing.T) {
 		Backend: "workspaceexec",
 	})
 	assert.Equal(t, safety.DecisionDeny, report.Decision)
+	// Either PATH_ (sensitive file) or NET_ (non-whitelisted domain) must fire.
+	assert.True(t,
+		strings.Contains(report.RuleID, "PATH_") || strings.Contains(report.RuleID, "NET_") || strings.Contains(report.RuleID, "CMD_"),
+		"expected PATH_, NET_, or CMD_ rule, got %s", report.RuleID)
 }
 
 // 9. Dependency install → ask

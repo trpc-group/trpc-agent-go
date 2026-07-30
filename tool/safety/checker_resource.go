@@ -116,8 +116,21 @@ func (c *resourceChecker) checkSleep(text string) *CheckResult {
 
 func (c *resourceChecker) checkHeavyOutput(text string) *CheckResult {
 	textLower := strings.ToLower(text)
+	tokens := strings.Fields(textLower)
 	for cmd := range heavyOutputCmds {
-		if strings.Contains(textLower, cmd) {
+		// Match the first token (the executable name) against heavy-output
+		// commands or match multi-word commands as a whole.
+		if len(tokens) > 0 && tokens[0] == cmd {
+			return &CheckResult{
+				Decision:       DecisionAsk,
+				RiskLevel:      RiskMedium,
+				RuleID:         "RESOURCE_OUTPUT_LIMIT",
+				Evidence:       cmd,
+				Recommendation: fmt.Sprintf("Command '%s' may produce unbounded output. Pipe through 'head' or set an explicit output limit.", cmd),
+			}
+		}
+		// Match multi-word heavy commands (e.g. "cat /dev/urandom").
+		if strings.Contains(cmd, " ") && strings.Contains(textLower, cmd) {
 			return &CheckResult{
 				Decision:       DecisionAsk,
 				RiskLevel:      RiskMedium,

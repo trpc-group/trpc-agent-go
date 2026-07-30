@@ -59,12 +59,7 @@ func maskSecret(s string) string {
 	if len(s) <= 8 {
 		return s[:min(len(s), 3)] + "***"
 	}
-	keep := len(s) / 3
-	if keep < 3 {
-		keep = 3
-	}
-	if keep > 10 {
-		keep = 10
-	}
+	// Keep a small fixed prefix/suffix to aid debugging without exposing the secret.
+	const keep = 4
 	return s[:keep] + "***" + s[len(s)-keep:]
 }
