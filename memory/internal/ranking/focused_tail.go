@@ -9,6 +9,7 @@
 package ranking
 
 import (
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -83,11 +84,27 @@ func backfillFocusedTail(
 	}
 
 	results := append([]*memory.Entry(nil), base[:limit]...)
+	selectedCopy := *selected
+	selectedCopy.Score = focusedTailScore(results)
 	if len(results) < maxResults {
-		return append(results, selected)
+		return append(results, &selectedCopy)
 	}
-	results[len(results)-1] = selected
+	results[len(results)-1] = &selectedCopy
 	return results
+}
+
+func focusedTailScore(results []*memory.Entry) float64 {
+	minScore := math.Inf(1)
+	for _, entry := range results {
+		if entry == nil || math.IsNaN(entry.Score) {
+			continue
+		}
+		minScore = min(minScore, entry.Score)
+	}
+	if math.IsInf(minScore, 1) {
+		return 0
+	}
+	return math.Nextafter(minScore, math.Inf(-1))
 }
 
 func rankFocusedTail(

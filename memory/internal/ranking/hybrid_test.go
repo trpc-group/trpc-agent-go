@@ -48,6 +48,12 @@ func TestMergeHybridBackfillsFocusedEventTail(t *testing.T) {
 			},
 		}
 	}
+	tailAnswer := entry(
+		"tail-answer",
+		"Watched the College Football National Championship.",
+		memory.KindEpisode,
+		&eventTime,
+	)
 	results := MergeHybrid(
 		"What is the order of the sports events I watched in January?",
 		[]*memory.Entry{
@@ -60,12 +66,7 @@ func TestMergeHybridBackfillsFocusedEventTail(t *testing.T) {
 				memory.KindFact,
 				&eventTime,
 			),
-			entry(
-				"tail-answer",
-				"Watched the College Football National Championship.",
-				memory.KindEpisode,
-				&eventTime,
-			),
+			tailAnswer,
 		},
 		nil,
 		0,
@@ -78,6 +79,9 @@ func TestMergeHybridBackfillsFocusedEventTail(t *testing.T) {
 		results[1].ID,
 		results[2].ID,
 	})
+	assert.Less(t, results[2].Score, results[1].Score)
+	assert.NotSame(t, tailAnswer, results[2])
+	assert.Zero(t, tailAnswer.Score)
 }
 
 func TestMergeHybridDoesNotBackfillAssistantResultQuery(t *testing.T) {
