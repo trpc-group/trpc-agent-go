@@ -30,7 +30,8 @@ func HybridCandidateLimit(query string, limit int) int {
 	queryTerms := focusedQueryTerms(query)
 	if limit <= 0 || asksForAssistantResult(query) ||
 		len(queryTerms) < minimumFocusedPassageMatches ||
-		!focusedQueryHasCalendarReference(queryTerms) {
+		(!focusedQueryHasCalendarReference(queryTerms) &&
+			!focusedQueryHasTemporalSequence(queryTerms)) {
 		return limit
 	}
 	maxInt := int(^uint(0) >> 1)
@@ -118,6 +119,11 @@ func rankFocusedTail(
 	if len(queryTerms) < minimumFocusedPassageMatches {
 		return nil
 	}
+	hasCalendarReference := focusedQueryHasCalendarReference(queryTerms)
+	hasTemporalSequence := focusedQueryHasTemporalSequence(queryTerms)
+	if !hasCalendarReference && !hasTemporalSequence {
+		return nil
+	}
 
 	ranked := make([]focusedTailResult, 0, len(candidates))
 	for _, entry := range candidates {
@@ -129,17 +135,20 @@ func rankFocusedTail(
 			queryTerms, entry.Memory.Memory,
 		)
 		eventMatches := focusedEventTimeMatchTerms(queryTerms, entry)
-		if len(eventMatches) == 0 {
-			continue
-		}
-		distinctContentMatches := 0
-		for term := range contentMatches {
-			if _, temporal := eventMatches[term]; !temporal {
-				distinctContentMatches++
+		distinctContentMatches := focusedTailContentMatches(
+			contentMatches, eventMatches,
+		)
+		switch {
+		case hasCalendarReference:
+			if len(eventMatches) == 0 || distinctContentMatches == 0 {
+				continue
 			}
-		}
-		if distinctContentMatches == 0 {
-			continue
+		case hasTemporalSequence:
+			if entry.Memory.Kind != memory.KindEpisode ||
+				entry.Memory.EventTime == nil ||
+				distinctContentMatches < minimumFocusedPassageMatches {
+				continue
+			}
 		}
 		ranked = append(ranked, focusedTailResult{
 			entry:           entry,
@@ -220,6 +229,36 @@ var focusedCalendarTerms = map[string]struct{}{
 	"sunday": {}, "sun": {},
 }
 
+var focusedTailIgnoredContentTerms = map[string]struct{}{
+	"day": {}, "week": {}, "month": {}, "year": {},
+	"hour": {}, "minute": {}, "second": {},
+	"ago": {}, "recent": {}, "recently": {},
+	"order": {}, "earliest": {}, "latest": {},
+	"first": {}, "last": {}, "chronological": {}, "sequence": {},
+}
+
+var focusedTemporalSequenceTerms = map[string]struct{}{
+	"order": {}, "earliest": {}, "latest": {},
+	"first": {}, "last": {},
+}
+
+func focusedTailContentMatches(
+	contentMatches map[string]struct{},
+	eventMatches map[string]struct{},
+) int {
+	matched := 0
+	for term := range contentMatches {
+		if _, temporal := eventMatches[term]; temporal {
+			continue
+		}
+		if _, ignored := focusedTailIgnoredContentTerms[term]; ignored {
+			continue
+		}
+		matched++
+	}
+	return matched
+}
+
 func focusedQueryHasCalendarReference(queryTerms map[string]struct{}) bool {
 	for term := range queryTerms {
 		if _, ok := focusedCalendarTerms[term]; ok {
@@ -238,6 +277,22 @@ func focusedQueryHasCalendarReference(queryTerms map[string]struct{}) bool {
 		}
 	}
 	return false
+}
+
+func focusedQueryHasTemporalSequence(queryTerms map[string]struct{}) bool {
+	if _, ok := queryTerms["chronological"]; ok {
+		return true
+	}
+	if _, ok := queryTerms["sequence"]; ok {
+		return true
+	}
+	matched := 0
+	for term := range focusedTemporalSequenceTerms {
+		if _, ok := queryTerms[term]; ok {
+			matched++
+		}
+	}
+	return matched >= 2
 }
 
 func hybridResultHead(
