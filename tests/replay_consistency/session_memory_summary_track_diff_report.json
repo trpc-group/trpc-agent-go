@@ -1,0 +1,45 @@
+{
+  "generated_at": "2026-01-01T00:00:00Z",
+  "cases": [
+    "single_turn_text",
+    "multi_turn_sequence",
+    "tool_call_roundtrip",
+    "state_update_cycle",
+    "memory_write_read",
+    "summary_generation_update",
+    "summary_truncation_replay",
+    "track_event_timeline",
+    "interleaved_concurrency",
+    "failure_retry_dedup"
+  ],
+  "diffs": [
+    {
+      "case_name": "summary_generation_update",
+      "backend": "sqlite",
+      "path": "summaries[0].filter_key",
+      "baseline": "",
+      "actual": "branch-a",
+      "allowed_diff": false,
+      "explanation": "summary filter key changed",
+      "session_id": "session-a",
+      "summary_id": "summary-a",
+      "summary_key": "branch-a"
+    },
+    {
+      "case_name": "track_event_timeline",
+      "backend": "redis",
+      "path": "tracks[0].payload",
+      "baseline": "{\"duration_ms\":12,\"status\":\"ok\"}",
+      "actual": "{\"duration_ms\":13,\"status\":\"ok\"}",
+      "allowed_diff": true,
+      "explanation": "duration fields may drift by backend timing resolution",
+      "track_name": "tool-exec"
+    }
+  ],
+  "summary": {
+    "cases_run": 10,
+    "backends_run": 2,
+    "diff_count": 2,
+    "allowed_diff_count": 1
+  }
+}

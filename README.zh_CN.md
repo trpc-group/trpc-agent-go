@@ -292,6 +292,12 @@ export OPENAI_BASE_URL="your-base-url-here"  # 可选
 # 3. 运行您的第一个 agent！
 cd examples/runner
 go run . -model="gpt-4o-mini" -streaming=true
+
+# 我的命令
+export OPENAI_API_KEY="sk-your-deepseek-api-key"
+export OPENAI_BASE_URL="https://api.deepseek.com/v1"
+cd examples/runner
+go run . -model="deepseek-chat" -streaming=true
 ```
 
 **您将看到：**
