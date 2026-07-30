@@ -1,0 +1,853 @@
+{
+  "generatedAt": "2026-07-30T14:27:56Z",
+  "durationMs": 957473,
+  "stageTiming": {
+    "engineMs": 957467,
+    "attributionMs": 5,
+    "gateMs": 0,
+    "reportMs": 0
+  },
+  "appName": "promptiter-nba-commentary-app",
+  "model": "deepseek-v4-flash",
+  "rounds": 4,
+  "roundRecords": [
+    {
+      "round": 1,
+      "trainScore": 0.28125,
+      "validationScore": 0.609375,
+      "accepted": true,
+      "reason": "candidate score gain satisfies acceptance policy",
+      "candidatePrompt": "你是一名资深体育评论员。请基于历史真实数据（球员姓名、比分、赛况等均为真实，不得编造）生成一篇中文战报。用纯文字（不使用任何Markdown语法如#、*、-、```、加粗、列表、水平线等）将内容划分为三个部分：战报、数据面板、战术分析。总字数严格控制在350至850字之间，不得少于350字，不得多于850字。确保所有事实准确，无数字错误。"
+    },
+    {
+      "round": 2,
+      "trainScore": 0.6015625,
+      "validationScore": 0.796875,
+      "accepted": true,
+      "reason": "candidate score gain satisfies acceptance policy",
+      "candidatePrompt": "你是一名资深体育评论员。根据提供的比赛数据撰写，不得使用数据之外的信息。开头需包含一个标题，标题中总结比赛结果和关键转折点，并使用连字符表示比分（例如“湖人102-98火箭”）。用纯文字（不使用任何Markdown语法如#、*、-、```、加粗、列表、水平线等）将内容划分为三个部分：战报、数据面板、战术分析。总字数严格控制在350至850字之间，不得少于350字，不得多于850字。确保所有事实（比分、球员姓名、赛况等）完全来自输入数据，无任何编造；所有数值准确，无数字错误。"
+    },
+    {
+      "round": 3,
+      "trainScore": 0.828125,
+      "validationScore": 0.75,
+      "accepted": false,
+      "reason": "candidate score gain does not satisfy acceptance policy",
+      "candidatePrompt": "你是一名资深体育评论员。根据提供的比赛数据撰写，不得使用数据之外的信息。开头需包含一个标题，标题中总结比赛结果和关键转折点，并使用连字符表示比分（例如“湖人102-98火箭”）。用纯文字（不使用任何Markdown语法如#、*、-、```、加粗、列表、水平线等）将内容划分为三个部分：战报、数据面板、战术分析。总字数严格控制在350至850字之间，不得少于350字，不得多于850字。确保所有事实（比分、球员姓名、赛况等）完全来自输入数据，无任何编造；所有数值准确，无数字错误。禁止添加任何未在数据中明确提及的细节（如战术意图、球员动机、未来赛事等），战术分析只能基于数据中记录的事件。"
+    },
+    {
+      "round": 4,
+      "trainScore": 0.7109375,
+      "validationScore": 0.8125,
+      "accepted": true,
+      "reason": "candidate score gain satisfies acceptance policy",
+      "candidatePrompt": "你是一名资深体育评论员。根据提供的比赛数据撰写，严格禁止使用任何数据之外的信息。开头需包含一个标题，标题中总结比赛结果和关键转折点，并使用连字符表示比分（例如\"湖人102-98火箭\"）。用纯文字（不使用任何Markdown语法）将内容划分为三个部分：战报、数据面板、战术分析。总字数严格控制在350至850字之间，不得少于350字，不得多于850字。如果超出850字，输出无效。确保所有事实（比分、球员姓名、赛况等）完全来自输入数据，无任何编造；所有数值准确，无数字错误。特别注意：禁止添加输入数据中未明确给出的信息（如球员位置、晋级状态、战术意图、心理描述等）。所有陈述必须与输入数据完全一致，不得反转或改变任何事实。"
+    }
+  ],
+  "baselineScore": 0.3984375,
+  "candidateScore": 0.8125,
+  "scoreDelta": 0.4140625,
+  "accepted": true,
+  "gateReason": "accepted: validation gain met, no regression or new hard fails",
+  "attribution": {
+    "totalCases": 8,
+    "failedCases": 8,
+    "failures": [
+      {
+        "evalSetId": "nba-commentary-validation",
+        "evalCaseId": "validation_01_nba_empty_48",
+        "metricName": "final_response_avg_score",
+        "score": 0,
+        "reason": "final response mismatch: text mismatch: length mismatch: actual length 1401 is greater than max 850, expected range [350, 850]",
+        "category": "response_mismatch"
+      },
+      {
+        "evalSetId": "nba-commentary-validation",
+        "evalCaseId": "validation_01_nba_empty_48",
+        "metricName": "llm_rubric_critic",
+        "score": 0.625,
+        "reason": "Actual output invents facts not supported by User JSON or Reference Answer: '百事中心' (User: Ball Arena), '杜兰特（本场未列出具体数据但据推测）' (no mention in sources), '尤班克斯+阿伦', '克雷格、奥科吉', '二次进攻得分领先太阳18分' (not in JSON or Reference). These constitute fabrication.\nActual opening paragraph sets context (date, venue, teams), states final score, and captures the main angle: despite Booker's 48 points, Nuggets won through rebounding (52-39) and low turnovers (8-16), with a decisive 14-4 run. Matches Reference's primary narrative.\nActual retains the decisive sequence: fourth quarter with 5:42 remaining, Nuggets 14-4 run, Suns 4 turnovers, Nuggets 5 offensive rebounds, and the explanation that missed shots/extra possessions decided the game. Order and key steps preserved.\nAll scores (118-111), margins, rebounds (52-39, 15-7), turnovers (8-16), assists (30-18), double-figure scorers (6-3), and player stats (Booker 48/5/6, Jokic 24/13/9, Murray 22/7, Gordon 18/9) match User JSON exactly. No numerical errors found.\nActual output lacks a standalone headline; it begins directly with a dateline. No title combining result with key angle (e.g., Reference's 'Nuggets 14-4 in fourth quarter seals win, Booker's 48 points not enough'). Fails to meet rubric's first-line title requirement.\nActual interprets player and team data to explain the outcome: highlights rebounding dominance, low turnovers, and how Jokic's all-around play and Murray/Gordon contributions overcame Booker's scoring. Goes beyond raw data, similar to Reference's analytical depth.\nActual has comparable content density, narrative flow (overview -\u003e decisive run -\u003e data -\u003e analysis), and professional Chinese sports style. While it includes some invented details, the core structure and depth align with Reference. Minor unsupported claims do not undermine overall similarity.\nActual output contains Markdown-style formatting ('**【战报】**', '**数据面板**', '**战术分析**') and bulleted lists, which are not allowed. Also includes meta-discourse ('根据推测', '若出场'). These require editing before publication.",
+        "category": "format_error"
+      },
+      {
+        "evalSetId": "nba-commentary-validation",
+        "evalCaseId": "validation_02_football_penalties",
+        "metricName": "final_response_avg_score",
+        "score": 0,
+        "reason": "final response mismatch: text mismatch: length mismatch: actual length 1124 is greater than max 850, expected range [350, 850]",
+        "category": "response_mismatch"
+      },
+      {
+        "evalSetId": "nba-commentary-validation",
+        "evalCaseId": "validation_02_football_penalties",
+        "metricName": "llm_rubric_critic",
+        "score": 0.25,
+        "reason": "编造了控球率、射门次数等数据面板及战术分析中的战术意图（如“放弃控球”），这些信息在用户JSON和参考战报中无依据。\n导语仅泛写结果，未突出参考战报首要强调的“两度追平”这一决定性角度。\n正确按顺序描述了点球大战各轮次，包括河城FC第3、第5轮罚失，与参考战报一致。\n总比分写为“6-5”，正确应为“5-6”，方向错误。\n标题未包含参考标题核心的“两度追平”和罚失轮次，角度不足。\n使用了编造的数据（控球率等），且未与胜负结果关联，不符合选择解读要求。\n叙事顺序和关键细节（两次追平、点球轮次）与参考战报接近，内容密度相当。\n包含Markdown标题和表格，不符合专业中文体育新闻文案格式。",
+        "category": "knowledge_gap"
+      },
+      {
+        "evalSetId": "nba-commentary-validation",
+        "evalCaseId": "validation_03_f1_rain_safety_car",
+        "metricName": "final_response_avg_score",
+        "score": 0,
+        "reason": "final response mismatch: text mismatch: length mismatch: actual length 2024 is greater than max 850, expected range [350, 850]",
+        "category": "response_mismatch"
+      },
+      {
+        "evalSetId": "nba-commentary-validation",
+        "evalCaseId": "validation_03_f1_rain_safety_car",
+        "metricName": "llm_rubric_critic",
+        "score": 0.75,
+        "reason": "Actual output includes unverified details such as 'Aurora Racing本赛季第二场胜利，港湾赛道首胜', '差距缩小至2秒内', and '维修区换胎仅用时2.4秒', which are not supported by the user JSON or reference answer. Golden: only reports given facts. Actual: adds fabricated specifics, violating the requirement to use only supported facts.\nThe opening paragraph correctly sets the context (rain race, 58 laps), states the final result (Silva wins, Brooks second, Ren third), and highlights the decisive angle (safety car and pit strategy), matching the reference answer's main narrative.\nThe actual output preserves the correct order of decisive events: safety car at lap 31, ending at lap 34, pit window laps 34-36, Silva and Brooks pitting on lap 35, Ren on lap 36, and Brooks' fastest lap on 52. No key steps are omitted or rearranged.\nAll numbers (race distance 58 laps, gaps +4.812s and +9.337s, fastest lap 1:42.318, safety car laps 31-34, pit laps 35-36) match the user JSON exactly. No errors or semantic mismatches.\nThe headline 'F1雨战：港湾街道赛道上演策略博弈，席尔瓦惊险夺冠' combines the result (Silva wins) with a decisive angle (strategy battle, rain race), similar in effect to the reference headline, though focusing on different specifics.\nData (pit laps, fastest lap, gaps) is selected and interpreted to explain the result, e.g., the impact of Ren's delayed stop and Brooks' speed. This matches the information depth of the reference answer.\nThe actual output maintains a similar content density, narrative order, and professional Chinese sports news style as the reference, covering all key points without oversimplification.\nThe output contains Markdown styling (e.g., '#' heading and pipe tables), which violates the requirement to avoid Markdown formatting. It is not a clean, plain-text professional sports copy as demanded.",
+        "category": "format_error"
+      },
+      {
+        "evalSetId": "nba-commentary-validation",
+        "evalCaseId": "validation_04_badminton_match_point",
+        "metricName": "llm_rubric_critic",
+        "score": 0.75,
+        "reason": "Actual output uses only facts from JSON and reference: scores, net front data, turning points. No fabricated information detected. The 75-minute duration is not in JSON or reference, but it is a minor addition that does not contradict any given data; however, for source_grounding, it is not a material defect because it is a harmless extrapolation and does not invent key facts. Score 1.\nOpening paragraph sets context (international badminton invitational, women's singles semifinal), final result (2-1 win), and highlights reversal storyline from reference: '19-20落后时网前扑球挽救赛点' and '连得3分'. Matches reference's main angle. Score 1.\nThe decisive chain (19-20, net front save, 3 consecutive points, winning second set, then dominating third set) is preserved in correct order and with specific details. No omission or vague substitution. Score 1.\nAll numbers (scores 17-21,22-20,21-16; net front points 18-14; errors 6-11; advantage 4; fewer errors 5) match JSON and are used with correct sports semantics. No errors. Score 1.\nThe first line is '### 【战报】', which is a markdown section header, not a publishable sports headline combining result with key angle. No headline is present. Reference headline includes '林悦19-20救赛点连下三分，2比1逆转高桥美咲'. Actual lacks such a headline. Score 0.\nData is selected (net front scores and errors) and interpreted to explain the reversal: '林悦在网前区域不仅得分多出4分，还比对手少失误5次，净胜高达9分，成为逆转关键'. This mirrors reference's analysis. Not mere stacking. Score 1.\nContent density, narrative order (result → first set → second set turning point → third set → data analysis) and professional tone are similar to reference. Key details like the 19-20 net front save are included. No missing essential parts. Score 1.\nOutput uses markdown headers ('### 【战报】', '### 【数据面板】', '### 【战术分析】'), which violates '不得包含 Markdown 样式'. Also includes a note ('注：') which is not standard in professional copy. These require editing before publication. Score 0.",
+        "category": "format_error"
+      },
+      {
+        "evalSetId": "nba-commentary-validation",
+        "evalCaseId": "validation_05_ice_hockey_overtime",
+        "metricName": "final_response_avg_score",
+        "score": 0,
+        "reason": "final response mismatch: text mismatch: length mismatch: actual length 1038 is greater than max 850, expected range [350, 850]",
+        "category": "response_mismatch"
+      },
+      {
+        "evalSetId": "nba-commentary-validation",
+        "evalCaseId": "validation_05_ice_hockey_overtime",
+        "metricName": "llm_rubric_critic",
+        "score": 0.625,
+        "reason": "Actual output introduces unsupported facts: venue \"北港竞技场\" (golden uses \"North Harbor Arena\") and player \"隋远\" for a second-period goal (not in golden or JSON). Fabricated details violate source grounding requirement.\nOpening paragraph correctly sets context (venue, result), highlights the decisive angle of surviving penalty kill and scoring overtime goal, consistent with golden's main story.\nActual output preserves the correct sequence of key moments: tying goal (第三节17:42), penalty (68s), saves on Han Wei and Ye Ming, return from penalty, then assist and goal. No omissions or reordering.\nAll scores and times (period scores, game time, overtime minutes) match user JSON. Extra shot numbers do not conflict. No numerical errors.\nFirst line is \"**【战报】**\" which is not a publishable headline; no headline is provided. Golden answer's headline combines result, decisive angle, and key player/time.\nActual output includes a dedicated data panel and tactical analysis that interprets goalie saves, penalty kill success, and key plays, linking data to the outcome, similar to golden answer.\nActual output maintains high content density, uses specific names, times, and chronological order in the recap, and adds tactical depth. Style is professional Chinese sports news. No loss of essential details.\nActual output uses Markdown-style headers (\"**【...】**\") which violates the prohibition on Markdown styles. Also includes extra decorative elements. Not production-ready.",
+        "category": "format_error"
+      },
+      {
+        "evalSetId": "nba-commentary-validation",
+        "evalCaseId": "validation_06_tennis_tiebreak",
+        "metricName": "final_response_avg_score",
+        "score": 0,
+        "reason": "final response mismatch: text mismatch: length mismatch: actual length 1158 is greater than max 850, expected range [350, 850]",
+        "category": "response_mismatch"
+      },
+      {
+        "evalSetId": "nba-commentary-validation",
+        "evalCaseId": "validation_06_tennis_tiebreak",
+        "metricName": "llm_rubric_critic",
+        "score": 0.875,
+        "reason": "All facts (score, tiebreak, aces, first serve%, break points, set point saves) are from user JSON and reference answer. No fabricated details.\nLead paragraph covers result (7-6(10),6-3), tiebreak 12-10, three set points saved, and emphasizes the match was not easy, matching golden answer's main angle.\nCorrectly retains decisive chain: saved 2 set points at 5-6, then saved third at 8-9 in tiebreak; second set: two breaks for winner, one break back for loser. Order preserved.\nAll numbers match user JSON: sets, tiebreak 12-10, aces 9-4, first serve% 78%-66%, break points 3/7 and 2/6, second set break details correct.\nTitle '女单焦点战：林诗语鏖战过关，抢七救盘点力克赵清岚' combines result with tiebreak and set point saves, aligning with golden answer's angle.\nData panel and tactical analysis select and interpret aces, first serve%, break points to explain winner's advantage, matching reference depth. Includes key comparisons.\nSimilar content density and narrative order: lead, play-by-play, data, analysis. Contains named processes, time points, and score changes, not a thin summary.\nContains Markdown headings (###, ##) and table, violating '不得包含 Markdown 样式'. Golden answer has no markdown. This is a material defect.",
+        "category": "format_error"
+      },
+      {
+        "evalSetId": "nba-commentary-validation",
+        "evalCaseId": "validation_07_road_cycling_breakaway",
+        "metricName": "final_response_avg_score",
+        "score": 0,
+        "reason": "final response mismatch: text mismatch: length mismatch: actual length 1198 is greater than max 850, expected range [350, 850]",
+        "category": "response_mismatch"
+      },
+      {
+        "evalSetId": "nba-commentary-validation",
+        "evalCaseId": "validation_07_road_cycling_breakaway",
+        "metricName": "llm_rubric_critic",
+        "score": 0.75,
+        "reason": "Golden: all facts from JSON and reference. Actual: uses only provided data, no invented facts. Materially matches.\nGolden: opens with context, result, main angle (breakaway, leadout, half-bike win). Actual: first paragraph sets race context, winner, and key tactical elements. Materially matches.\nGolden: breakaway at 5km, gap changes (9s→6s→4s→7s), Zhao Yu leadout until 600m, sprint at 180m. Actual: same sequence in correct order. No omissions or misordering.\nGolden and JSON: distance 5km, gaps exactly as provided, sprint distance 180m, margin half-bike, result order. Actual: all numbers match. No errors.\nGolden: first line is a headline combining result and key angle. Actual: first line is meta-discourse ('好的，这是一篇为您定制的...'), not a publishable headline. Material defect.\nGolden: interprets Zhao Yu's leadout and sprint selection. Actual: includes tactical analysis section that explains the team tactic and sprint decision. Data is used to explain result. Materially matches.\nGolden: narrative flow with details. Actual: covers all key events in similar narrative order, with professional style. Additional sections do not detract. Materially matches.\nGolden: clean, fluent, no markdown or meta-discourse. Actual: includes markdown headers ('###') and meta-discourse opening line ('好的，这是一篇为您定制的...'), which violate production copy requirements. Material defect.",
+        "category": "format_error"
+      },
+      {
+        "evalSetId": "nba-commentary-validation",
+        "evalCaseId": "validation_08_cricket_t20_chase",
+        "metricName": "final_response_avg_score",
+        "score": 0,
+        "reason": "final response mismatch: text mismatch: length mismatch: actual length 1448 is greater than max 850, expected range [350, 850]",
+        "category": "response_mismatch"
+      },
+      {
+        "evalSetId": "nba-commentary-validation",
+        "evalCaseId": "validation_08_cricket_t20_chase",
+        "metricName": "llm_rubric_critic",
+        "score": 0.75,
+        "reason": "Actual includes unsupported tactical details (e.g., '连续三个短球被梅塔识破', '近身外场站位未能收缩保护边线') not present in JSON or reference. Fails source grounding.\nFirst paragraph sets context: teams, result, key player Mehta, final over chase. Matches main angle of reference.\nCritical sequence preserved: 109/7 needing 11 off 6, Mehta scores 12 in final over, target reached on 19.5. No omission or reordering.\nAll numbers (119/8, 121/7, 3 wickets, 47* off 39, 4-0-18-3, 19.5 overs) match JSON and retain proper cricket semantics.\nHeadline '猎鹰绝地反击，梅塔47*定乾坤' combines result with decisive player and angle, similar to reference's '梅塔47*撑到19.5 overs 都会猎鹰3 wickets险胜'.\nPlayer and team data (Mehta's 47*, Rao's 3 wickets) are interpreted and linked to outcome in tactical analysis, matching reference's explanatory depth.\nContent density and narrative order are comparable to reference; includes specific processes and time points, not a mere data summary.\nActual uses Markdown headings (###) and a table format, violating rubric's '不得包含 Markdown 样式' requirement. Not clean plain text.",
+        "category": "format_error"
+      }
+    ],
+    "byCategory": {
+      "format_error": 7,
+      "knowledge_gap": 1,
+      "response_mismatch": 7
+    },
+    "method": "rule",
+    "clusters": [
+      {
+        "category": "response_mismatch",
+        "count": 7,
+        "reason": "final response mismatch: text mismatch: length mismatch: actual length 1401 is greater than max 850, expected range [350, 850]",
+        "caseIds": [
+          "nba-commentary-validation/validation_01_nba_empty_48",
+          "nba-commentary-validation/validation_02_football_penalties",
+          "nba-commentary-validation/validation_03_f1_rain_safety_car",
+          "nba-commentary-validation/validation_05_ice_hockey_overtime",
+          "nba-commentary-validation/validation_06_tennis_tiebreak"
+        ]
+      },
+      {
+        "category": "format_error",
+        "count": 1,
+        "reason": "Actual output invents facts not supported by User JSON or Reference Answer: '百事中心' (User: Ball Arena), '杜兰特（本场未列出具体数据但据推测）' (no mention in sources), '尤班克斯+阿伦', '克雷格、奥科吉', '二次进攻得分领先太阳18分' (not in JSON or Reference). These constitute fabrication.。Actual opening paragraph sets context (date, venue, teams), states final score, and captures the main angle: despite Booker's 48 points, Nuggets won through rebounding (52-39) and low turnovers (8-16), with a decisive 14-4 run. Matches Reference's primary narrative.。Actual retains the decisive sequence: fourth quarter with 5:42 remaining, Nuggets 14-4 run, Suns 4 turnovers, Nuggets 5 offensive rebounds, and the explanation that missed shots/extra possessions decided the game. Order and key steps preserved.。All scores (118-111), margins, rebounds (52-39, 15-7), turnovers (8-16), assists (30-18), double-figure scorers (6-3), and player stats (Booker 48/5/6, Jokic 24/13/9, Murray 22/7, Gordon 18/9) match User JSON exactly. No numerical errors found.。Actual output lacks a standalone headline。it begins directly with a dateline. No title combining result with key angle (e.g., Reference's 'Nuggets 14-4 in fourth quarter seals win, Booker's 48 points not enough'). Fails to meet rubric's first-line title requirement.。Actual interprets player and team data to explain the outcome: highlights rebounding dominance, low turnovers, and how Jokic's all-around play and Murray/Gordon contributions overcame Booker's scoring. Goes beyond raw data, similar to Reference's analytical depth.。Actual has comparable content density, narrative flow (overview -\u003e decisive run -\u003e data -\u003e analysis), and professional Chinese sports style. While it includes some invented details, the core structure and depth align with Reference. Minor unsupported claims do not undermine overall similarity.。Actual output contains Markdown-style formatting ('**【战报】**', '**数据面板**', '**战术分析**') and bulleted lists, which are not allowed. Also includes meta-discourse ('根据推测', '若出场'). These require editing before publication.。",
+        "caseIds": [
+          "nba-commentary-validation/validation_01_nba_empty_48"
+        ]
+      },
+      {
+        "category": "format_error",
+        "count": 1,
+        "reason": "Actual output includes unverified details such as 'Aurora Racing本赛季第二场胜利，港湾赛道首胜', '差距缩小至2秒内', and '维修区换胎仅用时2.4秒', which are not supported by the user JSON or reference answer. Golden: only reports given facts. Actual: adds fabricated specifics, violating the requirement to use only supported facts.。The opening paragraph correctly sets the context (rain race, 58 laps), states the final result (Silva wins, Brooks second, Ren third), and highlights the decisive angle (safety car and pit strategy), matching the reference answer's main narrative.。The actual output preserves the correct order of decisive events: safety car at lap 31, ending at lap 34, pit window laps 34-36, Silva and Brooks pitting on lap 35, Ren on lap 36, and Brooks' fastest lap on 52. No key steps are omitted or rearranged.。All numbers (race distance 58 laps, gaps +4.812s and +9.337s, fastest lap 1:42.318, safety car laps 31-34, pit laps 35-36) match the user JSON exactly. No errors or semantic mismatches.。The headline 'F1雨战：港湾街道赛道上演策略博弈，席尔瓦惊险夺冠' combines the result (Silva wins) with a decisive angle (strategy battle, rain race), similar in effect to the reference headline, though focusing on different specifics.。Data (pit laps, fastest lap, gaps) is selected and interpreted to explain the result, e.g., the impact of Ren's delayed stop and Brooks' speed. This matches the information depth of the reference answer.。The actual output maintains a similar content density, narrative order, and professional Chinese sports news style as the reference, covering all key points without oversimplification.。The output contains Markdown styling (e.g., '#' heading and pipe tables), which violates the requirement to avoid Markdown formatting. It is not a clean, plain-text professional sports copy as demanded.。",
+        "caseIds": [
+          "nba-commentary-validation/validation_03_f1_rain_safety_car"
+        ]
+      },
+      {
+        "category": "format_error",
+        "count": 1,
+        "reason": "Actual output uses only facts from JSON and reference: scores, net front data, turning points. No fabricated information detected. The 75-minute duration is not in JSON or reference, but it is a minor addition that does not contradict any given data。however, for source_grounding, it is not a material defect because it is a harmless extrapolation and does not invent key facts. Score 1.。Opening paragraph sets context (international badminton invitational, women's singles semifinal), final result (2-1 win), and highlights reversal storyline from reference: '19-20落后时网前扑球挽救赛点' and '连得3分'. Matches reference's main angle. Score 1.。The decisive chain (19-20, net front save, 3 consecutive points, winning second set, then dominating third set) is preserved in correct order and with specific details. No omission or vague substitution. Score 1.。All numbers (scores 17-21,22-20,21-16。net front points 18-14。errors 6-11。advantage 4。fewer errors 5) match JSON and are used with correct sports semantics. No errors. Score 1.。The first line is '### 【战报】', which is a markdown section header, not a publishable sports headline combining result with key angle. No headline is present. Reference headline includes '林悦19-20救赛点连下三分，2比1逆转高桥美咲'. Actual lacks such a headline. Score 0.。Data is selected (net front scores and errors) and interpreted to explain the reversal: '林悦在网前区域不仅得分多出4分，还比对手少失误5次，净胜高达9分，成为逆转关键'. This mirrors reference's analysis. Not mere stacking. Score 1.。Content density, narrative order (result → first set → second set turning point → third set → data analysis) and professional tone are similar to reference. Key details like the 19-20 net front save are included. No missing essential parts. Score 1.。Output uses markdown headers ('### 【战报】', '### 【数据面板】', '### 【战术分析】'), which violates '不得包含 Markdown 样式'. Also includes a note ('注：') which is not standard in professional copy. These require editing before publication. Score 0.。",
+        "caseIds": [
+          "nba-commentary-validation/validation_04_badminton_match_point"
+        ]
+      },
+      {
+        "category": "format_error",
+        "count": 1,
+        "reason": "Actual output introduces unsupported facts: venue \"北港竞技场\" (golden uses \"North Harbor Arena\") and player \"隋远\" for a second-period goal (not in golden or JSON). Fabricated details violate source grounding requirement.。Opening paragraph correctly sets context (venue, result), highlights the decisive angle of surviving penalty kill and scoring overtime goal, consistent with golden's main story.。Actual output preserves the correct sequence of key moments: tying goal (第三节17:42), penalty (68s), saves on Han Wei and Ye Ming, return from penalty, then assist and goal. No omissions or reordering.。All scores and times (period scores, game time, overtime minutes) match user JSON. Extra shot numbers do not conflict. No numerical errors.。First line is \"**【战报】**\" which is not a publishable headline。no headline is provided. Golden answer's headline combines result, decisive angle, and key player/time.。Actual output includes a dedicated data panel and tactical analysis that interprets goalie saves, penalty kill success, and key plays, linking data to the outcome, similar to golden answer.。Actual output maintains high content density, uses specific names, times, and chronological order in the recap, and adds tactical depth. Style is professional Chinese sports news. No loss of essential details.。Actual output uses Markdown-style headers (\"**【...】**\") which violates the prohibition on Markdown styles. Also includes extra decorative elements. Not production-ready.。",
+        "caseIds": [
+          "nba-commentary-validation/validation_05_ice_hockey_overtime"
+        ]
+      },
+      {
+        "category": "format_error",
+        "count": 1,
+        "reason": "All facts (score, tiebreak, aces, first serve%, break points, set point saves) are from user JSON and reference answer. No fabricated details.。Lead paragraph covers result (7-6(10),6-3), tiebreak 12-10, three set points saved, and emphasizes the match was not easy, matching golden answer's main angle.。Correctly retains decisive chain: saved 2 set points at 5-6, then saved third at 8-9 in tiebreak。second set: two breaks for winner, one break back for loser. Order preserved.。All numbers match user JSON: sets, tiebreak 12-10, aces 9-4, first serve% 78%-66%, break points 3/7 and 2/6, second set break details correct.。Title '女单焦点战：林诗语鏖战过关，抢七救盘点力克赵清岚' combines result with tiebreak and set point saves, aligning with golden answer's angle.。Data panel and tactical analysis select and interpret aces, first serve%, break points to explain winner's advantage, matching reference depth. Includes key comparisons.。Similar content density and narrative order: lead, play-by-play, data, analysis. Contains named processes, time points, and score changes, not a thin summary.。Contains Markdown headings (###, ##) and table, violating '不得包含 Markdown 样式'. Golden answer has no markdown. This is a material defect.。",
+        "caseIds": [
+          "nba-commentary-validation/validation_06_tennis_tiebreak"
+        ]
+      },
+      {
+        "category": "format_error",
+        "count": 1,
+        "reason": "Golden: all facts from JSON and reference. Actual: uses only provided data, no invented facts. Materially matches.。Golden: opens with context, result, main angle (breakaway, leadout, half-bike win). Actual: first paragraph sets race context, winner, and key tactical elements. Materially matches.。Golden: breakaway at 5km, gap changes (9s→6s→4s→7s), Zhao Yu leadout until 600m, sprint at 180m. Actual: same sequence in correct order. No omissions or misordering.。Golden and JSON: distance 5km, gaps exactly as provided, sprint distance 180m, margin half-bike, result order. Actual: all numbers match. No errors.。Golden: first line is a headline combining result and key angle. Actual: first line is meta-discourse ('好的，这是一篇为您定制的...'), not a publishable headline. Material defect.。Golden: interprets Zhao Yu's leadout and sprint selection. Actual: includes tactical analysis section that explains the team tactic and sprint decision. Data is used to explain result. Materially matches.。Golden: narrative flow with details. Actual: covers all key events in similar narrative order, with professional style. Additional sections do not detract. Materially matches.。Golden: clean, fluent, no markdown or meta-discourse. Actual: includes markdown headers ('###') and meta-discourse opening line ('好的，这是一篇为您定制的...'), which violate production copy requirements. Material defect.。",
+        "caseIds": [
+          "nba-commentary-validation/validation_07_road_cycling_breakaway"
+        ]
+      },
+      {
+        "category": "format_error",
+        "count": 1,
+        "reason": "Actual includes unsupported tactical details (e.g., '连续三个短球被梅塔识破', '近身外场站位未能收缩保护边线') not present in JSON or reference. Fails source grounding.。First paragraph sets context: teams, result, key player Mehta, final over chase. Matches main angle of reference.。Critical sequence preserved: 109/7 needing 11 off 6, Mehta scores 12 in final over, target reached on 19.5. No omission or reordering.。All numbers (119/8, 121/7, 3 wickets, 47* off 39, 4-0-18-3, 19.5 overs) match JSON and retain proper cricket semantics.。Headline '猎鹰绝地反击，梅塔47*定乾坤' combines result with decisive player and angle, similar to reference's '梅塔47*撑到19.5 overs 都会猎鹰3 wickets险胜'.。Player and team data (Mehta's 47*, Rao's 3 wickets) are interpreted and linked to outcome in tactical analysis, matching reference's explanatory depth.。Content density and narrative order are comparable to reference。includes specific processes and time points, not a mere data summary.。Actual uses Markdown headings (###) and a table format, violating rubric's '不得包含 Markdown 样式' requirement. Not clean plain text.。",
+        "caseIds": [
+          "nba-commentary-validation/validation_08_cricket_t20_chase"
+        ]
+      },
+      {
+        "category": "knowledge_gap",
+        "count": 1,
+        "reason": "编造了控球率、射门次数等数据面板及战术分析中的战术意图（如“放弃控球”），这些信息在用户JSON和参考战报中无依据。导语仅泛写结果，未突出参考战报首要强调的“两度追平”这一决定性角度。正确按顺序描述了点球大战各轮次，包括河城FC第3、第5轮罚失，与参考战报一致。总比分写为“6-5”，正确应为“5-6”，方向错误。标题未包含参考标题核心的“两度追平”和罚失轮次，角度不足。使用了编造的数据（控球率等），且未与胜负结果关联，不符合选择解读要求。叙事顺序和关键细节（两次追平、点球轮次）与参考战报接近，内容密度相当。包含Markdown标题和表格，不符合专业中文体育新闻文案格式。",
+        "caseIds": [
+          "nba-commentary-validation/validation_02_football_penalties"
+        ]
+      }
+    ],
+    "insights": {
+      "method": "rule",
+      "summary": "共 15 个失败，主要分布在 format_error（7 个，占比 47%）。",
+      "patterns": [
+        {
+          "category": "format_error",
+          "count": 7,
+          "ratio": 0.4666666666666667,
+          "example": "Actual output invents facts not supported by User JSON or Reference Answer: '百事中心' (User: Ball Arena), '杜兰特（本场未列出具体数据但据推测）' (no mention in sources), '尤班克斯+阿伦', '克雷格、奥科吉', '二次进攻得分领先太阳18分' (not in JSON or Reference). These constitute fabrication.\nActual opening paragraph sets context (date, venue, teams), states final score, and captures the main angle: despite Booker's 48 points, Nuggets won through rebounding (52-39) and low turnovers (8-16), with a decisive 14-4 run. Matches Reference's primary narrative.\nActual retains the decisive sequence: fourth quarter with 5:42 remaining, Nuggets 14-4 run, Suns 4 turnovers, Nuggets 5 offensive rebounds, and the explanation that missed shots/extra possessions decided the game. Order and key steps preserved.\nAll scores (118-111), margins, rebounds (52-39, 15-7), turnovers (8-16), assists (30-18), double-figure scorers (6-3), and player stats (Booker 48/5/6, Jokic 24/13/9, Murray 22/7, Gordon 18/9) match User JSON exactly. No numerical errors found.\nActual output lacks a standalone headline; it begins directly with a dateline. No title combining result with key angle (e.g., Reference's 'Nuggets 14-4 in fourth quarter seals win, Booker's 48 points not enough'). Fails to meet rubric's first-line title requirement.\nActual interprets player and team data to explain the outcome: highlights rebounding dominance, low turnovers, and how Jokic's all-around play and Murray/Gordon contributions overcame Booker's scoring. Goes beyond raw data, similar to Reference's analytical depth.\nActual has comparable content density, narrative flow (overview -\u003e decisive run -\u003e data -\u003e analysis), and professional Chinese sports style. While it includes some invented details, the core structure and depth align with Reference. Minor unsupported claims do not undermine overall similarity.\nActual output contains Markdown-style formatting ('**【战报】**', '**数据面板**', '**战术分析**') and bulleted lists, which are not allowed. Also includes meta-discourse ('根据推测', '若出场'). These require editing before publication."
+        },
+        {
+          "category": "response_mismatch",
+          "count": 7,
+          "ratio": 0.4666666666666667,
+          "example": "final response mismatch: text mismatch: length mismatch: actual length 1401 is greater than max 850, expected range [350, 850]"
+        },
+        {
+          "category": "knowledge_gap",
+          "count": 1,
+          "ratio": 0.06666666666666667,
+          "example": "编造了控球率、射门次数等数据面板及战术分析中的战术意图（如“放弃控球”），这些信息在用户JSON和参考战报中无依据。\n导语仅泛写结果，未突出参考战报首要强调的“两度追平”这一决定性角度。\n正确按顺序描述了点球大战各轮次，包括河城FC第3、第5轮罚失，与参考战报一致。\n总比分写为“6-5”，正确应为“5-6”，方向错误。\n标题未包含参考标题核心的“两度追平”和罚失轮次，角度不足。\n使用了编造的数据（控球率等），且未与胜负结果关联，不符合选择解读要求。\n叙事顺序和关键细节（两次追平、点球轮次）与参考战报接近，内容密度相当。\n包含Markdown标题和表格，不符合专业中文体育新闻文案格式。"
+        }
+      ]
+    }
+  },
+  "narrative": "本次优化候选在验证集上得分为 0.8125（基线 0.3984，变化 +0.4141），gate 决策为已接受。候选满足接受条件。 共 15 个失败，主要分布在 format_error（7 个，占比 47%）。",
+  "llmCalls": 0,
+  "llmErrors": 0,
+  "perCaseDelta": [
+    {
+      "evalSetId": "nba-commentary-validation",
+      "evalCaseId": "validation_01_nba_empty_48",
+      "baselineScore": 0.3125,
+      "candidateScore": 1,
+      "delta": 0.6875,
+      "trend": "up",
+      "baselinePassed": false,
+      "candidatePassed": true,
+      "transition": "new_pass"
+    },
+    {
+      "evalSetId": "nba-commentary-validation",
+      "evalCaseId": "validation_02_football_penalties",
+      "baselineScore": 0.125,
+      "candidateScore": 0.9375,
+      "delta": 0.8125,
+      "trend": "up",
+      "baselinePassed": false,
+      "candidatePassed": false,
+      "transition": "score_up"
+    },
+    {
+      "evalSetId": "nba-commentary-validation",
+      "evalCaseId": "validation_03_f1_rain_safety_car",
+      "baselineScore": 0.375,
+      "candidateScore": 0.4375,
+      "delta": 0.0625,
+      "trend": "up",
+      "baselinePassed": false,
+      "candidatePassed": false,
+      "transition": "score_up"
+    },
+    {
+      "evalSetId": "nba-commentary-validation",
+      "evalCaseId": "validation_04_badminton_match_point",
+      "baselineScore": 0.875,
+      "candidateScore": 1,
+      "delta": 0.125,
+      "trend": "up",
+      "baselinePassed": false,
+      "candidatePassed": true,
+      "transition": "new_pass"
+    },
+    {
+      "evalSetId": "nba-commentary-validation",
+      "evalCaseId": "validation_05_ice_hockey_overtime",
+      "baselineScore": 0.3125,
+      "candidateScore": 0.3125,
+      "delta": 0,
+      "trend": "flat",
+      "baselinePassed": false,
+      "candidatePassed": false,
+      "transition": "flat"
+    },
+    {
+      "evalSetId": "nba-commentary-validation",
+      "evalCaseId": "validation_06_tennis_tiebreak",
+      "baselineScore": 0.4375,
+      "candidateScore": 0.9375,
+      "delta": 0.5,
+      "trend": "up",
+      "baselinePassed": false,
+      "candidatePassed": false,
+      "transition": "score_up"
+    },
+    {
+      "evalSetId": "nba-commentary-validation",
+      "evalCaseId": "validation_07_road_cycling_breakaway",
+      "baselineScore": 0.375,
+      "candidateScore": 0.875,
+      "delta": 0.5,
+      "trend": "up",
+      "baselinePassed": false,
+      "candidatePassed": false,
+      "transition": "score_up"
+    },
+    {
+      "evalSetId": "nba-commentary-validation",
+      "evalCaseId": "validation_08_cricket_t20_chase",
+      "baselineScore": 0.375,
+      "candidateScore": 1,
+      "delta": 0.625,
+      "trend": "up",
+      "baselinePassed": false,
+      "candidatePassed": true,
+      "transition": "new_pass"
+    }
+  ],
+  "baselineEvaluation": {
+    "evalSets": [
+      {
+        "role": "validation",
+        "evalSetId": "nba-commentary-validation",
+        "caseCount": 8,
+        "passed": 0,
+        "failed": 8,
+        "cases": [
+          {
+            "evalSetId": "nba-commentary-validation",
+            "evalCaseId": "validation_01_nba_empty_48",
+            "sessionId": "10ecf2cb-6b1e-479a-b2e0-3437e5a3a882",
+            "passed": false,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 0,
+                "status": "fail",
+                "reason": "final response mismatch: text mismatch: length mismatch: actual length 1401 is greater than max 850, expected range [350, 850]"
+              },
+              {
+                "name": "llm_rubric_critic",
+                "score": 0.625,
+                "status": "fail",
+                "reason": "Actual output invents facts not supported by User JSON or Reference Answer: '百事中心' (User: Ball Arena), '杜兰特（本场未列出具体数据但据推测）' (no mention in sources), '尤班克斯+阿伦', '克雷格、奥科吉', '二次进攻得分领先太阳18分' (not in JSON or Reference). These constitute fabrication.\nActual opening paragraph sets context (date, venue, teams), states final score, and captures the main angle: despite Booker's 48 points, Nuggets won through rebounding (52-39) and low turnovers (8-16), with a decisive 14-4 run. Matches Reference's primary narrative.\nActual retains the decisive sequence: fourth quarter with 5:42 remaining, Nuggets 14-4 run, Suns 4 turnovers, Nuggets 5 offensive rebounds, and the explanation that missed shots/extra possessions decided the game. Order and key steps preserved.\nAll scores (118-111), margins, rebounds (52-39, 15-7), turnovers (8-16), assists (30-18), double-figure scorers (6-3), and player stats (Booker 48/5/6, Jokic 24/13/9, Murray 22/7, Gordon 18/9) match User JSON exactly. No numerical errors found.\nActual output lacks a standalone headline; it begins directly with a dateline. No title combining result with key angle (e.g., Reference's 'Nuggets 14-4 in fourth quarter seals win, Booker's 48 points not enough'). Fails to meet rubric's first-line title requirement.\nActual interprets player and team data to explain the outcome: highlights rebounding dominance, low turnovers, and how Jokic's all-around play and Murray/Gordon contributions overcame Booker's scoring. Goes beyond raw data, similar to Reference's analytical depth.\nActual has comparable content density, narrative flow (overview -\u003e decisive run -\u003e data -\u003e analysis), and professional Chinese sports style. While it includes some invented details, the core structure and depth align with Reference. Minor unsupported claims do not undermine overall similarity.\nActual output contains Markdown-style formatting ('**【战报】**', '**数据面板**', '**战术分析**') and bulleted lists, which are not allowed. Also includes meta-discourse ('根据推测', '若出场'). These require editing before publication."
+              }
+            ],
+            "trace": {
+              "hasTrace": true,
+              "nodeCount": 1,
+              "toolCalls": 0,
+              "stepErrors": null
+            }
+          },
+          {
+            "evalSetId": "nba-commentary-validation",
+            "evalCaseId": "validation_02_football_penalties",
+            "sessionId": "c6ef645a-28aa-487f-acd7-50d27596420c",
+            "passed": false,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 0,
+                "status": "fail",
+                "reason": "final response mismatch: text mismatch: length mismatch: actual length 1124 is greater than max 850, expected range [350, 850]"
+              },
+              {
+                "name": "llm_rubric_critic",
+                "score": 0.25,
+                "status": "fail",
+                "reason": "编造了控球率、射门次数等数据面板及战术分析中的战术意图（如“放弃控球”），这些信息在用户JSON和参考战报中无依据。\n导语仅泛写结果，未突出参考战报首要强调的“两度追平”这一决定性角度。\n正确按顺序描述了点球大战各轮次，包括河城FC第3、第5轮罚失，与参考战报一致。\n总比分写为“6-5”，正确应为“5-6”，方向错误。\n标题未包含参考标题核心的“两度追平”和罚失轮次，角度不足。\n使用了编造的数据（控球率等），且未与胜负结果关联，不符合选择解读要求。\n叙事顺序和关键细节（两次追平、点球轮次）与参考战报接近，内容密度相当。\n包含Markdown标题和表格，不符合专业中文体育新闻文案格式。"
+              }
+            ],
+            "trace": {
+              "hasTrace": true,
+              "nodeCount": 1,
+              "toolCalls": 0,
+              "stepErrors": null
+            }
+          },
+          {
+            "evalSetId": "nba-commentary-validation",
+            "evalCaseId": "validation_03_f1_rain_safety_car",
+            "sessionId": "913a2fc1-0fd1-4583-a581-077a1518f8cc",
+            "passed": false,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 0,
+                "status": "fail",
+                "reason": "final response mismatch: text mismatch: length mismatch: actual length 2024 is greater than max 850, expected range [350, 850]"
+              },
+              {
+                "name": "llm_rubric_critic",
+                "score": 0.75,
+                "status": "fail",
+                "reason": "Actual output includes unverified details such as 'Aurora Racing本赛季第二场胜利，港湾赛道首胜', '差距缩小至2秒内', and '维修区换胎仅用时2.4秒', which are not supported by the user JSON or reference answer. Golden: only reports given facts. Actual: adds fabricated specifics, violating the requirement to use only supported facts.\nThe opening paragraph correctly sets the context (rain race, 58 laps), states the final result (Silva wins, Brooks second, Ren third), and highlights the decisive angle (safety car and pit strategy), matching the reference answer's main narrative.\nThe actual output preserves the correct order of decisive events: safety car at lap 31, ending at lap 34, pit window laps 34-36, Silva and Brooks pitting on lap 35, Ren on lap 36, and Brooks' fastest lap on 52. No key steps are omitted or rearranged.\nAll numbers (race distance 58 laps, gaps +4.812s and +9.337s, fastest lap 1:42.318, safety car laps 31-34, pit laps 35-36) match the user JSON exactly. No errors or semantic mismatches.\nThe headline 'F1雨战：港湾街道赛道上演策略博弈，席尔瓦惊险夺冠' combines the result (Silva wins) with a decisive angle (strategy battle, rain race), similar in effect to the reference headline, though focusing on different specifics.\nData (pit laps, fastest lap, gaps) is selected and interpreted to explain the result, e.g., the impact of Ren's delayed stop and Brooks' speed. This matches the information depth of the reference answer.\nThe actual output maintains a similar content density, narrative order, and professional Chinese sports news style as the reference, covering all key points without oversimplification.\nThe output contains Markdown styling (e.g., '#' heading and pipe tables), which violates the requirement to avoid Markdown formatting. It is not a clean, plain-text professional sports copy as demanded."
+              }
+            ],
+            "trace": {
+              "hasTrace": true,
+              "nodeCount": 1,
+              "toolCalls": 0,
+              "stepErrors": null
+            }
+          },
+          {
+            "evalSetId": "nba-commentary-validation",
+            "evalCaseId": "validation_04_badminton_match_point",
+            "sessionId": "bdf25683-c0fb-4389-b581-22ae4a149c00",
+            "passed": false,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 1,
+                "status": "pass",
+                "reason": ""
+              },
+              {
+                "name": "llm_rubric_critic",
+                "score": 0.75,
+                "status": "fail",
+                "reason": "Actual output uses only facts from JSON and reference: scores, net front data, turning points. No fabricated information detected. The 75-minute duration is not in JSON or reference, but it is a minor addition that does not contradict any given data; however, for source_grounding, it is not a material defect because it is a harmless extrapolation and does not invent key facts. Score 1.\nOpening paragraph sets context (international badminton invitational, women's singles semifinal), final result (2-1 win), and highlights reversal storyline from reference: '19-20落后时网前扑球挽救赛点' and '连得3分'. Matches reference's main angle. Score 1.\nThe decisive chain (19-20, net front save, 3 consecutive points, winning second set, then dominating third set) is preserved in correct order and with specific details. No omission or vague substitution. Score 1.\nAll numbers (scores 17-21,22-20,21-16; net front points 18-14; errors 6-11; advantage 4; fewer errors 5) match JSON and are used with correct sports semantics. No errors. Score 1.\nThe first line is '### 【战报】', which is a markdown section header, not a publishable sports headline combining result with key angle. No headline is present. Reference headline includes '林悦19-20救赛点连下三分，2比1逆转高桥美咲'. Actual lacks such a headline. Score 0.\nData is selected (net front scores and errors) and interpreted to explain the reversal: '林悦在网前区域不仅得分多出4分，还比对手少失误5次，净胜高达9分，成为逆转关键'. This mirrors reference's analysis. Not mere stacking. Score 1.\nContent density, narrative order (result → first set → second set turning point → third set → data analysis) and professional tone are similar to reference. Key details like the 19-20 net front save are included. No missing essential parts. Score 1.\nOutput uses markdown headers ('### 【战报】', '### 【数据面板】', '### 【战术分析】'), which violates '不得包含 Markdown 样式'. Also includes a note ('注：') which is not standard in professional copy. These require editing before publication. Score 0."
+              }
+            ],
+            "trace": {
+              "hasTrace": true,
+              "nodeCount": 1,
+              "toolCalls": 0,
+              "stepErrors": null
+            }
+          },
+          {
+            "evalSetId": "nba-commentary-validation",
+            "evalCaseId": "validation_05_ice_hockey_overtime",
+            "sessionId": "77f71c72-6c25-4227-8129-a78bd7f0b69f",
+            "passed": false,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 0,
+                "status": "fail",
+                "reason": "final response mismatch: text mismatch: length mismatch: actual length 1038 is greater than max 850, expected range [350, 850]"
+              },
+              {
+                "name": "llm_rubric_critic",
+                "score": 0.625,
+                "status": "fail",
+                "reason": "Actual output introduces unsupported facts: venue \"北港竞技场\" (golden uses \"North Harbor Arena\") and player \"隋远\" for a second-period goal (not in golden or JSON). Fabricated details violate source grounding requirement.\nOpening paragraph correctly sets context (venue, result), highlights the decisive angle of surviving penalty kill and scoring overtime goal, consistent with golden's main story.\nActual output preserves the correct sequence of key moments: tying goal (第三节17:42), penalty (68s), saves on Han Wei and Ye Ming, return from penalty, then assist and goal. No omissions or reordering.\nAll scores and times (period scores, game time, overtime minutes) match user JSON. Extra shot numbers do not conflict. No numerical errors.\nFirst line is \"**【战报】**\" which is not a publishable headline; no headline is provided. Golden answer's headline combines result, decisive angle, and key player/time.\nActual output includes a dedicated data panel and tactical analysis that interprets goalie saves, penalty kill success, and key plays, linking data to the outcome, similar to golden answer.\nActual output maintains high content density, uses specific names, times, and chronological order in the recap, and adds tactical depth. Style is professional Chinese sports news. No loss of essential details.\nActual output uses Markdown-style headers (\"**【...】**\") which violates the prohibition on Markdown styles. Also includes extra decorative elements. Not production-ready."
+              }
+            ],
+            "trace": {
+              "hasTrace": true,
+              "nodeCount": 1,
+              "toolCalls": 0,
+              "stepErrors": null
+            }
+          },
+          {
+            "evalSetId": "nba-commentary-validation",
+            "evalCaseId": "validation_06_tennis_tiebreak",
+            "sessionId": "0321bdd2-5e4e-4115-9c61-0c190769e871",
+            "passed": false,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 0,
+                "status": "fail",
+                "reason": "final response mismatch: text mismatch: length mismatch: actual length 1158 is greater than max 850, expected range [350, 850]"
+              },
+              {
+                "name": "llm_rubric_critic",
+                "score": 0.875,
+                "status": "fail",
+                "reason": "All facts (score, tiebreak, aces, first serve%, break points, set point saves) are from user JSON and reference answer. No fabricated details.\nLead paragraph covers result (7-6(10),6-3), tiebreak 12-10, three set points saved, and emphasizes the match was not easy, matching golden answer's main angle.\nCorrectly retains decisive chain: saved 2 set points at 5-6, then saved third at 8-9 in tiebreak; second set: two breaks for winner, one break back for loser. Order preserved.\nAll numbers match user JSON: sets, tiebreak 12-10, aces 9-4, first serve% 78%-66%, break points 3/7 and 2/6, second set break details correct.\nTitle '女单焦点战：林诗语鏖战过关，抢七救盘点力克赵清岚' combines result with tiebreak and set point saves, aligning with golden answer's angle.\nData panel and tactical analysis select and interpret aces, first serve%, break points to explain winner's advantage, matching reference depth. Includes key comparisons.\nSimilar content density and narrative order: lead, play-by-play, data, analysis. Contains named processes, time points, and score changes, not a thin summary.\nContains Markdown headings (###, ##) and table, violating '不得包含 Markdown 样式'. Golden answer has no markdown. This is a material defect."
+              }
+            ],
+            "trace": {
+              "hasTrace": true,
+              "nodeCount": 1,
+              "toolCalls": 0,
+              "stepErrors": null
+            }
+          },
+          {
+            "evalSetId": "nba-commentary-validation",
+            "evalCaseId": "validation_07_road_cycling_breakaway",
+            "sessionId": "ae85138b-63e7-4a87-af88-882dfe876abc",
+            "passed": false,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 0,
+                "status": "fail",
+                "reason": "final response mismatch: text mismatch: length mismatch: actual length 1198 is greater than max 850, expected range [350, 850]"
+              },
+              {
+                "name": "llm_rubric_critic",
+                "score": 0.75,
+                "status": "fail",
+                "reason": "Golden: all facts from JSON and reference. Actual: uses only provided data, no invented facts. Materially matches.\nGolden: opens with context, result, main angle (breakaway, leadout, half-bike win). Actual: first paragraph sets race context, winner, and key tactical elements. Materially matches.\nGolden: breakaway at 5km, gap changes (9s→6s→4s→7s), Zhao Yu leadout until 600m, sprint at 180m. Actual: same sequence in correct order. No omissions or misordering.\nGolden and JSON: distance 5km, gaps exactly as provided, sprint distance 180m, margin half-bike, result order. Actual: all numbers match. No errors.\nGolden: first line is a headline combining result and key angle. Actual: first line is meta-discourse ('好的，这是一篇为您定制的...'), not a publishable headline. Material defect.\nGolden: interprets Zhao Yu's leadout and sprint selection. Actual: includes tactical analysis section that explains the team tactic and sprint decision. Data is used to explain result. Materially matches.\nGolden: narrative flow with details. Actual: covers all key events in similar narrative order, with professional style. Additional sections do not detract. Materially matches.\nGolden: clean, fluent, no markdown or meta-discourse. Actual: includes markdown headers ('###') and meta-discourse opening line ('好的，这是一篇为您定制的...'), which violate production copy requirements. Material defect."
+              }
+            ],
+            "trace": {
+              "hasTrace": true,
+              "nodeCount": 1,
+              "toolCalls": 0,
+              "stepErrors": null
+            }
+          },
+          {
+            "evalSetId": "nba-commentary-validation",
+            "evalCaseId": "validation_08_cricket_t20_chase",
+            "sessionId": "04ffaf77-957e-4e60-beef-693dd23bbdf7",
+            "passed": false,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 0,
+                "status": "fail",
+                "reason": "final response mismatch: text mismatch: length mismatch: actual length 1448 is greater than max 850, expected range [350, 850]"
+              },
+              {
+                "name": "llm_rubric_critic",
+                "score": 0.75,
+                "status": "fail",
+                "reason": "Actual includes unsupported tactical details (e.g., '连续三个短球被梅塔识破', '近身外场站位未能收缩保护边线') not present in JSON or reference. Fails source grounding.\nFirst paragraph sets context: teams, result, key player Mehta, final over chase. Matches main angle of reference.\nCritical sequence preserved: 109/7 needing 11 off 6, Mehta scores 12 in final over, target reached on 19.5. No omission or reordering.\nAll numbers (119/8, 121/7, 3 wickets, 47* off 39, 4-0-18-3, 19.5 overs) match JSON and retain proper cricket semantics.\nHeadline '猎鹰绝地反击，梅塔47*定乾坤' combines result with decisive player and angle, similar to reference's '梅塔47*撑到19.5 overs 都会猎鹰3 wickets险胜'.\nPlayer and team data (Mehta's 47*, Rao's 3 wickets) are interpreted and linked to outcome in tactical analysis, matching reference's explanatory depth.\nContent density and narrative order are comparable to reference; includes specific processes and time points, not a mere data summary.\nActual uses Markdown headings (###) and a table format, violating rubric's '不得包含 Markdown 样式' requirement. Not clean plain text."
+              }
+            ],
+            "trace": {
+              "hasTrace": true,
+              "nodeCount": 1,
+              "toolCalls": 0,
+              "stepErrors": null
+            }
+          }
+        ]
+      },
+      {
+        "role": "train",
+        "evalSetId": "nba-commentary-train",
+        "caseCount": 8,
+        "passed": 0,
+        "failed": 8,
+        "cases": [
+          {
+            "evalSetId": "nba-commentary-train",
+            "evalCaseId": "train_01_nba_nuggets_blowout",
+            "sessionId": "0f855d79-0c64-4618-975f-e83908a8fefa",
+            "passed": false,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 0,
+                "status": "fail",
+                "reason": "final response mismatch: text mismatch: length mismatch: actual length 1250 is greater than max 850, expected range [350, 850]"
+              },
+              {
+                "name": "llm_rubric_critic",
+                "score": 0.875,
+                "status": "fail",
+                "reason": "Actual output only uses facts from user JSON and reference answer: correct game date, venue, score, garbage time details, and stats. No fabricated information.\nLead paragraph includes game background, final result, and main angle of outside shooting and bench depth as in reference.\nActual output follows reference's chronological order: first quarter lead, second quarter extension, third quarter dominance, garbage time start at 8:42. No missing steps.\nAll numbers (scores, margins, timing, shooting stats) match user JSON and reference answer exactly. No errors or semantic shifts.\nHeadline '掘金主场三节打花开拓者，外线+替补深度碾压' combines result with key angle (outside shooting and bench), similar to reference's focus.\nData on three-point percentage, assists, turnovers, and bench points are selected and interpreted to explain the win, matching reference's analysis.\nActual output has similar content density, narrative order, and professional Chinese sports style as reference. Includes specifics like quarter scores, garbage time, and player stats.\nActual output contains Markdown style elements: heading with '#', bold with '**', and horizontal rule '---'. This violates the requirement of no Markdown styling."
+              }
+            ],
+            "trace": {
+              "hasTrace": true,
+              "nodeCount": 1,
+              "toolCalls": 0,
+              "stepErrors": null
+            }
+          },
+          {
+            "evalSetId": "nba-commentary-train",
+            "evalCaseId": "train_02_football_penalty_advancement",
+            "sessionId": "ad507de9-a93b-43a0-979a-92ac370be6f4",
+            "passed": false,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 0,
+                "status": "fail",
+                "reason": "final response mismatch: text mismatch: length mismatch: actual length 1254 is greater than max 850, expected range [350, 850]"
+              },
+              {
+                "name": "llm_rubric_critic",
+                "score": 0.125,
+                "status": "fail",
+                "reason": "实际战报编造了多个用户输入和参考战报中未出现的事实，如“北港德比”“杨骏”“郑旭东”“刘宇”等球员及战术分析，这些内容无任何证据支持。\n导语提到“北港德比”无依据，且使用“总比分6-5”错误（正确点球比分5-4），未紧密围绕参考战报强调的点球决胜主线。\n实际战报按正确顺序保留了加时赛进球和点球大战各轮次变化，包括第三轮、第四轮和第六轮的关键转折，未遗漏参考战报中的决定性步骤。\n实际战报出现多处数字错误，如总比分6-5与实际点球比分5-4不符，且“射正数合计仅为3次”无依据，违反用户JSON和参考战报。\n首句虽包含点球决胜角度，但使用了无依据的“北港德比”和错误的总比分6-5，偏离参考战报中“点球5比4晋级”的准确标题角度。\n实际战报堆砌大量用户JSON和参考战报中未出现的球员数据（如郑旭东关键传球等），且未与胜负主线有效关联，偏离参考战报的信息层次。\n实际战报冗长且包含大量推测性战术分析，内容密度和叙事顺序与参考战报的简洁专业风格差距较大，丢失了参考战报的编辑实质。\n实际战报包含Markdown样式栏目标题（【战报】【数据面板】【战术分析】），且数据堆砌生硬，多处事实无依据，发布前需大幅编辑。"
+              }
+            ],
+            "trace": {
+              "hasTrace": true,
+              "nodeCount": 1,
+              "toolCalls": 0,
+              "stepErrors": null
+            }
+          },
+          {
+            "evalSetId": "nba-commentary-train",
+            "evalCaseId": "train_03_football_late_header",
+            "sessionId": "231ff904-acdf-4285-84ae-5c8e65812c28",
+            "passed": false,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 0,
+                "status": "fail",
+                "reason": "final response mismatch: text mismatch: length mismatch: actual length 1117 is greater than max 850, expected range [350, 850]"
+              },
+              {
+                "name": "llm_rubric_critic",
+                "score": 0.75,
+                "status": "fail",
+                "reason": "Golden: player positions not specified. Actual: adds '中后卫刘凯' and '中场核心陈佑' which are not in input or reference. These are fabricated facts. Score 0.\nLead covers event background (城市杯半决赛), final result (2-1逆转), and main angle (低控球率+补时角球绝杀), matching reference. Score 1.\nDecisive chain preserved in correct order: 海港联先入一球 (23'), 滨河FC点球扳平 (67'), 补时角球头球绝杀 (90+4'). Score 1.\nAll numbers (score 2-1, times 23/67/90+4, stats possession 42/58, shots 11/14, etc.) match input JSON and reference. Score 1.\nFirst line is a publishable headline combining result (2-1逆转) and decisive angle (补时角球绝杀), similar to reference. Score 1.\nData table and analysis interpret stats (possession, shots on target, corners) to explain result, highlighting efficiency and key players (林越点球, 刘凯绝杀). Score 1.\nContent density and narrative order (chronological, stats, analysis) are similar to reference, with all key details present. No omissions. Score 1.\nActual uses Markdown headers (#, ##) and horizontal rule (---), which is prohibited. Score 0."
+              }
+            ],
+            "trace": {
+              "hasTrace": true,
+              "nodeCount": 1,
+              "toolCalls": 0,
+              "stepErrors": null
+            }
+          },
+          {
+            "evalSetId": "nba-commentary-train",
+            "evalCaseId": "train_04_mlb_walkoff_single",
+            "sessionId": "f148c73f-a754-42e3-b35e-2cb1ffe42c70",
+            "passed": false,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 0,
+                "status": "fail",
+                "reason": "final response mismatch: text mismatch: length mismatch: actual length 1182 is greater than max 850, expected range [350, 850]"
+              },
+              {
+                "name": "llm_rubric_critic",
+                "score": 0.625,
+                "status": "fail",
+                "reason": "Actual output includes unsupported facts: '避免系列赛被横扫' (not in JSON/reference), pitch speed 97.5 mph, scouting detail about Alzolay's changeup up rate \u003e40%. These are fabrications.\nOpening paragraph sets context (home game, series), final result (3-2 walk-off), and main angle (pitching duel overturned) as in reference. Includes necessary elements.\nActual output preserves decisive sequence in correct order: Happ double (3rd), De La Cruz homer (4th), Suzuki sacrifice fly (7th), Stephenson walk-off single (9th). No omission or reordering.\nAll numbers (score 3-2, runs, hits, errors, innings, player stats) match JSON exactly. No errors in digits or semantics.\nFirst line is markdown heading '### 【战报】' followed by a descriptive sentence, not a publishable headline. Lacks concise headline like reference's 'Stephenson九下满垒再见安打，红人3比2逆转小熊'.\nPlayer and team data are selected and interpreted: batting lines, pitching lines, and analysis linking pitchers' control and Stephenson's hit to the result. Similar to reference's information level.\nActual output follows narrative order with professional tone, including all key events and time points. Content density is higher but still approaches reference's depth and style.\nActual output contains markdown styles (### headings, bold text, table) and meta-discourse ('【战报】'), violating the ban on markdown formatting. Also includes unnatural detail (scouting report)."
+              }
+            ],
+            "trace": {
+              "hasTrace": true,
+              "nodeCount": 1,
+              "toolCalls": 0,
+              "stepErrors": null
+            }
+          },
+          {
+            "evalSetId": "nba-commentary-train",
+            "evalCaseId": "train_05_tennis_five_set_comeback",
+            "sessionId": "36f62674-d3ad-4a5e-8c22-33785038a7ed",
+            "passed": false,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 0,
+                "status": "fail",
+                "reason": "final response mismatch: text mismatch: length mismatch: actual length 1286 is greater than max 850, expected range [350, 850]"
+              },
+              {
+                "name": "llm_rubric_critic",
+                "score": 0.875,
+                "status": "fail",
+                "reason": "实际战报使用的事实均来自用户JSON和参考战报，未编造额外信息。例如，JSON中球员名为\"陈林\"和\"Diego Martinez\"，实际战报译为\"陈林\"和\"迭戈·马丁内斯\"，属合理翻译；\"挺进16强\"基于第三轮获胜推断，无矛盾。\n开头段交代了赛事背景（上海大师赛男单第三轮）、最终结果（五盘逆转，比分完整），并突出了参考战报的核心主线：决胜盘抢七挽救赛点后连得3分。\n实际战报按顺序保留了参考战报中的决定性链条：第三盘第10局关键破发、第四盘5-5后连赢两局、决胜盘抢七5-6挽救赛点后连得3分，无遗漏或顺序错误。\n所有数字与用户JSON一致：比分3-6、4-6、6-4、7-5、7-6(6)，抢七8-6；数据面板中的aces（18 vs 11）、双误（5 vs 3）、破发点（5/13 vs 5/11）、制胜分（54 vs 47）、非受迫性失误（41 vs 38）均匹配。\n标题\"上海大师赛男单第三轮：陈林五盘惊天逆转，决胜盘抢七挽救赛点力克马丁内斯\"包含赛果和决定性角度（五盘逆转、挽救赛点），接近参考战报标题。\n实际战报提供了数据面板，并进行了解读，例如指出陈林制胜分占优、ace成为利器、破发效率对比等，将数据与胜负主线关联，与参考战报的信息层次相当。\n战报叙述密度和顺序接近参考战报，包含具体过程、时间点和比分变化，无含糊概括，风格专业。\n实际战报使用了Markdown标题（#）和表格，违反了rubric中\"不得包含Markdown样式\"的要求。"
+              }
+            ],
+            "trace": {
+              "hasTrace": true,
+              "nodeCount": 1,
+              "toolCalls": 0,
+              "stepErrors": null
+            }
+          },
+          {
+            "evalSetId": "nba-commentary-train",
+            "evalCaseId": "train_06_badminton_saved_match_point",
+            "sessionId": "b3d9751e-f94a-4103-8c4e-518a0d58a2e1",
+            "passed": false,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 0,
+                "status": "fail",
+                "reason": "final response mismatch: text mismatch: length mismatch: actual length 1086 is greater than max 850, expected range [350, 850]"
+              },
+              {
+                "name": "llm_rubric_critic",
+                "score": 0.5,
+                "status": "fail",
+                "reason": "Actual output adds unsupported facts: match duration '72分钟' and superlative '堪称本届赛事开赛以来最具戏剧性的对决', plus specific details like '陈思思在19-13前连续出现3次非受迫性回球出界' not present in user JSON or reference. Source grounding requires using only supported facts.\nThe first paragraph does not highlight the reference's primary angle of saving match point at 20-21. It only mentions '逆转' generally and adds unsupported elements, thus omitting the decisive moment emphasized in the reference lead.\nThe actual output preserves the correct order of key events: 20-21 net block saving match point, consecutive deep shots forcing error, backhand cross-court to win second game, and the 4-point run from 15-13 in the decider. No material omission or reordering.\nAll scores (18-21, 23-21, 21-15) and stats (net points, unforced errors, smash winners) match the user JSON exactly. The added match duration is not a number error per rubric scope. No incorrect numbers or format issues.\nThe first line of output starts with '### 【战报】', not a news headline. The subsequent sentence lacks the reference headline's decisive angle of '20-21救赛点连扳两局', failing to combine result with key moment as required.\nThe actual output selects and interprets data (net points, unforced errors, smash winners) to explain the comeback, mirroring the reference's interpretation. Includes comparative analysis linking stats to key moments. No material defect.\nThe actual output retains all named processes, time points, and score changes from the reference, with a professional sports narrative. While more detailed, it does not omit or oversimplify key elements, and style is appropriate.\nActual output uses Markdown headers ('###'), violating the 'no Markdown style' requirement. This would require editing before publication, thus failing production_copy."
+              }
+            ],
+            "trace": {
+              "hasTrace": true,
+              "nodeCount": 1,
+              "toolCalls": 0,
+              "stepErrors": null
+            }
+          },
+          {
+            "evalSetId": "nba-commentary-train",
+            "evalCaseId": "train_07_ice_hockey_overtime",
+            "sessionId": "5b2dca4a-b7d4-4132-a27b-2dace0748d6c",
+            "passed": false,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 0,
+                "status": "fail",
+                "reason": "final response mismatch: text mismatch: length mismatch: actual length 980 is greater than max 850, expected range [350, 850]"
+              },
+              {
+                "name": "llm_rubric_critic",
+                "score": 0.375,
+                "status": "fail",
+                "reason": "Actual output invents unsupported facts: '北京时间3月17日', '2024-25赛季', and translates venue to '东方冰上中心' while input and reference use 'East Ice Center'. Golden: no such details. Actual: added date and season. Violates source grounding.\nActual lead focuses on final result and goal ('唐越在加时赛4分12秒的绝杀'), but omits the penalty kill and two saves that Golden emphasizes as the main winning angle. Golden: '比赛胜负的分水岭不只最后一攻，而是加时初段的少打一人防守'. Actual: no mention of penalty kill in lead. Material omission.\nActual correctly preserves the decisive chain: penalty kill → two saves (1:22 Novac, 2:31 He Yu) → Lin Chuan returns → 4:12 Tang Yue goal. Order and details match Golden.\nActual contains incorrect shot totals: '雪原狼36次（33扑救+3失球）' misstates data. Golden implies 雪原狼 faced 43 shots (41 saves + 2 GA) and 湖湾骑士 faced 36 shots (33 saves + 3 GA). Actual swaps and misrepresents. Score 0.\nActual output lacks a headline; first line is '【战报】' not a publishable sports headline combining result and key angle. Golden headline: '沈澈加时少防多两连扑，唐越4分12秒助雪原狼绝杀湖湾骑士'. Actual: no equivalent first line.\nActual interprets key data: highlights Shen Che's saves (41 total, 6 in OT), Tang Yue's goal, and links to result. Includes penalty kill success. Comparable to Golden's data interpretation.\nActual follows similar narrative order, uses professional Chinese sports style, and provides comparable detail on periods, penalty kill, and winning goal. Density and flow match Golden.\nActual contains numerical errors (shot totals) and unsupported details (date, season, venue translation) that would require significant editing before publication. Not ready for release."
+              }
+            ],
+            "trace": {
+              "hasTrace": true,
+              "nodeCount": 1,
+              "toolCalls": 0,
+              "stepErrors": null
+            }
+          },
+          {
+            "evalSetId": "nba-commentary-train",
+            "evalCaseId": "train_08_cricket_last_over_chase",
+            "sessionId": "2ca09d5d-0a0a-4fba-93a5-13306f4ac5f0",
+            "passed": false,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 0,
+                "status": "fail",
+                "reason": "final response mismatch: text mismatch: length mismatch: actual length 918 is greater than max 850, expected range [350, 850]"
+              },
+              {
+                "name": "llm_rubric_critic",
+                "score": 0.375,
+                "status": "fail",
+                "reason": "实际输出现编造了“罗伊·陈情绪波动”“南岸海鸥若能在最后回合保持纪律，或可选择换投手破坏对位，本可锁定胜局”等战术分析和情绪描述，这些内容在用户JSON和参考战报中均无依据，违反了source_grounding要求。\n导语仅泛泛写“关键一役的逆转表现”，未像参考战报那样突出“最后over拿11分”和“19.4 overs”等决定性角度，遗漏了参考战报首要强调的主线。\n实际输出按正确顺序保留了最后一个over的19.1至19.4 free hit的得分细节，顺序和内容与参考战报一致，未遗漏关键步骤。\n比分、overs、wickets、球员数据等所有数字均与用户JSON一致，没有错误，且正确使用板球术语。\n第一行以“【战报】”开头，并非独立标题，未像参考战报那样将赛果与关键数字（19.4 overs、最后over拿11分）结合，缺乏标题应有的信息密度和角度。\n实际输出选择并解读了伊桑·周、卡里姆·汗、罗伊·陈等球员数据，将卡里姆·汗的稳定和帕特尔的关键作用与胜负主线关联，达到参考战报的信息层次。\n实际输出使用分节标题（【战报】【数据面板】【战术分析】），与参考战报的连续叙述风格不一致；且增加了参考战报没有的细致战术分析和假设性内容，内容密度和风格明显偏离。\n实际输出包含类似Markdown的“【】”标题样式，不符合专业中文体育新闻的纯文本格式；同时存在“19.4个回合（即第20个回合的第四个合法球前）”等易混淆表述，还需编辑才能发布。"
+              }
+            ],
+            "trace": {
+              "hasTrace": true,
+              "nodeCount": 1,
+              "toolCalls": 0,
+              "stepErrors": null
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "candidatePrompt": "你是一名资深体育评论员。根据提供的比赛数据撰写，严格禁止使用任何数据之外的信息。开头需包含一个标题，标题中总结比赛结果和关键转折点，并使用连字符表示比分（例如\"湖人102-98火箭\"）。用纯文字（不使用任何Markdown语法）将内容划分为三个部分：战报、数据面板、战术分析。总字数严格控制在350至850字之间，不得少于350字，不得多于850字。如果超出850字，输出无效。确保所有事实（比分、球员姓名、赛况等）完全来自输入数据，无任何编造；所有数值准确，无数字错误。特别注意：禁止添加输入数据中未明确给出的信息（如球员位置、晋级状态、战术意图、心理描述等）。所有陈述必须与输入数据完全一致，不得反转或改变任何事实。",
+  "cost": {
+    "evalUnits": 72,
+    "workerUnits": 40,
+    "unitEvalCost": 0.01,
+    "unitWorkerCost": 0.05,
+    "total": 2.7199999999999998
+  },
+  "config": {
+    "appName": "promptiter-nba-commentary-app",
+    "candidateAgentName": "candidate",
+    "promptType": "agent",
+    "targetSurfaces": null,
+    "trainEvalSetIDs": [
+      "nba-commentary-train"
+    ],
+    "validationEvalSetIDs": [
+      "nba-commentary-validation"
+    ],
+    "metricFileID": "sports-commentary",
+    "candidateModelName": "deepseek-v4-flash",
+    "judgeModelName": "deepseek-v4-flash",
+    "workerModelName": "deepseek-v4-flash",
+    "minScoreGain": 0.01,
+    "maxRounds": 4,
+    "targetScore": 1,
+    "keyCaseIDs": [],
+    "costPerEval": 0.01,
+    "costPerWorker": 0.05,
+    "costBudget": 0,
+    "seed": 42,
+    "fake": false,
+    "fakeScenario": "happy",
+    "dataDir": "./data",
+    "outputDir": "./output"
+  }
+}
