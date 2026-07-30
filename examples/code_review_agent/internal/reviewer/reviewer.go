@@ -454,11 +454,7 @@ func getCodeexecutor(pwd, sandbox string) (executor codeexecutor.CodeExecutor, e
 			return nil, err
 		}
 	case "local":
-		executor = localexec.New(
-			localexec.WithWorkDir(
-				filepath.Join(pwd, "local_workspace"),
-			),
-		)
+		executor = localexec.New()
 	default:
 		return nil, fmt.Errorf("unsupported sandbox backend %q (use container or local)", sandbox)
 	}

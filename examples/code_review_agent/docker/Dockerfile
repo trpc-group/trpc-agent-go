@@ -21,8 +21,16 @@ ENV PATH=/usr/local/bin:/usr/local/go/bin:/usr/bin:/bin \
 # Keep the Go toolchain on the retained PATH used by login shells.
 RUN ln -sf /usr/local/go/bin/go /usr/local/bin/go
 
+RUN groupadd --gid 10001 reviewer \
+    && useradd --uid 10001 --gid reviewer --home-dir /tmp --shell /usr/sbin/nologin reviewer \
+    && install -d -o reviewer -g reviewer \
+        /tmp/run \
+        /tmp/code-review-go-build \
+        /tmp/code-review-go
+
 WORKDIR /
 
 # Keep the sandbox process alive so workspace_exec can attach with docker exec.
 # Create-time container.Config should leave Cmd empty and use this image default.
+USER reviewer:reviewer
 CMD ["tail", "-f", "/dev/null"]

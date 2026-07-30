@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -46,7 +47,8 @@ func TestNewReviewModelRequiresFixtureForFakeModel(t *testing.T) {
 }
 
 func TestLocalCodeExecutorPreservesInteractiveRunner(t *testing.T) {
-	executor, err := getCodeexecutor(t.TempDir(), "local")
+	projectDir := t.TempDir()
+	executor, err := getCodeexecutor(projectDir, "local")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,6 +59,27 @@ func TestLocalCodeExecutorPreservesInteractiveRunner(t *testing.T) {
 	}
 	if _, ok := provider.Engine().Runner().(codeexecutor.InteractiveProgramRunner); !ok {
 		t.Fatalf("local runner %T lost interactive execution support", provider.Engine().Runner())
+	}
+	ctx := context.Background()
+	engine := provider.Engine()
+	workspace, err := engine.Manager().CreateWorkspace(
+		ctx,
+		"outside-example",
+		codeexecutor.WorkspacePolicy{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Manager().Cleanup(ctx, workspace)
+	rel, err := filepath.Rel(projectDir, workspace.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.IsLocal(rel) {
+		t.Fatalf("local workspace %q is inside project directory %q", workspace.Path, projectDir)
+	}
+	if _, err := os.Stat(filepath.Join(projectDir, "local_workspace")); !os.IsNotExist(err) {
+		t.Fatalf("project-local workspace exists: %v", err)
 	}
 }
 
