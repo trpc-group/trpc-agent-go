@@ -28,9 +28,6 @@ import (
 // timings from state; writes json_report_path and md_report_path.
 func Run(ctx context.Context, gs graph.State) (any, error) {
 	start := time.Now()
-	defer func() {
-		gs[state.StateKeyNodeReportGeneratorMs] = time.Since(start).Milliseconds()
-	}()
 
 	taskID, _ := gs[state.StateKeyTaskID].(string)
 	findings, _ := gs[state.StateKeyFindings].([]types.Finding)

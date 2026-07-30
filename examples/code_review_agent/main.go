@@ -136,11 +136,17 @@ func main() {
 	// 3. Create task
 	taskID := uuid.New().String()
 	now := time.Now().UTC().Format(time.RFC3339)
+	inputSource := diffInput
+	if inputType == "diff_text" {
+		// Don't persist inline diff bodies — they may contain secrets or PII.
+		// InputDiffHash already provides correlation with the original input.
+		inputSource = "inline_diff"
+	}
 	task := storage.TaskRow{
 		ID:            taskID,
 		Status:        "running",
 		InputType:     inputType,
-		InputSource:   diffInput,
+		InputSource:   inputSource,
 		InputDiffHash: diffHash,
 		BaseRef:       effectiveBaseRef,
 		ModelMode:     cfg.Mode,
@@ -156,6 +162,10 @@ func main() {
 	rules, err := ruleengine.LoadRules(cfg.Skill.Dir, cfg.Skill.RulesGlob)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error loading skill rules from %s/%s: %v\n", cfg.Skill.Dir, cfg.Skill.RulesGlob, err)
+		store.UpdateTask(context.Background(), taskID, map[string]any{
+			"status": "failed", "completed_at": time.Now().UTC().Format(time.RFC3339),
+			"error_message": err.Error(),
+		})
 		os.Exit(1)
 	}
 
@@ -163,11 +173,19 @@ func main() {
 	sg, err := graphagent.Build()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error building graph: %v\n", err)
+		store.UpdateTask(context.Background(), taskID, map[string]any{
+			"status": "failed", "completed_at": time.Now().UTC().Format(time.RFC3339),
+			"error_message": err.Error(),
+		})
 		os.Exit(1)
 	}
 	compiled, err := sg.Compile()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error compiling graph: %v\n", err)
+		store.UpdateTask(context.Background(), taskID, map[string]any{
+			"status": "failed", "completed_at": time.Now().UTC().Format(time.RFC3339),
+			"error_message": err.Error(),
+		})
 		os.Exit(1)
 	}
 

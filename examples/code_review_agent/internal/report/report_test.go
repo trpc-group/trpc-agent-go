@@ -294,11 +294,15 @@ func TestRun_TimingRecorded(t *testing.T) {
 	if err := json.Unmarshal(jsonData, &report); err != nil {
 		t.Fatalf("json report invalid: %v", err)
 	}
-	ms, ok = report.NodeTimings[state.StateKeyNodeReportGeneratorMs]
+	reportMs, ok := report.NodeTimings[state.StateKeyNodeReportGeneratorMs]
 	if !ok {
 		t.Error("serialized NodeTimings missing report_generator entry")
-	} else if ms < 0 {
+	} else if reportMs < 0 {
 		t.Error("serialized NodeTimings for report_generator should be non-negative")
+	}
+	// Cross-layer contract: serialized value must match in-memory state.
+	if reportMs != ms {
+		t.Errorf("report_generator timing mismatch: state=%dms, report=%dms", ms, reportMs)
 	}
 }
 

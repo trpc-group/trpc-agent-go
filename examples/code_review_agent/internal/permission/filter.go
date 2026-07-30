@@ -12,6 +12,7 @@ package permission
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -61,7 +62,7 @@ func Run(ctx context.Context, gs graph.State) (any, error) {
 
 		// Apply command-specific overrides to refine the default policy
 		// before the mandatory deny-list runs.
-		fullCmd := cmd.Cmd + " " + strings.Join(cmd.Args, " ")
+		fullCmd := strings.Join(append([]string{cmd.Cmd}, cmd.Args...), " ")
 		for _, o := range permCfg.Overrides {
 			if matchOverride(o.Pattern, fullCmd) {
 				decision = o.Decision
@@ -108,6 +109,13 @@ func isBlocked(cmd string) bool {
 		return false
 	}
 	base := tokens[0]
+
+	// Normalize wrapper commands (env, command) to the wrapped executable,
+	// and strip directory paths so /bin/rm is treated the same as rm.
+	if (base == "env" || base == "command") && len(tokens) > 1 {
+		base = tokens[1]
+	}
+	base = filepath.Base(base)
 
 	// Block entire dangerous command families.
 	switch base {

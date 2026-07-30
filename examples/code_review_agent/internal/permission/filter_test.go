@@ -13,6 +13,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/config"
 	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/state"
 	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/types"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
@@ -458,5 +459,71 @@ func TestPermissionFilter_DefaultTimeoutApplied(t *testing.T) {
 	}
 	if allowed[0].Timeout != 30000 {
 		t.Errorf("zero timeout should default to 30000ms, got %d", allowed[0].Timeout)
+	}
+}
+
+// ── Zero-argument command override tests ──
+
+func TestIsBlocked_ZeroArgCommandNoTrailingSpace(t *testing.T) {
+	// A command with no arguments should not have a trailing space in fullCmd.
+	// This test verifies isBlocked correctly handles single-token commands.
+	if isBlocked("staticcheck") {
+		t.Error("staticcheck alone should not be blocked by deny-list")
+	}
+}
+
+func TestPermissionFilter_OverrideMatchesZeroArgCommand(t *testing.T) {
+	// Override pattern "staticcheck" must match command "staticcheck" (no args).
+	gs := graph.State{
+		state.StateKeyExecutorConfig: types.ExecutorConfig{
+			Commands: []types.SandboxCommand{
+				{Name: "check", Cmd: "staticcheck", Args: []string{}, RiskLevel: "low"},
+			},
+		},
+		state.StateKeyPermissionConfig: config.PermissionConfig{
+			DefaultPolicy: map[string]string{"low": "allow"},
+			Overrides: []config.PermOverride{
+				{Pattern: "staticcheck", Decision: "deny", Reason: "blocked by override"},
+			},
+		},
+	}
+	result, _ := Run(context.Background(), gs)
+	finalState := result.(graph.State)
+	decisions, _ := finalState[state.StateKeyPermissionDecisions].([]types.PermissionDecision)
+	if len(decisions) != 1 {
+		t.Fatalf("expected 1 decision, got %d", len(decisions))
+	}
+	if decisions[0].Decision != "deny" {
+		t.Errorf("staticcheck override should deny zero-arg command, got %s", decisions[0].Decision)
+	}
+}
+
+// ── Path/wrapper bypass tests ──
+
+func TestIsBlocked_PathPrefixedRmBlocked(t *testing.T) {
+	if !isBlocked("/bin/rm -rf /tmp") {
+		t.Error("/bin/rm -rf should be blocked (path normalization)")
+	}
+	if !isBlocked("/usr/bin/rm -rf /tmp") {
+		t.Error("/usr/bin/rm -rf should be blocked (path normalization)")
+	}
+}
+
+func TestIsBlocked_EnvWrapperBlocked(t *testing.T) {
+	if !isBlocked("env rm -rf /tmp") {
+		t.Error("env rm -rf should be blocked (wrapper unwrapping)")
+	}
+}
+
+func TestIsBlocked_CommandWrapperBlocked(t *testing.T) {
+	if !isBlocked("command rm -rf /tmp") {
+		t.Error("command rm -rf should be blocked (wrapper unwrapping)")
+	}
+}
+
+func TestIsBlocked_EnvEchoAllowed(t *testing.T) {
+	// env wrapping a safe command should still be allowed
+	if isBlocked("env echo hello") {
+		t.Error("env echo should be allowed")
 	}
 }
