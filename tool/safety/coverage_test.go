@@ -760,11 +760,20 @@ func TestPath_GlobStarPattern(t *testing.T) {
 // ─── checker_resource: case-insensitive sleep ───
 
 func TestResource_SleepCaseInsensitive(t *testing.T) {
-	s := newTestScanner(t)
+	p, err := safety.LoadPolicyBytes([]byte(`
+version: "1.0"
+commands:
+  allowed: ["sleep", "SLEEP", "echo"]
+resources:
+  max_timeout_sec: 300
+`), "yaml")
+	require.NoError(t, err)
+	s := safety.NewTestScanner(p)
 	report := s.ScanCtx(context.Background(), &safety.ScanRequest{
 		Command: "SLEEP 10M",
 		Backend: "workspaceexec",
 	})
+	// 10M = 600s > 300s max → RESOURCE_TIMEOUT (ask).
 	assert.Equal(t, safety.DecisionAsk, report.Decision)
 	assert.Equal(t, "RESOURCE_TIMEOUT", report.RuleID)
 }
