@@ -218,6 +218,114 @@ func TestSubmitReviewResultsMissingTaskLeavesNoRows(t *testing.T) {
 	}
 }
 
+func TestSaveTaskValidatesJSONFields(t *testing.T) {
+	tests := []struct {
+		name              string
+		inputSummary      string
+		monitoringSummary string
+		wantError         string
+	}{
+		{name: "empty values use defaults"},
+		{
+			name:         "invalid input summary",
+			inputSummary: `{"files":`,
+			wantError:    "input summary must be valid JSON",
+		},
+		{
+			name:              "invalid monitoring summary",
+			monitoringSummary: `{"events":`,
+			wantError:         "monitoring summary must be valid JSON",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			reviewStore, closeStore, _ := openReviewStore(t, ctx)
+			defer closeStore()
+			const taskID = "save-task-json"
+			err := reviewStore.SaveTask(ctx, store.ReviewTaskRecord{
+				TaskID:                taskID,
+				AppName:               "code_review_agent",
+				UserID:                "reviewer",
+				InputSummaryJSON:      test.inputSummary,
+				MonitoringSummaryJSON: test.monitoringSummary,
+			})
+			if test.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantError) {
+					t.Fatalf("SaveTask error = %v, want %q", err, test.wantError)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			snapshot, err := reviewStore.LoadTaskSnapshot(ctx, taskID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if snapshot.Task.InputSummaryJSON != "{}" ||
+				snapshot.Task.MonitoringSummaryJSON != "{}" {
+				t.Fatalf("task JSON defaults = %#v", snapshot.Task)
+			}
+		})
+	}
+}
+
+func TestUpdateTaskInputValidatesInputSummaryJSON(t *testing.T) {
+	tests := []struct {
+		name         string
+		inputSummary string
+		wantError    string
+	}{
+		{name: "empty value uses default"},
+		{
+			name:         "invalid nonempty value",
+			inputSummary: `{"files":`,
+			wantError:    "input summary must be valid JSON",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			reviewStore, closeStore, _ := openReviewStore(t, ctx)
+			defer closeStore()
+			const taskID = "update-task-input-json"
+			saveReviewTask(t, ctx, reviewStore, taskID)
+			err := reviewStore.UpdateTaskInput(ctx, taskID, store.TaskInputRecord{
+				InputKind:         "diff_file",
+				InputSummaryJSON:  test.inputSummary,
+				InputArtifactName: "review-input.diff",
+			})
+			if test.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantError) {
+					t.Fatalf("UpdateTaskInput error = %v, want %q", err, test.wantError)
+				}
+				snapshot, loadErr := reviewStore.LoadTaskSnapshot(ctx, taskID)
+				if loadErr != nil {
+					t.Fatal(loadErr)
+				}
+				if snapshot.Task.InputKind != "manual" ||
+					snapshot.Task.InputSummaryJSON != "{}" {
+					t.Fatalf("invalid update changed task input: %#v", snapshot.Task)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			snapshot, err := reviewStore.LoadTaskSnapshot(ctx, taskID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if snapshot.Task.InputKind != "diff_file" ||
+				snapshot.Task.InputSummaryJSON != "{}" ||
+				snapshot.Task.InputArtifactName != "review-input.diff" {
+				t.Fatalf("updated task input = %#v", snapshot.Task)
+			}
+		})
+	}
+}
+
 func TestReviewResultsSchemaUsesLocationAndRuleIdentity(t *testing.T) {
 	ctx := context.Background()
 	_, closeStore, dbPath := openReviewStore(t, ctx)

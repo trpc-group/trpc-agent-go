@@ -198,7 +198,7 @@ func requireCompletedReview(t *testing.T, outcome ReviewOutcome, snapshot store.
 		t.Fatalf("report references = %#v", outcome.References)
 	}
 	if snapshot.Task.MonitoringSummaryJSON == "" || snapshot.Task.MonitoringSummaryJSON == "{}" {
-		// empty object is allowed only if no events; fake path should have counts
+		t.Fatal("completed fake review missing monitoring counts")
 	}
 }
 

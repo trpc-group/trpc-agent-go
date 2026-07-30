@@ -43,18 +43,34 @@ func (s *SQLite) SaveTask(ctx context.Context, task ReviewTaskRecord) error {
 	if task.StartedAt.IsZero() {
 		task.StartedAt = time.Now()
 	}
+	inputSummaryJSON, err := jsonDefault(
+		task.InputSummaryJSON,
+		"{}",
+		"input summary",
+	)
+	if err != nil {
+		return err
+	}
+	monitoringSummaryJSON, err := jsonDefault(
+		task.MonitoringSummaryJSON,
+		"{}",
+		"monitoring summary",
+	)
+	if err != nil {
+		return err
+	}
 
 	// Argument order matches _sqlUpsertReviewTask column list.
-	_, err := s.db.ExecContext(ctx, _sqlUpsertReviewTask,
+	_, err = s.db.ExecContext(ctx, _sqlUpsertReviewTask,
 		task.TaskID,
 		task.AppName,
 		task.UserID,
 		emptyDefault(task.Status, "running"),
 		emptyDefault(task.InputKind, "manual"),
-		jsonDefault(task.InputSummaryJSON, "{}"),
+		inputSummaryJSON,
 		nullableString(task.InputArtifactName),
 		nullableInt(task.InputArtifactVersion),
-		jsonDefault(task.MonitoringSummaryJSON, "{}"),
+		monitoringSummaryJSON,
 		nullableString(task.Conclusion),
 		nullableString(task.JSONReportName),
 		nullableInt(task.JSONReportVersion),
@@ -83,11 +99,19 @@ func (s *SQLite) UpdateTaskInput(
 	if taskID == "" || input.InputKind == "" || input.InputArtifactName == "" {
 		return errors.New("task input requires task id, input kind, and artifact name")
 	}
+	inputSummaryJSON, err := jsonDefault(
+		input.InputSummaryJSON,
+		"{}",
+		"input summary",
+	)
+	if err != nil {
+		return err
+	}
 
 	// Argument order matches _sqlUpdateTaskInput SET / WHERE columns.
 	result, err := s.db.ExecContext(ctx, _sqlUpdateTaskInput,
 		input.InputKind,
-		jsonDefault(input.InputSummaryJSON, "{}"),
+		inputSummaryJSON,
 		input.InputArtifactName,
 		input.InputArtifactVersion,
 		taskID,
@@ -224,9 +248,6 @@ func (s *SQLite) SubmitReviewResults(
 
 	var counts ReviewResultCounts
 	for _, result := range results {
-		if err := insertReviewResult(ctx, tx, taskID, result); err != nil {
-			return ReviewResultCounts{}, err
-		}
 		switch result.ResultKind {
 		case "finding":
 			counts.FindingCount++
@@ -240,6 +261,9 @@ func (s *SQLite) SubmitReviewResults(
 				taskID,
 				result.ResultKind,
 			)
+		}
+		if err := insertReviewResult(ctx, tx, taskID, result); err != nil {
+			return ReviewResultCounts{}, err
 		}
 	}
 
@@ -370,11 +394,14 @@ func emptyDefault(value, fallback string) string {
 	return value
 }
 
-func jsonDefault(value, fallback string) string {
-	if value == "" || !json.Valid([]byte(value)) {
-		return fallback
+func jsonDefault(value, fallback, field string) (string, error) {
+	if value == "" {
+		return fallback, nil
 	}
-	return value
+	if !json.Valid([]byte(value)) {
+		return "", fmt.Errorf("%s must be valid JSON", field)
+	}
+	return value, nil
 }
 
 func nullableString(value string) any {
