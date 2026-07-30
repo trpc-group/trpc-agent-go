@@ -216,7 +216,7 @@ func Run(ctx context.Context, gs graph.State) (any, error) {
 	// Merge artifact errors with stable, sanitized exception types so
 	// monitoring can aggregate across runs without path-specific keys.
 	if len(artifactErrors) > 0 {
-		excTypeSet["artifact_failed"] = len(artifactErrors)
+		excTypeSet["artifact_failed"] += len(artifactErrors)
 	}
 	for etype, count := range excTypeSet {
 		exceptions = append(exceptions, storage.ExceptionRow{

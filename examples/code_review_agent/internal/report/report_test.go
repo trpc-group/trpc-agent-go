@@ -294,7 +294,10 @@ func TestRun_TimingRecorded(t *testing.T) {
 	if err := json.Unmarshal(jsonData, &report); err != nil {
 		t.Fatalf("json report invalid: %v", err)
 	}
-	if report.NodeTimings[state.StateKeyNodeReportGeneratorMs] < 0 {
+	ms, ok = report.NodeTimings[state.StateKeyNodeReportGeneratorMs]
+	if !ok {
+		t.Error("serialized NodeTimings missing report_generator entry")
+	} else if ms < 0 {
 		t.Error("serialized NodeTimings for report_generator should be non-negative")
 	}
 }

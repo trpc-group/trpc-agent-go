@@ -45,8 +45,10 @@ func Run(ctx context.Context, gs graph.State) (any, error) {
 	report := buildReport(taskID, findings, warnings, permDecisions, sandboxResults, gs)
 
 	// Record report generation timing once, after buildReport, so the report
-	// includes it and the deferred metric agrees (single source of truth).
-	gs[state.StateKeyNodeReportGeneratorMs] = time.Since(start).Milliseconds()
+	// and storage metric agree (single source of truth).
+	reportGenMs := time.Since(start).Milliseconds()
+	gs[state.StateKeyNodeReportGeneratorMs] = reportGenMs
+	report.NodeTimings[state.StateKeyNodeReportGeneratorMs] = reportGenMs
 
 	// ── Sanitize sensitive data in findings before output ──
 	redactor := sanitize.NewRedactor(nil, "***REDACTED***")
