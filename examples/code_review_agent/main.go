@@ -161,32 +161,17 @@ func main() {
 	// 4. Load skill rules
 	rules, err := ruleengine.LoadRules(cfg.Skill.Dir, cfg.Skill.RulesGlob)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error loading skill rules from %s/%s: %v\n", cfg.Skill.Dir, cfg.Skill.RulesGlob, err)
-		store.UpdateTask(context.Background(), taskID, map[string]any{
-			"status": "failed", "completed_at": time.Now().UTC().Format(time.RFC3339),
-			"error_message": err.Error(),
-		})
-		os.Exit(1)
+		failTask(store, taskID, fmt.Sprintf("load skill rules: %v", err))
 	}
 
 	// 5. Build GraphAgent
 	sg, err := graphagent.Build()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error building graph: %v\n", err)
-		store.UpdateTask(context.Background(), taskID, map[string]any{
-			"status": "failed", "completed_at": time.Now().UTC().Format(time.RFC3339),
-			"error_message": err.Error(),
-		})
-		os.Exit(1)
+		failTask(store, taskID, fmt.Sprintf("build graph: %v", err))
 	}
 	compiled, err := sg.Compile()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error compiling graph: %v\n", err)
-		store.UpdateTask(context.Background(), taskID, map[string]any{
-			"status": "failed", "completed_at": time.Now().UTC().Format(time.RFC3339),
-			"error_message": err.Error(),
-		})
-		os.Exit(1)
+		failTask(store, taskID, fmt.Sprintf("compile graph: %v", err))
 	}
 
 	// 6. Prepare initial state
@@ -310,6 +295,21 @@ func main() {
 	fmt.Printf("  MD:       %s\n", mdPath)
 	fmt.Printf("  DB:       %v\n", done)
 	fmt.Println("══════════════════════════════════════════")
+}
+
+// failTask marks the task as failed, reports the error, and exits.
+// Uses context.Background() so persistence works even after executor ctx is
+// canceled (e.g., dry-run timeout). If UpdateTask itself fails, the error is
+// printed to stderr so the operator can investigate the stuck task row.
+func failTask(store storage.Storage, taskID string, msg string) {
+	fmt.Fprintf(os.Stderr, "Error: %s\n", msg)
+	now := time.Now().UTC().Format(time.RFC3339)
+	if err := store.UpdateTask(context.Background(), taskID, map[string]any{
+		"status": "failed", "completed_at": now, "error_message": msg,
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "Error updating task status: %v\n", err)
+	}
+	os.Exit(1)
 }
 
 func hashDiff(content string) string {

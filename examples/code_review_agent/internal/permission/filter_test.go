@@ -527,3 +527,35 @@ func TestIsBlocked_EnvEchoAllowed(t *testing.T) {
 		t.Error("env echo should be allowed")
 	}
 }
+
+// ── Wrapper bypass: env with options/assignments ──
+
+func TestIsBlocked_EnvWithDashIBypass(t *testing.T) {
+	if !isBlocked("env -i rm -rf /tmp") {
+		t.Error("env -i rm -rf should be blocked (skip wrapper options)")
+	}
+}
+
+func TestIsBlocked_EnvWithAssignmentBypass(t *testing.T) {
+	if !isBlocked("env FOO=1 rm -rf /tmp") {
+		t.Error("env FOO=1 rm -rf should be blocked (skip env assignments)")
+	}
+}
+
+func TestIsBlocked_PathPrefixedEnvBypass(t *testing.T) {
+	if !isBlocked("/usr/bin/env rm -rf /tmp") {
+		t.Error("/usr/bin/env rm -rf should be blocked (path normalization + wrapper)")
+	}
+}
+
+func TestIsBlocked_CommandWithDashPBypass(t *testing.T) {
+	if !isBlocked("command -p rm -rf /tmp") {
+		t.Error("command -p rm -rf should be blocked (skip wrapper options)")
+	}
+}
+
+func TestIsBlocked_EnvMultipleOptions(t *testing.T) {
+	if !isBlocked("env -i FOO=1 BAR=2 -S rm -rf /tmp") {
+		t.Error("env with mixed options/assignments should still find and block rm")
+	}
+}

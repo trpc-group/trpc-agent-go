@@ -108,14 +108,7 @@ func isBlocked(cmd string) bool {
 	if len(tokens) == 0 {
 		return false
 	}
-	base := tokens[0]
-
-	// Normalize wrapper commands (env, command) to the wrapped executable,
-	// and strip directory paths so /bin/rm is treated the same as rm.
-	if (base == "env" || base == "command") && len(tokens) > 1 {
-		base = tokens[1]
-	}
-	base = filepath.Base(base)
+	base := resolveCommand(tokens)
 
 	// Block entire dangerous command families.
 	switch base {
@@ -203,6 +196,41 @@ func tokenize(cmd string) []string {
 		tokens = append(tokens, current.String())
 	}
 	return tokens
+}
+
+// resolveCommand normalizes the base executable from a tokenized command.
+// Strips directory paths, unwraps env/command (skipping options like -i, -p
+// and env assignments like FOO=1), and returns the resolved executable name.
+// For unsupported wrapper syntax, falls through to the path-stripped base.
+func resolveCommand(tokens []string) string {
+	if len(tokens) == 0 {
+		return ""
+	}
+	base := filepath.Base(tokens[0])
+
+	// Only handle recognized wrappers.
+	if base != "env" && base != "command" {
+		return base
+	}
+
+	// Walk past the wrapper to find the real executable, skipping
+	// supported options (-i, -p, -S) and env assignments (KEY=VALUE).
+	for i := 1; i < len(tokens); i++ {
+		t := tokens[i]
+		// Skip known wrapper options.
+		if strings.HasPrefix(t, "-") {
+			continue
+		}
+		// Skip environment variable assignments.
+		if strings.Contains(t, "=") {
+			continue
+		}
+		// Found the real executable — strip path and return.
+		return filepath.Base(t)
+	}
+
+	// No executable found after the wrapper — fail closed.
+	return base
 }
 
 func riskReason(decision, riskLevel string) string {
