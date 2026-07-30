@@ -115,10 +115,13 @@ func WithOutputSchema(schema *tool.Schema) Option {
 }
 
 // WithResultFormatter sets the formatter for the function tool's final result.
-// The formatter changes only the default model-visible tool message content;
-// the framework continues to manage the message role, tool name, tool call ID,
-// ordering, and session persistence. When formatter is nil, the framework uses
-// its default JSON representation. Repeated configuration is last-writer-wins.
+// It is currently supported by LLMAgent's default tool-call flow. Graph
+// ToolsNode, ToolPipe, wrappers that replace tool instances, and direct
+// Tool.Call consumers do not currently apply it. The formatter changes only
+// the default model-visible tool message content; the framework continues to
+// manage the message role, tool name, tool call ID, ordering, and session
+// persistence. When formatter is nil, the framework uses its default JSON
+// representation. Repeated configuration is last-writer-wins.
 func WithResultFormatter(formatter resultformat.Formatter) Option {
 	return func(opts *functionToolOptions) {
 		opts.resultFormatter = formatter
@@ -213,7 +216,7 @@ func (ft *FunctionTool[I, O]) SkipSummarization() bool {
 }
 
 // ResultFormatter returns the formatter configured by WithResultFormatter.
-// It is used by the framework's function-call flow; configure formatting with
+// It is used by LLMAgent's default tool-call flow; configure formatting with
 // WithResultFormatter rather than calling this method directly.
 func (ft *FunctionTool[I, O]) ResultFormatter() resultformat.Formatter {
 	return ft.resultFormatter
@@ -368,7 +371,8 @@ func (t *StreamableFunctionTool[I, O]) SkipSummarization() bool {
 }
 
 // ResultFormatter returns the formatter configured by WithResultFormatter.
-// Only the final streamable result is formatted; intermediate events are not.
+// In LLMAgent's default tool-call flow, only the final streamable result is
+// formatted; intermediate events are not.
 func (t *StreamableFunctionTool[I, O]) ResultFormatter() resultformat.Formatter {
 	return t.resultFormatter
 }

@@ -483,6 +483,17 @@ Function Tool 默认使用 JSON 构造模型可见的工具结果消息。当某
 observation 等自定义文本时，可以使用 `function.WithResultFormatter`，无需自行构造
 `model.Message` 或维护 tool call ID。
 
+当前支持：
+
+- 注册到 LLMAgent，并由其默认工具调用流程执行的 Function Tool。
+
+当前暂不支持：
+
+- Graph ToolsNode；
+- ToolPipe；
+- 替换或重新包装工具实例的扩展及业务 wrapper；
+- 直接调用 `Tool.Call`，或自行构造工具结果消息的其他执行链路。
+
 ```go
 import (
     "context"
@@ -516,8 +527,8 @@ Formatter 接收 `AfterTool` callback 处理后的最终结果，仅改变
   `StreamableTool` 只格式化最终结果，中间事件不变。
 - 对于会更新会话状态的工具，formatter 只改变模型看到的文本；状态更新仍基于
   `AfterTool` callback 处理后的工具结果。
-- `ToolResultMessages` 仍在默认消息生成后执行并可以覆盖它；多消息、多模态内容或完全
-  接管消息协议的场景继续使用该 callback。
+- `ToolResultMessages` callback 仍会在默认工具结果消息生成后执行，并可用其返回的消息
+  覆盖默认消息；多消息、多模态内容或完全接管消息协议的场景继续使用该 callback。
 
 Formatter 返回的文本会直接写入默认工具结果消息，可以在格式化函数中按业务协议处理
 转义、截断和格式校验。Formatter 可能被并发调用；若持有可变状态，需要自行保证并发

@@ -502,6 +502,19 @@ Function Tools use JSON for model-visible tool result messages by default. Use
 XML-like observation, without constructing `model.Message` or managing the tool
 call ID.
 
+Currently supported:
+
+- Function Tools registered with an LLMAgent and executed by its default
+  tool-call flow.
+
+Not currently supported:
+
+- Graph ToolsNode;
+- ToolPipe;
+- extensions or application wrappers that replace or re-wrap the tool instance;
+- direct `Tool.Call` consumers or other execution paths that construct their
+  own tool-result messages.
+
 ```go
 import (
     "context"
@@ -537,9 +550,10 @@ role, name, tool call ID, ordering, events, and session persistence.
 - For tools that update session state, formatting changes only the text shown
   to the model. State updates still use the tool result produced after
   `AfterTool` callbacks.
-- `ToolResultMessages` still runs after the default message is prepared and may
-  override it. Continue using that callback for multiple messages, multimodal
-  content, or complete control of the message protocol.
+- The `ToolResultMessages` callback still runs after the default tool result
+  message is prepared and may replace it with the messages returned by the
+  callback. Continue using it for multiple messages, multimodal content, or
+  complete control of the message protocol.
 
 The formatter's return value becomes the default tool result message. The
 formatting function can apply any escaping, truncation, or validation required
