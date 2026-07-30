@@ -27,7 +27,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
-	"trpc.group/trpc-go/trpc-agent-go/tool/safety"
 	toolskill "trpc.group/trpc-go/trpc-agent-go/tool/skill"
 	toolworkspaceexec "trpc.group/trpc-go/trpc-agent-go/tool/workspaceexec"
 )
@@ -545,8 +544,6 @@ type Options struct {
 	skillRunDeniedCommands []string
 	// skillRunOutputLimits customizes inline skill_run output sizes.
 	skillRunOutputLimits toolskill.RunOutputLimits
-	// skillRunSafetyScanner scans inline skill_run output after execution.
-	skillRunSafetyScanner *safety.Scanner
 
 	// skillRunForceSaveArtifacts forces skill_run to persist collected
 	// outputs via the artifact service when possible.
@@ -1227,15 +1224,6 @@ func WithSkillRunOutputLimits(
 ) Option {
 	return func(opts *Options) {
 		opts.skillRunOutputLimits = limits
-	}
-}
-
-// WithSkillRunSafetyScanner configures post-execution scanning for inline
-// skill_run output. Returned stdout, stderr, primary_output and output_files
-// content are scanned, redacted and truncated according to the scanner policy.
-func WithSkillRunSafetyScanner(scanner *safety.Scanner) Option {
-	return func(opts *Options) {
-		opts.skillRunSafetyScanner = scanner
 	}
 }
 

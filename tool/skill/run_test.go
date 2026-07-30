@@ -38,6 +38,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/safety"
 )
 
@@ -2919,7 +2920,7 @@ func TestRunTool_Declaration(t *testing.T) {
 	rt := NewRunTool(nil, nil)
 	d := rt.Declaration()
 	require.NotNil(t, d)
-	require.Equal(t, "skill_run", d.Name)
+	require.Equal(t, tool.SkillRunToolName, d.Name)
 	require.NotNil(t, d.InputSchema)
 	require.Contains(t, d.InputSchema.Required, "skill")
 	require.Contains(t, d.InputSchema.Required, "command")

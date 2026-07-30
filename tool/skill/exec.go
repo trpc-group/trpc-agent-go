@@ -157,7 +157,7 @@ func NewKillSessionTool(exec *ExecTool) *KillSessionTool {
 // Declaration returns the tool schema for skill_exec.
 func (t *ExecTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
-		Name: "skill_exec",
+		Name: tool.SkillExecToolName,
 		Description: "Start an interactive command inside a skill " +
 			"workspace. Use it when a skill command may prompt for " +
 			"stdin, selection, or TTY interaction. It shares the " +
@@ -228,7 +228,7 @@ func (t *ExecTool) Declaration() *tool.Declaration {
 // Declaration returns the tool schema for skill_write_stdin.
 func (t *WriteStdinTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
-		Name: "skill_write_stdin",
+		Name: tool.SkillWriteStdinToolName,
 		Description: "Write to a running skill_exec session. Set " +
 			"submit=true to append a newline. When chars is empty " +
 			"and submit is false, it acts like a lightweight poll.",

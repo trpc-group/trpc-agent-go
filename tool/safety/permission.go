@@ -23,14 +23,14 @@ import (
 )
 
 const (
-	toolWorkspaceExec  = "workspace_exec"
-	toolWorkspaceStdin = "workspace_write_stdin"
-	toolExecuteCode    = "execute_code"
-	toolExecCommand    = "exec_command"
-	toolWriteStdin     = "write_stdin"
-	toolSkillRun       = "skill_run"
-	toolSkillExec      = "skill_exec"
-	toolSkillStdin     = "skill_write_stdin"
+	toolWorkspaceExec  = tool.WorkspaceExecToolName
+	toolWorkspaceStdin = tool.WorkspaceWriteStdinToolName
+	toolExecuteCode    = tool.ExecuteCodeToolName
+	toolExecCommand    = tool.HostExecCommandToolName
+	toolWriteStdin     = tool.HostWriteStdinToolName
+	toolSkillRun       = tool.SkillRunToolName
+	toolSkillExec      = tool.SkillExecToolName
+	toolSkillStdin     = tool.SkillWriteStdinToolName
 )
 
 // AuditFailureMode controls PermissionPolicy behavior when audit writing fails.

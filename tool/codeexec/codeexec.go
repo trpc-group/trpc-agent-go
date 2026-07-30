@@ -58,7 +58,7 @@ func WithSafetyScanner(scanner *safety.Scanner) Option {
 
 func defaultConfig() config {
 	return config{
-		name:        "execute_code",
+		name:        tool.ExecuteCodeToolName,
 		description: "Execute code and return the result. Use for computation, data analysis, or logic verification.",
 		languages:   []string{"python", "bash"},
 	}

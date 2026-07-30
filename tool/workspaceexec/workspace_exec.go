@@ -541,7 +541,7 @@ func (t *ExecTool) Declaration() *tool.Declaration {
 		}
 	}
 	return &tool.Declaration{
-		Name:        "workspace_exec",
+		Name:        tool.WorkspaceExecToolName,
 		Description: desc,
 		InputSchema: &tool.Schema{
 			Type:       "object",
@@ -555,7 +555,7 @@ func (t *ExecTool) Declaration() *tool.Declaration {
 // Declaration returns the schema for workspace_write_stdin.
 func (t *WriteStdinTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
-		Name: "workspace_write_stdin",
+		Name: tool.WorkspaceWriteStdinToolName,
 		Description: "Write to a running workspace_exec session. " +
 			"When chars is empty, this acts like a poll.",
 		InputSchema: &tool.Schema{
@@ -687,7 +687,7 @@ func (t *ExecTool) checkSafety(ctx context.Context, in execInput) error {
 		timeout = in.Timeout
 	}
 	report := t.safetyScanner.Scan(ctx, safety.Request{
-		ToolName:   "workspace_exec",
+		ToolName:   tool.WorkspaceExecToolName,
 		Backend:    safety.BackendWorkspaceExec,
 		Command:    in.Command,
 		Cwd:        in.Cwd,
@@ -717,7 +717,7 @@ func (t *ExecTool) checkStdinSafety(
 		stdin += "\n"
 	}
 	report := t.safetyScanner.Scan(ctx, safety.Request{
-		ToolName: "workspace_write_stdin",
+		ToolName: tool.WorkspaceWriteStdinToolName,
 		Backend:  safety.BackendWorkspaceExec,
 		Stdin:    stdin,
 		Metadata: map[string]string{
@@ -737,7 +737,7 @@ func (t *ExecTool) scanOutput(ctx context.Context, out execOutput) execOutput {
 	}
 	policy := t.safetyScanner.Policy()
 	report := t.safetyScanner.ScanOutput(ctx, safety.Request{
-		ToolName: "workspace_exec",
+		ToolName: tool.WorkspaceExecToolName,
 		Backend:  safety.BackendWorkspaceExec,
 		Metadata: map[string]string{
 			"output_status": out.Status,

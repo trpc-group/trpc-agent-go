@@ -44,6 +44,7 @@ const (
 	ruleInteractiveStdin   = "TSG-SHELL-004"
 	ruleUnknownBackend     = "TSG-BACKEND-001"
 	ruleAuditFailure       = "TSG-AUDIT-001"
+	ruleContextCancelled   = "TSG-CTX-001"
 
 	// DefaultHostExecTimeoutSec matches tool/hostexec's runtime default.
 	DefaultHostExecTimeoutSec = 1_800
@@ -128,20 +129,19 @@ func (s *Scanner) Scan(ctx context.Context, req Request) Report {
 			"backend is unknown", "wire the safety guard to a supported execution tool",
 			maxDecision(p.UnknownToolAction, DecisionAsk)))
 	}
+	if report, ok := s.cancelledReport(ctx, req, findings, start, p); ok {
+		return report
+	}
 
-	findings = append(findings, scanExecutableInputs(req, p)...)
+	findings = append(findings, scanExecutableInputs(ctx, req, p)...)
+	if report, ok := s.cancelledReport(ctx, req, findings, start, p); ok {
+		return report
+	}
 
 	texts := requestTexts(req)
-	findings = append(findings, scanRequestContext(req, texts, p)...)
+	findings = append(findings, scanRequestContext(ctx, req, texts, p)...)
 
-	report := buildReport(req, findings, start, p)
-	if s.audit != nil {
-		if err := s.audit.WriteAudit(auditEventFromReport(report)); err != nil {
-			report = reportWithAuditFailure(req, findings, start, p, err)
-		}
-	}
-	_ = ctx
-	return report
+	return s.finishScan(req, findings, start, p)
 }
 
 func normalizeRequestForScan(req Request) Request {
@@ -168,36 +168,71 @@ func clonePolicy(p Policy) Policy {
 	return p
 }
 
-func scanExecutableInputs(req Request, p Policy) []Finding {
+func scanExecutableInputs(ctx context.Context, req Request, p Policy) []Finding {
 	var findings []Finding
+	if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+		return []Finding{*cancelled}
+	}
 	if strings.TrimSpace(req.Command) != "" {
 		findings = append(findings, scanCommand(req.Command, p)...)
 	}
+	if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+		return append(findings, *cancelled)
+	}
 	if len(req.Args) > 0 {
 		findings = append(findings, scanArgv(req.Args, p)...)
+	}
+	if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+		return append(findings, *cancelled)
 	}
 	if isInteractiveStdin(req) {
 		findings = append(findings, scanInteractiveStdinCommandRisks(req.Stdin, p)...)
 	} else if shouldScanStdinAsCommand(req) {
 		findings = append(findings, scanCommand(req.Stdin, p)...)
 	}
+	if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+		return append(findings, *cancelled)
+	}
 	findings = append(findings, scanUnknownRawArgs(req.RawArgs, p)...)
 	for _, block := range req.CodeBlocks {
+		if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+			return append(findings, *cancelled)
+		}
 		findings = append(findings, scanCodeBlock(block, p)...)
 	}
 	return findings
 }
 
-func scanRequestContext(req Request, texts []string, p Policy) []Finding {
+func scanRequestContext(ctx context.Context, req Request, texts []string, p Policy) []Finding {
 	var findings []Finding
 	findings = append(findings, scanEnvironment(req, p)...)
+	if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+		return append(findings, *cancelled)
+	}
 	findings = append(findings, scanSensitivePaths(texts, p)...)
+	if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+		return append(findings, *cancelled)
+	}
 	for _, text := range texts {
+		if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+			return append(findings, *cancelled)
+		}
 		findings = append(findings, scanNetworkText(text, p)...)
 	}
-	findings = append(findings, scanSecrets(texts, p)...)
-	findings = append(findings, scanResourceHints(req, texts, p)...)
+	if secretFindings, cancelled := scanSecretsContext(ctx, texts, p); cancelled != nil {
+		findings = append(findings, secretFindings...)
+		return append(findings, *cancelled)
+	} else {
+		findings = append(findings, secretFindings...)
+	}
+	findings = append(findings, scanResourceHints(ctx, req, texts, p)...)
+	if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+		return append(findings, *cancelled)
+	}
 	findings = append(findings, scanHostExec(req, p)...)
+	if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+		return append(findings, *cancelled)
+	}
 	findings = append(findings, scanInteractiveStdin(req, p)...)
 	return findings
 }
@@ -210,21 +245,56 @@ func (s *Scanner) ScanOutput(ctx context.Context, req Request, output string) Re
 		s = NewScanner(DefaultPolicy())
 	}
 	p := s.policy.Normalize()
-	findings := scanSecrets([]string{output}, p)
-	if len(findings) == 0 {
-		findings = append(findings, scanSensitivePaths([]string{output}, p)...)
-	}
-	findings = append(findings, scanOutputSize(output, p)...)
 	if req.Backend == "" {
 		req.Backend = BackendUnknown
 	}
+	findings, cancelled := scanSecretsContext(ctx, []string{output}, p)
+	if cancelled != nil {
+		findings = append(findings, *cancelled)
+		return s.finishScan(req, findings, start, p)
+	}
+	if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+		findings = append(findings, *cancelled)
+		return s.finishScan(req, findings, start, p)
+	}
+	if len(findings) == 0 {
+		findings = append(findings, scanSensitivePaths([]string{output}, p)...)
+	}
+	if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+		findings = append(findings, *cancelled)
+		return s.finishScan(req, findings, start, p)
+	}
+	findings = append(findings, scanOutputSize(output, p)...)
+	return s.finishScan(req, findings, start, p)
+}
+
+func (s *Scanner) cancelledReport(
+	ctx context.Context,
+	req Request,
+	findings []Finding,
+	start time.Time,
+	p Policy,
+) (Report, bool) {
+	cancelled := contextCancellationFinding(ctx)
+	if cancelled == nil {
+		return Report{}, false
+	}
+	findings = append(findings, *cancelled)
+	return s.finishScan(req, findings, start, p), true
+}
+
+func (s *Scanner) finishScan(
+	req Request,
+	findings []Finding,
+	start time.Time,
+	p Policy,
+) Report {
 	report := buildReport(req, findings, start, p)
-	if s.audit != nil {
+	if s != nil && s.audit != nil {
 		if err := s.audit.WriteAudit(auditEventFromReport(report)); err != nil {
 			report = reportWithAuditFailure(req, findings, start, p, err)
 		}
 	}
-	_ = ctx
 	return report
 }
 
@@ -858,7 +928,7 @@ func scanShellBypassText(text string, p Policy) []Finding {
 	return findings
 }
 
-func scanResourceHints(req Request, texts []string, p Policy) []Finding {
+func scanResourceHints(ctx context.Context, req Request, texts []string, p Policy) []Finding {
 	var findings []Finding
 	if p.MaxTimeoutSec > 0 && req.TimeoutSec > p.MaxTimeoutSec {
 		findings = append(findings, finding(ruleResourceRuntime,
@@ -875,6 +945,9 @@ func scanResourceHints(req Request, texts []string, p Policy) []Finding {
 			DecisionAsk))
 	}
 	for _, text := range texts {
+		if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+			return append(findings, *cancelled)
+		}
 		low := strings.ToLower(text)
 		if strings.Contains(low, "while true") || strings.Contains(low, "for ;;") ||
 			strings.Contains(low, ":(){ :|:& };:") {
@@ -940,12 +1013,20 @@ func scanInteractiveStdin(req Request, p Policy) []Finding {
 }
 
 func scanSecrets(texts []string, p Policy) []Finding {
+	findings, _ := scanSecretsContext(nil, texts, p)
+	return findings
+}
+
+func scanSecretsContext(ctx context.Context, texts []string, p Policy) ([]Finding, *Finding) {
 	if !p.DenySecretLeakage {
-		return nil
+		return nil, nil
 	}
 	var findings []Finding
 	for _, text := range texts {
 		for _, re := range secretRes {
+			if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+				return findings, cancelled
+			}
 			if match := re.FindString(text); match != "" {
 				findings = append(findings, finding(ruleSecretLeakage,
 					"sensitive_information_leakage", RiskCritical, match,
@@ -954,7 +1035,20 @@ func scanSecrets(texts []string, p Policy) []Finding {
 			}
 		}
 	}
-	return findings
+	return findings, nil
+}
+
+func contextCancellationFinding(ctx context.Context) *Finding {
+	if ctx == nil {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		f := finding(ruleContextCancelled, "context_cancellation", RiskMedium,
+			err.Error(), "retry the scan with an active context before execution",
+			DecisionDeny)
+		return &f
+	}
+	return nil
 }
 
 func finding(ruleID, riskType string, risk RiskLevel, evidence, rec string, d Decision) Finding {

@@ -32,7 +32,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
-	"trpc.group/trpc-go/trpc-agent-go/tool/safety"
 	toolskill "trpc.group/trpc-go/trpc-agent-go/tool/skill"
 	toolworkspaceexec "trpc.group/trpc-go/trpc-agent-go/tool/workspaceexec"
 )
@@ -963,30 +962,6 @@ func TestLLMAgent_SkillRun_AllowedCommands_Enforced(t *testing.T) {
 	require.NoError(t, err)
 	_, err = tl.(tool.CallableTool).Call(context.Background(), blockB)
 	require.Error(t, err)
-}
-
-func TestLLMAgent_SkillRunSafetyScanner_ThreadsToRunTool(t *testing.T) {
-	root := createTestSkill(t)
-	repo, err := skill.NewFSRepository(root)
-	require.NoError(t, err)
-	scanner := safety.NewScanner(safety.DefaultPolicy())
-
-	a := New(
-		"tester",
-		WithSkills(repo),
-		WithSkillToolProfile(SkillToolProfileFull),
-		WithSkillRunSafetyScanner(scanner),
-	)
-	runTool, ok := findTool(a.Tools(), "skill_run").(*toolskill.RunTool)
-	require.True(t, ok)
-
-	runToolVal := reflect.ValueOf(runTool).Elem()
-	field := runToolVal.FieldByName("safetyScanner")
-	got := reflect.NewAt(
-		field.Type(),
-		unsafe.Pointer(field.UnsafeAddr()),
-	).Elem().Interface()
-	require.Same(t, scanner, got)
 }
 
 // TestLLMAgent_WorkspaceExec_DeniedCommands_Enforced confirms that

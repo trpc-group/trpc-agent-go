@@ -10,7 +10,10 @@
 package safety
 
 import (
+	"bytes"
 	"context"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -196,4 +199,84 @@ func TestScannerAcceptanceRates(t *testing.T) {
 	}
 	require.GreaterOrEqual(t, float64(detected)/float64(len(unsafe)), 0.90)
 	require.LessOrEqual(t, float64(falsePositives)/float64(len(safe)), 0.10)
+}
+
+func TestScannerHonorsCancelledContext(t *testing.T) {
+	var audit bytes.Buffer
+	scanner := NewScanner(
+		DefaultPolicy(),
+		WithAuditSink(NewWriterAuditSink(&audit)),
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	report := scanner.Scan(ctx, Request{
+		ToolName: "workspace_exec",
+		Backend:  BackendWorkspaceExec,
+		Command:  "go test ./tool/safety",
+	})
+
+	require.Equal(t, DecisionDeny, report.Decision)
+	require.True(t, report.Blocked)
+	require.True(t, hasRule(report, ruleContextCancelled), report.Findings)
+	require.Contains(t, audit.String(), ruleContextCancelled)
+}
+
+func TestScannerOutputHonorsCancelledContext(t *testing.T) {
+	var audit bytes.Buffer
+	scanner := NewScanner(
+		DefaultPolicy(),
+		WithAuditSink(NewWriterAuditSink(&audit)),
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	report := scanner.ScanOutput(ctx, Request{
+		ToolName: "workspace_exec",
+		Backend:  BackendWorkspaceExec,
+	}, "token=sk-12345678901234567890")
+
+	require.Equal(t, DecisionDeny, report.Decision)
+	require.True(t, report.Blocked)
+	require.True(t, hasRule(report, ruleContextCancelled), report.Findings)
+	require.Contains(t, audit.String(), ruleContextCancelled)
+}
+
+func TestScannerConcurrentScansShareAuditSinkSafely(t *testing.T) {
+	var audit bytes.Buffer
+	scanner := NewScanner(
+		DefaultPolicy(),
+		WithAuditSink(NewWriterAuditSink(&audit)),
+	)
+
+	const scans = 16
+	var wg sync.WaitGroup
+	reports := make(chan Report, scans)
+	for i := 0; i < scans; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			command := "go test ./tool/safety"
+			if i%2 == 1 {
+				command = "cat .env"
+			}
+			reports <- scanner.Scan(context.Background(), Request{
+				ToolName: "workspace_exec",
+				Backend:  BackendWorkspaceExec,
+				Command:  command,
+			})
+		}(i)
+	}
+	wg.Wait()
+	close(reports)
+
+	gotReports := 0
+	for report := range reports {
+		gotReports++
+		require.NotZero(t, report.ScannedAt)
+	}
+	require.Equal(t, scans, gotReports)
+
+	lines := strings.Split(strings.TrimSpace(audit.String()), "\n")
+	require.Len(t, lines, scans)
 }

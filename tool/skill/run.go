@@ -402,7 +402,7 @@ func (t *RunTool) Declaration() *tool.Declaration {
 		}
 	}
 	return &tool.Declaration{
-		Name:        "skill_run",
+		Name:        tool.SkillRunToolName,
 		Description: desc,
 		InputSchema: &tool.Schema{
 			Type:        "object",
@@ -881,7 +881,7 @@ func (t *RunTool) scanRunOutputText(
 	remaining int,
 ) (string, bool, int) {
 	report := t.safetyScanner.ScanOutput(ctx, safety.Request{
-		ToolName: "skill_run",
+		ToolName: tool.SkillRunToolName,
 		Backend:  safety.BackendWorkspaceExec,
 		Command:  in.Command,
 		Metadata: map[string]string{

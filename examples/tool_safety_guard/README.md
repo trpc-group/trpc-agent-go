@@ -40,6 +40,16 @@ The scanner uses `internal/shellsafe` for conservative shell parsing. Commands
 that cannot be safely parsed are not silently allowed; the configured
 `parse_error_action` decides whether they are denied or sent for human review.
 
+Pipeline evaluation has two layers. `internal/shellsafe` first validates the
+whole command structure and returns ordered argv segments. The safety scanner
+then applies command, network, path, dependency and resource rules to each
+segment and aggregates all findings; the final report decision and risk level
+are the worst decision/risk across the whole command. When
+`review_shell_pipelines` is true, any multi-segment pipeline adds
+`TSG-SHELL-003` with `ask`, even if every segment is otherwise allowed. Higher
+risk findings such as denied commands, non-allowlisted network egress, or
+download-into-shell patterns still dominate the final decision.
+
 ## PermissionPolicy / wrapper integration
 
 The reusable integration point is `tool/safety.PermissionPolicy`:
@@ -84,6 +94,23 @@ Audit write failures are best-effort by library default. The example policy
 uses `audit_failure_mode: fail_closed`; use
 `WithAuditFailureMode(safety.AuditFailClosed)` when a missing audit record
 should block execution.
+
+## Scanner lifecycle
+
+Create scanners with `safety.NewScanner(policy, opts...)`. The policy is cloned
+and normalized during construction, and `Scanner.Policy()` returns a clone so
+callers cannot mutate scanner state accidentally. A nil `*Scanner` receiver is
+allowed for convenience and behaves like `NewScanner(DefaultPolicy())`, but it
+has no configured audit sink; production code that needs audit records should
+hold and reuse an explicit scanner.
+
+`Scanner.Scan` and `Scanner.ScanOutput` can be called concurrently when the
+configured `AuditSink` is concurrency-safe. The built-in writer and recording
+sinks serialize writes with a mutex, and the file sink opens/appends one JSONL
+record per scan. Custom sinks should provide the same concurrency guarantees.
+`PermissionPolicy.WithScanner` clones scanner policy and wraps audit failure
+tracking per policy instance so overlapping permission checks do not share
+recorded audit errors.
 
 ## Security boundaries
 

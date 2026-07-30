@@ -30,8 +30,8 @@ const (
 	defaultToolSetName  = "hostexec"
 	defaultWriteYieldMS = 200
 
-	toolExecCommand = "exec_command"
-	toolWriteStdin  = "write_stdin"
+	toolExecCommand = tool.HostExecCommandToolName
+	toolWriteStdin  = tool.HostWriteStdinToolName
 	toolKillSession = "kill_session"
 )
 
