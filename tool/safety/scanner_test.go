@@ -12,8 +12,12 @@ package safety
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -222,6 +226,22 @@ func TestScannerHonorsCancelledContext(t *testing.T) {
 	require.Contains(t, audit.String(), ruleContextCancelled)
 }
 
+func TestScannerHonorsContextCancelledDuringCommandScan(t *testing.T) {
+	ctx := &delayedCancelContext{
+		Context:     context.Background(),
+		cancelAfter: 2,
+	}
+	report := NewScanner(DefaultPolicy()).Scan(ctx, Request{
+		ToolName: "workspace_exec",
+		Backend:  BackendWorkspaceExec,
+		Command:  "cat .env",
+	})
+
+	require.Equal(t, DecisionDeny, report.Decision)
+	require.True(t, hasRule(report, ruleContextCancelled), report.Findings)
+	require.False(t, hasRule(report, ruleSensitivePath), report.Findings)
+}
+
 func TestScannerOutputHonorsCancelledContext(t *testing.T) {
 	var audit bytes.Buffer
 	scanner := NewScanner(
@@ -280,3 +300,56 @@ func TestScannerConcurrentScansShareAuditSinkSafely(t *testing.T) {
 	lines := strings.Split(strings.TrimSpace(audit.String()), "\n")
 	require.Len(t, lines, scans)
 }
+
+func TestFileAuditSinkConcurrentWrites(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tool_safety_audit.jsonl")
+	sink := NewFileAuditSink(path)
+
+	const writes = 64
+	var wg sync.WaitGroup
+	errs := make(chan error, writes)
+	for i := 0; i < writes; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs <- sink.WriteAudit(AuditEvent{
+				ToolName:   "workspace_exec",
+				Backend:    BackendWorkspaceExec,
+				Decision:   DecisionAllow,
+				RiskLevel:  RiskLow,
+				DurationMS: int64(i),
+			})
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	require.Len(t, lines, writes)
+	for _, line := range lines {
+		var ev AuditEvent
+		require.NoError(t, json.Unmarshal([]byte(line), &ev), line)
+		require.Equal(t, "workspace_exec", ev.ToolName)
+		require.Equal(t, DecisionAllow, ev.Decision)
+	}
+}
+
+type delayedCancelContext struct {
+	context.Context
+	checks      atomic.Int32
+	cancelAfter int32
+}
+
+func (c *delayedCancelContext) Err() error {
+	if c.checks.Add(1) > c.cancelAfter {
+		return context.Canceled
+	}
+	return nil
+}
+
+func (c *delayedCancelContext) Done() <-chan struct{} { return nil }

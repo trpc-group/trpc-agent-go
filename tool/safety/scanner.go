@@ -174,42 +174,42 @@ func scanExecutableInputs(ctx context.Context, req Request, p Policy) []Finding 
 		return []Finding{*cancelled}
 	}
 	if strings.TrimSpace(req.Command) != "" {
-		findings = append(findings, scanCommand(req.Command, p)...)
+		findings = append(findings, scanCommand(ctx, req.Command, p)...)
 	}
 	if cancelled := contextCancellationFinding(ctx); cancelled != nil {
 		return append(findings, *cancelled)
 	}
 	if len(req.Args) > 0 {
-		findings = append(findings, scanArgv(req.Args, p)...)
+		findings = append(findings, scanArgv(ctx, req.Args, p)...)
 	}
 	if cancelled := contextCancellationFinding(ctx); cancelled != nil {
 		return append(findings, *cancelled)
 	}
 	if isInteractiveStdin(req) {
-		findings = append(findings, scanInteractiveStdinCommandRisks(req.Stdin, p)...)
+		findings = append(findings, scanInteractiveStdinCommandRisks(ctx, req.Stdin, p)...)
 	} else if shouldScanStdinAsCommand(req) {
-		findings = append(findings, scanCommand(req.Stdin, p)...)
+		findings = append(findings, scanCommand(ctx, req.Stdin, p)...)
 	}
 	if cancelled := contextCancellationFinding(ctx); cancelled != nil {
 		return append(findings, *cancelled)
 	}
-	findings = append(findings, scanUnknownRawArgs(req.RawArgs, p)...)
+	findings = append(findings, scanUnknownRawArgs(ctx, req.RawArgs, p)...)
 	for _, block := range req.CodeBlocks {
 		if cancelled := contextCancellationFinding(ctx); cancelled != nil {
 			return append(findings, *cancelled)
 		}
-		findings = append(findings, scanCodeBlock(block, p)...)
+		findings = append(findings, scanCodeBlock(ctx, block, p)...)
 	}
 	return findings
 }
 
 func scanRequestContext(ctx context.Context, req Request, texts []string, p Policy) []Finding {
 	var findings []Finding
-	findings = append(findings, scanEnvironment(req, p)...)
+	findings = append(findings, scanEnvironment(ctx, req, p)...)
 	if cancelled := contextCancellationFinding(ctx); cancelled != nil {
 		return append(findings, *cancelled)
 	}
-	findings = append(findings, scanSensitivePaths(texts, p)...)
+	findings = append(findings, scanSensitivePaths(ctx, texts, p)...)
 	if cancelled := contextCancellationFinding(ctx); cancelled != nil {
 		return append(findings, *cancelled)
 	}
@@ -217,7 +217,7 @@ func scanRequestContext(ctx context.Context, req Request, texts []string, p Poli
 		if cancelled := contextCancellationFinding(ctx); cancelled != nil {
 			return append(findings, *cancelled)
 		}
-		findings = append(findings, scanNetworkText(text, p)...)
+		findings = append(findings, scanNetworkText(ctx, text, p)...)
 	}
 	if secretFindings, cancelled := scanSecretsContext(ctx, texts, p); cancelled != nil {
 		findings = append(findings, secretFindings...)
@@ -258,7 +258,7 @@ func (s *Scanner) ScanOutput(ctx context.Context, req Request, output string) Re
 		return s.finishScan(req, findings, start, p)
 	}
 	if len(findings) == 0 {
-		findings = append(findings, scanSensitivePaths([]string{output}, p)...)
+		findings = append(findings, scanSensitivePaths(ctx, []string{output}, p)...)
 	}
 	if cancelled := contextCancellationFinding(ctx); cancelled != nil {
 		findings = append(findings, *cancelled)
@@ -406,7 +406,7 @@ func dedupeFindings(in []Finding) []Finding {
 	return out
 }
 
-func scanCommand(command string, p Policy) []Finding {
+func scanCommand(ctx context.Context, command string, p Policy) []Finding {
 	var findings []Finding
 	pipe, err := shellsafe.Parse(command)
 	if err != nil {
@@ -415,10 +415,19 @@ func scanCommand(command string, p Policy) []Finding {
 			"rewrite command without shell expansion, redirection, wrappers, or substitutions",
 			p.ParseErrorAction))
 	}
+	if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+		return append(findings, *cancelled)
+	}
 	if err == nil {
 		pol := shellsafe.PolicyFromLists(p.AllowedCommands, p.DeniedCommands)
-		findings = append(findings, scanCommandSegments(pipe.Commands, p)...)
-		findings = append(findings, scanNetworkCommandSegments(pipe.Commands, p)...)
+		findings = append(findings, scanCommandSegments(ctx, pipe.Commands, p)...)
+		if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+			return append(findings, *cancelled)
+		}
+		findings = append(findings, scanNetworkCommandSegments(ctx, pipe.Commands, p)...)
+		if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+			return append(findings, *cancelled)
+		}
 		if err := pol.Check(pipe); err != nil {
 			riskType, decision := commandPolicyFinding(err, p)
 			findings = append(findings, finding(ruleShellWrapper, riskType, RiskHigh, err.Error(),
@@ -438,22 +447,39 @@ func scanCommand(command string, p Policy) []Finding {
 			}
 		}
 	}
-	findings = append(findings, scanShellBypassText(command, p)...)
-	findings = append(findings, scanNetworkText(command, p)...)
+	if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+		return append(findings, *cancelled)
+	}
+	findings = append(findings, scanShellBypassText(ctx, command, p)...)
+	if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+		return append(findings, *cancelled)
+	}
+	findings = append(findings, scanNetworkText(ctx, command, p)...)
 	return findings
 }
 
-func scanCodeBlock(block CodeBlock, p Policy) []Finding {
+func scanCodeBlock(ctx context.Context, block CodeBlock, p Policy) []Finding {
 	lang := strings.ToLower(strings.TrimSpace(block.Language))
 	if lang == "bash" || lang == "sh" || lang == "shell" {
-		return scanCommand(block.Code, p)
+		return scanCommand(ctx, block.Code, p)
 	}
 	var findings []Finding
 	texts := []string{block.Code}
-	findings = append(findings, scanSensitivePaths(texts, p)...)
-	findings = append(findings, scanSecrets(texts, p)...)
-	findings = append(findings, scanNetworkText(block.Code, p)...)
-	findings = append(findings, scanShellBypassText(block.Code, p)...)
+	findings = append(findings, scanSensitivePaths(ctx, texts, p)...)
+	if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+		return append(findings, *cancelled)
+	}
+	if secretFindings, cancelled := scanSecretsContext(ctx, texts, p); cancelled != nil {
+		findings = append(findings, secretFindings...)
+		return append(findings, *cancelled)
+	} else {
+		findings = append(findings, secretFindings...)
+	}
+	findings = append(findings, scanNetworkText(ctx, block.Code, p)...)
+	if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+		return append(findings, *cancelled)
+	}
+	findings = append(findings, scanShellBypassText(ctx, block.Code, p)...)
 	if strings.Contains(block.Code, "subprocess.") ||
 		strings.Contains(block.Code, "os.system(") ||
 		strings.Contains(block.Code, "os.popen(") ||
@@ -464,12 +490,15 @@ func scanCodeBlock(block CodeBlock, p Policy) []Finding {
 			p.ShellBypassAction))
 	}
 	for _, command := range extractQuotedCommands(block.Code) {
-		findings = append(findings, scanCommand(command, p)...)
+		if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+			return append(findings, *cancelled)
+		}
+		findings = append(findings, scanCommand(ctx, command, p)...)
 	}
 	return findings
 }
 
-func scanArgv(argv []string, p Policy) []Finding {
+func scanArgv(ctx context.Context, argv []string, p Policy) []Finding {
 	var clean []string
 	for _, a := range argv {
 		if strings.TrimSpace(a) != "" {
@@ -480,9 +509,18 @@ func scanArgv(argv []string, p Policy) []Finding {
 		return nil
 	}
 	var findings []Finding
-	findings = append(findings, scanCommandSegments([][]string{clean}, p)...)
-	findings = append(findings, scanNetworkCommandSegments([][]string{clean}, p)...)
-	findings = append(findings, scanSensitivePaths(clean, p)...)
+	findings = append(findings, scanCommandSegments(ctx, [][]string{clean}, p)...)
+	if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+		return append(findings, *cancelled)
+	}
+	findings = append(findings, scanNetworkCommandSegments(ctx, [][]string{clean}, p)...)
+	if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+		return append(findings, *cancelled)
+	}
+	findings = append(findings, scanSensitivePaths(ctx, clean, p)...)
+	if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+		return append(findings, *cancelled)
+	}
 	pol := shellsafe.PolicyFromLists(p.AllowedCommands, p.DeniedCommands)
 	if err := pol.Check(&shellsafe.Pipeline{Commands: [][]string{clean}}); err != nil {
 		riskType, decision := commandPolicyFinding(err, p)
@@ -492,8 +530,14 @@ func scanArgv(argv []string, p Policy) []Finding {
 			decision))
 	}
 	joined := strings.Join(clean, " ")
-	findings = append(findings, scanNetworkText(joined, p)...)
-	findings = append(findings, scanShellBypassText(joined, p)...)
+	if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+		return append(findings, *cancelled)
+	}
+	findings = append(findings, scanNetworkText(ctx, joined, p)...)
+	if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+		return append(findings, *cancelled)
+	}
+	findings = append(findings, scanShellBypassText(ctx, joined, p)...)
 	return findings
 }
 
@@ -504,7 +548,7 @@ func commandPolicyFinding(err error, p Policy) (string, Decision) {
 	return "command_policy", DecisionDeny
 }
 
-func scanUnknownRawArgs(raw string, p Policy) []Finding {
+func scanUnknownRawArgs(ctx context.Context, raw string, p Policy) []Finding {
 	if strings.TrimSpace(raw) == "" {
 		return nil
 	}
@@ -514,17 +558,20 @@ func scanUnknownRawArgs(raw string, p Policy) []Finding {
 	}
 	var findings []Finding
 	for _, field := range extractJSONFields("", v) {
+		if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+			return append(findings, *cancelled)
+		}
 		key := strings.ToLower(field.key)
 		if isCommandLikeKey(key) {
 			if len(field.values) > 0 {
-				findings = append(findings, scanArgv(field.values, p)...)
+				findings = append(findings, scanArgv(ctx, field.values, p)...)
 				continue
 			}
 			val := strings.TrimSpace(field.value)
 			if val == "" {
 				continue
 			}
-			findings = append(findings, scanCommand(val, p)...)
+			findings = append(findings, scanCommand(ctx, val, p)...)
 			continue
 		}
 		if isCodeLikeKey(key) {
@@ -532,7 +579,7 @@ func scanUnknownRawArgs(raw string, p Policy) []Finding {
 			if val == "" {
 				continue
 			}
-			findings = append(findings, scanCodeBlock(CodeBlock{
+			findings = append(findings, scanCodeBlock(ctx, CodeBlock{
 				Language: languageFromKey(key),
 				Code:     val,
 			}, p)...)
@@ -644,15 +691,21 @@ func isInteractiveStdin(req Request) bool {
 		req.Metadata["interactive_stdin"] == "true"
 }
 
-func scanInteractiveStdinCommandRisks(stdin string, p Policy) []Finding {
+func scanInteractiveStdinCommandRisks(ctx context.Context, stdin string, p Policy) []Finding {
 	if strings.TrimSpace(stdin) == "" {
 		return nil
 	}
 	var findings []Finding
 	pipe, err := shellsafe.Parse(stdin)
 	if err == nil {
-		findings = append(findings, scanCommandSegments(pipe.Commands, p)...)
-		findings = append(findings, scanNetworkCommandSegments(pipe.Commands, p)...)
+		findings = append(findings, scanCommandSegments(ctx, pipe.Commands, p)...)
+		if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+			return append(findings, *cancelled)
+		}
+		findings = append(findings, scanNetworkCommandSegments(ctx, pipe.Commands, p)...)
+		if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+			return append(findings, *cancelled)
+		}
 		if p.ReviewShellPipelines && len(pipe.Commands) > 1 {
 			findings = append(findings, finding(rulePipeline, "shell_pipeline",
 				RiskMedium, stdin,
@@ -660,14 +713,23 @@ func scanInteractiveStdinCommandRisks(stdin string, p Policy) []Finding {
 				DecisionAsk))
 		}
 	}
-	findings = append(findings, scanShellBypassText(stdin, p)...)
-	findings = append(findings, scanNetworkText(stdin, p)...)
+	if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+		return append(findings, *cancelled)
+	}
+	findings = append(findings, scanShellBypassText(ctx, stdin, p)...)
+	if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+		return append(findings, *cancelled)
+	}
+	findings = append(findings, scanNetworkText(ctx, stdin, p)...)
 	return findings
 }
 
-func scanCommandSegments(cmds [][]string, p Policy) []Finding {
+func scanCommandSegments(ctx context.Context, cmds [][]string, p Policy) []Finding {
 	var findings []Finding
 	for _, argv := range cmds {
+		if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+			return append(findings, *cancelled)
+		}
 		if len(argv) == 0 {
 			continue
 		}
@@ -686,10 +748,16 @@ func scanCommandSegments(cmds [][]string, p Policy) []Finding {
 				DecisionDeny))
 		}
 		if wrapped := unwrapCommandRunner(cmd, argv); len(wrapped) > 0 {
-			findings = append(findings, scanCommandSegments([][]string{wrapped}, p)...)
-			findings = append(findings, scanNetworkText(strings.Join(wrapped, " "), p)...)
+			findings = append(findings, scanCommandSegments(ctx, [][]string{wrapped}, p)...)
+			if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+				return append(findings, *cancelled)
+			}
+			findings = append(findings, scanNetworkText(ctx, strings.Join(wrapped, " "), p)...)
 		}
-		findings = append(findings, scanSensitivePaths(argv, p)...)
+		if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+			return append(findings, *cancelled)
+		}
+		findings = append(findings, scanSensitivePaths(ctx, argv, p)...)
 		if isInlineInterpreter(cmd, argv) {
 			findings = append(findings, finding(ruleShellWrapper, "process_spawn",
 				RiskHigh, strings.Join(argv, " "),
@@ -718,7 +786,7 @@ func scanCommandSegments(cmds [][]string, p Policy) []Finding {
 	return findings
 }
 
-func scanEnvironment(req Request, p Policy) []Finding {
+func scanEnvironment(ctx context.Context, req Request, p Policy) []Finding {
 	if len(req.Env) == 0 {
 		return nil
 	}
@@ -728,6 +796,9 @@ func scanEnvironment(req Request, p Policy) []Finding {
 	}
 	var findings []Finding
 	for k, v := range req.Env {
+		if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+			return append(findings, *cancelled)
+		}
 		upper := strings.ToUpper(k)
 		if _, ok := allowed[upper]; !ok {
 			findings = append(findings, finding(ruleEnvironment,
@@ -741,17 +812,23 @@ func scanEnvironment(req Request, p Policy) []Finding {
 				"remove shell startup, dynamic linker, and search path override variables",
 				DecisionDeny))
 		}
-		for _, f := range scanSecrets([]string{k + "=" + v}, p) {
-			findings = append(findings, f)
+		if secretFindings, cancelled := scanSecretsContext(ctx, []string{k + "=" + v}, p); cancelled != nil {
+			findings = append(findings, secretFindings...)
+			return append(findings, *cancelled)
+		} else {
+			findings = append(findings, secretFindings...)
 		}
 	}
 	return findings
 }
 
-func scanSensitivePaths(texts []string, p Policy) []Finding {
+func scanSensitivePaths(ctx context.Context, texts []string, p Policy) []Finding {
 	var findings []Finding
 	for _, text := range texts {
 		for _, denied := range p.DeniedPaths {
+			if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+				return append(findings, *cancelled)
+			}
 			needle := strings.TrimSpace(denied)
 			if needle == "" {
 				continue
@@ -872,12 +949,15 @@ func normalizeSensitivePathCandidate(candidate string) (string, bool) {
 	return "", false
 }
 
-func scanNetworkText(text string, p Policy) []Finding {
+func scanNetworkText(ctx context.Context, text string, p Policy) []Finding {
 	var findings []Finding
 	rawURLMatches := urlRe.FindAllString(text, -1)
 	urlMatches := networkURLMatches(rawURLMatches)
 	seenHosts := map[string]struct{}{}
 	for _, raw := range urlMatches {
+		if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+			return append(findings, *cancelled)
+		}
 		host := hostFromURL(raw)
 		if host != "" {
 			seenHosts[host] = struct{}{}
@@ -892,6 +972,9 @@ func scanNetworkText(text string, p Policy) []Finding {
 	}
 	schemelessHosts := schemelessNetworkHosts(text)
 	for _, host := range schemelessHosts {
+		if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+			return append(findings, *cancelled)
+		}
 		if _, ok := seenHosts[host]; ok {
 			continue
 		}
@@ -912,11 +995,14 @@ func scanNetworkText(text string, p Policy) []Finding {
 	return findings
 }
 
-func scanShellBypassText(text string, p Policy) []Finding {
+func scanShellBypassText(ctx context.Context, text string, p Policy) []Finding {
 	var findings []Finding
 	lower := strings.ToLower(text)
 	patterns := []string{"sh -c", "bash -c", "eval ", "`", "$(", " > ", ">>", " 2>", "<("}
 	for _, pat := range patterns {
+		if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+			return append(findings, *cancelled)
+		}
 		if strings.Contains(lower, pat) || strings.Contains(text, pat) {
 			findings = append(findings, finding(ruleShellExpansion,
 				"shell_bypass", RiskHigh, evidenceAround(text, pat),
@@ -1287,9 +1373,12 @@ func hasNetworkCommand(text string) bool {
 	return false
 }
 
-func scanNetworkCommandSegments(cmds [][]string, p Policy) []Finding {
+func scanNetworkCommandSegments(ctx context.Context, cmds [][]string, p Policy) []Finding {
 	var findings []Finding
 	for _, argv := range cmds {
+		if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+			return append(findings, *cancelled)
+		}
 		if len(argv) == 0 {
 			continue
 		}
@@ -1297,6 +1386,9 @@ func scanNetworkCommandSegments(cmds [][]string, p Policy) []Finding {
 		if cmd == "git" {
 			hosts, review := gitNetworkTargets(argv[1:])
 			for _, host := range hosts {
+				if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+					return append(findings, *cancelled)
+				}
 				if domainAllowed(host, p.AllowedDomains) {
 					continue
 				}
@@ -1306,6 +1398,9 @@ func scanNetworkCommandSegments(cmds [][]string, p Policy) []Finding {
 					p.NonWhitelistedNetworkAction))
 			}
 			for _, evidence := range review {
+				if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+					return append(findings, *cancelled)
+				}
 				findings = append(findings, finding(ruleNetworkEgress,
 					"network_egress", RiskHigh, evidence,
 					"review git remotes that are resolved from local configuration",
@@ -1315,6 +1410,9 @@ func scanNetworkCommandSegments(cmds [][]string, p Policy) []Finding {
 		}
 		if cmd == "curl" {
 			for _, host := range curlConnectionOverrideHosts(argv[1:]) {
+				if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+					return append(findings, *cancelled)
+				}
 				if domainAllowed(host, p.AllowedDomains) {
 					continue
 				}
@@ -1324,6 +1422,9 @@ func scanNetworkCommandSegments(cmds [][]string, p Policy) []Finding {
 					p.NonWhitelistedNetworkAction))
 			}
 			for _, evidence := range curlConfigEvidence(argv[1:]) {
+				if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+					return append(findings, *cancelled)
+				}
 				findings = append(findings, finding(ruleNetworkEgress,
 					"network_egress", RiskHigh, evidence,
 					"review curl config files before execution because they can override URLs, proxies, and connection targets",
@@ -1342,6 +1443,9 @@ func scanNetworkCommandSegments(cmds [][]string, p Policy) []Finding {
 			continue
 		}
 		for _, host := range sshLikeHosts(cmd, argv[1:]) {
+			if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+				return append(findings, *cancelled)
+			}
 			if domainAllowed(host, p.AllowedDomains) {
 				continue
 			}
@@ -1351,6 +1455,9 @@ func scanNetworkCommandSegments(cmds [][]string, p Policy) []Finding {
 				p.NonWhitelistedNetworkAction))
 		}
 		for _, evidence := range sshLikeUnsafeOptionEvidence(cmd, argv[1:]) {
+			if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+				return append(findings, *cancelled)
+			}
 			findings = append(findings, finding(ruleNetworkEgress,
 				"network_egress", RiskHigh, evidence,
 				"review external SSH configuration or helper programs before execution",

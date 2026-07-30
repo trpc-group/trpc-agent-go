@@ -43,6 +43,7 @@ type WriterAuditSink struct {
 
 // FileAuditSink appends audit events to a JSONL file.
 type FileAuditSink struct {
+	mu   sync.Mutex
 	path string
 }
 
@@ -98,6 +99,8 @@ func (s *FileAuditSink) WriteAudit(ev AuditEvent) error {
 	if s == nil || s.path == "" {
 		return nil
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return AppendAuditFile(s.path, ev)
 }
 
