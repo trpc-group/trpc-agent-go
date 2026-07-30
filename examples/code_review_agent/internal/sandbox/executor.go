@@ -86,12 +86,12 @@ func Run(ctx context.Context, gs graph.State) (any, error) {
 		engine = localexec.New().Engine()
 	}
 
-	gs[state.StateKeySandboxResults] = runCommands(ctx, engine, allowed, maxBytes)
+	gs[state.StateKeySandboxResults] = runCommands(ctx, engine, allowed, maxBytes, repoPath)
 	return gs, nil
 }
 
 // runCommands executes sandbox commands through the framework's codeexecutor.Engine.
-func runCommands(ctx context.Context, engine codeexecutor.Engine, commands []types.SandboxCommand, maxBytes int64) []types.SandboxResult {
+func runCommands(ctx context.Context, engine codeexecutor.Engine, commands []types.SandboxCommand, maxBytes int64, repoPath string) []types.SandboxResult {
 	mgr := engine.Manager()
 	runner := engine.Runner()
 	var results []types.SandboxResult

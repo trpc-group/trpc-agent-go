@@ -107,7 +107,8 @@ func main() {
 
 	// 2. Initialize storage
 	var store storage.Storage
-	if cfg.Database.Driver == "sqlite" {
+	switch cfg.Database.Driver {
+	case "sqlite":
 		store, err = storage.NewSQLite(cfg.Database.DSN)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error opening database: %v\n", err)

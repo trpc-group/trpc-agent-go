@@ -265,9 +265,18 @@ func loadMockFindings(path string, changedFiles map[string]bool) ([]types.Findin
 	return filtered, nil
 }
 
+// modelCtxKey is the package-level context key for injecting the LLM model.
+type modelCtxKey struct{}
+
+// WithModel returns a context carrying the LLM model so LLMAnalyzer can use
+// it in live mode. Callers (e.g., graphagent or CLI) should call this before
+// graph execution.
+func WithModel(ctx context.Context, m model.Model) context.Context {
+	return context.WithValue(ctx, modelCtxKey{}, m)
+}
+
 // getLLMModel retrieves the LLM model from context.
 func getLLMModel(ctx context.Context) model.Model {
-	type llmModelCtxKey struct{}
-	m, _ := ctx.Value(llmModelCtxKey{}).(model.Model)
+	m, _ := ctx.Value(modelCtxKey{}).(model.Model)
 	return m
 }
