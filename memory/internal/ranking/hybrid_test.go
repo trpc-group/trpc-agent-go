@@ -61,8 +61,13 @@ func TestMergeHybridBackfillsTemporalSequenceTail(t *testing.T) {
 			entry("base-2", "Visited the Art Museum.", memory.KindEpisode),
 			entry("tail-fact", "Interested in museums.", memory.KindFact),
 			entry(
+				"tail-count",
+				"Reserved six seats at the theater.",
+				memory.KindEpisode,
+			),
+			entry(
 				"tail-episode",
-				"Visited the Natural History Museum.",
+				"Met a curator at the Museum of Contemporary Art.",
 				memory.KindEpisode,
 			),
 		},

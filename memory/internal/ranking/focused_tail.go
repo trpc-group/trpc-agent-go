@@ -20,8 +20,9 @@ import (
 )
 
 const (
-	defaultHybridCandidateRatio = 3
-	focusedTailSlots            = 1
+	defaultHybridCandidateRatio    = 3
+	focusedTailSlots               = 1
+	minimumTemporalSequenceMatches = 1
 )
 
 // HybridCandidateLimit expands the candidate window only when an ordinary
@@ -146,7 +147,7 @@ func rankFocusedTail(
 		case hasTemporalSequence:
 			if entry.Memory.Kind != memory.KindEpisode ||
 				entry.Memory.EventTime == nil ||
-				distinctContentMatches < minimumFocusedPassageMatches {
+				distinctContentMatches < minimumTemporalSequenceMatches {
 				continue
 			}
 		}
@@ -235,6 +236,11 @@ var focusedTailIgnoredContentTerms = map[string]struct{}{
 	"ago": {}, "recent": {}, "recently": {},
 	"order": {}, "earliest": {}, "latest": {},
 	"first": {}, "last": {}, "chronological": {}, "sequence": {},
+	"zero": {}, "one": {}, "two": {}, "three": {}, "four": {},
+	"five": {}, "six": {}, "seven": {}, "eight": {}, "nine": {},
+	"ten": {}, "eleven": {}, "twelve": {}, "thirteen": {},
+	"fourteen": {}, "fifteen": {}, "sixteen": {}, "seventeen": {},
+	"eighteen": {}, "nineteen": {}, "twenty": {},
 }
 
 var focusedTemporalSequenceTerms = map[string]struct{}{
@@ -252,6 +258,9 @@ func focusedTailContentMatches(
 			continue
 		}
 		if _, ignored := focusedTailIgnoredContentTerms[term]; ignored {
+			continue
+		}
+		if _, err := strconv.Atoi(term); err == nil {
 			continue
 		}
 		matched++
