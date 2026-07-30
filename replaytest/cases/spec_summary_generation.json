@@ -31,6 +31,7 @@
   "allowed_diffs": [
     { "path": "$.events[*].id", "kind": "auto_id", "strategy": "ignore" },
     { "path": "$.events[*].timestamp", "kind": "timestamp_drift", "strategy": "allow_drift", "max_drift": { "duration_ms": 5000 } },
-    { "path": "$.summaries[*].updated_at", "kind": "timestamp_drift", "strategy": "allow_drift", "max_drift": { "duration_ms": 5000 } }
+    { "path": "$.summaries[*].updated_at", "kind": "timestamp_drift", "strategy": "allow_drift", "max_drift": { "duration_ms": 5000 } },
+    { "path": "$.summaries.", "kind": "backend_metadata", "strategy": "ignore", "note": "Some backends auto-populate a default (empty filter-key) summary when any summary is created; others do not." }
   ]
 }

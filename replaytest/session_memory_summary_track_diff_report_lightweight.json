@@ -2,9 +2,9 @@
   "reports": [
     {
       "spec_name": "concurrent_writes",
-      "started_at": "2026-07-30T02:52:54.0876496Z",
-      "completed_at": "2026-07-30T02:52:54.102611Z",
-      "duration_ms": 14,
+      "started_at": "2026-07-30T06:54:46.7544738Z",
+      "completed_at": "2026-07-30T06:54:46.7668805Z",
+      "duration_ms": 12,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -49,9 +49,9 @@
     },
     {
       "spec_name": "error_recovery",
-      "started_at": "2026-07-30T02:52:54.1030856Z",
-      "completed_at": "2026-07-30T02:52:54.1377143Z",
-      "duration_ms": 34,
+      "started_at": "2026-07-30T06:54:46.7668805Z",
+      "completed_at": "2026-07-30T06:54:46.7956856Z",
+      "duration_ms": 28,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -111,9 +111,9 @@
     },
     {
       "spec_name": "memory_writes",
-      "started_at": "2026-07-30T02:52:54.1382575Z",
-      "completed_at": "2026-07-30T02:52:54.1429746Z",
-      "duration_ms": 4,
+      "started_at": "2026-07-30T06:54:46.7962184Z",
+      "completed_at": "2026-07-30T06:54:46.7988575Z",
+      "duration_ms": 2,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -170,9 +170,9 @@
     },
     {
       "spec_name": "multi_turn",
-      "started_at": "2026-07-30T02:52:54.1429746Z",
-      "completed_at": "2026-07-30T02:52:54.1498135Z",
-      "duration_ms": 6,
+      "started_at": "2026-07-30T06:54:46.7988575Z",
+      "completed_at": "2026-07-30T06:54:46.8060869Z",
+      "duration_ms": 7,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -205,9 +205,9 @@
     },
     {
       "spec_name": "out_of_order",
-      "started_at": "2026-07-30T02:52:54.1503441Z",
-      "completed_at": "2026-07-30T02:52:54.1566534Z",
-      "duration_ms": 6,
+      "started_at": "2026-07-30T06:54:46.8060869Z",
+      "completed_at": "2026-07-30T06:54:46.8138607Z",
+      "duration_ms": 7,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -257,8 +257,8 @@
     },
     {
       "spec_name": "single_turn",
-      "started_at": "2026-07-30T02:52:54.1571677Z",
-      "completed_at": "2026-07-30T02:52:54.1607567Z",
+      "started_at": "2026-07-30T06:54:46.8138607Z",
+      "completed_at": "2026-07-30T06:54:46.8175285Z",
       "duration_ms": 3,
       "backends_tested": {
         "session": [
@@ -304,9 +304,9 @@
     },
     {
       "spec_name": "state_updates",
-      "started_at": "2026-07-30T02:52:54.1607567Z",
-      "completed_at": "2026-07-30T02:52:54.1650205Z",
-      "duration_ms": 4,
+      "started_at": "2026-07-30T06:54:46.8185157Z",
+      "completed_at": "2026-07-30T06:54:46.8205098Z",
+      "duration_ms": 1,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -323,7 +323,7 @@
       "diff_count": 0,
       "verifications": [
         {
-          "what": "state",
+          "what": "session_full",
           "reference_backend": "inmemory",
           "compared_backend": "sqlite",
           "status": "pass",
@@ -335,7 +335,7 @@
           }
         },
         {
-          "what": "session_full",
+          "what": "state",
           "reference_backend": "inmemory",
           "compared_backend": "sqlite",
           "status": "pass",
@@ -351,9 +351,9 @@
     },
     {
       "spec_name": "summary_generation",
-      "started_at": "2026-07-30T02:52:54.1655299Z",
-      "completed_at": "2026-07-30T02:52:54.1738626Z",
-      "duration_ms": 8,
+      "started_at": "2026-07-30T06:54:46.8205098Z",
+      "completed_at": "2026-07-30T06:54:46.8281642Z",
+      "duration_ms": 7,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -408,9 +408,9 @@
     },
     {
       "spec_name": "summary_truncation",
-      "started_at": "2026-07-30T02:52:54.1743777Z",
-      "completed_at": "2026-07-30T02:52:54.1830782Z",
-      "duration_ms": 8,
+      "started_at": "2026-07-30T06:54:46.8291611Z",
+      "completed_at": "2026-07-30T06:54:46.8365662Z",
+      "duration_ms": 7,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -476,9 +476,9 @@
     },
     {
       "spec_name": "tool_calls",
-      "started_at": "2026-07-30T02:52:54.1840755Z",
-      "completed_at": "2026-07-30T02:52:54.1899076Z",
-      "duration_ms": 5,
+      "started_at": "2026-07-30T06:54:46.8370713Z",
+      "completed_at": "2026-07-30T06:54:46.8409271Z",
+      "duration_ms": 3,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -523,9 +523,9 @@
     },
     {
       "spec_name": "track_events",
-      "started_at": "2026-07-30T02:52:54.1899076Z",
-      "completed_at": "2026-07-30T02:52:54.195208Z",
-      "duration_ms": 5,
+      "started_at": "2026-07-30T06:54:46.8419351Z",
+      "completed_at": "2026-07-30T06:54:46.8459086Z",
+      "duration_ms": 3,
       "backends_tested": {
         "session": [
           "inmemory",

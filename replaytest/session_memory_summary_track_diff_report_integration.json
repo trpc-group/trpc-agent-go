@@ -2,13 +2,13 @@
   "reports": [
     {
       "spec_name": "concurrent_writes",
-      "started_at": "2026-07-30T02:56:52.905356Z",
-      "completed_at": "2026-07-30T02:56:52.944544Z",
-      "duration_ms": 39,
+      "started_at": "2026-07-30T07:00:58.8352657Z",
+      "completed_at": "2026-07-30T07:00:58.9038696Z",
+      "duration_ms": 68,
       "backends_tested": {
         "session": [
           "inmemory",
-          "sqlite"
+          "redis"
         ],
         "memory": [
           "inmemory",
@@ -21,9 +21,9 @@
       "diff_count": 0,
       "verifications": [
         {
-          "what": "session_full",
+          "what": "events",
           "reference_backend": "inmemory",
-          "compared_backend": "sqlite",
+          "compared_backend": "redis",
           "status": "pass",
           "diffs": null,
           "session_key": {
@@ -33,9 +33,9 @@
           }
         },
         {
-          "what": "events",
+          "what": "session_full",
           "reference_backend": "inmemory",
-          "compared_backend": "sqlite",
+          "compared_backend": "redis",
           "status": "pass",
           "diffs": null,
           "session_key": {
@@ -49,13 +49,13 @@
     },
     {
       "spec_name": "error_recovery",
-      "started_at": "2026-07-30T02:56:52.9451355Z",
-      "completed_at": "2026-07-30T02:56:52.9801122Z",
-      "duration_ms": 34,
+      "started_at": "2026-07-30T07:00:58.9038696Z",
+      "completed_at": "2026-07-30T07:00:58.9213431Z",
+      "duration_ms": 17,
       "backends_tested": {
         "session": [
           "inmemory",
-          "sqlite"
+          "redis"
         ],
         "memory": [
           "inmemory",
@@ -70,7 +70,7 @@
         {
           "what": "events",
           "reference_backend": "inmemory",
-          "compared_backend": "sqlite",
+          "compared_backend": "redis",
           "status": "pass",
           "diffs": null,
           "session_key": {
@@ -82,7 +82,7 @@
         {
           "what": "state",
           "reference_backend": "inmemory",
-          "compared_backend": "sqlite",
+          "compared_backend": "redis",
           "status": "pass",
           "diffs": null,
           "session_key": {
@@ -111,13 +111,13 @@
     },
     {
       "spec_name": "full_cycle",
-      "started_at": "2026-07-30T02:56:52.9806229Z",
-      "completed_at": "2026-07-30T02:56:52.9955354Z",
-      "duration_ms": 14,
+      "started_at": "2026-07-30T07:00:58.9213431Z",
+      "completed_at": "2026-07-30T07:00:58.9500532Z",
+      "duration_ms": 28,
       "backends_tested": {
         "session": [
           "inmemory",
-          "sqlite"
+          "redis"
         ],
         "memory": [
           "inmemory",
@@ -132,7 +132,7 @@
         {
           "what": "events",
           "reference_backend": "inmemory",
-          "compared_backend": "sqlite",
+          "compared_backend": "redis",
           "status": "pass",
           "diffs": null,
           "session_key": {
@@ -148,7 +148,7 @@
         {
           "what": "state",
           "reference_backend": "inmemory",
-          "compared_backend": "sqlite",
+          "compared_backend": "redis",
           "status": "pass",
           "diffs": null,
           "session_key": {
@@ -164,7 +164,7 @@
         {
           "what": "tracks",
           "reference_backend": "inmemory",
-          "compared_backend": "sqlite",
+          "compared_backend": "redis",
           "status": "pass",
           "diffs": null,
           "session_key": {
@@ -180,7 +180,7 @@
         {
           "what": "session_full",
           "reference_backend": "inmemory",
-          "compared_backend": "sqlite",
+          "compared_backend": "redis",
           "status": "pass",
           "diffs": null,
           "session_key": {
@@ -214,13 +214,13 @@
     },
     {
       "spec_name": "injection_comprehensive",
-      "started_at": "2026-07-30T02:56:52.9955354Z",
-      "completed_at": "2026-07-30T02:56:53.005773Z",
-      "duration_ms": 10,
+      "started_at": "2026-07-30T07:00:58.9505624Z",
+      "completed_at": "2026-07-30T07:00:58.9643039Z",
+      "duration_ms": 13,
       "backends_tested": {
         "session": [
           "inmemory",
-          "sqlite"
+          "redis"
         ],
         "memory": [
           "inmemory",
@@ -233,45 +233,9 @@
       "diff_count": 0,
       "verifications": [
         {
-          "what": "tracks",
-          "reference_backend": "inmemory",
-          "compared_backend": "sqlite",
-          "status": "pass",
-          "diffs": null,
-          "session_key": {
-            "AppName": "test-app",
-            "UserID": "user1",
-            "SessionID": "sess-injection-1"
-          },
-          "summary_filter_keys": [
-            "main"
-          ],
-          "track_names": [
-            "search_timing"
-          ]
-        },
-        {
-          "what": "session_full",
-          "reference_backend": "inmemory",
-          "compared_backend": "sqlite",
-          "status": "pass",
-          "diffs": null,
-          "session_key": {
-            "AppName": "test-app",
-            "UserID": "user1",
-            "SessionID": "sess-injection-1"
-          },
-          "summary_filter_keys": [
-            "main"
-          ],
-          "track_names": [
-            "search_timing"
-          ]
-        },
-        {
           "what": "events",
           "reference_backend": "inmemory",
-          "compared_backend": "sqlite",
+          "compared_backend": "redis",
           "status": "pass",
           "diffs": null,
           "session_key": {
@@ -289,7 +253,7 @@
         {
           "what": "state",
           "reference_backend": "inmemory",
-          "compared_backend": "sqlite",
+          "compared_backend": "redis",
           "status": "pass",
           "diffs": null,
           "session_key": {
@@ -307,7 +271,43 @@
         {
           "what": "summary",
           "reference_backend": "inmemory",
-          "compared_backend": "sqlite",
+          "compared_backend": "redis",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-injection-1"
+          },
+          "summary_filter_keys": [
+            "main"
+          ],
+          "track_names": [
+            "search_timing"
+          ]
+        },
+        {
+          "what": "tracks",
+          "reference_backend": "inmemory",
+          "compared_backend": "redis",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-injection-1"
+          },
+          "summary_filter_keys": [
+            "main"
+          ],
+          "track_names": [
+            "search_timing"
+          ]
+        },
+        {
+          "what": "session_full",
+          "reference_backend": "inmemory",
+          "compared_backend": "redis",
           "status": "pass",
           "diffs": null,
           "session_key": {
@@ -343,13 +343,13 @@
     },
     {
       "spec_name": "memory_writes",
-      "started_at": "2026-07-30T02:56:53.0064204Z",
-      "completed_at": "2026-07-30T02:56:53.0129881Z",
+      "started_at": "2026-07-30T07:00:58.9643142Z",
+      "completed_at": "2026-07-30T07:00:58.9712903Z",
       "duration_ms": 6,
       "backends_tested": {
         "session": [
           "inmemory",
-          "sqlite"
+          "redis"
         ],
         "memory": [
           "inmemory",
@@ -402,13 +402,13 @@
     },
     {
       "spec_name": "multi_turn",
-      "started_at": "2026-07-30T02:56:53.0129881Z",
-      "completed_at": "2026-07-30T02:56:53.0207479Z",
-      "duration_ms": 7,
+      "started_at": "2026-07-30T07:00:58.9718032Z",
+      "completed_at": "2026-07-30T07:00:58.9855593Z",
+      "duration_ms": 13,
       "backends_tested": {
         "session": [
           "inmemory",
-          "sqlite"
+          "redis"
         ],
         "memory": [
           "inmemory",
@@ -423,7 +423,7 @@
         {
           "what": "events",
           "reference_backend": "inmemory",
-          "compared_backend": "sqlite",
+          "compared_backend": "redis",
           "status": "pass",
           "diffs": null,
           "session_key": {
@@ -437,13 +437,13 @@
     },
     {
       "spec_name": "out_of_order",
-      "started_at": "2026-07-30T02:56:53.0212628Z",
-      "completed_at": "2026-07-30T02:56:53.0308459Z",
-      "duration_ms": 9,
+      "started_at": "2026-07-30T07:00:58.986072Z",
+      "completed_at": "2026-07-30T07:00:58.9983268Z",
+      "duration_ms": 12,
       "backends_tested": {
         "session": [
           "inmemory",
-          "sqlite"
+          "redis"
         ],
         "memory": [
           "inmemory",
@@ -458,7 +458,7 @@
         {
           "what": "events",
           "reference_backend": "inmemory",
-          "compared_backend": "sqlite",
+          "compared_backend": "redis",
           "status": "pass",
           "diffs": null,
           "session_key": {
@@ -489,13 +489,13 @@
     },
     {
       "spec_name": "single_turn",
-      "started_at": "2026-07-30T02:56:53.0313574Z",
-      "completed_at": "2026-07-30T02:56:53.0362057Z",
-      "duration_ms": 4,
+      "started_at": "2026-07-30T07:00:58.9988405Z",
+      "completed_at": "2026-07-30T07:00:59.0059954Z",
+      "duration_ms": 7,
       "backends_tested": {
         "session": [
           "inmemory",
-          "sqlite"
+          "redis"
         ],
         "memory": [
           "inmemory",
@@ -510,7 +510,7 @@
         {
           "what": "events",
           "reference_backend": "inmemory",
-          "compared_backend": "sqlite",
+          "compared_backend": "redis",
           "status": "pass",
           "diffs": null,
           "session_key": {
@@ -522,7 +522,7 @@
         {
           "what": "state",
           "reference_backend": "inmemory",
-          "compared_backend": "sqlite",
+          "compared_backend": "redis",
           "status": "pass",
           "diffs": null,
           "session_key": {
@@ -536,13 +536,13 @@
     },
     {
       "spec_name": "state_updates",
-      "started_at": "2026-07-30T02:56:53.0377068Z",
-      "completed_at": "2026-07-30T02:56:53.0432884Z",
-      "duration_ms": 5,
+      "started_at": "2026-07-30T07:00:59.0065417Z",
+      "completed_at": "2026-07-30T07:00:59.015222Z",
+      "duration_ms": 8,
       "backends_tested": {
         "session": [
           "inmemory",
-          "sqlite"
+          "redis"
         ],
         "memory": [
           "inmemory",
@@ -557,7 +557,7 @@
         {
           "what": "state",
           "reference_backend": "inmemory",
-          "compared_backend": "sqlite",
+          "compared_backend": "redis",
           "status": "pass",
           "diffs": null,
           "session_key": {
@@ -569,7 +569,7 @@
         {
           "what": "session_full",
           "reference_backend": "inmemory",
-          "compared_backend": "sqlite",
+          "compared_backend": "redis",
           "status": "pass",
           "diffs": null,
           "session_key": {
@@ -583,13 +583,13 @@
     },
     {
       "spec_name": "summary_generation",
-      "started_at": "2026-07-30T02:56:53.0438052Z",
-      "completed_at": "2026-07-30T02:56:53.0561594Z",
-      "duration_ms": 12,
+      "started_at": "2026-07-30T07:00:59.0157431Z",
+      "completed_at": "2026-07-30T07:00:59.0316674Z",
+      "duration_ms": 15,
       "backends_tested": {
         "session": [
           "inmemory",
-          "sqlite"
+          "redis"
         ],
         "memory": [
           "inmemory",
@@ -604,7 +604,7 @@
         {
           "what": "summary",
           "reference_backend": "inmemory",
-          "compared_backend": "sqlite",
+          "compared_backend": "redis",
           "status": "pass",
           "diffs": null,
           "session_key": {
@@ -621,7 +621,7 @@
         {
           "what": "events",
           "reference_backend": "inmemory",
-          "compared_backend": "sqlite",
+          "compared_backend": "redis",
           "status": "pass",
           "diffs": null,
           "session_key": {
@@ -640,13 +640,13 @@
     },
     {
       "spec_name": "summary_truncation",
-      "started_at": "2026-07-30T02:56:53.0566804Z",
-      "completed_at": "2026-07-30T02:56:53.0679415Z",
-      "duration_ms": 11,
+      "started_at": "2026-07-30T07:00:59.0316779Z",
+      "completed_at": "2026-07-30T07:00:59.0477695Z",
+      "duration_ms": 16,
       "backends_tested": {
         "session": [
           "inmemory",
-          "sqlite"
+          "redis"
         ],
         "memory": [
           "inmemory",
@@ -659,24 +659,9 @@
       "diff_count": 0,
       "verifications": [
         {
-          "what": "state",
-          "reference_backend": "inmemory",
-          "compared_backend": "sqlite",
-          "status": "pass",
-          "diffs": null,
-          "session_key": {
-            "AppName": "test-app",
-            "UserID": "user1",
-            "SessionID": "sess-trunc-1"
-          },
-          "summary_filter_keys": [
-            "main"
-          ]
-        },
-        {
           "what": "summary",
           "reference_backend": "inmemory",
-          "compared_backend": "sqlite",
+          "compared_backend": "redis",
           "status": "pass",
           "diffs": null,
           "session_key": {
@@ -691,7 +676,22 @@
         {
           "what": "events",
           "reference_backend": "inmemory",
-          "compared_backend": "sqlite",
+          "compared_backend": "redis",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-trunc-1"
+          },
+          "summary_filter_keys": [
+            "main"
+          ]
+        },
+        {
+          "what": "state",
+          "reference_backend": "inmemory",
+          "compared_backend": "redis",
           "status": "pass",
           "diffs": null,
           "session_key": {
@@ -708,13 +708,13 @@
     },
     {
       "spec_name": "tool_calls",
-      "started_at": "2026-07-30T02:56:53.0684561Z",
-      "completed_at": "2026-07-30T02:56:53.075869Z",
-      "duration_ms": 7,
+      "started_at": "2026-07-30T07:00:59.0482835Z",
+      "completed_at": "2026-07-30T07:00:59.0577775Z",
+      "duration_ms": 9,
       "backends_tested": {
         "session": [
           "inmemory",
-          "sqlite"
+          "redis"
         ],
         "memory": [
           "inmemory",
@@ -727,9 +727,9 @@
       "diff_count": 0,
       "verifications": [
         {
-          "what": "events",
+          "what": "state",
           "reference_backend": "inmemory",
-          "compared_backend": "sqlite",
+          "compared_backend": "redis",
           "status": "pass",
           "diffs": null,
           "session_key": {
@@ -739,9 +739,9 @@
           }
         },
         {
-          "what": "state",
+          "what": "events",
           "reference_backend": "inmemory",
-          "compared_backend": "sqlite",
+          "compared_backend": "redis",
           "status": "pass",
           "diffs": null,
           "session_key": {
@@ -755,13 +755,13 @@
     },
     {
       "spec_name": "track_events",
-      "started_at": "2026-07-30T02:56:53.0764328Z",
-      "completed_at": "2026-07-30T02:56:53.0827387Z",
-      "duration_ms": 6,
+      "started_at": "2026-07-30T07:00:59.0577775Z",
+      "completed_at": "2026-07-30T07:00:59.0683157Z",
+      "duration_ms": 10,
       "backends_tested": {
         "session": [
           "inmemory",
-          "sqlite"
+          "redis"
         ],
         "memory": [
           "inmemory",
@@ -776,7 +776,7 @@
         {
           "what": "tracks",
           "reference_backend": "inmemory",
-          "compared_backend": "sqlite",
+          "compared_backend": "redis",
           "status": "pass",
           "diffs": null,
           "session_key": {
