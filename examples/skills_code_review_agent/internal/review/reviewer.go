@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -421,7 +422,7 @@ func gitDiff(ctx context.Context, repoPath string) (string, error) {
 	var out []byte
 	var err error
 	if gitHasHEAD(ctx, repoPath) {
-		out, err = gitOutputLimited(ctx, repoPath, budget.remaining(), "diff", "HEAD", "--no-ext-diff", "--no-color", "--unified=3")
+		out, err = gitOutputLimited(ctx, repoPath, budget.remaining(), "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--unified=3", "HEAD")
 		if err == nil && len(out) > 0 {
 			if err := validateDiffChunkPerFile(string(out)); err != nil {
 				return "", err
@@ -484,8 +485,7 @@ func gitHasHEAD(ctx context.Context, repoPath string) bool {
 }
 
 func gitOutput(ctx context.Context, repoPath string, args ...string) ([]byte, error) {
-	cmdArgs := append([]string{"-C", repoPath}, args...)
-	cmd := exec.CommandContext(ctx, "git", cmdArgs...)
+	cmd := gitCommand(ctx, repoPath, args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -564,7 +564,7 @@ func worktreeFileDiffsWithLimit(
 	parts := bytes.Split(raw, []byte{0})
 	var files []string
 	for _, part := range parts {
-		file := filepath.ToSlash(strings.TrimSpace(string(part)))
+		file := filepath.ToSlash(string(part))
 		if file != "" {
 			if len(files)+1 > reviewDiffMaxFiles {
 				return "", &diffInputBudgetError{
@@ -616,7 +616,8 @@ func worktreeFileDiffsWithLimit(
 		}
 		if bytes.Contains(data, []byte{0}) {
 			var b strings.Builder
-			fmt.Fprintf(&b, "diff --git a/%s b/%s\nnew file mode 100644\nBinary files /dev/null and b/%s differ\n", file, file, file)
+			newPath := gitDiffPath("b/", file)
+			fmt.Fprintf(&b, "diff --git %s %s\nnew file mode 100644\nBinary files /dev/null and %s differ\n", gitDiffPath("a/", file), newPath, newPath)
 			if err := validateDiffSectionSize(b.String(), file); err != nil {
 				return "", err
 			}
@@ -707,8 +708,7 @@ func gitOutputLimited(ctx context.Context, repoPath string, maxBytes int64, args
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	cmdArgs := append([]string{"-C", repoPath}, args...)
-	cmd := exec.CommandContext(ctx, "git", cmdArgs...)
+	cmd := gitCommand(ctx, repoPath, args...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err
@@ -749,6 +749,40 @@ func gitOutputLimited(ctx context.Context, repoPath string, maxBytes int64, args
 	return out, waitErr
 }
 
+func gitCommand(ctx context.Context, repoPath string, args ...string) *exec.Cmd {
+	cmdArgs := append([]string{"-C", repoPath}, args...)
+	cmd := exec.CommandContext(ctx, "git", cmdArgs...)
+	cmd.Env = sanitizedGitEnv()
+	return cmd
+}
+
+func sanitizedGitEnv() []string {
+	keys := []string{
+		"PATH",
+		"SystemRoot",
+		"WINDIR",
+		"COMSPEC",
+		"PATHEXT",
+		"TMPDIR",
+		"TMP",
+		"TEMP",
+	}
+	env := make([]string, 0, len(keys)+5)
+	for _, key := range keys {
+		if value, ok := os.LookupEnv(key); ok {
+			env = append(env, key+"="+value)
+		}
+	}
+	env = append(env,
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_CONFIG_GLOBAL="+os.DevNull,
+		"GIT_CONFIG_COUNT=0",
+		"GIT_TERMINAL_PROMPT=0",
+		"GIT_OPTIONAL_LOCKS=0",
+	)
+	return env
+}
+
 func validateDiffChunkPerFile(raw string) error {
 	if raw == "" {
 		return nil
@@ -780,10 +814,10 @@ func writeNewFileDiffText(b *strings.Builder, file, text string, noNewline bool)
 	if text != "" {
 		lineCount = strings.Count(text, "\n") + 1
 	}
-	fmt.Fprintf(b, "diff --git a/%s b/%s\n", file, file)
+	fmt.Fprintf(b, "diff --git %s %s\n", gitDiffPath("a/", file), gitDiffPath("b/", file))
 	fmt.Fprintf(b, "new file mode 100644\n")
 	fmt.Fprintf(b, "--- /dev/null\n")
-	fmt.Fprintf(b, "+++ b/%s\n", file)
+	fmt.Fprintf(b, "+++ %s\n", gitDiffPath("b/", file))
 	fmt.Fprintf(b, "@@ -0,0 +1,%d @@\n", lineCount)
 	for start := 0; start < len(text); {
 		end := strings.IndexByte(text[start:], '\n')
@@ -800,9 +834,9 @@ func writeNewFileDiffText(b *strings.Builder, file, text string, noNewline bool)
 }
 
 func writeSyntheticFileDiff(b *strings.Builder, file string) {
-	fmt.Fprintf(b, "diff --git a/%s b/%s\n", file, file)
-	fmt.Fprintf(b, "--- a/%s\n", file)
-	fmt.Fprintf(b, "+++ b/%s\n", file)
+	fmt.Fprintf(b, "diff --git %s %s\n", gitDiffPath("a/", file), gitDiffPath("b/", file))
+	fmt.Fprintf(b, "--- %s\n", gitDiffPath("a/", file))
+	fmt.Fprintf(b, "+++ %s\n", gitDiffPath("b/", file))
 }
 
 func fileListIncompleteFinding() Finding {
@@ -821,10 +855,10 @@ func fileListIncompleteFinding() Finding {
 }
 
 func writeNewFileDiff(b *strings.Builder, file string, lines []string, noNewline bool) {
-	fmt.Fprintf(b, "diff --git a/%s b/%s\n", file, file)
+	fmt.Fprintf(b, "diff --git %s %s\n", gitDiffPath("a/", file), gitDiffPath("b/", file))
 	fmt.Fprintf(b, "new file mode 100644\n")
 	fmt.Fprintf(b, "--- /dev/null\n")
-	fmt.Fprintf(b, "+++ b/%s\n", file)
+	fmt.Fprintf(b, "+++ %s\n", gitDiffPath("b/", file))
 	fmt.Fprintf(b, "@@ -0,0 +1,%d @@\n", len(lines))
 	for _, line := range lines {
 		fmt.Fprintf(b, "+%s\n", line)
@@ -832,6 +866,23 @@ func writeNewFileDiff(b *strings.Builder, file string, lines []string, noNewline
 	if noNewline {
 		b.WriteString("\\ No newline at end of file\n")
 	}
+}
+
+func gitDiffPath(prefix, file string) string {
+	path := prefix + filepathSlash(file)
+	if !needsGitPathQuoting(path) {
+		return path
+	}
+	return strconv.Quote(path)
+}
+
+func needsGitPathQuoting(path string) bool {
+	for _, r := range path {
+		if r <= ' ' || r == '"' || r == '\\' || r == 0x7f {
+			return true
+		}
+	}
+	return false
 }
 
 // incompleteAnalysisReasons are sandbox skip reasons that indicate core

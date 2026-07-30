@@ -54,8 +54,17 @@ type CodeExecutor struct {
 	autoInputs bool
 }
 
-// New creates a new CodeExecutor instance
+// New creates a new CodeExecutor instance.
 func New(opts ...Option) (*CodeExecutor, error) {
+	return NewWithContext(context.Background(), opts...)
+}
+
+// NewWithContext creates a new CodeExecutor instance and bounds Docker
+// initialization with ctx.
+func NewWithContext(ctx context.Context, opts ...Option) (*CodeExecutor, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	c := &CodeExecutor{
 		hostConfig: container.HostConfig{
 			AutoRemove:  true,   // Automatically remove container after it stops
@@ -104,7 +113,10 @@ func New(opts ...Option) (*CodeExecutor, error) {
 	}
 
 	// Initialize container
-	if err := c.initContainer(); err != nil {
+	if err := c.initContainer(ctx); err != nil {
+		if c.client != nil {
+			_ = c.client.Close()
+		}
 		return nil, fmt.Errorf("failed to initialize container: %w", err)
 	}
 
@@ -491,10 +503,11 @@ func (c *CodeExecutor) verifyPythonInstallation(ctx context.Context) error {
 	return nil
 }
 
-// initContainer initializes the Docker container
-func (c *CodeExecutor) initContainer() error {
-	ctx := context.Background()
-
+// initContainer initializes the Docker container.
+func (c *CodeExecutor) initContainer(ctx context.Context) (err error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if c.client == nil {
 		return fmt.Errorf("docker client is not initialized")
 	}
@@ -516,6 +529,16 @@ func (c *CodeExecutor) initContainer() error {
 	if err != nil {
 		return fmt.Errorf("failed to create container: %w", err)
 	}
+	createdContainerID := resp.ID
+	defer func() {
+		if err == nil || createdContainerID == "" {
+			return
+		}
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		c.cleanupContainerID(cleanupCtx, createdContainerID, true)
+		c.container = nil
+	}()
 
 	// Start container
 	if err := c.client.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
@@ -562,11 +585,14 @@ func (c *CodeExecutor) waitForContainerReady(ctx context.Context, timeout time.D
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
-	timeoutCh := time.After(timeout)
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 
 	for {
 		select {
-		case <-timeoutCh:
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
 			return fmt.Errorf("timeout %v reached while waiting for container %s to be ready", timeout, containerID)
 		case <-ticker.C:
 			// Check container status
@@ -597,18 +623,23 @@ func (c *CodeExecutor) cleanup() {
 	}
 
 	ctx := context.Background()
+	c.cleanupContainerID(ctx, c.container.ID, false)
+	log.DebugfContext(ctx, "Container %s stopped and removed", c.container.ID)
+}
 
+func (c *CodeExecutor) cleanupContainerID(ctx context.Context, containerID string, force bool) {
+	if containerID == "" || c.client == nil {
+		return
+	}
 	// Stop container
-	if err := c.client.ContainerStop(ctx, c.container.ID, container.StopOptions{}); err != nil {
+	if err := c.client.ContainerStop(ctx, containerID, container.StopOptions{}); err != nil {
 		log.DebugfContext(ctx, "Failed to stop container: %v", err)
 	}
 
 	// Remove container
-	if err := c.client.ContainerRemove(ctx, c.container.ID, container.RemoveOptions{}); err != nil {
+	if err := c.client.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: force}); err != nil {
 		log.DebugfContext(ctx, "Failed to remove container: %v", err)
 	}
-
-	log.DebugfContext(ctx, "Container %s stopped and removed", c.container.ID)
 }
 
 // Close manually cleans up resources

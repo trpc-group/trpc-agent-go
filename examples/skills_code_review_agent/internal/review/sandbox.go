@@ -90,7 +90,10 @@ func NewSandboxRunnerWithContext(ctx context.Context, cfg ReviewConfig) (Sandbox
 		if err != nil {
 			return nil, err
 		}
-		ex, err := containerexec.New(
+		initCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		ex, err := containerexec.NewWithContext(
+			initCtx,
 			containerexec.WithDockerFilePath(dockerfilePath),
 			containerexec.WithHostConfig(dockercontainer.HostConfig{
 				AutoRemove:  true,
@@ -426,8 +429,8 @@ func (r *WorkspaceSandboxRunner) runProgram(ctx context.Context, ws codeexecutor
 	})
 	// limitText is applied after RunProgram to enforce the cap on any
 	// executor that does not yet honour MaxOutputBytes at the source.
-	out, outTrunc := limitText(redactSecrets(res.Stdout), r.outputLimitBytes)
-	stderr, errTrunc := limitText(redactSecrets(res.Stderr), r.outputLimitBytes)
+	out, outTrunc := safeSandboxOutput(res.Stdout, r.outputLimitBytes, res.OutputTruncated)
+	stderr, errTrunc := safeSandboxOutput(res.Stderr, r.outputLimitBytes, res.OutputTruncated)
 	status := "success"
 	errType := ""
 	if err != nil {
@@ -1141,6 +1144,14 @@ func limitText(s string, max int) (string, bool) {
 		return s, false
 	}
 	return s[:max] + "\n...[truncated]", true
+}
+
+func safeSandboxOutput(s string, max int, alreadyTruncated bool) (string, bool) {
+	if alreadyTruncated && strings.TrimSpace(s) != "" {
+		out, _ := limitText("[REDACTED_TRUNCATED_OUTPUT]", max)
+		return out, true
+	}
+	return limitText(redactSecrets(s), max)
 }
 
 func classifySandboxError(err error) string {

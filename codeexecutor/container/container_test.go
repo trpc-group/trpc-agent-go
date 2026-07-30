@@ -97,6 +97,27 @@ func newFakeDockerClient(t *testing.T, handler http.HandlerFunc) (*client.Client
 	return cli, cleanup
 }
 
+func newFakeDockerHost(t *testing.T, handler http.HandlerFunc) (string, func()) {
+	t.Helper()
+
+	server := httptest.NewServer(http.HandlerFunc(handler))
+	parsed, err := url.Parse(server.URL)
+	require.NoError(t, err)
+	return fmt.Sprintf("tcp://%s", parsed.Host), server.Close
+}
+
+func allowContainerCleanup(w http.ResponseWriter, r *http.Request, id string) bool {
+	if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/"+id+"/stop") {
+		w.WriteHeader(http.StatusNoContent)
+		return true
+	}
+	if r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/containers/"+id) {
+		w.WriteHeader(http.StatusNoContent)
+		return true
+	}
+	return false
+}
+
 func writeHijackStream(t *testing.T, conn net.Conn, buf *bufio.ReadWriter, stdout, stderr string) {
 	t.Helper()
 
@@ -1056,7 +1077,7 @@ func TestInitContainer_CreateError(t *testing.T) {
 		containerName: "test",
 	}
 
-	err := exec.initContainer()
+	err := exec.initContainer(context.Background())
 	assert.Error(t, err)
 	assert.True(t, createCalled)
 }
@@ -1074,6 +1095,7 @@ func TestInitContainer_StartError(t *testing.T) {
 		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/cid/start"):
 			startCalled = true
 			http.Error(w, "start fail", http.StatusInternalServerError)
+		case allowContainerCleanup(w, r, "cid"):
 		default:
 			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
 			return
@@ -1092,7 +1114,7 @@ func TestInitContainer_StartError(t *testing.T) {
 		containerName: "test",
 	}
 
-	err := exec.initContainer()
+	err := exec.initContainer(context.Background())
 	assert.Error(t, err)
 	assert.True(t, startCalled)
 }
@@ -1118,6 +1140,7 @@ func TestInitContainer_WaitError(t *testing.T) {
 			}
 			assert.Failf(t, "unexpected inspect call", "%d", inspectCalls)
 			return
+		case allowContainerCleanup(w, r, "cid"):
 		default:
 			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
 			return
@@ -1136,7 +1159,7 @@ func TestInitContainer_WaitError(t *testing.T) {
 		containerName: "test",
 	}
 
-	err := exec.initContainer()
+	err := exec.initContainer(context.Background())
 	assert.Error(t, err)
 	assert.Equal(t, 1, inspectCalls)
 }
@@ -1161,6 +1184,7 @@ func TestInitContainer_InspectError(t *testing.T) {
 				return
 			}
 			http.Error(w, "inspect fail", http.StatusInternalServerError)
+		case allowContainerCleanup(w, r, "cid"):
 		default:
 			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
 			return
@@ -1179,7 +1203,7 @@ func TestInitContainer_InspectError(t *testing.T) {
 		containerName: "test",
 	}
 
-	err := exec.initContainer()
+	err := exec.initContainer(context.Background())
 	assert.Error(t, err)
 	assert.Equal(t, 2, inspectCalls)
 }
@@ -1205,6 +1229,7 @@ func TestInitContainer_NotRunning(t *testing.T) {
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"State":{"Running":false,"Status":"created","ExitCode":0}}`))
+		case allowContainerCleanup(w, r, "cid"):
 		default:
 			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
 			return
@@ -1223,7 +1248,7 @@ func TestInitContainer_NotRunning(t *testing.T) {
 		containerName: "test",
 	}
 
-	err := exec.initContainer()
+	err := exec.initContainer(context.Background())
 	assert.Error(t, err)
 	assert.Equal(t, 2, inspectCalls)
 }
@@ -1252,6 +1277,7 @@ func TestInitContainer_VerifyError(t *testing.T) {
 		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/cid/exec"):
 			execCreateCalled = true
 			http.Error(w, "exec fail", http.StatusInternalServerError)
+		case allowContainerCleanup(w, r, "cid"):
 		default:
 			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
 			return
@@ -1270,7 +1296,7 @@ func TestInitContainer_VerifyError(t *testing.T) {
 		containerName: "test",
 	}
 
-	err := exec.initContainer()
+	err := exec.initContainer(context.Background())
 	assert.Error(t, err)
 	assert.Equal(t, 2, inspectCalls)
 	assert.True(t, execCreateCalled)
@@ -1328,7 +1354,7 @@ func TestInitContainer_Success(t *testing.T) {
 		containerName: "test",
 	}
 
-	assert.NoError(t, exec.initContainer())
+	assert.NoError(t, exec.initContainer(context.Background()))
 	assert.NotNil(t, exec.container)
 	assert.Equal(t, "cid", exec.container.ID)
 }
@@ -1359,7 +1385,7 @@ func TestInitContainer_EnsureImageError(t *testing.T) {
 		containerName: "test",
 	}
 
-	err := exec.initContainer()
+	err := exec.initContainer(context.Background())
 	assert.Error(t, err)
 	assert.True(t, listCalled)
 }
@@ -1393,9 +1419,67 @@ func TestInitContainer_BuildError(t *testing.T) {
 	// Ensure Dockerfile exists to avoid context error.
 	assert.NoError(t, os.WriteFile(filepath.Join(exec.dockerFilePath, "Dockerfile"), []byte("FROM scratch\n"), 0o644))
 
-	err := exec.initContainer()
+	err := exec.initContainer(context.Background())
 	assert.Error(t, err)
 	assert.True(t, buildCalled)
+}
+
+func TestNewWithContextBoundsInitialization(t *testing.T) {
+	host, cleanup := newFakeDockerHost(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case (r.Method == http.MethodGet || r.Method == http.MethodHead) && strings.HasSuffix(r.URL.Path, "_ping"):
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/images/json"):
+			<-r.Context().Done()
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+		}
+	})
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := NewWithContext(ctx,
+		WithHost(host),
+		WithContainerConfig(tcontainer.Config{Image: "python:3.9-slim"}),
+	)
+	require.Error(t, err)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Less(t, time.Since(start), time.Second)
+}
+
+func TestNewWithContextCleansCreatedContainerOnPostCreateFailure(t *testing.T) {
+	var removed atomic.Int32
+	host, cleanup := newFakeDockerHost(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case (r.Method == http.MethodGet || r.Method == http.MethodHead) && strings.HasSuffix(r.URL.Path, "_ping"):
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/images/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[{"RepoTags":["python:3.9-slim"]}]`))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/create"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"cid","Warnings":[]}`))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/cid/start"):
+			http.Error(w, "start fail", http.StatusInternalServerError)
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/cid/stop"):
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/containers/cid"):
+			removed.Add(1)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+		}
+	})
+	defer cleanup()
+
+	_, err := NewWithContext(context.Background(),
+		WithHost(host),
+		WithContainerConfig(tcontainer.Config{Image: "python:3.9-slim"}),
+	)
+	require.Error(t, err)
+	require.Equal(t, int32(1), removed.Load())
 }
 
 func TestCleanup_NoResources(t *testing.T) {
@@ -1450,7 +1534,7 @@ func TestCleanup_StopRemoveError(t *testing.T) {
 
 func TestInitContainerWithoutClient(t *testing.T) {
 	exec := &CodeExecutor{}
-	err := exec.initContainer()
+	err := exec.initContainer(context.Background())
 	assert.Error(t, err)
 }
 

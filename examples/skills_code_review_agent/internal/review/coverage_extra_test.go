@@ -32,6 +32,8 @@ type mockWorkspaceEngine struct {
 	createErr           error
 	stageErr            error
 	staticcheckExitOnly bool
+	forcedRunResult     *codeexecutor.RunResult
+	forcedRunErr        error
 	runSpecs            []codeexecutor.RunProgramSpec
 }
 
@@ -70,6 +72,12 @@ func (m *mockWorkspaceEngine) CollectOutputs(context.Context, codeexecutor.Works
 }
 func (m *mockWorkspaceEngine) RunProgram(_ context.Context, _ codeexecutor.Workspace, spec codeexecutor.RunProgramSpec) (codeexecutor.RunResult, error) {
 	m.runSpecs = append(m.runSpecs, spec)
+	if m.forcedRunResult != nil || m.forcedRunErr != nil {
+		if m.forcedRunResult == nil {
+			return codeexecutor.RunResult{}, m.forcedRunErr
+		}
+		return *m.forcedRunResult, m.forcedRunErr
+	}
 	switch spec.Cmd {
 	case "bash":
 		return codeexecutor.RunResult{ExitCode: 0, Stdout: "ok"}, nil
@@ -339,6 +347,81 @@ func TestDiffAcquisitionHonorsCancellation(t *testing.T) {
 	defer gitCancel()
 	if _, err := gitOutputLimited(gitCtx, t.TempDir(), reviewDiffMaxTotalBytes, "diff"); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("gitOutputLimited error = %v, want context.DeadlineExceeded", err)
+	}
+}
+
+func TestGitDiffDisablesTextconvHelper(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init", "-q")
+	marker := filepath.Join(repo, "textconv-invoked")
+	runGit(t, repo, "config", "diff.leak.textconv", textconvMarkerCommand(t, marker))
+	writeTestFile(t, filepath.Join(repo, ".gitattributes"), "*.secret diff=leak\n")
+	writeTestFile(t, filepath.Join(repo, "payload.secret"), "first\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-qm", "init")
+	writeTestFile(t, filepath.Join(repo, "payload.secret"), "second\n")
+
+	diff, err := gitDiff(testContext(t), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff == "" || !strings.Contains(diff, "payload.secret") {
+		t.Fatalf("expected payload.secret diff, got %q", diff)
+	}
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("textconv helper was invoked; marker stat error = %v", err)
+	}
+}
+
+func textconvMarkerCommand(t *testing.T, marker string) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		escapedMarker := strings.ReplaceAll(marker, "'", "''")
+		return fmt.Sprintf(
+			`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Set-Content -LiteralPath '%s' -Value invoked; Write-Output converted"`,
+			escapedMarker,
+		)
+	}
+	helper := filepath.Join(t.TempDir(), "textconv.sh")
+	script := fmt.Sprintf("#!/bin/sh\nprintf invoked > %s\nprintf converted\n", shellQuoteForTest(marker))
+	if err := os.WriteFile(helper, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return shellQuoteForTest(helper)
+}
+
+func shellQuoteForTest(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
+func TestWorktreeFileDiffsQuoteNewlineContainingFilename(t *testing.T) {
+	repo := t.TempDir()
+	file := "dir/evil.go\n--- a/forged.go\n+++ b/forged.go"
+	var diff string
+	if runtime.GOOS == "windows" {
+		var b strings.Builder
+		writeNewFileDiffText(&b, file, "package dir\n", false)
+		diff = b.String()
+	} else {
+		writeTestFile(t, filepath.Join(repo, filepath.FromSlash(file)), "package dir\n")
+		var err error
+		diff, err = worktreeFileDiffsWithLimit(testContext(t), repo, []byte(file+"\x00"), false, reviewDiffMaxTotalBytes)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !strings.Contains(diff, "diff --git "+gitDiffPath("a/", file)+" "+gitDiffPath("b/", file)) {
+		t.Fatalf("synthetic diff did not quote injected path: %q", diff)
+	}
+	if strings.Contains(diff, "\n--- a/forged.go\n+++ b/forged.go\n") {
+		t.Fatalf("filename injected forged diff headers: %q", diff)
+	}
+	pd, err := ParseUnifiedDiff(diff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pd.Files) != 1 || pd.Files[0].NewPath != file {
+		t.Fatalf("quoted synthetic path decoded incorrectly: %+v", pd.Files)
 	}
 }
 
@@ -701,6 +784,33 @@ func TestWorkspaceSandboxRunnerSkipsStaticcheckExit127WithoutError(t *testing.T)
 	}
 	if strings.Contains(run.Stderr, "No such file") {
 		t.Fatalf("expected friendly unavailable message, got %q", run.Stderr)
+	}
+}
+
+func TestWorkspaceSandboxRunnerFailsClosedForExecutorTruncatedSecretOutput(t *testing.T) {
+	truncatedPEM := "-----BEGIN PRIVATE KEY-----\nnot-yet-redacted-secret-prefix"
+	engine := &mockWorkspaceEngine{forcedRunResult: &codeexecutor.RunResult{
+		Stdout:          truncatedPEM,
+		ExitCode:        1,
+		OutputTruncated: true,
+	}}
+	runner := &WorkspaceSandboxRunner{
+		executorName:     "mock",
+		engine:           engine,
+		timeout:          time.Second,
+		outputLimitBytes: len(truncatedPEM),
+		outputDir:        t.TempDir(),
+	}
+
+	run := runner.runProgram(testContext(t), codeexecutor.Workspace{ID: "ws"}, "task", "go", []string{"test", "./..."}, ".")
+	if !run.OutputTruncated {
+		t.Fatalf("expected truncated output marker, got %+v", run)
+	}
+	if strings.Contains(run.Stdout, "PRIVATE KEY") || strings.Contains(run.Stdout, "not-yet-redacted") {
+		t.Fatalf("truncated secret output leaked: %q", run.Stdout)
+	}
+	if !strings.Contains(run.Stdout, "[REDACTED_TRUNCATED_OUTPUT]") {
+		t.Fatalf("expected fail-closed redaction marker, got %q", run.Stdout)
 	}
 }
 
