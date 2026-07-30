@@ -10,13 +10,15 @@ package telemetry
 
 import (
 	"sync/atomic"
+
+	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 )
 
 // AttributeAction controls how a span attribute value is produced.
 type AttributeAction int
 
 const (
-	// AttributeCapture writes the full serialized value (default).
+	// AttributeCapture writes the full serialized value when selected.
 	AttributeCapture AttributeAction = iota
 	// AttributeDrop skips marshaling and does not write the attribute.
 	AttributeDrop
@@ -69,11 +71,12 @@ func InstallSpanAttributePolicy(policy SpanAttributePolicy) (restore func()) {
 	}
 }
 
-// Resolve returns the effective rule for operation/key. No match yields default Capture.
+// Resolve returns the effective rule for operation/key. Tool arguments and
+// results default to Omit; other unmatched attributes default to Capture.
 func Resolve(operation, key string) AttributeRule {
 	p := spanAttributePolicy.Load()
 	if p == nil {
-		return AttributeRule{Action: AttributeCapture}
+		return defaultAttributeRule(operation, key)
 	}
 	return p.resolve(operation, key)
 }
@@ -101,6 +104,17 @@ func (p *SpanAttributePolicy) resolve(operation, key string) AttributeRule {
 			continue
 		}
 		return r
+	}
+	return defaultAttributeRule(operation, key)
+}
+
+func defaultAttributeRule(operation, key string) AttributeRule {
+	if operation == OperationExecuteTool {
+		switch key {
+		case semconvtrace.KeyGenAIToolCallArguments,
+			semconvtrace.KeyGenAIToolCallResult:
+			return AttributeRule{Action: AttributeOmit}
+		}
 	}
 	return AttributeRule{Action: AttributeCapture}
 }

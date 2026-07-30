@@ -38,6 +38,7 @@ import (
 	knowledgedoc "trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	knowledgegraph "trpc.group/trpc-go/trpc-agent-go/knowledge/graph"
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
+	agentlog "trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/plugin"
@@ -9901,6 +9902,171 @@ func TestExecuteToolWithCallbacks_PluginAfterToolError(t *testing.T) {
 		nil,
 	)
 	require.Error(t, err)
+}
+
+func TestExecuteToolWithCallbacksFailureLogExcludesPayload(
+	t *testing.T,
+) {
+	const (
+		argumentSecret = "argument-secret-value"
+		errorSecret    = "error-secret-value"
+	)
+
+	originalWarn := agentlog.WarnfContext
+	originalError := agentlog.ErrorfContext
+	var entries []string
+	capture := func(
+		_ context.Context,
+		format string,
+		args ...any,
+	) {
+		entries = append(entries, fmt.Sprintf(format, args...))
+	}
+	agentlog.WarnfContext = capture
+	agentlog.ErrorfContext = capture
+	t.Cleanup(func() {
+		agentlog.WarnfContext = originalWarn
+		agentlog.ErrorfContext = originalError
+	})
+
+	proc := NewFunctionCallResponseProcessor(false, nil)
+	tl := &mockCallableTool{
+		declaration: &tool.Declaration{Name: "sensitive_tool"},
+		callFn: func(_ context.Context, _ []byte) (any, error) {
+			return map[string]any{
+				"password": argumentSecret,
+			}, fmt.Errorf("remote failure: %s", errorSecret)
+		},
+	}
+	toolCall := model.ToolCall{
+		ID: "call-sensitive",
+		Function: model.FunctionDefinitionParam{
+			Name: "sensitive_tool",
+			Arguments: []byte(
+				`{"password":"` + argumentSecret + `"}`,
+			),
+		},
+	}
+
+	_, _, _, _, _, err := proc.executeToolWithCallbacks(
+		context.Background(),
+		&agent.Invocation{},
+		toolCall,
+		tl,
+		nil,
+	)
+	require.Error(t, err)
+
+	joined := strings.Join(entries, "\n")
+	require.Contains(t, joined, "sensitive_tool")
+	require.NotContains(t, joined, argumentSecret)
+	require.NotContains(t, joined, errorSecret)
+}
+
+func TestExecuteToolCallDebugLogExcludesArguments(t *testing.T) {
+	const (
+		toolName       = "sensitive_tool"
+		argumentSecret = "argument-secret-value"
+	)
+
+	originalDebug := agentlog.DebugfContext
+	var entries []string
+	agentlog.DebugfContext = func(
+		_ context.Context,
+		format string,
+		args ...any,
+	) {
+		entries = append(entries, fmt.Sprintf(format, args...))
+	}
+	t.Cleanup(func() {
+		agentlog.DebugfContext = originalDebug
+	})
+
+	tl := &mockCallableTool{
+		declaration: &tool.Declaration{Name: toolName},
+		callFn: func(_ context.Context, _ []byte) (any, error) {
+			return map[string]any{"ok": true}, nil
+		},
+	}
+	toolCall := model.ToolCall{
+		ID: "call-sensitive-debug",
+		Function: model.FunctionDefinitionParam{
+			Name: toolName,
+			Arguments: []byte(
+				`{"password":"` + argumentSecret + `"}`,
+			),
+		},
+	}
+
+	_, _, _, _, _, err := NewFunctionCallResponseProcessor(
+		false,
+		nil,
+	).executeToolCall(
+		context.Background(),
+		&agent.Invocation{},
+		toolCall,
+		map[string]tool.Tool{toolName: tl},
+		0,
+		nil,
+	)
+	require.NoError(t, err)
+
+	joined := strings.Join(entries, "\n")
+	require.Contains(t, joined, toolName)
+	require.NotContains(t, joined, argumentSecret)
+	require.NotContains(t, joined, `"password"`)
+}
+
+func TestExecuteToolSuccessDebugLogExcludesResult(t *testing.T) {
+	const (
+		toolName     = "sensitive_tool"
+		resultSecret = "successful-result-secret-value"
+	)
+
+	originalDebug := agentlog.DebugfContext
+	var entries []string
+	agentlog.DebugfContext = func(
+		_ context.Context,
+		format string,
+		args ...any,
+	) {
+		entries = append(entries, fmt.Sprintf(format, args...))
+	}
+	t.Cleanup(func() {
+		agentlog.DebugfContext = originalDebug
+	})
+
+	tl := &mockCallableTool{
+		declaration: &tool.Declaration{Name: toolName},
+		callFn: func(_ context.Context, _ []byte) (any, error) {
+			return map[string]any{"password": resultSecret}, nil
+		},
+	}
+	toolCall := model.ToolCall{
+		ID: "call-sensitive-success",
+		Function: model.FunctionDefinitionParam{
+			Name:      toolName,
+			Arguments: []byte(`{}`),
+		},
+	}
+
+	_, _, _, _, _, err := NewFunctionCallResponseProcessor(
+		false,
+		nil,
+	).executeToolCall(
+		context.Background(),
+		&agent.Invocation{},
+		toolCall,
+		map[string]tool.Tool{toolName: tl},
+		0,
+		nil,
+	)
+	require.NoError(t, err)
+
+	joined := strings.Join(entries, "\n")
+	require.Contains(t, joined, toolName)
+	require.NotContains(t, joined, resultSecret)
+	require.NotContains(t, joined, `"password"`)
 }
 
 func TestExecuteToolWithCallbacks_PluginAfterToolOverrideClearsErr(

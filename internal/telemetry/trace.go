@@ -307,11 +307,23 @@ func TraceToolCall(span trace.Span, sess *session.Session, declaration *tool.Dec
 	setBytesAttribute(span, OperationExecuteTool, semconvtrace.KeyGenAIToolCallArguments, args)
 	if rspEvent != nil && rspEvent.Response != nil {
 		if e := rspEvent.Response.Error; e != nil {
-			span.SetStatus(codes.Error, e.Message)
-			span.SetAttributes(responseErrorAttributes(e, semconvtrace.ValueDefaultErrorType)...)
+			span.SetStatus(codes.Error, "tool execution failed")
+			span.SetAttributes(attribute.String(
+				semconvtrace.KeyErrorType,
+				FormatResponseErrorLabel(
+					e,
+					semconvtrace.ValueDefaultErrorType,
+				),
+			))
 		} else if err != nil {
-			span.SetStatus(codes.Error, err.Error())
-			span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, ToErrorType(err, semconvtrace.ValueDefaultErrorType)), attribute.String(semconvtrace.KeyErrorMessage, err.Error()))
+			span.SetStatus(codes.Error, "tool execution failed")
+			span.SetAttributes(attribute.String(
+				semconvtrace.KeyErrorType,
+				ToErrorType(
+					err,
+					semconvtrace.ValueDefaultErrorType,
+				),
+			))
 		}
 
 		if callIDs := rspEvent.Response.GetToolCallIDs(); len(callIDs) > 0 {
@@ -349,8 +361,14 @@ func TraceMergedToolCalls(span trace.Span, rspEvent *event.Event) {
 			span.SetAttributes(attribute.String(semconvtrace.KeyGenAIToolCallID, callIDs[0]))
 		}
 		if e := rspEvent.Response.Error; e != nil {
-			span.SetStatus(codes.Error, e.Message)
-			span.SetAttributes(responseErrorAttributes(e, semconvtrace.ValueDefaultErrorType)...)
+			span.SetStatus(codes.Error, "tool execution failed")
+			span.SetAttributes(attribute.String(
+				semconvtrace.KeyErrorType,
+				FormatResponseErrorLabel(
+					e,
+					semconvtrace.ValueDefaultErrorType,
+				),
+			))
 		}
 		span.SetAttributes(attribute.String(semconvtrace.KeyEventID, rspEvent.ID))
 

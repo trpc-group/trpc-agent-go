@@ -43,10 +43,15 @@ const (
 	AttrOutputMessages AttributeKey = semconvtrace.KeyGenAIOutputMessages
 	// AttrOutputMessagesOTel is the OTel output messages attribute key.
 	AttrOutputMessagesOTel AttributeKey = semconvtrace.KeyGenAIOutputMessagesOTel
+	// AttrToolCallArguments is the JSON-encoded tool argument attribute key.
+	AttrToolCallArguments AttributeKey = semconvtrace.KeyGenAIToolCallArguments
+	// AttrToolCallResult is the JSON-encoded tool result attribute key.
+	AttrToolCallResult AttributeKey = semconvtrace.KeyGenAIToolCallResult
 )
 
 // SpanAttributePolicy controls production-side span attribute behavior.
-// Zero value preserves current behavior.
+// The zero value omits tool arguments and results while preserving capture
+// defaults for other attributes.
 type SpanAttributePolicy struct {
 	rules []attributeRule
 }
