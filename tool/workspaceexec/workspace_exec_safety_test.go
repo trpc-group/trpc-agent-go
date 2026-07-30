@@ -19,6 +19,15 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool/safety"
 )
 
+func newSafetyScanner(t *testing.T, policy safety.Policy) *safety.Scanner {
+	t.Helper()
+	scanner, err := safety.NewScanner(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return scanner
+}
+
 func TestExecTool_SafetyScannerBlocksBeforeExecutor(t *testing.T) {
 	scanner, err := safety.NewScanner(safety.DefaultPolicy())
 	if err != nil {
@@ -101,7 +110,7 @@ func TestExecTool_SafetyScannerTreatsPositiveYieldAsBackground(t *testing.T) {
 func TestExecTool_SafetyScannerRejectsEnvironmentHijacking(t *testing.T) {
 	policy := safety.DefaultPolicy()
 	policy.EnvAllowlist = append(policy.EnvAllowlist, "PATH", "HOME")
-	scanner := safety.MustScanner(policy)
+	scanner := newSafetyScanner(t, policy)
 	tool := NewExecTool(local.New(), WithSafetyScanner(scanner))
 	_, err := tool.prepareExec(context.Background(), execInput{
 		Command: "echo ok",
@@ -117,7 +126,7 @@ func TestExecTool_SafetyScannerRejectsEnvironmentHijacking(t *testing.T) {
 }
 
 func TestExecTool_SafetyScannerScansStdinConfig(t *testing.T) {
-	scanner := safety.MustScanner(safety.DefaultPolicy())
+	scanner := newSafetyScanner(t, safety.DefaultPolicy())
 	tool := NewExecTool(local.New(), WithSafetyScanner(scanner))
 	_, err := tool.prepareExec(context.Background(), execInput{
 		Command: "curl -q --config -",
@@ -131,7 +140,7 @@ func TestExecTool_SafetyScannerScansStdinConfig(t *testing.T) {
 }
 
 func TestExecTool_SafetyScannerRedactsSplitPrivateKey(t *testing.T) {
-	scanner := safety.MustScanner(safety.DefaultPolicy())
+	scanner := newSafetyScanner(t, safety.DefaultPolicy())
 	tool := &ExecTool{safetyScanner: scanner}
 	session := &execSession{sanitizer: scanner.NewOutputSanitizer()}
 	chunks := []string{
@@ -139,22 +148,29 @@ func TestExecTool_SafetyScannerRedactsSplitPrivateKey(t *testing.T) {
 		"secret-body\n",
 		"-----END PRIVATE KEY-----\nvisible",
 	}
-	var visible strings.Builder
-	for _, chunk := range chunks {
-		out := tool.sanitizeOutputWith(execOutput{Output: chunk}, session.sanitizer)
+	for i, chunk := range chunks {
+		status := codeexecutor.ProgramStatusRunning
+		if i == len(chunks)-1 {
+			status = codeexecutor.ProgramStatusExited
+		}
+		out := tool.sanitizeOutputWith(execOutput{Output: chunk, Status: status}, session.sanitizer)
 		if strings.Contains(out.Output, "PRIVATE KEY") || strings.Contains(out.Output, "secret-body") {
 			t.Fatalf("poll leaked private key: %q", out.Output)
 		}
-		visible.WriteString(out.Output)
-	}
-	if strings.Count(visible.String(), "[REDACTED]") != 1 ||
-		!strings.Contains(visible.String(), "visible") {
-		t.Fatalf("visible output = %q, want one replacement and trailing output", visible.String())
+		if i < len(chunks)-1 {
+			if out.Output != "" {
+				t.Fatalf("running poll output = %q, want no output before session exit", out.Output)
+			}
+			continue
+		}
+		if strings.Count(out.Output, "[REDACTED]") != 1 || !strings.Contains(out.Output, "visible") {
+			t.Fatalf("final output = %q, want one replacement and trailing output", out.Output)
+		}
 	}
 }
 
 func TestWriteStdinTool_SafetyScannerBlocksInputBeforeWrite(t *testing.T) {
-	scanner := safety.MustScanner(safety.DefaultPolicy())
+	scanner := newSafetyScanner(t, safety.DefaultPolicy())
 	execTool := NewExecTool(local.New(), WithSafetyScanner(scanner))
 	proc := &recordingProgramSession{}
 	execTool.putSession(proc.ID(), &execSession{

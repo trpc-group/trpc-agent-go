@@ -152,10 +152,13 @@ func TestPermissionPolicyRecognizesRenamedCodeExec(t *testing.T) {
 		t.Fatal(err)
 	}
 	tl := NewTool(&safetyTestExecutor{}, WithName("run_code"))
-	policy := safety.NewPermissionPolicy(
+	policy, err := safety.NewPermissionPolicy(
 		scanner,
 		safety.WithToolBackend(tl.Declaration().Name, safety.BackendCodeExec),
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	decision, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
 		ToolName: "run_code",
 		Arguments: []byte(`{

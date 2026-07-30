@@ -28,6 +28,15 @@ func (failingAuditWriter) WriteAuditEvent(context.Context, AuditEvent) error {
 	return errors.New("audit sink failed")
 }
 
+func newTestScanner(tb testing.TB, policy Policy) *Scanner {
+	tb.Helper()
+	scanner, err := NewScanner(policy)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return scanner
+}
+
 func TestBlockedError(t *testing.T) {
 	report := Report{
 		Decision:       DecisionDeny,
@@ -440,7 +449,7 @@ func TestBackendResourceAndNetworkBranches(t *testing.T) {
 }
 
 func TestScannerReviewRegressionCases(t *testing.T) {
-	scanner := MustScanner(DefaultPolicy())
+	scanner := newTestScanner(t, DefaultPolicy())
 
 	tests := []struct {
 		name         string
@@ -683,7 +692,10 @@ func TestPermissionPolicyAllowAskAndAuditFailures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	policy := NewPermissionPolicy(scanner)
+	policy, err := NewPermissionPolicy(scanner)
+	if err != nil {
+		t.Fatal(err)
+	}
 	allow, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
 		ToolName:  "workspace_exec",
 		Arguments: []byte(`{"command":"go test ./tool/safety","cwd":"."}`),
@@ -704,11 +716,14 @@ func TestPermissionPolicyAllowAskAndAuditFailures(t *testing.T) {
 	if ask.Action != tool.PermissionActionAsk {
 		t.Fatalf("ask action = %s", ask.Action)
 	}
-	openPolicy := NewPermissionPolicy(
+	openPolicy, err := NewPermissionPolicy(
 		scanner,
 		WithAuditWriter(failingAuditWriter{}),
 		WithAuditFailClosed(false),
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := openPolicy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
 		ToolName:  "workspace_exec",
 		Arguments: []byte(`{"command":"go test ./tool/safety","cwd":"."}`),
@@ -791,7 +806,7 @@ func TestReportHelpersAndContextCancellation(t *testing.T) {
 	if primaryRuleID(nil) != RuleAllowSafeCommand {
 		t.Fatalf("primaryRuleID(nil) mismatch")
 	}
-	scanner := MustScanner(DefaultPolicy())
+	scanner := newTestScanner(t, DefaultPolicy())
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := scanner.Scan(ctx, ExecutionRequest{Command: "echo ok"}); err == nil {
@@ -803,7 +818,7 @@ func TestReportHelpersAndContextCancellation(t *testing.T) {
 }
 
 func TestScannerPolicyReviewRegressions(t *testing.T) {
-	scanner := MustScanner(DefaultPolicy())
+	scanner := newTestScanner(t, DefaultPolicy())
 	tests := []struct {
 		name     string
 		req      ExecutionRequest
@@ -888,7 +903,7 @@ func TestScannerPolicyReviewRegressions(t *testing.T) {
 
 	denyHost := DefaultPolicy()
 	denyHost.BackendRules.HostExec.DefaultAction = DecisionDeny
-	denyHostScanner := MustScanner(denyHost)
+	denyHostScanner := newTestScanner(t, denyHost)
 	report, err := denyHostScanner.Scan(context.Background(), ExecutionRequest{
 		ToolName: "exec_command", Backend: BackendHostExec,
 		Command: "go test ./tool/safety",
@@ -911,7 +926,7 @@ func TestScannerPolicyReviewRegressions(t *testing.T) {
 
 	exactPath := DefaultPolicy()
 	exactPath.AllowedCommands = []string{"./git"}
-	exactScanner := MustScanner(exactPath)
+	exactScanner := newTestScanner(t, exactPath)
 	report, err = exactScanner.Scan(context.Background(), ExecutionRequest{
 		ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
 		Command: "./git", Args: []string{"status"},
@@ -925,7 +940,7 @@ func TestScannerPolicyReviewRegressions(t *testing.T) {
 
 	relativePath := DefaultPolicy()
 	relativePath.ForbiddenPaths = []string{"/safe/blocked/**"}
-	report, err = MustScanner(relativePath).Scan(context.Background(), ExecutionRequest{
+	report, err = newTestScanner(t, relativePath).Scan(context.Background(), ExecutionRequest{
 		ToolName: "custom", Backend: BackendWorkspaceExec,
 		Command: "cat", Args: []string{"blocked/file.txt"}, Cwd: "/safe",
 	})
@@ -941,7 +956,7 @@ func TestScannerPolicyReviewRegressions(t *testing.T) {
 		allowedLanguage.BackendRules.CodeExec.AllowedLanguages,
 		"ruby",
 	)
-	report, err = MustScanner(allowedLanguage).Scan(context.Background(), ExecutionRequest{
+	report, err = newTestScanner(t, allowedLanguage).Scan(context.Background(), ExecutionRequest{
 		ToolName: "execute_code", Backend: BackendCodeExec,
 		Language: "ruby", Script: "puts 'ok'",
 	})
@@ -971,7 +986,7 @@ func TestStrictPolicyParsingAndRedactionToggle(t *testing.T) {
 		})
 	}
 
-	zero := MustScanner(Policy{})
+	zero := newTestScanner(t, Policy{})
 	if len(zero.policy.AllowedCommands) == 0 || len(zero.policy.DeniedCommands) == 0 {
 		t.Fatalf("zero policy did not inherit command defaults: %#v", zero.policy)
 	}
@@ -1011,7 +1026,7 @@ func TestStrictPolicyParsingAndRedactionToggle(t *testing.T) {
 		t.Run("redaction "+fmt.Sprint(enabled), func(t *testing.T) {
 			policy := DefaultPolicy()
 			policy.Redaction.Enabled = boolPointer(enabled)
-			report, err := MustScanner(policy).Scan(context.Background(), ExecutionRequest{
+			report, err := newTestScanner(t, policy).Scan(context.Background(), ExecutionRequest{
 				ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
 				Command: "echo token=super-secret-value",
 			})
@@ -1085,7 +1100,7 @@ func TestPolicyConfiguredAudit(t *testing.T) {
 		t.Fatalf("fail-open scan failed: %v", err)
 	}
 
-	runtimeFailure := MustScanner(DefaultPolicy())
+	runtimeFailure := newTestScanner(t, DefaultPolicy())
 	runtimeFailure.audit = failingAuditWriter{}
 	runtimeFailure.auditFailClosed = true
 	if _, err := runtimeFailure.Scan(context.Background(), ExecutionRequest{Command: "go test ./tool/safety"}); err == nil {
@@ -1100,7 +1115,7 @@ func TestPolicyConfiguredAudit(t *testing.T) {
 func TestSanitizeOutputsUsesSharedUTF8ByteBudget(t *testing.T) {
 	policy := DefaultPolicy()
 	policy.ResourceLimits.MaxOutputBytes = 24
-	scanner := MustScanner(policy)
+	scanner := newTestScanner(t, policy)
 	parts := scanner.SanitizeOutputs(
 		"token=super-secret-value",
 		strings.Repeat("界", 20),

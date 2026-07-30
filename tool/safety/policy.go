@@ -19,6 +19,8 @@ const supportedPolicyVersion = "1"
 
 // Policy configures scanner decisions. YAML and JSON use the same field names.
 type Policy struct {
+	// Version identifies the policy format. Empty or whitespace-only values
+	// default to "1"; currently only version "1" is supported.
 	Version               string                        `json:"version" yaml:"version"`
 	DefaultAction         Decision                      `json:"default_action" yaml:"default_action"`
 	ParseErrorAction      Decision                      `json:"parse_error_action" yaml:"parse_error_action"`

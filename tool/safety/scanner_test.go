@@ -100,7 +100,10 @@ func TestPolicyChangeAffectsNetworkDecision(t *testing.T) {
 func TestPermissionPolicyBlocksAndAudits(t *testing.T) {
 	scanner := sampleScanner(t)
 	var buf bytes.Buffer
-	policy := NewPermissionPolicy(scanner, WithAuditWriter(NewJSONLWriter(&buf)))
+	policy, err := NewPermissionPolicy(scanner, WithAuditWriter(NewJSONLWriter(&buf)))
+	if err != nil {
+		t.Fatal(err)
+	}
 	decision, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
 		ToolName: "workspace_exec",
 		Arguments: []byte(`{
@@ -165,6 +168,51 @@ func BenchmarkScan500Commands(b *testing.B) {
 		if _, err := scanner.Scan(context.Background(), req); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+func TestNewPermissionPolicyRejectsNilScanner(t *testing.T) {
+	policy, err := NewPermissionPolicy(nil)
+	if policy != nil {
+		t.Fatalf("policy = %#v, want nil", policy)
+	}
+	if err == nil || err.Error() != "nil safety scanner" {
+		t.Fatalf("error = %v, want nil safety scanner", err)
+	}
+}
+
+func TestLoadPolicyVersionValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		contents    string
+		wantVersion string
+		wantErr     string
+	}{
+		{name: "unsupported.yaml", contents: "version: '2'\n", wantErr: "2"},
+		{name: "unsupported.json", contents: `{"version":"10"}`, wantErr: "10"},
+		{name: "whitespace.yaml", contents: "version: '  '\n", wantVersion: "1"},
+		{name: "whitespace.json", contents: `{"version":" \t "}`, wantVersion: "1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), tc.name)
+			if err := os.WriteFile(path, []byte(tc.contents), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			policy, err := LoadPolicy(path)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), "unsupported policy version") ||
+					!strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("LoadPolicy error = %v, want unsupported version %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if policy.Version != tc.wantVersion {
+				t.Fatalf("version = %q, want %q", policy.Version, tc.wantVersion)
+			}
+		})
 	}
 }
 

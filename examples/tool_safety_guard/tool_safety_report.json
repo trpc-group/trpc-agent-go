@@ -8,7 +8,7 @@
     "decision": "ask",
     "risk_level": "medium",
     "blocked": true,
-    "duration_ms": 0.099,
+    "duration_ms": 0.049,
     "rule_ids": [
       "TSG-HUMAN-REVIEW",
       "TSG-DEPENDENCY-INSTALL"
@@ -55,7 +55,7 @@
     "decision": "deny",
     "risk_level": "critical",
     "blocked": true,
-    "duration_ms": 0.039,
+    "duration_ms": 0.034,
     "rule_ids": [
       "TSG-DANGER-RM-RF",
       "TSG-HUMAN-REVIEW"
@@ -112,7 +112,7 @@
     "decision": "ask",
     "risk_level": "medium",
     "blocked": true,
-    "duration_ms": 0.03,
+    "duration_ms": 0.012,
     "rule_ids": [
       "TSG-DEPENDENCY-INSTALL"
     ],
@@ -148,7 +148,7 @@
     "decision": "deny",
     "risk_level": "critical",
     "blocked": true,
-    "duration_ms": 0.06,
+    "duration_ms": 0.025,
     "rule_ids": [
       "TSG-HOSTEXEC-PRIVILEGE",
       "TSG-SHELL-WRAPPER",
@@ -271,7 +271,7 @@
     "decision": "deny",
     "risk_level": "high",
     "blocked": true,
-    "duration_ms": 0.036,
+    "duration_ms": 0.006,
     "rule_ids": [
       "TSG-RESOURCE-LONG-RUNNING",
       "TSG-RESOURCE-OUTPUT"
@@ -318,7 +318,7 @@
     "decision": "ask",
     "risk_level": "medium",
     "blocked": true,
-    "duration_ms": 0.023,
+    "duration_ms": 0.007,
     "rule_ids": [
       "TSG-RESOURCE-LONG-RUNNING",
       "TSG-RESOURCE-TIMEOUT"
@@ -365,7 +365,7 @@
     "decision": "allow",
     "risk_level": "none",
     "blocked": false,
-    "duration_ms": 0.048,
+    "duration_ms": 0.02,
     "rule_ids": [
       "TSG-NETWORK-DOMAIN-ALLOWED"
     ],
@@ -401,7 +401,7 @@
     "decision": "deny",
     "risk_level": "high",
     "blocked": true,
-    "duration_ms": 0.029,
+    "duration_ms": 0.017,
     "rule_ids": [
       "TSG-NETWORK-DOMAIN-DENIED"
     ],
@@ -437,7 +437,7 @@
     "decision": "ask",
     "risk_level": "medium",
     "blocked": true,
-    "duration_ms": 0.028,
+    "duration_ms": 0.013,
     "rule_ids": [
       "TSG-SHELL-BYPASS-CONSTRUCT"
     ],
@@ -473,7 +473,7 @@
     "decision": "deny",
     "risk_level": "critical",
     "blocked": true,
-    "duration_ms": 0.025,
+    "duration_ms": 0.013,
     "rule_ids": [
       "TSG-DANGER-FORBIDDEN-PATH",
       "TSG-POLICY-ENV-NOT-ALLOWED",
@@ -541,7 +541,7 @@
     "decision": "allow",
     "risk_level": "none",
     "blocked": false,
-    "duration_ms": 0.029,
+    "duration_ms": 0.011,
     "rule_ids": [
       "TSG-ALLOW-SAFE-COMMAND"
     ],
@@ -566,7 +566,7 @@
     "decision": "deny",
     "risk_level": "high",
     "blocked": true,
-    "duration_ms": 0.025,
+    "duration_ms": 0.021,
     "rule_ids": [
       "TSG-SHELL-WRAPPER",
       "TSG-HUMAN-REVIEW",

@@ -19,7 +19,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// LoadPolicy loads a YAML or JSON policy file and validates it.
+// LoadPolicy loads, normalizes, and validates a YAML or JSON policy file.
+//
+// An omitted or whitespace-only version defaults to version "1". Currently,
+// version "1" is the only supported policy format; all other versions return
+// an error.
 func LoadPolicy(path string) (Policy, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -29,7 +33,11 @@ func LoadPolicy(path string) (Policy, error) {
 	return ParsePolicy(data, format)
 }
 
-// ParsePolicy parses a YAML or JSON policy payload and validates it.
+// ParsePolicy parses, normalizes, and validates a YAML or JSON policy payload.
+//
+// An omitted or whitespace-only version defaults to version "1". Currently,
+// version "1" is the only supported policy format; all other versions return
+// an error.
 func ParsePolicy(data []byte, format string) (Policy, error) {
 	var p Policy
 	switch strings.ToLower(format) {

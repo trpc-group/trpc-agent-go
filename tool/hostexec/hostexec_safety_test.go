@@ -17,6 +17,15 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool/safety"
 )
 
+func newSafetyScanner(t *testing.T, policy safety.Policy) *safety.Scanner {
+	t.Helper()
+	scanner, err := safety.NewScanner(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return scanner
+}
+
 func TestExecCommandTool_SafetyScannerBlocksBeforeHostShell(t *testing.T) {
 	scanner, err := safety.NewScanner(safety.DefaultPolicy())
 	if err != nil {
@@ -131,7 +140,7 @@ func TestExecCommandTool_SafetyScannerAppliesBackgroundPolicyToYield(t *testing.
 	policy.BackendRules.HostExec.DefaultAction = safety.DecisionAllow
 	policy.BackendRules.HostExec.BackgroundAction = safety.DecisionDeny
 	policy.BackendRules.HostExec.MaxTimeoutMS = int64(defaultTimeoutS) * 1000
-	scanner := safety.MustScanner(policy)
+	scanner := newSafetyScanner(t, policy)
 	set, err := NewToolSet(WithSafetyScanner(scanner))
 	if err != nil {
 		t.Fatal(err)
@@ -184,7 +193,7 @@ func TestExecCommandTool_SafetyScannerBlocksForbiddenWorkdir(t *testing.T) {
 func TestExecCommandTool_SafetyScannerRejectsEnvironmentHijacking(t *testing.T) {
 	policy := safety.DefaultPolicy()
 	policy.EnvAllowlist = append(policy.EnvAllowlist, "PATH", "HOME")
-	scanner := safety.MustScanner(policy)
+	scanner := newSafetyScanner(t, policy)
 	set, err := NewToolSet(WithSafetyScanner(scanner))
 	if err != nil {
 		t.Fatal(err)
@@ -207,7 +216,7 @@ func TestExecCommandTool_SafetyScannerRejectsEnvironmentHijacking(t *testing.T) 
 }
 
 func TestWriteStdinTool_SafetyScannerRedactsSplitPrivateKey(t *testing.T) {
-	scanner := safety.MustScanner(safety.DefaultPolicy())
+	scanner := newSafetyScanner(t, safety.DefaultPolicy())
 	mgr := newManager()
 	sess := newSession("split-key", "echo ok", defaultMaxLines)
 	sess.stdin = &testWriteCloser{}
@@ -220,10 +229,9 @@ func TestWriteStdinTool_SafetyScannerRedactsSplitPrivateKey(t *testing.T) {
 		"secret-body\n",
 		"-----END PRIVATE KEY-----\nvisible\n",
 	}
-	var visible strings.Builder
-	for _, chunk := range chunks {
+	for i, chunk := range chunks {
 		sess.appendOutput(chunk)
-		if strings.Contains(chunk, "END PRIVATE KEY") {
+		if i == len(chunks)-1 {
 			sess.markDone(0)
 		}
 		got, err := writeTool.Call(context.Background(), []byte(`{
@@ -236,11 +244,15 @@ func TestWriteStdinTool_SafetyScannerRedactsSplitPrivateKey(t *testing.T) {
 		if strings.Contains(output, "PRIVATE KEY") || strings.Contains(output, "secret-body") {
 			t.Fatalf("poll leaked private key: %q", output)
 		}
-		visible.WriteString(output)
-	}
-	if strings.Count(visible.String(), "[REDACTED]") != 1 ||
-		!strings.Contains(visible.String(), "visible") {
-		t.Fatalf("visible output = %q, want one replacement and trailing output", visible.String())
+		if i < len(chunks)-1 {
+			if output != "" {
+				t.Fatalf("running poll output = %q, want no output before session exit", output)
+			}
+			continue
+		}
+		if strings.Count(output, "[REDACTED]") != 1 || !strings.Contains(output, "visible") {
+			t.Fatalf("final output = %q, want one replacement and trailing output", output)
+		}
 	}
 	if sess.sanitizer != nil {
 		t.Fatal("finished session retained output sanitizer")
@@ -251,7 +263,7 @@ func TestWriteStdinTool_SafetyScannerBlocksInputBeforeWrite(t *testing.T) {
 	policy := safety.DefaultPolicy()
 	policy.BackendRules.HostExec.DefaultAction = safety.DecisionAllow
 	policy.BackendRules.HostExec.BackgroundAction = safety.DecisionAllow
-	scanner := safety.MustScanner(policy)
+	scanner := newSafetyScanner(t, policy)
 	mgr := newManager()
 	sess := newSession(
 		"session-input",

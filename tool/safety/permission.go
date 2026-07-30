@@ -51,10 +51,13 @@ func WithToolBackend(name string, backend Backend) PermissionOption {
 	}
 }
 
-// NewPermissionPolicy creates a tool permission policy.
-func NewPermissionPolicy(scanner *Scanner, opts ...PermissionOption) *PermissionPolicy {
+// NewPermissionPolicy creates a tool permission policy from scanner.
+//
+// scanner must not be nil. The returned PermissionPolicy does not own scanner;
+// callers remain responsible for closing it when appropriate.
+func NewPermissionPolicy(scanner *Scanner, opts ...PermissionOption) (*PermissionPolicy, error) {
 	if scanner == nil {
-		scanner = MustScanner(DefaultPolicy())
+		return nil, fmt.Errorf("nil safety scanner")
 	}
 	p := &PermissionPolicy{scanner: scanner, failClosed: true}
 	for _, opt := range opts {
@@ -62,7 +65,7 @@ func NewPermissionPolicy(scanner *Scanner, opts ...PermissionOption) *Permission
 			opt(p)
 		}
 	}
-	return p
+	return p, nil
 }
 
 // CheckToolPermission implements tool.PermissionPolicy.

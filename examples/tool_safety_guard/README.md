@@ -39,8 +39,9 @@ ask findings instead of default allow decisions.
 Policy parsing rejects unknown fields. Command arguments and working directories
 participate in semantic path and dependency checks, code block languages use the
 configured allowlist, and host execution always applies its backend default
-action. Policy version `1` is the only supported schema version, and rule
-overrides must name a rule ID exported by the safety package.
+action. An omitted or whitespace-only policy version normalizes to `"1"`; no
+other schema version is supported. Rule overrides must name a rule ID exported
+by the safety package.
 
 Scanned `curl` commands must pass `-q` or `--disable` as the first argument so
 curl cannot load an implicit user configuration file. Proxy endpoints and
@@ -51,7 +52,8 @@ Backends without a registered semantic scanner use the policy's conservative
 `tool.PermissionPolicy` is the normal framework interception point. It runs
 after tool arguments are finalized and before the tool executes. `tool.FilterFunc`
 controls tool visibility, while `PermissionPolicy` controls whether a visible
-tool call may run.
+tool call may run. `NewPermissionPolicy` requires a non-nil scanner and does not
+own or close that scanner.
 
 `workspace_exec` runs in an executor workspace and can use workspace-relative
 paths, output limits, and environment scrubbing. `hostexec` runs a host shell and
@@ -61,8 +63,11 @@ sandboxes still need runtime isolation for filesystem, process, network, and
 resource controls.
 
 When these tools are configured with the scanner, returned output is redacted
-and bounded by `resource_limits.max_output_bytes`. Each response or session poll
-gets its own byte budget.
+and bounded by `resource_limits.max_output_bytes`. With redaction enabled,
+session output is withheld until exit so a secret split across arbitrary chunks
+cannot leak. The raw session buffer is bounded by that same limit; on overflow,
+its raw contents are discarded and only a safe replacement and truncation marker
+are returned. With redaction disabled, output remains immediate.
 
 Follow-up input sent to a running host or workspace session is scanned before
 it reaches the process. This prevents credentials introduced through a later

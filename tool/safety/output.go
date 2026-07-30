@@ -8,20 +8,11 @@
 package safety
 
 import (
-	"regexp"
-	"strings"
 	"sync"
 	"unicode/utf8"
 )
 
 const outputTruncatedMarker = "\n[truncated]"
-
-const maxPendingPEMMarkerBytes = 256
-
-var (
-	pemBeginMarkerRE = regexp.MustCompile(`(?i)-----BEGIN [A-Z ]*PRIVATE KEY-----`)
-	pemEndMarkerRE   = regexp.MustCompile(`(?i)-----END [A-Z ]*PRIVATE KEY-----`)
-)
 
 // SanitizedOutput describes output transformations applied by the scanner.
 type SanitizedOutput struct {
@@ -30,15 +21,15 @@ type SanitizedOutput struct {
 	Truncated bool
 }
 
-// OutputSanitizer redacts a sequence of output chunks while preserving
-// sensitive-value state across calls. It is intended for one execution
-// session and is safe for concurrent use.
+// OutputSanitizer redacts a sequence of output chunks from one execution
+// session. When redaction is enabled, it withholds output until SanitizeFinal
+// so arbitrary configured regular expressions cannot leak across chunk
+// boundaries. It is safe for concurrent use.
 type OutputSanitizer struct {
-	mu            sync.Mutex
-	scanner       *Scanner
-	pending       string
-	pendingSecret string
-	inPrivateKey  bool
+	mu       sync.Mutex
+	scanner  *Scanner
+	pending  string
+	overflow bool
 }
 
 // NewOutputSanitizer creates an output sanitizer for one streaming session.
@@ -46,7 +37,8 @@ func (s *Scanner) NewOutputSanitizer() *OutputSanitizer {
 	return &OutputSanitizer{scanner: s}
 }
 
-// Sanitize redacts one incremental output chunk.
+// Sanitize buffers one incremental output chunk. When redaction is enabled, it
+// returns an empty string until SanitizeFinal is called.
 func (s *OutputSanitizer) Sanitize(output string) string {
 	return s.sanitize(output, false)
 }
@@ -65,113 +57,25 @@ func (s *OutputSanitizer) sanitize(output string, final bool) string {
 	if s.scanner.redactor == nil || !s.scanner.redactor.enabled {
 		return s.scanner.SanitizeOutput(output)
 	}
-	visible := s.redactPrivateKeyChunks(s.pending + s.pendingSecret + output)
-	s.pendingSecret = ""
-	visible, _ = s.scanner.redactor.Redact(visible)
-	if start := possibleCredentialStart(visible, s.scanner.redactor.streamPrefixes); start >= 0 {
-		if final {
-			visible = visible[:start] + s.scanner.redactor.replacement
+	if !s.overflow {
+		limit := s.scanner.policy.ResourceLimits.MaxOutputBytes
+		if limit > 0 && int64(len(s.pending))+int64(len(output)) > limit {
+			s.pending = ""
+			s.overflow = true
 		} else {
-			s.pendingSecret = visible[start:]
-			visible = visible[:start]
+			s.pending += output
 		}
 	}
-	if final && s.pending != "" {
-		visible += s.scanner.redactor.replacement
-		s.pending = ""
+	if !final {
+		return ""
 	}
-	return s.scanner.SanitizeOutput(visible)
-}
-
-func possibleCredentialStart(input string, prefixes []string) int {
-	lower := strings.ToLower(input)
-	best := -1
-	for _, rawPrefix := range prefixes {
-		prefix := strings.ToLower(rawPrefix)
-		if i := strings.LastIndex(lower, prefix); i >= 0 && (best < 0 || i < best) {
-			best = i
-		}
-		for n := min(len(lower), len(prefix)-1); n >= 3; n-- {
-			if strings.HasSuffix(lower, prefix[:n]) {
-				start := len(input) - n
-				if best < 0 || start < best {
-					best = start
-				}
-				break
-			}
-		}
+	if s.overflow {
+		s.overflow = false
+		return s.scanner.SanitizeOutput(s.scanner.redactor.replacement + outputTruncatedMarker)
 	}
-	return best
-}
-
-func (s *OutputSanitizer) redactPrivateKeyChunks(input string) string {
+	visible := s.pending
 	s.pending = ""
-	var out strings.Builder
-	for input != "" {
-		if s.inPrivateKey {
-			loc := pemEndMarkerRE.FindStringIndex(input)
-			if loc == nil {
-				s.pending = privateKeyMarkerTail(input, "-----END ")
-				return out.String()
-			}
-			s.inPrivateKey = false
-			input = input[loc[1]:]
-			continue
-		}
-		loc := pemBeginMarkerRE.FindStringIndex(input)
-		if loc != nil {
-			out.WriteString(input[:loc[0]])
-			out.WriteString(s.scanner.redactor.replacement)
-			s.inPrivateKey = true
-			input = input[loc[1]:]
-			continue
-		}
-		start := possiblePEMBeginStart(input)
-		if start >= 0 {
-			out.WriteString(input[:start])
-			s.pending = input[start:]
-			return out.String()
-		}
-		out.WriteString(input)
-		return out.String()
-	}
-	return out.String()
-}
-
-func possiblePEMBeginStart(input string) int {
-	upper := strings.ToUpper(input)
-	if idx := strings.LastIndex(upper, "-----BEGIN "); idx >= 0 {
-		candidate := upper[idx+len("-----BEGIN "):]
-		if len(candidate) <= maxPendingPEMMarkerBytes &&
-			(candidate == "" || strings.IndexFunc(candidate, func(r rune) bool {
-				return r != ' ' && (r < 'A' || r > 'Z') && r != '-'
-			}) == -1) {
-			return idx
-		}
-	}
-	prefix := "-----BEGIN "
-	for n := min(len(input), len(prefix)-1); n > 0; n-- {
-		if strings.EqualFold(input[len(input)-n:], prefix[:n]) {
-			return len(input) - n
-		}
-	}
-	return -1
-}
-
-func privateKeyMarkerTail(input, marker string) string {
-	upper := strings.ToUpper(input)
-	if idx := strings.LastIndex(upper, marker); idx >= 0 {
-		candidate := input[idx:]
-		if len(candidate) <= maxPendingPEMMarkerBytes {
-			return candidate
-		}
-	}
-	for n := min(len(input), len(marker)-1); n > 0; n-- {
-		if strings.EqualFold(input[len(input)-n:], marker[:n]) {
-			return input[len(input)-n:]
-		}
-	}
-	return ""
+	return s.scanner.SanitizeOutput(visible)
 }
 
 // SanitizeOutput redacts and bounds one user-visible executor output.

@@ -67,15 +67,6 @@ func NewScanner(policy Policy) (*Scanner, error) {
 	return scanner, nil
 }
 
-// MustScanner returns a scanner or panics. It is intended for examples.
-func MustScanner(policy Policy) *Scanner {
-	sc, err := NewScanner(policy)
-	if err != nil {
-		panic(err)
-	}
-	return sc
-}
-
 // Scan scans req and never executes it.
 func (s *Scanner) Scan(ctx context.Context, req ExecutionRequest) (Report, error) {
 	if s == nil {

@@ -36,15 +36,16 @@ from pre-execution scanning and audit. Code block languages are checked against
 `backend_rules.codeexec.allowed_languages` before execution.
 
 Policy loading is strict: unknown JSON or YAML fields and trailing documents are
-rejected. Only policy version `1` is currently accepted, and every key under
-`rules` must match an exported rule ID. This prevents misspelled security
-settings from being silently ignored. Backends without a registered semantic
-scanner use `default_action` rather than defaulting to allow. When
-`audit.enabled` is true, `NewScanner` opens `audit.path` and writes
-one JSONL event per scan. Audit creation or write failures block execution when
-`audit.fail_closed` is true. Call `Scanner.Close` when the scanner is no longer
-needed. `redaction.enabled` defaults to true and an explicit false value is
-preserved.
+rejected. An omitted or whitespace-only policy `version` normalizes to `"1"`;
+only version `1` is currently accepted. Every key under `rules` must match an
+exported rule ID. This prevents misspelled security settings from being silently
+ignored. Backends without a registered semantic scanner use `default_action`
+rather than defaulting to allow. When `audit.enabled` is true, `NewScanner`
+opens `audit.path` and writes one JSONL event per scan. Audit creation or write
+failures block execution when `audit.fail_closed` is true. Call `Scanner.Close`
+when the scanner is no longer needed. `NewPermissionPolicy` requires a non-nil
+scanner and does not own or close that caller-provided scanner.
+`redaction.enabled` defaults to true and an explicit false value is preserved.
 
 Direct `curl` commands must use `-q` or `--disable` as their first argument.
 This prevents curl from loading an implicit user configuration file that could
@@ -52,10 +53,14 @@ inject an unreviewed proxy, destination, or output path. Explicit proxy options
 and stdin-based curl configuration are scanned after this guard is present.
 
 The workspace, host, and code execution adapters apply the scanner's redaction
-and `resource_limits.max_output_bytes` budget to user-visible output. The cap is
-per tool response; each poll of a long-running session is bounded separately.
-Non-empty follow-up stdin for host and workspace sessions is scanned before it
-is forwarded to the running process.
+and `resource_limits.max_output_bytes` budget to user-visible output. With
+redaction enabled, session output is withheld until the process exits so a
+sensitive value split across arbitrary output chunks cannot leak. The raw
+session buffer is bounded by `resource_limits.max_output_bytes`; if it
+overflows, its raw contents are discarded and the final response contains only a
+safe replacement and truncation marker. Redaction disabled output remains
+immediate. Non-empty follow-up stdin for host and workspace sessions is scanned
+before it is forwarded to the running process.
 
 ## Not A Sandbox Replacement
 

@@ -14,10 +14,9 @@ import (
 
 // Redactor redacts sensitive values before report or audit output.
 type Redactor struct {
-	replacement    string
-	patterns       []*regexp.Regexp
-	streamPrefixes []string
-	enabled        bool
+	replacement string
+	patterns    []*regexp.Regexp
+	enabled     bool
 }
 
 var credentialPatternSources = []string{
@@ -46,36 +45,8 @@ func NewRedactor(cfg RedactionConfig) (*Redactor, error) {
 		}
 		compiled = append(compiled, re)
 	}
-	streamPrefixes := []string{"sk-", "ghp_", "authorization:", "x-api-key:", "api_key=", "api-key=", "token=", "password=", "secret="}
-	for _, pattern := range cfg.ExtraPatterns {
-		if prefix := regexLiteralPrefix(pattern); prefix != "" {
-			streamPrefixes = append(streamPrefixes, prefix)
-		}
-	}
 	enabled := cfg.Enabled == nil || *cfg.Enabled
-	return &Redactor{replacement: replacement, patterns: compiled, streamPrefixes: streamPrefixes, enabled: enabled}, nil
-}
-
-func regexLiteralPrefix(pattern string) string {
-	pattern = strings.TrimPrefix(pattern, "(?i)")
-	var out strings.Builder
-	escaped := false
-	for _, r := range pattern {
-		if escaped {
-			out.WriteRune(r)
-			escaped = false
-			continue
-		}
-		if r == '\\' {
-			escaped = true
-			continue
-		}
-		if strings.ContainsRune(".^$*+?()[]{}|", r) {
-			break
-		}
-		out.WriteRune(r)
-	}
-	return out.String()
+	return &Redactor{replacement: replacement, patterns: compiled, enabled: enabled}, nil
 }
 
 // Redact replaces sensitive substrings and reports whether anything changed.
@@ -105,9 +76,6 @@ func (r *Redactor) Redact(s string) (string, bool) {
 func (r *Redactor) contains(s string) bool {
 	if r == nil || s == "" {
 		return false
-	}
-	if pemBeginMarkerRE.MatchString(s) {
-		return true
 	}
 	for _, re := range r.patterns {
 		if re.MatchString(s) {

@@ -12,4 +12,11 @@
 // tool runs, then returns allow, deny, or ask decisions with structured findings.
 // It does not execute commands and does not replace sandbox, container, process,
 // filesystem, resource, or network isolation.
+//
+// Each execution request passes through normalization and parsing, semantic
+// scans for commands, scripts, resources, backends, environments, networks, and
+// paths, policy rule overrides, finding deduplication and ranking, then report
+// construction. The highest-ranked primary finding determines the report's
+// decision, risk, rule, and recommendation. Reports are redacted before being
+// returned or written to audit output.
 package safety

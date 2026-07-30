@@ -19,7 +19,7 @@ import (
 func TestScannerRejectsExecutionAffectingEnvironment(t *testing.T) {
 	policy := DefaultPolicy()
 	policy.EnvAllowlist = append(policy.EnvAllowlist, "PATH", "HOME")
-	scanner := MustScanner(policy)
+	scanner := newTestScanner(t, policy)
 	for _, key := range []string{"PATH", "HOME", "BASH_ENV", "LD_PRELOAD"} {
 		report, err := scanner.Scan(context.Background(), ExecutionRequest{
 			Command: "echo ok",
@@ -45,7 +45,7 @@ func TestRequestFromPermissionPreservesStdin(t *testing.T) {
 }
 
 func TestScannerScansCurlStdinConfig(t *testing.T) {
-	scanner := MustScanner(DefaultPolicy())
+	scanner := newTestScanner(t, DefaultPolicy())
 	report, err := scanner.Scan(context.Background(), ExecutionRequest{
 		Command: "curl -q --config -",
 		Stdin: "url = \"https://proxy.example.test\"\n" +
@@ -60,7 +60,7 @@ func TestScannerScansCurlStdinConfig(t *testing.T) {
 }
 
 func TestScannerRejectsCurlDestinationRewrite(t *testing.T) {
-	scanner := MustScanner(DefaultPolicy())
+	scanner := newTestScanner(t, DefaultPolicy())
 	for _, command := range []string{
 		"curl -q --connect-to proxy.example.test:443:evil.example:443 https://proxy.example.test",
 		"curl -q --connect-to=proxy.example.test:443:evil.example:443 https://proxy.example.test",
@@ -78,7 +78,7 @@ func TestScannerRejectsCurlDestinationRewrite(t *testing.T) {
 }
 
 func TestScannerRejectsCurlProxyAndFileConfig(t *testing.T) {
-	scanner := MustScanner(DefaultPolicy())
+	scanner := newTestScanner(t, DefaultPolicy())
 	for _, command := range []string{
 		"curl -q --proxy evil.example:8080 https://proxy.example.test",
 		"curl -q -xevil.example:8080 https://proxy.example.test",
@@ -97,7 +97,7 @@ func TestScannerRejectsCurlProxyAndFileConfig(t *testing.T) {
 }
 
 func TestScannerRejectsAllCurlProxyEndpointForms(t *testing.T) {
-	scanner := MustScanner(DefaultPolicy())
+	scanner := newTestScanner(t, DefaultPolicy())
 	for _, args := range []string{
 		"--proxy evil.example:8080", "--proxy=evil.example:8080",
 		"--preproxy evil.example:8080", "--preproxy=evil.example:8080",
@@ -123,7 +123,7 @@ func TestScannerRejectsAllCurlProxyEndpointForms(t *testing.T) {
 }
 
 func TestScannerRequiresCurlDefaultConfigDisableFirst(t *testing.T) {
-	scanner := MustScanner(DefaultPolicy())
+	scanner := newTestScanner(t, DefaultPolicy())
 	for _, command := range []string{
 		"curl https://proxy.example.test",
 		"curl https://proxy.example.test -q",
@@ -160,7 +160,7 @@ func TestScannerRequiresCurlDefaultConfigDisableFirst(t *testing.T) {
 func TestScannerMatchesConfiguredBareForbiddenPaths(t *testing.T) {
 	policy := DefaultPolicy()
 	policy.ForbiddenPaths = []string{"vault", "token-*"}
-	scanner := MustScanner(policy)
+	scanner := newTestScanner(t, policy)
 	for _, command := range []string{"cat vault", "cat token-prod"} {
 		report, err := scanner.Scan(context.Background(), ExecutionRequest{Command: command})
 		if err != nil {
@@ -175,7 +175,7 @@ func TestScannerMatchesConfiguredBareForbiddenPaths(t *testing.T) {
 func TestScannerMatchesZeroDirectoryForbiddenGlob(t *testing.T) {
 	policy := DefaultPolicy()
 	policy.ForbiddenPaths = []string{"**/*token*", "nested/*secret*"}
-	scanner := MustScanner(policy)
+	scanner := newTestScanner(t, policy)
 	report, err := scanner.Scan(context.Background(), ExecutionRequest{
 		Backend: BackendWorkspaceExec,
 		Command: "cat token-prod",
@@ -199,7 +199,7 @@ func TestScannerMatchesZeroDirectoryForbiddenGlob(t *testing.T) {
 }
 
 func TestScannerRejectsAbsoluteWorkspaceCwd(t *testing.T) {
-	scanner := MustScanner(DefaultPolicy())
+	scanner := newTestScanner(t, DefaultPolicy())
 	report, err := scanner.Scan(context.Background(), ExecutionRequest{Backend: BackendWorkspaceExec, Command: "echo ok", Cwd: "/tmp"})
 	if err != nil {
 		t.Fatal(err)
@@ -210,7 +210,7 @@ func TestScannerRejectsAbsoluteWorkspaceCwd(t *testing.T) {
 }
 
 func TestScannerRejectsCrossPlatformAbsoluteWorkspaceCwd(t *testing.T) {
-	scanner := MustScanner(DefaultPolicy())
+	scanner := newTestScanner(t, DefaultPolicy())
 	for _, cwd := range []string{`C:\\temp`, `D:/data`, `\\server\share`, `//server/share`} {
 		report, err := scanner.Scan(context.Background(), ExecutionRequest{
 			Backend: BackendWorkspaceExec,
@@ -258,8 +258,11 @@ func TestPolicyRejectsUnsupportedVersionsAndUnknownRules(t *testing.T) {
 }
 
 func TestPermissionPolicyUsesConservativeBackendsAndEffectiveValues(t *testing.T) {
-	scanner := MustScanner(DefaultPolicy())
-	policy := NewPermissionPolicy(scanner)
+	scanner := newTestScanner(t, DefaultPolicy())
+	policy, err := NewPermissionPolicy(scanner)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, name := range []string{"mcp_delete_file", "unregistered_tool"} {
 		decision, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
 			ToolName:  name,
@@ -272,7 +275,10 @@ func TestPermissionPolicyUsesConservativeBackendsAndEffectiveValues(t *testing.T
 			t.Fatalf("%s action = %s, want ask", name, decision.Action)
 		}
 	}
-	registered := NewPermissionPolicy(scanner, WithToolBackend("custom", BackendWorkspaceExec))
+	registered, err := NewPermissionPolicy(scanner, WithToolBackend("custom", BackendWorkspaceExec))
+	if err != nil {
+		t.Fatal(err)
+	}
 	decision, err := registered.CheckToolPermission(context.Background(), &tool.PermissionRequest{
 		ToolName:  "custom",
 		Arguments: []byte(`{"command":"echo ok"}`),
@@ -309,11 +315,14 @@ func TestPermissionPolicyUsesConservativeBackendsAndEffectiveValues(t *testing.T
 
 func TestPermissionAuditUsesToolCallIDAsRequestID(t *testing.T) {
 	var buf bytes.Buffer
-	policy := NewPermissionPolicy(
-		MustScanner(DefaultPolicy()),
+	policy, err := NewPermissionPolicy(
+		newTestScanner(t, DefaultPolicy()),
 		WithAuditWriter(NewJSONLWriter(&buf)),
 	)
-	_, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
 		ToolName:   "unregistered_tool",
 		ToolCallID: "call-42",
 		Arguments:  []byte(`{}`),
@@ -327,7 +336,7 @@ func TestPermissionAuditUsesToolCallIDAsRequestID(t *testing.T) {
 }
 
 func TestScannerFindsDependencySubcommandAfterGlobalOptions(t *testing.T) {
-	scanner := MustScanner(DefaultPolicy())
+	scanner := newTestScanner(t, DefaultPolicy())
 	for _, command := range []string{
 		"npm --global install pkg",
 		"pip --isolated install pkg",
@@ -344,7 +353,7 @@ func TestScannerFindsDependencySubcommandAfterGlobalOptions(t *testing.T) {
 }
 
 func TestScannerParsesSleepDurations(t *testing.T) {
-	scanner := MustScanner(DefaultPolicy())
+	scanner := newTestScanner(t, DefaultPolicy())
 	cases := []struct {
 		command string
 		action  Decision
@@ -375,7 +384,7 @@ func TestScannerParsesSleepDurations(t *testing.T) {
 func TestScannerDetectsEveryRedactedCredentialFormat(t *testing.T) {
 	policy := DefaultPolicy()
 	policy.Redaction.ExtraPatterns = []string{`CUSTOM-[0-9]{6}`}
-	scanner := MustScanner(policy)
+	scanner := newTestScanner(t, policy)
 	secrets := []string{
 		"api_key=secret-value",
 		"Authorization: Bearer abc.def-123",
@@ -403,7 +412,7 @@ func TestDisabledRedactionStillDetectsCredentials(t *testing.T) {
 	enabled := false
 	policy := DefaultPolicy()
 	policy.Redaction.Enabled = &enabled
-	scanner := MustScanner(policy)
+	scanner := newTestScanner(t, policy)
 	report, err := scanner.Scan(context.Background(), ExecutionRequest{
 		Command: "curl -q https://proxy.example.test --data sk-1234567890abcdef",
 	})
@@ -439,42 +448,136 @@ func TestPolicyRejectsMalformedForbiddenPathPatterns(t *testing.T) {
 }
 
 func TestOutputSanitizerRedactsSplitPrivateKey(t *testing.T) {
-	sanitizer := MustScanner(DefaultPolicy()).NewOutputSanitizer()
+	sanitizer := newTestScanner(t, DefaultPolicy()).NewOutputSanitizer()
 	chunks := []string{
 		"before\n-----BEG",
 		"IN RSA PRIVATE KEY-----\nsecret-body\n-----EN",
 		"D RSA PRIVATE KEY-----\nafter",
 	}
-	var output strings.Builder
 	for _, chunk := range chunks {
-		value := sanitizer.Sanitize(chunk)
-		if strings.Contains(value, "PRIVATE KEY") || strings.Contains(value, "secret-body") {
-			t.Fatalf("chunk leaked private key: %q", value)
+		if got := sanitizer.Sanitize(chunk); got != "" {
+			t.Fatalf("running chunk = %q, want no output before final flush", got)
 		}
-		output.WriteString(value)
 	}
-	got := output.String()
+	got := sanitizer.SanitizeFinal("")
+	if strings.Contains(got, "PRIVATE KEY") || strings.Contains(got, "secret-body") {
+		t.Fatalf("final output leaked private key: %q", got)
+	}
 	if strings.Count(got, "[REDACTED]") != 1 || !strings.Contains(got, "before") || !strings.Contains(got, "after") {
-		t.Fatalf("stream output = %q, want surrounding text and one replacement", got)
+		t.Fatalf("final output = %q, want surrounding text and one replacement", got)
 	}
 }
 
 func TestOutputSanitizerRedactsSplitCredentials(t *testing.T) {
 	policy := DefaultPolicy()
-	policy.Redaction.ExtraPatterns = []string{`CUSTOM-[0-9]{6}`}
-	for _, chunks := range [][]string{
-		{"before sk-123456", "7890abcdef after"},
-		{"Authorization: Bearer abc.", "def-123\n"},
-		{"CUSTOM-123", "456\n"},
+	policy.Redaction.ExtraPatterns = []string{`(?:[A-Z]{3}-[0-9]{6})`}
+	for _, tc := range []struct {
+		name   string
+		chunks []string
+		secret string
+	}{
+		{name: "api key", chunks: []string{"before sk-123456", "7890abcdef after"}, secret: "sk-1234567890abcdef"},
+		{name: "authorization", chunks: []string{"Authorization: Bearer abc.", "def-123\n"}, secret: "abc.def-123"},
+		{name: "database URL", chunks: []string{"postgres://user:password", "@db.example.test/app\n"}, secret: "postgres://user:password@"},
+		{name: "custom pattern without literal prefix", chunks: []string{"ABC-123", "456\n"}, secret: "ABC-123456"},
 	} {
-		sanitizer := MustScanner(policy).NewOutputSanitizer()
-		var output strings.Builder
-		for _, chunk := range chunks {
-			output.WriteString(sanitizer.Sanitize(chunk))
+		t.Run(tc.name, func(t *testing.T) {
+			sanitizer := newTestScanner(t, policy).NewOutputSanitizer()
+			for _, chunk := range tc.chunks {
+				if got := sanitizer.Sanitize(chunk); got != "" {
+					t.Fatalf("running chunk = %q, want no output before final flush", got)
+				}
+			}
+			got := sanitizer.SanitizeFinal("")
+			if strings.Contains(got, tc.secret) || !strings.Contains(got, "[REDACTED]") {
+				t.Fatalf("final output = %q, want redacted %q", got, tc.secret)
+			}
+		})
+	}
+}
+
+func TestOutputSanitizerOverflowDoesNotReleaseRawOutput(t *testing.T) {
+	policy := DefaultPolicy()
+	policy.ResourceLimits.MaxOutputBytes = 24
+	sanitizer := newTestScanner(t, policy).NewOutputSanitizer()
+	for _, chunk := range []string{"before sk-123", "4567890abcdef after"} {
+		if got := sanitizer.Sanitize(chunk); got != "" {
+			t.Fatalf("running chunk = %q, want no output before final flush", got)
 		}
-		got := output.String()
-		if strings.Contains(got, "1234567890abcdef") || strings.Contains(got, "abc.def-123") || strings.Contains(got, "CUSTOM-123456") {
-			t.Fatalf("split credential leaked: %q", got)
+	}
+	got := sanitizer.SanitizeFinal("")
+	if strings.Contains(got, "before") || strings.Contains(got, "sk-1234567890abcdef") {
+		t.Fatalf("overflow output leaked raw data: %q", got)
+	}
+	if got != "[REDACTED]"+outputTruncatedMarker {
+		t.Fatalf("overflow output = %q, want replacement and truncation marker", got)
+	}
+}
+
+func TestOutputSanitizerWithoutRedactionReturnsOutputImmediately(t *testing.T) {
+	policy := DefaultPolicy()
+	disabled := false
+	policy.Redaction.Enabled = &disabled
+	sanitizer := newTestScanner(t, policy).NewOutputSanitizer()
+	if got := sanitizer.Sanitize("running output"); got != "running output" {
+		t.Fatalf("running output = %q, want immediate output", got)
+	}
+	if got := sanitizer.SanitizeFinal("final output"); got != "final output" {
+		t.Fatalf("final output = %q, want immediate output", got)
+	}
+}
+
+func TestPolicyVersionValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		format  string
+		data    string
+		version string
+		wantErr bool
+	}{
+		{name: "json unsupported", format: "json", data: `{"version":"2"}`, version: "2", wantErr: true},
+		{name: "yaml unsupported", format: "yaml", data: "version: '10'\n", version: "10", wantErr: true},
+		{name: "json whitespace", format: "json", data: `{"version":" \t "}`, version: "1"},
+		{name: "yaml whitespace", format: "yaml", data: "version: '  '\n", version: "1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			policy, err := ParsePolicy([]byte(tc.data), tc.format)
+			if tc.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "unsupported policy version") ||
+					!strings.Contains(err.Error(), tc.version) {
+					t.Fatalf("ParsePolicy error = %v, want unsupported version %q", err, tc.version)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if policy.Version != tc.version {
+				t.Fatalf("version = %q, want %q", policy.Version, tc.version)
+			}
+		})
+	}
+	for _, tc := range []struct {
+		version string
+		wantErr bool
+	}{
+		{version: " \t "},
+		{version: "1"},
+		{version: "2", wantErr: true},
+	} {
+		scanner, err := NewScanner(Policy{Version: tc.version})
+		if tc.wantErr {
+			if err == nil || !strings.Contains(err.Error(), "unsupported policy version") ||
+				!strings.Contains(err.Error(), tc.version) {
+				t.Fatalf("NewScanner(%q) error = %v", tc.version, err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("NewScanner(%q): %v", tc.version, err)
+		}
+		if scanner.policy.Version != "1" {
+			t.Fatalf("NewScanner(%q) version = %q, want 1", tc.version, scanner.policy.Version)
 		}
 	}
 }
@@ -485,7 +588,7 @@ func TestScannerSnapshotsPolicyReferences(t *testing.T) {
 	policy.BackendRules.CodeExec.AllowedLanguages = []string{"python"}
 	policy.DependencyCommands = []DependencyCommandPolicy{{Command: "pkg", Subcommands: []string{"install"}, Action: DecisionDeny}}
 	policy.Rules = map[string]RulePolicyOverride{RuleDependencyInstall: {Action: DecisionDeny}}
-	scanner := MustScanner(policy)
+	scanner := newTestScanner(t, policy)
 	policy.AllowedNetworkDomains[0] = "evil.example"
 	policy.BackendRules.CodeExec.AllowedLanguages[0] = "ruby"
 	policy.DependencyCommands[0].Subcommands[0] = "remove"
