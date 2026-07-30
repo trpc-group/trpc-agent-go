@@ -43,7 +43,7 @@ func (c *pathChecker) Check(ctx context.Context, req *ScanRequest) (*CheckResult
 
 	for _, pattern := range c.policy.Paths.Denied {
 		expanded := expandTilde(pattern)
-		if matchPath(text, expanded) {
+		if matchPath(text, expanded) || matchPath(text, pattern) {
 			return c.result(pattern, expanded)
 		}
 	}
