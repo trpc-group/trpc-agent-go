@@ -696,12 +696,14 @@ func TestRunnerWrappersRejectInvalidSkillBeforeModelRequest(t *testing.T) {
 	tests := []struct {
 		name      string
 		runnerOpt Option
+		errorType string
 	}{
 		{
 			name: "ralph loop",
 			runnerOpt: WithRalphLoop(RalphLoopConfig{
 				CompletionPromise: "DONE",
 			}),
+			errorType: agent.ErrorTypeStopAgentError,
 		},
 		{
 			name: "candidate selector",
@@ -709,6 +711,7 @@ func TestRunnerWrappersRejectInvalidSkillBeforeModelRequest(t *testing.T) {
 				&fixedCandidateSelector{winner: 0},
 				WithCandidateAttempts(2),
 			),
+			errorType: model.ErrorTypeRunError,
 		},
 	}
 	for _, test := range tests {
@@ -729,9 +732,24 @@ func TestRunnerWrappersRejectInvalidSkillBeforeModelRequest(t *testing.T) {
 				agent.WithSkillLoads(skill.LoadRequest{Name: "missing"}),
 			)
 			require.NoError(t, err)
-			for range events {
+			var skillLoadError *model.ResponseError
+			for evt := range events {
+				if evt != nil && evt.Response != nil &&
+					evt.Response.Error != nil &&
+					strings.Contains(
+						evt.Response.Error.Message,
+						skill.ErrSkillUnavailable.Error(),
+					) {
+					skillLoadError = evt.Response.Error
+				}
 			}
 
+			require.NotNil(
+				t,
+				skillLoadError,
+				"wrapper must deliver the skill-load failure",
+			)
+			require.Equal(t, test.errorType, skillLoadError.Type)
 			require.Empty(t, modelStub.Requests())
 		})
 	}

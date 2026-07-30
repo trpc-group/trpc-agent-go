@@ -18,6 +18,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
 
+// prepareSkillLoads validates and normalizes all declared loads before
+// updating the invocation or activating tools. If any request fails,
+// inv.RunOptions.SkillLoads remains unchanged and no partial load is committed.
 func (a *LLMAgent) prepareSkillLoads(
 	ctx context.Context,
 	inv *agent.Invocation,

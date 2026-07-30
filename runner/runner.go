@@ -631,25 +631,14 @@ func (r *runner) Run(
 		ro,
 		runnerLatencySpanSelectAgent,
 	)
-	ag, err := r.selectAgent(selectCtx, ro)
+	ag, err := r.selectAgentForRun(selectCtx, ro)
 	if selectStarted && ag != nil {
 		selectSpan.SetAttributes(attribute.String("runner.agent", ag.Info().Name))
 	}
 	finishRunnerLatencySpan(selectSpan, selectStarted, err)
 	if err != nil {
 		execCancel()
-		return nil, fmt.Errorf("select agent: %w", err)
-	}
-	if len(ro.SkillLoads) > 0 {
-		support, ok := ag.(agent.InvocationSkillLoadSupport)
-		if !ok || !support.SupportsInvocationSkillLoads() {
-			execCancel()
-			return nil, fmt.Errorf(
-				"%w: %s",
-				agent.ErrSkillLoadingUnsupported,
-				ag.Info().Name,
-			)
-		}
+		return nil, err
 	}
 	resolveCtx, resolveSpan, resolveStarted := startRunnerRunOptionsLatencySpan(
 		execCtx,
@@ -1162,6 +1151,30 @@ func (r *runner) lookupCancel(requestID string) context.CancelFunc {
 		return nil
 	}
 	return handle.cancel
+}
+
+// selectAgentForRun resolves the selected agent and validates capabilities
+// that must be known before the invocation is constructed.
+func (r *runner) selectAgentForRun(
+	ctx context.Context,
+	ro agent.RunOptions,
+) (agent.Agent, error) {
+	ag, err := r.selectAgent(ctx, ro)
+	if err != nil {
+		return nil, fmt.Errorf("select agent: %w", err)
+	}
+	if len(ro.SkillLoads) == 0 {
+		return ag, nil
+	}
+	support, ok := ag.(agent.InvocationSkillLoadSupport)
+	if !ok || !support.SupportsInvocationSkillLoads() {
+		return ag, fmt.Errorf(
+			"%w: %s",
+			agent.ErrSkillLoadingUnsupported,
+			ag.Info().Name,
+		)
+	}
+	return ag, nil
 }
 
 // resolveAgent decides which agent to use for this run.

@@ -174,6 +174,107 @@ func TestPrepareSkillLoadsRejectsConflictingDocSelection(t *testing.T) {
 	require.Empty(t, inv.Session.SnapshotState())
 }
 
+func TestDeclaredSkillLoadIncludesAllDocs(t *testing.T) {
+	repo := &skillLoadTestRepository{skills: map[string]*skill.Skill{
+		"review": {
+			Summary: skill.Summary{Name: "review"},
+			Body:    "Review body",
+			Docs: []skill.Doc{
+				{Path: "a.md", Content: "Doc A"},
+				{Path: "b.md", Content: "Doc B"},
+			},
+		},
+	}}
+	modelStub := &captureModel{}
+	agt := New(
+		"tester",
+		WithModel(modelStub),
+		WithSkills(repo),
+	)
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{}),
+		agent.WithInvocationMessage(model.NewUserMessage("review")),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			SkillLoads: []skill.LoadRequest{{
+				Name:           "review",
+				IncludeAllDocs: true,
+			}},
+		}),
+	)
+
+	events, err := agt.Run(context.Background(), inv)
+	require.NoError(t, err)
+	for range events {
+	}
+
+	require.NotNil(t, modelStub.got)
+	system := skillLoadTestSystemContent(modelStub.got)
+	require.Contains(t, system, "Doc A")
+	require.Contains(t, system, "Doc B")
+	docs, ok := inv.Session.GetState(skill.DocsKey("tester", "review"))
+	require.True(t, ok)
+	require.Equal(t, []byte("*"), docs)
+}
+
+func TestDeclaredSkillLoadPreservesExistingDocs(t *testing.T) {
+	repo := &skillLoadTestRepository{skills: map[string]*skill.Skill{
+		"review": {
+			Summary: skill.Summary{Name: "review"},
+			Body:    "Review body",
+			Docs: []skill.Doc{{
+				Path:    "old.md",
+				Content: "Old doc body",
+			}},
+		},
+	}}
+	modelStub := &captureModel{}
+	agt := New(
+		"tester",
+		WithModel(modelStub),
+		WithSkills(repo),
+		WithSkillLoadMode(SkillLoadModeSession),
+	)
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{
+			State: session.StateMap{
+				skill.DocsKey("tester", "review"): []byte(`["old.md"]`),
+			},
+		}),
+		agent.WithInvocationMessage(model.NewUserMessage("review")),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			SkillLoads: []skill.LoadRequest{{Name: "review"}},
+		}),
+	)
+
+	events, err := agt.Run(context.Background(), inv)
+	require.NoError(t, err)
+	for range events {
+	}
+
+	require.NotNil(t, modelStub.got)
+	require.Contains(
+		t,
+		skillLoadTestSystemContent(modelStub.got),
+		"Old doc body",
+	)
+	docs, ok := inv.Session.GetState(skill.DocsKey("tester", "review"))
+	require.True(t, ok)
+	require.JSONEq(t, `["old.md"]`, string(docs))
+}
+
+func skillLoadTestSystemContent(req *model.Request) string {
+	if req == nil {
+		return ""
+	}
+	var system string
+	for _, message := range req.Messages {
+		if message.Role == model.RoleSystem {
+			system += message.Content
+		}
+	}
+	return system
+}
+
 func TestPrepareSkillLoadsActivatesToolsForFirstModelRequest(t *testing.T) {
 	repo := &skillLoadTestRepository{skills: map[string]*skill.Skill{
 		"review": {Summary: skill.Summary{Name: "review"}},
