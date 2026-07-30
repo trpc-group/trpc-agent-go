@@ -42,6 +42,21 @@ func TestWriteReportsRejectsNilReport(t *testing.T) {
 	require.ErrorContains(t, err, "report is nil")
 }
 
+func TestWriteReportsRejectsCollidingPaths(t *testing.T) {
+	dir := t.TempDir()
+	jsonPath := filepath.Join(dir, "optimization_report")
+	markdownPath := dir + string(filepath.Separator) + "nested" + string(filepath.Separator) +
+		".." + string(filepath.Separator) + "optimization_report"
+	require.NoError(t, os.WriteFile(jsonPath, []byte("existing"), 0o644))
+
+	err := WriteReports(sampleReport(), jsonPath, markdownPath)
+	require.ErrorContains(t, err, "output.jsonReport and output.markdownReport must be distinct")
+	data, readErr := os.ReadFile(jsonPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, "existing", string(data))
+	assert.NoDirExists(t, filepath.Join(dir, "nested"))
+}
+
 func TestMarkdownReportEscapesDynamicText(t *testing.T) {
 	report := sampleReport()
 	report.Run.AppName = "app`name\nnext"

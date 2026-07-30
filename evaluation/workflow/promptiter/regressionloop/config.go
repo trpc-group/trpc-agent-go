@@ -9,9 +9,11 @@
 package regressionloop
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,8 +29,17 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
 	var cfg Config
-	if err := json.Unmarshal(data, &cfg); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("decode config: %w", err)
+	}
+	extraErr := decoder.Decode(&struct{}{})
+	if extraErr != io.EOF {
+		if extraErr == nil {
+			extraErr = errors.New("config must contain a single JSON object")
+		}
+		return nil, fmt.Errorf("decode config: %w", extraErr)
 	}
 	resolveConfigPaths(&cfg, filepath.Dir(path))
 	if err := cfg.Validate(); err != nil {
@@ -91,6 +102,9 @@ func (c *Config) Validate() error {
 	if len(missing) > 0 {
 		return fmt.Errorf("missing required config fields: %s", strings.Join(missing, ", "))
 	}
+	if err := validateReportPaths(c.Output.JSONReport, c.Output.MarkdownReport); err != nil {
+		return err
+	}
 	if c.TrainEvalSet.ID == c.ValidationEvalSet.ID {
 		return errors.New("train and validation eval sets must be distinct")
 	}
@@ -118,6 +132,13 @@ func (c *Config) Validate() error {
 	}
 	if (c.Runner.Mode == RunnerModeFake || c.Runner.Mode == RunnerModeTrace) && c.Seed == 0 {
 		return errors.New("deterministic fake/trace mode requires a non-zero seed")
+	}
+	return nil
+}
+
+func validateReportPaths(jsonPath, markdownPath string) error {
+	if filepath.Clean(jsonPath) == filepath.Clean(markdownPath) {
+		return errors.New("output.jsonReport and output.markdownReport must be distinct")
 	}
 	return nil
 }

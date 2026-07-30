@@ -23,6 +23,7 @@ func TestCandidatesFromPromptIterResult(t *testing.T) {
 
 	prompt := "candidate prompt"
 	wrongPrompt := "wrong prompt"
+	emptyPrompt := ""
 	result := &promptiterengine.RunResult{
 		Rounds: []promptiterengine.RoundResult{
 			{
@@ -46,12 +47,25 @@ func TestCandidatesFromPromptIterResult(t *testing.T) {
 			{
 				Round: 3,
 			},
+			{
+				Round: 4,
+				OutputProfile: &promptiter.Profile{Overrides: []promptiter.SurfaceOverride{{
+					SurfaceID: "agent#instruction",
+				}}},
+			},
+			{
+				Round: 5,
+				OutputProfile: &promptiter.Profile{Overrides: []promptiter.SurfaceOverride{{
+					SurfaceID: "agent#instruction",
+					Value:     structure.SurfaceValue{Text: &emptyPrompt},
+				}}},
+				Acceptance: &promptiterengine.AcceptanceDecision{Reason: "intentionally empty"},
+			},
 		},
 	}
 
 	candidates := CandidatesFromPromptIterResult(result, "agent#instruction")
-	require.Len(t, candidates, 3)
+	require.Len(t, candidates, 2)
 	assert.Equal(t, Candidate{Round: 1, Prompt: prompt, Reason: "accepted by promptiter"}, candidates[0])
-	assert.Equal(t, Candidate{Round: 2}, candidates[1])
-	assert.Equal(t, Candidate{Round: 3}, candidates[2])
+	assert.Equal(t, Candidate{Round: 5, Prompt: "", Reason: "intentionally empty"}, candidates[1])
 }

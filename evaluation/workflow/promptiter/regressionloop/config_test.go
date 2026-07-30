@@ -74,6 +74,15 @@ func TestConfigValidateRejectsInvalidValues(t *testing.T) {
 			wantErr: "gate.maxLatencyMs must be non-negative",
 		},
 		{
+			name: "colliding report paths",
+			mutate: func(cfg *Config) {
+				cfg.Output.JSONReport = filepath.Join(cfg.Output.Dir, "same")
+				cfg.Output.MarkdownReport = cfg.Output.Dir + string(filepath.Separator) +
+					"nested" + string(filepath.Separator) + ".." + string(filepath.Separator) + "same"
+			},
+			wantErr: "output.jsonReport and output.markdownReport must be distinct",
+		},
+		{
 			name: "unsupported prompt target type",
 			mutate: func(cfg *Config) {
 				cfg.PromptSource.TargetType = "unknown"
@@ -178,9 +187,27 @@ func TestLoadConfigRejectsBadInput(t *testing.T) {
 	_, err = LoadConfig(badJSON)
 	require.ErrorContains(t, err, "decode config")
 
+	valid := testConfig(t)
+	data, err := json.Marshal(valid)
+	require.NoError(t, err)
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(data, &raw))
+	raw["gate"].(map[string]any)["blockCriticalRegressions"] = true
+	unknownData, err := json.Marshal(raw)
+	require.NoError(t, err)
+	unknownPath := filepath.Join(dir, "unknown.json")
+	require.NoError(t, os.WriteFile(unknownPath, unknownData, 0o644))
+	_, err = LoadConfig(unknownPath)
+	require.ErrorContains(t, err, `unknown field "blockCriticalRegressions"`)
+
+	trailingPath := filepath.Join(dir, "trailing.json")
+	require.NoError(t, os.WriteFile(trailingPath, append(data, []byte("\n{}")...), 0o644))
+	_, err = LoadConfig(trailingPath)
+	require.ErrorContains(t, err, "config must contain a single JSON object")
+
 	invalid := testConfig(t)
 	invalid.AppName = ""
-	data, err := json.Marshal(invalid)
+	data, err = json.Marshal(invalid)
 	require.NoError(t, err)
 	invalidPath := filepath.Join(dir, "invalid.json")
 	require.NoError(t, os.WriteFile(invalidPath, data, 0o644))

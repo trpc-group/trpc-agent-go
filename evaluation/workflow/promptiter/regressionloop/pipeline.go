@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -188,5 +189,25 @@ func (p *Pipeline) evaluate(ctx context.Context, cfg Config, phase Phase, round 
 	if err != nil {
 		return EvaluationSummary{}, fmt.Errorf("evaluate %s %s: %w", phase, evalSet.ID, err)
 	}
+	if err := validateEvaluationSummary(result); err != nil {
+		return EvaluationSummary{}, fmt.Errorf("evaluate %s %s: invalid summary: %w", phase, evalSet.ID, err)
+	}
 	return AttributeEvaluation(result), nil
+}
+
+func validateEvaluationSummary(summary EvaluationSummary) error {
+	if len(summary.Cases) == 0 {
+		return fmt.Errorf("cases are empty")
+	}
+	seen := make(map[string]struct{}, len(summary.Cases))
+	for i, c := range summary.Cases {
+		if strings.TrimSpace(c.EvalID) == "" {
+			return fmt.Errorf("case %d has an empty eval ID", i)
+		}
+		if _, ok := seen[c.EvalID]; ok {
+			return fmt.Errorf("duplicate eval ID %q", c.EvalID)
+		}
+		seen[c.EvalID] = struct{}{}
+	}
+	return nil
 }

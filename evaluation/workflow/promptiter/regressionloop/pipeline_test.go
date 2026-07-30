@@ -211,8 +211,12 @@ func TestPipelinePropagatesOptimizerAndEvaluatorErrors(t *testing.T) {
 
 	_, err = (&Pipeline{
 		Evaluator: &fakeEvaluator{
-			results: baseResults,
-			errors:  map[string]error{phaseKey(PhaseCandidateValidation, 1): errFake},
+			results: map[string]EvaluationSummary{
+				phaseKey(PhaseBaselineTrain, 0):      baseResults[phaseKey(PhaseBaselineTrain, 0)],
+				phaseKey(PhaseBaselineValidation, 0): baseResults[phaseKey(PhaseBaselineValidation, 0)],
+				phaseKey(PhaseCandidateTrain, 1):     evalSummary(0.7, caseResult("train", 0.7, true)),
+			},
+			errors: map[string]error{phaseKey(PhaseCandidateValidation, 1): errFake},
 		},
 		Optimizer: fakeOptimizer{candidates: []Candidate{{Round: 1, Prompt: "candidate"}}},
 		Clock: &fixedClock{ticks: []time.Time{
@@ -221,4 +225,44 @@ func TestPipelinePropagatesOptimizerAndEvaluatorErrors(t *testing.T) {
 		}},
 	}).Run(context.Background(), cfg)
 	require.ErrorContains(t, err, "evaluate candidate_validation validation")
+}
+
+func TestPipelineRejectsInvalidEvaluatorSummaries(t *testing.T) {
+	tests := []struct {
+		name    string
+		summary EvaluationSummary
+		wantErr string
+	}{
+		{
+			name:    "empty cases",
+			summary: evalSummary(0.5),
+			wantErr: "cases are empty",
+		},
+		{
+			name:    "empty eval ID",
+			summary: evalSummary(0.5, caseResult(" ", 0.5, true)),
+			wantErr: "case 0 has an empty eval ID",
+		},
+		{
+			name: "duplicate eval ID",
+			summary: evalSummary(0.5,
+				caseResult("duplicate", 0.4, false),
+				caseResult("duplicate", 0.6, true),
+			),
+			wantErr: `duplicate eval ID "duplicate"`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := testConfig(t)
+			_, err := (&Pipeline{
+				Evaluator: &fakeEvaluator{results: map[string]EvaluationSummary{
+					phaseKey(PhaseBaselineTrain, 0): tt.summary,
+				}},
+				Optimizer: fakeOptimizer{},
+			}).Run(context.Background(), cfg)
+			require.ErrorContains(t, err, "evaluate baseline_train train: invalid summary")
+			require.ErrorContains(t, err, tt.wantErr)
+		})
+	}
 }

@@ -23,6 +23,9 @@ func WriteReports(report *Report, jsonPath, markdownPath string) error {
 	if report == nil {
 		return fmt.Errorf("report is nil")
 	}
+	if err := validateReportPaths(jsonPath, markdownPath); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(jsonPath), 0o755); err != nil {
 		return fmt.Errorf("create json report dir: %w", err)
 	}

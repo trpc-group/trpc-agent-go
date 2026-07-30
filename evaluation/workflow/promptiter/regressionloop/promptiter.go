@@ -20,10 +20,14 @@ func CandidatesFromPromptIterResult(result *promptiterengine.RunResult, promptSu
 	}
 	candidates := make([]Candidate, 0, len(result.Rounds))
 	for _, round := range result.Rounds {
-		candidate := Candidate{Round: round.Round}
-		if round.OutputProfile != nil {
-			candidate.Prompt = promptTextForSurface(round.OutputProfile.Overrides, promptSurfaceID)
+		if round.OutputProfile == nil {
+			continue
 		}
+		prompt, found := promptTextForSurface(round.OutputProfile.Overrides, promptSurfaceID)
+		if !found {
+			continue
+		}
+		candidate := Candidate{Round: round.Round, Prompt: prompt}
 		if round.Acceptance != nil {
 			candidate.Reason = round.Acceptance.Reason
 		}
@@ -32,12 +36,12 @@ func CandidatesFromPromptIterResult(result *promptiterengine.RunResult, promptSu
 	return candidates
 }
 
-func promptTextForSurface(overrides []promptiter.SurfaceOverride, surfaceID string) string {
+func promptTextForSurface(overrides []promptiter.SurfaceOverride, surfaceID string) (string, bool) {
 	for _, override := range overrides {
 		if override.SurfaceID != surfaceID || override.Value.Text == nil {
 			continue
 		}
-		return *override.Value.Text
+		return *override.Value.Text, true
 	}
-	return ""
+	return "", false
 }
