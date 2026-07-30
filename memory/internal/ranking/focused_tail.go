@@ -222,10 +222,8 @@ var focusedCalendarTerms = map[string]struct{}{
 	"august": {}, "aug": {}, "september": {}, "sep": {}, "sept": {},
 	"october": {}, "oct": {}, "november": {}, "nov": {},
 	"december": {}, "dec": {},
-	"monday": {}, "mon": {}, "tuesday": {}, "tue": {}, "tues": {},
-	"wednesday": {}, "wed": {}, "thursday": {}, "thu": {}, "thur": {},
-	"thurs": {}, "friday": {}, "fri": {}, "saturday": {}, "sat": {},
-	"sunday": {}, "sun": {},
+	"monday": {}, "tuesday": {}, "wednesday": {}, "thursday": {},
+	"friday": {}, "saturday": {}, "sunday": {},
 }
 
 var focusedTailIgnoredContentTerms = map[string]struct{}{

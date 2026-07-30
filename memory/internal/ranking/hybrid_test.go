@@ -29,6 +29,9 @@ func TestHybridCandidateLimit(t *testing.T) {
 	assert.Equal(t, 30, HybridCandidateLimit(
 		"Where am I planning to stay for my birthday trip?", 30,
 	))
+	assert.Equal(t, 30, HybridCandidateLimit(
+		"Caroline tree sun painting LGBTQ center art show", 30,
+	))
 	assert.Equal(t, 90, HybridCandidateLimit(
 		"What is the order from earliest to latest?", 30,
 	))
