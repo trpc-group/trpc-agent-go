@@ -159,6 +159,42 @@ func TestRun_RejectsUnknownComparisonMode(t *testing.T) {
 		}
 	}
 }
+func TestExecuteCase_AutoCaptureAllCachedSessionsDeterministic(t *testing.T) {
+	b := openInMemoryBackend(t)
+	keyZ := SessionKeyFor("auto_capture_z")
+	keyA := SessionKeyFor("auto_capture_a")
+	tc := ReplayCase{
+		Name: "auto_capture_all_cached_sessions",
+		Steps: []Step{
+			AppendEventStep{StepKey: "z", SessionKey: keyZ, Event: UserEvent("z", "z-payload")},
+			AppendEventStep{StepKey: "a", SessionKey: keyA, Event: UserEvent("a", "a-payload")},
+		},
+	}
+	snap, err := executeCase(context.Background(), tc, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.Session == nil || snap.Session.ID != keyA.SessionID {
+		got := "<nil>"
+		if snap.Session != nil {
+			got = snap.Session.ID
+		}
+		t.Fatalf("primary session=%q, want sorted first %q", got, keyA.SessionID)
+	}
+	if len(snap.Sessions) != 2 {
+		t.Fatalf("captured sessions=%d, want 2", len(snap.Sessions))
+	}
+	for _, key := range []session.Key{keyA, keyZ} {
+		sess := snap.Sessions[key.SessionID]
+		if sess == nil {
+			t.Fatalf("missing captured session %q in %v", key.SessionID, snap.Sessions)
+		}
+		if len(sess.Events) != 1 {
+			t.Fatalf("session %q events=%d, want 1", key.SessionID, len(sess.Events))
+		}
+	}
+}
+
 func TestRun_RejectsEmptyBackends(t *testing.T) {
 	h := NewHarness(DefaultHarnessOpts())
 	// No AddBackend: must not produce a green report of "passed" cases.
@@ -690,22 +726,22 @@ func TestExecuteCase_AppUserStateListAndReload(t *testing.T) {
 	}
 }
 
-func TestExecuteCase_AppendEventAutoSessionKey(t *testing.T) {
+func TestExecuteCase_AppendEventEmptyKeyWithoutContextReturnsError(t *testing.T) {
 	b := openInMemoryBackend(t)
-	// No SessionKey on first append: should auto-create session-auto
 	tc := ReplayCase{
-		Name: "auto_key",
+		Name: "empty_key_missing_context",
 		Steps: []Step{
 			AppendEventStep{StepKey: "auto.1", Event: UserEvent("auto.1", "x")},
-			GetSessionStep{StepKey: "g", SessionKey: session.Key{AppName: DefaultApp, UserID: DefaultUser, SessionID: "session-auto"}},
 		},
 	}
-	snap, err := executeCase(context.Background(), tc, b)
-	if err != nil {
-		t.Fatal(err)
+	_, err := executeCase(context.Background(), tc, b)
+	if err == nil {
+		t.Fatal("expected empty session key error")
 	}
-	if snap.Session == nil || len(snap.Session.Events) == 0 {
-		t.Fatalf("snap=%+v", snap)
+	for _, want := range []string{"auto.1", "empty session key", "requires an existing captured or cached session"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("err=%v missing %q", err, want)
+		}
 	}
 }
 

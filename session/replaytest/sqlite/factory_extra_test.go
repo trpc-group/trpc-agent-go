@@ -11,6 +11,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/session/replaytest"
@@ -56,6 +57,55 @@ func TestOpen_ExplicitDir(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "memory.db")); err != nil {
 		t.Fatalf("memory.db: %v", err)
 	}
+}
+
+func TestFactory_MemoryCloseRemovesTemporaryDirectory(t *testing.T) {
+	before := replaySQLiteTempDirs(t)
+	sess, mem, _, err := replaysqlite.Factory()()
+	requireSQLiteAvailable(t, err)
+	t.Cleanup(func() { _ = sess.Close() })
+	dir := onlyNewReplaySQLiteTempDir(t, before)
+
+	if err := mem.Close(); err != nil {
+		t.Fatalf("mem.Close: %v", err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("temporary directory %q still exists after mem.Close: %v", dir, err)
+	}
+}
+
+func replaySQLiteTempDirs(t *testing.T) map[string]struct{} {
+	t.Helper()
+	entries, err := os.ReadDir(os.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dirs := make(map[string]struct{})
+	for _, entry := range entries {
+		if entry.IsDir() && strings.HasPrefix(entry.Name(), "replaytest-sqlite-") {
+			dirs[filepath.Join(os.TempDir(), entry.Name())] = struct{}{}
+		}
+	}
+	return dirs
+}
+
+func onlyNewReplaySQLiteTempDir(t *testing.T, before map[string]struct{}) string {
+	t.Helper()
+	after := replaySQLiteTempDirs(t)
+	var dir string
+	for candidate := range after {
+		if _, exists := before[candidate]; exists {
+			continue
+		}
+		if dir != "" {
+			t.Fatalf("multiple new replay sqlite temp dirs: %q and %q", dir, candidate)
+		}
+		dir = candidate
+	}
+	if dir == "" {
+		t.Fatal("Factory did not create a replay sqlite temporary directory")
+	}
+	return dir
 }
 
 func TestFactory_AndNamedBackend(t *testing.T) {

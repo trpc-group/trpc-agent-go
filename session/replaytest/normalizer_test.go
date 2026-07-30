@@ -240,6 +240,49 @@ func TestNormalizer_KeepsUnderscoreStateKeys(t *testing.T) {
 	}
 }
 
+func TestNormalizer_SummaryUpdatedAtCanonicalized(t *testing.T) {
+	n := NewNormalizer()
+	build := func(updatedAt time.Time) *Snapshot {
+		return &Snapshot{
+			Backend: "summary-audit",
+			Session: &session.Session{
+				Summaries: map[string]*session.Summary{
+					"": {Summary: "same", UpdatedAt: updatedAt},
+				},
+			},
+		}
+	}
+
+	a, err := n.Normalize(build(time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := n.Normalize(build(time.Date(2026, 2, 3, 4, 5, 6, 0, time.UTC)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := a.Session.Summaries[""].UpdatedAt; !got.Equal(FixedTimestamp) {
+		t.Fatalf("a updated_at=%v want %v", got, FixedTimestamp)
+	}
+	if got := b.Session.Summaries[""].UpdatedAt; !got.Equal(FixedTimestamp) {
+		t.Fatalf("b updated_at=%v want %v", got, FixedTimestamp)
+	}
+	if diffs := NewComparator().Compare(ReplayCase{Name: "summary_audit"}, a, b, InMemoryProfile(), InMemoryProfile()); ErrorDiffCount(diffs) != 0 {
+		t.Fatalf("unexpected summary audit diff: %+v", diffs)
+	}
+
+	zero, err := n.Normalize(build(time.Time{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !zero.Session.Summaries[""].UpdatedAt.IsZero() {
+		t.Fatalf("zero updated_at=%v", zero.Session.Summaries[""].UpdatedAt)
+	}
+	if diffs := NewComparator().Compare(ReplayCase{Name: "summary_audit"}, zero, a, InMemoryProfile(), InMemoryProfile()); ErrorDiffCount(diffs) == 0 {
+		t.Fatal("expected zero/non-zero summary audit diff")
+	}
+}
+
 func TestNormalizer_CanonicalizesMemoryAuditTimestamps(t *testing.T) {
 	n := NewNormalizer()
 	ts1 := time.Unix(100, 0).UTC()

@@ -371,6 +371,34 @@ func TestHarness_AppendEventFromCacheAndDefaults(t *testing.T) {
 	}
 }
 
+func TestHarness_AppendEventEmptyKeyWithoutContextReturnsError(t *testing.T) {
+	b := openInMemoryBackend(t)
+	tc := ReplayCase{
+		Name: "missing_empty_key",
+		Steps: []Step{
+			AppendEventStep{StepKey: "missing", Event: UserEvent("missing", "bad")},
+		},
+	}
+	_, err := executeCase(context.Background(), tc, b)
+	if err == nil {
+		t.Fatal("expected empty session key error")
+	}
+	for _, want := range []string{"missing", "empty session key", "requires an existing captured or cached session"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("err=%v missing %q", err, want)
+		}
+	}
+	wrong, err := b.SessionService.GetSession(context.Background(), session.Key{
+		AppName: DefaultApp, UserID: DefaultUser, SessionID: "session-auto",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wrong != nil {
+		t.Fatalf("unexpected fallback session created: %+v", wrong)
+	}
+}
+
 func TestHarness_AppendEventEmptyKeyReusesFullSnapshotSessionKey(t *testing.T) {
 	b := openInMemoryBackend(t)
 	key := session.Key{AppName: "appX", UserID: "userY", SessionID: "sessionZ"}

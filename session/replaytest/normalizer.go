@@ -115,7 +115,9 @@ func normalizeSessionSummaries(sess *session.Session, eventIDMap map[string]stri
 		if sum == nil {
 			continue
 		}
-		sum.UpdatedAt = sum.UpdatedAt.UTC()
+		if !sum.UpdatedAt.IsZero() {
+			sum.UpdatedAt = FixedTimestamp
+		}
 		sort.Strings(sum.Topics)
 		if sum.Boundary == nil {
 			continue

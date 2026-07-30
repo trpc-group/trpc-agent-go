@@ -7,6 +7,7 @@ package replaytest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync/atomic"
@@ -266,6 +267,47 @@ func TestMemoryLifecycle_InMemorySelfConsistency(t *testing.T) {
 				t.Fatalf("memory_lifecycle failed: %+v", r.Diffs)
 			}
 		}
+	}
+}
+
+func TestResolveMemoryKey_MatchContentAmbiguousReturnsError(t *testing.T) {
+	userKey := MemoryUserKeyDefault()
+	ex := &caseExecutor{
+		snapshot: &Snapshot{Memories: []*memory.Entry{
+			{ID: "mem-b", AppName: userKey.AppName, UserID: userKey.UserID, Memory: &memory.Memory{Memory: "same memory"}},
+			{ID: "mem-a", AppName: userKey.AppName, UserID: userKey.UserID, Memory: &memory.Memory{Memory: "same memory"}},
+		}},
+	}
+
+	_, err := ex.resolveMemoryKey(userKey, "", "same memory")
+	if err == nil {
+		t.Fatal("expected ambiguous match content error")
+	}
+	for _, want := range []string{"match content", "same memory", "ambiguous"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("err=%v missing %q", err, want)
+		}
+	}
+
+	key, err := ex.resolveMemoryKey(userKey, "mem-b", "same memory")
+	if err != nil {
+		t.Fatalf("explicit memory id should bypass content ambiguity: %v", err)
+	}
+	if key.MemoryID != "mem-b" {
+		t.Fatalf("memory id=%q", key.MemoryID)
+	}
+}
+
+func TestWaitPollOrContext_CancelReturnsPromptly(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	start := time.Now()
+	err := waitPollOrContext(ctx, time.Hour)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
+		t.Fatalf("cancel took %s", elapsed)
 	}
 }
 

@@ -9,6 +9,7 @@ package replaytest
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -252,11 +253,10 @@ func executeCase(ctx context.Context, tc ReplayCase, backend NamedBackend) (*Sna
 		}
 	}
 	if ex.getSnapshotSession() == nil {
-		for _, key := range ex.sessionKeys() {
-			if err := ex.captureSession(ctx, key); err != nil {
+		for i, key := range ex.sessionKeys() {
+			if err := ex.captureSessionWithPrimary(ctx, key, i == 0); err != nil {
 				return nil, err
 			}
-			break
 		}
 	}
 	return ex.snapshot, nil
@@ -324,6 +324,15 @@ func (e *caseExecutor) sessionKeys() []session.Key {
 	for k := range e.sessions {
 		keys = append(keys, k)
 	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].AppName != keys[j].AppName {
+			return keys[i].AppName < keys[j].AppName
+		}
+		if keys[i].UserID != keys[j].UserID {
+			return keys[i].UserID < keys[j].UserID
+		}
+		return keys[i].SessionID < keys[j].SessionID
+	})
 	return keys
 }
 
@@ -466,7 +475,7 @@ func (e *caseExecutor) resolveAppendSessionKey(step AppendEventStep) (session.Ke
 	if len(e.sessions) > 1 {
 		return session.Key{}, fmt.Errorf("append_event %q: empty session key is ambiguous across %d cached sessions", step.StepKey, len(e.sessions))
 	}
-	return session.Key{AppName: DefaultApp, UserID: DefaultUser, SessionID: "session-auto"}, nil
+	return session.Key{}, fmt.Errorf("append_event %q: empty session key requires an existing captured or cached session", step.StepKey)
 }
 
 func (e *caseExecutor) updateState(ctx context.Context, step UpdateStateStep) error {
@@ -569,19 +578,25 @@ func (e *caseExecutor) resolveMemoryKey(userKey memory.UserKey, memoryID, matchC
 			return memory.Key{}, fmt.Errorf("memory id or match content required")
 		}
 		e.mu.Lock()
-		mems := e.snapshot.Memories
+		mems := append([]*memory.Entry(nil), e.snapshot.Memories...)
 		e.mu.Unlock()
+		matches := make([]string, 0, 1)
 		for _, m := range mems {
 			if m == nil || m.Memory == nil {
 				continue
 			}
 			if m.Memory.Memory == matchContent {
-				id = m.ID
-				break
+				matches = append(matches, m.ID)
 			}
 		}
-		if id == "" {
+		switch len(matches) {
+		case 0:
 			return memory.Key{}, fmt.Errorf("memory not found for match content %q", matchContent)
+		case 1:
+			id = matches[0]
+		default:
+			sort.Strings(matches)
+			return memory.Key{}, fmt.Errorf("memory match content %q is ambiguous across %d entries", matchContent, len(matches))
 		}
 	}
 	return memory.Key{
@@ -658,11 +673,27 @@ func (e *caseExecutor) waitSummary(ctx context.Context, step WaitSummaryStep) er
 		if time.Now().After(deadline) {
 			return fmt.Errorf("timeout waiting for summary filter=%q", step.FilterKey)
 		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(poll):
+		if err := waitPollOrContext(ctx, poll); err != nil {
+			return err
 		}
+	}
+}
+
+func waitPollOrContext(ctx context.Context, poll time.Duration) error {
+	timer := time.NewTimer(poll)
+	defer func() {
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+	}()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
 	}
 }
 
@@ -695,14 +726,20 @@ func (e *caseExecutor) getSession(ctx context.Context, step GetSessionStep) erro
 }
 
 func (e *caseExecutor) captureSession(ctx context.Context, key session.Key) error {
+	return e.captureSessionWithPrimary(ctx, key, true)
+}
+
+func (e *caseExecutor) captureSessionWithPrimary(ctx context.Context, key session.Key, primary bool) error {
 	sess, err := e.backend.SessionService.GetSession(ctx, key)
 	if err != nil {
 		return err
 	}
 	e.mu.Lock()
 	e.sessions[key] = sess
-	e.snapshot.Session = sess
-	e.snapshot.SessionID = key.SessionID
+	if primary {
+		e.snapshot.Session = sess
+		e.snapshot.SessionID = key.SessionID
+	}
 	if e.snapshot.Sessions == nil {
 		e.snapshot.Sessions = map[string]*session.Session{}
 	}

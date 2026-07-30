@@ -90,30 +90,50 @@ func Open(dir string) (session.Service, memory.Service, replaytest.BackendProfil
 	return sess, mem, profile, cleanup, nil
 }
 
-// sessionCloser wraps session.Service.Close to also run cleanup.
-type sessionCloser struct {
-	session.Service
+// serviceCleanup owns Factory's shared cleanup.
+type serviceCleanup struct {
 	cleanup func()
 }
 
-func (s sessionCloser) Close() error {
-	err := s.Service.Close()
-	if s.cleanup != nil {
-		s.cleanup()
+func (c serviceCleanup) close() {
+	if c.cleanup != nil {
+		c.cleanup()
 	}
-	return err
+}
+
+// sessionCloser wraps session.Service.Close to also run cleanup.
+type sessionCloser struct {
+	session.Service
+	serviceCleanup
+}
+
+func (s sessionCloser) Close() error {
+	s.serviceCleanup.close()
+	return nil
+}
+
+// memoryCloser wraps memory.Service.Close to also run cleanup.
+type memoryCloser struct {
+	memory.Service
+	serviceCleanup
+}
+
+func (m memoryCloser) Close() error {
+	m.serviceCleanup.close()
+	return nil
 }
 
 // Factory returns a replaytest.BackendFactory backed by temporary SQLite files.
-// Closing the returned session service also closes the memory service and
-// removes the temporary directory created by Open.
+// Closing either returned service closes both services and removes the temporary
+// directory created by Open.
 func Factory() replaytest.BackendFactory {
 	return func() (session.Service, memory.Service, replaytest.BackendProfile, error) {
 		sess, mem, profile, cleanup, err := Open("")
 		if err != nil {
 			return nil, nil, profile, err
 		}
-		return sessionCloser{Service: sess, cleanup: cleanup}, mem, profile, nil
+		closer := serviceCleanup{cleanup: cleanup}
+		return sessionCloser{Service: sess, serviceCleanup: closer}, memoryCloser{Service: mem, serviceCleanup: closer}, profile, nil
 	}
 }
 
