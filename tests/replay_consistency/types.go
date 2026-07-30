@@ -30,6 +30,14 @@ const (
 	OperationKindReadBack         OperationKind = "read_back"
 )
 
+type StateScope string
+
+const (
+	StateScopeSession StateScope = "session"
+	StateScopeApp     StateScope = "app"
+	StateScopeUser    StateScope = "user"
+)
+
 type ReplayCase struct {
 	Name                string
 	Description         string
@@ -39,7 +47,8 @@ type ReplayCase struct {
 }
 
 type Operation struct {
-	Kind OperationKind
+	Kind  OperationKind
+	Scope StateScope
 
 	Event       *event.Event
 	StatePatch  session.StateMap

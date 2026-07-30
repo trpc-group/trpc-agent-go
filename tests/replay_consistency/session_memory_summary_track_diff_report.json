@@ -1,45 +1,588 @@
 {
-  "generated_at": "2026-01-01T00:00:00Z",
+  "generated_at": "2026-07-30T11:15:12.427377435Z",
   "cases": [
-    "single_turn_text",
-    "multi_turn_sequence",
-    "tool_call_roundtrip",
-    "state_update_cycle",
+    "failure_retry_dedup",
+    "interleaved_concurrency",
     "memory_write_read",
+    "multi_turn_sequence",
+    "single_turn_text",
+    "state_update_cycle",
     "summary_generation_update",
     "summary_truncation_replay",
-    "track_event_timeline",
-    "interleaved_concurrency",
-    "failure_retry_dedup"
+    "tool_call_roundtrip",
+    "track_event_timeline"
   ],
-  "diffs": [
+  "diffs": null,
+  "results": [
     {
-      "case_name": "summary_generation_update",
-      "backend": "sqlite",
-      "path": "summaries[0].filter_key",
-      "baseline": "",
-      "actual": "branch-a",
-      "allowed_diff": false,
-      "explanation": "summary filter key changed",
-      "session_id": "session-a",
-      "summary_id": "summary-a",
-      "summary_key": "branch-a"
+      "CaseName": "single_turn_text",
+      "Backend": "inmemory",
+      "Snapshot": {},
+      "Diffs": null,
+      "Error": ""
     },
     {
-      "case_name": "track_event_timeline",
-      "backend": "redis",
-      "path": "tracks[0].payload",
-      "baseline": "{\"duration_ms\":12,\"status\":\"ok\"}",
-      "actual": "{\"duration_ms\":13,\"status\":\"ok\"}",
-      "allowed_diff": true,
-      "explanation": "duration fields may drift by backend timing resolution",
-      "track_name": "tool-exec"
+      "CaseName": "single_turn_text",
+      "Backend": "sqlite",
+      "Snapshot": {},
+      "Diffs": null,
+      "Error": ""
+    },
+    {
+      "CaseName": "multi_turn_sequence",
+      "Backend": "inmemory",
+      "Snapshot": {
+        "events": [
+          {
+            "index": 0,
+            "id": "user-1",
+            "author": "user-a",
+            "role": "user",
+            "content": "first",
+            "branch": "main",
+            "filter_key": "app-a",
+            "timestamp": "2026-07-30T12:15:05Z",
+            "object": "chat.completion"
+          },
+          {
+            "index": 1,
+            "id": "assistant-1",
+            "author": "assistant",
+            "role": "assistant",
+            "content": "reply-1",
+            "branch": "main",
+            "filter_key": "app-a",
+            "timestamp": "2026-07-30T12:15:05Z",
+            "object": "chat.completion"
+          },
+          {
+            "index": 2,
+            "id": "user-2",
+            "author": "user-a",
+            "role": "user",
+            "content": "second",
+            "branch": "main",
+            "filter_key": "app-a",
+            "timestamp": "2026-07-30T12:15:05Z",
+            "object": "chat.completion"
+          },
+          {
+            "index": 3,
+            "id": "assistant-2",
+            "author": "assistant",
+            "role": "assistant",
+            "content": "reply-2",
+            "branch": "main",
+            "filter_key": "app-a",
+            "timestamp": "2026-07-30T12:15:05Z",
+            "object": "chat.completion"
+          }
+        ]
+      },
+      "Diffs": null,
+      "Error": ""
+    },
+    {
+      "CaseName": "multi_turn_sequence",
+      "Backend": "sqlite",
+      "Snapshot": {
+        "events": [
+          {
+            "index": 0,
+            "id": "user-1",
+            "author": "user-a",
+            "role": "user",
+            "content": "first",
+            "branch": "main",
+            "filter_key": "app-a",
+            "timestamp": "2026-07-30T12:15:05Z",
+            "object": "chat.completion"
+          },
+          {
+            "index": 1,
+            "id": "assistant-1",
+            "author": "assistant",
+            "role": "assistant",
+            "content": "reply-1",
+            "branch": "main",
+            "filter_key": "app-a",
+            "timestamp": "2026-07-30T12:15:05Z",
+            "object": "chat.completion"
+          },
+          {
+            "index": 2,
+            "id": "user-2",
+            "author": "user-a",
+            "role": "user",
+            "content": "second",
+            "branch": "main",
+            "filter_key": "app-a",
+            "timestamp": "2026-07-30T12:15:05Z",
+            "object": "chat.completion"
+          },
+          {
+            "index": 3,
+            "id": "assistant-2",
+            "author": "assistant",
+            "role": "assistant",
+            "content": "reply-2",
+            "branch": "main",
+            "filter_key": "app-a",
+            "timestamp": "2026-07-30T12:15:05Z",
+            "object": "chat.completion"
+          }
+        ]
+      },
+      "Diffs": null,
+      "Error": ""
+    },
+    {
+      "CaseName": "tool_call_roundtrip",
+      "Backend": "inmemory",
+      "Snapshot": {},
+      "Diffs": null,
+      "Error": ""
+    },
+    {
+      "CaseName": "tool_call_roundtrip",
+      "Backend": "sqlite",
+      "Snapshot": {},
+      "Diffs": null,
+      "Error": ""
+    },
+    {
+      "CaseName": "state_update_cycle",
+      "Backend": "inmemory",
+      "Snapshot": {
+        "state": [
+          {
+            "key": "name"
+          },
+          {
+            "key": "step"
+          }
+        ]
+      },
+      "Diffs": null,
+      "Error": ""
+    },
+    {
+      "CaseName": "state_update_cycle",
+      "Backend": "sqlite",
+      "Snapshot": {
+        "state": [
+          {
+            "key": "name"
+          },
+          {
+            "key": "step"
+          }
+        ]
+      },
+      "Diffs": null,
+      "Error": ""
+    },
+    {
+      "CaseName": "memory_write_read",
+      "Backend": "inmemory",
+      "Snapshot": {},
+      "Diffs": null,
+      "Error": ""
+    },
+    {
+      "CaseName": "memory_write_read",
+      "Backend": "sqlite",
+      "Snapshot": {},
+      "Diffs": null,
+      "Error": ""
+    },
+    {
+      "CaseName": "summary_generation_update",
+      "Backend": "inmemory",
+      "Snapshot": {
+        "events": [
+          {
+            "index": 0,
+            "id": "evt-summary-base",
+            "author": "user-a",
+            "role": "user",
+            "content": "base event for summary",
+            "branch": "main",
+            "filter_key": "app-a",
+            "timestamp": "2026-07-30T12:15:05Z",
+            "object": "chat.completion"
+          },
+          {
+            "index": 1,
+            "id": "evt-branch-a",
+            "author": "assistant",
+            "role": "assistant",
+            "content": "branch specific event",
+            "branch": "main",
+            "filter_key": "branch-a",
+            "timestamp": "2026-07-30T12:15:05Z",
+            "object": "chat.completion"
+          }
+        ],
+        "summaries": [
+          {
+            "session_id": "replay-session-summary-generation-update",
+            "summary": "replay-summary:replay-session-summary-generation-update::events=2:state=0",
+            "updated_at": "2026-07-30T12:15:05Z",
+            "boundary": "1||2026-07-30T12:15:05Z|evt-branch-a",
+            "version": "1"
+          },
+          {
+            "session_id": "replay-session-summary-generation-update",
+            "filter_key": "branch-a",
+            "summary": "replay-summary:replay-session-summary-generation-update:branch-a:events=1:state=0",
+            "updated_at": "2026-07-30T12:15:05Z",
+            "boundary": "1|branch-a|2026-07-30T12:15:05Z|evt-branch-a",
+            "version": "1"
+          }
+        ]
+      },
+      "Diffs": null,
+      "Error": ""
+    },
+    {
+      "CaseName": "summary_generation_update",
+      "Backend": "sqlite",
+      "Snapshot": {
+        "events": [
+          {
+            "index": 0,
+            "id": "evt-summary-base",
+            "author": "user-a",
+            "role": "user",
+            "content": "base event for summary",
+            "branch": "main",
+            "filter_key": "app-a",
+            "timestamp": "2026-07-30T12:15:05Z",
+            "object": "chat.completion"
+          },
+          {
+            "index": 1,
+            "id": "evt-branch-a",
+            "author": "assistant",
+            "role": "assistant",
+            "content": "branch specific event",
+            "branch": "main",
+            "filter_key": "branch-a",
+            "timestamp": "2026-07-30T12:15:05Z",
+            "object": "chat.completion"
+          }
+        ],
+        "summaries": [
+          {
+            "session_id": "replay-session-summary-generation-update",
+            "summary": "replay-summary:replay-session-summary-generation-update::events=2:state=0",
+            "updated_at": "2026-07-30T12:15:05Z",
+            "boundary": "1||2026-07-30T12:15:05Z|evt-branch-a",
+            "version": "1"
+          },
+          {
+            "session_id": "replay-session-summary-generation-update",
+            "filter_key": "branch-a",
+            "summary": "replay-summary:replay-session-summary-generation-update:branch-a:events=1:state=0",
+            "updated_at": "2026-07-30T12:15:05Z",
+            "boundary": "1|branch-a|2026-07-30T12:15:05Z|evt-branch-a",
+            "version": "1"
+          }
+        ]
+      },
+      "Diffs": null,
+      "Error": ""
+    },
+    {
+      "CaseName": "summary_truncation_replay",
+      "Backend": "inmemory",
+      "Snapshot": {
+        "events": [
+          {
+            "index": 0,
+            "id": "evt-pre-summary",
+            "author": "user-a",
+            "role": "user",
+            "content": "event before summary",
+            "branch": "main",
+            "filter_key": "app-a",
+            "timestamp": "2026-07-30T12:15:05Z",
+            "object": "chat.completion"
+          },
+          {
+            "index": 1,
+            "id": "user-post-summary",
+            "author": "user-a",
+            "role": "user",
+            "content": "continue",
+            "branch": "main",
+            "filter_key": "app-a",
+            "timestamp": "2026-07-30T12:15:05Z",
+            "object": "chat.completion"
+          }
+        ],
+        "summaries": [
+          {
+            "session_id": "replay-session-summary-truncation-replay",
+            "summary": "replay-summary:replay-session-summary-truncation-replay::events=1:state=0",
+            "updated_at": "2026-07-30T12:15:05Z",
+            "boundary": "1||2026-07-30T12:15:05Z|evt-pre-summary",
+            "version": "1"
+          }
+        ]
+      },
+      "Diffs": null,
+      "Error": ""
+    },
+    {
+      "CaseName": "summary_truncation_replay",
+      "Backend": "sqlite",
+      "Snapshot": {
+        "events": [
+          {
+            "index": 0,
+            "id": "evt-pre-summary",
+            "author": "user-a",
+            "role": "user",
+            "content": "event before summary",
+            "branch": "main",
+            "filter_key": "app-a",
+            "timestamp": "2026-07-30T12:15:05Z",
+            "object": "chat.completion"
+          },
+          {
+            "index": 1,
+            "id": "user-post-summary",
+            "author": "user-a",
+            "role": "user",
+            "content": "continue",
+            "branch": "main",
+            "filter_key": "app-a",
+            "timestamp": "2026-07-30T12:15:05Z",
+            "object": "chat.completion"
+          }
+        ],
+        "summaries": [
+          {
+            "session_id": "replay-session-summary-truncation-replay",
+            "summary": "replay-summary:replay-session-summary-truncation-replay::events=1:state=0",
+            "updated_at": "2026-07-30T12:15:05Z",
+            "boundary": "1||2026-07-30T12:15:05Z|evt-pre-summary",
+            "version": "1"
+          }
+        ]
+      },
+      "Diffs": null,
+      "Error": ""
+    },
+    {
+      "CaseName": "track_event_timeline",
+      "Backend": "inmemory",
+      "Snapshot": {
+        "state": [
+          {
+            "key": "tracks",
+            "value": "[\"tool-exec\",\"subtask\"]"
+          }
+        ],
+        "tracks": [
+          {
+            "track": "subtask",
+            "timestamp": "2026-07-30T12:15:05Z",
+            "payload": "{\"error\":\"boom\",\"status\":\"failed\"}"
+          },
+          {
+            "track": "tool-exec",
+            "timestamp": "2026-07-30T12:15:05Z",
+            "payload": "{\"duration_ms\":12,\"status\":\"ok\"}"
+          }
+        ]
+      },
+      "Diffs": null,
+      "Error": ""
+    },
+    {
+      "CaseName": "track_event_timeline",
+      "Backend": "sqlite",
+      "Snapshot": {
+        "state": [
+          {
+            "key": "tracks",
+            "value": "[\"tool-exec\",\"subtask\"]"
+          }
+        ],
+        "tracks": [
+          {
+            "track": "subtask",
+            "timestamp": "2026-07-30T12:15:05Z",
+            "payload": "{\"error\":\"boom\",\"status\":\"failed\"}"
+          },
+          {
+            "track": "tool-exec",
+            "timestamp": "2026-07-30T12:15:05Z",
+            "payload": "{\"duration_ms\":12,\"status\":\"ok\"}"
+          }
+        ]
+      },
+      "Diffs": null,
+      "Error": ""
+    },
+    {
+      "CaseName": "interleaved_concurrency",
+      "Backend": "inmemory",
+      "Snapshot": {
+        "events": [
+          {
+            "index": 0,
+            "id": "branch-a-1",
+            "author": "user-a",
+            "role": "user",
+            "content": "branch a",
+            "branch": "main",
+            "filter_key": "app-a",
+            "timestamp": "2026-07-30T12:15:05Z",
+            "object": "chat.completion"
+          },
+          {
+            "index": 1,
+            "id": "branch-b-1",
+            "author": "user-a",
+            "role": "user",
+            "content": "branch b",
+            "branch": "main",
+            "filter_key": "app-a",
+            "timestamp": "2026-07-30T12:15:05Z",
+            "object": "chat.completion"
+          },
+          {
+            "index": 2,
+            "id": "branch-a-2",
+            "author": "assistant",
+            "role": "assistant",
+            "content": "done a",
+            "branch": "main",
+            "filter_key": "app-a",
+            "timestamp": "2026-07-30T12:15:05Z",
+            "object": "chat.completion"
+          }
+        ]
+      },
+      "Diffs": null,
+      "Error": ""
+    },
+    {
+      "CaseName": "interleaved_concurrency",
+      "Backend": "sqlite",
+      "Snapshot": {
+        "events": [
+          {
+            "index": 0,
+            "id": "branch-a-1",
+            "author": "user-a",
+            "role": "user",
+            "content": "branch a",
+            "branch": "main",
+            "filter_key": "app-a",
+            "timestamp": "2026-07-30T12:15:05Z",
+            "object": "chat.completion"
+          },
+          {
+            "index": 1,
+            "id": "branch-b-1",
+            "author": "user-a",
+            "role": "user",
+            "content": "branch b",
+            "branch": "main",
+            "filter_key": "app-a",
+            "timestamp": "2026-07-30T12:15:05Z",
+            "object": "chat.completion"
+          },
+          {
+            "index": 2,
+            "id": "branch-a-2",
+            "author": "assistant",
+            "role": "assistant",
+            "content": "done a",
+            "branch": "main",
+            "filter_key": "app-a",
+            "timestamp": "2026-07-30T12:15:05Z",
+            "object": "chat.completion"
+          }
+        ]
+      },
+      "Diffs": null,
+      "Error": ""
+    },
+    {
+      "CaseName": "failure_retry_dedup",
+      "Backend": "inmemory",
+      "Snapshot": {
+        "events": [
+          {
+            "index": 0,
+            "id": "dup-1",
+            "author": "user-a",
+            "role": "user",
+            "content": "retry me",
+            "branch": "main",
+            "filter_key": "app-a",
+            "timestamp": "2026-07-30T12:15:05Z",
+            "object": "chat.completion"
+          },
+          {
+            "index": 1,
+            "id": "dup-1",
+            "author": "user-a",
+            "role": "user",
+            "content": "retry me",
+            "branch": "main",
+            "filter_key": "app-a",
+            "timestamp": "2026-07-30T12:15:05Z",
+            "object": "chat.completion"
+          }
+        ]
+      },
+      "Diffs": null,
+      "Error": ""
+    },
+    {
+      "CaseName": "failure_retry_dedup",
+      "Backend": "sqlite",
+      "Snapshot": {
+        "events": [
+          {
+            "index": 0,
+            "id": "dup-1",
+            "author": "user-a",
+            "role": "user",
+            "content": "retry me",
+            "branch": "main",
+            "filter_key": "app-a",
+            "timestamp": "2026-07-30T12:15:05Z",
+            "object": "chat.completion"
+          },
+          {
+            "index": 1,
+            "id": "dup-1",
+            "author": "user-a",
+            "role": "user",
+            "content": "retry me",
+            "branch": "main",
+            "filter_key": "app-a",
+            "timestamp": "2026-07-30T12:15:05Z",
+            "object": "chat.completion"
+          }
+        ]
+      },
+      "Diffs": null,
+      "Error": ""
     }
   ],
   "summary": {
     "cases_run": 10,
     "backends_run": 2,
-    "diff_count": 2,
-    "allowed_diff_count": 1
+    "diff_count": 0,
+    "allowed_diff_count": 0
   }
 }

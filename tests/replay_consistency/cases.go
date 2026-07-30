@@ -10,6 +10,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
+func replayNow() time.Time { return time.Now().Add(time.Hour).Truncate(time.Second) }
+
 func DefaultReplayCases() []ReplayCase {
 	return []ReplayCase{
 		{
@@ -43,12 +45,21 @@ func DefaultReplayCases() []ReplayCase {
 		{
 			Name:        "summary_generation_update",
 			Description: "summary content, filter key, version, and updated time comparison",
-			Operations:  []Operation{{Kind: OperationKindCreateSummary, FilterKey: "", Summary: sampleSummary("session-a", "", "rolling summary")}, {Kind: OperationKindCreateSummary, FilterKey: "branch-a", Summary: sampleSummary("session-a", "branch-a", "branch summary")}},
+			Operations: []Operation{
+				{Kind: OperationKindAppendEvent, Event: sampleUserEvent("evt-summary-base", "base event for summary", "session-a", "user-a", "app-a")},
+				{Kind: OperationKindAppendEvent, Event: sampleBranchEvent("evt-branch-a", "branch specific event", "session-a", "user-a", "branch-a")},
+				{Kind: OperationKindCreateSummary, FilterKey: ""},
+				{Kind: OperationKindCreateSummary, FilterKey: "branch-a"},
+			},
 		},
 		{
 			Name:        "summary_truncation_replay",
 			Description: "summary plus truncated events and new continuation events",
-			Operations:  []Operation{{Kind: OperationKindCreateSummary, FilterKey: "", Summary: sampleSummary("session-a", "", "compressed history")}, {Kind: OperationKindAppendEvent, Event: sampleUserEvent("user-post-summary", "continue", "session-a", "user-a", "app-a")}},
+			Operations: []Operation{
+				{Kind: OperationKindAppendEvent, Event: sampleUserEvent("evt-pre-summary", "event before summary", "session-a", "user-a", "app-a")},
+				{Kind: OperationKindCreateSummary, FilterKey: ""},
+				{Kind: OperationKindAppendEvent, Event: sampleUserEvent("user-post-summary", "continue", "session-a", "user-a", "app-a")},
+			},
 		},
 		{
 			Name:        "track_event_timeline",
@@ -72,9 +83,10 @@ func sampleUserEvent(id, content, sessionID, userID, appName string) *event.Even
 	return &event.Event{
 		ID:        id,
 		Author:    userID,
-		Timestamp: time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC),
+		Timestamp: replayNow(),
 		Branch:    "main",
 		FilterKey: appName,
+		Version:   event.CurrentVersion,
 		Response: &model.Response{
 			Object: model.ObjectTypeChatCompletion,
 			Choices: []model.Choice{{
@@ -88,9 +100,10 @@ func sampleAssistantEvent(id, content, sessionID, userID, appName string) *event
 	return &event.Event{
 		ID:        id,
 		Author:    "assistant",
-		Timestamp: time.Date(2026, 1, 1, 10, 0, 1, 0, time.UTC),
+		Timestamp: replayNow(),
 		Branch:    "main",
 		FilterKey: appName,
+		Version:   event.CurrentVersion,
 		Response: &model.Response{
 			Object: model.ObjectTypeChatCompletion,
 			Choices: []model.Choice{{
@@ -104,9 +117,10 @@ func sampleToolCallEvent(id, toolName, args, sessionID, userID, appName string) 
 	return &event.Event{
 		ID:        id,
 		Author:    "assistant",
-		Timestamp: time.Date(2026, 1, 1, 10, 0, 2, 0, time.UTC),
+		Timestamp: replayNow(),
 		Branch:    "main",
 		FilterKey: appName,
+		Version:   event.CurrentVersion,
 		Response: &model.Response{
 			Object: model.ObjectTypeChatCompletionChunk,
 			Choices: []model.Choice{{
@@ -130,9 +144,10 @@ func sampleToolResponseEvent(id, toolName, content, toolCallID, sessionID, userI
 	return &event.Event{
 		ID:        id,
 		Author:    "tool",
-		Timestamp: time.Date(2026, 1, 1, 10, 0, 3, 0, time.UTC),
+		Timestamp: replayNow(),
 		Branch:    "main",
 		FilterKey: appName,
+		Version:   event.CurrentVersion,
 		Response: &model.Response{
 			Object: model.ObjectTypeToolResponse,
 			Choices: []model.Choice{{
@@ -147,9 +162,26 @@ func sampleMemoryWrite(userID, memoryID, content string, topics []string) *Memor
 }
 
 func sampleSummary(sessionID, filterKey, text string) *session.Summary {
-	return &session.Summary{Summary: text, UpdatedAt: time.Date(2026, 1, 1, 10, 5, 0, 0, time.UTC), Boundary: session.NewSummaryBoundaryWithEventID(filterKey, time.Date(2026, 1, 1, 10, 4, 59, 0, time.UTC), "event-last")}
+	return &session.Summary{Summary: text, UpdatedAt: replayNow(), Boundary: session.NewSummaryBoundaryWithEventID(filterKey, replayNow(), "event-last")}
 }
 
 func sampleTrackEvent(track string, payload string) *session.TrackEvent {
-	return &session.TrackEvent{Track: session.Track(track), Timestamp: time.Date(2026, 1, 1, 10, 6, 0, 0, time.UTC), Payload: json.RawMessage(payload)}
+	return &session.TrackEvent{Track: session.Track(track), Timestamp: replayNow(), Payload: json.RawMessage(payload)}
+}
+
+func sampleBranchEvent(id, content, sessionID, userID, filterKey string) *event.Event {
+	return &event.Event{
+		ID:        id,
+		Author:    "assistant",
+		Timestamp: replayNow(),
+		Branch:    "main",
+		FilterKey: filterKey,
+		Version:   event.CurrentVersion,
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletion,
+			Choices: []model.Choice{{
+				Message: model.Message{Role: model.RoleAssistant, Content: content},
+			}},
+		},
+	}
 }

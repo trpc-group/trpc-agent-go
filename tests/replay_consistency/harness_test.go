@@ -3,6 +3,7 @@ package replayconsistency
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"testing"
 	"time"
 
@@ -73,8 +74,12 @@ func TestCompareSnapshotsAndBuildReport(t *testing.T) {
 }
 
 func TestReplayHarnessRunReturnsSkeletonReport(t *testing.T) {
+	backend, err := newInMemoryReplayBackend()
+	require.NoError(t, err)
+	defer backend.Close()
+
 	harness := ReplayHarness{
-		Backends: []Backend{fakeBackend{name: "inmemory"}},
+		Backends: []Backend{backend},
 		Options:  HarnessOptions{MaxCases: 1},
 	}
 	report, err := harness.Run(contextBackground())
@@ -83,13 +88,73 @@ func TestReplayHarnessRunReturnsSkeletonReport(t *testing.T) {
 	assert.Equal(t, 1, report.Summary.CasesRun)
 }
 
-type fakeBackend struct{ name string }
+func TestFullReplayLightMode(t *testing.T) {
+	backend, err := newInMemoryReplayBackend()
+	require.NoError(t, err)
+	defer backend.Close()
 
-func (f fakeBackend) Name() string         { return f.name }
-func (f fakeBackend) Kind() BackendKind    { return BackendKindSession }
-func (f fakeBackend) Supports(string) bool { return true }
-func (f fakeBackend) Close() error         { return nil }
+	harness := ReplayHarness{
+		Backends: []Backend{backend},
+		Options:  HarnessOptions{LightMode: true},
+	}
+	report, err := harness.Run(contextBackground())
+	require.NoError(t, err)
+	require.NotEmpty(t, report.Results)
+	assert.Equal(t, 10, report.Summary.CasesRun)
+	t.Logf("Light mode report: %d cases, %d diffs (allowed: %d)",
+		report.Summary.CasesRun, report.Summary.DiffCount, report.Summary.AllowedDiffCount)
+}
 
 func ptrTime(t time.Time) *time.Time { return &t }
 
 func contextBackground() context.Context { return context.Background() }
+
+// TestCrossBackendReplay runs all scenarios against InMemory baseline and SQLite test backend.
+// This is the primary integration test for the replay consistency framework.
+func TestCrossBackendReplay(t *testing.T) {
+	baseline, err := newInMemoryReplayBackend()
+	require.NoError(t, err)
+	defer baseline.Close()
+
+	sqliteBackend, err := newSQLiteReplayBackend()
+	require.NoError(t, err)
+	defer sqliteBackend.Close()
+
+	harness := ReplayHarness{
+		Backends: []Backend{baseline, sqliteBackend},
+	}
+	report, err := harness.Run(contextBackground())
+	require.NoError(t, err)
+	require.NotEmpty(t, report.Results)
+
+	t.Logf("Cross-backend report: %d cases, %d diffs (allowed: %d)",
+		report.Summary.CasesRun, report.Summary.DiffCount, report.Summary.AllowedDiffCount)
+
+	// Check that unexpected diffs are zero.
+	for _, result := range report.Results {
+		for _, diff := range result.Diffs {
+			if !diff.AllowedDiff {
+				t.Errorf("Unexpected diff in case %q on backend %q: path=%s baseline=%q actual=%q",
+					result.CaseName, result.Backend, diff.Path, diff.Baseline, diff.Actual)
+			}
+		}
+	}
+
+	// Write the report to the example JSON file.
+	reportData, err := MarshalReport(report)
+	require.NoError(t, err)
+	err = os.WriteFile("session_memory_summary_track_diff_report.json", reportData, 0644)
+	require.NoError(t, err)
+	t.Logf("Report written to session_memory_summary_track_diff_report.json")
+
+	// Assert all cases passed (only allowed diffs).
+	for _, result := range report.Results {
+		for _, diff := range result.Diffs {
+			if !diff.AllowedDiff {
+				assert.True(t, diff.AllowedDiff,
+					"Unexpected diff: case=%q backend=%q path=%q",
+					result.CaseName, result.Backend, diff.Path)
+			}
+		}
+	}
+}
