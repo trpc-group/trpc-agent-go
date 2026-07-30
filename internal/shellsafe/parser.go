@@ -164,9 +164,12 @@ var implicitDeny = map[string]struct{}{
 	// still ends up resolving git to "./work/bin/git". `printf`,
 	// `let`, `mapfile` and `readarray` are bash extensions but
 	// `/bin/sh` is bash on macOS and on many container images,
-	// so the deny needs to be unconditional. `read` and
-	// `getopts` are POSIX and assign to a named variable.
-	"printf": {}, "read": {}, "getopts": {},
+	// so the deny needs to be unconditional. `read` and `getopts`
+	// are POSIX and assign to a named variable. `printf` is
+	// handled separately in checkSegmentForGOOS: ordinary output
+	// is allowed, while Bash's `printf -v VAR` and `printf -vVAR`
+	// remain denied.
+	"read": {}, "getopts": {},
 	"let": {}, "mapfile": {}, "readarray": {},
 }
 
@@ -281,25 +284,321 @@ func (p Policy) checkSegment(argv []string) error {
 	return p.checkSegmentForGOOS(argv, runtime.GOOS)
 }
 
+func printfMutatesShellState(argv []string) bool {
+	if len(argv) < 2 {
+		return false
+	}
+
+	return argv[1] == "-v" ||
+		strings.HasPrefix(argv[1], "-v")
+}
+
+func secondaryExecutorArgumentsUnsafe(
+	normalizedBase string,
+	argv []string,
+) bool {
+	switch normalizedBase {
+	case "find":
+		for _, arg := range argv[1:] {
+			switch strings.ToLower(arg) {
+			case "-delete", "-exec", "-execdir", "-ok", "-okdir",
+				"-fprint", "-fprint0", "-fprintf", "-fls":
+				return true
+			}
+		}
+	case "awk", "gawk", "mawk", "nawk":
+		return awkArgumentsUnsafe(argv[1:])
+	case "git":
+		return gitArgumentsUnsafe(argv[1:])
+	case "sed", "gsed":
+		return sedArgumentsExecuteCommand(argv[1:])
+	}
+	return false
+}
+
+func containsFunctionCall(text string, name string) bool {
+	lower := strings.ToLower(text)
+	name = strings.ToLower(name)
+	for offset := 0; offset < len(lower); {
+		index := strings.Index(lower[offset:], name)
+		if index < 0 {
+			return false
+		}
+		index += offset
+		beforeOK := index == 0 ||
+			!isIdentifierByte(lower[index-1])
+		after := index + len(name)
+		for after < len(lower) &&
+			(lower[after] == ' ' || lower[after] == '\t') {
+			after++
+		}
+		if beforeOK && after < len(lower) &&
+			lower[after] == '(' {
+			return true
+		}
+		offset = index + len(name)
+	}
+	return false
+}
+
+func isIdentifierByte(value byte) bool {
+	return value == '_' ||
+		(value >= 'a' && value <= 'z') ||
+		(value >= '0' && value <= '9')
+}
+
+func gitDefinesExecutingAlias(args []string) bool {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		var config string
+		switch {
+		case arg == "-c":
+			if i+1 >= len(args) {
+				continue
+			}
+			i++
+			config = args[i]
+		case strings.HasPrefix(arg, "-c") && len(arg) > 2:
+			config = strings.TrimPrefix(arg, "-c")
+		default:
+			continue
+		}
+		key, value, ok := strings.Cut(config, "=")
+		if !ok {
+			continue
+		}
+		lowerKey := strings.ToLower(strings.TrimSpace(key))
+		value = strings.TrimSpace(value)
+		if strings.HasPrefix(lowerKey, "alias.") &&
+			strings.HasPrefix(value, "!") {
+			return true
+		}
+		if value != "" && gitConfigExecutesCommand(lowerKey) {
+			return true
+		}
+	}
+	return false
+}
+
+func gitArgumentsUnsafe(args []string) bool {
+	if gitDefinesExecutingAlias(args) {
+		return true
+	}
+	for i, arg := range args {
+		lower := strings.ToLower(arg)
+		if lower == "--exec-path" ||
+			strings.HasPrefix(lower, "--exec-path=") ||
+			lower == "--config-env" ||
+			strings.HasPrefix(lower, "--config-env=") ||
+			strings.HasPrefix(lower, "ext::") {
+			return true
+		}
+		switch lower {
+		case "difftool":
+			for _, rest := range args[i+1:] {
+				if rest == "--extcmd" ||
+					strings.HasPrefix(rest, "--extcmd=") {
+					return true
+				}
+			}
+		case "filter-branch":
+			return true
+		case "bisect":
+			if i+1 < len(args) &&
+				strings.EqualFold(args[i+1], "run") {
+				return true
+			}
+		case "submodule":
+			if i+1 < len(args) &&
+				strings.EqualFold(args[i+1], "foreach") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func gitConfigExecutesCommand(key string) bool {
+	switch key {
+	case "core.sshcommand", "diff.external", "core.pager",
+		"core.editor", "sequence.editor", "core.fsmonitor",
+		"core.hookspath", "credential.helper", "include.path":
+		return true
+	}
+	return strings.HasPrefix(key, "pager.") ||
+		(strings.HasPrefix(key, "includeif.") &&
+			strings.HasSuffix(key, ".path")) ||
+		key == "protocol.ext.allow" ||
+		(strings.HasPrefix(key, "diff.") &&
+			strings.HasSuffix(key, ".command")) ||
+		(strings.HasPrefix(key, "merge.") &&
+			strings.HasSuffix(key, ".driver")) ||
+		(strings.HasPrefix(key, "filter.") &&
+			(strings.HasSuffix(key, ".clean") ||
+				strings.HasSuffix(key, ".smudge") ||
+				strings.HasSuffix(key, ".process"))) ||
+		(strings.HasPrefix(key, "remote.") &&
+			(strings.HasSuffix(key, ".uploadpack") ||
+				strings.HasSuffix(key, ".receivepack") ||
+				strings.HasSuffix(key, ".vcs")))
+}
+
+func awkArgumentsUnsafe(args []string) bool {
+	for _, arg := range args {
+		if arg == "-f" || arg == "--file" ||
+			strings.HasPrefix(arg, "--file=") {
+			return true
+		}
+	}
+	script := strings.ToLower(strings.Join(args, " "))
+	if containsFunctionCall(script, "system") {
+		return true
+	}
+	if strings.Contains(script, "getline") &&
+		(strings.Contains(script, "|") ||
+			strings.Contains(script, "<")) {
+		return true
+	}
+	return (strings.Contains(script, "print") ||
+		strings.Contains(script, "printf")) &&
+		(strings.Contains(script, "|") ||
+			strings.Contains(script, ">"))
+}
+
+func sedArgumentsExecuteCommand(args []string) bool {
+	expectExpression := false
+	for _, arg := range args {
+		if expectExpression {
+			if sedScriptExecutesCommand(arg) {
+				return true
+			}
+			expectExpression = false
+			continue
+		}
+		switch {
+		case arg == "-i" || strings.HasPrefix(arg, "-i"):
+			return true
+		case arg == "-f" || arg == "--file" ||
+			strings.HasPrefix(arg, "--file="):
+			return true
+		case arg == "-e" || arg == "--expression":
+			expectExpression = true
+		case strings.HasPrefix(arg, "--expression="):
+			if sedScriptExecutesCommand(
+				strings.TrimPrefix(arg, "--expression="),
+			) {
+				return true
+			}
+		case arg == "-n" || arg == "--quiet" ||
+			arg == "--silent":
+			continue
+		case strings.HasPrefix(arg, "-"):
+			continue
+		default:
+			return sedScriptExecutesCommand(arg)
+		}
+	}
+	return false
+}
+
+func sedScriptExecutesCommand(script string) bool {
+	for _, command := range strings.FieldsFunc(
+		script,
+		func(r rune) bool {
+			return r == ';' || r == '\n'
+		},
+	) {
+		command = strings.TrimSpace(command)
+		if command == "e" ||
+			strings.HasPrefix(command, "e ") ||
+			strings.HasPrefix(command, "e\t") {
+			return true
+		}
+		if strings.HasPrefix(command, "s/") {
+			lastSlash := strings.LastIndex(command, "/")
+			if lastSlash >= 0 &&
+				strings.ContainsAny(
+					command[lastSlash+1:],
+					"ew",
+				) {
+				return true
+			}
+		}
+		if sedCommandUsesFile(command) {
+			return true
+		}
+	}
+	return false
+}
+
+func sedCommandUsesFile(command string) bool {
+	command = strings.TrimSpace(command)
+	for len(command) > 0 {
+		first := command[0]
+		if (first >= '0' && first <= '9') ||
+			first == '$' || first == ',' ||
+			first == ' ' || first == '\t' {
+			command = command[1:]
+			continue
+		}
+		break
+	}
+	if strings.HasPrefix(command, "/") {
+		if end := strings.Index(command[1:], "/"); end >= 0 {
+			command = strings.TrimSpace(command[end+2:])
+		}
+	}
+	if command == "" {
+		return false
+	}
+	switch command[0] {
+	case 'r', 'R', 'w', 'W':
+		return len(command) == 1 ||
+			command[1] == ' ' ||
+			command[1] == '\t'
+	default:
+		return false
+	}
+}
+
 func (p Policy) checkSegmentForGOOS(argv []string, goos string) error {
 	cmd := argv[0]
 	base := basenameForGOOS(cmd, goos)
+	normalizedBase := normalizeName(base, goos)
+
 	if matchDeny(p.Deny, cmd, base, goos) {
 		return fmt.Errorf(
-			"command %q is denied by denied_commands", cmd,
+			"command %q is denied by denied_commands",
+			cmd,
+		)
+	}
+
+	if normalizedBase == "printf" &&
+		printfMutatesShellState(argv) {
+		return implicitDenyError(cmd)
+	}
+	if secondaryExecutorArgumentsUnsafe(normalizedBase, argv) {
+		return fmt.Errorf(
+			"command %q is denied by built-in policy because its "+
+				"arguments enable a secondary executor",
+			cmd,
 		)
 	}
 	// implicitDeny keys are lower-case. Fold the basename through
 	// normalizeName so "SH", "Sh", "/usr/bin/SH" and (on Windows)
 	// "sh.exe" all hit the look-up via the bare "sh" key.
-	if _, ok := implicitDeny[normalizeName(base, goos)]; ok {
+	if _, ok := implicitDeny[normalizedBase]; ok {
 		return implicitDenyError(cmd)
 	}
-	if len(p.Allow) > 0 && !matchAllow(p.Allow, cmd, base, goos) {
+
+	if len(p.Allow) > 0 &&
+		!matchAllow(p.Allow, cmd, base, goos) {
 		return fmt.Errorf(
-			"command %q is not in allowed_commands", cmd,
+			"command %q is not in allowed_commands",
+			cmd,
 		)
 	}
+
 	return nil
 }
 

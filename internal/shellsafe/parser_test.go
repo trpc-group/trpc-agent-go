@@ -405,6 +405,7 @@ func TestPolicy_BuiltinDenyBlocksVarMutatingBuiltins(t *testing.T) {
 		// bash extension: `printf -v VAR FORMAT [ARGS]` writes
 		// the formatted output to VAR instead of stdout.
 		"printf -v PATH ./work/bin",
+		"printf -vPATH %s ./work/bin",
 		"printf -v PATH ./work/bin ; git",
 		// POSIX: read assigns to a named variable from stdin.
 		"read PATH",
@@ -423,6 +424,109 @@ func TestPolicy_BuiltinDenyBlocksVarMutatingBuiltins(t *testing.T) {
 				!strings.Contains(err.Error(), "built-in policy") {
 				t.Fatalf(
 					"expected built-in deny for %q, got: %v", in, err,
+				)
+			}
+		})
+	}
+}
+
+func TestPolicy_AllowsNonMutatingPrintf(t *testing.T) {
+	p := PolicyFromLists(
+		[]string{"printf"},
+		nil,
+	)
+
+	tests := []struct {
+		name    string
+		command string
+	}{
+		{
+			name: "ordinary format output",
+			command: `printf '%s\n' ` +
+				`'password policy enabled'`,
+		},
+		{
+			name:    "option terminator before v text",
+			command: `printf -- '-value=%s\n' ok`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := CheckCommand(tc.command, p)
+			if err != nil {
+				t.Fatalf(
+					"ordinary printf should be allowed: %v",
+					err,
+				)
+			}
+		})
+	}
+}
+
+func TestPolicy_BlocksSecondaryExecutorArguments(t *testing.T) {
+	p := PolicyFromLists(
+		[]string{"find", "awk", "git", "sed"},
+		nil,
+	)
+
+	tests := []string{
+		`find /etc -delete`,
+		`find . -exec rm -rf {} \;`,
+		`awk 'BEGIN { system("rm -rf /") }'`,
+		`awk 'BEGIN { "rm -rf /" | getline }'`,
+		`awk 'BEGIN { getline x < "/etc/shadow"; print x }'`,
+		`awk -f ./rules.awk README.md`,
+		`git -c alias.pwn='!rm -rf /' pwn`,
+		`git -c core.sshCommand='rm -rf /' clone ssh://github.com/org/repo`,
+		`git -c diff.external='rm -rf /' diff`,
+		`git -c include.path=./attacker.gitconfig status`,
+		`sed -n 'e rm -rf /' README.md`,
+		`sed -n '1r /etc/shadow' README.md`,
+		`sed -n '1w /etc/passwd' README.md`,
+		`sed -f ./commands.sed README.md`,
+	}
+
+	for _, command := range tests {
+		t.Run(command, func(t *testing.T) {
+			err := CheckCommand(command, p)
+			if err == nil ||
+				!strings.Contains(
+					err.Error(),
+					"secondary executor",
+				) {
+				t.Fatalf(
+					"secondary execution %q should be denied, got: %v",
+					command,
+					err,
+				)
+			}
+		})
+	}
+}
+
+func TestPolicy_AllowsNonExecutingFindAwkGitAndSed(
+	t *testing.T,
+) {
+	p := PolicyFromLists(
+		[]string{"find", "awk", "git", "sed"},
+		nil,
+	)
+
+	tests := []string{
+		`find . -name '*.go'`,
+		`awk 'BEGIN { print("ok") }'`,
+		`git -c color.ui=false status`,
+		`sed -n '1p' README.md`,
+	}
+
+	for _, command := range tests {
+		t.Run(command, func(t *testing.T) {
+			if err := CheckCommand(command, p); err != nil {
+				t.Fatalf(
+					"non-executing command %q should be allowed: %v",
+					command,
+					err,
 				)
 			}
 		})

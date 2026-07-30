@@ -551,6 +551,11 @@ func flushSegment(
 		return fmt.Errorf(
 			"operator %q has empty left side", opName(kind))
 	}
+	if (*cur)[0] == "" {
+		return errors.New(
+			"command name is empty",
+		)
+	}
 	if isLeadingAssignment((*cur)[0]) {
 		return fmt.Errorf(
 			"leading variable assignment %q is not allowed",
