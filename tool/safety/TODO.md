@@ -55,12 +55,12 @@
 - 在 README 中明确标注测试策略仅供测试使用
 - 添加 `allow_reason` 字段要求对高危命令的 allow 提供理由
 
-### 5. 缺少输出大小检测
+### 5. MaxOutputMB 配置未完全集成
 
-**风险等级**: 中
-**描述**: `checker_resource.go` 的 `MaxOutputMB` 配置存在，但没有任何 checker 实际使用它。`max_output_mb` 默认值是 50 但在代码中从未被检查。
+**风险等级**: 低
+**描述**: `RESOURCE_OUTPUT_LIMIT` 规则已检测 `yes`、`cat /dev/urandom`、`dd` 等无界输出命令。但 `max_output_mb` 数值配置尚未用于运行时输出大小截断——此限制由 CodeExecutor 层实施（workspaceexec/hostexec 各自的 max_output_bytes / max_lines），Safety Guard 只做预检提醒。
 
-**建议**: 在 resource checker 中添加输出大小检测逻辑，或在注释中说明此限制由 CodeExecutor 层实施。
+**建议**: 在 README 中明确说明 `max_output_mb` 与 CodeExecutor 层限制的分工关系。
 
 ### 6. audit.go: TraceIDKey 是字符串常量但应该用自定义类型
 

@@ -195,7 +195,7 @@ any OTel SDK — it only produces data for OTel consumers.
 
 | Category    | RuleID Examples                          | Checker           |
 |------------|------------------------------------------|-------------------|
-| Command    | `CMD_DANGEROUS_DELETE`, `CMD_SHELL_WRAPPER`, `CMD_DEP_INSTALL` | checker_command |
+| Command    | `CMD_DENIED_BY_POLICY`, `CMD_SHELL_WRAPPER`, `CMD_DEP_INSTALL` | checker_command |
 | Network    | `NET_DOMAIN_BLACKLISTED`, `NET_DOMAIN_NOT_WHITELISTED` | checker_network |
 | Path       | `PATH_SENSITIVE_SSH`, `PATH_SENSITIVE_ENV`, `PATH_SENSITIVE_CRED` | checker_path |
 | Host       | `HOST_BACKGROUND_PROC`, `HOST_PRIVILEGE_ESC`, `HOST_SESSION_RESIDUAL` | checker_host |

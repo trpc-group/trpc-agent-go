@@ -173,7 +173,14 @@ func (p *Policy) applyDefaults() {
 	}
 }
 
+// validCheckerNames is the set of checker names recognized by NewScanner.
+var validCheckerNames = map[string]bool{
+	"command": true, "secret_cmd": true, "env": true,
+	"network": true, "path": true, "host": true, "resource": true,
+}
+
 // compile pre-compiles all regex patterns so they are not re-compiled on every scan.
+// It also validates the Checkers list against known checker names.
 func (p *Policy) compile() error {
 	for i, pat := range p.Secrets.Patterns {
 		re, err := regexp.Compile(pat)
@@ -188,6 +195,12 @@ func (p *Policy) compile() error {
 			return fmt.Errorf("safety: env deny_values pattern %d %q: %w", i, pat, err)
 		}
 		p.compiled.envDenyPatterns = append(p.compiled.envDenyPatterns, re)
+	}
+	// Validate checker names so typos are caught at load time, not silently ignored.
+	for i, name := range p.Checkers {
+		if !validCheckerNames[name] {
+			return fmt.Errorf("safety: unknown checker name %q at position %d (valid: command, secret_cmd, env, network, path, host, resource)", name, i)
+		}
 	}
 	return nil
 }

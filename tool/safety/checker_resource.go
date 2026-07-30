@@ -120,7 +120,7 @@ func (c *resourceChecker) checkHeavyOutput(text string) *CheckResult {
 	for cmd := range heavyOutputCmds {
 		// Match the first token (the executable name) against heavy-output
 		// commands or match multi-word commands as a whole.
-		if len(tokens) > 0 && tokens[0] == cmd {
+		if len(tokens) > 0 && pathBase(tokens[0]) == cmd {
 			return &CheckResult{
 				Decision:       DecisionAsk,
 				RiskLevel:      RiskMedium,

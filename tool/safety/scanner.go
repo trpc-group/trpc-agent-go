@@ -50,10 +50,12 @@ type CheckResult struct {
 //
 // Aggregation: Deny > Ask > Allow. First Deny wins. Highest-risk Ask
 // among multiple Ask findings provides the report details.
+//
+// Audit logging is handled by the caller (typically SafetyPermissionPolicy),
+// not by Scan itself. This keeps Scan pure and testable.
 type Scanner struct {
 	checkers []Checker
 	policy   *Policy
-	audit    AuditLogger
 }
 
 // allCheckers builds the full list of available checkers.
@@ -72,10 +74,26 @@ func allCheckers(policy *Policy) []Checker {
 // NewScanner creates a Scanner with checkers filtered by the policy's
 // Checkers field. When policy.Checkers is empty, all built-in checkers
 // are enabled.
-func NewScanner(policy *Policy, audit AuditLogger) *Scanner {
-	s := &Scanner{policy: policy, audit: audit}
+//
+// Audit logging is handled externally by SafetyPermissionPolicy; Scan
+// itself is a pure function that returns a report without side effects.
+func NewScanner(policy *Policy) *Scanner {
+	if policy == nil {
+		policy = defaultPolicy()
+	}
+	s := &Scanner{policy: policy}
 	s.checkers = filterCheckers(allCheckers(policy), policy)
 	return s
+}
+
+// defaultPolicy returns a Policy with safe defaults for all fields.
+func defaultPolicy() *Policy {
+	p := &Policy{}
+	p.applyDefaults()
+	// Best-effort compile; default patterns are well-known so this
+	// should never fail.
+	_ = p.compile()
+	return p
 }
 
 // filterCheckers returns the subset of checkers whose Name() appears in
@@ -175,7 +193,7 @@ func (sc *Scanner) DesensitizeEvidence(evidence string) string {
 
 // NewTestScanner creates a Scanner without an audit logger for use in tests.
 func NewTestScanner(policy *Policy) *Scanner {
-	return NewScanner(policy, nil)
+	return NewScanner(policy)
 }
 
 // ScanCtx is a convenience wrapper for Scan.

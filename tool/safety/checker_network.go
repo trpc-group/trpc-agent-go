@@ -37,7 +37,8 @@ var urlRe = regexp.MustCompile(
 var networkCommands = map[string]bool{
 	"curl": true, "wget": true, "nc": true, "ncat": true,
 	"netcat": true, "ssh": true, "scp": true, "rsync": true,
-	"ftp": true, "sftp": true, "telnet": true,
+	"ftp": true, "sftp": true, "http": true, "https": true,
+	"telnet": true,
 	"dig": true, "nslookup": true, "host": true,
 }
 

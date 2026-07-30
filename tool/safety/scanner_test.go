@@ -28,7 +28,7 @@ func TestToSpanAttributes(t *testing.T) {
 	r := &safety.SafetyReport{
 		Decision:   safety.DecisionDeny,
 		RiskLevel:  safety.RiskCritical,
-		RuleID:     "CMD_DANGEROUS_DELETE",
+		RuleID:     "CMD_DENIED_BY_POLICY",
 		Backend:    "workspaceexec",
 		Blocked:    true,
 		DurationMs: 42,
@@ -36,7 +36,7 @@ func TestToSpanAttributes(t *testing.T) {
 	attrs := r.ToSpanAttributes()
 	assert.Equal(t, "deny", attrs["tool.safety.decision"])
 	assert.Equal(t, "critical", attrs["tool.safety.risk_level"])
-	assert.Equal(t, "CMD_DANGEROUS_DELETE", attrs["tool.safety.rule_id"])
+	assert.Equal(t, "CMD_DENIED_BY_POLICY", attrs["tool.safety.rule_id"])
 	assert.Equal(t, "workspaceexec", attrs["tool.safety.backend"])
 	assert.Equal(t, "true", attrs["tool.safety.blocked"])
 	assert.Equal(t, "42", attrs["tool.safety.duration_ms"])

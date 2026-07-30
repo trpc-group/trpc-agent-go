@@ -106,7 +106,7 @@ func inferCommandRuleID(err error) string {
 	}
 	// "denied by denied_commands" — explicit deny list.
 	if strings.Contains(msg, "denied by denied_commands") {
-		return "CMD_DANGEROUS_DELETE"
+		return "CMD_DENIED_BY_POLICY"
 	}
 	// "not in allowed_commands" — not in the explicit allow list.
 	if strings.Contains(msg, "not in allowed_commands") {

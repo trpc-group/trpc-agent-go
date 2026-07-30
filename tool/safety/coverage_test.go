@@ -651,10 +651,9 @@ func TestMaskSecret_ShortSecret(t *testing.T) {
 		Command: `echo "sk-shortkey"`,
 		Backend: "workspaceexec",
 	})
-	// "sk-shortkey" is 12 chars, matches sk-[a-zA-Z0-9]{20,}? No it doesn't
-	// reach 20 chars. Actually the default pattern requires 20+ chars, so
-	// this won't match. But this test is still useful for verifying no panic.
-	_ = report
+	// "sk-shortkey" is 12 chars — below the 20-char default threshold,
+	// so no secret should be detected. Assert explicitly.
+	assert.Equal(t, safety.DecisionAllow, report.Decision)
 }
 
 func TestMaskSecret_LongEnough(t *testing.T) {
@@ -726,23 +725,14 @@ func TestPolicy_NilSecretRegexps(t *testing.T) {
 
 // ─── NewJSONLAuditLogger: nil policy does not panic ───
 
-func TestNewJSONLAuditLogger_NilPolicy_NoPanic(t *testing.T) {
-	logger, err := safety.NewJSONLAuditLogger(
+func TestNewJSONLAuditLogger_NilPolicy_Rejected(t *testing.T) {
+	// nil policy is now rejected — caller must supply a valid Policy.
+	_, err := safety.NewJSONLAuditLogger(
 		filepath.Join(t.TempDir(), "audit.jsonl"),
 		nil,
 	)
-	require.NoError(t, err)
-	require.NotNil(t, logger)
-	defer logger.Close()
-
-	report := &safety.SafetyReport{
-		Decision:  safety.DecisionAllow,
-		RiskLevel: safety.RiskNone,
-		Backend:   "workspaceexec",
-		Command:   "echo hello",
-	}
-	err = logger.Log(context.Background(), report)
-	require.NoError(t, err)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "policy must not be nil")
 }
 
 // ─── checker_path: glob star pattern ───
@@ -755,6 +745,19 @@ func TestPath_GlobStarPattern(t *testing.T) {
 	})
 	assert.Equal(t, safety.DecisionDeny, report.Decision)
 	assert.Contains(t, report.RuleID, "PATH_")
+}
+
+// ─── Policy: invalid checker name rejected ───
+
+func TestPolicy_InvalidCheckerName(t *testing.T) {
+	_, err := safety.LoadPolicyBytes([]byte(`
+version: "1.0"
+commands:
+  allowed: ["echo"]
+checkers: ["typo_checker", "command"]
+`), "yaml")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown checker name")
 }
 
 // ─── checker_resource: case-insensitive sleep ───

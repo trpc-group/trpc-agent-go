@@ -136,7 +136,8 @@ func TestScenario_SafeGoTest(t *testing.T) {
 	assert.Equal(t, safety.RiskNone, report.RiskLevel)
 	assert.Equal(t, "", report.RuleID)
 	assert.False(t, report.Blocked)
-	// All 7 checkers must pass for a safe command.
+	// All 7 checkers must be present and pass for a safe command.
+	assert.Len(t, report.Checkers, 7)
 	for _, c := range report.Checkers {
 		assert.Equal(t, "pass", c.Status, "checker %s should pass for safe command", c.Name)
 	}

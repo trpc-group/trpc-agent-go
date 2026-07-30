@@ -49,18 +49,19 @@ type JSONLAuditLogger struct {
 }
 
 // NewJSONLAuditLogger opens the audit file for append-only writing.
+// It returns an error if policy is nil — a policy with secret-detection
+// patterns is required for safe audit logging.
 func NewJSONLAuditLogger(path string, policy *Policy) (*JSONLAuditLogger, error) {
+	if policy == nil {
+		return nil, fmt.Errorf("audit: policy must not be nil")
+	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("audit: open %s: %w", path, err)
 	}
-	var patterns []*regexp.Regexp
-	if policy != nil {
-		patterns = policy.SecretRegexps()
-	}
 	return &JSONLAuditLogger{
 		file:     f,
-		patterns: patterns,
+		patterns: policy.SecretRegexps(),
 	}, nil
 }
 
@@ -117,7 +118,11 @@ func traceIDFromContext(ctx context.Context) string {
 }
 
 // TraceIDKey is the context key set by WithTraceID for audit logging.
-const TraceIDKey = "trace_id"
+// It uses a private type to avoid collisions with other packages' keys.
+type contextKey string
+
+// TraceIDKey is the context key for trace identifiers in audit logging.
+const TraceIDKey contextKey = "trace_id"
 
 // WithTraceID returns a context carrying a trace identifier for audit logging.
 func WithTraceID(ctx context.Context, id string) context.Context {
