@@ -2,9 +2,9 @@
   "reports": [
     {
       "spec_name": "concurrent_writes",
-      "started_at": "2026-07-29T08:39:11.6408249Z",
-      "completed_at": "2026-07-29T08:39:11.6710684Z",
-      "duration_ms": 30,
+      "started_at": "2026-07-30T02:52:54.0876496Z",
+      "completed_at": "2026-07-30T02:52:54.102611Z",
+      "duration_ms": 14,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -49,9 +49,9 @@
     },
     {
       "spec_name": "error_recovery",
-      "started_at": "2026-07-29T08:39:11.6713744Z",
-      "completed_at": "2026-07-29T08:39:11.7158725Z",
-      "duration_ms": 44,
+      "started_at": "2026-07-30T02:52:54.1030856Z",
+      "completed_at": "2026-07-30T02:52:54.1377143Z",
+      "duration_ms": 34,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -111,9 +111,9 @@
     },
     {
       "spec_name": "memory_writes",
-      "started_at": "2026-07-29T08:39:11.7158725Z",
-      "completed_at": "2026-07-29T08:39:11.7215947Z",
-      "duration_ms": 5,
+      "started_at": "2026-07-30T02:52:54.1382575Z",
+      "completed_at": "2026-07-30T02:52:54.1429746Z",
+      "duration_ms": 4,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -170,9 +170,9 @@
     },
     {
       "spec_name": "multi_turn",
-      "started_at": "2026-07-29T08:39:11.7215947Z",
-      "completed_at": "2026-07-29T08:39:11.7320039Z",
-      "duration_ms": 10,
+      "started_at": "2026-07-30T02:52:54.1429746Z",
+      "completed_at": "2026-07-30T02:52:54.1498135Z",
+      "duration_ms": 6,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -205,9 +205,9 @@
     },
     {
       "spec_name": "out_of_order",
-      "started_at": "2026-07-29T08:39:11.732513Z",
-      "completed_at": "2026-07-29T08:39:11.7397367Z",
-      "duration_ms": 7,
+      "started_at": "2026-07-30T02:52:54.1503441Z",
+      "completed_at": "2026-07-30T02:52:54.1566534Z",
+      "duration_ms": 6,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -257,9 +257,9 @@
     },
     {
       "spec_name": "single_turn",
-      "started_at": "2026-07-29T08:39:11.7397367Z",
-      "completed_at": "2026-07-29T08:39:11.7516962Z",
-      "duration_ms": 11,
+      "started_at": "2026-07-30T02:52:54.1571677Z",
+      "completed_at": "2026-07-30T02:52:54.1607567Z",
+      "duration_ms": 3,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -304,9 +304,9 @@
     },
     {
       "spec_name": "state_updates",
-      "started_at": "2026-07-29T08:39:11.7656587Z",
-      "completed_at": "2026-07-29T08:39:11.7696482Z",
-      "duration_ms": 3,
+      "started_at": "2026-07-30T02:52:54.1607567Z",
+      "completed_at": "2026-07-30T02:52:54.1650205Z",
+      "duration_ms": 4,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -351,9 +351,9 @@
     },
     {
       "spec_name": "summary_generation",
-      "started_at": "2026-07-29T08:39:11.7696482Z",
-      "completed_at": "2026-07-29T08:39:11.7808381Z",
-      "duration_ms": 11,
+      "started_at": "2026-07-30T02:52:54.1655299Z",
+      "completed_at": "2026-07-30T02:52:54.1738626Z",
+      "duration_ms": 8,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -381,6 +381,7 @@
             "SessionID": "sess-summary-1"
           },
           "summary_filter_keys": [
+            "",
             "dev",
             "main"
           ]
@@ -397,6 +398,7 @@
             "SessionID": "sess-summary-1"
           },
           "summary_filter_keys": [
+            "",
             "dev",
             "main"
           ]
@@ -406,9 +408,9 @@
     },
     {
       "spec_name": "summary_truncation",
-      "started_at": "2026-07-29T08:39:11.7818301Z",
-      "completed_at": "2026-07-29T08:39:11.8047274Z",
-      "duration_ms": 22,
+      "started_at": "2026-07-30T02:52:54.1743777Z",
+      "completed_at": "2026-07-30T02:52:54.1830782Z",
+      "duration_ms": 8,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -424,21 +426,6 @@
       "skip_count": 0,
       "diff_count": 0,
       "verifications": [
-        {
-          "what": "state",
-          "reference_backend": "inmemory",
-          "compared_backend": "sqlite",
-          "status": "pass",
-          "diffs": null,
-          "session_key": {
-            "AppName": "test-app",
-            "UserID": "user1",
-            "SessionID": "sess-trunc-1"
-          },
-          "summary_filter_keys": [
-            "main"
-          ]
-        },
         {
           "what": "summary",
           "reference_backend": "inmemory",
@@ -468,15 +455,30 @@
           "summary_filter_keys": [
             "main"
           ]
+        },
+        {
+          "what": "state",
+          "reference_backend": "inmemory",
+          "compared_backend": "sqlite",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-trunc-1"
+          },
+          "summary_filter_keys": [
+            "main"
+          ]
         }
       ],
       "summary": "All 3 verifications passed across 2 session + 2 memory backends."
     },
     {
       "spec_name": "tool_calls",
-      "started_at": "2026-07-29T08:39:11.8071945Z",
-      "completed_at": "2026-07-29T08:39:11.8156464Z",
-      "duration_ms": 8,
+      "started_at": "2026-07-30T02:52:54.1840755Z",
+      "completed_at": "2026-07-30T02:52:54.1899076Z",
+      "duration_ms": 5,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -521,9 +523,9 @@
     },
     {
       "spec_name": "track_events",
-      "started_at": "2026-07-29T08:39:11.8156464Z",
-      "completed_at": "2026-07-29T08:39:11.8218884Z",
-      "duration_ms": 6,
+      "started_at": "2026-07-30T02:52:54.1899076Z",
+      "completed_at": "2026-07-30T02:52:54.195208Z",
+      "duration_ms": 5,
       "backends_tested": {
         "session": [
           "inmemory",

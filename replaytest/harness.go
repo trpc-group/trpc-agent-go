@@ -61,6 +61,9 @@ const (
 	VerifyMemorySearch = "memory_search"
 )
 
+// defaultSearchQuery is the fallback query used when no memory_search verification declares one.
+const defaultSearchQuery = "test"
+
 // BatchRange describes the creation-index range of a single append_concurrent_events batch.
 // Start is inclusive, End is exclusive.
 type BatchRange struct {
@@ -82,7 +85,9 @@ type MemorySnapshot struct {
 	SearchResults []*memory.Entry `json:"search_results,omitempty"`
 }
 
-// UnavailableError marks backend errors ,Setup skips only unavailable backends.
+// UnavailableError is an optional interface that backend factories may implement on the errors they return.
+// When a factory returns an error that satisfies UnavailableError and Unavailable() returns true, Setup skips that backend instead of failing the whole test run.
+// If Unavailable() returns false (or the error does not implement the interface), the error is treated as fatal and Setup aborts.
 type UnavailableError interface {
 	Unavailable() bool
 }
@@ -101,7 +106,7 @@ type Harness struct {
 	// Active backends after Setup.
 	ActiveSessionBackends []string
 	ActiveMemoryBackends  []string
-	SkippedBackends       map[string]string // name �?reason
+	SkippedBackends       map[string]string // name -> reason
 
 	// TrackSupport records which session backends implement TrackService.
 	TrackSupported map[string]bool
@@ -431,6 +436,10 @@ func (h *Harness) Close() error {
 			errs = append(errs, fmt.Sprintf("memory: %v", err))
 		}
 	}
+	// Clear slices so a second call to Close (e.g. from a deferred call after Setup returns an error) is harmless.
+	h.sessionClose = nil
+	h.memoryClose = nil
+
 	if len(errs) > 0 {
 		return fmt.Errorf("close errors: %s", strings.Join(errs, "; "))
 	}
@@ -936,7 +945,7 @@ func (h *Harness) searchMemories(ctx context.Context, svc memory.Service, raw js
 		return fmt.Errorf("unmarshal search args: %w", err)
 	}
 	if args.Query == "" {
-		args.Query = "test"
+		args.Query = defaultSearchQuery
 	}
 	_, err := svc.SearchMemories(ctx, h.memoryUserKey, args.Query)
 	return err

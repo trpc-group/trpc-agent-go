@@ -341,15 +341,27 @@ func (c *Comparator) compareResponses(left, right *model.Response, basePath stri
 		})
 	}
 
-	// SystemFingerprint.
-	if left.SystemFingerprint != nil && right.SystemFingerprint != nil {
-		if *left.SystemFingerprint != *right.SystemFingerprint {
-			diffs = append(diffs, DiffResult{
-				Path: basePath + ".systemFingerprint", Kind: DiffValueMismatch, Severity: SeverityInfo,
-				Left: *left.SystemFingerprint, Right: *right.SystemFingerprint,
-				Message: "system fingerprint mismatch",
-			})
+	// SystemFingerprint — treat as backend-private metadata.
+	// Presence and value differences are surfaced so the default DiffRule (which ignores this path) documents the intentional allowance rather than having the comparator silently hide the diff.
+	if (left.SystemFingerprint == nil) != (right.SystemFingerprint == nil) {
+		ls, rs := "<nil>", "<nil>"
+		if left.SystemFingerprint != nil {
+			ls = *left.SystemFingerprint
 		}
+		if right.SystemFingerprint != nil {
+			rs = *right.SystemFingerprint
+		}
+		diffs = append(diffs, DiffResult{
+			Path: basePath + ".systemFingerprint", Kind: DiffValueMismatch, Severity: SeverityInfo,
+			Left: ls, Right: rs,
+			Message: "system fingerprint presence mismatch",
+		})
+	} else if left.SystemFingerprint != nil && *left.SystemFingerprint != *right.SystemFingerprint {
+		diffs = append(diffs, DiffResult{
+			Path: basePath + ".systemFingerprint", Kind: DiffValueMismatch, Severity: SeverityInfo,
+			Left: *left.SystemFingerprint, Right: *right.SystemFingerprint,
+			Message: "system fingerprint mismatch",
+		})
 	}
 
 	return diffs

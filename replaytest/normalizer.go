@@ -117,10 +117,14 @@ func (n *backendMetadataStripper) NormalizeSession(snap *SessionSnapshot) (*Sess
 	}
 	if snap.Session != nil {
 
-		// Some backends create a default summary entry with an empty filter key during session initialisation while others do not.
-		// Strip it so it does not cause spurious diffs.
+		// Some backends create a default, empty summary entry during session initialisation while others do not.
+		// Strip only entries that have no content, no boundary, and no topics so that real summaries (including those under an empty filter key) are still compared across backends.
 		if snap.Session.Summaries != nil {
-			delete(snap.Session.Summaries, "")
+			for k, s := range snap.Session.Summaries {
+				if s == nil || (s.Summary == "" && s.Boundary == nil && len(s.Topics) == 0) {
+					delete(snap.Session.Summaries, k)
+				}
+			}
 		}
 		snap.Session.ServiceMeta = nil
 		snap.Session.Hash = 0
@@ -499,32 +503,57 @@ func (n *concurrentEventSorter) NormalizeSession(snap *SessionSnapshot) (*Sessio
 		return snap, nil
 	}
 
-	// Build a set of creation indices that belong to concurrent batches, keyed by batch ID.
-	batchForIdx := make(map[int]int) // creation index → batch id
-	for batchID, br := range snap.ConcurrentBatchRanges {
+	eventBatch := assignEventsToBatches(events, snap.ConcurrentBatchRanges)
+	sortBatchSubRanges(events, eventBatch)
+	return snap, nil
+
+}
+
+// assignEventsToBatches maps each event position to a batch ID (-1 = none).
+func assignEventsToBatches(events []event.Event, ranges []BatchRange) []int {
+	batchForIdx := make(map[int]int)
+	for batchID, br := range ranges {
 		for idx := br.Start; idx < br.End; idx++ {
 			batchForIdx[idx] = batchID
 		}
 	}
-
-	// Parse creation index from each event and map to batch.
-	// -1 means the event is not part of any concurrent batch.
 	eventBatch := make([]int, len(events))
-	creationIdx := make([]int, len(events))
 	for i := range events {
 		eventBatch[i] = -1
-		creationIdx[i] = -1
 		if events[i].Response != nil {
 			ci := parseCreationIndex(events[i].Response.ID)
-			creationIdx[i] = ci
 			if bid, ok := batchForIdx[ci]; ok {
 				eventBatch[i] = bid
 			}
 		}
 	}
+	return eventBatch
+}
 
-	// Walk through events. For each run of events in the same concurrent batch,
-	// sort that sub-slice by the stable composite key.
+// eventLess reports whether events[a] should sort before events[b] by stable key.
+func eventLess(events []event.Event, a, b int) bool {
+	ea, eb := &events[a], &events[b]
+	if ea.Author != eb.Author {
+		return ea.Author < eb.Author
+	}
+	if ea.Tag != eb.Tag {
+		return ea.Tag < eb.Tag
+	}
+	if ea.FilterKey != eb.FilterKey {
+		return ea.FilterKey < eb.FilterKey
+	}
+	ca, cb := "", ""
+	if ea.Response != nil && len(ea.Response.Choices) > 0 {
+		ca = ea.Response.Choices[0].Message.Content
+	}
+	if eb.Response != nil && len(eb.Response.Choices) > 0 {
+		cb = eb.Response.Choices[0].Message.Content
+	}
+	return ca < cb
+}
+
+// sortBatchSubRanges sorts each contiguous run of same-batch events in-place.
+func sortBatchSubRanges(events []event.Event, eventBatch []int) {
 	i := 0
 	for i < len(events) {
 		if eventBatch[i] < 0 {
@@ -536,31 +565,11 @@ func (n *concurrentEventSorter) NormalizeSession(snap *SessionSnapshot) (*Sessio
 		for j < len(events) && eventBatch[j] == batchID {
 			j++
 		}
-		// Sort only the sub-range [i, j) belonging to the same batch.
 		sort.SliceStable(events[i:j], func(a, b int) bool {
-			ea, eb := &events[i+a], &events[i+b]
-			if ea.Author != eb.Author {
-				return ea.Author < eb.Author
-			}
-			if ea.Tag != eb.Tag {
-				return ea.Tag < eb.Tag
-			}
-			if ea.FilterKey != eb.FilterKey {
-				return ea.FilterKey < eb.FilterKey
-			}
-			ca, cb := "", ""
-			if ea.Response != nil && len(ea.Response.Choices) > 0 {
-				ca = ea.Response.Choices[0].Message.Content
-			}
-			if eb.Response != nil && len(eb.Response.Choices) > 0 {
-				cb = eb.Response.Choices[0].Message.Content
-			}
-			return ca < cb
+			return eventLess(events, i+a, i+b)
 		})
 		i = j
 	}
-
-	return snap, nil
 }
 
 // parseCreationIndex extracts the numeric index from a response ID of the form "resp-N". Returns -1 when the format is unrecognized.

@@ -269,6 +269,7 @@ func TestDefaultDiffRules_NonEmpty(t *testing.T) {
 		"$.events[*].parentInvocationId",
 		"$.events[*].usage[*]",
 		"$.events[*].response.id",
+		"$.events[*].response.systemFingerprint",
 		"$.tracks[*].events[*].timestamp",
 		"$.memories[*].memory.eventTime",
 		"$.memories[*].score",

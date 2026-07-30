@@ -413,11 +413,16 @@ func TestRunSpec_MemorySearchFallsBackToDefaultQuery(t *testing.T) {
 	if recorder == nil {
 		t.Fatal("recorder not initialized")
 	}
-	// When no memory_search verify exists, the fallback "test" is used.
-	// Since there's no memory_search verify, collectMemorySnapshot still
-	// calls SearchMemories with the searchQuery ("test") for the
-	// VerifyMemorySearch snapshot entry.
-	t.Logf("recorded queries (default fallback): %v", recorder.queries)
+	// When no memory_search verify exists, the fallback defaultSearchQuery is used.
+	// Verify the recorded query matches the constant.
+	if len(recorder.queries) == 0 {
+		t.Fatal("expected at least one SearchMemories call during Verify")
+	}
+	for _, q := range recorder.queries {
+		if q != defaultSearchQuery {
+			t.Errorf("fallback query should be %q, got %q", defaultSearchQuery, q)
+		}
+	}
 	if report == nil {
 		t.Fatal("report is nil")
 	}

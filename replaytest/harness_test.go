@@ -338,22 +338,34 @@ func TestConcurrentEvents_SequentialIndexAfterConcurrent(t *testing.T) {
 		t.Fatalf("GetSession: %v", err)
 	}
 
-	if len(sess.Events) < 3 {
-		t.Fatalf("expected at least 3 events (2 sequential + 3 concurrent), got %d", len(sess.Events))
+	// 1 user + 3 concurrent + 1 user = 5 events.
+	if len(sess.Events) != 5 {
+		t.Fatalf("expected exactly 5 events (1 user + 3 concurrent + 1 user), got %d", len(sess.Events))
 	}
 
-	// Check that the "after concurrent" event has a higher index than concurrent events.
-	// Response IDs use the index: "resp-%d".
-	lastRespID := ""
+	// Verify the "after concurrent" event carries a higher creation index than any concurrent event.
+	// Creation indices are embedded in Response.ID as "resp-<N>".
+	// The concurrent batch occupied indices [2, 5) and the trailing sequential event uses index 5.
+	var maxConcIdx, lastIdx int
 	for _, ev := range sess.Events {
-		if ev.Response != nil {
-			lastRespID = ev.Response.ID
+		if ev.Response == nil {
+			continue
 		}
+		ci := parseCreationIndex(ev.Response.ID)
+		if ci < 0 {
+			continue
+		}
+		if ci >= 2 && ci < 5 {
+			if ci > maxConcIdx {
+				maxConcIdx = ci
+			}
+		}
+		lastIdx = ci
 	}
-	t.Logf("Events stored: %d, last response ID: %s", len(sess.Events), lastRespID)
-	if lastRespID == "" {
-		t.Error("no response ID found in events")
+	if lastIdx <= maxConcIdx {
+		t.Errorf("last event index %d should be > max concurrent index %d", lastIdx, maxConcIdx)
 	}
+	t.Logf("Events: %d, last index: %d, max concurrent index: %d", len(sess.Events), lastIdx, maxConcIdx)
 }
 
 func TestBuildConcurrentEventAt_NoSharedStateRace(t *testing.T) {

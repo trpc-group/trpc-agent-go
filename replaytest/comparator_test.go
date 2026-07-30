@@ -863,15 +863,15 @@ func TestCompareMemoryEntry_NilMemoryContent(t *testing.T) {
 
 // --- isAllowed: strategy coverage ---
 
-// TestComparator_isAllowed_UnknownStrategyNotAllowed verifies that strategies
-// other than "ignore" and "allow_drift" are NOT currently handled by isAllowed.
-func TestComparator_isAllowed_UnknownStrategyNotAllowed(t *testing.T) {
+// TestComparator_isAllowed_ExtraKeysOnlyMatchesCorrectKind verifies that allow_extra_keys matches when d.Kind == DiffExtraKey but NOT for other kinds.
+func TestComparator_isAllowed_ExtraKeysOnlyMatchesCorrectKind(t *testing.T) {
 	c := NewComparator([]DiffRule{
 		{Path: "$.state[*]", Kind: "backend_metadata", Strategy: "allow_extra_keys"},
 	})
+	// DiffResult has no Kind set → zero-value "", which does NOT match DiffExtraKey.
 	_, ok := c.isAllowed(&DiffResult{Path: "$.state.extra_field"})
 	if ok {
-		t.Error("allow_extra_keys is not yet implemented in isAllowed — expected false")
+		t.Error("allow_extra_keys should not match when d.Kind is not DiffExtraKey")
 	}
 }
 
@@ -907,16 +907,8 @@ func TestCompareResponses_SystemFingerprintOneNil(t *testing.T) {
 	}}
 	diffs := c.compareEvent(left, right, "$.events[0]")
 
-	// One side has nil systemFingerprint — should not produce a diff since the comparison only fires when both non-nil.
-	hasFP := false
-	for _, d := range diffs {
-		if d.Path == "$.events[0].response.systemFingerprint" {
-			hasFP = true
-		}
-	}
-	if hasFP {
-		t.Error("one nil systemFingerprint should not produce diff (only compared when both non-nil)")
-	}
+	// One side has nil systemFingerprint — now produces a presence-mismatch diff so the default DiffRule can document the intentional allowance.
+	assertHasDiffPath(t, diffs, "$.events[0].response.systemFingerprint")
 }
 
 // --- helpers ---

@@ -179,9 +179,8 @@ func (d *DriftSpec) IsDriftAllowed(kind string, drift float64) bool {
 	return false
 }
 
-// DefaultDiffRules returns the set of built-in diff rules that apply to
-// all specs. These handle auto-generated IDs, timestamps, and backend
-// metadata that are known to differ across implementations.
+// DefaultDiffRules returns the set of built-in diff rules that apply to all specs.
+// These handle auto-generated IDs, timestamps, and backend metadata that are known to differ across implementations.
 func DefaultDiffRules() []DiffRule {
 	return []DiffRule{
 		{
@@ -226,6 +225,12 @@ func DefaultDiffRules() []DiffRule {
 			Kind:     "auto_id",
 			Strategy: "ignore",
 			Note:     "Response IDs are auto-generated per call.",
+		},
+		{
+			Path:     "$.events[*].response.systemFingerprint",
+			Kind:     "backend_metadata",
+			Strategy: "ignore",
+			Note:     "System fingerprint is a backend-internal identifier that may or may not be populated; its presence and value are not part of the public API contract.",
 		},
 		{
 			Path:     "$.tracks[*].events[*].timestamp",

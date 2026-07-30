@@ -84,7 +84,9 @@ func (r *DiffReport) Finalize() {
 		case StatusSkip:
 			r.SkipCount++
 		}
-		r.DiffCount += len(v.Diffs)
+		if v.Status != StatusSkip {
+			r.DiffCount += len(v.Diffs)
+		}
 	}
 
 	if r.PassCount == 0 && r.FailCount == 0 && r.SkipCount == 0 {

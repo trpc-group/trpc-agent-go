@@ -39,16 +39,23 @@ func RunSpec(ctx context.Context, spec *Spec, dbURL string) (*DiffReport, error)
 	}
 
 	// Determine search query from spec verifications (memory_search).
-	searchQuery := "test"
+	// All memory_search verifications must agree on the query;
+	// inconsistent queries would compare results from different datasets.
+	searchQuery := defaultSearchQuery
 	for _, vs := range spec.Verifies {
-		if vs.What == "memory_search" && len(vs.Params) > 0 {
-			var sq struct {
-				Query string `json:"query"`
-			}
-			if json.Unmarshal(vs.Params, &sq) == nil && sq.Query != "" {
-				searchQuery = sq.Query
-				break
-			}
+		if vs.What != "memory_search" || len(vs.Params) == 0 {
+			continue
+		}
+		var sq struct {
+			Query string `json:"query"`
+		}
+		if err := json.Unmarshal(vs.Params, &sq); err != nil || sq.Query == "" {
+			continue
+		}
+		if searchQuery == defaultSearchQuery {
+			searchQuery = sq.Query
+		} else if sq.Query != searchQuery {
+			return nil, fmt.Errorf("inconsistent memory_search queries: %q vs %q — all verifications must use the same query", searchQuery, sq.Query)
 		}
 	}
 	sessionSnapshots, memorySnapshots, err := harness.Verify(ctx, searchQuery)
@@ -60,25 +67,46 @@ func RunSpec(ctx context.Context, spec *Spec, dbURL string) (*DiffReport, error)
 	rules := MergeDiffRules(DefaultDiffRules(), spec.AllowedDiffs)
 	comp := NewComparator(rules)
 
-	// Select reference backends from the actually-initialized list, not the spec list.
-	if len(harness.ActiveSessionBackends) == 0 {
+	// Select reference backends from the active list, not the spec list.
+	// If only memory backends are available (no sessions), we can still run memory-scoped verifications.
+	if len(harness.ActiveSessionBackends) == 0 && len(harness.ActiveMemoryBackends) == 0 {
 		report.Finalize()
 		return report, nil
 	}
-	refBackend := harness.ActiveSessionBackends[0]
+	refBackend := ""
+	if len(harness.ActiveSessionBackends) > 0 {
+		refBackend = harness.ActiveSessionBackends[0]
+	}
 	refMemBackend := refBackend
 	if len(harness.ActiveMemoryBackends) > 0 {
 		refMemBackend = harness.ActiveMemoryBackends[0]
 	}
 
-	// If there are not enough active backends to perform cross-backend
-	// comparison, record skip results so the report does not silently pass.
-	if len(harness.ActiveSessionBackends) < 2 {
+	recordSingleBackendSkips(report, spec, harness, refBackend, refMemBackend)
+
+	if len(harness.ActiveSessionBackends) >= 2 {
+		if err := runSessionVerifications(report, harness, comp, normChain, spec, sessionSnapshots, refBackend); err != nil {
+			return nil, err
+		}
+	}
+	if len(harness.ActiveMemoryBackends) >= 2 {
+		if err := runMemoryVerifications(report, harness, comp, normChain, spec, memorySnapshots, refMemBackend); err != nil {
+			return nil, err
+		}
+	}
+
+	report.Finalize()
+	return report, nil
+}
+
+// recordSingleBackendSkips adds skip verifications when there are not enough
+// active backends to perform a cross-backend comparison.
+func recordSingleBackendSkips(report *DiffReport, spec *Spec, h *Harness, refSess, refMem string) {
+	if len(h.ActiveSessionBackends) < 2 {
 		for _, vs := range spec.Verifies {
-			switch vs.What {
-			case "session_full", "events", "state", "summary", "tracks":
+			if isSessionWhat(vs.What) {
 				report.AddVerification(VerificationResult{
-					What: vs.What, ReferenceBackend: refBackend,
+					What: vs.What, ReferenceBackend: refSess,
 					ComparedBackend: "", Status: StatusSkip,
 					Diffs: []DiffResult{{Path: "$",
 						Kind: DiffMissingEntry, Severity: SeverityInfo,
@@ -88,12 +116,11 @@ func RunSpec(ctx context.Context, spec *Spec, dbURL string) (*DiffReport, error)
 			}
 		}
 	}
-	if len(harness.ActiveMemoryBackends) < 2 {
+	if len(h.ActiveMemoryBackends) < 2 {
 		for _, vs := range spec.Verifies {
-			switch vs.What {
-			case "memories", "memory_search":
+			if isMemoryWhat(vs.What) {
 				report.AddVerification(VerificationResult{
-					What: vs.What, ReferenceBackend: refMemBackend,
+					What: vs.What, ReferenceBackend: refMem,
 					ComparedBackend: "", Status: StatusSkip,
 					Diffs: []DiffResult{{Path: "$",
 						Kind: DiffMissingEntry, Severity: SeverityInfo,
@@ -103,23 +130,22 @@ func RunSpec(ctx context.Context, spec *Spec, dbURL string) (*DiffReport, error)
 			}
 		}
 	}
+}
 
-	// ---- session-scoped verifications (compute once, filter by path) ----
-	if len(harness.ActiveSessionBackends) >= 2 {
-		if err := runSessionVerifications(report, harness, comp, normChain, spec, sessionSnapshots, refBackend); err != nil {
-			return nil, err
-		}
+func isSessionWhat(w string) bool {
+	switch w {
+	case "session_full", "events", "state", "summary", "tracks":
+		return true
 	}
+	return false
+}
 
-	// ---- non-session verifications (memories, memory_search) ----
-	if len(harness.ActiveMemoryBackends) >= 2 {
-		if err := runMemoryVerifications(report, harness, comp, normChain, spec, memorySnapshots, refMemBackend); err != nil {
-			return nil, err
-		}
+func isMemoryWhat(w string) bool {
+	switch w {
+	case "memories", "memory_search":
+		return true
 	}
-
-	report.Finalize()
-	return report, nil
+	return false
 }
 
 // runMemoryVerifications handles memories and memory_search verifications.
