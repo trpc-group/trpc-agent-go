@@ -9112,8 +9112,14 @@ func TestMergeCurrentTurnMessagesIntoSeed_ReplacesLastUserMessageWhenItMatchesOr
 			message:       model.NewUserMessage("first"),
 			seededHistory: true,
 		},
-		{message: model.NewUserMessage("ctx")},
-		{message: model.NewUserMessage("rewritten")},
+		{
+			message:     model.NewUserMessage("ctx"),
+			currentTurn: true,
+		},
+		{
+			message:     model.NewUserMessage("rewritten"),
+			currentTurn: true,
+		},
 		{
 			message:       model.NewAssistantMessage("after"),
 			seededHistory: true,
@@ -9149,8 +9155,14 @@ func TestMergeCurrentTurnMessagesIntoSeed_AppendsWhenOnlyOlderMessageMatchesOrig
 			message:       model.NewUserMessage("latest"),
 			seededHistory: true,
 		},
-		{message: model.NewUserMessage("ctx")},
-		{message: model.NewUserMessage("rewritten")},
+		{
+			message:     model.NewUserMessage("ctx"),
+			currentTurn: true,
+		},
+		{
+			message:     model.NewUserMessage("rewritten"),
+			currentTurn: true,
+		},
 	}, merged)
 }
 
@@ -9177,8 +9189,14 @@ func TestMergeCurrentTurnMessagesIntoSeed_AppendsWhenOriginalMissing(t *testing.
 			message:       model.NewAssistantMessage("after"),
 			seededHistory: true,
 		},
-		{message: model.NewUserMessage("ctx")},
-		{message: model.NewUserMessage("rewritten")},
+		{
+			message:     model.NewUserMessage("ctx"),
+			currentTurn: true,
+		},
+		{
+			message:     model.NewUserMessage("rewritten"),
+			currentTurn: true,
+		},
 	}, merged)
 }
 

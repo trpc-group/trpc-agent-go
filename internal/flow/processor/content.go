@@ -28,7 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	iflow "trpc.group/trpc-go/trpc-agent-go/internal/flow"
-	"trpc.group/trpc-go/trpc-agent-go/internal/state/seedhistory"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/messageorigin"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/toolresultround"
 	"trpc.group/trpc-go/trpc-agent-go/internal/util/message"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -1534,8 +1534,8 @@ func (p *ContentRequestProcessor) isCoveredCurrentInvocationEvent(
 	filter string,
 	cutoff eventHistoryCutoff,
 ) bool {
-	return evt.RequestID == inv.RunOptions.RequestID &&
-		evt.InvocationID == inv.InvocationID &&
+	return !messageorigin.IsSeedHistory(inv, evt.ID) &&
+		isCurrentInvocationEvent(evt, inv) &&
 		cutoff.excludesEvent(index, evt) &&
 		p.canMatchToolRound(evt, inv, filter)
 }
@@ -2334,7 +2334,14 @@ func (p *ContentRequestProcessor) shouldIncludeEvent(
 	}
 	// Caller-supplied seed history shares the current request and invocation
 	// identifiers, but remains ordinary history for summary-cutoff purposes.
-	seededHistory := seedhistory.Contains(inv, evt.ID)
+	seededHistory := messageorigin.IsSeedHistory(inv, evt.ID)
+	// UserMessageRewriter may expand the active turn into an ordered,
+	// mixed-role transcript. Preserve that input as a unit even when an
+	// intra-run summary covers its session timestamps.
+	if messageorigin.IsCurrentTurn(inv, evt.ID) &&
+		isCurrentInvocationEvent(evt, inv) {
+		return true, isStrictInvocationMessage(evt, inv)
+	}
 	// Exact invocation message match keeps existing semantics.
 	if !seededHistory && isStrictInvocationMessage(evt, inv) {
 		return true, true
@@ -2483,12 +2490,17 @@ func isStrictInvocationMessage(evt event.Event, inv *agent.Invocation) bool {
 // RequestID + InvocationID matching avoids preserving unrelated user messages
 // from other invocations that may share the same request scope.
 func isCurrentInvocationUserMessage(evt event.Event, inv *agent.Invocation) bool {
-	return inv.RunOptions.RequestID != "" &&
-		inv.RunOptions.RequestID == evt.RequestID &&
-		inv.InvocationID != "" &&
-		inv.InvocationID == evt.InvocationID &&
+	return isCurrentInvocationEvent(evt, inv) &&
 		len(evt.Choices) > 0 &&
 		evt.Choices[0].Message.Role == model.RoleUser
+}
+
+func isCurrentInvocationEvent(evt event.Event, inv *agent.Invocation) bool {
+	return inv != nil &&
+		inv.RunOptions.RequestID != "" &&
+		inv.RunOptions.RequestID == evt.RequestID &&
+		inv.InvocationID != "" &&
+		inv.InvocationID == evt.InvocationID
 }
 
 // hasCompactedCurrentInvocationToolResults reports whether the bounded resume

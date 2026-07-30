@@ -37,7 +37,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/livesession"
-	"trpc.group/trpc-go/trpc-agent-go/internal/state/seedhistory"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/messageorigin"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/sessionroute"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryfork"
@@ -927,6 +927,7 @@ func (r *runner) seedSessionHistory(
 type pendingSessionMessage struct {
 	message       model.Message
 	seededHistory bool
+	currentTurn   bool
 }
 
 // appendSessionMessages persists messages into the session transcript in the
@@ -940,7 +941,10 @@ func (r *runner) appendSessionMessages(
 ) error {
 	pending := make([]pendingSessionMessage, 0, len(messages))
 	for _, message := range messages {
-		pending = append(pending, pendingSessionMessage{message: message})
+		pending = append(pending, pendingSessionMessage{
+			message:     message,
+			currentTurn: true,
+		})
 	}
 	return r.appendMessagesAsSessionEvents(ctx, sess, invocation, ag, pending)
 }
@@ -972,7 +976,10 @@ func (r *runner) appendMessagesAsSessionEvents(
 			return err
 		}
 		if pending.seededHistory {
-			seedhistory.Mark(invocation, evt.ID)
+			messageorigin.MarkSeedHistory(invocation, evt.ID)
+		}
+		if pending.currentTurn {
+			messageorigin.MarkCurrentTurn(invocation, evt.ID)
 		}
 	}
 	return nil
@@ -1810,7 +1817,7 @@ func (r *runner) applyEventPluginsNoSpan(
 	if updated == nil {
 		return e
 	}
-	copyEventInvocationFields(updated, e)
+	backfillEventMetadata(updated, e)
 	return updated
 }
 
@@ -1839,12 +1846,15 @@ func (r *runner) applyAfterRunPlugins(
 	}
 }
 
-func copyEventInvocationFields(dst *event.Event, src *event.Event) {
+func backfillEventMetadata(dst *event.Event, src *event.Event) {
 	if dst == nil || src == nil {
 		return
 	}
 	if dst.RequestID == "" {
 		dst.RequestID = src.RequestID
+	}
+	if dst.ID == "" {
+		dst.ID = src.ID
 	}
 	if dst.InvocationID == "" {
 		dst.InvocationID = src.InvocationID
@@ -3997,6 +4007,7 @@ func pendingSeedMessages(
 		pending = append(pending, pendingSessionMessage{
 			message:       message,
 			seededHistory: i != currentTurnIndex,
+			currentTurn:   i == currentTurnIndex,
 		})
 	}
 	return pending
@@ -4010,7 +4021,8 @@ func mergeCurrentTurnMessagesIntoSeed(
 	pendingCurrent := make([]pendingSessionMessage, 0, len(currentTurn))
 	for _, message := range currentTurn {
 		pendingCurrent = append(pendingCurrent, pendingSessionMessage{
-			message: message,
+			message:     message,
+			currentTurn: true,
 		})
 	}
 	if len(currentTurn) == 0 {

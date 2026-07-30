@@ -25,6 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/messageorigin"
 	"trpc.group/trpc-go/trpc-agent-go/internal/util/message"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -3870,6 +3871,61 @@ func TestContentRequestProcessor_shouldIncludeEvent(t *testing.T) {
 			if isInvocationMessage != tt.isInvocationMessage {
 				t.Errorf("shouldIncludeEvent() = %v, want %v", isInvocationMessage, tt.isInvocationMessage)
 			}
+		})
+	}
+}
+
+func TestContentRequestProcessor_CurrentTurnOriginRequiresSameInvocation(
+	t *testing.T,
+) {
+	const eventID = "current-turn-event"
+	inv := agent.NewInvocation()
+	inv.InvocationID = "current-invocation"
+	inv.RunOptions.RequestID = "request"
+	messageorigin.MarkCurrentTurn(inv, eventID)
+	cutoffTime := time.Now()
+
+	tests := []struct {
+		name         string
+		invocationID string
+		want         bool
+	}{
+		{
+			name:         "same invocation",
+			invocationID: inv.InvocationID,
+			want:         true,
+		},
+		{
+			name:         "different invocation",
+			invocationID: "different-invocation",
+			want:         false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			evt := event.Event{
+				ID:           eventID,
+				RequestID:    inv.RunOptions.RequestID,
+				InvocationID: tt.invocationID,
+				Timestamp:    cutoffTime.Add(-time.Hour),
+				Response: &model.Response{
+					Choices: []model.Choice{{
+						Message: model.NewAssistantMessage("context"),
+					}},
+				},
+			}
+			eventCutoff := newEventHistoryCutoff(
+				[]event.Event{evt},
+				summaryHistoryCutoffFromTime(cutoffTime),
+			)
+			got, _ := (&ContentRequestProcessor{}).shouldIncludeEvent(
+				evt,
+				0,
+				inv,
+				"",
+				eventCutoff,
+			)
+			require.Equal(t, tt.want, got)
 		})
 	}
 }
