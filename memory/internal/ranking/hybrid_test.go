@@ -21,10 +21,13 @@ func TestHybridCandidateLimit(t *testing.T) {
 	t.Parallel()
 
 	assert.Equal(t, 90, HybridCandidateLimit(
-		"Which sports events did I watch?", 30,
+		"Which sports events did I watch in January?", 30,
 	))
 	assert.Equal(t, 30, HybridCandidateLimit(
 		"What did you recommend?", 30,
+	))
+	assert.Equal(t, 30, HybridCandidateLimit(
+		"Where am I planning to stay for my birthday trip?", 30,
 	))
 	assert.Equal(t, 30, HybridCandidateLimit("When?", 30))
 	assert.Equal(t, 0, HybridCandidateLimit("ordinary query", 0))
@@ -32,6 +35,39 @@ func TestHybridCandidateLimit(t *testing.T) {
 
 	maxInt := int(^uint(0) >> 1)
 	assert.Equal(t, maxInt, HybridCandidateLimit("ordinary query", maxInt))
+}
+
+func TestMergeHybridRejectsDuplicateCalendarOnlyTailMatch(t *testing.T) {
+	t.Parallel()
+
+	eventTime := time.Date(2023, time.April, 1, 0, 0, 0, 0, time.UTC)
+	entry := func(id, text string, at *time.Time) *memory.Entry {
+		return &memory.Entry{
+			ID: id,
+			Memory: &memory.Memory{
+				Memory:    text,
+				Kind:      memory.KindEpisode,
+				EventTime: at,
+			},
+		}
+	}
+	results := MergeHybrid(
+		"Which events happened in April?",
+		[]*memory.Entry{
+			entry("base-1", "Attended a workshop.", nil),
+			entry("base-2", "Attended a lecture.", nil),
+			entry("tail", "Celebrated a birthday in April.", &eventTime),
+		},
+		nil,
+		0,
+		2,
+	)
+
+	require.Len(t, results, 2)
+	assert.Equal(t, []string{"base-1", "base-2"}, []string{
+		results[0].ID,
+		results[1].ID,
+	})
 }
 
 func TestMergeHybridBackfillsFocusedEventTail(t *testing.T) {

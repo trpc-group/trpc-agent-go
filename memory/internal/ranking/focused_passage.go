@@ -108,18 +108,26 @@ func bestFocusedPassageMatch(
 	queryTerms map[string]struct{},
 	text string,
 ) (int, int) {
-	bestMatched := 0
+	matched, passageTerms := bestFocusedPassageMatchTerms(queryTerms, text)
+	return len(matched), passageTerms
+}
+
+func bestFocusedPassageMatchTerms(
+	queryTerms map[string]struct{},
+	text string,
+) (map[string]struct{}, int) {
+	var bestMatched map[string]struct{}
 	bestTerms := 0
 	for _, passage := range splitFocusedPassages(text) {
 		terms := focusedTermSet(passage)
-		matched := 0
+		matched := make(map[string]struct{})
 		for term := range terms {
 			if _, ok := queryTerms[term]; ok {
-				matched++
+				matched[term] = struct{}{}
 			}
 		}
-		if matched > bestMatched ||
-			(matched == bestMatched && matched > 0 &&
+		if len(matched) > len(bestMatched) ||
+			(len(matched) == len(bestMatched) && len(matched) > 0 &&
 				(bestTerms == 0 || len(terms) < bestTerms)) {
 			bestMatched = matched
 			bestTerms = len(terms)

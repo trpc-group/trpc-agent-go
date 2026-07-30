@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory/internal/assistantresult"
@@ -26,8 +27,10 @@ const (
 // HybridCandidateLimit expands the candidate window only when an ordinary
 // query has enough terms for focused tail ranking.
 func HybridCandidateLimit(query string, limit int) int {
+	queryTerms := focusedQueryTerms(query)
 	if limit <= 0 || asksForAssistantResult(query) ||
-		len(focusedQueryTerms(query)) < minimumFocusedPassageMatches {
+		len(queryTerms) < minimumFocusedPassageMatches ||
+		!focusedQueryHasCalendarReference(queryTerms) {
 		return limit
 	}
 	maxInt := int(^uint(0) >> 1)
@@ -122,21 +125,28 @@ func rankFocusedTail(
 			assistantresult.Is(entry.Memory.Memory) {
 			continue
 		}
-		matched, passageTerms := bestFocusedPassageMatch(
+		contentMatches, passageTerms := bestFocusedPassageMatchTerms(
 			queryTerms, entry.Memory.Memory,
 		)
-		eventTimeTerms := focusedEventTimeMatches(queryTerms, entry)
-		if matched < minimumFocusedPassageMatches &&
-			(matched == 0 || eventTimeTerms == 0) {
+		eventMatches := focusedEventTimeMatchTerms(queryTerms, entry)
+		if len(eventMatches) == 0 {
+			continue
+		}
+		distinctContentMatches := 0
+		for term := range contentMatches {
+			if _, temporal := eventMatches[term]; !temporal {
+				distinctContentMatches++
+			}
+		}
+		if distinctContentMatches == 0 {
 			continue
 		}
 		ranked = append(ranked, focusedTailResult{
-			entry:          entry,
-			matchedTerms:   matched,
-			eventTimeTerms: eventTimeTerms,
-			passageTerms:   passageTerms,
-			temporalEpisode: eventTimeTerms > 0 &&
-				entry.Memory.Kind == memory.KindEpisode,
+			entry:           entry,
+			matchedTerms:    distinctContentMatches,
+			eventTimeTerms:  len(eventMatches),
+			passageTerms:    passageTerms,
+			temporalEpisode: entry.Memory.Kind == memory.KindEpisode,
 		})
 	}
 	if len(ranked) == 0 {
@@ -170,29 +180,64 @@ func rankFocusedTail(
 	return results
 }
 
-func focusedEventTimeMatches(
+func focusedEventTimeMatchTerms(
 	queryTerms map[string]struct{},
 	entry *memory.Entry,
-) int {
+) map[string]struct{} {
 	if entry.Memory.EventTime == nil {
-		return 0
+		return nil
 	}
 	eventTime := entry.Memory.EventTime.UTC()
 	eventTerms := []string{
 		strings.ToLower(eventTime.Format("January")),
 		strings.ToLower(eventTime.Format("Jan")),
+		strings.ToLower(eventTime.Format("Monday")),
+		strings.ToLower(eventTime.Format("Mon")),
 		strconv.Itoa(eventTime.Year()),
 		eventTime.Format("01"),
 		eventTime.Format("02"),
 		eventTime.Format("20060102"),
 	}
-	matched := 0
+	matched := make(map[string]struct{})
 	for _, term := range eventTerms {
 		if _, ok := queryTerms[term]; ok {
-			matched++
+			matched[term] = struct{}{}
 		}
 	}
 	return matched
+}
+
+var focusedCalendarTerms = map[string]struct{}{
+	"january": {}, "jan": {}, "february": {}, "feb": {},
+	"march": {}, "mar": {}, "april": {}, "apr": {},
+	"may": {}, "june": {}, "jun": {}, "july": {}, "jul": {},
+	"august": {}, "aug": {}, "september": {}, "sep": {}, "sept": {},
+	"october": {}, "oct": {}, "november": {}, "nov": {},
+	"december": {}, "dec": {},
+	"monday": {}, "mon": {}, "tuesday": {}, "tue": {}, "tues": {},
+	"wednesday": {}, "wed": {}, "thursday": {}, "thu": {}, "thur": {},
+	"thurs": {}, "friday": {}, "fri": {}, "saturday": {}, "sat": {},
+	"sunday": {}, "sun": {},
+}
+
+func focusedQueryHasCalendarReference(queryTerms map[string]struct{}) bool {
+	for term := range queryTerms {
+		if _, ok := focusedCalendarTerms[term]; ok {
+			return true
+		}
+		switch len(term) {
+		case 4:
+			year, err := strconv.Atoi(term)
+			if err == nil && year >= 1900 && year <= 2100 {
+				return true
+			}
+		case 8:
+			if _, err := time.Parse("20060102", term); err == nil {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func hybridResultHead(
