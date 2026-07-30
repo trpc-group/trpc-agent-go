@@ -172,6 +172,33 @@ func writeTestFile(t *testing.T, path string, data []byte) {
 	}
 }
 
+func requireWorktreeExecutableBits(t *testing.T, path string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("worktree executable bits are not portable on Windows")
+	}
+	if err := os.Chmod(path, 0o700); err != nil {
+		t.Skipf("chmod executable unavailable: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm()&0o111 == 0 {
+		t.Skipf("filesystem does not preserve executable mode: %04o", info.Mode().Perm())
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	info, err = os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm()&0o111 != 0 {
+		t.Skipf("filesystem does not clear executable mode: %04o", info.Mode().Perm())
+	}
+}
+
 func requireError(t *testing.T, name string, err error) {
 	t.Helper()
 	if err == nil {
@@ -423,6 +450,34 @@ func TestCollectFilesDiffUsesFinalTrackedWorktree(t *testing.T) {
 	}
 }
 
+func TestLoadFilesModeAllowsDeletedTrackedFile(t *testing.T) {
+	requireTestGit(t)
+	root := t.TempDir()
+	runTestGit(t, root, "init", "--quiet")
+	runTestGit(t, root, "config", "user.email", "review@example.com")
+	runTestGit(t, root, "config", "user.name", "Review Test")
+	writeTestFile(t, filepath.Join(root, "deleted.go"), []byte("package demo\n"))
+	runTestGit(t, root, "add", "deleted.go")
+	runTestGit(t, root, "commit", "--quiet", "-m", "initial")
+	if err := os.Remove(filepath.Join(root, "deleted.go")); err != nil {
+		t.Fatal(err)
+	}
+	list := filepath.Join(t.TempDir(), "files.txt")
+	writeTestFile(t, list, []byte("deleted.go\n"))
+
+	summary := mustLoad(t, Config{RepoPath: root, FilesFile: list, Limits: testLimits()})
+	defer assertSnapshotCleanup(t, summary.RepoRoot, summary.Cleanup)
+	if summary.Kind != "files" || len(summary.Files) != 1 || !summary.Files[0].Deleted {
+		t.Fatalf("summary = %#v, files = %#v", summary.Metadata(), summary.Files)
+	}
+	if !bytes.Contains(summary.RawDiff, []byte("+++ /dev/null")) {
+		t.Fatalf("deleted-file diff missing /dev/null target:\n%s", summary.RawDiff)
+	}
+	if _, err := os.Stat(filepath.Join(summary.RepoRoot, "deleted.go")); !os.IsNotExist(err) {
+		t.Fatalf("snapshot contains deleted file: %v", err)
+	}
+}
+
 func TestCollectFilesDiffFallsBackWithoutHead(t *testing.T) {
 	for _, test := range []struct {
 		name    string
@@ -560,6 +615,12 @@ func TestInputErrorAndBoundaryBranches(t *testing.T) {
 	writeTestFile(t, listPath, []byte("../outside.go\n"))
 	_, err = readFileList(root, listPath, testLimits())
 	requireError(t, "escaping file-list path", err)
+	if err := os.Mkdir(filepath.Join(root, "listed-dir"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, listPath, []byte("listed-dir\n"))
+	_, err = readFileList(root, listPath, testLimits())
+	requireError(t, "directory file-list path", err)
 	_, err = newFilesDiff(root, []string{"missing.go"}, testLimits())
 	requireError(t, "missing listed file", err)
 	limits = testLimits()
@@ -779,7 +840,7 @@ func TestLoadFilesSnapshotCanOptInIgnoredFile(t *testing.T) {
 	}
 }
 
-func TestRepositoryInventoryUsesGitModesAndSkipsGitlinks(t *testing.T) {
+func TestRepositoryInventorySkipsGitlinks(t *testing.T) {
 	requireTestGit(t)
 	root := t.TempDir()
 	runTestGit(t, root, "init", "--quiet")
@@ -793,13 +854,47 @@ func TestRepositoryInventoryUsesGitModesAndSkipsGitlinks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(inventory) != 1 || inventory[0].Path != "helper.sh" || !inventory[0].Executable {
+	if len(inventory) != 1 || inventory[0].Path != "helper.sh" {
 		t.Fatalf("inventory = %#v", inventory)
+	}
+}
+
+func TestRepositoryInventoryPreservesWorktreeExecutableMode(t *testing.T) {
+	requireTestGit(t)
+	root := t.TempDir()
+	runTestGit(t, root, "init", "--quiet")
+	path := filepath.Join(root, "helper.sh")
+	writeTestFile(t, path, []byte("#!/bin/sh\nexit 0\n"))
+	requireWorktreeExecutableBits(t, path)
+	runTestGit(t, root, "add", "helper.sh")
+	runTestGit(t, root, "update-index", "--chmod=-x", "helper.sh")
+	if err := os.Chmod(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	inventory, err := repositoryInventory(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inventory) != 1 || inventory[0].Path != "helper.sh" || !inventory[0].Executable {
+		t.Fatalf("inventory with worktree +x = %#v", inventory)
 	}
 	summary := mustLoad(t, Config{RepoPath: root, Limits: testLimits()})
 	defer assertSnapshotCleanup(t, summary.RepoRoot, summary.Cleanup)
 	if !slices.Equal(summary.ExecutablePaths, []string{"helper.sh"}) {
 		t.Fatalf("executable paths = %v", summary.ExecutablePaths)
+	}
+
+	runTestGit(t, root, "update-index", "--chmod=+x", "helper.sh")
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	inventory, err = repositoryInventory(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inventory) != 1 || inventory[0].Path != "helper.sh" || inventory[0].Executable {
+		t.Fatalf("inventory with worktree non-executable = %#v", inventory)
 	}
 }
 

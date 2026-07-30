@@ -142,9 +142,12 @@ func readFileList(root, listPath string, limits Limits) (paths []string, resultE
 		if item == "" {
 			continue
 		}
-		clean, cleanErr := cleanRelativePath(root, item)
+		clean, cleanErr := cleanSnapshotPath(item)
 		if cleanErr != nil {
 			return nil, cleanErr
+		}
+		if err := validateExistingFileListPath(root, clean); err != nil {
+			return nil, err
 		}
 		paths = append(paths, clean)
 		if len(paths) > limits.MaxFiles {
@@ -153,6 +156,21 @@ func readFileList(root, listPath string, limits Limits) (paths []string, resultE
 	}
 	return paths, scanner.Err()
 }
+
+func validateExistingFileListPath(root, path string) error {
+	info, err := os.Stat(filepath.Join(root, filepath.FromSlash(path)))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("path is not a regular file: %q", path)
+	}
+	return nil
+}
+
 func newFilesDiff(root string, paths []string, limits Limits) ([]byte, error) {
 	var result bytes.Buffer
 	for _, path := range paths {
@@ -289,7 +307,7 @@ func selectedTrackedPaths(
 			if len(rawPath) == 0 {
 				continue
 			}
-			path, cleanErr := cleanRelativePath(root, string(rawPath))
+			path, cleanErr := cleanSnapshotPath(string(rawPath))
 			if cleanErr != nil {
 				return nil, cleanErr
 			}
@@ -509,14 +527,30 @@ func repositoryInventory(ctx context.Context, root string) ([]snapshotEntry, err
 		if cleanErr != nil {
 			return nil, cleanErr
 		}
-		_, statErr := os.Lstat(filepath.Join(root, filepath.FromSlash(path)))
+		absPath := filepath.Join(root, filepath.FromSlash(path))
+		pathInfo, statErr := os.Lstat(absPath)
 		if os.IsNotExist(statErr) {
 			continue
 		}
 		if statErr != nil {
 			return nil, statErr
 		}
-		seen[path] = snapshotEntry{Path: path, Executable: mode == "100755"}
+		entryInfo := pathInfo
+		if pathInfo.Mode()&os.ModeSymlink != 0 {
+			if resolved, resolveErr := os.Stat(absPath); resolveErr == nil {
+				entryInfo = resolved
+			} else {
+				seen[path] = snapshotEntry{Path: path, Executable: mode == "100755"}
+				if len(seen) > maxSnapshotFiles {
+					return nil, fmt.Errorf("repository exceeds %d files", maxSnapshotFiles)
+				}
+				continue
+			}
+		}
+		if pathInfo.Mode()&os.ModeSymlink == 0 && !entryInfo.Mode().IsRegular() {
+			return nil, fmt.Errorf("unsupported repository file: %s", absPath)
+		}
+		seen[path] = snapshotEntry{Path: path, Executable: worktreeExecutable(entryInfo, mode)}
 		if len(seen) > maxSnapshotFiles {
 			return nil, fmt.Errorf("repository exceeds %d files", maxSnapshotFiles)
 		}
@@ -552,6 +586,14 @@ func repositoryInventory(ctx context.Context, root string) ([]snapshotEntry, err
 	return result, nil
 }
 
+func worktreeExecutable(info os.FileInfo, indexMode string) bool {
+	executable := info.Mode().Perm()&0o111 != 0
+	if runtime.GOOS == "windows" && !executable {
+		return indexMode == "100755"
+	}
+	return executable
+}
+
 func mergeInventory(root string, inventory []snapshotEntry, explicit []string) ([]snapshotEntry, error) {
 	seen := make(map[string]snapshotEntry, len(inventory)+len(explicit))
 	for _, entry := range inventory {
@@ -567,6 +609,9 @@ func mergeInventory(root string, inventory []snapshotEntry, explicit []string) (
 		}
 		info, err := os.Stat(filepath.Join(root, filepath.FromSlash(path)))
 		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
 			return nil, err
 		}
 		seen[path] = snapshotEntry{Path: path, Executable: info.Mode().Perm()&0o111 != 0}
@@ -627,7 +672,7 @@ type Summary struct {
 	// ModuleHints includes changed Go packages and module metadata directories.
 	// It is ephemeral execution input and is not persisted as package metadata.
 	ModuleHints []string
-	// ExecutablePaths preserves Git index execution semantics for staging.
+	// ExecutablePaths preserves effective worktree execution semantics for staging.
 	ExecutablePaths []string
 	Sources         map[string][]byte
 	RawDiff         []byte

@@ -390,15 +390,16 @@ func TestMemoryStoresAreIsolated(t *testing.T) {
 
 func createLegacyDatabase(t *testing.T, path string) *sql.DB {
 	t.Helper()
+	initialSchema := strings.ReplaceAll(migrations.InitialSchema, "\r\n", "\n")
 	legacySchema := strings.Replace(
-		migrations.InitialSchema,
+		initialSchema,
 		"    error TEXT NOT NULL,\n"+
 			"    result_sha256 TEXT NOT NULL DEFAULT '',\n"+
 			"    result_size_bytes INTEGER NOT NULL DEFAULT 0 CHECK (result_size_bytes >= 0)\n",
 		"    error TEXT NOT NULL\n",
 		1,
 	)
-	if legacySchema == migrations.InitialSchema {
+	if legacySchema == initialSchema {
 		t.Fatal("legacy schema replacement did not match")
 	}
 	database, err := sql.Open(driverName, path)
