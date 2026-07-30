@@ -46,7 +46,6 @@ type focusedTailResult struct {
 	entry           *memory.Entry
 	matchedTerms    int
 	eventTimeTerms  int
-	passageTerms    int
 	temporalEpisode bool
 }
 
@@ -132,7 +131,7 @@ func rankFocusedTail(
 			assistantresult.Is(entry.Memory.Memory) {
 			continue
 		}
-		contentMatches, passageTerms := bestFocusedPassageMatchTerms(
+		contentMatches, _ := bestFocusedPassageMatchTerms(
 			queryTerms, entry.Memory.Memory,
 		)
 		eventMatches := focusedEventTimeMatchTerms(queryTerms, entry)
@@ -155,7 +154,6 @@ func rankFocusedTail(
 			entry:           entry,
 			matchedTerms:    distinctContentMatches,
 			eventTimeTerms:  len(eventMatches),
-			passageTerms:    passageTerms,
 			temporalEpisode: entry.Memory.Kind == memory.KindEpisode,
 		})
 	}
@@ -180,7 +178,7 @@ func rankFocusedTail(
 		if left.matchedTerms != right.matchedTerms {
 			return left.matchedTerms > right.matchedTerms
 		}
-		return left.passageTerms < right.passageTerms
+		return false
 	})
 
 	results := make([]*memory.Entry, 0, len(ranked))

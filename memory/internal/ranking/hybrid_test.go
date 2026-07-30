@@ -70,6 +70,11 @@ func TestMergeHybridBackfillsTemporalSequenceTail(t *testing.T) {
 				"Met a curator at the Museum of Contemporary Art.",
 				memory.KindEpisode,
 			),
+			entry(
+				"tail-shorter-distractor",
+				"Museum lecture.",
+				memory.KindEpisode,
+			),
 		},
 		nil,
 		0,
