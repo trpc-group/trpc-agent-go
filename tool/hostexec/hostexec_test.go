@@ -104,6 +104,31 @@ func TestNewToolSet_ForegroundHonorsMaxLines(t *testing.T) {
 	}
 }
 
+func TestNewToolSet_ForegroundEnforcesMaxOutputBytes(t *testing.T) {
+	if _, _, err := shellSpec(); err != nil {
+		t.Skip(err.Error())
+	}
+
+	set, err := NewToolSet()
+	require.NoError(t, err)
+	defer set.Close()
+
+	execTool, _, _, _ := toolSetTools(t, set)
+	out, err := execTool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"command":          "printf 0123456789",
+			"yield_time_ms":    0,
+			"max_output_bytes": 5,
+		}),
+	)
+	require.NoError(t, err)
+
+	res := out.(map[string]any)
+	require.Equal(t, "01234", outputField(res))
+	require.Equal(t, true, res["truncated"])
+}
+
 func TestNewToolSet_BaseDirAndRelativeWorkdir(t *testing.T) {
 	if _, _, err := shellSpec(); err != nil {
 		t.Skip(err.Error())
@@ -1138,6 +1163,20 @@ func TestSession_HelpersAndBranches(t *testing.T) {
 	require.Equal(t, programStatusExited, exited.Status)
 	require.NotNil(t, exited.ExitCode)
 	require.Equal(t, 7, *exited.ExitCode)
+}
+
+func TestSession_MaxOutputBytes(t *testing.T) {
+	sess := newSession("bounded", "printf", defaultMaxLines)
+	sess.maxOutputBytes = 5
+
+	sess.appendOutput("abc")
+	sess.appendOutput("def")
+
+	out, _ := sess.allOutput()
+	require.Equal(t, "abcde", out)
+	require.True(t, sess.wasTruncated())
+	poll := sess.poll(nil)
+	require.True(t, poll.Truncated)
 }
 
 func TestSession_WriteAndCloseBranches(t *testing.T) {

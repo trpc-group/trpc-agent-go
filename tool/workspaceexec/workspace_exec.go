@@ -26,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/envscrub"
+	"trpc.group/trpc-go/trpc-agent-go/internal/outputlimit"
 	"trpc.group/trpc-go/trpc-agent-go/internal/programsession"
 	"trpc.group/trpc-go/trpc-agent-go/internal/shellsafe"
 	"trpc.group/trpc-go/trpc-agent-go/internal/workspacefacade"
@@ -41,6 +42,7 @@ const (
 	defaultWorkspaceExecTimeout = 5 * time.Minute
 	defaultWorkspaceWriteYield  = 200
 	outputTruncatedMarker       = "\n...[output truncated]...\n"
+	defaultWorkspaceMaxOutput   = 4 << 20
 )
 
 // Environment variables that mirror the option names; useful for
@@ -99,26 +101,30 @@ type KillSessionTool struct {
 type execSession struct {
 	mu sync.Mutex
 
-	proc        codeexecutor.ProgramSession
-	handle      codeexecutor.WorkspaceHandle
-	exitedAt    time.Time
-	finalized   bool
-	finalizedAt time.Time
+	proc           codeexecutor.ProgramSession
+	handle         codeexecutor.WorkspaceHandle
+	maxOutputBytes int
+	outputBytes    int
+	truncated      bool
+	exitedAt       time.Time
+	finalized      bool
+	finalizedAt    time.Time
 }
 
 type execInput struct {
-	Command       string            `json:"command"`
-	Cwd           string            `json:"cwd,omitempty"`
-	Env           map[string]string `json:"env,omitempty"`
-	Stdin         string            `json:"stdin,omitempty"`
-	YieldTimeMS   *int              `json:"yield_time_ms,omitempty"`
-	YieldMs       *int              `json:"yieldMs,omitempty"`
-	Background    bool              `json:"background,omitempty"`
-	Timeout       int               `json:"timeout,omitempty"`
-	TimeoutSec    *int              `json:"timeout_sec,omitempty"`
-	TimeoutSecOld *int              `json:"timeoutSec,omitempty"`
-	TTY           *bool             `json:"tty,omitempty"`
-	PTY           *bool             `json:"pty,omitempty"`
+	Command        string            `json:"command"`
+	Cwd            string            `json:"cwd,omitempty"`
+	Env            map[string]string `json:"env,omitempty"`
+	Stdin          string            `json:"stdin,omitempty"`
+	YieldTimeMS    *int              `json:"yield_time_ms,omitempty"`
+	YieldMs        *int              `json:"yieldMs,omitempty"`
+	Background     bool              `json:"background,omitempty"`
+	Timeout        int               `json:"timeout,omitempty"`
+	TimeoutSec     *int              `json:"timeout_sec,omitempty"`
+	TimeoutSecOld  *int              `json:"timeoutSec,omitempty"`
+	MaxOutputBytes int               `json:"max_output_bytes,omitempty"`
+	TTY            *bool             `json:"tty,omitempty"`
+	PTY            *bool             `json:"pty,omitempty"`
 }
 
 type writeInput struct {
@@ -501,6 +507,11 @@ func (t *ExecTool) Declaration() *tool.Declaration {
 			Type:        "integer",
 			Description: "Alias for timeout_sec.",
 		},
+		"max_output_bytes": {
+			Type: "integer",
+			Description: "Maximum combined stdout and stderr bytes " +
+				"retained for this execution.",
+		},
 	}
 	if t.sessional {
 		props["yield_time_ms"] = &tool.Schema{
@@ -621,6 +632,9 @@ func parseExecInput(args []byte) (execInput, error) {
 	if strings.TrimSpace(in.Command) == "" {
 		return execInput{}, errors.New("command is required")
 	}
+	if in.MaxOutputBytes < 0 {
+		return execInput{}, errors.New("max_output_bytes must not be negative")
+	}
 	return in, nil
 }
 
@@ -647,19 +661,24 @@ func (t *ExecTool) prepareExec(
 	if timeout <= 0 {
 		timeout = in.Timeout
 	}
+	maxOutputBytes := in.MaxOutputBytes
+	if maxOutputBytes == 0 {
+		maxOutputBytes = defaultWorkspaceMaxOutput
+	}
 	return execRequest{
 		background: in.Background,
 		tty:        firstBoolValue(in.TTY, in.PTY),
 		yield:      firstIntPtr(in.YieldTimeMS, in.YieldMs),
 		eng:        eng,
 		spec: codeexecutor.RunProgramSpec{
-			Cmd:      "sh",
-			Args:     shellArgsForPolicy(policyActive, in.Command),
-			Env:      envForPolicy(policyActive, in.Env),
-			CleanEnv: policyActive,
-			Cwd:      cwd,
-			Stdin:    in.Stdin,
-			Timeout:  execTimeout(timeout),
+			Cmd:            "sh",
+			Args:           shellArgsForPolicy(policyActive, in.Command),
+			Env:            envForPolicy(policyActive, in.Env),
+			CleanEnv:       policyActive,
+			Cwd:            cwd,
+			Stdin:          in.Stdin,
+			Timeout:        execTimeout(timeout),
+			MaxOutputBytes: maxOutputBytes,
 		},
 	}, nil
 }
@@ -861,12 +880,17 @@ func runOneShot(
 	if err != nil {
 		return execOutput{}, err
 	}
+	combined := combineOutput(rr.Stdout, rr.Stderr)
+	combined, outerTruncated := outputlimit.TruncateString(
+		combined, spec.MaxOutputBytes,
+	)
 	return execOutput{
 		Status:     codeexecutor.ProgramStatusExited,
-		Output:     combineOutput(rr.Stdout, rr.Stderr),
+		Output:     combined,
 		ExitCode:   intPtrValue(rr.ExitCode),
 		Offset:     0,
 		NextOffset: 0,
+		Truncated:  rr.Truncated || outerTruncated,
 	}, nil
 }
 
@@ -891,11 +915,14 @@ func (t *ExecTool) startInteractive(
 	if err != nil {
 		return execOutput{}, err
 	}
-	t.putSession(proc.ID(), &execSession{
-		proc:   proc,
-		handle: req.workspaceHandle,
-	})
+	sess := &execSession{
+		proc:           proc,
+		handle:         req.workspaceHandle,
+		maxOutputBytes: req.spec.MaxOutputBytes,
+	}
+	t.putSession(proc.ID(), sess)
 	poll := initialPoll(proc, req.background, req.yield)
+	poll = sess.limitPoll(poll)
 	out := pollOutput(proc.ID(), poll)
 	out = t.limitOutput(out)
 	if poll.Status == codeexecutor.ProgramStatusExited {
@@ -953,6 +980,7 @@ func (t *WriteStdinTool) Call(ctx context.Context, args []byte) (any, error) {
 		writeYield(yield),
 		programsession.PollLineLimit(0),
 	)
+	poll = sess.limitPoll(poll)
 	out := pollOutput(sessionID, poll)
 	out = t.exec.limitOutput(out)
 	if poll.Status == codeexecutor.ProgramStatusExited {
@@ -1202,6 +1230,7 @@ func pollOutput(sessionID string, poll codeexecutor.ProgramPoll) execOutput {
 		ExitCode:   poll.ExitCode,
 		Offset:     poll.Offset,
 		NextOffset: poll.NextOffset,
+		Truncated:  poll.Truncated,
 	}
 	if poll.Status == codeexecutor.ProgramStatusRunning {
 		out.SessionID = sessionID
@@ -1265,6 +1294,34 @@ func utf8Suffix(s string, maxBytes int) string {
 		start++
 	}
 	return s[start:]
+}
+
+func (s *execSession) limitPoll(
+	poll codeexecutor.ProgramPoll,
+) codeexecutor.ProgramPoll {
+	if s == nil {
+		return poll
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	remaining := s.maxOutputBytes - s.outputBytes
+	if remaining < 0 {
+		remaining = 0
+	}
+	var truncated bool
+	if s.maxOutputBytes > 0 && remaining == 0 && poll.Output != "" {
+		poll.Output = ""
+		truncated = true
+	} else {
+		poll.Output, truncated = outputlimit.TruncateString(
+			poll.Output, remaining,
+		)
+	}
+	s.outputBytes += len(poll.Output)
+	s.truncated = s.truncated || poll.Truncated || truncated
+	poll.Truncated = s.truncated
+	return poll
 }
 
 func execTimeout(raw int) time.Duration {

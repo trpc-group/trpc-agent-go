@@ -74,6 +74,25 @@ func TestExecTool_ExecutesWithoutSkillsRepo(t *testing.T) {
 	require.Empty(t, out.SessionID)
 }
 
+func TestExecTool_EnforcesMaxOutputBytes(t *testing.T) {
+	tl := NewExecTool(localexec.New())
+
+	args := execInput{
+		Command:        "printf 0123456789",
+		Timeout:        timeoutSecSmall,
+		MaxOutputBytes: 5,
+	}
+	enc, err := json.Marshal(args)
+	require.NoError(t, err)
+
+	res, err := tl.Call(context.Background(), enc)
+	require.NoError(t, err)
+
+	out := res.(execOutput)
+	require.Equal(t, "01234", out.Output)
+	require.True(t, out.Truncated)
+}
+
 func TestExecTool_Declaration_DescribesGeneralShellUsage(t *testing.T) {
 	tl := NewExecTool(localexec.New())
 
