@@ -83,6 +83,8 @@ Each memory query declares `ExpectedContents`. Search results are compared as an
 
 Memory operation aliases follow canonical memory identity rather than content alone. Add aliases include app, user, content, kind, event time, participants, and location while intentionally excluding topics. An update always advances its referenced alias to the effective ID returned by the backend, so a later update or delete does not reuse an ID that was rotated after content or identity metadata changed.
 
+Snapshot construction returns an error when an event cannot be normalized, a memory entry is nil, or an entry has a nil `Memory` payload. These conditions indicate malformed fixtures or backend corruption; they are never discarded during normalization and cannot be accepted with `allowed_diff`.
+
 Cases with app, user, or session state also validate each scope as a backend contract. The runner reads app and user state separately, creates a temporary peer session under the same app/user, and requires the peer to inherit only app/user values. The peer is deleted on every return path. Missing propagation, leaked session/temp state, and cleanup failures are runner errors; they are not snapshot differences and cannot be accepted with `allowed_diff`.
 
 ## Summary And Track Strategy
@@ -162,7 +164,7 @@ When adding a backend:
 
 - keep default local tests free of external-service dependencies
 - give the backend a non-empty name with no surrounding whitespace; the name is the report and `allowed_diff` identity
-- configure a positive `Backend.MemoryReadLimit` supported by that memory service; alias resolution and final snapshots share this limit, and the runner fails instead of comparing results when the returned entry count reaches the limit
+- provide `Backend.ReadAllMemories`; alias resolution and final snapshots share this callback, and it must return `complete=true` only after backend-specific pagination, total-count validation, or a documented unbounded read proves that every memory was returned
 - normalize backend-generated IDs and response timing metadata while preserving caller-supplied event timestamps
 - preserve summary and track semantics across backends
 - prove new backend differences are precisely locatable through anomaly tests before considering `allowed_diff`

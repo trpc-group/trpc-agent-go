@@ -43,12 +43,18 @@ type Backend struct {
 	SessionService session.Service
 	TrackService   session.TrackService
 	MemoryService  memory.Service
-	// MemoryReadLimit is the positive backend-supported limit used for alias
-	// resolution and final snapshots. It must exceed the number of memories a
-	// replay case can return so truncated results are never compared.
-	MemoryReadLimit int
+	// ReadAllMemories must return every memory for the requested user. Complete
+	// must be true only when the backend-specific adapter has proved that the
+	// read is exhaustive; Run rejects unconfirmed partial reads.
+	ReadAllMemories ReadAllMemoriesFunc
 	SetSummaryText  func(string)
 }
+
+// ReadAllMemoriesFunc performs a backend-specific exhaustive memory read.
+type ReadAllMemoriesFunc func(
+	ctx context.Context,
+	userKey memory.UserKey,
+) (entries []*memory.Entry, complete bool, err error)
 
 // MemoryOperation identifies a memory mutation used by a replay case.
 type MemoryOperation string
@@ -100,6 +106,12 @@ type TrackSpec struct {
 	// Payload accepts any JSON-marshalable value, including arrays and scalars.
 	Payload   any
 	Timestamp time.Time
+}
+
+type preparedTrack struct {
+	name      string
+	payload   json.RawMessage
+	timestamp time.Time
 }
 
 // Case is a backend-independent replay scenario.
@@ -232,6 +244,10 @@ func Run(ctx context.Context, backend Backend, tc Case) (Result, error) {
 	if err := validateBackend(backend); err != nil {
 		return Result{}, err
 	}
+	tracks, err := prepareTracks(backend, tc)
+	if err != nil {
+		return Result{}, err
+	}
 	key := replayKey(tc.Name)
 	if err := createSessionAndState(ctx, backend, key, tc); err != nil {
 		return Result{}, err
@@ -239,7 +255,7 @@ func Run(ctx context.Context, backend Backend, tc Case) (Result, error) {
 	if err := runEventSummaryTimeline(ctx, backend, key, tc); err != nil {
 		return Result{}, err
 	}
-	if err := appendTracks(ctx, backend, key, tc); err != nil {
+	if err := appendTracks(ctx, backend, key, tc.Name, tracks); err != nil {
 		return Result{}, err
 	}
 	userKey := memory.UserKey{AppName: key.AppName, UserID: key.UserID}
@@ -269,11 +285,8 @@ func validateBackend(backend Backend) error {
 	if backend.MemoryService == nil {
 		return fmt.Errorf("replay backend %q has nil memory service", backend.Name)
 	}
-	if backend.MemoryReadLimit <= 0 {
-		return fmt.Errorf(
-			"replay backend %q has non-positive memory read limit %d",
-			backend.Name, backend.MemoryReadLimit,
-		)
+	if backend.ReadAllMemories == nil {
+		return fmt.Errorf("replay backend %q has nil ReadAllMemories", backend.Name)
 	}
 	return nil
 }
@@ -374,28 +387,47 @@ func appendEventRange(ctx context.Context, backend Backend, key session.Key, tc 
 	return nil
 }
 
-func appendTracks(ctx context.Context, backend Backend, key session.Key, tc Case) error {
+func prepareTracks(backend Backend, tc Case) ([]preparedTrack, error) {
+	if len(tc.Tracks) == 0 {
+		return nil, nil
+	}
+	if backend.TrackService == nil {
+		return nil, fmt.Errorf("track 0 for case %q requires track service", tc.Name)
+	}
+	prepared := make([]preparedTrack, 0, len(tc.Tracks))
 	for i, spec := range tc.Tracks {
-		if backend.TrackService == nil {
-			return fmt.Errorf("track %d for case %q requires track service", i, tc.Name)
-		}
 		if strings.TrimSpace(spec.Name) == "" {
-			return fmt.Errorf("track %d for case %q has empty name", i, tc.Name)
-		}
-		got, err := backend.SessionService.GetSession(ctx, key)
-		if err != nil {
-			return fmt.Errorf("get session before track %d for case %q: %w", i, tc.Name, err)
+			return nil, fmt.Errorf("track %d for case %q has empty name", i, tc.Name)
 		}
 		payload, err := json.Marshal(spec.Payload)
 		if err != nil {
-			return fmt.Errorf("marshal track %d for case %q: %w", i, tc.Name, err)
+			return nil, fmt.Errorf("marshal track %d for case %q: %w", i, tc.Name, err)
+		}
+		prepared = append(prepared, preparedTrack{
+			name: spec.Name, payload: payload, timestamp: spec.Timestamp,
+		})
+	}
+	return prepared, nil
+}
+
+func appendTracks(
+	ctx context.Context,
+	backend Backend,
+	key session.Key,
+	caseName string,
+	tracks []preparedTrack,
+) error {
+	for i, track := range tracks {
+		got, err := backend.SessionService.GetSession(ctx, key)
+		if err != nil {
+			return fmt.Errorf("get session before track %d for case %q: %w", i, caseName, err)
 		}
 		if err := backend.TrackService.AppendTrackEvent(ctx, got, &session.TrackEvent{
-			Track:     session.Track(spec.Name),
-			Payload:   payload,
-			Timestamp: spec.Timestamp,
+			Track:     session.Track(track.name),
+			Payload:   track.payload,
+			Timestamp: track.timestamp,
 		}); err != nil {
-			return fmt.Errorf("append track %d for case %q: %w", i, tc.Name, err)
+			return fmt.Errorf("append track %d for case %q: %w", i, caseName, err)
 		}
 	}
 	return nil
@@ -405,7 +437,7 @@ func applyMemoryOperations(ctx context.Context, backend Backend, userKey memory.
 	aliases := make(map[string]string)
 	for i, op := range tc.Memories {
 		if err := applyMemoryOp(
-			ctx, backend.MemoryService, backend.MemoryReadLimit, userKey, aliases, op,
+			ctx, backend.MemoryService, backend.ReadAllMemories, userKey, aliases, op,
 		); err != nil {
 			return fmt.Errorf("memory operation %d for case %q: %w", i, tc.Name, err)
 		}
@@ -551,11 +583,18 @@ func buildResult(ctx context.Context, backend Backend, key session.Key, userKey 
 	if got == nil {
 		return Result{}, fmt.Errorf("get final session for case %q returned nil", caseName)
 	}
-	memories, err := readMemoriesForReplay(ctx, backend.MemoryService, userKey, backend.MemoryReadLimit)
+	memories, err := readMemoriesForReplay(ctx, backend.ReadAllMemories, userKey)
 	if err != nil {
 		return Result{}, fmt.Errorf("read final memories for case %q: %w", caseName, err)
 	}
-	return Result{Backend: backend.Name, Key: key, Snapshot: BuildSnapshot(got, memories)}, nil
+	snapshot, err := BuildSnapshot(got, memories)
+	if err != nil {
+		return Result{}, fmt.Errorf(
+			"build final snapshot for case %q on backend %q: %w",
+			caseName, backend.Name, err,
+		)
+	}
+	return Result{Backend: backend.Name, Key: key, Snapshot: snapshot}, nil
 }
 
 func createSummary(ctx context.Context, backend Backend, key session.Key, spec SummaryStep) error {
@@ -600,7 +639,7 @@ func createSummary(ctx context.Context, backend Backend, key session.Key, spec S
 func applyMemoryOp(
 	ctx context.Context,
 	service memory.Service,
-	memoryReadLimit int,
+	readAllMemories ReadAllMemoriesFunc,
 	userKey memory.UserKey,
 	aliases map[string]string,
 	op MemoryOp,
@@ -615,7 +654,7 @@ func applyMemoryOp(
 			return err
 		}
 		if op.ResultAlias != "" {
-			id, err := findMemoryID(ctx, service, userKey, op, memoryReadLimit)
+			id, err := findMemoryID(ctx, readAllMemories, userKey, op)
 			if err != nil {
 				return err
 			}
@@ -744,21 +783,17 @@ func canonicalIdentityParticipants(values []string) []string {
 
 func findMemoryID(
 	ctx context.Context,
-	service memory.Service,
+	readAllMemories ReadAllMemoriesFunc,
 	userKey memory.UserKey,
 	op MemoryOp,
-	memoryReadLimit int,
 ) (string, error) {
-	entries, err := readMemoriesForReplay(ctx, service, userKey, memoryReadLimit)
+	entries, err := readMemoriesForReplay(ctx, readAllMemories, userKey)
 	if err != nil {
 		return "", err
 	}
 	want := canonicalMemoryOpIdentity(userKey, op)
 	var matches []string
 	for _, entry := range entries {
-		if entry == nil || entry.Memory == nil {
-			continue
-		}
 		got := newCanonicalMemoryIdentity(entry.AppName, entry.UserID, entry.Memory)
 		if got == want {
 			matches = append(matches, entry.ID)
@@ -780,41 +815,54 @@ func findMemoryID(
 
 func readMemoriesForReplay(
 	ctx context.Context,
-	service memory.Service,
+	readAllMemories ReadAllMemoriesFunc,
 	userKey memory.UserKey,
-	limit int,
 ) ([]*memory.Entry, error) {
-	if limit <= 0 {
-		return nil, fmt.Errorf("memory read limit must be positive, got %d", limit)
-	}
-	entries, err := service.ReadMemories(ctx, userKey, limit)
+	entries, complete, err := readAllMemories(ctx, userKey)
 	if err != nil {
 		return nil, err
 	}
-	if len(entries) >= limit {
-		return nil, fmt.Errorf(
-			"memory read returned %d entries at configured limit %d; increase MemoryReadLimit to avoid truncated replay results",
-			len(entries), limit,
-		)
+	if !complete {
+		return nil, fmt.Errorf("memory read returned %d entries without completeness confirmation", len(entries))
+	}
+	if err := validateMemoryEntries(entries); err != nil {
+		return nil, err
 	}
 	return entries, nil
+}
+
+func validateMemoryEntries(entries []*memory.Entry) error {
+	for i, entry := range entries {
+		if entry == nil {
+			return fmt.Errorf("memory entry %d is nil", i)
+		}
+		if entry.Memory == nil {
+			return fmt.Errorf("memory entry %d has nil Memory", i)
+		}
+	}
+	return nil
 }
 
 func applyMemoriesConcurrently(ctx context.Context, service memory.Service, userKey memory.UserKey, ops []MemoryOp) error {
 	if len(ops) == 0 {
 		return nil
 	}
+	type operationError struct {
+		index int
+		err   error
+	}
 	var wg sync.WaitGroup
-	errCh := make(chan error, len(ops))
+	errCh := make(chan operationError, len(ops))
 	start := make(chan struct{})
-	for _, op := range ops {
+	for i, op := range ops {
+		i := i
 		op := op
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			<-start
 			if op.Operation != MemoryAdd {
-				errCh <- fmt.Errorf("unsupported concurrent memory operation %q", op.Operation)
+				errCh <- operationError{index: i, err: fmt.Errorf("unsupported concurrent memory operation %q", op.Operation)}
 				return
 			}
 			var opts []memory.AddOption
@@ -822,35 +870,50 @@ func applyMemoriesConcurrently(ctx context.Context, service memory.Service, user
 				opts = append(opts, memory.WithMetadata(op.Metadata))
 			}
 			if err := service.AddMemory(ctx, userKey, op.Content, append([]string(nil), op.Topics...), opts...); err != nil {
-				errCh <- err
+				errCh <- operationError{index: i, err: err}
 			}
 		}()
 	}
 	close(start)
 	wg.Wait()
 	close(errCh)
-	for err := range errCh {
-		if err != nil {
-			return err
-		}
+	var failures []operationError
+	for failure := range errCh {
+		failures = append(failures, failure)
 	}
-	return nil
+	if len(failures) == 0 {
+		return nil
+	}
+	sort.Slice(failures, func(i, j int) bool { return failures[i].index < failures[j].index })
+	errs := make([]error, 0, len(failures))
+	for _, failure := range failures {
+		errs = append(errs, fmt.Errorf("concurrent memory operation %d: %w", failure.index, failure.err))
+	}
+	return errors.Join(errs...)
 }
 
 // BuildSnapshot normalizes a session and its memories for stable comparison.
-func BuildSnapshot(sess *session.Session, memories []*memory.Entry) Snapshot {
+func BuildSnapshot(sess *session.Session, memories []*memory.Entry) (Snapshot, error) {
 	if sess == nil {
-		return Snapshot{State: map[string]any{}, Memory: []MemorySnapshot{}, Summary: map[string]SummaryEntry{}, Tracks: []TrackSnapshot{}}
+		return Snapshot{State: map[string]any{}, Memory: []MemorySnapshot{}, Summary: map[string]SummaryEntry{}, Tracks: []TrackSnapshot{}}, nil
 	}
 	events := sess.GetEvents()
+	normalizedEvents, err := normalizeEvents(events)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	normalizedMemories, err := normalizeMemories(memories)
+	if err != nil {
+		return Snapshot{}, err
+	}
 	return Snapshot{
 		Session: SessionSnapshot{ID: sess.ID, App: sess.AppName, UserID: sess.UserID},
-		Events:  normalizeEvents(events),
+		Events:  normalizedEvents,
 		State:   normalizeState(sess.SnapshotState()),
-		Memory:  normalizeMemories(memories),
+		Memory:  normalizedMemories,
 		Summary: normalizeSummaries(cloneSummaries(sess), events),
 		Tracks:  normalizeTracks(cloneTracks(sess)),
-	}
+	}, nil
 }
 
 func cloneSummaries(sess *session.Session) map[string]*session.Summary {
@@ -878,16 +941,16 @@ func cloneTracks(sess *session.Session) map[session.Track]*session.TrackEvents {
 	return out
 }
 
-func normalizeEvents(events []event.Event) []EventSnapshot {
+func normalizeEvents(events []event.Event) ([]EventSnapshot, error) {
 	out := make([]EventSnapshot, 0, len(events))
-	for _, evt := range events {
+	for i, evt := range events {
 		encoded, err := json.Marshal(evt)
 		if err != nil {
-			panic(fmt.Sprintf("marshal replay event: %v", err))
+			return nil, fmt.Errorf("normalize event %d: marshal: %w", i, err)
 		}
 		var normalized map[string]any
 		if err := decodeJSON(encoded, &normalized); err != nil {
-			panic(fmt.Sprintf("unmarshal replay event: %v", err))
+			return nil, fmt.Errorf("normalize event %d: decode: %w", i, err)
 		}
 		delete(normalized, "id")
 		normalized["timestamp"] = normalizeTime(evt.Timestamp)
@@ -904,7 +967,7 @@ func normalizeEvents(events []event.Event) []EventSnapshot {
 		}
 		out = append(out, EventSnapshot(normalized))
 	}
-	return out
+	return out, nil
 }
 
 func normalizeState(state session.StateMap) map[string]any {
@@ -986,34 +1049,36 @@ func canonicalJSON(value any) any {
 	}
 }
 
-func normalizeMemories(entries []*memory.Entry) []MemorySnapshot {
+func normalizeMemories(entries []*memory.Entry) ([]MemorySnapshot, error) {
+	if err := validateMemoryEntries(entries); err != nil {
+		return nil, err
+	}
 	out := make([]MemorySnapshot, 0, len(entries))
-	for _, entry := range entries {
-		if entry == nil {
-			continue
-		}
+	for i, entry := range entries {
 		snapshot := MemorySnapshot{RawID: entry.ID, App: entry.AppName, UserID: entry.UserID}
-		if entry.Memory != nil {
-			snapshot.Content = entry.Memory.Memory
-			snapshot.Topics = sortedStrings(entry.Memory.Topics)
-			snapshot.Kind = string(entry.Memory.Kind)
-			snapshot.EventTime = normalizeTimePtr(entry.Memory.EventTime)
-			snapshot.Participants = sortedStrings(entry.Memory.Participants)
-			snapshot.Location = entry.Memory.Location
+		snapshot.Content = entry.Memory.Memory
+		snapshot.Topics = sortedStrings(entry.Memory.Topics)
+		snapshot.Kind = string(entry.Memory.Kind)
+		snapshot.EventTime = normalizeTimePtr(entry.Memory.EventTime)
+		snapshot.Participants = sortedStrings(entry.Memory.Participants)
+		snapshot.Location = entry.Memory.Location
+		key, err := memoryKey(snapshot)
+		if err != nil {
+			return nil, fmt.Errorf("normalize memory entry %d key: %w", i, err)
 		}
-		snapshot.Key = memoryKey(snapshot)
+		snapshot.Key = key
 		out = append(out, snapshot)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
-	return out
+	return out, nil
 }
 
-func memoryKey(snapshot MemorySnapshot) string {
+func memoryKey(snapshot MemorySnapshot) (string, error) {
 	encoded, err := json.Marshal(snapshot)
 	if err != nil {
-		panic(fmt.Sprintf("marshal replay memory key: %v", err))
+		return "", fmt.Errorf("marshal replay memory key: %w", err)
 	}
-	return string(encoded)
+	return string(encoded), nil
 }
 
 func normalizeSummaries(summaries map[string]*session.Summary, events []event.Event) map[string]SummaryEntry {
@@ -1380,7 +1445,7 @@ func (rule AllowedDiffRule) matches(entry Diff) bool {
 		backendA == "" || backendA == "*" || backendB == "" || backendB == "*" || reason == "" {
 		return false
 	}
-	return section == entry.Section && wildcardMatch(path, entry.Path) && backendRuleMatches(backendA, backendB, entry.BackendA, entry.BackendB)
+	return section == entry.Section && MatchAllowedDiffPath(path, entry.Path) && backendRuleMatches(backendA, backendB, entry.BackendA, entry.BackendB)
 }
 
 func allowedPathHasConcreteSegment(section, path string) bool {
@@ -1484,7 +1549,9 @@ func backendRuleMatches(ruleA, ruleB, entryA, entryB string) bool {
 	return ruleA == entryA && ruleB == entryB || ruleA == entryB && ruleB == entryA
 }
 
-func wildcardMatch(pattern, value string) bool {
+// MatchAllowedDiffPath reports whether a normalized diff path matches an
+// AllowedDiffRule path pattern.
+func MatchAllowedDiffPath(pattern, value string) bool {
 	if pattern == value || pattern == "*" {
 		return true
 	}

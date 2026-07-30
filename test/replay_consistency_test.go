@@ -42,7 +42,7 @@ type backendBundle struct {
 	sessionService    session.Service
 	trackService      session.TrackService
 	memoryService     memory.Service
-	memoryReadLimit   int
+	readAllMemories   replaytest.ReadAllMemoriesFunc
 	sqliteMemoryDB    *sql.DB
 	sqliteMemoryTable string
 	summarizer        *deterministicSummarizer
@@ -201,7 +201,6 @@ var replayBaseTime = time.Now().UTC().Add(24 * time.Hour).Truncate(time.Second)
 
 const (
 	replaySQLiteMemoryTableName = "memories"
-	replayMemoryReadLimit       = 1000
 )
 
 var _ sessionsummary.SessionSummarizer = (*deterministicSummarizer)(nil)
@@ -241,6 +240,13 @@ func openSQLiteDB(t *testing.T, name string) *sql.DB {
 	return db
 }
 
+func completeReplayMemoryReader(service memory.Service) replaytest.ReadAllMemoriesFunc {
+	return func(ctx context.Context, userKey memory.UserKey) ([]*memory.Entry, bool, error) {
+		entries, err := service.ReadMemories(ctx, userKey, 0)
+		return entries, err == nil, err
+	}
+}
+
 func makeReplayBackends(t *testing.T) []backendBundle {
 	t.Helper()
 
@@ -274,7 +280,7 @@ func makeReplayBackends(t *testing.T) []backendBundle {
 			sessionService:  inMemorySessionService,
 			trackService:    inMemorySessionService,
 			memoryService:   inMemoryMemoryService,
-			memoryReadLimit: replayMemoryReadLimit,
+			readAllMemories: completeReplayMemoryReader(inMemoryMemoryService),
 			summarizer:      inMemorySummarizer,
 		},
 		{
@@ -282,7 +288,7 @@ func makeReplayBackends(t *testing.T) []backendBundle {
 			sessionService:    sqliteSessionService,
 			trackService:      sqliteSessionService,
 			memoryService:     sqliteMemoryService,
-			memoryReadLimit:   replayMemoryReadLimit,
+			readAllMemories:   completeReplayMemoryReader(sqliteMemoryService),
 			sqliteMemoryDB:    sqliteMemoryDB,
 			sqliteMemoryTable: replaySQLiteMemoryTableName,
 			summarizer:        sqliteSummarizer,
@@ -305,12 +311,18 @@ func closeReplayBackends(t *testing.T, backends []backendBundle) {
 	}
 }
 
-func makeReplaySnapshot(sess *session.Session, memories []*memory.Entry) replaySnapshot {
-	return replaytest.BuildSnapshot(sess, memories)
+func makeReplaySnapshot(t testing.TB, sess *session.Session, memories []*memory.Entry) replaySnapshot {
+	t.Helper()
+	snapshot, err := replaytest.BuildSnapshot(sess, memories)
+	require.NoError(t, err)
+	return snapshot
 }
 
-func normalizeReplayState(state session.StateMap) map[string]any {
-	return replaytest.BuildSnapshot(&session.Session{State: cloneReplayStateMap(state)}, nil).State
+func normalizeReplayState(t testing.TB, state session.StateMap) map[string]any {
+	t.Helper()
+	snapshot, err := replaytest.BuildSnapshot(&session.Session{State: cloneReplayStateMap(state)}, nil)
+	require.NoError(t, err)
+	return snapshot.State
 }
 
 func normalizeReplayTime(value time.Time) string {
@@ -338,32 +350,6 @@ func diffReplaySnapshots(
 		right,
 		allowedRules,
 	)
-}
-
-func replayWildcardMatch(pattern string, value string) bool {
-	if pattern == value || pattern == "*" {
-		return true
-	}
-	parts := strings.Split(pattern, "*")
-	if len(parts) == 1 {
-		return false
-	}
-	if parts[0] != "" && !strings.HasPrefix(value, parts[0]) {
-		return false
-	}
-	position := len(parts[0])
-	for _, part := range parts[1:] {
-		if part == "" {
-			continue
-		}
-		index := strings.Index(value[position:], part)
-		if index < 0 {
-			return false
-		}
-		position += index + len(part)
-	}
-	last := parts[len(parts)-1]
-	return last == "" || strings.HasSuffix(value, last)
 }
 
 func replayMissingValue() map[string]string {
@@ -419,7 +405,7 @@ func toReplayTestBackend(backend backendBundle) replaytest.Backend {
 		SessionService:  backend.sessionService,
 		TrackService:    backend.trackService,
 		MemoryService:   backend.memoryService,
-		MemoryReadLimit: backend.memoryReadLimit,
+		ReadAllMemories: backend.readAllMemories,
 		SetSummaryText: func(text string) {
 			backend.summarizer.text = text
 		},
@@ -481,17 +467,16 @@ func refreshReplayCaseResultSnapshot(
 	got, err := backend.sessionService.GetSession(ctx, key)
 	require.NoError(t, err)
 	require.NotNil(t, got)
-	memories, err := backend.memoryService.ReadMemories(ctx, memory.UserKey{
+	memories, complete, err := backend.readAllMemories(ctx, memory.UserKey{
 		AppName: key.AppName,
 		UserID:  key.UserID,
-	}, backend.memoryReadLimit)
+	})
 	require.NoError(t, err)
-	require.Less(t, len(memories), backend.memoryReadLimit,
-		"memory snapshot reached configured limit and may be truncated")
+	require.True(t, complete, "memory snapshot read did not confirm completeness")
 	return replayCaseResult{
 		backend:  backend.name,
 		key:      key,
-		snapshot: makeReplaySnapshot(got, memories),
+		snapshot: makeReplaySnapshot(t, got, memories),
 	}
 }
 
@@ -827,7 +812,7 @@ func requireReplayDiff(
 		if diff.Section != section {
 			continue
 		}
-		if !replayWildcardMatch(pathGlob, diff.Path) {
+		if !replaytest.MatchAllowedDiffPath(pathGlob, diff.Path) {
 			continue
 		}
 		matchesContext := true
@@ -1785,8 +1770,8 @@ func replayMemoryMetadata(
 }
 
 func TestReplayConsistencySnapshotNormalize_IgnoresGeneratedFields(t *testing.T) {
-	left := newReplaySnapshotFixture("left", `{"a":1,"b":2}`, `{"a":1,"b":2}`, "raw-left")
-	right := newReplaySnapshotFixture("right", `{"b":2,"a":1}`, `{"b":2,"a":1}`, "raw-right")
+	left := newReplaySnapshotFixture(t, "left", `{"a":1,"b":2}`, `{"a":1,"b":2}`, "raw-left")
+	right := newReplaySnapshotFixture(t, "right", `{"b":2,"a":1}`, `{"b":2,"a":1}`, "raw-right")
 
 	diffs := diffReplaySnapshots(
 		"normalize-generated-fields",
@@ -1803,6 +1788,7 @@ func TestReplayConsistencySnapshotNormalize_IgnoresGeneratedFields(t *testing.T)
 func TestReplayConsistencySnapshotNormalize_UsesSummaryLastEventAnchor(t *testing.T) {
 	t.Run("same semantic anchor ignores raw ids", func(t *testing.T) {
 		left := newReplaySnapshotFixtureWithSummaryAnchor(
+			t,
 			"left",
 			`{"a":1,"b":2}`,
 			`{"a":1,"b":2}`,
@@ -1811,6 +1797,7 @@ func TestReplayConsistencySnapshotNormalize_UsesSummaryLastEventAnchor(t *testin
 			"event-left",
 		)
 		right := newReplaySnapshotFixtureWithSummaryAnchor(
+			t,
 			"left",
 			`{"a":1,"b":2}`,
 			`{"a":1,"b":2}`,
@@ -1833,6 +1820,7 @@ func TestReplayConsistencySnapshotNormalize_UsesSummaryLastEventAnchor(t *testin
 
 	t.Run("missing anchor differs from present anchor", func(t *testing.T) {
 		left := newReplaySnapshotFixtureWithSummaryAnchor(
+			t,
 			"left",
 			`{"a":1,"b":2}`,
 			`{"a":1,"b":2}`,
@@ -1841,6 +1829,7 @@ func TestReplayConsistencySnapshotNormalize_UsesSummaryLastEventAnchor(t *testin
 			"event-left",
 		)
 		right := newReplaySnapshotFixtureWithSummaryAnchor(
+			t,
 			"left",
 			`{"a":1,"b":2}`,
 			`{"a":1,"b":2}`,
@@ -1863,6 +1852,7 @@ func TestReplayConsistencySnapshotNormalize_UsesSummaryLastEventAnchor(t *testin
 
 	t.Run("unmatched anchor uses sentinel", func(t *testing.T) {
 		left := newReplaySnapshotFixtureWithSummaryAnchor(
+			t,
 			"left",
 			`{"a":1,"b":2}`,
 			`{"a":1,"b":2}`,
@@ -1871,6 +1861,7 @@ func TestReplayConsistencySnapshotNormalize_UsesSummaryLastEventAnchor(t *testin
 			"event-left",
 		)
 		right := newReplaySnapshotFixtureWithSummaryAnchor(
+			t,
 			"left",
 			`{"a":1,"b":2}`,
 			`{"a":1,"b":2}`,
@@ -1898,12 +1889,14 @@ func TestReplayConsistencySnapshotNormalize_PreservesLargeJSONNumbers(t *testing
 		rightBig = "9007199254740993"
 	)
 	left := newReplaySnapshotFixture(
+		t,
 		"left",
 		`{"big":`+leftBig+`}`,
 		`{"big":`+leftBig+`}`,
 		"raw-left",
 	)
 	right := newReplaySnapshotFixture(
+		t,
 		"left",
 		`{"big":`+rightBig+`}`,
 		`{"big":`+rightBig+`}`,
@@ -1987,14 +1980,14 @@ func TestReplayConsistencySnapshotNormalize_PreservesStateByteDistinctions(t *te
 		t.Run(tt.name, func(t *testing.T) {
 			left := replaySnapshot{
 				Session: replaySessionSnapshot{ID: "session-1", App: "replay-app", UserID: "user-1"},
-				State:   normalizeReplayState(session.StateMap{"value": tt.left}),
+				State:   normalizeReplayState(t, session.StateMap{"value": tt.left}),
 				Memory:  []replayMemorySnapshot{},
 				Summary: map[string]summaryEntry{},
 				Tracks:  []trackSnapshot{},
 			}
 			right := replaySnapshot{
 				Session: replaySessionSnapshot{ID: "session-1", App: "replay-app", UserID: "user-1"},
-				State:   normalizeReplayState(session.StateMap{"value": tt.right}),
+				State:   normalizeReplayState(t, session.StateMap{"value": tt.right}),
 				Memory:  []replayMemorySnapshot{},
 				Summary: map[string]summaryEntry{},
 				Tracks:  []trackSnapshot{},
@@ -2104,8 +2097,8 @@ func TestReplayConsistencySnapshotDiff_MutationsHavePrecisePaths(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			left := newReplaySnapshotFixture("left", `{"a":1,"b":2}`, `{"a":1,"b":2}`, "raw-left")
-			right := newReplaySnapshotFixture("right", `{"b":2,"a":1}`, `{"b":2,"a":1}`, "raw-right")
+			left := newReplaySnapshotFixture(t, "left", `{"a":1,"b":2}`, `{"a":1,"b":2}`, "raw-left")
+			right := newReplaySnapshotFixture(t, "right", `{"b":2,"a":1}`, `{"b":2,"a":1}`, "raw-right")
 			tt.mutate(&right)
 
 			diffs := diffReplaySnapshots(
@@ -2241,8 +2234,8 @@ func TestReplayConsistencyAnomaly_SnapshotMutations(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			left := newReplaySnapshotFixture("left", `{"a":1,"b":2}`, `{"a":1,"b":2}`, "raw-left")
-			right := newReplaySnapshotFixture("left", `{"a":1,"b":2}`, `{"a":1,"b":2}`, "raw-left")
+			left := newReplaySnapshotFixture(t, "left", `{"a":1,"b":2}`, `{"a":1,"b":2}`, "raw-left")
+			right := newReplaySnapshotFixture(t, "left", `{"a":1,"b":2}`, `{"a":1,"b":2}`, "raw-left")
 			tt.mutate(&right)
 
 			diffs := diffReplaySnapshots(
@@ -2358,8 +2351,8 @@ func TestReplayConsistencyAnomaly_ServiceContractMutationsDetected(t *testing.T)
 }
 
 func TestReplayConsistencyReport_AllowedDiffAndEnvPath(t *testing.T) {
-	left := newReplaySnapshotFixture("left", `{"a":1,"b":2}`, `{"a":1,"b":2}`, "raw-left")
-	right := newReplaySnapshotFixture("right", `{"b":2,"a":1}`, `{"b":2,"a":1}`, "raw-right")
+	left := newReplaySnapshotFixture(t, "left", `{"a":1,"b":2}`, `{"a":1,"b":2}`, "raw-left")
+	right := newReplaySnapshotFixture(t, "right", `{"b":2,"a":1}`, `{"b":2,"a":1}`, "raw-right")
 	right.Memory[0].Content = "likes coffee"
 	reportPath := filepath.Join(t.TempDir(), "replay-report.json")
 	t.Setenv("TRPC_AGENT_REPLAY_REPORT_PATH", reportPath)
@@ -2654,8 +2647,8 @@ func TestReplayConsistencyAnomaly_SQLiteStorageInjection(t *testing.T) {
 }
 
 func TestReplayConsistencyAllowedDiffRules_RequireExplicitMatch(t *testing.T) {
-	left := newReplaySnapshotFixture("left", `{"a":1,"b":2}`, `{"a":1,"b":2}`, "raw-left")
-	right := newReplaySnapshotFixture("left", `{"a":1,"b":2}`, `{"a":1,"b":2}`, "raw-left")
+	left := newReplaySnapshotFixture(t, "left", `{"a":1,"b":2}`, `{"a":1,"b":2}`, "raw-left")
+	right := newReplaySnapshotFixture(t, "left", `{"a":1,"b":2}`, `{"a":1,"b":2}`, "raw-left")
 	right.Memory[0].Content = "likes coffee"
 
 	tests := []struct {
@@ -2901,6 +2894,7 @@ func replayCaseByName(t *testing.T, name string) replayCase {
 }
 
 func newReplaySnapshotFixture(
+	t testing.TB,
 	generated string,
 	stateJSON string,
 	trackPayload string,
@@ -2908,6 +2902,7 @@ func newReplaySnapshotFixture(
 ) replaySnapshot {
 	eventID := "event-" + generated
 	return newReplaySnapshotFixtureWithSummaryAnchor(
+		t,
 		generated,
 		stateJSON,
 		trackPayload,
@@ -2918,6 +2913,7 @@ func newReplaySnapshotFixture(
 }
 
 func newReplaySnapshotFixtureWithSummaryAnchor(
+	t testing.TB,
 	generated string,
 	stateJSON string,
 	trackPayload string,
@@ -3020,5 +3016,5 @@ func newReplaySnapshotFixtureWithSummaryAnchor(
 		CreatedAt: fixed,
 		UpdatedAt: fixed,
 	}}
-	return makeReplaySnapshot(sess, memories)
+	return makeReplaySnapshot(t, sess, memories)
 }

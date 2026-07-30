@@ -29,7 +29,23 @@ import (
 	sessinmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
 
-const testMemoryReadLimit = 1000
+func completeMemoryReader(service memory.Service) ReadAllMemoriesFunc {
+	return func(ctx context.Context, userKey memory.UserKey) ([]*memory.Entry, bool, error) {
+		entries, err := service.ReadMemories(ctx, userKey, 0)
+		return entries, err == nil, err
+	}
+}
+
+func buildSnapshotForTest(
+	t testing.TB,
+	sess *session.Session,
+	memories []*memory.Entry,
+) Snapshot {
+	t.Helper()
+	snapshot, err := BuildSnapshot(sess, memories)
+	require.NoError(t, err)
+	return snapshot
+}
 
 func TestRunRejectsInvalidBackendNames(t *testing.T) {
 	tests := []struct {
@@ -64,32 +80,27 @@ func TestRunRejectsMissingServices(t *testing.T) {
 	memoryService := meminmemory.NewMemoryService()
 	defer memoryService.Close()
 	_, err = Run(ctx, Backend{
-		Name: "zero-memory-limit", SessionService: sessionService,
+		Name: "missing-read-all", SessionService: sessionService,
 		MemoryService: memoryService,
 	}, Case{Name: "invalid"})
-	require.EqualError(t, err, `replay backend "zero-memory-limit" has non-positive memory read limit 0`)
-	_, err = Run(ctx, Backend{
-		Name: "negative-memory-limit", SessionService: sessionService,
-		MemoryService: memoryService, MemoryReadLimit: -1,
-	}, Case{Name: "invalid"})
-	require.EqualError(t, err, `replay backend "negative-memory-limit" has non-positive memory read limit -1`)
+	require.EqualError(t, err, `replay backend "missing-read-all" has nil ReadAllMemories`)
 	got, err := sessionService.GetSession(ctx, replayKey("invalid"))
 	require.NoError(t, err)
 	require.Nil(t, got)
 }
 
-func TestRunUsesConfiguredMemoryReadLimit(t *testing.T) {
+func TestRunUsesReadAllMemoriesForAliasAndFinalSnapshot(t *testing.T) {
 	tests := []struct {
 		name      string
 		tc        Case
 		wantReads int
 		wantFinal string
 	}{
-		{name: "final snapshot", tc: Case{Name: "positive-limit-final"}, wantReads: 1},
+		{name: "final snapshot", tc: Case{Name: "complete-read-final"}, wantReads: 1},
 		{
 			name: "alias and final snapshot",
 			tc: Case{
-				Name: "positive-limit-alias",
+				Name: "complete-read-alias",
 				Memories: []MemoryOp{
 					{Operation: MemoryAdd, Content: "initial", ResultAlias: "memory"},
 					{Operation: MemoryUpdate, Ref: "memory", Content: "updated"},
@@ -104,18 +115,21 @@ func TestRunUsesConfiguredMemoryReadLimit(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			sessionService := sessinmemory.NewSessionService()
 			defer sessionService.Close()
-			memoryService := &positiveLimitMemoryService{Service: meminmemory.NewMemoryService()}
+			memoryService := meminmemory.NewMemoryService()
 			defer memoryService.Close()
+			readCount := 0
+			readAllMemories := func(ctx context.Context, userKey memory.UserKey) ([]*memory.Entry, bool, error) {
+				readCount++
+				entries, err := memoryService.ReadMemories(ctx, userKey, 0)
+				return entries, err == nil, err
+			}
 
 			result, err := Run(context.Background(), Backend{
-				Name: "positive_limit", SessionService: sessionService,
-				MemoryService: memoryService, MemoryReadLimit: testMemoryReadLimit,
+				Name: "complete_read", SessionService: sessionService,
+				MemoryService: memoryService, ReadAllMemories: readAllMemories,
 			}, test.tc)
 			require.NoError(t, err)
-			require.Equal(t, test.wantReads, len(memoryService.limits))
-			for _, limit := range memoryService.limits {
-				require.Equal(t, testMemoryReadLimit, limit)
-			}
+			require.Equal(t, test.wantReads, readCount)
 			if test.wantFinal == "" {
 				require.Empty(t, result.Snapshot.Memory)
 				return
@@ -126,22 +140,74 @@ func TestRunUsesConfiguredMemoryReadLimit(t *testing.T) {
 	}
 }
 
-func TestRunRejectsPotentiallyTruncatedMemoryRead(t *testing.T) {
+func TestRunRejectsMemoryReadWithoutCompletenessConfirmation(t *testing.T) {
 	sessionService := sessinmemory.NewSessionService()
 	defer sessionService.Close()
-	memoryService := &positiveLimitMemoryService{Service: meminmemory.NewMemoryService()}
+	memoryService := meminmemory.NewMemoryService()
 	defer memoryService.Close()
+	readCount := 0
 
 	_, err := Run(context.Background(), Backend{
 		Name: "limited", SessionService: sessionService,
-		MemoryService: memoryService, MemoryReadLimit: 1,
+		MemoryService: memoryService,
+		ReadAllMemories: func(ctx context.Context, userKey memory.UserKey) ([]*memory.Entry, bool, error) {
+			readCount++
+			entries, err := memoryService.ReadMemories(ctx, userKey, 0)
+			return entries, false, err
+		},
 	}, Case{
 		Name:     "truncated-memory",
-		Memories: []MemoryOp{{Operation: MemoryAdd, Content: "at limit"}},
+		Memories: []MemoryOp{{Operation: MemoryAdd, Content: "short read"}},
 	})
 	require.EqualError(t, err,
-		`read final memories for case "truncated-memory": memory read returned 1 entries at configured limit 1; increase MemoryReadLimit to avoid truncated replay results`)
-	require.Equal(t, []int{1}, memoryService.limits)
+		`read final memories for case "truncated-memory": memory read returned 1 entries without completeness confirmation`)
+	require.Equal(t, 1, readCount)
+}
+
+func TestRunRejectsCorruptMemoryReads(t *testing.T) {
+	tests := []struct {
+		name    string
+		entries []*memory.Entry
+		want    string
+	}{
+		{name: "nil entry", entries: []*memory.Entry{nil}, want: "memory entry 0 is nil"},
+		{
+			name: "nil memory",
+			entries: []*memory.Entry{{
+				ID: "broken", AppName: "app", UserID: "user",
+			}},
+			want: "memory entry 0 has nil Memory",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			sessionService := sessinmemory.NewSessionService()
+			defer sessionService.Close()
+			memoryService := meminmemory.NewMemoryService()
+			defer memoryService.Close()
+			readAllMemories := func(context.Context, memory.UserKey) ([]*memory.Entry, bool, error) {
+				return test.entries, true, nil
+			}
+
+			_, err := Run(context.Background(), Backend{
+				Name: "corrupt", SessionService: sessionService,
+				MemoryService: memoryService, ReadAllMemories: readAllMemories,
+			}, Case{Name: "corrupt-final"})
+			require.EqualError(t, err, `read final memories for case "corrupt-final": `+test.want)
+
+			_, err = Run(context.Background(), Backend{
+				Name: "corrupt-alias", SessionService: sessionService,
+				MemoryService: memoryService, ReadAllMemories: readAllMemories,
+			}, Case{
+				Name: "corrupt-alias",
+				Memories: []MemoryOp{{
+					Operation: MemoryAdd, Content: "target", ResultAlias: "target",
+				}},
+			})
+			require.EqualError(t, err, `memory operation 0 for case "corrupt-alias": `+test.want)
+		})
+	}
 }
 
 func TestRunReportsInvalidCaseOperations(t *testing.T) {
@@ -197,7 +263,7 @@ func TestRunReportsInvalidCaseOperations(t *testing.T) {
 			tc: Case{Name: "concurrent-update", ConcurrentMemories: []MemoryOp{{
 				Operation: MemoryUpdate,
 			}}},
-			want: `concurrent memory operations for case "concurrent-update": unsupported concurrent memory operation "update"`,
+			want: `concurrent memory operations for case "concurrent-update": concurrent memory operation 0: unsupported concurrent memory operation "update"`,
 		},
 		{
 			name: "query contents mismatch",
@@ -223,10 +289,43 @@ func TestRunReportsInvalidCaseOperations(t *testing.T) {
 				SessionService:  sessionService,
 				TrackService:    trackService,
 				MemoryService:   memoryService,
-				MemoryReadLimit: testMemoryReadLimit,
+				ReadAllMemories: completeMemoryReader(memoryService),
 			}, test.tc)
 			require.EqualError(t, err, test.want)
+			if len(test.tc.Tracks) > 0 {
+				got, getErr := sessionService.GetSession(context.Background(), replayKey(test.tc.Name))
+				require.NoError(t, getErr)
+				require.Nil(t, got)
+			}
 		})
+	}
+}
+
+func TestApplyMemoriesConcurrentlyAggregatesErrorsDeterministically(t *testing.T) {
+	firstErr := errors.New("first add failed")
+	thirdErr := errors.New("third add failed")
+	service := &concurrentFailureMemoryService{
+		Service: meminmemory.NewMemoryService(),
+		failures: map[string]error{
+			"first": firstErr,
+			"third": thirdErr,
+		},
+	}
+	defer service.Close()
+	userKey := memory.UserKey{AppName: "app", UserID: "user"}
+	ops := []MemoryOp{
+		{Operation: MemoryAdd, Content: "first"},
+		{Operation: MemoryAdd, Content: "success"},
+		{Operation: MemoryAdd, Content: "third"},
+	}
+	want := "concurrent memory operation 0: first add failed\n" +
+		"concurrent memory operation 2: third add failed"
+
+	for i := 0; i < 20; i++ {
+		err := applyMemoriesConcurrently(context.Background(), service, userKey, ops)
+		require.EqualError(t, err, want)
+		require.ErrorIs(t, err, firstErr)
+		require.ErrorIs(t, err, thirdErr)
 	}
 }
 
@@ -289,7 +388,7 @@ func TestRunInterleavesEventsAndSummaries(t *testing.T) {
 	}
 	result, err := Run(context.Background(), Backend{
 		Name: "in_memory", SessionService: sessionService, MemoryService: memoryService,
-		MemoryReadLimit: testMemoryReadLimit,
+		ReadAllMemories: completeMemoryReader(memoryService),
 		SetSummaryText:  func(text string) { summarizer.text = text },
 	}, Case{
 		Name:   "summary-timeline",
@@ -318,7 +417,7 @@ func TestRunAcceptsFullTrackPayloadDomain(t *testing.T) {
 	result, err := Run(context.Background(), Backend{
 		Name: "in_memory", SessionService: sessionService,
 		TrackService: sessionService, MemoryService: memoryService,
-		MemoryReadLimit: testMemoryReadLimit,
+		ReadAllMemories: completeMemoryReader(memoryService),
 	}, Case{
 		Name: "track-payload-domain",
 		Tracks: []TrackSpec{
@@ -374,6 +473,14 @@ func TestRunPropagatesBackendErrors(t *testing.T) {
 			tc:   Case{Name: "read"},
 			want: `read final memories for case "read": read failed`,
 		},
+		{
+			name: "read memories for alias",
+			wrap: func(service *failingMemoryService) { service.readErr = errors.New("alias read failed") },
+			tc: Case{Name: "read-alias", Memories: []MemoryOp{{
+				Operation: MemoryAdd, Content: "memory", ResultAlias: "memory",
+			}}},
+			want: `memory operation 0 for case "read-alias": alias read failed`,
+		},
 	}
 
 	for _, test := range tests {
@@ -387,7 +494,7 @@ func TestRunPropagatesBackendErrors(t *testing.T) {
 				Name:            "in_memory",
 				SessionService:  sessionService,
 				MemoryService:   memoryService,
-				MemoryReadLimit: testMemoryReadLimit,
+				ReadAllMemories: completeMemoryReader(memoryService),
 			}, test.tc)
 			require.EqualError(t, err, test.want)
 		})
@@ -404,7 +511,7 @@ func TestRunAddsAndDeletesAliasedMemory(t *testing.T) {
 		Name:            "in_memory",
 		SessionService:  sessionService,
 		MemoryService:   memoryService,
-		MemoryReadLimit: testMemoryReadLimit,
+		ReadAllMemories: completeMemoryReader(memoryService),
 	}, Case{
 		Name: "delete-memory",
 		Memories: []MemoryOp{
@@ -431,7 +538,7 @@ func TestRunRefreshesUpdatedMemoryAlias(t *testing.T) {
 		Name:            "in_memory",
 		SessionService:  sessionService,
 		MemoryService:   memoryService,
-		MemoryReadLimit: testMemoryReadLimit,
+		ReadAllMemories: completeMemoryReader(memoryService),
 	}, Case{
 		Name: "update-memory-alias",
 		Memories: []MemoryOp{
@@ -455,7 +562,7 @@ func TestRunRejectsEmptyUpdatedMemoryID(t *testing.T) {
 		Name:            "empty_update_result",
 		SessionService:  sessionService,
 		MemoryService:   memoryService,
-		MemoryReadLimit: testMemoryReadLimit,
+		ReadAllMemories: completeMemoryReader(memoryService),
 	}, Case{
 		Name: "empty-update-result",
 		Memories: []MemoryOp{
@@ -478,7 +585,7 @@ func TestRunResolvesAddAliasByCanonicalIdentity(t *testing.T) {
 		Name:            "ordered_memory",
 		SessionService:  sessionService,
 		MemoryService:   memoryService,
-		MemoryReadLimit: testMemoryReadLimit,
+		ReadAllMemories: completeMemoryReader(memoryService),
 	}, Case{
 		Name: "same-content-episodes",
 		Memories: []MemoryOp{
@@ -517,7 +624,7 @@ func TestRunResolvesIdempotentAddAlias(t *testing.T) {
 		Name:            "in_memory",
 		SessionService:  sessionService,
 		MemoryService:   memoryService,
-		MemoryReadLimit: testMemoryReadLimit,
+		ReadAllMemories: completeMemoryReader(memoryService),
 	}, Case{
 		Name: "idempotent-add-alias",
 		Memories: []MemoryOp{
@@ -543,13 +650,13 @@ func TestFindMemoryIDRejectsAmbiguousIdentity(t *testing.T) {
 		}
 	}
 	service := &fixedReadMemoryService{entries: []*memory.Entry{newEntry("z-id"), newEntry("a-id")}}
-	_, err := findMemoryID(context.Background(), service, userKey, MemoryOp{
+	_, err := findMemoryID(context.Background(), completeMemoryReader(service), userKey, MemoryOp{
 		Content: "same episode",
 		Metadata: &memory.Metadata{
 			Kind: memory.KindEpisode, EventTime: &at,
 			Participants: []string{"Alice"}, Location: "Kyoto",
 		},
-	}, testMemoryReadLimit)
+	})
 	require.ErrorContains(t, err, `ambiguous across IDs ["a-id" "z-id"]`)
 }
 
@@ -567,10 +674,20 @@ func TestFindMemoryIDReportsResolutionErrors(t *testing.T) {
 			want:    "read failed",
 		},
 		{
+			name:    "nil entry",
+			service: &fixedReadMemoryService{entries: []*memory.Entry{nil}},
+			want:    "memory entry 0 is nil",
+		},
+		{
+			name: "nil memory",
+			service: &fixedReadMemoryService{entries: []*memory.Entry{{
+				ID: "nil-memory", AppName: "app", UserID: "user",
+			}}},
+			want: "memory entry 0 has nil Memory",
+		},
+		{
 			name: "identity not found",
 			service: &fixedReadMemoryService{entries: []*memory.Entry{
-				nil,
-				{ID: "nil-memory", AppName: "app", UserID: "user"},
 				{ID: "other", AppName: "app", UserID: "user", Memory: &memory.Memory{Memory: "other"}},
 			}},
 			want: "not found",
@@ -586,7 +703,7 @@ func TestFindMemoryIDReportsResolutionErrors(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := findMemoryID(context.Background(), test.service, userKey, op, testMemoryReadLimit)
+			_, err := findMemoryID(context.Background(), completeMemoryReader(test.service), userKey, op)
 			require.ErrorContains(t, err, test.want)
 		})
 	}
@@ -688,7 +805,7 @@ func TestRunValidatesStateScopesAndCleansPeer(t *testing.T) {
 
 	_, err := Run(ctx, Backend{
 		Name: "in_memory", SessionService: sessionService, MemoryService: memoryService,
-		MemoryReadLimit: testMemoryReadLimit,
+		ReadAllMemories: completeMemoryReader(memoryService),
 	}, tc)
 	require.NoError(t, err)
 	peerKey := replayKey(tc.Name)
@@ -740,7 +857,7 @@ func TestRunCleansStateScopePeerAfterCallerCancellation(t *testing.T) {
 
 			_, err := Run(ctx, Backend{
 				Name: "scope_fake", SessionService: sessionService, MemoryService: memoryService,
-				MemoryReadLimit: testMemoryReadLimit,
+				ReadAllMemories: completeMemoryReader(memoryService),
 			}, tc)
 			require.ErrorIs(t, err, context.Canceled)
 			if test.deleteErr != nil {
@@ -847,7 +964,7 @@ func TestRunRejectsIncorrectStateScopes(t *testing.T) {
 
 			_, err := Run(context.Background(), Backend{
 				Name: "scope_fake", SessionService: sessionService, MemoryService: memoryService,
-				MemoryReadLimit: testMemoryReadLimit,
+				ReadAllMemories: completeMemoryReader(memoryService),
 			}, replayStateScopeCase(strings.ReplaceAll(test.name, " ", "-")))
 			require.Error(t, err)
 			for _, want := range test.wantErrors {
@@ -882,21 +999,22 @@ type orderedReadMemoryService struct {
 	memory.Service
 }
 
-type positiveLimitMemoryService struct {
+type concurrentFailureMemoryService struct {
 	memory.Service
-	limits []int
+	failures map[string]error
 }
 
-func (s *positiveLimitMemoryService) ReadMemories(
+func (s *concurrentFailureMemoryService) AddMemory(
 	ctx context.Context,
 	userKey memory.UserKey,
-	limit int,
-) ([]*memory.Entry, error) {
-	if limit <= 0 {
-		return nil, errors.New("test memory service requires a positive read limit")
+	content string,
+	topics []string,
+	opts ...memory.AddOption,
+) error {
+	if err := s.failures[content]; err != nil {
+		return err
 	}
-	s.limits = append(s.limits, limit)
-	return s.Service.ReadMemories(ctx, userKey, limit)
+	return s.Service.AddMemory(ctx, userKey, content, topics, opts...)
 }
 
 func (s *orderedReadMemoryService) ReadMemories(
@@ -943,7 +1061,7 @@ func addAndReadMemoryID(t *testing.T, userKey memory.UserKey, op MemoryOp) strin
 	require.NoError(t, service.AddMemory(
 		context.Background(), userKey, op.Content, append([]string(nil), op.Topics...), opts...,
 	))
-	entries, err := service.ReadMemories(context.Background(), userKey, testMemoryReadLimit)
+	entries, err := service.ReadMemories(context.Background(), userKey, 0)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	return entries[0].ID
@@ -988,6 +1106,23 @@ type scopeSessionService struct {
 	deleteContextDeadlineActive  bool
 	deleteContextValueKey        any
 	deleteContextValue           any
+}
+
+type malformedSnapshotSessionService struct {
+	session.Service
+}
+
+func (s *malformedSnapshotSessionService) GetSession(
+	ctx context.Context,
+	key session.Key,
+	opts ...session.Option,
+) (*session.Session, error) {
+	got, err := s.Service.GetSession(ctx, key, opts...)
+	if err != nil || got == nil {
+		return got, err
+	}
+	got.Events = append(got.Events, *replayMalformedEvent())
+	return got, nil
 }
 
 func (s *scopeSessionService) ListAppStates(ctx context.Context, appName string) (session.StateMap, error) {
@@ -1203,8 +1338,8 @@ func TestBuildSnapshotNormalizesGeneratedEventFields(t *testing.T) {
 	leftSession := replayTestSession("left", timestamp)
 	rightSession := replayTestSession("right", timestamp)
 	rightSession.Events[0].Response.Timestamp = timestamp.Add(time.Second)
-	left := BuildSnapshot(leftSession, nil)
-	right := BuildSnapshot(rightSession, nil)
+	left := buildSnapshotForTest(t, leftSession, nil)
+	right := buildSnapshotForTest(t, rightSession, nil)
 	diffs := CompareSnapshots(
 		"generated",
 		"session-1",
@@ -1217,11 +1352,58 @@ func TestBuildSnapshotNormalizesGeneratedEventFields(t *testing.T) {
 	require.Empty(t, diffs)
 }
 
+func TestBuildSnapshotReturnsNormalizationErrors(t *testing.T) {
+	t.Run("malformed event", func(t *testing.T) {
+		badEvent := replayMalformedEvent()
+		sess := session.NewSession(
+			"app", "user", "session",
+			session.WithSessionEvents([]event.Event{*badEvent}),
+		)
+		_, err := BuildSnapshot(sess, nil)
+		require.ErrorContains(t, err, "normalize event 0: marshal")
+		require.ErrorContains(t, err, "unsupported type: chan int")
+	})
+
+	t.Run("nil memory entry", func(t *testing.T) {
+		sess := session.NewSession("app", "user", "session")
+		entry := &memory.Entry{
+			ID: "memory", AppName: "app", UserID: "user",
+			Memory: &memory.Memory{Memory: "valid"},
+		}
+		_, err := BuildSnapshot(sess, []*memory.Entry{entry, nil, entry})
+		require.EqualError(t, err, "memory entry 1 is nil")
+	})
+
+	t.Run("nil nested memory", func(t *testing.T) {
+		sess := session.NewSession("app", "user", "session")
+		_, err := BuildSnapshot(sess, []*memory.Entry{{
+			ID: "broken", AppName: "app", UserID: "user",
+		}})
+		require.EqualError(t, err, "memory entry 0 has nil Memory")
+	})
+}
+
+func TestRunReturnsWrappedSnapshotNormalizationError(t *testing.T) {
+	baseSessionService := sessinmemory.NewSessionService()
+	defer baseSessionService.Close()
+	sessionService := &malformedSnapshotSessionService{Service: baseSessionService}
+	memoryService := meminmemory.NewMemoryService()
+	defer memoryService.Close()
+
+	_, err := Run(context.Background(), Backend{
+		Name: "in_memory", SessionService: sessionService,
+		MemoryService: memoryService, ReadAllMemories: completeMemoryReader(memoryService),
+	}, Case{Name: "malformed-event"})
+	require.ErrorContains(t, err,
+		`build final snapshot for case "malformed-event" on backend "in_memory": normalize event 0: marshal`)
+	require.ErrorContains(t, err, "unsupported type: chan int")
+}
+
 func TestBuildSnapshotPreservesSuppliedEventTimestamp(t *testing.T) {
 	leftTime := time.Date(2026, time.July, 24, 8, 9, 10, 123, time.FixedZone("UTC+8", 8*60*60))
 	rightTime := leftTime.Add(time.Second)
-	left := BuildSnapshot(replayTestSession("same", leftTime), nil)
-	right := BuildSnapshot(replayTestSession("same", rightTime), nil)
+	left := buildSnapshotForTest(t, replayTestSession("same", leftTime), nil)
+	right := buildSnapshotForTest(t, replayTestSession("same", rightTime), nil)
 
 	require.Equal(t, normalizeTime(leftTime), left.Events[0]["timestamp"])
 	diffs := CompareSnapshots("timestamp", "session-1", "left", "right", left, right, nil)
@@ -1233,7 +1415,7 @@ func TestBuildSnapshotPreservesSuppliedEventTimestamp(t *testing.T) {
 	require.Equal(t, 0, diffs[0].Context["event_index"])
 	require.False(t, diffs[0].Allowed)
 
-	sameInstant := BuildSnapshot(replayTestSession("same", leftTime.UTC()), nil)
+	sameInstant := buildSnapshotForTest(t, replayTestSession("same", leftTime.UTC()), nil)
 	require.Empty(t, CompareSnapshots("timestamp", "session-1", "left", "right", left, sameInstant, nil))
 }
 
@@ -1253,7 +1435,7 @@ func TestNormalizeStatePreservesJSONNumbersAndByteKinds(t *testing.T) {
 }
 
 func TestNormalizationHandlesInvalidAndEmptyInputs(t *testing.T) {
-	empty := BuildSnapshot(nil, nil)
+	empty := buildSnapshotForTest(t, nil, nil)
 	require.Empty(t, empty.Events)
 	require.Empty(t, empty.State)
 	require.Empty(t, empty.Memory)
@@ -1291,8 +1473,8 @@ func TestNormalizationHandlesInvalidAndEmptyInputs(t *testing.T) {
 func TestTrackSnapshotsPreserveContainerAndPayloadIdentity(t *testing.T) {
 	leftSession := replayTrackSession("tool", json.RawMessage("null"))
 	rightSession := replayTrackSession("wrong-container", json.RawMessage("null"))
-	left := BuildSnapshot(leftSession, nil)
-	right := BuildSnapshot(rightSession, nil)
+	left := buildSnapshotForTest(t, leftSession, nil)
+	right := buildSnapshotForTest(t, rightSession, nil)
 
 	require.Equal(t, "tool", left.Tracks[0].Name)
 	require.Equal(t, "tool", left.Tracks[0].Track)
@@ -1305,7 +1487,7 @@ func TestTrackSnapshotsPreserveContainerAndPayloadIdentity(t *testing.T) {
 	require.False(t, diffs[0].Allowed)
 
 	rightSession = replayTrackSession("tool", nil)
-	right = BuildSnapshot(rightSession, nil)
+	right = buildSnapshotForTest(t, rightSession, nil)
 	diffs = CompareSnapshots("payload", "session-1", "left", "right", left, right, nil)
 	require.Len(t, diffs, 1)
 	require.Equal(t, "$.tracks[0].events[0].payload.kind", diffs[0].Path)
@@ -1376,8 +1558,8 @@ func TestCompareSnapshotsPreservesSpecialSummaryFilterKeyContext(t *testing.T) {
 }
 
 func TestCompareSnapshotsAddsContextAndAppliesExplicitRule(t *testing.T) {
-	left := BuildSnapshot(replayTestSession("same", time.Unix(1, 0)), nil)
-	right := BuildSnapshot(replayTestSession("same", time.Unix(1, 0)), nil)
+	left := buildSnapshotForTest(t, replayTestSession("same", time.Unix(1, 0)), nil)
+	right := buildSnapshotForTest(t, replayTestSession("same", time.Unix(1, 0)), nil)
 	right.Events[0]["author"] = "different"
 	rules := []AllowedDiffRule{{
 		Section: "events", Path: "$.events[0].author",
@@ -1443,8 +1625,8 @@ func TestAllowedDiffRulesRequireConcreteSegmentBelowSectionRoot(t *testing.T) {
 }
 
 func TestWildcardMatchHandlesRepeatedAndMissingSegments(t *testing.T) {
-	require.True(t, wildcardMatch("events.**.id", "events.item.id"))
-	require.False(t, wildcardMatch("events.*.missing", "events.item.id"))
+	require.True(t, MatchAllowedDiffPath("events.**.id", "events.item.id"))
+	require.False(t, MatchAllowedDiffPath("events.*.missing", "events.item.id"))
 }
 
 func TestWriteReportUsesEmptyArrayForNilDiffs(t *testing.T) {
@@ -1520,6 +1702,24 @@ func replayTrackSession(container session.Track, payload json.RawMessage) *sessi
 		},
 	}
 	return sess
+}
+
+func replayMalformedEvent() *event.Event {
+	return &event.Event{
+		Response: &model.Response{Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					Type: "function",
+					ExtraFields: map[string]any{
+						"unsupported": make(chan int),
+					},
+				}},
+			},
+		}}},
+		InvocationID: "malformed",
+		Author:       "assistant",
+	}
 }
 
 func replayTestSession(generated string, timestamp time.Time) *session.Session {

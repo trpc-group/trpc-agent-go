@@ -83,6 +83,8 @@ Track payload fixture 支持完整 JSON 值域：object、array、string、numbe
 
 Memory 操作别名按完整 canonical identity 解析，而不是只比较 content。Add alias 会比较 app、user、content、kind、event time、participants 和 location，并刻意排除 topics。Update 每次都会用后端返回的有效 ID 推进原 `Ref` alias，因此内容或身份元数据导致 ID 轮换后，后续 update/delete 不会继续使用旧 ID。
 
+当 event 无法归一化、memory entry 为 nil，或 entry 的 `Memory` payload 为 nil 时，snapshot 构建会返回错误。这些情况表示 fixture 非法或后端数据损坏，不会在 normalize 时被丢弃，也不能通过 `allowed_diff` 放行。
+
 包含 app、user 或 session state 的 case 还会直接验证作用域契约。Runner 分别读取 app/user state，并在同一 app/user 下创建临时 peer session；peer 必须只继承 app/user 值，且会在所有返回路径中删除。app/user 传播缺失、session/temp state 泄漏和 peer 清理失败都是 runner error，不属于 snapshot diff，也不能通过 `allowed_diff` 放行。
 
 ## Summary 与 Track 策略
@@ -162,7 +164,7 @@ ID 和时间类差异应优先通过 normalize 或 runner 修正，不应使用 
 
 - 默认本地测试不需要外部服务
 - backend 名称非空、没有首尾空白；该名称同时是 report 与 `allowed_diff` 使用的身份
-- 配置 memory service 支持的正数 `Backend.MemoryReadLimit`；alias 解析与最终 snapshot 共用该上限，返回条目数触及上限时 runner 会失败，而不会比较可能被截断的结果
+- 提供 `Backend.ReadAllMemories`；alias 解析与最终 snapshot 共用该 callback，并且只有在后端专用分页、total count 校验或明确的无上限读取已经证明所有 memory 均被返回时，才能设置 `complete=true`
 - 后端生成的 ID 与 response 时间元数据通过 normalize 处理，同时保留调用方提供的事件时间戳
 - summary 与 track 语义与现有后端一致
 - 新后端差异必须先由异常注入测试证明可定位，再评估是否需要 `allowed_diff`
