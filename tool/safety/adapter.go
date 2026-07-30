@@ -78,7 +78,11 @@ func (p *SafetyPermissionPolicy) CheckToolPermission(
 
 	switch report.Decision {
 	case DecisionDeny:
-		return tool.DenyPermission(report.Evidence), nil
+		// Desensitize evidence before returning to the model — a denial
+		// that happens before secret_cmd runs (e.g. network checker
+		// catching a non-whitelisted domain) may still contain raw secrets
+		// in the evidence string.
+		return tool.DenyPermission(p.scanner.DesensitizeEvidence(report.Evidence)), nil
 	case DecisionAsk:
 		return tool.AskPermission(report.Recommendation), nil
 	default:

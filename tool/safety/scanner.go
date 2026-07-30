@@ -165,6 +165,15 @@ func (s *Scanner) SetCheckers(checkers []Checker) {
 	s.checkers = checkers
 }
 
+// DesensitizeEvidence applies the policy's secret-detection patterns to mask
+// secrets in the evidence string before it is returned to the model.
+func (sc *Scanner) DesensitizeEvidence(evidence string) string {
+	if evidence == "" || sc.policy == nil {
+		return evidence
+	}
+	return Desensitize(evidence, sc.policy.SecretRegexps())
+}
+
 // NewTestScanner creates a Scanner without an audit logger for use in tests.
 func NewTestScanner(policy *Policy) *Scanner {
 	s := NewScanner(policy, nil)
