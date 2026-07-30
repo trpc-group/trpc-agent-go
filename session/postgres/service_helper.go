@@ -385,17 +385,22 @@ func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent
 			return fmt.Errorf("marshal session state failed: %w", err)
 		}
 
-		var expiresAt *time.Time
+		var sessionExpires *time.Time
 		if s.opts.sessionTTL > 0 {
 			t := now.Add(s.opts.sessionTTL)
-			expiresAt = &t
+			sessionExpires = &t
+		}
+		var trackExpires *time.Time
+		if trackTTL := s.opts.effectiveTrackEventTTL(); trackTTL > 0 {
+			t := now.Add(trackTTL)
+			trackExpires = &t
 		}
 
 		// Update session state.
 		_, err = tx.ExecContext(ctx,
 			fmt.Sprintf(`UPDATE %s SET state = $1, updated_at = $2, expires_at = $3
 			 WHERE app_name = $4 AND user_id = $5 AND session_id = $6 AND deleted_at IS NULL`, s.tableSessionStates),
-			updatedStateBytes, updatedAt, expiresAt,
+			updatedStateBytes, updatedAt, sessionExpires,
 			key.AppName, key.UserID, key.SessionID)
 		if err != nil {
 			return fmt.Errorf("update session state failed: %w", err)
@@ -406,7 +411,7 @@ func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent
 			fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, track, event, created_at, updated_at, expires_at)
 			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, s.tableSessionTracks),
 			key.AppName, key.UserID, key.SessionID, trackEvent.Track, eventBytes,
-			trackEvent.Timestamp, trackEvent.Timestamp, expiresAt)
+			trackEvent.Timestamp, trackEvent.Timestamp, trackExpires)
 		if err != nil {
 			return fmt.Errorf("insert track event failed: %w", err)
 		}
@@ -789,7 +794,30 @@ func (s *Service) getTrackEvents(
 	if len(sessionStates) != len(sessionKeys) {
 		return nil, fmt.Errorf("session states count mismatch: %d != %d", len(sessionStates), len(sessionKeys))
 	}
+	trackLists := make([][]session.Track, len(sessionKeys))
+	for i := range sessionKeys {
+		tracks, err := session.TracksFromState(sessionStates[i].State)
+		if err != nil {
+			return nil, fmt.Errorf("get track list failed: %w", err)
+		}
+		trackLists[i] = tracks
+	}
+	return s.getTrackEventsByTrackLists(ctx, sessionKeys, trackLists, limit, afterTime)
+}
 
+func (s *Service) getTrackEventsByTrackLists(
+	ctx context.Context,
+	sessionKeys []session.Key,
+	trackLists [][]session.Track,
+	limit int,
+	afterTime time.Time,
+) ([]map[session.Track][]session.TrackEvent, error) {
+	if len(sessionKeys) == 0 {
+		return nil, nil
+	}
+	if len(trackLists) != len(sessionKeys) {
+		return nil, fmt.Errorf("track lists count mismatch: %d != %d", len(trackLists), len(sessionKeys))
+	}
 	type trackQuery struct {
 		sessionIdx int
 		track      session.Track
@@ -799,10 +827,7 @@ func (s *Service) getTrackEvents(
 	queries := make([]*trackQuery, 0)
 	now := time.Now()
 	for i, key := range sessionKeys {
-		tracks, err := session.TracksFromState(sessionStates[i].State)
-		if err != nil {
-			return nil, fmt.Errorf("get track list failed: %w", err)
-		}
+		tracks := trackLists[i]
 		for _, track := range tracks {
 			var query string
 			var args []any
@@ -832,7 +857,6 @@ func (s *Service) getTrackEvents(
 			})
 		}
 	}
-
 	results := make([]map[session.Track][]session.TrackEvent, len(sessionKeys))
 	for _, q := range queries {
 		events := make([]session.TrackEvent, 0)

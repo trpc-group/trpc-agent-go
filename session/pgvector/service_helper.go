@@ -504,10 +504,15 @@ func (s *Service) addTrackEvent(
 		)
 	}
 
-	var expiresAt *time.Time
+	var sessionExpires *time.Time
 	if s.opts.sessionTTL > 0 {
 		t := now.Add(s.opts.sessionTTL)
-		expiresAt = &t
+		sessionExpires = &t
+	}
+	var trackExpires *time.Time
+	if trackTTL := s.opts.effectiveTrackEventTTL(); trackTTL > 0 {
+		t := now.Add(trackTTL)
+		trackExpires = &t
 	}
 
 	err = s.pgClient.Transaction(ctx,
@@ -589,7 +594,7 @@ func (s *Service) addTrackEvent(
 					s.tableSessionStates,
 				),
 				updatedStateBytes,
-				sessState.UpdatedAt, expiresAt,
+				sessState.UpdatedAt, sessionExpires,
 				key.AppName, key.UserID,
 				key.SessionID,
 			)
@@ -612,7 +617,7 @@ func (s *Service) addTrackEvent(
 				key.AppName, key.UserID,
 				key.SessionID, trackEvent.Track,
 				eventBytes, trackCreatedAt,
-				nowUTC, expiresAt,
+				nowUTC, trackExpires,
 			)
 			if err != nil {
 				return fmt.Errorf(
@@ -931,15 +936,8 @@ func (s *Service) getTrackEvents(
 			len(sessionStates), len(sessionKeys),
 		)
 	}
-
-	type trackQuery struct {
-		sessionIdx int
-		track      session.Track
-		query      string
-		args       []any
-	}
-	queries := make([]*trackQuery, 0)
-	for i, key := range sessionKeys {
+	trackLists := make([][]session.Track, len(sessionKeys))
+	for i := range sessionKeys {
 		tracks, err := session.TracksFromState(
 			sessionStates[i].State,
 		)
@@ -948,6 +946,38 @@ func (s *Service) getTrackEvents(
 				"get track list failed: %w", err,
 			)
 		}
+		trackLists[i] = tracks
+	}
+	return s.getTrackEventsByTrackLists(
+		ctx, sessionKeys, trackLists, limit, afterTime,
+	)
+}
+
+func (s *Service) getTrackEventsByTrackLists(
+	ctx context.Context,
+	sessionKeys []session.Key,
+	trackLists [][]session.Track,
+	limit int,
+	afterTime time.Time,
+) ([]map[session.Track][]session.TrackEvent, error) {
+	if len(sessionKeys) == 0 {
+		return nil, nil
+	}
+	if len(trackLists) != len(sessionKeys) {
+		return nil, fmt.Errorf(
+			"track lists count mismatch: %d != %d",
+			len(trackLists), len(sessionKeys),
+		)
+	}
+	type trackQuery struct {
+		sessionIdx int
+		track      session.Track
+		query      string
+		args       []any
+	}
+	queries := make([]*trackQuery, 0)
+	for i, key := range sessionKeys {
+		tracks := trackLists[i]
 		for _, track := range tracks {
 			var q string
 			var args []any
@@ -999,7 +1029,6 @@ func (s *Service) getTrackEvents(
 			})
 		}
 	}
-
 	results := make(
 		[]map[session.Track][]session.TrackEvent,
 		len(sessionKeys),

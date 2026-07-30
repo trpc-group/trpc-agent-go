@@ -565,6 +565,11 @@ func (c *defaultEventToA2AMessage) convertDeltaContentToA2AStreamingMessage(
 ) (protocol.StreamingMessageResult, error) {
 	choice := event.Response.Choices[0]
 	parts := c.buildTextParts(choice.Delta)
+	if !event.Response.IsPartial {
+		if messageParts := c.buildTextParts(choice.Message); len(messageParts) > 0 {
+			parts = messageParts
+		}
+	}
 
 	mapperParts, err := c.runEventPartMappers(ctx, event)
 	if err != nil {

@@ -452,11 +452,11 @@ func (t *writeStdinTool) Call(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	sess, err := t.mgr.get(sessionID)
+	if err != nil {
+		return nil, err
+	}
 	if t.safety != nil && in.Chars != "" {
-		sess, err := t.mgr.get(sessionID)
-		if err != nil {
-			return nil, err
-		}
 		report, err := t.safety.ScanSessionInput(ctx, safety.ExecutionRequest{
 			ToolName: toolWriteStdin,
 			Backend:  safety.BackendHostExec,
@@ -471,8 +471,7 @@ func (t *writeStdinTool) Call(
 			return nil, safety.NewBlockedError(report)
 		}
 	}
-	if err := t.mgr.write(
-		sessionID,
+	if err := sess.write(
 		in.Chars,
 		firstBool(in.AppendNewline, in.Submit),
 	); err != nil {
@@ -487,27 +486,23 @@ func (t *writeStdinTool) Call(
 	if yield > 0 {
 		timer := time.NewTimer(time.Duration(yield) * time.Millisecond)
 		defer timer.Stop()
+		// Return as soon as the process exits: sleeping out the full
+		// yield after exit only delays the result the caller is
+		// waiting for. Mirrors the manager's own exec yield path.
 		select {
 		case <-ctx.Done():
 		case <-timer.C:
+		case <-sess.doneCh:
 		}
 	}
 
-	poll, err := t.mgr.poll(sessionID, nil)
-	if err != nil {
-		return nil, err
-	}
+	poll := sess.poll(nil)
 	if t.safety != nil {
-		sess, getErr := t.mgr.get(sessionID)
-		if getErr == nil {
-			poll.Output = sess.sanitizeOutput(
-				poll.Output,
-				t.safety,
-				poll.Status == programStatusExited,
-			)
-		} else {
-			poll.Output = t.safety.SanitizeOutput(poll.Output)
-		}
+		poll.Output = sess.sanitizeOutput(
+			poll.Output,
+			t.safety,
+			poll.Status == programStatusExited,
+		)
 	}
 	return mapPollResult(sessionID, poll), nil
 }
