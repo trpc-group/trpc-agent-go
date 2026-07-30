@@ -18,6 +18,7 @@ import (
 	"time"
 
 	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	promptiterengine "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
 )
@@ -236,14 +237,14 @@ func summarizeEvalSet(role string, res *promptiterengine.EvaluationResult) Basel
 			}
 			passed := true
 			for _, m := range c.Metrics {
-				ok := m.Score >= 1.0
+				ok := m.Status != status.EvalStatusFailed
 				if !ok {
 					passed = false
 				}
-				status := "pass"
+				statusStr := "pass"
 				reason := m.Reason
 				if !ok {
-					status = "fail"
+					statusStr = "fail"
 					if strings.TrimSpace(reason) == "" {
 						reason = explainCategory(classifyMetric(m, c.Trace), m)
 					}
@@ -251,7 +252,7 @@ func summarizeEvalSet(role string, res *promptiterengine.EvaluationResult) Basel
 				cc.Metrics = append(cc.Metrics, BaselineMetric{
 					Name:   m.MetricName,
 					Score:  m.Score,
-					Status: status,
+					Status: statusStr,
 					Reason: reason,
 				})
 			}
@@ -314,13 +315,21 @@ func writeReport(outputDir string, report *RegressionReport, result *promptitere
 	}
 	if result != nil {
 		if result.BaselineValidation != nil {
-			if b, err := json.MarshalIndent(result.BaselineValidation, "", "  "); err == nil {
-				_ = os.WriteFile(filepath.Join(outputDir, "baseline_eval_result.json"), b, 0o644)
+			b, err := json.MarshalIndent(result.BaselineValidation, "", "  ")
+			if err != nil {
+				return fmt.Errorf("marshal baseline eval result: %w", err)
+			}
+			if err := os.WriteFile(filepath.Join(outputDir, "baseline_eval_result.json"), b, 0o644); err != nil {
+				return fmt.Errorf("write baseline eval result: %w", err)
 			}
 		}
 		if n := len(result.Rounds); n > 0 && result.Rounds[n-1].Validation != nil {
-			if b, err := json.MarshalIndent(result.Rounds[n-1].Validation, "", "  "); err == nil {
-				_ = os.WriteFile(filepath.Join(outputDir, "candidate_eval_result.json"), b, 0o644)
+			b, err := json.MarshalIndent(result.Rounds[n-1].Validation, "", "  ")
+			if err != nil {
+				return fmt.Errorf("marshal candidate eval result: %w", err)
+			}
+			if err := os.WriteFile(filepath.Join(outputDir, "candidate_eval_result.json"), b, 0o644); err != nil {
+				return fmt.Errorf("write candidate eval result: %w", err)
 			}
 		}
 	}

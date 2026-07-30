@@ -9,6 +9,8 @@
 package main
 
 import (
+	"sort"
+
 	promptiterengine "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
 )
 
@@ -212,6 +214,13 @@ func perCaseDeltas(baseline, candidate *promptiterengine.EvaluationResult) []Cas
 			Transition:      transitionOf(bp, cp, trend),
 		})
 	}
+	// Sort by evalSetId then evalCaseId for deterministic output across runs.
+	sort.Slice(deltas, func(i, j int) bool {
+		if deltas[i].EvalSetID != deltas[j].EvalSetID {
+			return deltas[i].EvalSetID < deltas[j].EvalSetID
+		}
+		return deltas[i].EvalCaseID < deltas[j].EvalCaseID
+	})
 	return deltas
 }
 
