@@ -57,8 +57,9 @@ func (p *Preparer) InputKind(spec Spec) (inputKind string, err error) {
 	return deriveInputKind(spec)
 }
 
-// Prepare builds one internally consistent view of the change. Every failure
-// after a snapshot is created cleans only task-owned temporary files.
+// Prepare builds one internally consistent view of the change. The caller must
+// close a successful PreparedInput. Every failure after a snapshot is created
+// cleans only task-owned temporary files
 func (p *Preparer) Prepare(ctx context.Context, scope TaskScope, spec Spec) (prepared *PreparedInput, retErr error) {
 	if err := scope.validate(); err != nil {
 		return nil, err

@@ -69,7 +69,7 @@ func (a *Approver) readResponse() <-chan approvalResponse {
 }
 
 // decide performs one serialized user decision. skip is the fake-model path;
-// missing terminal I/O returns Ask instead of silently approving. Cancellation
+// missing terminal I/O returns an error instead of silently approving. Cancellation
 // permanently closes this Approver because a generic Reader cannot retract a
 // late response safely for reuse by another decision.
 func (a *Approver) decide(
@@ -85,7 +85,7 @@ func (a *Approver) decide(
 		return tool.AllowPermission(), nil
 	}
 	if a == nil || a.reader == nil || a.writer == nil {
-		return tool.PermissionDecision{}, fmt.Errorf("interactive approval is not available")
+		return tool.PermissionDecision{}, errors.New("interactive approval is not available")
 	}
 
 	a.mu.Lock()
@@ -114,7 +114,7 @@ func (a *Approver) decide(
 		case response = <-responses:
 		}
 		if response.err != nil && len(response.answer) == 0 {
-			if response.err == io.EOF {
+			if errors.Is(response.err, io.EOF) {
 				return tool.AskPermission("interactive approval input ended before a decision"), nil
 			}
 			return tool.PermissionDecision{}, fmt.Errorf("read approval response: %w", response.err)

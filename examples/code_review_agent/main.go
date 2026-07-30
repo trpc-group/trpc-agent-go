@@ -32,7 +32,7 @@ var (
 	mode      = flag.String("mode", "", "set to fake-model to run a registered deterministic fixture scenario")
 	modelName = flag.String("model", "deepseek-v4-flash", "model name for agent")
 	baseURL   = flag.String("base-url", "", "Base URL for the model")
-	sandbox   = flag.String("sandbox", "container", "workspace execution backend: container or local")
+	sandbox   = flag.String("sandbox", reviewer.SandboxBackendContainer, "workspace execution backend: container or local")
 	dbPath    = flag.String("db-path", "cr.db", "SQLite database path for review task records")
 	diffFile  = flag.String("diff-file", "", "unified diff or PR patch to review")
 	repoPath  = flag.String("repo-path", "", "local Git worktree used as review input or repository context")
@@ -51,7 +51,7 @@ func main() {
 
 func run() (retErr error) {
 	// Graceful shutdown
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, os.Kill, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	// Sanitizer is shared by input preparation, tool callbacks, Review Store

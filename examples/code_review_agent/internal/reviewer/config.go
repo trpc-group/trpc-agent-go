@@ -11,9 +11,21 @@ package reviewer
 
 import "io"
 
+const (
+	// ModeFakeModel selects the deterministic fixture-backed model
+	ModeFakeModel = "fake-model"
+
+	// SandboxBackendContainer selects the isolated container executor
+	SandboxBackendContainer = "container"
+	// SandboxBackendLocal selects the local process executor
+	SandboxBackendLocal = "local"
+)
+
 // Config contains model selection and sandbox settings for one reviewer instance.
 type Config struct {
-	Mode     string
+	// Mode selects provider-backed execution when empty or ModeFakeModel
+	Mode string
+
 	Model    ModelConfig
 	Sandbox  SandboxConfig
 	Approval ApprovalConfig
@@ -29,6 +41,7 @@ type ModelConfig struct {
 
 // SandboxConfig selects the workspace execution backend.
 type SandboxConfig struct {
+	// Backend selects SandboxBackendContainer or SandboxBackendLocal
 	Backend string
 }
 

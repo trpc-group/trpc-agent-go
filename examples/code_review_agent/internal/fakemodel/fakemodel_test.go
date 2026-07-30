@@ -12,6 +12,7 @@ package fakemodel
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -163,6 +164,24 @@ func TestGenerateContentRejectsMissingUserInput(t *testing.T) {
 	_, err = fake.GenerateContent(context.Background(), &model.Request{})
 	if err == nil {
 		t.Fatal("GenerateContent accepted a request without user input")
+	}
+}
+
+func TestGenerateContentRejectsCanceledContext(t *testing.T) {
+	fake, err := NewForFixture("acceptance-clean")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = fake.GenerateContent(ctx, &model.Request{
+		Messages: []model.Message{{
+			Role:    model.RoleUser,
+			Content: "Review this code change.",
+		}},
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("GenerateContent error = %v, want context canceled", err)
 	}
 }
 

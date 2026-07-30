@@ -89,7 +89,7 @@ func newGovernedExecution(
 	backend string,
 ) *governedExecution {
 	if backend == "" {
-		backend = "container"
+		backend = SandboxBackendContainer
 	}
 	return &governedExecution{
 		markers:          append([]string(nil), riskMarkers...),
@@ -431,12 +431,12 @@ func canonicalJSON(value []byte) ([]byte, error) {
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		if err == nil {
-			return nil, errors.New("JSON value contains trailing data")
+			return nil, errors.New("json value contains trailing data")
 		}
 		return nil, err
 	}
 	if _, ok := decoded.(map[string]any); !ok {
-		return nil, errors.New("JSON value must be an object")
+		return nil, errors.New("json value must be an object")
 	}
 	return json.Marshal(decoded)
 }

@@ -12,6 +12,7 @@ package reviewer
 import (
 	"context"
 	"encoding/json"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -51,6 +52,9 @@ func TestWorkspaceTimeoutBudgetAndObservedTimeoutEvidence(t *testing.T) {
 	})
 
 	t.Run("local runtime timeout becomes sandbox evidence", func(t *testing.T) {
+		if _, err := exec.LookPath("sleep"); err != nil {
+			t.Skip("sleep executable is unavailable")
+		}
 		ctx := context.Background()
 		resources, err := persistence.Open(
 			ctx,

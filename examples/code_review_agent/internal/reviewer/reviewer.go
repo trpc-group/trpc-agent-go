@@ -128,7 +128,7 @@ func NewReviewer(dep Dependencies, cfg Config) (reviewAgent *reviewer, err error
 	}
 	recorder := newReviewRecorder(dep.Store, dep.Sanitizer)
 	if cfg.Sandbox.Backend == "" {
-		cfg.Sandbox.Backend = "container"
+		cfg.Sandbox.Backend = SandboxBackendContainer
 	}
 
 	return &reviewer{
@@ -138,7 +138,7 @@ func NewReviewer(dep Dependencies, cfg Config) (reviewAgent *reviewer, err error
 		store:        dep.Store,
 		recorder:     recorder,
 		inputs:       inputPreparer,
-		approver:     newApprover(cfg.Approval, cfg.Mode == "fake-model"),
+		approver:     newApprover(cfg.Approval, cfg.Mode == ModeFakeModel),
 	}, nil
 }
 
@@ -338,7 +338,7 @@ func (r *reviewer) newRunner(
 
 func (r *reviewer) newReviewModel(fixture string) (configured model.Model, err error) {
 	switch r.config.Mode {
-	case "fake-model":
+	case ModeFakeModel:
 		if fixture == "" {
 			return nil, errors.New("fixture is required when mode is fake-model")
 		}
@@ -425,7 +425,7 @@ func getSkillRepos(pwd string) *skill.FSRepository {
 func getCodeexecutor(pwd, sandbox string) (executor codeexecutor.CodeExecutor, err error) {
 
 	switch sandbox {
-	case "container":
+	case SandboxBackendContainer:
 		// Use a 1-second stop timeout to avoid Docker's default 10-second wait.
 		// By cleanup time, the reviewed command has already exited; only the
 		// container's keepalive process remains.
@@ -453,7 +453,7 @@ func getCodeexecutor(pwd, sandbox string) (executor codeexecutor.CodeExecutor, e
 			log.Printf("Warning: Failed to create container code executor: %v", err)
 			return nil, err
 		}
-	case "local":
+	case SandboxBackendLocal:
 		executor = localexec.New()
 	default:
 		return nil, fmt.Errorf("unsupported sandbox backend %q (use container or local)", sandbox)
