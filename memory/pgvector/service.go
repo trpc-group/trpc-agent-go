@@ -763,7 +763,7 @@ func (s *Service) SearchMemories(
 	}
 	candidateLimit := maxResults
 	if opts.HybridSearch {
-		candidateLimit = iranking.HybridCandidateLimit(maxResults)
+		candidateLimit = iranking.HybridCandidateLimit(query, maxResults)
 	}
 	results, err := s.executeVectorSearch(
 		ctx, userKey, opts, vector, candidateLimit,

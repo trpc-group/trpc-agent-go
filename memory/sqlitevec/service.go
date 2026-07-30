@@ -1091,7 +1091,7 @@ func resolveSearchCandidateLimit(
 ) int {
 	limit := resolveSearchLimit(defaultMax, override)
 	if opts.HybridSearch {
-		limit = iranking.HybridCandidateLimit(limit)
+		limit = iranking.HybridCandidateLimit(opts.Query, limit)
 	}
 	if opts.Kind != "" || opts.TimeAfter != nil || opts.TimeBefore != nil ||
 		opts.OrderByEventTime || opts.KindFallback || opts.Deduplicate {

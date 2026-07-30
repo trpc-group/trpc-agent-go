@@ -10,6 +10,7 @@ package ranking
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -19,12 +20,92 @@ import (
 func TestHybridCandidateLimit(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, 90, HybridCandidateLimit(30))
-	assert.Equal(t, 0, HybridCandidateLimit(0))
-	assert.Equal(t, -1, HybridCandidateLimit(-1))
+	assert.Equal(t, 90, HybridCandidateLimit(
+		"Which sports events did I watch?", 30,
+	))
+	assert.Equal(t, 30, HybridCandidateLimit(
+		"What did you recommend?", 30,
+	))
+	assert.Equal(t, 30, HybridCandidateLimit("When?", 30))
+	assert.Equal(t, 0, HybridCandidateLimit("ordinary query", 0))
+	assert.Equal(t, -1, HybridCandidateLimit("ordinary query", -1))
 
 	maxInt := int(^uint(0) >> 1)
-	assert.Equal(t, maxInt, HybridCandidateLimit(maxInt))
+	assert.Equal(t, maxInt, HybridCandidateLimit("ordinary query", maxInt))
+}
+
+func TestMergeHybridBackfillsFocusedEventTail(t *testing.T) {
+	t.Parallel()
+
+	eventTime := time.Date(2023, time.January, 14, 0, 0, 0, 0, time.UTC)
+	entry := func(id, text string, kind memory.Kind, at *time.Time) *memory.Entry {
+		return &memory.Entry{
+			ID: id,
+			Memory: &memory.Memory{
+				Memory:    text,
+				Kind:      kind,
+				EventTime: at,
+			},
+		}
+	}
+	results := MergeHybrid(
+		"What is the order of the sports events I watched in January?",
+		[]*memory.Entry{
+			entry("base-1", "Watched an NFL game.", memory.KindEpisode, nil),
+			entry("base-2", "Attended an NBA game.", memory.KindEpisode, nil),
+			entry("base-3", "Other memory.", memory.KindFact, nil),
+			entry(
+				"tail-fact",
+				"Interested in fintech and e-commerce events.",
+				memory.KindFact,
+				&eventTime,
+			),
+			entry(
+				"tail-answer",
+				"Watched the College Football National Championship.",
+				memory.KindEpisode,
+				&eventTime,
+			),
+		},
+		nil,
+		0,
+		3,
+	)
+
+	require.Len(t, results, 3)
+	assert.Equal(t, []string{"base-1", "base-2", "tail-answer"}, []string{
+		results[0].ID,
+		results[1].ID,
+		results[2].ID,
+	})
+}
+
+func TestMergeHybridDoesNotBackfillAssistantResultQuery(t *testing.T) {
+	t.Parallel()
+
+	entry := func(id, text string) *memory.Entry {
+		return &memory.Entry{
+			ID:     id,
+			Memory: &memory.Memory{Memory: text},
+		}
+	}
+	results := MergeHybrid(
+		"Which evening train did you recommend?",
+		[]*memory.Entry{
+			entry("base-1", "Assistant result: Recommended Express 7."),
+			entry("base-2", "User asked about evening trains."),
+			entry("tail", "Assistant result: Recommended an evening train."),
+		},
+		nil,
+		0,
+		2,
+	)
+
+	require.Len(t, results, 2)
+	assert.Equal(t, []string{"base-1", "base-2"}, []string{
+		results[0].ID,
+		results[1].ID,
+	})
 }
 
 func TestMergeHybridFusesBackendRankings(t *testing.T) {

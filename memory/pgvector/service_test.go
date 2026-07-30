@@ -3198,9 +3198,9 @@ func TestService_SearchMemories_KindFallbackAndHybridSearchOverfetches(t *testin
 	results, err := svc.SearchMemories(
 		context.Background(),
 		memory.UserKey{AppName: "test-app", UserID: "u1"},
-		"Kyoto",
+		"Kyoto travel",
 		memory.WithSearchOptions(memory.SearchOptions{
-			Query:        "Kyoto",
+			Query:        "Kyoto travel",
 			Kind:         memory.KindEpisode,
 			KindFallback: true,
 			HybridSearch: true,
