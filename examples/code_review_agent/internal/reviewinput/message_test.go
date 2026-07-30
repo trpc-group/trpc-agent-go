@@ -53,6 +53,64 @@ func TestBuildReviewMessageUsesModeSpecificWorkspaceInstructions(t *testing.T) {
 	}
 }
 
+func TestBuildReviewMessagePreservesInstructionsWithinBudget(t *testing.T) {
+	parsed := parsedInput{
+		ChangedFiles: []ChangedFile{{Path: strings.Repeat("large-name-", 100) + ".go"}},
+		ChangedHunks: []ChangedHunk{{
+			ID:   "large.go:1:1",
+			File: "large.go",
+			Body: strings.Repeat("+oversized content\n", 100),
+		}},
+	}
+	limits := Limits{
+		MaxMessageBytes: 320,
+		MaxFiles:        1,
+		MaxHunks:        1,
+		MaxHunkBytes:    1024,
+	}
+	message := buildReviewMessage(
+		InputKindRepoPath,
+		ReviewModeRepoBacked,
+		nil,
+		parsed,
+		limits,
+	)
+	if len(message) > limits.MaxMessageBytes {
+		t.Fatalf("message length = %d, want at most %d", len(message), limits.MaxMessageBytes)
+	}
+	for _, want := range []string{"workspace_exec", "submit_review_results"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("message does not preserve %q instruction:\n%s", want, message)
+		}
+	}
+}
+
+func TestBuildReviewMessageBoundsSecretSignals(t *testing.T) {
+	parsed := parsedInput{
+		SecretSignals: []SecretSignal{
+			{File: "a.go", Line: 1, Kind: "token", RuleID: "SECRET-A", Evidence: "first"},
+			{File: "b.go", Line: 2, Kind: "token", RuleID: "SECRET-B", Evidence: "second"},
+			{File: "c.go", Line: 3, Kind: "token", RuleID: "SECRET-C", Evidence: "third"},
+		},
+	}
+	message := buildReviewMessage(
+		InputKindDiffFile,
+		ReviewModePatchOnly,
+		nil,
+		parsed,
+		Limits{MaxFiles: 2},
+	)
+	if !strings.Contains(message, "SECRET-A") || !strings.Contains(message, "SECRET-B") {
+		t.Fatalf("message omitted bounded secret signals:\n%s", message)
+	}
+	if strings.Contains(message, "SECRET-C") {
+		t.Fatalf("message contains a secret signal beyond the limit:\n%s", message)
+	}
+	if !strings.Contains(message, "1 additional secret signals omitted") {
+		t.Fatalf("message has no secret-signal omission summary:\n%s", message)
+	}
+}
+
 func TestBuildReviewMessageExplainsScopeAndNavigationFields(t *testing.T) {
 	parsed := parsedInput{
 		ChangedFiles: []ChangedFile{{

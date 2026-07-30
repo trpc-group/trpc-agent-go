@@ -117,6 +117,58 @@ func TestCanonicalizeReviewSubmissionKeepsDistinctRulesLinesAndRuleIDCase(t *tes
 	}
 }
 
+func TestCanonicalizeReviewSubmissionSupportsStableAgentRuleIDs(t *testing.T) {
+	tests := []struct {
+		name      string
+		source    string
+		category  string
+		ruleID    string
+		wantError string
+	}{
+		{
+			name:   "agent direct rule matches category",
+			source: "agent", category: "resource_lifecycle",
+			ruleID: "AGENT-RESOURCE-LIFECYCLE",
+		},
+		{
+			name:   "agent direct rule rejects another category",
+			source: "agent", category: "resource_lifecycle",
+			ruleID:    "AGENT-CORRECTNESS",
+			wantError: `requires reserved rule_id "AGENT-RESOURCE-LIFECYCLE"`,
+		},
+		{
+			name:   "reserved rule rejects another source",
+			source: "skill", category: "correctness",
+			ruleID:    "AGENT-CORRECTNESS",
+			wantError: `reserved agent rule_id requires source "agent"`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := validSubmissionResult()
+			result.Source = test.source
+			result.Category = test.category
+			result.RuleID = test.ruleID
+			submission, err := canonicalizeReviewSubmission(
+				[]store.ReviewResultRecord{result},
+			)
+			if test.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantError) {
+					t.Fatalf("canonicalize error = %v, want %q", err, test.wantError)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(submission.Results) != 1 ||
+				submission.Results[0].RuleID != test.ruleID {
+				t.Fatalf("canonical results = %#v", submission.Results)
+			}
+		})
+	}
+}
+
 func TestCanonicalizeReviewToolSubmissionReportsBothConflictOrigins(t *testing.T) {
 	base := validReviewResultInput()
 	categoryConflict := base

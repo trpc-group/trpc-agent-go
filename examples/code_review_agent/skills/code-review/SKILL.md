@@ -23,6 +23,7 @@ behavior.
 4. Generate candidates from both the catalog and direct reasoning about the
    changed behavior. For each candidate, identify the changed cause, establish
    impact, and actively look for evidence that disproves it.
+   Never modify this Skill or its rule catalog during a review.
 5. For a repository-backed review, identify every runnable Go module affected
    by the change. A module is runnable when its staged repository copy contains
    `go.mod`.
@@ -127,8 +128,13 @@ Include these fields in every item:
   catalog supplies the primary rule, `agent` for direct reasoning outside the
   catalog, and `static_rule` only for an explicitly observed deterministic rule
   signal.
-- `rule_id`: The applicable stable identifier from `references/rules.md`. Never
-  invent an identifier or use an unrelated rule merely to satisfy this field.
+- `rule_id`: A stable, non-empty identity used for classification and
+  deduplication. Use the applicable identifier from `references/rules.md` when
+  one exists. For `source=agent` with no catalog match, use
+  `AGENT-<CATEGORY>`, where `CATEGORY` is the uppercase category with
+  underscores replaced by hyphens, such as `AGENT-RESOURCE-LIFECYCLE`. Never
+  invent another identifier or use an unrelated catalog rule merely to satisfy
+  this field.
 
 ## Deduplication
 

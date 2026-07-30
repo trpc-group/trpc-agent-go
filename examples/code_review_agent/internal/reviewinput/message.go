@@ -26,6 +26,11 @@ const (
 // stable workspace paths declared in the same message.
 func buildReviewMessage(kind, mode string, paths []string, parsed parsedInput, limits Limits) string {
 	limits = limits.withDefaults()
+	instructions := reviewInstructions(mode)
+	prefixBudget := limits.MaxMessageBytes - len(instructions)
+	if prefixBudget <= 0 {
+		return truncateUTF8(instructions, limits.MaxMessageBytes)
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "Review this code change using the code-review Skill.\n\n")
 	fmt.Fprintf(&b, "Input:\n- source: %s\n- mode: %s\n- changed files: %d\n- changed hunks: %d\n- Go packages: %d\n",
@@ -77,9 +82,13 @@ func buildReviewMessage(kind, mode string, paths []string, parsed parsedInput, l
 
 	if len(parsed.SecretSignals) > 0 {
 		fmt.Fprintf(&b, "\nMasked secret signals:\n")
-		for _, signal := range parsed.SecretSignals {
+		signalLimit := min(len(parsed.SecretSignals), limits.MaxFiles)
+		for _, signal := range parsed.SecretSignals[:signalLimit] {
 			fmt.Fprintf(&b, "- %s:%d kind=%s rule=%s confidence=%.2f evidence=%s\n",
 				signal.File, signal.Line, signal.Kind, signal.RuleID, signal.Confidence, signal.Evidence)
+		}
+		if omitted := len(parsed.SecretSignals) - signalLimit; omitted > 0 {
+			fmt.Fprintf(&b, "- ... %d additional secret signals omitted from this message\n", omitted)
 		}
 	}
 
@@ -94,23 +103,23 @@ func buildReviewMessage(kind, mode string, paths []string, parsed parsedInput, l
 		fmt.Fprintf(&b, "\n[%s] %s old=%d,%d new=%d,%d candidate_lines=%v\n%s\n",
 			hunk.ID, hunk.File, hunk.OldStart, hunk.OldLines, hunk.NewStart, hunk.NewLines,
 			hunk.CandidateLines, body)
-		if b.Len() >= limits.MaxMessageBytes {
+		if b.Len() >= prefixBudget {
 			break
 		}
 	}
 	if omitted := len(parsed.ChangedHunks) - hunkLimit; omitted > 0 {
 		fmt.Fprintf(&b, "\n%d additional hunks were omitted from this message.\n", omitted)
 	}
-	if b.Len() > limits.MaxMessageBytes {
-		return truncateWithNotice(b.String(), limits.MaxMessageBytes, messageTruncationNotice)
-	}
+	return truncateWithNotice(b.String(), prefixBudget, messageTruncationNotice) + instructions
+}
+
+func reviewInstructions(mode string) string {
 	if mode == ReviewModeRepoBacked {
-		fmt.Fprintf(&b, "\nInspect the complete diff and relevant files in the repository snapshot through workspace_exec before forming conclusions.")
-	} else {
-		fmt.Fprintf(&b, "\nInspect the complete diff through workspace_exec before forming conclusions.")
+		return "\nInspect the complete diff and relevant files in the repository snapshot through workspace_exec before forming conclusions." +
+			" Base every finding on changed hunks or observed tool output, then submit the result through submit_review_results.\n"
 	}
-	fmt.Fprintf(&b, " Base every finding on changed hunks or observed tool output, then submit the result through submit_review_results.\n")
-	return truncateWithNotice(b.String(), limits.MaxMessageBytes, messageTruncationNotice)
+	return "\nInspect the complete diff through workspace_exec before forming conclusions." +
+		" Base every finding on changed hunks or observed tool output, then submit the result through submit_review_results.\n"
 }
 
 // buildInputSummary produces the bounded Review Store projection. It includes

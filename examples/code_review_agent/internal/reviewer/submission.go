@@ -31,6 +31,8 @@ type ruleLocationKey struct {
 	ruleID string
 }
 
+const agentRulePrefix = "AGENT-"
+
 // unknownLineLiteralKey includes every normalized business field. Line zero is
 // not a location identity, so only literally identical records are collapsed.
 type unknownLineLiteralKey struct {
@@ -324,7 +326,30 @@ func normalizeAndValidateReviewResult(
 			origin,
 		)
 	}
+	if strings.HasPrefix(result.RuleID, agentRulePrefix) {
+		if result.Source != "agent" {
+			return store.ReviewResultRecord{}, fmt.Errorf(
+				"%s reserved agent rule_id requires source %q",
+				origin,
+				"agent",
+			)
+		}
+		expected := directAgentRuleID(result.Category)
+		if result.RuleID != expected {
+			return store.ReviewResultRecord{}, fmt.Errorf(
+				"%s source %q category %q requires reserved rule_id %q",
+				origin,
+				result.Source,
+				result.Category,
+				expected,
+			)
+		}
+	}
 	return result, nil
+}
+
+func directAgentRuleID(category string) string {
+	return agentRulePrefix + strings.ToUpper(strings.ReplaceAll(category, "_", "-"))
 }
 
 func validReviewResultKind(kind string) bool {
