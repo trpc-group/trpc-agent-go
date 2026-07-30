@@ -1,3 +1,12 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
 // Code Review Agent CLI — entry point for the tRPC-Agent-Go code review system.
 // Uses GraphAgent with 8 nodes in serial topology.
 package main

@@ -1,3 +1,12 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
 // Package storage provides database persistence for review data.
 // Default backend is SQLite; PostgreSQL/MySQL are supported via the Storage interface.
 package storage
