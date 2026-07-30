@@ -1,0 +1,15 @@
+diff --git a/logic/calc.go b/logic/calc.go
+index 1234567..abcdefg 100644
+--- a/logic/calc.go
++++ b/logic/calc.go
+@@ -8,6 +8,10 @@ func Add(a, b int) int {
+ 	return a + b
+ }
+
++func Divide(a, b int) string {
++	return a / b  // 类型错误: 返回 int 但函数签名声明返回 string
++}
++
+ func Multiply(a, b int) int {
+ 	return a * b
+ }

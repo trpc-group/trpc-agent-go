@@ -1,0 +1,15 @@
+diff --git a/models/user.go b/models/user.go
+index 1234567..abcdefg 100644
+--- a/models/user.go
++++ b/models/user.go
+@@ -3,6 +3,10 @@ package models
+
+ import "time"
+
++// User represents a registered user in the system.
++// The password field is hashed using bcrypt before storage.
++// API tokens are generated on login and expire after 24 hours.
++// Database connections are managed by the connection pool.
+ type User struct {
+ 	ID        string    `json:"id"`
+ 	Name      string    `json:"name"`

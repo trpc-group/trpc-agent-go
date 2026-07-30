@@ -1,0 +1,16 @@
+diff --git a/repo/user.go b/repo/user.go
+index 1234567..abcdefg 100644
+--- a/repo/user.go
++++ b/repo/user.go
+@@ -12,6 +12,10 @@ func GetUser(db *sql.DB, userID string) (*User, error) {
+ 	return user, nil
+ }
+
++func SearchUsers(db *sql.DB, keyword string) ([]User, error) {
++	query := fmt.Sprintf("SELECT * FROM users WHERE name LIKE '%%%s%%'", keyword)
++	return db.Query(query)
++}
++
+ func DeleteUser(db *sql.DB, userID string) error {
+ 	_, err := db.Exec("DELETE FROM users WHERE id = ?", userID)
+ 	return err

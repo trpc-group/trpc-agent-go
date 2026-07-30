@@ -1,0 +1,13 @@
+diff --git a/api/middleware.go b/api/middleware.go
+index 1234567..abcdefg 100644
+--- a/api/middleware.go
++++ b/api/middleware.go
+@@ -10,7 +10,7 @@ import (
+
+ var (
+ 	// defaultHeaders holds the standard response headers.
+-	defaultHeaders = map[string]string{
++	standardHeaders = map[string]string{
+ 		"X-Content-Type-Options": "nosniff",
+ 		"X-Frame-Options":        "DENY",
+ 	}

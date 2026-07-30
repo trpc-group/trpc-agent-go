@@ -1,0 +1,17 @@
+diff --git a/messages/errors.go b/messages/errors.go
+index 1234567..abcdefg 100644
+--- a/messages/errors.go
++++ b/messages/errors.go
+@@ -3,6 +3,12 @@ package messages
+
+ import "errors"
+
++var (
++	ErrUserNotFound    = errors.New("user not found in database")
++	ErrInvalidPassword = errors.New("the provided password is incorrect")
++	ErrTokenExpired    = errors.New("API token has expired, please request a new one")
++)
++
+ var (
+ 	ErrInternal = errors.New("internal server error")
+ 	ErrTimeout  = errors.New("request timed out")

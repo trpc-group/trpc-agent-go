@@ -1,0 +1,16 @@
+diff --git a/service/interface.go b/service/interface.go
+new file mode 100644
+index 0000000..abcdefg
+--- /dev/null
++++ b/service/interface.go
+@@ -0,0 +1,10 @@
++package service
++
++import "context"
++
++// UserStore defines the persistence contract for user data.
++type UserStore interface {
++	GetUser(ctx context.Context, id string) (*User, error)
++	SaveUser(ctx context.Context, user *User) error
++	DeleteUser(ctx context.Context, id string) error
++}

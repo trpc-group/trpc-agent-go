@@ -1,0 +1,11 @@
+diff --git a/.env.example b/.env.example
+new file mode 100644
+index 0000000..abcdefg
+--- /dev/null
++++ b/.env.example
+@@ -0,0 +1,5 @@
++# Database connection string
++DATABASE_URL=postgres://localhost:5432/myapp
++
++# Server configuration
++PORT=8080
