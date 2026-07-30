@@ -59,19 +59,20 @@ func Run(ctx context.Context, gs graph.State) (any, error) {
 			decision = d
 		}
 
-		// Check against deny-list patterns (token-level matching).
+		// Apply command-specific overrides to refine the default policy
+		// before the mandatory deny-list runs.
 		fullCmd := cmd.Cmd + " " + strings.Join(cmd.Args, " ")
-		if isBlocked(fullCmd) {
-			decision = "deny"
-		}
-
-		// Apply command-specific overrides (take precedence over default policy
-		// and deny-list). Override patterns are matched against the command text.
 		for _, o := range permCfg.Overrides {
 			if matchOverride(o.Pattern, fullCmd) {
 				decision = o.Decision
 				break
 			}
+		}
+
+		// Hard deny-list runs last — overrides can refine policy but cannot
+		// disable mandatory safety controls.
+		if isBlocked(fullCmd) {
+			decision = "deny"
 		}
 
 		decisions = append(decisions, types.PermissionDecision{

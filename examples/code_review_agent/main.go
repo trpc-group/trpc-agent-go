@@ -56,6 +56,12 @@ func main() {
 
 	// CLI flags override config
 	if *mode != "" {
+		switch *mode {
+		case "live", "dry_run", "rule_only":
+		default:
+			fmt.Fprintf(os.Stderr, "Error: invalid mode %q (must be live, dry_run, or rule_only)\n", *mode)
+			os.Exit(1)
+		}
 		cfg.Mode = *mode
 	}
 	if *outputDir != "" {
