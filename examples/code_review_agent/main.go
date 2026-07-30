@@ -31,7 +31,6 @@ import (
 var (
 	mode      = flag.String("mode", "", "set to fake-model to run a registered deterministic fixture scenario")
 	modelName = flag.String("model", "deepseek-v4-flash", "model name for agent")
-	apiKey    = flag.String("api-key", "", "API key for the model")
 	baseURL   = flag.String("base-url", "", "Base URL for the model")
 	sandbox   = flag.String("sandbox", "container", "workspace execution backend: container or local")
 	dbPath    = flag.String("db-path", "cr.db", "SQLite database path for review task records")
@@ -91,7 +90,7 @@ func run() (retErr error) {
 			Model: reviewer.ModelConfig{
 				Name:    *modelName,
 				BaseURL: *baseURL,
-				APIKey:  *apiKey,
+				APIKey:  modelAPIKeyFromEnvironment(),
 			},
 			Sandbox: reviewer.SandboxConfig{
 				Backend: *sandbox,
@@ -136,6 +135,10 @@ func run() (retErr error) {
 	fmt.Printf("Review completed\nTask ID: %s\nJSON report: %s\nMarkdown report: %s\n",
 		outcome.TaskID, jsonPath, markdownPath)
 	return nil
+}
+
+func modelAPIKeyFromEnvironment() string {
+	return os.Getenv("OPENAI_API_KEY")
 }
 
 // writeReviewReports materializes the already-persisted Artifact bytes as one

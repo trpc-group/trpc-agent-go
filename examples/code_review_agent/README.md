@@ -20,8 +20,8 @@ Runner → LLMAgent → Skill → PermissionPolicy
 
 - Go 1.25+ (or a compatible toolchain)
 - Docker (for `--sandbox container`)
-- An OpenAI-compatible API key for real-model runs (defaults below use
-  DeepSeek)
+- `OPENAI_API_KEY` set to an OpenAI-compatible API key for real-model
+  runs (defaults below use DeepSeek)
 
 Container mode builds `docker/Dockerfile` into the local image tag
 `code-review-agent-sandbox:latest` when the container executor starts.
@@ -34,7 +34,6 @@ the offline Go environment; Docker pulls the base image if needed.
 | -------------- | ---------------------------------------------- | ------------------- |
 | `--mode`       | `fake-model` for deterministic offline runs    | ``                  |
 | `--model`      | Model name                                     | `deepseek-v4-flash` |
-| `--api-key`    | Model API key (real-model mode)                | ``                  |
 | `--base-url`   | Model API base URL (real-model mode)           | ``                  |
 | `--sandbox`    | `container` or `local`                         | `container`         |
 | `--db-path`    | SQLite database path                           | `cr.db`             |
@@ -44,6 +43,10 @@ the offline Go environment; Docker pulls the base image if needed.
 | `--paths`      | Comma-separated repo-relative path scope       | ``                  |
 | `--paths-file` | File with one repo-relative path per line      | ``                  |
 | `--output-dir` | Directory for per-task reports                 | `review-output`     |
+
+Real-model runs read the API key only from `OPENAI_API_KEY`. The CLI
+does not accept API keys as flags, so credentials are not exposed in
+process arguments.
 
 Input rules:
 
@@ -97,12 +100,14 @@ Fixtures:
 ```bash
 cd examples/code_review_agent
 
-export MODEL_API_KEY='<your-api-key>'
+printf 'OPENAI_API_KEY: '
+read -s OPENAI_API_KEY
+printf '\n'
+export OPENAI_API_KEY
 
 go run . \
   --model deepseek-v4-flash \
   --base-url https://api.deepseek.com \
-  --api-key "$MODEL_API_KEY" \
   --sandbox container \
   --fixture acceptance-security \
   --db-path cr.db \
@@ -133,7 +138,6 @@ go run . \
   --diff-file ./change.patch \
   --model deepseek-v4-flash \
   --base-url https://api.deepseek.com \
-  --api-key "$MODEL_API_KEY" \
   --sandbox container
 ```
 
@@ -147,7 +151,6 @@ go run . \
   --repo-path /absolute/path/to/git-worktree \
   --model deepseek-v4-flash \
   --base-url https://api.deepseek.com \
-  --api-key "$MODEL_API_KEY" \
   --sandbox container \
   --output-dir review-output
 ```
@@ -160,7 +163,6 @@ go run . \
   --paths internal/reviewer,main.go \
   --model deepseek-v4-flash \
   --base-url https://api.deepseek.com \
-  --api-key "$MODEL_API_KEY" \
   --sandbox container
 ```
 
@@ -172,7 +174,6 @@ go run . \
   --repo-path /absolute/path/to/git-worktree \
   --model deepseek-v4-flash \
   --base-url https://api.deepseek.com \
-  --api-key "$MODEL_API_KEY" \
   --sandbox container
 ```
 
