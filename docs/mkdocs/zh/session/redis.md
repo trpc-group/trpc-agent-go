@@ -6,7 +6,7 @@ Redis 存储适用于生产环境和分布式应用，提供高性能和自动�
 
 - 基于 Redis 的会话、事件、状态持久化存储
 - 支持 Redis Standalone / Sentinel / Cluster 部署模式
-- Session、AppState、UserState 独立 TTL 控制
+- Session、TrackEvent、AppState、UserState 独立 TTL 控制
 - 异步持久化（可选），降低写入延迟
 - OpenTelemetry 链路追踪（可选）
 - 会话摘要（Summary）异步生成
@@ -28,11 +28,13 @@ Redis 存储适用于生产环境和分布式应用，提供高性能和自动�
 | --- | --- | --- | --- |
 | `WithSessionEventLimit(limit int)` | `int` | `1000` | 每个会话存储的最大事件数量 |
 | `WithSessionTTL(ttl time.Duration)` | `time.Duration` | `0`（不过期） | 会话状态和事件的 TTL，负值等同于 0 |
+| `WithTrackEventTTL(ttl time.Duration)` | `time.Duration` | 继承 SessionTTL | Track event TTL。非正数表示 Track event 不过期 |
 | `WithAppStateTTL(ttl time.Duration)` | `time.Duration` | `0`（不过期） | 应用级状态的 TTL |
 | `WithUserStateTTL(ttl time.Duration)` | `time.Duration` | `0`（不过期） | 用户级状态的 TTL |
 | `WithKeyPrefix(prefix string)` | `string` | `""` | Redis key 前缀，所有 key 将以 `prefix:` 开头。适用于多应用共享同一 Redis 实例的场景 |
 | `WithCompatMode(mode CompatMode)` | `CompatMode` | `CompatModeLegacy` | 存储兼容模式。可选值：`CompatModeNone`、`CompatModeLegacy`、`CompatModeTransition`。详见[存储兼容模式](#存储兼容模式compatmode) |
 | `WithEnableUserSessionIndex(enable bool)` | `bool` | `false` | 启用 HashIdx 的用户级 Session 索引。详见[用户级 Session 索引](#用户级-session-索引) |
+| `WithDisableScriptCache(disable bool)` | `bool` | `false` | 默认保持 `EVALSHA`-first；启用后仅通过 `EVAL` 执行 Lua 脚本，适用于脚本缓存不可靠的后端，但每次调用都会发送完整脚本，增加带宽开销 |
 
 **异步持久化配置：**
 

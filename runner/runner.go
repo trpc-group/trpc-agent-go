@@ -40,6 +40,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/sessionroute"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryfork"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/toolresultround"
+	"trpc.group/trpc-go/trpc-agent-go/internal/summarytrigger"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -530,6 +532,7 @@ func (r *runner) Run(
 	message model.Message,
 	runOpts ...agent.RunOption,
 ) (out <-chan *event.Event, err error) {
+	requestStartedAt := time.Now().UTC()
 	if message.Role == "" && model.HasPayload(message) {
 		log.WarnfContext(
 			ctx,
@@ -569,6 +572,13 @@ func (r *runner) Run(
 	}()
 
 	execCtx, execCancel := r.newExecutionContext(ctx, ro)
+	execCtx = summarytrigger.ContextWithRequestStart(
+		execCtx,
+		summarytrigger.RequestStart{
+			RequestID: ro.RequestID,
+			StartedAt: requestStartedAt,
+		},
+	)
 
 	// Resolve or create the session for this user and conversation.
 	sessionKey := session.Key{
@@ -760,6 +770,7 @@ func (r *runner) Run(
 		invocation.CleanupNotice(execCtx)
 		return nil, err
 	}
+	executionTraceInput = resolveExecutionTraceInvocationInputSnapshot(invocation, executionTraceInput)
 
 	// Process the agent events and emit them to the output channel.
 	return r.processAgentEvents(
@@ -1428,6 +1439,11 @@ func (r *runner) processSingleAgentEvent(
 		log.Errorf("agentEvent is nil")
 		return nil
 	}
+	hasToolResultRoundMarker := toolresultround.HasMarker(agentEvent)
+	toolResultRoundIncomplete := toolresultround.IsIncomplete(agentEvent)
+	if toolResultRoundIncomplete {
+		summaryfork.Invalidate(loop.invocation)
+	}
 	dynamicWorkflowChild := isDynamicWorkflowChildEvent(agentEvent)
 	routeEvent := sessionroute.SnapshotEventIdentity(agentEvent)
 	persistSession, routedEvent := sessionroute.RouteEvent(
@@ -1446,6 +1462,7 @@ func (r *runner) processSingleAgentEvent(
 	if agentEvent == nil {
 		return nil
 	}
+	restoreToolResultRoundMarker(agentEvent, hasToolResultRoundMarker, toolResultRoundIncomplete)
 	agentEvent = errorEventWithContent(agentEvent)
 	excludeRootCompletion := shouldExcludeRootCompletion(
 		routedEvent,
@@ -1542,6 +1559,13 @@ func (r *runner) processSingleAgentEvent(
 	finishRunnerLatencySpan(emitSpan, emitStarted, nil)
 
 	return nil
+}
+
+func restoreToolResultRoundMarker(evt *event.Event, hasMarker, incomplete bool) {
+	if !hasMarker {
+		return
+	}
+	toolresultround.Mark(evt, incomplete)
 }
 
 func isDynamicWorkflowChildEvent(evt *event.Event) bool {
@@ -1763,6 +1787,31 @@ func (r *runner) applyEventPluginsNoSpan(
 	}
 	copyEventInvocationFields(updated, e)
 	return updated
+}
+
+func (r *runner) applyAfterRunPlugins(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	completionEvent *event.Event,
+) {
+	if invocation == nil || invocation.Plugins == nil || completionEvent == nil {
+		return
+	}
+	hooks, ok := invocation.Plugins.(afterRunManager)
+	if !ok {
+		return
+	}
+	completionSnapshot := completionEvent.Clone()
+	if completionSnapshot != nil {
+		completionSnapshot.ID = completionEvent.ID
+	}
+	args := &plugin.AfterRunArgs{
+		Invocation:      invocation,
+		CompletionEvent: completionSnapshot,
+	}
+	if err := hooks.AfterRun(context.WithoutCancel(ctx), args); err != nil {
+		log.ErrorfContext(ctx, "plugin AfterRun failed: %v", err)
+	}
 }
 
 func copyEventInvocationFields(dst *event.Event, src *event.Event) {
@@ -2476,6 +2525,7 @@ func (r *runner) handleEventPersistence(
 ) bool {
 	// Ensure error events have content so they are valid for persistence.
 	agentEvent = errorEventWithContent(agentEvent)
+	toolResultRoundIncomplete := toolresultround.IsIncomplete(agentEvent)
 
 	// Append event to session if it's complete (not partial).
 	if !r.shouldPersistEvent(agentEvent) {
@@ -2532,6 +2582,9 @@ func (r *runner) handleEventPersistence(
 	// Skip if the event explicitly opts out of summarization.
 	if agentEvent.Actions != nil &&
 		agentEvent.Actions.SkipSummarization {
+		return true
+	}
+	if toolResultRoundIncomplete {
 		return true
 	}
 
@@ -2657,8 +2710,8 @@ func (r *runner) captureCompletionFallback(
 	if loop == nil || agentEvent == nil {
 		return
 	}
-	graphCompletionEvent := isGraphCompletionSnapshotEvent(agentEvent)
-	if !graphCompletionEvent && len(agentEvent.StateDelta) > 0 {
+	graphEvent := isGraphCompletionSnapshotEvent(agentEvent)
+	if !graphEvent && len(agentEvent.StateDelta) > 0 {
 		loop.fallbackStateDelta = mergeCompletionFallbackStateDelta(
 			loop.fallbackStateDelta,
 			agentEvent.StateDelta,
@@ -2670,14 +2723,14 @@ func (r *runner) captureCompletionFallback(
 	hasAssistantPayload := eventHasAssistantMessageContent(agentEvent)
 	// Any later complete non-graph response invalidates the captured graph
 	// result. Only a new assistant payload switches output selection to fallback.
-	if loop.graphCompletionSeen && !graphCompletionEvent {
+	if loop.graphCompletionSeen && !graphEvent {
 		loop.finalStateDelta = nil
 		loop.finalChoices = nil
 		if hasAssistantPayload {
 			loop.graphCompletionSeen = false
 		}
 	}
-	if !graphCompletionEvent &&
+	if !graphEvent &&
 		len(agentEvent.Response.Choices) > 0 &&
 		hasAssistantPayload {
 		loop.fallbackChoices = cloneChoices(agentEvent.Response.Choices)
@@ -2891,6 +2944,7 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 			traceSnapshotOnly,
 		)
 	}
+	r.applyAfterRunPlugins(ctx, loop.invocation, runnerCompletionEvent)
 
 	// Append runner completion event to session.
 	persistRunnerCompletionEvent := runnerCompletionEvent
@@ -3020,6 +3074,19 @@ func executionTraceInputSnapshot(message model.Message, ro agent.RunOptions) *tr
 		return nil
 	}
 	return &trace.Snapshot{Text: string(data)}
+}
+
+func resolveExecutionTraceInvocationInputSnapshot(
+	invocation *agent.Invocation,
+	current *trace.Snapshot,
+) *trace.Snapshot {
+	if current != nil {
+		return current
+	}
+	if invocation == nil || !invocation.RunOptions.ExecutionTraceEnabled {
+		return nil
+	}
+	return executionTraceMessageSnapshot(invocation.Message)
 }
 
 func executionTraceOutputSnapshot(

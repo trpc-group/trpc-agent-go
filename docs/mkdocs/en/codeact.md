@@ -9,11 +9,70 @@ LLM -> execute_tool_code -> Runtime -> guest call_tool(name, JSON args)
 
 The Go gateway is the trust boundary: it rejects unknown tools, validates input JSON against the tool declaration, calls the tool, then validates/serializes its result before returning it to guest code. Guest code never gets Go references or host credentials.
 
-`Runtime` is the transport boundary. The built-in `LocalRunner` implements it with a Python stdio guest. Remote or sandbox-native backends should implement `Runtime` directly and route sandbox-originated `ToolCall` values to the provided `ToolCallHandler`.
+`Runtime` is the transport boundary. `LocalRunner` executes a Python stdio
+guest directly. `SandboxRunner` uses the same callback protocol inside a fresh
+OS-sandboxed workspace. Remote services and microVM platforms should implement
+`Runtime` directly and route guest `ToolCall` values to the provided
+`ToolCallHandler`.
 
 ## Security
 
-`LocalRunner` starts a local Python process and is only for development or an already isolated container/VM. It is **not** a security sandbox. Applications should implement `codeact.Runtime` for their existing remote sandbox, microVM, or container service, with the isolation, resource, and dependency policies appropriate to their environment.
+`LocalRunner` starts a local Python process and is only for development or an
+already isolated container/VM. It is **not** a security sandbox. It uses the
+shared local Python runtime, which applies defense-in-depth checks such as
+source-size limits, a minimal process environment, an empty temporary working
+directory by default, a private bootstrap script, best-effort guest process
+termination with process-group cleanup on Unix-like systems, and an optional
+full-execution timeout configured with
+`codeact.NewLocalRunner(codeact.LocalRunnerConfig{Timeout: ...})`.
+
+CodeAct preserves general Python syntax and builtins, including imports and
+exception handling. Unlike Dynamic Workflow, it does not apply an AST or
+builtin allowlist. The shared runtime covers process startup and lifecycle
+hardening, not a shared language policy.
+
+Compared with the earlier LocalRunner behavior, the hardened runner no longer
+inherits the host environment, uses an empty temporary working directory by
+default, and rejects generated source larger than 64 KiB unless configured
+otherwise. These are intentional behavior changes rather than a security
+sandbox boundary.
+
+For local OS isolation, construct a sandbox-backed runtime and pass it where a
+`LocalRunner` would otherwise be used:
+
+```go
+runtime := codeact.NewSandboxRunner()
+orchestrator, err := toolcode.NewTool(runtime, managedTools)
+```
+
+With the no-option constructor shown above, each execution gets a one-shot
+workspace and a clean environment. It uses the managed
+`codeexecutor/sandbox` backend, restricts networking by default, and never
+falls back to `LocalRunner` if sandbox setup fails. Linux requires `bubblewrap`;
+macOS uses `/usr/bin/sandbox-exec`; managed sandboxing is not implemented on
+Windows.
+
+`SandboxRunner.Timeout` sets a deadline for the complete execution and
+propagates cancellation to the guest and host tool calls. Go context
+cancellation is cooperative: tool handlers must return promptly when their
+context is done. The zero value adds no deadline and relies on the caller's
+context. A production caller must provide a context deadline or configure this
+timeout; if both are present, the earlier deadline wins. CPU, memory, and
+process-count quotas remain the responsibility of the surrounding container,
+microVM, or remote runtime.
+
+When `SandboxRunner.Python` is empty, the sandbox resolves `python3` from its
+clean PATH. Any non-empty value, including an explicit `"python3"`, is resolved
+through the host PATH and converted to an absolute path. An interpreter outside
+the backend's default runtime paths may also need a managed permission profile
+extended with `sandbox.WorkspaceWriteProfile().WithReadPaths(...)` and passed
+through `sandbox.WithPermissionProfile(...)`.
+
+The OS sandbox remains host-local and grants the platform/runtime paths needed
+to launch the interpreter; exact read visibility differs by backend. It is not
+a tenant boundary equivalent to a microVM. Use a container, microVM, or remote
+`Runtime` when the guest must have no host filesystem visibility or needs
+stronger resource and tenant isolation.
 
 ## Why not call raw HTTP APIs from generated code?
 

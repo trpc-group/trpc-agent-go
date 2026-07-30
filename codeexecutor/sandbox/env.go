@@ -59,21 +59,24 @@ func (r *Runtime) buildEnvironment(
 	ws codeexecutor.Workspace,
 	spec codeexecutor.RunProgramSpec,
 ) []string {
-	env := map[string]string{}
-	host := hostEnvMap()
-	switch r.envPolicy.Inherit {
-	case ShellEnvironmentPolicyInheritNone:
-	case ShellEnvironmentPolicyInheritCore:
-		for k, v := range host {
-			if isCoreEnvironmentKey(k) {
-				env[k] = v
-			}
-		}
-	default:
-		for k, v := range host {
-			env[k] = v
-		}
-	}
+	// RunProgram preserves its historical environment behavior, including
+	// host inheritance when spec.CleanEnv is set.
+	return r.buildEnvironmentFrom(ws, spec.Env, true)
+}
+
+func (r *Runtime) buildProcessEnvironment(
+	ws codeexecutor.Workspace,
+	spec ProcessSpec,
+) []string {
+	return r.buildEnvironmentFrom(ws, spec.Env, !spec.CleanEnv)
+}
+
+func (r *Runtime) buildEnvironmentFrom(
+	ws codeexecutor.Workspace,
+	explicit map[string]string,
+	inheritHost bool,
+) []string {
+	env := r.inheritedEnvironment(inheritHost)
 	if r.envPolicy.ApplyDefaultExcludes {
 		for k := range env {
 			if isSecretName(k) {
@@ -93,7 +96,7 @@ func (r *Runtime) buildEnvironment(
 			env[k] = v
 		}
 	}
-	for k, v := range spec.Env {
+	for k, v := range explicit {
 		if k != "" {
 			env[k] = v
 		}
@@ -123,6 +126,28 @@ func (r *Runtime) buildEnvironment(
 		env["PATH"] = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 	}
 	return envSlice(env)
+}
+
+func (r *Runtime) inheritedEnvironment(enabled bool) map[string]string {
+	env := map[string]string{}
+	if !enabled {
+		return env
+	}
+	host := hostEnvMap()
+	switch r.envPolicy.Inherit {
+	case ShellEnvironmentPolicyInheritNone:
+	case ShellEnvironmentPolicyInheritCore:
+		for k, v := range host {
+			if isCoreEnvironmentKey(k) {
+				env[k] = v
+			}
+		}
+	default:
+		for k, v := range host {
+			env[k] = v
+		}
+	}
+	return env
 }
 
 func isCoreEnvironmentKey(name string) bool {

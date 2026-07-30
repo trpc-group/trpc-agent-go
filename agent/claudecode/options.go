@@ -114,13 +114,6 @@ func WithRawOutputHook(hook RawOutputHook) Option {
 	}
 }
 
-// withCommandRunner overrides how the agent executes external commands, only for test.
-func withCommandRunner(runner commandRunner) Option {
-	return func(o *options) {
-		o.commandRunner = runner
-	}
-}
-
 // newOptions applies options and validates the resulting configuration.
 func newOptions(opt ...Option) (*options, error) {
 	opts := &options{

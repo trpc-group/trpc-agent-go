@@ -1492,6 +1492,67 @@ func TestSessionServiceGetSessionFiltersTrackEvents(t *testing.T) {
 	})
 }
 
+func TestSessionServiceGetTrackEvents(t *testing.T) {
+	service := NewSessionService()
+	defer service.Close()
+	ctx := context.Background()
+	key := session.Key{
+		AppName:   "track-app",
+		UserID:    "track-user",
+		SessionID: "track-session",
+	}
+	sess, err := service.CreateSession(ctx, key, session.StateMap{})
+	require.NoError(t, err)
+	base := time.Now().Add(-time.Hour)
+	require.NoError(t, service.AppendTrackEvent(ctx, sess, &session.TrackEvent{
+		Track:     "alpha",
+		Payload:   json.RawMessage(`"a1"`),
+		Timestamp: base,
+	}))
+	require.NoError(t, service.AppendTrackEvent(ctx, sess, &session.TrackEvent{
+		Track:     "alpha",
+		Payload:   json.RawMessage(`"a2"`),
+		Timestamp: base.Add(time.Second),
+	}))
+	got, err := service.GetTrackEvents(ctx, key, "alpha", session.WithEventNum(1))
+	require.NoError(t, err)
+	require.Equal(t, session.Track("alpha"), got.Track)
+	require.Len(t, got.Events, 1)
+	assert.Equal(t, json.RawMessage(`"a2"`), got.Events[0].Payload)
+	got, err = service.GetTrackEvents(ctx, key, "alpha", session.WithEventTime(base.Add(time.Second)))
+	require.NoError(t, err)
+	require.Len(t, got.Events, 1)
+	assert.Equal(t, json.RawMessage(`"a2"`), got.Events[0].Payload)
+	missing, err := service.GetTrackEvents(ctx, key, "missing")
+	require.NoError(t, err)
+	require.Equal(t, session.Track("missing"), missing.Track)
+	require.Empty(t, missing.Events)
+}
+
+func TestSessionServiceGetTrackEventsEmptyAndErrors(t *testing.T) {
+	service := NewSessionService()
+	defer service.Close()
+	ctx := context.Background()
+	_, err := service.GetTrackEvents(ctx, session.Key{UserID: "track-user", SessionID: "track-session"}, "alpha")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, session.ErrAppNameRequired)
+	key := session.Key{AppName: "track-app", UserID: "track-user", SessionID: "missing-session"}
+	got, err := service.GetTrackEvents(ctx, key, "alpha")
+	require.NoError(t, err)
+	require.Equal(t, session.Track("alpha"), got.Track)
+	require.Empty(t, got.Events)
+	_, err = service.GetTrackEvents(ctx, key, "alpha", session.WithGetSessionEventPage(0, 10))
+	require.Error(t, err)
+	assert.ErrorIs(t, err, session.ErrEventPageUnsupported)
+	sess, err := service.CreateSession(ctx, key, session.StateMap{})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	got, err = service.GetTrackEvents(ctx, key, "alpha")
+	require.NoError(t, err)
+	require.Equal(t, session.Track("alpha"), got.Track)
+	require.Empty(t, got.Events)
+}
+
 func TestSessionServiceListSessionsFiltersTrackEvents(t *testing.T) {
 	service := NewSessionService()
 	defer service.Close()

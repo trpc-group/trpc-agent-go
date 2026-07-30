@@ -12,6 +12,7 @@ package inmemory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -880,6 +881,34 @@ func (s *SessionService) AppendTrackEvent(
 	storedSessionWithTTL.session = storedSession
 	storedSessionWithTTL.expiredAt = calculateExpiredAt(s.opts.sessionTTL)
 	return nil
+}
+
+// GetTrackEvents returns persisted track events for the given session track.
+func (s *SessionService) GetTrackEvents(
+	ctx context.Context,
+	key session.Key,
+	track session.Track,
+	opts ...session.Option,
+) (*session.TrackEvents, error) {
+	if err := key.CheckSessionKey(); err != nil {
+		return nil, err
+	}
+	sess, err := s.GetSession(ctx, key, opts...)
+	if err != nil {
+		return nil, err
+	}
+	if sess == nil {
+		return &session.TrackEvents{Track: track}, nil
+	}
+	trackEvents, err := sess.GetTrackEvents(track)
+	if errors.Is(err, session.ErrTracksEmpty) ||
+		errors.Is(err, session.ErrTrackEventsNotFound) {
+		return &session.TrackEvents{Track: track}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return trackEvents, nil
 }
 
 // cleanupExpired removes all expired sessions and states.

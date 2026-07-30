@@ -681,6 +681,25 @@ func TestGetTrackEvents_MismatchedLengths(t *testing.T) {
 	assert.Contains(t, err.Error(), "count mismatch")
 }
 
+func TestGetTrackEventsByTrackLists_EmptyAndMismatch(t *testing.T) {
+	s, _, db := newTestService(t, nil)
+	defer db.Close()
+	got, err := s.getTrackEventsByTrackLists(
+		context.Background(), nil, nil, 0, time.Time{},
+	)
+	require.NoError(t, err)
+	assert.Nil(t, got)
+	_, err = s.getTrackEventsByTrackLists(
+		context.Background(),
+		[]session.Key{{AppName: "app", UserID: "user", SessionID: "s1"}},
+		nil,
+		0,
+		time.Time{},
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "track lists count mismatch")
+}
+
 func TestGetTrackEvents_NoTracks(t *testing.T) {
 	s, _, db := newTestService(t, nil)
 	defer db.Close()

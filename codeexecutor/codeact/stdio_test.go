@@ -15,7 +15,9 @@ import (
 	"errors"
 	"io"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -49,8 +51,8 @@ func TestExecuteStdioReapsGuestAfterProtocolError(t *testing.T) {
 		fakeToolCallHandler{},
 	)
 	require.Error(t, err)
-	require.Equal(t, 1, process.kills)
-	require.Equal(t, 1, process.waits)
+	require.Equal(t, int32(1), process.kills.Load())
+	require.Equal(t, int32(1), process.waits.Load())
 	require.Equal(t, 1, process.stdinCloses)
 }
 
@@ -105,8 +107,8 @@ func TestExecuteStdioBridgesToolCalls(t *testing.T) {
 	require.JSONEq(t, `{"a":1,"b":2}`, string(got.Args))
 	require.JSONEq(t, `{"answer":3}`, string(result.Value))
 	require.Equal(t, "done\n", result.Stdout)
-	require.Equal(t, 0, process.kills)
-	require.Equal(t, 1, process.waits)
+	require.Equal(t, int32(0), process.kills.Load())
+	require.Equal(t, int32(1), process.waits.Load())
 	require.Equal(t, 1, process.stdinCloses)
 	require.Contains(t, process.stdin.String(), `"type":"run"`)
 	require.Contains(t, process.stdin.String(), `"type":"tool_result"`)
@@ -196,8 +198,8 @@ func TestExecuteStdioBoundsCompletedGuestWait(t *testing.T) {
 	require.Less(t, time.Since(start), 200*time.Millisecond)
 	require.JSONEq(t, `{"answer":1}`, string(result.Value))
 	require.Equal(t, "done\n", result.Stdout)
-	require.Equal(t, 1, process.kills)
-	require.Equal(t, 1, process.waits)
+	require.Equal(t, int32(1), process.kills.Load())
+	require.Equal(t, int32(1), process.waits.Load())
 }
 
 func TestExecuteStdioFailsWhenTimedOutGuestDoesNotExitAfterKill(t *testing.T) {
@@ -228,8 +230,8 @@ func TestExecuteStdioFailsWhenTimedOutGuestDoesNotExitAfterKill(t *testing.T) {
 		fakeToolCallHandler{},
 	)
 	require.ErrorContains(t, err, "timed-out guest did not exit after kill")
-	require.Equal(t, 1, process.kills)
-	require.Equal(t, 1, process.waits)
+	require.Equal(t, int32(1), process.kills.Load())
+	require.Equal(t, int32(1), process.waits.Load())
 }
 
 func TestExecuteStdioReturnsContextErrorWhileWaitingForCompletedGuest(t *testing.T) {
@@ -265,8 +267,8 @@ func TestExecuteStdioReturnsContextErrorWhileWaitingForCompletedGuest(t *testing
 		fakeToolCallHandler{},
 	)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
-	require.Equal(t, 1, process.kills)
-	require.Equal(t, 1, process.waits)
+	require.Equal(t, int32(1), process.kills.Load())
+	require.Equal(t, int32(1), process.waits.Load())
 }
 
 func TestExecuteStdioReportsProtocolEdgeCases(t *testing.T) {
@@ -331,22 +333,99 @@ func TestExecuteStdioReportsWriteErrors(t *testing.T) {
 }
 
 func TestLocalRunnerReturnsStartError(t *testing.T) {
-	_, err := LocalRunner{Python: "definitely-not-a-python-executable"}.start(context.Background(), "return 1")
+	_, err := LocalRunner{Python: "definitely-not-a-python-executable"}.start(
+		context.Background(),
+		Request{Code: "return 1"},
+		"return 1",
+	)
 	require.Error(t, err)
 }
 
-func TestLocalProcessKill(t *testing.T) {
-	notStarted := &localProcess{cmd: exec.Command("sleep", "60")}
-	require.NoError(t, notStarted.Kill())
-
-	if _, err := exec.LookPath("sleep"); err != nil {
-		t.Skip("sleep unavailable")
+func TestLocalRunnerEnforcesMaxCodeBytes(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 unavailable")
 	}
-	cmd := exec.Command("sleep", "60")
-	require.NoError(t, cmd.Start())
-	process := &localProcess{cmd: cmd}
-	require.NoError(t, process.Kill())
-	_ = cmd.Wait()
+	_, err := Execute(
+		context.Background(),
+		NewLocalRunner(LocalRunnerConfig{MaxCodeBytes: 8}),
+		fakeToolCallHandler{},
+		"return None",
+	)
+	require.ErrorContains(t, err, "code exceeds 8 bytes")
+}
+
+func TestLocalRunnerOptionalTimeoutStopsBusyCode(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 unavailable")
+	}
+	start := time.Now()
+	_, err := Execute(
+		context.Background(),
+		NewLocalRunner(LocalRunnerConfig{Timeout: 100 * time.Millisecond}),
+		fakeToolCallHandler{},
+		"while True:\n    pass",
+	)
+	require.Error(t, err)
+	require.Less(t, time.Since(start), 5*time.Second)
+}
+
+func TestConfiguredLocalRunnerTimeoutCancelsToolHandler(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 unavailable")
+	}
+	started := time.Now()
+	_, err := Execute(
+		context.Background(),
+		NewLocalRunner(LocalRunnerConfig{Timeout: 100 * time.Millisecond}),
+		toolCallHandlerFunc(func(ctx context.Context, _ ToolCall) (json.RawMessage, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}),
+		"return await call_tool('wait')",
+	)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Less(t, time.Since(started), 5*time.Second)
+}
+
+func TestLocalRunnerUsesConfiguredWorkDir(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 unavailable")
+	}
+	workDir := t.TempDir()
+	result, err := Execute(
+		context.Background(),
+		NewLocalRunner(LocalRunnerConfig{WorkDir: workDir}),
+		fakeToolCallHandler{},
+		`import os
+return os.getcwd()`,
+	)
+	require.NoError(t, err)
+	resolvedWorkDir, err := filepath.EvalSymlinks(workDir)
+	require.NoError(t, err)
+	var got string
+	require.NoError(t, json.Unmarshal(result.Value, &got))
+	resolvedGot, err := filepath.EvalSymlinks(got)
+	require.NoError(t, err)
+	require.Equal(t, resolvedWorkDir, resolvedGot)
+}
+
+func TestConfiguredLocalRunnerUsesApprovedEnvironment(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 unavailable")
+	}
+	result, err := Execute(
+		context.Background(),
+		NewLocalRunner(LocalRunnerConfig{Env: []string{
+			"TRPC_CODEACT_ENV_PROBE=visible",
+			"PYTHONPATH=/tmp/unsafe",
+		}}),
+		fakeToolCallHandler{},
+		"import os\nreturn {"+
+			"'visible': os.getenv('TRPC_CODEACT_ENV_PROBE'), "+
+			"'pythonpath': os.getenv('PYTHONPATH')}",
+	)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"visible":"visible","pythonpath":null}`, string(result.Value))
 }
 
 type fakeStdioRunner struct {
@@ -354,7 +433,7 @@ type fakeStdioRunner struct {
 	err     error
 }
 
-func (r fakeStdioRunner) start(context.Context, string) (stdioProcess, error) {
+func (r fakeStdioRunner) start(context.Context, Request, string) (stdioProcess, error) {
 	if r.err != nil {
 		return nil, r.err
 	}
@@ -365,8 +444,8 @@ type fakeStdioProcess struct {
 	stdin       bytes.Buffer
 	stdinWriter io.WriteCloser
 	stdout      io.ReadCloser
-	kills       int
-	waits       int
+	kills       atomic.Int32
+	waits       atomic.Int32
 	stdinCloses int
 	waitFn      func() error
 	waitErr     error
@@ -381,14 +460,14 @@ func (p *fakeStdioProcess) Stdin() io.WriteCloser {
 }
 func (p *fakeStdioProcess) Stdout() io.ReadCloser { return p.stdout }
 func (p *fakeStdioProcess) Wait() error {
-	p.waits++
+	p.waits.Add(1)
 	if p.waitFn != nil {
 		return p.waitFn()
 	}
 	return p.waitErr
 }
 func (p *fakeStdioProcess) Kill() error {
-	p.kills++
+	p.kills.Add(1)
 	if p.killFn != nil {
 		return p.killFn()
 	}

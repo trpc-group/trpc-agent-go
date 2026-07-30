@@ -2143,6 +2143,34 @@ func TestSession_Clone_Concurrent(t *testing.T) {
 	wg.Wait()
 }
 
+func TestSession_Clone_ConcurrentUpdateUserSession(t *testing.T) {
+	sess := NewSession("app", "user", "session")
+	updatedAt := sess.UpdatedAt
+	ev := &event.Event{}
+	start := make(chan struct{})
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < 1000; i++ {
+			sess.Clone()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < 1000; i++ {
+			sess.UpdateUserSession(ev)
+		}
+	}()
+
+	close(start)
+	wg.Wait()
+	assert.True(t, sess.UpdatedAt.After(updatedAt))
+}
+
 func TestNewSession(t *testing.T) {
 	fixedTime := time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC)
 

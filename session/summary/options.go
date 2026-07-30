@@ -35,9 +35,11 @@ type SkipRecentFunc func(events []event.Event) int
 
 // WithPrompt sets the custom prompt for summarization.
 // The prompt must include the placeholder {conversation_text}, which will be
-// replaced with the extracted conversation when generating the summary. When
-// WithMaxSummaryWords is configured, {max_summary_words} must be included in
-// either this prompt or WithSystemPrompt.
+// replaced with the extracted conversation when generating the summary. It may
+// also include {previous_summary} to position the previous rolling summary
+// separately from newly uncovered conversation text. When WithMaxSummaryWords
+// is configured, {max_summary_words} must be included in either this prompt or
+// WithSystemPrompt.
 func WithPrompt(prompt string) Option {
 	return func(s *sessionSummarizer) {
 		if prompt != "" {
@@ -48,9 +50,10 @@ func WithPrompt(prompt string) Option {
 
 // WithSystemPrompt sets an additional system prompt for summarization.
 // The prompt is rendered into a dedicated system message before the user prompt.
-// It must not include the {conversation_text} placeholder; keep conversation
-// content in the user prompt instead. When WithMaxSummaryWords is configured,
-// {max_summary_words} may be included here instead of the user prompt.
+// It must not include the {conversation_text} or {previous_summary}
+// placeholders; keep conversation content in the user prompt instead. When
+// WithMaxSummaryWords is configured, {max_summary_words} may be included here
+// instead of the user prompt.
 func WithSystemPrompt(prompt string) Option {
 	return func(s *sessionSummarizer) {
 		if prompt != "" {
@@ -63,7 +66,8 @@ func WithSystemPrompt(prompt string) Option {
 // parent model request is available in the context. When enabled, the
 // summarizer clones the parent request and appends a compacting user message
 // instead of sending a standalone summary prompt. If no parent request is
-// available, summarization falls back to the standalone prompt path.
+// available, or the parent cannot fit the summary model's input budget,
+// summarization falls back to a bounded standalone prompt.
 //
 // This is disabled by default.
 func WithCacheSafeForking(enable bool) Option {
@@ -74,8 +78,9 @@ func WithCacheSafeForking(enable bool) Option {
 
 // WithCacheSafeForkPrompt sets the user message appended to a parent request
 // when cache-safe forking is enabled. The prompt may include
-// {max_summary_words}, but it must not include {conversation_text}; the parent
-// request already contains the conversation prefix.
+// {max_summary_words}, but it must not include {conversation_text} or
+// {previous_summary}; the parent request already contains the conversation
+// prefix, including any injected summary.
 func WithCacheSafeForkPrompt(prompt string) Option {
 	return func(s *sessionSummarizer) {
 		if prompt != "" {
@@ -144,7 +149,9 @@ func WithEventThreshold(eventCount int) Option {
 	}
 }
 
-// WithTimeThreshold appends a time-based check.
+// WithTimeThreshold appends a time-based check. The built-in Runner path uses
+// the idle gap before the current top-level request; standalone evaluation
+// preserves CheckTimeThreshold's last-event-age fallback.
 // Note: all checks in a summarizer are combined with global AND semantics.
 // If you call multiple threshold options (e.g. event + time), all must pass.
 func WithTimeThreshold(interval time.Duration) Option {
