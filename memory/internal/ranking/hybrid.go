@@ -16,7 +16,7 @@ import (
 )
 
 // MergeHybrid combines backend-provided vector and keyword rankings within the
-// requested result window. Ordinary queries may replace the last result with
+// requested result window. Temporal queries may replace the last result with
 // one strongly matched candidate from the overfetched tail.
 func MergeHybrid(
 	query string,

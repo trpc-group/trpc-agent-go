@@ -25,8 +25,8 @@ const (
 	minimumTemporalSequenceMatches = 1
 )
 
-// HybridCandidateLimit expands the candidate window only when an ordinary
-// query has enough terms for focused tail ranking.
+// HybridCandidateLimit expands the candidate window only when a non-assistant
+// temporal query has enough terms for focused tail ranking.
 func HybridCandidateLimit(query string, limit int) int {
 	queryTerms := focusedQueryTerms(query)
 	if limit <= 0 || asksForAssistantResult(query) ||
