@@ -4,7 +4,7 @@ go 1.21
 
 replace trpc.group/trpc-go/trpc-agent-go => ../../../..
 
-require trpc.group/trpc-go/trpc-agent-go v1.9.2-0.20260602121024-664ebd0ab56d
+require trpc.group/trpc-go/trpc-agent-go v1.10.1-0.20260605075142-de51b6b2b584
 
 require (
 	github.com/yuin/goldmark v1.4.13 // indirect
