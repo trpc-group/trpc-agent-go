@@ -1,13 +1,19 @@
-//
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
-//
-// Copyright (C) 2025 Tencent.  All rights reserved.
-//
-// trpc-agent-go is licensed under the Apache License Version 2.0.
-//
-
 // Package ruleengine implements the RuleEngine GraphAgent node.
 // Applies deterministic rules (TokenRule + ToolRule) to file changes and sandbox output.
+//
+// ## Limitations (Issue #2004 — CodeRabbit review)
+//
+//  1. TokenRule matching is scoped to added (+) lines only, except for
+//     resource-leak categories (goroutine_leak, resource_leak, db_lifecycle,
+//     error_handling) which also scan removed (-) lines to detect deleted
+//     cleanup calls (defer Close, cancel, rows.Close, tx.Rollback, etc.).
+//  2. Regex matching operates on single lines — multi-line patterns
+//     (e.g., a function call spanning multiple lines) will be missed.
+//  3. The isFalsePositiveLine pre-filter skips comments, package/import
+//     declarations, and pure string literals, which may cause false negatives
+//     in unusual code styles.
+//  4. Rules are loaded from Markdown files with a fixed format (see
+//     skills/code-review/rules/). Rule evolution requires format versioning.
 package ruleengine
 
 import (
@@ -21,8 +27,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/state"
-	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/types"
+	"github.com/dcdc4747/trpc-agent-go-cr-project/internal/state"
+	"github.com/dcdc4747/trpc-agent-go-cr-project/internal/types"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 )
 
@@ -66,8 +72,8 @@ func Run(ctx context.Context, gs graph.State) (any, error) {
 		for _, fc := range changes {
 			for _, hunk := range fc.Hunks {
 				for _, l := range hunk.Lines {
-					if l.Type != "+" {
-						continue // only inspect added lines
+					if l.Type != "+" && !(isLeakCategory(rule.Category) && l.Type == "-") {
+						continue
 					}
 					// Pre-filter: skip comments and pure string literals to
 					// avoid false positives from harmless text.
@@ -298,5 +304,17 @@ func inferCategoryFromID(id string) string {
 		return "resource_leak"
 	default:
 		return "other"
+	}
+}
+
+// isLeakCategory returns true for rule categories that benefit from scanning
+// both added (+) and removed (-) lines. Deleted defer/Close/cancel calls are
+// as significant as added leaky patterns for these categories.
+func isLeakCategory(category string) bool {
+	switch category {
+	case "goroutine_leak", "resource_leak", "db_lifecycle", "error_handling":
+		return true
+	default:
+		return false
 	}
 }

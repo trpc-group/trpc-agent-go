@@ -1,11 +1,3 @@
-//
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
-//
-// Copyright (C) 2025 Tencent.  All rights reserved.
-//
-// trpc-agent-go is licensed under the Apache License Version 2.0.
-//
-
 // Package llmanalyzer implements the LLMAnalyzer GraphAgent node.
 // Uses model.GenerateContent() for semantic code review analysis.
 package llmanalyzer
@@ -20,16 +12,15 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/sanitize"
-	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/state"
-	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/types"
+	"github.com/dcdc4747/trpc-agent-go-cr-project/internal/state"
+	"github.com/dcdc4747/trpc-agent-go-cr-project/internal/types"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 // Run is the LLMAnalyzer GraphAgent node.
 // Reads file_changes, sandbox_results, and rule_findings from state,
-// writes llm_findings.
+// writes llm_findings and llm_errors (for monitoring LLM outages).
 func Run(ctx context.Context, gs graph.State) (any, error) {
 	start := time.Now()
 	defer func() { gs[state.StateKeyNodeLLMAnalyzerMs] = time.Since(start).Milliseconds() }()
@@ -39,6 +30,10 @@ func Run(ctx context.Context, gs graph.State) (any, error) {
 	results, _ := gs[state.StateKeySandboxResults].([]types.SandboxResult)
 	ruleFindings, _ := gs[state.StateKeyRuleFindings].([]types.Finding)
 	taskID, _ := gs[state.StateKeyTaskID].(string)
+
+	// Initialize LLM error tracking so downstream nodes can distinguish
+	// "no findings" from "LLM failed".
+	gs[state.StateKeyLLMErrors] = []types.LLMError{}
 
 	if len(changes) == 0 {
 		gs[state.StateKeyLLMFindings] = []types.Finding{}
@@ -58,6 +53,7 @@ func Run(ctx context.Context, gs graph.State) (any, error) {
 		}
 		findings, err := loadMockFindings(mockPath, changedFiles)
 		if err != nil {
+			recordLLMError(gs, "mock_load", err.Error())
 			gs[state.StateKeyLLMFindings] = []types.Finding{}
 			return gs, nil
 		}
@@ -75,12 +71,15 @@ func Run(ctx context.Context, gs graph.State) (any, error) {
 	// ── Live mode: call model.GenerateContent() ──
 	llm := getLLMModel(ctx)
 	if llm == nil {
+		recordLLMError(gs, "no_model", "LLM model is nil — check model provider configuration")
 		gs[state.StateKeyLLMFindings] = []types.Finding{}
 		return gs, nil
 	}
 	findings, err := analyzeWithLLM(ctx, llm, cfg, changes, results, ruleFindings, taskID)
 	if err != nil {
-		// LLM failure is non-fatal per error contract
+		// LLM failure is non-fatal per error contract, but MUST be surfaced
+		// through llm_errors for monitoring (Issue #2004 — CodeRabbit review).
+		recordLLMError(gs, "llm_failure", err.Error())
 		gs[state.StateKeyLLMFindings] = []types.Finding{}
 		return gs, nil
 	}
@@ -89,21 +88,33 @@ func Run(ctx context.Context, gs graph.State) (any, error) {
 	return gs, nil
 }
 
+// recordLLMError appends an LLM error entry to the state so StorageWriter
+// can persist it as an exception row for monitoring.
+func recordLLMError(gs graph.State, errorType, detail string) {
+	errors, _ := gs[state.StateKeyLLMErrors].([]types.LLMError)
+	gs[state.StateKeyLLMErrors] = append(errors, types.LLMError{
+		ErrorType: errorType,
+		Detail:    detail,
+	})
+}
+
 // analyzeWithLLM calls the model API to analyze code changes.
 // Uses StructuredOutput to constrain the response to a Finding array.
 func analyzeWithLLM(ctx context.Context, llm model.Model, cfg types.LLMConfig,
 	changes []types.FileChange, results []types.SandboxResult,
 	ruleFindings []types.Finding, taskID string) ([]types.Finding, error) {
 
+	// Default MaxTokens before building prompts (Issue #2004: avoid
+	// truncation logic using uninitialized zero value).
+	if cfg.MaxTokens == 0 {
+		cfg.MaxTokens = 4096
+	}
+
 	// Build the system prompt
 	systemPrompt := buildSystemPrompt(cfg, results, ruleFindings)
 
 	// Build the user prompt from diff hunks
 	userPrompt := buildUserPrompt(changes, cfg.MaxTokens)
-
-	if cfg.MaxTokens == 0 {
-		cfg.MaxTokens = 4096
-	}
 
 	req := &model.Request{
 		Messages: []model.Message{
@@ -159,7 +170,6 @@ func analyzeWithLLM(ctx context.Context, llm model.Model, cfg types.LLMConfig,
 }
 
 func buildSystemPrompt(cfg types.LLMConfig, results []types.SandboxResult, ruleFindings []types.Finding) string {
-
 	if cfg.SystemPrompt != "" {
 		return cfg.SystemPrompt
 	}
@@ -192,7 +202,6 @@ func buildSystemPrompt(cfg types.LLMConfig, results []types.SandboxResult, ruleF
 }
 
 func buildUserPrompt(changes []types.FileChange, maxTokens int) string {
-	redactor := sanitize.NewRedactor(nil, "***REDACTED***")
 	var sb strings.Builder
 	for _, fc := range changes {
 		sb.WriteString(fmt.Sprintf("### %s\n", fc.FilePath))
@@ -204,7 +213,7 @@ func buildUserPrompt(changes []types.FileChange, maxTokens int) string {
 			}
 		}
 	}
-	result := redactor.RedactReport(sb.String())
+	result := sb.String()
 	// Rough truncation: ~4 chars per token
 	if maxTokens > 0 && len(result) > maxTokens*4 {
 		result = result[:maxTokens*4] + "\n... (truncated)"

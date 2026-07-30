@@ -1,5 +1,7 @@
 # Sensitive Information Rules
 
+> **Limitations**: Token rules match against added (`+`) lines in unified diffs. Multi-line patterns and non-standard code styles may cause false negatives. See `internal/ruleengine/ruleengine.go`.
+
 ## SEN-001: Hardcoded API Key or Token in Assignment
 
 - **type**: token

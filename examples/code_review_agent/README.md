@@ -7,13 +7,13 @@
 
 ```bash
 # dry-run（不调 LLM、不跑沙箱）
-go run ./cmd/code-review-agent \
+go run ./examples/code-review-agent \
   --config code-review-agent.yaml \
   --diff-file testdata/diffs/02-sql-injection.diff \
   --mode dry_run
 
 # live sandbox（需要 Go 工具链 + --repo-path）
-go run ./cmd/code-review-agent \
+go run ./examples/code-review-agent \
   --config code-review-agent.yaml \
   --diff-file testdata/diffs/02-sql-injection.diff \
   --repo-path /path/to/go/repo \
@@ -44,7 +44,7 @@ DiffParser → PermissionFilter → SandboxRunner → RuleEngine → LLMAnalyzer
 ## 目录结构
 
 ```
-cmd/code-review-agent/main.go    CLI 入口
+examples/code-review-agent/main.go    CLI 入口
 internal/
   types/        共享类型（Finding, FileChange, Rule...）
   state/        State key 常量
@@ -110,11 +110,11 @@ go test ./internal/...
 
 # 全量 diff 测试
 for f in testdata/diffs/*.diff; do
-  go run ./cmd/code-review-agent --config code-review-agent.yaml --diff-file "$f" --mode dry_run
+  go run ./examples/code-review-agent --config code-review-agent.yaml --diff-file "$f" --mode dry_run
 done
 
 # 带沙箱执行
-go run ./cmd/code-review-agent --config code-review-agent.yaml \
+go run ./examples/code-review-agent --config code-review-agent.yaml \
   --diff-file testdata/diffs/02-sql-injection.diff \
   --repo-path /path/to/go/repo --mode dry_run
 ```

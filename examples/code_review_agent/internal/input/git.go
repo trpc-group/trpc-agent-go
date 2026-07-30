@@ -1,11 +1,3 @@
-//
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
-//
-// Copyright (C) 2025 Tencent.  All rights reserved.
-//
-// trpc-agent-go is licensed under the Apache License Version 2.0.
-//
-
 // Package input provides git-based diff extraction for the --repo-path input mode.
 package input
 
@@ -29,7 +21,7 @@ func FromRepo(repoPath, baseRef string) (string, error) {
 	refs := []string{baseRef, "main", "HEAD~1"}
 	var lastErr error
 	for _, ref := range refs {
-		cmd := exec.Command("git", "diff", "--no-textconv", "--no-ext-diff", ref+"...HEAD")
+		cmd := exec.Command("git", "diff", ref+"...HEAD")
 		cmd.Dir = repoPath
 		out, err := cmd.CombinedOutput()
 		if err == nil {

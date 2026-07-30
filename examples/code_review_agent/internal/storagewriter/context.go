@@ -1,17 +1,9 @@
-//
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
-//
-// Copyright (C) 2025 Tencent.  All rights reserved.
-//
-// trpc-agent-go is licensed under the Apache License Version 2.0.
-//
-
 package storagewriter
 
 import (
 	"context"
 
-	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/storage"
+	"github.com/dcdc4747/trpc-agent-go-cr-project/internal/storage"
 )
 
 // Context keys for passing non-serializable objects through graph execution.

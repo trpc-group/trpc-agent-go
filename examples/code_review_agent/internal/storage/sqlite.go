@@ -1,11 +1,3 @@
-//
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
-//
-// Copyright (C) 2025 Tencent.  All rights reserved.
-//
-// trpc-agent-go is licensed under the Apache License Version 2.0.
-//
-
 // Package storage provides database persistence for review data.
 // Default backend is SQLite; PostgreSQL/MySQL are supported via the Storage interface.
 package storage
@@ -28,154 +20,169 @@ import (
 
 // TaskRow maps to review_task table.
 type TaskRow struct {
-	ID              string
-	Status          string
-	InputType       string
-	InputSource     string
-	InputDiffHash   string
-	BaseRef         string
-	TotalFiles      int
-	TotalHunks      int
-	ModelMode       string
-	ErrorMessage    string
-	CreatedAt       string
-	StartedAt       string
-	CompletedAt     string
-	TotalDurationMs int64
+	ID              string // Unique identifier for the review task.
+	Status          string // Current status: pending, running, completed, failed.
+	InputType       string // Type of input: diff, pr, commit, etc.
+	InputSource     string // Source of the input: file path, branch name, etc.
+	InputDiffHash   string // SHA256 hash of the diff content for deduplication.
+	BaseRef         string // Git base ref the diff is compared against.
+	TotalFiles      int    // Number of files in the diff.
+	TotalHunks      int    // Number of hunks (diff chunks) in the diff.
+	ModelMode       string // LLM mode: live, mock, etc.
+	ErrorMessage    string // Error message if the task failed.
+	CreatedAt       string // ISO 8601 timestamp of creation.
+	StartedAt       string // ISO 8601 timestamp when processing started.
+	CompletedAt     string // ISO 8601 timestamp when processing completed.
+	TotalDurationMs int64  // Total duration of the review in milliseconds.
 }
 
 // FindingRow maps to review_finding table.
 type FindingRow struct {
-	ID             string
-	TaskID         string
-	Severity       string
-	Category       string
-	File           string
-	Line           int
-	Title          string
-	Evidence       string
-	Recommendation string
-	Confidence     float64
-	Source         string
-	DecisionKind   string
-	RuleID         string
-	CreatedAt      string
+	ID             string  // Unique identifier for the finding.
+	TaskID         string  // Foreign key referencing review_task.id.
+	Severity       string  // Severity level: critical, high, medium, low, warning.
+	Category       string  // Category of the finding: security, performance, style, etc.
+	File           string  // Source file path where the issue was found.
+	Line           int     // Line number in the source file.
+	Title          string  // Short title describing the issue.
+	Evidence       string  // Evidence snippet from the code supporting the finding.
+	Recommendation string  // Suggested fix or improvement.
+	Confidence     float64 // Confidence score between 0.0 and 1.0.
+	Source         string  // Origin of the finding: llm, rule, sandbox.
+	DecisionKind   string  // Decision kind: heuristic, approved, rejected, etc.
+	RuleID         string  // Rule identifier if the finding came from a static rule.
+	CreatedAt      string  // ISO 8601 timestamp of creation.
 }
 
 // SandboxRunRow maps to sandbox_run table.
 type SandboxRunRow struct {
-	ID              string
-	TaskID          string
-	ExecutorType    string
-	CommandName     string
-	Command         string
-	ExitCode        int
-	Stdout          string
-	Stderr          string
-	DurationMs      int64
-	TimedOut        bool
-	OutputTruncated bool
-	ErrorType       string
-	CreatedAt       string
+	ID              string // Unique identifier for the sandbox run.
+	TaskID          string // Foreign key referencing review_task.id.
+	ExecutorType    string // Sandbox executor type: docker, e2b, etc.
+	CommandName     string // Human-readable name for the command.
+	Command         string // Full command string executed in the sandbox.
+	ExitCode        int    // Exit code from the command execution.
+	Stdout          string // Standard output captured from the command.
+	Stderr          string // Standard error captured from the command.
+	DurationMs      int64  // Execution duration in milliseconds.
+	TimedOut        bool   // Whether the command exceeded the timeout.
+	OutputTruncated bool   // Whether the output was truncated due to size limits.
+	ErrorType       string // Classification of any execution error.
+	CreatedAt       string // ISO 8601 timestamp of creation.
 }
 
 // PermissionDecisionRow maps to permission_decision table.
 type PermissionDecisionRow struct {
-	ID        string
-	TaskID    string
-	Command   string
-	RiskLevel string
-	Decision  string
-	Reason    string
-	DecidedAt string
+	ID        string // Unique identifier for the decision.
+	TaskID    string // Foreign key referencing review_task.id.
+	Command   string // Command that was evaluated for permission.
+	RiskLevel string // Assessed risk level: low, medium, high, critical.
+	Decision  string // Permission decision: allow, deny, review.
+	Reason    string // Rationale behind the permission decision.
+	DecidedAt string // ISO 8601 timestamp of the decision.
 }
 
 // ArtifactRow maps to review_artifact table.
 type ArtifactRow struct {
-	ID           string
-	TaskID       string
-	ArtifactType string
-	FilePath     string
-	SizeBytes    int64
-	ContentHash  string
-	CreatedAt    string
+	ID           string // Unique identifier for the artifact.
+	TaskID       string // Foreign key referencing review_task.id.
+	ArtifactType string // Type of artifact: patch, log, report, etc.
+	FilePath     string // File path where the artifact is stored.
+	SizeBytes    int64  // Size of the artifact in bytes.
+	ContentHash  string // SHA256 hash of the artifact content.
+	CreatedAt    string // ISO 8601 timestamp of creation.
 }
 
 // ReportRow maps to review_report table.
 type ReportRow struct {
-	ID                   string
-	TaskID               string
-	FindingsCount        int
-	WarningsCount        int
-	SeverityDistribution string // JSON
-	CategoryDistribution string // JSON
-	JSONReportPath       string
-	MDReportPath         string
-	Summary              string
-	CreatedAt            string
+	ID                    string // Unique identifier for the report.
+	TaskID                string // Foreign key referencing review_task.id.
+	FindingsCount         int    // Total number of findings in the report.
+	WarningsCount         int    // Total number of warnings in the report.
+	SeverityDistribution  string // JSON-encoded map of severity to count.
+	CategoryDistribution  string // JSON-encoded map of category to count.
+	JSONReportPath        string // File path to the JSON-formatted report.
+	MDReportPath          string // File path to the Markdown-formatted report.
+	Summary               string // Natural language summary of the review.
+	CreatedAt             string // ISO 8601 timestamp of creation.
 }
 
 // MetricRow maps to monitor_metric table.
 type MetricRow struct {
-	ID                    string
-	TaskID                string
-	TotalDurationMs       int64
-	DiffParseMs           int64
-	PermissionFilterMs    int64
-	SandboxTotalMs        int64
-	RuleEngineMs          int64
-	LLMAnalyzerMs         int64
-	DedupMs               int64
-	ReportGenMs           int64
-	StorageMs             int64
-	ToolCallsCount        int
-	PermissionBlocksCount int
-	FindingsCritical      int
-	FindingsHigh          int
-	FindingsMedium        int
-	FindingsLow           int
-	FindingsWarning       int
-	LLMTokensPrompt       int
-	LLMTokensCompletion   int
-	LLMTokensTotal        int
-	CreatedAt             string
+	ID                    string // Unique identifier for the metric record.
+	TaskID                string // Foreign key referencing review_task.id.
+	TotalDurationMs       int64  // Total review duration in milliseconds.
+	DiffParseMs           int64  // Time spent parsing the diff in milliseconds.
+	PermissionFilterMs    int64  // Time spent filtering permissions in milliseconds.
+	SandboxTotalMs        int64  // Total time spent in sandbox execution in milliseconds.
+	RuleEngineMs          int64  // Time spent in rule engine processing in milliseconds.
+	LLMAnalyzerMs         int64  // Time spent in LLM analysis in milliseconds.
+	DedupMs               int64  // Time spent deduplicating findings in milliseconds.
+	ReportGenMs           int64  // Time spent generating reports in milliseconds.
+	StorageMs             int64  // Time spent in storage operations in milliseconds.
+	ToolCallsCount        int    // Number of tool calls made during the review.
+	PermissionBlocksCount int    // Number of times permission was blocked.
+	FindingsCritical      int    // Count of critical-severity findings.
+	FindingsHigh          int    // Count of high-severity findings.
+	FindingsMedium        int    // Count of medium-severity findings.
+	FindingsLow           int    // Count of low-severity findings.
+	FindingsWarning       int    // Count of warning-level findings.
+	LLMTokensPrompt       int    // Number of prompt tokens consumed by the LLM.
+	LLMTokensCompletion   int    // Number of completion tokens generated by the LLM.
+	LLMTokensTotal        int    // Total number of LLM tokens consumed.
+	CreatedAt             string // ISO 8601 timestamp of creation.
 }
 
 // ExceptionRow maps to metrics_exception table.
 type ExceptionRow struct {
-	ID          string
-	TaskID      string
-	ErrorType   string
-	ErrorCount  int
-	ErrorDetail string
-	CreatedAt   string
+	ID          string // Unique identifier for the exception record.
+	TaskID      string // Foreign key referencing review_task.id.
+	ErrorType   string // Classification of the exception type.
+	ErrorCount  int    // Number of times this exception occurred.
+	ErrorDetail string // Detailed error message or stack trace.
+	CreatedAt   string // ISO 8601 timestamp of creation.
 }
 
 // ── Storage interface ──
 
 // Storage is the database abstraction for review persistence.
 type Storage interface {
+	// CreateTask inserts a new review task record.
 	CreateTask(ctx context.Context, t TaskRow) error
+	// UpdateTask updates specific columns of a task record identified by id.
 	UpdateTask(ctx context.Context, id string, updates map[string]any) error
+	// GetTask retrieves a single task record by its unique id.
 	GetTask(ctx context.Context, id string) (*TaskRow, error)
 
+	// InsertFindings batch-inserts finding records, ignoring duplicates on conflict.
 	InsertFindings(ctx context.Context, findings []FindingRow) error
+	// GetFindingsByTask retrieves all findings for a given task, ordered by severity, file, and line.
 	GetFindingsByTask(ctx context.Context, taskID string) ([]FindingRow, error)
 
+	// InsertSandboxRun records a single sandbox execution.
 	InsertSandboxRun(ctx context.Context, r SandboxRunRow) error
+	// GetSandboxRunsByTask retrieves all sandbox runs for a given task.
 	GetSandboxRunsByTask(ctx context.Context, taskID string) ([]SandboxRunRow, error)
 
+	// InsertPermissionDecisions batch-inserts permission decision records.
 	InsertPermissionDecisions(ctx context.Context, ds []PermissionDecisionRow) error
 
+	// InsertArtifact records a single review artifact.
 	InsertArtifact(ctx context.Context, a ArtifactRow) error
 
+	// InsertReport records a review report for a task.
 	InsertReport(ctx context.Context, r ReportRow) error
+	// GetReport retrieves the report associated with a task.
 	GetReport(ctx context.Context, taskID string) (*ReportRow, error)
 
+	// InsertMetric records performance metrics for a task.
 	InsertMetric(ctx context.Context, m MetricRow) error
+	// InsertExceptions batch-inserts exception records for a task.
 	InsertExceptions(ctx context.Context, es []ExceptionRow) error
 
+	// Close closes the database connection and releases resources.
 	Close() error
+	// Ping verifies the database connection is still alive.
 	Ping(ctx context.Context) error
 }
 

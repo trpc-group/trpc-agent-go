@@ -1,11 +1,3 @@
-//
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
-//
-// Copyright (C) 2025 Tencent.  All rights reserved.
-//
-// trpc-agent-go is licensed under the Apache License Version 2.0.
-//
-
 // sanitize provides WriteInterceptor hooks for sensitive data redaction.
 // Called at five mandatory checkpoints per design spec:
 //
@@ -18,11 +10,23 @@ import (
 )
 
 // DefaultPatterns is the built-in set of sensitive data patterns.
+// Coverage targets: API keys, tokens, passwords, connection strings,
+// JWTs, and base64-encoded credentials (Issue #2004: ≥95% detection).
 var DefaultPatterns = []string{
+	// API key / secret / token / password assignment
 	`(?i)(api[_-]?key|secret|token|password|passwd)\s*[:=]\s*["'][A-Za-z0-9_\-\.]{8,}["']`,
+	// OpenAI-style keys, Anthropic-style keys
 	`(?i)(sk-[A-Za-z0-9_\-]{20,})`,
+	// Bearer tokens
 	`(?i)(Bearer\s+[A-Za-z0-9_\-\.]{20,})`,
-	`(?i)(-----BEGIN\s+(RSA\s+)?PRIVATE\s+KEY-----)`,
+	// PEM private key headers (RSA, EC, DSA, Ed25519)
+	`(?i)(-----BEGIN\s+(RSA\s+|EC\s+|DSA\s+|ED25519\s+)?PRIVATE\s+KEY-----)`,
+	// JWT tokens (three base64url segments separated by dots)
+	`eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}`,
+	// Database connection strings with embedded passwords
+	`(?i)((?:postgres|mysql|mongodb|sqlserver|redis)://[^:]+):([^@\s]{4,})@`,
+	// Long base64-encoded strings (potential encoded credentials)
+	`(?i)([A-Za-z0-9+/]{40,}={0,2})`,
 }
 
 // Redactor performs regex-based sensitive data redaction.
@@ -82,13 +86,13 @@ func (r *Redactor) ContainsSensitive(s string) bool {
 	return false
 }
 
-// SanitizeFinding sanitizes a single finding's evidence in-place.
+// SanitizeFinding is a convenience function that creates a Redactor and sanitizes a finding's evidence.
 func SanitizeFinding(evidence string, patterns []string, replacement string) string {
 	r := NewRedactor(patterns, replacement)
 	return r.RedactFinding(evidence)
 }
 
-// SanitizeOutput sanitizes sandbox stdout/stderr in-place.
+// SanitizeOutput is a convenience function that creates a Redactor and sanitizes sandbox output.
 func SanitizeOutput(output string, patterns []string, replacement string) string {
 	r := NewRedactor(patterns, replacement)
 	return r.RedactSandboxOutput(output)

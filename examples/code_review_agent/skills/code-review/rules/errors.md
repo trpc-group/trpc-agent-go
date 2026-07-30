@@ -1,5 +1,7 @@
 # Error Handling Rules
 
+> **Limitations**: Token rules match against both added (`+`) and removed (`-`) lines (error_handling category). Multi-line patterns and non-standard code styles may cause false negatives. See `internal/ruleengine/ruleengine.go`.
+
 ## ERR-001: Function Call Result Ignored
 
 - **type**: token

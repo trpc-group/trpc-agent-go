@@ -1,11 +1,3 @@
-//
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
-//
-// Copyright (C) 2025 Tencent.  All rights reserved.
-//
-// trpc-agent-go is licensed under the Apache License Version 2.0.
-//
-
 // Package report implements the ReportGenerator GraphAgent node.
 // Generates JSON and Markdown review reports.
 package report
@@ -19,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/sanitize"
-	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/state"
-	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/types"
+	"github.com/dcdc4747/trpc-agent-go-cr-project/internal/sanitize"
+	"github.com/dcdc4747/trpc-agent-go-cr-project/internal/state"
+	"github.com/dcdc4747/trpc-agent-go-cr-project/internal/types"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 )
 

@@ -1,5 +1,7 @@
 # Security Rules
 
+> **Limitations**: Token rules match against added (`+`) lines in unified diffs. Resource-leak categories also scan removed (`-`) lines. Multi-line patterns and non-standard code styles may cause false negatives. See `internal/ruleengine/ruleengine.go`.
+
 ## SEC-001: SQL Injection via fmt.Sprintf
 
 - **type**: token

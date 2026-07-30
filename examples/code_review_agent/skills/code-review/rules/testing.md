@@ -1,5 +1,7 @@
 # Testing Rules
 
+> **Limitations**: Token rules match against added (`+`) lines in unified diffs. The TEST-001 heuristic requires ≥4 added code lines to flag a file. Multi-line patterns may cause false negatives. See `internal/ruleengine/ruleengine.go`.
+
 ## TEST-001: New Public Function Without Corresponding Test
 
 - **type**: token

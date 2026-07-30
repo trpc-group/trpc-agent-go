@@ -1,11 +1,3 @@
-//
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
-//
-// Copyright (C) 2025 Tencent.  All rights reserved.
-//
-// trpc-agent-go is licensed under the Apache License Version 2.0.
-//
-
 // Package permission implements the PermissionFilter GraphAgent node.
 package permission
 
@@ -14,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/state"
-	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/types"
+	"github.com/dcdc4747/trpc-agent-go-cr-project/internal/state"
+	"github.com/dcdc4747/trpc-agent-go-cr-project/internal/types"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 )
 
@@ -80,18 +72,104 @@ func Run(ctx context.Context, gs graph.State) (any, error) {
 	return gs, nil
 }
 
+// isBlocked checks whether a command should be denied based on token-level
+// matching. Parsing the command into tokens avoids substring-based bypass
+// (e.g., "echo rm -rf" or "rm\t-rf"). The first token is matched as the
+// command name; dangerous argument patterns are matched against individual
+// tokens with word boundaries.
 func isBlocked(cmd string) bool {
-	blocked := []string{"rm -rf", "sudo", "chmod 777", "chmod -R", "> /dev/", "mkfs", "dd if="}
-	for _, b := range blocked {
-		if strings.Contains(cmd, b) {
+	tokens := tokenize(cmd)
+	if len(tokens) == 0 {
+		return false
+	}
+	base := tokens[0]
+
+	// Block entire dangerous command families.
+	switch base {
+	case "sudo", "mkfs", "dd":
+		return true
+	case "chmod":
+		// Block any recursive or permissive chmod
+		for _, t := range tokens[1:] {
+			if t == "-R" || t == "-r" || t == "777" || t == "a+rwx" {
+				return true
+			}
+		}
+		return false
+	case "rm":
+		// Only block recursive force removal
+		for _, t := range tokens[1:] {
+			if (t == "-rf" || t == "-fr" || t == "-r" || t == "-f") && hasRecursiveRemove(tokens) {
+				return true
+			}
+		}
+		return false
+	case "curl", "wget":
+		return true
+	case "sh", "bash":
+		// Block inline scripts that embed dangerous commands inside the -c argument
+		for _, t := range tokens[1:] {
+			if t == "-c" {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Block output redirection to block devices.
+	for _, t := range tokens {
+		if strings.HasPrefix(t, ">/dev/") || t == ">/dev/null" {
+			return false // allow /dev/null (common in go test)
+		}
+		if strings.HasPrefix(t, ">") && strings.Contains(t, "/dev/") {
 			return true
 		}
 	}
-	// Block network access scripts
-	if strings.Contains(cmd, "curl ") || strings.Contains(cmd, "wget ") {
-		return true
-	}
 	return false
+}
+
+// hasRecursiveRemove checks whether the token list includes recursive + force
+// flags that make rm dangerous.
+func hasRecursiveRemove(tokens []string) bool {
+	hasR, hasF := false, false
+	for _, t := range tokens {
+		if t == "-rf" || t == "-fr" || t == "-r" || t == "--recursive" {
+			hasR = true
+		}
+		if t == "-f" || t == "-rf" || t == "-fr" || t == "--force" {
+			hasF = true
+		}
+	}
+	return hasR && hasF
+}
+
+// tokenize splits a command string into tokens respecting quoted strings.
+func tokenize(cmd string) []string {
+	var tokens []string
+	var current strings.Builder
+	inSingle, inDouble := false, false
+
+	for _, r := range cmd {
+		switch {
+		case r == '\'' && !inDouble:
+			inSingle = !inSingle
+		case r == '"' && !inSingle:
+			inDouble = !inDouble
+		case r == ' ' || r == '\t':
+			if inSingle || inDouble {
+				current.WriteRune(r)
+			} else if current.Len() > 0 {
+				tokens = append(tokens, current.String())
+				current.Reset()
+			}
+		default:
+			current.WriteRune(r)
+		}
+	}
+	if current.Len() > 0 {
+		tokens = append(tokens, current.String())
+	}
+	return tokens
 }
 
 func riskReason(decision, riskLevel string) string {

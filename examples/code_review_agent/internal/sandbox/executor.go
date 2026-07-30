@@ -1,11 +1,3 @@
-//
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
-//
-// Copyright (C) 2025 Tencent.  All rights reserved.
-//
-// trpc-agent-go is licensed under the Apache License Version 2.0.
-//
-
 // Package sandbox implements the SandboxRunner GraphAgent node.
 // Routes sandbox command execution through upstream codeexecutor.Engine
 // (Issue #2004: tool chain via workspace_exec / codeexec).
@@ -20,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/state"
-	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/types"
+	"github.com/dcdc4747/trpc-agent-go-cr-project/internal/state"
+	"github.com/dcdc4747/trpc-agent-go-cr-project/internal/types"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/container"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
@@ -85,12 +77,12 @@ func Run(ctx context.Context, gs graph.State) (any, error) {
 		engine = localexec.New().Engine()
 	}
 
-	gs[state.StateKeySandboxResults] = runCommands(ctx, engine, allowed, maxBytes, repoPath)
+	gs[state.StateKeySandboxResults] = runCommands(ctx, engine, allowed, maxBytes)
 	return gs, nil
 }
 
 // runCommands executes sandbox commands through the framework's codeexecutor.Engine.
-func runCommands(ctx context.Context, engine codeexecutor.Engine, commands []types.SandboxCommand, maxBytes int64, repoPath string) []types.SandboxResult {
+func runCommands(ctx context.Context, engine codeexecutor.Engine, commands []types.SandboxCommand, maxBytes int64) []types.SandboxResult {
 	mgr := engine.Manager()
 	runner := engine.Runner()
 	var results []types.SandboxResult
@@ -114,23 +106,6 @@ func runCommands(ctx context.Context, engine codeexecutor.Engine, commands []typ
 			})
 			cancel()
 			continue
-		}
-
-		// Stage the target repo into the workspace so tools (go vet, etc.)
-		// can operate on actual code, not an empty directory.
-		if repoPath != "" {
-			if err := engine.FS().StageDirectory(execCtx, ws, repoPath, "/workspace", codeexecutor.StageOptions{}); err != nil {
-				results = append(results, types.SandboxResult{
-					Command:    cmd.Cmd + " " + strings.Join(cmd.Args, " "),
-					ExitCode:   -1,
-					Stderr:     fmt.Sprintf("stage repo: %v", err),
-					ErrorType:  "sandbox_crash",
-					DurationMs: time.Since(start).Milliseconds(),
-				})
-				mgr.Cleanup(execCtx, ws)
-				cancel()
-				continue
-			}
 		}
 
 		result, runErr := runner.RunProgram(execCtx, ws, codeexecutor.RunProgramSpec{

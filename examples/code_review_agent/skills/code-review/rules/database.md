@@ -1,5 +1,7 @@
 # Database Lifecycle Rules
 
+> **Limitations**: Token rules match against both added (`+`) and removed (`-`) lines (db_lifecycle category). Multi-line patterns and non-standard code styles may cause false negatives. See `internal/ruleengine/ruleengine.go`.
+
 ## DB-001: sql.Open Without Deferred Close
 
 - **type**: token

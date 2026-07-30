@@ -1,28 +1,22 @@
-//
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
-//
-// Copyright (C) 2025 Tencent.  All rights reserved.
-//
-// trpc-agent-go is licensed under the Apache License Version 2.0.
-//
-
 // Package storagewriter implements the StorageWriter GraphAgent node.
 // Persists all review data to the database.
 package storagewriter
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
 	"github.com/google/uuid"
 
-	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/sanitize"
-	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/state"
-	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/storage"
-	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/types"
+	"github.com/dcdc4747/trpc-agent-go-cr-project/internal/sanitize"
+	"github.com/dcdc4747/trpc-agent-go-cr-project/internal/state"
+	"github.com/dcdc4747/trpc-agent-go-cr-project/internal/storage"
+	"github.com/dcdc4747/trpc-agent-go-cr-project/internal/types"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 )
 
@@ -117,24 +111,24 @@ func Run(ctx context.Context, gs graph.State) (any, error) {
 	sevJSON, _ := json.Marshal(sevDist)
 	catJSON, _ := json.Marshal(catDist)
 	if err := store.InsertReport(ctx, storage.ReportRow{
-		ID:                   uuid.New().String(),
-		TaskID:               taskID,
-		FindingsCount:        len(findings),
-		WarningsCount:        len(warnings),
-		SeverityDistribution: string(sevJSON),
-		CategoryDistribution: string(catJSON),
-		JSONReportPath:       jsonPath,
-		MDReportPath:         mdPath,
-		Summary:              fmt.Sprintf("Reviewed %d findings (%d warnings).", len(findings), len(warnings)),
-		CreatedAt:            now,
+		ID:                    uuid.New().String(),
+		TaskID:                taskID,
+		FindingsCount:         len(findings),
+		WarningsCount:         len(warnings),
+		SeverityDistribution:  string(sevJSON),
+		CategoryDistribution:  string(catJSON),
+		JSONReportPath:        jsonPath,
+		MDReportPath:          mdPath,
+		Summary:               fmt.Sprintf("Reviewed %d findings (%d warnings).", len(findings), len(warnings)),
+		CreatedAt:             now,
 	}); err != nil {
 		return nil, fmt.Errorf("insert report: %w", err)
 	}
 
 	// 7. Insert metrics
 	metric := storage.MetricRow{
-		ID:        uuid.New().String(),
-		TaskID:    taskID,
+		ID:      uuid.New().String(),
+		TaskID:  taskID,
 		CreatedAt: now,
 	}
 	if v, ok := gs[state.StateKeyNodeDiffParserMs].(int64); ok {
@@ -181,12 +175,20 @@ func Run(ctx context.Context, gs graph.State) (any, error) {
 		return nil, fmt.Errorf("insert metric: %w", err)
 	}
 
-	// 8. Insert exceptions from sandbox failures
+	// 8. Insert exceptions from sandbox failures + LLM errors
 	var exceptions []storage.ExceptionRow
 	excTypeSet := make(map[string]int)
 	for _, r := range sandboxResults {
 		if r.ErrorType != "" {
 			excTypeSet[r.ErrorType]++
+		}
+	}
+	// Merge LLM errors into the exception set so LLM outages are visible
+	// in monitoring (Issue #2004 CodeRabbit: LLM failure degrades silently).
+	if llmErrors, ok := gs[state.StateKeyLLMErrors].([]types.LLMError); ok {
+		for _, e := range llmErrors {
+			key := "llm_" + e.ErrorType
+			excTypeSet[key]++
 		}
 	}
 	for etype, count := range excTypeSet {
@@ -232,19 +234,19 @@ func toFindingRow(f types.Finding) storage.FindingRow {
 
 func toSandboxRow(taskID string, r types.SandboxResult) storage.SandboxRunRow {
 	return storage.SandboxRunRow{
-		ID:              uuid.New().String(),
-		TaskID:          taskID,
-		ExecutorType:    "local",
-		CommandName:     r.Command,
-		Command:         r.Command,
-		ExitCode:        r.ExitCode,
-		Stdout:          r.Stdout,
-		Stderr:          r.Stderr,
-		DurationMs:      r.DurationMs,
-		TimedOut:        r.TimedOut,
+		ID:        uuid.New().String(),
+		TaskID:    taskID,
+		ExecutorType: "local",
+		CommandName:  r.Command,
+		Command:      r.Command,
+		ExitCode:     r.ExitCode,
+		Stdout:       r.Stdout,
+		Stderr:       r.Stderr,
+		DurationMs:   r.DurationMs,
+		TimedOut:     r.TimedOut,
 		OutputTruncated: false,
-		ErrorType:       r.ErrorType,
-		CreatedAt:       time.Now().UTC().Format(time.RFC3339),
+		ErrorType:    r.ErrorType,
+		CreatedAt:    time.Now().UTC().Format(time.RFC3339),
 	}
 }
 
@@ -260,9 +262,18 @@ func toPermRow(taskID string, d types.PermissionDecision) storage.PermissionDeci
 	}
 }
 
+// fileHash computes a SHA-256 hex digest of the file at path.
 func fileHash(path string) string {
-	// Lazy: return empty for remote artifacts
-	return ""
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
 func countSeverity(findings []types.Finding) map[string]int {
