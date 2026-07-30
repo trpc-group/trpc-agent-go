@@ -32,6 +32,12 @@ type scriptedRunner struct {
 	run   func(command) ([]byte, []byte, error)
 }
 
+func withCommandRunner(runner commandRunner) Option {
+	return func(o *options) {
+		o.commandRunner = runner
+	}
+}
+
 // Run implements commandRunner.
 func (r *scriptedRunner) Run(ctx context.Context, cmd command) ([]byte, []byte, error) {
 	r.mu.Lock()

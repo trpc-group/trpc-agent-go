@@ -463,6 +463,18 @@ func TestWithToolCallArgumentsJSONRepairEnabled_SetsRunOptions(t *testing.T) {
 	require.False(t, *ro.ToolCallArgumentsJSONRepairEnabled)
 }
 
+func TestWithToolCallTextRepairEnabled_SetsRunOptions(t *testing.T) {
+	var ro RunOptions
+	require.Nil(t, ro.ToolCallTextRepairEnabled)
+	WithToolCallTextRepairEnabled(true)(&ro)
+	require.NotNil(t, ro.ToolCallTextRepairEnabled)
+	require.True(t, *ro.ToolCallTextRepairEnabled)
+
+	WithToolCallTextRepairEnabled(false)(&ro)
+	require.NotNil(t, ro.ToolCallTextRepairEnabled)
+	require.False(t, *ro.ToolCallTextRepairEnabled)
+}
+
 func TestWithPromptSectionOptions_SetsRunOptions(t *testing.T) {
 	renderer := func(
 		_ context.Context,

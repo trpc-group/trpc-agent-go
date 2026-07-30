@@ -50,6 +50,12 @@ func (stubRunner) Close() error {
 	return nil
 }
 
+type passEvalCaseResultAggregator struct{}
+
+func (passEvalCaseResultAggregator) Aggregate(context.Context, *service.EvalCaseResultAggregationInput) (*service.EvalCaseResultAggregationResult, error) {
+	return &service.EvalCaseResultAggregationResult{Score: 1, Status: status.EvalStatusPassed}, nil
+}
+
 type fakeService struct {
 	inferenceResults [][]*service.InferenceResult
 	evaluateResults  []*service.EvalSetRunResult
@@ -429,6 +435,20 @@ func TestNewAgentEvaluatorWithParallelOptionsBuildsLocalService(t *testing.T) {
 		WithEvalCaseParallelism(2),
 		WithEvalCaseParallelInferenceEnabled(true),
 		WithEvalCaseParallelEvaluationEnabled(true),
+	)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+
+	assert.NoError(t, ae.Close())
+}
+
+func TestNewAgentEvaluatorWithEvalCaseResultAggregatorBuildsLocalService(t *testing.T) {
+	ae, err := New(
+		"app",
+		stubRunner{},
+		WithEvalCaseResultAggregator(passEvalCaseResultAggregator{}),
 	)
 	assert.NoError(t, err)
 	if err != nil {
@@ -831,6 +851,9 @@ func TestAgentEvaluatorEvaluatePassesServiceCallOptions(t *testing.T) {
 	svc := &fakeService{}
 	callbacks := service.NewCallbacks()
 	reg := registry.New()
+	aggregator := passEvalCaseResultAggregator{}
+	toolMockRunner := stubRunner{}
+	simulator := stubSimulator{}
 
 	ae, err := New(
 		appName,
@@ -845,6 +868,9 @@ func TestAgentEvaluatorEvaluatePassesServiceCallOptions(t *testing.T) {
 		WithEvalCaseParallelInferenceEnabled(true),
 		WithEvalCaseParallelEvaluationEnabled(true),
 		WithRunOptions(agent.WithInstruction("prompt")),
+		WithEvalCaseResultAggregator(aggregator),
+		WithToolMockRunner(toolMockRunner),
+		WithUserSimulator(simulator),
 	)
 	assert.NoError(t, err)
 	if err != nil {
@@ -863,6 +889,8 @@ func TestAgentEvaluatorEvaluatePassesServiceCallOptions(t *testing.T) {
 	inferenceOpts := svc.inferenceOptions[0]
 	assert.Same(t, evalSetMgr, inferenceOpts.EvalSetManager)
 	assert.Same(t, callbacks, inferenceOpts.Callbacks)
+	assert.Equal(t, toolMockRunner, inferenceOpts.ToolMockRunner)
+	assert.Equal(t, simulator, inferenceOpts.UserSimulator)
 	assert.Len(t, inferenceOpts.RunOptions, 1)
 	assert.Equal(t, 2, inferenceOpts.EvalCaseParallelism)
 	assert.True(t, inferenceOpts.EvalCaseParallelInferenceEnabled)
@@ -871,8 +899,10 @@ func TestAgentEvaluatorEvaluatePassesServiceCallOptions(t *testing.T) {
 	assert.Same(t, evalSetMgr, evaluateOpts.EvalSetManager)
 	assert.Same(t, reg, evaluateOpts.Registry)
 	assert.Same(t, callbacks, evaluateOpts.Callbacks)
+	assert.Equal(t, toolMockRunner, evaluateOpts.ToolMockRunner)
 	assert.Equal(t, 2, evaluateOpts.EvalCaseParallelism)
 	assert.True(t, evaluateOpts.EvalCaseParallelEvaluationEnabled)
+	assert.Equal(t, aggregator, evaluateOpts.EvalCaseResultAggregator)
 }
 
 func TestAgentEvaluatorEvaluateAppliesPerCallNumRuns(t *testing.T) {
@@ -2067,14 +2097,34 @@ func TestAggregateCaseRunsSuccess(t *testing.T) {
 	assert.Len(t, result.EvalCaseResults, 2)
 }
 
+func TestAggregateCaseRunsUsesCaseFinalStatusWhenMetricsFail(t *testing.T) {
+	runs := []*evalresult.EvalCaseResult{
+		{
+			EvalSetID:       "set",
+			EvalID:          "case",
+			RunID:           1,
+			Score:           0.8,
+			FinalEvalStatus: status.EvalStatusPassed,
+			OverallEvalMetricResults: []*evalresult.EvalMetricResult{
+				makeEvalMetricResult("important", 1, status.EvalStatusPassed, 1),
+				makeEvalMetricResult("minor", 0, status.EvalStatusFailed, 1),
+			},
+		},
+	}
+
+	result, err := aggregateCaseRuns("case", runs)
+	assert.NoError(t, err)
+	assert.Equal(t, status.EvalStatusPassed, result.OverallStatus)
+	assert.Len(t, result.MetricResults, 2)
+}
+
 func TestAggregateCaseRunsUnknownStatus(t *testing.T) {
 	runs := []*evalresult.EvalCaseResult{
 		makeEvalCaseResult("set", "case", "metric", 0.5, 1, status.EvalStatusUnknown),
 	}
 	result, err := aggregateCaseRuns("case", runs)
-	assert.NoError(t, err)
-	assert.Equal(t, status.EvalStatusFailed, result.OverallStatus)
-	assert.Len(t, result.MetricResults, 1)
+	assert.Error(t, err)
+	assert.Nil(t, result)
 }
 
 func TestAggregateCaseRunsNotEvaluated(t *testing.T) {
@@ -2086,6 +2136,35 @@ func TestAggregateCaseRunsNotEvaluated(t *testing.T) {
 	assert.Equal(t, status.EvalStatusNotEvaluated, result.OverallStatus)
 	assert.Empty(t, result.MetricResults)
 	assert.Len(t, result.EvalCaseResults, 1)
+}
+
+func TestAggregateCaseRunsSingleRunFailedWhenRunErrorHasNoMetrics(t *testing.T) {
+	runs := []*evalresult.EvalCaseResult{
+		{
+			EvalSetID:       "set",
+			EvalID:          "case",
+			FinalEvalStatus: status.EvalStatusNotEvaluated,
+			ErrorMessage:    "inference failed",
+		},
+	}
+	result, err := aggregateCaseRuns("case", runs)
+	assert.NoError(t, err)
+	assert.Equal(t, status.EvalStatusFailed, result.OverallStatus)
+	assert.Empty(t, result.MetricResults)
+	assert.Len(t, result.EvalCaseResults, 1)
+}
+
+func TestAggregateCaseRunsSkipsNilRuns(t *testing.T) {
+	runs := []*evalresult.EvalCaseResult{
+		nil,
+		makeEvalCaseResult("set", "case", "metric", 1, 1, status.EvalStatusPassed),
+	}
+	result, err := aggregateCaseRuns("case", runs)
+	assert.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, status.EvalStatusPassed, result.OverallStatus)
+	assert.Len(t, result.MetricResults, 1)
+	assert.Len(t, result.EvalCaseResults, 2)
 }
 
 func TestAggregateCaseRunsHardFailureWithoutMetrics(t *testing.T) {
@@ -2102,6 +2181,37 @@ func TestAggregateCaseRunsHardFailureWithoutMetrics(t *testing.T) {
 	assert.Equal(t, status.EvalStatusFailed, result.OverallStatus)
 	assert.Empty(t, result.MetricResults)
 	assert.Len(t, result.EvalCaseResults, 1)
+}
+
+func TestAggregateCaseRunsMultipleRunsFailedWhenRunErrorHasNoMetrics(t *testing.T) {
+	runs := []*evalresult.EvalCaseResult{
+		{
+			EvalSetID:       "set",
+			EvalID:          "case",
+			FinalEvalStatus: status.EvalStatusNotEvaluated,
+			ErrorMessage:    "inference failed",
+		},
+		{
+			EvalSetID:       "set",
+			EvalID:          "case",
+			FinalEvalStatus: status.EvalStatusNotEvaluated,
+		},
+	}
+	result, err := aggregateCaseRuns("case", runs)
+	assert.NoError(t, err)
+	assert.Equal(t, status.EvalStatusFailed, result.OverallStatus)
+	assert.Empty(t, result.MetricResults)
+	assert.Len(t, result.EvalCaseResults, 2)
+}
+
+func TestSummarizeAggregateCaseRunsStatusRejectsInvalidMetricStatus(t *testing.T) {
+	overallStatus, err := summarizeAggregateCaseRunsStatus(
+		[]status.EvalStatus{status.EvalStatusPassed, status.EvalStatusPassed},
+		[]*evalresult.EvalMetricResult{{EvalStatus: status.EvalStatusUnknown}},
+		false,
+	)
+	assert.Error(t, err)
+	assert.Equal(t, status.EvalStatusFailed, overallStatus)
 }
 
 func TestSummarizeOverallStatus(t *testing.T) {

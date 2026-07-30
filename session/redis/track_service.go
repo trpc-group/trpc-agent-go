@@ -59,6 +59,67 @@ func (s *Service) AppendTrackEvent(
 	return s.persistTrackEvent(ctx, getSessionVersion(sess), key, trackEvent, tracksState)
 }
 
+// GetTrackEvents returns persisted track events for the given session track.
+func (s *Service) GetTrackEvents(
+	ctx context.Context,
+	key session.Key,
+	track session.Track,
+	opts ...session.Option,
+) (*session.TrackEvents, error) {
+	ctx, span := s.startSpan(ctx, "get_track_events", key)
+	defer span.End()
+	if err := key.CheckSessionKey(); err != nil {
+		return nil, err
+	}
+	opt := applyOptions(opts...)
+	zsetExists, hashidxExists, err := s.checkSessionExists(ctx, key)
+	if err != nil {
+		return nil, fmt.Errorf("check session exists: %w", err)
+	}
+	if s.compatEnabled() && zsetExists {
+		return s.getZSetTrackEvents(ctx, key, track, opt)
+	}
+	if hashidxExists {
+		return s.getHashIdxTrackEvents(ctx, key, track, opt)
+	}
+	if s.compatEnabled() {
+		trackEvents, err := s.getZSetTrackEvents(ctx, key, track, opt)
+		if err != nil {
+			return nil, err
+		}
+		if len(trackEvents.Events) > 0 {
+			return trackEvents, nil
+		}
+	}
+	return s.getHashIdxTrackEvents(ctx, key, track, opt)
+}
+
+func (s *Service) getZSetTrackEvents(
+	ctx context.Context,
+	key session.Key,
+	track session.Track,
+	opt *session.Options,
+) (*session.TrackEvents, error) {
+	events, err := s.zsetClient.GetTrackEvents(ctx, key, []session.Track{track}, opt.EventNum, opt.EventTime)
+	if err != nil {
+		return nil, fmt.Errorf("get track events (zset): %w", err)
+	}
+	return &session.TrackEvents{Track: track, Events: events[track]}, nil
+}
+
+func (s *Service) getHashIdxTrackEvents(
+	ctx context.Context,
+	key session.Key,
+	track session.Track,
+	opt *session.Options,
+) (*session.TrackEvents, error) {
+	events, err := s.hashidxClient.GetTrackEvents(ctx, key, []session.Track{track}, opt.EventNum, opt.EventTime)
+	if err != nil {
+		return nil, fmt.Errorf("get track events (hashidx): %w", err)
+	}
+	return &session.TrackEvents{Track: track, Events: events[track]}, nil
+}
+
 // enqueueTrackEvent enqueues a track event for async persistence.
 func (s *Service) enqueueTrackEvent(ctx context.Context, sess *session.Session, key session.Key, trackEvent *session.TrackEvent, tracksState []byte) error {
 	defer func() {

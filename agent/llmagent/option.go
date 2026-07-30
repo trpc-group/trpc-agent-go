@@ -28,6 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	toolskill "trpc.group/trpc-go/trpc-agent-go/tool/skill"
+	toolworkspaceexec "trpc.group/trpc-go/trpc-agent-go/tool/workspaceexec"
 )
 
 const (
@@ -569,6 +570,9 @@ type Options struct {
 	// explicit Deny > implicit deny > explicit Allow > implicit
 	// allow.
 	workspaceExecDeniedCommands []string
+	// workspaceExecOutputLimits caps inline terminal output before
+	// workspace_exec tool-result events are persisted.
+	workspaceExecOutputLimits toolworkspaceexec.OutputLimits
 	// workspaceBootstrap declares static files and commands that
 	// must be present/executed in the workspace before user
 	// commands run. When non-empty it is converted into a Provider
@@ -1358,6 +1362,19 @@ func WithWorkspaceExecDeniedCommands(cmds ...string) Option {
 		opts.workspaceExecDeniedCommands = append(
 			[]string(nil), cmds...,
 		)
+	}
+}
+
+// WithWorkspaceExecOutputLimits limits terminal output returned inline by
+// workspace_exec and workspace_write_stdin. The limit is applied before the
+// tool-result event is persisted, so it also bounds the corresponding session
+// payload. A non-positive MaxOutputBytes leaves output unlimited, which is the
+// default for compatibility.
+func WithWorkspaceExecOutputLimits(
+	limits toolworkspaceexec.OutputLimits,
+) Option {
+	return func(opts *Options) {
+		opts.workspaceExecOutputLimits = limits
 	}
 }
 

@@ -175,6 +175,39 @@ func TestTrackerGetEventsForwardsOptions(t *testing.T) {
 	afterTime := time.Now().Add(-time.Hour)
 
 	var got *session.Options
+	var gotKey session.Key
+	var gotTrack session.Track
+	svc.getSessionFn = func(context.Context, session.Key, ...session.Option) (*session.Session, error) {
+		return nil, errors.New("get session should not be called")
+	}
+	svc.getTrackEventsFn = func(ctx context.Context, key session.Key, track session.Track, opts ...session.Option) (*session.TrackEvents, error) {
+		opt := &session.Options{}
+		for _, o := range opts {
+			o(opt)
+		}
+		got = opt
+		gotKey = key
+		gotTrack = track
+		return &session.TrackEvents{Track: track}, nil
+	}
+
+	tracker, err := New(svc)
+	require.NoError(t, err)
+
+	_, err = tracker.GetEvents(ctx, key, session.WithEventTime(afterTime))
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.True(t, got.EventTime.Equal(afterTime))
+	require.Equal(t, key, gotKey)
+	require.Equal(t, TrackAGUI, gotTrack)
+}
+
+func TestTrackerGetEventsFallbackForwardsOptions(t *testing.T) {
+	ctx := context.Background()
+	svc := newTrackOnlyHookService()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
+	afterTime := time.Now().Add(-time.Hour)
+	var got *session.Options
 	svc.getSessionFn = func(ctx context.Context, key session.Key, opts ...session.Option) (*session.Session, error) {
 		opt := &session.Options{}
 		for _, o := range opts {
@@ -182,14 +215,11 @@ func TestTrackerGetEventsForwardsOptions(t *testing.T) {
 		}
 		got = opt
 		sess := session.NewSession(key.AppName, key.UserID, key.SessionID)
-		// Ensure the AG-UI track exists so that GetTrackEvents succeeds.
 		require.NoError(t, sess.AppendTrackEvent(&session.TrackEvent{Track: TrackAGUI, Timestamp: time.Now()}))
 		return sess, nil
 	}
-
-	tracker, err := New(svc, WithFlushInterval(0))
+	tracker, err := New(svc)
 	require.NoError(t, err)
-
 	_, err = tracker.GetEvents(ctx, key, session.WithEventTime(afterTime))
 	require.NoError(t, err)
 	require.NotNil(t, got)
@@ -274,7 +304,7 @@ func TestTrackerGetEventsErrors(t *testing.T) {
 	require.ErrorContains(t, err, "session key")
 
 	t.Run("get session error", func(t *testing.T) {
-		svc := newHookSessionService()
+		svc := newTrackOnlyHookService()
 		svc.getSessionFn = func(context.Context, session.Key, ...session.Option) (*session.Session, error) {
 			return nil, errors.New("nope")
 		}
@@ -285,7 +315,7 @@ func TestTrackerGetEventsErrors(t *testing.T) {
 	})
 
 	t.Run("session not found", func(t *testing.T) {
-		svc := newHookSessionService()
+		svc := newTrackOnlyHookService()
 		svc.getSessionFn = func(context.Context, session.Key, ...session.Option) (*session.Session, error) {
 			return nil, nil
 		}
@@ -296,7 +326,7 @@ func TestTrackerGetEventsErrors(t *testing.T) {
 	})
 
 	t.Run("track events error", func(t *testing.T) {
-		svc := newHookSessionService()
+		svc := newTrackOnlyHookService()
 		svc.getSessionFn = func(context.Context, session.Key, ...session.Option) (*session.Session, error) {
 			return &session.Session{
 				AppName: validKey.AppName,
@@ -308,6 +338,16 @@ func TestTrackerGetEventsErrors(t *testing.T) {
 		require.NoError(t, err)
 		_, err = tracker.GetEvents(ctx, validKey)
 		require.ErrorContains(t, err, "tracks is empty")
+	})
+	t.Run("reader error", func(t *testing.T) {
+		svc := newHookSessionService()
+		svc.getTrackEventsFn = func(context.Context, session.Key, session.Track, ...session.Option) (*session.TrackEvents, error) {
+			return nil, errors.New("reader failed")
+		}
+		tracker, err := New(svc)
+		require.NoError(t, err)
+		_, err = tracker.GetEvents(ctx, validKey)
+		require.ErrorContains(t, err, "get track events: reader failed")
 	})
 }
 
@@ -419,26 +459,36 @@ func TestTrackerFlushPersistsPendingAggregation(t *testing.T) {
 	svc := inmemory.NewSessionService()
 	tracker, err := New(svc)
 	require.NoError(t, err)
-
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
 	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageStartEvent("msg",
 		aguievents.WithRole("assistant"))))
 	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageContentEvent("msg", "hi ")))
 	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageContentEvent("msg", "there")))
-
 	require.NoError(t, tracker.Flush(ctx, key))
-
 	sess, err := svc.GetSession(ctx, key)
 	require.NoError(t, err)
 	trackEvents, err := sess.GetTrackEvents(TrackAGUI)
 	require.NoError(t, err)
 	require.Len(t, trackEvents.Events, 2)
-
 	parsed, err := aguievents.EventFromJSON(trackEvents.Events[1].Payload)
 	require.NoError(t, err)
 	content, ok := parsed.(*aguievents.TextMessageContentEvent)
 	require.True(t, ok)
 	require.Equal(t, "hi there", content.Delta)
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageContentEvent("msg", " again")))
+	require.NoError(t, tracker.Close(ctx, key))
+	sess, err = svc.GetSession(ctx, key)
+	require.NoError(t, err)
+	trackEvents, err = sess.GetTrackEvents(TrackAGUI)
+	require.NoError(t, err)
+	require.Len(t, trackEvents.Events, 3)
+	parsed, err = aguievents.EventFromJSON(trackEvents.Events[2].Payload)
+	require.NoError(t, err)
+	content, ok = parsed.(*aguievents.TextMessageContentEvent)
+	require.True(t, ok)
+	require.Equal(t, " again", content.Delta)
+	err = tracker.Flush(ctx, key)
+	require.ErrorContains(t, err, "session state not found")
 }
 
 func TestTrackerFlushReturnsAggregatorError(t *testing.T) {
@@ -461,28 +511,21 @@ func TestTrackerFlushReturnsAggregatorError(t *testing.T) {
 	require.ErrorContains(t, err, "aggregator flush: flush fail")
 }
 
-func TestTrackerFlushPeriodically(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	svc := inmemory.NewSessionService()
-	agg := &stubAggregator{flushCh: make(chan struct{}, 2)}
-	tracker, err := New(svc,
-		WithAggregatorFactory(func(ctx context.Context, opt ...aggregator.Option) aggregator.Aggregator {
-			return agg
-		}),
-		WithFlushInterval(10*time.Millisecond),
-	)
+func TestTrackerFlushAndCloseMissingState(t *testing.T) {
+	ctx := context.Background()
+	tracker, err := New(inmemory.NewSessionService())
 	require.NoError(t, err)
-
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
-	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageContentEvent("msg", "hi")))
+	err = tracker.Flush(ctx, key)
+	require.ErrorContains(t, err, "session state not found")
+	require.NoError(t, tracker.Close(ctx, key))
+}
 
-	select {
-	case <-agg.flushCh:
-	case <-time.After(200 * time.Millisecond):
-		require.FailNow(t, "expected periodic flush")
-	}
+func TestTrackerCloseInvalidKey(t *testing.T) {
+	tracker, err := New(inmemory.NewSessionService())
+	require.NoError(t, err)
+	err = tracker.Close(context.Background(), session.Key{})
+	require.ErrorContains(t, err, "session key")
 }
 
 type serviceWithoutTrack struct{}
@@ -578,9 +621,10 @@ func (s *stubAggregator) Flush(ctx context.Context) ([]aguievents.Event, error) 
 
 type hookSessionService struct {
 	*inmemory.SessionService
-	getSessionFn    func(context.Context, session.Key, ...session.Option) (*session.Session, error)
-	createSessionFn func(context.Context, session.Key, session.StateMap, ...session.Option) (*session.Session, error)
-	appendTrackFn   func(context.Context, *session.Session, *session.TrackEvent, ...session.Option) error
+	getSessionFn     func(context.Context, session.Key, ...session.Option) (*session.Session, error)
+	createSessionFn  func(context.Context, session.Key, session.StateMap, ...session.Option) (*session.Session, error)
+	appendTrackFn    func(context.Context, *session.Session, *session.TrackEvent, ...session.Option) error
+	getTrackEventsFn func(context.Context, session.Key, session.Track, ...session.Option) (*session.TrackEvents, error)
 }
 
 func newHookSessionService() *hookSessionService {
@@ -606,6 +650,46 @@ func (s *hookSessionService) AppendTrackEvent(ctx context.Context, sess *session
 		return s.appendTrackFn(ctx, sess, evt, opts...)
 	}
 	return s.SessionService.AppendTrackEvent(ctx, sess, evt, opts...)
+}
+
+func (s *hookSessionService) GetTrackEvents(ctx context.Context, key session.Key, track session.Track, opts ...session.Option) (*session.TrackEvents, error) {
+	if s.getTrackEventsFn != nil {
+		return s.getTrackEventsFn(ctx, key, track, opts...)
+	}
+	return s.SessionService.GetTrackEvents(ctx, key, track, opts...)
+}
+
+type trackOnlyHookService struct {
+	serviceWithoutTrack
+	store           *inmemory.SessionService
+	getSessionFn    func(context.Context, session.Key, ...session.Option) (*session.Session, error)
+	createSessionFn func(context.Context, session.Key, session.StateMap, ...session.Option) (*session.Session, error)
+	appendTrackFn   func(context.Context, *session.Session, *session.TrackEvent, ...session.Option) error
+}
+
+func newTrackOnlyHookService() *trackOnlyHookService {
+	return &trackOnlyHookService{store: inmemory.NewSessionService()}
+}
+
+func (s *trackOnlyHookService) GetSession(ctx context.Context, key session.Key, opts ...session.Option) (*session.Session, error) {
+	if s.getSessionFn != nil {
+		return s.getSessionFn(ctx, key, opts...)
+	}
+	return s.store.GetSession(ctx, key, opts...)
+}
+
+func (s *trackOnlyHookService) CreateSession(ctx context.Context, key session.Key, state session.StateMap, opts ...session.Option) (*session.Session, error) {
+	if s.createSessionFn != nil {
+		return s.createSessionFn(ctx, key, state, opts...)
+	}
+	return s.store.CreateSession(ctx, key, state, opts...)
+}
+
+func (s *trackOnlyHookService) AppendTrackEvent(ctx context.Context, sess *session.Session, evt *session.TrackEvent, opts ...session.Option) error {
+	if s.appendTrackFn != nil {
+		return s.appendTrackFn(ctx, sess, evt, opts...)
+	}
+	return s.store.AppendTrackEvent(ctx, sess, evt, opts...)
 }
 
 type failingEvent struct {

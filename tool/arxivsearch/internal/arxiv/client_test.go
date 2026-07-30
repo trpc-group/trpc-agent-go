@@ -126,6 +126,128 @@ func TestClient_buildQueryURL(t *testing.T) {
 			},
 			want: "http://example.com?max_results=1&search_query=hello+world%21&start=0",
 		},
+		{
+			name: "submitted date range with query",
+			fields: fields{
+				baseURL: "http://arxiv.org",
+			},
+			args: args{
+				search: Search{
+					Query:             "cat:cs.AI",
+					SubmittedDateFrom: "2022-06-01",
+					SubmittedDateTo:   "2022-06-30",
+				},
+				start:      0,
+				maxResults: 10,
+			},
+			want: "http://arxiv.org?max_results=10&search_query=%28cat%3Acs.AI%29+AND+submittedDate%3A%5B202206010000+TO+202206302359%5D&start=0",
+		},
+		{
+			name: "submitted date range groups compound query",
+			fields: fields{
+				baseURL: "http://arxiv.org",
+			},
+			args: args{
+				search: Search{
+					Query:             "cat:cs.AI OR cat:cs.LG",
+					SubmittedDateFrom: "2022-06-01",
+					SubmittedDateTo:   "2022-06-30",
+				},
+				start:      0,
+				maxResults: 10,
+			},
+			want: "http://arxiv.org?max_results=10&search_query=%28cat%3Acs.AI+OR+cat%3Acs.LG%29+AND+submittedDate%3A%5B202206010000+TO+202206302359%5D&start=0",
+		},
+		{
+			name: "submitted date range only",
+			fields: fields{
+				baseURL: "http://arxiv.org",
+			},
+			args: args{
+				search: Search{
+					SubmittedDateFrom: "2016-08-11",
+					SubmittedDateTo:   "2016-08-11",
+				},
+				start:      0,
+				maxResults: 5,
+			},
+			want: "http://arxiv.org?max_results=5&search_query=submittedDate%3A%5B201608110000+TO+201608112359%5D&start=0",
+		},
+		{
+			name: "submitted date from only",
+			fields: fields{
+				baseURL: "http://arxiv.org",
+			},
+			args: args{
+				search: Search{
+					Query:             "cat:cs.AI",
+					SubmittedDateFrom: "2022-06-01",
+				},
+				start:      0,
+				maxResults: 5,
+			},
+			want: "http://arxiv.org?max_results=5&search_query=%28cat%3Acs.AI%29+AND+submittedDate%3A%5B202206010000+TO+999912312359%5D&start=0",
+		},
+		{
+			name: "submitted date to only",
+			fields: fields{
+				baseURL: "http://arxiv.org",
+			},
+			args: args{
+				search: Search{
+					SubmittedDateTo: "2022-06-30",
+				},
+				start:      0,
+				maxResults: 5,
+			},
+			want: "http://arxiv.org?max_results=5&search_query=submittedDate%3A%5B199001010000+TO+202206302359%5D&start=0",
+		},
+		{
+			name: "invalid submitted date",
+			fields: fields{
+				baseURL: "http://arxiv.org",
+			},
+			args: args{
+				search: Search{
+					Query:             "cat:cs.AI",
+					SubmittedDateFrom: "2022-13-01",
+				},
+				start:      0,
+				maxResults: 5,
+			},
+			wantErr: true,
+		},
+		{
+			name: "duplicate submitted date clause",
+			fields: fields{
+				baseURL: "http://arxiv.org",
+			},
+			args: args{
+				search: Search{
+					Query:             "cat:cs.AI AND submittedDate:[202201010000 TO 202201312359]",
+					SubmittedDateFrom: "2022-06-01",
+				},
+				start:      0,
+				maxResults: 5,
+			},
+			wantErr: true,
+		},
+		{
+			name: "inverted submitted date range",
+			fields: fields{
+				baseURL: "http://arxiv.org",
+			},
+			args: args{
+				search: Search{
+					Query:             "cat:cs.AI",
+					SubmittedDateFrom: "2022-12-31",
+					SubmittedDateTo:   "2022-01-01",
+				},
+				start:      0,
+				maxResults: 5,
+			},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -144,6 +266,35 @@ func TestClient_buildQueryURL(t *testing.T) {
 			if got != tt.want {
 				t.Errorf("Client.buildQueryURL() = \n%v, \nwant \n%v", got, tt.want)
 			}
+		})
+	}
+}
+
+func TestNormalizeArxivDateBound(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     string
+		upper   bool
+		want    string
+		wantErr bool
+	}{
+		{name: "lower date", raw: "2022-06-01", want: "202206010000"},
+		{name: "upper date", raw: "20220630", upper: true, want: "202206302359"},
+		{name: "minute", raw: "202206011234", want: "202206011234"},
+		{name: "date time text", raw: "2022-06-01 12:34", want: "202206011234"},
+		{name: "bad date", raw: "2022-02-31", wantErr: true},
+		{name: "unexpected date character", raw: "2022-0x6-01", wantErr: true},
+		{name: "bad shape", raw: "2022", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := normalizeArxivDateBound(tt.raw, tt.upper)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }

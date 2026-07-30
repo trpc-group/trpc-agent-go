@@ -970,6 +970,19 @@ func WithToolExecutionFilter(filter tool.FilterFunc) RunOption {
 	}
 }
 
+// WithToolResultEventPerCallEnabled controls whether each result is emitted as
+// its tool call completes in framework-executed, non-long-running multi-tool
+// rounds. No additional aggregate event is emitted, and the next model call
+// still waits for all results. Other rounds keep the existing behavior.
+// Round-level StateDelta and Actions.SkipSummarization are carried only by the
+// last result event, or by the terminal error if the round ends early.
+// Disabled by default.
+func WithToolResultEventPerCallEnabled(enabled bool) RunOption {
+	return func(opts *RunOptions) {
+		opts.ToolResultEventPerCallEnabled = enabled
+	}
+}
+
 // WithToolPermissionPolicy sets a per-run policy that is checked after
 // before-tool callbacks finalize arguments and immediately before the
 // framework executes a tool call.
@@ -1025,6 +1038,15 @@ func WithToolCallArgumentsJSONRepairEnabled(enabled bool) RunOption {
 	return func(opts *RunOptions) {
 		e := enabled
 		opts.ToolCallArgumentsJSONRepairEnabled = &e
+	}
+}
+
+// WithToolCallTextRepairEnabled enables best-effort repair for model responses
+// that emit tool calls as visible text instead of structured tool_calls.
+func WithToolCallTextRepairEnabled(enabled bool) RunOption {
+	return func(opts *RunOptions) {
+		e := enabled
+		opts.ToolCallTextRepairEnabled = &e
 	}
 }
 
@@ -1389,6 +1411,10 @@ type RunOptions struct {
 	// externally and later provide tool results (RoleTool messages).
 	ToolExecutionFilter tool.FilterFunc
 
+	// ToolResultEventPerCallEnabled enables the behavior documented by
+	// [WithToolResultEventPerCallEnabled].
+	ToolResultEventPerCallEnabled bool
+
 	// ToolPermissionPolicy checks whether a tool call may run after the model
 	// has requested it, after argument repair, and after before-tool callbacks
 	// have finalized arguments.
@@ -1403,6 +1429,11 @@ type RunOptions struct {
 	// ToolCallArgumentsJSONRepairEnabled enables best-effort JSON repair for tool call arguments.
 	// When nil, JSON repair is disabled by default.
 	ToolCallArgumentsJSONRepairEnabled *bool
+
+	// ToolCallTextRepairEnabled enables best-effort repair for model responses
+	// that emit tool calls as visible text instead of structured tool_calls.
+	// When nil, text repair is disabled by default.
+	ToolCallTextRepairEnabled *bool
 
 	// runControlConfig stores internal event and buffering controls.
 	runControlConfig runControlConfig
