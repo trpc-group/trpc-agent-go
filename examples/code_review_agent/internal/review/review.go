@@ -27,33 +27,33 @@ import (
 // a Fingerprint (for dedup and traceability) and a TaskID (the run-unique
 // identifier of the review task that produced it).
 type Finding struct {
-	TaskID         string
-	Severity       string // "critical"|"high"|"medium"|"low"
-	Category       string
-	File           string
-	Line           int
-	Title          string
-	Evidence       string
-	Recommendation string
-	Confidence     float64
-	Source         string // e.g. "rule:SI-001"
-	RuleID         string
-	Fingerprint    string // sha256(task_id + rule_id + file + line + category)
+	TaskID         string  `json:"task_id"`
+	Severity       string  `json:"severity"` // "critical"|"high"|"medium"|"low"
+	Category       string  `json:"category"`
+	File           string  `json:"file"`
+	Line           int     `json:"line"`
+	Title          string  `json:"title"`
+	Evidence       string  `json:"evidence"`
+	Recommendation string  `json:"recommendation"`
+	Confidence     float64 `json:"confidence"`
+	Source         string  `json:"source"` // e.g. "rule:SI-001"
+	RuleID         string  `json:"rule_id"`
+	Fingerprint    string  `json:"fingerprint"` // sha256(task_id + rule_id + file + line + category)
 }
 
 // Warning wraps a low-confidence finding together with the reason it was
 // not promoted to a confirmed finding.
 type Warning struct {
-	Finding Finding
-	Reason  string // e.g. "low confidence: 0.40"
+	Finding Finding `json:"finding"`
+	Reason  string  `json:"reason"` // e.g. "low confidence: 0.40"
 }
 
 // Report is the aggregated output of a review task.
 type Report struct {
-	TaskID           string
-	Findings         []Finding // confidence >= 0.6
-	Warnings         []Warning // confidence < 0.6, non-critical
-	NeedsHumanReview []Finding // critical findings with low confidence
+	TaskID           string    `json:"task_id"`
+	Findings         []Finding `json:"findings"`           // confidence >= 0.6
+	Warnings         []Warning `json:"warnings"`           // confidence < 0.6, non-critical
+	NeedsHumanReview []Finding `json:"needs_human_review"` // critical findings with low confidence
 }
 
 // confirmedThreshold is the minimum confidence for a finding to be treated

@@ -47,13 +47,13 @@ type Metrics struct {
 // invoked, so callers may keep and read the snapshot after the lock is
 // released without triggering data races.
 type Summary struct {
-	TotalDuration     time.Duration
-	SandboxDuration   time.Duration
-	ToolCalls         int64
-	PermissionBlocked int64
-	FindingCount      int64
-	SeverityCounts    map[string]int64
-	ExceptionTypes    map[string]int64
+	TotalDuration     time.Duration    `json:"total_duration"`
+	SandboxDuration   time.Duration    `json:"sandbox_duration"`
+	ToolCalls         int64            `json:"tool_calls"`
+	PermissionBlocked int64            `json:"permission_blocked"`
+	FindingCount      int64            `json:"finding_count"`
+	SeverityCounts    map[string]int64 `json:"severity_counts"`
+	ExceptionTypes    map[string]int64 `json:"exception_types"`
 }
 
 // New constructs a zero-value Metrics collector with its severity and

@@ -230,14 +230,16 @@ func (r *contextLeakRule) Scan(file diffparse.DiffFile) []Finding {
 // --- RL-001: Resource not closed ---
 
 type resourceNotClosedRule struct {
-	openRe  *regexp.Regexp
-	closeRe *regexp.Regexp
+	openRe   *regexp.Regexp
+	closeRe  *regexp.Regexp
+	assignRe *regexp.Regexp
 }
 
 func newResourceNotClosedRule() *resourceNotClosedRule {
 	return &resourceNotClosedRule{
-		openRe:  regexp.MustCompile(`os\.(Open|Create|OpenFile)\(`),
-		closeRe: regexp.MustCompile(`defer\s+.*\.Close\(\)`),
+		openRe:   regexp.MustCompile(`os\.(Open|Create|OpenFile)\(`),
+		closeRe:  regexp.MustCompile(`defer\s+.*\.Close\(\)`),
+		assignRe: regexp.MustCompile(`(\w+)\s*[,=].*os\.(Open|Create|OpenFile)\(`),
 	}
 }
 
@@ -246,14 +248,42 @@ func (r *resourceNotClosedRule) Severity() string    { return "high" }
 func (r *resourceNotClosedRule) Category() string    { return "reliability" }
 func (r *resourceNotClosedRule) Confidence() float64 { return 0.90 }
 
+// Scan checks each os.Open/Create/OpenFile call in the added lines for a
+// matching `defer <handle>.Close()`. Unlike a file-level early return (which
+// treats any defer Close as satisfying every Open), this associates each
+// acquisition with its receiver variable so a change that opens two files,
+// closes the first, and leaks the second is still reported.
 func (r *resourceNotClosedRule) Scan(file diffparse.DiffFile) []Finding {
-	if r.closeRe.MatchString(addedContent(file)) {
-		return nil
+	added := file.AddedLinesNumbered()
+	// Collect every "defer <var>.Close()" across the added lines so each
+	// Open can be checked against its own handle.
+	closedVars := make(map[string]bool)
+	for _, l := range added {
+		m := r.closeRe.FindStringSubmatch(l.Content)
+		if m == nil {
+			continue
+		}
+		// Extract the variable name from "defer <var>.Close()".
+		// The regex captures everything between "defer " and ".Close()".
+		if parts := strings.Fields(l.Content); len(parts) >= 2 {
+			handle := parts[1] // "defer f.Close()" -> parts[1] = "f.Close()"
+			if dot := strings.IndexByte(handle, '.'); dot > 0 {
+				closedVars[handle[:dot]] = true
+			}
+		}
 	}
 	var out []Finding
-	for _, l := range file.AddedLinesNumbered() {
+	for _, l := range added {
 		if !r.openRe.MatchString(l.Content) {
 			continue
+		}
+		// Try to extract the receiver variable name from the assignment.
+		// e.g. "f, err := os.Open(...)" -> "f"
+		if m := r.assignRe.FindStringSubmatch(l.Content); m != nil {
+			if closedVars[m[1]] {
+				// This handle has a matching defer Close; skip.
+				continue
+			}
 		}
 		out = append(out, makeFinding(r, file, l,
 			"Opened resource may not be closed",

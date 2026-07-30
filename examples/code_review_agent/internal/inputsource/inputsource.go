@@ -361,9 +361,8 @@ func gitDefaultBranch(ctx context.Context, repo string) (string, error) {
 // gitCommittedDiff returns the diff of HEAD against its merge-base with
 // the given base branch. baseBranch is empty only for an unborn HEAD (no
 // commits); gitDefaultBranch fails closed when HEAD exists but no base can
-// be resolved. If the merge-base fails (unrelated histories), it returns an
-// empty string so the caller only sees the working-tree diff — never a
-// duplicate of it.
+// be resolved. If the merge-base fails (unrelated histories), it fails
+// closed so a clean orphan feature branch cannot silently report pass.
 func gitCommittedDiff(ctx context.Context, repo, baseBranch string) (string, error) {
 	if baseBranch == "" {
 		// Unborn HEAD only; unresolved bases are rejected by gitDefaultBranch.
@@ -371,8 +370,14 @@ func gitCommittedDiff(ctx context.Context, repo, baseBranch string) (string, err
 	}
 	base, err := gitOutput(ctx, repo, "merge-base", "HEAD", baseBranch)
 	if err != nil {
-		// No common ancestor (unrelated histories): no committed diff.
-		return "", nil
+		// Unrelated histories: HEAD and baseBranch share no common ancestor.
+		// Returning an empty diff would let a clean orphan branch report pass,
+		// so fail closed and ask the caller to provide an explicit diff input.
+		return "", fmt.Errorf(
+			"inputsource: cannot compute merge-base of HEAD and %q "+
+				"(unrelated histories or base ref missing); "+
+				"fetch the base branch or provide a diff/file-list input instead",
+			baseBranch)
 	}
 	base = strings.TrimSpace(base)
 	if base == "" {
@@ -385,37 +390,28 @@ func gitCommittedDiff(ctx context.Context, repo, baseBranch string) (string, err
 	return diff, nil
 }
 
-// gitWorkingTreeDiff returns the working-tree diff against HEAD, capturing
-// both staged and unstaged changes so staged-but-uncommitted security or
-// correctness changes are reviewed rather than silently skipped. For repos
-// with an unborn HEAD (no commits), it falls back to staged (`git diff --cached`)
-// plus unstaged (`git diff`) so a developer who only `git add`s a secret-bearing
-// file is still reviewed.
+// gitWorkingTreeDiff returns the effective worktree diff against HEAD,
+// capturing the net result of staged and unstaged changes so a security
+// or correctness issue introduced in the index and later corrected in the
+// worktree is reported only by its final state, not the intermediate one.
 //
-// Untracked files (listed by `git ls-files --others --exclude-standard`) are
-// synthesised into "new file" diffs and appended so newly-added files —
-// which may contain hardcoded secrets or other reviewable issues — are not
-// silently skipped. This matters for security: a developer who drops a
-// config file with an API key into the repo without `git add` would
-// otherwise bypass the rule engine entirely.
+// For repos with a born HEAD, `git diff HEAD` already yields this net diff
+// (worktree vs HEAD, including both staged and unstaged changes). Untracked
+// files are appended as synthesised "new file" diffs.
+//
+// For repos with an unborn HEAD (no commits), `git diff HEAD` fails. Rather
+// than concatenating `git diff --cached` (staged) and `git diff` (unstaged) —
+// which would report the intermediate index state and flag a staged issue
+// that was corrected in the worktree — gitUnbornEffectiveDiff synthesises a
+// single "new file" diff from the final worktree content of every tracked
+// (staged) and untracked file, so only the effective state is reviewed.
 func gitWorkingTreeDiff(ctx context.Context, repo string) (string, error) {
 	diff, err := gitOutput(ctx, repo, "diff", "HEAD")
 	if err != nil {
-		// unborn HEAD (no commits): capture staged + unstaged.
-		unstaged, uerr := gitOutput(ctx, repo, "diff")
-		if uerr != nil {
-			return "", fmt.Errorf("inputsource: git diff working tree: %w", uerr)
-		}
-		staged, serr := gitOutput(ctx, repo, "diff", "--cached")
-		if serr != nil {
-			diff = unstaged
-		} else {
-			diff = staged
-			if diff != "" && unstaged != "" {
-				diff += "\n"
-			}
-			diff += unstaged
-		}
+		// Unborn HEAD (no commits): produce a single effective worktree diff
+		// instead of concatenating staged + unstaged, which would report the
+		// intermediate index state.
+		return gitUnbornEffectiveDiff(ctx, repo)
 	}
 	untracked, err := gitUntrackedDiff(ctx, repo, int64(len(diff)))
 	if err != nil {
@@ -426,6 +422,69 @@ func gitWorkingTreeDiff(ctx context.Context, repo string) (string, error) {
 	}
 	diff += untracked
 	return diff, nil
+}
+
+// gitUnbornEffectiveDiff synthesises an effective "new file" diff for every
+// tracked (staged in the index) and untracked file in the repository's final
+// worktree state. It is used when HEAD is unborn (no commits) so that staged
+// and unstaged changes are merged into a single net diff rather than
+// concatenated — concatenating `git diff --cached` (staged) and `git diff`
+// (unstaged) would report the intermediate index state, causing a staged
+// issue that was later corrected in the worktree to still be flagged.
+//
+// Non-regular files (directories, submodules, symlinks, devices) and files
+// that disappear between the ls-files call and the read are silently skipped
+// — they are not reviewable as text diffs and failing the whole review on
+// their account would be too aggressive. The total size is capped at
+// MaxDiffBytes; exhaustion fails closed so a secret-bearing file is never
+// silently dropped.
+func gitUnbornEffectiveDiff(ctx context.Context, repo string) (string, error) {
+	absRepo, err := filepath.Abs(repo)
+	if err != nil {
+		return "", fmt.Errorf("inputsource: resolve repo root: %w", err)
+	}
+	// List tracked (in index) and untracked files. -z uses NUL separators so
+	// paths with spaces or special characters are handled correctly.
+	tracked, terr := gitOutput(ctx, repo, "ls-files", "-z")
+	if terr != nil {
+		return "", fmt.Errorf("inputsource: ls-files (tracked) for unborn HEAD: %w", terr)
+	}
+	untracked, uerr := gitOutput(ctx, repo, "ls-files", "--others", "--exclude-standard", "-z")
+	if uerr != nil {
+		return "", fmt.Errorf("inputsource: ls-files (untracked) for unborn HEAD: %w", uerr)
+	}
+	names := append(
+		strings.Split(strings.TrimRight(tracked, "\x00"), "\x00"),
+		strings.Split(strings.TrimRight(untracked, "\x00"), "\x00")...,
+	)
+	var diffs []string
+	var totalSize int64
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" || filepath.IsAbs(name) {
+			continue
+		}
+		if totalSize >= MaxDiffBytes {
+			return "", fmt.Errorf("inputsource: unborn-HEAD effective diff exceeds max total size %d bytes", MaxDiffBytes)
+		}
+		full := filepath.Join(absRepo, name)
+		info, lerr := os.Lstat(full)
+		if lerr != nil {
+			// TOCTOU: file deleted between ls-files and Lstat; skip.
+			continue
+		}
+		if !info.Mode().IsRegular() {
+			// Directory, submodule, symlink, device, socket, etc.
+			continue
+		}
+		synth, serr := syntheticDiffForFile(name, absRepo, MaxDiffBytes-totalSize)
+		if serr != nil {
+			return "", serr
+		}
+		totalSize += int64(len(synth))
+		diffs = append(diffs, synth)
+	}
+	return strings.Join(diffs, "\n"), nil
 }
 
 // gitUntrackedDiff synthesises "new file" diffs for every untracked file

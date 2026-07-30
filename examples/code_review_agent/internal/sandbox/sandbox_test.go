@@ -208,7 +208,7 @@ func TestBuildSandboxEnv_NoHostLeak(t *testing.T) {
 	t.Setenv("PATH", "/evil/bin:/usr/bin")
 
 	ws := codeexecutor.Workspace{Path: t.TempDir()}
-	env := buildSandboxEnv(ws, nil)
+	env := buildSandboxEnv(ws, nil, false)
 	if env["GOPROXY"] != "off" {
 		t.Fatalf("GOPROXY = %q, want off", env["GOPROXY"])
 	}

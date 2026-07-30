@@ -32,10 +32,19 @@ import (
 	"time"
 )
 
-// CurrentSchemaVersion is the schema version applied by Init. Migrate
-// applies every migration up to and including this version. Bump this
-// constant when adding a new migration entry to migrations().
+// CurrentSchemaVersion is the highest schema version the code supports.
+// Migrate applies every migration up to and including this version. Bump
+// this constant when adding a new migration entry to migrations().
 const CurrentSchemaVersion = "v1"
+
+// bootstrapSchemaVersion is the schema version established by the embedded
+// schema.sql that Init executes. Init records only this version — not
+// CurrentSchemaVersion — so that future migrations (v2, v3, ...) are applied
+// by Migrate rather than silently skipped. If Init recorded
+// CurrentSchemaVersion directly, reopening an old database after a v2
+// migration is added would insert the v2 marker without executing the v2
+// SQL, leaving the schema in an inconsistent state.
+const bootstrapSchemaVersion = "v1"
 
 // Migration is a single schema change. Version is the unique identifier
 // (e.g. "v1"); SQL is the idempotent SQL to apply (typically

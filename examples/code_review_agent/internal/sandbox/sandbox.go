@@ -172,20 +172,21 @@ type RunSpec struct {
 // RunResult captures the outcome of a sandboxed run. The pipeline persists
 // this to the sandbox_run table.
 type RunResult struct {
-	Status    string // one of StatusSuccess / StatusFailed / StatusTimeout
-	ExitCode  int
-	Duration  time.Duration
-	TimedOut  bool
-	Truncated bool
-	Stdout    []byte
-	Stderr    []byte
+	Status    string        `json:"status"` // one of StatusSuccess / StatusFailed / StatusTimeout
+	ExitCode  int           `json:"exit_code"`
+	Duration  time.Duration `json:"duration"`
+	TimedOut  bool          `json:"timed_out"`
+	Truncated bool          `json:"truncated"`
+	Stdout    []byte        `json:"stdout"`
+	Stderr    []byte        `json:"stderr"`
 }
 
 // Executor wraps a codeexecutor.Engine with safe defaults.
 type Executor struct {
-	eng    codeexecutor.Engine
-	closer io.Closer // may be nil (local backend has no Close)
-	cfg    Config
+	eng        codeexecutor.Engine
+	closer     io.Closer // may be nil (local backend has no Close)
+	cfg        Config
+	vendorMode bool // true if the staged repo has a vendor/ directory
 }
 
 // New constructs an Executor for the configured backend.
@@ -306,7 +307,18 @@ func (e *Executor) CreateWorkspace(ctx context.Context) (codeexecutor.Workspace,
 		_ = mgr.Cleanup(ctx, ws)
 		return codeexecutor.Workspace{}, fmt.Errorf("sandbox: stage repo: %w", stageErr)
 	}
+	// Detect vendoring so buildSandboxEnv can set GOFLAGS=-mod=vendor.
+	// Without this, GOPROXY=off + an empty GOMODCACHE makes go vet /
+	// staticcheck / go test fail for any non-vendored module, even when
+	// the Go toolchain version is compatible.
+	e.vendorMode = fileExists(filepath.Join(e.cfg.RepoPath, "vendor"))
 	return ws, nil
+}
+
+// fileExists reports whether path exists (file or directory).
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // StageDirectory stages a host directory into the workspace at the given
@@ -358,7 +370,7 @@ func (e *Executor) Run(
 	progSpec := codeexecutor.RunProgramSpec{
 		Cmd:      spec.Cmd,
 		Args:     spec.Args,
-		Env:      buildSandboxEnv(ws, spec.Env),
+		Env:      buildSandboxEnv(ws, spec.Env, e.vendorMode),
 		CleanEnv: true,
 		Cwd:      spec.Cwd,
 		Timeout:  e.cfg.Timeout,
@@ -450,23 +462,36 @@ func (e *Executor) Close(ctx context.Context, ws codeexecutor.Workspace) error {
 }
 
 // buildSandboxEnv constructs the minimal, allowlisted environment for a
-// spawned process. Only PATH, GOPATH, GOCACHE, GOPROXY and WORKSPACE_DIR are
-// injected; os.Environ is never called.
+// spawned process. Only PATH, GOPATH, GOCACHE, GOMODCACHE, GOPROXY,
+// GOFLAGS (when vendored) and WORKSPACE_DIR are injected; os.Environ is
+// never called.
 //
 // Security: host GOPATH / GOCACHE / GOPROXY / PATH values are NOT copied.
 // Host GOPROXY may contain credentials (https://user:token@proxy), and host
-// PATH may point at attacker-controlled tool shims. GOPATH and GOCACHE always
-// resolve under the workspace; GOPROXY is always "off" (offline); PATH is a
-// fixed minimal set (or the directories of tools LookPath finds on local).
+// PATH may point at attacker-controlled tool shims. GOPATH, GOCACHE and
+// GOMODCACHE always resolve under the workspace; GOPROXY is always "off"
+// (offline); PATH is a fixed minimal set (or the directories of tools
+// LookPath finds on local).
+//
+// When vendorMode is true (the staged repo has a vendor/ directory),
+// GOFLAGS=-mod=vendor is set so go vet / staticcheck / go test resolve
+// dependencies from the vendored tree instead of the empty module cache —
+// without this, every non-vendored module fails under GOPROXY=off.
+//
 // Caller-supplied extra values are merged on top and may intentionally
 // override these defaults for tests.
-func buildSandboxEnv(ws codeexecutor.Workspace, extra map[string]string) map[string]string {
+func buildSandboxEnv(ws codeexecutor.Workspace, extra map[string]string, vendorMode bool) map[string]string {
+	gopath := filepath.Join(ws.Path, ".gopath")
 	env := map[string]string{
 		"PATH":                          minimalCleanPATH(),
-		"GOPATH":                        filepath.Join(ws.Path, ".gopath"),
+		"GOPATH":                        gopath,
 		"GOCACHE":                       filepath.Join(ws.Path, ".gocache"),
+		"GOMODCACHE":                    filepath.Join(gopath, "pkg", "mod"),
 		"GOPROXY":                       "off",
 		codeexecutor.WorkspaceEnvDirKey: ws.Path,
+	}
+	if vendorMode {
+		env["GOFLAGS"] = "-mod=vendor"
 	}
 	for k, v := range extra {
 		env[k] = v

@@ -91,10 +91,12 @@ func New(path string) Store {
 // CREATE INDEX statement uses IF NOT EXISTS, so re-applying the schema is
 // idempotent.
 //
-// After applying the schema, Init records the current schema version in
-// schema_migrations (borrowed from competitor PR #2243) so Migrate can
-// detect already-applied migrations. The version insert uses INSERT OR
-// IGNORE so re-initialising an existing database is a no-op.
+// After applying the schema, Init records the bootstrap schema version (the
+// version established by schema.sql) in schema_migrations. This is NOT
+// CurrentSchemaVersion: recording only the bootstrap version ensures future
+// migrations are applied by Migrate rather than silently skipped. The
+// version insert uses INSERT OR IGNORE so re-initialising an existing
+// database is a no-op.
 func (s *sqliteStore) Init(ctx context.Context) error {
 	if s.db != nil {
 		return nil
@@ -117,13 +119,15 @@ func (s *sqliteStore) Init(ctx context.Context) error {
 		s.db = nil
 		return fmt.Errorf("store: apply schema: %w", err)
 	}
-	// Record the initial schema version. INSERT OR IGNORE makes this
-	// idempotent: a database that already has the v1 row (e.g. re-opened
-	// from disk) is left untouched.
+	// Record only the bootstrap schema version (the one established by
+	// schema.sql), NOT CurrentSchemaVersion. This ensures future migrations
+	// (v2, v3, ...) are applied by Migrate rather than silently skipped.
+	// INSERT OR IGNORE makes this idempotent: a database that already has
+	// the bootstrap row (e.g. re-opened from disk) is left untouched.
 	now := time.Now().UTC().Format(time.RFC3339)
 	if _, err := s.db.ExecContext(ctx, `
 INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?);`,
-		CurrentSchemaVersion, now); err != nil {
+		bootstrapSchemaVersion, now); err != nil {
 		_ = s.db.Close()
 		s.db = nil
 		return fmt.Errorf("store: record schema version: %w", err)

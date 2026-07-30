@@ -67,10 +67,16 @@ RUN su reviewer -c 'go build std 2>/dev/null || true'
 # read-only at /workspace/repo and writes output to /workspace/out.
 WORKDIR /workspace
 
-# Drop privileges for every process started by docker exec / the
-# container entrypoint. Without USER, the image would still run as
-# root despite creating the reviewer account.
-USER reviewer
+# NOTE: We intentionally do NOT set `USER reviewer` here. The framework's
+# StageDirectory(ReadOnly: true) implements read-only staging by running
+# `chmod -R a-w` via docker exec, using the container's default user.
+# When USER is set to a non-root account, docker-cp'd files (root-owned
+# in CI checkouts) cannot be chmod'd by the non-root user, causing
+# staging to fail before any review tool starts. Until the framework
+# supports per-exec user selection (so staging runs as root and review
+# commands run as reviewer), the container must remain root-owned.
+# The reviewer account is retained above so it can be used once the
+# framework gains that capability.
 
 # Keep the container alive so the sandbox executor can run commands
 # inside it via docker exec.

@@ -73,22 +73,22 @@ type SandboxRun struct {
 // PermissionDecision records whether a potentially dangerous command was
 // permitted or blocked and why.
 type PermissionDecision struct {
-	ID        int64
-	TaskID    string
-	Command   string
-	Action    string
-	Reason    string
-	CreatedAt string
+	ID        int64  `json:"id"`
+	TaskID    string `json:"task_id"`
+	Command   string `json:"command"`
+	Action    string `json:"action"`
+	Reason    string `json:"reason"`
+	CreatedAt string `json:"created_at"`
 }
 
 // Artifact is a file produced by a review run (e.g. the rendered report).
 type Artifact struct {
-	ID        int64
-	TaskID    string
-	Name      string
-	Path      string
-	SizeBytes int64
-	CreatedAt string
+	ID        int64  `json:"id"`
+	TaskID    string `json:"task_id"`
+	Name      string `json:"name"`
+	Path      string `json:"path"`
+	SizeBytes int64  `json:"size_bytes"`
+	CreatedAt string `json:"created_at"`
 }
 
 // ReportRow stores the on-disk locations of the JSON and Markdown reports for
