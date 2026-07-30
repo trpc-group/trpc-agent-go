@@ -1382,87 +1382,105 @@ func scanNetworkCommandSegments(ctx context.Context, cmds [][]string, p Policy) 
 		if len(argv) == 0 {
 			continue
 		}
-		cmd := commandBase(argv[0])
-		if cmd == "git" {
-			hosts, review := gitNetworkTargets(argv[1:])
-			for _, host := range hosts {
-				if cancelled := contextCancellationFinding(ctx); cancelled != nil {
-					return append(findings, *cancelled)
-				}
-				if domainAllowed(host, p.AllowedDomains) {
-					continue
-				}
-				findings = append(findings, finding(ruleNetworkEgress,
-					"network_egress", RiskCritical, host,
-					"add the domain to allowed_domains or remove the outbound network call",
-					p.NonWhitelistedNetworkAction))
-			}
-			for _, evidence := range review {
-				if cancelled := contextCancellationFinding(ctx); cancelled != nil {
-					return append(findings, *cancelled)
-				}
-				findings = append(findings, finding(ruleNetworkEgress,
-					"network_egress", RiskHigh, evidence,
-					"review git remotes that are resolved from local configuration",
-					DecisionAsk))
-			}
+		findings = append(findings, scanNetworkCommandSegment(ctx, argv, p)...)
+	}
+	return findings
+}
+
+func scanNetworkCommandSegment(ctx context.Context, argv []string, p Policy) []Finding {
+	if len(argv) == 0 {
+		return nil
+	}
+	switch cmd := commandBase(argv[0]); cmd {
+	case "git":
+		return scanGitNetworkSegment(ctx, argv[1:], p)
+	case "curl":
+		return scanCurlNetworkSegment(ctx, argv[1:], p)
+	case "wget":
+		return networkTargetFindings(wgetURLTargets(argv[1:]), p)
+	case "ssh", "scp", "sftp":
+		return scanSSHNetworkSegment(ctx, cmd, argv[1:], p)
+	default:
+		return nil
+	}
+}
+
+func scanGitNetworkSegment(ctx context.Context, args []string, p Policy) []Finding {
+	hosts, review := gitNetworkTargets(args)
+	var findings []Finding
+	for _, host := range hosts {
+		if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+			return append(findings, *cancelled)
+		}
+		if domainAllowed(host, p.AllowedDomains) {
 			continue
 		}
-		if cmd == "curl" {
-			for _, host := range curlConnectionOverrideHosts(argv[1:]) {
-				if cancelled := contextCancellationFinding(ctx); cancelled != nil {
-					return append(findings, *cancelled)
-				}
-				if domainAllowed(host, p.AllowedDomains) {
-					continue
-				}
-				findings = append(findings, finding(ruleNetworkEgress,
-					"network_egress", RiskCritical, host,
-					"add the domain to allowed_domains or remove the outbound network call",
-					p.NonWhitelistedNetworkAction))
-			}
-			for _, evidence := range curlConfigEvidence(argv[1:]) {
-				if cancelled := contextCancellationFinding(ctx); cancelled != nil {
-					return append(findings, *cancelled)
-				}
-				findings = append(findings, finding(ruleNetworkEgress,
-					"network_egress", RiskHigh, evidence,
-					"review curl config files before execution because they can override URLs, proxies, and connection targets",
-					DecisionAsk))
-			}
-			findings = append(findings,
-				networkTargetFindings(curlURLTargets(argv[1:]), p)...)
+		findings = append(findings, finding(ruleNetworkEgress,
+			"network_egress", RiskCritical, host,
+			"add the domain to allowed_domains or remove the outbound network call",
+			p.NonWhitelistedNetworkAction))
+	}
+	for _, evidence := range review {
+		if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+			return append(findings, *cancelled)
+		}
+		findings = append(findings, finding(ruleNetworkEgress,
+			"network_egress", RiskHigh, evidence,
+			"review git remotes that are resolved from local configuration",
+			DecisionAsk))
+	}
+	return findings
+}
+
+func scanCurlNetworkSegment(ctx context.Context, args []string, p Policy) []Finding {
+	var findings []Finding
+	for _, host := range curlConnectionOverrideHosts(args) {
+		if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+			return append(findings, *cancelled)
+		}
+		if domainAllowed(host, p.AllowedDomains) {
 			continue
 		}
-		if cmd == "wget" {
-			findings = append(findings,
-				networkTargetFindings(wgetURLTargets(argv[1:]), p)...)
+		findings = append(findings, finding(ruleNetworkEgress,
+			"network_egress", RiskCritical, host,
+			"add the domain to allowed_domains or remove the outbound network call",
+			p.NonWhitelistedNetworkAction))
+	}
+	for _, evidence := range curlConfigEvidence(args) {
+		if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+			return append(findings, *cancelled)
+		}
+		findings = append(findings, finding(ruleNetworkEgress,
+			"network_egress", RiskHigh, evidence,
+			"review curl config files before execution because they can override URLs, proxies, and connection targets",
+			DecisionAsk))
+	}
+	findings = append(findings, networkTargetFindings(curlURLTargets(args), p)...)
+	return findings
+}
+
+func scanSSHNetworkSegment(ctx context.Context, cmd string, args []string, p Policy) []Finding {
+	var findings []Finding
+	for _, host := range sshLikeHosts(cmd, args) {
+		if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+			return append(findings, *cancelled)
+		}
+		if domainAllowed(host, p.AllowedDomains) {
 			continue
 		}
-		if cmd != "ssh" && cmd != "scp" && cmd != "sftp" {
-			continue
+		findings = append(findings, finding(ruleNetworkEgress,
+			"network_egress", RiskCritical, host,
+			"add the domain to allowed_domains or remove the outbound network call",
+			p.NonWhitelistedNetworkAction))
+	}
+	for _, evidence := range sshLikeUnsafeOptionEvidence(cmd, args) {
+		if cancelled := contextCancellationFinding(ctx); cancelled != nil {
+			return append(findings, *cancelled)
 		}
-		for _, host := range sshLikeHosts(cmd, argv[1:]) {
-			if cancelled := contextCancellationFinding(ctx); cancelled != nil {
-				return append(findings, *cancelled)
-			}
-			if domainAllowed(host, p.AllowedDomains) {
-				continue
-			}
-			findings = append(findings, finding(ruleNetworkEgress,
-				"network_egress", RiskCritical, host,
-				"add the domain to allowed_domains or remove the outbound network call",
-				p.NonWhitelistedNetworkAction))
-		}
-		for _, evidence := range sshLikeUnsafeOptionEvidence(cmd, argv[1:]) {
-			if cancelled := contextCancellationFinding(ctx); cancelled != nil {
-				return append(findings, *cancelled)
-			}
-			findings = append(findings, finding(ruleNetworkEgress,
-				"network_egress", RiskHigh, evidence,
-				"review external SSH configuration or helper programs before execution",
-				DecisionAsk))
-		}
+		findings = append(findings, finding(ruleNetworkEgress,
+			"network_egress", RiskHigh, evidence,
+			"review external SSH configuration or helper programs before execution",
+			DecisionAsk))
 	}
 	return findings
 }

