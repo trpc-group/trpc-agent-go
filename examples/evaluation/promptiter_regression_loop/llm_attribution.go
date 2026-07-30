@@ -76,10 +76,16 @@ func (a *llmAttributor) Attribute(ctx context.Context, in FailedMetricInput) (Fa
 	}
 	content, err := readModelChannel(reqCtx, ch)
 	if err != nil {
+		if a.stats != nil {
+			a.stats.Errors++
+		}
 		return "", "", err
 	}
 	cat, reason, ok := parseLLMAttribution(content)
 	if !ok {
+		if a.stats != nil {
+			a.stats.Errors++
+		}
 		return "", "", errors.New("llm attribution: could not parse a valid category/reason JSON from the response")
 	}
 	return cat, reason, nil
@@ -114,10 +120,16 @@ func (a *llmAttributor) AttributeBatch(ctx context.Context, inputs []FailedMetri
 	}
 	content, err := readModelChannel(reqCtx, ch)
 	if err != nil {
+		if a.stats != nil {
+			a.stats.Errors++
+		}
 		return nil, err
 	}
 	out, ok := parseLLMBatchAttribution(content, len(inputs))
 	if !ok {
+		if a.stats != nil {
+			a.stats.Errors++
+		}
 		return nil, errors.New("llm batch attribution: could not parse a valid category/reason array from the response")
 	}
 	return out, nil
