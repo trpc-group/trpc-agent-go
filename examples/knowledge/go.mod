@@ -24,7 +24,7 @@ replace (
 require (
 	github.com/getkin/kin-openapi v0.131.0
 	github.com/jackc/pgx/v5 v5.7.2
-	trpc.group/trpc-go/trpc-agent-go v0.8.0
+	trpc.group/trpc-go/trpc-agent-go v1.9.2-0.20260602121024-664ebd0ab56d
 	trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/golang v0.0.0-20260602121024-664ebd0ab56d
 	trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf v0.5.0
 	trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/python v0.0.0
