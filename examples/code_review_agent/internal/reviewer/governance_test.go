@@ -251,6 +251,11 @@ func TestWorkspacePolicyValidation(t *testing.T) {
 			denyReason: denyTimeoutBudget,
 		},
 		{
+			name:       "timeout duration overflow",
+			arguments:  `{"command":"go test ./...","timeout_sec":9223372036854775807}`,
+			denyReason: denyTimeoutBudget,
+		},
+		{
 			name:       "trailing data",
 			arguments:  `{"command":"go test ./..."}{}`,
 			denyReason: denyArgsTrailingData,

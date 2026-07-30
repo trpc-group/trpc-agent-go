@@ -390,13 +390,13 @@ func validateWorkspaceTimeout(raw map[string]json.RawMessage) string {
 	if seconds < 0 {
 		return denyTimeoutNegative
 	}
-	if time.Duration(seconds)*time.Second > workspaceTimeoutBudget {
+	if seconds > int64(workspaceTimeoutBudget/time.Second) {
 		return denyTimeoutBudget
 	}
 	return ""
 }
 
-func decodeTimeoutSeconds(raw map[string]json.RawMessage) (int, bool, error) {
+func decodeTimeoutSeconds(raw map[string]json.RawMessage) (int64, bool, error) {
 	for _, name := range []string{"timeout_sec", "timeoutSec", "timeout"} {
 		valueRaw, ok := raw[name]
 		if !ok || len(valueRaw) == 0 || string(valueRaw) == "null" {
@@ -408,9 +408,9 @@ func decodeTimeoutSeconds(raw map[string]json.RawMessage) (int, bool, error) {
 			if err != nil {
 				return 0, true, err
 			}
-			return int(parsed), true, nil
+			return parsed, true, nil
 		}
-		var asInt int
+		var asInt int64
 		if err := json.Unmarshal(valueRaw, &asInt); err != nil {
 			return 0, true, err
 		}

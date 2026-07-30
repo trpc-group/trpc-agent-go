@@ -89,13 +89,13 @@ func (g gitClient) run(ctx context.Context, dir string, stdin []byte, args ...st
 	if err == nil {
 		return result, nil
 	}
+	if commandCtx.Err() != nil {
+		return result, fmt.Errorf("git %s: %w", strings.Join(args, " "), commandCtx.Err())
+	}
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
 		result.exitCode = exitErr.ExitCode()
 		return result, nil
-	}
-	if commandCtx.Err() != nil {
-		return result, fmt.Errorf("git %s: %w", strings.Join(args, " "), commandCtx.Err())
 	}
 	return result, fmt.Errorf("run git %s: %w", strings.Join(args, " "), err)
 }
