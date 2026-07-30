@@ -3,10 +3,10 @@
 - 应用: promptiter-nba-commentary-app
 - 模型: deepseek-v4-flash
 - 优化轮次: 4
-- 耗时: 244 毫秒
+- 耗时: 281 毫秒
 - 分阶段耗时:
-  - 引擎运行: 243 毫秒
-  - 失败归因: 0 毫秒
+  - 引擎运行: 280 毫秒
+  - 失败归因: 1 毫秒
   - 门禁判断: 0 毫秒
   - 报告生成: 0 毫秒
 - 基线分数: 0.2500
@@ -51,20 +51,21 @@
 | 2 | 0.5000 | 0.5000 | false | candidate score gain does not satisfy acceptance policy |
 | 3 | 0.5000 | 0.5000 | false | candidate score gain does not satisfy acceptance policy |
 | 4 | 0.5000 | 0.5000 | false | candidate score gain does not satisfy acceptance policy |
+
 （每轮候选 prompt 见 optimization_report.json 的 `roundRecords`）
 
 ## 逐 case 分数变化
 
 | 评测集 | Case | 基线 | 候选 | 基线通过 | 候选通过 | 变化 | 趋势 | 变化类别 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| nba-commentary-validation | validation_05_ice_hockey_overtime | 0.2500 | 0.5000 | false | false | +0.2500 | 上升 | 分数提升 |
-| nba-commentary-validation | validation_06_tennis_tiebreak | 0.2500 | 0.5000 | false | false | +0.2500 | 上升 | 分数提升 |
-| nba-commentary-validation | validation_07_road_cycling_breakaway | 0.2500 | 0.5000 | false | false | +0.2500 | 上升 | 分数提升 |
-| nba-commentary-validation | validation_03_f1_rain_safety_car | 0.2500 | 0.5000 | false | false | +0.2500 | 上升 | 分数提升 |
 | nba-commentary-validation | validation_04_badminton_match_point | 0.2500 | 0.5000 | false | false | +0.2500 | 上升 | 分数提升 |
+| nba-commentary-validation | validation_05_ice_hockey_overtime | 0.2500 | 0.5000 | false | false | +0.2500 | 上升 | 分数提升 |
+| nba-commentary-validation | validation_07_road_cycling_breakaway | 0.2500 | 0.5000 | false | false | +0.2500 | 上升 | 分数提升 |
 | nba-commentary-validation | validation_08_cricket_t20_chase | 0.2500 | 0.5000 | false | false | +0.2500 | 上升 | 分数提升 |
 | nba-commentary-validation | validation_01_nba_empty_48 | 0.2500 | 0.5000 | false | false | +0.2500 | 上升 | 分数提升 |
 | nba-commentary-validation | validation_02_football_penalties | 0.2500 | 0.5000 | false | false | +0.2500 | 上升 | 分数提升 |
+| nba-commentary-validation | validation_06_tennis_tiebreak | 0.2500 | 0.5000 | false | false | +0.2500 | 上升 | 分数提升 |
+| nba-commentary-validation | validation_03_f1_rain_safety_car | 0.2500 | 0.5000 | false | false | +0.2500 | 上升 | 分数提升 |
 
 ## 成本
 

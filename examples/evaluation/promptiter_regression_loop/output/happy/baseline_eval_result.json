@@ -8,13 +8,13 @@
         {
           "EvalSetID": "nba-commentary-validation",
           "EvalCaseID": "validation_01_nba_empty_48",
-          "SessionID": "40a1cb8d-c507-43e9-b410-e74399846641",
+          "SessionID": "ff90dcc0-1483-4028-af62-0f098c4e8041",
           "Trace": {
             "RootAgentName": "candidate",
-            "RootInvocationID": "23860fa0-c4a5-44f7-865e-2f3b0a101a4a",
-            "SessionID": "40a1cb8d-c507-43e9-b410-e74399846641",
-            "StartedAt": "2026-07-30T13:44:44.822917382Z",
-            "EndedAt": "2026-07-30T13:44:44.825966719Z",
+            "RootInvocationID": "2a36f2f0-c0a1-45ca-aada-30372038a785",
+            "SessionID": "ff90dcc0-1483-4028-af62-0f098c4e8041",
+            "StartedAt": "2026-07-30T13:56:35.343711948Z",
+            "EndedAt": "2026-07-30T13:56:35.346420559Z",
             "Status": "completed",
             "Input": {
               "Text": "{\"role\":\"user\",\"content\":\"{\\\"sport\\\":\\\"basketball\\\",\\\"league\\\":\\\"NBA\\\",\\\"date\\\":\\\"2026-02-12\\\",\\\"venue\\\":\\\"Ball Arena\\\",\\\"teams\\\":{\\\"home\\\":{\\\"name\\\":\\\"丹佛掘金\\\",\\\"score\\\":118},\\\"away\\\":{\\\"name\\\":\\\"菲尼克斯太阳\\\",\\\"score\\\":111}},\\\"result\\\":{\\\"winner\\\":\\\"丹佛掘金\\\",\\\"margin\\\":7},\\\"teamStats\\\":{\\\"丹佛掘金\\\":{\\\"rebounds\\\":52,\\\"offensiveRebounds\\\":15,\\\"turnovers\\\":8,\\\"assists\\\":30,\\\"playersInDoubleFigures\\\":6},\\\"菲尼克斯太阳\\\":{\\\"rebounds\\\":39,\\\"offensiveRebounds\\\":7,\\\"turnovers\\\":16,\\\"assists\\\":18,\\\"playersInDoubleFigures\\\":3}},\\\"keyPlayers\\\":[{\\\"team\\\":\\\"菲尼克斯太阳\\\",\\\"name\\\":\\\"德文·布克\\\",\\\"points\\\":48,\\\"rebounds\\\":5,\\\"assists\\\":6,\\\"fieldGoals\\\":\\\"17-31\\\",\\\"threePointers\\\":\\\"6-12\\\"},{\\\"team\\\":\\\"丹佛掘金\\\",\\\"name\\\":\\\"尼古拉·约基奇\\\",\\\"points\\\":24,\\\"rebounds\\\":13,\\\"assists\\\":9},{\\\"team\\\":\\\"丹佛掘金\\\",\\\"name\\\":\\\"贾马尔·穆雷\\\",\\\"points\\\":22,\\\"assists\\\":7},{\\\"team\\\":\\\"丹佛掘金\\\",\\\"name\\\":\\\"阿龙·戈登\\\",\\\"points\\\":18,\\\"rebounds\\\":9}],\\\"decisiveStretch\\\":{\\\"quarter\\\":\\\"第四节\\\",\\\"timeRemaining\\\":\\\"5:42\\\",\\\"run\\\":\\\"丹佛掘金14-4菲尼克斯太阳\\\",\\\"sunTurnovers\\\":4,\\\"nuggetsOffensiveRebounds\\\":5},\\\"recapAngle\\\":\\\"输球方球星高分，赢球方靠篮板和失误控制取胜\\\"}\"}"
@@ -26,14 +26,14 @@
             "Steps": [
               {
                 "StepID": "s1",
-                "InvocationID": "23860fa0-c4a5-44f7-865e-2f3b0a101a4a",
+                "InvocationID": "2a36f2f0-c0a1-45ca-aada-30372038a785",
                 "ParentInvocationID": "",
                 "AgentName": "candidate",
                 "Branch": "candidate",
                 "NodeID": "candidate",
                 "NodeType": "agent",
-                "StartedAt": "2026-07-30T13:44:44.824022682Z",
-                "EndedAt": "2026-07-30T13:44:44.825553016Z",
+                "StartedAt": "2026-07-30T13:56:35.34470274Z",
+                "EndedAt": "2026-07-30T13:56:35.346227099Z",
                 "PredecessorStepIDs": null,
                 "AppliedSurfaceIDs": [
                   "candidate#instruction",
@@ -43,7 +43,7 @@
                   "Text": "[{\"role\":\"system\",\"content\":\"你是一名体育评论员。请为给定的比赛信息撰写一段中文比赛评论。\"},{\"role\":\"user\",\"content\":\"{\\\"sport\\\":\\\"basketball\\\",\\\"league\\\":\\\"NBA\\\",\\\"date\\\":\\\"2026-02-12\\\",\\\"venue\\\":\\\"Ball Arena\\\",\\\"teams\\\":{\\\"home\\\":{\\\"name\\\":\\\"丹佛掘金\\\",\\\"score\\\":118},\\\"away\\\":{\\\"name\\\":\\\"菲尼克斯太阳\\\",\\\"score\\\":111}},\\\"result\\\":{\\\"winner\\\":\\\"丹佛掘金\\\",\\\"margin\\\":7},\\\"teamStats\\\":{\\\"丹佛掘金\\\":{\\\"rebounds\\\":52,\\\"offensiveRebounds\\\":15,\\\"turnovers\\\":8,\\\"assists\\\":30,\\\"playersInDoubleFigures\\\":6},\\\"菲尼克斯太阳\\\":{\\\"rebounds\\\":39,\\\"offensiveRebounds\\\":7,\\\"turnovers\\\":16,\\\"assists\\\":18,\\\"playersInDoubleFigures\\\":3}},\\\"keyPlayers\\\":[{\\\"team\\\":\\\"菲尼克斯太阳\\\",\\\"name\\\":\\\"德文·布克\\\",\\\"points\\\":48,\\\"rebounds\\\":5,\\\"assists\\\":6,\\\"fieldGoals\\\":\\\"17-31\\\",\\\"threePointers\\\":\\\"6-12\\\"},{\\\"team\\\":\\\"丹佛掘金\\\",\\\"name\\\":\\\"尼古拉·约基奇\\\",\\\"points\\\":24,\\\"rebounds\\\":13,\\\"assists\\\":9},{\\\"team\\\":\\\"丹佛掘金\\\",\\\"name\\\":\\\"贾马尔·穆雷\\\",\\\"points\\\":22,\\\"assists\\\":7},{\\\"team\\\":\\\"丹佛掘金\\\",\\\"name\\\":\\\"阿龙·戈登\\\",\\\"points\\\":18,\\\"rebounds\\\":9}],\\\"decisiveStretch\\\":{\\\"quarter\\\":\\\"第四节\\\",\\\"timeRemaining\\\":\\\"5:42\\\",\\\"run\\\":\\\"丹佛掘金14-4菲尼克斯太阳\\\",\\\"sunTurnovers\\\":4,\\\"nuggetsOffensiveRebounds\\\":5},\\\"recapAngle\\\":\\\"输球方球星高分，赢球方靠篮板和失误控制取胜\\\"}\"}]"
                 },
                 "Output": {
-                  "Text": "{\"id\":\"llmflow-response-3f4a3808-9f8a-4205-94d2-85d84fbbe713\",\"object\":\"\",\"created\":0,\"model\":\"deepseek-v4-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"关于{\\\"sport\\\":\\\"basketball\\\",\\\"l，本场比赛十分精彩，双方球员都拼尽全力，最终比分非常接近，主场球队表现更胜一筹并取得了胜利。\"},\"delta\":{\"role\":\"\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":45811}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
+                  "Text": "{\"id\":\"llmflow-response-102be319-1b9d-4b8c-8f1d-a3ad711ffed7\",\"object\":\"\",\"created\":0,\"model\":\"deepseek-v4-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"关于{\\\"sport\\\":\\\"basketball\\\",\\\"l，本场比赛十分精彩，双方球员都拼尽全力，最终比分非常接近，主场球队表现更胜一筹并取得了胜利。\"},\"delta\":{\"role\":\"\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":40988}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
                 },
                 "Usage": null,
                 "Error": ""
@@ -68,13 +68,13 @@
         {
           "EvalSetID": "nba-commentary-validation",
           "EvalCaseID": "validation_02_football_penalties",
-          "SessionID": "22610897-d386-4134-a64a-871e7cc1bb5d",
+          "SessionID": "f5d74fba-7f73-4164-bd79-15b4a437019c",
           "Trace": {
             "RootAgentName": "candidate",
-            "RootInvocationID": "6186a2b3-e0fe-4487-b23a-ae08235e5ed7",
-            "SessionID": "22610897-d386-4134-a64a-871e7cc1bb5d",
-            "StartedAt": "2026-07-30T13:44:44.823064513Z",
-            "EndedAt": "2026-07-30T13:44:44.825476998Z",
+            "RootInvocationID": "5056a555-c897-4e8c-8627-c51ac1b43725",
+            "SessionID": "f5d74fba-7f73-4164-bd79-15b4a437019c",
+            "StartedAt": "2026-07-30T13:56:35.343764459Z",
+            "EndedAt": "2026-07-30T13:56:35.346236025Z",
             "Status": "completed",
             "Input": {
               "Text": "{\"role\":\"user\",\"content\":\"{\\\"sport\\\":\\\"football\\\",\\\"competition\\\":\\\"洲际杯\\\",\\\"round\\\":\\\"1/4决赛\\\",\\\"game\\\":\\\"河城FC vs 海港联\\\",\\\"advancingTeam\\\":\\\"海港联\\\",\\\"regularTimeScore\\\":\\\"河城FC 1-1 海港联\\\",\\\"extraTimeScore\\\":\\\"河城FC 2-2 海港联\\\",\\\"goals\\\":[{\\\"minute\\\":27,\\\"team\\\":\\\"河城FC\\\",\\\"player\\\":\\\"卢卡·莫雷诺\\\",\\\"period\\\":\\\"regular_time\\\"},{\\\"minute\\\":71,\\\"team\\\":\\\"海港联\\\",\\\"player\\\":\\\"诺亚·里德\\\",\\\"period\\\":\\\"regular_time\\\"},{\\\"minute\\\":98,\\\"team\\\":\\\"河城FC\\\",\\\"player\\\":\\\"马特奥·席尔瓦\\\",\\\"period\\\":\\\"extra_time\\\"},{\\\"minute\\\":114,\\\"team\\\":\\\"海港联\\\",\\\"player\\\":\\\"埃文·布鲁克斯\\\",\\\"period\\\":\\\"extra_time\\\"}],\\\"penaltyShootout\\\":{\\\"score\\\":\\\"河城FC 3-4 海港联\\\",\\\"rounds\\\":[{\\\"round\\\":1,\\\"河城FC\\\":\\\"scored\\\",\\\"海港联\\\":\\\"scored\\\",\\\"runningScore\\\":\\\"1-1\\\"},{\\\"round\\\":2,\\\"河城FC\\\":\\\"scored\\\",\\\"海港联\\\":\\\"scored\\\",\\\"runningScore\\\":\\\"2-2\\\"},{\\\"round\\\":3,\\\"河城FC\\\":\\\"missed\\\",\\\"海港联\\\":\\\"scored\\\",\\\"runningScore\\\":\\\"2-3\\\"},{\\\"round\\\":4,\\\"河城FC\\\":\\\"scored\\\",\\\"海港联\\\":\\\"missed\\\",\\\"runningScore\\\":\\\"3-3\\\"},{\\\"round\\\":5,\\\"河城FC\\\":\\\"missed\\\",\\\"海港联\\\":\\\"scored\\\",\\\"runningScore\\\":\\\"3-4\\\"}]}}\"}"
@@ -86,14 +86,14 @@
             "Steps": [
               {
                 "StepID": "s1",
-                "InvocationID": "6186a2b3-e0fe-4487-b23a-ae08235e5ed7",
+                "InvocationID": "5056a555-c897-4e8c-8627-c51ac1b43725",
                 "ParentInvocationID": "",
                 "AgentName": "candidate",
                 "Branch": "candidate",
                 "NodeID": "candidate",
                 "NodeType": "agent",
-                "StartedAt": "2026-07-30T13:44:44.823810487Z",
-                "EndedAt": "2026-07-30T13:44:44.825412824Z",
+                "StartedAt": "2026-07-30T13:56:35.343831256Z",
+                "EndedAt": "2026-07-30T13:56:35.346192119Z",
                 "PredecessorStepIDs": null,
                 "AppliedSurfaceIDs": [
                   "candidate#instruction",
@@ -103,7 +103,7 @@
                   "Text": "[{\"role\":\"system\",\"content\":\"你是一名体育评论员。请为给定的比赛信息撰写一段中文比赛评论。\"},{\"role\":\"user\",\"content\":\"{\\\"sport\\\":\\\"football\\\",\\\"competition\\\":\\\"洲际杯\\\",\\\"round\\\":\\\"1/4决赛\\\",\\\"game\\\":\\\"河城FC vs 海港联\\\",\\\"advancingTeam\\\":\\\"海港联\\\",\\\"regularTimeScore\\\":\\\"河城FC 1-1 海港联\\\",\\\"extraTimeScore\\\":\\\"河城FC 2-2 海港联\\\",\\\"goals\\\":[{\\\"minute\\\":27,\\\"team\\\":\\\"河城FC\\\",\\\"player\\\":\\\"卢卡·莫雷诺\\\",\\\"period\\\":\\\"regular_time\\\"},{\\\"minute\\\":71,\\\"team\\\":\\\"海港联\\\",\\\"player\\\":\\\"诺亚·里德\\\",\\\"period\\\":\\\"regular_time\\\"},{\\\"minute\\\":98,\\\"team\\\":\\\"河城FC\\\",\\\"player\\\":\\\"马特奥·席尔瓦\\\",\\\"period\\\":\\\"extra_time\\\"},{\\\"minute\\\":114,\\\"team\\\":\\\"海港联\\\",\\\"player\\\":\\\"埃文·布鲁克斯\\\",\\\"period\\\":\\\"extra_time\\\"}],\\\"penaltyShootout\\\":{\\\"score\\\":\\\"河城FC 3-4 海港联\\\",\\\"rounds\\\":[{\\\"round\\\":1,\\\"河城FC\\\":\\\"scored\\\",\\\"海港联\\\":\\\"scored\\\",\\\"runningScore\\\":\\\"1-1\\\"},{\\\"round\\\":2,\\\"河城FC\\\":\\\"scored\\\",\\\"海港联\\\":\\\"scored\\\",\\\"runningScore\\\":\\\"2-2\\\"},{\\\"round\\\":3,\\\"河城FC\\\":\\\"missed\\\",\\\"海港联\\\":\\\"scored\\\",\\\"runningScore\\\":\\\"2-3\\\"},{\\\"round\\\":4,\\\"河城FC\\\":\\\"scored\\\",\\\"海港联\\\":\\\"missed\\\",\\\"runningScore\\\":\\\"3-3\\\"},{\\\"round\\\":5,\\\"河城FC\\\":\\\"missed\\\",\\\"海港联\\\":\\\"scored\\\",\\\"runningScore\\\":\\\"3-4\\\"}]}}\"}]"
                 },
                 "Output": {
-                  "Text": "{\"id\":\"llmflow-response-1583320d-45df-429c-a1cf-082bac2d5316\",\"object\":\"\",\"created\":0,\"model\":\"deepseek-v4-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"关于{\\\"sport\\\":\\\"football\\\",\\\"com，本场比赛十分精彩，双方球员都拼尽全力，最终比分非常接近，主场球队表现更胜一筹并取得了胜利。\"},\"delta\":{\"role\":\"\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":39034}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
+                  "Text": "{\"id\":\"llmflow-response-ecd8aacc-e6bb-4d09-a9ef-83189a44d0a2\",\"object\":\"\",\"created\":0,\"model\":\"deepseek-v4-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"关于{\\\"sport\\\":\\\"football\\\",\\\"com，本场比赛十分精彩，双方球员都拼尽全力，最终比分非常接近，主场球队表现更胜一筹并取得了胜利。\"},\"delta\":{\"role\":\"\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":55511}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
                 },
                 "Usage": null,
                 "Error": ""
@@ -128,13 +128,13 @@
         {
           "EvalSetID": "nba-commentary-validation",
           "EvalCaseID": "validation_03_f1_rain_safety_car",
-          "SessionID": "3965d680-9541-4889-8f27-4d71b389a6d5",
+          "SessionID": "799903a0-9403-4bd0-9264-225ad33a0a63",
           "Trace": {
             "RootAgentName": "candidate",
-            "RootInvocationID": "3d0f4c10-9391-4201-84ee-59551bc7ef58",
-            "SessionID": "3965d680-9541-4889-8f27-4d71b389a6d5",
-            "StartedAt": "2026-07-30T13:44:44.822299453Z",
-            "EndedAt": "2026-07-30T13:44:44.825951331Z",
+            "RootInvocationID": "eb9f1e3f-3d45-457f-af3e-65c8058106f4",
+            "SessionID": "799903a0-9403-4bd0-9264-225ad33a0a63",
+            "StartedAt": "2026-07-30T13:56:35.343983186Z",
+            "EndedAt": "2026-07-30T13:56:35.346922973Z",
             "Status": "completed",
             "Input": {
               "Text": "{\"role\":\"user\",\"content\":\"{\\\"sport\\\":\\\"Formula 1\\\",\\\"event\\\":\\\"Rain Grand Prix\\\",\\\"venue\\\":\\\"Harbor Street Circuit\\\",\\\"conditions\\\":\\\"Rain\\\",\\\"raceDistanceLaps\\\":58,\\\"safetyCar\\\":{\\\"deployedLap\\\":31,\\\"endedLap\\\":34,\\\"reason\\\":\\\"Car 22 stopped at Turn 7\\\"},\\\"postSafetyCarPitWindow\\\":{\\\"laps\\\":[34,35,36],\\\"tireChanges\\\":[{\\\"driver\\\":\\\"Marco Silva\\\",\\\"team\\\":\\\"Aurora Racing\\\",\\\"lap\\\":35,\\\"from\\\":\\\"Wet\\\",\\\"to\\\":\\\"Intermediate\\\"},{\\\"driver\\\":\\\"Evan Brooks\\\",\\\"team\\\":\\\"Northstar GP\\\",\\\"lap\\\":35,\\\"from\\\":\\\"Wet\\\",\\\"to\\\":\\\"Intermediate\\\"},{\\\"driver\\\":\\\"Luca Ren\\\",\\\"team\\\":\\\"Vector Motorsport\\\",\\\"lap\\\":36,\\\"from\\\":\\\"Wet\\\",\\\"to\\\":\\\"Intermediate\\\"}]},\\\"classification\\\":[{\\\"position\\\":1,\\\"driver\\\":\\\"Marco Silva\\\",\\\"team\\\":\\\"Aurora Racing\\\"},{\\\"position\\\":2,\\\"driver\\\":\\\"Evan Brooks\\\",\\\"team\\\":\\\"Northstar GP\\\",\\\"gap\\\":\\\"+4.812s\\\"},{\\\"position\\\":3,\\\"driver\\\":\\\"Luca Ren\\\",\\\"team\\\":\\\"Vector Motorsport\\\",\\\"gap\\\":\\\"+9.337s\\\"}],\\\"fastestLap\\\":{\\\"driver\\\":\\\"Evan Brooks\\\",\\\"team\\\":\\\"Northstar GP\\\",\\\"lap\\\":52,\\\"time\\\":\\\"1:42.318\\\"}}\"}"
@@ -146,14 +146,14 @@
             "Steps": [
               {
                 "StepID": "s1",
-                "InvocationID": "3d0f4c10-9391-4201-84ee-59551bc7ef58",
+                "InvocationID": "eb9f1e3f-3d45-457f-af3e-65c8058106f4",
                 "ParentInvocationID": "",
                 "AgentName": "candidate",
                 "Branch": "candidate",
                 "NodeID": "candidate",
                 "NodeType": "agent",
-                "StartedAt": "2026-07-30T13:44:44.823150667Z",
-                "EndedAt": "2026-07-30T13:44:44.825431325Z",
+                "StartedAt": "2026-07-30T13:56:35.344022401Z",
+                "EndedAt": "2026-07-30T13:56:35.346381228Z",
                 "PredecessorStepIDs": null,
                 "AppliedSurfaceIDs": [
                   "candidate#instruction",
@@ -163,7 +163,7 @@
                   "Text": "[{\"role\":\"system\",\"content\":\"你是一名体育评论员。请为给定的比赛信息撰写一段中文比赛评论。\"},{\"role\":\"user\",\"content\":\"{\\\"sport\\\":\\\"Formula 1\\\",\\\"event\\\":\\\"Rain Grand Prix\\\",\\\"venue\\\":\\\"Harbor Street Circuit\\\",\\\"conditions\\\":\\\"Rain\\\",\\\"raceDistanceLaps\\\":58,\\\"safetyCar\\\":{\\\"deployedLap\\\":31,\\\"endedLap\\\":34,\\\"reason\\\":\\\"Car 22 stopped at Turn 7\\\"},\\\"postSafetyCarPitWindow\\\":{\\\"laps\\\":[34,35,36],\\\"tireChanges\\\":[{\\\"driver\\\":\\\"Marco Silva\\\",\\\"team\\\":\\\"Aurora Racing\\\",\\\"lap\\\":35,\\\"from\\\":\\\"Wet\\\",\\\"to\\\":\\\"Intermediate\\\"},{\\\"driver\\\":\\\"Evan Brooks\\\",\\\"team\\\":\\\"Northstar GP\\\",\\\"lap\\\":35,\\\"from\\\":\\\"Wet\\\",\\\"to\\\":\\\"Intermediate\\\"},{\\\"driver\\\":\\\"Luca Ren\\\",\\\"team\\\":\\\"Vector Motorsport\\\",\\\"lap\\\":36,\\\"from\\\":\\\"Wet\\\",\\\"to\\\":\\\"Intermediate\\\"}]},\\\"classification\\\":[{\\\"position\\\":1,\\\"driver\\\":\\\"Marco Silva\\\",\\\"team\\\":\\\"Aurora Racing\\\"},{\\\"position\\\":2,\\\"driver\\\":\\\"Evan Brooks\\\",\\\"team\\\":\\\"Northstar GP\\\",\\\"gap\\\":\\\"+4.812s\\\"},{\\\"position\\\":3,\\\"driver\\\":\\\"Luca Ren\\\",\\\"team\\\":\\\"Vector Motorsport\\\",\\\"gap\\\":\\\"+9.337s\\\"}],\\\"fastestLap\\\":{\\\"driver\\\":\\\"Evan Brooks\\\",\\\"team\\\":\\\"Northstar GP\\\",\\\"lap\\\":52,\\\"time\\\":\\\"1:42.318\\\"}}\"}]"
                 },
                 "Output": {
-                  "Text": "{\"id\":\"llmflow-response-d21f3ffc-494a-4333-a124-d23e28fc0301\",\"object\":\"\",\"created\":0,\"model\":\"deepseek-v4-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"关于{\\\"sport\\\":\\\"Formula 1\\\",\\\"ev，本场比赛十分精彩，双方球员都拼尽全力，最终比分非常接近，主场球队表现更胜一筹并取得了胜利。\"},\"delta\":{\"role\":\"\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":23456}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
+                  "Text": "{\"id\":\"llmflow-response-c0f75523-967a-48f5-af5a-289cefc47758\",\"object\":\"\",\"created\":0,\"model\":\"deepseek-v4-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"关于{\\\"sport\\\":\\\"Formula 1\\\",\\\"ev，本场比赛十分精彩，双方球员都拼尽全力，最终比分非常接近，主场球队表现更胜一筹并取得了胜利。\"},\"delta\":{\"role\":\"\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":9227}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
                 },
                 "Usage": null,
                 "Error": ""
@@ -188,13 +188,13 @@
         {
           "EvalSetID": "nba-commentary-validation",
           "EvalCaseID": "validation_04_badminton_match_point",
-          "SessionID": "9582ab23-a86c-4632-9149-f18085c7dc7a",
+          "SessionID": "833a3bf9-6650-4150-9ff1-ca31cd96c874",
           "Trace": {
             "RootAgentName": "candidate",
-            "RootInvocationID": "ea1abc34-22f5-4d2a-9457-5460c2bb7a37",
-            "SessionID": "9582ab23-a86c-4632-9149-f18085c7dc7a",
-            "StartedAt": "2026-07-30T13:44:44.822250628Z",
-            "EndedAt": "2026-07-30T13:44:44.825421937Z",
+            "RootInvocationID": "07a94da6-dd87-4bca-8f32-7859ee97d95f",
+            "SessionID": "833a3bf9-6650-4150-9ff1-ca31cd96c874",
+            "StartedAt": "2026-07-30T13:56:35.343636355Z",
+            "EndedAt": "2026-07-30T13:56:35.346092996Z",
             "Status": "completed",
             "Input": {
               "Text": "{\"role\":\"user\",\"content\":\"{\\\"sport\\\":\\\"badminton\\\",\\\"event\\\":\\\"国际羽毛球邀请赛\\\",\\\"discipline\\\":\\\"女单半决赛\\\",\\\"match\\\":\\\"林悦 vs 高桥美咲\\\",\\\"winner\\\":\\\"林悦\\\",\\\"finalScore\\\":\\\"17-21, 22-20, 21-16\\\",\\\"sets\\\":[{\\\"set\\\":1,\\\"score\\\":\\\"17-21\\\",\\\"winner\\\":\\\"高桥美咲\\\"},{\\\"set\\\":2,\\\"score\\\":\\\"22-20\\\",\\\"winner\\\":\\\"林悦\\\"},{\\\"set\\\":3,\\\"score\\\":\\\"21-16\\\",\\\"winner\\\":\\\"林悦\\\"}],\\\"competitors\\\":[{\\\"name\\\":\\\"林悦\\\",\\\"result\\\":\\\"win\\\",\\\"netFrontPoints\\\":18,\\\"netFrontErrors\\\":6,\\\"matchPointsSaved\\\":1},{\\\"name\\\":\\\"高桥美咲\\\",\\\"result\\\":\\\"loss\\\",\\\"netFrontPoints\\\":14,\\\"netFrontErrors\\\":11,\\\"matchPointsEarned\\\":1}],\\\"turningPoints\\\":[\\\"林悦首局17-21告负，随后以22-20和21-16连赢两局\\\",\\\"第二局林悦19-20落后时用一次网前扑球挽救赛点\\\",\\\"林悦第二局从19-20连得3分，以22-20拿下该局\\\"],\\\"netFrontMargin\\\":{\\\"winnerPointsAdvantage\\\":4,\\\"winnerFewerErrors\\\":5}}\"}"
@@ -206,14 +206,14 @@
             "Steps": [
               {
                 "StepID": "s1",
-                "InvocationID": "ea1abc34-22f5-4d2a-9457-5460c2bb7a37",
+                "InvocationID": "07a94da6-dd87-4bca-8f32-7859ee97d95f",
                 "ParentInvocationID": "",
                 "AgentName": "candidate",
                 "Branch": "candidate",
                 "NodeID": "candidate",
                 "NodeType": "agent",
-                "StartedAt": "2026-07-30T13:44:44.822289226Z",
-                "EndedAt": "2026-07-30T13:44:44.825295281Z",
+                "StartedAt": "2026-07-30T13:56:35.343743596Z",
+                "EndedAt": "2026-07-30T13:56:35.346003151Z",
                 "PredecessorStepIDs": null,
                 "AppliedSurfaceIDs": [
                   "candidate#instruction",
@@ -223,7 +223,7 @@
                   "Text": "[{\"role\":\"system\",\"content\":\"你是一名体育评论员。请为给定的比赛信息撰写一段中文比赛评论。\"},{\"role\":\"user\",\"content\":\"{\\\"sport\\\":\\\"badminton\\\",\\\"event\\\":\\\"国际羽毛球邀请赛\\\",\\\"discipline\\\":\\\"女单半决赛\\\",\\\"match\\\":\\\"林悦 vs 高桥美咲\\\",\\\"winner\\\":\\\"林悦\\\",\\\"finalScore\\\":\\\"17-21, 22-20, 21-16\\\",\\\"sets\\\":[{\\\"set\\\":1,\\\"score\\\":\\\"17-21\\\",\\\"winner\\\":\\\"高桥美咲\\\"},{\\\"set\\\":2,\\\"score\\\":\\\"22-20\\\",\\\"winner\\\":\\\"林悦\\\"},{\\\"set\\\":3,\\\"score\\\":\\\"21-16\\\",\\\"winner\\\":\\\"林悦\\\"}],\\\"competitors\\\":[{\\\"name\\\":\\\"林悦\\\",\\\"result\\\":\\\"win\\\",\\\"netFrontPoints\\\":18,\\\"netFrontErrors\\\":6,\\\"matchPointsSaved\\\":1},{\\\"name\\\":\\\"高桥美咲\\\",\\\"result\\\":\\\"loss\\\",\\\"netFrontPoints\\\":14,\\\"netFrontErrors\\\":11,\\\"matchPointsEarned\\\":1}],\\\"turningPoints\\\":[\\\"林悦首局17-21告负，随后以22-20和21-16连赢两局\\\",\\\"第二局林悦19-20落后时用一次网前扑球挽救赛点\\\",\\\"林悦第二局从19-20连得3分，以22-20拿下该局\\\"],\\\"netFrontMargin\\\":{\\\"winnerPointsAdvantage\\\":4,\\\"winnerFewerErrors\\\":5}}\"}]"
                 },
                 "Output": {
-                  "Text": "{\"id\":\"llmflow-response-0e00aee9-bd04-4c64-a522-e32b000f6a4b\",\"object\":\"\",\"created\":0,\"model\":\"deepseek-v4-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"关于{\\\"sport\\\":\\\"badminton\\\",\\\"ev，本场比赛十分精彩，双方球员都拼尽全力，最终比分非常接近，主场球队表现更胜一筹并取得了胜利。\"},\"delta\":{\"role\":\"\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":21603}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
+                  "Text": "{\"id\":\"llmflow-response-c67e3c9e-5911-4400-ae6b-138187db2d95\",\"object\":\"\",\"created\":0,\"model\":\"deepseek-v4-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"关于{\\\"sport\\\":\\\"badminton\\\",\\\"ev，本场比赛十分精彩，双方球员都拼尽全力，最终比分非常接近，主场球队表现更胜一筹并取得了胜利。\"},\"delta\":{\"role\":\"\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":31683}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
                 },
                 "Usage": null,
                 "Error": ""
@@ -248,13 +248,13 @@
         {
           "EvalSetID": "nba-commentary-validation",
           "EvalCaseID": "validation_05_ice_hockey_overtime",
-          "SessionID": "05fbf4e2-9f63-4f6c-aabb-c148826ef827",
+          "SessionID": "2da74f26-be63-4f12-9142-df2ffd50e99e",
           "Trace": {
             "RootAgentName": "candidate",
-            "RootInvocationID": "aecda1b5-6cfd-4902-b660-017c43c8ef1e",
-            "SessionID": "05fbf4e2-9f63-4f6c-aabb-c148826ef827",
-            "StartedAt": "2026-07-30T13:44:44.823819566Z",
-            "EndedAt": "2026-07-30T13:44:44.825311281Z",
+            "RootInvocationID": "0c5eed7b-495c-4a84-8a92-d5a8f7179f47",
+            "SessionID": "2da74f26-be63-4f12-9142-df2ffd50e99e",
+            "StartedAt": "2026-07-30T13:56:35.343840992Z",
+            "EndedAt": "2026-07-30T13:56:35.346337457Z",
             "Status": "completed",
             "Input": {
               "Text": "{\"role\":\"user\",\"content\":\"{\\\"sport\\\":\\\"ice_hockey\\\",\\\"gameType\\\":\\\"regular_season\\\",\\\"venue\\\":\\\"North Harbor Arena\\\",\\\"teams\\\":{\\\"home\\\":\\\"港城海鹰\\\",\\\"away\\\":\\\"北岸风暴\\\"},\\\"score\\\":{\\\"港城海鹰\\\":4,\\\"北岸风暴\\\":3,\\\"periods\\\":[{\\\"period\\\":1,\\\"港城海鹰\\\":1,\\\"北岸风暴\\\":1},{\\\"period\\\":2,\\\"港城海鹰\\\":1,\\\"北岸风暴\\\":2},{\\\"period\\\":3,\\\"港城海鹰\\\":1,\\\"北岸风暴\\\":0},{\\\"period\\\":\\\"OT\\\",\\\"港城海鹰\\\":1,\\\"北岸风暴\\\":0}]},\\\"keyPlays\\\":[{\\\"time\\\":\\\"第三节17:42\\\",\\\"team\\\":\\\"港城海鹰\\\",\\\"player\\\":\\\"林澈\\\",\\\"event\\\":\\\"扳平进球\\\",\\\"detail\\\":\\\"林澈在门前补射得手，将比分追成3比3\\\"},{\\\"time\\\":\\\"加时赛01:08\\\",\\\"team\\\":\\\"港城海鹰\\\",\\\"player\\\":\\\"周砚\\\",\\\"event\\\":\\\"犯规\\\",\\\"detail\\\":\\\"周砚因钩人被判2分钟小罚，港城海鹰进入少打一人防守\\\"},{\\\"time\\\":\\\"加时赛01:41\\\",\\\"team\\\":\\\"北岸风暴\\\",\\\"player\\\":\\\"韩维\\\",\\\"event\\\":\\\"强打射门\\\",\\\"detail\\\":\\\"韩维在右侧争球圈完成一次直接射门，被门将许知远用右腿挡出\\\"},{\\\"time\\\":\\\"加时赛02:16\\\",\\\"team\\\":\\\"北岸风暴\\\",\\\"player\\\":\\\"叶铭\\\",\\\"event\\\":\\\"强打补射\\\",\\\"detail\\\":\\\"叶铭在门前补射，被许知远用手套接住，比赛暂停\\\"},{\\\"time\\\":\\\"加时赛03:04\\\",\\\"team\\\":\\\"港城海鹰\\\",\\\"player\\\":\\\"周砚\\\",\\\"event\\\":\\\"回场\\\",\\\"detail\\\":\\\"周砚结束受罚回到冰面，港城海鹰完成少打一人防守\\\"},{\\\"time\\\":\\\"加时赛03:47\\\",\\\"team\\\":\\\"港城海鹰\\\",\\\"player\\\":\\\"陆行舟\\\",\\\"event\\\":\\\"绝杀进球\\\",\\\"detail\\\":\\\"陆行舟接林澈横传，在左侧低射破门，帮助港城海鹰4比3取胜\\\"}],\\\"goalieStats\\\":{\\\"港城海鹰\\\":{\\\"goalie\\\":\\\"许知远\\\",\\\"saves\\\":38,\\\"goalsAgainst\\\":3,\\\"overtimeSaves\\\":5},\\\"北岸风暴\\\":{\\\"goalie\\\":\\\"沈岳\\\",\\\"saves\\\":29,\\\"goalsAgainst\\\":4,\\\"overtimeSaves\\\":1}},\\\"specialTeams\\\":{\\\"港城海鹰\\\":{\\\"penaltyKill\\\":\\\"1/1\\\",\\\"overtimePenaltyKill\\\":\\\"1/1\\\"},\\\"北岸风暴\\\":{\\\"powerPlay\\\":\\\"0/1\\\",\\\"overtimePowerPlay\\\":\\\"0/1\\\"}}}\"}"
@@ -266,14 +266,14 @@
             "Steps": [
               {
                 "StepID": "s1",
-                "InvocationID": "aecda1b5-6cfd-4902-b660-017c43c8ef1e",
+                "InvocationID": "0c5eed7b-495c-4a84-8a92-d5a8f7179f47",
                 "ParentInvocationID": "",
                 "AgentName": "candidate",
                 "Branch": "candidate",
                 "NodeID": "candidate",
                 "NodeType": "agent",
-                "StartedAt": "2026-07-30T13:44:44.823876787Z",
-                "EndedAt": "2026-07-30T13:44:44.825239648Z",
+                "StartedAt": "2026-07-30T13:56:35.344690092Z",
+                "EndedAt": "2026-07-30T13:56:35.346229741Z",
                 "PredecessorStepIDs": null,
                 "AppliedSurfaceIDs": [
                   "candidate#instruction",
@@ -283,7 +283,7 @@
                   "Text": "[{\"role\":\"system\",\"content\":\"你是一名体育评论员。请为给定的比赛信息撰写一段中文比赛评论。\"},{\"role\":\"user\",\"content\":\"{\\\"sport\\\":\\\"ice_hockey\\\",\\\"gameType\\\":\\\"regular_season\\\",\\\"venue\\\":\\\"North Harbor Arena\\\",\\\"teams\\\":{\\\"home\\\":\\\"港城海鹰\\\",\\\"away\\\":\\\"北岸风暴\\\"},\\\"score\\\":{\\\"港城海鹰\\\":4,\\\"北岸风暴\\\":3,\\\"periods\\\":[{\\\"period\\\":1,\\\"港城海鹰\\\":1,\\\"北岸风暴\\\":1},{\\\"period\\\":2,\\\"港城海鹰\\\":1,\\\"北岸风暴\\\":2},{\\\"period\\\":3,\\\"港城海鹰\\\":1,\\\"北岸风暴\\\":0},{\\\"period\\\":\\\"OT\\\",\\\"港城海鹰\\\":1,\\\"北岸风暴\\\":0}]},\\\"keyPlays\\\":[{\\\"time\\\":\\\"第三节17:42\\\",\\\"team\\\":\\\"港城海鹰\\\",\\\"player\\\":\\\"林澈\\\",\\\"event\\\":\\\"扳平进球\\\",\\\"detail\\\":\\\"林澈在门前补射得手，将比分追成3比3\\\"},{\\\"time\\\":\\\"加时赛01:08\\\",\\\"team\\\":\\\"港城海鹰\\\",\\\"player\\\":\\\"周砚\\\",\\\"event\\\":\\\"犯规\\\",\\\"detail\\\":\\\"周砚因钩人被判2分钟小罚，港城海鹰进入少打一人防守\\\"},{\\\"time\\\":\\\"加时赛01:41\\\",\\\"team\\\":\\\"北岸风暴\\\",\\\"player\\\":\\\"韩维\\\",\\\"event\\\":\\\"强打射门\\\",\\\"detail\\\":\\\"韩维在右侧争球圈完成一次直接射门，被门将许知远用右腿挡出\\\"},{\\\"time\\\":\\\"加时赛02:16\\\",\\\"team\\\":\\\"北岸风暴\\\",\\\"player\\\":\\\"叶铭\\\",\\\"event\\\":\\\"强打补射\\\",\\\"detail\\\":\\\"叶铭在门前补射，被许知远用手套接住，比赛暂停\\\"},{\\\"time\\\":\\\"加时赛03:04\\\",\\\"team\\\":\\\"港城海鹰\\\",\\\"player\\\":\\\"周砚\\\",\\\"event\\\":\\\"回场\\\",\\\"detail\\\":\\\"周砚结束受罚回到冰面，港城海鹰完成少打一人防守\\\"},{\\\"time\\\":\\\"加时赛03:47\\\",\\\"team\\\":\\\"港城海鹰\\\",\\\"player\\\":\\\"陆行舟\\\",\\\"event\\\":\\\"绝杀进球\\\",\\\"detail\\\":\\\"陆行舟接林澈横传，在左侧低射破门，帮助港城海鹰4比3取胜\\\"}],\\\"goalieStats\\\":{\\\"港城海鹰\\\":{\\\"goalie\\\":\\\"许知远\\\",\\\"saves\\\":38,\\\"goalsAgainst\\\":3,\\\"overtimeSaves\\\":5},\\\"北岸风暴\\\":{\\\"goalie\\\":\\\"沈岳\\\",\\\"saves\\\":29,\\\"goalsAgainst\\\":4,\\\"overtimeSaves\\\":1}},\\\"specialTeams\\\":{\\\"港城海鹰\\\":{\\\"penaltyKill\\\":\\\"1/1\\\",\\\"overtimePenaltyKill\\\":\\\"1/1\\\"},\\\"北岸风暴\\\":{\\\"powerPlay\\\":\\\"0/1\\\",\\\"overtimePowerPlay\\\":\\\"0/1\\\"}}}\"}]"
                 },
                 "Output": {
-                  "Text": "{\"id\":\"llmflow-response-ac8f9350-1bbe-435e-ad7d-8c66f31e6f59\",\"object\":\"\",\"created\":0,\"model\":\"deepseek-v4-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"关于{\\\"sport\\\":\\\"ice_hockey\\\",\\\"g，本场比赛十分精彩，双方球员都拼尽全力，最终比分非常接近，主场球队表现更胜一筹并取得了胜利。\"},\"delta\":{\"role\":\"\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":39117}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
+                  "Text": "{\"id\":\"llmflow-response-f0a7ac33-7ad1-4da2-9640-f0b479376b17\",\"object\":\"\",\"created\":0,\"model\":\"deepseek-v4-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"关于{\\\"sport\\\":\\\"ice_hockey\\\",\\\"g，本场比赛十分精彩，双方球员都拼尽全力，最终比分非常接近，主场球队表现更胜一筹并取得了胜利。\"},\"delta\":{\"role\":\"\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":34357}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
                 },
                 "Usage": null,
                 "Error": ""
@@ -308,13 +308,13 @@
         {
           "EvalSetID": "nba-commentary-validation",
           "EvalCaseID": "validation_06_tennis_tiebreak",
-          "SessionID": "bfa0746e-d437-47b9-b74f-63a65aa0fdc7",
+          "SessionID": "69bdbb4f-fee6-42a1-a79b-e9d4880f1a59",
           "Trace": {
             "RootAgentName": "candidate",
-            "RootInvocationID": "086b42b7-7715-4a55-8af8-a8651bf95d45",
-            "SessionID": "bfa0746e-d437-47b9-b74f-63a65aa0fdc7",
-            "StartedAt": "2026-07-30T13:44:44.823159805Z",
-            "EndedAt": "2026-07-30T13:44:44.825269448Z",
+            "RootInvocationID": "433878ba-4c22-420a-a44c-12ed36193125",
+            "SessionID": "69bdbb4f-fee6-42a1-a79b-e9d4880f1a59",
+            "StartedAt": "2026-07-30T13:56:35.343936312Z",
+            "EndedAt": "2026-07-30T13:56:35.34691353Z",
             "Status": "completed",
             "Input": {
               "Text": "{\"role\":\"user\",\"content\":\"{\\\"sport\\\":\\\"tennis\\\",\\\"discipline\\\":\\\"女单\\\",\\\"winner\\\":\\\"林诗语\\\",\\\"loser\\\":\\\"赵清岚\\\",\\\"score\\\":{\\\"sets\\\":[\\\"7-6(10)\\\",\\\"6-3\\\"],\\\"straightSets\\\":true,\\\"setOneTiebreak\\\":\\\"12-10\\\"},\\\"keyFacts\\\":{\\\"setPointsSavedByWinner\\\":3,\\\"setPointDetails\\\":[\\\"首盘5-6发球局挽救2个盘点\\\",\\\"首盘抢七8-9再挽救1个盘点\\\"],\\\"aces\\\":{\\\"林诗语\\\":9,\\\"赵清岚\\\":4},\\\"firstServePointsWon\\\":{\\\"林诗语\\\":\\\"78%\\\",\\\"赵清岚\\\":\\\"66%\\\"},\\\"breakPoints\\\":{\\\"林诗语\\\":\\\"3/7\\\",\\\"赵清岚\\\":\\\"2/6\\\"},\\\"decisiveSecondSetFact\\\":\\\"第二盘林诗语两次破发，赵清岚一次回破\\\"},\\\"recapAngle\\\":\\\"直落两盘但首盘抢七极胶着，不能写成轻松横扫\\\"}\"}"
@@ -326,14 +326,14 @@
             "Steps": [
               {
                 "StepID": "s1",
-                "InvocationID": "086b42b7-7715-4a55-8af8-a8651bf95d45",
+                "InvocationID": "433878ba-4c22-420a-a44c-12ed36193125",
                 "ParentInvocationID": "",
                 "AgentName": "candidate",
                 "Branch": "candidate",
                 "NodeID": "candidate",
                 "NodeType": "agent",
-                "StartedAt": "2026-07-30T13:44:44.824072064Z",
-                "EndedAt": "2026-07-30T13:44:44.825167485Z",
+                "StartedAt": "2026-07-30T13:56:35.344003118Z",
+                "EndedAt": "2026-07-30T13:56:35.34635291Z",
                 "PredecessorStepIDs": null,
                 "AppliedSurfaceIDs": [
                   "candidate#instruction",
@@ -343,7 +343,7 @@
                   "Text": "[{\"role\":\"system\",\"content\":\"你是一名体育评论员。请为给定的比赛信息撰写一段中文比赛评论。\"},{\"role\":\"user\",\"content\":\"{\\\"sport\\\":\\\"tennis\\\",\\\"discipline\\\":\\\"女单\\\",\\\"winner\\\":\\\"林诗语\\\",\\\"loser\\\":\\\"赵清岚\\\",\\\"score\\\":{\\\"sets\\\":[\\\"7-6(10)\\\",\\\"6-3\\\"],\\\"straightSets\\\":true,\\\"setOneTiebreak\\\":\\\"12-10\\\"},\\\"keyFacts\\\":{\\\"setPointsSavedByWinner\\\":3,\\\"setPointDetails\\\":[\\\"首盘5-6发球局挽救2个盘点\\\",\\\"首盘抢七8-9再挽救1个盘点\\\"],\\\"aces\\\":{\\\"林诗语\\\":9,\\\"赵清岚\\\":4},\\\"firstServePointsWon\\\":{\\\"林诗语\\\":\\\"78%\\\",\\\"赵清岚\\\":\\\"66%\\\"},\\\"breakPoints\\\":{\\\"林诗语\\\":\\\"3/7\\\",\\\"赵清岚\\\":\\\"2/6\\\"},\\\"decisiveSecondSetFact\\\":\\\"第二盘林诗语两次破发，赵清岚一次回破\\\"},\\\"recapAngle\\\":\\\"直落两盘但首盘抢七极胶着，不能写成轻松横扫\\\"}\"}]"
                 },
                 "Output": {
-                  "Text": "{\"id\":\"llmflow-response-b36f1dd3-9226-45c2-a5b7-f603d9819e37\",\"object\":\"\",\"created\":0,\"model\":\"deepseek-v4-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"关于{\\\"sport\\\":\\\"tennis\\\",\\\"disci，本场比赛十分精彩，双方球员都拼尽全力，最终比分非常接近，主场球队表现更胜一筹并取得了胜利。\"},\"delta\":{\"role\":\"\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":41143}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
+                  "Text": "{\"id\":\"llmflow-response-c9a02c51-3d9e-496e-94ac-840b0c29ea52\",\"object\":\"\",\"created\":0,\"model\":\"deepseek-v4-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"关于{\\\"sport\\\":\\\"tennis\\\",\\\"disci，本场比赛十分精彩，双方球员都拼尽全力，最终比分非常接近，主场球队表现更胜一筹并取得了胜利。\"},\"delta\":{\"role\":\"\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":37703}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
                 },
                 "Usage": null,
                 "Error": ""
@@ -368,13 +368,13 @@
         {
           "EvalSetID": "nba-commentary-validation",
           "EvalCaseID": "validation_07_road_cycling_breakaway",
-          "SessionID": "7d82dd5e-163c-4366-9720-c3cc131693c9",
+          "SessionID": "cf16412a-9272-4f2d-a6a7-ce1c5c4fb88a",
           "Trace": {
             "RootAgentName": "candidate",
-            "RootInvocationID": "4e1fc925-3b9a-409e-ae18-d0a8bee80753",
-            "SessionID": "7d82dd5e-163c-4366-9720-c3cc131693c9",
-            "StartedAt": "2026-07-30T13:44:44.824025919Z",
-            "EndedAt": "2026-07-30T13:44:44.825315317Z",
+            "RootInvocationID": "b5505800-395f-48dc-8879-0671ded84758",
+            "SessionID": "cf16412a-9272-4f2d-a6a7-ce1c5c4fb88a",
+            "StartedAt": "2026-07-30T13:56:35.343939279Z",
+            "EndedAt": "2026-07-30T13:56:35.346920968Z",
             "Status": "completed",
             "Input": {
               "Text": "{\"role\":\"user\",\"content\":\"{\\\"sport\\\":\\\"road_cycling\\\",\\\"raceType\\\":\\\"individual_road_race\\\",\\\"distanceRemainingKmAtKeyMove\\\":5,\\\"winner\\\":{\\\"name\\\":\\\"林澈\\\",\\\"team\\\":\\\"青岚车队\\\"},\\\"teammateLeadout\\\":{\\\"name\\\":\\\"赵屿\\\",\\\"team\\\":\\\"青岚车队\\\",\\\"role\\\":\\\"在最后5公里进入突围后持续领骑，帮助林澈维持优势，最后600米退出争夺\\\"},\\\"breakaway\\\":{\\\"riders\\\":[\\\"林澈\\\",\\\"赵屿\\\",\\\"周明远\\\",\\\"韩砚\\\"],\\\"gapToChasingGroup\\\":[{\\\"remainingKm\\\":5,\\\"gapSeconds\\\":9},{\\\"remainingKm\\\":3,\\\"gapSeconds\\\":6},{\\\"remainingKm\\\":1,\\\"gapSeconds\\\":4},{\\\"remainingKm\\\":0,\\\"gapSeconds\\\":7}]},\\\"finalSprint\\\":{\\\"launchDistanceMeters\\\":180,\\\"winnerAction\\\":\\\"林澈从周明远右侧启动冲刺并率先过线\\\",\\\"margin\\\":\\\"半个车身\\\"},\\\"result\\\":[{\\\"rank\\\":1,\\\"rider\\\":\\\"林澈\\\",\\\"team\\\":\\\"青岚车队\\\"},{\\\"rank\\\":2,\\\"rider\\\":\\\"周明远\\\",\\\"team\\\":\\\"北湾车队\\\",\\\"gap\\\":\\\"半个车身\\\"},{\\\"rank\\\":3,\\\"rider\\\":\\\"韩砚\\\",\\\"team\\\":\\\"岩川车队\\\",\\\"gap\\\":\\\"同秒\\\"},{\\\"rank\\\":4,\\\"rider\\\":\\\"赵屿\\\",\\\"team\\\":\\\"青岚车队\\\",\\\"gap\\\":\\\"同秒\\\"},{\\\"rank\\\":5,\\\"rider\\\":\\\"集团第一名\\\",\\\"gapSeconds\\\":7}],\\\"scoringNote\\\":\\\"这是个人公路赛，胜利归属车手林澈，不是青岚车队的团队胜利\\\"}\"}"
@@ -386,14 +386,14 @@
             "Steps": [
               {
                 "StepID": "s1",
-                "InvocationID": "4e1fc925-3b9a-409e-ae18-d0a8bee80753",
+                "InvocationID": "b5505800-395f-48dc-8879-0671ded84758",
                 "ParentInvocationID": "",
                 "AgentName": "candidate",
                 "Branch": "candidate",
                 "NodeID": "candidate",
                 "NodeType": "agent",
-                "StartedAt": "2026-07-30T13:44:44.824058673Z",
-                "EndedAt": "2026-07-30T13:44:44.825184974Z",
+                "StartedAt": "2026-07-30T13:56:35.343985846Z",
+                "EndedAt": "2026-07-30T13:56:35.346409643Z",
                 "PredecessorStepIDs": null,
                 "AppliedSurfaceIDs": [
                   "candidate#instruction",
@@ -403,7 +403,7 @@
                   "Text": "[{\"role\":\"system\",\"content\":\"你是一名体育评论员。请为给定的比赛信息撰写一段中文比赛评论。\"},{\"role\":\"user\",\"content\":\"{\\\"sport\\\":\\\"road_cycling\\\",\\\"raceType\\\":\\\"individual_road_race\\\",\\\"distanceRemainingKmAtKeyMove\\\":5,\\\"winner\\\":{\\\"name\\\":\\\"林澈\\\",\\\"team\\\":\\\"青岚车队\\\"},\\\"teammateLeadout\\\":{\\\"name\\\":\\\"赵屿\\\",\\\"team\\\":\\\"青岚车队\\\",\\\"role\\\":\\\"在最后5公里进入突围后持续领骑，帮助林澈维持优势，最后600米退出争夺\\\"},\\\"breakaway\\\":{\\\"riders\\\":[\\\"林澈\\\",\\\"赵屿\\\",\\\"周明远\\\",\\\"韩砚\\\"],\\\"gapToChasingGroup\\\":[{\\\"remainingKm\\\":5,\\\"gapSeconds\\\":9},{\\\"remainingKm\\\":3,\\\"gapSeconds\\\":6},{\\\"remainingKm\\\":1,\\\"gapSeconds\\\":4},{\\\"remainingKm\\\":0,\\\"gapSeconds\\\":7}]},\\\"finalSprint\\\":{\\\"launchDistanceMeters\\\":180,\\\"winnerAction\\\":\\\"林澈从周明远右侧启动冲刺并率先过线\\\",\\\"margin\\\":\\\"半个车身\\\"},\\\"result\\\":[{\\\"rank\\\":1,\\\"rider\\\":\\\"林澈\\\",\\\"team\\\":\\\"青岚车队\\\"},{\\\"rank\\\":2,\\\"rider\\\":\\\"周明远\\\",\\\"team\\\":\\\"北湾车队\\\",\\\"gap\\\":\\\"半个车身\\\"},{\\\"rank\\\":3,\\\"rider\\\":\\\"韩砚\\\",\\\"team\\\":\\\"岩川车队\\\",\\\"gap\\\":\\\"同秒\\\"},{\\\"rank\\\":4,\\\"rider\\\":\\\"赵屿\\\",\\\"team\\\":\\\"青岚车队\\\",\\\"gap\\\":\\\"同秒\\\"},{\\\"rank\\\":5,\\\"rider\\\":\\\"集团第一名\\\",\\\"gapSeconds\\\":7}],\\\"scoringNote\\\":\\\"这是个人公路赛，胜利归属车手林澈，不是青岚车队的团队胜利\\\"}\"}]"
                 },
                 "Output": {
-                  "Text": "{\"id\":\"llmflow-response-abe99e7b-cdf3-405d-b664-34ea11cee067\",\"object\":\"\",\"created\":0,\"model\":\"deepseek-v4-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"关于{\\\"sport\\\":\\\"road_cycling\\\",，本场比赛十分精彩，双方球员都拼尽全力，最终比分非常接近，主场球队表现更胜一筹并取得了胜利。\"},\"delta\":{\"role\":\"\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":42067}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
+                  "Text": "{\"id\":\"llmflow-response-52919849-dc17-467b-b25e-1dffac81deca\",\"object\":\"\",\"created\":0,\"model\":\"deepseek-v4-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"关于{\\\"sport\\\":\\\"road_cycling\\\",，本场比赛十分精彩，双方球员都拼尽全力，最终比分非常接近，主场球队表现更胜一筹并取得了胜利。\"},\"delta\":{\"role\":\"\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":12180}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
                 },
                 "Usage": null,
                 "Error": ""
@@ -428,13 +428,13 @@
         {
           "EvalSetID": "nba-commentary-validation",
           "EvalCaseID": "validation_08_cricket_t20_chase",
-          "SessionID": "7e5d0f48-be5c-46ea-b1f1-586bf7203745",
+          "SessionID": "afb456a2-c18c-44cc-ae87-8791f2e70a56",
           "Trace": {
             "RootAgentName": "candidate",
-            "RootInvocationID": "f793b72b-b441-4d39-a862-5fa387e7c6f0",
-            "SessionID": "7e5d0f48-be5c-46ea-b1f1-586bf7203745",
-            "StartedAt": "2026-07-30T13:44:44.82222746Z",
-            "EndedAt": "2026-07-30T13:44:44.825403604Z",
+            "RootInvocationID": "a2ff3b65-a8bf-42fe-9a70-6afb1cc83872",
+            "SessionID": "afb456a2-c18c-44cc-ae87-8791f2e70a56",
+            "StartedAt": "2026-07-30T13:56:35.342917096Z",
+            "EndedAt": "2026-07-30T13:56:35.346931764Z",
             "Status": "completed",
             "Input": {
               "Text": "{\"role\":\"user\",\"content\":\"{\\\"sport\\\":\\\"cricket\\\",\\\"format\\\":\\\"T20\\\",\\\"teams\\\":{\\\"battingFirst\\\":\\\"海港国王\\\",\\\"chasing\\\":\\\"都会猎鹰\\\"},\\\"innings\\\":[{\\\"inningsNumber\\\":1,\\\"team\\\":\\\"海港国王\\\",\\\"score\\\":119,\\\"wickets\\\":8,\\\"overs\\\":\\\"20.0\\\"},{\\\"inningsNumber\\\":2,\\\"team\\\":\\\"都会猎鹰\\\",\\\"target\\\":120,\\\"score\\\":121,\\\"wickets\\\":7,\\\"overs\\\":\\\"19.5\\\",\\\"ballsRemaining\\\":1}],\\\"finalOver\\\":{\\\"startState\\\":{\\\"team\\\":\\\"都会猎鹰\\\",\\\"score\\\":109,\\\"wickets\\\":7,\\\"runsNeeded\\\":11,\\\"ballsRemaining\\\":6},\\\"battingTeamRunsInOver\\\":12,\\\"targetPassedOnBall\\\":\\\"19.5\\\"},\\\"keyBatsman\\\":{\\\"team\\\":\\\"都会猎鹰\\\",\\\"name\\\":\\\"阿拉夫·梅塔\\\",\\\"runs\\\":47,\\\"balls\\\":39,\\\"notOut\\\":true,\\\"fours\\\":3,\\\"sixes\\\":2},\\\"keyBowler\\\":{\\\"team\\\":\\\"海港国王\\\",\\\"name\\\":\\\"尼基尔·拉奥\\\",\\\"overs\\\":\\\"4.0\\\",\\\"maidens\\\":0,\\\"runsConceded\\\":18,\\\"wickets\\\":3,\\\"bowledFinalOver\\\":true,\\\"runsConcededInFinalOver\\\":12},\\\"result\\\":{\\\"winner\\\":\\\"都会猎鹰\\\",\\\"margin\\\":\\\"3 wickets\\\",\\\"winningScore\\\":\\\"121/7\\\",\\\"chaseCompletedInOvers\\\":\\\"19.5\\\"}}\"}"
@@ -446,14 +446,14 @@
             "Steps": [
               {
                 "StepID": "s1",
-                "InvocationID": "f793b72b-b441-4d39-a862-5fa387e7c6f0",
+                "InvocationID": "a2ff3b65-a8bf-42fe-9a70-6afb1cc83872",
                 "ParentInvocationID": "",
                 "AgentName": "candidate",
                 "Branch": "candidate",
                 "NodeID": "candidate",
                 "NodeType": "agent",
-                "StartedAt": "2026-07-30T13:44:44.822281265Z",
-                "EndedAt": "2026-07-30T13:44:44.82528975Z",
+                "StartedAt": "2026-07-30T13:56:35.342989475Z",
+                "EndedAt": "2026-07-30T13:56:35.346395803Z",
                 "PredecessorStepIDs": null,
                 "AppliedSurfaceIDs": [
                   "candidate#instruction",
@@ -463,7 +463,7 @@
                   "Text": "[{\"role\":\"system\",\"content\":\"你是一名体育评论员。请为给定的比赛信息撰写一段中文比赛评论。\"},{\"role\":\"user\",\"content\":\"{\\\"sport\\\":\\\"cricket\\\",\\\"format\\\":\\\"T20\\\",\\\"teams\\\":{\\\"battingFirst\\\":\\\"海港国王\\\",\\\"chasing\\\":\\\"都会猎鹰\\\"},\\\"innings\\\":[{\\\"inningsNumber\\\":1,\\\"team\\\":\\\"海港国王\\\",\\\"score\\\":119,\\\"wickets\\\":8,\\\"overs\\\":\\\"20.0\\\"},{\\\"inningsNumber\\\":2,\\\"team\\\":\\\"都会猎鹰\\\",\\\"target\\\":120,\\\"score\\\":121,\\\"wickets\\\":7,\\\"overs\\\":\\\"19.5\\\",\\\"ballsRemaining\\\":1}],\\\"finalOver\\\":{\\\"startState\\\":{\\\"team\\\":\\\"都会猎鹰\\\",\\\"score\\\":109,\\\"wickets\\\":7,\\\"runsNeeded\\\":11,\\\"ballsRemaining\\\":6},\\\"battingTeamRunsInOver\\\":12,\\\"targetPassedOnBall\\\":\\\"19.5\\\"},\\\"keyBatsman\\\":{\\\"team\\\":\\\"都会猎鹰\\\",\\\"name\\\":\\\"阿拉夫·梅塔\\\",\\\"runs\\\":47,\\\"balls\\\":39,\\\"notOut\\\":true,\\\"fours\\\":3,\\\"sixes\\\":2},\\\"keyBowler\\\":{\\\"team\\\":\\\"海港国王\\\",\\\"name\\\":\\\"尼基尔·拉奥\\\",\\\"overs\\\":\\\"4.0\\\",\\\"maidens\\\":0,\\\"runsConceded\\\":18,\\\"wickets\\\":3,\\\"bowledFinalOver\\\":true,\\\"runsConcededInFinalOver\\\":12},\\\"result\\\":{\\\"winner\\\":\\\"都会猎鹰\\\",\\\"margin\\\":\\\"3 wickets\\\",\\\"winningScore\\\":\\\"121/7\\\",\\\"chaseCompletedInOvers\\\":\\\"19.5\\\"}}\"}]"
                 },
                 "Output": {
-                  "Text": "{\"id\":\"llmflow-response-d85a5b98-77db-473d-8ee8-c0862dc33aea\",\"object\":\"\",\"created\":0,\"model\":\"deepseek-v4-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"关于{\\\"sport\\\":\\\"cricket\\\",\\\"form，本场比赛十分精彩，双方球员都拼尽全力，最终比分非常接近，主场球队表现更胜一筹并取得了胜利。\"},\"delta\":{\"role\":\"\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":21038}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
+                  "Text": "{\"id\":\"llmflow-response-c31e76b3-e982-4851-8c80-60a25e6f9154\",\"object\":\"\",\"created\":0,\"model\":\"deepseek-v4-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"关于{\\\"sport\\\":\\\"cricket\\\",\\\"form，本场比赛十分精彩，双方球员都拼尽全力，最终比分非常接近，主场球队表现更胜一筹并取得了胜利。\"},\"delta\":{\"role\":\"\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":76297}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
                 },
                 "Usage": null,
                 "Error": ""

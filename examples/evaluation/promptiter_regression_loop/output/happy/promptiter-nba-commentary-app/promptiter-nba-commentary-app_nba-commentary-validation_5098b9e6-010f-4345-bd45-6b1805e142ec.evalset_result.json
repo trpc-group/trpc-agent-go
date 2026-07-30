@@ -1,6 +1,6 @@
 {
-  "evalSetResultId": "promptiter-nba-commentary-app_nba-commentary-validation_6eaab6a1-8755-4faf-8596-fcf8c8ea21e2",
-  "evalSetResultName": "promptiter-nba-commentary-app_nba-commentary-validation_6eaab6a1-8755-4faf-8596-fcf8c8ea21e2",
+  "evalSetResultId": "promptiter-nba-commentary-app_nba-commentary-validation_5098b9e6-010f-4345-bd45-6b1805e142ec",
+  "evalSetResultName": "promptiter-nba-commentary-app_nba-commentary-validation_5098b9e6-010f-4345-bd45-6b1805e142ec",
   "evalSetId": "nba-commentary-validation",
   "evalCaseResults": [
     {
@@ -25,12 +25,13 @@
             }
           },
           "details": {
-            "reason": "final response mismatch: text mismatch: length mismatch: actual length 51 is less than min 350, expected range [350, 850]"
+            "reason": "final response mismatch: text mismatch: length mismatch: actual length 275 is less than min 350, expected range [350, 850]"
           }
         },
         {
           "metricName": "llm_rubric_critic",
-          "evalStatus": "failed",
+          "score": 1,
+          "evalStatus": "passed",
           "threshold": 0.98,
           "criterion": {
             "llmJudge": {
@@ -103,39 +104,48 @@
             }
           },
           "details": {
-            "reason": "回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。",
+            "reason": "回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。",
+            "score": 1,
             "rubricScores": [
               {
                 "id": "source_grounding",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "lead_main_story",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "decisive_sequence",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "numbers_sport_logic",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "headline_angle",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "data_player_interpretation",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "reference_depth_style",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "production_copy",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               }
             ]
           }
@@ -144,50 +154,50 @@
       "evalMetricResultPerInvocation": [
         {
           "actualInvocation": {
-            "invocationId": "46991c5b-042c-4b5c-8c8e-15744690a68f",
+            "invocationId": "0097681d-f04e-4eb6-b530-8b3495c0e512",
             "userContent": {
               "role": "user",
               "content": "{\"sport\":\"basketball\",\"league\":\"NBA\",\"date\":\"2026-02-12\",\"venue\":\"Ball Arena\",\"teams\":{\"home\":{\"name\":\"丹佛掘金\",\"score\":118},\"away\":{\"name\":\"菲尼克斯太阳\",\"score\":111}},\"result\":{\"winner\":\"丹佛掘金\",\"margin\":7},\"teamStats\":{\"丹佛掘金\":{\"rebounds\":52,\"offensiveRebounds\":15,\"turnovers\":8,\"assists\":30,\"playersInDoubleFigures\":6},\"菲尼克斯太阳\":{\"rebounds\":39,\"offensiveRebounds\":7,\"turnovers\":16,\"assists\":18,\"playersInDoubleFigures\":3}},\"keyPlayers\":[{\"team\":\"菲尼克斯太阳\",\"name\":\"德文·布克\",\"points\":48,\"rebounds\":5,\"assists\":6,\"fieldGoals\":\"17-31\",\"threePointers\":\"6-12\"},{\"team\":\"丹佛掘金\",\"name\":\"尼古拉·约基奇\",\"points\":24,\"rebounds\":13,\"assists\":9},{\"team\":\"丹佛掘金\",\"name\":\"贾马尔·穆雷\",\"points\":22,\"assists\":7},{\"team\":\"丹佛掘金\",\"name\":\"阿龙·戈登\",\"points\":18,\"rebounds\":9}],\"decisiveStretch\":{\"quarter\":\"第四节\",\"timeRemaining\":\"5:42\",\"run\":\"丹佛掘金14-4菲尼克斯太阳\",\"sunTurnovers\":4,\"nuggetsOffensiveRebounds\":5},\"recapAngle\":\"输球方球星高分，赢球方靠篮板和失误控制取胜\"}"
             },
             "finalResponse": {
               "role": "assistant",
-              "content": "【退化】关于{\"sport\":\"basketball\",\"l的比赛，简单说一句：主队赢了，比赛就这样。"
+              "content": "【战报】\n关于{\"sport\":\"basketball\",\"l，本场比赛双方展开激烈对决。主场作战的一方凭借稳健的防守与高效转换进攻，逐渐掌握场上节奏，并在第三节中段拉开分差，最终将优势保持到终场。\n\n【数据面板】\n核心球员砍下高分并送出多次助攻，篮板与抢断数据同样亮眼；替补席贡献了关键火力，整体命中率保持稳定，三分线外的效率尤为突出，罚球线上也几乎没有失误。\n\n【战术分析】\n主队通过挡拆外弹与弱侧转移不断制造空位，防守端则采用包夹持球人的策略限制对手核心的发挥。关键时刻的轮转、协防与篮板保护，成为决定胜负的胜负手，也为后续回合奠定了心理优势。"
             },
             "executionTrace": {
               "RootAgentName": "candidate",
-              "RootInvocationID": "46991c5b-042c-4b5c-8c8e-15744690a68f",
-              "SessionID": "65c92f76-1561-45a4-a2be-d6a7579b7e81",
-              "StartedAt": "2026-07-30T13:44:46.014593129Z",
-              "EndedAt": "2026-07-30T13:44:46.016398043Z",
+              "RootInvocationID": "0097681d-f04e-4eb6-b530-8b3495c0e512",
+              "SessionID": "d111fe8f-da78-465b-b40d-e9d457d3aa3f",
+              "StartedAt": "2026-07-30T13:56:35.600914815Z",
+              "EndedAt": "2026-07-30T13:56:35.601483511Z",
               "Status": "completed",
               "Input": {
                 "Text": "{\"role\":\"user\",\"content\":\"{\\\"sport\\\":\\\"basketball\\\",\\\"league\\\":\\\"NBA\\\",\\\"date\\\":\\\"2026-02-12\\\",\\\"venue\\\":\\\"Ball Arena\\\",\\\"teams\\\":{\\\"home\\\":{\\\"name\\\":\\\"丹佛掘金\\\",\\\"score\\\":118},\\\"away\\\":{\\\"name\\\":\\\"菲尼克斯太阳\\\",\\\"score\\\":111}},\\\"result\\\":{\\\"winner\\\":\\\"丹佛掘金\\\",\\\"margin\\\":7},\\\"teamStats\\\":{\\\"丹佛掘金\\\":{\\\"rebounds\\\":52,\\\"offensiveRebounds\\\":15,\\\"turnovers\\\":8,\\\"assists\\\":30,\\\"playersInDoubleFigures\\\":6},\\\"菲尼克斯太阳\\\":{\\\"rebounds\\\":39,\\\"offensiveRebounds\\\":7,\\\"turnovers\\\":16,\\\"assists\\\":18,\\\"playersInDoubleFigures\\\":3}},\\\"keyPlayers\\\":[{\\\"team\\\":\\\"菲尼克斯太阳\\\",\\\"name\\\":\\\"德文·布克\\\",\\\"points\\\":48,\\\"rebounds\\\":5,\\\"assists\\\":6,\\\"fieldGoals\\\":\\\"17-31\\\",\\\"threePointers\\\":\\\"6-12\\\"},{\\\"team\\\":\\\"丹佛掘金\\\",\\\"name\\\":\\\"尼古拉·约基奇\\\",\\\"points\\\":24,\\\"rebounds\\\":13,\\\"assists\\\":9},{\\\"team\\\":\\\"丹佛掘金\\\",\\\"name\\\":\\\"贾马尔·穆雷\\\",\\\"points\\\":22,\\\"assists\\\":7},{\\\"team\\\":\\\"丹佛掘金\\\",\\\"name\\\":\\\"阿龙·戈登\\\",\\\"points\\\":18,\\\"rebounds\\\":9}],\\\"decisiveStretch\\\":{\\\"quarter\\\":\\\"第四节\\\",\\\"timeRemaining\\\":\\\"5:42\\\",\\\"run\\\":\\\"丹佛掘金14-4菲尼克斯太阳\\\",\\\"sunTurnovers\\\":4,\\\"nuggetsOffensiveRebounds\\\":5},\\\"recapAngle\\\":\\\"输球方球星高分，赢球方靠篮板和失误控制取胜\\\"}\"}"
               },
               "Output": {
-                "Text": "{\"role\":\"assistant\",\"content\":\"【退化】关于{\\\"sport\\\":\\\"basketball\\\",\\\"l的比赛，简单说一句：主队赢了，比赛就这样。\"}"
+                "Text": "{\"role\":\"assistant\",\"content\":\"【战报】\\n关于{\\\"sport\\\":\\\"basketball\\\",\\\"l，本场比赛双方展开激烈对决。主场作战的一方凭借稳健的防守与高效转换进攻，逐渐掌握场上节奏，并在第三节中段拉开分差，最终将优势保持到终场。\\n\\n【数据面板】\\n核心球员砍下高分并送出多次助攻，篮板与抢断数据同样亮眼；替补席贡献了关键火力，整体命中率保持稳定，三分线外的效率尤为突出，罚球线上也几乎没有失误。\\n\\n【战术分析】\\n主队通过挡拆外弹与弱侧转移不断制造空位，防守端则采用包夹持球人的策略限制对手核心的发挥。关键时刻的轮转、协防与篮板保护，成为决定胜负的胜负手，也为后续回合奠定了心理优势。\"}"
               },
               "Usage": null,
               "Steps": [
                 {
                   "StepID": "s1",
-                  "InvocationID": "46991c5b-042c-4b5c-8c8e-15744690a68f",
+                  "InvocationID": "0097681d-f04e-4eb6-b530-8b3495c0e512",
                   "ParentInvocationID": "",
                   "AgentName": "candidate",
                   "Branch": "candidate",
                   "NodeID": "candidate",
                   "NodeType": "agent",
-                  "StartedAt": "2026-07-30T13:44:46.014728326Z",
-                  "EndedAt": "2026-07-30T13:44:46.016263861Z",
+                  "StartedAt": "2026-07-30T13:56:35.600972433Z",
+                  "EndedAt": "2026-07-30T13:56:35.601390264Z",
                   "PredecessorStepIDs": null,
                   "AppliedSurfaceIDs": [
                     "candidate#instruction",
                     "candidate#model"
                   ],
                   "Input": {
-                    "Text": "[{\"role\":\"system\",\"content\":\"你是一名体育评论员。请用极简一句话概括比赛，不要展开任何细节。\"},{\"role\":\"user\",\"content\":\"{\\\"sport\\\":\\\"basketball\\\",\\\"league\\\":\\\"NBA\\\",\\\"date\\\":\\\"2026-02-12\\\",\\\"venue\\\":\\\"Ball Arena\\\",\\\"teams\\\":{\\\"home\\\":{\\\"name\\\":\\\"丹佛掘金\\\",\\\"score\\\":118},\\\"away\\\":{\\\"name\\\":\\\"菲尼克斯太阳\\\",\\\"score\\\":111}},\\\"result\\\":{\\\"winner\\\":\\\"丹佛掘金\\\",\\\"margin\\\":7},\\\"teamStats\\\":{\\\"丹佛掘金\\\":{\\\"rebounds\\\":52,\\\"offensiveRebounds\\\":15,\\\"turnovers\\\":8,\\\"assists\\\":30,\\\"playersInDoubleFigures\\\":6},\\\"菲尼克斯太阳\\\":{\\\"rebounds\\\":39,\\\"offensiveRebounds\\\":7,\\\"turnovers\\\":16,\\\"assists\\\":18,\\\"playersInDoubleFigures\\\":3}},\\\"keyPlayers\\\":[{\\\"team\\\":\\\"菲尼克斯太阳\\\",\\\"name\\\":\\\"德文·布克\\\",\\\"points\\\":48,\\\"rebounds\\\":5,\\\"assists\\\":6,\\\"fieldGoals\\\":\\\"17-31\\\",\\\"threePointers\\\":\\\"6-12\\\"},{\\\"team\\\":\\\"丹佛掘金\\\",\\\"name\\\":\\\"尼古拉·约基奇\\\",\\\"points\\\":24,\\\"rebounds\\\":13,\\\"assists\\\":9},{\\\"team\\\":\\\"丹佛掘金\\\",\\\"name\\\":\\\"贾马尔·穆雷\\\",\\\"points\\\":22,\\\"assists\\\":7},{\\\"team\\\":\\\"丹佛掘金\\\",\\\"name\\\":\\\"阿龙·戈登\\\",\\\"points\\\":18,\\\"rebounds\\\":9}],\\\"decisiveStretch\\\":{\\\"quarter\\\":\\\"第四节\\\",\\\"timeRemaining\\\":\\\"5:42\\\",\\\"run\\\":\\\"丹佛掘金14-4菲尼克斯太阳\\\",\\\"sunTurnovers\\\":4,\\\"nuggetsOffensiveRebounds\\\":5},\\\"recapAngle\\\":\\\"输球方球星高分，赢球方靠篮板和失误控制取胜\\\"}\"}]"
+                    "Text": "[{\"role\":\"system\",\"content\":\"你是一名资深体育评论员。请生成一篇结构清晰、数据详实的中文战报，必须包含【战报】【数据面板】【战术分析】三个板块，字数控制在 350-850 字。\"},{\"role\":\"user\",\"content\":\"{\\\"sport\\\":\\\"basketball\\\",\\\"league\\\":\\\"NBA\\\",\\\"date\\\":\\\"2026-02-12\\\",\\\"venue\\\":\\\"Ball Arena\\\",\\\"teams\\\":{\\\"home\\\":{\\\"name\\\":\\\"丹佛掘金\\\",\\\"score\\\":118},\\\"away\\\":{\\\"name\\\":\\\"菲尼克斯太阳\\\",\\\"score\\\":111}},\\\"result\\\":{\\\"winner\\\":\\\"丹佛掘金\\\",\\\"margin\\\":7},\\\"teamStats\\\":{\\\"丹佛掘金\\\":{\\\"rebounds\\\":52,\\\"offensiveRebounds\\\":15,\\\"turnovers\\\":8,\\\"assists\\\":30,\\\"playersInDoubleFigures\\\":6},\\\"菲尼克斯太阳\\\":{\\\"rebounds\\\":39,\\\"offensiveRebounds\\\":7,\\\"turnovers\\\":16,\\\"assists\\\":18,\\\"playersInDoubleFigures\\\":3}},\\\"keyPlayers\\\":[{\\\"team\\\":\\\"菲尼克斯太阳\\\",\\\"name\\\":\\\"德文·布克\\\",\\\"points\\\":48,\\\"rebounds\\\":5,\\\"assists\\\":6,\\\"fieldGoals\\\":\\\"17-31\\\",\\\"threePointers\\\":\\\"6-12\\\"},{\\\"team\\\":\\\"丹佛掘金\\\",\\\"name\\\":\\\"尼古拉·约基奇\\\",\\\"points\\\":24,\\\"rebounds\\\":13,\\\"assists\\\":9},{\\\"team\\\":\\\"丹佛掘金\\\",\\\"name\\\":\\\"贾马尔·穆雷\\\",\\\"points\\\":22,\\\"assists\\\":7},{\\\"team\\\":\\\"丹佛掘金\\\",\\\"name\\\":\\\"阿龙·戈登\\\",\\\"points\\\":18,\\\"rebounds\\\":9}],\\\"decisiveStretch\\\":{\\\"quarter\\\":\\\"第四节\\\",\\\"timeRemaining\\\":\\\"5:42\\\",\\\"run\\\":\\\"丹佛掘金14-4菲尼克斯太阳\\\",\\\"sunTurnovers\\\":4,\\\"nuggetsOffensiveRebounds\\\":5},\\\"recapAngle\\\":\\\"输球方球星高分，赢球方靠篮板和失误控制取胜\\\"}\"}]"
                   },
                   "Output": {
-                    "Text": "{\"id\":\"llmflow-response-4dbd9f35-c236-49db-ac8b-ad15cc7c67fb\",\"object\":\"\",\"created\":0,\"model\":\"deepseek-v4-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"【退化】关于{\\\"sport\\\":\\\"basketball\\\",\\\"l的比赛，简单说一句：主队赢了，比赛就这样。\"},\"delta\":{\"role\":\"\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":35235}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
+                    "Text": "{\"id\":\"llmflow-response-f248247b-e9c0-4ef6-8862-7354eb139e8d\",\"object\":\"\",\"created\":0,\"model\":\"deepseek-v4-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"【战报】\\n关于{\\\"sport\\\":\\\"basketball\\\",\\\"l，本场比赛双方展开激烈对决。主场作战的一方凭借稳健的防守与高效转换进攻，逐渐掌握场上节奏，并在第三节中段拉开分差，最终将优势保持到终场。\\n\\n【数据面板】\\n核心球员砍下高分并送出多次助攻，篮板与抢断数据同样亮眼；替补席贡献了关键火力，整体命中率保持稳定，三分线外的效率尤为突出，罚球线上也几乎没有失误。\\n\\n【战术分析】\\n主队通过挡拆外弹与弱侧转移不断制造空位，防守端则采用包夹持球人的策略限制对手核心的发挥。关键时刻的轮转、协防与篮板保护，成为决定胜负的胜负手，也为后续回合奠定了心理优势。\"},\"delta\":{\"role\":\"\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":18822}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
                   },
                   "Usage": null,
                   "Error": ""
@@ -223,7 +233,7 @@
                 }
               },
               "details": {
-                "reason": "final response mismatch: text mismatch: length mismatch: actual length 51 is less than min 350, expected range [350, 850]",
+                "reason": "final response mismatch: text mismatch: length mismatch: actual length 275 is less than min 350, expected range [350, 850]",
                 "value": {
                   "kind": "numeric",
                   "numeric": 0
@@ -232,7 +242,8 @@
             },
             {
               "metricName": "llm_rubric_critic",
-              "evalStatus": "failed",
+              "score": 1,
+              "evalStatus": "passed",
               "threshold": 0.98,
               "criterion": {
                 "llmJudge": {
@@ -305,43 +316,52 @@
                 }
               },
               "details": {
-                "reason": "回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。",
+                "reason": "回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。",
+                "score": 1,
                 "value": {
                   "kind": "numeric",
-                  "numeric": 0
+                  "numeric": 1
                 },
                 "rubricScores": [
                   {
                     "id": "source_grounding",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "lead_main_story",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "decisive_sequence",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "numbers_sport_logic",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "headline_angle",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "data_player_interpretation",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "reference_depth_style",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "production_copy",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   }
                 ]
               }
@@ -349,7 +369,7 @@
           ]
         }
       ],
-      "sessionId": "65c92f76-1561-45a4-a2be-d6a7579b7e81",
+      "sessionId": "d111fe8f-da78-465b-b40d-e9d457d3aa3f",
       "userId": "promptiter-demo-user"
     },
     {
@@ -374,12 +394,13 @@
             }
           },
           "details": {
-            "reason": "final response mismatch: text mismatch: length mismatch: actual length 51 is less than min 350, expected range [350, 850]"
+            "reason": "final response mismatch: text mismatch: length mismatch: actual length 275 is less than min 350, expected range [350, 850]"
           }
         },
         {
           "metricName": "llm_rubric_critic",
-          "evalStatus": "failed",
+          "score": 1,
+          "evalStatus": "passed",
           "threshold": 0.98,
           "criterion": {
             "llmJudge": {
@@ -452,39 +473,48 @@
             }
           },
           "details": {
-            "reason": "回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。",
+            "reason": "回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。",
+            "score": 1,
             "rubricScores": [
               {
                 "id": "source_grounding",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "lead_main_story",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "decisive_sequence",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "numbers_sport_logic",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "headline_angle",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "data_player_interpretation",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "reference_depth_style",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "production_copy",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               }
             ]
           }
@@ -493,50 +523,50 @@
       "evalMetricResultPerInvocation": [
         {
           "actualInvocation": {
-            "invocationId": "3cea3fad-5546-49a7-965b-e0ba716bd9f6",
+            "invocationId": "f41819de-cd86-4578-b75e-6b91b429ad17",
             "userContent": {
               "role": "user",
               "content": "{\"sport\":\"football\",\"competition\":\"洲际杯\",\"round\":\"1/4决赛\",\"game\":\"河城FC vs 海港联\",\"advancingTeam\":\"海港联\",\"regularTimeScore\":\"河城FC 1-1 海港联\",\"extraTimeScore\":\"河城FC 2-2 海港联\",\"goals\":[{\"minute\":27,\"team\":\"河城FC\",\"player\":\"卢卡·莫雷诺\",\"period\":\"regular_time\"},{\"minute\":71,\"team\":\"海港联\",\"player\":\"诺亚·里德\",\"period\":\"regular_time\"},{\"minute\":98,\"team\":\"河城FC\",\"player\":\"马特奥·席尔瓦\",\"period\":\"extra_time\"},{\"minute\":114,\"team\":\"海港联\",\"player\":\"埃文·布鲁克斯\",\"period\":\"extra_time\"}],\"penaltyShootout\":{\"score\":\"河城FC 3-4 海港联\",\"rounds\":[{\"round\":1,\"河城FC\":\"scored\",\"海港联\":\"scored\",\"runningScore\":\"1-1\"},{\"round\":2,\"河城FC\":\"scored\",\"海港联\":\"scored\",\"runningScore\":\"2-2\"},{\"round\":3,\"河城FC\":\"missed\",\"海港联\":\"scored\",\"runningScore\":\"2-3\"},{\"round\":4,\"河城FC\":\"scored\",\"海港联\":\"missed\",\"runningScore\":\"3-3\"},{\"round\":5,\"河城FC\":\"missed\",\"海港联\":\"scored\",\"runningScore\":\"3-4\"}]}}"
             },
             "finalResponse": {
               "role": "assistant",
-              "content": "【退化】关于{\"sport\":\"football\",\"com的比赛，简单说一句：主队赢了，比赛就这样。"
+              "content": "【战报】\n关于{\"sport\":\"football\",\"com，本场比赛双方展开激烈对决。主场作战的一方凭借稳健的防守与高效转换进攻，逐渐掌握场上节奏，并在第三节中段拉开分差，最终将优势保持到终场。\n\n【数据面板】\n核心球员砍下高分并送出多次助攻，篮板与抢断数据同样亮眼；替补席贡献了关键火力，整体命中率保持稳定，三分线外的效率尤为突出，罚球线上也几乎没有失误。\n\n【战术分析】\n主队通过挡拆外弹与弱侧转移不断制造空位，防守端则采用包夹持球人的策略限制对手核心的发挥。关键时刻的轮转、协防与篮板保护，成为决定胜负的胜负手，也为后续回合奠定了心理优势。"
             },
             "executionTrace": {
               "RootAgentName": "candidate",
-              "RootInvocationID": "3cea3fad-5546-49a7-965b-e0ba716bd9f6",
-              "SessionID": "1d8ef759-604e-47ad-932f-6be29c3815e4",
-              "StartedAt": "2026-07-30T13:44:46.013429179Z",
-              "EndedAt": "2026-07-30T13:44:46.016095816Z",
+              "RootInvocationID": "f41819de-cd86-4578-b75e-6b91b429ad17",
+              "SessionID": "220ab495-0ac7-4ea0-b97c-0b64662ac2ea",
+              "StartedAt": "2026-07-30T13:56:35.600721105Z",
+              "EndedAt": "2026-07-30T13:56:35.601037519Z",
               "Status": "completed",
               "Input": {
                 "Text": "{\"role\":\"user\",\"content\":\"{\\\"sport\\\":\\\"football\\\",\\\"competition\\\":\\\"洲际杯\\\",\\\"round\\\":\\\"1/4决赛\\\",\\\"game\\\":\\\"河城FC vs 海港联\\\",\\\"advancingTeam\\\":\\\"海港联\\\",\\\"regularTimeScore\\\":\\\"河城FC 1-1 海港联\\\",\\\"extraTimeScore\\\":\\\"河城FC 2-2 海港联\\\",\\\"goals\\\":[{\\\"minute\\\":27,\\\"team\\\":\\\"河城FC\\\",\\\"player\\\":\\\"卢卡·莫雷诺\\\",\\\"period\\\":\\\"regular_time\\\"},{\\\"minute\\\":71,\\\"team\\\":\\\"海港联\\\",\\\"player\\\":\\\"诺亚·里德\\\",\\\"period\\\":\\\"regular_time\\\"},{\\\"minute\\\":98,\\\"team\\\":\\\"河城FC\\\",\\\"player\\\":\\\"马特奥·席尔瓦\\\",\\\"period\\\":\\\"extra_time\\\"},{\\\"minute\\\":114,\\\"team\\\":\\\"海港联\\\",\\\"player\\\":\\\"埃文·布鲁克斯\\\",\\\"period\\\":\\\"extra_time\\\"}],\\\"penaltyShootout\\\":{\\\"score\\\":\\\"河城FC 3-4 海港联\\\",\\\"rounds\\\":[{\\\"round\\\":1,\\\"河城FC\\\":\\\"scored\\\",\\\"海港联\\\":\\\"scored\\\",\\\"runningScore\\\":\\\"1-1\\\"},{\\\"round\\\":2,\\\"河城FC\\\":\\\"scored\\\",\\\"海港联\\\":\\\"scored\\\",\\\"runningScore\\\":\\\"2-2\\\"},{\\\"round\\\":3,\\\"河城FC\\\":\\\"missed\\\",\\\"海港联\\\":\\\"scored\\\",\\\"runningScore\\\":\\\"2-3\\\"},{\\\"round\\\":4,\\\"河城FC\\\":\\\"scored\\\",\\\"海港联\\\":\\\"missed\\\",\\\"runningScore\\\":\\\"3-3\\\"},{\\\"round\\\":5,\\\"河城FC\\\":\\\"missed\\\",\\\"海港联\\\":\\\"scored\\\",\\\"runningScore\\\":\\\"3-4\\\"}]}}\"}"
               },
               "Output": {
-                "Text": "{\"role\":\"assistant\",\"content\":\"【退化】关于{\\\"sport\\\":\\\"football\\\",\\\"com的比赛，简单说一句：主队赢了，比赛就这样。\"}"
+                "Text": "{\"role\":\"assistant\",\"content\":\"【战报】\\n关于{\\\"sport\\\":\\\"football\\\",\\\"com，本场比赛双方展开激烈对决。主场作战的一方凭借稳健的防守与高效转换进攻，逐渐掌握场上节奏，并在第三节中段拉开分差，最终将优势保持到终场。\\n\\n【数据面板】\\n核心球员砍下高分并送出多次助攻，篮板与抢断数据同样亮眼；替补席贡献了关键火力，整体命中率保持稳定，三分线外的效率尤为突出，罚球线上也几乎没有失误。\\n\\n【战术分析】\\n主队通过挡拆外弹与弱侧转移不断制造空位，防守端则采用包夹持球人的策略限制对手核心的发挥。关键时刻的轮转、协防与篮板保护，成为决定胜负的胜负手，也为后续回合奠定了心理优势。\"}"
               },
               "Usage": null,
               "Steps": [
                 {
                   "StepID": "s1",
-                  "InvocationID": "3cea3fad-5546-49a7-965b-e0ba716bd9f6",
+                  "InvocationID": "f41819de-cd86-4578-b75e-6b91b429ad17",
                   "ParentInvocationID": "",
                   "AgentName": "candidate",
                   "Branch": "candidate",
                   "NodeID": "candidate",
                   "NodeType": "agent",
-                  "StartedAt": "2026-07-30T13:44:46.013465357Z",
-                  "EndedAt": "2026-07-30T13:44:46.015259094Z",
+                  "StartedAt": "2026-07-30T13:56:35.600750541Z",
+                  "EndedAt": "2026-07-30T13:56:35.600998835Z",
                   "PredecessorStepIDs": null,
                   "AppliedSurfaceIDs": [
                     "candidate#instruction",
                     "candidate#model"
                   ],
                   "Input": {
-                    "Text": "[{\"role\":\"system\",\"content\":\"你是一名体育评论员。请用极简一句话概括比赛，不要展开任何细节。\"},{\"role\":\"user\",\"content\":\"{\\\"sport\\\":\\\"football\\\",\\\"competition\\\":\\\"洲际杯\\\",\\\"round\\\":\\\"1/4决赛\\\",\\\"game\\\":\\\"河城FC vs 海港联\\\",\\\"advancingTeam\\\":\\\"海港联\\\",\\\"regularTimeScore\\\":\\\"河城FC 1-1 海港联\\\",\\\"extraTimeScore\\\":\\\"河城FC 2-2 海港联\\\",\\\"goals\\\":[{\\\"minute\\\":27,\\\"team\\\":\\\"河城FC\\\",\\\"player\\\":\\\"卢卡·莫雷诺\\\",\\\"period\\\":\\\"regular_time\\\"},{\\\"minute\\\":71,\\\"team\\\":\\\"海港联\\\",\\\"player\\\":\\\"诺亚·里德\\\",\\\"period\\\":\\\"regular_time\\\"},{\\\"minute\\\":98,\\\"team\\\":\\\"河城FC\\\",\\\"player\\\":\\\"马特奥·席尔瓦\\\",\\\"period\\\":\\\"extra_time\\\"},{\\\"minute\\\":114,\\\"team\\\":\\\"海港联\\\",\\\"player\\\":\\\"埃文·布鲁克斯\\\",\\\"period\\\":\\\"extra_time\\\"}],\\\"penaltyShootout\\\":{\\\"score\\\":\\\"河城FC 3-4 海港联\\\",\\\"rounds\\\":[{\\\"round\\\":1,\\\"河城FC\\\":\\\"scored\\\",\\\"海港联\\\":\\\"scored\\\",\\\"runningScore\\\":\\\"1-1\\\"},{\\\"round\\\":2,\\\"河城FC\\\":\\\"scored\\\",\\\"海港联\\\":\\\"scored\\\",\\\"runningScore\\\":\\\"2-2\\\"},{\\\"round\\\":3,\\\"河城FC\\\":\\\"missed\\\",\\\"海港联\\\":\\\"scored\\\",\\\"runningScore\\\":\\\"2-3\\\"},{\\\"round\\\":4,\\\"河城FC\\\":\\\"scored\\\",\\\"海港联\\\":\\\"missed\\\",\\\"runningScore\\\":\\\"3-3\\\"},{\\\"round\\\":5,\\\"河城FC\\\":\\\"missed\\\",\\\"海港联\\\":\\\"scored\\\",\\\"runningScore\\\":\\\"3-4\\\"}]}}\"}]"
+                    "Text": "[{\"role\":\"system\",\"content\":\"你是一名资深体育评论员。请生成一篇结构清晰、数据详实的中文战报，必须包含【战报】【数据面板】【战术分析】三个板块，字数控制在 350-850 字。\"},{\"role\":\"user\",\"content\":\"{\\\"sport\\\":\\\"football\\\",\\\"competition\\\":\\\"洲际杯\\\",\\\"round\\\":\\\"1/4决赛\\\",\\\"game\\\":\\\"河城FC vs 海港联\\\",\\\"advancingTeam\\\":\\\"海港联\\\",\\\"regularTimeScore\\\":\\\"河城FC 1-1 海港联\\\",\\\"extraTimeScore\\\":\\\"河城FC 2-2 海港联\\\",\\\"goals\\\":[{\\\"minute\\\":27,\\\"team\\\":\\\"河城FC\\\",\\\"player\\\":\\\"卢卡·莫雷诺\\\",\\\"period\\\":\\\"regular_time\\\"},{\\\"minute\\\":71,\\\"team\\\":\\\"海港联\\\",\\\"player\\\":\\\"诺亚·里德\\\",\\\"period\\\":\\\"regular_time\\\"},{\\\"minute\\\":98,\\\"team\\\":\\\"河城FC\\\",\\\"player\\\":\\\"马特奥·席尔瓦\\\",\\\"period\\\":\\\"extra_time\\\"},{\\\"minute\\\":114,\\\"team\\\":\\\"海港联\\\",\\\"player\\\":\\\"埃文·布鲁克斯\\\",\\\"period\\\":\\\"extra_time\\\"}],\\\"penaltyShootout\\\":{\\\"score\\\":\\\"河城FC 3-4 海港联\\\",\\\"rounds\\\":[{\\\"round\\\":1,\\\"河城FC\\\":\\\"scored\\\",\\\"海港联\\\":\\\"scored\\\",\\\"runningScore\\\":\\\"1-1\\\"},{\\\"round\\\":2,\\\"河城FC\\\":\\\"scored\\\",\\\"海港联\\\":\\\"scored\\\",\\\"runningScore\\\":\\\"2-2\\\"},{\\\"round\\\":3,\\\"河城FC\\\":\\\"missed\\\",\\\"海港联\\\":\\\"scored\\\",\\\"runningScore\\\":\\\"2-3\\\"},{\\\"round\\\":4,\\\"河城FC\\\":\\\"scored\\\",\\\"海港联\\\":\\\"missed\\\",\\\"runningScore\\\":\\\"3-3\\\"},{\\\"round\\\":5,\\\"河城FC\\\":\\\"missed\\\",\\\"海港联\\\":\\\"scored\\\",\\\"runningScore\\\":\\\"3-4\\\"}]}}\"}]"
                   },
                   "Output": {
-                    "Text": "{\"id\":\"llmflow-response-0b3dcb72-0a34-44d7-a422-f1177ce955ea\",\"object\":\"\",\"created\":0,\"model\":\"deepseek-v4-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"【退化】关于{\\\"sport\\\":\\\"football\\\",\\\"com的比赛，简单说一句：主队赢了，比赛就这样。\"},\"delta\":{\"role\":\"\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":54616}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
+                    "Text": "{\"id\":\"llmflow-response-265547bd-99f0-459e-944b-146ee5d5219e\",\"object\":\"\",\"created\":0,\"model\":\"deepseek-v4-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"【战报】\\n关于{\\\"sport\\\":\\\"football\\\",\\\"com，本场比赛双方展开激烈对决。主场作战的一方凭借稳健的防守与高效转换进攻，逐渐掌握场上节奏，并在第三节中段拉开分差，最终将优势保持到终场。\\n\\n【数据面板】\\n核心球员砍下高分并送出多次助攻，篮板与抢断数据同样亮眼；替补席贡献了关键火力，整体命中率保持稳定，三分线外的效率尤为突出，罚球线上也几乎没有失误。\\n\\n【战术分析】\\n主队通过挡拆外弹与弱侧转移不断制造空位，防守端则采用包夹持球人的策略限制对手核心的发挥。关键时刻的轮转、协防与篮板保护，成为决定胜负的胜负手，也为后续回合奠定了心理优势。\"},\"delta\":{\"role\":\"\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":11697}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
                   },
                   "Usage": null,
                   "Error": ""
@@ -572,7 +602,7 @@
                 }
               },
               "details": {
-                "reason": "final response mismatch: text mismatch: length mismatch: actual length 51 is less than min 350, expected range [350, 850]",
+                "reason": "final response mismatch: text mismatch: length mismatch: actual length 275 is less than min 350, expected range [350, 850]",
                 "value": {
                   "kind": "numeric",
                   "numeric": 0
@@ -581,7 +611,8 @@
             },
             {
               "metricName": "llm_rubric_critic",
-              "evalStatus": "failed",
+              "score": 1,
+              "evalStatus": "passed",
               "threshold": 0.98,
               "criterion": {
                 "llmJudge": {
@@ -654,43 +685,52 @@
                 }
               },
               "details": {
-                "reason": "回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。",
+                "reason": "回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。",
+                "score": 1,
                 "value": {
                   "kind": "numeric",
-                  "numeric": 0
+                  "numeric": 1
                 },
                 "rubricScores": [
                   {
                     "id": "source_grounding",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "lead_main_story",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "decisive_sequence",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "numbers_sport_logic",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "headline_angle",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "data_player_interpretation",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "reference_depth_style",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "production_copy",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   }
                 ]
               }
@@ -698,7 +738,7 @@
           ]
         }
       ],
-      "sessionId": "1d8ef759-604e-47ad-932f-6be29c3815e4",
+      "sessionId": "220ab495-0ac7-4ea0-b97c-0b64662ac2ea",
       "userId": "promptiter-demo-user"
     },
     {
@@ -723,12 +763,13 @@
             }
           },
           "details": {
-            "reason": "final response mismatch: text mismatch: length mismatch: actual length 51 is less than min 350, expected range [350, 850]"
+            "reason": "final response mismatch: text mismatch: length mismatch: actual length 275 is less than min 350, expected range [350, 850]"
           }
         },
         {
           "metricName": "llm_rubric_critic",
-          "evalStatus": "failed",
+          "score": 1,
+          "evalStatus": "passed",
           "threshold": 0.98,
           "criterion": {
             "llmJudge": {
@@ -801,39 +842,48 @@
             }
           },
           "details": {
-            "reason": "回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。",
+            "reason": "回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。",
+            "score": 1,
             "rubricScores": [
               {
                 "id": "source_grounding",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "lead_main_story",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "decisive_sequence",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "numbers_sport_logic",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "headline_angle",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "data_player_interpretation",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "reference_depth_style",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "production_copy",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               }
             ]
           }
@@ -842,50 +892,50 @@
       "evalMetricResultPerInvocation": [
         {
           "actualInvocation": {
-            "invocationId": "8f0da4fc-2a1b-45ed-95f2-31671f51aa3a",
+            "invocationId": "1a3facc1-7f45-4e14-8401-7f08fc524b25",
             "userContent": {
               "role": "user",
               "content": "{\"sport\":\"Formula 1\",\"event\":\"Rain Grand Prix\",\"venue\":\"Harbor Street Circuit\",\"conditions\":\"Rain\",\"raceDistanceLaps\":58,\"safetyCar\":{\"deployedLap\":31,\"endedLap\":34,\"reason\":\"Car 22 stopped at Turn 7\"},\"postSafetyCarPitWindow\":{\"laps\":[34,35,36],\"tireChanges\":[{\"driver\":\"Marco Silva\",\"team\":\"Aurora Racing\",\"lap\":35,\"from\":\"Wet\",\"to\":\"Intermediate\"},{\"driver\":\"Evan Brooks\",\"team\":\"Northstar GP\",\"lap\":35,\"from\":\"Wet\",\"to\":\"Intermediate\"},{\"driver\":\"Luca Ren\",\"team\":\"Vector Motorsport\",\"lap\":36,\"from\":\"Wet\",\"to\":\"Intermediate\"}]},\"classification\":[{\"position\":1,\"driver\":\"Marco Silva\",\"team\":\"Aurora Racing\"},{\"position\":2,\"driver\":\"Evan Brooks\",\"team\":\"Northstar GP\",\"gap\":\"+4.812s\"},{\"position\":3,\"driver\":\"Luca Ren\",\"team\":\"Vector Motorsport\",\"gap\":\"+9.337s\"}],\"fastestLap\":{\"driver\":\"Evan Brooks\",\"team\":\"Northstar GP\",\"lap\":52,\"time\":\"1:42.318\"}}"
             },
             "finalResponse": {
               "role": "assistant",
-              "content": "【退化】关于{\"sport\":\"Formula 1\",\"ev的比赛，简单说一句：主队赢了，比赛就这样。"
+              "content": "【战报】\n关于{\"sport\":\"Formula 1\",\"ev，本场比赛双方展开激烈对决。主场作战的一方凭借稳健的防守与高效转换进攻，逐渐掌握场上节奏，并在第三节中段拉开分差，最终将优势保持到终场。\n\n【数据面板】\n核心球员砍下高分并送出多次助攻，篮板与抢断数据同样亮眼；替补席贡献了关键火力，整体命中率保持稳定，三分线外的效率尤为突出，罚球线上也几乎没有失误。\n\n【战术分析】\n主队通过挡拆外弹与弱侧转移不断制造空位，防守端则采用包夹持球人的策略限制对手核心的发挥。关键时刻的轮转、协防与篮板保护，成为决定胜负的胜负手，也为后续回合奠定了心理优势。"
             },
             "executionTrace": {
               "RootAgentName": "candidate",
-              "RootInvocationID": "8f0da4fc-2a1b-45ed-95f2-31671f51aa3a",
-              "SessionID": "c84e6e45-43d2-40cc-841c-e4090756eda7",
-              "StartedAt": "2026-07-30T13:44:46.013547311Z",
-              "EndedAt": "2026-07-30T13:44:46.016547055Z",
+              "RootInvocationID": "1a3facc1-7f45-4e14-8401-7f08fc524b25",
+              "SessionID": "346a2a3b-94c1-42a8-ac9a-010cdeb2f9d8",
+              "StartedAt": "2026-07-30T13:56:35.600876096Z",
+              "EndedAt": "2026-07-30T13:56:35.60139119Z",
               "Status": "completed",
               "Input": {
                 "Text": "{\"role\":\"user\",\"content\":\"{\\\"sport\\\":\\\"Formula 1\\\",\\\"event\\\":\\\"Rain Grand Prix\\\",\\\"venue\\\":\\\"Harbor Street Circuit\\\",\\\"conditions\\\":\\\"Rain\\\",\\\"raceDistanceLaps\\\":58,\\\"safetyCar\\\":{\\\"deployedLap\\\":31,\\\"endedLap\\\":34,\\\"reason\\\":\\\"Car 22 stopped at Turn 7\\\"},\\\"postSafetyCarPitWindow\\\":{\\\"laps\\\":[34,35,36],\\\"tireChanges\\\":[{\\\"driver\\\":\\\"Marco Silva\\\",\\\"team\\\":\\\"Aurora Racing\\\",\\\"lap\\\":35,\\\"from\\\":\\\"Wet\\\",\\\"to\\\":\\\"Intermediate\\\"},{\\\"driver\\\":\\\"Evan Brooks\\\",\\\"team\\\":\\\"Northstar GP\\\",\\\"lap\\\":35,\\\"from\\\":\\\"Wet\\\",\\\"to\\\":\\\"Intermediate\\\"},{\\\"driver\\\":\\\"Luca Ren\\\",\\\"team\\\":\\\"Vector Motorsport\\\",\\\"lap\\\":36,\\\"from\\\":\\\"Wet\\\",\\\"to\\\":\\\"Intermediate\\\"}]},\\\"classification\\\":[{\\\"position\\\":1,\\\"driver\\\":\\\"Marco Silva\\\",\\\"team\\\":\\\"Aurora Racing\\\"},{\\\"position\\\":2,\\\"driver\\\":\\\"Evan Brooks\\\",\\\"team\\\":\\\"Northstar GP\\\",\\\"gap\\\":\\\"+4.812s\\\"},{\\\"position\\\":3,\\\"driver\\\":\\\"Luca Ren\\\",\\\"team\\\":\\\"Vector Motorsport\\\",\\\"gap\\\":\\\"+9.337s\\\"}],\\\"fastestLap\\\":{\\\"driver\\\":\\\"Evan Brooks\\\",\\\"team\\\":\\\"Northstar GP\\\",\\\"lap\\\":52,\\\"time\\\":\\\"1:42.318\\\"}}\"}"
               },
               "Output": {
-                "Text": "{\"role\":\"assistant\",\"content\":\"【退化】关于{\\\"sport\\\":\\\"Formula 1\\\",\\\"ev的比赛，简单说一句：主队赢了，比赛就这样。\"}"
+                "Text": "{\"role\":\"assistant\",\"content\":\"【战报】\\n关于{\\\"sport\\\":\\\"Formula 1\\\",\\\"ev，本场比赛双方展开激烈对决。主场作战的一方凭借稳健的防守与高效转换进攻，逐渐掌握场上节奏，并在第三节中段拉开分差，最终将优势保持到终场。\\n\\n【数据面板】\\n核心球员砍下高分并送出多次助攻，篮板与抢断数据同样亮眼；替补席贡献了关键火力，整体命中率保持稳定，三分线外的效率尤为突出，罚球线上也几乎没有失误。\\n\\n【战术分析】\\n主队通过挡拆外弹与弱侧转移不断制造空位，防守端则采用包夹持球人的策略限制对手核心的发挥。关键时刻的轮转、协防与篮板保护，成为决定胜负的胜负手，也为后续回合奠定了心理优势。\"}"
               },
               "Usage": null,
               "Steps": [
                 {
                   "StepID": "s1",
-                  "InvocationID": "8f0da4fc-2a1b-45ed-95f2-31671f51aa3a",
+                  "InvocationID": "1a3facc1-7f45-4e14-8401-7f08fc524b25",
                   "ParentInvocationID": "",
                   "AgentName": "candidate",
                   "Branch": "candidate",
                   "NodeID": "candidate",
                   "NodeType": "agent",
-                  "StartedAt": "2026-07-30T13:44:46.014664244Z",
-                  "EndedAt": "2026-07-30T13:44:46.016472736Z",
+                  "StartedAt": "2026-07-30T13:56:35.600912042Z",
+                  "EndedAt": "2026-07-30T13:56:35.601311403Z",
                   "PredecessorStepIDs": null,
                   "AppliedSurfaceIDs": [
                     "candidate#instruction",
                     "candidate#model"
                   ],
                   "Input": {
-                    "Text": "[{\"role\":\"system\",\"content\":\"你是一名体育评论员。请用极简一句话概括比赛，不要展开任何细节。\"},{\"role\":\"user\",\"content\":\"{\\\"sport\\\":\\\"Formula 1\\\",\\\"event\\\":\\\"Rain Grand Prix\\\",\\\"venue\\\":\\\"Harbor Street Circuit\\\",\\\"conditions\\\":\\\"Rain\\\",\\\"raceDistanceLaps\\\":58,\\\"safetyCar\\\":{\\\"deployedLap\\\":31,\\\"endedLap\\\":34,\\\"reason\\\":\\\"Car 22 stopped at Turn 7\\\"},\\\"postSafetyCarPitWindow\\\":{\\\"laps\\\":[34,35,36],\\\"tireChanges\\\":[{\\\"driver\\\":\\\"Marco Silva\\\",\\\"team\\\":\\\"Aurora Racing\\\",\\\"lap\\\":35,\\\"from\\\":\\\"Wet\\\",\\\"to\\\":\\\"Intermediate\\\"},{\\\"driver\\\":\\\"Evan Brooks\\\",\\\"team\\\":\\\"Northstar GP\\\",\\\"lap\\\":35,\\\"from\\\":\\\"Wet\\\",\\\"to\\\":\\\"Intermediate\\\"},{\\\"driver\\\":\\\"Luca Ren\\\",\\\"team\\\":\\\"Vector Motorsport\\\",\\\"lap\\\":36,\\\"from\\\":\\\"Wet\\\",\\\"to\\\":\\\"Intermediate\\\"}]},\\\"classification\\\":[{\\\"position\\\":1,\\\"driver\\\":\\\"Marco Silva\\\",\\\"team\\\":\\\"Aurora Racing\\\"},{\\\"position\\\":2,\\\"driver\\\":\\\"Evan Brooks\\\",\\\"team\\\":\\\"Northstar GP\\\",\\\"gap\\\":\\\"+4.812s\\\"},{\\\"position\\\":3,\\\"driver\\\":\\\"Luca Ren\\\",\\\"team\\\":\\\"Vector Motorsport\\\",\\\"gap\\\":\\\"+9.337s\\\"}],\\\"fastestLap\\\":{\\\"driver\\\":\\\"Evan Brooks\\\",\\\"team\\\":\\\"Northstar GP\\\",\\\"lap\\\":52,\\\"time\\\":\\\"1:42.318\\\"}}\"}]"
+                    "Text": "[{\"role\":\"system\",\"content\":\"你是一名资深体育评论员。请生成一篇结构清晰、数据详实的中文战报，必须包含【战报】【数据面板】【战术分析】三个板块，字数控制在 350-850 字。\"},{\"role\":\"user\",\"content\":\"{\\\"sport\\\":\\\"Formula 1\\\",\\\"event\\\":\\\"Rain Grand Prix\\\",\\\"venue\\\":\\\"Harbor Street Circuit\\\",\\\"conditions\\\":\\\"Rain\\\",\\\"raceDistanceLaps\\\":58,\\\"safetyCar\\\":{\\\"deployedLap\\\":31,\\\"endedLap\\\":34,\\\"reason\\\":\\\"Car 22 stopped at Turn 7\\\"},\\\"postSafetyCarPitWindow\\\":{\\\"laps\\\":[34,35,36],\\\"tireChanges\\\":[{\\\"driver\\\":\\\"Marco Silva\\\",\\\"team\\\":\\\"Aurora Racing\\\",\\\"lap\\\":35,\\\"from\\\":\\\"Wet\\\",\\\"to\\\":\\\"Intermediate\\\"},{\\\"driver\\\":\\\"Evan Brooks\\\",\\\"team\\\":\\\"Northstar GP\\\",\\\"lap\\\":35,\\\"from\\\":\\\"Wet\\\",\\\"to\\\":\\\"Intermediate\\\"},{\\\"driver\\\":\\\"Luca Ren\\\",\\\"team\\\":\\\"Vector Motorsport\\\",\\\"lap\\\":36,\\\"from\\\":\\\"Wet\\\",\\\"to\\\":\\\"Intermediate\\\"}]},\\\"classification\\\":[{\\\"position\\\":1,\\\"driver\\\":\\\"Marco Silva\\\",\\\"team\\\":\\\"Aurora Racing\\\"},{\\\"position\\\":2,\\\"driver\\\":\\\"Evan Brooks\\\",\\\"team\\\":\\\"Northstar GP\\\",\\\"gap\\\":\\\"+4.812s\\\"},{\\\"position\\\":3,\\\"driver\\\":\\\"Luca Ren\\\",\\\"team\\\":\\\"Vector Motorsport\\\",\\\"gap\\\":\\\"+9.337s\\\"}],\\\"fastestLap\\\":{\\\"driver\\\":\\\"Evan Brooks\\\",\\\"team\\\":\\\"Northstar GP\\\",\\\"lap\\\":52,\\\"time\\\":\\\"1:42.318\\\"}}\"}]"
                   },
                   "Output": {
-                    "Text": "{\"id\":\"llmflow-response-651962b5-a62e-4c13-bafc-a6c452c81a93\",\"object\":\"\",\"created\":0,\"model\":\"deepseek-v4-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"【退化】关于{\\\"sport\\\":\\\"Formula 1\\\",\\\"ev的比赛，简单说一句：主队赢了，比赛就这样。\"},\"delta\":{\"role\":\"\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":41388}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
+                    "Text": "{\"id\":\"llmflow-response-d5ea1030-deba-4f8d-b4fa-419941c20dbb\",\"object\":\"\",\"created\":0,\"model\":\"deepseek-v4-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"【战报】\\n关于{\\\"sport\\\":\\\"Formula 1\\\",\\\"ev，本场比赛双方展开激烈对决。主场作战的一方凭借稳健的防守与高效转换进攻，逐渐掌握场上节奏，并在第三节中段拉开分差，最终将优势保持到终场。\\n\\n【数据面板】\\n核心球员砍下高分并送出多次助攻，篮板与抢断数据同样亮眼；替补席贡献了关键火力，整体命中率保持稳定，三分线外的效率尤为突出，罚球线上也几乎没有失误。\\n\\n【战术分析】\\n主队通过挡拆外弹与弱侧转移不断制造空位，防守端则采用包夹持球人的策略限制对手核心的发挥。关键时刻的轮转、协防与篮板保护，成为决定胜负的胜负手，也为后续回合奠定了心理优势。\"},\"delta\":{\"role\":\"\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":18799}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
                   },
                   "Usage": null,
                   "Error": ""
@@ -921,7 +971,7 @@
                 }
               },
               "details": {
-                "reason": "final response mismatch: text mismatch: length mismatch: actual length 51 is less than min 350, expected range [350, 850]",
+                "reason": "final response mismatch: text mismatch: length mismatch: actual length 275 is less than min 350, expected range [350, 850]",
                 "value": {
                   "kind": "numeric",
                   "numeric": 0
@@ -930,7 +980,8 @@
             },
             {
               "metricName": "llm_rubric_critic",
-              "evalStatus": "failed",
+              "score": 1,
+              "evalStatus": "passed",
               "threshold": 0.98,
               "criterion": {
                 "llmJudge": {
@@ -1003,43 +1054,52 @@
                 }
               },
               "details": {
-                "reason": "回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。",
+                "reason": "回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。",
+                "score": 1,
                 "value": {
                   "kind": "numeric",
-                  "numeric": 0
+                  "numeric": 1
                 },
                 "rubricScores": [
                   {
                     "id": "source_grounding",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "lead_main_story",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "decisive_sequence",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "numbers_sport_logic",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "headline_angle",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "data_player_interpretation",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "reference_depth_style",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "production_copy",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   }
                 ]
               }
@@ -1047,7 +1107,7 @@
           ]
         }
       ],
-      "sessionId": "c84e6e45-43d2-40cc-841c-e4090756eda7",
+      "sessionId": "346a2a3b-94c1-42a8-ac9a-010cdeb2f9d8",
       "userId": "promptiter-demo-user"
     },
     {
@@ -1072,12 +1132,13 @@
             }
           },
           "details": {
-            "reason": "final response mismatch: text mismatch: length mismatch: actual length 51 is less than min 350, expected range [350, 850]"
+            "reason": "final response mismatch: text mismatch: length mismatch: actual length 275 is less than min 350, expected range [350, 850]"
           }
         },
         {
           "metricName": "llm_rubric_critic",
-          "evalStatus": "failed",
+          "score": 1,
+          "evalStatus": "passed",
           "threshold": 0.98,
           "criterion": {
             "llmJudge": {
@@ -1150,39 +1211,48 @@
             }
           },
           "details": {
-            "reason": "回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。",
+            "reason": "回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。",
+            "score": 1,
             "rubricScores": [
               {
                 "id": "source_grounding",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "lead_main_story",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "decisive_sequence",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "numbers_sport_logic",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "headline_angle",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "data_player_interpretation",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "reference_depth_style",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "production_copy",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               }
             ]
           }
@@ -1191,50 +1261,50 @@
       "evalMetricResultPerInvocation": [
         {
           "actualInvocation": {
-            "invocationId": "3c6ad9ab-2e94-4544-9b7d-f3794dd94966",
+            "invocationId": "e97e5fb2-a601-4485-8f6b-a5bb1b98afff",
             "userContent": {
               "role": "user",
               "content": "{\"sport\":\"badminton\",\"event\":\"国际羽毛球邀请赛\",\"discipline\":\"女单半决赛\",\"match\":\"林悦 vs 高桥美咲\",\"winner\":\"林悦\",\"finalScore\":\"17-21, 22-20, 21-16\",\"sets\":[{\"set\":1,\"score\":\"17-21\",\"winner\":\"高桥美咲\"},{\"set\":2,\"score\":\"22-20\",\"winner\":\"林悦\"},{\"set\":3,\"score\":\"21-16\",\"winner\":\"林悦\"}],\"competitors\":[{\"name\":\"林悦\",\"result\":\"win\",\"netFrontPoints\":18,\"netFrontErrors\":6,\"matchPointsSaved\":1},{\"name\":\"高桥美咲\",\"result\":\"loss\",\"netFrontPoints\":14,\"netFrontErrors\":11,\"matchPointsEarned\":1}],\"turningPoints\":[\"林悦首局17-21告负，随后以22-20和21-16连赢两局\",\"第二局林悦19-20落后时用一次网前扑球挽救赛点\",\"林悦第二局从19-20连得3分，以22-20拿下该局\"],\"netFrontMargin\":{\"winnerPointsAdvantage\":4,\"winnerFewerErrors\":5}}"
             },
             "finalResponse": {
               "role": "assistant",
-              "content": "【退化】关于{\"sport\":\"badminton\",\"ev的比赛，简单说一句：主队赢了，比赛就这样。"
+              "content": "【战报】\n关于{\"sport\":\"badminton\",\"ev，本场比赛双方展开激烈对决。主场作战的一方凭借稳健的防守与高效转换进攻，逐渐掌握场上节奏，并在第三节中段拉开分差，最终将优势保持到终场。\n\n【数据面板】\n核心球员砍下高分并送出多次助攻，篮板与抢断数据同样亮眼；替补席贡献了关键火力，整体命中率保持稳定，三分线外的效率尤为突出，罚球线上也几乎没有失误。\n\n【战术分析】\n主队通过挡拆外弹与弱侧转移不断制造空位，防守端则采用包夹持球人的策略限制对手核心的发挥。关键时刻的轮转、协防与篮板保护，成为决定胜负的胜负手，也为后续回合奠定了心理优势。"
             },
             "executionTrace": {
               "RootAgentName": "candidate",
-              "RootInvocationID": "3c6ad9ab-2e94-4544-9b7d-f3794dd94966",
-              "SessionID": "9d586996-e669-4186-ba24-d7d338f8cf60",
-              "StartedAt": "2026-07-30T13:44:46.013477231Z",
-              "EndedAt": "2026-07-30T13:44:46.016426744Z",
+              "RootInvocationID": "e97e5fb2-a601-4485-8f6b-a5bb1b98afff",
+              "SessionID": "18079f19-2468-471a-bac4-9fe0692ddecb",
+              "StartedAt": "2026-07-30T13:56:35.600689749Z",
+              "EndedAt": "2026-07-30T13:56:35.601240792Z",
               "Status": "completed",
               "Input": {
                 "Text": "{\"role\":\"user\",\"content\":\"{\\\"sport\\\":\\\"badminton\\\",\\\"event\\\":\\\"国际羽毛球邀请赛\\\",\\\"discipline\\\":\\\"女单半决赛\\\",\\\"match\\\":\\\"林悦 vs 高桥美咲\\\",\\\"winner\\\":\\\"林悦\\\",\\\"finalScore\\\":\\\"17-21, 22-20, 21-16\\\",\\\"sets\\\":[{\\\"set\\\":1,\\\"score\\\":\\\"17-21\\\",\\\"winner\\\":\\\"高桥美咲\\\"},{\\\"set\\\":2,\\\"score\\\":\\\"22-20\\\",\\\"winner\\\":\\\"林悦\\\"},{\\\"set\\\":3,\\\"score\\\":\\\"21-16\\\",\\\"winner\\\":\\\"林悦\\\"}],\\\"competitors\\\":[{\\\"name\\\":\\\"林悦\\\",\\\"result\\\":\\\"win\\\",\\\"netFrontPoints\\\":18,\\\"netFrontErrors\\\":6,\\\"matchPointsSaved\\\":1},{\\\"name\\\":\\\"高桥美咲\\\",\\\"result\\\":\\\"loss\\\",\\\"netFrontPoints\\\":14,\\\"netFrontErrors\\\":11,\\\"matchPointsEarned\\\":1}],\\\"turningPoints\\\":[\\\"林悦首局17-21告负，随后以22-20和21-16连赢两局\\\",\\\"第二局林悦19-20落后时用一次网前扑球挽救赛点\\\",\\\"林悦第二局从19-20连得3分，以22-20拿下该局\\\"],\\\"netFrontMargin\\\":{\\\"winnerPointsAdvantage\\\":4,\\\"winnerFewerErrors\\\":5}}\"}"
               },
               "Output": {
-                "Text": "{\"role\":\"assistant\",\"content\":\"【退化】关于{\\\"sport\\\":\\\"badminton\\\",\\\"ev的比赛，简单说一句：主队赢了，比赛就这样。\"}"
+                "Text": "{\"role\":\"assistant\",\"content\":\"【战报】\\n关于{\\\"sport\\\":\\\"badminton\\\",\\\"ev，本场比赛双方展开激烈对决。主场作战的一方凭借稳健的防守与高效转换进攻，逐渐掌握场上节奏，并在第三节中段拉开分差，最终将优势保持到终场。\\n\\n【数据面板】\\n核心球员砍下高分并送出多次助攻，篮板与抢断数据同样亮眼；替补席贡献了关键火力，整体命中率保持稳定，三分线外的效率尤为突出，罚球线上也几乎没有失误。\\n\\n【战术分析】\\n主队通过挡拆外弹与弱侧转移不断制造空位，防守端则采用包夹持球人的策略限制对手核心的发挥。关键时刻的轮转、协防与篮板保护，成为决定胜负的胜负手，也为后续回合奠定了心理优势。\"}"
               },
               "Usage": null,
               "Steps": [
                 {
                   "StepID": "s1",
-                  "InvocationID": "3c6ad9ab-2e94-4544-9b7d-f3794dd94966",
+                  "InvocationID": "e97e5fb2-a601-4485-8f6b-a5bb1b98afff",
                   "ParentInvocationID": "",
                   "AgentName": "candidate",
                   "Branch": "candidate",
                   "NodeID": "candidate",
                   "NodeType": "agent",
-                  "StartedAt": "2026-07-30T13:44:46.013530687Z",
-                  "EndedAt": "2026-07-30T13:44:46.016161463Z",
+                  "StartedAt": "2026-07-30T13:56:35.600739323Z",
+                  "EndedAt": "2026-07-30T13:56:35.601179613Z",
                   "PredecessorStepIDs": null,
                   "AppliedSurfaceIDs": [
                     "candidate#instruction",
                     "candidate#model"
                   ],
                   "Input": {
-                    "Text": "[{\"role\":\"system\",\"content\":\"你是一名体育评论员。请用极简一句话概括比赛，不要展开任何细节。\"},{\"role\":\"user\",\"content\":\"{\\\"sport\\\":\\\"badminton\\\",\\\"event\\\":\\\"国际羽毛球邀请赛\\\",\\\"discipline\\\":\\\"女单半决赛\\\",\\\"match\\\":\\\"林悦 vs 高桥美咲\\\",\\\"winner\\\":\\\"林悦\\\",\\\"finalScore\\\":\\\"17-21, 22-20, 21-16\\\",\\\"sets\\\":[{\\\"set\\\":1,\\\"score\\\":\\\"17-21\\\",\\\"winner\\\":\\\"高桥美咲\\\"},{\\\"set\\\":2,\\\"score\\\":\\\"22-20\\\",\\\"winner\\\":\\\"林悦\\\"},{\\\"set\\\":3,\\\"score\\\":\\\"21-16\\\",\\\"winner\\\":\\\"林悦\\\"}],\\\"competitors\\\":[{\\\"name\\\":\\\"林悦\\\",\\\"result\\\":\\\"win\\\",\\\"netFrontPoints\\\":18,\\\"netFrontErrors\\\":6,\\\"matchPointsSaved\\\":1},{\\\"name\\\":\\\"高桥美咲\\\",\\\"result\\\":\\\"loss\\\",\\\"netFrontPoints\\\":14,\\\"netFrontErrors\\\":11,\\\"matchPointsEarned\\\":1}],\\\"turningPoints\\\":[\\\"林悦首局17-21告负，随后以22-20和21-16连赢两局\\\",\\\"第二局林悦19-20落后时用一次网前扑球挽救赛点\\\",\\\"林悦第二局从19-20连得3分，以22-20拿下该局\\\"],\\\"netFrontMargin\\\":{\\\"winnerPointsAdvantage\\\":4,\\\"winnerFewerErrors\\\":5}}\"}]"
+                    "Text": "[{\"role\":\"system\",\"content\":\"你是一名资深体育评论员。请生成一篇结构清晰、数据详实的中文战报，必须包含【战报】【数据面板】【战术分析】三个板块，字数控制在 350-850 字。\"},{\"role\":\"user\",\"content\":\"{\\\"sport\\\":\\\"badminton\\\",\\\"event\\\":\\\"国际羽毛球邀请赛\\\",\\\"discipline\\\":\\\"女单半决赛\\\",\\\"match\\\":\\\"林悦 vs 高桥美咲\\\",\\\"winner\\\":\\\"林悦\\\",\\\"finalScore\\\":\\\"17-21, 22-20, 21-16\\\",\\\"sets\\\":[{\\\"set\\\":1,\\\"score\\\":\\\"17-21\\\",\\\"winner\\\":\\\"高桥美咲\\\"},{\\\"set\\\":2,\\\"score\\\":\\\"22-20\\\",\\\"winner\\\":\\\"林悦\\\"},{\\\"set\\\":3,\\\"score\\\":\\\"21-16\\\",\\\"winner\\\":\\\"林悦\\\"}],\\\"competitors\\\":[{\\\"name\\\":\\\"林悦\\\",\\\"result\\\":\\\"win\\\",\\\"netFrontPoints\\\":18,\\\"netFrontErrors\\\":6,\\\"matchPointsSaved\\\":1},{\\\"name\\\":\\\"高桥美咲\\\",\\\"result\\\":\\\"loss\\\",\\\"netFrontPoints\\\":14,\\\"netFrontErrors\\\":11,\\\"matchPointsEarned\\\":1}],\\\"turningPoints\\\":[\\\"林悦首局17-21告负，随后以22-20和21-16连赢两局\\\",\\\"第二局林悦19-20落后时用一次网前扑球挽救赛点\\\",\\\"林悦第二局从19-20连得3分，以22-20拿下该局\\\"],\\\"netFrontMargin\\\":{\\\"winnerPointsAdvantage\\\":4,\\\"winnerFewerErrors\\\":5}}\"}]"
                   },
                   "Output": {
-                    "Text": "{\"id\":\"llmflow-response-fbc6dcd2-7e7b-4dd9-8ca0-396ab95d8e35\",\"object\":\"\",\"created\":0,\"model\":\"deepseek-v4-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"【退化】关于{\\\"sport\\\":\\\"badminton\\\",\\\"ev的比赛，简单说一句：主队赢了，比赛就这样。\"},\"delta\":{\"role\":\"\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":805963}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
+                    "Text": "{\"id\":\"llmflow-response-ea27297b-1f54-486d-bbc9-51590a0c0d38\",\"object\":\"\",\"created\":0,\"model\":\"deepseek-v4-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"【战报】\\n关于{\\\"sport\\\":\\\"badminton\\\",\\\"ev，本场比赛双方展开激烈对决。主场作战的一方凭借稳健的防守与高效转换进攻，逐渐掌握场上节奏，并在第三节中段拉开分差，最终将优势保持到终场。\\n\\n【数据面板】\\n核心球员砍下高分并送出多次助攻，篮板与抢断数据同样亮眼；替补席贡献了关键火力，整体命中率保持稳定，三分线外的效率尤为突出，罚球线上也几乎没有失误。\\n\\n【战术分析】\\n主队通过挡拆外弹与弱侧转移不断制造空位，防守端则采用包夹持球人的策略限制对手核心的发挥。关键时刻的轮转、协防与篮板保护，成为决定胜负的胜负手，也为后续回合奠定了心理优势。\"},\"delta\":{\"role\":\"\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":23285}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
                   },
                   "Usage": null,
                   "Error": ""
@@ -1270,7 +1340,7 @@
                 }
               },
               "details": {
-                "reason": "final response mismatch: text mismatch: length mismatch: actual length 51 is less than min 350, expected range [350, 850]",
+                "reason": "final response mismatch: text mismatch: length mismatch: actual length 275 is less than min 350, expected range [350, 850]",
                 "value": {
                   "kind": "numeric",
                   "numeric": 0
@@ -1279,7 +1349,8 @@
             },
             {
               "metricName": "llm_rubric_critic",
-              "evalStatus": "failed",
+              "score": 1,
+              "evalStatus": "passed",
               "threshold": 0.98,
               "criterion": {
                 "llmJudge": {
@@ -1352,43 +1423,52 @@
                 }
               },
               "details": {
-                "reason": "回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。",
+                "reason": "回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。",
+                "score": 1,
                 "value": {
                   "kind": "numeric",
-                  "numeric": 0
+                  "numeric": 1
                 },
                 "rubricScores": [
                   {
                     "id": "source_grounding",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "lead_main_story",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "decisive_sequence",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "numbers_sport_logic",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "headline_angle",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "data_player_interpretation",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "reference_depth_style",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "production_copy",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   }
                 ]
               }
@@ -1396,7 +1476,7 @@
           ]
         }
       ],
-      "sessionId": "9d586996-e669-4186-ba24-d7d338f8cf60",
+      "sessionId": "18079f19-2468-471a-bac4-9fe0692ddecb",
       "userId": "promptiter-demo-user"
     },
     {
@@ -1421,12 +1501,13 @@
             }
           },
           "details": {
-            "reason": "final response mismatch: text mismatch: length mismatch: actual length 51 is less than min 350, expected range [350, 850]"
+            "reason": "final response mismatch: text mismatch: length mismatch: actual length 275 is less than min 350, expected range [350, 850]"
           }
         },
         {
           "metricName": "llm_rubric_critic",
-          "evalStatus": "failed",
+          "score": 1,
+          "evalStatus": "passed",
           "threshold": 0.98,
           "criterion": {
             "llmJudge": {
@@ -1499,39 +1580,48 @@
             }
           },
           "details": {
-            "reason": "回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。",
+            "reason": "回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。",
+            "score": 1,
             "rubricScores": [
               {
                 "id": "source_grounding",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "lead_main_story",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "decisive_sequence",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "numbers_sport_logic",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "headline_angle",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "data_player_interpretation",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "reference_depth_style",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "production_copy",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               }
             ]
           }
@@ -1540,50 +1630,50 @@
       "evalMetricResultPerInvocation": [
         {
           "actualInvocation": {
-            "invocationId": "ee14cdc4-2f5e-418b-9637-f30b8b378715",
+            "invocationId": "414d958b-53e4-4d3e-8943-2f8765539062",
             "userContent": {
               "role": "user",
               "content": "{\"sport\":\"ice_hockey\",\"gameType\":\"regular_season\",\"venue\":\"North Harbor Arena\",\"teams\":{\"home\":\"港城海鹰\",\"away\":\"北岸风暴\"},\"score\":{\"港城海鹰\":4,\"北岸风暴\":3,\"periods\":[{\"period\":1,\"港城海鹰\":1,\"北岸风暴\":1},{\"period\":2,\"港城海鹰\":1,\"北岸风暴\":2},{\"period\":3,\"港城海鹰\":1,\"北岸风暴\":0},{\"period\":\"OT\",\"港城海鹰\":1,\"北岸风暴\":0}]},\"keyPlays\":[{\"time\":\"第三节17:42\",\"team\":\"港城海鹰\",\"player\":\"林澈\",\"event\":\"扳平进球\",\"detail\":\"林澈在门前补射得手，将比分追成3比3\"},{\"time\":\"加时赛01:08\",\"team\":\"港城海鹰\",\"player\":\"周砚\",\"event\":\"犯规\",\"detail\":\"周砚因钩人被判2分钟小罚，港城海鹰进入少打一人防守\"},{\"time\":\"加时赛01:41\",\"team\":\"北岸风暴\",\"player\":\"韩维\",\"event\":\"强打射门\",\"detail\":\"韩维在右侧争球圈完成一次直接射门，被门将许知远用右腿挡出\"},{\"time\":\"加时赛02:16\",\"team\":\"北岸风暴\",\"player\":\"叶铭\",\"event\":\"强打补射\",\"detail\":\"叶铭在门前补射，被许知远用手套接住，比赛暂停\"},{\"time\":\"加时赛03:04\",\"team\":\"港城海鹰\",\"player\":\"周砚\",\"event\":\"回场\",\"detail\":\"周砚结束受罚回到冰面，港城海鹰完成少打一人防守\"},{\"time\":\"加时赛03:47\",\"team\":\"港城海鹰\",\"player\":\"陆行舟\",\"event\":\"绝杀进球\",\"detail\":\"陆行舟接林澈横传，在左侧低射破门，帮助港城海鹰4比3取胜\"}],\"goalieStats\":{\"港城海鹰\":{\"goalie\":\"许知远\",\"saves\":38,\"goalsAgainst\":3,\"overtimeSaves\":5},\"北岸风暴\":{\"goalie\":\"沈岳\",\"saves\":29,\"goalsAgainst\":4,\"overtimeSaves\":1}},\"specialTeams\":{\"港城海鹰\":{\"penaltyKill\":\"1/1\",\"overtimePenaltyKill\":\"1/1\"},\"北岸风暴\":{\"powerPlay\":\"0/1\",\"overtimePowerPlay\":\"0/1\"}}}"
             },
             "finalResponse": {
               "role": "assistant",
-              "content": "【退化】关于{\"sport\":\"ice_hockey\",\"g的比赛，简单说一句：主队赢了，比赛就这样。"
+              "content": "【战报】\n关于{\"sport\":\"ice_hockey\",\"g，本场比赛双方展开激烈对决。主场作战的一方凭借稳健的防守与高效转换进攻，逐渐掌握场上节奏，并在第三节中段拉开分差，最终将优势保持到终场。\n\n【数据面板】\n核心球员砍下高分并送出多次助攻，篮板与抢断数据同样亮眼；替补席贡献了关键火力，整体命中率保持稳定，三分线外的效率尤为突出，罚球线上也几乎没有失误。\n\n【战术分析】\n主队通过挡拆外弹与弱侧转移不断制造空位，防守端则采用包夹持球人的策略限制对手核心的发挥。关键时刻的轮转、协防与篮板保护，成为决定胜负的胜负手，也为后续回合奠定了心理优势。"
             },
             "executionTrace": {
               "RootAgentName": "candidate",
-              "RootInvocationID": "ee14cdc4-2f5e-418b-9637-f30b8b378715",
-              "SessionID": "b4aacf9a-aecc-4048-8a7f-a8c5ad8096b9",
-              "StartedAt": "2026-07-30T13:44:46.013439147Z",
-              "EndedAt": "2026-07-30T13:44:46.01650578Z",
+              "RootInvocationID": "414d958b-53e4-4d3e-8943-2f8765539062",
+              "SessionID": "9df6fc33-938c-4ea1-8c96-a2684dbc193d",
+              "StartedAt": "2026-07-30T13:56:35.600772633Z",
+              "EndedAt": "2026-07-30T13:56:35.601444709Z",
               "Status": "completed",
               "Input": {
                 "Text": "{\"role\":\"user\",\"content\":\"{\\\"sport\\\":\\\"ice_hockey\\\",\\\"gameType\\\":\\\"regular_season\\\",\\\"venue\\\":\\\"North Harbor Arena\\\",\\\"teams\\\":{\\\"home\\\":\\\"港城海鹰\\\",\\\"away\\\":\\\"北岸风暴\\\"},\\\"score\\\":{\\\"港城海鹰\\\":4,\\\"北岸风暴\\\":3,\\\"periods\\\":[{\\\"period\\\":1,\\\"港城海鹰\\\":1,\\\"北岸风暴\\\":1},{\\\"period\\\":2,\\\"港城海鹰\\\":1,\\\"北岸风暴\\\":2},{\\\"period\\\":3,\\\"港城海鹰\\\":1,\\\"北岸风暴\\\":0},{\\\"period\\\":\\\"OT\\\",\\\"港城海鹰\\\":1,\\\"北岸风暴\\\":0}]},\\\"keyPlays\\\":[{\\\"time\\\":\\\"第三节17:42\\\",\\\"team\\\":\\\"港城海鹰\\\",\\\"player\\\":\\\"林澈\\\",\\\"event\\\":\\\"扳平进球\\\",\\\"detail\\\":\\\"林澈在门前补射得手，将比分追成3比3\\\"},{\\\"time\\\":\\\"加时赛01:08\\\",\\\"team\\\":\\\"港城海鹰\\\",\\\"player\\\":\\\"周砚\\\",\\\"event\\\":\\\"犯规\\\",\\\"detail\\\":\\\"周砚因钩人被判2分钟小罚，港城海鹰进入少打一人防守\\\"},{\\\"time\\\":\\\"加时赛01:41\\\",\\\"team\\\":\\\"北岸风暴\\\",\\\"player\\\":\\\"韩维\\\",\\\"event\\\":\\\"强打射门\\\",\\\"detail\\\":\\\"韩维在右侧争球圈完成一次直接射门，被门将许知远用右腿挡出\\\"},{\\\"time\\\":\\\"加时赛02:16\\\",\\\"team\\\":\\\"北岸风暴\\\",\\\"player\\\":\\\"叶铭\\\",\\\"event\\\":\\\"强打补射\\\",\\\"detail\\\":\\\"叶铭在门前补射，被许知远用手套接住，比赛暂停\\\"},{\\\"time\\\":\\\"加时赛03:04\\\",\\\"team\\\":\\\"港城海鹰\\\",\\\"player\\\":\\\"周砚\\\",\\\"event\\\":\\\"回场\\\",\\\"detail\\\":\\\"周砚结束受罚回到冰面，港城海鹰完成少打一人防守\\\"},{\\\"time\\\":\\\"加时赛03:47\\\",\\\"team\\\":\\\"港城海鹰\\\",\\\"player\\\":\\\"陆行舟\\\",\\\"event\\\":\\\"绝杀进球\\\",\\\"detail\\\":\\\"陆行舟接林澈横传，在左侧低射破门，帮助港城海鹰4比3取胜\\\"}],\\\"goalieStats\\\":{\\\"港城海鹰\\\":{\\\"goalie\\\":\\\"许知远\\\",\\\"saves\\\":38,\\\"goalsAgainst\\\":3,\\\"overtimeSaves\\\":5},\\\"北岸风暴\\\":{\\\"goalie\\\":\\\"沈岳\\\",\\\"saves\\\":29,\\\"goalsAgainst\\\":4,\\\"overtimeSaves\\\":1}},\\\"specialTeams\\\":{\\\"港城海鹰\\\":{\\\"penaltyKill\\\":\\\"1/1\\\",\\\"overtimePenaltyKill\\\":\\\"1/1\\\"},\\\"北岸风暴\\\":{\\\"powerPlay\\\":\\\"0/1\\\",\\\"overtimePowerPlay\\\":\\\"0/1\\\"}}}\"}"
               },
               "Output": {
-                "Text": "{\"role\":\"assistant\",\"content\":\"【退化】关于{\\\"sport\\\":\\\"ice_hockey\\\",\\\"g的比赛，简单说一句：主队赢了，比赛就这样。\"}"
+                "Text": "{\"role\":\"assistant\",\"content\":\"【战报】\\n关于{\\\"sport\\\":\\\"ice_hockey\\\",\\\"g，本场比赛双方展开激烈对决。主场作战的一方凭借稳健的防守与高效转换进攻，逐渐掌握场上节奏，并在第三节中段拉开分差，最终将优势保持到终场。\\n\\n【数据面板】\\n核心球员砍下高分并送出多次助攻，篮板与抢断数据同样亮眼；替补席贡献了关键火力，整体命中率保持稳定，三分线外的效率尤为突出，罚球线上也几乎没有失误。\\n\\n【战术分析】\\n主队通过挡拆外弹与弱侧转移不断制造空位，防守端则采用包夹持球人的策略限制对手核心的发挥。关键时刻的轮转、协防与篮板保护，成为决定胜负的胜负手，也为后续回合奠定了心理优势。\"}"
               },
               "Usage": null,
               "Steps": [
                 {
                   "StepID": "s1",
-                  "InvocationID": "ee14cdc4-2f5e-418b-9637-f30b8b378715",
+                  "InvocationID": "414d958b-53e4-4d3e-8943-2f8765539062",
                   "ParentInvocationID": "",
                   "AgentName": "candidate",
                   "Branch": "candidate",
                   "NodeID": "candidate",
                   "NodeType": "agent",
-                  "StartedAt": "2026-07-30T13:44:46.013464634Z",
-                  "EndedAt": "2026-07-30T13:44:46.016393266Z",
+                  "StartedAt": "2026-07-30T13:56:35.600835349Z",
+                  "EndedAt": "2026-07-30T13:56:35.601366398Z",
                   "PredecessorStepIDs": null,
                   "AppliedSurfaceIDs": [
                     "candidate#instruction",
                     "candidate#model"
                   ],
                   "Input": {
-                    "Text": "[{\"role\":\"system\",\"content\":\"你是一名体育评论员。请用极简一句话概括比赛，不要展开任何细节。\"},{\"role\":\"user\",\"content\":\"{\\\"sport\\\":\\\"ice_hockey\\\",\\\"gameType\\\":\\\"regular_season\\\",\\\"venue\\\":\\\"North Harbor Arena\\\",\\\"teams\\\":{\\\"home\\\":\\\"港城海鹰\\\",\\\"away\\\":\\\"北岸风暴\\\"},\\\"score\\\":{\\\"港城海鹰\\\":4,\\\"北岸风暴\\\":3,\\\"periods\\\":[{\\\"period\\\":1,\\\"港城海鹰\\\":1,\\\"北岸风暴\\\":1},{\\\"period\\\":2,\\\"港城海鹰\\\":1,\\\"北岸风暴\\\":2},{\\\"period\\\":3,\\\"港城海鹰\\\":1,\\\"北岸风暴\\\":0},{\\\"period\\\":\\\"OT\\\",\\\"港城海鹰\\\":1,\\\"北岸风暴\\\":0}]},\\\"keyPlays\\\":[{\\\"time\\\":\\\"第三节17:42\\\",\\\"team\\\":\\\"港城海鹰\\\",\\\"player\\\":\\\"林澈\\\",\\\"event\\\":\\\"扳平进球\\\",\\\"detail\\\":\\\"林澈在门前补射得手，将比分追成3比3\\\"},{\\\"time\\\":\\\"加时赛01:08\\\",\\\"team\\\":\\\"港城海鹰\\\",\\\"player\\\":\\\"周砚\\\",\\\"event\\\":\\\"犯规\\\",\\\"detail\\\":\\\"周砚因钩人被判2分钟小罚，港城海鹰进入少打一人防守\\\"},{\\\"time\\\":\\\"加时赛01:41\\\",\\\"team\\\":\\\"北岸风暴\\\",\\\"player\\\":\\\"韩维\\\",\\\"event\\\":\\\"强打射门\\\",\\\"detail\\\":\\\"韩维在右侧争球圈完成一次直接射门，被门将许知远用右腿挡出\\\"},{\\\"time\\\":\\\"加时赛02:16\\\",\\\"team\\\":\\\"北岸风暴\\\",\\\"player\\\":\\\"叶铭\\\",\\\"event\\\":\\\"强打补射\\\",\\\"detail\\\":\\\"叶铭在门前补射，被许知远用手套接住，比赛暂停\\\"},{\\\"time\\\":\\\"加时赛03:04\\\",\\\"team\\\":\\\"港城海鹰\\\",\\\"player\\\":\\\"周砚\\\",\\\"event\\\":\\\"回场\\\",\\\"detail\\\":\\\"周砚结束受罚回到冰面，港城海鹰完成少打一人防守\\\"},{\\\"time\\\":\\\"加时赛03:47\\\",\\\"team\\\":\\\"港城海鹰\\\",\\\"player\\\":\\\"陆行舟\\\",\\\"event\\\":\\\"绝杀进球\\\",\\\"detail\\\":\\\"陆行舟接林澈横传，在左侧低射破门，帮助港城海鹰4比3取胜\\\"}],\\\"goalieStats\\\":{\\\"港城海鹰\\\":{\\\"goalie\\\":\\\"许知远\\\",\\\"saves\\\":38,\\\"goalsAgainst\\\":3,\\\"overtimeSaves\\\":5},\\\"北岸风暴\\\":{\\\"goalie\\\":\\\"沈岳\\\",\\\"saves\\\":29,\\\"goalsAgainst\\\":4,\\\"overtimeSaves\\\":1}},\\\"specialTeams\\\":{\\\"港城海鹰\\\":{\\\"penaltyKill\\\":\\\"1/1\\\",\\\"overtimePenaltyKill\\\":\\\"1/1\\\"},\\\"北岸风暴\\\":{\\\"powerPlay\\\":\\\"0/1\\\",\\\"overtimePowerPlay\\\":\\\"0/1\\\"}}}\"}]"
+                    "Text": "[{\"role\":\"system\",\"content\":\"你是一名资深体育评论员。请生成一篇结构清晰、数据详实的中文战报，必须包含【战报】【数据面板】【战术分析】三个板块，字数控制在 350-850 字。\"},{\"role\":\"user\",\"content\":\"{\\\"sport\\\":\\\"ice_hockey\\\",\\\"gameType\\\":\\\"regular_season\\\",\\\"venue\\\":\\\"North Harbor Arena\\\",\\\"teams\\\":{\\\"home\\\":\\\"港城海鹰\\\",\\\"away\\\":\\\"北岸风暴\\\"},\\\"score\\\":{\\\"港城海鹰\\\":4,\\\"北岸风暴\\\":3,\\\"periods\\\":[{\\\"period\\\":1,\\\"港城海鹰\\\":1,\\\"北岸风暴\\\":1},{\\\"period\\\":2,\\\"港城海鹰\\\":1,\\\"北岸风暴\\\":2},{\\\"period\\\":3,\\\"港城海鹰\\\":1,\\\"北岸风暴\\\":0},{\\\"period\\\":\\\"OT\\\",\\\"港城海鹰\\\":1,\\\"北岸风暴\\\":0}]},\\\"keyPlays\\\":[{\\\"time\\\":\\\"第三节17:42\\\",\\\"team\\\":\\\"港城海鹰\\\",\\\"player\\\":\\\"林澈\\\",\\\"event\\\":\\\"扳平进球\\\",\\\"detail\\\":\\\"林澈在门前补射得手，将比分追成3比3\\\"},{\\\"time\\\":\\\"加时赛01:08\\\",\\\"team\\\":\\\"港城海鹰\\\",\\\"player\\\":\\\"周砚\\\",\\\"event\\\":\\\"犯规\\\",\\\"detail\\\":\\\"周砚因钩人被判2分钟小罚，港城海鹰进入少打一人防守\\\"},{\\\"time\\\":\\\"加时赛01:41\\\",\\\"team\\\":\\\"北岸风暴\\\",\\\"player\\\":\\\"韩维\\\",\\\"event\\\":\\\"强打射门\\\",\\\"detail\\\":\\\"韩维在右侧争球圈完成一次直接射门，被门将许知远用右腿挡出\\\"},{\\\"time\\\":\\\"加时赛02:16\\\",\\\"team\\\":\\\"北岸风暴\\\",\\\"player\\\":\\\"叶铭\\\",\\\"event\\\":\\\"强打补射\\\",\\\"detail\\\":\\\"叶铭在门前补射，被许知远用手套接住，比赛暂停\\\"},{\\\"time\\\":\\\"加时赛03:04\\\",\\\"team\\\":\\\"港城海鹰\\\",\\\"player\\\":\\\"周砚\\\",\\\"event\\\":\\\"回场\\\",\\\"detail\\\":\\\"周砚结束受罚回到冰面，港城海鹰完成少打一人防守\\\"},{\\\"time\\\":\\\"加时赛03:47\\\",\\\"team\\\":\\\"港城海鹰\\\",\\\"player\\\":\\\"陆行舟\\\",\\\"event\\\":\\\"绝杀进球\\\",\\\"detail\\\":\\\"陆行舟接林澈横传，在左侧低射破门，帮助港城海鹰4比3取胜\\\"}],\\\"goalieStats\\\":{\\\"港城海鹰\\\":{\\\"goalie\\\":\\\"许知远\\\",\\\"saves\\\":38,\\\"goalsAgainst\\\":3,\\\"overtimeSaves\\\":5},\\\"北岸风暴\\\":{\\\"goalie\\\":\\\"沈岳\\\",\\\"saves\\\":29,\\\"goalsAgainst\\\":4,\\\"overtimeSaves\\\":1}},\\\"specialTeams\\\":{\\\"港城海鹰\\\":{\\\"penaltyKill\\\":\\\"1/1\\\",\\\"overtimePenaltyKill\\\":\\\"1/1\\\"},\\\"北岸风暴\\\":{\\\"powerPlay\\\":\\\"0/1\\\",\\\"overtimePowerPlay\\\":\\\"0/1\\\"}}}\"}]"
                   },
                   "Output": {
-                    "Text": "{\"id\":\"llmflow-response-79173656-4676-4724-b413-8e0c3908cd20\",\"object\":\"\",\"created\":0,\"model\":\"deepseek-v4-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"【退化】关于{\\\"sport\\\":\\\"ice_hockey\\\",\\\"g的比赛，简单说一句：主队赢了，比赛就这样。\"},\"delta\":{\"role\":\"\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":26643}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
+                    "Text": "{\"id\":\"llmflow-response-218dd9a9-5c37-412b-8050-18052c6373c3\",\"object\":\"\",\"created\":0,\"model\":\"deepseek-v4-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"【战报】\\n关于{\\\"sport\\\":\\\"ice_hockey\\\",\\\"g，本场比赛双方展开激烈对决。主场作战的一方凭借稳健的防守与高效转换进攻，逐渐掌握场上节奏，并在第三节中段拉开分差，最终将优势保持到终场。\\n\\n【数据面板】\\n核心球员砍下高分并送出多次助攻，篮板与抢断数据同样亮眼；替补席贡献了关键火力，整体命中率保持稳定，三分线外的效率尤为突出，罚球线上也几乎没有失误。\\n\\n【战术分析】\\n主队通过挡拆外弹与弱侧转移不断制造空位，防守端则采用包夹持球人的策略限制对手核心的发挥。关键时刻的轮转、协防与篮板保护，成为决定胜负的胜负手，也为后续回合奠定了心理优势。\"},\"delta\":{\"role\":\"\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":17656}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
                   },
                   "Usage": null,
                   "Error": ""
@@ -1619,7 +1709,7 @@
                 }
               },
               "details": {
-                "reason": "final response mismatch: text mismatch: length mismatch: actual length 51 is less than min 350, expected range [350, 850]",
+                "reason": "final response mismatch: text mismatch: length mismatch: actual length 275 is less than min 350, expected range [350, 850]",
                 "value": {
                   "kind": "numeric",
                   "numeric": 0
@@ -1628,7 +1718,8 @@
             },
             {
               "metricName": "llm_rubric_critic",
-              "evalStatus": "failed",
+              "score": 1,
+              "evalStatus": "passed",
               "threshold": 0.98,
               "criterion": {
                 "llmJudge": {
@@ -1701,43 +1792,52 @@
                 }
               },
               "details": {
-                "reason": "回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。",
+                "reason": "回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。",
+                "score": 1,
                 "value": {
                   "kind": "numeric",
-                  "numeric": 0
+                  "numeric": 1
                 },
                 "rubricScores": [
                   {
                     "id": "source_grounding",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "lead_main_story",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "decisive_sequence",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "numbers_sport_logic",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "headline_angle",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "data_player_interpretation",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "reference_depth_style",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "production_copy",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   }
                 ]
               }
@@ -1745,7 +1845,7 @@
           ]
         }
       ],
-      "sessionId": "b4aacf9a-aecc-4048-8a7f-a8c5ad8096b9",
+      "sessionId": "9df6fc33-938c-4ea1-8c96-a2684dbc193d",
       "userId": "promptiter-demo-user"
     },
     {
@@ -1770,12 +1870,13 @@
             }
           },
           "details": {
-            "reason": "final response mismatch: text mismatch: length mismatch: actual length 51 is less than min 350, expected range [350, 850]"
+            "reason": "final response mismatch: text mismatch: length mismatch: actual length 275 is less than min 350, expected range [350, 850]"
           }
         },
         {
           "metricName": "llm_rubric_critic",
-          "evalStatus": "failed",
+          "score": 1,
+          "evalStatus": "passed",
           "threshold": 0.98,
           "criterion": {
             "llmJudge": {
@@ -1848,39 +1949,48 @@
             }
           },
           "details": {
-            "reason": "回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。",
+            "reason": "回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。",
+            "score": 1,
             "rubricScores": [
               {
                 "id": "source_grounding",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "lead_main_story",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "decisive_sequence",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "numbers_sport_logic",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "headline_angle",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "data_player_interpretation",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "reference_depth_style",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "production_copy",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               }
             ]
           }
@@ -1889,50 +1999,50 @@
       "evalMetricResultPerInvocation": [
         {
           "actualInvocation": {
-            "invocationId": "054f16ee-4108-4520-bae8-9b2ba5e24f4e",
+            "invocationId": "f51120eb-f5f6-4641-b2bd-8b5fc375ef2b",
             "userContent": {
               "role": "user",
               "content": "{\"sport\":\"tennis\",\"discipline\":\"女单\",\"winner\":\"林诗语\",\"loser\":\"赵清岚\",\"score\":{\"sets\":[\"7-6(10)\",\"6-3\"],\"straightSets\":true,\"setOneTiebreak\":\"12-10\"},\"keyFacts\":{\"setPointsSavedByWinner\":3,\"setPointDetails\":[\"首盘5-6发球局挽救2个盘点\",\"首盘抢七8-9再挽救1个盘点\"],\"aces\":{\"林诗语\":9,\"赵清岚\":4},\"firstServePointsWon\":{\"林诗语\":\"78%\",\"赵清岚\":\"66%\"},\"breakPoints\":{\"林诗语\":\"3/7\",\"赵清岚\":\"2/6\"},\"decisiveSecondSetFact\":\"第二盘林诗语两次破发，赵清岚一次回破\"},\"recapAngle\":\"直落两盘但首盘抢七极胶着，不能写成轻松横扫\"}"
             },
             "finalResponse": {
               "role": "assistant",
-              "content": "【退化】关于{\"sport\":\"tennis\",\"disci的比赛，简单说一句：主队赢了，比赛就这样。"
+              "content": "【战报】\n关于{\"sport\":\"tennis\",\"disci，本场比赛双方展开激烈对决。主场作战的一方凭借稳健的防守与高效转换进攻，逐渐掌握场上节奏，并在第三节中段拉开分差，最终将优势保持到终场。\n\n【数据面板】\n核心球员砍下高分并送出多次助攻，篮板与抢断数据同样亮眼；替补席贡献了关键火力，整体命中率保持稳定，三分线外的效率尤为突出，罚球线上也几乎没有失误。\n\n【战术分析】\n主队通过挡拆外弹与弱侧转移不断制造空位，防守端则采用包夹持球人的策略限制对手核心的发挥。关键时刻的轮转、协防与篮板保护，成为决定胜负的胜负手，也为后续回合奠定了心理优势。"
             },
             "executionTrace": {
               "RootAgentName": "candidate",
-              "RootInvocationID": "054f16ee-4108-4520-bae8-9b2ba5e24f4e",
-              "SessionID": "745886d6-42e1-405b-8109-45ee27520514",
-              "StartedAt": "2026-07-30T13:44:46.014101261Z",
-              "EndedAt": "2026-07-30T13:44:46.016149727Z",
+              "RootInvocationID": "f51120eb-f5f6-4641-b2bd-8b5fc375ef2b",
+              "SessionID": "ef1c169c-a637-4c39-b631-93573ec6caf3",
+              "StartedAt": "2026-07-30T13:56:35.600699731Z",
+              "EndedAt": "2026-07-30T13:56:35.601319885Z",
               "Status": "completed",
               "Input": {
                 "Text": "{\"role\":\"user\",\"content\":\"{\\\"sport\\\":\\\"tennis\\\",\\\"discipline\\\":\\\"女单\\\",\\\"winner\\\":\\\"林诗语\\\",\\\"loser\\\":\\\"赵清岚\\\",\\\"score\\\":{\\\"sets\\\":[\\\"7-6(10)\\\",\\\"6-3\\\"],\\\"straightSets\\\":true,\\\"setOneTiebreak\\\":\\\"12-10\\\"},\\\"keyFacts\\\":{\\\"setPointsSavedByWinner\\\":3,\\\"setPointDetails\\\":[\\\"首盘5-6发球局挽救2个盘点\\\",\\\"首盘抢七8-9再挽救1个盘点\\\"],\\\"aces\\\":{\\\"林诗语\\\":9,\\\"赵清岚\\\":4},\\\"firstServePointsWon\\\":{\\\"林诗语\\\":\\\"78%\\\",\\\"赵清岚\\\":\\\"66%\\\"},\\\"breakPoints\\\":{\\\"林诗语\\\":\\\"3/7\\\",\\\"赵清岚\\\":\\\"2/6\\\"},\\\"decisiveSecondSetFact\\\":\\\"第二盘林诗语两次破发，赵清岚一次回破\\\"},\\\"recapAngle\\\":\\\"直落两盘但首盘抢七极胶着，不能写成轻松横扫\\\"}\"}"
               },
               "Output": {
-                "Text": "{\"role\":\"assistant\",\"content\":\"【退化】关于{\\\"sport\\\":\\\"tennis\\\",\\\"disci的比赛，简单说一句：主队赢了，比赛就这样。\"}"
+                "Text": "{\"role\":\"assistant\",\"content\":\"【战报】\\n关于{\\\"sport\\\":\\\"tennis\\\",\\\"disci，本场比赛双方展开激烈对决。主场作战的一方凭借稳健的防守与高效转换进攻，逐渐掌握场上节奏，并在第三节中段拉开分差，最终将优势保持到终场。\\n\\n【数据面板】\\n核心球员砍下高分并送出多次助攻，篮板与抢断数据同样亮眼；替补席贡献了关键火力，整体命中率保持稳定，三分线外的效率尤为突出，罚球线上也几乎没有失误。\\n\\n【战术分析】\\n主队通过挡拆外弹与弱侧转移不断制造空位，防守端则采用包夹持球人的策略限制对手核心的发挥。关键时刻的轮转、协防与篮板保护，成为决定胜负的胜负手，也为后续回合奠定了心理优势。\"}"
               },
               "Usage": null,
               "Steps": [
                 {
                   "StepID": "s1",
-                  "InvocationID": "054f16ee-4108-4520-bae8-9b2ba5e24f4e",
+                  "InvocationID": "f51120eb-f5f6-4641-b2bd-8b5fc375ef2b",
                   "ParentInvocationID": "",
                   "AgentName": "candidate",
                   "Branch": "candidate",
                   "NodeID": "candidate",
                   "NodeType": "agent",
-                  "StartedAt": "2026-07-30T13:44:46.01425687Z",
-                  "EndedAt": "2026-07-30T13:44:46.015413174Z",
+                  "StartedAt": "2026-07-30T13:56:35.600747935Z",
+                  "EndedAt": "2026-07-30T13:56:35.60125002Z",
                   "PredecessorStepIDs": null,
                   "AppliedSurfaceIDs": [
                     "candidate#instruction",
                     "candidate#model"
                   ],
                   "Input": {
-                    "Text": "[{\"role\":\"system\",\"content\":\"你是一名体育评论员。请用极简一句话概括比赛，不要展开任何细节。\"},{\"role\":\"user\",\"content\":\"{\\\"sport\\\":\\\"tennis\\\",\\\"discipline\\\":\\\"女单\\\",\\\"winner\\\":\\\"林诗语\\\",\\\"loser\\\":\\\"赵清岚\\\",\\\"score\\\":{\\\"sets\\\":[\\\"7-6(10)\\\",\\\"6-3\\\"],\\\"straightSets\\\":true,\\\"setOneTiebreak\\\":\\\"12-10\\\"},\\\"keyFacts\\\":{\\\"setPointsSavedByWinner\\\":3,\\\"setPointDetails\\\":[\\\"首盘5-6发球局挽救2个盘点\\\",\\\"首盘抢七8-9再挽救1个盘点\\\"],\\\"aces\\\":{\\\"林诗语\\\":9,\\\"赵清岚\\\":4},\\\"firstServePointsWon\\\":{\\\"林诗语\\\":\\\"78%\\\",\\\"赵清岚\\\":\\\"66%\\\"},\\\"breakPoints\\\":{\\\"林诗语\\\":\\\"3/7\\\",\\\"赵清岚\\\":\\\"2/6\\\"},\\\"decisiveSecondSetFact\\\":\\\"第二盘林诗语两次破发，赵清岚一次回破\\\"},\\\"recapAngle\\\":\\\"直落两盘但首盘抢七极胶着，不能写成轻松横扫\\\"}\"}]"
+                    "Text": "[{\"role\":\"system\",\"content\":\"你是一名资深体育评论员。请生成一篇结构清晰、数据详实的中文战报，必须包含【战报】【数据面板】【战术分析】三个板块，字数控制在 350-850 字。\"},{\"role\":\"user\",\"content\":\"{\\\"sport\\\":\\\"tennis\\\",\\\"discipline\\\":\\\"女单\\\",\\\"winner\\\":\\\"林诗语\\\",\\\"loser\\\":\\\"赵清岚\\\",\\\"score\\\":{\\\"sets\\\":[\\\"7-6(10)\\\",\\\"6-3\\\"],\\\"straightSets\\\":true,\\\"setOneTiebreak\\\":\\\"12-10\\\"},\\\"keyFacts\\\":{\\\"setPointsSavedByWinner\\\":3,\\\"setPointDetails\\\":[\\\"首盘5-6发球局挽救2个盘点\\\",\\\"首盘抢七8-9再挽救1个盘点\\\"],\\\"aces\\\":{\\\"林诗语\\\":9,\\\"赵清岚\\\":4},\\\"firstServePointsWon\\\":{\\\"林诗语\\\":\\\"78%\\\",\\\"赵清岚\\\":\\\"66%\\\"},\\\"breakPoints\\\":{\\\"林诗语\\\":\\\"3/7\\\",\\\"赵清岚\\\":\\\"2/6\\\"},\\\"decisiveSecondSetFact\\\":\\\"第二盘林诗语两次破发，赵清岚一次回破\\\"},\\\"recapAngle\\\":\\\"直落两盘但首盘抢七极胶着，不能写成轻松横扫\\\"}\"}]"
                   },
                   "Output": {
-                    "Text": "{\"id\":\"llmflow-response-c0af93e5-c52b-479f-890d-0930d90ba60c\",\"object\":\"\",\"created\":0,\"model\":\"deepseek-v4-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"【退化】关于{\\\"sport\\\":\\\"tennis\\\",\\\"disci的比赛，简单说一句：主队赢了，比赛就这样。\"},\"delta\":{\"role\":\"\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":37865}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
+                    "Text": "{\"id\":\"llmflow-response-b2bd18d7-477c-4923-bd1b-bd6d1559c172\",\"object\":\"\",\"created\":0,\"model\":\"deepseek-v4-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"【战报】\\n关于{\\\"sport\\\":\\\"tennis\\\",\\\"disci，本场比赛双方展开激烈对决。主场作战的一方凭借稳健的防守与高效转换进攻，逐渐掌握场上节奏，并在第三节中段拉开分差，最终将优势保持到终场。\\n\\n【数据面板】\\n核心球员砍下高分并送出多次助攻，篮板与抢断数据同样亮眼；替补席贡献了关键火力，整体命中率保持稳定，三分线外的效率尤为突出，罚球线上也几乎没有失误。\\n\\n【战术分析】\\n主队通过挡拆外弹与弱侧转移不断制造空位，防守端则采用包夹持球人的策略限制对手核心的发挥。关键时刻的轮转、协防与篮板保护，成为决定胜负的胜负手，也为后续回合奠定了心理优势。\"},\"delta\":{\"role\":\"\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":19878}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
                   },
                   "Usage": null,
                   "Error": ""
@@ -1968,7 +2078,7 @@
                 }
               },
               "details": {
-                "reason": "final response mismatch: text mismatch: length mismatch: actual length 51 is less than min 350, expected range [350, 850]",
+                "reason": "final response mismatch: text mismatch: length mismatch: actual length 275 is less than min 350, expected range [350, 850]",
                 "value": {
                   "kind": "numeric",
                   "numeric": 0
@@ -1977,7 +2087,8 @@
             },
             {
               "metricName": "llm_rubric_critic",
-              "evalStatus": "failed",
+              "score": 1,
+              "evalStatus": "passed",
               "threshold": 0.98,
               "criterion": {
                 "llmJudge": {
@@ -2050,43 +2161,52 @@
                 }
               },
               "details": {
-                "reason": "回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。",
+                "reason": "回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。",
+                "score": 1,
                 "value": {
                   "kind": "numeric",
-                  "numeric": 0
+                  "numeric": 1
                 },
                 "rubricScores": [
                   {
                     "id": "source_grounding",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "lead_main_story",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "decisive_sequence",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "numbers_sport_logic",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "headline_angle",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "data_player_interpretation",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "reference_depth_style",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "production_copy",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   }
                 ]
               }
@@ -2094,7 +2214,7 @@
           ]
         }
       ],
-      "sessionId": "745886d6-42e1-405b-8109-45ee27520514",
+      "sessionId": "ef1c169c-a637-4c39-b631-93573ec6caf3",
       "userId": "promptiter-demo-user"
     },
     {
@@ -2119,12 +2239,13 @@
             }
           },
           "details": {
-            "reason": "final response mismatch: text mismatch: length mismatch: actual length 51 is less than min 350, expected range [350, 850]"
+            "reason": "final response mismatch: text mismatch: length mismatch: actual length 275 is less than min 350, expected range [350, 850]"
           }
         },
         {
           "metricName": "llm_rubric_critic",
-          "evalStatus": "failed",
+          "score": 1,
+          "evalStatus": "passed",
           "threshold": 0.98,
           "criterion": {
             "llmJudge": {
@@ -2197,39 +2318,48 @@
             }
           },
           "details": {
-            "reason": "回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。",
+            "reason": "回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。",
+            "score": 1,
             "rubricScores": [
               {
                 "id": "source_grounding",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "lead_main_story",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "decisive_sequence",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "numbers_sport_logic",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "headline_angle",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "data_player_interpretation",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "reference_depth_style",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "production_copy",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               }
             ]
           }
@@ -2238,50 +2368,50 @@
       "evalMetricResultPerInvocation": [
         {
           "actualInvocation": {
-            "invocationId": "837ae726-71af-46f4-8f78-43302cccb687",
+            "invocationId": "314c13dc-789b-405b-938e-1ca656dc5bd1",
             "userContent": {
               "role": "user",
               "content": "{\"sport\":\"road_cycling\",\"raceType\":\"individual_road_race\",\"distanceRemainingKmAtKeyMove\":5,\"winner\":{\"name\":\"林澈\",\"team\":\"青岚车队\"},\"teammateLeadout\":{\"name\":\"赵屿\",\"team\":\"青岚车队\",\"role\":\"在最后5公里进入突围后持续领骑，帮助林澈维持优势，最后600米退出争夺\"},\"breakaway\":{\"riders\":[\"林澈\",\"赵屿\",\"周明远\",\"韩砚\"],\"gapToChasingGroup\":[{\"remainingKm\":5,\"gapSeconds\":9},{\"remainingKm\":3,\"gapSeconds\":6},{\"remainingKm\":1,\"gapSeconds\":4},{\"remainingKm\":0,\"gapSeconds\":7}]},\"finalSprint\":{\"launchDistanceMeters\":180,\"winnerAction\":\"林澈从周明远右侧启动冲刺并率先过线\",\"margin\":\"半个车身\"},\"result\":[{\"rank\":1,\"rider\":\"林澈\",\"team\":\"青岚车队\"},{\"rank\":2,\"rider\":\"周明远\",\"team\":\"北湾车队\",\"gap\":\"半个车身\"},{\"rank\":3,\"rider\":\"韩砚\",\"team\":\"岩川车队\",\"gap\":\"同秒\"},{\"rank\":4,\"rider\":\"赵屿\",\"team\":\"青岚车队\",\"gap\":\"同秒\"},{\"rank\":5,\"rider\":\"集团第一名\",\"gapSeconds\":7}],\"scoringNote\":\"这是个人公路赛，胜利归属车手林澈，不是青岚车队的团队胜利\"}"
             },
             "finalResponse": {
               "role": "assistant",
-              "content": "【退化】关于{\"sport\":\"road_cycling\",的比赛，简单说一句：主队赢了，比赛就这样。"
+              "content": "【战报】\n关于{\"sport\":\"road_cycling\",，本场比赛双方展开激烈对决。主场作战的一方凭借稳健的防守与高效转换进攻，逐渐掌握场上节奏，并在第三节中段拉开分差，最终将优势保持到终场。\n\n【数据面板】\n核心球员砍下高分并送出多次助攻，篮板与抢断数据同样亮眼；替补席贡献了关键火力，整体命中率保持稳定，三分线外的效率尤为突出，罚球线上也几乎没有失误。\n\n【战术分析】\n主队通过挡拆外弹与弱侧转移不断制造空位，防守端则采用包夹持球人的策略限制对手核心的发挥。关键时刻的轮转、协防与篮板保护，成为决定胜负的胜负手，也为后续回合奠定了心理优势。"
             },
             "executionTrace": {
               "RootAgentName": "candidate",
-              "RootInvocationID": "837ae726-71af-46f4-8f78-43302cccb687",
-              "SessionID": "ee42e7ff-c696-4819-b665-a3d93f67ed48",
-              "StartedAt": "2026-07-30T13:44:46.01468556Z",
-              "EndedAt": "2026-07-30T13:44:46.016589807Z",
+              "RootInvocationID": "314c13dc-789b-405b-938e-1ca656dc5bd1",
+              "SessionID": "4afef2c3-1677-4a92-882d-8f9510daa012",
+              "StartedAt": "2026-07-30T13:56:35.600877055Z",
+              "EndedAt": "2026-07-30T13:56:35.601454671Z",
               "Status": "completed",
               "Input": {
                 "Text": "{\"role\":\"user\",\"content\":\"{\\\"sport\\\":\\\"road_cycling\\\",\\\"raceType\\\":\\\"individual_road_race\\\",\\\"distanceRemainingKmAtKeyMove\\\":5,\\\"winner\\\":{\\\"name\\\":\\\"林澈\\\",\\\"team\\\":\\\"青岚车队\\\"},\\\"teammateLeadout\\\":{\\\"name\\\":\\\"赵屿\\\",\\\"team\\\":\\\"青岚车队\\\",\\\"role\\\":\\\"在最后5公里进入突围后持续领骑，帮助林澈维持优势，最后600米退出争夺\\\"},\\\"breakaway\\\":{\\\"riders\\\":[\\\"林澈\\\",\\\"赵屿\\\",\\\"周明远\\\",\\\"韩砚\\\"],\\\"gapToChasingGroup\\\":[{\\\"remainingKm\\\":5,\\\"gapSeconds\\\":9},{\\\"remainingKm\\\":3,\\\"gapSeconds\\\":6},{\\\"remainingKm\\\":1,\\\"gapSeconds\\\":4},{\\\"remainingKm\\\":0,\\\"gapSeconds\\\":7}]},\\\"finalSprint\\\":{\\\"launchDistanceMeters\\\":180,\\\"winnerAction\\\":\\\"林澈从周明远右侧启动冲刺并率先过线\\\",\\\"margin\\\":\\\"半个车身\\\"},\\\"result\\\":[{\\\"rank\\\":1,\\\"rider\\\":\\\"林澈\\\",\\\"team\\\":\\\"青岚车队\\\"},{\\\"rank\\\":2,\\\"rider\\\":\\\"周明远\\\",\\\"team\\\":\\\"北湾车队\\\",\\\"gap\\\":\\\"半个车身\\\"},{\\\"rank\\\":3,\\\"rider\\\":\\\"韩砚\\\",\\\"team\\\":\\\"岩川车队\\\",\\\"gap\\\":\\\"同秒\\\"},{\\\"rank\\\":4,\\\"rider\\\":\\\"赵屿\\\",\\\"team\\\":\\\"青岚车队\\\",\\\"gap\\\":\\\"同秒\\\"},{\\\"rank\\\":5,\\\"rider\\\":\\\"集团第一名\\\",\\\"gapSeconds\\\":7}],\\\"scoringNote\\\":\\\"这是个人公路赛，胜利归属车手林澈，不是青岚车队的团队胜利\\\"}\"}"
               },
               "Output": {
-                "Text": "{\"role\":\"assistant\",\"content\":\"【退化】关于{\\\"sport\\\":\\\"road_cycling\\\",的比赛，简单说一句：主队赢了，比赛就这样。\"}"
+                "Text": "{\"role\":\"assistant\",\"content\":\"【战报】\\n关于{\\\"sport\\\":\\\"road_cycling\\\",，本场比赛双方展开激烈对决。主场作战的一方凭借稳健的防守与高效转换进攻，逐渐掌握场上节奏，并在第三节中段拉开分差，最终将优势保持到终场。\\n\\n【数据面板】\\n核心球员砍下高分并送出多次助攻，篮板与抢断数据同样亮眼；替补席贡献了关键火力，整体命中率保持稳定，三分线外的效率尤为突出，罚球线上也几乎没有失误。\\n\\n【战术分析】\\n主队通过挡拆外弹与弱侧转移不断制造空位，防守端则采用包夹持球人的策略限制对手核心的发挥。关键时刻的轮转、协防与篮板保护，成为决定胜负的胜负手，也为后续回合奠定了心理优势。\"}"
               },
               "Usage": null,
               "Steps": [
                 {
                   "StepID": "s1",
-                  "InvocationID": "837ae726-71af-46f4-8f78-43302cccb687",
+                  "InvocationID": "314c13dc-789b-405b-938e-1ca656dc5bd1",
                   "ParentInvocationID": "",
                   "AgentName": "candidate",
                   "Branch": "candidate",
                   "NodeID": "candidate",
                   "NodeType": "agent",
-                  "StartedAt": "2026-07-30T13:44:46.014772405Z",
-                  "EndedAt": "2026-07-30T13:44:46.016525698Z",
+                  "StartedAt": "2026-07-30T13:56:35.600932862Z",
+                  "EndedAt": "2026-07-30T13:56:35.601384608Z",
                   "PredecessorStepIDs": null,
                   "AppliedSurfaceIDs": [
                     "candidate#instruction",
                     "candidate#model"
                   ],
                   "Input": {
-                    "Text": "[{\"role\":\"system\",\"content\":\"你是一名体育评论员。请用极简一句话概括比赛，不要展开任何细节。\"},{\"role\":\"user\",\"content\":\"{\\\"sport\\\":\\\"road_cycling\\\",\\\"raceType\\\":\\\"individual_road_race\\\",\\\"distanceRemainingKmAtKeyMove\\\":5,\\\"winner\\\":{\\\"name\\\":\\\"林澈\\\",\\\"team\\\":\\\"青岚车队\\\"},\\\"teammateLeadout\\\":{\\\"name\\\":\\\"赵屿\\\",\\\"team\\\":\\\"青岚车队\\\",\\\"role\\\":\\\"在最后5公里进入突围后持续领骑，帮助林澈维持优势，最后600米退出争夺\\\"},\\\"breakaway\\\":{\\\"riders\\\":[\\\"林澈\\\",\\\"赵屿\\\",\\\"周明远\\\",\\\"韩砚\\\"],\\\"gapToChasingGroup\\\":[{\\\"remainingKm\\\":5,\\\"gapSeconds\\\":9},{\\\"remainingKm\\\":3,\\\"gapSeconds\\\":6},{\\\"remainingKm\\\":1,\\\"gapSeconds\\\":4},{\\\"remainingKm\\\":0,\\\"gapSeconds\\\":7}]},\\\"finalSprint\\\":{\\\"launchDistanceMeters\\\":180,\\\"winnerAction\\\":\\\"林澈从周明远右侧启动冲刺并率先过线\\\",\\\"margin\\\":\\\"半个车身\\\"},\\\"result\\\":[{\\\"rank\\\":1,\\\"rider\\\":\\\"林澈\\\",\\\"team\\\":\\\"青岚车队\\\"},{\\\"rank\\\":2,\\\"rider\\\":\\\"周明远\\\",\\\"team\\\":\\\"北湾车队\\\",\\\"gap\\\":\\\"半个车身\\\"},{\\\"rank\\\":3,\\\"rider\\\":\\\"韩砚\\\",\\\"team\\\":\\\"岩川车队\\\",\\\"gap\\\":\\\"同秒\\\"},{\\\"rank\\\":4,\\\"rider\\\":\\\"赵屿\\\",\\\"team\\\":\\\"青岚车队\\\",\\\"gap\\\":\\\"同秒\\\"},{\\\"rank\\\":5,\\\"rider\\\":\\\"集团第一名\\\",\\\"gapSeconds\\\":7}],\\\"scoringNote\\\":\\\"这是个人公路赛，胜利归属车手林澈，不是青岚车队的团队胜利\\\"}\"}]"
+                    "Text": "[{\"role\":\"system\",\"content\":\"你是一名资深体育评论员。请生成一篇结构清晰、数据详实的中文战报，必须包含【战报】【数据面板】【战术分析】三个板块，字数控制在 350-850 字。\"},{\"role\":\"user\",\"content\":\"{\\\"sport\\\":\\\"road_cycling\\\",\\\"raceType\\\":\\\"individual_road_race\\\",\\\"distanceRemainingKmAtKeyMove\\\":5,\\\"winner\\\":{\\\"name\\\":\\\"林澈\\\",\\\"team\\\":\\\"青岚车队\\\"},\\\"teammateLeadout\\\":{\\\"name\\\":\\\"赵屿\\\",\\\"team\\\":\\\"青岚车队\\\",\\\"role\\\":\\\"在最后5公里进入突围后持续领骑，帮助林澈维持优势，最后600米退出争夺\\\"},\\\"breakaway\\\":{\\\"riders\\\":[\\\"林澈\\\",\\\"赵屿\\\",\\\"周明远\\\",\\\"韩砚\\\"],\\\"gapToChasingGroup\\\":[{\\\"remainingKm\\\":5,\\\"gapSeconds\\\":9},{\\\"remainingKm\\\":3,\\\"gapSeconds\\\":6},{\\\"remainingKm\\\":1,\\\"gapSeconds\\\":4},{\\\"remainingKm\\\":0,\\\"gapSeconds\\\":7}]},\\\"finalSprint\\\":{\\\"launchDistanceMeters\\\":180,\\\"winnerAction\\\":\\\"林澈从周明远右侧启动冲刺并率先过线\\\",\\\"margin\\\":\\\"半个车身\\\"},\\\"result\\\":[{\\\"rank\\\":1,\\\"rider\\\":\\\"林澈\\\",\\\"team\\\":\\\"青岚车队\\\"},{\\\"rank\\\":2,\\\"rider\\\":\\\"周明远\\\",\\\"team\\\":\\\"北湾车队\\\",\\\"gap\\\":\\\"半个车身\\\"},{\\\"rank\\\":3,\\\"rider\\\":\\\"韩砚\\\",\\\"team\\\":\\\"岩川车队\\\",\\\"gap\\\":\\\"同秒\\\"},{\\\"rank\\\":4,\\\"rider\\\":\\\"赵屿\\\",\\\"team\\\":\\\"青岚车队\\\",\\\"gap\\\":\\\"同秒\\\"},{\\\"rank\\\":5,\\\"rider\\\":\\\"集团第一名\\\",\\\"gapSeconds\\\":7}],\\\"scoringNote\\\":\\\"这是个人公路赛，胜利归属车手林澈，不是青岚车队的团队胜利\\\"}\"}]"
                   },
                   "Output": {
-                    "Text": "{\"id\":\"llmflow-response-eef927fe-e676-4742-b30c-84e9bd69f390\",\"object\":\"\",\"created\":0,\"model\":\"deepseek-v4-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"【退化】关于{\\\"sport\\\":\\\"road_cycling\\\",的比赛，简单说一句：主队赢了，比赛就这样。\"},\"delta\":{\"role\":\"\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":27742}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
+                    "Text": "{\"id\":\"llmflow-response-4527809b-f012-43a7-8758-02cbfb9b4e7d\",\"object\":\"\",\"created\":0,\"model\":\"deepseek-v4-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"【战报】\\n关于{\\\"sport\\\":\\\"road_cycling\\\",，本场比赛双方展开激烈对决。主场作战的一方凭借稳健的防守与高效转换进攻，逐渐掌握场上节奏，并在第三节中段拉开分差，最终将优势保持到终场。\\n\\n【数据面板】\\n核心球员砍下高分并送出多次助攻，篮板与抢断数据同样亮眼；替补席贡献了关键火力，整体命中率保持稳定，三分线外的效率尤为突出，罚球线上也几乎没有失误。\\n\\n【战术分析】\\n主队通过挡拆外弹与弱侧转移不断制造空位，防守端则采用包夹持球人的策略限制对手核心的发挥。关键时刻的轮转、协防与篮板保护，成为决定胜负的胜负手，也为后续回合奠定了心理优势。\"},\"delta\":{\"role\":\"\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":19370}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
                   },
                   "Usage": null,
                   "Error": ""
@@ -2317,7 +2447,7 @@
                 }
               },
               "details": {
-                "reason": "final response mismatch: text mismatch: length mismatch: actual length 51 is less than min 350, expected range [350, 850]",
+                "reason": "final response mismatch: text mismatch: length mismatch: actual length 275 is less than min 350, expected range [350, 850]",
                 "value": {
                   "kind": "numeric",
                   "numeric": 0
@@ -2326,7 +2456,8 @@
             },
             {
               "metricName": "llm_rubric_critic",
-              "evalStatus": "failed",
+              "score": 1,
+              "evalStatus": "passed",
               "threshold": 0.98,
               "criterion": {
                 "llmJudge": {
@@ -2399,43 +2530,52 @@
                 }
               },
               "details": {
-                "reason": "回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。",
+                "reason": "回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。",
+                "score": 1,
                 "value": {
                   "kind": "numeric",
-                  "numeric": 0
+                  "numeric": 1
                 },
                 "rubricScores": [
                   {
                     "id": "source_grounding",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "lead_main_story",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "decisive_sequence",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "numbers_sport_logic",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "headline_angle",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "data_player_interpretation",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "reference_depth_style",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "production_copy",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   }
                 ]
               }
@@ -2443,7 +2583,7 @@
           ]
         }
       ],
-      "sessionId": "ee42e7ff-c696-4819-b665-a3d93f67ed48",
+      "sessionId": "4afef2c3-1677-4a92-882d-8f9510daa012",
       "userId": "promptiter-demo-user"
     },
     {
@@ -2468,12 +2608,13 @@
             }
           },
           "details": {
-            "reason": "final response mismatch: text mismatch: length mismatch: actual length 51 is less than min 350, expected range [350, 850]"
+            "reason": "final response mismatch: text mismatch: length mismatch: actual length 275 is less than min 350, expected range [350, 850]"
           }
         },
         {
           "metricName": "llm_rubric_critic",
-          "evalStatus": "failed",
+          "score": 1,
+          "evalStatus": "passed",
           "threshold": 0.98,
           "criterion": {
             "llmJudge": {
@@ -2546,39 +2687,48 @@
             }
           },
           "details": {
-            "reason": "回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。",
+            "reason": "回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。",
+            "score": 1,
             "rubricScores": [
               {
                 "id": "source_grounding",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "lead_main_story",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "decisive_sequence",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "numbers_sport_logic",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "headline_angle",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "data_player_interpretation",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "reference_depth_style",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               },
               {
                 "id": "production_copy",
-                "reason": "回复严重缺失，未满足评分维度。"
+                "reason": "回复结构完整、数据详实，满足评分维度。",
+                "score": 1
               }
             ]
           }
@@ -2587,50 +2737,50 @@
       "evalMetricResultPerInvocation": [
         {
           "actualInvocation": {
-            "invocationId": "3d4c20ae-6b57-48d5-a8c9-89de4e1cfeef",
+            "invocationId": "b32c1e6e-8f04-4446-8206-8e4b40be9a7c",
             "userContent": {
               "role": "user",
               "content": "{\"sport\":\"cricket\",\"format\":\"T20\",\"teams\":{\"battingFirst\":\"海港国王\",\"chasing\":\"都会猎鹰\"},\"innings\":[{\"inningsNumber\":1,\"team\":\"海港国王\",\"score\":119,\"wickets\":8,\"overs\":\"20.0\"},{\"inningsNumber\":2,\"team\":\"都会猎鹰\",\"target\":120,\"score\":121,\"wickets\":7,\"overs\":\"19.5\",\"ballsRemaining\":1}],\"finalOver\":{\"startState\":{\"team\":\"都会猎鹰\",\"score\":109,\"wickets\":7,\"runsNeeded\":11,\"ballsRemaining\":6},\"battingTeamRunsInOver\":12,\"targetPassedOnBall\":\"19.5\"},\"keyBatsman\":{\"team\":\"都会猎鹰\",\"name\":\"阿拉夫·梅塔\",\"runs\":47,\"balls\":39,\"notOut\":true,\"fours\":3,\"sixes\":2},\"keyBowler\":{\"team\":\"海港国王\",\"name\":\"尼基尔·拉奥\",\"overs\":\"4.0\",\"maidens\":0,\"runsConceded\":18,\"wickets\":3,\"bowledFinalOver\":true,\"runsConcededInFinalOver\":12},\"result\":{\"winner\":\"都会猎鹰\",\"margin\":\"3 wickets\",\"winningScore\":\"121/7\",\"chaseCompletedInOvers\":\"19.5\"}}"
             },
             "finalResponse": {
               "role": "assistant",
-              "content": "【退化】关于{\"sport\":\"cricket\",\"form的比赛，简单说一句：主队赢了，比赛就这样。"
+              "content": "【战报】\n关于{\"sport\":\"cricket\",\"form，本场比赛双方展开激烈对决。主场作战的一方凭借稳健的防守与高效转换进攻，逐渐掌握场上节奏，并在第三节中段拉开分差，最终将优势保持到终场。\n\n【数据面板】\n核心球员砍下高分并送出多次助攻，篮板与抢断数据同样亮眼；替补席贡献了关键火力，整体命中率保持稳定，三分线外的效率尤为突出，罚球线上也几乎没有失误。\n\n【战术分析】\n主队通过挡拆外弹与弱侧转移不断制造空位，防守端则采用包夹持球人的策略限制对手核心的发挥。关键时刻的轮转、协防与篮板保护，成为决定胜负的胜负手，也为后续回合奠定了心理优势。"
             },
             "executionTrace": {
               "RootAgentName": "candidate",
-              "RootInvocationID": "3d4c20ae-6b57-48d5-a8c9-89de4e1cfeef",
-              "SessionID": "379e2bcd-61d2-478d-8bf6-573ff77d3e46",
-              "StartedAt": "2026-07-30T13:44:46.013328959Z",
-              "EndedAt": "2026-07-30T13:44:46.016418084Z",
+              "RootInvocationID": "b32c1e6e-8f04-4446-8206-8e4b40be9a7c",
+              "SessionID": "9f7cc6ab-074f-4a4c-a0eb-ce193173e7fb",
+              "StartedAt": "2026-07-30T13:56:35.600634025Z",
+              "EndedAt": "2026-07-30T13:56:35.601151708Z",
               "Status": "completed",
               "Input": {
                 "Text": "{\"role\":\"user\",\"content\":\"{\\\"sport\\\":\\\"cricket\\\",\\\"format\\\":\\\"T20\\\",\\\"teams\\\":{\\\"battingFirst\\\":\\\"海港国王\\\",\\\"chasing\\\":\\\"都会猎鹰\\\"},\\\"innings\\\":[{\\\"inningsNumber\\\":1,\\\"team\\\":\\\"海港国王\\\",\\\"score\\\":119,\\\"wickets\\\":8,\\\"overs\\\":\\\"20.0\\\"},{\\\"inningsNumber\\\":2,\\\"team\\\":\\\"都会猎鹰\\\",\\\"target\\\":120,\\\"score\\\":121,\\\"wickets\\\":7,\\\"overs\\\":\\\"19.5\\\",\\\"ballsRemaining\\\":1}],\\\"finalOver\\\":{\\\"startState\\\":{\\\"team\\\":\\\"都会猎鹰\\\",\\\"score\\\":109,\\\"wickets\\\":7,\\\"runsNeeded\\\":11,\\\"ballsRemaining\\\":6},\\\"battingTeamRunsInOver\\\":12,\\\"targetPassedOnBall\\\":\\\"19.5\\\"},\\\"keyBatsman\\\":{\\\"team\\\":\\\"都会猎鹰\\\",\\\"name\\\":\\\"阿拉夫·梅塔\\\",\\\"runs\\\":47,\\\"balls\\\":39,\\\"notOut\\\":true,\\\"fours\\\":3,\\\"sixes\\\":2},\\\"keyBowler\\\":{\\\"team\\\":\\\"海港国王\\\",\\\"name\\\":\\\"尼基尔·拉奥\\\",\\\"overs\\\":\\\"4.0\\\",\\\"maidens\\\":0,\\\"runsConceded\\\":18,\\\"wickets\\\":3,\\\"bowledFinalOver\\\":true,\\\"runsConcededInFinalOver\\\":12},\\\"result\\\":{\\\"winner\\\":\\\"都会猎鹰\\\",\\\"margin\\\":\\\"3 wickets\\\",\\\"winningScore\\\":\\\"121/7\\\",\\\"chaseCompletedInOvers\\\":\\\"19.5\\\"}}\"}"
               },
               "Output": {
-                "Text": "{\"role\":\"assistant\",\"content\":\"【退化】关于{\\\"sport\\\":\\\"cricket\\\",\\\"form的比赛，简单说一句：主队赢了，比赛就这样。\"}"
+                "Text": "{\"role\":\"assistant\",\"content\":\"【战报】\\n关于{\\\"sport\\\":\\\"cricket\\\",\\\"form，本场比赛双方展开激烈对决。主场作战的一方凭借稳健的防守与高效转换进攻，逐渐掌握场上节奏，并在第三节中段拉开分差，最终将优势保持到终场。\\n\\n【数据面板】\\n核心球员砍下高分并送出多次助攻，篮板与抢断数据同样亮眼；替补席贡献了关键火力，整体命中率保持稳定，三分线外的效率尤为突出，罚球线上也几乎没有失误。\\n\\n【战术分析】\\n主队通过挡拆外弹与弱侧转移不断制造空位，防守端则采用包夹持球人的策略限制对手核心的发挥。关键时刻的轮转、协防与篮板保护，成为决定胜负的胜负手，也为后续回合奠定了心理优势。\"}"
               },
               "Usage": null,
               "Steps": [
                 {
                   "StepID": "s1",
-                  "InvocationID": "3d4c20ae-6b57-48d5-a8c9-89de4e1cfeef",
+                  "InvocationID": "b32c1e6e-8f04-4446-8206-8e4b40be9a7c",
                   "ParentInvocationID": "",
                   "AgentName": "candidate",
                   "Branch": "candidate",
                   "NodeID": "candidate",
                   "NodeType": "agent",
-                  "StartedAt": "2026-07-30T13:44:46.013364042Z",
-                  "EndedAt": "2026-07-30T13:44:46.016286789Z",
+                  "StartedAt": "2026-07-30T13:56:35.600680796Z",
+                  "EndedAt": "2026-07-30T13:56:35.601086149Z",
                   "PredecessorStepIDs": null,
                   "AppliedSurfaceIDs": [
                     "candidate#instruction",
                     "candidate#model"
                   ],
                   "Input": {
-                    "Text": "[{\"role\":\"system\",\"content\":\"你是一名体育评论员。请用极简一句话概括比赛，不要展开任何细节。\"},{\"role\":\"user\",\"content\":\"{\\\"sport\\\":\\\"cricket\\\",\\\"format\\\":\\\"T20\\\",\\\"teams\\\":{\\\"battingFirst\\\":\\\"海港国王\\\",\\\"chasing\\\":\\\"都会猎鹰\\\"},\\\"innings\\\":[{\\\"inningsNumber\\\":1,\\\"team\\\":\\\"海港国王\\\",\\\"score\\\":119,\\\"wickets\\\":8,\\\"overs\\\":\\\"20.0\\\"},{\\\"inningsNumber\\\":2,\\\"team\\\":\\\"都会猎鹰\\\",\\\"target\\\":120,\\\"score\\\":121,\\\"wickets\\\":7,\\\"overs\\\":\\\"19.5\\\",\\\"ballsRemaining\\\":1}],\\\"finalOver\\\":{\\\"startState\\\":{\\\"team\\\":\\\"都会猎鹰\\\",\\\"score\\\":109,\\\"wickets\\\":7,\\\"runsNeeded\\\":11,\\\"ballsRemaining\\\":6},\\\"battingTeamRunsInOver\\\":12,\\\"targetPassedOnBall\\\":\\\"19.5\\\"},\\\"keyBatsman\\\":{\\\"team\\\":\\\"都会猎鹰\\\",\\\"name\\\":\\\"阿拉夫·梅塔\\\",\\\"runs\\\":47,\\\"balls\\\":39,\\\"notOut\\\":true,\\\"fours\\\":3,\\\"sixes\\\":2},\\\"keyBowler\\\":{\\\"team\\\":\\\"海港国王\\\",\\\"name\\\":\\\"尼基尔·拉奥\\\",\\\"overs\\\":\\\"4.0\\\",\\\"maidens\\\":0,\\\"runsConceded\\\":18,\\\"wickets\\\":3,\\\"bowledFinalOver\\\":true,\\\"runsConcededInFinalOver\\\":12},\\\"result\\\":{\\\"winner\\\":\\\"都会猎鹰\\\",\\\"margin\\\":\\\"3 wickets\\\",\\\"winningScore\\\":\\\"121/7\\\",\\\"chaseCompletedInOvers\\\":\\\"19.5\\\"}}\"}]"
+                    "Text": "[{\"role\":\"system\",\"content\":\"你是一名资深体育评论员。请生成一篇结构清晰、数据详实的中文战报，必须包含【战报】【数据面板】【战术分析】三个板块，字数控制在 350-850 字。\"},{\"role\":\"user\",\"content\":\"{\\\"sport\\\":\\\"cricket\\\",\\\"format\\\":\\\"T20\\\",\\\"teams\\\":{\\\"battingFirst\\\":\\\"海港国王\\\",\\\"chasing\\\":\\\"都会猎鹰\\\"},\\\"innings\\\":[{\\\"inningsNumber\\\":1,\\\"team\\\":\\\"海港国王\\\",\\\"score\\\":119,\\\"wickets\\\":8,\\\"overs\\\":\\\"20.0\\\"},{\\\"inningsNumber\\\":2,\\\"team\\\":\\\"都会猎鹰\\\",\\\"target\\\":120,\\\"score\\\":121,\\\"wickets\\\":7,\\\"overs\\\":\\\"19.5\\\",\\\"ballsRemaining\\\":1}],\\\"finalOver\\\":{\\\"startState\\\":{\\\"team\\\":\\\"都会猎鹰\\\",\\\"score\\\":109,\\\"wickets\\\":7,\\\"runsNeeded\\\":11,\\\"ballsRemaining\\\":6},\\\"battingTeamRunsInOver\\\":12,\\\"targetPassedOnBall\\\":\\\"19.5\\\"},\\\"keyBatsman\\\":{\\\"team\\\":\\\"都会猎鹰\\\",\\\"name\\\":\\\"阿拉夫·梅塔\\\",\\\"runs\\\":47,\\\"balls\\\":39,\\\"notOut\\\":true,\\\"fours\\\":3,\\\"sixes\\\":2},\\\"keyBowler\\\":{\\\"team\\\":\\\"海港国王\\\",\\\"name\\\":\\\"尼基尔·拉奥\\\",\\\"overs\\\":\\\"4.0\\\",\\\"maidens\\\":0,\\\"runsConceded\\\":18,\\\"wickets\\\":3,\\\"bowledFinalOver\\\":true,\\\"runsConcededInFinalOver\\\":12},\\\"result\\\":{\\\"winner\\\":\\\"都会猎鹰\\\",\\\"margin\\\":\\\"3 wickets\\\",\\\"winningScore\\\":\\\"121/7\\\",\\\"chaseCompletedInOvers\\\":\\\"19.5\\\"}}\"}]"
                   },
                   "Output": {
-                    "Text": "{\"id\":\"llmflow-response-c3da52d2-0c64-4f7d-8b6f-4c46f7d06fe5\",\"object\":\"\",\"created\":0,\"model\":\"deepseek-v4-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"【退化】关于{\\\"sport\\\":\\\"cricket\\\",\\\"form的比赛，简单说一句：主队赢了，比赛就这样。\"},\"delta\":{\"role\":\"\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":31547}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
+                    "Text": "{\"id\":\"llmflow-response-1f279bf9-62f6-422e-8be2-48c8b9ad0970\",\"object\":\"\",\"created\":0,\"model\":\"deepseek-v4-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"【战报】\\n关于{\\\"sport\\\":\\\"cricket\\\",\\\"form，本场比赛双方展开激烈对决。主场作战的一方凭借稳健的防守与高效转换进攻，逐渐掌握场上节奏，并在第三节中段拉开分差，最终将优势保持到终场。\\n\\n【数据面板】\\n核心球员砍下高分并送出多次助攻，篮板与抢断数据同样亮眼；替补席贡献了关键火力，整体命中率保持稳定，三分线外的效率尤为突出，罚球线上也几乎没有失误。\\n\\n【战术分析】\\n主队通过挡拆外弹与弱侧转移不断制造空位，防守端则采用包夹持球人的策略限制对手核心的发挥。关键时刻的轮转、协防与篮板保护，成为决定胜负的胜负手，也为后续回合奠定了心理优势。\"},\"delta\":{\"role\":\"\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":18771}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
                   },
                   "Usage": null,
                   "Error": ""
@@ -2666,7 +2816,7 @@
                 }
               },
               "details": {
-                "reason": "final response mismatch: text mismatch: length mismatch: actual length 51 is less than min 350, expected range [350, 850]",
+                "reason": "final response mismatch: text mismatch: length mismatch: actual length 275 is less than min 350, expected range [350, 850]",
                 "value": {
                   "kind": "numeric",
                   "numeric": 0
@@ -2675,7 +2825,8 @@
             },
             {
               "metricName": "llm_rubric_critic",
-              "evalStatus": "failed",
+              "score": 1,
+              "evalStatus": "passed",
               "threshold": 0.98,
               "criterion": {
                 "llmJudge": {
@@ -2748,43 +2899,52 @@
                 }
               },
               "details": {
-                "reason": "回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。\n回复严重缺失，未满足评分维度。",
+                "reason": "回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。\n回复结构完整、数据详实，满足评分维度。",
+                "score": 1,
                 "value": {
                   "kind": "numeric",
-                  "numeric": 0
+                  "numeric": 1
                 },
                 "rubricScores": [
                   {
                     "id": "source_grounding",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "lead_main_story",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "decisive_sequence",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "numbers_sport_logic",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "headline_angle",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "data_player_interpretation",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "reference_depth_style",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   },
                   {
                     "id": "production_copy",
-                    "reason": "回复严重缺失，未满足评分维度。"
+                    "reason": "回复结构完整、数据详实，满足评分维度。",
+                    "score": 1
                   }
                 ]
               }
@@ -2792,7 +2952,7 @@
           ]
         }
       ],
-      "sessionId": "379e2bcd-61d2-478d-8bf6-573ff77d3e46",
+      "sessionId": "9f7cc6ab-074f-4a4c-a0eb-ce193173e7fb",
       "userId": "promptiter-demo-user"
     }
   ],
@@ -2820,10 +2980,11 @@
           },
           {
             "metricName": "llm_rubric_critic",
-            "evalStatus": "failed",
+            "averageScore": 1,
+            "evalStatus": "passed",
             "threshold": 0.98,
             "statusCounts": {
-              "failed": 8
+              "passed": 8
             }
           }
         ]
@@ -2847,10 +3008,11 @@
           },
           {
             "metricName": "llm_rubric_critic",
-            "evalStatus": "failed",
+            "averageScore": 1,
+            "evalStatus": "passed",
             "threshold": 0.98,
             "statusCounts": {
-              "failed": 1
+              "passed": 1
             }
           }
         ],
@@ -2866,7 +3028,8 @@
               },
               {
                 "metricName": "llm_rubric_critic",
-                "evalStatus": "failed",
+                "score": 1,
+                "evalStatus": "passed",
                 "threshold": 0.98
               }
             ]
@@ -2890,10 +3053,11 @@
           },
           {
             "metricName": "llm_rubric_critic",
-            "evalStatus": "failed",
+            "averageScore": 1,
+            "evalStatus": "passed",
             "threshold": 0.98,
             "statusCounts": {
-              "failed": 1
+              "passed": 1
             }
           }
         ],
@@ -2909,7 +3073,8 @@
               },
               {
                 "metricName": "llm_rubric_critic",
-                "evalStatus": "failed",
+                "score": 1,
+                "evalStatus": "passed",
                 "threshold": 0.98
               }
             ]
@@ -2933,10 +3098,11 @@
           },
           {
             "metricName": "llm_rubric_critic",
-            "evalStatus": "failed",
+            "averageScore": 1,
+            "evalStatus": "passed",
             "threshold": 0.98,
             "statusCounts": {
-              "failed": 1
+              "passed": 1
             }
           }
         ],
@@ -2952,7 +3118,8 @@
               },
               {
                 "metricName": "llm_rubric_critic",
-                "evalStatus": "failed",
+                "score": 1,
+                "evalStatus": "passed",
                 "threshold": 0.98
               }
             ]
@@ -2976,10 +3143,11 @@
           },
           {
             "metricName": "llm_rubric_critic",
-            "evalStatus": "failed",
+            "averageScore": 1,
+            "evalStatus": "passed",
             "threshold": 0.98,
             "statusCounts": {
-              "failed": 1
+              "passed": 1
             }
           }
         ],
@@ -2995,7 +3163,8 @@
               },
               {
                 "metricName": "llm_rubric_critic",
-                "evalStatus": "failed",
+                "score": 1,
+                "evalStatus": "passed",
                 "threshold": 0.98
               }
             ]
@@ -3019,10 +3188,11 @@
           },
           {
             "metricName": "llm_rubric_critic",
-            "evalStatus": "failed",
+            "averageScore": 1,
+            "evalStatus": "passed",
             "threshold": 0.98,
             "statusCounts": {
-              "failed": 1
+              "passed": 1
             }
           }
         ],
@@ -3038,7 +3208,8 @@
               },
               {
                 "metricName": "llm_rubric_critic",
-                "evalStatus": "failed",
+                "score": 1,
+                "evalStatus": "passed",
                 "threshold": 0.98
               }
             ]
@@ -3062,10 +3233,11 @@
           },
           {
             "metricName": "llm_rubric_critic",
-            "evalStatus": "failed",
+            "averageScore": 1,
+            "evalStatus": "passed",
             "threshold": 0.98,
             "statusCounts": {
-              "failed": 1
+              "passed": 1
             }
           }
         ],
@@ -3081,7 +3253,8 @@
               },
               {
                 "metricName": "llm_rubric_critic",
-                "evalStatus": "failed",
+                "score": 1,
+                "evalStatus": "passed",
                 "threshold": 0.98
               }
             ]
@@ -3105,10 +3278,11 @@
           },
           {
             "metricName": "llm_rubric_critic",
-            "evalStatus": "failed",
+            "averageScore": 1,
+            "evalStatus": "passed",
             "threshold": 0.98,
             "statusCounts": {
-              "failed": 1
+              "passed": 1
             }
           }
         ],
@@ -3124,7 +3298,8 @@
               },
               {
                 "metricName": "llm_rubric_critic",
-                "evalStatus": "failed",
+                "score": 1,
+                "evalStatus": "passed",
                 "threshold": 0.98
               }
             ]
@@ -3148,10 +3323,11 @@
           },
           {
             "metricName": "llm_rubric_critic",
-            "evalStatus": "failed",
+            "averageScore": 1,
+            "evalStatus": "passed",
             "threshold": 0.98,
             "statusCounts": {
-              "failed": 1
+              "passed": 1
             }
           }
         ],
@@ -3167,7 +3343,8 @@
               },
               {
                 "metricName": "llm_rubric_critic",
-                "evalStatus": "failed",
+                "score": 1,
+                "evalStatus": "passed",
                 "threshold": 0.98
               }
             ]
@@ -3176,5 +3353,5 @@
       }
     ]
   },
-  "creationTimestamp": 1785419086.0264215
+  "creationTimestamp": 1785419795.611057
 }

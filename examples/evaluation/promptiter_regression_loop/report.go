@@ -411,7 +411,7 @@ func reportToMarkdown(r *RegressionReport) string {
 			fmt.Fprintf(&b, "| %d | %.4f | %.4f | %v | %s |\n",
 				rr.Round, rr.TrainScore, rr.ValidationScore, rr.Accepted, rr.Reason)
 		}
-		b.WriteString("（每轮候选 prompt 见 optimization_report.json 的 `roundRecords`）\n")
+		b.WriteString("\n（每轮候选 prompt 见 optimization_report.json 的 `roundRecords`）\n")
 	}
 	b.WriteString("\n## 逐 case 分数变化\n\n")
 	b.WriteString("| 评测集 | Case | 基线 | 候选 | 基线通过 | 候选通过 | 变化 | 趋势 | 变化类别 |\n")

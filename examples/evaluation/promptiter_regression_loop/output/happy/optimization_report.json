@@ -1,9 +1,9 @@
 {
-  "generatedAt": "2026-07-30T13:44:45Z",
-  "durationMs": 244,
+  "generatedAt": "2026-07-30T13:56:35Z",
+  "durationMs": 281,
   "stageTiming": {
-    "engineMs": 243,
-    "attributionMs": 0,
+    "engineMs": 280,
+    "attributionMs": 1,
     "gateMs": 0,
     "reportMs": 0
   },
@@ -231,6 +231,17 @@
   "perCaseDelta": [
     {
       "evalSetId": "nba-commentary-validation",
+      "evalCaseId": "validation_04_badminton_match_point",
+      "baselineScore": 0.25,
+      "candidateScore": 0.5,
+      "delta": 0.25,
+      "trend": "up",
+      "baselinePassed": false,
+      "candidatePassed": false,
+      "transition": "score_up"
+    },
+    {
+      "evalSetId": "nba-commentary-validation",
       "evalCaseId": "validation_05_ice_hockey_overtime",
       "baselineScore": 0.25,
       "candidateScore": 0.5,
@@ -242,40 +253,7 @@
     },
     {
       "evalSetId": "nba-commentary-validation",
-      "evalCaseId": "validation_06_tennis_tiebreak",
-      "baselineScore": 0.25,
-      "candidateScore": 0.5,
-      "delta": 0.25,
-      "trend": "up",
-      "baselinePassed": false,
-      "candidatePassed": false,
-      "transition": "score_up"
-    },
-    {
-      "evalSetId": "nba-commentary-validation",
       "evalCaseId": "validation_07_road_cycling_breakaway",
-      "baselineScore": 0.25,
-      "candidateScore": 0.5,
-      "delta": 0.25,
-      "trend": "up",
-      "baselinePassed": false,
-      "candidatePassed": false,
-      "transition": "score_up"
-    },
-    {
-      "evalSetId": "nba-commentary-validation",
-      "evalCaseId": "validation_03_f1_rain_safety_car",
-      "baselineScore": 0.25,
-      "candidateScore": 0.5,
-      "delta": 0.25,
-      "trend": "up",
-      "baselinePassed": false,
-      "candidatePassed": false,
-      "transition": "score_up"
-    },
-    {
-      "evalSetId": "nba-commentary-validation",
-      "evalCaseId": "validation_04_badminton_match_point",
       "baselineScore": 0.25,
       "candidateScore": 0.5,
       "delta": 0.25,
@@ -316,6 +294,28 @@
       "baselinePassed": false,
       "candidatePassed": false,
       "transition": "score_up"
+    },
+    {
+      "evalSetId": "nba-commentary-validation",
+      "evalCaseId": "validation_06_tennis_tiebreak",
+      "baselineScore": 0.25,
+      "candidateScore": 0.5,
+      "delta": 0.25,
+      "trend": "up",
+      "baselinePassed": false,
+      "candidatePassed": false,
+      "transition": "score_up"
+    },
+    {
+      "evalSetId": "nba-commentary-validation",
+      "evalCaseId": "validation_03_f1_rain_safety_car",
+      "baselineScore": 0.25,
+      "candidateScore": 0.5,
+      "delta": 0.25,
+      "trend": "up",
+      "baselinePassed": false,
+      "candidatePassed": false,
+      "transition": "score_up"
     }
   ],
   "baselineEvaluation": {
@@ -330,7 +330,7 @@
           {
             "evalSetId": "nba-commentary-validation",
             "evalCaseId": "validation_01_nba_empty_48",
-            "sessionId": "40a1cb8d-c507-43e9-b410-e74399846641",
+            "sessionId": "ff90dcc0-1483-4028-af62-0f098c4e8041",
             "passed": false,
             "metrics": [
               {
@@ -356,7 +356,7 @@
           {
             "evalSetId": "nba-commentary-validation",
             "evalCaseId": "validation_02_football_penalties",
-            "sessionId": "22610897-d386-4134-a64a-871e7cc1bb5d",
+            "sessionId": "f5d74fba-7f73-4164-bd79-15b4a437019c",
             "passed": false,
             "metrics": [
               {
@@ -382,7 +382,7 @@
           {
             "evalSetId": "nba-commentary-validation",
             "evalCaseId": "validation_03_f1_rain_safety_car",
-            "sessionId": "3965d680-9541-4889-8f27-4d71b389a6d5",
+            "sessionId": "799903a0-9403-4bd0-9264-225ad33a0a63",
             "passed": false,
             "metrics": [
               {
@@ -408,7 +408,7 @@
           {
             "evalSetId": "nba-commentary-validation",
             "evalCaseId": "validation_04_badminton_match_point",
-            "sessionId": "9582ab23-a86c-4632-9149-f18085c7dc7a",
+            "sessionId": "833a3bf9-6650-4150-9ff1-ca31cd96c874",
             "passed": false,
             "metrics": [
               {
@@ -434,7 +434,7 @@
           {
             "evalSetId": "nba-commentary-validation",
             "evalCaseId": "validation_05_ice_hockey_overtime",
-            "sessionId": "05fbf4e2-9f63-4f6c-aabb-c148826ef827",
+            "sessionId": "2da74f26-be63-4f12-9142-df2ffd50e99e",
             "passed": false,
             "metrics": [
               {
@@ -460,7 +460,7 @@
           {
             "evalSetId": "nba-commentary-validation",
             "evalCaseId": "validation_06_tennis_tiebreak",
-            "sessionId": "bfa0746e-d437-47b9-b74f-63a65aa0fdc7",
+            "sessionId": "69bdbb4f-fee6-42a1-a79b-e9d4880f1a59",
             "passed": false,
             "metrics": [
               {
@@ -486,7 +486,7 @@
           {
             "evalSetId": "nba-commentary-validation",
             "evalCaseId": "validation_07_road_cycling_breakaway",
-            "sessionId": "7d82dd5e-163c-4366-9720-c3cc131693c9",
+            "sessionId": "cf16412a-9272-4f2d-a6a7-ce1c5c4fb88a",
             "passed": false,
             "metrics": [
               {
@@ -512,7 +512,7 @@
           {
             "evalSetId": "nba-commentary-validation",
             "evalCaseId": "validation_08_cricket_t20_chase",
-            "sessionId": "7e5d0f48-be5c-46ea-b1f1-586bf7203745",
+            "sessionId": "afb456a2-c18c-44cc-ae87-8791f2e70a56",
             "passed": false,
             "metrics": [
               {
@@ -547,7 +547,7 @@
           {
             "evalSetId": "nba-commentary-train",
             "evalCaseId": "train_01_nba_nuggets_blowout",
-            "sessionId": "374b0086-d210-4c75-81f6-18f0d35d59d8",
+            "sessionId": "e5651376-62d0-4bfd-b2dc-4455bf5957d3",
             "passed": false,
             "metrics": [
               {
@@ -573,7 +573,7 @@
           {
             "evalSetId": "nba-commentary-train",
             "evalCaseId": "train_02_football_penalty_advancement",
-            "sessionId": "cc77ceb8-dc4f-411b-9431-46d73cc0cfd7",
+            "sessionId": "a965fb5d-75dd-4052-96f1-9619af5f2860",
             "passed": false,
             "metrics": [
               {
@@ -599,7 +599,7 @@
           {
             "evalSetId": "nba-commentary-train",
             "evalCaseId": "train_03_football_late_header",
-            "sessionId": "e0dfcc30-1741-4456-b4ad-6ce0ec6e4f23",
+            "sessionId": "d7bdb600-1552-45b3-9402-18fe2e7f3f82",
             "passed": false,
             "metrics": [
               {
@@ -625,7 +625,7 @@
           {
             "evalSetId": "nba-commentary-train",
             "evalCaseId": "train_04_mlb_walkoff_single",
-            "sessionId": "2c2cf2e0-ee78-4171-aeed-7c2ac766e02a",
+            "sessionId": "13c009d3-fb63-4092-8306-e728a1bf7b3c",
             "passed": false,
             "metrics": [
               {
@@ -651,7 +651,7 @@
           {
             "evalSetId": "nba-commentary-train",
             "evalCaseId": "train_05_tennis_five_set_comeback",
-            "sessionId": "44f44085-4d06-4280-bcb2-078dbd579eda",
+            "sessionId": "d25c202d-ded4-4cbf-b5ab-ec63b9daec6f",
             "passed": false,
             "metrics": [
               {
@@ -677,7 +677,7 @@
           {
             "evalSetId": "nba-commentary-train",
             "evalCaseId": "train_06_badminton_saved_match_point",
-            "sessionId": "3f27dfdc-5af8-4e26-b87c-92ae2cd308e6",
+            "sessionId": "5f756016-a0ae-41cb-bcf6-dc7a7a5f448c",
             "passed": false,
             "metrics": [
               {
@@ -703,7 +703,7 @@
           {
             "evalSetId": "nba-commentary-train",
             "evalCaseId": "train_07_ice_hockey_overtime",
-            "sessionId": "84238dba-c61d-4d69-8eb3-f47eeae5af74",
+            "sessionId": "5b332806-3f03-4f5a-b926-cd25ac17f5ce",
             "passed": false,
             "metrics": [
               {
@@ -729,7 +729,7 @@
           {
             "evalSetId": "nba-commentary-train",
             "evalCaseId": "train_08_cricket_last_over_chase",
-            "sessionId": "7a18957d-0038-44c2-8581-609a638f63af",
+            "sessionId": "f72bc696-832b-4bf2-895b-efdbabcb6d19",
             "passed": false,
             "metrics": [
               {
