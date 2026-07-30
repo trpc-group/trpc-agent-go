@@ -388,6 +388,15 @@ func classifyMetric(m promptiterengine.MetricResult, trace *atrace.Trace) Failur
 		strings.Contains(text, "非法参数") || strings.Contains(text, "参数类型") ||
 		strings.Contains(text, "取值非法") || strings.Contains(text, "缺少参数"):
 		return FailureToolParamError
+	// Knowledge gap is checked before generic tool-call errors because keywords
+	// like "recall" would otherwise substring-match "call" (e.g. "缺少关键知识点 recall"
+	// would be misclassified as tool_call_error). Knowledge signals are more specific
+	// (missing/deletion/factual-recall patterns) and take precedence.
+	case strings.Contains(text, "knowledge") || strings.Contains(text, "知识") ||
+		strings.Contains(text, "recall") || strings.Contains(text, "事实") ||
+		strings.Contains(text, "hallucin") || strings.Contains(text, "编造") ||
+		strings.Contains(text, "缺失关键") || strings.Contains(text, "缺失"):
+		return FailureKnowledgeGap
 	case strings.Contains(text, "tool") || strings.Contains(text, "function") ||
 		strings.Contains(text, "call") || strings.Contains(text, "工具") ||
 		strings.Contains(text, "func_call"):
@@ -402,11 +411,6 @@ func classifyMetric(m promptiterengine.MetricResult, trace *atrace.Trace) Failur
 		strings.Contains(text, "markdown") || strings.Contains(text, "xml") ||
 		strings.Contains(text, "括号") || strings.Contains(text, "bracket"):
 		return FailureFormatError
-	case strings.Contains(text, "knowledge") || strings.Contains(text, "知识") ||
-		strings.Contains(text, "recall") || strings.Contains(text, "事实") ||
-		strings.Contains(text, "hallucin") || strings.Contains(text, "编造") ||
-		strings.Contains(text, "缺失关键") || strings.Contains(text, "缺失"):
-		return FailureKnowledgeGap
 	case strings.Contains(text, "mismatch") || strings.Contains(text, "contradict") ||
 		strings.Contains(text, "不满足") || strings.Contains(text, "不符") ||
 		strings.Contains(text, "偏题") || strings.Contains(text, "rubric") ||

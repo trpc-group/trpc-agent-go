@@ -441,7 +441,7 @@ func TestBuildReport_SurfacesRegressedCandidate(t *testing.T) {
 		},
 	}
 	gate := decideAcceptance(baseline, candidate, GateConfig{MinValidationGain: 0.01, AllowRegression: false})
-	report := buildReport(regressionConfig{CandidateModelName: "test-model"}, result, classifyFailures(context.Background(), baseline, ruleAttributor{}), gate, &CostReport{}, 0, "rule narrative", 0, 0)
+	report := buildReport(regressionConfig{CandidateModelName: "test-model"}, result, classifyFailures(context.Background(), baseline, ruleAttributor{}), gate, &CostReport{}, 0, nil, "rule narrative", 0, 0)
 	if report.Accepted {
 		t.Fatalf("expected rejected report")
 	}
@@ -530,7 +530,7 @@ func TestBuildAndWriteReport(t *testing.T) {
 		},
 	}
 	gate := decideAcceptance(baseline, candidate, GateConfig{MinValidationGain: 0.01})
-	report := buildReport(regressionConfig{OutputDir: dir, CandidateModelName: "test-model"}, result, classifyFailures(context.Background(), baseline, ruleAttributor{}), gate, &CostReport{}, 1500*time.Millisecond, "rule narrative", 0, 0)
+	report := buildReport(regressionConfig{OutputDir: dir, CandidateModelName: "test-model"}, result, classifyFailures(context.Background(), baseline, ruleAttributor{}), gate, &CostReport{}, 1500*time.Millisecond, nil, "rule narrative", 0, 0)
 	if err := writeReport(dir, report, result); err != nil {
 		t.Fatalf("write report: %v", err)
 	}
@@ -961,5 +961,57 @@ func TestRunRegressionLoop_FakeRegression(t *testing.T) {
 	}
 	if rep.GateRejectedBy != "validation_regression" {
 		t.Fatalf("expected validation_regression, got %s", rep.GateRejectedBy)
+	}
+}
+
+func TestRunRegressionLoop_FakeNoGain(t *testing.T) {
+	// No-gain scenario: the optimizer produces a candidate that scores the same
+	// as baseline (no measurable improvement), so the gate must reject it on
+	// insufficient_gain. This satisfies issue #2003's requirement for three
+	// classes of eval cases: optimizable success, no-gain, and regression.
+	dir := t.TempDir()
+	cfg := regressionConfig{
+		DataDir:              "data",
+		OutputDir:            dir,
+		CandidateModelName:   "deepseek-v3.2",
+		CandidateInstruction: "你是一名体育评论员。",
+		JudgeModelName:       "gpt-5.2",
+		WorkerModelName:      "gpt-5.2",
+		MaxRounds:            4,
+		MinScoreGain:         0.01,
+		Fake:                 true,
+		FakeScenario:         scenarioNoGain,
+		Logger:               log.New(io.Discard, "", 0),
+		TrainEvalSetID:       trainEvalSetID,
+		ValidationEvalSetID:  validationEvalSetID,
+		MetricFileID:         sharedMetricFileID,
+		CostPerEval:          0.01,
+		CostPerWorker:        0.05,
+		Attribution:          "rule",
+		AttributionModelName: "deepseek-v4-flash",
+	}
+	if err := runRegressionLoop(context.Background(), cfg); err != nil {
+		t.Fatalf("runRegressionLoop: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "optimization_report.json"))
+	if err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	var rep RegressionReport
+	if err := json.Unmarshal(raw, &rep); err != nil {
+		t.Fatalf("unmarshal report: %v", err)
+	}
+	if rep.Accepted {
+		t.Fatalf("no-gain scenario must be rejected")
+	}
+	if rep.GateRejectedBy != "insufficient_gain" {
+		t.Fatalf("expected insufficient_gain, got %s", rep.GateRejectedBy)
+	}
+	// Stage timing must be present in the report.
+	if rep.StageTiming == nil {
+		t.Fatalf("expected stageTiming in the report")
+	}
+	if rep.StageTiming.EngineMs == 0 {
+		t.Fatalf("engine timing should be > 0")
 	}
 }

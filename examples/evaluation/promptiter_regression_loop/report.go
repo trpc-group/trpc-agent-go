@@ -77,6 +77,16 @@ type CaseDelta struct {
 	Transition string `json:"transition"`
 }
 
+// StageTiming records the wall-clock duration of each pipeline phase so the
+// audit report shows where time is spent (satisfying the "记录耗时" requirement
+// from issue #2003).
+type StageTiming struct {
+	EngineMs      int64 `json:"engineMs"`
+	AttributionMs int64 `json:"attributionMs"`
+	GateMs        int64 `json:"gateMs"`
+	ReportMs      int64 `json:"reportMs"`
+}
+
 // RoundRecord audits one optimization round: the candidate prompt the
 // optimizer produced plus the train/validation scores of that round.
 type RoundRecord struct {
@@ -92,6 +102,7 @@ type RoundRecord struct {
 type RegressionReport struct {
 	GeneratedAt        string              `json:"generatedAt"`
 	DurationMS         int64               `json:"durationMs"`
+	StageTiming        *StageTiming        `json:"stageTiming,omitempty"`
 	AppName            string              `json:"appName"`
 	Model              string              `json:"model"`
 	Rounds             int                 `json:"rounds"`
@@ -122,6 +133,7 @@ func buildReport(
 	gate *GateDecision,
 	cost *CostReport,
 	duration time.Duration,
+	stageTiming *StageTiming,
 	narrative string,
 	llmCalls int,
 	llmErrors int,
@@ -140,6 +152,7 @@ func buildReport(
 	return &RegressionReport{
 		GeneratedAt:        time.Now().Format(time.RFC3339),
 		DurationMS:         duration.Milliseconds(),
+		StageTiming:        stageTiming,
 		AppName:            appName,
 		Model:              cfg.CandidateModelName,
 		Rounds:             len(result.Rounds),
@@ -313,6 +326,13 @@ func reportToMarkdown(r *RegressionReport) string {
 	fmt.Fprintf(&b, "- 模型: %s\n", r.Model)
 	fmt.Fprintf(&b, "- 优化轮次: %d\n", r.Rounds)
 	fmt.Fprintf(&b, "- 耗时: %d 毫秒\n", r.DurationMS)
+	if st := r.StageTiming; st != nil {
+		b.WriteString("- 分阶段耗时:\n")
+		fmt.Fprintf(&b, "  - 引擎运行: %d 毫秒\n", st.EngineMs)
+		fmt.Fprintf(&b, "  - 失败归因: %d 毫秒\n", st.AttributionMs)
+		fmt.Fprintf(&b, "  - 门禁判断: %d 毫秒\n", st.GateMs)
+		fmt.Fprintf(&b, "  - 报告生成: %d 毫秒\n", st.ReportMs)
+	}
 	fmt.Fprintf(&b, "- 基线分数: %.4f\n", r.BaselineScore)
 	fmt.Fprintf(&b, "- 候选分数: %.4f\n", r.CandidateScore)
 	fmt.Fprintf(&b, "- 分数变化: %+.4f\n", r.ScoreDelta)

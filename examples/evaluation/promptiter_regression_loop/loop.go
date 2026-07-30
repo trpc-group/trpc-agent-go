@@ -22,7 +22,11 @@ import (
 //     clusters, gate decision, and the optimized prompt.
 func runRegressionLoop(ctx context.Context, cfg regressionConfig) error {
 	start := time.Now()
+
+	// --- Engine phase ---
+	engineStart := time.Now()
 	result, _, err := runEngine(ctx, cfg)
+	engineMs := time.Since(engineStart).Milliseconds()
 	if err != nil {
 		return err
 	}
@@ -44,6 +48,8 @@ func runRegressionLoop(ctx context.Context, cfg regressionConfig) error {
 	// so these counters only inform the operator; they never gate acceptance.
 	stats := &llmCallStats{}
 
+	// --- Attribution phase ---
+	attrStart := time.Now()
 	// Build the failure-attribution strategy. The LLM enhancement is optional: any
 	// error (no real LLM available, model init failure) falls back to the
 	// deterministic rule so the gate remains reproducible and free. Attribution is
@@ -65,8 +71,12 @@ func runRegressionLoop(ctx context.Context, cfg regressionConfig) error {
 		agg = ruleInsightAggregator{}
 	}
 	attrib.Insights = agg.Aggregate(ctx, attrib.Failures)
+	attributionMs := time.Since(attrStart).Milliseconds()
 
 	cost := estimateCost(cfg, result)
+
+	// --- Gate phase ---
+	gateStart := time.Now()
 	gateCfg := GateConfig{
 		MinValidationGain: cfg.MinScoreGain,
 		AllowRegression:   false,
@@ -76,6 +86,7 @@ func runRegressionLoop(ctx context.Context, cfg regressionConfig) error {
 		CostUsed:          cost.Total,
 	}
 	gateDecision := decideAcceptance(baseline, candidate, gateCfg)
+	gateMs := time.Since(gateStart).Milliseconds()
 
 	bs := overallScore(baseline)
 	cs := overallScore(candidate)
@@ -126,10 +137,19 @@ func runRegressionLoop(ctx context.Context, cfg regressionConfig) error {
 		narrative, _ = ruleNarrator{}.Narrate(ctx, ni)
 	}
 
-	report := buildReport(cfg, result, attrib, gateDecision, cost, time.Since(start), narrative, stats.Calls, stats.Errors)
+	// --- Report phase ---
+	reportStart := time.Now()
+	stageTiming := &StageTiming{
+		EngineMs:      engineMs,
+		AttributionMs: attributionMs,
+		GateMs:        gateMs,
+		ReportMs:      0, // filled below
+	}
+	report := buildReport(cfg, result, attrib, gateDecision, cost, time.Since(start), stageTiming, narrative, stats.Calls, stats.Errors)
 	if err := writeReport(cfg.OutputDir, report, result); err != nil {
 		return err
 	}
+	stageTiming.ReportMs = time.Since(reportStart).Milliseconds()
 	printSummary(report)
 	return nil
 }
