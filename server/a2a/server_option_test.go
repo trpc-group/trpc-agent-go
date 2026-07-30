@@ -902,7 +902,7 @@ func TestAnonymousUserCookieMiddleware_CookieAttributes(t *testing.T) {
 			}
 			if assert.NotNil(t, anonymousCookie) {
 				assert.True(t, anonymousCookie.HttpOnly)
-				assert.Equal(t, "/", anonymousCookie.Path)
+				assert.Equal(t, "/test", anonymousCookie.Path)
 				assert.Equal(t, tt.wantSecure, anonymousCookie.Secure)
 				assert.Equal(t, http.SameSiteLaxMode, anonymousCookie.SameSite)
 			}

@@ -151,8 +151,22 @@ func main() {
 
 匿名直连 client 应复用同一个 client 和 Cookie Jar。`NewAnonymousA2AClient`
 会在服务端建立匿名 principal 期间，串行化该 client 发出的首次请求。
-这个保证只覆盖单个 client 实例；不同 client 需要自行协调。浏览器 client
+这个保证只覆盖单个 client 实例；不同 client 需要自行协调。匿名直连 client
+会在 Cookie Jar 中遵循 anonymous `Set-Cookie` 的 Path、Domain、过期和删除指令。
+它不会接入 `SessionService`，也不负责持久化 session state。
 应先完成一次初始请求，再开始并发匿名消息发送，或者提供可信用户身份。
+
+#### 匿名 Principal 行为
+
+当请求没有通过配置的 UserID header（默认是 `X-User-ID`）提供非空身份时，
+内置 A2A Server 认证会生成带有 `A2A_ANONYMOUS_` 前缀的随机 principal。
+服务端通过 HTTP-only Cookie `trpc_agent_a2a_anon` 返回该 principal，并利用
+这个 Cookie 维持后续请求的匿名身份连续性。A2A `contextID` 仍然用于标识
+session，不再作为 principal 的来源。
+
+需要保持连续性的客户端必须复用 Cookie Jar；不保留 Cookie 的客户端或独立请求，
+每次都可能获得新的匿名 principal。请求携带非空 UserID header 时，服务端使用
+header 中的身份，不走匿名 Cookie 流程。
 
 ### 高级配置
 

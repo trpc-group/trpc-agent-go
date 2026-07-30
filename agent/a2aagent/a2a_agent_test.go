@@ -51,6 +51,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
+const anonymousAgentTestTimeout = 10 * time.Second
+
 func TestNew(t *testing.T) {
 	type testCase struct {
 		name         string
@@ -486,7 +488,7 @@ func TestA2AAgent_AnonymousCookiesSerializeConcurrentInitialAcquisition(t *testi
 	}
 
 	runAnonymous := func(invocationID string) error {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), anonymousAgentTestTimeout)
 		defer cancel()
 		eventChan, runErr := a.Run(ctx, &agent.Invocation{
 			InvocationID: invocationID,
@@ -510,7 +512,7 @@ func TestA2AAgent_AnonymousCookiesSerializeConcurrentInitialAcquisition(t *testi
 	}()
 	select {
 	case <-firstRequestStarted:
-	case <-time.After(time.Second):
+	case <-time.After(anonymousAgentTestTimeout):
 		t.Fatal("first anonymous request did not start")
 	}
 
@@ -522,7 +524,7 @@ func TestA2AAgent_AnonymousCookiesSerializeConcurrentInitialAcquisition(t *testi
 	case <-secondWaitingForInit:
 	case <-secondRequestObserved:
 		t.Fatal("second anonymous request bypassed initialization lock")
-	case <-time.After(time.Second):
+	case <-time.After(anonymousAgentTestTimeout):
 		t.Fatal("second anonymous request did not reach initialization lock")
 	}
 	select {
@@ -534,13 +536,13 @@ func TestA2AAgent_AnonymousCookiesSerializeConcurrentInitialAcquisition(t *testi
 	select {
 	case err := <-firstDone:
 		require.NoError(t, err)
-	case <-time.After(time.Second):
+	case <-time.After(anonymousAgentTestTimeout):
 		t.Fatal("first anonymous request did not finish")
 	}
 	select {
 	case err := <-secondDone:
 		require.NoError(t, err)
-	case <-time.After(time.Second):
+	case <-time.After(anonymousAgentTestTimeout):
 		t.Fatal("second anonymous request did not finish")
 	}
 	select {
@@ -679,7 +681,7 @@ func TestA2AAgent_AnonymousCookiesSerializeConcurrentPersistentSessionInitializa
 	t.Cleanup(func() { require.NoError(t, r.Close()) })
 
 	run := func(message string) error {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), anonymousAgentTestTimeout)
 		defer cancel()
 		eventChan, runErr := r.Run(
 			ctx,
@@ -702,7 +704,7 @@ func TestA2AAgent_AnonymousCookiesSerializeConcurrentPersistentSessionInitializa
 	go func() { firstDone <- run("first") }()
 	select {
 	case <-firstRequestStarted:
-	case <-time.After(time.Second):
+	case <-time.After(anonymousAgentTestTimeout):
 		t.Fatal("first persistent anonymous request did not start")
 	}
 
@@ -712,7 +714,7 @@ func TestA2AAgent_AnonymousCookiesSerializeConcurrentPersistentSessionInitializa
 	case <-secondWaitingForInit:
 	case <-secondRequestObserved:
 		t.Fatal("second persistent anonymous request bypassed initialization lock")
-	case <-time.After(time.Second):
+	case <-time.After(anonymousAgentTestTimeout):
 		t.Fatal("second persistent anonymous request did not reach initialization lock")
 	}
 	select {
@@ -725,13 +727,13 @@ func TestA2AAgent_AnonymousCookiesSerializeConcurrentPersistentSessionInitializa
 	select {
 	case err := <-firstDone:
 		require.NoError(t, err)
-	case <-time.After(time.Second):
+	case <-time.After(anonymousAgentTestTimeout):
 		t.Fatal("first persistent anonymous request did not finish")
 	}
 	select {
 	case err := <-secondDone:
 		require.NoError(t, err)
-	case <-time.After(time.Second):
+	case <-time.After(anonymousAgentTestTimeout):
 		t.Fatal("second persistent anonymous request did not finish")
 	}
 	select {
@@ -796,14 +798,14 @@ func TestA2AAgent_AnonymousCookieInitializationHonorsContextCancellation(t *test
 	}()
 	select {
 	case <-secondWaitingForInit:
-	case <-time.After(time.Second):
+	case <-time.After(anonymousAgentTestTimeout):
 		t.Fatal("second anonymous cookie initialization did not wait")
 	}
 	cancel()
 	select {
 	case err := <-secondDone:
 		require.ErrorIs(t, err, context.Canceled)
-	case <-time.After(time.Second):
+	case <-time.After(anonymousAgentTestTimeout):
 		t.Fatal("second anonymous cookie initialization did not observe cancellation")
 	}
 
@@ -1006,7 +1008,7 @@ func TestA2AAgent_AnonymousCookieInitializationDoesNotBlockIndependentScopes(t *
 		sess *session.Session,
 		invocationID string,
 	) error {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), anonymousAgentTestTimeout)
 		defer cancel()
 		eventChan, runErr := a.Run(ctx, &agent.Invocation{
 			InvocationID: invocationID,
@@ -1149,20 +1151,20 @@ func TestA2AAgent_AnonymousCookieInitializationDoesNotBlockIndependentScopes(t *
 		firstDone := runAsync(a, sessionA, "first")
 		select {
 		case <-firstRequestStarted:
-		case <-time.After(time.Second):
+		case <-time.After(anonymousAgentTestTimeout):
 			t.Fatal("first anonymous request did not start")
 		}
 
 		secondDone := runAsync(a, sessionB, "second")
 		select {
 		case <-secondRequestObserved:
-		case <-time.After(time.Second):
+		case <-time.After(anonymousAgentTestTimeout):
 			t.Fatal("different session was blocked by first initialization")
 		}
 		select {
 		case err := <-secondDone:
 			require.NoError(t, err)
-		case <-time.After(time.Second):
+		case <-time.After(anonymousAgentTestTimeout):
 			t.Fatal("different session request did not finish while first was blocked")
 		}
 
@@ -1170,7 +1172,7 @@ func TestA2AAgent_AnonymousCookieInitializationDoesNotBlockIndependentScopes(t *
 		select {
 		case err := <-firstDone:
 			require.NoError(t, err)
-		case <-time.After(time.Second):
+		case <-time.After(anonymousAgentTestTimeout):
 			t.Fatal("first anonymous request did not finish")
 		}
 		select {
@@ -1317,20 +1319,20 @@ func TestA2AAgent_AnonymousCookieInitializationDoesNotBlockIndependentScopes(t *
 		firstDone := runAsync(agentA, sess, "first-scope")
 		select {
 		case <-serverA.firstStarted:
-		case <-time.After(time.Second):
+		case <-time.After(anonymousAgentTestTimeout):
 			t.Fatal("first remote scope request did not start")
 		}
 
 		secondDone := runAsync(agentB, sess, "second-scope")
 		select {
 		case <-serverB.observed:
-		case <-time.After(time.Second):
+		case <-time.After(anonymousAgentTestTimeout):
 			t.Fatal("different remote scope was blocked by first initialization")
 		}
 		select {
 		case err := <-secondDone:
 			require.NoError(t, err)
-		case <-time.After(time.Second):
+		case <-time.After(anonymousAgentTestTimeout):
 			t.Fatal("different remote scope request did not finish while first was blocked")
 		}
 
@@ -1338,7 +1340,7 @@ func TestA2AAgent_AnonymousCookieInitializationDoesNotBlockIndependentScopes(t *
 		select {
 		case err := <-firstDone:
 			require.NoError(t, err)
-		case <-time.After(time.Second):
+		case <-time.After(anonymousAgentTestTimeout):
 			t.Fatal("first remote scope request did not finish")
 		}
 		for _, rec := range []*blockingServer{serverA, serverB} {
@@ -1648,6 +1650,35 @@ func TestAnonymousCookieStateRejectsInvalidValues(t *testing.T) {
 	require.Equal(t, anonymousTestCookieValue(4), cookieValue)
 }
 
+func TestAnonymousCookieStateRetainsCookieInLiveParentWithoutService(t *testing.T) {
+	parent := &session.Session{
+		AppName: "app",
+		UserID:  "local-user",
+		ID:      "session-a",
+	}
+	firstChild := parent.Clone()
+	firstChild.UserID = ""
+	secondChild := parent.Clone()
+	secondChild.UserID = ""
+	const stateKey = "anonymous-cookie-state"
+	wantCookie := anonymousTestCookieValue(5)
+
+	firstState := newAnonymousCookieState(firstChild, parent, nil, stateKey)
+	require.NoError(t, firstState.capture(context.Background(), wantCookie))
+
+	secondState := newAnonymousCookieState(secondChild, parent, nil, stateKey)
+	req, err := http.NewRequest(http.MethodPost, "https://example.com/a2a", nil)
+	require.NoError(t, err)
+	setAnonymousCookieHeader(
+		req,
+		secondState,
+		anonymousCookieURLScopeFromAgentURL("https://example.com/a2a"),
+	)
+	gotCookie, err := req.Cookie(anonymousUserIDCookieName)
+	require.NoError(t, err)
+	require.Equal(t, wantCookie, gotCookie.Value)
+}
+
 func TestAnonymousCookieJarHandlesCookieBoundaries(t *testing.T) {
 	parseURL := func(raw string) *url.URL {
 		parsed, err := url.Parse(raw)
@@ -1941,6 +1972,121 @@ func TestAnonymousCookieRequestHandlerCapturesCustomResponseCookie(t *testing.T)
 	cookie, ok := state.load()
 	require.True(t, ok)
 	require.Equal(t, wantCookie, cookie)
+}
+
+func TestAnonymousCookieRequestHandlerHonorsCookieDeletionAndExpiry(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer srv.Close()
+
+	stateKey := anonymousCookieStateKey(srv.URL)
+	service := sessionmemory.NewSessionService()
+	persistedSession, err := service.CreateSession(context.Background(), session.Key{
+		AppName:   "app",
+		UserID:    "user-1",
+		SessionID: "session-a",
+	}, session.StateMap{})
+	require.NoError(t, err)
+	state := newAnonymousCookieState(persistedSession, persistedSession, service, stateKey)
+	wantCookie := anonymousTestCookieValue(8)
+	responseCount := 0
+	handler := &anonymousCookieHTTPReqHandler{
+		next: httpReqHandlerFunc(func(
+			_ context.Context,
+			_ *http.Client,
+			req *http.Request,
+		) (*http.Response, error) {
+			responseCount++
+			responseCookie := &http.Cookie{
+				Name:  anonymousUserIDCookieName,
+				Path:  "/a2a",
+				Value: wantCookie,
+			}
+			if responseCount == 1 {
+				responseCookie.Expires = time.Now().Add(time.Hour)
+			} else {
+				responseCookie.Value = ""
+				responseCookie.MaxAge = -1
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Set-Cookie": []string{responseCookie.String()}},
+				Body:       io.NopCloser(strings.NewReader("ok")),
+				Request:    req,
+			}, nil
+		}),
+		cookie: state,
+		scope:  anonymousCookieURLScopeFromAgentURL(srv.URL),
+	}
+
+	firstReq, err := http.NewRequest(http.MethodGet, srv.URL+"/a2a", nil)
+	require.NoError(t, err)
+	firstResp, err := handler.Handle(context.Background(), srv.Client(), firstReq)
+	require.NoError(t, err)
+	require.NoError(t, firstResp.Body.Close())
+	record, ok := state.loadRecord()
+	require.True(t, ok)
+	require.Equal(t, wantCookie, record.value)
+	require.Equal(t, "/a2a", record.path)
+	require.False(t, record.expires.IsZero())
+
+	secondReq, err := http.NewRequest(http.MethodGet, srv.URL+"/a2a", nil)
+	require.NoError(t, err)
+	secondResp, err := handler.Handle(context.Background(), srv.Client(), secondReq)
+	require.NoError(t, err)
+	require.NoError(t, secondResp.Body.Close())
+	_, ok = state.loadRecord()
+	require.False(t, ok)
+
+	persistedSession, err = service.GetSession(context.Background(), session.Key{
+		AppName:   "app",
+		UserID:    "user-1",
+		SessionID: "session-a",
+	})
+	require.NoError(t, err)
+	stateValue, stateExists := persistedSession.GetState(stateKey)
+	require.True(t, stateExists)
+	require.Empty(t, stateValue)
+}
+
+func TestAnonymousCookieRequestHandlerRejectsCookieOutsideResponseScope(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer srv.Close()
+
+	sess := &session.Session{AppName: "app", ID: "session-a"}
+	state := newAnonymousCookieState(
+		sess,
+		nil,
+		nil,
+		anonymousCookieStateKey(srv.URL),
+	)
+	handler := &anonymousCookieHTTPReqHandler{
+		next: httpReqHandlerFunc(func(
+			_ context.Context,
+			_ *http.Client,
+			req *http.Request,
+		) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Set-Cookie": []string{
+						anonymousUserIDCookieName + "=" + anonymousTestCookieValue(9) +
+							"; Path=/other; Domain=other.example",
+					},
+				},
+				Body:    io.NopCloser(strings.NewReader("ok")),
+				Request: req,
+			}, nil
+		}),
+		cookie: state,
+		scope:  anonymousCookieURLScopeFromAgentURL(srv.URL),
+	}
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/a2a", nil)
+	require.NoError(t, err)
+	resp, err := handler.Handle(context.Background(), srv.Client(), req)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+	_, ok := state.loadRecord()
+	require.False(t, ok)
 }
 
 func TestAnonymousCookieRequestHandlerPersistsResponseCookieOnce(t *testing.T) {

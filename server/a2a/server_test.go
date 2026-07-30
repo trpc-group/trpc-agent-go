@@ -2796,6 +2796,156 @@ func TestA2AHTTPAnonymousCookieIsScopedToBasePath(t *testing.T) {
 	assert.Empty(t, outsidePathCookie)
 }
 
+func TestA2AHTTPAnonymousCookieFollowsEffectiveJSONRPCEndpoint(t *testing.T) {
+	var (
+		mu   sync.Mutex
+		runs []string
+	)
+	mockRunner := &mockRunner{
+		runFunc: func(
+			_ context.Context,
+			userID string,
+			_ string,
+			_ model.Message,
+			_ ...agent.RunOption,
+		) (<-chan *event.Event, error) {
+			mu.Lock()
+			runs = append(runs, userID)
+			mu.Unlock()
+			ch := make(chan *event.Event, 1)
+			ch <- event.NewResponseEvent("response", "agent", &model.Response{
+				Done: true,
+				Choices: []model.Choice{{Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "ok",
+				}}},
+			})
+			close(ch)
+			return ch, nil
+		},
+	}
+	srv, err := New(
+		WithRunner(mockRunner),
+		WithAgentCard(a2a.AgentCard{
+			Name: "effective-endpoint-anonymous-cookie",
+			URL:  "http://placeholder.local/agents/math",
+		}),
+		WithExtraA2AOptions(a2a.WithBasePath("/internal")),
+	)
+	require.NoError(t, err)
+
+	var outsidePathCookie string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/other", func(w http.ResponseWriter, r *http.Request) {
+		if cookie, cookieErr := r.Cookie(anonymousUserIDCookie); cookieErr == nil {
+			outsidePathCookie = cookie.Value
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.Handle("/", srv.Handler())
+	httpSrv := httptest.NewServer(mux)
+	defer httpSrv.Close()
+
+	jar, err := cookiejar.New(nil)
+	require.NoError(t, err)
+	httpClient := &http.Client{Jar: jar}
+	a2aClient, err := a2aclient.NewA2AClient(
+		httpSrv.URL+"/internal",
+		a2aclient.WithHTTPClient(httpClient),
+	)
+	require.NoError(t, err)
+	for i := 0; i < 2; i++ {
+		_, err = a2aClient.SendMessage(
+			context.Background(),
+			protocol.SendMessageParams{Message: protocol.NewMessage(
+				protocol.MessageRoleUser,
+				[]protocol.Part{protocol.NewTextPart("hello")},
+			)},
+		)
+		require.NoError(t, err)
+	}
+
+	mu.Lock()
+	require.Len(t, runs, 2)
+	require.True(t, isAnonymousUserID(runs[0]))
+	require.Equal(t, runs[0], runs[1])
+	mu.Unlock()
+
+	resp, err := httpClient.Get(httpSrv.URL + "/other")
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+	assert.Empty(t, outsidePathCookie)
+}
+
+func TestA2AHTTPAnonymousCookieUsesOriginalPathWhenMiddlewareRewrites(t *testing.T) {
+	var (
+		mu   sync.Mutex
+		runs []string
+	)
+	mockRunner := &mockRunner{
+		runFunc: func(
+			_ context.Context,
+			userID string,
+			_ string,
+			_ model.Message,
+			_ ...agent.RunOption,
+		) (<-chan *event.Event, error) {
+			mu.Lock()
+			runs = append(runs, userID)
+			mu.Unlock()
+			ch := make(chan *event.Event, 1)
+			ch <- event.NewResponseEvent("response", "agent", &model.Response{
+				Done: true,
+				Choices: []model.Choice{{Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "ok",
+				}}},
+			})
+			close(ch)
+			return ch, nil
+		},
+	}
+	srv, err := New(
+		WithRunner(mockRunner),
+		WithAgentCard(a2a.AgentCard{
+			Name: "rewritten-path-anonymous-cookie",
+			URL:  "http://placeholder.local/agents/math",
+		}),
+		WithExtraA2AOptions(a2a.WithMiddleWare(requestContextMiddlewareFunc(func(r *http.Request) *http.Request {
+			rewritten := r.Clone(r.Context())
+			rewritten.URL.Path = "/internal-jsonrpc"
+			return rewritten
+		}))),
+	)
+	require.NoError(t, err)
+
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
+	jar, err := cookiejar.New(nil)
+	require.NoError(t, err)
+	a2aClient, err := a2aclient.NewA2AClient(
+		httpSrv.URL+"/agents/math",
+		a2aclient.WithHTTPClient(&http.Client{Jar: jar}),
+	)
+	require.NoError(t, err)
+	for i := 0; i < 2; i++ {
+		_, err = a2aClient.SendMessage(
+			context.Background(),
+			protocol.SendMessageParams{Message: protocol.NewMessage(
+				protocol.MessageRoleUser,
+				[]protocol.Part{protocol.NewTextPart("hello")},
+			)},
+		)
+		require.NoError(t, err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, runs, 2)
+	require.True(t, isAnonymousUserID(runs[0]))
+	require.Equal(t, runs[0], runs[1])
+}
+
 func TestA2AHTTPDirectClientCookieJarProvidesAnonymousContinuity(t *testing.T) {
 	var (
 		mu   sync.Mutex

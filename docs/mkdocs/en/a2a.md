@@ -158,8 +158,25 @@ For anonymous direct clients, reuse the same client and cookie jar for later
 requests. `NewAnonymousA2AClient` serializes the first requests made through
 that client while the server establishes the anonymous principal. The
 guarantee is per client instance; coordinate separate clients independently.
+The client honors anonymous `Set-Cookie` path, domain, expiry, and deletion
+directives in its cookie jar. It does not connect to `SessionService` or
+persist session state itself.
 Browser clients should complete one initial request before starting concurrent
 anonymous message sends, or provide a trusted user identity instead.
+
+#### Anonymous Principal Behavior
+
+When a request does not provide a non-empty UserID through the configured
+header (the default is `X-User-ID`), the built-in A2A server authentication
+generates a random principal with the `A2A_ANONYMOUS_` prefix. The server
+returns it in the HTTP-only `trpc_agent_a2a_anon` cookie and uses that cookie to
+keep subsequent requests on the same anonymous principal. The A2A `contextID`
+continues to identify the session; it is not used as the principal source.
+
+Clients that need continuity must reuse a Cookie Jar. A client or request that
+does not retain cookies can receive a new anonymous principal on each request.
+When a non-empty UserID header is supplied, the server uses that header
+identity instead of the anonymous cookie flow.
 
 ### Advanced Configuration
 

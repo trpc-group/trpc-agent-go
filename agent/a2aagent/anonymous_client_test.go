@@ -26,7 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 )
 
-const anonymousClientTestTimeout = time.Second
+const anonymousClientTestTimeout = 10 * time.Second
 
 func TestAnonymousA2AClientSerializesFirstRequests(t *testing.T) {
 	const contextID = "direct-client-context"

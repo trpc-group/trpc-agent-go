@@ -153,8 +153,27 @@ type anonymousUserCookieMiddleware struct {
 
 type anonymousCookieStateKey struct{}
 
+type anonymousRequestPathKey struct{}
+
 type anonymousCookieState struct {
 	userID string
+}
+
+type anonymousRequestPathMiddleware struct{}
+
+func (anonymousRequestPathMiddleware) Wrap(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r == nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+		requestPath := ""
+		if r.URL != nil {
+			requestPath = r.URL.Path
+		}
+		ctx := context.WithValue(r.Context(), anonymousRequestPathKey{}, requestPath)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
 func (m anonymousUserCookieMiddleware) Wrap(next http.Handler) http.Handler {
@@ -185,7 +204,6 @@ func (m anonymousUserCookieMiddleware) Wrap(next http.Handler) http.Handler {
 
 type anonymousUserCookieResponseMiddleware struct {
 	secureCookie bool
-	cookiePath   string
 }
 
 type anonymousAuthUserMiddleware struct{}
@@ -200,6 +218,10 @@ func (anonymousAuthUserMiddleware) Wrap(next http.Handler) http.Handler {
 
 func (m anonymousUserCookieResponseMiddleware) Wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestPath, originalPathAvailable := r.Context().Value(anonymousRequestPathKey{}).(string)
+		if !originalPathAvailable && r.URL != nil {
+			requestPath = r.URL.Path
+		}
 		state, _ := r.Context().Value(anonymousCookieStateKey{}).(*anonymousCookieState)
 		user, _ := r.Context().Value(auth.AuthUserKey).(*auth.User)
 		builtInUser, _ := r.Context().Value(anonymousAuthUserKey{}).(*auth.User)
@@ -213,7 +235,7 @@ func (m anonymousUserCookieResponseMiddleware) Wrap(next http.Handler) http.Hand
 			http.SetCookie(w, &http.Cookie{
 				Name:     anonymousUserIDCookie,
 				Value:    state.userID,
-				Path:     anonymousCookiePathForBasePath(m.cookiePath),
+				Path:     anonymousCookiePathForBasePath(requestPath),
 				HttpOnly: true,
 				SameSite: http.SameSiteLaxMode,
 				Secure:   m.secureCookie || r.TLS != nil,

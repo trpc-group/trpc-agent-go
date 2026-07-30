@@ -210,11 +210,13 @@ func buildA2AServer(options *options) (*a2a.A2AServer, error) {
 	// it will be extracted and used as the base path for routing incoming requests.
 	basePath := extractBasePath(ia2a.NormalizeURL(agentCard.URL))
 
-	// Extract trace context before caller middleware runs, then apply the
+	// Freeze the externally visible request path and extract trace context before
+	// caller middleware runs, then apply the
 	// provisional identity and explicitly configured pre-auth middleware before
 	// anonymous-cookie creation and authentication.
 	opts := []a2a.Option{
 		a2a.WithBasePath(basePath),
+		a2a.WithMiddleWare(anonymousRequestPathMiddleware{}),
 		a2a.WithMiddleWare(&traceContextMiddleware{}),
 		a2a.WithMiddleWare(preAuthIdentityMiddleware{userIDHeader: userIDHeader}),
 	}
@@ -233,7 +235,6 @@ func buildA2AServer(options *options) (*a2a.A2AServer, error) {
 	opts = append(opts, options.extraOptions...)
 	opts = append(opts, a2a.WithMiddleWare(anonymousUserCookieResponseMiddleware{
 		secureCookie: anonymousCookieSecureForAgentURL(agentCard.URL),
-		cookiePath:   basePath,
 	}))
 	a2aServer, err := a2a.NewA2AServer(agentCard, taskManager, opts...)
 	if err != nil {
