@@ -39,7 +39,7 @@ var networkCommands = map[string]bool{
 	"netcat": true, "ssh": true, "scp": true, "rsync": true,
 	"ftp": true, "sftp": true, "http": true, "https": true,
 	"telnet": true,
-	"dig": true, "nslookup": true, "host": true,
+	"dig":    true, "nslookup": true, "host": true,
 }
 
 func (c *networkChecker) Check(ctx context.Context, req *ScanRequest) (*CheckResult, error) {
