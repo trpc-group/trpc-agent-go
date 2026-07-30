@@ -56,5 +56,5 @@ func CurrentBranch(repoPath string) string {
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(out))
+	return strings.TrimSpace(strings.TrimSuffix(string(out), "\n"))
 }

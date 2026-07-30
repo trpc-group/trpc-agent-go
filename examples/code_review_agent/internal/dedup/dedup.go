@@ -14,7 +14,7 @@ package dedup
 
 import (
 	"context"
-	"fmt"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -111,16 +111,12 @@ func applyCaps(findings []types.Finding, maxPerFile, maxTotal int) []types.Findi
 	return capped
 }
 
+// sortBySeverity sorts findings by severity (critical > high > medium > low > warning).
 func sortBySeverity(findings []types.Finding) {
 	rank := map[string]int{
 		"critical": 0, "high": 1, "medium": 2, "low": 3, "warning": 4,
 	}
-	for i := 0; i < len(findings); i++ {
-		for j := i + 1; j < len(findings); j++ {
-			if rank[findings[i].Severity] > rank[findings[j].Severity] {
-				findings[i], findings[j] = findings[j], findings[i]
-			}
-		}
-	}
-	_ = fmt.Sprintf("") // suppress unused import if needed
+	sort.Slice(findings, func(i, j int) bool {
+		return rank[findings[i].Severity] < rank[findings[j].Severity]
+	})
 }

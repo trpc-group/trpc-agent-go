@@ -77,7 +77,7 @@ func Run(ctx context.Context, gs graph.State) (any, error) {
 	case "container", "cube":
 		ce, err := container.New()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "sandbox: container unavailable (%v), falling back to local\n", err)
+			fmt.Fprintf(os.Stderr, "sandbox: container unavailable (%v), falling back to local executor — sandbox isolation is degraded\n", err)
 			engine = localexec.New().Engine()
 		} else {
 			engine = ce.Engine()

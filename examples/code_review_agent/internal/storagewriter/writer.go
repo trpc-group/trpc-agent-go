@@ -99,18 +99,23 @@ func Run(ctx context.Context, gs graph.State) (any, error) {
 	}
 	if jsonPath != "" {
 		if info, err := os.Stat(jsonPath); err == nil && info.Size() <= maxArtifactBytes {
-			store.InsertArtifact(ctx, storage.ArtifactRow{
+			if err := store.InsertArtifact(ctx, storage.ArtifactRow{
 				ID: uuid.New().String(), TaskID: taskID, ArtifactType: "json_report",
 				FilePath: jsonPath, SizeBytes: info.Size(), ContentHash: fileHash(jsonPath), CreatedAt: now,
-			})
+			}); err != nil {
+				// Artifact persistence failure is non-fatal — log and continue.
+				fmt.Fprintf(os.Stderr, "storagewriter: failed to insert json artifact: %v\n", err)
+			}
 		}
 	}
 	if mdPath != "" {
 		if info, err := os.Stat(mdPath); err == nil && info.Size() <= maxArtifactBytes {
-			store.InsertArtifact(ctx, storage.ArtifactRow{
+			if err := store.InsertArtifact(ctx, storage.ArtifactRow{
 				ID: uuid.New().String(), TaskID: taskID, ArtifactType: "md_report",
 				FilePath: mdPath, SizeBytes: info.Size(), ContentHash: fileHash(mdPath), CreatedAt: now,
-			})
+			}); err != nil {
+				fmt.Fprintf(os.Stderr, "storagewriter: failed to insert md artifact: %v\n", err)
+			}
 		}
 	}
 

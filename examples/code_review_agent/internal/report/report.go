@@ -1,12 +1,9 @@
-//
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
-//
-
 // Package report implements the ReportGenerator GraphAgent node.
 // Generates JSON and Markdown review reports.
 package report
@@ -44,6 +41,10 @@ func Run(ctx context.Context, gs graph.State) (any, error) {
 	if outputDir == "" {
 		outputDir = "./output"
 	}
+
+	// Set report generator timing before buildReport reads node timings from state.
+	// The defer above will overwrite this with the final elapsed time.
+	gs[state.StateKeyNodeReportGeneratorMs] = time.Since(start).Milliseconds()
 
 	report := buildReport(taskID, findings, warnings, permDecisions, sandboxResults, gs)
 

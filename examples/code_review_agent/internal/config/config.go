@@ -1,12 +1,9 @@
-//
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
-//
-
 // Package config loads and validates code-review-agent YAML configuration.
 package config
 
@@ -158,6 +155,10 @@ func (c *Config) Validate() error {
 	}
 	if c.Executor.Type == "" {
 		return fmt.Errorf("executor.type is required")
+	}
+	supportedExecutors := map[string]bool{"local": true, "container": true, "cube": true, "e2b": true}
+	if !supportedExecutors[c.Executor.Type] {
+		return fmt.Errorf("executor.type must be one of: local, container, cube, e2b; got %q", c.Executor.Type)
 	}
 	if c.LLM.ModelName == "" && c.Mode == "live" {
 		return fmt.Errorf("llm.model_name is required in live mode")
