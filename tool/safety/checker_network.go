@@ -61,6 +61,10 @@ func (c *networkChecker) Check(ctx context.Context, req *ScanRequest) (*CheckRes
 		if host == "" || !strings.Contains(host, ".") {
 			continue
 		}
+		// Skip hosts that look like filenames (common extensions).
+		if looksLikeFilename(host) {
+			continue
+		}
 
 		if matchDomain(host, c.policy.Network.Blacklist) {
 			return &CheckResult{
@@ -105,6 +109,28 @@ func extractHost(rawURL string) string {
 		return rawURL
 	}
 	return u.Hostname()
+}
+
+// fileExtensionSuffixes lists common file extensions that should not
+// be treated as domains when matched by the bare-domain regex alternative.
+var fileExtensionSuffixes = []string{
+	".tar.gz", ".tar.bz2", ".tar.xz", ".tar", ".zip", ".gz",
+	".yaml", ".yml", ".json", ".xml", ".toml",
+	".log", ".txt", ".csv", ".md", ".rst",
+	".env", ".git", ".hg",
+	".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico",
+	".exe", ".dll", ".so", ".dylib",
+	".deb", ".rpm", ".apk",
+}
+
+func looksLikeFilename(host string) bool {
+	host = strings.ToLower(host)
+	for _, ext := range fileExtensionSuffixes {
+		if strings.HasSuffix(host, ext) {
+			return true
+		}
+	}
+	return false
 }
 
 func matchDomain(host string, domains []string) bool {

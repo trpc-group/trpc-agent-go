@@ -12,7 +12,6 @@ package safety
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"strings"
 )
 
@@ -70,17 +69,17 @@ func (c *envChecker) Check(ctx context.Context, req *ScanRequest) (*CheckResult,
 		}
 	}
 
-	// Check for denied value patterns (e.g., secrets in env values).
-	if len(p.DenyValues) > 0 {
+	// Check for denied value patterns using pre-compiled regexps.
+	denyPatterns := c.policy.EnvDenyValueRegexps()
+	if len(denyPatterns) > 0 {
 		for key, val := range req.Env {
-			for _, pattern := range p.DenyValues {
-				matched, _ := regexp.MatchString(pattern, val)
-				if matched {
+			for _, re := range denyPatterns {
+				if re.MatchString(val) {
 					return &CheckResult{
 						Decision:       DecisionDeny,
 						RiskLevel:      RiskCritical,
 						RuleID:         "ENV_DENIED_VALUE",
-						Evidence:       fmt.Sprintf("Environment variable %s matched denied pattern %s", key, pattern),
+						Evidence:       fmt.Sprintf("Environment variable %s matched denied pattern", key),
 						Recommendation: "Environment variable value matches a forbidden pattern. Use a secret manager or the tool's env injection mechanism.",
 					}, nil
 				}

@@ -109,10 +109,17 @@ func matchPath(text, path string) bool {
 		return true
 	}
 
+	// **/ patterns: match the glob against every whitespace-separated
+	// token in the text. Go's filepath.Match does not support **, so
+	// we strip the **/ prefix and match the remainder against each
+	// path-like token individually.
 	if strings.HasPrefix(path, "**/") {
 		suffix := path[3:]
-		if containsNormalized(text, suffix) {
-			return true
+		for _, token := range strings.Fields(text) {
+			token = strings.Trim(token, `"'`)
+			if matched, _ := filepath.Match(suffix, token); matched {
+				return true
+			}
 		}
 	}
 

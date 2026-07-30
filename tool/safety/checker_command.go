@@ -34,7 +34,12 @@ type commandChecker struct {
 func (c *commandChecker) Name() string { return "command" }
 
 func (c *commandChecker) Check(ctx context.Context, req *ScanRequest) (*CheckResult, error) {
-	if req.Command == "" {
+	// Combine command and args as shellsafe would see them at execution time.
+	cmd := req.Command
+	if len(req.Args) > 0 {
+		cmd += " " + strings.Join(req.Args, " ")
+	}
+	if cmd == "" {
 		return nil, nil
 	}
 
@@ -43,14 +48,14 @@ func (c *commandChecker) Check(ctx context.Context, req *ScanRequest) (*CheckRes
 		return nil, nil
 	}
 
-	pipe, err := shellsafe.Parse(req.Command)
+	pipe, err := shellsafe.Parse(cmd)
 	if err != nil {
 		// shellsafe rejected the structure — it's unsafe by construction.
 		return &CheckResult{
 			Decision:       DecisionDeny,
 			RiskLevel:      RiskHigh,
 			RuleID:         "CMD_STRUCTURE_REJECTED",
-			Evidence:       req.Command,
+			Evidence:       cmd,
 			Recommendation: fmt.Sprintf("Command rejected by parser: %s. Simplify to literal commands without shell expansions.", err.Error()),
 		}, nil
 	}

@@ -38,7 +38,8 @@ type Policy struct {
 }
 
 type compiledPolicy struct {
-	secretPatterns []*regexp.Regexp
+	secretPatterns  []*regexp.Regexp
+	envDenyPatterns []*regexp.Regexp
 }
 
 // CommandPolicy controls which commands are allowed or denied.
@@ -181,10 +182,22 @@ func (p *Policy) compile() error {
 		}
 		p.compiled.secretPatterns = append(p.compiled.secretPatterns, re)
 	}
+	for i, pat := range p.Env.DenyValues {
+		re, err := regexp.Compile(pat)
+		if err != nil {
+			return fmt.Errorf("safety: env deny_values pattern %d %q: %w", i, pat, err)
+		}
+		p.compiled.envDenyPatterns = append(p.compiled.envDenyPatterns, re)
+	}
 	return nil
 }
 
 // SecretRegexps returns the pre-compiled secret detection patterns.
 func (p *Policy) SecretRegexps() []*regexp.Regexp {
 	return p.compiled.secretPatterns
+}
+
+// EnvDenyValueRegexps returns the pre-compiled env deny-value patterns.
+func (p *Policy) EnvDenyValueRegexps() []*regexp.Regexp {
+	return p.compiled.envDenyPatterns
 }
