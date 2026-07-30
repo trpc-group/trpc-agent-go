@@ -62,8 +62,8 @@ func (c *Client) CreateSummary(
 
 	sumKey := c.keys.SummaryKey(key)
 
-	if _, err := luaSummarySetIfNewer.Run(
-		ctx, c.client, []string{sumKey}, filterKey, string(payload), ttlSeconds,
+	if _, err := c.runScript(
+		ctx, luaSummarySetIfNewer, []string{sumKey}, filterKey, string(payload), ttlSeconds,
 	).Result(); err != nil {
 		return fmt.Errorf("store summary failed: %w", err)
 	}

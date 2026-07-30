@@ -28,6 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	iflow "trpc.group/trpc-go/trpc-agent-go/internal/flow"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/toolresultround"
 	"trpc.group/trpc-go/trpc-agent-go/internal/util/message"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
@@ -3015,12 +3016,35 @@ func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 			continue
 		} else if evt.IsToolCallResponse() {
 			responseMatches := responseMatchesByCallEvent[i]
+			callIDs := evt.GetToolCallIDs()
+			perToolCallResultRound := hasPerToolCallResultRound(
+				events,
+				i,
+				responseMatches,
+			)
+			if !allToolCallIDsMatched(callIDs, events, responseMatches) &&
+				perToolCallResultRound {
+				// Keep persisted events for audit, but do not project a
+				// provider-invalid partial tool round into a later model
+				// request. Preserve assistant payload unrelated to the calls.
+				if stripped, keep := stripToolCallsFromEvent(evt); keep {
+					resultEvents = append(resultEvents, stripped)
+				}
+				continue
+			}
 			resultEvents = append(resultEvents, evt)
 
 			if len(responseMatches) == 0 {
 				continue
 			} else if len(responseMatches) == 1 {
-				resultEvents = append(resultEvents, filterToolResponseEvent(events, responseMatches[0]))
+				responseEvent := filterToolResponseEvent(events, responseMatches[0])
+				if perToolCallResultRound {
+					responseEvent = orderToolResultChoicesByCallOrder(
+						responseEvent,
+						callIDs,
+					)
+				}
+				resultEvents = append(resultEvents, responseEvent)
 			} else {
 				// Merge multiple async function responses.
 				var responseEvents []event.Event
@@ -3028,6 +3052,12 @@ func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 					responseEvents = append(responseEvents, filterToolResponseEvent(events, match))
 				}
 				mergedEvent := p.mergeFunctionResponseEvents(responseEvents)
+				if perToolCallResultRound {
+					mergedEvent = orderToolResultChoicesByCallOrder(
+						mergedEvent,
+						callIDs,
+					)
+				}
 				resultEvents = append(resultEvents, mergedEvent)
 			}
 		} else {
@@ -3036,6 +3066,87 @@ func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 	}
 
 	return resultEvents
+}
+
+func hasPerToolCallResultRound(
+	events []event.Event,
+	callEventIndex int,
+	matches []matchedToolResponseEvent,
+) bool {
+	for _, match := range matches {
+		if match.eventIndex < 0 || match.eventIndex >= len(events) {
+			continue
+		}
+		if toolresultround.HasMarker(&events[match.eventIndex]) {
+			return true
+		}
+	}
+
+	if callEventIndex < 0 || callEventIndex >= len(events) {
+		return false
+	}
+	callEvent := events[callEventIndex]
+	for i := callEventIndex + 1; i < len(events); i++ {
+		candidate := &events[i]
+		if !sameToolResultRound(callEvent, *candidate) {
+			continue
+		}
+		if candidate.IsUserMessage() || candidate.IsToolCallResponse() {
+			break
+		}
+		if toolresultround.HasMarker(candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func sameToolResultRound(callEvent, candidate event.Event) bool {
+	if callEvent.InvocationID == "" ||
+		callEvent.InvocationID != candidate.InvocationID {
+		return false
+	}
+	if callEvent.RequestID == "" && candidate.RequestID == "" {
+		return true
+	}
+	return callEvent.RequestID != "" &&
+		callEvent.RequestID == candidate.RequestID
+}
+
+// orderToolResultChoicesByCallOrder projects tool-result choices in the order
+// declared by the assistant, independently of the order in which tools
+// finished. Choices outside the round, if any, remain at the end in their
+// original order.
+func orderToolResultChoicesByCallOrder(
+	evt event.Event,
+	callIDs []string,
+) event.Event {
+	if evt.Response == nil || len(evt.Response.Choices) < 2 || len(callIDs) < 2 {
+		return evt
+	}
+
+	orderByID := make(map[string]int, len(callIDs))
+	for i, callID := range callIDs {
+		if _, exists := orderByID[callID]; !exists {
+			orderByID[callID] = i
+		}
+	}
+
+	response := *evt.Response
+	response.Choices = append([]model.Choice(nil), evt.Response.Choices...)
+	sort.SliceStable(response.Choices, func(i, j int) bool {
+		iOrder, iKnown := orderByID[toolResponseIDFromChoice(response.Choices[i])]
+		jOrder, jKnown := orderByID[toolResponseIDFromChoice(response.Choices[j])]
+		if iKnown != jKnown {
+			return iKnown
+		}
+		if !iKnown {
+			return false
+		}
+		return iOrder < jOrder
+	})
+	evt.Response = &response
+	return evt
 }
 
 type pendingToolCallRound struct {
@@ -3162,7 +3273,11 @@ func (p *ContentRequestProcessor) mergeFunctionResponseEvents(
 	var allChoices []model.Choice
 	for _, evt := range functionResponseEvents {
 		for _, choice := range evt.Choices {
-			if choice.Message.Content != "" && choice.Message.ToolID != "" {
+			message := choice.Message
+			if message.ToolID == "" {
+				message = choice.Delta
+			}
+			if message.ToolID != "" && model.HasPayload(message) {
 				allChoices = append(allChoices, choice)
 			}
 		}

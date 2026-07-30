@@ -13,6 +13,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -232,7 +233,11 @@ func (r *commandRequirement) Apply(
 				Mode:    codeexecutor.DefaultScriptFileMode,
 			}},
 		); err != nil {
-			return fmt.Errorf("write marker: %w", err)
+			markerErr := fmt.Errorf("write marker: %w", err)
+			if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+				return errors.Join(markerErr, ErrReconcileRetryUnsafe)
+			}
+			return markerErr
 		}
 	}
 	return nil

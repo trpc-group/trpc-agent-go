@@ -127,7 +127,7 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	if database == "" {
 		database = defaultDatabase
 	}
-	if opts.sessionTTL > 0 && opts.cleanupInterval == 0 {
+	if (opts.sessionTTL > 0 || opts.effectiveTrackEventTTL() > 0) && opts.cleanupInterval == 0 {
 		opts.cleanupInterval = defaultCleanupIntervalSecond
 	}
 
@@ -169,7 +169,7 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		})
 		s.asyncWorker.Start()
 	}
-	if opts.sessionTTL > 0 && opts.cleanupInterval > 0 {
+	if (opts.sessionTTL > 0 || opts.effectiveTrackEventTTL() > 0) && opts.cleanupInterval > 0 {
 		s.cleanupDone = make(chan struct{})
 		s.startCleanupRoutine()
 	}
@@ -1052,6 +1052,34 @@ func (s *Service) AppendTrackEvent(
 	return nil
 }
 
+// GetTrackEvents returns persisted track events for the given session track.
+func (s *Service) GetTrackEvents(
+	ctx context.Context,
+	key session.Key,
+	track session.Track,
+	opts ...session.Option,
+) (*session.TrackEvents, error) {
+	if err := key.CheckSessionKey(); err != nil {
+		return nil, err
+	}
+	opt := applyOptions(opts...)
+	trackEvents, err := s.getTrackEventsByTrackLists(
+		ctx,
+		[]session.Key{key},
+		[][]session.Track{{track}},
+		opt.EventNum,
+		opt.EventTime,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("mongodb session service get track events failed: %w", err)
+	}
+	events := trackEvents[0][track]
+	if events == nil {
+		events = []session.TrackEvent{}
+	}
+	return &session.TrackEvents{Track: track, Events: events}, nil
+}
+
 func (s *Service) persistTrackEvent(ctx context.Context, key session.Key, trackEvent *session.TrackEvent) error {
 	if trackEvent == nil {
 		return fmt.Errorf("track event is nil")
@@ -1061,7 +1089,8 @@ func (s *Service) persistTrackEvent(ctx context.Context, key session.Key, trackE
 		return fmt.Errorf("marshal track event failed: %w", err)
 	}
 	now := time.Now()
-	expiresAt := expiresAtPtr(now, s.opts.sessionTTL)
+	sessionExpires := expiresAtPtr(now, s.opts.sessionTTL)
+	trackExpires := expiresAtPtr(now, s.opts.effectiveTrackEventTTL())
 
 	return s.client.Transaction(ctx, func(sc mongo.SessionContext) error {
 		var doc sessionStateDoc
@@ -1090,7 +1119,7 @@ func (s *Service) persistTrackEvent(ctx context.Context, key session.Key, trackE
 		}
 		res, err := s.client.UpdateOne(sc, s.database, s.collSessionStates,
 			activeFilterNoExpiry(sessionKeyFilter(key)),
-			sessionStateUpdate(set, expiresAt))
+			sessionStateUpdate(set, sessionExpires))
 		if err != nil {
 			return fmt.Errorf("update session state: %w", err)
 		}
@@ -1106,7 +1135,7 @@ func (s *Service) persistTrackEvent(ctx context.Context, key session.Key, trackE
 			Event:     eventBytes,
 			CreatedAt: trackEvent.Timestamp,
 			UpdatedAt: trackEvent.Timestamp,
-			ExpiresAt: expiresAt,
+			ExpiresAt: trackExpires,
 		}
 		if _, err := s.client.InsertOne(sc, s.database, s.collSessionTracks, trackDoc); err != nil {
 			return fmt.Errorf("insert track event: %w", err)
@@ -1198,9 +1227,10 @@ func (s *Service) Close() error {
 //
 // Other collections rely on MongoDB TTL indexes. Events and track events need
 // backend cleanup so histories stay all-or-nothing: a session group is cleaned
-// only when its latest row in that collection is older than the TTL cutoff.
+// only when its latest row in that collection is older than its TTL cutoff.
 func (s *Service) cleanupExpired(ctx context.Context) {
-	if s.opts.sessionTTL <= 0 {
+	trackTTL := s.opts.effectiveTrackEventTTL()
+	if s.opts.sessionTTL <= 0 && trackTTL <= 0 {
 		return
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -1215,18 +1245,18 @@ func (s *Service) cleanupExpired(ctx context.Context) {
 }
 
 func (s *Service) cleanupExpiredEvents(ctx context.Context, now time.Time) error {
-	return s.cleanupExpiredCollection(ctx, now, s.collSessionEvents, "events")
+	return s.cleanupExpiredCollection(ctx, now, s.opts.sessionTTL, s.collSessionEvents, "events")
 }
 
 func (s *Service) cleanupExpiredTracks(ctx context.Context, now time.Time) error {
-	return s.cleanupExpiredCollection(ctx, now, s.collSessionTracks, "tracks")
+	return s.cleanupExpiredCollection(ctx, now, s.opts.effectiveTrackEventTTL(), s.collSessionTracks, "tracks")
 }
 
-func (s *Service) cleanupExpiredCollection(ctx context.Context, now time.Time, collection string, label string) error {
-	if s.opts.sessionTTL <= 0 {
+func (s *Service) cleanupExpiredCollection(ctx context.Context, now time.Time, ttl time.Duration, collection string, label string) error {
+	if ttl <= 0 {
 		return nil
 	}
-	cutoff := now.Add(-s.opts.sessionTTL)
+	cutoff := now.Add(-ttl)
 	pipeline := bson.A{
 		bson.M{"$match": bson.M{"deleted_at": nil}},
 		bson.M{"$group": bson.M{
