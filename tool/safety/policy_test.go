@@ -218,10 +218,16 @@ func TestScenario_PipeDataLeak(t *testing.T) {
 		Backend: "workspaceexec",
 	})
 	assert.Equal(t, safety.DecisionDeny, report.Decision)
-	// Either PATH_ (sensitive file) or NET_ (non-whitelisted domain) must fire.
+	// The command starts with "cat /etc/passwd" → shellsafe parses it,
+	// path checker catches the sensitive /etc/passwd reference.
 	assert.True(t,
 		strings.Contains(report.RuleID, "PATH_") || strings.Contains(report.RuleID, "NET_") || strings.Contains(report.RuleID, "CMD_"),
 		"expected PATH_, NET_, or CMD_ rule, got %s", report.RuleID)
+	// Regardless of which checker fired first, we verify the report is
+	// properly structured.
+	assert.NotEmpty(t, report.Evidence)
+	assert.NotEmpty(t, report.Recommendation)
+	assert.True(t, report.Blocked)
 }
 
 // 9. Dependency install → ask

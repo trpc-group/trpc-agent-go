@@ -52,28 +52,29 @@ func (c *pathChecker) Check(ctx context.Context, req *ScanRequest) (*CheckResult
 }
 
 func (c *pathChecker) result(pattern, path string) (*CheckResult, error) {
-	switch {
-	case strings.Contains(pattern, ".ssh") || strings.Contains(pattern, "id_rsa") || strings.Contains(pattern, ".pem"):
+	rule := classifyPathRule(pattern)
+	switch rule {
+	case "PATH_SENSITIVE_SSH":
 		return &CheckResult{
 			Decision:       DecisionDeny,
 			RiskLevel:      RiskCritical,
-			RuleID:         "PATH_SENSITIVE_SSH",
+			RuleID:         rule,
 			Evidence:       pattern + " -> " + path,
 			Recommendation: "Access to SSH keys and credentials is forbidden. Use a dedicated secret management tool.",
 		}, nil
-	case strings.Contains(pattern, ".env") || strings.Contains(pattern, "credentials"):
+	case "PATH_SENSITIVE_ENV":
 		return &CheckResult{
 			Decision:       DecisionDeny,
 			RiskLevel:      RiskCritical,
-			RuleID:         "PATH_SENSITIVE_ENV",
+			RuleID:         rule,
 			Evidence:       pattern + " -> " + path,
 			Recommendation: "Access to environment files and credentials is forbidden. Inject secrets via the tool's env parameter.",
 		}, nil
-	case strings.Contains(pattern, ".git/config"):
+	case "PATH_SENSITIVE_CRED":
 		return &CheckResult{
 			Decision:       DecisionDeny,
 			RiskLevel:      RiskHigh,
-			RuleID:         "PATH_SENSITIVE_CRED",
+			RuleID:         rule,
 			Evidence:       pattern + " -> " + path,
 			Recommendation: "Access to git configuration may leak credentials.",
 		}, nil
@@ -86,6 +87,39 @@ func (c *pathChecker) result(pattern, path string) (*CheckResult, error) {
 			Recommendation: "The referenced path is forbidden by the safety policy.",
 		}, nil
 	}
+}
+
+// classifyPathRule maps a denied-path glob pattern to a structured RuleID.
+// It matches against the policy pattern (not the scanned text), so it is
+// immune to adversarial crafting of command-line arguments.
+func classifyPathRule(pattern string) string {
+	// Normalise to forward slashes for consistent matching.
+	p := filepath.ToSlash(pattern)
+	base := filepath.Base(p)
+
+	// SSH-related: .ssh directory, id_rsa, *.pem key files.
+	if base == ".ssh" || strings.HasSuffix(p, "/.ssh") || base == "id_rsa" ||
+		strings.HasPrefix(base, "id_") && strings.HasSuffix(base, ".pem") {
+		return "PATH_SENSITIVE_SSH"
+	}
+
+	// Environment / credential files.
+	if base == ".env" || strings.HasSuffix(p, "/.env") ||
+		base == "credentials" || strings.HasSuffix(p, "/credentials") {
+		return "PATH_SENSITIVE_ENV"
+	}
+
+	// Git config (may contain embedded credentials).
+	if base == "config" && strings.Contains(p, ".git") {
+		return "PATH_SENSITIVE_CRED"
+	}
+
+	// PEM key files (generic).
+	if strings.HasSuffix(base, ".pem") {
+		return "PATH_SENSITIVE_SSH"
+	}
+
+	return "PATH_DENIED"
 }
 
 // expandTilde replaces a leading ~ with $HOME.

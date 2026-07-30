@@ -90,17 +90,26 @@ func (c *envChecker) Check(ctx context.Context, req *ScanRequest) (*CheckResult,
 	return nil, nil
 }
 
-// equalOrSuffixMatch returns true if key == entry or key has suffix "entry"
-// (to support wildcard patterns like "*_TOKEN" matching "GITHUB_TOKEN").
+// equalOrSuffixMatch returns true if key matches entry (exact or wildcard).
+//
+// Two wildcard forms are supported:
+//   - "*_TOKEN" matches any key ending with "_TOKEN" (prefix wildcard)
+//   - "TOKEN_*" matches any key starting with "TOKEN_" (suffix wildcard)
+//
+// Matching is case-insensitive.
 func equalOrSuffixMatch(key, entry string) bool {
 	key = strings.ToUpper(key)
 	entry = strings.ToUpper(entry)
 	if key == entry {
 		return true
 	}
-	// Wildcard: "*_TOKEN" → match any key ending with "_TOKEN".
+	// Prefix wildcard: "*_TOKEN" → match any key ending with "_TOKEN".
 	if strings.HasPrefix(entry, "*") {
 		return strings.HasSuffix(key, entry[1:])
+	}
+	// Suffix wildcard: "TOKEN_*" → match any key starting with "TOKEN_".
+	if strings.HasSuffix(entry, "*") {
+		return strings.HasPrefix(key, entry[:len(entry)-1])
 	}
 	return false
 }

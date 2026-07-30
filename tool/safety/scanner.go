@@ -56,10 +56,9 @@ type Scanner struct {
 	audit    AuditLogger
 }
 
-// NewScanner creates a Scanner with all built-in checkers registered.
-func NewScanner(policy *Policy, audit AuditLogger) *Scanner {
-	s := &Scanner{policy: policy, audit: audit}
-	s.checkers = []Checker{
+// allCheckers builds the full list of available checkers.
+func allCheckers(policy *Policy) []Checker {
+	return []Checker{
 		&commandChecker{policy: policy},
 		&secretCmdChecker{policy: policy},
 		&envChecker{policy: policy},
@@ -68,7 +67,35 @@ func NewScanner(policy *Policy, audit AuditLogger) *Scanner {
 		&hostChecker{policy: policy},
 		&resourceChecker{policy: policy},
 	}
+}
+
+// NewScanner creates a Scanner with checkers filtered by the policy's
+// Checkers field. When policy.Checkers is empty, all built-in checkers
+// are enabled.
+func NewScanner(policy *Policy, audit AuditLogger) *Scanner {
+	s := &Scanner{policy: policy, audit: audit}
+	s.checkers = filterCheckers(allCheckers(policy), policy)
 	return s
+}
+
+// filterCheckers returns the subset of checkers whose Name() appears in
+// policy.Checkers. When policy is nil or policy.Checkers is empty, all
+// checkers are returned.
+func filterCheckers(all []Checker, policy *Policy) []Checker {
+	if policy == nil || len(policy.Checkers) == 0 {
+		return all
+	}
+	enabled := make(map[string]bool, len(policy.Checkers))
+	for _, name := range policy.Checkers {
+		enabled[name] = true
+	}
+	out := make([]Checker, 0, len(all))
+	for _, c := range all {
+		if enabled[c.Name()] {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // Scan runs all checkers serially and returns the aggregated SafetyReport.

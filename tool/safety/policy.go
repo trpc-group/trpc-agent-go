@@ -32,6 +32,11 @@ type Policy struct {
 	Env       EnvPolicy      `yaml:"env" json:"env"`
 	Secrets   SecretPolicy   `yaml:"secrets" json:"secrets"`
 	HostExec  HostExecPolicy `yaml:"hostexec" json:"hostexec"`
+	// Checkers lists which safety checkers to enable. An empty list
+	// (the default) enables all built-in checkers. Set to a subset
+	// to disable specific checkers. Valid names: "command", "secret_cmd",
+	// "env", "network", "path", "host", "resource".
+	Checkers []string `yaml:"checkers" json:"checkers"`
 
 	// compiled holds pre-compiled regexes built during LoadPolicy.
 	compiled compiledPolicy
@@ -189,10 +194,16 @@ func (p *Policy) compile() error {
 
 // SecretRegexps returns the pre-compiled secret detection patterns.
 func (p *Policy) SecretRegexps() []*regexp.Regexp {
+	if p == nil {
+		return nil
+	}
 	return p.compiled.secretPatterns
 }
 
 // EnvDenyValueRegexps returns the pre-compiled env deny-value patterns.
 func (p *Policy) EnvDenyValueRegexps() []*regexp.Regexp {
+	if p == nil {
+		return nil
+	}
 	return p.compiled.envDenyPatterns
 }

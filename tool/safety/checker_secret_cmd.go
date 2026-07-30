@@ -56,10 +56,15 @@ func (c *secretCmdChecker) Check(ctx context.Context, req *ScanRequest) (*CheckR
 // maskSecret replaces the middle portion of a detected secret with "***"
 // so the audit log does not record the raw secret value.
 func maskSecret(s string) string {
-	if len(s) <= 8 {
-		return s[:min(len(s), 3)] + "***"
+	if len(s) <= 6 {
+		// Too short to safely show prefix+suffix; mask entirely.
+		return "***"
 	}
-	// Keep a small fixed prefix/suffix to aid debugging without exposing the secret.
-	const keep = 4
+	// Keep a small fixed prefix/suffix to aid debugging without exposing
+	// the secret. For shorter secrets use fewer visible characters.
+	keep := 3
+	if len(s) <= 12 {
+		keep = 2
+	}
 	return s[:keep] + "***" + s[len(s)-keep:]
 }

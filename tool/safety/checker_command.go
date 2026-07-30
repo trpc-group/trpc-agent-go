@@ -90,21 +90,29 @@ func (c *commandChecker) buildShellsafePolicy() shellsafe.Policy {
 }
 
 // inferCommandRuleID maps a shellsafe rejection to a structured RuleID.
+//
+// N.B. shellsafe (internal/shellsafe) does not expose typed sentinel
+// errors. We match on stable substrings from its error messages. If
+// shellsafe changes its error format, the tests in policy_test.go
+// (scenario #2, #7, #14, #18) will catch the regression because they
+// assert on specific RuleID prefixes.
 func inferCommandRuleID(err error) string {
 	msg := err.Error()
-	// Check for "built-in" first — this is shellsafe's implicit-deny message.
-	if strings.Contains(msg, "built-in") || strings.Contains(msg, "implicit") {
+	// "denied by built-in policy" — shellsafe's implicit-deny set
+	// (shell wrappers, re-executing builtins). Check first because it
+	// is the most specific and highest-severity rejection.
+	if strings.Contains(msg, "denied by built-in policy") {
 		return "CMD_SHELL_WRAPPER"
 	}
-	if strings.Contains(msg, "denied_commands") {
+	// "denied by denied_commands" — explicit deny list.
+	if strings.Contains(msg, "denied by denied_commands") {
 		return "CMD_DANGEROUS_DELETE"
 	}
-	if strings.Contains(msg, "allowed_commands") || strings.Contains(msg, "not in allowed_commands") {
+	// "not in allowed_commands" — not in the explicit allow list.
+	if strings.Contains(msg, "not in allowed_commands") {
 		return "CMD_NOT_ALLOWED"
 	}
-	if strings.Contains(msg, "shellsafe") || strings.Contains(msg, "parser") {
-		return "CMD_STRUCTURE_REJECTED"
-	}
+	// Fallback: catch any other shellsafe rejection.
 	return "CMD_REJECTED"
 }
 

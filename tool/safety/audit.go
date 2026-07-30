@@ -54,9 +54,13 @@ func NewJSONLAuditLogger(path string, policy *Policy) (*JSONLAuditLogger, error)
 	if err != nil {
 		return nil, fmt.Errorf("audit: open %s: %w", path, err)
 	}
+	var patterns []*regexp.Regexp
+	if policy != nil {
+		patterns = policy.SecretRegexps()
+	}
 	return &JSONLAuditLogger{
 		file:     f,
-		patterns: policy.SecretRegexps(),
+		patterns: patterns,
 	}, nil
 }
 

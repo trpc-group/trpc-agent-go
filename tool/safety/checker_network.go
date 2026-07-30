@@ -37,8 +37,8 @@ var urlRe = regexp.MustCompile(
 var networkCommands = map[string]bool{
 	"curl": true, "wget": true, "nc": true, "ncat": true,
 	"netcat": true, "ssh": true, "scp": true, "rsync": true,
-	"ftp": true, "sftp": true, "http": true, "https": true,
-	"telnet": true, "dig": true, "nslookup": true, "host": true,
+	"ftp": true, "sftp": true, "telnet": true,
+	"dig": true, "nslookup": true, "host": true,
 }
 
 func (c *networkChecker) Check(ctx context.Context, req *ScanRequest) (*CheckResult, error) {
@@ -91,13 +91,45 @@ func (c *networkChecker) Check(ctx context.Context, req *ScanRequest) (*CheckRes
 }
 
 func containsNetworkCommand(text string) bool {
-	lower := strings.ToLower(text)
-	for cmd := range networkCommands {
-		if strings.Contains(lower, cmd) {
+	// Tokenise the command into words so we match executable names, not
+	// substrings. "python3 -m http.server" should NOT trigger on "http";
+	// "curl https://..." and "http POST ..." still match correctly.
+	tokens := strings.Fields(strings.ToLower(text))
+	for i, tok := range tokens {
+		// Skip flags (leading "-").
+		if strings.HasPrefix(tok, "-") {
+			continue
+		}
+		// Strip leading path components: "/usr/bin/curl" → "curl".
+		if base := pathBase(tok); networkCommands[base] {
+			// Additional guard: "http" and "host" are both common
+			// as substrings (http.server, localhost, ghostscript).
+			// When they appear as token N+1 for "-m" at position N,
+			// they are module names, not network commands.
+			if needsContextGuard(base) && i > 0 && tokens[i-1] == "-m" {
+				continue
+			}
 			return true
 		}
 	}
 	return false
+}
+
+// needsContextGuard returns true for network command names that are
+// common substrings in non-network contexts.
+func needsContextGuard(cmd string) bool {
+	return cmd == "http" || cmd == "https" || cmd == "host"
+}
+
+// pathBase returns the last element of a path, like filepath.Base but
+// operating on '/' separated paths from tokenised commands.
+func pathBase(p string) string {
+	for i := len(p) - 1; i >= 0; i-- {
+		if p[i] == '/' || p[i] == '\\' {
+			return p[i+1:]
+		}
+	}
+	return p
 }
 
 func extractHost(rawURL string) string {

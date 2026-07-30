@@ -12,7 +12,6 @@ package safety
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -50,7 +49,7 @@ func NewSafetyPermissionPolicy(
 	audit AuditLogger,
 ) *SafetyPermissionPolicy {
 	if scanner == nil {
-		panic(fmt.Sprintf("safety: NewSafetyPermissionPolicy called with nil scanner"))
+		panic("safety: NewSafetyPermissionPolicy called with nil scanner")
 	}
 	return &SafetyPermissionPolicy{
 		inner:   inner,
@@ -102,6 +101,17 @@ func (p *SafetyPermissionPolicy) CheckToolPermission(
 }
 
 // defaultRequestMapper extracts the command from common JSON argument shapes.
+//
+// It tries these keys in order:
+//   - "command" (workspace_exec, exec_command, most exec tools)
+//   - "cmd"     (fallback for custom/short-form tools)
+//   - "script"  (code_exec tools)
+//
+// The first non-empty string value wins. If none match, Command stays empty
+// and only structure-independent checkers (resource limits, etc.) apply.
+//
+// For tools with non-standard argument shapes, use SetRequestMapper to
+// provide a custom mapper.
 func defaultRequestMapper(req *tool.PermissionRequest) *ScanRequest {
 	sr := &ScanRequest{
 		ToolName: req.ToolName,
@@ -114,8 +124,13 @@ func defaultRequestMapper(req *tool.PermissionRequest) *ScanRequest {
 	if err := json.Unmarshal(req.Arguments, &args); err != nil {
 		return sr
 	}
-	if cmd, ok := args["command"].(string); ok {
+	// Try multiple common command-key names.
+	if cmd, ok := args["command"].(string); ok && cmd != "" {
 		sr.Command = cmd
+	} else if cmd, ok := args["cmd"].(string); ok && cmd != "" {
+		sr.Command = cmd
+	} else if script, ok := args["script"].(string); ok && script != "" {
+		sr.Command = script
 	}
 	if cwd, ok := args["cwd"].(string); ok {
 		sr.Cwd = cwd
