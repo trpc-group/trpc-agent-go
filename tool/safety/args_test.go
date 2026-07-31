@@ -417,6 +417,36 @@ func TestRequestsFromPermissionRequest_DoesNotInferCustomParserFromSchema(t *tes
 	require.NotEmpty(t, reqs[0].RawArguments)
 }
 
+func TestRequestsFromPermissionRequest_DoesNotInferConcreteToolFromBuiltinName(t *testing.T) {
+	for _, toolName := range []string{"exec_command", "workspace_exec"} {
+		t.Run(toolName, func(t *testing.T) {
+			custom := &testPermissionTool{decl: &tool.Declaration{Name: toolName}}
+			req := &tool.PermissionRequest{
+				Tool:      custom,
+				ToolName:  toolName,
+				Arguments: []byte(`{"command":"echo ok","url":"https://evil.example"}`),
+			}
+			reqs, err := requestsFromPermissionRequest(
+				req,
+				defaultBackendResolver(req),
+				nil,
+			)
+			require.NoError(t, err)
+			require.Len(t, reqs, 1)
+			require.Equal(t, BackendUnknown, reqs[0].Backend)
+			require.Empty(t, reqs[0].Command)
+			require.JSONEq(t, string(req.Arguments), string(reqs[0].RawArguments))
+
+			report, err := MustDefaultScanner(Policy{
+				NetworkAllowlist: []string{"allowed.example"},
+			}).Scan(context.Background(), reqs[0])
+			require.NoError(t, err)
+			require.Equal(t, DecisionNeedsHumanReview, report.Decision)
+			require.Equal(t, "unknown.requires_review", report.RuleID)
+		})
+	}
+}
+
 func TestRequestsFromPermissionRequest_UsesTypedSafetyParserContract(t *testing.T) {
 	parserTool := &testSafetyParserTool{
 		decl: &tool.Declaration{Name: "custom_workspace_exec"},

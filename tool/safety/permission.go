@@ -279,9 +279,13 @@ func defaultBackendResolver(req *tool.PermissionRequest) Backend {
 	if req == nil {
 		return BackendUnknown
 	}
+	kind := parserKindForPermissionRequest(req)
+	if req.Tool != nil && kind == parserUnknown {
+		return BackendUnknown
+	}
 	return inferBackendForParser(
 		normalizeToolName(req.ToolName),
-		parserKindForPermissionRequest(req),
+		kind,
 	)
 }
 

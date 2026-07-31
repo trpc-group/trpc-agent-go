@@ -21,11 +21,18 @@ import (
 // Decision is the scanner's original safety decision.
 type Decision string
 
-// Safety decisions.
+// Safety decisions. When findings are combined, their stable precedence is
+// deny, needs_human_review, ask, then allow. Risk level breaks ties between
+// findings with the same decision.
 const (
-	DecisionAllow            Decision = "allow"
-	DecisionDeny             Decision = "deny"
-	DecisionAsk              Decision = "ask"
+	DecisionAllow Decision = "allow"
+	DecisionDeny  Decision = "deny"
+	// DecisionAsk identifies an understood action that may proceed after normal
+	// policy approval or operator acknowledgement.
+	DecisionAsk Decision = "ask"
+	// DecisionNeedsHumanReview identifies incomplete, ambiguous, or unknown
+	// input whose safety requires substantive human inspection. It outranks
+	// DecisionAsk, although both map to the framework's ask action.
 	DecisionNeedsHumanReview Decision = "needs_human_review"
 )
 

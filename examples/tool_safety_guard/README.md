@@ -68,8 +68,14 @@ rm -f tool_safety_report.json tool_safety_audit.jsonl
 Use the scanner through `agent.WithToolPermissionPolicy` when running an agent:
 
 ```go
-policy, _ := safety.LoadPolicyFile("tool_safety_policy.yaml")
-scanner, _ := safety.NewDefaultScanner(policy)
+policy, err := safety.LoadPolicyFile("tool_safety_policy.yaml")
+if err != nil {
+    log.Fatalf("load safety policy: %v", err)
+}
+scanner, err := safety.NewDefaultScanner(policy)
+if err != nil {
+    log.Fatalf("create safety scanner: %v", err)
+}
 
 events, err := runner.Run(
     ctx,

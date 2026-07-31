@@ -144,10 +144,8 @@ func parserKindForPermissionRequest(req *tool.PermissionRequest) parserKind {
 	if req == nil {
 		return parserUnknown
 	}
-	if semantic := internaltool.ResolveSemantic(req.Tool); semantic != nil {
-		if kind := parserKindFromSemanticTool(semantic); kind != parserUnknown {
-			return kind
-		}
+	if req.Tool != nil {
+		return parserKindFromSemanticTool(internaltool.ResolveSemantic(req.Tool))
 	}
 	return parserKindFromToolName(req.ToolName)
 }

@@ -759,6 +759,7 @@ func TestDefaultScanner_NetworkAndCodeEdges(t *testing.T) {
 	t.Run("curl alternate routing options are destination overrides", func(t *testing.T) {
 		commands := []string{
 			"curl --unix-socket /var/run/docker.sock https://allowed.example",
+			"curl --unix-socket=/var/run/docker.sock https://allowed.example",
 			"curl --abstract-unix-socket docker https://allowed.example",
 			"curl --proxy http://proxy.example:8080 https://allowed.example",
 			"curl --proxy=socks5://proxy.example:1080 https://allowed.example",
@@ -766,6 +767,8 @@ func TestDefaultScanner_NetworkAndCodeEdges(t *testing.T) {
 			"curl --socks4a proxy.example:1080 https://allowed.example",
 			"curl --socks5-hostname proxy.example:1080 https://allowed.example",
 			"curl -x http://proxy.example:8080 https://allowed.example",
+			"curl -xhttp://proxy.example:8080 https://allowed.example",
+			"curl -Lxhttp://proxy.example:8080 https://allowed.example",
 			"curl --proxy1.0 proxy.example:8080 https://allowed.example",
 		}
 		for _, command := range commands {
@@ -780,6 +783,43 @@ func TestDefaultScanner_NetworkAndCodeEdges(t *testing.T) {
 			require.Equal(t, DecisionDeny, report.Decision, command)
 			require.Equal(t, "network.destination_override", report.RuleID, command)
 		}
+	})
+
+	t.Run("network option values are not treated as destination hosts", func(t *testing.T) {
+		commands := []string{
+			"curl -o release.tar.gz https://allowed.example",
+			"curl --output release.tar.gz https://allowed.example",
+			"curl -d payload.json https://allowed.example",
+			"curl -K curl.conf https://allowed.example",
+			"wget -O release.tar.gz https://allowed.example",
+			"wget --output-document release.tar.gz https://allowed.example",
+			"wget --post-file payload.json https://allowed.example",
+		}
+		for _, command := range commands {
+			report, err := MustDefaultScanner(Policy{
+				NetworkAllowlist: []string{"allowed.example"},
+			}).Scan(context.Background(), ScanRequest{
+				ToolName: "workspace_exec",
+				Backend:  BackendWorkspace,
+				Command:  command,
+			})
+			require.NoError(t, err)
+			require.Equal(t, DecisionAllow, report.Decision, command)
+			require.Equal(t, "evaluation.none", report.RuleID, command)
+		}
+	})
+
+	t.Run("destination option URLs still obey the network allowlist", func(t *testing.T) {
+		report, err := MustDefaultScanner(Policy{
+			NetworkAllowlist: []string{"allowed.example"},
+		}).Scan(context.Background(), ScanRequest{
+			ToolName: "workspace_exec",
+			Backend:  BackendWorkspace,
+			Command:  "curl --doh-url https://evil.example/dns https://allowed.example",
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionDeny, report.Decision)
+		require.Equal(t, "network.non_allowlisted_domain", report.RuleID)
 	})
 
 	t.Run("curl destination override asks without allowlist", func(t *testing.T) {
@@ -1211,6 +1251,43 @@ func TestDefaultScanner_UnknownArgumentsAndSensitivePathRegressions(t *testing.T
 		require.NotContains(t, report.Evidence, "/etc//passwd")
 		require.NotContains(t, report.Evidence, "/etc/passwd")
 	})
+
+	t.Run("bare denied words do not match ordinary word substrings", func(t *testing.T) {
+		const command = "echo secretariat credentialship"
+		report, err := scanner.Scan(context.Background(), ScanRequest{
+			ToolName: "workspace_exec",
+			Backend:  BackendWorkspace,
+			Command:  command,
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionAllow, report.Decision)
+		require.Equal(t, "evaluation.none", report.RuleID)
+		require.Equal(t, command, report.Command)
+		require.False(t, report.Redacted)
+	})
+}
+
+func TestBuildReport_DecisionPrecedence(t *testing.T) {
+	findings := []Finding{
+		{
+			RuleID:         "known.approval",
+			RiskLevel:      RiskCritical,
+			Decision:       DecisionAsk,
+			Recommendation: "approve the understood action",
+		},
+		{
+			RuleID:         "unknown.review",
+			RiskLevel:      RiskLow,
+			Decision:       DecisionNeedsHumanReview,
+			Recommendation: "inspect ambiguous input",
+		},
+	}
+	for _, ordered := range [][]Finding{findings, {findings[1], findings[0]}} {
+		report := buildReport(ScanRequest{Backend: BackendUnknown}, ordered, time.Second)
+		require.Equal(t, DecisionNeedsHumanReview, report.Decision)
+		require.Equal(t, "unknown.review", report.RuleID)
+		require.True(t, report.Blocked)
+	}
 }
 
 func TestDefaultScanner_HelperEdges(t *testing.T) {
@@ -1247,6 +1324,8 @@ func TestDefaultScanner_HelperEdges(t *testing.T) {
 	require.True(t, sensitivePathMatch("foo/.ssh/id_ed25519", "~/.ssh"))
 	require.True(t, sensitivePathMatch("/etc/./passwd", "/etc/passwd"))
 	require.True(t, sensitivePathMatch("/etc//passwd", "/etc/passwd"))
+	require.True(t, sensitivePathMatch("config/client_secret.json", "secret"))
+	require.False(t, sensitivePathMatch("secretariat", "secret"))
 	require.False(t, sensitivePathMatch("", "~/.ssh"))
 	require.Equal(t, "plain", redactSensitivePath("plain", ""))
 	require.Equal(t, "<redacted>/id_rsa", redactSensitivePath("C:/Users/me/.ssh/id_rsa", `C:\Users\me\.ssh`))

@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 func (s *DefaultScanner) scanCwd(req ScanRequest) []Finding {
@@ -246,16 +247,60 @@ func sensitivePathMatch(arg, denied string) bool {
 	if strings.TrimSpace(arg) == "" || strings.TrimSpace(denied) == "" {
 		return false
 	}
+	bareRule := isBareSensitivePathRule(denied)
 	deniedNeedles := sensitivePathNeedles(denied)
 	for _, candidate := range sensitivePathCandidates(arg) {
 		candidateLower := strings.ToLower(candidate)
 		for _, deniedNeedle := range deniedNeedles {
-			if deniedNeedle != "" && strings.Contains(candidateLower, deniedNeedle) {
+			if sensitiveNeedleMatch(candidateLower, deniedNeedle, bareRule) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+func sensitiveNeedleMatch(candidate, needle string, bareRule bool) bool {
+	if needle == "" {
+		return false
+	}
+	if !bareRule {
+		return strings.Contains(candidate, needle)
+	}
+	for offset := 0; offset <= len(candidate)-len(needle); {
+		index := strings.Index(candidate[offset:], needle)
+		if index < 0 {
+			return false
+		}
+		start := offset + index
+		end := start + len(needle)
+		beforeOK := start == 0 || !isSensitiveWordRune(lastRune(candidate[:start]))
+		afterOK := end == len(candidate) || !isSensitiveWordRune(firstRune(candidate[end:]))
+		if beforeOK && afterOK {
+			return true
+		}
+		offset = start + len(needle)
+	}
+	return false
+}
+
+func isBareSensitivePathRule(denied string) bool {
+	denied = slashNormalizedPathText(denied)
+	return denied != "" && !strings.Contains(denied, "/")
+}
+
+func firstRune(value string) rune {
+	r, _ := utf8.DecodeRuneInString(value)
+	return r
+}
+
+func lastRune(value string) rune {
+	r, _ := utf8.DecodeLastRuneInString(value)
+	return r
+}
+
+func isSensitiveWordRune(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsNumber(r)
 }
 
 func joinCwdPath(cwd, arg string) string {
@@ -297,6 +342,9 @@ func redactSensitivePath(text, denied string) string {
 	needle := strings.Trim(strings.TrimSpace(denied), `"'`)
 	if needle == "" {
 		return text
+	}
+	if isBareSensitivePathRule(needle) {
+		return redactNormalizedSensitiveTokens(text, denied)
 	}
 	out := replaceFold(text, needle, "<redacted>")
 	slashed := strings.ReplaceAll(needle, "\\", "/")
@@ -360,7 +408,11 @@ func redactSensitiveToken(token string, deniedNeedles []string) (string, bool) {
 		for _, normalized := range sensitivePathCandidates(candidate.text) {
 			lower := strings.ToLower(normalized)
 			for _, deniedNeedle := range deniedNeedles {
-				if deniedNeedle != "" && strings.Contains(lower, deniedNeedle) {
+				if sensitiveNeedleMatch(
+					lower,
+					deniedNeedle,
+					isBareSensitivePathRule(deniedNeedle),
+				) {
 					return token[:candidate.start] + "<redacted>" + token[candidate.end:], true
 				}
 			}

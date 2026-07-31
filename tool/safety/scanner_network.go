@@ -192,23 +192,160 @@ func hasNetworkDestinationOverride(cmd string, argv []string) bool {
 	if cmd != "curl" {
 		return false
 	}
-	options := []string{
-		"--resolve", "--connect-to", "--unix-socket", "--abstract-unix-socket",
-		"-x", "--proxy", "--proxy1.0", "--preproxy", "--socks4", "--socks4a",
-		"--socks5", "--socks5-hostname",
-	}
 	for i := 1; i < len(argv); i++ {
-		arg := strings.ToLower(strings.TrimSpace(argv[i]))
-		for _, option := range options {
-			if arg == option {
-				return i+1 < len(argv) && strings.TrimSpace(argv[i+1]) != ""
-			}
-			if strings.HasPrefix(arg, option+"=") {
-				return strings.TrimSpace(strings.TrimPrefix(arg, option+"=")) != ""
-			}
+		if argv[i] == "--" {
+			break
+		}
+		option := parseNetworkOption(cmd, argv, i)
+		if curlDestinationOverrideOption(option.name) &&
+			strings.TrimSpace(option.value) != "" {
+			return true
+		}
+		if option.consumesNext {
+			i++
 		}
 	}
 	return false
+}
+
+func curlDestinationOverrideOption(option string) bool {
+	switch option {
+	case "-x", "--resolve", "--connect-to", "--unix-socket",
+		"--abstract-unix-socket", "--proxy", "--proxy1.0", "--preproxy",
+		"--socks4", "--socks4a", "--socks5", "--socks5-hostname":
+		return true
+	default:
+		return false
+	}
+}
+
+type networkOption struct {
+	name         string
+	value        string
+	consumesNext bool
+}
+
+func parseNetworkOption(cmd string, argv []string, index int) networkOption {
+	arg := strings.TrimSpace(argv[index])
+	if arg == "" || arg == "-" || !strings.HasPrefix(arg, "-") {
+		return networkOption{}
+	}
+	if arg == "--" {
+		return networkOption{name: arg}
+	}
+	if strings.HasPrefix(arg, "--") {
+		name, value, hasValue := strings.Cut(arg, "=")
+		name = strings.ToLower(name)
+		if hasValue {
+			return networkOption{name: name, value: value}
+		}
+		option := networkOption{name: name}
+		if networkLongOptionTakesValue(cmd, name) && index+1 < len(argv) {
+			option.value = argv[index+1]
+			option.consumesNext = true
+		}
+		return option
+	}
+
+	cluster := strings.TrimPrefix(arg, "-")
+	for i := 0; i < len(cluster); i++ {
+		if !networkShortOptionTakesValue(cmd, cluster[i]) {
+			continue
+		}
+		option := networkOption{name: "-" + string(cluster[i])}
+		if i+1 < len(cluster) {
+			option.value = cluster[i+1:]
+		} else if index+1 < len(argv) {
+			option.value = argv[index+1]
+			option.consumesNext = true
+		}
+		return option
+	}
+	return networkOption{name: arg}
+}
+
+func networkShortOptionTakesValue(cmd string, option byte) bool {
+	switch cmd {
+	case "curl":
+		return strings.ContainsRune("AbcCdDeEFHKmoPQrTtUuwxXyYz", rune(option))
+	case "wget":
+		return strings.ContainsRune("eoaiBtOTwQPURADlIX", rune(option))
+	default:
+		return false
+	}
+}
+
+func networkLongOptionTakesValue(cmd, option string) bool {
+	switch cmd {
+	case "curl":
+		return curlLongOptionTakesValue(option)
+	case "wget":
+		return wgetLongOptionTakesValue(option)
+	default:
+		return false
+	}
+}
+
+func curlLongOptionTakesValue(option string) bool {
+	switch option {
+	case "--abstract-unix-socket", "--alt-svc", "--aws-sigv4", "--cacert",
+		"--capath", "--cert", "--cert-type", "--ciphers", "--config",
+		"--connect-timeout", "--connect-to", "--cookie", "--cookie-jar",
+		"--create-file-mode", "--data", "--data-ascii", "--data-binary",
+		"--data-raw", "--data-urlencode", "--delegation", "--dns-interface",
+		"--dns-ipv4-addr", "--dns-ipv6-addr", "--doh-url", "--dump-header",
+		"--egd-file", "--engine", "--etag-compare", "--etag-save",
+		"--expect100-timeout", "--expand-data", "--expand-data-binary",
+		"--expand-form", "--expand-form-string", "--expand-header",
+		"--expand-url", "--expand-variable", "--form", "--form-string",
+		"--ftp-account", "--ftp-alternative-to-user", "--ftp-method",
+		"--ftp-port", "--happy-eyeballs-timeout-ms", "--haproxy-clientip",
+		"--header", "--hostpubmd5", "--hsts", "--interface", "--json",
+		"--key", "--key-type", "--krb", "--libcurl", "--limit-rate",
+		"--local-port", "--login-options", "--mail-auth", "--mail-from",
+		"--mail-rcpt", "--max-filesize", "--max-redirs", "--max-time",
+		"--netrc-file", "--noproxy", "--oauth2-bearer", "--output",
+		"--output-dir", "--parallel-max", "--pass", "--pinnedpubkey",
+		"--preproxy", "--proto", "--proto-default", "--proto-redir",
+		"--proxy", "--proxy-cacert", "--proxy-capath", "--proxy-cert",
+		"--proxy-cert-type", "--proxy-ciphers", "--proxy-crlfile",
+		"--proxy-header", "--proxy-key", "--proxy-key-type", "--proxy-pass",
+		"--proxy-service-name", "--proxy-tls13-ciphers", "--proxy-user",
+		"--proxy1.0", "--pubkey", "--quote", "--random-file", "--range",
+		"--rate", "--referer", "--request", "--request-target", "--resolve",
+		"--retry", "--retry-delay", "--retry-max-time", "--service-name",
+		"--speed-limit", "--speed-time", "--socks4", "--socks4a",
+		"--socks5", "--socks5-gssapi-service", "--socks5-hostname",
+		"--stderr", "--telnet-option", "--tftp-blksize", "--time-cond",
+		"--tls-max", "--tls13-ciphers", "--unix-socket", "--upload-file",
+		"--url", "--url-query", "--user", "--user-agent", "--variable",
+		"--write-out":
+		return true
+	default:
+		return false
+	}
+}
+
+func wgetLongOptionTakesValue(option string) bool {
+	switch option {
+	case "--accept", "--append-output", "--backup-converted", "--base",
+		"--bind-address", "--ca-certificate", "--ca-directory", "--certificate",
+		"--certificate-type", "--config", "--connect-timeout", "--cut-dirs",
+		"--directory-prefix", "--domains", "--exclude-directories",
+		"--exclude-domains", "--execute", "--follow-tags", "--ftp-password",
+		"--ftp-user", "--header", "--ignore-tags", "--include-directories",
+		"--input-file", "--level", "--limit-rate", "--load-cookies",
+		"--local-encoding", "--output-document", "--output-file", "--password",
+		"--post-data", "--post-file", "--private-key", "--private-key-type",
+		"--progress", "--protocol-directories", "--proxy-password", "--proxy-user",
+		"--quota", "--read-timeout", "--referer", "--reject", "--remote-encoding",
+		"--restrict-file-names", "--retry-on-http-error", "--save-cookies",
+		"--secure-protocol", "--timeout", "--tries", "--user", "--user-agent",
+		"--wait", "--waitretry":
+		return true
+	default:
+		return false
+	}
 }
 
 func isHighRiskNetworkCommand(cmd string) bool {
@@ -238,12 +375,48 @@ func extractHosts(text string) []string {
 func extractNetworkHosts(cmd string, argv []string) []string {
 	seen := make(map[string]struct{})
 	var hosts []string
-	hosts = appendHosts(hosts, seen, extractHosts(strings.Join(argv, " "))...)
-	for _, arg := range argv[1:] {
-		host, ok := networkArgHost(cmd, arg)
-		if !ok {
-			continue
+	optionsEnded := false
+	for i := 1; i < len(argv); i++ {
+		arg := argv[i]
+		if (cmd == "curl" || cmd == "wget") && !optionsEnded {
+			if arg == "--" {
+				optionsEnded = true
+				continue
+			}
+			if option := parseNetworkOption(cmd, argv, i); option.name != "" {
+				if networkOptionIsDestination(cmd, option.name) {
+					hosts = appendNetworkArgumentHosts(hosts, seen, cmd, option.value)
+				}
+				if option.consumesNext {
+					i++
+				}
+				continue
+			}
 		}
+		hosts = appendNetworkArgumentHosts(hosts, seen, cmd, arg)
+	}
+	return hosts
+}
+
+func networkOptionIsDestination(cmd, option string) bool {
+	switch cmd {
+	case "curl":
+		return option == "--url" || option == "--expand-url" || option == "--doh-url"
+	case "wget":
+		return option == "-B" || option == "--base"
+	default:
+		return false
+	}
+}
+
+func appendNetworkArgumentHosts(
+	hosts []string,
+	seen map[string]struct{},
+	cmd string,
+	arg string,
+) []string {
+	hosts = appendHosts(hosts, seen, extractHosts(arg)...)
+	if host, ok := networkArgHost(cmd, arg); ok {
 		hosts = appendHost(hosts, seen, host)
 	}
 	return hosts
