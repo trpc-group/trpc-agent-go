@@ -1,6 +1,6 @@
 module trpc.group/trpc-go/trpc-agent-go/replaytest/caserunner
 
-go 1.21
+go 1.25.0
 
 require (
 	github.com/alicebob/miniredis/v2 v2.35.0
