@@ -15,6 +15,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -326,19 +327,43 @@ func TestTraceWorkflow_DropRequest(t *testing.T) {
 	}
 }
 
-func TestTraceToolCall_DropArguments(t *testing.T) {
+func TestTraceToolCall_DropPayloads(t *testing.T) {
 	t.Cleanup(func() { SetSpanAttributePolicy(SpanAttributePolicy{}) })
 
-	SetSpanAttributePolicy(AppendAttributeRule(SpanAttributePolicy{}, AttributeRule{
+	policy := AppendAttributeRule(SpanAttributePolicy{}, AttributeRule{
 		Operation: OperationExecuteTool,
 		Key:       semconvtrace.KeyGenAIToolCallArguments,
 		Action:    AttributeDrop,
-	}))
+	})
+	policy = AppendAttributeRule(policy, AttributeRule{
+		Operation: OperationExecuteTool,
+		Key:       semconvtrace.KeyGenAIToolCallResult,
+		Action:    AttributeDrop,
+	})
+	SetSpanAttributePolicy(policy)
 
 	span := newRecordingSpan()
-	TraceToolCall(span, nil, &tool.Declaration{Name: "t"}, []byte(`{"a":1}`), nil, nil)
+	const secret = "sk-1234567890abcdef1234"
+	response := &model.Response{ID: secret}
+	responseEvent := event.NewResponseEvent("invocation", "tool", response)
+	TraceToolCall(
+		span,
+		nil,
+		&tool.Declaration{Name: "t"},
+		[]byte(`{"token":"`+secret+`"}`),
+		responseEvent,
+		nil,
+	)
 	if _, ok := attrStringValue(span.attrs, semconvtrace.KeyGenAIToolCallArguments); ok {
 		t.Fatal("expected tool arguments to be dropped")
+	}
+	if _, ok := attrStringValue(span.attrs, semconvtrace.KeyGenAIToolCallResult); ok {
+		t.Fatal("expected tool result to be dropped")
+	}
+	for _, attr := range span.attrs {
+		if strings.Contains(attr.Value.AsString(), secret) {
+			t.Fatalf("attribute %q leaked tool payload", attr.Key)
+		}
 	}
 }
 

@@ -1,0 +1,57 @@
+schema_version: v1
+policy_id: example-default
+
+allowed_commands:
+  - cat
+  - curl
+  - echo
+  - go
+  - npm
+  - rm
+  - sh
+  - sleep
+  - yes
+
+denied_commands:
+  - nc
+  - ssh
+  - wget
+
+forbidden_paths:
+  - ~/.ssh/**
+  - '**/.ssh/**'
+  - '**/.env'
+  - '**/.env.*'
+  - '**/credentials*'
+  - /etc/**
+  - /root/**
+
+allowed_network_domains:
+  - api.example.com
+  - github.com
+  - '*.githubusercontent.com'
+  - proxy.golang.org
+
+network_commands:
+  - download
+
+max_timeout_seconds: 300
+max_output_bytes: 1048576
+max_sleep_seconds: 30
+max_concurrency: 4
+
+allowed_env_vars:
+  - CI
+  - GOFLAGS
+  - GOPROXY
+  - LC_*
+
+tool_profiles:
+  custom_mcp_exec:
+    backend: host
+    command_field: request.command
+    working_directory_field: request.workdir
+    environment_field: request.env
+    timeout_seconds_field: request.timeout_seconds
+    background_field: request.background
+    pty_field: request.pty
