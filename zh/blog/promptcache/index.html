@@ -2789,6 +2789,21 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="观测 cache hit rate">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#usage" class="md-nav__link">
+    <span class="md-ellipsis">
+      流式 Usage 排障
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
       </ul>
@@ -3298,6 +3313,21 @@
       观测 cache hit rate
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="观测 cache hit rate">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#usage" class="md-nav__link">
+    <span class="md-ellipsis">
+      流式 Usage 排障
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
         
@@ -3928,6 +3958,21 @@
 <li><code>input_cache_creation</code></li>
 <li><code>output</code></li>
 </ul>
+<h4 id="usage">流式 Usage 排障</h4>
+<p>在流式请求中，OpenAI-compatible 服务通常会在最后发送一个只包含 usage
+的 chunk。tRPC-Agent-Go 会消费该 chunk，并把累计结果放入最终
+<code>model.Response</code>。</p>
+<p>如果原始流中 <code>cached_tokens</code> 非零，但最终响应中变成零，应检查模型是否配置了
+<code>openai.WithAccumulateChunkTokenUsage</code>。该回调的返回值会整体替换累计后的
+<code>model.Usage</code>；如果只返回 <code>PromptTokens</code>、<code>CompletionTokens</code> 和
+<code>TotalTokens</code>，就会丢失 <code>PromptTokensDetails.CachedTokens</code>。</p>
+<p>大多数应用应使用默认聚合器。非标准服务方可能返回增量、累计总量或最后一次完整
+总量；自定义 accumulator 必须匹配对应行为，并返回完整 usage 状态。完整的
+回调执行顺序、<code>model.Usage</code> 字段说明和示例见
+<a href="../../model/#usage">自定义流式 Usage 聚合</a>。</p>
+<p>当 <code>Stream</code> 为 true 时，OpenAI-compatible adapter 会自动请求 usage。
+仍可通过检查服务方请求和原始响应确认最终 usage chunk 是否到达客户端，但重复
+添加 <code>stream_options.include_usage</code> 无法恢复已经被自定义聚合器丢弃的明细。</p>
 <p>一个简单的统计口径是：</p>
 <div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-17-1">1</a></span>
 <span class="normal"><a href="#__codelineno-17-2">2</a></span>
@@ -4107,7 +4152,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年7月20日 02:18:03 UTC">2026-07-20 02:18:03</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年7月31日 07:13:14 UTC">2026-07-31 07:13:14</span>
   </span>
 
     

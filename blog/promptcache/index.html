@@ -2789,6 +2789,21 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Observing Cache Hit Rate">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#troubleshooting-streaming-usage" class="md-nav__link">
+    <span class="md-ellipsis">
+      Troubleshooting Streaming Usage
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
       </ul>
@@ -3298,6 +3313,21 @@
       Observing Cache Hit Rate
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Observing Cache Hit Rate">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#troubleshooting-streaming-usage" class="md-nav__link">
+    <span class="md-ellipsis">
+      Troubleshooting Streaming Usage
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
         
@@ -3913,6 +3943,27 @@
 <li><code>input_cache_creation</code></li>
 <li><code>output</code></li>
 </ul>
+<h4 id="troubleshooting-streaming-usage">Troubleshooting Streaming Usage</h4>
+<p>For streaming requests, OpenAI-compatible providers commonly send usage in a
+final usage-only chunk. tRPC-Agent-Go consumes that chunk and attaches the
+accumulated usage to the final <code>model.Response</code>.</p>
+<p>If the raw stream contains a nonzero <code>cached_tokens</code> value but the final
+response reports zero, check whether the model was configured with
+<code>openai.WithAccumulateChunkTokenUsage</code>. The callback's return value replaces
+the complete accumulated <code>model.Usage</code>; returning only <code>PromptTokens</code>,
+<code>CompletionTokens</code>, and <code>TotalTokens</code> discards
+<code>PromptTokensDetails.CachedTokens</code>.</p>
+<p>Most applications should use the default accumulator. Nonstandard providers
+may report increments, cumulative totals, or a final total; the custom
+accumulator must match that behavior and return a complete usage state. See
+<a href="../../model/#custom-streaming-usage-aggregation">Custom Streaming Usage Aggregation</a>
+for the callback execution order, every <code>model.Usage</code> field, and complete
+examples.</p>
+<p>When <code>Stream</code> is true, the OpenAI-compatible adapter requests usage
+automatically. Provider-specific request inspection can still be useful to
+confirm that the final usage chunk reaches the client, but adding another
+<code>stream_options.include_usage</code> field does not restore details discarded by a
+custom accumulator.</p>
 <p>A simple aggregate view is:</p>
 <div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-17-1">1</a></span>
 <span class="normal"><a href="#__codelineno-17-2">2</a></span>
@@ -4092,7 +4143,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="July 20, 2026 02:18:03 UTC">2026-07-20 02:18:03</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="July 31, 2026 07:13:14 UTC">2026-07-31 07:13:14</span>
   </span>
 
     
