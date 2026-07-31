@@ -11,8 +11,9 @@
 // CodeAct does not make Python safe by itself. LocalRunner applies
 // defense-in-depth process hardening for development and already isolated
 // environments, but preserves general Python syntax and builtins; it does not
-// apply Dynamic Workflow's language restrictions. Production guest code must
-// run in an isolated container, microVM, or an equivalent sandbox. This package
-// owns the host-side security boundary: only explicitly registered tools can be
+// apply Dynamic Workflow's language restrictions. SandboxRunner adds local OS
+// sandboxing through codeexecutor/sandbox. Stronger container, microVM, or
+// remote isolation can be supplied by implementing Runtime. This package owns
+// the host-side capability boundary: only explicitly registered tools can be
 // called, and their input and output schemas are validated on the Go side.
 package codeact

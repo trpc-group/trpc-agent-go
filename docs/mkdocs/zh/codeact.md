@@ -7,7 +7,11 @@ LLM -> execute_tool_code -> Runtime -> guest call_tool(name, JSON args)
                                   -> Go Gateway -> trpc Tool
 ```
 
-`Gateway` 是能力边界，负责 allowlist、schema 校验和真实 Go tool 调用。`Runtime` 是传输/执行边界：内置 `LocalRunner` 用 Python stdio guest 实现；远端 sandbox、microVM、容器服务或平台原生 callback 后端应直接实现 `codeact.Runtime`，并把 sandbox 产生的 `ToolCall` 路由给传入的 `ToolCallHandler`。
+`Gateway` 是能力边界，负责 allowlist、schema 校验和真实 Go tool 调用。`Runtime`
+是传输/执行边界：`LocalRunner` 直接运行 Python stdio guest；`SandboxRunner` 在每次
+调用新建的 OS sandbox workspace 中运行同一套 callback 协议。远端服务或 microVM
+平台应直接实现 `codeact.Runtime`，并把 guest 产生的 `ToolCall` 路由给传入的
+`ToolCallHandler`。
 
 ## 安全边界
 
@@ -25,7 +29,35 @@ Workflow 不同，不应用 AST 或 builtin allowlist。二者共享的是进程
 目录，并会拒绝超过 64 KiB 的生成源码，除非调用方显式调整限制。这些是有意的行为
 变化，但不会构成安全 sandbox 边界。
 
-生产应用应基于已有远端 sandbox、microVM 或容器服务实现 `codeact.Runtime`，并由应用侧配置隔离、资源和依赖策略。
+需要本地 OS 隔离时，可以在原来传入 `LocalRunner` 的位置改用：
+
+```go
+runtime := codeact.NewSandboxRunner()
+orchestrator, err := toolcode.NewTool(runtime, managedTools)
+```
+
+使用上面不带 option 的构造方式时，每次执行都会使用一次性 workspace 和 clean
+environment。它使用 `codeexecutor/sandbox` 的 managed backend，默认限制网络；
+如果 sandbox 初始化失败，会直接报错，不会 fallback 到 `LocalRunner`。Linux 需要
+`bubblewrap`，macOS 使用 `/usr/bin/sandbox-exec`，Windows 尚未实现 managed
+sandbox。
+
+`SandboxRunner.Timeout` 会为完整执行设置 deadline，并把取消信号传导给 guest 和宿主
+Tool 调用。Go context 采用协作式取消，Tool handler 必须在 context 结束后及时返回。
+零值不会额外添加 deadline，而是依赖调用方 context；生产环境必须为调用方 context
+设置 deadline，或者显式配置该 timeout。两者同时存在时，以更早到期者为准。CPU、
+内存和进程数配额仍应由外层容器、microVM 或远端 runtime 提供。
+
+`SandboxRunner.Python` 为空时，sandbox 会从自己的 clean PATH 解析 `python3`。任何
+非空值（包括显式的 `"python3"`）都会先通过宿主 PATH 解析并转换成绝对路径。如果
+解释器不在 backend 默认开放的 runtime 路径中，还需要通过
+`sandbox.WorkspaceWriteProfile().WithReadPaths(...)` 扩展 managed permission
+profile，并将其传给 `sandbox.WithPermissionProfile(...)`。
+
+OS sandbox 仍然运行在宿主机上，并会开放启动解释器所需的平台与 runtime 路径；具体
+只读可见范围因 backend 而异。它不等价于 microVM 级租户边界。如果 guest 不能看到
+任何宿主文件，或者需要更强的 CPU、内存和租户隔离，应使用容器、microVM 或远端
+`Runtime`。
 
 ## 为什么不让生成代码直接调用 HTTP API？
 

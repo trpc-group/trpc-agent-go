@@ -9107,11 +9107,23 @@ func TestMergeCurrentTurnMessagesIntoSeed_ReplacesLastUserMessageWhenItMatchesOr
 		model.NewUserMessage("current"),
 		currentTurn,
 	)
-	require.Equal(t, []model.Message{
-		model.NewUserMessage("first"),
-		model.NewUserMessage("ctx"),
-		model.NewUserMessage("rewritten"),
-		model.NewAssistantMessage("after"),
+	require.Equal(t, []pendingSessionMessage{
+		{
+			message:       model.NewUserMessage("first"),
+			seededHistory: true,
+		},
+		{
+			message:     model.NewUserMessage("ctx"),
+			currentTurn: true,
+		},
+		{
+			message:     model.NewUserMessage("rewritten"),
+			currentTurn: true,
+		},
+		{
+			message:       model.NewAssistantMessage("after"),
+			seededHistory: true,
+		},
 	}, merged)
 }
 
@@ -9130,12 +9142,27 @@ func TestMergeCurrentTurnMessagesIntoSeed_AppendsWhenOnlyOlderMessageMatchesOrig
 		model.NewUserMessage("current"),
 		currentTurn,
 	)
-	require.Equal(t, []model.Message{
-		model.NewUserMessage("current"),
-		model.NewAssistantMessage("after"),
-		model.NewUserMessage("latest"),
-		model.NewUserMessage("ctx"),
-		model.NewUserMessage("rewritten"),
+	require.Equal(t, []pendingSessionMessage{
+		{
+			message:       model.NewUserMessage("current"),
+			seededHistory: true,
+		},
+		{
+			message:       model.NewAssistantMessage("after"),
+			seededHistory: true,
+		},
+		{
+			message:       model.NewUserMessage("latest"),
+			seededHistory: true,
+		},
+		{
+			message:     model.NewUserMessage("ctx"),
+			currentTurn: true,
+		},
+		{
+			message:     model.NewUserMessage("rewritten"),
+			currentTurn: true,
+		},
 	}, merged)
 }
 
@@ -9153,11 +9180,23 @@ func TestMergeCurrentTurnMessagesIntoSeed_AppendsWhenOriginalMissing(t *testing.
 		model.NewUserMessage("current"),
 		currentTurn,
 	)
-	require.Equal(t, []model.Message{
-		model.NewUserMessage("first"),
-		model.NewAssistantMessage("after"),
-		model.NewUserMessage("ctx"),
-		model.NewUserMessage("rewritten"),
+	require.Equal(t, []pendingSessionMessage{
+		{
+			message:       model.NewUserMessage("first"),
+			seededHistory: true,
+		},
+		{
+			message:       model.NewAssistantMessage("after"),
+			seededHistory: true,
+		},
+		{
+			message:     model.NewUserMessage("ctx"),
+			currentTurn: true,
+		},
+		{
+			message:     model.NewUserMessage("rewritten"),
+			currentTurn: true,
+		},
 	}, merged)
 }
 
@@ -9171,7 +9210,16 @@ func TestMergeCurrentTurnMessagesIntoSeed_PreservesSeedWhenCurrentTurnIsEmpty(t 
 		model.NewUserMessage("current"),
 		nil,
 	)
-	require.Equal(t, seed, merged)
+	require.Equal(t, []pendingSessionMessage{
+		{
+			message:       model.NewUserMessage("first"),
+			seededHistory: true,
+		},
+		{
+			message:       model.NewUserMessage("current"),
+			seededHistory: true,
+		},
+	}, merged)
 }
 
 func TestFinalResponseIDFromStateDelta_Cases(t *testing.T) {
@@ -9701,19 +9749,19 @@ func TestRunner_Run_WithSurfacePatchForNode_AppliesDeepNestedWorkflowPatches(
 		t,
 		snapshot,
 		"start",
-		structure.NodeKindLLM,
+		structure.NodeKindAgent,
 	)
 	plannerNodeID := requireNodeIDByNameAndKind(
 		t,
 		snapshot,
 		"planner",
-		structure.NodeKindLLM,
+		structure.NodeKindAgent,
 	)
 	workerNodeID := requireNodeIDByNameAndKind(
 		t,
 		snapshot,
 		"worker",
-		structure.NodeKindLLM,
+		structure.NodeKindAgent,
 	)
 	var startPatch agent.SurfacePatch
 	startPatch.SetInstruction("start patched instruction")
@@ -9828,13 +9876,13 @@ func TestRunner_Run_WithSurfacePatchForNode_AppliesDirectChainChildPatch(
 		t,
 		snapshot,
 		"planner",
-		structure.NodeKindLLM,
+		structure.NodeKindAgent,
 	)
 	writerNodeID := requireNodeIDByNameAndKind(
 		t,
 		snapshot,
 		"writer",
-		structure.NodeKindLLM,
+		structure.NodeKindAgent,
 	)
 	var plannerPatch agent.SurfacePatch
 	plannerPatch.SetInstruction("planner patched instruction")
@@ -9983,13 +10031,13 @@ func TestRunner_Run_WithSurfacePatchForNode_AppliesDirectParallelBranchPatches(
 		t,
 		snapshot,
 		"researcher",
-		structure.NodeKindLLM,
+		structure.NodeKindAgent,
 	)
 	reviewerNodeID := requireNodeIDByNameAndKind(
 		t,
 		snapshot,
 		"reviewer",
-		structure.NodeKindLLM,
+		structure.NodeKindAgent,
 	)
 	var researcherPatch agent.SurfacePatch
 	researcherPatch.SetInstruction("researcher patched instruction")
@@ -10146,7 +10194,7 @@ func TestRunner_Run_WithSurfacePatchForNode_AppliesDirectCycleChildPatch(
 		t,
 		snapshot,
 		"worker",
-		structure.NodeKindLLM,
+		structure.NodeKindAgent,
 	)
 	var workerPatch agent.SurfacePatch
 	workerPatch.SetInstruction("worker patched instruction")
@@ -10749,7 +10797,7 @@ func TestRunner_Run_WithSurfacePatchForNode_AppliesGraphCompositeChildPatch(
 		t,
 		snapshot,
 		"planner",
-		structure.NodeKindLLM,
+		structure.NodeKindAgent,
 	)
 	require.Equal(t, "assistant/pipeline/planner", plannerNodeID)
 	var patch agent.SurfacePatch

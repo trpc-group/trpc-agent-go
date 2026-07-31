@@ -204,17 +204,128 @@ return await agent("review", unsupported_option=True)
 	require.ErrorContains(t, err, "unsupported agent option(s): unsupported_option")
 }
 
-func TestLocalRunnerRejectsUncalledWorkflowWrapper(t *testing.T) {
+func TestLocalRunnerRunsConventionalWorkflowWrapper(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 is not installed")
 	}
-	_, err := Execute(context.Background(), LocalRunner{}, callHandlerFunc(func(context.Context, Call) (json.RawMessage, error) {
-		return nil, nil
-	}), `
+	for _, name := range []string{"run", "main"} {
+		t.Run(name, func(t *testing.T) {
+			result, err := Execute(
+				context.Background(),
+				LocalRunner{},
+				callHandlerFunc(func(
+					context.Context,
+					Call,
+				) (json.RawMessage, error) {
+					return nil, nil
+				}),
+				fmt.Sprintf(`
+async def %s():
+    return {"status": "invoked"}
+`, name),
+			)
+			require.NoError(t, err)
+			require.JSONEq(t, `{"status":"invoked"}`, string(result.Value))
+		})
+	}
+	t.Run("leading docstring", func(t *testing.T) {
+		result, err := Execute(
+			context.Background(),
+			LocalRunner{},
+			callHandlerFunc(func(
+				context.Context,
+				Call,
+			) (json.RawMessage, error) {
+				return nil, nil
+			}),
+			`
+"""A generated workflow."""
+async def run():
+    return {"status": "invoked"}
+`,
+		)
+		require.NoError(t, err)
+		require.JSONEq(t, `{"status":"invoked"}`, string(result.Value))
+	})
+}
+
+func TestLocalRunnerRejectsConventionalWrapperWithoutReturn(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 is not installed")
+	}
+	var calls int
+	_, err := Execute(
+		context.Background(),
+		LocalRunner{},
+		callHandlerFunc(func(
+			context.Context,
+			Call,
+		) (json.RawMessage, error) {
+			calls++
+			return json.RawMessage(`{"text":"unexpected"}`), nil
+		}),
+		`
+async def main():
+    await agent("draft", instruction="Write a draft.", tools=[])
+`,
+	)
+	require.ErrorContains(
+		t,
+		err,
+		"workflow code must contain a return statement outside nested functions or classes",
+	)
+	require.Zero(t, calls)
+}
+
+func TestLocalRunnerRejectsUncalledNonconventionalHelper(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 is not installed")
+	}
+	_, err := Execute(
+		context.Background(),
+		LocalRunner{},
+		callHandlerFunc(func(
+			context.Context,
+			Call,
+		) (json.RawMessage, error) {
+			return nil, nil
+		}),
+		`
+async def helper():
+    return {"status": "not invoked"}
+`,
+	)
+	require.ErrorContains(
+		t,
+		err,
+		"workflow code must contain a return statement outside nested functions or classes",
+	)
+}
+
+func TestLocalRunnerReportsUnsupportedSyntaxBeforeWrapperShape(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 is not installed")
+	}
+	_, err := Execute(
+		context.Background(),
+		LocalRunner{},
+		callHandlerFunc(func(
+			context.Context,
+			Call,
+		) (json.RawMessage, error) {
+			return nil, nil
+		}),
+		`
+import asyncio
 async def run():
     return {"status": "not invoked"}
-`)
-	require.ErrorContains(t, err, "workflow code must contain a return statement outside nested functions or classes")
+`,
+	)
+	require.ErrorContains(
+		t,
+		err,
+		"workflow code uses unsupported Python syntax: Import",
+	)
 }
 
 func TestLocalRunnerProjectsStructuredAgentFields(t *testing.T) {
@@ -376,8 +487,8 @@ func TestLocalRunnerPipelineStreamsEachItemWithoutBatchBarrier(t *testing.T) {
 	})
 
 	result, err := Execute(ctx, LocalRunner{}, handler, `
-async def analyze(previous, original, index):
-    return await agent({"stage": "analyze", "file": previous}, "reviewer")
+async def analyze(item):
+    return await agent({"stage": "analyze", "file": item}, "reviewer")
 
 async def review(analysis, original, index):
     return await agent({
@@ -390,6 +501,78 @@ return await pipeline(["a", "b"], analyze, review)
 `)
 	require.NoError(t, err)
 	require.JSONEq(t, `[{"text":"reviewed-a"},{"text":"reviewed-b"}]`, string(result.Value))
+}
+
+func TestLocalRunnerPipelineSupportsOneTwoAndThreeArgumentStages(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 is not installed")
+	}
+	result, err := Execute(
+		context.Background(),
+		LocalRunner{},
+		callHandlerFunc(func(
+			context.Context,
+			Call,
+		) (json.RawMessage, error) {
+			return nil, errors.New("unexpected host call")
+		}),
+		`
+async def first(previous):
+    return previous + "-first"
+
+async def second(previous, original):
+    return previous + ":" + original
+
+async def third(previous, original, index):
+    return {
+        "previous": previous,
+        "original": original,
+        "index": index,
+    }
+
+return await pipeline(["a", "b"], first, second, third)
+`,
+	)
+	require.NoError(t, err)
+	require.JSONEq(t, `[
+		{"previous":"a-first:a","original":"a","index":0},
+		{"previous":"b-first:b","original":"b","index":1}
+	]`, string(result.Value))
+}
+
+func TestLocalRunnerPipelineRejectsInvalidStageArityBeforeStartingItems(
+	t *testing.T,
+) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 is not installed")
+	}
+	var calls int
+	_, err := Execute(
+		context.Background(),
+		LocalRunner{},
+		callHandlerFunc(func(
+			context.Context,
+			Call,
+		) (json.RawMessage, error) {
+			calls++
+			return json.RawMessage(`{"text":"unexpected"}`), nil
+		}),
+		`
+async def analyze(item):
+    return await agent(item, instruction="Analyze", tools=[])
+
+async def invalid():
+    return "invalid"
+
+return await pipeline(["a", "b"], analyze, invalid)
+`,
+	)
+	require.ErrorContains(
+		t,
+		err,
+		"pipeline stages must accept 1, 2, or 3 positional arguments",
+	)
+	require.Zero(t, calls)
 }
 
 func TestLocalRunnerOptionalTimeoutStopsBusyWorkflow(t *testing.T) {

@@ -15,6 +15,7 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -3752,6 +3753,48 @@ func TestAppendTrackEvent_SyncMode_Success(
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestAppendTrackEvent_TrackTTLOverridesSessionTTL(
+	t *testing.T,
+) {
+	s, mock, db := newTestService(t, nil)
+	defer db.Close()
+	s.opts.enableAsyncPersist = false
+	s.opts.sessionTTL = time.Hour
+	trackTTL := time.Duration(0)
+	s.opts.trackEventTTL = &trackTTL
+
+	sess := session.NewSession("app", "user", "sess")
+	sessState := SessionState{
+		ID:    "sess",
+		State: session.StateMap{},
+	}
+	stateBytes, _ := json.Marshal(sessState)
+	te := &session.TrackEvent{
+		Track:     "track1",
+		Timestamp: time.Now(),
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT state, expires_at FROM").
+		WillReturnRows(sqlmock.NewRows(
+			[]string{"state", "expires_at"},
+		).AddRow(stateBytes, nil))
+	mock.ExpectExec("UPDATE .* SET state").
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(),
+			sqlmock.AnyArg(), "app", "user", "sess").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO session_track").
+		WithArgs("app", "user", "sess", session.Track("track1"),
+			sqlmock.AnyArg(), sqlmock.AnyArg(),
+			sqlmock.AnyArg(), nil).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	err := s.AppendTrackEvent(context.Background(), sess, te)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestAppendTrackEvent_SyncMode_AddError(
 	t *testing.T,
 ) {
@@ -4848,4 +4891,58 @@ func TestUpdateSessionState_EmptyStateBytes(
 		session.StateMap{"k": []byte("v")},
 	)
 	require.NoError(t, err)
+}
+
+func TestServiceGetTrackEventsReadsTrackStorage(t *testing.T) {
+	svc, mock, db := newTestService(t, nil)
+	defer db.Close()
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+	track := session.Track("agui")
+	base := time.Now().Add(-time.Hour)
+	oldEvent := session.TrackEvent{Track: track, Payload: json.RawMessage(`"old"`), Timestamp: base}
+	newEvent := session.TrackEvent{Track: track, Payload: json.RawMessage(`"new"`), Timestamp: base.Add(time.Second)}
+	oldBytes, err := json.Marshal(oldEvent)
+	require.NoError(t, err)
+	newBytes, err := json.Marshal(newEvent)
+	require.NoError(t, err)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT event FROM session_track_events")).
+		WithArgs(key.AppName, key.UserID, key.SessionID, track, base.Add(-time.Minute), 2).
+		WillReturnRows(sqlmock.NewRows([]string{"event"}).AddRow(newBytes).AddRow(oldBytes))
+	got, err := svc.GetTrackEvents(ctx, key, track, session.WithEventTime(base.Add(-time.Minute)), session.WithEventNum(2))
+	require.NoError(t, err)
+	require.Equal(t, track, got.Track)
+	require.Len(t, got.Events, 2)
+	require.Equal(t, oldEvent.Payload, got.Events[0].Payload)
+	require.Equal(t, newEvent.Payload, got.Events[1].Payload)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT event FROM session_track_events")).
+		WithArgs(key.AppName, key.UserID, key.SessionID, session.Track("missing"), time.Time{}).
+		WillReturnRows(sqlmock.NewRows([]string{"event"}))
+	missing, err := svc.GetTrackEvents(ctx, key, "missing")
+	require.NoError(t, err)
+	require.Equal(t, session.Track("missing"), missing.Track)
+	require.Empty(t, missing.Events)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestServiceGetTrackEventsErrors(t *testing.T) {
+	t.Run("invalid key", func(t *testing.T) {
+		svc, _, db := newTestService(t, nil)
+		defer db.Close()
+		_, err := svc.GetTrackEvents(context.Background(), session.Key{UserID: "user", SessionID: "sess"}, "agui")
+		require.Error(t, err)
+		assert.ErrorIs(t, err, session.ErrAppNameRequired)
+	})
+	t.Run("query error", func(t *testing.T) {
+		svc, mock, db := newTestService(t, nil)
+		defer db.Close()
+		key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT event FROM session_track_events")).
+			WithArgs(key.AppName, key.UserID, key.SessionID, session.Track("agui"), time.Time{}).
+			WillReturnError(assert.AnError)
+		_, err := svc.GetTrackEvents(context.Background(), key, "agui")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "pgvector session service get track events failed")
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
 }

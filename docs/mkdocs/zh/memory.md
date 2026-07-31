@@ -302,10 +302,13 @@ Memory 模块采用分层设计，由以下核心组件组成：
 │                   Storage Backends                           │
 │  • InMemory: 内存存储（开发/测试）                          │
 │  • SQLite: 本地文件数据库（单机持久化）                     │
+│  • SQLiteVec: SQLite + 向量检索（本地语义搜索）             │
 │  • Redis: 高性能缓存（生产环境）                            │
 │  • MySQL: 关系型数据库（ACID 保证）                        │
+│  • MySQLVec: MySQL + 向量检索（语义搜索）                  │
 │  • PostgreSQL: 关系型数据库（JSONB 支持）                  │
 │  • pgvector: PostgreSQL + 向量检索（语义搜索）              │
+│  • ChromaDB: REST 向量数据库（余弦与混合检索）             │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -327,7 +330,7 @@ Memory 模块采用分层设计，由以下核心组件组成：
 | **Memory ID**       | 记忆的唯一标识符                          | 基于内容、用户维度和规范化事件元数据的 SHA256 哈希；主题不参与身份 |
 | **Topics**          | 记忆的主题标签                            | 用于分类和检索，支持多个标签                       |
 | **Memory Tools**    | Agent 可调用的记忆操作工具                | 包括 add、update、delete、search、load、clear      |
-| **Storage Backend** | 存储后端实现                              | 支持 InMemory、SQLite、SQLiteVec、Redis、MySQL、PostgreSQL、pgvector |
+| **Storage Backend** | 存储后端实现                              | 支持 InMemory、SQLite、SQLiteVec、Redis、MySQL、MySQLVec、PostgreSQL、pgvector、ChromaDB |
 
 ### 关键流程
 
@@ -345,7 +348,7 @@ Memory 模块采用分层设计，由以下核心组件组成：
        │
        ↓
 ┌──────────────┐
-│ 3. 存储记忆   │  Entry → Storage Backend（InMemory/SQLite/SQLiteVec/Redis/MySQL/PostgreSQL/pgvector）
+│ 3. 存储记忆   │  Entry → Storage Backend（InMemory/SQLite/SQLiteVec/Redis/MySQL/MySQLVec/PostgreSQL/pgvector/ChromaDB）
 └──────┬───────┘
        │
        ↓
@@ -447,7 +450,7 @@ appRunner := runner.NewRunner(
 
 ### 记忆服务 (Memory Service)
 
-记忆服务支持多种存储后端（InMemory、SQLite、SQLiteVec、Redis、MySQL、PostgreSQL、pgvector），可根据场景选择。
+记忆服务支持多种存储后端（InMemory、SQLite、SQLiteVec、Redis、MySQL、MySQLVec、PostgreSQL、pgvector、ChromaDB），可根据场景选择。
 
 #### 配置示例
 
@@ -496,13 +499,16 @@ if err != nil {
 
 **快速选择指南**：
 
-| 场景               | 推荐后端         | 原因                       |
-| ------------------ | ---------------- | -------------------------- |
-| 本地开发           | InMemory         | 零配置，快速启动           |
-| 高并发读写         | Redis            | 内存级性能，支持分布式     |
-| 需要复杂查询       | MySQL/PostgreSQL | 关系型数据库，SQL 支持     |
-| 需要 JSON 高级操作 | PostgreSQL       | JSONB 类型，高效 JSON 查询 |
-| 需要审计追踪       | MySQL/PostgreSQL | 支持软删除，可恢复数据     |
+| 场景                 | 推荐后端         | 原因                             |
+| -------------------- | ---------------- | -------------------------------- |
+| 本地开发             | InMemory         | 零配置，快速启动                 |
+| 高并发读写           | Redis            | 内存级性能，支持分布式           |
+| 需要复杂查询         | MySQL/PostgreSQL | 关系型数据库，SQL 支持           |
+| 需要 JSON 高级操作   | PostgreSQL       | JSONB 类型，高效 JSON 查询       |
+| 需要审计追踪         | MySQL/PostgreSQL | 支持软删除，可恢复数据           |
+| MySQL 向量检索       | MySQLVec         | MySQL 余弦与混合检索             |
+| PostgreSQL 向量检索  | pgvector         | PostgreSQL 余弦与混合检索        |
+| 独立向量数据库服务   | ChromaDB         | REST 余弦检索与客户端混合结果融合 |
 
 ### 记忆工具配置
 
@@ -563,8 +569,36 @@ memoryService := memoryinmemory.NewMemoryService(
 
 ### 覆盖语义（ID 与重复）
 
-- 记忆 ID 基于「内容 + appName + userID + 规范化事件元数据」生成；主题不参与 ID。对同一用户重复添加相同内容与身份元数据是幂等的：会覆盖原有记录（非追加），并刷新 topics 与 UpdatedAt。
+- 记忆 ID 基于「内容 + appName + userID + 规范化事件元数据」生成；主题不参与 ID。对同一用户重复添加相同内容与身份元数据是幂等的：会覆盖原有记录（非追加），并刷新 topics 与 UpdatedAt。如果该规范 ID 对应软删除记录，`AddMemory` 会将其重新激活。
 - 如需“允许重复/只返回已存在/忽略重复”等策略，可通过自定义工具或扩展服务策略配置实现。
+
+### 更新语义与 ID 轮转
+
+`UpdateMemory` 会先应用新的内容、topics 和事件元数据，再重新计算规范 Memory
+ID。topics 不参与 ID 计算，因此只修改 topics 时 ID 保持不变。
+
+更新遵循以下状态机：
+
+| 应用更新后的状态 | 结果 |
+| ---------------- | ---- |
+| source 不存在或已软删除 | 返回 not-found 错误，且不修改 `UpdateResult` |
+| 规范 ID 不变 | 原地更新 active source |
+| newID 不存在 | 创建 target，再淘汰 source |
+| newID 是软删除记录 | 重新激活 target；硬删除模式会替换旧 tombstone |
+| newID 已是 active | 返回冲突错误，source 和 target 都不修改 |
+
+启用软删除时，成功的 ID 轮转会把旧 source 保留为 tombstone；硬删除模式则移除旧
+source。SQL 后端会原子地完成 target 准备和 source 淘汰。
+
+SQL 后端的时间戳语义保持一致：
+
+- 新插入的 target 继承 source 的 `CreatedAt`。
+- 重新激活的 target 保留自己的 `CreatedAt`。
+- 硬删除模式替换旧 target tombstone 时，replacement 继承 source 的 `CreatedAt`。
+- 每次成功更新都会刷新 `UpdatedAt`。
+
+成功时，`UpdateResult.MemoryID` 返回最终生效的规范 ID；失败时，调用方传入的
+result 保持不变。
 
 ### 自定义工具实现
 
@@ -1011,6 +1045,12 @@ redisService, err := memoryredis.NewService(
 
 **注意**：`WithRedisClientURL` 优先级高于 `WithRedisInstance`
 
+**Redis ACL 要求**：`UpdateMemory` 使用服务端 Lua 脚本，以原子方式校验并
+轮换记忆 ID。除脚本使用的 `HEXISTS`、`HSET`、`HDEL` 命令和对应记忆 key
+访问权限外，ACL 用户还必须具有 `EVALSHA` 和 `EVAL` 权限；脚本尚未缓存时
+需要 `EVAL`。Redis 重启或执行 `SCRIPT FLUSH` 后脚本缓存可能被清除，因此
+不能只在预热阶段临时授予 `EVAL`。
+
 **Key 前缀示例**：
 
 ```go
@@ -1274,19 +1314,87 @@ CREATE INDEX ON memories USING hnsw (embedding vector_cosine_ops);
 defer pgvectorService.Close()
 ```
 
+### ChromaDB 存储
+
+**适用场景**：自建 ChromaDB 或 Chroma Cloud，使用余弦语义检索和混合检索
+
+```go
+import (
+    openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
+    memorychromadb "trpc.group/trpc-go/trpc-agent-go/memory/chromadb"
+)
+
+embedder := openaiembedder.New(
+    openaiembedder.WithModel("text-embedding-3-small"),
+)
+
+chromaService, err := memorychromadb.NewService(
+    memorychromadb.WithBaseURL("http://localhost:8000"),
+    memorychromadb.WithCollectionName("memories"),
+    memorychromadb.WithEmbedder(embedder),
+    memorychromadb.WithSoftDelete(true),
+)
+if err != nil {
+    // 处理错误
+}
+defer chromaService.Close()
+```
+
+这是 client-server 模式的 REST 适配器，不是嵌入式 Chroma 运行时。需要单独
+启动 Chroma 服务，或让 `WithBaseURL` 指向远程部署或 Chroma Cloud。Embedding
+由配置的 tRPC-Agent-Go `embedder.Embedder` 生成；适配器不会安装或调用 Chroma
+服务端 embedding function。
+
+使用 Chroma Cloud 时可配置 `WithAPIKey`，该值通过 `X-Chroma-Token` 发送；如果
+没有显式设置 tenant 和 database，服务会通过 identity 接口解析唯一作用域。
+Bearer 和自定义请求头认证分别使用 `WithBearerToken` 和 `WithHTTPHeaders`，
+主要面向代理或自定义网关。使用自定义认证请求头时，必须显式指定 tenant 和
+database。非 loopback 地址只要携带认证或任意自定义请求头，就必须使用 HTTPS。
+
+**配置选项**：
+
+- 连接：`WithBaseURL`、`WithAPIKey`、`WithBearerToken`、
+  `WithHTTPHeaders`、`WithTenant`、`WithDatabase`、`WithHTTPClient`、
+  `WithTimeout`
+- Collection：`WithCollectionName`、`WithAutoCreateCollection`、
+  `WithIndexDimension`、`WithEmbedder`
+- 检索：`WithMaxResults`、`WithSimilarityThreshold`、
+  `WithHybridCandidateLimit`
+- 保留策略：`WithMemoryLimit`、`WithSoftDelete`
+- Auto 模式和工具配置与其他 memory 后端一致。
+
+适配器直接使用 ChromaDB REST API v2，不依赖第三方 SDK。Collection 必须只启用
+一个 HNSW 或 SPANN 索引，且距离度量必须为 `cosine`。记录在同一个 collection
+内通过 schema、应用和用户 metadata 隔离。每用户容量限制只在单个 Service 实例
+内串行保证；多实例同时写同一用户时，应在上层使用分布式锁或 sticky routing。
+
+还需注意以下运行约束：
+
+- 更换 embedding 模型时，即使新旧模型维度相同，也必须使用新 collection，或
+  对全部记录重新生成 embedding。
+- `EventTime` 和检索时间边界必须能以有符号 64 位 Unix 纳秒表示，即位于 UTC
+  1677-09-21 至 2262-04-11 之间；超出范围的值会在请求 ChromaDB 前被拒绝。
+- `WithHybridCandidateLimit` 是本地关键词候选扫描的硬上限，与
+  `WithMemoryLimit` 无关。
+- Chroma 没有为本流程提供跨请求事务或分页 snapshot token，因此多 Service
+  实例下的容量检查、ID 轮换和分页读取都是 best-effort。
+- Chroma Cloud 当前说明的限制包括：collection 名称最多 128 字节、查询结果最多
+  300 条、单次写入最多 300 条、每个 collection 并发读写各 10。适配器只说明
+  这些服务限制，不会静默 clamp 用户配置。
+
 ### 后端对比与选择
 
-| 特性         | InMemory | SQLite     | SQLiteVec | Redis  | MySQL    | PostgreSQL | pgvector |
-| ------------ | -------- | ---------- | -------- | ------ | -------- | ---------- | -------- |
-| **持久化**   | ❌       | ✅         | ✅       | ✅     | ✅       | ✅         | ✅       |
-| **分布式**   | ❌       | ❌         | ❌       | ✅     | ✅       | ✅         | ✅       |
-| **事务**     | ❌       | ✅ ACID    | ✅ ACID  | 部分   | ✅ ACID  | ✅ ACID    | ✅ ACID  |
-| **查询**     | 简单     | SQL        | SQL+向量 | 中等   | SQL      | SQL        | SQL+向量 |
-| **JSON**     | ❌       | 基础       | 基础     | 基础   | JSON     | JSONB      | JSONB    |
-| **性能**     | 极高     | 中高       | 中高     | 高     | 中高     | 中高       | 中高     |
-| **配置**     | 零配置   | 简单       | 中等     | 简单   | 中等     | 中等       | 中等     |
-| **软删除**   | ❌       | ✅         | ✅       | ❌     | ✅       | ✅         | ✅       |
-| **适用场景** | 开发测试 | 本地持久化 | 本地向量 | 高并发 | 企业应用 | 高级特性   | 向量搜索 |
+| 特性         | InMemory | SQLite     | SQLiteVec | Redis  | MySQL    | MySQLVec  | PostgreSQL | pgvector | ChromaDB    |
+| ------------ | -------- | ---------- | --------- | ------ | -------- | --------- | ---------- | -------- | ----------- |
+| **持久化**   | ❌       | ✅         | ✅        | ✅     | ✅       | ✅        | ✅         | ✅       | ✅          |
+| **分布式**   | ❌       | ❌         | ❌        | ✅     | ✅       | ✅        | ✅         | ✅       | ✅          |
+| **事务**     | ❌       | ✅ ACID    | ✅ ACID   | 部分   | ✅ ACID  | ✅ ACID   | ✅ ACID    | ✅ ACID  | 尽力保证    |
+| **查询**     | 简单     | SQL        | SQL+向量  | 中等   | SQL      | SQL+向量  | SQL        | SQL+向量 | 向量+本地   |
+| **JSON**     | ❌       | 基础       | 基础      | 基础   | JSON     | JSON      | JSONB      | JSONB    | Metadata    |
+| **性能**     | 极高     | 中高       | 中高      | 高     | 中高     | 中高      | 中高       | 中高     | 高          |
+| **配置**     | 零配置   | 简单       | 中等      | 简单   | 中等     | 中等      | 中等       | 中等     | 中等        |
+| **软删除**   | ❌       | ✅         | ✅        | ❌     | ✅       | ✅        | ✅         | ✅       | ✅          |
+| **适用场景** | 开发测试 | 本地持久化 | 本地向量  | 高并发 | 企业应用 | MySQL 向量 | 高级特性   | 向量搜索 | 向量服务    |
 
 **选择建议**：
 
@@ -1297,8 +1405,10 @@ defer pgvectorService.Close()
 高并发读写 → Redis（内存级性能）
 需要 ACID → MySQL/PostgreSQL（事务保证）
 复杂 JSON → PostgreSQL（JSONB 索引和查询）
+MySQL 向量检索 → MySQLVec（MySQL 9.0+ 相似度检索）
 向量搜索 → pgvector（基于 embedding 的相似度搜索）
-审计追踪 → MySQL/PostgreSQL/pgvector/SQLite/SQLiteVec（软删除支持）
+向量服务 → ChromaDB（基于 REST 的余弦与混合检索）
+审计追踪 → MySQL/MySQLVec/PostgreSQL/pgvector/ChromaDB/SQLite/SQLiteVec（软删除支持）
 ```
 
 ## 常见问题
@@ -1355,6 +1465,7 @@ memory.AddMemory(ctx, userKey, "用户喜欢编程", []string{"兴趣"})
 
 - 对 `inmemory` / `redis` / `mysql` / `postgres`：`SearchMemories` 使用 **BM25 风格 lexical 关键词匹配**（不是语义搜索）。
 - 对 `pgvector` / `mysqlvec` / `sqlitevec`：`SearchMemories` 使用**向量相似度检索**，并且需要配置 Embedder。
+- 对 `chromadb`：`SearchMemories` 使用 ChromaDB 向量检索，并支持 kind 回退和混合检索。
 
 **Lexical 匹配细节**（非向量后端）：
 
@@ -1390,13 +1501,13 @@ memory.AddMemory(ctx, userKey, "用户喜欢编程", []string{"兴趣"})
 **建议**：
 
 - 使用明确关键词和主题标签提高命中率
-- 如需语义相似度检索，使用 pgvector、mysqlvec 或 sqlitevec 后端
+- 如需语义相似度检索，使用 pgvector、mysqlvec、sqlitevec 或 ChromaDB 后端
 
 ### 软删除的注意事项
 
 **支持情况**：
 
-- ✅ MySQL、PostgreSQL、pgvector、SQLite、SQLiteVec：支持软删除
+- ✅ MySQL、MySQLVec、PostgreSQL、pgvector、SQLite、SQLiteVec、ChromaDB：支持软删除
 - ❌ InMemory、Redis：不支持（只有硬删除）
 
 **软删除配置**：
@@ -1414,7 +1525,7 @@ mysqlService, err := memorymysql.NewService(
 | ---- | -------- | ------------------------------------ |
 | 删除 | 立即移除 | 设置 `deleted_at` 字段               |
 | 查询 | 不可见   | 自动过滤（WHERE deleted_at IS NULL） |
-| 恢复 | 无法恢复 | 可手动清除 `deleted_at`              |
+| 恢复 | 无法恢复 | 重新 Add，或将更新轮转到相同 ID      |
 | 存储 | 节省空间 | 占用空间                             |
 
 **迁移陷阱**：

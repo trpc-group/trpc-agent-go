@@ -66,3 +66,25 @@ variable injection model is described in
 can inherit all, core, or no host variables, apply excludes or allow-lists, and
 the runtime always injects stable workspace variables such as `HOME`, `TMPDIR`,
 `WORKSPACE_DIR`, and `OUTPUT_DIR`.
+
+For backward compatibility, `RunProgram` keeps its existing environment
+behavior and does not advertise generic `CleanEnv` support. The new
+`StartProcess` API honors `ProcessSpec.CleanEnv`: when it is true, the
+process starts without host environment variables; explicit policy settings,
+per-run variables, and sandbox-owned workspace variables are still applied.
+
+## Full-duplex Processes
+
+`Runtime.StartProcess` starts a program through the same permission checks and
+native sandbox backend as `RunProgram`, but returns separate stdin, stdout, and
+stderr pipes. It is intended for machine protocols that need multiple request
+and response exchanges while the process stays alive.
+
+Callers must drain stdout and stderr and must call `Wait` after normal exit or
+`Kill`. `Wait` releases native backend resources and the workspace run lock. A
+process abandoned without `Wait` can retain backend resources and, with serial
+workspace concurrency, block later runs on that workspace. Context cancellation
+terminates the process but does not replace the caller's responsibility to call
+`Wait`. A zero `ProcessSpec.Timeout` adds no runtime timeout; the
+caller's context remains authoritative. `RunProgram` keeps its existing default
+timeout behavior. Interactive input is written through `Process.Stdin()`.

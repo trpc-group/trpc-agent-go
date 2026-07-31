@@ -1536,7 +1536,7 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-c
 			},
 		)
 		if traceLease.Owns {
-			tracecapture.SetStepNodeType(traceCtx, traceLease.StepID, "llm")
+			tracecapture.SetStepNodeType(traceCtx, traceLease.StepID, "agent")
 		}
 	}
 	ctx = a.withWorkspace(ctx, invocation)

@@ -26,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/messageoriginkey"
 	"trpc.group/trpc-go/trpc-agent-go/internal/structuredoutput"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/internal/tracecapture"
@@ -970,6 +971,19 @@ func WithToolExecutionFilter(filter tool.FilterFunc) RunOption {
 	}
 }
 
+// WithToolResultEventPerCallEnabled controls whether each result is emitted as
+// its tool call completes in framework-executed, non-long-running multi-tool
+// rounds. No additional aggregate event is emitted, and the next model call
+// still waits for all results. Other rounds keep the existing behavior.
+// Round-level StateDelta and Actions.SkipSummarization are carried only by the
+// last result event, or by the terminal error if the round ends early.
+// Disabled by default.
+func WithToolResultEventPerCallEnabled(enabled bool) RunOption {
+	return func(opts *RunOptions) {
+		opts.ToolResultEventPerCallEnabled = enabled
+	}
+}
+
 // WithToolPermissionPolicy sets a per-run policy that is checked after
 // before-tool callbacks finalize arguments and immediately before the
 // framework executes a tool call.
@@ -1398,6 +1412,10 @@ type RunOptions struct {
 	// externally and later provide tool results (RoleTool messages).
 	ToolExecutionFilter tool.FilterFunc
 
+	// ToolResultEventPerCallEnabled enables the behavior documented by
+	// [WithToolResultEventPerCallEnabled].
+	ToolResultEventPerCallEnabled bool
+
 	// ToolPermissionPolicy checks whether a tool call may run after the model
 	// has requested it, after argument repair, and after before-tool callbacks
 	// have finalized arguments.
@@ -1726,6 +1744,7 @@ func isCloneStateKey(key string) bool {
 		appenderStateKey,
 		liveSessionStateKey,
 		streamHubStateKey,
+		messageoriginkey.Key,
 		surfaceRootNodeIDStateKey,
 		teamMemberTraceRootStateKey:
 		return true
