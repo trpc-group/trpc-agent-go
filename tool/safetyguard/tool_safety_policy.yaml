@@ -1,0 +1,208 @@
+# tool_safety_policy.yaml
+#
+# Example safety policy for the trpc-agent-go safetyguard.
+# This file demonstrates every risk category and can be loaded via:
+#
+#   policy, err := safetyguard.LoadPolicy("tool_safety_policy.yaml")
+#   guard := safetyguard.NewGuard(policy)
+#
+# A zero/empty policy is a no-op (allows every call). This sample is
+# conservative and ready for production tuning.
+
+version: "safetyguard/v1"
+
+# ---------------------------------------------------------------------------
+# Commands: executable-name allow/deny and structural shellsafe parse.
+# ---------------------------------------------------------------------------
+commands:
+  # When non-empty, only these executables are allowed (basename-strict).
+  # Bare names match PATH-resolved lookups; pathful entries must match
+  # exactly. Leave empty to skip the allowlist.
+  allowed: []
+
+  # Always denied, matched by basename (so "curl", "/usr/bin/curl" and
+  # "./curl" all match). Case-folded on every OS.
+  denied:
+    - rm
+    - rmdir
+    - dd
+    - mkfs
+    - fdisk
+    - shred
+    - wipe
+    - chmod
+    - chown
+    - chattr
+    - kill
+    - pkill
+    - killall
+    - reboot
+    - shutdown
+    - poweroff
+    - halt
+    - init
+    - mkswap
+    - mount
+    - umount
+
+  # Executables that mutate the toolchain or environment. Flagged at
+  # medium risk by default; "install"/"add" subcommands lift to high.
+  # Defaults are pre-seeded; this list overrides them.
+  dependency_changes:
+    - go
+    - pip
+    - pip3
+    - python
+    - python3
+    - pipx
+    - npm
+    - yarn
+    - pnpm
+    - node
+    - npx
+    - cargo
+    - rustc
+    - apt
+    - apt-get
+    - dpkg
+    - yum
+    - dnf
+    - rpm
+    - zypper
+    - brew
+    - port
+    - gem
+    - bundle
+    - mvn
+    - gradle
+    - docker
+    - podman
+
+  # Privilege-escalation executables. High risk on workspace_exec,
+  # critical on host_exec tools.
+  privilege_escalation:
+    - sudo
+    - su
+    - doas
+    - pkexec
+    - runuser
+    - gosu
+
+# ---------------------------------------------------------------------------
+# Forbidden paths: path fragments that must not appear in any argument.
+# Home-relative entries (~/.ssh) are expanded to the absolute home path
+# so both literal and expanded forms are caught.
+# ---------------------------------------------------------------------------
+forbidden_paths:
+  - "~/.ssh"
+  - "~/.aws"
+  - "~/.config/gcloud"
+  - "~/.gnupg"
+  - "~/.bash_history"
+  - "~/.netrc"
+  - "~/.docker/config.json"
+  - "/etc/passwd"
+  - "/etc/shadow"
+  - "/etc/sudoers"
+  - "/etc/hosts"
+
+# ---------------------------------------------------------------------------
+# Network: outbound-egress detection for curl/wget and bare URLs.
+# ---------------------------------------------------------------------------
+network:
+  enabled: true
+  # When non-empty, any host not in the list is flagged at high risk.
+  # Empty means "no egress allowed" when enabled is true.
+  allowed_domains:
+    - localhost
+    - "127.0.0.1"
+    - "::1"
+  # Executables that open sockets. Their presence is flagged even
+  # without an explicit URL.
+  network_tools:
+    - curl
+    - wget
+    - ftp
+    - scp
+    - sftp
+    - rsync
+    - ssh
+    - telnet
+    - nc
+    - ncat
+    - netcat
+    - dig
+    - nslookup
+    - host
+
+# ---------------------------------------------------------------------------
+# Resource limits: caps timeouts and output sizes declared in tool args.
+# ---------------------------------------------------------------------------
+resource_limits:
+  max_timeout_seconds: 600
+  max_output_bytes: 1048576  # 1 MiB
+
+# ---------------------------------------------------------------------------
+# Environment: constrains the env map passed to shell tools.
+# ---------------------------------------------------------------------------
+environment:
+  # When non-empty, any key not in the list is flagged at low risk.
+  allowed_vars:
+    - LANG
+    - TZ
+    - LC_ALL
+    - HOME
+    - PATH
+  # Always rejected (in addition to envscrub's built-in blocklist).
+  denied_vars:
+    - LD_PRELOAD
+    - LD_LIBRARY_PATH
+    - BASH_ENV
+    - ENV
+
+# ---------------------------------------------------------------------------
+# Sensitive info: credential-shape scanning of arguments.
+# ---------------------------------------------------------------------------
+sensitive_info:
+  enabled: true
+  # When true, a detected credential routes to deny instead of ask.
+  deny_on_detect: false
+
+# ---------------------------------------------------------------------------
+# Decision: how findings aggregate into an action.
+# ---------------------------------------------------------------------------
+decision:
+  # fail_closed: deny on any finding at or above risk_threshold_deny,
+  # ask on any finding at or above risk_threshold_ask.
+  # advisory: record findings but allow unless critical.
+  mode: fail_closed
+  # Action when shellsafe cannot safely parse a command.
+  on_parse_error: deny
+  # Minimum risk level that triggers an ask (when not denied).
+  risk_threshold_ask: medium
+  # Minimum risk level that triggers a deny.
+  risk_threshold_deny: high
+
+# ---------------------------------------------------------------------------
+# Tool command fields: maps tool name to the JSON field carrying its
+# shell command. Defaults are pre-seeded; this overrides them.
+# ---------------------------------------------------------------------------
+tool_command_fields:
+  workspace_exec: command
+  workspace_command: command
+  hostexec: command
+  host_exec: command
+  exec: command
+  run_command: command
+  bash: command
+  shell: command
+
+# ---------------------------------------------------------------------------
+# Host-exec tools: tool names that run on the host (higher blast radius).
+# Findings on these tools are escalated one risk level.
+# ---------------------------------------------------------------------------
+host_exec_tools:
+  - hostexec
+  - host_exec
+  - exec
+  - run_command
