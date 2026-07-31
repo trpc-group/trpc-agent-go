@@ -60,14 +60,23 @@ func TestGateRejectsOverfitAndAcceptsGeneralization(t *testing.T) {
 	}}, costSummary{Calls: 6, EstimatedTokens: 100})
 	require.True(t, accepted.Accepted)
 
-	for name, cost := range map[string]costSummary{
-		"call budget":  {Calls: cfg.MaxCalls + 1},
-		"token budget": {EstimatedTokens: cfg.MaxEstimatedTokens + 1},
+	for name, test := range map[string]struct {
+		cost   costSummary
+		reason string
+	}{
+		"call budget": {
+			cost:   costSummary{Calls: cfg.MaxCalls + 1},
+			reason: "call count 11 exceeds budget 10",
+		},
+		"token budget": {
+			cost:   costSummary{EstimatedTokens: cfg.MaxEstimatedTokens + 1},
+			reason: "estimated tokens 1001 exceed budget 1000",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			decision := decideGate(cfg, baseline, evaluationSummary{Score: 1}, nil, cost)
+			decision := decideGate(cfg, baseline, evaluationSummary{Score: 1}, nil, test.cost)
 			require.False(t, decision.Accepted)
-			require.NotEmpty(t, decision.Reasons)
+			require.Contains(t, decision.Reasons, test.reason)
 		})
 	}
 
@@ -100,6 +109,13 @@ func TestValidateInputsRejectsIncompleteCandidates(t *testing.T) {
 	missingPrompt := valid
 	missingPrompt.Config.Candidates = []candidateConfig{{ID: "candidate"}}
 	require.EqualError(t, validateInputs(&missingPrompt), "candidate \"candidate\" prompt is empty")
+
+	duplicateID := valid
+	duplicateID.Config.Candidates = []candidateConfig{
+		{ID: "candidate", Prompt: "first"},
+		{ID: " candidate ", Prompt: "second"},
+	}
+	require.EqualError(t, validateInputs(&duplicateID), "candidate id \"candidate\" is duplicated")
 }
 
 func TestCodeFenceExceedsPromptBackticks(t *testing.T) {

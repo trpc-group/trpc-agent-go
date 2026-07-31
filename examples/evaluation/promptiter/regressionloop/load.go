@@ -84,10 +84,16 @@ func validateInputs(loaded *inputs) error {
 	if len(loaded.Config.Candidates) == 0 {
 		return errors.New("promptiter candidates are empty")
 	}
+	seenCandidateIDs := make(map[string]struct{}, len(loaded.Config.Candidates))
 	for _, candidate := range loaded.Config.Candidates {
-		if strings.TrimSpace(candidate.ID) == "" {
+		id := strings.TrimSpace(candidate.ID)
+		if id == "" {
 			return errors.New("candidate id is empty")
 		}
+		if _, exists := seenCandidateIDs[id]; exists {
+			return fmt.Errorf("candidate id %q is duplicated", id)
+		}
+		seenCandidateIDs[id] = struct{}{}
 		if strings.TrimSpace(candidate.Prompt) == "" {
 			return fmt.Errorf("candidate %q prompt is empty", candidate.ID)
 		}
