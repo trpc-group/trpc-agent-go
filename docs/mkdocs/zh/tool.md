@@ -522,13 +522,21 @@ Formatter 接收 `AfterTool` callback 处理后的最终结果，仅改变
 
 - 未配置 formatter 时，现有默认 JSON 输出保持不变。
 - formatter 返回错误或发生 panic 时，本次工具结果会报告错误；框架不会回退 JSON，
-  也不会重新执行已经完成的工具。
+  也不会重新执行已经完成的工具。格式化失败只是展示失败，工具已经执行完毕，它的会话
+  状态更新照常写入。
 - `tool.PermissionResult` 和仅携带状态的流式最终结果不经过 formatter；其他
   `StreamableTool` 只格式化最终结果，中间事件不变。
-- 对于会更新会话状态的工具，formatter 只改变模型看到的文本；状态更新仍基于
-  `AfterTool` callback 处理后的工具结果。
+- 对于会更新会话状态的工具，状态更新消费的是「未配置 formatter 时框架会发出的那条
+  工具消息内容」，也就是 `AfterTool` callback 处理后结果的 JSON。formatter 不参与
+  状态协议：即使它原地修改了指针或 map 类型的结果，写入会话的仍然是修改前的内容。
+  如果 `ToolResultMessages` 改写了工具消息内容，则以改写后的内容为准——这与引入
+  formatter 之前的行为一致。
 - `ToolResultMessages` callback 仍会在默认工具结果消息生成后执行，并可用其返回的消息
-  覆盖默认消息；多消息、多模态内容或完全接管消息协议的场景继续使用该 callback。
+  覆盖默认消息；多消息、多模态内容或完全接管消息协议的场景继续使用该 callback。注意
+  formatter 是按工具配置的，而 `ToolResultMessages` 是整个 Agent 全局的：对配置了
+  formatter 的工具，回调拿到的 `DefaultToolMessage.Content` 是格式化后的文本而不是
+  JSON。回调如果需要结构化数据，请读取 `ToolResultMessagesInput.Result`，不要解析
+  `DefaultToolMessage.Content`。
 
 Formatter 返回的文本会直接写入默认工具结果消息，可以在格式化函数中按业务协议处理
 转义、截断和格式校验。Formatter 可能被并发调用；若持有可变状态，需要自行保证并发

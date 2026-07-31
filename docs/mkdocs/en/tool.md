@@ -543,17 +543,27 @@ role, name, tool call ID, ordering, events, and session persistence.
 
 - Without a formatter, existing JSON output remains unchanged.
 - A formatting error or panic is reported as an error. The framework does not
-  fall back to JSON or run the completed tool again.
+  fall back to JSON or run the completed tool again. Formatting is presentation
+  only, so a tool that already ran still applies its session state updates.
 - Permission results and state-only final stream results bypass the formatter.
   For other streamable results, only the final result is formatted;
   intermediate events are unchanged.
-- For tools that update session state, formatting changes only the text shown
-  to the model. State updates still use the tool result produced after
-  `AfterTool` callbacks.
+- For tools that update session state, the state update consumes the tool
+  message content the framework would send without a formatter, which is the
+  JSON of the result produced after `AfterTool` callbacks. A formatter is not
+  part of the state protocol: even if it mutates a pointer or map result in
+  place, the session records the value from before that mutation. When
+  `ToolResultMessages` rewrites the tool message content, the rewritten content
+  wins, exactly as it did before formatting existed.
 - The `ToolResultMessages` callback still runs after the default tool result
   message is prepared and may replace it with the messages returned by the
   callback. Continue using it for multiple messages, multimodal content, or
-  complete control of the message protocol.
+  complete control of the message protocol. Note that a formatter is configured
+  per tool while `ToolResultMessages` is registered for the whole agent: for a
+  tool with a formatter, the callback receives formatted text in
+  `DefaultToolMessage.Content` rather than JSON. A callback that needs
+  structured data should read `ToolResultMessagesInput.Result` instead of
+  parsing `DefaultToolMessage.Content`.
 
 The formatter's return value becomes the default tool result message. The
 formatting function can apply any escaping, truncation, or validation required
