@@ -590,23 +590,98 @@ model := openai.New("deepseek-v4-flash",
 
 ##### 自定义流式 Usage 聚合
 
-OpenAI-compatible adapter 默认会开启流式 usage 收集，并聚合服务方返回的
-usage chunks。大多数应用应保留这一默认行为。
+OpenAI-compatible adapter 默认会请求流式 usage，并聚合服务方返回的
+usage chunks。大多数应用应保留这一行为。只有兼容服务方对 usage chunks
+采用了非标准语义时，才需要配置 `WithAccumulateChunkTokenUsage`。该 option
+只影响流式 chunks 的聚合；非流式 usage 直接来自完整响应。
 
-`WithAccumulateChunkTokenUsage` 只适合流式 usage 语义不标准的服务方，
-例如每个 chunk 都返回累计总量的服务。回调接收当前 chunk 之前已经累计的
-usage，以及当前 chunk 的 usage：
+###### 心智模型：把 Usage Chunks Reduce 成一个结果
+
+这个 option 的工作方式类似对 stream 执行 reduce 或 fold，与 Python 的
+`functools.reduce`、Java 的 `Stream.reduce` 是同一种心智模型。`current`
+是 accumulator，当前 chunk 是下一个元素，返回值会成为下一次调用的
+accumulator：
+
+```go
+state0 := model.Usage{}
+state1 := accumulate(state0, chunk1.Usage)
+state2 := accumulate(state1, chunk2.Usage)
+// ...
+finalResponse.Usage = accumulate(stateN, lastChunk.Usage)
+```
+
+回调签名是：
 
 ```go
 func(current model.Usage, delta model.Usage) model.Usage
 ```
 
-回调返回的 `model.Usage` 会整体替换累计结果。返回值中没有填写的字段，
-不会自动从 `current` 或 `delta` 补回，其中包括
-`PromptTokensDetails.CachedTokens`、
-`CompletionTokensDetails.ReasoningTokens` 等嵌套明细。
+| 参数 | 含义 |
+| --- | --- |
+| `current` | 处理当前 chunk 之前的累计状态 |
+| `delta` | 当前 chunk 携带的 `Usage` |
+| 返回值 | 处理当前 chunk 之后要保存的完整状态 |
 
-如果服务方以最新 usage chunk 为准，应直接返回完整的 `delta`：
+对于每个 chunk，OpenAI-compatible adapter 会先让上游 SDK 聚合这个 chunk。
+如果配置了自定义回调，adapter 随后会还原出处理该 chunk 之前的 usage 状态，
+把当前 chunk 的 usage 映射成 `delta`，调用回调，再用回调返回值整体替换 SDK
+accumulator 中的 usage。因此，下一个 chunk 看到的 `current` 就是上一次的
+返回值，最终模型响应拿到的是最后一次返回值。
+
+`delta` 只是 API 中的参数名，不代表服务方一定发送了数学意义上的增量。
+它可能是真正的增量、截至当前的累计总量、最后一次完整总量，也可能是空值，
+具体取决于服务方。
+
+回调返回值会整体替换累计后的 `model.Usage`。返回值中没有填写的字段，
+不会自动从 `current` 或 `delta` 补回。
+
+标准 OpenAI-compatible stream 通常在普通内容 chunks 中不携带 usage，
+最后再发送一个只包含完整 usage 的 chunk：
+
+```text
+chunk 1..N: delta = {0, 0, 0}
+最后的 chunk: delta = {prompt: 100, completion: 20, total: 120, cached: 80}
+最终 usage:           {prompt: 100, completion: 20, total: 120, cached: 80}
+```
+
+默认聚合器可以直接处理这种形态，不需要自定义 accumulator。
+
+###### `model.Usage` 字段说明
+
+Accumulator 保存的是一个完整的 `model.Usage`：
+
+| 字段 | 含义 |
+| --- | --- |
+| `PromptTokens` | 服务方上报的本次请求输入 token 总量。缓存命中的输入 token 通常已经包含在该值中，不应再次相加 |
+| `CompletionTokens` | 服务方上报的模型输出 token 总量 |
+| `TotalTokens` | 服务方上报的总 token，通常等于 prompt 加 completion |
+| `PromptTokensDetails.CachedTokens` | OpenAI-compatible Prompt Cache 命中的输入 token，通常是 `PromptTokens` 的子集 |
+| `PromptTokensDetails.CacheCreationTokens` | 用于创建显式缓存的 token，主要对应 Anthropic 风格缓存 |
+| `PromptTokensDetails.CacheReadTokens` | 从显式缓存中读取的 token，主要对应 Anthropic 风格缓存 |
+| `CompletionTokensDetails.ReasoningTokens` | Completion usage 中服务方上报的推理 token |
+| `TimingInfo` | 可选的框架耗时信息，不属于计费 token |
+| `TimingInfo.FirstTokenDuration` | 每次模型调用从请求开始到第一个有效 reasoning、content 或 tool-call chunk 的耗时，多个模型调用会累加 |
+| `TimingInfo.ReasoningDuration` | 流式 reasoning 阶段的累计耗时；非流式请求无法精确计算区间，因此保持为零 |
+
+这些字段组成 provider-agnostic 结构。
+`WithAccumulateChunkTokenUsage` 属于 OpenAI-compatible adapter，因此回调
+只会收到上游 OpenAI-compatible 响应和 adapter 映射支持的字段；其他服务方
+专用字段保持为零。
+
+`TimingInfo` 包含 `FirstTokenDuration` 和 `ReasoningDuration`。框架会在
+OpenAI chunk usage 聚合之外附加这些耗时，因此自定义 token accumulator
+通常不需要创建或合并 `TimingInfo`。
+
+Token 计数细节仍以具体服务方定义为准。例如，不应把 `CachedTokens` 再加到
+`PromptTokens` 上，也不应在服务方没有要求时自行重算 `TotalTokens`。
+
+###### 根据服务方选择聚合策略
+
+服务方遵循标准 OpenAI 流式 usage 行为时，使用默认聚合器。
+
+如果每个 stream chunk 都包含截至当前的累计总量，或者服务方保证最后会发送
+一个权威的完整 usage chunk，继续求和会造成重复计算。此时采用“最新 chunk
+为准”的语义，直接返回完整的 `delta`：
 
 ```go
 import (
@@ -624,10 +699,40 @@ llm := openai.New("your-model",
 )
 ```
 
-不要只重新构造顶层 token 计数，否则未填写的明细会被重置为零，可能出现
-服务方已经返回非零 `cached_tokens`，但最终
-`model.Response.Usage` 中仍为零的现象。如果服务方遵循标准 OpenAI 流式
-usage 语义，应删除该 option，使用默认聚合器。
+如果累计 usage 只出现在部分 chunks 中，遇到空 `delta` 时应保留 `current`，
+不要把状态清零；“空”的判断应覆盖该服务方可能上报的字段。
+
+如果每个 usage chunk 携带的确实只是增量，应累加 OpenAI-compatible chunk
+映射已经暴露的每个字段：
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+)
+
+func addUsage(current, delta model.Usage) model.Usage {
+    current.PromptTokens += delta.PromptTokens
+    current.CompletionTokens += delta.CompletionTokens
+    current.TotalTokens += delta.TotalTokens
+    current.PromptTokensDetails.CachedTokens +=
+        delta.PromptTokensDetails.CachedTokens
+    current.CompletionTokensDetails.ReasoningTokens +=
+        delta.CompletionTokensDetails.ReasoningTokens
+    return current
+}
+
+llm := openai.New("your-model",
+    openai.WithAccumulateChunkTokenUsage(addUsage),
+)
+```
+
+不要只重新构造 `PromptTokens`、`CompletionTokens` 和 `TotalTokens`，
+否则没有填写的嵌套明细会被重置为零，可能出现服务方已经返回非零
+`cached_tokens`，但最终 `model.Response.Usage` 中仍为零的现象。
+
+选择自定义策略前，应检查服务方一次完整请求的原始 chunks，确认 usage
+究竟是增量还是累计值，以及是否存在最后的 usage-only chunk。
 
 ##### 通过回调动态修改请求体
 

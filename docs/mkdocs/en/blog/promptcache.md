@@ -392,25 +392,12 @@ the complete accumulated `model.Usage`; returning only `PromptTokens`,
 `CompletionTokens`, and `TotalTokens` discards
 `PromptTokensDetails.CachedTokens`.
 
-Most applications should use the default accumulator. If a nonstandard
-provider requires "latest chunk wins" semantics, preserve every usage field by
-returning the complete delta:
-
-```go
-import (
-    "trpc.group/trpc-go/trpc-agent-go/model"
-    "trpc.group/trpc-go/trpc-agent-go/model/openai"
-)
-
-llm := openai.New("your-model",
-    openai.WithAccumulateChunkTokenUsage(func(
-        _ model.Usage,
-        delta model.Usage,
-    ) model.Usage {
-        return delta
-    }),
-)
-```
+Most applications should use the default accumulator. Nonstandard providers
+may report increments, cumulative totals, or a final total; the custom
+accumulator must match that behavior and return a complete usage state. See
+[Custom Streaming Usage Aggregation](../model.md#custom-streaming-usage-aggregation)
+for the reduce-style mental model, every `model.Usage` field, and complete
+examples.
 
 When `Stream` is true, the OpenAI-compatible adapter requests usage
 automatically. Provider-specific request inspection can still be useful to
