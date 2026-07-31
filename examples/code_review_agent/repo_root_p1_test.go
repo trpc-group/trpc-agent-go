@@ -360,6 +360,29 @@ func TestRepoInputBinaryGoDiffStillRequiresRepositoryChecks(t *testing.T) {
 	if !hasReviewableGoChange(parsed) {
 		t.Fatal("binary Go diff skipped repository checks")
 	}
+	runner := &recordingSandboxRunner{}
+	governance, err := runGovernance(
+		context.Background(),
+		config{},
+		input,
+		parsed,
+		runtimeHooks{sandboxRunner: runner},
+	)
+	if err != nil {
+		t.Fatalf("run governance: %v", err)
+	}
+	if len(runner.calls) != 3 || runner.calls[1].Kind != commandCheckGoTest ||
+		runner.calls[2].Kind != commandCheckGoVet {
+		t.Fatalf("sandbox calls = %+v, want version/test/vet", runner.calls)
+	}
+	if len(governance.Matches) != 0 {
+		t.Fatalf("governance warnings = %+v, want module checks to be available", governance.Matches)
+	}
+	if conclusion := determineConclusion(reviewReport{
+		Parse: reportParse{Warnings: len(parsed.Warnings)},
+	}); conclusion != reviewConclusionNeedsHumanReview {
+		t.Fatalf("binary Go conclusion = %q, want human review", conclusion)
+	}
 }
 
 func repoRootP1MinimalDiff(file string) string {

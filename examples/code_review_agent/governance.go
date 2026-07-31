@@ -193,7 +193,17 @@ func runGovernance(
 	}
 
 	plannedInput := input
-	if shouldRunRepositoryChecks(input, parsed) && plannedInput.sandboxRepoRoot == "" {
+	shouldRunRepoChecks := shouldRunRepositoryChecks(input, parsed)
+	if requiresGoRepositoryValidation(parsed) && !shouldRunRepoChecks {
+		result.addGovernanceWarning(
+			"sandbox",
+			commandSpec{Kind: commandCheckGoTest},
+			ruleSandboxSnapshotUnavailable,
+			"Repository validation is unavailable",
+			"destructive or binary Go changes require a complete repository snapshot",
+		)
+	}
+	if shouldRunRepoChecks && plannedInput.sandboxRepoRoot == "" {
 		if len(input.repoFiles) > 0 {
 			result.addGovernanceWarning(
 				"sandbox",
@@ -341,7 +351,7 @@ func runGovernance(
 		if sandboxRunNeedsWarning(run) {
 			diagnostics := parseSandboxDiagnostics(spec, run, parsed)
 			result.Matches = append(result.Matches, diagnostics.Matches...)
-			if sandboxDiagnosticsNeedGenericWarning(run, diagnostics) {
+			if sandboxDiagnosticsNeedGenericWarning(spec, run, diagnostics) {
 				result.addSandboxWarning(spec, run)
 			}
 		}
@@ -384,8 +394,15 @@ func (r *governanceResult) addSandboxWarning(spec commandSpec, run sandboxRun) {
 		spec,
 		ruleID,
 		title,
-		sandboxRunFailureReason(run),
+		sandboxWarningReason(spec, run),
 	)
+}
+
+func sandboxWarningReason(spec commandSpec, run sandboxRun) string {
+	if spec.Kind == commandCheckGoTest {
+		return sandboxRunStatusReason(run)
+	}
+	return sandboxRunFailureReason(run)
 }
 
 func (r *governanceResult) addGovernanceWarning(
@@ -601,8 +618,16 @@ func shouldRunRepositoryChecks(input reviewInput, parsed parsedDiff) bool {
 }
 
 func hasReviewableGoChange(parsed parsedDiff) bool {
+	return len(affectedGoModuleSeeds(parsed)) > 0
+}
+
+func requiresGoRepositoryValidation(parsed parsedDiff) bool {
 	for _, file := range parsed.Files {
-		if file.isGoFile() && !file.IsDeleted {
+		oldIsGo := isGoSourcePath(file.OldPath)
+		newIsGo := isGoSourcePath(file.NewPath)
+		if (file.IsBinary && (oldIsGo || newIsGo)) ||
+			(file.IsDeleted && oldIsGo) ||
+			(file.IsRename && (oldIsGo || newIsGo)) {
 			return true
 		}
 	}

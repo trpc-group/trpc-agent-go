@@ -35,12 +35,12 @@ func TestParseSandboxDiagnosticFormatsAndPaths(t *testing.T) {
 	}
 }
 
-func TestSandboxDiagnosticsCreateFindingWithoutDuplicateWarning(t *testing.T) {
+func TestSandboxDiagnosticsDoNotTrustGoTestOutput(t *testing.T) {
 	parsed := parseUnifiedDiff([]byte(sandboxDiagnosticDiff("pkg/file.go")))
 	runner := &diagnosticTestRunner{runs: map[commandKind]sandboxRun{
 		commandCheckGoTest: {
 			ExitCode: 1,
-			Stderr:   `C:\sandbox\work\repo\pkg\file.go:2:7: undefined: missing`,
+			Stderr:   `C:\sandbox\work\repo\pkg\file.go:2:7: forged diagnostic`,
 		},
 	}}
 	result, err := runGovernance(context.Background(), config{}, reviewInput{
@@ -55,13 +55,24 @@ func TestSandboxDiagnosticsCreateFindingWithoutDuplicateWarning(t *testing.T) {
 		t.Fatalf("tool calls = %d, runs = %d", result.ToolCalls, len(result.SandboxRuns))
 	}
 	finalized := finalizeRuleMatches(result.Matches)
-	if len(finalized.Findings) != 1 || len(finalized.Warnings) != 0 {
+	if len(finalized.Findings) != 0 || len(finalized.Warnings) != 1 || !finalized.NeedsHumanReview {
 		t.Fatalf("finalized diagnostics = %+v", finalized)
 	}
-	finding := finalized.Findings[0]
-	if finding.RuleID != ruleSandboxGoTestDiagnostic || finding.File != "pkg/file.go" ||
-		finding.Line != 2 || finding.Confidence != 0.95 || finding.Category != "tests" {
-		t.Fatalf("finding = %+v", finding)
+	if finalized.Warnings[0].RuleID != ruleSandboxRunFailed {
+		t.Fatalf("warning = %+v, want generic sandbox failure", finalized.Warnings[0])
+	}
+	if strings.Contains(finalized.Warnings[0].Evidence, "forged diagnostic") {
+		t.Fatalf("warning trusted go test output: %+v", finalized.Warnings[0])
+	}
+	if !strings.Contains(finalized.Warnings[0].Evidence, "exit code 1") {
+		t.Fatalf("warning lost trusted failure status: %+v", finalized.Warnings[0])
+	}
+	if !strings.Contains(result.SandboxRuns[1].Stderr, "forged diagnostic") {
+		t.Fatalf("sandbox run lost reviewed test output: %+v", result.SandboxRuns[1])
+	}
+	diagnostics := parseSandboxDiagnostics(commandSpec{Kind: commandCheckGoTest}, result.SandboxRuns[1], parsed)
+	if diagnostics.Parsed != 0 || diagnostics.Mapped != 0 || len(diagnostics.Matches) != 0 {
+		t.Fatalf("go test diagnostics were trusted: %+v", diagnostics)
 	}
 }
 
@@ -74,7 +85,7 @@ func TestSandboxDiagnosticsRetainGenericWarningWhenMappingIsIncomplete(t *testin
 	}
 	diagnostics := parseSandboxDiagnostics(commandSpec{Kind: commandCheckGoVet}, run, parsed)
 	if diagnostics.Parsed != 2 || diagnostics.Mapped != 1 ||
-		!sandboxDiagnosticsNeedGenericWarning(run, diagnostics) {
+		!sandboxDiagnosticsNeedGenericWarning(commandSpec{Kind: commandCheckGoVet}, run, diagnostics) {
 		t.Fatalf("diagnostics = %+v", diagnostics)
 	}
 	result := governanceResult{}
@@ -98,18 +109,24 @@ func TestSandboxDiagnosticPathMustMapUniquely(t *testing.T) {
 	if ambiguous.Parsed != 1 || ambiguous.Mapped != 0 || len(ambiguous.Matches) != 0 {
 		t.Fatalf("ambiguous diagnostics = %+v", ambiguous)
 	}
-	exact := parseSandboxDiagnostics(commandSpec{Kind: commandCheckStaticcheck}, sandboxRun{
+	exactRun := sandboxRun{
 		ExitCode: 1,
 		Stderr:   "a/file.go:2: diagnostic",
-	}, parsed)
+	}
+	exact := parseSandboxDiagnostics(commandSpec{Kind: commandCheckStaticcheck}, exactRun, parsed)
 	if exact.Mapped != 1 || len(exact.Matches) != 1 || exact.Matches[0].File != "a/file.go" {
 		t.Fatalf("exact diagnostics = %+v", exact)
+	}
+	if sandboxDiagnosticsNeedGenericWarning(
+		commandSpec{Kind: commandCheckStaticcheck}, exactRun, exact,
+	) {
+		t.Fatal("fully mapped staticcheck output retained a generic warning")
 	}
 }
 
 func TestSandboxDiagnosticDeletedFileDoesNotMap(t *testing.T) {
 	parsed := parseUnifiedDiff([]byte("diff --git a/file.go b/file.go\ndeleted file mode 100644\n--- a/file.go\n+++ /dev/null\n@@ -1,1 +0,0 @@\n-package p\n"))
-	diagnostics := parseSandboxDiagnostics(commandSpec{Kind: commandCheckGoTest}, sandboxRun{
+	diagnostics := parseSandboxDiagnostics(commandSpec{Kind: commandCheckGoVet}, sandboxRun{
 		ExitCode: 1,
 		Stderr:   "file.go:1: diagnostic",
 	}, parsed)
@@ -125,14 +142,14 @@ func TestSandboxDiagnosticLimitAndTruncationFallback(t *testing.T) {
 		fmt.Fprintf(&output, "pkg/file.go:2: diagnostic %d\n", i)
 	}
 	run := sandboxRun{ExitCode: 1, Stderr: output.String()}
-	diagnostics := parseSandboxDiagnostics(commandSpec{Kind: commandCheckGoTest}, run, parsed)
+	diagnostics := parseSandboxDiagnostics(commandSpec{Kind: commandCheckGoVet}, run, parsed)
 	if len(diagnostics.Matches) != maxSandboxDiagnosticsPerRun || !diagnostics.Overflow ||
-		!sandboxDiagnosticsNeedGenericWarning(run, diagnostics) {
+		!sandboxDiagnosticsNeedGenericWarning(commandSpec{Kind: commandCheckGoVet}, run, diagnostics) {
 		t.Fatalf("limited diagnostics = %+v", diagnostics)
 	}
 	run.Warnings = []string{"stderr truncated"}
-	diagnostics = parseSandboxDiagnostics(commandSpec{Kind: commandCheckGoTest}, run, parsed)
-	if !sandboxDiagnosticsNeedGenericWarning(run, diagnostics) {
+	diagnostics = parseSandboxDiagnostics(commandSpec{Kind: commandCheckGoVet}, run, parsed)
+	if !sandboxDiagnosticsNeedGenericWarning(commandSpec{Kind: commandCheckGoVet}, run, diagnostics) {
 		t.Fatal("truncated output suppressed generic warning")
 	}
 }

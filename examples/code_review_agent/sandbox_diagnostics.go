@@ -19,7 +19,6 @@ import (
 const (
 	maxSandboxDiagnosticsPerRun = 50
 
-	ruleSandboxGoTestDiagnostic      = "sandbox.go_test_diagnostic"
 	ruleSandboxGoVetDiagnostic       = "sandbox.go_vet_diagnostic"
 	ruleSandboxStaticcheckDiagnostic = "sandbox.staticcheck_diagnostic"
 )
@@ -191,14 +190,6 @@ func lineInNewHunk(file changedFile, line int) bool {
 
 func diagnosticMetadataForCommand(kind commandKind) (sandboxDiagnosticMetadata, bool) {
 	switch kind {
-	case commandCheckGoTest:
-		return sandboxDiagnosticMetadata{
-			RuleID:         ruleSandboxGoTestDiagnostic,
-			Severity:       "high",
-			Category:       "tests",
-			Title:          "Go test reported a changed-file diagnostic",
-			Recommendation: "Fix the reported Go test or compile error and rerun go test.",
-		}, true
 	case commandCheckGoVet:
 		return sandboxDiagnosticMetadata{
 			RuleID:         ruleSandboxGoVetDiagnostic,
@@ -221,9 +212,13 @@ func diagnosticMetadataForCommand(kind commandKind) (sandboxDiagnosticMetadata, 
 }
 
 func sandboxDiagnosticsNeedGenericWarning(
+	spec commandSpec,
 	run sandboxRun,
 	diagnostics sandboxDiagnosticResult,
 ) bool {
+	if spec.Kind == commandCheckGoTest {
+		return true
+	}
 	if run.Skipped || run.TimedOut || strings.TrimSpace(run.Error) != "" ||
 		len(run.Warnings) > 0 || diagnostics.Overflow {
 		return true

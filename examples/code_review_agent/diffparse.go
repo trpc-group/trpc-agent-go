@@ -400,12 +400,16 @@ func (p *diffParser) validateCurrentFileStatus() {
 		file.IsDeleted = false
 		file.NewPath = file.headerNewPath
 	}
-	if file.IsBinary && file.isGoFile() {
+	binaryGoPath := file.NewPath
+	if !isGoSourcePath(binaryGoPath) {
+		binaryGoPath = file.OldPath
+	}
+	if file.IsBinary && isGoSourcePath(binaryGoPath) {
 		line := file.binaryLine
 		if line == 0 {
 			line = file.headerLine
 		}
-		p.addWarning(file.reviewPath(), line, "Go source path is represented as binary")
+		p.addWarning(binaryGoPath, line, "Go source path is represented as binary")
 	}
 }
 

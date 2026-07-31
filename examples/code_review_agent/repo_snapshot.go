@@ -71,6 +71,11 @@ type repoSnapshot struct {
 	Bytes int64
 }
 
+type affectedGoModuleSeed struct {
+	path               string
+	requireRegularFile bool
+}
+
 type snapshotBuilder struct {
 	repoRoot     string
 	snapshotRoot string
@@ -285,18 +290,15 @@ func prepareAffectedModuleManifest(
 		return nil, fmt.Errorf("resolve snapshot root: %w", err)
 	}
 	modules := make(map[string]bool)
-	for _, file := range parsed.Files {
+	for _, seed := range affectedGoModuleSeeds(parsed) {
 		if err := ctx.Err(); err != nil {
 			return nil, fmt.Errorf("prepare affected module manifest: %w", err)
 		}
-		if !file.isGoFile() || file.IsDeleted || file.IsBinary {
-			continue
-		}
-		rel, err := cleanTrackedPath(file.reviewPath())
+		rel, err := cleanTrackedPath(seed.path)
 		if err != nil {
-			return nil, fmt.Errorf("resolve affected module for %q: %w", file.reviewPath(), err)
+			return nil, fmt.Errorf("resolve affected module for %q: %w", seed.path, err)
 		}
-		module, err := nearestGoModule(ctx, root, rel)
+		module, err := nearestGoModule(ctx, root, rel, seed.requireRegularFile)
 		if err != nil {
 			return nil, fmt.Errorf("resolve affected module for %q: %w", rel, err)
 		}
@@ -347,7 +349,48 @@ func prepareAffectedModuleManifest(
 	return ordered, nil
 }
 
-func nearestGoModule(ctx context.Context, snapshotRoot string, changedFile string) (string, error) {
+func affectedGoModuleSeeds(parsed parsedDiff) []affectedGoModuleSeed {
+	seeds := make([]affectedGoModuleSeed, 0, len(parsed.Files))
+	seedIndexes := make(map[string]int, len(parsed.Files))
+	add := func(candidate string, requireRegularFile bool) {
+		if !isGoSourcePath(candidate) {
+			return
+		}
+		if index, ok := seedIndexes[candidate]; ok {
+			seeds[index].requireRegularFile = seeds[index].requireRegularFile || requireRegularFile
+			return
+		}
+		seedIndexes[candidate] = len(seeds)
+		seeds = append(seeds, affectedGoModuleSeed{
+			path:               candidate,
+			requireRegularFile: requireRegularFile,
+		})
+	}
+
+	for _, file := range parsed.Files {
+		switch {
+		case file.IsDeleted:
+			add(file.OldPath, false)
+		case file.IsRename:
+			add(file.OldPath, false)
+			add(file.NewPath, true)
+		default:
+			add(file.NewPath, true)
+		}
+	}
+	return seeds
+}
+
+func isGoSourcePath(candidate string) bool {
+	return candidate != "" && strings.HasSuffix(candidate, ".go")
+}
+
+func nearestGoModule(
+	ctx context.Context,
+	snapshotRoot string,
+	changedFile string,
+	requireRegularFile bool,
+) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -355,12 +398,14 @@ func nearestGoModule(ctx context.Context, snapshotRoot string, changedFile strin
 	if !pathStaysWithin(snapshotRoot, changedPath) {
 		return "", fmt.Errorf("changed file escapes the snapshot")
 	}
-	info, err := os.Lstat(changedPath)
-	if err != nil {
-		return "", fmt.Errorf("stat changed file: %w", err)
-	}
-	if !info.Mode().IsRegular() {
-		return "", fmt.Errorf("changed file is not regular")
+	if requireRegularFile {
+		info, err := os.Lstat(changedPath)
+		if err != nil {
+			return "", fmt.Errorf("stat changed file: %w", err)
+		}
+		if !info.Mode().IsRegular() {
+			return "", fmt.Errorf("changed file is not regular")
+		}
 	}
 
 	dir := filepath.Dir(filepath.FromSlash(changedFile))
@@ -375,10 +420,17 @@ func nearestGoModule(ctx context.Context, snapshotRoot string, changedFile strin
 			if !moduleInfo.Mode().IsRegular() {
 				return "", fmt.Errorf("module file %q is not regular", filepath.ToSlash(moduleFile))
 			}
-			if dir == "." {
-				return ".", nil
+			canonicalModuleFile, err := canonicalSnapshotRelativePath(
+				snapshotRoot,
+				filepath.Join(dir, "go.mod"),
+			)
+			if err != nil {
+				return "", fmt.Errorf("canonicalize module file: %w", err)
 			}
-			return filepath.ToSlash(dir), nil
+			if path.Base(canonicalModuleFile) != "go.mod" {
+				return "", fmt.Errorf("module file %q is not named go.mod", canonicalModuleFile)
+			}
+			return path.Dir(canonicalModuleFile), nil
 		case !os.IsNotExist(err):
 			return "", fmt.Errorf("stat module file %q: %w", filepath.ToSlash(moduleFile), err)
 		}
@@ -392,6 +444,66 @@ func nearestGoModule(ctx context.Context, snapshotRoot string, changedFile strin
 		dir = parent
 	}
 	return "", fmt.Errorf("no go.mod found in snapshot ancestors")
+}
+
+func canonicalSnapshotRelativePath(snapshotRoot string, relativePath string) (string, error) {
+	clean := filepath.Clean(relativePath)
+	if clean == "." || filepath.IsAbs(clean) {
+		return "", fmt.Errorf("snapshot path %q must name a relative entry", relativePath)
+	}
+	components := strings.Split(clean, string(filepath.Separator))
+	current := snapshotRoot
+	canonical := make([]string, 0, len(components))
+	for index, component := range components {
+		if component == "" || component == "." || component == ".." {
+			return "", fmt.Errorf("snapshot path %q contains an invalid component", relativePath)
+		}
+		requested := filepath.Join(current, component)
+		requestedInfo, err := os.Lstat(requested)
+		if err != nil {
+			return "", fmt.Errorf("stat snapshot path %q: %w", filepath.ToSlash(requested), err)
+		}
+		if requestedInfo.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("snapshot path %q is a symlink", filepath.ToSlash(requested))
+		}
+		if index < len(components)-1 && !requestedInfo.IsDir() {
+			return "", fmt.Errorf("snapshot path %q is not a directory", filepath.ToSlash(requested))
+		}
+
+		entries, err := os.ReadDir(current)
+		if err != nil {
+			return "", fmt.Errorf("read snapshot directory %q: %w", filepath.ToSlash(current), err)
+		}
+		actual := ""
+		for _, entry := range entries {
+			if entry.Name() == component {
+				actual = entry.Name()
+				break
+			}
+		}
+		if actual == "" {
+			for _, entry := range entries {
+				entryInfo, err := entry.Info()
+				if err != nil {
+					return "", fmt.Errorf(
+						"stat snapshot directory entry %q: %w",
+						filepath.ToSlash(filepath.Join(current, entry.Name())),
+						err,
+					)
+				}
+				if os.SameFile(requestedInfo, entryInfo) {
+					actual = entry.Name()
+					break
+				}
+			}
+		}
+		if actual == "" {
+			return "", fmt.Errorf("snapshot path component %q could not be canonicalized", component)
+		}
+		canonical = append(canonical, actual)
+		current = filepath.Join(current, actual)
+	}
+	return filepath.ToSlash(filepath.Join(canonical...)), nil
 }
 
 func walkGitTrackedFiles(

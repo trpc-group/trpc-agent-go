@@ -90,7 +90,7 @@
       "diff": "diff --git a/old_name.go b/new_name.go\nsimilarity index 88%\nrename from old_name.go\nrename to new_name.go\n--- a/old_name.go\n+++ b/new_name.go\n@@ -1 +1 @@\n-package oldname\n+package newname\ndiff --git a/logo.png b/logo.png\nnew file mode 100644\nindex 0000000..1111111\nGIT binary patch\nliteral 0\ndiff --git a/deleted.go b/deleted.go\ndeleted file mode 100644\nindex 1111111..0000000\n--- a/deleted.go\n+++ /dev/null\n@@ -1 +0,0 @@\n-package deleted\n",
       "expected": {
         "finding_rule_ids": [],
-        "warning_rule_ids": []
+        "warning_rule_ids": ["sandbox.snapshot_unavailable"]
       }
     },
     "negative_controls": {

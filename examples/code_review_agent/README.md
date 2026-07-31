@@ -147,8 +147,13 @@ environment settings, timeout and output limits, and restricted artifacts. E2B
 is the production-style runtime; fake mode is deterministic for tests; local
 mode is an explicit development fallback rather than a hostile-code boundary.
 Complete repository snapshots resolve changed Go files to their nearest
-`go.mod` and run checks once per affected module. The snapshot root contains a
-reserved `.trpc-agent-review-modules` manifest with
+`go.mod` and run checks once per affected module. Module selection considers
+both sides of a rename: deleted or renamed-away Go paths walk upward from the
+missing old leaf, while surviving Go paths, including binary-diff paths, must
+exist as regular snapshot files. Destructive or binary Go changes that cannot
+obtain a complete snapshot or module mapping require human review instead of
+receiving a pass. The snapshot root contains a reserved
+`.trpc-agent-review-modules` manifest with
 sorted, repository-relative module directories separated by NUL bytes; `.` names
 the root module. Snapshot enumeration and copying share a 30-second deadline and
 enforce fixed limits for tracked entries, unique directories, path bytes, and
@@ -156,12 +161,16 @@ actual copied content. A timeout or limit failure skips repository-dependent
 checks and produces a human-review warning. All evidence, sandbox output,
 governance reasons, reports, and stored fields pass through redaction before
 persistence.
-Standard Go diagnostics emitted by test, vet, and staticcheck are parsed from
-stdout and stderr. A diagnostic becomes a high-confidence finding only when its
-path uniquely maps to a changed file and its line is inside a new-side hunk;
-ambiguous, out-of-hunk, truncated, or otherwise incomplete output retains a
-governance warning for human review. Synthetic skipped runs remain visible but
-do not count as runner tool calls.
+`go test` stdout and stderr are controlled by reviewed tests, package
+initializers, and `TestMain`, so they remain only in the redacted sandbox run
+record and never become high-confidence findings. Every failed or otherwise
+abnormal go test run retains a generic sandbox warning and requires human
+review. Diagnostics from `go vet` and staticcheck are parsed from stdout and
+stderr because those commands do not execute reviewed tests. Such a diagnostic
+becomes a high-confidence finding only when its path uniquely maps to a changed
+file and its line is inside a new-side hunk; ambiguous, out-of-hunk, truncated,
+or otherwise incomplete output retains a governance warning for human review.
+Synthetic skipped runs remain visible but do not count as runner tool calls.
 SQLite stores a review task, diff summary, decisions, sandbox runs, findings,
 warnings, metrics, artifacts, and final report metadata, but not the raw diff.
 The normalized schema deliberately separates repeated child records from the

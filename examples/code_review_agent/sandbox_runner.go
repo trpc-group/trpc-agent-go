@@ -239,6 +239,18 @@ func sandboxRunFailed(run sandboxRun) bool {
 }
 
 func sandboxRunFailureReason(run sandboxRun) string {
+	parts := sandboxRunStatusParts(run)
+	if strings.TrimSpace(run.Stderr) != "" {
+		parts = append(parts, strings.TrimSpace(run.Stderr))
+	}
+	return joinSandboxRunFailureReason(parts)
+}
+
+func sandboxRunStatusReason(run sandboxRun) string {
+	return joinSandboxRunFailureReason(sandboxRunStatusParts(run))
+}
+
+func sandboxRunStatusParts(run sandboxRun) []string {
 	var parts []string
 	if strings.TrimSpace(run.Error) != "" {
 		parts = append(parts, run.Error)
@@ -253,9 +265,10 @@ func sandboxRunFailureReason(run sandboxRun) string {
 		parts = append(parts, fmt.Sprintf("exit code %d", run.ExitCode))
 	}
 	parts = append(parts, run.Warnings...)
-	if strings.TrimSpace(run.Stderr) != "" {
-		parts = append(parts, strings.TrimSpace(run.Stderr))
-	}
+	return parts
+}
+
+func joinSandboxRunFailureReason(parts []string) string {
 	if len(parts) == 0 {
 		return "sandbox command did not complete successfully"
 	}
