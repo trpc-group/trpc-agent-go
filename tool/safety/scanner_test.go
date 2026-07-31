@@ -487,6 +487,45 @@ func TestScannerRejectsNegativeRequestedLimits(t *testing.T) {
 	}
 }
 
+func TestScannerRejectsRequestedLimitsAbovePolicy(t *testing.T) {
+	scanner := newTestScanner(t)
+	tests := []struct {
+		name   string
+		input  ScanInput
+		ruleID RuleID
+	}{
+		{
+			name: "timeout",
+			input: ScanInput{
+				ToolName:       "workspace_exec",
+				Backend:        BackendWorkspace,
+				Command:        "go test ./...",
+				TimeoutSeconds: 301,
+			},
+			ruleID: RuleTimeoutLimit,
+		},
+		{
+			name: "output bytes",
+			input: ScanInput{
+				ToolName:             "workspace_exec",
+				Backend:              BackendWorkspace,
+				Command:              "go test ./...",
+				RequestedOutputBytes: (1 << 20) + 1,
+			},
+			ruleID: RuleResourceAbuse,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			report, err := scanner.Scan(context.Background(), test.input)
+			require.NoError(t, err)
+			require.Equal(t, DecisionDeny, report.Decision)
+			require.Equal(t, test.ruleID, report.RuleID)
+			require.True(t, report.Intercepted)
+		})
+	}
+}
+
 func TestScannerRejectsNilContext(t *testing.T) {
 	_, err := newTestScanner(t).Scan(nil, ScanInput{ToolName: "runner"})
 	require.ErrorContains(t, err, "nil context")
