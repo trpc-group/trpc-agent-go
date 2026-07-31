@@ -609,6 +609,11 @@ func(current model.Usage, delta model.Usage) model.Usage
 如果服务方以最新 usage chunk 为准，应直接返回完整的 `delta`：
 
 ```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+)
+
 llm := openai.New("your-model",
     openai.WithAccumulateChunkTokenUsage(func(
         _ model.Usage,

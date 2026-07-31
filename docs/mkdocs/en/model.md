@@ -617,6 +617,11 @@ For a provider where the latest usage chunk is authoritative, return the
 complete `delta` value:
 
 ```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+)
+
 llm := openai.New("your-model",
     openai.WithAccumulateChunkTokenUsage(func(
         _ model.Usage,

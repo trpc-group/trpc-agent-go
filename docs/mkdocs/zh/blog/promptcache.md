@@ -415,12 +415,19 @@ Telemetry 层也会拆分 token 类型。`internal/telemetry` 包会记录：
 返回完整的 delta，以保留所有 usage 字段：
 
 ```go
-openai.WithAccumulateChunkTokenUsage(func(
-    _ model.Usage,
-    delta model.Usage,
-) model.Usage {
-    return delta
-})
+import (
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+)
+
+llm := openai.New("your-model",
+    openai.WithAccumulateChunkTokenUsage(func(
+        _ model.Usage,
+        delta model.Usage,
+    ) model.Usage {
+        return delta
+    }),
+)
 ```
 
 当 `Stream` 为 true 时，OpenAI-compatible adapter 会自动请求 usage。

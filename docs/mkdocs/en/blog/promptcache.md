@@ -397,12 +397,19 @@ provider requires "latest chunk wins" semantics, preserve every usage field by
 returning the complete delta:
 
 ```go
-openai.WithAccumulateChunkTokenUsage(func(
-    _ model.Usage,
-    delta model.Usage,
-) model.Usage {
-    return delta
-})
+import (
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+)
+
+llm := openai.New("your-model",
+    openai.WithAccumulateChunkTokenUsage(func(
+        _ model.Usage,
+        delta model.Usage,
+    ) model.Usage {
+        return delta
+    }),
+)
 ```
 
 When `Stream` is true, the OpenAI-compatible adapter requests usage
