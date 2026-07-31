@@ -1498,9 +1498,56 @@ func (p *ContentRequestProcessor) restoreUserEventsAcrossCutoff(
 		return retained
 	}
 
+	coveredUsers := p.coveredUserEventsBeforeCutoff(
+		all,
+		inv,
+		filter,
+		cutoff,
+	)
+	if len(coveredUsers) == 0 {
+		return retained
+	}
+
+	seen := make(map[historyTurnKey]struct{})
+	restored := make([]event.Event, 0, len(retained)+len(coveredUsers))
+	for i := range retained {
+		evt := retained[i]
+		key, ok := historyTurnKeyForEvent(evt)
+		if !ok {
+			restored = append(restored, evt)
+			continue
+		}
+		if _, ok := seen[key]; !ok {
+			seen[key] = struct{}{}
+			role, hasRole := historyRoleForEvent(evt)
+			if hasRole && inv != nil &&
+				p.isOtherAgentReply(
+					inv.AgentName,
+					inv.Branch,
+					&retained[i],
+				) {
+				role = model.RoleUser
+			}
+			userEvt, hasCoveredUser := coveredUsers[key]
+			if hasCoveredUser &&
+				(role == model.RoleAssistant || role == model.RoleTool) {
+				restored = append(restored, userEvt)
+			}
+		}
+		restored = append(restored, evt)
+	}
+	return restored
+}
+
+func (p *ContentRequestProcessor) coveredUserEventsBeforeCutoff(
+	events []event.Event,
+	inv *agent.Invocation,
+	filter string,
+	cutoff eventHistoryCutoff,
+) map[historyTurnKey]event.Event {
 	coveredUsers := make(map[historyTurnKey]event.Event)
 	tailStarted := make(map[historyTurnKey]struct{})
-	for i, evt := range all {
+	for i, evt := range events {
 		if !p.canMatchToolRound(evt, inv, filter) ||
 			messageorigin.IsSeedHistory(inv, evt.ID) {
 			continue
@@ -1524,34 +1571,7 @@ func (p *ContentRequestProcessor) restoreUserEventsAcrossCutoff(
 			coveredUsers[key] = evt
 		}
 	}
-	if len(coveredUsers) == 0 {
-		return retained
-	}
-
-	seen := make(map[historyTurnKey]struct{})
-	restored := make([]event.Event, 0, len(retained)+len(coveredUsers))
-	for _, evt := range retained {
-		key, ok := historyTurnKeyForEvent(evt)
-		if !ok {
-			restored = append(restored, evt)
-			continue
-		}
-		if _, ok := seen[key]; !ok {
-			seen[key] = struct{}{}
-			role, hasRole := historyRoleForEvent(evt)
-			if hasRole && inv != nil &&
-				p.isOtherAgentReply(inv.AgentName, inv.Branch, &evt) {
-				role = model.RoleUser
-			}
-			userEvt, hasCoveredUser := coveredUsers[key]
-			if hasCoveredUser &&
-				(role == model.RoleAssistant || role == model.RoleTool) {
-				restored = append(restored, userEvt)
-			}
-		}
-		restored = append(restored, evt)
-	}
-	return restored
+	return coveredUsers
 }
 
 func historyTurnKeyForEvent(evt event.Event) (historyTurnKey, bool) {
