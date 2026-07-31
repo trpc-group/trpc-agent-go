@@ -161,10 +161,13 @@ type toolCallExecution struct {
 	// as documented on toolEventStateDelta. It is populated even when rendering
 	// the result later fails.
 	stateDeltaInput []byte
-	// toolSucceeded reports that the tool and its AfterTool callbacks completed.
-	// A later failure while rendering the result is a presentation failure, so
-	// the effects the tool already had on session state must still be recorded.
-	toolSucceeded     bool
+	// resultProduced reports that execution reached a final result, whether it
+	// came from the tool and its AfterTool callbacks or from a custom result
+	// supplied by a BeforeTool callback or plugin. Everything that could commit
+	// side effects has therefore already run, so a later failure while
+	// rendering that result is a presentation failure and the session-state
+	// effects behind it must still be recorded.
+	resultProduced    bool
 	shouldIgnoreError bool
 	skipSummarization bool
 }
@@ -1530,17 +1533,22 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequentialResult(
 		return toolResult{index: index, toolArgs: modifiedArgs}, nil
 	}
 	decl := p.lookupDeclaration(tools, toolCall.Function.Name)
-	var stateDelta *toolEventStateDelta
-	// A failure raised after the tool ran, such as a result formatter error,
-	// only prevents the framework from rendering the result. The tool already
-	// took effect, so its session-state consequences must still be recorded.
-	if err == nil || execution.toolSucceeded {
+	// The pollution marker means the session consumed external context. When
+	// rendering the result fails, the session records the error message rather
+	// than the tool output, so nothing external entered the conversation.
+	if err == nil {
 		markSessionAutoMemoryPolluted(
 			invocation,
 			toolEvent,
 			tools[toolCall.Function.Name],
 			toolCall.Function.Name,
 		)
+	}
+	var stateDelta *toolEventStateDelta
+	// A failure raised after the result was produced, such as a result
+	// formatter error, only prevents the framework from rendering it. Any
+	// session-state effects already committed must still be recorded.
+	if err == nil || execution.resultProduced {
 		stateDelta = p.buildToolEventStateDelta(
 			ctx,
 			invocation,
@@ -1885,18 +1893,14 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 			execution.skipSummarization,
 			!shouldSkipToolSkipSummarization(ctx),
 		)
-		// A failure raised after the tool ran, such as a result formatter
-		// error, only prevents the framework from rendering the result. The
-		// tool already took effect, so its session-state consequences must
-		// still be recorded, matching sequential execution.
+		// A failure raised after the result was produced, such as a result
+		// formatter error, only prevents the framework from rendering it. Any
+		// session-state effects already committed must still be recorded,
+		// matching sequential execution. The pollution marker stays out of
+		// this branch for the same reason it does there: the session records
+		// the error message, not the tool output.
 		var stateDelta *toolEventStateDelta
-		if execution.toolSucceeded {
-			markSessionAutoMemoryPolluted(
-				invocation,
-				errorEvent,
-				tools[tc.Function.Name],
-				tc.Function.Name,
-			)
+		if execution.resultProduced {
 			stateDelta = p.buildToolEventStateDelta(
 				ctx,
 				invocation,
@@ -2673,7 +2677,7 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 		return execution, err
 	}
 	execution.shouldIgnoreError = true
-	execution.toolSucceeded = true
+	execution.resultProduced = true
 	//  allow to return nil not provide function response.
 	if r, ok := itool.ResolveDeclaration(tl).(function.LongRunner); ok && r.LongRunning() {
 		if result == nil {

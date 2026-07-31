@@ -22,6 +22,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
+	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -1398,6 +1399,120 @@ func TestHandleFunctionCalls_FormatterFailureKeepsStateDelta(t *testing.T) {
 			assert.Equal(t, statefulResultJSON, string(stateful.stateContent))
 			assert.Equal(t, []byte("updated"), evt.StateDelta["state"])
 		})
+	}
+}
+
+// TestHandleFunctionCalls_FormatterFailureDoesNotMarkAutoMemoryPolluted pins
+// that the pollution marker tracks external context entering the session.
+// A rendering failure puts the error message in the session instead of the
+// retrieved content, so nothing external was consumed and automatic memory
+// extraction must stay enabled for the session.
+func TestHandleFunctionCalls_FormatterFailureDoesNotMarkAutoMemoryPolluted(
+	t *testing.T,
+) {
+	for _, parallel := range []bool{false, true} {
+		for _, formatterFails := range []bool{false, true} {
+			name := fmt.Sprintf(
+				"parallel=%t/formatterFails=%t",
+				parallel,
+				formatterFails,
+			)
+			t.Run(name, func(t *testing.T) {
+				searchTool := function.NewFunctionTool(
+					func(context.Context, struct{}) (resultFormatTestResult, error) {
+						return resultFormatTestResult{Output: "external"}, nil
+					},
+					function.WithName(knowledgeSearchToolName),
+					function.WithResultFormatter(
+						resultformat.FormatterFunc[resultFormatTestResult](func(
+							context.Context,
+							resultFormatTestResult,
+						) (string, error) {
+							if formatterFails {
+								return "", errors.New("format failed")
+							}
+							return "<observation/>", nil
+						}),
+					),
+				)
+				// Parallel execution only engages with more than one call.
+				sibling := function.NewFunctionTool(
+					func(context.Context, struct{}) (resultFormatTestResult, error) {
+						return resultFormatTestResult{Output: "sibling"}, nil
+					},
+					function.WithName("sibling"),
+				)
+				llmResponse := &model.Response{Choices: []model.Choice{{
+					Message: model.Message{
+						Role: model.RoleAssistant,
+						ToolCalls: []model.ToolCall{
+							{
+								ID: "call-1",
+								Function: model.FunctionDefinitionParam{
+									Name:      knowledgeSearchToolName,
+									Arguments: []byte(`{}`),
+								},
+							},
+							{
+								ID: "call-2",
+								Function: model.FunctionDefinitionParam{
+									Name:      "sibling",
+									Arguments: []byte(`{}`),
+								},
+							},
+						},
+					},
+				}}}
+				inv := &agent.Invocation{
+					AgentName: "agent",
+					Model:     &mockModel{},
+					Session:   &session.Session{},
+				}
+
+				evt, err := NewFunctionCallResponseProcessor(
+					parallel,
+					nil,
+				).handleFunctionCalls(
+					context.Background(),
+					inv,
+					llmResponse,
+					map[string]tool.Tool{
+						knowledgeSearchToolName: searchTool,
+						"sibling":               sibling,
+					},
+					make(chan *event.Event, 32),
+				)
+
+				require.NoError(t, err)
+				require.NotNil(t, evt)
+				// The event state delta is the durable channel in both modes.
+				// Parallel workers run against a cloned session view, so only
+				// sequential execution also updates the shared session.
+				polluted := []byte(memory.MemoryModePolluted)
+				mode, marked := inv.Session.GetState(
+					memory.SessionStateKeyMemoryMode,
+				)
+				if formatterFails {
+					assert.NotContains(
+						t,
+						evt.StateDelta,
+						memory.SessionStateKeyMemoryMode,
+					)
+					assert.False(t, marked)
+					assert.Empty(t, mode)
+					return
+				}
+				assert.Equal(
+					t,
+					polluted,
+					evt.StateDelta[memory.SessionStateKeyMemoryMode],
+				)
+				if !parallel {
+					assert.True(t, marked)
+					assert.Equal(t, polluted, mode)
+				}
+			})
+		}
 	}
 }
 
