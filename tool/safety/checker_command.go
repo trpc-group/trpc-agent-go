@@ -66,7 +66,10 @@ func (c *commandChecker) Check(ctx context.Context, req *ScanRequest) (*CheckRes
 			Decision:       DecisionDeny,
 			RiskLevel:      RiskCritical,
 			RuleID:         ruleID,
-			Evidence:       req.Command,
+			// Evidence uses the combined command line (base command +
+			// args) so denials triggered by args keep the full context
+			// in reports and audit logs.
+			Evidence:       cmd,
 			Recommendation: err.Error(),
 		}, nil
 	}

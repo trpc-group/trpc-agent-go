@@ -35,6 +35,11 @@ type ScanRequest struct {
 	Backend         string
 	TimeoutSec      int
 	ConcurrentCount int
+	// ParseError is set when the request arguments could not be parsed
+	// (e.g. malformed JSON), meaning Command/Args may not reflect the
+	// real command. Checkers ignore it; SafetyPermissionPolicy uses it
+	// to fail closed (Ask) instead of scanning an empty command.
+	ParseError string
 }
 
 // CheckResult is returned by each checker.

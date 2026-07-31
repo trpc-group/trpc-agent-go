@@ -13,6 +13,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -79,7 +80,9 @@ func TestDefaultRequestMapper_InvalidJSON(t *testing.T) {
 	}
 	decision, err := adapter.CheckToolPermission(context.Background(), req)
 	require.NoError(t, err)
-	assert.Equal(t, tool.PermissionActionAllow, decision.Action)
+	// Fail closed: unparsable arguments mean the guard cannot inspect
+	// the real command, so the decision must be Ask, not Allow.
+	assert.Equal(t, tool.PermissionActionAsk, decision.Action)
 }
 
 func TestDefaultRequestMapper_TimeoutFields(t *testing.T) {
@@ -791,4 +794,122 @@ resources:
 	// 10M = 600s > 300s max → RESOURCE_TIMEOUT (ask).
 	assert.Equal(t, safety.DecisionAsk, report.Decision)
 	assert.Equal(t, "RESOURCE_TIMEOUT", report.RuleID)
+}
+
+// ─── adapter: mapper hot swap is race-free ───
+
+func TestAdapter_MapperConcurrentSwap(t *testing.T) {
+	p, _ := safety.LoadPolicyBytes([]byte(defaultTestPolicyYAML()), "yaml")
+	s := safety.NewTestScanner(p)
+	adapter := safety.NewSafetyPermissionPolicy(nil, s, nil)
+
+	var wg sync.WaitGroup
+	// Writer: hot-swap the mapper in a loop.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 100; i++ {
+			adapter.SetRequestMapper(func(req *tool.PermissionRequest) *safety.ScanRequest {
+				return &safety.ScanRequest{
+					Command:  "echo swapped",
+					ToolName: req.ToolName,
+				}
+			})
+		}
+	}()
+	// Readers: scan concurrently while the mapper is being swapped.
+	// Run with -race: any unsynchronized mapper access is flagged.
+	for g := 0; g < 4; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 100; i++ {
+				req := &tool.PermissionRequest{
+					ToolName:  "workspace_exec",
+					Arguments: []byte(`{"command":"echo hello"}`),
+				}
+				_, err := adapter.CheckToolPermission(context.Background(), req)
+				assert.NoError(t, err)
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+// ─── adapter: custom mapper returning nil falls back to default ───
+
+func TestAdapter_MapperReturningNil(t *testing.T) {
+	p, _ := safety.LoadPolicyBytes([]byte(defaultTestPolicyYAML()), "yaml")
+	s := safety.NewTestScanner(p)
+	adapter := safety.NewSafetyPermissionPolicy(nil, s, nil)
+	adapter.SetRequestMapper(func(req *tool.PermissionRequest) *safety.ScanRequest {
+		return nil // violates the contract; must fall back, not panic
+	})
+
+	req := &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"rm -rf /"}`),
+	}
+	decision, err := adapter.CheckToolPermission(context.Background(), req)
+	require.NoError(t, err)
+	// The default mapper kicked in and saw the real command → deny.
+	assert.Equal(t, tool.PermissionActionDeny, decision.Action)
+}
+
+// ─── checker_command: deny evidence keeps the full command line ───
+
+func TestCommand_ArgsDenyEvidence(t *testing.T) {
+	s := newTestScanner(t)
+	report := s.ScanCtx(context.Background(), &safety.ScanRequest{
+		Command: "rm",
+		Args:    []string{"-rf", "/tmp/build"},
+		Backend: "workspaceexec",
+	})
+	assert.Equal(t, safety.DecisionDeny, report.Decision)
+	// Evidence must be the combined command line, not just the base
+	// command, so audits show what actually would have run.
+	assert.Equal(t, "rm -rf /tmp/build", report.Evidence)
+}
+
+// ─── checker_network: scheme URLs are never treated as filenames ───
+
+func TestNetwork_SchemeURLWithTLDExtension_Blacklisted(t *testing.T) {
+	p, err := safety.LoadPolicyBytes([]byte(`
+version: "1.0"
+commands:
+  allowed: ["curl", "echo"]
+network:
+  blacklist: ["blocked.zip"]
+`), "yaml")
+	require.NoError(t, err)
+	s := safety.NewTestScanner(p)
+
+	// ".zip" is a delegated TLD; a scheme-prefixed host must go through
+	// the black/whitelist even though it ends in a "file extension".
+	report := s.ScanCtx(context.Background(), &safety.ScanRequest{
+		Command: "curl https://blocked.zip/payload",
+		Backend: "workspaceexec",
+	})
+	assert.Equal(t, safety.DecisionDeny, report.Decision)
+	assert.Equal(t, "NET_DOMAIN_BLACKLISTED", report.RuleID)
+}
+
+func TestNetwork_BareFilenameToken_StillSkipped(t *testing.T) {
+	p, err := safety.LoadPolicyBytes([]byte(`
+version: "1.0"
+commands:
+  allowed: ["curl", "echo"]
+network:
+  whitelist: ["github.com"]
+`), "yaml")
+	require.NoError(t, err)
+	s := safety.NewTestScanner(p)
+
+	// A scheme-less bare token ending in an archive extension is a
+	// filename, not a domain — the whitelist must not fire on it.
+	report := s.ScanCtx(context.Background(), &safety.ScanRequest{
+		Command: "curl -o pkg.tar.gz https://github.com/x",
+		Backend: "workspaceexec",
+	})
+	assert.Equal(t, safety.DecisionAllow, report.Decision)
 }

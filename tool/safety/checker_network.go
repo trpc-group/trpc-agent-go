@@ -62,8 +62,12 @@ func (c *networkChecker) Check(ctx context.Context, req *ScanRequest) (*CheckRes
 		if host == "" || !strings.Contains(host, ".") {
 			continue
 		}
-		// Skip hosts that look like filenames (common extensions).
-		if looksLikeFilename(host) {
+		// Skip hosts that look like filenames (common extensions), but
+		// only for scheme-less bare tokens. With an explicit scheme the
+		// host is unambiguously a domain, and several excluded suffixes
+		// (".zip", ".so", ...) are delegated TLDs — skipping them would
+		// let e.g. https://blocked.zip bypass the black/whitelist.
+		if !hasScheme(rawURL) && looksLikeFilename(host) {
 			continue
 		}
 
@@ -133,8 +137,14 @@ func pathBase(p string) string {
 	return p
 }
 
+// hasScheme reports whether the matched URL token carried an explicit
+// http(s) scheme.
+func hasScheme(rawURL string) bool {
+	return strings.HasPrefix(rawURL, "http://") || strings.HasPrefix(rawURL, "https://")
+}
+
 func extractHost(rawURL string) string {
-	if !strings.HasPrefix(rawURL, "http://") && !strings.HasPrefix(rawURL, "https://") {
+	if !hasScheme(rawURL) {
 		rawURL = "https://" + rawURL
 	}
 	u, err := url.Parse(rawURL)

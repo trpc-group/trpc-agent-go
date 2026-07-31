@@ -12,6 +12,7 @@ package safety
 import (
 	"context"
 	"encoding/json"
+	"sync/atomic"
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -28,13 +29,19 @@ type SafetyPermissionPolicy struct {
 	inner   tool.PermissionPolicy
 	scanner *Scanner
 	audit   AuditLogger
-	mapper  RequestMapper
+	// mapper holds the current RequestMapper behind an atomic pointer so
+	// SetRequestMapper (hot swap) is safe against concurrent
+	// CheckToolPermission reads.
+	mapper atomic.Pointer[RequestMapper]
 }
 
 // RequestMapper converts a tool.PermissionRequest into a ScanRequest.
 // Different backends (workspaceexec, hostexec) may store the command
 // in different argument fields; implement this function to map
 // backend-specific shapes to the normalized ScanRequest.
+//
+// Contract: a mapper must not return nil. If it does, the adapter
+// falls back to the default mapper's result instead of panicking.
 //
 // If no mapper is set, the default mapper extracts "command", "cwd",
 // and "env" fields from JSON-encoded arguments (workspaceexec shape).
@@ -51,19 +58,22 @@ func NewSafetyPermissionPolicy(
 	if scanner == nil {
 		panic("safety: NewSafetyPermissionPolicy called with nil scanner")
 	}
-	return &SafetyPermissionPolicy{
+	p := &SafetyPermissionPolicy{
 		inner:   inner,
 		scanner: scanner,
 		audit:   audit,
-		mapper:  defaultRequestMapper,
 	}
+	mapper := RequestMapper(defaultRequestMapper)
+	p.mapper.Store(&mapper)
+	return p
 }
 
 // SetRequestMapper replaces the default request mapper.
 // Use this to handle backends with non-standard argument shapes.
+// It is safe to call concurrently with CheckToolPermission.
 func (p *SafetyPermissionPolicy) SetRequestMapper(m RequestMapper) {
 	if m != nil {
-		p.mapper = m
+		p.mapper.Store(&m)
 	}
 }
 
@@ -72,7 +82,32 @@ func (p *SafetyPermissionPolicy) CheckToolPermission(
 	ctx context.Context,
 	req *tool.PermissionRequest,
 ) (tool.PermissionDecision, error) {
-	scanReq := p.mapper(req)
+	mapper := *p.mapper.Load()
+	scanReq := mapper(req)
+	if scanReq == nil {
+		// A custom mapper violating the non-nil contract must not panic
+		// the guard; fall back to the default mapper instead.
+		scanReq = defaultRequestMapper(req)
+	}
+	if scanReq.ParseError != "" {
+		// Fail closed: unparsable arguments cannot be inspected, so the
+		// guard cannot vouch for the real command. Escalate to Ask.
+		report := &SafetyReport{
+			ToolName:       scanReq.ToolName,
+			Backend:        scanReq.Backend,
+			Decision:       DecisionAsk,
+			RiskLevel:      RiskLow,
+			RuleID:         "ARGS_PARSE_ERROR",
+			Evidence:       scanReq.ParseError,
+			Recommendation: "Tool arguments could not be parsed; the real command cannot be safety-checked. Review and approve manually.",
+		}
+		if p.audit != nil {
+			if err := p.audit.Log(ctx, report); err != nil {
+				log.Warnf("safety: audit log failed: %v", err)
+			}
+		}
+		return tool.AskPermission(report.Recommendation), nil
+	}
 	report := p.scanner.Scan(ctx, scanReq)
 
 	// Always audit, regardless of decision.
@@ -110,6 +145,10 @@ func (p *SafetyPermissionPolicy) CheckToolPermission(
 // The first non-empty string value wins. If none match, Command stays empty
 // and only structure-independent checkers (resource limits, etc.) apply.
 //
+// If the arguments are not valid JSON, the command cannot be extracted;
+// the returned ScanRequest carries ParseError so the adapter can fail
+// closed (Ask) instead of silently allowing an uninspectable command.
+//
 // For tools with non-standard argument shapes, use SetRequestMapper to
 // provide a custom mapper.
 func defaultRequestMapper(req *tool.PermissionRequest) *ScanRequest {
@@ -122,6 +161,7 @@ func defaultRequestMapper(req *tool.PermissionRequest) *ScanRequest {
 	}
 	var args map[string]any
 	if err := json.Unmarshal(req.Arguments, &args); err != nil {
+		sr.ParseError = err.Error()
 		return sr
 	}
 	// Try multiple common command-key names.
