@@ -63,9 +63,9 @@ func (c *commandChecker) Check(ctx context.Context, req *ScanRequest) (*CheckRes
 	if err := sp.Check(pipe); err != nil {
 		ruleID := inferCommandRuleID(err)
 		return &CheckResult{
-			Decision:       DecisionDeny,
-			RiskLevel:      RiskCritical,
-			RuleID:         ruleID,
+			Decision:  DecisionDeny,
+			RiskLevel: RiskCritical,
+			RuleID:    ruleID,
 			// Evidence uses the combined command line (base command +
 			// args) so denials triggered by args keep the full context
 			// in reports and audit logs.
