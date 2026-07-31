@@ -46,7 +46,7 @@ func TestDefaultInvocationConverterContentPartsAndMetadata(t *testing.T) {
 					Name: "report.pdf", Data: []byte("file"), MimeType: "application/pdf",
 				}},
 				{Type: model.ContentTypeFile, File: &model.File{
-					URL: "https://example.com/file", MimeType: "application/pdf",
+					URL: "https://example.com/file", FileID: "ignored-file-id", MimeType: "application/pdf",
 				}},
 				{Type: model.ContentTypeFile, File: &model.File{FileID: "provider-file-id"}},
 				{Type: model.ContentTypeFile},
@@ -76,6 +76,11 @@ func TestDefaultInvocationConverterContentPartsAndMetadata(t *testing.T) {
 	}
 	if got := message.Parts[6].URLContent(); got != "https://example.com/file" {
 		t.Fatalf("file URL = %q, want https://example.com/file", got)
+	}
+	for _, part := range message.Parts {
+		if got := part.URLContent(); got == "provider-file-id" {
+			t.Fatal("provider file ID was serialized as an A2A URI")
+		}
 	}
 
 	empty, err := (&defaultEventA2AConverter{}).ConvertToA2AMessage(
@@ -372,16 +377,27 @@ func TestDataPartAndTextHelperBranches(t *testing.T) {
 		t.Fatalf("string-argument function call = %#v", got)
 	}
 
-	content, id, name := processFunctionResponse(protocol.NewDataPart("invalid"))
-	if content != "" || id != "" || name != "" {
+	content, contentParts, id, name := processFunctionResponse(
+		protocol.NewDataPart("invalid"),
+	)
+	if content != "" || len(contentParts) != 0 || id != "" || name != "" {
 		t.Fatalf("invalid function response = (%q, %q, %q)", content, id, name)
 	}
+	partText := "content-parts-only result"
 	response := protocol.NewDataPart(map[string]any{
 		ia2a.ToolCallFieldResponse: map[string]any{"ok": true},
+		ia2a.ToolCallFieldContentParts: []map[string]any{{
+			"type": "text",
+			"text": partText,
+		}},
 	})
-	content, _, _ = processFunctionResponse(response)
+	content, contentParts, _, _ = processFunctionResponse(response)
 	if content != `{"ok":true}` {
 		t.Fatalf("structured function response = %q", content)
+	}
+	if len(contentParts) != 1 || contentParts[0].Text == nil ||
+		*contentParts[0].Text != partText {
+		t.Fatalf("function response content parts = %#v", contentParts)
 	}
 
 	data := map[string]any{"fallback": "value"}

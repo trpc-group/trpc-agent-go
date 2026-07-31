@@ -496,6 +496,7 @@ func (c *defaultEventToA2AMessage) convertPartsToA2AStreamingResultWithMetadata(
 		protocol.Artifact{
 			ArtifactID: evt.Response.ID,
 			Parts:      parts,
+			Metadata:   cloneMetadata(metadata),
 		},
 		false,
 	)
@@ -612,6 +613,9 @@ func (c *defaultEventToA2AMessage) convertToolCallToA2AMessage(
 			// Client will receive the raw response string and display it directly
 			if message.Content != "" {
 				toolResponseData[ia2a.ToolCallFieldResponse] = message.Content
+			}
+			if len(message.ContentParts) > 0 {
+				toolResponseData[ia2a.ToolCallFieldContentParts] = message.ContentParts
 			}
 
 			dataPart := protocol.NewDataPart(toolResponseData)

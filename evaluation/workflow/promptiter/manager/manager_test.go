@@ -1407,6 +1407,95 @@ func TestValidateRunRequest(t *testing.T) {
 		MaxRounds:  1,
 	}), `train loss hint severity "P4" for eval set "train" case "case_1" metric "quality" is invalid`)
 	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
+		Train: []promptiterengine.EvalSetInput{
+			{
+				EvalSetID: "train",
+				LossTargets: []promptiterengine.LossTarget{
+					{
+						MetricName: " ",
+						NodeID:     "node_1",
+					},
+				},
+			},
+		},
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+	}), `train loss target metric name for eval set "train" is empty`)
+	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
+		Train: []promptiterengine.EvalSetInput{
+			{
+				EvalSetID: "train",
+				LossTargets: []promptiterengine.LossTarget{
+					{
+						MetricName: "quality",
+						NodeID:     " ",
+					},
+				},
+			},
+		},
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+	}), `train loss target node id for eval set "train" metric "quality" is empty`)
+	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
+		Train: []promptiterengine.EvalSetInput{
+			{
+				EvalSetID: "train",
+				LossTargets: []promptiterengine.LossTarget{
+					{
+						MetricName: "quality",
+						NodeID:     "node_1",
+					},
+					{
+						MetricName: " quality ",
+						NodeID:     "node_2",
+					},
+				},
+			},
+		},
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+	}), `train loss target metric " quality " for eval set "train" is duplicated`)
+	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
+		Train: []promptiterengine.EvalSetInput{
+			{
+				EvalSetID: "train",
+				LossTargets: []promptiterengine.LossTarget{
+					{
+						MetricName: "quality",
+						NodeID:     "node_1",
+					},
+				},
+			},
+			{
+				EvalSetID: "train",
+				LossTargets: []promptiterengine.LossTarget{
+					{
+						MetricName: "quality",
+						NodeID:     "node_2",
+					},
+				},
+			},
+		},
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+	}), `train loss target metric "quality" for eval set "train" is duplicated`)
+	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
+		Train: testEvalSetInputs("train"),
+		Validation: []promptiterengine.EvalSetInput{
+			{
+				EvalSetID: "validation",
+				LossTargets: []promptiterengine.LossTarget{
+					{
+						MetricName: " ",
+						NodeID:     " ",
+					},
+				},
+			},
+		},
+		MaxRounds:        1,
+		TargetSurfaceIDs: []string{"candidate#instruction"},
+	}), `validation loss targets for eval set "validation" are not supported`)
+	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
 		Train:      testEvalSetInputs("train"),
 		Validation: testEvalSetInputs("validation"),
 	}), "max rounds must be greater than 0")

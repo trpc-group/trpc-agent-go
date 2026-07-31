@@ -449,7 +449,7 @@ func redactedEventForLogging(e *Event) Event {
 
 func tryEmitReadyEvent(ctx context.Context, ch chan<- *Event, e *Event) (bool, error) {
 	// Snapshot before send: once ch <- e returns, the receiver owns *e and
-	// may mutate it concurrently (runner.copyEventInvocationFields). Reading
+	// may mutate it concurrently (runner.backfillEventMetadata). Reading
 	// *e after the send for logging is a data race.
 	eventStr := snapshotEvent(e)
 	select {

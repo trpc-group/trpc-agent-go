@@ -25,6 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/messageorigin"
 	"trpc.group/trpc-go/trpc-agent-go/internal/util/message"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -3874,6 +3875,61 @@ func TestContentRequestProcessor_shouldIncludeEvent(t *testing.T) {
 	}
 }
 
+func TestContentRequestProcessor_CurrentTurnOriginRequiresSameInvocation(
+	t *testing.T,
+) {
+	const eventID = "current-turn-event"
+	inv := agent.NewInvocation()
+	inv.InvocationID = "current-invocation"
+	inv.RunOptions.RequestID = "request"
+	messageorigin.MarkCurrentTurn(inv, eventID)
+	cutoffTime := time.Now()
+
+	tests := []struct {
+		name         string
+		invocationID string
+		want         bool
+	}{
+		{
+			name:         "same invocation",
+			invocationID: inv.InvocationID,
+			want:         true,
+		},
+		{
+			name:         "different invocation",
+			invocationID: "different-invocation",
+			want:         false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			evt := event.Event{
+				ID:           eventID,
+				RequestID:    inv.RunOptions.RequestID,
+				InvocationID: tt.invocationID,
+				Timestamp:    cutoffTime.Add(-time.Hour),
+				Response: &model.Response{
+					Choices: []model.Choice{{
+						Message: model.NewAssistantMessage("context"),
+					}},
+				},
+			}
+			eventCutoff := newEventHistoryCutoff(
+				[]event.Event{evt},
+				summaryHistoryCutoffFromTime(cutoffTime),
+			)
+			got, _ := (&ContentRequestProcessor{}).shouldIncludeEvent(
+				evt,
+				0,
+				inv,
+				"",
+				eventCutoff,
+			)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestContentRequestProcessor_getIncrementMessages_BoundedResumeTail(t *testing.T) {
 	baseTime := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
 	userMsg := model.NewUserMessage("run the task")
@@ -4029,6 +4085,88 @@ func TestContentRequestProcessor_getIncrementMessages_BoundedResumeTail(t *testi
 		assert.Equal(t, toolCall2.ToolCalls, messages[3].ToolCalls)
 		assert.True(t, model.MessagesEqual(toolResult2, messages[4]))
 	}
+}
+
+func TestContentRequestProcessor_getIncrementMessages_CurrentTurnSkipsResumeTailCompaction(
+	t *testing.T,
+) {
+	baseTime := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	toolCall := model.Message{
+		Role: model.RoleAssistant,
+		ToolCalls: []model.ToolCall{{
+			Type: "function",
+			ID:   "call_1",
+			Function: model.FunctionDefinitionParam{
+				Name:      "step_worker",
+				Arguments: []byte(`{"step":1}`),
+			},
+		}},
+	}
+	toolResult := model.Message{
+		Role:     model.RoleTool,
+		ToolID:   "call_1",
+		ToolName: "step_worker",
+		Content:  strings.Repeat("current-turn-result;", 20),
+	}
+	events := []event.Event{
+		{
+			ID:           "tool-call",
+			Author:       "test-agent",
+			RequestID:    "req1",
+			InvocationID: "inv1",
+			Timestamp:    baseTime,
+			Version:      event.CurrentVersion,
+			Response: &model.Response{
+				Done:    true,
+				Choices: []model.Choice{{Message: toolCall}},
+			},
+		},
+		{
+			ID:           "tool-result",
+			Author:       "test-agent",
+			RequestID:    "req1",
+			InvocationID: "inv1",
+			Timestamp:    baseTime.Add(time.Second),
+			Version:      event.CurrentVersion,
+			Response: &model.Response{
+				Done:    true,
+				Object:  model.ObjectTypeToolResponse,
+				Choices: []model.Choice{{Message: toolResult}},
+			},
+		},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{Events: events}),
+		agent.WithInvocationID("inv1"),
+		agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req1"}),
+	)
+	inv.AgentName = "test-agent"
+	for _, evt := range events {
+		messageorigin.MarkCurrentTurn(inv, evt.ID)
+	}
+
+	p := NewContentRequestProcessor(
+		WithAddSessionSummary(true),
+		WithEnableContextCompaction(true),
+		WithContextCompactionToolResultMaxTokens(10),
+	)
+	cutoff := summaryHistoryCutoff{
+		at:          events[1].Timestamp,
+		lastEventID: events[1].ID,
+	}
+	messages := p.getIncrementMessagesAfterCutoff(
+		inv,
+		nil,
+		cutoff,
+	)
+
+	require.Len(t, messages, 2)
+	require.Equal(t, toolCall, messages[0])
+	require.Equal(t, toolResult, messages[1])
+	require.False(
+		t,
+		p.hasCompactedCurrentInvocationToolResultsAfterCutoff(inv, cutoff),
+	)
 }
 
 func TestCompactResumeToolRoundPreservesCompactionSemantics(t *testing.T) {

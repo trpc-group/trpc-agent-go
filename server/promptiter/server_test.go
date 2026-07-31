@@ -404,6 +404,11 @@ func TestHandleRunsDecodesEvalSetInputs(t *testing.T) {
 					"reason": "business reason",
 					"unknownHintField": "ignored"
 				}],
+				"lossTargets": [{
+					"metricName": "quality",
+					"nodeId": "node_1",
+					"unknownTargetField": "ignored"
+				}],
 				"unknownEvalSetField": "ignored"
 			}],
 			"validation": [{"evalSetId": "validation", "evalCaseIds": ["validation_case_1", "validation_case_2"]}],
@@ -428,6 +433,12 @@ func TestHandleRunsDecodesEvalSetInputs(t *testing.T) {
 					MetricName: "quality",
 					Severity:   "P1",
 					Reason:     "business reason",
+				},
+			},
+			LossTargets: []enginepkg.LossTarget{
+				{
+					MetricName: "quality",
+					NodeID:     "node_1",
 				},
 			},
 		},
@@ -484,6 +495,40 @@ func TestHandleRunsRejectsInvalidLossHints(t *testing.T) {
 	srv.Handler().ServeHTTP(recorder, req)
 	require.Equal(t, http.StatusBadRequest, recorder.Code)
 	assert.Contains(t, recorder.Body.String(), "loss hint reason")
+	assert.False(t, called)
+}
+
+func TestHandleRunsRejectsInvalidLossTargets(t *testing.T) {
+	called := false
+	srv := newTestServer(t,
+		WithEngine(&fakeEngine{
+			run: func(ctx context.Context, request *enginepkg.RunRequest, opts ...enginepkg.Option) (*enginepkg.RunResult, error) {
+				_ = ctx
+				_ = request
+				_ = opts
+				called = true
+				return &enginepkg.RunResult{Status: enginepkg.RunStatusSucceeded}, nil
+			},
+		}),
+	)
+	body := `{
+		"run": {
+			"train": [{
+				"evalSetId": "train",
+				"lossTargets": [{
+					"metricName": " ",
+					"nodeId": "node_1"
+				}]
+			}],
+			"validation": [{"evalSetId": "validation"}],
+			"MaxRounds": 1
+		}
+	}`
+	req := httptest.NewRequest(http.MethodPost, srv.RunsPath(), bytes.NewBufferString(body))
+	recorder := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(recorder, req)
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), "loss target metric name")
 	assert.False(t, called)
 }
 
@@ -1001,6 +1046,95 @@ func TestValidateRunRequest(t *testing.T) {
 		Validation: testEvalSetInputs("validation"),
 		MaxRounds:  1,
 	}}), `train loss hint eval case "case_2" is not selected for eval set "train"`)
+	assert.EqualError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{
+		Train: []enginepkg.EvalSetInput{
+			{
+				EvalSetID: "train",
+				LossTargets: []enginepkg.LossTarget{
+					{
+						MetricName: " ",
+						NodeID:     "node_1",
+					},
+				},
+			},
+		},
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+	}}), `train loss target metric name for eval set "train" is empty`)
+	assert.EqualError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{
+		Train: []enginepkg.EvalSetInput{
+			{
+				EvalSetID: "train",
+				LossTargets: []enginepkg.LossTarget{
+					{
+						MetricName: "quality",
+						NodeID:     " ",
+					},
+				},
+			},
+		},
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+	}}), `train loss target node id for eval set "train" metric "quality" is empty`)
+	assert.EqualError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{
+		Train: []enginepkg.EvalSetInput{
+			{
+				EvalSetID: "train",
+				LossTargets: []enginepkg.LossTarget{
+					{
+						MetricName: "quality",
+						NodeID:     "node_1",
+					},
+					{
+						MetricName: " quality ",
+						NodeID:     "node_2",
+					},
+				},
+			},
+		},
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+	}}), `train loss target metric " quality " for eval set "train" is duplicated`)
+	assert.EqualError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{
+		Train: []enginepkg.EvalSetInput{
+			{
+				EvalSetID: "train",
+				LossTargets: []enginepkg.LossTarget{
+					{
+						MetricName: "quality",
+						NodeID:     "node_1",
+					},
+				},
+			},
+			{
+				EvalSetID: "train",
+				LossTargets: []enginepkg.LossTarget{
+					{
+						MetricName: "quality",
+						NodeID:     "node_2",
+					},
+				},
+			},
+		},
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+	}}), `train loss target metric "quality" for eval set "train" is duplicated`)
+	assert.EqualError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{
+		Train: testEvalSetInputs("train"),
+		Validation: []enginepkg.EvalSetInput{
+			{
+				EvalSetID: "validation",
+				LossTargets: []enginepkg.LossTarget{
+					{
+						MetricName: " ",
+						NodeID:     " ",
+					},
+				},
+			},
+		},
+		MaxRounds:        1,
+		TargetSurfaceIDs: []string{"candidate#instruction"},
+	}}), `validation loss targets for eval set "validation" are not supported`)
 	assert.EqualError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{
 		Train:      testEvalSetInputs("train"),
 		Validation: testEvalSetInputs("validation"),

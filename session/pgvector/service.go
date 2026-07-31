@@ -137,7 +137,8 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	if opts.cleanupInterval <= 0 {
 		if opts.sessionTTL > 0 ||
 			opts.appStateTTL > 0 ||
-			opts.userStateTTL > 0 {
+			opts.userStateTTL > 0 ||
+			opts.effectiveTrackEventTTL() > 0 {
 			opts.cleanupInterval =
 				defaultCleanupIntervalSecond
 		}
@@ -1018,6 +1019,30 @@ func (s *Service) AppendTrackEvent(
 	return nil
 }
 
+// GetTrackEvents returns persisted track events for the given session track.
+func (s *Service) GetTrackEvents(
+	ctx context.Context,
+	key session.Key,
+	track session.Track,
+	opts ...session.Option,
+) (*session.TrackEvents, error) {
+	if err := key.CheckSessionKey(); err != nil {
+		return nil, err
+	}
+	opt := applyOptions(opts...)
+	trackEvents, err := s.getTrackEventsByTrackLists(
+		ctx,
+		[]session.Key{key},
+		[][]session.Track{{track}},
+		opt.EventNum,
+		opt.EventTime,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("pgvector session service get track events failed: %w", err)
+	}
+	return &session.TrackEvents{Track: track, Events: trackEvents[0][track]}, nil
+}
+
 // Close closes the service.
 func (s *Service) Close() error {
 	s.once.Do(func() {
@@ -1297,7 +1322,7 @@ func (s *Service) cleanupExpiredData(
 	tasks := []cleanupTask{
 		{s.tableSessionStates, s.opts.sessionTTL},
 		{s.tableSessionEvents, s.opts.sessionTTL},
-		{s.tableSessionTracks, s.opts.sessionTTL},
+		{s.tableSessionTracks, s.opts.effectiveTrackEventTTL()},
 		{s.tableSessionSummaries, s.opts.sessionTTL},
 		{s.tableAppStates, s.opts.appStateTTL},
 		{s.tableUserStates, s.opts.userStateTTL},

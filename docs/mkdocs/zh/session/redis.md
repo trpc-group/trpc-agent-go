@@ -6,11 +6,35 @@ Redis 存储适用于生产环境和分布式应用，提供高性能和自动�
 
 - 基于 Redis 的会话、事件、状态持久化存储
 - 支持 Redis Standalone / Sentinel / Cluster 部署模式
-- Session、AppState、UserState 独立 TTL 控制
+- Session、TrackEvent、AppState、UserState 独立 TTL 控制
 - 异步持久化（可选），降低写入延迟
 - OpenTelemetry 链路追踪（可选）
 - 会话摘要（Summary）异步生成
 - AppendEvent / GetSession Hook 扩展点
+
+## Redis 兼容性
+
+Redis Session Service 使用的命令兼容 Redis OSS 4.0 及以上版本。Redis 4.0 是文档声明的兼容下限，并非生产环境推荐版本；生产环境应使用 Redis 厂商仍在维护的版本。
+
+当前服务依赖以下数据访问命令：
+
+| 能力 | 命令 |
+| --- | --- |
+| Key 与字符串 | `DEL`、`EXISTS`、`EXPIRE`、`GET`、`PERSIST`、`PEXPIRE`、`PTTL`、`SCAN`、`SET`、`SETNX` |
+| Hash | `HDEL`、`HEXISTS`、`HGET`、`HGETALL`、`HINCRBY`、`HMGET`、`HSCAN`、`HSET` |
+| Set | `SADD`、`SMEMBERS` |
+| Sorted Set | `ZADD`、`ZRANGE`、`ZRANGEBYSCORE`、`ZRANK`、`ZREM`、`ZREVRANGE`、`ZREVRANGEBYSCORE` |
+| Lua 与事务 | `EVAL`、`EVALSHA`、`WATCH`、`UNWATCH`、`MULTI`、`EXEC` |
+
+这里只要求当前服务实际使用的命令形式，不依赖后续 Redis 版本新增的可选参数。Lua 脚本使用 Redis 的 Lua 5.1 环境和 `cjson`。
+
+Redis Standalone、Sentinel 和 Cluster 均可兼容，但 client builder 必须返回与部署模式对应的 `go-redis` 客户端。`WithRedisClientURL` 使用的默认 builder 只会根据单个地址创建单节点客户端；使用 Sentinel 或 Cluster 时，需要通过 `storage/redis.SetClientBuilder` 配置自定义 builder。
+
+在 Cluster 模式下，同一个多 Key Lua 脚本或事务涉及的所有 Key 必须位于同一 hash slot。内置 Key 格式通过 `{userID}` 或 `{appName}` hash tag 满足该要求；按用户执行的 `SCAN` pattern 也包含相同的固定 hash tag，Cluster 客户端可以将其路由到对应 slot 所在节点。
+
+对于 Redis 兼容代理或其他兼容实现，需要单独验证 `SCAN`/`HSCAN`、Lua 5.1 与 `cjson`、事务及脚本缓存行为。若后端的 `EVALSHA` 缓存不可靠，可使用 `WithDisableScriptCache(true)` 仅通过 `EVAL` 执行脚本。根据连接 URL 的配置，内置 `go-redis` 客户端还可能发送 `AUTH`、`SELECT`、`CLIENT SETNAME`，并探测 `HELLO`、`CLIENT SETINFO` 等较新的命令。Redis OSS 4.0 会为不支持的探测命令返回普通错误，客户端随后回退或继续初始化，但遇到未知命令时直接断开连接的代理需要另行验证。
+
+Redis 4.x 和 5.x 不支持 ACL 用户名。这些版本启用鉴权时应仅配置密码，例如 `redis://:password@127.0.0.1:6379/0`；用户名加密码的鉴权方式要求 Redis 6.0 及以上版本。
 
 ## 配置选项
 
@@ -28,6 +52,7 @@ Redis 存储适用于生产环境和分布式应用，提供高性能和自动�
 | --- | --- | --- | --- |
 | `WithSessionEventLimit(limit int)` | `int` | `1000` | 每个会话存储的最大事件数量 |
 | `WithSessionTTL(ttl time.Duration)` | `time.Duration` | `0`（不过期） | 会话状态和事件的 TTL，负值等同于 0 |
+| `WithTrackEventTTL(ttl time.Duration)` | `time.Duration` | 继承 SessionTTL | Track event TTL。非正数表示 Track event 不过期 |
 | `WithAppStateTTL(ttl time.Duration)` | `time.Duration` | `0`（不过期） | 应用级状态的 TTL |
 | `WithUserStateTTL(ttl time.Duration)` | `time.Duration` | `0`（不过期） | 用户级状态的 TTL |
 | `WithKeyPrefix(prefix string)` | `string` | `""` | Redis key 前缀，所有 key 将以 `prefix:` 开头。适用于多应用共享同一 Redis 实例的场景 |

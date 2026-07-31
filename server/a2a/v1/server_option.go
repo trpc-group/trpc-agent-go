@@ -106,6 +106,7 @@ type options struct {
 	eventToA2AConverter       EventToA2AMessage
 	eventPartMappers          []EventToA2APartMapper
 	extraOptions              []a2a.Option
+	v0Compatibility           bool
 	errorHandler              ErrorHandler
 	debugLogging              bool
 	userIDHeader              string
@@ -177,6 +178,20 @@ func WithUserIDHeader(header string) Option {
 func WithExtraA2AOptions(opts ...a2a.Option) Option {
 	return func(options *options) {
 		options.extraOptions = append(options.extraOptions, opts...)
+	}
+}
+
+// WithV0Compatibility serves the legacy trpc-a2a-go v0.2.x JSON-RPC wire on
+// the same endpoint and through the same authentication chain as protocol v1.0.
+//
+// The selected TaskManager defines which legacy operations are available.
+// Requests that omit configuration.blocking are handled as blocking so
+// unchanged legacy clients work with the default stateless manager. An
+// explicit blocking=false remains non-blocking and requires a retaining
+// manager. Task control operations such as tasks/get also require retention.
+func WithV0Compatibility() Option {
+	return func(opts *options) {
+		opts.v0Compatibility = true
 	}
 }
 
@@ -305,6 +320,9 @@ func WithDebugLogging(debug bool) Option {
 // WithErrorHandler sets a custom error handler.
 func WithErrorHandler(handler ErrorHandler) Option {
 	return func(opts *options) {
+		if handler == nil {
+			return
+		}
 		opts.errorHandler = handler
 	}
 }
