@@ -1,0 +1,31 @@
+{
+  "seed": 42,
+  "model": {
+    "name": "deterministic-rule-v1",
+    "temperature": 0
+  },
+  "gate": {
+    "minValidationGain": 0.2,
+    "forbidNewFailures": true,
+    "noHardRegression": true,
+    "maxCalls": 8,
+    "maxEstimatedTokens": 500
+  },
+  "candidates": [
+    {
+      "id": "ineffective",
+      "prompt": "You are a reliable assistant. format=json concise=true tone=neutral",
+      "reason": "Add a neutral tone without addressing observed tool and grounding failures."
+    },
+    {
+      "id": "training-overfit",
+      "prompt": "You are a reliable assistant. format=json concise=true route=search cite=sources memorize=train",
+      "reason": "Fit every training signal using a training-only shortcut that must fail held-out validation."
+    },
+    {
+      "id": "generalized",
+      "prompt": "You are a reliable assistant. format=json concise=true route=search cite=sources",
+      "reason": "Address routing and grounding failures without adding a training-set shortcut."
+    }
+  ]
+}

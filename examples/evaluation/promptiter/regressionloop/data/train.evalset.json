@@ -1,0 +1,27 @@
+{
+  "name": "prompt-regression-train",
+  "cases": [
+    {
+      "id": "train-structured-output",
+      "input": "Return a structured incident summary",
+      "expected": "A valid JSON object",
+      "required": ["format=json"],
+      "failureCategory": "format_error",
+      "hard": true
+    },
+    {
+      "id": "train-search-routing",
+      "input": "Find the latest deployment status",
+      "expected": "Use the search route before answering",
+      "required": ["route=search"],
+      "failureCategory": "route_error"
+    },
+    {
+      "id": "train-source-grounding",
+      "input": "Explain the result with evidence",
+      "expected": "Answer with source references",
+      "required": ["cite=sources"],
+      "failureCategory": "knowledge_recall"
+    }
+  ]
+}
