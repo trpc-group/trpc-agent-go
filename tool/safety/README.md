@@ -37,7 +37,7 @@ evidence, recommendation, tool name, command, backend, blocked.
 
 ## Where it sits relative to the rest of the stack
 
-```
+```text
 model tool call
     -> PermissionPolicy (this Guard)     # decide allow/deny/ask, audit, OTel
     -> workspaceexec / hostexec / codeexec

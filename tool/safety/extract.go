@@ -1,4 +1,4 @@
-//
+﻿//
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
@@ -79,7 +79,11 @@ func Extract(req *tool.PermissionRequest) (Extracted, error) {
 	out.Command = stringField(payload, "command")
 	out.Stdin = firstStringField(payload, "stdin", "chars")
 	out.Cwd = firstStringField(payload, "cwd", "workdir", "working_directory")
-	out.Env = stringMapField(payload, "env")
+	env, err := stringMapField(payload, "env")
+	if err != nil {
+		return out, err
+	}
+	out.Env = env
 	out.CodeBlocks = codeBlockTexts(payload["code_blocks"])
 
 	parts := make([]string, 0, 4)
@@ -137,19 +141,19 @@ func firstStringField(payload map[string]json.RawMessage, keys ...string) string
 	return ""
 }
 
-func stringMapField(payload map[string]json.RawMessage, key string) map[string]string {
+func stringMapField(payload map[string]json.RawMessage, key string) (map[string]string, error) {
 	if payload == nil {
-		return nil
+		return nil, nil
 	}
 	raw, ok := payload[key]
 	if !ok || len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
-		return nil
+		return nil, nil
 	}
 	var m map[string]string
 	if err := json.Unmarshal(raw, &m); err != nil {
-		return nil
+		return nil, fmt.Errorf("safety: decode %s: must be a string map: %w", key, err)
 	}
-	return m
+	return m, nil
 }
 
 func codeBlockTexts(raw json.RawMessage) []string {

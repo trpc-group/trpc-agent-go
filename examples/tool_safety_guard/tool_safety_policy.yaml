@@ -26,12 +26,11 @@ allowed_hosts:
   - proxy.golang.org
   - sum.golang.org
 
+# Locale/terminal only — do not allow PATH/HOME/GOROOT overrides via tool args.
 allowed_env_vars:
-  - PATH
-  - HOME
   - LANG
-  - GOPATH
-  - GOROOT
+  - LC_ALL
+  - TERM
 
 ask_commands:
   - npm

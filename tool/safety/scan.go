@@ -1,4 +1,4 @@
-//
+﻿//
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
@@ -118,11 +118,12 @@ func Scan(ex Extracted, policy Policy) Result {
 		if res.Decision == DecisionDeny {
 			return res
 		}
-	} else {
-		res = scanNonShellPayload(res, ex, policy)
-		if res.Decision == DecisionDeny {
-			return res
-		}
+	}
+	// Always scan stdin / code_blocks for deletion, network, and install
+	// patterns — even when a benign command is also present.
+	res = scanNonShellPayload(res, ex, policy)
+	if res.Decision == DecisionDeny {
+		return res
 	}
 
 	if f, ok := scanResourceAbuse(ex, policy); ok {
@@ -157,6 +158,9 @@ func scanShellCommand(res Result, ex Extracted, policy Policy) Result {
 		})
 	}
 	shellPol := policy.shellPolicy()
+	// shellsafe.Check only applies its built-in wrapper denies when the
+	// policy is Active(); the sentinel keeps Deny non-empty without matching
+	// real executables.
 	if !shellPol.Active() {
 		shellPol.Deny = []string{"__trpc_agent_safety_sentinel__"}
 	}
@@ -605,18 +609,48 @@ func scanResourceAbuse(ex Extracted, policy Policy) (Finding, bool) {
 }
 
 func parseSleepSeconds(text string) (int, bool) {
-	// Match common forms: sleep 99999 / sleep 99999s
+	// Match common forms: sleep 99999 / sleep 99999s / sleep 10m / sleep 1h.
+	// Skip unparsable tokens so "sleep 0.5; sleep 99999" still finds the long wait.
 	fields := strings.Fields(text)
+	best := 0
+	found := false
 	for i := 0; i+1 < len(fields); i++ {
 		if fields[i] != "sleep" {
 			continue
 		}
-		raw := strings.TrimSuffix(fields[i+1], "s")
-		n, err := strconv.Atoi(raw)
-		if err != nil || n < 0 {
-			return 0, false
+		sec, ok := parseDurationToken(fields[i+1])
+		if !ok {
+			continue
 		}
-		return n, true
+		if !found || sec > best {
+			best = sec
+			found = true
+		}
+	}
+	return best, found
+}
+
+func parseDurationToken(raw string) (int, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, false
+	}
+	mult := 1.0
+	switch {
+	case strings.HasSuffix(raw, "h"):
+		mult = 3600
+		raw = strings.TrimSuffix(raw, "h")
+	case strings.HasSuffix(raw, "m"):
+		mult = 60
+		raw = strings.TrimSuffix(raw, "m")
+	case strings.HasSuffix(raw, "s"):
+		raw = strings.TrimSuffix(raw, "s")
+	}
+	if n, err := strconv.Atoi(raw); err == nil && n >= 0 {
+		return int(float64(n) * mult), true
+	}
+	if f, err := strconv.ParseFloat(raw, 64); err == nil && f >= 0 {
+		return int(f * mult), true
 	}
 	return 0, false
 }

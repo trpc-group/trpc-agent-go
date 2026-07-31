@@ -1,4 +1,4 @@
-//
+﻿//
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
@@ -14,8 +14,11 @@
 package safety
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -28,7 +31,7 @@ import (
 //
 // LoadPolicyFile starts from DefaultPolicy and overlays values from the file.
 // Omitted deny lists therefore keep safe defaults (fail-closed), instead of
-// silently disabling denials 鈥?a common failure mode called out in reviews of
+// silently disabling denials — a common failure mode called out in reviews of
 // competing #2002 implementations.
 type Policy struct {
 	// AllowedCommands is passed to shellsafe allow matching (strict).
@@ -75,9 +78,11 @@ func DefaultPolicy() Policy {
 			"sum.golang.org",
 			"storage.googleapis.com",
 		},
+		// Keep only locale/terminal hints. Do not allow PATH / HOME / GOROOT /
+		// GOPATH here: tool-arg overrides of those can redirect which binary
+		// runs after Guard allows a scanned command name.
 		AllowedEnvVars: []string{
-			"PATH", "HOME", "LANG", "LC_ALL", "TERM",
-			"GOPATH", "GOROOT", "GOCACHE", "GOMODCACHE",
+			"LANG", "LC_ALL", "TERM",
 		},
 		AskCommands: []string{
 			"npm", "pnpm", "yarn", "pip", "pip3",
@@ -92,28 +97,38 @@ func DefaultPolicy() Policy {
 
 // LoadPolicyFile reads JSON or YAML policy. Extension selects the decoder.
 // The result is DefaultPolicy overlaid with file contents.
+// On read failure it still returns DefaultPolicy alongside the error so a
+// careless caller that ignores err does not get an empty fail-open policy.
 func LoadPolicyFile(path string) (Policy, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return Policy{}, fmt.Errorf("safety: read policy %q: %w", path, err)
+		return DefaultPolicy(), fmt.Errorf("safety: read policy %q: %w", path, err)
 	}
 	return ParsePolicy(data, path)
 }
 
 // ParsePolicy decodes policy bytes. name is used only to pick JSON vs YAML
-// (".json" suffix 閳?JSON; otherwise YAML).
+// (".json" suffix → JSON; otherwise YAML). Unknown keys are rejected so a
+// typo cannot silently drop a deny list.
 func ParsePolicy(data []byte, name string) (Policy, error) {
 	base := DefaultPolicy()
 	var overlay policyOverlay
 	var err error
 	lower := strings.ToLower(name)
 	if strings.HasSuffix(lower, ".json") {
-		err = json.Unmarshal(data, &overlay)
+		dec := json.NewDecoder(bytes.NewReader(data))
+		dec.DisallowUnknownFields()
+		err = dec.Decode(&overlay)
 	} else {
-		err = yaml.Unmarshal(data, &overlay)
+		dec := yaml.NewDecoder(bytes.NewReader(data))
+		dec.KnownFields(true)
+		err = dec.Decode(&overlay)
+		if errors.Is(err, io.EOF) {
+			err = nil
+		}
 	}
 	if err != nil {
-		return Policy{}, fmt.Errorf("safety: parse policy: %w", err)
+		return DefaultPolicy(), fmt.Errorf("safety: parse policy: %w", err)
 	}
 	return overlay.apply(base), nil
 }
