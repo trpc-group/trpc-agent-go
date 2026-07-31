@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -27,19 +28,19 @@ type inputs struct {
 
 func loadInputs(dataDir string) (*inputs, error) {
 	var loaded inputs
-	if err := readJSON(dataDir+"/train.evalset.json", &loaded.Train); err != nil {
+	if err := readJSON(filepath.Join(dataDir, "train.evalset.json"), &loaded.Train); err != nil {
 		return nil, err
 	}
-	if err := readJSON(dataDir+"/validation.evalset.json", &loaded.Validation); err != nil {
+	if err := readJSON(filepath.Join(dataDir, "validation.evalset.json"), &loaded.Validation); err != nil {
 		return nil, err
 	}
-	if err := readJSON(dataDir+"/metrics.json", &loaded.Metrics); err != nil {
+	if err := readJSON(filepath.Join(dataDir, "metrics.json"), &loaded.Metrics); err != nil {
 		return nil, err
 	}
-	if err := readJSON(dataDir+"/promptiter.json", &loaded.Config); err != nil {
+	if err := readJSON(filepath.Join(dataDir, "promptiter.json"), &loaded.Config); err != nil {
 		return nil, err
 	}
-	prompt, err := os.ReadFile(dataDir + "/baseline_prompt.txt")
+	prompt, err := os.ReadFile(filepath.Join(dataDir, "baseline_prompt.txt"))
 	if err != nil {
 		return nil, fmt.Errorf("read baseline prompt: %w", err)
 	}
@@ -82,6 +83,14 @@ func validateInputs(loaded *inputs) error {
 	}
 	if len(loaded.Config.Candidates) == 0 {
 		return errors.New("promptiter candidates are empty")
+	}
+	for _, candidate := range loaded.Config.Candidates {
+		if strings.TrimSpace(candidate.ID) == "" {
+			return errors.New("candidate id is empty")
+		}
+		if strings.TrimSpace(candidate.Prompt) == "" {
+			return fmt.Errorf("candidate %q prompt is empty", candidate.ID)
+		}
 	}
 	if loaded.Config.Gate.MaxCalls <= 0 || loaded.Config.Gate.MaxEstimatedTokens <= 0 {
 		return errors.New("gate budgets must be positive")

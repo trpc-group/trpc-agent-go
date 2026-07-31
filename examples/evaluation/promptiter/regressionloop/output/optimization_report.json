@@ -5,8 +5,6 @@
       "name": "deterministic-rule-v1",
       "temperature": 0
     },
-    "startedAt": "2026-07-31T10:17:45.9596983Z",
-    "durationMillis": 0,
     "mode": "deterministic",
     "promptiterIntegration": "evaluation/workflow/promptiter.PatchSet"
   },

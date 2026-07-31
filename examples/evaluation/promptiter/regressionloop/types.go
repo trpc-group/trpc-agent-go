@@ -8,8 +8,6 @@
 
 package main
 
-import "time"
-
 type evalSet struct {
 	Name  string     `json:"name"`
 	Cases []evalCase `json:"cases"`
@@ -126,8 +124,6 @@ type baselineReport struct {
 type runMetadata struct {
 	Seed       int64       `json:"seed"`
 	Model      modelConfig `json:"model"`
-	StartedAt  time.Time   `json:"startedAt"`
-	DurationMS int64       `json:"durationMillis"`
 	Mode       string      `json:"mode"`
 	Promptiter string      `json:"promptiterIntegration"`
 }

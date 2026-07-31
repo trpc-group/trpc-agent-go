@@ -22,9 +22,9 @@ Train score: **0.333**; validation score: **0.667**.
 
 ### Round 1 — `ineffective`
 
-- `validation-json-contract`: unchanged (1.0 → 1.0)
-- `validation-grounded-search`: unchanged (0.0 → 0.0)
-- `validation-held-out-style`: unchanged (1.0 → 1.0)
+- `validation-json-contract`: unchanged (1.000 → 1.000)
+- `validation-grounded-search`: unchanged (0.000 → 0.000)
+- `validation-held-out-style`: unchanged (1.000 → 1.000)
 - Failure attribution:
   - `knowledge_recall`: 1
   - `route_error`: 1
@@ -32,17 +32,17 @@ Train score: **0.333**; validation score: **0.667**.
 
 ### Round 2 — `training-overfit`
 
-- `validation-json-contract`: unchanged (1.0 → 1.0)
-- `validation-grounded-search`: new_pass (0.0 → 1.0)
-- `validation-held-out-style`: new_failure (1.0 → 0.0)
+- `validation-json-contract`: unchanged (1.000 → 1.000)
+- `validation-grounded-search`: new_pass (0.000 → 1.000)
+- `validation-held-out-style`: new_failure (1.000 → 0.000)
 - Failure attribution:
   - `overfit`: 1
 
 ### Round 3 — `generalized`
 
-- `validation-json-contract`: unchanged (1.0 → 1.0)
-- `validation-grounded-search`: new_pass (0.0 → 1.0)
-- `validation-held-out-style`: unchanged (1.0 → 1.0)
+- `validation-json-contract`: unchanged (1.000 → 1.000)
+- `validation-grounded-search`: new_pass (0.000 → 1.000)
+- `validation-held-out-style`: unchanged (1.000 → 1.000)
 
 ## Accepted prompt
 

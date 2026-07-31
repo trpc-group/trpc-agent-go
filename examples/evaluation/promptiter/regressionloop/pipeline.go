@@ -12,7 +12,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
@@ -28,12 +27,11 @@ func runPipeline(ctx context.Context, dataDir, outputDir string) (*optimizationR
 	if err != nil {
 		return nil, err
 	}
-	startedAt := time.Now().UTC()
 	baselineTrain := evaluate(loaded.Train, loaded.Prompt, loaded.Metrics)
 	baselineValidation := evaluate(loaded.Validation, loaded.Prompt, loaded.Metrics)
 	report := &optimizationReport{
 		Metadata: runMetadata{
-			Seed: loaded.Config.Seed, Model: loaded.Config.Model, StartedAt: startedAt,
+			Seed: loaded.Config.Seed, Model: loaded.Config.Model,
 			Mode: "deterministic", Promptiter: "evaluation/workflow/promptiter.PatchSet",
 		},
 		Baseline:       baselineReport{Prompt: loaded.Prompt, Train: baselineTrain, Validation: baselineValidation},
@@ -68,7 +66,6 @@ func runPipeline(ctx context.Context, dataDir, outputDir string) (*optimizationR
 			break
 		}
 	}
-	report.Metadata.DurationMS = time.Since(startedAt).Milliseconds()
 	if err := writeReports(outputDir, report); err != nil {
 		return nil, err
 	}

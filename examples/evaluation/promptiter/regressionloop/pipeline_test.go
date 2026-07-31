@@ -59,6 +59,52 @@ func TestGateRejectsOverfitAndAcceptsGeneralization(t *testing.T) {
 		CaseID: "held-out", Status: deltaNewPass, Delta: 1,
 	}}, costSummary{Calls: 6, EstimatedTokens: 100})
 	require.True(t, accepted.Accepted)
+
+	for name, cost := range map[string]costSummary{
+		"call budget":  {Calls: cfg.MaxCalls + 1},
+		"token budget": {EstimatedTokens: cfg.MaxEstimatedTokens + 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			decision := decideGate(cfg, baseline, evaluationSummary{Score: 1}, nil, cost)
+			require.False(t, decision.Accepted)
+			require.NotEmpty(t, decision.Reasons)
+		})
+	}
+
+	hardRegression := decideGate(cfg, baseline, evaluationSummary{Score: 1}, []caseDelta{{
+		CaseID: "hard", Status: deltaRegressed, Delta: -0.1, Hard: true,
+	}}, costSummary{})
+	require.False(t, hardRegression.Accepted)
+	require.Contains(t, hardRegression.Reasons, "hard case hard regressed")
+}
+
+func TestValidateInputsRejectsIncompleteCandidates(t *testing.T) {
+	valid := inputs{
+		Prompt: "baseline",
+		Train: evalSet{Name: "train", Cases: []evalCase{{
+			ID: "train", Required: []string{"signal"}, FailureCategory: "route_error",
+		}}},
+		Validation: evalSet{Name: "validation", Cases: []evalCase{{
+			ID: "validation", Required: []string{"signal"}, FailureCategory: "route_error",
+		}}},
+		Config: optimizationConfig{
+			Candidates: []candidateConfig{{ID: "candidate", Prompt: "prompt"}},
+			Gate:       gateConfig{MaxCalls: 1, MaxEstimatedTokens: 1},
+		},
+	}
+
+	missingID := valid
+	missingID.Config.Candidates = []candidateConfig{{Prompt: "prompt"}}
+	require.EqualError(t, validateInputs(&missingID), "candidate id is empty")
+
+	missingPrompt := valid
+	missingPrompt.Config.Candidates = []candidateConfig{{ID: "candidate"}}
+	require.EqualError(t, validateInputs(&missingPrompt), "candidate \"candidate\" prompt is empty")
+}
+
+func TestCodeFenceExceedsPromptBackticks(t *testing.T) {
+	require.Equal(t, "```", codeFence("plain prompt"))
+	require.Equal(t, "````", codeFence("prompt with ``` fence"))
 }
 
 func TestRunPipelineWritesAuditableReports(t *testing.T) {

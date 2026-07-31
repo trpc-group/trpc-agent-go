@@ -73,7 +73,7 @@ func markdownReport(report *optimizationReport) string {
 		fmt.Fprintln(&output)
 		fmt.Fprintf(&output, "### Round %d — `%s`\n\n", round.Round, round.CandidateID)
 		for _, delta := range round.ValidationDelta {
-			fmt.Fprintf(&output, "- `%s`: %s (%.1f → %.1f)\n", delta.CaseID, delta.Status, delta.BaselineScore, delta.CandidateScore)
+			fmt.Fprintf(&output, "- `%s`: %s (%.3f → %.3f)\n", delta.CaseID, delta.Status, delta.BaselineScore, delta.CandidateScore)
 		}
 		categories := make([]string, 0, len(round.AttributionSummary))
 		for category := range round.AttributionSummary {
@@ -90,8 +90,28 @@ func markdownReport(report *optimizationReport) string {
 	fmt.Fprintln(&output)
 	fmt.Fprintln(&output, "## Accepted prompt")
 	fmt.Fprintln(&output)
-	fmt.Fprintf(&output, "```text\n%s\n```\n", report.AcceptedPrompt)
+	fence := codeFence(report.AcceptedPrompt)
+	fmt.Fprintf(&output, "%stext\n%s\n%s\n", fence, report.AcceptedPrompt, fence)
 	return output.String()
+}
+
+// codeFence returns a backtick fence long enough to enclose content verbatim.
+func codeFence(content string) string {
+	longest, current := 0, 0
+	for _, char := range content {
+		if char == '`' {
+			current++
+			if current > longest {
+				longest = current
+			}
+			continue
+		}
+		current = 0
+	}
+	if longest < 3 {
+		return "```"
+	}
+	return strings.Repeat("`", longest+1)
 }
 
 func valueOrNone(value string) string {
