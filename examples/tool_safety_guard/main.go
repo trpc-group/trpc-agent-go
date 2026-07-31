@@ -58,7 +58,7 @@ func run(
 	samplesPath string,
 	reportPath string,
 	auditPath string,
-) error {
+) (err error) {
 	policy, err := safety.LoadPolicyFile(policyPath)
 	if err != nil {
 		return err
@@ -71,7 +71,11 @@ func run(
 	if err != nil {
 		return fmt.Errorf("open audit output: %w", err)
 	}
-	defer audit.Close()
+	defer func() {
+		if closeErr := audit.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("close audit output: %w", closeErr)
+		}
+	}()
 
 	scanner, err := safety.NewScanner(policy, safety.WithAuditWriter(audit))
 	if err != nil {

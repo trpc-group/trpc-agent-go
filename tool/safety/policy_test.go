@@ -67,6 +67,16 @@ func TestLoadPolicyRejectsInvalidDocuments(t *testing.T) {
 	}
 }
 
+func TestNewScannerRejectsTrimmedToolProfileCollision(t *testing.T) {
+	_, err := NewScanner(Policy{
+		ToolProfiles: map[string]ToolProfile{
+			"run":   {Backend: BackendHost},
+			" run ": {Backend: BackendWorkspace},
+		},
+	})
+	require.ErrorContains(t, err, "collides after trimming")
+}
+
 func TestPolicyIdentityAndRevision(t *testing.T) {
 	policy := Policy{PolicyID: "production", AllowedCommands: []string{"go"}}
 	first, err := NewScanner(policy)

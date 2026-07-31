@@ -25,6 +25,8 @@ import (
 
 var _ tool.PermissionPolicy = (*Scanner)(nil)
 
+const maxPermissionArgumentDepth = 64
+
 type inputFields struct {
 	backend      Backend
 	command      []string
@@ -115,7 +117,17 @@ func (s *Scanner) scanInputFromPermissionRequest(req *tool.PermissionRequest) Sc
 		))
 		return input
 	}
-	input.extraValues = collectStrings(root)
+	input.extraValues, err = collectStrings(root)
+	if err != nil {
+		input.initialFindings = append(input.initialFindings, finding(
+			DecisionDeny,
+			RiskLevelHigh,
+			RuleResourceAbuse,
+			err.Error(),
+			"reduce the nesting depth of the tool argument payload",
+		))
+		return input
+	}
 	fields := s.fieldsForRequest(req, root)
 	input.Backend = fields.backend
 	s.extractPermissionFields(&input, root, fields)
@@ -168,7 +180,11 @@ func (s *Scanner) fieldsForRequest(
 	_, hasChars := props["chars"]
 	switch {
 	case hasCode:
-		return conventionalFields(BackendCodeExecutor, true)
+		fields := conventionalFields(BackendCodeExecutor, true)
+		if hasCommand {
+			fields.command = []string{"command"}
+		}
+		return fields
 	case hasCommand && hasCWD:
 		return conventionalFields(BackendWorkspace, true)
 	case hasCommand && hasWorkdir:
@@ -471,19 +487,37 @@ func codeBlocksField(
 	return out, errs
 }
 
-func collectStrings(value any) []string {
+func collectStrings(value any) ([]string, error) {
 	var out []string
-	collectStringsInto(value, &out)
-	return out
+	if err := collectStringsInto(value, "", 0, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
-func collectStringsInto(value any, out *[]string) {
+func collectStringsInto(
+	value any,
+	keyContext string,
+	depth int,
+	out *[]string,
+) error {
+	if depth > maxPermissionArgumentDepth {
+		return fmt.Errorf(
+			"tool arguments exceed maximum nesting depth %d",
+			maxPermissionArgumentDepth,
+		)
+	}
 	switch typed := value.(type) {
 	case string:
 		*out = append(*out, typed)
+		if keyContext != "" {
+			*out = append(*out, keyContext+"="+typed)
+		}
 	case []any:
 		for _, item := range typed {
-			collectStringsInto(item, out)
+			if err := collectStringsInto(item, keyContext, depth+1, out); err != nil {
+				return err
+			}
 		}
 	case map[string]any:
 		keys := make([]string, 0, len(typed))
@@ -492,9 +526,13 @@ func collectStringsInto(value any, out *[]string) {
 		}
 		sort.Strings(keys)
 		for _, key := range keys {
-			collectStringsInto(typed[key], out)
+			*out = append(*out, key)
+			if err := collectStringsInto(typed[key], key, depth+1, out); err != nil {
+				return err
+			}
 		}
 	}
+	return nil
 }
 
 func (s *Scanner) scanOpenWorldValues(
@@ -508,7 +546,7 @@ func (s *Scanner) scanOpenWorldValues(
 		for _, rawURL := range sourceURLPattern.FindAllString(value, -1) {
 			parsed, err := url.Parse(strings.TrimRight(rawURL, ".,;:)\"'"))
 			if err != nil || parsed.Hostname() == "" || !s.domainAllowed(parsed.Hostname()) {
-				host := rawURL
+				host, _ := Redact(rawURL)
 				if err == nil && parsed.Hostname() != "" {
 					host = parsed.Hostname()
 				}

@@ -38,7 +38,7 @@ const (
 	RuleShellBypass RuleID = "shell_bypass"
 	// RuleCommandDenied identifies a command rejected by command policy.
 	RuleCommandDenied RuleID = "command_denied"
-	// RuleDangerousDelete identifies recursive or forced deletion.
+	// RuleDangerousDelete identifies deletion that is both recursive and forced.
 	RuleDangerousDelete RuleID = "dangerous_delete"
 	// RuleSystemModification identifies an unsafe system-level modification.
 	RuleSystemModification RuleID = "system_modification"

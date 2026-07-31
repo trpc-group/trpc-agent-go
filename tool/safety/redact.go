@@ -45,6 +45,10 @@ var redactionPatterns = []struct {
 		regexp.MustCompile(`(?i)(https?://[^/@:\s]+:)[^/@\s]+@`),
 		`${1}[REDACTED]@`,
 	},
+	{
+		regexp.MustCompile(`(?i)([?&](?:api[_-]?key|access[_-]?token|auth[_-]?token|password|passwd|secret|token)=)[^&#\s]+`),
+		`${1}[REDACTED]`,
+	},
 }
 
 // Redact replaces common credentials, tokens, passwords, and private keys in
@@ -64,7 +68,7 @@ func sanitizeReportText(text string) (string, bool) {
 	}
 	const marker = "\n...[truncated]..."
 	limit := maxReportTextBytes - len(marker)
-	for limit > 0 && !utf8.ValidString(text[:limit]) {
+	for limit > 0 && limit < len(text) && !utf8.RuneStart(text[limit]) {
 		limit--
 	}
 	return strings.TrimSpace(text[:limit]) + marker, true

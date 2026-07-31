@@ -11,10 +11,15 @@ package safety
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+)
+
+var secretVariableReferencePattern = regexp.MustCompile(
+	`(?i)\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|password|passwd|secret|token)\s*[:=]\s*(?:"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})"|'\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})'|\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\}))`,
 )
 
 func scanSecrets(input ScanInput) ([]Finding, bool) {
@@ -29,7 +34,8 @@ func scanSecrets(input ScanInput) ([]Finding, bool) {
 	}
 	values = append(values, input.extraValues...)
 	for _, value := range values {
-		if _, changed := Redact(value); changed {
+		literalValue := secretVariableReferencePattern.ReplaceAllString(value, "")
+		if _, changed := Redact(literalValue); changed {
 			return []Finding{finding(
 				DecisionDeny,
 				RiskLevelCritical,

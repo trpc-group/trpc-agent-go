@@ -10,6 +10,7 @@
 package safety
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -25,6 +26,10 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/shellsafe"
 )
 
+// shellsafeActivationCommand keeps shellsafe.PolicyFromLists active when the
+// configured allow and deny lists are empty. Removing this sentinel would make
+// shellsafe.Policy.Active false and skip its built-in shell-wrapper and
+// re-execution protections.
 const shellsafeActivationCommand = "__tool_safety_policy_active__"
 
 var (
@@ -99,7 +104,7 @@ func (s *Scanner) scanPipeline(
 	if err := commandPolicy.Check(pipe); err != nil {
 		ruleID := RuleCommandDenied
 		risk := RiskLevelHigh
-		if strings.Contains(err.Error(), "built-in policy") {
+		if errors.Is(err, shellsafe.ErrImplicitDeny) {
 			ruleID = RuleShellBypass
 			risk = RiskLevelCritical
 		}
@@ -453,26 +458,30 @@ func networkOptionConsumesValue(command string, arg string) bool {
 	switch command {
 	case "curl":
 		options = map[string]struct{}{
-			"-o": {}, "--output": {}, "-h": {}, "--header": {},
+			"-o": {}, "--output": {}, "-H": {}, "--header": {},
 			"-d": {}, "--data": {}, "--data-raw": {},
-			"--request": {}, "-a": {}, "--user-agent": {}, "-u": {},
+			"--request": {}, "-A": {}, "--user-agent": {}, "-u": {},
 			"--user": {}, "--cacert": {}, "--cert": {}, "--key": {},
 			"--connect-timeout": {}, "--max-time": {},
 		}
 	case "wget":
 		options = map[string]struct{}{
-			"-o": {}, "--output-document": {}, "--header": {},
+			"-o": {}, "-O": {}, "--output-document": {}, "--header": {},
 			"--post-data": {}, "--user": {}, "--password": {},
 			"--timeout": {},
 		}
 	case "ssh", "scp", "sftp":
 		options = map[string]struct{}{
-			"-p": {}, "-i": {}, "-l": {},
+			"-p": {}, "-P": {}, "-i": {}, "-l": {},
 		}
 	default:
 		return false
 	}
-	_, ok := options[strings.ToLower(arg)]
+	if strings.HasPrefix(arg, "--") {
+		_, ok := options[strings.ToLower(arg)]
+		return ok
+	}
+	_, ok := options[arg]
 	return ok
 }
 
@@ -681,19 +690,51 @@ func isOutputFlood(command string, args []string) bool {
 }
 
 func requestedConcurrency(argv []string) (int, bool) {
-	for i, arg := range argv[1:] {
+	command := commandBase(argv[0])
+	for i := 1; i < len(argv); i++ {
+		arg := argv[i]
 		lower := strings.ToLower(arg)
-		for _, prefix := range []string{"-p=", "-j", "--jobs=", "--parallel="} {
-			if !strings.HasPrefix(lower, prefix) {
-				continue
+		var value string
+		switch {
+		case (concurrencyShortOption(command, "-p") && lower == "-p") ||
+			(concurrencyShortOption(command, "-j") && lower == "-j") ||
+			lower == "--jobs" || lower == "--parallel":
+			if i+1 < len(argv) {
+				value = argv[i+1]
 			}
-			value := strings.TrimPrefix(lower, prefix)
-			if value == "" && i+2 < len(argv) {
-				value = argv[i+2]
-			}
-			parsed, err := strconv.Atoi(value)
-			return parsed, err == nil
+		case concurrencyShortOption(command, "-p") && strings.HasPrefix(lower, "-p="):
+			value = strings.TrimPrefix(lower, "-p=")
+		case concurrencyShortOption(command, "-j") && strings.HasPrefix(lower, "-j="):
+			value = strings.TrimPrefix(lower, "-j=")
+		case strings.HasPrefix(lower, "--jobs="):
+			value = strings.TrimPrefix(lower, "--jobs=")
+		case strings.HasPrefix(lower, "--parallel="):
+			value = strings.TrimPrefix(lower, "--parallel=")
+		case concurrencyShortOption(command, "-p") && strings.HasPrefix(lower, "-p") &&
+			len(lower) > len("-p"):
+			value = lower[len("-p"):]
+		case concurrencyShortOption(command, "-j") && strings.HasPrefix(lower, "-j") &&
+			len(lower) > len("-j"):
+			value = lower[len("-j"):]
+		default:
+			continue
+		}
+		parsed, err := strconv.Atoi(value)
+		if err == nil {
+			return parsed, true
 		}
 	}
 	return 0, false
+}
+
+func concurrencyShortOption(command, option string) bool {
+	switch option {
+	case "-p":
+		return command == "go" || command == "xargs"
+	case "-j":
+		return command == "make" || command == "gmake" || command == "ninja" ||
+			command == "cargo" || command == "parallel"
+	default:
+		return false
+	}
 }

@@ -185,6 +185,12 @@ func normalizePolicy(policy Policy) (Policy, error) {
 		if name == "" {
 			return Policy{}, errors.New("tool profile name must not be empty")
 		}
+		if _, exists := profiles[name]; exists {
+			return Policy{}, fmt.Errorf(
+				"tool profile name %q collides after trimming",
+				name,
+			)
+		}
 		normalizedProfile := profile
 		if err := validateProfile(&normalizedProfile); err != nil {
 			return Policy{}, fmt.Errorf("tool profile %q: %w", name, err)

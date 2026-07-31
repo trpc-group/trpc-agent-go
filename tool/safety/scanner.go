@@ -159,6 +159,7 @@ func (s *Scanner) scan(
 			fmt.Sprintf("scan input exceeds %d bytes", maxScanInputBytes),
 			"split the request into smaller bounded executions",
 		))
+		return deduplicateFindings(findings), false, nil
 	}
 
 	sensitive := false
@@ -173,6 +174,14 @@ func (s *Scanner) scan(
 	}
 	if strings.TrimSpace(input.Command) != "" && !input.sessionWrite {
 		findings = append(findings, s.scanCommandInput(input)...)
+	} else if len(input.Arguments) > 0 && !input.sessionWrite {
+		findings = append(findings, finding(
+			DecisionDeny,
+			RiskLevelHigh,
+			RuleInvalidInput,
+			"structured command arguments require a non-empty executable",
+			"provide the executable in command and literal argv values in arguments",
+		))
 	}
 	for i, block := range input.CodeBlocks {
 		blockFindings, err := s.scanCodeBlock(ctx, i, block, input)

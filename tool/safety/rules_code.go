@@ -184,20 +184,21 @@ func (s *Scanner) scanSourceText(
 }
 
 func (s *Scanner) scanSourceNetwork(blockIndex int, code string) []Finding {
-	if !sourceNetworkPattern.MatchString(code) {
+	callMatches := sourceNetworkPattern.FindAllStringIndex(code, -1)
+	if len(callMatches) == 0 {
 		return nil
 	}
-	matches := sourceURLPattern.FindAllString(code, -1)
-	if len(matches) == 0 {
-		return []Finding{finding(
-			DecisionDeny,
-			RiskLevelCritical,
-			RuleNetworkEgress,
-			fmt.Sprintf("code block %d uses a network API with a non-literal destination", blockIndex),
-			"use a literal http or https URL whose host is explicitly allowlisted",
-		)}
-	}
-	for _, rawURL := range matches {
+	for _, callMatch := range callMatches {
+		rawURL, ok := sourceNetworkLiteralURL(code, callMatch)
+		if !ok {
+			return []Finding{finding(
+				DecisionDeny,
+				RiskLevelCritical,
+				RuleNetworkEgress,
+				fmt.Sprintf("code block %d uses a network API with a non-literal destination", blockIndex),
+				"use a literal http or https URL whose host is explicitly allowlisted",
+			)}
+		}
 		parsed, err := url.Parse(strings.TrimRight(rawURL, ".,;:)\"'"))
 		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") ||
 			parsed.Hostname() == "" || !s.domainAllowed(parsed.Hostname()) {
@@ -215,4 +216,133 @@ func (s *Scanner) scanSourceNetwork(blockIndex int, code string) []Finding {
 		}
 	}
 	return nil
+}
+
+func sourceNetworkLiteralURL(code string, callMatch []int) (string, bool) {
+	openOffset := strings.IndexByte(code[callMatch[0]:], '(')
+	if openOffset < 0 {
+		return "", false
+	}
+	open := callMatch[0] + openOffset
+	if open-callMatch[1] > 64 || strings.ContainsAny(code[callMatch[0]:open], "\r\n;") {
+		return "", false
+	}
+	arguments, ok := sourceCallArguments(code, open)
+	if !ok {
+		return "", false
+	}
+	parts := splitSourceArguments(arguments)
+	argumentIndex := 0
+	if strings.Contains(strings.ToLower(code[callMatch[0]:callMatch[1]]), "newrequest") {
+		argumentIndex = 1
+	}
+	if argumentIndex >= len(parts) {
+		return "", false
+	}
+	return sourceLiteralURL(parts[argumentIndex])
+}
+
+func sourceCallArguments(code string, open int) (string, bool) {
+	depth := 1
+	var quote byte
+	escaped := false
+	for i := open + 1; i < len(code); i++ {
+		current := code[i]
+		if quote != 0 {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if current == '\\' && quote != '`' {
+				escaped = true
+				continue
+			}
+			if current == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch current {
+		case '\'', '"', '`':
+			quote = current
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return code[open+1 : i], true
+			}
+		}
+	}
+	return "", false
+}
+
+func splitSourceArguments(arguments string) []string {
+	var parts []string
+	start := 0
+	depth := 0
+	var quote byte
+	escaped := false
+	for i := 0; i < len(arguments); i++ {
+		current := arguments[i]
+		if quote != 0 {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if current == '\\' && quote != '`' {
+				escaped = true
+				continue
+			}
+			if current == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch current {
+		case '\'', '"', '`':
+			quote = current
+		case '(', '[', '{':
+			depth++
+		case ')', ']', '}':
+			if depth > 0 {
+				depth--
+			}
+		case ',':
+			if depth == 0 {
+				parts = append(parts, strings.TrimSpace(arguments[start:i]))
+				start = i + 1
+			}
+		}
+	}
+	parts = append(parts, strings.TrimSpace(arguments[start:]))
+	return parts
+}
+
+func sourceLiteralURL(argument string) (string, bool) {
+	argument = strings.TrimSpace(argument)
+	if separator := strings.IndexByte(argument, '='); separator >= 0 {
+		name := strings.TrimSpace(argument[:separator])
+		if strings.EqualFold(name, "url") {
+			argument = strings.TrimSpace(argument[separator+1:])
+		}
+	}
+	if len(argument) > 1 && strings.ContainsAny(argument[:1], "rRuUbB") {
+		argument = argument[1:]
+	}
+	if len(argument) < 2 {
+		return "", false
+	}
+	quote := argument[0]
+	if (quote != '\'' && quote != '"' && quote != '`') || argument[len(argument)-1] != quote {
+		return "", false
+	}
+	literal := argument[1 : len(argument)-1]
+	if quote == '`' && strings.Contains(literal, "${") {
+		return "", false
+	}
+	if !sourceURLPattern.MatchString(literal) {
+		return "", false
+	}
+	return literal, true
 }
