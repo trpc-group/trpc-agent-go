@@ -16,7 +16,9 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/http/httputil"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -2423,9 +2425,13 @@ func TestA2AHTTPAnonymousCookieSurvivesPostAuthUserClone(t *testing.T) {
 			if user == nil {
 				return r
 			}
+			claims := make(map[string]any, len(user.Claims))
+			for key, value := range user.Claims {
+				claims[key] = value
+			}
 			cloned := &auth.User{
 				ID:     user.ID,
-				Claims: user.Claims,
+				Claims: claims,
 			}
 			return r.WithContext(context.WithValue(
 				r.Context(),
@@ -2746,9 +2752,9 @@ func TestA2AHTTPAnonymousCookieRejectsForeignServerScope(t *testing.T) {
 	}
 
 	var runsA, runsB []string
-	serverA := newServer("anonymous-scope-a", "http://a2a-a.example", &runsA)
+	serverA := newServer("anonymous-scope-a", "http://shared.example:8443", &runsA)
 	defer serverA.Close()
-	serverB := newServer("anonymous-scope-b", "http://a2a-b.example", &runsB)
+	serverB := newServer("anonymous-scope-b", "http://shared.example:9443", &runsB)
 	defer serverB.Close()
 
 	jar, err := cookiejar.New(nil)
@@ -2780,8 +2786,9 @@ func TestA2AHTTPAnonymousCookieRejectsForeignServerScope(t *testing.T) {
 
 	require.Len(t, runsA, 1)
 	require.Len(t, runsB, 1)
-	scopeA := anonymousCookieScopeFromAgentURL("http://a2a-a.example")
-	scopeB := anonymousCookieScopeFromAgentURL("http://a2a-b.example")
+	scopeA := anonymousCookieScopeFromAgentURL("http://shared.example:8443")
+	scopeB := anonymousCookieScopeFromAgentURL("http://shared.example:9443")
+	require.NotEqual(t, scopeA, scopeB)
 	require.True(t, isAnonymousUserIDForScope(runsA[0], scopeA))
 	require.True(t, isAnonymousUserIDForScope(runsB[0], scopeB))
 	require.NotEqual(t, runsA[0], runsB[0])
@@ -3029,29 +3036,33 @@ func TestA2AHTTPAnonymousCookieFollowsEffectiveJSONRPCEndpoint(t *testing.T) {
 		WithRunner(mockRunner),
 		WithAgentCard(a2a.AgentCard{
 			Name: "effective-endpoint-anonymous-cookie",
-			URL:  "http://placeholder.local/internal",
+			URL:  "http://public.example/agents/math",
 		}),
 		WithExtraA2AOptions(a2a.WithBasePath("/internal")),
 	)
 	require.NoError(t, err)
 
-	var outsidePathCookie string
-	mux := http.NewServeMux()
-	mux.HandleFunc("/other", func(w http.ResponseWriter, r *http.Request) {
-		if cookie, cookieErr := r.Cookie(anonymousUserIDCookie); cookieErr == nil {
-			outsidePathCookie = cookie.Value
-		}
-		w.WriteHeader(http.StatusNoContent)
-	})
-	mux.Handle("/", srv.Handler())
-	httpSrv := httptest.NewServer(mux)
-	defer httpSrv.Close()
+	backendSrv := httptest.NewServer(srv.Handler())
+	defer backendSrv.Close()
+	backendURL, err := url.Parse(backendSrv.URL)
+	require.NoError(t, err)
+	proxy := httputil.NewSingleHostReverseProxy(backendURL)
+	proxy.Director = func(r *http.Request) {
+		r.URL.Scheme = backendURL.Scheme
+		r.URL.Host = backendURL.Host
+		r.URL.Path = strings.Replace(r.URL.Path, "/agents/math", "/internal", 1)
+		r.URL.RawPath = ""
+		r.Host = backendURL.Host
+	}
+	publicSrv := httptest.NewServer(proxy)
+	defer publicSrv.Close()
 
 	jar, err := cookiejar.New(nil)
 	require.NoError(t, err)
-	httpClient := &http.Client{Jar: jar}
+	transport := &cookiePathRoundTripper{}
+	httpClient := &http.Client{Jar: jar, Transport: transport}
 	a2aClient, err := a2aclient.NewA2AClient(
-		httpSrv.URL+"/internal",
+		publicSrv.URL+"/agents/math",
 		a2aclient.WithHTTPClient(httpClient),
 	)
 	require.NoError(t, err)
@@ -3071,11 +3082,7 @@ func TestA2AHTTPAnonymousCookieFollowsEffectiveJSONRPCEndpoint(t *testing.T) {
 	require.True(t, isAnonymousUserID(runs[0]))
 	require.Equal(t, runs[0], runs[1])
 	mu.Unlock()
-
-	resp, err := httpClient.Get(httpSrv.URL + "/other")
-	require.NoError(t, err)
-	require.NoError(t, resp.Body.Close())
-	assert.Empty(t, outsidePathCookie)
+	require.Equal(t, []string{"/agents/math", "/agents/math"}, transport.paths)
 }
 
 func TestA2AHTTPAnonymousCookieUsesOriginalPathWhenMiddlewareRewrites(t *testing.T) {

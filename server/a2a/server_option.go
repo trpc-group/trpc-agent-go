@@ -220,6 +220,8 @@ func (m anonymousUserCookieResponseMiddleware) Wrap(next http.Handler) http.Hand
 			http.Error(w, "authenticated user ID is empty", http.StatusUnauthorized)
 			return
 		}
+		// The context marker survives post-auth user clones; the claim check
+		// preserves the rule that custom auth providers cannot forge this cookie.
 		if state != nil && builtInAnonymous && isBuiltInAnonymousAuthUser(user) &&
 			user.ID == state.userID && isAnonymousUserIDForScope(user.ID, m.cookieScope) {
 			http.SetCookie(w, &http.Cookie{
