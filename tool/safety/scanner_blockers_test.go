@@ -219,6 +219,18 @@ func path() string { return ".env" }`,
 			wantRule: ruleCodePolicy,
 		},
 		{
+			name:     "go sensitive constant file read",
+			language: "go",
+			code:     `package main; import "os"; func main() { _, _ = os.ReadFile(".env") }`,
+			wantRule: ruleSensitivePath,
+		},
+		{
+			name:     "python unresolved native capability",
+			language: "python",
+			code:     `ctypes.CDLL("libc.so")`,
+			wantRule: ruleCodePolicy,
+		},
+		{
 			name:     "go risky dot import",
 			language: "go",
 			code:     `package main; import . "os"; func main() { RemoveAll("/") }`,

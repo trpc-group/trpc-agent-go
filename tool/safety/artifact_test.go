@@ -222,3 +222,90 @@ func TestRedactingArtifactServiceProtectsCodeExecutorSavePath(
 		t.Errorf("invalid JSON artifact was stored: %+v", stored)
 	}
 }
+
+func TestRedactingArtifactServiceDelegatesReadAndDeleteOperations(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	info := artifact.SessionInfo{
+		AppName:   "safety-test",
+		UserID:    "user",
+		SessionID: "delegation",
+	}
+	base := inmemory.NewService()
+	service := NewRedactingArtifactService(base)
+
+	for _, data := range []string{"first", "second"} {
+		if _, err := service.SaveArtifact(
+			ctx,
+			info,
+			"result.txt",
+			&artifact.Artifact{
+				Data:     []byte(data),
+				MimeType: "text/plain",
+			},
+		); err != nil {
+			t.Fatalf("SaveArtifact() error = %v", err)
+		}
+	}
+
+	loaded, err := service.LoadArtifact(ctx, info, "result.txt", nil)
+	if err != nil {
+		t.Fatalf("LoadArtifact() error = %v", err)
+	}
+	if loaded == nil || string(loaded.Data) != "second" {
+		t.Fatalf("LoadArtifact() = %+v, want latest artifact", loaded)
+	}
+
+	keys, err := service.ListArtifactKeys(ctx, info)
+	if err != nil {
+		t.Fatalf("ListArtifactKeys() error = %v", err)
+	}
+	if len(keys) != 1 || keys[0] != "result.txt" {
+		t.Fatalf("ListArtifactKeys() = %v, want [result.txt]", keys)
+	}
+
+	versions, err := service.ListVersions(ctx, info, "result.txt")
+	if err != nil {
+		t.Fatalf("ListVersions() error = %v", err)
+	}
+	if len(versions) != 2 || versions[0] != 0 || versions[1] != 1 {
+		t.Fatalf("ListVersions() = %v, want [0 1]", versions)
+	}
+
+	if err := service.DeleteArtifact(ctx, info, "result.txt"); err != nil {
+		t.Fatalf("DeleteArtifact() error = %v", err)
+	}
+	loaded, err = service.LoadArtifact(ctx, info, "result.txt", nil)
+	if err != nil {
+		t.Fatalf("LoadArtifact(deleted) error = %v", err)
+	}
+	if loaded != nil {
+		t.Fatalf("LoadArtifact(deleted) = %+v, want nil", loaded)
+	}
+}
+
+func TestRedactingArtifactServiceRequiresDelegate(t *testing.T) {
+	ctx := context.Background()
+	service := &RedactingArtifactService{}
+	info := artifact.SessionInfo{}
+	assertDelegateError := func(name string, err error) {
+		t.Helper()
+		if err == nil || !strings.Contains(err.Error(), "delegate is required") {
+			t.Errorf("%s error = %v, want missing delegate", name, err)
+		}
+	}
+
+	_, err := service.SaveArtifact(ctx, info, "result.txt", nil)
+	assertDelegateError("SaveArtifact", err)
+	_, err = service.LoadArtifact(ctx, info, "result.txt", nil)
+	assertDelegateError("LoadArtifact", err)
+	_, err = service.ListArtifactKeys(ctx, info)
+	assertDelegateError("ListArtifactKeys", err)
+	assertDelegateError(
+		"DeleteArtifact",
+		service.DeleteArtifact(ctx, info, "result.txt"),
+	)
+	_, err = service.ListVersions(ctx, info, "result.txt")
+	assertDelegateError("ListVersions", err)
+}
