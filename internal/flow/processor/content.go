@@ -1010,6 +1010,11 @@ type eventHistoryCutoff struct {
 	lastEventIndex int
 }
 
+type historyTurnKey struct {
+	requestID    string
+	invocationID string
+}
+
 func newEventHistoryCutoff(
 	events []event.Event,
 	cutoff summaryHistoryCutoff,
@@ -1322,6 +1327,13 @@ func (p *ContentRequestProcessor) getIncrementMessagesAfterCutoff(
 			inv.AgentName,
 		)
 	}
+	resultEvents = p.restoreUserEventsAcrossCutoff(
+		resultEvents,
+		sessionEvents,
+		inv,
+		filter,
+		eventCutoff,
+	)
 
 	// Get current request ID for reasoning content filtering.
 	currentRequestID := inv.RunOptions.RequestID
@@ -1469,6 +1481,103 @@ func (p *ContentRequestProcessor) canMatchToolRound(
 	return isEventEligibleForInclusion(evt) &&
 		p.passTimelineFilter(evt, inv) &&
 		p.passBranchFilter(evt, filter)
+}
+
+// restoreUserEventsAcrossCutoff prepends the nearest covered user message to
+// each retained turn that would otherwise begin with an assistant or tool
+// message. It runs after transcript filtering and compaction so it does not
+// restore a user message whose remaining turn was omitted.
+func (p *ContentRequestProcessor) restoreUserEventsAcrossCutoff(
+	retained []event.Event,
+	all []event.Event,
+	inv *agent.Invocation,
+	filter string,
+	cutoff eventHistoryCutoff,
+) []event.Event {
+	if cutoff.IsZero() || len(retained) == 0 {
+		return retained
+	}
+
+	coveredUsers := make(map[historyTurnKey]event.Event)
+	tailStarted := make(map[historyTurnKey]struct{})
+	for i, evt := range all {
+		if !p.canMatchToolRound(evt, inv, filter) ||
+			messageorigin.IsSeedHistory(inv, evt.ID) {
+			continue
+		}
+		key, ok := historyTurnKeyForEvent(evt)
+		if !ok {
+			continue
+		}
+		role, ok := historyRoleForEvent(evt)
+		if !ok {
+			continue
+		}
+		if _, ok := tailStarted[key]; ok {
+			continue
+		}
+		if !cutoff.excludesEvent(i, evt) {
+			tailStarted[key] = struct{}{}
+			continue
+		}
+		if role == model.RoleUser {
+			coveredUsers[key] = evt
+		}
+	}
+	if len(coveredUsers) == 0 {
+		return retained
+	}
+
+	seen := make(map[historyTurnKey]struct{})
+	restored := make([]event.Event, 0, len(retained)+len(coveredUsers))
+	for _, evt := range retained {
+		key, ok := historyTurnKeyForEvent(evt)
+		if !ok {
+			restored = append(restored, evt)
+			continue
+		}
+		if _, ok := seen[key]; !ok {
+			seen[key] = struct{}{}
+			role, hasRole := historyRoleForEvent(evt)
+			if hasRole && inv != nil &&
+				p.isOtherAgentReply(inv.AgentName, inv.Branch, &evt) {
+				role = model.RoleUser
+			}
+			userEvt, hasCoveredUser := coveredUsers[key]
+			if hasCoveredUser &&
+				(role == model.RoleAssistant || role == model.RoleTool) {
+				restored = append(restored, userEvt)
+			}
+		}
+		restored = append(restored, evt)
+	}
+	return restored
+}
+
+func historyTurnKeyForEvent(evt event.Event) (historyTurnKey, bool) {
+	if evt.RequestID == "" || evt.InvocationID == "" {
+		return historyTurnKey{}, false
+	}
+	return historyTurnKey{
+		requestID:    evt.RequestID,
+		invocationID: evt.InvocationID,
+	}, true
+}
+
+func historyRoleForEvent(evt event.Event) (model.Role, bool) {
+	for _, choice := range evt.Choices {
+		msg := choice.Message
+		if msg.Role.IsValid() {
+			return msg.Role, true
+		}
+		if msg.ToolID != "" {
+			return model.RoleTool, true
+		}
+		if len(msg.ToolCalls) > 0 {
+			return model.RoleAssistant, true
+		}
+	}
+	return "", false
 }
 
 func addToolCallIDToRestore(
