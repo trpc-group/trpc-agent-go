@@ -495,8 +495,8 @@ func TestPermissionHelpers(t *testing.T) {
 }
 
 func TestJSONLAuditWriter_NilCancelledAndShortWrite(t *testing.T) {
-	require.NoError(t, (*JSONLAuditWriter)(nil).WriteAuditEvent(context.Background(), AuditEvent{}))
-	require.NoError(t, NewJSONLAuditWriter(nil).WriteAuditEvent(context.Background(), AuditEvent{}))
+	require.EqualError(t, (*JSONLAuditWriter)(nil).WriteAuditEvent(context.Background(), AuditEvent{}), "audit writer is nil")
+	require.EqualError(t, NewJSONLAuditWriter(nil).WriteAuditEvent(context.Background(), AuditEvent{}), "audit writer destination is nil")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -504,6 +504,27 @@ func TestJSONLAuditWriter_NilCancelledAndShortWrite(t *testing.T) {
 
 	err := NewJSONLAuditWriter(shortWriter{}).WriteAuditEvent(context.Background(), AuditEvent{})
 	require.Error(t, err)
+}
+
+func TestPermissionPolicy_AuditStrictFailsWithNilJSONLDestination(t *testing.T) {
+	policy := NewPermissionPolicy(
+		ScannerFunc(func(context.Context, ScanRequest) (Report, error) {
+			return Report{
+				ToolName:       "workspace_exec",
+				Backend:        BackendWorkspace,
+				Decision:       DecisionAllow,
+				RiskLevel:      RiskLow,
+				Recommendation: "safe",
+			}, nil
+		}),
+		WithAuditWriter(NewJSONLAuditWriter(nil)),
+		WithAuditFailureMode(AuditFailureModeStrict),
+	)
+	_, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"go test ./..."}`),
+	})
+	require.EqualError(t, err, "audit writer destination is nil")
 }
 
 type shortWriter struct{}

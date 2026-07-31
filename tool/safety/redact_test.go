@@ -77,6 +77,23 @@ func TestRedactString_RedactsSpaceSeparatedCredentialFlags(t *testing.T) {
 	require.NotContains(t, out, "hunter 2")
 }
 
+func TestRedactString_RedactsCurlCredentialFlags(t *testing.T) {
+	for _, input := range []string{
+		`curl -u alice:password https://allowed.example`,
+		`curl -ualice:password https://allowed.example`,
+		`curl --user alice:password https://allowed.example`,
+		`curl --user=alice:password https://allowed.example`,
+		`curl --proxy-user proxy:password https://allowed.example`,
+		`curl --oauth2-bearer bearer-token https://allowed.example`,
+	} {
+		out, redacted := redactString(input)
+		require.True(t, redacted, input)
+		require.NotContains(t, out, "alice:password", input)
+		require.NotContains(t, out, "proxy:password", input)
+		require.NotContains(t, out, "bearer-token", input)
+	}
+}
+
 func TestRedactString_NoSecretLeavesInput(t *testing.T) {
 	out, redacted := redactString("plain output")
 	require.False(t, redacted)

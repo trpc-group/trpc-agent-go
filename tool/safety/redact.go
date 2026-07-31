@@ -27,7 +27,9 @@ var secretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----`),
 }
 
-var credentialFlagPattern = regexp.MustCompile(`(?i)(--(?:api[-_]?key|access[-_]?token|refresh[-_]?token|id[-_]?token|oauth[-_]?token|session[-_]?token|csrf[-_]?token|xsrf[-_]?token|jwt[-_]?token|client[-_]?secret|password|passwd|secret|token)\b\s+)(?:"[^"]+"|'[^']+'|[^\s]+)`)
+var credentialFlagPattern = regexp.MustCompile(`(?i)(--(?:api[-_]?key|access[-_]?token|refresh[-_]?token|id[-_]?token|oauth[-_]?token|session[-_]?token|csrf[-_]?token|xsrf[-_]?token|jwt[-_]?token|client[-_]?secret|password|passwd|secret|token|user|proxy-user|oauth2-bearer)\b(?:\s+|=))(?:"[^"]+"|'[^']+'|[^\s]+)`)
+
+var shortCredentialFlagPattern = regexp.MustCompile(`(?i)(^|[\s])(-u)(?:(\s+)(?:"[^"]+"|'[^']+'|[^\s]+)|(?:"[^"]+"|'[^']+'|[^\s]+))`)
 
 func redactString(s string) (string, bool) {
 	redacted := false
@@ -52,6 +54,7 @@ func redactString(s string) (string, bool) {
 
 func redactCredentialFlags(s string) (string, bool) {
 	out := credentialFlagPattern.ReplaceAllString(s, `${1}<redacted>`)
+	out = shortCredentialFlagPattern.ReplaceAllString(out, `${1}${2}${3}<redacted>`)
 	return out, out != s
 }
 

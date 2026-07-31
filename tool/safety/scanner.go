@@ -47,6 +47,15 @@ func (s *DefaultScanner) Scan(ctx context.Context, req ScanRequest) (Report, err
 	}
 	if req.Backend == "" {
 		req.Backend = BackendUnknown
+		findings := []Finding{{
+			RuleID:         "backend.missing",
+			RiskLevel:      RiskCritical,
+			Decision:       DecisionDeny,
+			Evidence:       "backend is required for safety scanning",
+			Recommendation: "set an explicit supported safety backend before tool execution",
+		}}
+		report := buildReport(req, findings, time.Since(start))
+		return normalizeReportText(report, s.policy.DeniedPaths), nil
 	}
 	var findings []Finding
 	if !req.Backend.Valid() {
@@ -79,7 +88,9 @@ func (s *DefaultScanner) scanRequest(ctx context.Context, req ScanRequest) []Fin
 	default:
 	}
 	var findings []Finding
-	findings = append(findings, s.scanSize(req)...)
+	if sizeFindings := s.scanSize(req); len(sizeFindings) > 0 {
+		return sizeFindings
+	}
 	findings = append(findings, s.scanEnv(req.Env)...)
 	findings = append(findings, s.scanCwd(req)...)
 	findings = append(findings, s.scanCollectionPaths(req)...)
@@ -151,6 +162,36 @@ func (s *DefaultScanner) scanSize(req ScanRequest) []Finding {
 			Recommendation: "review long generated commands manually",
 		})
 	}
+	if s.policy.MaxCommandBytes > 0 && len(req.Args) > 0 {
+		argumentBytes := len(strings.Join(req.Args, " "))
+		if argumentBytes > s.policy.MaxCommandBytes {
+			findings = append(findings, Finding{
+				RuleID:         "command.too_large",
+				RiskLevel:      RiskHigh,
+				Decision:       DecisionNeedsHumanReview,
+				Evidence:       fmt.Sprintf("arguments have %d bytes, exceeds max_command_bytes=%d", argumentBytes, s.policy.MaxCommandBytes),
+				Recommendation: "review long generated arguments manually",
+			})
+		}
+	}
+	if s.policy.MaxCommandBytes > 0 && len(req.Stdin) > s.policy.MaxCommandBytes {
+		findings = append(findings, Finding{
+			RuleID:         "command.too_large",
+			RiskLevel:      RiskHigh,
+			Decision:       DecisionNeedsHumanReview,
+			Evidence:       fmt.Sprintf("stdin has %d bytes, exceeds max_command_bytes=%d", len(req.Stdin), s.policy.MaxCommandBytes),
+			Recommendation: "review large stdin payloads manually",
+		})
+	}
+	if s.policy.MaxCommandBytes > 0 && len(req.RawArguments) > s.policy.MaxCommandBytes {
+		findings = append(findings, Finding{
+			RuleID:         "unknown.bounded_scan",
+			RiskLevel:      RiskHigh,
+			Decision:       DecisionNeedsHumanReview,
+			Evidence:       fmt.Sprintf("raw arguments have %d bytes, exceeds max_command_bytes=%d", len(req.RawArguments), s.policy.MaxCommandBytes),
+			Recommendation: "review large unknown tool arguments manually before execution",
+		})
+	}
 	if s.policy.MaxScriptBytes > 0 && len(req.Code) > s.policy.MaxScriptBytes {
 		findings = append(findings, Finding{
 			RuleID:         "script.too_large",
@@ -158,6 +199,15 @@ func (s *DefaultScanner) scanSize(req ScanRequest) []Finding {
 			Decision:       DecisionNeedsHumanReview,
 			Evidence:       fmt.Sprintf("script has %d bytes", len(req.Code)),
 			Recommendation: "review large scripts manually",
+		})
+	}
+	if s.policy.MaxScriptBytes > 0 && len(req.EditorText) > s.policy.MaxScriptBytes {
+		findings = append(findings, Finding{
+			RuleID:         "script.too_large",
+			RiskLevel:      RiskHigh,
+			Decision:       DecisionNeedsHumanReview,
+			Evidence:       fmt.Sprintf("editor text has %d bytes, exceeds max_script_bytes=%d", len(req.EditorText), s.policy.MaxScriptBytes),
+			Recommendation: "review large editor payloads manually",
 		})
 	}
 	return findings

@@ -95,6 +95,19 @@ func (s *DefaultScanner) scanNetwork(cmd string, argv []string) []Finding {
 			Recommendation: "remove curl destination-routing options or review the effective destination",
 		}}
 	}
+	if hasNetworkConfigurationOverride(cmd, argv) {
+		decision := DecisionAsk
+		if len(s.policy.NetworkAllowlist) > 0 {
+			decision = DecisionDeny
+		}
+		return []Finding{{
+			RuleID:         "network.configuration_override",
+			RiskLevel:      RiskHigh,
+			Decision:       decision,
+			Evidence:       "network client configuration override requires an explicit network review",
+			Recommendation: "remove opaque curl or wget configuration options or review the effective network settings",
+		}}
+	}
 	if len(hosts) == 0 {
 		decision := DecisionAsk
 		if len(s.policy.NetworkAllowlist) > 0 {
@@ -206,6 +219,37 @@ func hasNetworkDestinationOverride(cmd string, argv []string) bool {
 		}
 	}
 	return false
+}
+
+func hasNetworkConfigurationOverride(cmd string, argv []string) bool {
+	if cmd != "curl" && cmd != "wget" {
+		return false
+	}
+	for i := 1; i < len(argv); i++ {
+		if argv[i] == "--" {
+			break
+		}
+		option := parseNetworkOption(cmd, argv, i)
+		if networkConfigurationOverrideOption(cmd, option.name) &&
+			strings.TrimSpace(option.value) != "" {
+			return true
+		}
+		if option.consumesNext {
+			i++
+		}
+	}
+	return false
+}
+
+func networkConfigurationOverrideOption(cmd, option string) bool {
+	switch cmd {
+	case "curl":
+		return option == "-K" || option == "--config"
+	case "wget":
+		return option == "--config" || option == "--execute"
+	default:
+		return false
+	}
 }
 
 func curlDestinationOverrideOption(option string) bool {

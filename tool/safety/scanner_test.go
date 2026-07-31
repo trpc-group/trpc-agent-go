@@ -346,6 +346,22 @@ func TestDefaultScanner_RejectsUnsupportedBackend(t *testing.T) {
 	require.Contains(t, report.Evidence, `unsupported backend "HOST"`)
 }
 
+func TestDefaultScanner_RejectsMissingBackend(t *testing.T) {
+	report, err := MustDefaultScanner(Policy{}).Scan(context.Background(), ScanRequest{
+		ToolName:   "exec_command",
+		Command:    "python -i",
+		Background: true,
+		TTY:        true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, BackendUnknown, report.Backend)
+	require.Equal(t, DecisionDeny, report.Decision)
+	require.Equal(t, RiskCritical, report.RiskLevel)
+	require.Equal(t, "backend.missing", report.RuleID)
+	require.True(t, report.Blocked)
+	require.Equal(t, "backend is required for safety scanning", report.Evidence)
+}
+
 func TestDefaultScanner_DeniesProcessControlEnvWithoutAllowlist(t *testing.T) {
 	report, err := MustDefaultScanner(Policy{}).Scan(context.Background(), ScanRequest{
 		ToolName: "exec_command",
@@ -671,6 +687,59 @@ func TestDefaultScanner_EdgeCoverageCases(t *testing.T) {
 		require.Contains(t, []string{"command.too_large", "script.too_large"}, report.RuleID)
 	})
 
+	t.Run("oversized structured payloads stop content scanning", func(t *testing.T) {
+		scanner := MustDefaultScanner(Policy{
+			MaxCommandBytes: 4,
+			MaxScriptBytes:  4,
+		})
+		cases := []struct {
+			name   string
+			req    ScanRequest
+			ruleID string
+		}{
+			{
+				name:   "command",
+				req:    ScanRequest{Backend: BackendWorkspace, Command: "rm -rf /tmp/x"},
+				ruleID: "command.too_large",
+			},
+			{
+				name:   "args",
+				req:    ScanRequest{Backend: BackendWorkspace, Args: []string{"rm", "-rf", "/tmp/x"}},
+				ruleID: "command.too_large",
+			},
+			{
+				name:   "stdin",
+				req:    ScanRequest{Backend: BackendWorkspace, Command: "cat", Stdin: "rm -rf /tmp/x"},
+				ruleID: "command.too_large",
+			},
+			{
+				name:   "raw arguments",
+				req:    ScanRequest{Backend: BackendUnknown, RawArguments: []byte(`{"command":"rm -rf /tmp/x"}`)},
+				ruleID: "unknown.bounded_scan",
+			},
+			{
+				name:   "code",
+				req:    ScanRequest{Backend: BackendCodeExec, Code: "rm -rf /tmp/x"},
+				ruleID: "script.too_large",
+			},
+			{
+				name:   "editor text",
+				req:    ScanRequest{Backend: BackendWorkspace, EditorText: "password=hunter2"},
+				ruleID: "script.too_large",
+			},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				report, err := scanner.Scan(context.Background(), tc.req)
+				require.NoError(t, err)
+				require.Equal(t, DecisionNeedsHumanReview, report.Decision)
+				require.Equal(t, tc.ruleID, report.RuleID)
+				require.Len(t, report.Findings, 1)
+				require.False(t, report.Redacted)
+			})
+		}
+	})
+
 	t.Run("timeout host request denies", func(t *testing.T) {
 		report, err := MustDefaultScanner(Policy{MaxTimeoutSec: 5}).Scan(
 			context.Background(),
@@ -790,7 +859,6 @@ func TestDefaultScanner_NetworkAndCodeEdges(t *testing.T) {
 			"curl -o release.tar.gz https://allowed.example",
 			"curl --output release.tar.gz https://allowed.example",
 			"curl -d payload.json https://allowed.example",
-			"curl -K curl.conf https://allowed.example",
 			"wget -O release.tar.gz https://allowed.example",
 			"wget --output-document release.tar.gz https://allowed.example",
 			"wget --post-file payload.json https://allowed.example",
@@ -806,6 +874,31 @@ func TestDefaultScanner_NetworkAndCodeEdges(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, DecisionAllow, report.Decision, command)
 			require.Equal(t, "evaluation.none", report.RuleID, command)
+		}
+	})
+
+	t.Run("network configuration overrides are denied with allowlist", func(t *testing.T) {
+		commands := []string{
+			"curl -K curl.conf https://allowed.example",
+			"curl -Kcurl.conf https://allowed.example",
+			"curl --config curl.conf https://allowed.example",
+			"curl --config=curl.conf https://allowed.example",
+			"wget --config wgetrc https://allowed.example",
+			"wget --config=wgetrc https://allowed.example",
+			"wget --execute use_proxy=no https://allowed.example",
+			"wget --execute=use_proxy=no https://allowed.example",
+		}
+		for _, command := range commands {
+			report, err := MustDefaultScanner(Policy{
+				NetworkAllowlist: []string{"allowed.example"},
+			}).Scan(context.Background(), ScanRequest{
+				ToolName: "workspace_exec",
+				Backend:  BackendWorkspace,
+				Command:  command,
+			})
+			require.NoError(t, err)
+			require.Equal(t, DecisionDeny, report.Decision, command)
+			require.Equal(t, "network.configuration_override", report.RuleID, command)
 		}
 	})
 
@@ -850,6 +943,23 @@ func TestDefaultScanner_NetworkAndCodeEdges(t *testing.T) {
 		encoded, err := json.Marshal(report)
 		require.NoError(t, err)
 		require.NotContains(t, string(encoded), "s3cr3t")
+	})
+
+	t.Run("curl authentication flags are denied and redacted", func(t *testing.T) {
+		report, err := MustDefaultScanner(Policy{
+			NetworkAllowlist: []string{"allowed.example"},
+		}).Scan(context.Background(), ScanRequest{
+			ToolName: "workspace_exec",
+			Backend:  BackendWorkspace,
+			Command:  "curl -u alice:password --proxy-user=proxy:password --oauth2-bearer bearer-token https://allowed.example",
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionDeny, report.Decision)
+		require.Equal(t, "secret.inline_value", report.RuleID)
+		require.True(t, report.Redacted)
+		require.NotContains(t, report.Command, "alice:password")
+		require.NotContains(t, report.Command, "proxy:password")
+		require.NotContains(t, report.Command, "bearer-token")
 	})
 
 	t.Run("benign token metadata is not a secret", func(t *testing.T) {

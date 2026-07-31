@@ -11,6 +11,7 @@ package safety
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"sort"
 	"strings"
@@ -55,8 +56,11 @@ func (w *JSONLAuditWriter) WriteAuditEvent(
 	ctx context.Context,
 	ev AuditEvent,
 ) error {
-	if w == nil || w.w == nil {
-		return nil
+	if w == nil {
+		return errors.New("audit writer is nil")
+	}
+	if w.w == nil {
+		return errors.New("audit writer destination is nil")
 	}
 	select {
 	case <-ctx.Done():
