@@ -1306,3 +1306,96 @@ func TestExecuteToolCall_ResultFormatterDoesNotTraverseOrdinaryUnwrap(t *testing
 		choices[0].Message.Content,
 	)
 }
+
+// TestHandleFunctionCalls_FormatterFailureKeepsStateDelta pins that a result
+// formatter is a presentation hook. When it fails, the model is told the result
+// could not be rendered, but the session still records what the tool already
+// did, so external state and session state cannot drift apart.
+func TestHandleFunctionCalls_FormatterFailureKeepsStateDelta(t *testing.T) {
+	for _, parallel := range []bool{false, true} {
+		t.Run(fmt.Sprintf("parallel=%t", parallel), func(t *testing.T) {
+			var toolCalls atomic.Int32
+			stateful := &statefulFunctionTool[struct{}, resultFormatTestResult]{
+				FunctionTool: function.NewFunctionTool(
+					func(context.Context, struct{}) (resultFormatTestResult, error) {
+						toolCalls.Add(1)
+						return resultFormatTestResult{
+							ExitCode: 0,
+							Output:   "stateful",
+						}, nil
+					},
+					function.WithName("stateful"),
+					function.WithResultFormatter(
+						resultformat.FormatterFunc[resultFormatTestResult](func(
+							context.Context,
+							resultFormatTestResult,
+						) (string, error) {
+							return "", errors.New("format failed")
+						}),
+					),
+				),
+			}
+			// Parallel execution only engages with more than one tool call.
+			sibling := function.NewFunctionTool(
+				func(context.Context, struct{}) (resultFormatTestResult, error) {
+					return resultFormatTestResult{Output: "sibling"}, nil
+				},
+				function.WithName("sibling"),
+			)
+			llmResponse := &model.Response{Choices: []model.Choice{{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{
+						{
+							ID: "call-1",
+							Function: model.FunctionDefinitionParam{
+								Name:      "stateful",
+								Arguments: []byte(`{}`),
+							},
+						},
+						{
+							ID: "call-2",
+							Function: model.FunctionDefinitionParam{
+								Name:      "sibling",
+								Arguments: []byte(`{}`),
+							},
+						},
+					},
+				},
+			}}}
+
+			evt, err := NewFunctionCallResponseProcessor(
+				parallel,
+				nil,
+			).handleFunctionCalls(
+				context.Background(),
+				&agent.Invocation{
+					AgentName: "agent",
+					Model:     &mockModel{},
+					Session:   &session.Session{},
+				},
+				llmResponse,
+				map[string]tool.Tool{
+					"stateful": stateful,
+					"sibling":  sibling,
+				},
+				make(chan *event.Event, 32),
+			)
+
+			require.NoError(t, err)
+			require.NotNil(t, evt)
+			require.Len(t, evt.Choices, 2)
+			// The failure is in rendering, so the tool is not retried.
+			assert.Equal(t, int32(1), toolCalls.Load())
+			assert.Equal(t, "call-1", evt.Choices[0].Message.ToolID)
+			assert.Contains(
+				t,
+				evt.Choices[0].Message.Content,
+				ErrorFormatResult,
+			)
+			assert.Equal(t, 1, stateful.stateDeltaCalls)
+			assert.Equal(t, statefulResultJSON, string(stateful.stateContent))
+			assert.Equal(t, []byte("updated"), evt.StateDelta["state"])
+		})
+	}
+}

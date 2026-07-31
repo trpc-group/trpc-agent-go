@@ -154,10 +154,17 @@ func (e *toolResultRoundError) Unwrap() error {
 }
 
 type toolCallExecution struct {
-	ctx               context.Context
-	choices           []model.Choice
-	modifiedArgs      []byte
-	stateDeltaInput   []byte
+	ctx          context.Context
+	choices      []model.Choice
+	modifiedArgs []byte
+	// stateDeltaInput carries the content consumed by the tool state protocol,
+	// as documented on toolEventStateDelta. It is populated even when rendering
+	// the result later fails.
+	stateDeltaInput []byte
+	// toolSucceeded reports that the tool and its AfterTool callbacks completed.
+	// A later failure while rendering the result is a presentation failure, so
+	// the effects the tool already had on session state must still be recorded.
+	toolSucceeded     bool
 	shouldIgnoreError bool
 	skipSummarization bool
 }
@@ -1524,7 +1531,10 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequentialResult(
 	}
 	decl := p.lookupDeclaration(tools, toolCall.Function.Name)
 	var stateDelta *toolEventStateDelta
-	if err == nil {
+	// A failure raised after the tool ran, such as a result formatter error,
+	// only prevents the framework from rendering the result. The tool already
+	// took effect, so its session-state consequences must still be recorded.
+	if err == nil || execution.toolSucceeded {
 		markSessionAutoMemoryPolluted(
 			invocation,
 			toolEvent,
@@ -1863,8 +1873,9 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 			index, tc.ID, fmt.Sprintf("tool execution error: %v", err),
 		)
 		errorChoice.Message.ToolName = tc.Function.Name
+		errorChoices := []model.Choice{*errorChoice}
 		errorEvent := newToolCallResponseEvent(
-			invocation, llmResponse, []model.Choice{*errorChoice},
+			invocation, llmResponse, errorChoices,
 		)
 		annotateToolCallArgs(errorEvent, tc, modifiedArgs)
 		errorEvent = p.decorateToolCallResponseEvent(
@@ -1874,16 +1885,37 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 			execution.skipSummarization,
 			!shouldSkipToolSkipSummarization(ctx),
 		)
+		// A failure raised after the tool ran, such as a result formatter
+		// error, only prevents the framework from rendering the result. The
+		// tool already took effect, so its session-state consequences must
+		// still be recorded, matching sequential execution.
+		var stateDelta *toolEventStateDelta
+		if execution.toolSucceeded {
+			markSessionAutoMemoryPolluted(
+				invocation,
+				errorEvent,
+				tools[tc.Function.Name],
+				tc.Function.Name,
+			)
+			stateDelta = p.buildToolEventStateDelta(
+				ctx,
+				invocation,
+				modifiedArgs,
+				errorChoices,
+				execution.stateDeltaInput,
+			)
+		}
 		// Only propagate the error if it's not ignorable (e.g., stop errors)
 		var returnErr error
 		if !execution.shouldIgnoreError {
 			returnErr = err
 		}
 		sendResult(toolResult{
-			index:    index,
-			event:    errorEvent,
-			err:      returnErr,
-			toolArgs: modifiedArgs,
+			index:      index,
+			event:      errorEvent,
+			err:        returnErr,
+			stateDelta: stateDelta,
+			toolArgs:   modifiedArgs,
 		})
 		// Return the critical error so the errgroup cancels siblings.
 		// Ignorable errors return nil here and travel only via toolResult.err.
@@ -2641,6 +2673,7 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 		return execution, err
 	}
 	execution.shouldIgnoreError = true
+	execution.toolSucceeded = true
 	//  allow to return nil not provide function response.
 	if r, ok := itool.ResolveDeclaration(tl).(function.LongRunner); ok && r.LongRunning() {
 		if result == nil {
@@ -2672,6 +2705,9 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 			toolCall.Function.Name,
 			err,
 		)
+		// Rendering failed after the tool ran. No callback observed the result,
+		// so the framework default stands as the state protocol content.
+		execution.stateDeltaInput = stateDeltaInput
 		return execution, err
 	}
 	defaultMsg.ToolName = toolCall.Function.Name
