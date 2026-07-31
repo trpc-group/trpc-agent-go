@@ -23,6 +23,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -772,6 +773,146 @@ func TestExecuteWithFailureFailBeforeRetry(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, 1, calls)
+}
+
+func TestExecuteWithFailureFailAfterConfirmedDoesNotRetry(t *testing.T) {
+	operationCalls := 0
+	confirmCalls := 0
+
+	err := executeWithFailure(
+		func() error {
+			operationCalls++
+			return nil
+		},
+		&FailureInput{
+			FailAfter: true,
+			Retry:     true,
+		},
+		func() (bool, error) {
+			confirmCalls++
+			return true, nil
+		},
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, 1, operationCalls)
+	require.Equal(t, 1, confirmCalls)
+}
+
+func TestReplayMemoryFailAfterConfirmsBeforeRetry(t *testing.T) {
+	ctx := context.Background()
+	backend, err := (InMemoryBackendFactory{}).Create(ctx, BackendConfig{})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, backend.Close())
+	})
+
+	service, ok := backend.(*serviceBackend)
+	require.True(t, ok)
+	counting := &countingMemoryService{Service: service.memoryService}
+	service.memoryService = counting
+	state := &replayState{
+		appName:   "replay-app",
+		userID:    "replay-user",
+		sessions:  make(map[string]*session.Session),
+		memoryIDs: make(map[string]string),
+	}
+
+	add := ReplayAction{
+		Action: ActionAddMemory,
+		Memory: &MemoryInput{
+			Ref:     "fact",
+			Content: "original fact",
+			Topics:  []string{"retry"},
+			Kind:    memory.KindFact,
+		},
+		Failure: &FailureInput{FailAfter: true, Retry: true},
+	}
+	require.NoError(t, executeReplayAction(ctx, backend, state, add))
+	require.Equal(t, 1, counting.addCalls)
+	require.NotEmpty(t, state.memoryIDs["fact"])
+
+	update := ReplayAction{
+		Action: ActionUpdateMemory,
+		Memory: &MemoryInput{
+			Ref:     "fact",
+			Content: "updated fact",
+			Topics:  []string{"confirmed", "retry"},
+			Kind:    memory.KindFact,
+		},
+		Failure: &FailureInput{FailAfter: true, Retry: true},
+	}
+	require.NoError(t, executeReplayAction(ctx, backend, state, update))
+	require.Equal(t, 1, counting.updateCalls)
+
+	entries, err := counting.ReadMemories(
+		ctx,
+		memory.UserKey{AppName: state.appName, UserID: state.userID},
+		0,
+	)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Equal(t, "updated fact", entries[0].Memory.Memory)
+	require.ElementsMatch(
+		t,
+		[]string{"confirmed", "retry"},
+		entries[0].Memory.Topics,
+	)
+
+	remove := ReplayAction{
+		Action:  ActionDeleteMemory,
+		Memory:  &MemoryInput{Ref: "fact"},
+		Failure: &FailureInput{FailAfter: true, Retry: true},
+	}
+	require.NoError(t, executeReplayAction(ctx, backend, state, remove))
+	require.Equal(t, 1, counting.deleteCalls)
+	_, exists := state.memoryIDs["fact"]
+	require.False(t, exists)
+
+	entries, err = counting.ReadMemories(
+		ctx,
+		memory.UserKey{AppName: state.appName, UserID: state.userID},
+		0,
+	)
+	require.NoError(t, err)
+	require.Empty(t, entries)
+}
+
+type countingMemoryService struct {
+	memory.Service
+	addCalls    int
+	updateCalls int
+	deleteCalls int
+}
+
+func (s *countingMemoryService) AddMemory(
+	ctx context.Context,
+	userKey memory.UserKey,
+	memoryText string,
+	topics []string,
+	opts ...memory.AddOption,
+) error {
+	s.addCalls++
+	return s.Service.AddMemory(ctx, userKey, memoryText, topics, opts...)
+}
+
+func (s *countingMemoryService) UpdateMemory(
+	ctx context.Context,
+	key memory.Key,
+	memoryText string,
+	topics []string,
+	opts ...memory.UpdateOption,
+) error {
+	s.updateCalls++
+	return s.Service.UpdateMemory(ctx, key, memoryText, topics, opts...)
+}
+
+func (s *countingMemoryService) DeleteMemory(
+	ctx context.Context,
+	key memory.Key,
+) error {
+	s.deleteCalls++
+	return s.Service.DeleteMemory(ctx, key)
 }
 
 func TestReplayActionValidateAssertMemoryRequiresExpectation(t *testing.T) {

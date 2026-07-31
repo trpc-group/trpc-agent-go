@@ -1,5 +1,12 @@
-{"action":"metadata","version":1,"id":"09_postwrite_retry","description":"idempotent memory retry after an ambiguous write result"}
+{"action":"metadata","version":1,"id":"09_postwrite_retry","description":"confirm ambiguous memory add, update, and delete results before retrying"}
 {"action":"create_session","session_id":"session-09"}
 {"action":"add_memory","failure":{"fail_after":true,"retry":true},"memory":{"ref":"retry-memory","content":"需要幂等保存的事实","topics":["retry"],"kind":"fact"}}
-{"action":"checkpoint","checkpoint":"after-retry"}
+{"action":"checkpoint","checkpoint":"after-add-retry"}
 {"action":"assert_memory","expected_memory":{"count":1,"contains":[{"ref":"retry-memory","content":"需要幂等保存的事实"}]}}
+{"action":"update_memory","failure":{"fail_after":true,"retry":true},"memory":{"ref":"retry-memory","content":"已确认落库后不应重复更新的事实","topics":["confirmed","retry"],"kind":"fact"}}
+{"action":"checkpoint","checkpoint":"after-update-retry"}
+{"action":"assert_memory","expected_memory":{"count":1,"contains":[{"ref":"retry-memory","content":"已确认落库后不应重复更新的事实","topics":["retry","confirmed"]}]}}
+{"action":"add_memory","memory":{"ref":"temporary-memory","content":"删除重试使用的临时记忆","topics":["temporary"],"kind":"fact"}}
+{"action":"delete_memory","failure":{"fail_after":true,"retry":true},"memory":{"ref":"temporary-memory"}}
+{"action":"checkpoint","checkpoint":"after-delete-retry"}
+{"action":"assert_memory","expected_memory":{"count":1,"contains":[{"ref":"retry-memory","content":"已确认落库后不应重复更新的事实"}]}}

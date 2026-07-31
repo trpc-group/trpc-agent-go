@@ -1,3 +1,3 @@
-# 回放一致性设计
+# 多后端回放一致性设计
 
-框架按 JSONL 执行 Event、State、Memory、Summary、Track 动作，经公开 API 读回快照。规范化只处理 UTC、JSON、集合顺序和 nil/empty，保留事件与 Track 顺序。Summary 比较 filter-key、正文、Session 归属、版本、更新时间和 Boundary；Track 比较名称、时间及 payload。交错 fixture 模拟工具与子 Agent 模拟交错顺序。差异须用 `allowed_diff` 声明路径、后端和原因。默认比较 InMemory、SQLite、miniredis，可接入真实 Redis。
+框架将同一组轨迹写入多个后端，再经公共接口读回快照。归一化只消除非业务差异：时间转为 UTC、规范 JSON、统一空值、排序无序集合并稳定替换记忆 ID；事件与单条观测轨迹内的顺序保持不变。摘要按 filter-key 比较正文、主题、会话归属、版本、更新时间和截断边界；观测轨迹按名称、下标、时间及载荷比较。allowed_diff 以路径、可选后端和必填原因声明例外，命中项仍进入报告。新增后端需实现 BackendFactory，提供隔离的会话、记忆服务和清理逻辑并完成注册；当前支持 InMemory、SQLite、Redis。

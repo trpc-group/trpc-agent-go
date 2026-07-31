@@ -701,6 +701,13 @@ func Replay(ctx context.Context, backend Backend, tc ReplayCase, appName, userID
 }
 
 func executeReplayAction(ctx context.Context, backend Backend, state *replayState, action ReplayAction) error {
+	memoryUserKey := memory.UserKey{
+		AppName: state.appName,
+		UserID:  state.userID,
+	}
+	var memoryOriginalID string
+	var memoryEffectiveID string
+
 	op := func() error {
 		switch action.Action {
 		case ActionCreateSession:
@@ -746,19 +753,18 @@ func executeReplayAction(ctx context.Context, backend Backend, state *replayStat
 			key := session.Key{AppName: state.appName, UserID: state.userID, SessionID: action.SessionID}
 			return backend.SessionService().UpdateSessionState(ctx, key, rawState(action.State))
 		case ActionAddMemory:
-			userKey := memory.UserKey{AppName: state.appName, UserID: state.userID}
 			opts, err := addMemoryOptions(action.Memory)
 			if err != nil {
 				return err
 			}
-			beforeIDs, err := readReplayMemoryIDs(ctx, backend, userKey)
+			beforeIDs, err := readReplayMemoryIDs(ctx, backend, memoryUserKey)
 			if err != nil {
 				return err
 			}
 
 			if err := backend.MemoryService().AddMemory(
 				ctx,
-				userKey,
+				memoryUserKey,
 				action.Memory.Content,
 				action.Memory.Topics,
 				opts...,
@@ -766,16 +772,16 @@ func executeReplayAction(ctx context.Context, backend Backend, state *replayStat
 				return err
 			}
 
-			afterIDs, err := readReplayMemoryIDs(ctx, backend, userKey)
+			afterIDs, err := readReplayMemoryIDs(ctx, backend, memoryUserKey)
 			if err != nil {
 				return err
 			}
 
 			memoryID, err := resolveAddedMemoryID(beforeIDs, afterIDs)
 			if err != nil {
-				if existingID, ok := state.memoryIDs[action.Memory.Ref]; ok &&
+				if memoryEffectiveID != "" &&
 					memoryIDSetsEqual(beforeIDs, afterIDs) {
-					if _, exists := afterIDs[existingID]; exists {
+					if _, exists := afterIDs[memoryEffectiveID]; exists {
 						return nil
 					}
 				}
@@ -786,12 +792,16 @@ func executeReplayAction(ctx context.Context, backend Backend, state *replayStat
 				)
 			}
 
-			state.memoryIDs[action.Memory.Ref] = memoryID
+			memoryEffectiveID = memoryID
 			return nil
 		case ActionUpdateMemory:
-			memoryID, ok := state.memoryIDs[action.Memory.Ref]
-			if !ok {
-				return fmt.Errorf("unknown memory ref %q", action.Memory.Ref)
+			if memoryEffectiveID == "" {
+				memoryID, ok := state.memoryIDs[action.Memory.Ref]
+				if !ok {
+					return fmt.Errorf("unknown memory ref %q", action.Memory.Ref)
+				}
+				memoryOriginalID = memoryID
+				memoryEffectiveID = memoryID
 			}
 			metadata, err := memoryMetadata(action.Memory)
 			if err != nil {
@@ -802,25 +812,35 @@ func executeReplayAction(ctx context.Context, backend Backend, state *replayStat
 			if metadata != nil {
 				opts = append(opts, memory.WithUpdateMetadata(metadata))
 			}
-			key := memory.Key{AppName: state.appName, UserID: state.userID, MemoryID: memoryID}
+			key := memory.Key{
+				AppName:  state.appName,
+				UserID:   state.userID,
+				MemoryID: memoryEffectiveID,
+			}
 			if err := backend.MemoryService().UpdateMemory(ctx, key,
 				action.Memory.Content, action.Memory.Topics, opts...); err != nil {
 				return err
 			}
 			if updateResult.MemoryID != "" {
-				state.memoryIDs[action.Memory.Ref] = updateResult.MemoryID
+				memoryEffectiveID = updateResult.MemoryID
 			}
 			return nil
 		case ActionDeleteMemory:
-			memoryID, ok := state.memoryIDs[action.Memory.Ref]
-			if !ok {
-				return fmt.Errorf("unknown memory ref %q", action.Memory.Ref)
+			if memoryOriginalID == "" {
+				memoryID, ok := state.memoryIDs[action.Memory.Ref]
+				if !ok {
+					return fmt.Errorf("unknown memory ref %q", action.Memory.Ref)
+				}
+				memoryOriginalID = memoryID
 			}
-			key := memory.Key{AppName: state.appName, UserID: state.userID, MemoryID: memoryID}
+			key := memory.Key{
+				AppName:  state.appName,
+				UserID:   state.userID,
+				MemoryID: memoryOriginalID,
+			}
 			if err := backend.MemoryService().DeleteMemory(ctx, key); err != nil {
 				return err
 			}
-			delete(state.memoryIDs, action.Memory.Ref)
 			return nil
 		case ActionCreateSummary:
 			sess, err := getReplaySession(ctx, backend, state, action.SessionID)
@@ -912,8 +932,112 @@ func executeReplayAction(ctx context.Context, backend Backend, state *replayStat
 			sess.SummariesMu.RUnlock()
 			return summary != nil, nil
 		}
+	case ActionAddMemory, ActionUpdateMemory:
+		confirm = func() (bool, error) {
+			return confirmReplayMemoryWrite(
+				ctx,
+				backend,
+				memoryUserKey,
+				memoryEffectiveID,
+				action.Memory,
+			)
+		}
+	case ActionDeleteMemory:
+		confirm = func() (bool, error) {
+			if memoryOriginalID == "" {
+				return false, errors.New("delete memory has no original ID")
+			}
+			ids, err := readReplayMemoryIDs(ctx, backend, memoryUserKey)
+			if err != nil {
+				return false, err
+			}
+			_, exists := ids[memoryOriginalID]
+			return !exists, nil
+		}
 	}
-	return executeWithFailure(op, action.Failure, confirm)
+	if err := executeWithFailure(op, action.Failure, confirm); err != nil {
+		return err
+	}
+
+	switch action.Action {
+	case ActionAddMemory, ActionUpdateMemory:
+		if memoryEffectiveID == "" {
+			return fmt.Errorf("%s produced no effective memory ID", action.Action)
+		}
+		state.memoryIDs[action.Memory.Ref] = memoryEffectiveID
+	case ActionDeleteMemory:
+		delete(state.memoryIDs, action.Memory.Ref)
+	}
+	return nil
+}
+
+// confirmReplayMemoryWrite verifies the durable post-image of an ambiguous
+// add or update before executeWithFailure decides whether to retry the write.
+func confirmReplayMemoryWrite(
+	ctx context.Context,
+	backend Backend,
+	userKey memory.UserKey,
+	memoryID string,
+	expected *MemoryInput,
+) (bool, error) {
+	if memoryID == "" {
+		return false, errors.New("memory write has no effective ID")
+	}
+	entries, err := backend.MemoryService().ReadMemories(ctx, userKey, 0)
+	if err != nil {
+		return false, err
+	}
+
+	for _, entry := range entries {
+		if entry == nil || entry.ID != memoryID {
+			continue
+		}
+		return replayMemoryMatchesInput(entry, expected)
+	}
+	return false, nil
+}
+
+// replayMemoryMatchesInput compares the business post-image of a memory
+// mutation. Backend-generated timestamps are intentionally ignored.
+func replayMemoryMatchesInput(
+	entry *memory.Entry,
+	expected *MemoryInput,
+) (bool, error) {
+	if entry == nil || entry.Memory == nil || expected == nil {
+		return false, nil
+	}
+	actual := entry.Memory
+	if actual.Memory != expected.Content ||
+		!equalUnorderedStrings(actual.Topics, expected.Topics) {
+		return false, nil
+	}
+	if expected.Kind != "" {
+		actualKind := actual.Kind
+		if actualKind == "" {
+			actualKind = memory.KindFact
+		}
+		if actualKind != expected.Kind {
+			return false, nil
+		}
+	}
+	if expected.EventTime != "" {
+		expectedTime, err := time.Parse(time.RFC3339Nano, expected.EventTime)
+		if err != nil {
+			return false, fmt.Errorf("parse memory event time: %w", err)
+		}
+		if actual.EventTime == nil ||
+			!actual.EventTime.Equal(expectedTime.UTC()) {
+			return false, nil
+		}
+	}
+	if len(expected.Participants) > 0 &&
+		!equalUnorderedStrings(actual.Participants, expected.Participants) {
+		return false, nil
+	}
+	if expected.Location != "" && actual.Location != expected.Location {
+		return false, nil
+	}
+	return true, nil
 }
 
 // readReplayMemoryIDs reads the complete ID set for one replay user.
