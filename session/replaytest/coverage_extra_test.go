@@ -1104,11 +1104,31 @@ func TestNormalizer_NilAndCloneEdges(t *testing.T) {
 	if out.AppState == nil || out.UserState == nil {
 		t.Fatal("app/user state clone")
 	}
-	// ensure original not fully shared for state map mutation safety loosely
+	// Clone isolation is a core Normalizer contract: mutating the normalized
+	// output must never leak back into the input snapshot.
 	out.AppState["a"] = []byte("mut")
 	if string(snap.AppState["a"]) == "mut" {
-		// clone should isolate; if not, still don't fail hard — just note
-		t.Log("app state may be shared")
+		t.Fatalf("normalized AppState shares map with input")
+	}
+	out.UserState["u"] = []byte("mut")
+	if string(snap.UserState["u"]) == "mut" {
+		t.Fatalf("normalized UserState shares map with input")
+	}
+	out.Session.State["k"] = []byte("mut")
+	if string(snap.Session.State["k"]) == "mut" {
+		t.Fatalf("normalized session State shares map with input")
+	}
+	out.Session.Events[0].StateDelta["d"] = []byte("mut")
+	if string(snap.Session.Events[0].StateDelta["d"]) == "mut" {
+		t.Fatalf("normalized event StateDelta shares map with input")
+	}
+	out.Session.Tracks["tool"].Events[0].Payload = []byte(`mut`)
+	if string(snap.Session.Tracks["tool"].Events[0].Payload) == "mut" {
+		t.Fatalf("normalized track payload shares slice with input")
+	}
+	out.Memories[1].Memory.Memory = "mut"
+	if snap.Memories[1].Memory.Memory == "mut" {
+		t.Fatalf("normalized memory shares pointer with input")
 	}
 }
 
