@@ -182,6 +182,29 @@ func TestNormalizeSnapshotPreservesSummaryBoundaryIDSpace(t *testing.T) {
 	}
 }
 
+func TestNormalizeSnapshotAssignsSummaryBoundaryIDsAfterSorting(t *testing.T) {
+	baseline := Snapshot{Sessions: []SessionSnapshot{{
+		ID: "session-1",
+		Summaries: []SummarySnapshot{
+			{FilterKey: "branch/b", Boundary: map[string]any{"last_event_id": "event-b"}},
+			{FilterKey: "branch/a", Boundary: map[string]any{"last_event_id": "event-a"}},
+		},
+	}}}
+	actual := Snapshot{Sessions: []SessionSnapshot{{
+		ID: "session-1",
+		Summaries: []SummarySnapshot{
+			{FilterKey: "branch/a", Boundary: map[string]any{"last_event_id": "event-a"}},
+			{FilterKey: "branch/b", Boundary: map[string]any{"last_event_id": "event-b"}},
+		},
+	}}}
+
+	gotBaseline := NormalizeSnapshot(baseline, DefaultNormalizeOptions())
+	gotActual := NormalizeSnapshot(actual, DefaultNormalizeOptions())
+	if !reflect.DeepEqual(gotBaseline, gotActual) {
+		t.Fatalf("summary boundary IDs depend on backend order:\nbaseline: %#v\nactual: %#v", gotBaseline, gotActual)
+	}
+}
+
 func TestNormalizeSnapshotSupportsExplicitIDAndOrderingPolicies(t *testing.T) {
 	snapshot := normalizationFixture(
 		"event-z", "memory-z", "invocation-z",
@@ -203,6 +226,57 @@ func TestNormalizeSnapshotSupportsExplicitIDAndOrderingPolicies(t *testing.T) {
 	call := got.Sessions[0].Events[0].ToolCalls[0].ID
 	if call != "tool-call-0001" || got.Sessions[0].Events[0].ToolResponse.ToolCallID != call {
 		t.Fatalf("tool call references are inconsistent: %#v", got.Sessions[0].Events[0])
+	}
+}
+
+func TestNormalizeSnapshotSortsMemoriesBySemanticFieldsBeforeID(t *testing.T) {
+	tests := []struct {
+		name   string
+		first  MemorySnapshot
+		second MemorySnapshot
+	}{
+		{
+			name: "topics",
+			first: MemorySnapshot{
+				ID: "backend-z", AppName: "replay", UserID: "user-1",
+				Scope:   MemoryScope{AppName: "replay", UserID: "user-1"},
+				Content: "same", Topics: []string{"alpha"},
+			},
+			second: MemorySnapshot{
+				ID: "backend-a", AppName: "replay", UserID: "user-1",
+				Scope:   MemoryScope{AppName: "replay", UserID: "user-1"},
+				Content: "same", Topics: []string{"beta"},
+			},
+		},
+		{
+			name: "metadata",
+			first: MemorySnapshot{
+				ID: "backend-z", AppName: "replay", UserID: "user-1",
+				Scope:    MemoryScope{AppName: "replay", UserID: "user-1"},
+				Content:  "same",
+				Metadata: map[string]any{"rank": 1},
+			},
+			second: MemorySnapshot{
+				ID: "backend-a", AppName: "replay", UserID: "user-1",
+				Scope:    MemoryScope{AppName: "replay", UserID: "user-1"},
+				Content:  "same",
+				Metadata: map[string]any{"rank": 2},
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			baseline := Snapshot{Memories: []MemorySnapshot{test.first, test.second}}
+			actualFirst, actualSecond := test.first, test.second
+			actualFirst.ID, actualSecond.ID = test.second.ID, test.first.ID
+			actual := Snapshot{Memories: []MemorySnapshot{actualFirst, actualSecond}}
+
+			gotBaseline := NormalizeSnapshot(baseline, DefaultNormalizeOptions())
+			gotActual := NormalizeSnapshot(actual, DefaultNormalizeOptions())
+			if !reflect.DeepEqual(gotBaseline, gotActual) {
+				t.Fatalf("memory ordering depends on generated IDs:\nbaseline: %#v\nactual: %#v", gotBaseline, gotActual)
+			}
+		})
 	}
 }
 

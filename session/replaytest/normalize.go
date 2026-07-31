@@ -62,11 +62,6 @@ func NormalizeSnapshot(snapshot Snapshot, options NormalizeOptions) Snapshot {
 	sort.Slice(normalized.Sessions, func(i, j int) bool {
 		return sessionSortKey(normalized.Sessions[i]) < sessionSortKey(normalized.Sessions[j])
 	})
-	if options.SortMemories {
-		sort.SliceStable(normalized.Memories, func(i, j int) bool {
-			return memorySortKey(normalized.Memories[i]) < memorySortKey(normalized.Memories[j])
-		})
-	}
 	sort.SliceStable(normalized.MemorySearches, func(i, j int) bool {
 		return memorySearchSortKey(normalized.MemorySearches[i]) <
 			memorySearchSortKey(normalized.MemorySearches[j])
@@ -88,7 +83,15 @@ func NormalizeSnapshot(snapshot Snapshot, options NormalizeOptions) Snapshot {
 		normalizeSession(&normalized.Sessions[i], options, ids)
 	}
 	for i := range normalized.Memories {
-		normalizeMemory(&normalized.Memories[i], options, memoryIDs)
+		normalizeMemoryValues(&normalized.Memories[i], options)
+	}
+	if options.SortMemories {
+		sort.SliceStable(normalized.Memories, func(i, j int) bool {
+			return memorySortKey(normalized.Memories[i]) < memorySortKey(normalized.Memories[j])
+		})
+	}
+	for i := range normalized.Memories {
+		normalizeMemoryID(&normalized.Memories[i], options, memoryIDs)
 	}
 	for i := range normalized.MemorySearches {
 		for j := range normalized.MemorySearches[i].Results {
@@ -131,15 +134,15 @@ func normalizeSession(
 			event.ToolResponse = &response
 		}
 	}
+	sort.Slice(snapshot.Summaries, func(i, j int) bool {
+		return snapshot.Summaries[i].FilterKey < snapshot.Summaries[j].FilterKey
+	})
 	for i := range snapshot.Summaries {
 		snapshot.Summaries[i].Boundary = normalizeStringMap(snapshot.Summaries[i].Boundary, options)
 		if id, ok := snapshot.Summaries[i].Boundary["last_event_id"].(string); ok && !options.PreserveEventIDs {
 			snapshot.Summaries[i].Boundary["last_event_id"] = ids.events.value(id)
 		}
 	}
-	sort.Slice(snapshot.Summaries, func(i, j int) bool {
-		return snapshot.Summaries[i].FilterKey < snapshot.Summaries[j].FilterKey
-	})
 	sort.SliceStable(snapshot.Tracks, func(i, j int) bool {
 		return snapshot.Tracks[i].Name < snapshot.Tracks[j].Name
 	})
@@ -160,13 +163,28 @@ func normalizeMemory(
 	options NormalizeOptions,
 	memoryIDs *logicalIDMap,
 ) {
+	normalizeMemoryValues(snapshot, options)
+	normalizeMemoryID(snapshot, options, memoryIDs)
+}
+
+func normalizeMemoryValues(
+	snapshot *MemorySnapshot,
+	options NormalizeOptions,
+) {
 	normalizeTimes([]*time.Time{&snapshot.CreatedAt, &snapshot.UpdatedAt}, options.TimePrecision)
-	if !options.PreserveMemoryIDs {
-		snapshot.ID = memoryIDs.value(snapshot.ID)
-	}
 	snapshot.Topics = append([]string(nil), snapshot.Topics...)
 	sort.Strings(snapshot.Topics)
 	snapshot.Metadata = normalizeMetadataMap(snapshot.Metadata, options)
+}
+
+func normalizeMemoryID(
+	snapshot *MemorySnapshot,
+	options NormalizeOptions,
+	memoryIDs *logicalIDMap,
+) {
+	if !options.PreserveMemoryIDs {
+		snapshot.ID = memoryIDs.value(snapshot.ID)
+	}
 }
 
 func normalizeStringMap(value map[string]any, options NormalizeOptions) map[string]any {
@@ -523,12 +541,34 @@ func cloneJSONLikeValue(value reflect.Value) reflect.Value {
 }
 
 func memorySortKey(snapshot MemorySnapshot) string {
-	return snapshot.AppName + "\x00" + snapshot.UserID + "\x00" +
-		snapshot.Content + "\x00" + snapshot.ID
+	semantic := struct {
+		AppName   string         `json:"app_name"`
+		UserID    string         `json:"user_id"`
+		Scope     MemoryScope    `json:"scope"`
+		Content   string         `json:"content"`
+		Topics    []string       `json:"topics,omitempty"`
+		Metadata  map[string]any `json:"metadata,omitempty"`
+		Score     float64        `json:"score"`
+		CreatedAt time.Time      `json:"created_at,omitempty"`
+		UpdatedAt time.Time      `json:"updated_at,omitempty"`
+	}{
+		AppName: snapshot.AppName, UserID: snapshot.UserID, Scope: snapshot.Scope,
+		Content: snapshot.Content, Topics: snapshot.Topics, Metadata: snapshot.Metadata,
+		Score: snapshot.Score, CreatedAt: snapshot.CreatedAt, UpdatedAt: snapshot.UpdatedAt,
+	}
+	return stableKey(semantic) + "\x00" + snapshot.ID
 }
 
 func memorySearchSortKey(snapshot MemorySearchSnapshot) string {
 	return snapshot.AppName + "\x00" + snapshot.UserID + "\x00" + snapshot.Query
+}
+
+func stableKey(value any) string {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Sprintf("%#v", value)
+	}
+	return string(encoded)
 }
 
 type logicalIDMap struct {

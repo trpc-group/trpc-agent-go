@@ -296,6 +296,41 @@ func TestReplayFixtureCapturesMemorySearchAtApplyTime(t *testing.T) {
 	}
 }
 
+func TestReplayFixtureSnapshotReadsAllMemories(t *testing.T) {
+	fixture := newReplayFixture(replayFixtureConfig{
+		name:           "inmemory",
+		sessionService: sessioninmemory.NewSessionService(),
+		memoryService:  memoryinmemory.NewMemoryService(),
+		summarizer:     &replaySummarizer{},
+	})
+	t.Cleanup(func() {
+		if err := fixture.Close(); err != nil {
+			t.Errorf("close fixture: %v", err)
+		}
+	})
+	const memoryCount = 105
+	for i := 0; i < memoryCount; i++ {
+		err := fixture.Apply(context.Background(), replaytest.Operation{
+			Kind: replaytest.OperationWriteMemory,
+			Memory: &replaytest.MemorySnapshot{
+				AppName: replayAppName, UserID: replayUserID,
+				Content: fmt.Sprintf("memory-%03d", i),
+			},
+		})
+		if err != nil {
+			t.Fatalf("write memory %d: %v", i, err)
+		}
+	}
+
+	snapshot, err := fixture.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("fixture.Snapshot() error = %v", err)
+	}
+	if len(snapshot.Memories) != memoryCount {
+		t.Fatalf("snapshot memory count = %d, want %d", len(snapshot.Memories), memoryCount)
+	}
+}
+
 func TestReplayFixtureCanDeclareUnsupportedCapability(t *testing.T) {
 	summarizer := &replaySummarizer{}
 	fixture := newReplayFixture(replayFixtureConfig{

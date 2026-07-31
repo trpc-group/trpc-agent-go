@@ -37,7 +37,6 @@ const (
 	filterKeyMain                 = "branch/main"
 	clickHouseBackend             = "clickhouse"
 	toolResponseExtraExtensionKey = "replaytest.tool_response_extra"
-	memoryReadLimit               = 100
 	fixtureCleanupTimeout         = 5 * time.Second
 	serviceCloseOperationCount    = 2
 )
@@ -363,7 +362,7 @@ func (fixture *replayFixture) Snapshot(ctx context.Context) (replaytest.Snapshot
 		snapshot.Sessions = append(snapshot.Sessions, sessionSnapshot)
 	}
 	for _, scope := range bookkeeping.memoryScopes {
-		entries, err := fixture.memoryService.ReadMemories(ctx, scope.physical, memoryReadLimit)
+		entries, err := fixture.memoryService.ReadMemories(ctx, scope.physical, 0)
 		if err != nil {
 			return replaytest.Snapshot{}, fmt.Errorf("read memories for %#v: %w", scope.logical, err)
 		}
