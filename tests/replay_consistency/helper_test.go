@@ -10,10 +10,12 @@ package replayconsistency
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -1405,4 +1407,189 @@ func TestDeleteMemory_ExplicitID_NoPriorAdd(t *testing.T) {
 	// The delete will fail because the user doesn't exist, but the code path
 	// (harness.go line 153) is exercised regardless.
 	assert.Error(t, err)
+}
+
+// ---------------------------------------------------------------------------
+// errCloseSessionService wraps a session.Service to return an error on Close.
+// ---------------------------------------------------------------------------
+
+type errCloseSessionService struct {
+	session.Service
+}
+
+func (s *errCloseSessionService) Close() error {
+	return errors.New("mock session close error")
+}
+
+// ---------------------------------------------------------------------------
+// errCloseMemoryService wraps a memory.Service to return an error on Close.
+// ---------------------------------------------------------------------------
+
+type errCloseMemoryService struct {
+	memory.Service
+}
+
+func (m *errCloseMemoryService) Close() error {
+	return errors.New("mock memory close error")
+}
+
+// ---------------------------------------------------------------------------
+// replayBackend Close error path tests
+// ---------------------------------------------------------------------------
+
+func TestReplayBackend_Close_SessionSvcError(t *testing.T) {
+	inner, err := newInMemoryReplayBackend()
+	require.NoError(t, err)
+	rb := inner.(*replayBackend)
+	defer func() { _ = rb.sessionSvc.Close(); _ = rb.memorySvc.Close() }()
+
+	b := &replayBackend{
+		name:       "test",
+		kind:       BackendKindSession,
+		sessionSvc: &errCloseSessionService{rb.sessionSvc},
+		memorySvc:  rb.memorySvc,
+	}
+	err = b.Close()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mock session close error")
+}
+
+func TestReplayBackend_Close_MemorySvcError(t *testing.T) {
+	inner, err := newInMemoryReplayBackend()
+	require.NoError(t, err)
+	rb := inner.(*replayBackend)
+	defer func() { _ = rb.sessionSvc.Close(); _ = rb.memorySvc.Close() }()
+
+	b := &replayBackend{
+		name:       "test",
+		kind:       BackendKindSession,
+		sessionSvc: rb.sessionSvc,
+		memorySvc:  &errCloseMemoryService{rb.memorySvc},
+	}
+	err = b.Close()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mock memory close error")
+}
+
+func TestReplayBackend_Close_CleanupErrors(t *testing.T) {
+	b := &replayBackend{
+		name: "test",
+		kind: BackendKindSession,
+		cleanup: []func() error{
+			func() error { return errors.New("cleanup 1 error") },
+			func() error { return errors.New("cleanup 2 error") },
+		},
+	}
+	err := b.Close()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cleanup 1 error")
+	assert.Contains(t, err.Error(), "cleanup 2 error")
+}
+
+func TestReplayBackend_Close_AllErrors(t *testing.T) {
+	inner, err := newInMemoryReplayBackend()
+	require.NoError(t, err)
+	rb := inner.(*replayBackend)
+	defer func() { _ = rb.sessionSvc.Close(); _ = rb.memorySvc.Close() }()
+
+	b := &replayBackend{
+		name:       "test",
+		kind:       BackendKindSession,
+		sessionSvc: &errCloseSessionService{rb.sessionSvc},
+		memorySvc:  &errCloseMemoryService{rb.memorySvc},
+		cleanup: []func() error{
+			func() error { return errors.New("cleanup 1 error") },
+			func() error { return errors.New("cleanup 2 error") },
+		},
+	}
+	err = b.Close()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mock session close error")
+	assert.Contains(t, err.Error(), "mock memory close error")
+	assert.Contains(t, err.Error(), "cleanup 1 error")
+	assert.Contains(t, err.Error(), "cleanup 2 error")
+}
+
+// ---------------------------------------------------------------------------
+// openTempSQLiteDB error path tests
+// ---------------------------------------------------------------------------
+
+func TestOpenTempSQLiteDB_CreateTempError(t *testing.T) {
+	t.Setenv("TMPDIR", "/nonexistent/path")
+	_, _, err := openTempSQLiteDB("test-*.db")
+	require.Error(t, err)
+}
+
+// ---------------------------------------------------------------------------
+// newSQLiteReplayBackend error path tests
+// ---------------------------------------------------------------------------
+
+func TestNewSQLiteReplayBackend_SessionDBError(t *testing.T) {
+	t.Setenv("TMPDIR", "/nonexistent/path")
+	_, err := newSQLiteReplayBackend()
+	require.Error(t, err)
+}
+
+// ---------------------------------------------------------------------------
+// newDefaultReplayBackends error path tests
+// ---------------------------------------------------------------------------
+
+func TestNewDefaultReplayBackends_SQLiteError(t *testing.T) {
+	// InMemory succeeds but SQLite fails due to invalid TMPDIR.
+	t.Setenv("TMPDIR", "/nonexistent/path")
+	_, err := newDefaultReplayBackends(HarnessOptions{})
+	require.Error(t, err)
+}
+
+// ---------------------------------------------------------------------------
+// newRedisReplayBackend tests using miniredis (in-process Redis for testing)
+// ---------------------------------------------------------------------------
+
+func TestNewRedisReplayBackend_Success(t *testing.T) {
+	mr := miniredis.NewMiniRedis()
+	require.NoError(t, mr.Start())
+	defer mr.Close()
+
+	t.Setenv(replayEnableRedis, "true")
+	t.Setenv("REDIS_ADDR", mr.Addr())
+
+	backend, err := newRedisReplayBackend()
+	require.NoError(t, err)
+	require.NotNil(t, backend)
+	assert.Equal(t, "redis", backend.Name())
+	assert.Equal(t, BackendKindSession, backend.Kind())
+	assert.True(t, backend.Supports("track"))
+	assert.True(t, backend.Supports("summary"))
+	assert.True(t, backend.Supports("memory"))
+	assert.NoError(t, backend.Close())
+}
+
+func TestNewRedisReplayBackend_NoEnvVar(t *testing.T) {
+	t.Setenv(replayEnableRedis, "true")
+	t.Setenv("REDIS_ADDR", "") // empty addr
+
+	_, err := newRedisReplayBackend()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "REDIS_ADDR")
+}
+
+func TestNewDefaultReplayBackends_WithRedis(t *testing.T) {
+	mr := miniredis.NewMiniRedis()
+	require.NoError(t, mr.Start())
+	defer mr.Close()
+
+	t.Setenv(replayEnableRedis, "true")
+	t.Setenv("REDIS_ADDR", mr.Addr())
+
+	backends, err := newDefaultReplayBackends(HarnessOptions{})
+	require.NoError(t, err)
+	// Expect inmemory + sqlite + redis
+	require.Len(t, backends, 3)
+	assert.Equal(t, "inmemory", backends[0].Name())
+	assert.Equal(t, "sqlite", backends[1].Name())
+	assert.Equal(t, "redis", backends[2].Name())
+
+	for _, b := range backends {
+		assert.NoError(t, b.Close())
+	}
 }

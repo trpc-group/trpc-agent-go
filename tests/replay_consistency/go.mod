@@ -3,6 +3,7 @@ module trpc.group/trpc-go/trpc-agent-go/tests/replay_consistency
 go 1.24.4
 
 require (
+	github.com/alicebob/miniredis/v2 v2.35.0
 	github.com/mattn/go-sqlite3 v1.14.32
 	github.com/stretchr/testify v1.11.1
 	trpc.group/trpc-go/trpc-agent-go v1.10.0
@@ -46,6 +47,7 @@ require (
 	github.com/segmentio/asm v1.2.0 // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect
 	github.com/vcaesar/cedar v0.20.2 // indirect
+	github.com/yuin/gopher-lua v1.1.1 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel v1.39.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric v0.42.0 // indirect
