@@ -5,16 +5,16 @@ go 1.24.4
 require (
 	github.com/mattn/go-sqlite3 v1.14.32
 	github.com/stretchr/testify v1.11.1
-	trpc.group/trpc-go/trpc-agent-go v1.6.1-0.20260311094958-7b74ee59e339
-	trpc.group/trpc-go/trpc-agent-go/memory/mysql v0.0.0-00010101000000-000000000000
-	trpc.group/trpc-go/trpc-agent-go/memory/postgres v0.0.0-00010101000000-000000000000
-	trpc.group/trpc-go/trpc-agent-go/memory/redis v0.0.0-00010101000000-000000000000
-	trpc.group/trpc-go/trpc-agent-go/memory/sqlite v0.0.0-00010101000000-000000000000
-	trpc.group/trpc-go/trpc-agent-go/session/clickhouse v0.0.0-00010101000000-000000000000
-	trpc.group/trpc-go/trpc-agent-go/session/mysql v0.0.0-00010101000000-000000000000
-	trpc.group/trpc-go/trpc-agent-go/session/postgres v0.0.0-00010101000000-000000000000
-	trpc.group/trpc-go/trpc-agent-go/session/redis v0.0.0-00010101000000-000000000000
-	trpc.group/trpc-go/trpc-agent-go/session/sqlite v0.0.0-00010101000000-000000000000
+	trpc.group/trpc-go/trpc-agent-go v1.10.0
+	trpc.group/trpc-go/trpc-agent-go/memory/mysql v1.10.0
+	trpc.group/trpc-go/trpc-agent-go/memory/postgres v1.10.0
+	trpc.group/trpc-go/trpc-agent-go/memory/redis v1.10.0
+	trpc.group/trpc-go/trpc-agent-go/memory/sqlite v1.10.0
+	trpc.group/trpc-go/trpc-agent-go/session/clickhouse v1.10.0
+	trpc.group/trpc-go/trpc-agent-go/session/mysql v1.10.0
+	trpc.group/trpc-go/trpc-agent-go/session/postgres v1.10.0
+	trpc.group/trpc-go/trpc-agent-go/session/redis v1.10.0
+	trpc.group/trpc-go/trpc-agent-go/session/sqlite v1.10.0
 )
 
 require (
@@ -76,17 +76,4 @@ require (
 	trpc.group/trpc-go/trpc-agent-go/storage/mysql v0.5.0 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/postgres v0.8.0 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/redis v0.2.0 // indirect
-)
-
-replace (
-	trpc.group/trpc-go/trpc-agent-go => ../../
-	trpc.group/trpc-go/trpc-agent-go/memory/mysql => ../../memory/mysql
-	trpc.group/trpc-go/trpc-agent-go/memory/postgres => ../../memory/postgres
-	trpc.group/trpc-go/trpc-agent-go/memory/redis => ../../memory/redis
-	trpc.group/trpc-go/trpc-agent-go/memory/sqlite => ../../memory/sqlite
-	trpc.group/trpc-go/trpc-agent-go/session/clickhouse => ../../session/clickhouse
-	trpc.group/trpc-go/trpc-agent-go/session/mysql => ../../session/mysql
-	trpc.group/trpc-go/trpc-agent-go/session/postgres => ../../session/postgres
-	trpc.group/trpc-go/trpc-agent-go/session/redis => ../../session/redis
-	trpc.group/trpc-go/trpc-agent-go/session/sqlite => ../../session/sqlite
 )
