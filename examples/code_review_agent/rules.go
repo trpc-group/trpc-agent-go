@@ -11,7 +11,6 @@ package main
 
 import (
 	"go/ast"
-	"go/importer"
 	"go/parser"
 	"go/token"
 	"go/types"
@@ -69,29 +68,117 @@ type ruleMatch struct {
 	RuleID         string
 }
 
+type ruleEvaluation struct {
+	match              ruleMatch
+	lifecycleCandidate int
+}
+
+type lifecycleCandidate struct {
+	candidate candidateLine
+	matcher   cleanupMatcher
+}
+
+type lifecycleAnalysisStats struct {
+	ParsedSourceUnits      int
+	TypeCheckedSourceUnits int
+	AnalyzedFunctions      int
+}
+
 func runRules(parsed parsedDiff, repoRoot string) []ruleMatch {
-	var matches []ruleMatch
+	matches, _ := runRulesWithLifecycleStats(parsed, repoRoot)
+	return matches
+}
+
+func runRulesWithLifecycleStats(
+	parsed parsedDiff,
+	repoRoot string,
+) ([]ruleMatch, lifecycleAnalysisStats) {
 	candidates := parsed.candidateLines()
-	for _, candidate := range candidates {
+	evaluations := make([][]ruleEvaluation, len(candidates))
+	var lifecycleCandidates []lifecycleCandidate
+	for candidateIndex, candidate := range candidates {
 		file := parsed.Files[candidate.FileIndex]
 		hunk := file.Hunks[candidate.HunkIndex]
-		matches = append(matches, runCandidateRules(candidate, file, hunk, repoRoot)...)
+		trimmed := strings.TrimSpace(candidate.Text)
+		evaluations[candidateIndex] = appendImmediateRuleMatches(
+			evaluations[candidateIndex],
+			securityRuleMatches(candidate, trimmed),
+		)
+		evaluations[candidateIndex] = appendImmediateRuleMatches(
+			evaluations[candidateIndex],
+			concurrencyRuleMatches(candidate, file, hunk, trimmed),
+		)
+		evaluations[candidateIndex] = appendLifecycleRuleEvaluations(
+			evaluations[candidateIndex],
+			&lifecycleCandidates,
+			candidate,
+			resourceRuleCandidates(candidate, file, trimmed),
+		)
+		evaluations[candidateIndex] = appendImmediateRuleMatches(
+			evaluations[candidateIndex],
+			errorRuleMatches(candidate, trimmed),
+		)
+		evaluations[candidateIndex] = appendLifecycleRuleEvaluations(
+			evaluations[candidateIndex],
+			&lifecycleCandidates,
+			candidate,
+			databaseRuleCandidates(candidate, file, trimmed),
+		)
+	}
+
+	cleanupProven, stats := analyzeLifecycleCandidates(parsed.Files, repoRoot, lifecycleCandidates)
+	var matches []ruleMatch
+	for _, candidateEvaluations := range evaluations {
+		for _, evaluation := range candidateEvaluations {
+			if evaluation.lifecycleCandidate >= 0 &&
+				cleanupProven[evaluation.lifecycleCandidate] {
+				continue
+			}
+			matches = append(matches, evaluation.match)
+		}
 	}
 
 	missingTestsIndex := newMissingTestsRuleIndex(parsed.Files, candidates)
 	matches = append(matches, runMissingTestsRule(parsed.Files, missingTestsIndex)...)
-	return matches
+	return matches, stats
 }
 
-func runCandidateRules(candidate candidateLine, file changedFile, hunk diffHunk, repoRoot string) []ruleMatch {
-	trimmed := strings.TrimSpace(candidate.Text)
-	var matches []ruleMatch
-	matches = append(matches, securityRuleMatches(candidate, trimmed)...)
-	matches = append(matches, concurrencyRuleMatches(candidate, file, hunk, trimmed)...)
-	matches = append(matches, resourceRuleMatches(candidate, file, repoRoot, trimmed)...)
-	matches = append(matches, errorRuleMatches(candidate, trimmed)...)
-	matches = append(matches, databaseRuleMatches(candidate, file, repoRoot, trimmed)...)
-	return matches
+func appendImmediateRuleMatches(
+	evaluations []ruleEvaluation,
+	matches []ruleMatch,
+) []ruleEvaluation {
+	for _, match := range matches {
+		evaluations = append(evaluations, ruleEvaluation{
+			match:              match,
+			lifecycleCandidate: -1,
+		})
+	}
+	return evaluations
+}
+
+type pendingLifecycleRule struct {
+	match   ruleMatch
+	matcher cleanupMatcher
+}
+
+func appendLifecycleRuleEvaluations(
+	evaluations []ruleEvaluation,
+	candidates *[]lifecycleCandidate,
+	candidate candidateLine,
+	pending []pendingLifecycleRule,
+) []ruleEvaluation {
+	for _, item := range pending {
+		index := len(*candidates)
+		*candidates = append(*candidates, lifecycleCandidate{
+			candidate: candidate,
+			matcher:   item.matcher,
+		})
+		evaluations = append(evaluations, ruleEvaluation{
+			match:              item.match,
+			lifecycleCandidate: index,
+		})
+	}
+	return evaluations
 }
 
 func securityRuleMatches(candidate candidateLine, line string) []ruleMatch {
@@ -127,34 +214,42 @@ func concurrencyRuleMatches(candidate candidateLine, file changedFile, hunk diff
 		confidenceLifecycle)}
 }
 
-func resourceRuleMatches(candidate candidateLine, file changedFile, repoRoot string, line string) []ruleMatch {
-	var matches []ruleMatch
+func resourceRuleCandidates(
+	candidate candidateLine,
+	file changedFile,
+	line string,
+) []pendingLifecycleRule {
+	var matches []pendingLifecycleRule
+	confidence := lifecycleConfidence(file)
 	if variable := firstCapture(fileOpenPattern, line); variable != "" {
 		matcher := cleanupMatcher{variable: variable, methods: map[string]bool{"Close": true}}
-		if confidence, ok := resourceLeakConfidence(file, candidate, repoRoot, matcher); ok {
-			matches = append(matches, newRuleMatch(candidate, ruleUnclosedFile, "medium", "resource",
+		matches = append(matches, pendingLifecycleRule{
+			match: newRuleMatch(candidate, ruleUnclosedFile, "medium", "resource",
 				"Opened file is not closed",
 				"Close the file with defer after checking the open error.",
-				confidence))
-		}
+				confidence),
+			matcher: matcher,
+		})
 	}
 	if variable := firstCapture(httpGetPattern, line); variable != "" {
 		matcher := cleanupMatcher{variable: variable, methods: map[string]bool{"Close": true}, body: true}
-		if confidence, ok := resourceLeakConfidence(file, candidate, repoRoot, matcher); ok {
-			matches = append(matches, newRuleMatch(candidate, ruleUnclosedHTTPBody, "medium", "resource",
+		matches = append(matches, pendingLifecycleRule{
+			match: newRuleMatch(candidate, ruleUnclosedHTTPBody, "medium", "resource",
 				"HTTP response body is not closed",
 				"Close response bodies with defer resp.Body.Close() after checking errors.",
-				confidence))
-		}
+				confidence),
+			matcher: matcher,
+		})
 	}
 	if variable := firstCapture(sqlRowsPattern, line); variable != "" {
 		matcher := cleanupMatcher{variable: variable, methods: map[string]bool{"Close": true}}
-		if confidence, ok := resourceLeakConfidence(file, candidate, repoRoot, matcher); ok {
-			matches = append(matches, newRuleMatch(candidate, ruleUnclosedSQLRows, "medium", "resource",
+		matches = append(matches, pendingLifecycleRule{
+			match: newRuleMatch(candidate, ruleUnclosedSQLRows, "medium", "resource",
 				"SQL rows are not closed",
 				"Close rows with defer rows.Close() and check rows.Err().",
-				confidence))
-		}
+				confidence),
+			matcher: matcher,
+		})
 	}
 	return matches
 }
@@ -169,27 +264,41 @@ func errorRuleMatches(candidate candidateLine, line string) []ruleMatch {
 		confidenceStrong)}
 }
 
-func databaseRuleMatches(candidate candidateLine, file changedFile, repoRoot string, line string) []ruleMatch {
-	var matches []ruleMatch
+func databaseRuleCandidates(
+	candidate candidateLine,
+	file changedFile,
+	line string,
+) []pendingLifecycleRule {
+	var matches []pendingLifecycleRule
+	confidence := lifecycleConfidence(file)
 	if variable := firstCapture(sqlTxPattern, line); variable != "" {
 		matcher := cleanupMatcher{variable: variable, methods: map[string]bool{"Commit": true, "Rollback": true}}
-		if confidence, ok := resourceLeakConfidence(file, candidate, repoRoot, matcher); ok {
-			matches = append(matches, newRuleMatch(candidate, ruleDatabaseTxLifecycle, "high", "database",
+		matches = append(matches, pendingLifecycleRule{
+			match: newRuleMatch(candidate, ruleDatabaseTxLifecycle, "high", "database",
 				"Database transaction is opened without commit or rollback",
 				"Ensure every transaction path commits or rolls back.",
-				confidence))
-		}
+				confidence),
+			matcher: matcher,
+		})
 	}
 	if variable := firstCapture(sqlOpenPattern, line); variable != "" {
 		matcher := cleanupMatcher{variable: variable, methods: map[string]bool{"Close": true}}
-		if confidence, ok := resourceLeakConfidence(file, candidate, repoRoot, matcher); ok {
-			matches = append(matches, newRuleMatch(candidate, ruleDatabaseOpenLifecycle, "medium", "database",
+		matches = append(matches, pendingLifecycleRule{
+			match: newRuleMatch(candidate, ruleDatabaseOpenLifecycle, "medium", "database",
 				"Database handle is opened without a close path",
 				"Close database handles owned by this function or document shared ownership.",
-				confidence))
-		}
+				confidence),
+			matcher: matcher,
+		})
 	}
 	return matches
+}
+
+func lifecycleConfidence(file changedFile) float64 {
+	if len(file.Hunks) > 1 {
+		return confidenceBoundary
+	}
+	return confidenceLifecycle
 }
 
 func newRuleMatch(
@@ -373,165 +482,6 @@ type cleanupMatcher struct {
 	body     bool
 }
 
-func resourceLeakConfidence(
-	file changedFile,
-	candidate candidateLine,
-	repoRoot string,
-	matcher cleanupMatcher,
-) (float64, bool) {
-	if repoRoot != "" &&
-		repoFunctionContainsCleanup(repoRoot, file.reviewPath(), candidate, matcher) {
-		return 0, false
-	}
-	if repoRoot == "" && hunkFunctionWindowContainsCleanup(file, candidate, matcher) {
-		return 0, false
-	}
-	if len(file.Hunks) > 1 {
-		return confidenceBoundary, true
-	}
-	return confidenceLifecycle, true
-}
-
-func repoFunctionContainsCleanup(
-	repoRoot string,
-	filePath string,
-	candidate candidateLine,
-	matcher cleanupMatcher,
-) bool {
-	if filePath == "" || matcher.variable == "" || len(matcher.methods) == 0 {
-		return false
-	}
-	fset := token.NewFileSet()
-	parsedFile, err := parser.ParseFile(
-		fset,
-		filepath.Join(repoRoot, filepath.FromSlash(filePath)),
-		nil,
-		0,
-	)
-	if err != nil {
-		return false
-	}
-	fn := enclosingFunctionForLine(fset, parsedFile, candidate.Line)
-	if fn == nil || fn.Body == nil {
-		return false
-	}
-	return functionProvesBoundCleanup(
-		fset,
-		parsedFile,
-		fn,
-		candidate.Line,
-		matcher,
-	)
-}
-
-type resourceFlowState uint8
-
-const (
-	resourceUnacquired resourceFlowState = 1 << iota
-	resourceActive
-	resourceSafe
-)
-
-type resourceFlow struct {
-	normal    resourceFlowState
-	breaks    resourceFlowState
-	continues resourceFlowState
-}
-
-type resourceAcquisition struct {
-	assignment     *ast.AssignStmt
-	resourceObject types.Object
-	errorObject    types.Object
-}
-
-type resourceCleanupAnalyzer struct {
-	info               *types.Info
-	matcher            cleanupMatcher
-	acquisition        resourceAcquisition
-	bodyAliases        map[types.Object]bool
-	valid              bool
-	acquisitionReached bool
-}
-
-func functionProvesBoundCleanup(
-	fset *token.FileSet,
-	parsedFile *ast.File,
-	fn *ast.FuncDecl,
-	candidateLine int,
-	matcher cleanupMatcher,
-) bool {
-	info := &types.Info{
-		Defs: make(map[*ast.Ident]types.Object),
-		Uses: make(map[*ast.Ident]types.Object),
-	}
-	config := &types.Config{
-		Importer: importer.Default(),
-		Error:    func(error) {},
-	}
-	_, _ = config.Check(parsedFile.Name.Name, fset, []*ast.File{parsedFile}, info)
-
-	acquisition := candidateResourceAcquisition(
-		fn.Body,
-		fset,
-		info,
-		matcher.variable,
-		candidateLine,
-	)
-	if acquisition.assignment == nil || acquisition.resourceObject == nil ||
-		functionHasUnsupportedResourceControlFlow(fn.Body) {
-		return false
-	}
-	analyzer := resourceCleanupAnalyzer{
-		info:        info,
-		matcher:     matcher,
-		acquisition: acquisition,
-		bodyAliases: make(map[types.Object]bool),
-		valid:       true,
-	}
-	flow := analyzer.analyzeBlock(fn.Body.List, resourceUnacquired)
-	return analyzer.valid && analyzer.acquisitionReached &&
-		flow.breaks == 0 && flow.continues == 0 &&
-		flow.normal&resourceActive == 0
-}
-
-func candidateResourceAcquisition(
-	body *ast.BlockStmt,
-	fset *token.FileSet,
-	info *types.Info,
-	variable string,
-	line int,
-) resourceAcquisition {
-	var result resourceAcquisition
-	ast.Inspect(body, func(node ast.Node) bool {
-		if result.assignment != nil {
-			return false
-		}
-		if _, ok := node.(*ast.FuncLit); ok {
-			return false
-		}
-		assign, ok := node.(*ast.AssignStmt)
-		if !ok || assign.Tok != token.DEFINE || fset.Position(assign.Pos()).Line != line {
-			return true
-		}
-		for i, lhs := range assign.Lhs {
-			ident, ok := lhs.(*ast.Ident)
-			if !ok || ident.Name != variable {
-				continue
-			}
-			result.assignment = assign
-			result.resourceObject = bindingObject(info, ident)
-			if i+1 < len(assign.Lhs) {
-				if errorIdent, ok := assign.Lhs[i+1].(*ast.Ident); ok && errorIdent.Name != "_" {
-					result.errorObject = bindingObject(info, errorIdent)
-				}
-			}
-			break
-		}
-		return result.assignment == nil
-	})
-	return result
-}
-
 func bindingObject(info *types.Info, ident *ast.Ident) types.Object {
 	if ident == nil {
 		return nil
@@ -563,614 +513,6 @@ func functionHasUnsupportedResourceControlFlow(body *ast.BlockStmt) bool {
 	return unsupported
 }
 
-func (a *resourceCleanupAnalyzer) analyzeBlock(
-	statements []ast.Stmt,
-	input resourceFlowState,
-) resourceFlow {
-	flow := resourceFlow{normal: input}
-	for i := 0; i < len(statements) && flow.normal != 0 && a.valid; i++ {
-		if assignment, ok := statements[i].(*ast.AssignStmt); ok &&
-			assignment == a.acquisition.assignment {
-			flow.normal = a.acquire(flow.normal)
-			if i+1 < len(statements) && a.isStandardErrorGuard(statements[i+1]) {
-				i++
-			}
-			continue
-		}
-		statementFlow := a.analyzeStatement(statements[i], flow.normal)
-		flow.normal = statementFlow.normal
-		flow.breaks |= statementFlow.breaks
-		flow.continues |= statementFlow.continues
-	}
-	return flow
-}
-
-func (a *resourceCleanupAnalyzer) acquire(input resourceFlowState) resourceFlowState {
-	a.acquisitionReached = true
-	if input&resourceActive != 0 {
-		a.valid = false
-		return 0
-	}
-	if input&(resourceUnacquired|resourceSafe) == 0 {
-		return 0
-	}
-	return resourceActive
-}
-
-func (a *resourceCleanupAnalyzer) analyzeStatement(
-	statement ast.Stmt,
-	input resourceFlowState,
-) resourceFlow {
-	if input&resourceActive != 0 && a.statementObscuresActiveBinding(statement) {
-		a.valid = false
-		return resourceFlow{}
-	}
-	switch typed := statement.(type) {
-	case *ast.BlockStmt:
-		return a.analyzeBlock(typed.List, input)
-	case *ast.AssignStmt:
-		a.observeBodyAliasAssignment(typed, input)
-		state := a.applyCleanupExpressions(input, typed.Rhs)
-		a.rejectActiveReassignment(typed.Lhs, state)
-		return resourceFlow{normal: state}
-	case *ast.DeclStmt:
-		state := input
-		if declaration, ok := typed.Decl.(*ast.GenDecl); ok {
-			for _, spec := range declaration.Specs {
-				value, ok := spec.(*ast.ValueSpec)
-				if !ok {
-					continue
-				}
-				a.observeBodyAliasDeclaration(value, state)
-				state = a.applyCleanupExpressions(state, value.Values)
-			}
-		}
-		return resourceFlow{normal: state}
-	case *ast.ExprStmt:
-		a.rejectBodyBindingCall(typed.X, input)
-		state := a.applyCleanupExpression(input, typed.X)
-		if isDirectPanicCall(typed.X) {
-			a.rejectActiveExit(state)
-			return resourceFlow{}
-		}
-		return resourceFlow{normal: state}
-	case *ast.DeferStmt:
-		if a.isCleanupCall(typed.Call) {
-			return resourceFlow{normal: markResourceSafe(input)}
-		}
-		return resourceFlow{normal: input}
-	case *ast.GoStmt:
-		a.rejectBodyBindingCall(typed.Call, input)
-		return resourceFlow{normal: input}
-	case *ast.ReturnStmt:
-		state := a.applyCleanupExpressions(input, typed.Results)
-		a.rejectActiveExit(state)
-		return resourceFlow{}
-	case *ast.IfStmt:
-		return a.analyzeIf(typed, input)
-	case *ast.ForStmt:
-		return a.analyzeFor(typed, input)
-	case *ast.RangeStmt:
-		return a.analyzeRange(typed, input)
-	case *ast.SwitchStmt:
-		return a.analyzeSwitch(typed, input)
-	case *ast.TypeSwitchStmt:
-		return a.analyzeTypeSwitch(typed, input)
-	case *ast.SelectStmt:
-		return a.analyzeSelect(typed, input)
-	case *ast.BranchStmt:
-		switch typed.Tok {
-		case token.BREAK:
-			return resourceFlow{breaks: input}
-		case token.CONTINUE:
-			return resourceFlow{continues: input}
-		default:
-			a.valid = false
-			return resourceFlow{}
-		}
-	case *ast.IncDecStmt:
-		a.rejectActiveReassignment([]ast.Expr{typed.X}, input)
-		return resourceFlow{normal: input}
-	case *ast.LabeledStmt:
-		return a.analyzeStatement(typed.Stmt, input)
-	case *ast.SendStmt:
-		a.rejectBodyBindingExposure(typed.Value, input)
-		return resourceFlow{normal: input}
-	case *ast.EmptyStmt:
-		return resourceFlow{normal: input}
-	default:
-		a.valid = false
-		return resourceFlow{}
-	}
-}
-
-func (a *resourceCleanupAnalyzer) statementObscuresActiveBinding(statement ast.Stmt) bool {
-	obscured := false
-	ast.Inspect(statement, func(node ast.Node) bool {
-		if obscured {
-			return false
-		}
-		switch typed := node.(type) {
-		case *ast.FuncLit:
-			ast.Inspect(typed.Body, func(inner ast.Node) bool {
-				ident, ok := inner.(*ast.Ident)
-				if ok && a.identifierMayObscureResource(ident) {
-					obscured = true
-					return false
-				}
-				return !obscured
-			})
-			return false
-		case *ast.UnaryExpr:
-			if typed.Op != token.AND {
-				return true
-			}
-			if a.expressionMayBeCleanupTarget(typed.X) {
-				obscured = true
-				return false
-			}
-		}
-		return true
-	})
-	return obscured
-}
-
-func (a *resourceCleanupAnalyzer) identifierMayBeResource(ident *ast.Ident) bool {
-	if ident == nil || ident.Name != a.matcher.variable {
-		return false
-	}
-	object := bindingObject(a.info, ident)
-	return object == nil || object == a.acquisition.resourceObject
-}
-
-func (a *resourceCleanupAnalyzer) identifierMayObscureResource(ident *ast.Ident) bool {
-	if a.identifierMayBeResource(ident) {
-		return true
-	}
-	return a.matcher.body && a.identifierIsBodyAlias(ident)
-}
-
-func (a *resourceCleanupAnalyzer) identifierIsBodyAlias(ident *ast.Ident) bool {
-	if ident == nil {
-		return false
-	}
-	object := bindingObject(a.info, ident)
-	return object != nil && a.bodyAliases[object]
-}
-
-func (a *resourceCleanupAnalyzer) identifierMayBeBodyResponse(ident *ast.Ident) bool {
-	return a.identifierMayBeResource(ident) || a.identifierIsBodyAlias(ident)
-}
-
-func (a *resourceCleanupAnalyzer) expressionMayBeCleanupTarget(expression ast.Expr) bool {
-	expression = unparenthesizedExpression(expression)
-	if ident, ok := expression.(*ast.Ident); ok {
-		return a.identifierMayBeResource(ident)
-	}
-	if !a.matcher.body {
-		return false
-	}
-	selector, ok := expression.(*ast.SelectorExpr)
-	if !ok || selector.Sel.Name != "Body" {
-		star, ok := expression.(*ast.StarExpr)
-		if !ok {
-			return false
-		}
-		ident, ok := unparenthesizedExpression(star.X).(*ast.Ident)
-		return ok && a.identifierMayBeBodyResponse(ident)
-	}
-	return a.expressionRefersToBodyResponse(selector.X)
-}
-
-func (a *resourceCleanupAnalyzer) expressionRefersToBodyResponse(expression ast.Expr) bool {
-	expression = unparenthesizedExpression(expression)
-	if ident, ok := expression.(*ast.Ident); ok {
-		return a.identifierMayBeBodyResponse(ident)
-	}
-	star, ok := expression.(*ast.StarExpr)
-	if !ok {
-		return false
-	}
-	ident, ok := unparenthesizedExpression(star.X).(*ast.Ident)
-	return ok && a.identifierMayBeBodyResponse(ident)
-}
-
-func (a *resourceCleanupAnalyzer) observeBodyAliasAssignment(
-	statement *ast.AssignStmt,
-	state resourceFlowState,
-) {
-	if !a.matcher.body || state&resourceActive == 0 {
-		return
-	}
-	a.rejectBodyBindingCalls(statement.Rhs, state)
-	if !a.valid {
-		return
-	}
-	if len(statement.Lhs) != len(statement.Rhs) {
-		for _, expression := range statement.Rhs {
-			if a.expressionContainsStoredBodyResponse(expression) {
-				a.valid = false
-				return
-			}
-		}
-		return
-	}
-	for i, expression := range statement.Rhs {
-		if a.expressionIsBodyResponseValue(expression) {
-			a.bindBodyAlias(statement.Lhs[i])
-			continue
-		}
-		if a.expressionContainsStoredBodyResponse(expression) {
-			a.valid = false
-			return
-		}
-	}
-}
-
-func (a *resourceCleanupAnalyzer) observeBodyAliasDeclaration(
-	spec *ast.ValueSpec,
-	state resourceFlowState,
-) {
-	if !a.matcher.body || state&resourceActive == 0 {
-		return
-	}
-	a.rejectBodyBindingCalls(spec.Values, state)
-	if !a.valid {
-		return
-	}
-	if len(spec.Names) != len(spec.Values) {
-		for _, expression := range spec.Values {
-			if a.expressionContainsStoredBodyResponse(expression) {
-				a.valid = false
-				return
-			}
-		}
-		return
-	}
-	for i, expression := range spec.Values {
-		if a.expressionIsBodyResponseValue(expression) {
-			a.bindBodyAlias(spec.Names[i])
-			continue
-		}
-		if a.expressionContainsStoredBodyResponse(expression) {
-			a.valid = false
-			return
-		}
-	}
-}
-
-func (a *resourceCleanupAnalyzer) bindBodyAlias(expression ast.Expr) {
-	ident, ok := unparenthesizedExpression(expression).(*ast.Ident)
-	if !ok {
-		a.valid = false
-		return
-	}
-	if ident.Name == "_" {
-		return
-	}
-	object := bindingObject(a.info, ident)
-	if object == a.acquisition.resourceObject {
-		return
-	}
-	if object == nil || object.Parent() == nil ||
-		object.Pkg() != nil && object.Parent() == object.Pkg().Scope() {
-		a.valid = false
-		return
-	}
-	a.bodyAliases[object] = true
-}
-
-func (a *resourceCleanupAnalyzer) rejectBodyBindingExposure(
-	expression ast.Expr,
-	state resourceFlowState,
-) {
-	if !a.matcher.body || state&resourceActive == 0 {
-		return
-	}
-	if a.expressionContainsStoredBodyResponse(expression) ||
-		a.expressionCallsWithBodyResponse(expression) {
-		a.valid = false
-	}
-}
-
-func (a *resourceCleanupAnalyzer) rejectBodyBindingCall(
-	expression ast.Expr,
-	state resourceFlowState,
-) {
-	if !a.matcher.body || state&resourceActive == 0 {
-		return
-	}
-	if a.expressionCallsWithBodyResponse(expression) {
-		a.valid = false
-	}
-}
-
-func (a *resourceCleanupAnalyzer) rejectBodyBindingCalls(
-	expressions []ast.Expr,
-	state resourceFlowState,
-) {
-	for _, expression := range expressions {
-		a.rejectBodyBindingCall(expression, state)
-		if !a.valid {
-			return
-		}
-	}
-}
-
-func (a *resourceCleanupAnalyzer) expressionIsBodyResponseValue(expression ast.Expr) bool {
-	ident, ok := unparenthesizedExpression(expression).(*ast.Ident)
-	return ok && a.identifierMayBeBodyResponse(ident)
-}
-
-func (a *resourceCleanupAnalyzer) expressionContainsStoredBodyResponse(expression ast.Expr) bool {
-	expression = unparenthesizedExpression(expression)
-	if ident, ok := expression.(*ast.Ident); ok {
-		return a.identifierMayBeBodyResponse(ident)
-	}
-	switch typed := expression.(type) {
-	case *ast.CompositeLit:
-		for _, element := range typed.Elts {
-			if a.expressionContainsStoredBodyResponse(element) {
-				return true
-			}
-		}
-	case *ast.KeyValueExpr:
-		return a.expressionContainsStoredBodyResponse(typed.Key) ||
-			a.expressionContainsStoredBodyResponse(typed.Value)
-	case *ast.UnaryExpr:
-		return typed.Op == token.AND &&
-			a.expressionContainsStoredBodyResponse(typed.X)
-	}
-	return false
-}
-
-func (a *resourceCleanupAnalyzer) expressionCallsWithBodyResponse(expression ast.Expr) bool {
-	found := false
-	ast.Inspect(expression, func(node ast.Node) bool {
-		if found {
-			return false
-		}
-		if _, ok := node.(*ast.FuncLit); ok {
-			return false
-		}
-		call, ok := node.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		if selector, ok := unparenthesizedExpression(call.Fun).(*ast.SelectorExpr); ok &&
-			a.expressionRefersToBodyResponse(selector.X) {
-			found = true
-			return false
-		}
-		for _, argument := range call.Args {
-			if a.expressionContainsStoredBodyResponse(argument) {
-				found = true
-				return false
-			}
-		}
-		return true
-	})
-	return found
-}
-
-func (a *resourceCleanupAnalyzer) analyzeIf(
-	statement *ast.IfStmt,
-	input resourceFlowState,
-) resourceFlow {
-	state := input
-	if statement.Init != nil {
-		initFlow := a.analyzeStatement(statement.Init, state)
-		if initFlow.breaks != 0 || initFlow.continues != 0 {
-			a.valid = false
-			return resourceFlow{}
-		}
-		state = initFlow.normal
-	}
-	a.rejectBodyBindingCall(statement.Cond, state)
-	state = a.applyCleanupExpression(state, statement.Cond)
-	thenFlow := a.analyzeBlock(statement.Body.List, state)
-	elseFlow := resourceFlow{normal: state}
-	if statement.Else != nil {
-		elseFlow = a.analyzeStatement(statement.Else, state)
-	}
-	return mergeResourceFlows(thenFlow, elseFlow)
-}
-
-func (a *resourceCleanupAnalyzer) analyzeFor(
-	statement *ast.ForStmt,
-	input resourceFlowState,
-) resourceFlow {
-	state := input
-	if statement.Init != nil {
-		initFlow := a.analyzeStatement(statement.Init, state)
-		if initFlow.breaks != 0 || initFlow.continues != 0 {
-			a.valid = false
-			return resourceFlow{}
-		}
-		state = initFlow.normal
-	}
-	if statement.Cond != nil {
-		a.rejectBodyBindingCall(statement.Cond, state)
-	}
-	return a.analyzeLoop(statement.Body, statement.Post, state)
-}
-
-func (a *resourceCleanupAnalyzer) analyzeRange(
-	statement *ast.RangeStmt,
-	input resourceFlowState,
-) resourceFlow {
-	a.rejectBodyBindingExposure(statement.X, input)
-	if statement.Tok == token.ASSIGN {
-		a.rejectActiveReassignment([]ast.Expr{statement.Key, statement.Value}, input)
-	}
-	return a.analyzeLoop(statement.Body, nil, input)
-}
-
-func (a *resourceCleanupAnalyzer) analyzeLoop(
-	body *ast.BlockStmt,
-	post ast.Stmt,
-	input resourceFlowState,
-) resourceFlow {
-	entry := input
-	exits := input
-	var breaks resourceFlowState
-	for a.valid {
-		bodyFlow := a.analyzeBlock(body.List, entry)
-		breaks |= bodyFlow.breaks
-		iteration := bodyFlow.normal | bodyFlow.continues
-		if post != nil && iteration != 0 {
-			postFlow := a.analyzeStatement(post, iteration)
-			if postFlow.breaks != 0 || postFlow.continues != 0 {
-				a.valid = false
-				break
-			}
-			iteration = postFlow.normal
-		}
-		exits |= iteration
-		nextEntry := entry | iteration
-		if nextEntry == entry {
-			break
-		}
-		entry = nextEntry
-	}
-	return resourceFlow{normal: exits | breaks}
-}
-
-func (a *resourceCleanupAnalyzer) analyzeSwitch(
-	statement *ast.SwitchStmt,
-	input resourceFlowState,
-) resourceFlow {
-	state := input
-	if statement.Init != nil {
-		initFlow := a.analyzeStatement(statement.Init, state)
-		if initFlow.breaks != 0 || initFlow.continues != 0 {
-			a.valid = false
-			return resourceFlow{}
-		}
-		state = initFlow.normal
-	}
-	if statement.Tag != nil {
-		a.rejectBodyBindingCall(statement.Tag, state)
-	}
-	for _, rawClause := range statement.Body.List {
-		clause, ok := rawClause.(*ast.CaseClause)
-		if !ok {
-			continue
-		}
-		for _, expression := range clause.List {
-			a.rejectBodyBindingCall(expression, state)
-		}
-	}
-	return a.analyzeCaseClauses(statement.Body.List, state)
-}
-
-func (a *resourceCleanupAnalyzer) analyzeTypeSwitch(
-	statement *ast.TypeSwitchStmt,
-	input resourceFlowState,
-) resourceFlow {
-	state := input
-	for _, init := range []ast.Stmt{statement.Init, statement.Assign} {
-		if init == nil {
-			continue
-		}
-		initFlow := a.analyzeStatement(init, state)
-		if initFlow.breaks != 0 || initFlow.continues != 0 {
-			a.valid = false
-			return resourceFlow{}
-		}
-		state = initFlow.normal
-	}
-	return a.analyzeCaseClauses(statement.Body.List, state)
-}
-
-func (a *resourceCleanupAnalyzer) analyzeCaseClauses(
-	clauses []ast.Stmt,
-	input resourceFlowState,
-) resourceFlow {
-	result := resourceFlow{}
-	hasDefault := false
-	for _, rawClause := range clauses {
-		clause, ok := rawClause.(*ast.CaseClause)
-		if !ok {
-			a.valid = false
-			return resourceFlow{}
-		}
-		if clause.List == nil {
-			hasDefault = true
-		}
-		clauseFlow := a.analyzeBlock(clause.Body, input)
-		result.normal |= clauseFlow.normal | clauseFlow.breaks
-		result.continues |= clauseFlow.continues
-	}
-	if !hasDefault {
-		result.normal |= input
-	}
-	return result
-}
-
-func (a *resourceCleanupAnalyzer) analyzeSelect(
-	statement *ast.SelectStmt,
-	input resourceFlowState,
-) resourceFlow {
-	result := resourceFlow{normal: input}
-	for _, rawClause := range statement.Body.List {
-		clause, ok := rawClause.(*ast.CommClause)
-		if !ok {
-			a.valid = false
-			return resourceFlow{}
-		}
-		state := input
-		if clause.Comm != nil {
-			commFlow := a.analyzeStatement(clause.Comm, state)
-			if commFlow.breaks != 0 || commFlow.continues != 0 {
-				a.valid = false
-				return resourceFlow{}
-			}
-			state = commFlow.normal
-		}
-		clauseFlow := a.analyzeBlock(clause.Body, state)
-		result.normal |= clauseFlow.normal | clauseFlow.breaks
-		result.continues |= clauseFlow.continues
-	}
-	return result
-}
-
-func mergeResourceFlows(left resourceFlow, right resourceFlow) resourceFlow {
-	return resourceFlow{
-		normal:    left.normal | right.normal,
-		breaks:    left.breaks | right.breaks,
-		continues: left.continues | right.continues,
-	}
-}
-
-func markResourceSafe(state resourceFlowState) resourceFlowState {
-	if state&resourceActive == 0 {
-		return state
-	}
-	return state&^resourceActive | resourceSafe
-}
-
-func (a *resourceCleanupAnalyzer) applyCleanupExpressions(
-	state resourceFlowState,
-	expressions []ast.Expr,
-) resourceFlowState {
-	for _, expression := range expressions {
-		state = a.applyCleanupExpression(state, expression)
-	}
-	return state
-}
-
-func (a *resourceCleanupAnalyzer) applyCleanupExpression(
-	state resourceFlowState,
-	expression ast.Expr,
-) resourceFlowState {
-	call, ok := unparenthesizedExpression(expression).(*ast.CallExpr)
-	if !ok || !a.isCleanupCall(call) {
-		return state
-	}
-	return markResourceSafe(state)
-}
-
 func unparenthesizedExpression(expression ast.Expr) ast.Expr {
 	for {
 		parenthesized, ok := expression.(*ast.ParenExpr)
@@ -1179,52 +521,6 @@ func unparenthesizedExpression(expression ast.Expr) ast.Expr {
 		}
 		expression = parenthesized.X
 	}
-}
-
-func (a *resourceCleanupAnalyzer) isCleanupCall(call *ast.CallExpr) bool {
-	receiver := a.matcher.callReceiver(call.Fun)
-	if receiver == nil {
-		return false
-	}
-	object := bindingObject(a.info, receiver)
-	if object == nil {
-		a.valid = false
-		return false
-	}
-	return object == a.acquisition.resourceObject
-}
-
-func (a *resourceCleanupAnalyzer) rejectActiveReassignment(
-	expressions []ast.Expr,
-	state resourceFlowState,
-) {
-	if state&resourceActive == 0 {
-		return
-	}
-	for _, expression := range expressions {
-		if a.expressionMayBeCleanupTarget(expression) {
-			a.valid = false
-			return
-		}
-	}
-}
-
-func (a *resourceCleanupAnalyzer) rejectActiveExit(state resourceFlowState) {
-	if state&resourceActive != 0 {
-		a.valid = false
-	}
-}
-
-func (a *resourceCleanupAnalyzer) isStandardErrorGuard(statement ast.Stmt) bool {
-	if a.acquisition.errorObject == nil {
-		return false
-	}
-	guard, ok := statement.(*ast.IfStmt)
-	if !ok || guard.Init != nil || guard.Else != nil ||
-		!conditionChecksErrorNonNil(guard.Cond, a.info, a.acquisition.errorObject) {
-		return false
-	}
-	return blockAlwaysTerminates(guard.Body)
 }
 
 func conditionChecksErrorNonNil(
@@ -1303,114 +599,6 @@ func isDirectPanicCall(expression ast.Expr) bool {
 	}
 	ident, ok := call.Fun.(*ast.Ident)
 	return ok && ident.Name == "panic"
-}
-
-func enclosingFunctionForLine(
-	fset *token.FileSet,
-	file *ast.File,
-	line int,
-) *ast.FuncDecl {
-	for _, decl := range file.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Body == nil {
-			continue
-		}
-		start := fset.Position(fn.Pos()).Line
-		end := fset.Position(fn.End()).Line
-		if start <= line && line <= end {
-			return fn
-		}
-	}
-	return nil
-}
-
-func (m cleanupMatcher) callReceiver(expr ast.Expr) *ast.Ident {
-	selector, ok := expr.(*ast.SelectorExpr)
-	if !ok || !m.methods[selector.Sel.Name] {
-		return nil
-	}
-	if m.body {
-		inner, ok := selector.X.(*ast.SelectorExpr)
-		if !ok || inner.Sel.Name != "Body" {
-			return nil
-		}
-		ident, ok := inner.X.(*ast.Ident)
-		if !ok || ident.Name != m.variable {
-			return nil
-		}
-		return ident
-	}
-	ident, ok := selector.X.(*ast.Ident)
-	if !ok || ident.Name != m.variable {
-		return nil
-	}
-	return ident
-}
-
-func hunkFunctionWindowContainsCleanup(
-	file changedFile,
-	candidate candidateLine,
-	matcher cleanupMatcher,
-) bool {
-	if candidate.HunkIndex < 0 || candidate.HunkIndex >= len(file.Hunks) {
-		return false
-	}
-	hunk := file.Hunks[candidate.HunkIndex]
-	if candidate.HunkLineIndex < 0 || candidate.HunkLineIndex >= len(hunk.Lines) {
-		return false
-	}
-	start := -1
-	for i := candidate.HunkLineIndex; i >= 0; i-- {
-		if isFunctionStartLine(hunk.Lines[i]) {
-			start = i
-			break
-		}
-	}
-	if start < 0 {
-		return false
-	}
-	end := len(hunk.Lines)
-	for i := candidate.HunkLineIndex + 1; i < len(hunk.Lines); i++ {
-		if isFunctionStartLine(hunk.Lines[i]) {
-			end = i
-			break
-		}
-	}
-	var source strings.Builder
-	source.WriteString("package review\n")
-	sourceLine := 1
-	candidateSourceLine := 0
-	for i := start; i < end; i++ {
-		line := hunk.Lines[i]
-		if line.Kind != diffLineAdded && line.Kind != diffLineContext {
-			continue
-		}
-		sourceLine++
-		if i == candidate.HunkLineIndex {
-			candidateSourceLine = sourceLine
-		}
-		source.WriteString(line.Text)
-		source.WriteByte('\n')
-	}
-	if candidateSourceLine == 0 {
-		return false
-	}
-	fset := token.NewFileSet()
-	parsedFile, err := parser.ParseFile(fset, "review_hunk.go", source.String(), 0)
-	if err != nil {
-		return false
-	}
-	fn := enclosingFunctionForLine(fset, parsedFile, candidateSourceLine)
-	if fn == nil || fn.Body == nil {
-		return false
-	}
-	return functionProvesBoundCleanup(
-		fset,
-		parsedFile,
-		fn,
-		candidateSourceLine,
-		matcher,
-	)
 }
 
 func isFunctionStartLine(line diffLine) bool {
