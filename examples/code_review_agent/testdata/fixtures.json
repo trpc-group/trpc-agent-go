@@ -1,0 +1,11 @@
+[
+  {"name":"clean","status":"completed"},
+  {"name":"security","rule":"security.dynamic-input"},
+  {"name":"goroutine_context","rule":"concurrency.goroutine-lifetime"},
+  {"name":"resource","rule":"resources.close-missing"},
+  {"name":"database","rule":"database.rows-close-missing"},
+  {"name":"test_missing","rule":"tests.missing-related-test"},
+  {"name":"duplicate","rule":"security.dynamic-input"},
+  {"name":"sandbox_failure","status":"needs_human_review"},
+  {"name":"secret_redaction","rule":"secrets.literal"}
+]

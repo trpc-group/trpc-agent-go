@@ -1,0 +1,107 @@
+{
+  "task_id": "sample-security",
+  "status": "completed",
+  "input": {
+    "kind": "fixture",
+    "digest": "sha256:bc6007643d956e3953ad3235436188ab0e56830bffb4e7067cbf453f1fb16716",
+    "files": 2,
+    "hunks": 2,
+    "added_lines": 2
+  },
+  "findings": [
+    {
+      "severity": "high",
+      "category": "security",
+      "file": "app.go",
+      "line": 2,
+      "title": "unsafe dynamic execution or query",
+      "evidence": "func run(user string) { exec.Command(\"sh\", \"-c\", user) }",
+      "recommendation": "use fixed commands or parameterized queries with validated arguments",
+      "confidence": 0.9,
+      "source": "rule",
+      "rule_id": "security.dynamic-input"
+    }
+  ],
+  "needs_human_review": [],
+  "sandbox_runs": [
+    {
+      "command_id": "go-test",
+      "stdout": "ok\n",
+      "stderr": "",
+      "exit_code": 0,
+      "timed_out": false,
+      "truncated": false,
+      "duration_ms": 0,
+      "outcome": "success"
+    },
+    {
+      "command_id": "go-vet",
+      "stdout": "ok\n",
+      "stderr": "",
+      "exit_code": 0,
+      "timed_out": false,
+      "truncated": false,
+      "duration_ms": 0,
+      "outcome": "success"
+    },
+    {
+      "command_id": "staticcheck",
+      "stdout": "ok\n",
+      "stderr": "",
+      "exit_code": 0,
+      "timed_out": false,
+      "truncated": false,
+      "duration_ms": 0,
+      "outcome": "success"
+    }
+  ],
+  "metrics": {
+    "duration_ms": 194,
+    "files": 2,
+    "findings": 1,
+    "human_review": 0,
+    "permission_blocks": 0,
+    "permission_decisions": 3,
+    "sandbox_duration_ms": 0,
+    "sandbox_runs": 3,
+    "severity_high": 1,
+    "suppressed": 0,
+    "tool_calls": 3
+  },
+  "governance": [
+    "allow:go-test::3190296ecc68873ab9fd816e588ba5c52419a95ec0a5250446a898770df5e80d",
+    "allow:go-vet::9ab3aefa14b63f3a63e661edcb355ae4bd03e348aa65053abbd68f4b8299e49d",
+    "allow:staticcheck::91590cdf0adfc9eebe630259ccab557c12dedff43180033b1d47f3460b4aad09"
+  ],
+  "artifacts": [
+    "review_report.json",
+    "review_report.md"
+  ],
+  "files": [
+    "app.go",
+    "app_test.go"
+  ],
+  "parser_warnings": [],
+  "stats": {
+    "severity": {
+      "high": 1
+    },
+    "tools": {
+      "count": 3,
+      "duration_ms": 0,
+      "error_by_outcome": {
+        "success": 3
+      }
+    },
+    "sandbox": {
+      "runs": 3,
+      "failed": 0,
+      "timed_out": 0,
+      "truncated": 0,
+      "non_zero": 0,
+      "unisolated": false
+    },
+    "artifacts": 2,
+    "governance": 3
+  }
+}

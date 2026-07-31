@@ -1,0 +1,12 @@
+diff --git a/db.go b/db.go
+--- a/db.go
++++ b/db.go
+@@ -1,1 +1,2 @@
+ package app
++func rows(db *sql.DB) { rows, _ := db.Query("select 1"); _ = rows }
+diff --git a/db_test.go b/db_test.go
+--- a/db_test.go
++++ b/db_test.go
+@@ -1,1 +1,2 @@
+ package app
++func TestRows(t *testing.T) {}
