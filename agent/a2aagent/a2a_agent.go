@@ -51,6 +51,7 @@ const (
 	defaultUserIDHeader                  = "X-User-ID"
 	anonymousUserIDCookieName            = "trpc_agent_a2a_anon"
 	anonymousUserIDPrefix                = "A2A_ANONYMOUS_"
+	anonymousUserIDScopeSeparator        = "_"
 	anonymousUserIDCookieStateKeyPrefix  = "trpc.agent.a2a.anonymous_user_id_cookie."
 	anonymousUserIDCookieSecureKeySuffix = ".secure"
 	anonymousUserIDCookiePathKeySuffix   = ".path"
@@ -1345,8 +1346,18 @@ func isAnonymousUserIDCookieValue(value string) bool {
 		return false
 	}
 	encoded := strings.TrimPrefix(value, anonymousUserIDPrefix)
-	decoded, err := hex.DecodeString(encoded)
-	return err == nil && len(decoded) == anonymousUserIDCookieEncodedBytes
+	if decoded, err := hex.DecodeString(encoded); err == nil &&
+		len(decoded) == anonymousUserIDCookieEncodedBytes {
+		return true
+	}
+	parts := strings.Split(encoded, anonymousUserIDScopeSeparator)
+	if len(parts) != 2 {
+		return false
+	}
+	scope, scopeErr := hex.DecodeString(parts[0])
+	principal, principalErr := hex.DecodeString(parts[1])
+	return scopeErr == nil && len(scope) == sha256.Size &&
+		principalErr == nil && len(principal) == anonymousUserIDCookieEncodedBytes
 }
 
 // sendErrorEvent sends an error event to the event channel.

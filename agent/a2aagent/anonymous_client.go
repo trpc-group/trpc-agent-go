@@ -82,28 +82,31 @@ func (h *anonymousA2AClientInitHandler) Handle(
 	if err := h.middleware.ensureCookieJar(httpClient.Jar); err != nil {
 		return nil, err
 	}
-	if !h.middleware.needsInitialization(req) {
-		requestClient, err := h.middleware.clientWithCookieJar(httpClient)
+	var (
+		release func()
+		err     error
+	)
+	if h.middleware.needsInitialization(req) {
+		release, err = h.middleware.acquire(ctx)
 		if err != nil {
 			return nil, err
 		}
-		return h.next.Handle(ctx, requestClient, req)
+		defer release()
 	}
 
-	release, err := h.middleware.acquire(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer release()
-
-	// The first request owns the gate until the HTTP client has processed its
-	// response and stored Set-Cookie in the jar. A waiter can then send through
-	// the same jar and continue under the principal established by the winner.
+	// The first request owns the gate until the downstream handler has
+	// processed its response and this middleware has stored Set-Cookie in the
+	// jar. A waiter can then send through the same jar and continue under the
+	// principal established by the winner.
 	requestClient, err := h.middleware.clientWithCookieJar(httpClient)
 	if err != nil {
 		return nil, err
 	}
-	return h.next.Handle(ctx, requestClient, req)
+	request := req.Clone(ctx)
+	h.middleware.addJarCookies(request)
+	resp, handleErr := h.next.Handle(ctx, requestClient, request)
+	h.middleware.captureResponseCookies(request, resp)
+	return resp, handleErr
 }
 
 func (m *anonymousA2AClientInitMiddleware) needsInitialization(
@@ -147,6 +150,77 @@ func (m *anonymousA2AClientInitMiddleware) clientWithCookieJar(
 	requestClient := *httpClient
 	requestClient.Jar = jar
 	return &requestClient, nil
+}
+
+func (m *anonymousA2AClientInitMiddleware) cookieJar() http.CookieJar {
+	m.jarMu.Lock()
+	defer m.jarMu.Unlock()
+	return m.jar
+}
+
+// addJarCookies makes cookie state visible to handlers that do not call
+// http.Client.Do themselves. The standard client path still receives the jar
+// on the shallow-copied client so it can apply its normal cookie behavior.
+func (m *anonymousA2AClientInitMiddleware) addJarCookies(req *http.Request) {
+	if req == nil || req.URL == nil {
+		return
+	}
+	jar := m.cookieJar()
+	if jar == nil {
+		return
+	}
+
+	jarCookies := jar.Cookies(req.URL)
+	if len(jarCookies) == 0 {
+		return
+	}
+	if req.Header == nil {
+		req.Header = make(http.Header)
+	}
+	jarCookieNames := make(map[string]struct{}, len(jarCookies))
+	for _, cookie := range jarCookies {
+		if cookie != nil {
+			jarCookieNames[cookie.Name] = struct{}{}
+		}
+	}
+
+	existingCookies := req.Cookies()
+	req.Header.Del("Cookie")
+	for _, cookie := range existingCookies {
+		if cookie == nil {
+			continue
+		}
+		if _, existsInJar := jarCookieNames[cookie.Name]; existsInJar {
+			continue
+		}
+		req.AddCookie(cookie)
+	}
+	for _, cookie := range jarCookies {
+		if cookie != nil {
+			req.AddCookie(cookie)
+		}
+	}
+}
+
+func (m *anonymousA2AClientInitMiddleware) captureResponseCookies(
+	req *http.Request,
+	resp *http.Response,
+) {
+	if req == nil || resp == nil {
+		return
+	}
+	jar := m.cookieJar()
+	if jar == nil {
+		return
+	}
+	responseURL := req.URL
+	if resp.Request != nil && resp.Request.URL != nil {
+		responseURL = resp.Request.URL
+	}
+	if responseURL == nil {
+		return
+	}
+	jar.SetCookies(responseURL, resp.Cookies())
 }
 
 func (m *anonymousA2AClientInitMiddleware) acquire(ctx context.Context) (func(), error) {

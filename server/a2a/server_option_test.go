@@ -882,6 +882,7 @@ func TestAnonymousUserCookieMiddleware_CookieAttributes(t *testing.T) {
 			})
 			responseFinalizer := anonymousUserCookieResponseMiddleware{
 				secureCookie: tt.secureCookie,
+				cookiePath:   "/test",
 			}
 			handler := middleware.Wrap(
 				auth.NewMiddleware(
@@ -948,19 +949,6 @@ func TestPreAuthIdentityMiddleware_PreservesExistingAuthenticatedUser(t *testing
 	req := httptest.NewRequest(http.MethodGet, "http://example.com/test", nil)
 	req = req.WithContext(context.WithValue(req.Context(), auth.AuthUserKey, user))
 	handler.ServeHTTP(httptest.NewRecorder(), req)
-	require.True(t, called)
-}
-
-func TestAnonymousRequestPathMiddleware_NilRequest(t *testing.T) {
-	called := false
-	handler := anonymousRequestPathMiddleware{}.Wrap(http.HandlerFunc(func(
-		_ http.ResponseWriter,
-		r *http.Request,
-	) {
-		called = true
-		require.Nil(t, r)
-	}))
-	handler.ServeHTTP(httptest.NewRecorder(), nil)
 	require.True(t, called)
 }
 

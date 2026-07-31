@@ -469,6 +469,61 @@ func TestNewAnonymousA2AClientInstallsCookieJar(t *testing.T) {
 	require.Equal(t, []string{"", anonymousTestCookieValue(1)}, received)
 }
 
+func TestNewAnonymousA2AClientCustomHandlerKeepsCookieContinuity(t *testing.T) {
+	var receivedCookies []string
+	customHandler := httpReqHandlerFunc(func(
+		_ context.Context,
+		_ *http.Client,
+		req *http.Request,
+	) (*http.Response, error) {
+		cookieValue := ""
+		if cookie, err := req.Cookie(anonymousUserIDCookieName); err == nil {
+			cookieValue = cookie.Value
+		}
+		receivedCookies = append(receivedCookies, cookieValue)
+		if cookieValue == "" {
+			cookieValue = anonymousTestCookieValue(1)
+		}
+
+		rr := httptest.NewRecorder()
+		http.SetCookie(rr, &http.Cookie{
+			Name:  anonymousUserIDCookieName,
+			Value: cookieValue,
+			Path:  "/",
+		})
+		rr.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(rr).Encode(struct {
+			JSONRPC string           `json:"jsonrpc"`
+			ID      any              `json:"id"`
+			Result  protocol.Message `json:"result"`
+		}{
+			JSONRPC: "2.0",
+			Result: protocol.Message{
+				Kind:      protocol.KindMessage,
+				MessageID: "response",
+				Role:      protocol.MessageRoleAgent,
+				Parts:     []protocol.Part{protocol.NewTextPart("test response")},
+			},
+		})
+		resp := rr.Result()
+		resp.Request = req
+		return resp, nil
+	})
+
+	directClient, err := NewAnonymousA2AClient(
+		"http://example.com/a2a",
+		client.WithHTTPReqHandler(customHandler),
+	)
+	require.NoError(t, err)
+	message := protocol.NewMessage(
+		protocol.MessageRoleUser,
+		[]protocol.Part{protocol.NewTextPart("hello")},
+	)
+	require.NoError(t, sendDirectClientMessage(directClient, message))
+	require.NoError(t, sendDirectClientMessage(directClient, message))
+	require.Equal(t, []string{"", anonymousTestCookieValue(1)}, receivedCookies)
+}
+
 func TestNewAnonymousA2AClientPreservesConfiguredCookieJar(t *testing.T) {
 	const (
 		routingCookieName = "route"

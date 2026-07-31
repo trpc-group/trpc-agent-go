@@ -1603,6 +1603,18 @@ func TestAnonymousCookieJarDoesNotReplayOrCaptureOutsideRemoteScope(t *testing.T
 }
 
 func TestAnonymousCookieStateRejectsInvalidValues(t *testing.T) {
+	t.Run("accepts endpoint-scoped values", func(t *testing.T) {
+		value := anonymousUserIDPrefix +
+			strings.Repeat("ab", 32) + anonymousUserIDScopeSeparator +
+			strings.Repeat("cd", anonymousUserIDCookieEncodedBytes)
+		state := newAnonymousCookieState(&session.Session{}, nil, nil, "state-key")
+
+		state.capture(context.Background(), value)
+		got, ok := state.load()
+		require.True(t, ok)
+		require.Equal(t, value, got)
+	})
+
 	var nilState *anonymousCookieState
 	_, ok := nilState.load()
 	require.False(t, ok)
