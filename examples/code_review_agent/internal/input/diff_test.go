@@ -89,6 +89,50 @@ func TestParseUnifiedDiffAdversarialEdges(t *testing.T) {
 	}
 }
 
+func TestParseUnifiedDiffStartsNewFileWhenHeaderAppearsBeforeHunkCountsEnd(t *testing.T) {
+	diff := "diff --git a/a.go b/a.go\n" +
+		"--- a/a.go\n" +
+		"+++ b/a.go\n" +
+		"@@ -1,3 +1,3 @@\n" +
+		" package a\n" +
+		"+func A() {}\n" +
+		"diff --git a/b.go b/b.go\n" +
+		"--- a/b.go\n" +
+		"+++ b/b.go\n" +
+		"@@ -1 +1,2 @@\n" +
+		" package b\n" +
+		"+func B() {}\n"
+	parsed, err := ParseUnifiedDiffString(diff, Limits{MaxBytes: 1 << 20, MaxLines: 100})
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(parsed.Files) != 2 || parsed.Files[1].NewPath != "b.go" || len(parsed.Files[1].Added) != 1 {
+		t.Fatalf("file header consumed as hunk content: %#v", parsed.Files)
+	}
+	if parsed.Complete {
+		t.Fatalf("mismatched first hunk should be marked incomplete")
+	}
+}
+
+func TestParseUnifiedDiffDetectsPackageOnAddedPackageClause(t *testing.T) {
+	diff := "diff --git a/new.go b/new.go\n" +
+		"--- /dev/null\n" +
+		"+++ b/new.go\n" +
+		"@@ -0,0 +1,2 @@\n" +
+		"+package newpkg\n" +
+		"+func New() {}\n"
+	parsed, err := ParseUnifiedDiffString(diff, Limits{MaxBytes: 1 << 20, MaxLines: 100})
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if got := parsed.Files[0].Package; got != "newpkg" {
+		t.Fatalf("file package = %q", got)
+	}
+	if got := parsed.Files[0].Added[0].Package; got != "newpkg" {
+		t.Fatalf("added package = %q", got)
+	}
+}
+
 func TestParseUnifiedDiffDetectsTruncatedHunk(t *testing.T) {
 	diff := "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1,1 +1,3 @@\n package a\n+func A() {}\n"
 	parsed, err := ParseUnifiedDiffString(diff, Limits{MaxBytes: 1 << 20, MaxLines: 100})
@@ -157,6 +201,28 @@ func TestBuildGitSnapshotCopiesOnlyTrackedSafeFiles(t *testing.T) {
 	}
 }
 
+func TestBuildGitSnapshotSkipsTrackedFilesDeletedFromWorktree(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+	runGit(t, repo, "config", "user.email", "test@example.com")
+	runGit(t, repo, "config", "user.name", "Test User")
+	writeFile(t, repo, "go.mod", "module example.com/repo\n")
+	writeFile(t, repo, "deleted.go", "package repo\n")
+	runGit(t, repo, "add", "go.mod", "deleted.go")
+	runGit(t, repo, "commit", "-m", "initial")
+	if err := os.Remove(filepath.Join(repo, "deleted.go")); err != nil {
+		t.Fatal(err)
+	}
+
+	snap, cleanup, err := BuildGitSnapshot(repo, 128<<20)
+	if err != nil {
+		t.Fatalf("snapshot with unstaged delete: %v", err)
+	}
+	defer cleanup()
+	assertExists(t, filepath.Join(snap.Path, "go.mod"))
+	assertMissing(t, filepath.Join(snap.Path, "deleted.go"))
+}
+
 func TestBuildGitSnapshotNormalizesFileModesForContainerReadOnlyStage(t *testing.T) {
 	repo := t.TempDir()
 	runGit(t, repo, "init")
@@ -180,6 +246,54 @@ func TestBuildGitSnapshotNormalizesFileModesForContainerReadOnlyStage(t *testing
 	}
 	if got := st.Mode().Perm(); got != 0o644 {
 		t.Fatalf("snapshot file mode = %o, want 0644", got)
+	}
+}
+
+func TestCopyFileRejectsSymlinkSource(t *testing.T) {
+	dir := t.TempDir()
+	outside := filepath.Join(dir, "outside.txt")
+	if err := os.WriteFile(outside, []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "tracked.go")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(dir, "snapshot.go")
+	if err := copyFile(link, dst, 0o644); err == nil {
+		t.Fatalf("copyFile followed symlink source into snapshot")
+	}
+	assertMissing(t, dst)
+}
+
+func TestCopyOpenedFileUsesAlreadyValidatedDescriptor(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "tracked.go")
+	if err := os.WriteFile(src, []byte("package original\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer in.Close()
+	replacement := filepath.Join(dir, "replacement.go")
+	if err := os.WriteFile(replacement, []byte("package replaced\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacement, src); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(dir, "snapshot.go")
+	if err := copyOpenedFile(in, dst, 0o644); err != nil {
+		t.Fatalf("copy opened file: %v", err)
+	}
+	data, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "package original\n" {
+		t.Fatalf("copied path replacement instead of validated fd: %q", data)
 	}
 }
 

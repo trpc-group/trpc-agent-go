@@ -88,3 +88,29 @@ func TestRenderJSONAndMarkdownRedactAndSummarize(t *testing.T) {
 		t.Fatalf("artifact metadata omitted:\njson=%s\nmd=%s", js, md)
 	}
 }
+
+func TestRenderJSONAndMarkdownDoNotMutateCallerDTO(t *testing.T) {
+	dto := DTO{
+		TaskID:     "mutate",
+		Status:     domain.StatusCompleted,
+		Findings:   []domain.Finding{{Evidence: "fixture-secret-value-github-token"}},
+		Governance: []string{"allow:token=\"fixture-secret-value-governance\""},
+		SandboxRuns: []sandbox.Result{{
+			Stdout: "password=\"fixture-secret-value-stdout\"",
+		}},
+		ArtifactDetails: []Artifact{{Path: "review_report.json"}},
+	}
+	if _, err := RenderJSON(dto); err != nil {
+		t.Fatalf("json: %v", err)
+	}
+	if dto.Findings[0].Evidence != "fixture-secret-value-github-token" ||
+		dto.Governance[0] != "allow:token=\"fixture-secret-value-governance\"" ||
+		dto.SandboxRuns[0].Stdout != "password=\"fixture-secret-value-stdout\"" ||
+		dto.ArtifactDetails[0].Path != "review_report.json" {
+		t.Fatalf("RenderJSON mutated caller DTO: %#v", dto)
+	}
+	_ = RenderMarkdown(dto)
+	if dto.Findings[0].Evidence != "fixture-secret-value-github-token" || dto.SandboxRuns[0].Stdout != "password=\"fixture-secret-value-stdout\"" {
+		t.Fatalf("RenderMarkdown mutated caller DTO: %#v", dto)
+	}
+}

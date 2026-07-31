@@ -68,11 +68,14 @@ type Config struct {
 type runtimeFactory func(Config) (sandbox.Runtime, error)
 
 // Run executes a full review.
-func Run(cfg Config) (report.DTO, error) {
-	return runWithRuntimeFactory(cfg, defaultRuntimeFactory)
+func Run(ctx context.Context, cfg Config) (report.DTO, error) {
+	return runWithRuntimeFactory(ctx, cfg, defaultRuntimeFactory)
 }
 
-func runWithRuntimeFactory(cfg Config, newRuntime runtimeFactory) (report.DTO, error) {
+func runWithRuntimeFactory(ctx context.Context, cfg Config, newRuntime runtimeFactory) (report.DTO, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	started := time.Now()
 	if cfg.Runtime == "" {
 		cfg.Runtime = RuntimeContainer
@@ -98,7 +101,7 @@ func runWithRuntimeFactory(cfg Config, newRuntime runtimeFactory) (report.DTO, e
 			return report.DTO{}, err
 		}
 		defer st.Close()
-		return st.GetReview(cfg.ShowTask)
+		return st.GetReview(ctx, cfg.ShowTask)
 	}
 	if cfg.Runtime == RuntimeLocal && !cfg.AllowLocal {
 		return report.DTO{}, fmt.Errorf("local runtime requires --allow-local")
@@ -126,12 +129,12 @@ func runWithRuntimeFactory(cfg Config, newRuntime runtimeFactory) (report.DTO, e
 	defer st.Close()
 	diffBytes, err := readDiff(cfg)
 	if err != nil {
-		_ = persistFailure(st, cfg, taskID, "input_error", err)
+		_ = persistFailure(ctx, st, cfg, taskID, "input_error", err)
 		return report.DTO{}, err
 	}
 	parsed, err := input.ParseUnifiedDiffString(string(diffBytes), input.Limits{MaxBytes: 16 << 20, MaxLines: 200000})
 	if err != nil {
-		_ = persistFailure(st, cfg, taskID, "parse_error", err)
+		_ = persistFailure(ctx, st, cfg, taskID, "parse_error", err)
 		return report.DTO{}, err
 	}
 	engineOut := review.NewEngine(review.NewRedactor()).Review(parsed)
@@ -139,11 +142,11 @@ func runWithRuntimeFactory(cfg Config, newRuntime runtimeFactory) (report.DTO, e
 	if !parsed.Complete || len(engineOut.NeedsHumanReview) > 0 {
 		status = domain.StatusNeedsHumanReview
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	snap, cleanup, err := buildSandboxSnapshot(cfg, diffBytes)
 	if err != nil {
-		_ = persistFailure(st, cfg, taskID, "snapshot_error", err)
+		_ = persistFailure(ctx, st, cfg, taskID, "snapshot_error", err)
 		return report.DTO{}, err
 	}
 	defer cleanup()
@@ -279,6 +282,7 @@ func runWithRuntimeFactory(cfg Config, newRuntime runtimeFactory) (report.DTO, e
 			metrics["dependency_unavailable"]++
 		}
 	}
+	runs = redactSandboxRuns(redactor, runs)
 	dto := report.DTO{
 		TaskID: taskID, Status: status, Input: inputSummary(cfg, diffBytes, parsed), Findings: engineOut.Findings, NeedsHumanReview: engineOut.NeedsHumanReview,
 		SandboxRuns: runs, Governance: governanceActions, Artifacts: []string{"review_report.json", "review_report.md"},
@@ -295,14 +299,11 @@ func runWithRuntimeFactory(cfg Config, newRuntime runtimeFactory) (report.DTO, e
 	if err := os.WriteFile(filepath.Join(cfg.OutDir, "review_report.md"), []byte(report.RenderMarkdown(dto)), 0o600); err != nil {
 		return report.DTO{}, err
 	}
-	if err := writeAcceptanceManifest(cfg.OutDir, dto); err != nil {
-		return report.DTO{}, err
-	}
-	artifacts, err := collectReportArtifacts(cfg.OutDir)
+	reportArtifacts, err := collectReportArtifacts(cfg.OutDir, "review_report.json", "review_report.md")
 	if err != nil {
 		return report.DTO{}, err
 	}
-	dto.ArtifactDetails = artifacts
+	dto.ArtifactDetails = reportArtifacts
 	dto.Stats = report.BuildStats(dto)
 	js, err = report.RenderJSON(dto)
 	if err != nil {
@@ -317,19 +318,28 @@ func runWithRuntimeFactory(cfg Config, newRuntime runtimeFactory) (report.DTO, e
 	if err := writeAcceptanceManifest(cfg.OutDir, dto); err != nil {
 		return report.DTO{}, err
 	}
-	artifacts, err = collectReportArtifacts(cfg.OutDir)
+	manifestArtifact, err := artifactForFile(cfg.OutDir, report.Artifact{Path: "acceptance_manifest.json", ContentType: "application/json", Durable: true})
 	if err != nil {
 		return report.DTO{}, err
 	}
-	dto.ArtifactDetails = artifacts
+	dto.ArtifactDetails = append(reportArtifacts, manifestArtifact)
 	dto.Stats = report.BuildStats(dto)
-	if err := st.Finalize(dto); err != nil {
+	if err := st.Finalize(ctx, dto); err != nil {
 		return report.DTO{}, err
 	}
 	return dto, nil
 }
 
-func persistFailure(st storage.Store, cfg Config, taskID, metric string, cause error) error {
+func redactSandboxRuns(redactor review.Redactor, runs []sandbox.Result) []sandbox.Result {
+	redacted := append([]sandbox.Result(nil), runs...)
+	for i := range redacted {
+		redacted[i].Stdout = redactor.Redact(redacted[i].Stdout)
+		redacted[i].Stderr = redactor.Redact(redacted[i].Stderr)
+	}
+	return redacted
+}
+
+func persistFailure(ctx context.Context, st storage.Store, cfg Config, taskID, metric string, cause error) error {
 	if st == nil {
 		return nil
 	}
@@ -342,14 +352,20 @@ func persistFailure(st storage.Store, cfg Config, taskID, metric string, cause e
 		ParserWarnings: []string{cause.Error()},
 	}
 	dto.Stats = report.BuildStats(dto)
-	return st.Finalize(dto)
+	return st.Finalize(ctx, dto)
 }
 
-func collectReportArtifacts(outDir string) ([]report.Artifact, error) {
-	artifacts := []report.Artifact{
-		{Path: "acceptance_manifest.json", ContentType: "application/json", Durable: true},
-		{Path: "review_report.json", ContentType: "application/json", Durable: true},
-		{Path: "review_report.md", ContentType: "text/markdown", Durable: true},
+func collectReportArtifacts(outDir string, paths ...string) ([]report.Artifact, error) {
+	artifacts := make([]report.Artifact, 0, len(paths))
+	for _, path := range paths {
+		artifact := report.Artifact{Path: path, Durable: true}
+		switch path {
+		case "acceptance_manifest.json", "review_report.json":
+			artifact.ContentType = "application/json"
+		case "review_report.md":
+			artifact.ContentType = "text/markdown"
+		}
+		artifacts = append(artifacts, artifact)
 	}
 	for i := range artifacts {
 		artifact, err := artifactForFile(outDir, artifacts[i])

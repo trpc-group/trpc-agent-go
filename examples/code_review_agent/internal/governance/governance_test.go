@@ -44,9 +44,36 @@ func TestGateAllowsOnlyDigestBoundFixedCommand(t *testing.T) {
 	if decision.Action != tool.PermissionActionAllow || spy.Count != 1 {
 		t.Fatalf("decision=%s stage=%d", decision.Action, spy.Count)
 	}
-	plan.Args[0] = "sh -c"
-	if _, err := Gate(context.Background(), policy, plan, nil, nil, spy.Stage); err == nil {
-		t.Fatalf("argument injection accepted")
+}
+
+func TestGateRejectsMutableCommandSurfaceBeforeStage(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*Plan)
+	}{
+		{"unknown command id", func(p *Plan) { p.CommandID = "rm" }},
+		{"wrong command mode", func(p *Plan) { p.Args[0] = "sh -c" }},
+		{"shell metacharacter in package arg", func(p *Plan) { p.Args = []string{"test", "./...;rm -rf /"} }},
+		{"shell command substitution", func(p *Plan) { p.Args = []string{"test", "$(id)"} }},
+		{"unknown env", func(p *Plan) { p.Env["AWS_SECRET_ACCESS_KEY"] = "fixture-secret-value" }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			plan := validPlan()
+			tt.mutate(&plan)
+			policy := StaticPolicy{Enabled: true, Action: tool.PermissionActionAllow, ExpectedPlanDigest: plan.Digest()}
+			spy := &StageSpy{}
+			decision, err := Gate(context.Background(), policy, plan, nil, nil, spy.Stage)
+			if err == nil {
+				t.Fatalf("unsafe plan was accepted: %#v", plan)
+			}
+			if decision.Action != tool.PermissionActionDeny {
+				t.Fatalf("decision = %s, want deny", decision.Action)
+			}
+			if spy.Count != 0 {
+				t.Fatalf("unsafe plan staged %d times", spy.Count)
+			}
+		})
 	}
 }
 
@@ -235,6 +262,28 @@ func TestDigestTreeAndFileDetectSkillMutation(t *testing.T) {
 	}
 	if treeBefore == treeAfter || fileBefore == fileAfter {
 		t.Fatalf("mutation was not reflected in digests")
+	}
+}
+
+func TestDigestTreeFramesPathAndContentBoundaries(t *testing.T) {
+	left := t.TempDir()
+	right := t.TempDir()
+	if err := os.WriteFile(filepath.Join(left, "ab"), []byte("c"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(right, "a"), []byte("bc"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	leftDigest, err := DigestTree(left)
+	if err != nil {
+		t.Fatalf("left digest: %v", err)
+	}
+	rightDigest, err := DigestTree(right)
+	if err != nil {
+		t.Fatalf("right digest: %v", err)
+	}
+	if leftDigest == rightDigest {
+		t.Fatalf("ambiguous tree digests matched: %s", leftDigest)
 	}
 }
 

@@ -14,23 +14,27 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"net/url"
 	"os"
 	"time"
 
 	_ "github.com/ncruces/go-sqlite3/driver"
 	_ "github.com/ncruces/go-sqlite3/embed"
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/domain"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/report"
 )
 
 const sqliteDriverName = "sqlite3"
 
+// ErrReviewNotFound is returned when no audit report exists for a task id.
+var ErrReviewNotFound = errors.New("review not found")
+
 // Store persists and retrieves review audits.
 type Store interface {
 	RecordDecision(context.Context, string, DecisionRecord) error
-	Finalize(report.DTO) error
-	GetReview(taskID string) (report.DTO, error)
+	Finalize(context.Context, report.DTO) error
+	GetReview(context.Context, string) (report.DTO, error)
 	Close() error
 }
 
@@ -70,7 +74,10 @@ func OpenSQLite(path string) (*SQLiteStore, error) {
 	if err := os.Chmod(path, 0o600); err != nil {
 		return nil, err
 	}
-	dsn := (&url.URL{Scheme: "file", Path: path, RawQuery: "_busy_timeout=5000"}).String()
+	q := url.Values{}
+	q.Add("_pragma", "busy_timeout(5000)")
+	q.Add("_pragma", "foreign_keys(on)")
+	dsn := (&url.URL{Scheme: "file", Path: path, RawQuery: q.Encode()}).String()
 	db, err := sql.Open(sqliteDriverName, dsn)
 	if err != nil {
 		return nil, err
@@ -124,7 +131,7 @@ func (s *SQLiteStore) RecordDecision(ctx context.Context, taskID string, rec Dec
 }
 
 // Finalize writes the final report and all audit entities in one transaction.
-func (s *SQLiteStore) Finalize(dto report.DTO) error {
+func (s *SQLiteStore) Finalize(ctx context.Context, dto report.DTO) error {
 	js, err := report.RenderJSON(dto)
 	if err != nil {
 		return err
@@ -133,14 +140,14 @@ func (s *SQLiteStore) Finalize(dto report.DTO) error {
 	if err := json.Unmarshal(js, &clean); err != nil {
 		return err
 	}
-	ctx := context.Background()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer rollbackUnlessCommitted(tx)
 	if _, err := tx.ExecContext(ctx,
-		"INSERT OR REPLACE INTO review_tasks(task_id,status,input_kind,input_digest,input_files,input_hunks,input_added_lines) VALUES(?,?,?,?,?,?,?)",
+		`INSERT INTO review_tasks(task_id,status,input_kind,input_digest,input_files,input_hunks,input_added_lines) VALUES(?,?,?,?,?,?,?)
+		 ON CONFLICT(task_id) DO UPDATE SET status=excluded.status,input_kind=excluded.input_kind,input_digest=excluded.input_digest,input_files=excluded.input_files,input_hunks=excluded.input_hunks,input_added_lines=excluded.input_added_lines`,
 		clean.TaskID, string(clean.Status), clean.Input.Kind, clean.Input.Digest, clean.Input.Files, clean.Input.Hunks, clean.Input.AddedLines,
 	); err != nil {
 		return err
@@ -150,8 +157,8 @@ func (s *SQLiteStore) Finalize(dto report.DTO) error {
 	}
 	for _, run := range clean.SandboxRuns {
 		if _, err := tx.ExecContext(ctx,
-			"INSERT INTO sandbox_runs(task_id,command_id,stdout,stderr,exit_code,timed_out,truncated,outcome) VALUES(?,?,?,?,?,?,?,?)",
-			clean.TaskID, run.CommandID, run.Stdout, run.Stderr, run.ExitCode, run.TimedOut, run.Truncated, run.Outcome,
+			"INSERT INTO sandbox_runs(task_id,command_id,stdout,stderr,exit_code,timed_out,truncated,outcome,duration_ms) VALUES(?,?,?,?,?,?,?,?,?)",
+			clean.TaskID, run.CommandID, run.Stdout, run.Stderr, run.ExitCode, run.TimedOut, run.Truncated, run.Outcome, run.DurationMS,
 		); err != nil {
 			return err
 		}
@@ -170,13 +177,11 @@ func (s *SQLiteStore) Finalize(dto report.DTO) error {
 			}
 		}
 	}
-	for _, f := range append(clean.Findings, clean.NeedsHumanReview...) {
-		if _, err := tx.ExecContext(ctx,
-			"INSERT INTO findings(task_id,severity,category,file,line,title,evidence,recommendation,confidence,source,rule_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-			clean.TaskID, string(f.Severity), f.Category, f.File, f.Line, f.Title, f.Evidence, f.Recommendation, f.Confidence, f.Source, f.RuleID,
-		); err != nil {
-			return err
-		}
+	if err := insertFindings(ctx, tx, clean.TaskID, clean.Findings, false); err != nil {
+		return err
+	}
+	if err := insertFindings(ctx, tx, clean.TaskID, clean.NeedsHumanReview, true); err != nil {
+		return err
 	}
 	artifacts := clean.ArtifactDetails
 	if len(artifacts) == 0 {
@@ -210,8 +215,7 @@ func (s *SQLiteStore) Finalize(dto report.DTO) error {
 }
 
 // GetReview reads one aggregate report from a read-only transaction snapshot.
-func (s *SQLiteStore) GetReview(taskID string) (report.DTO, error) {
-	ctx := context.Background()
+func (s *SQLiteStore) GetReview(ctx context.Context, taskID string) (report.DTO, error) {
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return report.DTO{}, err
@@ -220,7 +224,7 @@ func (s *SQLiteStore) GetReview(taskID string) (report.DTO, error) {
 	var raw string
 	if err := tx.QueryRowContext(ctx, "SELECT json FROM reports WHERE task_id=?", taskID).Scan(&raw); err != nil {
 		if err == sql.ErrNoRows {
-			return report.DTO{}, fmt.Errorf("review not found")
+			return report.DTO{}, ErrReviewNotFound
 		}
 		return report.DTO{}, err
 	}
@@ -235,17 +239,23 @@ func (s *SQLiteStore) GetReview(taskID string) (report.DTO, error) {
 }
 
 func (s *SQLiteStore) init(ctx context.Context) error {
-	if _, err := s.db.ExecContext(ctx, "PRAGMA foreign_keys=ON"); err != nil {
-		return err
-	}
 	if _, err := s.db.ExecContext(ctx, "PRAGMA journal_mode=WAL"); err != nil {
-		return err
-	}
-	if _, err := s.db.ExecContext(ctx, "PRAGMA busy_timeout=5000"); err != nil {
 		return err
 	}
 	_, err := s.db.ExecContext(ctx, schemaSQL)
 	return err
+}
+
+func insertFindings(ctx context.Context, tx *sql.Tx, taskID string, findings []domain.Finding, needsHumanReview bool) error {
+	for _, f := range findings {
+		if _, err := tx.ExecContext(ctx,
+			"INSERT INTO findings(task_id,severity,category,file,line,title,evidence,recommendation,confidence,source,rule_id,needs_human_review) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+			taskID, string(f.Severity), f.Category, f.File, f.Line, f.Title, f.Evidence, f.Recommendation, f.Confidence, f.Source, f.RuleID, needsHumanReview,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func deleteChildren(ctx context.Context, tx *sql.Tx, taskID string) error {
@@ -269,9 +279,9 @@ func rollbackUnlessCommitted(tx *sql.Tx) {
 
 const schemaSQL = `
 CREATE TABLE IF NOT EXISTS review_tasks(task_id TEXT PRIMARY KEY, status TEXT NOT NULL, input_kind TEXT NOT NULL DEFAULT '', input_digest TEXT NOT NULL DEFAULT '', input_files INTEGER NOT NULL DEFAULT 0, input_hunks INTEGER NOT NULL DEFAULT 0, input_added_lines INTEGER NOT NULL DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
-CREATE TABLE IF NOT EXISTS sandbox_runs(id INTEGER PRIMARY KEY, task_id TEXT NOT NULL REFERENCES review_tasks(task_id), command_id TEXT, stdout TEXT, stderr TEXT, exit_code INTEGER, timed_out INTEGER, truncated INTEGER, outcome TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS sandbox_runs(id INTEGER PRIMARY KEY, task_id TEXT NOT NULL REFERENCES review_tasks(task_id), command_id TEXT, stdout TEXT, stderr TEXT, exit_code INTEGER, timed_out INTEGER, truncated INTEGER, outcome TEXT NOT NULL, duration_ms INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS governance_decisions(id INTEGER PRIMARY KEY, task_id TEXT NOT NULL REFERENCES review_tasks(task_id), action TEXT NOT NULL, reason TEXT NOT NULL, plan_digest TEXT NOT NULL, created_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS findings(id INTEGER PRIMARY KEY, task_id TEXT NOT NULL REFERENCES review_tasks(task_id), severity TEXT, category TEXT, file TEXT, line INTEGER, title TEXT, evidence TEXT, recommendation TEXT, confidence REAL, source TEXT, rule_id TEXT);
+CREATE TABLE IF NOT EXISTS findings(id INTEGER PRIMARY KEY, task_id TEXT NOT NULL REFERENCES review_tasks(task_id), severity TEXT, category TEXT, file TEXT, line INTEGER, title TEXT, evidence TEXT, recommendation TEXT, confidence REAL, source TEXT, rule_id TEXT, needs_human_review INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS artifacts(id INTEGER PRIMARY KEY, task_id TEXT NOT NULL REFERENCES review_tasks(task_id), path TEXT NOT NULL, sha256 TEXT NOT NULL DEFAULT '', bytes INTEGER NOT NULL DEFAULT 0, content_type TEXT NOT NULL DEFAULT '', durable INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS review_metrics(id INTEGER PRIMARY KEY, task_id TEXT NOT NULL REFERENCES review_tasks(task_id), name TEXT NOT NULL, value INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS reports(task_id TEXT PRIMARY KEY REFERENCES review_tasks(task_id), json TEXT NOT NULL, markdown TEXT NOT NULL);

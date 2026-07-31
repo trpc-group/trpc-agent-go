@@ -11,12 +11,15 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 )
 
 func TestFakeRuntimeCoversSuccessFailureTimeoutAndTruncation(t *testing.T) {
@@ -131,6 +134,24 @@ func TestContainerRuntimeOwnsAndClosesExecutor(t *testing.T) {
 	if closed != 1 {
 		t.Fatalf("executor close count = %d, want 1", closed)
 	}
+}
+
+func TestContainerRuntimeRunReturnsRunnerErrorWithoutClassifyingEmptyResult(t *testing.T) {
+	want := errors.New("runner failed")
+	rt := &ContainerRuntime{engine: codeexecutor.NewEngine(nil, nil, errorRunner{err: want}), ws: codeexecutor.Workspace{Path: "workspace"}}
+	got, err := rt.Run(context.Background(), Command{ID: "go-test", Args: []string{"test", "."}, Timeout: time.Second})
+	if !errors.Is(err, want) {
+		t.Fatalf("err = %v, want %v", err, want)
+	}
+	if got != (Result{}) {
+		t.Fatalf("result = %#v, want zero result on runner error", got)
+	}
+}
+
+type errorRunner struct{ err error }
+
+func (r errorRunner) RunProgram(context.Context, codeexecutor.Workspace, codeexecutor.RunProgramSpec) (codeexecutor.RunResult, error) {
+	return codeexecutor.RunResult{ExitCode: 127, Stderr: "should not classify"}, r.err
 }
 
 func TestRunChecksScriptBoundsEmittedOutputBeforeRuntimeCapture(t *testing.T) {

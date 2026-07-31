@@ -10,8 +10,6 @@
 package input
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -19,6 +17,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/digest"
 )
 
 // Snapshot is an immutable copy of reviewable regular files.
@@ -60,6 +60,9 @@ func BuildGitSnapshot(repoPath string, maxBytes int64) (Snapshot, func() error, 
 		src := filepath.Join(absRepo, filepath.FromSlash(rel))
 		info, err := os.Lstat(src)
 		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
 			_ = cleanup()
 			return Snapshot{}, nil, err
 		}
@@ -69,34 +72,62 @@ func BuildGitSnapshot(repoPath string, maxBytes int64) (Snapshot, func() error, 
 		if !info.Mode().IsRegular() {
 			continue
 		}
+		in, err := digest.OpenFile(src)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			_ = cleanup()
+			return Snapshot{}, nil, err
+		}
+		info, err = in.Stat()
+		if err != nil {
+			_ = in.Close()
+			_ = cleanup()
+			return Snapshot{}, nil, err
+		}
 		total += info.Size()
 		if total > maxBytes {
+			_ = in.Close()
 			_ = cleanup()
 			return Snapshot{}, nil, fmt.Errorf("snapshot exceeds size limit")
 		}
 		dst := filepath.Join(tmp, filepath.FromSlash(rel))
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			_ = in.Close()
 			_ = cleanup()
 			return Snapshot{}, nil, err
 		}
-		if err := copyFile(src, dst, normalizedSnapshotMode(info.Mode().Perm())); err != nil {
+		if err := copyOpenedFile(in, dst, normalizedSnapshotMode(info.Mode().Perm())); err != nil {
+			_ = in.Close()
+			_ = cleanup()
+			return Snapshot{}, nil, err
+		}
+		if err := in.Close(); err != nil {
 			_ = cleanup()
 			return Snapshot{}, nil, err
 		}
 		copied = append(copied, rel)
 	}
 	sort.Strings(copied)
-	h := sha256.New()
+	h := digest.New()
 	for _, rel := range copied {
-		_, _ = h.Write([]byte(rel))
-		data, err := os.ReadFile(filepath.Join(tmp, filepath.FromSlash(rel)))
+		file, err := digest.OpenFile(filepath.Join(tmp, filepath.FromSlash(rel)))
 		if err != nil {
 			_ = cleanup()
 			return Snapshot{}, nil, err
 		}
-		_, _ = h.Write(data)
+		if err := digest.WriteOpenedFile(h, rel, file); err != nil {
+			_ = file.Close()
+			_ = cleanup()
+			return Snapshot{}, nil, err
+		}
+		if err := file.Close(); err != nil {
+			_ = cleanup()
+			return Snapshot{}, nil, err
+		}
 	}
-	return Snapshot{Path: tmp, Digest: hex.EncodeToString(h.Sum(nil))}, cleanup, nil
+	return Snapshot{Path: tmp, Digest: digest.Sum(h)}, cleanup, nil
 }
 
 func gitTrackedFiles(repoPath string) ([]string, error) {
@@ -144,11 +175,18 @@ func normalizedSnapshotMode(mode os.FileMode) os.FileMode {
 }
 
 func copyFile(src, dst string, mode os.FileMode) error {
-	in, err := os.Open(src)
+	in, err := digest.OpenFile(src)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
+	return copyOpenedFile(in, dst, mode)
+}
+
+func copyOpenedFile(in *os.File, dst string, mode os.FileMode) error {
+	if _, err := in.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
 	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
 	if err != nil {
 		return err

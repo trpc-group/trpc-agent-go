@@ -237,7 +237,41 @@ func writeFindings(b *strings.Builder, title string, findings []domain.Finding) 
 	b.WriteString("\n")
 }
 
+func cloneDTO(dto DTO) DTO {
+	dto.Findings = append([]domain.Finding(nil), dto.Findings...)
+	dto.NeedsHumanReview = append([]domain.Finding(nil), dto.NeedsHumanReview...)
+	dto.SandboxRuns = append([]sandbox.Result(nil), dto.SandboxRuns...)
+	if dto.Metrics != nil {
+		metrics := make(map[string]int, len(dto.Metrics))
+		for k, v := range dto.Metrics {
+			metrics[k] = v
+		}
+		dto.Metrics = metrics
+	}
+	dto.Governance = append([]string(nil), dto.Governance...)
+	dto.Artifacts = append([]string(nil), dto.Artifacts...)
+	dto.ArtifactDetails = append([]Artifact(nil), dto.ArtifactDetails...)
+	dto.Files = append([]string(nil), dto.Files...)
+	dto.ParserWarnings = append([]string(nil), dto.ParserWarnings...)
+	if dto.Stats.Severity != nil {
+		severity := make(map[string]int, len(dto.Stats.Severity))
+		for k, v := range dto.Stats.Severity {
+			severity[k] = v
+		}
+		dto.Stats.Severity = severity
+	}
+	if dto.Stats.Tools.ErrorByOutcome != nil {
+		outcomes := make(map[string]int, len(dto.Stats.Tools.ErrorByOutcome))
+		for k, v := range dto.Stats.Tools.ErrorByOutcome {
+			outcomes[k] = v
+		}
+		dto.Stats.Tools.ErrorByOutcome = outcomes
+	}
+	return dto
+}
+
 func redactDTO(dto DTO) DTO {
+	dto = cloneDTO(dto)
 	r := review.NewRedactor()
 	redactFinding := func(f domain.Finding) domain.Finding {
 		f.File = r.Redact(f.File)

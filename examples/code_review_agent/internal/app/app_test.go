@@ -23,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/domain"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/governance"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/input"
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/report"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/sandbox"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/storage"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -36,7 +37,7 @@ func TestRunFakeFullFlowProducesReportsAndAudit(t *testing.T) {
 	}
 	out := filepath.Join(dir, "out")
 	db := filepath.Join(dir, "audit.db")
-	result, err := Run(Config{DiffFile: diff, Runtime: RuntimeFake, Mode: ModeRuleOnly, OutDir: out, DBPath: db})
+	result, err := Run(context.Background(), Config{DiffFile: diff, Runtime: RuntimeFake, Mode: ModeRuleOnly, OutDir: out, DBPath: db})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -67,8 +68,16 @@ func TestRunFakeFullFlowProducesReportsAndAudit(t *testing.T) {
 	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
 		t.Fatalf("parse acceptance manifest: %v\n%s", err, manifestBytes)
 	}
-	if manifest.TaskID != result.TaskID || manifest.Status != result.Status || len(manifest.Artifacts) != 3 || manifest.Checks["sandbox"] == "" {
+	if manifest.TaskID != result.TaskID || manifest.Status != result.Status || len(manifest.Artifacts) != 2 || manifest.Checks["sandbox"] == "" {
 		t.Fatalf("unexpected acceptance manifest: %#v", manifest)
+	}
+	for _, artifact := range manifest.Artifacts {
+		if artifact.Path == "acceptance_manifest.json" {
+			t.Fatalf("acceptance manifest self-referenced its own artifact row: %#v", manifest.Artifacts)
+		}
+	}
+	if len(result.ArtifactDetails) != 3 || !hasArtifact(result.ArtifactDetails, "acceptance_manifest.json") {
+		t.Fatalf("returned DTO omitted durable manifest artifact: %#v", result.ArtifactDetails)
 	}
 	st, err := storage.OpenSQLite(db)
 	if err != nil {
@@ -92,6 +101,15 @@ type reportArtifact struct {
 	Durable     bool   `json:"durable"`
 }
 
+func hasArtifact(artifacts []report.Artifact, path string) bool {
+	for _, artifact := range artifacts {
+		if artifact.Path == path {
+			return true
+		}
+	}
+	return false
+}
+
 func TestRunAllPublicFixtures(t *testing.T) {
 	fixtures := map[string]domain.Status{
 		"clean":             domain.StatusCompleted,
@@ -107,7 +125,7 @@ func TestRunAllPublicFixtures(t *testing.T) {
 	for name, wantStatus := range fixtures {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
-			result, err := Run(Config{Fixture: name, Runtime: RuntimeFake, Mode: ModeRuleOnly, OutDir: dir, DBPath: filepath.Join(dir, "audit.db")})
+			result, err := Run(context.Background(), Config{Fixture: name, Runtime: RuntimeFake, Mode: ModeRuleOnly, OutDir: dir, DBPath: filepath.Join(dir, "audit.db")})
 			if err != nil {
 				t.Fatalf("run: %v", err)
 			}
@@ -128,7 +146,7 @@ func TestRunAllPublicFixtures(t *testing.T) {
 }
 
 func TestLocalRuntimeDoesNotFallbackToFake(t *testing.T) {
-	_, err := Run(Config{Fixture: "clean", Runtime: RuntimeLocal, AllowLocal: true, OutDir: t.TempDir()})
+	_, err := Run(context.Background(), Config{Fixture: "clean", Runtime: RuntimeLocal, AllowLocal: true, OutDir: t.TempDir()})
 	if err == nil {
 		t.Fatalf("local runtime fell back to fake")
 	}
@@ -139,18 +157,55 @@ func TestContainerRuntimeDockerfileProvidesGoTooling(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read Dockerfile: %v", err)
 	}
-	text := string(data)
-	for _, want := range []string{"FROM golang:", "go install honnef.co/go/tools/cmd/staticcheck@", "WORKDIR /work/repo"} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("Dockerfile missing %q:\n%s", want, text)
+	instructions := dockerfileInstructions(string(data))
+	assertDockerfileInstruction(t, instructions, "FROM", func(args string) bool {
+		return strings.HasPrefix(args, "golang:1.24-bookworm@sha256:")
+	}, "pinned golang:1.24-bookworm digest")
+	assertDockerfileInstruction(t, instructions, "RUN", func(args string) bool {
+		return strings.Contains(args, "go install honnef.co/go/tools/cmd/staticcheck@v0.6.1")
+	}, "pinned staticcheck install")
+	assertDockerfileInstruction(t, instructions, "ENV", func(args string) bool {
+		return strings.Contains(args, "PATH=") && strings.Contains(args, "/go/bin")
+	}, "staticcheck path")
+	assertDockerfileInstruction(t, instructions, "RUN", func(args string) bool {
+		return strings.Contains(args, "useradd") && strings.Contains(args, "review") && strings.Contains(args, "chown") && strings.Contains(args, "/work/repo")
+	}, "non-root review user setup")
+	assertDockerfileInstruction(t, instructions, "WORKDIR", func(args string) bool { return args == "/work/repo" }, "workdir")
+	assertDockerfileInstruction(t, instructions, "USER", func(args string) bool { return args == "review" }, "non-root user")
+}
+
+type dockerInstruction struct {
+	Name string
+	Args string
+}
+
+func dockerfileInstructions(text string) []dockerInstruction {
+	var instructions []dockerInstruction
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		name, args, _ := strings.Cut(line, " ")
+		instructions = append(instructions, dockerInstruction{Name: strings.ToUpper(name), Args: strings.TrimSpace(args)})
+	}
+	return instructions
+}
+
+func assertDockerfileInstruction(t *testing.T, instructions []dockerInstruction, name string, match func(string) bool, label string) {
+	t.Helper()
+	for _, instruction := range instructions {
+		if instruction.Name == name && match(instruction.Args) {
+			return
 		}
 	}
+	t.Fatalf("Dockerfile missing active %s instruction for %s: %#v", name, label, instructions)
 }
 
 func TestEarlyInputFailurePersistsReloadableFailedReport(t *testing.T) {
 	dir := t.TempDir()
 	db := filepath.Join(dir, "audit.db")
-	_, err := Run(Config{DiffFile: filepath.Join(dir, "missing.diff"), Runtime: RuntimeFake, OutDir: dir, DBPath: db, TaskID: "early-failure"})
+	_, err := Run(context.Background(), Config{DiffFile: filepath.Join(dir, "missing.diff"), Runtime: RuntimeFake, OutDir: dir, DBPath: db, TaskID: "early-failure"})
 	if err == nil {
 		t.Fatalf("missing diff file succeeded")
 	}
@@ -159,7 +214,7 @@ func TestEarlyInputFailurePersistsReloadableFailedReport(t *testing.T) {
 		t.Fatalf("open audit db: %v", openErr)
 	}
 	defer st.Close()
-	reloaded, getErr := st.GetReview("early-failure")
+	reloaded, getErr := st.GetReview(context.Background(), "early-failure")
 	if getErr != nil {
 		t.Fatalf("reload early failure: %v", getErr)
 	}
@@ -175,7 +230,7 @@ func TestPermissionDenyAndAskPersistWithoutCreatingRuntime(t *testing.T) {
 			repo := newChangedRepo(t)
 			db := filepath.Join(dir, "audit.db")
 			created := 0
-			result, err := runWithRuntimeFactory(Config{
+			result, err := runWithRuntimeFactory(context.Background(), Config{
 				RepoPath: repo, Runtime: RuntimeFake, Mode: ModeRuleOnly,
 				OutDir: dir, DBPath: db, TaskID: "permission-" + string(action),
 				PermissionAction: action, PermissionReason: "policy test",
@@ -200,7 +255,7 @@ func TestPermissionDenyAndAskPersistWithoutCreatingRuntime(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer st.Close()
-			reloaded, err := st.GetReview(result.TaskID)
+			reloaded, err := st.GetReview(context.Background(), result.TaskID)
 			if err != nil {
 				t.Fatalf("reload: %v", err)
 			}
@@ -225,7 +280,7 @@ func TestStagingFailureNeverRunsAndStillClosesRuntime(t *testing.T) {
 	dir := t.TempDir()
 	repo := newChangedRepo(t)
 	rt := &failingStageRuntime{}
-	result, err := runWithRuntimeFactory(Config{
+	result, err := runWithRuntimeFactory(context.Background(), Config{
 		RepoPath: repo, Runtime: RuntimeFake, Mode: ModeRuleOnly,
 		OutDir: dir, DBPath: filepath.Join(dir, "audit.db"), TaskID: "stage-failure",
 	}, func(Config) (sandbox.Runtime, error) { return rt, nil })
@@ -249,7 +304,7 @@ func TestSandboxAndGovernanceSecretsAreRedactedAcrossDurableSinks(t *testing.T) 
 		[]byte("fixture-secret-value-sandbox-stderr"),
 		[]byte("fixture-secret-value-governance"),
 	}
-	result, err := runWithRuntimeFactory(Config{
+	result, err := runWithRuntimeFactory(context.Background(), Config{
 		RepoPath: repo, Runtime: RuntimeFake, Mode: ModeRuleOnly,
 		OutDir: dir, DBPath: db, TaskID: "redact-sandbox-governance",
 		PermissionReason: "token = \"fixture-secret-value-governance\"",
@@ -362,7 +417,7 @@ func TestRunAgentModeCannotUseTargetRepositorySkill(t *testing.T) {
 	}
 
 	out := t.TempDir()
-	result, err := Run(Config{
+	result, err := Run(context.Background(), Config{
 		RepoPath: repo, Runtime: RuntimeFake, Mode: ModeAgent,
 		OutDir: out, DBPath: filepath.Join(out, "audit.db"), TaskID: "agent-target-skill",
 	})
@@ -399,7 +454,7 @@ func TestRunRepoPathUsesTrackedGitDiffAndAudit(t *testing.T) {
 	writeFile(t, repo, "untracked.go", "package repo\nconst token = \"fixture-secret-value-github-token\"\n")
 
 	dir := t.TempDir()
-	result, err := Run(Config{RepoPath: repo, Runtime: RuntimeFake, Mode: ModeRuleOnly, OutDir: dir, DBPath: filepath.Join(dir, "audit.db"), TaskID: "repo-task"})
+	result, err := Run(context.Background(), Config{RepoPath: repo, Runtime: RuntimeFake, Mode: ModeRuleOnly, OutDir: dir, DBPath: filepath.Join(dir, "audit.db"), TaskID: "repo-task"})
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -460,7 +515,7 @@ func TestDiffOnlyInputSkipsRepositorySandboxCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	created := 0
-	result, err := runWithRuntimeFactory(Config{
+	result, err := runWithRuntimeFactory(context.Background(), Config{
 		DiffFile: diff, Runtime: RuntimeFake, Mode: ModeRuleOnly,
 		OutDir: dir, DBPath: filepath.Join(dir, "audit.db"), TaskID: "diff-only",
 	}, func(Config) (sandbox.Runtime, error) {

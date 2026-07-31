@@ -12,16 +12,14 @@ package governance
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/digest"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -74,17 +72,12 @@ type DecisionRecord struct {
 
 // DigestString returns a stable SHA-256 hex digest of s.
 func DigestString(s string) string {
-	sum := sha256.Sum256([]byte(s))
-	return hex.EncodeToString(sum[:])
+	return digest.String(s)
 }
 
 // DigestFile returns the SHA-256 hex digest of a regular file.
 func DigestFile(path string) (string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", err
-	}
-	return DigestString(string(data)), nil
+	return digest.File(path)
 }
 
 // DigestTree returns a stable SHA-256 hex digest for all regular files under root.
@@ -114,16 +107,21 @@ func DigestTree(root string) (string, error) {
 		return "", err
 	}
 	sort.Strings(files)
-	h := sha256.New()
+	h := digest.New()
 	for _, rel := range files {
-		data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		file, err := digest.OpenFile(filepath.Join(root, filepath.FromSlash(rel)))
 		if err != nil {
 			return "", err
 		}
-		_, _ = h.Write([]byte(rel))
-		_, _ = h.Write(data)
+		if err := digest.WriteOpenedFile(h, rel, file); err != nil {
+			_ = file.Close()
+			return "", err
+		}
+		if err := file.Close(); err != nil {
+			return "", err
+		}
 	}
-	return hex.EncodeToString(h.Sum(nil)), nil
+	return digest.Sum(h), nil
 }
 
 // Digest returns the plan digest with stable map ordering.

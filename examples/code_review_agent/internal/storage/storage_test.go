@@ -11,6 +11,8 @@ package storage
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -31,7 +33,7 @@ func TestSQLiteStorePersistsFullAuditWithDatabaseSQL(t *testing.T) {
 		TaskID:      "task-1",
 		Status:      domain.StatusCompleted,
 		Input:       report.InputSummary{Kind: "diff-file", Digest: "sha256:abc", Files: 1, Hunks: 2, AddedLines: 3},
-		SandboxRuns: []sandbox.Result{{CommandID: "go-test", Outcome: sandbox.OutcomeSuccess}},
+		SandboxRuns: []sandbox.Result{{CommandID: "go-test", Outcome: sandbox.OutcomeSuccess, DurationMS: 123}},
 		Metrics:     map[string]int{"duration_ms": 7},
 		Artifacts:   []string{"review_report.json"},
 		ArtifactDetails: []report.Artifact{{
@@ -44,10 +46,10 @@ func TestSQLiteStorePersistsFullAuditWithDatabaseSQL(t *testing.T) {
 			Confidence: 0.9, Source: "rule", RuleID: "security.command-injection",
 		}},
 	}
-	if err := store.Finalize(dto); err != nil {
+	if err := store.Finalize(context.Background(), dto); err != nil {
 		t.Fatalf("finalize: %v", err)
 	}
-	got, err := store.GetReview("task-1")
+	got, err := store.GetReview(context.Background(), "task-1")
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -67,6 +69,20 @@ func TestSQLiteStorePersistsFullAuditWithDatabaseSQL(t *testing.T) {
 	}
 	if artifactDigest != "sha256:abc123" || artifactBytes != 42 {
 		t.Fatalf("artifact row digest=%s bytes=%d", artifactDigest, artifactBytes)
+	}
+	var runDuration int64
+	if err := store.DB().QueryRow("SELECT duration_ms FROM sandbox_runs WHERE task_id=? AND command_id=?", "task-1", "go-test").Scan(&runDuration); err != nil {
+		t.Fatal(err)
+	}
+	if runDuration != 123 {
+		t.Fatalf("sandbox duration_ms = %d, want 123", runDuration)
+	}
+	var needsHumanReview bool
+	if err := store.DB().QueryRow("SELECT needs_human_review FROM findings WHERE task_id=? AND rule_id=?", "task-1", "security.command-injection").Scan(&needsHumanReview); err != nil {
+		t.Fatal(err)
+	}
+	if needsHumanReview {
+		t.Fatalf("regular finding persisted as needs_human_review")
 	}
 	db := store.DB()
 	if db == nil {
@@ -106,7 +122,7 @@ func TestSQLiteStoreRedactsDBWALAndSHMBytes(t *testing.T) {
 			Confidence: 0.98, Source: "rule", RuleID: "secrets.literal",
 		}},
 	}
-	if err := store.Finalize(dto); err != nil {
+	if err := store.Finalize(context.Background(), dto); err != nil {
 		t.Fatalf("finalize: %v", err)
 	}
 	canaries := [][]byte{
@@ -153,13 +169,61 @@ func TestSQLiteOpenEscapesSpecialCharacterPath(t *testing.T) {
 		t.Fatalf("open special path: %v", err)
 	}
 	defer store.Close()
-	if err := store.Finalize(report.DTO{TaskID: "special-path", Status: domain.StatusCompleted}); err != nil {
+	if err := store.Finalize(context.Background(), report.DTO{TaskID: "special-path", Status: domain.StatusCompleted}); err != nil {
 		t.Fatalf("finalize: %v", err)
 	}
-	if _, err := store.GetReview("special-path"); err != nil {
+	if _, err := store.GetReview(context.Background(), "special-path"); err != nil {
 		t.Fatalf("reload special path review: %v", err)
 	}
 	assert0600(t, path)
+}
+
+func TestSQLiteStoreDistinguishesHumanReviewFindingsAndNotFound(t *testing.T) {
+	store, err := OpenSQLite(filepath.Join(t.TempDir(), "audit.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer store.Close()
+	_, err = store.GetReview(context.Background(), "missing")
+	if !errors.Is(err, ErrReviewNotFound) {
+		t.Fatalf("missing review err = %v, want ErrReviewNotFound", err)
+	}
+	dto := report.DTO{TaskID: "human-review", Status: domain.StatusNeedsHumanReview, NeedsHumanReview: []domain.Finding{{
+		Severity: domain.SeverityMedium, Category: domain.CategoryTests, File: "a.go", Line: 0,
+		Title: "needs review", Evidence: "low confidence", Recommendation: "check", Confidence: 0.5, Source: "rule", RuleID: "tests.missing-related-test",
+	}}}
+	if err := store.Finalize(context.Background(), dto); err != nil {
+		t.Fatalf("finalize: %v", err)
+	}
+	var needsHumanReview bool
+	if err := store.DB().QueryRow("SELECT needs_human_review FROM findings WHERE task_id=? AND rule_id=?", "human-review", "tests.missing-related-test").Scan(&needsHumanReview); err != nil {
+		t.Fatal(err)
+	}
+	if !needsHumanReview {
+		t.Fatalf("needs_human_review flag was not persisted")
+	}
+}
+
+func TestSQLiteFinalizeUpsertPreservesRecordedGovernanceDecision(t *testing.T) {
+	store, err := OpenSQLite(filepath.Join(t.TempDir(), "audit.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	if err := store.RecordDecision(ctx, "task-upsert", DecisionRecord{Action: "allow", Reason: "ok", PlanDigest: "plan-123"}); err != nil {
+		t.Fatalf("record decision: %v", err)
+	}
+	if err := store.Finalize(ctx, report.DTO{TaskID: "task-upsert", Status: domain.StatusCompleted}); err != nil {
+		t.Fatalf("finalize: %v", err)
+	}
+	var reason, digest string
+	if err := store.DB().QueryRow("SELECT reason,plan_digest FROM governance_decisions WHERE task_id=?", "task-upsert").Scan(&reason, &digest); err != nil {
+		t.Fatal(err)
+	}
+	if reason != "ok" || digest != "plan-123" {
+		t.Fatalf("governance decision reason=%q digest=%q", reason, digest)
+	}
 }
 
 func assert0600(t *testing.T, path string) {

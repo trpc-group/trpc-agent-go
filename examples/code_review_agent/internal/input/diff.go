@@ -120,39 +120,49 @@ func ParseUnifiedDiff(r io.Reader, limits Limits) (Diff, error) {
 			line = strings.TrimSuffix(line, "\n")
 			line = strings.TrimSuffix(line, "\r")
 			if inHunk {
-				switch {
-				case strings.HasPrefix(line, " "):
-					text := strings.TrimPrefix(line, " ")
-					if hunk != nil {
-						hunk.Context = append(hunk.Context, ContextLine{OldLine: oldLine, NewLine: newLine, Text: text})
+				if startsDiffStructure(line) {
+					finishHunk()
+					// Fall through to the outer parser so this structural line is
+					// handled as a file header or hunk header instead of content.
+				} else {
+					switch {
+					case strings.HasPrefix(line, " "):
+						text := strings.TrimPrefix(line, " ")
+						if hunk != nil {
+							hunk.Context = append(hunk.Context, ContextLine{OldLine: oldLine, NewLine: newLine, Text: text})
+						}
+						if pkg := packageName(text); pkg != "" {
+							ensureFile().Package = pkg
+						}
+						oldRemain--
+						newRemain--
+						oldLine++
+						newLine++
+						continue
+					case strings.HasPrefix(line, "+"):
+						text := strings.TrimPrefix(line, "+")
+						fd := ensureFile()
+						if pkg := packageName(text); pkg != "" && fd.Package == "" {
+							fd.Package = pkg
+						}
+						pkg := fd.Package
+						added := AddedLine{Line: newLine, Text: text, Package: pkg}
+						fd.Added = append(fd.Added, added)
+						if hunk != nil {
+							hunk.Candidates = append(hunk.Candidates, added)
+						}
+						newRemain--
+						newLine++
+						continue
+					case strings.HasPrefix(line, "-"):
+						oldRemain--
+						oldLine++
+						continue
+					case strings.HasPrefix(line, `\ No newline`):
+						continue
 					}
-					if pkg := packageName(text); pkg != "" {
-						ensureFile().Package = pkg
-					}
-					oldRemain--
-					newRemain--
-					oldLine++
-					newLine++
-					continue
-				case strings.HasPrefix(line, "+"):
-					text := strings.TrimPrefix(line, "+")
-					pkg := ensureFile().Package
-					added := AddedLine{Line: newLine, Text: text, Package: pkg}
-					ensureFile().Added = append(ensureFile().Added, added)
-					if hunk != nil {
-						hunk.Candidates = append(hunk.Candidates, added)
-					}
-					newRemain--
-					newLine++
-					continue
-				case strings.HasPrefix(line, "-"):
-					oldRemain--
-					oldLine++
-					continue
-				case strings.HasPrefix(line, `\ No newline`):
-					continue
+					finishHunk()
 				}
-				finishHunk()
 			}
 			switch {
 			case strings.HasPrefix(line, "diff --git "):
@@ -218,6 +228,10 @@ func ParseUnifiedDiff(r io.Reader, limits Limits) (Diff, error) {
 		}
 	}
 	return d, nil
+}
+
+func startsDiffStructure(line string) bool {
+	return strings.HasPrefix(line, "diff --git ") || strings.HasPrefix(line, "--- ") || strings.HasPrefix(line, "+++ ") || strings.HasPrefix(line, "@@ ")
 }
 
 func splitDiffGit(line string) []string {

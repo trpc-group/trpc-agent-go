@@ -47,9 +47,10 @@ Show an audited task:
 go run . --db=out/review_audit.db --show-task=<task_id>
 ```
 
-The `local` runtime is a development-only trust boundary and refuses to start
-unless `--allow-local` is passed. The production default is `container`; it does
-not silently fall back to local execution when Docker is unavailable.
+The `local` runtime is a reserved development-only trust boundary and is not
+implemented; it is rejected even with `--allow-local`. Use `fake` or `container`.
+The production default is `container`; it does not silently fall back to local
+execution when Docker is unavailable.
 
 The execution plan binds 60-second command and 120-second task deadlines,
 per-stream 1 MiB output limits, and artifact count/size limits. Bundled check

@@ -124,8 +124,11 @@ func (r *ContainerRuntime) Run(ctx context.Context, cmd Command) (Result, error)
 		Env:      map[string]string{"PATH": "/usr/local/go/bin:/usr/bin:/bin", "HOME": "/tmp"},
 		Limits:   codeexecutor.ResourceLimits{CPUPercent: 100, MemoryMB: 512, MaxPIDs: 128},
 	})
+	if err != nil {
+		return Result{}, err
+	}
 	out := Result{CommandID: cmd.ID, Stdout: cleanOutput(res.Stdout), Stderr: cleanOutput(res.Stderr), ExitCode: res.ExitCode, TimedOut: res.TimedOut, DurationMS: time.Since(start).Milliseconds()}
-	return classifyResult(truncateResult(out, cmd.MaxStdoutBytes, cmd.MaxStderrBytes)), err
+	return classifyResult(truncateResult(out, cmd.MaxStdoutBytes, cmd.MaxStderrBytes)), nil
 }
 
 // Cleanup removes the container workspace.

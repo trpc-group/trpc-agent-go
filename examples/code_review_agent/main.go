@@ -10,9 +10,11 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/app"
 )
@@ -41,7 +43,9 @@ func main() {
 	flag.Var((*stringListFlag)(&cfg.Files), "file", "repository-relative file to review; repeatable")
 	flag.StringVar(&cfg.FileList, "file-list", "", "newline-delimited repository-relative files to review")
 	flag.Parse()
-	dto, err := app.Run(cfg)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	dto, err := app.Run(ctx, cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "code review failed: %v\n", err)
 		os.Exit(1)
