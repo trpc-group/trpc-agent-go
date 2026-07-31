@@ -271,7 +271,7 @@ func TestCalculateMonitoring(t *testing.T) {
 		{DurationMs: 2000},
 	}
 
-	summary := CalculateMonitoring("task_008", findings, sandboxRuns, startTime)
+	summary := CalculateMonitoring("task_008", findings, sandboxRuns, nil, startTime)
 
 	if summary.TaskID != "task_008" {
 		t.Errorf("TaskID = %s, want task_008", summary.TaskID)

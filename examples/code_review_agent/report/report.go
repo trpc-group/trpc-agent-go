@@ -40,7 +40,7 @@ type ReportSummary struct {
 }
 
 // Generate 生成报告
-func Generate(taskID string, findings []store.Finding, warnings []store.Finding, sandboxRuns []store.SandboxRun, monitoring *store.MonitoringSummary) *ReviewReport {
+func Generate(taskID string, findings []store.Finding, warnings []store.Finding, sandboxRuns []store.SandboxRun, permissionDecisions []store.PermissionDecision, monitoring *store.MonitoringSummary) *ReviewReport {
 	critical, high, medium, low, info := countBySeverity(findings)
 	overallRisk := overallRiskFromCounts(critical, high, medium, low)
 
@@ -65,7 +65,7 @@ func Generate(taskID string, findings []store.Finding, warnings []store.Finding,
 		Findings:            findings,
 		Warnings:            warnings,
 		Sandbox:             sandboxRuns,
-		PermissionDecisions: make([]store.PermissionDecision, 0),
+		PermissionDecisions: permissionDecisions,
 		Monitoring:          monitoring,
 	}
 }

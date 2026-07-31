@@ -26,17 +26,17 @@ func NewFakeModel(name string) *FakeModel {
 
 // GenerateResponse 根据输入生成模拟响应
 func (m *FakeModel) GenerateResponse(ctx context.Context, prompt string) (string, error) {
-	// 分析 prompt 中的 diff 内容，返回模拟的 findings
-	findings := m.analyzeDiff(prompt)
-
-	if len(findings) == 0 {
-		return "No issues found in the code changes.", nil
+	if err := ctx.Err(); err != nil {
+		return "", err
 	}
-
-	// 格式化为 JSON
-	result := map[string]interface{}{
+	findings := m.analyzeDiff(prompt)
+	summary := fmt.Sprintf("Found %d issues", len(findings))
+	if len(findings) == 0 {
+		summary = "No issues found in the code changes."
+	}
+	result := map[string]any{
 		"findings": findings,
-		"summary":  fmt.Sprintf("Found %d issues", len(findings)),
+		"summary":  summary,
 	}
 
 	jsonData, err := json.MarshalIndent(result, "", "  ")

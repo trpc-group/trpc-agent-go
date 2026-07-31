@@ -77,19 +77,20 @@ func (p *DiffParser) ParseFileList(files []string) (*DiffParseResult, error) {
 			return nil, fmt.Errorf("failed to read file %q: %w", file, err)
 		}
 
-		// 创建一个简单的 diff（整个文件作为新增）
+		// Create a simple diff with the whole file as additions.
+		changes := p.contentToChanges(string(content))
 		diffFile := DiffFile{
 			Path:      file,
 			Status:    "added",
-			Additions: len(strings.Split(string(content), "\n")),
+			Additions: len(changes),
 			Deletions: 0,
 			Hunks: []DiffHunk{
 				{
 					OldStart: 0,
 					OldLines: 0,
 					NewStart: 1,
-					NewLines: len(strings.Split(string(content), "\n")),
-					Changes:  p.contentToChanges(string(content)),
+					NewLines: len(changes),
+					Changes:  changes,
 				},
 			},
 		}
@@ -105,6 +106,7 @@ func (p *DiffParser) ParseFileList(files []string) (*DiffParseResult, error) {
 
 // contentToChanges 将内容转换为 Change 列表
 func (p *DiffParser) contentToChanges(content string) []Change {
+	content = strings.TrimSuffix(content, "\n")
 	lines := strings.Split(content, "\n")
 	changes := make([]Change, 0, len(lines))
 
@@ -269,6 +271,9 @@ func (p *DiffParser) Parse(reader io.Reader) (*DiffParseResult, error) {
 				if currentHunk != nil {
 					currentFile.Hunks = append(currentFile.Hunks, *currentHunk)
 				}
+				if currentFile.Status == "" {
+					currentFile.Status = "modified"
+				}
 				result.Files = append(result.Files, *currentFile)
 			}
 			currentFile = &DiffFile{
@@ -293,6 +298,8 @@ func (p *DiffParser) Parse(reader io.Reader) (*DiffParseResult, error) {
 				if currentFile.Path == "" {
 					currentFile.Path = matches[1]
 				}
+			} else {
+				currentFile.Status = "added"
 			}
 			continue
 		}
@@ -308,6 +315,8 @@ func (p *DiffParser) Parse(reader io.Reader) (*DiffParseResult, error) {
 			}
 			if matches[1] != "" {
 				currentFile.Path = matches[1]
+			} else {
+				currentFile.Status = "deleted"
 			}
 			continue
 		}

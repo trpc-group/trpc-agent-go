@@ -171,15 +171,18 @@ func run() error {
 	// 7. Permission policy check
 	permPolicy := security.NewPermissionPolicy()
 	secretDetector := security.NewSecretDetector()
+	permissionDecisions := make([]store.PermissionDecision, 0, 3)
 
 	// Record initial permission decision
 	permDecision := permPolicy.Evaluate("review")
-	if err := store.SavePermissionDecision(db, &store.PermissionDecision{
+	initialDecision := store.PermissionDecision{
 		TaskID:   taskID,
 		Command:  "review",
 		Decision: string(permDecision.Decision),
 		Reason:   permDecision.Reason,
-	}); err != nil {
+	}
+	permissionDecisions = append(permissionDecisions, initialDecision)
+	if err := store.SavePermissionDecision(db, &initialDecision); err != nil {
 		log.Printf("Warning: failed to save permission decision: %v", err)
 	}
 
@@ -192,12 +195,14 @@ func run() error {
 		deniedCommands := make(map[string]bool)
 		for _, script := range []string{"go vet", "staticcheck"} {
 			decision := permPolicy.Evaluate(script)
-			if err := store.SavePermissionDecision(db, &store.PermissionDecision{
+			permissionDecision := store.PermissionDecision{
 				TaskID:   taskID,
 				Command:  script,
 				Decision: string(decision.Decision),
 				Reason:   decision.Reason,
-			}); err != nil {
+				}
+				permissionDecisions = append(permissionDecisions, permissionDecision)
+				if err := store.SavePermissionDecision(db, &permissionDecision); err != nil {
 				log.Printf("Warning: failed to save permission decision: %v", err)
 			}
 			if decision.Decision == "deny" {
@@ -260,14 +265,14 @@ func run() error {
 	}
 
 	// 9. 计算监控摘要
-	monitoring := store.CalculateMonitoring(taskID, uniqueFindings, sandboxRuns, startTime)
+	monitoring := store.CalculateMonitoring(taskID, uniqueFindings, sandboxRuns, permissionDecisions, startTime)
 	if err := store.SaveMonitoringSummary(db, monitoring); err != nil {
 		store.UpdateTaskStatus(db, taskID, "failed", err.Error())
 		return fmt.Errorf("save monitoring summary: %w", err)
 	}
 
 	// 10. 生成报告
-	reviewReport := report.Generate(taskID, uniqueFindings, warnings, sandboxRuns, monitoring)
+	reviewReport := report.Generate(taskID, uniqueFindings, warnings, sandboxRuns, permissionDecisions, monitoring)
 
 	// 11. 输出结果
 	switch *flagOutput {

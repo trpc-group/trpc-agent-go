@@ -98,20 +98,16 @@ func (e *Executor) RunAllChecks(ctx context.Context, taskID string) ([]store.San
 
 // runLocalChecks 本地执行（开发 fallback）
 func (e *Executor) runLocalChecks(ctx context.Context, taskID string) ([]store.SandboxRun, error) {
-	runs := make([]store.SandboxRun, 0)
-
-	// 运行 go vet
-	if isCommandAvailable("go") {
-		result := e.runCommand(ctx, taskID, "go_vet", "go", []string{"vet", "./..."})
-		runs = append(runs, result)
+	runs := make([]store.SandboxRun, 0, 2)
+	if !isCommandAvailable("go") {
+		return runs, fmt.Errorf("go command not available")
+	}
+	if !isCommandAvailable("staticcheck") {
+		return runs, fmt.Errorf("staticcheck command not available")
 	}
 
-	// 运行 staticcheck（如果可用）
-	if isCommandAvailable("staticcheck") {
-		result := e.runCommand(ctx, taskID, "staticcheck", "staticcheck", []string{"./..."})
-		runs = append(runs, result)
-	}
-
+	runs = append(runs, e.runCommand(ctx, taskID, "go_vet", "go", []string{"vet", "./..."}))
+	runs = append(runs, e.runCommand(ctx, taskID, "staticcheck", "staticcheck", []string{"./..."}))
 	return runs, nil
 }
 

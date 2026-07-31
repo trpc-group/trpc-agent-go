@@ -382,7 +382,7 @@ func GetTaskReport(db *sql.DB, taskID string) (*ReviewReport, error) {
 }
 
 // CalculateMonitoring 计算监控摘要
-func CalculateMonitoring(taskID string, findings []Finding, sandboxRuns []SandboxRun, startTime time.Time) *MonitoringSummary {
+func CalculateMonitoring(taskID string, findings []Finding, sandboxRuns []SandboxRun, permissionDecisions []PermissionDecision, startTime time.Time) *MonitoringSummary {
 	totalDurationMs := int(time.Since(startTime).Milliseconds())
 	sandboxDurationMs := 0
 	for _, run := range sandboxRuns {
@@ -395,13 +395,19 @@ func CalculateMonitoring(taskID string, findings []Finding, sandboxRuns []Sandbo
 	for _, f := range findings {
 		severityDistribution[f.Severity]++
 	}
+	permissionBlocks := 0
+	for _, decision := range permissionDecisions {
+		if decision.Decision == "deny" {
+			permissionBlocks++
+		}
+	}
 
 	return &MonitoringSummary{
 		TaskID:                taskID,
 		TotalDurationMs:       totalDurationMs,
 		SandboxDurationMs:     sandboxDurationMs,
 		ToolCallsCount:        len(sandboxRuns),
-		PermissionBlocksCount: 0,
+		PermissionBlocksCount: permissionBlocks,
 		FindingsCount:         len(findings),
 		SeverityDistribution:  severityDistribution,
 		ExceptionDistribution: map[string]int{},

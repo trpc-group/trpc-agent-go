@@ -234,7 +234,7 @@ func (o *Orchestrator) Run(ctx context.Context, config *ReviewConfig) *ReviewRes
 	}
 
 	// 10. 计算监控摘要
-	monitoring := store.CalculateMonitoring(config.TaskID, uniqueFindings, sandboxRuns, startTime)
+	monitoring := store.CalculateMonitoring(config.TaskID, uniqueFindings, sandboxRuns, []store.PermissionDecision{permDecision}, startTime)
 	if err := store.SaveMonitoringSummary(o.db, monitoring); err != nil {
 		result.Error = fmt.Errorf("save monitoring summary: %w", err)
 		store.UpdateTaskStatus(o.db, config.TaskID, "failed", result.Error.Error())
@@ -243,7 +243,7 @@ func (o *Orchestrator) Run(ctx context.Context, config *ReviewConfig) *ReviewRes
 	}
 
 	// 11. 生成报告
-	reviewReport := report.Generate(config.TaskID, uniqueFindings, warnings, sandboxRuns, monitoring)
+	reviewReport := report.Generate(config.TaskID, uniqueFindings, warnings, sandboxRuns, []store.PermissionDecision{permDecision}, monitoring)
 
 	// 12. 保存报告
 	reportJSON, err := json.MarshalIndent(reviewReport, "", "  ")
