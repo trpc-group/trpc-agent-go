@@ -4516,7 +4516,17 @@
 <span class="normal"><a href="#__codelineno-9-22">22</a></span>
 <span class="normal"><a href="#__codelineno-9-23">23</a></span>
 <span class="normal"><a href="#__codelineno-9-24">24</a></span>
-<span class="normal"><a href="#__codelineno-9-25">25</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+<span class="normal"><a href="#__codelineno-9-25">25</a></span>
+<span class="normal"><a href="#__codelineno-9-26">26</a></span>
+<span class="normal"><a href="#__codelineno-9-27">27</a></span>
+<span class="normal"><a href="#__codelineno-9-28">28</a></span>
+<span class="normal"><a href="#__codelineno-9-29">29</a></span>
+<span class="normal"><a href="#__codelineno-9-30">30</a></span>
+<span class="normal"><a href="#__codelineno-9-31">31</a></span>
+<span class="normal"><a href="#__codelineno-9-32">32</a></span>
+<span class="normal"><a href="#__codelineno-9-33">33</a></span>
+<span class="normal"><a href="#__codelineno-9-34">34</a></span>
+<span class="normal"><a href="#__codelineno-9-35">35</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
 </span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter&quot;</span>
 </span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3"></a><span class="p">)</span>
 </span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4"></a>
@@ -4528,22 +4538,33 @@
 </span><span id="__span-9-10"><a id="__codelineno-9-10" name="__codelineno-9-10"></a><span class="w">    </span><span class="nx">EvalCaseIDs</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span>
 </span><span id="__span-9-11"><a id="__codelineno-9-11" name="__codelineno-9-11"></a><span class="w">    </span><span class="c1">// LossHints supplements known business-side problem reasons for failed training-set metrics.</span>
 </span><span id="__span-9-12"><a id="__codelineno-9-12" name="__codelineno-9-12"></a><span class="w">    </span><span class="nx">LossHints</span><span class="w"> </span><span class="p">[]</span><span class="nx">LossHint</span>
-</span><span id="__span-9-13"><a id="__codelineno-9-13" name="__codelineno-9-13"></a><span class="p">}</span>
-</span><span id="__span-9-14"><a id="__codelineno-9-14" name="__codelineno-9-14"></a>
-</span><span id="__span-9-15"><a id="__codelineno-9-15" name="__codelineno-9-15"></a><span class="c1">// LossHint supplements the problem reason for one failed metric on one evaluation case.</span>
-</span><span id="__span-9-16"><a id="__codelineno-9-16" name="__codelineno-9-16"></a><span class="kd">type</span><span class="w"> </span><span class="nx">LossHint</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-9-17"><a id="__codelineno-9-17" name="__codelineno-9-17"></a><span class="w">    </span><span class="c1">// EvalCaseID specifies the evaluation case corresponding to the problem reason.</span>
-</span><span id="__span-9-18"><a id="__codelineno-9-18" name="__codelineno-9-18"></a><span class="w">    </span><span class="nx">EvalCaseID</span><span class="w"> </span><span class="kt">string</span>
-</span><span id="__span-9-19"><a id="__codelineno-9-19" name="__codelineno-9-19"></a><span class="w">    </span><span class="c1">// MetricName specifies the metric corresponding to the problem reason.</span>
-</span><span id="__span-9-20"><a id="__codelineno-9-20" name="__codelineno-9-20"></a><span class="w">    </span><span class="nx">MetricName</span><span class="w"> </span><span class="kt">string</span>
-</span><span id="__span-9-21"><a id="__codelineno-9-21" name="__codelineno-9-21"></a><span class="w">    </span><span class="c1">// Severity indicates the priority of the problem reason.</span>
-</span><span id="__span-9-22"><a id="__codelineno-9-22" name="__codelineno-9-22"></a><span class="w">    </span><span class="nx">Severity</span><span class="w"> </span><span class="nx">promptiter</span><span class="p">.</span><span class="nx">LossSeverity</span>
-</span><span id="__span-9-23"><a id="__codelineno-9-23" name="__codelineno-9-23"></a><span class="w">    </span><span class="c1">// Reason is the problem-reason text used for backpropagation attribution.</span>
-</span><span id="__span-9-24"><a id="__codelineno-9-24" name="__codelineno-9-24"></a><span class="w">    </span><span class="nx">Reason</span><span class="w"> </span><span class="kt">string</span>
-</span><span id="__span-9-25"><a id="__codelineno-9-25" name="__codelineno-9-25"></a><span class="p">}</span>
+</span><span id="__span-9-13"><a id="__codelineno-9-13" name="__codelineno-9-13"></a><span class="w">    </span><span class="c1">// LossTargets specify trace nodes where failed training metric losses start backward propagation.</span>
+</span><span id="__span-9-14"><a id="__codelineno-9-14" name="__codelineno-9-14"></a><span class="w">    </span><span class="nx">LossTargets</span><span class="w"> </span><span class="p">[]</span><span class="nx">LossTarget</span>
+</span><span id="__span-9-15"><a id="__codelineno-9-15" name="__codelineno-9-15"></a><span class="p">}</span>
+</span><span id="__span-9-16"><a id="__codelineno-9-16" name="__codelineno-9-16"></a>
+</span><span id="__span-9-17"><a id="__codelineno-9-17" name="__codelineno-9-17"></a><span class="c1">// LossHint supplements the problem reason for one failed metric on one evaluation case.</span>
+</span><span id="__span-9-18"><a id="__codelineno-9-18" name="__codelineno-9-18"></a><span class="kd">type</span><span class="w"> </span><span class="nx">LossHint</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-9-19"><a id="__codelineno-9-19" name="__codelineno-9-19"></a><span class="w">    </span><span class="c1">// EvalCaseID specifies the evaluation case corresponding to the problem reason.</span>
+</span><span id="__span-9-20"><a id="__codelineno-9-20" name="__codelineno-9-20"></a><span class="w">    </span><span class="nx">EvalCaseID</span><span class="w"> </span><span class="kt">string</span>
+</span><span id="__span-9-21"><a id="__codelineno-9-21" name="__codelineno-9-21"></a><span class="w">    </span><span class="c1">// MetricName specifies the metric corresponding to the problem reason.</span>
+</span><span id="__span-9-22"><a id="__codelineno-9-22" name="__codelineno-9-22"></a><span class="w">    </span><span class="nx">MetricName</span><span class="w"> </span><span class="kt">string</span>
+</span><span id="__span-9-23"><a id="__codelineno-9-23" name="__codelineno-9-23"></a><span class="w">    </span><span class="c1">// Severity indicates the priority of the problem reason.</span>
+</span><span id="__span-9-24"><a id="__codelineno-9-24" name="__codelineno-9-24"></a><span class="w">    </span><span class="nx">Severity</span><span class="w"> </span><span class="nx">promptiter</span><span class="p">.</span><span class="nx">LossSeverity</span>
+</span><span id="__span-9-25"><a id="__codelineno-9-25" name="__codelineno-9-25"></a><span class="w">    </span><span class="c1">// Reason is the problem-reason text used for backpropagation attribution.</span>
+</span><span id="__span-9-26"><a id="__codelineno-9-26" name="__codelineno-9-26"></a><span class="w">    </span><span class="nx">Reason</span><span class="w"> </span><span class="kt">string</span>
+</span><span id="__span-9-27"><a id="__codelineno-9-27" name="__codelineno-9-27"></a><span class="p">}</span>
+</span><span id="__span-9-28"><a id="__codelineno-9-28" name="__codelineno-9-28"></a>
+</span><span id="__span-9-29"><a id="__codelineno-9-29" name="__codelineno-9-29"></a><span class="c1">// LossTarget specifies which trace node starts backpropagation for one failed metric.</span>
+</span><span id="__span-9-30"><a id="__codelineno-9-30" name="__codelineno-9-30"></a><span class="kd">type</span><span class="w"> </span><span class="nx">LossTarget</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-9-31"><a id="__codelineno-9-31" name="__codelineno-9-31"></a><span class="w">    </span><span class="c1">// MetricName specifies the target metric.</span>
+</span><span id="__span-9-32"><a id="__codelineno-9-32" name="__codelineno-9-32"></a><span class="w">    </span><span class="nx">MetricName</span><span class="w"> </span><span class="kt">string</span>
+</span><span id="__span-9-33"><a id="__codelineno-9-33" name="__codelineno-9-33"></a><span class="w">    </span><span class="c1">// NodeID specifies the node ID that receives the metric loss.</span>
+</span><span id="__span-9-34"><a id="__codelineno-9-34" name="__codelineno-9-34"></a><span class="w">    </span><span class="nx">NodeID</span><span class="w"> </span><span class="kt">string</span>
+</span><span id="__span-9-35"><a id="__codelineno-9-35" name="__codelineno-9-35"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>If <code>EvalCaseIDs</code> is not specified, PromptIter runs all evaluation cases under the corresponding evaluation set. If a non-empty list is specified, only the listed evaluation cases run.</p>
 <p>When the business side already knows the specific problem in a training-set evaluation case, <code>LossHint</code> can supplement the problem reason. PromptIter merges <code>Reason</code> into the optimization signal of the corresponding failed metric, so backpropagation attribution can consider both the reason from the evaluator and the reason supplemented by the business side. When <code>LossHint</code> is used, <code>EvalCaseID</code> and <code>MetricName</code> must match a failed metric in the current training evaluation result, and <code>Severity</code> must be <code>P0</code>, <code>P1</code>, <code>P2</code>, or <code>P3</code>. <code>LossHint</code> does not change the evaluation score and does not participate in validation-set acceptance decisions.</p>
+<p>When a training-set metric directly evaluates an intermediate node output, <code>LossTarget</code> can inject that metric's failure reason into the last executed step of the target <code>NodeID</code>. The injected loss becomes incoming input for that step in the existing backpropagation flow and can continue propagating to predecessor steps. <code>LossTarget</code> only affects training-set optimization signals. It does not change evaluation scores and does not participate in validation-set acceptance decisions.</p>
 <p>Training sets and validation sets must be used separately. A higher training-set score only means the candidate patch is closer to metric requirements on samples used for optimization. It cannot prove that samples not used for optimization also satisfy the metrics. The validation set exposes overfitting risk and participates in acceptance decisions.</p>
 <h3 id="static-structure-snapshot">Static Structure Snapshot</h3>
 <p>The static structure snapshot is the exported structure of the target Agent. It contains nodes, edges, and iterable slots. Content that can be used as an iteration target in the structure snapshot is called a surface in code. Each surface has a stable <code>SurfaceID</code>. This section discusses only <code>instruction</code> prompt iteration. PromptIter uses the structure snapshot to confirm whether the specified <code>instruction</code> surface exists for the current run.</p>
@@ -4826,6 +4847,8 @@
 </span><span id="__span-13-25"><a id="__codelineno-13-25" name="__codelineno-13-25"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p><code>LossHints</code> only supplements optimization signals in the training phase. It does not change evaluation scores and does not affect validation-set acceptance decisions. PromptIter only uses a <code>LossHint</code> when the corresponding Metric of the corresponding EvalCase is in <code>failed</code> status in the current training evaluation. If the metric passes in the current round, <code>LossHint</code> will not change the evaluation case to failed.</p>
+<p>By default, PromptIter injects a failed metric's <code>Reason</code> into the terminal steps of that evaluation case trace and starts backpropagation from those terminal steps. For Graph Agent or multi-node Agent workflows, if a metric already evaluates an intermediate node through trace placeholders, set <code>LossTargets</code> in the training-set <code>EvalSetInput</code> to inject that metric's <code>Reason</code> directly into the last executed step of a specified <code>NodeID</code>. The following stages still reuse the existing backpropagation logic: the target step first generates its own gradients from the incoming loss, then produces gradient packets for predecessor steps according to <code>PredecessorStepIDs</code>.</p>
+<p><code>LossTargets</code> match training evaluation results by EvalSet and MetricName. Within the same EvalSet, one MetricName can have only one target node. If a configured MetricName does not appear in that EvalSet's training result, the run fails. A <code>NodeID</code> configured for training must exist in the current structure snapshot. If one evaluation case's trace did not execute that node in the current round, that metric loss is skipped for the case and does not fall back to terminal steps. <code>LossTargets</code> only take effect during training loss extraction. Validation inputs do not support <code>LossTargets</code>; requests containing them are rejected.</p>
 <h3 id="backwarder">Backwarder</h3>
 <p>The responsibility of <code>Backwarder</code> is to generate two kinds of output from failed samples, current step context, and incoming gradient packets. One is text gradients attributed to the current step's surfaces. The other is gradient packets that need to continue being passed to predecessor steps.</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-14-1"> 1</a></span>
@@ -5536,96 +5559,106 @@
 <p><code>MaxRounds</code> itself is a required constraint in <code>RunRequest</code> and must be greater than 0. When <code>TargetScore</code> is <code>nil</code>, the target-score stop condition is not enabled.</p>
 <h3 id="runrequest">RunRequest</h3>
 <p><code>RunRequest</code> describes all inputs of one PromptIter run. It specifies training sets, validation sets, initial version, iteration targets, stage configuration, and stop conditions.</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-29-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-29-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-29-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-29-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-29-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-29-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-29-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-29-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-29-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-29-10">10</a></span>
-<span class="normal"><a href="#__codelineno-29-11">11</a></span>
-<span class="normal"><a href="#__codelineno-29-12">12</a></span>
-<span class="normal"><a href="#__codelineno-29-13">13</a></span>
-<span class="normal"><a href="#__codelineno-29-14">14</a></span>
-<span class="normal"><a href="#__codelineno-29-15">15</a></span>
-<span class="normal"><a href="#__codelineno-29-16">16</a></span>
-<span class="normal"><a href="#__codelineno-29-17">17</a></span>
-<span class="normal"><a href="#__codelineno-29-18">18</a></span>
-<span class="normal"><a href="#__codelineno-29-19">19</a></span>
-<span class="normal"><a href="#__codelineno-29-20">20</a></span>
-<span class="normal"><a href="#__codelineno-29-21">21</a></span>
-<span class="normal"><a href="#__codelineno-29-22">22</a></span>
-<span class="normal"><a href="#__codelineno-29-23">23</a></span>
-<span class="normal"><a href="#__codelineno-29-24">24</a></span>
-<span class="normal"><a href="#__codelineno-29-25">25</a></span>
-<span class="normal"><a href="#__codelineno-29-26">26</a></span>
-<span class="normal"><a href="#__codelineno-29-27">27</a></span>
-<span class="normal"><a href="#__codelineno-29-28">28</a></span>
-<span class="normal"><a href="#__codelineno-29-29">29</a></span>
-<span class="normal"><a href="#__codelineno-29-30">30</a></span>
-<span class="normal"><a href="#__codelineno-29-31">31</a></span>
-<span class="normal"><a href="#__codelineno-29-32">32</a></span>
-<span class="normal"><a href="#__codelineno-29-33">33</a></span>
-<span class="normal"><a href="#__codelineno-29-34">34</a></span>
-<span class="normal"><a href="#__codelineno-29-35">35</a></span>
-<span class="normal"><a href="#__codelineno-29-36">36</a></span>
-<span class="normal"><a href="#__codelineno-29-37">37</a></span>
-<span class="normal"><a href="#__codelineno-29-38">38</a></span>
-<span class="normal"><a href="#__codelineno-29-39">39</a></span>
-<span class="normal"><a href="#__codelineno-29-40">40</a></span>
-<span class="normal"><a href="#__codelineno-29-41">41</a></span>
-<span class="normal"><a href="#__codelineno-29-42">42</a></span>
-<span class="normal"><a href="#__codelineno-29-43">43</a></span>
-<span class="normal"><a href="#__codelineno-29-44">44</a></span>
-<span class="normal"><a href="#__codelineno-29-45">45</a></span>
-<span class="normal"><a href="#__codelineno-29-46">46</a></span>
-<span class="normal"><a href="#__codelineno-29-47">47</a></span>
-<span class="normal"><a href="#__codelineno-29-48">48</a></span>
-<span class="normal"><a href="#__codelineno-29-49">49</a></span>
-<span class="normal"><a href="#__codelineno-29-50">50</a></span>
-<span class="normal"><a href="#__codelineno-29-51">51</a></span>
-<span class="normal"><a href="#__codelineno-29-52">52</a></span>
-<span class="normal"><a href="#__codelineno-29-53">53</a></span>
-<span class="normal"><a href="#__codelineno-29-54">54</a></span>
-<span class="normal"><a href="#__codelineno-29-55">55</a></span>
-<span class="normal"><a href="#__codelineno-29-56">56</a></span>
-<span class="normal"><a href="#__codelineno-29-57">57</a></span>
-<span class="normal"><a href="#__codelineno-29-58">58</a></span>
-<span class="normal"><a href="#__codelineno-29-59">59</a></span>
-<span class="normal"><a href="#__codelineno-29-60">60</a></span>
-<span class="normal"><a href="#__codelineno-29-61">61</a></span>
-<span class="normal"><a href="#__codelineno-29-62">62</a></span>
-<span class="normal"><a href="#__codelineno-29-63">63</a></span>
-<span class="normal"><a href="#__codelineno-29-64">64</a></span>
-<span class="normal"><a href="#__codelineno-29-65">65</a></span>
-<span class="normal"><a href="#__codelineno-29-66">66</a></span>
-<span class="normal"><a href="#__codelineno-29-67">67</a></span>
-<span class="normal"><a href="#__codelineno-29-68">68</a></span>
-<span class="normal"><a href="#__codelineno-29-69">69</a></span>
-<span class="normal"><a href="#__codelineno-29-70">70</a></span>
-<span class="normal"><a href="#__codelineno-29-71">71</a></span>
-<span class="normal"><a href="#__codelineno-29-72">72</a></span>
-<span class="normal"><a href="#__codelineno-29-73">73</a></span>
-<span class="normal"><a href="#__codelineno-29-74">74</a></span>
-<span class="normal"><a href="#__codelineno-29-75">75</a></span>
-<span class="normal"><a href="#__codelineno-29-76">76</a></span>
-<span class="normal"><a href="#__codelineno-29-77">77</a></span>
-<span class="normal"><a href="#__codelineno-29-78">78</a></span>
-<span class="normal"><a href="#__codelineno-29-79">79</a></span>
-<span class="normal"><a href="#__codelineno-29-80">80</a></span>
-<span class="normal"><a href="#__codelineno-29-81">81</a></span>
-<span class="normal"><a href="#__codelineno-29-82">82</a></span>
-<span class="normal"><a href="#__codelineno-29-83">83</a></span>
-<span class="normal"><a href="#__codelineno-29-84">84</a></span>
-<span class="normal"><a href="#__codelineno-29-85">85</a></span>
-<span class="normal"><a href="#__codelineno-29-86">86</a></span>
-<span class="normal"><a href="#__codelineno-29-87">87</a></span>
-<span class="normal"><a href="#__codelineno-29-88">88</a></span>
-<span class="normal"><a href="#__codelineno-29-89">89</a></span>
-<span class="normal"><a href="#__codelineno-29-90">90</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-29-1">  1</a></span>
+<span class="normal"><a href="#__codelineno-29-2">  2</a></span>
+<span class="normal"><a href="#__codelineno-29-3">  3</a></span>
+<span class="normal"><a href="#__codelineno-29-4">  4</a></span>
+<span class="normal"><a href="#__codelineno-29-5">  5</a></span>
+<span class="normal"><a href="#__codelineno-29-6">  6</a></span>
+<span class="normal"><a href="#__codelineno-29-7">  7</a></span>
+<span class="normal"><a href="#__codelineno-29-8">  8</a></span>
+<span class="normal"><a href="#__codelineno-29-9">  9</a></span>
+<span class="normal"><a href="#__codelineno-29-10"> 10</a></span>
+<span class="normal"><a href="#__codelineno-29-11"> 11</a></span>
+<span class="normal"><a href="#__codelineno-29-12"> 12</a></span>
+<span class="normal"><a href="#__codelineno-29-13"> 13</a></span>
+<span class="normal"><a href="#__codelineno-29-14"> 14</a></span>
+<span class="normal"><a href="#__codelineno-29-15"> 15</a></span>
+<span class="normal"><a href="#__codelineno-29-16"> 16</a></span>
+<span class="normal"><a href="#__codelineno-29-17"> 17</a></span>
+<span class="normal"><a href="#__codelineno-29-18"> 18</a></span>
+<span class="normal"><a href="#__codelineno-29-19"> 19</a></span>
+<span class="normal"><a href="#__codelineno-29-20"> 20</a></span>
+<span class="normal"><a href="#__codelineno-29-21"> 21</a></span>
+<span class="normal"><a href="#__codelineno-29-22"> 22</a></span>
+<span class="normal"><a href="#__codelineno-29-23"> 23</a></span>
+<span class="normal"><a href="#__codelineno-29-24"> 24</a></span>
+<span class="normal"><a href="#__codelineno-29-25"> 25</a></span>
+<span class="normal"><a href="#__codelineno-29-26"> 26</a></span>
+<span class="normal"><a href="#__codelineno-29-27"> 27</a></span>
+<span class="normal"><a href="#__codelineno-29-28"> 28</a></span>
+<span class="normal"><a href="#__codelineno-29-29"> 29</a></span>
+<span class="normal"><a href="#__codelineno-29-30"> 30</a></span>
+<span class="normal"><a href="#__codelineno-29-31"> 31</a></span>
+<span class="normal"><a href="#__codelineno-29-32"> 32</a></span>
+<span class="normal"><a href="#__codelineno-29-33"> 33</a></span>
+<span class="normal"><a href="#__codelineno-29-34"> 34</a></span>
+<span class="normal"><a href="#__codelineno-29-35"> 35</a></span>
+<span class="normal"><a href="#__codelineno-29-36"> 36</a></span>
+<span class="normal"><a href="#__codelineno-29-37"> 37</a></span>
+<span class="normal"><a href="#__codelineno-29-38"> 38</a></span>
+<span class="normal"><a href="#__codelineno-29-39"> 39</a></span>
+<span class="normal"><a href="#__codelineno-29-40"> 40</a></span>
+<span class="normal"><a href="#__codelineno-29-41"> 41</a></span>
+<span class="normal"><a href="#__codelineno-29-42"> 42</a></span>
+<span class="normal"><a href="#__codelineno-29-43"> 43</a></span>
+<span class="normal"><a href="#__codelineno-29-44"> 44</a></span>
+<span class="normal"><a href="#__codelineno-29-45"> 45</a></span>
+<span class="normal"><a href="#__codelineno-29-46"> 46</a></span>
+<span class="normal"><a href="#__codelineno-29-47"> 47</a></span>
+<span class="normal"><a href="#__codelineno-29-48"> 48</a></span>
+<span class="normal"><a href="#__codelineno-29-49"> 49</a></span>
+<span class="normal"><a href="#__codelineno-29-50"> 50</a></span>
+<span class="normal"><a href="#__codelineno-29-51"> 51</a></span>
+<span class="normal"><a href="#__codelineno-29-52"> 52</a></span>
+<span class="normal"><a href="#__codelineno-29-53"> 53</a></span>
+<span class="normal"><a href="#__codelineno-29-54"> 54</a></span>
+<span class="normal"><a href="#__codelineno-29-55"> 55</a></span>
+<span class="normal"><a href="#__codelineno-29-56"> 56</a></span>
+<span class="normal"><a href="#__codelineno-29-57"> 57</a></span>
+<span class="normal"><a href="#__codelineno-29-58"> 58</a></span>
+<span class="normal"><a href="#__codelineno-29-59"> 59</a></span>
+<span class="normal"><a href="#__codelineno-29-60"> 60</a></span>
+<span class="normal"><a href="#__codelineno-29-61"> 61</a></span>
+<span class="normal"><a href="#__codelineno-29-62"> 62</a></span>
+<span class="normal"><a href="#__codelineno-29-63"> 63</a></span>
+<span class="normal"><a href="#__codelineno-29-64"> 64</a></span>
+<span class="normal"><a href="#__codelineno-29-65"> 65</a></span>
+<span class="normal"><a href="#__codelineno-29-66"> 66</a></span>
+<span class="normal"><a href="#__codelineno-29-67"> 67</a></span>
+<span class="normal"><a href="#__codelineno-29-68"> 68</a></span>
+<span class="normal"><a href="#__codelineno-29-69"> 69</a></span>
+<span class="normal"><a href="#__codelineno-29-70"> 70</a></span>
+<span class="normal"><a href="#__codelineno-29-71"> 71</a></span>
+<span class="normal"><a href="#__codelineno-29-72"> 72</a></span>
+<span class="normal"><a href="#__codelineno-29-73"> 73</a></span>
+<span class="normal"><a href="#__codelineno-29-74"> 74</a></span>
+<span class="normal"><a href="#__codelineno-29-75"> 75</a></span>
+<span class="normal"><a href="#__codelineno-29-76"> 76</a></span>
+<span class="normal"><a href="#__codelineno-29-77"> 77</a></span>
+<span class="normal"><a href="#__codelineno-29-78"> 78</a></span>
+<span class="normal"><a href="#__codelineno-29-79"> 79</a></span>
+<span class="normal"><a href="#__codelineno-29-80"> 80</a></span>
+<span class="normal"><a href="#__codelineno-29-81"> 81</a></span>
+<span class="normal"><a href="#__codelineno-29-82"> 82</a></span>
+<span class="normal"><a href="#__codelineno-29-83"> 83</a></span>
+<span class="normal"><a href="#__codelineno-29-84"> 84</a></span>
+<span class="normal"><a href="#__codelineno-29-85"> 85</a></span>
+<span class="normal"><a href="#__codelineno-29-86"> 86</a></span>
+<span class="normal"><a href="#__codelineno-29-87"> 87</a></span>
+<span class="normal"><a href="#__codelineno-29-88"> 88</a></span>
+<span class="normal"><a href="#__codelineno-29-89"> 89</a></span>
+<span class="normal"><a href="#__codelineno-29-90"> 90</a></span>
+<span class="normal"><a href="#__codelineno-29-91"> 91</a></span>
+<span class="normal"><a href="#__codelineno-29-92"> 92</a></span>
+<span class="normal"><a href="#__codelineno-29-93"> 93</a></span>
+<span class="normal"><a href="#__codelineno-29-94"> 94</a></span>
+<span class="normal"><a href="#__codelineno-29-95"> 95</a></span>
+<span class="normal"><a href="#__codelineno-29-96"> 96</a></span>
+<span class="normal"><a href="#__codelineno-29-97"> 97</a></span>
+<span class="normal"><a href="#__codelineno-29-98"> 98</a></span>
+<span class="normal"><a href="#__codelineno-29-99"> 99</a></span>
+<span class="normal"><a href="#__codelineno-29-100">100</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
 </span><span id="__span-29-2"><a id="__codelineno-29-2" name="__codelineno-29-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter&quot;</span>
 </span><span id="__span-29-3"><a id="__codelineno-29-3" name="__codelineno-29-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
 </span><span id="__span-29-4"><a id="__codelineno-29-4" name="__codelineno-29-4"></a><span class="p">)</span>
@@ -5668,55 +5701,65 @@
 </span><span id="__span-29-41"><a id="__codelineno-29-41" name="__codelineno-29-41"></a><span class="w">    </span><span class="nx">EvalCaseIDs</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span>
 </span><span id="__span-29-42"><a id="__codelineno-29-42" name="__codelineno-29-42"></a><span class="w">    </span><span class="c1">// LossHints supplements known business-side problem reasons for failed training-set metrics.</span>
 </span><span id="__span-29-43"><a id="__codelineno-29-43" name="__codelineno-29-43"></a><span class="w">    </span><span class="nx">LossHints</span><span class="w"> </span><span class="p">[]</span><span class="nx">LossHint</span>
-</span><span id="__span-29-44"><a id="__codelineno-29-44" name="__codelineno-29-44"></a><span class="p">}</span>
-</span><span id="__span-29-45"><a id="__codelineno-29-45" name="__codelineno-29-45"></a>
-</span><span id="__span-29-46"><a id="__codelineno-29-46" name="__codelineno-29-46"></a><span class="c1">// LossHint supplements the problem reason for one failed metric on one evaluation case.</span>
-</span><span id="__span-29-47"><a id="__codelineno-29-47" name="__codelineno-29-47"></a><span class="kd">type</span><span class="w"> </span><span class="nx">LossHint</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-29-48"><a id="__codelineno-29-48" name="__codelineno-29-48"></a><span class="w">    </span><span class="c1">// EvalCaseID specifies the evaluation case corresponding to the problem reason.</span>
-</span><span id="__span-29-49"><a id="__codelineno-29-49" name="__codelineno-29-49"></a><span class="w">    </span><span class="nx">EvalCaseID</span><span class="w"> </span><span class="kt">string</span>
-</span><span id="__span-29-50"><a id="__codelineno-29-50" name="__codelineno-29-50"></a><span class="w">    </span><span class="c1">// MetricName specifies the metric corresponding to the problem reason.</span>
-</span><span id="__span-29-51"><a id="__codelineno-29-51" name="__codelineno-29-51"></a><span class="w">    </span><span class="nx">MetricName</span><span class="w"> </span><span class="kt">string</span>
-</span><span id="__span-29-52"><a id="__codelineno-29-52" name="__codelineno-29-52"></a><span class="w">    </span><span class="c1">// Severity indicates the priority of the problem reason.</span>
-</span><span id="__span-29-53"><a id="__codelineno-29-53" name="__codelineno-29-53"></a><span class="w">    </span><span class="nx">Severity</span><span class="w"> </span><span class="nx">promptiter</span><span class="p">.</span><span class="nx">LossSeverity</span>
-</span><span id="__span-29-54"><a id="__codelineno-29-54" name="__codelineno-29-54"></a><span class="w">    </span><span class="c1">// Reason is the problem-reason text used for backpropagation attribution.</span>
-</span><span id="__span-29-55"><a id="__codelineno-29-55" name="__codelineno-29-55"></a><span class="w">    </span><span class="nx">Reason</span><span class="w"> </span><span class="kt">string</span>
-</span><span id="__span-29-56"><a id="__codelineno-29-56" name="__codelineno-29-56"></a><span class="p">}</span>
-</span><span id="__span-29-57"><a id="__codelineno-29-57" name="__codelineno-29-57"></a>
-</span><span id="__span-29-58"><a id="__codelineno-29-58" name="__codelineno-29-58"></a><span class="c1">// EvaluationOptions configures the training-set and validation-set evaluation stages.</span>
-</span><span id="__span-29-59"><a id="__codelineno-29-59" name="__codelineno-29-59"></a><span class="kd">type</span><span class="w"> </span><span class="nx">EvaluationOptions</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-29-60"><a id="__codelineno-29-60" name="__codelineno-29-60"></a><span class="w">    </span><span class="c1">// EvalCaseParallelism limits evaluation-case-level concurrency.</span>
-</span><span id="__span-29-61"><a id="__codelineno-29-61" name="__codelineno-29-61"></a><span class="w">    </span><span class="nx">EvalCaseParallelism</span><span class="w"> </span><span class="kt">int</span>
-</span><span id="__span-29-62"><a id="__codelineno-29-62" name="__codelineno-29-62"></a><span class="w">    </span><span class="c1">// EvalCaseParallelInferenceEnabled enables evaluation-case-level concurrent inference.</span>
-</span><span id="__span-29-63"><a id="__codelineno-29-63" name="__codelineno-29-63"></a><span class="w">    </span><span class="nx">EvalCaseParallelInferenceEnabled</span><span class="w"> </span><span class="kt">bool</span>
-</span><span id="__span-29-64"><a id="__codelineno-29-64" name="__codelineno-29-64"></a><span class="w">    </span><span class="c1">// EvalCaseParallelEvaluationEnabled enables evaluation-case-level concurrent metric calculation.</span>
-</span><span id="__span-29-65"><a id="__codelineno-29-65" name="__codelineno-29-65"></a><span class="w">    </span><span class="nx">EvalCaseParallelEvaluationEnabled</span><span class="w"> </span><span class="kt">bool</span>
+</span><span id="__span-29-44"><a id="__codelineno-29-44" name="__codelineno-29-44"></a><span class="w">    </span><span class="c1">// LossTargets specify trace nodes where failed training metric losses start backward propagation.</span>
+</span><span id="__span-29-45"><a id="__codelineno-29-45" name="__codelineno-29-45"></a><span class="w">    </span><span class="nx">LossTargets</span><span class="w"> </span><span class="p">[]</span><span class="nx">LossTarget</span>
+</span><span id="__span-29-46"><a id="__codelineno-29-46" name="__codelineno-29-46"></a><span class="p">}</span>
+</span><span id="__span-29-47"><a id="__codelineno-29-47" name="__codelineno-29-47"></a>
+</span><span id="__span-29-48"><a id="__codelineno-29-48" name="__codelineno-29-48"></a><span class="c1">// LossHint supplements the problem reason for one failed metric on one evaluation case.</span>
+</span><span id="__span-29-49"><a id="__codelineno-29-49" name="__codelineno-29-49"></a><span class="kd">type</span><span class="w"> </span><span class="nx">LossHint</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-29-50"><a id="__codelineno-29-50" name="__codelineno-29-50"></a><span class="w">    </span><span class="c1">// EvalCaseID specifies the evaluation case corresponding to the problem reason.</span>
+</span><span id="__span-29-51"><a id="__codelineno-29-51" name="__codelineno-29-51"></a><span class="w">    </span><span class="nx">EvalCaseID</span><span class="w"> </span><span class="kt">string</span>
+</span><span id="__span-29-52"><a id="__codelineno-29-52" name="__codelineno-29-52"></a><span class="w">    </span><span class="c1">// MetricName specifies the metric corresponding to the problem reason.</span>
+</span><span id="__span-29-53"><a id="__codelineno-29-53" name="__codelineno-29-53"></a><span class="w">    </span><span class="nx">MetricName</span><span class="w"> </span><span class="kt">string</span>
+</span><span id="__span-29-54"><a id="__codelineno-29-54" name="__codelineno-29-54"></a><span class="w">    </span><span class="c1">// Severity indicates the priority of the problem reason.</span>
+</span><span id="__span-29-55"><a id="__codelineno-29-55" name="__codelineno-29-55"></a><span class="w">    </span><span class="nx">Severity</span><span class="w"> </span><span class="nx">promptiter</span><span class="p">.</span><span class="nx">LossSeverity</span>
+</span><span id="__span-29-56"><a id="__codelineno-29-56" name="__codelineno-29-56"></a><span class="w">    </span><span class="c1">// Reason is the problem-reason text used for backpropagation attribution.</span>
+</span><span id="__span-29-57"><a id="__codelineno-29-57" name="__codelineno-29-57"></a><span class="w">    </span><span class="nx">Reason</span><span class="w"> </span><span class="kt">string</span>
+</span><span id="__span-29-58"><a id="__codelineno-29-58" name="__codelineno-29-58"></a><span class="p">}</span>
+</span><span id="__span-29-59"><a id="__codelineno-29-59" name="__codelineno-29-59"></a>
+</span><span id="__span-29-60"><a id="__codelineno-29-60" name="__codelineno-29-60"></a><span class="c1">// LossTarget specifies which trace node starts backpropagation for one failed metric.</span>
+</span><span id="__span-29-61"><a id="__codelineno-29-61" name="__codelineno-29-61"></a><span class="kd">type</span><span class="w"> </span><span class="nx">LossTarget</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-29-62"><a id="__codelineno-29-62" name="__codelineno-29-62"></a><span class="w">    </span><span class="c1">// MetricName specifies the target metric.</span>
+</span><span id="__span-29-63"><a id="__codelineno-29-63" name="__codelineno-29-63"></a><span class="w">    </span><span class="nx">MetricName</span><span class="w"> </span><span class="kt">string</span>
+</span><span id="__span-29-64"><a id="__codelineno-29-64" name="__codelineno-29-64"></a><span class="w">    </span><span class="c1">// NodeID specifies the node ID that receives the metric loss.</span>
+</span><span id="__span-29-65"><a id="__codelineno-29-65" name="__codelineno-29-65"></a><span class="w">    </span><span class="nx">NodeID</span><span class="w"> </span><span class="kt">string</span>
 </span><span id="__span-29-66"><a id="__codelineno-29-66" name="__codelineno-29-66"></a><span class="p">}</span>
 </span><span id="__span-29-67"><a id="__codelineno-29-67" name="__codelineno-29-67"></a>
-</span><span id="__span-29-68"><a id="__codelineno-29-68" name="__codelineno-29-68"></a><span class="c1">// BackwardOptions configures the backpropagation-attribution stage.</span>
-</span><span id="__span-29-69"><a id="__codelineno-29-69" name="__codelineno-29-69"></a><span class="kd">type</span><span class="w"> </span><span class="nx">BackwardOptions</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-29-70"><a id="__codelineno-29-70" name="__codelineno-29-70"></a><span class="w">    </span><span class="c1">// CaseParallelismEnabled enables training-set evaluation-case-level concurrent backpropagation attribution.</span>
-</span><span id="__span-29-71"><a id="__codelineno-29-71" name="__codelineno-29-71"></a><span class="w">    </span><span class="nx">CaseParallelismEnabled</span><span class="w"> </span><span class="kt">bool</span>
-</span><span id="__span-29-72"><a id="__codelineno-29-72" name="__codelineno-29-72"></a><span class="w">    </span><span class="c1">// CaseParallelism limits evaluation-case concurrency in the backpropagation-attribution stage.</span>
-</span><span id="__span-29-73"><a id="__codelineno-29-73" name="__codelineno-29-73"></a><span class="w">    </span><span class="nx">CaseParallelism</span><span class="w"> </span><span class="kt">int</span>
-</span><span id="__span-29-74"><a id="__codelineno-29-74" name="__codelineno-29-74"></a><span class="p">}</span>
-</span><span id="__span-29-75"><a id="__codelineno-29-75" name="__codelineno-29-75"></a>
-</span><span id="__span-29-76"><a id="__codelineno-29-76" name="__codelineno-29-76"></a><span class="c1">// AggregationOptions configures the text-gradient aggregation stage.</span>
-</span><span id="__span-29-77"><a id="__codelineno-29-77" name="__codelineno-29-77"></a><span class="kd">type</span><span class="w"> </span><span class="nx">AggregationOptions</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-29-78"><a id="__codelineno-29-78" name="__codelineno-29-78"></a><span class="w">    </span><span class="c1">// SurfaceParallelismEnabled enables concurrent aggregation for multiple surfaces.</span>
-</span><span id="__span-29-79"><a id="__codelineno-29-79" name="__codelineno-29-79"></a><span class="w">    </span><span class="nx">SurfaceParallelismEnabled</span><span class="w"> </span><span class="kt">bool</span>
-</span><span id="__span-29-80"><a id="__codelineno-29-80" name="__codelineno-29-80"></a><span class="w">    </span><span class="c1">// SurfaceParallelism limits surface concurrency in the text-gradient aggregation stage.</span>
-</span><span id="__span-29-81"><a id="__codelineno-29-81" name="__codelineno-29-81"></a><span class="w">    </span><span class="nx">SurfaceParallelism</span><span class="w"> </span><span class="kt">int</span>
-</span><span id="__span-29-82"><a id="__codelineno-29-82" name="__codelineno-29-82"></a><span class="p">}</span>
-</span><span id="__span-29-83"><a id="__codelineno-29-83" name="__codelineno-29-83"></a>
-</span><span id="__span-29-84"><a id="__codelineno-29-84" name="__codelineno-29-84"></a><span class="c1">// OptimizerOptions configures the optimization patch generation stage.</span>
-</span><span id="__span-29-85"><a id="__codelineno-29-85" name="__codelineno-29-85"></a><span class="kd">type</span><span class="w"> </span><span class="nx">OptimizerOptions</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-29-86"><a id="__codelineno-29-86" name="__codelineno-29-86"></a><span class="w">    </span><span class="c1">// SurfaceParallelismEnabled enables concurrent patch generation for multiple surfaces.</span>
-</span><span id="__span-29-87"><a id="__codelineno-29-87" name="__codelineno-29-87"></a><span class="w">    </span><span class="nx">SurfaceParallelismEnabled</span><span class="w"> </span><span class="kt">bool</span>
-</span><span id="__span-29-88"><a id="__codelineno-29-88" name="__codelineno-29-88"></a><span class="w">    </span><span class="c1">// SurfaceParallelism limits surface concurrency in the optimization patch generation stage.</span>
-</span><span id="__span-29-89"><a id="__codelineno-29-89" name="__codelineno-29-89"></a><span class="w">    </span><span class="nx">SurfaceParallelism</span><span class="w"> </span><span class="kt">int</span>
-</span><span id="__span-29-90"><a id="__codelineno-29-90" name="__codelineno-29-90"></a><span class="p">}</span>
+</span><span id="__span-29-68"><a id="__codelineno-29-68" name="__codelineno-29-68"></a><span class="c1">// EvaluationOptions configures the training-set and validation-set evaluation stages.</span>
+</span><span id="__span-29-69"><a id="__codelineno-29-69" name="__codelineno-29-69"></a><span class="kd">type</span><span class="w"> </span><span class="nx">EvaluationOptions</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-29-70"><a id="__codelineno-29-70" name="__codelineno-29-70"></a><span class="w">    </span><span class="c1">// EvalCaseParallelism limits evaluation-case-level concurrency.</span>
+</span><span id="__span-29-71"><a id="__codelineno-29-71" name="__codelineno-29-71"></a><span class="w">    </span><span class="nx">EvalCaseParallelism</span><span class="w"> </span><span class="kt">int</span>
+</span><span id="__span-29-72"><a id="__codelineno-29-72" name="__codelineno-29-72"></a><span class="w">    </span><span class="c1">// EvalCaseParallelInferenceEnabled enables evaluation-case-level concurrent inference.</span>
+</span><span id="__span-29-73"><a id="__codelineno-29-73" name="__codelineno-29-73"></a><span class="w">    </span><span class="nx">EvalCaseParallelInferenceEnabled</span><span class="w"> </span><span class="kt">bool</span>
+</span><span id="__span-29-74"><a id="__codelineno-29-74" name="__codelineno-29-74"></a><span class="w">    </span><span class="c1">// EvalCaseParallelEvaluationEnabled enables evaluation-case-level concurrent metric calculation.</span>
+</span><span id="__span-29-75"><a id="__codelineno-29-75" name="__codelineno-29-75"></a><span class="w">    </span><span class="nx">EvalCaseParallelEvaluationEnabled</span><span class="w"> </span><span class="kt">bool</span>
+</span><span id="__span-29-76"><a id="__codelineno-29-76" name="__codelineno-29-76"></a><span class="p">}</span>
+</span><span id="__span-29-77"><a id="__codelineno-29-77" name="__codelineno-29-77"></a>
+</span><span id="__span-29-78"><a id="__codelineno-29-78" name="__codelineno-29-78"></a><span class="c1">// BackwardOptions configures the backpropagation-attribution stage.</span>
+</span><span id="__span-29-79"><a id="__codelineno-29-79" name="__codelineno-29-79"></a><span class="kd">type</span><span class="w"> </span><span class="nx">BackwardOptions</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-29-80"><a id="__codelineno-29-80" name="__codelineno-29-80"></a><span class="w">    </span><span class="c1">// CaseParallelismEnabled enables training-set evaluation-case-level concurrent backpropagation attribution.</span>
+</span><span id="__span-29-81"><a id="__codelineno-29-81" name="__codelineno-29-81"></a><span class="w">    </span><span class="nx">CaseParallelismEnabled</span><span class="w"> </span><span class="kt">bool</span>
+</span><span id="__span-29-82"><a id="__codelineno-29-82" name="__codelineno-29-82"></a><span class="w">    </span><span class="c1">// CaseParallelism limits evaluation-case concurrency in the backpropagation-attribution stage.</span>
+</span><span id="__span-29-83"><a id="__codelineno-29-83" name="__codelineno-29-83"></a><span class="w">    </span><span class="nx">CaseParallelism</span><span class="w"> </span><span class="kt">int</span>
+</span><span id="__span-29-84"><a id="__codelineno-29-84" name="__codelineno-29-84"></a><span class="p">}</span>
+</span><span id="__span-29-85"><a id="__codelineno-29-85" name="__codelineno-29-85"></a>
+</span><span id="__span-29-86"><a id="__codelineno-29-86" name="__codelineno-29-86"></a><span class="c1">// AggregationOptions configures the text-gradient aggregation stage.</span>
+</span><span id="__span-29-87"><a id="__codelineno-29-87" name="__codelineno-29-87"></a><span class="kd">type</span><span class="w"> </span><span class="nx">AggregationOptions</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-29-88"><a id="__codelineno-29-88" name="__codelineno-29-88"></a><span class="w">    </span><span class="c1">// SurfaceParallelismEnabled enables concurrent aggregation for multiple surfaces.</span>
+</span><span id="__span-29-89"><a id="__codelineno-29-89" name="__codelineno-29-89"></a><span class="w">    </span><span class="nx">SurfaceParallelismEnabled</span><span class="w"> </span><span class="kt">bool</span>
+</span><span id="__span-29-90"><a id="__codelineno-29-90" name="__codelineno-29-90"></a><span class="w">    </span><span class="c1">// SurfaceParallelism limits surface concurrency in the text-gradient aggregation stage.</span>
+</span><span id="__span-29-91"><a id="__codelineno-29-91" name="__codelineno-29-91"></a><span class="w">    </span><span class="nx">SurfaceParallelism</span><span class="w"> </span><span class="kt">int</span>
+</span><span id="__span-29-92"><a id="__codelineno-29-92" name="__codelineno-29-92"></a><span class="p">}</span>
+</span><span id="__span-29-93"><a id="__codelineno-29-93" name="__codelineno-29-93"></a>
+</span><span id="__span-29-94"><a id="__codelineno-29-94" name="__codelineno-29-94"></a><span class="c1">// OptimizerOptions configures the optimization patch generation stage.</span>
+</span><span id="__span-29-95"><a id="__codelineno-29-95" name="__codelineno-29-95"></a><span class="kd">type</span><span class="w"> </span><span class="nx">OptimizerOptions</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-29-96"><a id="__codelineno-29-96" name="__codelineno-29-96"></a><span class="w">    </span><span class="c1">// SurfaceParallelismEnabled enables concurrent patch generation for multiple surfaces.</span>
+</span><span id="__span-29-97"><a id="__codelineno-29-97" name="__codelineno-29-97"></a><span class="w">    </span><span class="nx">SurfaceParallelismEnabled</span><span class="w"> </span><span class="kt">bool</span>
+</span><span id="__span-29-98"><a id="__codelineno-29-98" name="__codelineno-29-98"></a><span class="w">    </span><span class="c1">// SurfaceParallelism limits surface concurrency in the optimization patch generation stage.</span>
+</span><span id="__span-29-99"><a id="__codelineno-29-99" name="__codelineno-29-99"></a><span class="w">    </span><span class="nx">SurfaceParallelism</span><span class="w"> </span><span class="kt">int</span>
+</span><span id="__span-29-100"><a id="__codelineno-29-100" name="__codelineno-29-100"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p><code>RunRequest</code> first specifies training sets and validation sets. <code>Train</code> is used to produce optimization signals, and <code>Validation</code> is used for acceptance decisions. Both must be non-empty. Each <code>EvalSetInput</code> can point to a complete evaluation set or use <code>EvalCaseIDs</code> to run only part of its evaluation cases. <code>LossHints</code> only serves the training set and is used to supplement known business-side problem reasons.</p>
+<p><code>RunRequest</code> first specifies training sets and validation sets. <code>Train</code> is used to produce optimization signals, and <code>Validation</code> is used for acceptance decisions. Both must be non-empty. Each <code>EvalSetInput</code> can point to a complete evaluation set or use <code>EvalCaseIDs</code> to run only part of its evaluation cases. <code>LossHints</code> and <code>LossTargets</code> only serve the training set. They respectively supplement known business-side problem reasons and specify trace nodes where failed metric losses start backward propagation.</p>
 <p><code>InitialProfile</code> specifies the starting Profile of this iteration. If it is not passed, PromptIter uses the original surface values in the structure snapshot as the initial baseline. If <code>InitialProfile</code> is passed and <code>StructureID</code> is non-empty, it must match the current structure snapshot ID.</p>
 <p><code>Teacher</code> and <code>Judge</code> are passed to Evaluation. <code>Teacher</code> is used to generate expected traces or reference answers when the evaluation needs them. If the EvalSet already contains these expected values, <code>Teacher</code> can be omitted. <code>Judge</code> supports LLM Judge metric scoring. If this type of metric is not used, <code>Judge</code> can be omitted.</p>
 <p><code>TargetSurfaceIDs</code> sets the surfaces allowed to be iterated in this run. A single-Agent scenario usually points to <code>candidate#instruction</code>, while a multi-node Agent scenario can point to <code>instruction</code> surfaces of multiple nodes. Tool-description iteration points to a single tool-description surface, such as <code>candidate#tool.lookup_record</code>.</p>
@@ -8108,7 +8151,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="July 3, 2026 02:07:59 UTC">2026-07-03 02:07:59</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="July 31, 2026 07:19:12 UTC">2026-07-31 07:19:12</span>
   </span>
 
     

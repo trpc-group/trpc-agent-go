@@ -4516,7 +4516,17 @@
 <span class="normal"><a href="#__codelineno-9-22">22</a></span>
 <span class="normal"><a href="#__codelineno-9-23">23</a></span>
 <span class="normal"><a href="#__codelineno-9-24">24</a></span>
-<span class="normal"><a href="#__codelineno-9-25">25</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+<span class="normal"><a href="#__codelineno-9-25">25</a></span>
+<span class="normal"><a href="#__codelineno-9-26">26</a></span>
+<span class="normal"><a href="#__codelineno-9-27">27</a></span>
+<span class="normal"><a href="#__codelineno-9-28">28</a></span>
+<span class="normal"><a href="#__codelineno-9-29">29</a></span>
+<span class="normal"><a href="#__codelineno-9-30">30</a></span>
+<span class="normal"><a href="#__codelineno-9-31">31</a></span>
+<span class="normal"><a href="#__codelineno-9-32">32</a></span>
+<span class="normal"><a href="#__codelineno-9-33">33</a></span>
+<span class="normal"><a href="#__codelineno-9-34">34</a></span>
+<span class="normal"><a href="#__codelineno-9-35">35</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
 </span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter&quot;</span>
 </span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3"></a><span class="p">)</span>
 </span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4"></a>
@@ -4528,22 +4538,33 @@
 </span><span id="__span-9-10"><a id="__codelineno-9-10" name="__codelineno-9-10"></a><span class="w">    </span><span class="nx">EvalCaseIDs</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span>
 </span><span id="__span-9-11"><a id="__codelineno-9-11" name="__codelineno-9-11"></a><span class="w">    </span><span class="c1">// LossHints 为训练集失败指标补充业务侧已知的问题原因。</span>
 </span><span id="__span-9-12"><a id="__codelineno-9-12" name="__codelineno-9-12"></a><span class="w">    </span><span class="nx">LossHints</span><span class="w">   </span><span class="p">[]</span><span class="nx">LossHint</span>
-</span><span id="__span-9-13"><a id="__codelineno-9-13" name="__codelineno-9-13"></a><span class="p">}</span>
-</span><span id="__span-9-14"><a id="__codelineno-9-14" name="__codelineno-9-14"></a>
-</span><span id="__span-9-15"><a id="__codelineno-9-15" name="__codelineno-9-15"></a><span class="c1">// LossHint 为单个评估用例上的单个失败指标补充问题原因。</span>
-</span><span id="__span-9-16"><a id="__codelineno-9-16" name="__codelineno-9-16"></a><span class="kd">type</span><span class="w"> </span><span class="nx">LossHint</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-9-17"><a id="__codelineno-9-17" name="__codelineno-9-17"></a><span class="w">    </span><span class="c1">// EvalCaseID 指定问题原因对应的评估用例。</span>
-</span><span id="__span-9-18"><a id="__codelineno-9-18" name="__codelineno-9-18"></a><span class="w">    </span><span class="nx">EvalCaseID</span><span class="w"> </span><span class="kt">string</span>
-</span><span id="__span-9-19"><a id="__codelineno-9-19" name="__codelineno-9-19"></a><span class="w">    </span><span class="c1">// MetricName 指定问题原因对应的评估指标。</span>
-</span><span id="__span-9-20"><a id="__codelineno-9-20" name="__codelineno-9-20"></a><span class="w">    </span><span class="nx">MetricName</span><span class="w"> </span><span class="kt">string</span>
-</span><span id="__span-9-21"><a id="__codelineno-9-21" name="__codelineno-9-21"></a><span class="w">    </span><span class="c1">// Severity 表示问题原因的优先级。</span>
-</span><span id="__span-9-22"><a id="__codelineno-9-22" name="__codelineno-9-22"></a><span class="w">    </span><span class="nx">Severity</span><span class="w">   </span><span class="nx">promptiter</span><span class="p">.</span><span class="nx">LossSeverity</span>
-</span><span id="__span-9-23"><a id="__codelineno-9-23" name="__codelineno-9-23"></a><span class="w">    </span><span class="c1">// Reason 是用于反向传播归因的问题原因文本。</span>
-</span><span id="__span-9-24"><a id="__codelineno-9-24" name="__codelineno-9-24"></a><span class="w">    </span><span class="nx">Reason</span><span class="w">     </span><span class="kt">string</span>
-</span><span id="__span-9-25"><a id="__codelineno-9-25" name="__codelineno-9-25"></a><span class="p">}</span>
+</span><span id="__span-9-13"><a id="__codelineno-9-13" name="__codelineno-9-13"></a><span class="w">    </span><span class="c1">// LossTargets 指定训练集失败指标 loss 开始反向传播的 trace 节点。</span>
+</span><span id="__span-9-14"><a id="__codelineno-9-14" name="__codelineno-9-14"></a><span class="w">    </span><span class="nx">LossTargets</span><span class="w"> </span><span class="p">[]</span><span class="nx">LossTarget</span>
+</span><span id="__span-9-15"><a id="__codelineno-9-15" name="__codelineno-9-15"></a><span class="p">}</span>
+</span><span id="__span-9-16"><a id="__codelineno-9-16" name="__codelineno-9-16"></a>
+</span><span id="__span-9-17"><a id="__codelineno-9-17" name="__codelineno-9-17"></a><span class="c1">// LossHint 为单个评估用例上的单个失败指标补充问题原因。</span>
+</span><span id="__span-9-18"><a id="__codelineno-9-18" name="__codelineno-9-18"></a><span class="kd">type</span><span class="w"> </span><span class="nx">LossHint</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-9-19"><a id="__codelineno-9-19" name="__codelineno-9-19"></a><span class="w">    </span><span class="c1">// EvalCaseID 指定问题原因对应的评估用例。</span>
+</span><span id="__span-9-20"><a id="__codelineno-9-20" name="__codelineno-9-20"></a><span class="w">    </span><span class="nx">EvalCaseID</span><span class="w"> </span><span class="kt">string</span>
+</span><span id="__span-9-21"><a id="__codelineno-9-21" name="__codelineno-9-21"></a><span class="w">    </span><span class="c1">// MetricName 指定问题原因对应的评估指标。</span>
+</span><span id="__span-9-22"><a id="__codelineno-9-22" name="__codelineno-9-22"></a><span class="w">    </span><span class="nx">MetricName</span><span class="w"> </span><span class="kt">string</span>
+</span><span id="__span-9-23"><a id="__codelineno-9-23" name="__codelineno-9-23"></a><span class="w">    </span><span class="c1">// Severity 表示问题原因的优先级。</span>
+</span><span id="__span-9-24"><a id="__codelineno-9-24" name="__codelineno-9-24"></a><span class="w">    </span><span class="nx">Severity</span><span class="w">   </span><span class="nx">promptiter</span><span class="p">.</span><span class="nx">LossSeverity</span>
+</span><span id="__span-9-25"><a id="__codelineno-9-25" name="__codelineno-9-25"></a><span class="w">    </span><span class="c1">// Reason 是用于反向传播归因的问题原因文本。</span>
+</span><span id="__span-9-26"><a id="__codelineno-9-26" name="__codelineno-9-26"></a><span class="w">    </span><span class="nx">Reason</span><span class="w">     </span><span class="kt">string</span>
+</span><span id="__span-9-27"><a id="__codelineno-9-27" name="__codelineno-9-27"></a><span class="p">}</span>
+</span><span id="__span-9-28"><a id="__codelineno-9-28" name="__codelineno-9-28"></a>
+</span><span id="__span-9-29"><a id="__codelineno-9-29" name="__codelineno-9-29"></a><span class="c1">// LossTarget 指定单个失败指标 loss 开始反向传播的 trace 节点。</span>
+</span><span id="__span-9-30"><a id="__codelineno-9-30" name="__codelineno-9-30"></a><span class="kd">type</span><span class="w"> </span><span class="nx">LossTarget</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-9-31"><a id="__codelineno-9-31" name="__codelineno-9-31"></a><span class="w">    </span><span class="c1">// MetricName 指定目标评估指标。</span>
+</span><span id="__span-9-32"><a id="__codelineno-9-32" name="__codelineno-9-32"></a><span class="w">    </span><span class="nx">MetricName</span><span class="w"> </span><span class="kt">string</span>
+</span><span id="__span-9-33"><a id="__codelineno-9-33" name="__codelineno-9-33"></a><span class="w">    </span><span class="c1">// NodeID 指定接收该指标 loss 的节点 ID。</span>
+</span><span id="__span-9-34"><a id="__codelineno-9-34" name="__codelineno-9-34"></a><span class="w">    </span><span class="nx">NodeID</span><span class="w">     </span><span class="kt">string</span>
+</span><span id="__span-9-35"><a id="__codelineno-9-35" name="__codelineno-9-35"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>不指定 <code>EvalCaseIDs</code> 时，PromptIter 会运行对应评估集下的全部评估用例。指定非空列表时，只运行列出的评估用例。</p>
 <p>当业务侧已经知道某个训练集评估用例的具体问题时，可以用 <code>LossHint</code> 补充问题原因。PromptIter 会把 <code>Reason</code> 并入对应失败指标的优化信号，使反向传播归因同时参考评估器给出的原因和业务侧补充原因。使用 <code>LossHint</code> 时，<code>EvalCaseID</code> 和 <code>MetricName</code> 必须能匹配本次训练评估结果中的失败指标，<code>Severity</code> 取值为 <code>P0</code>、<code>P1</code>、<code>P2</code> 或 <code>P3</code>。<code>LossHint</code> 不改变评估分数，也不参与验证集接受判定。</p>
+<p>当某个训练集指标直接评价中间节点输出时，可以用 <code>LossTarget</code> 将该指标的失败原因直接注入目标 <code>NodeID</code> 对应的最后一次执行步骤。注入后的 loss 会作为该步骤的 incoming 输入进入现有反向传播逻辑，并继续向前序步骤传播。<code>LossTarget</code> 只影响训练集优化信号，不改变评估分数，也不参与验证集接受判定。</p>
 <p>训练集和验证集需要分离使用。训练集分数提升只能说明候选补丁在参与优化的样本上更接近指标要求，不能证明未参与优化的样本也满足指标。验证集用于暴露过拟合风险，并参与接受判定。</p>
 <h3 id="_12">静态结构快照</h3>
 <p>静态结构快照是待测 Agent 的结构导出结果，包含节点、边和可迭代槽位。结构快照中可作为迭代目标的内容在代码中称为 surface，每个 surface 都有稳定的 <code>SurfaceID</code>。本节只讨论 <code>instruction</code> 提示词迭代，PromptIter 通过结构快照确认本次指定的 <code>instruction</code> surface 是否存在。</p>
@@ -4832,6 +4853,8 @@
 </span><span id="__span-13-25"><a id="__codelineno-13-25" name="__codelineno-13-25"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p><code>LossHints</code> 只补充训练阶段的优化信号，不改变评估分数，也不会影响验证集接受判定。只有对应 EvalCase 的对应 Metric 在本次训练评估中处于 <code>failed</code> 状态时，PromptIter 才会使用 <code>LossHint</code>。如果该指标本轮通过，<code>LossHint</code> 不会把该评估用例改判为失败。</p>
+<p>默认情况下，PromptIter 会把失败指标的 <code>Reason</code> 注入该评估用例 trace 的终端步骤，再从终端步骤开始反向传播。对于 Graph Agent 或多节点 Agent，如果某个指标已经通过 trace 占位符评价了中间节点，可以在训练集 <code>EvalSetInput</code> 中设置 <code>LossTargets</code>，将该指标的 <code>Reason</code> 直接注入指定 <code>NodeID</code> 的最后一次执行步骤。后续处理仍复用现有反向传播逻辑：目标步骤先根据 incoming loss 生成自身梯度，再按 <code>PredecessorStepIDs</code> 生成前序步骤的梯度包。</p>
+<p><code>LossTargets</code> 按 EvalSet 和 MetricName 匹配训练集评估结果。同一个 EvalSet 中，一个 MetricName 只能配置一个目标节点。如果配置的 MetricName 未出现在该 EvalSet 的训练评估结果中，本轮运行会失败。训练配置中的 <code>NodeID</code> 必须存在于当前结构快照中；如果某个评估用例本轮 trace 没有执行该节点，该指标 loss 会被跳过，不会回退到终端步骤。<code>LossTargets</code> 只在训练集 loss 提取中生效，验证集不支持 <code>LossTargets</code>，配置后请求会被拒绝。</p>
 <h3 id="backwarder">反向传播器 Backwarder</h3>
 <p><code>Backwarder</code> 的职责是根据失败样本、当前步骤上下文和传入梯度包生成两类输出。一类是归因到当前步骤 surface 的文本梯度，另一类是需要继续传给前驱步骤的梯度包。</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-14-1"> 1</a></span>
@@ -5550,96 +5573,106 @@
 <p><code>MaxRounds</code> 本身是 <code>RunRequest</code> 的必填约束，必须大于 0。<code>TargetScore</code> 为 <code>nil</code> 时不会触发目标分数停止条件。</p>
 <h3 id="runrequest_1">RunRequest</h3>
 <p><code>RunRequest</code> 描述一次 PromptIter 运行的全部输入，用于指定训练集、验证集、初始版本、迭代目标、阶段配置和停止条件。</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-29-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-29-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-29-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-29-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-29-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-29-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-29-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-29-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-29-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-29-10">10</a></span>
-<span class="normal"><a href="#__codelineno-29-11">11</a></span>
-<span class="normal"><a href="#__codelineno-29-12">12</a></span>
-<span class="normal"><a href="#__codelineno-29-13">13</a></span>
-<span class="normal"><a href="#__codelineno-29-14">14</a></span>
-<span class="normal"><a href="#__codelineno-29-15">15</a></span>
-<span class="normal"><a href="#__codelineno-29-16">16</a></span>
-<span class="normal"><a href="#__codelineno-29-17">17</a></span>
-<span class="normal"><a href="#__codelineno-29-18">18</a></span>
-<span class="normal"><a href="#__codelineno-29-19">19</a></span>
-<span class="normal"><a href="#__codelineno-29-20">20</a></span>
-<span class="normal"><a href="#__codelineno-29-21">21</a></span>
-<span class="normal"><a href="#__codelineno-29-22">22</a></span>
-<span class="normal"><a href="#__codelineno-29-23">23</a></span>
-<span class="normal"><a href="#__codelineno-29-24">24</a></span>
-<span class="normal"><a href="#__codelineno-29-25">25</a></span>
-<span class="normal"><a href="#__codelineno-29-26">26</a></span>
-<span class="normal"><a href="#__codelineno-29-27">27</a></span>
-<span class="normal"><a href="#__codelineno-29-28">28</a></span>
-<span class="normal"><a href="#__codelineno-29-29">29</a></span>
-<span class="normal"><a href="#__codelineno-29-30">30</a></span>
-<span class="normal"><a href="#__codelineno-29-31">31</a></span>
-<span class="normal"><a href="#__codelineno-29-32">32</a></span>
-<span class="normal"><a href="#__codelineno-29-33">33</a></span>
-<span class="normal"><a href="#__codelineno-29-34">34</a></span>
-<span class="normal"><a href="#__codelineno-29-35">35</a></span>
-<span class="normal"><a href="#__codelineno-29-36">36</a></span>
-<span class="normal"><a href="#__codelineno-29-37">37</a></span>
-<span class="normal"><a href="#__codelineno-29-38">38</a></span>
-<span class="normal"><a href="#__codelineno-29-39">39</a></span>
-<span class="normal"><a href="#__codelineno-29-40">40</a></span>
-<span class="normal"><a href="#__codelineno-29-41">41</a></span>
-<span class="normal"><a href="#__codelineno-29-42">42</a></span>
-<span class="normal"><a href="#__codelineno-29-43">43</a></span>
-<span class="normal"><a href="#__codelineno-29-44">44</a></span>
-<span class="normal"><a href="#__codelineno-29-45">45</a></span>
-<span class="normal"><a href="#__codelineno-29-46">46</a></span>
-<span class="normal"><a href="#__codelineno-29-47">47</a></span>
-<span class="normal"><a href="#__codelineno-29-48">48</a></span>
-<span class="normal"><a href="#__codelineno-29-49">49</a></span>
-<span class="normal"><a href="#__codelineno-29-50">50</a></span>
-<span class="normal"><a href="#__codelineno-29-51">51</a></span>
-<span class="normal"><a href="#__codelineno-29-52">52</a></span>
-<span class="normal"><a href="#__codelineno-29-53">53</a></span>
-<span class="normal"><a href="#__codelineno-29-54">54</a></span>
-<span class="normal"><a href="#__codelineno-29-55">55</a></span>
-<span class="normal"><a href="#__codelineno-29-56">56</a></span>
-<span class="normal"><a href="#__codelineno-29-57">57</a></span>
-<span class="normal"><a href="#__codelineno-29-58">58</a></span>
-<span class="normal"><a href="#__codelineno-29-59">59</a></span>
-<span class="normal"><a href="#__codelineno-29-60">60</a></span>
-<span class="normal"><a href="#__codelineno-29-61">61</a></span>
-<span class="normal"><a href="#__codelineno-29-62">62</a></span>
-<span class="normal"><a href="#__codelineno-29-63">63</a></span>
-<span class="normal"><a href="#__codelineno-29-64">64</a></span>
-<span class="normal"><a href="#__codelineno-29-65">65</a></span>
-<span class="normal"><a href="#__codelineno-29-66">66</a></span>
-<span class="normal"><a href="#__codelineno-29-67">67</a></span>
-<span class="normal"><a href="#__codelineno-29-68">68</a></span>
-<span class="normal"><a href="#__codelineno-29-69">69</a></span>
-<span class="normal"><a href="#__codelineno-29-70">70</a></span>
-<span class="normal"><a href="#__codelineno-29-71">71</a></span>
-<span class="normal"><a href="#__codelineno-29-72">72</a></span>
-<span class="normal"><a href="#__codelineno-29-73">73</a></span>
-<span class="normal"><a href="#__codelineno-29-74">74</a></span>
-<span class="normal"><a href="#__codelineno-29-75">75</a></span>
-<span class="normal"><a href="#__codelineno-29-76">76</a></span>
-<span class="normal"><a href="#__codelineno-29-77">77</a></span>
-<span class="normal"><a href="#__codelineno-29-78">78</a></span>
-<span class="normal"><a href="#__codelineno-29-79">79</a></span>
-<span class="normal"><a href="#__codelineno-29-80">80</a></span>
-<span class="normal"><a href="#__codelineno-29-81">81</a></span>
-<span class="normal"><a href="#__codelineno-29-82">82</a></span>
-<span class="normal"><a href="#__codelineno-29-83">83</a></span>
-<span class="normal"><a href="#__codelineno-29-84">84</a></span>
-<span class="normal"><a href="#__codelineno-29-85">85</a></span>
-<span class="normal"><a href="#__codelineno-29-86">86</a></span>
-<span class="normal"><a href="#__codelineno-29-87">87</a></span>
-<span class="normal"><a href="#__codelineno-29-88">88</a></span>
-<span class="normal"><a href="#__codelineno-29-89">89</a></span>
-<span class="normal"><a href="#__codelineno-29-90">90</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-29-1">  1</a></span>
+<span class="normal"><a href="#__codelineno-29-2">  2</a></span>
+<span class="normal"><a href="#__codelineno-29-3">  3</a></span>
+<span class="normal"><a href="#__codelineno-29-4">  4</a></span>
+<span class="normal"><a href="#__codelineno-29-5">  5</a></span>
+<span class="normal"><a href="#__codelineno-29-6">  6</a></span>
+<span class="normal"><a href="#__codelineno-29-7">  7</a></span>
+<span class="normal"><a href="#__codelineno-29-8">  8</a></span>
+<span class="normal"><a href="#__codelineno-29-9">  9</a></span>
+<span class="normal"><a href="#__codelineno-29-10"> 10</a></span>
+<span class="normal"><a href="#__codelineno-29-11"> 11</a></span>
+<span class="normal"><a href="#__codelineno-29-12"> 12</a></span>
+<span class="normal"><a href="#__codelineno-29-13"> 13</a></span>
+<span class="normal"><a href="#__codelineno-29-14"> 14</a></span>
+<span class="normal"><a href="#__codelineno-29-15"> 15</a></span>
+<span class="normal"><a href="#__codelineno-29-16"> 16</a></span>
+<span class="normal"><a href="#__codelineno-29-17"> 17</a></span>
+<span class="normal"><a href="#__codelineno-29-18"> 18</a></span>
+<span class="normal"><a href="#__codelineno-29-19"> 19</a></span>
+<span class="normal"><a href="#__codelineno-29-20"> 20</a></span>
+<span class="normal"><a href="#__codelineno-29-21"> 21</a></span>
+<span class="normal"><a href="#__codelineno-29-22"> 22</a></span>
+<span class="normal"><a href="#__codelineno-29-23"> 23</a></span>
+<span class="normal"><a href="#__codelineno-29-24"> 24</a></span>
+<span class="normal"><a href="#__codelineno-29-25"> 25</a></span>
+<span class="normal"><a href="#__codelineno-29-26"> 26</a></span>
+<span class="normal"><a href="#__codelineno-29-27"> 27</a></span>
+<span class="normal"><a href="#__codelineno-29-28"> 28</a></span>
+<span class="normal"><a href="#__codelineno-29-29"> 29</a></span>
+<span class="normal"><a href="#__codelineno-29-30"> 30</a></span>
+<span class="normal"><a href="#__codelineno-29-31"> 31</a></span>
+<span class="normal"><a href="#__codelineno-29-32"> 32</a></span>
+<span class="normal"><a href="#__codelineno-29-33"> 33</a></span>
+<span class="normal"><a href="#__codelineno-29-34"> 34</a></span>
+<span class="normal"><a href="#__codelineno-29-35"> 35</a></span>
+<span class="normal"><a href="#__codelineno-29-36"> 36</a></span>
+<span class="normal"><a href="#__codelineno-29-37"> 37</a></span>
+<span class="normal"><a href="#__codelineno-29-38"> 38</a></span>
+<span class="normal"><a href="#__codelineno-29-39"> 39</a></span>
+<span class="normal"><a href="#__codelineno-29-40"> 40</a></span>
+<span class="normal"><a href="#__codelineno-29-41"> 41</a></span>
+<span class="normal"><a href="#__codelineno-29-42"> 42</a></span>
+<span class="normal"><a href="#__codelineno-29-43"> 43</a></span>
+<span class="normal"><a href="#__codelineno-29-44"> 44</a></span>
+<span class="normal"><a href="#__codelineno-29-45"> 45</a></span>
+<span class="normal"><a href="#__codelineno-29-46"> 46</a></span>
+<span class="normal"><a href="#__codelineno-29-47"> 47</a></span>
+<span class="normal"><a href="#__codelineno-29-48"> 48</a></span>
+<span class="normal"><a href="#__codelineno-29-49"> 49</a></span>
+<span class="normal"><a href="#__codelineno-29-50"> 50</a></span>
+<span class="normal"><a href="#__codelineno-29-51"> 51</a></span>
+<span class="normal"><a href="#__codelineno-29-52"> 52</a></span>
+<span class="normal"><a href="#__codelineno-29-53"> 53</a></span>
+<span class="normal"><a href="#__codelineno-29-54"> 54</a></span>
+<span class="normal"><a href="#__codelineno-29-55"> 55</a></span>
+<span class="normal"><a href="#__codelineno-29-56"> 56</a></span>
+<span class="normal"><a href="#__codelineno-29-57"> 57</a></span>
+<span class="normal"><a href="#__codelineno-29-58"> 58</a></span>
+<span class="normal"><a href="#__codelineno-29-59"> 59</a></span>
+<span class="normal"><a href="#__codelineno-29-60"> 60</a></span>
+<span class="normal"><a href="#__codelineno-29-61"> 61</a></span>
+<span class="normal"><a href="#__codelineno-29-62"> 62</a></span>
+<span class="normal"><a href="#__codelineno-29-63"> 63</a></span>
+<span class="normal"><a href="#__codelineno-29-64"> 64</a></span>
+<span class="normal"><a href="#__codelineno-29-65"> 65</a></span>
+<span class="normal"><a href="#__codelineno-29-66"> 66</a></span>
+<span class="normal"><a href="#__codelineno-29-67"> 67</a></span>
+<span class="normal"><a href="#__codelineno-29-68"> 68</a></span>
+<span class="normal"><a href="#__codelineno-29-69"> 69</a></span>
+<span class="normal"><a href="#__codelineno-29-70"> 70</a></span>
+<span class="normal"><a href="#__codelineno-29-71"> 71</a></span>
+<span class="normal"><a href="#__codelineno-29-72"> 72</a></span>
+<span class="normal"><a href="#__codelineno-29-73"> 73</a></span>
+<span class="normal"><a href="#__codelineno-29-74"> 74</a></span>
+<span class="normal"><a href="#__codelineno-29-75"> 75</a></span>
+<span class="normal"><a href="#__codelineno-29-76"> 76</a></span>
+<span class="normal"><a href="#__codelineno-29-77"> 77</a></span>
+<span class="normal"><a href="#__codelineno-29-78"> 78</a></span>
+<span class="normal"><a href="#__codelineno-29-79"> 79</a></span>
+<span class="normal"><a href="#__codelineno-29-80"> 80</a></span>
+<span class="normal"><a href="#__codelineno-29-81"> 81</a></span>
+<span class="normal"><a href="#__codelineno-29-82"> 82</a></span>
+<span class="normal"><a href="#__codelineno-29-83"> 83</a></span>
+<span class="normal"><a href="#__codelineno-29-84"> 84</a></span>
+<span class="normal"><a href="#__codelineno-29-85"> 85</a></span>
+<span class="normal"><a href="#__codelineno-29-86"> 86</a></span>
+<span class="normal"><a href="#__codelineno-29-87"> 87</a></span>
+<span class="normal"><a href="#__codelineno-29-88"> 88</a></span>
+<span class="normal"><a href="#__codelineno-29-89"> 89</a></span>
+<span class="normal"><a href="#__codelineno-29-90"> 90</a></span>
+<span class="normal"><a href="#__codelineno-29-91"> 91</a></span>
+<span class="normal"><a href="#__codelineno-29-92"> 92</a></span>
+<span class="normal"><a href="#__codelineno-29-93"> 93</a></span>
+<span class="normal"><a href="#__codelineno-29-94"> 94</a></span>
+<span class="normal"><a href="#__codelineno-29-95"> 95</a></span>
+<span class="normal"><a href="#__codelineno-29-96"> 96</a></span>
+<span class="normal"><a href="#__codelineno-29-97"> 97</a></span>
+<span class="normal"><a href="#__codelineno-29-98"> 98</a></span>
+<span class="normal"><a href="#__codelineno-29-99"> 99</a></span>
+<span class="normal"><a href="#__codelineno-29-100">100</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
 </span><span id="__span-29-2"><a id="__codelineno-29-2" name="__codelineno-29-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter&quot;</span>
 </span><span id="__span-29-3"><a id="__codelineno-29-3" name="__codelineno-29-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
 </span><span id="__span-29-4"><a id="__codelineno-29-4" name="__codelineno-29-4"></a><span class="p">)</span>
@@ -5682,55 +5715,65 @@
 </span><span id="__span-29-41"><a id="__codelineno-29-41" name="__codelineno-29-41"></a><span class="w">    </span><span class="nx">EvalCaseIDs</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span>
 </span><span id="__span-29-42"><a id="__codelineno-29-42" name="__codelineno-29-42"></a><span class="w">    </span><span class="c1">// LossHints 为训练集失败指标补充业务侧已知的问题原因。</span>
 </span><span id="__span-29-43"><a id="__codelineno-29-43" name="__codelineno-29-43"></a><span class="w">    </span><span class="nx">LossHints</span><span class="w">   </span><span class="p">[]</span><span class="nx">LossHint</span>
-</span><span id="__span-29-44"><a id="__codelineno-29-44" name="__codelineno-29-44"></a><span class="p">}</span>
-</span><span id="__span-29-45"><a id="__codelineno-29-45" name="__codelineno-29-45"></a>
-</span><span id="__span-29-46"><a id="__codelineno-29-46" name="__codelineno-29-46"></a><span class="c1">// LossHint 为单个评估用例上的单个失败指标补充问题原因。</span>
-</span><span id="__span-29-47"><a id="__codelineno-29-47" name="__codelineno-29-47"></a><span class="kd">type</span><span class="w"> </span><span class="nx">LossHint</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-29-48"><a id="__codelineno-29-48" name="__codelineno-29-48"></a><span class="w">    </span><span class="c1">// EvalCaseID 指定问题原因对应的评估用例。</span>
-</span><span id="__span-29-49"><a id="__codelineno-29-49" name="__codelineno-29-49"></a><span class="w">    </span><span class="nx">EvalCaseID</span><span class="w"> </span><span class="kt">string</span>
-</span><span id="__span-29-50"><a id="__codelineno-29-50" name="__codelineno-29-50"></a><span class="w">    </span><span class="c1">// MetricName 指定问题原因对应的评估指标。</span>
-</span><span id="__span-29-51"><a id="__codelineno-29-51" name="__codelineno-29-51"></a><span class="w">    </span><span class="nx">MetricName</span><span class="w"> </span><span class="kt">string</span>
-</span><span id="__span-29-52"><a id="__codelineno-29-52" name="__codelineno-29-52"></a><span class="w">    </span><span class="c1">// Severity 表示问题原因的优先级。</span>
-</span><span id="__span-29-53"><a id="__codelineno-29-53" name="__codelineno-29-53"></a><span class="w">    </span><span class="nx">Severity</span><span class="w">   </span><span class="nx">promptiter</span><span class="p">.</span><span class="nx">LossSeverity</span>
-</span><span id="__span-29-54"><a id="__codelineno-29-54" name="__codelineno-29-54"></a><span class="w">    </span><span class="c1">// Reason 是用于反向传播归因的问题原因文本。</span>
-</span><span id="__span-29-55"><a id="__codelineno-29-55" name="__codelineno-29-55"></a><span class="w">    </span><span class="nx">Reason</span><span class="w">     </span><span class="kt">string</span>
-</span><span id="__span-29-56"><a id="__codelineno-29-56" name="__codelineno-29-56"></a><span class="p">}</span>
-</span><span id="__span-29-57"><a id="__codelineno-29-57" name="__codelineno-29-57"></a>
-</span><span id="__span-29-58"><a id="__codelineno-29-58" name="__codelineno-29-58"></a><span class="c1">// EvaluationOptions 配置训练集和验证集评估阶段。</span>
-</span><span id="__span-29-59"><a id="__codelineno-29-59" name="__codelineno-29-59"></a><span class="kd">type</span><span class="w"> </span><span class="nx">EvaluationOptions</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-29-60"><a id="__codelineno-29-60" name="__codelineno-29-60"></a><span class="w">    </span><span class="c1">// EvalCaseParallelism 限制评估用例级并发数。</span>
-</span><span id="__span-29-61"><a id="__codelineno-29-61" name="__codelineno-29-61"></a><span class="w">    </span><span class="nx">EvalCaseParallelism</span><span class="w">               </span><span class="kt">int</span>
-</span><span id="__span-29-62"><a id="__codelineno-29-62" name="__codelineno-29-62"></a><span class="w">    </span><span class="c1">// EvalCaseParallelInferenceEnabled 开启评估用例级并发推理。</span>
-</span><span id="__span-29-63"><a id="__codelineno-29-63" name="__codelineno-29-63"></a><span class="w">    </span><span class="nx">EvalCaseParallelInferenceEnabled</span><span class="w">  </span><span class="kt">bool</span>
-</span><span id="__span-29-64"><a id="__codelineno-29-64" name="__codelineno-29-64"></a><span class="w">    </span><span class="c1">// EvalCaseParallelEvaluationEnabled 开启评估用例级并发指标计算。</span>
-</span><span id="__span-29-65"><a id="__codelineno-29-65" name="__codelineno-29-65"></a><span class="w">    </span><span class="nx">EvalCaseParallelEvaluationEnabled</span><span class="w"> </span><span class="kt">bool</span>
+</span><span id="__span-29-44"><a id="__codelineno-29-44" name="__codelineno-29-44"></a><span class="w">    </span><span class="c1">// LossTargets 指定训练集失败指标 loss 开始反向传播的 trace 节点。</span>
+</span><span id="__span-29-45"><a id="__codelineno-29-45" name="__codelineno-29-45"></a><span class="w">    </span><span class="nx">LossTargets</span><span class="w"> </span><span class="p">[]</span><span class="nx">LossTarget</span>
+</span><span id="__span-29-46"><a id="__codelineno-29-46" name="__codelineno-29-46"></a><span class="p">}</span>
+</span><span id="__span-29-47"><a id="__codelineno-29-47" name="__codelineno-29-47"></a>
+</span><span id="__span-29-48"><a id="__codelineno-29-48" name="__codelineno-29-48"></a><span class="c1">// LossHint 为单个评估用例上的单个失败指标补充问题原因。</span>
+</span><span id="__span-29-49"><a id="__codelineno-29-49" name="__codelineno-29-49"></a><span class="kd">type</span><span class="w"> </span><span class="nx">LossHint</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-29-50"><a id="__codelineno-29-50" name="__codelineno-29-50"></a><span class="w">    </span><span class="c1">// EvalCaseID 指定问题原因对应的评估用例。</span>
+</span><span id="__span-29-51"><a id="__codelineno-29-51" name="__codelineno-29-51"></a><span class="w">    </span><span class="nx">EvalCaseID</span><span class="w"> </span><span class="kt">string</span>
+</span><span id="__span-29-52"><a id="__codelineno-29-52" name="__codelineno-29-52"></a><span class="w">    </span><span class="c1">// MetricName 指定问题原因对应的评估指标。</span>
+</span><span id="__span-29-53"><a id="__codelineno-29-53" name="__codelineno-29-53"></a><span class="w">    </span><span class="nx">MetricName</span><span class="w"> </span><span class="kt">string</span>
+</span><span id="__span-29-54"><a id="__codelineno-29-54" name="__codelineno-29-54"></a><span class="w">    </span><span class="c1">// Severity 表示问题原因的优先级。</span>
+</span><span id="__span-29-55"><a id="__codelineno-29-55" name="__codelineno-29-55"></a><span class="w">    </span><span class="nx">Severity</span><span class="w">   </span><span class="nx">promptiter</span><span class="p">.</span><span class="nx">LossSeverity</span>
+</span><span id="__span-29-56"><a id="__codelineno-29-56" name="__codelineno-29-56"></a><span class="w">    </span><span class="c1">// Reason 是用于反向传播归因的问题原因文本。</span>
+</span><span id="__span-29-57"><a id="__codelineno-29-57" name="__codelineno-29-57"></a><span class="w">    </span><span class="nx">Reason</span><span class="w">     </span><span class="kt">string</span>
+</span><span id="__span-29-58"><a id="__codelineno-29-58" name="__codelineno-29-58"></a><span class="p">}</span>
+</span><span id="__span-29-59"><a id="__codelineno-29-59" name="__codelineno-29-59"></a>
+</span><span id="__span-29-60"><a id="__codelineno-29-60" name="__codelineno-29-60"></a><span class="c1">// LossTarget 指定单个失败指标 loss 开始反向传播的 trace 节点。</span>
+</span><span id="__span-29-61"><a id="__codelineno-29-61" name="__codelineno-29-61"></a><span class="kd">type</span><span class="w"> </span><span class="nx">LossTarget</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-29-62"><a id="__codelineno-29-62" name="__codelineno-29-62"></a><span class="w">    </span><span class="c1">// MetricName 指定目标评估指标。</span>
+</span><span id="__span-29-63"><a id="__codelineno-29-63" name="__codelineno-29-63"></a><span class="w">    </span><span class="nx">MetricName</span><span class="w"> </span><span class="kt">string</span>
+</span><span id="__span-29-64"><a id="__codelineno-29-64" name="__codelineno-29-64"></a><span class="w">    </span><span class="c1">// NodeID 指定接收该指标 loss 的节点 ID。</span>
+</span><span id="__span-29-65"><a id="__codelineno-29-65" name="__codelineno-29-65"></a><span class="w">    </span><span class="nx">NodeID</span><span class="w">     </span><span class="kt">string</span>
 </span><span id="__span-29-66"><a id="__codelineno-29-66" name="__codelineno-29-66"></a><span class="p">}</span>
 </span><span id="__span-29-67"><a id="__codelineno-29-67" name="__codelineno-29-67"></a>
-</span><span id="__span-29-68"><a id="__codelineno-29-68" name="__codelineno-29-68"></a><span class="c1">// BackwardOptions 配置反向传播归因阶段。</span>
-</span><span id="__span-29-69"><a id="__codelineno-29-69" name="__codelineno-29-69"></a><span class="kd">type</span><span class="w"> </span><span class="nx">BackwardOptions</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-29-70"><a id="__codelineno-29-70" name="__codelineno-29-70"></a><span class="w">    </span><span class="c1">// CaseParallelismEnabled 开启训练集评估用例级并发反向传播归因。</span>
-</span><span id="__span-29-71"><a id="__codelineno-29-71" name="__codelineno-29-71"></a><span class="w">    </span><span class="nx">CaseParallelismEnabled</span><span class="w"> </span><span class="kt">bool</span>
-</span><span id="__span-29-72"><a id="__codelineno-29-72" name="__codelineno-29-72"></a><span class="w">    </span><span class="c1">// CaseParallelism 限制反向传播归因阶段的评估用例并发数。</span>
-</span><span id="__span-29-73"><a id="__codelineno-29-73" name="__codelineno-29-73"></a><span class="w">    </span><span class="nx">CaseParallelism</span><span class="w">        </span><span class="kt">int</span>
-</span><span id="__span-29-74"><a id="__codelineno-29-74" name="__codelineno-29-74"></a><span class="p">}</span>
-</span><span id="__span-29-75"><a id="__codelineno-29-75" name="__codelineno-29-75"></a>
-</span><span id="__span-29-76"><a id="__codelineno-29-76" name="__codelineno-29-76"></a><span class="c1">// AggregationOptions 配置文本梯度聚合阶段。</span>
-</span><span id="__span-29-77"><a id="__codelineno-29-77" name="__codelineno-29-77"></a><span class="kd">type</span><span class="w"> </span><span class="nx">AggregationOptions</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-29-78"><a id="__codelineno-29-78" name="__codelineno-29-78"></a><span class="w">    </span><span class="c1">// SurfaceParallelismEnabled 开启多个 surface 的并发聚合。</span>
-</span><span id="__span-29-79"><a id="__codelineno-29-79" name="__codelineno-29-79"></a><span class="w">    </span><span class="nx">SurfaceParallelismEnabled</span><span class="w"> </span><span class="kt">bool</span>
-</span><span id="__span-29-80"><a id="__codelineno-29-80" name="__codelineno-29-80"></a><span class="w">    </span><span class="c1">// SurfaceParallelism 限制文本梯度聚合阶段的 surface 并发数。</span>
-</span><span id="__span-29-81"><a id="__codelineno-29-81" name="__codelineno-29-81"></a><span class="w">    </span><span class="nx">SurfaceParallelism</span><span class="w">        </span><span class="kt">int</span>
-</span><span id="__span-29-82"><a id="__codelineno-29-82" name="__codelineno-29-82"></a><span class="p">}</span>
-</span><span id="__span-29-83"><a id="__codelineno-29-83" name="__codelineno-29-83"></a>
-</span><span id="__span-29-84"><a id="__codelineno-29-84" name="__codelineno-29-84"></a><span class="c1">// OptimizerOptions 配置优化补丁生成阶段。</span>
-</span><span id="__span-29-85"><a id="__codelineno-29-85" name="__codelineno-29-85"></a><span class="kd">type</span><span class="w"> </span><span class="nx">OptimizerOptions</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-29-86"><a id="__codelineno-29-86" name="__codelineno-29-86"></a><span class="w">    </span><span class="c1">// SurfaceParallelismEnabled 开启多个 surface 的并发补丁生成。</span>
-</span><span id="__span-29-87"><a id="__codelineno-29-87" name="__codelineno-29-87"></a><span class="w">    </span><span class="nx">SurfaceParallelismEnabled</span><span class="w"> </span><span class="kt">bool</span>
-</span><span id="__span-29-88"><a id="__codelineno-29-88" name="__codelineno-29-88"></a><span class="w">    </span><span class="c1">// SurfaceParallelism 限制优化补丁生成阶段的 surface 并发数。</span>
-</span><span id="__span-29-89"><a id="__codelineno-29-89" name="__codelineno-29-89"></a><span class="w">    </span><span class="nx">SurfaceParallelism</span><span class="w">        </span><span class="kt">int</span>
-</span><span id="__span-29-90"><a id="__codelineno-29-90" name="__codelineno-29-90"></a><span class="p">}</span>
+</span><span id="__span-29-68"><a id="__codelineno-29-68" name="__codelineno-29-68"></a><span class="c1">// EvaluationOptions 配置训练集和验证集评估阶段。</span>
+</span><span id="__span-29-69"><a id="__codelineno-29-69" name="__codelineno-29-69"></a><span class="kd">type</span><span class="w"> </span><span class="nx">EvaluationOptions</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-29-70"><a id="__codelineno-29-70" name="__codelineno-29-70"></a><span class="w">    </span><span class="c1">// EvalCaseParallelism 限制评估用例级并发数。</span>
+</span><span id="__span-29-71"><a id="__codelineno-29-71" name="__codelineno-29-71"></a><span class="w">    </span><span class="nx">EvalCaseParallelism</span><span class="w">               </span><span class="kt">int</span>
+</span><span id="__span-29-72"><a id="__codelineno-29-72" name="__codelineno-29-72"></a><span class="w">    </span><span class="c1">// EvalCaseParallelInferenceEnabled 开启评估用例级并发推理。</span>
+</span><span id="__span-29-73"><a id="__codelineno-29-73" name="__codelineno-29-73"></a><span class="w">    </span><span class="nx">EvalCaseParallelInferenceEnabled</span><span class="w">  </span><span class="kt">bool</span>
+</span><span id="__span-29-74"><a id="__codelineno-29-74" name="__codelineno-29-74"></a><span class="w">    </span><span class="c1">// EvalCaseParallelEvaluationEnabled 开启评估用例级并发指标计算。</span>
+</span><span id="__span-29-75"><a id="__codelineno-29-75" name="__codelineno-29-75"></a><span class="w">    </span><span class="nx">EvalCaseParallelEvaluationEnabled</span><span class="w"> </span><span class="kt">bool</span>
+</span><span id="__span-29-76"><a id="__codelineno-29-76" name="__codelineno-29-76"></a><span class="p">}</span>
+</span><span id="__span-29-77"><a id="__codelineno-29-77" name="__codelineno-29-77"></a>
+</span><span id="__span-29-78"><a id="__codelineno-29-78" name="__codelineno-29-78"></a><span class="c1">// BackwardOptions 配置反向传播归因阶段。</span>
+</span><span id="__span-29-79"><a id="__codelineno-29-79" name="__codelineno-29-79"></a><span class="kd">type</span><span class="w"> </span><span class="nx">BackwardOptions</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-29-80"><a id="__codelineno-29-80" name="__codelineno-29-80"></a><span class="w">    </span><span class="c1">// CaseParallelismEnabled 开启训练集评估用例级并发反向传播归因。</span>
+</span><span id="__span-29-81"><a id="__codelineno-29-81" name="__codelineno-29-81"></a><span class="w">    </span><span class="nx">CaseParallelismEnabled</span><span class="w"> </span><span class="kt">bool</span>
+</span><span id="__span-29-82"><a id="__codelineno-29-82" name="__codelineno-29-82"></a><span class="w">    </span><span class="c1">// CaseParallelism 限制反向传播归因阶段的评估用例并发数。</span>
+</span><span id="__span-29-83"><a id="__codelineno-29-83" name="__codelineno-29-83"></a><span class="w">    </span><span class="nx">CaseParallelism</span><span class="w">        </span><span class="kt">int</span>
+</span><span id="__span-29-84"><a id="__codelineno-29-84" name="__codelineno-29-84"></a><span class="p">}</span>
+</span><span id="__span-29-85"><a id="__codelineno-29-85" name="__codelineno-29-85"></a>
+</span><span id="__span-29-86"><a id="__codelineno-29-86" name="__codelineno-29-86"></a><span class="c1">// AggregationOptions 配置文本梯度聚合阶段。</span>
+</span><span id="__span-29-87"><a id="__codelineno-29-87" name="__codelineno-29-87"></a><span class="kd">type</span><span class="w"> </span><span class="nx">AggregationOptions</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-29-88"><a id="__codelineno-29-88" name="__codelineno-29-88"></a><span class="w">    </span><span class="c1">// SurfaceParallelismEnabled 开启多个 surface 的并发聚合。</span>
+</span><span id="__span-29-89"><a id="__codelineno-29-89" name="__codelineno-29-89"></a><span class="w">    </span><span class="nx">SurfaceParallelismEnabled</span><span class="w"> </span><span class="kt">bool</span>
+</span><span id="__span-29-90"><a id="__codelineno-29-90" name="__codelineno-29-90"></a><span class="w">    </span><span class="c1">// SurfaceParallelism 限制文本梯度聚合阶段的 surface 并发数。</span>
+</span><span id="__span-29-91"><a id="__codelineno-29-91" name="__codelineno-29-91"></a><span class="w">    </span><span class="nx">SurfaceParallelism</span><span class="w">        </span><span class="kt">int</span>
+</span><span id="__span-29-92"><a id="__codelineno-29-92" name="__codelineno-29-92"></a><span class="p">}</span>
+</span><span id="__span-29-93"><a id="__codelineno-29-93" name="__codelineno-29-93"></a>
+</span><span id="__span-29-94"><a id="__codelineno-29-94" name="__codelineno-29-94"></a><span class="c1">// OptimizerOptions 配置优化补丁生成阶段。</span>
+</span><span id="__span-29-95"><a id="__codelineno-29-95" name="__codelineno-29-95"></a><span class="kd">type</span><span class="w"> </span><span class="nx">OptimizerOptions</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-29-96"><a id="__codelineno-29-96" name="__codelineno-29-96"></a><span class="w">    </span><span class="c1">// SurfaceParallelismEnabled 开启多个 surface 的并发补丁生成。</span>
+</span><span id="__span-29-97"><a id="__codelineno-29-97" name="__codelineno-29-97"></a><span class="w">    </span><span class="nx">SurfaceParallelismEnabled</span><span class="w"> </span><span class="kt">bool</span>
+</span><span id="__span-29-98"><a id="__codelineno-29-98" name="__codelineno-29-98"></a><span class="w">    </span><span class="c1">// SurfaceParallelism 限制优化补丁生成阶段的 surface 并发数。</span>
+</span><span id="__span-29-99"><a id="__codelineno-29-99" name="__codelineno-29-99"></a><span class="w">    </span><span class="nx">SurfaceParallelism</span><span class="w">        </span><span class="kt">int</span>
+</span><span id="__span-29-100"><a id="__codelineno-29-100" name="__codelineno-29-100"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p><code>RunRequest</code> 首先指定训练集和验证集。<code>Train</code> 用于产生优化信号，<code>Validation</code> 用于接受判定，二者均不能为空。每个 <code>EvalSetInput</code> 可以指向完整评估集，也可以通过 <code>EvalCaseIDs</code> 只运行其中部分评估用例。<code>LossHints</code> 只服务于训练集，用于补充业务侧已知的问题原因。</p>
+<p><code>RunRequest</code> 首先指定训练集和验证集。<code>Train</code> 用于产生优化信号，<code>Validation</code> 用于接受判定，二者均不能为空。每个 <code>EvalSetInput</code> 可以指向完整评估集，也可以通过 <code>EvalCaseIDs</code> 只运行其中部分评估用例。<code>LossHints</code> 和 <code>LossTargets</code> 只服务于训练集，分别用于补充业务侧已知的问题原因，以及指定失败指标 loss 开始反向传播的 trace 节点。</p>
 <p><code>InitialProfile</code> 用于指定本次迭代的起始 Profile。未传入时，PromptIter 使用结构快照中的原始 surface 值作为起始基线。传入 <code>InitialProfile</code> 时，如果 <code>StructureID</code> 非空，需要与当前结构快照 ID 一致。</p>
 <p><code>Teacher</code> 和 <code>Judge</code> 会传给 Evaluation。<code>Teacher</code> 用于在评估需要时生成预期轨迹或参考答案。如果 EvalSet 已包含这些预期信息，<code>Teacher</code> 可以不传入。<code>Judge</code> 用于支撑 LLM Judge 类指标打分。未使用这类指标时，<code>Judge</code> 可以不传入。</p>
 <p><code>TargetSurfaceIDs</code> 用于设置本次允许迭代的 surface。单 Agent 场景通常指向 <code>candidate#instruction</code>，多节点 Agent 场景可指向多个节点的 <code>instruction</code> surface。工具描述迭代指向单工具描述 surface，例如 <code>candidate#tool.lookup_record</code>。</p>
@@ -8140,7 +8183,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年7月3日 02:07:59 UTC">2026-07-03 02:07:59</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年7月31日 07:19:12 UTC">2026-07-31 07:19:12</span>
   </span>
 
     
