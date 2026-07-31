@@ -23,19 +23,27 @@ import (
 type Decision string
 
 const (
+	// DecisionAllow lets the tool call proceed.
 	DecisionAllow Decision = "allow"
-	DecisionDeny  Decision = "deny"
-	DecisionAsk   Decision = "ask"
+	// DecisionDeny blocks the tool call.
+	DecisionDeny Decision = "deny"
+	// DecisionAsk requests human approval before execution.
+	DecisionAsk Decision = "ask"
 )
 
 // RiskLevel is a coarse severity label for reports and OTel attributes.
 type RiskLevel string
 
 const (
-	RiskNone     RiskLevel = "none"
-	RiskLow      RiskLevel = "low"
-	RiskMedium   RiskLevel = "medium"
-	RiskHigh     RiskLevel = "high"
+	// RiskNone means no elevated risk was observed.
+	RiskNone RiskLevel = "none"
+	// RiskLow is informational.
+	RiskLow RiskLevel = "low"
+	// RiskMedium warrants review (typically ask).
+	RiskMedium RiskLevel = "medium"
+	// RiskHigh should usually deny.
+	RiskHigh RiskLevel = "high"
+	// RiskCritical is reserved for credential / destructive hits.
 	RiskCritical RiskLevel = "critical"
 )
 
@@ -50,17 +58,17 @@ type Finding struct {
 
 // Result is the aggregated scan report for one tool call.
 type Result struct {
-	Decision   Decision  `json:"decision"`
-	RiskLevel  RiskLevel `json:"risk_level"`
-	RuleID     string    `json:"rule_id"`
-	Evidence   string    `json:"evidence"`
-	Advice     string    `json:"recommendation"`
-	ToolName   string    `json:"tool_name"`
-	Command    string    `json:"command,omitempty"`
-	Backend    Backend   `json:"backend"`
-	Blocked    bool      `json:"blocked"`
-	Findings   []Finding `json:"findings,omitempty"`
-	Redacted   bool      `json:"redacted"`
+	Decision  Decision  `json:"decision"`
+	RiskLevel RiskLevel `json:"risk_level"`
+	RuleID    string    `json:"rule_id"`
+	Evidence  string    `json:"evidence"`
+	Advice    string    `json:"recommendation"`
+	ToolName  string    `json:"tool_name"`
+	Command   string    `json:"command,omitempty"`
+	Backend   Backend   `json:"backend"`
+	Blocked   bool      `json:"blocked"`
+	Findings  []Finding `json:"findings,omitempty"`
+	Redacted  bool      `json:"redacted"`
 }
 
 var (
@@ -76,7 +84,7 @@ var (
 // Ordering (deny wins over ask over allow):
 //  1. secret / credential leakage in any text (including code_blocks / stdin)
 //  2. denied paths in argv / cwd / raw text
-//  3. shellsafe parse failure → deny (fail-closed; never default allow)
+//  3. shellsafe parse failure 鈫?deny (fail-closed; never default allow)
 //  4. shellsafe allow/deny + implicit wrapper deny
 //  5. network hosts outside allowlist
 //  6. ask-command / hostexec ask policy
@@ -94,6 +102,10 @@ func Scan(ex Extracted, policy Policy) Result {
 	texts = append(texts, ex.CodeBlocks...)
 
 	if f, ok := scanSecrets(texts); ok {
+		// Never leave the original command (with tokens) on the result —
+		// reports and audit consumers serialize Result.Command.
+		res.Command = redactSecrets(res.Command)
+		res.Redacted = true
 		return finalize(res, f)
 	}
 	if f, ok := scanDeniedPaths(ex, policy.DeniedPaths); ok {
@@ -105,7 +117,7 @@ func Scan(ex Extracted, policy Policy) Result {
 		pipe, err := shellsafe.Parse(ex.Command)
 		if err != nil {
 			return finalize(res, Finding{
-				RuleID:   "shellsafe.unparseable",
+				RuleID:   "shellsafe.unparsable",
 				Decision: DecisionDeny,
 				Risk:     RiskHigh,
 				Evidence: err.Error(),
@@ -128,7 +140,7 @@ func Scan(ex Extracted, policy Policy) Result {
 			})
 		}
 		// Dangerous deletion patterns that may pass basename policy if rm is
-		// not listed — keep an explicit content check for the issue's 100% bar.
+		// not listed 鈥?keep an explicit content check for the issue's 100% bar.
 		if f, ok := scanDangerousDeletion(ex.Command); ok {
 			return finalize(res, f)
 		}
@@ -190,10 +202,11 @@ func finalize(base Result, f Finding) Result {
 		base.RiskLevel = f.Risk
 	}
 	base.Blocked = base.Decision == DecisionDeny || base.Decision == DecisionAsk
-	if containsSecretEvidence(f.Evidence) || containsSecretEvidence(base.Evidence) {
+	if containsSecretEvidence(f.Evidence) || containsSecretEvidence(base.Evidence) ||
+		containsSecretEvidence(base.Command) {
 		base.Redacted = true
 		base.Evidence = redactSecrets(base.Evidence)
-		f.Evidence = redactSecrets(f.Evidence)
+		base.Command = redactSecrets(base.Command)
 	}
 	return base
 }
@@ -456,10 +469,10 @@ func hostAllowed(host string, allowed []string) bool {
 		if host == a {
 			return true
 		}
+		// Suffix matching is opt-in only: operators list ".github.com" when
+		// they intend every subdomain. A bare "api.github.com" must NOT admit
+		// "evil.api.github.com" (common allowlist footgun).
 		if strings.HasPrefix(a, ".") && strings.HasSuffix(host, a) {
-			return true
-		}
-		if strings.HasSuffix(host, "."+a) {
 			return true
 		}
 	}

@@ -6,6 +6,11 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
+// Package safety provides a thin pre-execution Tool Safety Guard that
+// implements tool.PermissionPolicy for issue #2002.
+//
+// It reuses internal/shellsafe for command structure checks and fails closed
+// when a command cannot be parsed or when policy overlays omit deny lists.
 package safety
 
 import (
@@ -23,7 +28,7 @@ import (
 //
 // LoadPolicyFile starts from DefaultPolicy and overlays values from the file.
 // Omitted deny lists therefore keep safe defaults (fail-closed), instead of
-// silently disabling denials — a common failure mode called out in reviews of
+// silently disabling denials 鈥?a common failure mode called out in reviews of
 // competing #2002 implementations.
 type Policy struct {
 	// AllowedCommands is passed to shellsafe allow matching (strict).
@@ -88,7 +93,7 @@ func LoadPolicyFile(path string) (Policy, error) {
 }
 
 // ParsePolicy decodes policy bytes. name is used only to pick JSON vs YAML
-// (".json" suffix → JSON; otherwise YAML).
+// (".json" suffix 鈫?JSON; otherwise YAML).
 func ParsePolicy(data []byte, name string) (Policy, error) {
 	base := DefaultPolicy()
 	var overlay policyOverlay

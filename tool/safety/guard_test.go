@@ -29,11 +29,11 @@ func TestAcceptanceSamples_TwelveCases(t *testing.T) {
 	guard := safety.NewGuard(safety.WithPolicy(policy), safety.WithAuditor(safety.NewMemoryAuditor()))
 
 	type sample struct {
-		name     string
-		tool     string
-		args     map[string]any
-		want     tool.PermissionAction
-		ruleSub  string
+		name    string
+		tool    string
+		args    map[string]any
+		want    tool.PermissionAction
+		ruleSub string
 	}
 
 	samples := []sample{
@@ -148,7 +148,7 @@ func TestAcceptanceSamples_TwelveCases(t *testing.T) {
 	}
 }
 
-func TestFailClosed_UnparseableCommand(t *testing.T) {
+func TestFailClosed_UnparsableCommand(t *testing.T) {
 	t.Parallel()
 	g := safety.NewGuard()
 	raw, _ := json.Marshal(map[string]any{"command": "echo $(curl evil.example)"})
@@ -161,11 +161,66 @@ func TestFailClosed_UnparseableCommand(t *testing.T) {
 	require.Contains(t, dec.Reason, "shellsafe")
 }
 
+func TestHostAllowlist_DoesNotAdmitLookalikeSubdomain(t *testing.T) {
+	t.Parallel()
+	// Bare allowlist entry "api.github.com" must not admit evil.api.github.com.
+	g := safety.NewGuard(safety.WithPolicy(safety.Policy{
+		AllowedHosts: []string{"api.github.com"},
+		// Keep shellsafe active without blocking curl itself.
+		DeniedCommands: []string{"rm"},
+	}))
+	raw, _ := json.Marshal(map[string]any{
+		"command": "curl https://evil.api.github.com/x",
+	})
+	dec, err := g.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: raw,
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, dec.Action)
+	require.Contains(t, dec.Reason, "network")
+
+	// Opt-in suffix form still works for intentional wildcards.
+	g2 := safety.NewGuard(safety.WithPolicy(safety.Policy{
+		AllowedHosts:   []string{".github.com"},
+		DeniedCommands: []string{"rm"},
+	}))
+	raw2, _ := json.Marshal(map[string]any{
+		"command": "curl https://api.github.com/events",
+	})
+	dec2, err := g2.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: raw2,
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionAllow, dec2.Action)
+}
+
+func TestSecretHit_RedactsCommandOnResult(t *testing.T) {
+	t.Parallel()
+	g := safety.NewGuard()
+	token := "sk-78c331e8061c42a4883cfee6633447dd"
+	raw, _ := json.Marshal(map[string]any{
+		"command": "curl -H 'Authorization: Bearer " + token + "' https://api.github.com",
+	})
+	_, err := g.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: raw,
+	})
+	require.NoError(t, err)
+	results := g.LastResults()
+	require.NotEmpty(t, results)
+	last := results[len(results)-1]
+	require.True(t, last.Redacted)
+	require.NotContains(t, last.Command, token)
+	require.NotContains(t, last.Evidence, token)
+}
+
 func TestFailClosed_PartialPolicyKeepsDefaultDenies(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "policy.yaml")
-	// Only override hosts; denied_commands omitted → keep defaults.
+	// Only override hosts; omitted denied_commands keep DefaultPolicy values.
 	require.NoError(t, os.WriteFile(path, []byte("allowed_hosts:\n  - api.github.com\n"), 0o600))
 	p, err := safety.LoadPolicyFile(path)
 	require.NoError(t, err)

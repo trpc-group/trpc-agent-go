@@ -22,17 +22,21 @@ import (
 
 // Attr keys reserved for OpenTelemetry consumers.
 const (
-	AttrDecision  = "tool.safety.decision"
+	// AttrDecision is the span attribute for allow/deny/ask.
+	AttrDecision = "tool.safety.decision"
+	// AttrRiskLevel is the span attribute for risk severity.
 	AttrRiskLevel = "tool.safety.risk_level"
-	AttrRuleID    = "tool.safety.rule_id"
-	AttrBackend   = "tool.safety.backend"
+	// AttrRuleID is the span attribute for the winning rule id.
+	AttrRuleID = "tool.safety.rule_id"
+	// AttrBackend is the span attribute for workspace/host/code backend.
+	AttrBackend = "tool.safety.backend"
 )
 
 // Guard is a thin pre-execution safety policy that implements tool.PermissionPolicy.
 //
 // Design goals (relative to competing #2002 PRs):
 //   - Reuse internal/shellsafe instead of inventing a second parser.
-//   - Fail closed on unparseable commands and omitted deny lists.
+//   - Fail closed on unparsable commands and omitted deny lists.
 //   - Integrate through PermissionPolicy only (no WrapToolSet capability loss).
 //   - Scan code_blocks / stdin as well as command strings.
 //

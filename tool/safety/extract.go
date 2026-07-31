@@ -19,10 +19,14 @@ import (
 type Backend string
 
 const (
+	// BackendWorkspace is workspace_exec style isolation.
 	BackendWorkspace Backend = "workspaceexec"
-	BackendHost      Backend = "hostexec"
-	BackendCode      Backend = "codeexec"
-	BackendUnknown   Backend = "unknown"
+	// BackendHost is hostexec / exec_command on the machine.
+	BackendHost Backend = "hostexec"
+	// BackendCode is codeexec / execute_code payloads.
+	BackendCode Backend = "codeexec"
+	// BackendUnknown is used when the tool name is not recognized.
+	BackendUnknown Backend = "unknown"
 )
 
 // Extracted is the normalized payload Guard scans.

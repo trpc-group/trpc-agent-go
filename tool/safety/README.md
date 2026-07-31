@@ -1,35 +1,40 @@
 # Tool Safety Guard
 
-Thin pre-execution safety layer for `trpc-agent-go` (**issue #2002**).
+Pre-execution permission layer for `trpc-agent-go` (issue **#2002**).
 
-## What this is
+## Design choice (why not another scanner empire)
 
-`tool/safety.Guard` implements `tool.PermissionPolicy` and decides
-`allow` / `deny` / `ask` **before** a tool runs. It is designed to
-**reuse** `internal/shellsafe` and the existing permission hook
-(`agent.WithToolPermissionPolicy`), not to invent a second shell parser
-or wrap every tool (which caused capability loss in several competing PRs).
+`workspaceexec` already speaks `internal/shellsafe` for allow/deny at spawn
+time, and the runner already has `tool.PermissionPolicy`. Most competing
+#2002 patches re-implement parsing and wrap every tool. That creates two
+problems we kept seeing in review threads on sibling PRs:
 
-## What this is not
+1. **Scanned text ≠ executed text** — a custom regex admits something
+   shellsafe would reject, or vice versa.
+2. **`WrapToolSet` capability loss** — wrappers drop `PermissionChecker`,
+   stream, or state-delta interfaces.
 
-- Not a sandbox. Container / E2B / OS isolation still matter.
-- Not a replacement for `workspaceexec` policy mode (`WithAllowedCommands`,
-  `CleanEnv`, non-login shell). Those harden *spawn*; this Guard hardens
-  *permission*.
-- Not a claim that static scanning can see inside compiled binaries.
+This package does the boring, harder-to-get-wrong thing: **PermissionPolicy
+only**, and **shellsafe is the only shell parser**. Extra rules (paths,
+hosts, secrets, ask-commands, hostexec ask) sit *on top of* that parse,
+never beside a second lexer.
 
-## Why this design (vs common #2002 failure modes)
+## Fail-closed contracts
 
-| Failure mode in other PRs | This package |
+| Situation | Behavior |
 |---|---|
-| Custom lexer / regex instead of shellsafe | Always `shellsafe.Parse` + `Policy.Check` |
-| Unparseable command → allow | **deny** (`shellsafe.unparseable`) |
-| Omitted YAML deny lists silently disable protection | `LoadPolicyFile` overlays **DefaultPolicy** |
-| `code_blocks` / stdin never scanned | `Extract` is tool-aware |
-| `WrapToolSet` drops interfaces | **PermissionPolicy only** |
-| Scheme-less `curl host/path` bypass | Host extraction without requiring `https://` |
+| `shellsafe.Parse` error (`$()`, backticks, redirects, …) | **deny** (`shellsafe.unparsable`) |
+| Policy YAML omits `denied_commands` | Keep **DefaultPolicy** denies (overlay, not replace) |
+| Bare allowlist host `api.github.com` | Exact match only — **not** `evil.api.github.com` |
+| Suffix wildcards | Opt-in via leading-dot entries (`.github.com`) |
+| Secret / token hit | deny, and **redact `Result.Command`** before report/audit |
 
-## Quick start
+`MaxTimeoutSeconds` / `MaxOutputBytes` in the policy file are **advisory
+metadata** for operators and reports. Hard limits still belong to
+workspaceexec / hostexec / codeexecutor — claiming otherwise would be a
+documentation lie.
+
+## Wiring
 
 ```go
 guard := safety.NewGuard(
@@ -42,29 +47,25 @@ events, err := runner.Run(ctx, user, session, msg,
 )
 ```
 
-## Policy
+Compose with other policies in the host if needed; this Guard returns
+allow for non-exec tools with an empty payload so it can sit on a shared
+runner without starving unrelated tools.
 
-See `examples/tool_safety_guard/tool_safety_policy.yaml`. Changing the file
-does not require code changes. Omitted deny lists keep defaults; set an
-explicit empty list only when you intentionally clear them via overlay
-pointers in JSON/YAML.
+## What Guard is not
+
+- Not a sandbox (Docker / E2B / namespaces).
+- Not a substitute for workspaceexec policy mode + `CleanEnv` (#1845).
+- Not strong enough alone against compiled binaries or intentionally
+  obfuscated scripts — that is why the README insists on defense in depth.
 
 ## Telemetry
 
-When the context has a recording span, Guard sets:
+Recording spans get:
 
 - `tool.safety.decision`
 - `tool.safety.risk_level`
 - `tool.safety.rule_id`
 - `tool.safety.backend`
-
-## Workspace vs hostexec
-
-| Backend | Tool names (examples) | Extra policy |
-|---|---|---|
-| workspaceexec | `workspace_exec` | shellsafe + path/network/secret/ask |
-| hostexec | `exec_command` | same, plus default **ask** (`host_exec_requires_ask`) |
-| codeexec | `execute_code` (configurable name) | scans `code_blocks` text |
 
 ## Demo
 

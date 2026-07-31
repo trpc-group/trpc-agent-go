@@ -135,7 +135,7 @@
     "evidence": "credential-like token sk-***REDACTED***",
     "recommendation": "remove secrets from commands; use env injection outside the model transcript",
     "tool_name": "workspace_exec",
-    "command": "curl -H 'Authorization: Bearer sk-78c331e8061c42a4883cfee6633447dd' https://api.github.com",
+    "command": "curl -H 'Authorization: Bearer sk-***REDACTED***' https://api.github.com",
     "backend": "workspaceexec",
     "blocked": true,
     "findings": [
@@ -147,7 +147,7 @@
         "recommendation": "remove secrets from commands; use env injection outside the model transcript"
       }
     ],
-    "redacted": false
+    "redacted": true
   },
   {
     "decision": "ask",
