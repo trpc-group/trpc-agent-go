@@ -221,6 +221,8 @@ func TestSandboxRunnerKillsDescendantHoldingStderr(t *testing.T) {
 	require.NoError(t, os.WriteFile(
 		wrapper,
 		[]byte(`#!/bin/sh
+# Consume the host run request before exiting so this test isolates process-group cleanup.
+IFS= read -r request || exit 98
 /bin/sleep 30 &
 printf '{"type":"done","result":"done"}\n'
 exit 0
