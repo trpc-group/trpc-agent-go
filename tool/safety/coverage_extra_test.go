@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -182,6 +183,79 @@ func TestPolicyLoadAndNormalizeEdges(t *testing.T) {
 
 	require.Equal(t, DecisionDeny, normalizeDecision("bad", DecisionDeny))
 	require.Equal(t, AuditBestEffort, normalizeAuditFailureMode("bad", AuditBestEffort))
+}
+
+func TestPolicyFromConfigAppliesAllOverlayFields(t *testing.T) {
+	allow := DecisionAllow
+	deny := DecisionDeny
+	ask := DecisionAsk
+	failClosed := AuditFailClosed
+	zero := 0
+	one := 1
+	falseValue := false
+	trueValue := true
+	allowedCommands := []string{"make"}
+	deniedCommands := []string{"rm"}
+	allowedDomains := []string{"example.com"}
+	deniedPaths := []string{"/secret"}
+	envAllowlist := []string{"SAFE_ENV"}
+
+	p := PolicyFromConfig(PolicyConfig{
+		AllowedCommands:                &allowedCommands,
+		DeniedCommands:                 &deniedCommands,
+		AllowedDomains:                 &allowedDomains,
+		DeniedPaths:                    &deniedPaths,
+		EnvAllowlist:                   &envAllowlist,
+		MaxTimeoutSec:                  &zero,
+		MaxOutputBytes:                 &one,
+		LongSleepSeconds:               &zero,
+		ParseErrorAction:               &deny,
+		UnknownToolAction:              &ask,
+		HostExecTTYAction:              &allow,
+		BackgroundAction:               &deny,
+		NonWhitelistedNetworkAction:    &ask,
+		DependencyInstallAction:        &deny,
+		ShellBypassAction:              &allow,
+		InteractiveStdinAction:         &deny,
+		DisallowedEnvironmentAction:    &allow,
+		SensitivePathReadAction:        &ask,
+		ReviewShellPipelines:           &falseValue,
+		DenyDangerousRecursiveDelete:   &falseValue,
+		DenySecretLeakage:              &falseValue,
+		RedactSensitiveEvidence:        &falseValue,
+		RedactSensitivePaths:           &trueValue,
+		FailClosedOnUnsupportedBackend: &trueValue,
+		AuditFailureMode:               &failClosed,
+	})
+
+	require.Equal(t, []string{"make"}, p.AllowedCommands)
+	require.Equal(t, []string{"rm"}, p.DeniedCommands)
+	require.Equal(t, []string{"example.com"}, p.AllowedDomains)
+	require.Equal(t, []string{"/secret"}, p.DeniedPaths)
+	require.Equal(t, []string{"SAFE_ENV"}, p.EnvAllowlist)
+	require.Zero(t, p.MaxTimeoutSec)
+	require.Equal(t, 1, p.MaxOutputBytes)
+	require.Zero(t, p.LongSleepSeconds)
+	require.Equal(t, DecisionDeny, p.ParseErrorAction)
+	require.Equal(t, DecisionAsk, p.UnknownToolAction)
+	require.Equal(t, DecisionAllow, p.HostExecTTYAction)
+	require.Equal(t, DecisionDeny, p.BackgroundAction)
+	require.Equal(t, DecisionAsk, p.NonWhitelistedNetworkAction)
+	require.Equal(t, DecisionDeny, p.DependencyInstallAction)
+	require.Equal(t, DecisionAllow, p.ShellBypassAction)
+	require.Equal(t, DecisionDeny, p.InteractiveStdinAction)
+	require.Equal(t, DecisionAllow, p.DisallowedEnvironmentAction)
+	require.Equal(t, DecisionAsk, p.SensitivePathReadAction)
+	require.False(t, p.ReviewShellPipelines)
+	require.False(t, p.DenyDangerousRecursiveDelete)
+	require.False(t, p.DenySecretLeakage)
+	require.False(t, p.RedactSensitiveEvidence)
+	require.True(t, p.RedactSensitivePaths)
+	require.True(t, p.FailClosedOnUnsupportedBackend)
+	require.Equal(t, AuditFailClosed, p.AuditFailureMode)
+
+	allowedCommands[0] = "mutated"
+	require.Equal(t, []string{"make"}, p.AllowedCommands)
 }
 
 func TestScannerOptionsAndEdges(t *testing.T) {
@@ -1048,6 +1122,67 @@ func TestScannerHelperEdges(t *testing.T) {
 	require.True(t, looksLikeNetworkOperand("https://evil.example"))
 	require.True(t, looksLikeNetworkOperand("evil.example/path"))
 	require.False(t, looksLikeNetworkOperand("POST"))
+}
+
+func TestOutputTruncationEdges(t *testing.T) {
+	p := DefaultPolicy()
+	p.MaxOutputBytes = 8
+	out, truncated := TruncateOutput("abcdefghijklmnop", p)
+	require.True(t, truncated)
+	require.Equal(t, "abcdefgh", out)
+
+	p.MaxOutputBytes = len(outputTruncatedMarker) + 3
+	out, truncated = TruncateOutput(strings.Repeat("x", p.MaxOutputBytes+10), p)
+	require.True(t, truncated)
+	require.Equal(t, "xxx"+outputTruncatedMarker, out)
+
+	out, truncated = TruncateOutput("short", p)
+	require.False(t, truncated)
+	require.Equal(t, "short", out)
+
+	require.Empty(t, trimStringBytes("abc", 0))
+	require.Equal(t, "\xe4", trimStringBytes("你好", 1))
+	require.Equal(t, "你", trimStringBytes("你好", 3))
+}
+
+func TestScannerUnexportedHelperCoverage(t *testing.T) {
+	require.True(t, sensitivePathMatch("cat ~/.ssh/id_rsa", "~/.ssh"))
+	require.False(t, sensitivePathMatch("cat /tmp/file", "~/.ssh"))
+	require.Equal(t, "proxycommand", strings.ToLower(sshConfigOptionName("ProxyCommand nc host 22")))
+	require.Equal(t, []jsonStringField{{key: "cmd", value: "echo ok"}},
+		extractJSONStrings("", map[string]any{"cmd": "echo ok"}))
+
+	require.NotEmpty(t, scanSecrets([]string{"token=sk-abcdefghijklmnopqrstuvwxyz"}, DefaultPolicy()))
+	p := DefaultPolicy()
+	p.DenySecretLeakage = false
+	require.Empty(t, scanSecrets([]string{"token=sk-abcdefghijklmnopqrstuvwxyz"}, p))
+
+	require.True(t, gitGlobalOptionNeedsOperand("--git-dir"))
+	require.False(t, gitGlobalOptionNeedsOperand("--no-pager"))
+	require.Equal(t, []string{"https://example.com/repo"},
+		gitRemoteCommandOperands([]string{"set-url", "--push", "origin", "https://example.com/repo"}))
+	require.Equal(t, []string{"https://example.com/repo"},
+		gitSubmoduleOperands([]string{"add", "--depth", "1", "https://example.com/repo", "deps/repo"}))
+	require.True(t, gitSubcommandUsesNetwork("remote", []string{"set-url", "origin", "https://example.com/repo"}))
+	require.False(t, gitSubcommandUsesNetwork("status", nil))
+	require.True(t, gitOptionNeedsOperand("--upload-pack"))
+	require.False(t, gitOptionNeedsOperand("--tags"))
+
+	require.True(t, wgetOptionNeedsOperand("--output-document"))
+	require.True(t, wgetOptionNeedsOperand("-O"))
+	require.False(t, wgetOptionNeedsOperand("--quiet"))
+	require.Equal(t, []string{"2001:db8::1"}, curlResolveHosts("example.com:443:[2001:db8::1]"))
+	require.Equal(t, "proxy.example", curlProxyHost("proxy.example:8080"))
+	require.Equal(t, "target.example", curlConnectToHost("example.com:443:target.example:8443"))
+}
+
+func TestSkillOutputMaxBytesEdges(t *testing.T) {
+	require.Zero(t, skillOutputMaxBytes(nil))
+	require.Zero(t, skillOutputMaxBytes(&codeexecutor.OutputSpec{Inline: false, MaxTotalBytes: 10}))
+	require.Equal(t, 64*1024*1024, skillOutputMaxBytes(&codeexecutor.OutputSpec{Inline: true}))
+	require.Equal(t, 42, skillOutputMaxBytes(&codeexecutor.OutputSpec{Inline: true, MaxTotalBytes: 42}))
+	require.Equal(t, "/tmp/source", normalizeSkillInputSourceForScan(" host:///tmp/source "))
+	require.Equal(t, "artifact://id", normalizeSkillInputSourceForScan("artifact://id"))
 }
 
 type errorAuditSink struct{}
