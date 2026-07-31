@@ -18,7 +18,7 @@ import (
 	"testing"
 )
 
-func tEq(t *testing.T, name string, want, got interface{}) {
+func tEq(t *testing.T, name string, want, got any) {
 	t.Helper()
 	if want != got {
 		t.Errorf("%s: want %v, got %v", name, want, got)
@@ -126,7 +126,7 @@ func TestFailureAttribution(t *testing.T) {
 						Reason: "strconv.ParseFloat: invalid syntax on five",
 					}},
 					ToolTrajectory: []ToolStep{
-						{ToolName: "calculator", Args: map[string]interface{}{"a": "five"}, Error: "strconv.ParseFloat: invalid syntax"},
+						{ToolName: "calculator", Args: map[string]any{"a": "five"}, Error: "strconv.ParseFloat: invalid syntax"},
 					},
 				},
 			},
