@@ -87,6 +87,7 @@ var errEmptyReplyValue = errors.New(errEmptyReply)
 
 const (
 	errTypeInvalidRequest = "invalid_request"
+	errTypeInvalidModel   = "invalid_model"
 	errTypeUnauthorized   = "unauthorized"
 	errTypeInternal       = "internal_error"
 	errTypeUnsupported    = "unsupported"
@@ -148,6 +149,7 @@ type Server struct {
 	requireMention    bool
 	mentionPatterns   []string
 	runOptionResolver RunOptionResolver
+	selectableModels  map[string]struct{}
 
 	lanes *laneLocker
 
@@ -238,6 +240,7 @@ func New(r runner.Runner, opts ...Option) (*Server, error) {
 		requireMention:    options.requireMention,
 		mentionPatterns:   options.mentionPatterns,
 		runOptionResolver: options.runOptionResolver,
+		selectableModels:  options.selectableModels,
 		lanes:             newLaneLocker(),
 		canceled:          newCancelTracker(),
 		recorder:          options.recorder,
@@ -579,6 +582,7 @@ func (s *Server) resolveRunOptions(
 				UserID:    run.userID,
 				SessionID: run.sessionID,
 				RequestID: run.requestID,
+				ModelName: run.modelName,
 				Message:   run.userMsg,
 				Trace:     debugrecorder.TraceFromContext(ctx),
 				Extensions: cloneExtensions(
