@@ -690,34 +690,20 @@ func isOutputFlood(command string, args []string) bool {
 }
 
 func requestedConcurrency(argv []string) (int, bool) {
-	command := commandBase(argv[0])
+	options := append(
+		[]string{"--jobs", "--parallel"},
+		concurrencyShortOptions[commandBase(argv[0])]...,
+	)
 	for i := 1; i < len(argv); i++ {
-		arg := argv[i]
-		lower := strings.ToLower(arg)
-		var value string
-		switch {
-		case (concurrencyShortOption(command, "-p") && lower == "-p") ||
-			(concurrencyShortOption(command, "-j") && lower == "-j") ||
-			lower == "--jobs" || lower == "--parallel":
-			if i+1 < len(argv) {
-				value = argv[i+1]
-			}
-		case concurrencyShortOption(command, "-p") && strings.HasPrefix(lower, "-p="):
-			value = strings.TrimPrefix(lower, "-p=")
-		case concurrencyShortOption(command, "-j") && strings.HasPrefix(lower, "-j="):
-			value = strings.TrimPrefix(lower, "-j=")
-		case strings.HasPrefix(lower, "--jobs="):
-			value = strings.TrimPrefix(lower, "--jobs=")
-		case strings.HasPrefix(lower, "--parallel="):
-			value = strings.TrimPrefix(lower, "--parallel=")
-		case concurrencyShortOption(command, "-p") && strings.HasPrefix(lower, "-p") &&
-			len(lower) > len("-p"):
-			value = lower[len("-p"):]
-		case concurrencyShortOption(command, "-j") && strings.HasPrefix(lower, "-j") &&
-			len(lower) > len("-j"):
-			value = lower[len("-j"):]
-		default:
+		value, needsNext, ok := concurrencyArgument(argv[i], options)
+		if !ok {
 			continue
+		}
+		if needsNext {
+			if i+1 >= len(argv) {
+				continue
+			}
+			value = argv[i+1]
 		}
 		parsed, err := strconv.Atoi(value)
 		if err == nil {
@@ -727,14 +713,29 @@ func requestedConcurrency(argv []string) (int, bool) {
 	return 0, false
 }
 
-func concurrencyShortOption(command, option string) bool {
-	switch option {
-	case "-p":
-		return command == "go" || command == "xargs"
-	case "-j":
-		return command == "make" || command == "gmake" || command == "ninja" ||
-			command == "cargo" || command == "parallel"
-	default:
-		return false
+var concurrencyShortOptions = map[string][]string{
+	"go":       {"-p"},
+	"xargs":    {"-p"},
+	"make":     {"-j"},
+	"gmake":    {"-j"},
+	"ninja":    {"-j"},
+	"cargo":    {"-j"},
+	"parallel": {"-j"},
+}
+
+func concurrencyArgument(argument string, options []string) (string, bool, bool) {
+	argument = strings.ToLower(argument)
+	for _, option := range options {
+		if argument == option {
+			return "", true, true
+		}
+		if strings.HasPrefix(argument, option+"=") {
+			return strings.TrimPrefix(argument, option+"="), false, true
+		}
+		if strings.HasPrefix(option, "-") && !strings.HasPrefix(option, "--") &&
+			strings.HasPrefix(argument, option) {
+			return strings.TrimPrefix(argument, option), false, true
+		}
 	}
+	return "", false, false
 }

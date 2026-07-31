@@ -136,6 +136,7 @@ func LoadPolicy(r io.Reader) (Policy, error) {
 
 // LoadPolicyFile loads one strict YAML or JSON policy document from path.
 func LoadPolicyFile(path string) (Policy, error) {
+	// #nosec G304 -- path is the policy file explicitly selected by the caller.
 	f, err := os.Open(path)
 	if err != nil {
 		return Policy{}, fmt.Errorf("open policy: %w", err)

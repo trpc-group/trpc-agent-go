@@ -11,6 +11,8 @@ package safety
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -37,6 +39,21 @@ tool_profiles:
 		require.Contains(t, policy.AllowedCommands, "go")
 		require.Equal(t, 30, policy.MaxTimeoutSeconds)
 	}
+}
+
+func TestLoadPolicyFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "policy.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(
+		"schema_version: v1\npolicy_id: file-policy\nallowed_commands: [go]\n",
+	), 0o600))
+
+	policy, err := LoadPolicyFile(path)
+	require.NoError(t, err)
+	require.Equal(t, "file-policy", policy.PolicyID)
+	require.Equal(t, []string{"go"}, policy.AllowedCommands)
+
+	_, err = LoadPolicyFile(filepath.Join(t.TempDir(), "missing.yaml"))
+	require.ErrorContains(t, err, "open policy")
 }
 
 func TestLoadPolicyAllowsExplicitHostAndIPEntries(t *testing.T) {

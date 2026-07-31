@@ -125,6 +125,89 @@ func TestPermissionPolicyUsesCustomToolProfile(t *testing.T) {
 	require.Contains(t, decision.Reason, string(RuleNetworkEgress))
 }
 
+func TestPermissionPolicyValidatesCustomProfileFields(t *testing.T) {
+	policy := testPolicy()
+	policy.ToolProfiles = map[string]ToolProfile{
+		"custom_exec": {
+			Backend:             BackendWorkspace,
+			CommandField:        "request.command",
+			ArgumentsField:      "request.args",
+			EnvironmentField:    "request.env",
+			TimeoutSecondsField: "request.timeout",
+			OutputBytesField:    "request.output_bytes",
+			BackgroundField:     "request.background",
+			PTYField:            "request.pty",
+		},
+	}
+	scanner, err := NewScanner(policy)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name      string
+		arguments string
+		action    tool.PermissionAction
+	}{
+		{
+			name: "valid fields",
+			arguments: `{"request":{"command":"go","args":["test","./..."],` +
+				`"env":{"CI":"true"},"timeout":30,"output_bytes":1024,` +
+				`"background":false,"pty":false}}`,
+			action: tool.PermissionActionAllow,
+		},
+		{
+			name:      "arguments must be an array",
+			arguments: `{"request":{"command":"go","args":"test"}}`,
+			action:    tool.PermissionActionDeny,
+		},
+		{
+			name:      "arguments must contain strings",
+			arguments: `{"request":{"command":"go","args":["test",1]}}`,
+			action:    tool.PermissionActionDeny,
+		},
+		{
+			name:      "environment must be an object",
+			arguments: `{"request":{"command":"go test ./...","env":[]}}`,
+			action:    tool.PermissionActionDeny,
+		},
+		{
+			name:      "environment values must be strings",
+			arguments: `{"request":{"command":"go test ./...","env":{"CI":true}}}`,
+			action:    tool.PermissionActionDeny,
+		},
+		{
+			name:      "timeout must be an integer",
+			arguments: `{"request":{"command":"go test ./...","timeout":1.5}}`,
+			action:    tool.PermissionActionDeny,
+		},
+		{
+			name:      "output bytes must be numeric",
+			arguments: `{"request":{"command":"go test ./...","output_bytes":"1024"}}`,
+			action:    tool.PermissionActionDeny,
+		},
+		{
+			name:      "background must be boolean",
+			arguments: `{"request":{"command":"go test ./...","background":"false"}}`,
+			action:    tool.PermissionActionDeny,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			decision, err := scanner.CheckToolPermission(
+				context.Background(),
+				&tool.PermissionRequest{
+					ToolName:  "custom_exec",
+					Arguments: []byte(test.arguments),
+				},
+			)
+			require.NoError(t, err)
+			require.Equal(t, test.action, decision.Action)
+			if test.action == tool.PermissionActionDeny {
+				require.Contains(t, decision.Reason, string(RuleInvalidInput))
+			}
+		})
+	}
+}
+
 func TestPermissionPolicyScansOpenWorldMCPArguments(t *testing.T) {
 	decision, err := newTestScanner(t).CheckToolPermission(
 		context.Background(),

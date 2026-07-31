@@ -427,6 +427,73 @@ func TestScannerSourceNetworkRequiresLiteralPerCall(t *testing.T) {
 	}
 }
 
+func TestSourceNetworkLiteralURLRejectsAmbiguousDestinations(t *testing.T) {
+	tests := []struct {
+		name string
+		code string
+		want string
+		ok   bool
+	}{
+		{
+			name: "named URL argument",
+			code: `requests.get(url="https://api.example.com/data")`,
+			want: "https://api.example.com/data",
+			ok:   true,
+		},
+		{
+			name: "raw string URL",
+			code: `requests.get(r"https://api.example.com/data")`,
+			want: "https://api.example.com/data",
+			ok:   true,
+		},
+		{
+			name: "missing call",
+			code: `requests.get`,
+		},
+		{
+			name: "unclosed call",
+			code: `fetch("https://api.example.com/data"`,
+		},
+		{
+			name: "dynamic expression",
+			code: `fetch(userInput)`,
+		},
+		{
+			name: "template expression",
+			code: "fetch(`https://api.example.com/${path}`)",
+		},
+		{
+			name: "new request without URL argument",
+			code: `http.NewRequest("GET")`,
+		},
+		{
+			name: "cross line call",
+			code: "requests.\nget(\"https://api.example.com/data\")",
+		},
+		{
+			name: "distant call",
+			code: "requests." + strings.Repeat("x", 65) + "()",
+		},
+		{
+			name: "nested call argument",
+			code: `fetch(makeURL("https://api.example.com/data"))`,
+		},
+		{
+			name: "relative literal",
+			code: `fetch("/local/path")`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			match := sourceNetworkPattern.FindStringIndex(test.code)
+			require.NotNil(t, match)
+			got, ok := sourceNetworkLiteralURL(test.code, match)
+			require.Equal(t, test.ok, ok)
+			require.Equal(t, test.want, got)
+		})
+	}
+}
+
 func TestScannerNetworkMatchingIsExact(t *testing.T) {
 	scanner := newTestScanner(t)
 	for _, command := range []string{
