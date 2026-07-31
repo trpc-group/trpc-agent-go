@@ -249,7 +249,8 @@ func (p *Pipeline) resolveInput(
 }
 
 // buildDiffFromFiles reads each file and constructs a pseudo-diff
-// that marks all content as added.
+// that marks all content as added. Empty lines are preserved as added
+// diff lines so that findings are reported on the correct line number.
 func (p *Pipeline) buildDiffFromFiles(paths []string) (string, error) {
 	var b strings.Builder
 	for _, path := range paths {
@@ -260,11 +261,12 @@ func (p *Pipeline) buildDiffFromFiles(paths []string) (string, error) {
 		b.WriteString(fmt.Sprintf("diff --git a/%s b/%s\n", path, path))
 		b.WriteString(fmt.Sprintf("--- /dev/null\n"))
 		b.WriteString(fmt.Sprintf("+++ b/%s\n", path))
-		b.WriteString(fmt.Sprintf("@@ -0,0 +1,%d @@\n", strings.Count(string(data), "\n")+1))
-		for _, line := range strings.Split(string(data), "\n") {
-			if line == "" {
-				continue
-			}
+		// Trim a single trailing newline so the hunk count matches the
+		// number of emitted added lines exactly.
+		content := strings.TrimSuffix(string(data), "\n")
+		lineCount := strings.Count(content, "\n") + 1
+		b.WriteString(fmt.Sprintf("@@ -0,0 +1,%d @@\n", lineCount))
+		for _, line := range strings.Split(content, "\n") {
 			b.WriteString("+")
 			b.WriteString(line)
 			b.WriteString("\n")
@@ -320,7 +322,7 @@ func (p *Pipeline) runSandboxChecks(
 ) (runs []types.SandboxRun, durationMs int64, denials int, toolCalls int) {
 	commands := []string{
 		"go vet ./...",
-		"go test -count=1 ./... 2>&1 || true",
+		"go test -count=1 ./...",
 	}
 	for _, cmd := range commands {
 		toolCalls++
