@@ -30,6 +30,16 @@ type CodeExecutor struct {
 	codeBlockDelimiter codeexecutor.CodeBlockDelimiter
 }
 
+var _ codeexecutor.ExecutionTimeoutProvider = (*CodeExecutor)(nil)
+
+// CodeExecutionTimeout reports the runtime's effective default run timeout.
+func (e *CodeExecutor) CodeExecutionTimeout() (time.Duration, bool) {
+	if e == nil || e.runtime == nil {
+		return 0, false
+	}
+	return e.runtime.defaultTimeout, e.runtime.defaultTimeout > 0
+}
+
 // New creates a sandbox code executor.
 func New(options ...Option) *CodeExecutor {
 	rt := NewRuntime(options...)

@@ -98,7 +98,9 @@ type PermissionRequest struct {
 // ExecPermissionContext is the executor-resolved context that a permission
 // policy must inspect before allowing an exec-like tool call.
 type ExecPermissionContext struct {
-	Cwd            string
+	Cwd string
+	// TimeoutSeconds is the effective timeout rounded up to whole seconds.
+	// A negative value means that execution has no finite timeout.
 	TimeoutSeconds int
 }
 
@@ -106,6 +108,14 @@ type ExecPermissionContext struct {
 // used by an exec-like tool without starting the command.
 type ExecPermissionContextResolver interface {
 	ResolveExecPermissionContext(args []byte) (ExecPermissionContext, error)
+}
+
+// CodeExecPermissionContextResolver identifies a code-execution tool and
+// exposes the executor-resolved timeout that a permission policy must inspect
+// before allowing code to run. It returns a negative TimeoutSeconds when the
+// executor has no finite timeout.
+type CodeExecPermissionContextResolver interface {
+	ResolveCodeExecPermissionContext() (ExecPermissionContext, error)
 }
 
 // PermissionChecker is implemented by tools that need to enforce their own

@@ -21,10 +21,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	codeexectool "trpc.group/trpc-go/trpc-agent-go/tool/codeexec"
 	"trpc.group/trpc-go/trpc-agent-go/tool/hostexec"
 	"trpc.group/trpc-go/trpc-agent-go/tool/workspaceexec"
 )
@@ -1105,6 +1107,105 @@ func TestPermissionPolicyChecksNonShellCodePathsAndNetwork(t *testing.T) {
 	}
 }
 
+func TestPermissionPolicyRecognizesRenamedCodeExec(t *testing.T) {
+	execTool := codeexectool.NewTool(
+		&permissionCodeExecutor{timeout: 10 * time.Second, bounded: true},
+		codeexectool.WithName("python_runner"),
+	)
+	guard := NewPermissionPolicy(DefaultPolicy())
+	for _, tt := range []struct {
+		name string
+		code string
+		rule string
+	}{
+		{
+			name: "denied path",
+			code: `print(open('/etc/passwd').read())`,
+			rule: "sensitive.path_access",
+		},
+		{
+			name: "non-allowlisted network",
+			code: `socket.create_connection(('evil.example', 443))`,
+			rule: "network.non_whitelisted_domain",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			args, err := json.Marshal(map[string]any{
+				"code_blocks": []map[string]string{{
+					"language": "python",
+					"code":     tt.code,
+				}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			decision, err := guard.CheckToolPermission(
+				context.Background(),
+				&tool.PermissionRequest{
+					Tool:        execTool,
+					ToolName:    "python_runner",
+					Declaration: execTool.Declaration(),
+					Arguments:   args,
+				},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decision.Action != tool.PermissionActionDeny ||
+				!strings.Contains(decision.Reason, tt.rule) {
+				t.Fatalf("renamed codeexec bypassed %s: %+v", tt.rule, decision)
+			}
+		})
+	}
+}
+
+func TestPermissionPolicyUsesCodeExecutorTimeout(t *testing.T) {
+	args := []byte(`{"code_blocks":[{"language":"python","code":"print(1)"}]}`)
+	for _, tt := range []struct {
+		name    string
+		timeout time.Duration
+		bounded bool
+		rule    string
+	}{
+		{
+			name:    "timeout exceeds policy",
+			timeout: 45 * time.Second,
+			bounded: true,
+			rule:    "resource.timeout_exceeded",
+		},
+		{
+			name:    "unbounded timeout",
+			bounded: false,
+			rule:    "resource.unbounded_timeout",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			execTool := codeexectool.NewTool(&permissionCodeExecutor{
+				timeout: tt.timeout,
+				bounded: tt.bounded,
+			})
+			policy := DefaultPolicy()
+			policy.MaxTimeoutSeconds = 30
+			decision, err := NewPermissionPolicy(policy).CheckToolPermission(
+				context.Background(),
+				&tool.PermissionRequest{
+					Tool:        execTool,
+					ToolName:    "execute_code",
+					Declaration: execTool.Declaration(),
+					Arguments:   args,
+				},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decision.Action != tool.PermissionActionDeny ||
+				!strings.Contains(decision.Reason, tt.rule) {
+				t.Fatalf("code executor timeout bypassed %s: %+v", tt.rule, decision)
+			}
+		})
+	}
+}
+
 func TestPermissionPolicyValidatesDeclaredCustomOutputCap(t *testing.T) {
 	policyConfig := DefaultPolicy()
 	policyConfig.MaxOutputBytes = 1024
@@ -1814,6 +1915,18 @@ func TestScanClosesNewCommandAndPathBypasses(t *testing.T) {
 			req: Request{ToolName: "exec_command", Backend: BackendHostExec,
 				Command: `%COMSPEC% /c shutdown /s /t 0`, TimeoutSeconds: 300},
 			ruleID: "shell.windows_cmd_syntax",
+		},
+		{
+			name: "windows start builtin",
+			req: Request{ToolName: "exec_command", Backend: BackendHostExec,
+				Command: `start "" shutdown /s /t 0`, TimeoutSeconds: 300},
+			ruleID: "shell.windows_cmd_builtin",
+		},
+		{
+			name: "windows call builtin",
+			req: Request{ToolName: "exec_command", Backend: BackendHostExec,
+				Command: `call shutdown /s /t 0`, TimeoutSeconds: 300},
+			ruleID: "shell.windows_cmd_builtin",
 		},
 		{
 			name: "deferred trap builtin",
@@ -2908,6 +3021,26 @@ type failingCloser struct {
 	writeErr error
 	closeErr error
 	closed   bool
+}
+
+type permissionCodeExecutor struct {
+	timeout time.Duration
+	bounded bool
+}
+
+func (e *permissionCodeExecutor) ExecuteCode(
+	_ context.Context,
+	_ codeexecutor.CodeExecutionInput,
+) (codeexecutor.CodeExecutionResult, error) {
+	return codeexecutor.CodeExecutionResult{}, nil
+}
+
+func (e *permissionCodeExecutor) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
+	return codeexecutor.CodeBlockDelimiter{}
+}
+
+func (e *permissionCodeExecutor) CodeExecutionTimeout() (time.Duration, bool) {
+	return e.timeout, e.bounded
 }
 
 func (f *failingCloser) Write(p []byte) (int, error) {

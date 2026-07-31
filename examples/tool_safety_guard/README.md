@@ -32,6 +32,11 @@ secret leakage.
 before they execute. `deny` blocks execution. `needs_human_review` and `ask`
 map to the framework approval-required action.
 
+The built-in code-execution adapter is recognized even when its model-facing
+name is changed. It reads the executor's effective timeout through
+`codeexecutor.ExecutionTimeoutProvider`; executors that cannot report a finite
+timeout fail closed when the permission request includes the actual tool.
+
 MCP, Skill, and custom execution tools can opt into the same policy with
 `safety.WithPermissionRequestParser(toolName, parser)`. The parser maps the
 tool's argument schema to a `safety.Request`. Tools without a built-in or

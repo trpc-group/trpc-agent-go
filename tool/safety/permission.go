@@ -11,6 +11,7 @@ package safety
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -280,7 +281,7 @@ func requestFromPermission(
 	case builtinWriteStdin, builtinWorkspaceWriteStdin:
 		return parseWriteStdinArgs(base, req.Arguments, builtin)
 	case builtinExecuteCode:
-		return parseCodeExecArgs(base, req.Arguments)
+		return parseCodeExecArgs(base, req.Arguments, execTool)
 	default:
 		return Request{}, false, nil
 	}
@@ -329,6 +330,9 @@ func resolveBuiltinExecTool(
 	semantic := itool.ResolveSemantic(req.Tool)
 	if semantic == nil {
 		return "", nil
+	}
+	if _, ok := semantic.(tool.CodeExecPermissionContextResolver); ok {
+		return builtinExecuteCode, semantic
 	}
 	decl := semantic.Declaration()
 	if decl == nil {
@@ -438,7 +442,11 @@ type codeExecArgs struct {
 	CodeBlocks json.RawMessage `json:"code_blocks"`
 }
 
-func parseCodeExecArgs(base Request, args []byte) (Request, bool, error) {
+func parseCodeExecArgs(
+	base Request,
+	args []byte,
+	execTool tool.Tool,
+) (Request, bool, error) {
 	var in codeExecArgs
 	if err := json.Unmarshal(args, &in); err != nil {
 		return Request{}, false, fmt.Errorf("tool safety guard: invalid args: %w", err)
@@ -449,6 +457,21 @@ func parseCodeExecArgs(base Request, args []byte) (Request, bool, error) {
 	}
 	if len(blocks) == 0 {
 		return Request{}, false, nil
+	}
+	if execTool != nil {
+		resolver, ok := execTool.(tool.CodeExecPermissionContextResolver)
+		if !ok {
+			return Request{}, false, errors.New(
+				"tool safety guard: code executor does not expose its execution context",
+			)
+		}
+		resolved, err := resolver.ResolveCodeExecPermissionContext()
+		if err != nil {
+			return Request{}, false, fmt.Errorf(
+				"tool safety guard: resolve code exec context: %w", err,
+			)
+		}
+		base.TimeoutSeconds = resolved.TimeoutSeconds
 	}
 	base.Backend = BackendCodeExec
 	base.CodeBlocks = blocks

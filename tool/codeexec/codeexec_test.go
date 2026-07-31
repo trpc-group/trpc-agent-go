@@ -13,11 +13,13 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 // mockCodeExecutor is a mock implementation of codeexecutor.CodeExecutor for testing.
@@ -32,6 +34,16 @@ func (m *mockCodeExecutor) ExecuteCode(_ context.Context, _ codeexecutor.CodeExe
 
 func (m *mockCodeExecutor) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
 	return codeexecutor.CodeBlockDelimiter{Start: "```", End: "```"}
+}
+
+type timeoutCodeExecutor struct {
+	*mockCodeExecutor
+	timeout time.Duration
+	bounded bool
+}
+
+func (e *timeoutCodeExecutor) CodeExecutionTimeout() (time.Duration, bool) {
+	return e.timeout, e.bounded
 }
 
 func TestNewTool(t *testing.T) {
@@ -104,6 +116,40 @@ func TestNewTool(t *testing.T) {
 		assert.Equal(t, []any{"python"}, langSchema.Enum)
 	})
 
+}
+
+func TestExecuteCodeToolResolvesPermissionContext(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		timeout time.Duration
+		bounded bool
+		want    int
+	}{
+		{name: "whole seconds", timeout: 5 * time.Second, bounded: true, want: 5},
+		{name: "partial second rounds up", timeout: 1500 * time.Millisecond, bounded: true, want: 2},
+		{name: "immediate timeout", timeout: 0, bounded: true, want: 0},
+		{name: "unbounded timeout", timeout: 0, bounded: false, want: -1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			exec := &timeoutCodeExecutor{
+				mockCodeExecutor: &mockCodeExecutor{},
+				timeout:          tt.timeout,
+				bounded:          tt.bounded,
+			}
+			callable := NewTool(exec, WithName("python_runner"))
+			resolver, ok := callable.(tool.CodeExecPermissionContextResolver)
+			require.True(t, ok)
+			got, err := resolver.ResolveCodeExecPermissionContext()
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got.TimeoutSeconds)
+		})
+	}
+
+	callable := NewTool(&mockCodeExecutor{})
+	resolver, ok := callable.(tool.CodeExecPermissionContextResolver)
+	require.True(t, ok)
+	_, err := resolver.ResolveCodeExecPermissionContext()
+	require.EqualError(t, err, "code executor does not report an execution timeout")
 }
 
 func TestExecuteCodeTool_Call(t *testing.T) {

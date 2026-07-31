@@ -523,6 +523,16 @@ func (s scanner) scanRequestEnvelope(req Request) []Finding {
 		))
 	}
 	timeoutSeconds := effectiveTimeoutSeconds(req)
+	if !req.InteractiveWrite && req.Backend == BackendCodeExec &&
+		timeoutSeconds < 0 {
+		findings = append(findings, newFinding(
+			DecisionDeny,
+			RiskHigh,
+			"resource.unbounded_timeout",
+			[]string{"code execution has no finite timeout"},
+			"Configure a finite code-execution timeout before allowing the tool.",
+		))
+	}
 	if !req.InteractiveWrite && timeoutSeconds > s.policy.MaxTimeoutSeconds {
 		findings = append(findings, newFinding(
 			DecisionDeny,
@@ -686,7 +696,7 @@ func (s scanner) scanShell(req Request, command string) []Finding {
 		))
 		return findings
 	}
-	findings = append(findings, s.scanParsedCommands(pipe)...)
+	findings = append(findings, s.scanParsedCommands(req, pipe)...)
 	return findings
 }
 
@@ -742,7 +752,10 @@ func hasWindowsCmdSyntax(command string) bool {
 	return windowsCmdExpansionRE.MatchString(command) || strings.Contains(command, "^")
 }
 
-func (s scanner) scanParsedCommands(pipe *shellsafe.Pipeline) []Finding {
+func (s scanner) scanParsedCommands(
+	req Request,
+	pipe *shellsafe.Pipeline,
+) []Finding {
 	var findings []Finding
 	for _, argv := range pipe.Commands {
 		if s.canceled() {
@@ -768,6 +781,19 @@ func (s scanner) scanParsedCommands(pipe *shellsafe.Pipeline) []Finding {
 			}
 			effectiveName := commandName(effective[0])
 			findings = append(findings, s.scanDeniedCommand(effectiveName)...)
+			if req.Backend == BackendHostExec &&
+				isWindowsCommandReexecutor(effectiveName) {
+				findings = append(findings, newFinding(
+					DecisionDeny,
+					RiskHigh,
+					"shell.windows_cmd_builtin",
+					[]string{fmt.Sprintf(
+						"command %q is a cmd.exe command re-execution builtin",
+						effective[0],
+					)},
+					"Pass the effective command directly without cmd.exe start or call.",
+				))
+			}
 			if i == len(chain)-1 && shellsafe.IsImplicitlyDenied(effectiveName) {
 				findings = append(findings, newFinding(
 					DecisionDeny,
@@ -817,6 +843,10 @@ func (s scanner) scanParsedCommands(pipe *shellsafe.Pipeline) []Finding {
 		findings = append(findings, s.scanDeniedPaths(argv)...)
 	}
 	return findings
+}
+
+func isWindowsCommandReexecutor(name string) bool {
+	return name == "start" || name == "call"
 }
 
 // scanInlineInterpreter routes source passed through an interpreter switch such

@@ -237,7 +237,9 @@ func TestEnvEngine_NilRunner(t *testing.T) {
 // --- CodeExecutor wrapper tests ---
 
 type fakeCodeExecutor struct {
-	eng Engine
+	eng     Engine
+	timeout time.Duration
+	bounded bool
 }
 
 func (e *fakeCodeExecutor) ExecuteCode(
@@ -249,6 +251,9 @@ func (e *fakeCodeExecutor) CodeBlockDelimiter() CodeBlockDelimiter {
 	return CodeBlockDelimiter{Start: "```", End: "```"}
 }
 func (e *fakeCodeExecutor) Engine() Engine { return e.eng }
+func (e *fakeCodeExecutor) CodeExecutionTimeout() (time.Duration, bool) {
+	return e.timeout, e.bounded
+}
 
 func TestNewEnvInjectingCodeExecutor_WrapsEngine(t *testing.T) {
 	fr := &fakeRunner{}
@@ -273,7 +278,9 @@ func TestNewEnvInjectingCodeExecutor_WrapsEngine(t *testing.T) {
 
 func TestNewEnvInjectingCodeExecutor_PreservesCodeExecutor(t *testing.T) {
 	fr := &fakeRunner{}
-	inner := &fakeCodeExecutor{eng: &fakeEngine{runner: fr}}
+	inner := &fakeCodeExecutor{
+		eng: &fakeEngine{runner: fr}, timeout: 7 * time.Second, bounded: true,
+	}
 
 	wrapped := NewEnvInjectingCodeExecutor(inner, func(ctx context.Context) map[string]string {
 		return nil
@@ -283,6 +290,11 @@ func TestNewEnvInjectingCodeExecutor_PreservesCodeExecutor(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "exec", result.Output)
 	assert.Equal(t, "```", wrapped.CodeBlockDelimiter().Start)
+	timeoutProvider, ok := wrapped.(ExecutionTimeoutProvider)
+	require.True(t, ok)
+	timeout, bounded := timeoutProvider.CodeExecutionTimeout()
+	assert.True(t, bounded)
+	assert.Equal(t, 7*time.Second, timeout)
 }
 
 func TestNewEnvInjectingCodeExecutor_NilArgs(t *testing.T) {
