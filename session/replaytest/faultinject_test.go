@@ -156,3 +156,46 @@ func TestInjectFault_WrongSummaryFilterKeyDeterministic(t *testing.T) {
 		t.Fatal("key z should remain")
 	}
 }
+
+func TestInjectFault_WrongSummaryFilterKeySkipsNilEmptyKey(t *testing.T) {
+	snap := &Snapshot{Session: &session.Session{
+		Summaries: map[string]*session.Summary{
+			"":  nil,
+			"b": {Summary: "b"},
+			"a": {Summary: "a"},
+		},
+	}}
+	if err := InjectFault(snap, FaultWrongSummaryFilterKey); err != nil {
+		t.Fatal(err)
+	}
+	// The nil "" entry must not be deleted first; a non-nil candidate is
+	// rekeyed deterministically (lexicographically first: "a").
+	if _, ok := snap.Session.Summaries[""]; !ok {
+		t.Fatal("nil empty-key summary should remain untouched")
+	}
+	if _, ok := snap.Session.Summaries["wrong-filter-key"]; !ok {
+		t.Fatalf("missing rekeyed summary: %+v", snap.Session.Summaries)
+	}
+	if _, ok := snap.Session.Summaries["a"]; ok {
+		t.Fatal("key a should have been rekeyed")
+	}
+}
+
+func TestInjectFault_WrongSummaryFilterKeyNilOnly(t *testing.T) {
+	snap := &Snapshot{Session: &session.Session{
+		Summaries: map[string]*session.Summary{
+			"": nil,
+		},
+	}}
+	err := InjectFault(snap, FaultWrongSummaryFilterKey)
+	if err == nil {
+		t.Fatal("expected error with no non-nil summary")
+	}
+	// Error path must not mutate the snapshot.
+	if _, ok := snap.Session.Summaries[""]; !ok {
+		t.Fatal("nil-only map must not be mutated on error")
+	}
+	if _, ok := snap.Session.Summaries["wrong-filter-key"]; ok {
+		t.Fatal("must not rekey on error")
+	}
+}

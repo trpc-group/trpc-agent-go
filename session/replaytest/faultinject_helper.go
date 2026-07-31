@@ -73,26 +73,26 @@ func faultWrongSummaryFilterKey(snap *Snapshot) error {
 	if snap.Session == nil || snap.Session.Summaries == nil {
 		return fmt.Errorf("no summaries")
 	}
+	// Select a non-nil candidate deterministically before mutating the map so
+	// error paths never leave the snapshot partially rekeyed.
+	var from string
 	var sum *session.Summary
-	if v, ok := snap.Session.Summaries[""]; ok {
-		sum = v
-		delete(snap.Session.Summaries, "")
+	if v, ok := snap.Session.Summaries[""]; ok && v != nil {
+		from, sum = "", v
 	} else {
 		keys := make([]string, 0, len(snap.Session.Summaries))
-		for k := range snap.Session.Summaries {
-			keys = append(keys, k)
+		for k, v := range snap.Session.Summaries {
+			if v != nil {
+				keys = append(keys, k)
+			}
 		}
 		sort.Strings(keys)
 		if len(keys) == 0 {
 			return fmt.Errorf("no summary to rekey")
 		}
-		k := keys[0]
-		sum = snap.Session.Summaries[k]
-		delete(snap.Session.Summaries, k)
+		from, sum = keys[0], snap.Session.Summaries[keys[0]]
 	}
-	if sum == nil {
-		return fmt.Errorf("no summary to rekey")
-	}
+	delete(snap.Session.Summaries, from)
 	snap.Session.Summaries["wrong-filter-key"] = sum
 	return nil
 }
