@@ -279,6 +279,28 @@ func TestWrapOutputGuardReturnsBlockedResult(t *testing.T) {
 	require.NotContains(t, string(encodedEvent), opaqueToken)
 }
 
+func TestWrapOutputGuardInspectsRawByteResult(t *testing.T) {
+	guard, auditor := newWrapperGuard(t, nil)
+	const secret = "password=super-secret-value"
+	inner := newFakeCallable([]byte(secret))
+	wrapper := wrapOutput(t, guard, inner)
+
+	result, err := wrapper.Call(context.Background(), nil)
+
+	require.NoError(t, err)
+	blocked, ok := result.(BlockedResult)
+	require.True(t, ok)
+	require.Equal(t, ruleOutputSecret, blocked.RuleID)
+	require.True(t, blocked.Redacted)
+	require.Len(t, auditor.events, 1)
+	encodedResult, err := json.Marshal(blocked)
+	require.NoError(t, err)
+	encodedEvent, err := json.Marshal(auditor.events[0])
+	require.NoError(t, err)
+	require.NotContains(t, string(encodedResult), secret)
+	require.NotContains(t, string(encodedEvent), secret)
+}
+
 func TestWrapOutputGuardBlocksOversizedAndUninspectableResults(t *testing.T) {
 	tests := []struct {
 		name      string

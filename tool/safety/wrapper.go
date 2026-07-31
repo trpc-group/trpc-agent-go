@@ -255,10 +255,33 @@ func (wrapper *outputGuard) resultViolation(result any) (outputViolation, bool) 
 	if int64(len(serialized)) > wrapper.guard.policy.maxOutputBytes {
 		return outputLimitViolation(), true
 	}
+	if raw, ok := byteSliceText(result); ok && hasSensitiveText(raw) {
+		return secretOutputViolation(), true
+	}
 	if hasSensitiveText(string(serialized)) {
 		return secretOutputViolation(), true
 	}
 	return outputViolation{}, false
+}
+
+func byteSliceText(result any) (string, bool) {
+	value := reflect.ValueOf(result)
+	for value.Kind() == reflect.Pointer {
+		if value.IsNil() {
+			return "", false
+		}
+		value = value.Elem()
+	}
+	if value.Kind() != reflect.Slice ||
+		value.Type().Elem().Kind() != reflect.Uint8 {
+		return "", false
+	}
+	if value.IsNil() {
+		return "", true
+	}
+	raw := make([]byte, value.Len())
+	reflect.Copy(reflect.ValueOf(raw), value)
+	return string(raw), true
 }
 
 func (wrapper *outputGuard) blockedResult(
