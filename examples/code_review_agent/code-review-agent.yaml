@@ -61,8 +61,16 @@ executor:
       risk_level: medium
 
 llm:
+  # Model provider used in "live" mode. Only "openai" (OpenAI-compatible
+  # protocol) is wired up; any other value fails validation.
+  provider: openai
   # LLM model identifier used in "live" mode.
   model_name: claude-sonnet-5
+  # API key for the provider. Empty = fall back to the provider env var
+  # (e.g. OPENAI_API_KEY).
+  api_key: ""
+  # Optional custom endpoint for OpenAI-compatible APIs.
+  base_url: ""
   # Sampling temperature: 0.0 for deterministic, higher for creative.
   temperature: 0.0
   # Maximum tokens in the LLM response.

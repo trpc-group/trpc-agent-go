@@ -142,10 +142,15 @@ func isBlocked(cmd string) bool {
 		return false
 	}
 
-	// Block output redirection to block devices.
+	// Block output redirection to device files. Only the exact >/dev/null
+	// form is allowed (common in go test); >/dev/sda and friends can write
+	// straight through to block devices.
 	for _, t := range tokens {
-		if strings.HasPrefix(t, ">/dev/") || t == ">/dev/null" {
-			return false // allow /dev/null (common in go test)
+		if t == ">/dev/null" {
+			continue
+		}
+		if strings.HasPrefix(t, ">/dev/") {
+			return true
 		}
 		if strings.HasPrefix(t, ">") && strings.Contains(t, "/dev/") {
 			return true

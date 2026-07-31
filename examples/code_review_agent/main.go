@@ -26,6 +26,7 @@ import (
 	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/config"
 	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/graphagent"
 	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/input"
+	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/llmanalyzer"
 	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/ruleengine"
 	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/state"
 	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/storage"
@@ -33,6 +34,7 @@ import (
 	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/types"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 )
 
 func main() {
@@ -130,8 +132,27 @@ func main() {
 			os.Exit(1)
 		}
 		defer store.Close()
+	default:
+		// Fail closed: config.Validate already rejects non-sqlite drivers,
+		// but guard here too so store can never be nil at CreateTask.
+		// Note: PostgreSQL/MySQL supportable via storage.NewPostgres / storage.NewMySQL
+		fmt.Fprintf(os.Stderr, "Error: unsupported database driver %q (only sqlite is implemented)\n", cfg.Database.Driver)
+		os.Exit(1)
 	}
-	// Note: PostgreSQL/MySQL supportable via storage.NewPostgres / storage.NewMySQL
+
+	// 2b. Build the LLM model in live mode and inject it via context
+	// (model.Model can't survive graph state deep-copy). dry_run uses mock
+	// findings and rule_only skips the LLM entirely, so neither needs a model.
+	if cfg.Mode == "live" {
+		var opts []openai.Option
+		if cfg.LLM.APIKey != "" {
+			opts = append(opts, openai.WithAPIKey(cfg.LLM.APIKey))
+		}
+		if cfg.LLM.BaseURL != "" {
+			opts = append(opts, openai.WithBaseURL(cfg.LLM.BaseURL))
+		}
+		ctx = llmanalyzer.WithModel(ctx, openai.New(cfg.LLM.ModelName, opts...))
+	}
 
 	// 3. Create task
 	taskID := uuid.New().String()
@@ -258,8 +279,17 @@ func main() {
 
 	// Drain events and collect final state from completion event
 	finalState := initialState
+	var execErr error
 	for evt := range eventChan {
-		if evt != nil && evt.Response != nil && evt.Response.Done &&
+		if evt == nil || evt.Response == nil {
+			continue
+		}
+		// Node/pregel error events carry Response.Error — without this check
+		// a failed graph run would exit 0 with an empty report.
+		if evt.Response.Error != nil && execErr == nil {
+			execErr = fmt.Errorf("graph execution failed: %s", evt.Response.Error.Message)
+		}
+		if evt.Response.Done &&
 			evt.Response.Object == graph.ObjectTypeGraphExecution {
 			// Completion event: StateDelta carries accumulated state as JSON bytes
 			if evt.StateDelta != nil {
@@ -272,6 +302,20 @@ func main() {
 	}
 
 	totalDuration := time.Since(totalStart)
+
+	if execErr != nil {
+		fmt.Fprintf(os.Stderr, "Execution failed: %v\n", execErr)
+		// Use a live context for persistence — executor context may be canceled.
+		if uerr := store.UpdateTask(context.Background(), taskID, map[string]any{
+			"status":            "failed",
+			"completed_at":      time.Now().UTC().Format(time.RFC3339),
+			"total_duration_ms": totalDuration.Milliseconds(),
+			"error_message":     execErr.Error(),
+		}); uerr != nil {
+			fmt.Fprintf(os.Stderr, "Error updating task status: %v\n", uerr)
+		}
+		os.Exit(1)
+	}
 
 	// Update total duration with a live context (executor ctx may be canceled).
 	if err := store.UpdateTask(context.Background(), taskID, map[string]any{

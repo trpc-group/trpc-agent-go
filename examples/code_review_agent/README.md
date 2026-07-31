@@ -92,7 +92,7 @@ docs/
 
 ### 2. live LLM 模式未端到端验证
 
-LLMAnalyzer 的 `model.GenerateContent()` 路径代码已就绪，但需要有效的 API key 和网络访问。当前所有测试使用 dry-run + mock findings。live 模式下的结构化输出解析、大 diff 截断、token 预算等路径未实际测试。
+LLMAnalyzer 的 `model.GenerateContent()` 路径代码已就绪：live 模式下 CLI 通过 `llm.provider`（目前仅 `openai`，OpenAI 兼容协议）、`llm.model_name`、`llm.api_key`（留空则读 `OPENAI_API_KEY` 环境变量）、`llm.base_url` 构造 model 并注入 ctx。但仍需要有效的 API key 和网络访问才能跑通。当前所有测试使用 dry-run + mock findings。live 模式下的结构化输出解析、大 diff 截断、token 预算等路径未实际测试。
 
 ### 3. 规则在分布外样本上的泛化性
 

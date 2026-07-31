@@ -59,6 +59,17 @@ func Run(ctx context.Context, gs graph.State) (any, error) {
 		return gs, nil
 	}
 
+	// repoPath is user input — validate before staging it into a workspace.
+	if info, statErr := os.Stat(repoPath); statErr != nil || !info.IsDir() {
+		gs[state.StateKeySandboxResults] = []types.SandboxResult{{
+			Command:   "setup",
+			ExitCode:  -1,
+			Stderr:    fmt.Sprintf("invalid --repo-path %q: not an existing directory", repoPath),
+			ErrorType: "invalid_repo_path",
+		}}
+		return gs, nil
+	}
+
 	if len(allowed) == 0 {
 		gs[state.StateKeySandboxResults] = []types.SandboxResult{}
 		return gs, nil
@@ -90,10 +101,43 @@ func Run(ctx context.Context, gs graph.State) (any, error) {
 	return gs, nil
 }
 
+// stagedRepoDir is the workspace-relative directory the repository is
+// staged into; every command runs with Cwd pointed at it.
+const stagedRepoDir = "repo"
+
 // runCommands executes sandbox commands through the framework's codeexecutor.Engine.
+//
+// The repo is staged (copied) into the workspace once and each command runs
+// with Cwd=stagedRepoDir, so go vet / staticcheck / go test operate on the
+// real sources instead of an empty workspace. Staging is used instead of
+// pointing Cwd at repoPath directly because RunProgramSpec.Cwd is
+// workspace-relative (no absolute paths); it also works identically on the
+// local and container backends with no bind mounts and without creating
+// workspace layout dirs inside the user's repo.
 func runCommands(ctx context.Context, engine codeexecutor.Engine, commands []types.SandboxCommand, maxBytes int64, repoPath string) []types.SandboxResult {
 	mgr := engine.Manager()
 	runner := engine.Runner()
+
+	ws, err := mgr.CreateWorkspace(ctx, "sandbox-review", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		return []types.SandboxResult{{
+			Command:   "setup",
+			ExitCode:  -1,
+			Stderr:    fmt.Sprintf("create workspace: %v", err),
+			ErrorType: "sandbox_crash",
+		}}
+	}
+	defer mgr.Cleanup(ctx, ws)
+
+	if err := engine.FS().StageDirectory(ctx, ws, repoPath, stagedRepoDir, codeexecutor.StageOptions{}); err != nil {
+		return []types.SandboxResult{{
+			Command:   "setup",
+			ExitCode:  -1,
+			Stderr:    fmt.Sprintf("stage repo %s into workspace: %v", repoPath, err),
+			ErrorType: "sandbox_crash",
+		}}
+	}
+
 	var results []types.SandboxResult
 
 	for _, cmd := range commands {
@@ -104,25 +148,12 @@ func runCommands(ctx context.Context, engine codeexecutor.Engine, commands []typ
 		execCtx, cancel := context.WithTimeout(ctx, timeout)
 
 		start := time.Now()
-		ws, err := mgr.CreateWorkspace(execCtx, "sandbox-"+cmd.Name, codeexecutor.WorkspacePolicy{})
-		if err != nil {
-			results = append(results, types.SandboxResult{
-				Command:    cmd.Cmd + " " + strings.Join(cmd.Args, " "),
-				ExitCode:   -1,
-				Stderr:     fmt.Sprintf("create workspace: %v", err),
-				ErrorType:  "sandbox_crash",
-				DurationMs: time.Since(start).Milliseconds(),
-			})
-			cancel()
-			continue
-		}
-
 		result, runErr := runner.RunProgram(execCtx, ws, codeexecutor.RunProgramSpec{
 			Cmd:     cmd.Cmd,
 			Args:    cmd.Args,
+			Cwd:     stagedRepoDir,
 			Timeout: timeout,
 		})
-		mgr.Cleanup(execCtx, ws)
 		cancel()
 
 		sr := types.SandboxResult{

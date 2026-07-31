@@ -325,10 +325,44 @@ func TestIsBlocked_DevNullAllowed(t *testing.T) {
 }
 
 func TestIsBlocked_DevRedirectionBehavior(t *testing.T) {
-	result := isBlocked("cat backup.img >/dev/sda")
-	t.Logf("isBlocked('cat backup.img >/dev/sda') = %v (current behavior)", result)
-	if result {
-		t.Error("current behavior: all /dev/ redirections pass the first check and are allowed")
+	// >/dev/sda writes straight through to a block device and must be denied;
+	// only the exact >/dev/null form is allowed.
+	if !isBlocked("cat backup.img >/dev/sda") {
+		t.Error(">/dev/sda redirection should be blocked")
+	}
+}
+
+func TestPermissionFilter_DevRedirection(t *testing.T) {
+	// Only the exact >/dev/null redirect is allowed; other >/dev/* targets
+	// (e.g. >/dev/sda writing through to a block device) must be denied.
+	gs := graph.State{
+		state.StateKeyExecutorConfig: types.ExecutorConfig{
+			Commands: []types.SandboxCommand{
+				{Name: "go_test_null", Cmd: "go", Args: []string{"test", "./...", ">/dev/null"}, RiskLevel: "low"},
+				{Name: "evil_sda", Cmd: "go", Args: []string{"test", "./...", ">/dev/sda"}, RiskLevel: "low"},
+			},
+		},
+	}
+
+	result, err := Run(context.Background(), gs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	finalState := result.(graph.State)
+
+	allowed, _ := finalState[state.StateKeyAllowedCommands].([]types.SandboxCommand)
+	if len(allowed) != 1 || allowed[0].Name != "go_test_null" {
+		t.Fatalf("expected only go_test_null allowed, got %v", allowed)
+	}
+
+	decisions, _ := finalState[state.StateKeyPermissionDecisions].([]types.PermissionDecision)
+	for _, d := range decisions {
+		if d.Command == "go test ./... >/dev/sda" && d.Decision != "deny" {
+			t.Errorf(">/dev/sda redirect: expected deny, got %s", d.Decision)
+		}
+		if d.Command == "go test ./... >/dev/null" && d.Decision != "allow" {
+			t.Errorf(">/dev/null redirect: expected allow, got %s", d.Decision)
+		}
 	}
 }
 

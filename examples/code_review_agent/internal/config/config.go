@@ -65,7 +65,10 @@ type CommandConfig struct {
 
 // LLMConfig configures the LLM analyzer.
 type LLMConfig struct {
+	Provider         string  `yaml:"provider"`           // model provider, currently only "openai" (OpenAI-compatible)
 	ModelName        string  `yaml:"model_name"`         // LLM model identifier (e.g., "gpt-4")
+	APIKey           string  `yaml:"api_key"`            // API key; empty falls back to the provider env var (e.g., OPENAI_API_KEY)
+	BaseURL          string  `yaml:"base_url"`           // custom endpoint for OpenAI-compatible APIs (optional)
 	Temperature      float64 `yaml:"temperature"`        // response randomness (0.0–1.0)
 	MaxTokens        int     `yaml:"max_tokens"`         // maximum tokens in the response
 	SystemPromptPath string  `yaml:"system_prompt_path"` // "" = use SKILL.md default
@@ -152,6 +155,11 @@ func (c *Config) Validate() error {
 	if c.Database.Driver == "" {
 		return fmt.Errorf("database.driver is required")
 	}
+	// Fail closed: only sqlite is implemented (storage.NewSQLite). Reject
+	// other drivers here instead of falling through to a nil storage.
+	if c.Database.Driver != "sqlite" {
+		return fmt.Errorf("database.driver must be 'sqlite' (postgres/mysql not yet implemented), got %q", c.Database.Driver)
+	}
 	if c.Database.DSN == "" {
 		return fmt.Errorf("database.dsn is required")
 	}
@@ -165,10 +173,18 @@ func (c *Config) Validate() error {
 	if c.LLM.ModelName == "" && c.Mode == "live" {
 		return fmt.Errorf("llm.model_name is required in live mode")
 	}
+	// Only the openai (OpenAI-compatible) provider is wired up; fail closed
+	// on anything else in live mode so a typo doesn't silently no-op.
+	if c.Mode == "live" && c.LLM.Provider != "" && c.LLM.Provider != "openai" {
+		return fmt.Errorf("llm.provider must be 'openai' (other providers not yet implemented), got %q", c.LLM.Provider)
+	}
 	return nil
 }
 
 func (c *Config) applyDefaults() {
+	if c.LLM.Provider == "" {
+		c.LLM.Provider = "openai"
+	}
 	if c.Input.BaseRef == "" {
 		c.Input.BaseRef = "origin/main"
 	}
