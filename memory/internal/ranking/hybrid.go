@@ -15,9 +15,9 @@ import (
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
 )
 
-// MergeHybrid combines backend-provided vector and keyword rankings within the
-// requested result window. Temporal queries may replace the last result with
-// one strongly matched candidate from the overfetched tail.
+// MergeHybrid combines backend-provided vector and keyword rankings with
+// shared query-aware rankings. The latter only reorder candidates already
+// retrieved by the backend.
 func MergeHybrid(
 	query string,
 	vectorResults []*memory.Entry,
@@ -25,44 +25,31 @@ func MergeHybrid(
 	k int,
 	maxResults int,
 ) []*memory.Entry {
-	vectorHead := hybridResultHead(vectorResults, maxResults)
-	keywordHead := hybridResultHead(keywordResults, maxResults)
-	assistantResultQuery := asksForAssistantResult(query)
 	rankings := make([][]*memory.Entry, 0, 4)
-	if len(vectorHead) > 0 {
-		rankings = append(rankings, vectorHead)
+	if len(vectorResults) > 0 {
+		rankings = append(rankings, vectorResults)
 	}
-	if len(keywordHead) > 0 {
-		rankings = append(rankings, keywordHead)
+	if len(keywordResults) > 0 {
+		rankings = append(rankings, keywordResults)
 	}
-	if assistantResultQuery {
+	if asksForAssistantResult(query) {
 		if focused := rankResultsByFocusedPassage(
-			query, vectorHead,
+			query, vectorResults,
 		); len(focused) > 0 {
 			rankings = append(rankings, focused)
 		}
 	}
 	if provenance := rankResultsByAssistantResultIntent(
-		query, vectorHead, keywordHead,
+		query, vectorResults, keywordResults,
 	); len(provenance) > 0 {
 		rankings = append(rankings, provenance)
 	}
-	var results []*memory.Entry
 	switch len(rankings) {
 	case 0:
 		return nil
 	case 1:
-		results = rankings[0]
+		return rankings[0]
 	default:
-		results = imemory.MergeRankedResults(rankings, k, maxResults)
+		return imemory.MergeRankedResults(rankings, k, maxResults)
 	}
-	if assistantResultQuery {
-		return results
-	}
-	return backfillFocusedTail(
-		query,
-		results,
-		hybridTailCandidates(vectorResults, keywordResults, maxResults),
-		maxResults,
-	)
 }

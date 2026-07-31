@@ -2025,10 +2025,6 @@ func TestSearchHelperFunctions(t *testing.T) {
 		Kind: memory.KindEpisode,
 	}))
 	require.Equal(t, 7, resolveSearchCandidateLimit(5, 7, 9, memory.SearchOptions{}))
-	require.Equal(t, 21, resolveSearchCandidateLimit(5, 7, 9, memory.SearchOptions{
-		HybridSearch: true,
-		Query:        "ordinary memory query in May",
-	}))
 	require.Nil(t, metadataEventTimeNS(nil))
 	require.Equal(t, day1.UnixNano(), metadataEventTimeNS(&day1))
 	require.Nil(t, metadataLocationValue("   "))

@@ -761,13 +761,7 @@ func (s *Service) SearchMemories(
 	if opts.MaxResults > 0 {
 		maxResults = opts.MaxResults
 	}
-	candidateLimit := maxResults
-	if opts.HybridSearch {
-		candidateLimit = iranking.HybridCandidateLimit(query, maxResults)
-	}
-	results, err := s.executeVectorSearch(
-		ctx, userKey, opts, vector, candidateLimit,
-	)
+	results, err := s.executeVectorSearch(ctx, userKey, opts, vector, maxResults)
 	if err != nil {
 		return nil, err
 	}
@@ -780,20 +774,18 @@ func (s *Service) SearchMemories(
 		fallbackOpts.Kind = ""
 		fallbackOpts.KindFallback = false
 		fallbackResults, fallbackErr := s.executeVectorSearch(
-			ctx, userKey, fallbackOpts, vector, candidateLimit,
+			ctx, userKey, fallbackOpts, vector, maxResults,
 		)
 		if fallbackErr == nil && len(fallbackResults) > 0 {
 			results = imemory.MergeSearchResults(
-				results, fallbackResults, opts.Kind, candidateLimit,
+				results, fallbackResults, opts.Kind, maxResults,
 			)
 		}
 	}
 
 	// Hybrid search fuses vector, keyword, and focused-passage rankings.
 	if opts.HybridSearch {
-		keywordResults, kwErr := s.executeKeywordSearch(
-			ctx, userKey, opts, candidateLimit,
-		)
+		keywordResults, kwErr := s.executeKeywordSearch(ctx, userKey, opts, maxResults)
 		if kwErr != nil {
 			keywordResults = nil
 		}
