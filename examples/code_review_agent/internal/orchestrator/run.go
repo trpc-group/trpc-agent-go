@@ -61,6 +61,8 @@ const (
 	dependencyPrepMaxOutput = 32 << 10
 	reviewSnapshotMaxBytes  = int64(512 << 20)
 	maxReviewSnapshotFiles  = 100_000
+	maxModelPlanCommands    = 32
+	maxModelCommandBytes    = 4 << 10
 	reviewAgentModuleDir    = "examples/code_review_agent"
 	rootModuleDecl          = "module trpc.group/trpc-go/trpc-agent-go"
 )
@@ -110,6 +112,7 @@ type bindMount struct {
 type reviewSnapshotFile struct {
 	Path    string
 	Tracked bool
+	Gitlink bool
 }
 
 // Planner produces the model-coordinated review plan.
@@ -188,7 +191,11 @@ func (p EnvPlanner) PlanReview(ctx context.Context, req PlanRequest) (review.Rev
 	}
 	plan := reviewPlan(modelName, "openai_compatible", "model_response", req.Skill, runtimeName, req.WorkDir)
 	if len(modelPlan.Commands) > 0 {
-		plan.Commands = redactStrings(uniqueModelCommands(modelPlan.Commands))
+		commands, err := uniqueModelCommands(modelPlan.Commands)
+		if err != nil {
+			return review.ReviewPlan{}, fmt.Errorf("validate model commands: %w", err)
+		}
+		plan.Commands = redactStrings(commands)
 	}
 	if len(modelPlan.RuleSources) > 0 {
 		plan.RuleSources = redactStrings(modelPlan.RuleSources)
@@ -325,7 +332,10 @@ func allowlistedModelCommands(commands []string, workDir string) []string {
 	return out
 }
 
-func uniqueModelCommands(commands []string) []string {
+func uniqueModelCommands(commands []string) ([]string, error) {
+	if len(commands) > maxModelPlanCommands {
+		return nil, fmt.Errorf("model command count exceeded %d", maxModelPlanCommands)
+	}
 	seen := make(map[string]struct{}, len(commands))
 	out := make([]string, 0, len(commands))
 	for _, command := range commands {
@@ -333,13 +343,16 @@ func uniqueModelCommands(commands []string) []string {
 		if canonical == "" {
 			continue
 		}
+		if len(canonical) > maxModelCommandBytes {
+			return nil, fmt.Errorf("model command exceeded %d bytes", maxModelCommandBytes)
+		}
 		if _, ok := seen[canonical]; ok {
 			continue
 		}
 		seen[canonical] = struct{}{}
 		out = append(out, canonical)
 	}
-	return out
+	return out, nil
 }
 
 func allowedCommandsByCanonical(workDir string) map[string]string {
@@ -679,7 +692,7 @@ func snapshotUntrackedPaths(input inputsource.Source, files []review.DiffFile) [
 	}
 	paths := make(map[string]struct{}, len(files)*2+len(input.FileList))
 	add := func(path string) {
-		path = filepath.ToSlash(strings.TrimSpace(path))
+		path = filepath.ToSlash(path)
 		if path == "" || path == "/dev/null" {
 			return
 		}
@@ -932,9 +945,7 @@ func newWorkspaceRuntimeWithSnapshotPaths(ctx context.Context, runtimeName strin
 		return nil, nil, fmt.Errorf("unsupported runtime %q", runtimeName)
 	}
 	if eng == nil || eng.Manager() == nil || eng.Runner() == nil {
-		if closeFn != nil {
-			_ = closeFn()
-		}
+		closeWorkspaceBackend(closeFn)
 		return nil, nil, fmt.Errorf("runtime %q did not expose a workspace engine", runtimeName)
 	}
 	ws, err := eng.Manager().CreateWorkspace(ctx, taskID, codeexecutor.WorkspacePolicy{
@@ -942,9 +953,7 @@ func newWorkspaceRuntimeWithSnapshotPaths(ctx context.Context, runtimeName strin
 		MaxDiskBytes: 512 << 20,
 	})
 	if err != nil {
-		if closeFn != nil {
-			_ = closeFn()
-		}
+		closeWorkspaceBackend(closeFn)
 		return nil, nil, err
 	}
 	var snapshotCleanup func()
@@ -970,17 +979,25 @@ func newWorkspaceRuntimeWithSnapshotPaths(ctx context.Context, runtimeName strin
 	}, func() { cleanup(context.Background()) }, nil
 }
 
+func closeWorkspaceBackend(closeFn func() error) {
+	if closeFn == nil {
+		return
+	}
+	newWorkspaceCleanup(nil, codeexecutor.Workspace{}, closeFn, nil)(context.Background())
+}
+
 func newWorkspaceCleanup(manager codeexecutor.WorkspaceManager, ws codeexecutor.Workspace, closeFn func() error, snapshotCleanup func()) func(context.Context) {
 	var cleanupOnce sync.Once
 	cleanupDone := make(chan struct{})
+	cleanupTimeout := workspaceCleanupTimeout
 	return func(ctx context.Context) {
 		cleanupOnce.Do(func() {
 			go func() {
 				defer close(cleanupDone)
-				cleanupWorkspaceResources(ctx, manager, ws, closeFn, snapshotCleanup)
+				cleanupWorkspaceResources(ctx, manager, ws, closeFn, snapshotCleanup, cleanupTimeout)
 			}()
 		})
-		waitCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), workspaceCleanupTimeout)
+		waitCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
 		defer cancel()
 		select {
 		case <-cleanupDone:
@@ -989,9 +1006,9 @@ func newWorkspaceCleanup(manager codeexecutor.WorkspaceManager, ws codeexecutor.
 	}
 }
 
-func cleanupWorkspaceResources(ctx context.Context, manager codeexecutor.WorkspaceManager, ws codeexecutor.Workspace, closeFn func() error, snapshotCleanup func()) {
+func cleanupWorkspaceResources(ctx context.Context, manager codeexecutor.WorkspaceManager, ws codeexecutor.Workspace, closeFn func() error, snapshotCleanup func(), cleanupTimeout time.Duration) {
 	cleanupStep := func(fn func(context.Context)) bool {
-		stepCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), workspaceCleanupTimeout)
+		stepCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
 		defer cancel()
 		done := make(chan struct{})
 		go func() {
@@ -1081,6 +1098,10 @@ func buildReviewSnapshotWithLimitsAndPaths(ctx context.Context, repoRoot string,
 	cleanup := func() { cleanupReviewSnapshot(snapshot) }
 	var snapshotBytes int64
 	for _, file := range files {
+		if file.Gitlink {
+			cleanup()
+			return "", nil, fmt.Errorf("unsupported tracked git submodule %q", file.Path)
+		}
 		if excludedReviewSnapshotPath(file.Path) && (!file.Tracked || sensitiveReviewSnapshotPath(file.Path)) {
 			continue
 		}
@@ -1403,7 +1424,7 @@ func trackedReviewFiles(ctx context.Context, repoRoot string, maxFiles int) ([]r
 
 func trackedReviewFilesWithPaths(ctx context.Context, repoRoot string, maxFiles int, snapshotPaths []string) ([]reviewSnapshotFile, error) {
 	files := make([]reviewSnapshotFile, 0, minInt(maxFiles, 1024))
-	if err := appendReviewFiles(ctx, repoRoot, maxFiles, true, nil, &files, "ls-files", "-z", "--cached"); err != nil {
+	if err := appendReviewFiles(ctx, repoRoot, maxFiles, true, nil, &files, "ls-files", "-s", "-z", "--cached"); err != nil {
 		return nil, fmt.Errorf("list tracked review files: %w", err)
 	}
 	allowed := snapshotPathSet(snapshotPaths)
@@ -1433,10 +1454,10 @@ func snapshotPathSet(paths []string) map[string]struct{} {
 	}
 	selected := make(map[string]struct{}, len(paths))
 	for _, path := range paths {
-		path = filepath.ToSlash(strings.TrimSpace(path))
-		if path != "" && path != "/dev/null" {
-			selected[path] = struct{}{}
+		if path == "" || path == "/dev/null" {
+			continue
 		}
+		selected[filepath.ToSlash(path)] = struct{}{}
 	}
 	return selected
 }
@@ -1458,7 +1479,12 @@ func appendReviewFiles(ctx context.Context, repoRoot string, maxFiles int, track
 		if len(part) > 0 {
 			part = bytes.TrimSuffix(part, []byte{0})
 			if len(part) > 0 {
-				path := filepath.ToSlash(string(part))
+				path, gitlink, parseErr := parseReviewFileRecord(part, tracked)
+				if parseErr != nil {
+					_ = cmd.Process.Kill()
+					_ = cmd.Wait()
+					return parseErr
+				}
 				if !tracked && allowed != nil {
 					if _, ok := allowed[path]; !ok {
 						continue
@@ -1469,7 +1495,7 @@ func appendReviewFiles(ctx context.Context, repoRoot string, maxFiles int, track
 					_ = cmd.Wait()
 					return fmt.Errorf("review snapshot file count exceeded %d", maxFiles)
 				}
-				*files = append(*files, reviewSnapshotFile{Path: path, Tracked: tracked})
+				*files = append(*files, reviewSnapshotFile{Path: path, Tracked: tracked, Gitlink: gitlink})
 			}
 		}
 		if readErr != nil {
@@ -1489,6 +1515,21 @@ func appendReviewFiles(ctx context.Context, repoRoot string, maxFiles int, track
 		return err
 	}
 	return nil
+}
+
+func parseReviewFileRecord(record []byte, tracked bool) (string, bool, error) {
+	if !tracked {
+		return filepath.ToSlash(string(record)), false, nil
+	}
+	separator := bytes.IndexByte(record, '\t')
+	if separator <= 0 || separator == len(record)-1 {
+		return "", false, fmt.Errorf("invalid tracked review file record")
+	}
+	metadata := bytes.Fields(record[:separator])
+	if len(metadata) == 0 {
+		return "", false, fmt.Errorf("invalid tracked review file metadata")
+	}
+	return filepath.ToSlash(string(record[separator+1:])), string(metadata[0]) == "160000", nil
 }
 
 func minInt(a int, b int) int {

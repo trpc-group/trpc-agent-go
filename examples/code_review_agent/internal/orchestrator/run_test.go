@@ -172,6 +172,58 @@ func TestPlanReviewPreservesModelPlannedCommandsForAudit(t *testing.T) {
 	}
 }
 
+func TestPlanReviewRejectsUnboundedModelCommands(t *testing.T) {
+	tests := []struct {
+		name     string
+		commands []string
+		wantErr  string
+	}{
+		{
+			name:     "command count",
+			commands: make([]string, maxModelPlanCommands+1),
+			wantErr:  "model command count exceeded",
+		},
+		{
+			name:     "command length",
+			commands: []string{strings.Repeat("x", maxModelCommandBytes+1)},
+			wantErr:  "model command exceeded",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			for index := range test.commands {
+				if test.commands[index] == "" {
+					test.commands[index] = "go test ./... " + strings.Repeat("x", index)
+				}
+			}
+			content, err := json.Marshal(map[string]any{"commands": test.commands})
+			if err != nil {
+				t.Fatalf("Marshal(model content) error = %v", err)
+			}
+			response, err := json.Marshal(map[string]any{
+				"choices": []any{map[string]any{
+					"message": map[string]string{"content": string(content)},
+				}},
+			})
+			if err != nil {
+				t.Fatalf("Marshal(model response) error = %v", err)
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write(response)
+			}))
+			defer server.Close()
+			_, err = (EnvPlanner{
+				APIKey:     "test-key",
+				BaseURL:    server.URL,
+				HTTPClient: server.Client(),
+			}).PlanReview(context.Background(), PlanRequest{Model: "gpt-review", Runtime: "container"})
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("PlanReview() error = %v, want %q", err, test.wantErr)
+			}
+		})
+	}
+}
+
 func TestExecutePlannedCommandsAuditsRejectedModelCommands(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "review_agent.db")
 	st, err := store.NewSQLite(context.Background(), dbPath)
@@ -768,6 +820,18 @@ func TestBuildReviewSnapshotRestrictsUntrackedFilesToSubmittedPaths(t *testing.T
 	}
 }
 
+func TestSnapshotPathSetPreservesWhitespace(t *testing.T) {
+	got := snapshotPathSet([]string{" leading.go", "trailing.go ", "tab\t.go", "  ", "/dev/null"})
+	for _, path := range []string{" leading.go", "trailing.go ", "tab\t.go", "  "} {
+		if _, ok := got[path]; !ok {
+			t.Fatalf("snapshotPathSet() lost exact path %q: %#v", path, got)
+		}
+	}
+	if len(got) != 4 {
+		t.Fatalf("snapshotPathSet() = %#v, want four selected paths", got)
+	}
+}
+
 func TestSnapshotUntrackedPathsOnlyIncludesAllForRepoWorkspace(t *testing.T) {
 	files := []review.DiffFile{{OldPath: "old.go", NewPath: "new.go"}}
 	if got := snapshotUntrackedPaths(inputsource.Source{Type: review.InputTypeRepo}, files); got != nil {
@@ -776,6 +840,13 @@ func TestSnapshotUntrackedPathsOnlyIncludesAllForRepoWorkspace(t *testing.T) {
 	got := snapshotUntrackedPaths(inputsource.Source{Type: review.InputTypeFixture}, files)
 	if want := []string{"new.go", "old.go"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("fixture snapshot paths = %#v, want %#v", got, want)
+	}
+	got = snapshotUntrackedPaths(inputsource.Source{
+		Type:     review.InputTypeFileList,
+		FileList: []string{" selected.go ", "  "},
+	}, nil)
+	if want := []string{"  ", " selected.go "}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("file-list snapshot paths = %#v, want %#v", got, want)
 	}
 }
 
@@ -824,6 +895,29 @@ func TestBuildReviewSnapshotRejectsTooManyFiles(t *testing.T) {
 	}
 	if snapshot != "" || cleanup != nil {
 		t.Fatalf("snapshot cleanup = %q/%t, want no materialized snapshot", snapshot, cleanup != nil)
+	}
+}
+
+func TestBuildReviewSnapshotRejectsTrackedSubmodule(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	repo := t.TempDir()
+	runGitCommand(t, repo, "init")
+	if err := os.WriteFile(filepath.Join(repo, "tracked.go"), []byte("package tracked\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(tracked.go) error = %v", err)
+	}
+	runGitCommand(t, repo, "add", "tracked.go")
+	runGitCommand(t, repo, "commit", "-m", "base")
+	hash := runGitOutput(t, repo, "rev-parse", "HEAD")
+	runGitCommand(t, repo, "update-index", "--add", "--cacheinfo", "160000,"+hash+",submodule")
+
+	_, cleanup, err := buildReviewSnapshot(context.Background(), repo)
+	if err == nil || !strings.Contains(err.Error(), "unsupported tracked git submodule") {
+		if cleanup != nil {
+			cleanup()
+		}
+		t.Fatalf("buildReviewSnapshot() error = %v, want explicit submodule rejection", err)
 	}
 }
 
@@ -1003,6 +1097,20 @@ func TestWorkspaceCleanupBoundsBlockingBackendClose(t *testing.T) {
 	}
 }
 
+func TestCloseWorkspaceBackendBoundsBlockingClose(t *testing.T) {
+	previous := workspaceCleanupTimeout
+	workspaceCleanupTimeout = 20 * time.Millisecond
+	defer func() { workspaceCleanupTimeout = previous }()
+
+	start := time.Now()
+	closeWorkspaceBackend(func() error {
+		select {}
+	})
+	if elapsed := time.Since(start); elapsed < 20*time.Millisecond || elapsed > 200*time.Millisecond {
+		t.Fatalf("closeWorkspaceBackend() returned after %s, want bounded wait around 20ms", elapsed)
+	}
+}
+
 func (f *recordingStageFS) PutFiles(context.Context, codeexecutor.Workspace, []codeexecutor.PutFile) error {
 	return nil
 }
@@ -1032,6 +1140,16 @@ func runGitCommand(t *testing.T, dir string, args ...string) {
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, output)
 	}
+}
+
+func runGitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	output, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git %s failed: %v", strings.Join(args, " "), err)
+	}
+	return strings.TrimSpace(string(output))
 }
 
 type cancelingRuntime struct {

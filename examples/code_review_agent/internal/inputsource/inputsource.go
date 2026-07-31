@@ -93,6 +93,10 @@ func configured(opts Options) []string {
 }
 
 func readFixtures(dir string) (Source, error) {
+	return readFixturesWithLimit(dir, maxReviewInputBytes)
+}
+
+func readFixturesWithLimit(dir string, maxBytes int64) (Source, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return Source{}, fmt.Errorf("read fixture dir: %w", err)
@@ -106,7 +110,14 @@ func readFixtures(dir string) (Source, error) {
 	sort.Strings(names)
 	var b strings.Builder
 	for _, name := range names {
-		raw, err := os.ReadFile(filepath.Join(dir, name))
+		remaining := maxBytes - int64(b.Len())
+		if b.Len() > 0 {
+			remaining--
+		}
+		if remaining < 0 {
+			return Source{}, fmt.Errorf("fixture input exceeds %d bytes", maxBytes)
+		}
+		raw, err := readFileLimited(filepath.Join(dir, name), remaining)
 		if err != nil {
 			return Source{}, fmt.Errorf("read fixture %s: %w", name, err)
 		}
@@ -115,8 +126,11 @@ func readFixtures(dir string) (Source, error) {
 			b.WriteString("\n")
 		}
 		b.Write(raw)
-		if !strings.HasSuffix(string(raw), "\n") {
+		if !bytes.HasSuffix(raw, []byte("\n")) {
 			b.WriteString("\n")
+		}
+		if int64(b.Len()) > maxBytes {
+			return Source{}, fmt.Errorf("fixture input exceeds %d bytes", maxBytes)
 		}
 	}
 	return Source{
@@ -134,7 +148,11 @@ func normalizeFixtureDiff(raw []byte) []byte {
 }
 
 func readDiffFile(path string, repoPath string) (Source, error) {
-	raw, err := os.ReadFile(path)
+	return readDiffFileWithLimit(path, repoPath, maxReviewInputBytes)
+}
+
+func readDiffFileWithLimit(path string, repoPath string, maxBytes int64) (Source, error) {
+	raw, err := readFileLimited(path, maxBytes)
 	if err != nil {
 		return Source{}, fmt.Errorf("read diff file: %w", err)
 	}
@@ -462,15 +480,18 @@ func untrackedSymlinkDiff(abs string, file string) (string, error) {
 }
 
 func readFileList(path string, repoPath string) (Source, error) {
-	raw, err := os.ReadFile(path)
+	return readFileListWithLimit(path, repoPath, maxUntrackedListBytes)
+}
+
+func readFileListWithLimit(path string, repoPath string, maxBytes int64) (Source, error) {
+	raw, err := readFileLimited(path, maxBytes)
 	if err != nil {
 		return Source{}, fmt.Errorf("read file list: %w", err)
 	}
 	var files []string
 	for _, line := range strings.Split(string(raw), "\n") {
 		file := strings.TrimSuffix(line, "\r")
-		trimmed := strings.TrimSpace(file)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+		if file == "" || strings.HasPrefix(file, "#") {
 			continue
 		}
 		files = append(files, filepath.ToSlash(file))
@@ -498,6 +519,25 @@ func minInt64(a int64, b int64) int64 {
 		return a
 	}
 	return b
+}
+
+func readFileLimited(path string, maxBytes int64) ([]byte, error) {
+	if maxBytes < 0 {
+		return nil, fmt.Errorf("invalid file size limit %d", maxBytes)
+	}
+	in, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer in.Close()
+	raw, err := io.ReadAll(io.LimitReader(in, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(raw)) > maxBytes {
+		return nil, fmt.Errorf("file exceeds %d bytes", maxBytes)
+	}
+	return raw, nil
 }
 
 func resolveRepoPath(repoPath string) (string, error) {

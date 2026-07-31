@@ -76,3 +76,27 @@ func TestDiffFilesRedactsMultilinePrivateKeysAcrossLines(t *testing.T) {
 		}
 	}
 }
+
+func TestDiffFilesRedactsPrivateKeysAcrossHunks(t *testing.T) {
+	in := []review.DiffFile{{
+		NewPath: "pkg/key.go",
+		Hunks: []review.DiffHunk{
+			{Lines: []review.DiffLine{
+				{Kind: "add", NewLine: 1, Content: "const key = \"-----BEGIN PRIVATE KEY-----"},
+			}},
+			{Lines: []review.DiffLine{
+				{Kind: "add", NewLine: 20, Content: "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC"},
+				{Kind: "add", NewLine: 21, Content: "-----END PRIVATE KEY-----\""},
+			}},
+		},
+	}}
+
+	out := DiffFiles(in)
+	for _, hunk := range out[0].Hunks {
+		for _, line := range hunk.Lines {
+			if strings.Contains(line.Content, "PRIVATE KEY") || strings.Contains(line.Content, "MIIEvQ") {
+				t.Fatalf("line leaked private key material across hunks: %#v", line)
+			}
+		}
+	}
+}

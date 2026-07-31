@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -35,6 +36,16 @@ func TestReadDiffFile(t *testing.T) {
 	}
 	if src.WorkDir != "" || src.RepoPath != "" {
 		t.Fatalf("standalone diff unexpectedly has workspace: %#v", src)
+	}
+}
+
+func TestReadDiffFileRejectsOversizeBeforeRead(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "large.diff")
+	if err := os.WriteFile(path, []byte("0123456789"), 0o600); err != nil {
+		t.Fatalf("WriteFile(diff) error = %v", err)
+	}
+	if _, err := readDiffFileWithLimit(path, "", 4); err == nil || !strings.Contains(err.Error(), "file exceeds 4 bytes") {
+		t.Fatalf("readDiffFileWithLimit() error = %v, want size rejection", err)
 	}
 }
 
@@ -74,6 +85,18 @@ func TestReadFixturesNormalizesLineEndings(t *testing.T) {
 	}
 }
 
+func TestReadFixturesRejectsAggregateLimit(t *testing.T) {
+	dir := t.TempDir()
+	for name, content := range map[string]string{"a.diff": "1234", "b.diff": "5678"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", name, err)
+		}
+	}
+	if _, err := readFixturesWithLimit(dir, 6); err == nil || !strings.Contains(err.Error(), "file exceeds") {
+		t.Fatalf("readFixturesWithLimit() error = %v, want aggregate size rejection", err)
+	}
+}
+
 func TestReadFileList(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "files.txt")
@@ -89,6 +112,32 @@ func TestReadFileList(t *testing.T) {
 	}
 	if got, want := strings.Join(src.FileList, ","), "pkg/a.go,pkg/b_test.go"; got != want {
 		t.Fatalf("FileList = %q, want %q", got, want)
+	}
+}
+
+func TestReadFileListPreservesPathWhitespace(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "files.txt")
+	if err := os.WriteFile(path, []byte(" selected.go \n  \n# comment\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	src, err := Read(context.Background(), Options{FileList: path})
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	want := []string{"  ", " selected.go "}
+	if !reflect.DeepEqual(src.FileList, want) {
+		t.Fatalf("FileList = %#v, want %#v", src.FileList, want)
+	}
+}
+
+func TestReadFileListRejectsOversizeBeforeRead(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "files.txt")
+	if err := os.WriteFile(path, []byte("123456"), 0o600); err != nil {
+		t.Fatalf("WriteFile(file list) error = %v", err)
+	}
+	if _, err := readFileListWithLimit(path, "", 4); err == nil || !strings.Contains(err.Error(), "file exceeds 4 bytes") {
+		t.Fatalf("readFileListWithLimit() error = %v, want size rejection", err)
 	}
 }
 

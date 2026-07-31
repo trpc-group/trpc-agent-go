@@ -262,7 +262,7 @@ English:
 The deterministic acceptance path is:
 
 ```powershell
-cd E:\trpc-agent-go\examples\code_review_agent
+cd examples/code_review_agent
 go test -count=1 ./...
 go run . -fixture-dir testdata\fixtures -out-dir .\out -runtime fake
 go run . -diff-file testdata\fixtures\security_secret.diff -out-dir .\out-diff -runtime fake
@@ -280,7 +280,7 @@ For a passing container sandbox run, `sandbox_runs` should show `runtime=contain
 确定性验收路径如下：
 
 ```powershell
-cd E:\trpc-agent-go\examples\code_review_agent
+cd examples/code_review_agent
 go test -count=1 ./...
 go run . -fixture-dir testdata\fixtures -out-dir .\out -runtime fake
 go run . -diff-file testdata\fixtures\security_secret.diff -out-dir .\out-diff -runtime fake
