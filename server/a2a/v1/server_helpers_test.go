@@ -535,6 +535,42 @@ func TestNormalizationAndTaskMetadataBranches(t *testing.T) {
 	}
 }
 
+func TestNormalizeStreamingResultDropsTypedNil(t *testing.T) {
+	var message *protocol.Message
+	var artifact *protocol.TaskArtifactUpdateEvent
+	var status *protocol.TaskStatusUpdateEvent
+	for name, result := range map[string]protocol.StreamEvent{
+		"message":  message,
+		"artifact": artifact,
+		"status":   status,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := normalizeStreamingResult(result); got != nil {
+				t.Fatalf("normalizeStreamingResult() = %#v, want nil", got)
+			}
+		})
+	}
+
+	emptyMessage := &protocol.Message{}
+	if got := normalizeStreamingResult(emptyMessage); got != nil {
+		t.Fatalf("empty message result = %#v, want nil", got)
+	}
+	emptyArtifact := &protocol.TaskArtifactUpdateEvent{}
+	if got := normalizeStreamingResult(emptyArtifact); got != nil {
+		t.Fatalf("empty artifact result = %#v, want nil", got)
+	}
+}
+
+func TestRecordTaskOutputEventIgnoresTypedNil(t *testing.T) {
+	var message *protocol.Message
+	var artifact *protocol.TaskArtifactUpdateEvent
+	var status *protocol.TaskStatusUpdateEvent
+	state := &taskOutputState{}
+	for _, result := range []protocol.StreamEvent{message, artifact, status} {
+		recordTaskOutputEvent(result, state, "task", nil)
+	}
+}
+
 func TestTaskErrorHelperBranches(t *testing.T) {
 	if taskErrorState(&model.ResponseError{
 		Type: agent.ErrorTypeStopAgentError,

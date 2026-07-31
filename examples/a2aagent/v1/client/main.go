@@ -33,10 +33,10 @@ const (
 )
 
 var (
-	serverURL = flag.String(
+	agentCardURL = flag.String(
 		"url",
-		"http://127.0.0.1:8888",
-		"A2A server URL",
+		"http://127.0.0.1:8888/.well-known/agent-card.json",
+		"A2A agent card URL",
 	)
 	initialSessionID = flag.String(
 		"session",
@@ -49,7 +49,7 @@ func main() {
 	flag.Parse()
 
 	remoteAgent, err := a2aagent.New(
-		a2aagent.WithAgentCardURL(*serverURL),
+		a2aagent.WithAgentCardURL(*agentCardURL),
 	)
 	if err != nil {
 		log.Fatalf("connect A2A agent: %v", err)
@@ -165,7 +165,15 @@ func printResponse(events <-chan *event.Event) error {
 			}
 			var content string
 			if isPartial {
-				content = choice.Delta.Content
+				if model.HasPayload(choice.Message) {
+					if printed {
+						fmt.Println()
+						printed = false
+					}
+					content = choice.Message.Content
+				} else {
+					content = choice.Delta.Content
+				}
 			} else if !sawPartial {
 				content = choice.Message.Content
 			}

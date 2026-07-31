@@ -592,6 +592,135 @@ model := openai.New("deepseek-v4-flash",
 )
 ```
 
+##### Custom Streaming Usage Aggregation
+
+The OpenAI-compatible adapter requests streaming usage and accumulates the
+provider's usage chunks by default. Most applications should keep this
+behavior. Configure `WithAccumulateChunkTokenUsage` only when a compatible
+provider gives usage chunks nonstandard semantics. The option only affects
+streaming chunk aggregation; non-streaming usage is read directly from the
+complete response.
+
+###### How `WithAccumulateChunkTokenUsage` Processes Each Chunk
+
+When configured, the callback runs once for each streaming chunk, in order.
+Its signature is:
+
+```go
+func(current model.Usage, delta model.Usage) model.Usage
+```
+
+| Value | Meaning |
+| --- | --- |
+| `current` | The accumulated state before the current chunk |
+| `delta` | The `Usage` value carried by the current chunk |
+| return value | The complete state to use after the current chunk |
+
+For each chunk, the OpenAI-compatible adapter first lets the upstream SDK
+accumulate the chunk. When a custom callback is configured, the adapter then
+reconstructs the usage state from before that chunk, maps the current chunk's
+usage to `delta`, calls the callback, and replaces the SDK accumulator's usage
+with the returned value. The next chunk therefore sees that returned value as
+`current`, and the final model response receives the last returned value.
+
+`delta` is the API parameter name, but it does not guarantee that the provider
+sent a mathematical increment. Depending on the provider, it can be an
+increment, a cumulative total, a final total, or an empty value.
+
+The return value replaces the complete accumulated `model.Usage`. Fields
+omitted from it are not copied from `current` or `delta`.
+
+For a standard OpenAI-compatible stream, the raw content chunks contain
+`usage: null`. The adapter maps that absence to a zero-value `model.Usage`
+before invoking the callback. The final usage-only chunk contains the complete
+totals:
+
+```text
+raw content chunk:       usage = null
+callback for that chunk: delta = model.Usage{}
+raw final chunk:         usage = {prompt: 100, completion: 20, total: 120, cached: 80}
+callback for final chunk: delta = {prompt: 100, completion: 20, total: 120, cached: 80}
+```
+
+The default accumulator handles this shape. A custom accumulator is not needed.
+
+###### `model.Usage` Fields
+
+The accumulator state is a complete `model.Usage` value:
+
+| Field | Meaning |
+| --- | --- |
+| `PromptTokens` | Total input tokens reported for the request. Cached input tokens are normally included in this total, not added on top of it |
+| `CompletionTokens` | Total generated output tokens reported by the provider |
+| `TotalTokens` | Provider-reported total, normally prompt plus completion tokens |
+| `PromptTokensDetails.CachedTokens` | Prompt tokens served from an OpenAI-compatible prompt cache; normally a subset of `PromptTokens` |
+| `PromptTokensDetails.CacheCreationTokens` | Tokens used to create an explicit provider cache, primarily for Anthropic-style caching |
+| `PromptTokensDetails.CacheReadTokens` | Tokens read from an explicit provider cache, primarily for Anthropic-style caching |
+| `CompletionTokensDetails.ReasoningTokens` | Reasoning tokens reported within the completion usage |
+| `TimingInfo` | Optional framework timing metadata, not billable token usage |
+| `TimingInfo.FirstTokenDuration` | Accumulated time from request start to the first meaningful reasoning, content, or tool-call chunk for each model call |
+| `TimingInfo.ReasoningDuration` | Accumulated duration of streaming reasoning phases; it remains zero for non-streaming requests because the interval cannot be measured precisely |
+
+These fields form a provider-agnostic structure.
+`WithAccumulateChunkTokenUsage` belongs to the OpenAI-compatible adapter, so
+its callback only receives fields that the upstream OpenAI-compatible response
+and adapter mapping support. Other provider-specific fields remain zero.
+
+`TimingInfo` contains `FirstTokenDuration` and `ReasoningDuration`. The
+framework attaches this timing metadata outside the OpenAI chunk-usage
+accumulator, so custom token accumulation normally does not need to create or
+merge it.
+
+Token accounting details remain provider-defined. For example, do not add
+`CachedTokens` to `PromptTokens`, and do not recompute `TotalTokens` unless the
+provider contract requires it.
+
+###### Choose the Strategy that Matches the Provider
+
+Start with the provider's response format:
+
+| Provider response format | Can direct summation count tokens more than once? | Recommended configuration |
+| --- | --- | --- |
+| A final usage-only chunk contains the complete totals | No; earlier chunks have no usage | Use the default accumulator |
+| Each usage chunk contains an independent increment | No | Use the default accumulator |
+| Usage chunks contain cumulative snapshots or repeat fields already reported | Yes | Use a latest-nonzero custom accumulator |
+
+For cumulative snapshots or repeated fields, keep the most recent nonzero
+usage value. Empty chunks must preserve `current`; otherwise an empty chunk
+after the last usage update can clear the result.
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+)
+
+func latestNonZeroUsage(current, delta model.Usage) model.Usage {
+    if delta.PromptTokens == 0 &&
+        delta.CompletionTokens == 0 &&
+        delta.TotalTokens == 0 &&
+        delta.PromptTokensDetails.CachedTokens == 0 &&
+        delta.PromptTokensDetails.CacheCreationTokens == 0 &&
+        delta.PromptTokensDetails.CacheReadTokens == 0 &&
+        delta.CompletionTokensDetails.ReasoningTokens == 0 {
+        return current
+    }
+    return delta
+}
+
+llm := openai.New("your-model",
+    openai.WithAccumulateChunkTokenUsage(latestNonZeroUsage),
+)
+```
+
+Returning the complete `delta` preserves nested details such as
+`CachedTokens` and `ReasoningTokens`. Define "empty" from every field that the
+provider can report.
+
+Before choosing a custom strategy, inspect the provider's raw chunks across a
+complete stream. In particular, check whether usage is incremental or
+cumulative and whether a final usage-only chunk is present.
+
 ##### Dynamically Modifying Request Body via Callback
 
 `WithChatRequestCallback` receives a `*openai.ChatCompletionNewParams` pointer,

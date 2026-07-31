@@ -391,8 +391,11 @@ func (t *writeStdinTool) Call(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if err := t.mgr.write(
-		sessionID,
+	sess, err := t.mgr.get(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if err := sess.write(
 		in.Chars,
 		firstBool(in.AppendNewline, in.Submit),
 	); err != nil {
@@ -407,17 +410,17 @@ func (t *writeStdinTool) Call(
 	if yield > 0 {
 		timer := time.NewTimer(time.Duration(yield) * time.Millisecond)
 		defer timer.Stop()
+		// Return as soon as the process exits: sleeping out the full
+		// yield after exit only delays the result the caller is
+		// waiting for. Mirrors the manager's own exec yield path.
 		select {
 		case <-ctx.Done():
 		case <-timer.C:
+		case <-sess.doneCh:
 		}
 	}
 
-	poll, err := t.mgr.poll(sessionID, nil)
-	if err != nil {
-		return nil, err
-	}
-	return mapPollResult(sessionID, poll), nil
+	return mapPollResult(sessionID, sess.poll(nil)), nil
 }
 
 type killSessionTool struct {

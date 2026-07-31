@@ -401,9 +401,10 @@ type parseResult struct {
 
 // toolResponseData holds tool response information
 type toolResponseData struct {
-	id      string
-	name    string
-	content string
+	id           string
+	name         string
+	content      string
+	contentParts []model.ContentPart
 }
 
 func newDataPartMappingResult(result *parseResult) *A2ADataPartMappingResult {
@@ -658,11 +659,12 @@ func processDataPartWithMappers(
 			}
 			builtInHandled = true
 		case ia2a.DataPartMetadataTypeFunctionResp:
-			content, id, name := processFunctionResponse(d)
+			content, contentParts, id, name := processFunctionResponse(d)
 			result.toolResponses = append(result.toolResponses, toolResponseData{
-				id:      id,
-				name:    name,
-				content: content,
+				id:           id,
+				name:         name,
+				content:      content,
+				contentParts: contentParts,
 			})
 			builtInHandled = true
 		case ia2a.DataPartMetadataTypeExecutableCode:
@@ -747,7 +749,9 @@ func processFunctionCall(d *protocol.Part) *model.ToolCall {
 }
 
 // processFunctionResponse processes a function response DataPart and returns the response content and metadata
-func processFunctionResponse(d *protocol.Part) (content string, id string, name string) {
+func processFunctionResponse(
+	d *protocol.Part,
+) (content string, contentParts []model.ContentPart, id string, name string) {
 	data, ok := d.DataContent().(map[string]any)
 	if !ok {
 		log.Warnf("DataPart data is not a map: %T", d.DataContent())
@@ -775,6 +779,17 @@ func processFunctionResponse(d *protocol.Part) (content string, id string, name 
 				response,
 				err,
 			)
+		}
+	}
+	if rawParts, ok := data[ia2a.ToolCallFieldContentParts]; ok {
+		encoded, err := json.Marshal(rawParts)
+		if err != nil {
+			log.Infof("Tool response content parts JSON marshal failed: %v", err)
+			return
+		}
+		if err := json.Unmarshal(encoded, &contentParts); err != nil {
+			log.Infof("Tool response content parts JSON unmarshal failed: %v", err)
+			contentParts = nil
 		}
 	}
 
@@ -917,10 +932,11 @@ func buildStreamingResponse(messageID string, result *parseResult, role protocol
 		for _, resp := range result.toolResponses {
 			choices = append(choices, model.Choice{
 				Message: model.Message{
-					Role:     model.RoleTool,
-					Content:  resp.content,
-					ToolID:   resp.id,
-					ToolName: resp.name,
+					Role:         model.RoleTool,
+					Content:      resp.content,
+					ContentParts: resp.contentParts,
+					ToolID:       resp.id,
+					ToolName:     resp.name,
 				},
 			})
 		}
@@ -1058,10 +1074,11 @@ func buildNonStreamingResponse(messageID string, result *parseResult, role proto
 		for _, resp := range result.toolResponses {
 			choices = append(choices, model.Choice{
 				Message: model.Message{
-					Role:     model.RoleTool,
-					Content:  resp.content,
-					ToolID:   resp.id,
-					ToolName: resp.name,
+					Role:         model.RoleTool,
+					Content:      resp.content,
+					ContentParts: resp.contentParts,
+					ToolID:       resp.id,
+					ToolName:     resp.name,
 				},
 			})
 		}
