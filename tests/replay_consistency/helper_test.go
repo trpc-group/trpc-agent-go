@@ -890,10 +890,10 @@ func TestBackendServiceProviders(t *testing.T) {
 
 type dummyBackend struct{}
 
-func (d *dummyBackend) Name() string            { return "dummy" }
-func (d *dummyBackend) Kind() BackendKind       { return BackendKindSession }
-func (d *dummyBackend) Supports(string) bool    { return false }
-func (d *dummyBackend) Close() error            { return nil }
+func (d *dummyBackend) Name() string         { return "dummy" }
+func (d *dummyBackend) Kind() BackendKind    { return BackendKindSession }
+func (d *dummyBackend) Supports(string) bool { return false }
+func (d *dummyBackend) Close() error         { return nil }
 
 func TestBackendSessionService_NilFallback(t *testing.T) {
 	// When the backend doesn't implement the interface AND is not *replayBackend
