@@ -1,0 +1,5 @@
+diff --git a/probe.go b/probe.go
+--- a/probe.go
++++ b/probe.go
+@@ -1,0 +2,1 @@
++func Probe() bool { return true }

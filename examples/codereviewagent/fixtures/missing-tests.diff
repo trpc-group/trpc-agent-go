@@ -1,0 +1,5 @@
+diff --git a/service.go b/service.go
+--- a/service.go
++++ b/service.go
+@@ -12,0 +13,1 @@
++func Enabled() bool { return true }

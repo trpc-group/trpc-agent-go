@@ -1,0 +1,6 @@
+diff --git a/runner.go b/runner.go
+--- a/runner.go
++++ b/runner.go
+@@ -10,0 +11,2 @@
++cmd := exec.Command("bash", "-c", input)
++cmd = exec.Command("bash", "-c", input)

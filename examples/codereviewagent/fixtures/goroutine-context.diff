@@ -1,0 +1,8 @@
+diff --git a/worker.go b/worker.go
+--- a/worker.go
++++ b/worker.go
+@@ -4,0 +5,4 @@
++go func() {
++	ctx := context.Background()
++	process(ctx)
++}()
