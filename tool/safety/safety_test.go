@@ -22,6 +22,7 @@ import (
 	"sync"
 	"testing"
 
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/hostexec"
@@ -313,6 +314,46 @@ func TestLoadPolicyRejectsUnknownFields(t *testing.T) {
 				t.Fatal("LoadPolicy unknown field error = nil")
 			}
 		})
+	}
+}
+
+func TestLoadPolicyRejectsInvalidUnknownToolAction(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "policy.yaml")
+	if err := os.WriteFile(
+		path,
+		[]byte("unknown_tool_action: execute\n"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadPolicy(path); err == nil ||
+		!strings.Contains(err.Error(), "unknown_tool_action") {
+		t.Fatalf("LoadPolicy invalid unknown_tool_action error = %v", err)
+	}
+}
+
+func TestLoadPolicyConfiguresUnknownToolAction(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "policy.yaml")
+	if err := os.WriteFile(
+		path,
+		[]byte("unknown_tool_action: allow\n"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := LoadPolicy(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := NewPermissionPolicy(policy).CheckToolPermission(
+		context.Background(),
+		&tool.PermissionRequest{ToolName: "unknown_tool"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Action != tool.PermissionActionAllow {
+		t.Fatalf("action = %q, want allow", decision.Action)
 	}
 }
 
@@ -1122,7 +1163,7 @@ func TestPermissionPolicyUsesExtensionRequestParser(t *testing.T) {
 	}
 }
 
-func TestPermissionPolicyAllowsUnknownToolAndNilRequest(t *testing.T) {
+func TestPermissionPolicyHandlesUnknownTool(t *testing.T) {
 	policy := NewPermissionPolicy(DefaultPolicy())
 	decision, err := policy.CheckToolPermission(context.Background(), nil)
 	if err != nil {
@@ -1139,8 +1180,121 @@ func TestPermissionPolicyAllowsUnknownToolAndNilRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decision.Action != tool.PermissionActionAllow {
-		t.Fatalf("unknown tool action = %q, want allow", decision.Action)
+	if decision.Action != tool.PermissionActionAsk ||
+		!strings.Contains(decision.Reason, "unknown_tool") {
+		t.Fatalf("unknown tool decision = %+v, want ask", decision)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		action tool.PermissionAction
+		want   tool.PermissionAction
+	}{
+		{name: "allow", action: tool.PermissionActionAllow, want: tool.PermissionActionAllow},
+		{name: "deny", action: tool.PermissionActionDeny, want: tool.PermissionActionDeny},
+		{name: "invalid fails closed", action: "execute", want: tool.PermissionActionDeny},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			config := DefaultPolicy()
+			config.UnknownToolAction = tc.action
+			guard := NewPermissionPolicy(config)
+			got, err := guard.CheckToolPermission(
+				context.Background(),
+				&tool.PermissionRequest{ToolName: "unknown_tool"},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Action != tc.want {
+				t.Fatalf("action = %q, want %q: %+v", got.Action, tc.want, got)
+			}
+		})
+	}
+}
+
+func TestPermissionPolicyHonorsCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	decision, err := NewPermissionPolicy(DefaultPolicy()).CheckToolPermission(
+		ctx,
+		&tool.PermissionRequest{
+			ToolName:  "workspace_exec",
+			Arguments: []byte(`{"command":"go test ./..."}`),
+		},
+	)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+	if decision.Action != tool.PermissionActionDeny {
+		t.Fatalf("action = %q, want deny", decision.Action)
+	}
+}
+
+func TestPermissionPolicyScansInlineInterpreterPayloads(t *testing.T) {
+	guard := NewPermissionPolicy(DefaultPolicy())
+	for _, tc := range []struct {
+		name    string
+		command string
+		want    tool.PermissionAction
+		ruleID  string
+	}{
+		{
+			name:    "python network",
+			command: `python -c "import socket; socket.create_connection(('evil.example',443))"`,
+			want:    tool.PermissionActionDeny,
+			ruleID:  "network.non_whitelisted_domain",
+		},
+		{
+			name:    "python shell bridge",
+			command: `python -c "import os; os.system('sudo id')"`,
+			want:    tool.PermissionActionAsk,
+			ruleID:  "codeexec.host_command_bridge",
+		},
+		{
+			name:    "node shell bridge",
+			command: `node -e "require('child_process').execSync('sudo id')"`,
+			want:    tool.PermissionActionAsk,
+			ruleID:  "codeexec.host_command_bridge",
+		},
+		{
+			name:    "node attached long option",
+			command: `node --eval="require('child_process').execSync('sudo id')"`,
+			want:    tool.PermissionActionAsk,
+			ruleID:  "codeexec.host_command_bridge",
+		},
+		{
+			name:    "ruby shell bridge",
+			command: `ruby -e "system('sudo id')"`,
+			want:    tool.PermissionActionAsk,
+			ruleID:  "codeexec.host_command_bridge",
+		},
+		{
+			name:    "ruby attached short option",
+			command: `ruby -e"system('sudo id')"`,
+			want:    tool.PermissionActionAsk,
+			ruleID:  "codeexec.host_command_bridge",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args, err := json.Marshal(map[string]any{"command": tc.command})
+			if err != nil {
+				t.Fatal(err)
+			}
+			decision, err := guard.CheckToolPermission(
+				context.Background(),
+				&tool.PermissionRequest{
+					ToolName:  "workspace_exec",
+					Arguments: args,
+				},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decision.Action != tc.want ||
+				!strings.Contains(decision.Reason, tc.ruleID) {
+				t.Fatalf("unexpected decision: %+v", decision)
+			}
+		})
 	}
 }
 
@@ -2569,6 +2723,98 @@ func TestScanRedactsAuthorizationCredentials(t *testing.T) {
 	}
 }
 
+func TestScanRedactsURLAndCurlUserCredentials(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		command string
+		secret  string
+	}{
+		{
+			name:    "URL userinfo",
+			command: `curl https://alice:hunter2@api.github.com`,
+			secret:  "hunter2",
+		},
+		{
+			name:    "short user option",
+			command: `curl -u alice:hunter2 https://api.github.com`,
+			secret:  "hunter2",
+		},
+		{
+			name:    "quoted short user option",
+			command: `curl -u 'alice:hunter two' https://api.github.com`,
+			secret:  "hunter two",
+		},
+		{
+			name:    "long user option",
+			command: `curl --user=alice:hunter2 https://api.github.com`,
+			secret:  "hunter2",
+		},
+		{
+			name:    "password containing colon",
+			command: `curl --user alice:hunter:two https://api.github.com`,
+			secret:  "hunter:two",
+		},
+		{
+			name:    "quoted proxy user option",
+			command: `curl --proxy-user "alice:hunter two" https://api.github.com`,
+			secret:  "hunter two",
+		},
+		{
+			name:    "short option after quoted URL metacharacter",
+			command: `curl 'https://api.github.com?a=1&b=2' -u alice:hunter2`,
+			secret:  "hunter2",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			report := Scan(Request{
+				ToolName: "workspace_exec",
+				Backend:  BackendWorkspaceExec,
+				Command:  tc.command,
+			}, DefaultPolicy())
+			if report.Decision != DecisionDeny || !report.Redacted ||
+				!reportHasRule(report, "sensitive.secret_leak") {
+				t.Fatalf("credential command was not denied and redacted: %+v", report)
+			}
+			raw, err := json.Marshal(report)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if bytes.Contains(raw, []byte(tc.secret)) {
+				t.Fatalf("serialized report leaked the credential: %s", raw)
+			}
+			var event bytes.Buffer
+			if err := WriteAuditJSONL(&event, report); err != nil {
+				t.Fatal(err)
+			}
+			if bytes.Contains(event.Bytes(), []byte(tc.secret)) {
+				t.Fatalf("audit event leaked the credential: %s", event.String())
+			}
+		})
+	}
+
+	report := Scan(Request{
+		ToolName: "workspace_exec",
+		Backend:  BackendWorkspaceExec,
+		Command:  "docker run -u 1000:1000 image",
+	}, DefaultPolicy())
+	if report.Decision != DecisionAllow || report.Redacted {
+		t.Fatalf("unrelated -u value was treated as a credential: %+v", report)
+	}
+
+	report = Scan(Request{
+		ToolName: "workspace_exec",
+		Backend:  BackendWorkspaceExec,
+		Command:  "curl -u alice:first -u bob:second https://api.github.com",
+	}, DefaultPolicy())
+	raw, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(raw, []byte("first")) || bytes.Contains(raw, []byte("second")) {
+		t.Fatalf("serialized report leaked one of multiple credentials: %s", raw)
+	}
+}
+
 // TestToolMetadataReusesFrameworkContract locks the guard onto the framework
 // metadata contract. A field added to tool.ToolMetadata must reach a scan
 // without updating a parallel type here.
@@ -2596,6 +2842,14 @@ func TestToolMetadataReusesFrameworkContract(t *testing.T) {
 	}
 	if req.Metadata != meta {
 		t.Fatalf("request metadata = %+v, want %+v", req.Metadata, meta)
+	}
+}
+
+func TestCodeBlockReusesCodeexecutorContract(t *testing.T) {
+	want := codeexecutor.CodeBlock{Language: "python", Code: "print(1)"}
+	var got CodeBlock = want
+	if got != want {
+		t.Fatalf("guard code block = %+v, want %+v", got, want)
 	}
 }
 

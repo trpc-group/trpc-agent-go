@@ -154,6 +154,15 @@
       },
       {
         "decision": "deny",
+        "risk_level": "high",
+        "rule_id": "shell.intrinsic_unsafe_command",
+        "evidence": [
+          "command \"bash\" is an unsafe shell builtin or re-executing command"
+        ],
+        "recommendation": "Use a directly inspectable command or an audited workspace script."
+      },
+      {
+        "decision": "deny",
         "risk_level": "medium",
         "rule_id": "policy.command_not_allowed",
         "evidence": [

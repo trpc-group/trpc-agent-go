@@ -42,7 +42,9 @@ type PermissionPolicy struct {
 }
 
 // NewPermissionPolicy returns a tool.PermissionPolicy that maps safety scan
-// decisions onto the framework allow / deny / ask actions.
+// decisions onto the framework allow / deny / ask actions. Tools without a
+// built-in or registered parser use Policy.UnknownToolAction, which defaults
+// to ask; recognized no-op requests remain allowed.
 func NewPermissionPolicy(policy Policy, opts ...PermissionOption) *PermissionPolicy {
 	p := &PermissionPolicy{
 		policy:         policy.withDefaults(),
@@ -87,18 +89,33 @@ func (p *PermissionPolicy) CheckToolPermission(
 	ctx context.Context,
 	req *tool.PermissionRequest,
 ) (tool.PermissionDecision, error) {
-	_ = ctx
 	if p == nil {
 		return tool.DenyPermission("tool safety guard permission policy is nil"), nil
+	}
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return tool.DenyPermission("tool safety guard scan interrupted"), err
+		}
 	}
 	scanReq, ok, err := p.scanRequest(req)
 	if err != nil {
 		return tool.DenyPermission(err.Error()), nil
 	}
-	if !ok {
-		return tool.AllowPermission(), nil
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return tool.DenyPermission("tool safety guard scan interrupted"), err
+		}
 	}
-	report := Scan(scanReq, p.policy)
+	if !ok {
+		if p.recognizesRequestTool(req) {
+			return tool.AllowPermission(), nil
+		}
+		return p.unknownToolDecision(req), nil
+	}
+	report, err := scanContext(ctx, scanReq, p.policy)
+	if err != nil {
+		return tool.DenyPermission("tool safety guard scan interrupted"), err
+	}
 	if err := p.writeAudit(report); err != nil {
 		return tool.DenyPermission("tool safety audit failed"), err
 	}
@@ -111,6 +128,54 @@ func (p *PermissionPolicy) CheckToolPermission(
 		return tool.AskPermission(permissionReason(report)), nil
 	default:
 		return tool.DenyPermission("tool safety guard returned an unknown decision"), nil
+	}
+}
+
+func (p *PermissionPolicy) recognizesRequestTool(
+	req *tool.PermissionRequest,
+) bool {
+	if req == nil {
+		return false
+	}
+	if builtin, _ := resolveBuiltinExecTool(req, true); builtin != "" {
+		return true
+	}
+	name := req.ToolName
+	if name == "" && req.Declaration != nil {
+		name = req.Declaration.Name
+	}
+	return p.requestParsers[name] != nil
+}
+
+func (p *PermissionPolicy) unknownToolDecision(
+	req *tool.PermissionRequest,
+) tool.PermissionDecision {
+	// A nil request cannot identify or execute a tool. Preserve the no-op
+	// behavior for callers probing the policy without a pending invocation.
+	if req == nil {
+		return tool.AllowPermission()
+	}
+	name := strings.TrimSpace(req.ToolName)
+	if name == "" && req.Declaration != nil {
+		name = strings.TrimSpace(req.Declaration.Name)
+	}
+	if name == "" {
+		name = "<unnamed>"
+	}
+	reason := fmt.Sprintf(
+		"tool safety guard has no request parser for tool %q", name,
+	)
+	switch p.policy.UnknownToolAction {
+	case tool.PermissionActionAllow:
+		return tool.AllowPermission()
+	case tool.PermissionActionAsk:
+		return tool.AskPermission(reason)
+	case tool.PermissionActionDeny:
+		return tool.DenyPermission(reason)
+	default:
+		return tool.DenyPermission(
+			"tool safety guard has an invalid unknown tool action",
+		)
 	}
 }
 

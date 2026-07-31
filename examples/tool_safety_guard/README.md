@@ -34,8 +34,10 @@ map to the framework approval-required action.
 
 MCP, Skill, and custom execution tools can opt into the same policy with
 `safety.WithPermissionRequestParser(toolName, parser)`. The parser maps the
-tool's argument schema to a `safety.Request`; non-execution tools remain
-unaffected by the wrapper.
+tool's argument schema to a `safety.Request`. Tools without a built-in or
+registered parser require approval by default. Set `unknown_tool_action` to
+`allow` only when the surrounding application separately proves those tools
+safe; `deny` is also supported.
 
 `workspaceexec` runs inside an executor workspace. That is a safer boundary than
 direct host execution, but it still needs command filtering, clean environment
@@ -70,4 +72,8 @@ paths, network allowlists, maximum timeout, caller-declared output caps,
 environment variable allowlist, and commands that require human review. The
 output-cap policy validates requests whose executor already enforces a byte
 cap; the built-in adapters do not claim a byte limit because their schemas do
-not expose one. Changing those fields does not require code changes.
+not expose one. `unknown_tool_action` controls unrecognized tools and defaults
+to `ask`. For programmatic configuration, start with `safety.DefaultPolicy()`
+before setting `review_shell_pipelines` or `deny_on_parse_error` to false;
+their zero values otherwise inherit the conservative true defaults. Changing
+those fields does not require code changes.

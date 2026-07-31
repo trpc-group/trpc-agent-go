@@ -12,6 +12,7 @@ package safety
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,6 +29,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/shellsafe"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/hostexec"
@@ -76,18 +78,29 @@ type Policy struct {
 	MaxTimeoutSeconds int      `json:"max_timeout_seconds,omitempty" yaml:"max_timeout_seconds,omitempty"`
 	// MaxOutputBytes validates a cap declared by the request. Executors remain
 	// responsible for enforcing that cap while collecting output.
-	MaxOutputBytes       int64    `json:"max_output_bytes,omitempty" yaml:"max_output_bytes,omitempty"`
-	EnvAllowlist         []string `json:"env_allowlist,omitempty" yaml:"env_allowlist,omitempty"`
-	ReviewCommands       []string `json:"review_commands,omitempty" yaml:"review_commands,omitempty"`
-	ReviewShellPipelines bool     `json:"review_shell_pipelines,omitempty" yaml:"review_shell_pipelines,omitempty"`
-	DenyOnParseError     bool     `json:"deny_on_parse_error,omitempty" yaml:"deny_on_parse_error,omitempty"`
+	MaxOutputBytes int64    `json:"max_output_bytes,omitempty" yaml:"max_output_bytes,omitempty"`
+	EnvAllowlist   []string `json:"env_allowlist,omitempty" yaml:"env_allowlist,omitempty"`
+	ReviewCommands []string `json:"review_commands,omitempty" yaml:"review_commands,omitempty"`
+	// ReviewShellPipelines defaults to true. Start with DefaultPolicy before
+	// assigning false in programmatic configuration.
+	ReviewShellPipelines bool `json:"review_shell_pipelines,omitempty" yaml:"review_shell_pipelines,omitempty"`
+	// DenyOnParseError defaults to true. Start with DefaultPolicy before
+	// assigning false in programmatic configuration.
+	DenyOnParseError bool `json:"deny_on_parse_error,omitempty" yaml:"deny_on_parse_error,omitempty"`
+	// UnknownToolAction controls how PermissionPolicy handles a tool for which
+	// no built-in or registered request parser is available. Supported values
+	// are allow, ask, and deny. The default is ask; invalid programmatic values
+	// fail closed, while LoadPolicy rejects them.
+	UnknownToolAction tool.PermissionAction `json:"unknown_tool_action,omitempty" yaml:"unknown_tool_action,omitempty"`
 
 	reviewShellPipelinesSet bool
 	denyOnParseErrorSet     bool
 }
 
 // DefaultPolicy returns a conservative policy suitable for workspaceexec,
-// hostexec and codeexec wrappers.
+// hostexec and codeexec wrappers. Programmatic callers should modify the
+// returned value, rather than a Policy literal, when setting a default-true
+// boolean to false.
 func DefaultPolicy() Policy {
 	return Policy{
 		DeniedCommands: []string{
@@ -111,6 +124,7 @@ func DefaultPolicy() Policy {
 		MaxOutputBytes:       4 * 1024 * 1024,
 		ReviewShellPipelines: true,
 		DenyOnParseError:     true,
+		UnknownToolAction:    tool.PermissionActionAsk,
 		ReviewCommands: []string{
 			"go install", "npm install", "npm ci", "pip install",
 			"pip3 install", "apt install", "apt-get install",
@@ -156,6 +170,14 @@ func LoadPolicy(path string) (Policy, error) {
 	}
 	if _, ok := raw["deny_on_parse_error"]; ok {
 		p.denyOnParseErrorSet = true
+	}
+	if !validUnknownToolAction(p.UnknownToolAction) {
+		return Policy{}, fmt.Errorf(
+			"unknown_tool_action must be %q, %q, or %q",
+			tool.PermissionActionAllow,
+			tool.PermissionActionAsk,
+			tool.PermissionActionDeny,
+		)
 	}
 	return p, nil
 }
@@ -222,7 +244,21 @@ func (p Policy) withDefaults() Policy {
 	if !p.denyOnParseErrorSet && !p.DenyOnParseError {
 		p.DenyOnParseError = d.DenyOnParseError
 	}
+	if p.UnknownToolAction == "" {
+		p.UnknownToolAction = d.UnknownToolAction
+	}
 	return p
+}
+
+func validUnknownToolAction(action tool.PermissionAction) bool {
+	switch action {
+	case tool.PermissionActionAllow,
+		tool.PermissionActionAsk,
+		tool.PermissionActionDeny:
+		return true
+	default:
+		return false
+	}
 }
 
 // ToolMetadata is the framework tool metadata contract, reused so that guard
@@ -231,11 +267,8 @@ func (p Policy) withDefaults() Policy {
 // parallel type to update.
 type ToolMetadata = tool.ToolMetadata
 
-// CodeBlock is a script block supplied to a code execution tool.
-type CodeBlock struct {
-	Language string `json:"language,omitempty"`
-	Code     string `json:"code,omitempty"`
-}
+// CodeBlock is the codeexecutor code block contract.
+type CodeBlock = codeexecutor.CodeBlock
 
 // Request describes one pending tool execution.
 type Request struct {
@@ -372,16 +405,35 @@ func AppendAuditFile(path string, report Report) error {
 
 // Scan evaluates a pending tool execution against the policy.
 func Scan(req Request, policy Policy) Report {
-	start := time.Now()
-	policy = policy.withDefaults()
-	s := scanner{policy: policy}
-	report := s.scan(req)
-	report.DurationMillis = time.Since(start).Milliseconds()
+	report, _ := scanContext(context.Background(), req, policy)
 	return report
 }
 
+func scanContext(ctx context.Context, req Request, policy Policy) (Report, error) {
+	start := time.Now()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return Report{}, err
+	}
+	policy = policy.withDefaults()
+	s := scanner{ctx: ctx, policy: policy}
+	report := s.scan(req)
+	if err := ctx.Err(); err != nil {
+		return Report{}, err
+	}
+	report.DurationMillis = time.Since(start).Milliseconds()
+	return report, nil
+}
+
 type scanner struct {
+	ctx    context.Context
 	policy Policy
+}
+
+func (s scanner) canceled() bool {
+	return s.ctx != nil && s.ctx.Err() != nil
 }
 
 func (s scanner) scan(req Request) Report {
@@ -389,11 +441,26 @@ func (s scanner) scan(req Request) Report {
 	cmd := requestCommand(req)
 	findings := make([]Finding, 0, 4)
 	findings = append(findings, s.scanMetadata(req)...)
+	if s.canceled() {
+		return Report{}
+	}
 	findings = append(findings, s.scanEnv(req.Env)...)
+	if s.canceled() {
+		return Report{}
+	}
 	findings = append(findings, s.scanRequestEnvelope(req)...)
+	if s.canceled() {
+		return Report{}
+	}
 	findings = append(findings, s.scanStdin(req)...)
+	if s.canceled() {
+		return Report{}
+	}
 	if len(req.CodeBlocks) > 0 {
 		for _, block := range req.CodeBlocks {
+			if s.canceled() {
+				return Report{}
+			}
 			findings = append(findings, s.scanCodeBlock(req, block)...)
 		}
 	} else if req.InteractiveWrite {
@@ -600,6 +667,9 @@ func (s scanner) scanShell(req Request, command string) []Finding {
 		)}
 	}
 	findings = append(findings, s.scanRawCommand(req, command)...)
+	if s.canceled() {
+		return findings
+	}
 	pipe, err := shellsafe.Parse(command)
 	if err != nil {
 		decision := DecisionAsk
@@ -675,6 +745,9 @@ func hasWindowsCmdSyntax(command string) bool {
 func (s scanner) scanParsedCommands(pipe *shellsafe.Pipeline) []Finding {
 	var findings []Finding
 	for _, argv := range pipe.Commands {
+		if s.canceled() {
+			return findings
+		}
 		if len(argv) == 0 {
 			continue
 		}
@@ -690,6 +763,9 @@ func (s scanner) scanParsedCommands(pipe *shellsafe.Pipeline) []Finding {
 		}
 		chain := commandChain(argv)
 		for i, effective := range chain {
+			if s.canceled() {
+				return findings
+			}
 			effectiveName := commandName(effective[0])
 			findings = append(findings, s.scanDeniedCommand(effectiveName)...)
 			if i == len(chain)-1 && shellsafe.IsImplicitlyDenied(effectiveName) {
@@ -737,9 +813,85 @@ func (s scanner) scanParsedCommands(pipe *shellsafe.Pipeline) []Finding {
 				"Pass the effective command directly or use an audited workspace script.",
 			))
 		}
+		findings = append(findings, s.scanInlineInterpreter(last)...)
 		findings = append(findings, s.scanDeniedPaths(argv)...)
 	}
 	return findings
+}
+
+// scanInlineInterpreter routes source passed through an interpreter switch such
+// as python -c or node -e through the code-block checks. Without this the
+// payload stays an ordinary argument, so a denied path, a non-allowlisted host,
+// or a shell bridge inside it is never inspected.
+func (s scanner) scanInlineInterpreter(argv []string) []Finding {
+	language, code, ok := inlineInterpreterPayload(argv)
+	if !ok {
+		return nil
+	}
+	if strings.TrimSpace(code) == "" {
+		return nil
+	}
+	return s.scanCodeBlock(
+		Request{ToolName: "inline_code", Backend: BackendCodeExec},
+		CodeBlock{Language: language, Code: code},
+	)
+}
+
+// inlineInterpreterPayload returns the language and source carried by an
+// interpreter switch. It accepts both a separate payload argument and the
+// interpreter's attached short or long-option form.
+func inlineInterpreterPayload(argv []string) (string, string, bool) {
+	if len(argv) < 2 {
+		return "", "", false
+	}
+	language, switches, ok := inlineInterpreterSwitches(commandName(argv[0]))
+	if !ok {
+		return "", "", false
+	}
+	for i := 1; i < len(argv); i++ {
+		for _, option := range switches {
+			if argv[i] == option {
+				if i+1 < len(argv) {
+					return language, argv[i+1], true
+				}
+				return "", "", false
+			}
+			if code, ok := attachedOptionValue(argv[i], option); ok {
+				return language, code, true
+			}
+		}
+	}
+	return "", "", false
+}
+
+func attachedOptionValue(arg, option string) (string, bool) {
+	if strings.HasPrefix(option, "--") {
+		value, ok := strings.CutPrefix(arg, option+"=")
+		return value, ok && value != ""
+	}
+	value, ok := strings.CutPrefix(arg, option)
+	return value, ok && value != ""
+}
+
+// inlineInterpreterSwitches maps an interpreter to the options that introduce
+// inline source and to the language its payload should be scanned as.
+func inlineInterpreterSwitches(name string) (string, []string, bool) {
+	switch {
+	case name == "python" || name == "python2" || name == "python3" ||
+		name == "py" || name == "pypy" || name == "pypy3" ||
+		strings.HasPrefix(name, "python2.") || strings.HasPrefix(name, "python3."):
+		return "python", []string{"-c"}, true
+	case name == "node" || name == "nodejs":
+		return "javascript", []string{"-e", "--eval", "-p", "--print"}, true
+	case name == "ruby":
+		return "ruby", []string{"-e"}, true
+	case name == "perl":
+		return "perl", []string{"-e", "-E"}, true
+	case name == "php":
+		return "php", []string{"-r"}, true
+	default:
+		return "", nil, false
+	}
 }
 
 func (s scanner) scanDeniedCommand(name string) []Finding {
@@ -863,6 +1015,9 @@ func (s scanner) scanReviewCommand(argv []string) []Finding {
 func (s scanner) scanDeniedPaths(argv []string) []Finding {
 	var findings []Finding
 	for _, arg := range argv[1:] {
+		if s.canceled() {
+			return findings
+		}
 		for _, candidate := range pathCandidates(arg) {
 			if s.pathDenied(candidate) {
 				findings = append(findings, newFinding(
@@ -944,6 +1099,9 @@ func (s scanner) scanNetwork(command string) []Finding {
 	unresolvedRemap := false
 	if pipe, err := shellsafe.Parse(command); err == nil {
 		for _, argv := range pipe.Commands {
+			if s.canceled() {
+				return findings
+			}
 			if containsNetworkCommand(argv) {
 				networkCommand = true
 			}
@@ -964,6 +1122,9 @@ func (s scanner) scanNetwork(command string) []Finding {
 	targets = append(targets, remapTargets...)
 	checkedHosts := make(map[string]struct{})
 	for _, raw := range targets {
+		if s.canceled() {
+			return findings
+		}
 		host := hostOf(raw)
 		if host == "" {
 			continue
@@ -1668,6 +1829,9 @@ func (s scanner) scanCodeBlock(req Request, block CodeBlock) []Finding {
 	code := strings.TrimSpace(block.Code)
 	var findings []Finding
 	findings = append(findings, s.scanSecretText(code, "code block")...)
+	if s.canceled() {
+		return findings
+	}
 	if lang == "bash" || lang == "sh" || lang == "shell" || lang == "" {
 		shellReq := req
 		shellReq.ToolName = "code_block"
@@ -1681,9 +1845,7 @@ func (s scanner) scanCodeBlock(req Request, block CodeBlock) []Finding {
 		return findings
 	}
 	lower := strings.ToLower(code)
-	if strings.Contains(lower, "os.system") ||
-		strings.Contains(lower, "subprocess.") ||
-		strings.Contains(lower, "exec(") {
+	if codeCanLaunchHostCommand(lang, lower) {
 		findings = append(findings, newFinding(
 			DecisionNeedsHumanReview,
 			RiskMedium,
@@ -1699,9 +1861,36 @@ func (s scanner) scanCodeBlock(req Request, block CodeBlock) []Finding {
 	return findings
 }
 
+func codeCanLaunchHostCommand(language, lowerCode string) bool {
+	patterns := []string{"os.system", "os.popen", "pty.spawn", "subprocess.", "exec("}
+	switch language {
+	case "javascript", "js", "typescript", "ts", "node", "nodejs":
+		patterns = append(patterns,
+			"child_process", "execsync", "spawn", "spawnsync",
+			"deno.command", "bun.spawn",
+		)
+	case "ruby":
+		patterns = append(patterns,
+			"system", "spawn", "io.popen", "open3.", "exec ", "`",
+		)
+	case "perl":
+		patterns = append(patterns, "system", "qx/", "qx(", "exec ", "`")
+	case "php":
+		patterns = append(patterns,
+			"shell_exec", "system", "passthru", "proc_open", "popen",
+		)
+	}
+	return slices.ContainsFunc(patterns, func(pattern string) bool {
+		return strings.Contains(lowerCode, pattern)
+	})
+}
+
 func (s scanner) scanCodePaths(code string) []Finding {
 	var findings []Finding
 	for _, literal := range codeStringLiterals(code) {
+		if s.canceled() {
+			return findings
+		}
 		if !s.pathDenied(literal) {
 			continue
 		}
@@ -1734,6 +1923,9 @@ func (s scanner) scanCodeNetwork(code string) []Finding {
 	var findings []Finding
 	checkedHosts := make(map[string]struct{})
 	for _, match := range codeNetworkCallRE.FindAllStringSubmatch(code, -1) {
+		if s.canceled() {
+			return findings
+		}
 		if len(match) != 2 || strings.Contains(match[1], "://") {
 			continue
 		}
@@ -2021,6 +2213,34 @@ var (
 	// optional so that a bare credential is still recognized.
 	authorizationHeaderRE = regexp.MustCompile(
 		`(?i)((?:proxy-)?authorization\s*:\s*)((?:bearer|basic|digest|token|apikey)\s+)?([^\s'"\\]+)`)
+	// urlUserInfoRE matches the password half of a URL userinfo component, as
+	// in https://alice:hunter2@host. The username is kept so the report still
+	// identifies the principal.
+	urlUserInfoRE = regexp.MustCompile(
+		`(?i)([a-z][a-z0-9+.-]*://)([^:/?#\s@"']*:)([^@/?#\s"']+)@`)
+	// curlUserCredentialREs match long credential options. The three forms keep
+	// quoted passwords containing spaces from being only partially redacted.
+	curlUserCredentialREs = []*regexp.Regexp{
+		regexp.MustCompile(
+			`(?i)(--(?:user|proxy-user)(?:[ \t]+|=)[ \t]*")([^":]*:)([^"]+)(")`),
+		regexp.MustCompile(
+			`(?i)(--(?:user|proxy-user)(?:[ \t]+|=)[ \t]*')([^':]*:)([^']+)(')`),
+		regexp.MustCompile(
+			`(?i)(--(?:user|proxy-user)(?:[ \t]+|=)[ \t]*)([^: \t\n\r;&|"'=]*:)([^ \t\n\r;&|"']+)()`),
+	}
+	// curlCommandRE reports whether text invokes curl, limiting the ambiguous
+	// short -u option without depending on its position relative to quoted shell
+	// metacharacters.
+	curlCommandRE = regexp.MustCompile(
+		`(?i)(?:^|[;&|]\s*)["']?(?:(?:[a-z]:)?[^\s"';&|]*[/\\])?curl(?:\.exe|\.cmd|\.bat|\.com)?["']?(?:\s|$)`)
+	curlShortUserCredentialREs = []*regexp.Regexp{
+		regexp.MustCompile(
+			`(?i)([ \t]-u[ \t]*")([^":]*:)([^"]+)(")`),
+		regexp.MustCompile(
+			`(?i)([ \t]-u[ \t]*')([^':]*:)([^']+)(')`),
+		regexp.MustCompile(
+			`(?i)([ \t]-u[ \t]*)([^: \t\n\r;&|"'=]*:)([^ \t\n\r;&|"']+)()`),
+	}
 	codeStringLiteralRE = regexp.MustCompile(
 		`(?s)(?:"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)')`)
 	// codeNetworkCallRE matches direct and chained socket connects. The
@@ -2043,7 +2263,23 @@ func looksSensitive(text string) bool {
 	return secretValueRE.MatchString(text) ||
 		secretSplitValueRE.MatchString(text) ||
 		authorizationHeaderRE.MatchString(text) ||
+		urlUserInfoRE.MatchString(text) ||
+		hasUserCredentialOption(text) ||
 		(secretNameRE.MatchString(text) && strings.Contains(text, "="))
+}
+
+// hasUserCredentialOption reports whether text carries a user:password value in
+// a curl-style credential option.
+func hasUserCredentialOption(text string) bool {
+	if slices.ContainsFunc(curlUserCredentialREs, func(re *regexp.Regexp) bool {
+		return re.MatchString(text)
+	}) {
+		return true
+	}
+	return curlCommandRE.MatchString(text) && slices.ContainsFunc(
+		curlShortUserCredentialREs,
+		func(re *regexp.Regexp) bool { return re.MatchString(text) },
+	)
 }
 
 type redactor struct {
@@ -2055,6 +2291,17 @@ func newRedactor() *redactor { return &redactor{} }
 func (r *redactor) redact(s string) string {
 	orig := s
 	s = authorizationHeaderRE.ReplaceAllString(s, "${1}${2}[REDACTED_SECRET]")
+	s = urlUserInfoRE.ReplaceAllString(s, "${1}${2}[REDACTED_SECRET]@")
+	for _, re := range curlUserCredentialREs {
+		s = re.ReplaceAllString(s, "${1}${2}[REDACTED_SECRET]${4}")
+	}
+	if curlCommandRE.MatchString(s) {
+		for _, re := range curlShortUserCredentialREs {
+			s = re.ReplaceAllString(
+				s, "${1}${2}[REDACTED_SECRET]${4}",
+			)
+		}
+	}
 	s = secretValueRE.ReplaceAllString(s, "[REDACTED_SECRET]")
 	s = secretNameValueRE.ReplaceAllString(s, "$1=[REDACTED_SECRET]")
 	s = secretSplitValueRE.ReplaceAllString(s, "$1$2[REDACTED_SECRET]")

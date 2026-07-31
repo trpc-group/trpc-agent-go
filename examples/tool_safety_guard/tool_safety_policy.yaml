@@ -76,3 +76,5 @@ review_commands:
   - cargo install
 review_shell_pipelines: true
 deny_on_parse_error: true
+# Supported values: ask, deny, allow. The conservative default is ask.
+unknown_tool_action: ask
