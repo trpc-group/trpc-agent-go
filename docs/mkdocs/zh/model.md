@@ -588,6 +588,42 @@ model := openai.New("deepseek-v4-flash",
 )
 ```
 
+##### 自定义流式 Usage 聚合
+
+OpenAI-compatible adapter 默认会开启流式 usage 收集，并聚合服务方返回的
+usage chunks。大多数应用应保留这一默认行为。
+
+`WithAccumulateChunkTokenUsage` 只适合流式 usage 语义不标准的服务方，
+例如每个 chunk 都返回累计总量的服务。回调接收当前 chunk 之前已经累计的
+usage，以及当前 chunk 的 usage：
+
+```go
+func(current model.Usage, delta model.Usage) model.Usage
+```
+
+回调返回的 `model.Usage` 会整体替换累计结果。返回值中没有填写的字段，
+不会自动从 `current` 或 `delta` 补回，其中包括
+`PromptTokensDetails.CachedTokens`、
+`CompletionTokensDetails.ReasoningTokens` 等嵌套明细。
+
+如果服务方以最新 usage chunk 为准，应直接返回完整的 `delta`：
+
+```go
+llm := openai.New("your-model",
+    openai.WithAccumulateChunkTokenUsage(func(
+        _ model.Usage,
+        delta model.Usage,
+    ) model.Usage {
+        return delta
+    }),
+)
+```
+
+不要只重新构造顶层 token 计数，否则未填写的明细会被重置为零，可能出现
+服务方已经返回非零 `cached_tokens`，但最终
+`model.Response.Usage` 中仍为零的现象。如果服务方遵循标准 OpenAI 流式
+usage 语义，应删除该 option，使用默认聚合器。
+
 ##### 通过回调动态修改请求体
 
 `WithChatRequestCallback` 接收 `*openai.ChatCompletionNewParams` 指针，

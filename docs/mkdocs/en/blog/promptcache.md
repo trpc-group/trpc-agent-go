@@ -379,6 +379,38 @@ Telemetry also splits token types:
 - `input_cache_creation`
 - `output`
 
+#### Troubleshooting Streaming Usage
+
+For streaming requests, OpenAI-compatible providers commonly send usage in a
+final usage-only chunk. tRPC-Agent-Go consumes that chunk and attaches the
+accumulated usage to the final `model.Response`.
+
+If the raw stream contains a nonzero `cached_tokens` value but the final
+response reports zero, check whether the model was configured with
+`openai.WithAccumulateChunkTokenUsage`. The callback's return value replaces
+the complete accumulated `model.Usage`; returning only `PromptTokens`,
+`CompletionTokens`, and `TotalTokens` discards
+`PromptTokensDetails.CachedTokens`.
+
+Most applications should use the default accumulator. If a nonstandard
+provider requires "latest chunk wins" semantics, preserve every usage field by
+returning the complete delta:
+
+```go
+openai.WithAccumulateChunkTokenUsage(func(
+    _ model.Usage,
+    delta model.Usage,
+) model.Usage {
+    return delta
+})
+```
+
+When `Stream` is true, the OpenAI-compatible adapter requests usage
+automatically. Provider-specific request inspection can still be useful to
+confirm that the final usage chunk reaches the client, but adding another
+`stream_options.include_usage` field does not restore details discarded by a
+custom accumulator.
+
 A simple aggregate view is:
 
 ```text

@@ -592,6 +592,47 @@ model := openai.New("deepseek-v4-flash",
 )
 ```
 
+##### Custom Streaming Usage Aggregation
+
+The OpenAI-compatible adapter enables streaming usage collection and
+accumulates the provider's usage chunks by default. Most applications should
+keep this default.
+
+`WithAccumulateChunkTokenUsage` is intended for providers with nonstandard
+streaming usage semantics, such as a provider that reports cumulative totals
+in every chunk. Its callback receives the usage accumulated before the current
+chunk and the current chunk's usage:
+
+```go
+func(current model.Usage, delta model.Usage) model.Usage
+```
+
+The returned `model.Usage` replaces the complete accumulated usage value.
+Fields omitted from the returned value are not copied from `current` or
+`delta`. This includes nested details such as
+`PromptTokensDetails.CachedTokens` and
+`CompletionTokensDetails.ReasoningTokens`.
+
+For a provider where the latest usage chunk is authoritative, return the
+complete `delta` value:
+
+```go
+llm := openai.New("your-model",
+    openai.WithAccumulateChunkTokenUsage(func(
+        _ model.Usage,
+        delta model.Usage,
+    ) model.Usage {
+        return delta
+    }),
+)
+```
+
+Avoid rebuilding only the top-level token counts. Doing so resets omitted
+details to zero, so a provider can return a nonzero `cached_tokens` value while
+the final `model.Response.Usage` reports zero. If the provider follows standard
+OpenAI streaming usage semantics, remove this option and use the default
+accumulator.
+
 ##### Dynamically Modifying Request Body via Callback
 
 `WithChatRequestCallback` receives a `*openai.ChatCompletionNewParams` pointer,
