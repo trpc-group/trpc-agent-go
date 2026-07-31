@@ -8,6 +8,7 @@ package replaytest
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -683,4 +684,503 @@ func TestRunSpec_CreateSessionStateIsReadable(t *testing.T) {
 		t.Errorf("session:lang = %q, want %q", string(v), "en")
 	}
 	_ = storedState // used for diagnostic
+}
+
+// ---------------------------------------------------------------------------
+// isSessionWhat / isMemoryWhat — full coverage
+// ---------------------------------------------------------------------------
+
+func TestIsSessionWhat_AllValues(t *testing.T) {
+	sessionWhats := []string{"session_full", "events", "state", "summary", "tracks"}
+	for _, w := range sessionWhats {
+		if !isSessionWhat(w) {
+			t.Errorf("isSessionWhat(%q) should be true", w)
+		}
+	}
+
+	nonSession := []string{"memories", "memory_search", "unknown", ""}
+	for _, w := range nonSession {
+		if isSessionWhat(w) {
+			t.Errorf("isSessionWhat(%q) should be false", w)
+		}
+	}
+}
+
+func TestIsMemoryWhat_AllValues(t *testing.T) {
+	memoryWhats := []string{"memories", "memory_search"}
+	for _, w := range memoryWhats {
+		if !isMemoryWhat(w) {
+			t.Errorf("isMemoryWhat(%q) should be true", w)
+		}
+	}
+
+	nonMemory := []string{"session_full", "events", "state", "unknown", ""}
+	for _, w := range nonMemory {
+		if isMemoryWhat(w) {
+			t.Errorf("isMemoryWhat(%q) should be false", w)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// RunSpec — inconsistent memory_search queries
+// ---------------------------------------------------------------------------
+
+func TestRunSpec_InconsistentSearchQueries(t *testing.T) {
+	origSession := sessionFactories
+	sessionFactories = map[string]SessionFactory{}
+	defer func() { sessionFactories = origSession }()
+	origMemory := memoryFactories
+	memoryFactories = map[string]MemoryFactory{}
+	defer func() { memoryFactories = origMemory }()
+
+	RegisterSessionFactory("sess", func(ctx context.Context, dbURL string) (session.Service, error) {
+		return sessinmemory.NewSessionService(), nil
+	})
+	RegisterMemoryFactory("mem_a", func(ctx context.Context, dbURL string) (memory.Service, error) {
+		return meminmemory.NewMemoryService(), nil
+	})
+	RegisterMemoryFactory("mem_b", func(ctx context.Context, dbURL string) (memory.Service, error) {
+		return meminmemory.NewMemoryService(), nil
+	})
+
+	spec := &Spec{
+		Name:        "test-inconsistent-query",
+		Description: "verify inconsistent queries are rejected",
+		Tags:        []string{"lightweight"},
+		Backends:    BackendConfig{Session: []string{"sess"}, Memory: []string{"mem_a", "mem_b"}},
+		Setup:       SetupSpec{AppName: "app", UserID: "u1", SessionID: "s1"},
+		Operations: []Operation{
+			{Op: "create_session", Backend: "session", Params: json.RawMessage(`{}`)},
+			{Op: "add_memory", Backend: "memory", Params: json.RawMessage(`{"memory":"test"}`)},
+		},
+		Verifies: []VerifySpec{
+			{What: "memory_search", Params: json.RawMessage(`{"query":"q1"}`)},
+			{What: "memory_search", Params: json.RawMessage(`{"query":"q2"}`)},
+		},
+	}
+
+	_, err := RunSpec(context.Background(), spec, "")
+	if err == nil {
+		t.Fatal("RunSpec should fail with inconsistent memory_search queries")
+	}
+	if !strings.Contains(err.Error(), "inconsistent") {
+		t.Errorf("expected 'inconsistent' in error, got: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// RunSpec — no active backends
+// ---------------------------------------------------------------------------
+
+func TestRunSpec_NoActiveBackends_ReturnsError(t *testing.T) {
+	origSession := sessionFactories
+	sessionFactories = map[string]SessionFactory{}
+	defer func() { sessionFactories = origSession }()
+	origMemory := memoryFactories
+	memoryFactories = map[string]MemoryFactory{}
+	defer func() { memoryFactories = origMemory }()
+
+	RegisterSessionFactory("sess", func(ctx context.Context, dbURL string) (session.Service, error) {
+		return nil, errUnavailable("session offline")
+	})
+	RegisterMemoryFactory("mem", func(ctx context.Context, dbURL string) (memory.Service, error) {
+		return nil, errUnavailable("memory offline")
+	})
+
+	spec := &Spec{
+		Name:        "test-no-backends",
+		Description: "all backends unavailable",
+		Tags:        []string{"lightweight"},
+		Backends:    BackendConfig{Session: []string{"sess"}, Memory: []string{"mem"}},
+		Setup:       SetupSpec{AppName: "app", UserID: "u1", SessionID: "s1"},
+		Operations:  []Operation{{Op: "create_session", Backend: "session", Params: json.RawMessage(`{}`)}},
+		Verifies:    []VerifySpec{{What: "session_full"}},
+	}
+
+	_, err := RunSpec(context.Background(), spec, "")
+	if err == nil {
+		t.Fatal("RunSpec should fail when no backends are available")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// RunSpec — memory verifications with single active backend
+// ---------------------------------------------------------------------------
+
+func TestRunSpec_MemoryVerificationsSingleBackend_ProducesSkip(t *testing.T) {
+	origSession := sessionFactories
+	sessionFactories = map[string]SessionFactory{}
+	defer func() { sessionFactories = origSession }()
+	origMemory := memoryFactories
+	memoryFactories = map[string]MemoryFactory{}
+	defer func() { memoryFactories = origMemory }()
+
+	RegisterSessionFactory("sess", func(ctx context.Context, dbURL string) (session.Service, error) {
+		return sessinmemory.NewSessionService(), nil
+	})
+	RegisterMemoryFactory("mem_only", func(ctx context.Context, dbURL string) (memory.Service, error) {
+		return meminmemory.NewMemoryService(), nil
+	})
+
+	spec := &Spec{
+		Name:        "test-single-memory",
+		Description: "single memory backend produces skip",
+		Tags:        []string{"lightweight"},
+		Backends:    BackendConfig{Session: []string{"sess"}, Memory: []string{"mem_only"}},
+		Setup:       SetupSpec{AppName: "app", UserID: "u1", SessionID: "s1"},
+		Operations: []Operation{
+			{Op: "create_session", Backend: "session", Params: json.RawMessage(`{}`)},
+			{Op: "add_memory", Backend: "memory", Params: json.RawMessage(`{"memory":"test"}`)},
+		},
+		Verifies: []VerifySpec{
+			{What: "memories"},
+			{What: "memory_search"},
+		},
+	}
+
+	report, err := RunSpec(context.Background(), spec, "")
+	if err != nil {
+		t.Fatalf("RunSpec: %v", err)
+	}
+
+	memorySkips := 0
+	for _, v := range report.Verifications {
+		if v.What == "memories" || v.What == "memory_search" {
+			if v.Status == StatusSkip {
+				memorySkips++
+			}
+		}
+	}
+	if memorySkips == 0 {
+		t.Error("expected skip results for memory verifications with single backend")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// RunSpecs — multiple specs
+// ---------------------------------------------------------------------------
+
+func TestRunSpecs_MultipleSpecs(t *testing.T) {
+	origSession := sessionFactories
+	sessionFactories = map[string]SessionFactory{}
+	defer func() { sessionFactories = origSession }()
+	origMemory := memoryFactories
+	memoryFactories = map[string]MemoryFactory{}
+	defer func() { memoryFactories = origMemory }()
+
+	RegisterSessionFactory("sess", func(ctx context.Context, dbURL string) (session.Service, error) {
+		return sessinmemory.NewSessionService(), nil
+	})
+	RegisterMemoryFactory("mem", func(ctx context.Context, dbURL string) (memory.Service, error) {
+		return meminmemory.NewMemoryService(), nil
+	})
+
+	spec1 := &Spec{
+		Name:        "spec-1",
+		Description: "first spec",
+		Tags:        []string{"lightweight"},
+		Backends:    BackendConfig{Session: []string{"sess"}, Memory: []string{"mem"}},
+		Setup:       SetupSpec{AppName: "app", UserID: "u1", SessionID: "s_rs1"},
+		Operations:  []Operation{{Op: "create_session", Backend: "session", Params: json.RawMessage(`{}`)}},
+		Verifies:    []VerifySpec{{What: "session_full"}},
+	}
+	spec2 := &Spec{
+		Name:        "spec-2",
+		Description: "second spec",
+		Tags:        []string{"lightweight"},
+		Backends:    BackendConfig{Session: []string{"sess"}, Memory: []string{"mem"}},
+		Setup:       SetupSpec{AppName: "app", UserID: "u2", SessionID: "s_rs2"},
+		Operations:  []Operation{{Op: "create_session", Backend: "session", Params: json.RawMessage(`{}`)}},
+		Verifies:    []VerifySpec{{What: "session_full"}},
+	}
+
+	reports, err := RunSpecs(context.Background(), []*Spec{spec1, spec2}, "")
+	if err != nil {
+		t.Fatalf("RunSpecs: %v", err)
+	}
+	if len(reports) != 2 {
+		t.Fatalf("expected 2 reports, got %d", len(reports))
+	}
+	if reports[0].SpecName != "spec-1" {
+		t.Errorf("report 0: expected 'spec-1', got %q", reports[0].SpecName)
+	}
+	if reports[1].SpecName != "spec-2" {
+		t.Errorf("report 1: expected 'spec-2', got %q", reports[1].SpecName)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// RunSpecs — error propagation on second spec
+// ---------------------------------------------------------------------------
+
+func TestRunSpecs_ErrorOnSecondSpec(t *testing.T) {
+	origSession := sessionFactories
+	sessionFactories = map[string]SessionFactory{}
+	defer func() { sessionFactories = origSession }()
+	origMemory := memoryFactories
+	memoryFactories = map[string]MemoryFactory{}
+	defer func() { memoryFactories = origMemory }()
+
+	RegisterSessionFactory("sess", func(ctx context.Context, dbURL string) (session.Service, error) {
+		return sessinmemory.NewSessionService(), nil
+	})
+	RegisterMemoryFactory("mem", func(ctx context.Context, dbURL string) (memory.Service, error) {
+		return meminmemory.NewMemoryService(), nil
+	})
+
+	spec1 := &Spec{
+		Name:        "good-spec",
+		Description: "first spec passes",
+		Tags:        []string{"lightweight"},
+		Backends:    BackendConfig{Session: []string{"sess"}, Memory: []string{"mem"}},
+		Setup:       SetupSpec{AppName: "app", UserID: "u1", SessionID: "s1"},
+		Operations:  []Operation{{Op: "create_session", Backend: "session", Params: json.RawMessage(`{}`)}},
+		Verifies:    []VerifySpec{{What: "session_full"}},
+	}
+	spec2 := &Spec{
+		Name:        "bad-spec",
+		Description: "second spec has inconsistent queries",
+		Tags:        []string{"lightweight"},
+		Backends:    BackendConfig{Session: []string{"sess"}, Memory: []string{"mem"}},
+		Setup:       SetupSpec{AppName: "app", UserID: "u1", SessionID: "s_bad"},
+		Operations:  []Operation{{Op: "create_session", Backend: "session", Params: json.RawMessage(`{}`)}},
+		Verifies: []VerifySpec{
+			{What: "memory_search", Params: json.RawMessage(`{"query":"a"}`)},
+			{What: "memory_search", Params: json.RawMessage(`{"query":"b"}`)},
+		},
+	}
+
+	reports, err := RunSpecs(context.Background(), []*Spec{spec1, spec2}, "")
+	if err == nil {
+		t.Fatal("RunSpecs should return an error when second spec fails")
+	}
+	if len(reports) != 1 {
+		t.Errorf("expected 1 report (first spec), got %d", len(reports))
+	}
+	if reports[0].SpecName != "good-spec" {
+		t.Errorf("expected 'good-spec' report, got %q", reports[0].SpecName)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// WriteCombinedReport
+// ---------------------------------------------------------------------------
+
+func TestWriteCombinedReport_Success(t *testing.T) {
+	reports := []*DiffReport{
+		{
+			SpecName: "spec-1",
+			Verifications: []VerificationResult{
+				{What: "events", Status: StatusPass},
+				{What: "state", Status: StatusPass},
+			},
+		},
+		{
+			SpecName: "spec-2",
+			Verifications: []VerificationResult{
+				{What: "events", Status: StatusFail, Diffs: []DiffResult{{Path: "$.events[0].author", Kind: DiffValueMismatch}}},
+			},
+		},
+	}
+	for _, r := range reports {
+		r.Finalize()
+	}
+
+	tmpDir := t.TempDir()
+	path := tmpDir + "/combined_report.json"
+
+	if err := WriteCombinedReport(reports, path); err != nil {
+		t.Fatalf("WriteCombinedReport: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+
+	var combined struct {
+		Reports []DiffReport `json:"reports"`
+		Summary struct {
+			TotalSpecs  int `json:"total_specs"`
+			TotalPassed int `json:"total_passed"`
+			TotalFailed int `json:"total_failed"`
+			TotalDiffs  int `json:"total_diffs"`
+		} `json:"summary"`
+	}
+	if err := json.Unmarshal(data, &combined); err != nil {
+		t.Fatalf("unmarshal combined report: %v", err)
+	}
+	if combined.Summary.TotalSpecs != 2 {
+		t.Errorf("TotalSpecs: expected 2, got %d", combined.Summary.TotalSpecs)
+	}
+	if combined.Summary.TotalPassed != 1 {
+		t.Errorf("TotalPassed: expected 1, got %d", combined.Summary.TotalPassed)
+	}
+	if combined.Summary.TotalFailed != 1 {
+		t.Errorf("TotalFailed: expected 1, got %d", combined.Summary.TotalFailed)
+	}
+	if combined.Summary.TotalDiffs != 1 {
+		t.Errorf("TotalDiffs: expected 1, got %d", combined.Summary.TotalDiffs)
+	}
+}
+
+func TestWriteCombinedReport_NilReportsNoError(t *testing.T) {
+	if err := WriteCombinedReport(nil, "/nonexistent/path/report.json"); err != nil {
+		t.Errorf("empty reports should not error, got: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// recordSingleBackendSkips — direct coverage
+// ---------------------------------------------------------------------------
+
+func TestRecordSingleBackendSkips_ProducesSkipResults(t *testing.T) {
+	report := NewDiffReport(&Spec{Name: "test"})
+	spec := &Spec{
+		Verifies: []VerifySpec{
+			{What: "session_full"},
+			{What: "events"},
+			{What: "memories"},
+		},
+	}
+	h := &Harness{
+		ActiveSessionBackends: []string{"sess_a"},
+		ActiveMemoryBackends:  []string{"mem_a"},
+	}
+
+	recordSingleBackendSkips(report, spec, h, "sess_a", "mem_a")
+	report.Finalize()
+
+	if len(report.Verifications) != 3 {
+		t.Fatalf("expected 3 skip verifications, got %d", len(report.Verifications))
+	}
+	for _, v := range report.Verifications {
+		if v.Status != StatusSkip {
+			t.Errorf("verification %s: expected skip, got %s", v.What, v.Status)
+		}
+	}
+}
+
+func TestRecordSingleBackendSkips_EnoughBackends_NoSkips(t *testing.T) {
+	report := NewDiffReport(&Spec{Name: "test"})
+	spec := &Spec{
+		Verifies: []VerifySpec{
+			{What: "session_full"},
+			{What: "memories"},
+		},
+	}
+	h := &Harness{
+		ActiveSessionBackends: []string{"sess_a", "sess_b"},
+		ActiveMemoryBackends:  []string{"mem_a", "mem_b"},
+	}
+
+	recordSingleBackendSkips(report, spec, h, "sess_a", "mem_a")
+
+	if len(report.Verifications) != 0 {
+		t.Errorf("expected 0 skip verifications, got %d", len(report.Verifications))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// RunSpec — tracks verification with two backends
+// ---------------------------------------------------------------------------
+
+func TestRunSpec_TracksVerificationWithTwoBackends(t *testing.T) {
+	origSession := sessionFactories
+	sessionFactories = map[string]SessionFactory{}
+	defer func() { sessionFactories = origSession }()
+	origMemory := memoryFactories
+	memoryFactories = map[string]MemoryFactory{}
+	defer func() { memoryFactories = origMemory }()
+
+	RegisterSessionFactory("sess_a", func(ctx context.Context, dbURL string) (session.Service, error) {
+		return sessinmemory.NewSessionService(), nil
+	})
+	RegisterSessionFactory("sess_b", func(ctx context.Context, dbURL string) (session.Service, error) {
+		return sessinmemory.NewSessionService(), nil
+	})
+	RegisterMemoryFactory("mem", func(ctx context.Context, dbURL string) (memory.Service, error) {
+		return meminmemory.NewMemoryService(), nil
+	})
+
+	spec := &Spec{
+		Name:        "test-tracks-two-backends",
+		Description: "verify tracks with two backends",
+		Tags:        []string{"lightweight"},
+		Backends:    BackendConfig{Session: []string{"sess_a", "sess_b"}, Memory: []string{"mem"}},
+		Setup:       SetupSpec{AppName: "app", UserID: "u1", SessionID: "s_tracks"},
+		Operations: []Operation{
+			{Op: "create_session", Backend: "session", Params: json.RawMessage(`{}`)},
+			{Op: "append_track_event", Backend: "session", Params: json.RawMessage(`{"track":"mytrack","payload":"data"}`)},
+		},
+		Verifies: []VerifySpec{
+			{What: "tracks"},
+			{What: "session_full"},
+		},
+	}
+
+	report, err := RunSpec(context.Background(), spec, "")
+	if err != nil {
+		t.Fatalf("RunSpec: %v", err)
+	}
+
+	for _, v := range report.Verifications {
+		t.Logf("verification: what=%s status=%s ref=%s cmp=%s diffs=%d",
+			v.What, v.Status, v.ReferenceBackend, v.ComparedBackend, len(v.Diffs))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// populateSessionLocalization — nil session in snapshot
+// ---------------------------------------------------------------------------
+
+func TestPopulateSessionLocalization_NilSessionInSnapshot(t *testing.T) {
+	vr := &VerificationResult{}
+	snap := &SessionSnapshot{Session: nil}
+	populateSessionLocalization(vr, snap)
+
+	if len(vr.SummaryFilterKeys) != 0 || len(vr.TrackNames) != 0 {
+		t.Error("nil session should not populate any localization")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// filterDiffsByScope — unknown what tag
+// ---------------------------------------------------------------------------
+
+func TestFilterDiffsByScope_UnknownWhat(t *testing.T) {
+	diffs := []DiffResult{
+		{Path: "$.custom.field[0].value"},
+		{Path: "$.events[0].author"},
+	}
+	got := filterDiffsByScope(diffs, "custom")
+	// Unknown tags use "$.<what>" prefix matching.
+	if len(got) != 1 {
+		t.Errorf("unknown what tags filter by prefix, expected 1 diff, got %d", len(got))
+	}
+	if got[0].Path != "$.custom.field[0].value" {
+		t.Errorf("unexpected path: %s", got[0].Path)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// scopePrefix — verify mapping entries
+// ---------------------------------------------------------------------------
+
+func TestScopePrefix_Mapping(t *testing.T) {
+	expected := map[string]string{
+		"events":  "$.events",
+		"state":   "$.state",
+		"summary": "$.summaries",
+		"tracks":  "$.tracks",
+	}
+	for what, prefix := range expected {
+		if scopePrefix[what] != prefix {
+			t.Errorf("scopePrefix[%q]: expected %q, got %q", what, prefix, scopePrefix[what])
+		}
+	}
+	if _, ok := scopePrefix["session_full"]; ok {
+		t.Error("session_full should NOT be in scopePrefix map")
+	}
 }
