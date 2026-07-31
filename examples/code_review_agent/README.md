@@ -25,7 +25,9 @@ scripted model:
 go run . --runtime=fake --mode=agent --fixture=security --out=out
 ```
 
-Run the default container path when Docker is available:
+Run the default container path when Docker is available. The container runtime
+builds `examples/code_review_agent/Dockerfile`, which provides Go and
+`staticcheck` for the bundled checks:
 
 ```bash
 go run . --runtime=container --repo-path=/path/to/go/repository --out=out

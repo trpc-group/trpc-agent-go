@@ -134,6 +134,19 @@ func TestLocalRuntimeDoesNotFallbackToFake(t *testing.T) {
 	}
 }
 
+func TestContainerRuntimeDockerfileProvidesGoTooling(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "Dockerfile"))
+	if err != nil {
+		t.Fatalf("read Dockerfile: %v", err)
+	}
+	text := string(data)
+	for _, want := range []string{"FROM golang:", "go install honnef.co/go/tools/cmd/staticcheck@", "WORKDIR /work/repo"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("Dockerfile missing %q:\n%s", want, text)
+		}
+	}
+}
+
 func TestEarlyInputFailurePersistsReloadableFailedReport(t *testing.T) {
 	dir := t.TempDir()
 	db := filepath.Join(dir, "audit.db")
