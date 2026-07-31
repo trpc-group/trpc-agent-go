@@ -4466,13 +4466,18 @@ func TestContentRequestProcessor_getIncrementMessages_RestoresUserAcrossSummaryC
 			},
 		}
 	}
+	withAuthor := func(evt event.Event, author string) event.Event {
+		evt.Author = author
+		return evt
+	}
 
 	tests := []struct {
-		name     string
-		events   []event.Event
-		cutoff   summaryHistoryCutoff
-		wantRole []model.Role
-		wantText []string
+		name      string
+		events    []event.Event
+		cutoff    summaryHistoryCutoff
+		configure func(*agent.Invocation)
+		wantRole  []model.Role
+		wantText  []string
 	}{
 		{
 			name: "legacy timestamp restores latest user in split turn",
@@ -4585,6 +4590,66 @@ func TestContentRequestProcessor_getIncrementMessages_RestoresUserAcrossSummaryC
 			wantRole: []model.Role{model.RoleAssistant},
 			wantText: []string{"answer"},
 		},
+		{
+			name: "seed history user is not restored",
+			events: []event.Event{
+				messageEvent(
+					"seed-user",
+					"request-1",
+					"invocation-1",
+					baseTime,
+					model.NewUserMessage("seed question"),
+				),
+				messageEvent(
+					"assistant",
+					"request-1",
+					"invocation-1",
+					baseTime.Add(2*time.Second),
+					model.NewAssistantMessage("answer"),
+				),
+			},
+			cutoff: summaryHistoryCutoffFromTime(
+				baseTime.Add(time.Second),
+			),
+			configure: func(inv *agent.Invocation) {
+				messageorigin.MarkSeedHistory(inv, "seed-user")
+			},
+			wantRole: []model.Role{model.RoleAssistant},
+			wantText: []string{"answer"},
+		},
+		{
+			name: "foreign assistant does not trigger user restoration",
+			events: []event.Event{
+				withAuthor(
+					messageEvent(
+						"user",
+						"request-1",
+						"invocation-1",
+						baseTime,
+						model.NewUserMessage("question"),
+					),
+					"user",
+				),
+				withAuthor(
+					messageEvent(
+						"assistant",
+						"request-1",
+						"invocation-1",
+						baseTime.Add(2*time.Second),
+						model.NewAssistantMessage("answer"),
+					),
+					"other-agent",
+				),
+			},
+			cutoff: summaryHistoryCutoffFromTime(
+				baseTime.Add(time.Second),
+			),
+			configure: func(inv *agent.Invocation) {
+				inv.AgentName = "current-agent"
+			},
+			wantRole: []model.Role{model.RoleUser},
+			wantText: []string{"For context: [other-agent] said: answer"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -4592,6 +4657,9 @@ func TestContentRequestProcessor_getIncrementMessages_RestoresUserAcrossSummaryC
 			inv := agent.NewInvocation(
 				agent.WithInvocationSession(getSession(tt.events...)),
 			)
+			if tt.configure != nil {
+				tt.configure(inv)
+			}
 			p := NewContentRequestProcessor(WithAddSessionSummary(true))
 
 			messages := p.getIncrementMessagesAfterCutoff(

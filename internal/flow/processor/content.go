@@ -1547,6 +1547,8 @@ func (p *ContentRequestProcessor) coveredUserEventsBeforeCutoff(
 ) map[historyTurnKey]event.Event {
 	coveredUsers := make(map[historyTurnKey]event.Event)
 	tailStarted := make(map[historyTurnKey]struct{})
+	// Keep replacing each candidate until its retained tail begins, so only
+	// the final eligible pre-cutoff user event can be restored for that turn.
 	for i, evt := range events {
 		if !p.canMatchToolRound(evt, inv, filter) ||
 			messageorigin.IsSeedHistory(inv, evt.ID) {
