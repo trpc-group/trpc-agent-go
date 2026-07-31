@@ -33,7 +33,8 @@ type pipelineConfig struct {
 }
 
 func runReview(ctx context.Context, cfg pipelineConfig) (*reviewReport, error) {
-	started := time.Now().UTC()
+	started := time.Now()
+	createdAt := started.UTC()
 	diffData, source, err := loadDiff(ctx, cfg.DiffFile, cfg.RepoPath)
 	if err != nil {
 		return nil, err
@@ -76,7 +77,7 @@ func runReview(ctx context.Context, cfg pipelineConfig) (*reviewReport, error) {
 	status := reviewStatus(findings)
 	report := &reviewReport{
 		TaskID: taskID, Status: status, Mode: cfg.Mode, InputSource: filepath.ToSlash(source),
-		DiffSHA256: diffSHA, Skill: skill.Name, CreatedAt: started, Findings: findings,
+		DiffSHA256: diffSHA, Skill: skill.Name, CreatedAt: createdAt, Findings: findings,
 		Permission: permission, Sandbox: sandboxResult, Metrics: metrics,
 		Summary: reviewSummary(status, findings),
 	}

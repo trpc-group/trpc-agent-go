@@ -45,11 +45,24 @@ func TestDedupeFindingsUsesFileLineAndRule(t *testing.T) {
 }
 
 func TestRedactRemovesSecrets(t *testing.T) {
-	result, changed := redact(`api_key="sk-abcdefghijklmnopqrstuvwxyz" token=ghp_abcdefghijklmnopqrstuvwxyz AKIAABCDEFGHIJKLMNOP`)
-	require.True(t, changed)
-	require.NotContains(t, result, "abcdefghijklmnopqrstuvwxyz")
-	require.NotContains(t, result, "AKIAABCDEFGHIJKLMNOP")
-	require.Contains(t, result, "[REDACTED]")
+	tests := map[string]string{
+		"keyword":            "api_key=fixture-secret-1234",
+		"github token":       "ghp_abcdefghijklmnopqrstuvwxyz",
+		"openai-style token": "sk-abcdefghijklmnopqrstuvwxyz",
+		"aws access key":     "AKIAABCDEFGHIJKLMNOP",
+		"slack token":        "xoxb-1234567890abcdef",
+		"jwt":                "eyJabcdefghij.abcdefghijk.abcdefghijk",
+		"bearer token":       "Bearer abcdefghijklmnop",
+		"private key header": "-----BEGIN PRIVATE KEY-----",
+	}
+	for name, secret := range tests {
+		t.Run(name, func(t *testing.T) {
+			result, changed := redact(secret)
+			require.True(t, changed)
+			require.NotContains(t, result, secret)
+			require.Contains(t, result, "[REDACTED]")
+		})
+	}
 }
 
 func TestSecretFixtureNeverPersistsSecretMaterial(t *testing.T) {
@@ -62,7 +75,7 @@ func TestSecretFixtureNeverPersistsSecretMaterial(t *testing.T) {
 	for _, name := range []string{"review_report.json", "review_report.md", "review.db"} {
 		data, err := os.ReadFile(filepath.Join(output, name))
 		require.NoError(t, err)
-		require.NotContains(t, string(data), "sk-abcdefghijklmnopqrstuvwxyz012345")
+		require.NotContains(t, string(data), "FIXTURE_SECRET_00000000000000000000000000")
 	}
 }
 
@@ -95,6 +108,7 @@ func TestSandboxFailureDoesNotAbortReview(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "failed", report.Sandbox.Status)
 	require.Contains(t, ruleIDs(report.Findings), "SAN001")
+	require.Contains(t, markdownReviewReport(report), "`(pipeline)`")
 }
 
 func TestFullReviewWritesReportsAndDatabase(t *testing.T) {
@@ -149,8 +163,21 @@ func TestPublicFixturesRunDeterministically(t *testing.T) {
 			if test.ruleID != "" {
 				require.Contains(t, ruleIDs(report.Findings), test.ruleID)
 			}
+			if test.name == "duplicate-findings.diff" {
+				require.Equal(t, 1, countRuleID(report.Findings, "SEC002"))
+			}
 		})
 	}
+}
+
+func countRuleID(findings []finding, ruleID string) int {
+	count := 0
+	for _, finding := range findings {
+		if finding.RuleID == ruleID {
+			count++
+		}
+	}
+	return count
 }
 
 func ruleIDs(findings []finding) []string {

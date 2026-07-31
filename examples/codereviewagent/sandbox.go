@@ -74,14 +74,21 @@ func (s managedSandbox) Run(ctx context.Context, taskID string, command []string
 		Limits: codeexecutor.ResourceLimits{CPUPercent: 100, MemoryMB: 256, MaxPIDs: 64},
 	})
 	output := strings.TrimSpace(strings.Join([]string{result.Stdout, result.Stderr}, "\n"))
+	status := "failed"
+	if runErr == nil && result.ExitCode == 0 && !result.TimedOut {
+		status = "passed"
+	}
 	run := sandboxRun{
-		Status: "passed", Command: append([]string(nil), command...), ExitCode: result.ExitCode,
+		Status: status, Command: append([]string(nil), command...), ExitCode: result.ExitCode,
 		TimedOut: result.TimedOut, Output: output, DurationMS: time.Since(started).Milliseconds(),
 		OutputCapped: len(result.Stdout) >= sandboxOutputLimit || len(result.Stderr) >= sandboxOutputLimit,
 	}
 	if runErr != nil {
-		run.Status = "failed"
 		run.Error = runErr.Error()
+	} else if result.TimedOut {
+		run.Error = "sandbox command timed out"
+	} else if result.ExitCode != 0 {
+		run.Error = fmt.Sprintf("sandbox command exited with code %d", result.ExitCode)
 	}
 	return run
 }

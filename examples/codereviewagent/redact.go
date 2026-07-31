@@ -10,27 +10,28 @@ package main
 
 import "regexp"
 
-var secretPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)(api[_-]?key|token|password|secret|client[_-]?secret|access[_-]?token|access[_-]?key)(\s*[:=]\s*)["']?[^\s"']{8,}`),
-	regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9]{20,}\b`),
-	regexp.MustCompile(`\bsk-[A-Za-z0-9_-]{20,}\b`),
-	regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`),
-	regexp.MustCompile(`\bxox[baprs]-[A-Za-z0-9-]{10,}\b`),
-	regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b`),
-	regexp.MustCompile(`(?i)Bearer\s+[A-Za-z0-9._~-]{12,}`),
-	regexp.MustCompile(`-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----`),
+var secretPatterns = []struct {
+	pattern     *regexp.Regexp
+	replacement string
+}{
+	{regexp.MustCompile(`(?i)(api[_-]?key|token|password|secret|client[_-]?secret|access[_-]?token|access[_-]?key)(\s*[:=]\s*)["']?[^\s"']{8,}`), `${1}${2}[REDACTED]`},
+	{regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9]{20,}\b`), `[REDACTED]`},
+	{regexp.MustCompile(`\bsk-[A-Za-z0-9_-]{20,}\b`), `[REDACTED]`},
+	{regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`), `[REDACTED]`},
+	{regexp.MustCompile(`\bxox[baprs]-[A-Za-z0-9-]{10,}\b`), `[REDACTED]`},
+	{regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b`), `[REDACTED]`},
+	{regexp.MustCompile(`(?i)Bearer\s+[A-Za-z0-9._~-]{12,}`), `[REDACTED]`},
+	// Header-only detection is intentional: the analyzer passes one changed diff
+	// line at a time, so private-key body lines are not matched or flagged alone.
+	{regexp.MustCompile(`-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----`), `[REDACTED]`},
 }
 
 func redact(text string) (string, bool) {
 	redacted := text
 	changed := false
-	for index, pattern := range secretPatterns {
+	for _, entry := range secretPatterns {
 		before := redacted
-		if index == 0 {
-			redacted = pattern.ReplaceAllString(redacted, `${1}${2}[REDACTED]`)
-		} else {
-			redacted = pattern.ReplaceAllString(redacted, `[REDACTED]`)
-		}
+		redacted = entry.pattern.ReplaceAllString(redacted, entry.replacement)
 		changed = changed || before != redacted
 	}
 	return redacted, changed

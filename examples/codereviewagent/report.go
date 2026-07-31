@@ -67,7 +67,11 @@ func markdownReviewReport(report *reviewReport) string {
 	}
 	for _, finding := range report.Findings {
 		fmt.Fprintf(&output, "### %s `%s` — %s\n\n", finding.Severity, finding.RuleID, finding.Category)
-		fmt.Fprintf(&output, "`%s:%d` · confidence %.2f · %s\n\n", finding.File, finding.StartLine, finding.Confidence, finding.Status)
+		location := fmt.Sprintf("%s:%d", finding.File, finding.StartLine)
+		if finding.File == "" {
+			location = "(pipeline)"
+		}
+		fmt.Fprintf(&output, "`%s` · confidence %.2f · %s\n\n", location, finding.Confidence, finding.Status)
 		fmt.Fprintf(&output, "%s\n\nSuggested action: %s\n\n", finding.Message, finding.Suggestion)
 	}
 	fmt.Fprintln(&output, "## Governance")

@@ -41,7 +41,7 @@ func analyze(lines []changedLine) []finding {
 		}
 		if strings.Contains(lower, "go func(") || strings.Contains(lower, "go func ") {
 			findings = append(findings, newFinding(line, "P1", "goroutine_lifecycle", 0.88, "CON001",
-				"a goroutine is started without an observable cancellation or join contract",
+				"a goroutine is started; verify that its cancellation and join contracts are explicit",
 				"bind the goroutine to context cancellation and wait for shutdown"))
 		}
 		if strings.Contains(lower, "context.background()") {
@@ -51,12 +51,12 @@ func analyze(lines []changedLine) []finding {
 		}
 		if strings.Contains(lower, "sql.open(") {
 			findings = append(findings, newFinding(line, "P1", "database_lifecycle", 0.91, "DB001",
-				"a database handle is created without visible ownership or cleanup",
+				"a database handle is created; verify explicit ownership and shutdown",
 				"establish connection ownership, validate with PingContext, and close on shutdown"))
 		}
 		if strings.Contains(lower, "http.get(") || strings.Contains(lower, "os.open(") {
 			findings = append(findings, newFinding(line, "P1", "resource_lifecycle", 0.84, "RES001",
-				"a closeable resource is created without visible cleanup",
+				"a closeable resource is created; verify that cleanup covers every path",
 				"check the error and defer Close immediately after successful acquisition"))
 		}
 	}
