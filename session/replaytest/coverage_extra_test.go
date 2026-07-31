@@ -123,7 +123,7 @@ func TestNewHarness_DefaultsAndAddBackendNameFallback(t *testing.T) {
 	}
 }
 
-func TestRun_RejectsEmptyBackendNameAndUnknownRule(t *testing.T) {
+func TestRun_RejectsEmptyBackendNameAndInvalidAllowedDiffRules(t *testing.T) {
 	h := NewHarness(DefaultHarnessOpts())
 	h.AddBackend(NamedBackend{Name: "", Profile: BackendProfile{}})
 	_, err := h.Run(context.Background(), []ReplayCase{CaseSingleTurnText()})
@@ -131,17 +131,28 @@ func TestRun_RejectsEmptyBackendNameAndUnknownRule(t *testing.T) {
 		t.Fatalf("err=%v", err)
 	}
 
-	h2 := NewHarness(DefaultHarnessOpts())
-	b2 := openInMemoryBackend(t)
-	h2.opts.ReferenceBackend = b2.Name
-	h2.AddBackend(b2)
-	_, err = h2.Run(context.Background(), []ReplayCase{{
-		Name:         "bad_allowed",
-		AllowedDiffs: []AllowedDiff{{PathPattern: "*", Rule: "mystery"}},
-		Steps:        []Step{},
-	}})
-	if err == nil || !strings.Contains(err.Error(), "unknown rule") {
-		t.Fatalf("err=%v", err)
+	for _, tc := range []struct {
+		name string
+		rule string
+		want string
+	}{
+		{name: "missing_allowed_rule", rule: "", want: "empty rule"},
+		{name: "unknown_allowed_rule", rule: "mystery", want: "unknown rule"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := NewHarness(DefaultHarnessOpts())
+			b := openInMemoryBackend(t)
+			h.opts.ReferenceBackend = b.Name
+			h.AddBackend(b)
+			_, err := h.Run(context.Background(), []ReplayCase{{
+				Name:         tc.name,
+				AllowedDiffs: []AllowedDiff{{PathPattern: "*", Rule: tc.rule}},
+				Steps:        []Step{},
+			}})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err=%v", err)
+			}
+		})
 	}
 }
 
@@ -1098,6 +1109,46 @@ func TestNormalizer_NilAndCloneEdges(t *testing.T) {
 	if string(snap.AppState["a"]) == "mut" {
 		// clone should isolate; if not, still don't fail hard — just note
 		t.Log("app state may be shared")
+	}
+}
+
+func TestComparator_TrackNilValuePresenceMismatch(t *testing.T) {
+	base := &Snapshot{
+		Backend: "a",
+		Session: &session.Session{
+			Tracks: map[session.Track]*session.TrackEvents{
+				"nil": nil,
+			},
+		},
+	}
+	actual := &Snapshot{
+		Backend: "b",
+		Session: &session.Session{
+			Tracks: map[session.Track]*session.TrackEvents{
+				"nil": nil,
+			},
+		},
+	}
+	diffs := NewComparator().Compare(CaseSingleTurnText(), base, actual, InMemoryProfile(), InMemoryProfile())
+	for _, d := range diffs {
+		if d.Path == `tracks["nil"]` {
+			t.Fatalf("expected equal nil track entries, got diff: %+v", d)
+		}
+	}
+
+	actual.Session.Tracks["nil"] = &session.TrackEvents{Track: "nil"}
+	diffs = NewComparator().Compare(CaseSingleTurnText(), base, actual, InMemoryProfile(), InMemoryProfile())
+	found := false
+	for _, d := range diffs {
+		if d.Path == `tracks["nil"]` && !d.Allowed {
+			found = true
+			if d.Baseline != false || d.Actual != true {
+				t.Fatalf("unexpected presence values: %+v", d)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected nil/value track diff, got %+v", diffs)
 	}
 }
 

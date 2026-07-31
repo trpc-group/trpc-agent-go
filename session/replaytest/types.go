@@ -107,7 +107,7 @@ type Report struct {
 // AllowedDiff describes a path-scoped accepted difference.
 type AllowedDiff struct {
 	PathPattern string  `json:"path_pattern"`
-	Rule        string  `json:"rule"` // ignore | within_delta | not_empty | same_type
+	Rule        string  `json:"rule"` // required: ignore | within_delta | not_empty | same_type
 	Delta       float64 `json:"delta,omitempty"`
 	Reason      string  `json:"reason,omitempty"`
 }

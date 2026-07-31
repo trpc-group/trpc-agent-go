@@ -249,8 +249,15 @@ func compareOneTrack(
 			Explanation: explanation,
 		}, tc.Name, backendA, backendB, sessionID))
 	}
-	if !okA || !okB || ta == nil || tb == nil {
+	if !okA || !okB {
 		add(fmt.Sprintf("tracks[%q]", name), okA, okB, "track presence mismatch")
+		return diffs
+	}
+	if ta == nil && tb == nil {
+		return diffs
+	}
+	if ta == nil || tb == nil {
+		add(fmt.Sprintf("tracks[%q]", name), ta != nil, tb != nil, "track value presence mismatch")
 		return diffs
 	}
 	// Ownership on the container (map key alone is not enough).
