@@ -202,7 +202,7 @@ func (p *Pipeline) Run(ctx context.Context, input types.ReviewInput) (
 			RulesEvaluated:    rulesEvaluated,
 		},
 	}
-	report.FillSummary(rpt, dedupedFindings, len(fileChanges))
+	report.FillSummary(rpt, len(fileChanges))
 
 	// 11. Write report files.
 	if err := p.writeReports(rpt); err != nil {

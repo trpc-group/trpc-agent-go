@@ -211,6 +211,14 @@ func Parse(diffText string) ([]FileChange, error) {
 
 		// Diff body
 		if currentHunk != nil {
+			// Git emits "\ No newline at end of file" inside the
+			// hunk body. This marker is not a content line: it must
+			// not be stored in Hunk.Lines (rules would scan it as
+			// source code) and must not increment newLineNum (every
+			// subsequent added line would be offset by 1).
+			if strings.HasPrefix(line, `\ `) {
+				continue
+			}
 			currentHunk.Lines = append(currentHunk.Lines, line)
 			switch {
 			case strings.HasPrefix(line, "+"):

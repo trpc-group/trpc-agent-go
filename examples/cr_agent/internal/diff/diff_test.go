@@ -48,10 +48,13 @@ index 1234567..abcdefg 100644
 		t.Errorf("DeletedLines = %d, want 0", fc.DeletedLines)
 	}
 	if len(fc.AddedLineNumbers) != 2 {
-		t.Errorf("len(AddedLineNumbers) = %d, want 2", len(fc.AddedLineNumbers))
+		t.Fatalf("len(AddedLineNumbers) = %d, want 2", len(fc.AddedLineNumbers))
 	}
 	if fc.AddedLineNumbers[0] != 12 {
 		t.Errorf("AddedLineNumbers[0] = %d, want 12", fc.AddedLineNumbers[0])
+	}
+	if fc.AddedLineNumbers[1] != 13 {
+		t.Errorf("AddedLineNumbers[1] = %d, want 13", fc.AddedLineNumbers[1])
 	}
 }
 

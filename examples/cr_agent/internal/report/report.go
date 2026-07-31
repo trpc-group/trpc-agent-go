@@ -194,11 +194,11 @@ func groupBySeverity(findings []types.Finding) map[types.Severity][]types.Findin
 }
 
 // FillSummary populates the Summary field of a ReviewReport from
-// the findings list. It is used by the pipeline to compute the
-// roll-up counts after deduplication.
-func FillSummary(report *types.ReviewReport, findings []types.Finding, totalFiles int) {
+// the report's own Findings list. It is used by the pipeline to
+// compute the roll-up counts after deduplication.
+func FillSummary(report *types.ReviewReport, totalFiles int) {
 	report.Summary.TotalFiles = totalFiles
-	for _, f := range findings {
+	for _, f := range report.Findings {
 		switch f.Severity {
 		case types.SeverityCritical:
 			report.Summary.Critical++
