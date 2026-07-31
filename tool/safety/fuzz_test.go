@@ -181,7 +181,7 @@ func FuzzScannerProperties(f *testing.F) {
 		if _, parseErr := shellsafe.Parse(input); parseErr != nil &&
 			report.Decision == DecisionAllow {
 			t.Fatalf(
-				"unparseable command was silently allowed: %q",
+				"unparsable command was silently allowed: %q",
 				input,
 			)
 		}

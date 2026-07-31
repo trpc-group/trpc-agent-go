@@ -390,6 +390,11 @@ func gitArgumentsUnsafe(args []string) bool {
 			strings.HasPrefix(lower, "--exec-path=") ||
 			lower == "--config-env" ||
 			strings.HasPrefix(lower, "--config-env=") ||
+			lower == "--upload-pack" ||
+			strings.HasPrefix(lower, "--upload-pack=") ||
+			lower == "--receive-pack" ||
+			strings.HasPrefix(lower, "--receive-pack=") ||
+			(lower == "-u" && gitCloneOrFetch(args)) ||
 			strings.HasPrefix(lower, "ext::") {
 			return true
 		}
@@ -413,6 +418,16 @@ func gitArgumentsUnsafe(args []string) bool {
 				strings.EqualFold(args[i+1], "foreach") {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+func gitCloneOrFetch(args []string) bool {
+	for _, arg := range args {
+		switch strings.ToLower(arg) {
+		case "clone", "fetch":
+			return true
 		}
 	}
 	return false
@@ -459,10 +474,75 @@ func awkArgumentsUnsafe(args []string) bool {
 			strings.Contains(script, "<")) {
 		return true
 	}
-	return (strings.Contains(script, "print") ||
-		strings.Contains(script, "printf")) &&
-		(strings.Contains(script, "|") ||
-			strings.Contains(script, ">"))
+	return awkOutputHasTarget(script)
+}
+
+func awkOutputHasTarget(script string) bool {
+	for offset := 0; offset < len(script); offset++ {
+		if !awkPrintKeywordAt(script, offset) {
+			continue
+		}
+		if awkPrintStatementRedirects(script[offset+len("print"):]) {
+			return true
+		}
+	}
+	return false
+}
+
+func awkPrintKeywordAt(script string, offset int) bool {
+	const keyword = "print"
+	if !strings.HasPrefix(script[offset:], keyword) {
+		return false
+	}
+	if offset > 0 && isWordByte(script[offset-1]) {
+		return false
+	}
+	end := offset + len(keyword)
+	return end == len(script) || !isWordByte(script[end])
+}
+
+func awkPrintStatementRedirects(statement string) bool {
+	depth := 0
+	inString := false
+	escaped := false
+	for _, char := range statement {
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if char == '\\' {
+				escaped = true
+			} else if char == '"' {
+				inString = false
+			}
+			continue
+		}
+		switch char {
+		case '"':
+			inString = true
+		case '(', '[':
+			depth++
+		case ')', ']':
+			if depth > 0 {
+				depth--
+			}
+		case ';', '\n', '}':
+			if depth == 0 {
+				return false
+			}
+		case '|', '>':
+			if depth == 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isWordByte(value byte) bool {
+	return value == '_' || value >= 'a' && value <= 'z' ||
+		value >= 'A' && value <= 'Z' || value >= '0' && value <= '9'
 }
 
 func sedArgumentsExecuteCommand(args []string) bool {

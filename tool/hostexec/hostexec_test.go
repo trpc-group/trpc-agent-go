@@ -129,6 +129,25 @@ func TestNewToolSet_ForegroundEnforcesMaxOutputBytes(t *testing.T) {
 	require.Equal(t, true, res["truncated"])
 }
 
+func TestNewToolSet_RejectsExcessiveMaxOutputBytes(t *testing.T) {
+	set, err := NewToolSet()
+	require.NoError(t, err)
+	defer set.Close()
+
+	execTool, _, _, _ := toolSetTools(t, set)
+	_, err = execTool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"command":          "echo hello",
+			"max_output_bytes": maxOutputBytes + 1,
+		}),
+	)
+	require.EqualError(
+		t, err,
+		fmt.Sprintf("max_output_bytes must not exceed %d", maxOutputBytes),
+	)
+}
+
 func TestNewToolSet_BaseDirAndRelativeWorkdir(t *testing.T) {
 	if _, _, err := shellSpec(); err != nil {
 		t.Skip(err.Error())

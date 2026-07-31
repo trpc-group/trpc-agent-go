@@ -400,8 +400,8 @@ from an untyped map:
 
 | Tool | Safety backend | Safety-relevant input contract | Execution and remaining boundary |
 | --- | --- | --- | --- |
-| `workspace_exec` | `workspaceexec` | `command`, `cwd`, `env`, timeout aliases, `max_output_bytes`, `background`, and `tty`/`pty` | Runs through a configured `CodeExecutor` workspace. `cwd` is workspace-relative. Output retention defaults to 4 MiB and reports `truncated: true` when exceeded, but actual filesystem, network, environment, session, and other resource isolation depend on that executor. |
-| `exec_command` | `hostexec` | `command`, `workdir`, `env`, `yield-time_ms`/`yieldMs`, timeout aliases, `max_output_bytes`, `background`, and `tty`/`pty` | Runs in a host shell. Output retention defaults to 4 MiB for foreground and session execution. PTY, background or yielded sessions, privilege wrappers, inherited host access, and process cleanup remain high-risk surfaces. It is not a sandbox. |
+| `workspace_exec` | `workspaceexec` | `command`, `cwd`, `env`, timeout aliases, `max_output_bytes`, `background`, and `tty`/`pty` | Runs through a configured `CodeExecutor` workspace. `cwd` is workspace-relative. Output retention remains unlimited when `max_output_bytes` is omitted or zero for compatibility; positive limits report `truncated: true` when exceeded. Actual filesystem, network, environment, session, and other resource isolation depend on that executor. |
+| `exec_command` | `hostexec` | `command`, `workdir`, `env`, `yield_time_ms`/`yieldMs`, timeout aliases, `max_output_bytes`, `background`, and `tty`/`pty` | Runs in a host shell. Output retention defaults to 4 MiB for foreground and session execution and rejects limits above 64 MiB. PTY, background or yielded sessions, privilege wrappers, inherited host access, and process cleanup remain high-risk surfaces. It is not a sandbox. |
 | `execute_code` | `codeexec` | required `code_blocks`, accepted as an array, one object, or double-encoded JSON | Delegates to local, container, e2b, or another `CodeExecutor`. Shell blocks use shellsafe. Python and JavaScript/TypeScript use conservative import, alias, literal, risky-API and constant-loop analysis; Go uses its parser and AST plus import and function-alias resolution. Dynamic filesystem or network targets, unresolved risky capabilities, risky wildcard/dot imports, syntax failures and unsupported languages require review. This is not complete data-flow analysis. |
 
 `workspace_exec.cwd` and `exec_command.workdir` are different contracts and must
@@ -424,11 +424,11 @@ configuration such as aliases, external diff commands, SSH commands, helpers,
 filters, hooks, or included config. Git object paths are separately checked for
 sensitive files.
 
-Host extraction also mirrors executor defaults. `yield-time_ms` takes precedence
+Host extraction also mirrors executor defaults. `yield_time_ms` takes precedence
 over `yieldMs`; omission or a negative value uses `10000` ms. `timeout_sec`
 takes precedence over `timeoutSec`; omission or a non-positive value uses
 `1800` seconds. Consequently, a bounded non-PTY foreground request should set
-`yield-time_ms: 0` and an explicit timeout within policy. A positive effective
+`yield_time_ms: 0` and an explicit timeout within policy. A positive effective
 yield may return a running session and produces `SAFE-HOSTEXEC-SESSION`.
 
 Host execution unconditionally rejects explicit overrides that can change shell

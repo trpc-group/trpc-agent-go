@@ -390,6 +390,20 @@ func constantConditionTrue(condition string) bool {
 func (s *Scanner) scanJavaScriptCode(code string) []Finding {
 	var findings []Finding
 	constants := foldedStringConstants(code)
+	aliases := javaScriptAliases(code)
+	findings = append(findings, javaScriptDestructureFindings(code)...)
+	extendCodeAliases(code, aliases)
+	findings = append(
+		findings,
+		s.scanJavaScriptCalls(code, constants, aliases)...,
+	)
+	if javaScriptHasTruthyConstantLoop(code) {
+		findings = append(findings, codeInfiniteLoopFinding())
+	}
+	return findings
+}
+
+func javaScriptAliases(code string) map[string]string {
 	aliases := make(map[string]string)
 	for _, match := range jsRequireAliasPattern.FindAllStringSubmatch(
 		code,
@@ -419,19 +433,32 @@ func (s *Scanner) scanJavaScriptCode(code string) []Finding {
 	) {
 		aliases[match[1]] = "fs.rmSync"
 	}
+	return aliases
+}
+
+func javaScriptDestructureFindings(code string) []Finding {
 	if jsFSDeleteDestructurePattern.MatchString(code) ||
 		jsFSDeleteNamedImportPattern.MatchString(code) {
-		findings = append(findings, codeDeleteFinding())
-	} else if jsRiskyDestructurePattern.MatchString(code) {
-		findings = append(findings, finding(
+		return []Finding{codeDeleteFinding()}
+	}
+	if jsRiskyDestructurePattern.MatchString(code) {
+		return []Finding{finding(
 			ruleCodePolicy,
 			DecisionAsk,
 			RiskHigh,
 			"JavaScript code destructures a capability-bearing module that cannot be classified completely",
 			"Use a direct qualified API call or require human review.",
-		))
+		)}
 	}
-	extendCodeAliases(code, aliases)
+	return nil
+}
+
+func (s *Scanner) scanJavaScriptCalls(
+	code string,
+	constants []string,
+	aliases map[string]string,
+) []Finding {
+	var findings []Finding
 	for _, match := range codeCallNamePattern.FindAllStringSubmatchIndex(code, -1) {
 		if len(match) < 4 {
 			continue
@@ -442,57 +469,66 @@ func (s *Scanner) scanJavaScriptCode(code string) []Finding {
 		))
 		directConstant, hasDirectConstant :=
 			readConcatenatedStringAt(code, match[1])
-		switch {
-		case strings.HasPrefix(name, "fs.") &&
-			(strings.Contains(name, "rm") ||
-				strings.Contains(name, "unlink") ||
-				strings.Contains(name, "rmdir")):
-			findings = append(findings, codeDeleteFinding())
-		case strings.HasPrefix(name, "fs.") &&
-			(strings.Contains(name, "readfile") ||
-				strings.HasSuffix(name, ".open") ||
-				strings.HasSuffix(name, ".opensync")):
-			if !hasDirectConstant {
-				findings = append(findings, finding(
-					ruleCodePolicy,
-					DecisionAsk,
-					RiskHigh,
-					"code reads a path that cannot be statically verified",
-					"Use a literal non-sensitive path or require human review for dynamic file access.",
-				))
-			} else if path := matchSensitivePath(
-				directConstant,
-				s.policy.ForbiddenPaths,
-			); path != "" {
-				findings = append(
-					findings,
-					codeSensitivePathFinding(path),
-				)
-			}
-		case name == "fetch" ||
-			strings.HasPrefix(name, "axios.") ||
-			strings.HasPrefix(name, "http.") ||
-			strings.HasPrefix(name, "https.") ||
-			strings.HasPrefix(name, "net."):
-			findings = append(
-				findings,
-				s.codeNetworkFindings(
-					constants,
-				)...,
-			)
-		case strings.HasPrefix(name, "child_process."):
-			findings = append(findings, codeProcessFinding())
-		case javaScriptRiskyUnresolvedCall(name):
-			findings = append(findings, codeUnresolvedCapabilityFinding(
-				"JavaScript",
-				name,
-			))
-		}
-	}
-	if javaScriptHasTruthyConstantLoop(code) {
-		findings = append(findings, codeInfiniteLoopFinding())
+		findings = append(findings, s.javaScriptCallFindings(
+			name,
+			directConstant,
+			hasDirectConstant,
+			constants,
+		)...)
 	}
 	return findings
+}
+
+func (s *Scanner) javaScriptCallFindings(
+	name string,
+	directConstant string,
+	hasDirectConstant bool,
+	constants []string,
+) []Finding {
+	switch {
+	case strings.HasPrefix(name, "fs.") &&
+		(strings.Contains(name, "rm") ||
+			strings.Contains(name, "unlink") ||
+			strings.Contains(name, "rmdir")):
+		return []Finding{codeDeleteFinding()}
+	case strings.HasPrefix(name, "fs.") &&
+		(strings.Contains(name, "readfile") ||
+			strings.HasSuffix(name, ".open") ||
+			strings.HasSuffix(name, ".opensync")):
+		return s.javaScriptReadFindings(directConstant, hasDirectConstant)
+	case name == "fetch" ||
+		strings.HasPrefix(name, "axios.") ||
+		strings.HasPrefix(name, "http.") ||
+		strings.HasPrefix(name, "https.") ||
+		strings.HasPrefix(name, "net."):
+		return s.codeNetworkFindings(constants)
+	case strings.HasPrefix(name, "child_process."):
+		return []Finding{codeProcessFinding()}
+	case javaScriptRiskyUnresolvedCall(name):
+		return []Finding{codeUnresolvedCapabilityFinding("JavaScript", name)}
+	default:
+		return nil
+	}
+}
+
+func (s *Scanner) javaScriptReadFindings(
+	directConstant string,
+	hasDirectConstant bool,
+) []Finding {
+	if !hasDirectConstant {
+		return []Finding{finding(
+			ruleCodePolicy,
+			DecisionAsk,
+			RiskHigh,
+			"code reads a path that cannot be statically verified",
+			"Use a literal non-sensitive path or require human review for dynamic file access.",
+		)}
+	}
+	path := matchSensitivePath(directConstant, s.policy.ForbiddenPaths)
+	if path == "" {
+		return nil
+	}
+	return []Finding{codeSensitivePathFinding(path)}
 }
 
 func javaScriptHasTruthyConstantLoop(code string) bool {
@@ -786,16 +822,26 @@ func evalGoString(expr ast.Expr) (string, bool) {
 	}
 }
 
+const (
+	maxFoldedConstants   = 512
+	maxFoldedConstantLen = 4 << 10
+)
+
 func foldedStringConstants(code string) []string {
 	var constants []string
 	for offset := 0; offset < len(code); {
+		if len(constants) >= maxFoldedConstants {
+			return constants
+		}
 		value, next, ok := readCodeString(code, offset)
 		if !ok {
 			offset++
 			continue
 		}
 		combined := value
-		constants = append(constants, value)
+		if len(value) <= maxFoldedConstantLen {
+			constants = append(constants, value)
+		}
 		cursor := next
 		for {
 			cursor = skipCodeSpace(code, cursor)
@@ -808,6 +854,10 @@ func foldedStringConstants(code string) []string {
 				cursor,
 			)
 			if !nextOK {
+				break
+			}
+			if len(combined)+len(nextValue) > maxFoldedConstantLen ||
+				len(constants) >= maxFoldedConstants {
 				break
 			}
 			combined += nextValue

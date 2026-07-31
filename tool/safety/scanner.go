@@ -283,6 +283,15 @@ func (s *Scanner) scanFindings(req ScanRequest) ([]Finding, bool) {
 		findings = append(findings, shellFindings...)
 	}
 	findings = append(findings, s.scanCommandPatterns(command, req, pipe)...)
+	findings = append(findings, s.executionEnvironmentFindings(req)...)
+	envFindings, envRedacted := s.scanEnv(req.Env)
+	findings = append(findings, envFindings...)
+	findings = append(findings, s.executionResourceFindings(req)...)
+	return findings, envRedacted
+}
+
+func (s *Scanner) executionEnvironmentFindings(req ScanRequest) []Finding {
+	var findings []Finding
 	if req.Backend == BackendHostExec && hasEnvKey(req.Env, "PATH") {
 		findings = append(findings, finding(
 			ruleHostPath,
@@ -316,8 +325,11 @@ func (s *Scanner) scanFindings(req ScanRequest) ([]Finding, bool) {
 			"Remove the proxy override or use an explicitly reviewed allowlisted proxy.",
 		))
 	}
-	envFindings, envRedacted := s.scanEnv(req.Env)
-	findings = append(findings, envFindings...)
+	return findings
+}
+
+func (s *Scanner) executionResourceFindings(req ScanRequest) []Finding {
+	var findings []Finding
 	if req.Backend == BackendHostExec && req.TTY {
 		findings = append(findings, finding(
 			ruleHostPTY,
@@ -336,10 +348,10 @@ func (s *Scanner) scanFindings(req ScanRequest) ([]Finding, bool) {
 			DecisionAsk,
 			RiskMedium,
 			fmt.Sprintf(
-				"hostexec may return a running session after yield_time-ms=%d",
+				"hostexec may return a running session after yield_time_ms=%d",
 				req.YieldTimeMS,
 			),
-			"Use yield-time-ms=0 with a bounded timeout, or require human review and track session cleanup.",
+			"Use yield_time_ms=0 with a bounded timeout, or require human review and track session cleanup.",
 		))
 	}
 	if req.Background {
@@ -367,7 +379,7 @@ func (s *Scanner) scanFindings(req ScanRequest) ([]Finding, bool) {
 			ruleOutput,
 			DecisionAsk,
 			RiskMedium,
-			fmt.Sprintf("max_output_bytes=%d exceeds max_output_bytes=%d", req.MaxOutputBytes, s.policy.MaxOutputBytes),
+			fmt.Sprintf("requested output limit %d bytes exceeds max_output_bytes=%d", req.MaxOutputBytes, s.policy.MaxOutputBytes),
 			"Limit output size or write large artifacts to bounded files.",
 		))
 	}
@@ -384,7 +396,7 @@ func (s *Scanner) scanFindings(req ScanRequest) ([]Finding, bool) {
 			"Lower the tool result limit or require human review.",
 		))
 	}
-	return findings, envRedacted
+	return findings
 }
 
 func (s *Scanner) scanShell(command string) (*shellsafe.Pipeline, []Finding) {
@@ -433,7 +445,22 @@ func (s *Scanner) scanCommandPatterns(
 	pipe *shellsafe.Pipeline,
 ) []Finding {
 	lower := strings.ToLower(command)
-	findings := make([]Finding, 0, 4)
+	var findings []Finding
+	findings = append(findings, s.codeAndDeleteFindings(command, lower, req, pipe)...)
+	findings = append(findings, s.accessFindings(command, req, pipe)...)
+	findings = append(findings, s.mutationFindings(lower, req, pipe)...)
+	findings = append(findings, s.patternResourceFindings(command, lower, req, pipe)...)
+	findings = append(findings, inlineSecretFindings(req, pipe)...)
+	return findings
+}
+
+func (s *Scanner) codeAndDeleteFindings(
+	command string,
+	lower string,
+	req ScanRequest,
+	pipe *shellsafe.Pipeline,
+) []Finding {
+	var findings []Finding
 	if req.Backend == BackendCodeExec && len(req.codeBlocks) > 0 {
 		findings = append(findings, s.scanCodeBlocks(req.codeBlocks)...)
 	}
@@ -458,6 +485,15 @@ func (s *Scanner) scanCommandPatterns(
 			"Use a directly supported, auditable operation instead of launching a nested command interpreter.",
 		))
 	}
+	return findings
+}
+
+func (s *Scanner) accessFindings(
+	command string,
+	req ScanRequest,
+	pipe *shellsafe.Pipeline,
+) []Finding {
+	var findings []Finding
 	if path := firstSensitivePath(req, pipe, s.policy.ForbiddenPaths); path != "" {
 		findings = append(findings, finding(
 			ruleSensitivePath,
@@ -484,6 +520,15 @@ func (s *Scanner) scanCommandPatterns(
 			"Use an explicit allowlisted destination or require human review of the referenced configuration.",
 		))
 	}
+	return findings
+}
+
+func (s *Scanner) mutationFindings(
+	lower string,
+	req ScanRequest,
+	pipe *shellsafe.Pipeline,
+) []Finding {
+	var findings []Finding
 	dependencyMutation := ""
 	if pipe != nil || !req.validatedCode {
 		dependencyMutation = firstDependencyInstall(
@@ -510,6 +555,16 @@ func (s *Scanner) scanCommandPatterns(
 			"Review the affected files and preserve required work before approving the command.",
 		))
 	}
+	return findings
+}
+
+func (s *Scanner) patternResourceFindings(
+	command string,
+	lower string,
+	req ScanRequest,
+	pipe *shellsafe.Pipeline,
+) []Finding {
+	var findings []Finding
 	sleepSeconds, unboundedSleep := sleepDurationSeconds(lower, pipe)
 	if sleepSeconds > 0 && s.policy.MaxTimeoutSec > 0 &&
 		sleepSeconds > int64(s.policy.MaxTimeoutSec) {
@@ -559,19 +614,26 @@ func (s *Scanner) scanCommandPatterns(
 			"Use a bounded loop with an explicit iteration limit, deadline, or cancellation condition.",
 		))
 	}
+	return findings
+}
+
+func inlineSecretFindings(
+	req ScanRequest,
+	pipe *shellsafe.Pipeline,
+) []Finding {
 	_, textSecret := redactString(req.Command)
 	if textSecret ||
 		commandTextHasCredentialOption(req.Command) ||
 		commandHasInlineCredential(pipe) {
-		findings = append(findings, finding(
+		return []Finding{finding(
 			ruleSecret,
 			DecisionDeny,
 			RiskCritical,
 			"command appears to contain an inline secret",
 			"Move secrets out of command text and use approved secret injection.",
-		))
+		)}
 	}
-	return findings
+	return nil
 }
 
 func commandHasInlineCredential(
@@ -824,7 +886,7 @@ func (s *Scanner) scanEnv(env map[string]string) ([]Finding, bool) {
 	for _, key := range keys {
 		value := env[key]
 
-		// allowlist 为空时不启用 key 限制，但 secret 扫描仍会继续。
+		// An empty allowlist disables key restrictions, but secret scanning continues.
 		if len(allowed) > 0 {
 			if _, ok := allowed[strings.ToUpper(key)]; !ok {
 				findings = append(findings, finding(
@@ -899,13 +961,18 @@ func firstDisallowedProxyEnvHost(
 	env map[string]string,
 	allowlist []string,
 ) (string, string) {
-	for key, value := range env {
+	keys := make([]string, 0, len(env))
+	for key := range env {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
 		switch strings.ToUpper(strings.TrimSpace(key)) {
 		case "ALL_PROXY", "HTTP_PROXY", "HTTPS_PROXY", "FTP_PROXY":
 		default:
 			continue
 		}
-		host := networkTargetHost(strings.TrimSpace(value), true)
+		host := networkTargetHost(strings.TrimSpace(env[key]), true)
 		if plausibleNetworkHost(host) && !hostAllowed(host, allowlist) {
 			return key, host
 		}
@@ -1057,10 +1124,14 @@ func isDangerousDelete(lower string, pipe *shellsafe.Pipeline) bool {
 		var targets []string
 		for _, arg := range argv[1:] {
 			if strings.HasPrefix(arg, "-") {
-				recursive = recursive || strings.Contains(arg, "r") ||
-					arg == "--recursive"
-				force = force || strings.Contains(arg, "f") ||
-					arg == "--force"
+				if strings.HasPrefix(arg, "--") {
+					recursive = recursive || arg == "--recursive"
+					force = force || arg == "--force"
+					continue
+				}
+				short := strings.TrimPrefix(arg, "-")
+				recursive = recursive || strings.ContainsAny(short, "rR")
+				force = force || strings.Contains(short, "f")
 				continue
 			}
 			targets = append(targets, arg)
@@ -1965,8 +2036,8 @@ func firstDependencyInstall(
 		return ""
 	}
 
-	// Parse 失败时没有可信 argv。这里保留保守的文本扫描，
-	// 避免复杂 shell 语法把依赖安装行为藏起来。
+	// A parse failure leaves no trusted argv, so retain conservative text
+	// scanning to prevent complex shell syntax from hiding dependency changes.
 	checks := dependencyMutationPhrases()
 	for _, check := range configured {
 		if len(strings.Fields(check)) >= 2 {
@@ -1999,46 +2070,46 @@ func dependencyMutation(executable string, args []string) string {
 		return ""
 	}
 	subcommand := args[0]
+	if executable == "go" {
+		return goDependencyMutation(args)
+	}
+	var mutations []string
 	switch executable {
-	case "go":
-		switch subcommand {
-		case "get", "install":
-			return executable + " " + subcommand
-		case "run":
-			for _, arg := range args[1:] {
-				if strings.Contains(arg, "@") &&
-					goModuleHost(arg) != "" {
-					return "go run remote module"
-				}
-			}
-		case "env":
-			for _, arg := range args[1:] {
-				if arg == "-w" || strings.HasPrefix(arg, "-w=") {
-					return "go env -w"
-				}
-			}
-		}
 	case "npm":
-		if stringInSet(subcommand,
-			"install", "i", "add", "ci", "update", "uninstall", "remove") {
-			return executable + " " + subcommand
+		mutations = []string{
+			"install", "i", "add", "ci", "update", "uninstall", "remove",
 		}
 	case "pnpm", "yarn":
-		if stringInSet(subcommand,
-			"install", "add", "update", "upgrade", "remove") {
-			return executable + " " + subcommand
-		}
+		mutations = []string{"install", "add", "update", "upgrade", "remove"}
 	case "pip", "pip3":
-		if stringInSet(subcommand, "install", "uninstall") {
-			return executable + " " + subcommand
-		}
+		mutations = []string{"install", "uninstall"}
 	case "cargo", "gem":
-		if stringInSet(subcommand, "install", "uninstall", "update") {
-			return executable + " " + subcommand
-		}
+		mutations = []string{"install", "uninstall", "update"}
 	case "apt", "apt-get", "brew":
-		if stringInSet(subcommand, "install", "remove", "upgrade", "update") {
-			return executable + " " + subcommand
+		mutations = []string{"install", "remove", "upgrade", "update"}
+	}
+	if stringInSet(subcommand, mutations...) {
+		return executable + " " + subcommand
+	}
+	return ""
+}
+
+func goDependencyMutation(args []string) string {
+	subcommand := args[0]
+	switch subcommand {
+	case "get", "install":
+		return "go " + subcommand
+	case "run":
+		for _, arg := range args[1:] {
+			if strings.Contains(arg, "@") && goModuleHost(arg) != "" {
+				return "go run remote module"
+			}
+		}
+	case "env":
+		for _, arg := range args[1:] {
+			if arg == "-w" || strings.HasPrefix(arg, "-w=") {
+				return "go env -w"
+			}
 		}
 	}
 	return ""
@@ -2424,7 +2495,7 @@ func scanHostExec(toolName string, args []byte) (ScanRequest, error) {
 		Command       string            `json:"command"`
 		Workdir       string            `json:"workdir"`
 		Env           map[string]string `json:"env"`
-		YieldTimeMS   *int              `json:"yield-time_ms"`
+		YieldTimeMS   *int              `json:"yield_time_ms"`
 		YieldMs       *int              `json:"yieldMs"`
 		TimeoutSec    *int              `json:"timeout_sec"`
 		TimeoutSecOld *int              `json:"timeoutSec"`

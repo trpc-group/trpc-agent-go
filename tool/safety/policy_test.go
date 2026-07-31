@@ -39,11 +39,11 @@ func TestDefaultPolicySafetyDefaults(t *testing.T) {
 	}
 
 	if policy.UnknownToolAction != DecisionAsk {
-		t.Errorf("UnknowToolAction = %q,want %q", policy.UnknownToolAction, DecisionAsk)
+		t.Errorf("UnknownToolAction = %q,want %q", policy.UnknownToolAction, DecisionAsk)
 	}
 
 	if policy.PipelineAction != DecisionAsk {
-		t.Errorf("PipeLlineAction = %q,want %q", policy.PipelineAction, DecisionAsk)
+		t.Errorf("PipelineAction = %q,want %q", policy.PipelineAction, DecisionAsk)
 	}
 
 	wantDeniedCommands := []string{
@@ -66,7 +66,7 @@ func TestDefaultPolicySafetyDefaults(t *testing.T) {
 	}
 
 	if err := policy.Validate(); err != nil {
-		t.Fatalf("DefaultPolicy().Vaildate() error = %v", err)
+		t.Fatalf("DefaultPolicy().Validate() error = %v", err)
 	}
 }
 

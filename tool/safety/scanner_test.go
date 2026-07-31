@@ -23,6 +23,41 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
+func TestScannerDoesNotTreatUnrelatedLongRMOptionsAsRecursive(t *testing.T) {
+	scanner := NewScanner(DefaultPolicy())
+	for _, command := range []string{
+		"rm --dir --force build",
+		"rm --no-preserve-root build",
+	} {
+		report, err := scanner.Scan(context.Background(), ScanRequest{
+			ToolName: "workspace_exec",
+			Command:  command,
+			Backend:  BackendWorkspaceExec,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, finding := range report.Findings {
+			if finding.RuleID == ruleDangerousDelete {
+				t.Fatalf("%q produced dangerous-delete finding: %+v", command, finding)
+			}
+		}
+	}
+}
+
+func TestFoldedStringConstantsAreBounded(t *testing.T) {
+	code := strings.Repeat("\"a\"+", 5000) + "\"a\""
+	constants := foldedStringConstants(code)
+	if len(constants) > maxFoldedConstants {
+		t.Fatalf("constants = %d, want <= %d", len(constants), maxFoldedConstants)
+	}
+	for _, value := range constants {
+		if len(value) > maxFoldedConstantLen {
+			t.Fatalf("constant length = %d, want <= %d", len(value), maxFoldedConstantLen)
+		}
+	}
+}
+
 func TestScannerRequiredScenarios(t *testing.T) {
 	base := DefaultPolicy()
 	base.AllowedCommands = []string{
@@ -1055,7 +1090,7 @@ func TestScanRequestFromArgsHostExec(t *testing.T) {
 				"env": {
 					"SAFE_VAR": "1"
 				},
-				"yield-time_ms": 250,
+				"yield_time_ms": 250,
 				"timeout_sec": 45,
 				"background": true,
 				"tty": true,
@@ -1086,7 +1121,7 @@ func TestScanRequestFromArgsHostExec(t *testing.T) {
 			name: "canonical timeout wins over legacy alias",
 			args: `{
 				"command": "sleep 45",
-				"yield-time_ms": 0,
+				"yield_time_ms": 0,
 				"yieldMs": 10000,
 				"timeout_sec": 45,
 				"timeoutSec": 900
@@ -1210,7 +1245,7 @@ func TestScanRequestFromArgsHostExecMatchesSessionExecutionDefaults(
 			name: "explicit zero yield stays foreground",
 			args: `{
 				"command": "echo ready",
-				"yield-time_ms": 0,
+				"yield_time_ms": 0,
 				"timeout_sec": 300
 			}`,
 			wantDecision: DecisionAllow,
@@ -1220,7 +1255,7 @@ func TestScanRequestFromArgsHostExecMatchesSessionExecutionDefaults(
 			name: "positive yield can return a running session",
 			args: `{
 				"command": "echo ready",
-				"yield-time_ms": 100,
+				"yield_time_ms": 100,
 				"timeout_sec": 300
 			}`,
 			wantDecision: DecisionAsk,
@@ -1239,7 +1274,7 @@ func TestScanRequestFromArgsHostExecMatchesSessionExecutionDefaults(
 			name: "omitted timeout uses thirty minute execution default",
 			args: `{
 				"command": "echo ready",
-				"yield-time_ms": 0
+				"yield_time_ms": 0
 			}`,
 			wantDecision: DecisionAsk,
 			wantRule:     ruleTimeout,
@@ -1248,7 +1283,7 @@ func TestScanRequestFromArgsHostExecMatchesSessionExecutionDefaults(
 			name: "canonical zero yield wins over legacy alias",
 			args: `{
 				"command": "echo ready",
-				"yield-time_ms": 0,
+				"yield_time_ms": 0,
 				"yieldMs": 10000,
 				"timeout_sec": 300
 			}`,
@@ -1259,7 +1294,7 @@ func TestScanRequestFromArgsHostExecMatchesSessionExecutionDefaults(
 			name: "canonical positive yield wins over legacy alias",
 			args: `{
 				"command": "echo ready",
-				"yield-time_ms": 10000,
+				"yield_time_ms": 10000,
 				"yieldMs": 0,
 				"timeout_sec": 300
 			}`,
@@ -1348,7 +1383,7 @@ func TestScanRequestFromArgsHostExecRejectsInvalidArgs(
 			name: "invalid yield type",
 			args: `{
 				"command": "echo hello",
-				"yield-time_ms": "100"
+				"yield_time_ms": "100"
 			}`,
 			wantErr: "extract hostexec arguments:",
 		},
@@ -2079,8 +2114,8 @@ func TestRedactingAfterToolCallbackRemovesSecretsFromToolOutput(
 		)
 	}
 
-	// RedactValue 的契约是不修改原始 Tool result，
-	// callback 通过 CustomResult 返回一个脱敏副本。
+	// RedactValue must not mutate the original tool result; the callback
+	// returns a redacted copy through CustomResult.
 	originalEncoded, err := json.Marshal(originalOutput)
 	if err != nil {
 		t.Fatalf(

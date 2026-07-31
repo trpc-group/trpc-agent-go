@@ -34,8 +34,9 @@ func (p *PermissionPolicy) CheckToolPermission(
 	ctx context.Context,
 	req *tool.PermissionRequest,
 ) (tool.PermissionDecision, error) {
+	scanner := permissionScanner(p)
 	if req == nil {
-		report, err := p.scanner.scanArgumentFailure(ctx, "")
+		report, err := scanner.scanArgumentFailure(ctx, "")
 		if err != nil {
 			return tool.DenyPermission(
 				"safety scan failed: " + err.Error(),
@@ -45,7 +46,7 @@ func (p *PermissionPolicy) CheckToolPermission(
 	}
 	scanReq, err := ScanRequestFromArgs(req.ToolName, req.Arguments)
 	if err != nil {
-		report, auditErr := p.scanner.scanArgumentFailure(
+		report, auditErr := scanner.scanArgumentFailure(
 			ctx,
 			req.ToolName,
 		)
@@ -58,7 +59,7 @@ func (p *PermissionPolicy) CheckToolPermission(
 	}
 	scanReq.ToolCallID = req.ToolCallID
 	scanReq.Metadata = req.Metadata
-	report, err := p.scanner.Scan(ctx, scanReq)
+	report, err := scanner.Scan(ctx, scanReq)
 	if err != nil {
 		return tool.DenyPermission("safety scan failed: " + err.Error()), nil
 	}
@@ -71,6 +72,13 @@ func (p *PermissionPolicy) CheckToolPermission(
 	default:
 		return tool.AllowPermission(), nil
 	}
+}
+
+func permissionScanner(p *PermissionPolicy) *Scanner {
+	if p == nil || p.scanner == nil {
+		return NewScanner(DefaultPolicy())
+	}
+	return p.scanner
 }
 
 func reportReason(report ScanReport) string {

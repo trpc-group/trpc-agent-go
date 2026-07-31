@@ -50,8 +50,10 @@ const (
 )
 
 // SpanAttributePolicy controls production-side span attribute behavior.
-// The zero value omits tool arguments and results while preserving capture
-// defaults for other attributes.
+// The zero value omits AttrToolCallArguments and AttrToolCallResult while
+// preserving capture defaults for other attributes. Earlier releases captured
+// both tool payload attributes by default. Consumers that require that legacy
+// behavior must explicitly configure AttributeCapture for both keys.
 type SpanAttributePolicy struct {
 	rules []attributeRule
 }

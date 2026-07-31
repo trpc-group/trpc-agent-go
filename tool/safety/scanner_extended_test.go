@@ -86,11 +86,11 @@ func TestLoadPolicyFileStrictValidation(t *testing.T) {
 			}
 			_, err := LoadPolicyFile(path)
 			if err == nil {
-				t.Fatalf("LoadPolicyFile() succeeded for invaild policy")
+				t.Fatalf("LoadPolicyFile() succeeded for invalid policy")
 			}
 			if !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf(
-					"LoadPolicyFile() err = %q,want it to contain %q",
+					"LoadPolicyFile() err = %q, want it to contain %q",
 					err,
 					tc.wantErr,
 				)
@@ -983,6 +983,17 @@ func TestPermissionPolicyFailsClosed(t *testing.T) {
 		if decision.Action != tool.PermissionActionDeny {
 			t.Fatalf("decision = %+v, want deny", decision)
 		}
+	}
+}
+
+func TestPermissionPolicyZeroValueFailsClosed(t *testing.T) {
+	var policy PermissionPolicy
+	decision, err := policy.CheckToolPermission(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Action != tool.PermissionActionDeny {
+		t.Fatalf("decision = %+v, want deny", decision)
 	}
 }
 
@@ -2030,8 +2041,8 @@ func TestEnvSecretDetectionDoesNotDependOnAllowlist(t *testing.T) {
 	policy.AllowedCommands = []string{"echo"}
 	policy.DeniedCommands = nil
 
-	// 空 allowlist 表示本测试不检查 env key 是否获准，
-	// 但 secret value 检测仍然必须执行。
+	// A nil allowlist disables environment key checks, but secret value
+	// detection must still run.
 	policy.EnvAllowlist = nil
 
 	scanner := NewScanner(policy)
@@ -2185,6 +2196,23 @@ func TestEnvAllowlistAndSecretFindingsAggregate(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+func TestFirstDisallowedProxyEnvHostIsDeterministic(t *testing.T) {
+	env := map[string]string{
+		"HTTP_PROXY": "http://http-proxy.example",
+		"ALL_PROXY":  "http://all-proxy.example",
+	}
+	key, host := firstDisallowedProxyEnvHost(env, nil)
+	if key != "ALL_PROXY" || host != "all-proxy.example" {
+		t.Fatalf("proxy = %q/%q, want ALL_PROXY/all-proxy.example", key, host)
+	}
+	for i := 0; i < 100; i++ {
+		gotKey, gotHost := firstDisallowedProxyEnvHost(env, nil)
+		if gotKey != key || gotHost != host {
+			t.Fatalf("proxy changed on iteration %d: %q/%q", i, gotKey, gotHost)
+		}
 	}
 }
 

@@ -13,6 +13,7 @@ package outputlimit
 import (
 	"io"
 	"sync"
+	"unicode/utf8"
 )
 
 // Stream identifies one captured process output stream.
@@ -113,10 +114,25 @@ func (w streamWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// TruncateString retains at most max leading bytes from value.
+// TruncateString retains at most max leading bytes from value without
+// splitting a valid UTF-8 encoding.
 func TruncateString(value string, max int) (string, bool) {
-	if max <= 0 || len(value) <= max {
+	if max <= 0 {
 		return value, false
 	}
-	return value[:max], true
+	end := len(value)
+	if end > max {
+		end = max
+	}
+	if end == 0 || utf8.ValidString(value[:end]) {
+		return value[:end], end < len(value)
+	}
+	start := end - 1
+	for start > 0 && !utf8.RuneStart(value[start]) {
+		start--
+	}
+	if !utf8.FullRuneInString(value[start:end]) {
+		end = start
+	}
+	return value[:end], end < len(value)
 }

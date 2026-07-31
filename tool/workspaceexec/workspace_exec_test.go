@@ -80,7 +80,7 @@ func TestExecTool_EnforcesMaxOutputBytes(t *testing.T) {
 	args := execInput{
 		Command:        "printf 0123456789",
 		Timeout:        timeoutSecSmall,
-		MaxOutputBytes: 5,
+		MaxOutputBytes: intPtrValue(5),
 	}
 	enc, err := json.Marshal(args)
 	require.NoError(t, err)
@@ -91,6 +91,42 @@ func TestExecTool_EnforcesMaxOutputBytes(t *testing.T) {
 	out := res.(execOutput)
 	require.Equal(t, "01234", out.Output)
 	require.True(t, out.Truncated)
+}
+
+func TestExecTool_MaxOutputBytesPreservesUTF8Boundary(t *testing.T) {
+	tl := NewExecTool(localexec.New())
+	args := execInput{
+		Command:        "printf 'éé'",
+		Timeout:        timeoutSecSmall,
+		MaxOutputBytes: intPtrValue(3),
+	}
+	enc, err := json.Marshal(args)
+	require.NoError(t, err)
+	res, err := tl.Call(context.Background(), enc)
+	require.NoError(t, err)
+	out := res.(execOutput)
+	require.Equal(t, "é", out.Output)
+	require.True(t, out.Truncated)
+}
+
+func TestExecSessionLimitPollPreservesUTF8Boundary(t *testing.T) {
+	sess := &execSession{maxOutputBytes: 3}
+	poll := sess.limitPoll(codeexecutor.ProgramPoll{Output: "éé"})
+	require.Equal(t, "é", poll.Output)
+	require.True(t, poll.Truncated)
+}
+
+func TestExecTool_OmittedMaxOutputBytesPreservesUnlimitedBehavior(
+	t *testing.T,
+) {
+	tl := NewExecTool(localexec.New())
+	in, err := parseExecInput([]byte(
+		`{"command":"echo hello"}`,
+	))
+	require.NoError(t, err)
+	req, err := tl.prepareExec(context.Background(), in)
+	require.NoError(t, err)
+	require.Zero(t, req.spec.MaxOutputBytes)
 }
 
 func TestExecTool_Declaration_DescribesGeneralShellUsage(t *testing.T) {

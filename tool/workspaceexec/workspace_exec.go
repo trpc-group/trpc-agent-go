@@ -42,7 +42,6 @@ const (
 	defaultWorkspaceExecTimeout = 5 * time.Minute
 	defaultWorkspaceWriteYield  = 200
 	outputTruncatedMarker       = "\n...[output truncated]...\n"
-	defaultWorkspaceMaxOutput   = 4 << 20
 )
 
 // Environment variables that mirror the option names; useful for
@@ -122,7 +121,7 @@ type execInput struct {
 	Timeout        int               `json:"timeout,omitempty"`
 	TimeoutSec     *int              `json:"timeout_sec,omitempty"`
 	TimeoutSecOld  *int              `json:"timeoutSec,omitempty"`
-	MaxOutputBytes int               `json:"max_output_bytes,omitempty"`
+	MaxOutputBytes *int              `json:"max_output_bytes,omitempty"`
 	TTY            *bool             `json:"tty,omitempty"`
 	PTY            *bool             `json:"pty,omitempty"`
 }
@@ -510,7 +509,8 @@ func (t *ExecTool) Declaration() *tool.Declaration {
 		"max_output_bytes": {
 			Type: "integer",
 			Description: "Maximum combined stdout and stderr bytes " +
-				"retained for this execution.",
+				"retained for this execution. Omit or use 0 to preserve " +
+				"unlimited legacy behavior.",
 		},
 	}
 	if t.sessional {
@@ -632,7 +632,7 @@ func parseExecInput(args []byte) (execInput, error) {
 	if strings.TrimSpace(in.Command) == "" {
 		return execInput{}, errors.New("command is required")
 	}
-	if in.MaxOutputBytes < 0 {
+	if in.MaxOutputBytes != nil && *in.MaxOutputBytes < 0 {
 		return execInput{}, errors.New("max_output_bytes must not be negative")
 	}
 	return in, nil
@@ -661,10 +661,6 @@ func (t *ExecTool) prepareExec(
 	if timeout <= 0 {
 		timeout = in.Timeout
 	}
-	maxOutputBytes := in.MaxOutputBytes
-	if maxOutputBytes == 0 {
-		maxOutputBytes = defaultWorkspaceMaxOutput
-	}
 	return execRequest{
 		background: in.Background,
 		tty:        firstBoolValue(in.TTY, in.PTY),
@@ -678,7 +674,7 @@ func (t *ExecTool) prepareExec(
 			Cwd:            cwd,
 			Stdin:          in.Stdin,
 			Timeout:        execTimeout(timeout),
-			MaxOutputBytes: maxOutputBytes,
+			MaxOutputBytes: intPtrValueOrZero(in.MaxOutputBytes),
 		},
 	}, nil
 }
@@ -1402,6 +1398,13 @@ func firstNonEmpty(values ...string) string {
 
 func intPtrValue(v int) *int {
 	return &v
+}
+
+func intPtrValueOrZero(v *int) int {
+	if v == nil {
+		return 0
+	}
+	return *v
 }
 
 // isAllowedWorkspacePath forwards to

@@ -214,9 +214,12 @@ func (t *execCommandTool) Declaration() *tool.Declaration {
 					Description: "Maximum command runtime.",
 				},
 				"max_output_bytes": {
-					Type: "integer",
+					Type:    "integer",
+					Default: defaultMaxOutputBytes,
 					Description: "Maximum combined stdout and stderr " +
-						"bytes retained for this execution.",
+						fmt.Sprintf("bytes retained for this execution. "+
+							"Omitting this field or using 0 applies the %d-byte default; "+
+							"the value must not exceed %d.", defaultMaxOutputBytes, maxOutputBytes),
 				},
 				"tty": {
 					Type: "boolean",
@@ -261,7 +264,7 @@ func (t *execCommandTool) Declaration() *tool.Declaration {
 				"truncated": {
 					Type: "boolean",
 					Description: "True when output exceeded " +
-						"max_output_bytes.",
+						"max_output_bytes; omitted when false.",
 				},
 			},
 		},
@@ -299,6 +302,12 @@ func (t *execCommandTool) Call(
 	}
 	if in.MaxOutputBytes < 0 {
 		return nil, errors.New("max_output_bytes must not be negative")
+	}
+	if in.MaxOutputBytes > maxOutputBytes {
+		return nil, fmt.Errorf(
+			"max_output_bytes must not exceed %d",
+			maxOutputBytes,
+		)
 	}
 
 	workdir, err := resolveWorkdir(in.Workdir, t.baseDir)

@@ -272,7 +272,7 @@
     "risk_level": "medium",
     "rule_id": "SAFE-RESOURCE-OUTPUT",
     "evidence": [
-      "max_output_bytes=1048576 exceeds max_output_bytes=1024"
+      "requested output limit 1048576 bytes exceeds max_output_bytes=1024"
     ],
     "recommendation": "Limit output size or write large artifacts to bounded files.",
     "tool_name": "workspace_exec",
@@ -286,7 +286,7 @@
         "rule_id": "SAFE-RESOURCE-OUTPUT",
         "decision": "ask",
         "risk_level": "medium",
-        "evidence": "max_output_bytes=1048576 exceeds max_output_bytes=1024",
+        "evidence": "requested output limit 1048576 bytes exceeds max_output_bytes=1024",
         "recommendation": "Limit output size or write large artifacts to bounded files."
       }
     ],

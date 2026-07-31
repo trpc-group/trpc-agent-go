@@ -28,6 +28,7 @@ const (
 	defaultLogTail        = 40
 	defaultMaxLines       = 20_000
 	defaultMaxOutputBytes = 4 << 20
+	maxOutputBytes        = 64 << 20
 	defaultJobTTL         = 30 * time.Minute
 	defaultKillGrace      = 2 * time.Second
 	timeoutKillGrace      = time.Duration(0)
@@ -107,6 +108,12 @@ func (m *manager) exec(
 	if params.MaxOutputBytes < 0 {
 		return execResult{}, errors.New(
 			"max_output_bytes must not be negative",
+		)
+	}
+	if params.MaxOutputBytes > maxOutputBytes {
+		return execResult{}, fmt.Errorf(
+			"max_output_bytes must not exceed %d",
+			maxOutputBytes,
 		)
 	}
 
