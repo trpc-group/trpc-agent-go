@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-31T12:10:03.509819327Z",
+  "generated_at": "2026-07-31T13:02:07.410635025Z",
   "cases": [
     "failure_retry_dedup",
     "interleaved_concurrency",
@@ -41,7 +41,7 @@
             "content": "first",
             "branch": "main",
             "filter_key": "app-a",
-            "timestamp": "2026-07-31T13:09:58Z",
+            "timestamp": "2026-07-31T14:02:01Z",
             "object": "chat.completion"
           },
           {
@@ -52,7 +52,7 @@
             "content": "reply-1",
             "branch": "main",
             "filter_key": "app-a",
-            "timestamp": "2026-07-31T13:09:58Z",
+            "timestamp": "2026-07-31T14:02:01Z",
             "object": "chat.completion"
           },
           {
@@ -63,7 +63,7 @@
             "content": "second",
             "branch": "main",
             "filter_key": "app-a",
-            "timestamp": "2026-07-31T13:09:58Z",
+            "timestamp": "2026-07-31T14:02:01Z",
             "object": "chat.completion"
           },
           {
@@ -74,7 +74,7 @@
             "content": "reply-2",
             "branch": "main",
             "filter_key": "app-a",
-            "timestamp": "2026-07-31T13:09:58Z",
+            "timestamp": "2026-07-31T14:02:01Z",
             "object": "chat.completion"
           }
         ]
@@ -95,7 +95,7 @@
             "content": "first",
             "branch": "main",
             "filter_key": "app-a",
-            "timestamp": "2026-07-31T13:09:58Z",
+            "timestamp": "2026-07-31T14:02:01Z",
             "object": "chat.completion"
           },
           {
@@ -106,7 +106,7 @@
             "content": "reply-1",
             "branch": "main",
             "filter_key": "app-a",
-            "timestamp": "2026-07-31T13:09:58Z",
+            "timestamp": "2026-07-31T14:02:01Z",
             "object": "chat.completion"
           },
           {
@@ -117,7 +117,7 @@
             "content": "second",
             "branch": "main",
             "filter_key": "app-a",
-            "timestamp": "2026-07-31T13:09:58Z",
+            "timestamp": "2026-07-31T14:02:01Z",
             "object": "chat.completion"
           },
           {
@@ -128,7 +128,7 @@
             "content": "reply-2",
             "branch": "main",
             "filter_key": "app-a",
-            "timestamp": "2026-07-31T13:09:58Z",
+            "timestamp": "2026-07-31T14:02:01Z",
             "object": "chat.completion"
           }
         ]
@@ -198,7 +198,7 @@
             ],
             "metadata": "{\"kind\":\"fact\"}",
             "score": "0.0000",
-            "updated_at": "2026-07-31T12:10:00.146493646Z"
+            "updated_at": "2026-07-31T13:02:03.691447407Z"
           }
         ]
       },
@@ -221,7 +221,7 @@
             ],
             "metadata": "{\"kind\":\"fact\"}",
             "score": "0.0000",
-            "updated_at": "2026-07-31T12:10:00.391155578Z"
+            "updated_at": "2026-07-31T13:02:03.958211306Z"
           }
         ]
       },
@@ -241,7 +241,7 @@
             "content": "base event for summary",
             "branch": "main",
             "filter_key": "app-a",
-            "timestamp": "2026-07-31T13:09:58Z",
+            "timestamp": "2026-07-31T14:02:01Z",
             "object": "chat.completion"
           },
           {
@@ -252,7 +252,7 @@
             "content": "branch specific event",
             "branch": "main",
             "filter_key": "branch-a",
-            "timestamp": "2026-07-31T13:09:58Z",
+            "timestamp": "2026-07-31T14:02:01Z",
             "object": "chat.completion"
           }
         ],
@@ -260,16 +260,16 @@
           {
             "session_id": "replay-session-summary-generation-update",
             "summary": "replay-summary:replay-session-summary-generation-update::events=2:state=0",
-            "updated_at": "2026-07-31T13:09:58Z",
-            "boundary": "1||2026-07-31T13:09:58Z|evt-branch-a",
+            "updated_at": "2026-07-31T14:02:01Z",
+            "boundary": "1||2026-07-31T14:02:01Z|evt-branch-a",
             "version": "1"
           },
           {
             "session_id": "replay-session-summary-generation-update",
             "filter_key": "branch-a",
             "summary": "replay-summary:replay-session-summary-generation-update:branch-a:events=1:state=0",
-            "updated_at": "2026-07-31T13:09:58Z",
-            "boundary": "1|branch-a|2026-07-31T13:09:58Z|evt-branch-a",
+            "updated_at": "2026-07-31T14:02:01Z",
+            "boundary": "1|branch-a|2026-07-31T14:02:01Z|evt-branch-a",
             "version": "1"
           }
         ]
@@ -290,7 +290,7 @@
             "content": "base event for summary",
             "branch": "main",
             "filter_key": "app-a",
-            "timestamp": "2026-07-31T13:09:58Z",
+            "timestamp": "2026-07-31T14:02:01Z",
             "object": "chat.completion"
           },
           {
@@ -301,7 +301,7 @@
             "content": "branch specific event",
             "branch": "main",
             "filter_key": "branch-a",
-            "timestamp": "2026-07-31T13:09:58Z",
+            "timestamp": "2026-07-31T14:02:01Z",
             "object": "chat.completion"
           }
         ],
@@ -309,16 +309,16 @@
           {
             "session_id": "replay-session-summary-generation-update",
             "summary": "replay-summary:replay-session-summary-generation-update::events=2:state=0",
-            "updated_at": "2026-07-31T13:09:58Z",
-            "boundary": "1||2026-07-31T13:09:58Z|evt-branch-a",
+            "updated_at": "2026-07-31T14:02:01Z",
+            "boundary": "1||2026-07-31T14:02:01Z|evt-branch-a",
             "version": "1"
           },
           {
             "session_id": "replay-session-summary-generation-update",
             "filter_key": "branch-a",
             "summary": "replay-summary:replay-session-summary-generation-update:branch-a:events=1:state=0",
-            "updated_at": "2026-07-31T13:09:58Z",
-            "boundary": "1|branch-a|2026-07-31T13:09:58Z|evt-branch-a",
+            "updated_at": "2026-07-31T14:02:01Z",
+            "boundary": "1|branch-a|2026-07-31T14:02:01Z|evt-branch-a",
             "version": "1"
           }
         ]
@@ -339,7 +339,7 @@
             "content": "event before summary",
             "branch": "main",
             "filter_key": "app-a",
-            "timestamp": "2026-07-31T13:09:58Z",
+            "timestamp": "2026-07-31T14:02:01Z",
             "object": "chat.completion"
           },
           {
@@ -350,7 +350,7 @@
             "content": "continue",
             "branch": "main",
             "filter_key": "app-a",
-            "timestamp": "2026-07-31T13:09:58Z",
+            "timestamp": "2026-07-31T14:02:01Z",
             "object": "chat.completion"
           }
         ],
@@ -358,8 +358,8 @@
           {
             "session_id": "replay-session-summary-truncation-replay",
             "summary": "replay-summary:replay-session-summary-truncation-replay::events=1:state=0",
-            "updated_at": "2026-07-31T13:09:58Z",
-            "boundary": "1||2026-07-31T13:09:58Z|evt-pre-summary",
+            "updated_at": "2026-07-31T14:02:01Z",
+            "boundary": "1||2026-07-31T14:02:01Z|evt-pre-summary",
             "version": "1"
           }
         ]
@@ -380,7 +380,7 @@
             "content": "event before summary",
             "branch": "main",
             "filter_key": "app-a",
-            "timestamp": "2026-07-31T13:09:58Z",
+            "timestamp": "2026-07-31T14:02:01Z",
             "object": "chat.completion"
           },
           {
@@ -391,7 +391,7 @@
             "content": "continue",
             "branch": "main",
             "filter_key": "app-a",
-            "timestamp": "2026-07-31T13:09:58Z",
+            "timestamp": "2026-07-31T14:02:01Z",
             "object": "chat.completion"
           }
         ],
@@ -399,8 +399,8 @@
           {
             "session_id": "replay-session-summary-truncation-replay",
             "summary": "replay-summary:replay-session-summary-truncation-replay::events=1:state=0",
-            "updated_at": "2026-07-31T13:09:58Z",
-            "boundary": "1||2026-07-31T13:09:58Z|evt-pre-summary",
+            "updated_at": "2026-07-31T14:02:01Z",
+            "boundary": "1||2026-07-31T14:02:01Z|evt-pre-summary",
             "version": "1"
           }
         ]
@@ -421,12 +421,12 @@
         "tracks": [
           {
             "track": "subtask",
-            "timestamp": "2026-07-31T13:09:58Z",
+            "timestamp": "2026-07-31T14:02:01Z",
             "payload": "{\"error\":\"boom\",\"status\":\"failed\"}"
           },
           {
             "track": "tool-exec",
-            "timestamp": "2026-07-31T13:09:58Z",
+            "timestamp": "2026-07-31T14:02:01Z",
             "payload": "{\"duration_ms\":12,\"status\":\"ok\"}"
           }
         ]
@@ -447,12 +447,12 @@
         "tracks": [
           {
             "track": "subtask",
-            "timestamp": "2026-07-31T13:09:58Z",
+            "timestamp": "2026-07-31T14:02:01Z",
             "payload": "{\"error\":\"boom\",\"status\":\"failed\"}"
           },
           {
             "track": "tool-exec",
-            "timestamp": "2026-07-31T13:09:58Z",
+            "timestamp": "2026-07-31T14:02:01Z",
             "payload": "{\"duration_ms\":12,\"status\":\"ok\"}"
           }
         ]
@@ -473,7 +473,7 @@
             "content": "branch a",
             "branch": "main",
             "filter_key": "app-a",
-            "timestamp": "2026-07-31T13:09:58Z",
+            "timestamp": "2026-07-31T14:02:01Z",
             "object": "chat.completion"
           },
           {
@@ -484,7 +484,7 @@
             "content": "branch b",
             "branch": "main",
             "filter_key": "app-a",
-            "timestamp": "2026-07-31T13:09:58Z",
+            "timestamp": "2026-07-31T14:02:01Z",
             "object": "chat.completion"
           },
           {
@@ -495,7 +495,7 @@
             "content": "done a",
             "branch": "main",
             "filter_key": "app-a",
-            "timestamp": "2026-07-31T13:09:58Z",
+            "timestamp": "2026-07-31T14:02:01Z",
             "object": "chat.completion"
           }
         ]
@@ -516,7 +516,7 @@
             "content": "branch a",
             "branch": "main",
             "filter_key": "app-a",
-            "timestamp": "2026-07-31T13:09:58Z",
+            "timestamp": "2026-07-31T14:02:01Z",
             "object": "chat.completion"
           },
           {
@@ -527,7 +527,7 @@
             "content": "branch b",
             "branch": "main",
             "filter_key": "app-a",
-            "timestamp": "2026-07-31T13:09:58Z",
+            "timestamp": "2026-07-31T14:02:01Z",
             "object": "chat.completion"
           },
           {
@@ -538,7 +538,7 @@
             "content": "done a",
             "branch": "main",
             "filter_key": "app-a",
-            "timestamp": "2026-07-31T13:09:58Z",
+            "timestamp": "2026-07-31T14:02:01Z",
             "object": "chat.completion"
           }
         ]
@@ -559,7 +559,7 @@
             "content": "retry me",
             "branch": "main",
             "filter_key": "app-a",
-            "timestamp": "2026-07-31T13:09:58Z",
+            "timestamp": "2026-07-31T14:02:01Z",
             "object": "chat.completion"
           },
           {
@@ -570,7 +570,7 @@
             "content": "retry me",
             "branch": "main",
             "filter_key": "app-a",
-            "timestamp": "2026-07-31T13:09:58Z",
+            "timestamp": "2026-07-31T14:02:01Z",
             "object": "chat.completion"
           }
         ]
@@ -591,7 +591,7 @@
             "content": "retry me",
             "branch": "main",
             "filter_key": "app-a",
-            "timestamp": "2026-07-31T13:09:58Z",
+            "timestamp": "2026-07-31T14:02:01Z",
             "object": "chat.completion"
           },
           {
@@ -602,7 +602,7 @@
             "content": "retry me",
             "branch": "main",
             "filter_key": "app-a",
-            "timestamp": "2026-07-31T13:09:58Z",
+            "timestamp": "2026-07-31T14:02:01Z",
             "object": "chat.completion"
           }
         ]
