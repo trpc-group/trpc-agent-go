@@ -92,8 +92,20 @@ func TestRedactingAfterToolCallbackBoundaryInputs(t *testing.T) {
 			t.Fatalf("callback() = %+v, want unchanged result", result)
 		}
 	}
+	result, err := callback(context.Background(), &tool.AfterToolArgs{
+		Result: "api_key=abcdefghijklmnop",
+	})
+	if err != nil {
+		t.Fatalf("callback(redacted) error = %v", err)
+	}
+	if result == nil || result.CustomResult != "api_key=[REDACTED]" {
+		t.Fatalf(
+			"callback(redacted) = %+v, want redacted custom result",
+			result,
+		)
+	}
 
-	_, err := callback(context.Background(), &tool.AfterToolArgs{
+	_, err = callback(context.Background(), &tool.AfterToolArgs{
 		Result: unmarshalableRedactionValue{
 			Callback: func() {},
 			secret:   "safe",
@@ -129,6 +141,10 @@ func TestValidateHostBoundaries(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "domain", host: "github.com"},
+		{
+			name: "maximum label",
+			host: strings.Repeat("a", 63) + ".com",
+		},
 		{name: "domain with trailing dot", host: "github.com."},
 		{name: "IPv4", host: "127.0.0.1"},
 		{name: "IPv6", host: "::1"},
@@ -166,5 +182,47 @@ func TestNewPermissionPolicyUsesDefaultScanner(t *testing.T) {
 	}
 	if decision.Action != tool.PermissionActionAllow {
 		t.Fatalf("decision = %+v, want allow", decision)
+	}
+}
+
+func TestPermissionPolicyDeniesArgumentFailuresWhenAuditFails(
+	t *testing.T,
+) {
+	policy := NewPermissionPolicy(NewScanner(
+		DefaultPolicy(),
+		WithAuditor(failingAuditor{}),
+	))
+	tests := []struct {
+		name string
+		req  *tool.PermissionRequest
+	}{
+		{name: "nil request"},
+		{
+			name: "invalid arguments",
+			req: &tool.PermissionRequest{
+				ToolName:  "workspace_exec",
+				Arguments: []byte(`{"command":`),
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			decision, err := policy.CheckToolPermission(
+				context.Background(),
+				tc.req,
+			)
+			if err != nil {
+				t.Fatalf("CheckToolPermission() error = %v", err)
+			}
+			if decision.Action != tool.PermissionActionDeny {
+				t.Fatalf("decision = %+v, want deny", decision)
+			}
+			if !strings.Contains(decision.Reason, "audit unavailable") {
+				t.Fatalf(
+					"decision reason = %q, want audit failure",
+					decision.Reason,
+				)
+			}
+		})
 	}
 }

@@ -256,6 +256,17 @@ func TestRedactingArtifactServiceDelegatesReadAndDeleteOperations(
 	if loaded == nil || string(loaded.Data) != "second" {
 		t.Fatalf("LoadArtifact() = %+v, want latest artifact", loaded)
 	}
+	version := 0
+	loaded, err = service.LoadArtifact(ctx, info, "result.txt", &version)
+	if err != nil {
+		t.Fatalf("LoadArtifact(version 0) error = %v", err)
+	}
+	if loaded == nil || string(loaded.Data) != "first" {
+		t.Fatalf(
+			"LoadArtifact(version 0) = %+v, want first artifact",
+			loaded,
+		)
+	}
 
 	keys, err := service.ListArtifactKeys(ctx, info)
 	if err != nil {
