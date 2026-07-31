@@ -28,6 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	iflow "trpc.group/trpc-go/trpc-agent-go/internal/flow"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/messageorigin"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/toolresultround"
 	"trpc.group/trpc-go/trpc-agent-go/internal/util/message"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -1533,8 +1534,9 @@ func (p *ContentRequestProcessor) isCoveredCurrentInvocationEvent(
 	filter string,
 	cutoff eventHistoryCutoff,
 ) bool {
-	return evt.RequestID == inv.RunOptions.RequestID &&
-		evt.InvocationID == inv.InvocationID &&
+	return !messageorigin.IsSeedHistory(inv, evt.ID) &&
+		!messageorigin.IsCurrentTurn(inv, evt.ID) &&
+		isCurrentInvocationEvent(evt, inv) &&
 		cutoff.excludesEvent(index, evt) &&
 		p.canMatchToolRound(evt, inv, filter)
 }
@@ -2331,15 +2333,25 @@ func (p *ContentRequestProcessor) shouldIncludeEvent(
 	if !isEventEligibleForInclusion(evt) {
 		return false, false
 	}
+	// Caller-supplied seed history shares the current request and invocation
+	// identifiers, but remains ordinary history for summary-cutoff purposes.
+	seededHistory := messageorigin.IsSeedHistory(inv, evt.ID)
+	// UserMessageRewriter may expand the active turn into an ordered,
+	// mixed-role transcript. Preserve that input as a unit even when an
+	// intra-run summary covers its session timestamps.
+	if messageorigin.IsCurrentTurn(inv, evt.ID) &&
+		isCurrentInvocationEvent(evt, inv) {
+		return true, isStrictInvocationMessage(evt, inv)
+	}
 	// Exact invocation message match keeps existing semantics.
-	if isStrictInvocationMessage(evt, inv) {
+	if !seededHistory && isStrictInvocationMessage(evt, inv) {
 		return true, true
 	}
 	// Keep the current invocation user message even when the summary cutoff
 	// would otherwise exclude it. This preserves the original request while
 	// still allowing same-turn tool/assistant history already covered by the
 	// summary to be compacted out of the next prompt.
-	if isCurrentInvocationUserMessage(evt, inv) {
+	if !seededHistory && isCurrentInvocationUserMessage(evt, inv) {
 		return true, false
 	}
 	if cutoff.excludesEvent(eventIndex, evt) {
@@ -2479,12 +2491,17 @@ func isStrictInvocationMessage(evt event.Event, inv *agent.Invocation) bool {
 // RequestID + InvocationID matching avoids preserving unrelated user messages
 // from other invocations that may share the same request scope.
 func isCurrentInvocationUserMessage(evt event.Event, inv *agent.Invocation) bool {
-	return inv.RunOptions.RequestID != "" &&
-		inv.RunOptions.RequestID == evt.RequestID &&
-		inv.InvocationID != "" &&
-		inv.InvocationID == evt.InvocationID &&
+	return isCurrentInvocationEvent(evt, inv) &&
 		len(evt.Choices) > 0 &&
 		evt.Choices[0].Message.Role == model.RoleUser
+}
+
+func isCurrentInvocationEvent(evt event.Event, inv *agent.Invocation) bool {
+	return inv != nil &&
+		inv.RunOptions.RequestID != "" &&
+		inv.RunOptions.RequestID == evt.RequestID &&
+		inv.InvocationID != "" &&
+		inv.InvocationID == evt.InvocationID
 }
 
 // hasCompactedCurrentInvocationToolResults reports whether the bounded resume
@@ -2530,11 +2547,13 @@ func (p *ContentRequestProcessor) hasCompactedCurrentInvocationToolResultsAfterC
 	// Keep the predicate useful for callers inspecting partially persisted
 	// histories where the matching tool-call event is not available yet.
 	for i, evt := range events {
-		if evt.RequestID != inv.RunOptions.RequestID ||
-			evt.InvocationID != inv.InvocationID ||
-			!eventCutoff.excludesEvent(i, evt) ||
-			!isEventEligibleForInclusion(evt) ||
-			!p.passBranchFilter(evt, filter) {
+		if !p.isCoveredCurrentInvocationEvent(
+			i,
+			evt,
+			inv,
+			filter,
+			eventCutoff,
+		) {
 			continue
 		}
 		if eventWouldCompactCurrentToolResult(
