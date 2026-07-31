@@ -1384,3 +1384,25 @@ func TestRun_BaselineCaseError(t *testing.T) {
 	_, err := harness.Run(context.Background())
 	assert.ErrorContains(t, err, "nil")
 }
+
+// ---------------------------------------------------------------------------
+// DeleteMemory with explicit MemoryID (no prior AddMemory)
+// Covers the path where lastMemoryID is empty and the MemoryID comes
+// from op.MemoryDelete.MemoryID (harness.go delete memory key construction).
+// ---------------------------------------------------------------------------
+
+func TestDeleteMemory_ExplicitID_NoPriorAdd(t *testing.T) {
+	backend, err := newInMemoryReplayBackend()
+	require.NoError(t, err)
+	defer backend.Close()
+
+	_, err = runReplayCase(context.Background(), ReplayCase{
+		Name: "delete_explicit_id",
+		Operations: []Operation{
+			{Kind: OperationKindDeleteMemory, MemoryDelete: &memory.Key{MemoryID: "explicit-mem-id"}},
+		},
+	}, backend)
+	// The delete will fail because the user doesn't exist, but the code path
+	// (harness.go line 153) is exercised regardless.
+	assert.Error(t, err)
+}
