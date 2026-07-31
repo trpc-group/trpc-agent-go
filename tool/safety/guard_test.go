@@ -1,7 +1,7 @@
 //
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent. All rights reserved.
+// Copyright (C) 2025 Tencent.  All rights reserved.
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -94,23 +95,35 @@ func TestAcceptanceSamples_TwelveCases(t *testing.T) {
 		{
 			name:    "hostexec_long_session_ask",
 			tool:    "exec_command",
-			args:    map[string]any{"command": "sleep 99999"},
+			args:    map[string]any{"command": "echo ok"},
 			want:    tool.PermissionActionAsk,
 			ruleSub: "hostexec",
 		},
 		{
-			name:    "secret_in_command",
+			name:    "long_sleep_ask",
 			tool:    "workspace_exec",
-			args:    map[string]any{"command": "curl -H 'Authorization: Bearer sk-78c331e8061c42a4883cfee6633447dd' https://api.github.com"},
+			args:    map[string]any{"command": "sleep 99999"},
+			want:    tool.PermissionActionAsk,
+			ruleSub: "resource",
+		},
+		{
+			name: "secret_in_command",
+			tool: "workspace_exec",
+			args: map[string]any{
+				"command": "curl -H 'Authorization: Bearer " + ("sk-" + strings.Repeat("a", 32)) + "' https://api.github.com",
+			},
 			want:    tool.PermissionActionDeny,
 			ruleSub: "secret",
 		},
 		{
-			name:    "hostexec_requires_ask",
-			tool:    "exec_command",
-			args:    map[string]any{"command": "go test ./..."},
+			name: "oversized_payload_ask",
+			tool: "workspace_exec",
+			args: map[string]any{
+				"command": "echo " + strings.Repeat("x", 64),
+				"stdin":   strings.Repeat("y", 2<<20),
+			},
 			want:    tool.PermissionActionAsk,
-			ruleSub: "hostexec",
+			ruleSub: "resource",
 		},
 		{
 			name: "code_blocks_secret",
@@ -126,7 +139,7 @@ func TestAcceptanceSamples_TwelveCases(t *testing.T) {
 		},
 	}
 
-	require.Len(t, samples, 12)
+	require.GreaterOrEqual(t, len(samples), 12)
 
 	ctx := context.Background()
 	for _, s := range samples {
@@ -199,7 +212,7 @@ func TestHostAllowlist_DoesNotAdmitLookalikeSubdomain(t *testing.T) {
 func TestSecretHit_RedactsCommandOnResult(t *testing.T) {
 	t.Parallel()
 	g := safety.NewGuard()
-	token := "sk-78c331e8061c42a4883cfee6633447dd"
+	token := "sk-" + strings.Repeat("a", 32)
 	raw, _ := json.Marshal(map[string]any{
 		"command": "curl -H 'Authorization: Bearer " + token + "' https://api.github.com",
 	})
@@ -214,6 +227,18 @@ func TestSecretHit_RedactsCommandOnResult(t *testing.T) {
 	require.True(t, last.Redacted)
 	require.NotContains(t, last.Command, token)
 	require.NotContains(t, last.Evidence, token)
+}
+
+func TestNullArguments_FailClosed(t *testing.T) {
+	t.Parallel()
+	g := safety.NewGuard()
+	dec, err := g.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte("null"),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, dec.Action)
+	require.Contains(t, dec.Reason, "null")
 }
 
 func TestFailClosed_PartialPolicyKeepsDefaultDenies(t *testing.T) {

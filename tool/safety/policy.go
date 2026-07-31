@@ -1,7 +1,7 @@
 //
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent. All rights reserved.
+// Copyright (C) 2025 Tencent.  All rights reserved.
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
@@ -28,7 +28,7 @@ import (
 //
 // LoadPolicyFile starts from DefaultPolicy and overlays values from the file.
 // Omitted deny lists therefore keep safe defaults (fail-closed), instead of
-// silently disabling denials — a common failure mode called out in reviews of
+// silently disabling denials 鈥?a common failure mode called out in reviews of
 // competing #2002 implementations.
 type Policy struct {
 	// AllowedCommands is passed to shellsafe allow matching (strict).
@@ -41,6 +41,8 @@ type Policy struct {
 	// Bare entries match the host exactly. Leading-dot entries (".example.com")
 	// opt into suffix matching for every subdomain of that domain.
 	AllowedHosts []string `json:"allowed_hosts" yaml:"allowed_hosts"`
+	// AllowedEnvVars, when non-empty, restricts env overrides in tool args.
+	AllowedEnvVars []string `json:"allowed_env_vars" yaml:"allowed_env_vars"`
 	// AskCommands triggers PermissionActionAsk when the executable basename matches.
 	AskCommands []string `json:"ask_commands" yaml:"ask_commands"`
 	// MaxTimeoutSeconds is advisory metadata surfaced in reports (enforcement
@@ -73,6 +75,10 @@ func DefaultPolicy() Policy {
 			"sum.golang.org",
 			"storage.googleapis.com",
 		},
+		AllowedEnvVars: []string{
+			"PATH", "HOME", "LANG", "LC_ALL", "TERM",
+			"GOPATH", "GOROOT", "GOCACHE", "GOMODCACHE",
+		},
 		AskCommands: []string{
 			"npm", "pnpm", "yarn", "pip", "pip3",
 			"go", "apt", "apt-get", "yum", "dnf", "brew",
@@ -95,7 +101,7 @@ func LoadPolicyFile(path string) (Policy, error) {
 }
 
 // ParsePolicy decodes policy bytes. name is used only to pick JSON vs YAML
-// (".json" suffix 鈫?JSON; otherwise YAML).
+// (".json" suffix 閳?JSON; otherwise YAML).
 func ParsePolicy(data []byte, name string) (Policy, error) {
 	base := DefaultPolicy()
 	var overlay policyOverlay
@@ -119,6 +125,7 @@ type policyOverlay struct {
 	DeniedCommands      *[]string `json:"denied_commands" yaml:"denied_commands"`
 	DeniedPaths         *[]string `json:"denied_paths" yaml:"denied_paths"`
 	AllowedHosts        *[]string `json:"allowed_hosts" yaml:"allowed_hosts"`
+	AllowedEnvVars      *[]string `json:"allowed_env_vars" yaml:"allowed_env_vars"`
 	AskCommands         *[]string `json:"ask_commands" yaml:"ask_commands"`
 	MaxTimeoutSeconds   *int      `json:"max_timeout_seconds" yaml:"max_timeout_seconds"`
 	MaxOutputBytes      *int      `json:"max_output_bytes" yaml:"max_output_bytes"`
@@ -137,6 +144,9 @@ func (o policyOverlay) apply(base Policy) Policy {
 	}
 	if o.AllowedHosts != nil {
 		base.AllowedHosts = cleanStrings(*o.AllowedHosts)
+	}
+	if o.AllowedEnvVars != nil {
+		base.AllowedEnvVars = cleanStrings(*o.AllowedEnvVars)
 	}
 	if o.AskCommands != nil {
 		base.AskCommands = cleanStrings(*o.AskCommands)

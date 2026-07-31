@@ -1,7 +1,7 @@
 //
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent. All rights reserved.
+// Copyright (C) 2025 Tencent.  All rights reserved.
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
@@ -9,6 +9,7 @@
 package safety
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -37,16 +38,17 @@ type Extracted struct {
 	Command    string
 	Stdin      string
 	Cwd        string
+	Env        map[string]string
 	CodeBlocks []string
 	RawText    string
 }
 
-// Extract pulls command / stdin / code_blocks from a permission request.
+// Extract pulls command / stdin / code_blocks / env from a permission request.
 //
 // It is intentionally tool-aware for the first-party exec tools so that
 // codeexec payloads are not ignored (a bypass repeatedly found in #2002 PRs).
-// Malformed JSON arguments return an error so Guard can fail closed instead of
-// treating garbage as an empty/allow payload.
+// Malformed JSON arguments, including JSON null, return an error so Guard can
+// fail closed instead of treating garbage as an empty/allow payload.
 func Extract(req *tool.PermissionRequest) (Extracted, error) {
 	out := Extracted{Backend: BackendUnknown}
 	if req == nil {
@@ -58,15 +60,26 @@ func Extract(req *tool.PermissionRequest) (Extracted, error) {
 	}
 	out.Backend = classifyBackend(out.ToolName)
 
-	var payload map[string]json.RawMessage
-	if len(req.Arguments) > 0 {
-		if err := json.Unmarshal(req.Arguments, &payload); err != nil {
-			return out, fmt.Errorf("safety: decode tool arguments: %w", err)
-		}
+	rawArgs := bytes.TrimSpace(req.Arguments)
+	if len(rawArgs) == 0 {
+		return out, nil
 	}
+	if bytes.Equal(rawArgs, []byte("null")) {
+		return out, fmt.Errorf("safety: tool arguments must be a JSON object, got null")
+	}
+
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(rawArgs, &payload); err != nil {
+		return out, fmt.Errorf("safety: decode tool arguments: %w", err)
+	}
+	if payload == nil {
+		return out, fmt.Errorf("safety: tool arguments must be a JSON object")
+	}
+
 	out.Command = stringField(payload, "command")
 	out.Stdin = firstStringField(payload, "stdin", "chars")
 	out.Cwd = firstStringField(payload, "cwd", "workdir", "working_directory")
+	out.Env = stringMapField(payload, "env")
 	out.CodeBlocks = codeBlockTexts(payload["code_blocks"])
 
 	parts := make([]string, 0, 4)
@@ -122,6 +135,21 @@ func firstStringField(payload map[string]json.RawMessage, keys ...string) string
 		}
 	}
 	return ""
+}
+
+func stringMapField(payload map[string]json.RawMessage, key string) map[string]string {
+	if payload == nil {
+		return nil
+	}
+	raw, ok := payload[key]
+	if !ok || len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return nil
+	}
+	var m map[string]string
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil
+	}
+	return m
 }
 
 func codeBlockTexts(raw json.RawMessage) []string {

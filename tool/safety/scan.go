@@ -1,7 +1,7 @@
 //
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent. All rights reserved.
+// Copyright (C) 2025 Tencent.  All rights reserved.
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
@@ -13,6 +13,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -84,10 +85,11 @@ var (
 // Ordering (deny wins over ask over allow):
 //  1. secret / credential leakage in any text (including code_blocks / stdin)
 //  2. denied paths in argv / cwd / raw text
-//  3. shellsafe parse failure 鈫?deny (fail-closed; never default allow)
+//  3. shellsafe parse failure -> deny (fail-closed; never default allow)
 //  4. shellsafe allow/deny + implicit wrapper deny
 //  5. network hosts outside allowlist
-//  6. ask-command / hostexec ask policy
+//  6. resource abuse (long sleep / over policy timeout hint)
+//  7. ask-command / hostexec ask policy
 func Scan(ex Extracted, policy Policy) Result {
 	res := Result{
 		Decision:  DecisionAllow,
@@ -98,12 +100,8 @@ func Scan(ex Extracted, policy Policy) Result {
 		Advice:    "safe to execute under current policy",
 	}
 
-	texts := []string{ex.RawText, ex.Command, ex.Stdin, ex.Cwd}
-	texts = append(texts, ex.CodeBlocks...)
-
+	texts := collectTexts(ex)
 	if f, ok := scanSecrets(texts); ok {
-		// Never leave the original command (with tokens) on the result —
-		// reports and audit consumers serialize Result.Command.
 		res.Command = redactSecrets(res.Command)
 		res.Redacted = true
 		return finalize(res, f)
@@ -111,68 +109,25 @@ func Scan(ex Extracted, policy Policy) Result {
 	if f, ok := scanDeniedPaths(ex, policy.DeniedPaths); ok {
 		return finalize(res, f)
 	}
+	if f, ok := scanEnvAllowlist(ex, policy.AllowedEnvVars); ok {
+		return finalize(res, f)
+	}
 
-	// Command path: prefer shellsafe. Code-only payloads skip shell parse.
 	if strings.TrimSpace(ex.Command) != "" {
-		pipe, err := shellsafe.Parse(ex.Command)
-		if err != nil {
-			return finalize(res, Finding{
-				RuleID:   "shellsafe.unparsable",
-				Decision: DecisionDeny,
-				Risk:     RiskHigh,
-				Evidence: err.Error(),
-				Advice:   "refuse commands shellsafe cannot parse; rewrite as a simple pipeline or deny",
-			})
+		res = scanShellCommand(res, ex, policy)
+		if res.Decision == DecisionDeny {
+			return res
 		}
-		shellPol := policy.shellPolicy()
-		// shellsafe applies its implicit wrapper deny only when the policy is
-		// Active(). Keep Guard fail-closed even if an overlay cleared both lists.
-		if !shellPol.Active() {
-			shellPol.Deny = []string{"__trpc_agent_safety_sentinel__"}
-		}
-		if err := shellPol.Check(pipe); err != nil {
-			return finalize(res, Finding{
-				RuleID:   "shellsafe.policy",
-				Decision: DecisionDeny,
-				Risk:     RiskHigh,
-				Evidence: err.Error(),
-				Advice:   "adjust allowed_commands / denied_commands or wrap the use in an auditable workspace script",
-			})
-		}
-		// Dangerous deletion patterns that may pass basename policy if rm is
-		// not listed — keep an explicit content check for the issue's 100% bar.
-		if f, ok := scanDangerousDeletion(ex.Command); ok {
-			return finalize(res, f)
-		}
-		if f, ok := scanNetwork(pipe, ex.Command, policy.AllowedHosts); ok {
-			return finalize(res, f)
-		}
-		if f, ok := scanAskCommands(pipe, policy.AskCommands); ok {
-			res = finalize(res, f)
+	} else {
+		res = scanNonShellPayload(res, ex, policy)
+		if res.Decision == DecisionDeny {
+			return res
 		}
 	}
 
-	// Non-command payloads (code_blocks and/or stdin) still need deletion /
-	// network scanning — otherwise stdin-only tool calls skip those rules.
-	extraText := strings.TrimSpace(strings.Join(append([]string{ex.Stdin}, ex.CodeBlocks...), "\n"))
-	if strings.TrimSpace(ex.Command) == "" && extraText != "" {
-		if f, ok := scanDangerousDeletion(extraText); ok {
-			return finalize(res, f)
-		}
-		if f, ok := scanNetworkFromText(extraText, policy.AllowedHosts); ok {
-			return finalize(res, f)
-		}
-		if looksLikeInstall(extraText) {
-			res = finalize(res, Finding{
-				RuleID:   "code.install_mutation",
-				Decision: DecisionAsk,
-				Risk:     RiskMedium,
-				Evidence: "payload appears to install packages or mutate environment",
-				Advice:   "require human review before executing dependency-changing code",
-			})
-		}
+	if f, ok := scanResourceAbuse(ex, policy); ok {
+		res = finalize(res, f)
 	}
-
 	if ex.Backend == BackendHost && policy.HostExecRequiresAsk && res.Decision == DecisionAllow {
 		res = finalize(res, Finding{
 			RuleID:   "hostexec.long_session_risk",
@@ -182,7 +137,74 @@ func Scan(ex Extracted, policy Policy) Result {
 			Advice:   "require approval for host execution or restrict to workspace_exec",
 		})
 	}
+	return finishResult(res)
+}
 
+func collectTexts(ex Extracted) []string {
+	texts := []string{ex.RawText, ex.Command, ex.Stdin, ex.Cwd}
+	return append(texts, ex.CodeBlocks...)
+}
+
+func scanShellCommand(res Result, ex Extracted, policy Policy) Result {
+	pipe, err := shellsafe.Parse(ex.Command)
+	if err != nil {
+		return finalize(res, Finding{
+			RuleID:   "shellsafe.unparsable",
+			Decision: DecisionDeny,
+			Risk:     RiskHigh,
+			Evidence: err.Error(),
+			Advice:   "refuse commands shellsafe cannot parse; rewrite as a simple pipeline or deny",
+		})
+	}
+	shellPol := policy.shellPolicy()
+	if !shellPol.Active() {
+		shellPol.Deny = []string{"__trpc_agent_safety_sentinel__"}
+	}
+	if err := shellPol.Check(pipe); err != nil {
+		return finalize(res, Finding{
+			RuleID:   "shellsafe.policy",
+			Decision: DecisionDeny,
+			Risk:     RiskHigh,
+			Evidence: err.Error(),
+			Advice:   "adjust allowed_commands / denied_commands or wrap the use in an auditable workspace script",
+		})
+	}
+	if f, ok := scanDangerousDeletion(ex.Command); ok {
+		return finalize(res, f)
+	}
+	if f, ok := scanNetwork(pipe, ex.Command, policy.AllowedHosts); ok {
+		return finalize(res, f)
+	}
+	if f, ok := scanAskCommands(pipe, policy.AskCommands); ok {
+		return finalize(res, f)
+	}
+	return res
+}
+
+func scanNonShellPayload(res Result, ex Extracted, policy Policy) Result {
+	extraText := strings.TrimSpace(strings.Join(append([]string{ex.Stdin}, ex.CodeBlocks...), "\n"))
+	if extraText == "" {
+		return res
+	}
+	if f, ok := scanDangerousDeletion(extraText); ok {
+		return finalize(res, f)
+	}
+	if f, ok := scanNetworkFromText(extraText, policy.AllowedHosts); ok {
+		return finalize(res, f)
+	}
+	if looksLikeInstall(extraText) {
+		return finalize(res, Finding{
+			RuleID:   "code.install_mutation",
+			Decision: DecisionAsk,
+			Risk:     RiskMedium,
+			Evidence: "payload appears to install packages or mutate environment",
+			Advice:   "require human review before executing dependency-changing code",
+		})
+	}
+	return res
+}
+
+func finishResult(res Result) Result {
 	if res.Decision == DecisionAllow && res.RuleID == "" {
 		res.RuleID = "allow"
 		res.Evidence = "no denying or ask rule matched"
@@ -192,12 +214,10 @@ func Scan(ex Extracted, policy Policy) Result {
 }
 
 func finalize(base Result, f Finding) Result {
-	// Redact the finding before storing so Findings[] cannot retain secrets.
 	if containsSecretEvidence(f.Evidence) {
 		f.Evidence = redactSecrets(f.Evidence)
 	}
 	base.Findings = append(base.Findings, f)
-	// Deny always wins; ask wins over allow.
 	switch {
 	case f.Decision == DecisionDeny || base.Decision != DecisionDeny && f.Decision == DecisionAsk:
 		base.Decision = f.Decision
@@ -299,15 +319,38 @@ func scanDeniedPaths(ex Extracted, denied []string) (Finding, bool) {
 	return Finding{}, false
 }
 
+func scanEnvAllowlist(ex Extracted, allowed []string) (Finding, bool) {
+	if len(allowed) == 0 || len(ex.Env) == 0 {
+		return Finding{}, false
+	}
+	allow := map[string]struct{}{}
+	for _, a := range allowed {
+		allow[strings.ToUpper(strings.TrimSpace(a))] = struct{}{}
+	}
+	for k := range ex.Env {
+		key := strings.ToUpper(strings.TrimSpace(k))
+		if key == "" {
+			continue
+		}
+		if _, ok := allow[key]; !ok {
+			return Finding{
+				RuleID:   "env.not_allowed",
+				Decision: DecisionDeny,
+				Risk:     RiskHigh,
+				Evidence: "environment variable " + k + " is not in allowed_env_vars",
+				Advice:   "drop the env override or add it to allowed_env_vars in the policy file",
+			}, true
+		}
+	}
+	return Finding{}, false
+}
+
 func pathHit(text, marker string) bool {
 	if marker == "" {
 		return false
 	}
-	lowerMarker := marker
-	// Short extension-like markers (".env") must not match arbitrary substrings
-	// such as "dotenv" or "my.env.example" comments without path separators.
 	strictExt := strings.HasPrefix(marker, ".") && !strings.Contains(marker[1:], "/")
-	if !strictExt && strings.Contains(text, lowerMarker) {
+	if !strictExt && strings.Contains(text, marker) {
 		return true
 	}
 	for _, part := range strings.FieldsFunc(text, func(r rune) bool {
@@ -317,13 +360,14 @@ func pathHit(text, marker string) bool {
 		pl := strings.ToLower(p)
 		if strictExt {
 			base := strings.ToLower(filepath.Base(p))
-			if base == strings.ToLower(marker) || strings.HasSuffix(pl, "/"+strings.ToLower(marker)) ||
+			if base == strings.ToLower(marker) ||
+				strings.HasSuffix(pl, "/"+strings.ToLower(marker)) ||
 				strings.HasSuffix(pl, "\\"+strings.ToLower(marker)) {
 				return true
 			}
 			continue
 		}
-		if strings.Contains(pl, lowerMarker) {
+		if strings.Contains(pl, marker) {
 			return true
 		}
 		base := strings.ToLower(filepath.Base(p))
@@ -352,7 +396,6 @@ func scanDangerousDeletion(text string) (Finding, bool) {
 			}, true
 		}
 	}
-	// Broader: rm with -rf/-fr anywhere.
 	if strings.Contains(lower, "rm ") && (strings.Contains(lower, " -rf") ||
 		strings.Contains(lower, " -fr") || strings.Contains(lower, " -r -f") ||
 		strings.Contains(lower, " -f -r")) {
@@ -378,7 +421,6 @@ func scanNetwork(pipe *shellsafe.Pipeline, command string, allowed []string) (Fi
 		base := strings.ToLower(filepath.Base(argv[0]))
 		base = strings.TrimSuffix(base, ".exe")
 		if !isNetworkClient(base) {
-			// Still scan argv for URLs in any command.
 			continue
 		}
 		for _, arg := range argv[1:] {
@@ -416,7 +458,6 @@ func scanNetworkFromText(text string, allowed []string) (Finding, bool) {
 			}, true
 		}
 	}
-	// Scheme-less curl/wget targets: `curl evil.example/x`
 	for _, m := range reSchemeLess.FindAllStringSubmatch(text, -1) {
 		if len(m) < 2 {
 			continue
@@ -463,7 +504,6 @@ func hostOf(raw string) string {
 		}
 		return strings.ToLower(u.Hostname())
 	}
-	// host/path or host:port
 	host := raw
 	if i := strings.IndexByte(host, '/'); i >= 0 {
 		host = host[:i]
@@ -488,9 +528,7 @@ func hostAllowed(host string, allowed []string) bool {
 		if host == a {
 			return true
 		}
-		// Suffix matching is opt-in only: operators list ".github.com" when
-		// they intend every subdomain. A bare "api.github.com" must NOT admit
-		// "evil.api.github.com" (common allowlist footgun).
+		// Suffix matching is opt-in only via leading-dot entries.
 		if strings.HasPrefix(a, ".") && strings.HasSuffix(host, a) {
 			return true
 		}
@@ -512,24 +550,75 @@ func scanAskCommands(pipe *shellsafe.Pipeline, ask []string) (Finding, bool) {
 		}
 		base := strings.ToLower(filepath.Base(argv[0]))
 		base = strings.TrimSuffix(base, ".exe")
-		if _, ok := askSet[base]; ok {
-			// go test is safe; go install / get need ask.
-			if base == "go" && len(argv) > 1 {
-				sub := argv[1]
-				if sub == "test" || sub == "version" || sub == "env" || sub == "fmt" || sub == "vet" {
-					continue
-				}
+		if _, ok := askSet[base]; !ok {
+			continue
+		}
+		if base == "go" && len(argv) > 1 {
+			sub := argv[1]
+			if sub == "test" || sub == "version" || sub == "env" || sub == "fmt" || sub == "vet" {
+				continue
 			}
+		}
+		return Finding{
+			RuleID:   "ask.dependency_or_mutation",
+			Decision: DecisionAsk,
+			Risk:     RiskMedium,
+			Evidence: "command " + base + " requires human review under ask_commands",
+			Advice:   "approve only after reviewing package sources and intended mutation",
+		}, true
+	}
+	return Finding{}, false
+}
+
+func scanResourceAbuse(ex Extracted, policy Policy) (Finding, bool) {
+	texts := collectTexts(ex)
+	joined := strings.ToLower(strings.Join(texts, "\n"))
+	if sec, ok := parseSleepSeconds(joined); ok {
+		limit := policy.MaxTimeoutSeconds
+		if limit <= 0 {
+			limit = 60
+		}
+		if sec >= limit {
 			return Finding{
-				RuleID:   "ask.dependency_or_mutation",
+				RuleID:   "resource.long_sleep",
 				Decision: DecisionAsk,
 				Risk:     RiskMedium,
-				Evidence: "command " + base + " requires human review under ask_commands",
-				Advice:   "approve only after reviewing package sources and intended mutation",
+				Evidence: "sleep duration exceeds max_timeout_seconds hint",
+				Advice:   "shorten the wait or raise max_timeout_seconds after review",
 			}, true
 		}
 	}
+	if policy.MaxOutputBytes > 0 {
+		for _, t := range texts {
+			if len(t) > policy.MaxOutputBytes {
+				return Finding{
+					RuleID:   "resource.oversized_payload",
+					Decision: DecisionAsk,
+					Risk:     RiskMedium,
+					Evidence: "tool argument size exceeds max_output_bytes hint",
+					Advice:   "trim the payload or raise max_output_bytes after review",
+				}, true
+			}
+		}
+	}
 	return Finding{}, false
+}
+
+func parseSleepSeconds(text string) (int, bool) {
+	// Match common forms: sleep 99999 / sleep 99999s
+	fields := strings.Fields(text)
+	for i := 0; i+1 < len(fields); i++ {
+		if fields[i] != "sleep" {
+			continue
+		}
+		raw := strings.TrimSuffix(fields[i+1], "s")
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 0 {
+			return 0, false
+		}
+		return n, true
+	}
+	return 0, false
 }
 
 func looksLikeInstall(code string) bool {

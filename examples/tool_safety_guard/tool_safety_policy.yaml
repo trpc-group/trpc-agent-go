@@ -26,6 +26,13 @@ allowed_hosts:
   - proxy.golang.org
   - sum.golang.org
 
+allowed_env_vars:
+  - PATH
+  - HOME
+  - LANG
+  - GOPATH
+  - GOROOT
+
 ask_commands:
   - npm
   - pip
