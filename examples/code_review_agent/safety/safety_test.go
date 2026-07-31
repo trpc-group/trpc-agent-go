@@ -82,6 +82,11 @@ func TestSecretDetector_Detect(t *testing.T) {
 			text:     `-----BEGIN RSA PRIVATE KEY-----`,
 			expected: true,
 		},
+		{
+			name:     "bearer token",
+			text:     `Authorization: Bearer abcdefghijklmnopqrstuvwxyz123456`,
+			expected: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -91,6 +96,19 @@ func TestSecretDetector_Detect(t *testing.T) {
 				t.Errorf("Detect() = %v, want %v", result, tt.expected)
 			}
 		})
+	}
+}
+
+func TestPermissionPolicy_EvaluateTool(t *testing.T) {
+	policy := NewPermissionPolicy()
+	if got := policy.EvaluateTool("skill_load", []byte(`{"skill":"code-review"}`)); got.Decision != "allow" {
+		t.Fatalf("skill_load decision = %q, want allow", got.Decision)
+	}
+	if got := policy.EvaluateTool("workspace_exec", []byte(`{"command":"curl https://example.com"}`)); got.Decision != "needs_human_review" {
+		t.Fatalf("workspace_exec decision = %q, want needs_human_review", got.Decision)
+	}
+	if got := policy.EvaluateTool("workspace_exec", []byte(`{"command":"rm -rf /"}`)); got.Decision != "deny" {
+		t.Fatalf("workspace_exec decision = %q, want deny", got.Decision)
 	}
 }
 

@@ -181,13 +181,11 @@ var (
 
 // ParseFile 解析 diff 文件
 func (p *DiffParser) ParseFile(diffFilePath string) (*DiffParseResult, error) {
-	if p.repoPath != "" {
-		resolved, err := p.resolveRepoPath(diffFilePath)
-		if err != nil {
-			return nil, err
-		}
-		diffFilePath = resolved
+	resolved, err := p.resolveRepoPath(diffFilePath)
+	if err != nil {
+		return nil, err
 	}
+	diffFilePath = resolved
 	file, err := os.Open(diffFilePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open diff file: %w", err)
@@ -199,7 +197,7 @@ func (p *DiffParser) ParseFile(diffFilePath string) (*DiffParseResult, error) {
 
 func (p *DiffParser) resolveRepoPath(name string) (string, error) {
 	if p.repoPath == "" {
-		return name, nil
+		return "", fmt.Errorf("repository path is required to resolve %q", name)
 	}
 	root, err := filepath.Abs(p.repoPath)
 	if err != nil {

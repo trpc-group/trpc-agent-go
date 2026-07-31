@@ -10,6 +10,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -44,8 +45,12 @@ type Finding struct {
 	Confidence     float64   `json:"confidence"`
 	Source         string    `json:"source"`
 	RuleID         string    `json:"rule_id"`
+	ReviewStatus   string    `json:"review_status,omitempty"`
 	CreatedAt      time.Time `json:"created_at"`
 }
+
+// Warning is a low-confidence finding retained for human review.
+type Warning = Finding
 
 // SandboxRun 沙箱执行记录
 type SandboxRun struct {
@@ -58,6 +63,7 @@ type SandboxRun struct {
 	Stderr     string    `json:"stderr"`
 	DurationMs int       `json:"duration_ms"`
 	Truncated  bool      `json:"truncated"`
+	ErrorType  string    `json:"error_type,omitempty"`
 	CreatedAt  time.Time `json:"created_at"`
 }
 
@@ -103,7 +109,9 @@ func InitDB(dbPath string) (*sql.DB, error) {
 		return nil, err
 	}
 
-	// Enable foreign key constraints
+	// SQLite foreign keys are connection-local; keep one connection so every
+	// operation observes the same constraint setting.
+	db.SetMaxOpenConns(1)
 	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("failed to enable foreign keys: %w", err)
@@ -148,6 +156,7 @@ func InitDB(dbPath string) (*sql.DB, error) {
 		confidence REAL DEFAULT 1.0,
 		source TEXT DEFAULT 'rule',
 		rule_id TEXT,
+			review_status TEXT NOT NULL DEFAULT 'finding',
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		FOREIGN KEY (task_id) REFERENCES review_tasks(task_id)
 	);
@@ -162,6 +171,7 @@ func InitDB(dbPath string) (*sql.DB, error) {
 		stderr TEXT,
 		duration_ms INTEGER,
 		truncated BOOLEAN DEFAULT FALSE,
+			error_type TEXT,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		FOREIGN KEY (task_id) REFERENCES review_tasks(task_id)
 	);
@@ -217,8 +227,21 @@ func InitDB(dbPath string) (*sql.DB, error) {
 	CREATE INDEX IF NOT EXISTS idx_review_reports_task_id ON review_reports(task_id);
 	`
 
-	_, err = db.Exec(schema)
-	return db, err
+	if _, err = db.Exec(schema); err != nil {
+		db.Close()
+		return nil, err
+	}
+	// Keep existing SQLite databases usable after adding audit columns.
+	for _, migration := range []string{
+		`ALTER TABLE findings ADD COLUMN review_status TEXT NOT NULL DEFAULT 'finding'`,
+		`ALTER TABLE sandbox_runs ADD COLUMN error_type TEXT`,
+	} {
+		if _, err := db.Exec(migration); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+			db.Close()
+			return nil, fmt.Errorf("migrate schema: %w", err)
+		}
+	}
+	return db, nil
 }
 
 // GenerateTaskID 生成任务 ID
@@ -252,6 +275,12 @@ func UpdateTaskStatus(db *sql.DB, taskID, status, errMsg string) error {
 	return err
 }
 
+// UpdateTaskTotals 回写任务的 diff 汇总。
+func UpdateTaskTotals(db *sql.DB, taskID string, totalFiles, totalAdded, totalDeleted int) error {
+	_, err := db.Exec(`UPDATE review_tasks SET total_files = ?, total_additions = ?, total_deletions = ? WHERE task_id = ?`, totalFiles, totalAdded, totalDeleted, taskID)
+	return err
+}
+
 // SaveDiffSummary 保存 Diff 摘要
 func SaveDiffSummary(db *sql.DB, taskID string, filePath string, status string, additions int, deletions int) error {
 	_, err := db.Exec(
@@ -271,8 +300,8 @@ func SaveFindings(db *sql.DB, findings []Finding) error {
 	defer tx.Rollback()
 
 	stmt, err := tx.Prepare(`
-		INSERT INTO findings (task_id, severity, category, file_path, line_number, title, description, evidence, recommendation, confidence, source, rule_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO findings (task_id, severity, category, file_path, line_number, title, description, evidence, recommendation, confidence, source, rule_id, review_status)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return fmt.Errorf("prepare statement: %w", err)
@@ -280,7 +309,11 @@ func SaveFindings(db *sql.DB, findings []Finding) error {
 	defer stmt.Close()
 
 	for _, f := range findings {
-		if _, err := stmt.Exec(f.TaskID, f.Severity, f.Category, f.File, f.Line, f.Title, f.Description, f.Evidence, f.Recommendation, f.Confidence, f.Source, f.RuleID); err != nil {
+		if _, err := stmt.Exec(
+			f.TaskID, f.Severity, f.Category, f.File, f.Line, f.Title,
+			f.Description, f.Evidence, f.Recommendation, f.Confidence,
+			f.Source, f.RuleID, findingStatus(f),
+		); err != nil {
 			return fmt.Errorf("insert finding: %w", err)
 		}
 	}
@@ -288,12 +321,23 @@ func SaveFindings(db *sql.DB, findings []Finding) error {
 	return tx.Commit()
 }
 
+func findingStatus(f Finding) string {
+	if f.ReviewStatus != "" {
+		return f.ReviewStatus
+	}
+	if f.Confidence < 0.7 {
+		return "warning"
+	}
+	return "finding"
+}
+
 // SaveFinding 保存单个 finding
 func SaveFinding(db *sql.DB, f *Finding) error {
 	_, err := db.Exec(
-		`INSERT INTO findings (task_id, severity, category, file_path, line_number, title, description, evidence, recommendation, confidence, source, rule_id)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		f.TaskID, f.Severity, f.Category, f.File, f.Line, f.Title, f.Description, f.Evidence, f.Recommendation, f.Confidence, f.Source, f.RuleID,
+		`INSERT INTO findings (task_id, severity, category, file_path, line_number, title, description, evidence, recommendation, confidence, source, rule_id, review_status)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		f.TaskID, f.Severity, f.Category, f.File, f.Line, f.Title, f.Description,
+		f.Evidence, f.Recommendation, f.Confidence, f.Source, f.RuleID, findingStatus(*f),
 	)
 	return err
 }
@@ -301,9 +345,9 @@ func SaveFinding(db *sql.DB, f *Finding) error {
 // SaveSandboxRun 保存沙箱执行记录
 func SaveSandboxRun(db *sql.DB, run *SandboxRun) error {
 	_, err := db.Exec(
-		`INSERT INTO sandbox_runs (task_id, script_name, command, exit_code, stdout, stderr, duration_ms, truncated)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		run.TaskID, run.ScriptName, run.Command, run.ExitCode, run.Stdout, run.Stderr, run.DurationMs, run.Truncated,
+		`INSERT INTO sandbox_runs (task_id, script_name, command, exit_code, stdout, stderr, duration_ms, truncated, error_type)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		run.TaskID, run.ScriptName, run.Command, run.ExitCode, run.Stdout, run.Stderr, run.DurationMs, run.Truncated, run.ErrorType,
 	)
 	return err
 }
@@ -381,6 +425,137 @@ func GetTaskReport(db *sql.DB, taskID string) (*ReviewReport, error) {
 	return report, err
 }
 
+func GetTask(db *sql.DB, taskID string) (*ReviewTask, error) {
+	task := &ReviewTask{}
+	err := db.QueryRow(`SELECT id, task_id, repo_path, diff_file, status,
+		total_files, total_additions, total_deletions, error_message, created_at
+		FROM review_tasks WHERE task_id = ?`, taskID).Scan(
+		&task.ID, &task.TaskID, &task.RepoPath, &task.DiffFile, &task.Status,
+		&task.TotalFiles, &task.TotalAdded, &task.TotalDeleted, &task.Error, &task.CreatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return task, err
+}
+
+func ListDiffSummaries(db *sql.DB, taskID string) ([]DiffSummary, error) {
+	rows, err := db.Query(`SELECT id, task_id, file_path, status, additions, deletions, created_at
+		FROM diff_summaries WHERE task_id = ? ORDER BY id`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []DiffSummary
+	for rows.Next() {
+		var item DiffSummary
+		if err := rows.Scan(&item.ID, &item.TaskID, &item.FilePath, &item.Status, &item.Additions, &item.Deletions, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		result = append(result, item)
+	}
+	return result, rows.Err()
+}
+
+func ListFindings(db *sql.DB, taskID string) ([]Finding, error) {
+	rows, err := db.Query(`SELECT id, task_id, severity, category, file_path, line_number, title,
+		description, evidence, recommendation, confidence, source, rule_id, review_status, created_at
+		FROM findings WHERE task_id = ? ORDER BY id`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []Finding
+	for rows.Next() {
+		var item Finding
+		if err := rows.Scan(&item.ID, &item.TaskID, &item.Severity, &item.Category, &item.File, &item.Line,
+			&item.Title, &item.Description, &item.Evidence, &item.Recommendation, &item.Confidence,
+			&item.Source, &item.RuleID, &item.ReviewStatus, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		result = append(result, item)
+	}
+	return result, rows.Err()
+}
+
+func ListSandboxRuns(db *sql.DB, taskID string) ([]SandboxRun, error) {
+	rows, err := db.Query(`SELECT id, task_id, script_name, command, exit_code, stdout, stderr,
+		duration_ms, truncated, error_type, created_at FROM sandbox_runs WHERE task_id = ? ORDER BY id`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []SandboxRun
+	for rows.Next() {
+		var item SandboxRun
+		if err := rows.Scan(&item.ID, &item.TaskID, &item.ScriptName, &item.Command, &item.ExitCode,
+			&item.Stdout, &item.Stderr, &item.DurationMs, &item.Truncated, &item.ErrorType, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		result = append(result, item)
+	}
+	return result, rows.Err()
+}
+
+func ListPermissionDecisions(db *sql.DB, taskID string) ([]PermissionDecision, error) {
+	rows, err := db.Query(`SELECT id, task_id, command, decision, reason, created_at
+		FROM permission_decisions WHERE task_id = ? ORDER BY id`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []PermissionDecision
+	for rows.Next() {
+		var item PermissionDecision
+		if err := rows.Scan(&item.ID, &item.TaskID, &item.Command, &item.Decision, &item.Reason, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		result = append(result, item)
+	}
+	return result, rows.Err()
+}
+
+func GetMonitoringSummary(db *sql.DB, taskID string) (*MonitoringSummary, error) {
+	var item MonitoringSummary
+	var severityJSON, exceptionJSON string
+	err := db.QueryRow(`SELECT id, task_id, total_duration_ms, sandbox_duration_ms, tool_calls_count,
+		permission_blocks_count, findings_count, severity_distribution, exception_distribution, created_at
+		FROM monitoring_summaries WHERE task_id = ? ORDER BY id DESC LIMIT 1`, taskID).Scan(
+		&item.ID, &item.TaskID, &item.TotalDurationMs, &item.SandboxDurationMs, &item.ToolCallsCount,
+		&item.PermissionBlocksCount, &item.FindingsCount, &severityJSON, &exceptionJSON, &item.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal([]byte(severityJSON), &item.SeverityDistribution); err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal([]byte(exceptionJSON), &item.ExceptionDistribution); err != nil {
+		return nil, err
+	}
+	return &item, nil
+}
+
+func ListArtifacts(db *sql.DB, taskID string) ([]Artifact, error) {
+	rows, err := db.Query(`SELECT id, task_id, artifact_type, file_path, content, created_at
+		FROM artifacts WHERE task_id = ? ORDER BY id`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []Artifact
+	for rows.Next() {
+		var item Artifact
+		if err := rows.Scan(&item.ID, &item.TaskID, &item.ArtifactType, &item.FilePath, &item.Content, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		result = append(result, item)
+	}
+	return result, rows.Err()
+}
+
 // CalculateMonitoring 计算监控摘要
 func CalculateMonitoring(taskID string, findings []Finding, sandboxRuns []SandboxRun, permissionDecisions []PermissionDecision, startTime time.Time) *MonitoringSummary {
 	totalDurationMs := int(time.Since(startTime).Milliseconds())
@@ -397,8 +572,19 @@ func CalculateMonitoring(taskID string, findings []Finding, sandboxRuns []Sandbo
 	}
 	permissionBlocks := 0
 	for _, decision := range permissionDecisions {
-		if decision.Decision == "deny" {
+		if decision.Decision != "allow" {
 			permissionBlocks++
+		}
+	}
+	exceptionDistribution := map[string]int{}
+	for _, run := range sandboxRuns {
+		switch {
+		case run.ErrorType != "":
+			exceptionDistribution[run.ErrorType]++
+		case run.ExitCode == -2:
+			exceptionDistribution["timeout"]++
+		case run.ExitCode != 0:
+			exceptionDistribution["non_zero_exit"]++
 		}
 	}
 
@@ -410,6 +596,6 @@ func CalculateMonitoring(taskID string, findings []Finding, sandboxRuns []Sandbo
 		PermissionBlocksCount: permissionBlocks,
 		FindingsCount:         len(findings),
 		SeverityDistribution:  severityDistribution,
-		ExceptionDistribution: map[string]int{},
+		ExceptionDistribution: exceptionDistribution,
 	}
 }

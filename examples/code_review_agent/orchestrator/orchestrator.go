@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"path/filepath"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/input"
@@ -145,7 +146,7 @@ func (o *Orchestrator) Run(ctx context.Context, config *ReviewConfig) *ReviewRes
 	} else if config.Mode == ModeLLM {
 		analyzer := config.LLMAnalyzer
 		if analyzer == nil {
-			analyzer = NewOpenAIAnalyzer("")
+			analyzer = NewOpenAIAnalyzerWithSkills("", filepath.Join("skills"))
 		}
 		aiFindings, err := analyzer(ctx, config.TaskID, diffResult)
 		if err != nil {
@@ -161,6 +162,7 @@ func (o *Orchestrator) Run(ctx context.Context, config *ReviewConfig) *ReviewRes
 	uniqueFindings, warnings := rules.DeduplicateFindings(findings)
 
 	// 6. 权限检查
+	permissionDecisions := make([]store.PermissionDecision, 0, 3)
 	decision := o.permPolicy.Evaluate("review")
 	permDecision := store.PermissionDecision{
 		TaskID:   config.TaskID,
@@ -168,6 +170,7 @@ func (o *Orchestrator) Run(ctx context.Context, config *ReviewConfig) *ReviewRes
 		Decision: decision.Decision,
 		Reason:   decision.Reason,
 	}
+	permissionDecisions = append(permissionDecisions, permDecision)
 	if err := store.SavePermissionDecision(o.db, &permDecision); err != nil {
 		result.Error = fmt.Errorf("save permission decision: %w", err)
 		store.UpdateTaskStatus(o.db, config.TaskID, "failed", result.Error.Error())
@@ -177,8 +180,28 @@ func (o *Orchestrator) Run(ctx context.Context, config *ReviewConfig) *ReviewRes
 
 	// 7. 沙箱执行
 	var sandboxRuns []store.SandboxRun
+	needsReview := false
 	if config.Mode != ModeDryRun {
 		log.Printf("Running sandbox checks (executor: %s)...", config.Executor)
+		for _, command := range []string{"go test", "go vet", "staticcheck"} {
+			check := o.permPolicy.Evaluate(command)
+			commandDecision := store.PermissionDecision{TaskID: config.TaskID, Command: command, Decision: check.Decision, Reason: check.Reason}
+			permissionDecisions = append(permissionDecisions, commandDecision)
+			if err := store.SavePermissionDecision(o.db, &commandDecision); err != nil {
+				result.Error = fmt.Errorf("save permission decision: %w", err)
+				store.UpdateTaskStatus(o.db, config.TaskID, "failed", result.Error.Error())
+				result.Duration = time.Since(startTime)
+				return result
+			}
+			if check.Decision != "allow" {
+				needsReview = true
+				log.Printf("sandbox command %s requires human review", command)
+				result.Duration = time.Since(startTime)
+			}
+		}
+		if needsReview {
+			log.Printf("sandbox execution will be reviewed before merge")
+		}
 
 		var sandboxExec *sandbox.Executor
 		switch config.Executor {
@@ -225,6 +248,7 @@ func (o *Orchestrator) Run(ctx context.Context, config *ReviewConfig) *ReviewRes
 	// 8. 敏感信息脱敏
 	o.secretDetector.RedactFindings(uniqueFindings)
 	o.secretDetector.RedactFindings(warnings)
+	o.secretDetector.RedactSandboxRuns(sandboxRuns)
 
 	// 9. 保存 findings
 	if err := store.SaveFindings(o.db, uniqueFindings); err != nil {
@@ -266,16 +290,16 @@ func (o *Orchestrator) Run(ctx context.Context, config *ReviewConfig) *ReviewRes
 	}
 
 	// 13. 保存 artifact
-	if err := store.SaveArtifact(o.db, &store.Artifact{
-		TaskID:       config.TaskID,
-		ArtifactType: "report_json",
-		FilePath:     "review_report.json",
-		Content:      string(reportJSON),
-	}); err != nil {
-		result.Error = fmt.Errorf("save report artifact: %w", err)
-		store.UpdateTaskStatus(o.db, config.TaskID, "failed", result.Error.Error())
-		result.Duration = time.Since(startTime)
-		return result
+	for _, artifact := range []store.Artifact{
+		{TaskID: config.TaskID, ArtifactType: "report_json", FilePath: "review_report.json", Content: string(reportJSON)},
+		{TaskID: config.TaskID, ArtifactType: "report_markdown", FilePath: "review_report.md", Content: reportMD},
+	} {
+		if err := store.SaveArtifact(o.db, &artifact); err != nil {
+			result.Error = fmt.Errorf("save report artifact: %w", err)
+			store.UpdateTaskStatus(o.db, config.TaskID, "failed", result.Error.Error())
+			result.Duration = time.Since(startTime)
+			return result
+		}
 	}
 	if err := store.UpdateTaskStatus(o.db, config.TaskID, "completed", ""); err != nil {
 		result.Error = fmt.Errorf("complete task: %w", err)

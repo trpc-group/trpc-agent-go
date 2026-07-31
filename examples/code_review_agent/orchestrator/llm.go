@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/skill"
 
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/input"
 	fakemodel "trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/model"
@@ -43,15 +45,32 @@ func analyzeWithFakeModel(ctx context.Context, taskID string, diff *input.DiffPa
 
 // NewOpenAIAnalyzer creates an analyzer backed by the configured OpenAI-compatible endpoint.
 func NewOpenAIAnalyzer(modelName string) LLMAnalyzer {
+	return NewOpenAIAnalyzerWithSkills(modelName, "")
+}
+
+// NewOpenAIAnalyzerWithSkills creates an analyzer with the code-review Skill repository.
+func NewOpenAIAnalyzerWithSkills(modelName, skillsRoot string) LLMAnalyzer {
 	return func(ctx context.Context, taskID string, diff *input.DiffParseResult) ([]store.Finding, error) {
 		if os.Getenv("OPENAI_API_KEY") == "" {
 			return nil, fmt.Errorf("OPENAI_API_KEY is required")
+		}
+		if strings.TrimSpace(skillsRoot) == "" {
+			return nil, fmt.Errorf("skills root is required for LLM analysis")
+		}
+		repo, err := skill.NewFSRepository(filepath.Clean(skillsRoot))
+		if err != nil {
+			return nil, fmt.Errorf("load skills repository: %w", err)
+		}
+		if _, err := repo.Get("code-review"); err != nil {
+			return nil, fmt.Errorf("load code-review skill: %w", err)
 		}
 		mdl := openai.New(modelName)
 		agent := llmagent.New("code-reviewer",
 			llmagent.WithModel(mdl),
 			llmagent.WithDescription("Go 代码审查 Agent"),
-			llmagent.WithInstruction("只返回包含 findings 数组的 JSON，不要返回其他内容。"),
+			llmagent.WithInstruction("先调用 skill_load 加载 code-review，再依据 Skill 规则审查；只返回包含 findings 数组的 JSON，不要返回其他内容。"),
+			llmagent.WithSkills(repo),
+			llmagent.WithSkillToolProfile(llmagent.SkillToolProfileFull),
 		)
 		events, err := runner.NewRunner("golens", agent).Run(ctx, "user", "review-"+taskID, model.NewUserMessage(BuildReviewPrompt(diff)))
 		if err != nil {

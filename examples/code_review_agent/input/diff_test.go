@@ -124,6 +124,13 @@ func TestDiffParser_ParsePlainUnifiedDiff(t *testing.T) {
 	}
 }
 
+func TestDiffParser_ParseFileRejectsEmptyRepositoryPath(t *testing.T) {
+	parser := NewDiffParser("")
+	if _, err := parser.ParseFile("/etc/passwd"); err == nil {
+		t.Fatal("ParseFile() should reject an empty repository path")
+	}
+}
+
 func TestDiffParser_ParseFileListRejectsMissingFile(t *testing.T) {
 	parser := NewDiffParser(t.TempDir())
 	if _, err := parser.ParseFileList([]string{"missing.go"}); err == nil {

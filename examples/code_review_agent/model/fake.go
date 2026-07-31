@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/store"
@@ -50,14 +51,28 @@ func (m *FakeModel) GenerateResponse(ctx context.Context, prompt string) (string
 // analyzeDiff 分析 diff 内容，返回模拟的 findings
 func (m *FakeModel) analyzeDiff(prompt string) []store.Finding {
 	findings := make([]store.Finding, 0)
+	currentFile := "unknown.go"
+	currentLine := 1
+	for _, line := range strings.Split(prompt, "\n") {
+		if strings.HasPrefix(line, "File: ") {
+			currentFile = strings.TrimSpace(strings.TrimPrefix(line, "File: "))
+		}
+		for _, field := range strings.Fields(line) {
+			if strings.HasPrefix(field, "new=") {
+				if n, err := strconv.Atoi(strings.TrimPrefix(field, "new=")); err == nil && n > 0 {
+					currentLine = n
+				}
+			}
+		}
+	}
 
 	// 检测 SQL 注入
 	if strings.Contains(prompt, "fmt.Sprintf") && strings.Contains(prompt, "SELECT") {
 		findings = append(findings, store.Finding{
 			Severity:       "critical",
 			Category:       "security",
-			File:           "db.go",
-			Line:           10,
+			File:           currentFile,
+			Line:           currentLine,
 			Title:          "SQL Injection Risk (AI)",
 			Description:    "AI detected: SQL query constructed using string formatting",
 			Evidence:       "fmt.Sprintf(\"SELECT * FROM users WHERE name = '%s'\", username)",
@@ -91,7 +106,7 @@ func (m *FakeModel) analyzeDiff(prompt string) []store.Finding {
 			Severity:       "high",
 			Category:       "goroutine",
 			File:           "worker.go",
-			Line:           10,
+			Line:           currentLine,
 			Title:          "Goroutine Leak (AI)",
 			Description:    "AI detected: Goroutine with infinite loop",
 			Evidence:       "go func() { for { ... } }",

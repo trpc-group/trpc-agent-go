@@ -181,6 +181,17 @@ func TestMissingTestRule(t *testing.T) {
 	}
 }
 
+func TestDeduplicateFindingsAcrossSources(t *testing.T) {
+	findings := []store.Finding{
+		{File: "db.go", Line: 10, Category: "security", RuleID: "SEC001", Confidence: 0.95},
+		{File: "db.go", Line: 10, Category: "security", RuleID: "AI_SEC001", Confidence: 0.95},
+	}
+	unique, warnings := DeduplicateFindings(findings)
+	if len(unique) != 1 || len(warnings) != 0 {
+		t.Fatalf("cross-source dedup = %d unique, %d warnings; want 1, 0", len(unique), len(warnings))
+	}
+}
+
 func TestDeduplicateFindings(t *testing.T) {
 	findings := []store.Finding{
 		{File: "db.go", Line: 10, Category: "security", RuleID: "SEC001", Severity: "critical", Confidence: 0.95},

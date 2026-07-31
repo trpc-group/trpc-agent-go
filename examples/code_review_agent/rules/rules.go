@@ -89,7 +89,7 @@ func DeduplicateFindings(findings []store.Finding) ([]store.Finding, []store.Fin
 	for _, f := range findings {
 		// 统一使用小写路径，避免 API.go 和 api.go 被认为是不同文件
 		filePath := strings.ToLower(f.File)
-		key := filePath + ":" + itoa(f.Line) + ":" + f.Category + ":" + f.RuleID
+		key := filePath + ":" + itoa(f.Line) + ":" + strings.ToLower(strings.TrimSpace(f.Category))
 		if seen[key] {
 			continue
 		}

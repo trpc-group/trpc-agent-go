@@ -2,22 +2,26 @@
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
-// Package sandbox 提供沙箱执行功能，支持 local、container、e2b 三种模式
+// Package sandbox adapts the native trpc-agent-go workspace runtimes for code review checks.
 package sandbox
 
 import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
+	"path"
 	"strings"
 	"time"
 
+	tcontainer "github.com/docker/docker/api/types/container"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	containerexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/container"
+	e2bexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/e2b"
+	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/store"
 )
 
-// ExecutorType 执行器类型
+// ExecutorType selects the native workspace backend.
 type ExecutorType string
 
 const (
@@ -26,264 +30,200 @@ const (
 	ExecutorE2B       ExecutorType = "e2b"
 )
 
-// SandboxConfig 沙箱配置
+// SandboxConfig controls native workspace execution.
 type SandboxConfig struct {
 	ExecutorType  ExecutorType
 	Timeout       time.Duration
 	MaxOutputSize int
 	EnvWhitelist  []string
-	ForbiddenDirs []string
-	WorkingDir    string
 }
 
-// DefaultSandboxConfig 默认沙箱配置
 func DefaultSandboxConfig() *SandboxConfig {
 	return &SandboxConfig{
-		ExecutorType:  ExecutorLocal,
+		ExecutorType:  ExecutorContainer,
 		Timeout:       5 * time.Minute,
-		MaxOutputSize: 1024 * 1024, // 1MB
-		EnvWhitelist: []string{
-			"HOME", "PATH", "LANG", "LC_ALL", "LC_CTYPE",
-			"LOGNAME", "TERM", "TMPDIR", "TMP", "TEMP",
-			"USER", "SHELL", "PWD", "GOPATH", "GOROOT",
-			"GOPROXY", "CGO_ENABLED",
-		},
-		ForbiddenDirs: []string{
-			"/etc", "/var", "/usr", "/bin", "/sbin", "/root",
-		},
+		MaxOutputSize: 1024 * 1024,
+		EnvWhitelist:  []string{"PATH", "LANG", "LC_ALL", "CGO_ENABLED", "GOPROXY", "HOME"},
 	}
 }
 
-// Executor 沙箱执行器
 type Executor struct {
 	repoPath string
 	config   *SandboxConfig
+	factory  func() (codeexecutor.CodeExecutor, error)
 }
 
-// NewExecutor 创建沙箱执行器（默认 local，仅作开发 fallback）
 func NewExecutor(repoPath string) *Executor {
-	return &Executor{
-		repoPath: repoPath,
-		config:   DefaultSandboxConfig(),
-	}
+	return &Executor{repoPath: repoPath, config: DefaultSandboxConfig()}
 }
 
-// NewExecutorWithType 创建指定类型的沙箱执行器
 func NewExecutorWithType(repoPath string, executorType ExecutorType) *Executor {
 	config := DefaultSandboxConfig()
 	config.ExecutorType = executorType
-	return &Executor{
-		repoPath: repoPath,
-		config:   config,
-	}
+	return &Executor{repoPath: repoPath, config: config}
 }
 
-// RunAllChecks 运行所有检查
+// WithExecutorFactory is intended for deterministic tests of the workspace adapter.
+func (e *Executor) WithExecutorFactory(factory func() (codeexecutor.CodeExecutor, error)) *Executor {
+	e.factory = factory
+	return e
+}
+
 func (e *Executor) RunAllChecks(ctx context.Context, taskID string) ([]store.SandboxRun, error) {
-	if err := e.validateWorkDir(e.repoPath); err != nil {
-		return nil, err
+	if strings.TrimSpace(e.repoPath) == "" {
+		return nil, fmt.Errorf("repository path is required")
+	}
+	if e.config.Timeout <= 0 {
+		return nil, fmt.Errorf("sandbox timeout must be positive")
 	}
 
+	exec, err := e.newExecutor()
+	if err != nil {
+		return nil, err
+	}
+	engineProvider, ok := exec.(codeexecutor.EngineProvider)
+	if !ok {
+		return nil, fmt.Errorf("executor %q does not expose a workspace engine", e.config.ExecutorType)
+	}
+	engine := engineProvider.Engine()
+	if engine == nil {
+		return nil, fmt.Errorf("executor %q returned a nil workspace engine", e.config.ExecutorType)
+	}
+
+	runCtx, cancel := context.WithTimeout(ctx, e.config.Timeout)
+	defer cancel()
+	ws, err := engine.Manager().CreateWorkspace(runCtx, taskID, codeexecutor.WorkspacePolicy{Isolated: true})
+	if err != nil {
+		return nil, fmt.Errorf("create workspace: %w", err)
+	}
+	defer func() { _ = engine.Manager().Cleanup(context.Background(), ws) }()
+
+	if err := engine.FS().StageDirectory(runCtx, ws, e.repoPath, "work", codeexecutor.StageOptions{ReadOnly: true, AllowMount: false}); err != nil {
+		return nil, fmt.Errorf("stage repository: %w", err)
+	}
+
+	if e.config.ExecutorType == ExecutorE2B {
+		// E2B templates may not preserve toolchain state between RunProgram
+		// calls. Keep all Go checks in one remote shell invocation.
+		checks := "go test ./... && go vet ./..."
+		if e.hasStaticcheck(exec) {
+			checks += " && staticcheck ./..."
+		}
+		run := e.runProgram(runCtx, engine, ws, taskID, "go_test_vet", "/bin/bash", []string{"-lc", checks}, nil)
+		return []store.SandboxRun{run}, nil
+	}
+
+	runs := make([]store.SandboxRun, 0, 3)
+	runs = append(runs, e.runProgram(runCtx, engine, ws, taskID, "go_test", "go", []string{"test", "./..."}, nil))
+	if runCtx.Err() != nil {
+		return runs, runCtx.Err()
+	}
+	runs = append(runs, e.runProgram(runCtx, engine, ws, taskID, "go_vet", "go", []string{"vet", "./..."}, nil))
+	if runCtx.Err() != nil {
+		return runs, runCtx.Err()
+	}
+	if e.hasStaticcheck(exec) {
+		runs = append(runs, e.runProgram(runCtx, engine, ws, taskID, "staticcheck", "staticcheck", []string{"./..."}, nil))
+	}
+	return runs, nil
+}
+
+func (e *Executor) newExecutor() (codeexecutor.CodeExecutor, error) {
+	if e.factory != nil {
+		return e.factory()
+	}
 	switch e.config.ExecutorType {
-	case ExecutorLocal:
-		return e.runLocalChecks(ctx, taskID)
 	case ExecutorContainer:
-		return e.runContainerChecks(ctx, taskID)
+		return containerexec.New(containerexec.WithContainerConfig(containerConfig()))
 	case ExecutorE2B:
-		return nil, fmt.Errorf("executor %q is not supported", ExecutorE2B)
+		apiKey := strings.TrimSpace(os.Getenv("E2B_API_KEY"))
+		if apiKey == "" {
+			return nil, fmt.Errorf("E2B_API_KEY is required for the e2b executor")
+		}
+		opts := []e2bexec.Option{
+			e2bexec.WithAPIKey(apiKey),
+			e2bexec.WithExecutionTimeout(e.config.Timeout),
+		}
+		if apiURL := strings.TrimSpace(os.Getenv("E2B_API_URL")); apiURL != "" {
+			opts = append(opts, e2bexec.WithAPIURL(apiURL))
+		}
+		if template := strings.TrimSpace(os.Getenv("E2B_TEMPLATE")); template != "" {
+			opts = append(opts, e2bexec.WithTemplate(template))
+		}
+		return e2bexec.New(opts...)
+	case ExecutorLocal:
+		return localexec.New(localexec.WithTimeout(e.config.Timeout)), nil
 	default:
 		return nil, fmt.Errorf("unknown executor type %q", e.config.ExecutorType)
 	}
 }
 
-// runLocalChecks 本地执行（开发 fallback）
-func (e *Executor) runLocalChecks(ctx context.Context, taskID string) ([]store.SandboxRun, error) {
-	runs := make([]store.SandboxRun, 0, 2)
-	if !isCommandAvailable("go") {
-		return runs, fmt.Errorf("go command not available")
-	}
-	if !isCommandAvailable("staticcheck") {
-		return runs, fmt.Errorf("staticcheck command not available")
-	}
-
-	runs = append(runs, e.runCommand(ctx, taskID, "go_vet", "go", []string{"vet", "./..."}))
-	runs = append(runs, e.runCommand(ctx, taskID, "staticcheck", "staticcheck", []string{"./..."}))
-	return runs, nil
-}
-
-// runContainerChecks 容器执行
-func (e *Executor) runContainerChecks(ctx context.Context, taskID string) ([]store.SandboxRun, error) {
-	runs := make([]store.SandboxRun, 0)
-
-	// 检查 Docker 是否可用
-	if !isCommandAvailable("docker") {
-		return runs, fmt.Errorf("docker not available")
-	}
-
-	// 使用 Docker 容器执行
-	containerName := fmt.Sprintf("golens-sandbox-%s", taskID)
-
-	// 运行 go vet
-	result := e.runDockerCommand(ctx, taskID, containerName, "go_vet", []string{"go", "vet", "./..."})
-	runs = append(runs, result)
-
-	// The base image only guarantees Go tooling; staticcheck is run locally when installed.
-	return runs, nil
-}
-
-// runCommand 执行命令（带超时和输出限制）
-func (e *Executor) runCommand(ctx context.Context, taskID, scriptName, command string, args []string) store.SandboxRun {
-	startTime := time.Now()
-
-	// 创建带超时的 context
-	ctx, cancel := context.WithTimeout(ctx, e.config.Timeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, command, args...)
-	cmd.Dir = e.repoPath
-
-	// 设置环境变量白名单
-	cmd.Env = e.buildEnv()
-
-	stdout := newLimitedBuffer(e.config.MaxOutputSize)
-	stderr := newLimitedBuffer(e.config.MaxOutputSize)
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
-
-	err := cmd.Run()
-	durationMs := int(time.Since(startTime).Milliseconds())
-
-	exitCode := 0
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			exitCode = exitErr.ExitCode()
-		} else if ctx.Err() == context.DeadlineExceeded {
-			exitCode = -2 // 超时
-		} else {
-			exitCode = -1
-		}
-	}
-
-	return store.SandboxRun{
-		TaskID:     taskID,
-		ScriptName: scriptName,
-		Command:    fmt.Sprintf("%s %s", command, joinArgs(args)),
-		ExitCode:   exitCode,
-		Stdout:     stdout.String(),
-		Stderr:     stderr.String(),
-		DurationMs: durationMs,
-		Truncated:  stdout.Truncated() || stderr.Truncated(),
+func containerConfig() tcontainer.Config {
+	return tcontainer.Config{
+		Image:      "golang:1.25-bookworm",
+		WorkingDir: "/",
+		Cmd:        []string{"tail", "-f", "/dev/null"},
+		Tty:        true,
+		OpenStdin:  true,
 	}
 }
 
-// runDockerCommand 在 Docker 容器中执行命令
-func (e *Executor) runDockerCommand(ctx context.Context, taskID, containerName, scriptName string, cmd []string) store.SandboxRun {
-	startTime := time.Now()
-
-	ctx, cancel := context.WithTimeout(ctx, e.config.Timeout)
-	defer cancel()
-
-	// 构建 docker run 命令
-	dockerArgs := []string{
-		"run", "--rm",
-		"--name", containerName,
-		"-v", e.repoPath + ":/workspace",
-		"-w", "/workspace",
-		"--network", "none", // 禁用网络
-		"golang:1.21-alpine",
-	}
-	dockerArgs = append(dockerArgs, cmd...)
-
-	execCmd := exec.CommandContext(ctx, "docker", dockerArgs...)
-
-	stdout := newLimitedBuffer(e.config.MaxOutputSize)
-	stderr := newLimitedBuffer(e.config.MaxOutputSize)
-	execCmd.Stdout = stdout
-	execCmd.Stderr = stderr
-
-	err := execCmd.Run()
-	durationMs := int(time.Since(startTime).Milliseconds())
-
-	exitCode := 0
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			exitCode = exitErr.ExitCode()
-		} else if ctx.Err() == context.DeadlineExceeded {
-			exitCode = -2
-		} else {
-			exitCode = -1
-		}
-	}
-
-	return store.SandboxRun{
-		TaskID:     taskID,
-		ScriptName: scriptName,
-		Command:    "docker " + strings.Join(dockerArgs, " "),
-		ExitCode:   exitCode,
-		Stdout:     stdout.String(),
-		Stderr:     stderr.String(),
-		DurationMs: durationMs,
-		Truncated:  stdout.Truncated() || stderr.Truncated(),
-	}
+func (e *Executor) hasStaticcheck(_ codeexecutor.CodeExecutor) bool {
+	return strings.TrimSpace(os.Getenv("GOLENS_STATICCHECK")) == "1"
 }
 
-// validateWorkDir validates that the working directory is not in a forbidden location
-func (e *Executor) validateWorkDir(workDir string) error {
-	absPath, err := filepath.Abs(workDir)
-	if err != nil {
-		return fmt.Errorf("cannot resolve path: %w", err)
-	}
-	absPath, err = filepath.EvalSymlinks(absPath)
-	if err != nil {
-		return fmt.Errorf("cannot resolve work directory: %w", err)
-	}
-
-	for _, forbidden := range e.config.ForbiddenDirs {
-		forbiddenAbs, err := filepath.Abs(forbidden)
-		if err != nil {
-			return fmt.Errorf("cannot resolve forbidden directory: %w", err)
-		}
-		forbiddenAbs, err = filepath.EvalSymlinks(forbiddenAbs)
-		if err != nil {
-			continue
-		}
-		rel, err := filepath.Rel(forbiddenAbs, absPath)
-		if err == nil && (rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel))) {
-			return fmt.Errorf("path %s is in forbidden directory %s", absPath, forbidden)
-		}
-	}
-
-	return nil
-}
-
-// buildEnv builds environment variables (whitelist only)
-func (e *Executor) buildEnv() []string {
-	env := make([]string, 0)
-
+func (e *Executor) runProgram(ctx context.Context, engine codeexecutor.Engine, ws codeexecutor.Workspace, taskID, script, command string, args []string, extraEnv map[string]string) store.SandboxRun {
+	start := time.Now()
+	env := make(map[string]string, len(e.config.EnvWhitelist))
 	for _, name := range e.config.EnvWhitelist {
-		if value, exists := os.LookupEnv(name); exists {
-			env = append(env, name+"="+value)
+		if value, ok := os.LookupEnv(name); ok {
+			env[name] = value
 		}
 	}
-
-	// Use isolated HOME
-	env = append(env, "HOME=/tmp/golens-sandbox")
-
-	return env
-}
-
-func isCommandAvailable(command string) bool {
-	_, err := exec.LookPath(command)
-	return err == nil
-}
-
-func joinArgs(args []string) string {
-	return strings.Join(args, " ")
-}
-
-func truncateOutput(output string, maxSize int) string {
-	if len(output) > maxSize {
-		return output[:maxSize] + "\n... (truncated)"
+	if e.config.ExecutorType == ExecutorContainer || e.config.ExecutorType == ExecutorE2B {
+		env["PATH"] = "/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+		env["HOME"] = path.Join(ws.Path, "home")
+		env["GOCACHE"] = path.Join(ws.Path, "cache")
+		env["GOPATH"] = path.Join(ws.Path, "gopath")
+		env["GOMODCACHE"] = path.Join(ws.Path, "gomodcache")
+		env["TMPDIR"] = path.Join(ws.Path, "tmp")
 	}
-	return output
+	for key, value := range extraEnv {
+		if key == "GOROOT" && strings.HasPrefix(value, "/") && !strings.Contains(value, " ") {
+			env[key] = value
+		}
+	}
+	result, err := engine.Runner().RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+		Cmd:      command,
+		Args:     args,
+		Env:      env,
+		CleanEnv: true,
+		Cwd:      "work",
+		Timeout:  e.config.Timeout,
+		Limits:   codeexecutor.ResourceLimits{MemoryMB: 1024, MaxPIDs: 128},
+	})
+	exitCode := result.ExitCode
+	if err != nil && exitCode == 0 {
+		exitCode = -1
+	}
+	if result.TimedOut || ctx.Err() == context.DeadlineExceeded {
+		exitCode = -2
+	}
+	stdout := result.Stdout
+	stderr := result.Stderr
+	truncated := false
+	if e.config.MaxOutputSize > 0 {
+		if len(stdout) > e.config.MaxOutputSize {
+			stdout = stdout[:e.config.MaxOutputSize]
+			truncated = true
+		}
+		if len(stderr) > e.config.MaxOutputSize {
+			stderr = stderr[:e.config.MaxOutputSize]
+			truncated = true
+		}
+	}
+	if err != nil && stderr == "" {
+		stderr = err.Error()
+	}
+	return store.SandboxRun{TaskID: taskID, ScriptName: script, Command: command + " " + strings.Join(args, " "), ExitCode: exitCode, Stdout: stdout, Stderr: stderr, DurationMs: int(time.Since(start).Milliseconds()), Truncated: truncated}
 }

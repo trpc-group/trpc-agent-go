@@ -88,7 +88,9 @@ skill run code-review --diff-file changes.diff --executor e2b
 ```
 
 **要求**：
-- E2B API Key
+- E2B API Key（`E2B_API_KEY`）
+- 可选配置 `E2B_API_URL` 和 `E2B_TEMPLATE`
+- 没有凭据时测试会明确跳过，生产审查会记录 `needs_human_review`，不会伪造执行成功
 
 ## 审查规则
 

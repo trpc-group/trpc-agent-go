@@ -2,73 +2,64 @@ package sandbox
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/store"
 )
 
-func TestNewExecutor(t *testing.T) {
-	executor := NewExecutor("/tmp/test")
-
-	if executor.repoPath != "/tmp/test" {
-		t.Errorf("repoPath = %s, want /tmp/test", executor.repoPath)
+func TestNewExecutorDefaultsToContainer(t *testing.T) {
+	executor := NewExecutor(t.TempDir())
+	if executor.config.ExecutorType != ExecutorContainer {
+		t.Fatalf("ExecutorType = %s, want container", executor.config.ExecutorType)
 	}
-
-	if executor.config.ExecutorType != ExecutorLocal {
-		t.Errorf("ExecutorType = %s, want local", executor.config.ExecutorType)
-	}
-
 	if executor.config.Timeout != 5*time.Minute {
-		t.Errorf("Timeout = %v, want 5m", executor.config.Timeout)
+		t.Fatalf("Timeout = %v, want 5m", executor.config.Timeout)
 	}
-
 	if executor.config.MaxOutputSize != 1024*1024 {
-		t.Errorf("MaxOutputSize = %d, want 1048576", executor.config.MaxOutputSize)
+		t.Fatalf("MaxOutputSize = %d, want 1048576", executor.config.MaxOutputSize)
 	}
 }
 
 func TestNewExecutorWithType(t *testing.T) {
-	executor := NewExecutorWithType("/tmp/test", ExecutorContainer)
-
-	if executor.config.ExecutorType != ExecutorContainer {
-		t.Errorf("ExecutorType = %s, want container", executor.config.ExecutorType)
+	executor := NewExecutorWithType(t.TempDir(), ExecutorLocal)
+	if executor.config.ExecutorType != ExecutorLocal {
+		t.Fatalf("ExecutorType = %s, want local", executor.config.ExecutorType)
 	}
 }
 
 func TestDefaultSandboxConfig(t *testing.T) {
 	config := DefaultSandboxConfig()
-
-	if config.ExecutorType != ExecutorLocal {
-		t.Errorf("ExecutorType = %s, want local", config.ExecutorType)
+	if config.ExecutorType != ExecutorContainer {
+		t.Fatalf("ExecutorType = %s, want container", config.ExecutorType)
 	}
-
-	if config.Timeout != 5*time.Minute {
-		t.Errorf("Timeout = %v, want 5m", config.Timeout)
-	}
-
-	if config.MaxOutputSize != 1024*1024 {
-		t.Errorf("MaxOutputSize = %d, want 1048576", config.MaxOutputSize)
-	}
-
 	if len(config.EnvWhitelist) == 0 {
-		t.Error("EnvWhitelist should not be empty")
-	}
-
-	if len(config.ForbiddenDirs) == 0 {
-		t.Error("ForbiddenDirs should not be empty")
+		t.Fatal("EnvWhitelist should not be empty")
 	}
 }
 
-func TestExecutor_RejectsUnknownExecutor(t *testing.T) {
+func TestExecutorRejectsUnknownExecutor(t *testing.T) {
 	executor := NewExecutorWithType(t.TempDir(), ExecutorType("unknown"))
 	if _, err := executor.RunAllChecks(context.Background(), "task_unknown"); err == nil {
 		t.Fatal("RunAllChecks() should reject unknown executor")
 	}
 }
 
-func TestExecutor_E2BUnsupported(t *testing.T) {
+func TestExecutorE2BRequiresConfiguration(t *testing.T) {
+	t.Setenv("E2B_API_KEY", "")
 	executor := NewExecutorWithType(t.TempDir(), ExecutorE2B)
 	if _, err := executor.RunAllChecks(context.Background(), "task_e2b"); err == nil {
-		t.Fatal("RunAllChecks() should reject unsupported E2B executor")
+		t.Fatal("RunAllChecks() should reject E2B without API key")
+	}
+}
+
+func TestExecutorRejectsEmptyRepository(t *testing.T) {
+	executor := NewExecutorWithType("", ExecutorLocal)
+	if _, err := executor.RunAllChecks(context.Background(), "task_empty"); err == nil {
+		t.Fatal("RunAllChecks() should reject an empty repository path")
 	}
 }
 
@@ -82,123 +73,66 @@ func TestLimitedBuffer(t *testing.T) {
 	}
 }
 
-func TestExecutor_RunAllChecks_SandboxFailureDoesNotCrash(t *testing.T) {
-	// 测试沙箱执行失败不会导致崩溃
-	executor := NewExecutor("/nonexistent/path")
+func TestExecutorFactoryIsUsedByNativeAdapter(t *testing.T) {
+	executor := NewExecutorWithType(t.TempDir(), ExecutorLocal)
+	called := false
+	executor.WithExecutorFactory(func() (codeexecutor.CodeExecutor, error) {
+		called = true
+		return nil, nil
+	})
+	_, _ = executor.RunAllChecks(context.Background(), "task_factory")
+	if !called {
+		t.Fatal("native executor factory was not called")
+	}
+}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	// 即使路径不存在，也不应该 panic
-	runs, err := executor.RunAllChecks(ctx, "task_test")
-
-	// 可能返回错误或空结果，但不应该 panic
+func TestRealContainerWorkspace(t *testing.T) {
+	if os.Getenv("GOLENS_RUN_REAL_SANDBOX") != "1" {
+		t.Skip("set GOLENS_RUN_REAL_SANDBOX=1 to run Docker integration tests")
+	}
+	repo := writeMinimalGoRepo(t)
+	runs, err := NewExecutorWithType(repo, ExecutorContainer).RunAllChecks(context.Background(), "task_real_container")
 	if err != nil {
-		t.Logf("RunAllChecks() error = %v (expected for nonexistent path)", err)
+		t.Fatalf("container workspace execution failed: %v", err)
 	}
-
-	if runs != nil {
-		t.Logf("RunAllChecks() returned %d runs", len(runs))
-	}
+	assertSuccessfulChecks(t, runs)
 }
 
-func TestExecutor_RunLocalChecks_Timeout(t *testing.T) {
-	// 测试超时控制
-	config := DefaultSandboxConfig()
-	config.Timeout = 1 * time.Millisecond // 极短超时
-
-	executor := &Executor{
-		repoPath: ".",
-		config:   config,
+func TestRealE2BWorkspace(t *testing.T) {
+	if os.Getenv("GOLENS_RUN_REAL_SANDBOX") != "1" {
+		t.Skip("set GOLENS_RUN_REAL_SANDBOX=1 to run E2B integration tests")
 	}
-
-	ctx := context.Background()
-	runs, err := executor.runLocalChecks(ctx, "task_timeout")
-
-	// 超时不应该导致 panic
+	if os.Getenv("E2B_API_KEY") == "" {
+		t.Skip("E2B_API_KEY is required for E2B integration tests")
+	}
+	repo := writeMinimalGoRepo(t)
+	runs, err := NewExecutorWithType(repo, ExecutorE2B).RunAllChecks(context.Background(), "task_real_e2b")
 	if err != nil {
-		t.Logf("runLocalChecks() error = %v", err)
+		t.Fatalf("E2B workspace execution failed: %v", err)
 	}
-
-	if runs != nil {
-		t.Logf("runLocalChecks() returned %d runs", len(runs))
-	}
+	assertSuccessfulChecks(t, runs)
 }
 
-func TestTruncateOutput(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    string
-		maxSize  int
-		expected bool
-	}{
-		{
-			name:     "short output",
-			input:    "hello",
-			maxSize:  100,
-			expected: false,
-		},
-		{
-			name:     "exact size",
-			input:    "hello",
-			maxSize:  5,
-			expected: false,
-		},
-		{
-			name:     "truncated",
-			input:    "hello world",
-			maxSize:  5,
-			expected: true,
-		},
+func writeMinimalGoRepo(t *testing.T) string {
+	t.Helper()
+	repo := t.TempDir()
+	if err := os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module example.com/sandboxfixture\n\ngo 1.25\n"), 0644); err != nil {
+		t.Fatal(err)
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := truncateOutput(tt.input, tt.maxSize)
-			isTruncated := len(result) > tt.maxSize || (len(result) == tt.maxSize+20 && result[len(result)-20:] == "\n... (truncated)")
-
-			if tt.expected && !isTruncated {
-				t.Errorf("expected truncation, got %q", result)
-			}
-
-			if !tt.expected && result != tt.input {
-				t.Errorf("expected %q, got %q", tt.input, result)
-			}
-		})
+	if err := os.WriteFile(filepath.Join(repo, "main.go"), []byte("package fixture\n\nfunc Add(a, b int) int { return a + b }\n"), 0644); err != nil {
+		t.Fatal(err)
 	}
+	return repo
 }
 
-func TestBuildEnv(t *testing.T) {
-	executor := NewExecutor(".")
-
-	env := executor.buildEnv()
-
-	if len(env) == 0 {
-		t.Error("buildEnv() returned empty env")
+func assertSuccessfulChecks(t *testing.T, runs []store.SandboxRun) {
+	t.Helper()
+	if len(runs) == 0 {
+		t.Fatal("no sandbox runs were recorded")
 	}
-
-	// 检查是否包含 HOME
-	found := false
-	for _, e := range env {
-		if e == "HOME=/tmp/golens-sandbox" {
-			found = true
-			break
+	for _, run := range runs {
+		if run.ExitCode != 0 {
+			t.Fatalf("%s failed: command=%q exit=%d stdout=%q stderr=%q error_type=%q", run.ScriptName, run.Command, run.ExitCode, run.Stdout, run.Stderr, run.ErrorType)
 		}
-	}
-
-	if !found {
-		t.Error("buildEnv() should set HOME=/tmp/golens-sandbox")
-	}
-}
-
-func TestIsCommandAvailable(t *testing.T) {
-	// go 命令应该可用
-	if !isCommandAvailable("go") {
-		t.Error("go command should be available")
-	}
-
-	// 不存在的命令应该不可用
-	if isCommandAvailable("nonexistent_command_xyz") {
-		t.Error("nonexistent command should not be available")
 	}
 }

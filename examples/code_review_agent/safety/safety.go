@@ -103,6 +103,31 @@ func (p *PermissionPolicy) Evaluate(command string) PermissionDecision {
 	}
 }
 
+// EvaluateTool applies the same command policy to framework skill tools.
+func (p *PermissionPolicy) EvaluateTool(toolName string, args []byte) PermissionDecision {
+	name := strings.ToLower(strings.TrimSpace(toolName))
+	if name == "skill_load" || name == "skill_list_docs" || name == "skill_select_docs" {
+		return PermissionDecision{Decision: "allow", Reason: "read-only skill operation"}
+	}
+	if name == "skill_run" || name == "workspace_exec" || name == "workspace_write_stdin" {
+		var command string
+		if len(args) > 0 {
+			for _, field := range []string{"command", "cmd"} {
+				pattern := regexp.MustCompile(`"` + field + `"\s*:\s*"([^"]*)"`)
+				if matches := pattern.FindSubmatch(args); len(matches) == 2 {
+					command = string(matches[1])
+					break
+				}
+			}
+		}
+		if command == "" {
+			return PermissionDecision{Decision: "needs_human_review", Reason: "execution command is missing"}
+		}
+		return p.Evaluate(command)
+	}
+	return PermissionDecision{Decision: "needs_human_review", Reason: "tool is not approved for code review"}
+}
+
 // isCommandPrefix checks if command starts with prefix followed by space or end of string
 func isCommandPrefix(command, prefix string) bool {
 	if !strings.HasPrefix(command, prefix) {
@@ -139,7 +164,10 @@ func NewSecretDetector() *SecretDetector {
 		Patterns: []*regexp.Regexp{
 			regexp.MustCompile(`(?i)(api[_-]?key|apikey)\s*[:=]\s*['"]?([A-Za-z0-9_\-]{20,})['"]?`),
 			regexp.MustCompile(`(?i)(token|access[_-]?token)\s*[:=]\s*['"]?([A-Za-z0-9_\-\.]{20,})['"]?`),
+			regexp.MustCompile(`(?i)authorization\s*:\s*bearer\s+[A-Za-z0-9_\-.]{20,}`),
+			regexp.MustCompile(`(?i)(client[_-]?secret|aws[_-]?secret[_-]?access[_-]?key|secret)\s*[:=]\s*['"]?([^\s'"]{8,})['"]?`),
 			regexp.MustCompile(`(?i)(password|passwd|pwd)\s*[:=]\s*['"]?([^\s'"]{8,})['"]?`),
+			regexp.MustCompile(`eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+`),
 			regexp.MustCompile(`(?i)(AKIA[0-9A-Z]{16})`),
 			regexp.MustCompile(`(?i)-----BEGIN\s+(RSA\s+)?PRIVATE\s+KEY-----`),
 		},
@@ -163,6 +191,15 @@ func (d *SecretDetector) RedactText(text string) string {
 		result = pattern.ReplaceAllString(result, "<redacted>")
 	}
 	return result
+}
+
+// RedactSandboxRuns removes secrets from command output before persistence/reporting.
+func (d *SecretDetector) RedactSandboxRuns(runs []store.SandboxRun) {
+	for i := range runs {
+		runs[i].Command = d.RedactText(runs[i].Command)
+		runs[i].Stdout = d.RedactText(runs[i].Stdout)
+		runs[i].Stderr = d.RedactText(runs[i].Stderr)
+	}
 }
 
 // RedactFindings removes secrets from all finding fields that may be persisted or reported.

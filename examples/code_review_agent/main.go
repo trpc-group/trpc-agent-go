@@ -15,13 +15,18 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
+	agentpkg "trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/skill"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/input"
 	fake "trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/model"
@@ -35,13 +40,14 @@ import (
 var (
 	flagModel      = flag.String("model", "", "LLM model name (default: from env or hy3)")
 	flagDiffFile   = flag.String("diff-file", "", "Diff file to review")
+	flagFileList   = flag.String("file-list", "", "Comma-separated changed file paths")
 	flagRepoPath   = flag.String("repo-path", ".", "Repository path")
 	flagOutput     = flag.String("output", "json", "Output format: json|md|text")
 	flagDB         = flag.String("db", "golens.db", "Database path")
 	flagDryRun     = flag.Bool("dry-run", false, "Dry run mode (rules only, no sandbox)")
 	flagFakeModel  = flag.Bool("fake-model", false, "Use fake model for testing (no real LLM needed)")
 	flagSkillsRoot = flag.String("skills-root", "", "Skills root directory")
-	flagExec       = flag.String("executor", "local", "Code executor: local|container|e2b")
+	flagExec       = flag.String("executor", "container", "Code executor: container|e2b|local (local is development fallback)")
 )
 
 const (
@@ -56,10 +62,6 @@ func main() {
 	if *flagExec != "local" && *flagExec != "container" && *flagExec != "e2b" {
 		fmt.Printf("Error: unsupported executor %q\n", *flagExec)
 		flag.Usage()
-		os.Exit(1)
-	}
-	if *flagSkillsRoot != "" {
-		fmt.Println("Error: --skills-root is not supported yet")
 		os.Exit(1)
 	}
 
@@ -102,6 +104,12 @@ func run() error {
 	if *flagDiffFile != "" {
 		// 方式1: 解析 diff 文件
 		diffResult, err = parser.ParseFile(*flagDiffFile)
+	} else if strings.TrimSpace(*flagFileList) != "" {
+		files := strings.Split(*flagFileList, ",")
+		for i := range files {
+			files[i] = strings.TrimSpace(files[i])
+		}
+		diffResult, err = parser.ParseFileList(files)
 	} else {
 		// 方式2: 解析 git 工作区变更
 		diffResult, err = parser.ParseGitDiff(ctx)
@@ -113,6 +121,7 @@ func run() error {
 	}
 
 	// 保存 diff 摘要
+	store.UpdateTaskTotals(db, taskID, diffResult.TotalFiles, diffResult.TotalAdded, diffResult.TotalDeleted)
 	for _, file := range diffResult.Files {
 		if err := store.SaveDiffSummary(db, taskID, file.Path, file.Status, file.Additions, file.Deletions); err != nil {
 			store.UpdateTaskStatus(db, taskID, "failed", err.Error())
@@ -157,9 +166,10 @@ func run() error {
 	} else if os.Getenv("OPENAI_API_KEY") != "" {
 		// 使用真实 LLM
 		fmt.Printf("Running LLM analysis (model: %s)...\n", getModelName())
-		llmFindings, err := runLLMAnalysis(ctx, taskID, diffResult)
+		llmFindings, err := runLLMAnalysis(ctx, taskID, diffResult, *flagSkillsRoot)
 		if err != nil {
-			log.Printf("Warning: LLM analysis failed: %v", err)
+			store.UpdateTaskStatus(db, taskID, "failed", err.Error())
+			return fmt.Errorf("LLM analysis: %w", err)
 		} else {
 			findings = append(findings, llmFindings...)
 		}
@@ -193,19 +203,19 @@ func run() error {
 
 		// 沙箱执行前检查权限
 		deniedCommands := make(map[string]bool)
-		for _, script := range []string{"go vet", "staticcheck"} {
+		for _, script := range []string{"go test", "go vet", "staticcheck"} {
 			decision := permPolicy.Evaluate(script)
 			permissionDecision := store.PermissionDecision{
 				TaskID:   taskID,
 				Command:  script,
 				Decision: string(decision.Decision),
 				Reason:   decision.Reason,
-				}
-				permissionDecisions = append(permissionDecisions, permissionDecision)
-				if err := store.SavePermissionDecision(db, &permissionDecision); err != nil {
+			}
+			permissionDecisions = append(permissionDecisions, permissionDecision)
+			if err := store.SavePermissionDecision(db, &permissionDecision); err != nil {
 				log.Printf("Warning: failed to save permission decision: %v", err)
 			}
-			if decision.Decision == "deny" {
+			if decision.Decision != "allow" {
 				deniedCommands[script] = true
 			}
 		}
@@ -228,9 +238,13 @@ func run() error {
 			runs, err := sandboxExec.RunAllChecks(ctx, taskID)
 			if err != nil {
 				store.UpdateTaskStatus(db, taskID, "failed", err.Error())
-				return fmt.Errorf("sandbox checks: %w", err)
+				store.UpdateTaskStatus(db, taskID, "needs_human_review", err.Error())
+				sandboxRuns = []store.SandboxRun{{TaskID: taskID, ScriptName: "sandbox", ExitCode: -1, Stderr: err.Error(), ErrorType: "executor_error"}}
+				log.Printf("sandbox checks failed: %v", err)
 			}
-			sandboxRuns = runs
+			if err == nil {
+				sandboxRuns = runs
+			}
 
 			// Save sandbox run records and check for failures
 			sandboxFailed := false
@@ -246,17 +260,26 @@ func run() error {
 
 			// Mark task as failed if sandbox execution failed
 			if sandboxFailed {
-				store.UpdateTaskStatus(db, taskID, "failed", "sandbox execution failed")
-				return fmt.Errorf("sandbox execution failed")
+				store.UpdateTaskStatus(db, taskID, "needs_human_review", "sandbox execution failed")
+				log.Printf("sandbox execution failed; continuing with a review report")
 			}
 		} else {
-			log.Printf("Warning: sandbox execution skipped due to permission denial")
+			reason := "sandbox command requires approval"
+			for _, decision := range permissionDecisions {
+				if decision.Decision != "allow" && decision.Command != "review" {
+					reason = decision.Command + ": " + decision.Reason
+					break
+				}
+			}
+			store.UpdateTaskStatus(db, taskID, "needs_human_review", reason)
+			log.Printf("sandbox execution blocked: %s", reason)
 		}
 	}
 
 	// 9. Sensitive information redaction
 	secretDetector.RedactFindings(uniqueFindings)
 	secretDetector.RedactFindings(warnings)
+	secretDetector.RedactSandboxRuns(sandboxRuns)
 
 	// 8. 保存 findings
 	if err := store.SaveFindings(db, uniqueFindings); err != nil {
@@ -313,16 +336,25 @@ func run() error {
 	}
 
 	// 14. 保存 artifact
-	if err := store.SaveArtifact(db, &store.Artifact{
-		TaskID:       taskID,
-		ArtifactType: "report_json",
-		FilePath:     "review_report.json",
-		Content:      string(reportJSON),
-	}); err != nil {
-		store.UpdateTaskStatus(db, taskID, "failed", err.Error())
-		return fmt.Errorf("save report artifact: %w", err)
+	for _, artifact := range []store.Artifact{
+		{TaskID: taskID, ArtifactType: "report_json", FilePath: "review_report.json", Content: string(reportJSON)},
+		{TaskID: taskID, ArtifactType: "report_markdown", FilePath: "review_report.md", Content: reportMD},
+	} {
+		if err := store.SaveArtifact(db, &artifact); err != nil {
+			store.UpdateTaskStatus(db, taskID, "failed", err.Error())
+			return fmt.Errorf("save report artifact: %w", err)
+		}
 	}
-	if err := store.UpdateTaskStatus(db, taskID, "completed", ""); err != nil {
+	finalStatus := "completed"
+	if len(sandboxRuns) > 0 {
+		for _, run := range sandboxRuns {
+			if run.ExitCode != 0 {
+				finalStatus = "needs_human_review"
+				break
+			}
+		}
+	}
+	if err := store.UpdateTaskStatus(db, taskID, finalStatus, ""); err != nil {
 		return fmt.Errorf("complete task: %w", err)
 	}
 
@@ -354,7 +386,7 @@ func getModelName() string {
 }
 
 // runLLMAnalysis 使用真实 LLM 进行分析
-func runLLMAnalysis(ctx context.Context, taskID string, diffResult *input.DiffParseResult) ([]store.Finding, error) {
+func runLLMAnalysis(ctx context.Context, taskID string, diffResult *input.DiffParseResult, skillsRoot string) ([]store.Finding, error) {
 	secretDetector := security.NewSecretDetector()
 	var diffContent strings.Builder
 	for _, file := range diffResult.Files {
@@ -404,6 +436,16 @@ Diff:
 
 	// 使用 trpc-agent-go 框架调用 LLM
 	modelName := getModelName()
+	if strings.TrimSpace(skillsRoot) == "" {
+		skillsRoot = filepath.Join(skillsDir)
+	}
+	repo, err := skill.NewFSRepository(skillsRoot)
+	if err != nil {
+		return nil, fmt.Errorf("load skills repository: %w", err)
+	}
+	if _, err := repo.Get("code-review"); err != nil {
+		return nil, fmt.Errorf("load code-review skill: %w", err)
+	}
 	mdl := openai.New(modelName)
 
 	genConfig := model.GenerationConfig{
@@ -414,15 +456,31 @@ Diff:
 	agentOpts := []llmagent.Option{
 		llmagent.WithModel(mdl),
 		llmagent.WithDescription("Go 代码审查 Agent"),
-		llmagent.WithInstruction(instructionText),
+		llmagent.WithInstruction("先调用 skill_load 加载 code-review，再依据 Skill 规则审查；" + instructionText),
 		llmagent.WithGenerationConfig(genConfig),
+		llmagent.WithSkills(repo),
+		llmagent.WithSkillToolProfile(llmagent.SkillToolProfileFull),
+		llmagent.WithCodeExecutor(localexec.New()),
 	}
 
 	agent := llmagent.New("code-reviewer", agentOpts...)
 	r := runner.NewRunner(appName, agent)
 
+	// Execute only after the framework-level permission policy allows the tool.
+	permissionPolicy := func(_ context.Context, req *tool.PermissionRequest) (tool.PermissionDecision, error) {
+		decision := security.NewPermissionPolicy().EvaluateTool(req.ToolName, req.Arguments)
+		switch decision.Decision {
+		case "allow":
+			return tool.AllowPermission(), nil
+		case "deny":
+			return tool.DenyPermission(decision.Reason), nil
+		default:
+			return tool.AskPermission(decision.Reason), nil
+		}
+	}
+
 	// 执行
-	events, err := r.Run(ctx, "user", "review-"+taskID, model.NewUserMessage(prompt))
+	events, err := r.Run(ctx, "user", "review-"+taskID, model.NewUserMessage(prompt), agentpkg.WithToolPermissionPolicyFunc(permissionPolicy))
 	if err != nil {
 		return nil, fmt.Errorf("LLM run failed: %w", err)
 	}

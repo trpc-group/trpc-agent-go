@@ -22,9 +22,18 @@ type ReviewReport struct {
 	Summary             ReportSummary              `json:"summary"`
 	Findings            []store.Finding            `json:"findings"`
 	Warnings            []store.Finding            `json:"warnings"`
+	HumanReviewItems    []string                   `json:"human_review_items,omitempty"`
+	Governance          GovernanceSummary          `json:"governance"`
 	Sandbox             []store.SandboxRun         `json:"sandbox_runs"`
 	PermissionDecisions []store.PermissionDecision `json:"permission_decisions"`
+	Artifacts           []string                   `json:"artifacts,omitempty"`
 	Monitoring          *store.MonitoringSummary   `json:"monitoring,omitempty"`
+}
+
+// GovernanceSummary summarizes decisions that prevented automatic execution.
+type GovernanceSummary struct {
+	BlockedCount int      `json:"blocked_count"`
+	Decisions    []string `json:"decisions,omitempty"`
 }
 
 // ReportSummary 报告摘要
@@ -58,14 +67,30 @@ func Generate(taskID string, findings []store.Finding, warnings []store.Finding,
 		summary.DurationMs = monitoring.TotalDurationMs
 	}
 
+	governance := GovernanceSummary{}
+	humanReview := make([]string, 0)
+	for _, decision := range permissionDecisions {
+		if decision.Decision != "allow" {
+			governance.BlockedCount++
+			governance.Decisions = append(governance.Decisions, decision.Command+": "+decision.Decision)
+			humanReview = append(humanReview, decision.Command+": "+decision.Reason)
+		}
+	}
+	for _, warning := range warnings {
+		humanReview = append(humanReview, warning.File+":"+fmt.Sprint(warning.Line)+" "+warning.Title)
+	}
+
 	return &ReviewReport{
 		TaskID:              taskID,
 		Timestamp:           time.Now(),
 		Summary:             summary,
 		Findings:            findings,
 		Warnings:            warnings,
+		HumanReviewItems:    humanReview,
+		Governance:          governance,
 		Sandbox:             sandboxRuns,
 		PermissionDecisions: permissionDecisions,
+		Artifacts:           []string{"review_report.json", "review_report.md"},
 		Monitoring:          monitoring,
 	}
 }
@@ -121,6 +146,7 @@ func PrintMarkdown(report *ReviewReport) {
 	fmt.Printf("- **High:** %d\n", report.Summary.HighCount)
 	fmt.Printf("- **Medium:** %d\n", report.Summary.MediumCount)
 	fmt.Printf("- **Low:** %d\n", report.Summary.LowCount)
+	fmt.Printf("- **Info:** %d\n", report.Summary.InfoCount)
 	fmt.Printf("- **Overall Risk:** %s\n", report.Summary.OverallRisk)
 	fmt.Printf("- **Duration:** %dms\n\n", report.Summary.DurationMs)
 
@@ -163,6 +189,13 @@ func PrintMarkdown(report *ReviewReport) {
 	}
 
 	// 治理拦截摘要
+	if len(report.HumanReviewItems) > 0 {
+		fmt.Printf("## Human Review\n\n")
+		for _, item := range report.HumanReviewItems {
+			fmt.Printf("- %s\n", item)
+		}
+		fmt.Println()
+	}
 	if len(report.PermissionDecisions) > 0 {
 		fmt.Printf("## Permission Decisions\n\n")
 		for _, p := range report.PermissionDecisions {
@@ -181,6 +214,12 @@ func PrintMarkdown(report *ReviewReport) {
 		fmt.Printf("- **Findings Count:** %d\n", report.Monitoring.FindingsCount)
 
 		// 按固定顺序输出 severity 分布
+		if len(report.Monitoring.ExceptionDistribution) > 0 {
+			fmt.Printf("\n**Exception Distribution:**\n")
+			for kind, count := range report.Monitoring.ExceptionDistribution {
+				fmt.Printf("- %s: %d\n", kind, count)
+			}
+		}
 		if len(report.Monitoring.SeverityDistribution) > 0 {
 			fmt.Printf("\n**Severity Distribution:**\n")
 			severityOrder := []string{"critical", "high", "medium", "low", "info"}
@@ -297,6 +336,12 @@ func GenerateMarkdownString(report *ReviewReport) string {
 		sb.WriteString(fmt.Sprintf("- **Tool Calls:** %d\n", report.Monitoring.ToolCallsCount))
 		sb.WriteString(fmt.Sprintf("- **Permission Blocks:** %d\n", report.Monitoring.PermissionBlocksCount))
 		sb.WriteString(fmt.Sprintf("- **Findings Count:** %d\n", report.Monitoring.FindingsCount))
+		if len(report.Monitoring.ExceptionDistribution) > 0 {
+			fmt.Printf("\n**Exception Distribution:**\n")
+			for kind, count := range report.Monitoring.ExceptionDistribution {
+				fmt.Printf("- %s: %d\n", kind, count)
+			}
+		}
 		if len(report.Monitoring.SeverityDistribution) > 0 {
 			sb.WriteString("\n**Severity Distribution:**\n")
 			for _, severity := range []string{"critical", "high", "medium", "low", "info"} {
