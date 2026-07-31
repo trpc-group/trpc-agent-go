@@ -17,7 +17,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -256,6 +258,113 @@ func TestContextOffloadPlugin_SkipsBelowThresholdAndDeduplicatesPrompt(t *testin
 	assert.Equal(t, 2, ingestCount, "internal prompts must not trigger L1.5")
 }
 
+func TestContextOffloadPlugin_RetriesPromptAfterIngestFailure(t *testing.T) {
+	var ingestCount int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, pathOffloadIngest, r.URL.Path)
+		ingestCount++
+		if ingestCount == 1 {
+			http.Error(w, "temporary failure", http.StatusServiceUnavailable)
+			return
+		}
+		writeOffloadResponse(t, w, map[string]any{"accepted": true})
+	}))
+	defer server.Close()
+
+	svc := newOffloadTestService(t, server.URL, ContextOffloadConfig{
+		Enabled:         true,
+		ServiceID:       testOffloadServiceID,
+		CompactionRatio: 0.5,
+		TokenCounter:    fixedOffloadTokenCounter{tokens: 1},
+	})
+	defer svc.Close()
+	mgr, err := pluginpkg.NewManager(svc.ContextOffloadPlugin())
+	require.NoError(t, err)
+	inv := &agent.Invocation{
+		Session: &session.Session{ID: "sess", AppName: "app", UserID: "user"},
+		RunOptions: agent.RunOptions{
+			ModelContextWindow: 100,
+		},
+	}
+	ctx := agent.NewInvocationContext(context.Background(), inv).Context
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("retry this prompt")},
+	}
+
+	for i := 0; i < 3; i++ {
+		_, err = mgr.ModelCallbacks().RunBeforeModel(
+			ctx,
+			&model.BeforeModelArgs{Request: req},
+		)
+		require.NoError(t, err)
+	}
+	assert.Equal(t, 2, ingestCount,
+		"failed ingest must retry and successful ingest must deduplicate")
+}
+
+func TestContextOffloadPlugin_DeduplicatesPromptWhileInFlight(t *testing.T) {
+	var ingestCount atomic.Int32
+	started := make(chan struct{})
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, pathOffloadIngest, r.URL.Path)
+		if ingestCount.Add(1) == 1 {
+			close(started)
+			<-release
+		}
+		writeOffloadResponse(t, w, map[string]any{"accepted": true})
+	}))
+	defer server.Close()
+
+	svc := newOffloadTestService(t, server.URL, ContextOffloadConfig{
+		Enabled:         true,
+		ServiceID:       testOffloadServiceID,
+		CompactionRatio: 0.5,
+		TokenCounter:    fixedOffloadTokenCounter{tokens: 1},
+	})
+	defer svc.Close()
+	mgr, err := pluginpkg.NewManager(svc.ContextOffloadPlugin())
+	require.NoError(t, err)
+	inv := &agent.Invocation{
+		Session: &session.Session{ID: "sess", AppName: "app", UserID: "user"},
+		RunOptions: agent.RunOptions{
+			ModelContextWindow: 100,
+		},
+	}
+	ctx := agent.NewInvocationContext(context.Background(), inv).Context
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("same in-flight prompt")},
+	}
+	callbacks := mgr.ModelCallbacks()
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := callbacks.RunBeforeModel(
+			ctx,
+			&model.BeforeModelArgs{Request: req},
+		)
+		firstDone <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for the first ingest")
+	}
+
+	_, err = callbacks.RunBeforeModel(
+		ctx,
+		&model.BeforeModelArgs{Request: req},
+	)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, ingestCount.Load())
+	close(release)
+	select {
+	case err := <-firstDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for the first ingest to finish")
+	}
+}
+
 func TestContextOffloadPlugin_PreservesUserHeartbeatRequests(t *testing.T) {
 	var ingests []offloadIngestRequest
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -445,7 +554,28 @@ func TestContextOffloadPlugin_HTTPAndEnvelopeFailuresAreBestEffort(t *testing.T)
 }
 
 func TestContextOffloadConfigurationValidationAndOverride(t *testing.T) {
-	_, err := NewService(
+	directContextOffloadOption := func(options *Options) {
+		options.ContextOffload = ContextOffloadConfig{
+			Enabled:   true,
+			ServiceID: testOffloadServiceID,
+		}
+	}
+	svcWithDirectOption, err := NewService(
+		WithAPIKey(testOffloadAPIKey),
+		directContextOffloadOption,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, defaultCompactionRatio,
+		svcWithDirectOption.opts.ContextOffload.CompactionRatio)
+	require.NoError(t, svcWithDirectOption.Close())
+
+	standalone := NewContextOffloadPlugin(directContextOffloadOption)
+	standalonePlugin, ok := standalone.(*contextOffloadPlugin)
+	require.True(t, ok)
+	assert.Equal(t, defaultCompactionRatio,
+		standalonePlugin.opts.ContextOffload.CompactionRatio)
+
+	_, err = NewService(
 		WithContextOffload(ContextOffloadConfig{
 			Enabled:   true,
 			ServiceID: testOffloadServiceID,

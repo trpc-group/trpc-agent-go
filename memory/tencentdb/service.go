@@ -56,6 +56,9 @@ func NewService(opts ...Option) (*Service, error) {
 			opt(&options)
 		}
 	}
+	options.ContextOffload = normalizeContextOffloadConfig(
+		options.ContextOffload,
+	)
 	client, err := newGatewayClient(options)
 	if err != nil {
 		return nil, err

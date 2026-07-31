@@ -64,16 +64,25 @@ func NewContextOffloadPlugin(opts ...Option) plugin.Plugin {
 			opt(&options)
 		}
 	}
+	options.ContextOffload = normalizeContextOffloadConfig(
+		options.ContextOffload,
+	)
 	return &contextOffloadPlugin{opts: options}
+}
+
+type offloadPromptKey struct {
+	sessionID string
+	prompt    string
 }
 
 type contextOffloadPlugin struct {
 	opts   Options
 	client *offloadGatewayClient
 
-	promptMu    sync.Mutex
-	lastPrompt  map[string]string
-	promptOrder []string
+	promptMu        sync.Mutex
+	lastPrompt      map[string]string
+	promptOrder     []string
+	promptsInFlight map[offloadPromptKey]struct{}
 }
 
 func (p *contextOffloadPlugin) Name() string {
@@ -210,7 +219,7 @@ func (p *contextOffloadPlugin) ingestPrompt(
 	recent []offloadRecentMessage,
 ) {
 	if prompt == "" || isInternalOffloadPrompt(prompt) ||
-		!p.markPrompt(sessionID, prompt) {
+		!p.reservePrompt(sessionID, prompt) {
 		return
 	}
 	if _, err := client.ingest(ctx, offloadIngestRequest{
@@ -219,11 +228,14 @@ func (p *contextOffloadPlugin) ingestPrompt(
 		Prompt:         prompt,
 		RecentMessages: recent,
 	}); err != nil {
+		p.finishPrompt(sessionID, prompt, false)
 		log.WarnfContext(ctx, "tencentdb context offload: prompt ingest failed: %v", err)
+		return
 	}
+	p.finishPrompt(sessionID, prompt, true)
 }
 
-func (p *contextOffloadPlugin) markPrompt(sessionID, prompt string) bool {
+func (p *contextOffloadPlugin) reservePrompt(sessionID, prompt string) bool {
 	p.promptMu.Lock()
 	defer p.promptMu.Unlock()
 	if p.lastPrompt == nil {
@@ -231,6 +243,31 @@ func (p *contextOffloadPlugin) markPrompt(sessionID, prompt string) bool {
 	}
 	if p.lastPrompt[sessionID] == prompt {
 		return false
+	}
+	if p.promptsInFlight == nil {
+		p.promptsInFlight = make(map[offloadPromptKey]struct{})
+	}
+	key := offloadPromptKey{sessionID: sessionID, prompt: prompt}
+	if _, ok := p.promptsInFlight[key]; ok {
+		return false
+	}
+	p.promptsInFlight[key] = struct{}{}
+	return true
+}
+
+func (p *contextOffloadPlugin) finishPrompt(
+	sessionID string,
+	prompt string,
+	succeeded bool,
+) {
+	p.promptMu.Lock()
+	defer p.promptMu.Unlock()
+	delete(p.promptsInFlight, offloadPromptKey{
+		sessionID: sessionID,
+		prompt:    prompt,
+	})
+	if !succeeded {
+		return
 	}
 	if _, ok := p.lastPrompt[sessionID]; !ok {
 		if len(p.promptOrder) >= maxOffloadPromptSessions {
@@ -240,7 +277,6 @@ func (p *contextOffloadPlugin) markPrompt(sessionID, prompt string) bool {
 		p.promptOrder = append(p.promptOrder, sessionID)
 	}
 	p.lastPrompt[sessionID] = prompt
-	return true
 }
 
 func (p *contextOffloadPlugin) countTokens(
