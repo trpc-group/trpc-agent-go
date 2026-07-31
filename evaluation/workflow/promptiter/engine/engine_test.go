@@ -4198,6 +4198,41 @@ func TestLossTargetsSkipCaseWhenTargetNodeDidNotRun(t *testing.T) {
 	assert.Empty(t, losses)
 }
 
+func TestLossTargetsRejectNilTrace(t *testing.T) {
+	losses, err := (&engine{}).loss(&EvaluationResult{
+		EvalSets: []EvalSetResult{
+			{
+				EvalSetID: "train",
+				Cases: []CaseResult{
+					{
+						EvalSetID:  "train",
+						EvalCaseID: "case_1",
+						Metrics: []MetricResult{
+							{
+								MetricName: "quality",
+								Status:     status.EvalStatusFailed,
+								Reason:     "needs improvement",
+							},
+						},
+					},
+				},
+			},
+		},
+	}, []EvalSetInput{
+		{
+			EvalSetID: "train",
+			LossTargets: []LossTarget{
+				{
+					MetricName: "quality",
+					NodeID:     "draft",
+				},
+			},
+		},
+	})
+	assert.Nil(t, losses)
+	assert.EqualError(t, err, `resolve loss target for eval case "case_1" metric "quality": execution trace is nil`)
+}
+
 func TestLossTargetsSkipPassedMetric(t *testing.T) {
 	losses, err := (&engine{}).loss(&EvaluationResult{
 		EvalSets: []EvalSetResult{

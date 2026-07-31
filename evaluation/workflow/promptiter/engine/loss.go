@@ -200,7 +200,7 @@ func validateLossTargetMetrics(
 
 func traceLastStepIDForNode(trace *atrace.Trace, nodeID string) (string, bool, error) {
 	if trace == nil {
-		return "", false, nil
+		return "", false, errors.New("execution trace is nil")
 	}
 	stepID := ""
 	for _, step := range trace.Steps {

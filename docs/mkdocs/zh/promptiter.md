@@ -699,7 +699,7 @@ train := []engine.EvalSetInput{
 
 默认情况下，PromptIter 会把失败指标的 `Reason` 注入该评估用例 trace 的终端步骤，再从终端步骤开始反向传播。对于 Graph Agent 或多节点 Agent，如果某个指标已经通过 trace 占位符评价了中间节点，可以在训练集 `EvalSetInput` 中设置 `LossTargets`，将该指标的 `Reason` 直接注入指定 `NodeID` 的最后一次执行步骤。后续处理仍复用现有反向传播逻辑：目标步骤先根据 incoming loss 生成自身梯度，再按 `PredecessorStepIDs` 生成前序步骤的梯度包。
 
-`LossTargets` 按 EvalSet 和 MetricName 匹配训练集评估结果。同一个 EvalSet 中，一个 MetricName 只能配置一个目标节点。训练配置中的 `NodeID` 必须存在于当前结构快照中；如果某个评估用例本轮 trace 没有执行该节点，该指标 loss 会被跳过，不会回退到终端步骤。`LossTargets` 只在训练集 loss 提取中生效，验证集不支持 `LossTargets`，配置后请求会被拒绝。
+`LossTargets` 按 EvalSet 和 MetricName 匹配训练集评估结果。同一个 EvalSet 中，一个 MetricName 只能配置一个目标节点。如果配置的 MetricName 未出现在该 EvalSet 的训练评估结果中，本轮运行会失败。训练配置中的 `NodeID` 必须存在于当前结构快照中；如果某个评估用例本轮 trace 没有执行该节点，该指标 loss 会被跳过，不会回退到终端步骤。`LossTargets` 只在训练集 loss 提取中生效，验证集不支持 `LossTargets`，配置后请求会被拒绝。
 
 ### 反向传播器 Backwarder
 
