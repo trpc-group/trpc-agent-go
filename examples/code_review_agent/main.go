@@ -1,7 +1,12 @@
-// Copyright (C) 2025 Tencent. All rights reserved.
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
+//
+
 // # GoLens - 基于 trpc-agent-go 的自动代码评审 Agent 示例
 //
 // 本示例展示了如何使用 trpc-agent-go 框架构建一个自动代码评审系统，
