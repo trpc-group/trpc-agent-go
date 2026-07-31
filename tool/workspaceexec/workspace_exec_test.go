@@ -120,13 +120,18 @@ func TestExecTool_OmittedMaxOutputBytesPreservesUnlimitedBehavior(
 	t *testing.T,
 ) {
 	tl := NewExecTool(localexec.New())
-	in, err := parseExecInput([]byte(
-		`{"command":"echo hello"}`,
-	))
+	const expected = "complete output"
+	args, err := json.Marshal(execInput{
+		Command: "printf '" + expected + "'",
+		Timeout: timeoutSecSmall,
+	})
 	require.NoError(t, err)
-	req, err := tl.prepareExec(context.Background(), in)
+
+	res, err := tl.Call(context.Background(), args)
 	require.NoError(t, err)
-	require.Zero(t, req.spec.MaxOutputBytes)
+	out := res.(execOutput)
+	require.Equal(t, expected, out.Output)
+	require.False(t, out.Truncated)
 }
 
 func TestExecTool_Declaration_DescribesGeneralShellUsage(t *testing.T) {

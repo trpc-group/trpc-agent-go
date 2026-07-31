@@ -91,30 +91,9 @@ func (m *manager) exec(
 	}
 
 	m.cleanupExpired()
-
-	yieldMs := defaultYieldMS
-	if params.YieldMs != nil && *params.YieldMs >= 0 {
-		yieldMs = *params.YieldMs
-	}
-
-	timeoutS := defaultTimeoutS
-	if params.TimeoutS != nil && *params.TimeoutS > 0 {
-		timeoutS = *params.TimeoutS
-	}
-	timeout := timeoutDuration(timeoutS)
-	if params.MaxOutputBytes == 0 {
-		params.MaxOutputBytes = defaultMaxOutputBytes
-	}
-	if params.MaxOutputBytes < 0 {
-		return execResult{}, errors.New(
-			"max_output_bytes must not be negative",
-		)
-	}
-	if params.MaxOutputBytes > maxOutputBytes {
-		return execResult{}, fmt.Errorf(
-			"max_output_bytes must not exceed %d",
-			maxOutputBytes,
-		)
+	params, yieldMs, timeout, err := normalizeExecParams(params)
+	if err != nil {
+		return execResult{}, err
 	}
 
 	if !params.Background && yieldMs == 0 && !params.Pty {
@@ -142,54 +121,80 @@ func (m *manager) exec(
 	}
 
 	if params.Background {
-		return execResult{
-			Status:    programStatusRunning,
-			SessionID: sess.id,
-			Output:    sess.pollTail(defaultLogTail),
-			Truncated: sess.wasTruncated(),
-		}, nil
+		return runningExecResult(sess), nil
 	}
 
 	if yieldMs == 0 {
-		select {
-		case <-ctx.Done():
-			_ = m.kill(sess.id)
-			return execResult{}, ctx.Err()
-		case <-sess.doneCh:
-		}
-		out, code := sess.allOutput()
-		_ = m.clearFinished(sess.id)
-		return execResult{
-			Status:    programStatusExited,
-			Output:    out,
-			ExitCode:  intPtr(code),
-			Truncated: sess.wasTruncated(),
-		}, nil
+		return m.waitForSession(ctx, sess, nil)
 	}
 
 	timer := time.NewTimer(time.Duration(yieldMs) * time.Millisecond)
 	defer timer.Stop()
+	return m.waitForSession(ctx, sess, timer.C)
+}
+
+func normalizeExecParams(
+	params execParams,
+) (execParams, int, time.Duration, error) {
+	yieldMs := defaultYieldMS
+	if params.YieldMs != nil && *params.YieldMs >= 0 {
+		yieldMs = *params.YieldMs
+	}
+	timeoutS := defaultTimeoutS
+	if params.TimeoutS != nil && *params.TimeoutS > 0 {
+		timeoutS = *params.TimeoutS
+	}
+	if params.MaxOutputBytes == 0 {
+		params.MaxOutputBytes = defaultMaxOutputBytes
+	}
+	if params.MaxOutputBytes < 0 {
+		return execParams{}, 0, 0, errors.New(
+			"max_output_bytes must not be negative",
+		)
+	}
+	if params.MaxOutputBytes > maxOutputBytes {
+		return execParams{}, 0, 0, fmt.Errorf(
+			"max_output_bytes must not exceed %d",
+			maxOutputBytes,
+		)
+	}
+	return params, yieldMs, timeoutDuration(timeoutS), nil
+}
+
+func (m *manager) waitForSession(
+	ctx context.Context,
+	sess *session,
+	yield <-chan time.Time,
+) (execResult, error) {
 
 	select {
 	case <-ctx.Done():
 		_ = m.kill(sess.id)
 		return execResult{}, ctx.Err()
 	case <-sess.doneCh:
-		out, code := sess.allOutput()
-		_ = m.clearFinished(sess.id)
-		return execResult{
-			Status:    programStatusExited,
-			Output:    out,
-			ExitCode:  intPtr(code),
-			Truncated: sess.wasTruncated(),
-		}, nil
-	case <-timer.C:
-		return execResult{
-			Status:    programStatusRunning,
-			SessionID: sess.id,
-			Output:    sess.pollTail(defaultLogTail),
-			Truncated: sess.wasTruncated(),
-		}, nil
+		return m.finishedExecResult(sess), nil
+	case <-yield:
+		return runningExecResult(sess), nil
+	}
+}
+
+func (m *manager) finishedExecResult(sess *session) execResult {
+	out, code := sess.allOutput()
+	_ = m.clearFinished(sess.id)
+	return execResult{
+		Status:    programStatusExited,
+		Output:    out,
+		ExitCode:  intPtr(code),
+		Truncated: sess.wasTruncated(),
+	}
+}
+
+func runningExecResult(sess *session) execResult {
+	return execResult{
+		Status:    programStatusRunning,
+		SessionID: sess.id,
+		Output:    sess.pollTail(defaultLogTail),
+		Truncated: sess.wasTruncated(),
 	}
 }
 

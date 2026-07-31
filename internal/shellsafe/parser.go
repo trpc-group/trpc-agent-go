@@ -385,40 +385,51 @@ func gitArgumentsUnsafe(args []string) bool {
 		return true
 	}
 	for i, arg := range args {
-		lower := strings.ToLower(arg)
-		if lower == "--exec-path" ||
-			strings.HasPrefix(lower, "--exec-path=") ||
-			lower == "--config-env" ||
-			strings.HasPrefix(lower, "--config-env=") ||
-			lower == "--upload-pack" ||
-			strings.HasPrefix(lower, "--upload-pack=") ||
-			lower == "--receive-pack" ||
-			strings.HasPrefix(lower, "--receive-pack=") ||
-			(lower == "-u" && gitCloneOrFetch(args)) ||
-			strings.HasPrefix(lower, "ext::") {
+		if gitArgumentUnsafe(args, i, arg) {
 			return true
 		}
-		switch lower {
-		case "difftool":
-			for _, rest := range args[i+1:] {
-				if rest == "--extcmd" ||
-					strings.HasPrefix(rest, "--extcmd=") {
-					return true
-				}
-			}
-		case "filter-branch":
-			return true
-		case "bisect":
-			if i+1 < len(args) &&
-				strings.EqualFold(args[i+1], "run") {
-				return true
-			}
-		case "submodule":
-			if i+1 < len(args) &&
-				strings.EqualFold(args[i+1], "foreach") {
+	}
+	return false
+}
+
+func gitArgumentUnsafe(args []string, index int, arg string) bool {
+	lower := strings.ToLower(arg)
+	if gitExecutionOptionUnsafe(lower, args) {
+		return true
+	}
+	return gitSubcommandUnsafe(args, index, lower)
+}
+
+func gitExecutionOptionUnsafe(arg string, args []string) bool {
+	return arg == "--exec-path" ||
+		strings.HasPrefix(arg, "--exec-path=") ||
+		arg == "--config-env" ||
+		strings.HasPrefix(arg, "--config-env=") ||
+		arg == "--upload-pack" ||
+		strings.HasPrefix(arg, "--upload-pack=") ||
+		arg == "--receive-pack" ||
+		strings.HasPrefix(arg, "--receive-pack=") ||
+		(arg == "-u" && gitCloneOrFetch(args)) ||
+		strings.HasPrefix(arg, "ext::")
+}
+
+func gitSubcommandUnsafe(args []string, index int, subcommand string) bool {
+	switch subcommand {
+	case "difftool":
+		for _, rest := range args[index+1:] {
+			if rest == "--extcmd" ||
+				strings.HasPrefix(rest, "--extcmd=") {
 				return true
 			}
 		}
+	case "filter-branch":
+		return true
+	case "bisect":
+		return index+1 < len(args) &&
+			strings.EqualFold(args[index+1], "run")
+	case "submodule":
+		return index+1 < len(args) &&
+			strings.EqualFold(args[index+1], "foreach")
 	}
 	return false
 }

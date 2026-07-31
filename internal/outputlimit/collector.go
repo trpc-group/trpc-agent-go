@@ -115,7 +115,8 @@ func (w streamWriter) Write(p []byte) (int, error) {
 }
 
 // TruncateString retains at most max leading bytes from value without
-// splitting a valid UTF-8 encoding.
+// splitting a valid UTF-8 encoding. A non-positive max disables truncation.
+// The returned boolean reports whether any bytes were discarded.
 func TruncateString(value string, max int) (string, bool) {
 	if max <= 0 {
 		return value, false
