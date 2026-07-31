@@ -17,8 +17,11 @@ import (
 )
 
 // Formatter formats a final tool result as model-visible message content.
-// Implementations may be called concurrently and must provide their own
-// synchronization when they hold mutable state.
+// Implementations must treat result as read-only. The same value is observed
+// afterwards by ToolResultMessages callbacks, so modifying a pointer, map, or
+// slice result in place makes consumers of one tool call disagree about what
+// the tool returned. Implementations may be called concurrently and must
+// provide their own synchronization when they hold mutable state.
 type Formatter interface {
 	Format(ctx context.Context, result any) (string, error)
 }

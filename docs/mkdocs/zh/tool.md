@@ -528,9 +528,9 @@ Formatter 接收 `AfterTool` callback 处理后的最终结果，仅改变
   `StreamableTool` 只格式化最终结果，中间事件不变。
 - 对于会更新会话状态的工具，状态更新消费的是「未配置 formatter 时框架会发出的那条
   工具消息内容」，也就是 `AfterTool` callback 处理后结果的 JSON。formatter 不参与
-  状态协议：即使它原地修改了指针或 map 类型的结果，写入会话的仍然是修改前的内容。
-  如果 `ToolResultMessages` 改写了工具消息内容，则以改写后的内容为准——这与引入
-  formatter 之前的行为一致。
+  状态协议：即使它违反只读契约、原地修改了指针或 map 类型的结果，写入会话的仍然是
+  修改前的内容。如果 `ToolResultMessages` 改写了工具消息内容，则以改写后的内容为
+  准——这与引入 formatter 之前的行为一致。
 - `ToolResultMessages` callback 仍会在默认工具结果消息生成后执行，并可用其返回的消息
   覆盖默认消息；多消息、多模态内容或完全接管消息协议的场景继续使用该 callback。注意
   formatter 是按工具配置的，而 `ToolResultMessages` 是整个 Agent 全局的：对配置了
@@ -539,8 +539,9 @@ Formatter 接收 `AfterTool` callback 处理后的最终结果，仅改变
   `DefaultToolMessage.Content`。
 
 Formatter 返回的文本会直接写入默认工具结果消息，可以在格式化函数中按业务协议处理
-转义、截断和格式校验。Formatter 可能被并发调用；若持有可变状态，需要自行保证并发
-安全。
+转义、截断和格式校验。Formatter 必须把入参结果视为只读：同一个结果对象随后会作为
+`ToolResultMessagesInput.Result` 交给回调，原地修改会让同一次工具调用的不同消费方
+看到不一致的结果。Formatter 可能被并发调用；若持有可变状态，需要自行保证并发安全。
 
 完整可运行示例见
 [examples/toolresultformat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/toolresultformat)。

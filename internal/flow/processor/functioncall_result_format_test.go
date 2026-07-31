@@ -978,9 +978,10 @@ type mutableResult struct {
 	Output string `json:"output"`
 }
 
-// TestExecuteToolCall_StateDeltaIgnoresInPlaceFormatterMutation pins that a
-// formatter is a presentation hook: mutating a reference-typed result in place
-// changes what the model sees but never what the session persists.
+// TestExecuteToolCall_StateDeltaIgnoresInPlaceFormatterMutation pins that the
+// state protocol degrades safely when a formatter breaks its read-only
+// contract. Mutating a reference-typed result in place is out of contract, but
+// it must never reach what the session persists.
 func TestExecuteToolCall_StateDeltaIgnoresInPlaceFormatterMutation(t *testing.T) {
 	stateful := &statefulFunctionTool[struct{}, *mutableResult]{
 		FunctionTool: function.NewFunctionTool(

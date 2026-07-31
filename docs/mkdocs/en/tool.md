@@ -551,8 +551,9 @@ role, name, tool call ID, ordering, events, and session persistence.
 - For tools that update session state, the state update consumes the tool
   message content the framework would send without a formatter, which is the
   JSON of the result produced after `AfterTool` callbacks. A formatter is not
-  part of the state protocol: even if it mutates a pointer or map result in
-  place, the session records the value from before that mutation. When
+  part of the state protocol: even if a formatter breaks the read-only contract
+  and mutates a pointer or map result in place, the session records the value
+  from before that mutation. When
   `ToolResultMessages` rewrites the tool message content, the rewritten content
   wins, exactly as it did before formatting existed.
 - The `ToolResultMessages` callback still runs after the default tool result
@@ -567,8 +568,11 @@ role, name, tool call ID, ordering, events, and session persistence.
 
 The formatter's return value becomes the default tool result message. The
 formatting function can apply any escaping, truncation, or validation required
-by the application's message format. A formatter may be called concurrently
-and must synchronize any mutable state it owns.
+by the application's message format. A formatter must treat its input result as
+read-only: the same value is handed to the `ToolResultMessages` callback as
+`ToolResultMessagesInput.Result`, so mutating it in place makes consumers of one
+tool call disagree about what the tool returned. A formatter may be called
+concurrently and must synchronize any mutable state it owns.
 
 For a runnable end-to-end example, see
 [examples/toolresultformat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/toolresultformat).
