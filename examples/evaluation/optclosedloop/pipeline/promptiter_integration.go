@@ -20,6 +20,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
@@ -100,9 +101,15 @@ func BuildRunRequest(
 // Text SurfaceValue. This profile can be passed as InitialProfile to the
 // promptiter engine.
 func BuildBaselineProfile(prompts map[string]string) *promptiter.Profile {
-	overrides := make([]promptiter.SurfaceOverride, 0, len(prompts))
-	for surfaceID, text := range prompts {
-		t := text
+	// Sort surface IDs for deterministic override ordering.
+	surfaceIDs := make([]string, 0, len(prompts))
+	for surfaceID := range prompts {
+		surfaceIDs = append(surfaceIDs, surfaceID)
+	}
+	sort.Strings(surfaceIDs)
+	overrides := make([]promptiter.SurfaceOverride, 0, len(surfaceIDs))
+	for _, surfaceID := range surfaceIDs {
+		t := prompts[surfaceID]
 		overrides = append(overrides, promptiter.SurfaceOverride{
 			SurfaceID: surfaceID,
 			Value:     astructure.SurfaceValue{Text: &t},

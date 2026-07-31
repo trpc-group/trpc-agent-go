@@ -43,7 +43,14 @@ type fakeCaseOutcome struct {
 	PassBaseline  bool
 	PassOptimized map[string]bool // surface -> pass after patch
 	Response      string
-	Tools         []ToolStep
+	// DegradedResponse is the response text shown when a candidate patch
+	// causes this case to fail (e.g. router mis-routing). If empty, Response
+	// is used for both pass and fail states.
+	DegradedResponse string
+	Tools            []ToolStep
+	// DegradedTools is the tool trajectory shown when a candidate patch
+	// causes this case to fail. If empty, Tools is used for both states.
+	DegradedTools []ToolStep
 	FailReason    FailureCategory
 	FailReasonStr string
 }
@@ -104,12 +111,19 @@ var caseOutcomes = map[string]fakeCaseOutcome{
 		// by other gates cleanly.
 		OptDelta:      map[string]float64{"router_prompt": -0.40, "system_prompt": 0.00, "agent_instruction": 0.00, "tool_desc_calc": 0.00},
 		PassOptimized: map[string]bool{"router_prompt": false, "system_prompt": true, "agent_instruction": true, "tool_desc_calc": true},
-		Response:      "Routed to MathAgent: answer is 7.0 (expects EmailAgent)",
-		FailReason:    RouteError,
-		FailReasonStr: "candidate over-optimized routing; sends email task to MathAgent",
+		// Baseline routes correctly to EmailAgent.
+		Response: "OK: email sent to sales@example.com confirming Q4 meeting at 3pm.",
 		Tools: []ToolStep{
+			{ToolName: "route", Args: map[string]any{"target": "EmailAgent"}, Output: "email_sent"},
+		},
+		// When the router_prompt patch degrades this case, the agent
+		// mis-routes to MathAgent instead of EmailAgent.
+		DegradedResponse: "Routed to MathAgent: answer is 7.0 (expects EmailAgent)",
+		DegradedTools: []ToolStep{
 			{ToolName: "route", Args: map[string]any{"target": "MathAgent"}, Output: "7.0"},
 		},
+		FailReason:    RouteError,
+		FailReasonStr: "candidate over-optimized routing; sends email task to MathAgent",
 	},
 	"val_case_opt_03": {
 		Labels:        []string{"validation", "noeffect", "hardfail_guard"},
@@ -138,13 +152,7 @@ func (e *BaselineEvaluator) EvaluateSet(
 	setID string,
 	candidate *PromptCandidate,
 ) (*EvalSummary, error) {
-	outcomes := []fakeCaseOutcome{}
-	for cid, oc := range caseOutcomes {
-		if isMemberOfSet(setID, cid) {
-			outcomes = append(outcomes, oc)
-		}
-	}
-	// Sort by id for deterministic ordering.
+	// Collect and sort case IDs for deterministic ordering.
 	orderedIDs := []string{}
 	for cid := range caseOutcomes {
 		if isMemberOfSet(setID, cid) {
@@ -171,13 +179,22 @@ func (e *BaselineEvaluator) EvaluateSet(
 		if candidate != nil {
 			// Apply patches: sum deltas across all patched surfaces for this case.
 			delta := 0.0
+			anyPatchedSurfaceDegrades := false
 			anyPatchedSurfacePasses := false
 			for surface := range candidate.Patches {
 				if d, ok := oc.OptDelta[surface]; ok {
 					delta += d
 				}
-				if p, ok := oc.PassOptimized[surface]; ok && p {
-					anyPatchedSurfacePasses = true
+				if p, ok := oc.PassOptimized[surface]; ok {
+					if !p {
+						// A patched surface explicitly causes this case to fail.
+						// Degradation takes priority over other passing surfaces
+						// so that merged patches correctly reflect the worst-case
+						// outcome (e.g. router_prompt mis-routing).
+						anyPatchedSurfaceDegrades = true
+					} else {
+						anyPatchedSurfacePasses = true
+					}
 				}
 			}
 			score += delta
@@ -187,7 +204,11 @@ func (e *BaselineEvaluator) EvaluateSet(
 			} else if score > 1 {
 				score = 1
 			}
-			passFlag = anyPatchedSurfacePasses || score >= 0.80
+			if anyPatchedSurfaceDegrades {
+				passFlag = false
+			} else {
+				passFlag = anyPatchedSurfacePasses || score >= 0.80
+			}
 		}
 
 		m := CaseMetric{
@@ -203,14 +224,26 @@ func (e *BaselineEvaluator) EvaluateSet(
 		if !passFlag {
 			m.Reason = fmt.Sprintf("%s: %s", oc.FailReason, oc.FailReasonStr)
 		}
+		// Use degraded trajectory/response when a candidate causes failure,
+		// so the audit trail accurately reflects the failing behavior.
+		resp := oc.Response
+		tools := oc.Tools
+		if candidate != nil && !passFlag {
+			if oc.DegradedResponse != "" {
+				resp = oc.DegradedResponse
+			}
+			if len(oc.DegradedTools) > 0 {
+				tools = oc.DegradedTools
+			}
+		}
 		caseResult := CaseEval{
 			EvalCaseID:     cid,
 			EvalSetID:      setID,
 			OverallPassed:  passFlag,
 			Metrics:        []CaseMetric{m},
 			SessionID:      fmt.Sprintf("sess_%s_%s_%d", setID, cid, e.rng.Int63n(100000)),
-			FinalResponse:  oc.Response,
-			ToolTrajectory: oc.Tools,
+			FinalResponse:  resp,
+			ToolTrajectory: tools,
 			TraceID:        fmt.Sprintf("trace_%s_%s", setID, cid),
 		}
 		caseResults = append(caseResults, caseResult)

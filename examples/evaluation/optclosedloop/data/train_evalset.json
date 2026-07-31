@@ -1,7 +1,7 @@
 {
   "evalSetId": "train",
   "name": "Prompt Optimization Training Set",
-  "description": "Training set used by the optclosedloop pipeline to drive PromptIter gradient signal. Contains three cases covering the three required categories: optimizable (pass→fail→pass with patch), noeffect (stable pass), and degrade-case is intentionally absent from train so optimiser can only learn from clearly fixable signals.",
+  "description": "Training set used by the optclosedloop pipeline to drive PromptIter gradient signal. Contains three cases covering two categories: optimizable (baseline fails, patched prompt fixes it) and noeffect (stable pass anchor). The degrade category is intentionally absent from train so the optimiser can only learn from clearly fixable signals.",
   "evalCases": [
     {
       "evalId": "train_case_opt_01",

@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"sort"
 
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
@@ -125,11 +126,17 @@ func (o *PromptOptimizer) ProposeCandidate(
 	}
 
 	// Merge with current prompts to produce a complete profile.
-	for surfaceID, text := range currentPrompts {
+	// Sort surface IDs for deterministic override ordering.
+	surfaceIDs := make([]string, 0, len(currentPrompts))
+	for surfaceID := range currentPrompts {
 		if surfaceID == strategy.Surface {
 			continue
 		}
-		t := text
+		surfaceIDs = append(surfaceIDs, surfaceID)
+	}
+	sort.Strings(surfaceIDs)
+	for _, surfaceID := range surfaceIDs {
+		t := currentPrompts[surfaceID]
 		profile.Overrides = append(profile.Overrides, promptiter.SurfaceOverride{
 			SurfaceID: surfaceID,
 			Value:     astructure.SurfaceValue{Text: &t},
@@ -155,12 +162,18 @@ func summarizeAttributions(attrs []FailureAttribution) string {
 	for _, a := range attrs {
 		counts[a.Category]++
 	}
+	// Sort categories for deterministic summary order.
+	cats := make([]string, 0, len(counts))
+	for cat := range counts {
+		cats = append(cats, string(cat))
+	}
+	sort.Strings(cats)
 	summary := ""
-	for cat, n := range counts {
+	for _, cat := range cats {
 		if summary != "" {
 			summary += ", "
 		}
-		summary += fmt.Sprintf("%s=%d", cat, n)
+		summary += fmt.Sprintf("%s=%d", cat, counts[FailureCategory(cat)])
 	}
 	return summary
 }

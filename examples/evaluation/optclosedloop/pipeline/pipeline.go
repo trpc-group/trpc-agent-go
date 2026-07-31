@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"sort"
 	"time"
 )
 
@@ -60,6 +61,7 @@ func buildPromptTargets(baseline map[string]string, targetIDs []string) []Prompt
 		for id := range baseline {
 			targetIDs = append(targetIDs, id)
 		}
+		sort.Strings(targetIDs)
 	}
 	targets := make([]PromptTarget, 0, len(targetIDs))
 	for _, id := range targetIDs {
@@ -80,6 +82,15 @@ func buildPromptTargets(baseline map[string]string, targetIDs []string) []Prompt
 // Run executes the full closed loop and returns the final report along with
 // the paths where JSON and Markdown reports have been written.
 func (p *Pipeline) Run(ctx context.Context) (*OptimizationReport, string, string, error) {
+	// trace_mode and real mode require the PromptIterAdapter with a live
+	// engine; the fake evaluator cannot produce meaningful results for them.
+	// Callers should use PromptIterAdapter.RunEngineWithAdapter for those modes.
+	if p.cfg.Mode != ModeFakeDeterministic {
+		return nil, "", "", fmt.Errorf(
+			"pipeline.Run does not support mode %q; use PromptIterAdapter.RunEngineWithAdapter for trace_mode/real",
+			p.cfg.Mode)
+	}
+
 	startedAt := time.Now()
 	report := &OptimizationReport{
 		AppName:         p.cfg.AppName,
@@ -115,6 +126,15 @@ func (p *Pipeline) Run(ctx context.Context) (*OptimizationReport, string, string
 	report.BestValidationScore = currentValScore
 	report.BestRound = 0
 
+	// acceptedPatches tracks only the surfaces that have been accepted by
+	// the gate in prior rounds. Each round's evaluation merges these with
+	// the new candidate so the evaluator sees the full accumulated state.
+	acceptedPatches := map[string]string{}
+	// currentValBaseline is the last accepted validation summary (or the
+	// original baseline). Delta computation uses this so "new hard fail"
+	// correctly means pass→fail relative to the current accepted state.
+	currentValBaseline := report.BaselineVal
+
 	totalCost := CostEstimate{}
 
 	// Phase 2: Multi-round optimization loop.
@@ -129,17 +149,20 @@ func (p *Pipeline) Run(ctx context.Context) (*OptimizationReport, string, string
 			PromptsBefore: maps.Clone(currentPrompts),
 		}
 
-		// 2a. Evaluate train set with current prompts (baseline on round 1
-		// uses same prompts; this mirrors real PromptIter where each round
-		// re-runs train to extract losses from the *current* accepted profile).
-		trainSummary, err := p.evaluator.EvaluateSet(ctx, p.cfg.TrainSetID, nil)
+		// 2a. Evaluate train set with currently accepted patches so the
+		// optimizer sees what is still failing in the accumulated state.
+		var trainCandidate *PromptCandidate
+		if len(acceptedPatches) > 0 {
+			trainCandidate = &PromptCandidate{Patches: acceptedPatches}
+		}
+		trainSummary, err := p.evaluator.EvaluateSet(ctx, p.cfg.TrainSetID, trainCandidate)
 		if err != nil {
 			return nil, "", "", fmt.Errorf("round %d train eval: %w", round, err)
 		}
 		roundRec.TrainSummary = trainSummary
-		roundRec.ValBaseline = report.BaselineVal
+		roundRec.ValBaseline = currentValBaseline
 
-		// 2b. Attribute failures.
+		// 2b. Attribute failures from the current train state.
 		roundRec.Attributions = AttributeFailures(trainSummary)
 
 		// 2c. Propose candidate via PromptIter simulator.
@@ -150,15 +173,24 @@ func (p *Pipeline) Run(ctx context.Context) (*OptimizationReport, string, string
 		}
 		roundRec.Candidate = candidate
 
-		// 2d. Re-run validation with candidate prompt applied.
-		valCandidate, err := p.evaluator.EvaluateSet(ctx, p.cfg.ValSetID, candidate)
+		// 2d. Build merged patches: accepted + new candidate. The evaluator
+		// sees the full accumulated prompt state so accepted patches compound
+		// across rounds instead of being silently dropped.
+		mergedPatches := maps.Clone(acceptedPatches)
+		for k, v := range candidate.Patches {
+			mergedPatches[k] = v
+		}
+		mergedCandidate := &PromptCandidate{Patches: mergedPatches}
+
+		// 2e. Re-run validation with merged candidate prompts applied.
+		valCandidate, err := p.evaluator.EvaluateSet(ctx, p.cfg.ValSetID, mergedCandidate)
 		if err != nil {
 			return nil, "", "", fmt.Errorf("round %d validation candidate eval: %w", round, err)
 		}
 		roundRec.ValCandidate = valCandidate
 
-		// 2e. Compute case delta.
-		deltas, newHardFail, keyCaseDegrade, err := ComputeCaseDelta(report.BaselineVal, valCandidate)
+		// 2f. Compute case delta against the current accepted baseline.
+		deltas, newHardFail, keyCaseDegrade, err := ComputeCaseDelta(currentValBaseline, valCandidate)
 		if err != nil {
 			return nil, "", "", fmt.Errorf("round %d compute delta: %w", round, err)
 		}
@@ -187,9 +219,11 @@ func (p *Pipeline) Run(ctx context.Context) (*OptimizationReport, string, string
 			nextPrompts = maps.Clone(currentPrompts)
 			for k, v := range candidate.Patches {
 				nextPrompts[k] = v
+				acceptedPatches[k] = v
 			}
 			currentPrompts = nextPrompts
 			currentValScore = candScore
+			currentValBaseline = valCandidate
 			lastAccepted = true
 			if candScore > report.BestValidationScore {
 				report.BestValidationScore = candScore

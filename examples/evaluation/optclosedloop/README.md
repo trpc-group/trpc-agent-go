@@ -68,6 +68,8 @@ iterate on the pipeline itself without burning live tokens. The orchestrator
 `Pipeline.Run` intentionally models the PromptIter engine contract
 (engine.RunRequest → engine.RunResult) but decouples stages into composable,
 testable units rather than requiring the heavy PromptIter engine stack up front.
+`Pipeline.Run` supports `fake_deterministic` mode directly; `trace_mode` and
+`real` mode require `PromptIterAdapter.RunEngineWithAdapter` with a live engine.
 
 Baseline evaluation separates train from validation exactly as the issue
 requires: training cases drive attribution and candidate proposal; validation
@@ -77,21 +79,25 @@ route, hedging/knowledge, final-response fallback — so the same rule set
 generalises to trace_mode and live runs.
 
 The PromptOptimizer runs a round-robin schedule over the four required prompt
-surfaces. Rounds 1–3 each produce exactly one patch, which the baseline
-evaluator maps onto programmed per-case deltas. That mapping is the critical
-deterministic harness: round 1 `system_prompt` patch lifts `train_case_opt_01`
-and `val_case_opt_01`; round 2 `tool_desc_calc` lifts `train_case_opt_02` with
-no validation movement; round 3 `router_prompt` patch over-fits and pushes
-`val_case_opt_02` from pass into `route_error`, triggering the
-`AllowNewHardFail=false` reject gate. The sequence therefore demonstrates both
-a successful acceptance (round 1) and a successful rejection (round 3) with a
-clean `optimization_report.*` audit trail for every step.
+surfaces. Rounds 1–3 each produce exactly one patch. Accepted patches compound
+across rounds: each round's evaluation merges all previously accepted patches
+with the new candidate, so the evaluator sees the full accumulated prompt
+state. The deterministic harness works as follows: round 1 `system_prompt`
+patch lifts `train_case_opt_01` and `val_case_opt_01` (accepted, Δ=+0.1833);
+round 2 `tool_desc_calc` patch produces no validation improvement relative to
+the already-accepted round-1 state (rejected, Δ=0.0000, below min_score_gain);
+round 3 `router_prompt` patch over-fits and pushes `val_case_opt_02` from pass
+into `route_error` (rejected, new hard fail, Δ=-0.1333). The sequence therefore
+demonstrates both a successful acceptance (round 1) and successful rejections
+(rounds 2 and 3) with a clean `optimization_report.*` audit trail for every step.
 
 Acceptance gates are additive and every gate's result is recorded individually
 in the decision reasons, so operators can read from the markdown report
 _exactly which gate_ rejected the candidate (score delta, new hard fail, key
-case degradation, or cost). Cost and timing estimates are synthetic but
-round-correlated to exercise the cost budget gate when enabled. The final
-accepted profile, best round, and per-case delta tables are surfaced both in
-the CLI summary and in the markdown report for the PR's required "产物审计"
-artifact.
+case degradation, or cost). Per-case deltas are computed against the current
+accepted validation baseline (not the original baseline), so "new hard fail"
+correctly means pass→fail relative to the current accepted state. Cost and
+timing estimates are synthetic but round-correlated to exercise the cost budget
+gate when enabled. The final accepted profile, best round, and per-case delta
+tables are surfaced both in the CLI summary and in the markdown report for the
+PR's required "产物审计" artifact.

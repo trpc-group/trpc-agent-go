@@ -10,6 +10,7 @@
 package pipeline
 
 import (
+	"sort"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
@@ -133,9 +134,10 @@ func classify(setID string, c CaseEval, m CaseMetric) FailureAttribution {
 }
 
 // ToTerminalLosses converts failure attributions into the real
-// promptiter.TerminalLoss slice that the backwarder stage consumes.
+// promptiter.CaseLoss slice that the backwarder stage consumes.
 // Each attribution becomes one TerminalLoss with its Severity and Reason
 // preserved, enabling direct integration with the promptiter engine.
+// The returned slice is sorted by EvalCaseID for deterministic output.
 func ToTerminalLosses(attrs []FailureAttribution, evalSetID string) []promptiter.CaseLoss {
 	if len(attrs) == 0 {
 		return nil
@@ -155,12 +157,18 @@ func ToTerminalLosses(attrs []FailureAttribution, evalSetID string) []promptiter
 			Loss:       a.Reason,
 		})
 	}
-	out := make([]promptiter.CaseLoss, 0, len(byCase))
-	for caseID, losses := range byCase {
+	// Sort case IDs for deterministic output order.
+	caseIDs := make([]string, 0, len(byCase))
+	for caseID := range byCase {
+		caseIDs = append(caseIDs, caseID)
+	}
+	sort.Strings(caseIDs)
+	out := make([]promptiter.CaseLoss, 0, len(caseIDs))
+	for _, caseID := range caseIDs {
 		out = append(out, promptiter.CaseLoss{
 			EvalSetID:      evalSetID,
 			EvalCaseID:     caseID,
-			TerminalLosses: losses,
+			TerminalLosses: byCase[caseID],
 		})
 	}
 	return out

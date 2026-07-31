@@ -28,11 +28,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
+	"sort"
 	"syscall"
 
 	"trpc.group/trpc-go/trpc-agent-go/examples/evaluation/optclosedloop/pipeline"
@@ -72,7 +74,7 @@ func main() {
 			AllowNewHardFail:       *allowNewHardFail,
 			MaxCostBudget:          *maxCostBudget,
 		},
-		PromptsBaseline:  defaultBaselinePrompts(),
+		PromptsBaseline:  loadBaselinePrompts(*dataDir),
 		TargetSurfaceIDs: splitAndTrim(*surfaces),
 	}
 	if len(cfg.TargetSurfaceIDs) == 0 {
@@ -108,6 +110,23 @@ func defaultBaselinePrompts() map[string]string {
 	}
 }
 
+// loadBaselinePrompts loads baseline prompts from data-dir/baseline_prompts.json
+// if it exists, falling back to the built-in defaults.
+func loadBaselinePrompts(dataDir string) map[string]string {
+	path := dataDir + "/baseline_prompts.json"
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return defaultBaselinePrompts()
+	}
+	var prompts map[string]string
+	if err := json.Unmarshal(raw, &prompts); err != nil {
+		logger := log.New(os.Stderr, "[optclosedloop] ", log.LstdFlags)
+		logger.Printf("warning: failed to parse %s: %v; using built-in defaults", path, err)
+		return defaultBaselinePrompts()
+	}
+	return prompts
+}
+
 func printBanner(logger *log.Logger, cfg pipeline.Config) {
 	logger.Println("================================================================")
 	logger.Println(" Evaluation + Prompt Optimization Closed-Loop (Issue #2003)")
@@ -131,7 +150,11 @@ func printSummary(logger *log.Logger, report *pipeline.OptimizationReport, jsonP
 	logger.Println(" Pipeline complete")
 	logger.Println("================================================================")
 	logger.Printf("  Final accepted       : %t", report.FinalAccepted)
-	logger.Printf("  Baseline val score   : %.4f", report.BaselineVal.OverallScore)
+	if report.BaselineVal != nil {
+		logger.Printf("  Baseline val score   : %.4f", report.BaselineVal.OverallScore)
+	} else {
+		logger.Printf("  Baseline val score   : N/A (nil)")
+	}
 	logger.Printf("  Final val score      : %.4f", report.FinalValidationScore)
 	logger.Printf("  Best val score       : %.4f (round %d)", report.BestValidationScore, report.BestRound)
 	logger.Printf("  Rounds executed      : %d", len(report.Rounds))
@@ -141,6 +164,11 @@ func printSummary(logger *log.Logger, report *pipeline.OptimizationReport, jsonP
 	logger.Printf("  JSON report          : %s", jsonPath)
 	logger.Printf("  Markdown report      : %s", mdPath)
 	logger.Println()
+
+	if report.BaselineVal == nil {
+		logger.Println("Baseline validation summary is nil; skipping per-case breakdown.")
+		return
+	}
 
 	// Per-case baseline vs final table.
 	logger.Println("Per-case breakdown (baseline → final accepted validation):")
@@ -186,7 +214,13 @@ func printSummary(logger *log.Logger, report *pipeline.OptimizationReport, jsonP
 			if r.Acceptance != nil && r.Acceptance.Accepted {
 				verdict = "ACCEPT"
 			}
+			// Sort surface IDs for deterministic log output.
+			surfaces := make([]string, 0, len(r.Candidate.Patches))
 			for surface := range r.Candidate.Patches {
+				surfaces = append(surfaces, surface)
+			}
+			sort.Strings(surfaces)
+			for _, surface := range surfaces {
 				logger.Printf("  round %d  %-6s  surface=%-18s  id=%s", r.Round, verdict, surface, r.Candidate.CandidateID)
 			}
 		}
