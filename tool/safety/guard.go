@@ -20,6 +20,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
+const maxStoredResults = 32
+
 // Attr keys reserved for OpenTelemetry consumers.
 const (
 	// AttrDecision is the span attribute for allow/deny/ask.
@@ -42,8 +44,9 @@ const (
 //
 // Guard does not replace workspace isolation, CleanEnv hardening, or sandboxes.
 type Guard struct {
-	policy Policy
-	audit  Auditor
+	policy  Policy
+	audit   Auditor
+	loadErr error
 
 	mu      sync.Mutex
 	last    []Result
@@ -59,16 +62,18 @@ func WithPolicy(p Policy) Option {
 }
 
 // WithPolicyFile loads and overlays DefaultPolicy from path.
+// Load failures are stored on the Guard and surfaced as deny decisions;
+// they do not overwrite a caller-provided Auditor.
 func WithPolicyFile(path string) Option {
 	return func(g *Guard) {
 		p, err := LoadPolicyFile(path)
 		if err != nil {
-			// Deferred surface: CheckToolPermission returns deny with reason.
 			g.policy = DefaultPolicy()
-			g.audit = &errAuditor{err: err}
+			g.loadErr = err
 			return
 		}
 		g.policy = p
+		g.loadErr = nil
 	}
 }
 
@@ -104,7 +109,7 @@ func (g *Guard) Policy() Policy {
 	return g.policy
 }
 
-// LastResults returns a copy of scan results collected so far (for demos/tests).
+// LastResults returns a copy of recent scan results (bounded ring, for demos/tests).
 func (g *Guard) LastResults() []Result {
 	if g == nil {
 		return nil
@@ -122,14 +127,19 @@ func (g *Guard) CheckToolPermission(
 	req *tool.PermissionRequest,
 ) (tool.PermissionDecision, error) {
 	if g == nil {
-		return tool.AllowPermission(), nil
+		// A typed-nil Guard must not fail open: callers who wire safety
+		// incorrectly should see a deny, not a silent allow.
+		return tool.DenyPermission("safety: nil Guard"), nil
 	}
-	if ea, ok := g.audit.(*errAuditor); ok && ea.err != nil {
-		return tool.DenyPermission("safety policy failed to load: " + ea.err.Error()), nil
+	if g.loadErr != nil {
+		return tool.DenyPermission("safety policy failed to load: " + g.loadErr.Error()), nil
 	}
 
 	start := time.Now()
-	ex := Extract(req)
+	ex, err := Extract(req)
+	if err != nil {
+		return tool.DenyPermission(err.Error()), nil
+	}
 	// Non-exec tools with empty payload: allow (permission policy may still
 	// be combined with other policies by the host).
 	if ex.Command == "" && ex.Stdin == "" && len(ex.CodeBlocks) == 0 &&
@@ -146,6 +156,9 @@ func (g *Guard) CheckToolPermission(
 	g.record(result)
 	g.emitSpan(ctx, result)
 	if g.audit != nil {
+		// Best-effort audit: permission decision must not hang on disk I/O
+		// failure, but we still attempt to record. Callers who need hard
+		// guarantees should use an in-memory Auditor or buffer.
 		_ = g.audit.Append(AuditEvent{
 			Timestamp:  time.Now().UTC(),
 			ToolName:   result.ToolName,
@@ -178,6 +191,9 @@ func (g *Guard) record(r Result) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.last = append(g.last, r)
+	if len(g.last) > maxStoredResults {
+		g.last = append([]Result(nil), g.last[len(g.last)-maxStoredResults:]...)
+	}
 	g.reports++
 }
 
@@ -193,10 +209,3 @@ func (g *Guard) emitSpan(ctx context.Context, r Result) {
 		attribute.String(AttrBackend, string(r.Backend)),
 	)
 }
-
-// errAuditor remembers a policy load failure.
-type errAuditor struct {
-	err error
-}
-
-func (e *errAuditor) Append(AuditEvent) error { return e.err }

@@ -77,7 +77,8 @@ func main() {
 	if err := safety.WriteReportJSON(filepath.Join("output", "tool_safety_report.json"), reports); err != nil {
 		log.Fatal(err)
 	}
-	// Also write stable sample fixtures for the issue deliverable.
-	_ = safety.WriteReportJSON("tool_safety_report.json", reports)
+	if err := safety.WriteReportJSON("tool_safety_report.json", reports); err != nil {
+		log.Fatal(err)
+	}
 	fmt.Println("wrote output/tool_safety_report.json and tool_safety_report.json")
 }

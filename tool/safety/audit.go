@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"runtime"
 	"sync"
 	"time"
 )
@@ -85,9 +86,8 @@ func NewFileAuditor(path string) (*FileAuditor, error) {
 		return nil, fmt.Errorf("safety: open audit file: %w", err)
 	}
 	_ = f.Close()
-	if err := os.Chmod(path, 0o600); err != nil {
-		// Best effort on platforms that support it.
-		_ = err
+	if err := os.Chmod(path, 0o600); err != nil && runtime.GOOS != "windows" {
+		return nil, fmt.Errorf("safety: chmod audit file %q: %w", path, err)
 	}
 	return &FileAuditor{path: path}, nil
 }

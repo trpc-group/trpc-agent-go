@@ -28,7 +28,7 @@ import (
 //
 // LoadPolicyFile starts from DefaultPolicy and overlays values from the file.
 // Omitted deny lists therefore keep safe defaults (fail-closed), instead of
-// silently disabling denials 鈥?a common failure mode called out in reviews of
+// silently disabling denials — a common failure mode called out in reviews of
 // competing #2002 implementations.
 type Policy struct {
 	// AllowedCommands is passed to shellsafe allow matching (strict).
@@ -37,7 +37,9 @@ type Policy struct {
 	DeniedCommands []string `json:"denied_commands" yaml:"denied_commands"`
 	// DeniedPaths blocks path-like argv tokens that match or contain these markers.
 	DeniedPaths []string `json:"denied_paths" yaml:"denied_paths"`
-	// AllowedHosts is the network allowlist (exact host or suffix ".example.com").
+	// AllowedHosts is the network allowlist.
+	// Bare entries match the host exactly. Leading-dot entries (".example.com")
+	// opt into suffix matching for every subdomain of that domain.
 	AllowedHosts []string `json:"allowed_hosts" yaml:"allowed_hosts"`
 	// AskCommands triggers PermissionActionAsk when the executable basename matches.
 	AskCommands []string `json:"ask_commands" yaml:"ask_commands"`
@@ -163,7 +165,8 @@ func cleanStrings(in []string) []string {
 	return out
 }
 
-// ShellPolicy maps DeniedCommands / AllowedCommands into shellsafe.Policy.
-func (p Policy) ShellPolicy() shellsafe.Policy {
+// shellPolicy maps DeniedCommands / AllowedCommands into shellsafe.Policy.
+// Unexported on purpose: callers should not depend on internal/shellsafe types.
+func (p Policy) shellPolicy() shellsafe.Policy {
 	return shellsafe.PolicyFromLists(p.AllowedCommands, p.DeniedCommands)
 }

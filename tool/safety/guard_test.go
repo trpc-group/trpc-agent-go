@@ -228,6 +228,18 @@ func TestFailClosed_PartialPolicyKeepsDefaultDenies(t *testing.T) {
 	require.Contains(t, p.DeniedCommands, "rm")
 }
 
+func TestMalformedArguments_FailClosed(t *testing.T) {
+	t.Parallel()
+	g := safety.NewGuard()
+	dec, err := g.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{not-json`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, dec.Action)
+	require.Contains(t, dec.Reason, "decode")
+}
+
 func TestSchemeLessNetworkDenied(t *testing.T) {
 	t.Parallel()
 	g := safety.NewGuard()
@@ -277,7 +289,13 @@ func TestFileAuditor_ConcurrentAppend(t *testing.T) {
 	}
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
-	require.Greater(t, len(data), 0)
+	lines := 0
+	for _, b := range data {
+		if b == '\n' {
+			lines++
+		}
+	}
+	require.Equal(t, n, lines)
 }
 
 func TestScanPerf_500CommandsUnderOneSecond(t *testing.T) {

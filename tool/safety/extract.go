@@ -10,6 +10,7 @@ package safety
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -44,10 +45,12 @@ type Extracted struct {
 //
 // It is intentionally tool-aware for the first-party exec tools so that
 // codeexec payloads are not ignored (a bypass repeatedly found in #2002 PRs).
-func Extract(req *tool.PermissionRequest) Extracted {
+// Malformed JSON arguments return an error so Guard can fail closed instead of
+// treating garbage as an empty/allow payload.
+func Extract(req *tool.PermissionRequest) (Extracted, error) {
 	out := Extracted{Backend: BackendUnknown}
 	if req == nil {
-		return out
+		return out, nil
 	}
 	out.ToolName = req.ToolName
 	if req.Declaration != nil && req.Declaration.Name != "" {
@@ -57,7 +60,9 @@ func Extract(req *tool.PermissionRequest) Extracted {
 
 	var payload map[string]json.RawMessage
 	if len(req.Arguments) > 0 {
-		_ = json.Unmarshal(req.Arguments, &payload)
+		if err := json.Unmarshal(req.Arguments, &payload); err != nil {
+			return out, fmt.Errorf("safety: decode tool arguments: %w", err)
+		}
 	}
 	out.Command = stringField(payload, "command")
 	out.Stdin = firstStringField(payload, "stdin", "chars")
@@ -76,7 +81,7 @@ func Extract(req *tool.PermissionRequest) Extracted {
 	}
 	parts = append(parts, out.CodeBlocks...)
 	out.RawText = strings.Join(parts, "\n")
-	return out
+	return out, nil
 }
 
 func classifyBackend(name string) Backend {
@@ -138,6 +143,26 @@ func codeBlockTexts(raw json.RawMessage) []string {
 			return out
 		}
 	}
+	// Single object {"language":"...","code":"..."}.
+	var one struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(raw, &one); err == nil && strings.TrimSpace(one.Code) != "" {
+		return []string{one.Code}
+	}
+	// Plain string array.
+	var strs []string
+	if err := json.Unmarshal(raw, &strs); err == nil {
+		out := make([]string, 0, len(strs))
+		for _, s := range strs {
+			if strings.TrimSpace(s) != "" {
+				out = append(out, s)
+			}
+		}
+		if len(out) > 0 {
+			return out
+		}
+	}
 	// Double-encoded string form used by some model outputs.
 	var asString string
 	if err := json.Unmarshal(raw, &asString); err == nil && strings.TrimSpace(asString) != "" {
@@ -151,7 +176,9 @@ func codeBlockTexts(raw json.RawMessage) []string {
 					out = append(out, b.Code)
 				}
 			}
-			return out
+			if len(out) > 0 {
+				return out
+			}
 		}
 		return []string{asString}
 	}

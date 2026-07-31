@@ -124,7 +124,7 @@ func Scan(ex Extracted, policy Policy) Result {
 				Advice:   "refuse commands shellsafe cannot parse; rewrite as a simple pipeline or deny",
 			})
 		}
-		shellPol := policy.ShellPolicy()
+		shellPol := policy.shellPolicy()
 		// shellsafe applies its implicit wrapper deny only when the policy is
 		// Active(). Keep Guard fail-closed even if an overlay cleared both lists.
 		if !shellPol.Active() {
@@ -140,7 +140,7 @@ func Scan(ex Extracted, policy Policy) Result {
 			})
 		}
 		// Dangerous deletion patterns that may pass basename policy if rm is
-		// not listed 鈥?keep an explicit content check for the issue's 100% bar.
+		// not listed — keep an explicit content check for the issue's 100% bar.
 		if f, ok := scanDangerousDeletion(ex.Command); ok {
 			return finalize(res, f)
 		}
@@ -150,21 +150,24 @@ func Scan(ex Extracted, policy Policy) Result {
 		if f, ok := scanAskCommands(pipe, policy.AskCommands); ok {
 			res = finalize(res, f)
 		}
-	} else if len(ex.CodeBlocks) > 0 {
-		joined := strings.Join(ex.CodeBlocks, "\n")
-		if f, ok := scanDangerousDeletion(joined); ok {
+	}
+
+	// Non-command payloads (code_blocks and/or stdin) still need deletion /
+	// network scanning — otherwise stdin-only tool calls skip those rules.
+	extraText := strings.TrimSpace(strings.Join(append([]string{ex.Stdin}, ex.CodeBlocks...), "\n"))
+	if strings.TrimSpace(ex.Command) == "" && extraText != "" {
+		if f, ok := scanDangerousDeletion(extraText); ok {
 			return finalize(res, f)
 		}
-		if f, ok := scanNetworkFromText(joined, policy.AllowedHosts); ok {
+		if f, ok := scanNetworkFromText(extraText, policy.AllowedHosts); ok {
 			return finalize(res, f)
 		}
-		// Code execution without a shell command still warrants review for installs.
-		if looksLikeInstall(joined) {
+		if looksLikeInstall(extraText) {
 			res = finalize(res, Finding{
 				RuleID:   "code.install_mutation",
 				Decision: DecisionAsk,
 				Risk:     RiskMedium,
-				Evidence: "code block appears to install packages or mutate environment",
+				Evidence: "payload appears to install packages or mutate environment",
 				Advice:   "require human review before executing dependency-changing code",
 			})
 		}
@@ -189,6 +192,10 @@ func Scan(ex Extracted, policy Policy) Result {
 }
 
 func finalize(base Result, f Finding) Result {
+	// Redact the finding before storing so Findings[] cannot retain secrets.
+	if containsSecretEvidence(f.Evidence) {
+		f.Evidence = redactSecrets(f.Evidence)
+	}
 	base.Findings = append(base.Findings, f)
 	// Deny always wins; ask wins over allow.
 	switch {
@@ -296,15 +303,27 @@ func pathHit(text, marker string) bool {
 	if marker == "" {
 		return false
 	}
-	if strings.Contains(text, marker) {
+	lowerMarker := marker
+	// Short extension-like markers (".env") must not match arbitrary substrings
+	// such as "dotenv" or "my.env.example" comments without path separators.
+	strictExt := strings.HasPrefix(marker, ".") && !strings.Contains(marker[1:], "/")
+	if !strictExt && strings.Contains(text, lowerMarker) {
 		return true
 	}
-	// Also match flag forms: --env-file=.env / --config=/etc/secrets
 	for _, part := range strings.FieldsFunc(text, func(r rune) bool {
 		return unicode.IsSpace(r) || r == '=' || r == ','
 	}) {
 		p := strings.Trim(part, `"'`)
-		if strings.Contains(strings.ToLower(p), marker) {
+		pl := strings.ToLower(p)
+		if strictExt {
+			base := strings.ToLower(filepath.Base(p))
+			if base == strings.ToLower(marker) || strings.HasSuffix(pl, "/"+strings.ToLower(marker)) ||
+				strings.HasSuffix(pl, "\\"+strings.ToLower(marker)) {
+				return true
+			}
+			continue
+		}
+		if strings.Contains(pl, lowerMarker) {
 			return true
 		}
 		base := strings.ToLower(filepath.Base(p))
