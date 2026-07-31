@@ -226,7 +226,8 @@ func dedupeRuleMatches(matches []ruleMatch) ([]ruleMatch, int) {
 }
 
 func dedupeKey(match ruleMatch) string {
-	return fmt.Sprintf("%s\x00%d\x00%s", match.File, match.Line, match.Category)
+	return fmt.Sprintf("%s\x00%d\x00%s\x00%s",
+		match.File, match.Line, match.Category, match.RuleID)
 }
 
 func isBetterRuleMatch(candidate ruleMatch, existing ruleMatch) bool {

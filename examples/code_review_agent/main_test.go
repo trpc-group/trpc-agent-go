@@ -208,7 +208,7 @@ func TestShowTaskQuery(t *testing.T) {
 			t.Fatalf("unmarshal report: %v\n%s", err, stdout)
 		}
 		if got.TaskID != "task-1" || got.Status != reviewStatusCompleted ||
-			got.Conclusion != reviewConclusionPass {
+			got.Conclusion != reviewConclusionPass || !got.Runtime.SkipGoTest {
 			t.Fatalf("report = %+v", got)
 		}
 	})
@@ -606,6 +606,7 @@ func TestShowTaskRebuildsReportFromSQLite(t *testing.T) {
 		t.Fatalf("unmarshal report: %v\n%s", err, stdout)
 	}
 	if report.TaskID != "task-sqlite" || report.Input.DiffSHA256 != summary.DiffSHA256 ||
+		!summary.SkipGoTest || !report.Runtime.SkipGoTest ||
 		len(report.Artifacts) != 2 {
 		t.Fatalf("rebuilt report = %+v", report)
 	}
@@ -1487,17 +1488,27 @@ func TestRunChecksUsesChangedNestedModule(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			cmd := exec.Command("bash", filepath.ToSlash(scriptPath), mode)
 			cmd.Env = append(os.Environ(), "REVIEW_REPO_DIR="+filepath.ToSlash(repoRoot))
-			output, err := cmd.CombinedOutput()
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			cmd.Stdout = &stdout
+			cmd.Stderr = &stderr
+			err := cmd.Run()
 			if err == nil {
-				t.Fatalf("%s succeeded, want nested module failure\n%s", mode, output)
+				t.Fatalf("%s succeeded, want nested module failure\nstdout:\n%s\nstderr:\n%s",
+					mode, stdout.String(), stderr.String())
 			}
-			outputText := string(output)
-			nestedMarker := "==> " + mode + " nested"
-			spaceMarker := "==> " + mode + " with space"
-			nestedIndex := strings.Index(outputText, nestedMarker)
-			spaceIndex := strings.Index(outputText, spaceMarker)
-			if nestedIndex < 0 || spaceIndex <= nestedIndex {
-				t.Fatalf("%s output = %s, want ordered module markers", mode, output)
+			for name, outputText := range map[string]string{
+				"stdout": stdout.String(),
+				"stderr": stderr.String(),
+			} {
+				nestedMarker := "==> " + mode + " nested"
+				spaceMarker := "==> " + mode + " with space"
+				nestedIndex := strings.Index(outputText, nestedMarker)
+				spaceIndex := strings.Index(outputText, spaceMarker)
+				if nestedIndex < 0 || spaceIndex <= nestedIndex {
+					t.Fatalf("%s %s = %s, want ordered module markers",
+						mode, name, outputText)
+				}
 			}
 		})
 	}
@@ -2686,6 +2697,18 @@ func TestFinalizeRuleMatchesRoutesDedupesAndSummarizes(t *testing.T) {
 			RuleID:         "security.a_rule",
 		},
 		{
+			Severity:       "medium",
+			Category:       "security",
+			File:           "b.go",
+			Line:           2,
+			Title:          "weaker duplicate of the same rule",
+			Evidence:       `token = "abcdef123456"`,
+			Recommendation: "rotate the token",
+			Confidence:     0.80,
+			Source:         "diff",
+			RuleID:         "security.a_rule",
+		},
+		{
 			Severity:       "high",
 			Category:       "testing",
 			File:           "a.go",
@@ -2728,11 +2751,11 @@ func TestFinalizeRuleMatchesRoutesDedupesAndSummarizes(t *testing.T) {
 	if !reflect.DeepEqual(first, second) {
 		t.Fatalf("finalizeRuleMatches is not stable:\nfirst=%+v\nsecond=%+v", first, second)
 	}
-	if len(first.Findings) != 2 || len(first.Warnings) != 1 {
-		t.Fatalf("findings/warnings = %d/%d, want 2/1: %+v", len(first.Findings), len(first.Warnings), first)
+	if len(first.Findings) != 4 || len(first.Warnings) != 2 {
+		t.Fatalf("findings/warnings = %d/%d, want 4/2: %+v", len(first.Findings), len(first.Warnings), first)
 	}
-	if first.SuppressedMatches != 3 {
-		t.Fatalf("suppressed matches = %d, want 3", first.SuppressedMatches)
+	if first.SuppressedMatches != 1 {
+		t.Fatalf("suppressed matches = %d, want 1", first.SuppressedMatches)
 	}
 	if !first.NeedsHumanReview {
 		t.Fatalf("needs human review = false, want true")
@@ -2743,11 +2766,18 @@ func TestFinalizeRuleMatchesRoutesDedupesAndSummarizes(t *testing.T) {
 	if first.Warnings[0].RuleID != "tests.high" {
 		t.Fatalf("warning winner = %+v, want tests.high", first.Warnings[0])
 	}
-	if first.SeverityCounts["critical"] != 1 || first.SeverityCounts["high"] != 2 {
-		t.Fatalf("severity counts = %+v, want critical=1 high=2", first.SeverityCounts)
+	if first.SeverityCounts["critical"] != 1 || first.SeverityCounts["high"] != 3 ||
+		first.SeverityCounts["medium"] != 1 || first.SeverityCounts["low"] != 1 {
+		t.Fatalf("severity counts = %+v, want critical=1 high=3 medium=1 low=1",
+			first.SeverityCounts)
 	}
-	assertStringSlice(t, first.FindingRuleIDs, []string{"security.a_rule", "security.authorization"})
-	assertStringSlice(t, first.WarningRuleIDs, []string{"tests.high"})
+	assertStringSlice(t, first.FindingRuleIDs, []string{
+		"security.a_rule",
+		"security.authorization",
+		"security.m_rule",
+		"security.z_rule",
+	})
+	assertStringSlice(t, first.WarningRuleIDs, []string{"tests.high", "tests.low"})
 	if first.Redactions == 0 || strings.Contains(first.Findings[0].Evidence, "abcdef123456") ||
 		strings.Contains(first.Findings[1].Evidence, "abcdefghijklmnopqrstuvwxyz") {
 		t.Fatalf("redaction failed: redactions=%d findings=%+v", first.Redactions, first.Findings)
@@ -3128,10 +3158,12 @@ func TestCLIFinalSummaryFromFixtures(t *testing.T) {
 			wantWarningRuleIDs:   []string{ruleMissingTests},
 		},
 		{
-			fixture:               "duplicate_finding",
-			wantFindings:          1,
-			wantSuppressedMatches: 1,
-			wantFindingRuleIDs:    []string{ruleSecretHardcoded},
+			fixture:      "duplicate_finding",
+			wantFindings: 2,
+			wantFindingRuleIDs: []string{
+				ruleSecretHardcoded,
+				ruleShellCommandInjection,
+			},
 		},
 		{
 			fixture:              "sandbox_failure",
@@ -3344,10 +3376,11 @@ func sampleReviewReport(taskID string) reviewReport {
 			}},
 		},
 		Runtime: reportRuntime{
-			Runtime:   runtimeFake,
-			DryRun:    true,
-			OutputDir: "output",
-			DBPath:    "reviews.db",
+			Runtime:    runtimeFake,
+			DryRun:     true,
+			SkipGoTest: true,
+			OutputDir:  "output",
+			DBPath:     "reviews.db",
 		},
 		Parse: reportParse{
 			ChangedFiles:   1,

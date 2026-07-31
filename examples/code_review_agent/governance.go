@@ -51,6 +51,7 @@ const (
 	reviewRepoDirFromSkill = "../../work/repo"
 
 	defaultCommandTimeoutSeconds = 60
+	goTestSkippedReason          = "go test is disabled by default because the configured runtime has no verified outbound network boundary; pass --skip-go-test=false only for trusted code or a network-isolated sandbox"
 )
 
 var commandEnvAllowlist = map[string]bool{
@@ -262,6 +263,16 @@ func runGovernance(
 	var preflightFailed bool
 	var preflightReason string
 	for _, spec := range specs {
+		if spec.Kind == commandCheckGoTest && cfg.skipGoTest {
+			run := intentionallySkippedSandboxRun(
+				cfg.effectiveRuntime,
+				spec,
+				goTestSkippedReason,
+			)
+			result.addSandboxRun(run)
+			result.addSandboxWarning(spec, run)
+			continue
+		}
 		filterDecision := gateCommand(spec)
 		result.addFilterDecision(filterDecision)
 		if filterDecision.Decision != governanceDecisionAllow {

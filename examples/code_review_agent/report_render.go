@@ -108,6 +108,7 @@ type reportRuntime struct {
 	DryRun            bool   `json:"dry_run"`
 	RuleOnly          bool   `json:"rule_only"`
 	E2BTemplate       string `json:"e2b_template,omitempty"`
+	SkipGoTest        bool   `json:"skip_go_test"`
 	EnableStaticcheck bool   `json:"enable_staticcheck"`
 	OutputDir         string `json:"output_dir"`
 	DBPath            string `json:"db_path"`
@@ -208,6 +209,7 @@ func buildReviewReport(
 			DryRun:            cfg.dryRun,
 			RuleOnly:          cfg.ruleOnly,
 			E2BTemplate:       redact(cfg.e2bTemplate),
+			SkipGoTest:        cfg.skipGoTest,
 			EnableStaticcheck: cfg.enableStaticcheck,
 			OutputDir:         redact(cfg.outputDir),
 			DBPath:            redact(cfg.dbPath),
@@ -350,6 +352,7 @@ func (r reviewReport) summary() reviewSummary {
 		OutputDir:         r.Runtime.OutputDir,
 		DBPath:            r.Runtime.DBPath,
 		E2BTemplate:       r.Runtime.E2BTemplate,
+		SkipGoTest:        r.Runtime.SkipGoTest,
 		EnableStaticcheck: r.Runtime.EnableStaticcheck,
 		ChangedFiles:      r.Parse.ChangedFiles,
 		Hunks:             r.Parse.Hunks,

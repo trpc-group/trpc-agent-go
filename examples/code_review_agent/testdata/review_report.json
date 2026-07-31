@@ -37,6 +37,7 @@
     "runtime": "fake",
     "dry_run": true,
     "rule_only": false,
+    "skip_go_test": true,
     "enable_staticcheck": false,
     "output_dir": "output",
     "db_path": "output/reviews.db"

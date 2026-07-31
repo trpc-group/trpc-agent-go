@@ -66,9 +66,18 @@ go run ./code_review_agent --repo-path ../ --runtime local --allow-local
 Local execution uses a fresh temporary work root for every sandbox command, but
 it is not an operating-system security boundary: reviewed code still runs as
 the current host user. Use it only with trusted development inputs. Production
-E2B repository reviews create an independent sandbox for `go version`,
-`go test`, `go vet`, and optional staticcheck, so enabling staticcheck creates
-four sandboxes instead of three.
+E2B repository reviews run `go version` and `go vet` in independent sandboxes by
+default. Reviewed `go test` execution is disabled because the E2B configuration
+does not establish a verified outbound-network boundary. Enable it only for
+trusted code or a separately network-isolated template:
+
+```bash
+go run ./code_review_agent --repo-path ../ --skip-go-test=false
+```
+
+The default skip is recorded as a `sandbox.run_skipped` warning and therefore
+requires human review. `--enable-staticcheck` adds an optional staticcheck
+sandbox command; it does not enable `go test`.
 
 `--rule-only` disables advisory model behavior. The current example does not
 call a real model provider, so findings come from deterministic diff and Go rule
@@ -133,19 +142,21 @@ unclosed files, HTTP bodies, SQL rows, ignored errors, database handle and
 transaction lifecycle issues, and missing tests. Confidence is fixed by rule
 type and context quality: high-confidence matches become findings,
 lower-confidence inferences become warnings that require human review. Dedupe
-uses file, line, and category, keeping the strongest result and counting
-suppressed matches.
+uses file, line, category, and rule ID, keeping the strongest duplicate of the
+same rule while retaining distinct rules reported at the same location.
 
 Sandbox execution is advisory evidence. The agent builds private command specs
 from a closed enum, validates them through a command gate, then calls a
 `tool.PermissionPolicy` before creating or invoking the command's runner. Denied
 or ask decisions are stored and reported without creating a sandbox. Every real
 repository-dependent command receives a fresh copy of the same host snapshot in
-an independent E2B sandbox or local temporary work root, so reviewed tests cannot
-rewrite the source later analyzers inspect. Allowed commands run with clean
-environment settings, timeout and output limits, and restricted artifacts. E2B
-is the production-style runtime; fake mode is deterministic for tests; local
-mode is an explicit development fallback rather than a hostile-code boundary.
+an independent E2B sandbox or local temporary work root. `go test` is skipped by
+default and does not reach the command gate, permission policy, or sandbox
+runner; `--skip-go-test=false` is the explicit opt-in. Allowed commands run with
+clean environment settings, timeout and output limits, and restricted artifacts.
+E2B is the production-style runtime; fake mode is deterministic for tests;
+local mode is an explicit development fallback rather than a hostile-code
+boundary.
 Complete repository snapshots resolve changed Go source and module metadata to
 the modules that must be checked. Changes to `go.mod` select that module,
 changes to `go.sum` select the nearest module, and changes to `go.work` or
@@ -166,15 +177,16 @@ actual copied content. A timeout or limit failure skips repository-dependent
 checks and produces a human-review warning. All evidence, sandbox output,
 governance reasons, reports, and stored fields pass through redaction before
 persistence.
-`go test` stdout and stderr are controlled by reviewed tests, package
-initializers, and `TestMain`, so they remain only in the redacted sandbox run
-record and never become high-confidence findings. Every failed or otherwise
-abnormal go test run retains a generic sandbox warning and requires human
-review. Diagnostics from `go vet` and staticcheck are parsed from stdout and
-stderr because those commands do not execute reviewed tests. Such a diagnostic
-becomes a high-confidence finding only when its path uniquely maps to a changed
-file and its line is inside a new-side hunk; ambiguous, out-of-hunk, truncated,
-or otherwise incomplete output retains a governance warning for human review.
+When explicitly enabled, `go test` stdout and stderr are controlled by reviewed
+tests, package initializers, and `TestMain`, so they remain only in the redacted
+sandbox run record and never become high-confidence findings. Every failed or
+otherwise abnormal go test run retains a generic sandbox warning and requires
+human review. Diagnostics from `go vet` and staticcheck are parsed from stdout
+and stderr because those commands do not execute reviewed tests. Such a
+diagnostic becomes a high-confidence finding only when its module-qualified path
+uniquely maps to a changed file and its line is inside a new-side hunk;
+ambiguous, out-of-hunk, truncated, or otherwise incomplete output retains a
+governance warning for human review.
 Synthetic skipped runs remain visible but do not count as runner tool calls.
 SQLite stores a review task, diff summary, decisions, sandbox runs, findings,
 warnings, metrics, artifacts, and final report metadata, but not the raw diff.

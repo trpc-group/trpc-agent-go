@@ -102,10 +102,10 @@
       }
     },
     "duplicate_finding": {
-      "description": "two security rule matches on the same file, line, and category should dedupe",
+      "description": "distinct security rules on the same file, line, and category should remain visible",
       "diff": "diff --git a/duplicate.go b/duplicate.go\nindex 1111111..2222222 100644\n--- a/duplicate.go\n+++ b/duplicate.go\n@@ -1 +1,3 @@\n package duplicate\n+\n+func run(pattern string) error { const serviceToken = \"ghp_TEST_ONLY_NOT_A_REAL_TOKEN_123456\"; return exec.Command(\"sh\", \"-c\", \"grep \"+pattern).Run() }\n",
       "expected": {
-        "finding_rule_ids": ["secret.hardcoded"],
+        "finding_rule_ids": ["secret.hardcoded", "security.shell_command_injection"],
         "warning_rule_ids": []
       }
     },

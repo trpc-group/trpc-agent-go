@@ -25,6 +25,8 @@ const (
 
 var goDiagnosticPattern = regexp.MustCompile(`^(.*\.go):([0-9]+)(?::([0-9]+))?:\s*(.+)$`)
 
+const invalidSandboxDiagnosticModule = "\x00"
+
 type sandboxDiagnosticResult struct {
 	Matches  []ruleMatch
 	Parsed   int
@@ -59,12 +61,25 @@ func parseSandboxDiagnostics(
 	result := sandboxDiagnosticResult{}
 	seen := map[string]bool{}
 	for _, output := range []string{run.Stdout, run.Stderr} {
+		activeModule := ""
 		for _, line := range strings.Split(output, "\n") {
+			if module, ok := parseSandboxModuleBanner(spec.Kind, line); ok {
+				activeModule = module
+				continue
+			}
 			diagnostic, ok := parseSandboxDiagnosticLine(line)
 			if !ok {
 				continue
 			}
-			key := fmt.Sprintf("%s\x00%d\x00%d\x00%s", diagnostic.Path,
+			repositoryPath, exactOnly, pathOK := repositoryDiagnosticPath(
+				diagnostic.Path,
+				activeModule,
+			)
+			keyPath := repositoryPath
+			if !pathOK {
+				keyPath = activeModule + "\x00" + diagnostic.Path
+			}
+			key := fmt.Sprintf("%s\x00%d\x00%d\x00%s", keyPath,
 				diagnostic.Line, diagnostic.Column, diagnostic.Message)
 			if seen[key] {
 				continue
@@ -75,7 +90,10 @@ func parseSandboxDiagnostics(
 				result.Overflow = true
 				continue
 			}
-			file, ok := mapSandboxDiagnosticFile(diagnostic.Path, parsed)
+			if !pathOK {
+				continue
+			}
+			file, ok := mapSandboxDiagnosticFile(repositoryPath, parsed, exactOnly)
 			if !ok || !lineInNewHunk(file, diagnostic.Line) {
 				continue
 			}
@@ -99,6 +117,77 @@ func parseSandboxDiagnostics(
 		}
 	}
 	return result
+}
+
+func parseSandboxModuleBanner(kind commandKind, line string) (string, bool) {
+	mode := ""
+	switch kind {
+	case commandCheckGoVet:
+		mode = "vet"
+	case commandCheckStaticcheck:
+		mode = "staticcheck"
+	default:
+		return "", false
+	}
+	prefix := "==> " + mode + " "
+	line = strings.TrimSuffix(line, "\r")
+	if strings.HasPrefix(line, "==> ") && !strings.HasPrefix(line, prefix) {
+		return invalidSandboxDiagnosticModule, true
+	}
+	if !strings.HasPrefix(line, prefix) {
+		return "", false
+	}
+	module := strings.ReplaceAll(strings.TrimPrefix(line, prefix), "\\", "/")
+	if !isSafeSandboxModulePath(module) {
+		return invalidSandboxDiagnosticModule, true
+	}
+	return module, true
+}
+
+func isSafeSandboxModulePath(module string) bool {
+	if module == "" || strings.ContainsRune(module, '\x00') ||
+		strings.ContainsAny(module, "\r\n") {
+		return false
+	}
+	normalized := strings.ReplaceAll(module, "\\", "/")
+	if strings.HasPrefix(normalized, "/") || strings.HasPrefix(normalized, "//") ||
+		hasWindowsDrive(normalized) {
+		return false
+	}
+	clean := path.Clean(normalized)
+	return clean == normalized && clean != ".." && !strings.HasPrefix(clean, "../")
+}
+
+func repositoryDiagnosticPath(
+	diagnosticPath string,
+	module string,
+) (string, bool, bool) {
+	diagnosticPath = normalizeDiagnosticPath(diagnosticPath)
+	if module == invalidSandboxDiagnosticModule {
+		return "", false, false
+	}
+	if strings.ContainsRune(diagnosticPath, '\x00') {
+		return "", false, false
+	}
+	if isAbsoluteDiagnosticPath(diagnosticPath) {
+		return diagnosticPath, false, true
+	}
+	if diagnosticPath == "." || diagnosticPath == ".." ||
+		strings.HasPrefix(diagnosticPath, "../") {
+		return "", false, false
+	}
+	if module == "" {
+		return diagnosticPath, false, true
+	}
+	if module == "." {
+		return diagnosticPath, true, true
+	}
+	return path.Join(module, diagnosticPath), true, true
+}
+
+func isAbsoluteDiagnosticPath(value string) bool {
+	return strings.HasPrefix(value, "/") || strings.HasPrefix(value, "//") ||
+		hasWindowsDrive(value)
 }
 
 func parseSandboxDiagnosticLine(line string) (parsedSandboxDiagnostic, bool) {
@@ -129,7 +218,11 @@ func parseSandboxDiagnosticLine(line string) (parsedSandboxDiagnostic, bool) {
 	}, true
 }
 
-func mapSandboxDiagnosticFile(diagnosticPath string, parsed parsedDiff) (changedFile, bool) {
+func mapSandboxDiagnosticFile(
+	diagnosticPath string,
+	parsed parsedDiff,
+	exactOnly bool,
+) (changedFile, bool) {
 	diagnosticPath = normalizeDiagnosticPath(diagnosticPath)
 	var exact changedFile
 	exactMatches := 0
@@ -144,6 +237,9 @@ func mapSandboxDiagnosticFile(diagnosticPath string, parsed parsedDiff) (changed
 	}
 	if exactMatches > 0 {
 		return exact, exactMatches == 1
+	}
+	if exactOnly {
+		return changedFile{}, false
 	}
 
 	var match changedFile

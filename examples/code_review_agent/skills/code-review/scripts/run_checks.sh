@@ -84,7 +84,8 @@ run_in_modules() {
       continue
     fi
     module_count=$((module_count + 1))
-    echo "==> $mode $module"
+    printf '==> %s %s\n' "$mode" "$module"
+    printf '==> %s %s\n' "$mode" "$module" >&2
     (cd "$module_dir" && "$@") || status=1
   done < "$module_manifest"
 

@@ -124,6 +124,114 @@ func TestSandboxDiagnosticPathMustMapUniquely(t *testing.T) {
 	}
 }
 
+func TestSandboxDiagnosticsUseAffectedModuleContext(t *testing.T) {
+	diff := sandboxDiagnosticDiff("pkg/a.go") + sandboxDiagnosticDiff("nested/pkg/a.go")
+	parsed := parseUnifiedDiff([]byte(diff))
+	diagnostics := parseSandboxDiagnostics(commandSpec{Kind: commandCheckGoVet}, sandboxRun{
+		ExitCode: 1,
+		Stdout: "==> vet .\n" +
+			"pkg/a.go:2: same diagnostic\n",
+		Stderr: "==> vet nested\n" +
+			"pkg/a.go:2: same diagnostic\n",
+	}, parsed)
+	if diagnostics.Parsed != 2 || diagnostics.Mapped != 2 || len(diagnostics.Matches) != 2 {
+		t.Fatalf("diagnostics = %+v", diagnostics)
+	}
+	if diagnostics.Matches[0].File != "pkg/a.go" ||
+		diagnostics.Matches[1].File != "nested/pkg/a.go" {
+		t.Fatalf("mapped files = %+v", diagnostics.Matches)
+	}
+}
+
+func TestSandboxDiagnosticModuleContextCannotFallBackToRootFile(t *testing.T) {
+	parsed := parseUnifiedDiff([]byte(sandboxDiagnosticDiff("pkg/a.go")))
+	run := sandboxRun{
+		ExitCode: 1,
+		Stderr: "==> staticcheck nested\n" +
+			"pkg/a.go:2: nested diagnostic\n",
+	}
+	diagnostics := parseSandboxDiagnostics(
+		commandSpec{Kind: commandCheckStaticcheck},
+		run,
+		parsed,
+	)
+	if diagnostics.Parsed != 1 || diagnostics.Mapped != 0 || len(diagnostics.Matches) != 0 {
+		t.Fatalf("diagnostics = %+v, want nested diagnostic unmapped", diagnostics)
+	}
+	if !sandboxDiagnosticsNeedGenericWarning(
+		commandSpec{Kind: commandCheckStaticcheck},
+		run,
+		diagnostics,
+	) {
+		t.Fatal("unmapped nested diagnostic suppressed the generic warning")
+	}
+}
+
+func TestSandboxDiagnosticInvalidModuleBannerFailsClosed(t *testing.T) {
+	parsed := parseUnifiedDiff([]byte(sandboxDiagnosticDiff("pkg/a.go")))
+	run := sandboxRun{
+		ExitCode: 1,
+		Stderr: "==> vet ../nested\n" +
+			"pkg/a.go:2: diagnostic\n",
+	}
+	diagnostics := parseSandboxDiagnostics(commandSpec{Kind: commandCheckGoVet}, run, parsed)
+	if diagnostics.Parsed != 1 || diagnostics.Mapped != 0 || len(diagnostics.Matches) != 0 {
+		t.Fatalf("diagnostics = %+v, want invalid module context unmapped", diagnostics)
+	}
+}
+
+func TestSandboxDiagnosticUnexpectedBannerModeFailsClosed(t *testing.T) {
+	parsed := parseUnifiedDiff([]byte(sandboxDiagnosticDiff("pkg/a.go")))
+	run := sandboxRun{
+		ExitCode: 1,
+		Stderr: "==> staticcheck nested\n" +
+			"pkg/a.go:2: diagnostic\n",
+	}
+	diagnostics := parseSandboxDiagnostics(commandSpec{Kind: commandCheckGoVet}, run, parsed)
+	if diagnostics.Parsed != 1 || diagnostics.Mapped != 0 || len(diagnostics.Matches) != 0 {
+		t.Fatalf("diagnostics = %+v, want unexpected banner mode unmapped", diagnostics)
+	}
+	if !sandboxDiagnosticsNeedGenericWarning(commandSpec{Kind: commandCheckGoVet}, run, diagnostics) {
+		t.Fatal("unexpected banner mode suppressed the generic warning")
+	}
+}
+
+func TestSandboxDiagnosticParentPathWithoutBannerFailsClosed(t *testing.T) {
+	parsed := parseUnifiedDiff([]byte(sandboxDiagnosticDiff("pkg/a.go")))
+	run := sandboxRun{
+		ExitCode: 1,
+		Stderr:   "../pkg/a.go:2: diagnostic\n",
+	}
+	diagnostics := parseSandboxDiagnostics(commandSpec{Kind: commandCheckGoVet}, run, parsed)
+	if diagnostics.Parsed != 1 || diagnostics.Mapped != 0 || len(diagnostics.Matches) != 0 {
+		t.Fatalf("diagnostics = %+v, want parent path unmapped", diagnostics)
+	}
+	if !sandboxDiagnosticsNeedGenericWarning(commandSpec{Kind: commandCheckGoVet}, run, diagnostics) {
+		t.Fatal("parent path suppressed the generic warning")
+	}
+}
+
+func TestParseSandboxModuleBanner(t *testing.T) {
+	module, ok := parseSandboxModuleBanner(
+		commandCheckStaticcheck,
+		"==> staticcheck with space\r",
+	)
+	if !ok || module != "with space" {
+		t.Fatalf("module banner = %q, %v", module, ok)
+	}
+	module, ok = parseSandboxModuleBanner(commandCheckGoVet, "==> vet ../escape")
+	if !ok || module != invalidSandboxDiagnosticModule {
+		t.Fatalf("invalid module banner = %q, %v", module, ok)
+	}
+	module, ok = parseSandboxModuleBanner(commandCheckGoVet, "==> staticcheck nested")
+	if !ok || module != invalidSandboxDiagnosticModule {
+		t.Fatalf("unexpected mode banner = %q, %v", module, ok)
+	}
+	if _, ok := parseSandboxModuleBanner(commandCheckGoTest, "==> test nested"); ok {
+		t.Fatal("go test banner was accepted as trusted diagnostic context")
+	}
+}
+
 func TestSandboxDiagnosticDeletedFileDoesNotMap(t *testing.T) {
 	parsed := parseUnifiedDiff([]byte("diff --git a/file.go b/file.go\ndeleted file mode 100644\n--- a/file.go\n+++ /dev/null\n@@ -1,1 +0,0 @@\n-package p\n"))
 	diagnostics := parseSandboxDiagnostics(commandSpec{Kind: commandCheckGoVet}, sandboxRun{

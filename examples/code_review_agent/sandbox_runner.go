@@ -229,6 +229,27 @@ func skippedSandboxRun(runtimeName string, spec commandSpec, reason string) sand
 	}
 }
 
+func intentionallySkippedSandboxRun(
+	runtimeName string,
+	spec commandSpec,
+	reason string,
+) sandboxRun {
+	if strings.TrimSpace(runtimeName) == "" {
+		runtimeName = runtimeFake
+	}
+	if strings.TrimSpace(reason) == "" {
+		reason = "command disabled by configuration"
+	}
+	return sandboxRun{
+		Runtime:    runtimeName,
+		Command:    string(spec.Kind),
+		ExitCode:   -1,
+		DurationMS: 0,
+		Skipped:    true,
+		Warnings:   []string{reason},
+	}
+}
+
 func sandboxRunNeedsWarning(run sandboxRun) bool {
 	return sandboxRunFailed(run) || len(run.Warnings) > 0
 }

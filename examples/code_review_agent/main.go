@@ -62,6 +62,7 @@ type config struct {
 	effectiveRuntime  string
 	allowLocal        bool
 	e2bTemplate       string
+	skipGoTest        bool
 	enableStaticcheck bool
 	dbPath            string
 	outputDir         string
@@ -106,6 +107,7 @@ type reviewSummary struct {
 	OutputDir         string         `json:"output_dir"`
 	DBPath            string         `json:"db_path"`
 	E2BTemplate       string         `json:"e2b_template,omitempty"`
+	SkipGoTest        bool           `json:"skip_go_test"`
 	EnableStaticcheck bool           `json:"enable_staticcheck"`
 	ChangedFiles      int            `json:"changed_files"`
 	Hunks             int            `json:"hunks"`
@@ -365,6 +367,7 @@ func newRunningReviewReport(taskID string, cfg config, started time.Time) review
 			DryRun:            cfg.dryRun,
 			RuleOnly:          cfg.ruleOnly,
 			E2BTemplate:       redact(cfg.e2bTemplate),
+			SkipGoTest:        cfg.skipGoTest,
 			EnableStaticcheck: cfg.enableStaticcheck,
 			OutputDir:         redact(cfg.outputDir),
 			DBPath:            redact(cfg.dbPath),
@@ -445,9 +448,10 @@ func writeReviewStageError(stderr io.Writer, taskID string, stage string, cause 
 
 func parseConfig(args []string, getenv func(string) string) (config, int, error) {
 	cfg := config{
-		runtime:   defaultRuntime,
-		outputDir: defaultOutputDir,
-		dbPath:    filepath.Join(defaultOutputDir, "reviews.db"),
+		runtime:    defaultRuntime,
+		skipGoTest: true,
+		outputDir:  defaultOutputDir,
+		dbPath:     filepath.Join(defaultOutputDir, "reviews.db"),
 	}
 
 	fs := flag.NewFlagSet("code_review_agent", flag.ContinueOnError)
@@ -462,6 +466,7 @@ func parseConfig(args []string, getenv func(string) string) (config, int, error)
 	fs.StringVar(&cfg.runtime, "runtime", defaultRuntime, "sandbox runtime: e2b, fake, or local")
 	fs.BoolVar(&cfg.allowLocal, "allow-local", false, "allow local runtime for development")
 	fs.StringVar(&cfg.e2bTemplate, "e2b-template", "", "E2B template ID or alias")
+	fs.BoolVar(&cfg.skipGoTest, "skip-go-test", true, "skip reviewed go test execution unless explicitly set to false")
 	fs.BoolVar(&cfg.enableStaticcheck, "enable-staticcheck", false, "enable optional staticcheck command")
 	fs.StringVar(&cfg.dbPath, "db-path", cfg.dbPath, "SQLite database path")
 	fs.StringVar(&cfg.outputDir, "output-dir", cfg.outputDir, "directory for review outputs")
