@@ -396,7 +396,7 @@ Most applications should use the default accumulator. Nonstandard providers
 may report increments, cumulative totals, or a final total; the custom
 accumulator must match that behavior and return a complete usage state. See
 [Custom Streaming Usage Aggregation](../model.md#custom-streaming-usage-aggregation)
-for the reduce-style mental model, every `model.Usage` field, and complete
+for the callback execution order, every `model.Usage` field, and complete
 examples.
 
 When `Stream` is true, the OpenAI-compatible adapter requests usage

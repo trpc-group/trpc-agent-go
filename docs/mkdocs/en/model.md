@@ -601,22 +601,10 @@ provider gives usage chunks nonstandard semantics. The option only affects
 streaming chunk aggregation; non-streaming usage is read directly from the
 complete response.
 
-###### Mental Model: Reduce Usage Chunks into One Result
+###### How `WithAccumulateChunkTokenUsage` Processes Each Chunk
 
-The option works like a reduce or fold operation over the stream—the same
-mental model as Python's `functools.reduce` or Java's `Stream.reduce`.
-`current` is the accumulator, the current chunk is the next element, and the
-return value becomes the next accumulator:
-
-```go
-state0 := model.Usage{}
-state1 := accumulate(state0, chunk1.Usage)
-state2 := accumulate(state1, chunk2.Usage)
-// ...
-finalResponse.Usage = accumulate(stateN, lastChunk.Usage)
-```
-
-The callback signature is:
+When configured, the callback runs once for each streaming chunk, in order.
+Its signature is:
 
 ```go
 func(current model.Usage, delta model.Usage) model.Usage
@@ -642,13 +630,16 @@ increment, a cumulative total, a final total, or an empty value.
 The return value replaces the complete accumulated `model.Usage`. Fields
 omitted from it are not copied from `current` or `delta`.
 
-For a standard OpenAI-compatible stream, content chunks usually contain no
-usage and the last usage-only chunk contains the complete totals:
+For a standard OpenAI-compatible stream, the raw content chunks contain
+`usage: null`. The adapter maps that absence to a zero-value `model.Usage`
+before invoking the callback. The final usage-only chunk contains the complete
+totals:
 
 ```text
-chunk 1..N: delta = {0, 0, 0}
-last chunk: delta = {prompt: 100, completion: 20, total: 120, cached: 80}
-final usage:        {prompt: 100, completion: 20, total: 120, cached: 80}
+raw content chunk:       usage = null
+callback for that chunk: delta = model.Usage{}
+raw final chunk:         usage = {prompt: 100, completion: 20, total: 120, cached: 80}
+callback for final chunk: delta = {prompt: 100, completion: 20, total: 120, cached: 80}
 ```
 
 The default accumulator handles this shape. A custom accumulator is not needed.
@@ -686,35 +677,17 @@ provider contract requires it.
 
 ###### Choose the Strategy that Matches the Provider
 
-Use the default accumulator when the provider follows standard OpenAI
-streaming usage behavior.
+Start with the provider's response format:
 
-If every streamed chunk contains the latest cumulative total, or the provider
-guarantees an authoritative final usage chunk, summing the chunks would double
-count. Use latest-chunk-wins semantics and return the complete `delta`:
+| Provider response format | Can direct summation count tokens more than once? | Recommended configuration |
+| --- | --- | --- |
+| A final usage-only chunk contains the complete totals | No; earlier chunks have no usage | Use the default accumulator |
+| Each usage chunk contains an independent increment | No | Use the default accumulator |
+| Usage chunks contain cumulative snapshots or repeat fields already reported | Yes | Use a latest-nonzero custom accumulator |
 
-```go
-import (
-    "trpc.group/trpc-go/trpc-agent-go/model"
-    "trpc.group/trpc-go/trpc-agent-go/model/openai"
-)
-
-llm := openai.New("your-model",
-    openai.WithAccumulateChunkTokenUsage(func(
-        _ model.Usage,
-        delta model.Usage,
-    ) model.Usage {
-        return delta
-    }),
-)
-```
-
-If cumulative usage appears only on some chunks, keep `current` when `delta`
-is empty instead of resetting the state. Define "empty" from the fields that
-the provider can report.
-
-If each usage chunk contains only a true increment, add every field exposed by
-the OpenAI-compatible chunk mapping:
+For cumulative snapshots or repeated fields, keep the most recent nonzero
+usage value. Empty chunks must preserve `current`; otherwise an empty chunk
+after the last usage update can clear the result.
 
 ```go
 import (
@@ -722,25 +695,27 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/model/openai"
 )
 
-func addUsage(current, delta model.Usage) model.Usage {
-    current.PromptTokens += delta.PromptTokens
-    current.CompletionTokens += delta.CompletionTokens
-    current.TotalTokens += delta.TotalTokens
-    current.PromptTokensDetails.CachedTokens +=
-        delta.PromptTokensDetails.CachedTokens
-    current.CompletionTokensDetails.ReasoningTokens +=
-        delta.CompletionTokensDetails.ReasoningTokens
-    return current
+func latestNonZeroUsage(current, delta model.Usage) model.Usage {
+    if delta.PromptTokens == 0 &&
+        delta.CompletionTokens == 0 &&
+        delta.TotalTokens == 0 &&
+        delta.PromptTokensDetails.CachedTokens == 0 &&
+        delta.PromptTokensDetails.CacheCreationTokens == 0 &&
+        delta.PromptTokensDetails.CacheReadTokens == 0 &&
+        delta.CompletionTokensDetails.ReasoningTokens == 0 {
+        return current
+    }
+    return delta
 }
 
 llm := openai.New("your-model",
-    openai.WithAccumulateChunkTokenUsage(addUsage),
+    openai.WithAccumulateChunkTokenUsage(latestNonZeroUsage),
 )
 ```
 
-Do not rebuild only `PromptTokens`, `CompletionTokens`, and `TotalTokens`.
-Doing so resets omitted nested details to zero. A provider can then return
-nonzero `cached_tokens` while the final `model.Response.Usage` reports zero.
+Returning the complete `delta` preserves nested details such as
+`CachedTokens` and `ReasoningTokens`. Define "empty" from every field that the
+provider can report.
 
 Before choosing a custom strategy, inspect the provider's raw chunks across a
 complete stream. In particular, check whether usage is incremental or

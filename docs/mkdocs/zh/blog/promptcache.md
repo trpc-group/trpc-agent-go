@@ -413,7 +413,7 @@ Telemetry 层也会拆分 token 类型。`internal/telemetry` 包会记录：
 
 大多数应用应使用默认聚合器。非标准服务方可能返回增量、累计总量或最后一次完整
 总量；自定义 accumulator 必须匹配对应行为，并返回完整 usage 状态。完整的
-reduce 心智模型、`model.Usage` 字段说明和示例见
+回调执行顺序、`model.Usage` 字段说明和示例见
 [自定义流式 Usage 聚合](../model.md#usage)。
 
 当 `Stream` 为 true 时，OpenAI-compatible adapter 会自动请求 usage。

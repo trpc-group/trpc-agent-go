@@ -591,26 +591,13 @@ model := openai.New("deepseek-v4-flash",
 ##### 自定义流式 Usage 聚合
 
 OpenAI-compatible adapter 默认会请求流式 usage，并聚合服务方返回的
-usage chunks。大多数应用应保留这一行为。只有兼容服务方对 usage chunks
+usage chunk。大多数应用应保留这一行为。只有兼容服务方对 usage chunk
 采用了非标准语义时，才需要配置 `WithAccumulateChunkTokenUsage`。该 option
-只影响流式 chunks 的聚合；非流式 usage 直接来自完整响应。
+只影响流式 chunk 的聚合；非流式 usage 直接来自完整响应。
 
-###### 心智模型：把 Usage Chunks Reduce 成一个结果
+###### `WithAccumulateChunkTokenUsage` 的执行方式
 
-这个 option 的工作方式类似对 stream 执行 reduce 或 fold，与 Python 的
-`functools.reduce`、Java 的 `Stream.reduce` 是同一种心智模型。`current`
-是 accumulator，当前 chunk 是下一个元素，返回值会成为下一次调用的
-accumulator：
-
-```go
-state0 := model.Usage{}
-state1 := accumulate(state0, chunk1.Usage)
-state2 := accumulate(state1, chunk2.Usage)
-// ...
-finalResponse.Usage = accumulate(stateN, lastChunk.Usage)
-```
-
-回调签名是：
+配置后，回调会按顺序处理每个流式 chunk。回调签名是：
 
 ```go
 func(current model.Usage, delta model.Usage) model.Usage
@@ -635,13 +622,15 @@ accumulator 中的 usage。因此，下一个 chunk 看到的 `current` 就是�
 回调返回值会整体替换累计后的 `model.Usage`。返回值中没有填写的字段，
 不会自动从 `current` 或 `delta` 补回。
 
-标准 OpenAI-compatible stream 通常在普通内容 chunks 中不携带 usage，
-最后再发送一个只包含完整 usage 的 chunk：
+标准 OpenAI-compatible stream 的原始内容 chunk 中，`usage` 为 `null`。
+adapter 在调用回调前，会把这个空值映射为零值 `model.Usage`。最后的
+usage-only chunk 才包含完整总量：
 
 ```text
-chunk 1..N: delta = {0, 0, 0}
-最后的 chunk: delta = {prompt: 100, completion: 20, total: 120, cached: 80}
-最终 usage:           {prompt: 100, completion: 20, total: 120, cached: 80}
+原始内容 chunk:     usage = null
+回调收到的内容 chunk: delta = model.Usage{}
+原始最后一个 chunk:  usage = {prompt: 100, completion: 20, total: 120, cached: 80}
+回调收到的最后 chunk: delta = {prompt: 100, completion: 20, total: 120, cached: 80}
 ```
 
 默认聚合器可以直接处理这种形态，不需要自定义 accumulator。
@@ -677,33 +666,16 @@ Token 计数细节仍以具体服务方定义为准。例如，不应把 `Cached
 
 ###### 根据服务方选择聚合策略
 
-服务方遵循标准 OpenAI 流式 usage 行为时，使用默认聚合器。
+先根据服务方的响应格式选择配置：
 
-如果每个 stream chunk 都包含截至当前的累计总量，或者服务方保证最后会发送
-一个权威的完整 usage chunk，继续求和会造成重复计算。此时采用“最新 chunk
-为准”的语义，直接返回完整的 `delta`：
+| 服务方响应格式 | 直接累加会重复计数吗 | 推荐配置 |
+| --- | --- | --- |
+| 最后的 usage-only chunk 包含完整总量 | 不会，之前的 chunk 不携带 usage | 使用默认聚合器 |
+| 每个 usage chunk 都是独立增量 | 不会 | 使用默认聚合器 |
+| usage chunk 是累计快照，或重复上报已经出现的字段 | 会 | 自定义“最新非零值”聚合器 |
 
-```go
-import (
-    "trpc.group/trpc-go/trpc-agent-go/model"
-    "trpc.group/trpc-go/trpc-agent-go/model/openai"
-)
-
-llm := openai.New("your-model",
-    openai.WithAccumulateChunkTokenUsage(func(
-        _ model.Usage,
-        delta model.Usage,
-    ) model.Usage {
-        return delta
-    }),
-)
-```
-
-如果累计 usage 只出现在部分 chunks 中，遇到空 `delta` 时应保留 `current`，
-不要把状态清零；“空”的判断应覆盖该服务方可能上报的字段。
-
-如果每个 usage chunk 携带的确实只是增量，应累加 OpenAI-compatible chunk
-映射已经暴露的每个字段：
+对于累计快照或重复字段，保留最新的非零 usage。空 chunk 必须保留
+`current`，否则最后一次有效 usage 后的空 chunk 可能把结果清零。
 
 ```go
 import (
@@ -711,27 +683,28 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/model/openai"
 )
 
-func addUsage(current, delta model.Usage) model.Usage {
-    current.PromptTokens += delta.PromptTokens
-    current.CompletionTokens += delta.CompletionTokens
-    current.TotalTokens += delta.TotalTokens
-    current.PromptTokensDetails.CachedTokens +=
-        delta.PromptTokensDetails.CachedTokens
-    current.CompletionTokensDetails.ReasoningTokens +=
-        delta.CompletionTokensDetails.ReasoningTokens
-    return current
+func latestNonZeroUsage(current, delta model.Usage) model.Usage {
+    if delta.PromptTokens == 0 &&
+        delta.CompletionTokens == 0 &&
+        delta.TotalTokens == 0 &&
+        delta.PromptTokensDetails.CachedTokens == 0 &&
+        delta.PromptTokensDetails.CacheCreationTokens == 0 &&
+        delta.PromptTokensDetails.CacheReadTokens == 0 &&
+        delta.CompletionTokensDetails.ReasoningTokens == 0 {
+        return current
+    }
+    return delta
 }
 
 llm := openai.New("your-model",
-    openai.WithAccumulateChunkTokenUsage(addUsage),
+    openai.WithAccumulateChunkTokenUsage(latestNonZeroUsage),
 )
 ```
 
-不要只重新构造 `PromptTokens`、`CompletionTokens` 和 `TotalTokens`，
-否则没有填写的嵌套明细会被重置为零，可能出现服务方已经返回非零
-`cached_tokens`，但最终 `model.Response.Usage` 中仍为零的现象。
+返回完整 `delta` 可以保留 `CachedTokens`、`ReasoningTokens` 等嵌套明细；
+“空”的判断应覆盖服务方可能上报的每个字段。
 
-选择自定义策略前，应检查服务方一次完整请求的原始 chunks，确认 usage
+选择自定义策略前，应检查服务方一次完整请求的原始 chunk，确认 usage
 究竟是增量还是累计值，以及是否存在最后的 usage-only chunk。
 
 ##### 通过回调动态修改请求体
