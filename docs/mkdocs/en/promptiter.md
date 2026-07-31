@@ -455,6 +455,8 @@ type EvalSetInput struct {
 	EvalCaseIDs []string
 	// LossHints supplements known business-side problem reasons for failed training-set metrics.
 	LossHints []LossHint
+	// LossTargets specify trace nodes where failed training metric losses start backward propagation.
+	LossTargets []LossTarget
 }
 
 // LossHint supplements the problem reason for one failed metric on one evaluation case.
@@ -468,11 +470,21 @@ type LossHint struct {
 	// Reason is the problem-reason text used for backpropagation attribution.
 	Reason string
 }
+
+// LossTarget specifies which trace node starts backpropagation for one failed metric.
+type LossTarget struct {
+	// MetricName specifies the target metric.
+	MetricName string
+	// NodeID specifies the node ID that receives the metric loss.
+	NodeID string
+}
 ```
 
 If `EvalCaseIDs` is not specified, PromptIter runs all evaluation cases under the corresponding evaluation set. If a non-empty list is specified, only the listed evaluation cases run.
 
 When the business side already knows the specific problem in a training-set evaluation case, `LossHint` can supplement the problem reason. PromptIter merges `Reason` into the optimization signal of the corresponding failed metric, so backpropagation attribution can consider both the reason from the evaluator and the reason supplemented by the business side. When `LossHint` is used, `EvalCaseID` and `MetricName` must match a failed metric in the current training evaluation result, and `Severity` must be `P0`, `P1`, `P2`, or `P3`. `LossHint` does not change the evaluation score and does not participate in validation-set acceptance decisions.
+
+When a training-set metric directly evaluates an intermediate node output, `LossTarget` can inject that metric's failure reason into the last executed step of the target `NodeID`. The injected loss becomes incoming input for that step in the existing backpropagation flow and can continue propagating to predecessor steps. `LossTarget` only affects training-set optimization signals. It does not change evaluation scores and does not participate in validation-set acceptance decisions.
 
 Training sets and validation sets must be used separately. A higher training-set score only means the candidate patch is closer to metric requirements on samples used for optimization. It cannot prove that samples not used for optimization also satisfy the metrics. The validation set exposes overfitting risk and participates in acceptance decisions.
 
@@ -681,6 +693,10 @@ train := []engine.EvalSetInput{
 ```
 
 `LossHints` only supplements optimization signals in the training phase. It does not change evaluation scores and does not affect validation-set acceptance decisions. PromptIter only uses a `LossHint` when the corresponding Metric of the corresponding EvalCase is in `failed` status in the current training evaluation. If the metric passes in the current round, `LossHint` will not change the evaluation case to failed.
+
+By default, PromptIter injects a failed metric's `Reason` into the terminal steps of that evaluation case trace and starts backpropagation from those terminal steps. For Graph Agent or multi-node Agent workflows, if a metric already evaluates an intermediate node through trace placeholders, set `LossTargets` in the training-set `EvalSetInput` to inject that metric's `Reason` directly into the last executed step of a specified `NodeID`. The following stages still reuse the existing backpropagation logic: the target step first generates its own gradients from the incoming loss, then produces gradient packets for predecessor steps according to `PredecessorStepIDs`.
+
+`LossTargets` match training evaluation results by EvalSet and MetricName. Within the same EvalSet, one MetricName can have only one target node. A `NodeID` configured for training must exist in the current structure snapshot. If one evaluation case's trace did not execute that node in the current round, that metric loss is skipped for the case and does not fall back to terminal steps. `LossTargets` only take effect during training loss extraction. Validation inputs do not support `LossTargets`; requests containing them are rejected.
 
 ### Backwarder
 
@@ -1182,6 +1198,8 @@ type EvalSetInput struct {
 	EvalCaseIDs []string
 	// LossHints supplements known business-side problem reasons for failed training-set metrics.
 	LossHints []LossHint
+	// LossTargets specify trace nodes where failed training metric losses start backward propagation.
+	LossTargets []LossTarget
 }
 
 // LossHint supplements the problem reason for one failed metric on one evaluation case.
@@ -1194,6 +1212,14 @@ type LossHint struct {
 	Severity promptiter.LossSeverity
 	// Reason is the problem-reason text used for backpropagation attribution.
 	Reason string
+}
+
+// LossTarget specifies which trace node starts backpropagation for one failed metric.
+type LossTarget struct {
+	// MetricName specifies the target metric.
+	MetricName string
+	// NodeID specifies the node ID that receives the metric loss.
+	NodeID string
 }
 
 // EvaluationOptions configures the training-set and validation-set evaluation stages.
@@ -1231,7 +1257,7 @@ type OptimizerOptions struct {
 }
 ```
 
-`RunRequest` first specifies training sets and validation sets. `Train` is used to produce optimization signals, and `Validation` is used for acceptance decisions. Both must be non-empty. Each `EvalSetInput` can point to a complete evaluation set or use `EvalCaseIDs` to run only part of its evaluation cases. `LossHints` only serves the training set and is used to supplement known business-side problem reasons.
+`RunRequest` first specifies training sets and validation sets. `Train` is used to produce optimization signals, and `Validation` is used for acceptance decisions. Both must be non-empty. Each `EvalSetInput` can point to a complete evaluation set or use `EvalCaseIDs` to run only part of its evaluation cases. `LossHints` and `LossTargets` only serve the training set. They respectively supplement known business-side problem reasons and specify trace nodes where failed metric losses start backward propagation.
 
 `InitialProfile` specifies the starting Profile of this iteration. If it is not passed, PromptIter uses the original surface values in the structure snapshot as the initial baseline. If `InitialProfile` is passed and `StructureID` is non-empty, it must match the current structure snapshot ID.
 

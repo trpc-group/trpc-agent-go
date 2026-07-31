@@ -19,6 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	iloss "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/internal/loss"
+	"trpc.group/trpc-go/trpc-agent-go/internal/profilecompiler"
 )
 
 type lossHintMetricKey struct {
@@ -27,9 +28,18 @@ type lossHintMetricKey struct {
 	metricName string
 }
 
-func (e *engine) loss(result *EvaluationResult) ([]promptiter.CaseLoss, error) {
+type lossTargetMetricKey struct {
+	evalSetID  string
+	metricName string
+}
+
+func (e *engine) loss(result *EvaluationResult, inputs []EvalSetInput) ([]promptiter.CaseLoss, error) {
 	if result == nil {
 		return nil, errors.New("evaluation result is nil")
+	}
+	targetIndex := indexLossTargets(inputs)
+	if err := validateLossTargetMetrics(result, targetIndex); err != nil {
+		return nil, err
 	}
 	losses := make([]promptiter.CaseLoss, 0)
 	for _, evalSet := range result.EvalSets {
@@ -52,6 +62,31 @@ func (e *engine) loss(result *EvaluationResult) ([]promptiter.CaseLoss, error) {
 						metric.MetricName,
 						evalCase.EvalCaseID,
 					)
+				}
+				if target, ok := targetIndex[lossTargetMetricKey{
+					evalSetID:  evalCase.EvalSetID,
+					metricName: metric.MetricName,
+				}]; ok {
+					stepID, matched, err := traceLastStepIDForNode(evalCase.Trace, target.NodeID)
+					if err != nil {
+						return nil, fmt.Errorf(
+							"resolve loss target for eval case %q metric %q: %w",
+							evalCase.EvalCaseID,
+							metric.MetricName,
+							err,
+						)
+					}
+					if !matched {
+						continue
+					}
+					caseLoss.TerminalLosses = append(caseLoss.TerminalLosses, promptiter.TerminalLoss{
+						EvalSetID:  evalCase.EvalSetID,
+						EvalCaseID: evalCase.EvalCaseID,
+						MetricName: metric.MetricName,
+						StepID:     stepID,
+						Loss:       strings.TrimSpace(metric.Reason),
+					})
+					continue
 				}
 				terminalStepIDs, err := traceTerminalStepIDs(evalCase.Trace)
 				if err != nil {
@@ -79,6 +114,105 @@ func (e *engine) loss(result *EvaluationResult) ([]promptiter.CaseLoss, error) {
 	}
 	sortCaseLosses(losses)
 	return losses, nil
+}
+
+func validateLossTargetNodes(structure *profilecompiler.Structure, inputs []EvalSetInput) error {
+	if len(inputs) == 0 {
+		return nil
+	}
+	if structure == nil {
+		return errors.New("structure is nil")
+	}
+	for _, input := range inputs {
+		for _, target := range input.LossTargets {
+			nodeID := strings.TrimSpace(target.NodeID)
+			if _, ok := structure.NodeIndex[nodeID]; !ok {
+				return fmt.Errorf(
+					"loss target node id %q for eval set %q metric %q is unknown",
+					target.NodeID,
+					input.EvalSetID,
+					target.MetricName,
+				)
+			}
+		}
+	}
+	return nil
+}
+
+func indexLossTargets(inputs []EvalSetInput) map[lossTargetMetricKey]LossTarget {
+	index := make(map[lossTargetMetricKey]LossTarget)
+	for _, input := range inputs {
+		for _, target := range input.LossTargets {
+			target.MetricName = strings.TrimSpace(target.MetricName)
+			target.NodeID = strings.TrimSpace(target.NodeID)
+			index[lossTargetMetricKey{
+				evalSetID:  input.EvalSetID,
+				metricName: target.MetricName,
+			}] = target
+		}
+	}
+	return index
+}
+
+func validateLossTargetMetrics(
+	result *EvaluationResult,
+	targetIndex map[lossTargetMetricKey]LossTarget,
+) error {
+	if len(targetIndex) == 0 {
+		return nil
+	}
+	metricIndex := make(map[string]map[string]struct{})
+	for _, evalSet := range result.EvalSets {
+		if _, ok := metricIndex[evalSet.EvalSetID]; !ok {
+			metricIndex[evalSet.EvalSetID] = make(map[string]struct{})
+		}
+		for _, evalCase := range evalSet.Cases {
+			for _, metric := range evalCase.Metrics {
+				metricIndex[evalSet.EvalSetID][metric.MetricName] = struct{}{}
+			}
+		}
+	}
+	keys := make([]lossTargetMetricKey, 0, len(targetIndex))
+	for key := range targetIndex {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].evalSetID != keys[j].evalSetID {
+			return keys[i].evalSetID < keys[j].evalSetID
+		}
+		return keys[i].metricName < keys[j].metricName
+	})
+	for _, key := range keys {
+		metrics, ok := metricIndex[key.evalSetID]
+		if !ok {
+			return fmt.Errorf("loss target eval set %q is missing from training result", key.evalSetID)
+		}
+		if _, ok := metrics[key.metricName]; !ok {
+			return fmt.Errorf(
+				"loss target metric %q for eval set %q is missing from training result",
+				key.metricName,
+				key.evalSetID,
+			)
+		}
+	}
+	return nil
+}
+
+func traceLastStepIDForNode(trace *atrace.Trace, nodeID string) (string, bool, error) {
+	if trace == nil {
+		return "", false, nil
+	}
+	stepID := ""
+	for _, step := range trace.Steps {
+		if step.NodeID != nodeID {
+			continue
+		}
+		if step.StepID == "" {
+			return "", false, errors.New("execution trace step id is empty")
+		}
+		stepID = step.StepID
+	}
+	return stepID, stepID != "", nil
 }
 
 func mergeLossHints(
