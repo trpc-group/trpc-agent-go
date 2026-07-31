@@ -13,7 +13,8 @@ contention, and pool exhaustion under load.
 ## DB-001: Transaction not committed or rolled back
 
 - **Rule ID**: `DB-001`
-- **Severity**: `critical`
+- **Severity**: `high`
+- **Status**: Enforced
 - **Description**: A transaction begun with `db.Begin` (or `db.BeginTx`) that
   reaches a `return` without calling `tx.Commit()` or `tx.Rollback()` leaves
   the transaction open. The database holds locks and the connection stays
@@ -82,6 +83,7 @@ contention, and pool exhaustion under load.
 
 - **Rule ID**: `DB-002`
 - **Severity**: `high`
+- **Status**: Guidance (not yet enforced by the rule engine)
 - **Description**: Even when a transaction is committed on the happy path,
   returning on an error without rolling back (and without a deferred rollback)
   leaves the transaction open. This often appears when developers add an early
@@ -139,6 +141,7 @@ contention, and pool exhaustion under load.
 
 - **Rule ID**: `DB-003`
 - **Severity**: `high`
+- **Status**: Guidance (not yet enforced by the rule engine)
 - **Description**: A `*sql.DB` opened with `sql.Open` that is never closed
   leaks its connections for the process lifetime. This most often affects
   short-lived commands, test helpers, and constructors called in loops. Pool
@@ -191,7 +194,7 @@ contention, and pool exhaustion under load.
   share it; call `Close` only during shutdown. For short-lived uses, always
   `defer db.Close()`. Configure `SetMaxOpenConns`, `SetMaxIdleConns`, and
   `SetConnMaxLifetime` to bound pool growth and recycle stale connections.
-  Ensure every `*sql.Rows` and `*sql.Stmt` is closed (see `RES-003`).
+  Ensure every `*sql.Rows` and `*sql.Stmt` is closed (see `RES-001`).
 
 ---
 
@@ -199,6 +202,7 @@ contention, and pool exhaustion under load.
 
 - **Rule ID**: `DB-004`
 - **Severity**: `medium`
+- **Status**: Guidance (not yet enforced by the rule engine)
 - **Description**: A `*sql.Stmt` created with `db.Prepare` (or `tx.Prepare`)
   holds database resources on both the client and server side. Failing to
   close it leaks a statement handle per call; on the transaction side, the
