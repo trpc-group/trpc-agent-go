@@ -74,6 +74,17 @@ type EvalSetInput struct {
 	EvalCaseIDs []string `json:"evalCaseIds,omitempty"`
 	// LossHints stores operator-provided loss reasons keyed by failed eval case and metric.
 	LossHints []LossHint `json:"lossHints,omitempty"`
+	// LossTargets specify trace nodes where failed training metric losses start backward propagation.
+	// LossTargets are valid only for training inputs.
+	LossTargets []LossTarget `json:"lossTargets,omitempty"`
+}
+
+// LossTarget specifies the trace node where one failed metric's loss starts backward propagation.
+type LossTarget struct {
+	// MetricName identifies the failed metric affected by this target.
+	MetricName string `json:"metricName"`
+	// NodeID identifies the trace node whose last executed step receives the metric loss.
+	NodeID string `json:"nodeId"`
 }
 
 // LossHint carries operator-provided context for one failed metric on one eval case.
@@ -220,6 +231,9 @@ func (e *engine) run(
 	structure, err := e.loadStructure(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if err := validateLossTargetNodes(structure, request.Train); err != nil {
+		return nil, fmt.Errorf("validate train loss targets: %w", err)
 	}
 	targetSurfaceSet, err := compileTargetSurfaceIDs(structure.SurfaceIndex, request.TargetSurfaceIDs)
 	if err != nil {
@@ -405,7 +419,7 @@ func (e *engine) executeRound(
 	if err := appendRunEvent(ctx, observer, EventKindRoundTrainEvaluation, roundNumber, trainResult); err != nil {
 		return nil, 0, err
 	}
-	losses, err := e.loss(trainResult)
+	losses, err := e.loss(trainResult, request.Train)
 	if err != nil {
 		return nil, 0, fmt.Errorf("extract train losses round %d: %w", roundNumber, err)
 	}
@@ -522,6 +536,12 @@ func validateEvalSetInputs(role string, inputs []EvalSetInput) error {
 	if len(inputs) == 0 {
 		return fmt.Errorf("%sevaluation sets are empty", prefix)
 	}
+	type lossTargetInputKey struct {
+		evalSetID  string
+		metricName string
+	}
+	seenLossTargets := make(map[lossTargetInputKey]struct{})
+	validateLossTargets := role == "train"
 	for _, input := range inputs {
 		if input.EvalSetID == "" {
 			return fmt.Errorf("%sevaluation set id is empty", prefix)
@@ -573,6 +593,36 @@ func validateEvalSetInputs(role string, inputs []EvalSetInput) error {
 					)
 				}
 			}
+		}
+		if !validateLossTargets {
+			if role == "validation" && len(input.LossTargets) > 0 {
+				return fmt.Errorf("%sloss targets for eval set %q are not supported", prefix, input.EvalSetID)
+			}
+			continue
+		}
+		for _, target := range input.LossTargets {
+			metricName := strings.TrimSpace(target.MetricName)
+			switch {
+			case metricName == "":
+				return fmt.Errorf("%sloss target metric name for eval set %q is empty", prefix, input.EvalSetID)
+			case strings.TrimSpace(target.NodeID) == "":
+				return fmt.Errorf(
+					"%sloss target node id for eval set %q metric %q is empty",
+					prefix,
+					input.EvalSetID,
+					target.MetricName,
+				)
+			}
+			key := lossTargetInputKey{evalSetID: input.EvalSetID, metricName: metricName}
+			if _, ok := seenLossTargets[key]; ok {
+				return fmt.Errorf(
+					"%sloss target metric %q for eval set %q is duplicated",
+					prefix,
+					target.MetricName,
+					input.EvalSetID,
+				)
+			}
+			seenLossTargets[key] = struct{}{}
 		}
 	}
 	return nil
