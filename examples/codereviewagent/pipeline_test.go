@@ -25,6 +25,15 @@ func TestParseUnifiedDiffTracksAddedLines(t *testing.T) {
 	require.Equal(t, []changedLine{{File: "a.go", Line: 2, Content: "func added() {}"}}, lines)
 }
 
+func TestLoadDiffPrefersRepositoryInput(t *testing.T) {
+	_, _, err := loadDiff(
+		context.Background(),
+		"fixtures/command-injection.diff",
+		filepath.Join(t.TempDir(), "missing-repository"),
+	)
+	require.ErrorContains(t, err, "read repository diff")
+}
+
 func TestDedupeFindingsUsesFileLineAndRule(t *testing.T) {
 	values := []finding{
 		{File: "a.go", StartLine: 3, RuleID: "SEC002", Confidence: 0.8},

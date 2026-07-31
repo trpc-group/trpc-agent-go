@@ -25,12 +25,6 @@ var hunkPattern = regexp.MustCompile(`^@@ -[0-9]+(?:,[0-9]+)? \+([0-9]+)(?:,[0-9
 
 func loadDiff(ctx context.Context, diffFile, repoPath string) ([]byte, string, error) {
 	switch {
-	case strings.TrimSpace(diffFile) != "":
-		data, err := os.ReadFile(diffFile)
-		if err != nil {
-			return nil, "", fmt.Errorf("read diff file: %w", err)
-		}
-		return data, diffFile, nil
 	case strings.TrimSpace(repoPath) != "":
 		runCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		defer cancel()
@@ -40,6 +34,12 @@ func loadDiff(ctx context.Context, diffFile, repoPath string) ([]byte, string, e
 			return nil, "", fmt.Errorf("read repository diff: %w", err)
 		}
 		return data, repoPath, nil
+	case strings.TrimSpace(diffFile) != "":
+		data, err := os.ReadFile(diffFile)
+		if err != nil {
+			return nil, "", fmt.Errorf("read diff file: %w", err)
+		}
+		return data, diffFile, nil
 	default:
 		return nil, "", errors.New("diff-file or repo-path is required")
 	}

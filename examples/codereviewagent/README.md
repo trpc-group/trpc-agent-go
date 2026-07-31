@@ -10,7 +10,7 @@ go run . --diff-file ./fixtures/command-injection.diff
 go test ./...
 ```
 
-Use `--repo-path /path/to/repository` instead of `--diff-file` to review the working-tree diff. Set `--dry-run=false` on a supported Linux or macOS host to run the validation probe with managed OS isolation. The sandbox uses a ten-second timeout, 4 KiB output cap, 256 MiB memory budget, restricted networking, a core environment allowlist, and default secret-name exclusion. Failure is recorded as `SAN001` and never crashes the review task.
+Use `--repo-path /path/to/repository` to review the working-tree diff; when set, it takes precedence over `--diff-file` and the default fixture. Set `--dry-run=false` on a supported Linux or macOS host to run the validation probe with managed OS isolation. The sandbox uses a ten-second timeout, 4 KiB output cap, 256 MiB memory budget, restricted networking, a core environment allowlist, and default secret-name exclusion. Failure is recorded as `SAN001` and never crashes the review task.
 
 ## Design
 
