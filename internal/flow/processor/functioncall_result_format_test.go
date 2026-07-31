@@ -974,6 +974,67 @@ func (t *statefulFunctionTool[I, O]) StateDelta(
 	return map[string][]byte{"state": []byte("updated")}
 }
 
+type mutableResult struct {
+	Output string `json:"output"`
+}
+
+// TestExecuteToolCall_StateDeltaIgnoresInPlaceFormatterMutation pins that a
+// formatter is a presentation hook: mutating a reference-typed result in place
+// changes what the model sees but never what the session persists.
+func TestExecuteToolCall_StateDeltaIgnoresInPlaceFormatterMutation(t *testing.T) {
+	stateful := &statefulFunctionTool[struct{}, *mutableResult]{
+		FunctionTool: function.NewFunctionTool(
+			func(context.Context, struct{}) (*mutableResult, error) {
+				return &mutableResult{Output: "original"}, nil
+			},
+			function.WithName("stateful"),
+			function.WithResultFormatter(
+				resultformat.FormatterFunc[*mutableResult](func(
+					_ context.Context,
+					result *mutableResult,
+				) (string, error) {
+					result.Output = "redacted"
+					return "<observation>redacted</observation>", nil
+				}),
+			),
+		),
+	}
+
+	evt, err := NewFunctionCallResponseProcessor(
+		false,
+		nil,
+	).executeSingleToolCallSequential(
+		context.Background(),
+		&agent.Invocation{
+			AgentName: "agent",
+			Model:     &mockModel{},
+			Session:   &session.Session{},
+		},
+		&model.Response{},
+		map[string]tool.Tool{"stateful": stateful},
+		make(chan *event.Event, 32),
+		0,
+		model.ToolCall{
+			ID: "call-1",
+			Function: model.FunctionDefinitionParam{
+				Name:      "stateful",
+				Arguments: []byte(`{}`),
+			},
+		},
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, evt)
+	require.NotEmpty(t, evt.Choices)
+	assert.Equal(
+		t,
+		"<observation>redacted</observation>",
+		evt.Choices[0].Message.Content,
+	)
+	assert.Equal(t, `{"output":"original"}`, string(stateful.stateContent))
+	assert.Equal(t, []byte("updated"), evt.StateDelta["state"])
+}
+
 const (
 	statefulResultJSON = `{"exit_code":0,"output":"stateful"}`
 	statefulRewritten  = `{"exit_code":9,"output":"rewritten"}`

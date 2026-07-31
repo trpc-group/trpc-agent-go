@@ -3642,18 +3642,23 @@ func buildDefaultToolMessage(
 		return msg, resultBytes, nil
 	}
 
-	content, err := formatToolResultWithRecover(ctx, formatter, result)
-	if err != nil {
-		return model.Message{}, nil,
-			fmt.Errorf("%s: %w", ErrorFormatResult, err)
-	}
+	// Serialize the state payload before formatting. A formatter that mutates
+	// the result in place must not leak presentation changes into persisted
+	// state, and a formatting failure must still leave a completed tool's state
+	// payload available to the caller.
 	var stateDeltaInput []byte
 	if needsStateDeltaInput {
+		var err error
 		stateDeltaInput, err = marshalStateDeltaInput(result)
 		if err != nil {
 			return model.Message{}, nil,
 				fmt.Errorf("%s: %w", ErrorMarshalResult, err)
 		}
+	}
+	content, err := formatToolResultWithRecover(ctx, formatter, result)
+	if err != nil {
+		return model.Message{}, stateDeltaInput,
+			fmt.Errorf("%s: %w", ErrorFormatResult, err)
 	}
 	return model.Message{
 		Role:    model.RoleTool,
