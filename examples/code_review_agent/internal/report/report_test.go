@@ -114,3 +114,34 @@ func TestRenderJSONAndMarkdownDoNotMutateCallerDTO(t *testing.T) {
 		t.Fatalf("RenderMarkdown mutated caller DTO: %#v", dto)
 	}
 }
+
+func TestRenderJSONAndMarkdownRedactUnsafeReferenceSubstrings(t *testing.T) {
+	dto := DTO{
+		TaskID: "sink-check",
+		Status: domain.StatusNeedsHumanReview,
+		Findings: []domain.Finding{{
+			Severity:       domain.SeverityHigh,
+			Category:       domain.CategorySecrets,
+			File:           "a.go",
+			Line:           1,
+			Title:          "password",
+			Evidence:       `password = "real-PLACEHOLDER-secret"`,
+			Recommendation: `use ${PASSWORD}`,
+			Confidence:     0.98,
+			Source:         "rule",
+			RuleID:         "secrets.literal",
+		}},
+		Governance:  []string{`allow:token="real-GETENV-secret"`},
+		SandboxRuns: []sandbox.Result{{Stdout: `token="real-${DB_PASSWORD}-secret"`}},
+	}
+	js, err := RenderJSON(dto)
+	if err != nil {
+		t.Fatalf("json: %v", err)
+	}
+	md := RenderMarkdown(dto)
+	for _, needle := range []string{"real-PLACEHOLDER-secret", "real-GETENV-secret", "real-${DB_PASSWORD}-secret"} {
+		if bytes.Contains(js, []byte(needle)) || bytes.Contains([]byte(md), []byte(needle)) {
+			t.Fatalf("sink leaked unsafe reference substring %q:\njson=%s\nmd=%s", needle, js, md)
+		}
+	}
+}

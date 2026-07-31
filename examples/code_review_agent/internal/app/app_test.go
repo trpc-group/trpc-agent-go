@@ -12,6 +12,8 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -19,13 +21,16 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/domain"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/governance"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/input"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/report"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/sandbox"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/storage"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -76,6 +81,25 @@ func TestRunFakeFullFlowProducesReportsAndAudit(t *testing.T) {
 			t.Fatalf("acceptance manifest self-referenced its own artifact row: %#v", manifest.Artifacts)
 		}
 	}
+	var reportJSON struct {
+		ArtifactDetails []reportArtifact `json:"artifact_details"`
+	}
+	reportJSONBytes, err := os.ReadFile(filepath.Join(out, "review_report.json"))
+	if err != nil {
+		t.Fatalf("read review_report.json: %v", err)
+	}
+	if err := json.Unmarshal(reportJSONBytes, &reportJSON); err != nil {
+		t.Fatalf("parse review_report.json: %v", err)
+	}
+	if len(reportJSON.ArtifactDetails) != 0 {
+		t.Fatalf("report JSON self-contained artifact details: %#v", reportJSON.ArtifactDetails)
+	}
+	for _, artifact := range manifest.Artifacts {
+		wantSHA, wantBytes := fileSHA256(t, filepath.Join(out, artifact.Path))
+		if artifact.SHA256 != wantSHA || artifact.Bytes != wantBytes {
+			t.Fatalf("manifest artifact %s digest=%s bytes=%d, want %s bytes=%d", artifact.Path, artifact.SHA256, artifact.Bytes, wantSHA, wantBytes)
+		}
+	}
 	if len(result.ArtifactDetails) != 3 || !hasArtifact(result.ArtifactDetails, "acceptance_manifest.json") {
 		t.Fatalf("returned DTO omitted durable manifest artifact: %#v", result.ArtifactDetails)
 	}
@@ -90,6 +114,17 @@ func TestRunFakeFullFlowProducesReportsAndAudit(t *testing.T) {
 	}
 	if artifactRows != 1 {
 		t.Fatalf("acceptance manifest artifact rows = %d", artifactRows)
+	}
+	for _, artifact := range result.ArtifactDetails {
+		wantSHA, wantBytes := fileSHA256(t, filepath.Join(out, artifact.Path))
+		var gotSHA string
+		var gotBytes int64
+		if err := st.DB().QueryRow("SELECT sha256,bytes FROM artifacts WHERE task_id=? AND path=?", result.TaskID, artifact.Path).Scan(&gotSHA, &gotBytes); err != nil {
+			t.Fatal(err)
+		}
+		if gotSHA != wantSHA || gotBytes != wantBytes {
+			t.Fatalf("sqlite artifact %s digest=%s bytes=%d, want %s bytes=%d", artifact.Path, gotSHA, gotBytes, wantSHA, wantBytes)
+		}
 	}
 }
 
@@ -108,6 +143,16 @@ func hasArtifact(artifacts []report.Artifact, path string) bool {
 		}
 	}
 	return false
+}
+
+func fileSHA256(t *testing.T, path string) (string, int64) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(data)
+	return "sha256:" + hex.EncodeToString(sum[:]), int64(len(data))
 }
 
 func TestRunAllPublicFixtures(t *testing.T) {
@@ -345,6 +390,25 @@ func TestSandboxAndGovernanceSecretsAreRedactedAcrossDurableSinks(t *testing.T) 
 	}
 }
 
+func TestDrainAgentEventsRecordsFirstErrorAfterDraining(t *testing.T) {
+	events := make(chan *event.Event)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer close(events)
+		events <- &event.Event{Response: &model.Response{Error: &model.ResponseError{Message: "first failure"}}}
+		events <- &event.Event{Response: &model.Response{ID: "after-error"}}
+	}()
+	if err := drainAgentEvents(events); err == nil || !strings.Contains(err.Error(), "first failure") {
+		t.Fatalf("drain error = %v", err)
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatalf("event producer remained blocked after error")
+	}
+}
+
 func TestAgentLoadsBundledSkillThenCallsPermissionBoundWorkspaceTool(t *testing.T) {
 	skillPath, err := bundledSkillPath()
 	if err != nil {
@@ -412,7 +476,15 @@ func TestRunAgentModeCannotUseTargetRepositorySkill(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cleanup()
-	if strings.HasPrefix(snap.SkillPath, repo+string(os.PathSeparator)) {
+	resolvedRepo, err := filepath.EvalSymlinks(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolvedSkill, err := filepath.EvalSymlinks(snap.SkillPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolvedSkill == resolvedRepo || strings.HasPrefix(resolvedSkill, resolvedRepo+string(os.PathSeparator)) {
 		t.Fatalf("target repository became skill root: %s", snap.SkillPath)
 	}
 

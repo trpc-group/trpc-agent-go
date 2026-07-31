@@ -11,7 +11,9 @@ package review
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/domain"
@@ -38,23 +40,36 @@ func NewEngine(redactor Redactor) Engine {
 // Review evaluates changed added lines and routes findings by confidence.
 func (e Engine) Review(diff input.Diff) Output {
 	var candidates []domain.Finding
-	hasProd, hasTest := false, false
+	prodByPackage := map[string]string{}
+	testByPackage := map[string]bool{}
 	for _, f := range diff.Files {
+		key := packageKey(f)
 		if strings.HasSuffix(f.NewPath, "_test.go") {
-			hasTest = true
+			if len(f.Added) > 0 {
+				testByPackage[key] = true
+			}
 		} else if strings.HasSuffix(f.NewPath, ".go") && len(f.Added) > 0 {
-			hasProd = true
+			if _, ok := prodByPackage[key]; !ok {
+				prodByPackage[key] = f.NewPath
+			}
 		}
 		for _, line := range f.Added {
 			candidates = append(candidates, e.rulesForLine(f.NewPath, line)...)
 		}
+		for _, block := range lifecycleBlocks(f.Added) {
+			candidates = append(candidates, e.lifecycleRulesForBlock(f.NewPath, block)...)
+		}
 	}
-	if hasProd && !hasTest {
+	for _, key := range sortedPackageKeys(prodByPackage) {
+		if testByPackage[key] {
+			continue
+		}
+		file := prodByPackage[key]
 		candidates = append(candidates, domain.Finding{
-			Severity: domain.SeverityMedium, Category: domain.CategoryTests, File: firstProdFile(diff.Files),
+			Severity: domain.SeverityMedium, Category: domain.CategoryTests, File: file,
 			Line: 0, Title: "production change lacks related tests",
-			Evidence:       "no changed _test.go file was present in the diff",
-			Recommendation: "add focused tests for the changed behavior",
+			Evidence:       fmt.Sprintf("package %s has production changes without related _test.go changes", key),
+			Recommendation: "add focused tests for the changed behavior in the same package",
 			Confidence:     0.66, Source: "rule", RuleID: "tests.missing-related-test",
 		})
 	}
@@ -95,21 +110,55 @@ func (e Engine) rulesForLine(file string, line input.AddedLine) []domain.Finding
 		add(domain.SeverityHigh, domain.CategorySecurity, "unsafe dynamic execution or query",
 			text, "use fixed commands or parameterized queries with validated arguments", 0.90, "security.dynamic-input")
 	}
-	if isUnsafeGoRoutine(text) {
-		add(domain.SeverityMedium, domain.CategoryConcurrency, "goroutine has no visible lifetime control",
-			text, "tie goroutine lifetime to context cancellation or an owned shutdown path", 0.82, "concurrency.goroutine-lifetime")
-	}
-	if isResourceLeak(text) {
-		add(domain.SeverityMedium, domain.CategoryResources, "opened resource is not closed",
-			text, "close the resource in the same function, usually with defer after error handling", 0.86, "resources.close-missing")
-	}
 	if isIgnoredError(text) {
 		add(domain.SeverityMedium, domain.CategoryErrors, "error result is ignored",
 			text, "check and propagate or handle the returned error", 0.88, "errors.ignored")
 	}
-	if isRowsLifecycle(text) {
-		add(domain.SeverityMedium, domain.CategoryDatabase, "database rows are not closed",
-			text, "call rows.Close and check rows.Err when iterating query results", 0.87, "database.rows-close-missing")
+	return out
+}
+
+func (e Engine) lifecycleRulesForBlock(file string, lines []input.AddedLine) []domain.Finding {
+	if len(lines) == 0 {
+		return nil
+	}
+	text := make([]string, 0, len(lines))
+	for _, line := range lines {
+		text = append(text, line.Text)
+	}
+	block := strings.Join(text, "\n")
+	anchor := lines[0]
+	for _, line := range lines {
+		if strings.Contains(line.Text, "go func") || strings.Contains(line.Text, "os.Open(") ||
+			strings.Contains(line.Text, "http.Get(") || strings.Contains(line.Text, ".Query(") {
+			anchor = line
+			break
+		}
+	}
+	add := func(sev domain.Severity, cat, title, rec string, conf float64, ruleID string) domain.Finding {
+		return domain.Finding{
+			Severity: sev, Category: cat, File: file, Line: anchor.Line,
+			Title: title, Evidence: anchor.Text, Recommendation: rec,
+			Confidence: conf, Source: "rule", RuleID: ruleID,
+		}
+	}
+	var out []domain.Finding
+	if isUnsafeGoRoutine(block) {
+		out = append(out, add(domain.SeverityMedium, domain.CategoryConcurrency,
+			"goroutine has no visible lifetime control",
+			"tie goroutine lifetime to context cancellation or an owned shutdown path", 0.82,
+			"concurrency.goroutine-lifetime"))
+	}
+	if isResourceLeak(block) {
+		out = append(out, add(domain.SeverityMedium, domain.CategoryResources,
+			"opened resource is not closed",
+			"close the resource in the same function, usually with defer after error handling", 0.86,
+			"resources.close-missing"))
+	}
+	if isRowsLifecycle(block) {
+		out = append(out, add(domain.SeverityMedium, domain.CategoryDatabase,
+			"database rows are not closed",
+			"call rows.Close and check rows.Err when iterating query results", 0.87,
+			"database.rows-close-missing"))
 	}
 	return out
 }
@@ -132,8 +181,20 @@ func isUnsafeGoRoutine(s string) bool {
 }
 
 func isResourceLeak(s string) bool {
-	return (strings.Contains(s, "os.Open(") || strings.Contains(s, "http.Get(")) &&
-		!strings.Contains(s, ".Close()") && !strings.Contains(s, "defer ")
+	if !strings.Contains(s, "os.Open(") && !strings.Contains(s, "http.Get(") {
+		return false
+	}
+	names := lifecycleResourceNames(s)
+	if len(names) == 0 {
+		return true
+	}
+	for _, name := range names {
+		if resourceClosedOrTransferred(s, name) {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 var ignoredErrRE = regexp.MustCompile(`(^|[^A-Za-z0-9_]),\s*_\s*:=|(^|[^A-Za-z0-9_]),\s*_\s*=`)
@@ -144,16 +205,118 @@ func isIgnoredError(s string) bool {
 }
 
 func isRowsLifecycle(s string) bool {
-	return strings.Contains(s, "rows") && strings.Contains(s, ".Query(") && !strings.Contains(s, "rows.Close()")
-}
-
-func firstProdFile(files []input.FileDiff) string {
-	for _, f := range files {
-		if strings.HasSuffix(f.NewPath, ".go") && !strings.HasSuffix(f.NewPath, "_test.go") {
-			return f.NewPath
+	if !strings.Contains(s, ".Query(") {
+		return false
+	}
+	for _, name := range queryResultNames(s) {
+		if strings.Contains(s, name+".Close()") {
+			return false
 		}
 	}
-	return "unknown"
+	return true
+}
+
+var lifecycleAssignmentRE = regexp.MustCompile(`\b([A-Za-z_][A-Za-z0-9_]*)\s*,\s*[^:=\n]+:=\s*(?:os\.Open|http\.Get)\(`)
+var queryAssignmentRE = regexp.MustCompile(`\b([A-Za-z_][A-Za-z0-9_]*)\s*,\s*[^:=\n]+:=\s*[^\n;]*\.Query\(`)
+
+func resourceClosedOrTransferred(s, name string) bool {
+	if strings.Contains(s, name+".Close()") {
+		return true
+	}
+	return resourceReturnedRE(name).MatchString(s)
+}
+
+func resourceReturnedRE(name string) *regexp.Regexp {
+	return regexp.MustCompile(`(?m)^\s*return\s+(?:[^\n,]+,\s*)*` + regexp.QuoteMeta(name) + `(?:\s*,|\s*$)`)
+}
+
+func lifecycleResourceNames(s string) []string {
+	matches := lifecycleAssignmentRE.FindAllStringSubmatch(s, -1)
+	names := make([]string, 0, len(matches))
+	for _, match := range matches {
+		names = append(names, match[1])
+	}
+	return names
+}
+
+func queryResultNames(s string) []string {
+	matches := queryAssignmentRE.FindAllStringSubmatch(s, -1)
+	names := make([]string, 0, len(matches))
+	for _, match := range matches {
+		names = append(names, match[1])
+	}
+	return names
+}
+
+func lifecycleBlocks(lines []input.AddedLine) [][]input.AddedLine {
+	var blocks [][]input.AddedLine
+	var current []input.AddedLine
+	depth := 0
+	inFunction := false
+	flush := func() {
+		if len(current) > 0 {
+			blocks = append(blocks, current)
+			current = nil
+		}
+		depth = 0
+		inFunction = false
+	}
+	for _, line := range lines {
+		if strings.Contains(line.Text, "func ") && len(current) > 0 && !inFunction {
+			flush()
+		}
+		current = append(current, line)
+		if strings.Contains(line.Text, "func ") {
+			inFunction = true
+		}
+		depth += braceDelta(line.Text)
+		if inFunction && depth <= 0 {
+			flush()
+		}
+	}
+	flush()
+	return blocks
+}
+
+func braceDelta(s string) int {
+	return strings.Count(s, "{") - strings.Count(s, "}")
+}
+
+func packageKey(f input.FileDiff) string {
+	path := f.NewPath
+	if path == "" {
+		path = f.OldPath
+	}
+	dir := filepath.ToSlash(filepath.Dir(path))
+	if dir == "." {
+		dir = ""
+	}
+	pkg := f.Package
+	if pkg == "" {
+		for _, line := range f.Added {
+			if line.Package != "" {
+				pkg = line.Package
+				break
+			}
+		}
+	}
+	pkg = strings.TrimSuffix(pkg, "_test")
+	if pkg == "" {
+		return dir
+	}
+	if dir == "" {
+		return pkg
+	}
+	return dir + ":" + pkg
+}
+
+func sortedPackageKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for key := range m {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // DedupeFindings deduplicates by normalized file, line, and category.

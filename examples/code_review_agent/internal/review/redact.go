@@ -62,9 +62,8 @@ func ContainsAny(s string, needles []string) bool {
 	return false
 }
 
+var safeSecretReferenceRE = regexp.MustCompile(`(?i)^\s*(password|passwd|token|secret)\s*[:=]\s*["']\$\{[A-Za-z_][A-Za-z0-9_]*\}["']\s*$`)
+
 func isSafeSecretReference(s string) bool {
-	upper := strings.ToUpper(s)
-	return strings.Contains(upper, "GETENV") ||
-		strings.Contains(upper, "${") ||
-		strings.Contains(upper, "PLACEHOLDER")
+	return safeSecretReferenceRE.MatchString(s)
 }

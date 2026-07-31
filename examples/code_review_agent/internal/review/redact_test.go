@@ -31,13 +31,27 @@ func TestRedactorRemovesSecretsBeforeSinks(t *testing.T) {
 func TestRedactorSafeNegatives(t *testing.T) {
 	r := NewRedactor()
 	safe := []string{
-		`password := os.Getenv("PASSWORD")`,
+		`password = "${PASSWORD}"`,
 		`token: "${GITHUB_TOKEN}"`,
-		`AWS_ACCESS_KEY_ID_PLACEHOLDER`,
 	}
 	for _, s := range safe {
 		if got := r.Redact(s); got != s {
 			t.Fatalf("safe text redacted: got %q want %q", got, s)
+		}
+	}
+}
+
+func TestRedactorDoesNotTrustSafeReferenceSubstringsInsideSecrets(t *testing.T) {
+	r := NewRedactor()
+	cases := []string{
+		`password = "real-GETENV-secret"`,
+		`password = "real-${DB_PASSWORD}-secret"`,
+		`password = "real-PLACEHOLDER-secret"`,
+	}
+	for _, s := range cases {
+		got := r.Redact(s)
+		if ContainsAny(got, []string{"real-GETENV-secret", "real-${DB_PASSWORD}-secret", "real-PLACEHOLDER-secret"}) {
+			t.Fatalf("redacted output leaked unsafe reference substring secret %q: %q", s, got)
 		}
 	}
 }

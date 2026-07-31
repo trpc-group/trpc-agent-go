@@ -10,6 +10,8 @@
 package review
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/domain"
@@ -100,6 +102,92 @@ func TestEngineCompactHoldoutScore(t *testing.T) {
 	}
 }
 
+func TestEngineTreatsMultilineResourceCloseAsOwnedCleanup(t *testing.T) {
+	diff := mustParse(t, multilineDiff(
+		"func readFile(name string) error {",
+		"f, err := os.Open(name)",
+		"if err != nil { return err }",
+		"defer f.Close()",
+		"return nil",
+		"}",
+	))
+	out := NewEngine(NewRedactor()).Review(diff)
+	if findings := findingsForRule(out, "resources.close-missing"); len(findings) != 0 {
+		t.Fatalf("multiline owned close produced resource findings: %#v", findings)
+	}
+}
+
+func TestEngineTreatsMultilineReturnedResourceAsOwnershipTransfer(t *testing.T) {
+	diff := mustParse(t, multilineDiff(
+		"func openFile(name string) (*os.File, error) {",
+		"f, err := os.Open(name)",
+		"if err != nil { return nil, err }",
+		"return f, nil",
+		"}",
+	))
+	out := NewEngine(NewRedactor()).Review(diff)
+	if findings := findingsForRule(out, "resources.close-missing"); len(findings) != 0 {
+		t.Fatalf("multiline returned resource ownership transfer produced resource findings: %#v", findings)
+	}
+}
+
+func TestEngineTreatsMultilineRowsCloseAsOwnedCleanup(t *testing.T) {
+	diff := mustParse(t, multilineDiff(
+		"func queryRows(db *sql.DB) error {",
+		"rows, err := db.Query(\"select 1\")",
+		"if err != nil { return err }",
+		"defer rows.Close()",
+		"return nil",
+		"}",
+	))
+	out := NewEngine(NewRedactor()).Review(diff)
+	if findings := findingsForRule(out, "database.rows-close-missing"); len(findings) != 0 {
+		t.Fatalf("multiline owned rows close produced database findings: %#v", findings)
+	}
+}
+
+func TestEngineTreatsMultilineContextControlledGoroutineAsSafe(t *testing.T) {
+	diff := mustParse(t, multilineDiff(
+		"func watch(ctx context.Context) {",
+		"go func(ctx context.Context) {",
+		"for {",
+		"select {",
+		"case <-ctx.Done():",
+		"return",
+		"}",
+		"}",
+		"}(ctx)",
+		"}",
+	))
+	out := NewEngine(NewRedactor()).Review(diff)
+	if findings := findingsForRule(out, "concurrency.goroutine-lifetime"); len(findings) != 0 {
+		t.Fatalf("multiline ctx-controlled goroutine produced concurrency findings: %#v", findings)
+	}
+}
+
+func TestEngineTracksMissingRelatedTestsByPackage(t *testing.T) {
+	diff := mustParse(t, "diff --git a/pkg/service.go b/pkg/service.go\n--- a/pkg/service.go\n+++ b/pkg/service.go\n@@ -1,1 +1,2 @@\n package service\n+func AddedService() {}\ndiff --git a/other/other.go b/other/other.go\n--- a/other/other.go\n+++ b/other/other.go\n@@ -1,1 +1,2 @@\n package other\n+func AddedOther() {}\ndiff --git a/other/other_test.go b/other/other_test.go\n--- a/other/other_test.go\n+++ b/other/other_test.go\n@@ -1,1 +1,2 @@\n package other\n+func TestAddedOther(t *testing.T) {}\n")
+	out := NewEngine(NewRedactor()).Review(diff)
+	missing := missingRelatedTestFindings(out)
+	if len(missing) != 1 {
+		t.Fatalf("missing-related-test findings = %#v, want exactly pkg/service.go", missing)
+	}
+	if missing[0].File != "pkg/service.go" {
+		t.Fatalf("missing-related-test file = %s, want pkg/service.go", missing[0].File)
+	}
+}
+
+func TestEngineUsesParsedPackageMetadataForRelatedTests(t *testing.T) {
+	diff := input.Diff{Complete: true, Files: []input.FileDiff{
+		{NewPath: "service/service.go", Package: "service", Added: []input.AddedLine{{Line: 2, Text: "func AddedService() {}", Package: "service"}}},
+		{NewPath: "service/service_test.go", Package: "service_test", Added: []input.AddedLine{{Line: 2, Text: "func TestAddedService(t *testing.T) {}", Package: "service_test"}}},
+	}}
+	out := NewEngine(NewRedactor()).Review(diff)
+	if missing := missingRelatedTestFindings(out); len(missing) != 0 {
+		t.Fatalf("external test package should cover production package: %#v", missing)
+	}
+}
+
 func TestDedupeKeepsHighestSeverityAndConfidence(t *testing.T) {
 	in := []domain.Finding{
 		{Severity: domain.SeverityLow, Category: domain.CategorySecurity, File: "a.go", Line: 7, Confidence: 0.81, Source: "rule-a", RuleID: "a", Evidence: "a", Title: "a", Recommendation: "a"},
@@ -125,6 +213,29 @@ func mustParse(t *testing.T, diff string) input.Diff {
 		t.Fatal(err)
 	}
 	return parsed
+}
+
+func findingsForRule(out Output, ruleID string) []domain.Finding {
+	var findings []domain.Finding
+	for _, finding := range append(out.Findings, out.NeedsHumanReview...) {
+		if finding.RuleID == ruleID {
+			findings = append(findings, finding)
+		}
+	}
+	return findings
+}
+
+func missingRelatedTestFindings(out Output) []domain.Finding {
+	return findingsForRule(out, "tests.missing-related-test")
+}
+
+func multilineDiff(lines ...string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "diff --git a/app.go b/app.go\n--- a/app.go\n+++ b/app.go\n@@ -1,1 +1,%d @@\n package app\n", len(lines)+1)
+	for _, line := range lines {
+		fmt.Fprintf(&b, "+%s\n", line)
+	}
+	return b.String()
 }
 
 func allCategoryDiff() string {

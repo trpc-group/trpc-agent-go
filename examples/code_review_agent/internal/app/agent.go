@@ -19,6 +19,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
@@ -144,13 +145,21 @@ func runAgentIntegration(ctx context.Context, skillPath, planDigest string, acti
 	if err != nil {
 		return audit, err
 	}
-	for ev := range events {
-		if ev.Error != nil {
-			return audit, fmt.Errorf("agent integration: %s", ev.Error.Message)
-		}
+	if err := drainAgentEvents(events); err != nil {
+		return audit, err
 	}
 	audit.SkillLoaded = modelImpl.bundledContentSeen
 	audit.WorkspaceCalled = workspace.called
 	audit.BundledContentSeen = modelImpl.bundledContentSeen
 	return audit, nil
+}
+
+func drainAgentEvents(events <-chan *event.Event) error {
+	var integrationErr error
+	for ev := range events {
+		if ev != nil && ev.Error != nil && integrationErr == nil {
+			integrationErr = fmt.Errorf("agent integration: %s", ev.Error.Message)
+		}
+	}
+	return integrationErr
 }

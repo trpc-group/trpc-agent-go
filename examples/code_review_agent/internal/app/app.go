@@ -289,33 +289,17 @@ func runWithRuntimeFactory(ctx context.Context, cfg Config, newRuntime runtimeFa
 		Metrics: metrics, Files: diffFiles(parsed), ParserWarnings: append([]string(nil), parsed.Warnings...),
 	}
 	dto.Stats = report.BuildStats(dto)
-	js, err := report.RenderJSON(dto)
-	if err != nil {
-		return report.DTO{}, err
-	}
-	if err := os.WriteFile(filepath.Join(cfg.OutDir, "review_report.json"), js, 0o600); err != nil {
-		return report.DTO{}, err
-	}
-	if err := os.WriteFile(filepath.Join(cfg.OutDir, "review_report.md"), []byte(report.RenderMarkdown(dto)), 0o600); err != nil {
+	if err := writeReports(cfg.OutDir, dto); err != nil {
 		return report.DTO{}, err
 	}
 	reportArtifacts, err := collectReportArtifacts(cfg.OutDir, "review_report.json", "review_report.md")
 	if err != nil {
 		return report.DTO{}, err
 	}
-	dto.ArtifactDetails = reportArtifacts
-	dto.Stats = report.BuildStats(dto)
-	js, err = report.RenderJSON(dto)
-	if err != nil {
-		return report.DTO{}, err
-	}
-	if err := os.WriteFile(filepath.Join(cfg.OutDir, "review_report.json"), js, 0o600); err != nil {
-		return report.DTO{}, err
-	}
-	if err := os.WriteFile(filepath.Join(cfg.OutDir, "review_report.md"), []byte(report.RenderMarkdown(dto)), 0o600); err != nil {
-		return report.DTO{}, err
-	}
-	if err := writeAcceptanceManifest(cfg.OutDir, dto); err != nil {
+	manifestDTO := dto
+	manifestDTO.ArtifactDetails = reportArtifacts
+	manifestDTO.Stats = report.BuildStats(manifestDTO)
+	if err := writeAcceptanceManifest(cfg.OutDir, manifestDTO); err != nil {
 		return report.DTO{}, err
 	}
 	manifestArtifact, err := artifactForFile(cfg.OutDir, report.Artifact{Path: "acceptance_manifest.json", ContentType: "application/json", Durable: true})
@@ -353,6 +337,17 @@ func persistFailure(ctx context.Context, st storage.Store, cfg Config, taskID, m
 	}
 	dto.Stats = report.BuildStats(dto)
 	return st.Finalize(ctx, dto)
+}
+
+func writeReports(outDir string, dto report.DTO) error {
+	js, err := report.RenderJSON(dto)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(outDir, "review_report.json"), js, 0o600); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(outDir, "review_report.md"), []byte(report.RenderMarkdown(dto)), 0o600)
 }
 
 func collectReportArtifacts(outDir string, paths ...string) ([]report.Artifact, error) {
