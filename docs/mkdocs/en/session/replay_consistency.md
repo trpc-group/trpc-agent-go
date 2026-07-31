@@ -85,7 +85,7 @@ Each memory query declares `ExpectedContents`. Search results are compared as an
 
 Memory operation aliases follow canonical memory identity rather than content alone. Add aliases include app, user, content, kind, event time, participants, and location while intentionally excluding topics. An update always advances its referenced alias to the effective ID returned by the backend, so a later update or delete does not reuse an ID that was rotated after content or identity metadata changed.
 
-Snapshot construction returns an error when an event cannot be normalized, a memory entry is nil, or an entry has a nil `Memory` payload. These conditions indicate malformed fixtures or backend corruption; they are never discarded during normalization and cannot be accepted with `allowed_diff`.
+Snapshot construction returns an error when an event cannot be normalized, a memory entry is nil, an entry has a nil `Memory` payload, or a summary map entry has a nil value. These conditions indicate malformed fixtures or backend corruption; they are never discarded during normalization and cannot be accepted with `allowed_diff`. `BuildSnapshot` also validates and normalizes supplied memories when the session is nil, so the empty-session form cannot hide valid or malformed memory data.
 
 Cases with app, user, or session state also validate each scope as a backend contract. The runner reads app and user state separately, creates a temporary peer session under the same app/user, and requires the peer to inherit only app/user values. The peer is deleted on every return path. Missing propagation, leaked session/temp state, and cleanup failures are runner errors; they are not snapshot differences and cannot be accepted with `allowed_diff`.
 

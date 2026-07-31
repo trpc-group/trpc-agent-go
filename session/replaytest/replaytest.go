@@ -912,9 +912,19 @@ func applyMemoriesConcurrently(ctx context.Context, service memory.Service, user
 }
 
 // BuildSnapshot normalizes a session and its memories for stable comparison.
+// A nil session produces an empty session snapshot, but supplied memories are
+// still validated and normalized. BuildSnapshot returns an error for malformed
+// events, memory entries, or summary entries.
 func BuildSnapshot(sess *session.Session, memories []*memory.Entry) (Snapshot, error) {
 	if sess == nil {
-		return Snapshot{State: map[string]any{}, Memory: []MemorySnapshot{}, Summary: map[string]SummaryEntry{}, Tracks: []TrackSnapshot{}}, nil
+		normalizedMemories, err := normalizeMemories(memories)
+		if err != nil {
+			return Snapshot{}, err
+		}
+		return Snapshot{
+			State: map[string]any{}, Memory: normalizedMemories,
+			Summary: map[string]SummaryEntry{}, Tracks: []TrackSnapshot{},
+		}, nil
 	}
 	events := sess.GetEvents()
 	normalizedEvents, err := normalizeEvents(events)
@@ -925,12 +935,16 @@ func BuildSnapshot(sess *session.Session, memories []*memory.Entry) (Snapshot, e
 	if err != nil {
 		return Snapshot{}, err
 	}
+	normalizedSummaries, err := normalizeSummaries(cloneSummaries(sess), events)
+	if err != nil {
+		return Snapshot{}, err
+	}
 	return Snapshot{
 		Session: SessionSnapshot{ID: sess.ID, App: sess.AppName, UserID: sess.UserID},
 		Events:  normalizedEvents,
 		State:   normalizeState(sess.SnapshotState()),
 		Memory:  normalizedMemories,
-		Summary: normalizeSummaries(cloneSummaries(sess), events),
+		Summary: normalizedSummaries,
 		Tracks:  normalizeTracks(cloneTracks(sess)),
 	}, nil
 }
@@ -1100,11 +1114,21 @@ func memoryKey(snapshot MemorySnapshot) (string, error) {
 	return string(encoded), nil
 }
 
-func normalizeSummaries(summaries map[string]*session.Summary, events []event.Event) map[string]SummaryEntry {
+func normalizeSummaries(
+	summaries map[string]*session.Summary,
+	events []event.Event,
+) (map[string]SummaryEntry, error) {
+	filterKeys := make([]string, 0, len(summaries))
+	for filterKey := range summaries {
+		filterKeys = append(filterKeys, filterKey)
+	}
+	sort.Strings(filterKeys)
+
 	out := make(map[string]SummaryEntry, len(summaries))
-	for filterKey, summary := range summaries {
+	for _, filterKey := range filterKeys {
+		summary := summaries[filterKey]
 		if summary == nil {
-			continue
+			return nil, fmt.Errorf("summary entry %q is nil", filterKey)
 		}
 		entry := SummaryEntry{Summary: summary.Summary, Topics: sortedStrings(summary.Topics), UpdatedAtNonZero: !summary.UpdatedAt.IsZero()}
 		if boundary := summary.CutoffBoundary(); boundary != nil {
@@ -1115,7 +1139,7 @@ func normalizeSummaries(summaries map[string]*session.Summary, events []event.Ev
 		}
 		out[filterKey] = entry
 	}
-	return out
+	return out, nil
 }
 
 func summaryLastEventIndex(events []event.Event, lastEventID string) *int {

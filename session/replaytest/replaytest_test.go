@@ -1179,6 +1179,10 @@ type malformedSnapshotSessionService struct {
 	session.Service
 }
 
+type nilSummarySnapshotSessionService struct {
+	session.Service
+}
+
 func (s *malformedSnapshotSessionService) GetSession(
 	ctx context.Context,
 	key session.Key,
@@ -1189,6 +1193,24 @@ func (s *malformedSnapshotSessionService) GetSession(
 		return got, err
 	}
 	got.Events = append(got.Events, *replayMalformedEvent())
+	return got, nil
+}
+
+func (s *nilSummarySnapshotSessionService) GetSession(
+	ctx context.Context,
+	key session.Key,
+	opts ...session.Option,
+) (*session.Session, error) {
+	got, err := s.Service.GetSession(ctx, key, opts...)
+	if err != nil || got == nil {
+		return got, err
+	}
+	got.SummariesMu.Lock()
+	if got.Summaries == nil {
+		got.Summaries = make(map[string]*session.Summary)
+	}
+	got.Summaries["branch"] = nil
+	got.SummariesMu.Unlock()
 	return got, nil
 }
 
@@ -1419,6 +1441,35 @@ func TestBuildSnapshotNormalizesGeneratedEventFields(t *testing.T) {
 	require.Empty(t, diffs)
 }
 
+func TestBuildSnapshotNormalizesMemoriesWithNilSession(t *testing.T) {
+	t.Run("no memories preserves empty snapshot", func(t *testing.T) {
+		got, err := BuildSnapshot(nil, nil)
+		require.NoError(t, err)
+		require.Equal(t, Snapshot{
+			State: map[string]any{}, Memory: []MemorySnapshot{},
+			Summary: map[string]SummaryEntry{}, Tracks: []TrackSnapshot{},
+		}, got)
+	})
+
+	t.Run("valid memory is preserved", func(t *testing.T) {
+		got, err := BuildSnapshot(nil, []*memory.Entry{{
+			ID: "generated-id", AppName: "app", UserID: "user",
+			Memory: &memory.Memory{Memory: "remembered", Topics: []string{"second", "first"}},
+		}})
+		require.NoError(t, err)
+		require.Len(t, got.Memory, 1)
+		require.Equal(t, "app", got.Memory[0].App)
+		require.Equal(t, "user", got.Memory[0].UserID)
+		require.Equal(t, "remembered", got.Memory[0].Content)
+		require.Equal(t, []string{"first", "second"}, got.Memory[0].Topics)
+		require.Empty(t, got.Session)
+		require.Empty(t, got.Events)
+		require.Empty(t, got.State)
+		require.Empty(t, got.Summary)
+		require.Empty(t, got.Tracks)
+	})
+}
+
 func TestBuildSnapshotReturnsNormalizationErrors(t *testing.T) {
 	t.Run("malformed event", func(t *testing.T) {
 		badEvent := replayMalformedEvent()
@@ -1448,6 +1499,98 @@ func TestBuildSnapshotReturnsNormalizationErrors(t *testing.T) {
 		}})
 		require.EqualError(t, err, "memory entry 0 has nil Memory")
 	})
+
+	t.Run("nil session with nil memory entry", func(t *testing.T) {
+		_, err := BuildSnapshot(nil, []*memory.Entry{nil})
+		require.EqualError(t, err, "memory entry 0 is nil")
+	})
+
+	t.Run("nil session with nil nested memory", func(t *testing.T) {
+		_, err := BuildSnapshot(nil, []*memory.Entry{{
+			ID: "broken", AppName: "app", UserID: "user",
+		}})
+		require.EqualError(t, err, "memory entry 0 has nil Memory")
+	})
+
+	t.Run("event error precedes memory error", func(t *testing.T) {
+		badEvent := replayMalformedEvent()
+		sess := session.NewSession(
+			"app", "user", "session",
+			session.WithSessionEvents([]event.Event{*badEvent}),
+		)
+		_, err := BuildSnapshot(sess, []*memory.Entry{nil})
+		require.ErrorContains(t, err, "normalize event 0: marshal")
+		require.NotContains(t, err.Error(), "memory entry")
+	})
+}
+
+func TestBuildSnapshotRejectsNilSummaryEntriesDeterministically(t *testing.T) {
+	tests := []struct {
+		name      string
+		summaries map[string]*session.Summary
+		want      string
+	}{
+		{
+			name: "single nil entry",
+			summaries: map[string]*session.Summary{
+				"branch": nil,
+			},
+			want: `summary entry "branch" is nil`,
+		},
+		{
+			name: "nil entry alongside valid summary",
+			summaries: map[string]*session.Summary{
+				"valid":  {Summary: "kept"},
+				"branch": nil,
+			},
+			want: `summary entry "branch" is nil`,
+		},
+		{
+			name: "multiple nil entries use first sorted key",
+			summaries: map[string]*session.Summary{
+				"z-last":  nil,
+				"a-first": nil,
+			},
+			want: `summary entry "a-first" is nil`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			sess := session.NewSession("app", "user", "session")
+			sess.Summaries = test.summaries
+			_, err := BuildSnapshot(sess, nil)
+			require.EqualError(t, err, test.want)
+		})
+	}
+}
+
+func TestBuildSnapshotAcceptsValidSummaryMaps(t *testing.T) {
+	t.Run("nil map", func(t *testing.T) {
+		sess := session.NewSession("app", "user", "session")
+		sess.Summaries = nil
+		got := buildSnapshotForTest(t, sess, nil)
+		require.NotNil(t, got.Summary)
+		require.Empty(t, got.Summary)
+	})
+
+	t.Run("empty map", func(t *testing.T) {
+		sess := session.NewSession("app", "user", "session")
+		got := buildSnapshotForTest(t, sess, nil)
+		require.NotNil(t, got.Summary)
+		require.Empty(t, got.Summary)
+	})
+
+	t.Run("valid summary", func(t *testing.T) {
+		sess := session.NewSession("app", "user", "session")
+		sess.Summaries["branch"] = &session.Summary{
+			Summary: "summary", Topics: []string{"second", "first"},
+		}
+		got := buildSnapshotForTest(t, sess, nil)
+		require.Equal(t, map[string]SummaryEntry{
+			"branch": {Summary: "summary", Topics: []string{"first", "second"}},
+		}, got.Summary)
+	})
 }
 
 func TestRunReturnsWrappedSnapshotNormalizationError(t *testing.T) {
@@ -1464,6 +1607,21 @@ func TestRunReturnsWrappedSnapshotNormalizationError(t *testing.T) {
 	require.ErrorContains(t, err,
 		`build final snapshot for case "malformed-event" on backend "in_memory": normalize event 0: marshal`)
 	require.ErrorContains(t, err, "unsupported type: chan int")
+}
+
+func TestRunReturnsWrappedNilSummaryNormalizationError(t *testing.T) {
+	baseSessionService := sessinmemory.NewSessionService()
+	defer baseSessionService.Close()
+	sessionService := &nilSummarySnapshotSessionService{Service: baseSessionService}
+	memoryService := meminmemory.NewMemoryService()
+	defer memoryService.Close()
+
+	_, err := Run(context.Background(), testRunNamespace, Backend{
+		Name: "in_memory", SessionService: sessionService,
+		MemoryService: memoryService, ReadAllMemories: completeMemoryReader(memoryService),
+	}, Case{Name: "nil-summary"})
+	require.EqualError(t, err,
+		`build final snapshot for case "nil-summary" on backend "in_memory": summary entry "branch" is nil`)
 }
 
 func TestBuildSnapshotPreservesSuppliedEventTimestamp(t *testing.T) {

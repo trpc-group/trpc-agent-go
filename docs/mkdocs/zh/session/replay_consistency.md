@@ -85,7 +85,7 @@ Track payload fixture 支持完整 JSON 值域：object、array、string、numbe
 
 Memory 操作别名按完整 canonical identity 解析，而不是只比较 content。Add alias 会比较 app、user、content、kind、event time、participants 和 location，并刻意排除 topics。Update 每次都会用后端返回的有效 ID 推进原 `Ref` alias，因此内容或身份元数据导致 ID 轮换后，后续 update/delete 不会继续使用旧 ID。
 
-当 event 无法归一化、memory entry 为 nil，或 entry 的 `Memory` payload 为 nil 时，snapshot 构建会返回错误。这些情况表示 fixture 非法或后端数据损坏，不会在 normalize 时被丢弃，也不能通过 `allowed_diff` 放行。
+当 event 无法归一化、memory entry 为 nil、entry 的 `Memory` payload 为 nil，或 summary map 条目的值为 nil 时，snapshot 构建会返回错误。这些情况表示 fixture 非法或后端数据损坏，不会在 normalize 时被丢弃，也不能通过 `allowed_diff` 放行。即使 session 为 nil，`BuildSnapshot` 也会校验并归一化传入的 memories，因此空 session 形式不会隐藏合法或损坏的 memory 数据。
 
 包含 app、user 或 session state 的 case 还会直接验证作用域契约。Runner 分别读取 app/user state，并在同一 app/user 下创建临时 peer session；peer 必须只继承 app/user 值，且会在所有返回路径中删除。app/user 传播缺失、session/temp state 泄漏和 peer 清理失败都是 runner error，不属于 snapshot diff，也不能通过 `allowed_diff` 放行。
 
