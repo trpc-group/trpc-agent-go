@@ -508,7 +508,7 @@ func (g *Guard) decide(level RiskLevel, findings []Finding) Decision {
 		return DecisionDeny
 	}
 	// parse_error is routed through OnParseError so the operator can pick
-	// deny or ask for structurally unparseable commands. This check runs
+	// deny or ask for structurally unparsable commands. This check runs
 	// before the risk-threshold denies because the parse-error finding is
 	// stamped at high risk but should honor OnParseError, not the deny
 	// threshold.

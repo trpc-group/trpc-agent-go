@@ -39,9 +39,9 @@ const (
 type ParseErrorAction string
 
 const (
-	// ParseErrorDeny rejects unparseable commands. Conservative default.
+	// ParseErrorDeny rejects unparsable commands. Conservative default.
 	ParseErrorDeny ParseErrorAction = "deny"
-	// ParseErrorAsk surfaces unparseable commands for human approval.
+	// ParseErrorAsk surfaces unparsable commands for human approval.
 	ParseErrorAsk ParseErrorAction = "ask"
 )
 
