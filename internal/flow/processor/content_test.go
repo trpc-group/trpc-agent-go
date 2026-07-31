@@ -4087,6 +4087,88 @@ func TestContentRequestProcessor_getIncrementMessages_BoundedResumeTail(t *testi
 	}
 }
 
+func TestContentRequestProcessor_getIncrementMessages_CurrentTurnSkipsResumeTailCompaction(
+	t *testing.T,
+) {
+	baseTime := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	toolCall := model.Message{
+		Role: model.RoleAssistant,
+		ToolCalls: []model.ToolCall{{
+			Type: "function",
+			ID:   "call_1",
+			Function: model.FunctionDefinitionParam{
+				Name:      "step_worker",
+				Arguments: []byte(`{"step":1}`),
+			},
+		}},
+	}
+	toolResult := model.Message{
+		Role:     model.RoleTool,
+		ToolID:   "call_1",
+		ToolName: "step_worker",
+		Content:  strings.Repeat("current-turn-result;", 20),
+	}
+	events := []event.Event{
+		{
+			ID:           "tool-call",
+			Author:       "test-agent",
+			RequestID:    "req1",
+			InvocationID: "inv1",
+			Timestamp:    baseTime,
+			Version:      event.CurrentVersion,
+			Response: &model.Response{
+				Done:    true,
+				Choices: []model.Choice{{Message: toolCall}},
+			},
+		},
+		{
+			ID:           "tool-result",
+			Author:       "test-agent",
+			RequestID:    "req1",
+			InvocationID: "inv1",
+			Timestamp:    baseTime.Add(time.Second),
+			Version:      event.CurrentVersion,
+			Response: &model.Response{
+				Done:    true,
+				Object:  model.ObjectTypeToolResponse,
+				Choices: []model.Choice{{Message: toolResult}},
+			},
+		},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{Events: events}),
+		agent.WithInvocationID("inv1"),
+		agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req1"}),
+	)
+	inv.AgentName = "test-agent"
+	for _, evt := range events {
+		messageorigin.MarkCurrentTurn(inv, evt.ID)
+	}
+
+	p := NewContentRequestProcessor(
+		WithAddSessionSummary(true),
+		WithEnableContextCompaction(true),
+		WithContextCompactionToolResultMaxTokens(10),
+	)
+	cutoff := summaryHistoryCutoff{
+		at:          events[1].Timestamp,
+		lastEventID: events[1].ID,
+	}
+	messages := p.getIncrementMessagesAfterCutoff(
+		inv,
+		nil,
+		cutoff,
+	)
+
+	require.Len(t, messages, 2)
+	require.Equal(t, toolCall, messages[0])
+	require.Equal(t, toolResult, messages[1])
+	require.False(
+		t,
+		p.hasCompactedCurrentInvocationToolResultsAfterCutoff(inv, cutoff),
+	)
+}
+
 func TestCompactResumeToolRoundPreservesCompactionSemantics(t *testing.T) {
 	arguments := []byte(`{"value":"payload"}`)
 	newTail := func(results ...string) map[int]event.Event {

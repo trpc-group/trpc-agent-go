@@ -1535,6 +1535,7 @@ func (p *ContentRequestProcessor) isCoveredCurrentInvocationEvent(
 	cutoff eventHistoryCutoff,
 ) bool {
 	return !messageorigin.IsSeedHistory(inv, evt.ID) &&
+		!messageorigin.IsCurrentTurn(inv, evt.ID) &&
 		isCurrentInvocationEvent(evt, inv) &&
 		cutoff.excludesEvent(index, evt) &&
 		p.canMatchToolRound(evt, inv, filter)
@@ -2546,11 +2547,13 @@ func (p *ContentRequestProcessor) hasCompactedCurrentInvocationToolResultsAfterC
 	// Keep the predicate useful for callers inspecting partially persisted
 	// histories where the matching tool-call event is not available yet.
 	for i, evt := range events {
-		if evt.RequestID != inv.RunOptions.RequestID ||
-			evt.InvocationID != inv.InvocationID ||
-			!eventCutoff.excludesEvent(i, evt) ||
-			!isEventEligibleForInclusion(evt) ||
-			!p.passBranchFilter(evt, filter) {
+		if !p.isCoveredCurrentInvocationEvent(
+			i,
+			evt,
+			inv,
+			filter,
+			eventCutoff,
+		) {
 			continue
 		}
 		if eventWouldCompactCurrentToolResult(
