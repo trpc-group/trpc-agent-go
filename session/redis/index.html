@@ -1326,6 +1326,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#redis-compatibility" class="md-nav__link">
+    <span class="md-ellipsis">
+      Redis Compatibility
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#configuration-options" class="md-nav__link">
     <span class="md-ellipsis">
       Configuration Options
@@ -3026,6 +3035,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#redis-compatibility" class="md-nav__link">
+    <span class="md-ellipsis">
+      Redis Compatibility
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#configuration-options" class="md-nav__link">
     <span class="md-ellipsis">
       Configuration Options
@@ -3201,6 +3219,44 @@
 <li>Async session summary generation</li>
 <li>AppendEvent / GetSession hook extension points</li>
 </ul>
+<h2 id="redis-compatibility">Redis Compatibility</h2>
+<p>The Redis Session service is command-compatible with Redis OSS 4.0 and later. Redis 4.0 is the documented compatibility floor, not a production recommendation; use a release that is still maintained by your Redis vendor in production.</p>
+<p>The service currently relies on the following data-path commands:</p>
+<table>
+<thead>
+<tr>
+<th>Capability</th>
+<th>Commands</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Keys and strings</td>
+<td><code>DEL</code>, <code>EXISTS</code>, <code>EXPIRE</code>, <code>GET</code>, <code>PERSIST</code>, <code>PEXPIRE</code>, <code>PTTL</code>, <code>SCAN</code>, <code>SET</code>, <code>SETNX</code></td>
+</tr>
+<tr>
+<td>Hashes</td>
+<td><code>HDEL</code>, <code>HEXISTS</code>, <code>HGET</code>, <code>HGETALL</code>, <code>HINCRBY</code>, <code>HMGET</code>, <code>HSCAN</code>, <code>HSET</code></td>
+</tr>
+<tr>
+<td>Sets</td>
+<td><code>SADD</code>, <code>SMEMBERS</code></td>
+</tr>
+<tr>
+<td>Sorted sets</td>
+<td><code>ZADD</code>, <code>ZRANGE</code>, <code>ZRANGEBYSCORE</code>, <code>ZRANK</code>, <code>ZREM</code>, <code>ZREVRANGE</code>, <code>ZREVRANGEBYSCORE</code></td>
+</tr>
+<tr>
+<td>Scripting and transactions</td>
+<td><code>EVAL</code>, <code>EVALSHA</code>, <code>WATCH</code>, <code>UNWATCH</code>, <code>MULTI</code>, <code>EXEC</code></td>
+</tr>
+</tbody>
+</table>
+<p>Only the command forms used by this service are required; optional modifiers introduced in later Redis releases are not prerequisites. The Lua scripts use the Redis Lua 5.1 environment and <code>cjson</code>.</p>
+<p>Redis Standalone, Sentinel, and Cluster deployments are compatible when the client builder returns the corresponding <code>go-redis</code> client. The default builder used by <code>WithRedisClientURL</code> creates a single-node client from one address. Configure Sentinel or Cluster with a custom builder through <code>storage/redis.SetClientBuilder</code>.</p>
+<p>In Cluster mode, all keys used by a multi-key Lua script or transaction must be in the same hash slot. The built-in key formats use <code>{userID}</code> or <code>{appName}</code> hash tags to satisfy this requirement, and the user-scoped <code>SCAN</code> pattern contains the same fixed hash tag so that the cluster client can route it to the slot owner.</p>
+<p>For Redis-compatible proxies or alternative backends, validate <code>SCAN</code>/<code>HSCAN</code>, Lua 5.1 with <code>cjson</code>, transactions, and script-cache behavior separately. Use <code>WithDisableScriptCache(true)</code> to execute scripts with <code>EVAL</code> only when <code>EVALSHA</code> caching is unreliable. Depending on the connection URL, the bundled <code>go-redis</code> client may also issue <code>AUTH</code>, <code>SELECT</code>, and <code>CLIENT SETNAME</code>, and probe newer commands such as <code>HELLO</code> and <code>CLIENT SETINFO</code>. Redis OSS 4.0 returns normal errors for unsupported probes and the client falls back or continues, while proxies that close connections on unknown commands require separate validation.</p>
+<p>Redis 4.x and 5.x do not support ACL usernames. When authentication is enabled on these versions, use password-only authentication, for example <code>redis://:password@127.0.0.1:6379/0</code>. Username-and-password authentication requires Redis 6.0 or later.</p>
 <h2 id="configuration-options">Configuration Options</h2>
 <p><strong>Connection:</strong></p>
 <table>
@@ -3717,7 +3773,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="July 29, 2026 08:07:20 UTC">2026-07-29 08:07:20</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="July 31, 2026 03:50:21 UTC">2026-07-31 03:50:21</span>
   </span>
 
     
