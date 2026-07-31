@@ -525,7 +525,11 @@ Formatter 接收 `AfterTool` callback 处理后的最终结果，仅改变
   也不会重新执行已经完成的工具。格式化失败只是展示失败，工具已经执行完毕，它的会话
   状态更新照常写入。
 - `tool.PermissionResult` 和仅携带状态的流式最终结果不经过 formatter；其他
-  `StreamableTool` 只格式化最终结果，中间事件不变。
+  `StreamableTool` 只格式化最终结果，中间事件不变。流式工具必须通过
+  `tool.FinalResultChunk` 声明这个最终结果。若数据流结束时没有 final chunk，最终
+  结果就是框架合并出的流内容，而不是工具声明的输出类型，此时框架跳过 formatter、
+  保持默认 JSON，并打印一条告警。`AfterTool` callback 如果用自己的结果替换了合并
+  内容，本次调用会重新具备格式化资格。
 - 对于会更新会话状态的工具，状态更新消费的是「未配置 formatter 时框架会发出的那条
   工具消息内容」，也就是 `AfterTool` callback 处理后结果的 JSON。formatter 不参与
   状态协议：即使它违反只读契约、原地修改了指针或 map 类型的结果，写入会话的仍然是
@@ -542,6 +546,11 @@ Formatter 返回的文本会直接写入默认工具结果消息，可以在格�
 转义、截断和格式校验。Formatter 必须把入参结果视为只读：同一个结果对象随后会作为
 `ToolResultMessagesInput.Result` 交给回调，原地修改会让同一次工具调用的不同消费方
 看到不一致的结果。Formatter 可能被并发调用；若持有可变状态，需要自行保证并发安全。
+
+框架通过语义工具上的 `ResultFormatter() resultformat.Formatter` 方法发现该能力；
+语义工具指的是框架解开自身的声明包装和名称包装之后剩下的那个工具。
+`function.FunctionTool` 和 `function.StreamableFunctionTool` 提供了该方法；
+`tool/function` 之外的工具实现只要暴露同名方法，就按同样的规则和同样的支持范围参与。
 
 完整可运行示例见
 [examples/toolresultformat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/toolresultformat)。

@@ -547,7 +547,13 @@ role, name, tool call ID, ordering, events, and session persistence.
   only, so a tool that already ran still applies its session state updates.
 - Permission results and state-only final stream results bypass the formatter.
   For other streamable results, only the final result is formatted;
-  intermediate events are unchanged.
+  intermediate events are unchanged. A streamable tool must declare that final
+  result with `tool.FinalResultChunk`. When a stream ends without one, the
+  final result is the stream content merged by the framework rather than the
+  tool's declared output type, so the formatter is skipped, the default JSON is
+  kept, and the framework logs a warning. An `AfterTool` callback that replaces
+  the merged content with its own result makes the call eligible for formatting
+  again.
 - For tools that update session state, the state update consumes the tool
   message content the framework would send without a formatter, which is the
   JSON of the result produced after `AfterTool` callbacks. A formatter is not
@@ -573,6 +579,13 @@ read-only: the same value is handed to the `ToolResultMessages` callback as
 `ToolResultMessagesInput.Result`, so mutating it in place makes consumers of one
 tool call disagree about what the tool returned. A formatter may be called
 concurrently and must synchronize any mutable state it owns.
+
+The framework discovers a formatter through a
+`ResultFormatter() resultformat.Formatter` method on the semantic tool, meaning
+the tool that remains after the framework unwraps its own declaration and name
+wrappers. `function.FunctionTool` and `function.StreamableFunctionTool` provide
+that method; a tool implemented outside `tool/function` that exposes the same
+method participates on the same terms and under the same support scope.
 
 For a runnable end-to-end example, see
 [examples/toolresultformat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/toolresultformat).

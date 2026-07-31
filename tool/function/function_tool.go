@@ -121,7 +121,10 @@ func WithOutputSchema(schema *tool.Schema) Option {
 // the default model-visible tool message content; the framework continues to
 // manage the message role, tool name, tool call ID, ordering, and session
 // persistence. When formatter is nil, the framework uses its default JSON
-// representation. Repeated configuration is last-writer-wins.
+// representation. A streamable tool must declare its final result with
+// tool.FinalResultChunk to be formatted; see
+// StreamableFunctionTool.ResultFormatter. Repeated configuration is
+// last-writer-wins.
 func WithResultFormatter(formatter resultformat.Formatter) Option {
 	return func(opts *functionToolOptions) {
 		opts.resultFormatter = formatter
@@ -372,7 +375,10 @@ func (t *StreamableFunctionTool[I, O]) SkipSummarization() bool {
 
 // ResultFormatter returns the formatter configured by WithResultFormatter.
 // In LLMAgent's default tool-call flow, only the final streamable result is
-// formatted; intermediate events are not.
+// formatted; intermediate events are not. The tool must declare that result
+// with tool.FinalResultChunk. When a stream ends without one, the final result
+// is the stream content merged by the framework rather than O, so the
+// framework keeps its default JSON representation instead of formatting it.
 func (t *StreamableFunctionTool[I, O]) ResultFormatter() resultformat.Formatter {
 	return t.resultFormatter
 }

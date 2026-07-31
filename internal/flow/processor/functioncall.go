@@ -2686,6 +2686,21 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 	if !isPermissionResult(result) && !suppressDefaultToolMessage {
 		formatter = resultFormatterForTool(tl)
 	}
+	// Merged stream content is likewise not a result the tool declared, so
+	// skipping keeps the output the call would have had without a formatter
+	// instead of failing over a value the formatter was never meant to
+	// receive. Warn so that a formatter that never applies is not a silent
+	// no-op.
+	if formatter != nil && hasMergedStreamToolResult(ctx) {
+		log.WarnfContext(
+			ctx,
+			"Skipping result formatter for %s: the stream ended without a "+
+				"tool.FinalResultChunk, so the final result is the merged "+
+				"stream content rather than the tool's declared result",
+			toolCall.Function.Name,
+		)
+		formatter = nil
+	}
 	// The state-delta input reproduces the tool message content the framework
 	// would send without a formatter. Permission and state-only results are
 	// filtered out downstream by the skip markers set during execution, so this
@@ -3272,7 +3287,10 @@ func (p *FunctionCallResponseProcessor) runAfterToolPluginCallbacks(
 	skipSummarization := afterResult != nil &&
 		afterResult.SkipSummarization
 	if afterResult != nil && afterResult.CustomResult != nil {
-		return ctx, afterResult.CustomResult, true, skipSummarization, nil
+		// The replacement is a value the plugin chose, so it is eligible for
+		// result formatting even when the tool only streamed content.
+		return clearMergedStreamToolResult(ctx), afterResult.CustomResult,
+			true, skipSummarization, nil
 	}
 	return ctx, toolResult, false, skipSummarization, nil
 }
@@ -3316,6 +3334,9 @@ func (p *FunctionCallResponseProcessor) runAfterToolCallbacks(
 		afterResult.SkipSummarization
 	if afterResult != nil && afterResult.CustomResult != nil {
 		toolResult = afterResult.CustomResult
+		// The replacement is a value the callback chose, so it is eligible for
+		// result formatting even when the tool only streamed content.
+		ctx = clearMergedStreamToolResult(ctx)
 	}
 	return ctx, toolResult, skipSummarization, nil
 }
@@ -3825,7 +3846,7 @@ func (f *FunctionCallResponseProcessor) executeStreamableTool(
 	// turn (to satisfy providers that require tool messages). The UI example
 	// suppresses printing these aggregated strings to avoid duplication; they are
 	// primarily for model consumption.
-	return ctx, tool.Merge(contents), false, nil
+	return markMergedStreamToolResult(ctx), tool.Merge(contents), false, nil
 }
 
 type streamFinalResult struct {
@@ -3854,6 +3875,37 @@ func hasSyntheticStateOnlyToolChoice(ctx context.Context) bool {
 	}
 	synthetic, _ := ctx.Value(syntheticStateOnlyToolChoiceKey{}).(bool)
 	return synthetic
+}
+
+type mergedStreamToolResultKey struct{}
+
+// markMergedStreamToolResult records that the final tool result is the stream
+// content merged by the framework rather than a value the tool declared
+// through tool.FinalResultChunk. Its type is whatever tool.Merge produced from
+// the emitted chunks, so it is not the streamable tool's declared output type.
+func markMergedStreamToolResult(ctx context.Context) context.Context {
+	if ctx == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, mergedStreamToolResultKey{}, true)
+}
+
+// clearMergedStreamToolResult records that a callback replaced the merged
+// stream content, so the final result is again a value an implementation
+// chose deliberately.
+func clearMergedStreamToolResult(ctx context.Context) context.Context {
+	if ctx == nil || !hasMergedStreamToolResult(ctx) {
+		return ctx
+	}
+	return context.WithValue(ctx, mergedStreamToolResultKey{}, false)
+}
+
+func hasMergedStreamToolResult(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	merged, _ := ctx.Value(mergedStreamToolResultKey{}).(bool)
+	return merged
 }
 
 // consumeStream reads all chunks from the reader and processes them.

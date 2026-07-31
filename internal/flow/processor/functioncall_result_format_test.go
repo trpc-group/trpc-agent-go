@@ -1400,3 +1400,106 @@ func TestHandleFunctionCalls_FormatterFailureKeepsStateDelta(t *testing.T) {
 		})
 	}
 }
+
+func newMergedStreamResultFormatTool(
+	formatterCalls *atomic.Int32,
+) *function.StreamableFunctionTool[struct{}, resultFormatTestResult] {
+	return function.NewStreamableFunctionTool[struct{}, resultFormatTestResult](
+		func(context.Context, struct{}) (*tool.StreamReader, error) {
+			stream := tool.NewStream(2)
+			go func() {
+				defer stream.Writer.Close()
+				_ = stream.Writer.Send(tool.StreamChunk{Content: "hello "}, nil)
+				_ = stream.Writer.Send(tool.StreamChunk{Content: "world"}, nil)
+			}()
+			return stream.Reader, nil
+		},
+		function.WithName("merged_stream"),
+		function.WithResultFormatter(
+			resultformat.FormatterFunc[resultFormatTestResult](func(
+				_ context.Context,
+				result resultFormatTestResult,
+			) (string, error) {
+				formatterCalls.Add(1)
+				return "formatted:" + result.Output, nil
+			}),
+		),
+	)
+}
+
+func executeMergedStreamToolCall(
+	t *testing.T,
+	callbacks *tool.Callbacks,
+	streamTool tool.Tool,
+) (toolCallExecution, error) {
+	t.Helper()
+	return NewFunctionCallResponseProcessor(false, callbacks).executeToolCall(
+		context.Background(),
+		&agent.Invocation{
+			InvocationID: "invocation",
+			AgentName:    "agent",
+			Model:        &mockModel{},
+		},
+		model.ToolCall{
+			ID: "call-1",
+			Function: model.FunctionDefinitionParam{
+				Name:      "merged_stream",
+				Arguments: []byte(`{}`),
+			},
+		},
+		map[string]tool.Tool{"merged_stream": streamTool},
+		0,
+		make(chan *event.Event, 32),
+	)
+}
+
+// TestExecuteToolCall_MergedStreamResultSkipsResultFormatter pins that a
+// formatter only receives a result the tool declared. A stream that ends
+// without a tool.FinalResultChunk leaves the framework's merged content as the
+// final result, and its type is not the tool's declared output, so the
+// framework keeps the default JSON instead of failing a call that succeeded.
+func TestExecuteToolCall_MergedStreamResultSkipsResultFormatter(t *testing.T) {
+	var formatterCalls atomic.Int32
+
+	execution, err := executeMergedStreamToolCall(
+		t,
+		nil,
+		newMergedStreamResultFormatTool(&formatterCalls),
+	)
+
+	require.NoError(t, err)
+	require.Len(t, execution.choices, 1)
+	assert.Equal(t, `"hello world"`, execution.choices[0].Message.Content)
+	assert.Equal(t, model.RoleTool, execution.choices[0].Message.Role)
+	assert.Zero(t, formatterCalls.Load())
+}
+
+// TestExecuteToolCall_MergedStreamResultFormattedAfterCallbackReplacement pins
+// the other half of that rule: once an AfterTool callback replaces the merged
+// content with a result it chose, the value is declared again and formatting
+// applies.
+func TestExecuteToolCall_MergedStreamResultFormattedAfterCallbackReplacement(
+	t *testing.T,
+) {
+	var formatterCalls atomic.Int32
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterAfterTool(func(
+		context.Context,
+		*tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		return &tool.AfterToolResult{
+			CustomResult: resultFormatTestResult{Output: "declared"},
+		}, nil
+	})
+
+	execution, err := executeMergedStreamToolCall(
+		t,
+		callbacks,
+		newMergedStreamResultFormatTool(&formatterCalls),
+	)
+
+	require.NoError(t, err)
+	require.Len(t, execution.choices, 1)
+	assert.Equal(t, "formatted:declared", execution.choices[0].Message.Content)
+	assert.Equal(t, int32(1), formatterCalls.Load())
+}
