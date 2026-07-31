@@ -974,79 +974,165 @@ func (t *statefulFunctionTool[I, O]) StateDelta(
 	return map[string][]byte{"state": []byte("updated")}
 }
 
-func TestExecuteToolCall_StateDeltaUsesResultJSONNotModelContent(t *testing.T) {
-	for _, override := range []bool{false, true} {
-		t.Run(fmt.Sprintf("override=%t", override), func(t *testing.T) {
+const (
+	statefulResultJSON = `{"exit_code":0,"output":"stateful"}`
+	statefulRewritten  = `{"exit_code":9,"output":"rewritten"}`
+	statefulObserved   = "<observation><exit_code>0</exit_code>" +
+		"<output>stateful</output></observation>"
+)
+
+type resultFormatCallbackMode int
+
+const (
+	callbackModeNone resultFormatCallbackMode = iota
+	// callbackModeKeepDefault returns the framework default message unchanged
+	// and appends another message, the common multimodal pattern.
+	callbackModeKeepDefault
+	// callbackModeRewrite replaces the tool message content, the pattern used
+	// to redact or reshape what the model and the session both observe.
+	callbackModeRewrite
+)
+
+func newResultFormatCallbacks(
+	mode resultFormatCallbackMode,
+	seenDefault *string,
+) *tool.Callbacks {
+	if mode == callbackModeNone {
+		return nil
+	}
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterToolResultMessages(func(
+		_ context.Context,
+		input *tool.ToolResultMessagesInput,
+	) (any, error) {
+		defaultMsg := input.DefaultToolMessage.(model.Message)
+		*seenDefault = defaultMsg.Content
+		if mode == callbackModeKeepDefault {
+			return []model.Message{
+				defaultMsg,
+				{Role: model.RoleUser, Content: "extra"},
+			}, nil
+		}
+		return model.Message{
+			Role:     model.RoleTool,
+			Content:  statefulRewritten,
+			ToolID:   input.ToolCallID,
+			ToolName: input.ToolName,
+		}, nil
+	})
+	return callbacks
+}
+
+// TestExecuteToolCall_StateDeltaIgnoresFormattingHonorsOverride pins the tool
+// state protocol: it consumes the tool message content the framework would send
+// without a result formatter, and a ToolResultMessages rewrite still owns that
+// content exactly as it did before result formatting existed.
+func TestExecuteToolCall_StateDeltaIgnoresFormattingHonorsOverride(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		formatted bool
+		callback  resultFormatCallbackMode
+		wantModel string
+		wantState string
+	}{
+		{
+			name:      "plain",
+			wantModel: statefulResultJSON,
+			wantState: statefulResultJSON,
+		},
+		{
+			name:      "callback keeps default",
+			callback:  callbackModeKeepDefault,
+			wantModel: statefulResultJSON,
+			wantState: statefulResultJSON,
+		},
+		{
+			name:      "callback rewrites content",
+			callback:  callbackModeRewrite,
+			wantModel: statefulRewritten,
+			wantState: statefulRewritten,
+		},
+		{
+			name:      "formatted",
+			formatted: true,
+			wantModel: statefulObserved,
+			wantState: statefulResultJSON,
+		},
+		{
+			name:      "formatted callback keeps default",
+			formatted: true,
+			callback:  callbackModeKeepDefault,
+			wantModel: statefulObserved,
+			wantState: statefulResultJSON,
+		},
+		{
+			name:      "formatted callback rewrites content",
+			formatted: true,
+			callback:  callbackModeRewrite,
+			wantModel: statefulRewritten,
+			wantState: statefulRewritten,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
 			result := resultFormatTestResult{ExitCode: 0, Output: "stateful"}
-			base := function.NewFunctionTool(
-				func(context.Context, struct{}) (resultFormatTestResult, error) {
-					return result, nil
-				},
-				function.WithName("stateful"),
-				function.WithResultFormatter(xmlLikeResultFormatter()),
-			)
+			opts := []function.Option{function.WithName("stateful")}
+			if tt.formatted {
+				opts = append(
+					opts,
+					function.WithResultFormatter(xmlLikeResultFormatter()),
+				)
+			}
 			stateful := &statefulFunctionTool[struct{}, resultFormatTestResult]{
-				FunctionTool: base,
+				FunctionTool: function.NewFunctionTool(
+					func(context.Context, struct{}) (resultFormatTestResult, error) {
+						return result, nil
+					},
+					opts...,
+				),
 			}
-			var defaultContent string
-			var callbacks *tool.Callbacks
-			if override {
-				callbacks = tool.NewCallbacks()
-				callbacks.RegisterToolResultMessages(func(
-					_ context.Context,
-					input *tool.ToolResultMessagesInput,
-				) (any, error) {
-					defaultContent = input.DefaultToolMessage.(model.Message).Content
-					return model.Message{
-						Role:     model.RoleTool,
-						Content:  "overridden",
-						ToolID:   input.ToolCallID,
-						ToolName: input.ToolName,
-					}, nil
-				})
-			}
-			inv := &agent.Invocation{
-				AgentName: "agent",
-				Model:     &mockModel{},
-				Session:   &session.Session{},
-			}
-			toolCall := model.ToolCall{
-				ID: "call-1",
-				Function: model.FunctionDefinitionParam{
-					Name:      "stateful",
-					Arguments: []byte(`{}`),
-				},
-			}
+			var seenDefault string
+			callbacks := newResultFormatCallbacks(tt.callback, &seenDefault)
 
 			evt, err := NewFunctionCallResponseProcessor(
 				false,
 				callbacks,
 			).executeSingleToolCallSequential(
 				context.Background(),
-				inv,
+				&agent.Invocation{
+					AgentName: "agent",
+					Model:     &mockModel{},
+					Session:   &session.Session{},
+				},
 				&model.Response{},
 				map[string]tool.Tool{"stateful": stateful},
 				make(chan *event.Event, 32),
 				0,
-				toolCall,
+				model.ToolCall{
+					ID: "call-1",
+					Function: model.FunctionDefinitionParam{
+						Name:      "stateful",
+						Arguments: []byte(`{}`),
+					},
+				},
 			)
 
 			require.NoError(t, err)
 			require.NotNil(t, evt)
-			require.Len(t, evt.Choices, 1)
-			if override {
-				assert.Equal(t, "overridden", evt.Choices[0].Message.Content)
-				assert.Contains(t, defaultContent, "<observation>")
-			} else {
-				assert.Contains(t, evt.Choices[0].Message.Content, "<observation>")
-			}
-			assert.Equal(
-				t,
-				`{"exit_code":0,"output":"stateful"}`,
-				string(stateful.stateContent),
-			)
+			require.NotEmpty(t, evt.Choices)
+			assert.Equal(t, tt.wantModel, evt.Choices[0].Message.Content)
 			assert.Equal(t, 1, stateful.stateDeltaCalls)
+			assert.Equal(t, tt.wantState, string(stateful.stateContent))
 			assert.Equal(t, []byte("updated"), evt.StateDelta["state"])
+			if tt.callback == callbackModeNone {
+				return
+			}
+			// A per-tool formatter also changes what the agent-wide
+			// ToolResultMessages callback observes as the default message.
+			wantDefault := statefulResultJSON
+			if tt.formatted {
+				wantDefault = statefulObserved
+			}
+			assert.Equal(t, wantDefault, seenDefault)
 		})
 	}
 }

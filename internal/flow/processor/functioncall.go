@@ -113,8 +113,9 @@ type toolEventStateDelta struct {
 	sessionBaseline session.StateMap
 	args            []byte
 	choice          model.Choice
-	// stateDeltaInput is the final tool result encoded as JSON. It is separate
-	// from model-visible formatted content.
+	// stateDeltaInput is the tool result message content the framework would
+	// send without a result formatter, so formatting never redefines the state
+	// protocol. A ToolResultMessages rewrite still owns it.
 	stateDeltaInput []byte
 }
 
@@ -2125,9 +2126,28 @@ func marshalStateDeltaInput(result any) (b []byte, err error) {
 	return marshalJSONNoHTMLEscape(result)
 }
 
-// attachStateDelta copies a tool-provided state delta using the final tool
-// result encoded as JSON. Model-visible content is never used as the state
-// protocol.
+// stateDeltaInputAfterOverride returns the content consumed by the tool state
+// protocol. legacy is the tool message content the framework would send without
+// a result formatter, so a formatter never redefines the state protocol.
+// A ToolResultMessages callback that rewrites the tool message owns that
+// protocol, as it always has; a callback that returns the framework's default
+// message unchanged is not a rewrite.
+func stateDeltaInputAfterOverride(
+	legacy []byte,
+	defaultMsg model.Message,
+	choices []model.Choice,
+) []byte {
+	if legacy == nil || len(choices) == 0 {
+		return legacy
+	}
+	if choices[0].Message.Content == defaultMsg.Content {
+		return legacy
+	}
+	return []byte(choices[0].Message.Content)
+}
+
+// attachStateDelta copies a tool-provided state delta using the tool result
+// message content the framework would send without a result formatter.
 func (p *FunctionCallResponseProcessor) attachStateDelta(
 	inv *agent.Invocation,
 	tl tool.Tool,
@@ -2629,14 +2649,15 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 	}
 	// Permission and state-only results are framework protocol messages, not
 	// normal tool output. Keep their default JSON representation.
-	var (
-		formatter            resultformat.Formatter
-		needsStateDeltaInput bool
-	)
+	var formatter resultformat.Formatter
 	if !isPermissionResult(result) && !suppressDefaultToolMessage {
 		formatter = resultFormatterForTool(tl)
-		needsStateDeltaInput = toolProvidesStateDelta(tl)
 	}
+	// The state-delta input reproduces the tool message content the framework
+	// would send without a formatter. Permission and state-only results are
+	// filtered out downstream by the skip markers set during execution, so this
+	// projection must not gate on them.
+	needsStateDeltaInput := toolProvidesStateDelta(tl)
 	defaultMsg, stateDeltaInput, err := buildDefaultToolMessage(
 		ctx,
 		toolCall.ID,
@@ -2654,7 +2675,6 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 		return execution, err
 	}
 	defaultMsg.ToolName = toolCall.Function.Name
-	execution.stateDeltaInput = stateDeltaInput
 	if suppressDefaultToolMessage {
 		ctx = markSyntheticStateOnlyToolChoice(ctx)
 		execution.ctx = ctx
@@ -2671,6 +2691,11 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 			return execution, cbErr
 		}
 		execution.choices = choices
+		execution.stateDeltaInput = stateDeltaInputAfterOverride(
+			stateDeltaInput,
+			defaultMsg,
+			choices,
+		)
 		return execution, nil
 	}
 
@@ -2695,6 +2720,11 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 	)
 
 	execution.choices = choices
+	execution.stateDeltaInput = stateDeltaInputAfterOverride(
+		stateDeltaInput,
+		defaultMsg,
+		choices,
+	)
 	return execution, nil
 }
 
