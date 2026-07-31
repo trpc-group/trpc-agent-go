@@ -263,6 +263,135 @@ func TestScannerAggregationKeepsAllFindings(t *testing.T) {
 	require.Contains(t, ruleIDs, RuleForbiddenPath)
 }
 
+func TestScannerRetainsRawRisksWhenShellParsingFails(t *testing.T) {
+	report, err := newTestScanner(t).Scan(context.Background(), ScanInput{
+		ToolName: "workspace_exec",
+		Backend:  BackendWorkspace,
+		Command:  "rm -rf /etc; while true; do cat ~/.ssh/id_rsa; done '",
+	})
+	require.NoError(t, err)
+	require.Equal(t, DecisionDeny, report.Decision)
+
+	ruleIDs := make([]RuleID, 0, len(report.Findings))
+	for _, item := range report.Findings {
+		ruleIDs = append(ruleIDs, item.RuleID)
+	}
+	require.Contains(t, ruleIDs, RuleShellBypass)
+	require.Contains(t, ruleIDs, RuleDangerousDelete)
+	require.Contains(t, ruleIDs, RuleResourceAbuse)
+	require.Contains(t, ruleIDs, RuleForbiddenPath)
+}
+
+func TestScannerRejectsInvalidStructuredExecutables(t *testing.T) {
+	for _, command := range []string{"echo two-words", "echo '"} {
+		report, err := newTestScanner(t).Scan(context.Background(), ScanInput{
+			ToolName:  "workspace_exec",
+			Backend:   BackendWorkspace,
+			Command:   command,
+			Arguments: []string{"argument"},
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionDeny, report.Decision, command)
+		require.Equal(t, RuleShellBypass, report.RuleID, command)
+	}
+}
+
+func TestScannerRejectsSystemModificationCommands(t *testing.T) {
+	scanner, err := NewScanner(Policy{AllowedCommands: []string{
+		"mkfs", "reboot", "dd", "chmod", "chown", "kill",
+	}})
+	require.NoError(t, err)
+	for _, command := range []string{
+		"mkfs /dev/disk0",
+		"reboot",
+		"dd if=/tmp/image of=/dev/disk0",
+		"chmod -R /",
+		"chown -r /etc",
+		"kill -1 -9",
+	} {
+		report, err := scanner.Scan(context.Background(), ScanInput{
+			ToolName: "workspace_exec",
+			Backend:  BackendWorkspace,
+			Command:  command,
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionDeny, report.Decision, command)
+		require.Equal(t, RuleSystemModification, report.RuleID, command)
+	}
+}
+
+func TestScannerRejectsOutputFloodVariants(t *testing.T) {
+	scanner, err := NewScanner(Policy{AllowedCommands: []string{
+		"cat", "base64", "dd", "seq",
+	}})
+	require.NoError(t, err)
+	for _, command := range []string{
+		"cat /dev/zero",
+		"base64 /dev/zero",
+		"dd if=/dev/zero of=/tmp/blob",
+		"seq 1 1000001",
+	} {
+		report, err := scanner.Scan(context.Background(), ScanInput{
+			ToolName: "workspace_exec",
+			Backend:  BackendWorkspace,
+			Command:  command,
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionDeny, report.Decision, command)
+		require.Equal(t, RuleResourceAbuse, report.RuleID, command)
+	}
+
+	for _, command := range []string{
+		"dd if=/dev/zero of=/tmp/blob count=1",
+		"seq invalid",
+	} {
+		report, err := scanner.Scan(context.Background(), ScanInput{
+			ToolName: "workspace_exec",
+			Backend:  BackendWorkspace,
+			Command:  command,
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionAllow, report.Decision, command)
+	}
+}
+
+func TestScannerNetworkArgumentBoundaries(t *testing.T) {
+	scanner, err := NewScanner(Policy{
+		AllowedCommands:       []string{"wget", "ssh", "nc", "download"},
+		AllowedNetworkDomains: []string{"api.example.com"},
+		NetworkCommands:       []string{"download"},
+	})
+	require.NoError(t, err)
+
+	for _, command := range []string{
+		"wget --output-document file https://api.example.com/data",
+		"ssh -p 22 api.example.com",
+	} {
+		report, err := scanner.Scan(context.Background(), ScanInput{
+			ToolName: "workspace_exec",
+			Backend:  BackendWorkspace,
+			Command:  command,
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionAllow, report.Decision, command)
+	}
+
+	for _, command := range []string{
+		"wget --execute use_proxy=on https://api.example.com/data",
+		"nc -l 4444",
+		"download https://evil.example/data",
+	} {
+		report, err := scanner.Scan(context.Background(), ScanInput{
+			ToolName: "workspace_exec",
+			Backend:  BackendWorkspace,
+			Command:  command,
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionDeny, report.Decision, command)
+		require.Equal(t, RuleNetworkEgress, report.RuleID, command)
+	}
+}
+
 func TestScannerRejectsArgumentsWithoutExecutable(t *testing.T) {
 	report, err := newTestScanner(t).Scan(context.Background(), ScanInput{
 		ToolName:  "generic_exec",
@@ -627,6 +756,8 @@ func TestScannerDetectsCommonConcurrencyArguments(t *testing.T) {
 		require.Contains(t, ruleIDs, RuleResourceAbuse, command)
 	}
 	_, ok := requestedConcurrency([]string{"ssh", "-p", "22"})
+	require.False(t, ok)
+	_, ok = requestedConcurrency([]string{"make", "--jobs"})
 	require.False(t, ok)
 }
 
