@@ -110,6 +110,42 @@ func TestRequestsFromToolCall_ParsesKnownToolArguments(t *testing.T) {
 			},
 		},
 		{
+			name:     "skill_editor_text_and_output_limits",
+			toolName: "skill_run",
+			args: []byte(`{
+				"command":"true",
+				"editor_text":"password=hunter2",
+				"outputs":{
+					"globs":["out/*.txt"],
+					"max_file_bytes":33554432,
+					"max_total_bytes":134217728
+				}
+			}`),
+			assert: func(t *testing.T, reqs []ScanRequest) {
+				require.Len(t, reqs, 1)
+				require.Equal(t, "password=hunter2", reqs[0].EditorText)
+				require.Equal(t, int64(128*1024*1024), reqs[0].RequestedOutputBytes)
+			},
+		},
+		{
+			name:     "skill_output_collector_defaults",
+			toolName: "skill_exec",
+			args:     []byte(`{"command":"true","outputs":{"globs":["out/*.txt"]}}`),
+			assert: func(t *testing.T, reqs []ScanRequest) {
+				require.Len(t, reqs, 1)
+				require.Equal(t, int64(skillDefaultOutputTotalBytes), reqs[0].RequestedOutputBytes)
+			},
+		},
+		{
+			name:     "skill_explicit_output_total_overrides_default",
+			toolName: "skill_exec",
+			args:     []byte(`{"command":"true","outputs":{"globs":["out/*.txt"],"max_total_bytes":33554432}}`),
+			assert: func(t *testing.T, reqs []ScanRequest) {
+				require.Len(t, reqs, 1)
+				require.Equal(t, int64(32*1024*1024), reqs[0].RequestedOutputBytes)
+			},
+		},
+		{
 			name:     "workspace_timeout_falls_back_from_zero",
 			toolName: "workspace_exec",
 			args:     []byte(`{"command":"sleep 1","timeout_sec":0,"timeout":3600}`),
@@ -381,11 +417,73 @@ func TestRequestsFromPermissionRequest_DoesNotInferCustomParserFromSchema(t *tes
 	require.NotEmpty(t, reqs[0].RawArguments)
 }
 
+func TestRequestsFromPermissionRequest_UsesTypedSafetyParserContract(t *testing.T) {
+	parserTool := &testSafetyParserTool{
+		decl: &tool.Declaration{Name: "custom_workspace_exec"},
+		kind: tool.SafetyParserKindWorkspaceExec,
+	}
+	req := &tool.PermissionRequest{
+		Tool:      parserTool,
+		ToolName:  parserTool.Declaration().Name,
+		Arguments: []byte(`{"command":"echo ok","cwd":"."}`),
+	}
+	reqs, err := requestsFromPermissionRequest(req, defaultBackendResolver(req), nil)
+	require.NoError(t, err)
+	require.Len(t, reqs, 1)
+	require.Equal(t, BackendWorkspace, reqs[0].Backend)
+	require.Equal(t, "echo ok", reqs[0].Command)
+	require.Equal(t, workspaceExecDefaultTimeoutSec, reqs[0].TimeoutSec)
+}
+
+func TestRequestsFromToolCall_SkillOutputLimitAffectsDecision(t *testing.T) {
+	reqs, err := requestsFromToolCall(
+		"skill_run",
+		"call-output",
+		BackendHost,
+		[]byte(`{"command":"true","outputs":{"globs":["out/*.txt"],"max_file_bytes":33554432,"max_total_bytes":134217728}}`),
+		nil,
+	)
+	require.NoError(t, err)
+	require.Len(t, reqs, 1)
+
+	for _, tc := range []struct {
+		name     string
+		maxBytes int64
+		decision Decision
+		ruleID   string
+	}{
+		{name: "policy below requested limit", maxBytes: 1 << 20, decision: DecisionAsk, ruleID: "resource.output_limit"},
+		{name: "policy above requested limit", maxBytes: 256 << 20, decision: DecisionAllow, ruleID: "evaluation.none"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			report, err := MustDefaultScanner(Policy{MaxOutputBytes: tc.maxBytes}).Scan(
+				context.Background(), reqs[0],
+			)
+			require.NoError(t, err)
+			require.Equal(t, tc.decision, report.Decision)
+			require.Equal(t, tc.ruleID, report.RuleID)
+		})
+	}
+}
+
 type testPermissionTool struct {
 	decl *tool.Declaration
 }
 
 func (t *testPermissionTool) Declaration() *tool.Declaration { return t.decl }
+
+type testSafetyParserTool struct {
+	decl *tool.Declaration
+	kind tool.SafetyParserKind
+}
+
+func (t *testSafetyParserTool) Declaration() *tool.Declaration { return t.decl }
+
+func (t *testSafetyParserTool) SafetyParserKind() tool.SafetyParserKind {
+	return t.kind
+}
+
+var _ tool.SafetyParserKindProvider = (*testSafetyParserTool)(nil)
 
 func TestUnmarshalCodeBlocks_RejectsStringifiedInvalidJSON(t *testing.T) {
 	_, err := unmarshalCodeBlocks(json.RawMessage(`"not-json"`))

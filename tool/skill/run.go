@@ -64,7 +64,9 @@ type RunTool struct {
 }
 
 // SafetyParserKind identifies the built-in parser required for this tool.
-func (*RunTool) SafetyParserKind() string { return "skill_exec" }
+func (*RunTool) SafetyParserKind() tool.SafetyParserKind {
+	return tool.SafetyParserKindSkillExec
+}
 
 // RunOutputLimits controls how much inline text skill_run returns.
 //

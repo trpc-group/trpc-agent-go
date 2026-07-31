@@ -22,6 +22,8 @@ const (
 	workspaceExecDefaultTimeoutSec = 300
 	hostExecDefaultTimeoutSec      = 1800
 	skillDefaultTimeoutSec         = 300
+	skillDefaultOutputFileBytes    = 4 * 1024 * 1024
+	skillDefaultOutputTotalBytes   = 64 * 1024 * 1024
 )
 
 type parserKind string
@@ -150,12 +152,8 @@ func parserKindForPermissionRequest(req *tool.PermissionRequest) parserKind {
 	return parserKindFromToolName(req.ToolName)
 }
 
-type safetyParserKindProvider interface {
-	SafetyParserKind() string
-}
-
 func parserKindFromSemanticTool(t tool.Tool) parserKind {
-	provider, ok := t.(safetyParserKindProvider)
+	provider, ok := t.(tool.SafetyParserKindProvider)
 	if !ok {
 		return parserUnknown
 	}
@@ -251,6 +249,7 @@ func parseExecArgs(
 	}
 	var collectionPaths []string
 	var inputPaths []string
+	var requestedOutputBytes int64
 	if toolKind == parserSkillExec {
 		collectionPaths, err = collectionPathsField(raw)
 		if err != nil {
@@ -260,12 +259,20 @@ func parseExecArgs(
 		if err != nil {
 			return nil, err
 		}
+		requestedOutputBytes, err = outputLimitField(raw)
+		if err != nil {
+			return nil, err
+		}
 	}
 	env, err := stringMapField(raw, "env")
 	if err != nil {
 		return nil, err
 	}
 	stdin, err := stringField(raw, "stdin")
+	if err != nil {
+		return nil, err
+	}
+	editorText, err := stringField(raw, "editor_text")
 	if err != nil {
 		return nil, err
 	}
@@ -285,17 +292,66 @@ func parseExecArgs(
 		Cwd:                   cwd,
 		Env:                   env,
 		Stdin:                 stdin,
+		EditorText:            editorText,
 		TimeoutSec:            timeout,
 		Background:            background,
 		TTY:                   tty,
 		RawArguments:          append([]byte(nil), args...),
 		CollectionPaths:       collectionPaths,
 		InputPaths:            inputPaths,
+		RequestedOutputBytes:  requestedOutputBytes,
 		Metadata:              metadata,
 		cwdResolutionRequired: resolveHostCwd,
 		cwdResolved:           cwdResolved,
 	}
 	return []ScanRequest{req}, nil
+}
+
+func outputLimitField(raw map[string]json.RawMessage) (int64, error) {
+	outputFiles, err := stringSliceField(raw, "output_files")
+	if err != nil {
+		return 0, err
+	}
+	limit := int64(0)
+	if len(outputFiles) > 0 {
+		limit = skillDefaultOutputTotalBytes
+	}
+	outputRaw, ok := raw["outputs"]
+	if !ok || string(outputRaw) == "null" {
+		return limit, nil
+	}
+	var outputs map[string]json.RawMessage
+	if err := json.Unmarshal(outputRaw, &outputs); err != nil {
+		return 0, fmt.Errorf("outputs: expected object: %w", err)
+	}
+	globs, err := stringSliceField(outputs, "globs")
+	if err != nil {
+		return 0, fmt.Errorf("outputs.globs: %w", err)
+	}
+	if len(globs) == 0 {
+		return limit, nil
+	}
+	maxFileBytes, err := intField(outputs, "max_file_bytes")
+	if err != nil {
+		return 0, fmt.Errorf("outputs.max_file_bytes: %w", err)
+	}
+	if maxFileBytes <= 0 {
+		maxFileBytes = skillDefaultOutputFileBytes
+	}
+	maxTotalBytes, err := intField(outputs, "max_total_bytes")
+	if err != nil {
+		return 0, fmt.Errorf("outputs.max_total_bytes: %w", err)
+	}
+	if maxTotalBytes <= 0 {
+		maxTotalBytes = skillDefaultOutputTotalBytes
+	}
+	if int64(maxFileBytes) > limit {
+		limit = int64(maxFileBytes)
+	}
+	if int64(maxTotalBytes) > limit {
+		limit = int64(maxTotalBytes)
+	}
+	return limit, nil
 }
 
 type inputPathSpec struct {

@@ -84,7 +84,9 @@ type ExecTool struct {
 }
 
 // SafetyParserKind identifies the built-in parser required for this tool.
-func (*ExecTool) SafetyParserKind() string { return "workspace_exec" }
+func (*ExecTool) SafetyParserKind() tool.SafetyParserKind {
+	return tool.SafetyParserKindWorkspaceExec
+}
 
 // WriteStdinTool sends additional stdin to a running workspace_exec session.
 type WriteStdinTool struct {
@@ -92,7 +94,9 @@ type WriteStdinTool struct {
 }
 
 // SafetyParserKind identifies the built-in parser required for this tool.
-func (*WriteStdinTool) SafetyParserKind() string { return "write_stdin" }
+func (*WriteStdinTool) SafetyParserKind() tool.SafetyParserKind {
+	return tool.SafetyParserKindWriteStdin
+}
 
 // KillSessionTool terminates a running workspace_exec session.
 type KillSessionTool struct {
@@ -100,7 +104,9 @@ type KillSessionTool struct {
 }
 
 // SafetyParserKind identifies the built-in parser required for this tool.
-func (*KillSessionTool) SafetyParserKind() string { return "kill_session" }
+func (*KillSessionTool) SafetyParserKind() tool.SafetyParserKind {
+	return tool.SafetyParserKindKillSession
+}
 
 type execSession struct {
 	mu sync.Mutex

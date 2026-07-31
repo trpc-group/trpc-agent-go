@@ -80,7 +80,9 @@ type executeCodeTool struct {
 }
 
 // SafetyParserKind identifies the built-in parser required for this tool.
-func (*executeCodeTool) SafetyParserKind() string { return "execute_code" }
+func (*executeCodeTool) SafetyParserKind() tool.SafetyParserKind {
+	return tool.SafetyParserKindCodeExec
+}
 
 // Declaration returns the tool's declaration.
 func (t *executeCodeTool) Declaration() *tool.Declaration {

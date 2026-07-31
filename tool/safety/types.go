@@ -84,23 +84,25 @@ func (b Backend) Valid() bool {
 
 // ScanRequest describes one pending tool call or script execution.
 type ScanRequest struct {
-	ToolName        string            `json:"tool_name"`
-	ToolCallID      string            `json:"tool_call_id,omitempty"`
-	Backend         Backend           `json:"backend"`
-	Command         string            `json:"command,omitempty"`
-	Args            []string          `json:"args,omitempty"`
-	Cwd             string            `json:"cwd,omitempty"`
-	Env             map[string]string `json:"env,omitempty"`
-	Stdin           string            `json:"stdin,omitempty"`
-	TimeoutSec      int               `json:"timeout_sec,omitempty"`
-	Background      bool              `json:"background,omitempty"`
-	TTY             bool              `json:"tty,omitempty"`
-	Language        string            `json:"language,omitempty"`
-	Code            string            `json:"code,omitempty"`
-	RawArguments    []byte            `json:"-"`
-	CollectionPaths []string          `json:"collection_paths,omitempty"`
-	InputPaths      []string          `json:"input_paths,omitempty"`
-	Metadata        map[string]any    `json:"metadata,omitempty"`
+	ToolName             string            `json:"tool_name"`
+	ToolCallID           string            `json:"tool_call_id,omitempty"`
+	Backend              Backend           `json:"backend"`
+	Command              string            `json:"command,omitempty"`
+	Args                 []string          `json:"args,omitempty"`
+	Cwd                  string            `json:"cwd,omitempty"`
+	Env                  map[string]string `json:"env,omitempty"`
+	Stdin                string            `json:"stdin,omitempty"`
+	EditorText           string            `json:"editor_text,omitempty"`
+	TimeoutSec           int               `json:"timeout_sec,omitempty"`
+	Background           bool              `json:"background,omitempty"`
+	TTY                  bool              `json:"tty,omitempty"`
+	Language             string            `json:"language,omitempty"`
+	Code                 string            `json:"code,omitempty"`
+	RawArguments         []byte            `json:"-"`
+	CollectionPaths      []string          `json:"collection_paths,omitempty"`
+	InputPaths           []string          `json:"input_paths,omitempty"`
+	RequestedOutputBytes int64             `json:"requested_output_bytes,omitempty"`
+	Metadata             map[string]any    `json:"metadata,omitempty"`
 
 	cwdResolutionRequired bool
 	cwdResolved           bool

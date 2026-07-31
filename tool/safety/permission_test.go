@@ -277,6 +277,41 @@ func TestPermissionPolicy_NilScannerFuncFailsClosed(t *testing.T) {
 	require.True(t, observed.Blocked)
 }
 
+func TestPermissionPolicy_NilDependenciesFailClosed(t *testing.T) {
+	req := &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"echo ok"}`),
+	}
+
+	var nilPolicy *permissionPolicy
+	decision, err := nilPolicy.CheckToolPermission(context.Background(), req)
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.Contains(t, decision.Reason, "scanner is not configured")
+
+	decision, err = (&permissionPolicy{}).CheckToolPermission(context.Background(), req)
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.Contains(t, decision.Reason, "scanner is not configured")
+
+	policy := NewPermissionPolicy(MustDefaultScanner(Policy{}))
+	decision, err = policy.CheckToolPermission(context.Background(), nil)
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.Contains(t, decision.Reason, "permission request is required")
+}
+
+func TestPermissionReason_PreservesSemicolons(t *testing.T) {
+	reason := PermissionReason(Report{
+		Backend:        BackendWorkspace,
+		Decision:       DecisionAsk,
+		RiskLevel:      RiskHigh,
+		RuleID:         "custom.review",
+		Recommendation: "run the first check; then run the second",
+	})
+	require.Contains(t, reason, "first check; then run")
+}
+
 func TestPermissionPolicy_ZeroValueScannerDecisionFailsClosed(t *testing.T) {
 	var observed Report
 	var audit bytes.Buffer
@@ -385,11 +420,11 @@ func TestPermissionPolicy_InvalidLaterScannerDecisionPreservesEarlierStricterRep
 }
 
 func TestPermissionPolicy_UsesBackendResolverAndNilFallbacks(t *testing.T) {
-	allowPolicy := NewPermissionPolicy(nil)
-	decision, err := allowPolicy.CheckToolPermission(context.Background(), nil)
+	defaultPolicy := NewPermissionPolicy(nil)
+	decision, err := defaultPolicy.CheckToolPermission(context.Background(), nil)
 	require.NoError(t, err)
-	require.Equal(t, tool.PermissionActionAllow, decision.Action)
-	decision, err = allowPolicy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	decision, err = defaultPolicy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
 		ToolName:  "workspace_exec",
 		Arguments: []byte(`{"command":"echo ok"}`),
 	})

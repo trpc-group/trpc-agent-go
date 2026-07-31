@@ -2,6 +2,8 @@
 
 This example runs the `tool/safety` scanner against offline command and tool-call samples. It does not call an LLM and does not execute the scanned commands.
 
+Safety scanning is opt-in. Built-in tool parser markers do not enable it by themselves; callers must install the policy with `agent.WithToolPermissionPolicy(...)` as shown below.
+
 The example demonstrates:
 
 - loading `tool_safety_policy.yaml`

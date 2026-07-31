@@ -113,7 +113,9 @@ type ExecTool struct {
 }
 
 // SafetyParserKind identifies the built-in parser required for this tool.
-func (*ExecTool) SafetyParserKind() string { return "skill_exec" }
+func (*ExecTool) SafetyParserKind() tool.SafetyParserKind {
+	return tool.SafetyParserKindSkillExec
+}
 
 // WriteStdinTool writes stdin to running skill sessions.
 type WriteStdinTool struct {
@@ -121,7 +123,9 @@ type WriteStdinTool struct {
 }
 
 // SafetyParserKind identifies the built-in parser required for this tool.
-func (*WriteStdinTool) SafetyParserKind() string { return "write_stdin" }
+func (*WriteStdinTool) SafetyParserKind() tool.SafetyParserKind {
+	return tool.SafetyParserKindWriteStdin
+}
 
 // PollSessionTool polls running skill sessions for new output.
 type PollSessionTool struct {
@@ -134,7 +138,9 @@ type KillSessionTool struct {
 }
 
 // SafetyParserKind identifies the built-in parser required for this tool.
-func (*KillSessionTool) SafetyParserKind() string { return "kill_session" }
+func (*KillSessionTool) SafetyParserKind() tool.SafetyParserKind {
+	return tool.SafetyParserKindKillSession
+}
 
 // NewExecTool creates the interactive skill execution tool.
 func NewExecTool(run *RunTool) *ExecTool {

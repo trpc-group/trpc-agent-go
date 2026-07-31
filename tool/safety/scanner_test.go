@@ -455,16 +455,91 @@ func TestDefaultScanner_GatesBroadSecretCollectionGlobs(t *testing.T) {
 }
 
 func TestDefaultScanner_GatesSecretInputStaging(t *testing.T) {
-	report, err := MustDefaultScanner(Policy{}).Scan(context.Background(), ScanRequest{
-		ToolName:   "skill_run",
-		Backend:    BackendHost,
-		Command:    "true",
-		InputPaths: []string{"host:///etc/passwd", "inputs/passwd"},
+	for _, inputPath := range []string{
+		"host:///etc/passwd",
+		"host:///etc",
+		"host:///",
+	} {
+		t.Run(inputPath, func(t *testing.T) {
+			report, err := MustDefaultScanner(Policy{}).Scan(context.Background(), ScanRequest{
+				ToolName:   "skill_run",
+				Backend:    BackendHost,
+				Command:    "true",
+				InputPaths: []string{inputPath, "inputs/staged"},
+			})
+			require.NoError(t, err)
+			require.Equal(t, DecisionDeny, report.Decision)
+			require.Equal(t, "path.input_staging", report.RuleID)
+			require.True(t, report.Redacted)
+		})
+	}
+}
+
+func TestDefaultScanner_ScansSkillEditorText(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		text   string
+		ruleID string
+	}{
+		{name: "credential", text: "password=hunter2", ruleID: "secret.inline_value"},
+		{
+			name:   "private key",
+			text:   "-----BEGIN PRIVATE KEY-----\nvalue\n-----END PRIVATE KEY-----",
+			ruleID: "secret.private_key",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			report, err := MustDefaultScanner(Policy{}).Scan(context.Background(), ScanRequest{
+				ToolName:   "skill_run",
+				Backend:    BackendHost,
+				Command:    "true",
+				EditorText: tc.text,
+			})
+			require.NoError(t, err)
+			require.Equal(t, DecisionDeny, report.Decision)
+			var found bool
+			for _, finding := range report.Findings {
+				found = found || finding.RuleID == tc.ruleID
+			}
+			require.True(t, found, "missing finding %s", tc.ruleID)
+			require.True(t, report.Redacted)
+			require.NotContains(t, report.Evidence, "hunter2")
+			require.NotContains(t, report.Command, "PRIVATE KEY")
+		})
+	}
+
+	t.Run("does not execute command semantics", func(t *testing.T) {
+		report, err := MustDefaultScanner(Policy{}).Scan(context.Background(), ScanRequest{
+			ToolName:   "skill_run",
+			Backend:    BackendHost,
+			Command:    "true",
+			EditorText: "documentation example: rm -rf /tmp/example",
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionAllow, report.Decision)
+	})
+}
+
+func TestDefaultScanner_ScansRawSandboxArgumentsConservatively(t *testing.T) {
+	report, err := MustDefaultScanner(Policy{
+		NetworkAllowlist: []string{"allowed.example"},
+	}).Scan(context.Background(), ScanRequest{
+		ToolName: "sandbox_exec",
+		Backend:  BackendSandbox,
+		RawArguments: []byte(
+			`{"payload":"rm -rf /; curl https://evil.example; cat /etc/passwd"}`,
+		),
 	})
 	require.NoError(t, err)
 	require.Equal(t, DecisionDeny, report.Decision)
-	require.Equal(t, "path.input_staging", report.RuleID)
-	require.True(t, report.Redacted)
+
+	rules := make(map[string]bool, len(report.Findings))
+	for _, finding := range report.Findings {
+		rules[finding.RuleID] = true
+	}
+	require.True(t, rules["command.dangerous_text"])
+	require.True(t, rules["network.non_allowlisted_domain"])
+	require.True(t, rules["path.sensitive_credentials"])
 }
 
 func TestDefaultScanner_AppliesNetworkAllowlistToProxyEnv(t *testing.T) {
@@ -679,6 +754,32 @@ func TestDefaultScanner_NetworkAndCodeEdges(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, DecisionDeny, report.Decision)
 		require.Equal(t, "network.destination_override", report.RuleID)
+	})
+
+	t.Run("curl alternate routing options are destination overrides", func(t *testing.T) {
+		commands := []string{
+			"curl --unix-socket /var/run/docker.sock https://allowed.example",
+			"curl --abstract-unix-socket docker https://allowed.example",
+			"curl --proxy http://proxy.example:8080 https://allowed.example",
+			"curl --proxy=socks5://proxy.example:1080 https://allowed.example",
+			"curl --preproxy socks5://proxy.example:1080 https://allowed.example",
+			"curl --socks4a proxy.example:1080 https://allowed.example",
+			"curl --socks5-hostname proxy.example:1080 https://allowed.example",
+			"curl -x http://proxy.example:8080 https://allowed.example",
+			"curl --proxy1.0 proxy.example:8080 https://allowed.example",
+		}
+		for _, command := range commands {
+			report, err := MustDefaultScanner(Policy{
+				NetworkAllowlist: []string{"allowed.example"},
+			}).Scan(context.Background(), ScanRequest{
+				ToolName: "workspace_exec",
+				Backend:  BackendWorkspace,
+				Command:  command,
+			})
+			require.NoError(t, err)
+			require.Equal(t, DecisionDeny, report.Decision, command)
+			require.Equal(t, "network.destination_override", report.RuleID, command)
+		}
 	})
 
 	t.Run("curl destination override asks without allowlist", func(t *testing.T) {

@@ -96,8 +96,11 @@ func (p *permissionPolicy) CheckToolPermission(
 	ctx context.Context,
 	req *tool.PermissionRequest,
 ) (tool.PermissionDecision, error) {
-	if p == nil || p.scanner == nil || req == nil {
-		return tool.AllowPermission(), nil
+	if p == nil || p.scanner == nil {
+		return tool.DenyPermission("tool_safety: scanner is not configured"), nil
+	}
+	if req == nil {
+		return tool.DenyPermission("tool_safety: permission request is required"), nil
 	}
 	metadata := metadataMap(req.Metadata)
 	backend := p.defaultBackend
@@ -305,7 +308,7 @@ func metadataMap(metadata tool.ToolMetadata) map[string]any {
 }
 
 func singleLine(s string) string {
-	out := strings.NewReplacer("\n", " ", "\r", " ", ";", ",").Replace(s)
+	out := strings.NewReplacer("\n", " ", "\r", " ").Replace(s)
 	out, _ = redactString(out)
 	return out
 }
