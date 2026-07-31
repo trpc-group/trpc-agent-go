@@ -199,6 +199,28 @@ func TestReadRepoDiffIncludesStagedAndUntrackedWithoutColor(t *testing.T) {
 	}
 }
 
+func TestReadRepoDiffRejectsTrackedDiffOverLimit(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	dir := t.TempDir()
+	runGit(t, dir, "init")
+	runGit(t, dir, "config", "user.email", "test@example.com")
+	runGit(t, dir, "config", "user.name", "Test")
+	path := filepath.Join(dir, "tracked.go")
+	if err := os.WriteFile(path, []byte("package main\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(base) error = %v", err)
+	}
+	runGit(t, dir, "add", "tracked.go")
+	runGit(t, dir, "commit", "-m", "base")
+	if err := os.WriteFile(path, []byte("package main\nconst value = \""+strings.Repeat("x", 256)+"\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(change) error = %v", err)
+	}
+	if _, err := readRepoDiffWithLimit(context.Background(), dir, 64); err == nil || !strings.Contains(err.Error(), "git output exceeded 64 bytes") {
+		t.Fatalf("readRepoDiffWithLimit() error = %v, want tracked diff limit rejection", err)
+	}
+}
+
 func TestUntrackedFileDiffRendersSymlinkWithoutReadingTarget(t *testing.T) {
 	dir := t.TempDir()
 	repo := filepath.Join(dir, "repo")

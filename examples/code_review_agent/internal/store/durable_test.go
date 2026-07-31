@@ -206,6 +206,45 @@ func TestDurableStoreSaveFindingsComputesMissingFingerprints(t *testing.T) {
 	}
 }
 
+func TestDurableStoreRedactsPathBearingRecords(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "review_agent.db")
+	s, err := NewSQLite(ctx, path)
+	if err != nil {
+		t.Fatalf("NewSQLite() error = %v", err)
+	}
+	defer s.Close()
+	secretPath := `token=supersecretvalue.go`
+	task := review.ReviewTask{ID: "task-path-secret", Status: review.TaskStatusRunning, RepoPath: secretPath}
+	if err := s.CreateTask(ctx, task); err != nil {
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+	if err := s.SaveFindings(ctx, task.ID, []review.Finding{{File: secretPath, Title: "finding"}}); err != nil {
+		t.Fatalf("SaveFindings() error = %v", err)
+	}
+	if err := s.SaveArtifacts(ctx, []review.ArtifactRecord{{TaskID: task.ID, Path: secretPath}}); err != nil {
+		t.Fatalf("SaveArtifacts() error = %v", err)
+	}
+	if err := s.SaveReport(ctx, ReportRecord{TaskID: task.ID, JSONPath: secretPath, MarkdownPath: secretPath}); err != nil {
+		t.Fatalf("SaveReport() error = %v", err)
+	}
+	loaded, err := s.LoadTaskReport(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("LoadTaskReport() error = %v", err)
+	}
+	serialized := loaded.Task.RepoPath + loaded.Findings[0].File + loaded.Artifacts[0].Path + loaded.Report.JSONPath + loaded.Report.MarkdownPath
+	if strings.Contains(serialized, "supersecretvalue") {
+		t.Fatalf("loaded path-bearing records leaked secret: %s", serialized)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(store) error = %v", err)
+	}
+	if strings.Contains(string(raw), "supersecretvalue") {
+		t.Fatalf("store file leaked path secret: %s", raw)
+	}
+}
+
 func TestDurableStoreRedactsQuotedChangedFilesBeforeMarshal(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "review_agent.db")
@@ -224,6 +263,7 @@ func TestDurableStoreRedactsQuotedChangedFilesBeforeMarshal(t *testing.T) {
 			{Kind: "+", Content: `password="quoted-password-value"`},
 			{Kind: "+", Content: `token="quoted-token-value"`},
 			{Kind: "+", Content: `api_key="quoted-api-key-value"`},
+			{Kind: "+", Content: `source := "password=\"source-password!\" token=\'source-token:!\'"`},
 		}}},
 	}})
 	if err != nil {
@@ -236,7 +276,7 @@ func TestDurableStoreRedactsQuotedChangedFilesBeforeMarshal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile(store) error = %v", err)
 	}
-	for _, secret := range []string{"quoted-password-value", "quoted-token-value", "quoted-api-key-value"} {
+	for _, secret := range []string{"quoted-password-value", "quoted-token-value", "quoted-api-key-value", "source-password!", "source-token:!"} {
 		if strings.Contains(string(raw), secret) {
 			t.Fatalf("store leaked quoted secret %q: %s", secret, raw)
 		}

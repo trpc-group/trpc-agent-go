@@ -11,6 +11,8 @@ package redact
 import (
 	"strings"
 	"testing"
+
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/review"
 )
 
 func TestTextRedactsSecrets(t *testing.T) {
@@ -23,6 +25,45 @@ func TestTextRedactsSecrets(t *testing.T) {
 	}
 	if strings.Count(got.Text, Placeholder) != 2 {
 		t.Fatalf("redacted text = %q, want two placeholders", got.Text)
+	}
+}
+
+func TestDiffFilesPreservesNilSlicesAndDeepCopiesWithQuotedPaths(t *testing.T) {
+	if got := DiffFiles(nil); got != nil {
+		t.Fatalf("DiffFiles(nil) = %#v, want nil", got)
+	}
+	in := []review.DiffFile{
+		{
+			OldPath: `password="old-secret-value"`,
+			Hunks:   nil,
+		},
+		{
+			NewPath: "pkg/config.go",
+			Hunks: []review.DiffHunk{
+				{Lines: nil},
+				{Lines: []review.DiffLine{{Content: `token="line-secret-value"`}}},
+			},
+		},
+	}
+
+	got := DiffFiles(in)
+	if got == nil || len(got) != len(in) {
+		t.Fatalf("DiffFiles() = %#v, want two files", got)
+	}
+	if got[0].Hunks != nil {
+		t.Fatalf("nil Hunks became non-nil: %#v", got[0].Hunks)
+	}
+	if got[1].Hunks == nil || got[1].Hunks[0].Lines != nil || got[1].Hunks[1].Lines == nil {
+		t.Fatalf("nil/empty Lines semantics changed: %#v", got[1].Hunks)
+	}
+	if ContainsSecret(got[0].OldPath) || ContainsSecret(got[1].Hunks[1].Lines[0].Content) {
+		t.Fatalf("DiffFiles() leaked a secret: %#v", got)
+	}
+
+	got[0].OldPath = "changed"
+	got[1].Hunks[1].Lines[0].Content = "changed"
+	if in[0].OldPath == got[0].OldPath || in[1].Hunks[1].Lines[0].Content == got[1].Hunks[1].Lines[0].Content {
+		t.Fatalf("DiffFiles() did not deep-copy mutable fields")
 	}
 }
 
@@ -39,5 +80,16 @@ func TestTextRedactsQuotedSecretsWithPunctuation(t *testing.T) {
 	}
 	if strings.Count(got.Text, Placeholder) != 4 {
 		t.Fatalf("redacted text = %q, want four placeholders", got.Text)
+	}
+}
+
+func TestTextRedactsSourceEscapedQuotedSecrets(t *testing.T) {
+	input := `cfg := "password=\"p@ss!\" token=\'tok:en!\'"`
+	got := Text(input)
+	if strings.Contains(got.Text, "p@ss!") || strings.Contains(got.Text, "tok:en!") {
+		t.Fatalf("Text() leaked source-escaped secret: %q", got.Text)
+	}
+	if got.Count < 2 {
+		t.Fatalf("Text() replacements = %d, want at least 2", got.Count)
 	}
 }

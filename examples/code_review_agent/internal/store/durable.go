@@ -74,6 +74,7 @@ func (s *DurableStore) Close() error {
 func (s *DurableStore) CreateTask(ctx context.Context, task review.ReviewTask) error {
 	return s.mutate(ctx, func(data *durableData) error {
 		task.Error = redact.Text(task.Error).Text
+		task.RepoPath = redact.Text(task.RepoPath).Text
 		data.Tasks[task.ID] = task
 		return nil
 	})
@@ -141,6 +142,7 @@ func (s *DurableStore) SaveFindings(ctx context.Context, taskID string, findings
 				finding.ID = fmt.Sprintf("%s-finding-%03d", taskID, index+1)
 			}
 			finding.Title = redact.Text(finding.Title).Text
+			finding.File = redact.Text(finding.File).Text
 			finding.Evidence = redact.Text(finding.Evidence).Text
 			finding.Recommendation = redact.Text(finding.Recommendation).Text
 			if existing[finding.Fingerprint] {
@@ -156,6 +158,10 @@ func (s *DurableStore) SaveFindings(ctx context.Context, taskID string, findings
 func (s *DurableStore) SaveArtifacts(ctx context.Context, artifacts []review.ArtifactRecord) error {
 	return s.mutate(ctx, func(data *durableData) error {
 		for _, artifact := range artifacts {
+			artifact.Kind = redact.Text(artifact.Kind).Text
+			artifact.Path = redact.Text(artifact.Path).Text
+			artifact.MimeType = redact.Text(artifact.MimeType).Text
+			artifact.SHA256 = redact.Text(artifact.SHA256).Text
 			data.Artifacts[artifact.TaskID] = append(data.Artifacts[artifact.TaskID], artifact)
 		}
 		return nil
@@ -164,6 +170,8 @@ func (s *DurableStore) SaveArtifacts(ctx context.Context, artifacts []review.Art
 
 func (s *DurableStore) SaveReport(ctx context.Context, report ReportRecord) error {
 	return s.mutate(ctx, func(data *durableData) error {
+		report.JSONPath = redact.Text(report.JSONPath).Text
+		report.MarkdownPath = redact.Text(report.MarkdownPath).Text
 		report.Conclusion = redact.Text(report.Conclusion).Text
 		report.MetricsJSON = redact.Text(report.MetricsJSON).Text
 		data.Reports[report.TaskID] = report

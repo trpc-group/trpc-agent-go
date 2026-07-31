@@ -15,7 +15,7 @@ cd examples/code_review_agent
 go test ./...
 export OPENAI_API_KEY="..."
 export MODEL="gpt-4.1-mini"
-go run . -fixture-dir testdata/fixtures -out-dir ./out -model "$MODEL"
+go run . -fixture-dir testdata/fixtures -out-dir ./out -model "$MODEL" -runtime fake
 ```
 
 Supported input modes:
@@ -50,8 +50,9 @@ and sandbox seams with `--runtime fake`; non-fake CLI runs require
 - `review_report_<task-id>.json`: structured findings, governance decisions, artifacts,
   and metrics.
 - `review_report_<task-id>.md`: human-readable summary.
-- `review_agent.db`: dependency-free JSON-backed durable task, input, sandbox
-  run, permission decision, finding, artifact, and report records. The generated
-  `.db` file is not a physical SQLite database and is not checked in.
-- `internal/store/schema.sql`: SQLite-compatible target schema for teams that
-  want to migrate the portable JSON store to strict SQL storage.
+- `review_agent.db`: the current dependency-free JSON-backed durable store for
+  task, input, sandbox run, permission decision, finding, artifact, and report
+  records. Despite the `.db` suffix, this file is not an SQLite database and is
+  not checked in.
+- `internal/store/schema.sql`: SQLite-compatible target schema for a future
+  strict SQL storage backend; it is not the active persistence format.

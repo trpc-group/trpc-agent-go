@@ -543,7 +543,7 @@ func Run(ctx context.Context, opts Options) (result Result, err error) {
 	var decisions []review.PermissionDecisionRecord
 	var runs []review.SandboxRun
 	if sandboxValidationAvailable(input) {
-		decisions, runs, err = executePlannedCommands(ctx, st, task.ID, opts.Runtime, opts.AllowTrustedLocal, opts.AllowTrustedHostPreparation, plan.Commands, now, opts.SandboxTimeout, input.WorkDir)
+		decisions, runs, err = executePlannedCommandsWithSnapshotPaths(ctx, st, task.ID, opts.Runtime, opts.AllowTrustedLocal, opts.AllowTrustedHostPreparation, plan.Commands, now, opts.SandboxTimeout, input.WorkDir, snapshotUntrackedPaths(input, files))
 		if err != nil {
 			return Result{}, failTask(err)
 		}
@@ -673,6 +673,33 @@ func sandboxValidationAvailable(input inputsource.Source) bool {
 	}
 }
 
+func snapshotUntrackedPaths(input inputsource.Source, files []review.DiffFile) []string {
+	if input.Type == review.InputTypeRepo {
+		return nil
+	}
+	paths := make(map[string]struct{}, len(files)*2+len(input.FileList))
+	add := func(path string) {
+		path = filepath.ToSlash(strings.TrimSpace(path))
+		if path == "" || path == "/dev/null" {
+			return
+		}
+		paths[path] = struct{}{}
+	}
+	for _, path := range input.FileList {
+		add(path)
+	}
+	for _, file := range files {
+		add(file.OldPath)
+		add(file.NewPath)
+	}
+	selected := make([]string, 0, len(paths))
+	for path := range paths {
+		selected = append(selected, path)
+	}
+	sort.Strings(selected)
+	return selected
+}
+
 func recordSandboxRuns(ctx context.Context, st store.Store, runs []review.SandboxRun) error {
 	for _, run := range runs {
 		if err := st.RecordSandboxRun(ctx, run); err != nil {
@@ -693,7 +720,14 @@ func recordSandboxRuns(ctx context.Context, st store.Store, runs []review.Sandbo
 type runtimeFactory func(context.Context, string, string, string, time.Duration, string, bool, bool) (sandboxrun.Runtime, func(), *review.SandboxRun)
 
 func executePlannedCommands(ctx context.Context, st store.Store, taskID string, runtimeName string, allowTrustedLocal bool, allowTrustedHostPreparation bool, commands []string, now time.Time, timeout time.Duration, workDir string) ([]review.PermissionDecisionRecord, []review.SandboxRun, error) {
-	return executePlannedCommandsWithFactory(ctx, st, taskID, runtimeName, allowTrustedLocal, allowTrustedHostPreparation, commands, now, timeout, workDir, runtimeForName)
+	return executePlannedCommandsWithSnapshotPaths(ctx, st, taskID, runtimeName, allowTrustedLocal, allowTrustedHostPreparation, commands, now, timeout, workDir, nil)
+}
+
+func executePlannedCommandsWithSnapshotPaths(ctx context.Context, st store.Store, taskID string, runtimeName string, allowTrustedLocal bool, allowTrustedHostPreparation bool, commands []string, now time.Time, timeout time.Duration, workDir string, snapshotPaths []string) ([]review.PermissionDecisionRecord, []review.SandboxRun, error) {
+	factory := func(factoryCtx context.Context, name string, factoryTaskID string, suffix string, factoryTimeout time.Duration, factoryWorkDir string, trustedLocal bool, trustedHostPreparation bool) (sandboxrun.Runtime, func(), *review.SandboxRun) {
+		return runtimeForNameWithSnapshotPaths(factoryCtx, name, factoryTaskID, suffix, factoryTimeout, factoryWorkDir, trustedLocal, trustedHostPreparation, snapshotPaths)
+	}
+	return executePlannedCommandsWithFactory(ctx, st, taskID, runtimeName, allowTrustedLocal, allowTrustedHostPreparation, commands, now, timeout, workDir, factory)
 }
 
 func executePlannedCommandsWithFactory(ctx context.Context, st store.Store, taskID string, runtimeName string, allowTrustedLocal bool, allowTrustedHostPreparation bool, commands []string, now time.Time, timeout time.Duration, workDir string, factory runtimeFactory) ([]review.PermissionDecisionRecord, []review.SandboxRun, error) {
@@ -705,6 +739,7 @@ func executePlannedCommandsWithFactory(ctx context.Context, st store.Store, task
 	var runs []review.SandboxRun
 	var runtime sandboxrun.Runtime
 	var cleanup func()
+	runtimeInitAttempted := false
 	defer func() {
 		if cleanup != nil {
 			cleanup()
@@ -756,12 +791,25 @@ func executePlannedCommandsWithFactory(ctx context.Context, st store.Store, task
 			})
 			continue
 		}
-		if runtime == nil {
+		if runtime == nil && !runtimeInitAttempted {
+			runtimeInitAttempted = true
 			var initRun *review.SandboxRun
 			runtime, cleanup, initRun = factory(ctx, runtimeName, taskID, suffix, timeout, workDir, allowTrustedLocal, allowTrustedHostPreparation)
 			if initRun != nil {
 				runs = append(runs, *initRun)
 			}
+		}
+		if runtime == nil {
+			runs = append(runs, review.SandboxRun{
+				ID:             runID,
+				TaskID:         taskID,
+				Runtime:        runtimeName,
+				Command:        redact.Text(command).Text,
+				Status:         sandboxrun.StatusUnavailable,
+				ErrorType:      sandboxrun.ErrorRuntimeUnavailable,
+				DurationMillis: 0,
+			})
+			continue
 		}
 		runCtx := ctx
 		cancel := func() {}
@@ -807,6 +855,10 @@ func countFindingRedactions(findings []review.Finding) int {
 }
 
 func runtimeForName(ctx context.Context, name string, taskID string, suffix string, timeout time.Duration, workDir string, allowTrustedLocal bool, allowTrustedHostPreparation bool) (sandboxrun.Runtime, func(), *review.SandboxRun) {
+	return runtimeForNameWithSnapshotPaths(ctx, name, taskID, suffix, timeout, workDir, allowTrustedLocal, allowTrustedHostPreparation, nil)
+}
+
+func runtimeForNameWithSnapshotPaths(ctx context.Context, name string, taskID string, suffix string, timeout time.Duration, workDir string, allowTrustedLocal bool, allowTrustedHostPreparation bool, snapshotPaths []string) (sandboxrun.Runtime, func(), *review.SandboxRun) {
 	normalized := strings.ToLower(strings.TrimSpace(name))
 	if normalized == "" {
 		normalized = "container"
@@ -814,7 +866,7 @@ func runtimeForName(ctx context.Context, name string, taskID string, suffix stri
 	if normalized == "fake" {
 		return sandboxrun.FakeRuntime{RuntimeName: normalized}, nil, nil
 	}
-	rt, cleanup, err := newWorkspaceRuntime(ctx, normalized, taskID, timeout, workDir, allowTrustedLocal, allowTrustedHostPreparation)
+	rt, cleanup, err := newWorkspaceRuntimeWithSnapshotPaths(ctx, normalized, taskID, timeout, workDir, allowTrustedLocal, allowTrustedHostPreparation, snapshotPaths)
 	if err != nil {
 		run := review.SandboxRun{
 			ID:             taskID + "-sandbox-init-" + suffix,
@@ -831,6 +883,10 @@ func runtimeForName(ctx context.Context, name string, taskID string, suffix stri
 }
 
 func newWorkspaceRuntime(ctx context.Context, runtimeName string, taskID string, timeout time.Duration, workDir string, allowTrustedLocal bool, allowTrustedHostPreparation bool) (sandboxrun.Runtime, func(), error) {
+	return newWorkspaceRuntimeWithSnapshotPaths(ctx, runtimeName, taskID, timeout, workDir, allowTrustedLocal, allowTrustedHostPreparation, nil)
+}
+
+func newWorkspaceRuntimeWithSnapshotPaths(ctx context.Context, runtimeName string, taskID string, timeout time.Duration, workDir string, allowTrustedLocal bool, allowTrustedHostPreparation bool, snapshotPaths []string) (sandboxrun.Runtime, func(), error) {
 	workspace := newSandboxWorkspace(workDir)
 	repoRoot, err := workspace.root()
 	if err != nil {
@@ -891,15 +947,17 @@ func newWorkspaceRuntime(ctx context.Context, runtimeName string, taskID string,
 		}
 		return nil, nil, err
 	}
-	snapshotCleanup, err := stageReviewWorkspace(ctx, eng.FS(), ws, runtimeName, repoRoot, workspace.dependencySubdir(), allowTrustedHostPreparation)
-	if err != nil {
-		_ = eng.Manager().Cleanup(context.Background(), ws)
-		if closeFn != nil {
-			_ = closeFn()
+	var snapshotCleanup func()
+	cleanup := newWorkspaceCleanup(eng.Manager(), ws, closeFn, func() {
+		if snapshotCleanup != nil {
+			snapshotCleanup()
 		}
+	})
+	snapshotCleanup, err = stageReviewWorkspaceWithSnapshotPaths(ctx, eng.FS(), ws, runtimeName, repoRoot, workspace.dependencySubdir(), allowTrustedHostPreparation, snapshotPaths)
+	if err != nil {
+		cleanup(context.Background())
 		return nil, nil, err
 	}
-	cleanup := newWorkspaceCleanup(eng.Manager(), ws, closeFn, snapshotCleanup)
 	return sandboxrun.WorkspaceRuntime{
 		RuntimeName: runtimeName,
 		Engine:      eng,
@@ -963,10 +1021,14 @@ func cleanupWorkspaceResources(ctx context.Context, manager codeexecutor.Workspa
 }
 
 func stageReviewWorkspace(ctx context.Context, fs codeexecutor.WorkspaceFS, ws codeexecutor.Workspace, runtimeName string, repoRoot string, dependencySubdir string, allowTrustedHostPreparation bool) (func(), error) {
+	return stageReviewWorkspaceWithSnapshotPaths(ctx, fs, ws, runtimeName, repoRoot, dependencySubdir, allowTrustedHostPreparation, nil)
+}
+
+func stageReviewWorkspaceWithSnapshotPaths(ctx context.Context, fs codeexecutor.WorkspaceFS, ws codeexecutor.Workspace, runtimeName string, repoRoot string, dependencySubdir string, allowTrustedHostPreparation bool, snapshotPaths []string) (func(), error) {
 	if runtimeName == "local" {
 		return nil, nil
 	}
-	stageRoot, snapshotCleanup, err := buildReviewSnapshot(ctx, repoRoot)
+	stageRoot, snapshotCleanup, err := buildReviewSnapshotWithSnapshotPaths(ctx, repoRoot, snapshotPaths)
 	if err != nil {
 		return nil, err
 	}
@@ -1000,7 +1062,15 @@ func buildReviewSnapshotWithLimit(ctx context.Context, repoRoot string, maxBytes
 }
 
 func buildReviewSnapshotWithLimits(ctx context.Context, repoRoot string, maxBytes int64, maxFiles int) (string, func(), error) {
-	files, err := trackedReviewFiles(ctx, repoRoot, maxFiles)
+	return buildReviewSnapshotWithLimitsAndPaths(ctx, repoRoot, maxBytes, maxFiles, nil)
+}
+
+func buildReviewSnapshotWithSnapshotPaths(ctx context.Context, repoRoot string, snapshotPaths []string) (string, func(), error) {
+	return buildReviewSnapshotWithLimitsAndPaths(ctx, repoRoot, reviewSnapshotMaxBytes, maxReviewSnapshotFiles, snapshotPaths)
+}
+
+func buildReviewSnapshotWithLimitsAndPaths(ctx context.Context, repoRoot string, maxBytes int64, maxFiles int, snapshotPaths []string) (string, func(), error) {
+	files, err := trackedReviewFilesWithPaths(ctx, repoRoot, maxFiles, snapshotPaths)
 	if err != nil {
 		return "", nil, err
 	}
@@ -1223,10 +1293,15 @@ func lockReviewSnapshotSource(root string, writableRoots []string) error {
 		if err != nil {
 			return err
 		}
+		mode := info.Mode().Perm()
 		if entry.IsDir() {
-			return os.Chmod(path, info.Mode().Perm()&^0o222)
+			return os.Chmod(path, (mode|0o555)&^0o222)
 		}
-		return os.Chmod(path, info.Mode().Perm()&^0o222)
+		readOnly := mode | 0o444
+		if mode&0o111 != 0 {
+			readOnly |= 0o111
+		}
+		return os.Chmod(path, readOnly&^0o222)
 	})
 	if err != nil {
 		return fmt.Errorf("make review snapshot source read-only: %w", err)
@@ -1323,17 +1398,50 @@ func ensureDependencyCacheWithinLimit(roots []string, limit int64) error {
 }
 
 func trackedReviewFiles(ctx context.Context, repoRoot string, maxFiles int) ([]reviewSnapshotFile, error) {
+	return trackedReviewFilesWithPaths(ctx, repoRoot, maxFiles, nil)
+}
+
+func trackedReviewFilesWithPaths(ctx context.Context, repoRoot string, maxFiles int, snapshotPaths []string) ([]reviewSnapshotFile, error) {
 	files := make([]reviewSnapshotFile, 0, minInt(maxFiles, 1024))
-	if err := appendReviewFiles(ctx, repoRoot, maxFiles, true, &files, "ls-files", "-z", "--cached"); err != nil {
+	if err := appendReviewFiles(ctx, repoRoot, maxFiles, true, nil, &files, "ls-files", "-z", "--cached"); err != nil {
 		return nil, fmt.Errorf("list tracked review files: %w", err)
 	}
-	if err := appendReviewFiles(ctx, repoRoot, maxFiles, false, &files, "ls-files", "-z", "--others", "--exclude-standard"); err != nil {
+	allowed := snapshotPathSet(snapshotPaths)
+	args := []string{"ls-files", "-z", "--others", "--exclude-standard"}
+	if allowed != nil {
+		if len(allowed) == 0 {
+			return files, nil
+		}
+		selected := make([]string, 0, len(allowed))
+		for path := range allowed {
+			selected = append(selected, path)
+		}
+		sort.Strings(selected)
+		args = append([]string{"--literal-pathspecs"}, args...)
+		args = append(args, "--")
+		args = append(args, selected...)
+	}
+	if err := appendReviewFiles(ctx, repoRoot, maxFiles, false, allowed, &files, args...); err != nil {
 		return nil, fmt.Errorf("list untracked review files: %w", err)
 	}
 	return files, nil
 }
 
-func appendReviewFiles(ctx context.Context, repoRoot string, maxFiles int, tracked bool, files *[]reviewSnapshotFile, args ...string) error {
+func snapshotPathSet(paths []string) map[string]struct{} {
+	if paths == nil {
+		return nil
+	}
+	selected := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		path = filepath.ToSlash(strings.TrimSpace(path))
+		if path != "" && path != "/dev/null" {
+			selected[path] = struct{}{}
+		}
+	}
+	return selected
+}
+
+func appendReviewFiles(ctx context.Context, repoRoot string, maxFiles int, tracked bool, allowed map[string]struct{}, files *[]reviewSnapshotFile, args ...string) error {
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", repoRoot}, args...)...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -1350,12 +1458,18 @@ func appendReviewFiles(ctx context.Context, repoRoot string, maxFiles int, track
 		if len(part) > 0 {
 			part = bytes.TrimSuffix(part, []byte{0})
 			if len(part) > 0 {
+				path := filepath.ToSlash(string(part))
+				if !tracked && allowed != nil {
+					if _, ok := allowed[path]; !ok {
+						continue
+					}
+				}
 				if maxFiles >= 0 && len(*files) >= maxFiles {
 					_ = cmd.Process.Kill()
 					_ = cmd.Wait()
 					return fmt.Errorf("review snapshot file count exceeded %d", maxFiles)
 				}
-				*files = append(*files, reviewSnapshotFile{Path: filepath.ToSlash(string(part)), Tracked: tracked})
+				*files = append(*files, reviewSnapshotFile{Path: path, Tracked: tracked})
 			}
 		}
 		if readErr != nil {

@@ -212,6 +212,38 @@ func TestExecutePlannedCommandsAuditsRejectedModelCommands(t *testing.T) {
 	}
 }
 
+func TestExecutePlannedCommandsInitializesFailedRuntimeOnce(t *testing.T) {
+	st, err := store.NewSQLite(context.Background(), filepath.Join(t.TempDir(), "review_agent.db"))
+	if err != nil {
+		t.Fatalf("NewSQLite() error = %v", err)
+	}
+	defer st.Close()
+	attempts := 0
+	_, runs, err := executePlannedCommandsWithFactory(
+		context.Background(), st, "task-init-once", "container", false, false,
+		[]string{"go test ./...", "go vet ./..."}, fixedTestTime(), time.Second, "",
+		func(_ context.Context, runtimeName string, taskID string, suffix string, _ time.Duration, _ string, _ bool, _ bool) (sandboxrun.Runtime, func(), *review.SandboxRun) {
+			attempts++
+			return nil, nil, &review.SandboxRun{
+				ID:        taskID + "-sandbox-init-" + suffix,
+				TaskID:    taskID,
+				Runtime:   runtimeName,
+				Status:    sandboxrun.StatusUnavailable,
+				ErrorType: sandboxrun.ErrorRuntimeUnavailable,
+			}
+		},
+	)
+	if err != nil {
+		t.Fatalf("executePlannedCommandsWithFactory() error = %v", err)
+	}
+	if attempts != 1 {
+		t.Fatalf("runtime initialization attempts = %d, want 1", attempts)
+	}
+	if len(runs) != 3 || runs[0].Status != sandboxrun.StatusUnavailable || runs[1].Status != sandboxrun.StatusUnavailable || runs[2].Status != sandboxrun.StatusUnavailable {
+		t.Fatalf("runs = %#v, want one initialization record and two unavailable commands", runs)
+	}
+}
+
 func TestWorkspaceRuntimeEnvProvidesContainerGoCacheDefaults(t *testing.T) {
 	for _, key := range []string{"HOME", "GOCACHE", "GOMODCACHE", "GOPATH"} {
 		t.Setenv(key, "")
@@ -706,6 +738,47 @@ func TestBuildReviewSnapshotExcludesGitIgnoredAndEnvironmentFiles(t *testing.T) 
 	}
 }
 
+func TestBuildReviewSnapshotRestrictsUntrackedFilesToSubmittedPaths(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	repo := t.TempDir()
+	runGitCommand(t, repo, "init")
+	if err := os.WriteFile(filepath.Join(repo, "tracked.go"), []byte("package tracked\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(tracked.go) error = %v", err)
+	}
+	runGitCommand(t, repo, "add", "tracked.go")
+	for _, name := range []string{"selected.go", "private.txt"} {
+		if err := os.WriteFile(filepath.Join(repo, name), []byte(name+"\n"), 0o600); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", name, err)
+		}
+	}
+	snapshot, cleanup, err := buildReviewSnapshotWithSnapshotPaths(context.Background(), repo, []string{"selected.go"})
+	if err != nil {
+		t.Fatalf("buildReviewSnapshotWithSnapshotPaths() error = %v", err)
+	}
+	defer cleanup()
+	for _, included := range []string{"tracked.go", "selected.go"} {
+		if _, err := os.Stat(filepath.Join(snapshot, included)); err != nil {
+			t.Fatalf("selected snapshot file %s missing: %v", included, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(snapshot, "private.txt")); !os.IsNotExist(err) {
+		t.Fatalf("non-selected untracked file was staged, stat err=%v", err)
+	}
+}
+
+func TestSnapshotUntrackedPathsOnlyIncludesAllForRepoWorkspace(t *testing.T) {
+	files := []review.DiffFile{{OldPath: "old.go", NewPath: "new.go"}}
+	if got := snapshotUntrackedPaths(inputsource.Source{Type: review.InputTypeRepo}, files); got != nil {
+		t.Fatalf("repo snapshot paths = %#v, want unrestricted untracked inventory", got)
+	}
+	got := snapshotUntrackedPaths(inputsource.Source{Type: review.InputTypeFixture}, files)
+	if want := []string{"new.go", "old.go"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("fixture snapshot paths = %#v, want %#v", got, want)
+	}
+}
+
 func TestBuildReviewSnapshotRejectsOversizeFileBeforeCopy(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is not installed")
@@ -807,7 +880,7 @@ func TestReviewSnapshotKeepsSourceReadOnlyAndCachesWritable(t *testing.T) {
 	if err := os.MkdirAll(cache, 0o755); err != nil {
 		t.Fatalf("MkdirAll(cache) error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(source, "a.go"), []byte("package pkg\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(source, "a.go"), []byte("package pkg\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile(source) error = %v", err)
 	}
 
@@ -823,6 +896,9 @@ func TestReviewSnapshotKeepsSourceReadOnlyAndCachesWritable(t *testing.T) {
 	}
 	if sourceInfo.Mode().Perm()&0o222 != 0 {
 		t.Fatalf("source mode = %o, want read-only", sourceInfo.Mode().Perm())
+	}
+	if sourceInfo.Mode().Perm()&0o444 != 0o444 {
+		t.Fatalf("source mode = %o, want readable by non-root runtime user", sourceInfo.Mode().Perm())
 	}
 	cacheInfo, err := os.Stat(cache)
 	if err != nil {
@@ -901,6 +977,29 @@ func TestWorkspaceCleanupContinuesAfterBlockingManager(t *testing.T) {
 	case <-snapshotCleaned:
 	case <-time.After(200 * time.Millisecond):
 		t.Fatal("snapshot cleanup was skipped after manager cleanup timed out")
+	}
+}
+
+func TestWorkspaceCleanupBoundsBlockingBackendClose(t *testing.T) {
+	previous := workspaceCleanupTimeout
+	workspaceCleanupTimeout = 20 * time.Millisecond
+	defer func() { workspaceCleanupTimeout = previous }()
+
+	snapshotCleaned := make(chan struct{})
+	cleanup := newWorkspaceCleanup(nil, codeexecutor.Workspace{}, func() error {
+		select {}
+	}, func() {
+		close(snapshotCleaned)
+	})
+	start := time.Now()
+	cleanup(context.Background())
+	if elapsed := time.Since(start); elapsed < 20*time.Millisecond || elapsed > 200*time.Millisecond {
+		t.Fatalf("cleanup returned after %s, want bounded wait around 20ms", elapsed)
+	}
+	select {
+	case <-snapshotCleaned:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("snapshot cleanup was skipped after backend close timed out")
 	}
 }
 

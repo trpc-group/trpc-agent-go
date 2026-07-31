@@ -27,6 +27,7 @@ import (
 
 const (
 	emptyTreeHash          = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+	maxReviewInputBytes    = int64(512 << 20)
 	maxUntrackedInputBytes = int64(512 << 20)
 	maxUntrackedFileCount  = 100_000
 	maxUntrackedListBytes  = int64(16 << 20)
@@ -155,6 +156,10 @@ func readDiffFile(path string, repoPath string) (Source, error) {
 }
 
 func readRepoDiff(ctx context.Context, repoPath string) (Source, error) {
+	return readRepoDiffWithLimit(ctx, repoPath, maxReviewInputBytes)
+}
+
+func readRepoDiffWithLimit(ctx context.Context, repoPath string, maxBytes int64) (Source, error) {
 	abs, err := filepath.Abs(repoPath)
 	if err != nil {
 		return Source{}, fmt.Errorf("resolve repo path: %w", err)
@@ -163,7 +168,7 @@ func readRepoDiff(ctx context.Context, repoPath string) (Source, error) {
 	if err != nil {
 		return Source{}, fmt.Errorf("resolve git diff base: %w", err)
 	}
-	raw, err := gitOutput(ctx, abs, "diff", "--no-ext-diff", "--binary", "--no-color", baseRef)
+	raw, err := gitOutputLimited(ctx, abs, maxBytes, "diff", "--no-ext-diff", "--binary", "--no-color", baseRef)
 	if err != nil {
 		return Source{}, fmt.Errorf("read git diff: %w", err)
 	}
@@ -172,7 +177,11 @@ func readRepoDiff(ctx context.Context, repoPath string) (Source, error) {
 		return Source{}, fmt.Errorf("read untracked files: %w", err)
 	}
 	diff := string(raw)
-	untrackedDiff, err := untrackedFileDiffs(abs, untracked)
+	remaining := maxBytes
+	if maxBytes >= 0 {
+		remaining -= int64(len(raw))
+	}
+	untrackedDiff, err := untrackedFileDiffsWithLimit(abs, untracked, remaining)
 	if err != nil {
 		return Source{}, err
 	}
@@ -237,6 +246,10 @@ func gitOutputLimited(ctx context.Context, repoPath string, maxBytes int64, args
 }
 
 func untrackedFileDiffs(repoPath string, raw []byte) (string, error) {
+	return untrackedFileDiffsWithLimit(repoPath, raw, maxUntrackedInputBytes)
+}
+
+func untrackedFileDiffsWithLimit(repoPath string, raw []byte, maxBytes int64) (string, error) {
 	files := splitNUL(raw)
 	if len(files) > maxUntrackedFileCount {
 		return "", fmt.Errorf("untracked file count exceeded %d", maxUntrackedFileCount)
@@ -245,7 +258,10 @@ func untrackedFileDiffs(repoPath string, raw []byte) (string, error) {
 	var b strings.Builder
 	var inputBytes int64
 	for _, file := range files {
-		remaining := minInt64(maxUntrackedInputBytes-inputBytes, maxUntrackedInputBytes-int64(b.Len()))
+		remaining := int64(-1)
+		if maxBytes >= 0 {
+			remaining = minInt64(maxBytes-inputBytes, maxBytes-int64(b.Len()))
+		}
 		diff, readBytes, err := untrackedFileDiffWithLimit(repoPath, file, remaining)
 		if err != nil {
 			return "", err
@@ -255,13 +271,13 @@ func untrackedFileDiffs(repoPath string, raw []byte) (string, error) {
 			continue
 		}
 		if b.Len() > 0 && !strings.HasSuffix(b.String(), "\n") {
-			if int64(b.Len()+1+len(diff)) > maxUntrackedInputBytes {
-				return "", fmt.Errorf("untracked diff exceeds %d bytes", maxUntrackedInputBytes)
+			if maxBytes >= 0 && int64(b.Len()+1+len(diff)) > maxBytes {
+				return "", fmt.Errorf("untracked diff exceeds %d bytes", maxBytes)
 			}
 			b.WriteString("\n")
 		}
-		if int64(b.Len()+len(diff)) > maxUntrackedInputBytes {
-			return "", fmt.Errorf("untracked diff exceeds %d bytes", maxUntrackedInputBytes)
+		if maxBytes >= 0 && int64(b.Len()+len(diff)) > maxBytes {
+			return "", fmt.Errorf("untracked diff exceeds %d bytes", maxBytes)
 		}
 		b.WriteString(diff)
 	}
