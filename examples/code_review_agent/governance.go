@@ -200,7 +200,7 @@ func runGovernance(
 			commandSpec{Kind: commandCheckGoTest},
 			ruleSandboxSnapshotUnavailable,
 			"Repository validation is unavailable",
-			"destructive or binary Go changes require a complete repository snapshot",
+			"Go source or module metadata changes require a complete repository snapshot",
 		)
 	}
 	if shouldRunRepoChecks && plannedInput.sandboxRepoRoot == "" {
@@ -614,17 +614,21 @@ func commandEnv(input reviewInput) map[string]string {
 func shouldRunRepositoryChecks(input reviewInput, parsed parsedDiff) bool {
 	return input.kind == inputKindRepoPath &&
 		input.repoRoot != "" &&
-		hasReviewableGoChange(parsed)
+		hasRepositoryValidationChange(parsed)
 }
 
-func hasReviewableGoChange(parsed parsedDiff) bool {
-	return len(affectedGoModuleSeeds(parsed)) > 0
+func hasRepositoryValidationChange(parsed parsedDiff) bool {
+	return len(repositoryValidationTargets(parsed)) > 0
 }
 
 func requiresGoRepositoryValidation(parsed parsedDiff) bool {
 	for _, file := range parsed.Files {
 		oldIsGo := isGoSourcePath(file.OldPath)
 		newIsGo := isGoSourcePath(file.NewPath)
+		if isGoRepositoryMetadataPath(file.OldPath) ||
+			isGoRepositoryMetadataPath(file.NewPath) {
+			return true
+		}
 		if (file.IsBinary && (oldIsGo || newIsGo)) ||
 			(file.IsDeleted && oldIsGo) ||
 			(file.IsRename && (oldIsGo || newIsGo)) {

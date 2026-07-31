@@ -357,7 +357,7 @@ func TestRepoInputBinaryGoDiffStillRequiresRepositoryChecks(t *testing.T) {
 	if !parseWarningsContain(parsed.Warnings, "Go source path is represented as binary") {
 		t.Fatalf("warnings = %+v, want binary Go warning", parsed.Warnings)
 	}
-	if !hasReviewableGoChange(parsed) {
+	if !hasRepositoryValidationChange(parsed) {
 		t.Fatal("binary Go diff skipped repository checks")
 	}
 	runner := &recordingSandboxRunner{}

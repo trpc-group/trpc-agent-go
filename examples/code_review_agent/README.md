@@ -146,16 +146,21 @@ rewrite the source later analyzers inspect. Allowed commands run with clean
 environment settings, timeout and output limits, and restricted artifacts. E2B
 is the production-style runtime; fake mode is deterministic for tests; local
 mode is an explicit development fallback rather than a hostile-code boundary.
-Complete repository snapshots resolve changed Go files to their nearest
-`go.mod` and run checks once per affected module. Module selection considers
-both sides of a rename: deleted or renamed-away Go paths walk upward from the
-missing old leaf, while surviving Go paths, including binary-diff paths, must
-exist as regular snapshot files. Destructive or binary Go changes that cannot
-obtain a complete snapshot or module mapping require human review instead of
-receiving a pass. The snapshot root contains a reserved
+Complete repository snapshots resolve changed Go source and module metadata to
+the modules that must be checked. Changes to `go.mod` select that module,
+changes to `go.sum` select the nearest module, and changes to `go.work` or
+`go.work.sum` conservatively select every module in the snapshot. Changed
+workspaces are recorded separately and a fixed `go work edit -json` validation
+runs before module checks. Module selection also considers both sides of a
+rename: deleted or renamed-away Go paths walk upward from the missing old leaf,
+while surviving paths, including binary-diff paths and module metadata, must
+exist as regular snapshot files. Go or module metadata changes that cannot
+obtain a complete snapshot or safe mapping require human review instead of
+receiving a pass. The snapshot root contains the reserved
 `.trpc-agent-review-modules` manifest with
 sorted, repository-relative module directories separated by NUL bytes; `.` names
-the root module. Snapshot enumeration and copying share a 30-second deadline and
+the root module. Workspace directories use the same format in
+`.trpc-agent-review-workspaces`. Snapshot enumeration and copying share a 30-second deadline and
 enforce fixed limits for tracked entries, unique directories, path bytes, and
 actual copied content. A timeout or limit failure skips repository-dependent
 checks and produces a human-review warning. All evidence, sandbox output,

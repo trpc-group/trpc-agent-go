@@ -1471,16 +1471,18 @@ func newMissingTestsRuleIndex(files []changedFile, candidates []candidateLine) m
 		changedTestDirs:  make(map[string]struct{}),
 		candidatesByFile: make(map[int][]candidateLine),
 	}
-	for _, file := range files {
-		path := file.reviewPath()
-		if strings.HasSuffix(path, "_test.go") {
-			index.changedTestDirs[reviewPathDirectory(path)] = struct{}{}
-		}
-	}
 	for _, candidate := range candidates {
 		index.candidatesByFile[candidate.FileIndex] = append(
 			index.candidatesByFile[candidate.FileIndex], candidate,
 		)
+	}
+	for fileIndex, file := range files {
+		if file.IsDeleted || file.IsBinary ||
+			!strings.HasSuffix(file.NewPath, "_test.go") ||
+			len(index.candidatesByFile[fileIndex]) == 0 {
+			continue
+		}
+		index.changedTestDirs[reviewPathDirectory(file.NewPath)] = struct{}{}
 	}
 	return index
 }

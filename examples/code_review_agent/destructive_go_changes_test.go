@@ -17,26 +17,32 @@ import (
 	"testing"
 )
 
-func TestAffectedGoModuleSeedsCoverBothRenameSides(t *testing.T) {
+func TestRepositoryValidationTargetsCoverBothRenameSides(t *testing.T) {
 	tests := []struct {
-		name  string
-		file  changedFile
-		seeds []affectedGoModuleSeed
+		name    string
+		file    changedFile
+		targets []repositoryValidationTarget
 	}{
 		{
-			name:  "modified",
-			file:  changedFile{OldPath: "pkg/review.go", NewPath: "pkg/review.go"},
-			seeds: []affectedGoModuleSeed{{path: "pkg/review.go", requireRegularFile: true}},
+			name: "modified",
+			file: changedFile{OldPath: "pkg/review.go", NewPath: "pkg/review.go"},
+			targets: []repositoryValidationTarget{{
+				path: "pkg/review.go", requireRegularFile: true, kind: repositoryValidationTargetModule,
+			}},
 		},
 		{
-			name:  "new",
-			file:  changedFile{NewPath: "pkg/review.go", IsNew: true},
-			seeds: []affectedGoModuleSeed{{path: "pkg/review.go", requireRegularFile: true}},
+			name: "new",
+			file: changedFile{NewPath: "pkg/review.go", IsNew: true},
+			targets: []repositoryValidationTarget{{
+				path: "pkg/review.go", requireRegularFile: true, kind: repositoryValidationTargetModule,
+			}},
 		},
 		{
-			name:  "deleted",
-			file:  changedFile{OldPath: "pkg/review.go", IsDeleted: true},
-			seeds: []affectedGoModuleSeed{{path: "pkg/review.go"}},
+			name: "deleted",
+			file: changedFile{OldPath: "pkg/review.go", IsDeleted: true},
+			targets: []repositoryValidationTarget{{
+				path: "pkg/review.go", kind: repositoryValidationTargetModule,
+			}},
 		},
 		{
 			name: "rename away",
@@ -45,7 +51,9 @@ func TestAffectedGoModuleSeedsCoverBothRenameSides(t *testing.T) {
 				NewPath:  "old/review.txt",
 				IsRename: true,
 			},
-			seeds: []affectedGoModuleSeed{{path: "old/review.go"}},
+			targets: []repositoryValidationTarget{{
+				path: "old/review.go", kind: repositoryValidationTargetModule,
+			}},
 		},
 		{
 			name: "rename into Go",
@@ -54,7 +62,9 @@ func TestAffectedGoModuleSeedsCoverBothRenameSides(t *testing.T) {
 				NewPath:  "new/review.go",
 				IsRename: true,
 			},
-			seeds: []affectedGoModuleSeed{{path: "new/review.go", requireRegularFile: true}},
+			targets: []repositoryValidationTarget{{
+				path: "new/review.go", requireRegularFile: true, kind: repositoryValidationTargetModule,
+			}},
 		},
 		{
 			name: "cross module Go rename",
@@ -63,9 +73,9 @@ func TestAffectedGoModuleSeedsCoverBothRenameSides(t *testing.T) {
 				NewPath:  "new/review.go",
 				IsRename: true,
 			},
-			seeds: []affectedGoModuleSeed{
-				{path: "old/review.go"},
-				{path: "new/review.go", requireRegularFile: true},
+			targets: []repositoryValidationTarget{
+				{path: "old/review.go", kind: repositoryValidationTargetModule},
+				{path: "new/review.go", requireRegularFile: true, kind: repositoryValidationTargetModule},
 			},
 		},
 		{
@@ -75,17 +85,19 @@ func TestAffectedGoModuleSeedsCoverBothRenameSides(t *testing.T) {
 				NewPath:  "pkg/review.go",
 				IsBinary: true,
 			},
-			seeds: []affectedGoModuleSeed{{path: "pkg/review.go", requireRegularFile: true}},
+			targets: []repositoryValidationTarget{{
+				path: "pkg/review.go", requireRegularFile: true, kind: repositoryValidationTargetModule,
+			}},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			parsed := parsedDiff{Files: []changedFile{tt.file}}
-			if got := affectedGoModuleSeeds(parsed); !reflect.DeepEqual(got, tt.seeds) {
-				t.Fatalf("seeds = %#v, want %#v", got, tt.seeds)
+			if got := repositoryValidationTargets(parsed); !reflect.DeepEqual(got, tt.targets) {
+				t.Fatalf("targets = %#v, want %#v", got, tt.targets)
 			}
-			if !hasReviewableGoChange(parsed) {
+			if !hasRepositoryValidationChange(parsed) {
 				t.Fatal("Go-impacting change was not considered reviewable")
 			}
 		})
@@ -216,7 +228,7 @@ func TestRepositoryDeletionAndRenameAwayRunModuleChecks(t *testing.T) {
 			if len(parsed.Files) != 1 || parsed.Files[0].OldPath != "review.go" {
 				t.Fatalf("parsed files = %+v", parsed.Files)
 			}
-			if !hasReviewableGoChange(parsed) {
+			if !hasRepositoryValidationChange(parsed) {
 				t.Fatal("destructive Go change was not reviewable")
 			}
 

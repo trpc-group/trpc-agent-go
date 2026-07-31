@@ -32,7 +32,10 @@ const (
 	snapshotCopyBufferBytes          = 32 * 1024
 )
 
-const reviewModuleManifestName = ".trpc-agent-review-modules"
+const (
+	reviewModuleManifestName    = ".trpc-agent-review-modules"
+	reviewWorkspaceManifestName = ".trpc-agent-review-workspaces"
+)
 
 var (
 	errSnapshotCopyLimit       = errors.New("snapshot copy exceeds remaining byte limit")
@@ -71,9 +74,17 @@ type repoSnapshot struct {
 	Bytes int64
 }
 
-type affectedGoModuleSeed struct {
+type repositoryValidationTargetKind uint8
+
+const (
+	repositoryValidationTargetModule repositoryValidationTargetKind = iota + 1
+	repositoryValidationTargetWorkspace
+)
+
+type repositoryValidationTarget struct {
 	path               string
 	requireRegularFile bool
+	kind               repositoryValidationTargetKind
 }
 
 type snapshotBuilder struct {
@@ -290,19 +301,44 @@ func prepareAffectedModuleManifest(
 		return nil, fmt.Errorf("resolve snapshot root: %w", err)
 	}
 	modules := make(map[string]bool)
-	for _, seed := range affectedGoModuleSeeds(parsed) {
+	workspaces := make(map[string]bool)
+	for _, target := range repositoryValidationTargets(parsed) {
 		if err := ctx.Err(); err != nil {
 			return nil, fmt.Errorf("prepare affected module manifest: %w", err)
 		}
-		rel, err := cleanTrackedPath(seed.path)
+		rel, err := cleanTrackedPath(target.path)
 		if err != nil {
-			return nil, fmt.Errorf("resolve affected module for %q: %w", seed.path, err)
+			return nil, fmt.Errorf("resolve repository validation target %q: %w", target.path, err)
 		}
-		module, err := nearestGoModule(ctx, root, rel, seed.requireRegularFile)
+		switch target.kind {
+		case repositoryValidationTargetModule:
+			module, err := nearestGoModule(ctx, root, rel, target.requireRegularFile)
+			if err != nil {
+				return nil, fmt.Errorf("resolve affected module for %q: %w", rel, err)
+			}
+			modules[module] = true
+		case repositoryValidationTargetWorkspace:
+			workspace, err := repositoryWorkspaceDirectory(
+				root,
+				rel,
+				target.requireRegularFile,
+			)
+			if err != nil {
+				return nil, fmt.Errorf("resolve affected workspace for %q: %w", rel, err)
+			}
+			workspaces[workspace] = true
+		default:
+			return nil, fmt.Errorf("unknown repository validation target kind")
+		}
+	}
+	if len(workspaces) > 0 {
+		workspaceModules, err := allSnapshotGoModules(ctx, root)
 		if err != nil {
-			return nil, fmt.Errorf("resolve affected module for %q: %w", rel, err)
+			return nil, fmt.Errorf("resolve workspace modules: %w", err)
 		}
-		modules[module] = true
+		for _, module := range workspaceModules {
+			modules[module] = true
+		}
 	}
 	if len(modules) == 0 {
 		return nil, fmt.Errorf("no affected Go modules were found")
@@ -314,56 +350,53 @@ func prepareAffectedModuleManifest(
 	}
 	sort.Strings(ordered)
 
-	manifestPath := filepath.Join(root, reviewModuleManifestName)
-	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf("prepare affected module manifest: %w", err)
+	if err := writeReviewPathManifest(
+		ctx,
+		root,
+		reviewModuleManifestName,
+		"affected module",
+		ordered,
+	); err != nil {
+		return nil, err
 	}
-	manifest, err := os.OpenFile(manifestPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return nil, fmt.Errorf("create affected module manifest: %w", err)
-	}
-	removeOnError := true
-	defer func() {
-		if removeOnError {
-			_ = os.Remove(manifestPath)
+	if len(workspaces) > 0 {
+		orderedWorkspaces := make([]string, 0, len(workspaces))
+		for workspace := range workspaces {
+			orderedWorkspaces = append(orderedWorkspaces, workspace)
 		}
-	}()
-	for _, module := range ordered {
-		if err := ctx.Err(); err != nil {
-			_ = manifest.Close()
-			return nil, fmt.Errorf("write affected module manifest: %w", err)
-		}
-		if _, err := io.WriteString(manifest, module); err != nil {
-			_ = manifest.Close()
-			return nil, fmt.Errorf("write affected module manifest: %w", err)
-		}
-		if _, err := manifest.Write([]byte{0}); err != nil {
-			_ = manifest.Close()
-			return nil, fmt.Errorf("write affected module manifest delimiter: %w", err)
+		sort.Strings(orderedWorkspaces)
+		if err := writeReviewPathManifest(
+			ctx,
+			root,
+			reviewWorkspaceManifestName,
+			"workspace",
+			orderedWorkspaces,
+		); err != nil {
+			_ = os.Remove(filepath.Join(root, reviewModuleManifestName))
+			return nil, err
 		}
 	}
-	if err := manifest.Close(); err != nil {
-		return nil, fmt.Errorf("close affected module manifest: %w", err)
-	}
-	removeOnError = false
 	return ordered, nil
 }
 
-func affectedGoModuleSeeds(parsed parsedDiff) []affectedGoModuleSeed {
-	seeds := make([]affectedGoModuleSeed, 0, len(parsed.Files))
-	seedIndexes := make(map[string]int, len(parsed.Files))
+func repositoryValidationTargets(parsed parsedDiff) []repositoryValidationTarget {
+	targets := make([]repositoryValidationTarget, 0, len(parsed.Files))
+	targetIndexes := make(map[string]int, len(parsed.Files))
 	add := func(candidate string, requireRegularFile bool) {
-		if !isGoSourcePath(candidate) {
+		kind := repositoryValidationKind(candidate)
+		if kind == 0 {
 			return
 		}
-		if index, ok := seedIndexes[candidate]; ok {
-			seeds[index].requireRegularFile = seeds[index].requireRegularFile || requireRegularFile
+		key := fmt.Sprintf("%d\x00%s", kind, candidate)
+		if index, ok := targetIndexes[key]; ok {
+			targets[index].requireRegularFile = targets[index].requireRegularFile || requireRegularFile
 			return
 		}
-		seedIndexes[candidate] = len(seeds)
-		seeds = append(seeds, affectedGoModuleSeed{
+		targetIndexes[key] = len(targets)
+		targets = append(targets, repositoryValidationTarget{
 			path:               candidate,
 			requireRegularFile: requireRegularFile,
+			kind:               kind,
 		})
 	}
 
@@ -378,11 +411,180 @@ func affectedGoModuleSeeds(parsed parsedDiff) []affectedGoModuleSeed {
 			add(file.NewPath, true)
 		}
 	}
-	return seeds
+	return targets
 }
 
 func isGoSourcePath(candidate string) bool {
 	return candidate != "" && strings.HasSuffix(candidate, ".go")
+}
+
+func isGoRepositoryMetadataPath(candidate string) bool {
+	switch path.Base(candidate) {
+	case "go.mod", "go.sum", "go.work", "go.work.sum":
+		return candidate != ""
+	default:
+		return false
+	}
+}
+
+func repositoryValidationKind(candidate string) repositoryValidationTargetKind {
+	if isGoSourcePath(candidate) {
+		return repositoryValidationTargetModule
+	}
+	switch path.Base(candidate) {
+	case "go.mod", "go.sum":
+		return repositoryValidationTargetModule
+	case "go.work", "go.work.sum":
+		return repositoryValidationTargetWorkspace
+	default:
+		return 0
+	}
+}
+
+func repositoryWorkspaceDirectory(
+	snapshotRoot string,
+	metadataPath string,
+	requireRegularFile bool,
+) (string, error) {
+	canonicalMetadataPath := metadataPath
+	if requireRegularFile {
+		fullPath := filepath.Join(snapshotRoot, filepath.FromSlash(metadataPath))
+		info, err := os.Lstat(fullPath)
+		if err != nil {
+			return "", fmt.Errorf("stat workspace metadata: %w", err)
+		}
+		if !info.Mode().IsRegular() {
+			return "", fmt.Errorf("workspace metadata is not regular")
+		}
+		canonicalMetadataPath, err = canonicalSnapshotRelativePath(
+			snapshotRoot,
+			filepath.FromSlash(metadataPath),
+		)
+		if err != nil {
+			return "", fmt.Errorf("canonicalize workspace metadata: %w", err)
+		}
+		if !isWorkspaceMetadataPath(canonicalMetadataPath) {
+			return "", fmt.Errorf("workspace metadata has an unexpected name")
+		}
+	}
+
+	workspace := path.Dir(canonicalMetadataPath)
+	if workspace == "." {
+		return ".", nil
+	}
+	canonicalWorkspace, err := canonicalSnapshotRelativePath(
+		snapshotRoot,
+		filepath.FromSlash(workspace),
+	)
+	if err != nil {
+		return "", fmt.Errorf("canonicalize workspace directory: %w", err)
+	}
+	info, err := os.Lstat(filepath.Join(snapshotRoot, filepath.FromSlash(canonicalWorkspace)))
+	if err != nil {
+		return "", fmt.Errorf("stat workspace directory: %w", err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("workspace path is not a directory")
+	}
+	return canonicalWorkspace, nil
+}
+
+func isWorkspaceMetadataPath(candidate string) bool {
+	switch path.Base(candidate) {
+	case "go.work", "go.work.sum":
+		return true
+	default:
+		return false
+	}
+}
+
+func allSnapshotGoModules(ctx context.Context, snapshotRoot string) ([]string, error) {
+	modules := make(map[string]bool)
+	err := filepath.WalkDir(snapshotRoot, func(current string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("snapshot path %q is a symlink", filepath.ToSlash(current))
+		}
+		if entry.IsDir() || entry.Name() != "go.mod" {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return fmt.Errorf("stat module file %q: %w", filepath.ToSlash(current), err)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("module file %q is not regular", filepath.ToSlash(current))
+		}
+		relative, err := filepath.Rel(snapshotRoot, current)
+		if err != nil {
+			return fmt.Errorf("resolve module file path: %w", err)
+		}
+		canonical, err := canonicalSnapshotRelativePath(snapshotRoot, relative)
+		if err != nil {
+			return fmt.Errorf("canonicalize module file: %w", err)
+		}
+		if path.Base(canonical) != "go.mod" {
+			return fmt.Errorf("module file %q is not named go.mod", canonical)
+		}
+		modules[path.Dir(canonical)] = true
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	ordered := make([]string, 0, len(modules))
+	for module := range modules {
+		ordered = append(ordered, module)
+	}
+	sort.Strings(ordered)
+	return ordered, nil
+}
+
+func writeReviewPathManifest(
+	ctx context.Context,
+	root string,
+	name string,
+	description string,
+	entries []string,
+) error {
+	manifestPath := filepath.Join(root, name)
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("prepare %s manifest: %w", description, err)
+	}
+	manifest, err := os.OpenFile(manifestPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return fmt.Errorf("create %s manifest: %w", description, err)
+	}
+	removeOnError := true
+	defer func() {
+		if removeOnError {
+			_ = os.Remove(manifestPath)
+		}
+	}()
+	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			_ = manifest.Close()
+			return fmt.Errorf("write %s manifest: %w", description, err)
+		}
+		if _, err := io.WriteString(manifest, entry); err != nil {
+			_ = manifest.Close()
+			return fmt.Errorf("write %s manifest: %w", description, err)
+		}
+		if _, err := manifest.Write([]byte{0}); err != nil {
+			_ = manifest.Close()
+			return fmt.Errorf("write %s manifest delimiter: %w", description, err)
+		}
+	}
+	if err := manifest.Close(); err != nil {
+		return fmt.Errorf("close %s manifest: %w", description, err)
+	}
+	removeOnError = false
+	return nil
 }
 
 func nearestGoModule(

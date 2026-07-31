@@ -27,6 +27,7 @@ func TestRunMissingTestsRuleUsesPrecomputedIndexInStableOrder(t *testing.T) {
 		{File: "pkg/existing.go", Line: 6, Text: "func Exported() {}", FileIndex: 1},
 		{File: "pkg/new.go", Line: 11, Text: "func Later() {}", FileIndex: 0},
 		{File: "covered/service.go", Line: 4, Text: "func Exported() {}", FileIndex: 2},
+		{File: "covered/service_test.go", Line: 4, Text: "func TestExported() {}", FileIndex: 3},
 	}
 
 	index := newMissingTestsRuleIndex(files, candidates)
@@ -62,6 +63,12 @@ func TestRunMissingTestsRuleHandlesHighFileCount(t *testing.T) {
 	for i := 0; i < testFileCount; i++ {
 		path := fmt.Sprintf("pkg/%04d/service_test.go", i*3)
 		files = append(files, changedFile{NewPath: path, IsNew: true})
+		candidates = append(candidates, candidateLine{
+			File:      path,
+			Line:      i + 1,
+			Text:      "func TestService() {}",
+			FileIndex: productionFileCount + i,
+		})
 	}
 
 	index := newMissingTestsRuleIndex(files, candidates)
