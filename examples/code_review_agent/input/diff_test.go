@@ -105,6 +105,39 @@ diff --git a/util.go b/util.go
 	}
 }
 
+func TestDiffParser_ParsePlainUnifiedDiff(t *testing.T) {
+	parser := NewDiffParser("")
+	result, err := parser.Parse(&stringReader{content: `--- a/main.go
++++ b/main.go
+@@ -1,1 +1,2 @@
+ package main
++func main() {}
+`})
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if len(result.Files) != 1 || result.Files[0].Path != "main.go" {
+		t.Fatalf("Parse() got files = %#v", result.Files)
+	}
+	if result.TotalAdded != 1 {
+		t.Fatalf("Parse() additions = %d, want 1", result.TotalAdded)
+	}
+}
+
+func TestDiffParser_ParseFileListRejectsMissingFile(t *testing.T) {
+	parser := NewDiffParser(t.TempDir())
+	if _, err := parser.ParseFileList([]string{"missing.go"}); err == nil {
+		t.Fatal("ParseFileList() should reject missing files")
+	}
+}
+
+func TestDiffParser_ParseFileListRejectsTraversal(t *testing.T) {
+	parser := NewDiffParser(t.TempDir())
+	if _, err := parser.ParseFileList([]string{"../outside.go"}); err == nil {
+		t.Fatal("ParseFileList() should reject paths outside repository")
+	}
+}
+
 func TestDiffParser_GetChangedLines(t *testing.T) {
 	parser := NewDiffParser("")
 

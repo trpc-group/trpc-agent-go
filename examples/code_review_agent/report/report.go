@@ -297,6 +297,14 @@ func GenerateMarkdownString(report *ReviewReport) string {
 		sb.WriteString(fmt.Sprintf("- **Tool Calls:** %d\n", report.Monitoring.ToolCallsCount))
 		sb.WriteString(fmt.Sprintf("- **Permission Blocks:** %d\n", report.Monitoring.PermissionBlocksCount))
 		sb.WriteString(fmt.Sprintf("- **Findings Count:** %d\n", report.Monitoring.FindingsCount))
+		if len(report.Monitoring.SeverityDistribution) > 0 {
+			sb.WriteString("\n**Severity Distribution:**\n")
+			for _, severity := range []string{"critical", "high", "medium", "low", "info"} {
+				if count := report.Monitoring.SeverityDistribution[severity]; count > 0 {
+					sb.WriteString(fmt.Sprintf("- %s: %d\n", severity, count))
+				}
+			}
+		}
 		sb.WriteString("\n")
 	}
 

@@ -58,6 +58,30 @@ func TestDefaultSandboxConfig(t *testing.T) {
 	}
 }
 
+func TestExecutor_RejectsUnknownExecutor(t *testing.T) {
+	executor := NewExecutorWithType(t.TempDir(), ExecutorType("unknown"))
+	if _, err := executor.RunAllChecks(context.Background(), "task_unknown"); err == nil {
+		t.Fatal("RunAllChecks() should reject unknown executor")
+	}
+}
+
+func TestExecutor_E2BUnsupported(t *testing.T) {
+	executor := NewExecutorWithType(t.TempDir(), ExecutorE2B)
+	if _, err := executor.RunAllChecks(context.Background(), "task_e2b"); err == nil {
+		t.Fatal("RunAllChecks() should reject unsupported E2B executor")
+	}
+}
+
+func TestLimitedBuffer(t *testing.T) {
+	buffer := newLimitedBuffer(5)
+	if n, err := buffer.Write([]byte("hello world")); err != nil || n != 11 {
+		t.Fatalf("Write() = %d, %v", n, err)
+	}
+	if !buffer.Truncated() || len(buffer.String()) <= 5 {
+		t.Fatalf("buffer did not record truncation: %q", buffer.String())
+	}
+}
+
 func TestExecutor_RunAllChecks_SandboxFailureDoesNotCrash(t *testing.T) {
 	// 测试沙箱执行失败不会导致崩溃
 	executor := NewExecutor("/nonexistent/path")

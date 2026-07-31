@@ -6,7 +6,6 @@
 package sandbox
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -81,15 +80,19 @@ func NewExecutorWithType(repoPath string, executorType ExecutorType) *Executor {
 
 // RunAllChecks 运行所有检查
 func (e *Executor) RunAllChecks(ctx context.Context, taskID string) ([]store.SandboxRun, error) {
-	// 根据执行器类型选择运行方式
+	if err := e.validateWorkDir(e.repoPath); err != nil {
+		return nil, err
+	}
+
 	switch e.config.ExecutorType {
+	case ExecutorLocal:
+		return e.runLocalChecks(ctx, taskID)
 	case ExecutorContainer:
 		return e.runContainerChecks(ctx, taskID)
 	case ExecutorE2B:
-		return e.runE2BChecks(ctx, taskID)
+		return nil, fmt.Errorf("executor %q is not supported", ExecutorE2B)
 	default:
-		// local 模式（仅作开发 fallback）
-		return e.runLocalChecks(ctx, taskID)
+		return nil, fmt.Errorf("unknown executor type %q", e.config.ExecutorType)
 	}
 }
 
@@ -128,27 +131,7 @@ func (e *Executor) runContainerChecks(ctx context.Context, taskID string) ([]sto
 	result := e.runDockerCommand(ctx, taskID, containerName, "go_vet", []string{"go", "vet", "./..."})
 	runs = append(runs, result)
 
-	// 运行 staticcheck
-	result = e.runDockerCommand(ctx, taskID, containerName, "staticcheck", []string{"staticcheck", "./..."})
-	runs = append(runs, result)
-
-	return runs, nil
-}
-
-// runE2BChecks E2B 沙箱执行
-func (e *Executor) runE2BChecks(ctx context.Context, taskID string) ([]store.SandboxRun, error) {
-	runs := make([]store.SandboxRun, 0)
-
-	// E2B 需要 API Key
-	e2bKey := os.Getenv("E2B_API_KEY")
-	if e2bKey == "" {
-		return runs, fmt.Errorf("E2B_API_KEY not set")
-	}
-
-	// 使用 E2B SDK 执行（简化实现）
-	result := e.runE2BCommand(ctx, taskID, "go_vet", "go vet ./...")
-	runs = append(runs, result)
-
+	// The base image only guarantees Go tooling; staticcheck is run locally when installed.
 	return runs, nil
 }
 
@@ -166,9 +149,10 @@ func (e *Executor) runCommand(ctx context.Context, taskID, scriptName, command s
 	// 设置环境变量白名单
 	cmd.Env = e.buildEnv()
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdout := newLimitedBuffer(e.config.MaxOutputSize)
+	stderr := newLimitedBuffer(e.config.MaxOutputSize)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 
 	err := cmd.Run()
 	durationMs := int(time.Since(startTime).Milliseconds())
@@ -189,10 +173,10 @@ func (e *Executor) runCommand(ctx context.Context, taskID, scriptName, command s
 		ScriptName: scriptName,
 		Command:    fmt.Sprintf("%s %s", command, joinArgs(args)),
 		ExitCode:   exitCode,
-		Stdout:     truncateOutput(stdout.String(), e.config.MaxOutputSize),
-		Stderr:     truncateOutput(stderr.String(), e.config.MaxOutputSize),
+		Stdout:     stdout.String(),
+		Stderr:     stderr.String(),
 		DurationMs: durationMs,
-		Truncated:  len(stdout.String()) > e.config.MaxOutputSize || len(stderr.String()) > e.config.MaxOutputSize,
+		Truncated:  stdout.Truncated() || stderr.Truncated(),
 	}
 }
 
@@ -216,9 +200,10 @@ func (e *Executor) runDockerCommand(ctx context.Context, taskID, containerName, 
 
 	execCmd := exec.CommandContext(ctx, "docker", dockerArgs...)
 
-	var stdout, stderr bytes.Buffer
-	execCmd.Stdout = &stdout
-	execCmd.Stderr = &stderr
+	stdout := newLimitedBuffer(e.config.MaxOutputSize)
+	stderr := newLimitedBuffer(e.config.MaxOutputSize)
+	execCmd.Stdout = stdout
+	execCmd.Stderr = stderr
 
 	err := execCmd.Run()
 	durationMs := int(time.Since(startTime).Milliseconds())
@@ -239,32 +224,10 @@ func (e *Executor) runDockerCommand(ctx context.Context, taskID, containerName, 
 		ScriptName: scriptName,
 		Command:    "docker " + strings.Join(dockerArgs, " "),
 		ExitCode:   exitCode,
-		Stdout:     truncateOutput(stdout.String(), e.config.MaxOutputSize),
-		Stderr:     truncateOutput(stderr.String(), e.config.MaxOutputSize),
+		Stdout:     stdout.String(),
+		Stderr:     stderr.String(),
 		DurationMs: durationMs,
-		Truncated:  len(stdout.String()) > e.config.MaxOutputSize || len(stderr.String()) > e.config.MaxOutputSize,
-	}
-}
-
-// runE2BCommand 使用 E2B 沙箱执行命令
-func (e *Executor) runE2BCommand(ctx context.Context, taskID, scriptName, command string) store.SandboxRun {
-	startTime := time.Now()
-
-	ctx, cancel := context.WithTimeout(ctx, e.config.Timeout)
-	defer cancel()
-
-	// E2B executor is not yet implemented - return unsupported error
-	durationMs := int(time.Since(startTime).Milliseconds())
-
-	return store.SandboxRun{
-		TaskID:     taskID,
-		ScriptName: scriptName,
-		Command:    command,
-		ExitCode:   -1,
-		Stdout:     "",
-		Stderr:     "E2B executor is not yet implemented. Please use local or container executor.",
-		DurationMs: durationMs,
-		Truncated:  false,
+		Truncated:  stdout.Truncated() || stderr.Truncated(),
 	}
 }
 
@@ -274,18 +237,24 @@ func (e *Executor) validateWorkDir(workDir string) error {
 	if err != nil {
 		return fmt.Errorf("cannot resolve path: %w", err)
 	}
-
-	// Check against forbidden directories
-	for _, forbidden := range e.config.ForbiddenDirs {
-		forbiddenAbs, _ := filepath.Abs(forbidden)
-		if strings.HasPrefix(absPath, forbiddenAbs) {
-			return fmt.Errorf("path %s is in forbidden directory %s", absPath, forbidden)
-		}
+	absPath, err = filepath.EvalSymlinks(absPath)
+	if err != nil {
+		return fmt.Errorf("cannot resolve work directory: %w", err)
 	}
 
-	// Check for path traversal
-	if strings.Contains(absPath, "..") {
-		return fmt.Errorf("path traversal detected: %s", absPath)
+	for _, forbidden := range e.config.ForbiddenDirs {
+		forbiddenAbs, err := filepath.Abs(forbidden)
+		if err != nil {
+			return fmt.Errorf("cannot resolve forbidden directory: %w", err)
+		}
+		forbiddenAbs, err = filepath.EvalSymlinks(forbiddenAbs)
+		if err != nil {
+			continue
+		}
+		rel, err := filepath.Rel(forbiddenAbs, absPath)
+		if err == nil && (rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel))) {
+			return fmt.Errorf("path %s is in forbidden directory %s", absPath, forbidden)
+		}
 	}
 
 	return nil

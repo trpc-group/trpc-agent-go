@@ -11,11 +11,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"os"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/input"
-	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/model"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/report"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/rules"
 	security "trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/safety"
@@ -34,13 +32,14 @@ const (
 
 // ReviewConfig 审查配置
 type ReviewConfig struct {
-	TaskID   string
-	RepoPath string
-	DiffFile string
-	Mode     ReviewMode
-	Executor string // local, container, e2b
-	Output   string // json, md, text
-	DBPath   string
+	TaskID      string
+	RepoPath    string
+	DiffFile    string
+	Mode        ReviewMode
+	Executor    string // local, container, e2b
+	Output      string // json, md, text
+	DBPath      string
+	LLMAnalyzer LLMAnalyzer
 }
 
 // ReviewResult 审查结果
@@ -121,7 +120,10 @@ func (o *Orchestrator) Run(ctx context.Context, config *ReviewConfig) *ReviewRes
 	// 保存 diff 摘要
 	for _, file := range diffResult.Files {
 		if err := store.SaveDiffSummary(o.db, config.TaskID, file.Path, file.Status, file.Additions, file.Deletions); err != nil {
-			log.Printf("Warning: failed to save diff summary for %s: %v", file.Path, err)
+			result.Error = fmt.Errorf("save diff summary for %s: %w", file.Path, err)
+			store.UpdateTaskStatus(o.db, config.TaskID, "failed", result.Error.Error())
+			result.Duration = time.Since(startTime)
+			return result
 		}
 	}
 
@@ -132,31 +134,46 @@ func (o *Orchestrator) Run(ctx context.Context, config *ReviewConfig) *ReviewRes
 	// 4. AI 增强分析
 	if config.Mode == ModeFakeModel {
 		log.Printf("Running fake model analysis...")
-		fakeModel := model.NewFakeModel("fake-gpt")
-		diffContent := readDiffContent(config.DiffFile)
-		aiResponse, err := fakeModel.GenerateResponse(ctx, diffContent)
+		aiFindings, err := analyzeWithFakeModel(ctx, config.TaskID, diffResult)
 		if err != nil {
-			log.Printf("Warning: fake model analysis failed: %v", err)
-		} else {
-			aiFindings := parseAIFindings(aiResponse, config.TaskID)
-			findings = append(findings, aiFindings...)
+			result.Error = fmt.Errorf("fake model analysis: %w", err)
+			store.UpdateTaskStatus(o.db, config.TaskID, "failed", result.Error.Error())
+			result.Duration = time.Since(startTime)
+			return result
 		}
-	} else if config.Mode == ModeLLM && os.Getenv("OPENAI_API_KEY") != "" {
-		log.Printf("Running LLM analysis...")
-		// LLM 分析在 main.go 中实现
+		findings = append(findings, aiFindings...)
+	} else if config.Mode == ModeLLM {
+		analyzer := config.LLMAnalyzer
+		if analyzer == nil {
+			analyzer = NewOpenAIAnalyzer("")
+		}
+		aiFindings, err := analyzer(ctx, config.TaskID, diffResult)
+		if err != nil {
+			result.Error = fmt.Errorf("LLM analysis: %w", err)
+			store.UpdateTaskStatus(o.db, config.TaskID, "failed", result.Error.Error())
+			result.Duration = time.Since(startTime)
+			return result
+		}
+		findings = append(findings, aiFindings...)
 	}
 
 	// 5. 去重降噪
 	uniqueFindings, warnings := rules.DeduplicateFindings(findings)
 
 	// 6. 权限检查
+	decision := o.permPolicy.Evaluate("review")
 	permDecision := store.PermissionDecision{
 		TaskID:   config.TaskID,
 		Command:  "review",
-		Decision: "allow",
-		Reason:   "code review operation",
+		Decision: decision.Decision,
+		Reason:   decision.Reason,
 	}
-	store.SavePermissionDecision(o.db, &permDecision)
+	if err := store.SavePermissionDecision(o.db, &permDecision); err != nil {
+		result.Error = fmt.Errorf("save permission decision: %w", err)
+		store.UpdateTaskStatus(o.db, config.TaskID, "failed", result.Error.Error())
+		result.Duration = time.Since(startTime)
+		return result
+	}
 
 	// 7. 沙箱执行
 	var sandboxRuns []store.SandboxRun
@@ -165,34 +182,49 @@ func (o *Orchestrator) Run(ctx context.Context, config *ReviewConfig) *ReviewRes
 
 		var sandboxExec *sandbox.Executor
 		switch config.Executor {
+		case "local":
+			sandboxExec = sandbox.NewExecutor(config.RepoPath)
 		case "container":
 			sandboxExec = sandbox.NewExecutorWithType(config.RepoPath, sandbox.ExecutorContainer)
 		case "e2b":
 			sandboxExec = sandbox.NewExecutorWithType(config.RepoPath, sandbox.ExecutorE2B)
 		default:
-			sandboxExec = sandbox.NewExecutor(config.RepoPath)
+			result.Error = fmt.Errorf("unsupported executor %q", config.Executor)
+			store.UpdateTaskStatus(o.db, config.TaskID, "failed", result.Error.Error())
+			result.Duration = time.Since(startTime)
+			return result
 		}
 
 		runs, err := sandboxExec.RunAllChecks(ctx, config.TaskID)
 		if err != nil {
-			log.Printf("Warning: sandbox checks failed: %v", err)
+			result.Error = fmt.Errorf("sandbox checks: %w", err)
+			store.UpdateTaskStatus(o.db, config.TaskID, "failed", result.Error.Error())
+			result.Duration = time.Since(startTime)
+			return result
 		}
 		sandboxRuns = runs
+		for _, run := range sandboxRuns {
+			if run.ExitCode != 0 {
+				result.Error = fmt.Errorf("sandbox check %s failed with exit code %d", run.ScriptName, run.ExitCode)
+				store.UpdateTaskStatus(o.db, config.TaskID, "failed", result.Error.Error())
+				result.Duration = time.Since(startTime)
+				return result
+			}
+		}
 
 		for _, run := range sandboxRuns {
-			store.SaveSandboxRun(o.db, &run)
+			if err := store.SaveSandboxRun(o.db, &run); err != nil {
+				result.Error = fmt.Errorf("save sandbox run: %w", err)
+				store.UpdateTaskStatus(o.db, config.TaskID, "failed", result.Error.Error())
+				result.Duration = time.Since(startTime)
+				return result
+			}
 		}
 	}
 
 	// 8. 敏感信息脱敏
-	for i := range uniqueFindings {
-		if o.secretDetector.Detect(uniqueFindings[i].Evidence) {
-			uniqueFindings[i].Evidence = "<redacted>"
-		}
-		if o.secretDetector.Detect(uniqueFindings[i].Description) {
-			uniqueFindings[i].Description = o.secretDetector.RedactText(uniqueFindings[i].Description)
-		}
-	}
+	o.secretDetector.RedactFindings(uniqueFindings)
+	o.secretDetector.RedactFindings(warnings)
 
 	// 9. 保存 findings
 	if err := store.SaveFindings(o.db, uniqueFindings); err != nil {
@@ -203,44 +235,58 @@ func (o *Orchestrator) Run(ctx context.Context, config *ReviewConfig) *ReviewRes
 
 	// 10. 计算监控摘要
 	monitoring := store.CalculateMonitoring(config.TaskID, uniqueFindings, sandboxRuns, startTime)
-	store.SaveMonitoringSummary(o.db, monitoring)
+	if err := store.SaveMonitoringSummary(o.db, monitoring); err != nil {
+		result.Error = fmt.Errorf("save monitoring summary: %w", err)
+		store.UpdateTaskStatus(o.db, config.TaskID, "failed", result.Error.Error())
+		result.Duration = time.Since(startTime)
+		return result
+	}
 
 	// 11. 生成报告
 	reviewReport := report.Generate(config.TaskID, uniqueFindings, warnings, sandboxRuns, monitoring)
 
-	// 12. 更新任务状态
-	store.UpdateTaskStatus(o.db, config.TaskID, "completed", "")
-
-	// 13. 保存报告
-	reportJSON, _ := json.MarshalIndent(reviewReport, "", "  ")
+	// 12. 保存报告
+	reportJSON, err := json.MarshalIndent(reviewReport, "", "  ")
+	if err != nil {
+		result.Error = fmt.Errorf("marshal report: %w", err)
+		store.UpdateTaskStatus(o.db, config.TaskID, "failed", result.Error.Error())
+		result.Duration = time.Since(startTime)
+		return result
+	}
 	reportMD := report.GenerateMarkdownString(reviewReport)
-	store.SaveReviewReport(o.db, &store.ReviewReport{
+	if err := store.SaveReviewReport(o.db, &store.ReviewReport{
 		TaskID:     config.TaskID,
 		ReportJSON: string(reportJSON),
 		ReportMD:   reportMD,
-	})
+	}); err != nil {
+		result.Error = fmt.Errorf("save report: %w", err)
+		store.UpdateTaskStatus(o.db, config.TaskID, "failed", result.Error.Error())
+		result.Duration = time.Since(startTime)
+		return result
+	}
 
-	// 14. 保存 artifact
-	store.SaveArtifact(o.db, &store.Artifact{
+	// 13. 保存 artifact
+	if err := store.SaveArtifact(o.db, &store.Artifact{
 		TaskID:       config.TaskID,
 		ArtifactType: "report_json",
 		FilePath:     "review_report.json",
 		Content:      string(reportJSON),
-	})
+	}); err != nil {
+		result.Error = fmt.Errorf("save report artifact: %w", err)
+		store.UpdateTaskStatus(o.db, config.TaskID, "failed", result.Error.Error())
+		result.Duration = time.Since(startTime)
+		return result
+	}
+	if err := store.UpdateTaskStatus(o.db, config.TaskID, "completed", ""); err != nil {
+		result.Error = fmt.Errorf("complete task: %w", err)
+		result.Duration = time.Since(startTime)
+		return result
+	}
 
 	result.Report = reviewReport
 	result.Duration = time.Since(startTime)
 
 	return result
-}
-
-// readDiffContent 读取 diff 文件内容
-func readDiffContent(diffFile string) string {
-	content, err := os.ReadFile(diffFile)
-	if err != nil {
-		return ""
-	}
-	return string(content)
 }
 
 // parseAIFindings 解析 AI 返回的 findings

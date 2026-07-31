@@ -66,10 +66,15 @@ func (p *DiffParser) ParseFileList(files []string) (*DiffParseResult, error) {
 	}
 
 	for _, file := range files {
-		// 读取文件内容
-		content, err := os.ReadFile(filepath.Join(p.repoPath, file))
+		path, err := p.resolveRepoPath(file)
 		if err != nil {
-			continue
+			return nil, err
+		}
+
+		// 读取文件内容
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read file %q: %w", file, err)
 		}
 
 		// 创建一个简单的 diff（整个文件作为新增）
@@ -174,6 +179,13 @@ var (
 
 // ParseFile 解析 diff 文件
 func (p *DiffParser) ParseFile(diffFilePath string) (*DiffParseResult, error) {
+	if p.repoPath != "" {
+		resolved, err := p.resolveRepoPath(diffFilePath)
+		if err != nil {
+			return nil, err
+		}
+		diffFilePath = resolved
+	}
 	file, err := os.Open(diffFilePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open diff file: %w", err)
@@ -181,6 +193,56 @@ func (p *DiffParser) ParseFile(diffFilePath string) (*DiffParseResult, error) {
 	defer file.Close()
 
 	return p.Parse(file)
+}
+
+func (p *DiffParser) resolveRepoPath(name string) (string, error) {
+	if p.repoPath == "" {
+		return name, nil
+	}
+	root, err := filepath.Abs(p.repoPath)
+	if err != nil {
+		return "", fmt.Errorf("resolve repository path: %w", err)
+	}
+	candidateName := filepath.FromSlash(name)
+	candidate, err := filepath.Abs(candidateName)
+	if !filepath.IsAbs(candidateName) {
+		candidate, err = filepath.Abs(filepath.Join(root, candidateName))
+	}
+	if err != nil {
+		return "", fmt.Errorf("resolve file path %q: %w", name, err)
+	}
+	if !isWithinPath(root, candidate) {
+		return "", fmt.Errorf("file path %q escapes repository", name)
+	}
+
+	canonicalRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", fmt.Errorf("resolve repository path: %w", err)
+	}
+	canonicalCandidate, err := filepath.EvalSymlinks(candidate)
+	if err != nil {
+		return "", fmt.Errorf("resolve file path %q: %w", name, err)
+	}
+	if !isWithinPath(canonicalRoot, canonicalCandidate) {
+		return "", fmt.Errorf("file path %q escapes repository through symlink", name)
+	}
+	return candidate, nil
+}
+
+func isWithinPath(root, candidate string) bool {
+	rel, err := filepath.Rel(root, candidate)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
+}
+
+func validateDiffPath(path string) error {
+	if path == "" || filepath.IsAbs(filepath.FromSlash(path)) || filepath.VolumeName(filepath.FromSlash(path)) != "" {
+		return fmt.Errorf("invalid diff path %q", path)
+	}
+	clean := filepath.Clean(filepath.FromSlash(path))
+	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("diff path %q escapes repository", path)
+	}
+	return nil
 }
 
 // Parse parses diff content from io.Reader
@@ -200,6 +262,9 @@ func (p *DiffParser) Parse(reader io.Reader) (*DiffParseResult, error) {
 		line := scanner.Text()
 
 		if matches := diffGitRegex.FindStringSubmatch(line); matches != nil {
+			if err := validateDiffPath(matches[2]); err != nil {
+				return nil, err
+			}
 			if currentFile != nil {
 				if currentHunk != nil {
 					currentFile.Hunks = append(currentFile.Hunks, *currentHunk)
@@ -215,20 +280,42 @@ func (p *DiffParser) Parse(reader io.Reader) (*DiffParseResult, error) {
 		}
 
 		if matches := oldFileRegex.FindStringSubmatch(line); matches != nil {
-			if currentFile != nil && matches[1] != "" {
+			if matches[1] != "" {
+				if err := validateDiffPath(matches[1]); err != nil {
+					return nil, err
+				}
+			}
+			if currentFile == nil {
+				currentFile = &DiffFile{Hunks: make([]DiffHunk, 0)}
+			}
+			if matches[1] != "" {
 				currentFile.OldPath = matches[1]
+				if currentFile.Path == "" {
+					currentFile.Path = matches[1]
+				}
 			}
 			continue
 		}
 
 		if matches := newFileRegex.FindStringSubmatch(line); matches != nil {
-			if currentFile != nil && matches[1] != "" {
+			if matches[1] != "" {
+				if err := validateDiffPath(matches[1]); err != nil {
+					return nil, err
+				}
+			}
+			if currentFile == nil {
+				currentFile = &DiffFile{Hunks: make([]DiffHunk, 0)}
+			}
+			if matches[1] != "" {
 				currentFile.Path = matches[1]
 			}
 			continue
 		}
 
 		if matches := hunkHeaderRegex.FindStringSubmatch(line); matches != nil {
+			if currentFile == nil {
+				currentFile = &DiffFile{Hunks: make([]DiffHunk, 0)}
+			}
 			if currentHunk != nil && currentFile != nil {
 				currentFile.Hunks = append(currentFile.Hunks, *currentHunk)
 			}

@@ -8,6 +8,8 @@ package safety
 import (
 	"regexp"
 	"strings"
+
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/store"
 )
 
 // PermissionDecision 权限决策
@@ -161,4 +163,16 @@ func (d *SecretDetector) RedactText(text string) string {
 		result = pattern.ReplaceAllString(result, "<redacted>")
 	}
 	return result
+}
+
+// RedactFindings removes secrets from all finding fields that may be persisted or reported.
+func (d *SecretDetector) RedactFindings(findings []store.Finding) {
+	for i := range findings {
+		if d.Detect(findings[i].Evidence) {
+			findings[i].Evidence = "<redacted>"
+		}
+		findings[i].Title = d.RedactText(findings[i].Title)
+		findings[i].Description = d.RedactText(findings[i].Description)
+		findings[i].Recommendation = d.RedactText(findings[i].Recommendation)
+	}
 }

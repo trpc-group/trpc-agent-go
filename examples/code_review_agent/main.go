@@ -53,9 +53,13 @@ const (
 func main() {
 	flag.Parse()
 
-	if *flagDiffFile == "" {
-		fmt.Println("Error: --diff-file is required")
+	if *flagExec != "local" && *flagExec != "container" && *flagExec != "e2b" {
+		fmt.Printf("Error: unsupported executor %q\n", *flagExec)
 		flag.Usage()
+		os.Exit(1)
+	}
+	if *flagSkillsRoot != "" {
+		fmt.Println("Error: --skills-root is not supported yet")
 		os.Exit(1)
 	}
 
@@ -111,7 +115,8 @@ func run() error {
 	// 保存 diff 摘要
 	for _, file := range diffResult.Files {
 		if err := store.SaveDiffSummary(db, taskID, file.Path, file.Status, file.Additions, file.Deletions); err != nil {
-			log.Printf("Warning: failed to save diff summary for %s: %v", file.Path, err)
+			store.UpdateTaskStatus(db, taskID, "failed", err.Error())
+			return fmt.Errorf("save diff summary for %s: %w", file.Path, err)
 		}
 	}
 
@@ -127,7 +132,21 @@ func run() error {
 		// 使用 fake model（不需要真实 LLM）
 		fmt.Printf("Running fake model analysis...\n")
 		fakeModel := fake.NewFakeModel("fake-gpt")
-		diffContent := readDiffContent(*flagDiffFile)
+		diffContent := ""
+		if *flagDiffFile != "" {
+			diffContent = readDiffContent(*flagDiffFile)
+		} else {
+			var content strings.Builder
+			for _, file := range diffResult.Files {
+				for _, hunk := range file.Hunks {
+					for _, change := range hunk.Changes {
+						content.WriteString(change.Content)
+						content.WriteString("\n")
+					}
+				}
+			}
+			diffContent = content.String()
+		}
 		aiResponse, err := fakeModel.GenerateResponse(ctx, diffContent)
 		if err != nil {
 			log.Printf("Warning: fake model analysis failed: %v", err)
@@ -191,17 +210,20 @@ func run() error {
 			// Create sandbox executor based on type
 			var sandboxExec *sandbox.Executor
 			switch *flagExec {
+			case "local":
+				sandboxExec = sandbox.NewExecutor(*flagRepoPath)
 			case "container":
 				sandboxExec = sandbox.NewExecutorWithType(*flagRepoPath, sandbox.ExecutorContainer)
 			case "e2b":
 				sandboxExec = sandbox.NewExecutorWithType(*flagRepoPath, sandbox.ExecutorE2B)
 			default:
-				sandboxExec = sandbox.NewExecutor(*flagRepoPath)
+				return fmt.Errorf("unsupported executor %q", *flagExec)
 			}
 
 			runs, err := sandboxExec.RunAllChecks(ctx, taskID)
 			if err != nil {
-				log.Printf("Warning: sandbox checks failed: %v", err)
+				store.UpdateTaskStatus(db, taskID, "failed", err.Error())
+				return fmt.Errorf("sandbox checks: %w", err)
 			}
 			sandboxRuns = runs
 
@@ -209,7 +231,8 @@ func run() error {
 			sandboxFailed := false
 			for _, run := range sandboxRuns {
 				if err := store.SaveSandboxRun(db, &run); err != nil {
-					log.Printf("Warning: failed to save sandbox run: %v", err)
+					store.UpdateTaskStatus(db, taskID, "failed", err.Error())
+					return fmt.Errorf("save sandbox run: %w", err)
 				}
 				if run.ExitCode != 0 {
 					sandboxFailed = true
@@ -219,6 +242,7 @@ func run() error {
 			// Mark task as failed if sandbox execution failed
 			if sandboxFailed {
 				store.UpdateTaskStatus(db, taskID, "failed", "sandbox execution failed")
+				return fmt.Errorf("sandbox execution failed")
 			}
 		} else {
 			log.Printf("Warning: sandbox execution skipped due to permission denial")
@@ -226,20 +250,8 @@ func run() error {
 	}
 
 	// 9. Sensitive information redaction
-	for i := range uniqueFindings {
-		if secretDetector.Detect(uniqueFindings[i].Evidence) {
-			uniqueFindings[i].Evidence = "<redacted>"
-		}
-		if secretDetector.Detect(uniqueFindings[i].Description) {
-			uniqueFindings[i].Description = secretDetector.RedactText(uniqueFindings[i].Description)
-		}
-		if secretDetector.Detect(uniqueFindings[i].Title) {
-			uniqueFindings[i].Title = secretDetector.RedactText(uniqueFindings[i].Title)
-		}
-		if secretDetector.Detect(uniqueFindings[i].Recommendation) {
-			uniqueFindings[i].Recommendation = secretDetector.RedactText(uniqueFindings[i].Recommendation)
-		}
-	}
+	secretDetector.RedactFindings(uniqueFindings)
+	secretDetector.RedactFindings(warnings)
 
 	// 8. 保存 findings
 	if err := store.SaveFindings(db, uniqueFindings); err != nil {
@@ -249,15 +261,15 @@ func run() error {
 
 	// 9. 计算监控摘要
 	monitoring := store.CalculateMonitoring(taskID, uniqueFindings, sandboxRuns, startTime)
-	store.SaveMonitoringSummary(db, monitoring)
+	if err := store.SaveMonitoringSummary(db, monitoring); err != nil {
+		store.UpdateTaskStatus(db, taskID, "failed", err.Error())
+		return fmt.Errorf("save monitoring summary: %w", err)
+	}
 
 	// 10. 生成报告
 	reviewReport := report.Generate(taskID, uniqueFindings, warnings, sandboxRuns, monitoring)
 
-	// 11. 更新任务状态
-	store.UpdateTaskStatus(db, taskID, "completed", "")
-
-	// 12. 输出结果
+	// 11. 输出结果
 	switch *flagOutput {
 	case "json":
 		report.PrintJSON(reviewReport)
@@ -269,26 +281,45 @@ func run() error {
 		report.PrintJSON(reviewReport)
 	}
 
-	// 13. 保存报告文件
-	report.SaveJSON(reviewReport, "review_report.json")
-	report.SaveMarkdown(reviewReport, "review_report.md")
+	// 12. 保存报告文件
+	if err := report.SaveJSON(reviewReport, "review_report.json"); err != nil {
+		store.UpdateTaskStatus(db, taskID, "failed", err.Error())
+		return fmt.Errorf("save JSON report: %w", err)
+	}
+	if err := report.SaveMarkdown(reviewReport, "review_report.md"); err != nil {
+		store.UpdateTaskStatus(db, taskID, "failed", err.Error())
+		return fmt.Errorf("save Markdown report: %w", err)
+	}
 
-	// 14. 保存报告到数据库
-	reportJSON, _ := json.MarshalIndent(reviewReport, "", "  ")
+	// 13. 保存报告到数据库
+	reportJSON, err := json.MarshalIndent(reviewReport, "", "  ")
+	if err != nil {
+		store.UpdateTaskStatus(db, taskID, "failed", err.Error())
+		return fmt.Errorf("marshal report: %w", err)
+	}
 	reportMD := report.GenerateMarkdownString(reviewReport)
-	store.SaveReviewReport(db, &store.ReviewReport{
+	if err := store.SaveReviewReport(db, &store.ReviewReport{
 		TaskID:     taskID,
 		ReportJSON: string(reportJSON),
 		ReportMD:   reportMD,
-	})
+	}); err != nil {
+		store.UpdateTaskStatus(db, taskID, "failed", err.Error())
+		return fmt.Errorf("save report: %w", err)
+	}
 
-	// 15. 保存 artifact
-	store.SaveArtifact(db, &store.Artifact{
+	// 14. 保存 artifact
+	if err := store.SaveArtifact(db, &store.Artifact{
 		TaskID:       taskID,
 		ArtifactType: "report_json",
 		FilePath:     "review_report.json",
 		Content:      string(reportJSON),
-	})
+	}); err != nil {
+		store.UpdateTaskStatus(db, taskID, "failed", err.Error())
+		return fmt.Errorf("save report artifact: %w", err)
+	}
+	if err := store.UpdateTaskStatus(db, taskID, "completed", ""); err != nil {
+		return fmt.Errorf("complete task: %w", err)
+	}
 
 	fmt.Printf("\nReview completed: %s\n", taskID)
 	fmt.Printf("Duration: %dms\n", time.Since(startTime).Milliseconds())
@@ -319,10 +350,12 @@ func getModelName() string {
 
 // runLLMAnalysis 使用真实 LLM 进行分析
 func runLLMAnalysis(ctx context.Context, taskID string, diffResult *input.DiffParseResult) ([]store.Finding, error) {
-	// 构建 diff 内容
+	secretDetector := security.NewSecretDetector()
 	var diffContent strings.Builder
 	for _, file := range diffResult.Files {
+		diffContent.WriteString(fmt.Sprintf("File: %s\n", file.Path))
 		for _, hunk := range file.Hunks {
+			diffContent.WriteString(fmt.Sprintf("Hunk: @@ -%d,%d +%d,%d @@ %s\n", hunk.OldStart, hunk.OldLines, hunk.NewStart, hunk.NewLines, hunk.Header))
 			for _, change := range hunk.Changes {
 				prefix := " "
 				switch change.Type {
@@ -331,10 +364,8 @@ func runLLMAnalysis(ctx context.Context, taskID string, diffResult *input.DiffPa
 				case "delete":
 					prefix = "-"
 				}
-				diffContent.WriteString(prefix)
-				diffContent.WriteString(" ")
-				diffContent.WriteString(change.Content)
-				diffContent.WriteString("\n")
+				content := secretDetector.RedactText(change.Content)
+				diffContent.WriteString(fmt.Sprintf("%s old=%d new=%d %s\n", prefix, change.OldLine, change.NewLine, content))
 			}
 		}
 	}
