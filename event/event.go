@@ -450,48 +450,11 @@ func redactedEventForLogging(e *Event) Event {
 	return redacted
 }
 
-// trySendReady performs a non-blocking channel send with panic recovery.
-// The recover scope is intentionally limited to the channel send operation
-// only; logging must be performed by the caller after this function returns
-// so that logging failures are not misreported as closed-channel errors.
-func trySendReady(ch chan<- *Event, e *Event) (sent bool, err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			err = fmt.Errorf("%w: %v", ErrClosedChannelSend, r)
-		}
-	}()
-	select {
-	case ch <- e:
-		return true, nil
-	default:
-		return false, nil
-	}
-}
-
-// sendBlocking performs a blocking channel send with optional timeout and
-// panic recovery. The recover scope is intentionally limited to the channel
-// send operation only; logging must be performed by the caller after this
-// function returns so that logging failures are not misreported as
-// closed-channel errors.
-func sendBlocking(ctx context.Context, ch chan<- *Event, e *Event,
-	timeout time.Duration) (sent bool, err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			err = fmt.Errorf("%w: %v", ErrClosedChannelSend, r)
-		}
-	}()
-
-	if timeout == EmitWithoutTimeout {
-		select {
-		case ch <- e:
-			return true, nil
-		case <-ctx.Done():
-			return false, ctx.Err()
-		}
-	}
-
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
+func tryEmitReadyEvent(ctx context.Context, ch chan<- *Event, e *Event) (bool, error) {
+	// Snapshot before send: once ch <- e returns, the receiver owns *e and
+	// may mutate it concurrently (runner.backfillEventMetadata). Reading
+	// *e after the send for logging is a data race.
+	eventStr := snapshotEvent(e)
 	select {
 	case ch <- e:
 		return true, nil

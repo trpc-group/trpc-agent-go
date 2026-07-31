@@ -189,6 +189,36 @@ func TestSessionSQLite_AppendTrackEvent_SessionNotFound_Error(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestSessionSQLite_GetTrackEvents_InvalidKey(t *testing.T) {
+	db, _, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+	svc, err := NewService(db)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+	_, err = svc.GetTrackEvents(
+		context.Background(),
+		session.Key{UserID: "u1", SessionID: "s1"},
+		"t1",
+	)
+	require.Error(t, err)
+	require.ErrorIs(t, err, session.ErrAppNameRequired)
+}
+
+func TestSessionSQLite_GetTrackEvents_QueryError(t *testing.T) {
+	db, _, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+	svc, err := NewService(db)
+	require.NoError(t, err)
+	require.NoError(t, svc.Close())
+	_, err = svc.GetTrackEvents(
+		context.Background(),
+		session.Key{AppName: "app", UserID: "u1", SessionID: "s1"},
+		"t1",
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "sqlite session service get track events failed")
+}
+
 func TestSessionSQLite_AppendEvent_ResponseNil_SkipsInsert(t *testing.T) {
 	db, _, cleanup := openTempSQLiteDB(t)
 	defer cleanup()
@@ -302,6 +332,90 @@ func TestSessionSQLite_AppendTrack_Expired_ExtendsTTL(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, expires.Valid)
 	require.Greater(t, expires.Int64, expiredNs)
+}
+
+func TestSessionSQLite_AppendTrack_TrackTTLOverridesSessionTTL(t *testing.T) {
+	db, _, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(
+		db,
+		WithSessionTTL(time.Hour),
+		WithTrackEventTTL(0),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "s1"}
+	sess, err := svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	require.NoError(t, svc.AppendTrackEvent(
+		ctx,
+		sess,
+		newTrackEvent("t1", 1),
+	))
+
+	var sessionExpires sql.NullInt64
+	err = svc.db.QueryRowContext(
+		ctx,
+		"SELECT expires_at FROM "+svc.tableSessionStates+
+			" WHERE app_name = ? AND user_id = ? AND session_id = ?",
+		key.AppName,
+		key.UserID,
+		key.SessionID,
+	).Scan(&sessionExpires)
+	require.NoError(t, err)
+	require.True(t, sessionExpires.Valid)
+
+	var trackExpires sql.NullInt64
+	err = svc.db.QueryRowContext(
+		ctx,
+		"SELECT expires_at FROM "+svc.tableSessionTracks+
+			" WHERE app_name = ? AND user_id = ? AND session_id = ?"+
+			" AND track = ?",
+		key.AppName,
+		key.UserID,
+		key.SessionID,
+		"t1",
+	).Scan(&trackExpires)
+	require.NoError(t, err)
+	require.False(t, trackExpires.Valid)
+}
+
+func TestSessionSQLite_AppendTrack_NegativeTrackTTLDisablesExpiry(t *testing.T) {
+	db, _, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+	svc, err := NewService(
+		db,
+		WithSessionTTL(time.Hour),
+		WithTrackEventTTL(-time.Hour),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "s1"}
+	sess, err := svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	require.NoError(t, svc.AppendTrackEvent(
+		ctx,
+		sess,
+		newTrackEvent("t1", 1),
+	))
+	var trackExpires sql.NullInt64
+	err = svc.db.QueryRowContext(
+		ctx,
+		"SELECT expires_at FROM "+svc.tableSessionTracks+
+			" WHERE app_name = ? AND user_id = ? AND session_id = ?"+
+			" AND track = ?",
+		key.AppName,
+		key.UserID,
+		key.SessionID,
+		"t1",
+	).Scan(&trackExpires)
+	require.NoError(t, err)
+	require.False(t, trackExpires.Valid)
 }
 
 func TestSessionSQLite_AppendEvent_CorruptState_Error(t *testing.T) {

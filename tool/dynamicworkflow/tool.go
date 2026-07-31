@@ -100,7 +100,7 @@ func NewTool(runtime Runtime, agents []agent.Agent, opts ...Option) (tool.Callab
 	}, nil
 }
 
-const defaultDescription = "Run one temporary Python workflow for tasks that need role delegation, parallel analysis, conditional iteration, or data flow between workflow-local child agents. Registered templates fix model, executor, callbacks, permissions, and other runtime policy; each agent call's dynamic instruction defines that child role's temporary business job. The code argument is executable workflow code, not a code sample. Use only declared workflow capabilities and return a JSON-compatible value."
+const defaultDescription = "Run one temporary Python workflow for tasks that need role delegation, parallel analysis, conditional iteration, or data flow between workflow-local child agents. Keep Python as short orchestration glue: delegate substantive work to child agents instead of embedding task deliverables, source files, reports, or large scripts. Registered templates fix model, executor, callbacks, permissions, and other runtime policy; each agent call's dynamic instruction defines that child role's temporary business job. The code argument is executable workflow code, not a code sample. Use only declared workflow capabilities and return a JSON-compatible value. Execution is not transactional; later failures or retries do not roll back side effects."
 
 const codeCallableToolDescription = "Code-callable host tools are enabled for this workflow. Call await call_tool(\"tool_name\", **json_arguments) only for the documented allowlisted tools below. Do not parallelize mutating tool calls; use child agents for concurrent work."
 
@@ -125,18 +125,23 @@ func (t *workflowTool) Declaration() *tool.Declaration {
 	if capabilities := buildCapabilityHelp(t.agents, t.tools); capabilities != "" {
 		description += "\n\nHost capabilities available inside Python:\n" + capabilities
 	}
-	codeDescription := `Write the executable workflow body itself: use await directly and finish with return. Do not assign the program to code, put it in a quoted string or Markdown fence, return Python source, define an uncalled wrapper such as async def run(), define or run main(), call asyncio.run(), import modules, or access undeclared host capabilities. Use Python True/False/None in source (JSON-style true/false/null aliases are also accepted in generated AgentSpec dictionaries). Use await agent(input, options=None) or await agent(input, **options) to create and run one child Agent. options may set template, instruction, instance_id, tools, skills, and structured_output; schema is shorthand for structured_output.schema. If exactly one template is registered, template may be omitted. Omitted tools and skills inherit eligible template capabilities; use [] to disable a capability type or a non-empty list to narrow it. Pass schema as a Python dict literal; do not import json or call json.dumps. agent returns an envelope with text and optional structured fields; prefer result["structured"], and missing result["field"] / result.get("field") fall back to structured.
+	// Keep model guidance on the canonical direct-body form. LocalRunner
+	// separately tolerates a sole run/main wrapper as a recovery path for
+	// common non-canonical model output.
+	codeDescription := `Write a short executable workflow body: use await directly and finish with return. Python is orchestration glue only; delegate substantive work to agent(...) and use Python for control flow and small JSON data shaping. Do not assign the program to code, put it in a quoted string or Markdown fence, return Python source, define an uncalled wrapper, call asyncio.run(), import modules, use class/with/try/global/nonlocal, embed task deliverables or large scripts, or access undeclared host capabilities. Use Python True/False/None in source (JSON-style true/false/null aliases are also accepted in generated AgentSpec dictionaries). Use await agent(input, options=None) or await agent(input, **options) to create and run one child Agent. options may set template, instruction, instance_id, tools, skills, and structured_output; schema is shorthand for structured_output.schema. If exactly one template is registered, template may be omitted. Omitted tools and skills inherit eligible template capabilities; use [] to disable a capability type or a non-empty list to narrow it. For values used by later conditions or loops, request schema as a Python dict and read result["structured"]; do not ask for JSON text or parse JSON in workflow code. For provider-portable visible tool use, first collect unstructured tool-grounded text, then pass it to a tools=[] agent call with schema instead of combining non-empty tools with schema/structured_output. agent returns an envelope with text and optional structured fields. Pass or return result["text"] for plain text and result["structured"] for typed data; do not forward the full envelope unless its metadata is needed. Missing result["field"] / result.get("field") fall back to structured.
 
 Canonical one-shot pattern:
 draft = await agent("Write a concise draft.", instruction="Write the first draft.", tools=[])
-for _ in range(3):
-    review = await agent({"draft": draft}, instruction="Review the draft and return approved plus feedback.", schema={"type": "object", "properties": {"approved": {"type": "boolean"}, "feedback": {"type": "string"}}})
-    if review["approved"]:
+draft_text = draft["text"]
+for attempt in range(3):
+    review = await agent({"draft": draft_text}, instruction="Review the draft and return approved plus feedback.", schema={"type": "object", "properties": {"approved": {"type": "boolean"}, "feedback": {"type": "string"}}}, tools=[])
+    if review["approved"] or attempt == 2:
         break
-    draft = await agent({"draft": draft, "feedback": review["feedback"]}, instruction="Revise the draft.", tools=[])
-return {"draft": draft, "review": review}
+    revised = await agent({"draft": draft_text, "feedback": review["feedback"]}, instruction="Revise the draft using every feedback item.", tools=[])
+    draft_text = revised["text"]
+return {"draft": draft_text, "review": review["structured"]}
 
-Short parallel idiom: analyses = await parallel([lambda: agent("Option A", instruction="Analyze"), lambda: agent("Option B", instruction="Analyze")]). parallel([lambda: agent(...), ...]) runs independent branches concurrently and preserves input order. pipeline(items, stage1, ...) runs each item through async stages; each stage receives (previous_result, original_item, index).`
+Short parallel idiom: analyses = await parallel([lambda: agent("Option A", instruction="Analyze"), lambda: agent("Option B", instruction="Analyze")]). parallel([lambda: agent(...), ...]) runs independent branches concurrently, preserves input order, and returns None for a failed branch. pipeline(items, stage1, ...) runs each item through async stages; a stage may accept previous, (previous, original), or (previous, original, index), and a failed item becomes None.`
 	if len(t.tools) > 0 {
 		codeDescription += " Code-callable host tools are enabled: use await call_tool(name, **json_arguments) only for the documented allowlisted tools."
 	}
@@ -336,11 +341,95 @@ func sendWorkflowStreamError(
 	if writer == nil || err == nil {
 		return
 	}
-	evt := event.NewErrorEvent("", "", model.ErrorTypeFlowError, err.Error())
+	evt := event.NewErrorEvent(
+		"",
+		"",
+		model.ErrorTypeFlowError,
+		modelVisibleWorkflowError(err),
+	)
 	if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
 		agent.InjectIntoEvent(inv, evt)
 	}
 	_ = writer.Send(tool.StreamChunk{Content: evt}, nil)
+}
+
+func modelVisibleWorkflowError(err error) string {
+	if err == nil {
+		return ""
+	}
+	message := strings.TrimSpace(err.Error())
+	if !strings.Contains(message, "Traceback (most recent call last):") ||
+		(!strings.Contains(message, "<dynamic-workflow>") &&
+			!strings.Contains(message, "workflow code ")) {
+		return message
+	}
+	summary := generatedWorkflowExceptionSummary(message)
+	switch {
+	case strings.Contains(summary, "unsupported Python syntax: Import"):
+		return summary + "; remove imports because agent, parallel, pipeline, " +
+			"and direct await are already available"
+	case strings.Contains(summary, "workflow code must contain a return statement"):
+		return summary + "; return a JSON-compatible value from the workflow body"
+	case strings.Contains(summary, "Invalid format specifier"):
+		return summary + "; escape literal braces in f-strings or pass a schema " +
+			"as a Python dict instead of embedding JSON text"
+	default:
+		return summary
+	}
+}
+
+func generatedWorkflowExceptionSummary(message string) string {
+	lines := strings.Split(message, "\n")
+	tracebackStart := 0
+	for index, line := range lines {
+		if strings.Contains(line, "Traceback (most recent call last):") {
+			tracebackStart = index + 1
+		}
+	}
+	exceptionStart := -1
+	for index := tracebackStart; index < len(lines); index++ {
+		if workflowExceptionLine(lines[index]) {
+			exceptionStart = index
+			break
+		}
+	}
+	if exceptionStart < 0 {
+		for index := len(lines) - 1; index >= tracebackStart; index-- {
+			if strings.TrimSpace(lines[index]) != "" {
+				return strings.TrimSpace(lines[index])
+			}
+		}
+		return strings.TrimSpace(message)
+	}
+	start := exceptionStart
+	exception := strings.TrimSpace(lines[exceptionStart])
+	if strings.HasPrefix(exception, "SyntaxError:") ||
+		strings.HasPrefix(exception, "IndentationError:") ||
+		strings.HasPrefix(exception, "TabError:") {
+		for index := exceptionStart - 1; index >= tracebackStart; index-- {
+			if strings.Contains(lines[index], `File "<dynamic-workflow>"`) {
+				start = index
+				break
+			}
+		}
+	}
+	return strings.TrimSpace(strings.Join(lines[start:], "\n"))
+}
+
+func workflowExceptionLine(line string) bool {
+	if line == "" || line != strings.TrimSpace(line) {
+		return false
+	}
+	colon := strings.IndexByte(line, ':')
+	if colon <= 0 {
+		return false
+	}
+	name := line[:colon]
+	if strings.ContainsAny(name, " \t/\\") {
+		return false
+	}
+	return strings.HasSuffix(name, "Error") ||
+		strings.HasSuffix(name, "Exception")
 }
 
 type workflowGateway struct {

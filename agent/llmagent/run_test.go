@@ -139,7 +139,7 @@ func TestLLMAgent_Run_BeforeCallbackCust(t *testing.T) {
 	require.NotNil(t, executionTrace)
 	require.Len(t, executionTrace.Steps, 1)
 	require.False(t, executionTrace.Steps[0].EndedAt.IsZero())
-	require.Equal(t, "llm", executionTrace.Steps[0].NodeType)
+	require.Equal(t, "agent", executionTrace.Steps[0].NodeType)
 	require.Contains(t, executionTrace.Steps[0].Input.Text, "hello")
 	require.Contains(t, executionTrace.Steps[0].Output.Text, "before")
 }
@@ -227,8 +227,8 @@ func TestLLMAgent_Run_SameInvocationTwiceCreatesTwoSteps(t *testing.T) {
 	require.Len(t, executionTrace.Steps, 2)
 	require.NotEqual(t, executionTrace.Steps[0].StepID, executionTrace.Steps[1].StepID)
 	require.Equal(t, executionTrace.Steps[0].NodeID, executionTrace.Steps[1].NodeID)
-	require.Equal(t, "llm", executionTrace.Steps[0].NodeType)
-	require.Equal(t, "llm", executionTrace.Steps[1].NodeType)
+	require.Equal(t, "agent", executionTrace.Steps[0].NodeType)
+	require.Equal(t, "agent", executionTrace.Steps[1].NodeType)
 	require.False(t, executionTrace.Steps[0].EndedAt.IsZero())
 	require.False(t, executionTrace.Steps[1].EndedAt.IsZero())
 }

@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -30,6 +31,31 @@ type errReader struct{}
 
 func (errReader) Read(_ []byte) (int, error) {
 	return 0, errors.New("read failed")
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(
+	req *http.Request,
+) (*http.Response, error) {
+	return f(req)
+}
+
+func TestBlockedFetchPageReasonIgnoresSecurityArticleTerms(t *testing.T) {
+	t.Parallel()
+
+	reason, blocked := blockedFetchPageReason(
+		"This security article compares anti-bot systems, CAPTCHA " +
+			"providers, and bot check terminology without blocking access.",
+	)
+	require.False(t, blocked)
+	require.Empty(t, reason)
+
+	reason, blocked = blockedFetchPageReason(
+		"Anti-bot security check: access blocked; verify to continue.",
+	)
+	require.True(t, blocked)
+	require.Contains(t, reason, "bot-check")
 }
 
 func TestWebFetch(t *testing.T) {
@@ -138,6 +164,161 @@ func TestWebFetch_HTTPErrorIncludesStatusTextAndBodySnippet(
 		"HTTP status 429 Too Many Requests",
 	)
 	require.Contains(t, resp.Results[0].Error, "Too Many Requests")
+}
+
+func TestWebFetch_HTTPErrorIncludesBlockedPageHintWhenEnabled(
+	t *testing.T,
+) {
+	ts := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprint(
+				w,
+				`<html><head><title>Just a moment...</title></head>`+
+					`<body>Checking if the site connection is secure.</body>`,
+			)
+		},
+	))
+	defer ts.Close()
+
+	tool := NewTool(WithBlockedPageDetection(true))
+	args := fmt.Sprintf(`{"urls": ["%s"]}`, ts.URL)
+
+	res, err := tool.Call(context.Background(), []byte(args))
+	require.NoError(t, err)
+
+	resp := res.(fetchResponse)
+	require.Len(t, resp.Results, 1)
+	require.Empty(t, resp.Results[0].Content)
+	require.Contains(t, resp.Results[0].Error, "HTTP status 403")
+	require.Contains(t, resp.Results[0].Error, "page appears blocked")
+	require.Contains(t, resp.Results[0].Error, "Cloudflare")
+}
+
+func TestWebFetch_HTTPErrorDetectsShortJustAMomentBody(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprint(w, "Just a moment......")
+		},
+	))
+	defer ts.Close()
+
+	tool := NewTool(WithBlockedPageDetection(true))
+	args := fmt.Sprintf(`{"urls": ["%s"]}`, ts.URL)
+
+	res, err := tool.Call(context.Background(), []byte(args))
+	require.NoError(t, err)
+
+	resp := res.(fetchResponse)
+	require.Len(t, resp.Results, 1)
+	require.Empty(t, resp.Results[0].Content)
+	require.Contains(t, resp.Results[0].Error, "HTTP status 403")
+	require.Contains(t, resp.Results[0].Error, "page appears blocked")
+	require.Contains(t, resp.Results[0].Error, "Cloudflare")
+}
+
+func TestWebFetch_BlocksSearchResultPagesWhenEnabled(t *testing.T) {
+	tool := NewTool(WithSearchResultPageBlocking(true))
+	args := `{"urls": ["https://www.google.com/search?q=openclaw"]}`
+
+	res, err := tool.Call(context.Background(), []byte(args))
+	require.NoError(t, err)
+
+	resp := res.(fetchResponse)
+	require.Len(t, resp.Results, 1)
+	require.Empty(t, resp.Results[0].Content)
+	require.Contains(
+		t,
+		resp.Results[0].Error,
+		"web_fetch search-result page is blocked",
+	)
+	require.Contains(t, resp.Results[0].Error, "Google search")
+}
+
+func TestWebFetch_BlocksRedirectedSearchResultPages(t *testing.T) {
+	redirects := 0
+	client := &http.Client{
+		Transport: roundTripFunc(func(
+			req *http.Request,
+		) (*http.Response, error) {
+			if req.URL.Host == "example.com" {
+				return &http.Response{
+					StatusCode: http.StatusFound,
+					Header: http.Header{
+						"Location": []string{
+							"https://www.google.com/search?q=openclaw",
+						},
+					},
+					Body:    http.NoBody,
+					Request: req,
+				}, nil
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Content-Type": []string{"text/html"},
+				},
+				Body: io.NopCloser(strings.NewReader(
+					"<html><body>results</body></html>",
+				)),
+				Request: req,
+			}, nil
+		}),
+		CheckRedirect: func(
+			_ *http.Request,
+			_ []*http.Request,
+		) error {
+			redirects++
+			return nil
+		},
+	}
+	tool := NewTool(
+		WithHTTPClient(client),
+		WithSearchResultPageBlocking(true),
+	)
+
+	res, err := tool.Call(
+		context.Background(),
+		[]byte(`{"urls":["https://example.com/start"]}`),
+	)
+	require.NoError(t, err)
+	response := res.(fetchResponse)
+	require.Equal(t, 1, redirects)
+	require.Len(t, response.Results, 1)
+	require.Contains(
+		t,
+		response.Results[0].Error,
+		"web_fetch search-result page is blocked",
+	)
+}
+
+func TestWebFetch_DetectsBlockedPagesWhenEnabled(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(
+				w,
+				`<html><head><title>Just a moment...</title></head>`+
+					`<body>Checking if the site connection is secure.</body>`,
+			)
+		},
+	))
+	defer ts.Close()
+
+	tool := NewTool(WithBlockedPageDetection(true))
+	args := fmt.Sprintf(`{"urls": ["%s"]}`, ts.URL)
+
+	res, err := tool.Call(context.Background(), []byte(args))
+	require.NoError(t, err)
+
+	resp := res.(fetchResponse)
+	require.Len(t, resp.Results, 1)
+	require.Empty(t, resp.Results[0].Content)
+	require.Contains(t, resp.Results[0].Error, "page appears blocked")
+	require.Contains(t, resp.Results[0].Error, "Cloudflare")
 }
 
 func TestWebFetch_PlainText(t *testing.T) {
@@ -854,6 +1035,106 @@ func TestWebFetch_CombinedFilters(t *testing.T) {
 	resp := res.(fetchResponse)
 	assert.Len(t, resp.Results, 1)
 	assert.Equal(t, "Success", resp.Results[0].Content)
+}
+
+func TestWebFetch_SearchResultPageRules(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+		ok   bool
+	}{
+		{
+			name: "DuckDuckGo main search",
+			raw:  "https://duckduckgo.com/?q=openclaw",
+			want: "DuckDuckGo search",
+			ok:   true,
+		},
+		{
+			name: "DuckDuckGo HTML search",
+			raw:  "https://html.duckduckgo.com/html/?q=openclaw",
+			want: "DuckDuckGo HTML search",
+			ok:   true,
+		},
+		{
+			name: "DuckDuckGo Lite search",
+			raw:  "https://lite.duckduckgo.com/lite/?q=openclaw",
+			want: "DuckDuckGo Lite search",
+			ok:   true,
+		},
+		{
+			name: "Google search",
+			raw:  "https://www.google.com/search?q=openclaw",
+			want: "Google search",
+			ok:   true,
+		},
+		{
+			name: "Google Scholar search",
+			raw:  "https://scholar.google.com/scholar?q=openclaw",
+			want: "Google Scholar search",
+			ok:   true,
+		},
+		{
+			name: "Google cached search",
+			raw:  "https://webcache.googleusercontent.com/search?q=cache:x",
+			want: "Google cached search",
+			ok:   true,
+		},
+		{
+			name: "Brave Search",
+			raw:  "https://search.brave.com/search?q=openclaw",
+			want: "Brave Search",
+			ok:   true,
+		},
+		{
+			name: "Bing search",
+			raw:  "https://www.bing.com/search?q=openclaw",
+			want: "Bing search",
+			ok:   true,
+		},
+		{
+			name: "Yahoo search",
+			raw:  "https://search.yahoo.com/search?p=openclaw",
+			want: "Yahoo search",
+			ok:   true,
+		},
+		{
+			name: "DuckDuckGo homepage without query",
+			raw:  "https://duckduckgo.com/",
+		},
+		{
+			name: "Google normal page",
+			raw:  "https://www.google.com/about/",
+		},
+		{
+			name: "Google search subpage without query",
+			raw:  "https://www.google.com/search/about",
+		},
+		{
+			name: "Google cached search subpage without query",
+			raw:  "https://webcache.googleusercontent.com/search/about",
+		},
+		{
+			name: "Bing search subpage without query",
+			raw:  "https://www.bing.com/search/overview",
+		},
+		{
+			name: "Brave Search subpage without query",
+			raw:  "https://search.brave.com/search/help",
+		},
+		{
+			name: "Yahoo search subpage without query",
+			raw:  "https://search.yahoo.com/search/help",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := blockedSearchResultPage(tt.raw)
+			require.Equal(t, tt.ok, ok)
+			require.Equal(t, tt.want, got)
+		})
+	}
 }
 
 // ============================================================================

@@ -235,3 +235,57 @@ func TestResolver_CreateWorkspace_InjectsArtifactContext(t *testing.T) {
 	require.Equal(t, "myapp/u1/sess-art", ws.ID)
 	require.True(t, probe.sawOK)
 }
+
+type resolverInstanceManager struct {
+	instanceID codeexecutor.WorkspaceInstanceID
+	creates    int
+}
+
+func (m *resolverInstanceManager) CreateWorkspace(
+	_ context.Context,
+	id string,
+	_ codeexecutor.WorkspacePolicy,
+) (codeexecutor.Workspace, error) {
+	m.creates++
+	return codeexecutor.Workspace{ID: id, Path: "/tmp/" + id}, nil
+}
+
+func (*resolverInstanceManager) Cleanup(
+	context.Context,
+	codeexecutor.Workspace,
+) error {
+	return nil
+}
+
+func (m *resolverInstanceManager) InstanceID(
+	context.Context,
+) (codeexecutor.WorkspaceInstanceID, error) {
+	return m.instanceID, nil
+}
+
+func TestResolver_InvalidateWorkspaceHandle_UsesInvocationKey(t *testing.T) {
+	mgr := &resolverInstanceManager{instanceID: "instance-1"}
+	eng := codeexecutor.NewEngine(
+		mgr,
+		&resolverStubFS{},
+		&resolverStubRunner{},
+	)
+	r := NewResolver(nil, nil)
+	inv := agent.NewInvocation()
+	inv.Session = &session.Session{
+		AppName: "app",
+		UserID:  "user",
+		ID:      "session",
+	}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	handle, err := r.CreateWorkspaceHandle(ctx, eng, "fallback")
+	require.NoError(t, err)
+	require.Equal(t, 1, mgr.creates)
+	require.False(t, NewResolver(nil, nil).InvalidateWorkspaceHandle(handle))
+	require.True(t, r.InvalidateWorkspaceHandle(handle))
+
+	_, err = r.CreateWorkspace(ctx, eng, "fallback")
+	require.NoError(t, err)
+	require.Equal(t, 2, mgr.creates)
+}

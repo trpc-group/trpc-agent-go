@@ -666,6 +666,125 @@ func TestTranslateErrorResponse(t *testing.T) {
 	assert.Equal(t, "run", runErr.RunID())
 }
 
+func TestTranslateErrorObservationClosesOnTerminalError(t *testing.T) {
+	translator := newTranslatorForTest(t)
+	if translator == nil {
+		return
+	}
+	observation := &model.Response{
+		ID:        "inv-1:codex-error-observation",
+		Object:    model.ObjectTypeChatCompletionChunk,
+		IsPartial: true,
+		Choices: []model.Choice{{
+			Delta: model.Message{Role: model.RoleAssistant, Content: "first failure"},
+		}},
+	}
+	events, err := translator.Translate(context.Background(), &agentevent.Event{Response: observation})
+	assert.NoError(t, err)
+	assert.Len(t, events, 2)
+	start, ok := events[0].(*aguievents.TextMessageStartEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "inv-1:codex-error-observation", start.MessageID)
+	content, ok := events[1].(*aguievents.TextMessageContentEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "inv-1:codex-error-observation", content.MessageID)
+	assert.Equal(t, "first failure", content.Delta)
+	terminal := &model.Response{
+		Object: model.ObjectTypeError,
+		Done:   true,
+		Error:  &model.ResponseError{Message: "final failure"},
+	}
+	events, err = translator.Translate(context.Background(), &agentevent.Event{Response: terminal})
+	assert.NoError(t, err)
+	assert.Len(t, events, 2)
+	end, ok := events[0].(*aguievents.TextMessageEndEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "inv-1:codex-error-observation", end.MessageID)
+	runErr, ok := events[1].(*aguievents.RunErrorEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "final failure", runErr.Message)
+}
+
+func TestTranslateAssistantToolAssistantClosesTextBoundary(t *testing.T) {
+	translator := newTranslatorForTest(t)
+	if translator == nil {
+		return
+	}
+	firstAssistant := &model.Response{
+		ID:        "assistant-1",
+		Object:    model.ObjectTypeChatCompletionChunk,
+		IsPartial: true,
+		Choices: []model.Choice{{
+			Delta: model.Message{Role: model.RoleAssistant, Content: "good luck"},
+		}},
+	}
+	events, err := translator.Translate(context.Background(), &agentevent.Event{Response: firstAssistant})
+	assert.NoError(t, err)
+	assert.Len(t, events, 2)
+	toolCall := model.ToolCall{
+		ID: "call-1",
+		Function: model.FunctionDefinitionParam{
+			Name:      "shell",
+			Arguments: []byte(`{"command":"printf done"}`),
+		},
+	}
+	startedTool := &model.Response{
+		Object:    model.ObjectTypeChatCompletion,
+		IsPartial: true,
+		Choices: []model.Choice{{
+			Message: model.Message{Role: model.RoleAssistant, ToolCalls: []model.ToolCall{toolCall}},
+		}},
+	}
+	events, err = translator.Translate(context.Background(), &agentevent.Event{ID: "tool-start", Response: startedTool})
+	assert.NoError(t, err)
+	assert.Len(t, events, 4)
+	endText, ok := events[0].(*aguievents.TextMessageEndEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "assistant-1", endText.MessageID)
+	startTool, ok := events[1].(*aguievents.ToolCallStartEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "call-1", startTool.ToolCallID)
+	completedTool := &model.Response{
+		Object: model.ObjectTypeChatCompletion,
+		Choices: []model.Choice{{
+			Message: model.Message{Role: model.RoleAssistant, ToolCalls: []model.ToolCall{toolCall}},
+		}},
+	}
+	events, err = translator.Translate(context.Background(), &agentevent.Event{ID: "tool-complete", Response: completedTool})
+	assert.NoError(t, err)
+	assert.Empty(t, events)
+	toolResult := &model.Response{
+		Object: model.ObjectTypeToolResponse,
+		Choices: []model.Choice{{
+			Message: model.Message{Role: model.RoleTool, ToolID: "call-1", Content: "done"},
+		}},
+	}
+	events, err = translator.Translate(context.Background(), &agentevent.Event{ID: "tool-result", Response: toolResult})
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+	result, ok := events[0].(*aguievents.ToolCallResultEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "tool-result", result.MessageID)
+	secondAssistant := &model.Response{
+		ID:        "assistant-2",
+		Object:    model.ObjectTypeChatCompletionChunk,
+		IsPartial: true,
+		Choices: []model.Choice{{
+			Delta: model.Message{Role: model.RoleAssistant, Content: "practice makes perfect"},
+		}},
+	}
+	events, err = translator.Translate(context.Background(), &agentevent.Event{Response: secondAssistant})
+	assert.NoError(t, err)
+	assert.Len(t, events, 2)
+	startText, ok := events[0].(*aguievents.TextMessageStartEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "assistant-2", startText.MessageID)
+	content, ok := events[1].(*aguievents.TextMessageContentEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "assistant-2", content.MessageID)
+	assert.Equal(t, "practice makes perfect", content.Delta)
+}
+
 func TestTranslateErrorResponseClosesOpenToolCallDelta(t *testing.T) {
 	translator := newTranslatorImplForTest(t, WithToolCallDeltaStreamingEnabled(true))
 	if translator == nil {
@@ -2603,8 +2722,11 @@ func TestTranslateToolResultResponse(t *testing.T) {
 		},
 	})
 	assert.NoError(t, err)
-	assert.Len(t, events, 1)
-	result, ok := events[0].(*aguievents.ToolCallResultEvent)
+	assert.Len(t, events, 2)
+	endText, ok := events[0].(*aguievents.TextMessageEndEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "msg-1", endText.MessageID)
+	result, ok := events[1].(*aguievents.ToolCallResultEvent)
 	assert.True(t, ok)
 	assert.Equal(t, "evt-tool-1", result.MessageID)
 	assert.Equal(t, "tool-1", result.ToolCallID)

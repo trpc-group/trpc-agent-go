@@ -11,6 +11,7 @@ package processor
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"strings"
 	"sync"
@@ -24,6 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/messageorigin"
 	"trpc.group/trpc-go/trpc-agent-go/internal/util/message"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -3873,7 +3875,62 @@ func TestContentRequestProcessor_shouldIncludeEvent(t *testing.T) {
 	}
 }
 
-func TestContentRequestProcessor_getIncrementMessages_SummaryPreservesToolState(t *testing.T) {
+func TestContentRequestProcessor_CurrentTurnOriginRequiresSameInvocation(
+	t *testing.T,
+) {
+	const eventID = "current-turn-event"
+	inv := agent.NewInvocation()
+	inv.InvocationID = "current-invocation"
+	inv.RunOptions.RequestID = "request"
+	messageorigin.MarkCurrentTurn(inv, eventID)
+	cutoffTime := time.Now()
+
+	tests := []struct {
+		name         string
+		invocationID string
+		want         bool
+	}{
+		{
+			name:         "same invocation",
+			invocationID: inv.InvocationID,
+			want:         true,
+		},
+		{
+			name:         "different invocation",
+			invocationID: "different-invocation",
+			want:         false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			evt := event.Event{
+				ID:           eventID,
+				RequestID:    inv.RunOptions.RequestID,
+				InvocationID: tt.invocationID,
+				Timestamp:    cutoffTime.Add(-time.Hour),
+				Response: &model.Response{
+					Choices: []model.Choice{{
+						Message: model.NewAssistantMessage("context"),
+					}},
+				},
+			}
+			eventCutoff := newEventHistoryCutoff(
+				[]event.Event{evt},
+				summaryHistoryCutoffFromTime(cutoffTime),
+			)
+			got, _ := (&ContentRequestProcessor{}).shouldIncludeEvent(
+				evt,
+				0,
+				inv,
+				"",
+				eventCutoff,
+			)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestContentRequestProcessor_getIncrementMessages_BoundedResumeTail(t *testing.T) {
 	baseTime := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
 	userMsg := model.NewUserMessage("run the task")
 	toolCall1 := model.Message{
@@ -3893,7 +3950,7 @@ func TestContentRequestProcessor_getIncrementMessages_SummaryPreservesToolState(
 		Role:     model.RoleTool,
 		ToolID:   "call_1",
 		ToolName: "step_worker",
-		Content:  "step-1-large-result",
+		Content:  strings.Repeat("step-1-large-result;", 20),
 	}
 	toolCall2 := model.Message{
 		Role:    model.RoleAssistant,
@@ -3992,7 +4049,8 @@ func TestContentRequestProcessor_getIncrementMessages_SummaryPreservesToolState(
 
 	p := NewContentRequestProcessor(
 		WithAddSessionSummary(true),
-		WithContextCompactionToolResultMaxTokens(1),
+		WithEnableContextCompaction(true),
+		WithContextCompactionToolResultMaxTokens(10),
 	)
 	messages := p.getIncrementMessagesAfterCutoff(
 		inv,
@@ -4007,19 +4065,337 @@ func TestContentRequestProcessor_getIncrementMessages_SummaryPreservesToolState(
 		assert.True(t, model.MessagesEqual(userMsg, messages[0]))
 		assert.Equal(t, toolCall1.Content, messages[1].Content)
 		assert.Equal(t, toolCall1.ReasoningContent, messages[1].ReasoningContent)
-		assert.Equal(t, toolCall1.ToolCalls, messages[1].ToolCalls)
+		assert.Equal(t, "call_1", messages[1].ToolCalls[0].ID)
+		assert.JSONEq(t, `{"step":1}`, string(
+			messages[1].ToolCalls[0].Function.Arguments,
+		))
 		assert.Equal(t, model.RoleTool, messages[2].Role)
 		assert.Equal(t, toolResult1.ToolID, messages[2].ToolID)
 		assert.Equal(t, toolResult1.ToolName, messages[2].ToolName)
-		assert.Contains(t, messages[2].Content, compactedToolResultPlaceholder)
-		assert.Contains(t, messages[2].Content, "event_id: tool-result-1")
-		assert.Contains(t, messages[2].Content, "tool_call_id: call_1")
-		assert.Contains(t, messages[2].Content, "tool_name: step_worker")
+		expectedCompactedResult := recoverableToolResultPlaceholder(
+			toolResultRecoveryRefForMessage(
+				sess.Events[2],
+				toolResult1,
+				"current_invocation_summary",
+			),
+		)
+		assert.Equal(t, expectedCompactedResult, messages[2].Content)
 		assert.NotContains(t, messages[2].Content, toolResult1.Content)
 		assert.Equal(t, toolCall2.Content, messages[3].Content)
 		assert.Equal(t, toolCall2.ToolCalls, messages[3].ToolCalls)
 		assert.True(t, model.MessagesEqual(toolResult2, messages[4]))
 	}
+}
+
+func TestContentRequestProcessor_getIncrementMessages_CurrentTurnSkipsResumeTailCompaction(
+	t *testing.T,
+) {
+	baseTime := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	toolCall := model.Message{
+		Role: model.RoleAssistant,
+		ToolCalls: []model.ToolCall{{
+			Type: "function",
+			ID:   "call_1",
+			Function: model.FunctionDefinitionParam{
+				Name:      "step_worker",
+				Arguments: []byte(`{"step":1}`),
+			},
+		}},
+	}
+	toolResult := model.Message{
+		Role:     model.RoleTool,
+		ToolID:   "call_1",
+		ToolName: "step_worker",
+		Content:  strings.Repeat("current-turn-result;", 20),
+	}
+	events := []event.Event{
+		{
+			ID:           "tool-call",
+			Author:       "test-agent",
+			RequestID:    "req1",
+			InvocationID: "inv1",
+			Timestamp:    baseTime,
+			Version:      event.CurrentVersion,
+			Response: &model.Response{
+				Done:    true,
+				Choices: []model.Choice{{Message: toolCall}},
+			},
+		},
+		{
+			ID:           "tool-result",
+			Author:       "test-agent",
+			RequestID:    "req1",
+			InvocationID: "inv1",
+			Timestamp:    baseTime.Add(time.Second),
+			Version:      event.CurrentVersion,
+			Response: &model.Response{
+				Done:    true,
+				Object:  model.ObjectTypeToolResponse,
+				Choices: []model.Choice{{Message: toolResult}},
+			},
+		},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{Events: events}),
+		agent.WithInvocationID("inv1"),
+		agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req1"}),
+	)
+	inv.AgentName = "test-agent"
+	for _, evt := range events {
+		messageorigin.MarkCurrentTurn(inv, evt.ID)
+	}
+
+	p := NewContentRequestProcessor(
+		WithAddSessionSummary(true),
+		WithEnableContextCompaction(true),
+		WithContextCompactionToolResultMaxTokens(10),
+	)
+	cutoff := summaryHistoryCutoff{
+		at:          events[1].Timestamp,
+		lastEventID: events[1].ID,
+	}
+	messages := p.getIncrementMessagesAfterCutoff(
+		inv,
+		nil,
+		cutoff,
+	)
+
+	require.Len(t, messages, 2)
+	require.Equal(t, toolCall, messages[0])
+	require.Equal(t, toolResult, messages[1])
+	require.False(
+		t,
+		p.hasCompactedCurrentInvocationToolResultsAfterCutoff(inv, cutoff),
+	)
+}
+
+func TestCompactResumeToolRoundPreservesCompactionSemantics(t *testing.T) {
+	arguments := []byte(`{"value":"payload"}`)
+	newTail := func(results ...string) map[int]event.Event {
+		calls := make([]model.ToolCall, 0, len(results))
+		choices := make([]model.Choice, 0, len(results))
+		for i, result := range results {
+			callID := fmt.Sprintf("call-%d", i)
+			calls = append(calls, model.ToolCall{
+				ID: callID,
+				Function: model.FunctionDefinitionParam{
+					Name:      "worker",
+					Arguments: append([]byte(nil), arguments...),
+				},
+			})
+			choices = append(choices, model.Choice{
+				Index: i,
+				Message: model.NewToolMessage(
+					callID,
+					"worker",
+					result,
+				),
+			})
+		}
+		return map[int]event.Event{
+			0: {
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{
+						Role:      model.RoleAssistant,
+						ToolCalls: calls,
+					},
+				}}},
+			},
+			1: {
+				Response: &model.Response{Choices: choices},
+			},
+		}
+	}
+
+	t.Run("default processor leaves the resumed round unchanged", func(t *testing.T) {
+		p := NewContentRequestProcessor()
+		tail := newTail("large result")
+		got := compactResumeToolRound(
+			context.Background(),
+			tail,
+			normalizeContextCompactionConfig(p.ContextCompactionConfig),
+		)
+
+		require.Equal(t, "large result", got[1].Choices[0].Message.Content)
+		require.Equal(t, arguments,
+			got[0].Choices[0].Message.ToolCalls[0].Function.Arguments)
+	})
+
+	t.Run("parallel results are compared with the limit individually", func(t *testing.T) {
+		tail := newTail("small result one", "small result two")
+		got := compactResumeToolRound(
+			context.Background(),
+			tail,
+			normalizeContextCompactionConfig(ContextCompactionConfig{
+				Enabled:             true,
+				ToolResultMaxTokens: 6,
+				TokenCounter: &sequenceTokenCounter{
+					counts: []int{1, 1, 5, 5},
+				},
+			}),
+		)
+
+		require.Equal(t, "small result one", got[1].Choices[0].Message.Content)
+		require.Equal(t, "small result two", got[1].Choices[1].Message.Content)
+		for _, call := range got[0].Choices[0].Message.ToolCalls {
+			require.Equal(t, arguments, call.Function.Arguments)
+		}
+	})
+
+	t.Run("only an individually oversized result is compacted", func(t *testing.T) {
+		tail := newTail("small result", "large result")
+		largeResultEvent := tail[1]
+		largeResult := largeResultEvent.Choices[1].Message
+		got := compactResumeToolRound(
+			context.Background(),
+			tail,
+			normalizeContextCompactionConfig(ContextCompactionConfig{
+				Enabled:             true,
+				ToolResultMaxTokens: 6,
+				TokenCounter: &sequenceTokenCounter{
+					counts: []int{1, 1, 5, 9},
+				},
+			}),
+		)
+
+		require.Equal(t, "small result", got[1].Choices[0].Message.Content)
+		expectedCompactedResult := recoverableToolResultPlaceholder(
+			toolResultRecoveryRefForMessage(
+				largeResultEvent,
+				largeResult,
+				"current_invocation_summary",
+			),
+		)
+		require.Equal(t, expectedCompactedResult,
+			got[1].Choices[1].Message.Content)
+		require.NotContains(t, got[1].Choices[1].Message.Content,
+			largeResult.Content)
+		for _, call := range got[0].Choices[0].Message.ToolCalls {
+			require.Equal(t, arguments, call.Function.Arguments)
+		}
+	})
+
+	t.Run("only individually oversized arguments are compacted", func(t *testing.T) {
+		tail := newTail("small result")
+		callEvent := tail[0]
+		callEvent.Choices[0].Message.ToolCalls[0].Function.Arguments = []byte(
+			strings.Repeat("large-argument ", 100),
+		)
+		tail[0] = callEvent
+		got := compactResumeToolRound(
+			context.Background(),
+			tail,
+			normalizeContextCompactionConfig(ContextCompactionConfig{
+				Enabled:             true,
+				ToolResultMaxTokens: 6,
+				TokenCounter: &sequenceTokenCounter{
+					counts: []int{9, 5},
+				},
+			}),
+		)
+
+		require.JSONEq(t, compactedToolArgumentsPlaceholder, string(
+			got[0].Choices[0].Message.ToolCalls[0].Function.Arguments,
+		))
+		require.Equal(t, "small result", got[1].Choices[0].Message.Content)
+	})
+}
+
+func TestContentRequestProcessor_LatestCompleteToolRoundBeforeCutoff(t *testing.T) {
+	baseTime := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	toolCallEvent := func(id string, callIDs ...string) event.Event {
+		calls := make([]model.ToolCall, 0, len(callIDs))
+		for _, callID := range callIDs {
+			calls = append(calls, model.ToolCall{
+				ID: callID,
+				Function: model.FunctionDefinitionParam{
+					Name:      "worker",
+					Arguments: []byte(`{"value":"payload"}`),
+				},
+			})
+		}
+		return event.Event{
+			ID:           id,
+			RequestID:    "req1",
+			InvocationID: "inv1",
+			Timestamp:    baseTime,
+			Version:      event.CurrentVersion,
+			Response: &model.Response{
+				ID:    "response-" + id,
+				Model: "provider-model",
+				Done:  true,
+				Choices: []model.Choice{{
+					Index: 7,
+					Message: model.Message{
+						Role:      model.RoleAssistant,
+						ToolCalls: calls,
+					},
+				}},
+			},
+		}
+	}
+	toolResultEvent := func(id string, callIDs ...string) event.Event {
+		choices := make([]model.Choice, 0, len(callIDs))
+		for i, callID := range callIDs {
+			choices = append(choices, model.Choice{
+				Index:   i,
+				Message: model.NewToolMessage(callID, "worker", "result"),
+			})
+		}
+		return event.Event{
+			ID:           id,
+			RequestID:    "req1",
+			InvocationID: "inv1",
+			Timestamp:    baseTime,
+			Version:      event.CurrentVersion,
+			Response: &model.Response{
+				Done:    true,
+				Object:  model.ObjectTypeToolResponse,
+				Choices: choices,
+			},
+		}
+	}
+	events := []event.Event{
+		toolCallEvent("call-old", "old"),
+		toolResultEvent("result-old", "old"),
+		toolCallEvent("call-new", "new-a", "new-b"),
+		toolResultEvent("result-new", "new-a", "new-b"),
+	}
+	for i := range events {
+		events[i].Timestamp = baseTime.Add(time.Duration(i) * time.Second)
+	}
+	sess := &session.Session{Events: events}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationID("inv1"),
+		agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req1"}),
+	)
+	p := NewContentRequestProcessor()
+	cutoff := newEventHistoryCutoff(
+		events,
+		summaryHistoryCutoff{
+			at:          events[3].Timestamp,
+			lastEventID: events[3].ID,
+		},
+	)
+
+	tail := p.latestCompleteToolRoundBeforeCutoff(
+		events,
+		inv,
+		nil,
+		"",
+		cutoff,
+	)
+	require.Len(t, tail, 2)
+	require.NotContains(t, tail, 0)
+	require.NotContains(t, tail, 1)
+	require.Contains(t, tail, 2)
+	require.Contains(t, tail, 3)
+	require.Equal(t, "response-call-new", tail[2].Response.ID)
+	require.Equal(t, "provider-model", tail[2].Response.Model)
+	require.Equal(t, 7, tail[2].Response.Choices[0].Index)
+	require.Len(t, tail[2].Response.Choices[0].Message.ToolCalls, 2)
+	require.Len(t, tail[3].Response.Choices, 2)
 }
 
 func TestContentRequestProcessor_getIncrementMessages_ExactBoundaryKeepsSameTimestampTail(t *testing.T) {
