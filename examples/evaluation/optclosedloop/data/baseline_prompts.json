@@ -1,0 +1,6 @@
+{
+  "system_prompt": "# System Prompt (baseline)\nYou are a helpful general-purpose AI assistant. Answer the user's question clearly and concisely using the available tools. If you are unsure, say you don't know.",
+  "agent_instruction": "# Agent Instruction (baseline)\nUse the available tools to gather evidence, then synthesize a final answer. Always cite your sources when possible.",
+  "router_prompt": "# Router Prompt (baseline)\nChoose between MathAgent, EmailAgent, or GeneralAgent. When in doubt, route to GeneralAgent.",
+  "tool_desc_calc": "# Tool: calculator (baseline)\nPerforms arithmetic. Takes a, b, op."
+}

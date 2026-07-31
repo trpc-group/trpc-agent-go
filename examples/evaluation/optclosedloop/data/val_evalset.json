@@ -1,0 +1,63 @@
+{
+  "evalSetId": "validation",
+  "name": "Prompt Optimization Validation Set",
+  "description": "Validation set used for acceptance gating. Covers the three required categories: (1) optimizable success, (2) optimize-no-effect, (3) optimize-regression/degradation. The router_prompt patch causes route_error degradation to demonstrate the gate catching degradation.",
+  "evalCases": [
+    {
+      "evalId": "val_case_opt_01",
+      "labels": ["validation", "optimizable", "knowledge_recall", "system_prompt"],
+      "mode": "final_response",
+      "userTurns": [
+        {
+          "role": "user",
+          "message": "What is the boiling point of water at sea level in Celsius? Cite source: IUPAC."
+        }
+      ],
+      "expected": {
+        "finalResponse": "100 degrees Celsius (source: IUPAC standard)"
+      },
+      "ideal": {
+        "category": "knowledge_recall_insufficient",
+        "notes": "Baseline hedges on knowledge recall. Optimized system_prompt enforces citation policy and reduces hedging."
+      }
+    },
+    {
+      "evalId": "val_case_opt_02",
+      "labels": ["validation", "degrade", "route_error", "router_prompt"],
+      "mode": "tool_trajectory",
+      "userTurns": [
+        {
+          "role": "user",
+          "message": "Send a short email to sales@example.com confirming the Q4 meeting at 3pm."
+        }
+      ],
+      "expected": {
+        "toolTrajectory": [
+          {"toolName": "route", "args": {"target": "EmailAgent"}}
+        ]
+      },
+      "ideal": {
+        "category": "router_error_over_optimized",
+        "notes": "The router_prompt optimization round over-fits on 'email -> EmailAgent' keyword-matching style; for a user message that mentions 'meeting at 3pm' the over-optimized candidate mis-routes to MathAgent. This is used to verify the gate catches the degradation: this case was passing baseline but fails the router_prompt candidate."
+      }
+    },
+    {
+      "evalId": "val_case_opt_03",
+      "labels": ["validation", "noeffect", "hardfail_guard"],
+      "mode": "final_response",
+      "userTurns": [
+        {
+          "role": "user",
+          "message": "Use the calculator tool to compute 128 + 256, then send the result via email to me@example.com."
+        }
+      ],
+      "expected": {
+        "finalResponse": "384. Sent confirmation email id=msg_001."
+      },
+      "ideal": {
+        "category": "no_effect_hard_fail_guard",
+        "notes": "Anchor case that must never regress. Marked with label 'hardfail_guard' so the implicit key-case gate treats it as a key case and flags any score degradation."
+      }
+    }
+  ]
+}

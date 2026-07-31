@@ -1,0 +1,1455 @@
+{
+  "appName": "trpc-agent-go-optclosedloop-demo",
+  "pipelineVersion": "v0.1.0-closedloop",
+  "mode": "fake_deterministic",
+  "startedAt": "2026-07-31T19:53:26.9222455+08:00",
+  "finishedAt": "2026-07-31T19:53:26.9222455+08:00",
+  "randomSeed": 20250101,
+  "promptTargets": [
+    {
+      "surfaceId": "system_prompt",
+      "description": "Top-level system prompt injected into every LLM call.",
+      "baselineText": "# System Prompt (baseline)\nYou are a helpful general-purpose AI assistant. Answer the user's question clearly and concisely using the available tools. If you are unsure, say you don't know."
+    },
+    {
+      "surfaceId": "tool_desc_calc",
+      "description": "Tool description for the calculator skill (used for tool-arg optimization).",
+      "baselineText": "# Tool: calculator (baseline)\nPerforms arithmetic. Takes a, b, op."
+    },
+    {
+      "surfaceId": "router_prompt",
+      "description": "Router decision rules when multi-agent routing is used.",
+      "baselineText": "# Router Prompt (baseline)\nChoose between MathAgent, EmailAgent, or GeneralAgent. When in doubt, route to GeneralAgent."
+    },
+    {
+      "surfaceId": "agent_instruction",
+      "description": "General agent behavior / decision policy.",
+      "baselineText": "# Agent Instruction (baseline)\nUse the available tools to gather evidence, then synthesize a final answer. Always cite your sources when possible."
+    }
+  ],
+  "gateConfig": {
+    "minValidationScoreGain": 0.05,
+    "allowNewHardFail": false
+  },
+  "baselineTrain": {
+    "evalSetId": "train",
+    "totalCases": 3,
+    "passedCases": 1,
+    "failedCases": 2,
+    "overallScore": 0.65,
+    "perCase": [
+      {
+        "evalCaseId": "train_case_opt_01",
+        "evalSetId": "train",
+        "overallPassed": false,
+        "metrics": [
+          {
+            "metricName": "overall",
+            "score": 0.45,
+            "threshold": 0.8,
+            "passed": false,
+            "evalStatus": "failed",
+            "reason": "final_response_mismatch: baseline agent hedges instead of answering; expected answer: Paris"
+          }
+        ],
+        "sessionId": "sess_train_train_case_opt_01_34792",
+        "finalResponse": "I don't have enough info to answer that.",
+        "traceId": "trace_train_train_case_opt_01"
+      },
+      {
+        "evalCaseId": "train_case_opt_02",
+        "evalSetId": "train",
+        "overallPassed": false,
+        "metrics": [
+          {
+            "metricName": "overall",
+            "score": 0.5,
+            "threshold": 0.8,
+            "passed": false,
+            "evalStatus": "failed",
+            "reason": "tool_argument_error: baseline passes string operand to calculator; expects numeric"
+          }
+        ],
+        "sessionId": "sess_train_train_case_opt_02_15610",
+        "finalResponse": "The result is: (error) invalid operand",
+        "toolTrajectory": [
+          {
+            "toolName": "calculator",
+            "args": {
+              "a": "five",
+              "b": "3",
+              "op": "+"
+            },
+            "error": "strconv.ParseFloat: invalid syntax"
+          }
+        ],
+        "traceId": "trace_train_train_case_opt_02"
+      },
+      {
+        "evalCaseId": "train_case_opt_03",
+        "evalSetId": "train",
+        "overallPassed": true,
+        "metrics": [
+          {
+            "metricName": "overall",
+            "score": 1,
+            "threshold": 0.8,
+            "passed": true,
+            "evalStatus": "passed"
+          }
+        ],
+        "sessionId": "sess_train_train_case_opt_03_5762",
+        "finalResponse": "Answer: 42",
+        "traceId": "trace_train_train_case_opt_03"
+      }
+    ],
+    "attribution": [
+      {
+        "evalCaseId": "train_case_opt_01",
+        "metricName": "overall",
+        "category": "final_response_mismatch",
+        "severity": "P1",
+        "reason": "final_response_mismatch: baseline agent hedges instead of answering; expected answer: Paris"
+      },
+      {
+        "evalCaseId": "train_case_opt_02",
+        "metricName": "overall",
+        "category": "tool_argument_error",
+        "severity": "P1",
+        "reason": "tool_argument_error: baseline passes string operand to calculator; expects numeric",
+        "evidence": [
+          "tool error: calculator -\u003e strconv.ParseFloat: invalid syntax"
+        ]
+      }
+    ]
+  },
+  "baselineVal": {
+    "evalSetId": "validation",
+    "totalCases": 3,
+    "passedCases": 2,
+    "failedCases": 1,
+    "overallScore": 0.7833333333333333,
+    "perCase": [
+      {
+        "evalCaseId": "val_case_opt_01",
+        "evalSetId": "validation",
+        "overallPassed": false,
+        "metrics": [
+          {
+            "metricName": "overall",
+            "score": 0.4,
+            "threshold": 0.8,
+            "passed": false,
+            "evalStatus": "failed",
+            "reason": "knowledge_recall_insufficient: baseline fails to remember the skill policy; should recall 'Always cite source when answering factual question'"
+          }
+        ],
+        "sessionId": "sess_validation_val_case_opt_01_62164",
+        "finalResponse": "Not sure about that.",
+        "traceId": "trace_validation_val_case_opt_01"
+      },
+      {
+        "evalCaseId": "val_case_opt_02",
+        "evalSetId": "validation",
+        "overallPassed": true,
+        "metrics": [
+          {
+            "metricName": "overall",
+            "score": 0.95,
+            "threshold": 0.8,
+            "passed": true,
+            "evalStatus": "passed"
+          }
+        ],
+        "sessionId": "sess_validation_val_case_opt_02_26620",
+        "finalResponse": "Routed to MathAgent: answer is 7.0 (expects EmailAgent)",
+        "toolTrajectory": [
+          {
+            "toolName": "route",
+            "args": {
+              "target": "MathAgent"
+            },
+            "output": "7.0"
+          }
+        ],
+        "traceId": "trace_validation_val_case_opt_02"
+      },
+      {
+        "evalCaseId": "val_case_opt_03",
+        "evalSetId": "validation",
+        "overallPassed": true,
+        "metrics": [
+          {
+            "metricName": "overall",
+            "score": 1,
+            "threshold": 0.8,
+            "passed": true,
+            "evalStatus": "passed"
+          }
+        ],
+        "sessionId": "sess_validation_val_case_opt_03_80702",
+        "finalResponse": "OK: email sent, id=msg_001",
+        "traceId": "trace_validation_val_case_opt_03"
+      }
+    ],
+    "attribution": [
+      {
+        "evalCaseId": "val_case_opt_01",
+        "metricName": "overall",
+        "category": "knowledge_recall_insufficient",
+        "severity": "P1",
+        "reason": "knowledge_recall_insufficient: baseline fails to remember the skill policy; should recall 'Always cite source when answering factual question'"
+      }
+    ]
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "timestamp": "2026-07-31T19:53:26.9222455+08:00",
+      "randomSeed": 20250132,
+      "trainSummary": {
+        "evalSetId": "train",
+        "totalCases": 3,
+        "passedCases": 1,
+        "failedCases": 2,
+        "overallScore": 0.65,
+        "perCase": [
+          {
+            "evalCaseId": "train_case_opt_01",
+            "evalSetId": "train",
+            "overallPassed": false,
+            "metrics": [
+              {
+                "metricName": "overall",
+                "score": 0.45,
+                "threshold": 0.8,
+                "passed": false,
+                "evalStatus": "failed",
+                "reason": "final_response_mismatch: baseline agent hedges instead of answering; expected answer: Paris"
+              }
+            ],
+            "sessionId": "sess_train_train_case_opt_01_89193",
+            "finalResponse": "I don't have enough info to answer that.",
+            "traceId": "trace_train_train_case_opt_01"
+          },
+          {
+            "evalCaseId": "train_case_opt_02",
+            "evalSetId": "train",
+            "overallPassed": false,
+            "metrics": [
+              {
+                "metricName": "overall",
+                "score": 0.5,
+                "threshold": 0.8,
+                "passed": false,
+                "evalStatus": "failed",
+                "reason": "tool_argument_error: baseline passes string operand to calculator; expects numeric"
+              }
+            ],
+            "sessionId": "sess_train_train_case_opt_02_36632",
+            "finalResponse": "The result is: (error) invalid operand",
+            "toolTrajectory": [
+              {
+                "toolName": "calculator",
+                "args": {
+                  "a": "five",
+                  "b": "3",
+                  "op": "+"
+                },
+                "error": "strconv.ParseFloat: invalid syntax"
+              }
+            ],
+            "traceId": "trace_train_train_case_opt_02"
+          },
+          {
+            "evalCaseId": "train_case_opt_03",
+            "evalSetId": "train",
+            "overallPassed": true,
+            "metrics": [
+              {
+                "metricName": "overall",
+                "score": 1,
+                "threshold": 0.8,
+                "passed": true,
+                "evalStatus": "passed"
+              }
+            ],
+            "sessionId": "sess_train_train_case_opt_03_14574",
+            "finalResponse": "Answer: 42",
+            "traceId": "trace_train_train_case_opt_03"
+          }
+        ],
+        "attribution": [
+          {
+            "evalCaseId": "train_case_opt_01",
+            "metricName": "overall",
+            "category": "final_response_mismatch",
+            "severity": "P1",
+            "reason": "final_response_mismatch: baseline agent hedges instead of answering; expected answer: Paris"
+          },
+          {
+            "evalCaseId": "train_case_opt_02",
+            "metricName": "overall",
+            "category": "tool_argument_error",
+            "severity": "P1",
+            "reason": "tool_argument_error: baseline passes string operand to calculator; expects numeric",
+            "evidence": [
+              "tool error: calculator -\u003e strconv.ParseFloat: invalid syntax"
+            ]
+          }
+        ]
+      },
+      "valBaseline": {
+        "evalSetId": "validation",
+        "totalCases": 3,
+        "passedCases": 2,
+        "failedCases": 1,
+        "overallScore": 0.7833333333333333,
+        "perCase": [
+          {
+            "evalCaseId": "val_case_opt_01",
+            "evalSetId": "validation",
+            "overallPassed": false,
+            "metrics": [
+              {
+                "metricName": "overall",
+                "score": 0.4,
+                "threshold": 0.8,
+                "passed": false,
+                "evalStatus": "failed",
+                "reason": "knowledge_recall_insufficient: baseline fails to remember the skill policy; should recall 'Always cite source when answering factual question'"
+              }
+            ],
+            "sessionId": "sess_validation_val_case_opt_01_62164",
+            "finalResponse": "Not sure about that.",
+            "traceId": "trace_validation_val_case_opt_01"
+          },
+          {
+            "evalCaseId": "val_case_opt_02",
+            "evalSetId": "validation",
+            "overallPassed": true,
+            "metrics": [
+              {
+                "metricName": "overall",
+                "score": 0.95,
+                "threshold": 0.8,
+                "passed": true,
+                "evalStatus": "passed"
+              }
+            ],
+            "sessionId": "sess_validation_val_case_opt_02_26620",
+            "finalResponse": "Routed to MathAgent: answer is 7.0 (expects EmailAgent)",
+            "toolTrajectory": [
+              {
+                "toolName": "route",
+                "args": {
+                  "target": "MathAgent"
+                },
+                "output": "7.0"
+              }
+            ],
+            "traceId": "trace_validation_val_case_opt_02"
+          },
+          {
+            "evalCaseId": "val_case_opt_03",
+            "evalSetId": "validation",
+            "overallPassed": true,
+            "metrics": [
+              {
+                "metricName": "overall",
+                "score": 1,
+                "threshold": 0.8,
+                "passed": true,
+                "evalStatus": "passed"
+              }
+            ],
+            "sessionId": "sess_validation_val_case_opt_03_80702",
+            "finalResponse": "OK: email sent, id=msg_001",
+            "traceId": "trace_validation_val_case_opt_03"
+          }
+        ],
+        "attribution": [
+          {
+            "evalCaseId": "val_case_opt_01",
+            "metricName": "overall",
+            "category": "knowledge_recall_insufficient",
+            "severity": "P1",
+            "reason": "knowledge_recall_insufficient: baseline fails to remember the skill policy; should recall 'Always cite source when answering factual question'"
+          }
+        ]
+      },
+      "attributions": [
+        {
+          "evalCaseId": "train_case_opt_01",
+          "metricName": "overall",
+          "category": "final_response_mismatch",
+          "severity": "P1",
+          "reason": "final_response_mismatch: baseline agent hedges instead of answering; expected answer: Paris"
+        },
+        {
+          "evalCaseId": "train_case_opt_02",
+          "metricName": "overall",
+          "category": "tool_argument_error",
+          "severity": "P1",
+          "reason": "tool_argument_error: baseline passes string operand to calculator; expects numeric",
+          "evidence": [
+            "tool error: calculator -\u003e strconv.ParseFloat: invalid syntax"
+          ]
+        }
+      ],
+      "candidate": {
+        "candidateId": "cand_r1_434792",
+        "round": 1,
+        "generatedBy": "promptiter_fake_deterministic",
+        "patches": {
+          "system_prompt": "# Optimized System Prompt\nYou are a precise and honest agent. For factual questions you MUST provide the direct answer and cite source when available; NEVER hedge ('I don't know') unless the knowledge is genuinely absent. Always end your response with a clear, concise final answer."
+        },
+        "rationale": "Top failed cases are FinalResponseMismatch and KnowledgeRecallInsufficient; tighten system-level answer policy. Attribution signal: final_response_mismatch=1, tool_argument_error=1"
+      },
+      "valCandidate": {
+        "evalSetId": "validation",
+        "totalCases": 3,
+        "passedCases": 3,
+        "failedCases": 0,
+        "overallScore": 0.9666666666666667,
+        "perCase": [
+          {
+            "evalCaseId": "val_case_opt_01",
+            "evalSetId": "validation",
+            "overallPassed": true,
+            "metrics": [
+              {
+                "metricName": "overall",
+                "score": 0.9500000000000001,
+                "threshold": 0.8,
+                "passed": true,
+                "evalStatus": "passed"
+              }
+            ],
+            "sessionId": "sess_validation_val_case_opt_01_36057",
+            "finalResponse": "Not sure about that.",
+            "traceId": "trace_validation_val_case_opt_01"
+          },
+          {
+            "evalCaseId": "val_case_opt_02",
+            "evalSetId": "validation",
+            "overallPassed": true,
+            "metrics": [
+              {
+                "metricName": "overall",
+                "score": 0.95,
+                "threshold": 0.8,
+                "passed": true,
+                "evalStatus": "passed"
+              }
+            ],
+            "sessionId": "sess_validation_val_case_opt_02_26400",
+            "finalResponse": "Routed to MathAgent: answer is 7.0 (expects EmailAgent)",
+            "toolTrajectory": [
+              {
+                "toolName": "route",
+                "args": {
+                  "target": "MathAgent"
+                },
+                "output": "7.0"
+              }
+            ],
+            "traceId": "trace_validation_val_case_opt_02"
+          },
+          {
+            "evalCaseId": "val_case_opt_03",
+            "evalSetId": "validation",
+            "overallPassed": true,
+            "metrics": [
+              {
+                "metricName": "overall",
+                "score": 1,
+                "threshold": 0.8,
+                "passed": true,
+                "evalStatus": "passed"
+              }
+            ],
+            "sessionId": "sess_validation_val_case_opt_03_68983",
+            "finalResponse": "OK: email sent, id=msg_001",
+            "traceId": "trace_validation_val_case_opt_03"
+          }
+        ]
+      },
+      "perCaseDelta": [
+        {
+          "evalCaseId": "val_case_opt_01",
+          "baselinePassed": false,
+          "candidatePassed": true,
+          "baselineScore": 0.4,
+          "candidateScore": 0.9500000000000001,
+          "scoreDelta": 0.55,
+          "isHardFailNew": false,
+          "isKeyCaseDegrade": false,
+          "labels": [
+            "validation",
+            "optimizable",
+            "knowledge_recall"
+          ]
+        },
+        {
+          "evalCaseId": "val_case_opt_02",
+          "baselinePassed": true,
+          "candidatePassed": true,
+          "baselineScore": 0.95,
+          "candidateScore": 0.95,
+          "scoreDelta": 0,
+          "isHardFailNew": false,
+          "isKeyCaseDegrade": false,
+          "labels": [
+            "validation",
+            "degrade",
+            "route_error"
+          ]
+        },
+        {
+          "evalCaseId": "val_case_opt_03",
+          "baselinePassed": true,
+          "candidatePassed": true,
+          "baselineScore": 1,
+          "candidateScore": 1,
+          "scoreDelta": 0,
+          "isHardFailNew": false,
+          "isKeyCaseDegrade": false,
+          "labels": [
+            "validation",
+            "noeffect",
+            "hardfail_guard"
+          ]
+        }
+      ],
+      "acceptance": {
+        "accepted": true,
+        "scoreDelta": 0.18333333333333335,
+        "reasons": [
+          "score_delta=+0.1833 meets min_score_gain=+0.0500",
+          "no newly introduced hard fails (count=0)",
+          "no implicit key case degradations (count=0)",
+          "cost budget disabled (MaxCostBudget=0)"
+        ],
+        "perCaseDelta": [
+          {
+            "evalCaseId": "val_case_opt_01",
+            "baselinePassed": false,
+            "candidatePassed": true,
+            "baselineScore": 0.4,
+            "candidateScore": 0.9500000000000001,
+            "scoreDelta": 0.55,
+            "isHardFailNew": false,
+            "isKeyCaseDegrade": false,
+            "labels": [
+              "validation",
+              "optimizable",
+              "knowledge_recall"
+            ]
+          },
+          {
+            "evalCaseId": "val_case_opt_02",
+            "baselinePassed": true,
+            "candidatePassed": true,
+            "baselineScore": 0.95,
+            "candidateScore": 0.95,
+            "scoreDelta": 0,
+            "isHardFailNew": false,
+            "isKeyCaseDegrade": false,
+            "labels": [
+              "validation",
+              "degrade",
+              "route_error"
+            ]
+          },
+          {
+            "evalCaseId": "val_case_opt_03",
+            "baselinePassed": true,
+            "candidatePassed": true,
+            "baselineScore": 1,
+            "candidateScore": 1,
+            "scoreDelta": 0,
+            "isHardFailNew": false,
+            "isKeyCaseDegrade": false,
+            "labels": [
+              "validation",
+              "noeffect",
+              "hardfail_guard"
+            ]
+          }
+        ],
+        "hardFailNewCount": 0,
+        "keyCaseDegradeCount": 0,
+        "cost": 0.0315
+      },
+      "cost": {
+        "inferenceTokens": 4500,
+        "judgeTokens": 2200,
+        "optimizerTokens": 3800,
+        "totalTokens": 10500,
+        "estimatedCostUsd": 0.0315,
+        "wallClockDurationNs": 0
+      },
+      "promptsBefore": {
+        "agent_instruction": "# Agent Instruction (baseline)\nUse the available tools to gather evidence, then synthesize a final answer. Always cite your sources when possible.",
+        "router_prompt": "# Router Prompt (baseline)\nChoose between MathAgent, EmailAgent, or GeneralAgent. When in doubt, route to GeneralAgent.",
+        "system_prompt": "# System Prompt (baseline)\nYou are a helpful general-purpose AI assistant. Answer the user's question clearly and concisely using the available tools. If you are unsure, say you don't know.",
+        "tool_desc_calc": "# Tool: calculator (baseline)\nPerforms arithmetic. Takes a, b, op."
+      },
+      "promptsAfter": {
+        "agent_instruction": "# Agent Instruction (baseline)\nUse the available tools to gather evidence, then synthesize a final answer. Always cite your sources when possible.",
+        "router_prompt": "# Router Prompt (baseline)\nChoose between MathAgent, EmailAgent, or GeneralAgent. When in doubt, route to GeneralAgent.",
+        "system_prompt": "# Optimized System Prompt\nYou are a precise and honest agent. For factual questions you MUST provide the direct answer and cite source when available; NEVER hedge ('I don't know') unless the knowledge is genuinely absent. Always end your response with a clear, concise final answer.",
+        "tool_desc_calc": "# Tool: calculator (baseline)\nPerforms arithmetic. Takes a, b, op."
+      }
+    },
+    {
+      "round": 2,
+      "timestamp": "2026-07-31T19:53:26.9222455+08:00",
+      "randomSeed": 20250163,
+      "trainSummary": {
+        "evalSetId": "train",
+        "totalCases": 3,
+        "passedCases": 1,
+        "failedCases": 2,
+        "overallScore": 0.65,
+        "perCase": [
+          {
+            "evalCaseId": "train_case_opt_01",
+            "evalSetId": "train",
+            "overallPassed": false,
+            "metrics": [
+              {
+                "metricName": "overall",
+                "score": 0.45,
+                "threshold": 0.8,
+                "passed": false,
+                "evalStatus": "failed",
+                "reason": "final_response_mismatch: baseline agent hedges instead of answering; expected answer: Paris"
+              }
+            ],
+            "sessionId": "sess_train_train_case_opt_01_94769",
+            "finalResponse": "I don't have enough info to answer that.",
+            "traceId": "trace_train_train_case_opt_01"
+          },
+          {
+            "evalCaseId": "train_case_opt_02",
+            "evalSetId": "train",
+            "overallPassed": false,
+            "metrics": [
+              {
+                "metricName": "overall",
+                "score": 0.5,
+                "threshold": 0.8,
+                "passed": false,
+                "evalStatus": "failed",
+                "reason": "tool_argument_error: baseline passes string operand to calculator; expects numeric"
+              }
+            ],
+            "sessionId": "sess_train_train_case_opt_02_44921",
+            "finalResponse": "The result is: (error) invalid operand",
+            "toolTrajectory": [
+              {
+                "toolName": "calculator",
+                "args": {
+                  "a": "five",
+                  "b": "3",
+                  "op": "+"
+                },
+                "error": "strconv.ParseFloat: invalid syntax"
+              }
+            ],
+            "traceId": "trace_train_train_case_opt_02"
+          },
+          {
+            "evalCaseId": "train_case_opt_03",
+            "evalSetId": "train",
+            "overallPassed": true,
+            "metrics": [
+              {
+                "metricName": "overall",
+                "score": 1,
+                "threshold": 0.8,
+                "passed": true,
+                "evalStatus": "passed"
+              }
+            ],
+            "sessionId": "sess_train_train_case_opt_03_5712",
+            "finalResponse": "Answer: 42",
+            "traceId": "trace_train_train_case_opt_03"
+          }
+        ],
+        "attribution": [
+          {
+            "evalCaseId": "train_case_opt_01",
+            "metricName": "overall",
+            "category": "final_response_mismatch",
+            "severity": "P1",
+            "reason": "final_response_mismatch: baseline agent hedges instead of answering; expected answer: Paris"
+          },
+          {
+            "evalCaseId": "train_case_opt_02",
+            "metricName": "overall",
+            "category": "tool_argument_error",
+            "severity": "P1",
+            "reason": "tool_argument_error: baseline passes string operand to calculator; expects numeric",
+            "evidence": [
+              "tool error: calculator -\u003e strconv.ParseFloat: invalid syntax"
+            ]
+          }
+        ]
+      },
+      "valBaseline": {
+        "evalSetId": "validation",
+        "totalCases": 3,
+        "passedCases": 2,
+        "failedCases": 1,
+        "overallScore": 0.7833333333333333,
+        "perCase": [
+          {
+            "evalCaseId": "val_case_opt_01",
+            "evalSetId": "validation",
+            "overallPassed": false,
+            "metrics": [
+              {
+                "metricName": "overall",
+                "score": 0.4,
+                "threshold": 0.8,
+                "passed": false,
+                "evalStatus": "failed",
+                "reason": "knowledge_recall_insufficient: baseline fails to remember the skill policy; should recall 'Always cite source when answering factual question'"
+              }
+            ],
+            "sessionId": "sess_validation_val_case_opt_01_62164",
+            "finalResponse": "Not sure about that.",
+            "traceId": "trace_validation_val_case_opt_01"
+          },
+          {
+            "evalCaseId": "val_case_opt_02",
+            "evalSetId": "validation",
+            "overallPassed": true,
+            "metrics": [
+              {
+                "metricName": "overall",
+                "score": 0.95,
+                "threshold": 0.8,
+                "passed": true,
+                "evalStatus": "passed"
+              }
+            ],
+            "sessionId": "sess_validation_val_case_opt_02_26620",
+            "finalResponse": "Routed to MathAgent: answer is 7.0 (expects EmailAgent)",
+            "toolTrajectory": [
+              {
+                "toolName": "route",
+                "args": {
+                  "target": "MathAgent"
+                },
+                "output": "7.0"
+              }
+            ],
+            "traceId": "trace_validation_val_case_opt_02"
+          },
+          {
+            "evalCaseId": "val_case_opt_03",
+            "evalSetId": "validation",
+            "overallPassed": true,
+            "metrics": [
+              {
+                "metricName": "overall",
+                "score": 1,
+                "threshold": 0.8,
+                "passed": true,
+                "evalStatus": "passed"
+              }
+            ],
+            "sessionId": "sess_validation_val_case_opt_03_80702",
+            "finalResponse": "OK: email sent, id=msg_001",
+            "traceId": "trace_validation_val_case_opt_03"
+          }
+        ],
+        "attribution": [
+          {
+            "evalCaseId": "val_case_opt_01",
+            "metricName": "overall",
+            "category": "knowledge_recall_insufficient",
+            "severity": "P1",
+            "reason": "knowledge_recall_insufficient: baseline fails to remember the skill policy; should recall 'Always cite source when answering factual question'"
+          }
+        ]
+      },
+      "attributions": [
+        {
+          "evalCaseId": "train_case_opt_01",
+          "metricName": "overall",
+          "category": "final_response_mismatch",
+          "severity": "P1",
+          "reason": "final_response_mismatch: baseline agent hedges instead of answering; expected answer: Paris"
+        },
+        {
+          "evalCaseId": "train_case_opt_02",
+          "metricName": "overall",
+          "category": "tool_argument_error",
+          "severity": "P1",
+          "reason": "tool_argument_error: baseline passes string operand to calculator; expects numeric",
+          "evidence": [
+            "tool error: calculator -\u003e strconv.ParseFloat: invalid syntax"
+          ]
+        }
+      ],
+      "candidate": {
+        "candidateId": "cand_r2_115610",
+        "round": 2,
+        "generatedBy": "promptiter_fake_deterministic",
+        "patches": {
+          "tool_desc_calc": "Tool: calculator. Computes arithmetic. REQUIRED numeric arguments (integers or floats). Use JSON numbers, NEVER string words like 'five'. Supported ops: +, -, *, /. Example payload: {\"a\": 5, \"b\": 3, \"op\": \"+\"}."
+        },
+        "rationale": "Train attribution shows ToolArgumentError on calculator; patch tool description to stress numeric args only. Attribution signal: final_response_mismatch=1, tool_argument_error=1"
+      },
+      "valCandidate": {
+        "evalSetId": "validation",
+        "totalCases": 3,
+        "passedCases": 2,
+        "failedCases": 1,
+        "overallScore": 0.7833333333333333,
+        "perCase": [
+          {
+            "evalCaseId": "val_case_opt_01",
+            "evalSetId": "validation",
+            "overallPassed": false,
+            "metrics": [
+              {
+                "metricName": "overall",
+                "score": 0.4,
+                "threshold": 0.8,
+                "passed": false,
+                "evalStatus": "failed",
+                "reason": "knowledge_recall_insufficient: baseline fails to remember the skill policy; should recall 'Always cite source when answering factual question'"
+              }
+            ],
+            "sessionId": "sess_validation_val_case_opt_01_70947",
+            "finalResponse": "Not sure about that.",
+            "traceId": "trace_validation_val_case_opt_01"
+          },
+          {
+            "evalCaseId": "val_case_opt_02",
+            "evalSetId": "validation",
+            "overallPassed": true,
+            "metrics": [
+              {
+                "metricName": "overall",
+                "score": 0.95,
+                "threshold": 0.8,
+                "passed": true,
+                "evalStatus": "passed"
+              }
+            ],
+            "sessionId": "sess_validation_val_case_opt_02_21664",
+            "finalResponse": "Routed to MathAgent: answer is 7.0 (expects EmailAgent)",
+            "toolTrajectory": [
+              {
+                "toolName": "route",
+                "args": {
+                  "target": "MathAgent"
+                },
+                "output": "7.0"
+              }
+            ],
+            "traceId": "trace_validation_val_case_opt_02"
+          },
+          {
+            "evalCaseId": "val_case_opt_03",
+            "evalSetId": "validation",
+            "overallPassed": true,
+            "metrics": [
+              {
+                "metricName": "overall",
+                "score": 1,
+                "threshold": 0.8,
+                "passed": true,
+                "evalStatus": "passed"
+              }
+            ],
+            "sessionId": "sess_validation_val_case_opt_03_36979",
+            "finalResponse": "OK: email sent, id=msg_001",
+            "traceId": "trace_validation_val_case_opt_03"
+          }
+        ],
+        "attribution": [
+          {
+            "evalCaseId": "val_case_opt_01",
+            "metricName": "overall",
+            "category": "knowledge_recall_insufficient",
+            "severity": "P1",
+            "reason": "knowledge_recall_insufficient: baseline fails to remember the skill policy; should recall 'Always cite source when answering factual question'"
+          }
+        ]
+      },
+      "perCaseDelta": [
+        {
+          "evalCaseId": "val_case_opt_01",
+          "baselinePassed": false,
+          "candidatePassed": false,
+          "baselineScore": 0.4,
+          "candidateScore": 0.4,
+          "scoreDelta": 0,
+          "isHardFailNew": false,
+          "isKeyCaseDegrade": false,
+          "labels": [
+            "validation",
+            "optimizable",
+            "knowledge_recall"
+          ]
+        },
+        {
+          "evalCaseId": "val_case_opt_02",
+          "baselinePassed": true,
+          "candidatePassed": true,
+          "baselineScore": 0.95,
+          "candidateScore": 0.95,
+          "scoreDelta": 0,
+          "isHardFailNew": false,
+          "isKeyCaseDegrade": false,
+          "labels": [
+            "validation",
+            "degrade",
+            "route_error"
+          ]
+        },
+        {
+          "evalCaseId": "val_case_opt_03",
+          "baselinePassed": true,
+          "candidatePassed": true,
+          "baselineScore": 1,
+          "candidateScore": 1,
+          "scoreDelta": 0,
+          "isHardFailNew": false,
+          "isKeyCaseDegrade": false,
+          "labels": [
+            "validation",
+            "noeffect",
+            "hardfail_guard"
+          ]
+        }
+      ],
+      "acceptance": {
+        "accepted": false,
+        "scoreDelta": -0.18333333333333335,
+        "reasons": [
+          "score_delta=-0.1833 below min_score_gain=+0.0500 (REJECT)",
+          "no newly introduced hard fails (count=0)",
+          "no implicit key case degradations (count=0)",
+          "cost budget disabled (MaxCostBudget=0)"
+        ],
+        "perCaseDelta": [
+          {
+            "evalCaseId": "val_case_opt_01",
+            "baselinePassed": false,
+            "candidatePassed": false,
+            "baselineScore": 0.4,
+            "candidateScore": 0.4,
+            "scoreDelta": 0,
+            "isHardFailNew": false,
+            "isKeyCaseDegrade": false,
+            "labels": [
+              "validation",
+              "optimizable",
+              "knowledge_recall"
+            ]
+          },
+          {
+            "evalCaseId": "val_case_opt_02",
+            "baselinePassed": true,
+            "candidatePassed": true,
+            "baselineScore": 0.95,
+            "candidateScore": 0.95,
+            "scoreDelta": 0,
+            "isHardFailNew": false,
+            "isKeyCaseDegrade": false,
+            "labels": [
+              "validation",
+              "degrade",
+              "route_error"
+            ]
+          },
+          {
+            "evalCaseId": "val_case_opt_03",
+            "baselinePassed": true,
+            "candidatePassed": true,
+            "baselineScore": 1,
+            "candidateScore": 1,
+            "scoreDelta": 0,
+            "isHardFailNew": false,
+            "isKeyCaseDegrade": false,
+            "labels": [
+              "validation",
+              "noeffect",
+              "hardfail_guard"
+            ]
+          }
+        ],
+        "hardFailNewCount": 0,
+        "keyCaseDegradeCount": 0,
+        "cost": 0.036000000000000004
+      },
+      "cost": {
+        "inferenceTokens": 5000,
+        "judgeTokens": 2400,
+        "optimizerTokens": 4600,
+        "totalTokens": 12000,
+        "estimatedCostUsd": 0.036000000000000004,
+        "wallClockDurationNs": 0
+      },
+      "promptsBefore": {
+        "agent_instruction": "# Agent Instruction (baseline)\nUse the available tools to gather evidence, then synthesize a final answer. Always cite your sources when possible.",
+        "router_prompt": "# Router Prompt (baseline)\nChoose between MathAgent, EmailAgent, or GeneralAgent. When in doubt, route to GeneralAgent.",
+        "system_prompt": "# Optimized System Prompt\nYou are a precise and honest agent. For factual questions you MUST provide the direct answer and cite source when available; NEVER hedge ('I don't know') unless the knowledge is genuinely absent. Always end your response with a clear, concise final answer.",
+        "tool_desc_calc": "# Tool: calculator (baseline)\nPerforms arithmetic. Takes a, b, op."
+      },
+      "promptsAfter": {
+        "agent_instruction": "# Agent Instruction (baseline)\nUse the available tools to gather evidence, then synthesize a final answer. Always cite your sources when possible.",
+        "router_prompt": "# Router Prompt (baseline)\nChoose between MathAgent, EmailAgent, or GeneralAgent. When in doubt, route to GeneralAgent.",
+        "system_prompt": "# Optimized System Prompt\nYou are a precise and honest agent. For factual questions you MUST provide the direct answer and cite source when available; NEVER hedge ('I don't know') unless the knowledge is genuinely absent. Always end your response with a clear, concise final answer.",
+        "tool_desc_calc": "# Tool: calculator (baseline)\nPerforms arithmetic. Takes a, b, op."
+      }
+    },
+    {
+      "round": 3,
+      "timestamp": "2026-07-31T19:53:26.9222455+08:00",
+      "randomSeed": 20250194,
+      "trainSummary": {
+        "evalSetId": "train",
+        "totalCases": 3,
+        "passedCases": 1,
+        "failedCases": 2,
+        "overallScore": 0.65,
+        "perCase": [
+          {
+            "evalCaseId": "train_case_opt_01",
+            "evalSetId": "train",
+            "overallPassed": false,
+            "metrics": [
+              {
+                "metricName": "overall",
+                "score": 0.45,
+                "threshold": 0.8,
+                "passed": false,
+                "evalStatus": "failed",
+                "reason": "final_response_mismatch: baseline agent hedges instead of answering; expected answer: Paris"
+              }
+            ],
+            "sessionId": "sess_train_train_case_opt_01_67138",
+            "finalResponse": "I don't have enough info to answer that.",
+            "traceId": "trace_train_train_case_opt_01"
+          },
+          {
+            "evalCaseId": "train_case_opt_02",
+            "evalSetId": "train",
+            "overallPassed": false,
+            "metrics": [
+              {
+                "metricName": "overall",
+                "score": 0.5,
+                "threshold": 0.8,
+                "passed": false,
+                "evalStatus": "failed",
+                "reason": "tool_argument_error: baseline passes string operand to calculator; expects numeric"
+              }
+            ],
+            "sessionId": "sess_train_train_case_opt_02_95390",
+            "finalResponse": "The result is: (error) invalid operand",
+            "toolTrajectory": [
+              {
+                "toolName": "calculator",
+                "args": {
+                  "a": "five",
+                  "b": "3",
+                  "op": "+"
+                },
+                "error": "strconv.ParseFloat: invalid syntax"
+              }
+            ],
+            "traceId": "trace_train_train_case_opt_02"
+          },
+          {
+            "evalCaseId": "train_case_opt_03",
+            "evalSetId": "train",
+            "overallPassed": true,
+            "metrics": [
+              {
+                "metricName": "overall",
+                "score": 1,
+                "threshold": 0.8,
+                "passed": true,
+                "evalStatus": "passed"
+              }
+            ],
+            "sessionId": "sess_train_train_case_opt_03_80095",
+            "finalResponse": "Answer: 42",
+            "traceId": "trace_train_train_case_opt_03"
+          }
+        ],
+        "attribution": [
+          {
+            "evalCaseId": "train_case_opt_01",
+            "metricName": "overall",
+            "category": "final_response_mismatch",
+            "severity": "P1",
+            "reason": "final_response_mismatch: baseline agent hedges instead of answering; expected answer: Paris"
+          },
+          {
+            "evalCaseId": "train_case_opt_02",
+            "metricName": "overall",
+            "category": "tool_argument_error",
+            "severity": "P1",
+            "reason": "tool_argument_error: baseline passes string operand to calculator; expects numeric",
+            "evidence": [
+              "tool error: calculator -\u003e strconv.ParseFloat: invalid syntax"
+            ]
+          }
+        ]
+      },
+      "valBaseline": {
+        "evalSetId": "validation",
+        "totalCases": 3,
+        "passedCases": 2,
+        "failedCases": 1,
+        "overallScore": 0.7833333333333333,
+        "perCase": [
+          {
+            "evalCaseId": "val_case_opt_01",
+            "evalSetId": "validation",
+            "overallPassed": false,
+            "metrics": [
+              {
+                "metricName": "overall",
+                "score": 0.4,
+                "threshold": 0.8,
+                "passed": false,
+                "evalStatus": "failed",
+                "reason": "knowledge_recall_insufficient: baseline fails to remember the skill policy; should recall 'Always cite source when answering factual question'"
+              }
+            ],
+            "sessionId": "sess_validation_val_case_opt_01_62164",
+            "finalResponse": "Not sure about that.",
+            "traceId": "trace_validation_val_case_opt_01"
+          },
+          {
+            "evalCaseId": "val_case_opt_02",
+            "evalSetId": "validation",
+            "overallPassed": true,
+            "metrics": [
+              {
+                "metricName": "overall",
+                "score": 0.95,
+                "threshold": 0.8,
+                "passed": true,
+                "evalStatus": "passed"
+              }
+            ],
+            "sessionId": "sess_validation_val_case_opt_02_26620",
+            "finalResponse": "Routed to MathAgent: answer is 7.0 (expects EmailAgent)",
+            "toolTrajectory": [
+              {
+                "toolName": "route",
+                "args": {
+                  "target": "MathAgent"
+                },
+                "output": "7.0"
+              }
+            ],
+            "traceId": "trace_validation_val_case_opt_02"
+          },
+          {
+            "evalCaseId": "val_case_opt_03",
+            "evalSetId": "validation",
+            "overallPassed": true,
+            "metrics": [
+              {
+                "metricName": "overall",
+                "score": 1,
+                "threshold": 0.8,
+                "passed": true,
+                "evalStatus": "passed"
+              }
+            ],
+            "sessionId": "sess_validation_val_case_opt_03_80702",
+            "finalResponse": "OK: email sent, id=msg_001",
+            "traceId": "trace_validation_val_case_opt_03"
+          }
+        ],
+        "attribution": [
+          {
+            "evalCaseId": "val_case_opt_01",
+            "metricName": "overall",
+            "category": "knowledge_recall_insufficient",
+            "severity": "P1",
+            "reason": "knowledge_recall_insufficient: baseline fails to remember the skill policy; should recall 'Always cite source when answering factual question'"
+          }
+        ]
+      },
+      "attributions": [
+        {
+          "evalCaseId": "train_case_opt_01",
+          "metricName": "overall",
+          "category": "final_response_mismatch",
+          "severity": "P1",
+          "reason": "final_response_mismatch: baseline agent hedges instead of answering; expected answer: Paris"
+        },
+        {
+          "evalCaseId": "train_case_opt_02",
+          "metricName": "overall",
+          "category": "tool_argument_error",
+          "severity": "P1",
+          "reason": "tool_argument_error: baseline passes string operand to calculator; expects numeric",
+          "evidence": [
+            "tool error: calculator -\u003e strconv.ParseFloat: invalid syntax"
+          ]
+        }
+      ],
+      "candidate": {
+        "candidateId": "cand_r3_605762",
+        "round": 3,
+        "generatedBy": "promptiter_fake_deterministic",
+        "patches": {
+          "router_prompt": "Router prompt (optimized). Rules: (1) If user intent is send_email, lookup_contact, or mentions 'email' -\u003e route to EmailAgent. (2) If user asks calculation or math -\u003e MathAgent. (3) Otherwise Agent-General. DO NOT route email intent to MathAgent."
+        },
+        "rationale": "Round 2 did not move the needle. Try router-level guidance: always route email tasks to EmailAgent instead of MathAgent. Attribution signal: final_response_mismatch=1, tool_argument_error=1"
+      },
+      "valCandidate": {
+        "evalSetId": "validation",
+        "totalCases": 3,
+        "passedCases": 1,
+        "failedCases": 2,
+        "overallScore": 0.65,
+        "perCase": [
+          {
+            "evalCaseId": "val_case_opt_01",
+            "evalSetId": "validation",
+            "overallPassed": false,
+            "metrics": [
+              {
+                "metricName": "overall",
+                "score": 0.4,
+                "threshold": 0.8,
+                "passed": false,
+                "evalStatus": "failed",
+                "reason": "knowledge_recall_insufficient: baseline fails to remember the skill policy; should recall 'Always cite source when answering factual question'"
+              }
+            ],
+            "sessionId": "sess_validation_val_case_opt_01_43114",
+            "finalResponse": "Not sure about that.",
+            "traceId": "trace_validation_val_case_opt_01"
+          },
+          {
+            "evalCaseId": "val_case_opt_02",
+            "evalSetId": "validation",
+            "overallPassed": false,
+            "metrics": [
+              {
+                "metricName": "overall",
+                "score": 0.5499999999999999,
+                "threshold": 0.8,
+                "passed": false,
+                "evalStatus": "failed",
+                "reason": "route_error: candidate over-optimized routing; sends email task to MathAgent"
+              }
+            ],
+            "sessionId": "sess_validation_val_case_opt_02_61159",
+            "finalResponse": "Routed to MathAgent: answer is 7.0 (expects EmailAgent)",
+            "toolTrajectory": [
+              {
+                "toolName": "route",
+                "args": {
+                  "target": "MathAgent"
+                },
+                "output": "7.0"
+              }
+            ],
+            "traceId": "trace_validation_val_case_opt_02"
+          },
+          {
+            "evalCaseId": "val_case_opt_03",
+            "evalSetId": "validation",
+            "overallPassed": true,
+            "metrics": [
+              {
+                "metricName": "overall",
+                "score": 1,
+                "threshold": 0.8,
+                "passed": true,
+                "evalStatus": "passed"
+              }
+            ],
+            "sessionId": "sess_validation_val_case_opt_03_60526",
+            "finalResponse": "OK: email sent, id=msg_001",
+            "traceId": "trace_validation_val_case_opt_03"
+          }
+        ],
+        "attribution": [
+          {
+            "evalCaseId": "val_case_opt_01",
+            "metricName": "overall",
+            "category": "knowledge_recall_insufficient",
+            "severity": "P1",
+            "reason": "knowledge_recall_insufficient: baseline fails to remember the skill policy; should recall 'Always cite source when answering factual question'"
+          },
+          {
+            "evalCaseId": "val_case_opt_02",
+            "metricName": "overall",
+            "category": "route_error",
+            "severity": "P1",
+            "reason": "route_error: candidate over-optimized routing; sends email task to MathAgent"
+          }
+        ]
+      },
+      "perCaseDelta": [
+        {
+          "evalCaseId": "val_case_opt_01",
+          "baselinePassed": false,
+          "candidatePassed": false,
+          "baselineScore": 0.4,
+          "candidateScore": 0.4,
+          "scoreDelta": 0,
+          "isHardFailNew": false,
+          "isKeyCaseDegrade": false,
+          "labels": [
+            "validation",
+            "optimizable",
+            "knowledge_recall"
+          ]
+        },
+        {
+          "evalCaseId": "val_case_opt_02",
+          "baselinePassed": true,
+          "candidatePassed": false,
+          "baselineScore": 0.95,
+          "candidateScore": 0.5499999999999999,
+          "scoreDelta": -0.4,
+          "isHardFailNew": true,
+          "isKeyCaseDegrade": false,
+          "labels": [
+            "validation",
+            "degrade",
+            "route_error"
+          ]
+        },
+        {
+          "evalCaseId": "val_case_opt_03",
+          "baselinePassed": true,
+          "candidatePassed": true,
+          "baselineScore": 1,
+          "candidateScore": 1,
+          "scoreDelta": 0,
+          "isHardFailNew": false,
+          "isKeyCaseDegrade": false,
+          "labels": [
+            "validation",
+            "noeffect",
+            "hardfail_guard"
+          ]
+        }
+      ],
+      "acceptance": {
+        "accepted": false,
+        "scoreDelta": -0.31666666666666665,
+        "reasons": [
+          "score_delta=-0.3167 below min_score_gain=+0.0500 (REJECT)",
+          "introduced 1 new hard fail(s); gate AllowNewHardFail=false (REJECT)",
+          "no implicit key case degradations (count=0)",
+          "cost budget disabled (MaxCostBudget=0)"
+        ],
+        "perCaseDelta": [
+          {
+            "evalCaseId": "val_case_opt_01",
+            "baselinePassed": false,
+            "candidatePassed": false,
+            "baselineScore": 0.4,
+            "candidateScore": 0.4,
+            "scoreDelta": 0,
+            "isHardFailNew": false,
+            "isKeyCaseDegrade": false,
+            "labels": [
+              "validation",
+              "optimizable",
+              "knowledge_recall"
+            ]
+          },
+          {
+            "evalCaseId": "val_case_opt_02",
+            "baselinePassed": true,
+            "candidatePassed": false,
+            "baselineScore": 0.95,
+            "candidateScore": 0.5499999999999999,
+            "scoreDelta": -0.4,
+            "isHardFailNew": true,
+            "isKeyCaseDegrade": false,
+            "labels": [
+              "validation",
+              "degrade",
+              "route_error"
+            ]
+          },
+          {
+            "evalCaseId": "val_case_opt_03",
+            "baselinePassed": true,
+            "candidatePassed": true,
+            "baselineScore": 1,
+            "candidateScore": 1,
+            "scoreDelta": 0,
+            "isHardFailNew": false,
+            "isKeyCaseDegrade": false,
+            "labels": [
+              "validation",
+              "noeffect",
+              "hardfail_guard"
+            ]
+          }
+        ],
+        "hardFailNewCount": 1,
+        "keyCaseDegradeCount": 0,
+        "cost": 0.0405
+      },
+      "cost": {
+        "inferenceTokens": 5500,
+        "judgeTokens": 2600,
+        "optimizerTokens": 5400,
+        "totalTokens": 13500,
+        "estimatedCostUsd": 0.0405,
+        "wallClockDurationNs": 0
+      },
+      "promptsBefore": {
+        "agent_instruction": "# Agent Instruction (baseline)\nUse the available tools to gather evidence, then synthesize a final answer. Always cite your sources when possible.",
+        "router_prompt": "# Router Prompt (baseline)\nChoose between MathAgent, EmailAgent, or GeneralAgent. When in doubt, route to GeneralAgent.",
+        "system_prompt": "# Optimized System Prompt\nYou are a precise and honest agent. For factual questions you MUST provide the direct answer and cite source when available; NEVER hedge ('I don't know') unless the knowledge is genuinely absent. Always end your response with a clear, concise final answer.",
+        "tool_desc_calc": "# Tool: calculator (baseline)\nPerforms arithmetic. Takes a, b, op."
+      },
+      "promptsAfter": {
+        "agent_instruction": "# Agent Instruction (baseline)\nUse the available tools to gather evidence, then synthesize a final answer. Always cite your sources when possible.",
+        "router_prompt": "# Router Prompt (baseline)\nChoose between MathAgent, EmailAgent, or GeneralAgent. When in doubt, route to GeneralAgent.",
+        "system_prompt": "# Optimized System Prompt\nYou are a precise and honest agent. For factual questions you MUST provide the direct answer and cite source when available; NEVER hedge ('I don't know') unless the knowledge is genuinely absent. Always end your response with a clear, concise final answer.",
+        "tool_desc_calc": "# Tool: calculator (baseline)\nPerforms arithmetic. Takes a, b, op."
+      }
+    }
+  ],
+  "finalAccepted": true,
+  "finalValidationScore": 0.9666666666666667,
+  "bestValidationScore": 0.9666666666666667,
+  "bestRound": 1,
+  "promptsFinal": {
+    "agent_instruction": "# Agent Instruction (baseline)\nUse the available tools to gather evidence, then synthesize a final answer. Always cite your sources when possible.",
+    "router_prompt": "# Router Prompt (baseline)\nChoose between MathAgent, EmailAgent, or GeneralAgent. When in doubt, route to GeneralAgent.",
+    "system_prompt": "# Optimized System Prompt\nYou are a precise and honest agent. For factual questions you MUST provide the direct answer and cite source when available; NEVER hedge ('I don't know') unless the knowledge is genuinely absent. Always end your response with a clear, concise final answer.",
+    "tool_desc_calc": "# Tool: calculator (baseline)\nPerforms arithmetic. Takes a, b, op."
+  },
+  "totalCost": {
+    "totalTokens": 36000,
+    "estimatedCostUsd": 0.10800000000000001,
+    "wallClockDurationNs": 0
+  },
+  "notes": [
+    "round 1: accepted candidate cand_r1_434792 (Δ=+0.1833)",
+    "round 2: rejected candidate cand_r2_115610 (Δ=-0.1833); reason: score_delta=-0.1833 below min_score_gain=+0.0500 (REJECT)",
+    "round 3: rejected candidate cand_r3_605762 (Δ=-0.3167); reason: score_delta=-0.3167 below min_score_gain=+0.0500 (REJECT)"
+  ]
+}
