@@ -321,11 +321,7 @@ func inspectOutputValue(
 	if !value.IsValid() {
 		return
 	}
-	typeOfValue := value.Type()
-	if typeOfValue.Implements(jsonMarshalerType) ||
-		reflect.PointerTo(typeOfValue).Implements(jsonMarshalerType) {
-		inspection.hasJSONMarshaler = true
-	}
+	inspectJSONMarshaler(value, inspection)
 	if value.Kind() == reflect.Interface {
 		if value.IsNil() {
 			return
@@ -338,41 +334,81 @@ func inspectOutputValue(
 	}
 	switch value.Kind() {
 	case reflect.Pointer:
-		if value.IsNil() {
-			return
-		}
-		inspectOutputValue(value.Elem(), seen, inspection)
+		inspectOutputPointer(value, seen, inspection)
 	case reflect.Slice, reflect.Array:
-		if byteSlice, ok := byteSequenceText(value); ok {
-			if hasSensitiveText(byteSlice) {
-				inspection.hasSensitiveBytes = true
-			}
-			return
-		}
-		for i := 0; i < value.Len(); i++ {
-			inspectOutputValue(value.Index(i), seen, inspection)
-		}
+		inspectOutputSequence(value, seen, inspection)
 	case reflect.Map:
-		if value.IsNil() {
-			return
-		}
-		iter := value.MapRange()
-		for iter.Next() {
-			inspectOutputValue(iter.Key(), seen, inspection)
-			inspectOutputValue(iter.Value(), seen, inspection)
-		}
+		inspectOutputMap(value, seen, inspection)
 	case reflect.Struct:
-		typeOfValue := value.Type()
-		for i := 0; i < value.NumField(); i++ {
-			field := typeOfValue.Field(i)
-			if field.PkgPath != "" && !field.Anonymous {
-				continue
-			}
-			if field.Tag.Get("json") == "-" {
-				continue
-			}
-			inspectOutputValue(value.Field(i), seen, inspection)
+		inspectOutputStruct(value, seen, inspection)
+	}
+}
+
+func inspectJSONMarshaler(value reflect.Value, inspection *outputInspection) {
+	typeOfValue := value.Type()
+	if typeOfValue.Implements(jsonMarshalerType) ||
+		reflect.PointerTo(typeOfValue).Implements(jsonMarshalerType) {
+		inspection.hasJSONMarshaler = true
+	}
+}
+
+func inspectOutputPointer(
+	value reflect.Value,
+	seen map[outputVisit]struct{},
+	inspection *outputInspection,
+) {
+	if value.IsNil() {
+		return
+	}
+	inspectOutputValue(value.Elem(), seen, inspection)
+}
+
+func inspectOutputSequence(
+	value reflect.Value,
+	seen map[outputVisit]struct{},
+	inspection *outputInspection,
+) {
+	if byteSlice, ok := byteSequenceText(value); ok {
+		if hasSensitiveText(byteSlice) {
+			inspection.hasSensitiveBytes = true
 		}
+		return
+	}
+	for i := 0; i < value.Len(); i++ {
+		inspectOutputValue(value.Index(i), seen, inspection)
+	}
+}
+
+func inspectOutputMap(
+	value reflect.Value,
+	seen map[outputVisit]struct{},
+	inspection *outputInspection,
+) {
+	if value.IsNil() {
+		return
+	}
+	iter := value.MapRange()
+	for iter.Next() {
+		inspectOutputValue(iter.Key(), seen, inspection)
+		inspectOutputValue(iter.Value(), seen, inspection)
+	}
+}
+
+func inspectOutputStruct(
+	value reflect.Value,
+	seen map[outputVisit]struct{},
+	inspection *outputInspection,
+) {
+	typeOfValue := value.Type()
+	for i := 0; i < value.NumField(); i++ {
+		field := typeOfValue.Field(i)
+		if field.PkgPath != "" && !field.Anonymous {
+			continue
+		}
+		if field.Tag.Get("json") == "-" {
+			continue
+		}
+		inspectOutputValue(value.Field(i), seen, inspection)
 	}
 }
 
