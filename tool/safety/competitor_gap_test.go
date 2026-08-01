@@ -91,8 +91,11 @@ func TestAuditEvent_IncludesPolicyMeta(t *testing.T) {
 }
 
 type memArtifact struct {
-	saved *artifact.Artifact
-	name  string
+	saved    *artifact.Artifact
+	name     string
+	keys     []string
+	versions []int
+	deleted  string
 }
 
 func (m *memArtifact) SaveArtifact(_ context.Context, _ artifact.SessionInfo, filename string, value *artifact.Artifact) (int, error) {
@@ -101,6 +104,8 @@ func (m *memArtifact) SaveArtifact(_ context.Context, _ artifact.SessionInfo, fi
 		cp := *value
 		cp.Data = append([]byte(nil), value.Data...)
 		m.saved = &cp
+	} else {
+		m.saved = nil
 	}
 	return 0, nil
 }
@@ -108,13 +113,14 @@ func (m *memArtifact) LoadArtifact(context.Context, artifact.SessionInfo, string
 	return m.saved, nil
 }
 func (m *memArtifact) ListArtifactKeys(context.Context, artifact.SessionInfo) ([]string, error) {
-	return nil, nil
+	return append([]string(nil), m.keys...), nil
 }
-func (m *memArtifact) DeleteArtifact(context.Context, artifact.SessionInfo, string) error {
+func (m *memArtifact) DeleteArtifact(_ context.Context, _ artifact.SessionInfo, filename string) error {
+	m.deleted = filename
 	return nil
 }
 func (m *memArtifact) ListVersions(context.Context, artifact.SessionInfo, string) ([]int, error) {
-	return nil, nil
+	return append([]int(nil), m.versions...), nil
 }
 
 func TestRedactingArtifactService_ScrubsText(t *testing.T) {
@@ -142,4 +148,118 @@ func TestRedactingArtifactService_RejectsSecretBinary(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Nil(t, inner.saved)
+}
+
+func TestRedactingArtifactService_DelegatesAndEdges(t *testing.T) {
+	t.Parallel()
+	inner := &memArtifact{
+		keys:     []string{"a.txt", "b.json"},
+		versions: []int{0, 1},
+	}
+	svc := NewRedactingArtifactService(inner)
+	ctx := context.Background()
+	si := artifact.SessionInfo{}
+
+	// Unchanged text path (no secret).
+	_, err := svc.SaveArtifact(ctx, si, "notes.txt", &artifact.Artifact{
+		Data:     []byte("hello world"),
+		MimeType: "text/plain",
+	})
+	require.NoError(t, err)
+	require.Equal(t, []byte("hello world"), inner.saved.Data)
+
+	// Empty / nil value.
+	_, err = svc.SaveArtifact(ctx, si, "empty.txt", &artifact.Artifact{Data: nil, MimeType: "text/plain"})
+	require.NoError(t, err)
+	_, err = svc.SaveArtifact(ctx, si, "nil", nil)
+	require.NoError(t, err)
+
+	// JSON scrub via mime +json and .json extension.
+	token := "sk-" + strings.Repeat("e", 32)
+	_, err = svc.SaveArtifact(ctx, si, "cfg.json", &artifact.Artifact{
+		Data:     []byte(`{"token":"` + token + `"}`),
+		MimeType: "application/json",
+	})
+	require.NoError(t, err)
+	require.NotContains(t, string(inner.saved.Data), token)
+
+	_, err = svc.SaveArtifact(ctx, si, "payload", &artifact.Artifact{
+		Data:     []byte(`{"k":"` + token + `"}`),
+		MimeType: "application/vnd.api+json",
+	})
+	require.NoError(t, err)
+	require.NotContains(t, string(inner.saved.Data), token)
+
+	// Safe binary passes through.
+	_, err = svc.SaveArtifact(ctx, si, "ok.bin", &artifact.Artifact{
+		Data:     []byte{0x00, 0x01, 0x02},
+		MimeType: "application/octet-stream",
+	})
+	require.NoError(t, err)
+	require.Equal(t, []byte{0x00, 0x01, 0x02}, inner.saved.Data)
+
+	// Text via extension without mime.
+	_, err = svc.SaveArtifact(ctx, si, "notes.md", &artifact.Artifact{
+		Data: []byte("token=" + token),
+	})
+	require.NoError(t, err)
+	require.Contains(t, string(inner.saved.Data), "REDACTED")
+
+	got, err := svc.LoadArtifact(ctx, si, "notes.md", nil)
+	require.NoError(t, err)
+	require.Equal(t, inner.saved, got)
+
+	keys, err := svc.ListArtifactKeys(ctx, si)
+	require.NoError(t, err)
+	require.Equal(t, []string{"a.txt", "b.json"}, keys)
+
+	require.NoError(t, svc.DeleteArtifact(ctx, si, "a.txt"))
+	require.Equal(t, "a.txt", inner.deleted)
+
+	vers, err := svc.ListVersions(ctx, si, "a.txt")
+	require.NoError(t, err)
+	require.Equal(t, []int{0, 1}, vers)
+
+	// Nil inner / nil receiver.
+	nilSvc := NewRedactingArtifactService(nil)
+	_, err = nilSvc.SaveArtifact(ctx, si, "x", &artifact.Artifact{Data: []byte("a")})
+	require.Error(t, err)
+	_, err = nilSvc.LoadArtifact(ctx, si, "x", nil)
+	require.Error(t, err)
+	_, err = nilSvc.ListArtifactKeys(ctx, si)
+	require.Error(t, err)
+	require.Error(t, nilSvc.DeleteArtifact(ctx, si, "x"))
+	_, err = nilSvc.ListVersions(ctx, si, "x")
+	require.Error(t, err)
+	_, err = (*RedactingArtifactService)(nil).LoadArtifact(ctx, si, "x", nil)
+	require.Error(t, err)
+}
+
+func TestResource_DDUnboundedDevice(t *testing.T) {
+	t.Parallel()
+	// dd is typically deny-listed; assert the unbounded-device helper directly.
+	for _, cmd := range []string{
+		"dd if=/dev/zero of=/tmp/x",
+		"dd if=/dev/random of=out.bin",
+	} {
+		f, ok := scanUnboundedDeviceIO(cmd, cmd)
+		require.True(t, ok, cmd)
+		require.Equal(t, "resource.unbounded_device", f.RuleID)
+	}
+	g := NewGuard(WithPolicy(DefaultPolicy()))
+	raw, err := json.Marshal(map[string]any{"command": "cat /dev/random"})
+	require.NoError(t, err)
+	dec, err := g.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: raw,
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionAsk, dec.Action)
+	require.Contains(t, dec.Reason, "resource.unbounded_device")
+
+	f, ok := scanUnboundedDeviceIO("dd if=/dev/zero of=x count=10", "dd if=/dev/zero of=x count=10")
+	require.False(t, ok)
+	require.Equal(t, Finding{}, f)
+	_, ok = scanUnboundedDeviceIO("", "")
+	require.False(t, ok)
 }

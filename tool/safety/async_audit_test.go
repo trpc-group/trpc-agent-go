@@ -170,3 +170,39 @@ func TestNewAsyncFileAuditor(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(data), `"allow"`)
 }
+
+func TestWithAuditor_NilAndAlreadyAsync(t *testing.T) {
+	t.Parallel()
+	g := NewGuard(WithAuditor(nil))
+	require.NotNil(t, g.audit) // default MemoryAuditor from NewGuard
+
+	inner := NewMemoryAuditor()
+	async := NewAsyncAuditor(inner, 4)
+	t.Cleanup(func() { _ = async.Close() })
+	g2 := NewGuard(WithAuditor(async))
+	_, ok := g2.audit.(*AsyncAuditor)
+	require.True(t, ok)
+	require.Same(t, async, g2.audit)
+
+	g3 := NewGuard(WithSyncAuditor(nil))
+	require.NotNil(t, g3.audit)
+}
+
+func TestGuard_CloseEdges(t *testing.T) {
+	t.Parallel()
+	require.NoError(t, (*Guard)(nil).Close())
+	require.NoError(t, NewGuard().Close()) // MemoryAuditor has no Close
+	g := NewGuard(WithSyncAuditor(&countingAuditor{}))
+	require.NoError(t, g.Close())
+}
+
+func TestAsyncAuditor_NilReceiverAndDefaults(t *testing.T) {
+	t.Parallel()
+	require.NoError(t, (*AsyncAuditor)(nil).Append(AuditEvent{}))
+	require.Equal(t, uint64(0), (*AsyncAuditor)(nil).Dropped())
+	require.NoError(t, (*AsyncAuditor)(nil).Close())
+
+	a := NewAsyncAuditor(nil, 0)
+	require.NoError(t, a.Append(AuditEvent{ToolName: "t", Decision: DecisionAllow, RuleID: "allow"}))
+	require.NoError(t, a.Close())
+}

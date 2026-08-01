@@ -242,3 +242,32 @@ func TestGuard_NilAndEmptyExtras(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, tool.PermissionActionDeny, dec.Action)
 }
+
+func TestPolicyMeta_EmptyDefaults(t *testing.T) {
+	t.Parallel()
+	p := Policy{}
+	schema, id, rev := p.Meta()
+	require.Equal(t, DefaultSchemaVersion, schema)
+	require.Equal(t, DefaultPolicyID, id)
+	require.NotEmpty(t, rev)
+	require.Equal(t, rev, p.Revision())
+}
+
+func TestRedactSecrets_ColonAndFallback(t *testing.T) {
+	t.Parallel()
+	out := redactSecrets("password:supersecretvalue123")
+	require.Contains(t, out, "REDACTED")
+	require.NotContains(t, out, "supersecretvalue123")
+	out = redactSecrets("sk-" + strings.Repeat("f", 32))
+	require.Contains(t, out, "REDACTED")
+}
+
+func TestIsTextArtifact_MimeAndExt(t *testing.T) {
+	t.Parallel()
+	require.True(t, isTextArtifact("x", "application/x-yaml"))
+	require.True(t, isTextArtifact("x", "text/html; charset=utf-8"))
+	require.True(t, isJSONArtifact("data.json", ""))
+	require.True(t, isJSONArtifact("x", "application/ld+json"))
+	require.False(t, isTextArtifact("blob.bin", "application/octet-stream"))
+	require.False(t, isJSONArtifact("blob.bin", "application/octet-stream"))
+}
