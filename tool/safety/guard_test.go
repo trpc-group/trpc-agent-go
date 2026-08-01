@@ -442,3 +442,17 @@ func TestUnknownPolicyKey_Rejected(t *testing.T) {
 	_, err := safety.ParsePolicy([]byte("denied_command:\n  - rm\n"), "policy.yaml")
 	require.Error(t, err)
 }
+
+func TestEnvLocalPath_Denied(t *testing.T) {
+	t.Parallel()
+	g := safety.NewGuard()
+	raw, err := json.Marshal(map[string]any{"command": "cat /app/.env.local"})
+	require.NoError(t, err)
+	dec, err := g.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: raw,
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, dec.Action)
+	require.Contains(t, dec.Reason, "path")
+}

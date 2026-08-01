@@ -353,8 +353,11 @@ func pathHit(text, marker string) bool {
 	if marker == "" {
 		return false
 	}
+	markerLower := strings.ToLower(marker)
+	// ".env" style markers match the exact basename and variants such as
+	// ".env.local" / ".env.production", without treating ".environment" as a hit.
 	strictExt := strings.HasPrefix(marker, ".") && !strings.Contains(marker[1:], "/")
-	if !strictExt && strings.Contains(text, marker) {
+	if !strictExt && strings.Contains(strings.ToLower(text), markerLower) {
 		return true
 	}
 	for _, part := range strings.FieldsFunc(text, func(r rune) bool {
@@ -364,18 +367,16 @@ func pathHit(text, marker string) bool {
 		pl := strings.ToLower(p)
 		if strictExt {
 			base := strings.ToLower(filepath.Base(p))
-			if base == strings.ToLower(marker) ||
-				strings.HasSuffix(pl, "/"+strings.ToLower(marker)) ||
-				strings.HasSuffix(pl, "\\"+strings.ToLower(marker)) {
+			if base == markerLower || strings.HasPrefix(base, markerLower+".") {
 				return true
 			}
 			continue
 		}
-		if strings.Contains(pl, marker) {
+		if strings.Contains(pl, markerLower) {
 			return true
 		}
 		base := strings.ToLower(filepath.Base(p))
-		if base == strings.ToLower(path.Base(marker)) || base == strings.ToLower(marker) {
+		if base == strings.ToLower(path.Base(marker)) || base == markerLower {
 			return true
 		}
 	}
