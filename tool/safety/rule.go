@@ -42,6 +42,9 @@ type namedRule struct {
 func (r namedRule) ID() string { return r.id }
 
 func (r namedRule) Check(ex Extracted, policy Policy) (Finding, bool) {
+	if r.fn == nil {
+		return Finding{}, false
+	}
 	f, ok := r.fn(ex, policy)
 	if ok && f.RuleID == "" {
 		f.RuleID = r.id
