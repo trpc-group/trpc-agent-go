@@ -57,8 +57,9 @@ Residual bypasses (honest list):
 | Resource abuse | scan-time only | long `sleep` / huge args / obvious `while true` → ask. Numbers in the policy are hints, not enforcement |
 | Secrets in args / reports | partial | deny + redact on the scan result. Logs/artifacts after execution are on the host |
 | Secrets in tool output | host-owned | wire `AfterToolRedact` / `RedactJSON`; PermissionPolicy never sees results |
-| Remote `go run host/…` | yes | deny (`shell.remote_go_run`); local `go run ./…` stays ask |
-| `curl\|sh` / `curl\|bash` | yes | treated as network→interpreter |
+| Remote `go run host/…` | yes | deny (`shell.remote_go_run`); also in `code_blocks`; local `./…` stays ask |
+| `curl\|sh` / `curl\|bash` | yes | shell + code_blocks (network→interpreter) |
+| `subprocess`/`os.system` + curl | yes | `code.subprocess_network` on execute_code payloads |
 
 ## Decisions
 
@@ -69,7 +70,9 @@ Common rule ids (also land in audit / report):
 - `shellsafe.unparsable`, `shellsafe.policy`
 - `shell.pipe_network_to_interpreter`, `shell.pipe_to_interpreter`
 - `shell.remote_go_run`
+- `code.subprocess_network`
 - `network.denied_host`
+- `extra.deny_tool_name`, `extra.ask_tool_name`, `extra.deny_command_substring`
 - `path.denied`, `env.not_allowed`
 - `danger.destructive_delete`
 - `secret.*`
@@ -114,11 +117,20 @@ events, err := runner.Run(ctx, user, session, msg,
 Optional:
 
 - `safety.Compose(guard, otherPolicy)` — first non-allow wins
-- `safety.WithExtraRules(...)` — can only tighten
+- `safety.WithExtraRules(...)` — can only tighten; helpers:
+  - `DenyToolNames`, `AskToolNames`, `DenyCommandSubstrings`
+  - or `NamedRule` for custom checks
 - `Policy.CommandLists()` — feed workspaceexec / skill_run command lists
 - output scrubbing (PermissionPolicy never sees results):
 
 ```go
+guard := safety.NewGuard(
+    safety.WithPolicyFile("tool_safety_policy.yaml"),
+    safety.WithExtraRules(
+        safety.DenyToolNames("host_exec"),
+        safety.DenyCommandSubstrings("terraform apply"),
+    ),
+)
 cbs := tool.NewCallbacks()
 cbs.RegisterAfterTool(safety.AfterToolRedact())
 // also: safety.RedactText / RedactJSON / RedactValue / RedactMap

@@ -79,6 +79,9 @@ var (
 	rePEM           = regexp.MustCompile(`-----BEGIN (?:RSA |OPENSSH |EC )?PRIVATE KEY-----`)
 	reSK            = regexp.MustCompile(`(?i)\bsk-[a-z0-9]{16,}\b`)
 	reNetPipeInterp = regexp.MustCompile(`(?i)\b(?:curl|wget|fetch|nc|ncat|netcat)\b[^|\n]*\|\s*(?:python3?|py|node|nodejs|deno|bun|ruby|perl|php|lua|pwsh|powershell|bash|sh|zsh|dash|ash)\b`)
+	// Python/Node-ish download-and-run via subprocess / os.system (code_blocks).
+	reSubprocessNet = regexp.MustCompile(`(?i)(?:subprocess\.(?:run|call|popen|check_output|check_call)|os\.(?:system|popen)|child_process\.(?:exec|execSync|spawn|spawnSync))\s*\([^;\n]{0,240}\b(?:curl|wget|fetch|http\.get|urllib|requests\.get)\b`)
+	reRemoteGoRun   = regexp.MustCompile(`(?i)\bgo\s+run\s+(?:https?://)?(?:[a-z0-9-]+\.)+[a-z]{2,}/[^\s'"]+`)
 )
 
 // Scan applies policy to an extracted payload.
@@ -218,6 +221,12 @@ func scanNonShellPayload(res Result, ex Extracted, policy Policy) Result {
 	if f, ok := scanTextPipeInterpreter(extraText); ok {
 		return finalize(res, f)
 	}
+	if f, ok := scanCodeSubprocessNetwork(extraText); ok {
+		return finalize(res, f)
+	}
+	if f, ok := scanTextRemoteGoRun(extraText); ok {
+		return finalize(res, f)
+	}
 	if f, ok := scanNetworkFromText(extraText, policy.AllowedHosts); ok {
 		return finalize(res, f)
 	}
@@ -242,7 +251,33 @@ func scanTextPipeInterpreter(text string) (Finding, bool) {
 		Decision: DecisionDeny,
 		Risk:     RiskHigh,
 		Evidence: "payload pipes network output into an interpreter",
-		Advice:   "download to a reviewed artifact first; do not pipe remote content into python/node/ruby/…",
+		Advice:   "download to a reviewed artifact first; do not pipe remote content into python/node/sh/bash/…",
+	}, true
+}
+
+func scanCodeSubprocessNetwork(text string) (Finding, bool) {
+	if text == "" || !reSubprocessNet.MatchString(text) {
+		return Finding{}, false
+	}
+	return Finding{
+		RuleID:   "code.subprocess_network",
+		Decision: DecisionDeny,
+		Risk:     RiskHigh,
+		Evidence: "code spawns a network client via subprocess/os.system/child_process",
+		Advice:   "fetch outside the sandbox with a reviewed allowlist, or pass a local artifact path",
+	}, true
+}
+
+func scanTextRemoteGoRun(text string) (Finding, bool) {
+	if text == "" || !reRemoteGoRun.MatchString(text) {
+		return Finding{}, false
+	}
+	return Finding{
+		RuleID:   "shell.remote_go_run",
+		Decision: DecisionDeny,
+		Risk:     RiskHigh,
+		Evidence: "payload contains go run of a remote module path",
+		Advice:   "vendor or clone the module locally, review it, then go run ./path",
 	}, true
 }
 

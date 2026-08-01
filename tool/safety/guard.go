@@ -154,14 +154,25 @@ func (g *Guard) CheckToolPermission(
 	if err != nil {
 		return tool.DenyPermission(err.Error()), nil
 	}
-	// Only skip scanning when there is nothing to inspect. Secret-shaped
-	// JSON keys, path fields, and env overrides must still reach Scan even
-	// for unknown / non-exec tools.
-	if !needsScan(ex) {
+	// Skip the built-in Scan when there is nothing to inspect. Extra rules
+	// still run so DenyToolNames / AskToolNames work on empty arg objects.
+	// Secret-shaped JSON keys, path fields, and env overrides must still
+	// reach Scan even for unknown / non-exec tools.
+	if !needsScan(ex) && len(g.extra) == 0 {
 		return tool.AllowPermission(), nil
 	}
 
-	result := Scan(ex, g.policy)
+	result := Result{
+		Decision:  DecisionAllow,
+		RiskLevel: RiskNone,
+		ToolName:  ex.ToolName,
+		Command:   ex.Command,
+		Backend:   ex.Backend,
+		Advice:    "safe to execute under current policy",
+	}
+	if needsScan(ex) {
+		result = Scan(ex, g.policy)
+	}
 	for _, rule := range g.extra {
 		if rule == nil {
 			continue

@@ -377,6 +377,46 @@
     "redacted": false
   },
   {
+    "decision": "deny",
+    "risk_level": "high",
+    "rule_id": "shell.pipe_network_to_interpreter",
+    "evidence": "payload pipes network output into an interpreter",
+    "recommendation": "download to a reviewed artifact first; do not pipe remote content into python/node/sh/bash/…",
+    "tool_name": "execute_code",
+    "backend": "codeexec",
+    "blocked": true,
+    "findings": [
+      {
+        "rule_id": "shell.pipe_network_to_interpreter",
+        "decision": "deny",
+        "risk_level": "high",
+        "evidence": "payload pipes network output into an interpreter",
+        "recommendation": "download to a reviewed artifact first; do not pipe remote content into python/node/sh/bash/…"
+      }
+    ],
+    "redacted": false
+  },
+  {
+    "decision": "deny",
+    "risk_level": "high",
+    "rule_id": "code.subprocess_network",
+    "evidence": "code spawns a network client via subprocess/os.system/child_process",
+    "recommendation": "fetch outside the sandbox with a reviewed allowlist, or pass a local artifact path",
+    "tool_name": "execute_code",
+    "backend": "codeexec",
+    "blocked": true,
+    "findings": [
+      {
+        "rule_id": "code.subprocess_network",
+        "decision": "deny",
+        "risk_level": "high",
+        "evidence": "code spawns a network client via subprocess/os.system/child_process",
+        "recommendation": "fetch outside the sandbox with a reviewed allowlist, or pass a local artifact path"
+      }
+    ],
+    "redacted": false
+  },
+  {
     "decision": "ask",
     "risk_level": "medium",
     "rule_id": "resource.oversized_payload",

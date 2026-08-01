@@ -64,6 +64,19 @@ cbs.RegisterAfterTool(safety.AfterToolRedact())
 
 `go run .` prints a small before/after `RedactJSON` example at the end.
 
+## Site rules without editing YAML
+
+```go
+guard := safety.NewGuard(
+    safety.WithPolicyFile("tool_safety_policy.yaml"),
+    safety.WithExtraRules(
+        safety.DenyToolNames("host_exec"),
+        safety.DenyCommandSubstrings("terraform apply"),
+    ),
+)
+_ = safety.Compose(guard) // stack more PermissionPolicy impls if needed
+```
+
 ## What this demo is not
 
 It does not start runner, workspaceexec, or a real sandbox. It only shows the
