@@ -303,7 +303,8 @@ func TestEmitSpan_Recording(t *testing.T) {
 		RiskLevel: RiskHigh,
 		RuleID:    "test",
 		Backend:   BackendWorkspace,
-	})
+		Blocked:   true,
+	}, "call-cov")
 	span.End()
 }
 

@@ -30,8 +30,9 @@ func TestGuard_EmitsOTelAttributes(t *testing.T) {
 	ctx, span := tp.Tracer("tool-safety-test").Start(context.Background(), "permission.check")
 	g := safety.NewGuard()
 	dec, err := g.CheckToolPermission(ctx, &tool.PermissionRequest{
-		ToolName:  "workspace_exec",
-		Arguments: []byte(`{"command":"rm -rf /"}`),
+		ToolName:   "workspace_exec",
+		ToolCallID: "call-otel-1",
+		Arguments:  []byte(`{"command":"rm -rf /"}`),
 	})
 	require.NoError(t, err)
 	require.Equal(t, tool.PermissionActionDeny, dec.Action)
@@ -40,11 +41,19 @@ func TestGuard_EmitsOTelAttributes(t *testing.T) {
 	ended := recorder.Ended()
 	require.NotEmpty(t, ended)
 	got := map[string]string{}
+	var blocked bool
 	for _, a := range ended[0].Attributes() {
-		got[string(a.Key)] = a.Value.AsString()
+		switch string(a.Key) {
+		case safety.AttrBlocked:
+			blocked = a.Value.AsBool()
+		default:
+			got[string(a.Key)] = a.Value.AsString()
+		}
 	}
 	require.Equal(t, "deny", got[safety.AttrDecision])
 	require.NotEmpty(t, got[safety.AttrRiskLevel])
 	require.NotEmpty(t, got[safety.AttrRuleID])
 	require.Equal(t, string(safety.BackendWorkspace), got[safety.AttrBackend])
+	require.True(t, blocked)
+	require.Equal(t, "call-otel-1", got[safety.AttrToolCallID])
 }

@@ -59,6 +59,7 @@ Residual bypasses (honest list):
 | Secrets in tool output | host-owned | wire `AfterToolRedact` / `RedactJSON`; PermissionPolicy never sees results |
 | Remote `go run host/…` | yes | deny (`shell.remote_go_run`); also in `code_blocks`; local `./…` stays ask |
 | `curl\|sh` / `curl\|bash` | yes | shell + code_blocks (network→interpreter) |
+| PowerShell `iwr\|iex` / `iex(irm …)` | yes | same pipe-to-interpreter class |
 | `subprocess`/`os.system` + curl | yes | `code.subprocess_network` on execute_code payloads |
 
 ## Decisions
@@ -136,8 +137,10 @@ cbs.RegisterAfterTool(safety.AfterToolRedact())
 // also: safety.RedactText / RedactJSON / RedactValue / RedactMap
 ```
 
-OTel attribute keys: `tool.safety.decision`, `tool.safety.risk_level`,
-`tool.safety.rule_id`, `tool.safety.backend`.
+OTel attribute keys (JSONL audit uses the same suffixes):
+
+- `tool.safety.decision` / `risk_level` / `rule_id` / `backend`
+- `tool.safety.blocked` / `tool_call_id`
 
 ## Policy load behavior
 

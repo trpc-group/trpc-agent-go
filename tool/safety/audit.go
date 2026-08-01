@@ -18,9 +18,14 @@ import (
 )
 
 // AuditEvent is one JSONL audit record.
+//
+// Field names for decision / risk_level / rule_id / backend / blocked align
+// with the OTel attribute suffixes under "tool.safety.*" so hosts can join
+// spans and audit lines without a mapping table.
 type AuditEvent struct {
 	Timestamp  time.Time `json:"timestamp"`
 	ToolName   string    `json:"tool_name"`
+	ToolCallID string    `json:"tool_call_id,omitempty"`
 	Decision   Decision  `json:"decision"`
 	RiskLevel  RiskLevel `json:"risk_level"`
 	RuleID     string    `json:"rule_id"`

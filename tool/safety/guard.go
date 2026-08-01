@@ -26,6 +26,7 @@ const maxStoredResults = 32
 // Attr keys reserved for OpenTelemetry consumers.
 const (
 	// AttrDecision is the span attribute for allow/deny/ask.
+	// JSONL audit uses the same suffix as the field name "decision".
 	AttrDecision = "tool.safety.decision"
 	// AttrRiskLevel is the span attribute for risk severity.
 	AttrRiskLevel = "tool.safety.risk_level"
@@ -33,6 +34,10 @@ const (
 	AttrRuleID = "tool.safety.rule_id"
 	// AttrBackend is the span attribute for workspace/host/code backend.
 	AttrBackend = "tool.safety.backend"
+	// AttrBlocked is true when the decision is deny or ask.
+	AttrBlocked = "tool.safety.blocked"
+	// AttrToolCallID is the model-issued tool call id when present.
+	AttrToolCallID = "tool.safety.tool_call_id"
 )
 
 // Guard is a thin pre-execution safety policy that implements tool.PermissionPolicy.
@@ -188,9 +193,13 @@ func (g *Guard) CheckToolPermission(
 	if result.ToolName == "" && req != nil {
 		result.ToolName = req.ToolName
 	}
+	toolCallID := ""
+	if req != nil {
+		toolCallID = req.ToolCallID
+	}
 
 	g.record(result)
-	g.emitSpan(ctx, result)
+	g.emitSpan(ctx, result, toolCallID)
 	if g.audit != nil {
 		// Best-effort audit: permission decision must not hang on disk I/O
 		// failure, but we still attempt to record. Callers who need hard
@@ -198,6 +207,7 @@ func (g *Guard) CheckToolPermission(
 		_ = g.audit.Append(AuditEvent{
 			Timestamp:  time.Now().UTC(),
 			ToolName:   result.ToolName,
+			ToolCallID: toolCallID,
 			Decision:   result.Decision,
 			RiskLevel:  result.RiskLevel,
 			RuleID:     result.RuleID,
@@ -253,15 +263,20 @@ func (g *Guard) record(r Result) {
 	g.reports++
 }
 
-func (g *Guard) emitSpan(ctx context.Context, r Result) {
+func (g *Guard) emitSpan(ctx context.Context, r Result, toolCallID string) {
 	span := trace.SpanFromContext(ctx)
 	if span == nil || !span.IsRecording() {
 		return
 	}
-	span.SetAttributes(
+	attrs := []attribute.KeyValue{
 		attribute.String(AttrDecision, string(r.Decision)),
 		attribute.String(AttrRiskLevel, string(r.RiskLevel)),
 		attribute.String(AttrRuleID, r.RuleID),
 		attribute.String(AttrBackend, string(r.Backend)),
-	)
+		attribute.Bool(AttrBlocked, r.Blocked),
+	}
+	if toolCallID != "" {
+		attrs = append(attrs, attribute.String(AttrToolCallID, toolCallID))
+	}
+	span.SetAttributes(attrs...)
 }

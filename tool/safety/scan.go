@@ -79,6 +79,9 @@ var (
 	rePEM           = regexp.MustCompile(`-----BEGIN (?:RSA |OPENSSH |EC )?PRIVATE KEY-----`)
 	reSK            = regexp.MustCompile(`(?i)\bsk-[a-z0-9]{16,}\b`)
 	reNetPipeInterp = regexp.MustCompile(`(?i)\b(?:curl|wget|fetch|nc|ncat|netcat)\b[^|\n]*\|\s*(?:python3?|py|node|nodejs|deno|bun|ruby|perl|php|lua|pwsh|powershell|bash|sh|zsh|dash|ash)\b`)
+	// PowerShell download-and-run: iwr|iex / irm|iex / iex(iwr …)
+	rePSNetIEX = regexp.MustCompile(`(?i)\b(?:invoke-webrequest|iwr|invoke-restmethod|irm)\b[^|\n]*\|\s*(?:invoke-expression|iex)\b`)
+	rePSIEXDownload = regexp.MustCompile(`(?i)\b(?:invoke-expression|iex)\s*\(\s*(?:invoke-webrequest|iwr|invoke-restmethod|irm)\b`)
 	// Python/Node-ish download-and-run via subprocess / os.system (code_blocks).
 	reSubprocessNet = regexp.MustCompile(`(?i)(?:subprocess\.(?:run|call|popen|check_output|check_call)|os\.(?:system|popen)|child_process\.(?:exec|execSync|spawn|spawnSync))\s*\([^;\n]{0,240}\b(?:curl|wget|fetch|http\.get|urllib|requests\.get)\b`)
 	reRemoteGoRun   = regexp.MustCompile(`(?i)\bgo\s+run\s+(?:https?://)?(?:[a-z0-9-]+\.)+[a-z]{2,}/[^\s'"]+`)
@@ -243,7 +246,12 @@ func scanNonShellPayload(res Result, ex Extracted, policy Policy) Result {
 }
 
 func scanTextPipeInterpreter(text string) (Finding, bool) {
-	if text == "" || !reNetPipeInterp.MatchString(text) {
+	if text == "" {
+		return Finding{}, false
+	}
+	if !reNetPipeInterp.MatchString(text) &&
+		!rePSNetIEX.MatchString(text) &&
+		!rePSIEXDownload.MatchString(text) {
 		return Finding{}, false
 	}
 	return Finding{
@@ -251,7 +259,7 @@ func scanTextPipeInterpreter(text string) (Finding, bool) {
 		Decision: DecisionDeny,
 		Risk:     RiskHigh,
 		Evidence: "payload pipes network output into an interpreter",
-		Advice:   "download to a reviewed artifact first; do not pipe remote content into python/node/sh/bash/…",
+		Advice:   "download to a reviewed artifact first; do not pipe remote content into python/node/sh/bash/iex/…",
 	}, true
 }
 
@@ -563,7 +571,9 @@ func scanNetworkFromText(text string, allowed []string) (Finding, bool) {
 
 func isNetworkClient(base string) bool {
 	switch base {
-	case "curl", "wget", "fetch", "nc", "ncat", "netcat", "ssh", "scp", "sftp", "ftp":
+	case "curl", "wget", "fetch", "nc", "ncat", "netcat", "ssh", "scp", "sftp", "ftp",
+		// PowerShell download cmdlets / aliases (when they appear as argv[0]).
+		"iwr", "irm", "invoke-webrequest", "invoke-restmethod":
 		return true
 	default:
 		return false
@@ -577,7 +587,9 @@ func isInterpreter(base string) bool {
 		"ruby", "perl", "php", "lua", "osascript",
 		"pwsh", "powershell", "powershell.exe",
 		// curl|sh is the classic download-and-run bypass.
-		"sh", "bash", "zsh", "dash", "ash":
+		"sh", "bash", "zsh", "dash", "ash",
+		// PowerShell: iwr … | iex
+		"iex", "invoke-expression":
 		return true
 	default:
 		return false
