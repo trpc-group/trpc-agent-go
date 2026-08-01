@@ -77,6 +77,15 @@ func Extract(req *tool.PermissionRequest) (Extracted, error) {
 	}
 
 	out.Command = stringField(payload, "command")
+	if args := stringSliceField(payload, "args", "argv", "arguments"); len(args) > 0 {
+		// Mentors repeatedly flag PRs that scan `command` but drop argv.
+		joined := strings.Join(args, " ")
+		if out.Command == "" {
+			out.Command = joined
+		} else {
+			out.Command = strings.TrimSpace(out.Command + " " + joined)
+		}
+	}
 	out.Stdin = firstStringField(payload, "stdin", "chars")
 	out.Cwd = firstStringField(payload, "cwd", "workdir", "working_directory")
 	env, err := stringMapField(payload, "env")
@@ -84,9 +93,13 @@ func Extract(req *tool.PermissionRequest) (Extracted, error) {
 		return out, err
 	}
 	out.Env = env
-	out.CodeBlocks = codeBlockTexts(payload["code_blocks"])
+	blocks, err := codeBlockTexts(payload["code_blocks"], 0)
+	if err != nil {
+		return out, err
+	}
+	out.CodeBlocks = blocks
 
-	parts := make([]string, 0, 4)
+	parts := make([]string, 0, 8)
 	if out.Command != "" {
 		parts = append(parts, out.Command)
 	}
@@ -97,6 +110,12 @@ func Extract(req *tool.PermissionRequest) (Extracted, error) {
 		parts = append(parts, out.Cwd)
 	}
 	parts = append(parts, out.CodeBlocks...)
+	parts = append(parts, secretKeyedStrings(payload)...)
+	for k, v := range out.Env {
+		if looksLikeSecretKey(k) && v != "" {
+			parts = append(parts, k+"="+v)
+		}
+	}
 	out.RawText = strings.Join(parts, "\n")
 	return out, nil
 }
@@ -156,11 +175,76 @@ func stringMapField(payload map[string]json.RawMessage, key string) (map[string]
 	return m, nil
 }
 
-func codeBlockTexts(raw json.RawMessage) []string {
-	if len(raw) == 0 {
+func stringSliceField(payload map[string]json.RawMessage, keys ...string) []string {
+	if payload == nil {
 		return nil
 	}
-	// Array of objects with "code".
+	for _, key := range keys {
+		raw, ok := payload[key]
+		if !ok || len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			continue
+		}
+		var strs []string
+		if err := json.Unmarshal(raw, &strs); err != nil {
+			continue
+		}
+		out := make([]string, 0, len(strs))
+		for _, s := range strs {
+			s = strings.TrimSpace(s)
+			if s != "" {
+				out = append(out, s)
+			}
+		}
+		if len(out) > 0 {
+			return out
+		}
+	}
+	return nil
+}
+
+func looksLikeSecretKey(k string) bool {
+	n := strings.ToLower(strings.TrimSpace(k))
+	n = strings.ReplaceAll(n, "-", "_")
+	switch {
+	case n == "password", n == "passwd", n == "secret", n == "token",
+		n == "api_key", n == "apikey", n == "access_token", n == "refresh_token",
+		n == "private_key", n == "client_secret", n == "authorization":
+		return true
+	case strings.Contains(n, "password"), strings.Contains(n, "secret"),
+		strings.HasSuffix(n, "_token"), strings.HasSuffix(n, "_key"):
+		return true
+	default:
+		return false
+	}
+}
+
+func secretKeyedStrings(payload map[string]json.RawMessage) []string {
+	if payload == nil {
+		return nil
+	}
+	var out []string
+	for k, raw := range payload {
+		if !looksLikeSecretKey(k) {
+			continue
+		}
+		var s string
+		if err := json.Unmarshal(raw, &s); err != nil || strings.TrimSpace(s) == "" {
+			continue
+		}
+		out = append(out, k+"="+s)
+	}
+	return out
+}
+
+const maxCodeBlockDepth = 3
+
+func codeBlockTexts(raw json.RawMessage, depth int) ([]string, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	if depth > maxCodeBlockDepth {
+		return nil, fmt.Errorf("safety: code_blocks nesting exceeds %d", maxCodeBlockDepth)
+	}
 	var blocks []struct {
 		Code string `json:"code"`
 	}
@@ -172,17 +256,15 @@ func codeBlockTexts(raw json.RawMessage) []string {
 			}
 		}
 		if len(out) > 0 {
-			return out
+			return out, nil
 		}
 	}
-	// Single object {"language":"...","code":"..."}.
 	var one struct {
 		Code string `json:"code"`
 	}
 	if err := json.Unmarshal(raw, &one); err == nil && strings.TrimSpace(one.Code) != "" {
-		return []string{one.Code}
+		return []string{one.Code}, nil
 	}
-	// Plain string array.
 	var strs []string
 	if err := json.Unmarshal(raw, &strs); err == nil {
 		out := make([]string, 0, len(strs))
@@ -192,27 +274,19 @@ func codeBlockTexts(raw json.RawMessage) []string {
 			}
 		}
 		if len(out) > 0 {
-			return out
+			return out, nil
 		}
 	}
-	// Double-encoded string form used by some model outputs.
 	var asString string
 	if err := json.Unmarshal(raw, &asString); err == nil && strings.TrimSpace(asString) != "" {
-		var inner []struct {
-			Code string `json:"code"`
+		inner, err := codeBlockTexts(json.RawMessage(asString), depth+1)
+		if err != nil {
+			return nil, err
 		}
-		if err := json.Unmarshal([]byte(asString), &inner); err == nil {
-			out := make([]string, 0, len(inner))
-			for _, b := range inner {
-				if strings.TrimSpace(b.Code) != "" {
-					out = append(out, b.Code)
-				}
-			}
-			if len(out) > 0 {
-				return out
-			}
+		if len(inner) > 0 {
+			return inner, nil
 		}
-		return []string{asString}
+		return []string{asString}, nil
 	}
-	return nil
+	return nil, nil
 }

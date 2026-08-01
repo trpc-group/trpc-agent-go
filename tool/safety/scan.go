@@ -129,6 +129,9 @@ func Scan(ex Extracted, policy Policy) Result {
 	if f, ok := scanResourceAbuse(ex, policy); ok {
 		res = finalize(res, f)
 	}
+	if f, ok := scanInfiniteLoop(ex); ok && res.Decision != DecisionDeny {
+		res = finalize(res, f)
+	}
 	if ex.Backend == BackendHost && policy.HostExecRequiresAsk && res.Decision == DecisionAllow {
 		res = finalize(res, Finding{
 			RuleID:   "hostexec.long_session_risk",
@@ -668,6 +671,32 @@ func looksLikeInstall(code string) bool {
 		}
 	}
 	return false
+}
+
+func scanInfiniteLoop(ex Extracted) (Finding, bool) {
+	texts := collectTexts(ex)
+	patterns := []string{
+		"while true", "while (true)", "while(true)",
+		"for(;;)", "for (; ;)",
+	}
+	for _, t := range texts {
+		if t == "" {
+			continue
+		}
+		lower := strings.ToLower(t)
+		for _, p := range patterns {
+			if strings.Contains(lower, strings.ToLower(p)) {
+				return Finding{
+					RuleID:   "resource.infinite_loop",
+					Decision: DecisionAsk,
+					Risk:     RiskMedium,
+					Evidence: "payload appears to contain an unbounded loop",
+					Advice:   "add a termination condition or require human review before execution",
+				}, true
+			}
+		}
+	}
+	return Finding{}, false
 }
 
 func containsSecretEvidence(s string) bool {

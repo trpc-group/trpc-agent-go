@@ -29,11 +29,25 @@ require a code change.
 | Shell bypass (`$()`, backticks, `bash -c`, …) | `shellsafe.Parse` + active policy; unparsable commands are **deny** |
 | hostexec PTY / long session | default `host_exec_requires_ask` |
 | Dependency installs | `ask_commands` (npm/pip/apt/`go install`, …) |
-| Resource abuse | long `sleep` and oversized payloads vs `max_timeout_seconds` / `max_output_bytes` |
-| Secret leakage in args / reports | deny + redact `command` / findings before report/audit |
+| Resource abuse | long `sleep`, oversized payloads, and obvious unbounded loops (`while true` / `for(;;)`) → ask |
+| Secret leakage in args / reports | deny + redact; also scan JSON keys like `password` / `api_key`; export `RedactText` for post-exec scrubbing |
 
 Structured report fields match the issue: decision, risk level, rule id,
 evidence, recommendation, tool name, command, backend, blocked.
+
+## Design choices (and why)
+
+- **PermissionPolicy only** — wrapping ToolSet often drops `tool.Tool` /
+  `tool.ToolSet` capabilities; compose with `safety.Compose` instead.
+- **Reuse `internal/shellsafe`** — do not fork a second shell parser; leave
+  spawn-time checks where they already live.
+- **Fail closed** — malformed / `null` args, unknown policy keys, load
+  errors, and unparsable commands deny.
+- **Scan the full payload** — `command` + `args`/`argv`, `stdin`,
+  `code_blocks`, `cwd`, and secret-shaped JSON fields.
+- **Exact host allowlist** — bare hosts match exactly; leading-dot entries
+  opt into suffix wildcards.
+- **Extension point** — `WithExtraRules` for org-specific tighten-only checks.
 
 ## Where it sits relative to the rest of the stack
 

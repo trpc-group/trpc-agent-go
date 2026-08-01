@@ -456,3 +456,92 @@ func TestEnvLocalPath_Denied(t *testing.T) {
 	require.Equal(t, tool.PermissionActionDeny, dec.Action)
 	require.Contains(t, dec.Reason, "path")
 }
+
+func TestArgsFoldedIntoCommand(t *testing.T) {
+	t.Parallel()
+	g := safety.NewGuard()
+	raw, err := json.Marshal(map[string]any{
+		"command": "rm",
+		"args":    []string{"-rf", "/tmp/x"},
+	})
+	require.NoError(t, err)
+	dec, err := g.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: raw,
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, dec.Action)
+}
+
+func TestJSONPasswordField_Denied(t *testing.T) {
+	t.Parallel()
+	g := safety.NewGuard()
+	raw, err := json.Marshal(map[string]any{
+		"command":  "echo ok",
+		"password": "hunter2hunter2",
+	})
+	require.NoError(t, err)
+	dec, err := g.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: raw,
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, dec.Action)
+	require.Contains(t, dec.Reason, "secret")
+}
+
+func TestComposeAndExtraRule(t *testing.T) {
+	t.Parallel()
+	denyGo := safety.NamedRule("site.deny_go", func(ex safety.Extracted, _ safety.Policy) (safety.Finding, bool) {
+		if strings.Contains(ex.Command, "go test") {
+			return safety.Finding{
+				RuleID:   "site.deny_go",
+				Decision: safety.DecisionDeny,
+				Risk:     safety.RiskHigh,
+				Evidence: "org policy blocks go test",
+				Advice:   "run tests outside the agent",
+			}, true
+		}
+		return safety.Finding{}, false
+	})
+	g := safety.NewGuard(safety.WithExtraRules(denyGo))
+	policy := safety.Compose(g)
+	raw, _ := json.Marshal(map[string]any{"command": "go test ./..."})
+	dec, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: raw,
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, dec.Action)
+	require.Contains(t, dec.Reason, "site.deny_go")
+}
+
+func TestRedactHelpers(t *testing.T) {
+	t.Parallel()
+	token := "sk-" + strings.Repeat("a", 32)
+	out := safety.RedactText("Bearer " + token)
+	require.Contains(t, out, "REDACTED")
+	require.NotContains(t, out, token)
+	m := safety.RedactMap(map[string]any{"cmd": "token=supersecretvalue123", "n": 1})
+	require.Contains(t, m["cmd"].(string), "REDACTED")
+	require.Equal(t, 1, m["n"])
+}
+
+func TestInfiniteLoopAsk(t *testing.T) {
+	t.Parallel()
+	g := safety.NewGuard()
+	raw, err := json.Marshal(map[string]any{
+		"code_blocks": []map[string]string{{
+			"language": "python",
+			"code":     "while True:\n  pass\n",
+		}},
+	})
+	require.NoError(t, err)
+	dec, err := g.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "execute_code",
+		Arguments: raw,
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionAsk, dec.Action)
+	require.Contains(t, dec.Reason, "infinite_loop")
+}

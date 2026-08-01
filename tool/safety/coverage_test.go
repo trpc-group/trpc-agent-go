@@ -33,19 +33,29 @@ func TestPathHit_EnvVariants(t *testing.T) {
 
 func TestCodeBlockTexts_Shapes(t *testing.T) {
 	t.Parallel()
-	require.Equal(t, []string{"print(1)"}, codeBlockTexts(json.RawMessage(
-		`[{"language":"python","code":"print(1)"}]`,
-	)))
-	require.Equal(t, []string{"echo hi"}, codeBlockTexts(json.RawMessage(
-		`{"language":"bash","code":"echo hi"}`,
-	)))
-	require.Equal(t, []string{"rm -rf /"}, codeBlockTexts(json.RawMessage(`["rm -rf /"]`)))
-	require.Equal(t, []string{"x=1"}, codeBlockTexts(json.RawMessage(`"x=1"`)))
+	got, err := codeBlockTexts(json.RawMessage(`[{"language":"python","code":"print(1)"}]`), 0)
+	require.NoError(t, err)
+	require.Equal(t, []string{"print(1)"}, got)
+	got, err = codeBlockTexts(json.RawMessage(`{"language":"bash","code":"echo hi"}`), 0)
+	require.NoError(t, err)
+	require.Equal(t, []string{"echo hi"}, got)
+	got, err = codeBlockTexts(json.RawMessage(`["rm -rf /"]`), 0)
+	require.NoError(t, err)
+	require.Equal(t, []string{"rm -rf /"}, got)
+	got, err = codeBlockTexts(json.RawMessage(`"x=1"`), 0)
+	require.NoError(t, err)
+	require.Equal(t, []string{"x=1"}, got)
 	raw, err := json.Marshal(`[{"code":"echo nested"}]`)
 	require.NoError(t, err)
-	require.Equal(t, []string{"echo nested"}, codeBlockTexts(json.RawMessage(raw)))
-	require.Nil(t, codeBlockTexts(nil))
-	require.Nil(t, codeBlockTexts(json.RawMessage(`true`)))
+	got, err = codeBlockTexts(json.RawMessage(raw), 0)
+	require.NoError(t, err)
+	require.Equal(t, []string{"echo nested"}, got)
+	got, err = codeBlockTexts(nil, 0)
+	require.NoError(t, err)
+	require.Nil(t, got)
+	got, err = codeBlockTexts(json.RawMessage(`true`), 0)
+	require.NoError(t, err)
+	require.Nil(t, got)
 }
 
 func TestParseDurationToken_Units(t *testing.T) {

