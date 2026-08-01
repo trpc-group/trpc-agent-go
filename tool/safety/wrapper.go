@@ -10,6 +10,7 @@
 package safety
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -186,12 +187,14 @@ func (wrapper *outputGuard) Call(
 	runCtx, cancel := context.WithTimeout(parentCtx, wrapper.guard.policy.maxTimeout)
 	defer cancel()
 	result, err = wrapper.callable.Call(runCtx, arguments)
-	violation, blocked := wrapper.callViolation(runCtx, parentCtx, result, err)
+	inspected, violation, blocked := wrapper.callViolation(
+		runCtx, parentCtx, result, err,
+	)
 	if blocked {
 		return wrapper.blockedResult(parentCtx, started, violation),
 			redactedTerminalError(err)
 	}
-	return result, err
+	return inspected, err
 }
 
 func (wrapper *outputGuard) recoverPostcheck(
@@ -219,19 +222,24 @@ func (wrapper *outputGuard) callViolation(
 	parentCtx context.Context,
 	result any,
 	callErr error,
-) (outputViolation, bool) {
+) (any, outputViolation, bool) {
 	if errors.Is(runCtx.Err(), context.DeadlineExceeded) && parentCtx.Err() == nil {
-		return timeoutViolation(), true
+		return nil, timeoutViolation(), true
 	}
+	inspected := result
 	if result != nil {
-		if violation, blocked := wrapper.resultViolation(result); blocked {
-			return violation, true
+		var violation outputViolation
+		var blocked bool
+		inspected, violation, blocked = wrapper.inspectResult(result)
+		if blocked {
+			return nil, violation, true
 		}
 	}
 	if callErr != nil {
-		return wrapper.errorViolation(callErr)
+		violation, blocked := wrapper.errorViolation(callErr)
+		return inspected, violation, blocked
 	}
-	return outputViolation{}, false
+	return inspected, outputViolation{}, false
 }
 
 func (wrapper *outputGuard) errorViolation(callErr error) (outputViolation, bool) {
@@ -247,41 +255,162 @@ func (wrapper *outputGuard) errorViolation(callErr error) (outputViolation, bool
 	return outputViolation{}, false
 }
 
-func (wrapper *outputGuard) resultViolation(result any) (outputViolation, bool) {
-	serialized, err := json.Marshal(result)
+func (wrapper *outputGuard) inspectResult(result any) (any, outputViolation, bool) {
+	inspection := inspectOutput(result)
+	serialized, err := marshalOutput(result)
 	if err != nil {
-		return uninspectableViolation(), true
+		return nil, uninspectableViolation(), true
 	}
 	if int64(len(serialized)) > wrapper.guard.policy.maxOutputBytes {
-		return outputLimitViolation(), true
+		return nil, outputLimitViolation(), true
 	}
-	if raw, ok := byteSliceText(result); ok && hasSensitiveText(raw) {
-		return secretOutputViolation(), true
+	if inspection.hasSensitiveBytes {
+		return nil, secretOutputViolation(), true
 	}
 	if hasSensitiveText(string(serialized)) {
-		return secretOutputViolation(), true
+		return nil, secretOutputViolation(), true
 	}
-	return outputViolation{}, false
+	if inspection.hasJSONMarshaler {
+		return json.RawMessage(append([]byte(nil), serialized...)), outputViolation{}, false
+	}
+	return result, outputViolation{}, false
 }
 
-func byteSliceText(result any) (string, bool) {
-	value := reflect.ValueOf(result)
-	for value.Kind() == reflect.Pointer {
-		if value.IsNil() {
-			return "", false
-		}
-		value = value.Elem()
+func marshalOutput(result any) ([]byte, error) {
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(result); err != nil {
+		return nil, err
 	}
-	if value.Kind() != reflect.Slice ||
-		value.Type().Elem().Kind() != reflect.Uint8 {
+	serialized := buf.Bytes()
+	if len(serialized) > 0 && serialized[len(serialized)-1] == '\n' {
+		serialized = serialized[:len(serialized)-1]
+	}
+	return append([]byte(nil), serialized...), nil
+}
+
+type outputVisit struct {
+	typ reflect.Type
+	ptr uintptr
+	len int
+}
+
+type outputInspection struct {
+	hasSensitiveBytes bool
+	hasJSONMarshaler  bool
+}
+
+var jsonMarshalerType = reflect.TypeOf((*json.Marshaler)(nil)).Elem()
+
+func inspectOutput(result any) outputInspection {
+	var inspection outputInspection
+	inspectOutputValue(
+		reflect.ValueOf(result),
+		make(map[outputVisit]struct{}),
+		&inspection,
+	)
+	return inspection
+}
+
+func inspectOutputValue(
+	value reflect.Value,
+	seen map[outputVisit]struct{},
+	inspection *outputInspection,
+) {
+	if !value.IsValid() {
+		return
+	}
+	typeOfValue := value.Type()
+	if typeOfValue.Implements(jsonMarshalerType) ||
+		reflect.PointerTo(typeOfValue).Implements(jsonMarshalerType) {
+		inspection.hasJSONMarshaler = true
+	}
+	if value.Kind() == reflect.Interface {
+		if value.IsNil() {
+			return
+		}
+		inspectOutputValue(value.Elem(), seen, inspection)
+		return
+	}
+	if markOutputVisit(value, seen) {
+		return
+	}
+	switch value.Kind() {
+	case reflect.Pointer:
+		if value.IsNil() {
+			return
+		}
+		inspectOutputValue(value.Elem(), seen, inspection)
+	case reflect.Slice, reflect.Array:
+		if byteSlice, ok := byteSequenceText(value); ok {
+			if hasSensitiveText(byteSlice) {
+				inspection.hasSensitiveBytes = true
+			}
+			return
+		}
+		for i := 0; i < value.Len(); i++ {
+			inspectOutputValue(value.Index(i), seen, inspection)
+		}
+	case reflect.Map:
+		if value.IsNil() {
+			return
+		}
+		iter := value.MapRange()
+		for iter.Next() {
+			inspectOutputValue(iter.Key(), seen, inspection)
+			inspectOutputValue(iter.Value(), seen, inspection)
+		}
+	case reflect.Struct:
+		typeOfValue := value.Type()
+		for i := 0; i < value.NumField(); i++ {
+			field := typeOfValue.Field(i)
+			if field.PkgPath != "" && !field.Anonymous {
+				continue
+			}
+			if field.Tag.Get("json") == "-" {
+				continue
+			}
+			inspectOutputValue(value.Field(i), seen, inspection)
+		}
+	}
+}
+
+func byteSequenceText(value reflect.Value) (string, bool) {
+	if value.Type().Elem().Kind() != reflect.Uint8 {
 		return "", false
 	}
-	if value.IsNil() {
+	if value.Kind() == reflect.Slice && value.IsNil() {
 		return "", true
 	}
 	raw := make([]byte, value.Len())
-	reflect.Copy(reflect.ValueOf(raw), value)
+	for i := range raw {
+		raw[i] = byte(value.Index(i).Uint())
+	}
 	return string(raw), true
+}
+
+func markOutputVisit(value reflect.Value, seen map[outputVisit]struct{}) bool {
+	switch value.Kind() {
+	case reflect.Map, reflect.Pointer, reflect.Slice:
+		if value.IsNil() {
+			return false
+		}
+	default:
+		return false
+	}
+	visit := outputVisit{typ: value.Type(), ptr: value.Pointer()}
+	if value.Kind() == reflect.Map || value.Kind() == reflect.Slice {
+		visit.len = value.Len()
+	}
+	if visit.ptr == 0 {
+		return false
+	}
+	if _, ok := seen[visit]; ok {
+		return true
+	}
+	seen[visit] = struct{}{}
+	return false
 }
 
 func (wrapper *outputGuard) blockedResult(

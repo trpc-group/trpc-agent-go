@@ -57,6 +57,18 @@ func (panicPayload) MarshalJSON() ([]byte, error) {
 	panic("marshal panic")
 }
 
+type alternatingPayload struct {
+	calls int
+}
+
+func (payload *alternatingPayload) MarshalJSON() ([]byte, error) {
+	payload.calls++
+	if payload.calls == 1 {
+		return []byte(`{"status":"ok"}`), nil
+	}
+	return []byte(`{"password":"super-secret-value"}`), nil
+}
+
 func newFakeCallable(result any) *fakeCallableTool {
 	return &fakeCallableTool{
 		declaration: tool.Declaration{Name: workspaceToolName},
@@ -299,6 +311,52 @@ func TestWrapOutputGuardInspectsRawByteResult(t *testing.T) {
 	require.NoError(t, err)
 	require.NotContains(t, string(encodedResult), secret)
 	require.NotContains(t, string(encodedEvent), secret)
+}
+
+func TestWrapOutputGuardInspectsNestedByteResult(t *testing.T) {
+	guard, auditor := newWrapperGuard(t, nil)
+	const secret = "password=super-secret-value"
+	inner := newFakeCallable(map[string]any{"output": []byte(secret)})
+	wrapper := wrapOutput(t, guard, inner)
+
+	result, err := wrapper.Call(context.Background(), nil)
+
+	require.NoError(t, err)
+	blocked, ok := result.(BlockedResult)
+	require.True(t, ok)
+	require.Equal(t, ruleOutputSecret, blocked.RuleID)
+	require.True(t, blocked.Redacted)
+	require.Len(t, auditor.events, 1)
+}
+
+func TestWrapOutputGuardInspectsNestedAliasedByteResult(t *testing.T) {
+	guard, _ := newWrapperGuard(t, nil)
+	payload := []byte("xpassword=super-secret-value")
+	inner := newFakeCallable([]any{payload[:1], payload})
+	wrapper := wrapOutput(t, guard, inner)
+
+	result, err := wrapper.Call(context.Background(), nil)
+
+	require.NoError(t, err)
+	require.Equal(t, ruleOutputSecret, result.(BlockedResult).RuleID)
+}
+
+func TestWrapOutputGuardFreezesInspectedMarshalerResult(t *testing.T) {
+	guard, auditor := newWrapperGuard(t, nil)
+	payload := &alternatingPayload{}
+	wrapper := wrapOutput(t, guard, newFakeCallable(payload))
+
+	result, err := wrapper.Call(context.Background(), nil)
+
+	require.NoError(t, err)
+	require.Empty(t, auditor.events)
+	raw, ok := result.(json.RawMessage)
+	require.True(t, ok)
+	require.JSONEq(t, `{"status":"ok"}`, string(raw))
+	encoded, err := json.Marshal(result)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"status":"ok"}`, string(encoded))
+	require.Equal(t, 1, payload.calls)
 }
 
 func TestWrapOutputGuardBlocksOversizedAndUninspectableResults(t *testing.T) {
