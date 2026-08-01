@@ -11,6 +11,7 @@ package safety_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -304,7 +305,7 @@ func TestFileAuditor_ConcurrentAppend(t *testing.T) {
 				Timestamp: time.Now().UTC(),
 				ToolName:  "workspace_exec",
 				Decision:  safety.DecisionDeny,
-				RuleID:    "test",
+				RuleID:    fmt.Sprintf("test-%d", i),
 			})
 			done <- struct{}{}
 		}(i)
@@ -314,13 +315,15 @@ func TestFileAuditor_ConcurrentAppend(t *testing.T) {
 	}
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
-	lines := 0
-	for _, b := range data {
-		if b == '\n' {
-			lines++
-		}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	require.Len(t, lines, n)
+	for _, line := range lines {
+		var ev safety.AuditEvent
+		require.NoError(t, json.Unmarshal([]byte(line), &ev))
+		require.Equal(t, "workspace_exec", ev.ToolName)
+		require.Equal(t, safety.DecisionDeny, ev.Decision)
+		require.NotEmpty(t, ev.RuleID)
 	}
-	require.Equal(t, n, lines)
 }
 
 func TestScanPerf_500CommandsUnderOneSecond(t *testing.T) {

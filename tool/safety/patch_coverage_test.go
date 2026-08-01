@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -169,6 +170,41 @@ func TestAuditAndPolicy_Edges(t *testing.T) {
 	require.NoError(t, WriteReportJSON(filepath.Join(dir, "r.json"), []Result{{Decision: DecisionAllow}}))
 
 	require.Equal(t, []string{"a"}, cleanStrings([]string{" a ", "", "  "}))
+}
+
+func TestFileAuditor_AppendContextCanceled(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	a, err := NewFileAuditor(path)
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err = a.AppendContext(ctx, AuditEvent{ToolName: "t", Decision: DecisionAllow})
+	require.Error(t, err)
+
+	mem := NewMemoryAuditor()
+	err = mem.AppendContext(ctx, AuditEvent{ToolName: "t"})
+	require.Error(t, err)
+}
+
+func TestGuard_AppendAuditUsesContext(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	fa, err := NewFileAuditor(path)
+	require.NoError(t, err)
+	g := NewGuard(WithAuditor(fa))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	dec, err := g.CheckToolPermission(ctx, &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"rm -rf /"}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, dec.Action)
+	// Canceled ctx should skip the write; file stays empty.
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Empty(t, data)
 }
 
 func TestLooksLikeRemoteGoPkg_Edges(t *testing.T) {

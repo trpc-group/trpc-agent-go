@@ -16,8 +16,9 @@ Guard looks at the JSON arguments of a tool call before the tool runs:
   (`file://…` is normalized so denied_paths can match the path part)
 - `env` overrides (allowlist) and secret-looking keys (`password`, `api_key`, …)
 
-It can return allow / deny / ask, append a JSONL audit line, and set a few
-span attributes when the context already has a recording span.
+It can return allow / deny / ask, append a JSONL audit line (best-effort;
+`ContextAuditor` respects cancelation before I/O), and set a few span
+attributes when the context already has a recording span.
 
 It does **not**:
 
@@ -43,7 +44,7 @@ Residual bypasses (honest list):
 | Allow then run a binary that phones home | args looked clean |
 | Secrets only in tool **output** | policy never sees results — wire `AfterToolRedact` |
 | Dual lists drift (Guard vs spawn) | you must wire `CommandLists()` (below) |
-| `go test` / `go fmt` / … | exempt from `ask_commands` for local workflows; still runs workspace code — pair with a sandbox if that matters |
+| `go test` ask-exemption | Kept for trusted local workflows (`test`/`fmt`/`vet`/`version`/`env`). `go test` still compiles and runs workspace-controlled code (`TestMain` / `init`). Callers must use a sandbox when the workspace is untrusted. |
 
 ## Issue 2002 mapping (partial on purpose)
 

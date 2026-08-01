@@ -9,6 +9,7 @@
 package safety
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -41,6 +42,14 @@ type Auditor interface {
 	Append(AuditEvent) error
 }
 
+// ContextAuditor is an optional Auditor that honors context cancelation /
+// deadlines before doing I/O. Guard prefers this when available so a stuck
+// filesystem cannot block the permission hot path forever.
+type ContextAuditor interface {
+	Auditor
+	AppendContext(ctx context.Context, ev AuditEvent) error
+}
+
 // MemoryAuditor stores events in process memory (tests / demos).
 type MemoryAuditor struct {
 	mu     sync.Mutex
@@ -54,8 +63,16 @@ func NewMemoryAuditor() *MemoryAuditor {
 
 // Append implements Auditor.
 func (a *MemoryAuditor) Append(ev AuditEvent) error {
+	return a.AppendContext(context.Background(), ev)
+}
+
+// AppendContext implements ContextAuditor.
+func (a *MemoryAuditor) AppendContext(ctx context.Context, ev AuditEvent) error {
 	if a == nil {
 		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -99,11 +116,26 @@ func NewFileAuditor(path string) (*FileAuditor, error) {
 
 // Append implements Auditor.
 func (a *FileAuditor) Append(ev AuditEvent) error {
+	return a.AppendContext(context.Background(), ev)
+}
+
+// AppendContext implements ContextAuditor.
+// It checks ctx before taking the lock and again before opening the file so a
+// canceled permission check does not wait on a wedged filesystem. A write that
+// has already started cannot be aborted mid-syscall; hosts that need hard
+// isolation should use MemoryAuditor or an async sink.
+func (a *FileAuditor) AppendContext(ctx context.Context, ev AuditEvent) error {
 	if a == nil {
 		return nil
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	f, err := os.OpenFile(a.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return fmt.Errorf("safety: open audit file: %w", err)

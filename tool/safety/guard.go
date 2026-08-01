@@ -200,24 +200,19 @@ func (g *Guard) CheckToolPermission(
 
 	g.record(result)
 	g.emitSpan(ctx, result, toolCallID)
-	if g.audit != nil {
-		// Best-effort audit: permission decision must not hang on disk I/O
-		// failure, but we still attempt to record. Callers who need hard
-		// guarantees should use an in-memory Auditor or buffer.
-		_ = g.audit.Append(AuditEvent{
-			Timestamp:  time.Now().UTC(),
-			ToolName:   result.ToolName,
-			ToolCallID: toolCallID,
-			Decision:   result.Decision,
-			RiskLevel:  result.RiskLevel,
-			RuleID:     result.RuleID,
-			Backend:    result.Backend,
-			DurationMS: time.Since(start).Milliseconds(),
-			Redacted:   result.Redacted,
-			Blocked:    result.Blocked,
-			Evidence:   result.Evidence,
-		})
-	}
+	g.appendAudit(ctx, AuditEvent{
+		Timestamp:  time.Now().UTC(),
+		ToolName:   result.ToolName,
+		ToolCallID: toolCallID,
+		Decision:   result.Decision,
+		RiskLevel:  result.RiskLevel,
+		RuleID:     result.RuleID,
+		Backend:    result.Backend,
+		DurationMS: time.Since(start).Milliseconds(),
+		Redacted:   result.Redacted,
+		Blocked:    result.Blocked,
+		Evidence:   result.Evidence,
+	})
 
 	switch result.Decision {
 	case DecisionDeny:
@@ -251,6 +246,19 @@ func needsScan(ex Extracted) bool {
 	default:
 		return false
 	}
+}
+
+func (g *Guard) appendAudit(ctx context.Context, ev AuditEvent) {
+	if g == nil || g.audit == nil {
+		return
+	}
+	// Best-effort: permission decisions must not hang forever on a wedged
+	// audit sink. Prefer ContextAuditor when available; ignore I/O errors.
+	if ca, ok := g.audit.(ContextAuditor); ok {
+		_ = ca.AppendContext(ctx, ev)
+		return
+	}
+	_ = g.audit.Append(ev)
 }
 
 func (g *Guard) record(r Result) {
