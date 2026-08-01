@@ -27,7 +27,8 @@ The harness derives those domains and preserved session keys from the replay
 input rather than only from stored events, so it does not hide differences in
 how adapters apply scoped deltas. Normalized state distinguishes nil, JSON
 null, empty bytes, and arbitrary non-JSON bytes with an explicit `nil`, `json`,
-or `bytes` kind for every value.
+or `bytes` kind for every value. JSON objects with duplicate keys also remain
+bytes because collapsing them would hide a backend transformation.
 
 Concurrent steps support event-only branches with stable internal execution
 lanes and require `EventOrderCausal`. A lane is independent of the event's

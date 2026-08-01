@@ -10,7 +10,8 @@ IDs, generated timestamps become presence markers, and maps are canonicalized.
 Stored memories are content-sorted; ranked searches preserve order and score.
 Event, response, and track times remain session-relative; caller-supplied
 memory times remain UTC instants. State values use tagged `nil`, `json`, or `bytes` forms,
-keeping nil, JSON null, empty bytes, and arbitrary bytes distinct. Event
+keeping nil, JSON null, empty bytes, and arbitrary bytes distinct. JSON objects
+with duplicate keys remain bytes because decoding them would be lossy. Event
 content, tool data, extensions, state delta, memory metadata and ownership,
 track payloads, and session identity remain comparable.
 

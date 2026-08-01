@@ -211,7 +211,8 @@ type EventInput struct {
 	LogicalID string
 	// Event is cloned before the runner changes timestamps or extensions. Every
 	// extension key must be non-empty and must not use the runner-owned logical
-	// identity key; every non-nil extension value must contain valid JSON.
+	// identity key; every non-nil extension value must contain valid UTF-8 JSON
+	// with paired surrogate escapes and unique object keys.
 	// StateDelta is applied to session state even when the event itself is not
 	// persisted. Keys beginning with app: or user: additionally declare scoped-state
 	// intent; unprefixed and temp: keys are session-only. The runner preserves every
@@ -280,7 +281,8 @@ type SummaryInput struct {
 // TrackInput appends one observation event.
 type TrackInput struct {
 	// Event is copied before its payload and timestamp are normalized. Payload
-	// may be nil for JSON null; every non-nil payload must contain valid JSON.
+	// may be nil for JSON null; every non-nil payload must contain valid UTF-8
+	// JSON with paired surrogate escapes and unique object keys.
 	Event *session.TrackEvent
 	// Offset is added to the created session time for deterministic ordering.
 	Offset time.Duration

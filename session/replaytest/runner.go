@@ -1256,8 +1256,11 @@ func validateTrackStep(step Step) error {
 	if step.Track.Event == nil || step.Track.Event.Track == "" {
 		return fmt.Errorf("step %q has invalid track input", step.Name)
 	}
-	if payload := step.Track.Event.Payload; payload != nil && !json.Valid(payload) {
-		return fmt.Errorf("step %q has invalid track JSON payload", step.Name)
+	if payload := step.Track.Event.Payload; payload != nil {
+		var decoded any
+		if err := decodeJSON(payload, &decoded); err != nil {
+			return fmt.Errorf("step %q has invalid track JSON payload: %w", step.Name, err)
+		}
 	}
 	return nil
 }
@@ -1279,8 +1282,11 @@ func validateEventStep(step Step) error {
 			return fmt.Errorf("step %q event extension %q is reserved", step.Name, key)
 		}
 		raw := step.Event.Event.Extensions[key]
-		if raw != nil && !json.Valid(raw) {
-			return fmt.Errorf("step %q event extension %q contains invalid JSON", step.Name, key)
+		if raw != nil {
+			var decoded any
+			if err := decodeJSON(raw, &decoded); err != nil {
+				return fmt.Errorf("step %q event extension %q contains invalid JSON: %w", step.Name, key, err)
+			}
 		}
 	}
 	if err := validateEventStateDelta(step.Name, step.Event.Event.StateDelta); err != nil {

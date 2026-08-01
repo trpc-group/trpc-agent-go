@@ -341,13 +341,10 @@ func normalizeStatePreserving(
 }
 
 func decodeLosslessJSON(raw []byte, output any) bool {
-	if !utf8.Valid(raw) || decodeJSON(raw, output) != nil {
-		return false
-	}
-	return validJSONSurrogatePairs(raw)
+	return decodeJSON(raw, output) == nil
 }
 
-// raw has passed decodeJSON, but encoding/json replaces unpaired UTF-16
+// raw has passed encoding/json validation, which replaces unpaired UTF-16
 // surrogate escapes with U+FFFD instead of rejecting them.
 func validJSONSurrogatePairs(raw []byte) bool {
 	for index := 0; index < len(raw); index++ {
@@ -639,6 +636,12 @@ func normalizeTimestamps(value map[string]any, keys ...string) {
 }
 
 func decodeJSON(raw []byte, output any) error {
+	if !utf8.Valid(raw) {
+		return errors.New("json contains invalid UTF-8")
+	}
+	if err := rejectDuplicateJSONKeys(raw); err != nil {
+		return err
+	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
 	if err := decoder.Decode(output); err != nil {
@@ -650,6 +653,68 @@ func decodeJSON(raw []byte, output any) error {
 			return fmt.Errorf("multiple JSON values")
 		}
 		return err
+	}
+	if !validJSONSurrogatePairs(raw) {
+		return errors.New("json contains an unpaired UTF-16 surrogate escape")
+	}
+	return nil
+}
+
+func rejectDuplicateJSONKeys(raw []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	return consumeUniqueJSONValue(decoder)
+}
+
+func consumeUniqueJSONValue(decoder *json.Decoder) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delimiter, ok := token.(json.Delim)
+	if !ok {
+		return nil
+	}
+	switch delimiter {
+	case '{':
+		keys := make(map[string]struct{})
+		for decoder.More() {
+			keyToken, err := decoder.Token()
+			if err != nil {
+				return err
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return errors.New("json object key is not a string")
+			}
+			if _, exists := keys[key]; exists {
+				return fmt.Errorf("duplicate json object key %q", key)
+			}
+			keys[key] = struct{}{}
+			if err := consumeUniqueJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+		return consumeJSONDelimiter(decoder, '}')
+	case '[':
+		for decoder.More() {
+			if err := consumeUniqueJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+		return consumeJSONDelimiter(decoder, ']')
+	default:
+		return fmt.Errorf("unexpected json delimiter %q", delimiter)
+	}
+}
+
+func consumeJSONDelimiter(decoder *json.Decoder, want json.Delim) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	if token != want {
+		return fmt.Errorf("unexpected json delimiter %q", token)
 	}
 	return nil
 }

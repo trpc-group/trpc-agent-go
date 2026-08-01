@@ -170,8 +170,14 @@ func TestCaseValidationRejectsAmbiguousInputs(t *testing.T) {
 		},
 		trackPayloadCase("empty-track-payload", json.RawMessage{}),
 		trackPayloadCase("malformed-track-payload", json.RawMessage("{")),
+		trackPayloadCase("invalid-utf8-track-payload", json.RawMessage{'"', 0xff, '"'}),
+		trackPayloadCase("unpaired-surrogate-track-payload", json.RawMessage(`"\ud800"`)),
+		trackPayloadCase("duplicate-track-object-key", json.RawMessage(`{"value":1,"value":2}`)),
 		eventExtensionCase("empty-event-extension", json.RawMessage{}),
 		eventExtensionCase("malformed-event-extension", json.RawMessage("{")),
+		eventExtensionCase("invalid-utf8-event-extension", json.RawMessage{'"', 0xff, '"'}),
+		eventExtensionCase("unpaired-surrogate-event-extension", json.RawMessage(`"\ud800"`)),
+		eventExtensionCase("duplicate-event-extension-object-key", json.RawMessage(`{"value":1,"value":2}`)),
 		{
 			Name:     "empty-event-extension-key",
 			Requires: []Capability{CapabilitySession},
@@ -220,6 +226,25 @@ func TestCaseValidationAllowsNilJSONPayloads(t *testing.T) {
 	}
 	if err := validateCase(replayCase); err != nil {
 		t.Fatalf("validateCase() rejected nil JSON payloads: %v", err)
+	}
+}
+
+func TestDecodeJSONRejectsDuplicateObjectKeys(t *testing.T) {
+	for _, raw := range []string{
+		`{"value":1,"value":2}`,
+		`{"outer":{"value":1,"value":2}}`,
+		`[{"value":1,"value":2}]`,
+		`{"value":1,"\u0076alue":2}`,
+	} {
+		var output any
+		if err := decodeJSON([]byte(raw), &output); err == nil {
+			t.Fatalf("decodeJSON(%s) accepted a duplicate object key", raw)
+		}
+	}
+
+	var output any
+	if err := decodeJSON([]byte(`{"left":{"value":1},"right":{"value":2}}`), &output); err != nil {
+		t.Fatalf("decodeJSON() rejected keys scoped to different objects: %v", err)
 	}
 }
 
@@ -1411,16 +1436,99 @@ func TestCompareAllowedDiffRules(t *testing.T) {
 	}
 }
 
-func TestExactNumberBounds(t *testing.T) {
-	for _, value := range []json.Number{
+func TestExactNumberParsing(t *testing.T) {
+	valid := []struct {
+		name  string
+		value any
+		want  string
+	}{
+		{name: "JSON number", value: json.Number("-1.25"), want: "-5/4"},
+		{name: "float64", value: float64(0.5), want: "1/2"},
+		{name: "float32", value: float32(0.25), want: "1/4"},
+		{name: "int", value: int(-1), want: "-1"},
+		{name: "int64", value: int64(-2), want: "-2"},
+		{name: "uint", value: uint(3), want: "3"},
+		{name: "uint64", value: uint64(4), want: "4"},
+	}
+	for _, test := range valid {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := exactNumber(test.value)
+			if !ok || got.RatString() != test.want {
+				t.Fatalf("exactNumber(%v) = %v, %t, want %s, true", test.value, got, ok, test.want)
+			}
+		})
+	}
+
+	invalid := []any{
 		json.Number(strings.Repeat("9", maxExactNumberCharacters+1)),
+		json.Number(""),
 		json.Number("1e1025"),
 		json.Number("1e-1025"),
+		json.Number("1e2e3"),
+		json.Number("1e"),
+		json.Number(".5"),
+		json.Number("1."),
 		json.Number("1/2"),
-	} {
+		math.NaN(),
+		math.Inf(1),
+		"1",
+	}
+	for _, value := range invalid {
 		if _, ok := exactNumber(value); ok {
-			t.Fatalf("exactNumber(%q) unexpectedly accepted an unbounded or invalid value", value)
+			t.Fatalf("exactNumber(%v) unexpectedly accepted an unbounded or invalid value", value)
 		}
+	}
+}
+
+func TestValidateObservedCausalPlan(t *testing.T) {
+	valid := &causalOrderPlan{predecessors: map[string][]string{
+		"first":  nil,
+		"second": {"first"},
+	}}
+	if err := validateObservedCausalPlan(map[string]int{"first": 0, "second": 1}, valid); err != nil {
+		t.Fatalf("validateObservedCausalPlan() error = %v", err)
+	}
+
+	tests := []struct {
+		name      string
+		positions map[string]int
+		plan      *causalOrderPlan
+	}{
+		{
+			name:      "event count mismatch",
+			positions: map[string]int{"first": 0},
+			plan:      valid,
+		},
+		{
+			name:      "planned event missing",
+			positions: map[string]int{"other": 0},
+			plan: &causalOrderPlan{predecessors: map[string][]string{
+				"first": nil,
+			}},
+		},
+		{
+			name:      "planned predecessor missing",
+			positions: map[string]int{"first": 0, "second": 1},
+			plan: &causalOrderPlan{predecessors: map[string][]string{
+				"first":  {"missing"},
+				"second": nil,
+			}},
+		},
+		{
+			name:      "event precedes predecessor",
+			positions: map[string]int{"first": 0, "second": 1},
+			plan: &causalOrderPlan{predecessors: map[string][]string{
+				"first":  {"second"},
+				"second": nil,
+			}},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := validateObservedCausalPlan(test.positions, test.plan); err == nil {
+				t.Fatal("validateObservedCausalPlan() unexpectedly accepted an invalid observation")
+			}
+		})
 	}
 }
 

@@ -852,6 +852,11 @@ func TestComparisonAndNormalizationEdgeCases(t *testing.T) {
 				left:  []byte(`"\ud800\u0061"`),
 				right: []byte(`"\ufffda"`),
 			},
+			{
+				name:  "duplicate JSON key and last-key-wins object",
+				left:  []byte(`{"value":1,"value":2}`),
+				right: []byte(`{"value":2}`),
+			},
 		}
 		for _, test := range tests {
 			t.Run(test.name, func(t *testing.T) {
