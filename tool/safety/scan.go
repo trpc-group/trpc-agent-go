@@ -770,6 +770,10 @@ func scanAskCommands(pipe *shellsafe.Pipeline, ask []string) (Finding, bool) {
 func scanResourceAbuse(ex Extracted, policy Policy) (Finding, bool) {
 	texts := collectTexts(ex)
 	joined := strings.ToLower(strings.Join(texts, "\n"))
+	cmd := strings.ToLower(strings.TrimSpace(ex.Command))
+	if f, ok := scanUnboundedDeviceIO(cmd, joined); ok {
+		return f, true
+	}
 	if sec, ok := parseSleepSeconds(joined); ok {
 		limit := policy.MaxTimeoutSeconds
 		if limit <= 0 {
@@ -799,6 +803,79 @@ func scanResourceAbuse(ex Extracted, policy Policy) (Finding, bool) {
 		}
 	}
 	return Finding{}, false
+}
+
+// scanUnboundedDeviceIO catches pre-exec shapes that can fill disks or hang
+// readers without an obvious bound (common gap vs sleep-only resource scans).
+func scanUnboundedDeviceIO(cmd, joined string) (Finding, bool) {
+	if cmd == "" && joined == "" {
+		return Finding{}, false
+	}
+	hay := joined
+	if cmd != "" {
+		hay = cmd + "\n" + joined
+	}
+	// cat/base64 of /dev/zero (or /dev/random) with no byte cap in the payload.
+	if strings.Contains(hay, "/dev/zero") || strings.Contains(hay, "/dev/random") {
+		if strings.Contains(hay, "cat ") || strings.Contains(hay, "base64") ||
+			strings.HasPrefix(strings.TrimSpace(cmd), "cat\t") ||
+			strings.HasPrefix(strings.TrimSpace(cmd), "cat ") ||
+			cmd == "cat /dev/zero" || cmd == "cat /dev/random" {
+			return Finding{
+				RuleID:   "resource.unbounded_device",
+				Decision: DecisionAsk,
+				Risk:     RiskMedium,
+				Evidence: "payload reads an unbounded device (/dev/zero or /dev/random)",
+				Advice:   "bound the read (head -c / dd count=) or require human review",
+			}, true
+		}
+		// dd if=/dev/zero without count= — belt-and-suspenders even if dd is denied.
+		if strings.Contains(hay, "dd ") && strings.Contains(hay, "if=/dev/") &&
+			!strings.Contains(hay, "count=") {
+			return Finding{
+				RuleID:   "resource.unbounded_device",
+				Decision: DecisionAsk,
+				Risk:     RiskMedium,
+				Evidence: "dd reads an unbounded device without count=",
+				Advice:   "add count= (and bs=) or require human review",
+			}, true
+		}
+	}
+	// Bare `yes` floods stdout forever. Prefer the command field so JSON
+	// wrappers in RawText do not dilute exact matches.
+	if hasYesCommand(cmd) || hasYesCommand(hay) {
+		return Finding{
+			RuleID:   "resource.unbounded_yes",
+			Decision: DecisionAsk,
+			Risk:     RiskMedium,
+			Evidence: "yes produces unbounded stdout",
+			Advice:   "pipe through head -n or drop yes from the tool args",
+		}, true
+	}
+	return Finding{}, false
+}
+
+func hasYesCommand(text string) bool {
+	text = strings.TrimSpace(strings.ToLower(text))
+	if text == "" {
+		return false
+	}
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "{") {
+			continue
+		}
+		if line == "yes" || strings.HasPrefix(line, "yes ") || strings.HasPrefix(line, "yes\t") {
+			return true
+		}
+		markers := []string{"|yes", ";yes", "&&yes", "||yes", "| yes", "; yes", "&& yes", "|| yes"}
+		for _, m := range markers {
+			if strings.Contains(line, m) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func parseSleepSeconds(text string) (int, bool) {

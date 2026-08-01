@@ -57,9 +57,10 @@ Residual bypasses (honest list):
 | Download \| interpreter | yes | e.g. `wget … \| python3` denied even if host is allowlisted |
 | hostexec long session | partial | default ask; no process-residual detector |
 | Install / mutate env | partial | `ask_commands` + install-ish code text |
-| Resource abuse | scan-time only | long `sleep` / huge args / obvious `while true` → ask. Numbers in the policy are hints, not enforcement |
+| Resource abuse | scan-time only | long `sleep`, `/dev/zero`/`yes`, huge args, `while true` → ask. Numbers in the policy are hints, not enforcement |
 | Secrets in args / reports | partial | deny + redact on the scan result. Logs/artifacts after execution are on the host |
 | Secrets in tool output | host-owned | wire `AfterToolRedact` / `RedactJSON`; PermissionPolicy never sees results |
+| Artifact persistence | host-owned | wrap storage with `NewRedactingArtifactService` |
 | Remote `go run host/…` | yes | deny (`shell.remote_go_run`); also in `code_blocks`; local `./…` stays ask |
 | `curl\|sh` / `curl\|bash` | yes | shell + code_blocks (network→interpreter) |
 | PowerShell `iwr\|iex` / `iex(irm …)` | yes | same pipe-to-interpreter class |
@@ -82,6 +83,7 @@ Common rule ids (also land in audit / report):
 - `secret.*`
 - `ask.dependency_or_mutation`
 - `resource.long_sleep`, `resource.oversized_payload`, `resource.infinite_loop`
+- `resource.unbounded_device`, `resource.unbounded_yes`
 - `hostexec.long_session_risk`
 - `code.install_mutation`
 - `allow` (nothing matched)
@@ -144,7 +146,12 @@ guard := safety.NewGuard(
 cbs := tool.NewCallbacks()
 cbs.RegisterAfterTool(safety.AfterToolRedact())
 // also: safety.RedactText / RedactJSON / RedactValue / RedactMap
+// artifacts: safety.NewRedactingArtifactService(inner)
 ```
+
+Audit JSONL stamps `schema_version`, `policy_id`, and `policy_revision`
+(content hash via `Policy.Revision()`) so hosts can join decisions to a
+deployed policy without re-parsing YAML.
 
 OTel attribute keys (JSONL audit uses the same suffixes):
 

@@ -15,6 +15,8 @@ package safety
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,6 +29,13 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/shellsafe"
 )
 
+// DefaultSchemaVersion is stamped on audit events when Policy.SchemaVersion
+// is empty. Bump only when audit field semantics change incompatibly.
+const DefaultSchemaVersion = "1"
+
+// DefaultPolicyID is used when Policy.PolicyID is empty.
+const DefaultPolicyID = "default"
+
 // Policy is the declarative configuration for Guard.
 //
 // LoadPolicyFile starts from DefaultPolicy and overlays values from the file.
@@ -34,6 +43,10 @@ import (
 // silently disabling denials — a common failure mode called out in reviews of
 // competing #2002 implementations.
 type Policy struct {
+	// SchemaVersion labels the policy document shape for audit consumers.
+	SchemaVersion string `json:"schema_version,omitempty" yaml:"schema_version,omitempty"`
+	// PolicyID is a deployment-defined name stamped into audit events.
+	PolicyID string `json:"policy_id,omitempty" yaml:"policy_id,omitempty"`
 	// AllowedCommands is passed to shellsafe allow matching (strict).
 	AllowedCommands []string `json:"allowed_commands" yaml:"allowed_commands"`
 	// DeniedCommands is passed to shellsafe deny matching (basename-friendly).
@@ -139,6 +152,8 @@ func ParsePolicy(data []byte, name string) (Policy, error) {
 // policyOverlay uses pointers so callers can distinguish "omitted" from
 // "explicitly empty". Omitted fields keep DefaultPolicy values.
 type policyOverlay struct {
+	SchemaVersion       *string   `json:"schema_version" yaml:"schema_version"`
+	PolicyID            *string   `json:"policy_id" yaml:"policy_id"`
 	AllowedCommands     *[]string `json:"allowed_commands" yaml:"allowed_commands"`
 	DeniedCommands      *[]string `json:"denied_commands" yaml:"denied_commands"`
 	DeniedPaths         *[]string `json:"denied_paths" yaml:"denied_paths"`
@@ -151,6 +166,12 @@ type policyOverlay struct {
 }
 
 func (o policyOverlay) apply(base Policy) Policy {
+	if o.SchemaVersion != nil {
+		base.SchemaVersion = strings.TrimSpace(*o.SchemaVersion)
+	}
+	if o.PolicyID != nil {
+		base.PolicyID = strings.TrimSpace(*o.PolicyID)
+	}
 	if o.AllowedCommands != nil {
 		base.AllowedCommands = cleanStrings(*o.AllowedCommands)
 	}
@@ -213,4 +234,51 @@ func (p Policy) CommandLists() (allowed, denied []string) {
 		denied = append([]string(nil), p.DeniedCommands...)
 	}
 	return allowed, denied
+}
+
+// Meta returns schema version, policy id, and a content revision hash for
+// audit/report stamping. Empty SchemaVersion / PolicyID get defaults.
+func (p Policy) Meta() (schemaVersion, policyID, revision string) {
+	schemaVersion = strings.TrimSpace(p.SchemaVersion)
+	if schemaVersion == "" {
+		schemaVersion = DefaultSchemaVersion
+	}
+	policyID = strings.TrimSpace(p.PolicyID)
+	if policyID == "" {
+		policyID = DefaultPolicyID
+	}
+	return schemaVersion, policyID, p.Revision()
+}
+
+// Revision returns a short stable hash of the security-relevant policy fields.
+// Identity metadata (schema_version / policy_id) is excluded so renaming a
+// deployment label does not look like a rule change.
+func (p Policy) Revision() string {
+	type finger struct {
+		AllowedCommands     []string `json:"allowed_commands"`
+		DeniedCommands      []string `json:"denied_commands"`
+		DeniedPaths         []string `json:"denied_paths"`
+		AllowedHosts        []string `json:"allowed_hosts"`
+		AllowedEnvVars      []string `json:"allowed_env_vars"`
+		AskCommands         []string `json:"ask_commands"`
+		MaxTimeoutSeconds   int      `json:"max_timeout_seconds"`
+		MaxOutputBytes      int      `json:"max_output_bytes"`
+		HostExecRequiresAsk bool     `json:"host_exec_requires_ask"`
+	}
+	raw, err := json.Marshal(finger{
+		AllowedCommands:     p.AllowedCommands,
+		DeniedCommands:      p.DeniedCommands,
+		DeniedPaths:         p.DeniedPaths,
+		AllowedHosts:        p.AllowedHosts,
+		AllowedEnvVars:      p.AllowedEnvVars,
+		AskCommands:         p.AskCommands,
+		MaxTimeoutSeconds:   p.MaxTimeoutSeconds,
+		MaxOutputBytes:      p.MaxOutputBytes,
+		HostExecRequiresAsk: p.HostExecRequiresAsk,
+	})
+	if err != nil {
+		return "unknown"
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:8])
 }

@@ -25,17 +25,20 @@ import (
 // with the OTel attribute suffixes under "tool.safety.*" so hosts can join
 // spans and audit lines without a mapping table.
 type AuditEvent struct {
-	Timestamp  time.Time `json:"timestamp"`
-	ToolName   string    `json:"tool_name"`
-	ToolCallID string    `json:"tool_call_id,omitempty"`
-	Decision   Decision  `json:"decision"`
-	RiskLevel  RiskLevel `json:"risk_level"`
-	RuleID     string    `json:"rule_id"`
-	Backend    Backend   `json:"backend"`
-	DurationMS int64     `json:"duration_ms"`
-	Redacted   bool      `json:"redacted"`
-	Blocked    bool      `json:"blocked"`
-	Evidence   string    `json:"evidence,omitempty"`
+	Timestamp      time.Time `json:"timestamp"`
+	SchemaVersion  string    `json:"schema_version,omitempty"`
+	PolicyID       string    `json:"policy_id,omitempty"`
+	PolicyRevision string    `json:"policy_revision,omitempty"`
+	ToolName       string    `json:"tool_name"`
+	ToolCallID     string    `json:"tool_call_id,omitempty"`
+	Decision       Decision  `json:"decision"`
+	RiskLevel      RiskLevel `json:"risk_level"`
+	RuleID         string    `json:"rule_id"`
+	Backend        Backend   `json:"backend"`
+	DurationMS     int64     `json:"duration_ms"`
+	Redacted       bool      `json:"redacted"`
+	Blocked        bool      `json:"blocked"`
+	Evidence       string    `json:"evidence,omitempty"`
 }
 
 // Auditor appends audit events.

@@ -220,18 +220,22 @@ func (g *Guard) CheckToolPermission(
 
 	g.record(result)
 	g.emitSpan(ctx, result, toolCallID)
+	schema, policyID, rev := g.policy.Meta()
 	g.appendAudit(ctx, AuditEvent{
-		Timestamp:  time.Now().UTC(),
-		ToolName:   result.ToolName,
-		ToolCallID: toolCallID,
-		Decision:   result.Decision,
-		RiskLevel:  result.RiskLevel,
-		RuleID:     result.RuleID,
-		Backend:    result.Backend,
-		DurationMS: time.Since(start).Milliseconds(),
-		Redacted:   result.Redacted,
-		Blocked:    result.Blocked,
-		Evidence:   result.Evidence,
+		Timestamp:      time.Now().UTC(),
+		SchemaVersion:  schema,
+		PolicyID:       policyID,
+		PolicyRevision: rev,
+		ToolName:       result.ToolName,
+		ToolCallID:     toolCallID,
+		Decision:       result.Decision,
+		RiskLevel:      result.RiskLevel,
+		RuleID:         result.RuleID,
+		Backend:        result.Backend,
+		DurationMS:     time.Since(start).Milliseconds(),
+		Redacted:       result.Redacted,
+		Blocked:        result.Blocked,
+		Evidence:       result.Evidence,
 	})
 
 	switch result.Decision {
