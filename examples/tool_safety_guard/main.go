@@ -89,6 +89,14 @@ func main() {
 		log.Fatal(err)
 	}
 	fmt.Println("wrote output/tool_safety_report.json and tool_safety_report.json")
+
+	// PermissionPolicy never sees tool outputs. Show the host-side half:
+	// RedactJSON / AfterToolRedact scrub results before they reach the model.
+	fmt.Println()
+	fmt.Println("output redact (host-side; wire via tool.Callbacks.RegisterAfterTool)")
+	leaky := `{"stdout":"token=supersecretvalue123","ok":true}`
+	fmt.Printf("  before: %s\n  after:  %s\n", leaky, safety.RedactJSON([]byte(leaky)))
+
 	if mismatched > 0 {
 		log.Fatalf("%d sample(s) mismatched expected action", mismatched)
 	}

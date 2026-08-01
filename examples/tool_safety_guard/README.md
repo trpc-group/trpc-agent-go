@@ -53,6 +53,17 @@ _ = workspaceexec.NewExecTool(runner,
 )
 ```
 
+## Scrubbing tool outputs
+
+Guard only sees arguments. For results:
+
+```go
+cbs := tool.NewCallbacks()
+cbs.RegisterAfterTool(safety.AfterToolRedact())
+```
+
+`go run .` prints a small before/after `RedactJSON` example at the end.
+
 ## What this demo is not
 
 It does not start runner, workspaceexec, or a real sandbox. It only shows the

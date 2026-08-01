@@ -78,7 +78,7 @@ var (
 	reSecret        = regexp.MustCompile(`(?i)(api[_-]?key|token|password|secret|authorization|bearer)\s*[:=]\s*['"]?([^\s'"]{8,})`)
 	rePEM           = regexp.MustCompile(`-----BEGIN (?:RSA |OPENSSH |EC )?PRIVATE KEY-----`)
 	reSK            = regexp.MustCompile(`(?i)\bsk-[a-z0-9]{16,}\b`)
-	reNetPipeInterp = regexp.MustCompile(`(?i)\b(?:curl|wget|fetch|nc|ncat|netcat)\b[^|\n]*\|\s*(?:python3?|py|node|nodejs|deno|bun|ruby|perl|php|lua|pwsh|powershell)\b`)
+	reNetPipeInterp = regexp.MustCompile(`(?i)\b(?:curl|wget|fetch|nc|ncat|netcat)\b[^|\n]*\|\s*(?:python3?|py|node|nodejs|deno|bun|ruby|perl|php|lua|pwsh|powershell|bash|sh|zsh|dash|ash)\b`)
 )
 
 // Scan applies policy to an extracted payload.
@@ -162,6 +162,14 @@ func scanShellCommand(res Result, ex Extracted, policy Policy) Result {
 			Advice:   "refuse commands shellsafe cannot parse; rewrite as a simple pipeline or deny",
 		})
 	}
+	// Prefer pipe / remote-go-run before the generic shellsafe wrapper deny so
+	// curl|sh reports pipe_network_to_interpreter instead of only "sh denied".
+	if f, ok := scanPipeToInterpreter(pipe); ok {
+		return finalize(res, f)
+	}
+	if f, ok := scanRemoteGoRun(pipe); ok {
+		return finalize(res, f)
+	}
 	shellPol := policy.shellPolicy()
 	// shellsafe.Check only applies its built-in wrapper denies when the
 	// policy is Active(); the sentinel keeps Deny non-empty without matching
@@ -179,9 +187,6 @@ func scanShellCommand(res Result, ex Extracted, policy Policy) Result {
 		})
 	}
 	if f, ok := scanDangerousDeletion(ex.Command); ok {
-		return finalize(res, f)
-	}
-	if f, ok := scanPipeToInterpreter(pipe); ok {
 		return finalize(res, f)
 	}
 	if f, ok := scanNetwork(pipe, ex.Command, policy.AllowedHosts); ok {
@@ -535,11 +540,61 @@ func isInterpreter(base string) bool {
 	case "python", "python2", "python3", "py",
 		"node", "nodejs", "deno", "bun",
 		"ruby", "perl", "php", "lua", "osascript",
-		"pwsh", "powershell", "powershell.exe":
+		"pwsh", "powershell", "powershell.exe",
+		// curl|sh is the classic download-and-run bypass.
+		"sh", "bash", "zsh", "dash", "ash":
 		return true
 	default:
 		return false
 	}
+}
+
+// scanRemoteGoRun denies `go run host/path…` (module path with a dotted host).
+// Local paths (./…, ../…, /abs) stay under ask_commands for plain `go`.
+func scanRemoteGoRun(pipe *shellsafe.Pipeline) (Finding, bool) {
+	if pipe == nil {
+		return Finding{}, false
+	}
+	for _, argv := range pipe.Commands {
+		if commandBase(argv) != "go" || len(argv) < 3 {
+			continue
+		}
+		if !strings.EqualFold(argv[1], "run") {
+			continue
+		}
+		pkg := strings.TrimSpace(argv[2])
+		if !looksLikeRemoteGoPkg(pkg) {
+			continue
+		}
+		return Finding{
+			RuleID:   "shell.remote_go_run",
+			Decision: DecisionDeny,
+			Risk:     RiskHigh,
+			Evidence: "go run fetches and executes a remote module path",
+			Advice:   "vendor or clone the module locally, review it, then go run ./path",
+		}, true
+	}
+	return Finding{}, false
+}
+
+func looksLikeRemoteGoPkg(pkg string) bool {
+	if pkg == "" {
+		return false
+	}
+	// Local / absolute paths are not remote module fetches.
+	if strings.HasPrefix(pkg, ".") || strings.HasPrefix(pkg, "/") ||
+		strings.HasPrefix(pkg, `\`) {
+		return false
+	}
+	if len(pkg) >= 2 && pkg[1] == ':' { // Windows drive
+		return false
+	}
+	host, _, ok := strings.Cut(pkg, "/")
+	if !ok || host == "" {
+		return false
+	}
+	// Module paths look like github.com/org/repo[…].
+	return strings.Contains(host, ".")
 }
 
 func commandBase(argv []string) string {
@@ -582,7 +637,7 @@ func scanPipeToInterpreter(pipe *shellsafe.Pipeline) (Finding, bool) {
 		Decision: DecisionDeny,
 		Risk:     RiskHigh,
 		Evidence: evidence,
-		Advice:   "avoid piping into python/node/ruby/…; write a reviewed script artifact instead",
+		Advice:   "avoid piping into python/node/sh/bash/…; write a reviewed script artifact instead",
 	}, true
 }
 

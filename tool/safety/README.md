@@ -41,7 +41,7 @@ Residual bypasses (honest list):
 |---|---|
 | Obfuscated interpreter code | no AST / decoder stage |
 | Allow then run a binary that phones home | args looked clean |
-| Secrets only in tool **output** | policy never sees results |
+| Secrets only in tool **output** | policy never sees results — wire `AfterToolRedact` |
 | Dual lists drift (Guard vs spawn) | you must wire `CommandLists()` (below) |
 
 ## Issue 2002 mapping (partial on purpose)
@@ -56,7 +56,9 @@ Residual bypasses (honest list):
 | Install / mutate env | partial | `ask_commands` + install-ish code text |
 | Resource abuse | scan-time only | long `sleep` / huge args / obvious `while true` → ask. Numbers in the policy are hints, not enforcement |
 | Secrets in args / reports | partial | deny + redact on the scan result. Logs/artifacts after execution are on the host |
-| Secrets in tool output | host-owned | PermissionPolicy never sees results |
+| Secrets in tool output | host-owned | wire `AfterToolRedact` / `RedactJSON`; PermissionPolicy never sees results |
+| Remote `go run host/…` | yes | deny (`shell.remote_go_run`); local `go run ./…` stays ask |
+| `curl\|sh` / `curl\|bash` | yes | treated as network→interpreter |
 
 ## Decisions
 
@@ -66,6 +68,7 @@ Common rule ids (also land in audit / report):
 
 - `shellsafe.unparsable`, `shellsafe.policy`
 - `shell.pipe_network_to_interpreter`, `shell.pipe_to_interpreter`
+- `shell.remote_go_run`
 - `network.denied_host`
 - `path.denied`, `env.not_allowed`
 - `danger.destructive_delete`
@@ -112,8 +115,14 @@ Optional:
 
 - `safety.Compose(guard, otherPolicy)` — first non-allow wins
 - `safety.WithExtraRules(...)` — can only tighten
-- `safety.RedactText` / `RedactMap` — for host-side result scrubbing
 - `Policy.CommandLists()` — feed workspaceexec / skill_run command lists
+- output scrubbing (PermissionPolicy never sees results):
+
+```go
+cbs := tool.NewCallbacks()
+cbs.RegisterAfterTool(safety.AfterToolRedact())
+// also: safety.RedactText / RedactJSON / RedactValue / RedactMap
+```
 
 OTel attribute keys: `tool.safety.decision`, `tool.safety.risk_level`,
 `tool.safety.rule_id`, `tool.safety.backend`.
