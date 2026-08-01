@@ -770,6 +770,9 @@ func TestComparisonAndNormalizationEdgeCases(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Compare() error = %v", err)
 		}
+		if len(diffs) == 0 {
+			t.Fatal("Compare() did not report the session ID difference")
+		}
 		for _, diff := range diffs {
 			if diff.SessionID != "actual-session" {
 				t.Fatalf("diff session ID = %q, want actual fallback", diff.SessionID)
@@ -782,6 +785,9 @@ func TestComparisonAndNormalizationEdgeCases(t *testing.T) {
 		diffs, err = Compare("locator-case", baseline, actual, nil)
 		if err != nil {
 			t.Fatalf("Compare() error = %v", err)
+		}
+		if len(diffs) == 0 {
+			t.Fatal("Compare() did not report the sequence difference")
 		}
 		for _, diff := range diffs {
 			if diff.SessionID != "locator-case" {
