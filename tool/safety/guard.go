@@ -85,11 +85,19 @@ func WithPolicyFile(path string) Option {
 }
 
 // WithAuditor attaches an audit sink.
+// Bare *FileAuditor values are wrapped in AsyncAuditor so CheckToolPermission
+// never waits on disk I/O. MemoryAuditor stays synchronous (in-process).
+// Call Close on the resulting *AsyncAuditor at process shutdown if you need
+// a drained queue.
 func WithAuditor(a Auditor) Option {
 	return func(g *Guard) {
-		if a != nil {
-			g.audit = a
+		if a == nil {
+			return
 		}
+		if _, ok := a.(*FileAuditor); ok {
+			a = NewAsyncAuditor(a, defaultAuditQueueSize)
+		}
+		g.audit = a
 	}
 }
 
@@ -138,6 +146,18 @@ func (g *Guard) LastResults() []Result {
 	out := make([]Result, len(g.last))
 	copy(out, g.last)
 	return out
+}
+
+// Close drains a wrapped AsyncAuditor if present. Safe when audit is nil or
+// synchronous. Prefer calling this at process shutdown after the last check.
+func (g *Guard) Close() error {
+	if g == nil || g.audit == nil {
+		return nil
+	}
+	if c, ok := g.audit.(interface{ Close() error }); ok {
+		return c.Close()
+	}
+	return nil
 }
 
 // CheckToolPermission implements tool.PermissionPolicy.
@@ -252,8 +272,8 @@ func (g *Guard) appendAudit(ctx context.Context, ev AuditEvent) {
 	if g == nil || g.audit == nil {
 		return
 	}
-	// Best-effort: permission decisions must not hang forever on a wedged
-	// audit sink. Prefer ContextAuditor when available; ignore I/O errors.
+	// Best-effort only: never let audit I/O determine the permission latency.
+	// Prefer ContextAuditor (AsyncAuditor / MemoryAuditor); ignore errors.
 	if ca, ok := g.audit.(ContextAuditor); ok {
 		_ = ca.AppendContext(ctx, ev)
 		return

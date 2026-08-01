@@ -44,8 +44,9 @@ func main() {
 
 	guard := safety.NewGuard(
 		safety.WithPolicyFile("tool_safety_policy.yaml"),
-		safety.WithAuditor(auditor),
+		safety.WithAuditor(auditor), // auto-wrapped AsyncAuditor on the hot path
 	)
+	defer func() { _ = guard.Close() }()
 
 	samples, err := loadSamples("tool_safety_samples.json")
 	if err != nil {

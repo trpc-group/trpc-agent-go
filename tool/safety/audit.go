@@ -15,6 +15,7 @@ import (
 	"os"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -43,12 +44,15 @@ type Auditor interface {
 }
 
 // ContextAuditor is an optional Auditor that honors context cancelation /
-// deadlines before doing I/O. Guard prefers this when available so a stuck
-// filesystem cannot block the permission hot path forever.
+// deadlines before enqueue or I/O.
 type ContextAuditor interface {
 	Auditor
 	AppendContext(ctx context.Context, ev AuditEvent) error
 }
+
+// defaultAuditQueueSize is the bounded queue used when FileAuditor is
+// auto-wrapped for the permission hot path.
+const defaultAuditQueueSize = 256
 
 // MemoryAuditor stores events in process memory (tests / demos).
 type MemoryAuditor struct {
@@ -93,6 +97,8 @@ func (a *MemoryAuditor) Events() []AuditEvent {
 }
 
 // FileAuditor appends JSONL records with owner-only file permissions.
+// Prefer NewAsyncFileAuditor / AsyncAuditor on the permission hot path:
+// bare FileAuditor.Append can block on a wedged filesystem.
 type FileAuditor struct {
 	path string
 	mu   sync.Mutex
@@ -119,11 +125,8 @@ func (a *FileAuditor) Append(ev AuditEvent) error {
 	return a.AppendContext(context.Background(), ev)
 }
 
-// AppendContext implements ContextAuditor.
-// It checks ctx before taking the lock and again before opening the file so a
-// canceled permission check does not wait on a wedged filesystem. A write that
-// has already started cannot be aborted mid-syscall; hosts that need hard
-// isolation should use MemoryAuditor or an async sink.
+// AppendContext implements ContextAuditor for offline / test use.
+// It may still block on mutex or filesystem I/O after the ctx checks.
 func (a *FileAuditor) AppendContext(ctx context.Context, ev AuditEvent) error {
 	if a == nil {
 		return nil
@@ -146,6 +149,98 @@ func (a *FileAuditor) AppendContext(ctx context.Context, ev AuditEvent) error {
 		return fmt.Errorf("safety: write audit event: %w", err)
 	}
 	return nil
+}
+
+// AsyncAuditor wraps an inner Auditor with a bounded queue and a single
+// background writer. Append / AppendContext never block on disk I/O: when the
+// queue is full the event is dropped (best-effort) and Dropped() increments.
+type AsyncAuditor struct {
+	inner     Auditor
+	ch        chan AuditEvent
+	done      chan struct{}
+	closeOnce sync.Once
+	dropped   atomic.Uint64
+}
+
+// NewAsyncAuditor starts a background consumer for inner.
+// queueSize <= 0 uses defaultAuditQueueSize.
+func NewAsyncAuditor(inner Auditor, queueSize int) *AsyncAuditor {
+	if inner == nil {
+		inner = NewMemoryAuditor()
+	}
+	if queueSize <= 0 {
+		queueSize = defaultAuditQueueSize
+	}
+	a := &AsyncAuditor{
+		inner: inner,
+		ch:    make(chan AuditEvent, queueSize),
+		done:  make(chan struct{}),
+	}
+	go a.loop()
+	return a
+}
+
+// NewAsyncFileAuditor is FileAuditor behind AsyncAuditor for hot-path use.
+func NewAsyncFileAuditor(path string, queueSize int) (*AsyncAuditor, error) {
+	fa, err := NewFileAuditor(path)
+	if err != nil {
+		return nil, err
+	}
+	return NewAsyncAuditor(fa, queueSize), nil
+}
+
+// Append implements Auditor (never blocks on inner I/O).
+func (a *AsyncAuditor) Append(ev AuditEvent) error {
+	return a.AppendContext(context.Background(), ev)
+}
+
+// AppendContext implements ContextAuditor.
+// Canceled ctx skips enqueue. A full queue drops the event and returns nil.
+func (a *AsyncAuditor) AppendContext(ctx context.Context, ev AuditEvent) error {
+	if a == nil {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case a.ch <- ev:
+		return nil
+	default:
+		a.dropped.Add(1)
+		return nil
+	}
+}
+
+// Dropped returns how many events were discarded because the queue was full.
+func (a *AsyncAuditor) Dropped() uint64 {
+	if a == nil {
+		return 0
+	}
+	return a.dropped.Load()
+}
+
+// Close stops the worker after draining the queue. Safe to call once.
+func (a *AsyncAuditor) Close() error {
+	if a == nil {
+		return nil
+	}
+	a.closeOnce.Do(func() {
+		close(a.ch)
+	})
+	<-a.done
+	return nil
+}
+
+func (a *AsyncAuditor) loop() {
+	defer close(a.done)
+	for ev := range a.ch {
+		if ca, ok := a.inner.(ContextAuditor); ok {
+			_ = ca.AppendContext(context.Background(), ev)
+			continue
+		}
+		_ = a.inner.Append(ev)
+	}
 }
 
 // WriteReportJSON writes the latest scan results as a JSON array.

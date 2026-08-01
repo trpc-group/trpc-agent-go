@@ -16,9 +16,9 @@ Guard looks at the JSON arguments of a tool call before the tool runs:
   (`file://…` is normalized so denied_paths can match the path part)
 - `env` overrides (allowlist) and secret-looking keys (`password`, `api_key`, …)
 
-It can return allow / deny / ask, append a JSONL audit line (best-effort;
-`ContextAuditor` respects cancelation before I/O), and set a few span
-attributes when the context already has a recording span.
+It can return allow / deny / ask, enqueue a JSONL audit line (best-effort,
+non-blocking when using `AsyncAuditor` / auto-wrapped `FileAuditor`), and set
+a few span attributes when the context already has a recording span.
 
 It does **not**:
 
@@ -45,6 +45,7 @@ Residual bypasses (honest list):
 | Secrets only in tool **output** | policy never sees results — wire `AfterToolRedact` |
 | Dual lists drift (Guard vs spawn) | you must wire `CommandLists()` (below) |
 | `go test` ask-exemption | Kept for trusted local workflows (`test`/`fmt`/`vet`/`version`/`env`). `go test` still compiles and runs workspace-controlled code (`TestMain` / `init`). Callers must use a sandbox when the workspace is untrusted. |
+| Audit queue full | `AsyncAuditor` drops events (see `Dropped()`); permission decisions are never blocked for audit I/O |
 
 ## Issue 2002 mapping (partial on purpose)
 
@@ -109,13 +110,19 @@ explicit.
 ```go
 guard := safety.NewGuard(
     safety.WithPolicyFile("tool_safety_policy.yaml"),
-    safety.WithAuditor(auditor),
+    safety.WithAuditor(auditor), // FileAuditor is auto-wrapped in AsyncAuditor
 )
+defer guard.Close() // drains the audit queue at shutdown
 
 events, err := runner.Run(ctx, user, session, msg,
     agent.WithToolPermissionPolicy(guard),
 )
 ```
+
+`WithAuditor(*FileAuditor)` wraps the sink in `AsyncAuditor` (bounded queue,
+drop-on-full) so `CheckToolPermission` never waits on disk. Prefer
+`NewAsyncFileAuditor` when constructing the sink yourself. `MemoryAuditor`
+stays synchronous.
 
 Optional:
 

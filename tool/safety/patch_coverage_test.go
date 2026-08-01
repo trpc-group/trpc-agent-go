@@ -193,6 +193,7 @@ func TestGuard_AppendAuditUsesContext(t *testing.T) {
 	fa, err := NewFileAuditor(path)
 	require.NoError(t, err)
 	g := NewGuard(WithAuditor(fa))
+	t.Cleanup(func() { _ = g.Close() })
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	dec, err := g.CheckToolPermission(ctx, &tool.PermissionRequest{
@@ -201,7 +202,8 @@ func TestGuard_AppendAuditUsesContext(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, tool.PermissionActionDeny, dec.Action)
-	// Canceled ctx should skip the write; file stays empty.
+	require.NoError(t, g.Close())
+	// Canceled ctx should skip enqueue; file stays empty.
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
 	require.Empty(t, data)
