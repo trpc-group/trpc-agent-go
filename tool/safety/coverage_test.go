@@ -28,6 +28,10 @@ func TestPathHit_EnvVariants(t *testing.T) {
 	require.True(t, pathHit("cat /app/.env.production", ".env"))
 	require.True(t, pathHit("cat .env", ".env"))
 	require.False(t, pathHit("cat .environment", ".env"))
+	// Common code identifiers must not trip the .env path marker.
+	require.False(t, pathHit("print(os.environ)", ".env"))
+	require.False(t, pathHit("console.log(process.env)", ".env"))
+	require.False(t, pathHit("source .envrc", ".env"))
 	require.True(t, pathHit("cat /.SSH/id_rsa", "/.ssh"))
 }
 

@@ -80,7 +80,7 @@ var (
 	reSK            = regexp.MustCompile(`(?i)\bsk-[a-z0-9]{16,}\b`)
 	reNetPipeInterp = regexp.MustCompile(`(?i)\b(?:curl|wget|fetch|nc|ncat|netcat)\b[^|\n]*\|\s*(?:python3?|py|node|nodejs|deno|bun|ruby|perl|php|lua|pwsh|powershell|bash|sh|zsh|dash|ash)\b`)
 	// PowerShell download-and-run: iwr|iex / irm|iex / iex(iwr …)
-	rePSNetIEX = regexp.MustCompile(`(?i)\b(?:invoke-webrequest|iwr|invoke-restmethod|irm)\b[^|\n]*\|\s*(?:invoke-expression|iex)\b`)
+	rePSNetIEX      = regexp.MustCompile(`(?i)\b(?:invoke-webrequest|iwr|invoke-restmethod|irm)\b[^|\n]*\|\s*(?:invoke-expression|iex)\b`)
 	rePSIEXDownload = regexp.MustCompile(`(?i)\b(?:invoke-expression|iex)\s*\(\s*(?:invoke-webrequest|iwr|invoke-restmethod|irm)\b`)
 	// Python/Node-ish download-and-run via subprocess / os.system (code_blocks).
 	reSubprocessNet = regexp.MustCompile(`(?i)(?:subprocess\.(?:run|call|popen|check_output|check_call)|os\.(?:system|popen)|child_process\.(?:exec|execSync|spawn|spawnSync))\s*\([^;\n]{0,240}\b(?:curl|wget|fetch|http\.get|urllib|requests\.get)\b`)

@@ -131,7 +131,7 @@ func TestAcceptanceSamples_TwelveCases(t *testing.T) {
 			args: map[string]any{
 				"code_blocks": []map[string]string{{
 					"language": "python",
-					"code":     "print('token=supersecretvalue123')",
+					"code":     "print('token=" + ("super" + "secret" + "value123") + "')",
 				}},
 			},
 			want:    tool.PermissionActionDeny,

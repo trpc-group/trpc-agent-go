@@ -43,6 +43,7 @@ Residual bypasses (honest list):
 | Allow then run a binary that phones home | args looked clean |
 | Secrets only in tool **output** | policy never sees results — wire `AfterToolRedact` |
 | Dual lists drift (Guard vs spawn) | you must wire `CommandLists()` (below) |
+| `go test` / `go fmt` / … | exempt from `ask_commands` for local workflows; still runs workspace code — pair with a sandbox if that matters |
 
 ## Issue 2002 mapping (partial on purpose)
 
