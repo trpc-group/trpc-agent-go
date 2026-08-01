@@ -48,10 +48,13 @@ type Policy struct {
 	AllowedEnvVars []string `json:"allowed_env_vars" yaml:"allowed_env_vars"`
 	// AskCommands triggers PermissionActionAsk when the executable basename matches.
 	AskCommands []string `json:"ask_commands" yaml:"ask_commands"`
-	// MaxTimeoutSeconds is advisory metadata surfaced in reports (enforcement
-	// remains with workspaceexec/hostexec/codeexecutor).
+	// MaxTimeoutSeconds is a pre-exec scan hint. When a sleep duration in the
+	// payload meets or exceeds this value, Guard returns ask. It does not
+	// kill running processes; executors still enforce their own timeouts.
 	MaxTimeoutSeconds int `json:"max_timeout_seconds" yaml:"max_timeout_seconds"`
-	// MaxOutputBytes is advisory metadata surfaced in reports.
+	// MaxOutputBytes is a pre-exec scan hint for argument payload size.
+	// Oversized stdin/code/command text returns ask. It does not cap live
+	// tool stdout; hosts/executors must enforce output limits separately.
 	MaxOutputBytes int `json:"max_output_bytes" yaml:"max_output_bytes"`
 	// HostExecRequiresAsk forces ask for hostexec tools even when the command
 	// would otherwise allow.

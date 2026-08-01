@@ -1,55 +1,66 @@
 # Tool Safety Guard
 
-This package is the Go-side answer to issue 2002: a pre-execution safety
-check that plugs into `tool.PermissionPolicy`, reuses `internal/shellsafe`,
-and leaves sandbox / spawn isolation where they already belong.
+Pre-execution `tool.PermissionPolicy` for issue 2002. It reuses
+`internal/shellsafe`, fails closed on garbage input, and leaves sandbox /
+CleanEnv / executor timeouts where they already belong.
+
+## Scope (honest)
+
+This package is an **exec-and-path argument gate**, not a full runtime
+security boundary.
+
+| Covered now | Explicitly out of band / host responsibility |
+|---|---|
+| `command` + `args`/`argv`, `stdin`, `code_blocks` | Live process timeout / kill |
+| File-like JSON fields (`path`, `file`, `file_path`, …) | Live stdout/stderr size caps |
+| Secret-shaped args / JSON keys; report redaction | Automatic result wrapping for every tool |
+| Network allowlist + `curl\|python` style pipes | Semantic understanding of obfuscated code |
+| hostexec default ask; install/sleep/oversized ask | Replacing container / E2B / namespaces |
+
+`RedactText` / `RedactMap` exist so hosts can scrub outputs without
+`WrapToolSet`. PermissionPolicy cannot see tool results by design.
 
 ## What you get
 
-Call `safety.NewGuard(...)` and pass it to the runner with
-`agent.WithToolPermissionPolicy`. Before `workspace_exec`, `exec_command`,
-or code-exec tools run, the Guard returns allow / deny / ask, writes an
-audit event, and (when a span is recording) sets:
+```go
+guard := safety.NewGuard(
+    safety.WithPolicyFile("tool_safety_policy.yaml"),
+    safety.WithAuditor(auditor),
+)
+events, err := runner.Run(ctx, user, session, msg,
+    agent.WithToolPermissionPolicy(guard),
+)
+```
+
+Span attributes when a span is recording:
 
 - `tool.safety.decision`
 - `tool.safety.risk_level`
 - `tool.safety.rule_id`
 - `tool.safety.backend`
 
-Policy lives in YAML/JSON. Changing allowlists, deny lists, denied paths,
-host allowlists, env allowlists, or the timeout/output hints does not
-require a code change.
-
 ## How it maps to issue 2002
 
-| Risk class from the issue | How Guard handles it |
+| Risk class | Guard behavior |
 |---|---|
-| Dangerous deletes / credential paths | `denied_commands`, `denied_paths`, plus an explicit `rm -rf` content check |
-| Non-allowlisted network | host allowlist on curl/wget/ssh-style clients; scheme-less `curl host/path` included |
-| Shell bypass (`$()`, backticks, `bash -c`, …) | `shellsafe.Parse` + active policy; unparsable commands are **deny** |
+| Dangerous deletes / credential paths | deny lists + path fields + `rm -rf` content check |
+| Non-allowlisted network | host allowlist; exact match by default |
+| Shell bypass | `shellsafe.Parse` + wrapper denies; unparsable → deny |
+| Download-to-interpreter | `curl\|wget … \| python/node/…` → deny even if host allowlisted |
 | hostexec PTY / long session | default `host_exec_requires_ask` |
-| Dependency installs | `ask_commands` (npm/pip/apt/`go install`, …) |
-| Resource abuse | long `sleep`, oversized payloads, and obvious unbounded loops (`while true` / `for(;;)`) → ask |
-| Secret leakage in args / reports | deny + redact; also scan JSON keys like `password` / `api_key`; export `RedactText` for post-exec scrubbing |
+| Dependency installs | `ask_commands` |
+| Resource abuse (scan-time) | long `sleep` / oversized args / obvious `while true` → ask (hints, not process enforcement) |
+| Secret leakage in args / reports | deny + redact; export helpers for post-exec scrubbing |
 
-Structured report fields match the issue: decision, risk level, rule id,
-evidence, recommendation, tool name, command, backend, blocked.
+## Design choices
 
-## Design choices (and why)
+- **PermissionPolicy only** — compose with `safety.Compose`; avoid WrapToolSet capability loss.
+- **Reuse `shellsafe`** — no second shell parser.
+- **Fail closed** — null/malformed args, unknown policy keys, load errors, unparsable commands deny.
+- **Exact host allowlist** — use `.example.com` only when suffix wildcards are intentional.
+- **Tighten-only extensions** — `WithExtraRules`.
 
-- **PermissionPolicy only** — wrapping ToolSet often drops `tool.Tool` /
-  `tool.ToolSet` capabilities; compose with `safety.Compose` instead.
-- **Reuse `internal/shellsafe`** — do not fork a second shell parser; leave
-  spawn-time checks where they already live.
-- **Fail closed** — malformed / `null` args, unknown policy keys, load
-  errors, and unparsable commands deny.
-- **Scan the full payload** — `command` + `args`/`argv`, `stdin`,
-  `code_blocks`, `cwd`, and secret-shaped JSON fields.
-- **Exact host allowlist** — bare hosts match exactly; leading-dot entries
-  opt into suffix wildcards.
-- **Extension point** — `WithExtraRules` for org-specific tighten-only checks.
-
-## Where it sits relative to the rest of the stack
+## Stack position
 
 ```text
 model tool call
@@ -60,40 +71,18 @@ model tool call
          -> local / container / e2B      # real isolation
 ```
 
-Guard is the cheap static gate. It does **not** replace a sandbox. A
-compiled binary or an obfuscated script can still do harm after an allow;
-container/E2B/namespaces are what contain blast radius. It also does not
-replace workspaceexec's own allow/deny + CleanEnv path (see issue 1845).
-
-`workspace_exec` stays rooted in the workspace with scrubbed env when
-policy mode is on. `exec_command` (hostexec) can keep a PTY and host
-processes; that is why the default policy asks before host execution.
-
-## Quick start
-
-```go
-guard := safety.NewGuard(
-    safety.WithPolicyFile("tool_safety_policy.yaml"),
-    safety.WithAuditor(auditor),
-)
-
-events, err := runner.Run(ctx, user, session, msg,
-    agent.WithToolPermissionPolicy(guard),
-)
-```
-
-Demo without an API key:
+## Demo
 
 ```bash
 cd examples/tool_safety_guard
 go run .
 ```
 
-## Fail-closed notes worth knowing
+Samples live in `tool_safety_samples.json` (oversized stdin appended at runtime).
 
-- Omitted deny lists in a policy file keep `DefaultPolicy` values (overlay).
-- Bare host entries are exact match only. Use `.example.com` when you
-  intentionally want every subdomain.
-- JSON `null` or non-object tool arguments are denied, not treated as empty.
-- Secrets found in arguments are redacted on the result before anything is
-  written to report/audit fixtures.
+## Fail-closed notes
+
+- Omitted deny lists keep `DefaultPolicy` values (overlay).
+- Bare hosts are exact match only.
+- JSON `null` / non-object arguments deny.
+- `max_timeout_seconds` / `max_output_bytes` are **scan hints** that drive ask; they do not replace executor limits.

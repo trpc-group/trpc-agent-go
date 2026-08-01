@@ -11,6 +11,7 @@ package safety
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -153,10 +154,10 @@ func (g *Guard) CheckToolPermission(
 	if err != nil {
 		return tool.DenyPermission(err.Error()), nil
 	}
-	// Non-exec tools with empty payload: allow (permission policy may still
-	// be combined with other policies by the host).
-	if ex.Command == "" && ex.Stdin == "" && len(ex.CodeBlocks) == 0 &&
-		ex.Backend == BackendUnknown {
+	// Only skip scanning when there is nothing to inspect. Secret-shaped
+	// JSON keys, path fields, and env overrides must still reach Scan even
+	// for unknown / non-exec tools.
+	if !needsScan(ex) {
 		return tool.AllowPermission(), nil
 	}
 
@@ -209,6 +210,26 @@ func (g *Guard) CheckToolPermission(
 
 func formatReason(r Result) string {
 	return fmt.Sprintf("tool safety [%s]: %s (%s)", r.RuleID, r.Evidence, r.Advice)
+}
+
+func needsScan(ex Extracted) bool {
+	if strings.TrimSpace(ex.Command) != "" ||
+		strings.TrimSpace(ex.Stdin) != "" ||
+		strings.TrimSpace(ex.Cwd) != "" ||
+		strings.TrimSpace(ex.RawText) != "" ||
+		len(ex.CodeBlocks) > 0 ||
+		len(ex.Paths) > 0 ||
+		len(ex.Env) > 0 {
+		return true
+	}
+	// Known exec backends still need backend-specific rules (e.g. hostexec ask)
+	// even when the argument object is empty.
+	switch ex.Backend {
+	case BackendHost, BackendWorkspace, BackendCode:
+		return true
+	default:
+		return false
+	}
 }
 
 func (g *Guard) record(r Result) {

@@ -1,4 +1,4 @@
-//
+﻿//
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
@@ -73,11 +73,12 @@ type Result struct {
 }
 
 var (
-	reURL        = regexp.MustCompile(`(?i)\bhttps?://[^\s"'\\]+`)
-	reSchemeLess = regexp.MustCompile(`(?i)\b(?:curl|wget|fetch)\s+((?:[a-z0-9-]+\.)+[a-z]{2,}(?:/[^\s"']*)?)`)
-	reSecret     = regexp.MustCompile(`(?i)(api[_-]?key|token|password|secret|authorization|bearer)\s*[:=]\s*['"]?([^\s'"]{8,})`)
-	rePEM        = regexp.MustCompile(`-----BEGIN (?:RSA |OPENSSH |EC )?PRIVATE KEY-----`)
-	reSK         = regexp.MustCompile(`(?i)\bsk-[a-z0-9]{16,}\b`)
+	reURL           = regexp.MustCompile(`(?i)\bhttps?://[^\s"'\\]+`)
+	reSchemeLess    = regexp.MustCompile(`(?i)\b(?:curl|wget|fetch)\s+((?:[a-z0-9-]+\.)+[a-z]{2,}(?:/[^\s"']*)?)`)
+	reSecret        = regexp.MustCompile(`(?i)(api[_-]?key|token|password|secret|authorization|bearer)\s*[:=]\s*['"]?([^\s'"]{8,})`)
+	rePEM           = regexp.MustCompile(`-----BEGIN (?:RSA |OPENSSH |EC )?PRIVATE KEY-----`)
+	reSK            = regexp.MustCompile(`(?i)\bsk-[a-z0-9]{16,}\b`)
+	reNetPipeInterp = regexp.MustCompile(`(?i)\b(?:curl|wget|fetch|nc|ncat|netcat)\b[^|\n]*\|\s*(?:python3?|py|node|nodejs|deno|bun|ruby|perl|php|lua|pwsh|powershell)\b`)
 )
 
 // Scan applies policy to an extracted payload.
@@ -146,6 +147,7 @@ func Scan(ex Extracted, policy Policy) Result {
 
 func collectTexts(ex Extracted) []string {
 	texts := []string{ex.RawText, ex.Command, ex.Stdin, ex.Cwd}
+	texts = append(texts, ex.Paths...)
 	return append(texts, ex.CodeBlocks...)
 }
 
@@ -179,6 +181,9 @@ func scanShellCommand(res Result, ex Extracted, policy Policy) Result {
 	if f, ok := scanDangerousDeletion(ex.Command); ok {
 		return finalize(res, f)
 	}
+	if f, ok := scanPipeToInterpreter(pipe); ok {
+		return finalize(res, f)
+	}
 	if f, ok := scanNetwork(pipe, ex.Command, policy.AllowedHosts); ok {
 		return finalize(res, f)
 	}
@@ -196,6 +201,9 @@ func scanNonShellPayload(res Result, ex Extracted, policy Policy) Result {
 	if f, ok := scanDangerousDeletion(extraText); ok {
 		return finalize(res, f)
 	}
+	if f, ok := scanTextPipeInterpreter(extraText); ok {
+		return finalize(res, f)
+	}
 	if f, ok := scanNetworkFromText(extraText, policy.AllowedHosts); ok {
 		return finalize(res, f)
 	}
@@ -209,6 +217,19 @@ func scanNonShellPayload(res Result, ex Extracted, policy Policy) Result {
 		})
 	}
 	return res
+}
+
+func scanTextPipeInterpreter(text string) (Finding, bool) {
+	if text == "" || !reNetPipeInterp.MatchString(text) {
+		return Finding{}, false
+	}
+	return Finding{
+		RuleID:   "shell.pipe_network_to_interpreter",
+		Decision: DecisionDeny,
+		Risk:     RiskHigh,
+		Evidence: "payload pipes network output into an interpreter",
+		Advice:   "download to a reviewed artifact first; do not pipe remote content into python/node/ruby/…",
+	}, true
 }
 
 func finishResult(res Result) Result {
@@ -301,6 +322,7 @@ func scanDeniedPaths(ex Extracted, denied []string) (Finding, bool) {
 		return Finding{}, false
 	}
 	candidates := []string{ex.Command, ex.Stdin, ex.Cwd, ex.RawText}
+	candidates = append(candidates, ex.Paths...)
 	candidates = append(candidates, ex.CodeBlocks...)
 	for _, c := range candidates {
 		if c == "" {
@@ -499,6 +521,62 @@ func isNetworkClient(base string) bool {
 	}
 }
 
+func isInterpreter(base string) bool {
+	switch base {
+	case "python", "python2", "python3", "py",
+		"node", "nodejs", "deno", "bun",
+		"ruby", "perl", "php", "lua", "osascript",
+		"pwsh", "powershell", "powershell.exe":
+		return true
+	default:
+		return false
+	}
+}
+
+func commandBase(argv []string) string {
+	if len(argv) == 0 {
+		return ""
+	}
+	base := strings.ToLower(filepath.Base(argv[0]))
+	return strings.TrimSuffix(base, ".exe")
+}
+
+// scanPipeToInterpreter catches pipelines that feed an interpreter.
+// Network-to-interpreter (even allowlisted hosts) and local-to-interpreter
+// both deny: static review cannot tell whether the left-hand side is trusted.
+func scanPipeToInterpreter(pipe *shellsafe.Pipeline) (Finding, bool) {
+	if pipe == nil || len(pipe.Commands) < 2 {
+		return Finding{}, false
+	}
+	hasNet := false
+	hasInterp := false
+	for _, argv := range pipe.Commands {
+		base := commandBase(argv)
+		if isNetworkClient(base) {
+			hasNet = true
+		}
+		if isInterpreter(base) {
+			hasInterp = true
+		}
+	}
+	if !hasInterp {
+		return Finding{}, false
+	}
+	rule := "shell.pipe_to_interpreter"
+	evidence := "pipeline feeds data into an interpreter"
+	if hasNet {
+		rule = "shell.pipe_network_to_interpreter"
+		evidence = "pipeline feeds network output into an interpreter"
+	}
+	return Finding{
+		RuleID:   rule,
+		Decision: DecisionDeny,
+		Risk:     RiskHigh,
+		Evidence: evidence,
+		Advice:   "avoid piping into python/node/ruby/…; write a reviewed script artifact instead",
+	}, true
+}
+
 func hostOf(raw string) string {
 	raw = strings.TrimSpace(raw)
 	raw = strings.Trim(raw, `"'`)
@@ -591,8 +669,8 @@ func scanResourceAbuse(ex Extracted, policy Policy) (Finding, bool) {
 				RuleID:   "resource.long_sleep",
 				Decision: DecisionAsk,
 				Risk:     RiskMedium,
-				Evidence: "sleep duration exceeds max_timeout_seconds hint",
-				Advice:   "shorten the wait or raise max_timeout_seconds after review",
+				Evidence: "sleep duration meets or exceeds max_timeout_seconds scan hint",
+				Advice:   "shorten the wait, raise the scan hint after review, and keep executor timeouts enabled",
 			}, true
 		}
 	}
@@ -603,8 +681,8 @@ func scanResourceAbuse(ex Extracted, policy Policy) (Finding, bool) {
 					RuleID:   "resource.oversized_payload",
 					Decision: DecisionAsk,
 					Risk:     RiskMedium,
-					Evidence: "tool argument size exceeds max_output_bytes hint",
-					Advice:   "trim the payload or raise max_output_bytes after review",
+					Evidence: "tool argument size exceeds max_output_bytes scan hint",
+					Advice:   "trim the payload, raise the scan hint after review, and keep executor output caps enabled",
 				}, true
 			}
 		}

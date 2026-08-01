@@ -39,6 +39,7 @@ type Extracted struct {
 	Stdin      string
 	Cwd        string
 	Env        map[string]string
+	Paths      []string
 	CodeBlocks []string
 	RawText    string
 }
@@ -98,6 +99,7 @@ func Extract(req *tool.PermissionRequest) (Extracted, error) {
 		return out, err
 	}
 	out.CodeBlocks = blocks
+	out.Paths = pathFields(payload)
 
 	parts := make([]string, 0, 8)
 	if out.Command != "" {
@@ -109,6 +111,7 @@ func Extract(req *tool.PermissionRequest) (Extracted, error) {
 	if out.Cwd != "" {
 		parts = append(parts, out.Cwd)
 	}
+	parts = append(parts, out.Paths...)
 	parts = append(parts, out.CodeBlocks...)
 	parts = append(parts, secretKeyedStrings(payload)...)
 	for k, v := range out.Env {
@@ -200,6 +203,38 @@ func stringSliceField(payload map[string]json.RawMessage, keys ...string) []stri
 		}
 	}
 	return nil
+}
+
+func pathFields(payload map[string]json.RawMessage) []string {
+	if payload == nil {
+		return nil
+	}
+	keys := []string{
+		"path", "file", "filename", "file_path", "filepath",
+		"target", "target_path", "src", "dst", "source", "destination",
+	}
+	seen := map[string]struct{}{}
+	var out []string
+	add := func(s string) {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return
+		}
+		if _, ok := seen[s]; ok {
+			return
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	for _, key := range keys {
+		if s := stringField(payload, key); s != "" {
+			add(s)
+		}
+		for _, s := range stringSliceField(payload, key) {
+			add(s)
+		}
+	}
+	return out
 }
 
 func looksLikeSecretKey(k string) bool {
