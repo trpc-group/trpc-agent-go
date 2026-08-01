@@ -94,13 +94,49 @@ func TestAdversarial_SelectorGaps(t *testing.T) {
 		require.Contains(t, dec.Reason, "pipe_to_interpreter")
 	})
 
-	t.Run("empty_unknown_tool_still_allows", func(t *testing.T) {
+	t.Run("mcp_file_uri_ssh_denied", func(t *testing.T) {
 		t.Parallel()
-		dec, err := g.CheckToolPermission(ctx, &tool.PermissionRequest{
-			ToolName:  "web_search",
-			Arguments: []byte(`{}`),
+		raw, err := json.Marshal(map[string]any{
+			"uri": "file:///home/u/.ssh/id_rsa",
 		})
 		require.NoError(t, err)
-		require.Equal(t, tool.PermissionActionAllow, dec.Action)
+		dec, err := g.CheckToolPermission(ctx, &tool.PermissionRequest{
+			ToolName:  "mcp_read",
+			Arguments: raw,
+		})
+		require.NoError(t, err)
+		require.Equal(t, tool.PermissionActionDeny, dec.Action)
+		require.Contains(t, dec.Reason, "path")
+	})
+
+	t.Run("url_field_denied_host", func(t *testing.T) {
+		t.Parallel()
+		raw, err := json.Marshal(map[string]any{
+			"command": "echo ok",
+			"url":     "https://evil.example/x",
+		})
+		require.NoError(t, err)
+		dec, err := g.CheckToolPermission(ctx, &tool.PermissionRequest{
+			ToolName:  "workspace_exec",
+			Arguments: raw,
+		})
+		require.NoError(t, err)
+		require.Equal(t, tool.PermissionActionDeny, dec.Action)
+		require.Contains(t, dec.Reason, "network")
+	})
+
+	t.Run("url_only_mcp_fetch_denied", func(t *testing.T) {
+		t.Parallel()
+		raw, err := json.Marshal(map[string]any{
+			"url": "https://evil.example/payload",
+		})
+		require.NoError(t, err)
+		dec, err := g.CheckToolPermission(ctx, &tool.PermissionRequest{
+			ToolName:  "mcp_fetch",
+			Arguments: raw,
+		})
+		require.NoError(t, err)
+		require.Equal(t, tool.PermissionActionDeny, dec.Action)
+		require.Contains(t, dec.Reason, "network")
 	})
 }

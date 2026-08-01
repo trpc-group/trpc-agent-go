@@ -194,7 +194,16 @@ func scanShellCommand(res Result, ex Extracted, policy Policy) Result {
 }
 
 func scanNonShellPayload(res Result, ex Extracted, policy Policy) Result {
-	extraText := strings.TrimSpace(strings.Join(append([]string{ex.Stdin}, ex.CodeBlocks...), "\n"))
+	// stdin / code_blocks / path-ish fields (path, uri, url, …). Paths are
+	// included so MCP-style tools without a shell command still hit network
+	// and install checks; denied_paths already ran earlier on the same set.
+	parts := make([]string, 0, 2+len(ex.CodeBlocks)+len(ex.Paths))
+	if ex.Stdin != "" {
+		parts = append(parts, ex.Stdin)
+	}
+	parts = append(parts, ex.CodeBlocks...)
+	parts = append(parts, ex.Paths...)
+	extraText := strings.TrimSpace(strings.Join(parts, "\n"))
 	if extraText == "" {
 		return res
 	}

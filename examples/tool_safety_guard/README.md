@@ -40,6 +40,19 @@ the demo’s only assertion; unit coverage lives under `tool/safety`.
 `ask_commands` includes `go`, but `go test` / `go version` / … are exempted in
 code so the “safe go test” sample can stay allow.
 
+## Wiring the same lists into workspaceexec
+
+This demo does not construct an ExecTool. In a real agent, reuse the policy’s
+command lists so Guard and spawn-time shellsafe stay aligned:
+
+```go
+allow, deny := guard.Policy().CommandLists()
+_ = workspaceexec.NewExecTool(runner,
+    workspaceexec.WithAllowedCommands(allow...),
+    workspaceexec.WithDeniedCommands(deny...),
+)
+```
+
 ## What this demo is not
 
 It does not start runner, workspaceexec, or a real sandbox. It only shows the

@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -212,19 +213,19 @@ func pathFields(payload map[string]json.RawMessage) []string {
 	keys := []string{
 		"path", "file", "filename", "file_path", "filepath",
 		"target", "target_path", "src", "dst", "source", "destination",
+		// MCP / fetch style keys that often carry local or remote locations.
+		"uri", "url", "href", "location", "file_uri",
 	}
 	seen := map[string]struct{}{}
 	var out []string
 	add := func(s string) {
-		s = strings.TrimSpace(s)
-		if s == "" {
-			return
+		for _, cand := range pathCandidates(s) {
+			if _, ok := seen[cand]; ok {
+				continue
+			}
+			seen[cand] = struct{}{}
+			out = append(out, cand)
 		}
-		if _, ok := seen[s]; ok {
-			return
-		}
-		seen[s] = struct{}{}
-		out = append(out, s)
 	}
 	for _, key := range keys {
 		if s := stringField(payload, key); s != "" {
@@ -232,6 +233,29 @@ func pathFields(payload map[string]json.RawMessage) []string {
 		}
 		for _, s := range stringSliceField(payload, key) {
 			add(s)
+		}
+	}
+	return out
+}
+
+// pathCandidates expands a path-ish value into forms denied_paths can match.
+// file:///home/u/.ssh/id_rsa → raw URI + /home/u/.ssh/id_rsa
+func pathCandidates(s string) []string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	out := []string{s}
+	lower := strings.ToLower(s)
+	if strings.HasPrefix(lower, "file:") {
+		if u, err := url.Parse(s); err == nil {
+			if u.Path != "" {
+				out = append(out, u.Path)
+			}
+			// Windows file URIs sometimes land in Opaque / host+path forms.
+			if u.Host != "" && u.Path != "" && u.Host != "localhost" {
+				out = append(out, u.Host+u.Path)
+			}
 		}
 	}
 	return out

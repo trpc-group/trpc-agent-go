@@ -113,6 +113,32 @@ func TestScanEnvAllowlist(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestPathCandidates_FileURI(t *testing.T) {
+	t.Parallel()
+	got := pathCandidates("file:///home/u/.ssh/id_rsa")
+	require.Contains(t, got, "file:///home/u/.ssh/id_rsa")
+	require.Contains(t, got, "/home/u/.ssh/id_rsa")
+	require.Equal(t, []string{"/tmp/x"}, pathCandidates("/tmp/x"))
+	require.Nil(t, pathCandidates("  "))
+}
+
+func TestCommandLists_Copies(t *testing.T) {
+	t.Parallel()
+	p := DefaultPolicy()
+	p.AllowedCommands = []string{"echo"}
+	p.DeniedCommands = []string{"curl", "wget"}
+	allow, deny := p.CommandLists()
+	require.Equal(t, []string{"echo"}, allow)
+	require.Equal(t, []string{"curl", "wget"}, deny)
+	allow[0] = "mutated"
+	deny[0] = "mutated"
+	require.Equal(t, "echo", p.AllowedCommands[0])
+	require.Equal(t, "curl", p.DeniedCommands[0])
+	emptyAllow, emptyDeny := Policy{}.CommandLists()
+	require.Nil(t, emptyAllow)
+	require.Nil(t, emptyDeny)
+}
+
 func TestPolicyOverlayApply_AllFields(t *testing.T) {
 	t.Parallel()
 	trueVal := true

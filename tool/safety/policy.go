@@ -194,7 +194,23 @@ func cleanStrings(in []string) []string {
 }
 
 // shellPolicy maps DeniedCommands / AllowedCommands into shellsafe.Policy.
-// Unexported on purpose: callers should not depend on internal/shellsafe types.
+// Unexported on purpose: apps should not import internal/shellsafe.
 func (p Policy) shellPolicy() shellsafe.Policy {
 	return shellsafe.PolicyFromLists(p.AllowedCommands, p.DeniedCommands)
+}
+
+// CommandLists returns copies of the command allow/deny lists.
+//
+// Feed these into workspaceexec.WithAllowedCommands / WithDeniedCommands (and
+// the hostexec equivalents if you use them) so one policy file drives both
+// Guard and spawn-time shellsafe. That is the reuse path issue 2002 asks for
+// without exporting internal/shellsafe types.
+func (p Policy) CommandLists() (allowed, denied []string) {
+	if len(p.AllowedCommands) > 0 {
+		allowed = append([]string(nil), p.AllowedCommands...)
+	}
+	if len(p.DeniedCommands) > 0 {
+		denied = append([]string(nil), p.DeniedCommands...)
+	}
+	return allowed, denied
 }

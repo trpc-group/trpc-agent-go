@@ -12,6 +12,8 @@ Guard looks at the JSON arguments of a tool call before the tool runs:
 
 - shell-ish fields: `command`, `args`/`argv`, `stdin`, `code_blocks`
 - file-ish fields: `path`, `file`, `file_path`, …
+- location fields: `uri`, `url`, `href`, `location`, `file_uri`
+  (`file://…` is normalized so denied_paths can match the path part)
 - `env` overrides (allowlist) and secret-looking keys (`password`, `api_key`, …)
 
 It can return allow / deny / ask, append a JSONL audit line, and set a few
@@ -24,12 +26,30 @@ It does **not**:
 - wrap every tool result for you (use `RedactText` / `RedactMap` if you need that)
 - understand obfuscated code (`exec(base64.b64decode(...))` and friends)
 
+## Threat model (short)
+
+| Trust boundary | Guard role |
+|---|---|
+| Model → tool args (JSON) | in scope: scan before invoke |
+| Tool → OS process | out of scope: workspaceexec / hostexec / sandbox |
+| Tool → network | in scope for args that carry hosts/URLs; not a proxy |
+| Tool → result text | out of scope for PermissionPolicy; host can call `Redact*` |
+
+Residual bypasses (honest list):
+
+| Bypass | Why still open |
+|---|---|
+| Obfuscated interpreter code | no AST / decoder stage |
+| Allow then run a binary that phones home | args looked clean |
+| Secrets only in tool **output** | policy never sees results |
+| Dual lists drift (Guard vs spawn) | you must wire `CommandLists()` (below) |
+
 ## Issue 2002 mapping (partial on purpose)
 
 | Topic in the issue | Here | Notes |
 |---|---|---|
-| Dangerous delete / credential paths | mostly | command text + path fields; not a full VFS policy |
-| Network allowlist | mostly | exact host by default; `.suffix` only if you opt in |
+| Dangerous delete / credential paths | mostly | command text + path/uri fields; not a full VFS policy |
+| Network allowlist | mostly | exact host by default; `.suffix` only if you opt in; also `url`/`uri` fields |
 | Shell bypass | mostly | fail closed when `shellsafe` cannot parse |
 | Download \| interpreter | yes | e.g. `wget … \| python3` denied even if host is allowlisted |
 | hostexec long session | partial | default ask; no process-residual detector |
@@ -56,21 +76,24 @@ Common rule ids (also land in audit / report):
 - `code.install_mutation`
 - `allow` (nothing matched)
 
-## Still easy to slip past
-
-Static checks have limits. Examples that are out of scope today:
-
-- `execute_code` with `exec(base64.b64decode("…"))` and no obvious path/secret text
-- a compiled binary that does harm after an allow
-- anything that only shows up in tool **output**, not in arguments
-
-If you need those closed, put a sandbox (or at least output redaction) next to this Guard.
-
 ## Dual policy with workspaceexec
 
 workspaceexec may also run `shellsafe` at spawn time. Guard is an earlier,
-argument-level pass. Keep the deny lists in the same ballpark or you will get
-“Guard allowed, spawn denied” (or the reverse). There is no automatic sync.
+argument-level pass. To keep one source of truth without importing
+`internal/shellsafe` from apps:
+
+```go
+guard := safety.NewGuard(safety.WithPolicyFile("tool_safety_policy.yaml"))
+allow, deny := guard.Policy().CommandLists()
+execTool := workspaceexec.NewExecTool(runner,
+    workspaceexec.WithAllowedCommands(allow...),
+    workspaceexec.WithDeniedCommands(deny...),
+)
+```
+
+If you skip that wiring, you can still get “Guard allowed, spawn denied”
+(or the reverse). There is no automatic sync on purpose — spawn options stay
+explicit.
 
 ## Usage
 
@@ -90,6 +113,7 @@ Optional:
 - `safety.Compose(guard, otherPolicy)` — first non-allow wins
 - `safety.WithExtraRules(...)` — can only tighten
 - `safety.RedactText` / `RedactMap` — for host-side result scrubbing
+- `Policy.CommandLists()` — feed workspaceexec / skill_run command lists
 
 OTel attribute keys: `tool.safety.decision`, `tool.safety.risk_level`,
 `tool.safety.rule_id`, `tool.safety.backend`.
