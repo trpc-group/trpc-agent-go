@@ -112,7 +112,7 @@ explicit.
 ```go
 guard := safety.NewGuard(
     safety.WithPolicyFile("tool_safety_policy.yaml"),
-    safety.WithAuditor(auditor), // FileAuditor is auto-wrapped in AsyncAuditor
+    safety.WithAuditor(auditor), // any non-memory Auditor is auto-wrapped
 )
 defer guard.Close() // drains the audit queue at shutdown
 
@@ -121,10 +121,11 @@ events, err := runner.Run(ctx, user, session, msg,
 )
 ```
 
-`WithAuditor(*FileAuditor)` wraps the sink in `AsyncAuditor` (bounded queue,
-drop-on-full) so `CheckToolPermission` never waits on disk. Prefer
-`NewAsyncFileAuditor` when constructing the sink yourself. `MemoryAuditor`
-stays synchronous.
+`WithAuditor` wraps every sink except `*MemoryAuditor` / `*AsyncAuditor` in
+`AsyncAuditor` (bounded queue, drop-on-full) so `CheckToolPermission` never
+waits on disk or a custom auditor's I/O. Prefer `NewAsyncFileAuditor` when
+constructing the sink yourself. `WithSyncAuditor` opts out of wrapping for
+tests or hosts that already own a non-blocking sink.
 
 Optional:
 

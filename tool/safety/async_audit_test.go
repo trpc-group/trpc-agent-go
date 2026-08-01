@@ -102,6 +102,54 @@ func TestWithAuditor_WrapsFileAuditorAsync(t *testing.T) {
 	require.Equal(t, DecisionDeny, ev.Decision)
 }
 
+type countingAuditor struct {
+	n atomic.Int64
+}
+
+func (c *countingAuditor) Append(ev AuditEvent) error {
+	c.n.Add(1)
+	return nil
+}
+
+func TestWithAuditor_WrapsCustomAuditorAsync(t *testing.T) {
+	t.Parallel()
+	inner := &countingAuditor{}
+	g := NewGuard(WithAuditor(inner))
+	t.Cleanup(func() { _ = g.Close() })
+	_, ok := g.audit.(*AsyncAuditor)
+	require.True(t, ok, "custom Auditor must be wrapped, not only *FileAuditor")
+
+	_, err := g.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"rm -rf /"}`),
+	})
+	require.NoError(t, err)
+	require.NoError(t, g.Close())
+	require.GreaterOrEqual(t, inner.n.Load(), int64(1))
+}
+
+func TestWithSyncAuditor_NoWrap(t *testing.T) {
+	t.Parallel()
+	inner := &countingAuditor{}
+	g := NewGuard(WithSyncAuditor(inner))
+	_, ok := g.audit.(*countingAuditor)
+	require.True(t, ok)
+	_, err := g.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"rm -rf /"}`),
+	})
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, inner.n.Load(), int64(1))
+}
+
+func TestWithAuditor_MemoryStaysSync(t *testing.T) {
+	t.Parallel()
+	mem := NewMemoryAuditor()
+	g := NewGuard(WithAuditor(mem))
+	_, ok := g.audit.(*MemoryAuditor)
+	require.True(t, ok)
+}
+
 func splitFirstLine(s string) string {
 	for i := 0; i < len(s); i++ {
 		if s[i] == '\n' {

@@ -84,20 +84,37 @@ func WithPolicyFile(path string) Option {
 	}
 }
 
-// WithAuditor attaches an audit sink.
-// Bare *FileAuditor values are wrapped in AsyncAuditor so CheckToolPermission
-// never waits on disk I/O. MemoryAuditor stays synchronous (in-process).
-// Call Close on the resulting *AsyncAuditor at process shutdown if you need
-// a drained queue.
+// WithAuditor attaches an audit sink for the permission hot path.
+//
+// Any sink other than *MemoryAuditor / *AsyncAuditor is wrapped in
+// AsyncAuditor (bounded queue, drop-on-full) so CheckToolPermission never
+// waits on a custom auditor's file, network, or lock I/O. MemoryAuditor stays
+// synchronous for tests that read Events() immediately. Use WithSyncAuditor
+// only when a host intentionally wants a blocking sink.
+//
+// Call Guard.Close() at shutdown to drain a wrapped queue.
 func WithAuditor(a Auditor) Option {
 	return func(g *Guard) {
 		if a == nil {
 			return
 		}
-		if _, ok := a.(*FileAuditor); ok {
-			a = NewAsyncAuditor(a, defaultAuditQueueSize)
+		switch a.(type) {
+		case *AsyncAuditor, *MemoryAuditor:
+			g.audit = a
+		default:
+			g.audit = NewAsyncAuditor(a, defaultAuditQueueSize)
 		}
-		g.audit = a
+	}
+}
+
+// WithSyncAuditor attaches an auditor without AsyncAuditor wrapping.
+// Prefer WithAuditor on production hot paths; this exists for tests and for
+// hosts that already own their own non-blocking sink.
+func WithSyncAuditor(a Auditor) Option {
+	return func(g *Guard) {
+		if a != nil {
+			g.audit = a
+		}
 	}
 }
 
