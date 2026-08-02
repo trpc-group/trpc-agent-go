@@ -450,11 +450,49 @@ func redactedEventForLogging(e *Event) Event {
 	return redacted
 }
 
-func tryEmitReadyEvent(ctx context.Context, ch chan<- *Event, e *Event) (bool, error) {
-	// Snapshot before send: once ch <- e returns, the receiver owns *e and
-	// may mutate it concurrently (runner.backfillEventMetadata). Reading
-	// *e after the send for logging is a data race.
-	eventStr := snapshotEvent(e)
+// trySendReady attempts a non-blocking send of e on ch. It reports whether the
+// send succeeded. A send on a closed channel panics; the deferred recover
+// converts that panic into ErrClosedChannelSend so callers can handle it as a
+// regular error instead of crashing the goroutine.
+func trySendReady(ch chan<- *Event, e *Event) (sent bool, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = ErrClosedChannelSend
+			sent = false
+		}
+	}()
+	select {
+	case ch <- e:
+		return true, nil
+	default:
+		return false, nil
+	}
+}
+
+// sendBlocking sends e on ch, blocking until either the send succeeds, the
+// context is cancelled, or (when timeout != EmitWithoutTimeout) the timeout
+// elapses. As with trySendReady, a send on a closed channel panics and is
+// converted into ErrClosedChannelSend via deferred recover.
+func sendBlocking(ctx context.Context, ch chan<- *Event, e *Event,
+	timeout time.Duration) (sent bool, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = ErrClosedChannelSend
+			sent = false
+		}
+	}()
+
+	if timeout == EmitWithoutTimeout {
+		select {
+		case ch <- e:
+			return true, nil
+		case <-ctx.Done():
+			return false, ctx.Err()
+		}
+	}
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 	select {
 	case ch <- e:
 		return true, nil
