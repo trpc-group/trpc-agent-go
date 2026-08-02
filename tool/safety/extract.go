@@ -101,6 +101,32 @@ func extract(args []byte, backend string) (execRequest, error) {
 	}, nil
 }
 
+// stdinArgs is the union of the write_stdin and workspace_write_stdin argument
+// schemas. Both carry the characters in "chars"; only the session-id and
+// yield-time keys differ (and both tools accept camelCase aliases), none of
+// which the rules inspect.
+type stdinArgs struct {
+	Chars string `json:"chars"`
+}
+
+// extractStdin turns a session-input tool's arguments into an execRequest whose
+// Command is the characters written into the session. The session already
+// exists, so there is no working directory, environment or timeout to scan: the
+// characters are the whole attack surface, and they are treated exactly like a
+// command line on the session's backend.
+//
+// A trailing newline (the tools also append one via append_newline / submit) is
+// not meaningful to the parser and is trimmed, so "ls\n" scans as "ls".
+func extractStdin(args []byte) (execRequest, error) {
+	var a stdinArgs
+	if len(args) > 0 {
+		if err := json.Unmarshal(args, &a); err != nil {
+			return execRequest{}, fmt.Errorf("parse stdin args: %w", err)
+		}
+	}
+	return execRequest{Command: strings.TrimRight(a.Chars, "\r\n")}, nil
+}
+
 // extractCode handles the execute_code schema. Its payload is a code_blocks
 // array (not a shell command). The blocks are kept individually so the rule
 // engine can scan shell-language blocks as full commands and other languages

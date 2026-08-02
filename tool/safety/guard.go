@@ -213,22 +213,74 @@ func (g *Guard) CheckToolPermission(
 	req *tool.PermissionRequest,
 ) (tool.PermissionDecision, error) {
 	start := time.Now()
+	callID := toolCallID(ctx, req)
 	backend := backendOf(req.ToolName, g.policy)
 	if backend == "" {
-		return tool.AllowPermission(), nil
+		return g.checkUnscanned(ctx, req, callID, start)
 	}
-	callID := toolCallID(ctx, req)
 	er, err := extract(req.Arguments, backend)
 	if err != nil {
-		findings := []Finding{argParseFinding(err, g.policy.UnparsableAction)}
-		return g.finalize(ctx, req.ToolName, callID, backend, execRequest{},
-			findings, actionToDecision(g.policy.UnparsableAction), RiskHigh, start)
+		return g.failClosed(ctx, req.ToolName, callID, backend, err, start)
 	}
 	er.ToolDestructive = req.Metadata.Destructive
 	er.BaseEnv = g.execEnv
 	er.Cwd = resolveExecCwd(er.Cwd, g.execBaseDir)
 	findings, decision, risk := g.policy.scan(er, backend)
 	return g.finalize(ctx, req.ToolName, callID, backend, er, findings, decision, risk, start)
+}
+
+// checkUnscanned handles a tool that is not a command entry point: a
+// session-input tool (scanned when session_input.scan is on, audited either
+// way) or any other tool, which is allowed and — under audit_unscanned —
+// recorded so an operator can see what passed through the guard untouched.
+func (g *Guard) checkUnscanned(
+	ctx context.Context,
+	req *tool.PermissionRequest,
+	callID string,
+	start time.Time,
+) (tool.PermissionDecision, error) {
+	backend := g.policy.sessionInputBackendFor(req.ToolName)
+	if backend == "" {
+		if !g.policy.AuditUnscanned {
+			return tool.AllowPermission(), nil
+		}
+		return g.finalize(ctx, req.ToolName, callID, BackendUnscanned, execRequest{},
+			nil, DecisionAllow, RiskNone, start)
+	}
+	if !g.policy.SessionInput.Scan {
+		// The command rules do not apply, but the call must not be silent: it is
+		// the documented bypass of the session-establishment check. The written
+		// characters are deliberately left out of the report — unparsed session
+		// input is as likely to be a password typed at a prompt as a command,
+		// and the secret patterns only redact secret-shaped values.
+		findings := []Finding{sessionInputUnscannedFinding(req.ToolName)}
+		return g.finalize(ctx, req.ToolName, callID, BackendUnscanned, execRequest{},
+			findings, DecisionAllow, RiskLow, start)
+	}
+	er, err := extractStdin(req.Arguments)
+	if err != nil {
+		return g.failClosed(ctx, req.ToolName, callID, backend, err, start)
+	}
+	er.ToolDestructive = req.Metadata.Destructive
+	// The session was started with the executor's environment and keeps it for
+	// every subsequent write, so the network rules must see the same base env
+	// they would for exec_command. There is no per-write cwd or env override.
+	er.BaseEnv = g.execEnv
+	findings, decision, risk := g.policy.scan(er, backend)
+	return g.finalize(ctx, req.ToolName, callID, backend, er, findings, decision, risk, start)
+}
+
+// failClosed reports an unparsable argument payload at the policy's
+// unparsable_action.
+func (g *Guard) failClosed(
+	ctx context.Context,
+	toolName, callID, backend string,
+	err error,
+	start time.Time,
+) (tool.PermissionDecision, error) {
+	findings := []Finding{argParseFinding(err, g.policy.UnparsableAction)}
+	return g.finalize(ctx, toolName, callID, backend, execRequest{},
+		findings, actionToDecision(g.policy.UnparsableAction), RiskHigh, start)
 }
 
 // resolveExecCwd resolves the request's working directory the way the executor

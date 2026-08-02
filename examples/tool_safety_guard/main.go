@@ -74,6 +74,15 @@ func samples() []sample {
 		{"host background + PTY", "exec_command", `{"command":"sleep 5","background":true,"tty":true}`},
 		{"secret in command", "workspace_exec",
 			`{"command":"curl -H \"Authorization: Bearer demo-token-not-a-real-secret\" https://github.com/x"}`},
+		// The argv rules never see a python block, so the credential rule has a
+		// code-side pass over string literals.
+		{"key read inside code", "execute_code",
+			`{"code_blocks":[{"language":"python","code":"print(open('/root/.ssh/id_rsa').read())"}]}`},
+		{"safe code block", "execute_code",
+			`{"code_blocks":[{"language":"python","code":"print(sum(range(10)))"}]}`},
+		// Characters typed into an already running session bypass the
+		// session-establishment check; session_input.scan is on in this policy.
+		{"command via session stdin", "write_stdin", `{"session_id":"s1","chars":"rm -rf /","append_newline":true}`},
 	}
 }
 

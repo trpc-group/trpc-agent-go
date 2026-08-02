@@ -68,6 +68,10 @@ const (
 	BackendHost = "host"
 	// BackendCode is the code executor backend (codeexec execute_code).
 	BackendCode = "code"
+	// BackendUnscanned labels a report/audit event for a tool call the guard did
+	// not scan: a non-exec tool (under audit_unscanned) or a session-input tool
+	// while session_input.scan is off. It is never a configurable backend name.
+	BackendUnscanned = "unscanned"
 )
 
 // CommandPolicy holds the executable-name allow/deny lists handed to
@@ -132,6 +136,35 @@ type EnvPolicy struct {
 	AllowedKeys []string `yaml:"allowed_keys" json:"allowed_keys"`
 }
 
+// SessionInputPolicy configures scanning of the characters written into an
+// already established exec session (hostexec write_stdin, workspaceexec
+// workspace_write_stdin).
+//
+// The guard normally intercepts at the session-establishment point
+// (exec_command / workspace_exec). Everything typed into the session afterwards
+// arrives through a separate tool whose payload is a session id plus raw
+// characters, which is a full bypass of every command rule: an allowed
+// "python3" or "bash" session accepts "import os; os.system('rm -rf /')" as
+// stdin and the guard never sees it.
+//
+// Scan is off by default because session input is not necessarily a command.
+// Answering an interactive prompt ("y", a password, a control character) would
+// be parsed as a command line, and under a policy with commands.allowed that
+// means an allow-list miss (R-CMD-001) or, for input shellsafe cannot tokenize,
+// the fail-closed unparsable_action. Turn it on for non-interactive
+// deployments, where every write_stdin really is a command; the tool calls are
+// audited either way (see Policy.AuditUnscanned).
+type SessionInputPolicy struct {
+	// Scan enables scanning the session-input tools listed in Tools. When
+	// false, those tools are not scanned but are still audited, so the blind
+	// spot is visible in the audit trail rather than silent.
+	Scan bool `yaml:"scan" json:"scan"`
+	// Tools maps a backend identifier to the session-input tool names that feed
+	// it. Defaults to the real framework tool names; override when a tool set
+	// was renamed. A tool listed here must not also appear under Backends.
+	Tools map[string][]string `yaml:"tools" json:"tools"`
+}
+
 // SecretPolicy lists regular expressions whose matches are redacted from
 // command strings, evidence, env values, reports and audit events.
 type SecretPolicy struct {
@@ -167,7 +200,15 @@ type Policy struct {
 	// command directly on the host. The host-risk rule (R-HOST-001:
 	// background/PTY denial, sudo/nohup) therefore also applies to the
 	// workspace backend unless this is explicitly set to true (fail closed).
-	WorkspaceIsolated bool                `yaml:"workspace_isolated" json:"workspace_isolated"`
+	WorkspaceIsolated bool `yaml:"workspace_isolated" json:"workspace_isolated"`
+	// AuditUnscanned emits an audit event (decision allow, backend "unscanned")
+	// for every tool call the guard does not scan, so an operator can see what
+	// passed through untouched. Off by default because it logs one line per
+	// non-exec tool call (webfetch, file tools, ...). Session-input tools whose
+	// scanning is disabled are audited regardless of this flag: they are a
+	// known bypass of the command rules and must never be silent.
+	AuditUnscanned    bool                `yaml:"audit_unscanned" json:"audit_unscanned"`
+	SessionInput      SessionInputPolicy  `yaml:"session_input" json:"session_input"`
 	Commands          CommandPolicy       `yaml:"commands" json:"commands"`
 	DeniedSubcommands []Subcommand        `yaml:"denied_subcommands" json:"denied_subcommands"`
 	ForbiddenPaths    []string            `yaml:"forbidden_paths" json:"forbidden_paths"`
@@ -190,6 +231,10 @@ type compiledPolicy struct {
 	allowedDomains []domainMatcher
 	shellPolicy    shellsafe.Policy
 	backendIndex   map[string]string // tool name -> backend identifier
+	// sessionInputIndex maps a session-input tool name to the backend it feeds.
+	// It is always built, even when SessionInput.Scan is false, so the guard can
+	// audit the unscanned call instead of dropping it silently.
+	sessionInputIndex map[string]string
 }
 
 // domainMatcher matches a host against one allowed_domains entry. A "*."
@@ -237,6 +282,13 @@ func DefaultPolicy() Policy {
 			BackendWorkspace: {"workspace_exec"},
 			BackendHost:      {"exec_command"},
 			BackendCode:      {"execute_code"},
+		},
+		SessionInput: SessionInputPolicy{
+			Scan: false,
+			Tools: map[string][]string{
+				BackendWorkspace: {"workspace_write_stdin"},
+				BackendHost:      {"write_stdin"},
+			},
 		},
 	}
 }
@@ -441,7 +493,7 @@ func (p *Policy) compile() error {
 	if len(p.Backends) == 0 {
 		p.Backends = DefaultPolicy().Backends
 	}
-	if c.backendIndex, err = buildBackendIndex(p.Backends); err != nil {
+	if c.backendIndex, err = buildBackendIndex("backends", p.Backends); err != nil {
 		return err
 	}
 	// A backend map that names backends but maps no tool (e.g. all-blank tool
@@ -451,6 +503,25 @@ func (p *Policy) compile() error {
 		return errors.New(
 			"backends: no tool is mapped to any backend; the guard would scan nothing " +
 				"(omit backends entirely to inherit the defaults)")
+	}
+	// Same inheritance as Backends: a partial programmatic policy leaves the
+	// session-input tools nil, and defaulting them keeps the audit trail over
+	// the known bypass tools intact. An explicitly empty (non-nil) map opts out.
+	if p.SessionInput.Tools == nil {
+		p.SessionInput.Tools = DefaultPolicy().SessionInput.Tools
+	}
+	if c.sessionInputIndex, err = buildBackendIndex(
+		"session_input.tools", p.SessionInput.Tools); err != nil {
+		return err
+	}
+	// A tool cannot be both a command entry point and a session-input sink: the
+	// two carry different argument schemas, and resolving the overlap by map
+	// lookup order would scan the wrong field.
+	for t := range c.sessionInputIndex {
+		if b, ok := c.backendIndex[t]; ok {
+			return fmt.Errorf(
+				"session_input.tools: tool %q is already mapped to backend %q under backends", t, b)
+		}
 	}
 	p.compiled = c
 	return nil
@@ -465,6 +536,7 @@ func (p *Policy) clone() Policy {
 	cp := *p
 	cp.compiled = compiledPolicy{}
 	cp.Backends = cloneStringSliceMap(p.Backends)
+	cp.SessionInput.Tools = cloneStringSliceMap(p.SessionInput.Tools)
 	cp.Commands.Allowed = cloneStrings(p.Commands.Allowed)
 	cp.Commands.Denied = cloneStrings(p.Commands.Denied)
 	cp.ForbiddenPaths = cloneStrings(p.ForbiddenPaths)
@@ -517,6 +589,13 @@ func cloneStringSliceMap(m map[string][]string) map[string][]string {
 // without scanning).
 func (p *Policy) backendFor(toolName string) string {
 	return p.compiled.backendIndex[toolName]
+}
+
+// sessionInputBackendFor returns the backend a session-input tool feeds, or an
+// empty string when toolName is not one. It resolves regardless of
+// SessionInput.Scan; the caller decides between scanning and audit-only.
+func (p *Policy) sessionInputBackendFor(toolName string) string {
+	return p.compiled.sessionInputIndex[toolName]
 }
 
 // shellPolicy exposes the compiled shellsafe policy to the rule engine.
@@ -699,19 +778,21 @@ func compileDomains(domains []string) []domainMatcher {
 	return out
 }
 
-// buildBackendIndex inverts the backend->tools map into a tool->backend index.
-// It rejects unknown backend names (a typo like "hostexec" would otherwise
-// silently disable backend-specific checks) and duplicate tool mappings (the
-// same tool under two backends would otherwise be resolved by map iteration
-// order). Both surface at compile time, not at request time.
-func buildBackendIndex(backends map[string][]string) (map[string]string, error) {
+// buildBackendIndex inverts a backend->tools map into a tool->backend index.
+// field names the policy key being compiled, so the same builder serves both
+// backends and session_input.tools. It rejects unknown backend names (a typo
+// like "hostexec" would otherwise silently disable backend-specific checks) and
+// duplicate tool mappings (the same tool under two backends would otherwise be
+// resolved by map iteration order). Both surface at compile time, not at
+// request time.
+func buildBackendIndex(field string, backends map[string][]string) (map[string]string, error) {
 	idx := make(map[string]string)
 	for backend, tools := range backends {
 		switch backend {
 		case BackendWorkspace, BackendHost, BackendCode:
 		default:
-			return nil, fmt.Errorf("backends: unknown backend %q (want %q, %q or %q)",
-				backend, BackendWorkspace, BackendHost, BackendCode)
+			return nil, fmt.Errorf("%s: unknown backend %q (want %q, %q or %q)",
+				field, backend, BackendWorkspace, BackendHost, BackendCode)
 		}
 		for _, t := range tools {
 			t = strings.TrimSpace(t)
@@ -720,7 +801,7 @@ func buildBackendIndex(backends map[string][]string) (map[string]string, error) 
 			}
 			if prev, ok := idx[t]; ok && prev != backend {
 				return nil, fmt.Errorf(
-					"backends: tool %q is mapped to both %q and %q", t, prev, backend)
+					"%s: tool %q is mapped to both %q and %q", field, t, prev, backend)
 			}
 			idx[t] = backend
 		}

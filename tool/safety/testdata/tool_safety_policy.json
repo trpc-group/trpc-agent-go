@@ -7,6 +7,14 @@
     "host": ["exec_command"],
     "code": ["execute_code"]
   },
+  "session_input": {
+    "scan": true,
+    "tools": {
+      "workspace_exec": ["workspace_write_stdin"],
+      "host": ["write_stdin"]
+    }
+  },
+  "audit_unscanned": false,
   "workspace_isolated": false,
   "commands": {
     "allowed": ["go", "git", "ls", "cat", "echo", "grep", "sed", "awk", "jq",

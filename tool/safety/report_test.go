@@ -40,6 +40,17 @@ func makeReport(t *testing.T, p *Policy, toolName, backend string, er execReques
 	return r
 }
 
+// codeCredentialReport builds the report for a python block that reads an ssh
+// private key, exercising the code-block path of the credential rule.
+func codeCredentialReport(t *testing.T, p *Policy) Report {
+	t.Helper()
+	block := codeBlock{Language: "python", Code: "open('/root/.ssh/id_rsa').read()"}
+	return makeReport(t, p, "execute_code", BackendCode, execRequest{
+		Command:    block.Code,
+		CodeBlocks: []codeBlock{block},
+	})
+}
+
 func TestRedactPatterns(t *testing.T) {
 	p := loadExamplePolicy(t)
 	secrets := []string{
@@ -329,6 +340,12 @@ func TestGenerateExamples(t *testing.T) {
 		makeReport(t, p, "workspace_exec", BackendWorkspace, execRequest{
 			Command: `curl -H "Authorization: Bearer ` + fakeGitHubPAT() + `" https://github.com/x`,
 		}),
+		// A credential read inside a code block: the argv rules never see it, so
+		// this is the code-side counterpart of the "cat ~/.ssh/id_rsa" event.
+		codeCredentialReport(t, p),
+		// A command written into an already running session, which bypasses the
+		// session-establishment check entirely.
+		makeReport(t, p, "write_stdin", BackendHost, execRequest{Command: "rm -rf /"}),
 	}
 
 	if *update {

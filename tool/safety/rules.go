@@ -48,6 +48,7 @@ const (
 	ruleSecretID    = "R-SECRET-001"
 	ruleEnvID       = "R-ENV-001"
 	ruleMetaID      = "R-META-001"
+	ruleSessionID   = "R-SESSION-001"
 )
 
 // knownRuleIDs indexes every built-in rule id. Policy compilation rejects a
@@ -59,7 +60,7 @@ var knownRuleIDs = map[string]bool{
 	ruleDangerousID: true, ruleCredID: true, ruleNetworkID: true,
 	ruleShellID: true, ruleCmdID: true, ruleHostID: true,
 	ruleDepID: true, ruleResourceID: true, ruleSecretID: true,
-	ruleEnvID: true, ruleMetaID: true,
+	ruleEnvID: true, ruleMetaID: true, ruleSessionID: true,
 }
 
 // Finding categories.
@@ -75,6 +76,7 @@ const (
 	catSecret      = "secret_leak"
 	catEnvKey      = "env_policy"
 	catMetadata    = "tool_metadata"
+	catSessionIn   = "session_input"
 )
 
 // Recommendation strings attached to each finding.
@@ -90,6 +92,7 @@ const (
 	recSecret      = "Command/env contains a secret-like value; pass secrets via a secret store, not inline." //nolint:gosec // G101 false positive: a recommendation string, not a credential.
 	recEnv         = "Environment key is not in env.allowed_keys; add it to the whitelist or drop the override."
 	recMetadata    = "The tool publishes destructive metadata; review the call or use a narrower, read-only tool."
+	recSessionIn   = "Characters written into a live session bypass the command rules; enable session_input.scan for non-interactive deployments, or rely on sandbox isolation."
 )
 
 // Finding is one detected risk. action is the internal, post-override action
@@ -189,10 +192,7 @@ func (p *Policy) scanCodeBlocks(blocks []codeBlock) ([]Finding, *shellsafe.Pipel
 			continue
 		}
 		if !isShellLanguage(b.Language) {
-			findings = append(findings, codeBridgeFindings(b)...)
-			if p.codeNetworkActive() {
-				findings = append(findings, p.codeNetworkFindings(b.Code)...)
-			}
+			findings = append(findings, p.genericCodeFindings(b)...)
 			continue
 		}
 		if isNonPOSIXShellLanguage(b.Language) {
@@ -203,10 +203,7 @@ func (p *Policy) scanCodeBlocks(blocks []codeBlock) ([]Finding, *shellsafe.Pipel
 			f := nonPOSIXShellFinding(b.Language)
 			f.action = p.UnparsableAction
 			findings = append(findings, f)
-			findings = append(findings, codeBridgeFindings(b)...)
-			if p.codeNetworkActive() {
-				findings = append(findings, p.codeNetworkFindings(b.Code)...)
-			}
+			findings = append(findings, p.genericCodeFindings(b)...)
 			continue
 		}
 		parsed, err := shellsafe.Parse(b.Code)
@@ -293,6 +290,116 @@ func codeBridgeFindings(b codeBlock) []Finding {
 		}
 	}
 	return nil
+}
+
+// genericCodeFindings runs the checks that apply to a code block the guard
+// cannot turn into argv: the shell-bridge check, the forbidden-path pass over
+// the block's string literals and the URL whitelist pass. It covers both
+// non-shell languages and the shells with no parser (pwsh, cmd), which reach
+// the rules as opaque text either way.
+func (p *Policy) genericCodeFindings(b codeBlock) []Finding {
+	out := codeBridgeFindings(b)
+	out = append(out, p.codePathFindings(b.Code)...)
+	if p.codeNetworkActive() {
+		out = append(out, p.codeNetworkFindings(b.Code)...)
+	}
+	return out
+}
+
+// codeStringLiteralRe matches a single-, double- or backtick-quoted string
+// literal. Paths in source code are always quoted, so the literals are the
+// units to test against forbidden_paths — matching raw source text would flag
+// identifiers and comments that merely contain a pattern.
+var codeStringLiteralRe = regexp.MustCompile(
+	"\"(?:[^\"\\\\\\n]|\\\\.)*\"|'(?:[^'\\\\\\n]|\\\\.)*'|`[^`]*`")
+
+// codePathFindings runs the forbidden-path rule over the string literals of a
+// code block the guard cannot parse into argv. Without it the credential rule
+// covers only shell commands, and open("/root/.ssh/id_rsa") in a python block
+// reaches the executor unflagged — the same read the shell rules deny for
+// "cat /root/.ssh/id_rsa".
+//
+// This is the code-side counterpart of ruleForbiddenPath (which walks argv) and
+// of codeNetworkFindings (which walks URLs). Unlike the network pass it is not
+// gated on any opt-in configuration: forbidden_paths is populated by
+// DefaultPolicy, so credential reads are caught out of the box on every backend.
+// String literals are also concatenation-blind — "/root/.ssh/" + name defeats
+// it, as does any dynamically built path — so this narrows the blind spot
+// rather than closing it; sandbox isolation remains the real boundary.
+func (p *Policy) codePathFindings(code string) []Finding {
+	var out []Finding
+	seen := make(map[string]bool)
+	for _, lit := range codeStringLiteralRe.FindAllString(code, -1) {
+		if len(lit) < 2 {
+			continue
+		}
+		val := unescapeCodeLiteral(lit[1 : len(lit)-1])
+		if !pathLikeLiteral(val) || seen[val] {
+			continue
+		}
+		seen[val] = true
+		// A file: URI is a filesystem access in disguise here too, matching the
+		// argv-side handling in pathCandidates.
+		for _, cand := range []string{val, fileURIPath(val)} {
+			pat, ok := p.forbiddenMatch(cand)
+			if !ok {
+				continue
+			}
+			out = append(out, Finding{
+				RuleID:         ruleCredID,
+				Category:       catCredential,
+				RiskLevel:      RiskCritical,
+				Evidence:       "code -> " + cand + " (matches " + pat + ")",
+				Recommendation: recCredential,
+			})
+			break
+		}
+	}
+	return out
+}
+
+// pathLikeLiteral reports whether a string literal is shaped like a filesystem
+// path: it carries a separator, or begins with "~" or "." (so a bare ".env" or
+// "./key" still counts).
+//
+// The argv side (pathCandidates) tests every token, bare words included,
+// because a shell operand overwhelmingly is a path or a command. Source code
+// inverts that base rate — most literals are messages, keys and identifiers —
+// so a bare word is not treated as a path here: a forbidden_paths entry such as
+// "**/credentials" would otherwise deny a plain print("credentials"), spending
+// the false-positive budget on a string that never opens a file. The cost is
+// that a key opened by bare name in the working directory (open("id_rsa")) is
+// not matched; a path with any directory component still is.
+func pathLikeLiteral(v string) bool {
+	if v == "" {
+		return false
+	}
+	return strings.ContainsAny(v, `/\`) || v[0] == '~' || v[0] == '.'
+}
+
+// unescapeCodeLiteral resolves the escape sequences that matter to a path
+// inside a quoted literal: an escaped quote or backslash. A Windows literal
+// ("C:\\Users\\me\\.ssh") therefore normalizes to single separators before
+// forbiddenMatch folds them to slashes. Other escapes (\n, \t) are left as
+// written; they never appear in a path the rule would match.
+func unescapeCodeLiteral(s string) string {
+	if !strings.Contains(s, `\`) {
+		return s
+	}
+	var sb strings.Builder
+	sb.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) {
+			switch s[i+1] {
+			case '\\', '"', '\'':
+				sb.WriteByte(s[i+1])
+				i++
+				continue
+			}
+		}
+		sb.WriteByte(s[i])
+	}
+	return sb.String()
 }
 
 // codeNetworkActive reports whether the URL whitelist pass applies to
@@ -1263,6 +1370,22 @@ func ruleToolMetadata(c ruleCtx) []Finding {
 		Evidence:       "tool metadata marks this tool as destructive",
 		Recommendation: recMetadata,
 	}}
+}
+
+// sessionInputUnscannedFinding records that a session-input tool ran without
+// being scanned (session_input.scan is off). The call is still allowed — the
+// guard deliberately does not judge input it did not parse — but the audit
+// trail now shows the command rules were bypassed, instead of the call being
+// invisible.
+func sessionInputUnscannedFinding(toolName string) Finding {
+	return Finding{
+		RuleID:         ruleSessionID,
+		Category:       catSessionIn,
+		RiskLevel:      RiskLow,
+		Evidence:       toolName + " wrote to a live session without command-level scanning (session_input.scan is off)",
+		Recommendation: recSessionIn,
+		action:         ActionAllow,
+	}
 }
 
 // rulePipelineReview is the opt-in commands.review_pipelines knob: any

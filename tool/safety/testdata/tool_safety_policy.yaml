@@ -15,6 +15,25 @@ backends:
   host: [exec_command]
   code: [execute_code]
 
+# Characters written into an ALREADY RUNNING session (hostexec write_stdin,
+# workspaceexec workspace_write_stdin). The guard normally intercepts at the
+# session-establishment point only, so an allowed "python3" session accepts
+# anything as stdin. Turning scan on applies the full rule set to those
+# characters; leave it off (the built-in default) for interactive sessions,
+# where a prompt answer ("y", a password) is not a command and would be judged
+# as one. The calls are audited (R-SESSION-001) either way, so the blind spot is
+# never silent. This reference policy turns it on: it targets a non-interactive
+# deployment, where every write_stdin really is a command.
+session_input:
+  scan: true
+  tools:
+    workspace_exec: [workspace_write_stdin]
+    host: [write_stdin]
+
+# Emit an audit event for every tool call the guard does not scan at all
+# (webfetch, file tools, ...). Off by default: it is one line per non-exec call.
+audit_unscanned: false
+
 # The guard cannot see which executor backs workspace_exec, and
 # codeexecutor/local runs commands directly on the host. The host-risk rule
 # (R-HOST-001: background/PTY denial, sudo/nohup) therefore also applies to

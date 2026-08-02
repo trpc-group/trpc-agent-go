@@ -22,7 +22,8 @@ agent.WithToolPermissionPolicy(guard)          ← only integration point, pre-e
       │
       ▼
 Guard.CheckToolPermission
-      ├─ 1. backendOf(toolName)  → "" ⇒ allow (non-exec tools short-circuit)
+      ├─ 1. backendOf(toolName)  → "" ⇒ session-input tool? (scan / audit-only)
+      │                              otherwise allow (audited iff audit_unscanned)
       ├─ 2. extract Arguments → execRequest{Command, Cwd, Env, Background, PTY, TimeoutSec}
       ├─ 3. shellsafe.Parse (unparsable ⇒ fail closed via unparsable_action)
       ├─ 4. rule engine → []Finding
@@ -42,7 +43,7 @@ second gate.
 | # | Category | Rule id | What it catches | Risk |
 |---|----------|---------|-----------------|------|
 | 1 | dangerous_command | `R-DEL-001` | denied destructive commands; recursive `rm` (all flag spellings) with force **or aimed at a root/system path even without force** (`rm -r /etc`); recursive `chmod -R` → review. **Windows is covered natively**, because hostexec runs commands through `cmd.exe` there: the `del`/`erase`/`rd`/`rmdir` switch semantics (`/s` recursive, `/q`/`/f` unattended) are understood, and the destructive Windows binaries (`format`, `diskpart`, `fsutil`, `vssadmin`, `wbadmin`, `bcdedit`, `bootrec`, `cipher`, `takeown`, `icacls`, `runas`) are in the default denied list. System paths include the Windows drive roots, `C:\Windows`, `C:\Program Files`, `C:\ProgramData`, the environment spellings `%SystemRoot%`/`%WINDIR%`/`%ProgramFiles%`/... and the separator-free form left behind when the POSIX word splitter eats the backslashes (`C:\Windows\System32` → `C:WindowsSystem32`) | medium → critical |
-| 2 | credential_access | `R-CRED-001` | argv/cwd hitting `~/.ssh`, `**/.env`, `**/id_rsa`, credentials; `file:` URIs are decoded to their filesystem path first so `curl file:///etc/shadow` (any RFC 8089 spelling, incl. percent-encoded) cannot hide the path inside a URI. Path-bearing portions embedded in **option values** are extracted before matching, so a forbidden path cannot hide inline: `--upload-file=/etc/shadow`, `-T/etc/shadow`, and curl's read-from-file markers (`--data-binary=@/etc/shadow`, `-d @/etc/shadow`, `-F name=@/etc/shadow`, the `name@path` spelling `--data-urlencode` takes without an `=`, and the `-F story=</etc/shadow` form-field file read) are all matched | critical |
+| 2 | credential_access | `R-CRED-001` | **(shell)** argv/cwd hitting `~/.ssh`, `**/.env`, `**/id_rsa`, credentials; **(code)** the same `forbidden_paths` globs are matched against the **string literals** of a non-shell `execute_code` block (single-, double- and backtick-quoted, with `\\`/`\"`/`\'` unescaped and `file:` URIs decoded), so `open('/root/.ssh/id_rsa')` in python is denied like `cat /root/.ssh/id_rsa` in shell — the argv rules never see a code block. Unlike the code URL pass this is **not** gated on opt-in configuration, since `forbidden_paths` is populated by `DefaultPolicy`. A code literal must look like a path (contain a separator, or start with `~`/`.`) to be tested: source is mostly messages and identifiers, so a bare `print("credentials")` is not a filesystem access, whereas a shell operand overwhelmingly is a path and is still matched bare. Concatenated or computed paths (`"/root/.ssh/" + name`) defeat the literal pass — it narrows the blind spot, the sandbox closes it. `file:` URIs are decoded to their filesystem path first so `curl file:///etc/shadow` (any RFC 8089 spelling, incl. percent-encoded) cannot hide the path inside a URI. Path-bearing portions embedded in **option values** are extracted before matching, so a forbidden path cannot hide inline: `--upload-file=/etc/shadow`, `-T/etc/shadow`, and curl's read-from-file markers (`--data-binary=@/etc/shadow`, `-d @/etc/shadow`, `-F name=@/etc/shadow`, the `name@path` spelling `--data-urlencode` takes without an `=`, and the `-F story=</etc/shadow` form-field file read) are all matched | critical |
 | 3 | network | `R-NET-001` | download commands targeting a non-whitelisted host, including curl egress-redirect options (`--connect-to`, `--resolve`, `-x/--proxy`/`--preproxy` and the SOCKS/HTTP-1.0 proxy variants `--socks4/--socks4a/--socks5/--socks5-hostname/--proxy1.0`, `--url`, `--dns-servers`, `--doh-url`) parsed for their real target across `flag value`, `flag=value` and bundled/inline short-flag (`-sx`, `-xhost`) forms. `--resolve` uses an option-specific `[+]host:port:addr[,addr]` parser so an **unbracketed IPv6** rewrite target (`--resolve github.com:443:2001:db8::1`) is extracted whole instead of being shattered on its colons. Fails closed on the opaque `-K/--config` file (incl. `-sK`) and on the Unix-socket destination overrides `--unix-socket`/`--abstract-unix-socket` (the connection is rerouted to a local socket — e.g. `/var/run/docker.sock` — that a domain whitelist cannot vet); optionally fails closed on curl's **implicit default config** (see below). The non-curl download commands get the same treatment: host-bearing options (`ssh/scp -J` jump hosts, `ssh -W/-L/-R` forwarding specs, `nc -x` proxy) are parsed for their real targets across space/inline/bundled forms, and opaque egress controls (`wget -e/--execute/--config/-i/--input-file`, `ssh/scp -o/-F`, `ssh -D` dynamic SOCKS proxying — the tunnel's destinations are chosen per-connection at runtime, so there is nothing to whitelist-check — and `scp/sftp -S/-D`) **fail closed** because their config file / rc directive / URL list / tunnel / transport program can redirect egress invisibly. Raw and bracketed IPv6 operands (`nc 2001:db8::1`, `[2001:db8::1]:443`, `user@[2001:db8::1]:`) are parsed as whole addresses instead of being truncated at the first colon. scp operands are split into local paths and remote specs, so a dotted local filename (`scp release.tar.gz user@host:/tmp/`) is not mistaken for a host. **Proxy environment overrides** (`http_proxy`/`HTTPS_PROXY`/`ALL_PROXY`/..., matched case-insensitively) on a download command are whitelist-checked like a command-line proxy option, independently of the opt-in `env.allowed_keys` rule. The check covers the **effective** environment, not just the model-supplied overrides: the guard process environment the command inherits (hostexec passes it through to every command), then the executor's base env mirrored in via `WithExecutorEnv` (`hostexec.WithBaseEnv`), then the request overrides — same precedence as hostexec. The inherited environment is consulted only for backends that really run in it (host, and workspace unless `workspace_isolated: true`; never `code`). A download command with **no extractable target at all** falls back to review instead of silently allowing. **Redirect contract:** by default `allowed_domains` is an *initial-target* check — a whitelisted server can still HTTP-redirect the client elsewhere at runtime (curl only with `-L`; wget by default); the opt-in `network.require_redirect_free` fails redirect-following invocations closed (curl `-L/--location/--location-trusted` denies; wget requires `--max-redirect=0`). For wget the **effective** option decides — options apply in order, so `--max-redirect=0 --max-redirect=5` still follows redirects and fails closed, and a value after the `--` terminator is an operand, not an option. See the trust-boundary section. URLs embedded in non-shell `execute_code` source are checked against the same whitelist **when the network policy is configured** (a domain whitelist or download commands); the built-in default policy has no whitelist and stays network-neutral on code, mirroring the shell side | medium → high |
 | 4 | shell_bypass | `R-SHELL-001` | unparsable commands (`$()`, backticks, `$VAR`, redirection, subshell) and shell wrappers / re-executing builtins (`bash -c`, `eval`, `xargs`, `env CMD`) that can bypass the allow/deny list; non-shell `execute_code` source that bridges into shell execution (`os.system`, `subprocess.`, `exec(`, `child_process`) → review | medium → high |
 | 4b | command_policy | `R-CMD-001` | a plain, parseable command that is simply **not in `commands.allowed`** (an allow-list miss, not a bypass); with the opt-in `commands.review_pipelines` knob, any multi-segment pipeline / chain → review | medium → high |
@@ -52,6 +53,7 @@ second gate.
 | 8 | secret_leak | `R-SECRET-001` | secret-like values in the command or env — provider token shapes (AWS, GitHub, `sk-`, Slack `xox`), private-key material (the **full PEM block** — header, base64 body and END marker — is redacted, with a bare-header fallback for truncated keys), bearer headers (full RFC 6750 token68 charset, so no token suffix survives redaction), plus a name-based `password=`/`api_key=`/`token=` key=value heuristic; the env key participates in the match (also sets `redacted`) | medium |
 | 9 | env_policy | `R-ENV-001` | environment keys not in `env.allowed_keys` (opt-in; inert when the list is empty) | medium |
 | 10 | tool_metadata | `R-META-001` | a tool whose published metadata (`tool.ToolMetadata.Destructive`) declares irreversible side effects → review | medium |
+| 11 | session_input | `R-SESSION-001` | a session-input tool (`write_stdin`, `workspace_write_stdin`) ran while `session_input.scan` is off — the call is allowed but recorded, so the documented bypass of the session-establishment check is visible in the audit trail rather than silent | low (allow) |
 
 Decision aggregation: the strongest action across findings wins
 (`critical`/`high` → deny, `medium` → ask); with no actionable finding the
@@ -88,6 +90,18 @@ subset, not the reference. Key fields:
   directly on the host, so the host-risk rule (`R-HOST-001`) applies to the
   workspace backend too until this is explicitly set. **Fail closed:** only set
   it to `true` when the deployment genuinely isolates workspace execution.
+- `session_input.scan` (default `false`) / `session_input.tools` — whether to
+  scan the characters written into an already running session, and which tools
+  carry them (defaults to `write_stdin` / `workspace_write_stdin`; same
+  inheritance rules as `backends`, and a non-nil empty map opts out). A tool
+  listed here must not also appear under `backends` — the two argument schemas
+  differ, so the overlap is rejected at compile time. See the session-input
+  section for the trade-off.
+- `audit_unscanned` (default `false`) — emit an audit event (decision `allow`,
+  backend `unscanned`) for every tool the guard does not scan at all, so an
+  operator can see what passed through untouched. Off by default because it is
+  one line per non-exec tool call. Session-input tools with scanning disabled
+  are audited **regardless** of this flag.
 - `commands.allowed` / `commands.denied` — handed to `internal/shellsafe`;
   `commands.review_pipelines` (opt-in) routes any multi-segment pipeline to
   review.
@@ -117,12 +131,36 @@ job.
 | Output / timeout | `max_timeout_sec` / explicit `head -c` flagged statically; a hard output cap must be configured on the executor itself (the guard does not wire `max_output_bytes` through) | same + process cleanup |
 | Env exposure | non-whitelisted keys flagged (`R-ENV-001`); actual isolation by the runtime | same, but a larger host blast radius |
 
-hostexec is a **ToolSet** (`exec_command` + `write_stdin` + `kill_session` +
-session listing). The guard intercepts at the **session-establishment point**
-(`exec_command`, including `pty:true`). In-session `write_stdin` carries only a
-`session_id` and characters, so the guard is effectively blind to it — that risk
-is covered by the sandbox and the audit trail, not by full per-keystroke
-inspection.
+### Session input (`write_stdin`) — the second entry point
+
+hostexec and workspaceexec are **ToolSets**: `exec_command` / `workspace_exec`
+establish a session, and `write_stdin` / `workspace_write_stdin` type into one
+that is already running. Guarding only the establishment point leaves a full
+bypass of every command rule — an allowed `python3` or `bash` session accepts
+`import os; os.system('rm -rf /')` as stdin, and no command rule ever sees it.
+
+`session_input` closes it, as an explicit posture choice:
+
+| `session_input.scan` | Behavior |
+|---|---|
+| `false` (default) | characters are **not** scanned; the call is allowed and an `R-SESSION-001` audit event records that the command rules were bypassed |
+| `true` | the characters are scanned as a command line on the session's backend — the full rule set (`R-DEL-001`, `R-CRED-001`, `R-NET-001`, ...) applies |
+
+It defaults to off because session input is not necessarily a command: a prompt
+answer (`y`), a password or a control character would be parsed as one, which
+under a policy with `commands.allowed` means an allow-list miss (`R-CMD-001`),
+and input shellsafe cannot tokenize hits the fail-closed `unparsable_action`.
+**Turn it on for non-interactive deployments**, where every `write_stdin` really
+is a command. Either way the call is now audited, so the blind spot is
+observable rather than silent.
+
+While scanning is off, the written characters are deliberately **not** copied
+into the report: unparsed session input is as likely to be a password typed at a
+prompt as a command, and the secret patterns only redact secret-*shaped* values.
+Recording the tool call is auditability; recording unvetted keystrokes would be
+the leak the guard exists to prevent.
+
+`kill_session` and session listing carry no command payload and are not scanned.
 
 ## Usage
 
@@ -212,20 +250,28 @@ Explicit limitations:
   closed via `unparsable_action`: parsing them as POSIX shell would incorrectly
   tokenize the command, and treating them as code would drop the command, forbidden-path,
   dependency and destructive-operation rules.
-  Non-shell blocks get the secret/resource rules, a URL whitelist pass over the
-  source (only when the network policy is configured — the default policy has
-  no whitelist and stays network-neutral) and a shell-bridge check (`os.system`, `subprocess.`, `exec(`,
-  `child_process` → review) — but dynamically built strings, obfuscated imports
-  and everything else an interpreter can do still bypass static analysis and
-  rely on the sandbox. Do not assume code execution gets the same protection as
-  shell commands.
+  Non-shell blocks get the secret/resource rules, a **forbidden-path pass over
+  the block's string literals** (`R-CRED-001`, always on), a URL whitelist pass
+  over the source (only when the network policy is configured — the default
+  policy has no whitelist and stays network-neutral) and a shell-bridge check
+  (`os.system`, `subprocess.`, `exec(`, `child_process` → review) — but the
+  literal pass is concatenation-blind (`"/root/.ssh/" + name`, `os.environ`
+  lookups, base64), and dynamically built strings, obfuscated imports and
+  everything else an interpreter can do still bypass static analysis and rely on
+  the sandbox. Do not assume code execution gets the same protection as shell
+  commands.
 - **Resource-abuse rules are best-effort.** String heuristics (`while true`,
   `yes`, `sleep N`) are easily evaded, and `max_output_bytes` only catches an
   explicitly requested size (`head -c N`). The guard does not configure the
   runtime: the real timeout / output enforcement is the executor's own limits
   (workspaceexec, the sandbox), which must be set up separately.
-- **hostexec PTY long sessions** are intercepted only at the establishment
-  point; in-session input is not inspected.
+- **hostexec PTY long sessions** are intercepted at the establishment point, and
+  in-session input only when `session_input.scan` is on — and then only as a
+  command line, so a program's own interactive protocol (a REPL's multi-line
+  block, an editor's keystrokes) is judged as if it were shell. Per-keystroke
+  semantic inspection is not attempted; the session's blast radius is the
+  sandbox's job. With scanning off the calls are audited (`R-SESSION-001`) but
+  not judged.
 - **HTTP redirects are a runtime egress the guard cannot follow.** By default
   `network.allowed_domains` is an **initial-target check**: it vets every
   destination named in the command (request URL, proxy/connect-to/resolve
@@ -259,23 +305,23 @@ Explicit limitations:
 
 ## Validation results
 
-Measured on the shipped policy and the 12-sample matrix
+Measured on the shipped policy and the 15-sample matrix
 (`go test ./tool/safety/ -run TestSampleMatrix -v`, `-bench BenchmarkScan`):
 
 | Metric | Result | Acceptance target |
 |--------|--------|-------------------|
-| High-risk detection | **100%** (9/9) | ≥ 90% |
-| Safe false-positive | **0%** (0/3 safe) | ≤ 10% |
+| High-risk detection | **100%** (11/11) | ≥ 90% |
+| Safe false-positive | **0%** (0/4 safe) | ≤ 10% |
 | Critical-class detection (credential read / dangerous delete / non-whitelisted network) | **100%** (3/3) | 100% |
-| Per-scan latency | **~3.9 µs** (`3912 ns/op`, 20 allocs, 971 B/op) | — |
-| 500-command total | **~1.5 ms** | ≤ 1 s |
+| Per-scan latency | **~3.9 µs** (`3867 ns/op`, 21 allocs, 983 B/op) | — |
+| 500-command total | **~1.9 ms** | ≤ 1 s |
 
-> The detection / false-positive percentages are **statistically coarse** at 12
-> samples (3 safe + 9 high-risk); the table-driven harness over
+> The detection / false-positive percentages are **statistically coarse** at 15
+> samples (4 safe + 11 high-risk); the table-driven harness over
 > `testdata/samples/` is built to grow. The hard guarantee is the 100% deny on
 > the three critical categories, asserted directly in `TestSampleMatrix`.
 
-### 12-sample matrix
+### 15-sample matrix
 
 | # | Sample | Tool | Class | Expected decision | Rule |
 |---|--------|------|-------|-------------------|------|
@@ -291,6 +337,13 @@ Measured on the shipped policy and the 12-sample matrix
 | 10 | unbounded output `yes` | workspace_exec | high_risk | deny | R-RES-001 |
 | 11 | host background + PTY `sleep 5` (bg, tty) | exec_command | high_risk | deny | R-HOST-001 |
 | 12 | secret in command (`Bearer <token>`) | workspace_exec | high_risk | needs_human_review | R-SECRET-001 |
+| 13 | key read in code `open('/root/.ssh/id_rsa')` | execute_code | high_risk | deny | R-CRED-001 |
+| 14 | safe code block (`json.dumps`, `/tmp` write) | execute_code | safe | allow | — |
+| 15 | `rm -rf /` written into a live session | write_stdin | high_risk | deny | R-DEL-001 |
+
+> Samples 13–15 exercise the two entry points the argv rules do not cover on
+> their own: a non-shell code block and session stdin. Sample 15 requires
+> `session_input.scan: true`, which the reference policy sets.
 
 ### Example structured report (`tool_safety_report.json`)
 
@@ -355,7 +408,7 @@ supplied no id.
 
 ```bash
 go test ./tool/safety/...                       # full suite
-go test ./tool/safety/ -run TestSampleMatrix -v # 12-sample detection metrics
+go test ./tool/safety/ -run TestSampleMatrix -v # 15-sample detection metrics
 go test ./tool/safety/ -bench BenchmarkScan     # per-scan latency (~µs)
 go test ./tool/safety/ -run TestGenerate -update # regenerate example outputs
 ```
