@@ -250,7 +250,10 @@ func (s *Service) buildSearchEventsSQL(
 	vector pgvector.Vector,
 	topK int,
 ) (string, []any) {
-	args := []any{vector, req.UserKey.AppName, req.UserKey.UserID}
+	args := []any{
+		vector, req.UserKey.AppName, req.UserKey.UserID,
+		time.Now(),
+	}
 	placeholder := func(v any) string {
 		args = append(args, v)
 		return fmt.Sprintf("$%d", len(args))
@@ -265,13 +268,13 @@ func (s *Service) buildSearchEventsSQL(
 		`ON ss.app_name = se.app_name`,
 		`AND ss.user_id = se.user_id`,
 		`AND ss.session_id = se.session_id`,
-		`AND (ss.expires_at IS NULL OR ss.expires_at > NOW() AT TIME ZONE 'localtime')`,
+		`AND (ss.expires_at IS NULL OR ss.expires_at > $4)`,
 		`AND ss.deleted_at IS NULL`,
 		`WHERE se.app_name = $2`,
 		`AND se.user_id = $3`,
 		`AND se.embedding IS NOT NULL`,
 		`AND se.deleted_at IS NULL`,
-		`AND (se.expires_at IS NULL OR se.expires_at > NOW() AT TIME ZONE 'localtime')`,
+		`AND (se.expires_at IS NULL OR se.expires_at > $4)`,
 	}
 	parts = appendSearchEventFilters(
 		parts,
@@ -291,7 +294,10 @@ func (s *Service) buildKeywordSearchEventsSQL(
 	query string,
 	topK int,
 ) (string, []any) {
-	args := []any{query, req.UserKey.AppName, req.UserKey.UserID}
+	args := []any{
+		query, req.UserKey.AppName, req.UserKey.UserID,
+		time.Now(),
+	}
 	placeholder := func(v any) string {
 		args = append(args, v)
 		return fmt.Sprintf("$%d", len(args))
@@ -306,12 +312,12 @@ func (s *Service) buildKeywordSearchEventsSQL(
 		`ON ss.app_name = se.app_name`,
 		`AND ss.user_id = se.user_id`,
 		`AND ss.session_id = se.session_id`,
-		`AND (ss.expires_at IS NULL OR ss.expires_at > NOW() AT TIME ZONE 'localtime')`,
+		`AND (ss.expires_at IS NULL OR ss.expires_at > $4)`,
 		`AND ss.deleted_at IS NULL`,
 		`WHERE se.app_name = $2`,
 		`AND se.user_id = $3`,
 		`AND se.deleted_at IS NULL`,
-		`AND (se.expires_at IS NULL OR se.expires_at > NOW() AT TIME ZONE 'localtime')`,
+		`AND (se.expires_at IS NULL OR se.expires_at > $4)`,
 		`AND se.search_vector @@ plainto_tsquery('english', $1)`,
 	}
 	parts = appendSearchEventFilters(

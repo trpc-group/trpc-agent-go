@@ -112,13 +112,13 @@ func TestGetEventWindow_Success(t *testing.T) {
 	)
 
 	mock.ExpectQuery(`SELECT se\.id, se\.event, se\.created_at`).
-		WithArgs("app", "user", "sess", "evt-2", []string{"user", "assistant"}).
+		WithArgs("app", "user", "sess", "evt-2", timeArg{}, []string{"user", "assistant"}).
 		WillReturnRows(anchorRows)
 	mock.ExpectQuery(`SELECT se\.event, se\.created_at`).
-		WithArgs("app", "user", "sess", base.Add(2*time.Minute), int64(22), []string{"user", "assistant"}).
+		WithArgs("app", "user", "sess", base.Add(2*time.Minute), int64(22), timeArg{}, []string{"user", "assistant"}).
 		WillReturnRows(beforeRows)
 	mock.ExpectQuery(`SELECT se\.event, se\.created_at`).
-		WithArgs("app", "user", "sess", base.Add(2*time.Minute), int64(22), []string{"user", "assistant"}).
+		WithArgs("app", "user", "sess", base.Add(2*time.Minute), int64(22), timeArg{}, []string{"user", "assistant"}).
 		WillReturnRows(afterRows)
 
 	window, err := s.GetEventWindow(
@@ -157,7 +157,7 @@ func TestGetEventWindow_AnchorNotFound(t *testing.T) {
 	)
 
 	mock.ExpectQuery(`SELECT se\.id, se\.event, se\.created_at`).
-		WithArgs("app", "user", "sess", "evt-tool", []string{"user", "assistant"}).
+		WithArgs("app", "user", "sess", "evt-tool", timeArg{}, []string{"user", "assistant"}).
 		WillReturnRows(rows)
 
 	_, err := s.GetEventWindow(
@@ -244,13 +244,13 @@ func TestGetEventWindow_IncludesToolResultsWhenRequested(t *testing.T) {
 	)
 
 	mock.ExpectQuery(`SELECT se\.id, se\.event, se\.created_at`).
-		WithArgs("app", "user", "sess", "evt-tool", []string{"user", "assistant", "tool"}).
+		WithArgs("app", "user", "sess", "evt-tool", timeArg{}, []string{"user", "assistant", "tool"}).
 		WillReturnRows(anchorRows)
 	mock.ExpectQuery(`SELECT se\.event, se\.created_at`).
-		WithArgs("app", "user", "sess", base.Add(time.Minute), int64(11), []string{"user", "assistant", "tool"}).
+		WithArgs("app", "user", "sess", base.Add(time.Minute), int64(11), timeArg{}, []string{"user", "assistant", "tool"}).
 		WillReturnRows(beforeRows)
 	mock.ExpectQuery(`SELECT se\.event, se\.created_at`).
-		WithArgs("app", "user", "sess", base.Add(time.Minute), int64(11), []string{"user", "assistant", "tool"}).
+		WithArgs("app", "user", "sess", base.Add(time.Minute), int64(11), timeArg{}, []string{"user", "assistant", "tool"}).
 		WillReturnRows(afterRows)
 
 	window, err := s.GetEventWindow(
@@ -282,7 +282,7 @@ func TestGetEventWindow_QueryError(t *testing.T) {
 	defer db.Close()
 
 	mock.ExpectQuery(`SELECT se\.id, se\.event, se\.created_at`).
-		WithArgs("app", "user", "sess", "evt-1").
+		WithArgs("app", "user", "sess", "evt-1", timeArg{}).
 		WillReturnError(assert.AnError)
 
 	_, err := s.GetEventWindow(
@@ -465,7 +465,7 @@ func TestLoadWindowHelpers_EdgeBranches(t *testing.T) {
 	)
 
 	mock.ExpectQuery(`SELECT se\.id, se\.event, se\.created_at`).
-		WithArgs("app", "user", "sess", "evt-1").
+		WithArgs("app", "user", "sess", "evt-1", timeArg{}).
 		WillReturnRows(anchorRows)
 
 	_, err = s.loadWindowAnchor(
