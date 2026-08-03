@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -84,6 +85,11 @@ type ScanRequest struct {
 	WorkDir  string   // Working directory for the command.
 	EnvVars  []string // Environment variables.
 	Backend  string   // "workspaceexec", "hostexec", "codeexec".
+	// Language is the language of the code/script being executed, when known
+	// (e.g. codeexec's "language" argument: "shell", "python", "javascript").
+	// Non-shell languages cannot be structurally parsed by shellsafe, so they
+	// fail closed to ask unless a regex rule already produced a worse verdict.
+	Language string
 }
 
 // Scan performs a safety scan on the given command and returns a report.
@@ -105,10 +111,24 @@ func (s *Scanner) Scan(ctx context.Context, req ScanRequest) ScanReport {
 		Intercepted: false,
 	}
 
-	// 1.5 ShellSafe 保守解析：无法安全解析的命令 fail-closed → deny。
+	// 1.5 保守解析：shell 命令无法安全解析 → fail-closed deny；
+	// 非 shell 代码（python/javascript 等）无法用 shellsafe 结构化建模 →
+	// fail-closed ask，除非已有更严格的规则命中。
 	// （issue 要求：对无法安全解析的命令返回 deny 或 ask，不得默认 allow）
 	if fullCommand != "" {
-		if _, perr := parseShellCommands(fullCommand); perr != nil {
+		if isForeignCode(req.Language) {
+			if riskOrder(RiskHigh) > riskOrder(report.RiskLevel) {
+				report.RiskLevel = RiskHigh
+			}
+			if actionOrder(DecisionAsk) > actionOrder(report.Decision) {
+				report.Decision = DecisionAsk
+				report.RuleID = "foreign_code_unscanned"
+				report.Evidence = req.Language
+				report.Category = "code_analysis"
+				report.Recommendation = fmt.Sprintf(
+					"%s code cannot be structurally parsed by shellsafe; review required", req.Language)
+			}
+		} else if _, perr := parseShellCommands(fullCommand); perr != nil {
 			if riskOrder(RiskCritical) > riskOrder(report.RiskLevel) {
 				report.RiskLevel = RiskCritical
 			}
@@ -191,8 +211,16 @@ func (s *Scanner) Scan(ctx context.Context, req ScanRequest) ScanReport {
 	}
 
 	// 4. Check for dangerous paths in command and WorkDir.
+	// ~ and ~user prefixes are also checked in normalized form so that path
+	// traversal through a home directory (~root/../etc/shadow) resolves to the
+	// real target instead of evading the literal forbidden-path match.
+	normalizedCommand := normalizeTildePaths(fullCommand)
+	normalizedWorkDir := normalizeTildePaths(req.WorkDir)
 	for _, forbidden := range s.policy.ForbiddenPaths {
-		if strings.Contains(fullCommand, forbidden) || strings.Contains(req.WorkDir, forbidden) {
+		if strings.Contains(fullCommand, forbidden) ||
+			strings.Contains(normalizedCommand, forbidden) ||
+			strings.Contains(req.WorkDir, forbidden) ||
+			strings.Contains(normalizedWorkDir, forbidden) {
 			// Apply the same guard as regex rules: only update
 			// metadata when the finding is worse than or equal
 			// to the current report state.
@@ -248,10 +276,67 @@ func (s *Scanner) Scan(ctx context.Context, req ScanRequest) ScanReport {
 		}
 	}
 
-	// 6. Check allowlisted hosts for network egress commands.
-	if cmdName == "curl" || cmdName == "wget" || cmdName == "nc" || cmdName == "ssh" {
-		if len(s.policy.AllowlistedHosts) > 0 {
-			target := extractHostTarget(fullCommand)
+	// 6a. Hidden command execution / unmodellable network configuration.
+	// These fail closed even when no host allowlist is configured, because the
+	// effective destination (or code run) cannot be statically modelled:
+	//   - ssh -o ProxyCommand/LocalCommand, scp -S, rsync -e/--rsh name a
+	//     program that executes behind an allowlisted destination;
+	//   - curl -K/--config reads a config file whose proxy/URL settings are
+	//     invisible to the scanner; curl --connect-to/--resolve rewrite the
+	//     real connection target; wget -e <non-proxy wgetrc> injects arbitrary
+	//     wgetrc configuration.
+	if cmdName == "ssh" || cmdName == "sftp" || cmdName == "scp" || cmdName == "rsync" {
+		if opt, found := netCommandOption(cmdName, fullCommand); found {
+			if riskOrder(RiskCritical) > riskOrder(report.RiskLevel) {
+				report.RiskLevel = RiskCritical
+			}
+			if actionOrder(DecisionDeny) > actionOrder(report.Decision) {
+				report.Decision = DecisionDeny
+			}
+			report.RuleID = "net_command_option"
+			report.Evidence = opt
+			report.Category = "network_egress"
+			report.Recommendation = fmt.Sprintf(
+				"%s carries a hidden command/program option (%s) that cannot be safely modelled", cmdName, opt,
+			)
+		}
+	}
+	if cmdName == "curl" {
+		if config, routing, found := curlNetOverride(fullCommand); found {
+			if riskOrder(RiskCritical) > riskOrder(report.RiskLevel) {
+				report.RiskLevel = RiskCritical
+			}
+			if actionOrder(DecisionDeny) > actionOrder(report.Decision) {
+				report.Decision = DecisionDeny
+			}
+			report.RuleID = "net_routing_override"
+			if config {
+				report.RuleID = "net_config_file"
+			}
+			report.Evidence = routing
+			report.Category = "network_egress"
+			report.Recommendation = "curl routing/config cannot be safely modelled; denying"
+		}
+	}
+	if cmdName == "wget" {
+		if val := wgetConfigOverride(fullCommand); val != "" {
+			if riskOrder(RiskHigh) > riskOrder(report.RiskLevel) {
+				report.RiskLevel = RiskHigh
+			}
+			if actionOrder(DecisionDeny) > actionOrder(report.Decision) {
+				report.Decision = DecisionDeny
+			}
+			report.RuleID = "net_routing_override"
+			report.Evidence = val
+			report.Category = "network_egress"
+			report.Recommendation = "wget -e injects wgetrc configuration that cannot be safely modelled; denying"
+		}
+	}
+
+	// 6b. Check allowlisted hosts for network egress commands. Every extracted
+	// target (destination, -J jump peers, proxy URLs) must clear the allowlist.
+	if isNetCommand(cmdName) && len(s.policy.AllowlistedHosts) > 0 {
+		for _, target := range extractNetworkTargets(cmdName, fullCommand) {
 			if target != "" && !isAllowed(target, s.policy.AllowlistedHosts) {
 				if riskOrder(RiskHigh) > riskOrder(report.RiskLevel) {
 					report.RiskLevel = RiskHigh
@@ -401,6 +486,7 @@ func (s *Scanner) CheckToolPermission(
 		ToolName: req.ToolName,
 		Command:  command,
 		Backend:  "permission_check",
+		Language: extractLanguageFromArgs(req.Arguments),
 	}
 	report := s.Scan(ctx, scanReq)
 
@@ -458,45 +544,588 @@ func extractCommandName(fullCommand string) string {
 	return cmd
 }
 
-// extractHostTarget extracts a hostname or IP from a curl/wget/nc/ssh
-// command arguments for allowlist checking.
-//
-// A URL-form token (contains "://") is the strongest signal of the real
-// target and wins over any plain token seen earlier — this prevents a
-// flag value such as `curl -o api.github.com https://evil.example.com`
-// from being mistaken for the destination. Without a URL, the first
-// non-flag token is used.
+// extractHostTarget returns the first network destination of a command, for
+// backward-compatible single-target callers. Multi-target analysis (jump
+// hosts, proxies) is done by extractNetworkTargets.
 func extractHostTarget(fullCommand string) string {
-	parts := strings.Fields(fullCommand)
-	firstPlain := ""
-	for i, p := range parts {
-		if i == 0 {
-			continue // skip the command itself.
+	targets := extractNetworkTargets(extractCommandName(fullCommand), fullCommand)
+	if len(targets) > 0 {
+		return targets[0]
+	}
+	return ""
+}
+
+// netCommands lists commands whose operands may name a network destination.
+// Each family has its own operand grammar; git counts only for its remote
+// subcommands (clone/fetch/pull/push/ls-remote).
+var netCommands = map[string]struct{}{
+	"curl": {}, "wget": {}, "nc": {}, "ncat": {}, "telnet": {}, "socat": {},
+	"ssh": {}, "scp": {}, "sftp": {}, "rsync": {}, "git": {},
+}
+
+func isNetCommand(name string) bool {
+	_, ok := netCommands[name]
+	return ok
+}
+
+// gitNetSubcommands are the git subcommands that touch the network; local
+// ones (status, diff, log, ...) are left alone.
+var gitNetSubcommands = map[string]struct{}{
+	"clone": {}, "fetch": {}, "pull": {}, "push": {}, "ls-remote": {},
+}
+
+// Flag sets: which options consume the next argv token, and which option
+// values are local files (never a host). Inline --flag=value / -fvalue forms
+// never consume a following token.
+var (
+	curlFileFlags = map[string]struct{}{
+		"-o": {}, "--output": {}, "--output-dir": {}, "-T": {}, "--upload-file": {},
+		"-K": {}, "--config": {}, "-b": {}, "--cookie": {}, "-c": {}, "--cookie-jar": {},
+		"-d": {}, "--data": {}, "--data-raw": {}, "--data-binary": {}, "-F": {},
+		"--form": {}, "-E": {}, "--cert": {}, "--key": {}, "--cacert": {},
+		"--capath": {}, "-H": {}, "--header": {}, "-u": {}, "--user": {},
+	}
+	wgetFileFlags = map[string]struct{}{
+		"-O": {}, "--output-document": {}, "-o": {}, "--output-file": {},
+		"-a": {}, "--append-output": {}, "-P": {}, "--directory-prefix": {},
+		"-i": {}, "--input-file": {}, "--config": {},
+		"--load-cookies": {}, "--save-cookies": {},
+	}
+	sshValueFlags = map[string]struct{}{
+		"-i": {}, "-o": {}, "-p": {}, "-P": {}, "-Q": {}, "-R": {}, "-S": {},
+		"-W": {}, "-w": {}, "-l": {}, "-F": {}, "-J": {},
+	}
+	scpValueFlags = map[string]struct{}{
+		"-c": {}, "-D": {}, "-F": {}, "-i": {}, "-l": {}, "-o": {}, "-P": {},
+		"-S": {}, "-X": {}, "-J": {},
+	}
+	rsyncValueFlags = map[string]struct{}{
+		"-e": {}, "--rsh": {}, "-p": {}, "--port": {}, "-i": {}, "--identity": {},
+		"--log-file": {}, "--password-file": {}, "--rsync-path": {},
+		"--include-from": {}, "--exclude-from": {},
+	}
+	// ssh_config options whose value is an arbitrary command executed behind
+	// an allowlisted destination → cannot be modelled, deny.
+	sshCommandOptions = map[string]struct{}{
+		"proxycommand": {}, "localcommand": {}, "remotecommand": {},
+		"permitlocalcommand": {}, "match": {},
+	}
+)
+
+func isWgetFileFlag(flag string) bool {
+	_, ok := wgetFileFlags[flag]
+	return ok
+}
+
+// splitFlagValue splits one option token into flag/value/attached.
+func splitFlagValue(a string) (flag, value string, attached bool) {
+	if strings.HasPrefix(a, "--") {
+		if i := strings.Index(a, "="); i >= 0 {
+			return a[:i], a[i+1:], true
 		}
-		// Skip flags (including inline --flag=value forms).
+		return a, "", false
+	}
+	if len(a) > 2 && strings.HasPrefix(a, "-") {
+		return a[:2], a[2:], true
+	}
+	return a, "", false
+}
+
+// bareHost reduces a URL / user@host[:port][/path] / host:path token to its
+// bare hostname. Tokens without a recognizable host form yield "".
+func bareHost(tok string) string {
+	tok = strings.TrimSpace(tok)
+	tok = strings.Trim(tok, `"'`)
+	if strings.HasPrefix(tok, "-") {
+		return "" // an option token is never a host
+	}
+	for _, scheme := range []string{"https://", "http://", "ftp://", "sftp://",
+		"ssh://", "git://", "rsync://", "ws://", "wss://"} {
+		tok = strings.TrimPrefix(tok, scheme)
+	}
+	if i := strings.Index(tok, "@"); i >= 0 {
+		tok = tok[i+1:]
+	}
+	if i := strings.IndexAny(tok, "/:?"); i >= 0 {
+		tok = tok[:i]
+	}
+	if tok == "" {
+		return ""
+	}
+	return strings.ToLower(tok)
+}
+
+// dedupHosts returns hosts in first-seen order without duplicates.
+func dedupHosts(hosts []string) []string {
+	seen := make(map[string]bool)
+	out := make([]string, 0, len(hosts))
+	for _, h := range hosts {
+		if h == "" || seen[h] {
+			continue
+		}
+		seen[h] = true
+		out = append(out, h)
+	}
+	return out
+}
+
+// jumpHosts splits a ssh -J value (host[,host...], each [user@]host[:port])
+// into its egress peers.
+func jumpHosts(v string) []string {
+	var out []string
+	for _, part := range strings.Split(v, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if h := bareHost(part); h != "" {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
+// pendingValue records what the token following a flag means when that flag
+// took its value in separate form.
+type pendingValue int
+
+const (
+	pendingNone pendingValue = iota
+	pendingSkip              // value is a local file/identity, not a host
+	pendingHost              // value is a host or URL
+)
+
+// extractNetworkTargets returns every hostname that a network command may
+// reach: positional URLs, option values that name hosts (proxies, -J peers),
+// and per-family operand grammars (ssh/sftp first-operand, scp/rsync
+// host:path, git remote subcommands). Local-file option values are skipped so
+// `wget -O release.tar.gz https://x` reads x, not release.tar.gz.
+func extractNetworkTargets(cmdName, fullCommand string) []string {
+	parts := strings.Fields(fullCommand)
+	if len(parts) < 2 {
+		return nil
+	}
+	switch cmdName {
+	case "curl":
+		return curlTargets(parts)
+	case "wget":
+		return wgetTargets(parts)
+	case "ssh", "sftp":
+		return sshStyleTargets(parts)
+	case "scp", "rsync":
+		return scpStyleTargets(parts)
+	case "git":
+		return gitTargets(parts)
+	default:
+		return genericTargets(parts)
+	}
+}
+
+// genericTargets handles nc/ncat/telnet/socat: the first non-flag operand is
+// the destination host.
+func genericTargets(parts []string) []string {
+	for _, p := range parts[1:] {
 		if strings.HasPrefix(p, "-") {
 			continue
 		}
-		if strings.Contains(p, "://") {
-			// A URL is almost certainly the actual target.
-			return normalizeHost(p)
-		}
-		if firstPlain == "" {
-			firstPlain = normalizeHost(p)
+		if h := bareHost(p); h != "" {
+			return []string{h}
 		}
 	}
-	return firstPlain
+	return nil
 }
 
-// normalizeHost strips a URL scheme and path/port suffix from a token.
-func normalizeHost(p string) string {
-	for _, scheme := range []string{"https://", "http://", "ftp://"} {
-		p = strings.TrimPrefix(p, scheme)
+// curlTargets: positional operands are URLs; values of host-bearing options
+// (--proxy/-x, --socks5) are egress peers; values of file-valued flags (-o,
+// -K, -H, -d, ...) are never hosts.
+func curlTargets(parts []string) []string {
+	var hosts []string
+	pending := pendingNone
+	for i := 1; i < len(parts); i++ {
+		a := parts[i]
+		if pending != pendingNone {
+			switch pending {
+			case pendingSkip:
+			case pendingHost:
+				if h := bareHost(a); h != "" {
+					hosts = append(hosts, h)
+				}
+			}
+			pending = pendingNone
+			continue
+		}
+		if strings.HasPrefix(a, "-") {
+			flag, val, attached := splitFlagValue(a)
+			switch {
+			case isCurlFileFlag(flag) && !attached:
+				pending = pendingSkip
+			case isCurlHostFlag(flag):
+				if attached {
+					if h := bareHost(val); h != "" {
+						hosts = append(hosts, h)
+					}
+				} else {
+					pending = pendingHost
+				}
+			}
+			continue
+		}
+		if h := bareHost(a); h != "" {
+			hosts = append(hosts, h)
+		}
 	}
-	if idx := strings.IndexAny(p, "/:"); idx >= 0 {
-		p = p[:idx]
+	return dedupHosts(hosts)
+}
+
+func isCurlFileFlag(flag string) bool {
+	_, ok := curlFileFlags[flag]
+	return ok
+}
+
+// curlHostFlags are curl options whose value names a host/URL (proxy or
+// socks routing), a real egress peer in addition to the positional URL.
+var curlHostFlags = map[string]struct{}{
+	"-x": {}, "--proxy": {}, "--socks5": {}, "--socks5-hostname": {},
+	"--socks4": {}, "--socks4a": {}, "--socks": {},
+}
+
+func isCurlHostFlag(flag string) bool {
+	_, ok := curlHostFlags[flag]
+	return ok
+}
+
+// curlNetOverride reports whether curl carries a config file (-K/--config)
+// or a connection-routing flag (--connect-to/--resolve) whose effective
+// destination cannot be statically modelled. Returns (configFile, evidence).
+func curlNetOverride(fullCommand string) (bool, string, bool) {
+	parts := strings.Fields(fullCommand)
+	for i := 1; i < len(parts); i++ {
+		a := parts[i]
+		if !strings.HasPrefix(a, "-") {
+			continue
+		}
+		flag, val, _ := splitFlagValue(a)
+		switch {
+		case flag == "-K" || flag == "--config":
+			return true, val, true
+		case flag == "--connect-to" || flag == "--resolve":
+			return false, val, true
+		}
 	}
-	return p
+	return false, "", false
+}
+
+// wgetTargets: positional operands are URLs; -e <key>=<value> proxy
+// assignments contribute the proxy as an egress peer; values of wget's
+// file-valued flags are never hosts.
+func wgetTargets(parts []string) []string {
+	var hosts []string
+	pending := pendingNone
+	for i := 1; i < len(parts); i++ {
+		a := parts[i]
+		if pending != pendingNone {
+			if pending == pendingHost {
+				if h := bareHost(a); h != "" {
+					hosts = append(hosts, h)
+				}
+			}
+			pending = pendingNone
+			continue
+		}
+		if strings.HasPrefix(a, "-") {
+			flag, val, attached := splitFlagValue(a)
+			switch {
+			case isWgetFileFlag(flag) && !attached:
+				pending = pendingSkip
+			case flag == "-e" || flag == "--execute":
+				if !attached {
+					if i+1 < len(parts) {
+						if _, v, ok := proxyAssignment(parts[i+1]); ok {
+							if h := bareHost(v); h != "" {
+								hosts = append(hosts, h)
+							}
+						}
+						i++
+					}
+					continue
+				}
+				if _, v, ok := proxyAssignment(val); ok {
+					if h := bareHost(v); h != "" {
+						hosts = append(hosts, h)
+					}
+				}
+			}
+			continue
+		}
+		if h := bareHost(a); h != "" {
+			hosts = append(hosts, h)
+		}
+	}
+	return dedupHosts(hosts)
+}
+
+// proxyAssignment reports whether a wget -e value is a proxy assignment
+// (<key>_proxy=URL). Any other -e value rewrites arbitrary wgetrc config and
+// is handled as an unmodellable override (wgetConfigOverride).
+func proxyAssignment(v string) (key, value string, ok bool) {
+	k, val, found := strings.Cut(v, "=")
+	if !found || val == "" {
+		return "", "", false
+	}
+	if !strings.HasSuffix(strings.ToLower(strings.TrimSpace(k)), "_proxy") {
+		return "", "", false
+	}
+	return k, val, true
+}
+
+// wgetConfigOverride returns the first non-proxy -e wgetrc assignment, which
+// injects arbitrary wget configuration the scanner cannot model.
+func wgetConfigOverride(fullCommand string) string {
+	parts := strings.Fields(fullCommand)
+	for i := 1; i < len(parts); i++ {
+		a := parts[i]
+		if !strings.HasPrefix(a, "-") {
+			continue
+		}
+		flag, val, attached := splitFlagValue(a)
+		if flag != "-e" && flag != "--execute" {
+			continue
+		}
+		if !attached {
+			if i+1 >= len(parts) {
+				continue
+			}
+			val = parts[i+1]
+			i++
+		}
+		if _, _, isProxy := proxyAssignment(val); !isProxy {
+			return val
+		}
+	}
+	return ""
+}
+
+// sshStyleTargets handles ssh/sftp: option values are skipped, -J jump hosts
+// are egress peers, and the first non-flag operand is the destination.
+func sshStyleTargets(parts []string) []string {
+	var hosts []string
+	skipNext, isJump := false, false
+	for i := 1; i < len(parts); i++ {
+		a := parts[i]
+		if skipNext {
+			if isJump {
+				hosts = append(hosts, jumpHosts(a)...)
+			}
+			skipNext, isJump = false, false
+			continue
+		}
+		if a == "" {
+			continue
+		}
+		if strings.HasPrefix(a, "-") {
+			flag, val, attached := splitFlagValue(a)
+			switch {
+			case flag == "-J":
+				if attached {
+					hosts = append(hosts, jumpHosts(val)...)
+				} else {
+					skipNext, isJump = true, true
+				}
+			default:
+				if _, ok := sshValueFlags[flag]; ok && !attached {
+					skipNext = true
+				}
+			}
+			continue
+		}
+		if h := bareHost(a); h != "" {
+			return dedupHosts(append(hosts, h))
+		}
+	}
+	return dedupHosts(hosts)
+}
+
+// scpStyleTargets handles scp/rsync: a remote operand carries a colon
+// ([user@]host:path) or a scheme URL; local files have neither and are not
+// hosts. Option values are skipped and -J jump peers are egress hosts.
+func scpStyleTargets(parts []string) []string {
+	var hosts []string
+	skipNext, isJump := false, false
+	for i := 1; i < len(parts); i++ {
+		a := parts[i]
+		if skipNext {
+			if isJump {
+				hosts = append(hosts, jumpHosts(a)...)
+			}
+			skipNext, isJump = false, false
+			continue
+		}
+		if a == "" {
+			continue
+		}
+		if strings.HasPrefix(a, "-") {
+			flag, val, attached := splitFlagValue(a)
+			switch {
+			case flag == "-J":
+				if attached {
+					hosts = append(hosts, jumpHosts(val)...)
+				} else {
+					skipNext, isJump = true, true
+				}
+			default:
+				if _, ok := scpValueFlags[flag]; ok && !attached {
+					skipNext = true
+				}
+				if _, ok := rsyncValueFlags[flag]; ok && !attached {
+					skipNext = true
+				}
+			}
+			continue
+		}
+		if strings.Contains(a, "://") || strings.Contains(a, ":") {
+			if h := bareHost(a); h != "" {
+				hosts = append(hosts, h)
+			}
+		}
+	}
+	return dedupHosts(hosts)
+}
+
+// gitTargets: only network subcommands (clone/fetch/pull/push/ls-remote) are
+// egress. Their operands are URLs (https://..., git@host:path) or remote
+// names; remote names are configured locally and are not network targets.
+func gitTargets(parts []string) []string {
+	if len(parts) < 2 {
+		return nil
+	}
+	if _, ok := gitNetSubcommands[parts[1]]; !ok {
+		return nil
+	}
+	var hosts []string
+	for _, a := range parts[2:] {
+		if strings.HasPrefix(a, "-") {
+			continue
+		}
+		a = strings.Trim(a, `"'`)
+		if !strings.Contains(a, "://") && !strings.Contains(a, "@") {
+			continue // bare remote name (origin) — locally configured
+		}
+		if h := bareHost(a); h != "" {
+			hosts = append(hosts, h)
+		}
+	}
+	return dedupHosts(hosts)
+}
+
+// netCommandOption finds a hidden program/command option in ssh/scp/sftp/
+// rsync argv: ssh -o ProxyCommand=..., scp -S prog, rsync -e 'prog args',
+// rsync --rsh=prog. Returns the option value when found.
+func netCommandOption(cmd, fullCommand string) (string, bool) {
+	parts := strings.Fields(fullCommand)
+	for i := 1; i < len(parts); i++ {
+		a := parts[i]
+		if !strings.HasPrefix(a, "-") {
+			// ssh/sftp: the first non-flag token is the destination; later
+			// operands are remote commands, which are out of scope here.
+			if cmd == "ssh" || cmd == "sftp" {
+				return "", false
+			}
+			continue
+		}
+		flag, val, attached := splitFlagValue(a)
+		switch {
+		case flag == "-o":
+			if !attached {
+				if i+1 >= len(parts) {
+					continue
+				}
+				val = parts[i+1]
+				i++
+			}
+			if k, _, found := strings.Cut(val, "="); found && isSSHCommandOption(k) {
+				return val, true
+			}
+		case cmd == "scp" || cmd == "sftp":
+			if flag == "-S" {
+				if attached {
+					return val, true
+				}
+				if i+1 < len(parts) {
+					return parts[i+1], true
+				}
+			}
+		case cmd == "rsync":
+			if flag == "-e" || flag == "--rsh" {
+				if attached {
+					return val, true
+				}
+				if i+1 < len(parts) {
+					return parts[i+1], true
+				}
+			}
+		}
+	}
+	return "", false
+}
+
+func isSSHCommandOption(key string) bool {
+	_, ok := sshCommandOptions[strings.ToLower(strings.TrimSpace(key))]
+	return ok
+}
+
+// isForeignCode reports whether the language of the code being executed is a
+// non-shell language that shellsafe cannot structurally parse.
+func isForeignCode(language string) bool {
+	switch strings.ToLower(strings.TrimSpace(language)) {
+	case "", "shell", "bash", "sh", "zsh", "powershell", "pwsh":
+		return false
+	default:
+		return true
+	}
+}
+
+// normalizeTildePaths rewrites ~ and ~user path tokens in a command so that
+// path traversal through a home directory resolves to its real target for
+// forbidden-path matching: ~root/../etc/shadow must be seen as /etc/shadow,
+// while traversal that stays inside the home (~/notes/../todo.txt) keeps its
+// ~ prefix. Non-path tokens are left untouched.
+func normalizeTildePaths(cmd string) string {
+	fields := strings.Fields(cmd)
+	changed := false
+	for i, f := range fields {
+		if nf, ok := normalizeTildeToken(f); ok {
+			fields[i] = nf
+			changed = true
+		}
+	}
+	if !changed {
+		return cmd
+	}
+	return strings.Join(fields, " ")
+}
+
+func normalizeTildeToken(f string) (string, bool) {
+	trimmed := strings.Trim(f, `"'`)
+	if !strings.HasPrefix(trimmed, "~") {
+		return f, false
+	}
+	var folded string
+	if idx := strings.Index(trimmed, "/"); idx >= 0 {
+		if idx == 1 {
+			folded = trimmed // "~/..."
+		} else {
+			// Fold the ~user segment: ~root/.ssh → ~/.ssh so forbidden-path
+			// patterns anchored on "~/" still match after traversal.
+			folded = "~" + trimmed[idx:]
+		}
+	} else {
+		return f, false // bare "~" or "~user" — no path to resolve
+	}
+	c := path.Clean("/" + folded)
+	if strings.HasPrefix(c, "/~") {
+		return strings.Replace(f, trimmed, c[1:], 1), true
+	}
+	return strings.Replace(f, trimmed, c, 1), true
 }
 
 // extractEnvVarName extracts the variable name from "KEY=value" format.
@@ -643,6 +1272,25 @@ func extractCommandFromArgs(args []byte) string {
 		}
 	}
 	return command
+}
+
+// extractLanguageFromArgs parses JSON arguments to find a "language"/"lang"
+// field (codeexec-style tools). An empty result means the language is unknown
+// and the caller should fall back to shell semantics.
+func extractLanguageFromArgs(args []byte) string {
+	if len(args) == 0 {
+		return ""
+	}
+	var m map[string]any
+	if err := json.Unmarshal(args, &m); err != nil {
+		return ""
+	}
+	for _, key := range []string{"language", "lang"} {
+		if v, ok := m[key].(string); ok {
+			return v
+		}
+	}
+	return ""
 }
 
 // riskOrder returns an integer ordering for risk levels (higher = worse).
