@@ -304,7 +304,7 @@ func gitOutputLimited(ctx context.Context, repoPath string, maxBytes int64, args
 }
 
 func gitReadOnlyOptions(ctx context.Context, repoPath string) ([]string, error) {
-	raw, err := gitOutputLimited(ctx, repoPath, maxGitConfigBytes, "config", "--local", "--name-only", "--null", "--list")
+	raw, err := gitOutputLimited(ctx, repoPath, maxGitConfigBytes, "config", "--includes", "--name-only", "--null", "--list")
 	if err != nil {
 		return nil, err
 	}

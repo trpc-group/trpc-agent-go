@@ -391,6 +391,62 @@ func TestValidateContainerToolchainRejectsWorkspaceRequirement(t *testing.T) {
 	}
 }
 
+func TestValidateContainerToolchainParsesQuotedWorkspaceModule(t *testing.T) {
+	root := t.TempDir()
+	module := filepath.Join(root, "module with spaces")
+	if err := os.MkdirAll(module, 0o700); err != nil {
+		t.Fatalf("MkdirAll(module) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module root.example\n\ngo 1.24\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(root go.mod) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(module, "go.mod"), []byte("module module.example\n\ngo 1.25\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(module go.mod) error = %v", err)
+	}
+	work := "go 1.24\n\nuse (\n\t\"./module with spaces\"\n)\n"
+	if err := os.WriteFile(filepath.Join(root, "go.work"), []byte(work), 0o600); err != nil {
+		t.Fatalf("WriteFile(go.work) error = %v", err)
+	}
+	if err := validateContainerToolchain(root, ""); err == nil || !strings.Contains(err.Error(), "unsupported-toolchain") {
+		t.Fatalf("validateContainerToolchain() error = %v, want quoted workspace module rejection", err)
+	}
+}
+
+func TestWorkspaceUsePathsSupportsRawStringsAndWhitespace(t *testing.T) {
+	raw := "use\t( // block comment\n\t`./module with spaces` // path comment\n) // block comment\nuse   \"./quoted\"\n"
+	want := []string{"./module with spaces", "./quoted"}
+	if got := workspaceUsePaths(raw); !reflect.DeepEqual(got, want) {
+		t.Fatalf("workspaceUsePaths() = %#v, want %#v", got, want)
+	}
+}
+
+func TestValidateContainerToolchainUsesNearestWorkspace(t *testing.T) {
+	root := t.TempDir()
+	module := filepath.Join(root, "module")
+	higher := filepath.Join(root, "higher")
+	if err := os.MkdirAll(module, 0o700); err != nil {
+		t.Fatalf("MkdirAll(module) error = %v", err)
+	}
+	if err := os.MkdirAll(higher, 0o700); err != nil {
+		t.Fatalf("MkdirAll(higher) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(module, "go.mod"), []byte("module module.example\n\ngo 1.24\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(module go.mod) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(higher, "go.mod"), []byte("module higher.example\n\ngo 1.25\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(higher go.mod) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "go.work"), []byte("go 1.24\n\nuse ./higher\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(root go.work) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(module, "go.work"), []byte("go 1.24\n\nuse .\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(module go.work) error = %v", err)
+	}
+	if err := validateContainerToolchain(root, "module"); err != nil {
+		t.Fatalf("validateContainerToolchain() error = %v, want nearest workspace accepted", err)
+	}
+}
+
 func TestValidateContainerToolchainRejectsOversizedMetadata(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte(strings.Repeat("x", int(maxGoMetadataBytes+1))), 0o600); err != nil {
@@ -398,6 +454,40 @@ func TestValidateContainerToolchainRejectsOversizedMetadata(t *testing.T) {
 	}
 	if err := validateContainerToolchain(root, ""); err == nil || !strings.Contains(err.Error(), "file exceeds") {
 		t.Fatalf("validateContainerToolchain() error = %v, want bounded metadata rejection", err)
+	}
+}
+
+func TestGoVersionPreservesPatchAndRejectsUnpinnedImageTag(t *testing.T) {
+	required, err := parseGoVersion("1.24.7")
+	if err != nil {
+		t.Fatalf("parseGoVersion(required) error = %v", err)
+	}
+	image, err := parseGoVersion("1.24")
+	if err != nil {
+		t.Fatalf("parseGoVersion(image) error = %v", err)
+	}
+	if required.String() != "1.24.7" || image.String() != "1.24" {
+		t.Fatalf("versions = %q/%q, want patch-preserving required and minor-only image", required, image)
+	}
+	if !required.exceeds(image) {
+		t.Fatal("explicit patch requirement should fail closed for a minor-only image tag")
+	}
+	baseline, err := parseGoVersion("1.24")
+	if err != nil {
+		t.Fatalf("parseGoVersion(baseline) error = %v", err)
+	}
+	if baseline.exceeds(image) {
+		t.Fatal("minor-only requirement should match the same minor image tag")
+	}
+	pinned, err := parseGoVersion("1.24.6")
+	if err != nil {
+		t.Fatalf("parseGoVersion(pinned) error = %v", err)
+	}
+	if !required.exceeds(pinned) {
+		t.Fatal("1.24.7 should exceed a pinned 1.24.6 image")
+	}
+	if !required.after(image) {
+		t.Fatal("1.24.7 should remain the greater required version for aggregation")
 	}
 }
 
@@ -1431,8 +1521,8 @@ func TestContainerHostConfigDisablesNetworkEgress(t *testing.T) {
 
 func TestContainerConfigUsesGo124Image(t *testing.T) {
 	cfg := containerConfig()
-	if cfg.Image != "golang:1.24" {
-		t.Fatalf("Image = %q, want golang:1.24", cfg.Image)
+	if cfg.Image != "golang:1.24.6" {
+		t.Fatalf("Image = %q, want golang:1.24.6", cfg.Image)
 	}
 	if cfg.WorkingDir != "/" {
 		t.Fatalf("WorkingDir = %q, want /", cfg.WorkingDir)

@@ -315,26 +315,54 @@ func TestReadRepoDiffDisablesConfiguredGitFilters(t *testing.T) {
 	runGit(t, dir, "init")
 	runGit(t, dir, "config", "user.email", "test@example.com")
 	runGit(t, dir, "config", "user.name", "Test")
-	if err := os.WriteFile(filepath.Join(dir, ".gitattributes"), []byte("tracked.txt filter=sentinel\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, ".gitattributes"), []byte("tracked.txt filter=sentinel\nincluded.txt filter=included\nworktree.txt filter=worktree\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile(.gitattributes) error = %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("before\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile(tracked.txt) error = %v", err)
 	}
-	runGit(t, dir, "add", ".gitattributes", "tracked.txt")
+	for _, name := range []string{"included.txt", "worktree.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("before\n"), 0o600); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", name, err)
+		}
+	}
+	runGit(t, dir, "add", ".gitattributes", "tracked.txt", "included.txt", "worktree.txt")
 	runGit(t, dir, "commit", "-m", "base")
 	if err := os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("after\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile(change) error = %v", err)
 	}
+	for _, name := range []string{"included.txt", "worktree.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("after\n"), 0o600); err != nil {
+			t.Fatalf("WriteFile(%s change) error = %v", name, err)
+		}
+	}
 	runGit(t, dir, "config", "filter.sentinel.clean", "echo FILTER_SENTINEL")
+	includeConfig := filepath.Join(dir, ".git", "review-filter.inc")
+	if err := os.WriteFile(includeConfig, []byte("[filter \"included\"]\n\tclean = echo INCLUDED_FILTER\n\tprocess = echo INCLUDED_FILTER\n\tsmudge = echo INCLUDED_FILTER\n\trequired = true\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(included filter config) error = %v", err)
+	}
+	runGit(t, dir, "config", "--local", "include.path", "review-filter.inc")
+	runGit(t, dir, "config", "extensions.worktreeConfig", "true")
+	runGit(t, dir, "config", "--worktree", "filter.worktree.clean", "echo WORKTREE_FILTER")
+	runGit(t, dir, "config", "--worktree", "filter.worktree.process", "echo WORKTREE_FILTER")
+	runGit(t, dir, "config", "--worktree", "filter.worktree.smudge", "echo WORKTREE_FILTER")
 
 	options, err := gitReadOnlyOptions(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("gitReadOnlyOptions() error = %v", err)
 	}
 	optionText := strings.Join(options, " ")
-	if !strings.Contains(optionText, "filter.sentinel.clean=") || !strings.Contains(optionText, "filter.sentinel.process=") {
-		t.Fatalf("gitReadOnlyOptions() = %q, want clean/process filter overrides", optionText)
+	for _, want := range []string{
+		"filter.sentinel.clean=",
+		"filter.sentinel.process=",
+		"filter.included.clean=",
+		"filter.included.process=",
+		"filter.worktree.clean=",
+		"filter.worktree.process=",
+	} {
+		if !strings.Contains(optionText, want) {
+			t.Fatalf("gitReadOnlyOptions() = %q, want %q", optionText, want)
+		}
 	}
 	src, err := Read(context.Background(), Options{RepoPath: dir})
 	if err != nil {
@@ -342,6 +370,11 @@ func TestReadRepoDiffDisablesConfiguredGitFilters(t *testing.T) {
 	}
 	if strings.Contains(src.Diff, "FILTER_SENTINEL") {
 		t.Fatalf("repo diff invoked configured clean filter:\n%s", src.Diff)
+	}
+	for _, sentinel := range []string{"INCLUDED_FILTER", "WORKTREE_FILTER"} {
+		if strings.Contains(src.Diff, sentinel) {
+			t.Fatalf("repo diff invoked configured %s helper:\n%s", sentinel, src.Diff)
+		}
 	}
 }
 

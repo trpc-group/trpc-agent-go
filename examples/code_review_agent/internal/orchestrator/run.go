@@ -28,6 +28,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	tcontainer "github.com/docker/docker/api/types/container"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
@@ -54,7 +55,7 @@ const (
 	containerPIDsLimit      = int64(128)
 	containerStorageLimit   = "512m"
 	containerUser           = "65532:65532"
-	containerSandboxImage   = "golang:1.24"
+	containerSandboxImage   = "golang:1.24.6"
 	containerGoBuildCache   = "/tmp/go-build"
 	containerGoModCache     = "/go/pkg/mod"
 	dependencyPrepTimeout   = 2 * time.Minute
@@ -88,8 +89,10 @@ const (
 )
 
 type goVersion struct {
-	major int
-	minor int
+	major          int
+	minor          int
+	patch          int
+	patchSpecified bool
 }
 
 // Options configures one review run.
@@ -1743,8 +1746,8 @@ func validateContainerToolchain(repoRoot string, dependencySubdir string) error 
 	if err != nil {
 		return fmt.Errorf("inspect container toolchain: %w", err)
 	}
-	if required.after(imageVersion) {
-		return fmt.Errorf("unsupported-toolchain: reviewed module requires Go %d.%d, but container image %s supports Go %d.%d", required.major, required.minor, containerSandboxImage, imageVersion.major, imageVersion.minor)
+	if required.exceeds(imageVersion) {
+		return fmt.Errorf("unsupported-toolchain: reviewed module requires Go %s, but container image %s supports Go %s", required, containerSandboxImage, imageVersion)
 	}
 	return nil
 }
@@ -1779,9 +1782,11 @@ func goWorkFiles(repoRoot string, moduleDir string) []string {
 	if err != nil || !pathWithinRoot(root, dir) {
 		return nil
 	}
-	var files []string
 	for {
-		files = append(files, filepath.Join(dir, "go.work"))
+		candidate := filepath.Join(dir, "go.work")
+		if _, err := os.Lstat(candidate); err == nil || !errors.Is(err, os.ErrNotExist) {
+			return []string{candidate}
+		}
 		if dir == root {
 			break
 		}
@@ -1791,7 +1796,7 @@ func goWorkFiles(repoRoot string, moduleDir string) []string {
 		}
 		dir = parent
 	}
-	return files
+	return nil
 }
 
 func workspaceUsePaths(raw string) []string {
@@ -1803,7 +1808,7 @@ func workspaceUsePaths(raw string) []string {
 			continue
 		}
 		if inBlock {
-			if line == ")" {
+			if workspaceUseBlockEnd(line) {
 				inBlock = false
 				continue
 			}
@@ -1812,31 +1817,79 @@ func workspaceUsePaths(raw string) []string {
 			}
 			continue
 		}
-		if strings.HasPrefix(line, "use (") {
+		rest, ok := workspaceUseDirective(line)
+		if !ok {
+			continue
+		}
+		if workspaceUseBlockStart(rest) {
 			inBlock = true
 			continue
 		}
-		if strings.HasPrefix(line, "use ") {
-			if path := firstWorkspacePathToken(strings.TrimSpace(strings.TrimPrefix(line, "use "))); path != "" {
-				paths = append(paths, path)
-			}
+		if path := firstWorkspacePathToken(rest); path != "" {
+			paths = append(paths, path)
 		}
 	}
 	return paths
 }
 
+func workspaceUseBlockStart(rest string) bool {
+	rest = strings.TrimSpace(rest)
+	if rest == "(" {
+		return true
+	}
+	return strings.HasPrefix(rest, "(") && strings.HasPrefix(strings.TrimSpace(rest[1:]), "//")
+}
+
+func workspaceUseBlockEnd(line string) bool {
+	line = strings.TrimSpace(line)
+	if line == ")" {
+		return true
+	}
+	return strings.HasPrefix(line, ")") && strings.HasPrefix(strings.TrimSpace(line[1:]), "//")
+}
+
+func workspaceUseDirective(line string) (string, bool) {
+	line = strings.TrimSpace(line)
+	if len(line) <= len("use") || line[:len("use")] != "use" || !unicode.IsSpace(rune(line[len("use")])) {
+		return "", false
+	}
+	return strings.TrimSpace(line[len("use"):]), true
+}
+
 func firstWorkspacePathToken(line string) string {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return ""
+	}
+	if line[0] == '`' {
+		end := strings.IndexByte(line[1:], '`')
+		if end < 0 {
+			return ""
+		}
+		return line[1 : end+1]
+	}
+	if line[0] == '"' {
+		for index := 1; index < len(line); index++ {
+			if line[index] == '\\' {
+				index++
+				continue
+			}
+			if line[index] != '"' {
+				continue
+			}
+			path, err := strconv.Unquote(line[:index+1])
+			if err != nil {
+				return ""
+			}
+			return path
+		}
+		return ""
+	}
 	fields := strings.Fields(line)
 	if len(fields) == 0 {
 		return ""
 	}
-	path := fields[0]
-	if strings.HasPrefix(path, "\"") {
-		if decoded, err := strconv.Unquote(path); err == nil {
-			path = decoded
-		}
-	}
-	return strings.TrimSpace(path)
+	return fields[0]
 }
 
 func pathWithinRoot(root string, candidate string) bool {
@@ -1877,8 +1930,9 @@ func readBoundedGoMetadata(path string) ([]byte, bool, error) {
 }
 
 func parseGoVersion(raw string) (goVersion, error) {
+	raw = strings.TrimSpace(raw)
 	parts := strings.Split(raw, ".")
-	if len(parts) < 2 {
+	if len(parts) < 2 || len(parts) > 3 {
 		return goVersion{}, fmt.Errorf("invalid Go version %q", raw)
 	}
 	major, err := strconv.Atoi(parts[0])
@@ -1889,7 +1943,16 @@ func parseGoVersion(raw string) (goVersion, error) {
 	if err != nil || minor < 0 {
 		return goVersion{}, fmt.Errorf("invalid Go version %q", raw)
 	}
-	return goVersion{major: major, minor: minor}, nil
+	version := goVersion{major: major, minor: minor}
+	if len(parts) == 3 {
+		patch, err := strconv.Atoi(parts[2])
+		if err != nil || patch < 0 {
+			return goVersion{}, fmt.Errorf("invalid Go version %q", raw)
+		}
+		version.patch = patch
+		version.patchSpecified = true
+	}
+	return version, nil
 }
 
 func (v goVersion) valid() bool {
@@ -1897,7 +1960,40 @@ func (v goVersion) valid() bool {
 }
 
 func (v goVersion) after(other goVersion) bool {
-	return v.major > other.major || (v.major == other.major && v.minor > other.minor)
+	if v.major != other.major {
+		return v.major > other.major
+	}
+	if v.minor != other.minor {
+		return v.minor > other.minor
+	}
+	if v.patchSpecified != other.patchSpecified {
+		return v.patchSpecified && v.patch > 0
+	}
+	return v.patch > other.patch
+}
+
+func (v goVersion) exceeds(other goVersion) bool {
+	if v.major != other.major {
+		return v.major > other.major
+	}
+	if v.minor != other.minor {
+		return v.minor > other.minor
+	}
+	if !v.patchSpecified {
+		return false
+	}
+	// An unpinned image tag cannot prove support for an explicit patch level.
+	if !other.patchSpecified {
+		return true
+	}
+	return v.patch > other.patch
+}
+
+func (v goVersion) String() string {
+	if v.patchSpecified {
+		return fmt.Sprintf("%d.%d.%d", v.major, v.minor, v.patch)
+	}
+	return fmt.Sprintf("%d.%d", v.major, v.minor)
 }
 
 func containerConfig() tcontainer.Config {

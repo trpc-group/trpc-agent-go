@@ -23,16 +23,35 @@ var hunkHeaderRE = regexp.MustCompile(`^@@ -([0-9]+)(?:,([0-9]+))? \+([0-9]+)(?:
 
 // Parse parses a unified diff into review DiffFile records.
 func Parse(diff string) ([]review.DiffFile, error) {
+	const (
+		diffHeaderComplete = iota
+		diffHeaderNeedsNewPath
+		diffHeaderNeedsHunk
+	)
+	// A header after a completed hunk must lead to another hunk, so an extra
+	// header-like deletion cannot be silently accepted as a new file.
 	var files []review.DiffFile
 	var current *review.DiffFile
 	var currentHunk *review.DiffHunk
 	oldLine := 0
 	newLine := 0
+	headerState := diffHeaderComplete
+	headerAfterCompletedHunk := false
 
 	scanner := bufio.NewScanner(strings.NewReader(diff))
 	scanner.Buffer(make([]byte, 1024), 1024*1024)
 	for scanner.Scan() {
 		line := scanner.Text()
+		switch headerState {
+		case diffHeaderNeedsNewPath:
+			if !strings.HasPrefix(line, "+++ ") {
+				return nil, fmt.Errorf("hunk contains content after declared ranges were consumed: expected +++ file header")
+			}
+		case diffHeaderNeedsHunk:
+			if !strings.HasPrefix(line, "@@ ") {
+				return nil, fmt.Errorf("file header is missing a hunk")
+			}
+		}
 		if currentHunk != nil && hunkHasRemaining(currentHunk, oldLine, newLine) && line != "" && !isDiffHunkLine(line) {
 			return nil, fmt.Errorf("hunk ended before declared ranges were consumed")
 		}
@@ -65,11 +84,13 @@ func Parse(diff string) ([]review.DiffFile, error) {
 			}
 			current.IsDeleted = true
 		case strings.HasPrefix(line, "--- "):
+			headerAfterCompletedHunk = currentHunk != nil && !hunkHasRemaining(currentHunk, oldLine, newLine)
 			if current == nil || len(current.Hunks) > 0 {
 				files = append(files, review.DiffFile{})
 				current = &files[len(files)-1]
 				currentHunk = nil
 			}
+			headerState = diffHeaderNeedsNewPath
 			oldPath, err := cleanDiffPath(strings.TrimPrefix(line, "--- "))
 			if err != nil {
 				return nil, fmt.Errorf("parse old path header: %w", err)
@@ -87,6 +108,13 @@ func Parse(diff string) ([]review.DiffFile, error) {
 			current.NewPath = newPath
 			current.IsDeleted = current.NewPath == ""
 			current.PackageDir = inferPackageDir(firstNonEmpty(current.NewPath, current.OldPath))
+			if headerState == diffHeaderNeedsNewPath {
+				if headerAfterCompletedHunk {
+					headerState = diffHeaderNeedsHunk
+				} else {
+					headerState = diffHeaderComplete
+				}
+			}
 		case strings.HasPrefix(line, "@@ "):
 			if current == nil {
 				continue
@@ -99,6 +127,7 @@ func Parse(diff string) ([]review.DiffFile, error) {
 			currentHunk = &current.Hunks[len(current.Hunks)-1]
 			oldLine = parsedOldLine
 			newLine = parsedNewLine
+			headerState = diffHeaderComplete
 		case currentHunk != nil && hunkHasRemaining(currentHunk, oldLine, newLine):
 			continue
 		}
@@ -108,6 +137,9 @@ func Parse(diff string) ([]review.DiffFile, error) {
 	}
 	if currentHunk != nil && hunkHasRemaining(currentHunk, oldLine, newLine) {
 		return nil, fmt.Errorf("hunk ended before declared ranges were consumed")
+	}
+	if headerState != diffHeaderComplete {
+		return nil, fmt.Errorf("hunk contains content after declared ranges were consumed: incomplete diff file header")
 	}
 	if len(files) == 0 && strings.TrimSpace(diff) != "" {
 		return nil, fmt.Errorf("no diff files found")

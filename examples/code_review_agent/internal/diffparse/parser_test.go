@@ -281,7 +281,10 @@ func TestParseRejectsIncompleteHunkAtFileBoundary(t *testing.T) {
 func TestParseRejectsHunkContentAfterDeclaredRanges(t *testing.T) {
 	for name, extra := range map[string]string{
 		"ordinary addition":    "+const leaked = true",
+		"ordinary deletion":    "-const leaked = true",
+		"ordinary context":     " leaked",
 		"header-like addition": "+++ leaked",
+		"header-like deletion": "--- leaked",
 	} {
 		t.Run(name, func(t *testing.T) {
 			raw := "--- pkg/config.go\n+++ pkg/config.go\n@@ -1,0 +1,1 @@\n+package pkg\n" + extra + "\n"
