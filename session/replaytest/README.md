@@ -6,13 +6,13 @@ backend, normalizes backend-generated values, and compares every result with a
 named reference backend or with every other backend in oracle-free consensus
 mode.
 
-The public matrix contains 16 cases: single-turn and multi-turn messages, tool
-calls, scoped state CRUD, memory persistence, ranked memory search, idempotent
-memory retry recovery, summary generation/update, summary retained-tail
-reconstruction, summary filter keys, tracks, concurrent event branches, and
-conflict-free concurrent State, Memory, Summary, and Track writes. Each case
-names an injected fault; the unit test proves that every fault produces a
-blocking diff.
+The public matrix contains 17 cases: single-turn and multi-turn messages, tool
+calls, scoped state CRUD, mid-replay Session reload continuity, memory
+persistence, ranked memory search, idempotent memory retry recovery, summary
+generation/update, summary retained-tail reconstruction, summary filter keys,
+tracks, concurrent event branches, and conflict-free concurrent State, Memory,
+Summary, and Track writes. Each case names an injected fault; the unit test
+proves that every fault produces a blocking diff.
 
 Memory persistence snapshots are content-sorted because `ReadMemories` does not
 define cross-backend result order. `StepSearchMemory` is separate: it requires
@@ -67,6 +67,12 @@ implementation:
 
 Anything outside this table is rejected during case validation rather than
 being interpreted from backend-specific scheduling or conflict behavior.
+
+`StepReloadSession` explicitly re-fetches the active Session. Later event,
+summary, and track writes use that returned value rather than the object created
+at the start of the case. The public reload-continuity case writes events and
+state on both sides of two reload boundaries, making persistence across an
+active replay lifecycle part of the lightweight InMemory/SQLite baseline.
 
 ## Run
 

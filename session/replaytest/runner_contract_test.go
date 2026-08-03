@@ -338,6 +338,27 @@ func TestReplayStopsImmediatelyAfterBackendCancellation(t *testing.T) {
 	}
 }
 
+func TestSessionReloadCasePreservesContinuity(t *testing.T) {
+	backend, sessionFaults, _ := backendWithReplayFaults(
+		InMemoryBackend(),
+		nil,
+		nil,
+		replayOperationTest{},
+	)
+	snapshot, err := Replay(context.Background(), sessionReloadCase(), backend)
+	if err != nil {
+		t.Fatalf("Replay() error = %v", err)
+	}
+	assertCalls(t, "main GetSession", sessionFaults.mainGetCalls.Load(), 3)
+	if len(snapshot.Events) != 2 {
+		t.Fatalf("reload case events = %d, want 2", len(snapshot.Events))
+	}
+	phase, ok := snapshot.State["session"]["phase"].(CanonicalMap)
+	if !ok || phase["kind"] != "json" || phase["json"] != "2" {
+		t.Fatalf("reload case phase = %#v, want normalized JSON 2", snapshot.State["session"]["phase"])
+	}
+}
+
 type replayOperationTest struct {
 	name          string
 	replayCase    func() Case

@@ -32,6 +32,7 @@ func PublicCases() []Case {
 		multiTurnCase(),
 		toolCallCase(),
 		stateCRUDCase(),
+		sessionReloadCase(),
 		memoryCase(),
 		memorySearchCase(),
 		memoryRetryRecoveryCase(),
@@ -44,6 +45,23 @@ func PublicCases() []Case {
 		concurrentMemoryCase(),
 		concurrentSummaryCase(),
 		concurrentTrackCase(),
+	}
+}
+
+func sessionReloadCase() Case {
+	return Case{
+		Name:        "session_reload_continuity",
+		Description: "events and state survive explicit reloads before later writes",
+		Requires:    []Capability{CapabilitySession, CapabilitySessionState},
+		Steps: []Step{
+			messageStep("reload-user", "reload-user", 1, "user", model.RoleUser, "start", ""),
+			stateStep("reload-state-initial", StateScopeSession, session.StateMap{"phase": []byte(`1`)}, nil),
+			{Name: "reload-after-first-turn", Kind: StepReloadSession},
+			messageStep("reload-assistant", "reload-assistant", 2, "assistant", model.RoleAssistant, "continued", ""),
+			stateStep("reload-state-advanced", StateScopeSession, session.StateMap{"phase": []byte(`2`)}, nil),
+			{Name: "reload-after-second-turn", Kind: StepReloadSession},
+		},
+		Fault: FaultEventContent,
 	}
 }
 

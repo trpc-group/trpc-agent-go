@@ -18,7 +18,9 @@ Write recovery is opt-in. After an error, a domain witness checks logical event
 count, state postconditions, semantic memory identity, summary change, or track
 tuple count. Only State and Memory may retry because their writes are
 idempotent. Other unproven outcomes return `ErrUncertainCommit` rather than
-risk a duplicate append.
+risk a duplicate append. Explicit reload steps re-fetch the active Session, and
+subsequent writes use that returned value; the public matrix verifies continuity
+across reload boundaries against both lightweight backends.
 
 Concurrent event branches preserve lane order and predecessor relationships
 while ignoring scheduler interleaving. Each concurrent step uses one write
