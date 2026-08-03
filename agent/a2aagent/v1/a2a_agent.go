@@ -615,10 +615,16 @@ func markArtifactReplacementSnapshot(evt *event.Event, replacement bool) {
 	}
 	for i := range evt.Response.Choices {
 		choice := &evt.Response.Choices[i]
-		if !model.HasPayload(choice.Delta) {
+		delta := choice.Delta
+		deltaHasPayload := model.HasPayload(delta) ||
+			delta.ReasoningSignature != "" ||
+			len(delta.ToolCalls) > 0 ||
+			delta.ToolID != "" ||
+			delta.ToolName != ""
+		if !deltaHasPayload {
 			continue
 		}
-		choice.Message = choice.Delta
+		choice.Message = delta
 		choice.Delta = model.Message{}
 	}
 }
@@ -650,10 +656,30 @@ func (r *A2AAgent) aggregateArtifactEventContent(
 	contentBuilder *strings.Builder,
 	contentParts *[]model.ContentPart,
 ) {
-	if update == nil {
+	if update == nil || evt == nil {
 		return
 	}
 	r.aggregateEventContent(evt, "", contentBuilder, contentParts)
+	if evt.Response == nil || evt.Response.Error != nil ||
+		!evt.Response.IsPartial || len(evt.Response.Choices) == 0 {
+		return
+	}
+	choice := evt.Response.Choices[0]
+	delta := choice.Delta
+	deltaHasPayload := model.HasPayload(delta) ||
+		delta.ReasoningSignature != "" ||
+		len(delta.ToolCalls) > 0 ||
+		delta.ToolID != "" ||
+		delta.ToolName != ""
+	if deltaHasPayload {
+		return
+	}
+	if choice.Message.Content != "" {
+		contentBuilder.WriteString(choice.Message.Content)
+	}
+	if contentParts != nil {
+		*contentParts = append(*contentParts, choice.Message.ContentParts...)
+	}
 }
 
 func recordArtifactChunk(

@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-a2a-go/v2/protocol"
@@ -454,6 +455,8 @@ func TestProcessStreamingEventsReplacesArtifactSnapshot(t *testing.T) {
 }
 
 func TestProcessStreamingEventsPreservesCustomReplacementMessage(t *testing.T) {
+	stalePartText := "stale-part"
+	replacementPartText := "replacement-part"
 	remote := &A2AAgent{
 		name: "remote",
 		eventConverter: &responseConverterFunc{stream: func(
@@ -461,18 +464,32 @@ func TestProcessStreamingEventsPreservesCustomReplacementMessage(t *testing.T) {
 			_ string,
 			_ *agent.Invocation,
 		) ([]*event.Event, error) {
-			if _, ok := response.Result.(*protocol.TaskArtifactUpdateEvent); !ok {
+			update, ok := response.Result.(*protocol.TaskArtifactUpdateEvent)
+			if !ok {
 				return nil, nil
+			}
+			choice := model.Choice{Delta: model.Message{
+				Role:    model.RoleAssistant,
+				Content: "stale",
+				ContentParts: []model.ContentPart{{
+					Type: model.ContentTypeText,
+					Text: &stalePartText,
+				}},
+			}}
+			if update.Append != nil && !*update.Append {
+				choice = model.Choice{Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "custom-message",
+					ContentParts: []model.ContentPart{{
+						Type: model.ContentTypeText,
+						Text: &replacementPartText,
+					}},
+				}}
 			}
 			return []*event.Event{{
 				Response: &model.Response{
 					IsPartial: true,
-					Choices: []model.Choice{{
-						Message: model.Message{
-							Role:    model.RoleAssistant,
-							Content: "custom-message",
-						},
-					}},
+					Choices:   []model.Choice{choice},
 				},
 			}}, nil
 		}},
@@ -513,19 +530,117 @@ func TestProcessStreamingEventsPreservesCustomReplacementMessage(t *testing.T) {
 	if result.terminalError != nil {
 		t.Fatalf("terminal error = %v, want nil", result.terminalError)
 	}
+	if result.aggregatedContent != "custom-message" {
+		t.Fatalf(
+			"aggregated content = %q, want custom-message",
+			result.aggregatedContent,
+		)
+	}
+	if len(result.aggregatedContentParts) != 1 ||
+		result.aggregatedContentParts[0].Text == nil ||
+		*result.aggregatedContentParts[0].Text != replacementPartText {
+		t.Fatalf(
+			"aggregated content parts = %#v, want replacement part",
+			result.aggregatedContentParts,
+		)
+	}
 	if len(eventChan) != 2 {
 		t.Fatalf("emitted event count = %d, want 2", len(eventChan))
 	}
-	<-eventChan
+	staleEvent := <-eventChan
+	if got := staleEvent.Response.Choices[0].Delta.Content; got != "stale" {
+		t.Fatalf("initial artifact delta = %q, want stale", got)
+	}
 	replacementEvent := <-eventChan
 	replacementChoice := replacementEvent.Response.Choices[0]
 	if replacementChoice.Message.Role != model.RoleAssistant ||
 		replacementChoice.Message.Content != "custom-message" ||
-		model.HasPayload(replacementChoice.Delta) {
+		len(replacementChoice.Message.ContentParts) != 1 ||
+		!reflect.DeepEqual(replacementChoice.Delta, model.Message{}) {
 		t.Fatalf(
 			"replacement event = %#v, want preserved custom Message",
 			replacementEvent,
 		)
+	}
+
+	finalEvents := make(chan *event.Event, 1)
+	remote.emitFinalEvent(
+		context.Background(),
+		&agent.Invocation{InvocationID: "invocation"},
+		finalEvents,
+		result.responseID,
+		result.aggregatedContent,
+		result.aggregatedContentParts,
+	)
+	finalEvent := <-finalEvents
+	finalChoice := finalEvent.Response.Choices[0]
+	if !finalEvent.Response.Done || finalEvent.Response.IsPartial ||
+		finalChoice.Message.Role != model.RoleAssistant ||
+		finalChoice.Message.Content != "custom-message" ||
+		len(finalChoice.Message.ContentParts) != 1 ||
+		finalChoice.Message.ContentParts[0].Text == nil ||
+		*finalChoice.Message.ContentParts[0].Text != replacementPartText {
+		t.Fatalf(
+			"final event = %#v, want complete replacement Message",
+			finalEvent,
+		)
+	}
+}
+
+func TestMarkArtifactReplacementSnapshotMovesExtendedDeltaPayload(t *testing.T) {
+	tests := []struct {
+		name  string
+		delta model.Message
+	}{
+		{
+			name: "tool call",
+			delta: model.Message{
+				Role:      model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{ID: "call"}},
+			},
+		},
+		{
+			name: "tool id",
+			delta: model.Message{
+				Role:   model.RoleTool,
+				ToolID: "call",
+			},
+		},
+		{
+			name: "tool name",
+			delta: model.Message{
+				Role:     model.RoleTool,
+				ToolName: "lookup",
+			},
+		},
+		{
+			name: "reasoning signature",
+			delta: model.Message{
+				Role:               model.RoleAssistant,
+				ReasoningSignature: "signature",
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			evt := &event.Event{Response: &model.Response{
+				IsPartial: true,
+				Choices: []model.Choice{{
+					Delta: test.delta,
+				}},
+			}}
+			markArtifactReplacementSnapshot(evt, true)
+			choice := evt.Response.Choices[0]
+			if !reflect.DeepEqual(choice.Message, test.delta) ||
+				!reflect.DeepEqual(choice.Delta, model.Message{}) {
+				t.Fatalf(
+					"replacement choice = %#v, want Message %#v and empty Delta",
+					choice,
+					test.delta,
+				)
+			}
+		})
 	}
 }
 
