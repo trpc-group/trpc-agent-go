@@ -2,6 +2,8 @@ module trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent
 
 go 1.24.1
 
+// ci: module cache refresh marker
+
 replace trpc.group/trpc-go/trpc-agent-go => ../..
 
 require (
