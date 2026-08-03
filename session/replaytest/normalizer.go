@@ -49,10 +49,19 @@ func normalizeState(state session.StateMap) map[string]string {
 }
 
 // normalizeEvents strips auto-generated fields (ID, Timestamp)
-// and normalizes event content for comparison.
+// and normalizes event content for comparison. Events are sorted by
+// timestamp first: backends that return events in map-iteration order
+// (in-memory) then agree with backends that preserve append order
+// (file-persisted). Timestamps are deterministic (baseTime + index),
+// so this restores the original event sequence.
 func normalizeEvents(events []event.Event) []NormalizedEvent {
-	result := make([]NormalizedEvent, 0, len(events))
-	for _, e := range events {
+	sorted := make([]event.Event, len(events))
+	copy(sorted, events)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return sorted[i].Timestamp.Before(sorted[j].Timestamp)
+	})
+	result := make([]NormalizedEvent, 0, len(sorted))
+	for _, e := range sorted {
 		ne := NormalizedEvent{
 			Author:    e.Author,
 			FilterKey: e.FilterKey,

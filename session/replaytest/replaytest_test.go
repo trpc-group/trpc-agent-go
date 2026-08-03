@@ -10,6 +10,7 @@ package replaytest
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -40,9 +41,11 @@ func (fakeSummarizer) SetModel(model.Model)                {}
 func (fakeSummarizer) Metadata() map[string]any            { return nil }
 
 // standardBackends returns the available backends for consistency
-// comparison. Currently only InMemory is available in the module;
-// additional backends (SQLite, Redis, Postgres, MySQL, ClickHouse)
-// can be added when their packages are enabled.
+// comparison. The default matrix is the in-memory pair; the
+// REPLAYTEST_BACKENDS environment variable (comma-separated backend
+// names, e.g. "inmemory,persistent") selects a subset, so the
+// file-persisted backend can be pulled into the matrix for cross-backend
+// runs.
 func standardBackends(t *testing.T) []Backend {
 	t.Helper()
 
@@ -54,7 +57,7 @@ func standardBackends(t *testing.T) []Backend {
 	)
 	inmemMem := memoryinmemory.NewMemoryService()
 
-	return []Backend{
+	all := []Backend{
 		{
 			Name:           "inmemory",
 			SessionService: inmemSess,
@@ -82,7 +85,35 @@ func standardBackends(t *testing.T) []Backend {
 				return nil
 			},
 		},
+		newPersistentBackend(t.TempDir(), "persistent"),
 	}
+
+	if env := os.Getenv("REPLAYTEST_BACKENDS"); env != "" {
+		want := make(map[string]bool)
+		for _, n := range strings.Split(env, ",") {
+			want[strings.TrimSpace(n)] = true
+		}
+		var selected []Backend
+		for _, b := range all {
+			if want[b.Name] {
+				selected = append(selected, b)
+			}
+		}
+		if len(selected) == 0 {
+			t.Fatalf("REPLAYTEST_BACKENDS=%q matched no known backends (%s)",
+				env, strings.Join(backendNames(all), ", "))
+		}
+		return selected
+	}
+	return all[:2]
+}
+
+func backendNames(backends []Backend) []string {
+	names := make([]string, len(backends))
+	for i, b := range backends {
+		names[i] = b.Name
+	}
+	return names
 }
 
 // replayCases returns all 10 replay cases defined by the acceptance
@@ -1086,7 +1117,7 @@ func TestPersistentBackendCrossBackendComparison(t *testing.T) {
 // backend, injects each deterministic inconsistency into the resulting
 // snapshot, and asserts the comparator reports a diff — acceptance #2
 // (100% detection of injected inconsistencies) and #4 (summary
-// loss/overwrite/wrong-filter-key).
+// loss/overwrite/wrong-session/wrong-filter-key).
 func TestFaultInjectionDetection(t *testing.T) {
 	backend := newPersistentBackend(t.TempDir(), "persistent")
 	injected := 0

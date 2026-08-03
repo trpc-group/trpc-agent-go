@@ -20,13 +20,14 @@ import (
 type FaultKind string
 
 const (
-	FaultDropMemory         FaultKind = "drop_memory"
-	FaultDropSummary        FaultKind = "drop_summary"
-	FaultOverwriteSummary   FaultKind = "overwrite_summary"
-	FaultWrongSummaryFilter FaultKind = "wrong_summary_filter"
-	FaultDropTrack          FaultKind = "drop_track"
-	FaultDropEvent          FaultKind = "drop_event"
-	FaultCorruptState       FaultKind = "corrupt_state"
+	FaultDropMemory          FaultKind = "drop_memory"
+	FaultDropSummary         FaultKind = "drop_summary"
+	FaultOverwriteSummary    FaultKind = "overwrite_summary"
+	FaultWrongSummaryFilter  FaultKind = "wrong_summary_filter"
+	FaultWrongSummarySession FaultKind = "wrong_summary_session"
+	FaultDropTrack           FaultKind = "drop_track"
+	FaultDropEvent           FaultKind = "drop_event"
+	FaultCorruptState        FaultKind = "corrupt_state"
 )
 
 // FaultKinds lists every supported injection, so a test can iterate over all.
@@ -35,6 +36,7 @@ var FaultKinds = []FaultKind{
 	FaultDropSummary,
 	FaultOverwriteSummary,
 	FaultWrongSummaryFilter,
+	FaultWrongSummarySession,
 	FaultDropTrack,
 	FaultDropEvent,
 	FaultCorruptState,
@@ -70,6 +72,14 @@ func InjectFault(snapshot Snapshot, kind FaultKind) (Snapshot, error) {
 			return Snapshot{}, fmt.Errorf("%s: no summaries to re-filter", kind)
 		}
 		clone.Summaries[0].FilterKey = "INJECTED-wrong-filter"
+	case FaultWrongSummarySession:
+		if len(clone.Summaries) == 0 {
+			return Snapshot{}, fmt.Errorf("%s: no summaries to re-attribute", kind)
+		}
+		// The summary was recorded under another session's key. In the
+		// normalized view the session dimension is carried by the
+		// filter key, so this surfaces as a cross-session mismatch.
+		clone.Summaries[0].FilterKey = "INJECTED-other-session|default"
 	case FaultDropTrack:
 		if len(clone.Tracks) == 0 {
 			return Snapshot{}, fmt.Errorf("%s: no tracks to drop", kind)

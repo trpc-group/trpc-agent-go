@@ -19,7 +19,7 @@
 - **`comparator.go`**：快照深度比较，支持 `allowed_diff`（backend 对 + 段落 + 路径通配符），
   并区分"state 键缺失 vs 值为空"、memory/track 按内容 one-to-one 配对。
 - **`fault.go`**：确定性故障注入（丢 memory/summary/track/event、覆盖 summary、错 filter-key、
-  篡改 state），用于验证 comparator 能 100% 检出人为注入的不一致。
+  错 session 归属、篡改 state），用于验证 comparator 能 100% 检出人为注入的不一致。
 
 ## 用法
 
@@ -43,6 +43,16 @@ go test ./session/replaytest/ -count=1
 # 见 TestPersistentBackendCrossBackendComparison：矩阵会自动产出跨后端 DiffReport
 ```
 
+默认矩阵是 in-memory 双实例；需要把文件持久化后端拉进矩阵做跨后端对比时，用环境变量
+选择后端（逗号分隔，按名称过滤）：
+
+```bash
+REPLAYTEST_BACKENDS=inmemory,persistent go test ./session/replaytest/ -count=1 -run TestInMemorySessionReplayEventsStateAndMemoryMatch
+```
+
+跨后端对比会如实暴露不同后端实现间的真实语义差异（例如检索后端对短查询的匹配行为不同），
+这正是框架要发现的回归。
+
 ## 验收标准对照
 
 | 验收标准 | 实现 |
@@ -50,7 +60,7 @@ go test ./session/replaytest/ -count=1
 | InMemory + 一个持久化/模拟持久化后端对比 | `standardBackends` 含 in-memory；`persistent_backend.go` 提供文件持久化后端；`TestPersistentBackendRunsAllCases` / `TestPersistentBackendCrossBackendComparison` |
 | 10 条公开 case 100% 检出注入不一致 | `TestFaultInjectionDetection`：每个 case × 每种故障类型，断言 comparator 必报 diff |
 | 正常 case 误报率 ≤ 5% | 相同 in-memory 后端对比零 unallowed diff（`TestInMemorySessionReplayEventsStateAndMemoryMatch`）；比较器只在真实差异上报 |
-| summary 丢失/覆盖/错归属/错 filter-key 检出率 100% | `FaultDropSummary` / `FaultOverwriteSummary` / `FaultWrongSummaryFilter` 全覆盖 |
+| summary 丢失/覆盖/错 session/错 filter-key 检出率 100% | `FaultDropSummary` / `FaultOverwriteSummary` / `FaultWrongSummarySession` / `FaultWrongSummaryFilter` 全覆盖 |
 | 差异报告定位到 session id / event index / summary filter-key / 字段路径 / memory id / track name | `FieldDiff` 字段完整（SessionID/EventIndex/MemoryID/SummaryID/TrackName/FieldPath）；样例见 `testdata/session_memory_summary_track_diff_report.json` |
 | 轻量模式 ≤ 30 秒 | 纯内存+文件后端，全量测试 < 2 秒 |
 
