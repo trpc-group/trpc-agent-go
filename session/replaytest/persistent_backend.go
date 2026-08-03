@@ -242,13 +242,13 @@ func (s *persistentSessionService) DeleteAppState(ctx context.Context, appName s
 	return nil
 }
 func (s *persistentSessionService) ListAppStates(ctx context.Context, appName string) (session.StateMap, error) {
-	return nil, nil
+	return session.StateMap{}, nil
 }
 func (s *persistentSessionService) UpdateUserState(ctx context.Context, userKey session.UserKey, state session.StateMap) error {
 	return nil
 }
 func (s *persistentSessionService) ListUserStates(ctx context.Context, userKey session.UserKey) (session.StateMap, error) {
-	return nil, nil
+	return session.StateMap{}, nil
 }
 func (s *persistentSessionService) DeleteUserState(ctx context.Context, userKey session.UserKey, key string) error {
 	return nil

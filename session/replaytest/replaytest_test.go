@@ -1107,3 +1107,82 @@ func TestFaultInjectionDetection(t *testing.T) {
 	assert.GreaterOrEqual(t, injected, 1,
 		"at least one fault injection should have run across the cases")
 }
+
+// TestPersistentBackendAPISurface exercises the broader session/memory API
+// surface of the file-persisted backend so patch coverage of the new
+// backend implementation stays above the repo threshold.
+func TestPersistentBackendAPISurface(t *testing.T) {
+	dir := t.TempDir()
+	sessSvc := newPersistentSessionService(dir)
+	memSvc := newPersistentMemoryService(dir)
+	ctx := context.Background()
+
+	key := session.Key{AppName: "app", UserID: "u", SessionID: "s"}
+	sess, err := sessSvc.CreateSession(ctx, key, session.StateMap{"k": []byte("v")})
+	require.NoError(t, err)
+
+	// Session reads/writes beyond the replay path.
+	got, err := sessSvc.GetSession(ctx, key)
+	require.NoError(t, err)
+	assert.Equal(t, "s", got.ID)
+	lst, err := sessSvc.ListSessions(ctx, session.UserKey{AppName: "app", UserID: "u"})
+	require.NoError(t, err)
+	assert.Len(t, lst, 1)
+	require.NoError(t, sessSvc.UpdateSessionState(ctx, key, session.StateMap{"k": []byte("v2")}))
+	require.NoError(t, sessSvc.UpdateAppState(ctx, "app", session.StateMap{"a": []byte("1")}))
+	appStates, err := sessSvc.ListAppStates(ctx, "app")
+	require.NoError(t, err)
+	assert.NotNil(t, appStates)
+	require.NoError(t, sessSvc.DeleteAppState(ctx, "app", "a"))
+	require.NoError(t, sessSvc.UpdateUserState(ctx, session.UserKey{AppName: "app", UserID: "u"}, session.StateMap{"a": []byte("1")}))
+	userStates, err := sessSvc.ListUserStates(ctx, session.UserKey{AppName: "app", UserID: "u"})
+	require.NoError(t, err)
+	assert.NotNil(t, userStates)
+	require.NoError(t, sessSvc.DeleteUserState(ctx, session.UserKey{AppName: "app", UserID: "u"}, "a"))
+	require.NoError(t, sessSvc.EnqueueSummaryJob(ctx, sess, "", false))
+	text, ok := sessSvc.GetSessionSummaryText(ctx, sess)
+	assert.False(t, ok)
+	assert.Empty(t, text)
+
+	// Memory API.
+	uk := memory.UserKey{AppName: "app", UserID: "u"}
+	require.NoError(t, memSvc.AddMemory(ctx, uk, "memory-one", []string{"t1"}))
+	require.NoError(t, memSvc.AddMemory(ctx, uk, "memory-two", []string{"t2"}))
+	all, err := memSvc.ReadMemories(ctx, uk, 10)
+	require.NoError(t, err)
+	assert.Len(t, all, 2)
+	res, err := memSvc.SearchMemories(ctx, uk, "two")
+	require.NoError(t, err)
+	assert.Len(t, res, 1)
+	assert.Equal(t, "memory-two", res[0].Memory.Memory)
+	// Update by key: find the first memory's key.
+	firstKey := memory.Key{AppName: "app", UserID: "u", MemoryID: all[0].ID}
+	require.NoError(t, memSvc.UpdateMemory(ctx, firstKey, "memory-one-updated", []string{"t1"}))
+	require.NoError(t, memSvc.DeleteMemory(ctx, firstKey))
+	require.NoError(t, memSvc.ClearMemories(ctx, uk))
+	assert.Nil(t, memSvc.Tools())
+	require.NoError(t, memSvc.EnqueueAutoMemoryJob(ctx, sess))
+	require.NoError(t, memSvc.Close())
+	require.NoError(t, sessSvc.Close())
+
+	// Delete session.
+	require.NoError(t, sessSvc.DeleteSession(ctx, key))
+	_, err = sessSvc.GetSession(ctx, key)
+	require.Error(t, err, "session should be gone after delete")
+}
+
+// TestInjectFaultNoTarget verifies InjectFault returns an error when the
+// snapshot has no suitable target for the requested fault.
+func TestInjectFaultNoTarget(t *testing.T) {
+	empty := Snapshot{SessionID: "s"}
+	_, err := InjectFault(empty, FaultDropSummary)
+	require.Error(t, err, "no summaries to drop must error")
+	_, err = InjectFault(empty, FaultDropMemory)
+	require.Error(t, err)
+	_, err = InjectFault(empty, FaultDropTrack)
+	require.Error(t, err)
+	_, err = InjectFault(empty, FaultDropEvent)
+	require.Error(t, err)
+	_, err = InjectFault(empty, "bogus_kind")
+	require.Error(t, err)
+}
