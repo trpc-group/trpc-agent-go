@@ -119,8 +119,8 @@ func TestPrepareAffectedModuleManifestAllowsDeletedLeafAndCrossModuleRename(t *t
 	if err != nil {
 		t.Fatalf("prepare manifest: %v", err)
 	}
-	if want := []string{"new", "old"}; !reflect.DeepEqual(modules, want) {
-		t.Fatalf("modules = %#v, want %#v", modules, want)
+	if want := []string{"new", "old"}; !reflect.DeepEqual(sandboxModulePaths(modules), want) {
+		t.Fatalf("modules = %#v, want %#v", sandboxModulePaths(modules), want)
 	}
 }
 
@@ -136,8 +136,8 @@ func TestPrepareAffectedModuleManifestIncludesBinaryGo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepare manifest: %v", err)
 	}
-	if want := []string{"."}; !reflect.DeepEqual(modules, want) {
-		t.Fatalf("modules = %#v, want %#v", modules, want)
+	if want := []string{"."}; !reflect.DeepEqual(sandboxModulePaths(modules), want) {
+		t.Fatalf("modules = %#v, want %#v", sandboxModulePaths(modules), want)
 	}
 }
 
@@ -184,8 +184,8 @@ func TestPrepareAffectedModuleManifestCanonicalizesCaseOnlyRename(t *testing.T) 
 	if err != nil {
 		t.Fatalf("prepare manifest: %v", err)
 	}
-	if want := []string{actualModule}; !reflect.DeepEqual(modules, want) {
-		t.Fatalf("modules = %#v, want %#v", modules, want)
+	if want := []string{actualModule}; !reflect.DeepEqual(sandboxModulePaths(modules), want) {
+		t.Fatalf("modules = %#v, want %#v", sandboxModulePaths(modules), want)
 	}
 }
 

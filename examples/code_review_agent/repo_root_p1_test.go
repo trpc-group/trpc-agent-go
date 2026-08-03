@@ -300,8 +300,8 @@ func TestNestedRepoRootSupportsASTSnapshotAndModuleManifest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(modules, []string{"."}) {
-		t.Fatalf("affected modules = %#v, want root module", modules)
+	if !reflect.DeepEqual(sandboxModulePaths(modules), []string{"."}) {
+		t.Fatalf("affected modules = %#v, want root module", sandboxModulePaths(modules))
 	}
 }
 

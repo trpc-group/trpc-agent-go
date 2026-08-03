@@ -82,13 +82,14 @@ func (s *repeatedStrings) Set(value string) error {
 }
 
 type reviewInput struct {
-	kind            string
-	source          string
-	diff            []byte
-	repoRoot        string
-	repoFiles       []string
-	sandboxRepoRoot string
-	fixture         *fixtureItem
+	kind                     string
+	source                   string
+	diff                     []byte
+	repoRoot                 string
+	repoFiles                []string
+	sandboxRepoRoot          string
+	sandboxDiagnosticModules map[string]string
+	fixture                  *fixtureItem
 }
 
 type reviewSummary struct {
@@ -564,12 +565,12 @@ func (cfg *config) validateMode() error {
 func normalizeFileFilters(raw []string) (repeatedStrings, error) {
 	normalized := make(repeatedStrings, 0, len(raw))
 	for _, item := range raw {
-		value := strings.TrimSpace(item)
+		value := item
 		if value == "" {
 			return nil, errors.New("--files contains an empty path")
 		}
 		if strings.ContainsRune(value, '\x00') {
-			return nil, fmt.Errorf("--files path %q contains a NUL byte", value)
+			return nil, fmt.Errorf("--files path %q contains a NUL byte", item)
 		}
 
 		value = strings.ReplaceAll(value, "\\", "/")

@@ -43,9 +43,12 @@ from that canonical root through a fixed argument array. Git execution disables
 external diff, textconv, fsmonitor, pagers, inherited `GIT_*` configuration,
 and interactive prompting before repository configuration is consulted. The
 `--files` values are repository-root-relative literal Git paths and cannot
-escape the repository. A scoped review does not upload files outside that
-scope, so repository test, vet, and staticcheck commands are skipped with a
-human-review warning instead of running against an incomplete Go module.
+escape the repository. Whitespace is significant: spaces around comma-separated
+entries are treated as part of the file name, so use repeated `--files` flags
+unless that whitespace is intentional. A scoped review does not upload files
+outside that scope, so repository test, vet, and staticcheck commands are
+skipped with a human-review warning instead of running against an incomplete Go
+module.
 
 ## Runtime Modes
 
@@ -169,24 +172,35 @@ exist as regular snapshot files. Go or module metadata changes that cannot
 obtain a complete snapshot or safe mapping require human review instead of
 receiving a pass. The snapshot root contains the reserved
 `.trpc-agent-review-modules` manifest with
-sorted, repository-relative module directories separated by NUL bytes; `.` names
-the root module. Workspace directories use the same format in
-`.trpc-agent-review-workspaces`. Snapshot enumeration and copying share a 30-second deadline and
-enforce fixed limits for tracked entries, unique directories, path bytes, and
-actual copied content. A timeout or limit failure skips repository-dependent
-checks and produces a human-review warning. All evidence, sandbox output,
-governance reasons, reports, and stored fields pass through redaction before
-persistence.
+sorted NUL-separated `<module-path>\0<module-token>\0` records; `.` names the
+root module. Each token is freshly generated for the review as
+`m_<32 lowercase hex characters>`. Raw module paths never enter diagnostic
+control frames. The check script emits only
+`==> trpc-agent-review-module-v1 <mode> <module-token>` banners, and the parser
+accepts a banner only when its mode matches the current command and its token is
+registered by that review. Old, malformed, or unknown `==>` control lines fail
+closed and retain a generic sandbox warning for human review. Workspace
+directories remain NUL-separated paths in `.trpc-agent-review-workspaces`; the
+script logs them with shell escaping and without the `==>` control prefix.
+Snapshot enumeration and copying share a 30-second deadline and enforce fixed
+limits for tracked entries, unique directories, path bytes, and actual copied
+content. A timeout or limit failure skips repository-dependent checks and
+produces a human-review warning. All evidence, sandbox output, governance
+reasons, reports, and stored fields pass through redaction before persistence.
 When explicitly enabled, `go test` stdout and stderr are controlled by reviewed
 tests, package initializers, and `TestMain`, so they remain only in the redacted
 sandbox run record and never become high-confidence findings. Every failed or
 otherwise abnormal go test run retains a generic sandbox warning and requires
-human review. Diagnostics from `go vet` and staticcheck are parsed from stdout
-and stderr because those commands do not execute reviewed tests. Such a
-diagnostic becomes a high-confidence finding only when its module-qualified path
-uniquely maps to a changed file and its line is inside a new-side hunk;
-ambiguous, out-of-hunk, truncated, or otherwise incomplete output retains a
-governance warning for human review.
+human review. Reviewed tests can read and print the module tokens in their
+isolated repository copy, but test output is never parsed as diagnostics and
+each repository command receives a fresh isolated copy. Test-side filesystem
+mutations therefore cannot reach the later vet or staticcheck command, while
+vet and staticcheck do not execute reviewed code that could read the manifest.
+Diagnostics from `go vet` and staticcheck are parsed from stdout and stderr.
+Such a diagnostic becomes a high-confidence finding only when its authenticated
+module-qualified path uniquely maps to a changed file and its line is inside a
+new-side hunk; ambiguous, out-of-hunk, truncated, protocol-invalid, or otherwise
+incomplete output retains a governance warning for human review.
 Synthetic skipped runs remain visible but do not count as runner tool calls.
 SQLite stores a review task, diff summary, decisions, sandbox runs, findings,
 warnings, metrics, artifacts, and final report metadata, but not the raw diff.

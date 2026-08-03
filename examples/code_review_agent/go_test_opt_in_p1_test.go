@@ -96,9 +96,10 @@ func TestSkipGoTestRecordsSyntheticRunWithoutPermissionOrExecution(t *testing.T)
 					enableStaticcheck: tt.enableStaticcheck,
 				},
 				reviewInput{
-					kind:            inputKindRepoPath,
-					repoRoot:        t.TempDir(),
-					sandboxRepoRoot: t.TempDir(),
+					kind:                     inputKindRepoPath,
+					repoRoot:                 t.TempDir(),
+					sandboxRepoRoot:          t.TempDir(),
+					sandboxDiagnosticModules: testRootDiagnosticModules(),
 				},
 				parsed,
 				runtimeHooks{sandboxRunnerFactory: func(context.Context) (sandboxRunner, error) {
@@ -155,9 +156,10 @@ func TestSkipGoTestFalseExecutesOriginalCommandPath(t *testing.T) {
 		context.Background(),
 		config{effectiveRuntime: runtimeFake, skipGoTest: false},
 		reviewInput{
-			kind:            inputKindRepoPath,
-			repoRoot:        t.TempDir(),
-			sandboxRepoRoot: t.TempDir(),
+			kind:                     inputKindRepoPath,
+			repoRoot:                 t.TempDir(),
+			sandboxRepoRoot:          t.TempDir(),
+			sandboxDiagnosticModules: testRootDiagnosticModules(),
 		},
 		parseUnifiedDiff([]byte(minimalDiff())),
 		runtimeHooks{sandboxRunner: runner},

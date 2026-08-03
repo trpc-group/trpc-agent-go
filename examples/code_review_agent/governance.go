@@ -106,13 +106,14 @@ func (s codeReviewSkill) Close() error {
 type commandKind string
 
 type commandSpec struct {
-	Kind           commandKind
-	Executable     string
-	Args           []string
-	Cwd            string
-	Env            map[string]string
-	Inputs         []inputMapping
-	TimeoutSeconds int
+	Kind              commandKind
+	Executable        string
+	Args              []string
+	Cwd               string
+	Env               map[string]string
+	Inputs            []inputMapping
+	DiagnosticModules map[string]string
+	TimeoutSeconds    int
 }
 
 type inputMapping struct {
@@ -226,7 +227,11 @@ func runGovernance(
 				limits,
 			)
 			if snapshotErr == nil {
-				_, snapshotErr = prepareAffectedModuleManifest(snapshotCtx, snapshot.Root, parsed)
+				var manifest sandboxModuleManifest
+				manifest, snapshotErr = prepareAffectedModuleManifest(snapshotCtx, snapshot.Root, parsed)
+				if snapshotErr == nil {
+					plannedInput.sandboxDiagnosticModules = cloneStringMap(manifest.ModulesByToken)
+				}
 			}
 			cancel()
 			if snapshotErr != nil {
@@ -563,12 +568,15 @@ func planCommands(cfg config, input reviewInput, parsed parsedDiff) []commandSpe
 
 	inputs := commandInputs(input)
 	env := commandEnv(input)
-	commands = append(commands,
-		newCommandSpec(commandCheckGoTest, inputs, env),
-		newCommandSpec(commandCheckGoVet, inputs, env),
-	)
+	testSpec := newCommandSpec(commandCheckGoTest, inputs, env)
+	testSpec.DiagnosticModules = cloneStringMap(input.sandboxDiagnosticModules)
+	vetSpec := newCommandSpec(commandCheckGoVet, inputs, env)
+	vetSpec.DiagnosticModules = cloneStringMap(input.sandboxDiagnosticModules)
+	commands = append(commands, testSpec, vetSpec)
 	if cfg.enableStaticcheck {
-		commands = append(commands, newCommandSpec(commandCheckStaticcheck, inputs, env))
+		staticcheckSpec := newCommandSpec(commandCheckStaticcheck, inputs, env)
+		staticcheckSpec.DiagnosticModules = cloneStringMap(input.sandboxDiagnosticModules)
+		commands = append(commands, staticcheckSpec)
 	}
 	return commands
 }
@@ -666,7 +674,36 @@ func gateCommand(spec commandSpec) governanceDecision {
 	if err := validateCommandInputs(spec.Inputs); err != nil {
 		return denyFilterDecision(spec.Kind, err.Error())
 	}
+	if err := validateCommandDiagnosticModules(spec.Kind, spec.DiagnosticModules); err != nil {
+		return denyFilterDecision(spec.Kind, err.Error())
+	}
 	return governanceDecision{Command: string(spec.Kind), Decision: governanceDecisionAllow}
+}
+
+func validateCommandDiagnosticModules(kind commandKind, modules map[string]string) error {
+	if kind == commandCheckGoVersion {
+		if len(modules) != 0 {
+			return fmt.Errorf("go version command must not carry diagnostic modules")
+		}
+		return nil
+	}
+	if len(modules) == 0 {
+		return fmt.Errorf("repository command requires diagnostic modules")
+	}
+	seenModules := make(map[string]bool, len(modules))
+	for token, module := range modules {
+		if !isValidSandboxModuleToken(token) {
+			return fmt.Errorf("diagnostic module token is invalid")
+		}
+		if !isSafeSandboxModulePath(module) {
+			return fmt.Errorf("diagnostic module path %q is invalid", module)
+		}
+		if seenModules[module] {
+			return fmt.Errorf("diagnostic module path %q is duplicated", module)
+		}
+		seenModules[module] = true
+	}
+	return nil
 }
 
 func isKnownCommandKind(kind commandKind) bool {

@@ -27,7 +27,7 @@ validate_workspaces() {
   while IFS= read -r -d '' workspace; do
     case "$workspace" in
       ""|/*|..|../*|*/..|*/../*)
-        echo "unsafe workspace path: $workspace" >&2
+        printf 'unsafe workspace path: %q\n' "$workspace" >&2
         return 2
         ;;
     esac
@@ -36,13 +36,13 @@ validate_workspaces() {
       workspace_dir="$repo_dir/$workspace"
     fi
     if [ ! -d "$workspace_dir" ]; then
-      echo "workspace directory is missing: $workspace" >&2
+      printf 'workspace directory is missing: %q\n' "$workspace" >&2
       status=1
       continue
     fi
     workspace_count=$((workspace_count + 1))
     if [ -f "$workspace_dir/go.work" ]; then
-      echo "==> work $workspace"
+      printf 'workspace validation: %q\n' "$workspace"
       (cd "$workspace_dir" && go work edit -json >/dev/null) || status=1
     fi
   done < "$workspace_manifest"
@@ -61,16 +61,37 @@ run_in_modules() {
   fi
 
   local module=""
+  local module_token=""
   local module_dir=""
-  local module_count=0
   local status=0
+  if [ ! -s "$module_manifest" ]; then
+    echo "affected module manifest is empty" >&2
+    return 2
+  fi
   if ! validate_workspaces; then
     status=1
   fi
-  while IFS= read -r -d '' module; do
+  while true; do
+    module=""
+    if ! IFS= read -r -d '' module; then
+      if [ -n "$module" ]; then
+        echo "affected module manifest has an incomplete record" >&2
+        return 2
+      fi
+      break
+    fi
+    module_token=""
+    if ! IFS= read -r -d '' module_token; then
+      echo "affected module manifest has an incomplete record" >&2
+      return 2
+    fi
+    if [[ ! "$module_token" =~ ^m_[0-9a-f]{32}$ ]]; then
+      printf 'invalid module token: %q\n' "$module_token" >&2
+      return 2
+    fi
     case "$module" in
       ""|/*|..|../*|*/..|*/../*)
-        echo "unsafe module path: $module" >&2
+        printf 'unsafe module path: %q\n' "$module" >&2
         return 2
         ;;
     esac
@@ -79,20 +100,14 @@ run_in_modules() {
       module_dir="$repo_dir/$module"
     fi
     if [ ! -f "$module_dir/go.mod" ]; then
-      echo "module file is missing: $module/go.mod" >&2
-      status=1
-      continue
+      printf 'module file is missing: %q/go.mod\n' "$module" >&2
+      return 2
     fi
-    module_count=$((module_count + 1))
-    printf '==> %s %s\n' "$mode" "$module"
-    printf '==> %s %s\n' "$mode" "$module" >&2
+    printf '==> trpc-agent-review-module-v1 %s %s\n' "$mode" "$module_token"
+    printf '==> trpc-agent-review-module-v1 %s %s\n' "$mode" "$module_token" >&2
     (cd "$module_dir" && "$@") || status=1
   done < "$module_manifest"
 
-  if [ "$module_count" -eq 0 ]; then
-    echo "affected module manifest is empty" >&2
-    return 2
-  fi
   return "$status"
 }
 

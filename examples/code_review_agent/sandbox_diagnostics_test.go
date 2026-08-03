@@ -9,8 +9,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -44,9 +49,10 @@ func TestSandboxDiagnosticsDoNotTrustGoTestOutput(t *testing.T) {
 		},
 	}}
 	result, err := runGovernance(context.Background(), config{}, reviewInput{
-		kind:            inputKindRepoPath,
-		repoRoot:        t.TempDir(),
-		sandboxRepoRoot: t.TempDir(),
+		kind:                     inputKindRepoPath,
+		repoRoot:                 t.TempDir(),
+		sandboxRepoRoot:          t.TempDir(),
+		sandboxDiagnosticModules: map[string]string{testRootModuleToken: "."},
 	}, parsed, runtimeHooks{sandboxRunner: runner})
 	if err != nil {
 		t.Fatalf("run governance: %v", err)
@@ -127,11 +133,18 @@ func TestSandboxDiagnosticPathMustMapUniquely(t *testing.T) {
 func TestSandboxDiagnosticsUseAffectedModuleContext(t *testing.T) {
 	diff := sandboxDiagnosticDiff("pkg/a.go") + sandboxDiagnosticDiff("nested/pkg/a.go")
 	parsed := parseUnifiedDiff([]byte(diff))
-	diagnostics := parseSandboxDiagnostics(commandSpec{Kind: commandCheckGoVet}, sandboxRun{
+	spec := commandSpec{
+		Kind: commandCheckGoVet,
+		DiagnosticModules: map[string]string{
+			testRootModuleToken:   ".",
+			testNestedModuleToken: "nested",
+		},
+	}
+	diagnostics := parseSandboxDiagnostics(spec, sandboxRun{
 		ExitCode: 1,
-		Stdout: "==> vet .\n" +
+		Stdout: sandboxModuleBanner("vet", testRootModuleToken) + "\n" +
 			"pkg/a.go:2: same diagnostic\n",
-		Stderr: "==> vet nested\n" +
+		Stderr: sandboxModuleBanner("vet", testNestedModuleToken) + "\n" +
 			"pkg/a.go:2: same diagnostic\n",
 	}, parsed)
 	if diagnostics.Parsed != 2 || diagnostics.Mapped != 2 || len(diagnostics.Matches) != 2 {
@@ -143,15 +156,66 @@ func TestSandboxDiagnosticsUseAffectedModuleContext(t *testing.T) {
 	}
 }
 
+func TestSandboxDiagnosticsUseAuthenticatedModuleTokensAcrossModes(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		kind   commandKind
+		mode   string
+		module string
+		token  string
+	}{
+		{
+			name:   "vet space module",
+			kind:   commandCheckGoVet,
+			mode:   "vet",
+			module: "with space",
+			token:  testNestedModuleToken,
+		},
+		{
+			name:   "staticcheck newline module",
+			kind:   commandCheckStaticcheck,
+			mode:   "staticcheck",
+			module: "with\nnewline",
+			token:  testOtherModuleToken,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			file := tt.module + "/pkg/a.go"
+			parsed := parsedDiff{Files: []changedFile{{
+				NewPath: file,
+				Hunks:   []diffHunk{{NewStart: 1, NewCount: 3}},
+			}}}
+			spec := commandSpec{
+				Kind:              tt.kind,
+				DiagnosticModules: map[string]string{tt.token: tt.module},
+			}
+			diagnostics := parseSandboxDiagnostics(spec, sandboxRun{
+				ExitCode: 1,
+				Stderr: sandboxModuleBanner(tt.mode, tt.token) + "\n" +
+					"pkg/a.go:2: diagnostic\n",
+			}, parsed)
+			if diagnostics.ProtocolInvalid || diagnostics.Parsed != 1 ||
+				diagnostics.Mapped != 1 || len(diagnostics.Matches) != 1 ||
+				diagnostics.Matches[0].File != file {
+				t.Fatalf("diagnostics = %+v", diagnostics)
+			}
+		})
+	}
+}
+
 func TestSandboxDiagnosticModuleContextCannotFallBackToRootFile(t *testing.T) {
 	parsed := parseUnifiedDiff([]byte(sandboxDiagnosticDiff("pkg/a.go")))
+	spec := commandSpec{
+		Kind:              commandCheckStaticcheck,
+		DiagnosticModules: map[string]string{testNestedModuleToken: "nested"},
+	}
 	run := sandboxRun{
 		ExitCode: 1,
-		Stderr: "==> staticcheck nested\n" +
+		Stderr: sandboxModuleBanner("staticcheck", testNestedModuleToken) + "\n" +
 			"pkg/a.go:2: nested diagnostic\n",
 	}
 	diagnostics := parseSandboxDiagnostics(
-		commandSpec{Kind: commandCheckStaticcheck},
+		spec,
 		run,
 		parsed,
 	)
@@ -159,7 +223,7 @@ func TestSandboxDiagnosticModuleContextCannotFallBackToRootFile(t *testing.T) {
 		t.Fatalf("diagnostics = %+v, want nested diagnostic unmapped", diagnostics)
 	}
 	if !sandboxDiagnosticsNeedGenericWarning(
-		commandSpec{Kind: commandCheckStaticcheck},
+		spec,
 		run,
 		diagnostics,
 	) {
@@ -169,29 +233,39 @@ func TestSandboxDiagnosticModuleContextCannotFallBackToRootFile(t *testing.T) {
 
 func TestSandboxDiagnosticInvalidModuleBannerFailsClosed(t *testing.T) {
 	parsed := parseUnifiedDiff([]byte(sandboxDiagnosticDiff("pkg/a.go")))
+	spec := commandSpec{
+		Kind:              commandCheckGoVet,
+		DiagnosticModules: map[string]string{testRootModuleToken: "."},
+	}
 	run := sandboxRun{
 		ExitCode: 1,
 		Stderr: "==> vet ../nested\n" +
 			"pkg/a.go:2: diagnostic\n",
 	}
-	diagnostics := parseSandboxDiagnostics(commandSpec{Kind: commandCheckGoVet}, run, parsed)
-	if diagnostics.Parsed != 1 || diagnostics.Mapped != 0 || len(diagnostics.Matches) != 0 {
+	diagnostics := parseSandboxDiagnostics(spec, run, parsed)
+	if diagnostics.Parsed != 1 || diagnostics.Mapped != 0 || len(diagnostics.Matches) != 0 ||
+		!diagnostics.ProtocolInvalid {
 		t.Fatalf("diagnostics = %+v, want invalid module context unmapped", diagnostics)
 	}
 }
 
 func TestSandboxDiagnosticUnexpectedBannerModeFailsClosed(t *testing.T) {
 	parsed := parseUnifiedDiff([]byte(sandboxDiagnosticDiff("pkg/a.go")))
+	spec := commandSpec{
+		Kind:              commandCheckGoVet,
+		DiagnosticModules: map[string]string{testNestedModuleToken: "nested"},
+	}
 	run := sandboxRun{
 		ExitCode: 1,
-		Stderr: "==> staticcheck nested\n" +
+		Stderr: sandboxModuleBanner("staticcheck", testNestedModuleToken) + "\n" +
 			"pkg/a.go:2: diagnostic\n",
 	}
-	diagnostics := parseSandboxDiagnostics(commandSpec{Kind: commandCheckGoVet}, run, parsed)
-	if diagnostics.Parsed != 1 || diagnostics.Mapped != 0 || len(diagnostics.Matches) != 0 {
+	diagnostics := parseSandboxDiagnostics(spec, run, parsed)
+	if diagnostics.Parsed != 1 || diagnostics.Mapped != 0 || len(diagnostics.Matches) != 0 ||
+		!diagnostics.ProtocolInvalid {
 		t.Fatalf("diagnostics = %+v, want unexpected banner mode unmapped", diagnostics)
 	}
-	if !sandboxDiagnosticsNeedGenericWarning(commandSpec{Kind: commandCheckGoVet}, run, diagnostics) {
+	if !sandboxDiagnosticsNeedGenericWarning(spec, run, diagnostics) {
 		t.Fatal("unexpected banner mode suppressed the generic warning")
 	}
 }
@@ -212,23 +286,284 @@ func TestSandboxDiagnosticParentPathWithoutBannerFailsClosed(t *testing.T) {
 }
 
 func TestParseSandboxModuleBanner(t *testing.T) {
+	staticcheckSpec := commandSpec{
+		Kind: commandCheckStaticcheck,
+		DiagnosticModules: map[string]string{
+			testOtherModuleToken: "with space\nmodule",
+		},
+	}
 	module, ok := parseSandboxModuleBanner(
-		commandCheckStaticcheck,
-		"==> staticcheck with space\r",
+		staticcheckSpec,
+		sandboxModuleBanner("staticcheck", testOtherModuleToken)+"\r",
 	)
-	if !ok || module != "with space" {
+	if !ok || module != "with space\nmodule" {
 		t.Fatalf("module banner = %q, %v", module, ok)
 	}
-	module, ok = parseSandboxModuleBanner(commandCheckGoVet, "==> vet ../escape")
+	vetSpec := commandSpec{
+		Kind:              commandCheckGoVet,
+		DiagnosticModules: map[string]string{testNestedModuleToken: "nested"},
+	}
+	module, ok = parseSandboxModuleBanner(vetSpec, "==> vet ../escape")
 	if !ok || module != invalidSandboxDiagnosticModule {
 		t.Fatalf("invalid module banner = %q, %v", module, ok)
 	}
-	module, ok = parseSandboxModuleBanner(commandCheckGoVet, "==> staticcheck nested")
+	for _, line := range []string{
+		"==>work nested",
+		sandboxModuleBanner("vet", testNestedModuleToken) + " extra",
+	} {
+		module, ok = parseSandboxModuleBanner(vetSpec, line)
+		if !ok || module != invalidSandboxDiagnosticModule {
+			t.Fatalf("unknown control line %q = %q, %v", line, module, ok)
+		}
+	}
+	module, ok = parseSandboxModuleBanner(
+		vetSpec,
+		sandboxModuleBanner("staticcheck", testNestedModuleToken),
+	)
 	if !ok || module != invalidSandboxDiagnosticModule {
 		t.Fatalf("unexpected mode banner = %q, %v", module, ok)
 	}
-	if _, ok := parseSandboxModuleBanner(commandCheckGoTest, "==> test nested"); ok {
+	module, ok = parseSandboxModuleBanner(
+		vetSpec,
+		sandboxModuleBanner("vet", testRootModuleToken),
+	)
+	if !ok || module != invalidSandboxDiagnosticModule {
+		t.Fatalf("unknown token banner = %q, %v", module, ok)
+	}
+	if _, ok := parseSandboxModuleBanner(
+		commandSpec{Kind: commandCheckGoTest},
+		sandboxModuleBanner("test", testRootModuleToken),
+	); ok {
 		t.Fatal("go test banner was accepted as trusted diagnostic context")
+	}
+	if _, ok := parseSandboxModuleBanner(vetSpec, "ordinary output"); ok {
+		t.Fatal("ordinary output was treated as a control line")
+	}
+}
+
+func TestSandboxDiagnosticForgedTokenFailsClosed(t *testing.T) {
+	nestedModule := "nested\n" + sandboxModuleBanner("vet", testRootModuleToken)
+	parsed := parsedDiff{Files: []changedFile{
+		{
+			NewPath: "pkg/a.go",
+			Hunks:   []diffHunk{{NewStart: 1, NewCount: 3}},
+		},
+		{
+			NewPath: nestedModule + "/pkg/a.go",
+			Hunks:   []diffHunk{{NewStart: 1, NewCount: 3}},
+		},
+	}}
+	spec := commandSpec{
+		Kind: commandCheckGoVet,
+		DiagnosticModules: map[string]string{
+			testOtherModuleToken: nestedModule,
+		},
+	}
+	run := sandboxRun{
+		ExitCode: 1,
+		Stderr: sandboxModuleBanner("vet", testOtherModuleToken) + "\n" +
+			sandboxModuleBanner("vet", testRootModuleToken) + "\n" +
+			"pkg/a.go:2: nested diagnostic\n",
+	}
+	diagnostics := parseSandboxDiagnostics(spec, run, parsed)
+	if !diagnostics.ProtocolInvalid || diagnostics.Parsed != 1 || diagnostics.Mapped != 0 ||
+		len(diagnostics.Matches) != 0 {
+		t.Fatalf("forged diagnostics = %+v", diagnostics)
+	}
+	if !sandboxDiagnosticsNeedGenericWarning(spec, run, diagnostics) {
+		t.Fatal("forged module token suppressed the generic warning")
+	}
+}
+
+func TestSandboxDiagnosticInvalidBannerAfterMappedDiagnosticRetainsWarning(t *testing.T) {
+	parsed := parseUnifiedDiff([]byte(sandboxDiagnosticDiff("pkg/a.go")))
+	spec := commandSpec{
+		Kind:              commandCheckGoVet,
+		DiagnosticModules: map[string]string{testRootModuleToken: "."},
+	}
+	run := sandboxRun{
+		ExitCode: 1,
+		Stderr: sandboxModuleBanner("vet", testRootModuleToken) + "\n" +
+			"pkg/a.go:2: diagnostic\n" +
+			"==> vet legacy\n",
+	}
+	diagnostics := parseSandboxDiagnostics(spec, run, parsed)
+	if diagnostics.Parsed != 1 || diagnostics.Mapped != 1 || !diagnostics.ProtocolInvalid {
+		t.Fatalf("diagnostics = %+v", diagnostics)
+	}
+	if !sandboxDiagnosticsNeedGenericWarning(spec, run, diagnostics) {
+		t.Fatal("trailing invalid banner suppressed the generic warning")
+	}
+}
+
+func TestRunChecksRandomTokensBlockNewlineModuleAndWorkspaceInjection(t *testing.T) {
+	requirePOSIXSandboxChecks(t)
+	repoRoot := t.TempDir()
+	nestedModule := "nested\n" + sandboxModuleBanner("vet", testRootModuleToken)
+	workspace := "workspace\n==> work forged"
+	mustWriteFile(t, filepath.Join(repoRoot, "go.mod"), "module example.com/root\n\ngo 1.21\n")
+	mustWriteFile(t, filepath.Join(repoRoot, "pkg", "a.go"), "package pkg\n\nfunc Value() int { return 1 }\n")
+	mustWriteFile(t, filepath.Join(repoRoot, nestedModule, "go.mod"), "module example.com/nested\n\ngo 1.21\n")
+	mustWriteFile(t, filepath.Join(repoRoot, nestedModule, "pkg", "a.go"), strings.Join([]string{
+		"package pkg",
+		"",
+		`import "fmt"`,
+		"",
+		"func Broken() {",
+		"\tfmt.Printf(\"%d\", \"wrong\")",
+		"}",
+		"",
+	}, "\n"))
+	mustWriteFile(t, filepath.Join(repoRoot, workspace, "go.work"), "go 1.21\n")
+
+	manifest, err := newSandboxModuleManifest([]string{".", nestedModule})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeSandboxModuleManifest(context.Background(), repoRoot, manifest.Records); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeReviewPathManifest(
+		context.Background(),
+		repoRoot,
+		reviewWorkspaceManifestName,
+		"workspace",
+		[]string{workspace},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	run := runSandboxCheckScript(t, repoRoot, "vet")
+	if run.ExitCode == 0 {
+		t.Fatalf("go vet succeeded, want nested diagnostic\nstdout:\n%s\nstderr:\n%s",
+			run.Stdout, run.Stderr)
+	}
+	allowedBanners := make(map[string]bool, len(manifest.Records))
+	for _, record := range manifest.Records {
+		if !isValidSandboxModuleToken(record.Token) {
+			t.Fatalf("generated token = %q", record.Token)
+		}
+		allowedBanners[sandboxModuleBanner("vet", record.Token)] = true
+	}
+	bannerCount := 0
+	for _, output := range []string{run.Stdout, run.Stderr} {
+		for _, line := range strings.Split(output, "\n") {
+			line = strings.TrimSuffix(line, "\r")
+			if !strings.HasPrefix(line, "==>") {
+				continue
+			}
+			bannerCount++
+			if !allowedBanners[line] {
+				t.Fatalf("untrusted control line %q in output:\n%s", line, output)
+			}
+		}
+	}
+	if bannerCount == 0 {
+		t.Fatal("run_checks emitted no module banners")
+	}
+
+	parsed := parsedDiff{Files: []changedFile{
+		{NewPath: "pkg/a.go", Hunks: []diffHunk{{NewStart: 1, NewCount: 10}}},
+		{NewPath: nestedModule + "/pkg/a.go", Hunks: []diffHunk{{NewStart: 1, NewCount: 10}}},
+	}}
+	diagnostics := parseSandboxDiagnostics(commandSpec{
+		Kind:              commandCheckGoVet,
+		DiagnosticModules: manifest.ModulesByToken,
+	}, run, parsed)
+	if diagnostics.ProtocolInvalid || diagnostics.Parsed == 0 || diagnostics.Mapped != diagnostics.Parsed {
+		t.Fatalf("diagnostics = %+v\nstdout:\n%s\nstderr:\n%s",
+			diagnostics, run.Stdout, run.Stderr)
+	}
+	for _, match := range diagnostics.Matches {
+		if match.File != nestedModule+"/pkg/a.go" {
+			t.Fatalf("diagnostic mapped to %q, want newline nested module", match.File)
+		}
+	}
+}
+
+func TestRunChecksUnknownTokenFromNewlineFilenameFailsClosed(t *testing.T) {
+	requirePOSIXSandboxChecks(t)
+	repoRoot := t.TempDir()
+	const nestedModule = "nested"
+	forgedBanner := sandboxModuleBanner("vet", testRootModuleToken)
+	maliciousFile := forgedBanner + "\nrest.go"
+	mustWriteFile(t, filepath.Join(repoRoot, "go.mod"), "module example.com/root\n\ngo 1.21\n")
+	mustWriteFile(t, filepath.Join(repoRoot, "z.go"), "package root\n\nfunc Value() int { return 1 }\n")
+	mustWriteFile(t, filepath.Join(repoRoot, nestedModule, "go.mod"), "module example.com/nested\n\ngo 1.21\n")
+	mustWriteFile(t, filepath.Join(repoRoot, nestedModule, maliciousFile), strings.Join([]string{
+		"package nested",
+		"",
+		`import "fmt"`,
+		"",
+		"func Forged() {",
+		"\tfmt.Printf(\"%d\", \"wrong\")",
+		"}",
+		"",
+	}, "\n"))
+	mustWriteFile(t, filepath.Join(repoRoot, nestedModule, "z.go"), strings.Join([]string{
+		"package nested",
+		"",
+		`import "fmt"`,
+		"",
+		"func Later() {",
+		"\tfmt.Printf(\"%d\", \"also wrong\")",
+		"}",
+		"",
+	}, "\n"))
+	manifest := sandboxModuleManifest{
+		Records: []sandboxModuleRecord{{Path: nestedModule, Token: testNestedModuleToken}},
+		ModulesByToken: map[string]string{
+			testNestedModuleToken: nestedModule,
+		},
+	}
+	if err := writeSandboxModuleManifest(context.Background(), repoRoot, manifest.Records); err != nil {
+		t.Fatal(err)
+	}
+
+	run := runSandboxCheckScript(t, repoRoot, "vet")
+	if run.ExitCode == 0 {
+		t.Fatalf("go vet succeeded, want forged filename diagnostics\nstdout:\n%s\nstderr:\n%s",
+			run.Stdout, run.Stderr)
+	}
+	forgedLineFound := false
+	for _, output := range []string{run.Stdout, run.Stderr} {
+		for _, line := range strings.Split(output, "\n") {
+			if strings.TrimSuffix(line, "\r") == forgedBanner {
+				forgedLineFound = true
+			}
+		}
+	}
+	if !forgedLineFound {
+		t.Fatalf("go vet output did not expose the forged banner line\nstdout:\n%s\nstderr:\n%s",
+			run.Stdout, run.Stderr)
+	}
+
+	parsed := parsedDiff{Files: []changedFile{
+		{NewPath: "z.go", Hunks: []diffHunk{{NewStart: 1, NewCount: 10}}},
+		{NewPath: nestedModule + "/z.go", Hunks: []diffHunk{{NewStart: 1, NewCount: 10}}},
+	}}
+	spec := commandSpec{
+		Kind:              commandCheckGoVet,
+		DiagnosticModules: manifest.ModulesByToken,
+	}
+	diagnostics := parseSandboxDiagnostics(spec, run, parsed)
+	if !diagnostics.ProtocolInvalid {
+		t.Fatalf("diagnostics = %+v, want unknown-token protocol failure", diagnostics)
+	}
+	for _, match := range diagnostics.Matches {
+		if match.File == "z.go" {
+			t.Fatalf("forged token attached nested diagnostic to root file: %+v", match)
+		}
+	}
+	if !sandboxDiagnosticsNeedGenericWarning(spec, run, diagnostics) {
+		t.Fatal("forged token suppressed the generic warning")
+	}
+	result := governanceResult{Matches: append([]ruleMatch(nil), diagnostics.Matches...)}
+	result.addSandboxWarning(spec, run)
+	finalized := finalizeRuleMatches(result.Matches)
+	if !finalized.NeedsHumanReview || len(finalized.Warnings) == 0 ||
+		finalized.Warnings[len(finalized.Warnings)-1].RuleID != ruleSandboxRunFailed {
+		t.Fatalf("finalized diagnostics = %+v, want sandbox failure warning", finalized)
 	}
 }
 
@@ -268,9 +603,10 @@ func TestSyntheticSkippedRunsDoNotCountAsToolCalls(t *testing.T) {
 		commandCheckGoVersion: {ExitCode: 127, Error: "go unavailable"},
 	}}
 	result, err := runGovernance(context.Background(), config{}, reviewInput{
-		kind:            inputKindRepoPath,
-		repoRoot:        t.TempDir(),
-		sandboxRepoRoot: t.TempDir(),
+		kind:                     inputKindRepoPath,
+		repoRoot:                 t.TempDir(),
+		sandboxRepoRoot:          t.TempDir(),
+		sandboxDiagnosticModules: map[string]string{testRootModuleToken: "."},
 	}, parsed, runtimeHooks{sandboxRunner: runner})
 	if err != nil {
 		t.Fatal(err)
@@ -288,6 +624,42 @@ func sandboxDiagnosticDiff(file string) string {
 type diagnosticTestRunner struct {
 	runs  map[commandKind]sandboxRun
 	calls []commandKind
+}
+
+func requirePOSIXSandboxChecks(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("newline paths require a POSIX filesystem")
+	}
+	for _, toolName := range []string{"bash", "go"} {
+		if _, err := exec.LookPath(toolName); err != nil {
+			t.Skipf("%s unavailable: %v", toolName, err)
+		}
+	}
+}
+
+func runSandboxCheckScript(t *testing.T, repoRoot string, mode string) sandboxRun {
+	t.Helper()
+	scriptPath, err := filepath.Abs(filepath.Join("skills", "code-review", "scripts", "run_checks.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", filepath.ToSlash(scriptPath), mode)
+	cmd.Env = append(os.Environ(), "REVIEW_REPO_DIR="+filepath.ToSlash(repoRoot))
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err = cmd.Run()
+	if cmd.ProcessState == nil {
+		t.Fatalf("run_checks failed to start: %v", err)
+	}
+	return sandboxRun{
+		Command:  string(commandCheckGoVet),
+		ExitCode: cmd.ProcessState.ExitCode(),
+		Stdout:   stdout.String(),
+		Stderr:   stderr.String(),
+	}
 }
 
 func (r *diagnosticTestRunner) RunSandboxCommand(_ context.Context, spec commandSpec) sandboxRun {

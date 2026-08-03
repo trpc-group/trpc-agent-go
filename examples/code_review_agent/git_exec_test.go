@@ -13,6 +13,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -166,6 +167,72 @@ func TestHardenedGitDiffUsesLiteralPathspecs(t *testing.T) {
 	diff := string(stdout)
 	if !strings.Contains(diff, "a/[ab].go") || strings.Contains(diff, "diff --git a/a.go b/a.go") {
 		t.Fatalf("literal pathspec diff = %s", diff)
+	}
+}
+
+func TestLiteralWhitespacePathspecScopesDiffAndSnapshot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Win32 path normalization does not preserve boundary spaces")
+	}
+	repoRoot := t.TempDir()
+	mustRunGit(t, repoRoot, "init")
+	leading := " leading.go"
+	trailing := "trailing.go "
+	trimmedLeading := strings.TrimSpace(leading)
+	trimmedTrailing := strings.TrimSpace(trailing)
+	for _, file := range []string{leading, trailing, trimmedLeading, trimmedTrailing} {
+		mustWriteFile(t, filepath.Join(repoRoot, file), "package literal\n\nconst value = 1\n")
+	}
+	mustRunGit(t, repoRoot, "add", "--", leading, trailing, trimmedLeading, trimmedTrailing)
+	mustCommitGit(t, repoRoot)
+	for _, file := range []string{leading, trailing, trimmedLeading, trimmedTrailing} {
+		mustWriteFile(t, filepath.Join(repoRoot, file), "package literal\n\nconst value = 2\n")
+	}
+
+	filters, err := normalizeFileFilters([]string{leading, trailing})
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := append(
+		[]string{"diff", "--no-ext-diff", "--no-textconv", "HEAD", "--"},
+		[]string(filters)...,
+	)
+	stdout, stderr, err := runGitCommand(context.Background(), repoRoot, args)
+	if err != nil {
+		t.Fatalf("run literal whitespace git diff: %v\nstderr: %s", err, stderr)
+	}
+	parsed := parseUnifiedDiff(stdout)
+	if len(parsed.Warnings) != 0 || len(parsed.Files) != 2 {
+		t.Fatalf("parsed whitespace diff = %+v", parsed)
+	}
+	changed := make(map[string]bool, len(parsed.Files))
+	for _, file := range parsed.Files {
+		changed[file.reviewPath()] = true
+	}
+	if !changed[leading] || !changed[trailing] ||
+		changed[trimmedLeading] || changed[trimmedTrailing] {
+		t.Fatalf("changed paths = %#v, want only %q and %q", changed, leading, trailing)
+	}
+
+	snapshot, err := prepareSandboxRepoSnapshot(
+		context.Background(),
+		repoRoot,
+		[]string(filters),
+		defaultSandboxSnapshotLimits(),
+	)
+	if err != nil {
+		t.Fatalf("prepare whitespace path snapshot: %v", err)
+	}
+	defer os.RemoveAll(snapshot.Root)
+	for _, file := range []string{leading, trailing} {
+		if _, err := os.Stat(filepath.Join(snapshot.Root, file)); err != nil {
+			t.Fatalf("selected snapshot path %q: %v", file, err)
+		}
+	}
+	for _, file := range []string{trimmedLeading, trimmedTrailing} {
+		if _, err := os.Stat(filepath.Join(snapshot.Root, file)); !os.IsNotExist(err) {
+			t.Fatalf("trimmed snapshot path %q stat error = %v, want not exist", file, err)
+		}
 	}
 }
 

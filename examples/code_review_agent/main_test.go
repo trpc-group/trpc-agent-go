@@ -781,7 +781,7 @@ func TestFilesAreNormalizedAndPassedToGit(t *testing.T) {
 
 	code, stdout, stderr := runForTest(t, []string{
 		"--repo-path", repoPath,
-		"--files", "a.go,b.go",
+		"--files", " a.go,b.go ",
 		"--files", `pkg\c.go`,
 		"--runtime", "fake",
 	}, nil, runner)
@@ -794,7 +794,10 @@ func TestFilesAreNormalizedAndPassedToGit(t *testing.T) {
 	if gotRepo != repoRoot {
 		t.Fatalf("diff repo path = %q, want canonical root %q", gotRepo, repoRoot)
 	}
-	wantArgs := []string{"diff", "--no-ext-diff", "--no-textconv", "HEAD", "--", "a.go", "b.go", "pkg/c.go"}
+	wantArgs := []string{
+		"diff", "--no-ext-diff", "--no-textconv", "HEAD", "--",
+		" a.go", "b.go ", "pkg/c.go",
+	}
 	if !reflect.DeepEqual(gotArgs, wantArgs) {
 		t.Fatalf("git args = %#v, want %#v", gotArgs, wantArgs)
 	}
@@ -805,12 +808,30 @@ func TestFilesAreNormalizedAndPassedToGit(t *testing.T) {
 	}
 }
 
+func TestNormalizeFileFiltersPreservesLiteralWhitespace(t *testing.T) {
+	want := repeatedStrings{" leading.go", "trailing.go ", "   ", "pkg/file.go"}
+	got, err := normalizeFileFilters([]string{
+		" leading.go",
+		"trailing.go ",
+		"   ",
+		`pkg\file.go`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("normalized files = %#v, want %#v", got, want)
+	}
+}
+
 func TestFileFilterValidation(t *testing.T) {
 	tests := []struct {
 		name       string
 		file       string
 		wantStderr string
 	}{
+		{name: "empty", file: "", wantStderr: "contains an empty path"},
+		{name: "NUL", file: "a\x00.go", wantStderr: "contains a NUL byte"},
 		{name: "parent escape", file: "../a.go", wantStderr: "escapes the repository"},
 		{name: "drive path", file: "C:/repo/a.go", wantStderr: "must be relative"},
 		{name: "absolute path", file: "/repo/a.go", wantStderr: "must be relative"},
@@ -988,15 +1009,17 @@ func TestLocalPreflightMissingToolsDoesNotAbortReview(t *testing.T) {
 func TestSkillRunBridgeArgumentsUseGovernedSpec(t *testing.T) {
 	sandboxRepoRoot := t.TempDir()
 	input := reviewInput{
-		kind:            inputKindRepoPath,
-		repoRoot:        t.TempDir(),
-		sandboxRepoRoot: sandboxRepoRoot,
+		kind:                     inputKindRepoPath,
+		repoRoot:                 t.TempDir(),
+		sandboxRepoRoot:          sandboxRepoRoot,
+		sandboxDiagnosticModules: testRootDiagnosticModules(),
 	}
 	spec := newCommandSpec(
 		commandCheckGoTest,
 		commandInputs(input),
 		commandEnv(input),
 	)
+	spec.DiagnosticModules = cloneStringMap(input.sandboxDiagnosticModules)
 	if decision := gateCommand(spec); decision.Decision != governanceDecisionAllow {
 		t.Fatalf("gate decision = %+v, want allow", decision)
 	}
@@ -1004,6 +1027,9 @@ func TestSkillRunBridgeArgumentsUseGovernedSpec(t *testing.T) {
 	args, err := permissionArguments(codeReviewSkillName, spec)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if bytes.Contains(args, []byte(testRootModuleToken)) {
+		t.Fatalf("permission arguments leaked diagnostic token: %s", args)
 	}
 	var got skillRunPermissionArguments
 	if err := json.Unmarshal(args, &got); err != nil {
@@ -1026,9 +1052,10 @@ func TestSkillRunBridgeArgumentsUseGovernedSpec(t *testing.T) {
 
 func TestPlanCommandsStagesRepoForEveryRepositoryCheck(t *testing.T) {
 	input := reviewInput{
-		kind:            inputKindRepoPath,
-		repoRoot:        t.TempDir(),
-		sandboxRepoRoot: t.TempDir(),
+		kind:                     inputKindRepoPath,
+		repoRoot:                 t.TempDir(),
+		sandboxRepoRoot:          t.TempDir(),
+		sandboxDiagnosticModules: testRootDiagnosticModules(),
 	}
 	commands := planCommands(
 		config{enableStaticcheck: true},
@@ -1049,7 +1076,8 @@ func TestPlanCommandsStagesRepoForEveryRepositoryCheck(t *testing.T) {
 			t.Fatalf("command %d kind = %q, want %q", i, command.Kind, wantKinds[i])
 		}
 		if i == 0 {
-			if len(command.Inputs) != 0 || len(command.Env) != 0 {
+			if len(command.Inputs) != 0 || len(command.Env) != 0 ||
+				len(command.DiagnosticModules) != 0 {
 				t.Fatalf("go version command = %+v, want no repo inputs/env", command)
 			}
 			continue
@@ -1061,6 +1089,18 @@ func TestPlanCommandsStagesRepoForEveryRepositoryCheck(t *testing.T) {
 			command.Inputs[0].Mode != "copy" {
 			t.Fatalf("command %d inputs = %+v, want one repository copy", i, command.Inputs)
 		}
+		if !reflect.DeepEqual(command.DiagnosticModules, input.sandboxDiagnosticModules) {
+			t.Fatalf("command %d diagnostic modules = %#v, want %#v",
+				i, command.DiagnosticModules, input.sandboxDiagnosticModules)
+		}
+	}
+	input.sandboxDiagnosticModules[testRootModuleToken] = "mutated"
+	if commands[1].DiagnosticModules[testRootModuleToken] != "." {
+		t.Fatalf("planned diagnostic modules alias review input: %#v", commands[1].DiagnosticModules)
+	}
+	commands[1].DiagnosticModules[testRootModuleToken] = "changed"
+	if commands[2].DiagnosticModules[testRootModuleToken] != "." {
+		t.Fatalf("planned diagnostic module maps alias each other: %#v", commands[2].DiagnosticModules)
 	}
 }
 
@@ -1148,16 +1188,18 @@ func TestRepoPathLocalRunnerStagesRepositoryOnce(t *testing.T) {
 	}
 	defer os.RemoveAll(snapshot.Root)
 	parsed := parseUnifiedDiff([]byte(minimalDiff()))
-	if _, err := prepareAffectedModuleManifest(context.Background(), snapshot.Root, parsed); err != nil {
+	manifest, err := prepareAffectedModuleManifest(context.Background(), snapshot.Root, parsed)
+	if err != nil {
 		t.Fatalf("prepare affected module manifest: %v", err)
 	}
 
 	commands := planCommands(
 		config{},
 		reviewInput{
-			kind:            inputKindRepoPath,
-			repoRoot:        repoRoot,
-			sandboxRepoRoot: snapshot.Root,
+			kind:                     inputKindRepoPath,
+			repoRoot:                 repoRoot,
+			sandboxRepoRoot:          snapshot.Root,
+			sandboxDiagnosticModules: manifest.ModulesByToken,
 		},
 		parsed,
 	)
@@ -1401,15 +1443,15 @@ func TestPrepareAffectedModuleManifest(t *testing.T) {
 		t.Fatalf("prepare manifest: %v", err)
 	}
 	wantModules := []string{".", "nested", "with space"}
-	if !reflect.DeepEqual(modules, wantModules) {
-		t.Fatalf("modules = %#v, want %#v", modules, wantModules)
+	if !reflect.DeepEqual(sandboxModulePaths(modules), wantModules) {
+		t.Fatalf("modules = %#v, want %#v", sandboxModulePaths(modules), wantModules)
 	}
 	manifestPath := filepath.Join(snapshotRoot, reviewModuleManifestName)
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []byte(".\x00nested\x00with space\x00"); !bytes.Equal(data, want) {
+	if want := testSandboxModuleManifestBytes(modules); !bytes.Equal(data, want) {
 		t.Fatalf("manifest = %q, want %q", data, want)
 	}
 	if runtime.GOOS != "windows" {
@@ -1471,7 +1513,8 @@ func TestRunChecksUsesChangedNestedModule(t *testing.T) {
 		"-package oldspace",
 		"+package space",
 	}, "\n")))
-	if _, err := prepareAffectedModuleManifest(context.Background(), repoRoot, parsed); err != nil {
+	manifest, err := prepareAffectedModuleManifest(context.Background(), repoRoot, parsed)
+	if err != nil {
 		t.Fatalf("prepare manifest: %v", err)
 	}
 
@@ -1501,8 +1544,16 @@ func TestRunChecksUsesChangedNestedModule(t *testing.T) {
 				"stdout": stdout.String(),
 				"stderr": stderr.String(),
 			} {
-				nestedMarker := "==> " + mode + " nested"
-				spaceMarker := "==> " + mode + " with space"
+				nestedToken, ok := sandboxModuleTokenForPath(manifest, "nested")
+				if !ok {
+					t.Fatal("nested module token is missing")
+				}
+				spaceToken, ok := sandboxModuleTokenForPath(manifest, "with space")
+				if !ok {
+					t.Fatal("space module token is missing")
+				}
+				nestedMarker := sandboxModuleBanner(mode, nestedToken)
+				spaceMarker := sandboxModuleBanner(mode, spaceToken)
 				nestedIndex := strings.Index(outputText, nestedMarker)
 				spaceIndex := strings.Index(outputText, spaceMarker)
 				if nestedIndex < 0 || spaceIndex <= nestedIndex {
@@ -1523,15 +1574,61 @@ func TestRunChecksRejectsUnsafeModuleManifest(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, tt := range []struct {
-		name     string
-		manifest []byte
+		name       string
+		manifest   []byte
+		wantOutput string
+		withGoMod  bool
 	}{
-		{name: "empty", manifest: []byte{0}},
-		{name: "absolute", manifest: []byte("/tmp/escape\x00")},
-		{name: "parent escape", manifest: []byte("../escape\x00")},
+		{name: "empty manifest", wantOutput: "affected module manifest is empty"},
+		{
+			name:       "incomplete pair",
+			manifest:   []byte(".\x00"),
+			wantOutput: "affected module manifest has an incomplete record",
+		},
+		{
+			name:       "unterminated path",
+			manifest:   []byte("."),
+			wantOutput: "affected module manifest has an incomplete record",
+		},
+		{
+			name: "trailing unterminated path",
+			manifest: []byte(".\x00" + testRootModuleToken +
+				"\x00nested"),
+			wantOutput: "affected module manifest has an incomplete record",
+			withGoMod:  true,
+		},
+		{
+			name:       "invalid token",
+			manifest:   []byte(".\x00invalid\x00"),
+			wantOutput: "invalid module token",
+		},
+		{
+			name:       "empty path",
+			manifest:   []byte("\x00" + testRootModuleToken + "\x00"),
+			wantOutput: "unsafe module path",
+		},
+		{
+			name:       "absolute",
+			manifest:   []byte("/tmp/escape\x00" + testRootModuleToken + "\x00"),
+			wantOutput: "unsafe module path",
+		},
+		{
+			name:       "parent escape",
+			manifest:   []byte("../escape\x00" + testRootModuleToken + "\x00"),
+			wantOutput: "unsafe module path",
+		},
+		{
+			name:       "missing go mod",
+			manifest:   []byte(".\x00" + testRootModuleToken + "\x00"),
+			wantOutput: "module file is missing",
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			repoRoot := t.TempDir()
+			if tt.withGoMod {
+				mustWriteFile(t, filepath.Join(repoRoot, "go.mod"),
+					"module example.com/root\n\ngo 1.21\n")
+			}
 			manifestPath := filepath.Join(repoRoot, reviewModuleManifestName)
 			if err := os.WriteFile(manifestPath, tt.manifest, 0o600); err != nil {
 				t.Fatal(err)
@@ -1539,8 +1636,11 @@ func TestRunChecksRejectsUnsafeModuleManifest(t *testing.T) {
 			cmd := exec.Command("bash", filepath.ToSlash(scriptPath), "test")
 			cmd.Env = append(os.Environ(), "REVIEW_REPO_DIR="+filepath.ToSlash(repoRoot))
 			output, err := cmd.CombinedOutput()
-			if err == nil || !strings.Contains(string(output), "unsafe module path") {
-				t.Fatalf("run_checks err = %v, output = %s, want unsafe-path rejection", err, output)
+			exitErr, isExitErr := err.(*exec.ExitError)
+			if err == nil || !isExitErr || exitErr.ExitCode() != 2 ||
+				!strings.Contains(string(output), tt.wantOutput) {
+				t.Fatalf("run_checks err = %v, output = %s, want %q",
+					err, output, tt.wantOutput)
 			}
 		})
 	}
@@ -1667,9 +1767,10 @@ func TestGovernanceStaticcheckIsOptIn(t *testing.T) {
 	commands := planCommands(
 		config{enableStaticcheck: true},
 		reviewInput{
-			kind:            inputKindRepoPath,
-			repoRoot:        t.TempDir(),
-			sandboxRepoRoot: t.TempDir(),
+			kind:                     inputKindRepoPath,
+			repoRoot:                 t.TempDir(),
+			sandboxRepoRoot:          t.TempDir(),
+			sandboxDiagnosticModules: testRootDiagnosticModules(),
 		},
 		parseUnifiedDiff([]byte(minimalDiff())),
 	)
@@ -1853,9 +1954,13 @@ func TestCommandGateValidation(t *testing.T) {
 	}{
 		{
 			name: "valid repo command",
-			spec: newCommandSpec(commandCheckGoTest, validInput, map[string]string{
-				"REVIEW_REPO_DIR": reviewRepoDirFromSkill,
-			}),
+			spec: func() commandSpec {
+				spec := newCommandSpec(commandCheckGoTest, validInput, map[string]string{
+					"REVIEW_REPO_DIR": reviewRepoDirFromSkill,
+				})
+				spec.DiagnosticModules = testRootDiagnosticModules()
+				return spec
+			}(),
 			want: governanceDecisionAllow,
 		},
 		{
@@ -1922,6 +2027,98 @@ func TestCommandGateValidation(t *testing.T) {
 			got := gateCommand(tt.spec)
 			if got.Decision != tt.want {
 				t.Fatalf("gate decision = %+v, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCommandGateDiagnosticModuleValidation(t *testing.T) {
+	absRepo := filepath.ToSlash(t.TempDir())
+	newRepoSpec := func(modules map[string]string) commandSpec {
+		spec := newCommandSpec(
+			commandCheckGoVet,
+			[]inputMapping{{
+				From: "host://" + absRepo,
+				To:   reviewRepoInputTarget,
+				Mode: "copy",
+			}},
+			map[string]string{"REVIEW_REPO_DIR": reviewRepoDirFromSkill},
+		)
+		spec.DiagnosticModules = modules
+		return spec
+	}
+
+	tests := []struct {
+		name       string
+		spec       commandSpec
+		want       string
+		wantReason string
+	}{
+		{
+			name: "valid newline module",
+			spec: newRepoSpec(map[string]string{
+				testNestedModuleToken: "nested\nmodule",
+			}),
+			want: governanceDecisionAllow,
+		},
+		{
+			name:       "missing map",
+			spec:       newRepoSpec(nil),
+			want:       governanceDecisionDeny,
+			wantReason: "requires diagnostic modules",
+		},
+		{
+			name: "invalid token",
+			spec: newRepoSpec(map[string]string{
+				"m_invalid": ".",
+			}),
+			want:       governanceDecisionDeny,
+			wantReason: "token is invalid",
+		},
+		{
+			name: "duplicate module",
+			spec: newRepoSpec(map[string]string{
+				testRootModuleToken:   ".",
+				testNestedModuleToken: ".",
+			}),
+			want:       governanceDecisionDeny,
+			wantReason: "is duplicated",
+		},
+		{
+			name: "non canonical module",
+			spec: newRepoSpec(map[string]string{
+				testRootModuleToken: "nested\\module",
+			}),
+			want:       governanceDecisionDeny,
+			wantReason: "path",
+		},
+		{
+			name: "escaping module",
+			spec: newRepoSpec(map[string]string{
+				testRootModuleToken: "../escape",
+			}),
+			want:       governanceDecisionDeny,
+			wantReason: "path",
+		},
+		{
+			name: "go version carries map",
+			spec: func() commandSpec {
+				spec := newCommandSpec(commandCheckGoVersion, nil, nil)
+				spec.DiagnosticModules = testRootDiagnosticModules()
+				return spec
+			}(),
+			want:       governanceDecisionDeny,
+			wantReason: "must not carry",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := gateCommand(tt.spec)
+			if got.Decision != tt.want ||
+				(tt.wantReason != "" && !strings.Contains(got.Reason, tt.wantReason)) {
+				t.Fatalf("gate decision = %+v, want %s containing %q",
+					got, tt.want, tt.wantReason)
 			}
 		})
 	}
@@ -2014,9 +2211,10 @@ func TestGovernanceBlockedPreflightSkipsLaterCommands(t *testing.T) {
 	permissionCalls := 0
 	runner := &recordingSandboxRunner{}
 	gov, err := runGovernance(context.Background(), config{}, reviewInput{
-		kind:            inputKindRepoPath,
-		repoRoot:        t.TempDir(),
-		sandboxRepoRoot: t.TempDir(),
+		kind:                     inputKindRepoPath,
+		repoRoot:                 t.TempDir(),
+		sandboxRepoRoot:          t.TempDir(),
+		sandboxDiagnosticModules: testRootDiagnosticModules(),
 	}, parseUnifiedDiff([]byte(minimalDiff())), runtimeHooks{
 		permissionPolicy: tool.PermissionPolicyFunc(func(
 			context.Context,
@@ -2050,9 +2248,10 @@ func TestGovernanceBlockedRepoCommandDoesNotSkipIndependentChecks(t *testing.T) 
 	permissionCalls := 0
 	runner := &recordingSandboxRunner{}
 	gov, err := runGovernance(context.Background(), config{}, reviewInput{
-		kind:            inputKindRepoPath,
-		repoRoot:        t.TempDir(),
-		sandboxRepoRoot: t.TempDir(),
+		kind:                     inputKindRepoPath,
+		repoRoot:                 t.TempDir(),
+		sandboxRepoRoot:          t.TempDir(),
+		sandboxDiagnosticModules: testRootDiagnosticModules(),
 	}, parseUnifiedDiff([]byte(minimalDiff())), runtimeHooks{
 		permissionPolicy: tool.PermissionPolicyFunc(func(
 			context.Context,

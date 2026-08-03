@@ -26,9 +26,10 @@ func TestGovernanceCreatesAndClosesIsolatedSandboxPerCommand(t *testing.T) {
 		context.Background(),
 		config{enableStaticcheck: true, effectiveRuntime: runtimeLocal},
 		reviewInput{
-			kind:            inputKindRepoPath,
-			repoRoot:        t.TempDir(),
-			sandboxRepoRoot: t.TempDir(),
+			kind:                     inputKindRepoPath,
+			repoRoot:                 t.TempDir(),
+			sandboxRepoRoot:          t.TempDir(),
+			sandboxDiagnosticModules: testRootDiagnosticModules(),
 		},
 		parseUnifiedDiff([]byte(minimalDiff())),
 		runtimeHooks{sandboxRunnerFactory: func(context.Context) (sandboxRunner, error) {
@@ -74,9 +75,10 @@ func TestGovernanceIsolatedSandboxStagingFailureOnlyAffectsCurrentCommand(t *tes
 		context.Background(),
 		config{enableStaticcheck: true, effectiveRuntime: runtimeE2B},
 		reviewInput{
-			kind:            inputKindRepoPath,
-			repoRoot:        t.TempDir(),
-			sandboxRepoRoot: t.TempDir(),
+			kind:                     inputKindRepoPath,
+			repoRoot:                 t.TempDir(),
+			sandboxRepoRoot:          t.TempDir(),
+			sandboxDiagnosticModules: testRootDiagnosticModules(),
 		},
 		parseUnifiedDiff([]byte(minimalDiff())),
 		runtimeHooks{sandboxRunnerFactory: func(context.Context) (sandboxRunner, error) {
@@ -115,9 +117,10 @@ func TestGovernanceInvokedStaticcheckSkipCountsToolCall(t *testing.T) {
 		context.Background(),
 		config{enableStaticcheck: true, effectiveRuntime: runtimeLocal},
 		reviewInput{
-			kind:            inputKindRepoPath,
-			repoRoot:        t.TempDir(),
-			sandboxRepoRoot: t.TempDir(),
+			kind:                     inputKindRepoPath,
+			repoRoot:                 t.TempDir(),
+			sandboxRepoRoot:          t.TempDir(),
+			sandboxDiagnosticModules: testRootDiagnosticModules(),
 		},
 		parseUnifiedDiff([]byte(minimalDiff())),
 		runtimeHooks{sandboxRunnerFactory: func(context.Context) (sandboxRunner, error) {
@@ -147,9 +150,10 @@ func TestGovernanceIsolatedSandboxCreationFailureOnlySkipsCurrentCommand(t *test
 		context.Background(),
 		config{enableStaticcheck: true, effectiveRuntime: runtimeE2B},
 		reviewInput{
-			kind:            inputKindRepoPath,
-			repoRoot:        t.TempDir(),
-			sandboxRepoRoot: t.TempDir(),
+			kind:                     inputKindRepoPath,
+			repoRoot:                 t.TempDir(),
+			sandboxRepoRoot:          t.TempDir(),
+			sandboxDiagnosticModules: testRootDiagnosticModules(),
 		},
 		parseUnifiedDiff([]byte(minimalDiff())),
 		runtimeHooks{sandboxRunnerFactory: func(context.Context) (sandboxRunner, error) {
@@ -187,9 +191,10 @@ func TestGovernanceIsolatedSandboxPreflightCreationFailureSkipsAllChecks(t *test
 		context.Background(),
 		config{enableStaticcheck: true, effectiveRuntime: runtimeE2B},
 		reviewInput{
-			kind:            inputKindRepoPath,
-			repoRoot:        t.TempDir(),
-			sandboxRepoRoot: t.TempDir(),
+			kind:                     inputKindRepoPath,
+			repoRoot:                 t.TempDir(),
+			sandboxRepoRoot:          t.TempDir(),
+			sandboxDiagnosticModules: testRootDiagnosticModules(),
 		},
 		parseUnifiedDiff([]byte(minimalDiff())),
 		runtimeHooks{sandboxRunnerFactory: func(context.Context) (sandboxRunner, error) {

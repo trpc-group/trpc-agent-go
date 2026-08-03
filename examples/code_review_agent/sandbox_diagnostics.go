@@ -28,10 +28,11 @@ var goDiagnosticPattern = regexp.MustCompile(`^(.*\.go):([0-9]+)(?::([0-9]+))?:\
 const invalidSandboxDiagnosticModule = "\x00"
 
 type sandboxDiagnosticResult struct {
-	Matches  []ruleMatch
-	Parsed   int
-	Mapped   int
-	Overflow bool
+	Matches         []ruleMatch
+	Parsed          int
+	Mapped          int
+	Overflow        bool
+	ProtocolInvalid bool
 }
 
 type parsedSandboxDiagnostic struct {
@@ -63,8 +64,11 @@ func parseSandboxDiagnostics(
 	for _, output := range []string{run.Stdout, run.Stderr} {
 		activeModule := ""
 		for _, line := range strings.Split(output, "\n") {
-			if module, ok := parseSandboxModuleBanner(spec.Kind, line); ok {
+			if module, ok := parseSandboxModuleBanner(spec, line); ok {
 				activeModule = module
+				if module == invalidSandboxDiagnosticModule {
+					result.ProtocolInvalid = true
+				}
 				continue
 			}
 			diagnostic, ok := parseSandboxDiagnosticLine(line)
@@ -119,9 +123,9 @@ func parseSandboxDiagnostics(
 	return result
 }
 
-func parseSandboxModuleBanner(kind commandKind, line string) (string, bool) {
+func parseSandboxModuleBanner(spec commandSpec, line string) (string, bool) {
 	mode := ""
-	switch kind {
+	switch spec.Kind {
 	case commandCheckGoVet:
 		mode = "vet"
 	case commandCheckStaticcheck:
@@ -129,33 +133,26 @@ func parseSandboxModuleBanner(kind commandKind, line string) (string, bool) {
 	default:
 		return "", false
 	}
-	prefix := "==> " + mode + " "
 	line = strings.TrimSuffix(line, "\r")
-	if strings.HasPrefix(line, "==> ") && !strings.HasPrefix(line, prefix) {
-		return invalidSandboxDiagnosticModule, true
-	}
-	if !strings.HasPrefix(line, prefix) {
+	if !strings.HasPrefix(line, "==>") {
 		return "", false
 	}
-	module := strings.ReplaceAll(strings.TrimPrefix(line, prefix), "\\", "/")
+	prefix := sandboxModuleBanner(mode, "")
+	if !strings.HasPrefix(line, prefix) {
+		return invalidSandboxDiagnosticModule, true
+	}
+	token := strings.TrimPrefix(line, prefix)
+	if !isValidSandboxModuleToken(token) {
+		return invalidSandboxDiagnosticModule, true
+	}
+	module, ok := spec.DiagnosticModules[token]
+	if !ok {
+		return invalidSandboxDiagnosticModule, true
+	}
 	if !isSafeSandboxModulePath(module) {
 		return invalidSandboxDiagnosticModule, true
 	}
 	return module, true
-}
-
-func isSafeSandboxModulePath(module string) bool {
-	if module == "" || strings.ContainsRune(module, '\x00') ||
-		strings.ContainsAny(module, "\r\n") {
-		return false
-	}
-	normalized := strings.ReplaceAll(module, "\\", "/")
-	if strings.HasPrefix(normalized, "/") || strings.HasPrefix(normalized, "//") ||
-		hasWindowsDrive(normalized) {
-		return false
-	}
-	clean := path.Clean(normalized)
-	return clean == normalized && clean != ".." && !strings.HasPrefix(clean, "../")
 }
 
 func repositoryDiagnosticPath(
@@ -316,7 +313,7 @@ func sandboxDiagnosticsNeedGenericWarning(
 		return true
 	}
 	if run.Skipped || run.TimedOut || strings.TrimSpace(run.Error) != "" ||
-		len(run.Warnings) > 0 || diagnostics.Overflow {
+		len(run.Warnings) > 0 || diagnostics.Overflow || diagnostics.ProtocolInvalid {
 		return true
 	}
 	return diagnostics.Parsed == 0 || diagnostics.Mapped != diagnostics.Parsed

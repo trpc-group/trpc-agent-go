@@ -292,29 +292,29 @@ func prepareAffectedModuleManifest(
 	ctx context.Context,
 	snapshotRoot string,
 	parsed parsedDiff,
-) ([]string, error) {
+) (sandboxModuleManifest, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf("prepare affected module manifest: %w", err)
+		return sandboxModuleManifest{}, fmt.Errorf("prepare affected module manifest: %w", err)
 	}
 	root, err := filepath.Abs(snapshotRoot)
 	if err != nil {
-		return nil, fmt.Errorf("resolve snapshot root: %w", err)
+		return sandboxModuleManifest{}, fmt.Errorf("resolve snapshot root: %w", err)
 	}
 	modules := make(map[string]bool)
 	workspaces := make(map[string]bool)
 	for _, target := range repositoryValidationTargets(parsed) {
 		if err := ctx.Err(); err != nil {
-			return nil, fmt.Errorf("prepare affected module manifest: %w", err)
+			return sandboxModuleManifest{}, fmt.Errorf("prepare affected module manifest: %w", err)
 		}
 		rel, err := cleanTrackedPath(target.path)
 		if err != nil {
-			return nil, fmt.Errorf("resolve repository validation target %q: %w", target.path, err)
+			return sandboxModuleManifest{}, fmt.Errorf("resolve repository validation target %q: %w", target.path, err)
 		}
 		switch target.kind {
 		case repositoryValidationTargetModule:
 			module, err := nearestGoModule(ctx, root, rel, target.requireRegularFile)
 			if err != nil {
-				return nil, fmt.Errorf("resolve affected module for %q: %w", rel, err)
+				return sandboxModuleManifest{}, fmt.Errorf("resolve affected module for %q: %w", rel, err)
 			}
 			modules[module] = true
 		case repositoryValidationTargetWorkspace:
@@ -324,24 +324,24 @@ func prepareAffectedModuleManifest(
 				target.requireRegularFile,
 			)
 			if err != nil {
-				return nil, fmt.Errorf("resolve affected workspace for %q: %w", rel, err)
+				return sandboxModuleManifest{}, fmt.Errorf("resolve affected workspace for %q: %w", rel, err)
 			}
 			workspaces[workspace] = true
 		default:
-			return nil, fmt.Errorf("unknown repository validation target kind")
+			return sandboxModuleManifest{}, fmt.Errorf("unknown repository validation target kind")
 		}
 	}
 	if len(workspaces) > 0 {
 		workspaceModules, err := allSnapshotGoModules(ctx, root)
 		if err != nil {
-			return nil, fmt.Errorf("resolve workspace modules: %w", err)
+			return sandboxModuleManifest{}, fmt.Errorf("resolve workspace modules: %w", err)
 		}
 		for _, module := range workspaceModules {
 			modules[module] = true
 		}
 	}
 	if len(modules) == 0 {
-		return nil, fmt.Errorf("no affected Go modules were found")
+		return sandboxModuleManifest{}, fmt.Errorf("no affected Go modules were found")
 	}
 
 	ordered := make([]string, 0, len(modules))
@@ -349,15 +349,17 @@ func prepareAffectedModuleManifest(
 		ordered = append(ordered, module)
 	}
 	sort.Strings(ordered)
+	manifest, err := newSandboxModuleManifest(ordered)
+	if err != nil {
+		return sandboxModuleManifest{}, fmt.Errorf("prepare affected module manifest: %w", err)
+	}
 
-	if err := writeReviewPathManifest(
+	if err := writeSandboxModuleManifest(
 		ctx,
 		root,
-		reviewModuleManifestName,
-		"affected module",
-		ordered,
+		manifest.Records,
 	); err != nil {
-		return nil, err
+		return sandboxModuleManifest{}, err
 	}
 	if len(workspaces) > 0 {
 		orderedWorkspaces := make([]string, 0, len(workspaces))
@@ -373,10 +375,28 @@ func prepareAffectedModuleManifest(
 			orderedWorkspaces,
 		); err != nil {
 			_ = os.Remove(filepath.Join(root, reviewModuleManifestName))
-			return nil, err
+			return sandboxModuleManifest{}, err
 		}
 	}
-	return ordered, nil
+	return manifest, nil
+}
+
+func writeSandboxModuleManifest(
+	ctx context.Context,
+	root string,
+	records []sandboxModuleRecord,
+) error {
+	entries := make([]string, 0, 2*len(records))
+	for _, record := range records {
+		entries = append(entries, record.Path, record.Token)
+	}
+	return writeReviewPathManifest(
+		ctx,
+		root,
+		reviewModuleManifestName,
+		"affected module",
+		entries,
+	)
 }
 
 func repositoryValidationTargets(parsed parsedDiff) []repositoryValidationTarget {

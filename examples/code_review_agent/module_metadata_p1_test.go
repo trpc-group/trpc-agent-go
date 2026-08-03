@@ -102,8 +102,8 @@ func TestPrepareAffectedModuleManifestResolvesModuleMetadata(t *testing.T) {
 			if err != nil {
 				t.Fatalf("prepare manifest: %v", err)
 			}
-			if !reflect.DeepEqual(modules, tt.wantModule) {
-				t.Fatalf("modules = %#v, want %#v", modules, tt.wantModule)
+			if !reflect.DeepEqual(sandboxModulePaths(modules), tt.wantModule) {
+				t.Fatalf("modules = %#v, want %#v", sandboxModulePaths(modules), tt.wantModule)
 			}
 		})
 	}
@@ -155,8 +155,8 @@ func TestWorkspaceMetadataPlansAllSnapshotModules(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepare manifest: %v", err)
 	}
-	if want := []string{".", "nested", "other"}; !reflect.DeepEqual(modules, want) {
-		t.Fatalf("modules = %#v, want %#v", modules, want)
+	if want := []string{".", "nested", "other"}; !reflect.DeepEqual(sandboxModulePaths(modules), want) {
+		t.Fatalf("modules = %#v, want %#v", sandboxModulePaths(modules), want)
 	}
 	workspaceManifest, err := os.ReadFile(filepath.Join(root, reviewWorkspaceManifestName))
 	if err != nil {
@@ -180,8 +180,8 @@ func TestDeletedWorkspaceMetadataStillPlansAllSnapshotModules(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepare manifest: %v", err)
 	}
-	if want := []string{".", "nested"}; !reflect.DeepEqual(modules, want) {
-		t.Fatalf("modules = %#v, want %#v", modules, want)
+	if want := []string{".", "nested"}; !reflect.DeepEqual(sandboxModulePaths(modules), want) {
+		t.Fatalf("modules = %#v, want %#v", sandboxModulePaths(modules), want)
 	}
 }
 
@@ -189,7 +189,8 @@ func TestRepositoryModuleMetadataPlansChecks(t *testing.T) {
 	root := t.TempDir()
 	mustWriteFile(t, filepath.Join(root, "go.mod"), "module example.com/root\n\ngo 1.21\n")
 	parsed := parsedDiff{Files: []changedFile{{OldPath: "go.mod", NewPath: "go.mod"}}}
-	if _, err := prepareAffectedModuleManifest(context.Background(), root, parsed); err != nil {
+	manifest, err := prepareAffectedModuleManifest(context.Background(), root, parsed)
+	if err != nil {
 		t.Fatalf("prepare manifest: %v", err)
 	}
 	runner := &recordingSandboxRunner{}
@@ -197,9 +198,10 @@ func TestRepositoryModuleMetadataPlansChecks(t *testing.T) {
 		context.Background(),
 		config{},
 		reviewInput{
-			kind:            inputKindRepoPath,
-			repoRoot:        root,
-			sandboxRepoRoot: root,
+			kind:                     inputKindRepoPath,
+			repoRoot:                 root,
+			sandboxRepoRoot:          root,
+			sandboxDiagnosticModules: manifest.ModulesByToken,
 		},
 		parsed,
 		runtimeHooks{sandboxRunner: runner},
@@ -252,7 +254,8 @@ func TestRunChecksValidatesNestedWorkspaceMetadata(t *testing.T) {
 	repoRoot := t.TempDir()
 	mustWriteFile(t, filepath.Join(repoRoot, "go.mod"), "module example.com/root\n\ngo 1.21\n")
 	mustWriteFile(t, filepath.Join(repoRoot, "root.go"), "package root\n")
-	mustWriteFile(t, filepath.Join(repoRoot, reviewModuleManifestName), ".\x00")
+	mustWriteFile(t, filepath.Join(repoRoot, reviewModuleManifestName),
+		".\x00"+testRootModuleToken+"\x00")
 	mustWriteFile(t, filepath.Join(repoRoot, reviewWorkspaceManifestName), "workspace\x00")
 	mustWriteFile(t, filepath.Join(repoRoot, "workspace", "go.work"), "go 1.21\n\nuse (\n")
 
@@ -280,7 +283,8 @@ func TestRunChecksRejectsInvalidGoModOnlyChange(t *testing.T) {
 	repoRoot := t.TempDir()
 	mustWriteFile(t, filepath.Join(repoRoot, "go.mod"), "module example.com/root\n\nrequire (\n")
 	mustWriteFile(t, filepath.Join(repoRoot, "root.go"), "package root\n")
-	mustWriteFile(t, filepath.Join(repoRoot, reviewModuleManifestName), ".\x00")
+	mustWriteFile(t, filepath.Join(repoRoot, reviewModuleManifestName),
+		".\x00"+testRootModuleToken+"\x00")
 
 	scriptPath, err := filepath.Abs(filepath.Join("skills", "code-review", "scripts", "run_checks.sh"))
 	if err != nil {
