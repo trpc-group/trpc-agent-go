@@ -4098,21 +4098,21 @@ func queuedUserMessageContentPartsSupported(parts []model.ContentPart) bool {
 			if part.Image == nil {
 				return false
 			}
-			if strings.TrimSpace(part.Image.URL) == "" && len(part.Image.Data) == 0 {
+			if !queuedUserMessageURLOrDataSupported(part.Image.URL, part.Image.Data) {
 				return false
 			}
 		case model.ContentTypeAudio:
 			if part.Audio == nil {
 				return false
 			}
-			if strings.TrimSpace(part.Audio.URL) == "" && len(part.Audio.Data) == 0 {
+			if !queuedUserMessageURLOrDataSupported(part.Audio.URL, part.Audio.Data) {
 				return false
 			}
 		case model.ContentTypeVideo:
 			if part.Video == nil {
 				return false
 			}
-			if strings.TrimSpace(part.Video.URL) == "" && len(part.Video.Data) == 0 {
+			if !queuedUserMessageURLOrDataSupported(part.Video.URL, part.Video.Data) {
 				return false
 			}
 		case model.ContentTypeFile:
@@ -4129,6 +4129,10 @@ func queuedUserMessageContentPartsSupported(parts []model.ContentPart) bool {
 		}
 	}
 	return true
+}
+
+func queuedUserMessageURLOrDataSupported(url string, data []byte) bool {
+	return strings.TrimSpace(url) != "" || len(data) > 0
 }
 
 // ensureErrorEventContent ensures that error events have valid content.
