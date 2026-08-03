@@ -1,8 +1,8 @@
-# A2A Protocol Interaction Specification
+# A2A v0.2.x Protocol Interaction Specification
 
 > **Note**
 >
-> This document defines the extended implementation specification for the A2A protocol within the trpc-agent-go framework. Regular users do not need to read this document when using A2A Client/Server — the framework automatically handles all protocol conversion details. You only need to refer to this specification when developing a non-trpc-agent-go A2A Client/Server that interoperates with this framework.
+> This document defines the extension encoding used by `server/a2a` and `agent/a2aagent` for A2A v0.2.x. Regular users of the legacy A2A Client/Server do not need these conversion details. Refer to this document only when implementing a non-tRPC-Agent-Go v0.2.x Client or Server that must interoperate with the legacy packages. For A2A v1.0 integration, use the v1 sections of the [A2A Integration Guide](a2a.md).
 
 ## Background
 
@@ -23,7 +23,7 @@ As shown above, A2A envisions agents collaborating as "black boxes" — discover
 
 However, in real-world multi-Agent orchestration scenarios, some users want to see the execution path of a remote Agent for debugging, auditing, or finer-grained coordination. To address this need, trpc-agent-go leverages the extension mechanisms reserved by the A2A protocol (`DataPart`, `Message.metadata`, etc.) to support the transmission of such data without violating the protocol specification.
 
-This document defines the **interaction specification** of trpc-agent-go on top of the A2A protocol, serving as the standard reference for Client and Server implementations. This document will be updated as the A2A protocol evolves.
+This document records the **interaction specification** between the legacy tRPC-Agent-Go v0.2.x Client and Server for maintenance of existing implementations. Its `TextPart`, `FilePart`, `DataPart`, lowercase wire methods, and streaming-event conventions do not apply to A2A v1.0.
 
 > **Future Plans**
 >
