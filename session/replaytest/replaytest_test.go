@@ -1023,3 +1023,61 @@ func TestRunReplayMatrix_CallsSetupTeardown(t *testing.T) {
 	assert.Equal(t, int32(1), atomic.LoadInt32(&setupCalls), "Setup must be called")
 	assert.Equal(t, int32(1), atomic.LoadInt32(&teardownCalls), "Teardown must be called")
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// Persistent ("simulated persistent") backend tests — acceptance #1
+// ─────────────────────────────────────────────────────────────────────
+
+func TestPersistentBackendRunsAllCases(t *testing.T) {
+	backend := newPersistentBackend(t.TempDir(), "persistent")
+	for _, c := range replayCases() {
+		snap, err := RunCase(context.Background(), backend, c)
+		require.NoError(t, err, "case %s should run on the persistent backend", c.Name)
+		assert.NotEmpty(t, snap.SessionID, "case %s should produce a snapshot", c.Name)
+	}
+}
+
+func TestPersistentBackendSurvivesRecreation(t *testing.T) {
+	dir := t.TempDir()
+	// Instance A writes a case.
+	b1 := newPersistentBackend(dir, "persistent-a")
+	_, err := RunCase(context.Background(), b1, case1SingleTurn())
+	require.NoError(t, err)
+
+	// A fresh instance pointed at the same dir must observe the data.
+	b2 := newPersistentBackend(dir, "persistent-b")
+	sess, err := b2.SessionService.GetSession(context.Background(),
+		session.Key{AppName: "test-app", UserID: "user-1", SessionID: "session-001"})
+	require.NoError(t, err, "session must survive service recreation")
+	assert.Len(t, sess.Events, 2, "events must survive persistence")
+
+	mem, err := b2.MemoryService.ReadMemories(context.Background(),
+		memory.UserKey{AppName: "test-app", UserID: "user-1"}, 10)
+	require.NoError(t, err)
+	assert.NotEmpty(t, mem, "memories must survive persistence")
+}
+
+func TestPersistentBackendCrossBackendComparison(t *testing.T) {
+	inmem := Backend{
+		Name: "inmemory",
+		SessionService: sessioninmemory.NewSessionService(
+			sessioninmemory.WithSummarizer(fakeSummarizer{}),
+		),
+		MemoryService: memoryinmemory.NewMemoryService(),
+	}
+	persistent := newPersistentBackend(t.TempDir(), "persistent")
+
+	reports, err := RunReplayMatrix(context.Background(),
+		[]Backend{inmem, persistent},
+		[]ReplayCase{case1SingleTurn(), case2MultiTurn()}, nil)
+	require.NoError(t, err, "cross-backend matrix must not crash")
+	require.Len(t, reports, 2, "one report per case for the single backend pair")
+	for _, r := range reports {
+		assert.Equal(t, "inmemory", r.BackendA)
+		assert.Equal(t, "persistent", r.BackendB)
+		assert.NotEmpty(t, r.CaseName, "report must identify the case")
+		// Diffs may be empty for consistent cases or non-empty when the
+		// implementations differ — both are valid structured outcomes;
+		// the key is that a structured report was produced per case.
+	}
+}
