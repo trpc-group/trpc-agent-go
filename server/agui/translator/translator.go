@@ -99,7 +99,6 @@ type translator struct {
 	lastReasoningMessageID                 string
 	receivingReasoning                     bool
 	reasoningStreams                       messageStreamState
-	reasoningMessageIDs                    map[string]string
 	concurrentMessageStreamsEnabled        bool
 	seenResponseIDs                        map[string]struct{}
 	seenToolCallIDs                        map[string]struct{}
@@ -503,7 +502,7 @@ func (t *translator) reasoningEvents(rsp *model.Response) ([]aguievents.Event, e
 	if rsp.ID == "" {
 		return nil, nil
 	}
-	reasoningID := t.reasoningMessageID(rsp.ID)
+	reasoningID := reasoningMessageID(rsp.ID)
 	var events []aguievents.Event
 	// Different message ID means a new reasoning message.
 	if t.lastReasoningMessageID != reasoningID {
@@ -666,16 +665,8 @@ func (t *translator) textMessageEvent(rsp *model.Response) ([]aguievents.Event, 
 	return events, nil
 }
 
-func (t *translator) reasoningMessageID(responseID string) string {
-	if t.reasoningMessageIDs == nil {
-		t.reasoningMessageIDs = make(map[string]string)
-	}
-	if messageID := t.reasoningMessageIDs[responseID]; messageID != "" {
-		return messageID
-	}
-	messageID := uuid.NewString()
-	t.reasoningMessageIDs[responseID] = messageID
-	return messageID
+func reasoningMessageID(responseID string) string {
+	return "reasoning-" + responseID
 }
 
 func textMessageRole(role model.Role) string {

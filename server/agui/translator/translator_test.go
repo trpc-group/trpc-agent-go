@@ -2832,8 +2832,7 @@ func TestTranslateReasoningStreamEndsOnContent(t *testing.T) {
 	start, ok := events[1].(*aguievents.ReasoningMessageStartEvent)
 	require.True(t, ok)
 	reasoningMessageID := start.MessageID
-	assert.NotEmpty(t, reasoningMessageID)
-	assert.NotEqual(t, first.ID, reasoningMessageID)
+	assert.Equal(t, "reasoning-"+first.ID, reasoningMessageID)
 	assert.Equal(t, reasoningMessageID, reasoningStart.MessageID)
 	assert.Equal(t, string(aguitypes.RoleReasoning), start.Role)
 	firstContent, ok := events[2].(*aguievents.ReasoningMessageContentEvent)
@@ -2965,8 +2964,7 @@ func TestTranslateReasoningNonStreamPrecedesText(t *testing.T) {
 	start, ok := events[1].(*aguievents.ReasoningMessageStartEvent)
 	require.True(t, ok)
 	reasoningMessageID := start.MessageID
-	assert.NotEmpty(t, reasoningMessageID)
-	assert.NotEqual(t, rsp.ID, reasoningMessageID)
+	assert.Equal(t, "reasoning-"+rsp.ID, reasoningMessageID)
 	assert.Equal(t, string(aguitypes.RoleReasoning), start.Role)
 	for _, event := range events[:5] {
 		switch item := event.(type) {
@@ -3161,8 +3159,7 @@ func TestTranslateReasoningStreamClosesOnIDChange(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, tr.receivingReasoning)
 	firstReasoningMessageID := tr.lastReasoningMessageID
-	assert.NotEmpty(t, firstReasoningMessageID)
-	assert.NotEqual(t, first.ID, firstReasoningMessageID)
+	assert.Equal(t, reasoningMessageID(first.ID), firstReasoningMessageID)
 
 	next := &model.Response{
 		ID:     "msg-2",
@@ -3182,8 +3179,7 @@ func TestTranslateReasoningStreamClosesOnIDChange(t *testing.T) {
 	assert.IsType(t, (*aguievents.ReasoningMessageContentEvent)(nil), events[4])
 	assert.True(t, tr.receivingReasoning)
 	secondReasoningMessageID := tr.lastReasoningMessageID
-	assert.NotEmpty(t, secondReasoningMessageID)
-	assert.NotEqual(t, next.ID, secondReasoningMessageID)
+	assert.Equal(t, reasoningMessageID(next.ID), secondReasoningMessageID)
 	assert.NotEqual(t, firstReasoningMessageID, secondReasoningMessageID)
 	end, ok := events[0].(*aguievents.ReasoningMessageEndEvent)
 	require.True(t, ok)
@@ -3213,8 +3209,7 @@ func TestTranslateReasoningStreamIDChangeKeepsPreviousMessageOpen(t *testing.T) 
 	assert.NoError(t, err)
 	assert.True(t, tr.receivingReasoning)
 	firstReasoningMessageID := tr.lastReasoningMessageID
-	assert.NotEmpty(t, firstReasoningMessageID)
-	assert.NotEqual(t, first.ID, firstReasoningMessageID)
+	assert.Equal(t, reasoningMessageID(first.ID), firstReasoningMessageID)
 
 	next := &model.Response{
 		ID:     "msg-2",
@@ -3232,8 +3227,7 @@ func TestTranslateReasoningStreamIDChangeKeepsPreviousMessageOpen(t *testing.T) 
 	assert.IsType(t, (*aguievents.ReasoningMessageContentEvent)(nil), events[2])
 	assert.True(t, tr.receivingReasoning)
 	secondReasoningMessageID := tr.lastReasoningMessageID
-	assert.NotEmpty(t, secondReasoningMessageID)
-	assert.NotEqual(t, next.ID, secondReasoningMessageID)
+	assert.Equal(t, reasoningMessageID(next.ID), secondReasoningMessageID)
 	assert.NotEqual(t, firstReasoningMessageID, secondReasoningMessageID)
 	assert.True(t, tr.reasoningStreams.isOpen(firstReasoningMessageID))
 	assert.True(t, tr.reasoningStreams.isOpen(secondReasoningMessageID))
@@ -3284,7 +3278,7 @@ func TestTranslateReasoningConcurrentModeClosesOnContentDelta(t *testing.T) {
 	reasoningStart, ok := firstEvents[1].(*aguievents.ReasoningMessageStartEvent)
 	require.True(t, ok)
 	reasoningMessageID := reasoningStart.MessageID
-	require.NotEqual(t, first.ID, reasoningMessageID)
+	require.Equal(t, "reasoning-"+first.ID, reasoningMessageID)
 	require.True(t, tr.reasoningStreams.isOpen(reasoningMessageID))
 	next := &model.Response{
 		ID:     "msg-1",
@@ -3332,15 +3326,14 @@ func TestTranslateReasoningConcurrentModeNonStreamClosesMessage(t *testing.T) {
 	assert.IsType(t, (*aguievents.ReasoningMessageStartEvent)(nil), events[1])
 	content, ok := events[2].(*aguievents.ReasoningMessageContentEvent)
 	require.True(t, ok)
-	reasoningMessageID := content.MessageID
-	assert.NotEmpty(t, reasoningMessageID)
-	assert.NotEqual(t, rsp.ID, reasoningMessageID)
+	reasoningID := content.MessageID
+	assert.Equal(t, reasoningMessageID(rsp.ID), reasoningID)
 	assert.Equal(t, "done", content.Delta)
 	assert.IsType(t, (*aguievents.ReasoningMessageEndEvent)(nil), events[3])
 	assert.IsType(t, (*aguievents.ReasoningEndEvent)(nil), events[4])
 	assert.False(t, tr.receivingReasoning)
-	assert.True(t, tr.reasoningStreams.hasStarted(reasoningMessageID))
-	assert.False(t, tr.reasoningStreams.isOpen(reasoningMessageID))
+	assert.True(t, tr.reasoningStreams.hasStarted(reasoningID))
+	assert.False(t, tr.reasoningStreams.isOpen(reasoningID))
 }
 
 func TestTranslateRunnerCompletionClosesConcurrentReasoningStreams(t *testing.T) {
@@ -3375,7 +3368,7 @@ func TestTranslateRunnerCompletionClosesConcurrentReasoningStreams(t *testing.T)
 		require.Len(t, events, 3)
 		start, ok := events[1].(*aguievents.ReasoningMessageStartEvent)
 		require.True(t, ok)
-		assert.NotEqual(t, rsp.ID, start.MessageID)
+		assert.Equal(t, reasoningMessageID(rsp.ID), start.MessageID)
 		reasoningMessageIDs = append(reasoningMessageIDs, start.MessageID)
 	}
 	require.True(t, tr.reasoningStreams.isOpen(reasoningMessageIDs[0]))
