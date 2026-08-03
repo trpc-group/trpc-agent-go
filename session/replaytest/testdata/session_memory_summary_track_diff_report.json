@@ -1,0 +1,273 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "tool_call_and_response",
+      "session_id": "session",
+      "backends": [
+        "inmemory",
+        "injected-sqlite"
+      ],
+      "required_capabilities": [
+        "events"
+      ],
+      "capabilities": {
+        "inmemory": {
+          "events": {
+            "supported": true,
+            "allowed_diff": false
+          }
+        },
+        "injected-sqlite": {
+          "events": {
+            "supported": true,
+            "allowed_diff": false
+          }
+        }
+      },
+      "diffs": [
+        {
+          "case": "tool_call_and_response",
+          "session_id": "session",
+          "backend_a": "inmemory",
+          "backend_b": "injected-sqlite",
+          "section": "events",
+          "path": "$.events[1].choices[0].message.content",
+          "baseline": {
+            "temperature": 30
+          },
+          "compared": {
+            "temperature": 31
+          },
+          "baseline_present": true,
+          "compared_present": true,
+          "allowed_diff": false,
+          "explanation": "unexpected backend mismatch",
+          "event_index": 1
+        }
+      ]
+    },
+    {
+      "name": "state_update_overwrite_delete",
+      "session_id": "session",
+      "backends": [
+        "inmemory",
+        "injected-sqlite"
+      ],
+      "required_capabilities": [
+        "events",
+        "state"
+      ],
+      "capabilities": {
+        "inmemory": {
+          "events": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "state": {
+            "supported": true,
+            "allowed_diff": false
+          }
+        },
+        "injected-sqlite": {
+          "events": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "state": {
+            "supported": true,
+            "allowed_diff": false
+          }
+        }
+      },
+      "diffs": [
+        {
+          "case": "state_update_overwrite_delete",
+          "session_id": "session",
+          "backend_a": "inmemory",
+          "backend_b": "injected-sqlite",
+          "section": "state",
+          "path": "$.state.counter",
+          "baseline": 3,
+          "compared": {
+            "missing": true
+          },
+          "baseline_present": true,
+          "compared_present": false,
+          "allowed_diff": false,
+          "explanation": "unexpected backend mismatch"
+        }
+      ]
+    },
+    {
+      "name": "summary_filter_and_update",
+      "session_id": "session",
+      "backends": [
+        "inmemory",
+        "injected-sqlite"
+      ],
+      "required_capabilities": [
+        "events",
+        "summary"
+      ],
+      "capabilities": {
+        "inmemory": {
+          "events": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "summary": {
+            "supported": true,
+            "allowed_diff": false
+          }
+        },
+        "injected-sqlite": {
+          "events": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "summary": {
+            "supported": true,
+            "allowed_diff": false
+          }
+        }
+      },
+      "diffs": [
+        {
+          "case": "summary_filter_and_update",
+          "session_id": "session",
+          "backend_a": "inmemory",
+          "backend_b": "injected-sqlite",
+          "section": "summaries",
+          "path": "$.summaries[\"agent/tool\"].filter_key",
+          "baseline": "agent/tool",
+          "compared": "agent/wrong-tool",
+          "baseline_present": true,
+          "compared_present": true,
+          "allowed_diff": false,
+          "explanation": "unexpected backend mismatch",
+          "summary_filter_key": "agent/tool"
+        }
+      ]
+    },
+    {
+      "name": "track_status_and_error",
+      "session_id": "session",
+      "backends": [
+        "inmemory",
+        "injected-sqlite"
+      ],
+      "required_capabilities": [
+        "tracks"
+      ],
+      "capabilities": {
+        "inmemory": {
+          "tracks": {
+            "supported": true,
+            "allowed_diff": false
+          }
+        },
+        "injected-sqlite": {
+          "tracks": {
+            "supported": true,
+            "allowed_diff": false
+          }
+        }
+      },
+      "diffs": [
+        {
+          "case": "track_status_and_error",
+          "session_id": "session",
+          "backend_a": "inmemory",
+          "backend_b": "injected-sqlite",
+          "section": "tracks",
+          "path": "$.tracks.tool[1].payload.backend_note",
+          "baseline": {
+            "missing": true
+          },
+          "compared": "sqlite",
+          "baseline_present": false,
+          "compared_present": true,
+          "allowed_diff": true,
+          "explanation": "SQLite exposes a backend-only diagnostic note",
+          "track_name": "tool"
+        }
+      ]
+    },
+    {
+      "name": "memory_update_and_delete",
+      "session_id": "session",
+      "backends": [
+        "inmemory",
+        "injected-sqlite"
+      ],
+      "required_capabilities": [
+        "memory"
+      ],
+      "capabilities": {
+        "inmemory": {
+          "memory": {
+            "supported": true,
+            "allowed_diff": false
+          }
+        },
+        "injected-sqlite": {
+          "memory": {
+            "supported": true,
+            "allowed_diff": false
+          }
+        }
+      },
+      "diffs": [
+        {
+          "case": "memory_update_and_delete",
+          "session_id": "session",
+          "backend_a": "inmemory",
+          "backend_b": "injected-sqlite",
+          "section": "memories",
+          "path": "$.memories[0].content",
+          "baseline": "final preference",
+          "compared": "draft preference",
+          "baseline_present": true,
+          "compared_present": true,
+          "allowed_diff": false,
+          "explanation": "unexpected backend mismatch",
+          "memory_id": "memory-000"
+        }
+      ]
+    },
+    {
+      "name": "track_unsupported",
+      "session_id": "session",
+      "backends": [
+        "inmemory",
+        "clickhouse"
+      ],
+      "required_capabilities": [
+        "tracks"
+      ],
+      "skipped_backends": {
+        "clickhouse": [
+          "tracks"
+        ]
+      },
+      "inconclusive": true,
+      "capabilities": {
+        "inmemory": {
+          "tracks": {
+            "supported": true,
+            "allowed_diff": false
+          }
+        },
+        "clickhouse": {
+          "tracks": {
+            "supported": false,
+            "reason": "session/clickhouse does not implement session.TrackService",
+            "allowed_diff": true
+          }
+        }
+      },
+      "diffs": []
+    }
+  ]
+}
