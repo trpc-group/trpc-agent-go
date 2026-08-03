@@ -1,0 +1,17 @@
+{
+  "scan": {
+    "decision": "deny",
+    "risk_level": "critical",
+    "rule_id": "dangerous_cmd_001",
+    "evidence": "rm -rf /",
+    "recommendation": "Command \"rm\" is explicitly denied by policy",
+    "tool_name": "workspace_exec",
+    "command": "rm -rf /",
+    "backend": "workspaceexec",
+    "intercepted": true,
+    "category": "dangerous_commands"
+  },
+  "meta": {
+    "note": "示例结构化扫描报告；实际由 Scanner.Scan 生成，command/evidence 已脱敏（redactSecrets）。"
+  }
+}

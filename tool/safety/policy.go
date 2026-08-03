@@ -10,6 +10,7 @@
 package safety
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 
@@ -28,9 +29,10 @@ func DefaultPolicy() *Policy {
 			".env", ".env.local", "credentials.json",
 			"/proc/", "/sys/",
 		},
-		AllowlistedHosts: []string{},
-		MaxTimeoutSec:    300,
-		MaxOutputBytes:   10 * 1024 * 1024, // 10MB
+		AllowlistedHosts:    []string{},
+		MaxTimeoutSec:       300,
+		MaxOutputBytes:      10 * 1024 * 1024, // 10MB
+		HostExecRequiresAsk: true,             // hostexec 直接跑 host shell，默认需 ask
 		EnvAllowlist: []string{
 			"PATH", "HOME", "USER", "LANG",
 			"GOFLAGS", "GOPATH", "GOROOT",
@@ -122,7 +124,11 @@ func LoadPolicy(path string) (*Policy, error) {
 
 	// Start from safe defaults, then overlay file values.
 	policy := *DefaultPolicy()
-	if err := yaml.Unmarshal(data, &policy); err != nil {
+	// KnownFields(true) rejects unknown keys so a typo (e.g. "allowd_commands")
+	// cannot silently drop the allowlist and weaken the policy.
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&policy); err != nil {
 		return nil, fmt.Errorf("parse policy yaml: %w", err)
 	}
 
