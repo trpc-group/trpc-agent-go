@@ -1081,3 +1081,29 @@ func TestPersistentBackendCrossBackendComparison(t *testing.T) {
 		// the key is that a structured report was produced per case.
 	}
 }
+
+// TestFaultInjectionDetection runs every replay case on the persistent
+// backend, injects each deterministic inconsistency into the resulting
+// snapshot, and asserts the comparator reports a diff — acceptance #2
+// (100% detection of injected inconsistencies) and #4 (summary
+// loss/overwrite/wrong-filter-key).
+func TestFaultInjectionDetection(t *testing.T) {
+	backend := newPersistentBackend(t.TempDir(), "persistent")
+	injected := 0
+	for _, c := range replayCases() {
+		clean, err := RunCase(context.Background(), backend, c)
+		require.NoError(t, err, "case %s should run", c.Name)
+		for _, kind := range FaultKinds {
+			mutated, err := InjectFault(clean, kind)
+			if err != nil {
+				continue // this case has no target for the fault
+			}
+			injected++
+			diffs := CompareSnapshots(clean, mutated, "clean", "faulted", nil)
+			assert.NotEmpty(t, diffs,
+				"case %q: injected fault %q must be detected", c.Name, kind)
+		}
+	}
+	assert.GreaterOrEqual(t, injected, 1,
+		"at least one fault injection should have run across the cases")
+}

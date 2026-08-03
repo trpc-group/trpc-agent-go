@@ -1,0 +1,253 @@
+[
+  {
+    "case_name": "error_recovery",
+    "session_id": "session-010",
+    "backend_a": "inmemory",
+    "backend_b": "persistent",
+    "diffs": [
+      {
+        "session_id": "session-010",
+        "memory_id": "Normal operation recorded",
+        "field_path": "memories[5]",
+        "value_a": null,
+        "value_b": {
+          "content": "Normal operation recorded",
+          "topics": [
+            "status"
+          ]
+        },
+        "allowed": false
+      }
+    ]
+  },
+  {
+    "case_name": "memory_multi_author_search",
+    "session_id": "session-005",
+    "backend_a": "inmemory",
+    "backend_b": "persistent",
+    "diffs": [
+      {
+        "session_id": "session-005",
+        "memory_id": "User enjoys hiking",
+        "field_path": "memories[3]",
+        "value_a": null,
+        "value_b": {
+          "content": "User enjoys hiking",
+          "topics": [
+            "hobbies"
+          ]
+        },
+        "allowed": false
+      },
+      {
+        "session_id": "session-005",
+        "memory_id": "User prefers tea",
+        "field_path": "memories[4]",
+        "value_a": null,
+        "value_b": {
+          "content": "User prefers tea",
+          "topics": [
+            "preferences"
+          ]
+        },
+        "allowed": false
+      },
+      {
+        "session_id": "session-005",
+        "memory_id": "User prefers tea",
+        "field_path": "memories[5]",
+        "value_a": null,
+        "value_b": {
+          "content": "User prefers tea",
+          "topics": [
+            "preferences"
+          ]
+        },
+        "allowed": false
+      }
+    ]
+  },
+  {
+    "case_name": "multi_turn_state_updates",
+    "session_id": "session-002",
+    "backend_a": "inmemory",
+    "backend_b": "persistent",
+    "diffs": [
+      {
+        "session_id": "session-002",
+        "memory_id": "User name is Bob",
+        "field_path": "memories[3]",
+        "value_a": null,
+        "value_b": {
+          "content": "User name is Bob",
+          "topics": [
+            "identity"
+          ]
+        },
+        "allowed": false
+      },
+      {
+        "session_id": "session-002",
+        "memory_id": "User likes coffee",
+        "field_path": "memories[4]",
+        "value_a": null,
+        "value_b": {
+          "content": "User likes coffee",
+          "topics": [
+            "preferences"
+          ]
+        },
+        "allowed": false
+      }
+    ]
+  },
+  {
+    "case_name": "out_of_order_writes",
+    "session_id": "session-009",
+    "backend_a": "inmemory",
+    "backend_b": "persistent",
+    "diffs": null
+  },
+  {
+    "case_name": "scoped_state_overwrite",
+    "session_id": "session-004",
+    "backend_a": "inmemory",
+    "backend_b": "persistent",
+    "diffs": [
+      {
+        "session_id": "session-004",
+        "field_path": "events[0].author",
+        "value_a": "user",
+        "value_b": "assistant",
+        "allowed": false
+      },
+      {
+        "session_id": "session-004",
+        "field_path": "events[0].role",
+        "value_a": "user",
+        "value_b": "assistant",
+        "allowed": false
+      },
+      {
+        "session_id": "session-004",
+        "field_path": "events[0].content",
+        "value_a": "I found the answer.",
+        "value_b": "Starting round 1.",
+        "allowed": false
+      },
+      {
+        "session_id": "session-004",
+        "field_path": "events[0].state_delta",
+        "value_a": null,
+        "value_b": {
+          "user:score": "10"
+        },
+        "allowed": false
+      },
+      {
+        "session_id": "session-004",
+        "field_path": "events[1].author",
+        "value_a": "assistant",
+        "value_b": "user",
+        "allowed": false
+      },
+      {
+        "session_id": "session-004",
+        "field_path": "events[1].role",
+        "value_a": "assistant",
+        "value_b": "user",
+        "allowed": false
+      },
+      {
+        "session_id": "session-004",
+        "field_path": "events[1].content",
+        "value_a": "Score updated.",
+        "value_b": "I found the answer.",
+        "allowed": false
+      },
+      {
+        "session_id": "session-004",
+        "field_path": "events[1].state_delta",
+        "value_a": {
+          "app:round": "2",
+          "user:score": "25"
+        },
+        "value_b": null,
+        "allowed": false
+      },
+      {
+        "session_id": "session-004",
+        "event_index": 2,
+        "field_path": "events[2]",
+        "value_a": null,
+        "value_b": {
+          "author": "assistant",
+          "role": "assistant",
+          "content": "Score updated.",
+          "state_delta": {
+            "app:round": "2",
+            "user:score": "25"
+          }
+        },
+        "allowed": false
+      }
+    ]
+  },
+  {
+    "case_name": "single_turn_text",
+    "session_id": "session-001",
+    "backend_a": "inmemory",
+    "backend_b": "persistent",
+    "diffs": null
+  },
+  {
+    "case_name": "summary_generation",
+    "session_id": "session-006",
+    "backend_a": "inmemory",
+    "backend_b": "persistent",
+    "diffs": null
+  },
+  {
+    "case_name": "summary_with_truncation",
+    "session_id": "session-007",
+    "backend_a": "inmemory",
+    "backend_b": "persistent",
+    "diffs": null
+  },
+  {
+    "case_name": "tool_call_roundtrip",
+    "session_id": "session-003",
+    "backend_a": "inmemory",
+    "backend_b": "persistent",
+    "diffs": [
+      {
+        "session_id": "session-003",
+        "memory_id": "User checked weather for Beijing",
+        "field_path": "memories[4]",
+        "value_a": null,
+        "value_b": {
+          "content": "User checked weather for Beijing",
+          "topics": [
+            "action"
+          ]
+        },
+        "allowed": false
+      }
+    ]
+  },
+  {
+    "case_name": "track_events",
+    "session_id": "session-008",
+    "backend_a": "inmemory",
+    "backend_b": "persistent",
+    "diffs": [
+      {
+        "session_id": "session-008",
+        "field_path": "state.tracks",
+        "value_a": "[\"tool_execution\",\"subtask_status\"]",
+        "value_b": "",
+        "allowed": false
+      }
+    ]
+  }
+]
