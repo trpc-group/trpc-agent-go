@@ -803,3 +803,23 @@ func TestLoadPolicy_RejectsUnknownKeys(t *testing.T) {
 	_, err := LoadPolicy(path)
 	require.Error(t, err, "unknown key must be rejected, not silently ignored")
 }
+
+func TestLoadPolicy_RejectsInvalidRegex(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/bad_regex.yaml"
+	// A typo in a rule pattern must fail loudly: a broken deny rule must not
+	// silently become a no-op.
+	content := `version: "1.0"
+rules:
+  - id: "broken_rule"
+    category: "dangerous_commands"
+    description: "typo pattern"
+    patterns:
+      - "rm -rf ["
+    risk_level: "critical"
+    action: "deny"
+`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	_, err := LoadPolicy(path)
+	require.Error(t, err, "invalid regex pattern must be rejected at load time")
+}

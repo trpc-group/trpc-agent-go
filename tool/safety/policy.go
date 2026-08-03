@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"regexp"
 
 	"gopkg.in/yaml.v3"
 )
@@ -134,6 +135,19 @@ func LoadPolicy(path string) (*Policy, error) {
 
 	if policy.Version == "" {
 		policy.Version = "1.0"
+	}
+
+	// Validate every rule pattern at load time: a typo must fail loudly
+	// instead of silently turning a deny rule into a no-op (the scanner's
+	// compileRules only warns as a last resort for programmatically-built
+	// policies).
+	for _, rule := range policy.Rules {
+		for _, pattern := range rule.Patterns {
+			if _, err := regexp.Compile(pattern); err != nil {
+				return nil, fmt.Errorf(
+					"invalid regex in rule %q pattern %q: %w", rule.ID, pattern, err)
+			}
+		}
 	}
 	return &policy, nil
 }
