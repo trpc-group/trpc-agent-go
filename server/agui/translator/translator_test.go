@@ -2827,13 +2827,19 @@ func TestTranslateReasoningStreamEndsOnContent(t *testing.T) {
 	events, err := tr.Translate(context.Background(), &agentevent.Event{Response: first})
 	assert.NoError(t, err)
 	assert.Len(t, events, 3)
-	assert.IsType(t, (*aguievents.ReasoningStartEvent)(nil), events[0])
+	reasoningStart, ok := events[0].(*aguievents.ReasoningStartEvent)
+	require.True(t, ok)
 	start, ok := events[1].(*aguievents.ReasoningMessageStartEvent)
-	assert.True(t, ok)
+	require.True(t, ok)
+	reasoningMessageID := start.MessageID
+	assert.Equal(t, "reasoning-"+first.ID, reasoningMessageID)
+	assert.Equal(t, reasoningMessageID, reasoningStart.MessageID)
 	assert.Equal(t, string(aguitypes.RoleReasoning), start.Role)
-	assert.IsType(t, (*aguievents.ReasoningMessageContentEvent)(nil), events[2])
+	firstContent, ok := events[2].(*aguievents.ReasoningMessageContentEvent)
+	require.True(t, ok)
+	assert.Equal(t, reasoningMessageID, firstContent.MessageID)
 	assert.True(t, tr.receivingReasoning)
-	assert.Equal(t, "msg-1", tr.lastReasoningMessageID)
+	assert.Equal(t, reasoningMessageID, tr.lastReasoningMessageID)
 	second := &model.Response{
 		ID:     "msg-1",
 		Object: model.ObjectTypeChatCompletionChunk,
@@ -2847,7 +2853,7 @@ func TestTranslateReasoningStreamEndsOnContent(t *testing.T) {
 	assert.Len(t, events, 1)
 	content, ok := events[0].(*aguievents.ReasoningMessageContentEvent)
 	assert.True(t, ok)
-	assert.Equal(t, "msg-1", content.MessageID)
+	assert.Equal(t, reasoningMessageID, content.MessageID)
 	assert.Equal(t, " more", content.Delta)
 	third := &model.Response{
 		ID:     "msg-1",
@@ -2860,9 +2866,17 @@ func TestTranslateReasoningStreamEndsOnContent(t *testing.T) {
 	events, err = tr.Translate(context.Background(), &agentevent.Event{Response: third})
 	assert.NoError(t, err)
 	assert.Len(t, events, 4)
-	assert.IsType(t, (*aguievents.ReasoningMessageEndEvent)(nil), events[0])
-	assert.IsType(t, (*aguievents.ReasoningEndEvent)(nil), events[1])
-	assert.IsType(t, (*aguievents.TextMessageStartEvent)(nil), events[2])
+	reasoningMessageEnd, ok := events[0].(*aguievents.ReasoningMessageEndEvent)
+	require.True(t, ok)
+	assert.Equal(t, reasoningMessageID, reasoningMessageEnd.MessageID)
+	reasoningEnd, ok := events[1].(*aguievents.ReasoningEndEvent)
+	require.True(t, ok)
+	assert.Equal(t, reasoningMessageID, reasoningEnd.MessageID)
+	textStart, ok := events[2].(*aguievents.TextMessageStartEvent)
+	require.True(t, ok)
+	assert.Equal(t, first.ID, textStart.MessageID)
+	require.NotNil(t, textStart.Role)
+	assert.Equal(t, model.RoleAssistant.String(), *textStart.Role)
 	assert.IsType(t, (*aguievents.TextMessageContentEvent)(nil), events[3])
 	assert.False(t, tr.receivingReasoning)
 	reason := "stop"
@@ -2903,12 +2917,27 @@ func TestTranslateReasoningNonStreamPrecedesText(t *testing.T) {
 	assert.Len(t, events, 8)
 	assert.IsType(t, (*aguievents.ReasoningStartEvent)(nil), events[0])
 	start, ok := events[1].(*aguievents.ReasoningMessageStartEvent)
-	assert.True(t, ok)
+	require.True(t, ok)
+	reasoningMessageID := start.MessageID
+	assert.Equal(t, "reasoning-"+rsp.ID, reasoningMessageID)
 	assert.Equal(t, string(aguitypes.RoleReasoning), start.Role)
-	assert.IsType(t, (*aguievents.ReasoningMessageContentEvent)(nil), events[2])
-	assert.IsType(t, (*aguievents.ReasoningMessageEndEvent)(nil), events[3])
-	assert.IsType(t, (*aguievents.ReasoningEndEvent)(nil), events[4])
-	assert.IsType(t, (*aguievents.TextMessageStartEvent)(nil), events[5])
+	for _, event := range events[:5] {
+		switch item := event.(type) {
+		case *aguievents.ReasoningStartEvent:
+			assert.Equal(t, reasoningMessageID, item.MessageID)
+		case *aguievents.ReasoningMessageStartEvent:
+			assert.Equal(t, reasoningMessageID, item.MessageID)
+		case *aguievents.ReasoningMessageContentEvent:
+			assert.Equal(t, reasoningMessageID, item.MessageID)
+		case *aguievents.ReasoningMessageEndEvent:
+			assert.Equal(t, reasoningMessageID, item.MessageID)
+		case *aguievents.ReasoningEndEvent:
+			assert.Equal(t, reasoningMessageID, item.MessageID)
+		}
+	}
+	textStart, ok := events[5].(*aguievents.TextMessageStartEvent)
+	require.True(t, ok)
+	assert.Equal(t, rsp.ID, textStart.MessageID)
 	assert.IsType(t, (*aguievents.TextMessageContentEvent)(nil), events[6])
 	assert.IsType(t, (*aguievents.TextMessageEndEvent)(nil), events[7])
 }
@@ -3084,7 +3113,8 @@ func TestTranslateReasoningStreamClosesOnIDChange(t *testing.T) {
 	_, err := tr.Translate(context.Background(), &agentevent.Event{Response: first})
 	assert.NoError(t, err)
 	assert.True(t, tr.receivingReasoning)
-	assert.Equal(t, "msg-1", tr.lastReasoningMessageID)
+	firstReasoningMessageID := tr.lastReasoningMessageID
+	assert.Equal(t, reasoningMessageID(first.ID), firstReasoningMessageID)
 
 	next := &model.Response{
 		ID:     "msg-2",
@@ -3103,7 +3133,15 @@ func TestTranslateReasoningStreamClosesOnIDChange(t *testing.T) {
 	assert.IsType(t, (*aguievents.ReasoningMessageStartEvent)(nil), events[3])
 	assert.IsType(t, (*aguievents.ReasoningMessageContentEvent)(nil), events[4])
 	assert.True(t, tr.receivingReasoning)
-	assert.Equal(t, "msg-2", tr.lastReasoningMessageID)
+	secondReasoningMessageID := tr.lastReasoningMessageID
+	assert.Equal(t, reasoningMessageID(next.ID), secondReasoningMessageID)
+	assert.NotEqual(t, firstReasoningMessageID, secondReasoningMessageID)
+	end, ok := events[0].(*aguievents.ReasoningMessageEndEvent)
+	require.True(t, ok)
+	assert.Equal(t, firstReasoningMessageID, end.MessageID)
+	start, ok := events[3].(*aguievents.ReasoningMessageStartEvent)
+	require.True(t, ok)
+	assert.Equal(t, secondReasoningMessageID, start.MessageID)
 }
 
 func TestTranslateReasoningStreamIDChangeKeepsPreviousMessageOpen(t *testing.T) {
@@ -3125,7 +3163,8 @@ func TestTranslateReasoningStreamIDChangeKeepsPreviousMessageOpen(t *testing.T) 
 	_, err := tr.Translate(context.Background(), &agentevent.Event{Response: first})
 	assert.NoError(t, err)
 	assert.True(t, tr.receivingReasoning)
-	assert.Equal(t, "msg-1", tr.lastReasoningMessageID)
+	firstReasoningMessageID := tr.lastReasoningMessageID
+	assert.Equal(t, reasoningMessageID(first.ID), firstReasoningMessageID)
 
 	next := &model.Response{
 		ID:     "msg-2",
@@ -3142,9 +3181,11 @@ func TestTranslateReasoningStreamIDChangeKeepsPreviousMessageOpen(t *testing.T) 
 	assert.IsType(t, (*aguievents.ReasoningMessageStartEvent)(nil), events[1])
 	assert.IsType(t, (*aguievents.ReasoningMessageContentEvent)(nil), events[2])
 	assert.True(t, tr.receivingReasoning)
-	assert.Equal(t, "msg-2", tr.lastReasoningMessageID)
-	assert.True(t, tr.reasoningStreams.isOpen("msg-1"))
-	assert.True(t, tr.reasoningStreams.isOpen("msg-2"))
+	secondReasoningMessageID := tr.lastReasoningMessageID
+	assert.Equal(t, reasoningMessageID(next.ID), secondReasoningMessageID)
+	assert.NotEqual(t, firstReasoningMessageID, secondReasoningMessageID)
+	assert.True(t, tr.reasoningStreams.isOpen(firstReasoningMessageID))
+	assert.True(t, tr.reasoningStreams.isOpen(secondReasoningMessageID))
 }
 
 func TestTranslateReasoningConcurrentModeSkipsEmptyResponseID(t *testing.T) {
@@ -3186,9 +3227,14 @@ func TestTranslateReasoningConcurrentModeClosesOnContentDelta(t *testing.T) {
 		}},
 		IsPartial: true,
 	}
-	_, err := tr.Translate(context.Background(), &agentevent.Event{Response: first})
+	firstEvents, err := tr.Translate(context.Background(), &agentevent.Event{Response: first})
 	require.NoError(t, err)
-	require.True(t, tr.reasoningStreams.isOpen("msg-1"))
+	require.Len(t, firstEvents, 3)
+	reasoningStart, ok := firstEvents[1].(*aguievents.ReasoningMessageStartEvent)
+	require.True(t, ok)
+	reasoningMessageID := reasoningStart.MessageID
+	require.Equal(t, "reasoning-"+first.ID, reasoningMessageID)
+	require.True(t, tr.reasoningStreams.isOpen(reasoningMessageID))
 	next := &model.Response{
 		ID:     "msg-1",
 		Object: model.ObjectTypeChatCompletionChunk,
@@ -3210,7 +3256,7 @@ func TestTranslateReasoningConcurrentModeClosesOnContentDelta(t *testing.T) {
 	assert.Equal(t, "msg-1", content.MessageID)
 	assert.Equal(t, "answer", content.Delta)
 	assert.False(t, tr.receivingReasoning)
-	assert.False(t, tr.reasoningStreams.isOpen("msg-1"))
+	assert.False(t, tr.reasoningStreams.isOpen(reasoningMessageID))
 }
 
 func TestTranslateReasoningConcurrentModeNonStreamClosesMessage(t *testing.T) {
@@ -3235,13 +3281,14 @@ func TestTranslateReasoningConcurrentModeNonStreamClosesMessage(t *testing.T) {
 	assert.IsType(t, (*aguievents.ReasoningMessageStartEvent)(nil), events[1])
 	content, ok := events[2].(*aguievents.ReasoningMessageContentEvent)
 	require.True(t, ok)
-	assert.Equal(t, "msg-final", content.MessageID)
+	reasoningID := content.MessageID
+	assert.Equal(t, reasoningMessageID(rsp.ID), reasoningID)
 	assert.Equal(t, "done", content.Delta)
 	assert.IsType(t, (*aguievents.ReasoningMessageEndEvent)(nil), events[3])
 	assert.IsType(t, (*aguievents.ReasoningEndEvent)(nil), events[4])
 	assert.False(t, tr.receivingReasoning)
-	assert.True(t, tr.reasoningStreams.hasStarted("msg-final"))
-	assert.False(t, tr.reasoningStreams.isOpen("msg-final"))
+	assert.True(t, tr.reasoningStreams.hasStarted(reasoningID))
+	assert.False(t, tr.reasoningStreams.isOpen(reasoningID))
 }
 
 func TestTranslateRunnerCompletionClosesConcurrentReasoningStreams(t *testing.T) {
@@ -3252,6 +3299,7 @@ func TestTranslateRunnerCompletionClosesConcurrentReasoningStreams(t *testing.T)
 	if tr == nil {
 		return
 	}
+	var reasoningMessageIDs []string
 	for _, rsp := range []*model.Response{
 		{
 			ID:     "msg-1",
@@ -3270,11 +3318,16 @@ func TestTranslateRunnerCompletionClosesConcurrentReasoningStreams(t *testing.T)
 			IsPartial: true,
 		},
 	} {
-		_, err := tr.Translate(context.Background(), &agentevent.Event{Response: rsp})
+		events, err := tr.Translate(context.Background(), &agentevent.Event{Response: rsp})
 		require.NoError(t, err)
+		require.Len(t, events, 3)
+		start, ok := events[1].(*aguievents.ReasoningMessageStartEvent)
+		require.True(t, ok)
+		assert.Equal(t, reasoningMessageID(rsp.ID), start.MessageID)
+		reasoningMessageIDs = append(reasoningMessageIDs, start.MessageID)
 	}
-	require.True(t, tr.reasoningStreams.isOpen("msg-1"))
-	require.True(t, tr.reasoningStreams.isOpen("msg-2"))
+	require.True(t, tr.reasoningStreams.isOpen(reasoningMessageIDs[0]))
+	require.True(t, tr.reasoningStreams.isOpen(reasoningMessageIDs[1]))
 	runCompletionRsp := &model.Response{
 		ID:     "msg-run-completion",
 		Object: model.ObjectTypeRunnerCompletion,
