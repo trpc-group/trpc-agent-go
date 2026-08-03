@@ -51,6 +51,8 @@ type Runtime struct {
 	bwrapPath      string
 	bwrapMountProc bool
 	seatbeltPath   string
+
+	egressRelayPath string
 }
 
 // NewRuntime constructs a sandbox runtime.

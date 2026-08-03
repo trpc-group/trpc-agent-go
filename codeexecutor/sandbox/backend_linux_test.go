@@ -14,6 +14,7 @@ package sandbox
 import (
 	"context"
 	"errors"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,6 +25,94 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 )
+
+func TestLinuxControlledEgressRejectsWritablePathIndirection(t *testing.T) {
+	root, err := os.MkdirTemp("/tmp", "ce-debug-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	rt := NewRuntime(WithWorkspaceRoot(root))
+	ws, err := rt.CreateWorkspace(context.Background(), "debug/path-trust", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	socketTarget := filepath.Join(ws.Path, "work", "proxy.sock")
+	writableListener, err := net.Listen("unix", socketTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writableListener.Close()
+	socketLink := filepath.Join(t.TempDir(), "proxy.sock")
+	if err := os.Symlink(socketTarget, socketLink); err != nil {
+		t.Fatal(err)
+	}
+
+	safeSocket := filepath.Join(root, "proxy.sock")
+	safeListener, err := net.Listen("unix", safeSocket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer safeListener.Close()
+	safeRelay := filepath.Join(t.TempDir(), "egress-relay")
+	if err := os.WriteFile(safeRelay, []byte("#!/bin/sh\nexec \"$@\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rt.egressRelayPath = safeRelay
+	profile := WorkspaceWriteProfile().WithControlledEgressProxy(ControlledEgressProxy{UnixPath: socketLink})
+	if _, err := rt.linuxSandboxSetup(
+		profile,
+		ws,
+		filepath.Join(ws.Path, "work"),
+		nil,
+		codeexecutor.RunProgramSpec{Cmd: "/bin/true"},
+		false,
+	); !isKind(err, ErrPolicyViolation) {
+		t.Fatalf("socket symlink error = %v, want ErrPolicyViolation", err)
+	}
+
+	relayTarget := filepath.Join(ws.Path, "work", "egress-relay")
+	if err := os.WriteFile(relayTarget, []byte("#!/bin/sh\nexec \"$@\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	relayLink := filepath.Join(t.TempDir(), "egress-relay")
+	if err := os.Symlink(relayTarget, relayLink); err != nil {
+		t.Fatal(err)
+	}
+	rt.egressRelayPath = relayLink
+	profile = WorkspaceWriteProfile().WithControlledEgressProxy(ControlledEgressProxy{UnixPath: safeSocket})
+	if _, err := rt.linuxSandboxSetup(
+		profile,
+		ws,
+		filepath.Join(ws.Path, "work"),
+		nil,
+		codeexecutor.RunProgramSpec{Cmd: "/bin/true"},
+		false,
+	); !isKind(err, ErrSetupFailed) {
+		t.Fatalf("relay symlink error = %v, want ErrSetupFailed", err)
+	}
+
+	externalWrite := t.TempDir()
+	externalRelay := filepath.Join(externalWrite, "egress-relay")
+	if err := os.WriteFile(externalRelay, []byte("#!/bin/sh\nexec \"$@\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rt.egressRelayPath = externalRelay
+	profile = WorkspaceWriteProfile().
+		WithWritePaths(externalWrite).
+		WithControlledEgressProxy(ControlledEgressProxy{UnixPath: safeSocket})
+	if _, err := rt.linuxSandboxSetup(
+		profile,
+		ws,
+		filepath.Join(ws.Path, "work"),
+		nil,
+		codeexecutor.RunProgramSpec{Cmd: "/bin/true"},
+		false,
+	); !isKind(err, ErrSetupFailed) {
+		t.Fatalf("external-write relay error = %v, want ErrSetupFailed", err)
+	}
+}
 
 func TestLinuxBwrapWorkspaceWriteIntegration(t *testing.T) {
 	if _, err := exec.LookPath("bwrap"); err != nil {
@@ -56,6 +145,60 @@ func TestLinuxBwrapWorkspaceWriteIntegration(t *testing.T) {
 	}
 }
 
+func TestLinuxSandboxArgsUnknownNetworkModeFailsClosed(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(
+		context.Background(),
+		"unknown-net-mode",
+		codeexecutor.WorkspacePolicy{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := WorkspaceWriteProfile()
+	profile.network.Mode = NetworkMode("weird")
+	_, err = rt.linuxSandboxArgs(
+		profile,
+		ws,
+		filepath.Join(ws.Path, codeexecutor.DirWork),
+		nil,
+		codeexecutor.RunProgramSpec{Cmd: "/bin/true"},
+		false,
+	)
+	if !isKind(err, ErrPolicyViolation) {
+		t.Fatalf(
+			"linuxSandboxArgs error = %v, want ErrPolicyViolation",
+			err,
+		)
+	}
+}
+
+func TestLinuxSandboxArgsRestrictedIsolatesNetwork(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(
+		context.Background(),
+		"restricted-net",
+		codeexecutor.WorkspacePolicy{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args, err := rt.linuxSandboxArgs(
+		WorkspaceWriteProfile(),
+		ws,
+		filepath.Join(ws.Path, codeexecutor.DirWork),
+		nil,
+		codeexecutor.RunProgramSpec{Cmd: "/bin/true"},
+		false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasArg(args, "--unshare-net") {
+		t.Fatalf("args = %#v, want --unshare-net for restricted", args)
+	}
+}
+
 func TestLinuxProcMountFailureDetection(t *testing.T) {
 	for _, stderr := range []string{
 		"bwrap: Can't mount proc on /newroot/proc: Invalid argument",
@@ -76,6 +219,72 @@ func TestLinuxProcMountFailureDetection(t *testing.T) {
 		if isProcMountFailure(stderr) {
 			t.Fatalf("isProcMountFailure(%q) = true, want false", stderr)
 		}
+	}
+}
+
+func TestValidateControlledEgressSocketPathRejectsGuestWritableMounts(
+	t *testing.T,
+) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(
+		context.Background(),
+		"controlled-socket",
+		codeexecutor.WorkspacePolicy{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	externalWrite := t.TempDir()
+	outside := t.TempDir()
+	tests := []struct {
+		name    string
+		profile PermissionProfile
+		path    string
+		denied  bool
+	}{
+		{
+			name:    "workspace",
+			profile: WorkspaceWriteProfile(),
+			path:    filepath.Join(ws.Path, codeexecutor.DirWork, "proxy.sock"),
+			denied:  true,
+		},
+		{
+			name:    "external write grant",
+			profile: ReadOnlyProfile().WithWritePaths(externalWrite),
+			path:    filepath.Join(externalWrite, "proxy.sock"),
+			denied:  true,
+		},
+		{
+			name:    "external read grant",
+			profile: ReadOnlyProfile().WithReadPaths(externalWrite),
+			path:    filepath.Join(externalWrite, "proxy.sock"),
+		},
+		{
+			name:    "outside writable mounts",
+			profile: WorkspaceWriteProfile(),
+			path:    filepath.Join(outside, "proxy.sock"),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := os.WriteFile(tt.path, []byte("socket path placeholder"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := rt.validateControlledEgressSocketPath(
+				tt.profile,
+				ws,
+				tt.path,
+			)
+			if tt.denied {
+				if !isKind(err, ErrPolicyViolation) {
+					t.Fatalf("error = %v, want %s", err, ErrPolicyViolation)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
 	}
 }
 

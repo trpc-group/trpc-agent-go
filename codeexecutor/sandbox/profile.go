@@ -9,7 +9,9 @@
 
 package sandbox
 
-import "context"
+import (
+	"context"
+)
 
 // enforcement is the internal execution mode derived from PermissionProfile.
 type enforcement string
@@ -40,10 +42,11 @@ const (
 // owns both filesystem and network policy so callers cannot request contradictory
 // combinations such as read-only + disabled enforcement.
 type PermissionProfile struct {
-	typ        permissionProfileType
-	fileSystem fileSystemPolicy
-	network    NetworkPolicy
-	macOS      macOSProfilePolicy
+	typ              permissionProfileType
+	fileSystem       fileSystemPolicy
+	network          NetworkPolicy
+	macOS            macOSProfilePolicy
+	controlledEgress ControlledEgressProxy
 }
 
 // macOSProfilePolicy describes macOS Seatbelt-specific controls. It is kept off
@@ -122,6 +125,9 @@ func (p PermissionProfile) WithNetworkPolicy(policy NetworkPolicy) PermissionPro
 		policy.Mode = NetworkRestricted
 	}
 	p.network = policy
+	if policy.Mode != NetworkControlled {
+		p.controlledEgress = ControlledEgressProxy{}
+	}
 	return p
 }
 

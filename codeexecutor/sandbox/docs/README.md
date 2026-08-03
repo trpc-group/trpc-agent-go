@@ -30,17 +30,24 @@ permissions, risk notes, and validation commands.
 
 ## Network
 
-Network policy is enforced as a binary boundary between isolated and host
-network access. Managed profiles use the `restricted` / `enabled` access model
-described in [`NETWORK_POLICY.md`](NETWORK_POLICY.md). In short, managed
-profiles default to restricted networking unless the caller explicitly enables
-host network access:
+Managed profiles use the `restricted` / `controlled` / `enabled` access model
+described in [`NETWORK_POLICY.md`](NETWORK_POLICY.md). They default to
+restricted networking unless the caller explicitly selects another mode:
 
 - `NetworkRestricted` asks the backend to block outbound networking when it can
   enforce that boundary.
+- `NetworkControlled` keeps host IP networking isolated and provides
+  HTTP/HTTPS egress through a caller-owned policy proxy.
 - `NetworkEnabled` allows the command to use the host network. On Linux this
   means the command is launched without network namespace isolation. On macOS
   this means the generated Seatbelt profile includes broad network allow rules.
+
+On Linux, `restricted` and `controlled` isolate AF_INET/AF_INET6 only. Because
+the backend exposes the host root read-only, a guest may still connect to host
+AF_UNIX sockets whose filesystem permissions permit it. These modes do not
+provide host IPC isolation, and `controlled` does not guarantee that its proxy
+is the sole host communication channel. Deployments must hide or independently
+protect sensitive sockets such as `docker.sock`.
 
 ## File System
 

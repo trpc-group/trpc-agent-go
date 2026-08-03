@@ -70,6 +70,9 @@ that subtree read-only.
 The Linux backend uses `bubblewrap` mount namespaces to materialize the policy:
 
 - `--ro-bind / /` gives the command a read-only view of the host root.
+  Read-only mounts do **not** block `connect(2)` to Unix domain socket files
+  that remain visible on that tree; see
+  [`NETWORK_POLICY.md` Non-guarantees](NETWORK_POLICY.md#non-guarantees-linux-af_unix).
 - `--bind <workspace> <workspace>` makes the sandbox workspace writable.
 - Explicit absolute read grants are added with `--ro-bind`.
 - Explicit absolute write grants are added with `--bind`.

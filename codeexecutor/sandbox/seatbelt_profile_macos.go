@@ -115,7 +115,19 @@ func (r *Runtime) macosSeatbeltProfile(
 	if err != nil {
 		return "", err
 	}
-	networkPolicy, err := macosSeatbeltNetworkPolicy(profile.network, profile.macOS)
+	plan, err := resolveNetworkPolicy(profile)
+	if err != nil {
+		return "", err
+	}
+	if plan.mode == NetworkControlled {
+		return "", deniedf(
+			ErrUnsupportedBackend,
+			"network",
+			"",
+			"controlled egress is not supported on macOS yet",
+		)
+	}
+	networkPolicy, err := macosSeatbeltNetworkPolicy(plan, profile.macOS)
 	if err != nil {
 		return "", err
 	}
@@ -501,9 +513,12 @@ func macosGlobPatternToRegex(pattern string) (string, error) {
 	return b.String(), nil
 }
 
-func macosSeatbeltNetworkPolicy(policy NetworkPolicy, macOS macOSProfilePolicy) (string, error) {
+func macosSeatbeltNetworkPolicy(
+	plan resolvedNetworkPolicy,
+	macOS macOSProfilePolicy,
+) (string, error) {
 	var sections []string
-	if policy.Mode == NetworkEnabled {
+	if !plan.isolateNetwork {
 		sections = append(sections, `(allow network-outbound)
 (allow network-inbound)
 (allow system-socket)`, macosNetworkMachLookupPolicy())

@@ -15,6 +15,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -127,8 +128,36 @@ func (r *Runtime) linuxSandboxSetup(
 	} else {
 		args = appendInaccessibleDirMaskArgs(args, "/proc")
 	}
-	if profile.network.Mode == NetworkRestricted {
+	plan, err := resolveNetworkPolicy(profile)
+	if err != nil {
+		return linuxSandboxSetup{}, err
+	}
+	if plan.isolateNetwork {
 		args = append(args, "--unshare-net")
+	}
+	if plan.mode == NetworkControlled {
+		socketPath, err := r.validateControlledEgressSocketPath(
+			profile,
+			ws,
+			plan.unixPath,
+		)
+		if err != nil {
+			return linuxSandboxSetup{}, err
+		}
+		plan.unixPath = socketPath
+		relayPath := r.egressRelayPath
+		if relayPath == "" {
+			relayPath = os.Getenv("TRPC_AGENT_EGRESS_RELAY")
+		}
+		relayPath, err = r.validateControlledEgressRelayPath(profile, ws, relayPath)
+		if err != nil {
+			return linuxSandboxSetup{}, err
+		}
+		env = applyControlledEgressEnv(env, plan)
+		spec, err = r.wrapControlledEgressSpec(plan, relayPath, spec)
+		if err != nil {
+			return linuxSandboxSetup{}, err
+		}
 	}
 	grantArgs, err := r.externalGrantArgs(profile, ws)
 	if err != nil {
@@ -615,6 +644,165 @@ func (r *Runtime) linuxWriteMountTargets(
 		all = append(all, target)
 	}
 	return all, nil
+}
+
+func (r *Runtime) validateControlledEgressSocketPath(
+	profile PermissionProfile,
+	ws codeexecutor.Workspace,
+	unixPath string,
+) (string, error) {
+	socketAbs, err := filepath.Abs(unixPath)
+	if err != nil {
+		return "", deniedf(
+			ErrPolicyViolation,
+			"network",
+			unixPath,
+			"resolve controlled egress UnixPath: %v",
+			err,
+		)
+	}
+	writeTargets, err := r.linuxWriteMountTargets(profile, ws)
+	if err != nil {
+		return "", err
+	}
+	for _, target := range writeTargets {
+		targetAbs, err := filepath.Abs(target)
+		if err != nil {
+			return "", err
+		}
+		if sameOrChild(targetAbs, socketAbs) {
+			return "", deniedf(
+				ErrPolicyViolation,
+				"network",
+				socketAbs,
+				"controlled egress UnixPath must be outside guest-writable mounts",
+			)
+		}
+	}
+	socketResolved, err := resolveControlledEgressSocketPath(socketAbs)
+	if err != nil {
+		return "", deniedf(
+			ErrPolicyViolation,
+			"network",
+			socketAbs,
+			"resolve controlled egress UnixPath symlinks: %v",
+			err,
+		)
+	}
+	for _, target := range writeTargets {
+		targetAbs, err := filepath.Abs(target)
+		if err != nil {
+			return "", err
+		}
+		targetResolved, err := filepath.EvalSymlinks(targetAbs)
+		if err != nil {
+			return "", deniedf(
+				ErrPolicyViolation,
+				"network",
+				targetAbs,
+				"resolve guest-writable mount symlinks: %v",
+				err,
+			)
+		}
+		if sameOrChild(targetResolved, socketResolved) {
+			return "", deniedf(
+				ErrPolicyViolation,
+				"network",
+				socketAbs,
+				"controlled egress UnixPath must be outside guest-writable mounts",
+			)
+		}
+	}
+	return socketResolved, nil
+}
+
+func resolveControlledEgressSocketPath(path string) (string, error) {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err == nil {
+		return resolved, nil
+	}
+	if !os.IsNotExist(err) {
+		return "", err
+	}
+	current := path
+	for i := 0; i < 255; i++ {
+		target, changed, resolveErr := resolvePotentialSymlinkTarget(current)
+		if resolveErr != nil {
+			return "", resolveErr
+		}
+		if !changed {
+			return current, nil
+		}
+		current = target
+		resolved, err = filepath.EvalSymlinks(current)
+		if err == nil {
+			return resolved, nil
+		}
+		if !os.IsNotExist(err) {
+			return "", err
+		}
+	}
+	return "", fmt.Errorf("too many symlinks resolving %q", path)
+}
+
+func (r *Runtime) validateControlledEgressRelayPath(
+	profile PermissionProfile,
+	ws codeexecutor.Workspace,
+	relayPath string,
+) (string, error) {
+	if relayPath == "" {
+		return "", deniedf(
+			ErrSetupFailed,
+			"network",
+			"",
+			"controlled egress requires egress-relay helper (WithControlledEgressRelayPath or TRPC_AGENT_EGRESS_RELAY)",
+		)
+	}
+	relayAbs, err := filepath.Abs(relayPath)
+	if err != nil {
+		return "", deniedf(ErrSetupFailed, "network", relayPath, "resolve relay path: %v", err)
+	}
+	relayResolved, err := filepath.EvalSymlinks(relayAbs)
+	if err != nil {
+		return "", deniedf(ErrSetupFailed, "network", relayAbs, "resolve relay path symlinks: %v", err)
+	}
+	st, err := os.Stat(relayResolved)
+	if err != nil || !st.Mode().IsRegular() {
+		return "", deniedf(ErrSetupFailed, "network", relayResolved, "egress-relay helper not found")
+	}
+	if st.Mode().Perm()&0o111 == 0 {
+		return "", deniedf(ErrSetupFailed, "network", relayResolved, "egress-relay helper is not executable")
+	}
+	writeTargets, err := r.linuxWriteMountTargets(profile, ws)
+	if err != nil {
+		return "", err
+	}
+	for _, target := range writeTargets {
+		targetAbs, err := filepath.Abs(target)
+		if err != nil {
+			return "", err
+		}
+		targetResolved, err := filepath.EvalSymlinks(targetAbs)
+		if err != nil {
+			return "", deniedf(
+				ErrPolicyViolation,
+				"network",
+				targetAbs,
+				"resolve guest-writable mount symlinks: %v",
+				err,
+			)
+		}
+		if sameOrChild(targetAbs, relayAbs) ||
+			sameOrChild(targetResolved, relayResolved) {
+			return "", deniedf(
+				ErrSetupFailed,
+				"network",
+				relayResolved,
+				"egress-relay helper must be outside guest-writable mounts",
+			)
+		}
+	}
+	return relayResolved, nil
 }
 
 func workspaceRelativeMounts(wsAbs string, targets []string) []string {
