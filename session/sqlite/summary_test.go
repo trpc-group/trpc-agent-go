@@ -195,6 +195,89 @@ func TestSessionSQLite_GetSession_LoadsAndFiltersSummaries(t *testing.T) {
 	require.Len(t, got.Summaries, 0)
 }
 
+func TestSessionSQLite_GetSession_LoadsSummaryWithFilteredEventWindow(t *testing.T) {
+	db, _, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(db, WithSummarizer(&fakeSummarizer{}))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "s1"}
+	sess, err := svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	require.NoError(t, svc.AppendEvent(ctx, sess, newUserEvent("hi")))
+	require.NoError(t, svc.CreateSessionSummary(
+		ctx,
+		sess,
+		session.SummaryFilterKeyAllContents,
+		true,
+	))
+	// Exercise summary loading when the event query returns an empty window.
+	_, err = svc.db.ExecContext(
+		ctx,
+		"UPDATE "+svc.tableSessionEvents+
+			" SET deleted_at = ? WHERE app_name = ? AND user_id = ?"+
+			" AND session_id = ?",
+		time.Now().UTC().UnixNano(),
+		key.AppName,
+		key.UserID,
+		key.SessionID,
+	)
+	require.NoError(t, err)
+
+	got, err := svc.GetSession(ctx, key, session.WithEventTime(time.Now().Add(time.Hour)))
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Empty(t, got.GetEvents())
+	require.NotEmpty(t, got.Summaries)
+	require.Equal(t, "summary", got.Summaries[session.SummaryFilterKeyAllContents].Summary)
+}
+
+func TestSessionSQLite_ListSessions_LoadsSummaryWithFilteredEventWindow(t *testing.T) {
+	db, _, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(db, WithSummarizer(&fakeSummarizer{}))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "s1"}
+	sess, err := svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	require.NoError(t, svc.AppendEvent(ctx, sess, newUserEvent("hi")))
+	require.NoError(t, svc.CreateSessionSummary(
+		ctx,
+		sess,
+		session.SummaryFilterKeyAllContents,
+		true,
+	))
+	_, err = svc.db.ExecContext(
+		ctx,
+		"UPDATE "+svc.tableSessionEvents+
+			" SET deleted_at = ? WHERE app_name = ? AND user_id = ?"+
+			" AND session_id = ?",
+		time.Now().UTC().UnixNano(),
+		key.AppName,
+		key.UserID,
+		key.SessionID,
+	)
+	require.NoError(t, err)
+
+	got, err := svc.ListSessions(
+		ctx,
+		session.UserKey{AppName: key.AppName, UserID: key.UserID},
+		session.WithEventTime(time.Now().Add(time.Hour)),
+	)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Empty(t, got[0].GetEvents())
+	require.NotEmpty(t, got[0].Summaries)
+	require.Equal(t, "summary", got[0].Summaries[session.SummaryFilterKeyAllContents].Summary)
+}
+
 func TestSessionSQLite_SummaryBoundaryLastEventIDRoundTrip(t *testing.T) {
 	db, _, cleanup := openTempSQLiteDB(t)
 	defer cleanup()

@@ -1,0 +1,154 @@
+{
+  "generated_at": "2026-07-07T00:00:00Z",
+  "base_backend": "session/inmemory+memory/inmemory",
+  "cases": [
+    {
+      "case": "06_summary_filter_key_update",
+      "session_id": "sess-summary",
+      "compared_backends": [
+        "session/inmemory+memory/inmemory",
+        "session/jsonfile+memory/jsonfile-mutated"
+      ],
+      "differences": [
+        {
+          "case": "06_summary_filter_key_update",
+          "backend": "session/jsonfile+memory/jsonfile-mutated",
+          "session_id": "sess-summary",
+          "locator": "summary:support/billing",
+          "field_path": "$.summaries[0].filter_key",
+          "base_value": "support/billing",
+          "compare_value": "support/sales",
+          "allowed_diff": false,
+          "explanation": "summary replay mismatch: filter-key changed"
+        },
+        {
+          "case": "06_summary_filter_key_update",
+          "backend": "session/jsonfile+memory/jsonfile-mutated",
+          "session_id": "sess-summary",
+          "locator": "summary:support/billing",
+          "field_path": "$.summaries[0].session_id",
+          "base_value": "sess-summary",
+          "compare_value": "sess-other",
+          "allowed_diff": false,
+          "explanation": "summary replay mismatch: owner marker points at another session"
+        }
+      ]
+    },
+    {
+      "case": "08_track_events",
+      "session_id": "sess-track",
+      "compared_backends": [
+        "session/inmemory+memory/inmemory",
+        "session/jsonfile+memory/jsonfile-mutated"
+      ],
+      "differences": [
+        {
+          "case": "08_track_events",
+          "backend": "session/jsonfile+memory/jsonfile-mutated",
+          "session_id": "sess-track",
+          "locator": "track:tool.lookup",
+          "field_path": "$.tracks[0].events[0].payload",
+          "base_value": "{\"duration_ms\":\"<duration>\",\"invocation\":\"inv-track\",\"type\":\"start\"}",
+          "compare_value": "{\"duration_ms\":\"<duration>\",\"invocation\":\"wrong-invocation\",\"type\":\"start\"}",
+          "allowed_diff": false,
+          "explanation": "track replay mismatch: invocation changed"
+        }
+      ]
+    },
+    {
+      "case": "11_state_delete_clear_semantics",
+      "session_id": "sess-state-delete-clear",
+      "compared_backends": [
+        "session/inmemory+memory/inmemory",
+        "session/jsonfile+memory/jsonfile"
+      ],
+      "differences": [
+        {
+          "case": "11_state_delete_clear_semantics",
+          "backend": "session/jsonfile+memory/jsonfile",
+          "session_id": "sess-state-delete-clear",
+          "locator": "state:profile",
+          "field_path": "$.state[\"profile\"].presence",
+          "base_value": true,
+          "compare_value": false,
+          "allowed_diff": true,
+          "explanation": "capability is not exposed by the in-memory replay adapter"
+        }
+      ],
+      "unsupported": [
+        {
+          "backend": "session/inmemory+memory/inmemory",
+          "unsupported": [
+            {
+              "capability": "state_delete",
+              "allowed_diff": true,
+              "explanation": "capability is not exposed by the in-memory replay adapter"
+            },
+            {
+              "capability": "state_clear",
+              "allowed_diff": true,
+              "explanation": "capability is not exposed by the in-memory replay adapter"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "case": "19_memory_multi_result_recall",
+      "session_id": "sess-memory-multi-result",
+      "compared_backends": [
+        "session/inmemory+memory/inmemory",
+        "session/sqlite+memory/sqlite-mutated"
+      ],
+      "differences": [
+        {
+          "case": "19_memory_multi_result_recall",
+          "backend": "session/sqlite+memory/sqlite-mutated",
+          "session_id": "sess-memory-multi-result",
+          "locator": "memory_query:multi",
+          "field_path": "$.memory_queries[0].results[0].content",
+          "base_value": "User prefers deterministic replay tests.",
+          "compare_value": "wrong recalled memory",
+          "allowed_diff": false,
+          "explanation": "memory retrieval mismatch: recalled memory content changed"
+        }
+      ]
+    },
+    {
+      "case": "10_retry_failure_recovery",
+      "session_id": "sess-retry",
+      "compared_backends": [
+        "session/inmemory+memory/inmemory",
+        "session/jsonfile+memory/jsonfile"
+      ],
+      "differences": [],
+      "unsupported": [
+        {
+          "backend": "session/inmemory+memory/inmemory",
+          "unsupported": [
+            {
+              "capability": "event_page",
+              "allowed_diff": true,
+              "explanation": "inmemory GetSession does not support strict offset event pages"
+            }
+          ]
+        },
+        {
+          "backend": "session/jsonfile+memory/jsonfile",
+          "unsupported": [
+            {
+              "capability": "event_page",
+              "allowed_diff": true,
+              "explanation": "jsonfile replay backend stores full event logs and does not implement strict page reads"
+            },
+            {
+              "capability": "ttl",
+              "allowed_diff": true,
+              "explanation": "jsonfile replay backend does not expire records during lightweight consistency tests"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

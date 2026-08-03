@@ -11,7 +11,6 @@ package hashidx
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -38,13 +37,6 @@ func (c *Client) AppendTrackEvent(ctx context.Context, key session.Key, trackEve
 		ttlSeconds = ttlSecondsCeil(trackTTL)
 	}
 
-	// Encode tracksState as base64 to match Go's json.Marshal behavior for []byte.
-	// In sessionMeta JSON, state values (map[string][]byte) are base64-encoded strings.
-	tracksVal := ""
-	if len(tracksState) > 0 {
-		tracksVal = base64.StdEncoding.EncodeToString(tracksState)
-	}
-
 	track := trackEvent.Track
 	keys := []string{
 		c.keys.TrackDataKey(key, track),
@@ -56,8 +48,8 @@ func (c *Client) AppendTrackEvent(ctx context.Context, key session.Key, trackEve
 		string(eventJSON),
 		trackEvent.Timestamp.UnixNano(),
 		ttlSeconds,
+		string(tracksState),
 		boolToInt(c.cfg.TrackEventTTL != nil),
-		tracksVal,
 		string(track),
 	}
 

@@ -873,6 +873,35 @@ func TestUpdateSessionStateCAS_CanceledDuringRetry(t *testing.T) {
 	assert.Equal(t, 1, attempts)
 }
 
+func TestUpdateSessionStateCAS_ReturnsConflictAfterMaxRetries(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "s_cas_conflict_bound"}
+
+	_, err := c.CreateSession(ctx, key, session.StateMap{"existing": []byte("1")})
+	require.NoError(t, err)
+
+	attempts := 0
+	start := time.Now()
+	err = c.updateSessionStateCAS(ctx, key, func(sessState *SessionState) error {
+		attempts++
+		sessState.State["new"] = []byte("2")
+		conflictBytes, err := json.Marshal(&SessionState{
+			ID:        key.SessionID,
+			State:     session.StateMap{"conflict": []byte(fmt.Sprintf("%d", attempts))},
+			CreatedAt: sessState.CreatedAt,
+			UpdatedAt: time.Now(),
+		})
+		require.NoError(t, err)
+		return rdb.(*redis.Client).HSet(ctx, c.sessionStateKey(key), key.SessionID, string(conflictBytes)).Err()
+	}, nil)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, errSessionStateUpdateConflict)
+	assert.Equal(t, maxSessionStateCASRetries+1, attempts)
+	assert.Less(t, time.Since(start), 2*time.Second)
+}
+
 // =============================================================================
 // AppState Operations
 // =============================================================================

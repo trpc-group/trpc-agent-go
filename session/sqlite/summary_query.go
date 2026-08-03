@@ -118,11 +118,7 @@ AND deleted_at IS NULL`,
 			key.UserID,
 			key.SessionID,
 		)
-		m := summariesMap[keyStr]
-		if m == nil {
-			m = make(map[string]*session.Summary)
-		}
-		out[i] = m
+		out[i] = summariesMap[keyStr]
 	}
 
 	return out, nil
