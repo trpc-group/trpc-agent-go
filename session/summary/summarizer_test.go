@@ -921,7 +921,7 @@ func TestSessionSummarizer_RetriesEmptyStandaloneSummary(t *testing.T) {
 		"event text for standalone fallback")
 }
 
-func TestEnsureSummaryRequestFitsDropsOldestCompleteRound(t *testing.T) {
+func TestEnsureSummaryRequestFitsPreservesSourceRounds(t *testing.T) {
 	s := NewSummarizer(&cacheSafeCaptureModel{}).(*sessionSummarizer)
 	request := &model.Request{Messages: []model.Message{
 		model.NewSystemMessage("stable system"),
@@ -948,17 +948,44 @@ func TestEnsureSummaryRequestFitsDropsOldestCompleteRound(t *testing.T) {
 		true,
 		200,
 	)
-	require.NoError(t, err)
-	require.Len(t, request.Messages, 4)
+	require.Error(t, err)
+	require.Len(t, request.Messages, 7)
 	require.Equal(t, model.RoleSystem, request.Messages[0].Role)
-	require.Equal(t, "latest source", request.Messages[1].Content)
-	require.Equal(t, "latest answer", request.Messages[2].Content)
-	require.Equal(t, "Summarize the conversation above.", request.Messages[3].Content)
-	for _, message := range request.Messages {
-		require.NotContains(t, message.Content, "old source")
-		require.Empty(t, message.ToolCalls)
-		require.NotEqual(t, "old-call", message.ToolID)
+	require.Contains(t, request.Messages[1].Content, "old source")
+	require.Equal(t, "latest source", request.Messages[4].Content)
+	require.Equal(t, "latest answer", request.Messages[5].Content)
+	require.Equal(t, "Summarize the conversation above.", request.Messages[6].Content)
+}
+
+func TestPrepareSummaryRequestFallsBackBeforeDroppingSourceRounds(t *testing.T) {
+	s := NewSummarizer(
+		&cacheSafeCaptureModel{},
+		WithPrompt("Conversation:\n{conversation_text}"),
+	).(*sessionSummarizer)
+	request := &model.Request{Messages: []model.Message{
+		model.NewSystemMessage("stable system"),
+		model.NewUserMessage(strings.Repeat("large source ", 400)),
+		model.NewAssistantMessage("latest progress"),
+		model.NewUserMessage("continue"),
+		model.NewUserMessage("Summarize the conversation above."),
+	}}
+	input := summaryPromptInput{
+		conversationText: "user: original request\nassistant: latest progress",
 	}
+
+	prepared, mode, err := s.prepareSummaryRequest(
+		context.Background(),
+		request,
+		callModeCacheSafeFork,
+		input,
+		200,
+	)
+	require.NoError(t, err)
+	require.Equal(t, callModeStandalone, mode)
+	require.Len(t, prepared.Messages, 1)
+	require.Contains(t, prepared.Messages[0].Content, "original request")
+	require.Contains(t, prepared.Messages[0].Content, "latest progress")
+	require.NotContains(t, prepared.Messages[0].Content, "continue")
 }
 
 // fakeModel is a minimal model that returns the conversation content back to simulate LLM.

@@ -1323,7 +1323,7 @@ func (s *sessionSummarizer) prepareSummaryRequest(
 	}
 
 	// Cache-safe forking is an optimization. When the parent prefix cannot be
-	// made safe without dropping its last source round, fall back to a bounded
+	// made safe without dropping source conversation, fall back to a bounded
 	// standalone prompt whose final user message contains the source itself.
 	bounded, err := s.buildBoundedStandaloneSummaryRequest(
 		ctx,
@@ -1503,17 +1503,9 @@ func (s *sessionSummarizer) ensureSummaryRequestFits(
 	if tokens <= budget {
 		return nil
 	}
-	// Prefer dropping source rounds already represented by newer context before
-	// erasing payloads from the latest complete round.
-	for dropOldestSummarySourceRound(request) {
-		tokens, err = countSummaryRequestTokens(ctx, request)
-		if err != nil {
-			return fmt.Errorf("count pruned summary request tokens: %w", err)
-		}
-		if tokens <= budget {
-			return nil
-		}
-	}
+	// Preserve every source turn. Tool payloads may be represented by explicit
+	// omission markers, but the conversation structure must remain intact so a
+	// successful summary can safely advance the history cutoff.
 	candidates, err := summaryToolPayloadCandidates(ctx, request.Messages)
 	if err != nil {
 		return fmt.Errorf("build summary payload candidates: %w", err)
@@ -1529,7 +1521,7 @@ func (s *sessionSummarizer) ensureSummaryRequestFits(
 		}
 	}
 	return fmt.Errorf(
-		"cache-safe summary request input too large after semantic compaction: estimated %d tokens exceeds budget %d",
+		"cache-safe summary request input too large without dropping source conversation after semantic compaction: estimated %d tokens exceeds budget %d",
 		tokens,
 		budget,
 	)
@@ -1561,45 +1553,6 @@ func (s *sessionSummarizer) summaryRequestInputBudget(
 		return 1
 	}
 	return budget
-}
-
-func dropOldestSummarySourceRound(request *model.Request) bool {
-	if request == nil || len(request.Messages) < 3 {
-		return false
-	}
-	sourceEnd := len(request.Messages) - 1
-	rounds := summarySourceRounds(request.Messages[:sourceEnd])
-	if len(rounds) <= 1 {
-		return false
-	}
-	drop := make(map[int]struct{}, len(rounds[0]))
-	for _, index := range rounds[0] {
-		drop[index] = struct{}{}
-	}
-	messages := make([]model.Message, 0, len(request.Messages)-len(drop))
-	for i, message := range request.Messages {
-		if _, ok := drop[i]; ok {
-			continue
-		}
-		messages = append(messages, message)
-	}
-	request.Messages = messages
-	return true
-}
-
-func summarySourceRounds(messages []model.Message) [][]int {
-	var rounds [][]int
-	for i, message := range messages {
-		if message.Role == model.RoleSystem {
-			continue
-		}
-		if len(rounds) == 0 ||
-			(message.Role == model.RoleUser && len(rounds[len(rounds)-1]) > 0) {
-			rounds = append(rounds, nil)
-		}
-		rounds[len(rounds)-1] = append(rounds[len(rounds)-1], i)
-	}
-	return rounds
 }
 
 func isSummaryContextLengthError(err error, response *model.Response) bool {
