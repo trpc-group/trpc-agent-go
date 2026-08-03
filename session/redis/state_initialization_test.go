@@ -768,6 +768,288 @@ func TestLoadOrInitializeSessionStateRejectsInvalidArguments(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestStateInitializationOwnerRecheckAndFailurePaths(t *testing.T) {
+	type ownerFixture struct {
+		service    *Service
+		key        session.Key
+		route      stateInitializationRoute
+		generation string
+		leaseKey   string
+		ownerToken string
+	}
+	newOwner := func(t *testing.T, state session.StateMap) ownerFixture {
+		t.Helper()
+		redisURL, cleanup := setupTestRedis(t)
+		t.Cleanup(cleanup)
+		service := newStateInitializationTestService(t, redisURL, CompatModeNone)
+		key := stateInitializationTestKey()
+		_, err := service.CreateSession(context.Background(), key, state)
+		require.NoError(t, err)
+		route, err := service.resolveStateInitializationRoute(context.Background(), key)
+		require.NoError(t, err)
+		_, _, generation, err := service.loadStateInitializationValue(
+			context.Background(), route, key, "state",
+		)
+		require.NoError(t, err)
+		leaseKey := service.stateInitializationLeaseKey(route, key, "state")
+		ownerToken := uuid.NewString()
+		require.NoError(t, service.redisClient.Set(
+			context.Background(), leaseKey, ownerToken, time.Minute,
+		).Err())
+		return ownerFixture{
+			service:    service,
+			key:        key,
+			route:      route,
+			generation: generation,
+			leaseKey:   leaseKey,
+			ownerToken: ownerToken,
+		}
+	}
+	run := func(
+		fixture ownerFixture,
+		ctx context.Context,
+		route stateInitializationRoute,
+		generation string,
+		validate func([]byte) bool,
+		initialize func(context.Context) ([]byte, error),
+	) ([]byte, bool, error) {
+		return fixture.service.initializeSessionState(
+			ctx,
+			route,
+			fixture.key,
+			"state",
+			fixture.leaseKey,
+			fixture.ownerToken,
+			time.Now().Add(time.Minute),
+			generation,
+			validate,
+			initialize,
+		)
+	}
+
+	t.Run("uses value committed before owner recheck", func(t *testing.T) {
+		fixture := newOwner(t, session.StateMap{"state": []byte("ready")})
+		value, initialized, err := run(
+			fixture,
+			context.Background(),
+			fixture.route,
+			fixture.generation,
+			func(value []byte) bool { return string(value) == "ready" },
+			func(context.Context) ([]byte, error) {
+				t.Fatal("initializer must not run for a valid rechecked value")
+				return nil, nil
+			},
+		)
+		require.NoError(t, err)
+		require.False(t, initialized)
+		require.Equal(t, "ready", string(value))
+		require.Zero(t, fixture.service.redisClient.Exists(
+			context.Background(), fixture.leaseKey,
+		).Val())
+	})
+
+	t.Run("rejects storage route change", func(t *testing.T) {
+		fixture := newOwner(t, nil)
+		_, _, err := run(
+			fixture,
+			context.Background(),
+			stateInitializationRouteZSet,
+			fixture.generation,
+			func([]byte) bool { return false },
+			func(context.Context) ([]byte, error) { return []byte("value"), nil },
+		)
+		require.ErrorContains(t, err, "storage route changed")
+	})
+
+	t.Run("rejects generation change before callback", func(t *testing.T) {
+		fixture := newOwner(t, nil)
+		_, _, err := run(
+			fixture,
+			context.Background(),
+			fixture.route,
+			"stale-generation",
+			func([]byte) bool { return false },
+			func(context.Context) ([]byte, error) { return []byte("value"), nil },
+		)
+		require.ErrorContains(t, err, "generation changed before ownership")
+	})
+
+	t.Run("rejects owner lost before callback", func(t *testing.T) {
+		fixture := newOwner(t, nil)
+		require.NoError(t, fixture.service.redisClient.Set(
+			context.Background(), fixture.leaseKey, "new-owner", time.Minute,
+		).Err())
+		_, _, err := run(
+			fixture,
+			context.Background(),
+			fixture.route,
+			fixture.generation,
+			func([]byte) bool { return false },
+			func(context.Context) ([]byte, error) { return []byte("value"), nil },
+		)
+		require.ErrorContains(t, err, "lease ownership lost before callback")
+	})
+
+	t.Run("rejects invalid callback value", func(t *testing.T) {
+		fixture := newOwner(t, nil)
+		_, _, err := run(
+			fixture,
+			context.Background(),
+			fixture.route,
+			fixture.generation,
+			func(value []byte) bool { return string(value) == "valid" },
+			func(context.Context) ([]byte, error) { return []byte("invalid"), nil },
+		)
+		require.ErrorContains(t, err, "callback returned an invalid value")
+	})
+
+	t.Run("honors caller cancellation after callback", func(t *testing.T) {
+		fixture := newOwner(t, nil)
+		ctx, cancel := context.WithCancel(context.Background())
+		_, _, err := run(
+			fixture,
+			ctx,
+			fixture.route,
+			fixture.generation,
+			func([]byte) bool { return true },
+			func(context.Context) ([]byte, error) {
+				cancel()
+				return []byte("value"), nil
+			},
+		)
+		require.ErrorIs(t, err, context.Canceled)
+	})
+
+	t.Run("reports session deleted during callback", func(t *testing.T) {
+		fixture := newOwner(t, nil)
+		_, _, err := run(
+			fixture,
+			context.Background(),
+			fixture.route,
+			fixture.generation,
+			func(value []byte) bool { return string(value) == "value" },
+			func(context.Context) ([]byte, error) {
+				require.NoError(t, fixture.service.DeleteSession(
+					context.Background(), fixture.key,
+				))
+				return []byte("value"), nil
+			},
+		)
+		require.ErrorContains(t, err, "session not found during commit")
+	})
+}
+
+func TestStateInitializationHelpers(t *testing.T) {
+	require.Equal(t, "hashidx", stateInitializationRouteHashIdx.String())
+	require.Equal(t, "zset", stateInitializationRouteZSet.String())
+	require.Equal(t, "unknown", stateInitializationRoute(99).String())
+
+	validate := func([]byte) bool { return true }
+	initialize := func(context.Context) ([]byte, error) { return []byte("value"), nil }
+	for _, test := range []struct {
+		name     string
+		key      session.Key
+		stateKey string
+		validate func([]byte) bool
+		init     func(context.Context) ([]byte, error)
+	}{
+		{
+			name:     "invalid session key",
+			key:      session.Key{},
+			stateKey: "state",
+			validate: validate,
+			init:     initialize,
+		},
+		{
+			name:     "empty state key",
+			key:      stateInitializationTestKey(),
+			stateKey: "  ",
+			validate: validate,
+			init:     initialize,
+		},
+		{
+			name:     "user state key",
+			key:      stateInitializationTestKey(),
+			stateKey: session.StateUserPrefix + "state",
+			validate: validate,
+			init:     initialize,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Error(t, validateStateInitializationArguments(
+				test.key, test.stateKey, test.validate, test.init,
+			))
+		})
+	}
+
+	redisURL, cleanup := setupTestRedis(t)
+	t.Cleanup(cleanup)
+	service := newStateInitializationTestService(
+		t,
+		redisURL,
+		CompatModeNone,
+		WithDisableScriptCache(true),
+	)
+	service.stateInitializationLeaseTTL = 0
+	require.Equal(t, time.Millisecond, service.effectiveStateInitializationLeaseTTL())
+	_, err := service.resolveStateInitializationRoute(
+		context.Background(), stateInitializationTestKey(),
+	)
+	require.ErrorContains(t, err, "session not found")
+	_, _, _, err = service.loadStateInitializationValue(
+		context.Background(), stateInitializationRoute(99), stateInitializationTestKey(), "state",
+	)
+	require.ErrorContains(t, err, "unknown storage route")
+	_, err = service.commitStateInitialization(
+		context.Background(),
+		stateInitializationRoute(99),
+		stateInitializationTestKey(),
+		"state",
+		[]byte("value"),
+		"generation",
+		"lease",
+		"owner",
+	)
+	require.ErrorContains(t, err, "unknown storage route")
+
+	leaseKey := "state-initialization-helper-lease"
+	require.NoError(t, service.redisClient.Set(
+		context.Background(), leaseKey, "owner", time.Minute,
+	).Err())
+	renewed, err := service.renewStateInitializationLease(
+		context.Background(), leaseKey, "owner",
+	)
+	require.NoError(t, err)
+	require.True(t, renewed)
+	released, err := service.abortStateInitializationLease(
+		context.Background(), leaseKey, "owner",
+	)
+	require.NoError(t, err)
+	require.True(t, released)
+	service.abortStateInitializationLeaseForCleanup(nil, leaseKey, "owner")
+
+	var nilRenewal *stateInitializationRenewal
+	require.NoError(t, nilRenewal.stop())
+	renewal := &stateInitializationRenewal{
+		lost:     make(chan error, 1),
+		deadline: time.Now().Add(time.Second),
+	}
+	canceled := false
+	renewal.reportLoss(nil, func() { canceled = true })
+	require.False(t, canceled)
+	deadline := renewal.currentDeadline()
+	renewal.extendDeadline(deadline.Add(-time.Second))
+	require.Equal(t, deadline, renewal.currentDeadline())
+	require.NoError(t, waitForStateInitializationPoll(context.Background(), 0))
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(
+		t,
+		waitForStateInitializationPoll(canceledCtx, time.Second),
+		context.Canceled,
+	)
+}
+
 type stateInitializationTestResult struct {
 	value         []byte
 	didInitialize bool

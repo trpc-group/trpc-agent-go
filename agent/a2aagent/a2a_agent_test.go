@@ -1114,6 +1114,170 @@ func TestAnonymousCookieStateCanonicalMutationsUseCoordinator(t *testing.T) {
 	require.Equal(t, anonymousCookieTombstoneValue(), tombstone)
 }
 
+func TestAnonymousCoordinationRecordAndSyncEdgeCases(t *testing.T) {
+	scope := anonymousCookieURLScopeFromAgentURL("https://agent.example.com/a2a")
+	stateKey := anonymousCookieStateKey("https://agent.example.com/a2a")
+
+	t.Run("record validation", func(t *testing.T) {
+		require.True(t, anonymousCookiePathIntersectsScope("", ""))
+		for _, value := range [][]byte{
+			[]byte(`{"version":1,"value":"invalid"}`),
+			[]byte(`{"version":1,"value":"` + anonymousTestCookieValue(1) + `","domain":"other.example.com"}`),
+			[]byte(`{"version":1,"value":"` + anonymousTestCookieValue(1) + `","expires_at":"2000-01-01T00:00:00Z"}`),
+		} {
+			_, ok := decodeAnonymousCookieRecord(value, scope)
+			require.False(t, ok)
+		}
+	})
+
+	t.Run("nil state helpers", func(t *testing.T) {
+		var state *anonymousCookieState
+		require.Empty(t, state.canonicalStateKey())
+		_, valid, present := state.loadCanonicalRecord()
+		require.False(t, valid)
+		require.False(t, present)
+		_, ok := state.legacyRecordForMigration()
+		require.False(t, ok)
+		require.ErrorContains(t, state.storeCanonicalValue(nil), "state is nil")
+		state.storeRecordLocally(anonymousCookieRecord{})
+		state.storeCanonicalTombstoneLocally()
+		state.syncFromPersistedSession(nil)
+		handler := &anonymousCookieHTTPReqHandler{}
+		require.False(t, handler.cookieInitializationNeeded(nil))
+	})
+
+	t.Run("rejects invalid canonical value", func(t *testing.T) {
+		state := newAnonymousCookieState(
+			session.NewSession("app", "user", "session"),
+			nil,
+			nil,
+			stateKey,
+			scope,
+		)
+		require.ErrorContains(t, state.storeCanonicalValue([]byte("invalid")), "value is invalid")
+	})
+
+	t.Run("synchronizes canonical and legacy records", func(t *testing.T) {
+		runtimeSession := session.NewSession("app", "user", "session")
+		persistSession := session.NewSession("app", "user", "session")
+		state := newAnonymousCookieState(
+			runtimeSession,
+			persistSession,
+			nil,
+			stateKey,
+			scope,
+		)
+		record := anonymousCookieRecord{
+			value: anonymousTestCookieValue(32),
+			path:  "/a2a",
+		}
+		canonical, err := encodeAnonymousCookieRecord(record)
+		require.NoError(t, err)
+		persisted := session.NewSession("app", "user", "session")
+		persisted.SetState(state.canonicalStateKey(), canonical)
+		state.syncFromPersistedSession(persisted)
+		for _, sess := range []*session.Session{runtimeSession, persistSession} {
+			value, present := sess.GetState(state.canonicalStateKey())
+			require.True(t, present)
+			require.Equal(t, canonical, value)
+			loaded, ok := loadAnonymousCookieStateFromSession(sess, stateKey)
+			require.True(t, ok)
+			require.True(t, record.equal(loaded))
+		}
+
+		persisted.SetState(state.canonicalStateKey(), anonymousCookieTombstoneValue())
+		state.syncFromPersistedSession(persisted)
+		for _, sess := range []*session.Session{runtimeSession, persistSession} {
+			_, ok := loadAnonymousCookieStateFromSession(sess, stateKey)
+			require.False(t, ok)
+		}
+
+		legacy := session.NewSession("app", "user", "session")
+		storeAnonymousCookieRecord(legacy, stateKey, record)
+		state.syncFromPersistedSession(legacy)
+		for _, sess := range []*session.Session{runtimeSession, persistSession} {
+			_, present := sess.GetState(state.canonicalStateKey())
+			require.False(t, present)
+			loaded, ok := loadAnonymousCookieStateFromSession(sess, stateKey)
+			require.True(t, ok)
+			require.True(t, record.equal(loaded))
+		}
+	})
+}
+
+func TestAnonymousCookieRequestHandlerHonorsInitializationContextCancellation(
+	t *testing.T,
+) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer srv.Close()
+	scope := anonymousCookieURLScopeFromAgentURL(srv.URL)
+	stateKey := anonymousCookieStateKey(srv.URL)
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+
+	for _, cancelBeforeRequest := range []bool{true, false} {
+		name := "during request"
+		if cancelBeforeRequest {
+			name = "before request"
+		}
+		t.Run(name, func(t *testing.T) {
+			state := newAnonymousCookieState(
+				session.NewSession(key.AppName, key.UserID, key.SessionID),
+				session.NewSession(key.AppName, key.UserID, key.SessionID),
+				nil,
+				stateKey,
+				scope,
+			)
+			initializer := &controlledStateInitializationService{
+				cancelBeforeInitialize: cancelBeforeRequest,
+			}
+			body := &trackingReadCloser{Reader: strings.NewReader("response")}
+			var remoteCalls atomic.Int32
+			handler := &anonymousCookieHTTPReqHandler{
+				next: httpReqHandlerFunc(func(
+					_ context.Context,
+					_ *http.Client,
+					req *http.Request,
+				) (*http.Response, error) {
+					remoteCalls.Add(1)
+					initializer.cancel()
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header: http.Header{
+							"Set-Cookie": []string{
+								anonymousUserIDCookieName + "=" +
+									anonymousTestCookieValue(33) + "; Path=/",
+							},
+						},
+						Body:    body,
+						Request: req,
+					}, nil
+				}),
+				cookie: state,
+				scope:  scope,
+			}
+			req, err := http.NewRequest(http.MethodPost, srv.URL+"/a2a", nil)
+			require.NoError(t, err)
+			resp, err := handler.handleCoordinatedInitialization(
+				context.Background(),
+				srv.Client(),
+				req,
+				state,
+				initializer,
+				key,
+			)
+			require.Nil(t, resp)
+			require.ErrorIs(t, err, context.Canceled)
+			if cancelBeforeRequest {
+				require.Zero(t, remoteCalls.Load())
+				require.False(t, body.closed.Load())
+				return
+			}
+			require.EqualValues(t, 1, remoteCalls.Load())
+			require.True(t, body.closed.Load())
+		})
+	}
+}
+
 func TestAnonymousCookieRequestHandlerDoesNotRetryAfterCookieAndHTTPError(
 	t *testing.T,
 ) {
@@ -1176,6 +1340,64 @@ func TestAnonymousCookieRequestHandlerDoesNotRetryAfterCookieAndHTTPError(
 	require.NoError(t, err)
 	_, ok := stored.GetState(stateKey + anonymousCookieRecordStateKeySuffix)
 	require.False(t, ok)
+}
+
+func TestAnonymousCookieRequestHandlerKeepsOwnerResponseBodyReadable(
+	t *testing.T,
+) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer srv.Close()
+	scope := anonymousCookieURLScopeFromAgentURL(srv.URL)
+	stateKey := anonymousCookieStateKey(srv.URL)
+	service := sessionmemory.NewSessionService()
+	t.Cleanup(func() { require.NoError(t, service.Close()) })
+	persisted, err := service.CreateSession(context.Background(), session.Key{
+		AppName:   "app",
+		UserID:    "user-1",
+		SessionID: "session-a",
+	}, nil)
+	require.NoError(t, err)
+	state := newAnonymousCookieState(
+		persisted.Clone(),
+		persisted,
+		service,
+		stateKey,
+		scope,
+	)
+	handler := &anonymousCookieHTTPReqHandler{
+		next: httpReqHandlerFunc(func(
+			ctx context.Context,
+			_ *http.Client,
+			req *http.Request,
+		) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Set-Cookie": []string{
+						anonymousUserIDCookieName + "=" +
+							anonymousTestCookieValue(31) + "; Path=/",
+					},
+				},
+				Body: &contextBoundReadCloser{
+					ctx:    ctx,
+					Reader: strings.NewReader("response body"),
+				},
+				Request: req,
+			}, nil
+		}),
+		cookie: state,
+		scope:  scope,
+	}
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/a2a", nil)
+	require.NoError(t, err)
+	resp, err := handler.Handle(context.Background(), srv.Client(), req)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	t.Cleanup(func() { require.NoError(t, resp.Body.Close()) })
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, "response body", string(body))
 }
 
 func TestAnonymousCookieRequestHandlerMigratesLegacyRecordBeforeRequest(
@@ -6352,6 +6574,34 @@ type failingStateInitializationService struct {
 	err error
 }
 
+type controlledStateInitializationService struct {
+	cancelBeforeInitialize bool
+	cancel                 context.CancelFunc
+}
+
+func (s *controlledStateInitializationService) LoadOrInitializeSessionState(
+	_ context.Context,
+	_ session.Key,
+	_ string,
+	validate func([]byte) bool,
+	initialize func(context.Context) ([]byte, error),
+) ([]byte, bool, error) {
+	initializeCtx, cancel := context.WithCancel(context.Background())
+	s.cancel = cancel
+	defer cancel()
+	if s.cancelBeforeInitialize {
+		cancel()
+	}
+	value, err := initialize(initializeCtx)
+	if err != nil {
+		return nil, false, err
+	}
+	if !validate(value) {
+		return nil, false, errors.New("initialized value is invalid")
+	}
+	return value, true, nil
+}
+
 type canonicalStateTrackingService struct {
 	*sessionmemory.SessionService
 	directUpdates atomic.Int32
@@ -6406,6 +6656,22 @@ type trackingReadCloser struct {
 
 func (c *trackingReadCloser) Close() error {
 	c.closed.Store(true)
+	return nil
+}
+
+type contextBoundReadCloser struct {
+	ctx context.Context
+	io.Reader
+}
+
+func (c *contextBoundReadCloser) Read(p []byte) (int, error) {
+	if err := c.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return c.Reader.Read(p)
+}
+
+func (*contextBoundReadCloser) Close() error {
 	return nil
 }
 

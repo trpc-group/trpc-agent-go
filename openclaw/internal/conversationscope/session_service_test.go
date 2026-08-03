@@ -325,6 +325,41 @@ func (r *searchWindowRecordingSessionService) SearchEvents(
 	return r.searchResults, nil
 }
 
+type recordingStateInitializer struct {
+	key session.Key
+}
+
+func (r *recordingStateInitializer) LoadOrInitializeSessionState(
+	_ context.Context,
+	key session.Key,
+	_ string,
+	_ func([]byte) bool,
+	_ func(context.Context) ([]byte, error),
+) ([]byte, bool, error) {
+	r.key = key
+	return []byte("value"), true, nil
+}
+
+type initializingRecordingSessionService struct {
+	*recordingSessionService
+	*recordingStateInitializer
+}
+
+type initializingWindowRecordingSessionService struct {
+	*windowRecordingSessionService
+	*recordingStateInitializer
+}
+
+type initializingSearchableRecordingSessionService struct {
+	*searchableRecordingSessionService
+	*recordingStateInitializer
+}
+
+type initializingSearchWindowRecordingSessionService struct {
+	*searchWindowRecordingSessionService
+	*recordingStateInitializer
+}
+
 func TestResolveStorageUserID(t *testing.T) {
 	t.Parallel()
 
@@ -727,6 +762,90 @@ func TestWrapSessionService_PreservesStateInitializationService(t *testing.T) {
 	persistedValue, present := persisted.GetState("private-state")
 	require.True(t, present)
 	require.Equal(t, "value", string(persistedValue))
+}
+
+func TestWrapSessionService_PreservesStateInitializationCombinations(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		service  func(*recordingStateInitializer) session.Service
+		expected any
+	}{
+		{
+			name: "base",
+			service: func(initializer *recordingStateInitializer) session.Service {
+				return &initializingRecordingSessionService{
+					recordingSessionService:   &recordingSessionService{},
+					recordingStateInitializer: initializer,
+				}
+			},
+			expected: &stateInitializingSessionService{},
+		},
+		{
+			name: "window",
+			service: func(initializer *recordingStateInitializer) session.Service {
+				return &initializingWindowRecordingSessionService{
+					windowRecordingSessionService: &windowRecordingSessionService{
+						recordingSessionService: &recordingSessionService{},
+					},
+					recordingStateInitializer: initializer,
+				}
+			},
+			expected: &stateInitializingWindowSessionService{},
+		},
+		{
+			name: "searchable",
+			service: func(initializer *recordingStateInitializer) session.Service {
+				return &initializingSearchableRecordingSessionService{
+					searchableRecordingSessionService: &searchableRecordingSessionService{
+						recordingSessionService: &recordingSessionService{},
+					},
+					recordingStateInitializer: initializer,
+				}
+			},
+			expected: &stateInitializingSearchableSessionService{},
+		},
+		{
+			name: "searchable window",
+			service: func(initializer *recordingStateInitializer) session.Service {
+				return &initializingSearchWindowRecordingSessionService{
+					searchWindowRecordingSessionService: &searchWindowRecordingSessionService{
+						recordingSessionService: &recordingSessionService{},
+					},
+					recordingStateInitializer: initializer,
+				}
+			},
+			expected: &stateInitializingSearchWindowSessionService{},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			initializer := &recordingStateInitializer{}
+			wrapped := WrapSessionService(test.service(initializer))
+			require.IsType(t, test.expected, wrapped)
+			stateInitializer, ok := wrapped.(session.StateInitializationService)
+			require.True(t, ok)
+			value, didInitialize, err := stateInitializer.LoadOrInitializeSessionState(
+				WithStorageUserID(context.Background(), "storage-user"),
+				session.Key{
+					AppName:   "app",
+					UserID:    "canonical-user",
+					SessionID: "session",
+				},
+				"state",
+				nil,
+				nil,
+			)
+			require.NoError(t, err)
+			require.True(t, didInitialize)
+			require.Equal(t, "value", string(value))
+			require.Equal(t, "storage-user", initializer.key.UserID)
+		})
+	}
 }
 
 func TestIndexedStorageUsersLifecycle(t *testing.T) {

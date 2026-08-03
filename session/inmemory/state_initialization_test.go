@@ -468,4 +468,236 @@ func TestLoadOrInitializeSessionStateDifferentKeysDoNotBlock(t *testing.T) {
 	require.NoError(t, <-firstDone)
 }
 
+func TestLoadOrInitializeSessionStateAdditionalFailurePaths(t *testing.T) {
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+
+	t.Run("accepts nil context for existing state", func(t *testing.T) {
+		service := NewSessionService()
+		t.Cleanup(func() { require.NoError(t, service.Close()) })
+		_, err := service.CreateSession(ctx, key, session.StateMap{"state": []byte("value")})
+		require.NoError(t, err)
+		value, initialized, err := service.LoadOrInitializeSessionState(
+			nil,
+			key,
+			"state",
+			func(value []byte) bool { return string(value) == "value" },
+			func(context.Context) ([]byte, error) { return []byte("unexpected"), nil },
+		)
+		require.NoError(t, err)
+		require.False(t, initialized)
+		require.Equal(t, "value", string(value))
+	})
+
+	t.Run("rejects invalid callback value", func(t *testing.T) {
+		service := NewSessionService()
+		t.Cleanup(func() { require.NoError(t, service.Close()) })
+		_, err := service.CreateSession(ctx, key, nil)
+		require.NoError(t, err)
+		_, _, err = service.LoadOrInitializeSessionState(
+			ctx,
+			key,
+			"state",
+			func(value []byte) bool { return string(value) == "valid" },
+			func(context.Context) ([]byte, error) { return []byte("invalid"), nil },
+		)
+		require.ErrorContains(t, err, "callback returned an invalid value")
+	})
+
+	t.Run("honors caller cancellation after callback", func(t *testing.T) {
+		service := NewSessionService()
+		t.Cleanup(func() { require.NoError(t, service.Close()) })
+		_, err := service.CreateSession(ctx, key, nil)
+		require.NoError(t, err)
+		callCtx, cancel := context.WithCancel(ctx)
+		_, _, err = service.LoadOrInitializeSessionState(
+			callCtx,
+			key,
+			"state",
+			func([]byte) bool { return true },
+			func(context.Context) ([]byte, error) {
+				cancel()
+				return []byte("value"), nil
+			},
+		)
+		require.ErrorIs(t, err, context.Canceled)
+	})
+}
+
+func TestInitializeSessionStateOwnerRecheckPaths(t *testing.T) {
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	coordinationKey := stateInitializationKey{sessionKey: key, stateKey: "state"}
+
+	t.Run("uses value committed before owner recheck", func(t *testing.T) {
+		service := NewSessionService()
+		t.Cleanup(func() { require.NoError(t, service.Close()) })
+		_, err := service.CreateSession(ctx, key, session.StateMap{"state": []byte("ready")})
+		require.NoError(t, err)
+		_, _, generation, err := service.loadSessionStateValue(key, "state")
+		require.NoError(t, err)
+		gate := newStateInitializationGate()
+		service.stateInitializationGates[coordinationKey] = gate
+		value, initialized, err := service.initializeSessionState(
+			ctx,
+			key,
+			"state",
+			func(value []byte) bool { return string(value) == "ready" },
+			func(context.Context) ([]byte, error) {
+				t.Fatal("initializer must not run for a valid rechecked value")
+				return nil, nil
+			},
+			generation,
+			coordinationKey,
+			gate,
+		)
+		require.NoError(t, err)
+		require.False(t, initialized)
+		require.Equal(t, "ready", string(value))
+	})
+
+	t.Run("rejects changed generation", func(t *testing.T) {
+		service := NewSessionService()
+		t.Cleanup(func() { require.NoError(t, service.Close()) })
+		_, err := service.CreateSession(ctx, key, nil)
+		require.NoError(t, err)
+		gate := newStateInitializationGate()
+		service.stateInitializationGates[coordinationKey] = gate
+		_, _, err = service.initializeSessionState(
+			ctx,
+			key,
+			"state",
+			func([]byte) bool { return false },
+			func(context.Context) ([]byte, error) { return []byte("value"), nil },
+			&sessionWithTTL{},
+			coordinationKey,
+			gate,
+		)
+		require.ErrorContains(t, err, "session generation changed")
+	})
+
+	t.Run("reports load failure", func(t *testing.T) {
+		service := NewSessionService()
+		t.Cleanup(func() { require.NoError(t, service.Close()) })
+		gate := newStateInitializationGate()
+		service.stateInitializationGates[coordinationKey] = gate
+		_, _, err := service.initializeSessionState(
+			ctx,
+			key,
+			"state",
+			func([]byte) bool { return false },
+			func(context.Context) ([]byte, error) { return []byte("value"), nil },
+			nil,
+			coordinationKey,
+			gate,
+		)
+		require.ErrorContains(t, err, "session not found")
+	})
+}
+
+func TestStateInitializationGateAndStorageHelpers(t *testing.T) {
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	coordinationKey := stateInitializationKey{sessionKey: key, stateKey: "state"}
+
+	var nilGate *stateInitializationGate
+	nilGate.release()
+	zero := &SessionService{}
+	gate, owner, err := zero.acquireStateInitializationGate(coordinationKey)
+	require.NoError(t, err)
+	require.True(t, owner)
+	require.NotNil(t, gate)
+	zero.releaseStateInitializationGate(coordinationKey, gate)
+	zero.closeStateInitialization()
+	zero.closeStateInitialization()
+	_, _, err = zero.acquireStateInitializationGate(coordinationKey)
+	require.ErrorIs(t, err, errStateInitializationClosed)
+
+	newStoredService := func() (*SessionService, *sessionWithTTL) {
+		stored := &sessionWithTTL{session: session.NewSession(key.AppName, key.UserID, key.SessionID)}
+		app := newAppSessions()
+		app.sessions[key.UserID] = map[string]*sessionWithTTL{key.SessionID: stored}
+		return &SessionService{
+			apps:                      map[string]*appSessions{key.AppName: app},
+			stateInitializationGates:  make(map[stateInitializationKey]*stateInitializationGate),
+			stateInitializationClosed: make(chan struct{}),
+		}, stored
+	}
+
+	t.Run("load distinguishes missing and expired sessions", func(t *testing.T) {
+		service, stored := newStoredService()
+		app := service.apps[key.AppName]
+		delete(app.sessions, key.UserID)
+		_, _, _, err := service.loadSessionStateValue(key, "state")
+		require.ErrorContains(t, err, "session not found")
+		app.sessions[key.UserID] = make(map[string]*sessionWithTTL)
+		_, _, _, err = service.loadSessionStateValue(key, "state")
+		require.ErrorContains(t, err, "session not found")
+		app.sessions[key.UserID][key.SessionID] = stored
+		stored.expiredAt = time.Now().Add(-time.Second)
+		_, _, _, err = service.loadSessionStateValue(key, "state")
+		require.ErrorContains(t, err, "session expired")
+	})
+
+	t.Run("commit validates lifecycle and generation", func(t *testing.T) {
+		service, stored := newStoredService()
+		canceledCtx, cancel := context.WithCancel(ctx)
+		cancel()
+		require.ErrorIs(
+			t,
+			service.commitInitializedSessionState(canceledCtx, key, "state", stored, []byte("value")),
+			context.Canceled,
+		)
+
+		close(service.stateInitializationClosed)
+		require.ErrorIs(
+			t,
+			service.commitInitializedSessionState(ctx, key, "state", stored, []byte("value")),
+			errStateInitializationClosed,
+		)
+		service.stateInitializationClosed = make(chan struct{})
+
+		delete(service.apps, key.AppName)
+		require.ErrorContains(
+			t,
+			service.commitInitializedSessionState(ctx, key, "state", stored, []byte("value")),
+			"session not found",
+		)
+		service, stored = newStoredService()
+		app := service.apps[key.AppName]
+		delete(app.sessions, key.UserID)
+		require.ErrorContains(
+			t,
+			service.commitInitializedSessionState(ctx, key, "state", stored, []byte("value")),
+			"session not found",
+		)
+		app.sessions[key.UserID] = map[string]*sessionWithTTL{key.SessionID: stored}
+		stored.expiredAt = time.Now().Add(-time.Second)
+		require.ErrorContains(
+			t,
+			service.commitInitializedSessionState(ctx, key, "state", stored, []byte("value")),
+			"session expired",
+		)
+		stored.expiredAt = time.Time{}
+		require.ErrorContains(
+			t,
+			service.commitInitializedSessionState(
+				ctx, key, "state", &sessionWithTTL{}, []byte("value"),
+			),
+			"session generation changed",
+		)
+
+		service.opts.sessionTTL = time.Minute
+		require.NoError(t, service.commitInitializedSessionState(
+			ctx, key, "state", stored, []byte("value"),
+		))
+		require.False(t, stored.expiredAt.IsZero())
+		value, present := stored.session.GetState("state")
+		require.True(t, present)
+		require.Equal(t, "value", string(value))
+	})
+
+	require.Nil(t, cloneStateInitializationValue(nil))
+}
+
 var _ session.StateInitializationService = (*SessionService)(nil)

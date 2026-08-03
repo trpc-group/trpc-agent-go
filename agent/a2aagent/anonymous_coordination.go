@@ -301,6 +301,9 @@ func (h *anonymousCookieHTTPReqHandler) handleCoordinatedInitialization(
 			return ok
 		},
 		func(initializeCtx context.Context) ([]byte, error) {
+			if err := initializeCtx.Err(); err != nil {
+				return nil, err
+			}
 			if legacy, ok := cookie.legacyRecordForMigration(); ok {
 				encoded, encodeErr := encodeAnonymousCookieRecord(legacy)
 				if encodeErr != nil {
@@ -321,8 +324,10 @@ func (h *anonymousCookieHTTPReqHandler) handleCoordinatedInitialization(
 				cookie.key,
 				h.scope,
 			)
+			// The response body outlives this initializer callback, so its request
+			// must remain bound to the invocation context after the lease is closed.
 			ownerResponse, ownerErr = h.sendRequest(
-				initializeCtx,
+				ctx,
 				httpClient,
 				req,
 				pendingCookie,
@@ -331,6 +336,11 @@ func (h *anonymousCookieHTTPReqHandler) handleCoordinatedInitialization(
 				closeAnonymousCookieResponse(ownerResponse)
 				ownerResponse = nil
 				return nil, ownerErr
+			}
+			if err := initializeCtx.Err(); err != nil {
+				closeAnonymousCookieResponse(ownerResponse)
+				ownerResponse = nil
+				return nil, err
 			}
 			record, ok := pendingCookie.loadLegacyRecord()
 			if !ok {
