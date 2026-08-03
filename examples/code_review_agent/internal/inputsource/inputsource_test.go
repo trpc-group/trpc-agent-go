@@ -97,6 +97,18 @@ func TestReadFixturesRejectsAggregateLimit(t *testing.T) {
 	}
 }
 
+func TestReadFixturesRejectsTooManyDiffFiles(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"a.diff", "b.diff"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("diff --git a/a.go b/a.go\n"), 0o600); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", name, err)
+		}
+	}
+	if _, err := readFixturesWithLimits(dir, 1024, 1); err == nil || !strings.Contains(err.Error(), "fixture file count exceeded 1") {
+		t.Fatalf("readFixturesWithLimits() error = %v, want file-count rejection", err)
+	}
+}
+
 func TestReadFileList(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "files.txt")
@@ -138,6 +150,23 @@ func TestReadFileListRejectsOversizeBeforeRead(t *testing.T) {
 	}
 	if _, err := readFileListWithLimit(path, "", 4); err == nil || !strings.Contains(err.Error(), "file exceeds 4 bytes") {
 		t.Fatalf("readFileListWithLimit() error = %v, want size rejection", err)
+	}
+}
+
+func TestReadFileListRejectsTooManyEntries(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "files.txt")
+	if err := os.WriteFile(path, []byte("pkg/a.go\npkg/b.go\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(file list) error = %v", err)
+	}
+	if _, err := readFileListWithLimits(path, "", 1024, 1); err == nil || !strings.Contains(err.Error(), "file-list entry count exceeded 1") {
+		t.Fatalf("readFileListWithLimits() error = %v, want file-count rejection", err)
+	}
+}
+
+func TestReadDirectInputRejectsNonRegularFile(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := readDiffFileWithLimit(dir, "", 1024); err == nil || !strings.Contains(err.Error(), "regular file") {
+		t.Fatalf("readDiffFileWithLimit() error = %v, want regular-file rejection", err)
 	}
 }
 
@@ -245,6 +274,74 @@ func TestReadRepoDiffIncludesStagedAndUntrackedWithoutColor(t *testing.T) {
 	}
 	if strings.Contains(src.Diff, "\x1b[") {
 		t.Fatalf("repo diff contained ANSI color escapes:\n%q", src.Diff)
+	}
+}
+
+func TestReadRepoDiffDisablesTextconv(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	dir := t.TempDir()
+	runGit(t, dir, "init")
+	runGit(t, dir, "config", "user.email", "test@example.com")
+	runGit(t, dir, "config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(dir, ".gitattributes"), []byte("tracked.bin diff=sentinel\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(.gitattributes) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "tracked.bin"), []byte{0, 1}, 0o600); err != nil {
+		t.Fatalf("WriteFile(tracked.bin) error = %v", err)
+	}
+	runGit(t, dir, "add", ".gitattributes", "tracked.bin")
+	runGit(t, dir, "commit", "-m", "base")
+	if err := os.WriteFile(filepath.Join(dir, "tracked.bin"), []byte{0, 2}, 0o600); err != nil {
+		t.Fatalf("WriteFile(change) error = %v", err)
+	}
+	runGit(t, dir, "config", "diff.sentinel.textconv", "echo TEXTCONV_SENTINEL")
+
+	src, err := Read(context.Background(), Options{RepoPath: dir})
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if strings.Contains(src.Diff, "TEXTCONV_SENTINEL") {
+		t.Fatalf("repo diff invoked configured textconv helper:\n%s", src.Diff)
+	}
+}
+
+func TestReadRepoDiffDisablesConfiguredGitFilters(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	dir := t.TempDir()
+	runGit(t, dir, "init")
+	runGit(t, dir, "config", "user.email", "test@example.com")
+	runGit(t, dir, "config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(dir, ".gitattributes"), []byte("tracked.txt filter=sentinel\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(.gitattributes) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("before\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(tracked.txt) error = %v", err)
+	}
+	runGit(t, dir, "add", ".gitattributes", "tracked.txt")
+	runGit(t, dir, "commit", "-m", "base")
+	if err := os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("after\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(change) error = %v", err)
+	}
+	runGit(t, dir, "config", "filter.sentinel.clean", "echo FILTER_SENTINEL")
+
+	options, err := gitReadOnlyOptions(context.Background(), dir)
+	if err != nil {
+		t.Fatalf("gitReadOnlyOptions() error = %v", err)
+	}
+	optionText := strings.Join(options, " ")
+	if !strings.Contains(optionText, "filter.sentinel.clean=") || !strings.Contains(optionText, "filter.sentinel.process=") {
+		t.Fatalf("gitReadOnlyOptions() = %q, want clean/process filter overrides", optionText)
+	}
+	src, err := Read(context.Background(), Options{RepoPath: dir})
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if strings.Contains(src.Diff, "FILTER_SENTINEL") {
+		t.Fatalf("repo diff invoked configured clean filter:\n%s", src.Diff)
 	}
 }
 

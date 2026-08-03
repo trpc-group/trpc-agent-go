@@ -24,6 +24,7 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -63,6 +64,7 @@ const (
 	maxReviewSnapshotFiles  = 100_000
 	maxModelPlanCommands    = 32
 	maxModelCommandBytes    = 4 << 10
+	maxGoMetadataBytes      = int64(1 << 20)
 	reviewAgentModuleDir    = "examples/code_review_agent"
 	rootModuleDecl          = "module trpc.group/trpc-go/trpc-agent-go"
 )
@@ -74,6 +76,20 @@ var defaultSandboxCommands = []string{
 	"go vet ./...",
 	"go test ./skills/code-review/scripts",
 	"go test ./internal/rules",
+}
+
+type sandboxDependencyMode string
+
+const (
+	dependencyModeNone            sandboxDependencyMode = "none"
+	dependencyModeVendor          sandboxDependencyMode = "vendor"
+	dependencyModePreProvisioned  sandboxDependencyMode = "pre-provisioned"
+	dependencyModeHostPreparation sandboxDependencyMode = "host-preparation"
+)
+
+type goVersion struct {
+	major int
+	minor int
 }
 
 // Options configures one review run.
@@ -911,6 +927,13 @@ func newWorkspaceRuntimeWithSnapshotPaths(ctx context.Context, runtimeName strin
 	}
 	var eng codeexecutor.Engine
 	var closeFn func() error
+	dependencyMode := dependencyModeNone
+	if runtimeName == "container" || runtimeName == "e2b" {
+		dependencyMode, err = vendorDependencyMode(filepath.Join(repoRoot, filepath.FromSlash(workspace.dependencySubdir())))
+		if err != nil {
+			return nil, nil, err
+		}
+	}
 	switch runtimeName {
 	case "local":
 		if err := validateRuntimePolicy(runtimeName, allowTrustedLocal); err != nil {
@@ -978,7 +1001,7 @@ func newWorkspaceRuntimeWithSnapshotPaths(ctx context.Context, runtimeName strin
 		Cwd:         workspace.runtimeCwd(runtimeName),
 		Timeout:     timeout,
 		OutputLimit: defaultMaxSandboxOutput,
-		Env:         workspaceRuntimeEnv(runtimeName),
+		Env:         workspaceRuntimeEnvForDependencyMode(runtimeName, dependencyMode),
 		TerminateFn: cleanup,
 	}, func() { cleanup(context.Background()) }, nil
 }
@@ -1052,6 +1075,12 @@ func stageReviewWorkspaceWithSnapshotPaths(ctx context.Context, fs codeexecutor.
 	stageRoot, snapshotCleanup, err := buildReviewSnapshotWithSnapshotPaths(ctx, repoRoot, snapshotPaths)
 	if err != nil {
 		return nil, err
+	}
+	if runtimeName == "container" {
+		if err := validateContainerToolchain(stageRoot, dependencySubdir); err != nil {
+			snapshotCleanup()
+			return nil, err
+		}
 	}
 	if err := prepareSandboxDependencies(ctx, stageRoot, dependencySubdir, allowTrustedHostPreparation); err != nil {
 		snapshotCleanup()
@@ -1229,14 +1258,14 @@ func prepareSandboxDependencies(ctx context.Context, snapshotRoot string, depend
 	if moduleErr != nil {
 		return fmt.Errorf("stat sandbox go.mod: %w", moduleErr)
 	}
-	preProvisioned, err := dependenciesPreProvisioned(moduleDir, modCache)
+	dependencyMode, err := dependencyModeForModule(moduleDir, modCache)
 	if err != nil {
 		return fmt.Errorf("inspect sandbox dependencies: %w", err)
 	}
-	if !preProvisioned && !allowTrustedHostPreparation {
+	if dependencyMode == dependencyModeHostPreparation && !allowTrustedHostPreparation {
 		return fmt.Errorf("host-side dependency preparation is disabled for untrusted review input; vendor dependencies or pre-provision .gomodcache, or rerun with --allow-trusted-host-preparation")
 	}
-	if preProvisioned {
+	if dependencyMode == dependencyModeVendor || dependencyMode == dependencyModePreProvisioned {
 		return makeSandboxCachesWritable(snapshotRoot, []string{cacheRoot, modCache, buildCache})
 	}
 	prepCtx, cancel := context.WithTimeout(ctx, dependencyPrepTimeout)
@@ -1263,11 +1292,37 @@ func prepareSandboxDependencies(ctx context.Context, snapshotRoot string, depend
 	return nil
 }
 
-func dependenciesPreProvisioned(moduleDir string, modCache string) (bool, error) {
+func vendorDependencyMode(moduleDir string) (sandboxDependencyMode, error) {
+	path := filepath.Join(moduleDir, "vendor", "modules.txt")
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return dependencyModeNone, nil
+	}
+	if err != nil {
+		return dependencyModeNone, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return dependencyModeNone, fmt.Errorf("vendor modules manifest %s must be a regular file", path)
+	}
+	return dependencyModeVendor, nil
+}
+
+func dependencyModeForModule(moduleDir string, modCache string) (sandboxDependencyMode, error) {
+	if _, err := os.Stat(filepath.Join(moduleDir, "go.mod")); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return dependencyModeNone, nil
+		}
+		return dependencyModeNone, err
+	}
 	if _, err := os.Stat(filepath.Join(moduleDir, "vendor", "modules.txt")); err == nil {
-		return true, nil
+		return dependencyModeVendor, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return false, err
+		return dependencyModeNone, err
+	}
+	if _, err := os.Stat(modCache); errors.Is(err, os.ErrNotExist) {
+		return dependencyModeHostPreparation, nil
+	} else if err != nil {
+		return dependencyModeNone, err
 	}
 	found := false
 	err := filepath.WalkDir(modCache, func(_ string, entry os.DirEntry, err error) error {
@@ -1279,7 +1334,13 @@ func dependenciesPreProvisioned(moduleDir string, modCache string) (bool, error)
 		}
 		return nil
 	})
-	return found, err
+	if err != nil {
+		return dependencyModeNone, err
+	}
+	if found {
+		return dependencyModePreProvisioned, nil
+	}
+	return dependencyModeHostPreparation, nil
 }
 
 func makeSandboxCachesWritable(snapshotRoot string, roots []string) error {
@@ -1467,7 +1528,10 @@ func snapshotPathSet(paths []string) map[string]struct{} {
 }
 
 func appendReviewFiles(ctx context.Context, repoRoot string, maxFiles int, tracked bool, allowed map[string]struct{}, files *[]reviewSnapshotFile, args ...string) error {
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", repoRoot}, args...)...)
+	cmdArgs := []string{"-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-C", repoRoot}
+	cmdArgs = append(cmdArgs, args...)
+	cmd := exec.CommandContext(ctx, "git", cmdArgs...)
+	cmd.Env = snapshotGitCommandEnv()
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return err
@@ -1519,6 +1583,47 @@ func appendReviewFiles(ctx context.Context, repoRoot string, maxFiles int, track
 		return err
 	}
 	return nil
+}
+
+func snapshotGitCommandEnv() []string {
+	env := os.Environ()
+	filtered := make([]string, 0, len(env)+5)
+	for _, item := range env {
+		name, _, _ := strings.Cut(item, "=")
+		switch {
+		case name == "GIT_CONFIG_COUNT",
+			strings.HasPrefix(name, "GIT_CONFIG_KEY_"),
+			strings.HasPrefix(name, "GIT_CONFIG_VALUE_"),
+			name == "GIT_CONFIG_PARAMETERS",
+			name == "GIT_CONFIG_GLOBAL",
+			name == "GIT_CONFIG_SYSTEM",
+			name == "GIT_CONFIG_NOSYSTEM",
+			name == "GIT_EXTERNAL_DIFF",
+			name == "GIT_DIFF_OPTS",
+			name == "GIT_PAGER",
+			name == "GIT_PAGER_IN_USE",
+			name == "GIT_DIR",
+			name == "GIT_WORK_TREE",
+			name == "GIT_INDEX_FILE",
+			name == "GIT_OBJECT_DIRECTORY",
+			name == "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+			name == "GIT_COMMON_DIR",
+			name == "GIT_ASKPASS",
+			name == "GIT_SSH",
+			name == "GIT_SSH_COMMAND",
+			name == "GIT_PROXY_COMMAND":
+			continue
+		default:
+			filtered = append(filtered, item)
+		}
+	}
+	filtered = append(filtered,
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_CONFIG_GLOBAL="+os.DevNull,
+		"GIT_PAGER=cat",
+		"GIT_TERMINAL_PROMPT=0",
+	)
+	return filtered
 }
 
 func parseReviewFileRecord(record []byte, tracked bool) (string, bool, error) {
@@ -1580,6 +1685,221 @@ func failedTaskContext(ctx context.Context) (context.Context, context.CancelFunc
 	return context.WithTimeout(context.WithoutCancel(ctx), failedTaskFinishTimeout)
 }
 
+func validateContainerToolchain(repoRoot string, dependencySubdir string) error {
+	moduleDir := filepath.Join(repoRoot, filepath.FromSlash(dependencySubdir))
+	required := goVersion{}
+	metadataPaths := []string{filepath.Join(moduleDir, "go.mod")}
+	workFiles := goWorkFiles(repoRoot, moduleDir)
+	metadataPaths = append(metadataPaths, workFiles...)
+	seen := make(map[string]struct{}, len(metadataPaths))
+	for index := 0; index < len(metadataPaths); index++ {
+		metadataPath := metadataPaths[index]
+		metadataPath, err := filepath.Abs(metadataPath)
+		if err != nil {
+			return fmt.Errorf("resolve Go metadata path: %w", err)
+		}
+		if _, ok := seen[metadataPath]; ok {
+			continue
+		}
+		seen[metadataPath] = struct{}{}
+		raw, exists, err := readBoundedGoMetadata(metadataPath)
+		if err != nil {
+			return fmt.Errorf("read Go metadata %s: %w", metadataPath, err)
+		}
+		if !exists {
+			continue
+		}
+		candidate, err := requiredModuleGoVersion(string(raw))
+		if err != nil {
+			return fmt.Errorf("inspect Go metadata %s: %w", metadataPath, err)
+		}
+		if candidate.after(required) {
+			required = candidate
+		}
+		if filepath.Base(metadataPath) != "go.work" {
+			continue
+		}
+		root, err := filepath.Abs(repoRoot)
+		if err != nil {
+			return fmt.Errorf("resolve workspace root: %w", err)
+		}
+		for _, usePath := range workspaceUsePaths(string(raw)) {
+			usePath = filepath.FromSlash(usePath)
+			candidatePath := usePath
+			if !filepath.IsAbs(candidatePath) {
+				candidatePath = filepath.Join(filepath.Dir(metadataPath), candidatePath)
+			}
+			candidatePath, err = filepath.Abs(candidatePath)
+			if err != nil || !pathWithinRoot(root, candidatePath) {
+				continue
+			}
+			metadataPaths = append(metadataPaths, filepath.Join(candidatePath, "go.mod"))
+		}
+	}
+	if !required.valid() {
+		return nil
+	}
+	imageVersion, err := parseGoVersion(strings.TrimPrefix(containerSandboxImage, "golang:"))
+	if err != nil {
+		return fmt.Errorf("inspect container toolchain: %w", err)
+	}
+	if required.after(imageVersion) {
+		return fmt.Errorf("unsupported-toolchain: reviewed module requires Go %d.%d, but container image %s supports Go %d.%d", required.major, required.minor, containerSandboxImage, imageVersion.major, imageVersion.minor)
+	}
+	return nil
+}
+
+func requiredModuleGoVersion(raw string) (goVersion, error) {
+	var required goVersion
+	for _, line := range strings.Split(raw, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		if fields[0] != "go" {
+			continue
+		}
+		candidate, err := parseGoVersion(fields[1])
+		if err != nil {
+			return goVersion{}, err
+		}
+		if !required.valid() || candidate.after(required) {
+			required = candidate
+		}
+	}
+	return required, nil
+}
+
+func goWorkFiles(repoRoot string, moduleDir string) []string {
+	root, err := filepath.Abs(repoRoot)
+	if err != nil {
+		return nil
+	}
+	dir, err := filepath.Abs(moduleDir)
+	if err != nil || !pathWithinRoot(root, dir) {
+		return nil
+	}
+	var files []string
+	for {
+		files = append(files, filepath.Join(dir, "go.work"))
+		if dir == root {
+			break
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return files
+}
+
+func workspaceUsePaths(raw string) []string {
+	var paths []string
+	inBlock := false
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "//") {
+			continue
+		}
+		if inBlock {
+			if line == ")" {
+				inBlock = false
+				continue
+			}
+			if path := firstWorkspacePathToken(line); path != "" {
+				paths = append(paths, path)
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "use (") {
+			inBlock = true
+			continue
+		}
+		if strings.HasPrefix(line, "use ") {
+			if path := firstWorkspacePathToken(strings.TrimSpace(strings.TrimPrefix(line, "use "))); path != "" {
+				paths = append(paths, path)
+			}
+		}
+	}
+	return paths
+}
+
+func firstWorkspacePathToken(line string) string {
+	fields := strings.Fields(line)
+	if len(fields) == 0 {
+		return ""
+	}
+	path := fields[0]
+	if strings.HasPrefix(path, "\"") {
+		if decoded, err := strconv.Unquote(path); err == nil {
+			path = decoded
+		}
+	}
+	return strings.TrimSpace(path)
+}
+
+func pathWithinRoot(root string, candidate string) bool {
+	rel, err := filepath.Rel(root, candidate)
+	if err != nil || filepath.IsAbs(rel) || rel == ".." {
+		return false
+	}
+	return !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
+}
+
+func readBoundedGoMetadata(path string) ([]byte, bool, error) {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return nil, false, fmt.Errorf("symlinks are not supported")
+	}
+	if !info.Mode().IsRegular() {
+		return nil, false, fmt.Errorf("expected a regular file, got %s", info.Mode().String())
+	}
+	in, err := os.Open(path)
+	if err != nil {
+		return nil, false, err
+	}
+	defer in.Close()
+	raw, err := io.ReadAll(io.LimitReader(in, maxGoMetadataBytes+1))
+	if err != nil {
+		return nil, false, err
+	}
+	if int64(len(raw)) > maxGoMetadataBytes {
+		return nil, false, fmt.Errorf("file exceeds %d bytes", maxGoMetadataBytes)
+	}
+	return raw, true, nil
+}
+
+func parseGoVersion(raw string) (goVersion, error) {
+	parts := strings.Split(raw, ".")
+	if len(parts) < 2 {
+		return goVersion{}, fmt.Errorf("invalid Go version %q", raw)
+	}
+	major, err := strconv.Atoi(parts[0])
+	if err != nil || major < 0 {
+		return goVersion{}, fmt.Errorf("invalid Go version %q", raw)
+	}
+	minor, err := strconv.Atoi(parts[1])
+	if err != nil || minor < 0 {
+		return goVersion{}, fmt.Errorf("invalid Go version %q", raw)
+	}
+	return goVersion{major: major, minor: minor}, nil
+}
+
+func (v goVersion) valid() bool {
+	return v.major != 0 || v.minor != 0
+}
+
+func (v goVersion) after(other goVersion) bool {
+	return v.major > other.major || (v.major == other.major && v.minor > other.minor)
+}
+
 func containerConfig() tcontainer.Config {
 	return tcontainer.Config{
 		Image:      containerSandboxImage,
@@ -1614,6 +1934,10 @@ func containerBindMounts(repoRoot string) []bindMount {
 }
 
 func workspaceRuntimeEnv(runtimeName string) map[string]string {
+	return workspaceRuntimeEnvForDependencyMode(runtimeName, dependencyModeNone)
+}
+
+func workspaceRuntimeEnvForDependencyMode(runtimeName string, dependencyMode sandboxDependencyMode) map[string]string {
 	if runtimeName == "local" {
 		env := map[string]string{
 			"GOPROXY":     os.Getenv("GOPROXY"),
@@ -1628,7 +1952,7 @@ func workspaceRuntimeEnv(runtimeName string) map[string]string {
 		env["GOPATH"] = os.Getenv("GOPATH")
 		return env
 	}
-	return map[string]string{
+	env := map[string]string{
 		"HOME":        "/tmp",
 		"GOPATH":      "/go",
 		"GOMODCACHE":  containerGoModCache,
@@ -1636,8 +1960,13 @@ func workspaceRuntimeEnv(runtimeName string) map[string]string {
 		"GOPROXY":     "off",
 		"GOSUMDB":     "off",
 		"GOTOOLCHAIN": "local",
-		"GOFLAGS":     "",
 	}
+	if dependencyMode == dependencyModeVendor {
+		env["GOFLAGS"] = "-mod=vendor"
+	} else {
+		env["GOFLAGS"] = ""
+	}
+	return env
 }
 
 func repositoryRoot() (string, error) {

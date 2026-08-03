@@ -277,3 +277,48 @@ func TestParseRejectsIncompleteHunkAtFileBoundary(t *testing.T) {
 		t.Fatalf("Parse() error = %q, want incomplete hunk message", err)
 	}
 }
+
+func TestParseRejectsHunkContentAfterDeclaredRanges(t *testing.T) {
+	for name, extra := range map[string]string{
+		"ordinary addition":    "+const leaked = true",
+		"header-like addition": "+++ leaked",
+	} {
+		t.Run(name, func(t *testing.T) {
+			raw := "--- pkg/config.go\n+++ pkg/config.go\n@@ -1,0 +1,1 @@\n+package pkg\n" + extra + "\n"
+			_, err := Parse(raw)
+			if err == nil {
+				t.Fatal("Parse() error = nil, want content-after-range rejection")
+			}
+			if !strings.Contains(err.Error(), "after declared ranges") {
+				t.Fatalf("Parse() error = %q, want content-after-range message", err)
+			}
+		})
+	}
+}
+
+func TestParseRejectsHunkLineThatExceedsOppositeRange(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "addition with no new range",
+			raw:  "--- pkg/config.go\n+++ pkg/config.go\n@@ -1,1 +1,0 @@\n+invalid\n",
+			want: "addition exceeds declared new range",
+		},
+		{
+			name: "context with no new range",
+			raw:  "--- pkg/config.go\n+++ pkg/config.go\n@@ -1,1 +1,0 @@\n context\n",
+			want: "context line exceeds declared range",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := Parse(test.raw)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Parse() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}

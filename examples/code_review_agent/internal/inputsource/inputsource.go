@@ -29,8 +29,10 @@ const (
 	emptyTreeHash          = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 	maxReviewInputBytes    = int64(512 << 20)
 	maxUntrackedInputBytes = int64(512 << 20)
-	maxUntrackedFileCount  = 100_000
+	maxInputFileCount      = 100_000
+	maxUntrackedFileCount  = maxInputFileCount
 	maxUntrackedListBytes  = int64(16 << 20)
+	maxGitConfigBytes      = int64(1 << 20)
 )
 
 // Options describes all supported review input sources.
@@ -97,17 +99,14 @@ func readFixtures(dir string) (Source, error) {
 }
 
 func readFixturesWithLimit(dir string, maxBytes int64) (Source, error) {
-	entries, err := os.ReadDir(dir)
+	return readFixturesWithLimits(dir, maxBytes, maxInputFileCount)
+}
+
+func readFixturesWithLimits(dir string, maxBytes int64, maxFiles int) (Source, error) {
+	names, err := readFixtureNames(dir, maxFiles)
 	if err != nil {
-		return Source{}, fmt.Errorf("read fixture dir: %w", err)
+		return Source{}, err
 	}
-	var names []string
-	for _, entry := range entries {
-		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".diff") {
-			names = append(names, entry.Name())
-		}
-	}
-	sort.Strings(names)
 	var b strings.Builder
 	for _, name := range names {
 		remaining := maxBytes - int64(b.Len())
@@ -139,6 +138,42 @@ func readFixturesWithLimit(dir string, maxBytes int64) (Source, error) {
 		FixtureNames: names,
 		Summary:      fmt.Sprintf("Reviewed %d diff fixtures.", len(names)),
 	}, nil
+}
+
+func readFixtureNames(dir string, maxFiles int) ([]string, error) {
+	if maxFiles <= 0 {
+		return nil, fmt.Errorf("fixture file count limit must be positive")
+	}
+	handle, err := os.Open(dir)
+	if err != nil {
+		return nil, fmt.Errorf("read fixture dir: %w", err)
+	}
+	defer handle.Close()
+	capacity := 128
+	if maxFiles < capacity {
+		capacity = maxFiles
+	}
+	names := make([]string, 0, capacity)
+	for {
+		entries, readErr := handle.ReadDir(128)
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".diff") {
+				continue
+			}
+			if len(names) >= maxFiles {
+				return nil, fmt.Errorf("fixture file count exceeded %d", maxFiles)
+			}
+			names = append(names, entry.Name())
+		}
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+		if readErr != nil {
+			return nil, fmt.Errorf("read fixture dir: %w", readErr)
+		}
+	}
+	sort.Strings(names)
+	return names, nil
 }
 
 func normalizeFixtureDiff(raw []byte) []byte {
@@ -182,15 +217,19 @@ func readRepoDiffWithLimit(ctx context.Context, repoPath string, maxBytes int64)
 	if err != nil {
 		return Source{}, fmt.Errorf("resolve repo path: %w", err)
 	}
-	baseRef, err := repoDiffBase(ctx, abs)
+	gitOptions, err := gitReadOnlyOptions(ctx, abs)
+	if err != nil {
+		return Source{}, fmt.Errorf("inspect git helper configuration: %w", err)
+	}
+	baseRef, err := repoDiffBase(ctx, abs, gitOptions...)
 	if err != nil {
 		return Source{}, fmt.Errorf("resolve git diff base: %w", err)
 	}
-	raw, err := gitOutputLimited(ctx, abs, maxBytes, "diff", "--no-ext-diff", "--binary", "--no-color", baseRef)
+	raw, err := gitOutputLimited(ctx, abs, maxBytes, appendGitOptions(gitOptions, "diff", "--no-ext-diff", "--no-textconv", "--binary", "--no-color", baseRef)...)
 	if err != nil {
 		return Source{}, fmt.Errorf("read git diff: %w", err)
 	}
-	untracked, err := gitOutputLimited(ctx, abs, maxUntrackedListBytes, "ls-files", "--others", "--exclude-standard", "-z")
+	untracked, err := gitOutputLimited(ctx, abs, maxUntrackedListBytes, appendGitOptions(gitOptions, "ls-files", "--others", "--exclude-standard", "-z")...)
 	if err != nil {
 		return Source{}, fmt.Errorf("read untracked files: %w", err)
 	}
@@ -216,8 +255,8 @@ func readRepoDiffWithLimit(ctx context.Context, repoPath string, maxBytes int64)
 	}, nil
 }
 
-func repoDiffBase(ctx context.Context, repoPath string) (string, error) {
-	if _, err := gitOutput(ctx, repoPath, "rev-parse", "--verify", "--quiet", "HEAD"); err != nil {
+func repoDiffBase(ctx context.Context, repoPath string, gitOptions ...string) (string, error) {
+	if _, err := gitOutput(ctx, repoPath, appendGitOptions(gitOptions, "rev-parse", "--verify", "--quiet", "HEAD")...); err != nil {
 		return emptyTreeHash, nil
 	}
 	return "HEAD", nil
@@ -230,6 +269,7 @@ func gitOutput(ctx context.Context, repoPath string, args ...string) ([]byte, er
 func gitOutputLimited(ctx context.Context, repoPath string, maxBytes int64, args ...string) ([]byte, error) {
 	cmdArgs := append([]string{"-C", repoPath}, args...)
 	cmd := exec.CommandContext(ctx, "git", cmdArgs...)
+	cmd.Env = gitCommandEnv()
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	stdout, err := cmd.StdoutPipe()
@@ -261,6 +301,99 @@ func gitOutputLimited(ctx context.Context, repoPath string, maxBytes int64, args
 		return nil, err
 	}
 	return raw, nil
+}
+
+func gitReadOnlyOptions(ctx context.Context, repoPath string) ([]string, error) {
+	raw, err := gitOutputLimited(ctx, repoPath, maxGitConfigBytes, "config", "--local", "--name-only", "--null", "--list")
+	if err != nil {
+		return nil, err
+	}
+	options := []string{
+		"-c", "core.fsmonitor=false",
+		"-c", "core.untrackedCache=false",
+		"-c", "diff.external=",
+	}
+	seen := make(map[string]struct{})
+	for _, rawKey := range bytes.Split(raw, []byte{0}) {
+		key := string(rawKey)
+		driver, ok := gitFilterDriver(key)
+		if !ok {
+			continue
+		}
+		if _, ok := seen[driver]; ok {
+			continue
+		}
+		seen[driver] = struct{}{}
+		for _, setting := range []string{"clean", "process", "smudge"} {
+			options = append(options, "-c", "filter."+driver+"."+setting+"=")
+		}
+		options = append(options, "-c", "filter."+driver+".required=false")
+	}
+	return options, nil
+}
+
+func gitFilterDriver(key string) (string, bool) {
+	const prefix = "filter."
+	if !strings.HasPrefix(key, prefix) {
+		return "", false
+	}
+	for _, setting := range []string{"clean", "process", "smudge", "required"} {
+		suffix := "." + setting
+		if !strings.HasSuffix(key, suffix) {
+			continue
+		}
+		driver := strings.TrimSuffix(strings.TrimPrefix(key, prefix), suffix)
+		return driver, driver != ""
+	}
+	return "", false
+}
+
+func appendGitOptions(options []string, args ...string) []string {
+	out := make([]string, 0, len(options)+len(args))
+	out = append(out, options...)
+	out = append(out, args...)
+	return out
+}
+
+func gitCommandEnv() []string {
+	env := os.Environ()
+	filtered := make([]string, 0, len(env)+5)
+	for _, item := range env {
+		name, _, _ := strings.Cut(item, "=")
+		switch {
+		case name == "GIT_CONFIG_COUNT",
+			strings.HasPrefix(name, "GIT_CONFIG_KEY_"),
+			strings.HasPrefix(name, "GIT_CONFIG_VALUE_"),
+			name == "GIT_CONFIG_PARAMETERS",
+			name == "GIT_CONFIG_GLOBAL",
+			name == "GIT_CONFIG_SYSTEM",
+			name == "GIT_CONFIG_NOSYSTEM",
+			name == "GIT_EXTERNAL_DIFF",
+			name == "GIT_DIFF_OPTS",
+			name == "GIT_PAGER",
+			name == "GIT_PAGER_IN_USE",
+			name == "GIT_DIR",
+			name == "GIT_WORK_TREE",
+			name == "GIT_INDEX_FILE",
+			name == "GIT_OBJECT_DIRECTORY",
+			name == "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+			name == "GIT_COMMON_DIR",
+			name == "GIT_ASKPASS",
+			name == "GIT_SSH",
+			name == "GIT_SSH_COMMAND",
+			name == "GIT_PROXY_COMMAND":
+			continue
+		default:
+			filtered = append(filtered, item)
+		}
+	}
+	filtered = append(filtered,
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_CONFIG_GLOBAL="+os.DevNull,
+		"GIT_PAGER=cat",
+		"GIT_TERMINAL_PROMPT=0",
+	)
+	return filtered
 }
 
 func untrackedFileDiffs(repoPath string, raw []byte) (string, error) {
@@ -484,17 +617,32 @@ func readFileList(path string, repoPath string) (Source, error) {
 }
 
 func readFileListWithLimit(path string, repoPath string, maxBytes int64) (Source, error) {
+	return readFileListWithLimits(path, repoPath, maxBytes, maxInputFileCount)
+}
+
+func readFileListWithLimits(path string, repoPath string, maxBytes int64, maxFiles int) (Source, error) {
 	raw, err := readFileLimited(path, maxBytes)
 	if err != nil {
 		return Source{}, fmt.Errorf("read file list: %w", err)
 	}
+	if maxFiles <= 0 {
+		return Source{}, fmt.Errorf("file-list entry count limit must be positive")
+	}
 	var files []string
-	for _, line := range strings.Split(string(raw), "\n") {
-		file := strings.TrimSuffix(line, "\r")
+	scanner := bufio.NewScanner(bytes.NewReader(raw))
+	scanner.Buffer(make([]byte, 4096), len(raw)+1)
+	for scanner.Scan() {
+		file := strings.TrimSuffix(scanner.Text(), "\r")
 		if file == "" || strings.HasPrefix(file, "#") {
 			continue
 		}
+		if len(files) >= maxFiles {
+			return Source{}, fmt.Errorf("file-list entry count exceeded %d", maxFiles)
+		}
 		files = append(files, filepath.ToSlash(file))
+	}
+	if err := scanner.Err(); err != nil {
+		return Source{}, fmt.Errorf("scan file list: %w", err)
 	}
 	sort.Strings(files)
 	absRepo, err := resolveRepoPath(repoPath)
@@ -524,6 +672,16 @@ func minInt64(a int64, b int64) int64 {
 func readFileLimited(path string, maxBytes int64) ([]byte, error) {
 	if maxBytes < 0 {
 		return nil, fmt.Errorf("invalid file size limit %d", maxBytes)
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("input %s must be a regular file; symlinks are not supported", path)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("input %s must be a regular file, got %s", path, info.Mode().String())
 	}
 	in, err := os.Open(path)
 	if err != nil {

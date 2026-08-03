@@ -36,7 +36,10 @@ func Parse(diff string) ([]review.DiffFile, error) {
 		if currentHunk != nil && hunkHasRemaining(currentHunk, oldLine, newLine) && line != "" && !isDiffHunkLine(line) {
 			return nil, fmt.Errorf("hunk ended before declared ranges were consumed")
 		}
-		if shouldParseHunkLine(currentHunk, oldLine, newLine, line) {
+		if currentHunk != nil && isDiffHunkLine(line) && shouldParseHunkLine(currentHunk, oldLine, newLine, line) {
+			if err := validateHunkLine(currentHunk, oldLine, newLine, line); err != nil {
+				return nil, err
+			}
 			diffLine, nextOld, nextNew := parseDiffLine(line, oldLine, newLine)
 			currentHunk.Lines = append(currentHunk.Lines, diffLine)
 			oldLine = nextOld
@@ -119,7 +122,38 @@ func shouldParseHunkLine(hunk *review.DiffHunk, oldLine int, newLine int, line s
 	if line == `\ No newline at end of file` {
 		return true
 	}
-	return hunkHasRemaining(hunk, oldLine, newLine)
+	if !hunkHasRemaining(hunk, oldLine, newLine) && strings.HasPrefix(line, "--- ") {
+		return false
+	}
+	return true
+}
+
+func validateHunkLine(hunk *review.DiffHunk, oldLine int, newLine int, line string) error {
+	if line == `\ No newline at end of file` {
+		return nil
+	}
+	oldRemaining := lineHasRemaining(oldLine, hunk.OldStart, hunk.OldLines)
+	newRemaining := lineHasRemaining(newLine, hunk.NewStart, hunk.NewLines)
+	if !oldRemaining && !newRemaining {
+		return fmt.Errorf("hunk contains content after declared ranges were consumed")
+	}
+	switch line[0] {
+	case '+':
+		if !newRemaining {
+			return fmt.Errorf("hunk addition exceeds declared new range")
+		}
+	case '-':
+		if !oldRemaining {
+			return fmt.Errorf("hunk deletion exceeds declared old range")
+		}
+	case ' ':
+		if !oldRemaining || !newRemaining {
+			return fmt.Errorf("hunk context line exceeds declared range")
+		}
+	default:
+		return fmt.Errorf("invalid hunk line %q", line)
+	}
+	return nil
 }
 
 func hunkHasRemaining(hunk *review.DiffHunk, oldLine int, newLine int) bool {

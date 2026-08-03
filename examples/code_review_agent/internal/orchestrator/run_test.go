@@ -351,6 +351,85 @@ func TestWorkspaceRuntimeEnvUsesContainerPathsForNonLocalRuntime(t *testing.T) {
 	}
 }
 
+func TestValidateContainerToolchainRejectsNewerModule(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.test\n\ngo 1.25\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(go.mod) error = %v", err)
+	}
+	if err := validateContainerToolchain(root, ""); err == nil || !strings.Contains(err.Error(), "unsupported-toolchain") {
+		t.Fatalf("validateContainerToolchain() error = %v, want unsupported-toolchain rejection", err)
+	}
+}
+
+func TestValidateContainerToolchainAcceptsSupportedModule(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.test\n\ngo 1.13\ntoolchain go1.25.7\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(go.mod) error = %v", err)
+	}
+	if err := validateContainerToolchain(root, ""); err != nil {
+		t.Fatalf("validateContainerToolchain() error = %v, want supported module accepted", err)
+	}
+}
+
+func TestValidateContainerToolchainRejectsWorkspaceRequirement(t *testing.T) {
+	root := t.TempDir()
+	module := filepath.Join(root, "module")
+	if err := os.MkdirAll(module, 0o700); err != nil {
+		t.Fatalf("MkdirAll(module) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module root.example\n\ngo 1.24\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(root go.mod) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(module, "go.mod"), []byte("module module.example\n\ngo 1.25\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(module go.mod) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "go.work"), []byte("go 1.24\n\nuse ./module\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(go.work) error = %v", err)
+	}
+	if err := validateContainerToolchain(root, ""); err == nil || !strings.Contains(err.Error(), "unsupported-toolchain") {
+		t.Fatalf("validateContainerToolchain() error = %v, want workspace toolchain rejection", err)
+	}
+}
+
+func TestValidateContainerToolchainRejectsOversizedMetadata(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte(strings.Repeat("x", int(maxGoMetadataBytes+1))), 0o600); err != nil {
+		t.Fatalf("WriteFile(go.mod) error = %v", err)
+	}
+	if err := validateContainerToolchain(root, ""); err == nil || !strings.Contains(err.Error(), "file exceeds") {
+		t.Fatalf("validateContainerToolchain() error = %v, want bounded metadata rejection", err)
+	}
+}
+
+func TestWorkspaceRuntimeEnvUsesVendorMode(t *testing.T) {
+	for _, runtimeName := range []string{"container", "e2b"} {
+		env := workspaceRuntimeEnvForDependencyMode(runtimeName, dependencyModeVendor)
+		if env["GOFLAGS"] != "-mod=vendor" {
+			t.Fatalf("%s GOFLAGS = %q, want -mod=vendor", runtimeName, env["GOFLAGS"])
+		}
+	}
+}
+
+func TestDependencyModeDetectsLegacyVendorModule(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.test\n\ngo 1.13\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(go.mod) error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "vendor"), 0o700); err != nil {
+		t.Fatalf("MkdirAll(vendor) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "vendor", "modules.txt"), []byte("# example.test/dep v1.0.0\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(vendor/modules.txt) error = %v", err)
+	}
+	mode, err := dependencyModeForModule(root, filepath.Join(root, ".gomodcache"))
+	if err != nil {
+		t.Fatalf("dependencyModeForModule() error = %v", err)
+	}
+	if mode != dependencyModeVendor {
+		t.Fatalf("dependency mode = %q, want vendor", mode)
+	}
+}
+
 func TestWorkspaceRuntimeEnvKeepsLocalGoCacheValues(t *testing.T) {
 	t.Setenv("HOME", "/custom-home")
 	t.Setenv("GOCACHE", "/custom-cache")
