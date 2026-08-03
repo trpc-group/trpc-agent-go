@@ -16,22 +16,42 @@ import (
 	"sync"
 )
 
+// defaultMaxAuditEvents bounds the in-memory audit buffer so a long-lived
+// Scanner cannot grow it without limit (recent events are kept, oldest are
+// dropped when the cap is reached).
+const defaultMaxAuditEvents = 10000
+
 // Auditor records safety scan events and can flush them to
 // a JSONL file.
 type Auditor struct {
-	mu     sync.Mutex
-	events []AuditEvent
+	mu        sync.Mutex
+	events    []AuditEvent
+	maxEvents int
 }
 
-// NewAuditor creates a new Auditor.
+// NewAuditor creates a new Auditor with the default buffer limit.
 func NewAuditor() *Auditor {
-	return &Auditor{}
+	return NewAuditorWithLimit(defaultMaxAuditEvents)
 }
 
-// Record appends an audit event to the in-memory buffer.
+// NewAuditorWithLimit creates an Auditor whose in-memory buffer keeps at
+// most maxEvents events (dropping the oldest beyond that). A non-positive
+// maxEvents falls back to the default limit.
+func NewAuditorWithLimit(maxEvents int) *Auditor {
+	if maxEvents <= 0 {
+		maxEvents = defaultMaxAuditEvents
+	}
+	return &Auditor{maxEvents: maxEvents}
+}
+
+// Record appends an audit event to the in-memory buffer. When the buffer is
+// at capacity the oldest event is dropped so memory stays bounded.
 func (a *Auditor) Record(event AuditEvent) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if len(a.events) >= a.maxEvents {
+		a.events = a.events[1:]
+	}
 	a.events = append(a.events, event)
 }
 

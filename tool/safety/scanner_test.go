@@ -11,6 +11,7 @@ package safety
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -300,6 +301,27 @@ func TestAuditor_RecordsAndFlushes(t *testing.T) {
 	assert.Contains(t, string(data), `"tool_name":"test2"`)
 }
 
+func TestAuditor_BufferBounded(t *testing.T) {
+	a := NewAuditorWithLimit(5)
+	for i := 0; i < 20; i++ {
+		a.Record(AuditEvent{ToolName: fmt.Sprintf("t%d", i), Decision: DecisionAllow})
+	}
+	evts := a.Events()
+	// Buffer stays bounded at the configured limit.
+	assert.Len(t, evts, 5)
+	// Oldest dropped, newest retained.
+	assert.Equal(t, "t15", evts[0].ToolName)
+	assert.Equal(t, "t19", evts[4].ToolName)
+}
+
+func TestAuditor_NonPositiveLimitFallsBackToDefault(t *testing.T) {
+	a := NewAuditorWithLimit(0)
+	for i := 0; i < defaultMaxAuditEvents+10; i++ {
+		a.Record(AuditEvent{ToolName: "t", Decision: DecisionAllow})
+	}
+	assert.Len(t, a.Events(), defaultMaxAuditEvents)
+}
+
 // =============================================================================
 // PermissionPolicy Integration
 // =============================================================================
@@ -320,6 +342,46 @@ func TestScanner_ImplementsPermissionPolicy(t *testing.T) {
 	// Dangerous command must be denied.
 	assert.Equal(t, tool.PermissionAction(DecisionDeny), decision.Action,
 		"dangerous command in Arguments must be denied, got %s", decision.Action)
+}
+
+func TestScanner_NonCommandToolNotFlagged(t *testing.T) {
+	// A non-command tool (search/read) with query args must not have its
+	// tool name treated as a shell command and hit the allowed-commands gate.
+	s := newTestScanner()
+	req := &tool.PermissionRequest{
+		ToolName:  "search",
+		Arguments: []byte(`{"query":"find files modified today"}`),
+	}
+	decision, err := s.CheckToolPermission(context.Background(), req)
+	require.NoError(t, err)
+	assert.Equal(t, tool.PermissionActionAllow, decision.Action,
+		"non-command tool must be allowed, got %s", decision.Action)
+}
+
+func TestScanner_NeedsHumanReviewMappedToAsk(t *testing.T) {
+	policy := DefaultPolicy()
+	policy.Rules = append(policy.Rules, Rule{
+		ID:          "human_review_001",
+		Category:    "test",
+		Description: "operation requires human review",
+		Patterns:    []string{`special-operation`},
+		RiskLevel:   RiskHigh,
+		Action:      DecisionNeedsReview,
+	})
+	s := NewScanner(policy)
+	req := &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"run special-operation"}`),
+	}
+	decision, err := s.CheckToolPermission(context.Background(), req)
+	require.NoError(t, err)
+	// needs_human_review must be normalized to ask for the permission framework.
+	assert.Equal(t, tool.PermissionActionAsk, decision.Action,
+		"needs_human_review must map to ask, got %s", decision.Action)
+	// NormalizePermissionDecision must not error on the returned action.
+	norm, err := tool.NormalizePermissionDecision(decision)
+	require.NoError(t, err)
+	assert.Equal(t, tool.PermissionActionAsk, norm.Action)
 }
 
 // =============================================================================
@@ -447,6 +509,12 @@ func TestExtractHostTarget(t *testing.T) {
 	assert.Equal(t, "10.0.0.1", extractHostTarget("curl 10.0.0.1:8080/data"))
 	assert.Equal(t, "host", extractHostTarget("ssh host -p 22"))
 	assert.Equal(t, "", extractHostTarget("curl"))
+	// A flag value that looks like a host must not mask the real URL target.
+	assert.Equal(t, "evil.example.com",
+		extractHostTarget("curl -o api.github.com https://evil.example.com"))
+	// Inline --flag=value forms are skipped too.
+	assert.Equal(t, "evil.example.com",
+		extractHostTarget("wget --output-document=x http://evil.example.com/data"))
 }
 
 func TestExtractEnvVarName(t *testing.T) {
@@ -480,14 +548,16 @@ func TestActionOrderAllCases(t *testing.T) {
 }
 
 func TestExtractCommandFromArgsAllKeys(t *testing.T) {
-	assert.Equal(t, "fallback", extractCommandFromArgs(nil, "fallback"))
-	assert.Equal(t, "fallback", extractCommandFromArgs([]byte{}, "fallback"))
-	assert.Equal(t, "fallback", extractCommandFromArgs([]byte("not json"), "fallback"))
-	assert.Equal(t, "rm -rf /", extractCommandFromArgs([]byte(`{"command":"rm -rf /"}`), "fb"))
-	assert.Equal(t, "ls -la", extractCommandFromArgs([]byte(`{"cmd":"ls -la"}`), "fb"))
-	assert.Equal(t, "print(1)", extractCommandFromArgs([]byte(`{"code":"print(1)"}`), "fb"))
-	assert.Equal(t, "echo hi", extractCommandFromArgs([]byte(`{"script":"echo hi"}`), "fb"))
-	assert.Equal(t, "fb", extractCommandFromArgs([]byte(`{"other":"x"}`), "fb"))
+	assert.Equal(t, "", extractCommandFromArgs(nil))
+	assert.Equal(t, "", extractCommandFromArgs([]byte{}))
+	assert.Equal(t, "", extractCommandFromArgs([]byte("not json")))
+	assert.Equal(t, "rm -rf /", extractCommandFromArgs([]byte(`{"command":"rm -rf /"}`)))
+	assert.Equal(t, "ls -la", extractCommandFromArgs([]byte(`{"cmd":"ls -la"}`)))
+	assert.Equal(t, "print(1)", extractCommandFromArgs([]byte(`{"code":"print(1)"}`)))
+	assert.Equal(t, "echo hi", extractCommandFromArgs([]byte(`{"script":"echo hi"}`)))
+	// No command field → "" so non-command tools are not treated as shell commands.
+	assert.Equal(t, "", extractCommandFromArgs([]byte(`{"other":"x"}`)))
+	assert.Equal(t, "", extractCommandFromArgs([]byte(`{"query":"find files"}`)))
 }
 
 func TestAddSafetySpanAttributes(t *testing.T) {
