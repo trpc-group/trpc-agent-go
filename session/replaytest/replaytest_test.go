@@ -243,9 +243,9 @@ func case6SummaryUpdate() ReplayCase {
 			{Author: "user", Role: "user", Content: "Help me plan a trip to Shanghai."},
 			{Author: "assistant", Role: "assistant", Content: "Sure! When would you like to go?"},
 			{Author: "user", Role: "user", Content: "Next month, for 3 days."},
-			{Author: "assistant", Role: "assistant", Content: "I recommend visiting the Bund and Yu Garden."},
+			{Author: "assistant", Role: "assistant", Content: "I recommend visiting the riverfront and Yu Garden."},
 			{Author: "user", Role: "user", Content: "Great, also I need hotel recommendations."},
-			{Author: "assistant", Role: "assistant", Content: "I can search for hotels near the Bund."},
+			{Author: "assistant", Role: "assistant", Content: "I can search for hotels near the riverfront."},
 		},
 		SummarySteps: []SummaryStep{
 			{AfterEventIndex: 6, FilterKey: "", Force: true},
