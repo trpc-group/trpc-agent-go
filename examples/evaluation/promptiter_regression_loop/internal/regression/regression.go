@@ -95,9 +95,12 @@ func ValidateGateConfig(cfg GateConfig) error {
 	}
 	seen := make(map[string]struct{}, len(cfg.CriticalCaseIDs))
 	for _, id := range cfg.CriticalCaseIDs {
-		id = strings.TrimSpace(id)
-		if id == "" {
+		trimmed := strings.TrimSpace(id)
+		if trimmed == "" {
 			return fmt.Errorf("critical case id must not be empty")
+		}
+		if id != trimmed {
+			return fmt.Errorf("critical case id %q must not have leading or trailing whitespace", id)
 		}
 		if _, exists := seen[id]; exists {
 			return fmt.Errorf("duplicate critical case id %q", id)

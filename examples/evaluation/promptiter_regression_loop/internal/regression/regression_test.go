@@ -61,6 +61,8 @@ func TestDecideGateRejectsBudgets(t *testing.T) {
 func TestValidateGateConfig(t *testing.T) {
 	require.Error(t, ValidateGateConfig(GateConfig{MinScoreGain: -1}))
 	require.Error(t, ValidateGateConfig(GateConfig{CriticalCaseIDs: []string{"critical", "critical"}}))
+	require.EqualError(t, ValidateGateConfig(GateConfig{CriticalCaseIDs: []string{" critical "}}),
+		`critical case id " critical " must not have leading or trailing whitespace`)
 	require.NoError(t, ValidateGateConfig(GateConfig{CriticalCaseIDs: []string{"critical"}}))
 }
 

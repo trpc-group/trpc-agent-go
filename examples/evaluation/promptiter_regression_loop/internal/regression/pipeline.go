@@ -30,14 +30,85 @@ func Run(ctx context.Context, engine EngineRunner, request *promptiterengine.Run
 	if request == nil {
 		return nil, fmt.Errorf("PromptIter run request is nil")
 	}
+	if err := ValidateGateConfig(cfg); err != nil {
+		return nil, fmt.Errorf("invalid gate config: %w", err)
+	}
+	if request.MaxRounds <= 0 {
+		return nil, fmt.Errorf("PromptIter max rounds must be greater than 0")
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	result, err := engine.Run(ctx, request)
-	if err != nil {
-		return nil, fmt.Errorf("run PromptIter: %w", err)
+
+	report := &Report{SchemaVersion: "1.0", GeneratedAt: time.Now().UTC()}
+	acceptedProfile := request.InitialProfile
+	var originalBaseline *promptiterengine.EvaluationResult
+	for roundNumber := 1; roundNumber <= request.MaxRounds; roundNumber++ {
+		roundRequest := *request
+		roundRequest.MaxRounds = 1
+		roundRequest.InitialProfile = acceptedProfile
+		result, err := engine.Run(ctx, &roundRequest)
+		if err != nil {
+			return nil, fmt.Errorf("run PromptIter round %d: %w", roundNumber, err)
+		}
+		if result == nil {
+			return nil, fmt.Errorf("PromptIter round %d result is nil", roundNumber)
+		}
+		report.RunStatus = string(result.Status)
+		if result.Status != promptiterengine.RunStatusSucceeded {
+			report.FinalReasons = []string{fmt.Sprintf("PromptIter round %d status is %s", roundNumber, result.Status)}
+			return report, nil
+		}
+		if result.BaselineValidation == nil {
+			return nil, fmt.Errorf("PromptIter round %d has no baseline validation", roundNumber)
+		}
+		if originalBaseline == nil {
+			originalBaseline = result.BaselineValidation
+			report.BaselineScore = originalBaseline.OverallScore
+		}
+		if len(result.Rounds) != 1 {
+			return nil, fmt.Errorf("PromptIter round %d returned %d candidate rounds, want 1", roundNumber, len(result.Rounds))
+		}
+
+		candidate := result.Rounds[0]
+		if candidate.Validation == nil {
+			decision := GateDecision{Accepted: false, Reasons: []string{"candidate validation is incomplete"}}
+			report.Rounds = append(report.Rounds, RoundReport{Round: roundNumber, Decision: decision})
+			if !report.Accepted {
+				report.FinalReasons = decision.Reasons
+			}
+			continue
+		}
+		fromOriginal, err := CompareEvaluations(originalBaseline, candidate.Validation)
+		if err != nil {
+			return nil, fmt.Errorf("compare round %d with original baseline: %w", roundNumber, err)
+		}
+		fromAccepted, err := CompareEvaluations(result.BaselineValidation, candidate.Validation)
+		if err != nil {
+			return nil, fmt.Errorf("compare round %d with accepted baseline: %w", roundNumber, err)
+		}
+		usage := SummarizeUsage(candidate.Validation)
+		decision := DecideGate(cfg, fromAccepted, usage)
+		engineAccepted := candidate.Acceptance != nil && candidate.Acceptance.Accepted
+		if !engineAccepted {
+			decision.Accepted = false
+			decision.Reasons = append(decision.Reasons, "PromptIter engine rejected the candidate")
+		}
+		report.Rounds = append(report.Rounds, RoundReport{
+			Round: roundNumber, DeltaFromOriginal: fromOriginal, DeltaFromAccepted: fromAccepted,
+			Usage: usage, Decision: decision, EngineAccepted: engineAccepted,
+		})
+		if decision.Accepted {
+			acceptedProfile = candidate.OutputProfile
+			report.Accepted = true
+			report.AcceptedRound = roundNumber
+			report.AcceptedProfile = candidate.OutputProfile
+			report.FinalReasons = decision.Reasons
+		} else if !report.Accepted {
+			report.FinalReasons = decision.Reasons
+		}
 	}
-	return AnalyzeRun(result, cfg)
+	return report, nil
 }
 
 // Report is the auditable result of one PromptIter regression run.

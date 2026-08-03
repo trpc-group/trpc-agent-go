@@ -35,7 +35,8 @@ func (s stubEngine) Run(context.Context, *promptiterengine.RunRequest, ...prompt
 }
 
 func TestRunExecutesPromptIterAndAnalyzesResult(t *testing.T) {
-	report, err := Run(context.Background(), stubEngine{result: runResult(0.5, 0.8, true)}, &promptiterengine.RunRequest{}, GateConfig{MinScoreGain: 0.1})
+	report, err := Run(context.Background(), stubEngine{result: runResult(0.5, 0.8, true)},
+		&promptiterengine.RunRequest{MaxRounds: 1}, GateConfig{MinScoreGain: 0.1})
 	require.NoError(t, err)
 	assert.True(t, report.Accepted)
 }
@@ -43,10 +44,57 @@ func TestRunExecutesPromptIterAndAnalyzesResult(t *testing.T) {
 func TestRunPropagatesCancellationAndEngineErrors(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err := Run(ctx, stubEngine{}, &promptiterengine.RunRequest{}, GateConfig{})
+	_, err := Run(ctx, stubEngine{}, &promptiterengine.RunRequest{MaxRounds: 1}, GateConfig{})
 	require.ErrorIs(t, err, context.Canceled)
-	_, err = Run(context.Background(), stubEngine{err: errors.New("engine failed")}, &promptiterengine.RunRequest{}, GateConfig{})
+	_, err = Run(context.Background(), stubEngine{err: errors.New("engine failed")},
+		&promptiterengine.RunRequest{MaxRounds: 1}, GateConfig{})
 	require.ErrorContains(t, err, "run PromptIter")
+}
+
+type recordingEngine struct {
+	results  []*promptiterengine.RunResult
+	profiles []*promptiter.Profile
+}
+
+func (e *recordingEngine) Run(_ context.Context, request *promptiterengine.RunRequest, _ ...promptiterengine.Option) (*promptiterengine.RunResult, error) {
+	e.profiles = append(e.profiles, request.InitialProfile)
+	result := e.results[0]
+	e.results = e.results[1:]
+	return result, nil
+}
+
+func TestRunDoesNotPropagateGateRejectedProfile(t *testing.T) {
+	initial := profile("initial")
+	engine := &recordingEngine{results: []*promptiterengine.RunResult{
+		runResult(0.5, 0.4, true),
+		runResult(0.5, 0.8, true),
+	}}
+	report, err := Run(context.Background(), engine,
+		&promptiterengine.RunRequest{InitialProfile: initial, MaxRounds: 2}, GateConfig{MinScoreGain: 0.1})
+	require.NoError(t, err)
+	require.Len(t, engine.profiles, 2)
+	assert.Same(t, initial, engine.profiles[0])
+	assert.Same(t, initial, engine.profiles[1])
+	require.Len(t, report.Rounds, 2)
+	assert.False(t, report.Rounds[0].Decision.Accepted)
+	assert.True(t, report.Rounds[1].Decision.Accepted)
+	assert.Equal(t, 2, report.AcceptedRound)
+}
+
+func TestRunPropagatesGateAcceptedProfile(t *testing.T) {
+	initial := profile("initial")
+	first := runResult(0.5, 0.8, true)
+	engine := &recordingEngine{results: []*promptiterengine.RunResult{
+		first,
+		runResult(0.8, 0.95, true),
+	}}
+	report, err := Run(context.Background(), engine,
+		&promptiterengine.RunRequest{InitialProfile: initial, MaxRounds: 2}, GateConfig{MinScoreGain: 0.1})
+	require.NoError(t, err)
+	require.Len(t, engine.profiles, 2)
+	assert.Same(t, initial, engine.profiles[0])
+	assert.Same(t, first.Rounds[0].OutputProfile, engine.profiles[1])
+	assert.Equal(t, 2, report.AcceptedRound)
 }
 
 func TestAnalyzeRunAcceptsSafeCandidate(t *testing.T) {
