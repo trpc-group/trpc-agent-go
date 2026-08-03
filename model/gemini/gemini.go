@@ -1008,6 +1008,9 @@ func (m *Model) convertContentPart(part model.ContentPart) *genai.Part {
 		if part.Audio.URL != "" {
 			return genai.NewPartFromURI(part.Audio.URL, mimeType)
 		}
+		if len(part.Audio.Data) == 0 {
+			return nil
+		}
 		return genai.NewPartFromBytes(part.Audio.Data, mimeType)
 	case model.ContentTypeVideo:
 		if part.Video == nil {
@@ -1016,6 +1019,9 @@ func (m *Model) convertContentPart(part model.ContentPart) *genai.Part {
 		mimeType := mediaMIMEType(part.Video.Format, "video")
 		if part.Video.URL != "" {
 			return genai.NewPartFromURI(part.Video.URL, mimeType)
+		}
+		if len(part.Video.Data) == 0 {
+			return nil
 		}
 		return genai.NewPartFromBytes(part.Video.Data, mimeType)
 	case model.ContentTypeFile:

@@ -263,6 +263,10 @@ func TestModel_convertMessages(t *testing.T) {
 									Format: "audio/wav",
 								},
 							},
+							{
+								Type:  model.ContentTypeAudio,
+								Audio: &model.Audio{Format: " "},
+							},
 						},
 					},
 				},
@@ -299,6 +303,10 @@ func TestModel_convertMessages(t *testing.T) {
 									Data:   []byte(videoData),
 									Format: "video/mp4",
 								},
+							},
+							{
+								Type:  model.ContentTypeVideo,
+								Video: &model.Video{Format: " "},
 							},
 						},
 					},
