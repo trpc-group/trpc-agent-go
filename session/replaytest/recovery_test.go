@@ -389,6 +389,52 @@ func TestRecoveryPreservesCancellationAsUncertain(t *testing.T) {
 	}
 }
 
+func TestStateRecoveryDoesNotRetryAfterCanceledRead(t *testing.T) {
+	tests := []struct {
+		name       string
+		scope      StateScope
+		capability Capability
+	}{
+		{
+			name:       "app",
+			scope:      StateScopeApp,
+			capability: CapabilityAppState,
+		},
+		{
+			name:       "user",
+			scope:      StateScopeUser,
+			capability: CapabilityUserState,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			var service *committedErrorSessionService
+			backend := committedErrorBackend(func(candidate *committedErrorSessionService) {
+				service = candidate
+				candidate.failBeforeStateUpdate = true
+				candidate.cancelOnListState = cancel
+			}, nil)
+			step := stateStep("state", test.scope, session.StateMap{"phase": []byte(`1`)}, nil)
+			step.Recovery = RecoveryRetryIdempotent
+			_, err := Replay(ctx, Case{
+				Name:     "canceled-" + test.name + "-state-recovery",
+				Requires: []Capability{CapabilitySession, test.capability},
+				Steps:    []Step{step},
+			}, backend)
+			if !errors.Is(err, ErrUncertainCommit) {
+				t.Fatalf("Replay() error = %v, want ErrUncertainCommit", err)
+			}
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("Replay() error = %v, want context.Canceled", err)
+			}
+			if service.stateUpdateCalls != 1 {
+				t.Fatalf("state update calls = %d, want 1", service.stateUpdateCalls)
+			}
+		})
+	}
+}
+
 func TestStateRecoveryPostconditions(t *testing.T) {
 	ctx := context.Background()
 	services, err := InMemoryBackend().Open(ctx, "state-recovery-postconditions")
@@ -524,15 +570,18 @@ func TestRecoveryValidationRejectsInvalidModes(t *testing.T) {
 type committedErrorSessionService struct {
 	session.Service
 	cancelOnAppendEvent          context.CancelFunc
+	cancelOnListState            context.CancelFunc
 	failBeforeAppendEvent        bool
 	failAfterAppendEvent         bool
 	corruptAppendEvent           bool
+	failBeforeStateUpdate        bool
 	failBeforeUpdateSessionState bool
 	failAfterUpdateSessionState  bool
 	failAfterCreateSummary       bool
 	failAfterAppendTrack         bool
 	failGetSessionCall           int
 	getSessionCalls              int
+	stateUpdateCalls             int
 	returnWrongSessionIdentity   bool
 }
 
@@ -580,6 +629,57 @@ func (s *committedErrorSessionService) AppendEvent(
 		return errors.New("injected committed event failure")
 	}
 	return nil
+}
+
+func (s *committedErrorSessionService) UpdateAppState(
+	ctx context.Context,
+	appName string,
+	state session.StateMap,
+) error {
+	s.stateUpdateCalls++
+	if s.failBeforeStateUpdate {
+		s.failBeforeStateUpdate = false
+		return errors.New("injected pre-commit app state failure")
+	}
+	return s.Service.UpdateAppState(ctx, appName, state)
+}
+
+func (s *committedErrorSessionService) ListAppStates(
+	ctx context.Context,
+	appName string,
+) (session.StateMap, error) {
+	state, err := s.Service.ListAppStates(ctx, appName)
+	s.cancelStateRead(err)
+	return state, err
+}
+
+func (s *committedErrorSessionService) UpdateUserState(
+	ctx context.Context,
+	key session.UserKey,
+	state session.StateMap,
+) error {
+	s.stateUpdateCalls++
+	if s.failBeforeStateUpdate {
+		s.failBeforeStateUpdate = false
+		return errors.New("injected pre-commit user state failure")
+	}
+	return s.Service.UpdateUserState(ctx, key, state)
+}
+
+func (s *committedErrorSessionService) ListUserStates(
+	ctx context.Context,
+	key session.UserKey,
+) (session.StateMap, error) {
+	state, err := s.Service.ListUserStates(ctx, key)
+	s.cancelStateRead(err)
+	return state, err
+}
+
+func (s *committedErrorSessionService) cancelStateRead(err error) {
+	if err == nil && s.cancelOnListState != nil {
+		s.cancelOnListState()
+		s.cancelOnListState = nil
+	}
 }
 
 func (s *committedErrorSessionService) UpdateSessionState(
