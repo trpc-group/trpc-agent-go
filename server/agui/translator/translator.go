@@ -619,7 +619,7 @@ func (t *translator) textMessageEvent(rsp *model.Response) ([]aguievents.Event, 
 			}
 			t.lastMessageID = rsp.ID
 			t.receivingMessage = true
-			role := textMessageRole(rsp.Choices[0].Delta.Role)
+			role := rsp.Choices[0].Delta.Role.String()
 			events = append(events, aguievents.NewTextMessageStartEvent(rsp.ID, aguievents.WithRole(role)))
 		case model.ObjectTypeChatCompletion:
 			if rsp.Choices[0].Message.Content == "" {
@@ -630,7 +630,7 @@ func (t *translator) textMessageEvent(rsp *model.Response) ([]aguievents.Event, 
 				t.receivingMessage = false
 			}
 			t.lastMessageID = rsp.ID
-			role := textMessageRole(rsp.Choices[0].Message.Role)
+			role := rsp.Choices[0].Message.Role.String()
 			events = append(events,
 				aguievents.NewTextMessageStartEvent(rsp.ID, aguievents.WithRole(role)),
 				aguievents.NewTextMessageContentEvent(rsp.ID, rsp.Choices[0].Message.Content),
@@ -667,13 +667,6 @@ func (t *translator) textMessageEvent(rsp *model.Response) ([]aguievents.Event, 
 
 func reasoningMessageID(responseID string) string {
 	return "reasoning-" + responseID
-}
-
-func textMessageRole(role model.Role) string {
-	if role == "" {
-		return model.RoleAssistant.String()
-	}
-	return role.String()
 }
 
 // toolCallEvent translates a tool call trpc-agent-go event to AG-UI events.

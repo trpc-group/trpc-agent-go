@@ -2859,7 +2859,7 @@ func TestTranslateReasoningStreamEndsOnContent(t *testing.T) {
 		ID:     "msg-1",
 		Object: model.ObjectTypeChatCompletionChunk,
 		Choices: []model.Choice{{
-			Delta: model.Message{Content: "answer"},
+			Delta: model.Message{Role: model.RoleAssistant, Content: "answer"},
 		}},
 		IsPartial: true,
 	}
@@ -2893,51 +2893,6 @@ func TestTranslateReasoningStreamEndsOnContent(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, events, 1)
 	assert.IsType(t, (*aguievents.TextMessageEndEvent)(nil), events[0])
-}
-
-func TestTranslateTextMessageDefaultsEmptyRoleToAssistant(t *testing.T) {
-	tests := []struct {
-		name       string
-		concurrent bool
-		streaming  bool
-	}{
-		{name: "serial non-streaming"},
-		{name: "serial streaming", streaming: true},
-		{name: "concurrent non-streaming", concurrent: true},
-		{name: "concurrent streaming", concurrent: true, streaming: true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var opts []Option
-			if tt.concurrent {
-				opts = append(opts, WithConcurrentMessageStreamsEnabled(true))
-			}
-			tr := newTranslatorForTest(t, opts...)
-			require.NotNil(t, tr)
-
-			rsp := &model.Response{
-				ID:      "msg-1",
-				Choices: []model.Choice{{}},
-			}
-			if tt.streaming {
-				rsp.Object = model.ObjectTypeChatCompletionChunk
-				rsp.Choices[0].Delta.Content = "answer"
-				rsp.IsPartial = true
-			} else {
-				rsp.Object = model.ObjectTypeChatCompletion
-				rsp.Choices[0].Message.Content = "answer"
-				rsp.Done = true
-			}
-
-			events, err := tr.Translate(context.Background(), &agentevent.Event{Response: rsp})
-			require.NoError(t, err)
-			require.NotEmpty(t, events)
-			start, ok := events[0].(*aguievents.TextMessageStartEvent)
-			require.True(t, ok)
-			require.NotNil(t, start.Role)
-			assert.Equal(t, model.RoleAssistant.String(), *start.Role)
-		})
-	}
 }
 
 func TestTranslateReasoningNonStreamPrecedesText(t *testing.T) {

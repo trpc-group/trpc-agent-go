@@ -298,7 +298,7 @@ func (t *translator) concurrentTextMessageEvent(rsp *model.Response) ([]aguieven
 					return nil, nil
 				}
 				t.openTextStream(rsp.ID)
-				role := textMessageRole(rsp.Choices[0].Delta.Role)
+				role := rsp.Choices[0].Delta.Role.String()
 				events = append(events, aguievents.NewTextMessageStartEvent(rsp.ID, aguievents.WithRole(role)))
 			} else {
 				t.recordTextStreamChunk(rsp.ID)
@@ -319,7 +319,7 @@ func (t *translator) concurrentTextMessageEvent(rsp *model.Response) ([]aguieven
 			return nil, nil
 		}
 		t.openTextStream(rsp.ID)
-		role := textMessageRole(rsp.Choices[0].Message.Role)
+		role := rsp.Choices[0].Message.Role.String()
 		events = append(events,
 			aguievents.NewTextMessageStartEvent(rsp.ID, aguievents.WithRole(role)),
 			aguievents.NewTextMessageContentEvent(rsp.ID, rsp.Choices[0].Message.Content),
