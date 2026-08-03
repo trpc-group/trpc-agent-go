@@ -1,0 +1,138 @@
+{
+  "baseline": "inmemory",
+  "cases": [
+    {
+      "case": "summary-update",
+      "status": "fail",
+      "backends": [
+        {
+          "backend": "mysql",
+          "status": "fail"
+        },
+        {
+          "backend": "clickhouse",
+          "status": "unsupported",
+          "unsupported": [
+            "summary"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "track-events",
+      "status": "pass",
+      "backends": [
+        {
+          "backend": "postgres",
+          "status": "pass"
+        },
+        {
+          "backend": "clickhouse",
+          "status": "unsupported",
+          "unsupported": [
+            "track"
+          ]
+        }
+      ]
+    }
+  ],
+  "probes": [
+    {
+      "probe": "session-ttl-expiry",
+      "backend": "clickhouse",
+      "capability": "ttl",
+      "status": "unsupported",
+      "allowed_diff": true,
+      "explanation": "ClickHouse 25.3 session did not expire within the deterministic probe deadline"
+    }
+  ],
+  "differences": [
+    {
+      "case": "single-turn",
+      "backend": "sqlite",
+      "path": "$.sessions[0].events[1].content",
+      "locator": {
+        "session_id": "session-1",
+        "event_index": 1
+      },
+      "baseline": "hi",
+      "actual": "hello",
+      "allowed_diff": false,
+      "explanation": "assistant content differs after replay"
+    },
+    {
+      "case": "state-update",
+      "backend": "sqlite",
+      "path": "$.sessions[0].state.theme",
+      "locator": {
+        "session_id": "session-1"
+      },
+      "baseline": "dark",
+      "actual": "light",
+      "allowed_diff": false,
+      "explanation": "final state value differs after overwrite"
+    },
+    {
+      "case": "memory-read-write",
+      "backend": "postgres",
+      "path": "$.memory_searches[0].results[0].content",
+      "locator": {
+        "memory_id": "memory-0001",
+        "memory_app_name": "replaytest",
+        "memory_user_id": "user-1"
+      },
+      "baseline": "prefers concise answers",
+      "actual": "verify tests before delivery",
+      "allowed_diff": false,
+      "explanation": "memory retrieval returned different content at rank 0"
+    },
+    {
+      "case": "summary-update",
+      "backend": "mysql",
+      "path": "$.sessions[0].summaries[0].text",
+      "locator": {
+        "session_id": "session-1",
+        "summary_filter_key": "branch/main"
+      },
+      "baseline": "updated summary",
+      "actual": "initial summary",
+      "allowed_diff": false,
+      "explanation": "summary overwrite kept the stale text"
+    },
+    {
+      "case": "track-events",
+      "backend": "sqlite",
+      "path": "$.sessions[0].tracks[0].events[2].error",
+      "locator": {
+        "session_id": "session-1",
+        "track_name": "tools"
+      },
+      "baseline": "timeout",
+      "actual": "",
+      "allowed_diff": false,
+      "explanation": "track error payload was lost"
+    },
+    {
+      "case": "memory-read-write",
+      "backend": "vector-memory",
+      "path": "$.memory_searches[0].results[0].score",
+      "locator": {
+        "memory_id": "memory-0001",
+        "memory_app_name": "replaytest",
+        "memory_user_id": "user-1"
+      },
+      "baseline": 0.91,
+      "actual": 0.9,
+      "allowed_diff": true,
+      "explanation": "vector backend uses a documented score tolerance"
+    },
+    {
+      "case": "track-events",
+      "backend": "legacy-session",
+      "path": "$.unsupported.track",
+      "actual": "track",
+      "allowed_diff": true,
+      "explanation": "legacy-session does not support track persistence"
+    }
+  ]
+}
