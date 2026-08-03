@@ -1,0 +1,2 @@
+*.sh text eol=lf
+*.diff text eol=lf whitespace=-blank-at-eol

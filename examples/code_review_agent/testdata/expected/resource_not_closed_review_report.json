@@ -1,0 +1,27 @@
+{
+  "summary": "1 high-confidence findings and 1 human-review items detected.",
+  "findings": [
+    {
+      "severity": "high",
+      "category": "resource",
+      "file": "files/read.go",
+      "line": 6,
+      "title": "Opened resource may not be closed",
+      "evidence": "f, err := os.Open(path)",
+      "recommendation": "Close the returned resource with defer after checking the error.",
+      "confidence": 0.82,
+      "source": "rule-only",
+      "rule_id": "RES001"
+    }
+  ],
+  "needs_human_review": [
+    {
+      "severity": "medium",
+      "category": "testing",
+      "file": "files/read.go",
+      "line": 5,
+      "title": "Changed Go code without nearby test changes",
+      "rule_id": "TEST001"
+    }
+  ]
+}

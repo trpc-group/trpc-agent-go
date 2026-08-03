@@ -40,11 +40,12 @@ type mockE2BServer struct {
 	server  *httptest.Server
 	respond executeResponder
 
-	mu          sync.Mutex
-	createCalls int
-	execCalls   int
-	killCalls   int
-	lastCode    string
+	mu           sync.Mutex
+	createCalls  int
+	execCalls    int
+	killCalls    int
+	lastCode     string
+	lastLanguage string
 }
 
 func newMockE2BServer(t *testing.T, respond executeResponder) *mockE2BServer {
@@ -96,20 +97,44 @@ func (m *mockE2BServer) handle(w http.ResponseWriter, r *http.Request) {
 		m.mu.Unlock()
 		// Extract `code` from body.
 		var body struct {
-			Code string `json:"code"`
+			Code     string `json:"code"`
+			Language string `json:"language"`
 		}
 		data, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(data, &body)
 		m.mu.Lock()
 		m.lastCode = body.Code
+		m.lastLanguage = body.Language
 		m.mu.Unlock()
 		w.Header().Set("Content-Type", "application/x-ndjson")
 		if m.respond != nil {
-			_, _ = w.Write([]byte(m.respond(body.Code)))
+			code := body.Code
+			if decoded, ok := unwrapBashPythonWrapper(code); ok {
+				code = decoded
+			}
+			_, _ = w.Write([]byte(m.respond(code)))
 		}
 		return
 	}
 	w.WriteHeader(http.StatusNotFound)
+}
+
+func unwrapBashPythonWrapper(code string) (string, bool) {
+	const prefix = `_trpc_bash = base64.b64decode("`
+	start := strings.Index(code, prefix)
+	if start < 0 {
+		return "", false
+	}
+	start += len(prefix)
+	end := strings.Index(code[start:], `")`)
+	if end < 0 {
+		return "", false
+	}
+	decoded, err := base64.StdEncoding.DecodeString(code[start : start+end])
+	if err != nil {
+		return "", false
+	}
+	return string(decoded), true
 }
 
 type redirectTransport struct {
@@ -440,6 +465,16 @@ func TestRunProgram_FramedOutput(t *testing.T) {
 	assert.False(t, res.TimedOut)
 }
 
+func TestRunProgram_StdinUsesPortablePipe(t *testing.T) {
+	script := runProgramCaptureScript(t, codeexecutor.RunProgramSpec{
+		Cmd:   "cat",
+		Stdin: "input data",
+	})
+	require.Contains(t, script, "| base64 -d |")
+	require.NotContains(t, script, "< <(",
+		"stdin must not depend on /dev/fd process substitution")
+}
+
 func TestRunProgram_BashErrorSurfaced(t *testing.T) {
 	srv := newMockE2BServer(t, func(code string) string {
 		// Emit an error event — runBashStreaming should translate this
@@ -482,6 +517,10 @@ func runProgramCaptureScript(
 	_, err := c.RunProgram(context.Background(), ws, spec)
 	require.NoError(t, err)
 	require.NotEmpty(t, gotScript)
+	srv.mu.Lock()
+	lastLanguage := srv.lastLanguage
+	srv.mu.Unlock()
+	require.Equal(t, string(ci.LanguagePython), lastLanguage)
 	return gotScript
 }
 
@@ -1030,7 +1069,11 @@ func TestStageInputs_SkillScheme(t *testing.T) {
 }
 
 func TestStageInputs_HostScheme(t *testing.T) {
-	srv := newMockE2BServer(t, func(code string) string { return "" })
+	var scripts []string
+	srv := newMockE2BServer(t, func(code string) string {
+		scripts = append(scripts, code)
+		return ""
+	})
 	defer srv.close()
 	c := newMockedExecutor(t, srv)
 
@@ -1039,8 +1082,19 @@ func TestStageInputs_HostScheme(t *testing.T) {
 
 	ws := codeexecutor.Workspace{ID: "x", Path: "/tmp/ws"}
 	err := c.StageInputs(context.Background(), ws,
-		[]codeexecutor.InputSpec{{From: "host://" + dir}})
+		[]codeexecutor.InputSpec{{
+			From: "host://" + dir,
+			To:   "work/repo",
+		}})
 	require.NoError(t, err)
+	require.Condition(t, func() bool {
+		for _, script := range scripts {
+			if strings.Contains(script, "/tmp/ws/work/repo") {
+				return true
+			}
+		}
+		return false
+	}, "host input must be extracted at its exact To destination")
 }
 
 func TestLoadWorkspaceMetadata_ParsesJSON(t *testing.T) {

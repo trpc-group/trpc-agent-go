@@ -1,0 +1,14 @@
+[
+  {
+    "kind": "json_report",
+    "path": "code_review_agent\\sample_output\\review_report.json",
+    "sha256": "cf3dd49293f505f1bfcf5a7035ccea3e5273f685dca6aa8aa178b4a49733266c",
+    "size_bytes": 8031
+  },
+  {
+    "kind": "markdown_report",
+    "path": "code_review_agent\\sample_output\\review_report.md",
+    "sha256": "78033019afb12c469b8597767a4db4f2bf50b1ebda0840610ce24a62f705b755",
+    "size_bytes": 3446
+  }
+]

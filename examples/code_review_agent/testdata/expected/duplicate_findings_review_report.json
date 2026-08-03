@@ -1,0 +1,27 @@
+{
+  "summary": "1 high-confidence findings and 1 human-review items detected.",
+  "findings": [
+    {
+      "severity": "medium",
+      "category": "error_handling",
+      "file": "dup/dup.go",
+      "line": 4,
+      "title": "Error result is ignored",
+      "evidence": "_ = writeSomething()",
+      "recommendation": "Handle or return the error so failures are observable.",
+      "confidence": 0.8,
+      "source": "rule-only",
+      "rule_id": "ERR001"
+    }
+  ],
+  "needs_human_review": [
+    {
+      "severity": "medium",
+      "category": "testing",
+      "file": "dup/dup.go",
+      "line": 3,
+      "title": "Changed Go code without nearby test changes",
+      "rule_id": "TEST001"
+    }
+  ]
+}

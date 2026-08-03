@@ -716,7 +716,13 @@ func (r *workspaceRuntime) stageHostInput(
 		}
 	}
 	// Fallback: tar copy host path to dest dir.
-	err := r.PutDirectory(ctx, ws, host, path.Dir(to))
+	stageTo := path.Dir(to)
+	if info, err := os.Stat(host); err == nil && info.IsDir() {
+		// Directory inputs treat To as the destination directory. File inputs
+		// retain the parent-directory extraction used by the tar fallback.
+		stageTo = to
+	}
+	err := r.PutDirectory(ctx, ws, host, stageTo)
 	return host, nil, err
 }
 

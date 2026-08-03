@@ -2224,6 +2224,54 @@ func TestWorkspaceRuntime_StageDirectory_FallbackTarCopy_ReadOnly(t *testing.T) 
 	require.Equal(t, 2, execCreates)
 }
 
+func TestStageHostInputFallbackDirectoryUsesExactDestination(t *testing.T) {
+	var archivePath string
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path, "/containers/"+testCID+"/exec"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"` + testExec1 + `"}`))
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path, "/exec/"+testExec1+"/start"):
+			hj, _ := w.(http.Hijacker)
+			conn, buf, _ := hj.Hijack()
+			writeHijackStream(t, conn, buf, "", "")
+		case r.Method == http.MethodGet &&
+			strings.Contains(r.URL.Path, "/exec/"+testExec1+"/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ExitCode":0}`))
+		case r.Method == http.MethodPut &&
+			strings.Contains(r.URL.Path, "/containers/"+testCID+"/archive"):
+			archivePath = r.URL.Query().Get("path")
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}
+
+	cli, cleanup := fakeDocker(t, handler)
+	defer cleanup()
+	rt := &workspaceRuntime{
+		ce: &CodeExecutor{
+			client:    cli,
+			container: &tcontainer.Summary{ID: testCID},
+		},
+		cfg: runtimeConfig{runContainerBase: testRunBase},
+	}
+	ws := codeexecutor.Workspace{ID: "w-host-dir", Path: "/ws"}
+	src := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(src, "go.mod"), []byte("module example.com/review\n"), 0o600))
+
+	_, _, err := rt.stageHostInput(
+		context.Background(), ws,
+		codeexecutor.InputSpec{From: "host://" + src},
+		"copy", "work/repo", path.Join(ws.Path, "work/repo"),
+	)
+	require.NoError(t, err)
+	require.Equal(t, path.Join(ws.Path, "work/repo"), archivePath)
+}
+
 func TestWorkspaceRuntime_StageDirectory_Fallback_ReadOnly_ChmodError(
 	t *testing.T,
 ) {
