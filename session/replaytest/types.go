@@ -113,7 +113,6 @@ type Snapshot struct {
 	Tracks    []NormalizedTrack   `json:"tracks"`
 }
 
-// NormalizedEvent is an event with auto-generated fields removed.
 // NormalizedToolCall is a tool call with auto-generated fields removed.
 type NormalizedToolCall struct {
 	ID   string `json:"id"`
@@ -121,6 +120,7 @@ type NormalizedToolCall struct {
 	Args string `json:"args"`
 }
 
+// NormalizedEvent is an event with auto-generated fields removed.
 type NormalizedEvent struct {
 	Author              string               `json:"author"`
 	Role                string               `json:"role"`

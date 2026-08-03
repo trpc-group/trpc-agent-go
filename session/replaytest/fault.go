@@ -19,6 +19,7 @@ import (
 // summary loss/overwrite/wrong-session/wrong-filter-key).
 type FaultKind string
 
+// Supported fault kinds for deterministic fault injection.
 const (
 	FaultDropMemory          FaultKind = "drop_memory"
 	FaultDropSummary         FaultKind = "drop_summary"

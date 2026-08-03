@@ -28,13 +28,6 @@ func RunCase(
 	c ReplayCase,
 ) (Snapshot, error) {
 	sessService := backend.SessionService
-	memService := backend.MemoryService
-
-	// Create initial state map.
-	initialState := make(session.StateMap)
-	for k, v := range c.InitialState {
-		initialState[k] = []byte(v)
-	}
 
 	// Build session key.
 	key := session.Key{
@@ -43,97 +36,30 @@ func RunCase(
 		SessionID: c.SessionID,
 	}
 
-	// Create session.
-	sess, err := sessService.CreateSession(ctx, key, initialState)
+	// Create session with initial state.
+	sess, err := sessService.CreateSession(ctx, key, initialState(c))
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("create session: %w", err)
 	}
 
-	// Append events with deterministic timestamps.
+	// Append events with deterministic timestamps and summary steps.
 	baseTime := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
-	for i, es := range c.Events {
-		evt, err := buildEvent(es, i, c.SessionID, baseTime)
-		if err != nil {
-			return Snapshot{}, fmt.Errorf("build event %d: %w", i, err)
-		}
-		if err := sessService.AppendEvent(ctx, sess, evt); err != nil {
-			return Snapshot{}, fmt.Errorf("append event %d: %w", i, err)
-		}
-
-		// Check for summary steps after this event.
-		for _, ss := range c.SummarySteps {
-			if ss.AfterEventIndex == i+1 {
-				if err := sessService.CreateSessionSummary(
-					ctx, sess, ss.FilterKey, ss.Force,
-				); err != nil {
-					return Snapshot{}, fmt.Errorf(
-						"create summary at event %d: %w", i+1, err,
-					)
-				}
-			}
-		}
+	if err := runEventSteps(ctx, sessService, sess, c, baseTime); err != nil {
+		return Snapshot{}, err
 	}
 
-	// Write memories.
-	userKey := memory.UserKey{AppName: c.AppName, UserID: c.UserID}
-	for _, mw := range c.MemoryWrites {
-		if err := memService.AddMemory(
-			ctx, userKey, mw.Memory, mw.Topics,
-		); err != nil {
-			return Snapshot{}, fmt.Errorf("add memory: %w", err)
-		}
-	}
-
-	// Read all memories after writes so that write-only
+	// Write memories, then read them back so that write-only
 	// cases also produce snapshot data.
-	var allMemories []*memory.Entry
-	if len(c.MemoryWrites) > 0 {
-		readEntries, err := memService.ReadMemories(ctx, userKey, 1000)
-		if err != nil {
-			return Snapshot{}, fmt.Errorf("read memories: %w", err)
-		}
-		allMemories = append(allMemories, readEntries...)
-	}
-
-	// Execute memory queries and collect results.
-	for _, mq := range c.MemoryQueries {
-		limit := mq.Limit
-		if limit <= 0 {
-			limit = 10
-		}
-		entries, err := memService.SearchMemories(
-			ctx, userKey, mq.Query,
-			memory.WithSearchOptions(memory.SearchOptions{
-				MaxResults: limit,
-			}),
-		)
-		if err != nil {
-			return Snapshot{}, fmt.Errorf("search memories: %w", err)
-		}
-		allMemories = append(allMemories, entries...)
+	allMemories, err := collectMemories(ctx, backend.MemoryService, c)
+	if err != nil {
+		return Snapshot{}, err
 	}
 
 	// Append track events. A case that requests track events must fail
 	// loudly when the backend does not implement session.TrackService —
 	// silently skipping would let the case pass with empty Tracks.
-	if len(c.TrackEvents) > 0 {
-		trackSvc, ok := sessService.(session.TrackService)
-		if !ok {
-			return Snapshot{}, fmt.Errorf(
-				"case %q requests track events but backend %q does not implement session.TrackService",
-				c.Name, backend.Name,
-			)
-		}
-		for _, ts := range c.TrackEvents {
-			trackEvent := &session.TrackEvent{
-				Track:     session.Track(ts.Track),
-				Payload:   json.RawMessage(ts.Payload),
-				Timestamp: baseTime,
-			}
-			if err := trackSvc.AppendTrackEvent(ctx, sess, trackEvent); err != nil {
-				return Snapshot{}, fmt.Errorf("append track event: %w", err)
-			}
-		}
+	if err := appendTrackEvents(ctx, sessService, backend, sess, c, baseTime); err != nil {
+		return Snapshot{}, err
 	}
 
 	// Re-fetch session to get latest state.
@@ -153,6 +79,126 @@ func RunCase(
 	}
 
 	return normalizeSnapshot(sess, allMemories), nil
+}
+
+// initialState converts the case's initial state into a session.StateMap.
+func initialState(c ReplayCase) session.StateMap {
+	initialState := make(session.StateMap, len(c.InitialState))
+	for k, v := range c.InitialState {
+		initialState[k] = []byte(v)
+	}
+	return initialState
+}
+
+// runEventSteps appends events with deterministic timestamps and
+// triggers summary steps after their target event index.
+func runEventSteps(
+	ctx context.Context,
+	sessService session.Service,
+	sess *session.Session,
+	c ReplayCase,
+	baseTime time.Time,
+) error {
+	for i, es := range c.Events {
+		evt, err := buildEvent(es, i, c.SessionID, baseTime)
+		if err != nil {
+			return fmt.Errorf("build event %d: %w", i, err)
+		}
+		if err := sessService.AppendEvent(ctx, sess, evt); err != nil {
+			return fmt.Errorf("append event %d: %w", i, err)
+		}
+
+		// Check for summary steps after this event.
+		for _, ss := range c.SummarySteps {
+			if ss.AfterEventIndex == i+1 {
+				if err := sessService.CreateSessionSummary(
+					ctx, sess, ss.FilterKey, ss.Force,
+				); err != nil {
+					return fmt.Errorf(
+						"create summary at event %d: %w", i+1, err,
+					)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// collectMemories writes memories, reads them back, and runs memory
+// queries, returning every entry observed.
+func collectMemories(
+	ctx context.Context,
+	memService memory.Service,
+	c ReplayCase,
+) ([]*memory.Entry, error) {
+	userKey := memory.UserKey{AppName: c.AppName, UserID: c.UserID}
+	for _, mw := range c.MemoryWrites {
+		if err := memService.AddMemory(
+			ctx, userKey, mw.Memory, mw.Topics,
+		); err != nil {
+			return nil, fmt.Errorf("add memory: %w", err)
+		}
+	}
+
+	var allMemories []*memory.Entry
+	if len(c.MemoryWrites) > 0 {
+		readEntries, err := memService.ReadMemories(ctx, userKey, 1000)
+		if err != nil {
+			return nil, fmt.Errorf("read memories: %w", err)
+		}
+		allMemories = append(allMemories, readEntries...)
+	}
+
+	// Execute memory queries and collect results.
+	for _, mq := range c.MemoryQueries {
+		limit := mq.Limit
+		if limit <= 0 {
+			limit = 10
+		}
+		entries, err := memService.SearchMemories(
+			ctx, userKey, mq.Query,
+			memory.WithSearchOptions(memory.SearchOptions{
+				MaxResults: limit,
+			}),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("search memories: %w", err)
+		}
+		allMemories = append(allMemories, entries...)
+	}
+	return allMemories, nil
+}
+
+// appendTrackEvents writes track events when the case requests them.
+func appendTrackEvents(
+	ctx context.Context,
+	sessService session.Service,
+	backend Backend,
+	sess *session.Session,
+	c ReplayCase,
+	baseTime time.Time,
+) error {
+	if len(c.TrackEvents) == 0 {
+		return nil
+	}
+	trackSvc, ok := sessService.(session.TrackService)
+	if !ok {
+		return fmt.Errorf(
+			"case %q requests track events but backend %q does not implement session.TrackService",
+			c.Name, backend.Name,
+		)
+	}
+	for _, ts := range c.TrackEvents {
+		trackEvent := &session.TrackEvent{
+			Track:     session.Track(ts.Track),
+			Payload:   json.RawMessage(ts.Payload),
+			Timestamp: baseTime,
+		}
+		if err := trackSvc.AppendTrackEvent(ctx, sess, trackEvent); err != nil {
+			return fmt.Errorf("append track event: %w", err)
+		}
+	}
+	return nil
 }
 
 // buildEvent constructs an event.Event from an EventSpec with
