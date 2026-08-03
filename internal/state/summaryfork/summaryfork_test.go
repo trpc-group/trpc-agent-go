@@ -35,6 +35,12 @@ func TestAttachSnapshotsRequest(t *testing.T) {
 			ContentParts: []model.ContentPart{{
 				Type: model.ContentTypeText,
 				Text: &text,
+			}, {
+				Type: model.ContentTypeVideo,
+				Video: &model.Video{
+					Data:   []byte("video"),
+					Format: "mp4",
+				},
 			}},
 			ToolCalls: []model.ToolCall{{
 				Index: &index,
@@ -66,6 +72,7 @@ func TestAttachSnapshotsRequest(t *testing.T) {
 	Attach(inv, req)
 
 	*req.Messages[0].ContentParts[0].Text = "mutated"
+	req.Messages[0].ContentParts[1].Video.Data[0] = 'V'
 	req.Messages[0].ToolCalls[0].Function.Arguments[0] = '['
 	req.Messages[0].ToolCalls[0].ExtraFields["nested"].(map[string]any)["k"] = "changed"
 	*req.GenerationConfig.MaxTokens = 20
@@ -77,6 +84,7 @@ func TestAttachSnapshotsRequest(t *testing.T) {
 	got, ok := Request(inv)
 	require.True(t, ok)
 	require.Equal(t, "part", *got.Messages[0].ContentParts[0].Text)
+	require.Equal(t, []byte("video"), got.Messages[0].ContentParts[1].Video.Data)
 	require.Equal(t, byte('{'), got.Messages[0].ToolCalls[0].Function.Arguments[0])
 	require.Equal(t, "v", got.Messages[0].ToolCalls[0].ExtraFields["nested"].(map[string]any)["k"])
 	require.Equal(t, 10, *got.GenerationConfig.MaxTokens)

@@ -3116,7 +3116,13 @@ func TestRunLastMessageContentArray(t *testing.T) {
 		Messages: []types.Message{{
 			Role: types.RoleUser,
 			Content: []types.InputContent{
-				{Type: types.InputContentTypeBinary, MimeType: "image/jpeg", URL: "https://example.com/resource/download?id=1"},
+				{
+					Type: types.InputContentTypeImage,
+					Source: &types.InputContentSource{
+						Type:  types.InputContentSourceTypeURL,
+						Value: "https://example.com/resource/download?id=1",
+					},
+				},
 				{Type: types.InputContentTypeText, Text: "图中有哪些信息?"},
 			},
 		}},

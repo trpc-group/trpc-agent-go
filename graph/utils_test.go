@@ -515,6 +515,7 @@ func TestDeepCopyAny_MessageNestedValuesPreserveSharing(t *testing.T) {
 	args := []byte("args")
 	imageData := []byte("img")
 	audioData := []byte("aud")
+	videoData := []byte("vid")
 	fileData := []byte("file")
 	parts := []model.ContentPart{
 		{
@@ -522,7 +523,12 @@ func TestDeepCopyAny_MessageNestedValuesPreserveSharing(t *testing.T) {
 			Text:  &text,
 			Image: &model.Image{Data: imageData},
 			Audio: &model.Audio{Data: audioData, Format: "wav"},
-			File:  &model.File{Name: "f.txt", Data: fileData},
+			Video: &model.Video{
+				URL:    "https://example.com/video.mp4",
+				Data:   videoData,
+				Format: "mp4",
+			},
+			File: &model.File{Name: "f.txt", Data: fileData},
 		},
 	}
 	calls := []model.ToolCall{
@@ -559,6 +565,21 @@ func TestDeepCopyAny_MessageNestedValuesPreserveSharing(t *testing.T) {
 		reflect.ValueOf(copiedMsgs[0].ContentParts[0].Image.Data).Pointer(),
 		reflect.ValueOf(copiedMsgs[1].ContentParts[0].Image.Data).Pointer(),
 	)
+	require.Same(
+		t,
+		copiedMsgs[0].ContentParts[0].Video,
+		copiedMsgs[1].ContentParts[0].Video,
+	)
+	require.NotSame(
+		t,
+		parts[0].Video,
+		copiedMsgs[0].ContentParts[0].Video,
+	)
+	require.Equal(
+		t,
+		reflect.ValueOf(copiedMsgs[0].ContentParts[0].Video.Data).Pointer(),
+		reflect.ValueOf(copiedMsgs[1].ContentParts[0].Video.Data).Pointer(),
+	)
 	require.Equal(
 		t,
 		reflect.ValueOf(copiedMsgs[0].ToolCalls).Pointer(),
@@ -573,6 +594,16 @@ func TestDeepCopyAny_MessageNestedValuesPreserveSharing(t *testing.T) {
 	*copiedMsgs[0].ContentParts[0].Text = "updated"
 	require.Equal(t, "updated", *copiedMsgs[1].ContentParts[0].Text)
 	require.Equal(t, "shared", text)
+	copiedMsgs[0].ContentParts[0].Video.URL = "https://example.com/changed.mp4"
+	copiedMsgs[0].ContentParts[0].Video.Data[0] = 'X'
+	require.Equal(
+		t,
+		"https://example.com/changed.mp4",
+		copiedMsgs[1].ContentParts[0].Video.URL,
+	)
+	require.Equal(t, byte('X'), copiedMsgs[1].ContentParts[0].Video.Data[0])
+	require.Equal(t, "https://example.com/video.mp4", parts[0].Video.URL)
+	require.Equal(t, []byte("vid"), videoData)
 	copiedMsgs[0].ToolCalls[0].Function.Arguments[0] = 'X'
 	require.Equal(t, byte('X'), copiedMsgs[1].ToolCalls[0].Function.Arguments[0])
 	require.Equal(t, []byte("args"), args)
