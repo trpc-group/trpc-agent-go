@@ -1,40 +1,37 @@
 # Design
 
-Replay consistency is a semantic contract, not byte-for-byte database
-equality. Typed cases drive isolated `session.Service` and `memory.Service`
-instances, then snapshots compare events, scoped state, memories, filter-key
-summaries, and named tracks.
+Replay consistency is a semantic contract, not byte-for-byte database equality.
+Typed cases drive isolated `session.Service` and `memory.Service` instances,
+then snapshots compare events, scoped state, memories, filter-key summaries,
+and named tracks.
 
-Normalization removes only values that are not portable. Physical IDs become
-logical IDs, generated timestamps become presence markers, maps are
-canonicalized, and stored memories are content-sorted. Ranked searches retain
-their order and score. State values use tagged `nil`, `json`, or `bytes`
-representations, so nil, JSON null, empty bytes, invalid JSON, and lossy JSON
-objects remain distinct. Summary comparison includes text, filter key,
-boundary, retained events, and ownership. Track payloads and session-relative
+Normalization removes only non-portable values. Physical IDs become logical
+IDs, generated timestamps become presence markers, maps are canonicalized, and
+stored memories are content-sorted. Ranked searches retain order and score.
+Tagged State representations keep nil, JSON null, empty bytes, invalid JSON,
+and lossy JSON objects distinct. Summary comparison includes text, filter key,
+boundary, retained events, and ownership; Track payloads and session-relative
 timing remain observable.
 
-Write recovery is opt-in. After an error, a domain witness checks logical event
-count, state postconditions, semantic memory identity, summary change, or track
-tuple count. Only State and Memory may retry because their writes are
-idempotent. Other unproven outcomes return `ErrUncertainCommit` rather than
-risk a duplicate append. Explicit reload steps re-fetch the active Session, and
-subsequent writes use that returned value; the public matrix verifies continuity
-across reload boundaries against both lightweight backends.
+Write recovery is opt-in. After an error, a domain witness checks event count
+and fingerprint, State postconditions, semantic Memory identity, Summary
+change, or Track tuple count. Only idempotent State and Memory writes may retry.
+Other unproven outcomes return `ErrUncertainCommit`. Explicit reloads re-fetch
+the active Session, validate its app, user, and session IDs, and make subsequent
+writes use that value.
 
-Concurrent event branches preserve lane order and predecessor relationships
-while ignoring scheduler interleaving. Each concurrent step uses one write
-domain. State, Memory, Summary, and Track writes require separate backend
-capabilities and disjoint footprints. Full-session summaries, event state
-deltas, reads, reloads, and nested concurrency stay sequential because the
-service contracts do not define portable conflict resolution for them.
+Concurrent Event branches preserve lane order and predecessor relationships
+while ignoring scheduler interleaving. State, Memory, Summary, and Track writes
+require separate capabilities and disjoint footprints. Full-session summaries,
+event State deltas, reads, reloads, and nested concurrency stay sequential
+because their service contracts provide no portable conflict resolution.
 
-Diffs use JSON Pointer paths plus session, event, memory, summary, or track
-locators. An `AllowedDiff` needs a backend pair, path glob, known rule, and
-reason, and remains visible in the report. Reference mode uses one oracle;
-consensus mode identifies an outlier only when every remaining backend agrees.
-Failures and unsupported capabilities remain explicit evidence.
+Diffs use JSON Pointer paths plus domain locators. Every `AllowedDiff` names an
+unordered backend pair, path glob, known rule, and reason, and remains visible
+in the report. Reference mode uses one oracle; consensus reports an outlier only
+when every remaining backend agrees. Failures and unsupported capabilities
+remain explicit evidence.
 
 InMemory and file-backed SQLite form the lightweight matrix. Optional external
-adapters belong in the independent integration module and declare only the
-capabilities they actually wire.
+adapters live in their owning integration modules and declare only capabilities
+they actually wire.
