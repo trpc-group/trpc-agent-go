@@ -1,0 +1,35 @@
+[
+  {
+    "metricName": "final_response_match",
+    "threshold": 0.75,
+    "weight": 0.3
+  },
+  {
+    "metricName": "tool_trajectory_avg_score",
+    "threshold": 1,
+    "weight": 0.25,
+    "hardFail": true
+  },
+  {
+    "metricName": "route_accuracy",
+    "threshold": 1,
+    "weight": 0.15,
+    "hardFail": true
+  },
+  {
+    "metricName": "structured_output_valid",
+    "threshold": 1,
+    "weight": 0.1,
+    "hardFail": true
+  },
+  {
+    "metricName": "knowledge_recall",
+    "threshold": 1,
+    "weight": 0.1
+  },
+  {
+    "metricName": "llm_rubric",
+    "threshold": 0.8,
+    "weight": 0.1
+  }
+]

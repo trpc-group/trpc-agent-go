@@ -1,0 +1,565 @@
+{
+  "evalSetId": "support-train",
+  "name": "support-train",
+  "passThreshold": 0.8,
+  "evalCases": [
+    {
+      "evalId": "train_weather_tool_args",
+      "tags": ["optimizable", "tool_parameter"],
+      "conversation": [
+        {
+          "invocationId": "train_weather_tool_args-1",
+          "userContent": {
+            "role": "user",
+            "content": "上海现在天气怎么样？"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "上海当前晴，26°C。"
+          },
+          "tools": [
+            {
+              "id": "expected-weather-shanghai",
+              "name": "get_weather",
+              "arguments": {
+                "city": "上海"
+              },
+              "result": {
+                "condition": "晴",
+                "temperatureC": 26
+              }
+            }
+          ]
+        }
+      ],
+      "expectations": {
+        "route": "weather_agent"
+      },
+      "fakeResponses": {
+        "baseline": {
+          "response": "北京当前多云，20°C。",
+          "tools": [
+            {
+              "id": "baseline-weather",
+              "name": "get_weather",
+              "arguments": {
+                "city": "北京"
+              },
+              "result": {
+                "condition": "多云",
+                "temperatureC": 20
+              }
+            }
+          ],
+          "route": "weather_agent",
+          "rubricScore": 0.2,
+          "rubricReason": "工具参数沿用了错误城市，最终回复不匹配。",
+          "promptSemanticSha256": "3c789d0631455ed15c4b700f815fe13d7e052825105140b3cf0459f4a7800820",
+          "trace": [
+            {
+              "stepId": "train-weather-route",
+              "kind": "route",
+              "name": "weather_agent",
+              "status": "completed",
+              "elapsedMs": 1
+            },
+            {
+              "stepId": "train-weather-tool",
+              "kind": "tool",
+              "name": "get_weather",
+              "status": "completed",
+              "elapsedMs": 6,
+              "input": {
+                "city": "北京"
+              },
+              "output": {
+                "condition": "多云",
+                "temperatureC": 20
+              }
+            },
+            {
+              "stepId": "train-weather-final",
+              "kind": "final_response",
+              "status": "completed",
+              "elapsedMs": 12,
+              "message": "北京当前多云，20°C。",
+              "rubricScore": 0.2,
+              "rubricReason": "工具参数沿用了错误城市，最终回复不匹配。",
+              "usage": {
+                "modelCalls": 1,
+                "toolCalls": 1,
+                "inputTokens": 42,
+                "outputTokens": 12,
+                "costUsd": 0,
+                "latencyMs": 12
+              }
+            }
+          ],
+          "usage": {
+            "modelCalls": 1,
+            "toolCalls": 1,
+            "inputTokens": 42,
+            "outputTokens": 12,
+            "costUsd": 0,
+            "latencyMs": 12
+          }
+        },
+        "candidate-overfit": {
+          "response": "上海当前晴，26°C。",
+          "tools": [
+            {
+              "id": "overfit-weather",
+              "name": "get_weather",
+              "arguments": {
+                "city": "上海"
+              },
+              "result": {
+                "condition": "晴",
+                "temperatureC": 26
+              }
+            }
+          ],
+          "route": "weather_agent",
+          "rubricScore": 1,
+          "rubricReason": "训练特例已修复。",
+          "promptSemanticSha256": "87448623848fb0cb3fcfb04cd686bafe8c83eb1a1075e068edc34ac6c4683133",
+          "trace": [
+            {
+              "stepId": "train-weather-overfit-route",
+              "kind": "route",
+              "name": "weather_agent",
+              "status": "completed",
+              "elapsedMs": 1
+            },
+            {
+              "stepId": "train-weather-overfit",
+              "kind": "tool",
+              "name": "get_weather",
+              "status": "completed",
+              "elapsedMs": 6,
+              "input": {
+                "city": "上海"
+              },
+              "output": {
+                "condition": "晴",
+                "temperatureC": 26
+              }
+            },
+            {
+              "stepId": "train-weather-overfit-final",
+              "kind": "final_response",
+              "status": "completed",
+              "elapsedMs": 11,
+              "message": "上海当前晴，26°C。",
+              "rubricScore": 1,
+              "rubricReason": "训练特例已修复。",
+              "usage": {
+                "modelCalls": 1,
+                "toolCalls": 1,
+                "inputTokens": 71,
+                "outputTokens": 12,
+                "costUsd": 0,
+                "latencyMs": 11
+              }
+            }
+          ],
+          "usage": {
+            "modelCalls": 1,
+            "toolCalls": 1,
+            "inputTokens": 71,
+            "outputTokens": 12,
+            "costUsd": 0,
+            "latencyMs": 11
+          }
+        },
+        "candidate-balanced": {
+          "response": "上海当前晴，26°C。",
+          "tools": [
+            {
+              "id": "balanced-weather",
+              "name": "get_weather",
+              "arguments": {
+                "city": "上海"
+              },
+              "result": {
+                "condition": "晴",
+                "temperatureC": 26
+              }
+            }
+          ],
+          "route": "weather_agent",
+          "rubricScore": 1,
+          "rubricReason": "通用参数提取规则生效。",
+          "promptSemanticSha256": "48188b412e0364151c49137c894668c234dddfb7e211b490e1057cfe10bfdc80",
+          "trace": [
+            {
+              "stepId": "train-weather-balanced-route",
+              "kind": "route",
+              "name": "weather_agent",
+              "status": "completed",
+              "elapsedMs": 1
+            },
+            {
+              "stepId": "train-weather-balanced",
+              "kind": "tool",
+              "name": "get_weather",
+              "status": "completed",
+              "elapsedMs": 6,
+              "input": {
+                "city": "上海"
+              },
+              "output": {
+                "condition": "晴",
+                "temperatureC": 26
+              }
+            },
+            {
+              "stepId": "train-weather-balanced-final",
+              "kind": "final_response",
+              "status": "completed",
+              "elapsedMs": 11,
+              "message": "上海当前晴，26°C。",
+              "rubricScore": 1,
+              "rubricReason": "通用参数提取规则生效。",
+              "usage": {
+                "modelCalls": 1,
+                "toolCalls": 1,
+                "inputTokens": 78,
+                "outputTokens": 12,
+                "costUsd": 0,
+                "latencyMs": 11
+              }
+            }
+          ],
+          "usage": {
+            "modelCalls": 1,
+            "toolCalls": 1,
+            "inputTokens": 78,
+            "outputTokens": 12,
+            "costUsd": 0,
+            "latencyMs": 11
+          }
+        }
+      }
+    },
+    {
+      "evalId": "train_order_json_format",
+      "tags": ["optimizable", "format"],
+      "conversation": [
+        {
+          "invocationId": "train_order_json_format-1",
+          "userContent": {
+            "role": "user",
+            "content": "用 JSON 返回订单 A100 的状态。"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "{\"orderId\":\"A100\",\"status\":\"ok\"}"
+          },
+          "tools": []
+        }
+      ],
+      "expectations": {
+        "route": "order_agent",
+        "responseFormat": "json"
+      },
+      "fakeResponses": {
+        "baseline": {
+          "response": "订单 A100 状态正常。",
+          "tools": [],
+          "route": "order_agent",
+          "rubricScore": 0.3,
+          "rubricReason": "内容大致正确，但格式不是 JSON。",
+          "promptSemanticSha256": "3c789d0631455ed15c4b700f815fe13d7e052825105140b3cf0459f4a7800820",
+          "trace": [
+            {
+              "stepId": "train-order-baseline-route",
+              "kind": "route",
+              "name": "order_agent",
+              "status": "completed",
+              "elapsedMs": 1
+            },
+            {
+              "stepId": "train-order-baseline",
+              "kind": "final_response",
+              "status": "completed",
+              "elapsedMs": 9,
+              "message": "订单 A100 状态正常。",
+              "rubricScore": 0.3,
+              "rubricReason": "内容大致正确，但格式不是 JSON。",
+              "usage": {
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "inputTokens": 38,
+                "outputTokens": 10,
+                "costUsd": 0,
+                "latencyMs": 9
+              }
+            }
+          ],
+          "usage": {
+            "modelCalls": 1,
+            "toolCalls": 0,
+            "inputTokens": 38,
+            "outputTokens": 10,
+            "costUsd": 0,
+            "latencyMs": 9
+          }
+        },
+        "candidate-overfit": {
+          "response": "{\"orderId\":\"A100\",\"status\":\"ok\"}",
+          "tools": [],
+          "route": "order_agent",
+          "rubricScore": 1,
+          "rubricReason": "训练订单特例输出合法 JSON。",
+          "promptSemanticSha256": "87448623848fb0cb3fcfb04cd686bafe8c83eb1a1075e068edc34ac6c4683133",
+          "trace": [
+            {
+              "stepId": "train-order-overfit-route",
+              "kind": "route",
+              "name": "order_agent",
+              "status": "completed",
+              "elapsedMs": 1
+            },
+            {
+              "stepId": "train-order-overfit",
+              "kind": "structured_output",
+              "status": "completed",
+              "elapsedMs": 4
+            },
+            {
+              "stepId": "train-order-overfit-final",
+              "kind": "final_response",
+              "status": "completed",
+              "elapsedMs": 9,
+              "message": "{\"orderId\":\"A100\",\"status\":\"ok\"}",
+              "rubricScore": 1,
+              "rubricReason": "训练订单特例输出合法 JSON。",
+              "usage": {
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "inputTokens": 68,
+                "outputTokens": 16,
+                "costUsd": 0,
+                "latencyMs": 9
+              }
+            }
+          ],
+          "usage": {
+            "modelCalls": 1,
+            "toolCalls": 0,
+            "inputTokens": 68,
+            "outputTokens": 16,
+            "costUsd": 0,
+            "latencyMs": 9
+          }
+        },
+        "candidate-balanced": {
+          "response": "{\"orderId\":\"A100\",\"status\":\"ok\"}",
+          "tools": [],
+          "route": "order_agent",
+          "rubricScore": 1,
+          "rubricReason": "通用 JSON 约束生效。",
+          "promptSemanticSha256": "48188b412e0364151c49137c894668c234dddfb7e211b490e1057cfe10bfdc80",
+          "trace": [
+            {
+              "stepId": "train-order-balanced-route",
+              "kind": "route",
+              "name": "order_agent",
+              "status": "completed",
+              "elapsedMs": 1
+            },
+            {
+              "stepId": "train-order-balanced",
+              "kind": "structured_output",
+              "status": "completed",
+              "elapsedMs": 4
+            },
+            {
+              "stepId": "train-order-balanced-final",
+              "kind": "final_response",
+              "status": "completed",
+              "elapsedMs": 9,
+              "message": "{\"orderId\":\"A100\",\"status\":\"ok\"}",
+              "rubricScore": 1,
+              "rubricReason": "通用 JSON 约束生效。",
+              "usage": {
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "inputTokens": 75,
+                "outputTokens": 16,
+                "costUsd": 0,
+                "latencyMs": 9
+              }
+            }
+          ],
+          "usage": {
+            "modelCalls": 1,
+            "toolCalls": 0,
+            "inputTokens": 75,
+            "outputTokens": 16,
+            "costUsd": 0,
+            "latencyMs": 9
+          }
+        }
+      }
+    },
+    {
+      "evalId": "train_knowledge_no_gain",
+      "tags": ["optimization_ineffective", "knowledge"],
+      "conversation": [
+        {
+          "invocationId": "train_knowledge_no_gain-1",
+          "userContent": {
+            "role": "user",
+            "content": "退款到账需要多久？"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "退款将在 3 个工作日内到账。"
+          },
+          "tools": []
+        }
+      ],
+      "expectations": {
+        "route": "knowledge_search",
+        "requiredFacts": ["refund_sla_3_days"],
+        "minRetrievedDocuments": 1
+      },
+      "fakeResponses": {
+        "baseline": {
+          "response": "请咨询人工客服。",
+          "tools": [],
+          "route": "general_faq",
+          "retrievedFacts": [],
+          "retrievedDocuments": 0,
+          "rubricScore": 0.1,
+          "rubricReason": "知识召回不足，未回答退款时效。",
+          "promptSemanticSha256": "3c789d0631455ed15c4b700f815fe13d7e052825105140b3cf0459f4a7800820",
+          "trace": [
+            {
+              "stepId": "train-refund-route",
+              "kind": "route",
+              "name": "general_faq",
+              "status": "completed",
+              "elapsedMs": 2
+            },
+            {
+              "stepId": "train-refund-final",
+              "kind": "final_response",
+              "status": "completed",
+              "elapsedMs": 8,
+              "message": "请咨询人工客服。",
+              "rubricScore": 0.1,
+              "rubricReason": "知识召回不足，未回答退款时效。",
+              "usage": {
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "inputTokens": 35,
+                "outputTokens": 8,
+                "costUsd": 0,
+                "latencyMs": 8
+              }
+            }
+          ],
+          "usage": {
+            "modelCalls": 1,
+            "toolCalls": 0,
+            "inputTokens": 35,
+            "outputTokens": 8,
+            "costUsd": 0,
+            "latencyMs": 8
+          }
+        },
+        "candidate-overfit": {
+          "response": "请咨询人工客服。",
+          "tools": [],
+          "route": "general_faq",
+          "retrievedFacts": [],
+          "retrievedDocuments": 0,
+          "rubricScore": 0.1,
+          "rubricReason": "训练特例未改善知识召回，仍未回答退款时效。",
+          "promptSemanticSha256": "87448623848fb0cb3fcfb04cd686bafe8c83eb1a1075e068edc34ac6c4683133",
+          "trace": [
+            {
+              "stepId": "train-refund-overfit-route",
+              "kind": "route",
+              "name": "general_faq",
+              "status": "completed",
+              "elapsedMs": 2
+            },
+            {
+              "stepId": "train-refund-overfit-final",
+              "kind": "final_response",
+              "status": "completed",
+              "elapsedMs": 8,
+              "message": "请咨询人工客服。",
+              "rubricScore": 0.1,
+              "rubricReason": "训练特例未改善知识召回，仍未回答退款时效。",
+              "usage": {
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "inputTokens": 64,
+                "outputTokens": 8,
+                "costUsd": 0,
+                "latencyMs": 8
+              }
+            }
+          ],
+          "usage": {
+            "modelCalls": 1,
+            "toolCalls": 0,
+            "inputTokens": 64,
+            "outputTokens": 8,
+            "costUsd": 0,
+            "latencyMs": 8
+          }
+        },
+        "candidate-balanced": {
+          "response": "请咨询人工客服。",
+          "tools": [],
+          "route": "general_faq",
+          "retrievedFacts": [],
+          "retrievedDocuments": 0,
+          "rubricScore": 0.1,
+          "rubricReason": "通用规则在此 case 未带来召回增益。",
+          "promptSemanticSha256": "48188b412e0364151c49137c894668c234dddfb7e211b490e1057cfe10bfdc80",
+          "trace": [
+            {
+              "stepId": "train-refund-balanced-route",
+              "kind": "route",
+              "name": "general_faq",
+              "status": "completed",
+              "elapsedMs": 2
+            },
+            {
+              "stepId": "train-refund-balanced-final",
+              "kind": "final_response",
+              "status": "completed",
+              "elapsedMs": 8,
+              "message": "请咨询人工客服。",
+              "rubricScore": 0.1,
+              "rubricReason": "通用规则在此 case 未带来召回增益。",
+              "usage": {
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "inputTokens": 72,
+                "outputTokens": 8,
+                "costUsd": 0,
+                "latencyMs": 8
+              }
+            }
+          ],
+          "usage": {
+            "modelCalls": 1,
+            "toolCalls": 0,
+            "inputTokens": 72,
+            "outputTokens": 8,
+            "costUsd": 0,
+            "latencyMs": 8
+          }
+        }
+      }
+    }
+  ]
+}

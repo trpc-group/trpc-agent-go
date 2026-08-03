@@ -1,0 +1,5186 @@
+{
+  "schemaVersion": "1.1",
+  "runId": "sample-promptiter-regression-20260710",
+  "mode": "fake",
+  "seed": 20260710,
+  "startedAt": "2026-07-21T07:28:06.183067Z",
+  "completedAt": "2026-07-21T07:28:06.186595Z",
+  "wallTimeMs": 3,
+  "modelConfig": {
+    "name": "deterministic-promptiter-scenario",
+    "version": "1.1.0",
+    "fallbackVariant": "baseline"
+  },
+  "baselinePrompt": {
+    "id": "baseline",
+    "content": "你是电商客服 Agent。根据用户问题直接作答；必要时调用工具。回答应简洁、礼貌。",
+    "sha256": "3c789d0631455ed15c4b700f815fe13d7e052825105140b3cf0459f4a7800820",
+    "semanticSha256": "3c789d0631455ed15c4b700f815fe13d7e052825105140b3cf0459f4a7800820",
+    "surfaceId": "support-agent#instruction"
+  },
+  "baseline": {
+    "train": {
+      "evalSetId": "support-train",
+      "variantId": "baseline",
+      "passThreshold": 0.8,
+      "overallScore": 0.522041,
+      "passedCases": 0,
+      "failedCases": 3,
+      "hardFailedCases": 3,
+      "cases": [
+        {
+          "caseId": "train_weather_tool_args",
+          "critical": false,
+          "score": 0.59,
+          "passed": false,
+          "hardFail": true,
+          "responseVariantId": "baseline",
+          "responsePromptSemanticSha256": "3c789d0631455ed15c4b700f815fe13d7e052825105140b3cf0459f4a7800820",
+          "usedFallback": false,
+          "metricResults": [
+            {
+              "metricName": "final_response_match",
+              "score": 0.4,
+              "threshold": 0.75,
+              "weight": 0.3,
+              "passed": false,
+              "hardFail": false,
+              "reason": "final response ROUGE similarity is 0.400000"
+            },
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 0.4,
+              "threshold": 1,
+              "weight": 0.25,
+              "passed": false,
+              "hardFail": true,
+              "reason": "tool name, arguments, result, or call count differs from reference"
+            },
+            {
+              "metricName": "route_accuracy",
+              "score": 1,
+              "threshold": 1,
+              "weight": 0.15,
+              "passed": true,
+              "hardFail": true,
+              "reason": "route matches reference"
+            },
+            {
+              "metricName": "structured_output_valid",
+              "score": 1,
+              "threshold": 1,
+              "weight": 0.1,
+              "passed": true,
+              "hardFail": true,
+              "reason": "no structured output required"
+            },
+            {
+              "metricName": "knowledge_recall",
+              "score": 1,
+              "threshold": 1,
+              "weight": 0.1,
+              "passed": true,
+              "hardFail": false,
+              "reason": "required knowledge was retrieved"
+            },
+            {
+              "metricName": "llm_rubric",
+              "score": 0.2,
+              "threshold": 0.8,
+              "weight": 0.1,
+              "passed": false,
+              "hardFail": false,
+              "reason": "工具参数沿用了错误城市，最终回复不匹配。"
+            }
+          ],
+          "expectedResponse": "上海当前晴，26°C。",
+          "finalResponse": "北京当前多云，20°C。",
+          "expectedToolTrajectory": [
+            {
+              "id": "expected-weather-shanghai",
+              "name": "get_weather",
+              "arguments": {
+                "city": "上海"
+              },
+              "result": {
+                "condition": "晴",
+                "temperatureC": 26
+              }
+            }
+          ],
+          "toolTrajectory": [
+            {
+              "id": "baseline-weather",
+              "name": "get_weather",
+              "arguments": {
+                "city": "北京"
+              },
+              "result": {
+                "condition": "多云",
+                "temperatureC": 20
+              }
+            }
+          ],
+          "expectedRoute": "weather_agent",
+          "route": "weather_agent",
+          "structuredValid": true,
+          "rubricReason": "工具参数沿用了错误城市，最终回复不匹配。",
+          "trace": [
+            {
+              "stepId": "train-weather-route",
+              "kind": "route",
+              "name": "weather_agent",
+              "status": "completed",
+              "elapsedMs": 1
+            },
+            {
+              "stepId": "train-weather-tool",
+              "kind": "tool",
+              "name": "get_weather",
+              "status": "completed",
+              "elapsedMs": 6,
+              "input": {
+                "city": "北京"
+              },
+              "output": {
+                "condition": "多云",
+                "temperatureC": 20
+              }
+            },
+            {
+              "stepId": "train-weather-final",
+              "kind": "final_response",
+              "status": "completed",
+              "elapsedMs": 12,
+              "message": "北京当前多云，20°C。",
+              "rubricScore": 0.2,
+              "rubricReason": "工具参数沿用了错误城市，最终回复不匹配。",
+              "usage": {
+                "modelCalls": 1,
+                "toolCalls": 1,
+                "inputTokens": 42,
+                "outputTokens": 12,
+                "costUsd": 0,
+                "latencyMs": 12
+              }
+            }
+          ],
+          "primaryFailure": {
+            "category": "tool_parameter_error",
+            "confidence": 0.99,
+            "evidence": "tool \"get_weather\" arguments differ from reference",
+            "signals": [
+              "tool_trajectory",
+              "tool_arguments"
+            ]
+          },
+          "failureAttributions": [
+            {
+              "category": "tool_parameter_error",
+              "confidence": 0.99,
+              "evidence": "tool \"get_weather\" arguments differ from reference",
+              "signals": [
+                "tool_trajectory",
+                "tool_arguments"
+              ]
+            },
+            {
+              "category": "final_response_mismatch",
+              "confidence": 0.9,
+              "evidence": "final response ROUGE similarity is 0.400000",
+              "signals": [
+                "final_response_match",
+                "final_response"
+              ]
+            }
+          ],
+          "usage": {
+            "modelCalls": 1,
+            "toolCalls": 1,
+            "inputTokens": 42,
+            "outputTokens": 12,
+            "costUsd": 0,
+            "latencyMs": 12
+          }
+        },
+        {
+          "caseId": "train_order_json_format",
+          "critical": false,
+          "score": 0.584545,
+          "passed": false,
+          "hardFail": true,
+          "responseVariantId": "baseline",
+          "responsePromptSemanticSha256": "3c789d0631455ed15c4b700f815fe13d7e052825105140b3cf0459f4a7800820",
+          "usedFallback": false,
+          "metricResults": [
+            {
+              "metricName": "final_response_match",
+              "score": 0.181818,
+              "threshold": 0.75,
+              "weight": 0.3,
+              "passed": false,
+              "hardFail": false,
+              "reason": "final response ROUGE similarity is 0.181818"
+            },
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 1,
+              "threshold": 1,
+              "weight": 0.25,
+              "passed": true,
+              "hardFail": true,
+              "reason": "tool trajectory is empty as expected"
+            },
+            {
+              "metricName": "route_accuracy",
+              "score": 1,
+              "threshold": 1,
+              "weight": 0.15,
+              "passed": true,
+              "hardFail": true,
+              "reason": "route matches reference"
+            },
+            {
+              "metricName": "structured_output_valid",
+              "score": 0,
+              "threshold": 1,
+              "weight": 0.1,
+              "passed": false,
+              "hardFail": true,
+              "reason": "response is not valid json"
+            },
+            {
+              "metricName": "knowledge_recall",
+              "score": 1,
+              "threshold": 1,
+              "weight": 0.1,
+              "passed": true,
+              "hardFail": false,
+              "reason": "required knowledge was retrieved"
+            },
+            {
+              "metricName": "llm_rubric",
+              "score": 0.3,
+              "threshold": 0.8,
+              "weight": 0.1,
+              "passed": false,
+              "hardFail": false,
+              "reason": "内容大致正确，但格式不是 JSON。"
+            }
+          ],
+          "expectedResponse": "{\"orderId\":\"A100\",\"status\":\"ok\"}",
+          "finalResponse": "订单 A100 状态正常。",
+          "expectedRoute": "order_agent",
+          "route": "order_agent",
+          "responseFormat": "json",
+          "structuredValid": false,
+          "rubricReason": "内容大致正确，但格式不是 JSON。",
+          "trace": [
+            {
+              "stepId": "train-order-baseline-route",
+              "kind": "route",
+              "name": "order_agent",
+              "status": "completed",
+              "elapsedMs": 1
+            },
+            {
+              "stepId": "train-order-baseline",
+              "kind": "final_response",
+              "status": "completed",
+              "elapsedMs": 9,
+              "message": "订单 A100 状态正常。",
+              "rubricScore": 0.3,
+              "rubricReason": "内容大致正确，但格式不是 JSON。",
+              "usage": {
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "inputTokens": 38,
+                "outputTokens": 10,
+                "costUsd": 0,
+                "latencyMs": 9
+              }
+            }
+          ],
+          "primaryFailure": {
+            "category": "format_error",
+            "confidence": 0.99,
+            "evidence": "final response violates required json format",
+            "signals": [
+              "structured_output",
+              "final_response"
+            ]
+          },
+          "failureAttributions": [
+            {
+              "category": "format_error",
+              "confidence": 0.99,
+              "evidence": "final response violates required json format",
+              "signals": [
+                "structured_output",
+                "final_response"
+              ]
+            },
+            {
+              "category": "final_response_mismatch",
+              "confidence": 0.9,
+              "evidence": "final response ROUGE similarity is 0.181818",
+              "signals": [
+                "final_response_match",
+                "final_response"
+              ]
+            }
+          ],
+          "usage": {
+            "modelCalls": 1,
+            "toolCalls": 0,
+            "inputTokens": 38,
+            "outputTokens": 10,
+            "costUsd": 0,
+            "latencyMs": 9
+          }
+        },
+        {
+          "caseId": "train_knowledge_no_gain",
+          "critical": false,
+          "score": 0.391579,
+          "passed": false,
+          "hardFail": true,
+          "responseVariantId": "baseline",
+          "responsePromptSemanticSha256": "3c789d0631455ed15c4b700f815fe13d7e052825105140b3cf0459f4a7800820",
+          "usedFallback": false,
+          "metricResults": [
+            {
+              "metricName": "final_response_match",
+              "score": 0.105263,
+              "threshold": 0.75,
+              "weight": 0.3,
+              "passed": false,
+              "hardFail": false,
+              "reason": "final response ROUGE similarity is 0.105263"
+            },
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 1,
+              "threshold": 1,
+              "weight": 0.25,
+              "passed": true,
+              "hardFail": true,
+              "reason": "tool trajectory is empty as expected"
+            },
+            {
+              "metricName": "route_accuracy",
+              "score": 0,
+              "threshold": 1,
+              "weight": 0.15,
+              "passed": false,
+              "hardFail": true,
+              "reason": "expected route \"knowledge_search\", got \"general_faq\""
+            },
+            {
+              "metricName": "structured_output_valid",
+              "score": 1,
+              "threshold": 1,
+              "weight": 0.1,
+              "passed": true,
+              "hardFail": true,
+              "reason": "no structured output required"
+            },
+            {
+              "metricName": "knowledge_recall",
+              "score": 0,
+              "threshold": 1,
+              "weight": 0.1,
+              "passed": false,
+              "hardFail": false,
+              "reason": "required knowledge retrieval is incomplete"
+            },
+            {
+              "metricName": "llm_rubric",
+              "score": 0.1,
+              "threshold": 0.8,
+              "weight": 0.1,
+              "passed": false,
+              "hardFail": false,
+              "reason": "知识召回不足，未回答退款时效。"
+            }
+          ],
+          "expectedResponse": "退款将在 3 个工作日内到账。",
+          "finalResponse": "请咨询人工客服。",
+          "expectedRoute": "knowledge_search",
+          "route": "general_faq",
+          "structuredValid": true,
+          "requiredFacts": [
+            "refund_sla_3_days"
+          ],
+          "minRetrievedDocuments": 1,
+          "rubricReason": "知识召回不足，未回答退款时效。",
+          "trace": [
+            {
+              "stepId": "train-refund-route",
+              "kind": "route",
+              "name": "general_faq",
+              "status": "completed",
+              "elapsedMs": 2
+            },
+            {
+              "stepId": "train-refund-final",
+              "kind": "final_response",
+              "status": "completed",
+              "elapsedMs": 8,
+              "message": "请咨询人工客服。",
+              "rubricScore": 0.1,
+              "rubricReason": "知识召回不足，未回答退款时效。",
+              "usage": {
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "inputTokens": 35,
+                "outputTokens": 8,
+                "costUsd": 0,
+                "latencyMs": 8
+              }
+            }
+          ],
+          "primaryFailure": {
+            "category": "route_error",
+            "confidence": 0.99,
+            "evidence": "expected route \"knowledge_search\", got \"general_faq\"",
+            "signals": [
+              "route",
+              "trace"
+            ]
+          },
+          "failureAttributions": [
+            {
+              "category": "route_error",
+              "confidence": 0.99,
+              "evidence": "expected route \"knowledge_search\", got \"general_faq\"",
+              "signals": [
+                "route",
+                "trace"
+              ]
+            },
+            {
+              "category": "knowledge_retrieval_insufficient",
+              "confidence": 0.98,
+              "evidence": "retrieved 0 documents and 0/1 required facts",
+              "signals": [
+                "retrieval",
+                "knowledge_recall"
+              ]
+            },
+            {
+              "category": "final_response_mismatch",
+              "confidence": 0.9,
+              "evidence": "final response ROUGE similarity is 0.105263",
+              "signals": [
+                "final_response_match",
+                "final_response"
+              ]
+            }
+          ],
+          "usage": {
+            "modelCalls": 1,
+            "toolCalls": 0,
+            "inputTokens": 35,
+            "outputTokens": 8,
+            "costUsd": 0,
+            "latencyMs": 8
+          }
+        }
+      ],
+      "attributionStats": {
+        "format_error": 1,
+        "route_error": 1,
+        "tool_parameter_error": 1
+      },
+      "usage": {
+        "modelCalls": 3,
+        "toolCalls": 1,
+        "inputTokens": 115,
+        "outputTokens": 30,
+        "costUsd": 0,
+        "latencyMs": 29
+      }
+    },
+    "validation": {
+      "evalSetId": "support-validation",
+      "variantId": "baseline",
+      "passThreshold": 0.8,
+      "overallScore": 0.72,
+      "passedCases": 1,
+      "failedCases": 2,
+      "hardFailedCases": 1,
+      "cases": [
+        {
+          "caseId": "validation_weather_unseen",
+          "critical": false,
+          "score": 0.59,
+          "passed": false,
+          "hardFail": true,
+          "responseVariantId": "baseline",
+          "responsePromptSemanticSha256": "3c789d0631455ed15c4b700f815fe13d7e052825105140b3cf0459f4a7800820",
+          "usedFallback": false,
+          "metricResults": [
+            {
+              "metricName": "final_response_match",
+              "score": 0.4,
+              "threshold": 0.75,
+              "weight": 0.3,
+              "passed": false,
+              "hardFail": false,
+              "reason": "final response ROUGE similarity is 0.400000"
+            },
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 0.4,
+              "threshold": 1,
+              "weight": 0.25,
+              "passed": false,
+              "hardFail": true,
+              "reason": "tool name, arguments, result, or call count differs from reference"
+            },
+            {
+              "metricName": "route_accuracy",
+              "score": 1,
+              "threshold": 1,
+              "weight": 0.15,
+              "passed": true,
+              "hardFail": true,
+              "reason": "route matches reference"
+            },
+            {
+              "metricName": "structured_output_valid",
+              "score": 1,
+              "threshold": 1,
+              "weight": 0.1,
+              "passed": true,
+              "hardFail": true,
+              "reason": "no structured output required"
+            },
+            {
+              "metricName": "knowledge_recall",
+              "score": 1,
+              "threshold": 1,
+              "weight": 0.1,
+              "passed": true,
+              "hardFail": false,
+              "reason": "required knowledge was retrieved"
+            },
+            {
+              "metricName": "llm_rubric",
+              "score": 0.2,
+              "threshold": 0.8,
+              "weight": 0.1,
+              "passed": false,
+              "hardFail": false,
+              "reason": "工具参数错误，复用了上海。"
+            }
+          ],
+          "expectedResponse": "广州当前小雨，24°C。",
+          "finalResponse": "上海当前晴，26°C。",
+          "expectedToolTrajectory": [
+            {
+              "id": "expected-weather-guangzhou",
+              "name": "get_weather",
+              "arguments": {
+                "city": "广州"
+              },
+              "result": {
+                "condition": "小雨",
+                "temperatureC": 24
+              }
+            }
+          ],
+          "toolTrajectory": [
+            {
+              "id": "baseline-weather-guangzhou",
+              "name": "get_weather",
+              "arguments": {
+                "city": "上海"
+              },
+              "result": {
+                "condition": "晴",
+                "temperatureC": 26
+              }
+            }
+          ],
+          "expectedRoute": "weather_agent",
+          "route": "weather_agent",
+          "structuredValid": true,
+          "rubricReason": "工具参数错误，复用了上海。",
+          "trace": [
+            {
+              "stepId": "validation-weather-baseline-route",
+              "kind": "route",
+              "name": "weather_agent",
+              "status": "completed",
+              "elapsedMs": 1
+            },
+            {
+              "stepId": "validation-weather-baseline",
+              "kind": "tool",
+              "name": "get_weather",
+              "status": "completed",
+              "elapsedMs": 6,
+              "input": {
+                "city": "上海"
+              },
+              "output": {
+                "condition": "晴",
+                "temperatureC": 26
+              }
+            },
+            {
+              "stepId": "validation-weather-baseline-final",
+              "kind": "final_response",
+              "status": "completed",
+              "elapsedMs": 12,
+              "message": "上海当前晴，26°C。",
+              "rubricScore": 0.2,
+              "rubricReason": "工具参数错误，复用了上海。",
+              "usage": {
+                "modelCalls": 1,
+                "toolCalls": 1,
+                "inputTokens": 42,
+                "outputTokens": 12,
+                "costUsd": 0,
+                "latencyMs": 12
+              }
+            }
+          ],
+          "primaryFailure": {
+            "category": "tool_parameter_error",
+            "confidence": 0.99,
+            "evidence": "tool \"get_weather\" arguments differ from reference",
+            "signals": [
+              "tool_trajectory",
+              "tool_arguments"
+            ]
+          },
+          "failureAttributions": [
+            {
+              "category": "tool_parameter_error",
+              "confidence": 0.99,
+              "evidence": "tool \"get_weather\" arguments differ from reference",
+              "signals": [
+                "tool_trajectory",
+                "tool_arguments"
+              ]
+            },
+            {
+              "category": "final_response_mismatch",
+              "confidence": 0.9,
+              "evidence": "final response ROUGE similarity is 0.400000",
+              "signals": [
+                "final_response_match",
+                "final_response"
+              ]
+            }
+          ],
+          "usage": {
+            "modelCalls": 1,
+            "toolCalls": 1,
+            "inputTokens": 42,
+            "outputTokens": 12,
+            "costUsd": 0,
+            "latencyMs": 12
+          }
+        },
+        {
+          "caseId": "validation_critical_refund",
+          "critical": true,
+          "score": 1,
+          "passed": true,
+          "hardFail": false,
+          "responseVariantId": "baseline",
+          "responsePromptSemanticSha256": "3c789d0631455ed15c4b700f815fe13d7e052825105140b3cf0459f4a7800820",
+          "usedFallback": false,
+          "metricResults": [
+            {
+              "metricName": "final_response_match",
+              "score": 1,
+              "threshold": 0.75,
+              "weight": 0.3,
+              "passed": true,
+              "hardFail": false,
+              "reason": "final response matches reference"
+            },
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 1,
+              "threshold": 1,
+              "weight": 0.25,
+              "passed": true,
+              "hardFail": true,
+              "reason": "tool trajectory is empty as expected"
+            },
+            {
+              "metricName": "route_accuracy",
+              "score": 1,
+              "threshold": 1,
+              "weight": 0.15,
+              "passed": true,
+              "hardFail": true,
+              "reason": "route matches reference"
+            },
+            {
+              "metricName": "structured_output_valid",
+              "score": 1,
+              "threshold": 1,
+              "weight": 0.1,
+              "passed": true,
+              "hardFail": true,
+              "reason": "no structured output required"
+            },
+            {
+              "metricName": "knowledge_recall",
+              "score": 1,
+              "threshold": 1,
+              "weight": 0.1,
+              "passed": true,
+              "hardFail": false,
+              "reason": "required knowledge was retrieved"
+            },
+            {
+              "metricName": "llm_rubric",
+              "score": 1,
+              "threshold": 0.8,
+              "weight": 0.1,
+              "passed": true,
+              "hardFail": false,
+              "reason": "关键政策回答准确且有召回依据。"
+            }
+          ],
+          "expectedResponse": "审核通过后，退款将在 3 个工作日内到账。",
+          "finalResponse": "审核通过后，退款将在 3 个工作日内到账。",
+          "expectedRoute": "knowledge_search",
+          "route": "knowledge_search",
+          "structuredValid": true,
+          "requiredFacts": [
+            "refund_sla_3_days"
+          ],
+          "retrievedFacts": [
+            "refund_sla_3_days"
+          ],
+          "minRetrievedDocuments": 1,
+          "retrievedDocuments": 1,
+          "rubricReason": "关键政策回答准确且有召回依据。",
+          "trace": [
+            {
+              "stepId": "validation-refund-baseline-route",
+              "kind": "route",
+              "name": "knowledge_search",
+              "status": "completed",
+              "elapsedMs": 1
+            },
+            {
+              "stepId": "validation-refund-baseline",
+              "kind": "retrieval",
+              "name": "knowledge_search",
+              "status": "completed",
+              "elapsedMs": 6,
+              "output": {
+                "documents": 1,
+                "facts": [
+                  "refund_sla_3_days"
+                ],
+                "matchedFacts": 1
+              }
+            },
+            {
+              "stepId": "validation-refund-baseline-final",
+              "kind": "final_response",
+              "status": "completed",
+              "elapsedMs": 10,
+              "message": "审核通过后，退款将在 3 个工作日内到账。",
+              "rubricScore": 1,
+              "rubricReason": "关键政策回答准确且有召回依据。",
+              "usage": {
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "inputTokens": 48,
+                "outputTokens": 15,
+                "costUsd": 0,
+                "latencyMs": 10
+              }
+            }
+          ],
+          "usage": {
+            "modelCalls": 1,
+            "toolCalls": 0,
+            "inputTokens": 48,
+            "outputTokens": 15,
+            "costUsd": 0,
+            "latencyMs": 10
+          }
+        },
+        {
+          "caseId": "validation_coupon_no_gain",
+          "critical": false,
+          "score": 0.57,
+          "passed": false,
+          "hardFail": false,
+          "responseVariantId": "baseline",
+          "responsePromptSemanticSha256": "3c789d0631455ed15c4b700f815fe13d7e052825105140b3cf0459f4a7800820",
+          "usedFallback": false,
+          "metricResults": [
+            {
+              "metricName": "final_response_match",
+              "score": 0,
+              "threshold": 0.75,
+              "weight": 0.3,
+              "passed": false,
+              "hardFail": false,
+              "reason": "final response ROUGE similarity is 0.000000"
+            },
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 1,
+              "threshold": 1,
+              "weight": 0.25,
+              "passed": true,
+              "hardFail": true,
+              "reason": "tool trajectory is empty as expected"
+            },
+            {
+              "metricName": "route_accuracy",
+              "score": 1,
+              "threshold": 1,
+              "weight": 0.15,
+              "passed": true,
+              "hardFail": true,
+              "reason": "route matches reference"
+            },
+            {
+              "metricName": "structured_output_valid",
+              "score": 1,
+              "threshold": 1,
+              "weight": 0.1,
+              "passed": true,
+              "hardFail": true,
+              "reason": "no structured output required"
+            },
+            {
+              "metricName": "knowledge_recall",
+              "score": 0.5,
+              "threshold": 1,
+              "weight": 0.1,
+              "passed": false,
+              "hardFail": false,
+              "reason": "required knowledge retrieval is incomplete"
+            },
+            {
+              "metricName": "llm_rubric",
+              "score": 0.2,
+              "threshold": 0.8,
+              "weight": 0.1,
+              "passed": false,
+              "hardFail": false,
+              "reason": "检索未召回优惠券叠加规则，最终回复不明确。"
+            }
+          ],
+          "expectedResponse": "会员券不能与满减券叠加使用。",
+          "finalResponse": "优惠规则以结算页为准。",
+          "expectedRoute": "knowledge_search",
+          "route": "knowledge_search",
+          "structuredValid": true,
+          "requiredFacts": [
+            "coupon_stack_forbidden"
+          ],
+          "minRetrievedDocuments": 1,
+          "retrievedDocuments": 1,
+          "rubricReason": "检索未召回优惠券叠加规则，最终回复不明确。",
+          "trace": [
+            {
+              "stepId": "validation-coupon-baseline-route",
+              "kind": "route",
+              "name": "knowledge_search",
+              "status": "completed",
+              "elapsedMs": 1
+            },
+            {
+              "stepId": "validation-coupon-baseline",
+              "kind": "retrieval",
+              "name": "knowledge_search",
+              "status": "completed",
+              "elapsedMs": 5,
+              "output": {
+                "documents": 1,
+                "facts": [],
+                "matchedFacts": 0
+              }
+            },
+            {
+              "stepId": "validation-coupon-baseline-final",
+              "kind": "final_response",
+              "status": "completed",
+              "elapsedMs": 9,
+              "message": "优惠规则以结算页为准。",
+              "rubricScore": 0.2,
+              "rubricReason": "检索未召回优惠券叠加规则，最终回复不明确。",
+              "usage": {
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "inputTokens": 44,
+                "outputTokens": 10,
+                "costUsd": 0,
+                "latencyMs": 9
+              }
+            }
+          ],
+          "primaryFailure": {
+            "category": "knowledge_retrieval_insufficient",
+            "confidence": 0.98,
+            "evidence": "retrieved 1 documents and 0/1 required facts",
+            "signals": [
+              "retrieval",
+              "knowledge_recall"
+            ]
+          },
+          "failureAttributions": [
+            {
+              "category": "knowledge_retrieval_insufficient",
+              "confidence": 0.98,
+              "evidence": "retrieved 1 documents and 0/1 required facts",
+              "signals": [
+                "retrieval",
+                "knowledge_recall"
+              ]
+            },
+            {
+              "category": "final_response_mismatch",
+              "confidence": 0.9,
+              "evidence": "final response ROUGE similarity is 0.000000",
+              "signals": [
+                "final_response_match",
+                "final_response"
+              ]
+            }
+          ],
+          "usage": {
+            "modelCalls": 1,
+            "toolCalls": 0,
+            "inputTokens": 44,
+            "outputTokens": 10,
+            "costUsd": 0,
+            "latencyMs": 9
+          }
+        }
+      ],
+      "attributionStats": {
+        "knowledge_retrieval_insufficient": 1,
+        "tool_parameter_error": 1
+      },
+      "usage": {
+        "modelCalls": 3,
+        "toolCalls": 1,
+        "inputTokens": 134,
+        "outputTokens": 37,
+        "costUsd": 0,
+        "latencyMs": 31
+      }
+    }
+  },
+  "candidatePrompt": {
+    "id": "candidate-balanced",
+    "content": "你是电商客服 Agent。根据用户问题直接作答；必要时调用工具。回答应简洁、礼貌。\n\n通用规则：工具参数必须从当前用户请求提取，不得复用其他 case；要求 JSON 时只输出合法 JSON；涉及政策或时效的问题必须路由到 knowledge_search 并基于召回内容作答。\n\nPromptIter 根据训练失败归因生成的通用约束：\n- 工具参数必须从当前请求提取，禁止复用其他样本参数。\n- 严格遵循要求的结构化输出格式并在返回前校验。\n- 政策与知识问题必须先召回依据，再基于证据作答。\n\n[[trpc-promptiter-candidate:candidate-balanced;seed:20260710]]",
+    "sha256": "69fc7e3d04d550956b1af9f92e2b54dba8bdbc5fd43d3496dcd89569defc4580",
+    "semanticSha256": "48188b412e0364151c49137c894668c234dddfb7e211b490e1057cfe10bfdc80",
+    "surfaceId": "support-agent#instruction",
+    "patchReason": "把失败归因转成可泛化的参数、格式和知识路由约束; matched failure categories: [tool_parameter_error format_error knowledge_retrieval_insufficient]"
+  },
+  "candidate": {
+    "train": {
+      "evalSetId": "support-train",
+      "variantId": "candidate-balanced",
+      "passThreshold": 0.8,
+      "overallScore": 0.797193,
+      "passedCases": 2,
+      "failedCases": 1,
+      "hardFailedCases": 1,
+      "cases": [
+        {
+          "caseId": "train_weather_tool_args",
+          "critical": false,
+          "score": 1,
+          "passed": true,
+          "hardFail": false,
+          "responseVariantId": "candidate-balanced",
+          "responsePromptSemanticSha256": "48188b412e0364151c49137c894668c234dddfb7e211b490e1057cfe10bfdc80",
+          "usedFallback": false,
+          "metricResults": [
+            {
+              "metricName": "final_response_match",
+              "score": 1,
+              "threshold": 0.75,
+              "weight": 0.3,
+              "passed": true,
+              "hardFail": false,
+              "reason": "final response matches reference"
+            },
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 1,
+              "threshold": 1,
+              "weight": 0.25,
+              "passed": true,
+              "hardFail": true,
+              "reason": "tool trajectory matches reference"
+            },
+            {
+              "metricName": "route_accuracy",
+              "score": 1,
+              "threshold": 1,
+              "weight": 0.15,
+              "passed": true,
+              "hardFail": true,
+              "reason": "route matches reference"
+            },
+            {
+              "metricName": "structured_output_valid",
+              "score": 1,
+              "threshold": 1,
+              "weight": 0.1,
+              "passed": true,
+              "hardFail": true,
+              "reason": "no structured output required"
+            },
+            {
+              "metricName": "knowledge_recall",
+              "score": 1,
+              "threshold": 1,
+              "weight": 0.1,
+              "passed": true,
+              "hardFail": false,
+              "reason": "required knowledge was retrieved"
+            },
+            {
+              "metricName": "llm_rubric",
+              "score": 1,
+              "threshold": 0.8,
+              "weight": 0.1,
+              "passed": true,
+              "hardFail": false,
+              "reason": "通用参数提取规则生效。"
+            }
+          ],
+          "expectedResponse": "上海当前晴，26°C。",
+          "finalResponse": "上海当前晴，26°C。",
+          "expectedToolTrajectory": [
+            {
+              "id": "expected-weather-shanghai",
+              "name": "get_weather",
+              "arguments": {
+                "city": "上海"
+              },
+              "result": {
+                "condition": "晴",
+                "temperatureC": 26
+              }
+            }
+          ],
+          "toolTrajectory": [
+            {
+              "id": "balanced-weather",
+              "name": "get_weather",
+              "arguments": {
+                "city": "上海"
+              },
+              "result": {
+                "condition": "晴",
+                "temperatureC": 26
+              }
+            }
+          ],
+          "expectedRoute": "weather_agent",
+          "route": "weather_agent",
+          "structuredValid": true,
+          "rubricReason": "通用参数提取规则生效。",
+          "trace": [
+            {
+              "stepId": "train-weather-balanced-route",
+              "kind": "route",
+              "name": "weather_agent",
+              "status": "completed",
+              "elapsedMs": 1
+            },
+            {
+              "stepId": "train-weather-balanced",
+              "kind": "tool",
+              "name": "get_weather",
+              "status": "completed",
+              "elapsedMs": 6,
+              "input": {
+                "city": "上海"
+              },
+              "output": {
+                "condition": "晴",
+                "temperatureC": 26
+              }
+            },
+            {
+              "stepId": "train-weather-balanced-final",
+              "kind": "final_response",
+              "status": "completed",
+              "elapsedMs": 11,
+              "message": "上海当前晴，26°C。",
+              "rubricScore": 1,
+              "rubricReason": "通用参数提取规则生效。",
+              "usage": {
+                "modelCalls": 1,
+                "toolCalls": 1,
+                "inputTokens": 78,
+                "outputTokens": 12,
+                "costUsd": 0,
+                "latencyMs": 11
+              }
+            }
+          ],
+          "usage": {
+            "modelCalls": 1,
+            "toolCalls": 1,
+            "inputTokens": 78,
+            "outputTokens": 12,
+            "costUsd": 0,
+            "latencyMs": 11
+          }
+        },
+        {
+          "caseId": "train_order_json_format",
+          "critical": false,
+          "score": 1,
+          "passed": true,
+          "hardFail": false,
+          "responseVariantId": "candidate-balanced",
+          "responsePromptSemanticSha256": "48188b412e0364151c49137c894668c234dddfb7e211b490e1057cfe10bfdc80",
+          "usedFallback": false,
+          "metricResults": [
+            {
+              "metricName": "final_response_match",
+              "score": 1,
+              "threshold": 0.75,
+              "weight": 0.3,
+              "passed": true,
+              "hardFail": false,
+              "reason": "final response matches reference"
+            },
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 1,
+              "threshold": 1,
+              "weight": 0.25,
+              "passed": true,
+              "hardFail": true,
+              "reason": "tool trajectory is empty as expected"
+            },
+            {
+              "metricName": "route_accuracy",
+              "score": 1,
+              "threshold": 1,
+              "weight": 0.15,
+              "passed": true,
+              "hardFail": true,
+              "reason": "route matches reference"
+            },
+            {
+              "metricName": "structured_output_valid",
+              "score": 1,
+              "threshold": 1,
+              "weight": 0.1,
+              "passed": true,
+              "hardFail": true,
+              "reason": "structured output is valid"
+            },
+            {
+              "metricName": "knowledge_recall",
+              "score": 1,
+              "threshold": 1,
+              "weight": 0.1,
+              "passed": true,
+              "hardFail": false,
+              "reason": "required knowledge was retrieved"
+            },
+            {
+              "metricName": "llm_rubric",
+              "score": 1,
+              "threshold": 0.8,
+              "weight": 0.1,
+              "passed": true,
+              "hardFail": false,
+              "reason": "通用 JSON 约束生效。"
+            }
+          ],
+          "expectedResponse": "{\"orderId\":\"A100\",\"status\":\"ok\"}",
+          "finalResponse": "{\"orderId\":\"A100\",\"status\":\"ok\"}",
+          "expectedRoute": "order_agent",
+          "route": "order_agent",
+          "responseFormat": "json",
+          "structuredValid": true,
+          "rubricReason": "通用 JSON 约束生效。",
+          "trace": [
+            {
+              "stepId": "train-order-balanced-route",
+              "kind": "route",
+              "name": "order_agent",
+              "status": "completed",
+              "elapsedMs": 1
+            },
+            {
+              "stepId": "train-order-balanced",
+              "kind": "structured_output",
+              "status": "completed",
+              "elapsedMs": 4
+            },
+            {
+              "stepId": "train-order-balanced-final",
+              "kind": "final_response",
+              "status": "completed",
+              "elapsedMs": 9,
+              "message": "{\"orderId\":\"A100\",\"status\":\"ok\"}",
+              "rubricScore": 1,
+              "rubricReason": "通用 JSON 约束生效。",
+              "usage": {
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "inputTokens": 75,
+                "outputTokens": 16,
+                "costUsd": 0,
+                "latencyMs": 9
+              }
+            }
+          ],
+          "usage": {
+            "modelCalls": 1,
+            "toolCalls": 0,
+            "inputTokens": 75,
+            "outputTokens": 16,
+            "costUsd": 0,
+            "latencyMs": 9
+          }
+        },
+        {
+          "caseId": "train_knowledge_no_gain",
+          "critical": false,
+          "score": 0.391579,
+          "passed": false,
+          "hardFail": true,
+          "responseVariantId": "candidate-balanced",
+          "responsePromptSemanticSha256": "48188b412e0364151c49137c894668c234dddfb7e211b490e1057cfe10bfdc80",
+          "usedFallback": false,
+          "metricResults": [
+            {
+              "metricName": "final_response_match",
+              "score": 0.105263,
+              "threshold": 0.75,
+              "weight": 0.3,
+              "passed": false,
+              "hardFail": false,
+              "reason": "final response ROUGE similarity is 0.105263"
+            },
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 1,
+              "threshold": 1,
+              "weight": 0.25,
+              "passed": true,
+              "hardFail": true,
+              "reason": "tool trajectory is empty as expected"
+            },
+            {
+              "metricName": "route_accuracy",
+              "score": 0,
+              "threshold": 1,
+              "weight": 0.15,
+              "passed": false,
+              "hardFail": true,
+              "reason": "expected route \"knowledge_search\", got \"general_faq\""
+            },
+            {
+              "metricName": "structured_output_valid",
+              "score": 1,
+              "threshold": 1,
+              "weight": 0.1,
+              "passed": true,
+              "hardFail": true,
+              "reason": "no structured output required"
+            },
+            {
+              "metricName": "knowledge_recall",
+              "score": 0,
+              "threshold": 1,
+              "weight": 0.1,
+              "passed": false,
+              "hardFail": false,
+              "reason": "required knowledge retrieval is incomplete"
+            },
+            {
+              "metricName": "llm_rubric",
+              "score": 0.1,
+              "threshold": 0.8,
+              "weight": 0.1,
+              "passed": false,
+              "hardFail": false,
+              "reason": "通用规则在此 case 未带来召回增益。"
+            }
+          ],
+          "expectedResponse": "退款将在 3 个工作日内到账。",
+          "finalResponse": "请咨询人工客服。",
+          "expectedRoute": "knowledge_search",
+          "route": "general_faq",
+          "structuredValid": true,
+          "requiredFacts": [
+            "refund_sla_3_days"
+          ],
+          "minRetrievedDocuments": 1,
+          "rubricReason": "通用规则在此 case 未带来召回增益。",
+          "trace": [
+            {
+              "stepId": "train-refund-balanced-route",
+              "kind": "route",
+              "name": "general_faq",
+              "status": "completed",
+              "elapsedMs": 2
+            },
+            {
+              "stepId": "train-refund-balanced-final",
+              "kind": "final_response",
+              "status": "completed",
+              "elapsedMs": 8,
+              "message": "请咨询人工客服。",
+              "rubricScore": 0.1,
+              "rubricReason": "通用规则在此 case 未带来召回增益。",
+              "usage": {
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "inputTokens": 72,
+                "outputTokens": 8,
+                "costUsd": 0,
+                "latencyMs": 8
+              }
+            }
+          ],
+          "primaryFailure": {
+            "category": "route_error",
+            "confidence": 0.99,
+            "evidence": "expected route \"knowledge_search\", got \"general_faq\"",
+            "signals": [
+              "route",
+              "trace"
+            ]
+          },
+          "failureAttributions": [
+            {
+              "category": "route_error",
+              "confidence": 0.99,
+              "evidence": "expected route \"knowledge_search\", got \"general_faq\"",
+              "signals": [
+                "route",
+                "trace"
+              ]
+            },
+            {
+              "category": "knowledge_retrieval_insufficient",
+              "confidence": 0.98,
+              "evidence": "retrieved 0 documents and 0/1 required facts",
+              "signals": [
+                "retrieval",
+                "knowledge_recall"
+              ]
+            },
+            {
+              "category": "final_response_mismatch",
+              "confidence": 0.9,
+              "evidence": "final response ROUGE similarity is 0.105263",
+              "signals": [
+                "final_response_match",
+                "final_response"
+              ]
+            }
+          ],
+          "usage": {
+            "modelCalls": 1,
+            "toolCalls": 0,
+            "inputTokens": 72,
+            "outputTokens": 8,
+            "costUsd": 0,
+            "latencyMs": 8
+          }
+        }
+      ],
+      "attributionStats": {
+        "route_error": 1
+      },
+      "usage": {
+        "modelCalls": 3,
+        "toolCalls": 1,
+        "inputTokens": 225,
+        "outputTokens": 36,
+        "costUsd": 0,
+        "latencyMs": 28
+      }
+    },
+    "validation": {
+      "evalSetId": "support-validation",
+      "variantId": "candidate-balanced",
+      "passThreshold": 0.8,
+      "overallScore": 0.856667,
+      "passedCases": 2,
+      "failedCases": 1,
+      "hardFailedCases": 0,
+      "cases": [
+        {
+          "caseId": "validation_weather_unseen",
+          "critical": false,
+          "score": 1,
+          "passed": true,
+          "hardFail": false,
+          "responseVariantId": "candidate-balanced",
+          "responsePromptSemanticSha256": "48188b412e0364151c49137c894668c234dddfb7e211b490e1057cfe10bfdc80",
+          "usedFallback": false,
+          "metricResults": [
+            {
+              "metricName": "final_response_match",
+              "score": 1,
+              "threshold": 0.75,
+              "weight": 0.3,
+              "passed": true,
+              "hardFail": false,
+              "reason": "final response matches reference"
+            },
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 1,
+              "threshold": 1,
+              "weight": 0.25,
+              "passed": true,
+              "hardFail": true,
+              "reason": "tool trajectory matches reference"
+            },
+            {
+              "metricName": "route_accuracy",
+              "score": 1,
+              "threshold": 1,
+              "weight": 0.15,
+              "passed": true,
+              "hardFail": true,
+              "reason": "route matches reference"
+            },
+            {
+              "metricName": "structured_output_valid",
+              "score": 1,
+              "threshold": 1,
+              "weight": 0.1,
+              "passed": true,
+              "hardFail": true,
+              "reason": "no structured output required"
+            },
+            {
+              "metricName": "knowledge_recall",
+              "score": 1,
+              "threshold": 1,
+              "weight": 0.1,
+              "passed": true,
+              "hardFail": false,
+              "reason": "required knowledge was retrieved"
+            },
+            {
+              "metricName": "llm_rubric",
+              "score": 1,
+              "threshold": 0.8,
+              "weight": 0.1,
+              "passed": true,
+              "hardFail": false,
+              "reason": "从当前请求提取城市，未复用训练样本。"
+            }
+          ],
+          "expectedResponse": "广州当前小雨，24°C。",
+          "finalResponse": "广州当前小雨，24°C。",
+          "expectedToolTrajectory": [
+            {
+              "id": "expected-weather-guangzhou",
+              "name": "get_weather",
+              "arguments": {
+                "city": "广州"
+              },
+              "result": {
+                "condition": "小雨",
+                "temperatureC": 24
+              }
+            }
+          ],
+          "toolTrajectory": [
+            {
+              "id": "balanced-weather-guangzhou",
+              "name": "get_weather",
+              "arguments": {
+                "city": "广州"
+              },
+              "result": {
+                "condition": "小雨",
+                "temperatureC": 24
+              }
+            }
+          ],
+          "expectedRoute": "weather_agent",
+          "route": "weather_agent",
+          "structuredValid": true,
+          "rubricReason": "从当前请求提取城市，未复用训练样本。",
+          "trace": [
+            {
+              "stepId": "validation-weather-balanced-route",
+              "kind": "route",
+              "name": "weather_agent",
+              "status": "completed",
+              "elapsedMs": 1
+            },
+            {
+              "stepId": "validation-weather-balanced",
+              "kind": "tool",
+              "name": "get_weather",
+              "status": "completed",
+              "elapsedMs": 6,
+              "input": {
+                "city": "广州"
+              },
+              "output": {
+                "condition": "小雨",
+                "temperatureC": 24
+              }
+            },
+            {
+              "stepId": "validation-weather-balanced-final",
+              "kind": "final_response",
+              "status": "completed",
+              "elapsedMs": 11,
+              "message": "广州当前小雨，24°C。",
+              "rubricScore": 1,
+              "rubricReason": "从当前请求提取城市，未复用训练样本。",
+              "usage": {
+                "modelCalls": 1,
+                "toolCalls": 1,
+                "inputTokens": 78,
+                "outputTokens": 12,
+                "costUsd": 0,
+                "latencyMs": 11
+              }
+            }
+          ],
+          "usage": {
+            "modelCalls": 1,
+            "toolCalls": 1,
+            "inputTokens": 78,
+            "outputTokens": 12,
+            "costUsd": 0,
+            "latencyMs": 11
+          }
+        },
+        {
+          "caseId": "validation_critical_refund",
+          "critical": true,
+          "score": 1,
+          "passed": true,
+          "hardFail": false,
+          "responseVariantId": "candidate-balanced",
+          "responsePromptSemanticSha256": "48188b412e0364151c49137c894668c234dddfb7e211b490e1057cfe10bfdc80",
+          "usedFallback": false,
+          "metricResults": [
+            {
+              "metricName": "final_response_match",
+              "score": 1,
+              "threshold": 0.75,
+              "weight": 0.3,
+              "passed": true,
+              "hardFail": false,
+              "reason": "final response matches reference"
+            },
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 1,
+              "threshold": 1,
+              "weight": 0.25,
+              "passed": true,
+              "hardFail": true,
+              "reason": "tool trajectory is empty as expected"
+            },
+            {
+              "metricName": "route_accuracy",
+              "score": 1,
+              "threshold": 1,
+              "weight": 0.15,
+              "passed": true,
+              "hardFail": true,
+              "reason": "route matches reference"
+            },
+            {
+              "metricName": "structured_output_valid",
+              "score": 1,
+              "threshold": 1,
+              "weight": 0.1,
+              "passed": true,
+              "hardFail": true,
+              "reason": "no structured output required"
+            },
+            {
+              "metricName": "knowledge_recall",
+              "score": 1,
+              "threshold": 1,
+              "weight": 0.1,
+              "passed": true,
+              "hardFail": false,
+              "reason": "required knowledge was retrieved"
+            },
+            {
+              "metricName": "llm_rubric",
+              "score": 1,
+              "threshold": 0.8,
+              "weight": 0.1,
+              "passed": true,
+              "hardFail": false,
+              "reason": "通用知识路由规则保持关键政策回答准确。"
+            }
+          ],
+          "expectedResponse": "审核通过后，退款将在 3 个工作日内到账。",
+          "finalResponse": "审核通过后，退款将在 3 个工作日内到账。",
+          "expectedRoute": "knowledge_search",
+          "route": "knowledge_search",
+          "structuredValid": true,
+          "requiredFacts": [
+            "refund_sla_3_days"
+          ],
+          "retrievedFacts": [
+            "refund_sla_3_days"
+          ],
+          "minRetrievedDocuments": 1,
+          "retrievedDocuments": 1,
+          "rubricReason": "通用知识路由规则保持关键政策回答准确。",
+          "trace": [
+            {
+              "stepId": "validation-refund-balanced-route",
+              "kind": "route",
+              "name": "knowledge_search",
+              "status": "completed",
+              "elapsedMs": 1
+            },
+            {
+              "stepId": "validation-refund-balanced-retrieval",
+              "kind": "retrieval",
+              "name": "knowledge_search",
+              "status": "completed",
+              "elapsedMs": 6,
+              "output": {
+                "documents": 1,
+                "facts": [
+                  "refund_sla_3_days"
+                ],
+                "matchedFacts": 1
+              }
+            },
+            {
+              "stepId": "validation-refund-balanced-final",
+              "kind": "final_response",
+              "status": "completed",
+              "elapsedMs": 10,
+              "message": "审核通过后，退款将在 3 个工作日内到账。",
+              "rubricScore": 1,
+              "rubricReason": "通用知识路由规则保持关键政策回答准确。",
+              "usage": {
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "inputTokens": 83,
+                "outputTokens": 15,
+                "costUsd": 0,
+                "latencyMs": 10
+              }
+            }
+          ],
+          "usage": {
+            "modelCalls": 1,
+            "toolCalls": 0,
+            "inputTokens": 83,
+            "outputTokens": 15,
+            "costUsd": 0,
+            "latencyMs": 10
+          }
+        },
+        {
+          "caseId": "validation_coupon_no_gain",
+          "critical": false,
+          "score": 0.57,
+          "passed": false,
+          "hardFail": false,
+          "responseVariantId": "candidate-balanced",
+          "responsePromptSemanticSha256": "48188b412e0364151c49137c894668c234dddfb7e211b490e1057cfe10bfdc80",
+          "usedFallback": false,
+          "metricResults": [
+            {
+              "metricName": "final_response_match",
+              "score": 0,
+              "threshold": 0.75,
+              "weight": 0.3,
+              "passed": false,
+              "hardFail": false,
+              "reason": "final response ROUGE similarity is 0.000000"
+            },
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 1,
+              "threshold": 1,
+              "weight": 0.25,
+              "passed": true,
+              "hardFail": true,
+              "reason": "tool trajectory is empty as expected"
+            },
+            {
+              "metricName": "route_accuracy",
+              "score": 1,
+              "threshold": 1,
+              "weight": 0.15,
+              "passed": true,
+              "hardFail": true,
+              "reason": "route matches reference"
+            },
+            {
+              "metricName": "structured_output_valid",
+              "score": 1,
+              "threshold": 1,
+              "weight": 0.1,
+              "passed": true,
+              "hardFail": true,
+              "reason": "no structured output required"
+            },
+            {
+              "metricName": "knowledge_recall",
+              "score": 0.5,
+              "threshold": 1,
+              "weight": 0.1,
+              "passed": false,
+              "hardFail": false,
+              "reason": "required knowledge retrieval is incomplete"
+            },
+            {
+              "metricName": "llm_rubric",
+              "score": 0.2,
+              "threshold": 0.8,
+              "weight": 0.1,
+              "passed": false,
+              "hardFail": false,
+              "reason": "已重新执行候选，但检索仍未召回优惠券叠加规则。"
+            }
+          ],
+          "expectedResponse": "会员券不能与满减券叠加使用。",
+          "finalResponse": "优惠规则以结算页为准。",
+          "expectedRoute": "knowledge_search",
+          "route": "knowledge_search",
+          "structuredValid": true,
+          "requiredFacts": [
+            "coupon_stack_forbidden"
+          ],
+          "minRetrievedDocuments": 1,
+          "retrievedDocuments": 1,
+          "rubricReason": "已重新执行候选，但检索仍未召回优惠券叠加规则。",
+          "trace": [
+            {
+              "stepId": "validation-coupon-balanced-route",
+              "kind": "route",
+              "name": "knowledge_search",
+              "status": "completed",
+              "elapsedMs": 1
+            },
+            {
+              "stepId": "validation-coupon-balanced-retrieval",
+              "kind": "retrieval",
+              "name": "knowledge_search",
+              "status": "completed",
+              "elapsedMs": 5,
+              "output": {
+                "documents": 1,
+                "facts": [],
+                "matchedFacts": 0
+              }
+            },
+            {
+              "stepId": "validation-coupon-balanced-final",
+              "kind": "final_response",
+              "status": "completed",
+              "elapsedMs": 9,
+              "message": "优惠规则以结算页为准。",
+              "rubricScore": 0.2,
+              "rubricReason": "已重新执行候选，但检索仍未召回优惠券叠加规则。",
+              "usage": {
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "inputTokens": 80,
+                "outputTokens": 10,
+                "costUsd": 0,
+                "latencyMs": 9
+              }
+            }
+          ],
+          "primaryFailure": {
+            "category": "knowledge_retrieval_insufficient",
+            "confidence": 0.98,
+            "evidence": "retrieved 1 documents and 0/1 required facts",
+            "signals": [
+              "retrieval",
+              "knowledge_recall"
+            ]
+          },
+          "failureAttributions": [
+            {
+              "category": "knowledge_retrieval_insufficient",
+              "confidence": 0.98,
+              "evidence": "retrieved 1 documents and 0/1 required facts",
+              "signals": [
+                "retrieval",
+                "knowledge_recall"
+              ]
+            },
+            {
+              "category": "final_response_mismatch",
+              "confidence": 0.9,
+              "evidence": "final response ROUGE similarity is 0.000000",
+              "signals": [
+                "final_response_match",
+                "final_response"
+              ]
+            }
+          ],
+          "usage": {
+            "modelCalls": 1,
+            "toolCalls": 0,
+            "inputTokens": 80,
+            "outputTokens": 10,
+            "costUsd": 0,
+            "latencyMs": 9
+          }
+        }
+      ],
+      "attributionStats": {
+        "knowledge_retrieval_insufficient": 1
+      },
+      "usage": {
+        "modelCalls": 3,
+        "toolCalls": 1,
+        "inputTokens": 241,
+        "outputTokens": 37,
+        "costUsd": 0,
+        "latencyMs": 30
+      }
+    }
+  },
+  "delta": {
+    "train": {
+      "baselineScore": 0.522041,
+      "candidateScore": 0.797193,
+      "scoreDelta": 0.27515200000000006,
+      "newPasses": 2,
+      "newFailures": 0,
+      "scoreImprovements": 2,
+      "scoreRegressions": 0,
+      "newHardFails": 0,
+      "complete": true,
+      "cases": [
+        {
+          "caseId": "train_knowledge_no_gain",
+          "baselinePresent": true,
+          "candidatePresent": true,
+          "baselineScore": 0.391579,
+          "candidateScore": 0.391579,
+          "scoreDelta": 0,
+          "baselinePassed": false,
+          "candidatePassed": false,
+          "baselineHardFail": true,
+          "candidateHardFail": true,
+          "critical": false,
+          "outcome": "unchanged_failure",
+          "becamePassed": false,
+          "becameFailed": false,
+          "scoreImproved": false,
+          "scoreRegressed": false,
+          "newHardFail": false,
+          "metricDeltas": [
+            {
+              "metricName": "final_response_match",
+              "baselineScore": 0.105263,
+              "candidateScore": 0.105263,
+              "scoreDelta": 0
+            },
+            {
+              "metricName": "knowledge_recall",
+              "baselineScore": 0,
+              "candidateScore": 0,
+              "scoreDelta": 0
+            },
+            {
+              "metricName": "llm_rubric",
+              "baselineScore": 0.1,
+              "candidateScore": 0.1,
+              "scoreDelta": 0
+            },
+            {
+              "metricName": "route_accuracy",
+              "baselineScore": 0,
+              "candidateScore": 0,
+              "scoreDelta": 0
+            },
+            {
+              "metricName": "structured_output_valid",
+              "baselineScore": 1,
+              "candidateScore": 1,
+              "scoreDelta": 0
+            },
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "baselineScore": 1,
+              "candidateScore": 1,
+              "scoreDelta": 0
+            }
+          ]
+        },
+        {
+          "caseId": "train_order_json_format",
+          "baselinePresent": true,
+          "candidatePresent": true,
+          "baselineScore": 0.584545,
+          "candidateScore": 1,
+          "scoreDelta": 0.415455,
+          "baselinePassed": false,
+          "candidatePassed": true,
+          "baselineHardFail": true,
+          "candidateHardFail": false,
+          "critical": false,
+          "outcome": "new_pass",
+          "becamePassed": true,
+          "becameFailed": false,
+          "scoreImproved": true,
+          "scoreRegressed": false,
+          "newHardFail": false,
+          "metricDeltas": [
+            {
+              "metricName": "final_response_match",
+              "baselineScore": 0.181818,
+              "candidateScore": 1,
+              "scoreDelta": 0.818182
+            },
+            {
+              "metricName": "knowledge_recall",
+              "baselineScore": 1,
+              "candidateScore": 1,
+              "scoreDelta": 0
+            },
+            {
+              "metricName": "llm_rubric",
+              "baselineScore": 0.3,
+              "candidateScore": 1,
+              "scoreDelta": 0.7
+            },
+            {
+              "metricName": "route_accuracy",
+              "baselineScore": 1,
+              "candidateScore": 1,
+              "scoreDelta": 0
+            },
+            {
+              "metricName": "structured_output_valid",
+              "baselineScore": 0,
+              "candidateScore": 1,
+              "scoreDelta": 1
+            },
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "baselineScore": 1,
+              "candidateScore": 1,
+              "scoreDelta": 0
+            }
+          ]
+        },
+        {
+          "caseId": "train_weather_tool_args",
+          "baselinePresent": true,
+          "candidatePresent": true,
+          "baselineScore": 0.59,
+          "candidateScore": 1,
+          "scoreDelta": 0.41000000000000003,
+          "baselinePassed": false,
+          "candidatePassed": true,
+          "baselineHardFail": true,
+          "candidateHardFail": false,
+          "critical": false,
+          "outcome": "new_pass",
+          "becamePassed": true,
+          "becameFailed": false,
+          "scoreImproved": true,
+          "scoreRegressed": false,
+          "newHardFail": false,
+          "metricDeltas": [
+            {
+              "metricName": "final_response_match",
+              "baselineScore": 0.4,
+              "candidateScore": 1,
+              "scoreDelta": 0.6
+            },
+            {
+              "metricName": "knowledge_recall",
+              "baselineScore": 1,
+              "candidateScore": 1,
+              "scoreDelta": 0
+            },
+            {
+              "metricName": "llm_rubric",
+              "baselineScore": 0.2,
+              "candidateScore": 1,
+              "scoreDelta": 0.8
+            },
+            {
+              "metricName": "route_accuracy",
+              "baselineScore": 1,
+              "candidateScore": 1,
+              "scoreDelta": 0
+            },
+            {
+              "metricName": "structured_output_valid",
+              "baselineScore": 1,
+              "candidateScore": 1,
+              "scoreDelta": 0
+            },
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "baselineScore": 0.4,
+              "candidateScore": 1,
+              "scoreDelta": 0.6
+            }
+          ]
+        }
+      ]
+    },
+    "validation": {
+      "baselineScore": 0.72,
+      "candidateScore": 0.856667,
+      "scoreDelta": 0.13666699999999998,
+      "newPasses": 1,
+      "newFailures": 0,
+      "scoreImprovements": 1,
+      "scoreRegressions": 0,
+      "newHardFails": 0,
+      "complete": true,
+      "cases": [
+        {
+          "caseId": "validation_coupon_no_gain",
+          "baselinePresent": true,
+          "candidatePresent": true,
+          "baselineScore": 0.57,
+          "candidateScore": 0.57,
+          "scoreDelta": 0,
+          "baselinePassed": false,
+          "candidatePassed": false,
+          "baselineHardFail": false,
+          "candidateHardFail": false,
+          "critical": false,
+          "outcome": "unchanged_failure",
+          "becamePassed": false,
+          "becameFailed": false,
+          "scoreImproved": false,
+          "scoreRegressed": false,
+          "newHardFail": false,
+          "metricDeltas": [
+            {
+              "metricName": "final_response_match",
+              "baselineScore": 0,
+              "candidateScore": 0,
+              "scoreDelta": 0
+            },
+            {
+              "metricName": "knowledge_recall",
+              "baselineScore": 0.5,
+              "candidateScore": 0.5,
+              "scoreDelta": 0
+            },
+            {
+              "metricName": "llm_rubric",
+              "baselineScore": 0.2,
+              "candidateScore": 0.2,
+              "scoreDelta": 0
+            },
+            {
+              "metricName": "route_accuracy",
+              "baselineScore": 1,
+              "candidateScore": 1,
+              "scoreDelta": 0
+            },
+            {
+              "metricName": "structured_output_valid",
+              "baselineScore": 1,
+              "candidateScore": 1,
+              "scoreDelta": 0
+            },
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "baselineScore": 1,
+              "candidateScore": 1,
+              "scoreDelta": 0
+            }
+          ]
+        },
+        {
+          "caseId": "validation_critical_refund",
+          "baselinePresent": true,
+          "candidatePresent": true,
+          "baselineScore": 1,
+          "candidateScore": 1,
+          "scoreDelta": 0,
+          "baselinePassed": true,
+          "candidatePassed": true,
+          "baselineHardFail": false,
+          "candidateHardFail": false,
+          "critical": true,
+          "outcome": "unchanged_pass",
+          "becamePassed": false,
+          "becameFailed": false,
+          "scoreImproved": false,
+          "scoreRegressed": false,
+          "newHardFail": false,
+          "metricDeltas": [
+            {
+              "metricName": "final_response_match",
+              "baselineScore": 1,
+              "candidateScore": 1,
+              "scoreDelta": 0
+            },
+            {
+              "metricName": "knowledge_recall",
+              "baselineScore": 1,
+              "candidateScore": 1,
+              "scoreDelta": 0
+            },
+            {
+              "metricName": "llm_rubric",
+              "baselineScore": 1,
+              "candidateScore": 1,
+              "scoreDelta": 0
+            },
+            {
+              "metricName": "route_accuracy",
+              "baselineScore": 1,
+              "candidateScore": 1,
+              "scoreDelta": 0
+            },
+            {
+              "metricName": "structured_output_valid",
+              "baselineScore": 1,
+              "candidateScore": 1,
+              "scoreDelta": 0
+            },
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "baselineScore": 1,
+              "candidateScore": 1,
+              "scoreDelta": 0
+            }
+          ]
+        },
+        {
+          "caseId": "validation_weather_unseen",
+          "baselinePresent": true,
+          "candidatePresent": true,
+          "baselineScore": 0.59,
+          "candidateScore": 1,
+          "scoreDelta": 0.41000000000000003,
+          "baselinePassed": false,
+          "candidatePassed": true,
+          "baselineHardFail": true,
+          "candidateHardFail": false,
+          "critical": false,
+          "outcome": "new_pass",
+          "becamePassed": true,
+          "becameFailed": false,
+          "scoreImproved": true,
+          "scoreRegressed": false,
+          "newHardFail": false,
+          "metricDeltas": [
+            {
+              "metricName": "final_response_match",
+              "baselineScore": 0.4,
+              "candidateScore": 1,
+              "scoreDelta": 0.6
+            },
+            {
+              "metricName": "knowledge_recall",
+              "baselineScore": 1,
+              "candidateScore": 1,
+              "scoreDelta": 0
+            },
+            {
+              "metricName": "llm_rubric",
+              "baselineScore": 0.2,
+              "candidateScore": 1,
+              "scoreDelta": 0.8
+            },
+            {
+              "metricName": "route_accuracy",
+              "baselineScore": 1,
+              "candidateScore": 1,
+              "scoreDelta": 0
+            },
+            {
+              "metricName": "structured_output_valid",
+              "baselineScore": 1,
+              "candidateScore": 1,
+              "scoreDelta": 0
+            },
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "baselineScore": 0.4,
+              "candidateScore": 1,
+              "scoreDelta": 0.6
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "gateDecision": {
+    "accepted": true,
+    "checks": [
+      {
+        "name": "evaluation_comparable",
+        "passed": true,
+        "actual": 1,
+        "comparator": "==",
+        "limit": 1,
+        "reason": "baseline and candidate cover the same cases and metrics"
+      },
+      {
+        "name": "delta_consistent",
+        "passed": true,
+        "actual": 1,
+        "comparator": "==",
+        "limit": 1,
+        "reason": "provided delta matches evaluation summaries"
+      },
+      {
+        "name": "prompt_changed",
+        "passed": true,
+        "actual": 1,
+        "comparator": "==",
+        "limit": 1,
+        "reason": "candidate prompt changed"
+      },
+      {
+        "name": "min_validation_score_gain",
+        "passed": true,
+        "actual": 0.13666699999999998,
+        "comparator": "\u003e=",
+        "limit": 0.05,
+        "reason": "validation score gain 0.136667 meets threshold"
+      },
+      {
+        "name": "max_new_failures",
+        "passed": true,
+        "actual": 0,
+        "comparator": "\u003c=",
+        "limit": 0,
+        "reason": "new failures 0 are within limit"
+      },
+      {
+        "name": "no_new_hard_failures",
+        "passed": true,
+        "actual": 0,
+        "comparator": "==",
+        "limit": 0,
+        "reason": "candidate introduced no hard failures"
+      },
+      {
+        "name": "critical_cases_non_regression",
+        "passed": true,
+        "actual": 0,
+        "comparator": "\u003c=",
+        "limit": 0,
+        "reason": "critical cases did not regress"
+      },
+      {
+        "name": "max_per_case_score_drop",
+        "passed": true,
+        "actual": 0,
+        "comparator": "\u003c=",
+        "limit": 0.05,
+        "reason": "maximum per-case score drop 0.000000 is within limit"
+      },
+      {
+        "name": "max_cost_usd",
+        "passed": true,
+        "actual": 0,
+        "comparator": "\u003c=",
+        "limit": 0,
+        "reason": "candidate cost 0.000000 is within budget"
+      },
+      {
+        "name": "max_model_calls",
+        "passed": true,
+        "actual": 6,
+        "comparator": "\u003c=",
+        "limit": 6,
+        "reason": "model calls 6.000000 is within budget"
+      },
+      {
+        "name": "max_total_calls",
+        "passed": true,
+        "actual": 8,
+        "comparator": "\u003c=",
+        "limit": 10,
+        "reason": "model and tool calls 8.000000 is within budget"
+      },
+      {
+        "name": "max_latency_ms",
+        "passed": true,
+        "actual": 58,
+        "comparator": "\u003c=",
+        "limit": 120,
+        "reason": "candidate latency 58.000000 is within budget"
+      }
+    ],
+    "reasons": [
+      "all acceptance checks passed"
+    ]
+  },
+  "failureAttributionStats": {
+    "format_error": 1,
+    "knowledge_retrieval_insufficient": 1,
+    "route_error": 1,
+    "tool_parameter_error": 2
+  },
+  "costLatencySummary": {
+    "baseline": {
+      "modelCalls": 6,
+      "toolCalls": 2,
+      "inputTokens": 249,
+      "outputTokens": 67,
+      "costUsd": 0,
+      "latencyMs": 60
+    },
+    "candidate": {
+      "modelCalls": 6,
+      "toolCalls": 2,
+      "inputTokens": 466,
+      "outputTokens": 73,
+      "costUsd": 0,
+      "latencyMs": 58
+    },
+    "delta": {
+      "modelCalls": 0,
+      "toolCalls": 0,
+      "inputTokens": 217,
+      "outputTokens": 6,
+      "costUsd": 0,
+      "latencyMs": -2
+    },
+    "totalRun": {
+      "modelCalls": 18,
+      "toolCalls": 6,
+      "inputTokens": 1139,
+      "outputTokens": 211,
+      "costUsd": 0,
+      "latencyMs": 175
+    }
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "candidatePrompt": {
+        "id": "candidate-overfit",
+        "content": "你是电商客服 Agent。根据用户问题直接作答；必要时调用工具。回答应简洁、礼貌。\n\n针对训练集记忆规则：上海天气必须使用 city=上海；订单 A100 必须输出 JSON。为减少检索开销，所有退款问题统一转交 general_faq，禁止调用知识检索。\n\nPromptIter 根据训练失败归因生成的通用约束：\n- 工具参数必须从当前请求提取，禁止复用其他样本参数。\n- 严格遵循要求的结构化输出格式并在返回前校验。\n\n[[trpc-promptiter-candidate:candidate-overfit;seed:20260710]]",
+        "sha256": "92e9f70b5e9d682194a80363b42144f7a212d1a06182f2fbf5feac2978dc258c",
+        "semanticSha256": "87448623848fb0cb3fcfb04cd686bafe8c83eb1a1075e068edc34ac6c4683133",
+        "surfaceId": "support-agent#instruction",
+        "patchReason": "根据训练失败 case 直接追加特例，并激进减少退款检索; matched failure categories: [tool_parameter_error format_error]"
+      },
+      "evaluation": {
+        "train": {
+          "evalSetId": "support-train",
+          "variantId": "candidate-overfit",
+          "passThreshold": 0.8,
+          "overallScore": 0.797193,
+          "passedCases": 2,
+          "failedCases": 1,
+          "hardFailedCases": 1,
+          "cases": [
+            {
+              "caseId": "train_weather_tool_args",
+              "critical": false,
+              "score": 1,
+              "passed": true,
+              "hardFail": false,
+              "responseVariantId": "candidate-overfit",
+              "responsePromptSemanticSha256": "87448623848fb0cb3fcfb04cd686bafe8c83eb1a1075e068edc34ac6c4683133",
+              "usedFallback": false,
+              "metricResults": [
+                {
+                  "metricName": "final_response_match",
+                  "score": 1,
+                  "threshold": 0.75,
+                  "weight": 0.3,
+                  "passed": true,
+                  "hardFail": false,
+                  "reason": "final response matches reference"
+                },
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "score": 1,
+                  "threshold": 1,
+                  "weight": 0.25,
+                  "passed": true,
+                  "hardFail": true,
+                  "reason": "tool trajectory matches reference"
+                },
+                {
+                  "metricName": "route_accuracy",
+                  "score": 1,
+                  "threshold": 1,
+                  "weight": 0.15,
+                  "passed": true,
+                  "hardFail": true,
+                  "reason": "route matches reference"
+                },
+                {
+                  "metricName": "structured_output_valid",
+                  "score": 1,
+                  "threshold": 1,
+                  "weight": 0.1,
+                  "passed": true,
+                  "hardFail": true,
+                  "reason": "no structured output required"
+                },
+                {
+                  "metricName": "knowledge_recall",
+                  "score": 1,
+                  "threshold": 1,
+                  "weight": 0.1,
+                  "passed": true,
+                  "hardFail": false,
+                  "reason": "required knowledge was retrieved"
+                },
+                {
+                  "metricName": "llm_rubric",
+                  "score": 1,
+                  "threshold": 0.8,
+                  "weight": 0.1,
+                  "passed": true,
+                  "hardFail": false,
+                  "reason": "训练特例已修复。"
+                }
+              ],
+              "expectedResponse": "上海当前晴，26°C。",
+              "finalResponse": "上海当前晴，26°C。",
+              "expectedToolTrajectory": [
+                {
+                  "id": "expected-weather-shanghai",
+                  "name": "get_weather",
+                  "arguments": {
+                    "city": "上海"
+                  },
+                  "result": {
+                    "condition": "晴",
+                    "temperatureC": 26
+                  }
+                }
+              ],
+              "toolTrajectory": [
+                {
+                  "id": "overfit-weather",
+                  "name": "get_weather",
+                  "arguments": {
+                    "city": "上海"
+                  },
+                  "result": {
+                    "condition": "晴",
+                    "temperatureC": 26
+                  }
+                }
+              ],
+              "expectedRoute": "weather_agent",
+              "route": "weather_agent",
+              "structuredValid": true,
+              "rubricReason": "训练特例已修复。",
+              "trace": [
+                {
+                  "stepId": "train-weather-overfit-route",
+                  "kind": "route",
+                  "name": "weather_agent",
+                  "status": "completed",
+                  "elapsedMs": 1
+                },
+                {
+                  "stepId": "train-weather-overfit",
+                  "kind": "tool",
+                  "name": "get_weather",
+                  "status": "completed",
+                  "elapsedMs": 6,
+                  "input": {
+                    "city": "上海"
+                  },
+                  "output": {
+                    "condition": "晴",
+                    "temperatureC": 26
+                  }
+                },
+                {
+                  "stepId": "train-weather-overfit-final",
+                  "kind": "final_response",
+                  "status": "completed",
+                  "elapsedMs": 11,
+                  "message": "上海当前晴，26°C。",
+                  "rubricScore": 1,
+                  "rubricReason": "训练特例已修复。",
+                  "usage": {
+                    "modelCalls": 1,
+                    "toolCalls": 1,
+                    "inputTokens": 71,
+                    "outputTokens": 12,
+                    "costUsd": 0,
+                    "latencyMs": 11
+                  }
+                }
+              ],
+              "usage": {
+                "modelCalls": 1,
+                "toolCalls": 1,
+                "inputTokens": 71,
+                "outputTokens": 12,
+                "costUsd": 0,
+                "latencyMs": 11
+              }
+            },
+            {
+              "caseId": "train_order_json_format",
+              "critical": false,
+              "score": 1,
+              "passed": true,
+              "hardFail": false,
+              "responseVariantId": "candidate-overfit",
+              "responsePromptSemanticSha256": "87448623848fb0cb3fcfb04cd686bafe8c83eb1a1075e068edc34ac6c4683133",
+              "usedFallback": false,
+              "metricResults": [
+                {
+                  "metricName": "final_response_match",
+                  "score": 1,
+                  "threshold": 0.75,
+                  "weight": 0.3,
+                  "passed": true,
+                  "hardFail": false,
+                  "reason": "final response matches reference"
+                },
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "score": 1,
+                  "threshold": 1,
+                  "weight": 0.25,
+                  "passed": true,
+                  "hardFail": true,
+                  "reason": "tool trajectory is empty as expected"
+                },
+                {
+                  "metricName": "route_accuracy",
+                  "score": 1,
+                  "threshold": 1,
+                  "weight": 0.15,
+                  "passed": true,
+                  "hardFail": true,
+                  "reason": "route matches reference"
+                },
+                {
+                  "metricName": "structured_output_valid",
+                  "score": 1,
+                  "threshold": 1,
+                  "weight": 0.1,
+                  "passed": true,
+                  "hardFail": true,
+                  "reason": "structured output is valid"
+                },
+                {
+                  "metricName": "knowledge_recall",
+                  "score": 1,
+                  "threshold": 1,
+                  "weight": 0.1,
+                  "passed": true,
+                  "hardFail": false,
+                  "reason": "required knowledge was retrieved"
+                },
+                {
+                  "metricName": "llm_rubric",
+                  "score": 1,
+                  "threshold": 0.8,
+                  "weight": 0.1,
+                  "passed": true,
+                  "hardFail": false,
+                  "reason": "训练订单特例输出合法 JSON。"
+                }
+              ],
+              "expectedResponse": "{\"orderId\":\"A100\",\"status\":\"ok\"}",
+              "finalResponse": "{\"orderId\":\"A100\",\"status\":\"ok\"}",
+              "expectedRoute": "order_agent",
+              "route": "order_agent",
+              "responseFormat": "json",
+              "structuredValid": true,
+              "rubricReason": "训练订单特例输出合法 JSON。",
+              "trace": [
+                {
+                  "stepId": "train-order-overfit-route",
+                  "kind": "route",
+                  "name": "order_agent",
+                  "status": "completed",
+                  "elapsedMs": 1
+                },
+                {
+                  "stepId": "train-order-overfit",
+                  "kind": "structured_output",
+                  "status": "completed",
+                  "elapsedMs": 4
+                },
+                {
+                  "stepId": "train-order-overfit-final",
+                  "kind": "final_response",
+                  "status": "completed",
+                  "elapsedMs": 9,
+                  "message": "{\"orderId\":\"A100\",\"status\":\"ok\"}",
+                  "rubricScore": 1,
+                  "rubricReason": "训练订单特例输出合法 JSON。",
+                  "usage": {
+                    "modelCalls": 1,
+                    "toolCalls": 0,
+                    "inputTokens": 68,
+                    "outputTokens": 16,
+                    "costUsd": 0,
+                    "latencyMs": 9
+                  }
+                }
+              ],
+              "usage": {
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "inputTokens": 68,
+                "outputTokens": 16,
+                "costUsd": 0,
+                "latencyMs": 9
+              }
+            },
+            {
+              "caseId": "train_knowledge_no_gain",
+              "critical": false,
+              "score": 0.391579,
+              "passed": false,
+              "hardFail": true,
+              "responseVariantId": "candidate-overfit",
+              "responsePromptSemanticSha256": "87448623848fb0cb3fcfb04cd686bafe8c83eb1a1075e068edc34ac6c4683133",
+              "usedFallback": false,
+              "metricResults": [
+                {
+                  "metricName": "final_response_match",
+                  "score": 0.105263,
+                  "threshold": 0.75,
+                  "weight": 0.3,
+                  "passed": false,
+                  "hardFail": false,
+                  "reason": "final response ROUGE similarity is 0.105263"
+                },
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "score": 1,
+                  "threshold": 1,
+                  "weight": 0.25,
+                  "passed": true,
+                  "hardFail": true,
+                  "reason": "tool trajectory is empty as expected"
+                },
+                {
+                  "metricName": "route_accuracy",
+                  "score": 0,
+                  "threshold": 1,
+                  "weight": 0.15,
+                  "passed": false,
+                  "hardFail": true,
+                  "reason": "expected route \"knowledge_search\", got \"general_faq\""
+                },
+                {
+                  "metricName": "structured_output_valid",
+                  "score": 1,
+                  "threshold": 1,
+                  "weight": 0.1,
+                  "passed": true,
+                  "hardFail": true,
+                  "reason": "no structured output required"
+                },
+                {
+                  "metricName": "knowledge_recall",
+                  "score": 0,
+                  "threshold": 1,
+                  "weight": 0.1,
+                  "passed": false,
+                  "hardFail": false,
+                  "reason": "required knowledge retrieval is incomplete"
+                },
+                {
+                  "metricName": "llm_rubric",
+                  "score": 0.1,
+                  "threshold": 0.8,
+                  "weight": 0.1,
+                  "passed": false,
+                  "hardFail": false,
+                  "reason": "训练特例未改善知识召回，仍未回答退款时效。"
+                }
+              ],
+              "expectedResponse": "退款将在 3 个工作日内到账。",
+              "finalResponse": "请咨询人工客服。",
+              "expectedRoute": "knowledge_search",
+              "route": "general_faq",
+              "structuredValid": true,
+              "requiredFacts": [
+                "refund_sla_3_days"
+              ],
+              "minRetrievedDocuments": 1,
+              "rubricReason": "训练特例未改善知识召回，仍未回答退款时效。",
+              "trace": [
+                {
+                  "stepId": "train-refund-overfit-route",
+                  "kind": "route",
+                  "name": "general_faq",
+                  "status": "completed",
+                  "elapsedMs": 2
+                },
+                {
+                  "stepId": "train-refund-overfit-final",
+                  "kind": "final_response",
+                  "status": "completed",
+                  "elapsedMs": 8,
+                  "message": "请咨询人工客服。",
+                  "rubricScore": 0.1,
+                  "rubricReason": "训练特例未改善知识召回，仍未回答退款时效。",
+                  "usage": {
+                    "modelCalls": 1,
+                    "toolCalls": 0,
+                    "inputTokens": 64,
+                    "outputTokens": 8,
+                    "costUsd": 0,
+                    "latencyMs": 8
+                  }
+                }
+              ],
+              "primaryFailure": {
+                "category": "route_error",
+                "confidence": 0.99,
+                "evidence": "expected route \"knowledge_search\", got \"general_faq\"",
+                "signals": [
+                  "route",
+                  "trace"
+                ]
+              },
+              "failureAttributions": [
+                {
+                  "category": "route_error",
+                  "confidence": 0.99,
+                  "evidence": "expected route \"knowledge_search\", got \"general_faq\"",
+                  "signals": [
+                    "route",
+                    "trace"
+                  ]
+                },
+                {
+                  "category": "knowledge_retrieval_insufficient",
+                  "confidence": 0.98,
+                  "evidence": "retrieved 0 documents and 0/1 required facts",
+                  "signals": [
+                    "retrieval",
+                    "knowledge_recall"
+                  ]
+                },
+                {
+                  "category": "final_response_mismatch",
+                  "confidence": 0.9,
+                  "evidence": "final response ROUGE similarity is 0.105263",
+                  "signals": [
+                    "final_response_match",
+                    "final_response"
+                  ]
+                }
+              ],
+              "usage": {
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "inputTokens": 64,
+                "outputTokens": 8,
+                "costUsd": 0,
+                "latencyMs": 8
+              }
+            }
+          ],
+          "attributionStats": {
+            "route_error": 1
+          },
+          "usage": {
+            "modelCalls": 3,
+            "toolCalls": 1,
+            "inputTokens": 203,
+            "outputTokens": 36,
+            "costUsd": 0,
+            "latencyMs": 28
+          }
+        },
+        "validation": {
+          "evalSetId": "support-validation",
+          "variantId": "candidate-overfit",
+          "passThreshold": 0.8,
+          "overallScore": 0.525417,
+          "passedCases": 0,
+          "failedCases": 3,
+          "hardFailedCases": 2,
+          "cases": [
+            {
+              "caseId": "validation_weather_unseen",
+              "critical": false,
+              "score": 0.59,
+              "passed": false,
+              "hardFail": true,
+              "responseVariantId": "candidate-overfit",
+              "responsePromptSemanticSha256": "87448623848fb0cb3fcfb04cd686bafe8c83eb1a1075e068edc34ac6c4683133",
+              "usedFallback": false,
+              "metricResults": [
+                {
+                  "metricName": "final_response_match",
+                  "score": 0.4,
+                  "threshold": 0.75,
+                  "weight": 0.3,
+                  "passed": false,
+                  "hardFail": false,
+                  "reason": "final response ROUGE similarity is 0.400000"
+                },
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "score": 0.4,
+                  "threshold": 1,
+                  "weight": 0.25,
+                  "passed": false,
+                  "hardFail": true,
+                  "reason": "tool name, arguments, result, or call count differs from reference"
+                },
+                {
+                  "metricName": "route_accuracy",
+                  "score": 1,
+                  "threshold": 1,
+                  "weight": 0.15,
+                  "passed": true,
+                  "hardFail": true,
+                  "reason": "route matches reference"
+                },
+                {
+                  "metricName": "structured_output_valid",
+                  "score": 1,
+                  "threshold": 1,
+                  "weight": 0.1,
+                  "passed": true,
+                  "hardFail": true,
+                  "reason": "no structured output required"
+                },
+                {
+                  "metricName": "knowledge_recall",
+                  "score": 1,
+                  "threshold": 1,
+                  "weight": 0.1,
+                  "passed": true,
+                  "hardFail": false,
+                  "reason": "required knowledge was retrieved"
+                },
+                {
+                  "metricName": "llm_rubric",
+                  "score": 0.2,
+                  "threshold": 0.8,
+                  "weight": 0.1,
+                  "passed": false,
+                  "hardFail": false,
+                  "reason": "训练城市特例被错误复用于未见城市。"
+                }
+              ],
+              "expectedResponse": "广州当前小雨，24°C。",
+              "finalResponse": "上海当前晴，26°C。",
+              "expectedToolTrajectory": [
+                {
+                  "id": "expected-weather-guangzhou",
+                  "name": "get_weather",
+                  "arguments": {
+                    "city": "广州"
+                  },
+                  "result": {
+                    "condition": "小雨",
+                    "temperatureC": 24
+                  }
+                }
+              ],
+              "toolTrajectory": [
+                {
+                  "id": "overfit-weather-guangzhou",
+                  "name": "get_weather",
+                  "arguments": {
+                    "city": "上海"
+                  },
+                  "result": {
+                    "condition": "晴",
+                    "temperatureC": 26
+                  }
+                }
+              ],
+              "expectedRoute": "weather_agent",
+              "route": "weather_agent",
+              "structuredValid": true,
+              "rubricReason": "训练城市特例被错误复用于未见城市。",
+              "trace": [
+                {
+                  "stepId": "validation-weather-overfit-route",
+                  "kind": "route",
+                  "name": "weather_agent",
+                  "status": "completed",
+                  "elapsedMs": 1
+                },
+                {
+                  "stepId": "validation-weather-overfit",
+                  "kind": "tool",
+                  "name": "get_weather",
+                  "status": "completed",
+                  "elapsedMs": 6,
+                  "input": {
+                    "city": "上海"
+                  },
+                  "output": {
+                    "condition": "晴",
+                    "temperatureC": 26
+                  }
+                },
+                {
+                  "stepId": "validation-weather-overfit-final",
+                  "kind": "final_response",
+                  "status": "completed",
+                  "elapsedMs": 12,
+                  "message": "上海当前晴，26°C。",
+                  "rubricScore": 0.2,
+                  "rubricReason": "训练城市特例被错误复用于未见城市。",
+                  "usage": {
+                    "modelCalls": 1,
+                    "toolCalls": 1,
+                    "inputTokens": 71,
+                    "outputTokens": 12,
+                    "costUsd": 0,
+                    "latencyMs": 12
+                  }
+                }
+              ],
+              "primaryFailure": {
+                "category": "tool_parameter_error",
+                "confidence": 0.99,
+                "evidence": "tool \"get_weather\" arguments differ from reference",
+                "signals": [
+                  "tool_trajectory",
+                  "tool_arguments"
+                ]
+              },
+              "failureAttributions": [
+                {
+                  "category": "tool_parameter_error",
+                  "confidence": 0.99,
+                  "evidence": "tool \"get_weather\" arguments differ from reference",
+                  "signals": [
+                    "tool_trajectory",
+                    "tool_arguments"
+                  ]
+                },
+                {
+                  "category": "final_response_mismatch",
+                  "confidence": 0.9,
+                  "evidence": "final response ROUGE similarity is 0.400000",
+                  "signals": [
+                    "final_response_match",
+                    "final_response"
+                  ]
+                }
+              ],
+              "usage": {
+                "modelCalls": 1,
+                "toolCalls": 1,
+                "inputTokens": 71,
+                "outputTokens": 12,
+                "costUsd": 0,
+                "latencyMs": 12
+              }
+            },
+            {
+              "caseId": "validation_critical_refund",
+              "critical": true,
+              "score": 0.41625,
+              "passed": false,
+              "hardFail": true,
+              "responseVariantId": "candidate-overfit",
+              "responsePromptSemanticSha256": "87448623848fb0cb3fcfb04cd686bafe8c83eb1a1075e068edc34ac6c4683133",
+              "usedFallback": false,
+              "metricResults": [
+                {
+                  "metricName": "final_response_match",
+                  "score": 0.1875,
+                  "threshold": 0.75,
+                  "weight": 0.3,
+                  "passed": false,
+                  "hardFail": false,
+                  "reason": "final response ROUGE similarity is 0.187500"
+                },
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "score": 1,
+                  "threshold": 1,
+                  "weight": 0.25,
+                  "passed": true,
+                  "hardFail": true,
+                  "reason": "tool trajectory is empty as expected"
+                },
+                {
+                  "metricName": "route_accuracy",
+                  "score": 0,
+                  "threshold": 1,
+                  "weight": 0.15,
+                  "passed": false,
+                  "hardFail": true,
+                  "reason": "expected route \"knowledge_search\", got \"general_faq\""
+                },
+                {
+                  "metricName": "structured_output_valid",
+                  "score": 1,
+                  "threshold": 1,
+                  "weight": 0.1,
+                  "passed": true,
+                  "hardFail": true,
+                  "reason": "no structured output required"
+                },
+                {
+                  "metricName": "knowledge_recall",
+                  "score": 0,
+                  "threshold": 1,
+                  "weight": 0.1,
+                  "passed": false,
+                  "hardFail": false,
+                  "reason": "required knowledge retrieval is incomplete"
+                },
+                {
+                  "metricName": "llm_rubric",
+                  "score": 0.1,
+                  "threshold": 0.8,
+                  "weight": 0.1,
+                  "passed": false,
+                  "hardFail": false,
+                  "reason": "激进规则导致关键退款 case 路由错误并丢失知识召回。"
+                }
+              ],
+              "expectedResponse": "审核通过后，退款将在 3 个工作日内到账。",
+              "finalResponse": "退款时间无法确定，请咨询人工客服。",
+              "expectedRoute": "knowledge_search",
+              "route": "general_faq",
+              "structuredValid": true,
+              "requiredFacts": [
+                "refund_sla_3_days"
+              ],
+              "minRetrievedDocuments": 1,
+              "rubricReason": "激进规则导致关键退款 case 路由错误并丢失知识召回。",
+              "trace": [
+                {
+                  "stepId": "validation-refund-overfit",
+                  "kind": "route",
+                  "name": "general_faq",
+                  "status": "completed",
+                  "elapsedMs": 2
+                },
+                {
+                  "stepId": "validation-refund-overfit-final",
+                  "kind": "final_response",
+                  "status": "completed",
+                  "elapsedMs": 8,
+                  "message": "退款时间无法确定，请咨询人工客服。",
+                  "rubricScore": 0.1,
+                  "rubricReason": "激进规则导致关键退款 case 路由错误并丢失知识召回。",
+                  "usage": {
+                    "modelCalls": 1,
+                    "toolCalls": 0,
+                    "inputTokens": 77,
+                    "outputTokens": 13,
+                    "costUsd": 0,
+                    "latencyMs": 8
+                  }
+                }
+              ],
+              "primaryFailure": {
+                "category": "route_error",
+                "confidence": 0.99,
+                "evidence": "expected route \"knowledge_search\", got \"general_faq\"",
+                "signals": [
+                  "route",
+                  "trace"
+                ]
+              },
+              "failureAttributions": [
+                {
+                  "category": "route_error",
+                  "confidence": 0.99,
+                  "evidence": "expected route \"knowledge_search\", got \"general_faq\"",
+                  "signals": [
+                    "route",
+                    "trace"
+                  ]
+                },
+                {
+                  "category": "knowledge_retrieval_insufficient",
+                  "confidence": 0.98,
+                  "evidence": "retrieved 0 documents and 0/1 required facts",
+                  "signals": [
+                    "retrieval",
+                    "knowledge_recall"
+                  ]
+                },
+                {
+                  "category": "final_response_mismatch",
+                  "confidence": 0.9,
+                  "evidence": "final response ROUGE similarity is 0.187500",
+                  "signals": [
+                    "final_response_match",
+                    "final_response"
+                  ]
+                }
+              ],
+              "usage": {
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "inputTokens": 77,
+                "outputTokens": 13,
+                "costUsd": 0,
+                "latencyMs": 8
+              }
+            },
+            {
+              "caseId": "validation_coupon_no_gain",
+              "critical": false,
+              "score": 0.57,
+              "passed": false,
+              "hardFail": false,
+              "responseVariantId": "candidate-overfit",
+              "responsePromptSemanticSha256": "87448623848fb0cb3fcfb04cd686bafe8c83eb1a1075e068edc34ac6c4683133",
+              "usedFallback": false,
+              "metricResults": [
+                {
+                  "metricName": "final_response_match",
+                  "score": 0,
+                  "threshold": 0.75,
+                  "weight": 0.3,
+                  "passed": false,
+                  "hardFail": false,
+                  "reason": "final response ROUGE similarity is 0.000000"
+                },
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "score": 1,
+                  "threshold": 1,
+                  "weight": 0.25,
+                  "passed": true,
+                  "hardFail": true,
+                  "reason": "tool trajectory is empty as expected"
+                },
+                {
+                  "metricName": "route_accuracy",
+                  "score": 1,
+                  "threshold": 1,
+                  "weight": 0.15,
+                  "passed": true,
+                  "hardFail": true,
+                  "reason": "route matches reference"
+                },
+                {
+                  "metricName": "structured_output_valid",
+                  "score": 1,
+                  "threshold": 1,
+                  "weight": 0.1,
+                  "passed": true,
+                  "hardFail": true,
+                  "reason": "no structured output required"
+                },
+                {
+                  "metricName": "knowledge_recall",
+                  "score": 0.5,
+                  "threshold": 1,
+                  "weight": 0.1,
+                  "passed": false,
+                  "hardFail": false,
+                  "reason": "required knowledge retrieval is incomplete"
+                },
+                {
+                  "metricName": "llm_rubric",
+                  "score": 0.2,
+                  "threshold": 0.8,
+                  "weight": 0.1,
+                  "passed": false,
+                  "hardFail": false,
+                  "reason": "训练特例未覆盖优惠券规则，检索仍无匹配事实。"
+                }
+              ],
+              "expectedResponse": "会员券不能与满减券叠加使用。",
+              "finalResponse": "优惠规则以结算页为准。",
+              "expectedRoute": "knowledge_search",
+              "route": "knowledge_search",
+              "structuredValid": true,
+              "requiredFacts": [
+                "coupon_stack_forbidden"
+              ],
+              "minRetrievedDocuments": 1,
+              "retrievedDocuments": 1,
+              "rubricReason": "训练特例未覆盖优惠券规则，检索仍无匹配事实。",
+              "trace": [
+                {
+                  "stepId": "validation-coupon-overfit-route",
+                  "kind": "route",
+                  "name": "knowledge_search",
+                  "status": "completed",
+                  "elapsedMs": 1
+                },
+                {
+                  "stepId": "validation-coupon-overfit-retrieval",
+                  "kind": "retrieval",
+                  "name": "knowledge_search",
+                  "status": "completed",
+                  "elapsedMs": 5,
+                  "output": {
+                    "documents": 1,
+                    "facts": [],
+                    "matchedFacts": 0
+                  }
+                },
+                {
+                  "stepId": "validation-coupon-overfit-final",
+                  "kind": "final_response",
+                  "status": "completed",
+                  "elapsedMs": 9,
+                  "message": "优惠规则以结算页为准。",
+                  "rubricScore": 0.2,
+                  "rubricReason": "训练特例未覆盖优惠券规则，检索仍无匹配事实。",
+                  "usage": {
+                    "modelCalls": 1,
+                    "toolCalls": 0,
+                    "inputTokens": 73,
+                    "outputTokens": 10,
+                    "costUsd": 0,
+                    "latencyMs": 9
+                  }
+                }
+              ],
+              "primaryFailure": {
+                "category": "knowledge_retrieval_insufficient",
+                "confidence": 0.98,
+                "evidence": "retrieved 1 documents and 0/1 required facts",
+                "signals": [
+                  "retrieval",
+                  "knowledge_recall"
+                ]
+              },
+              "failureAttributions": [
+                {
+                  "category": "knowledge_retrieval_insufficient",
+                  "confidence": 0.98,
+                  "evidence": "retrieved 1 documents and 0/1 required facts",
+                  "signals": [
+                    "retrieval",
+                    "knowledge_recall"
+                  ]
+                },
+                {
+                  "category": "final_response_mismatch",
+                  "confidence": 0.9,
+                  "evidence": "final response ROUGE similarity is 0.000000",
+                  "signals": [
+                    "final_response_match",
+                    "final_response"
+                  ]
+                }
+              ],
+              "usage": {
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "inputTokens": 73,
+                "outputTokens": 10,
+                "costUsd": 0,
+                "latencyMs": 9
+              }
+            }
+          ],
+          "attributionStats": {
+            "knowledge_retrieval_insufficient": 1,
+            "route_error": 1,
+            "tool_parameter_error": 1
+          },
+          "usage": {
+            "modelCalls": 3,
+            "toolCalls": 1,
+            "inputTokens": 221,
+            "outputTokens": 35,
+            "costUsd": 0,
+            "latencyMs": 29
+          }
+        }
+      },
+      "delta": {
+        "train": {
+          "baselineScore": 0.522041,
+          "candidateScore": 0.797193,
+          "scoreDelta": 0.27515200000000006,
+          "newPasses": 2,
+          "newFailures": 0,
+          "scoreImprovements": 2,
+          "scoreRegressions": 0,
+          "newHardFails": 0,
+          "complete": true,
+          "cases": [
+            {
+              "caseId": "train_knowledge_no_gain",
+              "baselinePresent": true,
+              "candidatePresent": true,
+              "baselineScore": 0.391579,
+              "candidateScore": 0.391579,
+              "scoreDelta": 0,
+              "baselinePassed": false,
+              "candidatePassed": false,
+              "baselineHardFail": true,
+              "candidateHardFail": true,
+              "critical": false,
+              "outcome": "unchanged_failure",
+              "becamePassed": false,
+              "becameFailed": false,
+              "scoreImproved": false,
+              "scoreRegressed": false,
+              "newHardFail": false,
+              "metricDeltas": [
+                {
+                  "metricName": "final_response_match",
+                  "baselineScore": 0.105263,
+                  "candidateScore": 0.105263,
+                  "scoreDelta": 0
+                },
+                {
+                  "metricName": "knowledge_recall",
+                  "baselineScore": 0,
+                  "candidateScore": 0,
+                  "scoreDelta": 0
+                },
+                {
+                  "metricName": "llm_rubric",
+                  "baselineScore": 0.1,
+                  "candidateScore": 0.1,
+                  "scoreDelta": 0
+                },
+                {
+                  "metricName": "route_accuracy",
+                  "baselineScore": 0,
+                  "candidateScore": 0,
+                  "scoreDelta": 0
+                },
+                {
+                  "metricName": "structured_output_valid",
+                  "baselineScore": 1,
+                  "candidateScore": 1,
+                  "scoreDelta": 0
+                },
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "baselineScore": 1,
+                  "candidateScore": 1,
+                  "scoreDelta": 0
+                }
+              ]
+            },
+            {
+              "caseId": "train_order_json_format",
+              "baselinePresent": true,
+              "candidatePresent": true,
+              "baselineScore": 0.584545,
+              "candidateScore": 1,
+              "scoreDelta": 0.415455,
+              "baselinePassed": false,
+              "candidatePassed": true,
+              "baselineHardFail": true,
+              "candidateHardFail": false,
+              "critical": false,
+              "outcome": "new_pass",
+              "becamePassed": true,
+              "becameFailed": false,
+              "scoreImproved": true,
+              "scoreRegressed": false,
+              "newHardFail": false,
+              "metricDeltas": [
+                {
+                  "metricName": "final_response_match",
+                  "baselineScore": 0.181818,
+                  "candidateScore": 1,
+                  "scoreDelta": 0.818182
+                },
+                {
+                  "metricName": "knowledge_recall",
+                  "baselineScore": 1,
+                  "candidateScore": 1,
+                  "scoreDelta": 0
+                },
+                {
+                  "metricName": "llm_rubric",
+                  "baselineScore": 0.3,
+                  "candidateScore": 1,
+                  "scoreDelta": 0.7
+                },
+                {
+                  "metricName": "route_accuracy",
+                  "baselineScore": 1,
+                  "candidateScore": 1,
+                  "scoreDelta": 0
+                },
+                {
+                  "metricName": "structured_output_valid",
+                  "baselineScore": 0,
+                  "candidateScore": 1,
+                  "scoreDelta": 1
+                },
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "baselineScore": 1,
+                  "candidateScore": 1,
+                  "scoreDelta": 0
+                }
+              ]
+            },
+            {
+              "caseId": "train_weather_tool_args",
+              "baselinePresent": true,
+              "candidatePresent": true,
+              "baselineScore": 0.59,
+              "candidateScore": 1,
+              "scoreDelta": 0.41000000000000003,
+              "baselinePassed": false,
+              "candidatePassed": true,
+              "baselineHardFail": true,
+              "candidateHardFail": false,
+              "critical": false,
+              "outcome": "new_pass",
+              "becamePassed": true,
+              "becameFailed": false,
+              "scoreImproved": true,
+              "scoreRegressed": false,
+              "newHardFail": false,
+              "metricDeltas": [
+                {
+                  "metricName": "final_response_match",
+                  "baselineScore": 0.4,
+                  "candidateScore": 1,
+                  "scoreDelta": 0.6
+                },
+                {
+                  "metricName": "knowledge_recall",
+                  "baselineScore": 1,
+                  "candidateScore": 1,
+                  "scoreDelta": 0
+                },
+                {
+                  "metricName": "llm_rubric",
+                  "baselineScore": 0.2,
+                  "candidateScore": 1,
+                  "scoreDelta": 0.8
+                },
+                {
+                  "metricName": "route_accuracy",
+                  "baselineScore": 1,
+                  "candidateScore": 1,
+                  "scoreDelta": 0
+                },
+                {
+                  "metricName": "structured_output_valid",
+                  "baselineScore": 1,
+                  "candidateScore": 1,
+                  "scoreDelta": 0
+                },
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "baselineScore": 0.4,
+                  "candidateScore": 1,
+                  "scoreDelta": 0.6
+                }
+              ]
+            }
+          ]
+        },
+        "validation": {
+          "baselineScore": 0.72,
+          "candidateScore": 0.525417,
+          "scoreDelta": -0.19458299999999995,
+          "newPasses": 0,
+          "newFailures": 1,
+          "scoreImprovements": 0,
+          "scoreRegressions": 1,
+          "newHardFails": 1,
+          "complete": true,
+          "cases": [
+            {
+              "caseId": "validation_coupon_no_gain",
+              "baselinePresent": true,
+              "candidatePresent": true,
+              "baselineScore": 0.57,
+              "candidateScore": 0.57,
+              "scoreDelta": 0,
+              "baselinePassed": false,
+              "candidatePassed": false,
+              "baselineHardFail": false,
+              "candidateHardFail": false,
+              "critical": false,
+              "outcome": "unchanged_failure",
+              "becamePassed": false,
+              "becameFailed": false,
+              "scoreImproved": false,
+              "scoreRegressed": false,
+              "newHardFail": false,
+              "metricDeltas": [
+                {
+                  "metricName": "final_response_match",
+                  "baselineScore": 0,
+                  "candidateScore": 0,
+                  "scoreDelta": 0
+                },
+                {
+                  "metricName": "knowledge_recall",
+                  "baselineScore": 0.5,
+                  "candidateScore": 0.5,
+                  "scoreDelta": 0
+                },
+                {
+                  "metricName": "llm_rubric",
+                  "baselineScore": 0.2,
+                  "candidateScore": 0.2,
+                  "scoreDelta": 0
+                },
+                {
+                  "metricName": "route_accuracy",
+                  "baselineScore": 1,
+                  "candidateScore": 1,
+                  "scoreDelta": 0
+                },
+                {
+                  "metricName": "structured_output_valid",
+                  "baselineScore": 1,
+                  "candidateScore": 1,
+                  "scoreDelta": 0
+                },
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "baselineScore": 1,
+                  "candidateScore": 1,
+                  "scoreDelta": 0
+                }
+              ]
+            },
+            {
+              "caseId": "validation_critical_refund",
+              "baselinePresent": true,
+              "candidatePresent": true,
+              "baselineScore": 1,
+              "candidateScore": 0.41625,
+              "scoreDelta": -0.58375,
+              "baselinePassed": true,
+              "candidatePassed": false,
+              "baselineHardFail": false,
+              "candidateHardFail": true,
+              "critical": true,
+              "outcome": "new_failure",
+              "becamePassed": false,
+              "becameFailed": true,
+              "scoreImproved": false,
+              "scoreRegressed": true,
+              "newHardFail": true,
+              "metricDeltas": [
+                {
+                  "metricName": "final_response_match",
+                  "baselineScore": 1,
+                  "candidateScore": 0.1875,
+                  "scoreDelta": -0.8125
+                },
+                {
+                  "metricName": "knowledge_recall",
+                  "baselineScore": 1,
+                  "candidateScore": 0,
+                  "scoreDelta": -1
+                },
+                {
+                  "metricName": "llm_rubric",
+                  "baselineScore": 1,
+                  "candidateScore": 0.1,
+                  "scoreDelta": -0.9
+                },
+                {
+                  "metricName": "route_accuracy",
+                  "baselineScore": 1,
+                  "candidateScore": 0,
+                  "scoreDelta": -1
+                },
+                {
+                  "metricName": "structured_output_valid",
+                  "baselineScore": 1,
+                  "candidateScore": 1,
+                  "scoreDelta": 0
+                },
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "baselineScore": 1,
+                  "candidateScore": 1,
+                  "scoreDelta": 0
+                }
+              ]
+            },
+            {
+              "caseId": "validation_weather_unseen",
+              "baselinePresent": true,
+              "candidatePresent": true,
+              "baselineScore": 0.59,
+              "candidateScore": 0.59,
+              "scoreDelta": 0,
+              "baselinePassed": false,
+              "candidatePassed": false,
+              "baselineHardFail": true,
+              "candidateHardFail": true,
+              "critical": false,
+              "outcome": "unchanged_failure",
+              "becamePassed": false,
+              "becameFailed": false,
+              "scoreImproved": false,
+              "scoreRegressed": false,
+              "newHardFail": false,
+              "metricDeltas": [
+                {
+                  "metricName": "final_response_match",
+                  "baselineScore": 0.4,
+                  "candidateScore": 0.4,
+                  "scoreDelta": 0
+                },
+                {
+                  "metricName": "knowledge_recall",
+                  "baselineScore": 1,
+                  "candidateScore": 1,
+                  "scoreDelta": 0
+                },
+                {
+                  "metricName": "llm_rubric",
+                  "baselineScore": 0.2,
+                  "candidateScore": 0.2,
+                  "scoreDelta": 0
+                },
+                {
+                  "metricName": "route_accuracy",
+                  "baselineScore": 1,
+                  "candidateScore": 1,
+                  "scoreDelta": 0
+                },
+                {
+                  "metricName": "structured_output_valid",
+                  "baselineScore": 1,
+                  "candidateScore": 1,
+                  "scoreDelta": 0
+                },
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "baselineScore": 0.4,
+                  "candidateScore": 0.4,
+                  "scoreDelta": 0
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "gateDecision": {
+        "accepted": false,
+        "checks": [
+          {
+            "name": "evaluation_comparable",
+            "passed": true,
+            "actual": 1,
+            "comparator": "==",
+            "limit": 1,
+            "reason": "baseline and candidate cover the same cases and metrics"
+          },
+          {
+            "name": "delta_consistent",
+            "passed": true,
+            "actual": 1,
+            "comparator": "==",
+            "limit": 1,
+            "reason": "provided delta matches evaluation summaries"
+          },
+          {
+            "name": "prompt_changed",
+            "passed": true,
+            "actual": 1,
+            "comparator": "==",
+            "limit": 1,
+            "reason": "candidate prompt changed"
+          },
+          {
+            "name": "min_validation_score_gain",
+            "passed": false,
+            "actual": -0.19458299999999995,
+            "comparator": "\u003e=",
+            "limit": 0.05,
+            "reason": "validation score gain -0.194583 is below 0.050000"
+          },
+          {
+            "name": "max_new_failures",
+            "passed": false,
+            "actual": 1,
+            "comparator": "\u003c=",
+            "limit": 0,
+            "reason": "new failures 1 exceed limit 0"
+          },
+          {
+            "name": "no_new_hard_failures",
+            "passed": false,
+            "actual": 1,
+            "comparator": "==",
+            "limit": 0,
+            "reason": "candidate introduced 1 hard failures"
+          },
+          {
+            "name": "critical_cases_non_regression",
+            "passed": false,
+            "actual": 0.58375,
+            "comparator": "\u003c=",
+            "limit": 0,
+            "reason": "critical-case gate failed; regressed=[validation_critical_refund] unknown=[]"
+          },
+          {
+            "name": "max_per_case_score_drop",
+            "passed": false,
+            "actual": 0.58375,
+            "comparator": "\u003c=",
+            "limit": 0.05,
+            "reason": "maximum per-case score drop 0.583750 exceeds 0.050000 for [validation_critical_refund]"
+          },
+          {
+            "name": "max_cost_usd",
+            "passed": true,
+            "actual": 0,
+            "comparator": "\u003c=",
+            "limit": 0,
+            "reason": "candidate cost 0.000000 is within budget"
+          },
+          {
+            "name": "max_model_calls",
+            "passed": true,
+            "actual": 6,
+            "comparator": "\u003c=",
+            "limit": 6,
+            "reason": "model calls 6.000000 is within budget"
+          },
+          {
+            "name": "max_total_calls",
+            "passed": true,
+            "actual": 8,
+            "comparator": "\u003c=",
+            "limit": 10,
+            "reason": "model and tool calls 8.000000 is within budget"
+          },
+          {
+            "name": "max_latency_ms",
+            "passed": true,
+            "actual": 57,
+            "comparator": "\u003c=",
+            "limit": 120,
+            "reason": "candidate latency 57.000000 is within budget"
+          }
+        ],
+        "reasons": [
+          "validation score gain -0.194583 is below 0.050000",
+          "new failures 1 exceed limit 0",
+          "candidate introduced 1 hard failures",
+          "critical-case gate failed; regressed=[validation_critical_refund] unknown=[]",
+          "maximum per-case score drop 0.583750 exceeds 0.050000 for [validation_critical_refund]"
+        ]
+      },
+      "usage": {
+        "modelCalls": 6,
+        "toolCalls": 2,
+        "inputTokens": 424,
+        "outputTokens": 71,
+        "costUsd": 0,
+        "latencyMs": 57
+      }
+    },
+    {
+      "round": 2,
+      "candidatePrompt": {
+        "id": "candidate-balanced",
+        "content": "你是电商客服 Agent。根据用户问题直接作答；必要时调用工具。回答应简洁、礼貌。\n\n通用规则：工具参数必须从当前用户请求提取，不得复用其他 case；要求 JSON 时只输出合法 JSON；涉及政策或时效的问题必须路由到 knowledge_search 并基于召回内容作答。\n\nPromptIter 根据训练失败归因生成的通用约束：\n- 工具参数必须从当前请求提取，禁止复用其他样本参数。\n- 严格遵循要求的结构化输出格式并在返回前校验。\n- 政策与知识问题必须先召回依据，再基于证据作答。\n\n[[trpc-promptiter-candidate:candidate-balanced;seed:20260710]]",
+        "sha256": "69fc7e3d04d550956b1af9f92e2b54dba8bdbc5fd43d3496dcd89569defc4580",
+        "semanticSha256": "48188b412e0364151c49137c894668c234dddfb7e211b490e1057cfe10bfdc80",
+        "surfaceId": "support-agent#instruction",
+        "patchReason": "把失败归因转成可泛化的参数、格式和知识路由约束; matched failure categories: [tool_parameter_error format_error knowledge_retrieval_insufficient]"
+      },
+      "evaluation": {
+        "train": {
+          "evalSetId": "support-train",
+          "variantId": "candidate-balanced",
+          "passThreshold": 0.8,
+          "overallScore": 0.797193,
+          "passedCases": 2,
+          "failedCases": 1,
+          "hardFailedCases": 1,
+          "cases": [
+            {
+              "caseId": "train_weather_tool_args",
+              "critical": false,
+              "score": 1,
+              "passed": true,
+              "hardFail": false,
+              "responseVariantId": "candidate-balanced",
+              "responsePromptSemanticSha256": "48188b412e0364151c49137c894668c234dddfb7e211b490e1057cfe10bfdc80",
+              "usedFallback": false,
+              "metricResults": [
+                {
+                  "metricName": "final_response_match",
+                  "score": 1,
+                  "threshold": 0.75,
+                  "weight": 0.3,
+                  "passed": true,
+                  "hardFail": false,
+                  "reason": "final response matches reference"
+                },
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "score": 1,
+                  "threshold": 1,
+                  "weight": 0.25,
+                  "passed": true,
+                  "hardFail": true,
+                  "reason": "tool trajectory matches reference"
+                },
+                {
+                  "metricName": "route_accuracy",
+                  "score": 1,
+                  "threshold": 1,
+                  "weight": 0.15,
+                  "passed": true,
+                  "hardFail": true,
+                  "reason": "route matches reference"
+                },
+                {
+                  "metricName": "structured_output_valid",
+                  "score": 1,
+                  "threshold": 1,
+                  "weight": 0.1,
+                  "passed": true,
+                  "hardFail": true,
+                  "reason": "no structured output required"
+                },
+                {
+                  "metricName": "knowledge_recall",
+                  "score": 1,
+                  "threshold": 1,
+                  "weight": 0.1,
+                  "passed": true,
+                  "hardFail": false,
+                  "reason": "required knowledge was retrieved"
+                },
+                {
+                  "metricName": "llm_rubric",
+                  "score": 1,
+                  "threshold": 0.8,
+                  "weight": 0.1,
+                  "passed": true,
+                  "hardFail": false,
+                  "reason": "通用参数提取规则生效。"
+                }
+              ],
+              "expectedResponse": "上海当前晴，26°C。",
+              "finalResponse": "上海当前晴，26°C。",
+              "expectedToolTrajectory": [
+                {
+                  "id": "expected-weather-shanghai",
+                  "name": "get_weather",
+                  "arguments": {
+                    "city": "上海"
+                  },
+                  "result": {
+                    "condition": "晴",
+                    "temperatureC": 26
+                  }
+                }
+              ],
+              "toolTrajectory": [
+                {
+                  "id": "balanced-weather",
+                  "name": "get_weather",
+                  "arguments": {
+                    "city": "上海"
+                  },
+                  "result": {
+                    "condition": "晴",
+                    "temperatureC": 26
+                  }
+                }
+              ],
+              "expectedRoute": "weather_agent",
+              "route": "weather_agent",
+              "structuredValid": true,
+              "rubricReason": "通用参数提取规则生效。",
+              "trace": [
+                {
+                  "stepId": "train-weather-balanced-route",
+                  "kind": "route",
+                  "name": "weather_agent",
+                  "status": "completed",
+                  "elapsedMs": 1
+                },
+                {
+                  "stepId": "train-weather-balanced",
+                  "kind": "tool",
+                  "name": "get_weather",
+                  "status": "completed",
+                  "elapsedMs": 6,
+                  "input": {
+                    "city": "上海"
+                  },
+                  "output": {
+                    "condition": "晴",
+                    "temperatureC": 26
+                  }
+                },
+                {
+                  "stepId": "train-weather-balanced-final",
+                  "kind": "final_response",
+                  "status": "completed",
+                  "elapsedMs": 11,
+                  "message": "上海当前晴，26°C。",
+                  "rubricScore": 1,
+                  "rubricReason": "通用参数提取规则生效。",
+                  "usage": {
+                    "modelCalls": 1,
+                    "toolCalls": 1,
+                    "inputTokens": 78,
+                    "outputTokens": 12,
+                    "costUsd": 0,
+                    "latencyMs": 11
+                  }
+                }
+              ],
+              "usage": {
+                "modelCalls": 1,
+                "toolCalls": 1,
+                "inputTokens": 78,
+                "outputTokens": 12,
+                "costUsd": 0,
+                "latencyMs": 11
+              }
+            },
+            {
+              "caseId": "train_order_json_format",
+              "critical": false,
+              "score": 1,
+              "passed": true,
+              "hardFail": false,
+              "responseVariantId": "candidate-balanced",
+              "responsePromptSemanticSha256": "48188b412e0364151c49137c894668c234dddfb7e211b490e1057cfe10bfdc80",
+              "usedFallback": false,
+              "metricResults": [
+                {
+                  "metricName": "final_response_match",
+                  "score": 1,
+                  "threshold": 0.75,
+                  "weight": 0.3,
+                  "passed": true,
+                  "hardFail": false,
+                  "reason": "final response matches reference"
+                },
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "score": 1,
+                  "threshold": 1,
+                  "weight": 0.25,
+                  "passed": true,
+                  "hardFail": true,
+                  "reason": "tool trajectory is empty as expected"
+                },
+                {
+                  "metricName": "route_accuracy",
+                  "score": 1,
+                  "threshold": 1,
+                  "weight": 0.15,
+                  "passed": true,
+                  "hardFail": true,
+                  "reason": "route matches reference"
+                },
+                {
+                  "metricName": "structured_output_valid",
+                  "score": 1,
+                  "threshold": 1,
+                  "weight": 0.1,
+                  "passed": true,
+                  "hardFail": true,
+                  "reason": "structured output is valid"
+                },
+                {
+                  "metricName": "knowledge_recall",
+                  "score": 1,
+                  "threshold": 1,
+                  "weight": 0.1,
+                  "passed": true,
+                  "hardFail": false,
+                  "reason": "required knowledge was retrieved"
+                },
+                {
+                  "metricName": "llm_rubric",
+                  "score": 1,
+                  "threshold": 0.8,
+                  "weight": 0.1,
+                  "passed": true,
+                  "hardFail": false,
+                  "reason": "通用 JSON 约束生效。"
+                }
+              ],
+              "expectedResponse": "{\"orderId\":\"A100\",\"status\":\"ok\"}",
+              "finalResponse": "{\"orderId\":\"A100\",\"status\":\"ok\"}",
+              "expectedRoute": "order_agent",
+              "route": "order_agent",
+              "responseFormat": "json",
+              "structuredValid": true,
+              "rubricReason": "通用 JSON 约束生效。",
+              "trace": [
+                {
+                  "stepId": "train-order-balanced-route",
+                  "kind": "route",
+                  "name": "order_agent",
+                  "status": "completed",
+                  "elapsedMs": 1
+                },
+                {
+                  "stepId": "train-order-balanced",
+                  "kind": "structured_output",
+                  "status": "completed",
+                  "elapsedMs": 4
+                },
+                {
+                  "stepId": "train-order-balanced-final",
+                  "kind": "final_response",
+                  "status": "completed",
+                  "elapsedMs": 9,
+                  "message": "{\"orderId\":\"A100\",\"status\":\"ok\"}",
+                  "rubricScore": 1,
+                  "rubricReason": "通用 JSON 约束生效。",
+                  "usage": {
+                    "modelCalls": 1,
+                    "toolCalls": 0,
+                    "inputTokens": 75,
+                    "outputTokens": 16,
+                    "costUsd": 0,
+                    "latencyMs": 9
+                  }
+                }
+              ],
+              "usage": {
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "inputTokens": 75,
+                "outputTokens": 16,
+                "costUsd": 0,
+                "latencyMs": 9
+              }
+            },
+            {
+              "caseId": "train_knowledge_no_gain",
+              "critical": false,
+              "score": 0.391579,
+              "passed": false,
+              "hardFail": true,
+              "responseVariantId": "candidate-balanced",
+              "responsePromptSemanticSha256": "48188b412e0364151c49137c894668c234dddfb7e211b490e1057cfe10bfdc80",
+              "usedFallback": false,
+              "metricResults": [
+                {
+                  "metricName": "final_response_match",
+                  "score": 0.105263,
+                  "threshold": 0.75,
+                  "weight": 0.3,
+                  "passed": false,
+                  "hardFail": false,
+                  "reason": "final response ROUGE similarity is 0.105263"
+                },
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "score": 1,
+                  "threshold": 1,
+                  "weight": 0.25,
+                  "passed": true,
+                  "hardFail": true,
+                  "reason": "tool trajectory is empty as expected"
+                },
+                {
+                  "metricName": "route_accuracy",
+                  "score": 0,
+                  "threshold": 1,
+                  "weight": 0.15,
+                  "passed": false,
+                  "hardFail": true,
+                  "reason": "expected route \"knowledge_search\", got \"general_faq\""
+                },
+                {
+                  "metricName": "structured_output_valid",
+                  "score": 1,
+                  "threshold": 1,
+                  "weight": 0.1,
+                  "passed": true,
+                  "hardFail": true,
+                  "reason": "no structured output required"
+                },
+                {
+                  "metricName": "knowledge_recall",
+                  "score": 0,
+                  "threshold": 1,
+                  "weight": 0.1,
+                  "passed": false,
+                  "hardFail": false,
+                  "reason": "required knowledge retrieval is incomplete"
+                },
+                {
+                  "metricName": "llm_rubric",
+                  "score": 0.1,
+                  "threshold": 0.8,
+                  "weight": 0.1,
+                  "passed": false,
+                  "hardFail": false,
+                  "reason": "通用规则在此 case 未带来召回增益。"
+                }
+              ],
+              "expectedResponse": "退款将在 3 个工作日内到账。",
+              "finalResponse": "请咨询人工客服。",
+              "expectedRoute": "knowledge_search",
+              "route": "general_faq",
+              "structuredValid": true,
+              "requiredFacts": [
+                "refund_sla_3_days"
+              ],
+              "minRetrievedDocuments": 1,
+              "rubricReason": "通用规则在此 case 未带来召回增益。",
+              "trace": [
+                {
+                  "stepId": "train-refund-balanced-route",
+                  "kind": "route",
+                  "name": "general_faq",
+                  "status": "completed",
+                  "elapsedMs": 2
+                },
+                {
+                  "stepId": "train-refund-balanced-final",
+                  "kind": "final_response",
+                  "status": "completed",
+                  "elapsedMs": 8,
+                  "message": "请咨询人工客服。",
+                  "rubricScore": 0.1,
+                  "rubricReason": "通用规则在此 case 未带来召回增益。",
+                  "usage": {
+                    "modelCalls": 1,
+                    "toolCalls": 0,
+                    "inputTokens": 72,
+                    "outputTokens": 8,
+                    "costUsd": 0,
+                    "latencyMs": 8
+                  }
+                }
+              ],
+              "primaryFailure": {
+                "category": "route_error",
+                "confidence": 0.99,
+                "evidence": "expected route \"knowledge_search\", got \"general_faq\"",
+                "signals": [
+                  "route",
+                  "trace"
+                ]
+              },
+              "failureAttributions": [
+                {
+                  "category": "route_error",
+                  "confidence": 0.99,
+                  "evidence": "expected route \"knowledge_search\", got \"general_faq\"",
+                  "signals": [
+                    "route",
+                    "trace"
+                  ]
+                },
+                {
+                  "category": "knowledge_retrieval_insufficient",
+                  "confidence": 0.98,
+                  "evidence": "retrieved 0 documents and 0/1 required facts",
+                  "signals": [
+                    "retrieval",
+                    "knowledge_recall"
+                  ]
+                },
+                {
+                  "category": "final_response_mismatch",
+                  "confidence": 0.9,
+                  "evidence": "final response ROUGE similarity is 0.105263",
+                  "signals": [
+                    "final_response_match",
+                    "final_response"
+                  ]
+                }
+              ],
+              "usage": {
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "inputTokens": 72,
+                "outputTokens": 8,
+                "costUsd": 0,
+                "latencyMs": 8
+              }
+            }
+          ],
+          "attributionStats": {
+            "route_error": 1
+          },
+          "usage": {
+            "modelCalls": 3,
+            "toolCalls": 1,
+            "inputTokens": 225,
+            "outputTokens": 36,
+            "costUsd": 0,
+            "latencyMs": 28
+          }
+        },
+        "validation": {
+          "evalSetId": "support-validation",
+          "variantId": "candidate-balanced",
+          "passThreshold": 0.8,
+          "overallScore": 0.856667,
+          "passedCases": 2,
+          "failedCases": 1,
+          "hardFailedCases": 0,
+          "cases": [
+            {
+              "caseId": "validation_weather_unseen",
+              "critical": false,
+              "score": 1,
+              "passed": true,
+              "hardFail": false,
+              "responseVariantId": "candidate-balanced",
+              "responsePromptSemanticSha256": "48188b412e0364151c49137c894668c234dddfb7e211b490e1057cfe10bfdc80",
+              "usedFallback": false,
+              "metricResults": [
+                {
+                  "metricName": "final_response_match",
+                  "score": 1,
+                  "threshold": 0.75,
+                  "weight": 0.3,
+                  "passed": true,
+                  "hardFail": false,
+                  "reason": "final response matches reference"
+                },
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "score": 1,
+                  "threshold": 1,
+                  "weight": 0.25,
+                  "passed": true,
+                  "hardFail": true,
+                  "reason": "tool trajectory matches reference"
+                },
+                {
+                  "metricName": "route_accuracy",
+                  "score": 1,
+                  "threshold": 1,
+                  "weight": 0.15,
+                  "passed": true,
+                  "hardFail": true,
+                  "reason": "route matches reference"
+                },
+                {
+                  "metricName": "structured_output_valid",
+                  "score": 1,
+                  "threshold": 1,
+                  "weight": 0.1,
+                  "passed": true,
+                  "hardFail": true,
+                  "reason": "no structured output required"
+                },
+                {
+                  "metricName": "knowledge_recall",
+                  "score": 1,
+                  "threshold": 1,
+                  "weight": 0.1,
+                  "passed": true,
+                  "hardFail": false,
+                  "reason": "required knowledge was retrieved"
+                },
+                {
+                  "metricName": "llm_rubric",
+                  "score": 1,
+                  "threshold": 0.8,
+                  "weight": 0.1,
+                  "passed": true,
+                  "hardFail": false,
+                  "reason": "从当前请求提取城市，未复用训练样本。"
+                }
+              ],
+              "expectedResponse": "广州当前小雨，24°C。",
+              "finalResponse": "广州当前小雨，24°C。",
+              "expectedToolTrajectory": [
+                {
+                  "id": "expected-weather-guangzhou",
+                  "name": "get_weather",
+                  "arguments": {
+                    "city": "广州"
+                  },
+                  "result": {
+                    "condition": "小雨",
+                    "temperatureC": 24
+                  }
+                }
+              ],
+              "toolTrajectory": [
+                {
+                  "id": "balanced-weather-guangzhou",
+                  "name": "get_weather",
+                  "arguments": {
+                    "city": "广州"
+                  },
+                  "result": {
+                    "condition": "小雨",
+                    "temperatureC": 24
+                  }
+                }
+              ],
+              "expectedRoute": "weather_agent",
+              "route": "weather_agent",
+              "structuredValid": true,
+              "rubricReason": "从当前请求提取城市，未复用训练样本。",
+              "trace": [
+                {
+                  "stepId": "validation-weather-balanced-route",
+                  "kind": "route",
+                  "name": "weather_agent",
+                  "status": "completed",
+                  "elapsedMs": 1
+                },
+                {
+                  "stepId": "validation-weather-balanced",
+                  "kind": "tool",
+                  "name": "get_weather",
+                  "status": "completed",
+                  "elapsedMs": 6,
+                  "input": {
+                    "city": "广州"
+                  },
+                  "output": {
+                    "condition": "小雨",
+                    "temperatureC": 24
+                  }
+                },
+                {
+                  "stepId": "validation-weather-balanced-final",
+                  "kind": "final_response",
+                  "status": "completed",
+                  "elapsedMs": 11,
+                  "message": "广州当前小雨，24°C。",
+                  "rubricScore": 1,
+                  "rubricReason": "从当前请求提取城市，未复用训练样本。",
+                  "usage": {
+                    "modelCalls": 1,
+                    "toolCalls": 1,
+                    "inputTokens": 78,
+                    "outputTokens": 12,
+                    "costUsd": 0,
+                    "latencyMs": 11
+                  }
+                }
+              ],
+              "usage": {
+                "modelCalls": 1,
+                "toolCalls": 1,
+                "inputTokens": 78,
+                "outputTokens": 12,
+                "costUsd": 0,
+                "latencyMs": 11
+              }
+            },
+            {
+              "caseId": "validation_critical_refund",
+              "critical": true,
+              "score": 1,
+              "passed": true,
+              "hardFail": false,
+              "responseVariantId": "candidate-balanced",
+              "responsePromptSemanticSha256": "48188b412e0364151c49137c894668c234dddfb7e211b490e1057cfe10bfdc80",
+              "usedFallback": false,
+              "metricResults": [
+                {
+                  "metricName": "final_response_match",
+                  "score": 1,
+                  "threshold": 0.75,
+                  "weight": 0.3,
+                  "passed": true,
+                  "hardFail": false,
+                  "reason": "final response matches reference"
+                },
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "score": 1,
+                  "threshold": 1,
+                  "weight": 0.25,
+                  "passed": true,
+                  "hardFail": true,
+                  "reason": "tool trajectory is empty as expected"
+                },
+                {
+                  "metricName": "route_accuracy",
+                  "score": 1,
+                  "threshold": 1,
+                  "weight": 0.15,
+                  "passed": true,
+                  "hardFail": true,
+                  "reason": "route matches reference"
+                },
+                {
+                  "metricName": "structured_output_valid",
+                  "score": 1,
+                  "threshold": 1,
+                  "weight": 0.1,
+                  "passed": true,
+                  "hardFail": true,
+                  "reason": "no structured output required"
+                },
+                {
+                  "metricName": "knowledge_recall",
+                  "score": 1,
+                  "threshold": 1,
+                  "weight": 0.1,
+                  "passed": true,
+                  "hardFail": false,
+                  "reason": "required knowledge was retrieved"
+                },
+                {
+                  "metricName": "llm_rubric",
+                  "score": 1,
+                  "threshold": 0.8,
+                  "weight": 0.1,
+                  "passed": true,
+                  "hardFail": false,
+                  "reason": "通用知识路由规则保持关键政策回答准确。"
+                }
+              ],
+              "expectedResponse": "审核通过后，退款将在 3 个工作日内到账。",
+              "finalResponse": "审核通过后，退款将在 3 个工作日内到账。",
+              "expectedRoute": "knowledge_search",
+              "route": "knowledge_search",
+              "structuredValid": true,
+              "requiredFacts": [
+                "refund_sla_3_days"
+              ],
+              "retrievedFacts": [
+                "refund_sla_3_days"
+              ],
+              "minRetrievedDocuments": 1,
+              "retrievedDocuments": 1,
+              "rubricReason": "通用知识路由规则保持关键政策回答准确。",
+              "trace": [
+                {
+                  "stepId": "validation-refund-balanced-route",
+                  "kind": "route",
+                  "name": "knowledge_search",
+                  "status": "completed",
+                  "elapsedMs": 1
+                },
+                {
+                  "stepId": "validation-refund-balanced-retrieval",
+                  "kind": "retrieval",
+                  "name": "knowledge_search",
+                  "status": "completed",
+                  "elapsedMs": 6,
+                  "output": {
+                    "documents": 1,
+                    "facts": [
+                      "refund_sla_3_days"
+                    ],
+                    "matchedFacts": 1
+                  }
+                },
+                {
+                  "stepId": "validation-refund-balanced-final",
+                  "kind": "final_response",
+                  "status": "completed",
+                  "elapsedMs": 10,
+                  "message": "审核通过后，退款将在 3 个工作日内到账。",
+                  "rubricScore": 1,
+                  "rubricReason": "通用知识路由规则保持关键政策回答准确。",
+                  "usage": {
+                    "modelCalls": 1,
+                    "toolCalls": 0,
+                    "inputTokens": 83,
+                    "outputTokens": 15,
+                    "costUsd": 0,
+                    "latencyMs": 10
+                  }
+                }
+              ],
+              "usage": {
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "inputTokens": 83,
+                "outputTokens": 15,
+                "costUsd": 0,
+                "latencyMs": 10
+              }
+            },
+            {
+              "caseId": "validation_coupon_no_gain",
+              "critical": false,
+              "score": 0.57,
+              "passed": false,
+              "hardFail": false,
+              "responseVariantId": "candidate-balanced",
+              "responsePromptSemanticSha256": "48188b412e0364151c49137c894668c234dddfb7e211b490e1057cfe10bfdc80",
+              "usedFallback": false,
+              "metricResults": [
+                {
+                  "metricName": "final_response_match",
+                  "score": 0,
+                  "threshold": 0.75,
+                  "weight": 0.3,
+                  "passed": false,
+                  "hardFail": false,
+                  "reason": "final response ROUGE similarity is 0.000000"
+                },
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "score": 1,
+                  "threshold": 1,
+                  "weight": 0.25,
+                  "passed": true,
+                  "hardFail": true,
+                  "reason": "tool trajectory is empty as expected"
+                },
+                {
+                  "metricName": "route_accuracy",
+                  "score": 1,
+                  "threshold": 1,
+                  "weight": 0.15,
+                  "passed": true,
+                  "hardFail": true,
+                  "reason": "route matches reference"
+                },
+                {
+                  "metricName": "structured_output_valid",
+                  "score": 1,
+                  "threshold": 1,
+                  "weight": 0.1,
+                  "passed": true,
+                  "hardFail": true,
+                  "reason": "no structured output required"
+                },
+                {
+                  "metricName": "knowledge_recall",
+                  "score": 0.5,
+                  "threshold": 1,
+                  "weight": 0.1,
+                  "passed": false,
+                  "hardFail": false,
+                  "reason": "required knowledge retrieval is incomplete"
+                },
+                {
+                  "metricName": "llm_rubric",
+                  "score": 0.2,
+                  "threshold": 0.8,
+                  "weight": 0.1,
+                  "passed": false,
+                  "hardFail": false,
+                  "reason": "已重新执行候选，但检索仍未召回优惠券叠加规则。"
+                }
+              ],
+              "expectedResponse": "会员券不能与满减券叠加使用。",
+              "finalResponse": "优惠规则以结算页为准。",
+              "expectedRoute": "knowledge_search",
+              "route": "knowledge_search",
+              "structuredValid": true,
+              "requiredFacts": [
+                "coupon_stack_forbidden"
+              ],
+              "minRetrievedDocuments": 1,
+              "retrievedDocuments": 1,
+              "rubricReason": "已重新执行候选，但检索仍未召回优惠券叠加规则。",
+              "trace": [
+                {
+                  "stepId": "validation-coupon-balanced-route",
+                  "kind": "route",
+                  "name": "knowledge_search",
+                  "status": "completed",
+                  "elapsedMs": 1
+                },
+                {
+                  "stepId": "validation-coupon-balanced-retrieval",
+                  "kind": "retrieval",
+                  "name": "knowledge_search",
+                  "status": "completed",
+                  "elapsedMs": 5,
+                  "output": {
+                    "documents": 1,
+                    "facts": [],
+                    "matchedFacts": 0
+                  }
+                },
+                {
+                  "stepId": "validation-coupon-balanced-final",
+                  "kind": "final_response",
+                  "status": "completed",
+                  "elapsedMs": 9,
+                  "message": "优惠规则以结算页为准。",
+                  "rubricScore": 0.2,
+                  "rubricReason": "已重新执行候选，但检索仍未召回优惠券叠加规则。",
+                  "usage": {
+                    "modelCalls": 1,
+                    "toolCalls": 0,
+                    "inputTokens": 80,
+                    "outputTokens": 10,
+                    "costUsd": 0,
+                    "latencyMs": 9
+                  }
+                }
+              ],
+              "primaryFailure": {
+                "category": "knowledge_retrieval_insufficient",
+                "confidence": 0.98,
+                "evidence": "retrieved 1 documents and 0/1 required facts",
+                "signals": [
+                  "retrieval",
+                  "knowledge_recall"
+                ]
+              },
+              "failureAttributions": [
+                {
+                  "category": "knowledge_retrieval_insufficient",
+                  "confidence": 0.98,
+                  "evidence": "retrieved 1 documents and 0/1 required facts",
+                  "signals": [
+                    "retrieval",
+                    "knowledge_recall"
+                  ]
+                },
+                {
+                  "category": "final_response_mismatch",
+                  "confidence": 0.9,
+                  "evidence": "final response ROUGE similarity is 0.000000",
+                  "signals": [
+                    "final_response_match",
+                    "final_response"
+                  ]
+                }
+              ],
+              "usage": {
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "inputTokens": 80,
+                "outputTokens": 10,
+                "costUsd": 0,
+                "latencyMs": 9
+              }
+            }
+          ],
+          "attributionStats": {
+            "knowledge_retrieval_insufficient": 1
+          },
+          "usage": {
+            "modelCalls": 3,
+            "toolCalls": 1,
+            "inputTokens": 241,
+            "outputTokens": 37,
+            "costUsd": 0,
+            "latencyMs": 30
+          }
+        }
+      },
+      "delta": {
+        "train": {
+          "baselineScore": 0.522041,
+          "candidateScore": 0.797193,
+          "scoreDelta": 0.27515200000000006,
+          "newPasses": 2,
+          "newFailures": 0,
+          "scoreImprovements": 2,
+          "scoreRegressions": 0,
+          "newHardFails": 0,
+          "complete": true,
+          "cases": [
+            {
+              "caseId": "train_knowledge_no_gain",
+              "baselinePresent": true,
+              "candidatePresent": true,
+              "baselineScore": 0.391579,
+              "candidateScore": 0.391579,
+              "scoreDelta": 0,
+              "baselinePassed": false,
+              "candidatePassed": false,
+              "baselineHardFail": true,
+              "candidateHardFail": true,
+              "critical": false,
+              "outcome": "unchanged_failure",
+              "becamePassed": false,
+              "becameFailed": false,
+              "scoreImproved": false,
+              "scoreRegressed": false,
+              "newHardFail": false,
+              "metricDeltas": [
+                {
+                  "metricName": "final_response_match",
+                  "baselineScore": 0.105263,
+                  "candidateScore": 0.105263,
+                  "scoreDelta": 0
+                },
+                {
+                  "metricName": "knowledge_recall",
+                  "baselineScore": 0,
+                  "candidateScore": 0,
+                  "scoreDelta": 0
+                },
+                {
+                  "metricName": "llm_rubric",
+                  "baselineScore": 0.1,
+                  "candidateScore": 0.1,
+                  "scoreDelta": 0
+                },
+                {
+                  "metricName": "route_accuracy",
+                  "baselineScore": 0,
+                  "candidateScore": 0,
+                  "scoreDelta": 0
+                },
+                {
+                  "metricName": "structured_output_valid",
+                  "baselineScore": 1,
+                  "candidateScore": 1,
+                  "scoreDelta": 0
+                },
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "baselineScore": 1,
+                  "candidateScore": 1,
+                  "scoreDelta": 0
+                }
+              ]
+            },
+            {
+              "caseId": "train_order_json_format",
+              "baselinePresent": true,
+              "candidatePresent": true,
+              "baselineScore": 0.584545,
+              "candidateScore": 1,
+              "scoreDelta": 0.415455,
+              "baselinePassed": false,
+              "candidatePassed": true,
+              "baselineHardFail": true,
+              "candidateHardFail": false,
+              "critical": false,
+              "outcome": "new_pass",
+              "becamePassed": true,
+              "becameFailed": false,
+              "scoreImproved": true,
+              "scoreRegressed": false,
+              "newHardFail": false,
+              "metricDeltas": [
+                {
+                  "metricName": "final_response_match",
+                  "baselineScore": 0.181818,
+                  "candidateScore": 1,
+                  "scoreDelta": 0.818182
+                },
+                {
+                  "metricName": "knowledge_recall",
+                  "baselineScore": 1,
+                  "candidateScore": 1,
+                  "scoreDelta": 0
+                },
+                {
+                  "metricName": "llm_rubric",
+                  "baselineScore": 0.3,
+                  "candidateScore": 1,
+                  "scoreDelta": 0.7
+                },
+                {
+                  "metricName": "route_accuracy",
+                  "baselineScore": 1,
+                  "candidateScore": 1,
+                  "scoreDelta": 0
+                },
+                {
+                  "metricName": "structured_output_valid",
+                  "baselineScore": 0,
+                  "candidateScore": 1,
+                  "scoreDelta": 1
+                },
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "baselineScore": 1,
+                  "candidateScore": 1,
+                  "scoreDelta": 0
+                }
+              ]
+            },
+            {
+              "caseId": "train_weather_tool_args",
+              "baselinePresent": true,
+              "candidatePresent": true,
+              "baselineScore": 0.59,
+              "candidateScore": 1,
+              "scoreDelta": 0.41000000000000003,
+              "baselinePassed": false,
+              "candidatePassed": true,
+              "baselineHardFail": true,
+              "candidateHardFail": false,
+              "critical": false,
+              "outcome": "new_pass",
+              "becamePassed": true,
+              "becameFailed": false,
+              "scoreImproved": true,
+              "scoreRegressed": false,
+              "newHardFail": false,
+              "metricDeltas": [
+                {
+                  "metricName": "final_response_match",
+                  "baselineScore": 0.4,
+                  "candidateScore": 1,
+                  "scoreDelta": 0.6
+                },
+                {
+                  "metricName": "knowledge_recall",
+                  "baselineScore": 1,
+                  "candidateScore": 1,
+                  "scoreDelta": 0
+                },
+                {
+                  "metricName": "llm_rubric",
+                  "baselineScore": 0.2,
+                  "candidateScore": 1,
+                  "scoreDelta": 0.8
+                },
+                {
+                  "metricName": "route_accuracy",
+                  "baselineScore": 1,
+                  "candidateScore": 1,
+                  "scoreDelta": 0
+                },
+                {
+                  "metricName": "structured_output_valid",
+                  "baselineScore": 1,
+                  "candidateScore": 1,
+                  "scoreDelta": 0
+                },
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "baselineScore": 0.4,
+                  "candidateScore": 1,
+                  "scoreDelta": 0.6
+                }
+              ]
+            }
+          ]
+        },
+        "validation": {
+          "baselineScore": 0.72,
+          "candidateScore": 0.856667,
+          "scoreDelta": 0.13666699999999998,
+          "newPasses": 1,
+          "newFailures": 0,
+          "scoreImprovements": 1,
+          "scoreRegressions": 0,
+          "newHardFails": 0,
+          "complete": true,
+          "cases": [
+            {
+              "caseId": "validation_coupon_no_gain",
+              "baselinePresent": true,
+              "candidatePresent": true,
+              "baselineScore": 0.57,
+              "candidateScore": 0.57,
+              "scoreDelta": 0,
+              "baselinePassed": false,
+              "candidatePassed": false,
+              "baselineHardFail": false,
+              "candidateHardFail": false,
+              "critical": false,
+              "outcome": "unchanged_failure",
+              "becamePassed": false,
+              "becameFailed": false,
+              "scoreImproved": false,
+              "scoreRegressed": false,
+              "newHardFail": false,
+              "metricDeltas": [
+                {
+                  "metricName": "final_response_match",
+                  "baselineScore": 0,
+                  "candidateScore": 0,
+                  "scoreDelta": 0
+                },
+                {
+                  "metricName": "knowledge_recall",
+                  "baselineScore": 0.5,
+                  "candidateScore": 0.5,
+                  "scoreDelta": 0
+                },
+                {
+                  "metricName": "llm_rubric",
+                  "baselineScore": 0.2,
+                  "candidateScore": 0.2,
+                  "scoreDelta": 0
+                },
+                {
+                  "metricName": "route_accuracy",
+                  "baselineScore": 1,
+                  "candidateScore": 1,
+                  "scoreDelta": 0
+                },
+                {
+                  "metricName": "structured_output_valid",
+                  "baselineScore": 1,
+                  "candidateScore": 1,
+                  "scoreDelta": 0
+                },
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "baselineScore": 1,
+                  "candidateScore": 1,
+                  "scoreDelta": 0
+                }
+              ]
+            },
+            {
+              "caseId": "validation_critical_refund",
+              "baselinePresent": true,
+              "candidatePresent": true,
+              "baselineScore": 1,
+              "candidateScore": 1,
+              "scoreDelta": 0,
+              "baselinePassed": true,
+              "candidatePassed": true,
+              "baselineHardFail": false,
+              "candidateHardFail": false,
+              "critical": true,
+              "outcome": "unchanged_pass",
+              "becamePassed": false,
+              "becameFailed": false,
+              "scoreImproved": false,
+              "scoreRegressed": false,
+              "newHardFail": false,
+              "metricDeltas": [
+                {
+                  "metricName": "final_response_match",
+                  "baselineScore": 1,
+                  "candidateScore": 1,
+                  "scoreDelta": 0
+                },
+                {
+                  "metricName": "knowledge_recall",
+                  "baselineScore": 1,
+                  "candidateScore": 1,
+                  "scoreDelta": 0
+                },
+                {
+                  "metricName": "llm_rubric",
+                  "baselineScore": 1,
+                  "candidateScore": 1,
+                  "scoreDelta": 0
+                },
+                {
+                  "metricName": "route_accuracy",
+                  "baselineScore": 1,
+                  "candidateScore": 1,
+                  "scoreDelta": 0
+                },
+                {
+                  "metricName": "structured_output_valid",
+                  "baselineScore": 1,
+                  "candidateScore": 1,
+                  "scoreDelta": 0
+                },
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "baselineScore": 1,
+                  "candidateScore": 1,
+                  "scoreDelta": 0
+                }
+              ]
+            },
+            {
+              "caseId": "validation_weather_unseen",
+              "baselinePresent": true,
+              "candidatePresent": true,
+              "baselineScore": 0.59,
+              "candidateScore": 1,
+              "scoreDelta": 0.41000000000000003,
+              "baselinePassed": false,
+              "candidatePassed": true,
+              "baselineHardFail": true,
+              "candidateHardFail": false,
+              "critical": false,
+              "outcome": "new_pass",
+              "becamePassed": true,
+              "becameFailed": false,
+              "scoreImproved": true,
+              "scoreRegressed": false,
+              "newHardFail": false,
+              "metricDeltas": [
+                {
+                  "metricName": "final_response_match",
+                  "baselineScore": 0.4,
+                  "candidateScore": 1,
+                  "scoreDelta": 0.6
+                },
+                {
+                  "metricName": "knowledge_recall",
+                  "baselineScore": 1,
+                  "candidateScore": 1,
+                  "scoreDelta": 0
+                },
+                {
+                  "metricName": "llm_rubric",
+                  "baselineScore": 0.2,
+                  "candidateScore": 1,
+                  "scoreDelta": 0.8
+                },
+                {
+                  "metricName": "route_accuracy",
+                  "baselineScore": 1,
+                  "candidateScore": 1,
+                  "scoreDelta": 0
+                },
+                {
+                  "metricName": "structured_output_valid",
+                  "baselineScore": 1,
+                  "candidateScore": 1,
+                  "scoreDelta": 0
+                },
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "baselineScore": 0.4,
+                  "candidateScore": 1,
+                  "scoreDelta": 0.6
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "gateDecision": {
+        "accepted": true,
+        "checks": [
+          {
+            "name": "evaluation_comparable",
+            "passed": true,
+            "actual": 1,
+            "comparator": "==",
+            "limit": 1,
+            "reason": "baseline and candidate cover the same cases and metrics"
+          },
+          {
+            "name": "delta_consistent",
+            "passed": true,
+            "actual": 1,
+            "comparator": "==",
+            "limit": 1,
+            "reason": "provided delta matches evaluation summaries"
+          },
+          {
+            "name": "prompt_changed",
+            "passed": true,
+            "actual": 1,
+            "comparator": "==",
+            "limit": 1,
+            "reason": "candidate prompt changed"
+          },
+          {
+            "name": "min_validation_score_gain",
+            "passed": true,
+            "actual": 0.13666699999999998,
+            "comparator": "\u003e=",
+            "limit": 0.05,
+            "reason": "validation score gain 0.136667 meets threshold"
+          },
+          {
+            "name": "max_new_failures",
+            "passed": true,
+            "actual": 0,
+            "comparator": "\u003c=",
+            "limit": 0,
+            "reason": "new failures 0 are within limit"
+          },
+          {
+            "name": "no_new_hard_failures",
+            "passed": true,
+            "actual": 0,
+            "comparator": "==",
+            "limit": 0,
+            "reason": "candidate introduced no hard failures"
+          },
+          {
+            "name": "critical_cases_non_regression",
+            "passed": true,
+            "actual": 0,
+            "comparator": "\u003c=",
+            "limit": 0,
+            "reason": "critical cases did not regress"
+          },
+          {
+            "name": "max_per_case_score_drop",
+            "passed": true,
+            "actual": 0,
+            "comparator": "\u003c=",
+            "limit": 0.05,
+            "reason": "maximum per-case score drop 0.000000 is within limit"
+          },
+          {
+            "name": "max_cost_usd",
+            "passed": true,
+            "actual": 0,
+            "comparator": "\u003c=",
+            "limit": 0,
+            "reason": "candidate cost 0.000000 is within budget"
+          },
+          {
+            "name": "max_model_calls",
+            "passed": true,
+            "actual": 6,
+            "comparator": "\u003c=",
+            "limit": 6,
+            "reason": "model calls 6.000000 is within budget"
+          },
+          {
+            "name": "max_total_calls",
+            "passed": true,
+            "actual": 8,
+            "comparator": "\u003c=",
+            "limit": 10,
+            "reason": "model and tool calls 8.000000 is within budget"
+          },
+          {
+            "name": "max_latency_ms",
+            "passed": true,
+            "actual": 58,
+            "comparator": "\u003c=",
+            "limit": 120,
+            "reason": "candidate latency 58.000000 is within budget"
+          }
+        ],
+        "reasons": [
+          "all acceptance checks passed"
+        ]
+      },
+      "usage": {
+        "modelCalls": 6,
+        "toolCalls": 2,
+        "inputTokens": 466,
+        "outputTokens": 73,
+        "costUsd": 0,
+        "latencyMs": 58
+      }
+    }
+  ]
+}
