@@ -163,6 +163,9 @@ func TestModel_convertMessages(t *testing.T) {
 		imageURL  = "imageURL"
 		imageData = "imageData"
 		audioURL  = "audioURL"
+		audioData = "audioData"
+		videoURL  = "videoURL"
+		videoData = "videoData"
 		fileURL   = "fileURL"
 	)
 	type fields struct {
@@ -249,7 +252,15 @@ func TestModel_convertMessages(t *testing.T) {
 							{
 								Type: model.ContentTypeAudio,
 								Audio: &model.Audio{
-									Data: []byte(audioURL),
+									URL:    audioURL,
+									Format: "audio/mpeg",
+								},
+							},
+							{
+								Type: model.ContentTypeAudio,
+								Audio: &model.Audio{
+									Data:   []byte(audioData),
+									Format: "audio/wav",
 								},
 							},
 						},
@@ -258,7 +269,47 @@ func TestModel_convertMessages(t *testing.T) {
 			},
 			want: []*genai.Content{
 				genai.NewContentFromParts([]*genai.Part{
-					genai.NewPartFromBytes([]byte(audioURL), ""),
+					genai.NewPartFromURI(audioURL, "audio/mpeg"),
+				}, genai.RoleUser),
+				genai.NewContentFromParts([]*genai.Part{
+					genai.NewPartFromBytes([]byte(audioData), "audio/wav"),
+				}, genai.RoleUser),
+			},
+		},
+		{
+			name: "video",
+			fields: fields{
+				m: &Model{},
+			},
+			args: args{
+				messages: []model.Message{
+					{
+						Role: model.RoleUser,
+						ContentParts: []model.ContentPart{
+							{
+								Type: model.ContentTypeVideo,
+								Video: &model.Video{
+									URL:    videoURL,
+									Format: "video/mp4",
+								},
+							},
+							{
+								Type: model.ContentTypeVideo,
+								Video: &model.Video{
+									Data:   []byte(videoData),
+									Format: "video/mp4",
+								},
+							},
+						},
+					},
+				},
+			},
+			want: []*genai.Content{
+				genai.NewContentFromParts([]*genai.Part{
+					genai.NewPartFromURI(videoURL, "video/mp4"),
+				}, genai.RoleUser),
+				genai.NewContentFromParts([]*genai.Part{
+					genai.NewPartFromBytes([]byte(videoData), "video/mp4"),
 				}, genai.RoleUser),
 			},
 		},

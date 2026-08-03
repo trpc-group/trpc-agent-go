@@ -97,6 +97,103 @@ func TestUserMessageFromInputContentsTextAndImageURL(t *testing.T) {
 	assert.Equal(t, "image/jpeg", msg.ContentParts[1].Image.Format)
 }
 
+func TestUserMessageFromInputContentsTypedImageData(t *testing.T) {
+	payload := []byte{0x01, 0x02, 0x03}
+	msg, err := UserMessageFromInputContents([]types.InputContent{
+		{
+			Type: types.InputContentTypeImage,
+			Source: &types.InputContentSource{
+				Type:     types.InputContentSourceTypeData,
+				Value:    base64.StdEncoding.EncodeToString(payload),
+				MimeType: "image/png",
+			},
+			Metadata: map[string]any{"filename": "demo.png"},
+		},
+		{Type: types.InputContentTypeText, Text: "describe this image"},
+	})
+	require.NoError(t, err)
+	require.Len(t, msg.ContentParts, 2)
+
+	assert.Equal(t, model.ContentTypeImage, msg.ContentParts[0].Type)
+	require.NotNil(t, msg.ContentParts[0].Image)
+	assert.Equal(t, payload, msg.ContentParts[0].Image.Data)
+	assert.Equal(t, "png", msg.ContentParts[0].Image.Format)
+
+	assert.Equal(t, model.ContentTypeText, msg.ContentParts[1].Type)
+	require.NotNil(t, msg.ContentParts[1].Text)
+	assert.Equal(t, "describe this image", *msg.ContentParts[1].Text)
+}
+
+func TestUserMessageFromInputContentsTypedImageURL(t *testing.T) {
+	msg, err := UserMessageFromInputContents([]types.InputContent{{
+		Type: types.InputContentTypeImage,
+		Source: &types.InputContentSource{
+			Type:  types.InputContentSourceTypeURL,
+			Value: " https://example.com/a.jpg ",
+		},
+	}})
+	require.NoError(t, err)
+	require.Len(t, msg.ContentParts, 1)
+	assert.Equal(t, model.ContentTypeImage, msg.ContentParts[0].Type)
+	require.NotNil(t, msg.ContentParts[0].Image)
+	assert.Equal(t, "https://example.com/a.jpg", msg.ContentParts[0].Image.URL)
+}
+
+func TestUserMessageFromInputContentsTypedAudioURL(t *testing.T) {
+	msg, err := UserMessageFromInputContents([]types.InputContent{{
+		Type: types.InputContentTypeAudio,
+		Source: &types.InputContentSource{
+			Type:     types.InputContentSourceTypeURL,
+			Value:    "https://example.com/audio.mp3",
+			MimeType: "audio/mpeg",
+		},
+	}})
+	require.NoError(t, err)
+	require.Len(t, msg.ContentParts, 1)
+	assert.Equal(t, model.ContentTypeAudio, msg.ContentParts[0].Type)
+	require.NotNil(t, msg.ContentParts[0].Audio)
+	assert.Equal(t, "https://example.com/audio.mp3", msg.ContentParts[0].Audio.URL)
+	assert.Equal(t, "audio/mpeg", msg.ContentParts[0].Audio.Format)
+}
+
+func TestUserMessageFromInputContentsTypedVideoData(t *testing.T) {
+	payload := []byte("video")
+	msg, err := UserMessageFromInputContents([]types.InputContent{{
+		Type: types.InputContentTypeVideo,
+		Source: &types.InputContentSource{
+			Type:     types.InputContentSourceTypeData,
+			Value:    base64.StdEncoding.EncodeToString(payload),
+			MimeType: "video/mp4",
+		},
+	}})
+	require.NoError(t, err)
+	require.Len(t, msg.ContentParts, 1)
+	assert.Equal(t, model.ContentTypeVideo, msg.ContentParts[0].Type)
+	require.NotNil(t, msg.ContentParts[0].Video)
+	assert.Equal(t, payload, msg.ContentParts[0].Video.Data)
+	assert.Equal(t, "mp4", msg.ContentParts[0].Video.Format)
+}
+
+func TestUserMessageFromInputContentsTypedDocumentData(t *testing.T) {
+	payload := []byte("document")
+	msg, err := UserMessageFromInputContents([]types.InputContent{{
+		Type: types.InputContentTypeDocument,
+		Source: &types.InputContentSource{
+			Type:     types.InputContentSourceTypeData,
+			Value:    base64.StdEncoding.EncodeToString(payload),
+			MimeType: "application/pdf",
+		},
+		Metadata: map[string]any{"filename": "demo.pdf"},
+	}})
+	require.NoError(t, err)
+	require.Len(t, msg.ContentParts, 1)
+	assert.Equal(t, model.ContentTypeFile, msg.ContentParts[0].Type)
+	require.NotNil(t, msg.ContentParts[0].File)
+	assert.Empty(t, msg.ContentParts[0].File.Name)
+	assert.Equal(t, payload, msg.ContentParts[0].File.Data)
+	assert.Equal(t, "application/pdf", msg.ContentParts[0].File.MimeType)
+}
+
 func TestUserMessageFromInputContentsBinaryURLFile(t *testing.T) {
 	msg, err := UserMessageFromInputContents([]types.InputContent{
 		{

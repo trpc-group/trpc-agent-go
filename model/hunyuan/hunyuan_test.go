@@ -757,7 +757,14 @@ func TestConvertMessage(t *testing.T) {
 		{
 			Type: model.ContentTypeAudio,
 			Audio: &model.Audio{
-				Data: []byte("audio data"),
+				URL: "https://example.com/audio.mp3",
+			},
+		},
+		{
+			Type: model.ContentTypeVideo,
+			Video: &model.Video{
+				Data:   []byte("video data"),
+				Format: "mp4",
 			},
 		},
 	}
@@ -766,9 +773,13 @@ func TestConvertMessage(t *testing.T) {
 		t.Fatalf("convertMessage failed: %v", err)
 	}
 
-	if len(hMsg.Contents) != 3 {
-		t.Fatalf("Expected 3 content parts, got %d", len(hMsg.Contents))
+	if len(hMsg.Contents) != 4 {
+		t.Fatalf("Expected 4 content parts, got %d", len(hMsg.Contents))
 	}
+	assert.Equal(t, "audio_url", hMsg.Contents[2].Type)
+	assert.Equal(t, "https://example.com/audio.mp3", hMsg.Contents[2].VideoUrl.Url)
+	assert.Equal(t, "video_url", hMsg.Contents[3].Type)
+	assert.Equal(t, "data:video/mp4;base64,dmlkZW8gZGF0YQ==", hMsg.Contents[3].VideoUrl.Url)
 }
 
 func TestTokenTailoringOptions(t *testing.T) {
@@ -1482,18 +1493,14 @@ func TestImageToURLOrBase64(t *testing.T) {
 	}
 }
 
-func TestAudioToBase64(t *testing.T) {
-	audio := &model.Audio{
-		Format: "audio/mp3",
+func TestAudioToURLOrBase64(t *testing.T) {
+	assert.Equal(t, "https://example.com/audio.mp3", audioToURLOrBase64(&model.Audio{
+		URL: "https://example.com/audio.mp3",
+	}))
+	assert.Equal(t, "data:audio/mp3;base64,dGVzdCBhdWRpbyBkYXRh", audioToURLOrBase64(&model.Audio{
+		Format: "mp3",
 		Data:   []byte("test audio data"),
-	}
-
-	result := audioToBase64(audio)
-	expected := "data:audio/mp3;base64,dGVzdCBhdWRpbyBkYXRh"
-
-	if result != expected {
-		t.Errorf("Expected %s, got %s", expected, result)
-	}
+	}))
 }
 
 // Test_buildToolDescription tests tool description building.

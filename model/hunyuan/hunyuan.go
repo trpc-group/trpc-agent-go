@@ -613,7 +613,16 @@ func convertMessage(msg model.Message) (*hunyuan.ChatCompletionMessageParam, err
 					contents = append(contents, &hunyuan.ChatCompletionMessageContentParam{
 						Type: "audio_url",
 						VideoUrl: &hunyuan.ChatCompletionContentVideoUrlParam{
-							Url: audioToBase64(part.Audio),
+							Url: audioToURLOrBase64(part.Audio),
+						},
+					})
+				}
+			case model.ContentTypeVideo:
+				if part.Video != nil {
+					contents = append(contents, &hunyuan.ChatCompletionMessageContentParam{
+						Type: "video_url",
+						VideoUrl: &hunyuan.ChatCompletionContentVideoUrlParam{
+							Url: videoToURLOrBase64(part.Video),
 						},
 					})
 				}
@@ -681,6 +690,24 @@ func imageToURLOrBase64(image *model.Image) string {
 	return "data:image/" + format + ";base64," + base64.StdEncoding.EncodeToString(image.Data)
 }
 
-func audioToBase64(audio *model.Audio) string {
-	return "data:" + audio.Format + ";base64," + base64.StdEncoding.EncodeToString(audio.Data)
+func audioToURLOrBase64(audio *model.Audio) string {
+	if audio.URL != "" {
+		return audio.URL
+	}
+	return mediaToBase64("audio", audio.Format, audio.Data)
+}
+
+func videoToURLOrBase64(video *model.Video) string {
+	if video.URL != "" {
+		return video.URL
+	}
+	return mediaToBase64("video", video.Format, video.Data)
+}
+
+func mediaToBase64(mediaType, format string, data []byte) string {
+	mimeType := format
+	if !strings.HasPrefix(mimeType, mediaType+"/") {
+		mimeType = mediaType + "/" + mimeType
+	}
+	return "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(data)
 }

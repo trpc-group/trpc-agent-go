@@ -405,6 +405,7 @@ func TestOmittedAttachmentHint(t *testing.T) {
 		name       string
 		imageCount int
 		audioCount int
+		videoCount int
 		fileCount  int
 		want       string
 	}{
@@ -422,9 +423,10 @@ func TestOmittedAttachmentHint(t *testing.T) {
 			name:       "plural attachments",
 			imageCount: 2,
 			audioCount: 2,
+			videoCount: 2,
 			fileCount:  2,
 			want: "Omitted non-text attachments for this provider: " +
-				"2 images, 2 audio clips, 2 files.",
+				"2 images, 2 audio clips, 2 videos, 2 files.",
 		},
 	}
 
@@ -436,6 +438,7 @@ func TestOmittedAttachmentHint(t *testing.T) {
 				omittedAttachmentHint(
 					tt.imageCount,
 					tt.audioCount,
+					tt.videoCount,
 					tt.fileCount,
 				),
 			)
@@ -3395,6 +3398,19 @@ func TestConvertContentPart(t *testing.T) {
 	assert.NotNilf(t, contentPart, "Expected image content part to be converted")
 
 	assert.NotNilf(t, contentPart.OfImageURL, "Expected image content part to be set")
+
+	// Chat Completions does not support URL-based audio or video inputs.
+	audioURLPart := model.ContentPart{
+		Type:  model.ContentTypeAudio,
+		Audio: &model.Audio{URL: "https://example.com/audio.mp3"},
+	}
+	assert.Nil(t, m.convertContentPart(audioURLPart))
+
+	videoPart := model.ContentPart{
+		Type:  model.ContentTypeVideo,
+		Video: &model.Video{URL: "https://example.com/video.mp4"},
+	}
+	assert.Nil(t, m.convertContentPart(videoPart))
 
 	// Test unknown content part type
 	unknownPart := model.ContentPart{

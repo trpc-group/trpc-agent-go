@@ -1004,7 +1004,18 @@ func (m *Model) convertContentPart(part model.ContentPart) *genai.Part {
 		if part.Audio == nil {
 			return nil
 		}
+		if part.Audio.URL != "" {
+			return genai.NewPartFromURI(part.Audio.URL, part.Audio.Format)
+		}
 		return genai.NewPartFromBytes(part.Audio.Data, part.Audio.Format)
+	case model.ContentTypeVideo:
+		if part.Video == nil {
+			return nil
+		}
+		if part.Video.URL != "" {
+			return genai.NewPartFromURI(part.Video.URL, part.Video.Format)
+		}
+		return genai.NewPartFromBytes(part.Video.Data, part.Video.Format)
 	case model.ContentTypeFile:
 		if part.File == nil {
 			return nil
