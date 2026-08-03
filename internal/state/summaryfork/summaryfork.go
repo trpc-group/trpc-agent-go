@@ -158,6 +158,11 @@ func cloneContentPart(part model.ContentPart) model.ContentPart {
 		audio.Data = append([]byte(nil), part.Audio.Data...)
 		cloned.Audio = &audio
 	}
+	if part.Video != nil {
+		video := *part.Video
+		video.Data = append([]byte(nil), part.Video.Data...)
+		cloned.Video = &video
+	}
 	if part.File != nil {
 		file := *part.File
 		file.Data = append([]byte(nil), part.File.Data...)

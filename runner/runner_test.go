@@ -464,6 +464,19 @@ func TestEnqueueUserMessage_Errors(t *testing.T) {
 	)
 	require.ErrorIs(t, err, ErrInvalidQueuedUserMessage)
 
+	err = EnqueueUserMessage(
+		r,
+		"req-1",
+		model.Message{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{{
+				Type:  model.ContentTypeVideo,
+				Video: &model.Video{URL: " "},
+			}},
+		},
+	)
+	require.ErrorIs(t, err, ErrInvalidQueuedUserMessage)
+
 	textPart := "hello from part"
 	err = EnqueueUserMessage(
 		r,
@@ -473,6 +486,45 @@ func TestEnqueueUserMessage_Errors(t *testing.T) {
 			ContentParts: []model.ContentPart{{
 				Type: model.ContentTypeText,
 				Text: &textPart,
+			}},
+		},
+	)
+	require.ErrorIs(t, err, ErrRunNotFound)
+
+	err = EnqueueUserMessage(
+		r,
+		"req-1",
+		model.Message{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{{
+				Type:  model.ContentTypeVideo,
+				Video: &model.Video{URL: "https://example.com/video.mp4"},
+			}},
+		},
+	)
+	require.ErrorIs(t, err, ErrRunNotFound)
+
+	err = EnqueueUserMessage(
+		r,
+		"req-1",
+		model.Message{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{{
+				Type:  model.ContentTypeVideo,
+				Video: &model.Video{Data: []byte("video")},
+			}},
+		},
+	)
+	require.ErrorIs(t, err, ErrRunNotFound)
+
+	err = EnqueueUserMessage(
+		r,
+		"req-1",
+		model.Message{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{{
+				Type:  model.ContentTypeAudio,
+				Audio: &model.Audio{URL: "https://example.com/audio.mp3"},
 			}},
 		},
 	)
@@ -4997,6 +5049,25 @@ func TestCloneResponseError(t *testing.T) {
 		require.Equal(t, "p", *got.Param)
 		require.Equal(t, "c", *got.Code)
 	})
+}
+
+func TestCloneContentPartsDeepCopiesVideo(t *testing.T) {
+	parts := []model.ContentPart{{
+		Type: model.ContentTypeVideo,
+		Video: &model.Video{
+			URL:    "https://example.com/video.mp4",
+			Data:   []byte("video"),
+			Format: "mp4",
+		},
+	}}
+
+	cloned := cloneContentParts(parts)
+
+	require.Len(t, cloned, 1)
+	require.NotSame(t, parts[0].Video, cloned[0].Video)
+	require.Equal(t, parts[0].Video, cloned[0].Video)
+	cloned[0].Video.Data[0] = 'V'
+	require.Equal(t, []byte("video"), parts[0].Video.Data)
 }
 
 func TestGraphCompletionNotPersistedAsMessage(t *testing.T) {
