@@ -52,6 +52,10 @@ func NewScanner(policy *Policy) *Scanner {
 	return s
 }
 
+// Auditor returns the scanner's audit buffer so operators can inspect or
+// flush recorded scan events.
+func (s *Scanner) Auditor() *Auditor { return s.auditor }
+
 // compileRules pre-compiles all regex patterns for performance.
 // Invalid patterns are skipped with a warning to stderr so that
 // operators are aware of misconfigured rules.
@@ -499,7 +503,11 @@ func (s *Scanner) CheckToolPermission(
 	scanReq := ScanRequest{
 		ToolName: req.ToolName,
 		Command:  command,
-		Backend:  "permission_check",
+		// The permission framework does not pass a backend, so it is inferred
+		// from the tool name: host-executing tools must keep the hostexec
+		// boundary (long sessions → ask), code-executing tools the codeexec
+		// semantics.
+		Backend:  backendFromToolName(req.ToolName),
 		Language: extractLanguageFromArgs(req.Arguments),
 	}
 	report := s.Scan(ctx, scanReq)
@@ -1291,6 +1299,21 @@ func extractCommandFromArgs(args []byte) string {
 		}
 	}
 	return command
+}
+
+// backendFromToolName infers the execution backend from the tool name when the
+// permission framework does not pass one explicitly.
+func backendFromToolName(name string) string {
+	switch {
+	case strings.Contains(name, "host"):
+		return "hostexec"
+	case strings.Contains(name, "code"):
+		return "codeexec"
+	case strings.Contains(name, "workspace"):
+		return "workspaceexec"
+	default:
+		return "permission_check"
+	}
 }
 
 // extractLanguageFromArgs parses JSON arguments to find a "language"/"lang"
