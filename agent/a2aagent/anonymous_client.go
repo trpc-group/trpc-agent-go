@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/cookiejar"
+	"net/url"
 	"sync"
 
 	"trpc.group/trpc-go/trpc-a2a-go/client"
@@ -38,10 +39,11 @@ func NewAnonymousA2AClient(agentURL string, opts ...client.Option) (*client.A2AC
 }
 
 type anonymousA2AClientInitMiddleware struct {
-	gate     chan struct{}
-	jarMu    sync.Mutex
-	jar      http.CookieJar
-	waitHook func()
+	gate        chan struct{}
+	jarMu       sync.Mutex
+	jar         http.CookieJar
+	initialized bool
+	waitHook    func()
 }
 
 func newAnonymousA2AClientInitMiddleware() *anonymousA2AClientInitMiddleware {
@@ -103,18 +105,38 @@ func (h *anonymousA2AClientInitHandler) Handle(
 		return nil, err
 	}
 	request := req.Clone(ctx)
-	h.middleware.addJarCookies(request)
+	jarCookieNames := h.middleware.addJarCookies(request)
+	requestJar := newAnonymousA2AClientRequestCookieJar(
+		requestClient.Jar,
+		request.URL,
+		jarCookieNames,
+	)
+	requestClient.Jar = requestJar
+	configuredCheckRedirect := requestClient.CheckRedirect
+	requestClient.CheckRedirect = func(redirectRequest *http.Request, via []*http.Request) error {
+		requestJar.prepareRedirect(redirectRequest)
+		if configuredCheckRedirect != nil {
+			return configuredCheckRedirect(redirectRequest, via)
+		}
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		return nil
+	}
 	resp, handleErr := h.next.Handle(ctx, requestClient, request)
-	h.middleware.captureResponseCookies(request, resp)
+	h.middleware.captureResponseCookies(request, resp, requestJar)
 	return resp, handleErr
 }
 
 func (m *anonymousA2AClientInitMiddleware) needsInitialization(
 	req *http.Request,
 ) bool {
+	if req == nil || req.URL == nil {
+		return false
+	}
 	m.jarMu.Lock()
 	defer m.jarMu.Unlock()
-	return anonymousA2AClientJarNeedsInitialization(m.jar, req)
+	return !m.initialized
 }
 
 func (m *anonymousA2AClientInitMiddleware) ensureCookieJar(configured http.CookieJar) error {
@@ -161,18 +183,18 @@ func (m *anonymousA2AClientInitMiddleware) cookieJar() http.CookieJar {
 // addJarCookies makes cookie state visible to handlers that do not call
 // http.Client.Do themselves. The standard client path still receives the jar
 // on the shallow-copied client so it can apply its normal cookie behavior.
-func (m *anonymousA2AClientInitMiddleware) addJarCookies(req *http.Request) {
+func (m *anonymousA2AClientInitMiddleware) addJarCookies(req *http.Request) map[string]struct{} {
 	if req == nil || req.URL == nil {
-		return
+		return nil
 	}
 	jar := m.cookieJar()
 	if jar == nil {
-		return
+		return nil
 	}
 
 	jarCookies := jar.Cookies(req.URL)
 	if len(jarCookies) == 0 {
-		return
+		return nil
 	}
 	if req.Header == nil {
 		req.Header = make(http.Header)
@@ -200,11 +222,13 @@ func (m *anonymousA2AClientInitMiddleware) addJarCookies(req *http.Request) {
 			req.AddCookie(cookie)
 		}
 	}
+	return jarCookieNames
 }
 
 func (m *anonymousA2AClientInitMiddleware) captureResponseCookies(
 	req *http.Request,
 	resp *http.Response,
+	requestJar *anonymousA2AClientRequestCookieJar,
 ) {
 	if req == nil || resp == nil {
 		return
@@ -220,7 +244,50 @@ func (m *anonymousA2AClientInitMiddleware) captureResponseCookies(
 	if responseURL == nil {
 		return
 	}
-	jar.SetCookies(responseURL, resp.Cookies())
+	responseCookies := resp.Cookies()
+	if len(responseCookies) == 0 {
+		return
+	}
+	if !requestJar.storedResponseCookies(responseURL, responseCookies) {
+		requestJar.SetCookies(responseURL, responseCookies)
+	}
+	m.markInitialized(responseURL, responseCookies)
+}
+
+func (m *anonymousA2AClientInitMiddleware) markInitialized(
+	responseURL *url.URL,
+	responseCookies []*http.Cookie,
+) {
+	m.jarMu.Lock()
+	if m.initialized || m.jar == nil {
+		m.jarMu.Unlock()
+		return
+	}
+	jar := m.jar
+	m.jarMu.Unlock()
+
+	responseValues := make(map[string]struct{})
+	for _, cookie := range responseCookies {
+		if cookie != nil && cookie.Name == anonymousUserIDCookieName &&
+			isAnonymousUserIDCookieValue(cookie.Value) {
+			responseValues[cookie.Value] = struct{}{}
+		}
+	}
+	if len(responseValues) == 0 {
+		return
+	}
+	for _, cookie := range jar.Cookies(responseURL) {
+		if cookie == nil || cookie.Name != anonymousUserIDCookieName {
+			continue
+		}
+		if _, ok := responseValues[cookie.Value]; !ok {
+			continue
+		}
+		m.jarMu.Lock()
+		m.initialized = true
+		m.jarMu.Unlock()
+		return
+	}
 }
 
 func (m *anonymousA2AClientInitMiddleware) acquire(ctx context.Context) (func(), error) {
@@ -240,19 +307,121 @@ func (m *anonymousA2AClientInitMiddleware) acquire(ctx context.Context) (func(),
 	}
 }
 
-func anonymousA2AClientJarNeedsInitialization(jar http.CookieJar, req *http.Request) bool {
-	if req == nil || req.URL == nil {
+// anonymousA2AClientRequestCookieJar lets the middleware inject cookies for
+// custom handlers without making the standard http.Client process the initial
+// request or final response cookies a second time. Redirects continue to use
+// the configured jar normally.
+type anonymousA2AClientRequestCookieJar struct {
+	base                  http.CookieJar
+	initialURL            string
+	initialJarCookieNames map[string]struct{}
+	mu                    sync.Mutex
+	redirected            bool
+	storedCookies         map[string]map[string]struct{}
+}
+
+func newAnonymousA2AClientRequestCookieJar(
+	base http.CookieJar,
+	initialURL *url.URL,
+	initialJarCookieNames map[string]struct{},
+) *anonymousA2AClientRequestCookieJar {
+	return &anonymousA2AClientRequestCookieJar{
+		base:                  base,
+		initialURL:            cookieJarURLKey(initialURL),
+		initialJarCookieNames: initialJarCookieNames,
+		storedCookies:         make(map[string]map[string]struct{}),
+	}
+}
+
+func (j *anonymousA2AClientRequestCookieJar) Cookies(u *url.URL) []*http.Cookie {
+	if j == nil || j.base == nil || u == nil {
+		return nil
+	}
+	j.mu.Lock()
+	redirected := j.redirected
+	j.mu.Unlock()
+	if !redirected && cookieJarURLKey(u) == j.initialURL {
+		return nil
+	}
+	return j.base.Cookies(u)
+}
+
+func (j *anonymousA2AClientRequestCookieJar) SetCookies(u *url.URL, cookies []*http.Cookie) {
+	if j == nil || j.base == nil || u == nil {
+		return
+	}
+	j.base.SetCookies(u, cookies)
+	if len(cookies) == 0 {
+		return
+	}
+	j.mu.Lock()
+	key := cookieJarURLKey(u)
+	stored := j.storedCookies[key]
+	if stored == nil {
+		stored = make(map[string]struct{}, len(cookies))
+		j.storedCookies[key] = stored
+	}
+	for _, cookie := range cookies {
+		if cookie == nil {
+			continue
+		}
+		stored[cookie.String()] = struct{}{}
+	}
+	j.mu.Unlock()
+}
+
+func (j *anonymousA2AClientRequestCookieJar) prepareRedirect(req *http.Request) {
+	if j == nil {
+		return
+	}
+	j.mu.Lock()
+	j.redirected = true
+	jarCookieNames := j.initialJarCookieNames
+	j.mu.Unlock()
+	if req == nil || len(jarCookieNames) == 0 {
+		return
+	}
+
+	existingCookies := req.Cookies()
+	req.Header.Del("Cookie")
+	for _, cookie := range existingCookies {
+		if cookie == nil {
+			continue
+		}
+		if _, injectedByJar := jarCookieNames[cookie.Name]; injectedByJar {
+			continue
+		}
+		req.AddCookie(cookie)
+	}
+}
+
+func (j *anonymousA2AClientRequestCookieJar) storedResponseCookies(
+	u *url.URL,
+	cookies []*http.Cookie,
+) bool {
+	if j == nil || u == nil || len(cookies) == 0 {
 		return false
 	}
-	if jar == nil {
-		return true
-	}
-	for _, cookie := range jar.Cookies(req.URL) {
-		if cookie != nil && cookie.Name == anonymousUserIDCookieName && isAnonymousUserIDCookieValue(cookie.Value) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	stored := j.storedCookies[cookieJarURLKey(u)]
+	for _, cookie := range cookies {
+		if cookie == nil {
+			continue
+		}
+		if _, ok := stored[cookie.String()]; !ok {
 			return false
 		}
 	}
 	return true
 }
 
+func cookieJarURLKey(u *url.URL) string {
+	if u == nil {
+		return ""
+	}
+	return u.String()
+}
+
 var _ client.Middleware = (*anonymousA2AClientInitMiddleware)(nil)
+var _ http.CookieJar = (*anonymousA2AClientRequestCookieJar)(nil)

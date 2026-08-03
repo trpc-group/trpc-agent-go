@@ -164,6 +164,8 @@ persist session state itself.
 Browser clients should complete one initial request before starting concurrent
 anonymous message sends, or provide a trusted user identity instead.
 
+Anonymous browser continuity requires a same-site deployment. The server cookie uses `SameSite=Lax`, so browsers do not send it on cross-site JSON-RPC POST requests. Cross-site deployments should provide a trusted user identity instead; cross-site anonymous cookie continuity is not supported.
+
 #### Anonymous Principal Behavior
 
 When a request does not provide a non-empty UserID through the configured

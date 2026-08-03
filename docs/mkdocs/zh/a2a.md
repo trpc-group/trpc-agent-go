@@ -156,6 +156,8 @@ func main() {
 它不会接入 `SessionService`，也不负责持久化 session state。
 应先完成一次初始请求，再开始并发匿名消息发送，或者提供可信用户身份。
 
+浏览器匿名身份连续性要求同站部署。服务端 Cookie 使用 `SameSite=Lax`，因此浏览器不会在跨站 JSON-RPC POST 请求中携带该 Cookie。跨站部署应改为提供可信用户身份；当前不支持跨站匿名 Cookie 连续性。
+
 #### 匿名 Principal 行为
 
 当请求没有通过配置的 UserID header（默认是 `X-User-ID`）提供非空身份时，
