@@ -296,12 +296,14 @@ func (s *Scanner) Scan(ctx context.Context, req ScanRequest) ScanReport {
 			if actionOrder(DecisionDeny) > actionOrder(report.Decision) {
 				report.Decision = DecisionDeny
 			}
-			report.RuleID = "net_command_option"
-			report.Evidence = opt
-			report.Category = "network_egress"
-			report.Recommendation = fmt.Sprintf(
-				"%s carries a hidden command/program option (%s) that cannot be safely modelled", cmdName, opt,
-			)
+			if metadataUpgrades(report, RiskCritical, DecisionDeny) {
+				report.RuleID = "net_command_option"
+				report.Evidence = opt
+				report.Category = "network_egress"
+				report.Recommendation = fmt.Sprintf(
+					"%s carries a hidden command/program option (%s) that cannot be safely modelled", cmdName, opt,
+				)
+			}
 		}
 	}
 	if cmdName == "curl" {
@@ -312,13 +314,15 @@ func (s *Scanner) Scan(ctx context.Context, req ScanRequest) ScanReport {
 			if actionOrder(DecisionDeny) > actionOrder(report.Decision) {
 				report.Decision = DecisionDeny
 			}
-			report.RuleID = "net_routing_override"
-			if config {
-				report.RuleID = "net_config_file"
+			if metadataUpgrades(report, RiskCritical, DecisionDeny) {
+				report.RuleID = "net_routing_override"
+				if config {
+					report.RuleID = "net_config_file"
+				}
+				report.Evidence = routing
+				report.Category = "network_egress"
+				report.Recommendation = "curl routing/config cannot be safely modelled; denying"
 			}
-			report.Evidence = routing
-			report.Category = "network_egress"
-			report.Recommendation = "curl routing/config cannot be safely modelled; denying"
 		}
 	}
 	if cmdName == "wget" {
@@ -329,10 +333,12 @@ func (s *Scanner) Scan(ctx context.Context, req ScanRequest) ScanReport {
 			if actionOrder(DecisionDeny) > actionOrder(report.Decision) {
 				report.Decision = DecisionDeny
 			}
-			report.RuleID = "net_routing_override"
-			report.Evidence = val
-			report.Category = "network_egress"
-			report.Recommendation = "wget -e injects wgetrc configuration that cannot be safely modelled; denying"
+			if metadataUpgrades(report, RiskHigh, DecisionDeny) {
+				report.RuleID = "net_routing_override"
+				report.Evidence = val
+				report.Category = "network_egress"
+				report.Recommendation = "wget -e injects wgetrc configuration that cannot be safely modelled; denying"
+			}
 		}
 	}
 
@@ -347,12 +353,14 @@ func (s *Scanner) Scan(ctx context.Context, req ScanRequest) ScanReport {
 				if actionOrder(DecisionDeny) > actionOrder(report.Decision) {
 					report.Decision = DecisionDeny
 				}
-				report.RuleID = "non_allowlisted_host"
-				report.Evidence = target
-				report.Category = "network_egress"
-				report.Recommendation = fmt.Sprintf(
-					"Target host %q is not in the allowlisted hosts", target,
-				)
+				if metadataUpgrades(report, RiskHigh, DecisionDeny) {
+					report.RuleID = "non_allowlisted_host"
+					report.Evidence = target
+					report.Category = "network_egress"
+					report.Recommendation = fmt.Sprintf(
+						"Target host %q is not in the allowlisted hosts", target,
+					)
+				}
 			}
 		}
 	}
