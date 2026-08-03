@@ -192,6 +192,104 @@ end
 return result
 `)
 
+var luaLoadStateInitializationValue = redis.NewScript(`
+local sessionMetaKey = KEYS[1]
+local generationCandidate = ARGV[1]
+
+local metaJSON = redis.call('GET', sessionMetaKey)
+if not metaJSON then
+    return false
+end
+
+local decoded, meta = pcall(cjson.decode, metaJSON)
+if not decoded or not meta or type(meta) ~= 'table' then
+    return redis.error_reply('unmarshal session meta')
+end
+if meta.generation ~= nil and type(meta.generation) ~= 'string' then
+    return redis.error_reply('invalid session generation')
+end
+if not meta.generation or meta.generation == '' then
+    local existingTTL = redis.call('PTTL', sessionMetaKey)
+    local stateMarker = "__TRPC_AGENT_GO_STATE_GENERATION_" ..
+        string.gsub(generationCandidate, "-", "") .. "__"
+    if not meta.state or type(meta.state) ~= 'table' then
+        meta.state = {}
+    end
+    meta.state[stateMarker] = stateMarker
+    meta.generation = generationCandidate
+    metaJSON = cjson.encode(meta)
+    local markerPair = '"' .. stateMarker .. '":"' .. stateMarker .. '"'
+    metaJSON = string.gsub(metaJSON, markerPair .. ',', '')
+    metaJSON = string.gsub(metaJSON, ',' .. markerPair, '')
+    metaJSON = string.gsub(metaJSON, markerPair, '')
+    if existingTTL >= 0 then
+        if existingTTL == 0 then
+            existingTTL = 1
+        end
+        redis.call('SET', sessionMetaKey, metaJSON, 'PX', existingTTL)
+    else
+        redis.call('SET', sessionMetaKey, metaJSON)
+    end
+end
+return metaJSON
+`)
+
+var luaCommitStateInitialization = redis.NewScript(`
+local leaseKey = KEYS[1]
+local sessionMetaKey = KEYS[2]
+local ownerToken = ARGV[1]
+local stateKey = ARGV[2]
+local encodedValue = ARGV[3]
+local valueIsNil = tonumber(ARGV[4]) == 1
+local expectedGeneration = ARGV[5]
+local updatedAt = ARGV[6]
+local ttlMs = tonumber(ARGV[7])
+local nilSentinel = "__TRPC_AGENT_GO_STATE_INITIALIZATION_NULL_" ..
+    string.gsub(ownerToken, "-", "") .. "__"
+
+if redis.call('GET', leaseKey) ~= ownerToken then
+    return 0
+end
+
+local metaJSON = redis.call('GET', sessionMetaKey)
+if not metaJSON then
+    redis.call('DEL', leaseKey)
+    return -1
+end
+
+local meta = cjson.decode(metaJSON)
+if not meta or type(meta) ~= 'table' then
+    return redis.error_reply('unmarshal session meta')
+end
+if expectedGeneration == '' or meta.generation ~= expectedGeneration then
+    redis.call('DEL', leaseKey)
+    return -2
+end
+if not meta.state or type(meta.state) ~= 'table' then
+    meta.state = {}
+end
+if valueIsNil then
+    meta.state[stateKey] = nilSentinel
+else
+    meta.state[stateKey] = encodedValue
+end
+meta.updatedAt = updatedAt
+
+local encodedMeta = cjson.encode(meta)
+encodedMeta = string.gsub(encodedMeta, '"' .. nilSentinel .. '"', 'null')
+if ttlMs > 0 then
+    redis.call('SET', sessionMetaKey, encodedMeta, 'PX', ttlMs)
+else
+    local existingTTL = redis.call('PTTL', sessionMetaKey)
+    redis.call('SET', sessionMetaKey, encodedMeta)
+    if existingTTL > 0 then
+        redis.call('PEXPIRE', sessionMetaKey, existingTTL)
+    end
+end
+redis.call('DEL', leaseKey)
+return 1
+`)
+
 // luaSummarySetIfNewer atomically merges one filterKey summary into the stored
 // JSON map (String key) only if the incoming UpdatedAt is newer-or-equal.
 //

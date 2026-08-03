@@ -715,9 +715,15 @@ func TestAttemptSessionService_DoesNotExposeUnsupportedOptionalInterfaces(t *tes
 	_, searchable := service.(session.SearchableService)
 	_, window := service.(session.WindowService)
 	_, track := service.(session.TrackService)
+	_, initializesState := service.(session.StateInitializationService)
 	assert.False(t, searchable)
 	assert.False(t, window)
 	assert.False(t, track)
+	assert.True(t, initializesState)
+
+	unsupported := newAttemptSessionService(nil, nil).Service()
+	_, initializesState = unsupported.(session.StateInitializationService)
+	assert.False(t, initializesState)
 }
 
 func TestAttemptSessionService_ListSessionsHidesDeletedBaseSession(t *testing.T) {

@@ -231,7 +231,76 @@ func (s *windowTrackReaderService) GetEventWindow(
 	return s.Service.getEventWindow(ctx, s.WindowService, req)
 }
 
+type stateInitializingService struct {
+	*Service
+	session.StateInitializationService
+}
+
+type stateInitializingSearchableService struct {
+	*searchableService
+	session.StateInitializationService
+}
+
+type stateInitializingWindowService struct {
+	*windowService
+	session.StateInitializationService
+}
+
+type stateInitializingTrackService struct {
+	*trackService
+	session.StateInitializationService
+}
+
+type stateInitializingSearchableWindowService struct {
+	*searchableWindowService
+	session.StateInitializationService
+}
+
+type stateInitializingSearchableTrackService struct {
+	*searchableTrackService
+	session.StateInitializationService
+}
+
+type stateInitializingWindowTrackService struct {
+	*windowTrackService
+	session.StateInitializationService
+}
+
+type stateInitializingTrackReaderService struct {
+	*trackReaderService
+	session.StateInitializationService
+}
+
+type stateInitializingSearchableWindowTrackService struct {
+	*searchableWindowTrackService
+	session.StateInitializationService
+}
+
+type stateInitializingSearchableWindowTrackReaderService struct {
+	*searchableWindowTrackReaderService
+	session.StateInitializationService
+}
+
+type stateInitializingSearchableTrackReaderService struct {
+	*searchableTrackReaderService
+	session.StateInitializationService
+}
+
+type stateInitializingWindowTrackReaderService struct {
+	*windowTrackReaderService
+	session.StateInitializationService
+}
+
 func wrapOptionalInterfaces(base *Service, inner session.Service) session.Service {
+	wrapped := wrapExistingOptionalInterfaces(base, inner)
+	initializer, ok := inner.(session.StateInitializationService)
+	if !ok {
+		return wrapped
+	}
+	return wrapStateInitializationInterface(wrapped, initializer)
+}
+
+func wrapExistingOptionalInterfaces(base *Service, inner session.Service) session.Service {
 	searchable, hasSearch := inner.(session.SearchableService)
 	window, hasWindow := inner.(session.WindowService)
 	track, hasTrack := inner.(session.TrackService)
@@ -258,6 +327,76 @@ func wrapOptionalInterfaces(base *Service, inner session.Service) session.Servic
 		}
 	default:
 		return base
+	}
+}
+
+func wrapStateInitializationInterface(
+	wrapped session.Service,
+	initializer session.StateInitializationService,
+) session.Service {
+	switch service := wrapped.(type) {
+	case *searchableWindowTrackReaderService:
+		return &stateInitializingSearchableWindowTrackReaderService{
+			searchableWindowTrackReaderService: service,
+			StateInitializationService:         initializer,
+		}
+	case *searchableWindowTrackService:
+		return &stateInitializingSearchableWindowTrackService{
+			searchableWindowTrackService: service,
+			StateInitializationService:   initializer,
+		}
+	case *searchableTrackReaderService:
+		return &stateInitializingSearchableTrackReaderService{
+			searchableTrackReaderService: service,
+			StateInitializationService:   initializer,
+		}
+	case *windowTrackReaderService:
+		return &stateInitializingWindowTrackReaderService{
+			windowTrackReaderService:   service,
+			StateInitializationService: initializer,
+		}
+	case *searchableWindowService:
+		return &stateInitializingSearchableWindowService{
+			searchableWindowService:    service,
+			StateInitializationService: initializer,
+		}
+	case *searchableTrackService:
+		return &stateInitializingSearchableTrackService{
+			searchableTrackService:     service,
+			StateInitializationService: initializer,
+		}
+	case *windowTrackService:
+		return &stateInitializingWindowTrackService{
+			windowTrackService:         service,
+			StateInitializationService: initializer,
+		}
+	case *trackReaderService:
+		return &stateInitializingTrackReaderService{
+			trackReaderService:         service,
+			StateInitializationService: initializer,
+		}
+	case *searchableService:
+		return &stateInitializingSearchableService{
+			searchableService:          service,
+			StateInitializationService: initializer,
+		}
+	case *windowService:
+		return &stateInitializingWindowService{
+			windowService:              service,
+			StateInitializationService: initializer,
+		}
+	case *trackService:
+		return &stateInitializingTrackService{
+			trackService:               service,
+			StateInitializationService: initializer,
+		}
+	case *Service:
+		return &stateInitializingService{
+			Service:                    service,
+			StateInitializationService: initializer,
+		}
+	default:
+		return wrapped
 	}
 }
 

@@ -686,6 +686,49 @@ func TestWrapSessionService_PreservesCombinedRecallServices(t *testing.T) {
 	require.Equal(t, "chat-scope", rec.searchReq.UserKey.UserID)
 }
 
+func TestWrapSessionService_PreservesStateInitializationService(t *testing.T) {
+	t.Parallel()
+
+	plain := WrapSessionService(&recordingSessionService{})
+	_, ok := plain.(session.StateInitializationService)
+	require.False(t, ok)
+
+	base := sessioninmemory.NewSessionService()
+	t.Cleanup(func() { require.NoError(t, base.Close()) })
+	wrapped := WrapSessionService(base)
+	initializer, ok := wrapped.(session.StateInitializationService)
+	require.True(t, ok)
+
+	ctx := WithStorageUserID(context.Background(), "chat-scope")
+	key := session.Key{
+		AppName:   "demo-app",
+		UserID:    "canonical-user",
+		SessionID: "sess-1",
+	}
+	_, err := wrapped.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	value, didInitialize, err := initializer.LoadOrInitializeSessionState(
+		ctx,
+		key,
+		"private-state",
+		func(value []byte) bool { return string(value) == "value" },
+		func(context.Context) ([]byte, error) { return []byte("value"), nil },
+	)
+	require.NoError(t, err)
+	require.True(t, didInitialize)
+	require.Equal(t, "value", string(value))
+
+	persisted, err := base.GetSession(ctx, session.Key{
+		AppName:   key.AppName,
+		UserID:    "chat-scope",
+		SessionID: key.SessionID,
+	})
+	require.NoError(t, err)
+	persistedValue, present := persisted.GetState("private-state")
+	require.True(t, present)
+	require.Equal(t, "value", string(persistedValue))
+}
+
 func TestIndexedStorageUsersLifecycle(t *testing.T) {
 	t.Parallel()
 

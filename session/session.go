@@ -1043,6 +1043,49 @@ type WindowService interface {
 	) (*EventWindow, error)
 }
 
+// StateInitializationService extends Service with coordinated initialization
+// of individual session-state values.
+//
+// Implementations coordinate callers that share the same backing service. The
+// coordination mechanism and its lifecycle are owned by the implementation;
+// callers provide only value validation and initialization behavior.
+type StateInitializationService interface {
+	// LoadOrInitializeSessionState returns a valid persisted value for stateKey.
+	//
+	// If the current value is absent or validate rejects it, only the current
+	// owner invokes initialize. Other callers wait for a committed value or
+	// compete for ownership after the owner fails. initialize runs outside
+	// physical storage locks and is invoked at most once by each method call.
+	//
+	// validate may be called more than once with caller-owned copies and must not
+	// retain or mutate its argument. initialize receives a context that is
+	// canceled when ctx is canceled or the backend confirms that ownership was
+	// lost. A callback panic may propagate, but implementations must release
+	// their gate or lease before doing so.
+	//
+	// A successful return guarantees that value was observed in, or atomically
+	// committed to, the session generation first observed by this method call.
+	// The call must not cross a deletion and recreation of the same key while
+	// waiting for or holding ownership. A recreated session is a different
+	// generation and must not accept the old call's callback result.
+	// didInitialize reports whether this call committed its callback result.
+	// Returned bytes are caller-owned. An invalid callback result, an ownership
+	// loss, an ambiguous commit, or a session-generation change returns an error
+	// and must not report didInitialize=true. Callback errors remain inspectable
+	// with errors.Is.
+	//
+	// A nil ctx is treated as context.Background. The session must already exist.
+	// stateKey must be non-empty and must not use the app: or user: prefixes.
+	// validate and initialize must be non-nil.
+	LoadOrInitializeSessionState(
+		ctx context.Context,
+		key Key,
+		stateKey string,
+		validate func([]byte) bool,
+		initialize func(context.Context) ([]byte, error),
+	) (value []byte, didInitialize bool, err error)
+}
+
 // Service is the interface that all session services must implement.
 type Service interface {
 	// CreateSession creates a new session.

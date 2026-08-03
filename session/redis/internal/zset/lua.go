@@ -43,3 +43,90 @@ var luaSummariesSetIfNewer = redis.NewScript(
 		"end\n" +
 		"return 0\n",
 )
+
+var luaLoadStateInitializationValue = redis.NewScript(`
+local sessionStateKey = KEYS[1]
+local sessionID = ARGV[1]
+local generationCandidate = ARGV[2]
+
+local sessionJSON = redis.call('HGET', sessionStateKey, sessionID)
+if not sessionJSON then
+    return false
+end
+
+local decoded, sessionState = pcall(cjson.decode, sessionJSON)
+if not decoded or not sessionState or type(sessionState) ~= 'table' then
+    return redis.error_reply('unmarshal session state')
+end
+if sessionState.generation ~= nil and type(sessionState.generation) ~= 'string' then
+    return redis.error_reply('invalid session generation')
+end
+if not sessionState.generation or sessionState.generation == '' then
+    local stateMarker = "__TRPC_AGENT_GO_STATE_GENERATION_" ..
+        string.gsub(generationCandidate, "-", "") .. "__"
+    if not sessionState.state or type(sessionState.state) ~= 'table' then
+        sessionState.state = {}
+    end
+    sessionState.state[stateMarker] = stateMarker
+    sessionState.generation = generationCandidate
+    sessionJSON = cjson.encode(sessionState)
+    local markerPair = '"' .. stateMarker .. '":"' .. stateMarker .. '"'
+    sessionJSON = string.gsub(sessionJSON, markerPair .. ',', '')
+    sessionJSON = string.gsub(sessionJSON, ',' .. markerPair, '')
+    sessionJSON = string.gsub(sessionJSON, markerPair, '')
+    redis.call('HSET', sessionStateKey, sessionID, sessionJSON)
+end
+return sessionJSON
+`)
+
+var luaCommitStateInitialization = redis.NewScript(`
+local leaseKey = KEYS[1]
+local sessionStateKey = KEYS[2]
+local ownerToken = ARGV[1]
+local sessionID = ARGV[2]
+local stateKey = ARGV[3]
+local encodedValue = ARGV[4]
+local valueIsNil = tonumber(ARGV[5]) == 1
+local expectedGeneration = ARGV[6]
+local updatedAt = ARGV[7]
+local ttlMs = tonumber(ARGV[8])
+local nilSentinel = "__TRPC_AGENT_GO_STATE_INITIALIZATION_NULL_" ..
+    string.gsub(ownerToken, "-", "") .. "__"
+
+if redis.call('GET', leaseKey) ~= ownerToken then
+    return 0
+end
+
+local sessionJSON = redis.call('HGET', sessionStateKey, sessionID)
+if not sessionJSON then
+    redis.call('DEL', leaseKey)
+    return -1
+end
+
+local sessionState = cjson.decode(sessionJSON)
+if not sessionState or type(sessionState) ~= 'table' then
+    return redis.error_reply('unmarshal session state')
+end
+if expectedGeneration == '' or sessionState.generation ~= expectedGeneration then
+    redis.call('DEL', leaseKey)
+    return -2
+end
+if not sessionState.state or type(sessionState.state) ~= 'table' then
+    sessionState.state = {}
+end
+if valueIsNil then
+    sessionState.state[stateKey] = nilSentinel
+else
+    sessionState.state[stateKey] = encodedValue
+end
+sessionState.updatedAt = updatedAt
+
+local encodedSession = cjson.encode(sessionState)
+encodedSession = string.gsub(encodedSession, '"' .. nilSentinel .. '"', 'null')
+redis.call('HSET', sessionStateKey, sessionID, encodedSession)
+if ttlMs > 0 then
+    redis.call('PEXPIRE', sessionStateKey, ttlMs)
+end
+redis.call('DEL', leaseKey)
+return 1
+`)
