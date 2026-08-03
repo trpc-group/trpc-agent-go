@@ -165,7 +165,7 @@ func (s *Scanner) Scan(ctx context.Context, req ScanRequest) ScanReport {
 // applyParseChecks is the conservative parsing step: shell commands that
 // shellsafe cannot parse fail closed to deny; non-shell code that cannot be
 // structurally modelled fails closed to ask (unless a stricter rule already
-// matched). The issue requires unparseable commands to return deny or ask,
+// matched). The issue requires unparsable commands to return deny or ask,
 // never a default allow.
 func (s *Scanner) applyParseChecks(req ScanRequest, fullCommand string, report *ScanReport) {
 	if fullCommand == "" {
@@ -1498,7 +1498,8 @@ func actionOrder(d Decision) int {
 		// built rule) never upgrades a verdict.
 		return 0
 	default:
-		// Unknown actions (e.g. a YAML typo "allowd") fail closed: they rank
+		// Unknown action values (e.g. a misspelled action in policy YAML) fail
+		// closed: they rank
 		// above every known action, so an unknown decision is never downgraded
 		// and the resulting non-allow decision intercepts execution.
 		return 100
