@@ -300,7 +300,7 @@ func (s *Scanner) Scan(ctx context.Context, req ScanRequest) ScanReport {
 func (s *Scanner) CheckToolPermission(
 	ctx context.Context, req *tool.PermissionRequest,
 ) (tool.PermissionDecision, error) {
-	command := extractCommandFromArgs(req.Arguments, req.ToolName)
+	command := extractCommandFromArgs(req.Arguments)
 
 	scanReq := ScanRequest{
 		ToolName: req.ToolName,
@@ -309,8 +309,16 @@ func (s *Scanner) CheckToolPermission(
 	}
 	report := s.Scan(ctx, scanReq)
 
+	// The core permission framework only normalizes allow/deny/ask
+	// (NormalizePermissionDecision). Map needs_human_review to ask so a
+	// policy rule configured with that action doesn't turn into an
+	// "unknown permission action" error downstream.
+	action := tool.PermissionAction(report.Decision)
+	if report.Decision == DecisionNeedsReview {
+		action = tool.PermissionActionAsk
+	}
 	decision := tool.PermissionDecision{
-		Action: tool.PermissionAction(report.Decision),
+		Action: action,
 		Reason: report.Recommendation,
 	}
 	return decision, nil
@@ -337,31 +345,43 @@ func extractCommandName(fullCommand string) string {
 
 // extractHostTarget extracts a hostname or IP from a curl/wget/nc/ssh
 // command arguments for allowlist checking.
+//
+// A URL-form token (contains "://") is the strongest signal of the real
+// target and wins over any plain token seen earlier — this prevents a
+// flag value such as `curl -o api.github.com https://evil.example.com`
+// from being mistaken for the destination. Without a URL, the first
+// non-flag token is used.
 func extractHostTarget(fullCommand string) string {
-	// Look for common URL/host patterns: https://host/path, host:port
-	// Simple heuristic: find the first token after curl/wget that
-	// looks like a URL or hostname.
 	parts := strings.Fields(fullCommand)
+	firstPlain := ""
 	for i, p := range parts {
 		if i == 0 {
 			continue // skip the command itself.
 		}
-		// Skip flags.
+		// Skip flags (including inline --flag=value forms).
 		if strings.HasPrefix(p, "-") {
 			continue
 		}
-		// Strip URL scheme.
-		p = strings.TrimPrefix(p, "https://")
-		p = strings.TrimPrefix(p, "http://")
-		// Extract host (before first / or :).
-		if idx := strings.IndexAny(p, "/:"); idx >= 0 {
-			p = p[:idx]
+		if strings.Contains(p, "://") {
+			// A URL is almost certainly the actual target.
+			return normalizeHost(p)
 		}
-		if p != "" {
-			return p
+		if firstPlain == "" {
+			firstPlain = normalizeHost(p)
 		}
 	}
-	return ""
+	return firstPlain
+}
+
+// normalizeHost strips a URL scheme and path/port suffix from a token.
+func normalizeHost(p string) string {
+	for _, scheme := range []string{"https://", "http://", "ftp://"} {
+		p = strings.TrimPrefix(p, scheme)
+	}
+	if idx := strings.IndexAny(p, "/:"); idx >= 0 {
+		p = p[:idx]
+	}
+	return p
 }
 
 // extractEnvVarName extracts the variable name from "KEY=value" format.
@@ -386,14 +406,19 @@ func isAllowed(val string, allowlist []string) bool {
 // When the JSON contains separate "args" or "arguments" arrays, those
 // are appended so that the full command+args string can be scanned by
 // the regex rules (e.g. {"command":"rm","args":["-rf","/"]} → "rm -rf /").
-func extractCommandFromArgs(args []byte, fallback string) string {
+//
+// When no command field is present (nil/empty/invalid JSON, or none of
+// command/cmd/script/code/shell_command), it returns "" — a non-command
+// tool like search/read must not have its tool name treated as a shell
+// command (which would wrongly trip the allowed-commands gate).
+func extractCommandFromArgs(args []byte) string {
 	if len(args) == 0 {
-		return fallback
+		return ""
 	}
 
 	var m map[string]any
 	if err := json.Unmarshal(args, &m); err != nil {
-		return fallback
+		return ""
 	}
 
 	cmdKeys := []string{"command", "cmd", "script", "code", "shell_command"}
@@ -405,7 +430,7 @@ func extractCommandFromArgs(args []byte, fallback string) string {
 		}
 	}
 	if command == "" {
-		return fallback
+		return ""
 	}
 
 	// Also extract args/arguments arrays and append for full
