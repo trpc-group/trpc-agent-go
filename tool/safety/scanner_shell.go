@@ -37,16 +37,22 @@ func (s *DefaultScanner) scanCommand(req ScanRequest) []Finding {
 	for _, argv := range pipe.Commands {
 		findings = append(findings, s.scanArgv(req, argv)...)
 	}
-	if req.Stdin != "" {
-		stdinFindings := s.scanStdin(req)
-		for i := range stdinFindings {
-			if req.Backend == BackendHost && stdinFindings[i].Decision == DecisionAsk {
-				stdinFindings[i].Decision = DecisionDeny
-			}
-		}
-		findings = append(findings, stdinFindings...)
-	}
+	findings = append(findings, s.scanCommandStdin(req)...)
 	return findings
+}
+
+func (s *DefaultScanner) scanCommandStdin(req ScanRequest) []Finding {
+	if req.Stdin == "" ||
+		(s.policy.MaxCommandBytes > 0 && len(req.Stdin) > s.policy.MaxCommandBytes) {
+		return nil
+	}
+	stdinFindings := s.scanStdin(req)
+	for i := range stdinFindings {
+		if req.Backend == BackendHost && stdinFindings[i].Decision == DecisionAsk {
+			stdinFindings[i].Decision = DecisionDeny
+		}
+	}
+	return stdinFindings
 }
 
 func (s *DefaultScanner) scanStdin(req ScanRequest) []Finding {

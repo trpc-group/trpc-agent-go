@@ -89,12 +89,8 @@ func (p Policy) WithDefaults() Policy {
 		d.DeniedCommands = cleanStringList(p.DeniedCommands)
 		d.DeniedPaths = cleanStringList(p.DeniedPaths)
 	} else {
-		if p.DeniedCommands != nil && len(cleanStringList(p.DeniedCommands)) > 0 {
-			d.DeniedCommands = cleanStringList(p.DeniedCommands)
-		}
-		if p.DeniedPaths != nil && len(cleanStringList(p.DeniedPaths)) > 0 {
-			d.DeniedPaths = cleanStringList(p.DeniedPaths)
-		}
+		d.DeniedCommands = mergeStringLists(d.DeniedCommands, p.DeniedCommands)
+		d.DeniedPaths = mergeStringLists(d.DeniedPaths, p.DeniedPaths)
 	}
 	d.DisableDefaultDenies = p.DisableDefaultDenies
 	if p.NetworkAllowlist != nil {
@@ -229,6 +225,24 @@ func cleanStringList(in []string) []string {
 		if v != "" {
 			out = append(out, v)
 		}
+	}
+	return out
+}
+
+func mergeStringLists(base, extra []string) []string {
+	cleanBase := cleanStringList(base)
+	cleanExtra := cleanStringList(extra)
+	if len(cleanExtra) == 0 {
+		return cleanBase
+	}
+	seen := make(map[string]struct{}, len(cleanBase)+len(cleanExtra))
+	out := make([]string, 0, len(cleanBase)+len(cleanExtra))
+	for _, value := range append(cleanBase, cleanExtra...) {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
 	}
 	return out
 }

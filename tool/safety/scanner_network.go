@@ -246,7 +246,7 @@ func networkConfigurationOverrideOption(cmd, option string) bool {
 	case "curl":
 		return option == "-K" || option == "--config"
 	case "wget":
-		return option == "--config" || option == "--execute"
+		return option == "-e" || option == "--config" || option == "--execute"
 	default:
 		return false
 	}

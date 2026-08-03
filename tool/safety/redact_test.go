@@ -94,6 +94,26 @@ func TestRedactString_RedactsCurlCredentialFlags(t *testing.T) {
 	}
 }
 
+func TestRedactString_ScopesNetworkCredentialFlagsToCommandSegment(t *testing.T) {
+	input := `python -u script.py | curl -u alice:password https://allowed.example && docker --user 1000 alpine`
+	out, redacted := redactString(input)
+	require.True(t, redacted)
+	require.Contains(t, out, `python -u script.py`)
+	require.Contains(t, out, `docker --user 1000 alpine`)
+	require.NotContains(t, out, "alice:password")
+}
+
+func TestRedactString_DoesNotRedactAmbiguousFlagsOutsideNetworkClients(t *testing.T) {
+	for _, input := range []string{
+		`python -u script.py`,
+		`docker run --user 1000 alpine`,
+	} {
+		out, redacted := redactString(input)
+		require.False(t, redacted, input)
+		require.Equal(t, input, out)
+	}
+}
+
 func TestRedactString_NoSecretLeavesInput(t *testing.T) {
 	out, redacted := redactString("plain output")
 	require.False(t, redacted)

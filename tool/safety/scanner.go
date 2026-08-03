@@ -18,7 +18,8 @@ import (
 
 // DefaultScanner implements Scanner with the package policy rules.
 type DefaultScanner struct {
-	policy Policy
+	policy      Policy
+	initialized bool
 }
 
 // NewDefaultScanner creates a scanner from policy.
@@ -27,7 +28,7 @@ func NewDefaultScanner(policy Policy) (*DefaultScanner, error) {
 	if err := p.Validate(); err != nil {
 		return nil, err
 	}
-	return &DefaultScanner{policy: p}, nil
+	return &DefaultScanner{policy: p, initialized: true}, nil
 }
 
 // MustDefaultScanner creates a scanner and panics on invalid policy.
@@ -42,9 +43,10 @@ func MustDefaultScanner(policy Policy) *DefaultScanner {
 // Scan scans one request.
 func (s *DefaultScanner) Scan(ctx context.Context, req ScanRequest) (Report, error) {
 	start := time.Now()
-	if s == nil {
+	if s == nil || !s.initialized {
 		s = MustDefaultScanner(Policy{})
 	}
+	sizeResult := s.scanSizeResult(req)
 	if req.Backend == "" {
 		req.Backend = BackendUnknown
 		findings := []Finding{{
@@ -54,7 +56,11 @@ func (s *DefaultScanner) Scan(ctx context.Context, req ScanRequest) (Report, err
 			Evidence:       "backend is required for safety scanning",
 			Recommendation: "set an explicit supported safety backend before tool execution",
 		}}
-		report := buildReport(req, findings, time.Since(start))
+		reportReq := req
+		if sizeResult.commandTooLarge {
+			reportReq.Command = ""
+		}
+		report := buildReport(reportReq, findings, time.Since(start))
 		return normalizeReportText(report, s.policy.DeniedPaths), nil
 	}
 	var findings []Finding
@@ -69,13 +75,21 @@ func (s *DefaultScanner) Scan(ctx context.Context, req ScanRequest) (Report, err
 			Recommendation: "use a supported safety backend before tool execution",
 		}}
 	} else {
-		findings = s.scanRequest(ctx, req)
+		findings = s.scanRequest(ctx, req, sizeResult)
 	}
-	report := buildReport(req, findings, time.Since(start))
+	reportReq := req
+	if sizeResult.commandTooLarge {
+		reportReq.Command = ""
+	}
+	report := buildReport(reportReq, findings, time.Since(start))
 	return normalizeReportText(report, s.policy.DeniedPaths), nil
 }
 
-func (s *DefaultScanner) scanRequest(ctx context.Context, req ScanRequest) []Finding {
+func (s *DefaultScanner) scanRequest(
+	ctx context.Context,
+	req ScanRequest,
+	sizeResult scanSizeResult,
+) []Finding {
 	select {
 	case <-ctx.Done():
 		return []Finding{{
@@ -87,25 +101,35 @@ func (s *DefaultScanner) scanRequest(ctx context.Context, req ScanRequest) []Fin
 		}}
 	default:
 	}
-	var findings []Finding
-	if sizeFindings := s.scanSize(req); len(sizeFindings) > 0 {
-		return sizeFindings
-	}
+	findings := append([]Finding(nil), sizeResult.findings...)
 	findings = append(findings, s.scanEnv(req.Env)...)
 	findings = append(findings, s.scanCwd(req)...)
 	findings = append(findings, s.scanCollectionPaths(req)...)
 	findings = append(findings, s.scanInputPaths(req)...)
-	findings = append(findings, s.scanEditorText(req)...)
+	if !sizeResult.editorTextTooLarge {
+		findings = append(findings, s.scanEditorText(req)...)
+	}
 	findings = append(findings, s.scanOutputLimit(req)...)
 	switch {
 	case req.Command != "":
-		findings = append(findings, s.scanCommand(req)...)
+		if !sizeResult.commandTooLarge {
+			findings = append(findings, s.scanCommand(req)...)
+		}
 	case len(req.Args) > 0:
-		findings = append(findings, s.scanArgvRequest(req)...)
+		if !sizeResult.argsTooLarge {
+			findings = append(findings, s.scanArgvRequest(req)...)
+		}
 	case req.Code != "":
-		findings = append(findings, s.scanCode(req)...)
+		if !sizeResult.codeTooLarge {
+			findings = append(findings, s.scanCode(req)...)
+		}
 	case len(req.RawArguments) > 0:
-		findings = append(findings, s.scanUnknownArguments(req)...)
+		if !sizeResult.rawArgumentsTooLarge {
+			findings = append(findings, s.scanUnknownArguments(req)...)
+		}
+	}
+	if req.Command != "" && sizeResult.commandTooLarge && !sizeResult.stdinTooLarge {
+		findings = append(findings, s.scanCommandStdin(req)...)
 	}
 	if req.Stdin != "" && req.Command == "" {
 		findings = append(findings, Finding{
@@ -152,8 +176,24 @@ func (s *DefaultScanner) scanRequest(ctx context.Context, req ScanRequest) []Fin
 }
 
 func (s *DefaultScanner) scanSize(req ScanRequest) []Finding {
+	return s.scanSizeResult(req).findings
+}
+
+type scanSizeResult struct {
+	findings             []Finding
+	commandTooLarge      bool
+	argsTooLarge         bool
+	stdinTooLarge        bool
+	rawArgumentsTooLarge bool
+	codeTooLarge         bool
+	editorTextTooLarge   bool
+}
+
+func (s *DefaultScanner) scanSizeResult(req ScanRequest) scanSizeResult {
+	result := scanSizeResult{}
 	var findings []Finding
 	if s.policy.MaxCommandBytes > 0 && len(req.Command) > s.policy.MaxCommandBytes {
+		result.commandTooLarge = true
 		findings = append(findings, Finding{
 			RuleID:         "command.too_large",
 			RiskLevel:      RiskHigh,
@@ -163,8 +203,10 @@ func (s *DefaultScanner) scanSize(req ScanRequest) []Finding {
 		})
 	}
 	if s.policy.MaxCommandBytes > 0 && len(req.Args) > 0 {
-		argumentBytes := len(strings.Join(req.Args, " "))
-		if argumentBytes > s.policy.MaxCommandBytes {
+		argumentBytes, tooLarge := argvByteLength(
+			req.Args, s.policy.MaxCommandBytes)
+		if tooLarge {
+			result.argsTooLarge = true
 			findings = append(findings, Finding{
 				RuleID:         "command.too_large",
 				RiskLevel:      RiskHigh,
@@ -175,6 +217,7 @@ func (s *DefaultScanner) scanSize(req ScanRequest) []Finding {
 		}
 	}
 	if s.policy.MaxCommandBytes > 0 && len(req.Stdin) > s.policy.MaxCommandBytes {
+		result.stdinTooLarge = true
 		findings = append(findings, Finding{
 			RuleID:         "command.too_large",
 			RiskLevel:      RiskHigh,
@@ -184,6 +227,7 @@ func (s *DefaultScanner) scanSize(req ScanRequest) []Finding {
 		})
 	}
 	if s.policy.MaxCommandBytes > 0 && len(req.RawArguments) > s.policy.MaxCommandBytes {
+		result.rawArgumentsTooLarge = true
 		findings = append(findings, Finding{
 			RuleID:         "unknown.bounded_scan",
 			RiskLevel:      RiskHigh,
@@ -193,6 +237,7 @@ func (s *DefaultScanner) scanSize(req ScanRequest) []Finding {
 		})
 	}
 	if s.policy.MaxScriptBytes > 0 && len(req.Code) > s.policy.MaxScriptBytes {
+		result.codeTooLarge = true
 		findings = append(findings, Finding{
 			RuleID:         "script.too_large",
 			RiskLevel:      RiskHigh,
@@ -202,6 +247,7 @@ func (s *DefaultScanner) scanSize(req ScanRequest) []Finding {
 		})
 	}
 	if s.policy.MaxScriptBytes > 0 && len(req.EditorText) > s.policy.MaxScriptBytes {
+		result.editorTextTooLarge = true
 		findings = append(findings, Finding{
 			RuleID:         "script.too_large",
 			RiskLevel:      RiskHigh,
@@ -210,7 +256,29 @@ func (s *DefaultScanner) scanSize(req ScanRequest) []Finding {
 			Recommendation: "review large editor payloads manually",
 		})
 	}
-	return findings
+	result.findings = findings
+	return result
+}
+
+func argvByteLength(args []string, limit int) (int, bool) {
+	maxInt := int(^uint(0) >> 1)
+	total := 0
+	for i, arg := range args {
+		if i > 0 {
+			if total == maxInt {
+				return maxInt, true
+			}
+			total++
+		}
+		if len(arg) > maxInt-total {
+			return maxInt, true
+		}
+		total += len(arg)
+		if total > limit {
+			return total, true
+		}
+	}
+	return total, false
 }
 
 func (s *DefaultScanner) scanOutputLimit(req ScanRequest) []Finding {

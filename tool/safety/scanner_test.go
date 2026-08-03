@@ -362,6 +362,37 @@ func TestDefaultScanner_RejectsMissingBackend(t *testing.T) {
 	require.Equal(t, "backend is required for safety scanning", report.Evidence)
 }
 
+func TestDefaultScanner_ZeroValueUsesDefaultPolicy(t *testing.T) {
+	var nilScanner *DefaultScanner
+	var zeroScanner DefaultScanner
+	scanners := []*DefaultScanner{
+		nilScanner,
+		&zeroScanner,
+		MustDefaultScanner(Policy{}),
+	}
+	for i, scanner := range scanners {
+		t.Run(fmt.Sprintf("scanner_%d", i), func(t *testing.T) {
+			pathReport, err := scanner.Scan(context.Background(), ScanRequest{
+				Backend: BackendWorkspace,
+				Command: "cat /etc/passwd",
+			})
+			require.NoError(t, err)
+			require.Equal(t, DecisionDeny, pathReport.Decision)
+			require.Equal(t, "path.sensitive_credentials", pathReport.RuleID)
+			require.True(t, pathReport.Redacted)
+
+			secretReport, err := scanner.Scan(context.Background(), ScanRequest{
+				Backend: BackendWorkspace,
+				Command: "echo token=abc123",
+			})
+			require.NoError(t, err)
+			require.Equal(t, DecisionDeny, secretReport.Decision)
+			require.Equal(t, "secret.inline_value", secretReport.RuleID)
+			require.True(t, secretReport.Redacted)
+		})
+	}
+}
+
 func TestDefaultScanner_DeniesProcessControlEnvWithoutAllowlist(t *testing.T) {
 	report, err := MustDefaultScanner(Policy{}).Scan(context.Background(), ScanRequest{
 		ToolName: "exec_command",
@@ -736,8 +767,33 @@ func TestDefaultScanner_EdgeCoverageCases(t *testing.T) {
 				require.Equal(t, tc.ruleID, report.RuleID)
 				require.Len(t, report.Findings, 1)
 				require.False(t, report.Redacted)
+				if tc.name == "command" {
+					require.Empty(t, report.Command)
+				}
 			})
 		}
+	})
+
+	t.Run("oversized stdin keeps independent environment deny", func(t *testing.T) {
+		report, err := MustDefaultScanner(Policy{
+			MaxCommandBytes: 4,
+		}).Scan(context.Background(), ScanRequest{
+			Backend: BackendHost,
+			Command: "cat",
+			Stdin:   "rm -rf /tmp/x",
+			Env: map[string]string{
+				"LD_PRELOAD": "/tmp/hook.so",
+			},
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionDeny, report.Decision)
+		require.Equal(t, "env.process_control", report.RuleID)
+		rules := make(map[string]bool, len(report.Findings))
+		for _, finding := range report.Findings {
+			rules[finding.RuleID] = true
+		}
+		require.True(t, rules["command.too_large"])
+		require.True(t, rules["env.process_control"])
 	})
 
 	t.Run("timeout host request denies", func(t *testing.T) {
@@ -887,6 +943,8 @@ func TestDefaultScanner_NetworkAndCodeEdges(t *testing.T) {
 			"wget --config=wgetrc https://allowed.example",
 			"wget --execute use_proxy=no https://allowed.example",
 			"wget --execute=use_proxy=no https://allowed.example",
+			"wget -e use_proxy=no https://allowed.example",
+			"wget -euse_proxy=no https://allowed.example",
 		}
 		for _, command := range commands {
 			report, err := MustDefaultScanner(Policy{
@@ -960,6 +1018,28 @@ func TestDefaultScanner_NetworkAndCodeEdges(t *testing.T) {
 		require.NotContains(t, report.Command, "alice:password")
 		require.NotContains(t, report.Command, "proxy:password")
 		require.NotContains(t, report.Command, "bearer-token")
+	})
+
+	t.Run("ambiguous authentication flags stay allowed for non-network commands", func(t *testing.T) {
+		for _, req := range []ScanRequest{
+			{
+				Backend: BackendWorkspace,
+				Command: "python -u script.py",
+			},
+			{
+				Backend: BackendWorkspace,
+				Command: "docker run --user 1000 alpine",
+			},
+			{
+				Backend: BackendWorkspace,
+				Args:    []string{"python", "-u", "script.py"},
+			},
+		} {
+			report, err := MustDefaultScanner(Policy{}).Scan(context.Background(), req)
+			require.NoError(t, err)
+			require.Equal(t, DecisionAllow, report.Decision, req.Command)
+			require.Equal(t, "evaluation.none", report.RuleID, req.Command)
+		}
 	})
 
 	t.Run("benign token metadata is not a secret", func(t *testing.T) {
@@ -1401,6 +1481,11 @@ func TestBuildReport_DecisionPrecedence(t *testing.T) {
 }
 
 func TestDefaultScanner_HelperEdges(t *testing.T) {
+	argumentBytes, tooLarge := argvByteLength(
+		[]string{"ab", "cd", strings.Repeat("x", 128)}, 4)
+	require.True(t, tooLarge)
+	require.Equal(t, 5, argumentBytes)
+
 	require.False(t, deleteTargetIsSystemPath(""))
 	require.False(t, deleteTargetIsSystemPath("-f"))
 	require.True(t, deleteTargetIsSystemPath("."))

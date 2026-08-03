@@ -29,7 +29,6 @@ type permissionPolicy struct {
 	resolver         BackendResolver
 	observer         func(context.Context, Report)
 	auditMode        AuditFailureMode
-	defaultBackend   Backend
 }
 
 // NewPermissionPolicy adapts a safety scanner to tool.PermissionPolicy.
@@ -47,9 +46,7 @@ func NewPermissionPolicy(
 	p := &permissionPolicy{
 		scanner:          scanner,
 		auditDeniedPaths: auditDeniedPathsForScanner(scanner),
-		resolver:         defaultBackendResolver,
 		auditMode:        auditMode,
-		defaultBackend:   BackendUnknown,
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -103,8 +100,8 @@ func (p *permissionPolicy) CheckToolPermission(
 		return tool.DenyPermission("tool_safety: permission request is required"), nil
 	}
 	metadata := metadataMap(req.Metadata)
-	backend := p.defaultBackend
-	if p.resolver != nil {
+	backend := defaultBackendResolver(req)
+	if backend == BackendUnknown && p.resolver != nil {
 		backend = p.resolver(req)
 	}
 	scanReqs, err := requestsFromPermissionRequest(req, backend, metadata)
@@ -202,6 +199,9 @@ func (p *permissionPolicy) writeAudit(
 
 func auditDeniedPathsForScanner(scanner Scanner) []string {
 	if defaultScanner, ok := scanner.(*DefaultScanner); ok {
+		if !defaultScanner.initialized {
+			return append([]string(nil), DefaultPolicy().DeniedPaths...)
+		}
 		return append([]string(nil), defaultScanner.policy.DeniedPaths...)
 	}
 	return append([]string(nil), DefaultPolicy().DeniedPaths...)

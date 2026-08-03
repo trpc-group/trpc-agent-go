@@ -59,14 +59,35 @@ func TestPermissionPolicy_UnsupportedBackendResolverFailsClosed(t *testing.T) {
 		}),
 	)
 	decision, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
-		ToolName:  "exec_command",
-		Arguments: []byte(`{"command":"python -i","background":true,"tty":true}`),
+		ToolName:  "custom",
+		Arguments: []byte(`{"value":"ok"}`),
 	})
 	require.NoError(t, err)
 	require.Equal(t, tool.PermissionActionDeny, decision.Action)
 	require.Equal(t, BackendUnknown, observed.Backend)
 	require.Equal(t, DecisionDeny, observed.Decision)
 	require.Equal(t, "backend.unsupported", observed.RuleID)
+}
+
+func TestPermissionPolicy_BackendResolverCannotWeakenBuiltinBackend(t *testing.T) {
+	var observed Report
+	policy := NewPermissionPolicy(
+		MustDefaultScanner(Policy{}),
+		WithBackendResolver(func(*tool.PermissionRequest) Backend {
+			return BackendUnknown
+		}),
+		WithReportObserver(func(_ context.Context, report Report) {
+			observed = report
+		}),
+	)
+	decision, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "exec_command",
+		Arguments: []byte(`{"command":"python -i","timeout_sec":300,"tty":true}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionAsk, decision.Action)
+	require.Equal(t, BackendHost, observed.Backend)
+	require.Equal(t, "host.pty_session", observed.RuleID)
 }
 
 func TestPermissionPolicy_AuditBestEffortKeepsDenyDecision(t *testing.T) {
@@ -634,7 +655,8 @@ func TestAuditEventFromReport_DefaultScannerExplicitEmptyDeniedPathsStayEmpty(t 
 func TestPermissionPolicy_AuditRedactionDoesNotMutateSharedDeniedPaths(t *testing.T) {
 	policy := NewPermissionPolicy(
 		MustDefaultScanner(Policy{
-			DeniedPaths: []string{"secret", "/etc/passwd", "/very/long/sensitive/path"},
+			DisableDefaultDenies: true,
+			DeniedPaths:          []string{"secret", "/etc/passwd", "/very/long/sensitive/path"},
 		}),
 		WithAuditWriter(NewJSONLAuditWriter(&bytes.Buffer{})),
 	)

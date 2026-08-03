@@ -13,6 +13,8 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+
+	"trpc.group/trpc-go/trpc-agent-go/internal/shellsafe"
 )
 
 const secretKeyPattern = `api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|oauth[_-]?token|session[_-]?token|csrf[_-]?token|xsrf[_-]?token|jwt[_-]?token|client[_-]?secret|db[_-]?(password|passwd|secret)|private[_-]?key|aws[_-]?(access[_-]?key|secret)|authorization(_(header|token|value|key))?|bearer(_(token|value))?|password|passwd|secret|token` // #nosec G101 -- credential-name matching pattern, not a credential
@@ -27,9 +29,11 @@ var secretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----`),
 }
 
-var credentialFlagPattern = regexp.MustCompile(`(?i)(--(?:api[-_]?key|access[-_]?token|refresh[-_]?token|id[-_]?token|oauth[-_]?token|session[-_]?token|csrf[-_]?token|xsrf[-_]?token|jwt[-_]?token|client[-_]?secret|password|passwd|secret|token|user|proxy-user|oauth2-bearer)\b(?:\s+|=))(?:"[^"]+"|'[^']+'|[^\s]+)`)
+var credentialFlagPattern = regexp.MustCompile(`(?i)(--(?:api[-_]?key|access[-_]?token|refresh[-_]?token|id[-_]?token|oauth[-_]?token|session[-_]?token|csrf[-_]?token|xsrf[-_]?token|jwt[-_]?token|client[-_]?secret|password|passwd|secret|token)\b(?:\s+|=))(?:"[^"]+"|'[^']+'|[^\s]+)`)
 
-var shortCredentialFlagPattern = regexp.MustCompile(`(?i)(^|[\s])(-u)(?:(\s+)(?:"[^"]+"|'[^']+'|[^\s]+)|(?:"[^"]+"|'[^']+'|[^\s]+))`)
+var networkCredentialFlagPattern = regexp.MustCompile(`(?i)(--(?:user|proxy-user|oauth2-bearer)\b(?:\s+|=))(?:"[^"]+"|'[^']+'|[^\s]+)`)
+
+var networkShortCredentialFlagPattern = regexp.MustCompile(`(?i)(^|[\s])(-u)(?:(\s+)(?:"[^"]+"|'[^']+'|[^\s]+)|(?:"[^"]+"|'[^']+'|[^\s]+))`)
 
 func redactString(s string) (string, bool) {
 	redacted := false
@@ -49,13 +53,118 @@ func redactString(s string) (string, bool) {
 		redacted = true
 		out = next
 	}
+	if next, changed := redactNetworkCredentialFlags(out); changed {
+		redacted = true
+		out = next
+	}
 	return out, redacted
 }
 
 func redactCredentialFlags(s string) (string, bool) {
 	out := credentialFlagPattern.ReplaceAllString(s, `${1}<redacted>`)
-	out = shortCredentialFlagPattern.ReplaceAllString(out, `${1}${2}${3}<redacted>`)
 	return out, out != s
+}
+
+func redactNetworkCredentialFlags(s string) (string, bool) {
+	pipe, err := shellsafe.Parse(s)
+	if err != nil {
+		return s, false
+	}
+	spans := shellCommandSpans(s)
+	if len(spans) != len(pipe.Commands) {
+		return s, false
+	}
+	var out strings.Builder
+	last := 0
+	redacted := false
+	for i, argv := range pipe.Commands {
+		if len(argv) == 0 {
+			continue
+		}
+		command := normalizeCommand(argv[0])
+		if command != "curl" && command != "wget" {
+			continue
+		}
+		span := spans[i]
+		segment := s[span.start:span.end]
+		next := networkCredentialFlagPattern.ReplaceAllString(
+			segment, `${1}<redacted>`)
+		next = networkShortCredentialFlagPattern.ReplaceAllString(
+			next, `${1}${2}${3}<redacted>`)
+		if next == segment {
+			continue
+		}
+		if !redacted {
+			out.Grow(len(s))
+		}
+		out.WriteString(s[last:span.start])
+		out.WriteString(next)
+		last = span.end
+		redacted = true
+	}
+	if !redacted {
+		return s, false
+	}
+	out.WriteString(s[last:])
+	return out.String(), true
+}
+
+type shellCommandSpan struct {
+	start int
+	end   int
+}
+
+func shellCommandSpans(s string) []shellCommandSpan {
+	var spans []shellCommandSpan
+	segmentStart := 0
+	var quote byte
+	escaped := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if quote != 0 {
+			if c == '\\' && quote == '"' {
+				escaped = true
+				continue
+			}
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch c {
+		case '\'', '"':
+			quote = c
+		case '\\':
+			escaped = true
+		case '|', '&', ';':
+			start, end := trimShellCommandSpan(s, segmentStart, i)
+			if start < end {
+				spans = append(spans, shellCommandSpan{start: start, end: end})
+			}
+			if i+1 < len(s) && s[i+1] == c && (c == '|' || c == '&') {
+				i++
+			}
+			segmentStart = i + 1
+		}
+	}
+	start, end := trimShellCommandSpan(s, segmentStart, len(s))
+	if start < end {
+		spans = append(spans, shellCommandSpan{start: start, end: end})
+	}
+	return spans
+}
+
+func trimShellCommandSpan(s string, start, end int) (int, int) {
+	segment := strings.TrimSpace(s[start:end])
+	if segment == "" {
+		return end, end
+	}
+	offset := strings.Index(s[start:end], segment)
+	return start + offset, start + offset + len(segment)
 }
 
 var credentialURLPattern = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://[^\s"'<>]+`)

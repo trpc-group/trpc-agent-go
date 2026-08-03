@@ -191,6 +191,16 @@ func TestPolicyValidate_RejectsNegativeBounds(t *testing.T) {
 }
 
 func TestPolicyWithDefaults_PreservesDefaultDeniesUnlessExplicitlyDisabled(t *testing.T) {
+	custom, err := LoadPolicyYAML(strings.NewReader(`
+denied_paths:
+  - /company/key
+  - /etc/passwd
+`))
+	require.NoError(t, err)
+	require.Contains(t, custom.DeniedPaths, "/company/key")
+	require.Contains(t, custom.DeniedPaths, "/etc/passwd")
+	require.Equal(t, len(DefaultPolicy().DeniedPaths)+1, len(custom.DeniedPaths))
+
 	policy, err := LoadPolicyYAML(strings.NewReader(`
 denied_commands: []
 denied_paths: []
