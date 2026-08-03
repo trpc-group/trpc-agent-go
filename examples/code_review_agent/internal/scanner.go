@@ -9,6 +9,7 @@
 package internal
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"regexp"
@@ -19,14 +20,14 @@ import (
 
 // Rule 定义一条代码评审规则。
 type Rule struct {
-	ID           string    `json:"id"`
-	Category     Category  `json:"category"`
-	Severity     Severity  `json:"severity"`
-	Title        string    `json:"title"`
-	Description  string    `json:"description"`
-	Patterns     []string  `json:"patterns"`
-	Suggestion   string    `json:"suggestion"`
-	compiledRe   []*regexp.Regexp
+	ID          string   `json:"id"`
+	Category    Category `json:"category"`
+	Severity    Severity `json:"severity"`
+	Title       string   `json:"title"`
+	Description string   `json:"description"`
+	Patterns    []string `json:"patterns"`
+	Suggestion  string   `json:"suggestion"`
+	compiledRe  []*regexp.Regexp
 }
 
 // RulesConfig 是规则配置文件的顶层结构。
@@ -114,7 +115,9 @@ func (rs *RuleScanner) CheckMissingTests(allFiles []string, changedFiles []DiffF
 	}
 
 	for _, df := range changedFiles {
-		if df.GoFile() && !hasTest[df.NewPath] {
+		// 只对新增文件（OldPath == /dev/null）检查测试缺失，
+		// 避免修改已有文件时对历史文件误报。
+		if df.GoFile() && !hasTest[df.NewPath] && df.OldPath == "/dev/null" {
 			f := NewFinding(
 				SeverityWarning,
 				CategoryTesting,
@@ -157,8 +160,8 @@ func defaultRules() []Rule {
 		// ===== 安全风险 =====
 		{
 			ID: "sec_hardcoded_key_001", Category: CategorySecurity,
-			Severity: SeverityCritical,
-			Title:    "硬编码的 API Key 或密钥",
+			Severity:    SeverityCritical,
+			Title:       "硬编码的 API Key 或密钥",
 			Description: "检测到代码中包含硬编码的 API Key、token 或密钥字符串。",
 			Patterns: []string{
 				`api[Kk]ey\s*[:=]\s*"[^"]{20,}"`,
@@ -174,8 +177,8 @@ func defaultRules() []Rule {
 		},
 		{
 			ID: "sec_sql_injection_001", Category: CategorySecurity,
-			Severity: SeverityCritical,
-			Title:    "潜在的 SQL 注入风险",
+			Severity:    SeverityCritical,
+			Title:       "潜在的 SQL 注入风险",
 			Description: "使用 fmt.Sprintf 拼接 SQL 查询可能导致 SQL 注入。",
 			Patterns: []string{
 				`fmt\.Sprintf\s*\(\s*".*SELECT\s`,
@@ -188,8 +191,8 @@ func defaultRules() []Rule {
 		},
 		{
 			ID: "sec_command_injection_001", Category: CategorySecurity,
-			Severity: SeverityCritical,
-			Title:    "命令注入风险",
+			Severity:    SeverityCritical,
+			Title:       "命令注入风险",
 			Description: "检测到直接使用外部输入拼接 shell 命令。",
 			Patterns: []string{
 				`exec\.Command\s*\(\s*"sh"\s*,\s*"-c"`,
@@ -203,8 +206,8 @@ func defaultRules() []Rule {
 		// ===== goroutine / context 泄漏 =====
 		{
 			ID: "concur_goroutine_leak_001", Category: CategoryConcurrency,
-			Severity: SeverityHigh,
-			Title:    "goroutine 可能泄漏（缺少 context 取消）",
+			Severity:    SeverityHigh,
+			Title:       "goroutine 可能泄漏（缺少 context 取消）",
 			Description: "启动的 goroutine 没有使用 context 控制生命周期，可能导致泄漏。",
 			Patterns: []string{
 				`go\s+func\s*\(\s*\)`,
@@ -214,8 +217,8 @@ func defaultRules() []Rule {
 		},
 		{
 			ID: "concur_context_not_checked_001", Category: CategoryConcurrency,
-			Severity: SeverityHigh,
-			Title:    "未检查 context 取消",
+			Severity:    SeverityHigh,
+			Title:       "未检查 context 取消",
 			Description: "在循环或阻塞操作中未检查 ctx.Done()。",
 			Patterns: []string{
 				`for\s+\{`,
@@ -227,8 +230,8 @@ func defaultRules() []Rule {
 		// ===== 资源管理 =====
 		{
 			ID: "res_open_without_close_001", Category: CategoryResource,
-			Severity: SeverityHigh,
-			Title:    "打开的资源可能未关闭",
+			Severity:    SeverityHigh,
+			Title:       "打开的资源可能未关闭",
 			Description: "os.Open/创建的资源未看到对应的 defer Close()。",
 			Patterns: []string{
 				`os\.Open\s*\(`,
@@ -241,8 +244,8 @@ func defaultRules() []Rule {
 		},
 		{
 			ID: "res_http_body_not_closed_001", Category: CategoryResource,
-			Severity: SeverityMedium,
-			Title:    "HTTP 响应 Body 可能未关闭",
+			Severity:    SeverityMedium,
+			Title:       "HTTP 响应 Body 可能未关闭",
 			Description: "http.Get/Post 的 resp.Body 需要关闭。",
 			Patterns: []string{
 				`http\.Get\s*\(`,
@@ -256,8 +259,8 @@ func defaultRules() []Rule {
 		// ===== 错误处理 =====
 		{
 			ID: "err_unchecked_001", Category: CategoryErrorHandling,
-			Severity: SeverityHigh,
-			Title:    "未检查的错误返回值",
+			Severity:    SeverityHigh,
+			Title:       "未检查的错误返回值",
 			Description: "函数返回 error 但调用方未检查（赋值给 _ 或未赋值）。",
 			Patterns: []string{
 				`_\s*,\s*_\s*:=\s*\w+\(`,
@@ -267,8 +270,8 @@ func defaultRules() []Rule {
 		},
 		{
 			ID: "err_fmt_errorf_without_verbfmt_001", Category: CategoryErrorHandling,
-			Severity: SeverityLow,
-			Title:    "错误信息中缺少上下文",
+			Severity:    SeverityLow,
+			Title:       "错误信息中缺少上下文",
 			Description: "fmt.Errorf 只包含 %w 或 %v 格式，未提供足够的上下文信息。",
 			Patterns: []string{
 				`fmt\.Errorf\s*\(\s*"%w"`,
@@ -279,8 +282,8 @@ func defaultRules() []Rule {
 		// ===== 数据库生命周期 =====
 		{
 			ID: "db_no_ping_001", Category: CategoryDBLifecycle,
-			Severity: SeverityMedium,
-			Title:    "数据库连接后未进行 Ping 验证",
+			Severity:    SeverityMedium,
+			Title:       "数据库连接后未进行 Ping 验证",
 			Description: "sql.Open 后未调用 db.Ping() 验证连接是否有效。",
 			Patterns: []string{
 				`sql\.Open\s*\(`,
@@ -290,8 +293,8 @@ func defaultRules() []Rule {
 		},
 		{
 			ID: "db_no_close_001", Category: CategoryDBLifecycle,
-			Severity: SeverityMedium,
-			Title:    "数据库连接可能未关闭",
+			Severity:    SeverityMedium,
+			Title:       "数据库连接可能未关闭",
 			Description: "检测到 sql.Open 但未看到对应的 defer db.Close()。",
 			Patterns: []string{
 				`sql\.Open\s*\(\s*"`,
@@ -302,8 +305,8 @@ func defaultRules() []Rule {
 		// ===== 敏感信息 =====
 		{
 			ID: "sens_credit_card_001", Category: CategorySensitive,
-			Severity: SeverityCritical,
-			Title:    "可能泄露信用卡号",
+			Severity:    SeverityCritical,
+			Title:       "可能泄露信用卡号",
 			Description: "检测到类似信用卡号的数字序列。",
 			Patterns: []string{
 				`\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b`,
@@ -312,8 +315,8 @@ func defaultRules() []Rule {
 		},
 		{
 			ID: "sens_private_key_001", Category: CategorySensitive,
-			Severity: SeverityCritical,
-			Title:    "可能泄露私钥",
+			Severity:    SeverityCritical,
+			Title:       "可能泄露私钥",
 			Description: "检测到包含 BEGIN PRIVATE KEY 的内容。",
 			Patterns: []string{
 				`BEGIN\s+(RSA\s+)?PRIVATE\s+KEY`,
@@ -336,9 +339,9 @@ func NewSafetyGate() *SafetyGate {
 	}
 }
 
-// Check 检查命令是否可以安全执行。返回 nil 表示通过。
+// Check 检查命令是否可以安全执行。
 func (sg *SafetyGate) Check(command string) *safety.ScanReport {
-	report := sg.scanner.Scan(nil, safety.ScanRequest{
+	report := sg.scanner.Scan(context.Background(), safety.ScanRequest{
 		ToolName: "code_review_sandbox",
 		Command:  command,
 		Backend:  "container",

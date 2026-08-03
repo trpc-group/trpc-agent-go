@@ -95,8 +95,9 @@ func DetectSensitiveInfo(df DiffFile) []Finding {
 
 	for _, hunk := range df.Hunks {
 		for _, line := range hunk.Lines {
-			// 检查新增行（+）和上下文行（ ）是否存在敏感信息
-			if line.Type == LineDelete {
+			// 只检查新增行（+）：删除行和上下文行不属于本次变更，
+			// 避免 PR 修改无关代码时误报历史遗留的敏感信息。
+			if line.Type != LineAdd {
 				continue
 			}
 			content := strings.TrimSpace(line.Content)

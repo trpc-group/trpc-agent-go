@@ -24,7 +24,9 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -124,16 +126,55 @@ func runPipeline(
 		allFindings = append(allFindings, sensFindings...)
 	}
 
+	// 测试缺失检测：新 Go 文件必须有对应 _test.go（repo-path 提供完整
+	// 文件列表，否则以 diff 内文件推断）。
+	allGoFiles := collectGoFiles(repoPath, diffFiles)
+	allFindings = append(allFindings, scanner.CheckMissingTests(allGoFiles, diffFiles)...)
+
 	// --- Stage 3: 安全门禁 + 沙箱执行 ---
 	sandboxCfg := internal.DefaultSandboxConfig()
 	executor := internal.NewSandboxExecutor(sandboxCfg, dryRun)
 
 	var sandboxDurationMs int64
+	var toolCalls, intercepts int
+	var sandboxRuns []internal.SandboxRun
+	var permissionDecisions []internal.PermissionDecision
+
+	recordPermission := func(result internal.SandboxResult) {
+		permissionDecisions = append(permissionDecisions, internal.PermissionDecision{
+			TaskID:      taskID,
+			Command:     result.Command,
+			Decision:    result.Decision,
+			RuleID:      result.RuleID,
+			RiskLevel:   result.RiskLevel,
+			Reason:      result.Recommendation,
+			Intercepted: result.Intercepted,
+			CreatedAt:   time.Now().Unix(),
+		})
+	}
+
 	if repoPath != "" {
 		result, err := executor.RunGoVet(ctx, repoPath)
-		sandboxDurationMs = result.DurationMs
-		if err != nil {
+		recordPermission(result)
+		if result.Intercepted {
+			intercepts++
+			fmt.Fprintf(os.Stderr, "沙箱命令被安全策略拦截 (decision=%s, rule=%s)\n",
+				result.Decision, result.RuleID)
+		} else if err != nil {
 			fmt.Fprintf(os.Stderr, "沙箱执行警告: %v (exit=%d)\n", err, result.ExitCode)
+		} else {
+			toolCalls++
+			sandboxDurationMs += result.DurationMs
+			sandboxRuns = append(sandboxRuns, internal.SandboxRun{
+				TaskID:     taskID,
+				Command:    result.Command,
+				ExitCode:   result.ExitCode,
+				Stdout:     result.Stdout,
+				Stderr:     result.Stderr,
+				DurationMs: result.DurationMs,
+				TimedOut:   result.TimedOut,
+				CreatedAt:  time.Now().Unix(),
+			})
 		}
 		if result.Stderr != "" || result.ExitCode != 0 {
 			vetLines := parseVetOutput(result.Stderr + result.Stdout)
@@ -154,10 +195,12 @@ func runPipeline(
 		}
 	}
 
-	// --- Stage 4: 去重 ---
+	// --- Stage 4: 去重 + 低置信度降级 ---
 	beforeDedup := len(allFindings)
 	allFindings = internal.DeduplicateFindings(allFindings)
 	dedupCount := beforeDedup - internal.CountNonDuplicate(allFindings)
+	// 低置信度问题降级为 warning / needs_human_review，不混入高置信 findings。
+	internal.ApplyConfidencePolicy(allFindings)
 
 	// --- Stage 5: 排序 ---
 	internal.SortFindings(allFindings)
@@ -195,6 +238,18 @@ func runPipeline(
 			task.ErrorMessage = fmt.Sprintf("存储 findings 失败: %v", err)
 			return task, dedupCount, err
 		}
+
+		// 落库沙箱执行与权限决策记录（审计链路）。
+		for _, run := range sandboxRuns {
+			if err := store.InsertSandboxRun(ctx, run); err != nil {
+				fmt.Fprintf(os.Stderr, "存储 sandbox run 失败: %v\n", err)
+			}
+		}
+		for _, d := range permissionDecisions {
+			if err := store.InsertPermissionDecision(ctx, d); err != nil {
+				fmt.Fprintf(os.Stderr, "存储 permission decision 失败: %v\n", err)
+			}
+		}
 	} else {
 		task.Findings = allFindings
 		task.TotalFindings = len(allFindings)
@@ -206,8 +261,22 @@ func runPipeline(
 	task.CompletedAt = time.Now().Unix()
 	task.DurationMs = time.Since(startTime).Milliseconds()
 
+	monitoring := internal.MonitoringSummary{
+		TaskID:               taskID,
+		TotalDurationMs:      task.DurationMs,
+		SandboxDurationMs:    sandboxDurationMs,
+		ToolCallsCount:       toolCalls,
+		PermissionIntercepts: intercepts,
+		FindingCount:         task.TotalFindings,
+	}
+	meta := internal.ReportMeta{
+		Monitoring:          monitoring,
+		PermissionDecisions: permissionDecisions,
+		SandboxRuns:         sandboxRuns,
+	}
+
 	if err := internal.GenerateJSONReport(
-		outputDir+"/review_report.json", task, dedupCount,
+		outputDir+"/review_report.json", task, dedupCount, meta,
 	); err != nil {
 		fmt.Fprintf(os.Stderr, "生成 JSON 报告失败: %v\n", err)
 	}
@@ -216,6 +285,7 @@ func runPipeline(
 		TaskTitle: prTitle,
 		Author:    author,
 		Branch:    branch,
+		Meta:      meta,
 	}
 	if err := internal.GenerateMarkdownReport(
 		outputDir+"/review_report.md", task, cfg,
@@ -226,16 +296,37 @@ func runPipeline(
 	// 保存 task 到数据库
 	if store != nil {
 		store.SaveTask(ctx, task)
-		store.SaveMonitoringSummary(ctx, internal.MonitoringSummary{
-			TaskID:            taskID,
-			TotalDurationMs:   task.DurationMs,
-			SandboxDurationMs: sandboxDurationMs,
-			ToolCallsCount:    1,
-			FindingCount:      task.TotalFindings,
-		})
+		store.SaveMonitoringSummary(ctx, monitoring)
 	}
 
 	return task, dedupCount, nil
+}
+
+// collectGoFiles 收集用于测试缺失检测的 Go 文件列表。
+// repoPath 非空时遍历仓库（相对路径与 diff 路径一致）；否则仅用 diff 内
+// 出现的文件推断（新增 .go 文件若无对应 _test.go 会被检出）。
+func collectGoFiles(repoPath string, diffFiles []internal.DiffFile) []string {
+	var files []string
+	if repoPath != "" {
+		_ = filepath.WalkDir(repoPath, func(path string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return nil
+			}
+			if strings.HasSuffix(path, ".go") {
+				if rel, relErr := filepath.Rel(repoPath, path); relErr == nil {
+					files = append(files, rel)
+				} else {
+					files = append(files, path)
+				}
+			}
+			return nil
+		})
+		return files
+	}
+	for _, df := range diffFiles {
+		files = append(files, df.NewPath)
+	}
+	return files
 }
 
 // vetLine 表示 go vet 输出的一行。

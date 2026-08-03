@@ -159,3 +159,37 @@ func TestSeverityOrder(t *testing.T) {
 		}
 	}
 }
+
+// TestApplyConfidencePolicy 验证低置信度降级策略（验收标准 7）：
+// 低置信度问题进入 warnings / needs_human_review，不混入高置信 findings。
+func TestApplyConfidencePolicy(t *testing.T) {
+	findings := []Finding{
+		{Severity: SeverityCritical, Confidence: 0.9, DedupKey: "a"},
+		{Severity: SeverityCritical, Confidence: 0.2, DedupKey: "b"},
+		{Severity: SeverityHigh, Confidence: 0.5, DedupKey: "c"},
+		{Severity: SeverityLow, Confidence: 0.7, DedupKey: "d"},
+		{Severity: SeverityWarning, Confidence: 0.4, DedupKey: "e"},
+	}
+
+	ApplyConfidencePolicy(findings)
+
+	if findings[0].Severity != SeverityCritical {
+		t.Errorf("高置信度 critical 不应被降级: %s", findings[0].Severity)
+	}
+	if findings[1].Severity != SeverityWarning || !findings[1].NeedsHumanReview {
+		t.Errorf("置信度 0.2 应降为 warning 并标记人工复核: severity=%s needs_review=%v",
+			findings[1].Severity, findings[1].NeedsHumanReview)
+	}
+	if findings[2].Severity != SeverityMedium {
+		t.Errorf("置信度 0.5 的 high 应降一级为 medium: %s", findings[2].Severity)
+	}
+	if findings[3].Severity != SeverityLow {
+		t.Errorf("置信度 0.7 不应降级: %s", findings[3].Severity)
+	}
+	if findings[4].Severity != SeverityWarning {
+		t.Errorf("warning 不应再降级: %s", findings[4].Severity)
+	}
+	if findings[4].NeedsHumanReview {
+		t.Error("置信度 0.4 介于阈值之间不应标记人工复核")
+	}
+}

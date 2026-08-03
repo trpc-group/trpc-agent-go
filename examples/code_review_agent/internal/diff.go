@@ -148,11 +148,13 @@ func ParseDiff(input string) ([]DiffFile, error) {
 			continue
 		}
 
-		// 检测 --- 行
+		// 检测 --- 行；--- /dev/null 表示新增文件
 		if strings.HasPrefix(rawLine, "--- ") {
 			if m := reOldFile.FindStringSubmatch(rawLine); m != nil {
 				if m[1] != "" {
 					currentFile.OldPath = m[1]
+				} else {
+					currentFile.OldPath = "/dev/null"
 				}
 			}
 			continue

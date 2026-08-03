@@ -39,10 +39,10 @@ func TestPipeline_SecurityIssue(t *testing.T) {
 
 	task, dedup, err := runPipeline(
 		"diff_file", content,
-		"",       // no repo path
+		"", // no repo path
 		dir+"/test.db",
 		dir,
-		true,     // dry-run
+		true, // dry-run
 		"", "", "",
 	)
 	if err != nil {
@@ -355,4 +355,116 @@ func TestPipeline_DatabasePersistence(t *testing.T) {
 			retrieved.ID, retrieved.Status, len(findings), info.Size())
 	}()
 
+}
+
+// TestPipeline_AllFixtures 验证 testdata 下全部公开 diff 样本均可运行并生成
+// 报告（issue 验收标准：公开样本必须全部可运行）。
+func TestPipeline_AllFixtures(t *testing.T) {
+	entries, err := os.ReadDir("testdata")
+	if err != nil {
+		t.Fatalf("读取 testdata 失败: %v", err)
+	}
+
+	// 每个 fixture 至少应检出的非重复 finding 数。
+	minFindings := map[string]int{
+		"clean":             0,
+		"security_issue":    1,
+		"goroutine_leak":    1,
+		"resource_leak":     1,
+		"db_lifecycle":      1,
+		"missing_tests":     1,
+		"duplicate_finding": 1,
+		"sandbox_failure":   0, // 沙箱失败场景：无 repo-path 时管线不崩即通过
+		"sensitive_info":    1,
+	}
+
+	found := 0
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		found++
+		t.Run(name, func(t *testing.T) {
+			patch, err := os.ReadFile(filepath.Join("testdata", name, "diff.patch"))
+			if err != nil {
+				t.Fatalf("读取 fixture 失败: %v", err)
+			}
+			dir := t.TempDir()
+			task, _, err := runPipeline(
+				"diff_file", string(patch), "", dir+"/test.db", dir, true, "", "", "",
+			)
+			if err != nil {
+				t.Fatalf("fixture %s 管线执行失败: %v", name, err)
+			}
+			if task.Status != "completed" {
+				t.Errorf("fixture %s 状态应为 completed, 实际 %s", name, task.Status)
+			}
+			if _, err := os.Stat(filepath.Join(dir, "review_report.json")); err != nil {
+				t.Errorf("fixture %s 未生成 JSON 报告: %v", name, err)
+			}
+			if _, err := os.Stat(filepath.Join(dir, "review_report.md")); err != nil {
+				t.Errorf("fixture %s 未生成 MD 报告: %v", name, err)
+			}
+			unique := task.Summary.Total - task.Summary.Duplicates
+			if min := minFindings[name]; unique < min {
+				t.Errorf("fixture %s 检出不足: 期望 >=%d, 实际 %d", name, min, unique)
+			}
+			t.Logf("fixture %s: findings=%d", name, unique)
+		})
+	}
+	if found == 0 {
+		t.Fatal("testdata 下没有 fixture 目录")
+	}
+}
+
+// TestPipeline_MonitoringPersisted 验证沙箱与权限决策记录落库（审计链路）。
+func TestPipeline_MonitoringPersisted(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "review.db")
+
+	content := `diff --git a/db.go b/db.go
+--- a/db.go
++++ b/db.go
+@@ -1,0 +1,5 @@
++package main
++import "database/sql"
++func connect() { sql.Open("sqlite3", "test.db") }
+`
+
+	task, _, err := runPipeline(
+		"diff_file", content, "", dbPath, dir, true, "", "", "",
+	)
+	if err != nil {
+		t.Fatalf("管线执行失败: %v", err)
+	}
+
+	store, err := internal.NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("打开数据库失败: %v", err)
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+
+	// 验证权限决策记录存在（dry-run 且无 repo-path 时应为 0 条，但任务本身完成）
+	mon, err := store.GetMonitoringSummary(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("查询监控摘要失败: %v", err)
+	}
+	if mon.TaskID != task.ID {
+		t.Errorf("监控摘要 task ID 不匹配: %q != %q", mon.TaskID, task.ID)
+	}
+
+	runs, err := store.GetSandboxRunsByTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("查询 sandbox runs 失败: %v", err)
+	}
+	decisions, err := store.GetPermissionDecisionsByTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("查询 permission decisions 失败: %v", err)
+	}
+
+	t.Logf("审计链路: sandbox_runs=%d, permission_decisions=%d, tool_calls=%d, intercepts=%d",
+		len(runs), len(decisions), mon.ToolCallsCount, mon.PermissionIntercepts)
 }

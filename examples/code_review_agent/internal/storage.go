@@ -117,6 +117,7 @@ func (s *Store) initDB(ctx context.Context) error {
 			rule_id TEXT DEFAULT '',
 			dedup_key TEXT NOT NULL DEFAULT '',
 			is_duplicate INTEGER DEFAULT 0,
+			needs_human_review INTEGER DEFAULT 0,
 			created_at INTEGER NOT NULL
 		)`,
 		`CREATE TABLE IF NOT EXISTS sandbox_runs (
@@ -188,18 +189,22 @@ func (s *Store) InsertFinding(ctx context.Context, taskID string, f Finding) err
 	query := `INSERT INTO findings
 		(task_id, severity, category, file, line, title, evidence,
 		 recommendation, confidence, source, rule_id, dedup_key,
-		 is_duplicate, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		 is_duplicate, needs_human_review, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	dup := 0
 	if f.IsDuplicate {
 		dup = 1
 	}
+	needsReview := 0
+	if f.NeedsHumanReview {
+		needsReview = 1
+	}
 
 	_, err := s.db.ExecContext(ctx, query,
 		taskID, f.Severity, f.Category, f.File, f.Line, f.Title,
 		f.Evidence, f.Recommendation, f.Confidence, f.Source,
-		f.RuleID, f.DedupKey, dup, f.Timestamp,
+		f.RuleID, f.DedupKey, dup, needsReview, f.Timestamp,
 	)
 	return err
 }
@@ -228,18 +233,22 @@ func (s *Store) insertFindingTx(ctx context.Context, tx *sql.Tx, taskID string, 
 	query := `INSERT INTO findings
 		(task_id, severity, category, file, line, title, evidence,
 		 recommendation, confidence, source, rule_id, dedup_key,
-		 is_duplicate, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		 is_duplicate, needs_human_review, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	dup := 0
 	if f.IsDuplicate {
 		dup = 1
 	}
+	needsReview := 0
+	if f.NeedsHumanReview {
+		needsReview = 1
+	}
 
 	_, err := tx.ExecContext(ctx, query,
 		taskID, f.Severity, f.Category, f.File, f.Line, f.Title,
 		f.Evidence, f.Recommendation, f.Confidence, f.Source,
-		f.RuleID, f.DedupKey, dup, f.Timestamp,
+		f.RuleID, f.DedupKey, dup, needsReview, f.Timestamp,
 	)
 	return err
 }
@@ -294,6 +303,69 @@ func (s *Store) SaveMonitoringSummary(ctx context.Context, m MonitoringSummary) 
 	return err
 }
 
+// GetMonitoringSummary 按 task ID 查询监控摘要。
+func (s *Store) GetMonitoringSummary(ctx context.Context, taskID string) (MonitoringSummary, error) {
+	query := `SELECT task_id, total_duration_ms, sandbox_duration_ms,
+		tool_calls_count, permission_intercepts, finding_count
+		FROM monitoring_summary WHERE task_id = ?`
+	var m MonitoringSummary
+	err := s.db.QueryRowContext(ctx, query, taskID).Scan(
+		&m.TaskID, &m.TotalDurationMs, &m.SandboxDurationMs,
+		&m.ToolCallsCount, &m.PermissionIntercepts, &m.FindingCount,
+	)
+	return m, err
+}
+
+// GetSandboxRunsByTask 查询某个任务的所有沙箱执行记录。
+func (s *Store) GetSandboxRunsByTask(ctx context.Context, taskID string) ([]SandboxRun, error) {
+	query := `SELECT id, task_id, command, exit_code, stdout, stderr,
+		duration_ms, timed_out, created_at
+		FROM sandbox_runs WHERE task_id = ? ORDER BY id`
+	rows, err := s.db.QueryContext(ctx, query, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var runs []SandboxRun
+	for rows.Next() {
+		var r SandboxRun
+		var timedOut int
+		if err := rows.Scan(&r.ID, &r.TaskID, &r.Command, &r.ExitCode,
+			&r.Stdout, &r.Stderr, &r.DurationMs, &timedOut, &r.CreatedAt); err != nil {
+			return nil, err
+		}
+		r.TimedOut = timedOut == 1
+		runs = append(runs, r)
+	}
+	return runs, rows.Err()
+}
+
+// GetPermissionDecisionsByTask 查询某个任务的所有安全决策记录。
+func (s *Store) GetPermissionDecisionsByTask(ctx context.Context, taskID string) ([]PermissionDecision, error) {
+	query := `SELECT id, task_id, command, decision, rule_id, risk_level,
+		reason, intercepted, created_at
+		FROM permission_decisions WHERE task_id = ? ORDER BY id`
+	rows, err := s.db.QueryContext(ctx, query, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var decisions []PermissionDecision
+	for rows.Next() {
+		var d PermissionDecision
+		var intercepted int
+		if err := rows.Scan(&d.ID, &d.TaskID, &d.Command, &d.Decision,
+			&d.RuleID, &d.RiskLevel, &d.Reason, &intercepted, &d.CreatedAt); err != nil {
+			return nil, err
+		}
+		d.Intercepted = intercepted == 1
+		decisions = append(decisions, d)
+	}
+	return decisions, rows.Err()
+}
+
 // GetTask 根据 ID 查询审查任务。
 func (s *Store) GetTask(ctx context.Context, taskID string) (*ReviewTask, error) {
 	query := `SELECT id, input_type, input_hash, status, created_at, completed_at,
@@ -320,7 +392,8 @@ func (s *Store) GetTask(ctx context.Context, taskID string) (*ReviewTask, error)
 // GetFindingsByTask 查询某个任务的所有 findings。
 func (s *Store) GetFindingsByTask(ctx context.Context, taskID string) ([]Finding, error) {
 	query := `SELECT severity, category, file, line, title, evidence,
-		recommendation, confidence, source, rule_id, dedup_key, is_duplicate, created_at
+		recommendation, confidence, source, rule_id, dedup_key, is_duplicate,
+		needs_human_review, created_at
 		FROM findings WHERE task_id = ? ORDER BY
 		CASE severity
 			WHEN 'critical' THEN 0
@@ -339,13 +412,15 @@ func (s *Store) GetFindingsByTask(ctx context.Context, taskID string) ([]Finding
 	var findings []Finding
 	for rows.Next() {
 		var f Finding
-		var dup int
+		var dup, needsReview int
 		if err := rows.Scan(&f.Severity, &f.Category, &f.File, &f.Line,
 			&f.Title, &f.Evidence, &f.Recommendation, &f.Confidence,
-			&f.Source, &f.RuleID, &f.DedupKey, &dup, &f.Timestamp); err != nil {
+			&f.Source, &f.RuleID, &f.DedupKey, &dup, &needsReview,
+			&f.Timestamp); err != nil {
 			return nil, err
 		}
 		f.IsDuplicate = dup == 1
+		f.NeedsHumanReview = needsReview == 1
 		findings = append(findings, f)
 	}
 

@@ -60,19 +60,20 @@ const (
 
 // Finding 表示一次代码审查发现的问题。
 type Finding struct {
-	Severity       Severity `json:"severity"`
-	Category       Category `json:"category"`
-	File           string   `json:"file"`
-	Line           int      `json:"line"`
-	Title          string   `json:"title"`
-	Evidence       string   `json:"evidence"`
-	Recommendation string   `json:"recommendation"`
-	Confidence     float64  `json:"confidence"`
-	Source         string   `json:"source"` // "rule" / "go_vet" / "sandbox_script"
-	RuleID         string   `json:"rule_id"`
-	DedupKey       string   `json:"dedup_key"`
-	IsDuplicate    bool     `json:"is_duplicate"`
-	Timestamp      int64    `json:"timestamp"`
+	Severity         Severity `json:"severity"`
+	Category         Category `json:"category"`
+	File             string   `json:"file"`
+	Line             int      `json:"line"`
+	Title            string   `json:"title"`
+	Evidence         string   `json:"evidence"`
+	Recommendation   string   `json:"recommendation"`
+	Confidence       float64  `json:"confidence"`
+	Source           string   `json:"source"` // "rule" / "go_vet" / "sandbox_script"
+	RuleID           string   `json:"rule_id"`
+	DedupKey         string   `json:"dedup_key"`
+	IsDuplicate      bool     `json:"is_duplicate"`
+	NeedsHumanReview bool     `json:"needs_human_review"`
+	Timestamp        int64    `json:"timestamp"`
 }
 
 // NewFinding 创建一个新的 Finding 并自动计算 dedup key。
@@ -140,15 +141,56 @@ func DeduplicateFindings(findings []Finding) []Finding {
 	return result
 }
 
+// 低置信度降级阈值：低于此值的 finding 降为 warning 并要求人工复核；
+// 低于此值的 finding 严重级别降一级。
+const (
+	lowConfidenceReviewThreshold    = 0.3
+	lowConfidenceDowngradeThreshold = 0.6
+)
+
+// ApplyConfidencePolicy 对低置信度 finding 做降噪处理：
+// Confidence < 0.3 → 降为 warning 并标记 NeedsHumanReview；
+// 0.3 <= Confidence < 0.6 → 严重级别降一级。
+// 保证低置信度问题进入 warnings / needs_human_review，不混入高置信 findings。
+func ApplyConfidencePolicy(findings []Finding) []Finding {
+	for i := range findings {
+		f := &findings[i]
+		if f.Confidence < lowConfidenceReviewThreshold {
+			f.Severity = SeverityWarning
+			f.NeedsHumanReview = true
+		} else if f.Confidence < lowConfidenceDowngradeThreshold {
+			f.Severity = downgradeSeverity(f.Severity)
+		}
+	}
+	return findings
+}
+
+// downgradeSeverity 将严重级别降一级。
+func downgradeSeverity(s Severity) Severity {
+	switch s {
+	case SeverityCritical:
+		return SeverityHigh
+	case SeverityHigh:
+		return SeverityMedium
+	case SeverityMedium:
+		return SeverityLow
+	case SeverityLow:
+		return SeverityWarning
+	default:
+		return s
+	}
+}
+
 // ReviewSummary 是审查结果的统计汇总。
 type ReviewSummary struct {
-	Total      int `json:"total"`
-	Critical   int `json:"critical"`
-	High       int `json:"high"`
-	Medium     int `json:"medium"`
-	Low        int `json:"low"`
-	Warning    int `json:"warning"`
-	Duplicates int `json:"duplicates"`
+	Total       int `json:"total"`
+	Critical    int `json:"critical"`
+	High        int `json:"high"`
+	Medium      int `json:"medium"`
+	Low         int `json:"low"`
+	Warning     int `json:"warning"`
+	Duplicates  int `json:"duplicates"`
+	NeedsReview int `json:"needs_review"`
 }
 
 // ComputeSummary 从 findings 列表计算统计汇总。
@@ -158,6 +200,9 @@ func ComputeSummary(findings []Finding) ReviewSummary {
 	for _, f := range findings {
 		if f.IsDuplicate {
 			s.Duplicates++
+		}
+		if f.NeedsHumanReview {
+			s.NeedsReview++
 		}
 		switch f.Severity {
 		case SeverityCritical:

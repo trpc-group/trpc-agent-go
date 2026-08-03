@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS findings (
     rule_id TEXT DEFAULT '',
     dedup_key TEXT NOT NULL DEFAULT '',    -- SHA256(file:line:category:rule_id)[:16]
     is_duplicate INTEGER DEFAULT 0,
+    needs_human_review INTEGER DEFAULT 0,  -- 低置信度 finding 需人工复核
     created_at INTEGER NOT NULL
 );
 
