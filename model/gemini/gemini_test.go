@@ -253,7 +253,7 @@ func TestModel_convertMessages(t *testing.T) {
 								Type: model.ContentTypeAudio,
 								Audio: &model.Audio{
 									URL:    audioURL,
-									Format: "audio/mpeg",
+									Format: "mpeg",
 								},
 							},
 							{
@@ -290,7 +290,7 @@ func TestModel_convertMessages(t *testing.T) {
 								Type: model.ContentTypeVideo,
 								Video: &model.Video{
 									URL:    videoURL,
-									Format: "video/mp4",
+									Format: "mp4",
 								},
 							},
 							{

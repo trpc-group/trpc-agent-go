@@ -1004,18 +1004,20 @@ func (m *Model) convertContentPart(part model.ContentPart) *genai.Part {
 		if part.Audio == nil {
 			return nil
 		}
+		mimeType := mediaMIMEType(part.Audio.Format, "audio")
 		if part.Audio.URL != "" {
-			return genai.NewPartFromURI(part.Audio.URL, part.Audio.Format)
+			return genai.NewPartFromURI(part.Audio.URL, mimeType)
 		}
-		return genai.NewPartFromBytes(part.Audio.Data, part.Audio.Format)
+		return genai.NewPartFromBytes(part.Audio.Data, mimeType)
 	case model.ContentTypeVideo:
 		if part.Video == nil {
 			return nil
 		}
+		mimeType := mediaMIMEType(part.Video.Format, "video")
 		if part.Video.URL != "" {
-			return genai.NewPartFromURI(part.Video.URL, part.Video.Format)
+			return genai.NewPartFromURI(part.Video.URL, mimeType)
 		}
-		return genai.NewPartFromBytes(part.Video.Data, part.Video.Format)
+		return genai.NewPartFromBytes(part.Video.Data, mimeType)
 	case model.ContentTypeFile:
 		if part.File == nil {
 			return nil
@@ -1031,4 +1033,12 @@ func (m *Model) convertContentPart(part model.ContentPart) *genai.Part {
 		return genai.NewPartFromBytes(part.File.Data, part.File.MimeType)
 	}
 	return nil
+}
+
+func mediaMIMEType(format, mediaType string) string {
+	format = strings.TrimSpace(format)
+	if format == "" || strings.Contains(format, "/") {
+		return format
+	}
+	return mediaType + "/" + format
 }
