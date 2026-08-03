@@ -221,12 +221,11 @@ func (s *Scanner) Scan(ctx context.Context, req ScanRequest) ScanReport {
 			strings.Contains(normalizedCommand, forbidden) ||
 			strings.Contains(req.WorkDir, forbidden) ||
 			strings.Contains(normalizedWorkDir, forbidden) {
-			// Apply the same guard as regex rules: only update
-			// metadata when the finding is worse than or equal
-			// to the current report state.
-			if riskOrder(RiskCritical) > riskOrder(report.RiskLevel) ||
-				(riskOrder(RiskCritical) == riskOrder(report.RiskLevel) &&
-					actionOrder(DecisionDeny) >= actionOrder(report.Decision)) {
+			// Only update metadata on a strict upgrade: an earlier rule at
+			// the same severity (e.g. secrets_001 for ~/.ssh) stays the
+			// reported rule because it is more specific than the generic
+			// forbidden-path finding.
+			if riskOrder(RiskCritical) > riskOrder(report.RiskLevel) {
 				report.RuleID = "forbidden_path"
 				report.Evidence = forbidden
 				report.Category = "dangerous_commands"
@@ -401,52 +400,67 @@ func (s *Scanner) Scan(ctx context.Context, req ScanRequest) ScanReport {
 			if actionOrder(DecisionAsk) > actionOrder(report.Decision) {
 				report.Decision = DecisionAsk
 			}
-			report.RuleID = "sleep_timeout_exceeded"
-			report.Evidence = fmt.Sprintf("sleep %ds", secs)
-			report.Category = "resource_abuse"
-			report.Recommendation = fmt.Sprintf(
-				"sleep %ds exceeds max timeout %ds", secs, s.policy.MaxTimeoutSec)
+			if metadataUpgrades(report, RiskHigh, DecisionAsk) {
+				report.RuleID = "sleep_timeout_exceeded"
+				report.Evidence = fmt.Sprintf("sleep %ds", secs)
+				report.Category = "resource_abuse"
+				report.Recommendation = fmt.Sprintf(
+					"sleep %ds exceeds max timeout %ds", secs, s.policy.MaxTimeoutSec)
+			}
 		}
 	}
 
 	// 8.6 Resource abuse: output flood / unbounded stream.
-	if s.policy.MaxOutputBytes > 0 && matchesOutputFlood(fullCommand) {
-		if riskOrder(RiskCritical) > riskOrder(report.RiskLevel) {
-			report.RiskLevel = RiskCritical
+	if s.policy.MaxOutputBytes > 0 {
+		if flood, isFlood := matchesOutputFlood(fullCommand); isFlood {
+			if riskOrder(RiskCritical) > riskOrder(report.RiskLevel) {
+				report.RiskLevel = RiskCritical
+			}
+			if actionOrder(DecisionDeny) > actionOrder(report.Decision) {
+				report.Decision = DecisionDeny
+			}
+			if metadataUpgrades(report, RiskCritical, DecisionDeny) {
+				report.RuleID = "output_flood"
+				report.Evidence = flood
+				report.Category = "resource_abuse"
+				report.Recommendation = "Command streams unbounded output (/dev/zero, yes, etc.)"
+			}
 		}
-		if actionOrder(DecisionDeny) > actionOrder(report.Decision) {
-			report.Decision = DecisionDeny
-		}
-		report.RuleID = "output_flood"
-		report.Category = "resource_abuse"
-		report.Recommendation = "Command streams unbounded output (/dev/zero, yes, etc.)"
 	}
 
 	// 8.7 Resource abuse: concurrency flags (parallel fan-out).
-	if matchesConcurrency(fullCommand) {
+	if concurrency, isConcurrent := matchesConcurrency(fullCommand); isConcurrent {
 		if riskOrder(RiskHigh) > riskOrder(report.RiskLevel) {
 			report.RiskLevel = RiskHigh
 		}
 		if actionOrder(DecisionAsk) > actionOrder(report.Decision) {
 			report.Decision = DecisionAsk
 		}
-		report.RuleID = "concurrent_execution"
-		report.Category = "resource_abuse"
-		report.Recommendation = "Command requests concurrent/parallel execution; review required"
+		if metadataUpgrades(report, RiskHigh, DecisionAsk) {
+			report.RuleID = "concurrent_execution"
+			report.Evidence = concurrency
+			report.Category = "resource_abuse"
+			report.Recommendation = "Command requests concurrent/parallel execution; review required"
+		}
 	}
 
 	// 8.8 HostExec safety boundary: interactive / long-lived PTY sessions
 	// run directly on the host shell and carry higher risk.
-	if req.Backend == "hostexec" && matchesHostExecRisk(fullCommand) {
-		if riskOrder(RiskHigh) > riskOrder(report.RiskLevel) {
-			report.RiskLevel = RiskHigh
+	if req.Backend == "hostexec" {
+		if session, isLongSession := matchesHostExecRisk(fullCommand); isLongSession {
+			if riskOrder(RiskHigh) > riskOrder(report.RiskLevel) {
+				report.RiskLevel = RiskHigh
+			}
+			if actionOrder(DecisionAsk) > actionOrder(report.Decision) {
+				report.Decision = DecisionAsk
+			}
+			if metadataUpgrades(report, RiskHigh, DecisionAsk) {
+				report.RuleID = "hostexec_long_session"
+				report.Evidence = session
+				report.Category = "host_execution"
+				report.Recommendation = "hostexec interactive/long-lived session (top, tail -f, editor, etc.); review required"
+			}
 		}
-		if actionOrder(DecisionAsk) > actionOrder(report.Decision) {
-			report.Decision = DecisionAsk
-		}
-		report.RuleID = "hostexec_long_session"
-		report.Category = "host_execution"
-		report.Recommendation = "hostexec interactive/long-lived session (top, tail -f, editor, etc.); review required"
 	}
 
 	// Desensitize the command and evidence stored in the report so secrets
@@ -804,12 +818,12 @@ func curlNetOverride(fullCommand string) (bool, string, bool) {
 		if !strings.HasPrefix(a, "-") {
 			continue
 		}
-		flag, val, _ := splitFlagValue(a)
-		switch {
-		case flag == "-K" || flag == "--config":
-			return true, val, true
-		case flag == "--connect-to" || flag == "--resolve":
-			return false, val, true
+		flag, val, attached := splitFlagValue(a)
+		if flag == "-K" || flag == "--config" || flag == "--connect-to" || flag == "--resolve" {
+			if !attached && i+1 < len(parts) {
+				val = parts[i+1]
+			}
+			return flag == "-K" || flag == "--config", val, true
 		}
 	}
 	return false, "", false
@@ -1174,31 +1188,36 @@ func parseSleepSeconds(cmd string) (int, bool) {
 }
 
 // matchesOutputFlood reports commands that stream unbounded output
-// (/dev/zero, /dev/urandom, `yes`, `: > /dev/...`, `cat /dev/`).
-func matchesOutputFlood(cmd string) bool {
+// (/dev/zero, /dev/urandom, `yes`, `: > /dev/...`, `cat /dev/`), returning
+// the matched token as evidence.
+func matchesOutputFlood(cmd string) (string, bool) {
 	for _, pat := range []string{
 		"/dev/zero", "/dev/urandom", "/dev/random",
 		"cat /dev/", ": > /dev/", "yes ", "yes|", "yes >",
 	} {
 		if strings.Contains(cmd, pat) {
-			return true
+			return pat, true
 		}
 	}
-	return false
+	return "", false
 }
 
 // matchesConcurrency reports commands requesting parallel fan-out
-// (xargs -P, make -j, --parallel, GNU parallel, -P <n>).
-func matchesConcurrency(cmd string) bool {
+// (xargs -P, make -j, --parallel, GNU parallel, -P <n>), returning the
+// matched fragment as evidence.
+func matchesConcurrency(cmd string) (string, bool) {
 	re := regexp.MustCompile(`(\bxargs\b[^|&]*\s-P\s*\d+|\s-j\d+\b|--parallel\b|\bparallel\s|curl[^|&]*-Z\b)`)
-	return re.MatchString(cmd)
+	m := re.FindString(cmd)
+	return m, m != ""
 }
 
 // matchesHostExecRisk reports interactive / long-lived host-shell commands
-// that are risky to run without review (PTY sessions, editors, followers).
-func matchesHostExecRisk(cmd string) bool {
+// that are risky to run without review (PTY sessions, editors, followers),
+// returning the matched command as evidence.
+func matchesHostExecRisk(cmd string) (string, bool) {
 	re := regexp.MustCompile(`(^|\s)(top|htop|less|more|vim|vi|nano|tail\s+-f|tail\s+--follow|ssh\s+-t|docker\s+exec\s+-it)(\s|$)`)
-	return re.MatchString(cmd)
+	m := re.FindString(cmd)
+	return strings.TrimSpace(m), m != ""
 }
 
 // redactSecrets masks API keys, tokens, passwords and private-key material
@@ -1307,6 +1326,17 @@ func riskOrder(r RiskLevel) int {
 	default:
 		return 0
 	}
+}
+
+// metadataUpgrades reports whether a finding with the given risk/action is at
+// least as severe as the current report state — the condition under which a
+// rule may overwrite the report's metadata (RuleID/Evidence/Recommendation).
+func metadataUpgrades(report ScanReport, risk RiskLevel, action Decision) bool {
+	if riskOrder(risk) > riskOrder(report.RiskLevel) {
+		return true
+	}
+	return riskOrder(risk) == riskOrder(report.RiskLevel) &&
+		actionOrder(action) >= actionOrder(report.Decision)
 }
 
 // actionOrder returns an integer ordering for actions (higher = more restrictive).

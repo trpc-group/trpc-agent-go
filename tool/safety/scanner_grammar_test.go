@@ -69,9 +69,10 @@ func TestNamedHomeTraversalDenied(t *testing.T) {
 	}
 	// Traversal inside the home must not false-positive.
 	mustAllow(t, "cat ~/notes/../todo.txt")
-	// ~user still anchors denied-path patterns like ~/.ssh.
+	// ~user still anchors denied-path patterns: id_rsa trips the credential
+	// rule (more specific than the generic forbidden-path rule).
 	r := mustDeny(t, "cat ~root/sub/../.ssh/id_rsa")
-	assert.Equal(t, "forbidden_path", r.RuleID)
+	assert.Contains(t, []string{"secrets_001", "forbidden_path"}, r.RuleID)
 }
 
 func TestNormalizeTildePaths(t *testing.T) {
