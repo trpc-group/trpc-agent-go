@@ -1478,7 +1478,7 @@ func TestDuckDuckGoTool_FilterSearchResponse(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-
+			tc := tc
 			got := tc.tool.filterSearchResponse(tc.response)
 			require.Equal(t, tc.want, got)
 		})

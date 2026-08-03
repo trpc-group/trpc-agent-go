@@ -1,0 +1,9 @@
+diff --git a/pkg/calc.go b/pkg/calc.go
+--- a/pkg/calc.go
++++ b/pkg/calc.go
+@@ -0,0 +1,5 @@
++package pkg
++
++func Multiply(a, b int) int {
++	return a * b
++}

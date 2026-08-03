@@ -1,0 +1,12 @@
+diff --git a/pkg/worker.go b/pkg/worker.go
+--- a/pkg/worker.go
++++ b/pkg/worker.go
+@@ -0,0 +1,8 @@
++package pkg
++
++func Start(ch <-chan int) {
++	go func() {
++		for range ch {
++		}
++	}()
++}

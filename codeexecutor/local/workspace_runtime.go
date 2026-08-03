@@ -330,6 +330,11 @@ func (r *Runtime) RunProgram(
 	ws codeexecutor.Workspace,
 	spec codeexecutor.RunProgramSpec,
 ) (codeexecutor.RunResult, error) {
+	if spec.DisableNetwork {
+		return codeexecutor.RunResult{}, errors.New(
+			"local runtime does not support DisableNetwork",
+		)
+	}
 	_, span := atrace.Tracer.Start(ctx, codeexecutor.SpanWorkspaceRun)
 	span.SetAttributes(
 		attribute.String(codeexecutor.AttrCmd, spec.Cmd),

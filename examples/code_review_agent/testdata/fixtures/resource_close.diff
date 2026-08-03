@@ -1,0 +1,12 @@
+diff --git a/pkg/file.go b/pkg/file.go
+--- a/pkg/file.go
++++ b/pkg/file.go
+@@ -0,0 +1,8 @@
++package pkg
++
++import "os"
++
++func Read(name string) error {
++	f, err := os.Open(name)
++	return err
++}

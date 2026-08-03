@@ -175,10 +175,14 @@ type RunProgramSpec struct {
 	// inheriting os.Environ. Workspace base variables and Env are still
 	// added by runtimes that support workspace execution.
 	CleanEnv bool
-	Cwd      string // relative to workspace root
-	Stdin    string
-	Timeout  time.Duration
-	Limits   ResourceLimits
+	// DisableNetwork requests that the runtime execute the command with
+	// outbound networking disabled. Runtimes that cannot enforce this
+	// should fail closed rather than silently allowing network access.
+	DisableNetwork bool
+	Cwd            string // relative to workspace root
+	Stdin          string
+	Timeout        time.Duration
+	Limits         ResourceLimits
 }
 
 // RunResult captures a single program run result.

@@ -408,6 +408,11 @@ func (r *workspaceRuntime) RunProgram(
 	ws codeexecutor.Workspace,
 	spec codeexecutor.RunProgramSpec,
 ) (codeexecutor.RunResult, error) {
+	if spec.DisableNetwork {
+		return codeexecutor.RunResult{}, errors.New(
+			"container runtime does not support DisableNetwork",
+		)
+	}
 	_, span := atrace.Tracer.Start(ctx,
 		codeexecutor.SpanWorkspaceRun)
 	span.SetAttributes(

@@ -1,0 +1,9 @@
+diff --git a/pkg/fail.go b/pkg/fail.go
+--- a/pkg/fail.go
++++ b/pkg/fail.go
+@@ -0,0 +1,5 @@
++package pkg
++
++func Broken() {
++	panic("compile-like failure fixture")
++}

@@ -1,0 +1,11 @@
+diff --git a/pkg/dup.go b/pkg/dup.go
+--- a/pkg/dup.go
++++ b/pkg/dup.go
+@@ -0,0 +1,7 @@
++package pkg
++
++func A() {
++	secret := "token=abcd1234secret"
++	_ = secret
++	secret = "token=abcd1234secret"
++}

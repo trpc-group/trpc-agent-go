@@ -22,7 +22,7 @@ func TestEncodeDecodeStateDeltaMetadata_RoundTrip(t *testing.T) {
 		"json_number": []byte(`1`),
 		"json_null":   []byte(`null`),
 		"plain_text":  []byte("raw-text"),
-		"empty":       []byte{},
+		"empty":       {},
 		"deleted":     nil,
 	}
 
@@ -43,7 +43,7 @@ func TestEncodeDecodeStateDeltaMetadata_RoundTrip(t *testing.T) {
 func TestEncodeStateDeltaMetadata_UsesSingleEnvelopeFormat(t *testing.T) {
 	encoded := EncodeStateDeltaMetadata(map[string][]byte{
 		"plain_text": []byte("raw-text"),
-		"empty":      []byte{},
+		"empty":      {},
 		"deleted":    nil,
 	})
 
