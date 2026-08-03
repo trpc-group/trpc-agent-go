@@ -79,6 +79,42 @@ func TestReplayRejectsInvalidBackendMetadata(t *testing.T) {
 	if _, err := Replay(context.Background(), replayCase, backend); err == nil {
 		t.Fatal("Replay() unexpectedly accepted an unknown backend capability")
 	}
+	backend = InMemoryBackend()
+	backend.Name = string([]byte{0xff})
+	if _, err := Replay(context.Background(), replayCase, backend); err == nil ||
+		!strings.Contains(err.Error(), "invalid UTF-8") {
+		t.Fatalf("Replay() backend name error = %v, want invalid UTF-8", err)
+	}
+}
+
+func TestConfigurationIdentifiersRequireValidUTF8(t *testing.T) {
+	invalid := string([]byte{0xff})
+	tests := []struct {
+		name   string
+		mutate func(*Case)
+	}{
+		{name: "case name", mutate: func(replayCase *Case) { replayCase.Name = invalid }},
+		{name: "step name", mutate: func(replayCase *Case) { replayCase.Steps[0].Name = invalid }},
+		{name: "logical event id", mutate: func(replayCase *Case) { replayCase.Steps[0].Event.LogicalID = invalid }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			replayCase := PublicCases()[0]
+			test.mutate(&replayCase)
+			if err := validateCase(replayCase); err == nil || !strings.Contains(err.Error(), "invalid UTF-8") {
+				t.Fatalf("validateCase() error = %v, want invalid UTF-8", err)
+			}
+		})
+	}
+	if err := validateAllowedDiffs([]AllowedDiff{{
+		BackendA: "left",
+		BackendB: "right",
+		Path:     "/events",
+		Rule:     AllowedIgnore,
+		Reason:   invalid,
+	}}); err == nil || !strings.Contains(err.Error(), "invalid UTF-8") {
+		t.Fatalf("validateAllowedDiffs() error = %v, want invalid UTF-8", err)
+	}
 }
 
 func TestReplayRejectsMissingRequiredCapabilities(t *testing.T) {
@@ -283,6 +319,44 @@ func TestReplayClosesSuccessfulOpenAfterCancellation(t *testing.T) {
 	}
 }
 
+func TestRunnerPreservesCleanupFailureOnCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cleanupErr := errors.New("injected cleanup failure")
+	first := InMemoryBackend()
+	first.Name = "canceling"
+	open := first.Open
+	first.Open = func(ctx context.Context, caseName string) (*Services, error) {
+		services, err := open(ctx, caseName)
+		if err == nil {
+			services.Cleanup = func() error {
+				cancel()
+				return cleanupErr
+			}
+		}
+		return services, err
+	}
+	second := InMemoryBackend()
+	second.Name = "not-opened"
+	secondOpenCalls := 0
+	secondOpen := second.Open
+	second.Open = func(ctx context.Context, caseName string) (*Services, error) {
+		secondOpenCalls++
+		return secondOpen(ctx, caseName)
+	}
+
+	report, err := (Runner{}).Run(ctx, PublicCases()[:1], []Backend{first, second})
+	if !errors.Is(err, context.Canceled) || !errors.Is(err, cleanupErr) {
+		t.Fatalf("Run() error = %v, want cancellation and cleanup failures", err)
+	}
+	if !reflect.DeepEqual(report, Report{}) {
+		t.Fatalf("Run() report = %#v, want no partial report", report)
+	}
+	if secondOpenCalls != 0 {
+		t.Fatalf("Run() opened backend after cancellation %d times", secondOpenCalls)
+	}
+}
+
 func TestCloneStatePreservesNilAndEmptyValues(t *testing.T) {
 	cloned := cloneState(session.StateMap{
 		"nil":   nil,
@@ -328,6 +402,92 @@ func TestPreparedInputsAreDeepCopied(t *testing.T) {
 		}
 	})
 
+	t.Run("event response graph", func(t *testing.T) {
+		type extraFixture struct {
+			Values []string `json:"values"`
+		}
+		text := "text"
+		finishReason := "stop"
+		index := 1
+		param := "parameter"
+		code := "code"
+		inputEvent := event.NewResponseEvent("invocation", "author", &model.Response{
+			Choices: []model.Choice{{
+				FinishReason: &finishReason,
+				Message: model.Message{
+					ContentParts: []model.ContentPart{{
+						Text:       &text,
+						Image:      &model.Image{Data: []byte("image")},
+						Audio:      &model.Audio{Data: []byte("audio")},
+						File:       &model.File{Data: []byte("file")},
+						ContentRef: &model.ContentRef{RequestID: "request"},
+					}},
+					ToolCalls: []model.ToolCall{{
+						Index: &index,
+						Function: model.FunctionDefinitionParam{
+							Arguments: []byte(`{"value":"original"}`),
+						},
+						ExtraFields: map[string]any{
+							"nested":     []any{map[string]any{"value": "original"}},
+							"array":      [1]map[string]any{{"value": "original"}},
+							"structured": &extraFixture{Values: []string{"original"}},
+							"bytes":      []byte("bytes"),
+							"nil-map":    map[string]any(nil),
+							"nil-slice":  []any(nil),
+						},
+					}},
+				},
+			}},
+			Error: &model.ResponseError{Param: &param, Code: &code},
+		})
+		inputEvent.ParentMetadata = &event.ParentInvocationMetadata{TriggerID: "original"}
+		exec := execution{session: &session.Session{CreatedAt: caseEpoch}}
+		prepared, err := exec.prepareEvent(&EventInput{
+			LogicalID: "logical-event",
+			Event:     inputEvent,
+		})
+		if err != nil {
+			t.Fatalf("prepareEvent() error = %v", err)
+		}
+		prepared.ParentMetadata.TriggerID = "changed"
+		choice := &prepared.Response.Choices[0]
+		*choice.FinishReason = "changed"
+		*choice.Message.ContentParts[0].Text = "changed"
+		choice.Message.ContentParts[0].Image.Data[0] = 'x'
+		choice.Message.ContentParts[0].Audio.Data[0] = 'x'
+		choice.Message.ContentParts[0].File.Data[0] = 'x'
+		choice.Message.ContentParts[0].ContentRef.RequestID = "changed"
+		choice.Message.ToolCalls[0].Function.Arguments[0] = 'x'
+		*choice.Message.ToolCalls[0].Index = 2
+		choice.Message.ToolCalls[0].ExtraFields["nested"].([]any)[0].(map[string]any)["value"] = "changed"
+		choice.Message.ToolCalls[0].ExtraFields["array"].([1]map[string]any)[0]["value"] = "changed"
+		choice.Message.ToolCalls[0].ExtraFields["structured"].(*extraFixture).Values[0] = "changed"
+		choice.Message.ToolCalls[0].ExtraFields["bytes"].([]byte)[0] = 'x'
+		*prepared.Response.Error.Param = "changed"
+		*prepared.Response.Error.Code = "changed"
+
+		originalChoice := &inputEvent.Response.Choices[0]
+		if inputEvent.ParentMetadata.TriggerID != "original" ||
+			*originalChoice.FinishReason != "stop" ||
+			*originalChoice.Message.ContentParts[0].Text != "text" ||
+			string(originalChoice.Message.ContentParts[0].Image.Data) != "image" ||
+			string(originalChoice.Message.ContentParts[0].Audio.Data) != "audio" ||
+			string(originalChoice.Message.ContentParts[0].File.Data) != "file" ||
+			originalChoice.Message.ContentParts[0].ContentRef.RequestID != "request" ||
+			string(originalChoice.Message.ToolCalls[0].Function.Arguments) != `{"value":"original"}` ||
+			*originalChoice.Message.ToolCalls[0].Index != 1 ||
+			originalChoice.Message.ToolCalls[0].ExtraFields["nested"].([]any)[0].(map[string]any)["value"] != "original" ||
+			originalChoice.Message.ToolCalls[0].ExtraFields["array"].([1]map[string]any)[0]["value"] != "original" ||
+			originalChoice.Message.ToolCalls[0].ExtraFields["structured"].(*extraFixture).Values[0] != "original" ||
+			string(originalChoice.Message.ToolCalls[0].ExtraFields["bytes"].([]byte)) != "bytes" ||
+			choice.Message.ToolCalls[0].ExtraFields["nil-map"].(map[string]any) != nil ||
+			choice.Message.ToolCalls[0].ExtraFields["nil-slice"].([]any) != nil ||
+			*inputEvent.Response.Error.Param != "parameter" ||
+			*inputEvent.Response.Error.Code != "code" {
+			t.Fatalf("prepareEvent() retained input ownership: %#v", inputEvent)
+		}
+	})
+
 	t.Run("memory metadata", func(t *testing.T) {
 		eventTime := caseEpoch
 		input := &memory.Metadata{
@@ -341,6 +501,95 @@ func TestPreparedInputsAreDeepCopied(t *testing.T) {
 			t.Fatalf("cloneMemoryMetadata() retained input ownership: %#v", cloned)
 		}
 	})
+}
+
+func TestRunnerIsolatesEventInputsBetweenBackends(t *testing.T) {
+	step := responseEvent("tool-call", 1, "assistant", model.Response{
+		Done: true,
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					Type: "function",
+					Function: model.FunctionDefinitionParam{
+						Name:      "tool",
+						Arguments: []byte(`{"value":"original"}`),
+					},
+				}},
+			},
+		}},
+	})
+	replayCase := Case{
+		Name:     "backend-event-isolation",
+		Requires: []Capability{CapabilitySession},
+		Steps: []Step{
+			messageStep("user", "user", 0, "user", model.RoleUser, "run tool", ""),
+			step,
+		},
+	}
+	mutating := InMemoryBackend()
+	mutating.Name = "mutating"
+	open := mutating.Open
+	mutating.Open = func(ctx context.Context, caseName string) (*Services, error) {
+		services, err := open(ctx, caseName)
+		if err == nil {
+			services.Session = &mutatingAppendSessionService{Service: services.Session}
+		}
+		return services, err
+	}
+	baseline := InMemoryBackend()
+	baseline.Name = "baseline"
+
+	mutatingSnapshot, err := Replay(context.Background(), replayCase, mutating)
+	if err != nil {
+		t.Fatalf("Replay() mutating backend error = %v", err)
+	}
+	baselineSnapshot, err := Replay(context.Background(), replayCase, baseline)
+	if err != nil {
+		t.Fatalf("Replay() baseline backend error = %v", err)
+	}
+	mutatingArguments := normalizedToolArguments(t, mutatingSnapshot.Events[1], "message")
+	baselineArguments := normalizedToolArguments(t, baselineSnapshot.Events[1], "message")
+	if mutatingArguments == baselineArguments {
+		t.Fatalf("Replay() arguments unexpectedly match: mutating=%q baseline=%q", mutatingArguments, baselineArguments)
+	}
+
+	report, err := (Runner{}).Run(context.Background(), []Case{replayCase}, []Backend{mutating, baseline})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if report.BlockingDiffs == 0 {
+		t.Fatalf("Run() report = %#v, want backend mutation to remain visible", report)
+	}
+	arguments := replayCase.Steps[1].Event.Event.Response.Choices[0].Message.ToolCalls[0].Function.Arguments
+	if string(arguments) != `{"value":"original"}` {
+		t.Fatalf("Run() mutated case input arguments = %q", arguments)
+	}
+}
+
+func TestEventExtraFieldsRejectCyclicJSONValues(t *testing.T) {
+	cyclic := &cyclicJSONValue{}
+	cyclic.Next = cyclic
+	step := responseEvent("cyclic-extra-fields", 1, "assistant", model.Response{
+		Done: true,
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					Type:        "function",
+					ExtraFields: map[string]any{"cyclic": cyclic},
+				}},
+			},
+		}},
+	})
+	replayCase := Case{
+		Name:     "cyclic-extra-fields",
+		Requires: []Capability{CapabilitySession},
+		Steps:    []Step{step},
+	}
+	if err := validateCase(replayCase); err == nil || !strings.Contains(err.Error(), "cyclic JSON data") {
+		t.Fatalf("validateCase() error = %v, want cyclic JSON data", err)
+	}
 }
 
 func TestReplayPreservesEmptyStateValue(t *testing.T) {
@@ -679,6 +928,18 @@ func TestComparisonAndNormalizationEdgeCases(t *testing.T) {
 		baseline.Case = "invalid"
 		if _, err := Compare("invalid", baseline, actual, nil); err == nil {
 			t.Fatal("Compare() unexpectedly encoded an unsupported actual value")
+		}
+	})
+	t.Run("invalid UTF-8 snapshot value", func(t *testing.T) {
+		baseline := minimalSnapshot("baseline", `{}`)
+		actual := minimalSnapshot("actual", `{}`)
+		baseline.Case = "invalid-utf8"
+		actual.Case = "invalid-utf8"
+		baseline.Session["value"] = string([]byte{0xff})
+		actual.Session["value"] = "\ufffd"
+		if _, err := Compare("invalid-utf8", baseline, actual, nil); err == nil ||
+			!strings.Contains(err.Error(), "invalid UTF-8") {
+			t.Fatalf("Compare() error = %v, want invalid UTF-8", err)
 		}
 	})
 	t.Run("empty case name", func(t *testing.T) {
@@ -1356,6 +1617,18 @@ type cancelAfterAppendService struct {
 	cancel context.CancelFunc
 }
 
+type mutatingAppendSessionService struct {
+	session.Service
+}
+
+type cyclicJSONValue struct {
+	Next *cyclicJSONValue `json:"next"`
+}
+
+func (*cyclicJSONValue) MarshalJSON() ([]byte, error) {
+	return []byte(`{"valid":true}`), nil
+}
+
 type cancelAfterAppUpdateService struct {
 	session.Service
 	cancel      context.CancelFunc
@@ -1391,6 +1664,18 @@ func (s *cancelAfterAppendService) AppendEvent(
 	}
 	s.cancel()
 	return nil
+}
+
+func (s *mutatingAppendSessionService) AppendEvent(
+	ctx context.Context,
+	sess *session.Session,
+	evt *event.Event,
+	options ...session.Option,
+) error {
+	if len(evt.Response.Choices[0].Message.ToolCalls) > 0 {
+		evt.Response.Choices[0].Message.ToolCalls[0].Function.Arguments = []byte(`{"value":"mutated"}`)
+	}
+	return s.Service.AppendEvent(ctx, sess, evt, options...)
 }
 
 func (*nilGetSessionService) GetSession(

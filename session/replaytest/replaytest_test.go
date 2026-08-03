@@ -370,10 +370,54 @@ func TestEventStringsRequireValidUTF8(t *testing.T) {
 		name   string
 		mutate func(*event.Event)
 	}{
+		{name: "request id", mutate: func(evt *event.Event) { evt.RequestID = invalid }},
+		{name: "invocation id", mutate: func(evt *event.Event) { evt.InvocationID = invalid }},
+		{name: "parent invocation id", mutate: func(evt *event.Event) { evt.ParentInvocationID = invalid }},
 		{name: "author", mutate: func(evt *event.Event) { evt.Author = invalid }},
 		{name: "branch", mutate: func(evt *event.Event) { evt.Branch = invalid }},
 		{name: "tag", mutate: func(evt *event.Event) { evt.Tag = invalid }},
 		{name: "filter key", mutate: func(evt *event.Event) { evt.FilterKey = invalid }},
+		{name: "parent trigger type", mutate: func(evt *event.Event) {
+			evt.ParentMetadata = &event.ParentInvocationMetadata{TriggerType: invalid}
+		}},
+		{name: "parent trigger id", mutate: func(evt *event.Event) {
+			evt.ParentMetadata = &event.ParentInvocationMetadata{TriggerID: invalid}
+		}},
+		{name: "parent trigger name", mutate: func(evt *event.Event) {
+			evt.ParentMetadata = &event.ParentInvocationMetadata{TriggerName: invalid}
+		}},
+		{name: "long running tool id", mutate: func(evt *event.Event) {
+			evt.LongRunningToolIDs = map[string]struct{}{invalid: {}}
+		}},
+		{name: "response id", mutate: func(evt *event.Event) { evt.Response.ID = invalid }},
+		{name: "response object", mutate: func(evt *event.Event) { evt.Response.Object = invalid }},
+		{name: "response model", mutate: func(evt *event.Event) { evt.Response.Model = invalid }},
+		{name: "system fingerprint", mutate: func(evt *event.Event) {
+			evt.Response.SystemFingerprint = &invalid
+		}},
+		{name: "response error message", mutate: func(evt *event.Event) {
+			evt.Response.Error = &model.ResponseError{Message: invalid}
+		}},
+		{name: "response error type", mutate: func(evt *event.Event) {
+			evt.Response.Error = &model.ResponseError{Type: invalid}
+		}},
+		{name: "response error param", mutate: func(evt *event.Event) {
+			evt.Response.Error = &model.ResponseError{Param: &invalid}
+		}},
+		{name: "response error code", mutate: func(evt *event.Event) {
+			evt.Response.Error = &model.ResponseError{Code: &invalid}
+		}},
+		{name: "finish reason", mutate: func(evt *event.Event) {
+			evt.Response.Choices[0].FinishReason = &invalid
+		}},
+		{name: "logprob token", mutate: func(evt *event.Event) {
+			evt.Response.Choices[0].Logprobs = &model.Logprobs{Content: []model.TokenLogprob{{Token: invalid}}}
+		}},
+		{name: "top logprob token", mutate: func(evt *event.Event) {
+			evt.Response.Choices[0].Logprobs = &model.Logprobs{Content: []model.TokenLogprob{{
+				TopLogprobs: []model.TopLogprob{{Token: invalid}},
+			}}}
+		}},
 		{name: "message content", mutate: func(evt *event.Event) {
 			evt.Response.Choices[0].Message.Content = invalid
 		}},
@@ -389,6 +433,30 @@ func TestEventStringsRequireValidUTF8(t *testing.T) {
 				Text: &invalid,
 			}}
 		}},
+		{name: "content part image", mutate: func(evt *event.Event) {
+			evt.Response.Choices[0].Message.ContentParts = []model.ContentPart{{
+				Type:  model.ContentTypeImage,
+				Image: &model.Image{URL: invalid},
+			}}
+		}},
+		{name: "content part audio", mutate: func(evt *event.Event) {
+			evt.Response.Choices[0].Message.ContentParts = []model.ContentPart{{
+				Type:  model.ContentTypeAudio,
+				Audio: &model.Audio{Format: invalid},
+			}}
+		}},
+		{name: "content part file", mutate: func(evt *event.Event) {
+			evt.Response.Choices[0].Message.ContentParts = []model.ContentPart{{
+				Type: model.ContentTypeFile,
+				File: &model.File{MimeType: invalid},
+			}}
+		}},
+		{name: "content reference", mutate: func(evt *event.Event) {
+			evt.Response.Choices[0].Message.ContentParts = []model.ContentPart{{
+				Type:       model.ContentTypeFile,
+				ContentRef: &model.ContentRef{RequestID: invalid},
+			}}
+		}},
 		{name: "tool call name", mutate: func(evt *event.Event) {
 			evt.Response.Choices[0].Message.ToolCalls = []model.ToolCall{{
 				Type: "function",
@@ -398,8 +466,26 @@ func TestEventStringsRequireValidUTF8(t *testing.T) {
 				},
 			}}
 		}},
+		{name: "tool call extra field key", mutate: func(evt *event.Event) {
+			evt.Response.Choices[0].Message.ToolCalls = []model.ToolCall{{
+				ExtraFields: map[string]any{invalid: "value"},
+			}}
+		}},
+		{name: "tool call extra field value", mutate: func(evt *event.Event) {
+			evt.Response.Choices[0].Message.ToolCalls = []model.ToolCall{{
+				ExtraFields: map[string]any{"nested": []any{map[string]any{"value": invalid}}},
+			}}
+		}},
+		{name: "tool call arguments", mutate: func(evt *event.Event) {
+			evt.Response.Choices[0].Message.ToolCalls = []model.ToolCall{{
+				Function: model.FunctionDefinitionParam{Arguments: []byte{0xff}},
+			}}
+		}},
 		{name: "extension key", mutate: func(evt *event.Event) {
 			evt.Extensions = map[string]json.RawMessage{invalid: json.RawMessage(`true`)}
+		}},
+		{name: "extension value", mutate: func(evt *event.Event) {
+			evt.Extensions = map[string]json.RawMessage{"custom.example/v1": {'"', 0xff, '"'}}
 		}},
 	}
 	for _, test := range tests {
@@ -428,6 +514,86 @@ func TestEventStringsRequireValidUTF8(t *testing.T) {
 				t.Fatalf("normalizeEvents() error = %v, want invalid UTF-8", err)
 			}
 		})
+	}
+}
+
+func TestEventRejectsNonJSONToolCallExtraFields(t *testing.T) {
+	tests := []struct {
+		name  string
+		value any
+	}{
+		{name: "unsupported value", value: func() {}},
+		{name: "duplicate custom object key", value: customJSON(`{"key":1,"key":2}`)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			step := messageStep("event", "event", 1, "assistant", model.RoleAssistant, "hello", "")
+			step.Event.Event.Response.Choices[0].Message.ToolCalls = []model.ToolCall{{
+				ExtraFields: map[string]any{"value": test.value},
+			}}
+			replayCase := Case{
+				Name:     "invalid-extra-fields",
+				Requires: []Capability{CapabilitySession},
+				Steps:    []Step{step},
+			}
+			if err := validateCase(replayCase); err == nil || !strings.Contains(err.Error(), "JSON") {
+				t.Fatalf("validateCase() error = %v, want invalid JSON extra fields", err)
+			}
+		})
+	}
+}
+
+type customJSON string
+
+func (value customJSON) MarshalJSON() ([]byte, error) {
+	return []byte(value), nil
+}
+
+func TestPartialToolCallArgumentsRequireValidUTF8(t *testing.T) {
+	step := responseEvent("partial-tool-call", 1, "assistant", model.Response{
+		IsPartial: true,
+		Choices: []model.Choice{{
+			Delta: model.Message{ToolCalls: []model.ToolCall{{
+				Function: model.FunctionDefinitionParam{Arguments: []byte{0xff}},
+			}}},
+		}},
+	})
+	replayCase := Case{
+		Name:     "invalid-partial-arguments",
+		Requires: []Capability{CapabilitySession},
+		Steps:    []Step{step},
+	}
+	if err := validateCase(replayCase); err == nil || !strings.Contains(err.Error(), "invalid UTF-8") {
+		t.Fatalf("validateCase() error = %v, want invalid UTF-8", err)
+	}
+}
+
+func TestTrackPayloadRequiresValidUTF8(t *testing.T) {
+	invalidPayload := json.RawMessage{'"', 0xff, '"'}
+	step := trackStep("track", "audit", 1, map[string]any{"value": "valid"})
+	step.Track.Event.Payload = invalidPayload
+	replayCase := Case{
+		Name:     "invalid-track-payload",
+		Requires: []Capability{CapabilitySession, CapabilityTrack},
+		Steps:    []Step{step},
+	}
+	if err := validateCase(replayCase); err == nil || !strings.Contains(err.Error(), "invalid UTF-8") {
+		t.Fatalf("validateCase() error = %v, want invalid UTF-8", err)
+	}
+	sess := &session.Session{
+		CreatedAt: caseEpoch,
+		Tracks: map[session.Track]*session.TrackEvents{
+			"audit": {
+				Track: "audit",
+				Events: []session.TrackEvent{{
+					Track:   "audit",
+					Payload: invalidPayload,
+				}},
+			},
+		},
+	}
+	if _, err := normalizeTracks(sess, caseEpoch); err == nil || !strings.Contains(err.Error(), "invalid UTF-8") {
+		t.Fatalf("normalizeTracks() error = %v, want invalid UTF-8", err)
 	}
 }
 
@@ -2467,8 +2633,8 @@ func TestNormalizeMemorySearchesPreservesRankAndScore(t *testing.T) {
 	}
 	results := searches["query"]
 	if len(results) != 2 ||
-		results[0]["id"] != ids["physical-b"] ||
-		results[1]["id"] != ids["physical-a"] ||
+		results[0]["id"] != ids["physical-b"].logicalID ||
+		results[1]["id"] != ids["physical-a"].logicalID ||
 		results[0]["score"] != 0.8 ||
 		results[1]["score"] != 0.4 {
 		t.Fatalf("normalized search results = %#v", results)
@@ -2477,6 +2643,30 @@ func TestNormalizeMemorySearchesPreservesRankAndScore(t *testing.T) {
 		"query": {{ID: "unknown", Memory: &memory.Memory{Memory: "unknown"}}},
 	}, ids); err == nil {
 		t.Fatal("normalizeMemorySearches() accepted an unknown memory id")
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*memory.Entry)
+	}{
+		{name: "content", mutate: func(entry *memory.Entry) { entry.Memory.Memory = "changed" }},
+		{name: "app", mutate: func(entry *memory.Entry) { entry.AppName = "other" }},
+		{name: "user", mutate: func(entry *memory.Entry) { entry.UserID = "other" }},
+		{name: "metadata", mutate: func(entry *memory.Entry) { entry.Memory.Topics = []string{"changed"} }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result := &memory.Entry{
+				ID:      "physical-a",
+				Memory:  &memory.Memory{Memory: "first"},
+				AppName: entries[0].AppName,
+				UserID:  entries[0].UserID,
+			}
+			test.mutate(result)
+			if _, err := normalizeMemorySearches(map[string][]*memory.Entry{
+				"query": {result},
+			}, ids); err == nil || !strings.Contains(err.Error(), "does not match catalog") {
+				t.Fatalf("normalizeMemorySearches() error = %v, want catalog mismatch", err)
+			}
+		})
 	}
 }
 

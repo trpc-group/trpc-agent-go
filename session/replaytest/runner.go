@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -215,7 +216,10 @@ func replayOnBackends(
 		snapshot, err := Replay(ctx, replayCase, backend)
 		if err != nil {
 			if contextErr := ctx.Err(); contextErr != nil {
-				return outcome, contextErr
+				if errors.Is(err, contextErr) {
+					return outcome, err
+				}
+				return outcome, errors.Join(err, contextErr)
 			}
 			outcome.diffs = append(outcome.diffs, executionFailureDiff(replayCase.Name, backend.Name, mode, reference, err))
 			continue
@@ -601,8 +605,10 @@ func (e *execution) prepareEvent(input *EventInput) (*event.Event, error) {
 	if input == nil || input.Event == nil || input.LogicalID == "" {
 		return nil, errors.New("invalid event input")
 	}
-	evt := input.Event.Clone()
-	evt.StateDelta = cloneByteMap(input.Event.StateDelta)
+	evt, err := cloneReplayEvent(input.Event)
+	if err != nil {
+		return nil, err
+	}
 	evt.Timestamp = e.session.CreatedAt.Add(input.Offset)
 	if evt.Response != nil {
 		evt.Response.Timestamp = evt.Timestamp
@@ -611,6 +617,182 @@ func (e *execution) prepareEvent(input *EventInput) (*event.Event, error) {
 		return nil, fmt.Errorf("set logical event id: %w", err)
 	}
 	return evt, nil
+}
+
+func cloneReplayEvent(input *event.Event) (*event.Event, error) {
+	cloned := input.Clone()
+	cloned.StateDelta = cloneByteMap(input.StateDelta)
+	if input.ParentMetadata != nil {
+		metadata := *input.ParentMetadata
+		cloned.ParentMetadata = &metadata
+	}
+	if input.Response == nil {
+		return cloned, nil
+	}
+	for index := range input.Response.Choices {
+		source := &input.Response.Choices[index]
+		destination := &cloned.Response.Choices[index]
+		destination.FinishReason = cloneStringPointer(source.FinishReason)
+		var err error
+		destination.Message, err = cloneReplayMessage(source.Message)
+		if err != nil {
+			return nil, fmt.Errorf("clone response choice %d message: %w", index, err)
+		}
+		destination.Delta, err = cloneReplayMessage(source.Delta)
+		if err != nil {
+			return nil, fmt.Errorf("clone response choice %d delta: %w", index, err)
+		}
+	}
+	if input.Response.Error != nil {
+		cloned.Response.Error.Param = cloneStringPointer(input.Response.Error.Param)
+		cloned.Response.Error.Code = cloneStringPointer(input.Response.Error.Code)
+	}
+	return cloned, nil
+}
+
+func cloneReplayMessage(input model.Message) (model.Message, error) {
+	cloned := input
+	if input.ContentParts != nil {
+		cloned.ContentParts = make([]model.ContentPart, len(input.ContentParts))
+		for index := range input.ContentParts {
+			cloned.ContentParts[index] = cloneContentPart(input.ContentParts[index])
+		}
+	}
+	if input.ToolCalls != nil {
+		cloned.ToolCalls = make([]model.ToolCall, len(input.ToolCalls))
+		for index := range input.ToolCalls {
+			call := input.ToolCalls[index]
+			call.Index = cloneIntPointer(call.Index)
+			call.Function.Arguments = cloneBytes(call.Function.Arguments)
+			if call.ExtraFields != nil {
+				extraFields, err := cloneToolCallExtraFields(call.ExtraFields)
+				if err != nil {
+					return model.Message{}, fmt.Errorf("tool call %d extra fields: %w", index, err)
+				}
+				call.ExtraFields = extraFields
+			}
+			cloned.ToolCalls[index] = call
+		}
+	}
+	return cloned, nil
+}
+
+func cloneContentPart(input model.ContentPart) model.ContentPart {
+	cloned := input
+	cloned.Text = cloneStringPointer(input.Text)
+	if input.Image != nil {
+		image := *input.Image
+		image.Data = cloneBytes(input.Image.Data)
+		cloned.Image = &image
+	}
+	if input.Audio != nil {
+		audio := *input.Audio
+		audio.Data = cloneBytes(input.Audio.Data)
+		cloned.Audio = &audio
+	}
+	if input.File != nil {
+		file := *input.File
+		file.Data = cloneBytes(input.File.Data)
+		cloned.File = &file
+	}
+	if input.ContentRef != nil {
+		contentRef := *input.ContentRef
+		cloned.ContentRef = &contentRef
+	}
+	return cloned
+}
+
+func cloneStringPointer(input *string) *string {
+	if input == nil {
+		return nil
+	}
+	cloned := *input
+	return &cloned
+}
+
+func cloneIntPointer(input *int) *int {
+	if input == nil {
+		return nil
+	}
+	cloned := *input
+	return &cloned
+}
+
+func cloneToolCallExtraFields(input map[string]any) (map[string]any, error) {
+	if err := validateJSONValue("tool call extra fields", input); err != nil {
+		return nil, err
+	}
+	cloned := cloneJSONValue(reflect.ValueOf(input))
+	return cloned.Interface().(map[string]any), nil
+}
+
+// cloneJSONValue preserves concrete JSON value types and nil containers. The
+// caller validates the graph first, so recursive JSON-visible values are acyclic.
+func cloneJSONValue(input reflect.Value) reflect.Value {
+	if !input.IsValid() {
+		return input
+	}
+	switch input.Kind() {
+	case reflect.Interface:
+		if input.IsNil() {
+			return reflect.Zero(input.Type())
+		}
+		value := cloneJSONValue(input.Elem())
+		cloned := reflect.New(input.Type()).Elem()
+		cloned.Set(value)
+		return cloned
+	case reflect.Pointer:
+		if input.IsNil() {
+			return reflect.Zero(input.Type())
+		}
+		value := cloneJSONValue(input.Elem())
+		cloned := reflect.New(input.Type().Elem())
+		cloned.Elem().Set(value)
+		return cloned
+	case reflect.Map:
+		if input.IsNil() {
+			return reflect.Zero(input.Type())
+		}
+		cloned := reflect.MakeMapWithSize(input.Type(), input.Len())
+		iterator := input.MapRange()
+		for iterator.Next() {
+			key := cloneJSONValue(iterator.Key())
+			value := cloneJSONValue(iterator.Value())
+			cloned.SetMapIndex(key, value)
+		}
+		return cloned
+	case reflect.Slice:
+		if input.IsNil() {
+			return reflect.Zero(input.Type())
+		}
+		cloned := reflect.MakeSlice(input.Type(), input.Len(), input.Len())
+		for index := 0; index < input.Len(); index++ {
+			value := cloneJSONValue(input.Index(index))
+			cloned.Index(index).Set(value)
+		}
+		return cloned
+	case reflect.Array:
+		cloned := reflect.New(input.Type()).Elem()
+		for index := 0; index < input.Len(); index++ {
+			value := cloneJSONValue(input.Index(index))
+			cloned.Index(index).Set(value)
+		}
+		return cloned
+	case reflect.Struct:
+		cloned := reflect.New(input.Type()).Elem()
+		cloned.Set(input)
+		for index := 0; index < input.NumField(); index++ {
+			field := input.Type().Field(index)
+			if field.PkgPath != "" || strings.Split(field.Tag.Get("json"), ",")[0] == "-" {
+				continue
+			}
+			value := cloneJSONValue(input.Field(index))
+			cloned.Field(index).Set(value)
+		}
+		return cloned
+	default:
+		return input
+	}
 }
 
 func (e *execution) updateState(ctx context.Context, input *StateInput) error {
@@ -1145,6 +1327,9 @@ func validateBackend(backend Backend) error {
 	if backend.Name == "" || backend.Open == nil {
 		return errors.New("replaytest: backend name and factory are required")
 	}
+	if err := validateUTF8String("backend name", backend.Name); err != nil {
+		return fmt.Errorf("replaytest: %w", err)
+	}
 	capabilities := make([]Capability, 0, len(backend.Capabilities))
 	for capability := range backend.Capabilities {
 		capabilities = append(capabilities, capability)
@@ -1165,6 +1350,9 @@ func validateBackend(backend Backend) error {
 func validateCase(replayCase Case) error {
 	if replayCase.Name == "" {
 		return errors.New("replaytest: case name is required")
+	}
+	if err := validateUTF8String("case name", replayCase.Name); err != nil {
+		return fmt.Errorf("replaytest: %w", err)
 	}
 	if len(replayCase.Steps) == 0 {
 		return fmt.Errorf("replaytest: case %q has no steps", replayCase.Name)
@@ -1428,6 +1616,9 @@ func validateStep(step Step) error {
 	if step.Name == "" {
 		return errors.New("unnamed step")
 	}
+	if err := validateUTF8String("step name", step.Name); err != nil {
+		return err
+	}
 	if err := validateRecoveryMode(step); err != nil {
 		return err
 	}
@@ -1521,6 +1712,9 @@ func validateStepKind(step Step) error {
 		if strings.TrimSpace(step.MemorySearch.Query) == "" {
 			return fmt.Errorf("step %q has invalid memory search input", step.Name)
 		}
+		if err := validateUTF8String("memory search query", step.MemorySearch.Query); err != nil {
+			return fmt.Errorf("step %q: %w", step.Name, err)
+		}
 	case StepCreateSummary:
 		if step.Summary == nil {
 			return fmt.Errorf("step %q kind %q requires summary payload", step.Name, step.Kind)
@@ -1580,6 +1774,9 @@ func validateTrackStep(step Step) error {
 		return fmt.Errorf("step %q: %w", step.Name, err)
 	}
 	if payload := step.Track.Event.Payload; payload != nil {
+		if err := validateUTF8String("track JSON payload", string(payload)); err != nil {
+			return fmt.Errorf("step %q: %w", step.Name, err)
+		}
 		var decoded any
 		if err := decodeJSON(payload, &decoded); err != nil {
 			return fmt.Errorf("step %q has invalid track JSON payload: %w", step.Name, err)
@@ -1591,6 +1788,9 @@ func validateTrackStep(step Step) error {
 func validateEventStep(step Step) error {
 	if step.Event.Event == nil || step.Event.LogicalID == "" {
 		return fmt.Errorf("step %q has invalid event input", step.Name)
+	}
+	if err := validateUTF8String("logical event id", step.Event.LogicalID); err != nil {
+		return fmt.Errorf("step %q: %w", step.Name, err)
 	}
 	if err := validateEventComparisonStrings(step.Event.Event, "event"); err != nil {
 		return fmt.Errorf("step %q: %w", step.Name, err)
@@ -1612,6 +1812,9 @@ func validateEventStep(step Step) error {
 		}
 		raw := step.Event.Event.Extensions[key]
 		if raw != nil {
+			if err := validateUTF8String("event extension value", string(raw)); err != nil {
+				return fmt.Errorf("step %q event extension %q: %w", step.Name, key, err)
+			}
 			var decoded any
 			if err := decodeJSON(raw, &decoded); err != nil {
 				return fmt.Errorf("step %q event extension %q contains invalid JSON: %w", step.Name, key, err)
@@ -1625,6 +1828,16 @@ func validateEventStep(step Step) error {
 }
 
 func validateEventComparisonStrings(evt *event.Event, owner string) error {
+	if err := validateEventMetadataStrings(evt, owner); err != nil {
+		return err
+	}
+	if evt.Response == nil {
+		return nil
+	}
+	return validateResponseStrings(evt.Response, owner)
+}
+
+func validateEventMetadataStrings(evt *event.Event, owner string) error {
 	check := func(name, value string) error {
 		return validateUTF8String(owner+" "+name, value)
 	}
@@ -1632,12 +1845,39 @@ func validateEventComparisonStrings(evt *event.Event, owner string) error {
 		name  string
 		value string
 	}{
+		{name: "request id", value: evt.RequestID},
+		{name: "invocation id", value: evt.InvocationID},
+		{name: "parent invocation id", value: evt.ParentInvocationID},
 		{name: "author", value: evt.Author},
 		{name: "branch", value: evt.Branch},
 		{name: "tag", value: evt.Tag},
 		{name: "filter key", value: evt.FilterKey},
 	} {
 		if err := check(field.name, field.value); err != nil {
+			return err
+		}
+	}
+	if evt.ParentMetadata != nil {
+		for _, field := range []struct {
+			name  string
+			value string
+		}{
+			{name: "parent trigger type", value: evt.ParentMetadata.TriggerType},
+			{name: "parent trigger id", value: evt.ParentMetadata.TriggerID},
+			{name: "parent trigger name", value: evt.ParentMetadata.TriggerName},
+		} {
+			if err := check(field.name, field.value); err != nil {
+				return err
+			}
+		}
+	}
+	longRunningToolIDs := make([]string, 0, len(evt.LongRunningToolIDs))
+	for id := range evt.LongRunningToolIDs {
+		longRunningToolIDs = append(longRunningToolIDs, id)
+	}
+	sort.Strings(longRunningToolIDs)
+	for _, id := range longRunningToolIDs {
+		if err := check("long-running tool id", id); err != nil {
 			return err
 		}
 	}
@@ -1650,30 +1890,123 @@ func validateEventComparisonStrings(evt *event.Event, owner string) error {
 		if err := check("extension key", key); err != nil {
 			return err
 		}
-	}
-	if evt.Response == nil {
-		return nil
-	}
-	for choiceIndex := range evt.Response.Choices {
-		choice := &evt.Response.Choices[choiceIndex]
-		if choice.FinishReason != nil {
-			if err := check(
-				fmt.Sprintf("choice %d finish reason", choiceIndex),
-				*choice.FinishReason,
-			); err != nil {
+		if raw := evt.Extensions[key]; raw != nil {
+			if err := check(fmt.Sprintf("extension %q value", key), string(raw)); err != nil {
 				return err
 			}
 		}
+	}
+	return nil
+}
+
+func validateResponseStrings(response *model.Response, owner string) error {
+	check := func(name, value string) error {
+		return validateUTF8String(owner+" "+name, value)
+	}
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{name: "response id", value: response.ID},
+		{name: "response object", value: response.Object},
+		{name: "response model", value: response.Model},
+	} {
+		if err := check(field.name, field.value); err != nil {
+			return err
+		}
+	}
+	if response.SystemFingerprint != nil {
+		if err := check("response system fingerprint", *response.SystemFingerprint); err != nil {
+			return err
+		}
+	}
+	if response.Error != nil {
 		for _, field := range []struct {
-			name    string
-			message *model.Message
+			name  string
+			value string
 		}{
-			{name: "message", message: &choice.Message},
-			{name: "delta", message: &choice.Delta},
+			{name: "response error message", value: response.Error.Message},
+			{name: "response error type", value: response.Error.Type},
 		} {
-			if err := validateMessageStrings(
-				field.message,
-				fmt.Sprintf("%s choice %d %s", owner, choiceIndex, field.name),
+			if err := check(field.name, field.value); err != nil {
+				return err
+			}
+		}
+		if response.Error.Param != nil {
+			if err := check("response error param", *response.Error.Param); err != nil {
+				return err
+			}
+		}
+		if response.Error.Code != nil {
+			if err := check("response error code", *response.Error.Code); err != nil {
+				return err
+			}
+		}
+	}
+	for choiceIndex := range response.Choices {
+		if err := validateChoiceStrings(
+			&response.Choices[choiceIndex],
+			owner,
+			choiceIndex,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateChoiceStrings(choice *model.Choice, owner string, choiceIndex int) error {
+	check := func(name, value string) error {
+		return validateUTF8String(owner+" "+name, value)
+	}
+	if choice.FinishReason != nil {
+		if err := check(
+			fmt.Sprintf("choice %d finish reason", choiceIndex),
+			*choice.FinishReason,
+		); err != nil {
+			return err
+		}
+	}
+	if err := validateLogprobsStrings(choice.Logprobs, check, choiceIndex); err != nil {
+		return err
+	}
+	for _, field := range []struct {
+		name    string
+		message *model.Message
+	}{
+		{name: "message", message: &choice.Message},
+		{name: "delta", message: &choice.Delta},
+	} {
+		if err := validateMessageStrings(
+			field.message,
+			fmt.Sprintf("%s choice %d %s", owner, choiceIndex, field.name),
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateLogprobsStrings(
+	logprobs *model.Logprobs,
+	check func(string, string) error,
+	choiceIndex int,
+) error {
+	if logprobs == nil {
+		return nil
+	}
+	for tokenIndex := range logprobs.Content {
+		token := &logprobs.Content[tokenIndex]
+		if err := check(
+			fmt.Sprintf("choice %d logprob token %d", choiceIndex, tokenIndex),
+			token.Token,
+		); err != nil {
+			return err
+		}
+		for topIndex := range token.TopLogprobs {
+			if err := check(
+				fmt.Sprintf("choice %d logprob token %d top token %d", choiceIndex, tokenIndex, topIndex),
+				token.TopLogprobs[topIndex].Token,
 			); err != nil {
 				return err
 			}
@@ -1702,28 +2035,78 @@ func validateMessageStrings(message *model.Message, owner string) error {
 		}
 	}
 	for index := range message.ContentParts {
-		part := &message.ContentParts[index]
-		if err := check(fmt.Sprintf("content part %d type", index), string(part.Type)); err != nil {
+		if err := validateContentPartStrings(&message.ContentParts[index], owner, index); err != nil {
 			return err
-		}
-		if part.Text != nil {
-			if err := check(fmt.Sprintf("content part %d text", index), *part.Text); err != nil {
-				return err
-			}
 		}
 	}
 	for index := range message.ToolCalls {
-		call := &message.ToolCalls[index]
+		if err := validateToolCallStrings(&message.ToolCalls[index], owner, index); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateContentPartStrings(part *model.ContentPart, owner string, index int) error {
+	check := func(name, value string) error {
+		return validateUTF8String(fmt.Sprintf("%s content part %d %s", owner, index, name), value)
+	}
+	if err := check("type", string(part.Type)); err != nil {
+		return err
+	}
+	if part.Text != nil {
+		if err := check("text", *part.Text); err != nil {
+			return err
+		}
+	}
+	if part.Image != nil {
 		for _, field := range []struct {
 			name  string
 			value string
 		}{
-			{name: "type", value: call.Type},
-			{name: "id", value: call.ID},
-			{name: "function name", value: call.Function.Name},
-			{name: "function description", value: call.Function.Description},
+			{name: "image URL", value: part.Image.URL},
+			{name: "image detail", value: part.Image.Detail},
+			{name: "image format", value: part.Image.Format},
 		} {
-			if err := check(fmt.Sprintf("tool call %d %s", index, field.name), field.value); err != nil {
+			if err := check(field.name, field.value); err != nil {
+				return err
+			}
+		}
+	}
+	if part.Audio != nil {
+		if err := check("audio format", part.Audio.Format); err != nil {
+			return err
+		}
+	}
+	if part.File != nil {
+		for _, field := range []struct {
+			name  string
+			value string
+		}{
+			{name: "file name", value: part.File.Name},
+			{name: "file URL", value: part.File.URL},
+			{name: "file id", value: part.File.FileID},
+			{name: "file MIME type", value: part.File.MimeType},
+		} {
+			if err := check(field.name, field.value); err != nil {
+				return err
+			}
+		}
+	}
+	if part.ContentRef != nil {
+		for _, field := range []struct {
+			name  string
+			value string
+		}{
+			{name: "content reference artifact", value: part.ContentRef.ArtifactRef},
+			{name: "content reference artifact name", value: part.ContentRef.ArtifactName},
+			{name: "content reference MIME type", value: part.ContentRef.MimeType},
+			{name: "content reference SHA-256", value: part.ContentRef.SHA256},
+			{name: "content reference original name", value: part.ContentRef.OriginalName},
+			{name: "content reference event id", value: part.ContentRef.EventID},
+			{name: "content reference request id", value: part.ContentRef.RequestID},
+		} {
+			if err := check(field.name, field.value); err != nil {
 				return err
 			}
 		}
@@ -1731,8 +2114,34 @@ func validateMessageStrings(message *model.Message, owner string) error {
 	return nil
 }
 
+func validateToolCallStrings(call *model.ToolCall, owner string, index int) error {
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{name: "type", value: call.Type},
+		{name: "id", value: call.ID},
+		{name: "function name", value: call.Function.Name},
+		{name: "function description", value: call.Function.Description},
+	} {
+		if err := validateUTF8String(
+			fmt.Sprintf("%s tool call %d %s", owner, index, field.name),
+			field.value,
+		); err != nil {
+			return err
+		}
+	}
+	if call.ExtraFields == nil {
+		return nil
+	}
+	return validateJSONValue(
+		fmt.Sprintf("%s tool call %d extra fields", owner, index),
+		call.ExtraFields,
+	)
+}
+
 func validateEventToolCallArguments(evt *event.Event) error {
-	if evt.Response == nil || evt.IsPartial {
+	if evt.Response == nil {
 		return nil
 	}
 	for choiceIndex := range evt.Response.Choices {
@@ -1749,12 +2158,22 @@ func validateEventToolCallArguments(evt *event.Event) error {
 				if len(arguments) == 0 {
 					continue
 				}
+				owner := fmt.Sprintf(
+					"event choice %d %s tool call %d arguments",
+					choiceIndex,
+					field.name,
+					callIndex,
+				)
+				if err := validateUTF8String(owner, string(arguments)); err != nil {
+					return err
+				}
+				if evt.IsPartial {
+					continue
+				}
 				if _, err := canonicalJSONString(string(arguments)); err != nil {
 					return fmt.Errorf(
-						"event choice %d %s tool call %d has invalid JSON arguments: %w",
-						choiceIndex,
-						field.name,
-						callIndex,
+						"%s has invalid JSON: %w",
+						owner,
 						err,
 					)
 				}
@@ -1762,6 +2181,147 @@ func validateEventToolCallArguments(evt *event.Event) error {
 		}
 	}
 	return nil
+}
+
+func validateJSONValue(owner string, value any) error {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Errorf("%s contains invalid JSON data: %w", owner, err)
+	}
+	var decoded any
+	if err := decodeJSON(raw, &decoded); err != nil {
+		return fmt.Errorf("%s contains invalid JSON data: %w", owner, err)
+	}
+	return validateJSONStrings(owner, reflect.ValueOf(value))
+}
+
+func validateJSONStrings(owner string, value reflect.Value) error {
+	return validateJSONStringsRecursively(
+		owner,
+		value,
+		make(map[jsonReference]struct{}),
+	)
+}
+
+type jsonReference struct {
+	typeOf  reflect.Type
+	pointer uintptr
+}
+
+func validateJSONStringsRecursively(
+	owner string,
+	value reflect.Value,
+	visiting map[jsonReference]struct{},
+) error {
+	if !value.IsValid() {
+		return nil
+	}
+	if reference, ok := jsonValueReference(value); ok {
+		if _, exists := visiting[reference]; exists {
+			return fmt.Errorf("%s contains cyclic JSON data", owner)
+		}
+		visiting[reference] = struct{}{}
+		defer delete(visiting, reference)
+	}
+	switch value.Kind() {
+	case reflect.Interface, reflect.Pointer:
+		if value.IsNil() {
+			return nil
+		}
+		return validateJSONStringsRecursively(owner, value.Elem(), visiting)
+	case reflect.String:
+		return validateUTF8String(owner, value.String())
+	case reflect.Map:
+		return validateJSONMapStrings(owner, value, visiting)
+	case reflect.Slice:
+		return validateJSONSliceStrings(owner, value, visiting)
+	case reflect.Array:
+		return validateJSONSequenceStrings(owner, value, visiting)
+	case reflect.Struct:
+		return validateJSONStructStrings(owner, value, visiting)
+	}
+	return nil
+}
+
+func validateJSONMapStrings(
+	owner string,
+	value reflect.Value,
+	visiting map[jsonReference]struct{},
+) error {
+	iterator := value.MapRange()
+	for iterator.Next() {
+		if err := validateJSONStringsRecursively(owner+" key", iterator.Key(), visiting); err != nil {
+			return err
+		}
+		if err := validateJSONStringsRecursively(owner+" value", iterator.Value(), visiting); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateJSONSliceStrings(
+	owner string,
+	value reflect.Value,
+	visiting map[jsonReference]struct{},
+) error {
+	if value.Type() == reflect.TypeOf(json.RawMessage(nil)) {
+		return validateUTF8String(owner, string(value.Bytes()))
+	}
+	if value.Type().Elem().Kind() == reflect.Uint8 {
+		return nil
+	}
+	return validateJSONSequenceStrings(owner, value, visiting)
+}
+
+func validateJSONSequenceStrings(
+	owner string,
+	value reflect.Value,
+	visiting map[jsonReference]struct{},
+) error {
+	for index := 0; index < value.Len(); index++ {
+		if err := validateJSONStringsRecursively(
+			fmt.Sprintf("%s item %d", owner, index),
+			value.Index(index),
+			visiting,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateJSONStructStrings(
+	owner string,
+	value reflect.Value,
+	visiting map[jsonReference]struct{},
+) error {
+	for index := 0; index < value.NumField(); index++ {
+		field := value.Type().Field(index)
+		if field.PkgPath != "" || strings.Split(field.Tag.Get("json"), ",")[0] == "-" {
+			continue
+		}
+		if err := validateJSONStringsRecursively(
+			owner+" field "+field.Name,
+			value.Field(index),
+			visiting,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func jsonValueReference(value reflect.Value) (jsonReference, bool) {
+	switch value.Kind() {
+	case reflect.Map, reflect.Pointer, reflect.Slice:
+		if value.IsNil() {
+			return jsonReference{}, false
+		}
+		return jsonReference{typeOf: value.Type(), pointer: value.Pointer()}, true
+	default:
+		return jsonReference{}, false
+	}
 }
 
 func validateEventStateDelta(stepName string, stateDelta session.StateMap) error {

@@ -259,6 +259,9 @@ func snapshotValue(snapshot Snapshot) (map[string]any, error) {
 		"summaries":       snapshot.Summaries,
 		"tracks":          snapshot.Tracks,
 	}
+	if err := validateJSONStrings("snapshot", reflect.ValueOf(comparable)); err != nil {
+		return nil, err
+	}
 	raw, err := json.Marshal(comparable)
 	if err != nil {
 		return nil, err
@@ -274,6 +277,19 @@ func validateAllowedDiffs(rules []AllowedDiff) error {
 	for index, rule := range rules {
 		if rule.BackendA == "" || rule.BackendB == "" || rule.Path == "" || rule.Reason == "" {
 			return fmt.Errorf("allowed_diff %d requires backend_a, backend_b, path, and reason", index)
+		}
+		for _, field := range []struct {
+			name  string
+			value string
+		}{
+			{name: "backend_a", value: rule.BackendA},
+			{name: "backend_b", value: rule.BackendB},
+			{name: "path", value: rule.Path},
+			{name: "reason", value: rule.Reason},
+		} {
+			if err := validateUTF8String("allowed_diff "+field.name, field.value); err != nil {
+				return fmt.Errorf("allowed_diff %d: %w", index, err)
+			}
 		}
 		if !strings.HasPrefix(rule.Path, "/") {
 			return fmt.Errorf("allowed_diff %d path must be a JSON pointer glob", index)

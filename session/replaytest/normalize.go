@@ -78,9 +78,9 @@ func normalizeSnapshot(
 		return Snapshot{}, err
 	}
 	normalizedMemories := make([]CanonicalMap, 0)
-	physicalToLogicalMemory := make(map[string]string)
+	memoryIdentities := make(map[string]normalizedMemoryIdentity)
 	if required[CapabilityMemory] {
-		normalizedMemories, physicalToLogicalMemory, err = normalizeMemoryCatalog(memories)
+		normalizedMemories, memoryIdentities, err = normalizeMemoryCatalog(memories)
 		if err != nil {
 			return Snapshot{}, err
 		}
@@ -89,7 +89,7 @@ func normalizeSnapshot(
 	if required[CapabilityMemorySearch] {
 		normalizedMemorySearches, err = normalizeMemorySearches(
 			memorySearches,
-			physicalToLogicalMemory,
+			memoryIdentities,
 		)
 		if err != nil {
 			return Snapshot{}, err
@@ -244,6 +244,9 @@ func normalizeEventValue(
 ) (CanonicalMap, error) {
 	if err := validateEventComparisonStrings(evt, fmt.Sprintf("event %d", index)); err != nil {
 		return nil, err
+	}
+	if err := validateEventToolCallArguments(evt); err != nil {
+		return nil, fmt.Errorf("event %d: %w", index, err)
 	}
 	if err := validateStateMapKeys(fmt.Sprintf("event %d state delta", index), evt.StateDelta); err != nil {
 		return nil, err
@@ -452,14 +455,20 @@ func normalizeMemories(entries []*memory.Entry) ([]CanonicalMap, error) {
 }
 
 type normalizedMemoryRecord struct {
-	physicalID string
-	value      CanonicalMap
-	sortKey    string
+	physicalID  string
+	value       CanonicalMap
+	sortKey     string
+	fingerprint string
+}
+
+type normalizedMemoryIdentity struct {
+	logicalID   string
+	fingerprint string
 }
 
 func normalizeMemoryCatalog(
 	entries []*memory.Entry,
-) ([]CanonicalMap, map[string]string, error) {
+) ([]CanonicalMap, map[string]normalizedMemoryIdentity, error) {
 	records := make([]normalizedMemoryRecord, 0, len(entries))
 	ids := make(map[string]struct{}, len(entries))
 	for index, entry := range entries {
@@ -472,36 +481,44 @@ func normalizeMemoryCatalog(
 		}
 		ids[entry.ID] = struct{}{}
 		delete(value, "id")
+		fingerprint, err := memoryIdentityFingerprint(value)
+		if err != nil {
+			return nil, nil, fmt.Errorf("fingerprint normalized memory %d: %w", index, err)
+		}
 		raw, err := json.Marshal(value)
 		if err != nil {
 			return nil, nil, fmt.Errorf("marshal normalized memory %d: %w", index, err)
 		}
 		records = append(records, normalizedMemoryRecord{
-			physicalID: entry.ID,
-			value:      value,
-			sortKey:    string(raw),
+			physicalID:  entry.ID,
+			value:       value,
+			sortKey:     string(raw),
+			fingerprint: fingerprint,
 		})
 	}
 	sort.Slice(records, func(i, j int) bool {
 		return records[i].sortKey < records[j].sortKey
 	})
 	output := make([]CanonicalMap, 0, len(records))
-	physicalToLogical := make(map[string]string, len(records))
+	identities := make(map[string]normalizedMemoryIdentity, len(records))
 	for index := range records {
 		if index > 0 && records[index-1].sortKey == records[index].sortKey {
 			return nil, nil, errors.New("duplicate normalized memory entry")
 		}
 		logicalID := "memory-" + strconv.Itoa(index)
 		records[index].value["id"] = logicalID
-		physicalToLogical[records[index].physicalID] = logicalID
+		identities[records[index].physicalID] = normalizedMemoryIdentity{
+			logicalID:   logicalID,
+			fingerprint: records[index].fingerprint,
+		}
 		output = append(output, records[index].value)
 	}
-	return output, physicalToLogical, nil
+	return output, identities, nil
 }
 
 func normalizeMemorySearches(
 	searches map[string][]*memory.Entry,
-	physicalToLogical map[string]string,
+	identities map[string]normalizedMemoryIdentity,
 ) (map[string][]CanonicalMap, error) {
 	output := make(map[string][]CanonicalMap, len(searches))
 	for name, entries := range searches {
@@ -522,17 +539,39 @@ func normalizeMemorySearches(
 				return nil, fmt.Errorf("memory search %q repeats id %q", name, entry.ID)
 			}
 			seen[entry.ID] = struct{}{}
-			logicalID := physicalToLogical[entry.ID]
-			if logicalID == "" {
+			identity, exists := identities[entry.ID]
+			if !exists {
 				return nil, fmt.Errorf("memory search %q returned unknown id %q", name, entry.ID)
 			}
-			value["id"] = logicalID
+			fingerprint, err := memoryIdentityFingerprint(value)
+			if err != nil {
+				return nil, fmt.Errorf("fingerprint memory search %q result %d: %w", name, index, err)
+			}
+			if fingerprint != identity.fingerprint {
+				return nil, fmt.Errorf("memory search %q result id %q does not match catalog entry", name, entry.ID)
+			}
+			value["id"] = identity.logicalID
 			value["score"] = entry.Score
 			results = append(results, value)
 		}
 		output[name] = results
 	}
 	return output, nil
+}
+
+func memoryIdentityFingerprint(value CanonicalMap) (string, error) {
+	identity := make(CanonicalMap, len(value))
+	for key, field := range value {
+		if key == "id" || key == "score" {
+			continue
+		}
+		identity[key] = field
+	}
+	raw, err := json.Marshal(identity)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
 }
 
 func normalizeMemoryEntry(entry *memory.Entry, owner string) (CanonicalMap, error) {
@@ -784,6 +823,12 @@ func normalizeTracks(sess *session.Session, baseTime time.Time) (map[string][]Ca
 			}
 			var payload any
 			if trackEvent.Payload != nil {
+				if err := validateUTF8String(
+					fmt.Sprintf("track %q event %d payload", trackName, index),
+					string(trackEvent.Payload),
+				); err != nil {
+					return nil, err
+				}
 				if err := decodeJSON(trackEvent.Payload, &payload); err != nil {
 					return nil, fmt.Errorf("decode track %s event %d: %w", trackName, index, err)
 				}

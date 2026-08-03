@@ -259,14 +259,15 @@ type Step struct {
 type EventInput struct {
 	// LogicalID is the stable event identity used after backend IDs are normalized.
 	LogicalID string
-	// Event is cloned before the runner changes timestamps or extensions. Every
-	// Event author, role, content, tool, branch, tag, filter key, and extension
-	// key strings must contain valid UTF-8. Extension keys must also be non-empty
-	// and must not use the runner-owned logical identity key; every non-nil
-	// extension value must contain valid UTF-8 JSON with paired surrogate escapes
-	// and unique object keys. Non-partial tool-call arguments follow the same JSON
-	// rules; partial argument fragments remain opaque until a final response is
-	// available.
+	// Event fields used for persistence are cloned independently for each backend
+	// before the runner changes timestamps or extensions. Every persisted event
+	// string must contain valid UTF-8.
+	// Extension keys must also be non-empty and must not use the runner-owned
+	// logical identity key; every non-nil extension value and tool-call extra
+	// field must contain valid JSON data. Non-partial tool-call arguments must
+	// contain valid UTF-8 JSON with paired surrogate escapes and unique object
+	// keys. Partial argument fragments must contain valid UTF-8 but otherwise
+	// remain opaque until a final response is available.
 	// StateDelta is applied to session state even when the event itself is not
 	// persisted. Keys beginning with app: or user: additionally declare scoped-state
 	// intent; unprefixed and temp: keys are session-only. The runner preserves every
