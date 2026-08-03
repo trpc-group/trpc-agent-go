@@ -113,15 +113,24 @@ func RunCase(
 		allMemories = append(allMemories, entries...)
 	}
 
-	// Append track events.
-	for _, ts := range c.TrackEvents {
-		trackEvent := &session.TrackEvent{
-			Track:     session.Track(ts.Track),
-			Payload:   json.RawMessage(ts.Payload),
-			Timestamp: baseTime,
+	// Append track events. A case that requests track events must fail
+	// loudly when the backend does not implement session.TrackService —
+	// silently skipping would let the case pass with empty Tracks.
+	if len(c.TrackEvents) > 0 {
+		trackSvc, ok := sessService.(session.TrackService)
+		if !ok {
+			return Snapshot{}, fmt.Errorf(
+				"case %q requests track events but backend %q does not implement session.TrackService",
+				c.Name, backend.Name,
+			)
 		}
-		if ts, ok := sessService.(session.TrackService); ok {
-			if err := ts.AppendTrackEvent(ctx, sess, trackEvent); err != nil {
+		for _, ts := range c.TrackEvents {
+			trackEvent := &session.TrackEvent{
+				Track:     session.Track(ts.Track),
+				Payload:   json.RawMessage(ts.Payload),
+				Timestamp: baseTime,
+			}
+			if err := trackSvc.AppendTrackEvent(ctx, sess, trackEvent); err != nil {
 				return Snapshot{}, fmt.Errorf("append track event: %w", err)
 			}
 		}
@@ -131,6 +140,16 @@ func RunCase(
 	sess, err = sessService.GetSession(ctx, key)
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("get session: %w", err)
+	}
+
+	// A case that requests summaries must actually get them persisted —
+	// an empty Summaries means CreateSessionSummary was a no-op (e.g. no
+	// summarizer configured), which would let the case pass vacuously.
+	if len(c.SummarySteps) > 0 && len(sess.Summaries) == 0 {
+		return Snapshot{}, fmt.Errorf(
+			"case %q requested summaries but backend %q persisted none",
+			c.Name, backend.Name,
+		)
 	}
 
 	return normalizeSnapshot(sess, allMemories), nil
@@ -210,10 +229,23 @@ func RunReplayMatrix(
 	var reports []DiffReport
 
 	for _, c := range cases {
-		// Run case on each backend.
+		// Run case on each backend, honoring Setup/Teardown so
+		// database-backed backends can prepare and clean up schema.
 		snapshots := make([]Snapshot, len(backends))
 		for i, b := range backends {
-			snap, err := RunCase(ctx, b, c)
+			var snap Snapshot
+			var err error
+			if b.Setup != nil {
+				if err = b.Setup(ctx); err != nil {
+					return nil, fmt.Errorf("backend %q setup: %w", b.Name, err)
+				}
+			}
+			snap, err = RunCase(ctx, b, c)
+			if b.Teardown != nil {
+				if terr := b.Teardown(ctx); terr != nil && err == nil {
+					err = fmt.Errorf("backend %q teardown: %w", b.Name, terr)
+				}
+			}
 			if err != nil {
 				return nil, fmt.Errorf(
 					"case %q on backend %q: %w", c.Name, b.Name, err,

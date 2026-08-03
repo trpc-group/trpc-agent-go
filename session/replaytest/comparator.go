@@ -133,8 +133,23 @@ func compareState(left, right Snapshot) []FieldDiff {
 	var diffs []FieldDiff
 	allKeys := mergeKeys(left.State, right.State)
 	for _, k := range allKeys {
-		leftVal := left.State[k]
-		rightVal := right.State[k]
+		leftVal, leftOK := left.State[k]
+		rightVal, rightOK := right.State[k]
+		// Distinguish "key missing on one side" from "key present with an
+		// empty value": a backend that drops an empty state value must not
+		// compare equal to one that persisted the key.
+		if leftOK != rightOK {
+			diffs = append(diffs, FieldDiff{
+				SessionID: left.SessionID,
+				FieldPath: fmt.Sprintf("state.%s", k),
+				ValueA:    leftVal,
+				ValueB:    rightVal,
+			})
+			continue
+		}
+		if !leftOK {
+			continue // key absent on both sides (shouldn't happen via mergeKeys)
+		}
 		if leftVal != rightVal {
 			diffs = append(diffs, FieldDiff{
 				SessionID: left.SessionID,
@@ -330,21 +345,46 @@ func compareSummaries(left, right Snapshot) []FieldDiff {
 func compareTracks(left, right Snapshot) []FieldDiff {
 	var diffs []FieldDiff
 
-	// Build index by track+payload for right side.
+	// Build index by track+payload for right side, allowing multiple
+	// entries with the same key (one-to-one matching, mirroring
+	// compareMemories): duplicate track events on the left must each
+	// match a distinct right-side entry, not all map to the same index.
 	type trackKey struct {
 		track   string
 		payload string
 	}
-	rightByKey := make(map[trackKey]int)
+	rightByKey := make(map[trackKey][]int)
 	for i, t := range right.Tracks {
-		rightByKey[trackKey{t.Track, t.Payload}] = i
+		tk := trackKey{t.Track, t.Payload}
+		rightByKey[tk] = append(rightByKey[tk], i)
 	}
 
 	matchedRight := make([]bool, len(right.Tracks))
 	for i, lt := range left.Tracks {
 		tk := trackKey{lt.Track, lt.Payload}
-		rIdx, ok := rightByKey[tk]
+		indices, ok := rightByKey[tk]
 		if !ok {
+			diffs = append(diffs, FieldDiff{
+				SessionID: left.SessionID,
+				TrackName: lt.Track,
+				FieldPath: fmt.Sprintf("tracks[%d]", i),
+				ValueA:    lt,
+				ValueB:    nil,
+			})
+			continue
+		}
+		// Find the first unmatched right entry with the same key.
+		var rIdx int
+		found := false
+		for _, idx := range indices {
+			if !matchedRight[idx] {
+				rIdx = idx
+				found = true
+				break
+			}
+		}
+		if !found {
+			// All right entries with this key already matched — extra left.
 			diffs = append(diffs, FieldDiff{
 				SessionID: left.SessionID,
 				TrackName: lt.Track,

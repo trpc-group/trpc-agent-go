@@ -12,6 +12,7 @@ import (
 	"context"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,9 +21,23 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
+
+// fakeSummarizer is a minimal summary.SessionSummarizer that always
+// produces a deterministic summary, so summary replay cases actually
+// exercise persistence instead of hitting the in-memory no-op path.
+type fakeSummarizer struct{}
+
+func (fakeSummarizer) ShouldSummarize(*session.Session) bool { return true }
+func (fakeSummarizer) Summarize(context.Context, *session.Session) (string, error) {
+	return "replay-test summary", nil
+}
+func (fakeSummarizer) SetPrompt(string)                    {}
+func (fakeSummarizer) SetModel(model.Model)                {}
+func (fakeSummarizer) Metadata() map[string]any            { return nil }
 
 // standardBackends returns the available backends for consistency
 // comparison. Currently only InMemory is available in the module;
@@ -31,7 +46,12 @@ import (
 func standardBackends(t *testing.T) []Backend {
 	t.Helper()
 
-	inmemSess := sessioninmemory.NewSessionService()
+	// Inject a fake summarizer so summary replay cases actually persist
+	// summaries (otherwise CreateSessionSummary is a no-op and the cases
+	// would pass vacuously with empty Summaries).
+	inmemSess := sessioninmemory.NewSessionService(
+		sessioninmemory.WithSummarizer(fakeSummarizer{}),
+	)
 	inmemMem := memoryinmemory.NewMemoryService()
 
 	return []Backend{
@@ -50,9 +70,11 @@ func standardBackends(t *testing.T) []Backend {
 		{
 			// second InMemory instance to verify cross-backend
 			// comparison infrastructure works end-to-end.
-			Name:           "inmemory_2",
-			SessionService: sessioninmemory.NewSessionService(),
-			MemoryService:  memoryinmemory.NewMemoryService(),
+			Name: "inmemory_2",
+			SessionService: sessioninmemory.NewSessionService(
+				sessioninmemory.WithSummarizer(fakeSummarizer{}),
+			),
+			MemoryService: memoryinmemory.NewMemoryService(),
 			Setup: func(ctx context.Context) error {
 				return nil
 			},
@@ -916,3 +938,88 @@ func TestCompareMemoriesDuplicateContentMismatch(t *testing.T) {
 // Compile-time interface compliance checks.
 var _ session.Service = (*sessioninmemory.SessionService)(nil)
 var _ memory.Service = (*memoryinmemory.MemoryService)(nil)
+
+// noTrackService wraps a session.Service but does not expose
+// session.TrackService (embeds the interface, so the promoted
+// AppendTrackEvent of the underlying impl is not promoted here).
+type noTrackService struct{ session.Service }
+
+func TestCompareState_MissingKeyVsEmpty(t *testing.T) {
+	// A key present on one side with an empty value vs. absent on the
+	// other must be flagged (a backend dropping an empty state value
+	// should not compare equal to one that persisted the key).
+	left := Snapshot{SessionID: "s", State: map[string]string{"k": ""}}
+	right := Snapshot{SessionID: "s", State: map[string]string{}}
+	diffs := compareState(left, right)
+	require.Len(t, diffs, 1, "missing key on one side must be flagged")
+	assert.Equal(t, "state.k", diffs[0].FieldPath)
+}
+
+func TestCompareTracks_DuplicateOneToOne(t *testing.T) {
+	dup := []NormalizedTrack{
+		{Track: "execution", Payload: `{"n":1}`},
+		{Track: "execution", Payload: `{"n":1}`},
+	}
+	left := Snapshot{SessionID: "s", Tracks: dup}
+	right := Snapshot{SessionID: "s", Tracks: dup}
+	// Two identical duplicate events must match one-to-one, not both
+	// map to the same right-side index.
+	assert.Empty(t, compareTracks(left, right),
+		"identical duplicate tracks must match one-to-one")
+
+	rightFewer := Snapshot{SessionID: "s", Tracks: dup[:1]}
+	diffs := compareTracks(left, rightFewer)
+	assert.Len(t, diffs, 1, "missing duplicate on the right must be flagged")
+}
+
+func TestSummaryCasesPersistSummaries(t *testing.T) {
+	backend := Backend{
+		Name:           "inmemory-summary",
+		SessionService: sessioninmemory.NewSessionService(
+			sessioninmemory.WithSummarizer(fakeSummarizer{}),
+		),
+		MemoryService: memoryinmemory.NewMemoryService(),
+	}
+	for _, c := range []ReplayCase{case6SummaryUpdate(), case7SummaryTruncation()} {
+		snap, err := RunCase(context.Background(), backend, c)
+		require.NoError(t, err, "case %s should run", c.Name)
+		assert.NotEmpty(t, snap.Summaries,
+			"case %s should persist summaries, not run the no-op path", c.Name)
+	}
+}
+
+func TestRunCase_TrackServiceUnsupportedErrors(t *testing.T) {
+	inmemSess := sessioninmemory.NewSessionService()
+	backend := Backend{
+		Name:           "no-track",
+		SessionService: noTrackService{inmemSess}, // does not implement TrackService
+		MemoryService:  memoryinmemory.NewMemoryService(),
+	}
+	_, err := RunCase(context.Background(), backend, case8TrackEvents())
+	require.Error(t, err, "track events must not be silently skipped")
+	assert.Contains(t, err.Error(), "session.TrackService")
+}
+
+func TestRunReplayMatrix_CallsSetupTeardown(t *testing.T) {
+	var setupCalls, teardownCalls int32
+	backend := Backend{
+		Name:           "setup-test",
+		SessionService: sessioninmemory.NewSessionService(),
+		MemoryService:  memoryinmemory.NewMemoryService(),
+		Setup: func(ctx context.Context) error {
+			atomic.AddInt32(&setupCalls, 1)
+			return nil
+		},
+		Teardown: func(ctx context.Context) error {
+			atomic.AddInt32(&teardownCalls, 1)
+			return nil
+		},
+	}
+	_, err := RunReplayMatrix(
+		context.Background(), []Backend{backend},
+		[]ReplayCase{case1SingleTurn()}, nil,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), atomic.LoadInt32(&setupCalls), "Setup must be called")
+	assert.Equal(t, int32(1), atomic.LoadInt32(&teardownCalls), "Teardown must be called")
+}
