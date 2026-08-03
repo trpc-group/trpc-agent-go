@@ -7814,10 +7814,10 @@ scene/persona generation, and recall.</p>
 </span><span id="__span-52-18"><a id="__codelineno-52-18" name="__codelineno-52-18"></a><span class="w">    </span><span class="c1">// Opt-in cross-session/user reads; enable only for a trusted/isolated gateway.</span>
 </span><span id="__span-52-19"><a id="__codelineno-52-19" name="__codelineno-52-19"></a><span class="w">    </span><span class="nx">memorytencentdb</span><span class="p">.</span><span class="nx">WithRecallEnabled</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
 </span><span id="__span-52-20"><a id="__codelineno-52-20" name="__codelineno-52-20"></a><span class="w">    </span><span class="nx">memorytencentdb</span><span class="p">.</span><span class="nx">WithMemorySearchTool</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
-</span><span id="__span-52-21"><a id="__codelineno-52-21" name="__codelineno-52-21"></a><span class="w">    </span><span class="c1">// Optional short-term tool result offload; requires a gateway that supports</span>
-</span><span id="__span-52-22"><a id="__codelineno-52-22" name="__codelineno-52-22"></a><span class="w">    </span><span class="c1">// /offload/v1/hooks/* and /offload/v1/tools/*.</span>
-</span><span id="__span-52-23"><a id="__codelineno-52-23" name="__codelineno-52-23"></a><span class="w">    </span><span class="c1">// memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{</span>
-</span><span id="__span-52-24"><a id="__codelineno-52-24" name="__codelineno-52-24"></a><span class="w">    </span><span class="c1">//     Enabled: true,</span>
+</span><span id="__span-52-21"><a id="__codelineno-52-21" name="__codelineno-52-21"></a><span class="w">    </span><span class="c1">// Optional short-term context offload through the gateway v2 API.</span>
+</span><span id="__span-52-22"><a id="__codelineno-52-22" name="__codelineno-52-22"></a><span class="w">    </span><span class="c1">// memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{</span>
+</span><span id="__span-52-23"><a id="__codelineno-52-23" name="__codelineno-52-23"></a><span class="w">    </span><span class="c1">//     Enabled:   true,</span>
+</span><span id="__span-52-24"><a id="__codelineno-52-24" name="__codelineno-52-24"></a><span class="w">    </span><span class="c1">//     ServiceID: os.Getenv(&quot;TDAI_SERVICE_ID&quot;),</span>
 </span><span id="__span-52-25"><a id="__codelineno-52-25" name="__codelineno-52-25"></a><span class="w">    </span><span class="c1">// }),</span>
 </span><span id="__span-52-26"><a id="__codelineno-52-26" name="__codelineno-52-26"></a><span class="w">    </span><span class="c1">// memorytencentdb.WithAPIKey(os.Getenv(&quot;TDAI_GATEWAY_API_KEY&quot;)),</span>
 </span><span id="__span-52-27"><a id="__codelineno-52-27" name="__codelineno-52-27"></a><span class="p">)</span>
@@ -7853,18 +7853,17 @@ scene/persona generation, and recall.</p>
 <li>Use <code>runner.WithPlugins(memSvc.Plugin())</code> to enable automatic <code>/recall</code>
   before model calls</li>
 <li>Use <code>runner.WithPlugins(memSvc.ContextOffloadPlugin())</code> only when
-  <code>WithContextOffload(memorytencentdb.ContextOffloadConfig{Enabled: true})</code> is
-  set and you want short-term tool result offload. Companion tools
-  <code>tdai_read_offload_ref</code>,
-  <code>tdai_read_offload_node</code>, and <code>tdai_search_offload_index</code> are exposed
-  through <code>memSvc.Tools()</code> when enabled.</li>
+  <code>WithContextOffload(...)</code> is enabled and you want short-term context
+  offload. The companion <code>tdai_read_offload_ref</code> tool is exposed through
+  <code>memSvc.Tools()</code> when enabled.</li>
 <li>Do <strong>not</strong> use <code>runner.WithMemoryService(...)</code> with this integration</li>
 </ul>
 <h3 id="enable-context-offload">Enable Context Offload</h3>
-<p>Context offload is a separate, opt-in path for large tool results. Use it only
-with a TencentDB Agent Memory gateway build that exposes the offload routes
-listed in the notes below. The Go adapter does not provide local storage,
-summarization models, or local/backend/collect modes.</p>
+<p>Context offload is a separate, opt-in integration with TencentDB Agent Memory's
+v2 offload API. It sends tool results to the gateway for asynchronous
+processing, asks the gateway to compact model context when the configured
+utilization threshold is reached, and exposes one tool for bounded recovery of
+archived results.</p>
 <p>Minimal setup:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-53-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-53-2"> 2</a></span>
@@ -7888,55 +7887,85 @@ summarization models, or local/backend/collect modes.</p>
 <span class="normal"><a href="#__codelineno-53-20">20</a></span>
 <span class="normal"><a href="#__codelineno-53-21">21</a></span>
 <span class="normal"><a href="#__codelineno-53-22">22</a></span>
-<span class="normal"><a href="#__codelineno-53-23">23</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-53-1"><a id="__codelineno-53-1" name="__codelineno-53-1"></a><span class="nx">memSvc</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">memorytencentdb</span><span class="p">.</span><span class="nx">NewService</span><span class="p">(</span>
+<span class="normal"><a href="#__codelineno-53-23">23</a></span>
+<span class="normal"><a href="#__codelineno-53-24">24</a></span>
+<span class="normal"><a href="#__codelineno-53-25">25</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-53-1"><a id="__codelineno-53-1" name="__codelineno-53-1"></a><span class="nx">memSvc</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">memorytencentdb</span><span class="p">.</span><span class="nx">NewService</span><span class="p">(</span>
 </span><span id="__span-53-2"><a id="__codelineno-53-2" name="__codelineno-53-2"></a><span class="w">    </span><span class="nx">memorytencentdb</span><span class="p">.</span><span class="nx">WithGatewayURL</span><span class="p">(</span><span class="nx">gatewayURL</span><span class="p">),</span>
-</span><span id="__span-53-3"><a id="__codelineno-53-3" name="__codelineno-53-3"></a><span class="w">    </span><span class="nx">memorytencentdb</span><span class="p">.</span><span class="nx">WithContextOffload</span><span class="p">(</span><span class="nx">memorytencentdb</span><span class="p">.</span><span class="nx">ContextOffloadConfig</span><span class="p">{</span>
-</span><span id="__span-53-4"><a id="__codelineno-53-4" name="__codelineno-53-4"></a><span class="w">        </span><span class="nx">Enabled</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-</span><span id="__span-53-5"><a id="__codelineno-53-5" name="__codelineno-53-5"></a><span class="w">    </span><span class="p">}),</span>
-</span><span id="__span-53-6"><a id="__codelineno-53-6" name="__codelineno-53-6"></a><span class="p">)</span>
-</span><span id="__span-53-7"><a id="__codelineno-53-7" name="__codelineno-53-7"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-53-8"><a id="__codelineno-53-8" name="__codelineno-53-8"></a><span class="w">    </span><span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-53-9"><a id="__codelineno-53-9" name="__codelineno-53-9"></a><span class="p">}</span>
-</span><span id="__span-53-10"><a id="__codelineno-53-10" name="__codelineno-53-10"></a>
-</span><span id="__span-53-11"><a id="__codelineno-53-11" name="__codelineno-53-11"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-53-12"><a id="__codelineno-53-12" name="__codelineno-53-12"></a><span class="w">    </span><span class="s">&quot;assistant&quot;</span><span class="p">,</span>
-</span><span id="__span-53-13"><a id="__codelineno-53-13" name="__codelineno-53-13"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;deepseek-v4-flash&quot;</span><span class="p">)),</span>
-</span><span id="__span-53-14"><a id="__codelineno-53-14" name="__codelineno-53-14"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">(</span><span class="nx">memSvc</span><span class="p">.</span><span class="nx">Tools</span><span class="p">()),</span>
-</span><span id="__span-53-15"><a id="__codelineno-53-15" name="__codelineno-53-15"></a><span class="p">)</span>
-</span><span id="__span-53-16"><a id="__codelineno-53-16" name="__codelineno-53-16"></a>
-</span><span id="__span-53-17"><a id="__codelineno-53-17" name="__codelineno-53-17"></a><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span>
-</span><span id="__span-53-18"><a id="__codelineno-53-18" name="__codelineno-53-18"></a><span class="w">    </span><span class="s">&quot;my-app&quot;</span><span class="p">,</span>
-</span><span id="__span-53-19"><a id="__codelineno-53-19" name="__codelineno-53-19"></a><span class="w">    </span><span class="nx">agent</span><span class="p">,</span>
-</span><span id="__span-53-20"><a id="__codelineno-53-20" name="__codelineno-53-20"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithSessionService</span><span class="p">(</span><span class="nx">sessionSvc</span><span class="p">),</span>
-</span><span id="__span-53-21"><a id="__codelineno-53-21" name="__codelineno-53-21"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithSessionIngestor</span><span class="p">(</span><span class="nx">memSvc</span><span class="p">),</span>
-</span><span id="__span-53-22"><a id="__codelineno-53-22" name="__codelineno-53-22"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithPlugins</span><span class="p">(</span><span class="nx">memSvc</span><span class="p">.</span><span class="nx">ContextOffloadPlugin</span><span class="p">()),</span>
-</span><span id="__span-53-23"><a id="__codelineno-53-23" name="__codelineno-53-23"></a><span class="p">)</span>
+</span><span id="__span-53-3"><a id="__codelineno-53-3" name="__codelineno-53-3"></a><span class="w">    </span><span class="nx">memorytencentdb</span><span class="p">.</span><span class="nx">WithAPIKey</span><span class="p">(</span><span class="nx">os</span><span class="p">.</span><span class="nx">Getenv</span><span class="p">(</span><span class="s">&quot;TDAI_GATEWAY_API_KEY&quot;</span><span class="p">)),</span>
+</span><span id="__span-53-4"><a id="__codelineno-53-4" name="__codelineno-53-4"></a><span class="w">    </span><span class="nx">memorytencentdb</span><span class="p">.</span><span class="nx">WithContextOffload</span><span class="p">(</span><span class="nx">memorytencentdb</span><span class="p">.</span><span class="nx">ContextOffloadConfig</span><span class="p">{</span>
+</span><span id="__span-53-5"><a id="__codelineno-53-5" name="__codelineno-53-5"></a><span class="w">        </span><span class="nx">Enabled</span><span class="p">:</span><span class="w">   </span><span class="kc">true</span><span class="p">,</span>
+</span><span id="__span-53-6"><a id="__codelineno-53-6" name="__codelineno-53-6"></a><span class="w">        </span><span class="nx">ServiceID</span><span class="p">:</span><span class="w"> </span><span class="nx">os</span><span class="p">.</span><span class="nx">Getenv</span><span class="p">(</span><span class="s">&quot;TDAI_SERVICE_ID&quot;</span><span class="p">),</span>
+</span><span id="__span-53-7"><a id="__codelineno-53-7" name="__codelineno-53-7"></a><span class="w">    </span><span class="p">}),</span>
+</span><span id="__span-53-8"><a id="__codelineno-53-8" name="__codelineno-53-8"></a><span class="p">)</span>
+</span><span id="__span-53-9"><a id="__codelineno-53-9" name="__codelineno-53-9"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-53-10"><a id="__codelineno-53-10" name="__codelineno-53-10"></a><span class="w">    </span><span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-53-11"><a id="__codelineno-53-11" name="__codelineno-53-11"></a><span class="p">}</span>
+</span><span id="__span-53-12"><a id="__codelineno-53-12" name="__codelineno-53-12"></a>
+</span><span id="__span-53-13"><a id="__codelineno-53-13" name="__codelineno-53-13"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-53-14"><a id="__codelineno-53-14" name="__codelineno-53-14"></a><span class="w">    </span><span class="s">&quot;assistant&quot;</span><span class="p">,</span>
+</span><span id="__span-53-15"><a id="__codelineno-53-15" name="__codelineno-53-15"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;deepseek-v4-flash&quot;</span><span class="p">)),</span>
+</span><span id="__span-53-16"><a id="__codelineno-53-16" name="__codelineno-53-16"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">(</span><span class="nx">memSvc</span><span class="p">.</span><span class="nx">Tools</span><span class="p">()),</span>
+</span><span id="__span-53-17"><a id="__codelineno-53-17" name="__codelineno-53-17"></a><span class="p">)</span>
+</span><span id="__span-53-18"><a id="__codelineno-53-18" name="__codelineno-53-18"></a>
+</span><span id="__span-53-19"><a id="__codelineno-53-19" name="__codelineno-53-19"></a><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span>
+</span><span id="__span-53-20"><a id="__codelineno-53-20" name="__codelineno-53-20"></a><span class="w">    </span><span class="s">&quot;my-app&quot;</span><span class="p">,</span>
+</span><span id="__span-53-21"><a id="__codelineno-53-21" name="__codelineno-53-21"></a><span class="w">    </span><span class="nx">agent</span><span class="p">,</span>
+</span><span id="__span-53-22"><a id="__codelineno-53-22" name="__codelineno-53-22"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithSessionService</span><span class="p">(</span><span class="nx">sessionSvc</span><span class="p">),</span>
+</span><span id="__span-53-23"><a id="__codelineno-53-23" name="__codelineno-53-23"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithSessionIngestor</span><span class="p">(</span><span class="nx">memSvc</span><span class="p">),</span>
+</span><span id="__span-53-24"><a id="__codelineno-53-24" name="__codelineno-53-24"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithPlugins</span><span class="p">(</span><span class="nx">memSvc</span><span class="p">.</span><span class="nx">ContextOffloadPlugin</span><span class="p">()),</span>
+</span><span id="__span-53-25"><a id="__codelineno-53-25" name="__codelineno-53-25"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-<p>If offload traffic should use a different gateway or key from normal
-capture/search/recall traffic, set <code>GatewayURL</code> and <code>APIKey</code> on
-<code>ContextOffloadConfig</code>:</p>
+<p>The v2 API requires both <code>Authorization: Bearer &lt;key&gt;</code> and
+<code>X-TDAI-Service-Id</code>. For the standalone upstream gateway, use the conventional
+values <code>local</code> and <code>default</code>; for a managed service, use the credentials
+assigned to the memory instance.</p>
+<p>If offload traffic should use a different gateway or API key from normal
+capture/search/recall traffic, override them on <code>ContextOffloadConfig</code>:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-54-1">1</a></span>
 <span class="normal"><a href="#__codelineno-54-2">2</a></span>
 <span class="normal"><a href="#__codelineno-54-3">3</a></span>
 <span class="normal"><a href="#__codelineno-54-4">4</a></span>
-<span class="normal"><a href="#__codelineno-54-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-54-1"><a id="__codelineno-54-1" name="__codelineno-54-1"></a><span class="nx">memorytencentdb</span><span class="p">.</span><span class="nx">WithContextOffload</span><span class="p">(</span><span class="nx">memorytencentdb</span><span class="p">.</span><span class="nx">ContextOffloadConfig</span><span class="p">{</span>
+<span class="normal"><a href="#__codelineno-54-5">5</a></span>
+<span class="normal"><a href="#__codelineno-54-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-54-1"><a id="__codelineno-54-1" name="__codelineno-54-1"></a><span class="nx">memorytencentdb</span><span class="p">.</span><span class="nx">WithContextOffload</span><span class="p">(</span><span class="nx">memorytencentdb</span><span class="p">.</span><span class="nx">ContextOffloadConfig</span><span class="p">{</span>
 </span><span id="__span-54-2"><a id="__codelineno-54-2" name="__codelineno-54-2"></a><span class="w">    </span><span class="nx">Enabled</span><span class="p">:</span><span class="w">    </span><span class="kc">true</span><span class="p">,</span>
-</span><span id="__span-54-3"><a id="__codelineno-54-3" name="__codelineno-54-3"></a><span class="w">    </span><span class="nx">GatewayURL</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;http://127.0.0.1:8420&quot;</span><span class="p">,</span>
-</span><span id="__span-54-4"><a id="__codelineno-54-4" name="__codelineno-54-4"></a><span class="w">    </span><span class="nx">APIKey</span><span class="p">:</span><span class="w">     </span><span class="nx">os</span><span class="p">.</span><span class="nx">Getenv</span><span class="p">(</span><span class="s">&quot;TDAI_OFFLOAD_GATEWAY_API_KEY&quot;</span><span class="p">),</span>
-</span><span id="__span-54-5"><a id="__codelineno-54-5" name="__codelineno-54-5"></a><span class="p">})</span>
+</span><span id="__span-54-3"><a id="__codelineno-54-3" name="__codelineno-54-3"></a><span class="w">    </span><span class="nx">GatewayURL</span><span class="p">:</span><span class="w"> </span><span class="nx">offloadGatewayURL</span><span class="p">,</span>
+</span><span id="__span-54-4"><a id="__codelineno-54-4" name="__codelineno-54-4"></a><span class="w">    </span><span class="nx">APIKey</span><span class="p">:</span><span class="w">     </span><span class="nx">os</span><span class="p">.</span><span class="nx">Getenv</span><span class="p">(</span><span class="s">&quot;TDAI_OFFLOAD_API_KEY&quot;</span><span class="p">),</span>
+</span><span id="__span-54-5"><a id="__codelineno-54-5" name="__codelineno-54-5"></a><span class="w">    </span><span class="nx">ServiceID</span><span class="p">:</span><span class="w">  </span><span class="nx">os</span><span class="p">.</span><span class="nx">Getenv</span><span class="p">(</span><span class="s">&quot;TDAI_SERVICE_ID&quot;</span><span class="p">),</span>
+</span><span id="__span-54-6"><a id="__codelineno-54-6" name="__codelineno-54-6"></a><span class="p">})</span>
 </span></code></pre></div></td></tr></table></div>
 <p>At runtime:</p>
 <ul>
-<li><code>ContextOffloadPlugin()</code> calls the gateway after tool execution. The gateway
-  may replace large tool result messages with compact references or summaries.</li>
-<li>Before the next model call, the plugin asks the gateway whether the current
-  request should be rewritten with offloaded context.</li>
-<li><code>memSvc.Tools()</code> exposes <code>tdai_read_offload_ref</code>,
-  <code>tdai_read_offload_node</code>, and <code>tdai_search_offload_index</code> when context
-  offload is enabled, so the model can drill into gateway-owned offload data.</li>
-<li>Do not configure local directories, local models, or L0-L3 policies in the Go
-  adapter; those concerns belong to TencentDB Agent Memory.</li>
+<li>After tool execution, <code>ContextOffloadPlugin()</code> sends real tool call/result
+  pairs to <code>POST /v2/offload/ingest</code>, together with the latest user prompt and
+  bounded recent conversation context. This does not rewrite the current tool
+  result message.</li>
+<li>Before each model call, the plugin sends an ingest with no tool pairs for
+  L1.5 task judgment. That request still includes the latest user prompt and
+  bounded recent conversation context. The plugin then estimates message
+  tokens and calls
+  <code>POST /v2/offload/compact</code> after <code>CompactionRatio</code> is reached. Failures are
+  best effort: the original model context is retained.</li>
+<li><code>memSvc.Tools()</code> exposes only <code>tdai_read_offload_ref</code>, backed by
+  <code>POST /v2/offload/read-ref</code>. It supports full, query-centered, or line-range
+  recovery, bounded by <code>max_tokens</code>.</li>
+<li>The adapter deliberately limits its integration to the three routes needed
+  by this lifecycle. Storage, summaries, task maps, and offload policy remain
+  gateway responsibilities.</li>
 </ul>
+<p>Both ingest paths can send up to 10 recent user or assistant messages after
+filtering, truncated to 400 Unicode code points each. The latest user prompt is
+sent separately and truncated to 500 code points. Tool messages, assistant
+tool-call messages, the duplicated current prompt, and recognized internal
+control messages are omitted from <code>recent_messages</code>.</p>
+<p>The compaction trigger is evaluated locally. The context window is resolved in
+this order: <code>agent.WithModelContextWindow(...)</code> for the current run, the
+model's <code>Info().ContextWindow</code> (which providers can expose through options such
+as <code>WithContextWindow(...)</code>), a value registered for the model name through
+<code>model.RegisterModelContextWindow(...)</code>, and finally 128,000 tokens.
+<code>TokenCounter</code> supplies the per-message counts used for both the local
+<code>CompactionRatio</code> decision and compact request metadata. If it is nil, or if a
+custom counter fails or returns a negative value, the plugin uses the simple
+token estimator for that model call.</p>
 <h3 id="interactive-example">Interactive Example</h3>
 <p>Run the example after the gateway is ready:</p>
 <div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-55-1">1</a></span>
@@ -8050,18 +8079,33 @@ modes and does not write local offload state.</p>
 <tbody>
 <tr>
 <td><code>Enabled</code></td>
-<td>Enable context offload plugin and companion tools.</td>
+<td>Enable the context offload plugin and result-reference tool.</td>
 <td><code>false</code></td>
 </tr>
 <tr>
 <td><code>GatewayURL</code></td>
-<td>Optional gateway URL override for context offload hook/tool calls. Empty reuses <code>WithGatewayURL</code>.</td>
+<td>Optional gateway URL override for v2 offload calls. Empty reuses <code>WithGatewayURL</code>.</td>
 <td>none</td>
 </tr>
 <tr>
 <td><code>APIKey</code></td>
-<td>Optional API key override for context offload hook/tool calls. Empty reuses <code>WithAPIKey</code>.</td>
+<td>Optional Bearer key override for v2 offload calls. Empty reuses <code>WithAPIKey</code>.</td>
 <td>none</td>
+</tr>
+<tr>
+<td><code>ServiceID</code></td>
+<td>Memory service ID sent as <code>X-TDAI-Service-Id</code>; required when enabled.</td>
+<td>none</td>
+</tr>
+<tr>
+<td><code>CompactionRatio</code></td>
+<td>Context-window utilization that triggers <code>/v2/offload/compact</code>; must be in <code>(0, 2]</code>.</td>
+<td><code>0.5</code></td>
+</tr>
+<tr>
+<td><code>TokenCounter</code></td>
+<td>Optional <code>model.TokenCounter</code> used for the local <code>CompactionRatio</code> trigger and compact request metadata; failures fall back to the simple estimator.</td>
+<td>simple estimator</td>
 </tr>
 </tbody>
 </table>
@@ -8079,17 +8123,16 @@ modes and does not write local offload state.</p>
   searchable.</li>
 <li><code>tdai_conversation_search</code> searches conversation history and defaults to the
   current gateway <code>session_key</code>.</li>
-<li>Context offload is opt-in and gateway-owned. It does not call <code>/capture</code> or
-  <code>/recall</code>, and enabling recall alone will not rewrite tool result messages or
-  create Mermaid task maps.</li>
-<li>The Go adapter calls gateway hook endpoints
-  <code>/offload/v1/hooks/after-tool-messages</code> and
-  <code>/offload/v1/hooks/before-model</code>. It does not create <code>.tdai-offload</code>, local
-  refs, JSONL indexes, Mermaid files, or local state.</li>
-<li>The offload tools call gateway drill-down endpoints
-  <code>/offload/v1/tools/read-ref</code>, <code>/offload/v1/tools/read-node</code>, and
-  <code>/offload/v1/tools/search-index</code>. Scope validation, storage ACLs, byte
-  limits, and persistence are gateway responsibilities.</li>
+<li>Context offload is opt-in and gateway-owned. It uses only
+  <code>/v2/offload/ingest</code>, <code>/v2/offload/compact</code>, and <code>/v2/offload/read-ref</code>; it
+  does not call <code>/capture</code> or <code>/recall</code>.</li>
+<li>The gateway may replace archived tool results with messages such as
+  "原始工具结果已存档，如需查看完整内容请调用 Offload V2 result_ref 恢复接口".
+  Register <code>memSvc.Tools()</code> so the model can satisfy that instruction through
+  <code>tdai_read_offload_ref</code>.</li>
+<li>The adapter does not create local refs, JSONL indexes, Mermaid files, or
+  local offload state. Scope validation, storage ACLs, token limits, and
+  persistence are gateway responsibilities.</li>
 <li>Call <code>Close()</code> on the service so background capture workers shut down cleanly.</li>
 </ul>
 <h2 id="references">References</h2>
@@ -8099,7 +8142,7 @@ modes and does not write local offload state.</p>
 <li><a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory/auto">Auto Mode Example</a></li>
 <li><a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory/mem0">mem0 Example</a></li>
 <li><a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory/tencentdb">TencentDB Agent Memory Example</a></li>
-<li><a href="https://github.com/Tencent/TencentDB-Agent-Memory">TencentDB Agent Memory SDK</a></li>
+<li><a href="https://github.com/TencentCloud/TencentDB-Agent-Memory">TencentDB Agent Memory SDK</a></li>
 <li><a href="https://github.com/trpc-group/trpc-agent-go/blob/main/docs/mkdocs/en/ecosystem.md">Ecosystem Guide</a></li>
 <li><a href="https://pkg.go.dev/trpc.group/trpc-go/trpc-agent-go/memory">API Documentation</a></li>
 </ul>
@@ -8125,7 +8168,7 @@ modes and does not write local offload state.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="July 28, 2026 13:16:02 UTC">2026-07-28 13:16:02</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="August 3, 2026 02:20:08 UTC">2026-08-03 02:20:08</span>
   </span>
 
     
