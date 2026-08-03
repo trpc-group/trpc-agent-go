@@ -20,6 +20,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -830,6 +831,9 @@ func (e *execution) runConcurrent(ctx context.Context, branches [][]Step) error 
 	if len(branches) == 0 {
 		return errors.New("concurrent step has no branches")
 	}
+	if err := validateConcurrentSession(e.session); err != nil {
+		return err
+	}
 	start := make(chan struct{})
 	errs := make([]error, len(branches))
 	var wg sync.WaitGroup
@@ -870,6 +874,20 @@ func (e *execution) runConcurrent(ctx context.Context, branches [][]Step) error 
 		return err
 	}
 	return e.reload(ctx)
+}
+
+func validateConcurrentSession(sess *session.Session) error {
+	if sess == nil {
+		return session.ErrNilSession
+	}
+	sess.TracksMu.RLock()
+	defer sess.TracksMu.RUnlock()
+	for track, history := range sess.Tracks {
+		if history == nil {
+			return fmt.Errorf("session track %q has nil history", track)
+		}
+	}
+	return nil
 }
 
 func (e *execution) snapshot(
@@ -913,18 +931,25 @@ func (e *execution) snapshot(
 			return Snapshot{}, err
 		}
 	}
+	memoryKey := memory.UserKey{
+		AppName: e.key.AppName,
+		UserID:  e.key.UserID,
+	}
 	var memories []*memory.Entry
 	if e.required[CapabilityMemory] {
-		memories, err = e.services.Memory.ReadMemories(ctx, memory.UserKey{
-			AppName: e.key.AppName,
-			UserID:  e.key.UserID,
-		}, 0)
+		memories, err = e.services.Memory.ReadMemories(ctx, memoryKey, 0)
 		if err != nil {
 			return Snapshot{}, fmt.Errorf("read memories: %w", err)
 		}
 		if err := ctx.Err(); err != nil {
 			return Snapshot{}, err
 		}
+		if err := validateMemoryOwnership(memories, memoryKey, "memory catalog"); err != nil {
+			return Snapshot{}, err
+		}
+	}
+	if err := validateMemorySearchConsistency(memories, e.memorySearches, memoryKey); err != nil {
+		return Snapshot{}, err
 	}
 	return normalizeSnapshot(
 		backendName,
@@ -939,6 +964,94 @@ func (e *execution) snapshot(
 		memories,
 		e.memorySearches,
 	)
+}
+
+func validateMemoryOwnership(
+	entries []*memory.Entry,
+	key memory.UserKey,
+	owner string,
+) error {
+	for index, entry := range entries {
+		if entry == nil {
+			continue
+		}
+		if entry.AppName != key.AppName || entry.UserID != key.UserID {
+			return fmt.Errorf(
+				"%s %d belongs to %q/%q, want %q/%q",
+				owner,
+				index,
+				entry.AppName,
+				entry.UserID,
+				key.AppName,
+				key.UserID,
+			)
+		}
+	}
+	return nil
+}
+
+func validateMemorySearchConsistency(
+	catalog []*memory.Entry,
+	searches map[string][]*memory.Entry,
+	key memory.UserKey,
+) error {
+	if len(searches) == 0 {
+		return nil
+	}
+	catalogEntries := make(map[string]string, len(catalog))
+	for index, entry := range catalog {
+		fingerprint, err := memoryEntryFingerprint(entry, fmt.Sprintf("memory catalog %d", index))
+		if err != nil {
+			return err
+		}
+		if _, exists := catalogEntries[entry.ID]; exists {
+			return fmt.Errorf("duplicate memory id %q", entry.ID)
+		}
+		catalogEntries[entry.ID] = fingerprint
+	}
+	names := make([]string, 0, len(searches))
+	for name := range searches {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		results := searches[name]
+		owner := fmt.Sprintf("memory search %q", name)
+		if err := validateMemoryOwnership(results, key, owner); err != nil {
+			return err
+		}
+		for index, entry := range results {
+			fingerprint, err := memoryEntryFingerprint(
+				entry,
+				fmt.Sprintf("%s result %d", owner, index),
+			)
+			if err != nil {
+				return err
+			}
+			catalogFingerprint, exists := catalogEntries[entry.ID]
+			if !exists {
+				return fmt.Errorf("%s returned unknown id %q", owner, entry.ID)
+			}
+			if fingerprint != catalogFingerprint {
+				return fmt.Errorf("%s result %d does not match catalog entry %q", owner, index, entry.ID)
+			}
+		}
+	}
+	return nil
+}
+
+func memoryEntryFingerprint(entry *memory.Entry, owner string) (string, error) {
+	value, err := normalizeMemoryEntry(entry, owner)
+	if err != nil {
+		return "", err
+	}
+	delete(value, "id")
+	delete(value, "score")
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return "", fmt.Errorf("marshal %s: %w", owner, err)
+	}
+	return string(raw), nil
 }
 
 func cloneState(input session.StateMap) session.StateMap {
@@ -1398,6 +1511,9 @@ func validateStepKind(step Step) error {
 		if step.Memory.Memory == "" {
 			return fmt.Errorf("step %q has invalid memory input", step.Name)
 		}
+		if err := validateMemoryInputStrings(step.Memory); err != nil {
+			return fmt.Errorf("step %q: %w", step.Name, err)
+		}
 	case StepSearchMemory:
 		if step.MemorySearch == nil {
 			return fmt.Errorf("step %q kind %q requires memory search payload", step.Name, step.Kind)
@@ -1408,6 +1524,9 @@ func validateStepKind(step Step) error {
 	case StepCreateSummary:
 		if step.Summary == nil {
 			return fmt.Errorf("step %q kind %q requires summary payload", step.Name, step.Kind)
+		}
+		if err := validateUTF8String("summary filter key", step.Summary.FilterKey); err != nil {
+			return fmt.Errorf("step %q: %w", step.Name, err)
 		}
 	case StepAppendTrack:
 		return validateTrackStep(step)
@@ -1424,12 +1543,41 @@ func validateStepKind(step Step) error {
 	return nil
 }
 
+func validateMemoryInputStrings(input *MemoryInput) error {
+	if err := validateUTF8String("memory content", input.Memory); err != nil {
+		return err
+	}
+	for index, topic := range input.Topics {
+		if err := validateUTF8String(fmt.Sprintf("memory topic %d", index), topic); err != nil {
+			return err
+		}
+	}
+	if input.Metadata == nil {
+		return nil
+	}
+	if err := validateUTF8String("memory kind", string(input.Metadata.Kind)); err != nil {
+		return err
+	}
+	for index, participant := range input.Metadata.Participants {
+		if err := validateUTF8String(
+			fmt.Sprintf("memory participant %d", index),
+			participant,
+		); err != nil {
+			return err
+		}
+	}
+	return validateUTF8String("memory location", input.Metadata.Location)
+}
+
 func validateTrackStep(step Step) error {
 	if step.Track == nil {
 		return fmt.Errorf("step %q kind %q requires track payload", step.Name, step.Kind)
 	}
 	if step.Track.Event == nil || step.Track.Event.Track == "" {
 		return fmt.Errorf("step %q has invalid track input", step.Name)
+	}
+	if err := validateUTF8String("track name", string(step.Track.Event.Track)); err != nil {
+		return fmt.Errorf("step %q: %w", step.Name, err)
 	}
 	if payload := step.Track.Event.Payload; payload != nil {
 		var decoded any
@@ -1443,6 +1591,12 @@ func validateTrackStep(step Step) error {
 func validateEventStep(step Step) error {
 	if step.Event.Event == nil || step.Event.LogicalID == "" {
 		return fmt.Errorf("step %q has invalid event input", step.Name)
+	}
+	if err := validateEventComparisonStrings(step.Event.Event, "event"); err != nil {
+		return fmt.Errorf("step %q: %w", step.Name, err)
+	}
+	if err := validateEventToolCallArguments(step.Event.Event); err != nil {
+		return fmt.Errorf("step %q: %w", step.Name, err)
 	}
 	extensionKeys := make([]string, 0, len(step.Event.Event.Extensions))
 	for key := range step.Event.Event.Extensions {
@@ -1470,6 +1624,146 @@ func validateEventStep(step Step) error {
 	return nil
 }
 
+func validateEventComparisonStrings(evt *event.Event, owner string) error {
+	check := func(name, value string) error {
+		return validateUTF8String(owner+" "+name, value)
+	}
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{name: "author", value: evt.Author},
+		{name: "branch", value: evt.Branch},
+		{name: "tag", value: evt.Tag},
+		{name: "filter key", value: evt.FilterKey},
+	} {
+		if err := check(field.name, field.value); err != nil {
+			return err
+		}
+	}
+	extensionKeys := make([]string, 0, len(evt.Extensions))
+	for key := range evt.Extensions {
+		extensionKeys = append(extensionKeys, key)
+	}
+	sort.Strings(extensionKeys)
+	for _, key := range extensionKeys {
+		if err := check("extension key", key); err != nil {
+			return err
+		}
+	}
+	if evt.Response == nil {
+		return nil
+	}
+	for choiceIndex := range evt.Response.Choices {
+		choice := &evt.Response.Choices[choiceIndex]
+		if choice.FinishReason != nil {
+			if err := check(
+				fmt.Sprintf("choice %d finish reason", choiceIndex),
+				*choice.FinishReason,
+			); err != nil {
+				return err
+			}
+		}
+		for _, field := range []struct {
+			name    string
+			message *model.Message
+		}{
+			{name: "message", message: &choice.Message},
+			{name: "delta", message: &choice.Delta},
+		} {
+			if err := validateMessageStrings(
+				field.message,
+				fmt.Sprintf("%s choice %d %s", owner, choiceIndex, field.name),
+			); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func validateMessageStrings(message *model.Message, owner string) error {
+	check := func(name, value string) error {
+		return validateUTF8String(owner+" "+name, value)
+	}
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{name: "role", value: string(message.Role)},
+		{name: "content", value: message.Content},
+		{name: "tool id", value: message.ToolID},
+		{name: "tool name", value: message.ToolName},
+		{name: "reasoning content", value: message.ReasoningContent},
+		{name: "reasoning signature", value: message.ReasoningSignature},
+	} {
+		if err := check(field.name, field.value); err != nil {
+			return err
+		}
+	}
+	for index := range message.ContentParts {
+		part := &message.ContentParts[index]
+		if err := check(fmt.Sprintf("content part %d type", index), string(part.Type)); err != nil {
+			return err
+		}
+		if part.Text != nil {
+			if err := check(fmt.Sprintf("content part %d text", index), *part.Text); err != nil {
+				return err
+			}
+		}
+	}
+	for index := range message.ToolCalls {
+		call := &message.ToolCalls[index]
+		for _, field := range []struct {
+			name  string
+			value string
+		}{
+			{name: "type", value: call.Type},
+			{name: "id", value: call.ID},
+			{name: "function name", value: call.Function.Name},
+			{name: "function description", value: call.Function.Description},
+		} {
+			if err := check(fmt.Sprintf("tool call %d %s", index, field.name), field.value); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func validateEventToolCallArguments(evt *event.Event) error {
+	if evt.Response == nil || evt.IsPartial {
+		return nil
+	}
+	for choiceIndex := range evt.Response.Choices {
+		choice := &evt.Response.Choices[choiceIndex]
+		for _, field := range []struct {
+			name  string
+			calls []model.ToolCall
+		}{
+			{name: "message", calls: choice.Message.ToolCalls},
+			{name: "delta", calls: choice.Delta.ToolCalls},
+		} {
+			for callIndex := range field.calls {
+				arguments := field.calls[callIndex].Function.Arguments
+				if len(arguments) == 0 {
+					continue
+				}
+				if _, err := canonicalJSONString(string(arguments)); err != nil {
+					return fmt.Errorf(
+						"event choice %d %s tool call %d has invalid JSON arguments: %w",
+						choiceIndex,
+						field.name,
+						callIndex,
+						err,
+					)
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func validateEventStateDelta(stepName string, stateDelta session.StateMap) error {
 	keys := make([]string, 0, len(stateDelta))
 	for key := range stateDelta {
@@ -1477,6 +1771,9 @@ func validateEventStateDelta(stepName string, stateDelta session.StateMap) error
 	}
 	sort.Strings(keys)
 	for _, key := range keys {
+		if err := validateUTF8String("event state delta key", key); err != nil {
+			return fmt.Errorf("step %q: %w", stepName, err)
+		}
 		if key == "" {
 			return fmt.Errorf("step %q event state delta: state key must not be empty", stepName)
 		}
@@ -1556,6 +1853,9 @@ func validateStateKeys(
 }
 
 func validateStateKey(scope StateScope, key string) error {
+	if err := validateUTF8String(string(scope)+" state key", key); err != nil {
+		return err
+	}
 	if key == "" {
 		return errors.New("state key must not be empty")
 	}

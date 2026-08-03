@@ -260,9 +260,13 @@ type EventInput struct {
 	// LogicalID is the stable event identity used after backend IDs are normalized.
 	LogicalID string
 	// Event is cloned before the runner changes timestamps or extensions. Every
-	// extension key must be non-empty and must not use the runner-owned logical
-	// identity key; every non-nil extension value must contain valid UTF-8 JSON
-	// with paired surrogate escapes and unique object keys.
+	// Event author, role, content, tool, branch, tag, filter key, and extension
+	// key strings must contain valid UTF-8. Extension keys must also be non-empty
+	// and must not use the runner-owned logical identity key; every non-nil
+	// extension value must contain valid UTF-8 JSON with paired surrogate escapes
+	// and unique object keys. Non-partial tool-call arguments follow the same JSON
+	// rules; partial argument fragments remain opaque until a final response is
+	// available.
 	// StateDelta is applied to session state even when the event itself is not
 	// persisted. Keys beginning with app: or user: additionally declare scoped-state
 	// intent; unprefixed and temp: keys are session-only. The runner preserves every
@@ -291,7 +295,8 @@ const (
 type StateInput struct {
 	// Scope selects the application, user, or session state owner.
 	Scope StateScope
-	// Values is copied before it is passed to the backend. Keys must be non-empty.
+	// Values is copied before it is passed to the backend. Keys must be valid
+	// UTF-8 and non-empty.
 	// App and user keys must not include a state scope prefix; session keys may
 	// use temp: but must not use app:, user:, or the backend-owned tracks key.
 	Values session.StateMap
@@ -303,11 +308,13 @@ type StateInput struct {
 
 // MemoryInput adds an idempotent memory entry.
 type MemoryInput struct {
-	// Memory is the non-empty content persisted by the memory service.
+	// Memory is the non-empty, valid UTF-8 content persisted by the memory service.
 	Memory string
-	// Topics is copied before it is passed to the backend.
+	// Topics is copied before it is passed to the backend. Every topic must be
+	// valid UTF-8.
 	Topics []string
-	// Metadata is copied before it is passed to the backend and may be nil.
+	// Metadata is copied before it is passed to the backend and may be nil. Its
+	// string fields must be valid UTF-8.
 	Metadata *memory.Metadata
 }
 
@@ -323,7 +330,8 @@ type MemorySearchInput struct {
 
 // SummaryInput creates or refreshes one filter-aware summary.
 type SummaryInput struct {
-	// FilterKey selects a branch; an empty value selects the full session.
+	// FilterKey selects a branch; an empty value selects the full session. A
+	// non-empty value must be valid UTF-8.
 	FilterKey string
 	// Force is passed to the session summary service unchanged.
 	Force bool
@@ -331,9 +339,10 @@ type SummaryInput struct {
 
 // TrackInput appends one observation event.
 type TrackInput struct {
-	// Event is copied before its payload and timestamp are normalized. Payload
-	// may be nil for JSON null; every non-nil payload must contain valid UTF-8
-	// JSON with paired surrogate escapes and unique object keys.
+	// Event is copied before its payload and timestamp are normalized. Its track
+	// name must be valid UTF-8. Payload may be nil for JSON null; every non-nil
+	// payload must contain valid UTF-8 JSON with paired surrogate escapes and
+	// unique object keys.
 	Event *session.TrackEvent
 	// Offset is added to the created session time for deterministic ordering.
 	Offset time.Duration

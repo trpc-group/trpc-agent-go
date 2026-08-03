@@ -52,6 +52,7 @@ func TestPublicCases(t *testing.T) {
 }
 
 func TestCaseValidationRejectsAmbiguousInputs(t *testing.T) {
+	invalidUTF8 := string([]byte{0xff})
 	validStep := messageStep("valid", "valid", 1, "user", "user", "hello", "")
 	trackPayloadCase := func(name string, payload json.RawMessage) Case {
 		return Case{
@@ -70,6 +71,30 @@ func TestCaseValidationRejectsAmbiguousInputs(t *testing.T) {
 	eventExtensionCase := func(name string, raw json.RawMessage) Case {
 		step := messageStep("event", "event", 1, "user", model.RoleUser, "hello", "")
 		step.Event.Event.Extensions = map[string]json.RawMessage{"custom.example/v1": raw}
+		return Case{
+			Name:     name,
+			Requires: []Capability{CapabilitySession},
+			Steps:    []Step{step},
+		}
+	}
+	toolArgumentsCase := func(name string, arguments []byte, delta bool) Case {
+		message := model.Message{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{
+				Type: "function",
+				Function: model.FunctionDefinitionParam{
+					Name:      "tool",
+					Arguments: arguments,
+				},
+			}},
+		}
+		choice := model.Choice{Message: message}
+		if delta {
+			choice = model.Choice{Delta: message}
+		}
+		step := responseEvent("tool-call", 1, "assistant", model.Response{
+			Choices: []model.Choice{choice},
+		})
 		return Case{
 			Name:     name,
 			Requires: []Capability{CapabilitySession},
@@ -177,6 +202,24 @@ func TestCaseValidationRejectsAmbiguousInputs(t *testing.T) {
 				Track: &TrackInput{Event: &session.TrackEvent{}},
 			}},
 		},
+		{
+			Name:     "invalid-utf8-track-name",
+			Requires: []Capability{CapabilitySession, CapabilityTrack},
+			Steps: []Step{{
+				Name:  "track",
+				Kind:  StepAppendTrack,
+				Track: &TrackInput{Event: &session.TrackEvent{Track: session.Track(invalidUTF8)}},
+			}},
+		},
+		{
+			Name:     "invalid-utf8-summary-filter-key",
+			Requires: []Capability{CapabilitySession, CapabilitySummary},
+			Steps: []Step{{
+				Name:    "summary",
+				Kind:    StepCreateSummary,
+				Summary: &SummaryInput{FilterKey: invalidUTF8},
+			}},
+		},
 		trackPayloadCase("empty-track-payload", json.RawMessage{}),
 		trackPayloadCase("malformed-track-payload", json.RawMessage("{")),
 		trackPayloadCase("invalid-utf8-track-payload", json.RawMessage{'"', 0xff, '"'}),
@@ -187,6 +230,11 @@ func TestCaseValidationRejectsAmbiguousInputs(t *testing.T) {
 		eventExtensionCase("invalid-utf8-event-extension", json.RawMessage{'"', 0xff, '"'}),
 		eventExtensionCase("unpaired-surrogate-event-extension", json.RawMessage(`"\ud800"`)),
 		eventExtensionCase("duplicate-event-extension-object-key", json.RawMessage(`{"value":1,"value":2}`)),
+		toolArgumentsCase("malformed-tool-call-arguments", []byte(`{"value":`), false),
+		toolArgumentsCase("malformed-delta-tool-call-arguments", []byte(`{"value":`), true),
+		toolArgumentsCase("invalid-utf8-tool-call-arguments", []byte{'"', 0xff, '"'}, false),
+		toolArgumentsCase("unpaired-surrogate-tool-call-arguments", []byte(`"\ud800"`), false),
+		toolArgumentsCase("duplicate-tool-call-argument-key", []byte(`{"value":1,"value":2}`), false),
 		{
 			Name:     "empty-event-extension-key",
 			Requires: []Capability{CapabilitySession},
@@ -282,7 +330,109 @@ func TestCaseValidationRejectsMismatchedStepPayloads(t *testing.T) {
 	}
 }
 
+func TestCaseValidationRejectsInvalidUTF8MemoryInput(t *testing.T) {
+	invalid := string([]byte{0xff})
+	tests := []struct {
+		name   string
+		mutate func(*MemoryInput)
+	}{
+		{name: "content", mutate: func(input *MemoryInput) { input.Memory = invalid }},
+		{name: "topic", mutate: func(input *MemoryInput) { input.Topics = []string{invalid} }},
+		{name: "kind", mutate: func(input *MemoryInput) {
+			input.Metadata = &memory.Metadata{Kind: memory.Kind(invalid)}
+		}},
+		{name: "participant", mutate: func(input *MemoryInput) {
+			input.Metadata = &memory.Metadata{Participants: []string{invalid}}
+		}},
+		{name: "location", mutate: func(input *MemoryInput) {
+			input.Metadata = &memory.Metadata{Location: invalid}
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			input := &MemoryInput{Memory: "memory"}
+			test.mutate(input)
+			err := validateCase(Case{
+				Name:     "invalid-memory-" + test.name,
+				Requires: []Capability{CapabilitySession, CapabilityMemory},
+				Steps:    []Step{{Name: "memory", Kind: StepAddMemory, Memory: input}},
+			})
+			if err == nil || !strings.Contains(err.Error(), "invalid UTF-8") {
+				t.Fatalf("validateCase() error = %v, want invalid UTF-8", err)
+			}
+		})
+	}
+}
+
+func TestEventStringsRequireValidUTF8(t *testing.T) {
+	invalid := string([]byte{0xff})
+	tests := []struct {
+		name   string
+		mutate func(*event.Event)
+	}{
+		{name: "author", mutate: func(evt *event.Event) { evt.Author = invalid }},
+		{name: "branch", mutate: func(evt *event.Event) { evt.Branch = invalid }},
+		{name: "tag", mutate: func(evt *event.Event) { evt.Tag = invalid }},
+		{name: "filter key", mutate: func(evt *event.Event) { evt.FilterKey = invalid }},
+		{name: "message content", mutate: func(evt *event.Event) {
+			evt.Response.Choices[0].Message.Content = invalid
+		}},
+		{name: "delta role", mutate: func(evt *event.Event) {
+			evt.Response.Choices[0].Delta.Role = model.Role(invalid)
+		}},
+		{name: "tool response id", mutate: func(evt *event.Event) {
+			evt.Response.Choices[0].Message.ToolID = invalid
+		}},
+		{name: "content part text", mutate: func(evt *event.Event) {
+			evt.Response.Choices[0].Message.ContentParts = []model.ContentPart{{
+				Type: model.ContentTypeText,
+				Text: &invalid,
+			}}
+		}},
+		{name: "tool call name", mutate: func(evt *event.Event) {
+			evt.Response.Choices[0].Message.ToolCalls = []model.ToolCall{{
+				Type: "function",
+				Function: model.FunctionDefinitionParam{
+					Name:      invalid,
+					Arguments: []byte(`{}`),
+				},
+			}}
+		}},
+		{name: "extension key", mutate: func(evt *event.Event) {
+			evt.Extensions = map[string]json.RawMessage{invalid: json.RawMessage(`true`)}
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			step := messageStep("event", "event", 1, "user", model.RoleUser, "hello", "")
+			test.mutate(step.Event.Event)
+			replayCase := Case{
+				Name:     "invalid-event-string",
+				Requires: []Capability{CapabilitySession},
+				Steps:    []Step{step},
+			}
+			if err := validateCase(replayCase); err == nil ||
+				!strings.Contains(err.Error(), "invalid UTF-8") {
+				t.Fatalf("validateCase() error = %v, want invalid UTF-8", err)
+			}
+
+			if err := event.SetExtension(step.Event.Event, logicalEventIDExtension, "event"); err != nil {
+				t.Fatalf("SetExtension() error = %v", err)
+			}
+			if _, _, _, err := normalizeEvents(
+				[]event.Event{*step.Event.Event},
+				EventOrderGlobal,
+				nil,
+				caseEpoch,
+			); err == nil || !strings.Contains(err.Error(), "invalid UTF-8") {
+				t.Fatalf("normalizeEvents() error = %v, want invalid UTF-8", err)
+			}
+		})
+	}
+}
+
 func TestCaseValidationRejectsNonPortableStateKeys(t *testing.T) {
+	invalidUTF8 := string([]byte{0xff})
 	stateCase := func(name string, scope StateScope, values session.StateMap, deletes []string) Case {
 		capability := CapabilitySessionState
 		if scope == StateScopeApp {
@@ -301,6 +451,8 @@ func TestCaseValidationRejectsNonPortableStateKeys(t *testing.T) {
 		}
 	}
 	tests := []Case{
+		stateCase("app-invalid-utf8-value-key", StateScopeApp, session.StateMap{invalidUTF8: []byte("x")}, nil),
+		stateCase("user-invalid-utf8-delete-key", StateScopeUser, nil, []string{invalidUTF8}),
 		stateCase("app-prefixed-value", StateScopeApp, session.StateMap{"app:key": []byte("x")}, nil),
 		stateCase("user-temp-value", StateScopeUser, session.StateMap{"temp:key": []byte("x")}, nil),
 		stateCase("app-empty-delete", StateScopeApp, nil, []string{""}),
@@ -318,6 +470,15 @@ func TestCaseValidationRejectsNonPortableStateKeys(t *testing.T) {
 			Steps: []Step{func() Step {
 				step := messageStep("event", "event", 1, "user", model.RoleUser, "hello", "")
 				step.Event.Event.StateDelta = session.StateMap{replayTrackStateKey: []byte("x")}
+				return step
+			}()},
+		},
+		{
+			Name:     "invalid-utf8-event-delta-key",
+			Requires: []Capability{CapabilitySession, CapabilitySessionState},
+			Steps: []Step{func() Step {
+				step := messageStep("event", "event", 1, "user", model.RoleUser, "hello", "")
+				step.Event.Event.StateDelta = session.StateMap{invalidUTF8: []byte("x")}
 				return step
 			}()},
 		},
@@ -351,6 +512,139 @@ func TestCaseValidationAllowsScopedEventStateDelta(t *testing.T) {
 	}
 	if err := validateCase(replayCase); err != nil {
 		t.Fatalf("validateCase() rejected scoped event state delta: %v", err)
+	}
+}
+
+func TestNormalizationRejectsInvalidUTF8StateKeys(t *testing.T) {
+	invalid := string([]byte{0xff})
+	tests := []struct {
+		name      string
+		required  Capability
+		appState  session.StateMap
+		userState session.StateMap
+		state     session.StateMap
+	}{
+		{name: "app", required: CapabilityAppState, appState: session.StateMap{invalid: []byte("x")}},
+		{name: "user", required: CapabilityUserState, userState: session.StateMap{invalid: []byte("x")}},
+		{name: "session", required: CapabilitySessionState, state: session.StateMap{invalid: []byte("x")}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			sess := session.NewSession("app", "user", "session")
+			for key, value := range test.state {
+				sess.SetState(key, value)
+			}
+			_, err := normalizeSnapshot(
+				"backend",
+				"invalid-state-key",
+				EventOrderGlobal,
+				nil,
+				Capabilities{test.required: true},
+				nil,
+				sess,
+				test.appState,
+				test.userState,
+				nil,
+				nil,
+			)
+			if err == nil || !strings.Contains(err.Error(), "invalid UTF-8") {
+				t.Fatalf("normalizeSnapshot() error = %v, want invalid UTF-8", err)
+			}
+		})
+	}
+
+	eventStep := messageStep("event", "event", 1, "user", model.RoleUser, "hello", "")
+	eventStep.Event.Event.StateDelta = session.StateMap{invalid: []byte("x")}
+	if err := event.SetExtension(eventStep.Event.Event, logicalEventIDExtension, "event"); err != nil {
+		t.Fatalf("SetExtension() error = %v", err)
+	}
+	if _, _, _, err := normalizeEvents(
+		[]event.Event{*eventStep.Event.Event},
+		EventOrderGlobal,
+		nil,
+		caseEpoch,
+	); err == nil || !strings.Contains(err.Error(), "invalid UTF-8") {
+		t.Fatalf("normalizeEvents() error = %v, want invalid UTF-8", err)
+	}
+}
+
+func TestNormalizationRejectsInvalidSummaryAndTrackStrings(t *testing.T) {
+	invalid := string([]byte{0xff})
+	summaryTests := []struct {
+		name      string
+		filterKey string
+		summary   *session.Summary
+	}{
+		{name: "filter key", filterKey: invalid},
+		{name: "text", filterKey: "summary", summary: &session.Summary{Summary: invalid}},
+		{name: "topic", filterKey: "summary", summary: &session.Summary{Topics: []string{invalid}}},
+		{
+			name:      "boundary filter key",
+			filterKey: "summary",
+			summary: &session.Summary{Boundary: &session.SummaryBoundary{
+				FilterKey: invalid,
+			}},
+		},
+		{
+			name:      "boundary event id",
+			filterKey: "summary",
+			summary: &session.Summary{Boundary: &session.SummaryBoundary{
+				LastEventID: invalid,
+			}},
+		},
+	}
+	for _, test := range summaryTests {
+		t.Run("summary "+test.name, func(t *testing.T) {
+			sess := &session.Session{Summaries: map[string]*session.Summary{
+				test.filterKey: test.summary,
+			}}
+			if _, err := normalizeSummaries(sess, nil, nil); err == nil ||
+				!strings.Contains(err.Error(), "invalid UTF-8") {
+				t.Fatalf("normalizeSummaries() error = %v, want invalid UTF-8", err)
+			}
+		})
+	}
+
+	trackTests := []struct {
+		name   string
+		tracks map[session.Track]*session.TrackEvents
+		want   string
+	}{
+		{
+			name:   "invalid map key",
+			tracks: map[session.Track]*session.TrackEvents{session.Track(invalid): nil},
+			want:   "invalid UTF-8",
+		},
+		{
+			name: "history mismatch",
+			tracks: map[session.Track]*session.TrackEvents{
+				"expected": {Track: "actual"},
+			},
+			want: `contains history for "actual"`,
+		},
+		{
+			name: "invalid event name",
+			tracks: map[session.Track]*session.TrackEvents{
+				"track": {Track: "track", Events: []session.TrackEvent{{Track: session.Track(invalid)}}},
+			},
+			want: "invalid UTF-8",
+		},
+		{
+			name: "event mismatch",
+			tracks: map[session.Track]*session.TrackEvents{
+				"expected": {Track: "expected", Events: []session.TrackEvent{{Track: "actual"}}},
+			},
+			want: `belongs to "actual"`,
+		},
+	}
+	for _, test := range trackTests {
+		t.Run("track "+test.name, func(t *testing.T) {
+			sess := &session.Session{Tracks: test.tracks}
+			if _, err := normalizeTracks(sess, time.Time{}); err == nil ||
+				!strings.Contains(err.Error(), test.want) {
+				t.Fatalf("normalizeTracks() error = %v, want %q", err, test.want)
+			}
+		})
 	}
 }
 
@@ -619,6 +913,23 @@ func TestConcurrentBranchesMayShareFilterKey(t *testing.T) {
 	if !reflect.DeepEqual(snapshot.EventOrder["concurrent:1/0"], []string{"a"}) ||
 		!reflect.DeepEqual(snapshot.EventOrder["concurrent:1/1"], []string{"b"}) {
 		t.Fatalf("concurrent event order = %v", snapshot.EventOrder)
+	}
+}
+
+func TestReplayRejectsUncloneableConcurrentSession(t *testing.T) {
+	backend := InMemoryBackend()
+	open := backend.Open
+	backend.Open = func(ctx context.Context, caseName string) (*Services, error) {
+		services, err := open(ctx, caseName)
+		if err != nil {
+			return nil, err
+		}
+		services.Session = &nilTrackHistoryService{Service: services.Session}
+		return services, nil
+	}
+	_, err := Replay(context.Background(), concurrentCase(), backend)
+	if err == nil || !strings.Contains(err.Error(), `session track "broken" has nil history`) {
+		t.Fatalf("Replay() error = %v, want nil track history rejection", err)
 	}
 }
 
@@ -1245,6 +1556,67 @@ func TestReplayReadsOnlyRequiredCapabilities(t *testing.T) {
 	}
 }
 
+func TestReplayRejectsMemoryOwnershipDrift(t *testing.T) {
+	tests := []struct {
+		name       string
+		replayCase Case
+		catalog    bool
+		search     bool
+		content    bool
+		invalid    bool
+		want       string
+	}{
+		{
+			name:       "catalog",
+			replayCase: memoryCase(),
+			catalog:    true,
+			want:       "memory catalog 0 belongs to",
+		},
+		{
+			name:       "search",
+			replayCase: memorySearchCase(),
+			search:     true,
+			want:       `memory search "rank-replay-reports" 0 belongs to`,
+		},
+		{
+			name:       "search content",
+			replayCase: memorySearchCase(),
+			content:    true,
+			want:       `memory search "rank-replay-reports" result 0 does not match catalog entry`,
+		},
+		{
+			name:       "search invalid UTF-8",
+			replayCase: memorySearchCase(),
+			invalid:    true,
+			want:       "contains invalid UTF-8",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			backend := InMemoryBackend()
+			open := backend.Open
+			backend.Open = func(ctx context.Context, caseName string) (*Services, error) {
+				services, err := open(ctx, caseName)
+				if err != nil {
+					return nil, err
+				}
+				services.Memory = &memoryDriftService{
+					Service: services.Memory,
+					catalog: test.catalog,
+					search:  test.search,
+					content: test.content,
+					invalid: test.invalid,
+				}
+				return services, nil
+			}
+			_, err := Replay(context.Background(), test.replayCase, backend)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Replay() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
 func TestReplayRejectsCrossSessionSummaryLeak(t *testing.T) {
 	base := InMemoryBackend()
 	backend := base
@@ -1796,6 +2168,130 @@ func TestEventExtensionTimestampsRemainSemantic(t *testing.T) {
 	}
 }
 
+func TestToolCallArgumentObjectOrderIsCanonical(t *testing.T) {
+	normalize := func(arguments string, field string) CanonicalMap {
+		message := model.Message{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{
+				Type: "function",
+				Function: model.FunctionDefinitionParam{
+					Name:      "tool",
+					Arguments: []byte(arguments),
+				},
+			}},
+		}
+		choice := model.Choice{Message: message}
+		if field == "delta" {
+			choice = model.Choice{Delta: message}
+		}
+		step := responseEvent("tool-call", 1, "assistant", model.Response{
+			Choices: []model.Choice{choice},
+		})
+		if err := event.SetExtension(step.Event.Event, logicalEventIDExtension, "tool-call"); err != nil {
+			t.Fatalf("SetExtension() error = %v", err)
+		}
+		events, _, _, err := normalizeEvents(
+			[]event.Event{*step.Event.Event},
+			EventOrderGlobal,
+			nil,
+			caseEpoch,
+		)
+		if err != nil {
+			t.Fatalf("normalizeEvents() error = %v", err)
+		}
+		return events[0]
+	}
+
+	for _, field := range []string{"message", "delta"} {
+		t.Run(field, func(t *testing.T) {
+			left := normalize(`{"a":1,"b":2}`, field)
+			right := normalize(`{"b":2,"a":1}`, field)
+			if !reflect.DeepEqual(left, right) {
+				t.Fatalf("equivalent tool arguments differ:\nleft=%v\nright=%v", left, right)
+			}
+			arrayLeft := normalize(`[1,2]`, field)
+			arrayRight := normalize(`[2,1]`, field)
+			if reflect.DeepEqual(arrayLeft, arrayRight) {
+				t.Fatal("tool argument array order was ignored")
+			}
+		})
+	}
+}
+
+func TestPartialToolCallArgumentsRemainOpaque(t *testing.T) {
+	step := responseEvent("partial-tool-call", 1, "assistant", model.Response{
+		IsPartial: true,
+		Choices: []model.Choice{{
+			Delta: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					Type: "function",
+					Function: model.FunctionDefinitionParam{
+						Name:      "tool",
+						Arguments: []byte(`{"value":`),
+					},
+				}},
+			},
+		}},
+	})
+	replayCase := Case{
+		Name:     "partial-tool-call",
+		Requires: []Capability{CapabilitySession},
+		Steps:    []Step{step},
+	}
+	if err := validateCase(replayCase); err != nil {
+		t.Fatalf("validateCase() rejected partial tool arguments: %v", err)
+	}
+	if err := event.SetExtension(step.Event.Event, logicalEventIDExtension, "partial-tool-call"); err != nil {
+		t.Fatalf("SetExtension() error = %v", err)
+	}
+	events, _, _, err := normalizeEvents(
+		[]event.Event{*step.Event.Event},
+		EventOrderGlobal,
+		nil,
+		caseEpoch,
+	)
+	if err != nil {
+		t.Fatalf("normalizeEvents() rejected partial tool arguments: %v", err)
+	}
+	if got := normalizedToolArguments(t, events[0], "delta"); got != `{"value":` {
+		t.Fatalf("partial tool arguments = %q, want original fragment", got)
+	}
+}
+
+func normalizedToolArguments(t *testing.T, evt CanonicalMap, field string) string {
+	t.Helper()
+	choices, ok := evt["choices"].([]any)
+	if !ok || len(choices) != 1 {
+		t.Fatalf("event choices = %#v, want one choice", evt["choices"])
+	}
+	choice, ok := choices[0].(map[string]any)
+	if !ok {
+		t.Fatalf("choice = %T, want object", choices[0])
+	}
+	message, ok := choice[field].(map[string]any)
+	if !ok {
+		t.Fatalf("choice %s = %T, want object", field, choice[field])
+	}
+	calls, ok := message["tool_calls"].([]any)
+	if !ok || len(calls) != 1 {
+		t.Fatalf("tool calls = %#v, want one call", message["tool_calls"])
+	}
+	call, ok := calls[0].(map[string]any)
+	if !ok {
+		t.Fatalf("tool call = %T, want object", calls[0])
+	}
+	function, ok := call["function"].(map[string]any)
+	if !ok {
+		t.Fatalf("tool function = %T, want object", call["function"])
+	}
+	arguments, ok := function["arguments"].(string)
+	if !ok {
+		t.Fatalf("tool arguments = %T, want string", function["arguments"])
+	}
+	return arguments
+}
+
 func TestTrackTimestampOffsetRemainsSemantic(t *testing.T) {
 	sess := &session.Session{Tracks: map[session.Track]*session.TrackEvents{
 		"tools": {
@@ -2197,6 +2693,10 @@ type eventAuthorDriftService struct {
 	session.Service
 }
 
+type nilTrackHistoryService struct {
+	session.Service
+}
+
 type unexpectedStateReadService struct {
 	session.Service
 	err error
@@ -2226,6 +2726,14 @@ func (s *ignoredSummaryUpdateService) CreateSessionSummary(
 
 type reversedMemorySearchService struct {
 	memory.Service
+}
+
+type memoryDriftService struct {
+	memory.Service
+	catalog bool
+	search  bool
+	content bool
+	invalid bool
 }
 
 type droppedNonPersistedStateDeltaService struct {
@@ -2261,6 +2769,51 @@ func (s *reversedMemorySearchService) SearchMemories(
 	return results, nil
 }
 
+func (s *memoryDriftService) ReadMemories(
+	ctx context.Context,
+	key memory.UserKey,
+	limit int,
+) ([]*memory.Entry, error) {
+	entries, err := s.Service.ReadMemories(ctx, key, limit)
+	if err != nil || !s.catalog {
+		return entries, err
+	}
+	return memoriesWithWrongOwner(entries), nil
+}
+
+func (s *memoryDriftService) SearchMemories(
+	ctx context.Context,
+	key memory.UserKey,
+	query string,
+	options ...memory.SearchOption,
+) ([]*memory.Entry, error) {
+	entries, err := s.Service.SearchMemories(ctx, key, query, options...)
+	if err != nil || (!s.search && !s.content && !s.invalid) {
+		return entries, err
+	}
+	entries = cloneMemoryEntries(entries)
+	if len(entries) > 0 && entries[0] != nil {
+		if s.search {
+			entries[0].UserID += "-wrong"
+		}
+		if s.content && entries[0].Memory != nil {
+			entries[0].Memory.Memory += "-wrong"
+		}
+		if s.invalid && entries[0].Memory != nil {
+			entries[0].Memory.Memory = string([]byte{0xff})
+		}
+	}
+	return entries, nil
+}
+
+func memoriesWithWrongOwner(entries []*memory.Entry) []*memory.Entry {
+	output := cloneMemoryEntries(entries)
+	if len(output) > 0 && output[0] != nil {
+		output[0].UserID += "-wrong"
+	}
+	return output
+}
+
 func (s *summaryLeakService) GetSession(
 	ctx context.Context,
 	key session.Key,
@@ -2294,6 +2847,22 @@ func (s *eventAuthorDriftService) AppendEvent(
 	drifted := evt.Clone()
 	drifted.Author += "-drifted"
 	return s.Service.AppendEvent(ctx, sess, drifted, options...)
+}
+
+func (s *nilTrackHistoryService) CreateSession(
+	ctx context.Context,
+	key session.Key,
+	state session.StateMap,
+	options ...session.Option,
+) (*session.Session, error) {
+	sess, err := s.Service.CreateSession(ctx, key, state, options...)
+	if err != nil || sess == nil {
+		return sess, err
+	}
+	sess.TracksMu.Lock()
+	sess.Tracks = map[session.Track]*session.TrackEvents{"broken": nil}
+	sess.TracksMu.Unlock()
+	return sess, nil
 }
 
 func eventAuthorDriftBackend(name string) Backend {

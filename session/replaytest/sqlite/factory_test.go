@@ -80,6 +80,13 @@ func newBackend(root string, dependencies backendDependencies) replaytest.Backen
 					cleanup(),
 				)
 			}
+			if sessionService == nil {
+				return nil, errors.Join(
+					errors.New("create session service: factory returned nil service"),
+					sessionDB.Close(),
+					cleanup(),
+				)
+			}
 
 			memoryDB, err := dependencies.openDB(filepath.Join(caseDir, "memory.db"))
 			if err != nil {
@@ -93,6 +100,14 @@ func newBackend(root string, dependencies backendDependencies) replaytest.Backen
 			if err != nil {
 				return nil, errors.Join(
 					fmt.Errorf("create memory service: %w", err),
+					memoryDB.Close(),
+					sessionService.Close(),
+					cleanup(),
+				)
+			}
+			if memoryService == nil {
+				return nil, errors.Join(
+					errors.New("create memory service: factory returned nil service"),
 					memoryDB.Close(),
 					sessionService.Close(),
 					cleanup(),
@@ -292,6 +307,47 @@ func TestSQLiteBackendCleansConstructionFailures(t *testing.T) {
 			}
 			if len(entries) != 0 {
 				t.Fatalf("failed construction left %d entries", len(entries))
+			}
+		})
+	}
+}
+
+func TestSQLiteBackendRejectsNilServices(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*backendDependencies)
+		want   string
+	}{
+		{
+			name: "session",
+			mutate: func(dependencies *backendDependencies) {
+				dependencies.newSession = func(*sql.DB) (session.Service, error) { return nil, nil }
+			},
+			want: "session service: factory returned nil service",
+		},
+		{
+			name: "memory",
+			mutate: func(dependencies *backendDependencies) {
+				dependencies.newMemory = func(*sql.DB) (memory.Service, error) { return nil, nil }
+			},
+			want: "memory service: factory returned nil service",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			dependencies := defaultBackendDependencies()
+			test.mutate(&dependencies)
+			_, err := newBackend(root, dependencies).Open(context.Background(), "case")
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Open() error = %v, want %q", err, test.want)
+			}
+			entries, readErr := os.ReadDir(root)
+			if readErr != nil {
+				t.Fatalf("ReadDir() error = %v", readErr)
+			}
+			if len(entries) != 0 {
+				t.Fatalf("nil service construction left %d entries", len(entries))
 			}
 		})
 	}

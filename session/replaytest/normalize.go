@@ -50,6 +50,23 @@ func normalizeSnapshot(
 	if sess == nil {
 		return Snapshot{}, session.ErrNilSession
 	}
+	if required[CapabilityAppState] {
+		if err := validateStateMapKeys("app state", appState); err != nil {
+			return Snapshot{}, err
+		}
+	}
+	if required[CapabilityUserState] {
+		if err := validateStateMapKeys("user state", userState); err != nil {
+			return Snapshot{}, err
+		}
+	}
+	var sessionState session.StateMap
+	if required[CapabilitySessionState] {
+		sessionState = sess.SnapshotState()
+		if err := validateStateMapKeys("session state", sessionState); err != nil {
+			return Snapshot{}, err
+		}
+	}
 	eventSnapshot := sess.GetEvents()
 	events, order, physicalToLogical, err := normalizeEvents(
 		eventSnapshot,
@@ -100,7 +117,7 @@ func normalizeSnapshot(
 		state["user"] = normalizeState(userState, "")
 	}
 	if required[CapabilitySessionState] {
-		state["session"] = normalizeSessionState(sess.SnapshotState(), eventStateKeys)
+		state["session"] = normalizeSessionState(sessionState, eventStateKeys)
 	}
 	return Snapshot{
 		Backend: backendName,
@@ -225,6 +242,12 @@ func normalizeEventValue(
 	logicalID string,
 	baseTime time.Time,
 ) (CanonicalMap, error) {
+	if err := validateEventComparisonStrings(evt, fmt.Sprintf("event %d", index)); err != nil {
+		return nil, err
+	}
+	if err := validateStateMapKeys(fmt.Sprintf("event %d state delta", index), evt.StateDelta); err != nil {
+		return nil, err
+	}
 	raw, err := json.Marshal(evt)
 	if err != nil {
 		return nil, fmt.Errorf("marshal event %d: %w", index, err)
@@ -251,7 +274,56 @@ func normalizeEventValue(
 		// must remain visible to comparison.
 		value["stateDelta"] = normalizeState(evt.StateDelta, "")
 	}
+	if evt.Response != nil && !evt.Response.IsPartial {
+		if err := normalizeToolCallArguments(value, index); err != nil {
+			return nil, err
+		}
+	}
 	return value, nil
+}
+
+func normalizeToolCallArguments(value CanonicalMap, eventIndex int) error {
+	choices, _ := value["choices"].([]any)
+	for choiceIndex, rawChoice := range choices {
+		choice, _ := rawChoice.(map[string]any)
+		for _, field := range []string{"message", "delta"} {
+			message, _ := choice[field].(map[string]any)
+			calls, _ := message["tool_calls"].([]any)
+			for callIndex, rawCall := range calls {
+				call, _ := rawCall.(map[string]any)
+				function, _ := call["function"].(map[string]any)
+				arguments, ok := function["arguments"].(string)
+				if !ok {
+					continue
+				}
+				canonical, err := canonicalJSONString(arguments)
+				if err != nil {
+					return fmt.Errorf(
+						"event %d choice %d %s tool call %d arguments: %w",
+						eventIndex,
+						choiceIndex,
+						field,
+						callIndex,
+						err,
+					)
+				}
+				function["arguments"] = canonical
+			}
+		}
+	}
+	return nil
+}
+
+func canonicalJSONString(input string) (string, error) {
+	var value any
+	if err := decodeJSON([]byte(input), &value); err != nil {
+		return "", err
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
 }
 
 func validateObservedCausalPlan(
@@ -473,6 +545,9 @@ func normalizeMemoryEntry(entry *memory.Entry, owner string) (CanonicalMap, erro
 	if entry.ID == "" {
 		return nil, fmt.Errorf("%s has no id", owner)
 	}
+	if err := validateMemoryEntryStrings(entry, owner); err != nil {
+		return nil, err
+	}
 	raw, err := json.Marshal(entry)
 	if err != nil {
 		return nil, fmt.Errorf("marshal %s: %w", owner, err)
@@ -490,6 +565,60 @@ func normalizeMemoryEntry(entry *memory.Entry, owner string) (CanonicalMap, erro
 	return value, nil
 }
 
+func validateMemoryEntryStrings(entry *memory.Entry, owner string) error {
+	fields := []struct {
+		name  string
+		value string
+	}{
+		{name: "id", value: entry.ID},
+		{name: "app name", value: entry.AppName},
+		{name: "user id", value: entry.UserID},
+		{name: "content", value: entry.Memory.Memory},
+		{name: "kind", value: string(entry.Memory.Kind)},
+		{name: "location", value: entry.Memory.Location},
+	}
+	for _, field := range fields {
+		if err := validateUTF8String(owner+" "+field.name, field.value); err != nil {
+			return err
+		}
+	}
+	for index, topic := range entry.Memory.Topics {
+		if err := validateUTF8String(fmt.Sprintf("%s topic %d", owner, index), topic); err != nil {
+			return err
+		}
+	}
+	for index, participant := range entry.Memory.Participants {
+		if err := validateUTF8String(
+			fmt.Sprintf("%s participant %d", owner, index),
+			participant,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateUTF8String(owner, value string) error {
+	if !utf8.ValidString(value) {
+		return fmt.Errorf("%s contains invalid UTF-8", owner)
+	}
+	return nil
+}
+
+func validateStateMapKeys(owner string, state session.StateMap) error {
+	keys := make([]string, 0, len(state))
+	for key := range state {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if err := validateUTF8String(owner+" key", key); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func normalizeSummaries(
 	sess *session.Session,
 	events []event.Event,
@@ -499,9 +628,15 @@ func normalizeSummaries(
 	sess.SummariesMu.RLock()
 	defer sess.SummariesMu.RUnlock()
 	for filterKey, summary := range sess.Summaries {
+		if err := validateUTF8String("summary filter key", filterKey); err != nil {
+			return nil, err
+		}
 		if summary == nil {
 			output[filterKey] = nil
 			continue
+		}
+		if err := validateSummaryStrings(summary, filterKey); err != nil {
+			return nil, err
 		}
 		value := CanonicalMap{
 			"text":               summary.Summary,
@@ -537,6 +672,33 @@ func normalizeSummaries(
 		output[filterKey] = value
 	}
 	return output, nil
+}
+
+func validateSummaryStrings(summary *session.Summary, filterKey string) error {
+	if err := validateUTF8String(fmt.Sprintf("summary %q text", filterKey), summary.Summary); err != nil {
+		return err
+	}
+	for index, topic := range summary.Topics {
+		if err := validateUTF8String(
+			fmt.Sprintf("summary %q topic %d", filterKey, index),
+			topic,
+		); err != nil {
+			return err
+		}
+	}
+	if summary.Boundary == nil {
+		return nil
+	}
+	if err := validateUTF8String(
+		fmt.Sprintf("summary %q boundary filter key", filterKey),
+		summary.Boundary.FilterKey,
+	); err != nil {
+		return err
+	}
+	return validateUTF8String(
+		fmt.Sprintf("summary %q boundary event id", filterKey),
+		summary.Boundary.LastEventID,
+	)
 }
 
 func eventByPhysicalID(events []event.Event, id string) *event.Event {
@@ -590,12 +752,36 @@ func normalizeTracks(sess *session.Session, baseTime time.Time) (map[string][]Ca
 	sess.TracksMu.RLock()
 	defer sess.TracksMu.RUnlock()
 	for trackName, history := range sess.Tracks {
+		if err := validateUTF8String("track name", string(trackName)); err != nil {
+			return nil, err
+		}
 		if history == nil {
 			output[string(trackName)] = nil
 			continue
 		}
+		if history.Track != trackName {
+			return nil, fmt.Errorf(
+				"track %q contains history for %q",
+				trackName,
+				history.Track,
+			)
+		}
 		events := make([]CanonicalMap, 0, len(history.Events))
 		for index, trackEvent := range history.Events {
+			if err := validateUTF8String(
+				fmt.Sprintf("track %q event %d name", trackName, index),
+				string(trackEvent.Track),
+			); err != nil {
+				return nil, err
+			}
+			if trackEvent.Track != trackName {
+				return nil, fmt.Errorf(
+					"track %q event %d belongs to %q",
+					trackName,
+					index,
+					trackEvent.Track,
+				)
+			}
 			var payload any
 			if trackEvent.Payload != nil {
 				if err := decodeJSON(trackEvent.Payload, &payload); err != nil {
