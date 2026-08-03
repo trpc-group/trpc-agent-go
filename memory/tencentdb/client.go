@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"strings"
@@ -26,11 +27,7 @@ const (
 	httpHeaderAccept        = "Accept"
 	httpHeaderContentType   = "Content-Type"
 	httpHeaderAuthorization = "Authorization"
-	httpHeaderAppName       = "X-App-Name"
-	httpHeaderUserID        = "X-User-Id"
-	httpHeaderSessionID     = "X-Session-Id"
-	httpHeaderSessionKey    = "X-Session-Key"
-	httpHeaderAgentName     = "X-Agent-Name"
+	httpHeaderServiceID     = "X-TDAI-Service-Id"
 	httpContentTypeJSON     = "application/json"
 	httpAuthBearerPrefix    = "Bearer "
 
@@ -43,11 +40,9 @@ const (
 	pathSearchConversations = "/search/conversations"
 	pathEndSession          = "/session/end"
 	pathHealth              = "/health"
-	pathOffloadAfterTool    = "/offload/v1/hooks/after-tool-messages"
-	pathOffloadBeforeModel  = "/offload/v1/hooks/before-model"
-	pathOffloadReadRef      = "/offload/v1/tools/read-ref"
-	pathOffloadReadNode     = "/offload/v1/tools/read-node"
-	pathOffloadSearchIndex  = "/offload/v1/tools/search-index"
+	pathOffloadIngest       = "/v2/offload/ingest"
+	pathOffloadCompact      = "/v2/offload/compact"
+	pathOffloadReadRef      = "/v2/offload/read-ref"
 
 	maxErrorBodyPreview = 512
 )
@@ -68,6 +63,11 @@ type gatewayClient struct {
 	timeout      time.Duration
 	maxBodyBytes int64
 	apiKey       string
+}
+
+type offloadGatewayClient struct {
+	gateway   *gatewayClient
+	serviceID string
 }
 
 func newGatewayClient(opts Options) (*gatewayClient, error) {
@@ -97,6 +97,40 @@ func newGatewayClient(opts Options) (*gatewayClient, error) {
 		maxBodyBytes: maxBodyBytes,
 		apiKey:       strings.TrimSpace(opts.APIKey),
 	}, nil
+}
+
+func newOffloadGatewayClient(opts Options) (*offloadGatewayClient, error) {
+	if !validCompactionRatio(opts.ContextOffload.CompactionRatio) {
+		return nil, errors.New(
+			"tencentdb memory: context offload compaction ratio must be in (0, 2]",
+		)
+	}
+	offloadOpts := opts
+	if opts.ContextOffload.GatewayURL != "" {
+		offloadOpts.GatewayURL = opts.ContextOffload.GatewayURL
+	}
+	if opts.ContextOffload.APIKey != "" {
+		offloadOpts.APIKey = opts.ContextOffload.APIKey
+	}
+	if strings.TrimSpace(offloadOpts.APIKey) == "" {
+		return nil, errors.New("tencentdb memory: context offload API key is required")
+	}
+	serviceID := strings.TrimSpace(opts.ContextOffload.ServiceID)
+	if serviceID == "" {
+		return nil, errors.New("tencentdb memory: context offload service ID is required")
+	}
+	client, err := newGatewayClient(offloadOpts)
+	if err != nil {
+		return nil, err
+	}
+	return &offloadGatewayClient{
+		gateway:   client,
+		serviceID: serviceID,
+	}, nil
+}
+
+func validCompactionRatio(ratio float64) bool {
+	return ratio > 0 && ratio <= 2 && !math.IsNaN(ratio) && !math.IsInf(ratio, 0)
 }
 
 func (c *gatewayClient) capture(ctx context.Context, req captureRequest) (*captureResponse, error) {
@@ -147,94 +181,59 @@ func (c *gatewayClient) health(ctx context.Context) (*HealthResponse, error) {
 	return &rsp, nil
 }
 
-func (c *gatewayClient) offloadAfterToolMessages(
+func (c *offloadGatewayClient) ingest(
 	ctx context.Context,
-	req offloadAfterToolMessagesRequest,
-) (*offloadAfterToolMessagesResponse, error) {
-	var rsp offloadAfterToolMessagesResponse
-	if err := c.doJSONWithHeaders(
-		ctx,
-		httpMethodPost,
-		pathOffloadAfterTool,
-		req,
-		&rsp,
-		offloadScopeHeaders(req.Scope),
-	); err != nil {
-		return nil, err
-	}
-	return &rsp, nil
+	req offloadIngestRequest,
+) (*offloadIngestData, error) {
+	return doOffloadJSON[offloadIngestData](ctx, c, pathOffloadIngest, req)
 }
 
-func (c *gatewayClient) offloadBeforeModel(
+func (c *offloadGatewayClient) compact(
 	ctx context.Context,
-	req offloadBeforeModelRequest,
-) (*offloadBeforeModelResponse, error) {
-	var rsp offloadBeforeModelResponse
-	if err := c.doJSONWithHeaders(
-		ctx,
-		httpMethodPost,
-		pathOffloadBeforeModel,
-		req,
-		&rsp,
-		offloadScopeHeaders(req.Scope),
-	); err != nil {
-		return nil, err
-	}
-	return &rsp, nil
+	req offloadCompactRequest,
+) (*offloadCompactData, error) {
+	return doOffloadJSON[offloadCompactData](ctx, c, pathOffloadCompact, req)
 }
 
-func (c *gatewayClient) offloadReadRef(
+func (c *offloadGatewayClient) readRef(
 	ctx context.Context,
 	req offloadReadRefRequest,
-) (*offloadReadRefResponse, error) {
-	var rsp offloadReadRefResponse
-	if err := c.doJSONWithHeaders(
-		ctx,
-		httpMethodPost,
-		pathOffloadReadRef,
-		req,
-		&rsp,
-		offloadScopeHeaders(req.Scope),
-	); err != nil {
-		return nil, err
-	}
-	return &rsp, nil
+) (*offloadReadRefData, error) {
+	return doOffloadJSON[offloadReadRefData](ctx, c, pathOffloadReadRef, req)
 }
 
-func (c *gatewayClient) offloadReadNode(
+func doOffloadJSON[T any](
 	ctx context.Context,
-	req offloadReadNodeRequest,
-) (*offloadReadNodeResponse, error) {
-	var rsp offloadReadNodeResponse
-	if err := c.doJSONWithHeaders(
+	client *offloadGatewayClient,
+	path string,
+	req any,
+) (*T, error) {
+	if client == nil || client.gateway == nil {
+		return nil, errors.New("tencentdb memory: context offload gateway is unavailable")
+	}
+	var envelope offloadResponseEnvelope[T]
+	if err := client.gateway.doJSONWithHeaders(
 		ctx,
 		httpMethodPost,
-		pathOffloadReadNode,
+		path,
 		req,
-		&rsp,
-		offloadScopeHeaders(req.Scope),
+		&envelope,
+		map[string]string{httpHeaderServiceID: client.serviceID},
 	); err != nil {
 		return nil, err
 	}
-	return &rsp, nil
-}
-
-func (c *gatewayClient) offloadSearchIndex(
-	ctx context.Context,
-	req offloadSearchIndexRequest,
-) (*offloadSearchIndexResponse, error) {
-	var rsp offloadSearchIndexResponse
-	if err := c.doJSONWithHeaders(
-		ctx,
-		httpMethodPost,
-		pathOffloadSearchIndex,
-		req,
-		&rsp,
-		offloadScopeHeaders(req.Scope),
-	); err != nil {
-		return nil, err
+	if envelope.Code != 0 {
+		return nil, fmt.Errorf(
+			"tencentdb memory: context offload request failed: code=%d message=%s request_id=%s",
+			envelope.Code,
+			envelope.Message,
+			envelope.RequestID,
+		)
 	}
-	return &rsp, nil
+	if envelope.Data == nil {
+		return nil, errors.New("tencentdb memory: context offload response data is missing")
+	}
+	return envelope.Data, nil
 }
 
 func (c *gatewayClient) doJSON(
@@ -332,14 +331,4 @@ func (c *gatewayClient) doJSONOnce(
 		return fmt.Errorf("tencentdb memory: unmarshal response failed: %w", err)
 	}
 	return nil
-}
-
-func offloadScopeHeaders(scope offloadScope) map[string]string {
-	return map[string]string{
-		httpHeaderAppName:    scope.AppName,
-		httpHeaderUserID:     scope.UserID,
-		httpHeaderSessionID:  scope.SessionID,
-		httpHeaderSessionKey: scope.SessionKey,
-		httpHeaderAgentName:  scope.AgentName,
-	}
 }
