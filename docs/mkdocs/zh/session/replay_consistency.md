@@ -79,21 +79,27 @@ snapshot 覆盖以下 section：
 
 后端重新生成的 event ID、response ID 与时间元数据，以及后端生成的 memory ID 会在 normalize 时移除。调用方提供的 `Event.Timestamp` 会保留为 UTC `RFC3339Nano` 字符串，使持久化时间漂移能够被发现。JSON 归一化使用 `json.Decoder.UseNumber`，避免大整数精度丢失。业务字段差异不会默认放行。
 
+当调用方手工构造的 snapshot 含 channel、function、NaN 或其他无法转换为 canonical JSON 比较表示的值时，`Compare` 与 `CompareSnapshots` 会返回错误而不是 panic。各 section 按 snapshot 顺序转换，每个 section 先 left 后 right，并在首个错误处停止；失败时不返回部分 diff，也不能通过 `allowed_diff` 放行。
+
 Track payload fixture 支持完整 JSON 值域：object、array、string、number、boolean 和 null。持久化后的 `json.RawMessage` 使用带标签快照，kind 为 `nil`、`empty`、`json`、`utf8` 或 `base64`。合法 JSON 在 `payload.value` 内做 canonical normalize，同时保留 raw nil、空字节、JSON null、非 JSON UTF-8 文本和二进制字节之间的可观察差异。
 
 每个 memory query 都声明 `ExpectedContents`。查询结果按照无序的精确内容多重集合比较，因此忽略后端特有的 ID、score 和排序，同时仍能发现缺失、无关、额外和重复结果。
 
 Memory 操作别名按完整 canonical identity 解析，而不是只比较 content。Add alias 会比较 app、user、content、kind、event time、participants 和 location，并刻意排除 topics。Update 每次都会用后端返回的有效 ID 推进原 `Ref` alias，因此内容或身份元数据导致 ID 轮换后，后续 update/delete 不会继续使用旧 ID。
 
-当 event 无法归一化、memory entry 为 nil、entry 的 `Memory` payload 为 nil，或 summary map 条目的值为 nil 时，snapshot 构建会返回错误。这些情况表示 fixture 非法或后端数据损坏，不会在 normalize 时被丢弃，也不能通过 `allowed_diff` 放行。即使 session 为 nil，`BuildSnapshot` 也会校验并归一化传入的 memories，因此空 session 形式不会隐藏合法或损坏的 memory 数据。
+当 event 无法归一化、memory entry 为 nil、entry 的 `Memory` payload 为 nil、summary map 条目的值为 nil，或 track map 条目含 nil `TrackEvents` 容器时，snapshot 构建会返回错误。这些情况表示 fixture 非法或后端数据损坏，不会在 normalize 时被丢弃，也不能通过 `allowed_diff` 放行；非 nil 的合法空 track 容器仍然有效。即使 session 为 nil，`BuildSnapshot` 也会校验并归一化传入的 memories，因此空 session 形式不会隐藏合法或损坏的 memory 数据。
 
-包含 app、user 或 session state 的 case 还会直接验证作用域契约。Runner 分别读取 app/user state，并在同一 app/user 下创建临时 peer session；peer 必须只继承 app/user 值，且会在所有返回路径中删除。app/user 传播缺失、session/temp state 泄漏和 peer 清理失败都是 runner error，不属于 snapshot diff，也不能通过 `allowed_diff` 放行。
+包含直接 app/user/session state，或在 `Event.StateDelta` 中包含 `app:` / `user:` 值的 case，还会直接验证作用域契约。app/user 期望值先应用直接更新，再按 event 顺序折叠带前缀的 delta；与 `ListAppStates` / `ListUserStates` 比较前会去掉前缀。Runner 随后在同一 app/user 下创建临时 peer session，并要求它只继承合并后的 app/user 值。每次 peer 创建尝试后都会使用脱离调用方取消信号的限时 context 尝试删除，包括已经落盘但返回错误的 ambiguous fail-after-write。app/user 传播缺失、session/temp state 泄漏和 peer 清理失败都是 runner error，不属于 snapshot diff，也不能通过 `allowed_diff` 放行。
+
+当前 InMemory/SQLite 轻量矩阵不会新增 prefixed-event scope case，因为这两个实现目前会把 event delta 保留在 session-local state。本契约由 replaytest 定向 fake 覆盖，不修改生产后端行为。
 
 ## Summary 与 Track 策略
 
 Go 版 summary 使用原生 session summary 语义，不生成 Python 风格的 summary event，也不比较 historical summary event。
 
 每个 `SummaryStep` 可以通过 `EventPrefix` 指定执行 summary 前应已追加的 `Case.Events` 前缀长度。前缀必须位于事件列表范围内并保持单调不减，允许相同前缀；nil 保持默认的“全部事件后执行”。因此用例可以表达“追加事件、总结、继续追加、再次总结”，并验证持久化 boundary 确实推进。
+
+提供 `Backend.CreateSummary` 时，该回调负责单个 step 的完整操作，包括 fixture 特定的 summary 准备和持久化，并且必须支持共享 backend 的并发 `Run`。回调为 nil 时，runner 直接调用 `SessionService.CreateSessionSummary`。
 
 summary 比较重点：
 

@@ -208,7 +208,8 @@ const (
 var _ sessionsummary.SessionSummarizer = (*deterministicSummarizer)(nil)
 
 type deterministicSummarizer struct {
-	text string
+	mu            sync.RWMutex
+	textBySession map[session.Key]string
 }
 
 func (s *deterministicSummarizer) ShouldSummarize(*session.Session) bool {
@@ -216,13 +217,17 @@ func (s *deterministicSummarizer) ShouldSummarize(*session.Session) bool {
 }
 
 func (s *deterministicSummarizer) Summarize(
-	context.Context,
-	*session.Session,
+	_ context.Context,
+	sess *session.Session,
 ) (string, error) {
-	if s.text == "" {
+	key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
+	s.mu.RLock()
+	text, ok := s.textBySession[key]
+	s.mu.RUnlock()
+	if !ok || text == "" {
 		return "smoke summary", nil
 	}
-	return s.text, nil
+	return text, nil
 }
 
 func (s *deterministicSummarizer) SetPrompt(string) {}
@@ -231,6 +236,45 @@ func (s *deterministicSummarizer) SetModel(model.Model) {}
 
 func (s *deterministicSummarizer) Metadata() map[string]any {
 	return map[string]any{"deterministic": true}
+}
+
+func (s *deterministicSummarizer) createSummary(
+	ctx context.Context,
+	service session.Service,
+	sess *session.Session,
+	step replaytest.SummaryStep,
+) error {
+	keys := deterministicSummaryKeys(sess, step.FilterKey)
+	s.mu.Lock()
+	if s.textBySession == nil {
+		s.textBySession = make(map[session.Key]string)
+	}
+	for _, key := range keys {
+		s.textBySession[key] = step.Text
+	}
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		for _, key := range keys {
+			delete(s.textBySession, key)
+		}
+		s.mu.Unlock()
+	}()
+	return service.CreateSessionSummary(ctx, sess, step.FilterKey, step.Force)
+}
+
+func deterministicSummaryKeys(sess *session.Session, filterKey string) []session.Key {
+	base := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
+	keys := []session.Key{
+		base,
+		{AppName: base.AppName, UserID: base.UserID, SessionID: base.SessionID + ":" + filterKey},
+	}
+	if filterKey != session.SummaryFilterKeyAllContents {
+		keys = append(keys, session.Key{
+			AppName: base.AppName, UserID: base.UserID, SessionID: base.SessionID + ":",
+		})
+	}
+	return keys
 }
 
 func openSQLiteDB(t *testing.T, name string) *sql.DB {
@@ -343,6 +387,7 @@ func normalizeReplayTime(value time.Time) string {
 }
 
 func diffReplaySnapshots(
+	t testing.TB,
 	caseName string,
 	sessionID string,
 	backendA string,
@@ -351,7 +396,8 @@ func diffReplaySnapshots(
 	right replaySnapshot,
 	allowedRules []allowedDiffRule,
 ) []diffEntry {
-	return replaytest.CompareSnapshots(
+	t.Helper()
+	diffs, err := replaytest.CompareSnapshots(
 		caseName,
 		sessionID,
 		backendA,
@@ -360,6 +406,8 @@ func diffReplaySnapshots(
 		right,
 		allowedRules,
 	)
+	require.NoError(t, err)
+	return diffs
 }
 
 func replayMissingValue() map[string]string {
@@ -417,8 +465,8 @@ func toReplayTestBackend(backend backendBundle) replaytest.Backend {
 		TrackService:    backend.trackService,
 		MemoryService:   backend.memoryService,
 		ReadAllMemories: backend.readAllMemories,
-		SetSummaryText: func(text string) {
-			backend.summarizer.text = text
+		CreateSummary: func(ctx context.Context, sess *session.Session, step replaytest.SummaryStep) error {
+			return backend.summarizer.createSummary(ctx, backend.sessionService, sess, step)
 		},
 	}
 }
@@ -569,7 +617,7 @@ func runReplayCaseWithBackendInjection(
 		}
 		results = append(results, result)
 	}
-	return compareReplayCaseResults(tc, results)
+	return compareReplayCaseResults(t, tc, results)
 }
 
 var errReplayInjectedFailure = errors.New("replay injected failure")
@@ -796,6 +844,7 @@ func runReplayCaseWithRetry(
 		baseline := runReplayCaseOnBackend(t, ctx, runNamespace, baselineBackend, tc)
 		retry := runReplayCaseOnBackend(t, ctx, runNamespace, wrapReplayBackendForRetry(retryBackend, fault), tc)
 		diffs := diffReplaySnapshots(
+			t,
 			tc.name,
 			baseline.key.SessionID,
 			baseline.backend+"_baseline",
@@ -976,14 +1025,17 @@ func cloneReplayEventActions(actions *event.EventActions) *event.EventActions {
 	}
 }
 
-func compareReplayCaseResults(tc replayCase, results []replayCaseResult) []diffEntry {
+func compareReplayCaseResults(t testing.TB, tc replayCase, results []replayCaseResult) []diffEntry {
+	t.Helper()
 	converted := make([]replaytest.Result, 0, len(results))
 	for _, result := range results {
 		converted = append(converted, replaytest.Result{
 			Backend: result.backend, Key: result.key, Snapshot: result.snapshot,
 		})
 	}
-	return replaytest.Compare(toReplayTestCase(tc), converted)
+	diffs, err := replaytest.Compare(toReplayTestCase(tc), converted)
+	require.NoError(t, err)
+	return diffs
 }
 
 func hasReplayUnallowedDiffs(entries []diffEntry) bool {
@@ -1207,7 +1259,7 @@ func TestReplayConsistencyMatrix_BasicCases(t *testing.T) {
 			}
 			requireReplayCaseIsolation(t, tc, results)
 			requireReplayCaseSemantics(t, tc, results)
-			diffs := compareReplayCaseResults(tc, results)
+			diffs := compareReplayCaseResults(t, tc, results)
 			allDiffs = append(allDiffs, diffs...)
 			require.Falsef(
 				t,
@@ -1899,6 +1951,7 @@ func TestReplayConsistencySnapshotNormalize_IgnoresGeneratedFields(t *testing.T)
 	right := newReplaySnapshotFixture(t, "right", `{"b":2,"a":1}`, `{"b":2,"a":1}`, "raw-right")
 
 	diffs := diffReplaySnapshots(
+		t,
 		"normalize-generated-fields",
 		left.Session.ID,
 		"in_memory",
@@ -1932,6 +1985,7 @@ func TestReplayConsistencySnapshotNormalize_UsesSummaryLastEventAnchor(t *testin
 		)
 
 		diffs := diffReplaySnapshots(
+			t,
 			"normalize-summary-last-event-anchor",
 			left.Session.ID,
 			"in_memory",
@@ -1964,6 +2018,7 @@ func TestReplayConsistencySnapshotNormalize_UsesSummaryLastEventAnchor(t *testin
 		)
 
 		diffs := diffReplaySnapshots(
+			t,
 			"summary-anchor-missing",
 			left.Session.ID,
 			"in_memory",
@@ -1996,6 +2051,7 @@ func TestReplayConsistencySnapshotNormalize_UsesSummaryLastEventAnchor(t *testin
 		)
 
 		diffs := diffReplaySnapshots(
+			t,
 			"summary-anchor-unmatched",
 			left.Session.ID,
 			"in_memory",
@@ -2029,6 +2085,7 @@ func TestReplayConsistencySnapshotNormalize_PreservesLargeJSONNumbers(t *testing
 	)
 
 	diffs := diffReplaySnapshots(
+		t,
 		"large-json-number",
 		left.Session.ID,
 		"in_memory",
@@ -2119,6 +2176,7 @@ func TestReplayConsistencySnapshotNormalize_PreservesStateByteDistinctions(t *te
 			}
 
 			diffs := diffReplaySnapshots(
+				t,
 				tt.name,
 				left.Session.ID,
 				"in_memory",
@@ -2227,6 +2285,7 @@ func TestReplayConsistencySnapshotDiff_MutationsHavePrecisePaths(t *testing.T) {
 			tt.mutate(&right)
 
 			diffs := diffReplaySnapshots(
+				t,
 				"mutation",
 				left.Session.ID,
 				"in_memory",
@@ -2364,6 +2423,7 @@ func TestReplayConsistencyAnomaly_SnapshotMutations(t *testing.T) {
 			tt.mutate(&right)
 
 			diffs := diffReplaySnapshots(
+				t,
 				tt.name,
 				left.Session.ID,
 				"in_memory",
@@ -2457,7 +2517,7 @@ func TestReplayConsistencyAnomaly_ServiceContractMutationsDetected(t *testing.T)
 				mutatedBackend.name += "_mutated"
 				baseline := runReplayCaseOnBackend(t, ctx, runNamespace, baselineBackend, tc)
 				mutated := runReplayCaseOnBackend(t, ctx, runNamespace, mutatedBackend, tc)
-				diffs := replaytest.CompareSnapshots(
+				diffs := diffReplaySnapshots(t,
 					tc.name,
 					baseline.key.SessionID,
 					baseline.backend,
@@ -2484,6 +2544,7 @@ func TestReplayConsistencyReport_AllowedDiffAndEnvPath(t *testing.T) {
 	t.Setenv("TRPC_AGENT_REPLAY_REPORT_PATH", reportPath)
 
 	diffs := diffReplaySnapshots(
+		t,
 		"allowed-memory",
 		left.Session.ID,
 		"in_memory",
@@ -2702,12 +2763,10 @@ func TestReplayConsistencyAnomaly_SQLitePublicAPIInjection(t *testing.T) {
 				got, err := backend.sessionService.GetSession(ctx, key)
 				require.NoError(t, err)
 				require.NotNil(t, got)
-				backend.summarizer.text = "sqlite overwritten summary"
-				require.NoError(t, backend.sessionService.CreateSessionSummary(
-					ctx,
-					got,
-					session.SummaryFilterKeyAllContents,
-					true,
+				require.NoError(t, backend.summarizer.createSummary(
+					ctx, backend.sessionService, got, replaytest.SummaryStep{
+						Text: "sqlite overwritten summary", FilterKey: session.SummaryFilterKeyAllContents, Force: true,
+					},
 				))
 			},
 			section:  "summary",
@@ -2992,6 +3051,7 @@ func TestReplayConsistencyAllowedDiffRules_RequireExplicitMatch(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			diffs := diffReplaySnapshots(
+				t,
 				tt.name,
 				left.Session.ID,
 				"in_memory",

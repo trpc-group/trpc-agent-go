@@ -47,8 +47,21 @@ type Backend struct {
 	// must be true only when the backend-specific adapter has proved that the
 	// read is exhaustive; Run rejects unconfirmed partial reads.
 	ReadAllMemories ReadAllMemoriesFunc
-	SetSummaryText  func(string)
+	// CreateSummary optionally performs one complete replay summary operation.
+	// Implementations must be safe for concurrent calls when multiple Run
+	// invocations share the same backend. When nil, Run calls
+	// SessionService.CreateSessionSummary directly.
+	CreateSummary CreateSummaryFunc
 }
+
+// CreateSummaryFunc prepares and creates one summary for a replay step.
+// The callback owns the complete operation, including any fixture-specific
+// summary setup and the call that persists the summary.
+type CreateSummaryFunc func(
+	ctx context.Context,
+	sess *session.Session,
+	step SummaryStep,
+) error
 
 // ReadAllMemoriesFunc performs a backend-specific exhaustive memory read.
 type ReadAllMemoriesFunc func(
@@ -494,11 +507,11 @@ func assertMemoryQueries(ctx context.Context, backend Backend, userKey memory.Us
 }
 
 func validateStateScopes(ctx context.Context, backend Backend, key session.Key, tc Case) (err error) {
-	if len(tc.AppState) == 0 && len(tc.UserState) == 0 && len(tc.SessionState) == 0 {
+	appState, userState, validate := expectedStateScopes(tc)
+	if !validate {
 		return nil
 	}
 
-	appState := stateWithoutPrefix(tc.AppState, session.StateAppPrefix)
 	gotAppState, err := backend.SessionService.ListAppStates(ctx, key.AppName)
 	if err != nil {
 		return fmt.Errorf("list app state for case %q on backend %q: %w", tc.Name, backend.Name, err)
@@ -508,7 +521,6 @@ func validateStateScopes(ctx context.Context, backend Backend, key session.Key, 
 	}
 
 	userKey := session.UserKey{AppName: key.AppName, UserID: key.UserID}
-	userState := stateWithoutPrefix(tc.UserState, session.StateUserPrefix)
 	gotUserState, err := backend.SessionService.ListUserStates(ctx, userKey)
 	if err != nil {
 		return fmt.Errorf("list user state for case %q on backend %q: %w", tc.Name, backend.Name, err)
@@ -519,10 +531,6 @@ func validateStateScopes(ctx context.Context, backend Backend, key session.Key, 
 
 	peerKey := key
 	peerKey.SessionID += "-scope-peer"
-	peer, err := backend.SessionService.CreateSession(ctx, peerKey, nil)
-	if err != nil {
-		return fmt.Errorf("create state-scope peer for case %q on backend %q: %w", tc.Name, backend.Name, err)
-	}
 	defer func() {
 		cleanupCtx, cancel := context.WithTimeout(
 			context.WithoutCancel(ctx), stateScopePeerCleanupTimeout,
@@ -535,6 +543,10 @@ func validateStateScopes(ctx context.Context, backend Backend, key session.Key, 
 			))
 		}
 	}()
+	peer, err := backend.SessionService.CreateSession(ctx, peerKey, nil)
+	if err != nil {
+		return fmt.Errorf("create state-scope peer for case %q on backend %q: %w", tc.Name, backend.Name, err)
+	}
 	if peer == nil {
 		return fmt.Errorf("create state-scope peer for case %q on backend %q returned nil", tc.Name, backend.Name)
 	}
@@ -548,6 +560,36 @@ func validateStateScopes(ctx context.Context, backend Backend, key session.Key, 
 	}
 	peerState := mergeScopedState(appState, userState)
 	return requireStateScope(tc.Name, backend.Name, "peer", peer.SnapshotState(), peerState)
+}
+
+func expectedStateScopes(tc Case) (appState, userState session.StateMap, validate bool) {
+	appState = stateWithoutPrefix(tc.AppState, session.StateAppPrefix)
+	userState = stateWithoutPrefix(tc.UserState, session.StateUserPrefix)
+	validate = len(tc.AppState) > 0 || len(tc.UserState) > 0 || len(tc.SessionState) > 0
+	for _, evt := range tc.Events {
+		if evt == nil {
+			continue
+		}
+		for key, value := range evt.StateDelta {
+			switch {
+			case strings.HasPrefix(key, session.StateAppPrefix):
+				setStateValue(appState, strings.TrimPrefix(key, session.StateAppPrefix), value)
+				validate = true
+			case strings.HasPrefix(key, session.StateUserPrefix):
+				setStateValue(userState, strings.TrimPrefix(key, session.StateUserPrefix), value)
+				validate = true
+			}
+		}
+	}
+	return appState, userState, validate
+}
+
+func setStateValue(state session.StateMap, key string, value []byte) {
+	if value == nil {
+		state[key] = nil
+		return
+	}
+	state[key] = append([]byte(nil), value...)
 }
 
 func requireStateScope(caseName, backendName, scope string, got, want session.StateMap) error {
@@ -624,10 +666,12 @@ func createSummary(ctx context.Context, backend Backend, key session.Key, spec S
 	if got == nil {
 		return fmt.Errorf("get session returned nil")
 	}
-	if backend.SetSummaryText != nil {
-		backend.SetSummaryText(spec.Text)
+	if backend.CreateSummary != nil {
+		err = backend.CreateSummary(ctx, got, spec)
+	} else {
+		err = backend.SessionService.CreateSessionSummary(ctx, got, spec.FilterKey, spec.Force)
 	}
-	if err := backend.SessionService.CreateSessionSummary(ctx, got, spec.FilterKey, spec.Force); err != nil {
+	if err != nil {
 		return err
 	}
 	got, err = backend.SessionService.GetSession(ctx, key)
@@ -914,7 +958,7 @@ func applyMemoriesConcurrently(ctx context.Context, service memory.Service, user
 // BuildSnapshot normalizes a session and its memories for stable comparison.
 // A nil session produces an empty session snapshot, but supplied memories are
 // still validated and normalized. BuildSnapshot returns an error for malformed
-// events, memory entries, or summary entries.
+// events, memory entries, summary entries, or track containers.
 func BuildSnapshot(sess *session.Session, memories []*memory.Entry) (Snapshot, error) {
 	if sess == nil {
 		normalizedMemories, err := normalizeMemories(memories)
@@ -939,13 +983,17 @@ func BuildSnapshot(sess *session.Session, memories []*memory.Entry) (Snapshot, e
 	if err != nil {
 		return Snapshot{}, err
 	}
+	normalizedTracks, err := normalizeTracks(cloneTracks(sess))
+	if err != nil {
+		return Snapshot{}, err
+	}
 	return Snapshot{
 		Session: SessionSnapshot{ID: sess.ID, App: sess.AppName, UserID: sess.UserID},
 		Events:  normalizedEvents,
 		State:   normalizeState(sess.SnapshotState()),
 		Memory:  normalizedMemories,
 		Summary: normalizedSummaries,
-		Tracks:  normalizeTracks(cloneTracks(sess)),
+		Tracks:  normalizedTracks,
 	}, nil
 }
 
@@ -964,11 +1012,12 @@ func cloneTracks(sess *session.Session) map[session.Track]*session.TrackEvents {
 	defer sess.TracksMu.RUnlock()
 	out := make(map[session.Track]*session.TrackEvents, len(sess.Tracks))
 	for track, events := range sess.Tracks {
-		copied := &session.TrackEvents{Track: track}
-		if events != nil {
-			copied.Track = events.Track
-			copied.Events = append([]session.TrackEvent(nil), events.Events...)
+		if events == nil {
+			out[track] = nil
+			continue
 		}
+		copied := &session.TrackEvents{Track: events.Track}
+		copied.Events = append([]session.TrackEvent(nil), events.Events...)
 		out[track] = copied
 	}
 	return out
@@ -1156,7 +1205,7 @@ func summaryLastEventIndex(events []event.Event, lastEventID string) *int {
 	return &unmatched
 }
 
-func normalizeTracks(tracks map[session.Track]*session.TrackEvents) []TrackSnapshot {
+func normalizeTracks(tracks map[session.Track]*session.TrackEvents) ([]TrackSnapshot, error) {
 	names := make([]string, 0, len(tracks))
 	for track := range tracks {
 		names = append(names, string(track))
@@ -1165,18 +1214,18 @@ func normalizeTracks(tracks map[session.Track]*session.TrackEvents) []TrackSnaps
 	out := make([]TrackSnapshot, 0, len(names))
 	for _, name := range names {
 		events := tracks[session.Track(name)]
-		snapshot := TrackSnapshot{Name: name}
-		if events != nil {
-			snapshot.Track = string(events.Track)
-			for _, evt := range events.Events {
-				snapshot.Events = append(snapshot.Events, TrackEventSnapshot{
-					Track: string(evt.Track), Payload: normalizeTrackPayload(evt.Payload), Timestamp: normalizeTime(evt.Timestamp),
-				})
-			}
+		if events == nil {
+			return nil, fmt.Errorf("track entry %q is nil", name)
+		}
+		snapshot := TrackSnapshot{Name: name, Track: string(events.Track)}
+		for _, evt := range events.Events {
+			snapshot.Events = append(snapshot.Events, TrackEventSnapshot{
+				Track: string(evt.Track), Payload: normalizeTrackPayload(evt.Payload), Timestamp: normalizeTime(evt.Timestamp),
+			})
 		}
 		out = append(out, snapshot)
 	}
-	return out
+	return out, nil
 }
 
 func sortedStrings(values []string) []string {
@@ -1203,17 +1252,27 @@ func normalizeTime(value time.Time) string {
 }
 
 // Compare returns all pairwise normalized differences for a replay case.
-func Compare(tc Case, results []Result) []Diff {
+// It returns an error when a caller-constructed snapshot contains a value that
+// cannot be converted to the canonical JSON comparison representation. Compare
+// stops at the first failing pair and returns a nil diff slice on error.
+func Compare(tc Case, results []Result) ([]Diff, error) {
 	var diffs []Diff
 	for i := 0; i < len(results); i++ {
 		for j := i + 1; j < len(results); j++ {
-			diffs = append(diffs, CompareSnapshots(
+			pairDiffs, err := CompareSnapshots(
 				tc.Name, results[i].Key.SessionID, results[i].Backend, results[j].Backend,
 				results[i].Snapshot, results[j].Snapshot, tc.AllowedDiffs,
-			)...)
+			)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"compare case %q between backends %q and %q: %w",
+					tc.Name, results[i].Backend, results[j].Backend, err,
+				)
+			}
+			diffs = append(diffs, pairDiffs...)
 		}
 	}
-	return diffs
+	return diffs, nil
 }
 
 type valueDiff struct {
@@ -1222,8 +1281,11 @@ type valueDiff struct {
 	Right any
 }
 
-// CompareSnapshots compares two normalized replay snapshots.
-func CompareSnapshots(caseName, sessionID, backendA, backendB string, left, right Snapshot, allowedRules []AllowedDiffRule) []Diff {
+// CompareSnapshots compares two normalized replay snapshots. It converts the
+// session, events, state, memory, summary, and tracks sections in that order,
+// checking the left snapshot before the right snapshot in each section. It
+// returns a nil diff slice on the first canonical JSON conversion error.
+func CompareSnapshots(caseName, sessionID, backendA, backendB string, left, right Snapshot, allowedRules []AllowedDiffRule) ([]Diff, error) {
 	sections := []struct {
 		name, path  string
 		left, right any
@@ -1237,7 +1299,21 @@ func CompareSnapshots(caseName, sessionID, backendA, backendB string, left, righ
 	}
 	var entries []Diff
 	for _, section := range sections {
-		for _, d := range recursiveDiff(section.path, jsonValue(section.left), jsonValue(section.right)) {
+		leftValue, err := jsonValue(section.left)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"normalize left %s section for backend %q: %w",
+				section.name, backendA, err,
+			)
+		}
+		rightValue, err := jsonValue(section.right)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"normalize right %s section for backend %q: %w",
+				section.name, backendB, err,
+			)
+		}
+		for _, d := range recursiveDiff(section.path, leftValue, rightValue) {
 			entries = append(entries, Diff{
 				Case: caseName, SessionID: sessionID, BackendA: backendA, BackendB: backendB,
 				Section: section.name, Path: d.Path, Left: d.Left, Right: d.Right,
@@ -1252,19 +1328,19 @@ func CompareSnapshots(caseName, sessionID, backendA, backendB string, left, righ
 		}
 		return entries[i].Path < entries[j].Path
 	})
-	return entries
+	return entries, nil
 }
 
-func jsonValue(value any) any {
+func jsonValue(value any) (any, error) {
 	encoded, err := json.Marshal(value)
 	if err != nil {
-		panic(fmt.Sprintf("marshal replay diff value: %v", err))
+		return nil, fmt.Errorf("marshal replay diff value: %w", err)
 	}
 	var out any
 	if err := decodeJSON(encoded, &out); err != nil {
-		panic(fmt.Sprintf("unmarshal replay diff value: %v", err))
+		return nil, fmt.Errorf("decode replay diff value: %w", err)
 	}
-	return canonicalJSON(out)
+	return canonicalJSON(out), nil
 }
 
 func recursiveDiff(path string, left, right any) []valueDiff {

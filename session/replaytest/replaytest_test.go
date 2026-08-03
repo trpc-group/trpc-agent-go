@@ -15,8 +15,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -47,6 +49,24 @@ func buildSnapshotForTest(
 	snapshot, err := BuildSnapshot(sess, memories)
 	require.NoError(t, err)
 	return snapshot
+}
+
+func compareSnapshotsForTest(
+	t testing.TB,
+	caseName string,
+	sessionID string,
+	backendA string,
+	backendB string,
+	left Snapshot,
+	right Snapshot,
+	allowedRules []AllowedDiffRule,
+) []Diff {
+	t.Helper()
+	diffs, err := CompareSnapshots(
+		caseName, sessionID, backendA, backendB, left, right, allowedRules,
+	)
+	require.NoError(t, err)
+	return diffs
 }
 
 func TestRunRejectsInvalidBackendNames(t *testing.T) {
@@ -456,7 +476,9 @@ func TestRunInterleavesEventsAndSummaries(t *testing.T) {
 	result, err := Run(context.Background(), testRunNamespace, Backend{
 		Name: "in_memory", SessionService: sessionService, MemoryService: memoryService,
 		ReadAllMemories: completeMemoryReader(memoryService),
-		SetSummaryText:  func(text string) { summarizer.text = text },
+		CreateSummary: func(ctx context.Context, sess *session.Session, step SummaryStep) error {
+			return summarizer.createSummary(ctx, sessionService, sess, step)
+		},
 	}, Case{
 		Name:   "summary-timeline",
 		Events: events,
@@ -473,6 +495,115 @@ func TestRunInterleavesEventsAndSummaries(t *testing.T) {
 	require.NotNil(t, summary.Boundary)
 	require.Equal(t, finalPrefix-1, *summary.Boundary.LastEventIndex)
 	require.Equal(t, normalizeTime(baseTime.Add(3*time.Second)), summary.Boundary.CutoffAt)
+}
+
+func TestRunScopesSummaryTextAcrossConcurrentRuns(t *testing.T) {
+	firstNamespace := "summary-concurrent-first"
+	secondNamespace := "summary-concurrent-second"
+	baseTime := time.Now().UTC().Add(time.Minute)
+	firstCase := Case{
+		Name: "summary-first",
+		Events: []*event.Event{
+			replayTimelineEvent("first-event", baseTime),
+		},
+		Summaries: []SummaryStep{{Force: true, Text: "first summary"}},
+	}
+	secondCase := Case{
+		Name: "summary-second",
+		Events: []*event.Event{
+			replayTimelineEvent("second-event", baseTime.Add(time.Second)),
+		},
+		Summaries: []SummaryStep{{Force: true, Text: "second summary"}},
+	}
+
+	firstEntered := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() { close(releaseFirst) })
+	}
+	defer release()
+	firstKey := replayKey(firstNamespace, firstCase.Name)
+	summarizer := &recordingSummarizer{
+		blockSessionID: firstKey.SessionID + ":",
+		entered:        firstEntered,
+		release:        releaseFirst,
+	}
+	sessionService := sessinmemory.NewSessionService(sessinmemory.WithSummarizer(summarizer))
+	defer sessionService.Close()
+	memoryService := meminmemory.NewMemoryService()
+	defer memoryService.Close()
+	backend := Backend{
+		Name: "in_memory", SessionService: sessionService, MemoryService: memoryService,
+		ReadAllMemories: completeMemoryReader(memoryService),
+		CreateSummary: func(ctx context.Context, sess *session.Session, step SummaryStep) error {
+			return summarizer.createSummary(ctx, sessionService, sess, step)
+		},
+	}
+
+	type runResult struct {
+		result Result
+		err    error
+	}
+	firstResult := make(chan runResult, 1)
+	secondResult := make(chan runResult, 1)
+	go func() {
+		result, err := Run(context.Background(), firstNamespace, backend, firstCase)
+		firstResult <- runResult{result: result, err: err}
+	}()
+
+	select {
+	case <-firstEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first summary did not reach the coordinated interleaving point")
+	}
+	go func() {
+		result, err := Run(context.Background(), secondNamespace, backend, secondCase)
+		secondResult <- runResult{result: result, err: err}
+	}()
+
+	var second runResult
+	select {
+	case second = <-secondResult:
+	case <-time.After(5 * time.Second):
+		t.Fatal("second summary did not complete while the first was blocked")
+	}
+	require.NoError(t, second.err)
+	require.Equal(t, "second summary", second.result.Snapshot.Summary[session.SummaryFilterKeyAllContents].Summary)
+	release()
+
+	var first runResult
+	select {
+	case first = <-firstResult:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first summary did not complete after release")
+	}
+	require.NoError(t, first.err)
+	require.Equal(t, "first summary", first.result.Snapshot.Summary[session.SummaryFilterKeyAllContents].Summary)
+}
+
+func TestRunWrapsCreateSummaryCallbackError(t *testing.T) {
+	summaryErr := errors.New("summary callback failed")
+	sessionService := sessinmemory.NewSessionService()
+	defer sessionService.Close()
+	memoryService := meminmemory.NewMemoryService()
+	defer memoryService.Close()
+
+	_, err := Run(context.Background(), testRunNamespace, Backend{
+		Name: "summary_callback", SessionService: sessionService, MemoryService: memoryService,
+		ReadAllMemories: completeMemoryReader(memoryService),
+		CreateSummary: func(context.Context, *session.Session, SummaryStep) error {
+			return summaryErr
+		},
+	}, Case{
+		Name: "summary-callback-error",
+		Events: []*event.Event{
+			replayTimelineEvent("event", time.Now().UTC()),
+		},
+		Summaries: []SummaryStep{{Text: "summary"}},
+	})
+	require.ErrorIs(t, err, summaryErr)
+	require.ErrorContains(t, err, `summary step 0 for case "summary-callback-error"`)
 }
 
 func TestRunAcceptsFullTrackPayloadDomain(t *testing.T) {
@@ -889,6 +1020,106 @@ func TestRunValidatesStateScopesAndCleansPeer(t *testing.T) {
 	}, mergeScopedState(session.StateMap{"nil": nil}, session.StateMap{"nil": nil}))
 }
 
+func TestExpectedStateScopesIncludesPrefixedEventDeltas(t *testing.T) {
+	tc := Case{
+		AppState: session.StateMap{
+			session.StateAppPrefix + "overridden": []byte(`"direct"`),
+		},
+		UserState: session.StateMap{
+			session.StateUserPrefix + "direct": []byte(`"user"`),
+		},
+		Events: []*event.Event{
+			{StateDelta: session.StateMap{
+				session.StateAppPrefix + "overridden": []byte(`"event-one"`),
+				session.StateUserPrefix + "event":     []byte(`"first"`),
+				"session:local":                       []byte(`"ignored"`),
+				session.StateTempPrefix + "scratch":   []byte(`"ignored"`),
+			}},
+			{StateDelta: session.StateMap{
+				session.StateAppPrefix + "overridden": []byte(`"event-two"`),
+				session.StateAppPrefix + "added":      nil,
+				session.StateUserPrefix + "event":     []byte(`"second"`),
+			}},
+		},
+	}
+
+	appState, userState, validate := expectedStateScopes(tc)
+	require.True(t, validate)
+	require.Equal(t, session.StateMap{
+		"overridden": []byte(`"event-two"`),
+		"added":      nil,
+	}, appState)
+	require.Equal(t, session.StateMap{
+		"direct": []byte(`"user"`),
+		"event":  []byte(`"second"`),
+	}, userState)
+
+	_, _, validate = expectedStateScopes(Case{Events: []*event.Event{{StateDelta: session.StateMap{
+		"session:local":                     []byte("value"),
+		session.StateTempPrefix + "scratch": []byte("value"),
+	}}}})
+	require.False(t, validate)
+}
+
+func TestRunValidatesPrefixedEventStateScopesWithTargetedFake(t *testing.T) {
+	newCase := func(name string) Case {
+		first := replayTimelineEvent("scoped-event-first", time.Now().UTC())
+		first.StateDelta = session.StateMap{
+			session.StateAppPrefix + "feature":  []byte(`{"source":"event-one"}`),
+			session.StateUserPrefix + "locale":  []byte(`"event-one"`),
+			"session:local":                     []byte(`"kept"`),
+			session.StateTempPrefix + "scratch": []byte(`"temporary"`),
+		}
+		second := replayTimelineEvent("scoped-event-second", time.Now().UTC().Add(time.Second))
+		second.StateDelta = session.StateMap{
+			session.StateAppPrefix + "feature": []byte(`{"source":"event-two"}`),
+			session.StateUserPrefix + "locale": []byte(`"event-two"`),
+		}
+		return Case{
+			Name: name,
+			AppState: session.StateMap{
+				session.StateAppPrefix + "feature": []byte(`{"source":"direct"}`),
+			},
+			UserState: session.StateMap{
+				session.StateUserPrefix + "locale": []byte(`"direct"`),
+			},
+			Events: []*event.Event{first, second},
+		}
+	}
+	tests := []struct {
+		name       string
+		routeState bool
+		wantErr    string
+	}{
+		{name: "correct routing", routeState: true},
+		{name: "session local routing", wantErr: "app state for case"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			base := sessinmemory.NewSessionService()
+			defer base.Close()
+			memoryService := meminmemory.NewMemoryService()
+			defer memoryService.Close()
+			sessionService := &scopeSessionService{
+				Service: base, routeScopedEventState: test.routeState,
+			}
+
+			_, err := Run(context.Background(), testRunNamespace, Backend{
+				Name: "scope_fake", SessionService: sessionService, MemoryService: memoryService,
+				ReadAllMemories: completeMemoryReader(memoryService),
+			}, newCase(strings.ReplaceAll(test.name, " ", "-")))
+			if test.wantErr == "" {
+				require.NoError(t, err)
+				require.Equal(t, 1, sessionService.deleteCalls)
+				return
+			}
+			require.ErrorContains(t, err, test.wantErr)
+			require.Zero(t, sessionService.deleteCalls)
+		})
+	}
+}
+
 func TestRunCleansStateScopePeerAfterCallerCancellation(t *testing.T) {
 	type contextKey string
 	const (
@@ -978,7 +1209,25 @@ func TestRunRejectsIncorrectStateScopes(t *testing.T) {
 			configure: func(service *scopeSessionService) {
 				service.createPeerErr = errors.New("create peer failed")
 			},
-			wantErrors: []string{"create state-scope peer", "create peer failed"},
+			wantErrors: []string{"create state-scope peer", "create peer failed"}, wantDeleteCalls: 1,
+		},
+		{
+			name: "peer create fails after write",
+			configure: func(service *scopeSessionService) {
+				service.createPeerAfterWriteErr = errors.New("create peer response failed")
+			},
+			wantErrors: []string{"create state-scope peer", "create peer response failed"}, wantDeleteCalls: 1,
+		},
+		{
+			name: "peer create and cleanup failures",
+			configure: func(service *scopeSessionService) {
+				service.createPeerAfterWriteErr = errors.New("create peer response failed")
+				service.deleteErr = errors.New("cleanup failed")
+			},
+			wantErrors: []string{
+				"create state-scope peer", "create peer response failed",
+				"delete state-scope peer", "cleanup failed",
+			}, wantDeleteCalls: 1,
 		},
 		{
 			name:            "peer create returns nil",
@@ -1038,6 +1287,15 @@ func TestRunRejectsIncorrectStateScopes(t *testing.T) {
 				require.ErrorContains(t, err, want)
 			}
 			require.Equal(t, test.wantDeleteCalls, sessionService.deleteCalls)
+			if test.wantDeleteCalls > 0 {
+				peerKey := replayKey(testRunNamespace, replayStateScopeCase(
+					strings.ReplaceAll(test.name, " ", "-"),
+				).Name)
+				peerKey.SessionID += "-scope-peer"
+				peer, getErr := base.GetSession(context.Background(), peerKey)
+				require.NoError(t, getErr)
+				require.Nil(t, peer)
+			}
 		})
 	}
 }
@@ -1156,11 +1414,13 @@ func replayStateScopeCase(name string) Case {
 type scopeSessionService struct {
 	session.Service
 	emptyAppState                bool
+	routeScopedEventState        bool
 	stripPeerState               bool
 	deleteErr                    error
 	listAppErr                   error
 	listUserErr                  error
 	createPeerErr                error
+	createPeerAfterWriteErr      error
 	getPeerErr                   error
 	nilCreatePeer                bool
 	nilGetPeer                   bool
@@ -1175,11 +1435,54 @@ type scopeSessionService struct {
 	deleteContextValue           any
 }
 
+func (s *scopeSessionService) AppendEvent(
+	ctx context.Context,
+	sess *session.Session,
+	evt *event.Event,
+	opts ...session.Option,
+) error {
+	if !s.routeScopedEventState || evt == nil {
+		return s.Service.AppendEvent(ctx, sess, evt, opts...)
+	}
+	appState := make(session.StateMap)
+	userState := make(session.StateMap)
+	localState := make(session.StateMap)
+	for key, value := range evt.StateDelta {
+		switch {
+		case strings.HasPrefix(key, session.StateAppPrefix):
+			setStateValue(appState, strings.TrimPrefix(key, session.StateAppPrefix), value)
+		case strings.HasPrefix(key, session.StateUserPrefix):
+			setStateValue(userState, strings.TrimPrefix(key, session.StateUserPrefix), value)
+		default:
+			setStateValue(localState, key, value)
+		}
+	}
+	if len(appState) > 0 {
+		if err := s.Service.UpdateAppState(ctx, sess.AppName, appState); err != nil {
+			return err
+		}
+	}
+	if len(userState) > 0 {
+		if err := s.Service.UpdateUserState(ctx, session.UserKey{
+			AppName: sess.AppName, UserID: sess.UserID,
+		}, userState); err != nil {
+			return err
+		}
+	}
+	delegated := evt.Clone()
+	delegated.StateDelta = localState
+	return s.Service.AppendEvent(ctx, sess, delegated, opts...)
+}
+
 type malformedSnapshotSessionService struct {
 	session.Service
 }
 
 type nilSummarySnapshotSessionService struct {
+	session.Service
+}
+
+type nilTrackSnapshotSessionService struct {
 	session.Service
 }
 
@@ -1211,6 +1514,24 @@ func (s *nilSummarySnapshotSessionService) GetSession(
 	}
 	got.Summaries["branch"] = nil
 	got.SummariesMu.Unlock()
+	return got, nil
+}
+
+func (s *nilTrackSnapshotSessionService) GetSession(
+	ctx context.Context,
+	key session.Key,
+	opts ...session.Option,
+) (*session.Session, error) {
+	got, err := s.Service.GetSession(ctx, key, opts...)
+	if err != nil || got == nil {
+		return got, err
+	}
+	got.TracksMu.Lock()
+	if got.Tracks == nil {
+		got.Tracks = make(map[session.Track]*session.TrackEvents)
+	}
+	got.Tracks["broken"] = nil
+	got.TracksMu.Unlock()
 	return got, nil
 }
 
@@ -1250,6 +1571,9 @@ func (s *scopeSessionService) CreateSession(
 		}
 		if s.nilCreatePeer {
 			return nil, nil
+		}
+		if s.createPeerAfterWriteErr != nil {
+			return nil, s.createPeerAfterWriteErr
 		}
 	}
 	return got, err
@@ -1429,7 +1753,7 @@ func TestBuildSnapshotNormalizesGeneratedEventFields(t *testing.T) {
 	rightSession.Events[0].Response.Timestamp = timestamp.Add(time.Second)
 	left := buildSnapshotForTest(t, leftSession, nil)
 	right := buildSnapshotForTest(t, rightSession, nil)
-	diffs := CompareSnapshots(
+	diffs := compareSnapshotsForTest(t,
 		"generated",
 		"session-1",
 		"left",
@@ -1593,6 +1917,64 @@ func TestBuildSnapshotAcceptsValidSummaryMaps(t *testing.T) {
 	})
 }
 
+func TestBuildSnapshotRejectsNilTrackEntriesDeterministically(t *testing.T) {
+	tests := []struct {
+		name   string
+		tracks map[session.Track]*session.TrackEvents
+		want   string
+	}{
+		{
+			name:   "single nil entry",
+			tracks: map[session.Track]*session.TrackEvents{"branch": nil},
+			want:   `track entry "branch" is nil`,
+		},
+		{
+			name: "nil entry alongside valid track",
+			tracks: map[session.Track]*session.TrackEvents{
+				"valid":  {Track: "valid"},
+				"branch": nil,
+			},
+			want: `track entry "branch" is nil`,
+		},
+		{
+			name: "multiple nil entries use first sorted key",
+			tracks: map[session.Track]*session.TrackEvents{
+				"z-last":  nil,
+				"a-first": nil,
+			},
+			want: `track entry "a-first" is nil`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			for i := 0; i < 20; i++ {
+				sess := session.NewSession("app", "user", "session")
+				sess.Tracks = test.tracks
+				_, err := BuildSnapshot(sess, nil)
+				require.EqualError(t, err, test.want)
+			}
+		})
+	}
+
+	t.Run("valid empty container", func(t *testing.T) {
+		sess := session.NewSession("app", "user", "session")
+		sess.Tracks = map[session.Track]*session.TrackEvents{
+			"empty": {Track: "empty"},
+		}
+		got := buildSnapshotForTest(t, sess, nil)
+		require.Equal(t, []TrackSnapshot{{Name: "empty", Track: "empty"}}, got.Tracks)
+	})
+
+	t.Run("summary error precedes track error", func(t *testing.T) {
+		sess := session.NewSession("app", "user", "session")
+		sess.Summaries["branch"] = nil
+		sess.Tracks = map[session.Track]*session.TrackEvents{"broken": nil}
+		_, err := BuildSnapshot(sess, nil)
+		require.EqualError(t, err, `summary entry "branch" is nil`)
+	})
+}
+
 func TestRunReturnsWrappedSnapshotNormalizationError(t *testing.T) {
 	baseSessionService := sessinmemory.NewSessionService()
 	defer baseSessionService.Close()
@@ -1624,6 +2006,21 @@ func TestRunReturnsWrappedNilSummaryNormalizationError(t *testing.T) {
 		`build final snapshot for case "nil-summary" on backend "in_memory": summary entry "branch" is nil`)
 }
 
+func TestRunReturnsWrappedNilTrackNormalizationError(t *testing.T) {
+	baseSessionService := sessinmemory.NewSessionService()
+	defer baseSessionService.Close()
+	sessionService := &nilTrackSnapshotSessionService{Service: baseSessionService}
+	memoryService := meminmemory.NewMemoryService()
+	defer memoryService.Close()
+
+	_, err := Run(context.Background(), testRunNamespace, Backend{
+		Name: "in_memory", SessionService: sessionService,
+		MemoryService: memoryService, ReadAllMemories: completeMemoryReader(memoryService),
+	}, Case{Name: "nil-track"})
+	require.EqualError(t, err,
+		`build final snapshot for case "nil-track" on backend "in_memory": track entry "broken" is nil`)
+}
+
 func TestBuildSnapshotPreservesSuppliedEventTimestamp(t *testing.T) {
 	leftTime := time.Date(2026, time.July, 24, 8, 9, 10, 123, time.FixedZone("UTC+8", 8*60*60))
 	rightTime := leftTime.Add(time.Second)
@@ -1631,7 +2028,7 @@ func TestBuildSnapshotPreservesSuppliedEventTimestamp(t *testing.T) {
 	right := buildSnapshotForTest(t, replayTestSession("same", rightTime), nil)
 
 	require.Equal(t, normalizeTime(leftTime), left.Events[0]["timestamp"])
-	diffs := CompareSnapshots("timestamp", "session-1", "left", "right", left, right, nil)
+	diffs := compareSnapshotsForTest(t, "timestamp", "session-1", "left", "right", left, right, nil)
 	require.Len(t, diffs, 1)
 	require.Equal(t, "events", diffs[0].Section)
 	require.Equal(t, "$.events[0].timestamp", diffs[0].Path)
@@ -1641,7 +2038,7 @@ func TestBuildSnapshotPreservesSuppliedEventTimestamp(t *testing.T) {
 	require.False(t, diffs[0].Allowed)
 
 	sameInstant := buildSnapshotForTest(t, replayTestSession("same", leftTime.UTC()), nil)
-	require.Empty(t, CompareSnapshots("timestamp", "session-1", "left", "right", left, sameInstant, nil))
+	require.Empty(t, compareSnapshotsForTest(t, "timestamp", "session-1", "left", "right", left, sameInstant, nil))
 }
 
 func TestNormalizeStatePreservesJSONNumbersAndByteKinds(t *testing.T) {
@@ -1704,7 +2101,7 @@ func TestTrackSnapshotsPreserveContainerAndPayloadIdentity(t *testing.T) {
 	require.Equal(t, "tool", left.Tracks[0].Name)
 	require.Equal(t, "tool", left.Tracks[0].Track)
 	require.Equal(t, "tool", left.Tracks[0].Events[0].Track)
-	diffs := CompareSnapshots("container", "session-1", "left", "right", left, right, nil)
+	diffs := compareSnapshotsForTest(t, "container", "session-1", "left", "right", left, right, nil)
 	require.Len(t, diffs, 1)
 	require.Equal(t, "tracks", diffs[0].Section)
 	require.Equal(t, "$.tracks[0].track", diffs[0].Path)
@@ -1713,7 +2110,7 @@ func TestTrackSnapshotsPreserveContainerAndPayloadIdentity(t *testing.T) {
 
 	rightSession = replayTrackSession("tool", nil)
 	right = buildSnapshotForTest(t, rightSession, nil)
-	diffs = CompareSnapshots("payload", "session-1", "left", "right", left, right, nil)
+	diffs = compareSnapshotsForTest(t, "payload", "session-1", "left", "right", left, right, nil)
 	require.Len(t, diffs, 1)
 	require.Equal(t, "$.tracks[0].events[0].payload.kind", diffs[0].Path)
 	require.Equal(t, 0, diffs[0].Context["track_event_index"])
@@ -1771,7 +2168,7 @@ func TestCompareSnapshotsPreservesSpecialSummaryFilterKeyContext(t *testing.T) {
 				filterKey: {Summary: "right"},
 			}}
 
-			diffs := CompareSnapshots(
+			diffs := compareSnapshotsForTest(t,
 				"special-summary-key", "session-1", "left", "right",
 				left, right, nil,
 			)
@@ -1790,12 +2187,83 @@ func TestCompareSnapshotsAddsContextAndAppliesExplicitRule(t *testing.T) {
 		Section: "events", Path: "$.events[0].author",
 		BackendA: "left", BackendB: "right", Reason: "fixture drift",
 	}}
-	diffs := CompareSnapshots("case", "session-1", "left", "right", left, right, rules)
+	diffs := compareSnapshotsForTest(t, "case", "session-1", "left", "right", left, right, rules)
 	require.Len(t, diffs, 1)
 	require.True(t, diffs[0].Allowed)
 	require.Equal(t, "fixture drift", diffs[0].Reason)
 	require.Equal(t, 0, diffs[0].Context["event_index"])
 	require.False(t, HasUnallowedDiffs(diffs))
+}
+
+func TestCompareSnapshotsReturnsJSONConversionErrors(t *testing.T) {
+	tests := []struct {
+		name  string
+		value any
+		want  string
+	}{
+		{name: "channel", value: make(chan int), want: "unsupported type: chan int"},
+		{name: "function", value: func() {}, want: "unsupported type: func()"},
+		{name: "nan", value: math.NaN(), want: "unsupported value: NaN"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			diffs, err := CompareSnapshots(
+				"invalid", "session-1", "left", "right",
+				Snapshot{State: map[string]any{"bad": test.value}},
+				Snapshot{State: map[string]any{"bad": "safe"}},
+				nil,
+			)
+			require.Nil(t, diffs)
+			require.ErrorContains(t, err, `normalize left state section for backend "left"`)
+			require.ErrorContains(t, err, test.want)
+		})
+	}
+
+	diffs, err := CompareSnapshots(
+		"invalid-right", "session-1", "left", "right",
+		Snapshot{State: map[string]any{"bad": "safe"}},
+		Snapshot{State: map[string]any{"bad": make(chan int)}},
+		nil,
+	)
+	require.Nil(t, diffs)
+	require.ErrorContains(t, err, `normalize right state section for backend "right"`)
+
+	t.Run("fixed section and side order", func(t *testing.T) {
+		diffs, err := CompareSnapshots(
+			"ordered", "session-1", "left", "right",
+			Snapshot{
+				Events: []EventSnapshot{{"bad": make(chan int)}},
+				State:  map[string]any{"bad": make(chan int)},
+			},
+			Snapshot{Events: []EventSnapshot{{"bad": func() {}}}},
+			nil,
+		)
+		require.Nil(t, diffs)
+		require.ErrorContains(t, err, `normalize left events section for backend "left"`)
+	})
+}
+
+func TestCompareReturnsErrorWithoutPartialDiffs(t *testing.T) {
+	results := []Result{
+		{
+			Backend: "first", Key: session.Key{SessionID: "session-1"},
+			Snapshot: Snapshot{State: map[string]any{"value": "first"}},
+		},
+		{
+			Backend: "second", Key: session.Key{SessionID: "session-1"},
+			Snapshot: Snapshot{State: map[string]any{"value": "second"}},
+		},
+		{
+			Backend: "invalid", Key: session.Key{SessionID: "session-1"},
+			Snapshot: Snapshot{State: map[string]any{"value": make(chan int)}},
+		},
+	}
+
+	diffs, err := Compare(Case{Name: "pairwise"}, results)
+	require.Nil(t, diffs)
+	require.ErrorContains(t, err, `compare case "pairwise" between backends "first" and "invalid"`)
+	require.ErrorContains(t, err, `normalize right state section for backend "invalid"`)
 }
 
 func TestAllowedDiffRulesRequireConcreteSegmentBelowSectionRoot(t *testing.T) {
@@ -1870,7 +2338,7 @@ func TestAllowedDiffRulesRejectWildcardOnlyQuotedSummaryKeys(t *testing.T) {
 		Section: "summary", Path: `$.summary["*"].*`,
 		BackendA: "left", BackendB: "right", Reason: "too broad",
 	}}
-	diffs := CompareSnapshots("quoted-wildcard", "session-1", "left", "right", left, right, broadRule)
+	diffs := compareSnapshotsForTest(t, "quoted-wildcard", "session-1", "left", "right", left, right, broadRule)
 	require.Len(t, diffs, 2)
 	for _, diff := range diffs {
 		require.False(t, diff.Allowed, "diff=%+v", diff)
@@ -1880,7 +2348,7 @@ func TestAllowedDiffRulesRejectWildcardOnlyQuotedSummaryKeys(t *testing.T) {
 		Section: "summary", Path: `$.summary["root/*"].summary`,
 		BackendA: "left", BackendB: "right", Reason: "known root summary drift",
 	}}
-	diffs = CompareSnapshots("quoted-literal", "session-1", "left", "right", left, right, literalRule)
+	diffs = compareSnapshotsForTest(t, "quoted-literal", "session-1", "left", "right", left, right, literalRule)
 	require.Len(t, diffs, 2)
 	allowedByKey := make(map[string]bool, len(diffs))
 	for _, diff := range diffs {
@@ -1912,13 +2380,74 @@ func (errorWriter) Write([]byte) (int, error) {
 }
 
 type recordingSummarizer struct {
-	text string
+	mu             sync.RWMutex
+	textBySession  map[session.Key]string
+	blockSessionID string
+	entered        chan struct{}
+	release        <-chan struct{}
+	enteredOnce    sync.Once
 }
 
 func (s *recordingSummarizer) ShouldSummarize(*session.Session) bool { return true }
 
-func (s *recordingSummarizer) Summarize(_ context.Context, _ *session.Session) (string, error) {
-	return s.text, nil
+func (s *recordingSummarizer) Summarize(_ context.Context, sess *session.Session) (string, error) {
+	if sess.ID == s.blockSessionID {
+		s.enteredOnce.Do(func() {
+			if s.entered != nil {
+				close(s.entered)
+			}
+		})
+		if s.release != nil {
+			<-s.release
+		}
+	}
+	key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
+	s.mu.RLock()
+	text, ok := s.textBySession[key]
+	s.mu.RUnlock()
+	if !ok || text == "" {
+		return "smoke summary", nil
+	}
+	return text, nil
+}
+
+func (s *recordingSummarizer) createSummary(
+	ctx context.Context,
+	service session.Service,
+	sess *session.Session,
+	step SummaryStep,
+) error {
+	keys := recordingSummaryKeys(sess, step.FilterKey)
+	s.mu.Lock()
+	if s.textBySession == nil {
+		s.textBySession = make(map[session.Key]string)
+	}
+	for _, key := range keys {
+		s.textBySession[key] = step.Text
+	}
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		for _, key := range keys {
+			delete(s.textBySession, key)
+		}
+		s.mu.Unlock()
+	}()
+	return service.CreateSessionSummary(ctx, sess, step.FilterKey, step.Force)
+}
+
+func recordingSummaryKeys(sess *session.Session, filterKey string) []session.Key {
+	base := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
+	keys := []session.Key{
+		base,
+		{AppName: base.AppName, UserID: base.UserID, SessionID: base.SessionID + ":" + filterKey},
+	}
+	if filterKey != session.SummaryFilterKeyAllContents {
+		keys = append(keys, session.Key{
+			AppName: base.AppName, UserID: base.UserID, SessionID: base.SessionID + ":",
+		})
+	}
+	return keys
 }
 
 func (*recordingSummarizer) SetPrompt(string) {}

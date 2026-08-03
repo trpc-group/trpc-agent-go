@@ -79,21 +79,27 @@ Snapshots include these sections:
 
 Backend-regenerated event IDs, response IDs and timing metadata, and backend-generated memory IDs are omitted during normalization. Caller-supplied `Event.Timestamp` values are retained as UTC `RFC3339Nano` strings so persistence drift remains visible. JSON normalization uses `json.Decoder.UseNumber` so large integers remain precise. Business-field differences are not allowed by default.
 
+`Compare` and `CompareSnapshots` return an error instead of panicking when a caller-constructed snapshot contains a channel, function, NaN, or another value that cannot be converted to the canonical JSON comparison representation. Sections are converted in snapshot order, left before right, and comparison stops at the first error. A failed comparison returns no partial diffs and cannot be accepted by an `allowed_diff` rule.
+
 Track payload fixtures accept the complete JSON value domain: objects, arrays, strings, numbers, booleans, and null. Persisted `json.RawMessage` values use a tagged snapshot with `nil`, `empty`, `json`, `utf8`, or `base64` kind. Valid JSON is canonicalized inside `payload.value`, while raw nil, empty bytes, JSON null, invalid UTF-8 text, and binary bytes remain distinguishable.
 
 Each memory query declares `ExpectedContents`. Search results are compared as an exact unordered content multiset, so backend-specific IDs, scores, and ranking are ignored while missing, unrelated, extra, and duplicate results remain observable.
 
 Memory operation aliases follow canonical memory identity rather than content alone. Add aliases include app, user, content, kind, event time, participants, and location while intentionally excluding topics. An update always advances its referenced alias to the effective ID returned by the backend, so a later update or delete does not reuse an ID that was rotated after content or identity metadata changed.
 
-Snapshot construction returns an error when an event cannot be normalized, a memory entry is nil, an entry has a nil `Memory` payload, or a summary map entry has a nil value. These conditions indicate malformed fixtures or backend corruption; they are never discarded during normalization and cannot be accepted with `allowed_diff`. `BuildSnapshot` also validates and normalizes supplied memories when the session is nil, so the empty-session form cannot hide valid or malformed memory data.
+Snapshot construction returns an error when an event cannot be normalized, a memory entry is nil, an entry has a nil `Memory` payload, a summary map entry has a nil value, or a track map entry has a nil `TrackEvents` container. These conditions indicate malformed fixtures or backend corruption; they are never discarded during normalization and cannot be accepted with `allowed_diff`. A non-nil empty track container remains valid. `BuildSnapshot` also validates and normalizes supplied memories when the session is nil, so the empty-session form cannot hide valid or malformed memory data.
 
-Cases with app, user, or session state also validate each scope as a backend contract. The runner reads app and user state separately, creates a temporary peer session under the same app/user, and requires the peer to inherit only app/user values. The peer is deleted on every return path. Missing propagation, leaked session/temp state, and cleanup failures are runner errors; they are not snapshot differences and cannot be accepted with `allowed_diff`.
+Cases with direct app/user/session state, or with `app:` / `user:` values in `Event.StateDelta`, also validate each scope as a backend contract. Expected app/user values apply direct updates first and then fold prefixed event deltas in event order, stripping the prefix before comparing them with `ListAppStates` / `ListUserStates`. The runner creates a temporary peer session under the same app/user and requires it to inherit only the merged app/user values. Peer deletion is attempted after every creation attempt, including ambiguous fail-after-write errors, using a bounded context detached from caller cancellation. Missing propagation, leaked session/temp state, and cleanup failures are runner errors; they are not snapshot differences and cannot be accepted with `allowed_diff`.
+
+The lightweight InMemory/SQLite matrix does not add a prefixed-event scope case because those two implementations currently retain event deltas in session-local state. Targeted replaytest fakes cover the generic runner contract without changing production backend behavior.
 
 ## Summary And Track Strategy
 
 The Go version uses native session summary semantics. It does not create Python-style summary events and does not compare historical summary events.
 
 Each `SummaryStep` may set `EventPrefix` to the number of leading case events that must be appended before that summary runs. Prefixes must stay within the event list and be monotonically non-decreasing; equal prefixes are allowed. A nil prefix preserves the default of running after all events. This allows a case to append events, summarize, append more events, and verify that the stored boundary advances.
+
+`Backend.CreateSummary`, when provided, owns the complete per-step operation: fixture-specific summary preparation and summary persistence. The callback must be safe for concurrent `Run` calls that share a backend. When it is nil, the runner calls `SessionService.CreateSessionSummary` directly.
 
 Summary comparison covers:
 
