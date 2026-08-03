@@ -21,6 +21,9 @@ allowed_commands:
   - find
   - mkdir
   - touch
+  - tail
+  - curl
+  - wget
 
 # Commands that are always denied.
 denied_commands:

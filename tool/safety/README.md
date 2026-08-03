@@ -16,6 +16,14 @@ if report.Decision == safety.DecisionDeny {
 }
 ```
 
+可运行 CLI 演示（`--demo` 内置 14 个覆盖验收全部风险族的场景 + PermissionPolicy 拦截演示）：
+
+```bash
+go run ./tool/safety/examples/demo --demo
+go run ./tool/safety/examples/demo --command "rm -rf /" --backend workspaceexec
+go run ./tool/safety/examples/demo --policy tool/safety/tool_safety_policy.yaml --command "curl https://api.github.com"
+```
+
 作为 PermissionPolicy 接入：
 
 ```go
