@@ -54,6 +54,7 @@ max_timeout_sec: 300
 
 # Maximum command output size in bytes (10MB).
 max_output_bytes: 10485760
+hostexec_requires_ask: true
 
 # Environment variables allowed to be passed to commands.
 env_allowlist:

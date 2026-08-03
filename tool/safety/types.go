@@ -45,15 +45,16 @@ type Rule struct {
 
 // Policy is the top-level safety policy configuration.
 type Policy struct {
-	Version          string   `yaml:"version" json:"version"`
-	AllowedCommands  []string `yaml:"allowed_commands" json:"allowed_commands"`
-	DeniedCommands   []string `yaml:"denied_commands" json:"denied_commands"`
-	ForbiddenPaths   []string `yaml:"forbidden_paths" json:"forbidden_paths"`
-	AllowlistedHosts []string `yaml:"allowlisted_hosts" json:"allowlisted_hosts"`
-	MaxTimeoutSec    int      `yaml:"max_timeout_sec" json:"max_timeout_sec"`
-	MaxOutputBytes   int      `yaml:"max_output_bytes" json:"max_output_bytes"`
-	EnvAllowlist     []string `yaml:"env_allowlist" json:"env_allowlist"`
-	Rules            []Rule   `yaml:"rules" json:"rules"`
+	Version             string   `yaml:"version" json:"version"`
+	AllowedCommands     []string `yaml:"allowed_commands" json:"allowed_commands"`
+	DeniedCommands      []string `yaml:"denied_commands" json:"denied_commands"`
+	ForbiddenPaths      []string `yaml:"forbidden_paths" json:"forbidden_paths"`
+	AllowlistedHosts    []string `yaml:"allowlisted_hosts" json:"allowlisted_hosts"`
+	MaxTimeoutSec       int      `yaml:"max_timeout_sec" json:"max_timeout_sec"`
+	MaxOutputBytes      int      `yaml:"max_output_bytes" json:"max_output_bytes"`
+	EnvAllowlist        []string `yaml:"env_allowlist" json:"env_allowlist"`
+	HostExecRequiresAsk bool     `yaml:"hostexec_requires_ask" json:"hostexec_requires_ask"`
+	Rules               []Rule   `yaml:"rules" json:"rules"`
 }
 
 // ScanReport is the structured output of a safety scan.
