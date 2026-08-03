@@ -72,7 +72,10 @@ being interpreted from backend-specific scheduling or conflict behavior.
 summary, and track writes use that returned value rather than the object created
 at the start of the case. The public reload-continuity case writes events and
 state on both sides of two reload boundaries, making persistence across an
-active replay lifecycle part of the lightweight InMemory/SQLite baseline.
+active replay lifecycle part of the lightweight InMemory/SQLite baseline. A
+Session returned by create, reload, recovery, isolation probing, or final
+snapshot must match the requested app, user, and session IDs; a mismatch is an
+execution failure rather than comparison evidence.
 
 ## Run
 

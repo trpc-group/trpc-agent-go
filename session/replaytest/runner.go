@@ -23,6 +23,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
+const summaryIsolationSessionSuffix = "-summary-isolation"
+
 // Runner executes cases using either a named reference or oracle-free
 // pairwise consensus.
 type Runner struct {
@@ -455,6 +457,9 @@ func replayWithServices(
 	if sess == nil {
 		return Snapshot{}, errors.New("create session: backend returned nil session")
 	}
+	if err := validateSessionIdentity(sess, key); err != nil {
+		return Snapshot{}, fmt.Errorf("create session: %w", err)
+	}
 	exec := execution{
 		services:       services,
 		key:            key,
@@ -744,6 +749,21 @@ func prepareTrackEvent(sess *session.Session, input *TrackInput) *session.TrackE
 	return &copyEvent
 }
 
+func validateSessionIdentity(sess *session.Session, key session.Key) error {
+	if sess.AppName != key.AppName || sess.UserID != key.UserID || sess.ID != key.SessionID {
+		return fmt.Errorf(
+			"backend returned session %q/%q/%q for %q/%q/%q",
+			sess.AppName,
+			sess.UserID,
+			sess.ID,
+			key.AppName,
+			key.UserID,
+			key.SessionID,
+		)
+	}
+	return nil
+}
+
 func (e *execution) reload(ctx context.Context) error {
 	sess, err := e.services.Session.GetSession(ctx, e.key)
 	if err != nil {
@@ -755,13 +775,16 @@ func (e *execution) reload(ctx context.Context) error {
 	if sess == nil {
 		return errors.New("get session: backend returned nil session")
 	}
+	if err := validateSessionIdentity(sess, e.key); err != nil {
+		return fmt.Errorf("get session: %w", err)
+	}
 	e.session = sess
 	return nil
 }
 
 func (e *execution) verifySummaryIsolation(ctx context.Context) error {
 	probeKey := e.key
-	probeKey.SessionID += "-summary-isolation"
+	probeKey.SessionID += summaryIsolationSessionSuffix
 	probe, err := e.services.Session.CreateSession(ctx, probeKey, nil)
 	if err != nil {
 		return fmt.Errorf("create probe session: %w", err)
@@ -772,6 +795,9 @@ func (e *execution) verifySummaryIsolation(ctx context.Context) error {
 	if probe == nil {
 		return errors.New("create probe session: backend returned nil session")
 	}
+	if err := validateSessionIdentity(probe, probeKey); err != nil {
+		return fmt.Errorf("create probe session: %w", err)
+	}
 	probe, err = e.services.Session.GetSession(ctx, probeKey)
 	if err != nil {
 		return fmt.Errorf("get probe session: %w", err)
@@ -781,6 +807,9 @@ func (e *execution) verifySummaryIsolation(ctx context.Context) error {
 	}
 	if probe == nil {
 		return errors.New("get probe session: backend returned nil session")
+	}
+	if err := validateSessionIdentity(probe, probeKey); err != nil {
+		return fmt.Errorf("get probe session: %w", err)
 	}
 	probe.SummariesMu.RLock()
 	summaryCount := len(probe.Summaries)
@@ -859,6 +888,9 @@ func (e *execution) snapshot(
 	}
 	if sess == nil {
 		return Snapshot{}, errors.New("get session: backend returned nil session")
+	}
+	if err := validateSessionIdentity(sess, e.key); err != nil {
+		return Snapshot{}, fmt.Errorf("get session: %w", err)
 	}
 	var appState session.StateMap
 	if e.required[CapabilityAppState] {

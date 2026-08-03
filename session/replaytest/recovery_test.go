@@ -255,7 +255,7 @@ func TestRecoveryVerifiesCommittedNilTrackPayload(t *testing.T) {
 	backend := committedErrorBackend(func(service *committedErrorSessionService) {
 		service.failAfterAppendTrack = true
 	}, nil)
-	_, err := Replay(context.Background(), Case{
+	snapshot, err := Replay(context.Background(), Case{
 		Name:     "verify-nil-track-payload",
 		Requires: []Capability{CapabilitySession, CapabilityTrack},
 		Steps: []Step{{
@@ -269,6 +269,10 @@ func TestRecoveryVerifiesCommittedNilTrackPayload(t *testing.T) {
 	}, backend)
 	if err != nil {
 		t.Fatalf("Replay() error = %v", err)
+	}
+	events := snapshot.Tracks["tools"]
+	if len(events) != 1 || events[0]["track"] != "tools" || events[0]["payload"] != nil {
+		t.Fatalf("track events = %#v, want one tools event with nil payload", events)
 	}
 }
 
@@ -322,6 +326,26 @@ func TestRecoveryRejectsWrongMemoryOwnership(t *testing.T) {
 	}, backend)
 	if !errors.Is(err, ErrUncertainCommit) {
 		t.Fatalf("Replay() error = %v, want ErrUncertainCommit", err)
+	}
+}
+
+func TestRecoveryRejectsWrongSessionIdentity(t *testing.T) {
+	backend := committedErrorBackend(func(service *committedErrorSessionService) {
+		service.failAfterUpdateSessionState = true
+		service.returnWrongSessionIdentity = true
+	}, nil)
+	step := stateStep("state", StateScopeSession, session.StateMap{"phase": []byte(`1`)}, nil)
+	step.Recovery = RecoveryVerify
+	_, err := Replay(context.Background(), Case{
+		Name:     "wrong-session-identity",
+		Requires: []Capability{CapabilitySession, CapabilitySessionState},
+		Steps:    []Step{step},
+	}, backend)
+	if !errors.Is(err, ErrUncertainCommit) {
+		t.Fatalf("Replay() error = %v, want ErrUncertainCommit", err)
+	}
+	if !strings.Contains(err.Error(), "backend returned session") {
+		t.Fatalf("Replay() error = %v, want session identity rejection", err)
 	}
 }
 
@@ -509,6 +533,7 @@ type committedErrorSessionService struct {
 	failAfterAppendTrack         bool
 	failGetSessionCall           int
 	getSessionCalls              int
+	returnWrongSessionIdentity   bool
 }
 
 func (s *committedErrorSessionService) GetSession(
@@ -520,7 +545,11 @@ func (s *committedErrorSessionService) GetSession(
 	if s.getSessionCalls == s.failGetSessionCall {
 		return nil, errors.New("injected recovery read failure")
 	}
-	return s.Service.GetSession(ctx, key, options...)
+	sess, err := s.Service.GetSession(ctx, key, options...)
+	if err != nil || sess == nil || !s.returnWrongSessionIdentity {
+		return sess, err
+	}
+	return wrongSessionIdentity(sess), nil
 }
 
 func (s *committedErrorSessionService) AppendEvent(

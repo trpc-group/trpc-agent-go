@@ -32,6 +32,23 @@ type recoveryWitness struct {
 	trackCount         int
 }
 
+func (e *execution) loadRecoverySession(ctx context.Context) (*session.Session, error) {
+	sess, err := e.services.Session.GetSession(ctx, e.key)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if sess == nil {
+		return nil, errors.New("backend returned nil session")
+	}
+	if err := validateSessionIdentity(sess, e.key); err != nil {
+		return nil, err
+	}
+	return sess, nil
+}
+
 func (e *execution) captureRecoveryWitness(
 	ctx context.Context,
 	step Step,
@@ -39,14 +56,8 @@ func (e *execution) captureRecoveryWitness(
 	var witness recoveryWitness
 	switch step.Kind {
 	case StepAppendEvent, StepCreateSummary, StepAppendTrack:
-		sess, err := e.services.Session.GetSession(ctx, e.key)
+		sess, err := e.loadRecoverySession(ctx)
 		if err != nil {
-			return witness, err
-		}
-		if sess == nil {
-			return witness, errors.New("backend returned nil session")
-		}
-		if err := validateRecoverySession(sess, e.key); err != nil {
 			return witness, err
 		}
 		switch step.Kind {
@@ -95,14 +106,8 @@ func (e *execution) verifyRecoveredCommit(
 ) (bool, error) {
 	switch step.Kind {
 	case StepAppendEvent:
-		sess, err := e.services.Session.GetSession(ctx, e.key)
+		sess, err := e.loadRecoverySession(ctx)
 		if err != nil {
-			return false, err
-		}
-		if sess == nil {
-			return false, errors.New("backend returned nil session")
-		}
-		if err := validateRecoverySession(sess, e.key); err != nil {
 			return false, err
 		}
 		e.session = sess
@@ -119,28 +124,16 @@ func (e *execution) verifyRecoveredCommit(
 	case StepAddMemory:
 		return e.memoryWriteMatches(ctx, step.Memory)
 	case StepCreateSummary:
-		sess, err := e.services.Session.GetSession(ctx, e.key)
+		sess, err := e.loadRecoverySession(ctx)
 		if err != nil {
-			return false, err
-		}
-		if sess == nil {
-			return false, errors.New("backend returned nil session")
-		}
-		if err := validateRecoverySession(sess, e.key); err != nil {
 			return false, err
 		}
 		e.session = sess
 		present, fingerprint := summaryFingerprint(sess, step.Summary.FilterKey)
 		return present && (!witness.summaryPresent || fingerprint != witness.summaryFingerprint), nil
 	case StepAppendTrack:
-		sess, err := e.services.Session.GetSession(ctx, e.key)
+		sess, err := e.loadRecoverySession(ctx)
 		if err != nil {
-			return false, err
-		}
-		if sess == nil {
-			return false, errors.New("backend returned nil session")
-		}
-		if err := validateRecoverySession(sess, e.key); err != nil {
 			return false, err
 		}
 		e.session = sess
@@ -195,21 +188,6 @@ func recoveryEventFingerprint(
 		return "", err
 	}
 	return string(raw), nil
-}
-
-func validateRecoverySession(sess *session.Session, key session.Key) error {
-	if sess.AppName != key.AppName || sess.UserID != key.UserID || sess.ID != key.SessionID {
-		return fmt.Errorf(
-			"backend returned session %q/%q/%q for %q/%q/%q",
-			sess.AppName,
-			sess.UserID,
-			sess.ID,
-			key.AppName,
-			key.UserID,
-			key.SessionID,
-		)
-	}
-	return nil
 }
 
 func summaryFingerprint(sess *session.Session, filterKey string) (bool, string) {
@@ -286,13 +264,10 @@ func (e *execution) stateWriteMatches(
 		})
 	case StateScopeSession:
 		var sess *session.Session
-		sess, err = e.services.Session.GetSession(ctx, e.key)
-		if err == nil && sess == nil {
-			return false, errors.New("backend returned nil session")
-		}
-		if sess != nil {
+		sess, err = e.loadRecoverySession(ctx)
+		if err == nil {
 			e.session = sess
-			state = sess.State
+			state = sess.SnapshotState()
 		}
 	default:
 		return false, fmt.Errorf("unknown state scope %q", input.Scope)

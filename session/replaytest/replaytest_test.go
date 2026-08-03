@@ -457,12 +457,14 @@ func TestCaseValidationRejectsNonPortableConcurrency(t *testing.T) {
 func TestCaseValidationRejectsConcurrentWriteConflicts(t *testing.T) {
 	base := messageStep("user", "user", 1, "user", model.RoleUser, "start", "")
 	tests := []struct {
-		name string
-		step Step
-		want string
+		name     string
+		requires []Capability
+		step     Step
+		want     string
 	}{
 		{
-			name: "state",
+			name:     "state",
+			requires: []Capability{CapabilitySessionState, CapabilityConcurrentState},
 			step: Step{
 				Name: "parallel",
 				Kind: StepConcurrent,
@@ -474,7 +476,8 @@ func TestCaseValidationRejectsConcurrentWriteConflicts(t *testing.T) {
 			want: "state conflict",
 		},
 		{
-			name: "memory",
+			name:     "memory",
+			requires: []Capability{CapabilityMemory, CapabilityConcurrentMemory},
 			step: Step{
 				Name: "parallel",
 				Kind: StepConcurrent,
@@ -486,7 +489,8 @@ func TestCaseValidationRejectsConcurrentWriteConflicts(t *testing.T) {
 			want: "memory conflict",
 		},
 		{
-			name: "summary",
+			name:     "summary",
+			requires: []Capability{CapabilitySummary, CapabilityConcurrentSummary},
 			step: Step{
 				Name: "parallel",
 				Kind: StepConcurrent,
@@ -498,7 +502,8 @@ func TestCaseValidationRejectsConcurrentWriteConflicts(t *testing.T) {
 			want: "summary conflict",
 		},
 		{
-			name: "track",
+			name:     "track",
+			requires: []Capability{CapabilityTrack, CapabilityConcurrentTrack},
 			step: Step{
 				Name: "parallel",
 				Kind: StepConcurrent,
@@ -512,10 +517,12 @@ func TestCaseValidationRejectsConcurrentWriteConflicts(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			requires := []Capability{CapabilitySession, CapabilityConcurrent}
+			requires = append(requires, test.requires...)
 			replayCase := Case{
 				Name:       "conflict-" + test.name,
 				EventOrder: EventOrderCausal,
-				Requires:   []Capability{CapabilitySession, CapabilityConcurrent},
+				Requires:   requires,
 				Steps:      []Step{base, test.step},
 			}
 			if err := validateCase(replayCase); err == nil || !strings.Contains(err.Error(), test.want) {
@@ -2260,7 +2267,7 @@ func (s *summaryLeakService) GetSession(
 	options ...session.Option,
 ) (*session.Session, error) {
 	sess, err := s.Service.GetSession(ctx, key, options...)
-	if err != nil || sess == nil || !strings.HasSuffix(key.SessionID, "-summary-isolation") {
+	if err != nil || sess == nil || !strings.HasSuffix(key.SessionID, summaryIsolationSessionSuffix) {
 		return sess, err
 	}
 	sess = sess.Clone()

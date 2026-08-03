@@ -359,6 +359,48 @@ func TestSessionReloadCasePreservesContinuity(t *testing.T) {
 	}
 }
 
+func TestReplayRejectsWrongSessionIdentity(t *testing.T) {
+	tests := []replayOperationTest{
+		{
+			name:       "create main session",
+			replayCase: singleTurnCase,
+			sessionFaults: func(faults *replaySessionFaults) {
+				faults.wrongCreateMainIdentity = true
+			},
+		},
+		{
+			name:       "get main session",
+			replayCase: reloadContractCase,
+			sessionFaults: func(faults *replaySessionFaults) {
+				faults.wrongGetMainIdentity = true
+			},
+		},
+		{
+			name:       "create summary isolation probe",
+			replayCase: summaryFilterKeyCase,
+			sessionFaults: func(faults *replaySessionFaults) {
+				faults.wrongCreateProbeIdentity = true
+			},
+		},
+		{
+			name:       "get summary isolation probe",
+			replayCase: summaryFilterKeyCase,
+			sessionFaults: func(faults *replaySessionFaults) {
+				faults.wrongGetProbeIdentity = true
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			backend, _, _ := backendWithReplayFaults(InMemoryBackend(), nil, nil, test)
+			_, err := Replay(context.Background(), test.replayCase(), backend)
+			if err == nil || !strings.Contains(err.Error(), "backend returned session") {
+				t.Fatalf("Replay() error = %v, want session identity rejection", err)
+			}
+		})
+	}
+}
+
 type replayOperationTest struct {
 	name          string
 	replayCase    func() Case
@@ -430,32 +472,36 @@ type replaySessionFaults struct {
 	targetAppendCalls  atomic.Int64
 	observedEventCalls atomic.Int64
 
-	failGetMain            bool
-	failGetProbe           bool
-	failUpdateAppState     bool
-	failDeleteAppState     bool
-	failUpdateUserState    bool
-	failDeleteUserState    bool
-	failUpdateSessionState bool
-	failListAppState       bool
-	failListUserState      bool
-	failCreateSummary      bool
-	failCreateProbe        bool
-	failDeleteSession      bool
-	failAppendTrack        bool
-	failEvent              func(*event.Event) bool
-	cancelCreateMain       bool
-	cancelGetMain          bool
-	cancelGetProbe         bool
-	cancelListAppState     bool
-	cancelListUserState    bool
-	cancelCreateSummary    bool
-	cancelCreateProbe      bool
-	cancelDeleteSession    bool
-	cancelAppendTrack      bool
-	cancelEvent            func(*event.Event) bool
-	observeEvent           func(*event.Event) bool
-	poisonGetMain          bool
+	failGetMain              bool
+	failGetProbe             bool
+	failUpdateAppState       bool
+	failDeleteAppState       bool
+	failUpdateUserState      bool
+	failDeleteUserState      bool
+	failUpdateSessionState   bool
+	failListAppState         bool
+	failListUserState        bool
+	failCreateSummary        bool
+	failCreateProbe          bool
+	failDeleteSession        bool
+	failAppendTrack          bool
+	failEvent                func(*event.Event) bool
+	cancelCreateMain         bool
+	cancelGetMain            bool
+	cancelGetProbe           bool
+	cancelListAppState       bool
+	cancelListUserState      bool
+	cancelCreateSummary      bool
+	cancelCreateProbe        bool
+	cancelDeleteSession      bool
+	cancelAppendTrack        bool
+	cancelEvent              func(*event.Event) bool
+	observeEvent             func(*event.Event) bool
+	poisonGetMain            bool
+	wrongCreateMainIdentity  bool
+	wrongCreateProbeIdentity bool
+	wrongGetMainIdentity     bool
+	wrongGetProbeIdentity    bool
 }
 
 func (s *replaySessionFaults) CreateSession(
@@ -469,6 +515,10 @@ func (s *replaySessionFaults) CreateSession(
 		return nil, s.failure
 	}
 	sess, err := s.Service.CreateSession(ctx, key, state, options...)
+	if err == nil && sess != nil && ((!probe && s.wrongCreateMainIdentity) ||
+		(probe && s.wrongCreateProbeIdentity)) {
+		sess = wrongSessionIdentity(sess)
+	}
 	if err == nil && !probe && s.cancelCreateMain {
 		s.cancel()
 	}
@@ -498,6 +548,10 @@ func (s *replaySessionFaults) GetSession(
 	sess, err := s.Service.GetSession(ctx, key, options...)
 	if err != nil {
 		return sess, err
+	}
+	if sess != nil && ((!probe && s.wrongGetMainIdentity) ||
+		(probe && s.wrongGetProbeIdentity)) {
+		sess = wrongSessionIdentity(sess)
 	}
 	if probe && s.cancelGetProbe {
 		s.cancel()
@@ -677,7 +731,13 @@ func (s *replaySessionFaults) AppendTrackEvent(
 }
 
 func (s *replaySessionFaults) isSummaryIsolationProbe(key session.Key) bool {
-	return key.SessionID == s.mainSessionID+"-summary-isolation"
+	return key.SessionID == s.mainSessionID+summaryIsolationSessionSuffix
+}
+
+func wrongSessionIdentity(sess *session.Session) *session.Session {
+	output := sess.Clone()
+	output.UserID += "-wrong"
+	return output
 }
 
 func logicalEventMatcher(want string) func(*event.Event) bool {
