@@ -239,3 +239,41 @@ func TestParsePropagatesMalformedQuotedFileHeader(t *testing.T) {
 		t.Fatalf("Parse() error = %q, want wrapped path decoding error", err)
 	}
 }
+
+func TestParseRejectsOverflowingHunkCoordinates(t *testing.T) {
+	const overflow = "999999999999999999999999999999999"
+	tests := []struct {
+		name   string
+		header string
+		want   string
+	}{
+		{name: "old start", header: "-" + overflow + ",1 +1,1", want: "invalid old start"},
+		{name: "old line count", header: "-1," + overflow + " +1,1", want: "invalid old line count"},
+		{name: "new start", header: "-1,1 +" + overflow + ",1", want: "invalid new start"},
+		{name: "new line count", header: "-1,1 +1," + overflow, want: "invalid new line count"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			raw := "--- pkg/config.go\n+++ pkg/config.go\n@@ " + test.header + " @@\n+token=supersecretvalue\n"
+			_, err := Parse(raw)
+			if err == nil {
+				t.Fatal("Parse() error = nil, want overflowing hunk coordinate error")
+			}
+			if !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Parse() error = %q, want %s overflow", err, test.name)
+			}
+		})
+	}
+}
+
+func TestParseRejectsIncompleteHunkAtFileBoundary(t *testing.T) {
+	raw := "diff --git a/pkg/a.go b/pkg/a.go\n--- a/pkg/a.go\n+++ b/pkg/a.go\n@@ -1,2 +1,2 @@\n+package pkg\n" +
+		"diff --git a/pkg/b.go b/pkg/b.go\n--- a/pkg/b.go\n+++ b/pkg/b.go\n@@ -1 +1 @@\n-package old\n+package new\n"
+	_, err := Parse(raw)
+	if err == nil {
+		t.Fatal("Parse() error = nil, want incomplete hunk error")
+	}
+	if !strings.Contains(err.Error(), "hunk ended before declared ranges") {
+		t.Fatalf("Parse() error = %q, want incomplete hunk message", err)
+	}
+}

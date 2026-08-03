@@ -88,6 +88,7 @@ type Options struct {
 	RepoPath                    string
 	AllowTrustedLocal           bool
 	AllowTrustedHostPreparation bool
+	AllowTrustedRemote          bool
 	SandboxTimeout              time.Duration
 	Now                         time.Time
 	FinishedAt                  time.Time
@@ -532,6 +533,9 @@ func Run(ctx context.Context, opts Options) (result Result, err error) {
 	if err := validateRuntimePolicy(opts.Runtime, opts.AllowTrustedLocal); err != nil {
 		return Result{}, failTask(err)
 	}
+	if err := validateRemoteRuntimePolicy(opts.Runtime, opts.AllowTrustedRemote); err != nil {
+		return Result{}, failTask(err)
+	}
 
 	planner := opts.Planner
 	if planner == nil {
@@ -556,7 +560,7 @@ func Run(ctx context.Context, opts Options) (result Result, err error) {
 	var decisions []review.PermissionDecisionRecord
 	var runs []review.SandboxRun
 	if sandboxValidationAvailable(input) {
-		decisions, runs, err = executePlannedCommandsWithSnapshotPaths(ctx, st, task.ID, opts.Runtime, opts.AllowTrustedLocal, opts.AllowTrustedHostPreparation, plan.Commands, now, opts.SandboxTimeout, input.WorkDir, snapshotUntrackedPaths(input, files))
+		decisions, runs, err = executePlannedCommandsWithSnapshotPaths(ctx, st, task.ID, opts.Runtime, opts.AllowTrustedLocal, opts.AllowTrustedHostPreparation, opts.AllowTrustedRemote, plan.Commands, now, opts.SandboxTimeout, input.WorkDir, snapshotUntrackedPaths(input, files))
 		if err != nil {
 			return Result{}, failTask(err)
 		}
@@ -593,22 +597,19 @@ func Run(ctx context.Context, opts Options) (result Result, err error) {
 		return Result{}, failTask(err)
 	}
 	r.Artifacts = artifacts
-	if err := st.SaveArtifacts(ctx, artifacts); err != nil {
-		return Result{}, failTask(err)
-	}
 	jsonPath, mdPath := artifactPaths(artifacts)
 	metricsJSON, _ := json.Marshal(metrics)
-	if err := st.SaveReport(ctx, store.ReportRecord{
+	// Persist report metadata and the terminal task state together; if this
+	// mutation fails, remove the already-written files before recording failure.
+	if err := st.FinalizeTask(ctx, task.ID, task.Status, finishedAt, artifacts, store.ReportRecord{
 		TaskID:       task.ID,
 		JSONPath:     jsonPath,
 		MarkdownPath: mdPath,
 		Conclusion:   conclusion,
 		MetricsJSON:  string(metricsJSON),
 	}); err != nil {
-		return Result{}, failTask(err)
-	}
-	if err := st.FinishTask(ctx, task.ID, task.Status, "", finishedAt); err != nil {
-		return Result{}, failTask(err)
+		cleanupErr := removeReportArtifacts(artifacts)
+		return Result{}, failTask(errors.Join(err, cleanupErr))
 	}
 	return Result{
 		TaskID:       task.ID,
@@ -733,12 +734,12 @@ func recordSandboxRuns(ctx context.Context, st store.Store, runs []review.Sandbo
 type runtimeFactory func(context.Context, string, string, string, time.Duration, string, bool, bool) (sandboxrun.Runtime, func(), *review.SandboxRun)
 
 func executePlannedCommands(ctx context.Context, st store.Store, taskID string, runtimeName string, allowTrustedLocal bool, allowTrustedHostPreparation bool, commands []string, now time.Time, timeout time.Duration, workDir string) ([]review.PermissionDecisionRecord, []review.SandboxRun, error) {
-	return executePlannedCommandsWithSnapshotPaths(ctx, st, taskID, runtimeName, allowTrustedLocal, allowTrustedHostPreparation, commands, now, timeout, workDir, nil)
+	return executePlannedCommandsWithSnapshotPaths(ctx, st, taskID, runtimeName, allowTrustedLocal, allowTrustedHostPreparation, false, commands, now, timeout, workDir, nil)
 }
 
-func executePlannedCommandsWithSnapshotPaths(ctx context.Context, st store.Store, taskID string, runtimeName string, allowTrustedLocal bool, allowTrustedHostPreparation bool, commands []string, now time.Time, timeout time.Duration, workDir string, snapshotPaths []string) ([]review.PermissionDecisionRecord, []review.SandboxRun, error) {
+func executePlannedCommandsWithSnapshotPaths(ctx context.Context, st store.Store, taskID string, runtimeName string, allowTrustedLocal bool, allowTrustedHostPreparation bool, allowTrustedRemote bool, commands []string, now time.Time, timeout time.Duration, workDir string, snapshotPaths []string) ([]review.PermissionDecisionRecord, []review.SandboxRun, error) {
 	factory := func(factoryCtx context.Context, name string, factoryTaskID string, suffix string, factoryTimeout time.Duration, factoryWorkDir string, trustedLocal bool, trustedHostPreparation bool) (sandboxrun.Runtime, func(), *review.SandboxRun) {
-		return runtimeForNameWithSnapshotPaths(factoryCtx, name, factoryTaskID, suffix, factoryTimeout, factoryWorkDir, trustedLocal, trustedHostPreparation, snapshotPaths)
+		return runtimeForNameWithSnapshotPaths(factoryCtx, name, factoryTaskID, suffix, factoryTimeout, factoryWorkDir, trustedLocal, trustedHostPreparation, allowTrustedRemote, snapshotPaths)
 	}
 	return executePlannedCommandsWithFactory(ctx, st, taskID, runtimeName, allowTrustedLocal, allowTrustedHostPreparation, commands, now, timeout, workDir, factory)
 }
@@ -867,11 +868,11 @@ func countFindingRedactions(findings []review.Finding) int {
 	return count
 }
 
-func runtimeForName(ctx context.Context, name string, taskID string, suffix string, timeout time.Duration, workDir string, allowTrustedLocal bool, allowTrustedHostPreparation bool) (sandboxrun.Runtime, func(), *review.SandboxRun) {
-	return runtimeForNameWithSnapshotPaths(ctx, name, taskID, suffix, timeout, workDir, allowTrustedLocal, allowTrustedHostPreparation, nil)
+func runtimeForName(ctx context.Context, name string, taskID string, suffix string, timeout time.Duration, workDir string, allowTrustedLocal bool, allowTrustedHostPreparation bool, allowTrustedRemote bool) (sandboxrun.Runtime, func(), *review.SandboxRun) {
+	return runtimeForNameWithSnapshotPaths(ctx, name, taskID, suffix, timeout, workDir, allowTrustedLocal, allowTrustedHostPreparation, allowTrustedRemote, nil)
 }
 
-func runtimeForNameWithSnapshotPaths(ctx context.Context, name string, taskID string, suffix string, timeout time.Duration, workDir string, allowTrustedLocal bool, allowTrustedHostPreparation bool, snapshotPaths []string) (sandboxrun.Runtime, func(), *review.SandboxRun) {
+func runtimeForNameWithSnapshotPaths(ctx context.Context, name string, taskID string, suffix string, timeout time.Duration, workDir string, allowTrustedLocal bool, allowTrustedHostPreparation bool, allowTrustedRemote bool, snapshotPaths []string) (sandboxrun.Runtime, func(), *review.SandboxRun) {
 	normalized := strings.ToLower(strings.TrimSpace(name))
 	if normalized == "" {
 		normalized = "container"
@@ -879,7 +880,7 @@ func runtimeForNameWithSnapshotPaths(ctx context.Context, name string, taskID st
 	if normalized == "fake" {
 		return sandboxrun.FakeRuntime{RuntimeName: normalized}, nil, nil
 	}
-	rt, cleanup, err := newWorkspaceRuntimeWithSnapshotPaths(ctx, normalized, taskID, timeout, workDir, allowTrustedLocal, allowTrustedHostPreparation, snapshotPaths)
+	rt, cleanup, err := newWorkspaceRuntimeWithSnapshotPaths(ctx, normalized, taskID, timeout, workDir, allowTrustedLocal, allowTrustedHostPreparation, allowTrustedRemote, snapshotPaths)
 	if err != nil {
 		run := review.SandboxRun{
 			ID:             taskID + "-sandbox-init-" + suffix,
@@ -895,14 +896,17 @@ func runtimeForNameWithSnapshotPaths(ctx context.Context, name string, taskID st
 	return rt, cleanup, nil
 }
 
-func newWorkspaceRuntime(ctx context.Context, runtimeName string, taskID string, timeout time.Duration, workDir string, allowTrustedLocal bool, allowTrustedHostPreparation bool) (sandboxrun.Runtime, func(), error) {
-	return newWorkspaceRuntimeWithSnapshotPaths(ctx, runtimeName, taskID, timeout, workDir, allowTrustedLocal, allowTrustedHostPreparation, nil)
+func newWorkspaceRuntime(ctx context.Context, runtimeName string, taskID string, timeout time.Duration, workDir string, allowTrustedLocal bool, allowTrustedHostPreparation bool, allowTrustedRemote bool) (sandboxrun.Runtime, func(), error) {
+	return newWorkspaceRuntimeWithSnapshotPaths(ctx, runtimeName, taskID, timeout, workDir, allowTrustedLocal, allowTrustedHostPreparation, allowTrustedRemote, nil)
 }
 
-func newWorkspaceRuntimeWithSnapshotPaths(ctx context.Context, runtimeName string, taskID string, timeout time.Duration, workDir string, allowTrustedLocal bool, allowTrustedHostPreparation bool, snapshotPaths []string) (sandboxrun.Runtime, func(), error) {
+func newWorkspaceRuntimeWithSnapshotPaths(ctx context.Context, runtimeName string, taskID string, timeout time.Duration, workDir string, allowTrustedLocal bool, allowTrustedHostPreparation bool, allowTrustedRemote bool, snapshotPaths []string) (sandboxrun.Runtime, func(), error) {
 	workspace := newSandboxWorkspace(workDir)
 	repoRoot, err := workspace.root()
 	if err != nil {
+		return nil, nil, err
+	}
+	if err := validateRemoteRuntimePolicy(runtimeName, allowTrustedRemote); err != nil {
 		return nil, nil, err
 	}
 	var eng codeexecutor.Engine
@@ -1564,6 +1568,14 @@ func validateRuntimePolicy(runtimeName string, allowTrustedLocal bool) error {
 	return fmt.Errorf("runtime %q is disabled for untrusted review input; rerun only for explicitly trusted input with AllowTrustedLocal or --allow-trusted-local", normalized)
 }
 
+func validateRemoteRuntimePolicy(runtimeName string, allowTrustedRemote bool) error {
+	normalized := strings.ToLower(strings.TrimSpace(runtimeName))
+	if normalized != "e2b" || allowTrustedRemote {
+		return nil
+	}
+	return fmt.Errorf("runtime %q is disabled because this E2B path has no enforced egress boundary; rerun only for explicitly trusted/networked review input with AllowTrustedRemote or --allow-trusted-remote", normalized)
+}
+
 func failedTaskContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.WithoutCancel(ctx), failedTaskFinishTimeout)
 }
@@ -1718,4 +1730,14 @@ func artifactPaths(artifacts []review.ArtifactRecord) (string, string) {
 		}
 	}
 	return jsonPath, mdPath
+}
+
+func removeReportArtifacts(artifacts []review.ArtifactRecord) error {
+	var cleanupErrs []error
+	for _, artifact := range artifacts {
+		if err := os.Remove(artifact.Path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("remove report artifact %s: %w", filepath.Base(artifact.Path), err))
+		}
+	}
+	return errors.Join(cleanupErrs...)
 }

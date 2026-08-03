@@ -319,12 +319,21 @@ func sortedIntKeys(m map[string]int) []string {
 }
 
 // Write writes JSON and Markdown reports and returns artifact records.
-func Write(outDir string, r review.Report, now time.Time) ([]review.ArtifactRecord, error) {
+func Write(outDir string, r review.Report, now time.Time) (records []review.ArtifactRecord, err error) {
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create output directory: %w", err)
 	}
+	var writtenPaths []string
+	defer func() {
+		if err == nil {
+			return
+		}
+		for _, path := range writtenPaths {
+			_ = os.Remove(path)
+		}
+	}()
 	stem := "review_report_" + safeTaskID(r.Task.ID)
-	records := []review.ArtifactRecord{
+	records = []review.ArtifactRecord{
 		{
 			ID:        "json_report-" + r.Task.ID,
 			TaskID:    r.Task.ID,
@@ -365,15 +374,41 @@ func Write(outDir string, r review.Report, now time.Time) ([]review.ArtifactReco
 	}
 	for _, artifact := range artifacts {
 		record := &records[artifact.index]
-		if err := os.WriteFile(record.Path, artifact.data, 0o600); err != nil {
-			return nil, fmt.Errorf("write %s: %w", filepath.Base(record.Path), err)
+		if err := writeArtifactAtomically(record.Path, artifact.data); err != nil {
+			return records, fmt.Errorf("write %s: %w", filepath.Base(record.Path), err)
 		}
+		writtenPaths = append(writtenPaths, record.Path)
 		if record.SHA256 == "" {
 			sum := sha256.Sum256(artifact.data)
 			record.SHA256 = hex.EncodeToString(sum[:])
 		}
 	}
 	return records, nil
+}
+
+func writeArtifactAtomically(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".review-report-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 func cloneArtifactRecords(records []review.ArtifactRecord) []review.ArtifactRecord {

@@ -205,3 +205,21 @@ func TestWriteReportsSanitizesTaskIDForPath(t *testing.T) {
 		}
 	}
 }
+
+func TestWriteCleansEarlierArtifactWhenLaterWriteFails(t *testing.T) {
+	dir := t.TempDir()
+	markdownPath := filepath.Join(dir, "review_report_task-1.md")
+	if err := os.Mkdir(markdownPath, 0o700); err != nil {
+		t.Fatalf("Mkdir(markdown path) error = %v", err)
+	}
+	_, err := Write(dir, review.Report{Task: review.ReviewTask{ID: "task-1"}}, time.Unix(1, 0))
+	if err == nil {
+		t.Fatal("Write() error = nil, want markdown write failure")
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "review_report_task-1.json")); !os.IsNotExist(statErr) {
+		t.Fatalf("partial JSON artifact still exists, stat err = %v", statErr)
+	}
+	if info, statErr := os.Stat(markdownPath); statErr != nil || !info.IsDir() {
+		t.Fatalf("pre-existing markdown directory was removed or changed: info=%v err=%v", info, statErr)
+	}
+}

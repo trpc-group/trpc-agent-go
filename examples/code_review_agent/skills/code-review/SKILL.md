@@ -63,9 +63,12 @@ logic inside the Skill folder.
 
 ## Sandbox Policy
 
-Production-oriented runtimes are `container` and `e2b`. `local` is an explicit
-development fallback only. Tests should use `fake` so they do not depend on
-Docker, E2B, API keys, network availability, or host-specific tools.
+The default production-oriented runtime is `container`. `e2b` is disabled unless
+the caller explicitly accepts its networked remote boundary with
+`--allow-trusted-remote`, because this example cannot enforce E2B egress policy.
+`local` is an explicit development fallback only. Tests should use `fake` so they
+do not depend on Docker, E2B, API keys, network availability, or host-specific
+tools.
 
 Non-fake runs require model orchestration configuration through `MODEL` or
 `--model` plus `OPENAI_API_KEY`; `OPENAI_BASE_URL` may point at an

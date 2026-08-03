@@ -146,6 +146,56 @@ func TestDurableStorePersistsReviewRecords(t *testing.T) {
 	}
 }
 
+func TestDurableStoreFinalizeTaskPersistsTerminalRecordsTogether(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "review_agent.db")
+	s, err := NewSQLite(ctx, path)
+	if err != nil {
+		t.Fatalf("NewSQLite() error = %v", err)
+	}
+	task := review.ReviewTask{ID: "task-finalize", Status: review.TaskStatusRunning, StartedAt: time.Unix(1, 0)}
+	if err := s.CreateTask(ctx, task); err != nil {
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+	finishedAt := time.Unix(2, 0).UTC()
+	artifacts := []review.ArtifactRecord{{
+		ID:        "artifact-finalize",
+		TaskID:    task.ID,
+		Kind:      "json_report",
+		Path:      "report.json",
+		MimeType:  "application/json",
+		SHA256:    "hash",
+		CreatedAt: finishedAt,
+	}}
+	if err := s.FinalizeTask(ctx, task.ID, review.TaskStatusPassed, finishedAt, artifacts, ReportRecord{
+		TaskID:       task.ID,
+		JSONPath:     "report.json",
+		MarkdownPath: "report.md",
+		Conclusion:   "passed",
+		MetricsJSON:  "{}",
+	}); err != nil {
+		t.Fatalf("FinalizeTask() error = %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	reopened, err := NewSQLite(ctx, path)
+	if err != nil {
+		t.Fatalf("reopen NewSQLite() error = %v", err)
+	}
+	defer reopened.Close()
+	loaded, err := reopened.LoadTaskReport(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("LoadTaskReport() error = %v", err)
+	}
+	if loaded.Task.Status != review.TaskStatusPassed || loaded.Task.FinishedAt == nil || !loaded.Task.FinishedAt.Equal(finishedAt) {
+		t.Fatalf("loaded task = %#v, want passed task at %v", loaded.Task, finishedAt)
+	}
+	if len(loaded.Artifacts) != 1 || loaded.Report.JSONPath != "report.json" || loaded.Report.MarkdownPath != "report.md" {
+		t.Fatalf("loaded final records = %#v/%#v, want one artifact and report paths", loaded.Artifacts, loaded.Report)
+	}
+}
+
 func TestDurableStoreSaveFindingsComputesMissingFingerprints(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "review_agent.db")

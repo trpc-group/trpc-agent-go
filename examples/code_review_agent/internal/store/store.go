@@ -54,5 +54,6 @@ type Store interface {
 	SaveFindings(ctx context.Context, taskID string, findings []review.Finding) error
 	SaveArtifacts(ctx context.Context, artifacts []review.ArtifactRecord) error
 	SaveReport(ctx context.Context, report ReportRecord) error
+	FinalizeTask(ctx context.Context, taskID string, status string, finishedAt time.Time, artifacts []review.ArtifactRecord, report ReportRecord) error
 	LoadTaskReport(ctx context.Context, taskID string) (TaskReport, error)
 }

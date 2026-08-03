@@ -433,6 +433,45 @@ func TestValidateRuntimePolicyRejectsUntrustedLocalRuntime(t *testing.T) {
 	}
 }
 
+func TestValidateRemoteRuntimePolicyRejectsUntrustedE2B(t *testing.T) {
+	if err := validateRemoteRuntimePolicy("e2b", false); err == nil {
+		t.Fatal("validateRemoteRuntimePolicy(e2b, false) error = nil, want rejection")
+	} else if !strings.Contains(err.Error(), "--allow-trusted-remote") {
+		t.Fatalf("validateRemoteRuntimePolicy() error = %q, want trusted remote guidance", err)
+	}
+	if err := validateRemoteRuntimePolicy("E2B", true); err != nil {
+		t.Fatalf("validateRemoteRuntimePolicy(E2B, true) error = %v, want nil", err)
+	}
+	if err := validateRemoteRuntimePolicy("container", false); err != nil {
+		t.Fatalf("validateRemoteRuntimePolicy(container, false) error = %v, want nil", err)
+	}
+}
+
+func TestRunRejectsE2BWithoutTrustedRemoteOptIn(t *testing.T) {
+	outDir := t.TempDir()
+	calledPlanner := false
+	_, err := Run(context.Background(), Options{
+		FixtureDir: filepath.Join("..", "..", "testdata", "fixtures"),
+		OutDir:     outDir,
+		DBPath:     filepath.Join(outDir, "review_agent.db"),
+		Runtime:    "e2b",
+		Now:        fixedTestTime(),
+		Planner: plannerFunc(func(ctx context.Context, req PlanRequest) (review.ReviewPlan, error) {
+			calledPlanner = true
+			return review.ReviewPlan{}, errors.New("planner should not be called")
+		}),
+	})
+	if err == nil {
+		t.Fatal("Run() error = nil, want E2B egress policy rejection")
+	}
+	if !strings.Contains(err.Error(), "--allow-trusted-remote") {
+		t.Fatalf("Run() error = %q, want trusted remote guidance", err)
+	}
+	if calledPlanner {
+		t.Fatal("planner was called before E2B policy rejection")
+	}
+}
+
 func TestRunRejectsLocalRuntimeWithoutTrustedOptIn(t *testing.T) {
 	outDir := t.TempDir()
 	calledPlanner := false

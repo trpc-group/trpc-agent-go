@@ -179,6 +179,40 @@ func (s *DurableStore) SaveReport(ctx context.Context, report ReportRecord) erro
 	})
 }
 
+// FinalizeTask persists the report records and terminal task state in one store
+// mutation so a partial report finalization cannot leave contradictory records.
+func (s *DurableStore) FinalizeTask(ctx context.Context, taskID string, status string, finishedAt time.Time, artifacts []review.ArtifactRecord, report ReportRecord) error {
+	return s.mutate(ctx, func(data *durableData) error {
+		task, ok := data.Tasks[taskID]
+		if !ok {
+			return fmt.Errorf("finalize task: task %q not found", taskID)
+		}
+		for _, artifact := range artifacts {
+			artifact.Kind = redact.Text(artifact.Kind).Text
+			artifact.Path = redact.Text(artifact.Path).Text
+			artifact.MimeType = redact.Text(artifact.MimeType).Text
+			artifact.SHA256 = redact.Text(artifact.SHA256).Text
+			data.Artifacts[taskID] = append(data.Artifacts[taskID], artifact)
+		}
+		report.TaskID = taskID
+		report.JSONPath = redact.Text(report.JSONPath).Text
+		report.MarkdownPath = redact.Text(report.MarkdownPath).Text
+		report.Conclusion = redact.Text(report.Conclusion).Text
+		report.MetricsJSON = redact.Text(report.MetricsJSON).Text
+		data.Reports[taskID] = report
+		task.Status = status
+		if finishedAt.IsZero() {
+			finishedAt = time.Now().UTC()
+		} else {
+			finishedAt = finishedAt.UTC()
+		}
+		task.FinishedAt = &finishedAt
+		task.Error = ""
+		data.Tasks[taskID] = task
+		return nil
+	})
+}
+
 func (s *DurableStore) LoadTaskReport(ctx context.Context, taskID string) (TaskReport, error) {
 	if err := ctx.Err(); err != nil {
 		return TaskReport{}, err

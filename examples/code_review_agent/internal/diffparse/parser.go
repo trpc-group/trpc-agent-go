@@ -33,6 +33,9 @@ func Parse(diff string) ([]review.DiffFile, error) {
 	scanner.Buffer(make([]byte, 1024), 1024*1024)
 	for scanner.Scan() {
 		line := scanner.Text()
+		if currentHunk != nil && hunkHasRemaining(currentHunk, oldLine, newLine) && line != "" && !isDiffHunkLine(line) {
+			return nil, fmt.Errorf("hunk ended before declared ranges were consumed")
+		}
 		if shouldParseHunkLine(currentHunk, oldLine, newLine, line) {
 			diffLine, nextOld, nextNew := parseDiffLine(line, oldLine, newLine)
 			currentHunk.Lines = append(currentHunk.Lines, diffLine)
@@ -100,6 +103,9 @@ func Parse(diff string) ([]review.DiffFile, error) {
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("scan diff: %w", err)
 	}
+	if currentHunk != nil && hunkHasRemaining(currentHunk, oldLine, newLine) {
+		return nil, fmt.Errorf("hunk ended before declared ranges were consumed")
+	}
 	if len(files) == 0 && strings.TrimSpace(diff) != "" {
 		return nil, fmt.Errorf("no diff files found")
 	}
@@ -117,7 +123,17 @@ func shouldParseHunkLine(hunk *review.DiffHunk, oldLine int, newLine int, line s
 }
 
 func hunkHasRemaining(hunk *review.DiffHunk, oldLine int, newLine int) bool {
-	return oldLine < hunk.OldStart+hunk.OldLines || newLine < hunk.NewStart+hunk.NewLines
+	return lineHasRemaining(oldLine, hunk.OldStart, hunk.OldLines) || lineHasRemaining(newLine, hunk.NewStart, hunk.NewLines)
+}
+
+func lineHasRemaining(line int, start int, count int) bool {
+	if count <= 0 {
+		return false
+	}
+	if line < start {
+		return true
+	}
+	return line-start < count
 }
 
 func isDiffHunkLine(line string) bool {
@@ -233,10 +249,28 @@ func parseHunkHeader(line string) (review.DiffHunk, int, int, error) {
 	if matches == nil {
 		return review.DiffHunk{}, 0, 0, fmt.Errorf("invalid hunk header: %s", line)
 	}
-	oldStart, _ := strconv.Atoi(matches[1])
-	oldLines := parseOptionalCount(matches[2])
-	newStart, _ := strconv.Atoi(matches[3])
-	newLines := parseOptionalCount(matches[4])
+	oldStart, err := parseHunkNumber(matches[1], "old start")
+	if err != nil {
+		return review.DiffHunk{}, 0, 0, err
+	}
+	oldLines, err := parseOptionalCount(matches[2], "old line count")
+	if err != nil {
+		return review.DiffHunk{}, 0, 0, err
+	}
+	newStart, err := parseHunkNumber(matches[3], "new start")
+	if err != nil {
+		return review.DiffHunk{}, 0, 0, err
+	}
+	newLines, err := parseOptionalCount(matches[4], "new line count")
+	if err != nil {
+		return review.DiffHunk{}, 0, 0, err
+	}
+	if err := validateHunkRange(oldStart, oldLines, "old"); err != nil {
+		return review.DiffHunk{}, 0, 0, err
+	}
+	if err := validateHunkRange(newStart, newLines, "new"); err != nil {
+		return review.DiffHunk{}, 0, 0, err
+	}
 	return review.DiffHunk{
 		OldStart: oldStart,
 		OldLines: oldLines,
@@ -245,15 +279,27 @@ func parseHunkHeader(line string) (review.DiffHunk, int, int, error) {
 	}, oldStart, newStart, nil
 }
 
-func parseOptionalCount(raw string) int {
-	if raw == "" {
-		return 1
-	}
+func parseHunkNumber(raw string, name string) (int, error) {
 	n, err := strconv.Atoi(raw)
 	if err != nil {
-		return 0
+		return 0, fmt.Errorf("invalid %s %q: %w", name, raw, err)
 	}
-	return n
+	return n, nil
+}
+
+func parseOptionalCount(raw string, name string) (int, error) {
+	if raw == "" {
+		return 1, nil
+	}
+	return parseHunkNumber(raw, name)
+}
+
+func validateHunkRange(start int, count int, name string) error {
+	maxInt := int(^uint(0) >> 1)
+	if count < 0 || start > maxInt-count {
+		return fmt.Errorf("%s hunk range overflows int", name)
+	}
+	return nil
 }
 
 func parseDiffLine(line string, oldLine int, newLine int) (review.DiffLine, int, int) {

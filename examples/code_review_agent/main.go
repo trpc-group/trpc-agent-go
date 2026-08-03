@@ -33,6 +33,7 @@ func main() {
 		runtime                     = flag.String("runtime", "container", "workspace runtime: container, e2b, local, or fake; local requires --allow-trusted-local")
 		allowTrustedLocal           = flag.Bool("allow-trusted-local", false, "allow trusted local host execution for explicitly trusted review input")
 		allowTrustedHostPreparation = flag.Bool("allow-trusted-host-preparation", false, "allow host-side dependency preparation for explicitly trusted review input")
+		allowTrustedRemote          = flag.Bool("allow-trusted-remote", false, "allow E2B execution for explicitly trusted input despite its networked remote boundary")
 		timeout                     = flag.Duration("sandbox-timeout", 30*time.Second, "per-command sandbox timeout")
 	)
 	flag.Parse()
@@ -53,6 +54,7 @@ func main() {
 		Runtime:                     *runtime,
 		AllowTrustedLocal:           *allowTrustedLocal,
 		AllowTrustedHostPreparation: *allowTrustedHostPreparation,
+		AllowTrustedRemote:          *allowTrustedRemote,
 		SandboxTimeout:              *timeout,
 	})
 	if err != nil {
