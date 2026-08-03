@@ -52,38 +52,23 @@ type searchConversationsToolResponse struct {
 }
 
 type readOffloadRefToolRequest struct {
-	ResultRef string `json:"result_ref" description:"Relative result reference produced by TencentDB context offload, for example refs/node_20260612_000001.md."`
+	ResultRef string `json:"result_ref" description:"Result reference produced by TencentDB context offload, for example offload/session/refs/call_1.md."`
+	Query     string `json:"query,omitempty" description:"Optional case-insensitive text to locate within the archived result. Cannot be combined with line ranges."`
+	StartLine int    `json:"start_line,omitempty" description:"Optional one-based first line to read. Cannot be combined with query."`
+	EndLine   int    `json:"end_line,omitempty" description:"Optional one-based last line to read. Cannot be combined with query."`
+	MaxTokens int    `json:"max_tokens,omitempty" description:"Maximum response size in tokens. Defaults to 1600, maximum 4096."`
 }
 
 type readOffloadRefToolResponse struct {
-	ResultRef string `json:"result_ref"`
-	Content   string `json:"content"`
-	Truncated bool   `json:"truncated,omitempty"`
-}
-
-type readOffloadNodeToolRequest struct {
-	NodeID string `json:"node_id" description:"Mermaid node_id produced by TencentDB context offload."`
-}
-
-type readOffloadNodeToolResponse struct {
-	NodeID  string              `json:"node_id"`
-	Entries []offloadIndexEntry `json:"entries"`
-}
-
-type searchOffloadIndexToolRequest struct {
-	Query string `json:"query" description:"Keyword query over TencentDB context offload summaries, tool calls, node IDs, and result_refs."`
-	Limit int    `json:"limit,omitempty" description:"Maximum results. Defaults to 5, maximum 20."`
-}
-
-type searchOffloadIndexToolResponse struct {
-	Query   string              `json:"query"`
-	Entries []offloadIndexEntry `json:"entries"`
-	Total   int                 `json:"total"`
+	ResultRef  string `json:"result_ref"`
+	Content    string `json:"content"`
+	Truncated  bool   `json:"truncated"`
+	MatchFound *bool  `json:"match_found,omitempty"`
 }
 
 func (s *Service) buildTools() []tool.Tool {
-	out := make([]tool.Tool, 0, 5)
-	seen := make(map[string]struct{}, 5)
+	out := make([]tool.Tool, 0, 3)
+	seen := make(map[string]struct{}, 3)
 	add := func(t tool.Tool) {
 		if t == nil || t.Declaration() == nil {
 			return
@@ -107,8 +92,6 @@ func (s *Service) buildTools() []tool.Tool {
 	}
 	if s.opts.ContextOffload.Enabled {
 		add(s.newReadOffloadRefTool(s.nativeToolName("read_offload_ref")))
-		add(s.newReadOffloadNodeTool(s.nativeToolName("read_offload_node")))
-		add(s.newSearchOffloadIndexTool(s.nativeToolName("search_offload_index")))
 	}
 	return out
 }
@@ -199,6 +182,21 @@ func (s *Service) newReadOffloadRefTool(name string) tool.CallableTool {
 		if req == nil || strings.TrimSpace(req.ResultRef) == "" {
 			return nil, fmt.Errorf("%s: result_ref is required", name)
 		}
+		query := strings.TrimSpace(req.Query)
+		if query != "" && (req.StartLine != 0 || req.EndLine != 0) {
+			return nil, fmt.Errorf("%s: query cannot be combined with line ranges", name)
+		}
+		if req.StartLine < 0 || req.EndLine < 0 ||
+			req.MaxTokens < 0 || req.MaxTokens > 4096 {
+			return nil, fmt.Errorf(
+				"%s: start_line, end_line, and max_tokens must be within the supported ranges",
+				name,
+			)
+		}
+		if req.StartLine > 0 && req.EndLine > 0 &&
+			req.StartLine > req.EndLine {
+			return nil, fmt.Errorf("%s: start_line must not exceed end_line", name)
+		}
 		inv, err := currentInvocation(ctx)
 		if err != nil {
 			return nil, err
@@ -207,9 +205,13 @@ func (s *Service) newReadOffloadRefTool(name string) tool.CallableTool {
 		if client == nil {
 			return nil, fmt.Errorf("%s: context offload gateway is unavailable", name)
 		}
-		rsp, err := client.offloadReadRef(ctx, offloadReadRefRequest{
-			Scope:     newOffloadScope(s.opts, inv.Session, inv.AgentName),
+		rsp, err := client.readRef(ctx, offloadReadRefRequest{
+			SessionID: s.sessionKey(inv.Session),
 			ResultRef: strings.TrimSpace(req.ResultRef),
+			Query:     query,
+			StartLine: optionalPositiveInt(req.StartLine),
+			EndLine:   optionalPositiveInt(req.EndLine),
+			MaxTokens: optionalPositiveInt(req.MaxTokens),
 		})
 		if err != nil {
 			return nil, err
@@ -220,9 +222,10 @@ func (s *Service) newReadOffloadRefTool(name string) tool.CallableTool {
 			}, nil
 		}
 		return &readOffloadRefToolResponse{
-			ResultRef: rsp.ResultRef,
-			Content:   rsp.Content,
-			Truncated: rsp.Truncated,
+			ResultRef:  rsp.ResultRef,
+			Content:    rsp.Content,
+			Truncated:  rsp.Truncated,
+			MatchFound: rsp.MatchFound,
 		}, nil
 	}
 	return function.NewFunctionTool(
@@ -233,81 +236,11 @@ func (s *Service) newReadOffloadRefTool(name string) tool.CallableTool {
 	)
 }
 
-func (s *Service) newReadOffloadNodeTool(name string) tool.CallableTool {
-	fn := func(ctx context.Context, req *readOffloadNodeToolRequest) (*readOffloadNodeToolResponse, error) {
-		if req == nil || strings.TrimSpace(req.NodeID) == "" {
-			return nil, fmt.Errorf("%s: node_id is required", name)
-		}
-		inv, err := currentInvocation(ctx)
-		if err != nil {
-			return nil, err
-		}
-		client := s.contextOffloadClient()
-		if client == nil {
-			return nil, fmt.Errorf("%s: context offload gateway is unavailable", name)
-		}
-		nodeID := strings.TrimSpace(req.NodeID)
-		rsp, err := client.offloadReadNode(ctx, offloadReadNodeRequest{
-			Scope:  newOffloadScope(s.opts, inv.Session, inv.AgentName),
-			NodeID: nodeID,
-		})
-		if err != nil {
-			return nil, err
-		}
-		if rsp == nil {
-			return &readOffloadNodeToolResponse{NodeID: nodeID}, nil
-		}
-		return &readOffloadNodeToolResponse{
-			NodeID:  rsp.NodeID,
-			Entries: rsp.Entries,
-		}, nil
+func optionalPositiveInt(value int) *int {
+	if value <= 0 {
+		return nil
 	}
-	return function.NewFunctionTool(
-		fn,
-		function.WithName(name),
-		function.WithDescription("Read TencentDB context offload entries mapped to a Mermaid node_id. "+
-			"Use this to drill down from the active task Mermaid graph."),
-	)
-}
-
-func (s *Service) newSearchOffloadIndexTool(name string) tool.CallableTool {
-	fn := func(ctx context.Context, req *searchOffloadIndexToolRequest) (*searchOffloadIndexToolResponse, error) {
-		if req == nil || strings.TrimSpace(req.Query) == "" {
-			return nil, fmt.Errorf("%s: query is required", name)
-		}
-		inv, err := currentInvocation(ctx)
-		if err != nil {
-			return nil, err
-		}
-		client := s.contextOffloadClient()
-		if client == nil {
-			return nil, fmt.Errorf("%s: context offload gateway is unavailable", name)
-		}
-		query := strings.TrimSpace(req.Query)
-		limit := normalizeLimit(req.Limit)
-		rsp, err := client.offloadSearchIndex(ctx, offloadSearchIndexRequest{
-			Scope: newOffloadScope(s.opts, inv.Session, inv.AgentName),
-			Query: query,
-			Limit: limit,
-		})
-		if err != nil {
-			return nil, err
-		}
-		if rsp == nil {
-			return &searchOffloadIndexToolResponse{Query: query}, nil
-		}
-		return &searchOffloadIndexToolResponse{
-			Query:   rsp.Query,
-			Entries: rsp.Entries,
-			Total:   rsp.Total,
-		}, nil
-	}
-	return function.NewFunctionTool(
-		fn,
-		function.WithName(name),
-		function.WithDescription("Search TencentDB context offload L1 summaries and refs for the current session. "+
-			"Use this when the active Mermaid graph does not show the exact result_ref needed."),
-	)
+	return &value
 }
 
 func currentSession(ctx context.Context) (*session.Session, error) {

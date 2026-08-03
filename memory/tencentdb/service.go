@@ -32,7 +32,7 @@ var _ session.Ingestor = (*Service)(nil)
 type Service struct {
 	opts          Options
 	client        *gatewayClient
-	offloadClient *gatewayClient
+	offloadClient *offloadGatewayClient
 
 	queue  chan ingestJob
 	mu     sync.RWMutex
@@ -56,21 +56,16 @@ func NewService(opts ...Option) (*Service, error) {
 			opt(&options)
 		}
 	}
+	options.ContextOffload = normalizeContextOffloadConfig(
+		options.ContextOffload,
+	)
 	client, err := newGatewayClient(options)
 	if err != nil {
 		return nil, err
 	}
-	offloadClient := client
-	if options.ContextOffload.Enabled &&
-		(options.ContextOffload.GatewayURL != "" || options.ContextOffload.APIKey != "") {
-		offloadOptions := options
-		if options.ContextOffload.GatewayURL != "" {
-			offloadOptions.GatewayURL = options.ContextOffload.GatewayURL
-		}
-		if options.ContextOffload.APIKey != "" {
-			offloadOptions.APIKey = options.ContextOffload.APIKey
-		}
-		offloadClient, err = newGatewayClient(offloadOptions)
+	var offloadClient *offloadGatewayClient
+	if options.ContextOffload.Enabled {
+		offloadClient, err = newOffloadGatewayClient(options)
 		if err != nil {
 			return nil, err
 		}
@@ -89,14 +84,11 @@ func NewService(opts ...Option) (*Service, error) {
 	return s, nil
 }
 
-func (s *Service) contextOffloadClient() *gatewayClient {
+func (s *Service) contextOffloadClient() *offloadGatewayClient {
 	if s == nil {
 		return nil
 	}
-	if s.offloadClient != nil {
-		return s.offloadClient
-	}
-	return s.client
+	return s.offloadClient
 }
 
 // IngestSession captures the latest user/assistant exchange and transcript
