@@ -17,6 +17,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
@@ -140,7 +141,10 @@ func TestCSVReader_ChunkingAndHelpers(t *testing.T) {
 	}
 
 	// Test helper methods.
-	txt := rdr.csvToText("foo,bar")
+	txt, err := rdr.csvToText("foo,bar")
+	if err != nil {
+		t.Fatalf("csvToText unexpected error: %v", err)
+	}
 	if txt != "foo | bar" {
 		t.Errorf("csvToText unexpected output: %s", txt)
 	}
@@ -149,6 +153,51 @@ func TestCSVReader_ChunkingAndHelpers(t *testing.T) {
 	if name != "data" {
 		t.Errorf("extractFileNameFromURL got %s", name)
 	}
+}
+
+func TestCSVReader_ParsesQuotedFieldsAndEmbeddedNewlines(t *testing.T) {
+	rdr := New(reader.WithChunk(false)).(*Reader)
+	csvData := "id,description\n" +
+		"1,\"hello, world\"\n" +
+		"2,\"line one\nline two\"\n"
+
+	docs, err := rdr.ReadFromReader("quoted", strings.NewReader(csvData))
+
+	require.NoError(t, err)
+	require.Len(t, docs, 1)
+	require.Equal(t,
+		"id | description\n"+
+			"1 | hello, world\n"+
+			"2 | line one line two",
+		docs[0].Content,
+	)
+}
+
+func TestCSVReader_PreservesFieldInternalWhitespace(t *testing.T) {
+	rdr := New(reader.WithChunk(false)).(*Reader)
+
+	docs, err := rdr.ReadFromReader(
+		"whitespace",
+		strings.NewReader("company,team\n\" ACME  Corp\tR&D \",agents\n"),
+	)
+
+	require.NoError(t, err)
+	require.Len(t, docs, 1)
+	require.Equal(t,
+		"company | team\nACME  Corp\tR&D | agents",
+		docs[0].Content,
+	)
+}
+
+func TestCSVReader_InvalidCSV(t *testing.T) {
+	rdr := New(reader.WithChunk(false))
+
+	_, err := rdr.ReadFromReader(
+		"invalid",
+		strings.NewReader("id,description\n1,\"unterminated"),
+	)
+
+	require.ErrorContains(t, err, "parse csv")
 }
 
 // mockErrorChunker implements chunking.Strategy returning error.
@@ -279,6 +328,59 @@ func TestCSVReader_ChunkDocumentDefaultStrategy(t *testing.T) {
 	if len(docs) == 0 {
 		t.Error("expected at least one document")
 	}
+}
+
+func TestCSVReader_DefaultChunkingPreservesRecords(t *testing.T) {
+	const chunkSize = 80
+	firstRecord := "1," + strings.Repeat("a", 50)
+	secondRecord := "2," + strings.Repeat("b", 50)
+	csvData := strings.Join([]string{
+		"id,description",
+		firstRecord,
+		secondRecord,
+	}, "\n")
+	rdr := New(
+		reader.WithChunk(true),
+		reader.WithChunkSize(chunkSize),
+	)
+
+	docs, err := rdr.ReadFromReader("records", strings.NewReader(csvData))
+
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"id | description\n1 | " + strings.Repeat("a", 50),
+		"2 | " + strings.Repeat("b", 50),
+	}, []string{
+		docs[0].Content,
+		docs[1].Content,
+	})
+}
+
+func TestCSVReader_OverlapPreservesRecordSeparator(t *testing.T) {
+	const (
+		chunkSize = 60
+		overlap   = 20
+	)
+	rdr := New(
+		reader.WithChunk(true),
+		reader.WithChunkSize(chunkSize),
+		reader.WithChunkOverlap(overlap),
+	)
+	secondRecord := "2" + strings.Repeat("b", 20)
+	csvData := "value\n" + strings.Repeat("a", 50) + "\n" +
+		secondRecord + "\n"
+
+	docs, err := rdr.ReadFromReader(
+		"record-boundary",
+		strings.NewReader(csvData),
+	)
+
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(docs), 2)
+	require.Contains(t, docs[1].Content,
+		strings.Repeat("a", overlap-1)+"\n"+secondRecord)
+	require.NotContains(t, docs[1].Content,
+		strings.Repeat("a", overlap)+"2")
 }
 
 // TestCSVReader_ExtractFileNameFromURL tests URL filename extraction.

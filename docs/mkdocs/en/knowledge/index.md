@@ -1,5 +1,7 @@
 # Knowledge Documentation
 
+![Knowledge Chunking Viewer](../../assets/img/knowledge/chunk-viewer.png)
+
 ## Overview
 
 Knowledge is the knowledge management system in the tRPC-Agent-Go framework, providing Retrieval-Augmented Generation (RAG) capabilities for Agents. By integrating vector data, embedding models, and document processing components, the Knowledge system helps Agents access and retrieve relevant knowledge information, providing more accurate and well-grounded responses.
