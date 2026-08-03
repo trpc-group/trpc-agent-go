@@ -1,7 +1,14 @@
 # tool_safety_guard example
 
-Offline demo for issue 2002. No model key: it only calls
-`safety.Guard.CheckToolPermission` on a fixed sample list.
+Offline demo for issue 2002. No model key.
+
+Default `go run .` shows the full host wiring reviewers expect:
+
+1. **PermissionPolicy** — `Guard.CheckToolPermission` on the sample matrix
+2. **CommandLists** — same allow/deny slices for `workspaceexec.WithAllowedCommands` /
+   `WithDeniedCommands` (see `tool/safety/DUAL_POLICY.md`)
+3. **AfterToolRedact** — real callback scrub of a leaky tool result
+4. **Audit** — first JSONL line from the file auditor after drain
 
 ## Run
 
@@ -35,49 +42,14 @@ Each entry looks like:
 ```
 
 If `want` is set and the decision differs, `go run .` exits non-zero. That is
-the demo’s only assertion; unit coverage lives under `tool/safety`.
+the demo’s only assertion; unit coverage lives under `tool/safety`
+(`TestAdversarial_HandChecks` for mentor paste cases).
 
 `ask_commands` includes `go`, but `go test` / `go version` / … are exempted in
 code so the “safe go test” sample can stay allow.
 
-## Wiring the same lists into workspaceexec
-
-This demo does not construct an ExecTool. In a real agent, reuse the policy’s
-command lists so Guard and spawn-time shellsafe stay aligned:
-
-```go
-allow, deny := guard.Policy().CommandLists()
-_ = workspaceexec.NewExecTool(runner,
-    workspaceexec.WithAllowedCommands(allow...),
-    workspaceexec.WithDeniedCommands(deny...),
-)
-```
-
-## Scrubbing tool outputs
-
-Guard only sees arguments. For results:
-
-```go
-cbs := tool.NewCallbacks()
-cbs.RegisterAfterTool(safety.AfterToolRedact())
-```
-
-`go run .` prints a small before/after `RedactJSON` example at the end.
-
-## Site rules without editing YAML
-
-```go
-guard := safety.NewGuard(
-    safety.WithPolicyFile("tool_safety_policy.yaml"),
-    safety.WithExtraRules(
-        safety.DenyToolNames("host_exec"),
-        safety.DenyCommandSubstrings("terraform apply"),
-    ),
-)
-_ = safety.Compose(guard) // stack more PermissionPolicy impls if needed
-```
-
 ## What this demo is not
 
-It does not start runner, workspaceexec, or a real sandbox. It only shows the
-permission decision + report/audit shape for the sample matrix.
+It does not start runner, workspaceexec, or a real sandbox. It prints the
+exact CommandLists → workspaceexec option shape so the dual-policy path is
+visible without constructing an ExecTool here.
