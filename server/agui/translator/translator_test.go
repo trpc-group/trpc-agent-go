@@ -344,6 +344,20 @@ func TestTranslateQueuedUserMessageConsumedWithContentParts(t *testing.T) {
 				},
 			},
 			{
+				Type: model.ContentTypeVideo,
+				Video: &model.Video{
+					Data:   []byte("video"),
+					Format: "mp4",
+				},
+			},
+			{
+				Type: model.ContentTypeVideo,
+				Video: &model.Video{
+					URL:    " https://example.com/video.webm ",
+					Format: "video/webm",
+				},
+			},
+			{
 				Type: model.ContentTypeFile,
 				File: &model.File{
 					Name:     "report.pdf",
@@ -380,7 +394,7 @@ func TestTranslateQueuedUserMessageConsumedWithContentParts(t *testing.T) {
 	assert.Equal(t, aguitypes.RoleUser, userMessage.Role)
 	contents, ok := userMessage.ContentInputContents()
 	require.True(t, ok)
-	require.Len(t, contents, 7)
+	require.Len(t, contents, 9)
 	assert.Equal(t, aguitypes.InputContentTypeText, contents[0].Type)
 	assert.Equal(t, "context", contents[0].Text)
 	assert.Equal(t, aguitypes.InputContentTypeText, contents[1].Type)
@@ -395,13 +409,19 @@ func TestTranslateQueuedUserMessageConsumedWithContentParts(t *testing.T) {
 	assert.Equal(t, "audio/mpeg", contents[4].MimeType)
 	assert.Equal(t, "https://example.com/audio.mp3", contents[4].URL)
 	assert.Equal(t, aguitypes.InputContentTypeBinary, contents[5].Type)
-	assert.Equal(t, "application/pdf", contents[5].MimeType)
-	assert.Equal(t, "report.pdf", contents[5].Filename)
-	assert.Equal(t, base64.StdEncoding.EncodeToString([]byte("file")), contents[5].Data)
+	assert.Equal(t, "video/mp4", contents[5].MimeType)
+	assert.Equal(t, base64.StdEncoding.EncodeToString([]byte("video")), contents[5].Data)
 	assert.Equal(t, aguitypes.InputContentTypeBinary, contents[6].Type)
-	assert.Equal(t, "application/octet-stream", contents[6].MimeType)
-	assert.Equal(t, "uploaded.pdf", contents[6].Filename)
-	assert.Equal(t, "file-123", contents[6].ID)
+	assert.Equal(t, "video/webm", contents[6].MimeType)
+	assert.Equal(t, "https://example.com/video.webm", contents[6].URL)
+	assert.Equal(t, aguitypes.InputContentTypeBinary, contents[7].Type)
+	assert.Equal(t, "application/pdf", contents[7].MimeType)
+	assert.Equal(t, "report.pdf", contents[7].Filename)
+	assert.Equal(t, base64.StdEncoding.EncodeToString([]byte("file")), contents[7].Data)
+	assert.Equal(t, aguitypes.InputContentTypeBinary, contents[8].Type)
+	assert.Equal(t, "application/octet-stream", contents[8].MimeType)
+	assert.Equal(t, "uploaded.pdf", contents[8].Filename)
+	assert.Equal(t, "file-123", contents[8].ID)
 
 	activity, ok := events[1].(*aguievents.ActivitySnapshotEvent)
 	require.True(t, ok)
@@ -457,6 +477,21 @@ func TestQueuedUserMessageContentPartsConversionErrors(t *testing.T) {
 			want: "queued user message audio content part is empty",
 		},
 		{
+			name: "nil video",
+			message: model.Message{Role: model.RoleUser, ContentParts: []model.ContentPart{{
+				Type: model.ContentTypeVideo,
+			}}},
+			want: "queued user message video content part is nil",
+		},
+		{
+			name: "empty video",
+			message: model.Message{Role: model.RoleUser, ContentParts: []model.ContentPart{{
+				Type:  model.ContentTypeVideo,
+				Video: &model.Video{},
+			}}},
+			want: "queued user message video content part is empty",
+		},
+		{
 			name: "nil file",
 			message: model.Message{Role: model.RoleUser, ContentParts: []model.ContentPart{{
 				Type: model.ContentTypeFile,
@@ -474,7 +509,7 @@ func TestQueuedUserMessageContentPartsConversionErrors(t *testing.T) {
 		{
 			name: "unsupported",
 			message: model.Message{Role: model.RoleUser, ContentParts: []model.ContentPart{{
-				Type: "video",
+				Type: "unknown",
 			}}},
 			want: "queued user message content part type unsupported",
 		},

@@ -69,6 +69,8 @@ func inputContentFromPart(part model.ContentPart) (aguitypes.InputContent, error
 		return inputContentFromImage(part.Image)
 	case model.ContentTypeAudio:
 		return inputContentFromAudio(part.Audio)
+	case model.ContentTypeVideo:
+		return inputContentFromVideo(part.Video)
 	case model.ContentTypeFile:
 		return inputContentFromFile(part.File)
 	default:
@@ -111,6 +113,24 @@ func inputContentFromAudio(audio *model.Audio) (aguitypes.InputContent, error) {
 	}
 	if content.URL == "" && content.Data == "" {
 		return aguitypes.InputContent{}, errors.New("queued user message audio content part is empty")
+	}
+	return content, nil
+}
+
+func inputContentFromVideo(video *model.Video) (aguitypes.InputContent, error) {
+	if video == nil {
+		return aguitypes.InputContent{}, errors.New("queued user message video content part is nil")
+	}
+	content := aguitypes.InputContent{
+		Type:     aguitypes.InputContentTypeBinary,
+		MimeType: binaryMimeType("video", video.Format),
+		URL:      strings.TrimSpace(video.URL),
+	}
+	if len(video.Data) > 0 {
+		content.Data = base64.StdEncoding.EncodeToString(video.Data)
+	}
+	if content.URL == "" && content.Data == "" {
+		return aguitypes.InputContent{}, errors.New("queued user message video content part is empty")
 	}
 	return content, nil
 }

@@ -464,6 +464,19 @@ func TestEnqueueUserMessage_Errors(t *testing.T) {
 	)
 	require.ErrorIs(t, err, ErrInvalidQueuedUserMessage)
 
+	err = EnqueueUserMessage(
+		r,
+		"req-1",
+		model.Message{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{{
+				Type:  model.ContentTypeVideo,
+				Video: &model.Video{URL: " "},
+			}},
+		},
+	)
+	require.ErrorIs(t, err, ErrInvalidQueuedUserMessage)
+
 	textPart := "hello from part"
 	err = EnqueueUserMessage(
 		r,
@@ -473,6 +486,32 @@ func TestEnqueueUserMessage_Errors(t *testing.T) {
 			ContentParts: []model.ContentPart{{
 				Type: model.ContentTypeText,
 				Text: &textPart,
+			}},
+		},
+	)
+	require.ErrorIs(t, err, ErrRunNotFound)
+
+	err = EnqueueUserMessage(
+		r,
+		"req-1",
+		model.Message{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{{
+				Type:  model.ContentTypeVideo,
+				Video: &model.Video{URL: "https://example.com/video.mp4"},
+			}},
+		},
+	)
+	require.ErrorIs(t, err, ErrRunNotFound)
+
+	err = EnqueueUserMessage(
+		r,
+		"req-1",
+		model.Message{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{{
+				Type:  model.ContentTypeVideo,
+				Video: &model.Video{Data: []byte("video")},
 			}},
 		},
 	)

@@ -4108,6 +4108,13 @@ func queuedUserMessageContentPartsSupported(parts []model.ContentPart) bool {
 			if strings.TrimSpace(part.Audio.URL) == "" && len(part.Audio.Data) == 0 {
 				return false
 			}
+		case model.ContentTypeVideo:
+			if part.Video == nil {
+				return false
+			}
+			if strings.TrimSpace(part.Video.URL) == "" && len(part.Video.Data) == 0 {
+				return false
+			}
 		case model.ContentTypeFile:
 			if part.File == nil {
 				return false

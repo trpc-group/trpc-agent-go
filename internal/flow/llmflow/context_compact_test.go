@@ -1631,7 +1631,7 @@ func TestCloneRequestForContextCompaction_DeepCopiesMutableFields(t *testing.T) 
 	req.Messages[0].ContentParts[0].Text = nil
 	req.Messages[0].ContentParts[1].Image.Data[0] = 9
 	req.Messages[0].ContentParts[2].Audio.Data[0] = 8
-	req.Messages[0].ContentParts[3].Video.Data[0] = 7
+	req.Messages[0].ContentParts[3].Video.Data[0] = 0
 	req.Messages[0].ContentParts[4].File.Data[0] = 'z'
 	req.Messages[0].ToolCalls[0].Function.Arguments[0] = '['
 	req.Messages[0].ToolCalls[0].ExtraFields["nested"] = map[string]any{"k": "changed"}
