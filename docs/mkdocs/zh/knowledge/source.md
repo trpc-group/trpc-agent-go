@@ -1,5 +1,7 @@
 # 文档源配置
 
+![Knowledge Chunking Viewer](../../assets/img/knowledge/chunk-viewer.png)
+
 > **示例代码**: [examples/knowledge/sources](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/sources)
 
 源模块提供了多种文档源类型，每种类型都支持丰富的配置选项。
@@ -206,7 +208,7 @@ sources := []source.Source{
 
 ## 分块策略 (Chunking Strategy)
 
-> **示例代码**: [fixed-chunking](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/sources/fixed-chunking) | [recursive-chunking](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/sources/recursive-chunking)
+> **示例代码**: [交互式 Chunking Viewer](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/chunking) | [fixed-chunking](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/sources/fixed-chunking) | [recursive-chunking](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/sources/recursive-chunking)
 
 分块（Chunking）是将长文档拆分为较小片段的过程，这对于向量检索至关重要。框架提供了多种内置分块策略，同时支持自定义分块策略。
 
@@ -214,35 +216,68 @@ sources := []source.Source{
 
 | 策略 | 说明 | 适用场景 |
 |-----|------|---------|
-| **FixedSizeChunking** | 固定大小分块 | 通用文本，简单快速 |
-| **RecursiveChunking** | 递归分块，按分隔符层级拆分 | 保持语义完整性 |
+| **FixedSizeChunking** | 限制大小，并优先选择附近的自然边界 | 通用文本，简单快速 |
+| **RecursiveChunking** | 按分隔符层级递归拆分并合并小片段 | 保持语义完整性 |
 | **MarkdownChunking** | 按 Markdown 结构分块 | Markdown 文档（默认） |
 | **JSONChunking** | 按 JSON 结构分块 | JSON 文件（默认） |
 
 ### 默认行为
 
-每种文件类型都有相关的分块策略：
+多数应用只需要配置 Source 或 Reader，不需要直接创建 Chunking
+Strategy。Reader 会按文档类型选择默认行为：
 
-- `.md` 文件 → MarkdownChunking（按标题层级 H1→H6→段落→固定大小 递归分块）
-- `.json` 文件 → JSONChunking（按 JSON 结构分块）
-- `.txt/.csv/.docx` 等 → FixedSizeChunking
+| 文档类型 | Reader 默认行为 |
+|---------|----------------|
+| `.md`、`.markdown` | MarkdownChunking（标题层级 H1→H6→段落→自然文本边界） |
+| `.json` | JSONChunking（JSON 结构） |
+| `.txt`、`.text` | 使用自然文本边界的 FixedSizeChunking |
+| `.csv` | 保留完整行的 FixedSizeChunking；仅当单条记录超过当前新正文预算时拆分 |
+| `.pdf`、`.doc`、`.docx` | 导入可选格式 Reader 后使用 FixedSizeChunking |
+| `.proto` | ProtoReader 按 AST 实体分块 |
+| `.go`、`.py` | 导入可选语言 Reader 后按 AST 实体分块；未导入时 Source 回退到 TextReader |
+
+如果普通文本需要按分隔符层级处理，可以显式使用 RecursiveChunking
+作为自定义策略。
+
+PDF、DOCX、Go 和 Python Reader 都是按需导入的包。应用需要显式导入所需
+Reader，让它注册到 Reader registry。
 
 **默认参数**：
 
 | 参数 | 默认值 | 说明 |
 |-----|-------|------|
-| ChunkSize | 1024 | 每个分块的最大字符数 |
-| Overlap | 128 | 相邻分块之间的重叠字符数 |
+| ChunkSize | 1024 | FixedSizeChunking、RecursiveChunking、MarkdownChunking 的最大 Unicode rune 数 |
+| JSON ChunkSize | 2000 | JSONChunking 序列化后的最大字节数 |
+| Overlap | 0 | 相邻分块之间的最大 Unicode rune 数 |
 
-> 默认的分块策略都受 `chunkSize` 参数影响。`overlap` 参数仅对 FixedSizeChunking、RecursiveChunking、MarkdownChunking 生效，JSONChunking 不支持 overlap。
+> `overlap` 仅对 FixedSizeChunking、RecursiveChunking、MarkdownChunking 生效。它表示上限：策略可以把 overlap 起点移动到自然边界，也可以缩小实际 overlap，以保证最终分块不超过 `chunkSize`。较大的 overlap 会压缩新正文的空间，因此产生更多 chunk。JSONChunking 不支持 overlap。
+
+Overlap 是前一个 chunk 尾部与后一个 chunk 头部共享的内容，并不是在单个
+chunk 的头尾分别追加一段重叠内容。
+
+文本策略的隐式 overlap 默认值从 `128` 改为 `0`。没有显式配置 overlap
+的已有知识库会受到影响，其 chunk 边界和 embedding 输入都会变化。如果仍需
+重叠窗口，请通过 `WithChunkOverlap` 或对应策略的 overlap option 显式配置
+所需值，然后重新导入受影响的文档。由于 overlap 现在计入 `chunkSize`，
+即使显式配置为 `128`，也不一定能逐字节复现旧的超预算 chunk。
+
+文本分块策略会在调用 `Chunk` 时校验配置：`chunkSize` 必须大于 0，
+`overlap` 必须位于 `[0, chunkSize)`。无效配置会返回
+`ErrInvalidChunkSize`、`ErrInvalidOverlap` 或 `ErrOverlapTooLarge`，而不是
+静默调整参数。
+
+JSONChunking 会按确定顺序遍历对象字段，并按数值顺序遍历数组索引。当
+字符串值连同 JSON path 无法放入一个分块时，策略会在 UTF-8 安全边界上
+继续拆分。如果不可拆分的值连同路径仍然无法放入 byte 预算，chunking 会
+返回错误，而不是输出 over-budget chunk。
 
 可通过 `WithChunkSize` 和 `WithChunkOverlap` 调整默认策略的参数：
 
 ```go
 fileSrc := filesource.New(
     []string{"./data/document.txt"},
-    filesource.WithChunkSize(512),     // 分块大小（字符数）
-    filesource.WithChunkOverlap(64),   // 分块重叠（字符数）
+    filesource.WithChunkSize(512),     // 最大 Unicode rune 数
+    filesource.WithChunkOverlap(64),   // 最大重叠 Unicode rune 数
 )
 ```
 
@@ -254,7 +289,7 @@ fileSrc := filesource.New(
 
 #### FixedSizeChunking - 固定大小分块
 
-将文本按固定字符数分割，支持重叠：
+在大小上限附近切分，并优先选择附近的换行、句子、标点或单词边界，同时支持 overlap：
 
 ```go
 import (
@@ -264,8 +299,8 @@ import (
 
 // 创建固定大小分块策略
 fixedChunking := chunking.NewFixedSizeChunking(
-    chunking.WithChunkSize(512),   // 每块最大 512 字符
-    chunking.WithOverlap(64),      // 块间重叠 64 字符
+    chunking.WithChunkSize(512),   // 每块最大 512 个 Unicode rune
+    chunking.WithOverlap(64),      // 最大重叠 64 个 Unicode rune
 )
 
 fileSrc := filesource.New(
@@ -273,6 +308,11 @@ fileSrc := filesource.New(
     filesource.WithCustomChunkingStrategy(fixedChunking),
 )
 ```
+
+当输入中的每一行都是一条逻辑记录时，可以配置
+`chunking.WithPreserveLines()`。能够放入当前新正文预算的完整行不会被
+拆开；单行自身超预算时，才继续按句子、标点、空白和 UTF-8 安全的 rune
+边界切分。CSVReader 默认启用这个选项。
 
 #### RecursiveChunking - 递归分块
 
@@ -306,6 +346,13 @@ fileSrc := filesource.New(
 4. ` ` - 按空格分割
 
 递归分块会尝试使用更高优先级的分隔符，仅当分块仍超过最大大小时才使用下一级分隔符。若所有分隔符都无法将文本切分到 chunkSize 以内，则按 chunkSize 强制切分。
+
+对于同一个超长逻辑块，内置文本策略会对小于一半 chunk budget 的尾块
+进行重平衡。普通文本优先选择附近的自然边界；Markdown 长段落优先按
+句子和标点，长表格与 fenced code block 优先按完整行切分；连续 token
+找不到自然边界时，才回退到 UTF-8 安全的 rune 边界。重平衡不会跨越
+Markdown 标题作用域或无关的结构化记录，因此语义完整的短章节仍可能
+保留为较小的 chunk。
 
 
 

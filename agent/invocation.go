@@ -26,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/messageoriginkey"
 	"trpc.group/trpc-go/trpc-agent-go/internal/structuredoutput"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/internal/tracecapture"
@@ -1743,6 +1744,7 @@ func isCloneStateKey(key string) bool {
 		appenderStateKey,
 		liveSessionStateKey,
 		streamHubStateKey,
+		messageoriginkey.Key,
 		surfaceRootNodeIDStateKey,
 		teamMemberTraceRootStateKey:
 		return true
