@@ -101,6 +101,16 @@ func (s *DefaultScanner) scanRequest(
 		}}
 	default:
 	}
+	findings := s.scanRequestMetadata(req, sizeResult)
+	findings = append(findings, s.scanRequestContent(req, sizeResult)...)
+	findings = append(findings, s.scanRequestExecutionControls(req)...)
+	return findings
+}
+
+func (s *DefaultScanner) scanRequestMetadata(
+	req ScanRequest,
+	sizeResult scanSizeResult,
+) []Finding {
 	findings := append([]Finding(nil), sizeResult.findings...)
 	findings = append(findings, s.scanEnv(req.Env)...)
 	findings = append(findings, s.scanCwd(req)...)
@@ -110,6 +120,14 @@ func (s *DefaultScanner) scanRequest(
 		findings = append(findings, s.scanEditorText(req)...)
 	}
 	findings = append(findings, s.scanOutputLimit(req)...)
+	return findings
+}
+
+func (s *DefaultScanner) scanRequestContent(
+	req ScanRequest,
+	sizeResult scanSizeResult,
+) []Finding {
+	var findings []Finding
 	switch {
 	case req.Command != "":
 		if !sizeResult.commandTooLarge {
@@ -140,6 +158,13 @@ func (s *DefaultScanner) scanRequest(
 			Recommendation: "scan complete submitted session lines or require review",
 		})
 	}
+	return findings
+}
+
+func (s *DefaultScanner) scanRequestExecutionControls(
+	req ScanRequest,
+) []Finding {
+	var findings []Finding
 	if req.TimeoutSec > 0 && s.policy.MaxTimeoutSec > 0 &&
 		req.TimeoutSec > s.policy.MaxTimeoutSec {
 		decision := DecisionAsk
