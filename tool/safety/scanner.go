@@ -1404,7 +1404,7 @@ func extractCommandFromArgs(args []byte) string {
 		if argsVal, ok := m[argKey]; ok {
 			var argList []string
 			switch v := argsVal.(type) {
-			case []interface{}:
+			case []any:
 				for _, a := range v {
 					if s, ok := a.(string); ok {
 						argList = append(argList, s)
