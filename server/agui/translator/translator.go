@@ -99,6 +99,7 @@ type translator struct {
 	lastReasoningMessageID                 string
 	receivingReasoning                     bool
 	reasoningStreams                       messageStreamState
+	reasoningMessageIDs                    map[string]string
 	concurrentMessageStreamsEnabled        bool
 	seenResponseIDs                        map[string]struct{}
 	seenToolCallIDs                        map[string]struct{}
@@ -502,7 +503,7 @@ func (t *translator) reasoningEvents(rsp *model.Response) ([]aguievents.Event, e
 	if rsp.ID == "" {
 		return nil, nil
 	}
-	reasoningID := rsp.ID
+	reasoningID := t.reasoningMessageID(rsp.ID)
 	var events []aguievents.Event
 	// Different message ID means a new reasoning message.
 	if t.lastReasoningMessageID != reasoningID {
@@ -619,7 +620,7 @@ func (t *translator) textMessageEvent(rsp *model.Response) ([]aguievents.Event, 
 			}
 			t.lastMessageID = rsp.ID
 			t.receivingMessage = true
-			role := rsp.Choices[0].Delta.Role.String()
+			role := textMessageRole(rsp.Choices[0].Delta.Role)
 			events = append(events, aguievents.NewTextMessageStartEvent(rsp.ID, aguievents.WithRole(role)))
 		case model.ObjectTypeChatCompletion:
 			if rsp.Choices[0].Message.Content == "" {
@@ -630,7 +631,7 @@ func (t *translator) textMessageEvent(rsp *model.Response) ([]aguievents.Event, 
 				t.receivingMessage = false
 			}
 			t.lastMessageID = rsp.ID
-			role := rsp.Choices[0].Message.Role.String()
+			role := textMessageRole(rsp.Choices[0].Message.Role)
 			events = append(events,
 				aguievents.NewTextMessageStartEvent(rsp.ID, aguievents.WithRole(role)),
 				aguievents.NewTextMessageContentEvent(rsp.ID, rsp.Choices[0].Message.Content),
@@ -663,6 +664,25 @@ func (t *translator) textMessageEvent(rsp *model.Response) ([]aguievents.Event, 
 		return nil, errors.New("invalid response object")
 	}
 	return events, nil
+}
+
+func (t *translator) reasoningMessageID(responseID string) string {
+	if t.reasoningMessageIDs == nil {
+		t.reasoningMessageIDs = make(map[string]string)
+	}
+	if messageID := t.reasoningMessageIDs[responseID]; messageID != "" {
+		return messageID
+	}
+	messageID := uuid.NewString()
+	t.reasoningMessageIDs[responseID] = messageID
+	return messageID
+}
+
+func textMessageRole(role model.Role) string {
+	if role == "" {
+		return model.RoleAssistant.String()
+	}
+	return role.String()
 }
 
 // toolCallEvent translates a tool call trpc-agent-go event to AG-UI events.
