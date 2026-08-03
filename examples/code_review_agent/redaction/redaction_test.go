@@ -1,0 +1,48 @@
+//
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
+package redaction
+
+import (
+	"strings"
+	"testing"
+)
+
+// TestRedactText verifies known secret shapes are masked.
+func TestRedactText(t *testing.T) {
+	in := `api_key = "sk-abcdefghijklmnopqrstuvwxyz123456" password=super-secret`
+	out := RedactText(in)
+	if strings.Contains(out, "abcdefghijklmnopqrstuvwxyz") || strings.Contains(out, "super-secret") {
+		t.Fatalf("secret leaked: %s", out)
+	}
+	if !strings.Contains(out, "[REDACTED_SECRET]") {
+		t.Fatalf("missing placeholder: %s", out)
+	}
+}
+
+// TestRedactTextQuotedMultiwordValue verifies a quoted passphrase with
+// spaces is removed completely, not just its first word.
+func TestRedactTextQuotedMultiwordValue(t *testing.T) {
+	cases := []string{
+		`password = "correct horse battery staple"`,
+		`token: 'multi word token value'`,
+		`API_KEY="spaced out key material"`,
+	}
+	for _, in := range cases {
+		out := RedactText(in)
+		for _, leak := range []string{"correct horse", "battery staple", "multi word", "spaced out"} {
+			if strings.Contains(out, leak) {
+				t.Fatalf("partial secret survived %q -> %q", in, out)
+			}
+		}
+		if !strings.Contains(out, "[REDACTED_SECRET]") {
+			t.Fatalf("missing placeholder for %q: %q", in, out)
+		}
+	}
+}

@@ -1,0 +1,27 @@
+{
+  "summary": "1 high-confidence findings and 1 human-review items detected.",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "security",
+      "file": "redact/redact.go",
+      "line": 3,
+      "title": "Potential hard-coded secret",
+      "evidence": "var githubToken = [REDACTED_SECRET]",
+      "recommendation": "Move secrets to a secret manager or environment variable and rotate the exposed credential.",
+      "confidence": 0.96,
+      "source": "rule-only",
+      "rule_id": "SEC001"
+    }
+  ],
+  "needs_human_review": [
+    {
+      "severity": "medium",
+      "category": "testing",
+      "file": "redact/redact.go",
+      "line": 3,
+      "title": "Changed Go code without nearby test changes",
+      "rule_id": "TEST001"
+    }
+  ]
+}

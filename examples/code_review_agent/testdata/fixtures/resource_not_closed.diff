@@ -1,0 +1,15 @@
+diff --git a/files/read.go b/files/read.go
+--- a/files/read.go
++++ b/files/read.go
+@@ -1,5 +1,11 @@
+ package files
+ 
+ import "os"
+ 
++func Read(path string) ([]byte, error) {
++	f, err := os.Open(path)
++	if err != nil {
++		return nil, err
++	}
++	return os.ReadFile(f.Name())
++}
