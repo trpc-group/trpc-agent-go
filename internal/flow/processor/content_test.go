@@ -4591,6 +4591,30 @@ func TestContentRequestProcessor_getIncrementMessages_RestoresUserAcrossSummaryC
 			wantText: []string{"answer"},
 		},
 		{
+			name: "missing turn identifier skips restoration",
+			events: []event.Event{
+				messageEvent(
+					"legacy-user",
+					"",
+					"invocation-1",
+					baseTime,
+					model.NewUserMessage("legacy question"),
+				),
+				messageEvent(
+					"legacy-assistant",
+					"",
+					"invocation-1",
+					baseTime.Add(2*time.Second),
+					model.NewAssistantMessage("answer"),
+				),
+			},
+			cutoff: summaryHistoryCutoffFromTime(
+				baseTime.Add(time.Second),
+			),
+			wantRole: []model.Role{model.RoleAssistant},
+			wantText: []string{"answer"},
+		},
+		{
 			name: "seed history user is not restored",
 			events: []event.Event{
 				messageEvent(

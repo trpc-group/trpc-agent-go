@@ -931,8 +931,9 @@ func TestEnsureSummaryRequestFitsPreservesSourceRounds(t *testing.T) {
 			ToolCalls: []model.ToolCall{{
 				ID: "old-call",
 				Function: model.FunctionDefinitionParam{
-					Name:      "lookup",
-					Arguments: []byte(`{"query":"old"}`),
+					Name: "lookup",
+					Arguments: []byte(`{"query":"` +
+						strings.Repeat("old ", 100) + `"}`),
 				},
 			}},
 		},
@@ -948,10 +949,15 @@ func TestEnsureSummaryRequestFitsPreservesSourceRounds(t *testing.T) {
 		true,
 		200,
 	)
-	require.Error(t, err)
+	require.ErrorContains(t, err, "without dropping source conversation")
 	require.Len(t, request.Messages, 7)
 	require.Equal(t, model.RoleSystem, request.Messages[0].Role)
 	require.Contains(t, request.Messages[1].Content, "old source")
+	require.JSONEq(
+		t,
+		summaryToolArgumentsOmitted,
+		string(request.Messages[2].ToolCalls[0].Function.Arguments),
+	)
 	require.Equal(t, "latest source", request.Messages[4].Content)
 	require.Equal(t, "latest answer", request.Messages[5].Content)
 	require.Equal(t, "Summarize the conversation above.", request.Messages[6].Content)

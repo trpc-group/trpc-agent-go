@@ -1313,18 +1313,24 @@ func (s *sessionSummarizer) prepareSummaryRequest(
 		)
 		return bounded, mode, err
 	}
-	if err := s.ensureSummaryRequestFits(
+	fitErr := s.ensureSummaryRequestFits(
 		ctx,
 		request,
 		true,
 		budget,
-	); err == nil {
+	)
+	if fitErr == nil {
 		return request, mode, nil
 	}
 
 	// Cache-safe forking is an optimization. When the parent prefix cannot be
 	// made safe without dropping source conversation, fall back to a bounded
 	// standalone prompt whose final user message contains the source itself.
+	log.DebugfContext(
+		ctx,
+		"cache-safe summary request does not fit; falling back to standalone summary request: %v",
+		fitErr,
+	)
 	bounded, err := s.buildBoundedStandaloneSummaryRequest(
 		ctx,
 		input,
