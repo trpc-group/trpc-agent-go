@@ -36,9 +36,9 @@ func (fakeSummarizer) ShouldSummarize(*session.Session) bool { return true }
 func (fakeSummarizer) Summarize(context.Context, *session.Session) (string, error) {
 	return "replay-test summary", nil
 }
-func (fakeSummarizer) SetPrompt(string)                    {}
-func (fakeSummarizer) SetModel(model.Model)                {}
-func (fakeSummarizer) Metadata() map[string]any            { return nil }
+func (fakeSummarizer) SetPrompt(string)         {}
+func (fakeSummarizer) SetModel(model.Model)     {}
+func (fakeSummarizer) Metadata() map[string]any { return nil }
 
 // standardBackends returns the available backends for consistency
 // comparison. The default matrix is the in-memory pair; the
@@ -1005,7 +1005,7 @@ func TestCompareTracks_DuplicateOneToOne(t *testing.T) {
 
 func TestSummaryCasesPersistSummaries(t *testing.T) {
 	backend := Backend{
-		Name:           "inmemory-summary",
+		Name: "inmemory-summary",
 		SessionService: sessioninmemory.NewSessionService(
 			sessioninmemory.WithSummarizer(fakeSummarizer{}),
 		),
