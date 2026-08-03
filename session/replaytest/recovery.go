@@ -153,13 +153,15 @@ func countRecoveryEvents(
 	sess.EventMu.RLock()
 	defer sess.EventMu.RUnlock()
 	var count, matchCount int
+	physicalIDs := make(map[string]struct{}, len(sess.Events))
+	logicalPositions := make(map[string]int, len(sess.Events))
 	for index := range sess.Events {
 		evt := &sess.Events[index]
-		value, ok, err := event.GetExtension[string](evt, logicalEventIDExtension)
+		value, err := recordEventIdentity(evt, index, physicalIDs, logicalPositions)
 		if err != nil {
-			return 0, 0, fmt.Errorf("event %d logical id: %w", index, err)
+			return 0, 0, err
 		}
-		if !ok || value != logicalID {
+		if value != logicalID {
 			continue
 		}
 		count++
@@ -194,7 +196,7 @@ func summaryFingerprint(sess *session.Session, filterKey string) (bool, string) 
 	sess.SummariesMu.RLock()
 	defer sess.SummariesMu.RUnlock()
 	summary, ok := sess.Summaries[filterKey]
-	if !ok {
+	if !ok || summary == nil {
 		return false, ""
 	}
 	raw, _ := json.Marshal(summary)
@@ -321,6 +323,12 @@ func (e *execution) memoryWriteMatches(
 	}, 0)
 	if err != nil {
 		return false, err
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if _, _, err := normalizeMemoryCatalog(entries); err != nil {
+		return false, fmt.Errorf("validate recovery memory catalog: %w", err)
 	}
 	for _, entry := range entries {
 		if memoryEntryMatchesInput(entry, input, e.key.AppName, e.key.UserID) {

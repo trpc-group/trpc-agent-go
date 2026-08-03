@@ -276,6 +276,29 @@ func TestRecoveryVerifiesCommittedNilTrackPayload(t *testing.T) {
 	}
 }
 
+func TestRecoveryRejectsNilCommittedSummary(t *testing.T) {
+	backend := committedErrorBackend(func(service *committedErrorSessionService) {
+		service.failAfterCreateSummary = true
+		service.returnNilSummary = true
+	}, nil)
+	_, err := Replay(context.Background(), Case{
+		Name:     "nil-committed-summary",
+		Requires: []Capability{CapabilitySession, CapabilitySummary},
+		Steps: []Step{
+			messageStep("user", "user", 1, "user", model.RoleUser, "hello", ""),
+			{
+				Name:     "summary",
+				Kind:     StepCreateSummary,
+				Recovery: RecoveryVerify,
+				Summary:  &SummaryInput{Force: true},
+			},
+		},
+	}, backend)
+	if !errors.Is(err, ErrUncertainCommit) {
+		t.Fatalf("Replay() error = %v, want ErrUncertainCommit", err)
+	}
+}
+
 func TestRecoveryReportsUnobservedNonIdempotentWrite(t *testing.T) {
 	backend := committedErrorBackend(func(service *committedErrorSessionService) {
 		service.failBeforeAppendEvent = true
@@ -309,6 +332,26 @@ func TestRecoveryRejectsCorruptedCommittedEvent(t *testing.T) {
 	}
 }
 
+func TestRecoveryRejectsCommittedEventWithoutPhysicalID(t *testing.T) {
+	backend := committedErrorBackend(func(service *committedErrorSessionService) {
+		service.clearAppendEventID = true
+		service.failAfterAppendEvent = true
+	}, nil)
+	step := messageStep("event", "event", 1, "user", model.RoleUser, "hello", "")
+	step.Recovery = RecoveryVerify
+	_, err := Replay(context.Background(), Case{
+		Name:     "committed-event-without-physical-id",
+		Requires: []Capability{CapabilitySession},
+		Steps:    []Step{step},
+	}, backend)
+	if !errors.Is(err, ErrUncertainCommit) {
+		t.Fatalf("Replay() error = %v, want ErrUncertainCommit", err)
+	}
+	if !strings.Contains(err.Error(), "has no physical id") {
+		t.Fatalf("Replay() error = %v, want invalid event identity", err)
+	}
+}
+
 func TestRecoveryRejectsWrongMemoryOwnership(t *testing.T) {
 	backend := committedErrorBackend(nil, func(service *committedErrorMemoryService) {
 		service.failAfterAddMemory = true
@@ -326,6 +369,29 @@ func TestRecoveryRejectsWrongMemoryOwnership(t *testing.T) {
 	}, backend)
 	if !errors.Is(err, ErrUncertainCommit) {
 		t.Fatalf("Replay() error = %v, want ErrUncertainCommit", err)
+	}
+}
+
+func TestRecoveryRejectsAmbiguousMemoryEvidence(t *testing.T) {
+	backend := committedErrorBackend(nil, func(service *committedErrorMemoryService) {
+		service.failAfterAddMemory = true
+		service.returnDuplicateEntries = true
+	})
+	_, err := Replay(context.Background(), Case{
+		Name:     "ambiguous-memory-evidence",
+		Requires: []Capability{CapabilitySession, CapabilityMemory},
+		Steps: []Step{{
+			Name:     "memory",
+			Kind:     StepAddMemory,
+			Recovery: RecoveryVerify,
+			Memory:   &MemoryInput{Memory: "remember once"},
+		}},
+	}, backend)
+	if !errors.Is(err, ErrUncertainCommit) {
+		t.Fatalf("Replay() error = %v, want ErrUncertainCommit", err)
+	}
+	if !strings.Contains(err.Error(), "duplicate normalized memory entry") {
+		t.Fatalf("Replay() error = %v, want ambiguous memory evidence", err)
 	}
 }
 
@@ -574,6 +640,7 @@ type committedErrorSessionService struct {
 	failBeforeAppendEvent        bool
 	failAfterAppendEvent         bool
 	corruptAppendEvent           bool
+	clearAppendEventID           bool
 	failBeforeStateUpdate        bool
 	failBeforeUpdateSessionState bool
 	failAfterUpdateSessionState  bool
@@ -582,6 +649,7 @@ type committedErrorSessionService struct {
 	failGetSessionCall           int
 	getSessionCalls              int
 	stateUpdateCalls             int
+	returnNilSummary             bool
 	returnWrongSessionIdentity   bool
 }
 
@@ -595,10 +663,20 @@ func (s *committedErrorSessionService) GetSession(
 		return nil, errors.New("injected recovery read failure")
 	}
 	sess, err := s.Service.GetSession(ctx, key, options...)
-	if err != nil || sess == nil || !s.returnWrongSessionIdentity {
+	if err != nil || sess == nil {
 		return sess, err
 	}
-	return wrongSessionIdentity(sess), nil
+	if s.returnNilSummary {
+		sess.SummariesMu.Lock()
+		if _, ok := sess.Summaries[""]; ok {
+			sess.Summaries[""] = nil
+		}
+		sess.SummariesMu.Unlock()
+	}
+	if s.returnWrongSessionIdentity {
+		sess = wrongSessionIdentity(sess)
+	}
+	return sess, nil
 }
 
 func (s *committedErrorSessionService) AppendEvent(
@@ -620,6 +698,11 @@ func (s *committedErrorSessionService) AppendEvent(
 		s.corruptAppendEvent = false
 		evt = evt.Clone()
 		evt.Author += "-corrupted"
+	}
+	if s.clearAppendEventID {
+		s.clearAppendEventID = false
+		evt = evt.Clone()
+		evt.ID = ""
 	}
 	if err := s.Service.AppendEvent(ctx, sess, evt, options...); err != nil {
 		return err
@@ -739,10 +822,11 @@ func (s *committedErrorSessionService) AppendTrackEvent(
 
 type committedErrorMemoryService struct {
 	memory.Service
-	failBeforeAddMemory  bool
-	failAfterAddMemory   bool
-	returnWrongOwnership bool
-	addMemoryCalls       int
+	failBeforeAddMemory    bool
+	failAfterAddMemory     bool
+	returnDuplicateEntries bool
+	returnWrongOwnership   bool
+	addMemoryCalls         int
 }
 
 func (s *committedErrorMemoryService) ReadMemories(
@@ -751,14 +835,21 @@ func (s *committedErrorMemoryService) ReadMemories(
 	limit int,
 ) ([]*memory.Entry, error) {
 	entries, err := s.Service.ReadMemories(ctx, userKey, limit)
-	if err != nil || !s.returnWrongOwnership {
+	if err != nil || (!s.returnWrongOwnership && !s.returnDuplicateEntries) {
 		return entries, err
 	}
 	entries = cloneMemoryEntries(entries)
-	for _, entry := range entries {
-		if entry != nil {
-			entry.UserID += "-wrong"
+	if s.returnWrongOwnership {
+		for _, entry := range entries {
+			if entry != nil {
+				entry.UserID += "-wrong"
+			}
 		}
+	}
+	if s.returnDuplicateEntries && len(entries) > 0 && entries[0] != nil {
+		duplicate := cloneMemoryEntries(entries[:1])[0]
+		duplicate.ID += "-duplicate"
+		entries = append(entries, duplicate)
 	}
 	return entries, nil
 }
