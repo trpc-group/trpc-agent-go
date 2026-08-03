@@ -141,13 +141,15 @@ func runPipeline(
 	var permissionDecisions []internal.PermissionDecision
 
 	recordPermission := func(result internal.SandboxResult) {
+		command, _ := internal.MaskSensitive(result.Command)
+		reason, _ := internal.MaskSensitive(result.Recommendation)
 		permissionDecisions = append(permissionDecisions, internal.PermissionDecision{
 			TaskID:      taskID,
-			Command:     result.Command,
+			Command:     command,
 			Decision:    result.Decision,
 			RuleID:      result.RuleID,
 			RiskLevel:   result.RiskLevel,
-			Reason:      result.Recommendation,
+			Reason:      reason,
 			Intercepted: result.Intercepted,
 			CreatedAt:   time.Now().Unix(),
 		})
@@ -165,12 +167,16 @@ func runPipeline(
 		} else {
 			toolCalls++
 			sandboxDurationMs += result.DurationMs
+			// 沙箱输出在落库/报告前脱敏，防止命令输出中的仓库数据或密钥泄漏。
+			command, _ := internal.MaskSensitive(result.Command)
+			stdout, _ := internal.MaskSensitive(result.Stdout)
+			stderr, _ := internal.MaskSensitive(result.Stderr)
 			sandboxRuns = append(sandboxRuns, internal.SandboxRun{
 				TaskID:     taskID,
-				Command:    result.Command,
+				Command:    command,
 				ExitCode:   result.ExitCode,
-				Stdout:     result.Stdout,
-				Stderr:     result.Stderr,
+				Stdout:     stdout,
+				Stderr:     stderr,
 				DurationMs: result.DurationMs,
 				TimedOut:   result.TimedOut,
 				CreatedAt:  time.Now().Unix(),

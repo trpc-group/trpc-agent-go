@@ -78,35 +78,40 @@ func TestRunCommand_Intercepted(t *testing.T) {
 	}
 }
 
-// TestRunCommand_OutputLimited 验证输出在运行中被限制，超限截断（A1）。
+// TestRunCommand_OutputLimited verifies output is bounded at run time and
+// truncated past the limit (A1).
 func TestRunCommand_OutputLimited(t *testing.T) {
 	dir := t.TempDir()
-	// 生成确定性的大文件（与主机路径无关），cat 后应被运行时截断。
+	// Deterministic large file (host-path independent); cat output must be
+	// truncated while the process is running.
 	bigFile := filepath.Join(dir, "big.txt")
 	if err := os.WriteFile(bigFile, []byte(strings.Repeat("x", 4096)), 0o600); err != nil {
-		t.Fatalf("写入测试文件失败: %v", err)
+		t.Fatalf("write test file: %v", err)
 	}
 
 	cfg := DefaultSandboxConfig()
 	cfg.MaxOutputSize = 128
 	se := NewSandboxExecutor(cfg, false)
-	// 用相对路径，避免 temp 随机目录名被 sensitive_leak 规则误伤。
+	// Relative path keeps the temp directory's random name out of the
+	// command, which would otherwise trip the sensitive_leak rule.
 	res, err := se.RunCommand(context.Background(), "cat big.txt", dir)
 	if err != nil {
-		t.Fatalf("命令执行失败: %v", err)
+		t.Fatalf("command failed: %v", err)
 	}
 	if res.Intercepted {
-		t.Fatal("cat 不应被安全策略拦截")
+		t.Fatal("cat must not be intercepted")
 	}
-	// 截断后内容 = 128 字节 + 标记。
-	if len(res.Stdout) > 256 {
-		t.Errorf("输出未被限制: 长度 %d > 256", len(res.Stdout))
+	// Truncated output = MaxOutputSize bytes + the truncation marker, never more.
+	const marker = "\n... (输出已截断)"
+	if len(res.Stdout) > cfg.MaxOutputSize+len(marker) {
+		t.Errorf("output exceeds configured limit: len=%d > %d",
+			len(res.Stdout), cfg.MaxOutputSize+len(marker))
 	}
 	if !strings.Contains(res.Stdout, "输出已截断") {
-		t.Error("超出限制的输出应标记截断")
+		t.Error("truncated output must carry the truncation marker")
 	}
 	if len(res.Stdout) == 0 {
-		t.Error("截断缓冲不应为空")
+		t.Error("truncated buffer must not be empty")
 	}
 }
 
