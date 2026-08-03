@@ -39,11 +39,11 @@ func NewAnonymousA2AClient(agentURL string, opts ...client.Option) (*client.A2AC
 }
 
 type anonymousA2AClientInitMiddleware struct {
-	gate        chan struct{}
-	jarMu       sync.Mutex
-	jar         http.CookieJar
-	initialized bool
-	waitHook    func()
+	gate                   chan struct{}
+	jarMu                  sync.Mutex
+	jar                    http.CookieJar
+	initializedCookieValue string
+	waitHook               func()
 }
 
 func newAnonymousA2AClientInitMiddleware() *anonymousA2AClientInitMiddleware {
@@ -135,8 +135,24 @@ func (m *anonymousA2AClientInitMiddleware) needsInitialization(
 		return false
 	}
 	m.jarMu.Lock()
-	defer m.jarMu.Unlock()
-	return !m.initialized
+	initializedCookieValue := m.initializedCookieValue
+	jar := m.jar
+	m.jarMu.Unlock()
+	if initializedCookieValue == "" || jar == nil {
+		return true
+	}
+	for _, cookie := range jar.Cookies(req.URL) {
+		if cookie != nil && cookie.Name == anonymousUserIDCookieName &&
+			cookie.Value == initializedCookieValue {
+			return false
+		}
+	}
+	m.jarMu.Lock()
+	if m.initializedCookieValue == initializedCookieValue {
+		m.initializedCookieValue = ""
+	}
+	m.jarMu.Unlock()
+	return true
 }
 
 func (m *anonymousA2AClientInitMiddleware) ensureCookieJar(configured http.CookieJar) error {
@@ -259,7 +275,7 @@ func (m *anonymousA2AClientInitMiddleware) markInitialized(
 	responseCookies []*http.Cookie,
 ) {
 	m.jarMu.Lock()
-	if m.initialized || m.jar == nil {
+	if m.jar == nil {
 		m.jarMu.Unlock()
 		return
 	}
@@ -284,7 +300,7 @@ func (m *anonymousA2AClientInitMiddleware) markInitialized(
 			continue
 		}
 		m.jarMu.Lock()
-		m.initialized = true
+		m.initializedCookieValue = cookie.Value
 		m.jarMu.Unlock()
 		return
 	}
@@ -362,9 +378,6 @@ func (j *anonymousA2AClientRequestCookieJar) SetCookies(u *url.URL, cookies []*h
 		j.storedCookies[key] = stored
 	}
 	for _, cookie := range cookies {
-		if cookie == nil {
-			continue
-		}
 		stored[cookie.String()] = struct{}{}
 	}
 	j.mu.Unlock()
@@ -385,9 +398,6 @@ func (j *anonymousA2AClientRequestCookieJar) prepareRedirect(req *http.Request) 
 	existingCookies := req.Cookies()
 	req.Header.Del("Cookie")
 	for _, cookie := range existingCookies {
-		if cookie == nil {
-			continue
-		}
 		if _, injectedByJar := jarCookieNames[cookie.Name]; injectedByJar {
 			continue
 		}
