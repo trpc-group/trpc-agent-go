@@ -428,7 +428,26 @@ func checkExplicitVersion(policyPath string, raw []byte) error {
 // keywords (including needs_human_review -> ask), compiles every regex and
 // glob, and builds the domain and backend indexes.
 func (p *Policy) compile() error {
+	if err := p.normalizeActions(); err != nil {
+		return err
+	}
+	if err := p.normalizeRuleOverrides(); err != nil {
+		return err
+	}
 	var c compiledPolicy
+	if err := p.compileMatchers(&c); err != nil {
+		return err
+	}
+	if err := p.compileToolIndexes(&c); err != nil {
+		return err
+	}
+	p.compiled = c
+	return nil
+}
+
+// normalizeActions validates the policy version and rewrites every action
+// keyword to its canonical form.
+func (p *Policy) normalizeActions() error {
 	var err error
 	switch p.Version {
 	case 0:
@@ -448,6 +467,12 @@ func (p *Policy) compile() error {
 		p.Network.OnNonWhitelisted, ActionDeny); err != nil {
 		return fmt.Errorf("network.on_non_whitelisted: %w", err)
 	}
+	return nil
+}
+
+// normalizeRuleOverrides canonicalizes each override in place, rejecting an
+// unknown rule id, action or risk level.
+func (p *Policy) normalizeRuleOverrides() error {
 	for id, ov := range p.RuleOverrides {
 		if !knownRuleIDs[id] {
 			return fmt.Errorf("rule_overrides[%s]: unknown rule id", id)
@@ -473,6 +498,13 @@ func (p *Policy) compile() error {
 			p.RuleOverrides[id] = ov
 		}
 	}
+	return nil
+}
+
+// compileMatchers precompiles the secret regexps, forbidden-path globs, domain
+// matchers and the shellsafe policy into c.
+func (p *Policy) compileMatchers(c *compiledPolicy) error {
+	var err error
 	if c.secretRes, err = compileRegexps(p.Secrets.Patterns, "secrets.patterns"); err != nil {
 		return err
 	}
@@ -484,6 +516,15 @@ func (p *Policy) compile() error {
 	}
 	c.allowedDomains = compileDomains(p.Network.AllowedDomains)
 	c.shellPolicy = shellsafe.PolicyFromLists(p.Commands.Allowed, p.Commands.Denied)
+	return nil
+}
+
+// compileToolIndexes builds the tool→backend indexes for the command entry
+// points and the session-input tools, applying the default-inheritance rules
+// and rejecting a configuration that would leave the guard scanning nothing or
+// resolving a tool ambiguously.
+func (p *Policy) compileToolIndexes(c *compiledPolicy) error {
+	var err error
 	// A partial programmatic policy (WithPolicy(&Policy{ForbiddenPaths: ...}))
 	// leaves Backends nil; compiled as-is it would produce an empty backend
 	// index, every exec tool would resolve to backend "" and be allowed without
@@ -523,7 +564,6 @@ func (p *Policy) compile() error {
 				"session_input.tools: tool %q is already mapped to backend %q under backends", t, b)
 		}
 	}
-	p.compiled = c
 	return nil
 }
 
