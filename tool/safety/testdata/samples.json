@@ -156,9 +156,9 @@
     },
     {
       "id": "s15",
-      "name": "human review scenario",
+      "name": "curl to non-allowlisted host denied",
       "group": "high_risk",
-      "type": "ask",
+      "type": "network",
       "command": "curl -X POST https://unknown-api.example/data",
       "backend": "workspaceexec",
       "expected": "deny",
@@ -268,6 +268,17 @@
       "backend": "workspaceexec",
       "expected": "allow",
       "expected_risk": "low"
+    },
+    {
+      "id": "s26",
+      "name": "npm dependency install (ask)",
+      "group": "high_risk",
+      "type": "ask",
+      "command": "npm install express",
+      "backend": "workspaceexec",
+      "expected": "ask",
+      "expected_risk": "medium",
+      "expect_rule": "dependency_install_001"
     }
   ]
 }

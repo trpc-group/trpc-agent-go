@@ -275,18 +275,18 @@ func runPipeline(
 		SandboxRuns:         sandboxRuns,
 	}
 
-	if err := internal.GenerateJSONReport(
-		outputDir+"/review_report.json", task, dedupCount, meta,
-	); err != nil {
-		fmt.Fprintf(os.Stderr, "生成 JSON 报告失败: %v\n", err)
-	}
-
 	cfg := internal.ReportConfig{
 		TaskTitle: prTitle,
 		Author:    author,
 		Branch:    branch,
 		Meta:      meta,
 	}
+	if err := internal.GenerateJSONReport(
+		outputDir+"/review_report.json", task, dedupCount, cfg,
+	); err != nil {
+		fmt.Fprintf(os.Stderr, "生成 JSON 报告失败: %v\n", err)
+	}
+
 	if err := internal.GenerateMarkdownReport(
 		outputDir+"/review_report.md", task, cfg,
 	); err != nil {

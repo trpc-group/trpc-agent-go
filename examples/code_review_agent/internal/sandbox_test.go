@@ -10,6 +10,8 @@ package internal
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -78,22 +80,33 @@ func TestRunCommand_Intercepted(t *testing.T) {
 
 // TestRunCommand_OutputLimited 验证输出在运行中被限制，超限截断（A1）。
 func TestRunCommand_OutputLimited(t *testing.T) {
+	dir := t.TempDir()
+	// 生成确定性的大文件（与主机路径无关），cat 后应被运行时截断。
+	bigFile := filepath.Join(dir, "big.txt")
+	if err := os.WriteFile(bigFile, []byte(strings.Repeat("x", 4096)), 0o600); err != nil {
+		t.Fatalf("写入测试文件失败: %v", err)
+	}
+
 	cfg := DefaultSandboxConfig()
 	cfg.MaxOutputSize = 128
 	se := NewSandboxExecutor(cfg, false)
-	res, err := se.RunCommand(context.Background(), "cat /usr/bin/env", t.TempDir())
+	// 用相对路径，避免 temp 随机目录名被 sensitive_leak 规则误伤。
+	res, err := se.RunCommand(context.Background(), "cat big.txt", dir)
 	if err != nil {
 		t.Fatalf("命令执行失败: %v", err)
 	}
 	if res.Intercepted {
-		t.Fatal("cat /usr/bin/env 不应被拦截")
+		t.Fatal("cat 不应被安全策略拦截")
 	}
-	// 截断后内容 = 128 字节 + 标记，远超说明缓冲确实限流了。
+	// 截断后内容 = 128 字节 + 标记。
 	if len(res.Stdout) > 256 {
 		t.Errorf("输出未被限制: 长度 %d > 256", len(res.Stdout))
 	}
-	if len(res.Stdout) >= 128 && !strings.Contains(res.Stdout, "输出已截断") {
-		t.Log("输出达到上限但未标记截断（二进制内容），可接受")
+	if !strings.Contains(res.Stdout, "输出已截断") {
+		t.Error("超出限制的输出应标记截断")
+	}
+	if len(res.Stdout) == 0 {
+		t.Error("截断缓冲不应为空")
 	}
 }
 

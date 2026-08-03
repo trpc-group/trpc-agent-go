@@ -34,7 +34,7 @@ type ReportConfig struct {
 }
 
 // GenerateJSONReport 生成 JSON 格式的审查报告。
-func GenerateJSONReport(path string, task *ReviewTask, dedupCount int, meta ReportMeta) error {
+func GenerateJSONReport(path string, task *ReviewTask, dedupCount int, cfg ReportConfig) error {
 	type reportEntry struct {
 		TaskID               string               `json:"task_id"`
 		Title                string               `json:"title,omitempty"`
@@ -57,6 +57,9 @@ func GenerateJSONReport(path string, task *ReviewTask, dedupCount int, meta Repo
 
 	entry := reportEntry{
 		TaskID:               task.ID,
+		Title:                cfg.TaskTitle,
+		Author:               cfg.Author,
+		Branch:               cfg.Branch,
 		Status:               task.Status,
 		CreatedAt:            time.Unix(task.CreatedAt, 0).Format(time.RFC3339),
 		DurationMs:           task.DurationMs,
@@ -65,11 +68,11 @@ func GenerateJSONReport(path string, task *ReviewTask, dedupCount int, meta Repo
 		Summary:              task.Summary,
 		DedupRemoved:         dedupCount,
 		Findings:             task.Findings,
-		PermissionDecisions:  meta.PermissionDecisions,
-		SandboxRuns:          meta.SandboxRuns,
-		ToolCallsCount:       meta.Monitoring.ToolCallsCount,
-		PermissionIntercepts: meta.Monitoring.PermissionIntercepts,
-		SandboxDurationMs:    meta.Monitoring.SandboxDurationMs,
+		PermissionDecisions:  cfg.Meta.PermissionDecisions,
+		SandboxRuns:          cfg.Meta.SandboxRuns,
+		ToolCallsCount:       cfg.Meta.Monitoring.ToolCallsCount,
+		PermissionIntercepts: cfg.Meta.Monitoring.PermissionIntercepts,
+		SandboxDurationMs:    cfg.Meta.Monitoring.SandboxDurationMs,
 	}
 
 	if len(task.Findings) == 0 {

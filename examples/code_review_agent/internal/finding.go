@@ -141,10 +141,10 @@ func DeduplicateFindings(findings []Finding) []Finding {
 	return result
 }
 
-// 低置信度降级阈值：低于此值的 finding 降为 warning 并要求人工复核；
-// 低于此值的 finding 严重级别降一级。
 const (
-	lowConfidenceReviewThreshold    = 0.3
+	// 低于此值的 finding 降为 warning 并标记 NeedsHumanReview。
+	lowConfidenceReviewThreshold = 0.3
+	// 低于此值（且不低于 ReviewThreshold）的 finding 严重级别降一级。
 	lowConfidenceDowngradeThreshold = 0.6
 )
 

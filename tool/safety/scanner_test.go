@@ -765,8 +765,23 @@ func TestScan_HostExecLongSessionAsked(t *testing.T) {
 	assert.Equal(t, "hostexec_long_session", report.RuleID)
 }
 
-func TestScan_HostExecSafeCommandAllowed(t *testing.T) {
+func TestScan_HostExecRequiresAskByDefault(t *testing.T) {
 	s := newTestScanner()
+	report := s.Scan(context.Background(), ScanRequest{
+		ToolName: "host_shell",
+		Command:  "echo hi",
+		Backend:  "hostexec",
+	})
+	// DefaultPolicy sets HostExecRequiresAsk=true: host shell commands must
+	// be confirmed by a human, even benign ones.
+	assert.Equal(t, DecisionAsk, report.Decision)
+	assert.Equal(t, "hostexec_requires_ask", report.RuleID)
+}
+
+func TestScan_HostExecAskDisabledAllows(t *testing.T) {
+	p := DefaultPolicy()
+	p.HostExecRequiresAsk = false
+	s := NewScanner(p)
 	report := s.Scan(context.Background(), ScanRequest{
 		ToolName: "host_shell",
 		Command:  "echo hi",

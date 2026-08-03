@@ -407,7 +407,15 @@ func TestPipeline_AllFixtures(t *testing.T) {
 				t.Errorf("fixture %s 未生成 MD 报告: %v", name, err)
 			}
 			unique := task.Summary.Total - task.Summary.Duplicates
-			if min := minFindings[name]; unique < min {
+			min, hasExpectation := minFindings[name]
+			if !hasExpectation {
+				t.Errorf("fixture %s 没有期望值配置，新 fixture 必须显式声明最小检出数", name)
+			} else if min == 0 {
+				// clean 类 fixture 必须严格零检出。
+				if unique != 0 {
+					t.Errorf("fixture %s 应为零检出, 实际 %d", name, unique)
+				}
+			} else if unique < min {
 				t.Errorf("fixture %s 检出不足: 期望 >=%d, 实际 %d", name, min, unique)
 			}
 			t.Logf("fixture %s: findings=%d", name, unique)
@@ -463,6 +471,18 @@ func TestPipeline_MonitoringPersisted(t *testing.T) {
 	decisions, err := store.GetPermissionDecisionsByTask(ctx, task.ID)
 	if err != nil {
 		t.Fatalf("查询 permission decisions 失败: %v", err)
+	}
+
+	// dry-run 且无 repo-path：没有沙箱命令进入门禁，runs 与 decisions 都应为 0。
+	if len(runs) != 0 {
+		t.Errorf("无 repo-path 时 sandbox_runs 应为 0 条, 实际 %d", len(runs))
+	}
+	if len(decisions) != 0 {
+		t.Errorf("无 repo-path 时 permission_decisions 应为 0 条, 实际 %d", len(decisions))
+	}
+	if mon.ToolCallsCount != 0 || mon.PermissionIntercepts != 0 {
+		t.Errorf("无沙箱执行时 tool_calls/intercepts 应为 0, 实际 %d/%d",
+			mon.ToolCallsCount, mon.PermissionIntercepts)
 	}
 
 	t.Logf("审计链路: sandbox_runs=%d, permission_decisions=%d, tool_calls=%d, intercepts=%d",

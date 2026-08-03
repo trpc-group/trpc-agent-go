@@ -228,6 +228,11 @@ type limitedBuffer struct {
 
 // Write 实现 io.Writer，始终返回 len(p) 以免 exec 报错。
 func (b *limitedBuffer) Write(p []byte) (int, error) {
+	// max <= 0 视为不限制：零值 SandboxConfig 不应静默丢弃全部输出。
+	if b.max <= 0 {
+		b.buf = append(b.buf, p...)
+		return len(p), nil
+	}
 	space := b.max - len(b.buf)
 	if space > 0 {
 		if len(p) <= space {
