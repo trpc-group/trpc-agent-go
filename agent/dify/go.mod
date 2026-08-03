@@ -6,7 +6,7 @@ replace trpc.group/trpc-go/trpc-agent-go => ../..
 
 require (
 	github.com/cloudernative/dify-sdk-go v1.0.0
-	trpc.group/trpc-go/trpc-a2a-go v0.2.5
+	trpc.group/trpc-go/trpc-a2a-go v0.2.6-0.20260721084546-18c8244d0acb
 	trpc.group/trpc-go/trpc-agent-go v0.5.0
 )
 

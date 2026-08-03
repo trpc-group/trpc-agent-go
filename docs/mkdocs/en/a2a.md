@@ -123,13 +123,24 @@ machine-readable fields preferred on the outer metadata, mirrored into
 
 ```go
 import (
+	"context"
+	"net/http"
+	"net/http/cookiejar"
+
+	"trpc.group/trpc-go/trpc-agent-go/agent/a2aagent"
 	"trpc.group/trpc-go/trpc-a2a-go/client"
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 )
 
 func main() {
-	// Connect to A2A service
-	client, _ := client.NewA2AClient("http://localhost:8080/")
+	jar, _ := cookiejar.New(nil)
+	httpClient := &http.Client{Jar: jar}
+	// The helper persists the anonymous cookie and serializes this client's
+	// first concurrent requests until the principal is established.
+	a2aClient, _ := a2aagent.NewAnonymousA2AClient(
+		"http://localhost:8080/",
+		client.WithHTTPClient(httpClient),
+	)
 
 	// Send message to Agent
 	message := protocol.NewMessage(
@@ -138,10 +149,34 @@ func main() {
 	)
 
 	// Agent will automatically process and return results
-	response, _ := client.SendMessage(context.Background(),
+	response, _ := a2aClient.SendMessage(context.Background(),
 		protocol.SendMessageParams{Message: message})
 }
 ```
+
+For anonymous direct clients, reuse the same client and cookie jar for later
+requests. `NewAnonymousA2AClient` serializes the first requests made through
+that client while the server establishes the anonymous principal. The
+guarantee is per client instance; coordinate separate clients independently.
+The client honors anonymous `Set-Cookie` path, domain, expiry, and deletion
+directives in its cookie jar. It does not connect to `SessionService` or
+persist session state itself.
+Browser clients should complete one initial request before starting concurrent
+anonymous message sends, or provide a trusted user identity instead.
+
+#### Anonymous Principal Behavior
+
+When a request does not provide a non-empty UserID through the configured
+header (the default is `X-User-ID`), the built-in A2A server authentication
+generates a random principal with the `A2A_ANONYMOUS_` prefix. The server
+returns it in the HTTP-only `trpc_agent_a2a_anon` cookie and uses that cookie to
+keep subsequent requests on the same anonymous principal. The A2A `contextID`
+continues to identify the session; it is not used as the principal source.
+
+Clients that need continuity must reuse a Cookie Jar. A client or request that
+does not retain cookies can receive a new anonymous principal on each request.
+When a non-empty UserID header is supplied, the server uses that header
+identity instead of the anonymous cookie flow.
 
 ### Advanced Configuration
 
@@ -955,7 +990,8 @@ Through the combined use of A2A Server and A2AAgent, you can easily build distri
 | `WithErrorHandler(handler)` | Custom error handler |
 | `WithA2AToAgentConverter(conv)` | Custom A2A→Agent message converter |
 | `WithEventToA2AConverter(conv)` | Custom Event→A2A message converter |
-| `WithExtraA2AOptions(opts...)` | Pass-through options for underlying A2A Server |
+| `WithExtraA2AOptions(opts...)` | Pass-through options for underlying A2A Server; middleware observes the final authenticated user. Custom auth providers must return a non-empty UserID; empty identities are rejected. |
+| `WithPreAuthA2AMiddleware(middlewares...)` | Add request middleware that must run before anonymous-cookie authentication |
 | `WithDebugLogging(enabled)` | Enable debug logging |
 
 ### A2AAgent Configuration Reference
