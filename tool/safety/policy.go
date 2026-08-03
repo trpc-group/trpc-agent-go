@@ -26,7 +26,7 @@ func DefaultPolicy() *Policy {
 		AllowedCommands: []string{"echo", "ls", "cat", "go", "python3", "node"},
 		DeniedCommands:  []string{},
 		ForbiddenPaths: []string{
-			"/etc/passwd", "/etc/shadow", "~/.ssh",
+			"/etc/passwd", "/etc/shadow", "~/.ssh", "$HOME/.ssh",
 			".env", ".env.local", "credentials.json",
 			"/proc/", "/sys/",
 		},
@@ -58,7 +58,7 @@ func DefaultPolicy() *Policy {
 				ID:          "secrets_001",
 				Category:    "sensitive_info",
 				Description: "Detect credential file access",
-				Patterns:    []string{`~/\.ssh`, `\.env`, `credentials`, `id_rsa`, `\.pem`},
+				Patterns:    []string{`~/\.ssh`, `\.ssh`, `\.env`, `credentials`, `id_rsa`, `\.pem`},
 				RiskLevel:   RiskCritical,
 				Action:      DecisionDeny,
 			},
@@ -137,11 +137,20 @@ func LoadPolicy(path string) (*Policy, error) {
 		policy.Version = "1.0"
 	}
 
-	// Validate every rule pattern at load time: a typo must fail loudly
-	// instead of silently turning a deny rule into a no-op (the scanner's
-	// compileRules only warns as a last resort for programmatically-built
-	// policies).
+	// Validate every rule pattern and enum at load time: a typo (bad regex,
+	// misspelled risk_level/action) must fail loudly instead of silently
+	// turning a deny rule into a no-op or an unknown action into allow.
 	for _, rule := range policy.Rules {
+		if !validRiskLevels[rule.RiskLevel] {
+			return nil, fmt.Errorf(
+				"rule %q has invalid risk_level %q (want one of low/medium/high/critical)",
+				rule.ID, rule.RiskLevel)
+		}
+		if !validActions[rule.Action] {
+			return nil, fmt.Errorf(
+				"rule %q has invalid action %q (want one of allow/deny/ask/needs_human_review)",
+				rule.ID, rule.Action)
+		}
 		for _, pattern := range rule.Patterns {
 			if _, err := regexp.Compile(pattern); err != nil {
 				return nil, fmt.Errorf(
@@ -150,4 +159,12 @@ func LoadPolicy(path string) (*Policy, error) {
 		}
 	}
 	return &policy, nil
+}
+
+var validRiskLevels = map[RiskLevel]bool{
+	RiskLow: true, RiskMedium: true, RiskHigh: true, RiskCritical: true,
+}
+
+var validActions = map[Decision]bool{
+	DecisionAllow: true, DecisionDeny: true, DecisionAsk: true, DecisionNeedsReview: true,
 }
