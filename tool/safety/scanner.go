@@ -115,365 +115,23 @@ func (s *Scanner) Scan(ctx context.Context, req ScanRequest) ScanReport {
 		Intercepted: false,
 	}
 
-	// 1.5 保守解析：shell 命令无法安全解析 → fail-closed deny；
-	// 非 shell 代码（python/javascript 等）无法用 shellsafe 结构化建模 →
-	// fail-closed ask，除非已有更严格的规则命中。
-	// （issue 要求：对无法安全解析的命令返回 deny 或 ask，不得默认 allow）
-	if fullCommand != "" {
-		if isForeignCode(req.Language) {
-			if riskOrder(RiskHigh) > riskOrder(report.RiskLevel) {
-				report.RiskLevel = RiskHigh
-			}
-			if actionOrder(DecisionAsk) > actionOrder(report.Decision) {
-				report.Decision = DecisionAsk
-				report.RuleID = "foreign_code_unscanned"
-				report.Evidence = req.Language
-				report.Category = "code_analysis"
-				report.Recommendation = fmt.Sprintf(
-					"%s code cannot be structurally parsed by shellsafe; review required", req.Language)
-			}
-		} else if _, perr := parseShellCommands(fullCommand); perr != nil {
-			if riskOrder(RiskCritical) > riskOrder(report.RiskLevel) {
-				report.RiskLevel = RiskCritical
-			}
-			if actionOrder(DecisionDeny) > actionOrder(report.Decision) {
-				report.Decision = DecisionDeny
-			}
-			report.RuleID = "shell_parse_failed"
-			report.Evidence = perr.Error()
-			report.Category = "shell_parse"
-			report.Recommendation = fmt.Sprintf(
-				"Command could not be safely parsed by shellsafe: %v", perr)
-		}
-	}
-
-	// 1. Check DeniedCommands (blacklist — highest priority).
-	cmdName := extractCommandName(fullCommand)
-	for _, denied := range s.policy.DeniedCommands {
-		if cmdName == denied {
-			if riskOrder(RiskCritical) > riskOrder(report.RiskLevel) {
-				report.RiskLevel = RiskCritical
-			}
-			if actionOrder(DecisionDeny) > actionOrder(report.Decision) {
-				report.Decision = DecisionDeny
-			}
-			report.RuleID = "denied_command"
-			report.Evidence = cmdName
-			report.Category = "dangerous_commands"
-			report.Recommendation = fmt.Sprintf(
-				"Command %q is explicitly denied by policy", cmdName,
-			)
-		}
-	}
-
-	// 2. Check against all regex rules. Worst risk level and most
-	// restrictive action win. Rule metadata (RuleID, Evidence,
-	// Category, Recommendation) is updated when the risk or action
-	// is escalated, so the report always points at the rule that
-	// drove the most restrictive decision.
-	for _, cr := range s.compiledRe {
-		for _, re := range cr.Patterns {
-			if matches := re.FindStringSubmatch(fullCommand); matches != nil {
-				matchedRisk := riskOrder(cr.Rule.RiskLevel)
-				currentRisk := riskOrder(report.RiskLevel)
-				matchedAction := actionOrder(cr.Rule.Action)
-				currentAction := actionOrder(report.Decision)
-
-				riskUpgraded := matchedRisk > currentRisk
-				actionUpgraded := matchedAction > currentAction
-
-				// Update metadata when:
-				// 1. This match has worse risk, OR
-				// 2. This match has equal risk and >= action, OR
-				// 3. This match caused an action escalation (even
-				//    with lower risk).  Case 3 is important: if a
-				//    lower-risk rule pushes the action from Ask to
-				//    Deny, the metadata must reference that rule to
-				//    explain the Deny.
-				if riskUpgraded ||
-					(matchedRisk == currentRisk && matchedAction >= currentAction) ||
-					actionUpgraded {
-					report.RuleID = cr.Rule.ID
-					report.Evidence = matches[0]
-					report.Category = cr.Rule.Category
-					report.Recommendation = fmt.Sprintf(
-						"Rule %s (%s): %s",
-						cr.Rule.ID, cr.Rule.Category, cr.Rule.Description,
-					)
-				}
-
-				// Upgrade risk level if this rule is worse.
-				if riskUpgraded {
-					report.RiskLevel = cr.Rule.RiskLevel
-				}
-				// Upgrade action if this rule is more restrictive.
-				if actionUpgraded {
-					report.Decision = cr.Rule.Action
-				}
-			}
-		}
-	}
-
-	// 4. Check for dangerous paths in command and WorkDir.
-	// ~ and ~user prefixes are also checked in normalized form so that path
-	// traversal through a home directory (~root/../etc/shadow) resolves to the
-	// real target instead of evading the literal forbidden-path match.
-	normalizedCommand := normalizeTildePaths(fullCommand)
-	normalizedWorkDir := normalizeTildePaths(req.WorkDir)
-	for _, forbidden := range s.policy.ForbiddenPaths {
-		if strings.Contains(fullCommand, forbidden) ||
-			strings.Contains(normalizedCommand, forbidden) ||
-			strings.Contains(req.WorkDir, forbidden) ||
-			strings.Contains(normalizedWorkDir, forbidden) {
-			// Only update metadata on a strict upgrade: an earlier rule at
-			// the same severity (e.g. secrets_001 for ~/.ssh) stays the
-			// reported rule because it is more specific than the generic
-			// forbidden-path finding.
-			if riskOrder(RiskCritical) > riskOrder(report.RiskLevel) {
-				report.RuleID = "forbidden_path"
-				report.Evidence = forbidden
-				report.Category = "dangerous_commands"
-				report.Recommendation = fmt.Sprintf(
-					"Command references forbidden path: %s", forbidden,
-				)
-			}
-			if riskOrder(RiskCritical) > riskOrder(report.RiskLevel) {
-				report.RiskLevel = RiskCritical
-			}
-			if actionOrder(DecisionDeny) > actionOrder(report.Decision) {
-				report.Decision = DecisionDeny
-			}
-		}
-	}
-
-	// 5. Check AllowedCommands whitelist — if configured, commands
-	// not in the allowlist are denied, but only when no regex rule
-	// has already made a more nuanced decision (ask/deny from regex
-	// takes priority over the allowlist gate).
-	if len(s.policy.AllowedCommands) > 0 && report.Decision == DecisionAllow && cmdName != "" {
-		// shellsafe 结构策略：对 pipeline 的每个 segment 的命令做 allowlist 裁决，
-		// 捕获 `wget | sh` 这类"首段在白名单但后续段绕过"的多段绕过，以及
-		// 多行脚本中任一行的命令不在白名单的情况。
-		notAllowed := !isAllowed(cmdName, s.policy.AllowedCommands)
-		if segCmds, serr := parseShellCommands(fullCommand); serr == nil {
-			for _, argv := range segCmds {
-				if len(argv) > 0 && !isAllowed(argv[0], s.policy.AllowedCommands) {
-					notAllowed = true
-					break
-				}
-			}
-		}
-		if notAllowed {
-			if riskOrder(RiskHigh) > riskOrder(report.RiskLevel) {
-				report.RiskLevel = RiskHigh
-			}
-			if actionOrder(DecisionAsk) > actionOrder(report.Decision) {
-				report.Decision = DecisionAsk
-			}
-			report.RuleID = "not_allowed_command"
-			report.Evidence = cmdName
-			report.Category = "dangerous_commands"
-			report.Recommendation = fmt.Sprintf(
-				"Command %q (or one of its pipeline segments) is not in the allowed commands list", cmdName,
-			)
-		}
-	}
-
-	// 6a. Hidden command execution / unmodellable network configuration.
-	// These fail closed even when no host allowlist is configured, because the
-	// effective destination (or code run) cannot be statically modelled:
-	//   - ssh -o ProxyCommand/LocalCommand, scp -S, rsync -e/--rsh name a
-	//     program that executes behind an allowlisted destination;
-	//   - curl -K/--config reads a config file whose proxy/URL settings are
-	//     invisible to the scanner; curl --connect-to/--resolve rewrite the
-	//     real connection target; wget -e <non-proxy wgetrc> injects arbitrary
-	//     wgetrc configuration.
-	if cmdName == "ssh" || cmdName == "sftp" || cmdName == "scp" || cmdName == "rsync" {
-		if opt, found := netCommandOption(cmdName, fullCommand); found {
-			if riskOrder(RiskCritical) > riskOrder(report.RiskLevel) {
-				report.RiskLevel = RiskCritical
-			}
-			if actionOrder(DecisionDeny) > actionOrder(report.Decision) {
-				report.Decision = DecisionDeny
-			}
-			if metadataUpgrades(report, RiskCritical, DecisionDeny) {
-				report.RuleID = "net_command_option"
-				report.Evidence = opt
-				report.Category = "network_egress"
-				report.Recommendation = fmt.Sprintf(
-					"%s carries a hidden command/program option (%s) that cannot be safely modelled", cmdName, opt,
-				)
-			}
-		}
-	}
-	if cmdName == "curl" {
-		if config, routing, found := curlNetOverride(fullCommand); found {
-			if riskOrder(RiskCritical) > riskOrder(report.RiskLevel) {
-				report.RiskLevel = RiskCritical
-			}
-			if actionOrder(DecisionDeny) > actionOrder(report.Decision) {
-				report.Decision = DecisionDeny
-			}
-			if metadataUpgrades(report, RiskCritical, DecisionDeny) {
-				report.RuleID = "net_routing_override"
-				if config {
-					report.RuleID = "net_config_file"
-				}
-				report.Evidence = routing
-				report.Category = "network_egress"
-				report.Recommendation = "curl routing/config cannot be safely modelled; denying"
-			}
-		}
-	}
-	if cmdName == "wget" {
-		if val := wgetConfigOverride(fullCommand); val != "" {
-			if riskOrder(RiskHigh) > riskOrder(report.RiskLevel) {
-				report.RiskLevel = RiskHigh
-			}
-			if actionOrder(DecisionDeny) > actionOrder(report.Decision) {
-				report.Decision = DecisionDeny
-			}
-			if metadataUpgrades(report, RiskHigh, DecisionDeny) {
-				report.RuleID = "net_routing_override"
-				report.Evidence = val
-				report.Category = "network_egress"
-				report.Recommendation = "wget -e injects wgetrc configuration that cannot be safely modelled; denying"
-			}
-		}
-	}
-
-	// 6b. Check allowlisted hosts for network egress commands. Every extracted
-	// target (destination, -J jump peers, proxy URLs) must clear the allowlist.
-	if isNetCommand(cmdName) && len(s.policy.AllowlistedHosts) > 0 {
-		for _, target := range extractNetworkTargets(cmdName, fullCommand) {
-			if target != "" && !isAllowed(target, s.policy.AllowlistedHosts) {
-				if riskOrder(RiskHigh) > riskOrder(report.RiskLevel) {
-					report.RiskLevel = RiskHigh
-				}
-				if actionOrder(DecisionDeny) > actionOrder(report.Decision) {
-					report.Decision = DecisionDeny
-				}
-				if metadataUpgrades(report, RiskHigh, DecisionDeny) {
-					report.RuleID = "non_allowlisted_host"
-					report.Evidence = target
-					report.Category = "network_egress"
-					report.Recommendation = fmt.Sprintf(
-						"Target host %q is not in the allowlisted hosts", target,
-					)
-				}
-			}
-		}
-	}
-
-	// 7. Check environment variable allowlist.
-	if len(s.policy.EnvAllowlist) > 0 && len(req.EnvVars) > 0 {
-		for _, ev := range req.EnvVars {
-			name := extractEnvVarName(ev)
-			if name != "" && !isAllowed(name, s.policy.EnvAllowlist) {
-				if riskOrder(RiskHigh) > riskOrder(report.RiskLevel) {
-					report.RiskLevel = RiskHigh
-				}
-				if actionOrder(DecisionDeny) > actionOrder(report.Decision) {
-					report.Decision = DecisionDeny
-				}
-				report.RuleID = "env_not_allowlisted"
-				report.Evidence = name
-				report.Category = "dangerous_commands"
-				report.Recommendation = fmt.Sprintf(
-					"Environment variable %q is not in the allowlist", name,
-				)
-			}
-		}
-	}
-
-	// 8. Check excessive command length (potential abuse).
-	// Only upgrade — never downgrade a more severe finding.
-	if len(fullCommand) > 10000 {
-		if riskOrder(RiskMedium) > riskOrder(report.RiskLevel) {
-			report.RiskLevel = RiskMedium
-		}
-		if actionOrder(DecisionAsk) > actionOrder(report.Decision) {
-			report.Decision = DecisionAsk
-		}
-		// Only set metadata if this is the worst finding.
-		if riskOrder(report.RiskLevel) <= riskOrder(RiskMedium) {
-			report.RuleID = "excessive_length"
-			report.Category = "resource_abuse"
-			report.Recommendation = "Command exceeds 10000 characters; review required."
-		}
-	}
-
-	// 8.5 Resource abuse: enforce MaxTimeoutSec on sleep durations.
-	if s.policy.MaxTimeoutSec > 0 {
-		if secs, ok := parseSleepSeconds(fullCommand); ok && secs > s.policy.MaxTimeoutSec {
-			if riskOrder(RiskHigh) > riskOrder(report.RiskLevel) {
-				report.RiskLevel = RiskHigh
-			}
-			if actionOrder(DecisionAsk) > actionOrder(report.Decision) {
-				report.Decision = DecisionAsk
-			}
-			if metadataUpgrades(report, RiskHigh, DecisionAsk) {
-				report.RuleID = "sleep_timeout_exceeded"
-				report.Evidence = fmt.Sprintf("sleep %ds", secs)
-				report.Category = "resource_abuse"
-				report.Recommendation = fmt.Sprintf(
-					"sleep %ds exceeds max timeout %ds", secs, s.policy.MaxTimeoutSec)
-			}
-		}
-	}
-
-	// 8.6 Resource abuse: output flood / unbounded stream.
-	if s.policy.MaxOutputBytes > 0 {
-		if flood, isFlood := matchesOutputFlood(fullCommand); isFlood {
-			if riskOrder(RiskCritical) > riskOrder(report.RiskLevel) {
-				report.RiskLevel = RiskCritical
-			}
-			if actionOrder(DecisionDeny) > actionOrder(report.Decision) {
-				report.Decision = DecisionDeny
-			}
-			if metadataUpgrades(report, RiskCritical, DecisionDeny) {
-				report.RuleID = "output_flood"
-				report.Evidence = flood
-				report.Category = "resource_abuse"
-				report.Recommendation = "Command streams unbounded output (/dev/zero, yes, etc.)"
-			}
-		}
-	}
-
-	// 8.7 Resource abuse: concurrency flags (parallel fan-out).
-	if concurrency, isConcurrent := matchesConcurrency(fullCommand); isConcurrent {
-		if riskOrder(RiskHigh) > riskOrder(report.RiskLevel) {
-			report.RiskLevel = RiskHigh
-		}
-		if actionOrder(DecisionAsk) > actionOrder(report.Decision) {
-			report.Decision = DecisionAsk
-		}
-		if metadataUpgrades(report, RiskHigh, DecisionAsk) {
-			report.RuleID = "concurrent_execution"
-			report.Evidence = concurrency
-			report.Category = "resource_abuse"
-			report.Recommendation = "Command requests concurrent/parallel execution; review required"
-		}
-	}
-
-	// 8.8 HostExec safety boundary: interactive / long-lived PTY sessions
-	// run directly on the host shell and carry higher risk.
-	if req.Backend == "hostexec" {
-		if session, isLongSession := matchesHostExecRisk(fullCommand); isLongSession {
-			if riskOrder(RiskHigh) > riskOrder(report.RiskLevel) {
-				report.RiskLevel = RiskHigh
-			}
-			if actionOrder(DecisionAsk) > actionOrder(report.Decision) {
-				report.Decision = DecisionAsk
-			}
-			if metadataUpgrades(report, RiskHigh, DecisionAsk) {
-				report.RuleID = "hostexec_long_session"
-				report.Evidence = session
-				report.Category = "host_execution"
-				report.Recommendation = "hostexec interactive/long-lived session (top, tail -f, editor, etc.); review required"
-			}
-		}
-	}
+	// Rule steps live in small methods so the decision pipeline stays
+	// readable and each step can be tested in isolation. Worst risk level
+	// and most restrictive action win across all steps; report metadata
+	// always points at the rule that drove the most restrictive verdict.
+	s.applyParseChecks(req, fullCommand, &report)
+	s.applyDeniedCommands(fullCommand, &report)
+	s.applyRegexRules(fullCommand, &report)
+	s.applyForbiddenPaths(req, fullCommand, &report)
+	s.applyAllowedCommands(fullCommand, &report)
+	s.applyNetworkOverrides(fullCommand, &report)
+	s.applyNetworkHosts(fullCommand, &report)
+	s.applyEnvAllowlist(req, &report)
+	s.applyLengthLimit(fullCommand, &report)
+	s.applySleepTimeout(fullCommand, &report)
+	s.applyOutputFlood(fullCommand, &report)
+	s.applyConcurrency(fullCommand, &report)
+	s.applyHostExec(req, fullCommand, &report)
 
 	// Desensitize the command and evidence stored in the report so secrets
 	// never leak into reports, logs, or audit events.
@@ -499,6 +157,421 @@ func (s *Scanner) Scan(ctx context.Context, req ScanRequest) ScanReport {
 	})
 
 	return report
+}
+
+// applyParseChecks is the conservative parsing step: shell commands that
+// shellsafe cannot parse fail closed to deny; non-shell code that cannot be
+// structurally modelled fails closed to ask (unless a stricter rule already
+// matched). The issue requires unparseable commands to return deny or ask,
+// never a default allow.
+func (s *Scanner) applyParseChecks(req ScanRequest, fullCommand string, report *ScanReport) {
+	if fullCommand == "" {
+		return
+	}
+	if isForeignCode(req.Language) {
+		if riskOrder(RiskHigh) > riskOrder(report.RiskLevel) {
+			report.RiskLevel = RiskHigh
+		}
+		if actionOrder(DecisionAsk) > actionOrder(report.Decision) {
+			report.Decision = DecisionAsk
+			report.RuleID = "foreign_code_unscanned"
+			report.Evidence = req.Language
+			report.Category = "code_analysis"
+			report.Recommendation = fmt.Sprintf(
+				"%s code cannot be structurally parsed by shellsafe; review required", req.Language)
+		}
+		return
+	}
+	if _, perr := parseShellCommands(fullCommand); perr != nil {
+		if riskOrder(RiskCritical) > riskOrder(report.RiskLevel) {
+			report.RiskLevel = RiskCritical
+		}
+		if actionOrder(DecisionDeny) > actionOrder(report.Decision) {
+			report.Decision = DecisionDeny
+		}
+		report.RuleID = "shell_parse_failed"
+		report.Evidence = perr.Error()
+		report.Category = "shell_parse"
+		report.Recommendation = fmt.Sprintf(
+			"Command could not be safely parsed by shellsafe: %v", perr)
+	}
+}
+
+// applyDeniedCommands enforces the DeniedCommands blacklist.
+func (s *Scanner) applyDeniedCommands(fullCommand string, report *ScanReport) {
+	cmdName := extractCommandName(fullCommand)
+	for _, denied := range s.policy.DeniedCommands {
+		if cmdName != denied {
+			continue
+		}
+		if riskOrder(RiskCritical) > riskOrder(report.RiskLevel) {
+			report.RiskLevel = RiskCritical
+		}
+		if actionOrder(DecisionDeny) > actionOrder(report.Decision) {
+			report.Decision = DecisionDeny
+		}
+		report.RuleID = "denied_command"
+		report.Evidence = cmdName
+		report.Category = "dangerous_commands"
+		report.Recommendation = fmt.Sprintf(
+			"Command %q is explicitly denied by policy", cmdName,
+		)
+	}
+}
+
+// applyRegexRules runs every configured regex rule. Worst risk level and most
+// restrictive action win; metadata is updated when the match has worse risk,
+// equal risk with >= action, or caused an action escalation (a lower-risk
+// rule that pushes Ask to Deny must still be reported as the reason).
+func (s *Scanner) applyRegexRules(fullCommand string, report *ScanReport) {
+	for _, cr := range s.compiledRe {
+		for _, re := range cr.Patterns {
+			if matches := re.FindStringSubmatch(fullCommand); matches != nil {
+				// Unknown risk/action (e.g. a programmatically-built policy
+				// with zero values) fail closed instead of ranking as allow.
+				ruleRisk := cr.Rule.RiskLevel
+				if !validRiskLevels[ruleRisk] {
+					ruleRisk = RiskCritical
+				}
+				ruleAction := cr.Rule.Action
+				if !validActions[ruleAction] {
+					ruleAction = DecisionDeny
+				}
+				matchedRisk := riskOrder(ruleRisk)
+				currentRisk := riskOrder(report.RiskLevel)
+				matchedAction := actionOrder(ruleAction)
+				currentAction := actionOrder(report.Decision)
+
+				riskUpgraded := matchedRisk > currentRisk
+				actionUpgraded := matchedAction > currentAction
+
+				if riskUpgraded ||
+					(matchedRisk == currentRisk && matchedAction >= currentAction) ||
+					actionUpgraded {
+					report.RuleID = cr.Rule.ID
+					report.Evidence = matches[0]
+					report.Category = cr.Rule.Category
+					report.Recommendation = fmt.Sprintf(
+						"Rule %s (%s): %s",
+						cr.Rule.ID, cr.Rule.Category, cr.Rule.Description,
+					)
+				}
+
+				if riskUpgraded {
+					report.RiskLevel = ruleRisk
+				}
+				if actionUpgraded {
+					report.Decision = ruleAction
+				}
+			}
+		}
+	}
+}
+
+// applyForbiddenPaths checks dangerous paths in command and WorkDir. ~ and
+// ~user prefixes are also checked in normalized form so path traversal
+// through a home directory (~root/../etc/shadow) resolves to the real target
+// instead of evading the literal forbidden-path match.
+func (s *Scanner) applyForbiddenPaths(req ScanRequest, fullCommand string, report *ScanReport) {
+	normalizedCommand := normalizeTildePaths(fullCommand)
+	normalizedWorkDir := normalizeTildePaths(req.WorkDir)
+	for _, forbidden := range s.policy.ForbiddenPaths {
+		if !(strings.Contains(fullCommand, forbidden) ||
+			strings.Contains(normalizedCommand, forbidden) ||
+			strings.Contains(req.WorkDir, forbidden) ||
+			strings.Contains(normalizedWorkDir, forbidden)) {
+			continue
+		}
+		// Only update metadata on a strict upgrade: an earlier rule at the
+		// same severity (e.g. secrets_001 for ~/.ssh) stays the reported
+		// rule because it is more specific than the generic forbidden-path
+		// finding.
+		if riskOrder(RiskCritical) > riskOrder(report.RiskLevel) {
+			report.RuleID = "forbidden_path"
+			report.Evidence = forbidden
+			report.Category = "dangerous_commands"
+			report.Recommendation = fmt.Sprintf(
+				"Command references forbidden path: %s", forbidden,
+			)
+		}
+		if riskOrder(RiskCritical) > riskOrder(report.RiskLevel) {
+			report.RiskLevel = RiskCritical
+		}
+		if actionOrder(DecisionDeny) > actionOrder(report.Decision) {
+			report.Decision = DecisionDeny
+		}
+	}
+}
+
+// applyAllowedCommands enforces the AllowedCommands whitelist — if configured,
+// commands not in the allowlist are flagged, but only when no regex rule has
+// already made a more nuanced decision. Every pipeline segment of every line
+// is checked so `wget | sh` (first segment allowlisted, later segment
+// bypassing) is caught.
+func (s *Scanner) applyAllowedCommands(fullCommand string, report *ScanReport) {
+	if len(s.policy.AllowedCommands) == 0 || report.Decision != DecisionAllow {
+		return
+	}
+	// Use the raw first token, not its basename: "/tmp/go test" must not
+	// match an allowlist entry "go", or the allowlist becomes a soft
+	// boundary evadable by invoking a binary from an arbitrary location.
+	cmdName := firstToken(fullCommand)
+	if cmdName == "" {
+		return
+	}
+	notAllowed := !isAllowed(cmdName, s.policy.AllowedCommands)
+	if segCmds, serr := parseShellCommands(fullCommand); serr == nil {
+		for _, argv := range segCmds {
+			if len(argv) > 0 && !isAllowed(argv[0], s.policy.AllowedCommands) {
+				notAllowed = true
+				break
+			}
+		}
+	}
+	if !notAllowed {
+		return
+	}
+	if riskOrder(RiskHigh) > riskOrder(report.RiskLevel) {
+		report.RiskLevel = RiskHigh
+	}
+	if actionOrder(DecisionAsk) > actionOrder(report.Decision) {
+		report.Decision = DecisionAsk
+	}
+	report.RuleID = "not_allowed_command"
+	report.Evidence = cmdName
+	report.Category = "dangerous_commands"
+	report.Recommendation = fmt.Sprintf(
+		"Command %q (or one of its pipeline segments) is not in the allowed commands list", cmdName,
+	)
+}
+
+// applyNetworkOverrides fails closed on hidden command execution and
+// unmodellable network configuration, even when no host allowlist is
+// configured, because the effective destination (or code run) cannot be
+// statically modelled: ssh -o ProxyCommand/LocalCommand, scp -S, rsync
+// -e/--rsh name a program that executes behind an allowlisted destination;
+// curl -K/--config reads a config file whose proxy/URL settings are
+// invisible; curl --connect-to/--resolve rewrite the real connection target;
+// wget -e <non-proxy wgetrc> injects arbitrary wgetrc configuration.
+func (s *Scanner) applyNetworkOverrides(fullCommand string, report *ScanReport) {
+	cmdName := extractCommandName(fullCommand)
+	if cmdName == "ssh" || cmdName == "sftp" || cmdName == "scp" || cmdName == "rsync" {
+		if opt, found := netCommandOption(cmdName, fullCommand); found {
+			if riskOrder(RiskCritical) > riskOrder(report.RiskLevel) {
+				report.RiskLevel = RiskCritical
+			}
+			if actionOrder(DecisionDeny) > actionOrder(report.Decision) {
+				report.Decision = DecisionDeny
+			}
+			if metadataUpgrades(*report, RiskCritical, DecisionDeny) {
+				report.RuleID = "net_command_option"
+				report.Evidence = opt
+				report.Category = "network_egress"
+				report.Recommendation = fmt.Sprintf(
+					"%s carries a hidden command/program option (%s) that cannot be safely modelled", cmdName, opt,
+				)
+			}
+		}
+	}
+	if cmdName == "curl" {
+		if config, routing, found := curlNetOverride(fullCommand); found {
+			if riskOrder(RiskCritical) > riskOrder(report.RiskLevel) {
+				report.RiskLevel = RiskCritical
+			}
+			if actionOrder(DecisionDeny) > actionOrder(report.Decision) {
+				report.Decision = DecisionDeny
+			}
+			if metadataUpgrades(*report, RiskCritical, DecisionDeny) {
+				report.RuleID = "net_routing_override"
+				if config {
+					report.RuleID = "net_config_file"
+				}
+				report.Evidence = routing
+				report.Category = "network_egress"
+				report.Recommendation = "curl routing/config cannot be safely modelled; denying"
+			}
+		}
+	}
+	if cmdName == "wget" {
+		if val := wgetConfigOverride(fullCommand); val != "" {
+			if riskOrder(RiskHigh) > riskOrder(report.RiskLevel) {
+				report.RiskLevel = RiskHigh
+			}
+			if actionOrder(DecisionDeny) > actionOrder(report.Decision) {
+				report.Decision = DecisionDeny
+			}
+			if metadataUpgrades(*report, RiskHigh, DecisionDeny) {
+				report.RuleID = "net_routing_override"
+				report.Evidence = val
+				report.Category = "network_egress"
+				report.Recommendation = "wget -e injects wgetrc configuration that cannot be safely modelled; denying"
+			}
+		}
+	}
+}
+
+// applyNetworkHosts checks the host allowlist for network egress commands.
+// Every extracted target (destination, -J jump peers, proxy URLs) must clear
+// the allowlist.
+func (s *Scanner) applyNetworkHosts(fullCommand string, report *ScanReport) {
+	cmdName := extractCommandName(fullCommand)
+	if !isNetCommand(cmdName) || len(s.policy.AllowlistedHosts) == 0 {
+		return
+	}
+	for _, target := range extractNetworkTargets(cmdName, fullCommand) {
+		if target == "" || isAllowed(target, s.policy.AllowlistedHosts) {
+			continue
+		}
+		if riskOrder(RiskHigh) > riskOrder(report.RiskLevel) {
+			report.RiskLevel = RiskHigh
+		}
+		if actionOrder(DecisionDeny) > actionOrder(report.Decision) {
+			report.Decision = DecisionDeny
+		}
+		if metadataUpgrades(*report, RiskHigh, DecisionDeny) {
+			report.RuleID = "non_allowlisted_host"
+			report.Evidence = target
+			report.Category = "network_egress"
+			report.Recommendation = fmt.Sprintf(
+				"Target host %q is not in the allowlisted hosts", target,
+			)
+		}
+	}
+}
+
+// applyEnvAllowlist checks the environment-variable allowlist.
+func (s *Scanner) applyEnvAllowlist(req ScanRequest, report *ScanReport) {
+	if len(s.policy.EnvAllowlist) == 0 || len(req.EnvVars) == 0 {
+		return
+	}
+	for _, ev := range req.EnvVars {
+		name := extractEnvVarName(ev)
+		if name == "" || isAllowed(name, s.policy.EnvAllowlist) {
+			continue
+		}
+		if riskOrder(RiskHigh) > riskOrder(report.RiskLevel) {
+			report.RiskLevel = RiskHigh
+		}
+		if actionOrder(DecisionDeny) > actionOrder(report.Decision) {
+			report.Decision = DecisionDeny
+		}
+		report.RuleID = "env_not_allowlisted"
+		report.Evidence = name
+		report.Category = "dangerous_commands"
+		report.Recommendation = fmt.Sprintf(
+			"Environment variable %q is not in the allowlist", name,
+		)
+	}
+}
+
+// applyLengthLimit flags excessive command length (potential abuse). It only
+// upgrades — never downgrades a more severe finding.
+func (s *Scanner) applyLengthLimit(fullCommand string, report *ScanReport) {
+	if len(fullCommand) <= 10000 {
+		return
+	}
+	if riskOrder(RiskMedium) > riskOrder(report.RiskLevel) {
+		report.RiskLevel = RiskMedium
+	}
+	if actionOrder(DecisionAsk) > actionOrder(report.Decision) {
+		report.Decision = DecisionAsk
+	}
+	if riskOrder(report.RiskLevel) <= riskOrder(RiskMedium) {
+		report.RuleID = "excessive_length"
+		report.Category = "resource_abuse"
+		report.Recommendation = "Command exceeds 10000 characters; review required."
+	}
+}
+
+// applySleepTimeout enforces MaxTimeoutSec on sleep durations.
+func (s *Scanner) applySleepTimeout(fullCommand string, report *ScanReport) {
+	if s.policy.MaxTimeoutSec <= 0 {
+		return
+	}
+	secs, ok := parseSleepSeconds(fullCommand)
+	if !ok || secs <= s.policy.MaxTimeoutSec {
+		return
+	}
+	if riskOrder(RiskHigh) > riskOrder(report.RiskLevel) {
+		report.RiskLevel = RiskHigh
+	}
+	if actionOrder(DecisionAsk) > actionOrder(report.Decision) {
+		report.Decision = DecisionAsk
+	}
+	if metadataUpgrades(*report, RiskHigh, DecisionAsk) {
+		report.RuleID = "sleep_timeout_exceeded"
+		report.Evidence = fmt.Sprintf("sleep %ds", secs)
+		report.Category = "resource_abuse"
+		report.Recommendation = fmt.Sprintf(
+			"sleep %ds exceeds max timeout %ds", secs, s.policy.MaxTimeoutSec)
+	}
+}
+
+// applyOutputFlood flags unbounded output streams (/dev/zero, yes, ...).
+func (s *Scanner) applyOutputFlood(fullCommand string, report *ScanReport) {
+	if s.policy.MaxOutputBytes <= 0 {
+		return
+	}
+	flood, isFlood := matchesOutputFlood(fullCommand)
+	if !isFlood {
+		return
+	}
+	if riskOrder(RiskCritical) > riskOrder(report.RiskLevel) {
+		report.RiskLevel = RiskCritical
+	}
+	if actionOrder(DecisionDeny) > actionOrder(report.Decision) {
+		report.Decision = DecisionDeny
+	}
+	if metadataUpgrades(*report, RiskCritical, DecisionDeny) {
+		report.RuleID = "output_flood"
+		report.Evidence = flood
+		report.Category = "resource_abuse"
+		report.Recommendation = "Command streams unbounded output (/dev/zero, yes, etc.)"
+	}
+}
+
+// applyConcurrency flags parallel fan-out (xargs -P, make -j, --parallel).
+func (s *Scanner) applyConcurrency(fullCommand string, report *ScanReport) {
+	concurrency, isConcurrent := matchesConcurrency(fullCommand)
+	if !isConcurrent {
+		return
+	}
+	if riskOrder(RiskHigh) > riskOrder(report.RiskLevel) {
+		report.RiskLevel = RiskHigh
+	}
+	if actionOrder(DecisionAsk) > actionOrder(report.Decision) {
+		report.Decision = DecisionAsk
+	}
+	if metadataUpgrades(*report, RiskHigh, DecisionAsk) {
+		report.RuleID = "concurrent_execution"
+		report.Evidence = concurrency
+		report.Category = "resource_abuse"
+		report.Recommendation = "Command requests concurrent/parallel execution; review required"
+	}
+}
+
+// applyHostExec flags interactive / long-lived host-shell sessions (PTY,
+// editors, followers) that are risky to run without review on the real host.
+func (s *Scanner) applyHostExec(req ScanRequest, fullCommand string, report *ScanReport) {
+	if req.Backend != "hostexec" {
+		return
+	}
+	session, isLongSession := matchesHostExecRisk(fullCommand)
+	if !isLongSession {
+		return
+	}
+	if riskOrder(RiskHigh) > riskOrder(report.RiskLevel) {
+		report.RiskLevel = RiskHigh
+	}
+	if actionOrder(DecisionAsk) > actionOrder(report.Decision) {
+		report.Decision = DecisionAsk
+	}
+	if metadataUpgrades(*report, RiskHigh, DecisionAsk) {
+		report.RuleID = "hostexec_long_session"
+		report.Evidence = session
+		report.Category = "host_execution"
+		report.Recommendation = "hostexec interactive/long-lived session (top, tail -f, editor, etc.); review required"
+	}
 }
 
 // CheckToolPermission implements tool.PermissionPolicy so that
@@ -1136,6 +1209,15 @@ func normalizeTildePaths(cmd string) string {
 
 func normalizeTildeToken(f string) (string, bool) {
 	trimmed := strings.Trim(f, `"'`)
+	// Fold $HOME into ~ so that "$HOME/.ssh/config" is matched by
+	// forbidden-path patterns anchored on "~/". A bare "$HOMEDIR" prefix
+	// must not be folded.
+	if strings.HasPrefix(trimmed, "$HOME") {
+		rest := trimmed[len("$HOME"):]
+		if rest == "" || rest[0] == '/' {
+			return strings.Replace(f, trimmed, "~"+rest, 1), true
+		}
+	}
 	if !strings.HasPrefix(trimmed, "~") {
 		return f, false
 	}
@@ -1174,6 +1256,16 @@ func isAllowed(val string, allowlist []string) bool {
 		}
 	}
 	return false
+}
+
+// firstToken returns the first whitespace-delimited token of a command
+// string, preserving any path prefix ("/usr/bin/rm -rf /" → "/usr/bin/rm").
+func firstToken(fullCommand string) string {
+	cmd := strings.TrimSpace(fullCommand)
+	if idx := strings.IndexAny(cmd, " \t\n\r"); idx >= 0 {
+		cmd = cmd[:idx]
+	}
+	return cmd
 }
 
 // parseSleepSeconds finds "sleep <n>[s|m|h]" in a command and returns the
@@ -1381,8 +1473,15 @@ func actionOrder(d Decision) int {
 		return 2
 	case DecisionDeny:
 		return 3
-	default:
+	case "":
+		// Zero-value Decision (no action configured on a programmatically
+		// built rule) never upgrades a verdict.
 		return 0
+	default:
+		// Unknown actions (e.g. a YAML typo "allowd") fail closed: they rank
+		// above every known action, so an unknown decision is never downgraded
+		// and the resulting non-allow decision intercepts execution.
+		return 100
 	}
 }
 

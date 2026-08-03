@@ -544,7 +544,9 @@ func TestActionOrderAllCases(t *testing.T) {
 	assert.Equal(t, 1, actionOrder(DecisionAsk))
 	assert.Equal(t, 2, actionOrder(DecisionNeedsReview))
 	assert.Equal(t, 3, actionOrder(DecisionDeny))
-	assert.Equal(t, 0, actionOrder("unknown"))
+	// Unknown actions rank above every known action (fail closed): an
+	// unknown decision is never downgraded to a permissive one.
+	assert.Greater(t, actionOrder("unknown"), actionOrder(DecisionDeny))
 }
 
 func TestExtractCommandFromArgsAllKeys(t *testing.T) {
@@ -822,4 +824,62 @@ rules:
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 	_, err := LoadPolicy(path)
 	require.Error(t, err, "invalid regex pattern must be rejected at load time")
+}
+
+func TestLoadPolicy_RejectsInvalidEnums(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "policy.yaml")
+
+	badRisk := `rules:
+  - id: "bad_risk"
+    category: "dangerous_commands"
+    patterns: ["rm -rf /"]
+    risk_level: "nope"
+    action: "deny"
+`
+	require.NoError(t, os.WriteFile(path, []byte(badRisk), 0o600))
+	_, err := LoadPolicy(path)
+	require.Error(t, err, "invalid risk_level must be rejected at load time")
+
+	badAction := `rules:
+  - id: "bad_action"
+    category: "dangerous_commands"
+    patterns: ["rm -rf /"]
+    risk_level: "critical"
+    action: "allowd"
+`
+	require.NoError(t, os.WriteFile(path, []byte(badAction), 0o600))
+	_, err = LoadPolicy(path)
+	require.Error(t, err, "invalid action must be rejected at load time")
+}
+
+func TestScan_PathQualifiedCommandNotAllowlisted(t *testing.T) {
+	s := NewScanner(DefaultPolicy())
+	// "/tmp/go" must not be allowlisted by the bare "go" entry; the command
+	// must fail closed to a non-allow decision.
+	report := s.Scan(context.Background(), ScanRequest{Command: "/tmp/go test ./..."})
+	assert.NotEqual(t, DecisionAllow, report.Decision)
+	assert.True(t, report.Intercepted)
+	assert.Equal(t, "not_allowed_command", report.RuleID)
+}
+
+func TestScan_HomeEnvPathForbidden(t *testing.T) {
+	s := NewScanner(DefaultPolicy())
+	report := s.Scan(context.Background(), ScanRequest{Command: "cat $HOME/.ssh/config"})
+	assert.Equal(t, DecisionDeny, report.Decision)
+	assert.True(t, report.Intercepted)
+
+	abs := s.Scan(context.Background(), ScanRequest{Command: "cat /home/alice/.ssh/authorized_keys"})
+	assert.Equal(t, DecisionDeny, abs.Decision)
+}
+
+func TestScan_UnknownRuleActionFailsClosed(t *testing.T) {
+	p := DefaultPolicy()
+	p.Rules = []Rule{
+		{ID: "typo_action", Category: "test", Patterns: []string{`echo`}, RiskLevel: RiskLow, Action: "allowd"},
+	}
+	s := NewScanner(p)
+	report := s.Scan(context.Background(), ScanRequest{Command: "echo hello"})
+	assert.Equal(t, DecisionDeny, report.Decision, "unknown action must fail closed to deny")
+	assert.True(t, report.Intercepted)
 }
