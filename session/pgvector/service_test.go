@@ -170,8 +170,8 @@ func (a anyVectorArg) Match(_ driver.Value) bool {
 type timeArg struct{}
 
 func (a timeArg) Match(v driver.Value) bool {
-	_, ok := v.(time.Time)
-	return ok
+	t, ok := v.(time.Time)
+	return ok && !t.IsZero()
 }
 
 type utcTimeArg struct{}
