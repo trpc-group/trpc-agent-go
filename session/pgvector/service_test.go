@@ -167,6 +167,13 @@ func (a anyVectorArg) Match(_ driver.Value) bool {
 	return true
 }
 
+type timeArg struct{}
+
+func (a timeArg) Match(v driver.Value) bool {
+	_, ok := v.(time.Time)
+	return ok
+}
+
 type utcTimeArg struct{}
 
 func (a utcTimeArg) Match(v driver.Value) bool {
@@ -1237,6 +1244,7 @@ func TestCreateSession_GeneratesSessionID(t *testing.T) {
 
 	// ListAppStates.
 	mock.ExpectQuery("SELECT key, value FROM app_states").
+		WithArgs("app", timeArg{}).
 		WillReturnRows(
 			sqlmock.NewRows([]string{"key", "value"}),
 		)
@@ -1244,9 +1252,10 @@ func TestCreateSession_GeneratesSessionID(t *testing.T) {
 	// ListUserStates.
 	mock.ExpectQuery(
 		"SELECT key, value FROM user_states",
-	).WillReturnRows(
-		sqlmock.NewRows([]string{"key", "value"}),
-	)
+	).WithArgs("app", "user", timeArg{}).
+		WillReturnRows(
+			sqlmock.NewRows([]string{"key", "value"}),
+		)
 
 	sess, err := s.CreateSession(
 		context.Background(), key, nil,
@@ -1277,6 +1286,7 @@ func TestGetSession_NotFound(t *testing.T) {
 
 	// Session state query returns no rows.
 	mock.ExpectQuery("SELECT state, created_at").
+		WithArgs("app", "user", "sess", timeArg{}).
 		WillReturnRows(sqlmock.NewRows(
 			[]string{"state", "created_at", "updated_at"},
 		))
@@ -1298,6 +1308,7 @@ func TestGetSession_QueryError(t *testing.T) {
 	}
 
 	mock.ExpectQuery("SELECT state, created_at").
+		WithArgs("app", "user", "sess", timeArg{}).
 		WillReturnError(fmt.Errorf("db error"))
 
 	_, err := s.GetSession(
@@ -1401,17 +1412,20 @@ func TestListSessions_Empty(t *testing.T) {
 
 	// ListAppStates.
 	mock.ExpectQuery("SELECT key, value FROM app_states").
+		WithArgs("app", timeArg{}).
 		WillReturnRows(
 			sqlmock.NewRows([]string{"key", "value"}),
 		)
 	// ListUserStates.
 	mock.ExpectQuery(
 		"SELECT key, value FROM user_states",
-	).WillReturnRows(
-		sqlmock.NewRows([]string{"key", "value"}),
-	)
+	).WithArgs("app", "user", timeArg{}).
+		WillReturnRows(
+			sqlmock.NewRows([]string{"key", "value"}),
+		)
 	// List session states returns empty.
 	mock.ExpectQuery("SELECT session_id, state").
+		WithArgs("app", "user", timeArg{}).
 		WillReturnRows(sqlmock.NewRows(
 			[]string{
 				"session_id", "state",
@@ -1598,6 +1612,7 @@ func TestListAppStates_Success(t *testing.T) {
 		AddRow("k2", []byte("v2"))
 
 	mock.ExpectQuery("SELECT key, value FROM app_states").
+		WithArgs("app", timeArg{}).
 		WillReturnRows(rows)
 
 	result, err := s.ListAppStates(
@@ -1615,6 +1630,7 @@ func TestListAppStates_QueryError(t *testing.T) {
 	defer db.Close()
 
 	mock.ExpectQuery("SELECT key, value FROM app_states").
+		WithArgs("app", timeArg{}).
 		WillReturnError(fmt.Errorf("db error"))
 
 	_, err := s.ListAppStates(
@@ -1766,7 +1782,8 @@ func TestListUserStates_Success(t *testing.T) {
 
 	mock.ExpectQuery(
 		"SELECT key, value FROM user_states",
-	).WillReturnRows(rows)
+	).WithArgs("app", "user", timeArg{}).
+		WillReturnRows(rows)
 
 	result, err := s.ListUserStates(
 		context.Background(),
@@ -1784,7 +1801,8 @@ func TestListUserStates_QueryError(t *testing.T) {
 
 	mock.ExpectQuery(
 		"SELECT key, value FROM user_states",
-	).WillReturnError(fmt.Errorf("db error"))
+	).WithArgs("app", "user", timeArg{}).
+		WillReturnError(fmt.Errorf("db error"))
 
 	_, err := s.ListUserStates(
 		context.Background(),
@@ -4907,7 +4925,7 @@ func TestServiceGetTrackEventsReadsTrackStorage(t *testing.T) {
 	newBytes, err := json.Marshal(newEvent)
 	require.NoError(t, err)
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT event FROM session_track_events")).
-		WithArgs(key.AppName, key.UserID, key.SessionID, track, base.Add(-time.Minute), 2).
+		WithArgs(key.AppName, key.UserID, key.SessionID, track, timeArg{}, base.Add(-time.Minute), 2).
 		WillReturnRows(sqlmock.NewRows([]string{"event"}).AddRow(newBytes).AddRow(oldBytes))
 	got, err := svc.GetTrackEvents(ctx, key, track, session.WithEventTime(base.Add(-time.Minute)), session.WithEventNum(2))
 	require.NoError(t, err)
@@ -4916,7 +4934,7 @@ func TestServiceGetTrackEventsReadsTrackStorage(t *testing.T) {
 	require.Equal(t, oldEvent.Payload, got.Events[0].Payload)
 	require.Equal(t, newEvent.Payload, got.Events[1].Payload)
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT event FROM session_track_events")).
-		WithArgs(key.AppName, key.UserID, key.SessionID, session.Track("missing"), time.Time{}).
+		WithArgs(key.AppName, key.UserID, key.SessionID, session.Track("missing"), timeArg{}, time.Time{}).
 		WillReturnRows(sqlmock.NewRows([]string{"event"}))
 	missing, err := svc.GetTrackEvents(ctx, key, "missing")
 	require.NoError(t, err)
@@ -4938,7 +4956,7 @@ func TestServiceGetTrackEventsErrors(t *testing.T) {
 		defer db.Close()
 		key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
 		mock.ExpectQuery(regexp.QuoteMeta("SELECT event FROM session_track_events")).
-			WithArgs(key.AppName, key.UserID, key.SessionID, session.Track("agui"), time.Time{}).
+			WithArgs(key.AppName, key.UserID, key.SessionID, session.Track("agui"), timeArg{}, time.Time{}).
 			WillReturnError(assert.AnError)
 		_, err := svc.GetTrackEvents(context.Background(), key, "agui")
 		require.Error(t, err)
