@@ -75,6 +75,54 @@ func TestUserMessageFromInputContentsErrors(t *testing.T) {
 		assert.ErrorContains(t, err, "decode binary payload")
 		assert.ErrorContains(t, err, "illegal base64 data")
 	})
+	t.Run("typed input requires source", func(t *testing.T) {
+		_, err := UserMessageFromInputContents([]types.InputContent{{
+			Type: types.InputContentTypeImage,
+		}})
+		assert.ErrorContains(t, err, "image input content requires source")
+	})
+	t.Run("typed input requires source value", func(t *testing.T) {
+		_, err := UserMessageFromInputContents([]types.InputContent{{
+			Type: types.InputContentTypeImage,
+			Source: &types.InputContentSource{
+				Type:  types.InputContentSourceTypeURL,
+				Value: " ",
+			},
+		}})
+		assert.ErrorContains(t, err, "image input content source value is empty")
+	})
+	t.Run("typed data requires mime type", func(t *testing.T) {
+		_, err := UserMessageFromInputContents([]types.InputContent{{
+			Type: types.InputContentTypeAudio,
+			Source: &types.InputContentSource{
+				Type:  types.InputContentSourceTypeData,
+				Value: "AQID",
+			},
+		}})
+		assert.ErrorContains(t, err, "audio data source requires mime type")
+	})
+	t.Run("typed data rejects invalid base64", func(t *testing.T) {
+		_, err := UserMessageFromInputContents([]types.InputContent{{
+			Type: types.InputContentTypeVideo,
+			Source: &types.InputContentSource{
+				Type:     types.InputContentSourceTypeData,
+				Value:    "not-base64",
+				MimeType: "video/mp4",
+			},
+		}})
+		assert.ErrorContains(t, err, "decode video payload")
+	})
+	t.Run("typed data requires matching mime type", func(t *testing.T) {
+		_, err := UserMessageFromInputContents([]types.InputContent{{
+			Type: types.InputContentTypeImage,
+			Source: &types.InputContentSource{
+				Type:     types.InputContentSourceTypeData,
+				Value:    "AQID",
+				MimeType: "audio/mpeg",
+			},
+		}})
+		assert.ErrorContains(t, err, "image data source requires image mime type")
+	})
 }
 
 func TestUserMessageFromInputContentsTextAndImageURL(t *testing.T) {
@@ -174,6 +222,23 @@ func TestUserMessageFromInputContentsTypedVideoData(t *testing.T) {
 	assert.Equal(t, "mp4", msg.ContentParts[0].Video.Format)
 }
 
+func TestUserMessageFromInputContentsTypedVideoURL(t *testing.T) {
+	msg, err := UserMessageFromInputContents([]types.InputContent{{
+		Type: types.InputContentTypeVideo,
+		Source: &types.InputContentSource{
+			Type:     types.InputContentSourceTypeURL,
+			Value:    "https://example.com/video.mp4",
+			MimeType: "video/mp4",
+		},
+	}})
+	require.NoError(t, err)
+	require.Len(t, msg.ContentParts, 1)
+	assert.Equal(t, model.ContentTypeVideo, msg.ContentParts[0].Type)
+	require.NotNil(t, msg.ContentParts[0].Video)
+	assert.Equal(t, "https://example.com/video.mp4", msg.ContentParts[0].Video.URL)
+	assert.Equal(t, "video/mp4", msg.ContentParts[0].Video.Format)
+}
+
 func TestUserMessageFromInputContentsTypedDocumentData(t *testing.T) {
 	payload := []byte("document")
 	msg, err := UserMessageFromInputContents([]types.InputContent{{
@@ -191,6 +256,23 @@ func TestUserMessageFromInputContentsTypedDocumentData(t *testing.T) {
 	require.NotNil(t, msg.ContentParts[0].File)
 	assert.Empty(t, msg.ContentParts[0].File.Name)
 	assert.Equal(t, payload, msg.ContentParts[0].File.Data)
+	assert.Equal(t, "application/pdf", msg.ContentParts[0].File.MimeType)
+}
+
+func TestUserMessageFromInputContentsTypedDocumentURL(t *testing.T) {
+	msg, err := UserMessageFromInputContents([]types.InputContent{{
+		Type: types.InputContentTypeDocument,
+		Source: &types.InputContentSource{
+			Type:     types.InputContentSourceTypeURL,
+			Value:    "https://example.com/document.pdf",
+			MimeType: "application/pdf",
+		},
+	}})
+	require.NoError(t, err)
+	require.Len(t, msg.ContentParts, 1)
+	assert.Equal(t, model.ContentTypeFile, msg.ContentParts[0].Type)
+	require.NotNil(t, msg.ContentParts[0].File)
+	assert.Equal(t, "https://example.com/document.pdf", msg.ContentParts[0].File.URL)
 	assert.Equal(t, "application/pdf", msg.ContentParts[0].File.MimeType)
 }
 

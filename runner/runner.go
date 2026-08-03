@@ -3423,6 +3423,11 @@ func cloneContentParts(parts []model.ContentPart) []model.ContentPart {
 			audio.Data = append([]byte(nil), part.Audio.Data...)
 			cloned[i].Audio = &audio
 		}
+		if part.Video != nil {
+			video := *part.Video
+			video.Data = append([]byte(nil), part.Video.Data...)
+			cloned[i].Video = &video
+		}
 		if part.File != nil {
 			file := *part.File
 			file.Data = append([]byte(nil), part.File.Data...)
@@ -4097,7 +4102,10 @@ func queuedUserMessageContentPartsSupported(parts []model.ContentPart) bool {
 				return false
 			}
 		case model.ContentTypeAudio:
-			if part.Audio == nil || len(part.Audio.Data) == 0 {
+			if part.Audio == nil {
+				return false
+			}
+			if strings.TrimSpace(part.Audio.URL) == "" && len(part.Audio.Data) == 0 {
 				return false
 			}
 		case model.ContentTypeFile:

@@ -763,8 +763,8 @@ func TestConvertMessage(t *testing.T) {
 		{
 			Type: model.ContentTypeVideo,
 			Video: &model.Video{
-				Data:   []byte("video data"),
-				Format: "mp4",
+				URL:  "https://example.com/video.mp4",
+				Data: []byte("ignored video data"),
 			},
 		},
 	}
@@ -779,7 +779,7 @@ func TestConvertMessage(t *testing.T) {
 	assert.Equal(t, "audio_url", hMsg.Contents[2].Type)
 	assert.Equal(t, "https://example.com/audio.mp3", hMsg.Contents[2].VideoUrl.Url)
 	assert.Equal(t, "video_url", hMsg.Contents[3].Type)
-	assert.Equal(t, "data:video/mp4;base64,dmlkZW8gZGF0YQ==", hMsg.Contents[3].VideoUrl.Url)
+	assert.Equal(t, "https://example.com/video.mp4", hMsg.Contents[3].VideoUrl.Url)
 }
 
 func TestTokenTailoringOptions(t *testing.T) {
@@ -1495,11 +1495,23 @@ func TestImageToURLOrBase64(t *testing.T) {
 
 func TestAudioToURLOrBase64(t *testing.T) {
 	assert.Equal(t, "https://example.com/audio.mp3", audioToURLOrBase64(&model.Audio{
-		URL: "https://example.com/audio.mp3",
+		URL:  "https://example.com/audio.mp3",
+		Data: []byte("ignored audio data"),
 	}))
 	assert.Equal(t, "data:audio/mp3;base64,dGVzdCBhdWRpbyBkYXRh", audioToURLOrBase64(&model.Audio{
 		Format: "mp3",
 		Data:   []byte("test audio data"),
+	}))
+}
+
+func TestVideoToURLOrBase64(t *testing.T) {
+	assert.Equal(t, "https://example.com/video.mp4", videoToURLOrBase64(&model.Video{
+		URL:  "https://example.com/video.mp4",
+		Data: []byte("ignored video data"),
+	}))
+	assert.Equal(t, "data:video/mp4;base64,dGVzdCB2aWRlbyBkYXRh", videoToURLOrBase64(&model.Video{
+		Format: "mp4",
+		Data:   []byte("test video data"),
 	}))
 }
 

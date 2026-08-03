@@ -1586,6 +1586,12 @@ func TestCloneRequestForContextCompaction_DeepCopiesMutableFields(t *testing.T) 
 					Format: "wav",
 				},
 			}, {
+				Type: model.ContentTypeVideo,
+				Video: &model.Video{
+					Data:   []byte{7, 8, 9},
+					Format: "mp4",
+				},
+			}, {
 				Type: model.ContentTypeFile,
 				File: &model.File{
 					Name: "test.txt",
@@ -1625,7 +1631,8 @@ func TestCloneRequestForContextCompaction_DeepCopiesMutableFields(t *testing.T) 
 	req.Messages[0].ContentParts[0].Text = nil
 	req.Messages[0].ContentParts[1].Image.Data[0] = 9
 	req.Messages[0].ContentParts[2].Audio.Data[0] = 8
-	req.Messages[0].ContentParts[3].File.Data[0] = 'z'
+	req.Messages[0].ContentParts[3].Video.Data[0] = 7
+	req.Messages[0].ContentParts[4].File.Data[0] = 'z'
 	req.Messages[0].ToolCalls[0].Function.Arguments[0] = '['
 	req.Messages[0].ToolCalls[0].ExtraFields["nested"] = map[string]any{"k": "changed"}
 	req.Messages[0].ToolCalls[0].Index = nil
@@ -1637,7 +1644,8 @@ func TestCloneRequestForContextCompaction_DeepCopiesMutableFields(t *testing.T) 
 	require.Equal(t, "hello", *cloned.Messages[0].ContentParts[0].Text)
 	require.Equal(t, []byte{1, 2, 3}, cloned.Messages[0].ContentParts[1].Image.Data)
 	require.Equal(t, []byte{4, 5, 6}, cloned.Messages[0].ContentParts[2].Audio.Data)
-	require.Equal(t, []byte("abc"), cloned.Messages[0].ContentParts[3].File.Data)
+	require.Equal(t, []byte{7, 8, 9}, cloned.Messages[0].ContentParts[3].Video.Data)
+	require.Equal(t, []byte("abc"), cloned.Messages[0].ContentParts[4].File.Data)
 	require.Equal(
 		t,
 		[]byte(`{"q":"go"}`),

@@ -3298,6 +3298,37 @@ func TestConvertUserMessageContentWithAudio(t *testing.T) {
 	assert.NotNilf(t, contentPart.OfInputAudio, "Expected audio content part to be set")
 }
 
+func TestConvertUserMessageContentAddsUnsupportedMediaHint(t *testing.T) {
+	text := "Describe the attachments"
+	message := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{Type: model.ContentTypeText, Text: &text},
+			{
+				Type:  model.ContentTypeAudio,
+				Audio: &model.Audio{URL: "https://example.com/audio.mp3"},
+			},
+			{
+				Type:  model.ContentTypeVideo,
+				Video: &model.Video{URL: "https://example.com/video.mp4"},
+			},
+		},
+	}
+
+	m := &Model{}
+	content, extraFields := m.convertUserMessageContent(message)
+
+	assert.Empty(t, extraFields)
+	require.Len(t, content.OfArrayOfContentParts, 2)
+	require.NotNil(t, content.OfArrayOfContentParts[0].OfText)
+	assert.Equal(t,
+		"Omitted non-text attachments for this provider: 1 audio clip, 1 video.",
+		content.OfArrayOfContentParts[0].OfText.Text,
+	)
+	require.NotNil(t, content.OfArrayOfContentParts[1].OfText)
+	assert.Equal(t, text, content.OfArrayOfContentParts[1].OfText.Text)
+}
+
 func TestConvertUserMessageContentWithFile(t *testing.T) {
 	// Test converting user message with file content parts
 	filePart := model.ContentPart{

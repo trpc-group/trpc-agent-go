@@ -337,6 +337,13 @@ func TestTranslateQueuedUserMessageConsumedWithContentParts(t *testing.T) {
 				},
 			},
 			{
+				Type: model.ContentTypeAudio,
+				Audio: &model.Audio{
+					URL:    " https://example.com/audio.mp3 ",
+					Format: "audio/mpeg",
+				},
+			},
+			{
 				Type: model.ContentTypeFile,
 				File: &model.File{
 					Name:     "report.pdf",
@@ -373,7 +380,7 @@ func TestTranslateQueuedUserMessageConsumedWithContentParts(t *testing.T) {
 	assert.Equal(t, aguitypes.RoleUser, userMessage.Role)
 	contents, ok := userMessage.ContentInputContents()
 	require.True(t, ok)
-	require.Len(t, contents, 6)
+	require.Len(t, contents, 7)
 	assert.Equal(t, aguitypes.InputContentTypeText, contents[0].Type)
 	assert.Equal(t, "context", contents[0].Text)
 	assert.Equal(t, aguitypes.InputContentTypeText, contents[1].Type)
@@ -385,13 +392,16 @@ func TestTranslateQueuedUserMessageConsumedWithContentParts(t *testing.T) {
 	assert.Equal(t, "audio/wav", contents[3].MimeType)
 	assert.Equal(t, base64.StdEncoding.EncodeToString([]byte("audio")), contents[3].Data)
 	assert.Equal(t, aguitypes.InputContentTypeBinary, contents[4].Type)
-	assert.Equal(t, "application/pdf", contents[4].MimeType)
-	assert.Equal(t, "report.pdf", contents[4].Filename)
-	assert.Equal(t, base64.StdEncoding.EncodeToString([]byte("file")), contents[4].Data)
+	assert.Equal(t, "audio/mpeg", contents[4].MimeType)
+	assert.Equal(t, "https://example.com/audio.mp3", contents[4].URL)
 	assert.Equal(t, aguitypes.InputContentTypeBinary, contents[5].Type)
-	assert.Equal(t, "application/octet-stream", contents[5].MimeType)
-	assert.Equal(t, "uploaded.pdf", contents[5].Filename)
-	assert.Equal(t, "file-123", contents[5].ID)
+	assert.Equal(t, "application/pdf", contents[5].MimeType)
+	assert.Equal(t, "report.pdf", contents[5].Filename)
+	assert.Equal(t, base64.StdEncoding.EncodeToString([]byte("file")), contents[5].Data)
+	assert.Equal(t, aguitypes.InputContentTypeBinary, contents[6].Type)
+	assert.Equal(t, "application/octet-stream", contents[6].MimeType)
+	assert.Equal(t, "uploaded.pdf", contents[6].Filename)
+	assert.Equal(t, "file-123", contents[6].ID)
 
 	activity, ok := events[1].(*aguievents.ActivitySnapshotEvent)
 	require.True(t, ok)

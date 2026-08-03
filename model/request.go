@@ -299,6 +299,7 @@ const (
 	ContentTypeText  ContentType = "text"
 	ContentTypeImage ContentType = "image"
 	ContentTypeAudio ContentType = "audio"
+	// ContentTypeVideo identifies video content.
 	ContentTypeVideo ContentType = "video"
 	ContentTypeFile  ContentType = "file"
 )
@@ -398,7 +399,8 @@ type Image struct {
 
 // Audio represents audio input for audio models.
 type Audio struct {
-	// URL is the URL of the audio.
+	// URL is the URL of the audio. When URL and Data are both set, URL takes
+	// precedence.
 	URL string `json:"url,omitempty"`
 	// Data is the raw audio data.
 	Data []byte `json:"data"`
@@ -410,7 +412,8 @@ type Audio struct {
 
 // Video represents video input for multimodal models.
 type Video struct {
-	// URL is the URL of the video.
+	// URL is the URL of the video. When URL and Data are both set, URL takes
+	// precedence.
 	URL string `json:"url,omitempty"`
 	// Data is the raw video data.
 	Data []byte `json:"data"`

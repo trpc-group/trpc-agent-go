@@ -1288,20 +1288,26 @@ func (m *Model) appendUserContentParts(
 }
 
 func (m *Model) omittedContentHint(parts []model.ContentPart) string {
-	if !m.variantConfig.textOnlyMessageContent {
-		return ""
-	}
-
 	var imageCount, audioCount, videoCount, fileCount int
 	for _, part := range parts {
 		switch part.Type {
 		case model.ContentTypeImage:
-			imageCount++
+			if m.variantConfig.textOnlyMessageContent {
+				imageCount++
+			}
 		case model.ContentTypeAudio:
-			audioCount++
+			if m.variantConfig.textOnlyMessageContent ||
+				(part.Audio != nil && part.Audio.URL != "") {
+				audioCount++
+			}
 		case model.ContentTypeVideo:
-			videoCount++
+			if m.variantConfig.textOnlyMessageContent || part.Video != nil {
+				videoCount++
+			}
 		case model.ContentTypeFile:
+			if !m.variantConfig.textOnlyMessageContent {
+				continue
+			}
 			if fileURLFallbackText(part.File) != "" {
 				continue
 			}

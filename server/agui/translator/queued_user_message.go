@@ -101,14 +101,18 @@ func inputContentFromAudio(audio *model.Audio) (aguitypes.InputContent, error) {
 	if audio == nil {
 		return aguitypes.InputContent{}, errors.New("queued user message audio content part is nil")
 	}
-	if len(audio.Data) == 0 {
-		return aguitypes.InputContent{}, errors.New("queued user message audio content part is empty")
-	}
-	return aguitypes.InputContent{
+	content := aguitypes.InputContent{
 		Type:     aguitypes.InputContentTypeBinary,
 		MimeType: binaryMimeType("audio", audio.Format),
-		Data:     base64.StdEncoding.EncodeToString(audio.Data),
-	}, nil
+		URL:      strings.TrimSpace(audio.URL),
+	}
+	if len(audio.Data) > 0 {
+		content.Data = base64.StdEncoding.EncodeToString(audio.Data)
+	}
+	if content.URL == "" && content.Data == "" {
+		return aguitypes.InputContent{}, errors.New("queued user message audio content part is empty")
+	}
+	return content, nil
 }
 
 func inputContentFromFile(file *model.File) (aguitypes.InputContent, error) {
