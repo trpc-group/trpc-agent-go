@@ -41,22 +41,43 @@ type changedFile struct {
 	PackageName string
 	Hunks       []diffHunk
 
-	headerLine         int
-	headerOldPath      string
-	headerNewPath      string
-	hasNewFileMode     bool
-	hasDeletedFileMode bool
-	hasRenameFrom      bool
-	hasRenameTo        bool
-	renameFromPath     string
-	renameToPath       string
-	renameFromValid    bool
-	renameToValid      bool
-	binaryLine         int
-	hasOldMarker       bool
-	hasNewMarker       bool
-	oldIsDevNull       bool
-	newIsDevNull       bool
+	headerLine           int
+	headerOldPath        string
+	headerNewPath        string
+	hasNewFileMode       bool
+	newFileMode          string
+	newFileModeValid     bool
+	hasDeletedFileMode   bool
+	deletedFileMode      string
+	deletedFileModeValid bool
+	hasOldMode           bool
+	oldMode              string
+	oldModeValid         bool
+	hasNewMode           bool
+	newMode              string
+	newModeValid         bool
+	hasSimilarityIndex   bool
+	similarityIndex      int
+	similarityValid      bool
+	hasRenameFrom        bool
+	hasRenameTo          bool
+	renameFromPath       string
+	renameToPath         string
+	renameFromValid      bool
+	renameToValid        bool
+	isCopy               bool
+	hasCopyFrom          bool
+	hasCopyTo            bool
+	copyFromPath         string
+	copyToPath           string
+	copyFromValid        bool
+	copyToValid          bool
+	binaryLine           int
+	hasOldMarker         bool
+	hasNewMarker         bool
+	sawHunkHeader        bool
+	oldIsDevNull         bool
+	newIsDevNull         bool
 }
 
 type diffHunk struct {
@@ -176,14 +197,56 @@ func (p *diffParser) consumeFileMetadata(file *changedFile, line string, inputLi
 	switch {
 	case strings.HasPrefix(line, "new file mode "):
 		file.IsNew = true
-		file.hasNewFileMode = true
+		p.consumeModeMetadata(
+			file,
+			strings.TrimPrefix(line, "new file mode "),
+			inputLine,
+			"new file mode",
+			&file.hasNewFileMode,
+			&file.newFileMode,
+			&file.newFileModeValid,
+		)
 	case strings.HasPrefix(line, "deleted file mode "):
 		file.IsDeleted = true
-		file.hasDeletedFileMode = true
+		p.consumeModeMetadata(
+			file,
+			strings.TrimPrefix(line, "deleted file mode "),
+			inputLine,
+			"deleted file mode",
+			&file.hasDeletedFileMode,
+			&file.deletedFileMode,
+			&file.deletedFileModeValid,
+		)
+	case strings.HasPrefix(line, "old mode "):
+		p.consumeModeMetadata(
+			file,
+			strings.TrimPrefix(line, "old mode "),
+			inputLine,
+			"old mode",
+			&file.hasOldMode,
+			&file.oldMode,
+			&file.oldModeValid,
+		)
+	case strings.HasPrefix(line, "new mode "):
+		p.consumeModeMetadata(
+			file,
+			strings.TrimPrefix(line, "new mode "),
+			inputLine,
+			"new mode",
+			&file.hasNewMode,
+			&file.newMode,
+			&file.newModeValid,
+		)
+	case strings.HasPrefix(line, "similarity index "):
+		p.consumeSimilarityIndex(file, line, inputLine)
 	case strings.HasPrefix(line, "rename from "):
 		p.consumeRenameFrom(file, line, inputLine)
 	case strings.HasPrefix(line, "rename to "):
 		p.consumeRenameTo(file, line, inputLine)
+	case strings.HasPrefix(line, "copy from "):
+		p.consumeCopyFrom(file, line, inputLine)
+	case strings.HasPrefix(line, "copy to "):
+		p.consumeCopyTo(file, line, inputLine)
 	case strings.HasPrefix(line, "Binary files "), line == "GIT binary patch":
 		file.IsBinary = true
 		if file.binaryLine == 0 {
@@ -200,6 +263,64 @@ func (p *diffParser) consumeFileMetadata(file *changedFile, line string, inputLi
 		return false
 	}
 	return true
+}
+
+func (p *diffParser) consumeModeMetadata(
+	file *changedFile,
+	value string,
+	inputLine int,
+	label string,
+	seen *bool,
+	stored *string,
+	valid *bool,
+) {
+	value = strings.TrimSpace(value)
+	if *seen {
+		message := "duplicate " + label + " metadata"
+		if *stored != value {
+			message = "conflicting " + label + " metadata"
+		}
+		p.addWarning(file.reviewPath(), inputLine, message)
+		return
+	}
+	*seen = true
+	*stored = value
+	*valid = validDiffFileMode(value)
+	if !*valid {
+		p.addWarning(file.reviewPath(), inputLine, "malformed "+label+" metadata")
+	}
+}
+
+func validDiffFileMode(value string) bool {
+	if len(value) != 6 {
+		return false
+	}
+	for _, char := range value {
+		if char < '0' || char > '7' {
+			return false
+		}
+	}
+	return true
+}
+
+func (p *diffParser) consumeSimilarityIndex(file *changedFile, line string, inputLine int) {
+	value := strings.TrimSpace(strings.TrimPrefix(line, "similarity index "))
+	if file.hasSimilarityIndex {
+		p.addWarning(file.reviewPath(), inputLine, "duplicate similarity index metadata")
+		return
+	}
+	file.hasSimilarityIndex = true
+	if !strings.HasSuffix(value, "%") {
+		p.addWarning(file.reviewPath(), inputLine, "malformed similarity index metadata")
+		return
+	}
+	parsed, err := strconv.Atoi(strings.TrimSuffix(value, "%"))
+	if err != nil || parsed < 0 || parsed > 100 {
+		p.addWarning(file.reviewPath(), inputLine, "malformed similarity index metadata")
+		return
+	}
+	file.similarityIndex = parsed
+	file.similarityValid = true
 }
 
 func (p *diffParser) consumeOldPath(file *changedFile, line string, inputLine int) {
@@ -246,6 +367,10 @@ func (p *diffParser) consumeNewPath(file *changedFile, line string, inputLine in
 
 func (p *diffParser) consumeRenameFrom(file *changedFile, line string, inputLine int) {
 	file.IsRename = true
+	if file.hasRenameFrom {
+		p.addWarning(file.reviewPath(), inputLine, "duplicate rename from metadata")
+		return
+	}
 	file.hasRenameFrom = true
 	renamePath, err := parseRenamePath(strings.TrimPrefix(line, "rename from "))
 	if err != nil {
@@ -262,6 +387,10 @@ func (p *diffParser) consumeRenameFrom(file *changedFile, line string, inputLine
 
 func (p *diffParser) consumeRenameTo(file *changedFile, line string, inputLine int) {
 	file.IsRename = true
+	if file.hasRenameTo {
+		p.addWarning(file.reviewPath(), inputLine, "duplicate rename to metadata")
+		return
+	}
 	file.hasRenameTo = true
 	renamePath, err := parseRenamePath(strings.TrimPrefix(line, "rename to "))
 	if err != nil {
@@ -282,8 +411,55 @@ func (p *diffParser) validateRenamePathPair(file *changedFile, inputLine int) {
 	}
 }
 
+func (p *diffParser) consumeCopyFrom(file *changedFile, line string, inputLine int) {
+	file.isCopy = true
+	if file.hasCopyFrom {
+		p.addWarning(file.reviewPath(), inputLine, "duplicate copy from metadata")
+		return
+	}
+	file.hasCopyFrom = true
+	copyPath, err := parseRenamePath(strings.TrimPrefix(line, "copy from "))
+	if err != nil {
+		p.addWarning(file.reviewPath(), inputLine, "malformed copy from path")
+		return
+	}
+	file.copyFromPath = copyPath
+	file.copyFromValid = true
+	if copyPath != file.headerOldPath {
+		p.addWarning(file.reviewPath(), inputLine, "copy from path does not match diff header")
+	}
+	p.validateCopyPathPair(file, inputLine)
+}
+
+func (p *diffParser) consumeCopyTo(file *changedFile, line string, inputLine int) {
+	file.isCopy = true
+	if file.hasCopyTo {
+		p.addWarning(file.reviewPath(), inputLine, "duplicate copy to metadata")
+		return
+	}
+	file.hasCopyTo = true
+	copyPath, err := parseRenamePath(strings.TrimPrefix(line, "copy to "))
+	if err != nil {
+		p.addWarning(file.reviewPath(), inputLine, "malformed copy to path")
+		return
+	}
+	file.copyToPath = copyPath
+	file.copyToValid = true
+	if copyPath != file.headerNewPath {
+		p.addWarning(file.reviewPath(), inputLine, "copy to path does not match diff header")
+	}
+	p.validateCopyPathPair(file, inputLine)
+}
+
+func (p *diffParser) validateCopyPathPair(file *changedFile, inputLine int) {
+	if file.copyFromValid && file.copyToValid && file.copyFromPath == file.copyToPath {
+		p.addWarning(file.reviewPath(), inputLine, "copy paths must be different")
+	}
+}
+
 func (p *diffParser) consumeHunkHeader(file *changedFile, line string, inputLine int) {
 	p.finalizeCurrentHunk()
+	file.sawHunkHeader = true
 	if file.IsBinary {
 		file.IsBinary = false
 		p.addWarning(file.reviewPath(), inputLine, "binary metadata conflicts with text hunk")
@@ -334,6 +510,25 @@ func (p *diffParser) validateCurrentFileStatus() {
 	if file.hasRenameFrom != file.hasRenameTo {
 		warn("rename metadata must include both rename from and rename to")
 	}
+	if file.hasCopyFrom != file.hasCopyTo {
+		warn("copy metadata must include both copy from and copy to")
+	}
+	if file.IsRename && file.isCopy {
+		warn("file cannot be both renamed and copied")
+	}
+	if file.isCopy && (file.IsNew || file.IsDeleted) {
+		warn("copy metadata conflicts with new or deleted file status")
+	}
+	if file.hasSimilarityIndex && !file.IsRename && !file.isCopy {
+		warn("similarity metadata requires rename or copy metadata")
+	}
+	if file.hasOldMode != file.hasNewMode {
+		warn("mode-only change must include both old mode and new mode")
+	}
+	if file.hasOldMode && file.hasNewMode && file.oldModeValid && file.newModeValid &&
+		file.oldMode == file.newMode {
+		warn("old mode and new mode must be different")
+	}
 
 	if file.IsNew {
 		if !file.hasNewFileMode {
@@ -345,10 +540,10 @@ func (p *diffParser) validateCurrentFileStatus() {
 		if file.hasNewMarker && file.newIsDevNull {
 			warn("new file new path must not be /dev/null")
 		}
-		if !file.IsBinary && (!file.hasOldMarker || !file.oldIsDevNull) {
+		if !file.IsBinary && len(file.Hunks) > 0 && (!file.hasOldMarker || !file.oldIsDevNull) {
 			warn("text new file must declare --- /dev/null")
 		}
-		if !file.IsBinary && (!file.hasNewMarker || file.newIsDevNull) {
+		if !file.IsBinary && len(file.Hunks) > 0 && (!file.hasNewMarker || file.newIsDevNull) {
 			warn("text new file must declare a non-null +++ path")
 		}
 		for _, hunk := range file.Hunks {
@@ -368,10 +563,10 @@ func (p *diffParser) validateCurrentFileStatus() {
 		if file.hasOldMarker && file.oldIsDevNull {
 			warn("deleted file old path must not be /dev/null")
 		}
-		if !file.IsBinary && (!file.hasNewMarker || !file.newIsDevNull) {
+		if !file.IsBinary && len(file.Hunks) > 0 && (!file.hasNewMarker || !file.newIsDevNull) {
 			warn("text deleted file must declare +++ /dev/null")
 		}
-		if !file.IsBinary && (!file.hasOldMarker || file.oldIsDevNull) {
+		if !file.IsBinary && len(file.Hunks) > 0 && (!file.hasOldMarker || file.oldIsDevNull) {
 			warn("text deleted file must declare a non-null --- path")
 		}
 		for _, hunk := range file.Hunks {
@@ -411,10 +606,50 @@ func (p *diffParser) validateCurrentFileStatus() {
 		}
 		p.addWarning(binaryGoPath, line, "Go source path is represented as binary")
 	}
+	p.validateCurrentFileCompleteness(file, newStatusTrusted, deletedStatusTrusted, warn)
+}
+
+func (p *diffParser) validateCurrentFileCompleteness(
+	file *changedFile,
+	newStatusTrusted bool,
+	deletedStatusTrusted bool,
+	warn func(string),
+) {
+	if file.IsBinary {
+		return
+	}
+	if len(file.Hunks) > 0 {
+		if !file.hasOldMarker || !file.hasNewMarker {
+			warn("text change must include both --- and +++ path markers")
+		}
+		return
+	}
+	if file.sawHunkHeader {
+		return
+	}
+
+	emptyNew := file.IsNew && newStatusTrusted && !file.hasOldMarker && !file.hasNewMarker
+	emptyDeleted := file.IsDeleted && deletedStatusTrusted && !file.hasOldMarker && !file.hasNewMarker
+	modeOnly := !file.IsNew && !file.IsDeleted && !file.IsRename && !file.isCopy &&
+		file.hasOldMode && file.oldModeValid && file.hasNewMode && file.newModeValid &&
+		file.oldMode != file.newMode && !file.hasOldMarker && !file.hasNewMarker
+	pureRename := file.IsRename && !file.isCopy && file.hasRenameFrom && file.hasRenameTo &&
+		file.renameFromValid && file.renameToValid && file.renameFromPath != file.renameToPath &&
+		file.hasSimilarityIndex && file.similarityValid && file.similarityIndex == 100 &&
+		!file.hasOldMarker && !file.hasNewMarker
+	pureCopy := file.isCopy && !file.IsRename && file.hasCopyFrom && file.hasCopyTo &&
+		file.copyFromValid && file.copyToValid && file.copyFromPath != file.copyToPath &&
+		file.hasSimilarityIndex && file.similarityValid && file.similarityIndex == 100 &&
+		!file.hasOldMarker && !file.hasNewMarker
+	if emptyNew || emptyDeleted || modeOnly || pureRename || pureCopy {
+		return
+	}
+	warn("text file change is missing a hunk")
 }
 
 func trustedNewFileStatus(file changedFile) bool {
-	if !file.hasNewFileMode || file.hasDeletedFileMode || file.IsDeleted || file.IsRename ||
+	if !file.hasNewFileMode || !file.newFileModeValid || file.hasDeletedFileMode ||
+		file.IsDeleted || file.IsRename || file.isCopy ||
 		file.headerNewPath == "" || file.hasOldMarker != file.hasNewMarker {
 		return false
 	}
@@ -441,7 +676,8 @@ func trustedNewFileStatus(file changedFile) bool {
 }
 
 func trustedDeletedFileStatus(file changedFile) bool {
-	if !file.hasDeletedFileMode || file.hasNewFileMode || file.IsNew || file.IsRename ||
+	if !file.hasDeletedFileMode || !file.deletedFileModeValid || file.hasNewFileMode ||
+		file.IsNew || file.IsRename || file.isCopy ||
 		file.headerOldPath == "" || file.hasOldMarker != file.hasNewMarker {
 		return false
 	}
