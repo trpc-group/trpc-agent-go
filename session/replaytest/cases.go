@@ -40,6 +40,10 @@ func PublicCases() []Case {
 		summaryFilterKeyCase(),
 		trackCase(),
 		concurrentCase(),
+		concurrentStateCase(),
+		concurrentMemoryCase(),
+		concurrentSummaryCase(),
+		concurrentTrackCase(),
 	}
 }
 
@@ -345,6 +349,99 @@ func concurrentCase() Case {
 			},
 		},
 		Fault: FaultDuplicateEvent,
+	}
+}
+
+func concurrentStateCase() Case {
+	return Case{
+		Name:        "concurrent_state_writes",
+		Description: "disjoint session state keys remain durable across concurrent updates",
+		Requires: []Capability{
+			CapabilitySession,
+			CapabilitySessionState,
+			CapabilityConcurrent,
+			CapabilityConcurrentState,
+		},
+		Steps: []Step{{
+			Name: "parallel-state",
+			Kind: StepConcurrent,
+			Concurrent: [][]Step{
+				{stateStep("left-state", StateScopeSession, session.StateMap{"left": []byte("1")}, nil)},
+				{stateStep("right-state", StateScopeSession, session.StateMap{"right": []byte("1")}, nil)},
+			},
+		}},
+		Fault: FaultStateValue,
+	}
+}
+
+func concurrentMemoryCase() Case {
+	return Case{
+		Name:        "concurrent_memory_writes",
+		Description: "distinct memories remain durable across concurrent idempotent writes",
+		Requires: []Capability{
+			CapabilitySession,
+			CapabilityMemory,
+			CapabilityConcurrent,
+			CapabilityConcurrentMemory,
+		},
+		Steps: []Step{{
+			Name: "parallel-memory",
+			Kind: StepConcurrent,
+			Concurrent: [][]Step{
+				{{Name: "left-memory", Kind: StepAddMemory, Memory: &MemoryInput{Memory: "left memory"}}},
+				{{Name: "right-memory", Kind: StepAddMemory, Memory: &MemoryInput{Memory: "right memory"}}},
+			},
+		}},
+		Fault: FaultDuplicateMemory,
+	}
+}
+
+func concurrentSummaryCase() Case {
+	return Case{
+		Name:        "concurrent_summary_writes",
+		Description: "disjoint filter-key summaries remain isolated across concurrent updates",
+		Requires: []Capability{
+			CapabilitySession,
+			CapabilitySummary,
+			CapabilityConcurrent,
+			CapabilityConcurrentSummary,
+		},
+		Steps: []Step{
+			messageStep("summary-user", "summary-user", 1, "user", model.RoleUser, "start", ""),
+			messageStep("left-source", "left-source", 2, "assistant", model.RoleAssistant, "left", "summary/left"),
+			messageStep("right-source", "right-source", 3, "assistant", model.RoleAssistant, "right", "summary/right"),
+			{
+				Name: "parallel-summary",
+				Kind: StepConcurrent,
+				Concurrent: [][]Step{
+					{{Name: "left-summary", Kind: StepCreateSummary, Summary: &SummaryInput{FilterKey: "summary/left", Force: true}}},
+					{{Name: "right-summary", Kind: StepCreateSummary, Summary: &SummaryInput{FilterKey: "summary/right", Force: true}}},
+				},
+			},
+		},
+		Fault: FaultSummaryText,
+	}
+}
+
+func concurrentTrackCase() Case {
+	return Case{
+		Name:        "concurrent_track_writes",
+		Description: "distinct tracks retain their events across concurrent appends",
+		Requires: []Capability{
+			CapabilitySession,
+			CapabilityTrack,
+			CapabilityConcurrent,
+			CapabilityConcurrentTrack,
+		},
+		Steps: []Step{{
+			Name: "parallel-track",
+			Kind: StepConcurrent,
+			Concurrent: [][]Step{
+				{trackStep("left-track", "track/left", 1, map[string]any{"side": "left"})},
+				{trackStep("right-track", "track/right", 2, map[string]any{"side": "right"})},
+			},
+		}},
+		Fault: FaultTrackPayload,
 	}
 }
 

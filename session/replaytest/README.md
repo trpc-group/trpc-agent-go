@@ -6,12 +6,13 @@ backend, normalizes backend-generated values, and compares every result with a
 named reference backend or with every other backend in oracle-free consensus
 mode.
 
-The public matrix contains 12 cases: single-turn and multi-turn messages, tool
+The public matrix contains 16 cases: single-turn and multi-turn messages, tool
 calls, scoped state CRUD, memory persistence, ranked memory search, idempotent
 memory retry recovery, summary generation/update, summary retained-tail
-reconstruction, summary filter keys, tracks, and concurrent branch writes.
-Each case names an injected fault; the unit test proves that every fault
-produces a blocking diff.
+reconstruction, summary filter keys, tracks, concurrent event branches, and
+conflict-free concurrent State, Memory, Summary, and Track writes. Each case
+names an injected fault; the unit test proves that every fault produces a
+blocking diff.
 
 Memory persistence snapshots are content-sorted because `ReadMemories` does not
 define cross-backend result order. `StepSearchMemory` is separate: it requires
@@ -30,12 +31,42 @@ null, empty bytes, and arbitrary non-JSON bytes with an explicit `nil`, `json`,
 or `bytes` kind for every value. JSON objects with duplicate keys also remain
 bytes because collapsing them would hide a backend transformation.
 
-Concurrent steps support event-only branches with stable internal execution
-lanes and require `EventOrderCausal`. A lane is independent of the event's
-business `filter key`; branches may use the same filter key. This models
-interleaved tool or sub-agent events without claiming portable concurrent
-state, memory, summary, or track write semantics that the backend interfaces do
-not provide. Summaries cannot be combined with concurrent steps in one case.
+Write recovery is explicit per step. `RecoveryVerify` performs a
+read-after-write check after an error and accepts the operation only when the
+requested event, state, memory, summary change, or track append is observed.
+`RecoveryRetryIdempotent` may retry once after a negative check, but is valid
+only for State and Memory because those writes have idempotent service
+contracts. Event, Summary, and Track writes are never retried blindly; an
+unobserved outcome returns `ErrUncertainCommit`. Event verification is limited
+to persisted appends without state deltas so the witness covers the complete
+durable effect.
+
+Concurrent event branches require `EventOrderCausal` and use stable internal
+execution lanes. A lane is independent of the event's business `filter key`,
+so branches may share one. Each concurrent step has one write domain. State,
+memory, summary, and track concurrency does not affect event order, but
+requires a domain-specific capability and disjoint footprints: state scopes and
+keys, memory content, summary filter keys, and track names cannot overlap
+across branches. Full-session summaries, searches, reloads, nested concurrent
+steps, and event state deltas remain sequential
+because they have no portable conflict-free contract. Backends may omit
+`CapabilityConcurrentState`, `CapabilityConcurrentMemory`,
+`CapabilityConcurrentSummary`, or `CapabilityConcurrentTrack` when their
+implementation cannot prove the corresponding atomicity.
+
+The portable write contract is deliberately narrower than any one backend's
+implementation:
+
+| Domain | Concurrent footprint | Required capability | Recovery after an error |
+| --- | --- | --- | --- |
+| Event | Persistable, state-delta-free events in ordered lanes | `CapabilityConcurrent` | Verify only |
+| State | Disjoint scope and key pairs | `CapabilityConcurrent` + `CapabilityConcurrentState` | Verify or retry once |
+| Memory | Distinct memory content | `CapabilityConcurrent` + `CapabilityConcurrentMemory` | Verify or retry once |
+| Summary | Distinct, non-empty filter keys | `CapabilityConcurrent` + `CapabilityConcurrentSummary` | Verify only |
+| Track | Distinct track names | `CapabilityConcurrent` + `CapabilityConcurrentTrack` | Verify only |
+
+Anything outside this table is rejected during case validation rather than
+being interpreted from backend-specific scheduling or conflict behavior.
 
 ## Run
 
@@ -81,13 +112,20 @@ as ordinary report diffs.
 
 ## Additional backends
 
-Optional server-backed adapters are not registered by this package. To add
-one, keep its integration test in the owning Redis, PostgreSQL, MySQL, or
-ClickHouse module and wrap the existing `session.Service` and `memory.Service`
-implementations in a `Backend` factory. Follow that module's existing
-integration-test configuration and skip behavior so credentials and external
-services remain optional. Missing capabilities are reported as `unsupported`
-allowed diffs instead of silently skipping assertions.
+This package does not register external server-backed adapters. Such adapters
+belong in the independent `test` module so the root module does not acquire
+database drivers or integration-only dependency upgrades. Future Redis,
+PostgreSQL, MySQL, and ClickHouse adapters can register their existing Session
+and Memory services through `Backend.Open` and follow the owning module's
+existing environment configuration and skip behavior.
+
+An adapter must isolate test data, clean up sessions, scoped state, summaries,
+tracks, and memories, and declare only capabilities that it actually wires.
+Missing environment variables should skip the integration rather than weaken
+the lightweight matrix. Capabilities such as ranked Memory search must remain
+undeclared when the backend does not share a portable scoring contract. The
+report then retains explicit `unsupported` evidence for cases outside the
+adapter's declaration.
 
 `AllowedDiff` rules are deliberately strict: an unordered backend pair, JSON
 Pointer glob, known rule, and a non-empty explanation are mandatory. Pairwise

@@ -1,39 +1,38 @@
 # Design
 
 Replay consistency is a semantic contract, not byte-for-byte database
-equality. Typed cases drive `session.Service` and `memory.Service`; each
-backend is isolated, replayed, read back, and closed. Snapshots cover events,
-scoped state, memories, filter-key summaries, and named tracks.
+equality. Typed cases drive isolated `session.Service` and `memory.Service`
+instances, then snapshots compare events, scoped state, memories, filter-key
+summaries, and named tracks.
 
-Normalization removes only non-portable values. Physical IDs become logical
-IDs, generated timestamps become presence markers, and maps are canonicalized.
-Stored memories are content-sorted; ranked searches preserve order and score.
-Event, response, and track times remain session-relative; caller-supplied
-memory times remain UTC instants. State values use tagged `nil`, `json`, or `bytes` forms,
-keeping nil, JSON null, empty bytes, and arbitrary bytes distinct. JSON objects
-with duplicate keys remain bytes because decoding them would be lossy. Event
-content, tool data, extensions, state delta, memory metadata and ownership,
-track payloads, and session identity remain comparable.
+Normalization removes only values that are not portable. Physical IDs become
+logical IDs, generated timestamps become presence markers, maps are
+canonicalized, and stored memories are content-sorted. Ranked searches retain
+their order and score. State values use tagged `nil`, `json`, or `bytes`
+representations, so nil, JSON null, empty bytes, invalid JSON, and lossy JSON
+objects remain distinct. Summary comparison includes text, filter key,
+boundary, retained events, and ownership. Track payloads and session-relative
+timing remain observable.
 
-Summary comparison includes text, topics, filter key, update presence,
-boundary version, cutoff, last event, and retained tail. An anchored boundary
-must reference an observed event and match its timestamp. A probe session
-detects cross-session summary leakage.
+Write recovery is opt-in. After an error, a domain witness checks logical event
+count, state postconditions, semantic memory identity, summary change, or track
+tuple count. Only State and Memory may retry because their writes are
+idempotent. Other unproven outcomes return `ErrUncertainCommit` rather than
+risk a duplicate append.
 
-Concurrent replay is limited to event-only branches with stable internal
-lanes. Global scheduler interleaving is ignored, but branch-local order,
-predecessor relationships, and the complete event set must match. State,
-memory, summary, and track writes remain sequential because their interfaces
-define no portable cross-backend atomicity contract.
+Concurrent event branches preserve lane order and predecessor relationships
+while ignoring scheduler interleaving. Each concurrent step uses one write
+domain. State, Memory, Summary, and Track writes require separate backend
+capabilities and disjoint footprints. Full-session summaries, event state
+deltas, reads, reloads, and nested concurrency stay sequential because the
+service contracts do not define portable conflict resolution for them.
 
-The comparator emits JSON Pointer paths with domain locators. `AllowedDiff`
-requires an unordered backend pair, path glob, known rule, and reason; accepted
-mismatches remain visible in the report. Reference mode uses one named oracle.
-Consensus mode compares every successful pair and names an outlier only when
-all remaining backends agree. Split results stay ambiguous, while failures and
-unsupported capabilities remain separate evidence.
+Diffs use JSON Pointer paths plus session, event, memory, summary, or track
+locators. An `AllowedDiff` needs a backend pair, path glob, known rule, and
+reason, and remains visible in the report. Reference mode uses one oracle;
+consensus mode identifies an outlier only when every remaining backend agrees.
+Failures and unsupported capabilities remain explicit evidence.
 
-Adapters declare capabilities, so unsupported operations never disappear. The
-root package supplies InMemory; a source-tree SQLite module binds real
-file-backed Session and Memory services without imposing CGO on the root.
-Further adapters reuse the same cases, normalization, and comparator.
+InMemory and file-backed SQLite form the lightweight matrix. Optional external
+adapters belong in the independent integration module and declare only the
+capabilities they actually wire.

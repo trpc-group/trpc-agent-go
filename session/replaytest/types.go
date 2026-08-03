@@ -38,8 +38,20 @@ const (
 	CapabilitySummary Capability = "summary"
 	// CapabilityTrack indicates support for track-event persistence.
 	CapabilityTrack Capability = "track"
-	// CapabilityConcurrent indicates support for concurrent event appends.
+	// CapabilityConcurrent indicates support for concurrent replay steps.
 	CapabilityConcurrent Capability = "concurrent_write"
+	// CapabilityConcurrentState indicates that disjoint state keys may be
+	// updated concurrently and compared after replay.
+	CapabilityConcurrentState Capability = "concurrent_state_write"
+	// CapabilityConcurrentMemory indicates that distinct memory entries may be
+	// added concurrently and compared after replay.
+	CapabilityConcurrentMemory Capability = "concurrent_memory_write"
+	// CapabilityConcurrentSummary indicates that distinct filter-key summaries
+	// may be created concurrently and compared after replay.
+	CapabilityConcurrentSummary Capability = "concurrent_summary_write"
+	// CapabilityConcurrentTrack indicates that distinct track names may receive
+	// concurrent append operations and be compared after replay.
+	CapabilityConcurrentTrack Capability = "concurrent_track_write"
 )
 
 // replayTrackStateKey mirrors the session-owned track index. Replay inputs
@@ -57,7 +69,11 @@ func isKnownCapability(capability Capability) bool {
 		CapabilityMemorySearch,
 		CapabilitySummary,
 		CapabilityTrack,
-		CapabilityConcurrent:
+		CapabilityConcurrent,
+		CapabilityConcurrentState,
+		CapabilityConcurrentMemory,
+		CapabilityConcurrentSummary,
+		CapabilityConcurrentTrack:
 		return true
 	default:
 		return false
@@ -71,15 +87,19 @@ type Capabilities map[Capability]bool
 // InMemory and SQLite replay matrix.
 func FullCapabilities() Capabilities {
 	return Capabilities{
-		CapabilitySession:      true,
-		CapabilityAppState:     true,
-		CapabilityUserState:    true,
-		CapabilitySessionState: true,
-		CapabilityMemory:       true,
-		CapabilityMemorySearch: true,
-		CapabilitySummary:      true,
-		CapabilityTrack:        true,
-		CapabilityConcurrent:   true,
+		CapabilitySession:           true,
+		CapabilityAppState:          true,
+		CapabilityUserState:         true,
+		CapabilitySessionState:      true,
+		CapabilityMemory:            true,
+		CapabilityMemorySearch:      true,
+		CapabilitySummary:           true,
+		CapabilityTrack:             true,
+		CapabilityConcurrent:        true,
+		CapabilityConcurrentState:   true,
+		CapabilityConcurrentMemory:  true,
+		CapabilityConcurrentSummary: true,
+		CapabilityConcurrentTrack:   true,
 	}
 }
 
@@ -175,9 +195,34 @@ const (
 	StepAppendTrack StepKind = "append_track"
 	// StepReloadSession reloads the active session from the backend.
 	StepReloadSession StepKind = "reload_session"
-	// StepConcurrent runs multiple ordered event-only branches concurrently.
+	// StepConcurrent runs multiple ordered branches concurrently. Event branches
+	// use causal lanes; non-event branches are restricted to disjoint state,
+	// memory, summary, or track writes by case validation. One concurrent step
+	// cannot mix write domains.
 	StepConcurrent StepKind = "concurrent"
 )
+
+// RecoveryMode controls how one write handles an error whose commit outcome
+// may be unknown. Recovery is opt-in so ordinary replay still exposes backend
+// errors directly.
+type RecoveryMode string
+
+const (
+	// RecoveryNone disables uncertain-commit recovery.
+	RecoveryNone RecoveryMode = ""
+	// RecoveryVerify accepts a failed write only when a read-after-write check
+	// proves that the requested durable effect is present. Event verification is
+	// limited to persisted appends without state deltas.
+	RecoveryVerify RecoveryMode = "verify_commit"
+	// RecoveryRetryIdempotent first verifies the failed write, then retries once
+	// when no commit is observed. It is valid only for state and memory writes.
+	RecoveryRetryIdempotent RecoveryMode = "retry_idempotent"
+)
+
+// ErrUncertainCommit indicates that a failed write could not be proven
+// committed by the selected recovery policy. Returned errors preserve the
+// original write, verification, retry, and context errors for errors.Is.
+var ErrUncertainCommit = errors.New("replaytest: write commit is uncertain")
 
 // Step is a tagged replay operation. Exactly one payload matching Kind must
 // be populated, except ReloadSession which has no payload.
@@ -186,6 +231,9 @@ type Step struct {
 	Name string
 	// Kind selects the payload and operation.
 	Kind StepKind
+	// Recovery selects explicit uncertain-commit handling for this write. Its
+	// zero value disables recovery.
+	Recovery RecoveryMode
 	// Event is populated only for event append steps.
 	Event *EventInput
 	// State is populated only for state update steps.
@@ -198,9 +246,11 @@ type Step struct {
 	Summary *SummaryInput
 	// Track is populated only for track append steps.
 	Track *TrackInput
-	// Concurrent contains two or more ordered event-only branches populated only
-	// for concurrent steps. Branches use their stable execution paths for causal
-	// comparison, independently of event filter keys.
+	// Concurrent contains two or more ordered branches populated only for
+	// concurrent steps. Event branches use their stable execution paths for
+	// causal comparison, independently of event filter keys. Other write kinds
+	// require the matching domain-specific concurrent capability. A concurrent
+	// step contains one write domain only.
 	Concurrent [][]Step
 }
 
@@ -246,7 +296,8 @@ type StateInput struct {
 	// use temp: but must not use app:, user:, or the backend-owned tracks key.
 	Values session.StateMap
 	// DeleteKeys applies only to application and user state and follows the same
-	// unprefixed, non-empty key rule as Values.
+	// unprefixed, non-empty key rule as Values. Deletion is the final operation,
+	// so a key present in both fields is expected to be absent afterward.
 	DeleteKeys []string
 }
 

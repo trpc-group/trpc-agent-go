@@ -505,6 +505,62 @@ type execution struct {
 }
 
 func (e *execution) runStep(ctx context.Context, step Step) error {
+	if step.Recovery == RecoveryNone {
+		return e.runStepOnce(ctx, step)
+	}
+	witness, err := e.captureRecoveryWitness(ctx, step)
+	if err != nil {
+		return fmt.Errorf("capture recovery witness: %w", err)
+	}
+	writeErr := e.runStepOnce(ctx, step)
+	if writeErr == nil {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return errors.Join(ErrUncertainCommit, writeErr, err)
+	}
+	committed, verifyErr := e.verifyRecoveredCommit(ctx, step, witness)
+	if verifyErr != nil {
+		return errors.Join(
+			ErrUncertainCommit,
+			writeErr,
+			fmt.Errorf("verify uncertain commit: %w", verifyErr),
+		)
+	}
+	if committed {
+		return nil
+	}
+	if step.Recovery == RecoveryRetryIdempotent {
+		retryStep := step
+		retryStep.Recovery = RecoveryNone
+		retryErr := e.runStepOnce(ctx, retryStep)
+		if retryErr == nil {
+			return nil
+		}
+		if err := ctx.Err(); err != nil {
+			return errors.Join(ErrUncertainCommit, writeErr, retryErr, err)
+		}
+		committed, verifyErr = e.verifyRecoveredCommit(ctx, step, witness)
+		if verifyErr != nil {
+			return errors.Join(
+				ErrUncertainCommit,
+				writeErr,
+				retryErr,
+				fmt.Errorf("verify uncertain commit after retry: %w", verifyErr),
+			)
+		}
+		if committed {
+			return nil
+		}
+		writeErr = errors.Join(writeErr, fmt.Errorf("idempotent retry: %w", retryErr))
+	}
+	return errors.Join(
+		ErrUncertainCommit,
+		fmt.Errorf("step %q (%s): %w", step.Name, step.Kind, writeErr),
+	)
+}
+
+func (e *execution) runStepOnce(ctx context.Context, step Step) error {
 	switch step.Kind {
 	case StepAppendEvent:
 		return e.appendEvent(ctx, step.Event)
@@ -677,10 +733,15 @@ func (e *execution) appendTrack(ctx context.Context, input *TrackInput) error {
 	if !ok {
 		return errors.New("track capability advertised but service does not implement session.TrackService")
 	}
+	copyEvent := prepareTrackEvent(e.session, input)
+	return trackService.AppendTrackEvent(ctx, e.session, copyEvent)
+}
+
+func prepareTrackEvent(sess *session.Session, input *TrackInput) *session.TrackEvent {
 	copyEvent := *input.Event
 	copyEvent.Payload = cloneBytes(input.Event.Payload)
-	copyEvent.Timestamp = e.session.CreatedAt.Add(input.Offset)
-	return trackService.AppendTrackEvent(ctx, e.session, &copyEvent)
+	copyEvent.Timestamp = sess.CreatedAt.Add(input.Offset)
+	return &copyEvent
 }
 
 func (e *execution) reload(ctx context.Context) error {
@@ -983,10 +1044,12 @@ func validateCase(replayCase Case) error {
 		return fmt.Errorf("replaytest: case %q: %w", replayCase.Name, err)
 	}
 	if containsConcurrentStep(replayCase.Steps) {
-		if replayCase.EventOrder != EventOrderCausal {
-			return fmt.Errorf("replaytest: case %q: concurrent steps require causal event ordering", replayCase.Name)
+		if containsConcurrentStepKind(replayCase.Steps, StepAppendEvent) &&
+			replayCase.EventOrder != EventOrderCausal {
+			return fmt.Errorf("replaytest: case %q: concurrent event steps require causal event ordering", replayCase.Name)
 		}
-		if containsStepKind(replayCase.Steps, StepCreateSummary) {
+		if containsConcurrentStepKind(replayCase.Steps, StepAppendEvent) &&
+			containsStepKind(replayCase.Steps, StepCreateSummary) {
 			return fmt.Errorf("replaytest: case %q: concurrent cases cannot contain summary steps", replayCase.Name)
 		}
 		if err := validateConcurrentHistory(replayCase.Steps); err != nil {
@@ -1019,6 +1082,20 @@ func containsStepKind(steps []Step, kind StepKind) bool {
 	return false
 }
 
+func containsConcurrentStepKind(steps []Step, kind StepKind) bool {
+	for _, step := range steps {
+		if step.Kind != StepConcurrent {
+			continue
+		}
+		for _, branch := range step.Concurrent {
+			if containsStepKind(branch, kind) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func validateConcurrentHistory(steps []Step) error {
 	hasUserAnchor := false
 	for _, step := range steps {
@@ -1028,12 +1105,21 @@ func validateConcurrentHistory(steps []Step) error {
 				hasUserAnchor = true
 			}
 		case StepConcurrent:
-			if !hasUserAnchor {
+			if containsConcurrentBranchKind(step.Concurrent, StepAppendEvent) && !hasUserAnchor {
 				return fmt.Errorf("step %q requires a preceding persisted user event", step.Name)
 			}
 		}
 	}
 	return nil
+}
+
+func containsConcurrentBranchKind(branches [][]Step, kind StepKind) bool {
+	for _, branch := range branches {
+		if containsStepKind(branch, kind) {
+			return true
+		}
+	}
+	return false
 }
 
 func validateLogicalEventIDs(steps []Step, owners map[string]string) error {
@@ -1145,12 +1231,34 @@ func collectStepCapabilities(step Step, capabilities Capabilities) {
 	case StepAppendTrack:
 		capabilities[CapabilityTrack] = true
 	case StepConcurrent:
-		capabilities[CapabilityConcurrent] = true
-		for _, branch := range step.Concurrent {
-			for _, nested := range branch {
-				collectStepCapabilities(nested, capabilities)
+		collectConcurrentCapabilities(step.Concurrent, capabilities)
+	}
+}
+
+func collectConcurrentCapabilities(branches [][]Step, capabilities Capabilities) {
+	capabilities[CapabilityConcurrent] = true
+	for _, branch := range branches {
+		for _, nested := range branch {
+			if capability, ok := concurrentDomainCapability(nested.Kind); ok {
+				capabilities[capability] = true
 			}
+			collectStepCapabilities(nested, capabilities)
 		}
+	}
+}
+
+func concurrentDomainCapability(kind StepKind) (Capability, bool) {
+	switch kind {
+	case StepUpdateState:
+		return CapabilityConcurrentState, true
+	case StepAddMemory:
+		return CapabilityConcurrentMemory, true
+	case StepCreateSummary:
+		return CapabilityConcurrentSummary, true
+	case StepAppendTrack:
+		return CapabilityConcurrentTrack, true
+	default:
+		return "", false
 	}
 }
 
@@ -1175,6 +1283,9 @@ func validateStep(step Step) error {
 	if step.Name == "" {
 		return errors.New("unnamed step")
 	}
+	if err := validateRecoveryMode(step); err != nil {
+		return err
+	}
 	payloads := stepPayloadCount(step)
 	wantPayloads := 1
 	if step.Kind == StepReloadSession {
@@ -1184,6 +1295,38 @@ func validateStep(step Step) error {
 		return fmt.Errorf("step %q has %d payloads, want %d", step.Name, payloads, wantPayloads)
 	}
 	return validateStepKind(step)
+}
+
+func validateRecoveryMode(step Step) error {
+	switch step.Recovery {
+	case RecoveryNone:
+		return nil
+	case RecoveryVerify:
+		switch step.Kind {
+		case StepAppendEvent:
+			if step.Event == nil || step.Event.Event == nil {
+				return nil
+			}
+			if !replayEventIsPersistable(step.Event.Event) || len(step.Event.Event.StateDelta) > 0 {
+				return fmt.Errorf(
+					"step %q can verify recovery only for persisted events without state delta",
+					step.Name,
+				)
+			}
+			return nil
+		case StepUpdateState, StepAddMemory, StepCreateSummary, StepAppendTrack:
+			return nil
+		default:
+			return fmt.Errorf("step %q cannot verify recovery for kind %q", step.Name, step.Kind)
+		}
+	case RecoveryRetryIdempotent:
+		if step.Kind == StepUpdateState || step.Kind == StepAddMemory {
+			return nil
+		}
+		return fmt.Errorf("step %q cannot idempotently retry kind %q", step.Name, step.Kind)
+	default:
+		return fmt.Errorf("step %q has unknown recovery mode %q", step.Name, step.Recovery)
+	}
 }
 
 func stepPayloadCount(step Step) int {
@@ -1330,6 +1473,9 @@ func validateEventStateDelta(stepName string, stateDelta session.StateMap) error
 }
 
 func validateStateStep(step Step) error {
+	if len(step.State.Values) == 0 && len(step.State.DeleteKeys) == 0 {
+		return fmt.Errorf("step %q has no state mutations", step.Name)
+	}
 	switch step.State.Scope {
 	case StateScopeApp, StateScopeUser:
 		return validateStateKeys(
@@ -1399,6 +1545,8 @@ func validateConcurrentStep(step Step) error {
 	if len(step.Concurrent) < 2 {
 		return fmt.Errorf("step %q must contain at least two concurrent branches", step.Name)
 	}
+	owners := newConcurrentWriteOwners()
+	var concurrentKind StepKind
 	for branchIndex, branch := range step.Concurrent {
 		if len(branch) == 0 {
 			return fmt.Errorf("step %q has an empty concurrent branch", step.Name)
@@ -1407,33 +1555,144 @@ func validateConcurrentStep(step Step) error {
 			if err := validateStep(nested); err != nil {
 				return fmt.Errorf("step %q: %w", step.Name, err)
 			}
-			if nested.Kind != StepAppendEvent {
+			if concurrentKind != "" && concurrentKind != nested.Kind {
 				return fmt.Errorf(
-					"step %q branch %d contains unsupported concurrent kind %q",
+					"step %q cannot mix concurrent %s and %s writes",
 					step.Name,
-					branchIndex,
+					concurrentKind,
 					nested.Kind,
 				)
 			}
-			if len(nested.Event.Event.StateDelta) > 0 {
-				return fmt.Errorf(
-					"step %q branch %d event %q contains a state delta",
-					step.Name,
-					branchIndex,
-					nested.Name,
-				)
-			}
-			if !replayEventIsPersistable(nested.Event.Event) {
-				return fmt.Errorf(
-					"step %q branch %d event %q is not persistable",
-					step.Name,
-					branchIndex,
-					nested.Name,
-				)
+			concurrentKind = nested.Kind
+			if err := owners.validate(step.Name, branchIndex, nested); err != nil {
+				return err
 			}
 		}
 	}
 	return nil
+}
+
+type concurrentWriteOwners struct {
+	state   map[string]int
+	memory  map[string]int
+	summary map[string]int
+	track   map[string]int
+}
+
+func newConcurrentWriteOwners() *concurrentWriteOwners {
+	return &concurrentWriteOwners{
+		state:   make(map[string]int),
+		memory:  make(map[string]int),
+		summary: make(map[string]int),
+		track:   make(map[string]int),
+	}
+}
+
+func (o *concurrentWriteOwners) validate(
+	stepName string,
+	branchIndex int,
+	nested Step,
+) error {
+	switch nested.Kind {
+	case StepAppendEvent:
+		return validateConcurrentEvent(stepName, branchIndex, nested)
+	case StepUpdateState:
+		return o.validateState(stepName, branchIndex, nested.State)
+	case StepAddMemory:
+		return claimConcurrentOwner(
+			o.memory,
+			nested.Memory.Memory,
+			branchIndex,
+			fmt.Sprintf("step %q has concurrent memory conflict for %q", stepName, nested.Memory.Memory),
+		)
+	case StepCreateSummary:
+		return o.validateSummary(stepName, branchIndex, nested.Summary)
+	case StepAppendTrack:
+		trackName := string(nested.Track.Event.Track)
+		return claimConcurrentOwner(
+			o.track,
+			trackName,
+			branchIndex,
+			fmt.Sprintf("step %q has concurrent track conflict for %q", stepName, trackName),
+		)
+	default:
+		return fmt.Errorf("step %q branch %d contains unsupported concurrent kind %q", stepName, branchIndex, nested.Kind)
+	}
+}
+
+func validateConcurrentEvent(stepName string, branchIndex int, nested Step) error {
+	if len(nested.Event.Event.StateDelta) > 0 {
+		return fmt.Errorf("step %q branch %d event %q contains a state delta", stepName, branchIndex, nested.Name)
+	}
+	if !replayEventIsPersistable(nested.Event.Event) {
+		return fmt.Errorf("step %q branch %d event %q is not persistable", stepName, branchIndex, nested.Name)
+	}
+	return nil
+}
+
+func (o *concurrentWriteOwners) validateState(
+	stepName string,
+	branchIndex int,
+	input *StateInput,
+) error {
+	for key := range input.Values {
+		if err := o.claimState(stepName, branchIndex, input.Scope, key); err != nil {
+			return err
+		}
+	}
+	for _, key := range input.DeleteKeys {
+		if err := o.claimState(stepName, branchIndex, input.Scope, key); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (o *concurrentWriteOwners) claimState(
+	stepName string,
+	branchIndex int,
+	scope StateScope,
+	key string,
+) error {
+	return claimConcurrentOwner(
+		o.state,
+		stateFootprintKey(scope, key),
+		branchIndex,
+		fmt.Sprintf("step %q has concurrent state conflict on %s:%s", stepName, scope, key),
+	)
+}
+
+func (o *concurrentWriteOwners) validateSummary(
+	stepName string,
+	branchIndex int,
+	input *SummaryInput,
+) error {
+	if input.FilterKey == "" {
+		return fmt.Errorf("step %q branch %d cannot concurrently create a full-session summary", stepName, branchIndex)
+	}
+	return claimConcurrentOwner(
+		o.summary,
+		input.FilterKey,
+		branchIndex,
+		fmt.Sprintf("step %q has concurrent summary conflict for filter key %q", stepName, input.FilterKey),
+	)
+}
+
+func claimConcurrentOwner(
+	owners map[string]int,
+	key string,
+	branchIndex int,
+	conflictMessage string,
+) error {
+	if owner, exists := owners[key]; exists && owner != branchIndex {
+		return errors.New(conflictMessage)
+	}
+	owners[key] = branchIndex
+	return nil
+}
+
+func stateFootprintKey(scope StateScope, key string) string {
+	return string(scope) + ":" + key
 }
 
 func replayEventIsPersistable(evt *event.Event) bool {
@@ -1468,17 +1727,37 @@ func buildCausalOrderPlan(steps []Step) *causalOrderPlan {
 				branchFrontier := append([]string(nil), frontier...)
 				lane := fmt.Sprintf("%d/%d", stepIndex, branchIndex)
 				for _, nested := range branch {
+					if nested.Kind != StepAppendEvent {
+						continue
+					}
 					logicalID := nested.Event.LogicalID
 					plan.lanes[logicalID] = lane
 					plan.predecessors[logicalID] = append([]string(nil), branchFrontier...)
 					branchFrontier = []string{logicalID}
 				}
-				exits = append(exits, branchFrontier...)
+				exits = appendUniqueStrings(exits, branchFrontier...)
 			}
-			frontier = exits
+			if len(exits) > 0 {
+				frontier = exits
+			}
 		}
 	}
 	return plan
+}
+
+func appendUniqueStrings(values []string, additions ...string) []string {
+	seen := make(map[string]struct{}, len(values)+len(additions))
+	for _, value := range values {
+		seen[value] = struct{}{}
+	}
+	for _, value := range additions {
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		values = append(values, value)
+	}
+	return values
 }
 
 func hasBackend(backends []Backend, name string) bool {

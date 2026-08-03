@@ -103,6 +103,15 @@ func TestCaseValidationRejectsAmbiguousInputs(t *testing.T) {
 			}},
 		},
 		{
+			Name:     "empty-state-step",
+			Requires: []Capability{CapabilitySession, CapabilitySessionState},
+			Steps: []Step{{
+				Name:  "empty-state",
+				Kind:  StepUpdateState,
+				State: &StateInput{Scope: StateScopeSession},
+			}},
+		},
+		{
 			Name:     "missing-session-capability",
 			Requires: nil,
 			Steps:    []Step{validStep},
@@ -440,6 +449,140 @@ func TestCaseValidationRejectsNonPortableConcurrency(t *testing.T) {
 		t.Run(replayCase.Name, func(t *testing.T) {
 			if err := validateCase(replayCase); err == nil {
 				t.Fatal("validateCase() accepted non-portable concurrency")
+			}
+		})
+	}
+}
+
+func TestCaseValidationRejectsConcurrentWriteConflicts(t *testing.T) {
+	base := messageStep("user", "user", 1, "user", model.RoleUser, "start", "")
+	tests := []struct {
+		name string
+		step Step
+		want string
+	}{
+		{
+			name: "state",
+			step: Step{
+				Name: "parallel",
+				Kind: StepConcurrent,
+				Concurrent: [][]Step{
+					{stateStep("left", StateScopeSession, session.StateMap{"same": []byte("left")}, nil)},
+					{stateStep("right", StateScopeSession, session.StateMap{"same": []byte("right")}, nil)},
+				},
+			},
+			want: "state conflict",
+		},
+		{
+			name: "memory",
+			step: Step{
+				Name: "parallel",
+				Kind: StepConcurrent,
+				Concurrent: [][]Step{
+					{{Name: "left", Kind: StepAddMemory, Memory: &MemoryInput{Memory: "same"}}},
+					{{Name: "right", Kind: StepAddMemory, Memory: &MemoryInput{Memory: "same"}}},
+				},
+			},
+			want: "memory conflict",
+		},
+		{
+			name: "summary",
+			step: Step{
+				Name: "parallel",
+				Kind: StepConcurrent,
+				Concurrent: [][]Step{
+					{{Name: "left", Kind: StepCreateSummary, Summary: &SummaryInput{FilterKey: "same"}}},
+					{{Name: "right", Kind: StepCreateSummary, Summary: &SummaryInput{FilterKey: "same"}}},
+				},
+			},
+			want: "summary conflict",
+		},
+		{
+			name: "track",
+			step: Step{
+				Name: "parallel",
+				Kind: StepConcurrent,
+				Concurrent: [][]Step{
+					{trackStep("left", "same", 2, map[string]any{"side": "left"})},
+					{trackStep("right", "same", 3, map[string]any{"side": "right"})},
+				},
+			},
+			want: "track conflict",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			replayCase := Case{
+				Name:       "conflict-" + test.name,
+				EventOrder: EventOrderCausal,
+				Requires:   []Capability{CapabilitySession, CapabilityConcurrent},
+				Steps:      []Step{base, test.step},
+			}
+			if err := validateCase(replayCase); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("validateCase() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestCaseValidationRejectsMixedConcurrentWriteDomains(t *testing.T) {
+	eventStep := messageStep("event", "event", 2, "assistant", model.RoleAssistant, "event", "branch/event")
+	tests := []struct {
+		name     string
+		requires []Capability
+		step     Step
+	}{
+		{
+			name: "event and memory",
+			requires: []Capability{
+				CapabilitySession,
+				CapabilityMemory,
+				CapabilityConcurrent,
+				CapabilityConcurrentMemory,
+			},
+			step: Step{
+				Name: "parallel",
+				Kind: StepConcurrent,
+				Concurrent: [][]Step{
+					{eventStep},
+					{{Name: "memory", Kind: StepAddMemory, Memory: &MemoryInput{Memory: "memory"}}},
+				},
+			},
+		},
+		{
+			name: "state and track",
+			requires: []Capability{
+				CapabilitySession,
+				CapabilitySessionState,
+				CapabilityTrack,
+				CapabilityConcurrent,
+				CapabilityConcurrentState,
+				CapabilityConcurrentTrack,
+			},
+			step: Step{
+				Name: "parallel",
+				Kind: StepConcurrent,
+				Concurrent: [][]Step{
+					{stateStep("state", StateScopeSession, session.StateMap{"key": []byte("value")}, nil)},
+					{trackStep("track", "tool", 2, map[string]any{"status": "ok"})},
+				},
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			replayCase := Case{
+				Name:       "mixed-" + strings.ReplaceAll(test.name, " ", "-"),
+				EventOrder: EventOrderCausal,
+				Requires:   test.requires,
+				Steps: []Step{
+					messageStep("user", "user", 1, "user", model.RoleUser, "start", ""),
+					test.step,
+				},
+			}
+			err := validateCase(replayCase)
+			if err == nil || !strings.Contains(err.Error(), "cannot mix concurrent") {
+				t.Fatalf("validateCase() error = %v, want mixed concurrent write rejection", err)
 			}
 		})
 	}
@@ -896,6 +1039,16 @@ func TestClassifyConsensus(t *testing.T) {
 				{BackendA: "b", BackendB: "c", BlockingDiffs: 1},
 				{BackendA: "b", BackendB: "d", BlockingDiffs: 1},
 				{BackendA: "c", BackendB: "d"},
+			},
+			verdict: ConsensusAmbiguous,
+		},
+		{
+			name:     "non-transitive agreement",
+			backends: []string{"a", "b", "c"},
+			pairs: []PairComparison{
+				{BackendA: "a", BackendB: "b"},
+				{BackendA: "a", BackendB: "c", BlockingDiffs: 1},
+				{BackendA: "b", BackendB: "c"},
 			},
 			verdict: ConsensusAmbiguous,
 		},
