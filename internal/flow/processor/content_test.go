@@ -4536,6 +4536,30 @@ func TestContentRequestProcessor_getIncrementMessages_RestoresUserAcrossSummaryC
 			wantText: []string{"question", "answer"},
 		},
 		{
+			name: "empty role payload restores user-like anchor",
+			events: []event.Event{
+				messageEvent(
+					"user",
+					"request-1",
+					"invocation-1",
+					baseTime,
+					model.Message{Content: "question"},
+				),
+				messageEvent(
+					"assistant",
+					"request-1",
+					"invocation-1",
+					baseTime.Add(2*time.Second),
+					model.NewAssistantMessage("answer"),
+				),
+			},
+			cutoff: summaryHistoryCutoffFromTime(
+				baseTime.Add(time.Second),
+			),
+			wantRole: []model.Role{"", model.RoleAssistant},
+			wantText: []string{"question", "answer"},
+		},
+		{
 			name: "retained user already anchors turn",
 			events: []event.Event{
 				messageEvent(

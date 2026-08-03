@@ -1589,6 +1589,9 @@ func historyTurnKeyForEvent(evt event.Event) (historyTurnKey, bool) {
 func historyRoleForEvent(evt event.Event) (model.Role, bool) {
 	for _, choice := range evt.Choices {
 		msg := choice.Message
+		if userLikeRole(msg.Role) && model.HasPayload(msg) {
+			return model.RoleUser, true
+		}
 		if msg.Role.IsValid() {
 			return msg.Role, true
 		}
