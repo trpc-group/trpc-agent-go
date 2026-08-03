@@ -24,14 +24,7 @@ func TestLifecycleAnalysisBatchesRepositorySourceUnitsAndFunctions(t *testing.T)
 
 	matches, stats := runRulesWithLifecycleStats(parsed, repoRoot)
 	assertNoLifecycleMatches(t, matches)
-	want := lifecycleAnalysisStats{
-		ParsedSourceUnits:      1,
-		TypeCheckedSourceUnits: 1,
-		AnalyzedFunctions:      2,
-	}
-	if stats != want {
-		t.Fatalf("lifecycle analysis stats = %+v, want %+v", stats, want)
-	}
+	assertLifecycleBatchingStats(t, stats, 1, 1, 2)
 }
 
 func TestLifecycleAnalysisBatchesDiffFunctionWindows(t *testing.T) {
@@ -40,13 +33,27 @@ func TestLifecycleAnalysisBatchesDiffFunctionWindows(t *testing.T) {
 
 	matches, stats := runRulesWithLifecycleStats(parsed, "")
 	assertNoLifecycleMatches(t, matches)
-	want := lifecycleAnalysisStats{
-		ParsedSourceUnits:      2,
-		TypeCheckedSourceUnits: 2,
-		AnalyzedFunctions:      2,
-	}
-	if stats != want {
-		t.Fatalf("lifecycle analysis stats = %+v, want %+v", stats, want)
+	assertLifecycleBatchingStats(t, stats, 2, 2, 2)
+}
+
+func assertLifecycleBatchingStats(
+	t *testing.T,
+	stats lifecycleAnalysisStats,
+	parsed int,
+	typeChecked int,
+	functions int,
+) {
+	t.Helper()
+	if stats.ParsedSourceUnits != parsed ||
+		stats.TypeCheckedSourceUnits != typeChecked ||
+		stats.AnalyzedFunctions != functions {
+		t.Fatalf(
+			"lifecycle batching stats = %+v, want parsed=%d type-checked=%d functions=%d",
+			stats,
+			parsed,
+			typeChecked,
+			functions,
+		)
 	}
 }
 
@@ -90,6 +97,76 @@ func review(firstName string, secondName string) error {
 				t.Fatalf("lifecycle matches = %+v, want only the first acquisition", lifecycleMatches)
 			}
 		})
+	}
+}
+
+func TestLifecycleAnalysisOperationsGrowLinearly(t *testing.T) {
+	scenarios := []struct {
+		name   string
+		source func(int) string
+	}{
+		{name: "immediate-defer", source: highCandidateLifecycleSource},
+		{name: "dense-active", source: denseActiveLifecycleSource},
+		{name: "unrelated-statements", source: unrelatedStatementLifecycleSource},
+		{name: "sparse-branch-loop", source: sparseBranchLoopLifecycleSource},
+	}
+	for _, mode := range []string{"repository", "diff-only"} {
+		for _, scenario := range scenarios {
+			t.Run(mode+"/"+scenario.name, func(t *testing.T) {
+				measurements := make(map[int]lifecycleAnalysisStats)
+				for _, count := range []int{32, 128, 512, 1024} {
+					source := scenario.source(count)
+					parsed := parseUnifiedDiff([]byte(lifecycleNewFileDiff(source)))
+					repoRoot := ""
+					if mode == "repository" {
+						repoRoot = t.TempDir()
+						mustWriteFile(t, filepath.Join(repoRoot, "review.go"), source)
+					}
+					matches, stats := runRulesWithLifecycleStats(parsed, repoRoot)
+					assertNoLifecycleMatches(t, matches)
+					if stats.AnalyzedStatements == 0 || stats.CandidateStateOperations == 0 {
+						t.Fatalf("count %d lifecycle stats = %+v, want non-zero operation counters", count, stats)
+					}
+					measurements[count] = stats
+				}
+				for _, pair := range [][2]int{{32, 128}, {128, 512}} {
+					assertLifecycleOperationGrowth(t, measurements, pair[0], pair[1], 5)
+				}
+				assertLifecycleOperationGrowth(t, measurements, 512, 1024, 3)
+			})
+		}
+	}
+}
+
+func assertLifecycleOperationGrowth(
+	t *testing.T,
+	measurements map[int]lifecycleAnalysisStats,
+	from int,
+	to int,
+	maximumMultiplier int,
+) {
+	t.Helper()
+	before := measurements[from]
+	after := measurements[to]
+	if after.AnalyzedStatements > before.AnalyzedStatements*maximumMultiplier {
+		t.Fatalf(
+			"analyzed statements grew from %d at %d candidates to %d at %d candidates; maximum multiplier %d",
+			before.AnalyzedStatements,
+			from,
+			after.AnalyzedStatements,
+			to,
+			maximumMultiplier,
+		)
+	}
+	if after.CandidateStateOperations > before.CandidateStateOperations*maximumMultiplier {
+		t.Fatalf(
+			"candidate operations grew from %d at %d candidates to %d at %d candidates; maximum multiplier %d",
+			before.CandidateStateOperations,
+			from,
+			after.CandidateStateOperations,
+			to,
+			maximumMultiplier,
+		)
 	}
 }
 
@@ -150,6 +227,47 @@ func highCandidateLifecycleSource(count int) string {
 	for index := 0; index < count; index++ {
 		fmt.Fprintf(&source, "\tfile%d, err%d := os.Open(%q)\n", index, index, fmt.Sprint(index))
 		fmt.Fprintf(&source, "\tif err%d != nil { return err%d }\n", index, index)
+		fmt.Fprintf(&source, "\tdefer file%d.Close()\n", index)
+	}
+	source.WriteString("\treturn nil\n}\n")
+	return source.String()
+}
+
+func denseActiveLifecycleSource(count int) string {
+	var source strings.Builder
+	source.WriteString("package lifecycle\n\nimport \"os\"\n\nfunc review() error {\n")
+	for index := 0; index < count; index++ {
+		fmt.Fprintf(&source, "\tfile%d, _ := os.Open(%q)\n", index, fmt.Sprint(index))
+	}
+	for index := 0; index < count; index++ {
+		fmt.Fprintf(&source, "\tdefer file%d.Close()\n", index)
+	}
+	source.WriteString("\treturn nil\n}\n")
+	return source.String()
+}
+
+func unrelatedStatementLifecycleSource(count int) string {
+	var source strings.Builder
+	source.WriteString("package lifecycle\n\nimport \"os\"\n\nfunc review() error {\n\tvalue := 0\n")
+	for index := 0; index < count; index++ {
+		fmt.Fprintf(&source, "\tfile%d, _ := os.Open(%q)\n", index, fmt.Sprint(index))
+		fmt.Fprintf(&source, "\tdefer file%d.Close()\n", index)
+		fmt.Fprintf(&source, "\tvalue += %d\n", index)
+	}
+	source.WriteString("\t_ = value\n\treturn nil\n}\n")
+	return source.String()
+}
+
+func sparseBranchLoopLifecycleSource(count int) string {
+	var source strings.Builder
+	source.WriteString("package lifecycle\n\nimport \"os\"\n\nfunc review(flag bool) error {\n")
+	source.WriteString("\tfile0, _ := os.Open(\"0\")\n")
+	source.WriteString("\tif flag { _ = file0.Close() } else { _ = file0.Close() }\n")
+	source.WriteString("\tfile1, _ := os.Open(\"1\")\n")
+	source.WriteString("\tfor flag { _ = file1.Close(); break }\n")
+	source.WriteString("\tdefer file1.Close()\n")
+	for index := 2; index < count; index++ {
+		fmt.Fprintf(&source, "\tfile%d, _ := os.Open(%q)\n", index, fmt.Sprint(index))
 		fmt.Fprintf(&source, "\tdefer file%d.Close()\n", index)
 	}
 	source.WriteString("\treturn nil\n}\n")

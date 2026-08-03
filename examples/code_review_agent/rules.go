@@ -79,9 +79,11 @@ type lifecycleCandidate struct {
 }
 
 type lifecycleAnalysisStats struct {
-	ParsedSourceUnits      int
-	TypeCheckedSourceUnits int
-	AnalyzedFunctions      int
+	ParsedSourceUnits        int
+	TypeCheckedSourceUnits   int
+	AnalyzedFunctions        int
+	AnalyzedStatements       int
+	CandidateStateOperations int
 }
 
 func runRules(parsed parsedDiff, repoRoot string) []ruleMatch {

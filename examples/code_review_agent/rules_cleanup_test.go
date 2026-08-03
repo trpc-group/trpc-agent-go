@@ -82,6 +82,36 @@ func TestResourceCleanupRequiresAllExitPaths(t *testing.T) {
 			wantFinding: true,
 		},
 		{
+			name: "loop continue path cleans before reacquisition",
+			source: fileLifecycleSource(`
+	for closeNow {
+		f, _ := os.Open(name)
+		if skip {
+			defer f.Close()
+			continue
+		}
+		_ = f.Close()
+		break
+	}
+	return nil`),
+			acquisition: "f, _ := os.Open(name)",
+			ruleID:      ruleUnclosedFile,
+		},
+		{
+			name: "loop continue path reaches reacquisition active",
+			source: fileLifecycleSource(`
+	for closeNow {
+		f, _ := os.Open(name)
+		if skip { continue }
+		_ = f.Close()
+		break
+	}
+	return nil`),
+			acquisition: "f, _ := os.Open(name)",
+			ruleID:      ruleUnclosedFile,
+			wantFinding: true,
+		},
+		{
 			name: "panic before defer",
 			source: fileLifecycleSource(`
 	f, err := os.Open(name)
