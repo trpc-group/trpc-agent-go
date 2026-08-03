@@ -1,0 +1,161 @@
+{
+  "schemaVersion": "1.0",
+  "generatedAt": "2026-08-03T06:39:16.009737Z",
+  "runStatus": "succeeded",
+  "baselineScore": 0.6,
+  "rounds": [
+    {
+      "round": 1,
+      "deltaFromOriginal": {
+        "baselineScore": 0.6,
+        "candidateScore": 0.6666666666666666,
+        "scoreDelta": 0.06666666666666665,
+        "newPasses": 2,
+        "newFailures": 1,
+        "scoreRegressions": 1,
+        "cases": [
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_account_security",
+            "baselinePassed": true,
+            "candidatePassed": false,
+            "outcome": "new_failure",
+            "metrics": [
+              {
+                "name": "quality",
+                "baselineScore": 1,
+                "candidateScore": 0,
+                "delta": -1,
+                "baselinePassed": true,
+                "candidatePassed": false,
+                "reason": "routing error exposes an unsafe path"
+              }
+            ],
+            "attributions": [
+              "routing_error"
+            ]
+          },
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_refund_format",
+            "baselinePassed": false,
+            "candidatePassed": true,
+            "outcome": "new_pass",
+            "metrics": [
+              {
+                "name": "quality",
+                "baselineScore": 0.4,
+                "candidateScore": 1,
+                "delta": 0.6,
+                "baselinePassed": false,
+                "candidatePassed": true
+              }
+            ]
+          },
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_return_shipping",
+            "baselinePassed": false,
+            "candidatePassed": true,
+            "outcome": "new_pass",
+            "metrics": [
+              {
+                "name": "quality",
+                "baselineScore": 0.4,
+                "candidateScore": 1,
+                "delta": 0.6,
+                "baselinePassed": false,
+                "candidatePassed": true
+              }
+            ]
+          }
+        ]
+      },
+      "deltaFromAccepted": {
+        "baselineScore": 0.6,
+        "candidateScore": 0.6666666666666666,
+        "scoreDelta": 0.06666666666666665,
+        "newPasses": 2,
+        "newFailures": 1,
+        "scoreRegressions": 1,
+        "cases": [
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_account_security",
+            "baselinePassed": true,
+            "candidatePassed": false,
+            "outcome": "new_failure",
+            "metrics": [
+              {
+                "name": "quality",
+                "baselineScore": 1,
+                "candidateScore": 0,
+                "delta": -1,
+                "baselinePassed": true,
+                "candidatePassed": false,
+                "reason": "routing error exposes an unsafe path"
+              }
+            ],
+            "attributions": [
+              "routing_error"
+            ]
+          },
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_refund_format",
+            "baselinePassed": false,
+            "candidatePassed": true,
+            "outcome": "new_pass",
+            "metrics": [
+              {
+                "name": "quality",
+                "baselineScore": 0.4,
+                "candidateScore": 1,
+                "delta": 0.6,
+                "baselinePassed": false,
+                "candidatePassed": true
+              }
+            ]
+          },
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_return_shipping",
+            "baselinePassed": false,
+            "candidatePassed": true,
+            "outcome": "new_pass",
+            "metrics": [
+              {
+                "name": "quality",
+                "baselineScore": 0.4,
+                "candidateScore": 1,
+                "delta": 0.6,
+                "baselinePassed": false,
+                "candidatePassed": true
+              }
+            ]
+          }
+        ]
+      },
+      "usage": {
+        "modelCalls": 3,
+        "toolCalls": 0,
+        "tokens": 300
+      },
+      "decision": {
+        "accepted": false,
+        "reasons": [
+          "new failures 1 exceed limit 0",
+          "metric regressions 1 exceed limit 0",
+          "critical case \"validation_account_security\" regressed"
+        ]
+      },
+      "engineAccepted": true
+    }
+  ],
+  "accepted": false,
+  "finalReasons": [
+    "new failures 1 exceed limit 0",
+    "metric regressions 1 exceed limit 0",
+    "critical case \"validation_account_security\" regressed"
+  ]
+}

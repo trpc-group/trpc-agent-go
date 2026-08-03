@@ -1,0 +1,167 @@
+{
+  "schemaVersion": "1.0",
+  "generatedAt": "2026-08-03T06:39:15.829698Z",
+  "runStatus": "succeeded",
+  "baselineScore": 0.6,
+  "rounds": [
+    {
+      "round": 1,
+      "deltaFromOriginal": {
+        "baselineScore": 0.6,
+        "candidateScore": 0.6,
+        "scoreDelta": 0,
+        "newPasses": 0,
+        "newFailures": 0,
+        "scoreRegressions": 0,
+        "cases": [
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_account_security",
+            "baselinePassed": true,
+            "candidatePassed": true,
+            "outcome": "unchanged",
+            "metrics": [
+              {
+                "name": "quality",
+                "baselineScore": 1,
+                "candidateScore": 1,
+                "delta": 0,
+                "baselinePassed": true,
+                "candidatePassed": true
+              }
+            ]
+          },
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_refund_format",
+            "baselinePassed": false,
+            "candidatePassed": false,
+            "outcome": "unchanged",
+            "metrics": [
+              {
+                "name": "quality",
+                "baselineScore": 0.4,
+                "candidateScore": 0.4,
+                "delta": 0,
+                "baselinePassed": false,
+                "candidatePassed": false,
+                "reason": "format schema mismatch"
+              }
+            ],
+            "attributions": [
+              "format_error"
+            ]
+          },
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_return_shipping",
+            "baselinePassed": false,
+            "candidatePassed": false,
+            "outcome": "unchanged",
+            "metrics": [
+              {
+                "name": "quality",
+                "baselineScore": 0.4,
+                "candidateScore": 0.4,
+                "delta": 0,
+                "baselinePassed": false,
+                "candidatePassed": false,
+                "reason": "final response misses shipping policy"
+              }
+            ],
+            "attributions": [
+              "final_response_mismatch"
+            ]
+          }
+        ]
+      },
+      "deltaFromAccepted": {
+        "baselineScore": 0.6,
+        "candidateScore": 0.6,
+        "scoreDelta": 0,
+        "newPasses": 0,
+        "newFailures": 0,
+        "scoreRegressions": 0,
+        "cases": [
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_account_security",
+            "baselinePassed": true,
+            "candidatePassed": true,
+            "outcome": "unchanged",
+            "metrics": [
+              {
+                "name": "quality",
+                "baselineScore": 1,
+                "candidateScore": 1,
+                "delta": 0,
+                "baselinePassed": true,
+                "candidatePassed": true
+              }
+            ]
+          },
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_refund_format",
+            "baselinePassed": false,
+            "candidatePassed": false,
+            "outcome": "unchanged",
+            "metrics": [
+              {
+                "name": "quality",
+                "baselineScore": 0.4,
+                "candidateScore": 0.4,
+                "delta": 0,
+                "baselinePassed": false,
+                "candidatePassed": false,
+                "reason": "format schema mismatch"
+              }
+            ],
+            "attributions": [
+              "format_error"
+            ]
+          },
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_return_shipping",
+            "baselinePassed": false,
+            "candidatePassed": false,
+            "outcome": "unchanged",
+            "metrics": [
+              {
+                "name": "quality",
+                "baselineScore": 0.4,
+                "candidateScore": 0.4,
+                "delta": 0,
+                "baselinePassed": false,
+                "candidatePassed": false,
+                "reason": "final response misses shipping policy"
+              }
+            ],
+            "attributions": [
+              "final_response_mismatch"
+            ]
+          }
+        ]
+      },
+      "usage": {
+        "modelCalls": 3,
+        "toolCalls": 0,
+        "tokens": 300
+      },
+      "decision": {
+        "accepted": false,
+        "reasons": [
+          "score gain 0.0000 is below minimum 0.0500",
+          "PromptIter engine rejected the candidate"
+        ]
+      },
+      "engineAccepted": false
+    }
+  ],
+  "accepted": false,
+  "finalReasons": [
+    "score gain 0.0000 is below minimum 0.0500",
+    "PromptIter engine rejected the candidate"
+  ]
+}
