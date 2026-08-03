@@ -110,6 +110,36 @@ func TestRequestsFromToolCall_ParsesKnownToolArguments(t *testing.T) {
 			},
 		},
 		{
+			name:     "skill_implicit_output_collection",
+			toolName: "skill_run",
+			args:     []byte(`{"command":"true"}`),
+			assert: func(t *testing.T, reqs []ScanRequest) {
+				require.Len(t, reqs, 1)
+				require.Equal(t, []string{skillDefaultOutputGlob}, reqs[0].CollectionPaths)
+				require.Equal(t, int64(skillDefaultOutputTotalBytes), reqs[0].RequestedOutputBytes)
+			},
+		},
+		{
+			name:     "empty_output_files_use_implicit_collection",
+			toolName: "skill_exec",
+			args:     []byte(`{"command":"true","output_files":[]}`),
+			assert: func(t *testing.T, reqs []ScanRequest) {
+				require.Len(t, reqs, 1)
+				require.Equal(t, []string{skillDefaultOutputGlob}, reqs[0].CollectionPaths)
+				require.Equal(t, int64(skillDefaultOutputTotalBytes), reqs[0].RequestedOutputBytes)
+			},
+		},
+		{
+			name:     "explicit_empty_outputs_do_not_collect",
+			toolName: "skill_run",
+			args:     []byte(`{"command":"true","outputs":{}}`),
+			assert: func(t *testing.T, reqs []ScanRequest) {
+				require.Len(t, reqs, 1)
+				require.Empty(t, reqs[0].CollectionPaths)
+				require.Zero(t, reqs[0].RequestedOutputBytes)
+			},
+		},
+		{
 			name:     "skill_editor_text_and_output_limits",
 			toolName: "skill_run",
 			args: []byte(`{

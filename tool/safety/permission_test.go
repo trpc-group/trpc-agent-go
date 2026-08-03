@@ -11,6 +11,7 @@ package safety
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"testing"
@@ -277,6 +278,58 @@ func TestPermissionPolicy_ScannerErrorReportIsRedacted(t *testing.T) {
 	require.NotContains(t, observed.Evidence, "/etc/passwd")
 	require.NotContains(t, audit.String(), "ghp_value")
 	require.NotContains(t, audit.String(), "/etc/passwd")
+}
+
+func TestPermissionPolicy_BackendResolverAppliesWorkspaceRawChecks(t *testing.T) {
+	var observed Report
+	policy := NewPermissionPolicy(
+		MustDefaultScanner(Policy{}),
+		WithBackendResolver(func(*tool.PermissionRequest) Backend {
+			return BackendWorkspace
+		}),
+		WithReportObserver(func(_ context.Context, report Report) {
+			observed = report
+		}),
+	)
+	decision, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "custom_open_world",
+		Arguments: []byte(`{"path":"/etc/passwd"}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.Equal(t, BackendWorkspace, observed.Backend)
+	require.Equal(t, "path.sensitive_credentials", observed.RuleID)
+	require.True(t, observed.Blocked)
+}
+
+func TestPermissionPolicy_RedactsCredentialsWhenShellParsingFails(t *testing.T) {
+	const secret = "s3cr3t"
+	var observed Report
+	var audit bytes.Buffer
+	policy := NewPermissionPolicy(
+		MustDefaultScanner(Policy{
+			NetworkAllowlist: []string{"allowed.example"},
+		}),
+		WithAuditWriter(NewJSONLAuditWriter(&audit)),
+		WithReportObserver(func(_ context.Context, report Report) {
+			observed = report
+		}),
+	)
+	decision, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"curl -u alice:` + secret + ` https://allowed.example > out.txt"}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.Equal(t, "shell.expansion", observed.RuleID)
+	require.NotContains(t, observed.Command, secret)
+	require.NotContains(t, observed.Evidence, secret)
+	require.NotContains(t, observed.Recommendation, secret)
+	reportJSON, err := json.Marshal(observed)
+	require.NoError(t, err)
+	require.NotContains(t, string(reportJSON), secret)
+	require.NotContains(t, decision.Reason, secret)
+	require.NotContains(t, audit.String(), secret)
 }
 
 func TestPermissionPolicy_NilScannerFuncFailsClosed(t *testing.T) {

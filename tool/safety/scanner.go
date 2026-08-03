@@ -128,6 +128,15 @@ func (s *DefaultScanner) scanRequestContent(
 	sizeResult scanSizeResult,
 ) []Finding {
 	var findings []Finding
+	if req.Command != "" && len(req.Args) > 0 {
+		return []Finding{{
+			RuleID:         "request.command_args_conflict",
+			RiskLevel:      RiskHigh,
+			Decision:       DecisionDeny,
+			Evidence:       "command and args are both set",
+			Recommendation: "provide either command or args; args must include argv[0]",
+		}}
+	}
 	switch {
 	case req.Command != "":
 		if !sizeResult.commandTooLarge {

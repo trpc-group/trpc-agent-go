@@ -81,6 +81,8 @@ func TestRedactString_RedactsCurlCredentialFlags(t *testing.T) {
 	for _, input := range []string{
 		`curl -u alice:password https://allowed.example`,
 		`curl -ualice:password https://allowed.example`,
+		`curl -Uproxy:password https://allowed.example`,
+		`curl -U proxy:password https://allowed.example`,
 		`curl --user alice:password https://allowed.example`,
 		`curl --user=alice:password https://allowed.example`,
 		`curl --proxy-user proxy:password https://allowed.example`,
@@ -92,6 +94,35 @@ func TestRedactString_RedactsCurlCredentialFlags(t *testing.T) {
 		require.NotContains(t, out, "proxy:password", input)
 		require.NotContains(t, out, "bearer-token", input)
 	}
+}
+
+func TestRedactString_RedactsRemainingNetworkCredentialFlags(t *testing.T) {
+	cases := []struct {
+		input  string
+		secret string
+	}{
+		{`curl --pass curl-passphrase https://allowed.example`, "curl-passphrase"},
+		{`curl --pass=curl-passphrase https://allowed.example`, "curl-passphrase"},
+		{`curl --proxy-pass proxy-passphrase https://allowed.example`, "proxy-passphrase"},
+		{`curl --proxy-pass=proxy-passphrase https://allowed.example`, "proxy-passphrase"},
+		{`wget --ftp-user ftp-user-value https://allowed.example`, "ftp-user-value"},
+		{`wget --ftp-password=ftp-password-value https://allowed.example`, "ftp-password-value"},
+		{`wget --proxy-password proxy-password-value https://allowed.example`, "proxy-password-value"},
+		{`wget --password=wget-password-value https://allowed.example`, "wget-password-value"},
+	}
+	for _, tc := range cases {
+		out, redacted := redactString(tc.input)
+		require.True(t, redacted, tc.input)
+		require.NotContains(t, out, tc.secret, tc.input)
+	}
+}
+
+func TestRedactString_RedactsNetworkCredentialsWhenShellParsingFails(t *testing.T) {
+	input := `curl -u alice:s3cr3t https://allowed.example > out.txt`
+	out, redacted := redactString(input)
+	require.True(t, redacted)
+	require.NotContains(t, out, "alice:s3cr3t")
+	require.NotContains(t, out, "s3cr3t")
 }
 
 func TestRedactString_ScopesNetworkCredentialFlagsToCommandSegment(t *testing.T) {

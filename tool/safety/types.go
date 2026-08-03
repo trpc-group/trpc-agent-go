@@ -89,7 +89,9 @@ func (b Backend) Valid() bool {
 	}
 }
 
-// ScanRequest describes one pending tool call or script execution.
+// ScanRequest describes one pending tool call or script execution. Command and
+// Args are mutually exclusive representations; Args is an already-split argv
+// and must include argv[0] as the executable name.
 type ScanRequest struct {
 	ToolName             string            `json:"tool_name"`
 	ToolCallID           string            `json:"tool_call_id,omitempty"`

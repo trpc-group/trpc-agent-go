@@ -79,7 +79,7 @@ func (s *DefaultScanner) scanTextForUnknownRisk(req ScanRequest, text string) []
 				Evidence:       "unknown tool contains downloader or URL-like content",
 				Recommendation: "review unknown open-world tools before execution",
 			})
-		} else if directTextInput && (req.Backend == BackendHost || req.Backend == BackendCodeExec || req.Backend == BackendSandbox) {
+		} else if directTextInput && (req.Backend == BackendWorkspace || req.Backend == BackendHost || req.Backend == BackendCodeExec || req.Backend == BackendSandbox) {
 			findings = append(findings, s.scanTextNetwork(text)...)
 		}
 	}
@@ -93,7 +93,7 @@ func (s *DefaultScanner) scanTextForUnknownRisk(req ScanRequest, text string) []
 				Evidence:       "unknown tool contains dangerous command-like content",
 				Recommendation: "review unknown open-world tools before execution",
 			})
-		case BackendHost, BackendCodeExec, BackendSandbox:
+		case BackendWorkspace, BackendHost, BackendCodeExec, BackendSandbox:
 			if !directTextInput {
 				break
 			}
@@ -116,7 +116,7 @@ func (s *DefaultScanner) scanTextForUnknownRisk(req ScanRequest, text string) []
 				Recommendation: "review unknown tools that reference credential or secret paths",
 				Redacted:       true,
 			})
-		} else if directTextInput && (req.Backend == BackendHost || req.Backend == BackendCodeExec || req.Backend == BackendSandbox) {
+		} else if directTextInput && (req.Backend == BackendWorkspace || req.Backend == BackendHost || req.Backend == BackendCodeExec || req.Backend == BackendSandbox) {
 			findings = append(findings, Finding{
 				RuleID:         "path.sensitive_credentials",
 				RiskLevel:      RiskCritical,

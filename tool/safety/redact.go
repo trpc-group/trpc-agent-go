@@ -31,9 +31,9 @@ var secretPatterns = []*regexp.Regexp{
 
 var credentialFlagPattern = regexp.MustCompile(`(?i)(--(?:api[-_]?key|access[-_]?token|refresh[-_]?token|id[-_]?token|oauth[-_]?token|session[-_]?token|csrf[-_]?token|xsrf[-_]?token|jwt[-_]?token|client[-_]?secret|password|passwd|secret|token)\b(?:\s+|=))(?:"[^"]+"|'[^']+'|[^\s]+)`)
 
-var networkCredentialFlagPattern = regexp.MustCompile(`(?i)(--(?:user|proxy-user|oauth2-bearer)\b(?:\s+|=))(?:"[^"]+"|'[^']+'|[^\s]+)`)
+var networkCredentialFlagPattern = regexp.MustCompile(`(?i)(--(?:user|proxy-user|oauth2-bearer|pass|proxy-pass|ftp-user|ftp-password|password|proxy-password)\b(?:\s+|=))(?:"[^"]+"|'[^']+'|[^\s]+)`)
 
-var networkShortCredentialFlagPattern = regexp.MustCompile(`(?i)(^|[\s])(-u)(?:(\s+)(?:"[^"]+"|'[^']+'|[^\s]+)|(?:"[^"]+"|'[^']+'|[^\s]+))`)
+var networkShortCredentialFlagPattern = regexp.MustCompile(`(?i)(^|[\s])(-[uU])(?:(\s+)(?:"[^"]+"|'[^']+'|[^\s]+)|(?:"[^"]+"|'[^']+'|[^\s]+))`)
 
 func redactString(s string) (string, bool) {
 	redacted := false
@@ -68,30 +68,45 @@ func redactCredentialFlags(s string) (string, bool) {
 func redactNetworkCredentialFlags(s string) (string, bool) {
 	pipe, err := shellsafe.Parse(s)
 	if err != nil {
-		return s, false
+		return redactNetworkCredentialFlagsFallback(s)
 	}
 	spans := shellCommandSpans(s)
 	if len(spans) != len(pipe.Commands) {
-		return s, false
+		return redactNetworkCredentialFlagsFallback(s)
 	}
+	commands := make([]string, len(pipe.Commands))
+	for i, argv := range pipe.Commands {
+		if len(argv) > 0 {
+			commands[i] = normalizeCommand(argv[0])
+		}
+	}
+	return redactNetworkCredentialCommandSpans(s, spans, commands)
+}
+
+func redactNetworkCredentialFlagsFallback(s string) (string, bool) {
+	spans := shellCommandSpans(s)
+	commands := make([]string, len(spans))
+	for i, span := range spans {
+		commands[i] = rawNetworkCommandName(s[span.start:span.end])
+	}
+	return redactNetworkCredentialCommandSpans(s, spans, commands)
+}
+
+func redactNetworkCredentialCommandSpans(
+	s string,
+	spans []shellCommandSpan,
+	commands []string,
+) (string, bool) {
 	var out strings.Builder
 	last := 0
 	redacted := false
-	for i, argv := range pipe.Commands {
-		if len(argv) == 0 {
-			continue
+	for i, span := range spans {
+		if i >= len(commands) {
+			break
 		}
-		command := normalizeCommand(argv[0])
-		if command != "curl" && command != "wget" {
-			continue
-		}
-		span := spans[i]
 		segment := s[span.start:span.end]
-		next := networkCredentialFlagPattern.ReplaceAllString(
-			segment, `${1}<redacted>`)
-		next = networkShortCredentialFlagPattern.ReplaceAllString(
-			next, `${1}${2}${3}<redacted>`)
-		if next == segment {
+		next, changed := redactNetworkCredentialSegment(segment, commands[i])
+		if !changed {
 			continue
 		}
 		if !redacted {
@@ -107,6 +122,25 @@ func redactNetworkCredentialFlags(s string) (string, bool) {
 	}
 	out.WriteString(s[last:])
 	return out.String(), true
+}
+
+func redactNetworkCredentialSegment(segment, command string) (string, bool) {
+	if command != "curl" && command != "wget" {
+		return segment, false
+	}
+	out := networkCredentialFlagPattern.ReplaceAllString(
+		segment, `${1}<redacted>`)
+	out = networkShortCredentialFlagPattern.ReplaceAllString(
+		out, `${1}${2}${3}<redacted>`)
+	return out, out != segment
+}
+
+func rawNetworkCommandName(segment string) string {
+	fields := strings.Fields(segment)
+	if len(fields) == 0 {
+		return ""
+	}
+	return normalizeCommand(strings.Trim(fields[0], `"'`))
 }
 
 type shellCommandSpan struct {

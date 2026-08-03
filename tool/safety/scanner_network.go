@@ -104,8 +104,8 @@ func (s *DefaultScanner) scanNetwork(cmd string, argv []string) []Finding {
 			RuleID:         "network.configuration_override",
 			RiskLevel:      RiskHigh,
 			Decision:       decision,
-			Evidence:       "network client configuration override requires an explicit network review",
-			Recommendation: "remove opaque curl or wget configuration options or review the effective network settings",
+			Evidence:       "network client configuration or input-file override requires an explicit network review",
+			Recommendation: "remove opaque curl or wget configuration or input-file options or review the effective network settings",
 		}}
 	}
 	if len(hosts) == 0 {
@@ -246,7 +246,8 @@ func networkConfigurationOverrideOption(cmd, option string) bool {
 	case "curl":
 		return option == "-K" || option == "--config"
 	case "wget":
-		return option == "-e" || option == "--config" || option == "--execute"
+		return option == "-e" || option == "--config" || option == "--execute" ||
+			option == "-i" || option == "--input-file"
 	default:
 		return false
 	}
@@ -496,6 +497,12 @@ func networkArgHost(cmd, arg string) (string, bool) {
 		if _, host, ok := strings.Cut(arg, "@"); ok {
 			arg = host
 		}
+	case "git":
+		var ok bool
+		arg, ok = gitRemoteHost(arg)
+		if !ok {
+			return "", false
+		}
 	case "nc", "netcat":
 	}
 	arg = strings.TrimSuffix(arg, ".")
@@ -503,6 +510,20 @@ func networkArgHost(cmd, arg string) (string, bool) {
 		return "", false
 	}
 	return arg, true
+}
+
+func gitRemoteHost(arg string) (string, bool) {
+	host, _, ok := strings.Cut(arg, ":")
+	if !ok {
+		return "", false
+	}
+	if _, userHost, ok := strings.Cut(host, "@"); ok {
+		host = userHost
+	}
+	if !looksLikeHost(host) {
+		return "", false
+	}
+	return host, true
 }
 
 func appendHosts(hosts []string, seen map[string]struct{}, values ...string) []string {

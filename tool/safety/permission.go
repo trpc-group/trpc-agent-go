@@ -63,7 +63,9 @@ func WithAuditWriter(w AuditWriter) PermissionPolicyOption {
 	}
 }
 
-// WithBackendResolver sets a custom backend resolver.
+// WithBackendResolver sets a fallback resolver for otherwise unknown tools.
+// Built-in semantic markers and recognized tool names are authoritative; the
+// resolver is called only when built-in resolution returns BackendUnknown.
 func WithBackendResolver(r BackendResolver) PermissionPolicyOption {
 	return func(p *permissionPolicy) {
 		if r != nil {

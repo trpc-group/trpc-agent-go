@@ -8,7 +8,12 @@
 
 package safety
 
-import "strings"
+import (
+	"runtime"
+	"strings"
+
+	"trpc.group/trpc-go/trpc-agent-go/internal/envscrub"
+)
 
 func (s *DefaultScanner) scanEnv(env map[string]string) []Finding {
 	var findings []Finding
@@ -61,8 +66,12 @@ func (s *DefaultScanner) envAllowed(key string) bool {
 }
 
 func isProcessControlEnv(key string) bool {
+	if envscrub.IsMalformedKey(key) ||
+		envscrub.IsBlocked(key, runtime.GOOS == "windows") {
+		return true
+	}
 	key = strings.ToUpper(strings.TrimSpace(key))
-	if key == "PATH" || strings.HasPrefix(key, "LD_") {
+	if strings.HasPrefix(key, "LD_") {
 		return true
 	}
 	switch key {

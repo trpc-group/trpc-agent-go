@@ -160,7 +160,29 @@ func hostInputMayContainDenied(inputPath, denied string) bool {
 }
 
 func sensitivePathOrGlobMatch(value, denied string) bool {
+	if workspaceWideCollectionSelector(value) &&
+		strings.TrimSpace(denied) != "" {
+		return true
+	}
 	return sensitivePathMatch(value, denied) || globMayMatchDenied(value, denied)
+}
+
+func workspaceWideCollectionSelector(value string) bool {
+	value = strings.Trim(strings.TrimSpace(value), `"'`)
+	if value == "" || strings.ContainsAny(value, "*?[") {
+		return false
+	}
+	value = strings.ReplaceAll(value, `\`, "/")
+	cleaned := path.Clean(value)
+	if cleaned == "." || cleaned == "/" {
+		return true
+	}
+	switch strings.TrimSuffix(value, "/") {
+	case "$WORKSPACE_DIR", "${WORKSPACE_DIR}":
+		return true
+	default:
+		return false
+	}
 }
 
 func globMayMatchDenied(pattern, denied string) bool {

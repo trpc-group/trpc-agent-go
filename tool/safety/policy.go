@@ -79,7 +79,11 @@ func DefaultPolicy() Policy {
 	}
 }
 
-// WithDefaults fills zero fields with default policy values.
+// WithDefaults applies default policy values to unset fields. Unless
+// DisableDefaultDenies is true, DeniedCommands and DeniedPaths are merged
+// with and deduplicated against the default deny lists. When
+// DisableDefaultDenies is true, the supplied deny lists replace the defaults;
+// nil or empty lists therefore clear the default denies.
 func (p Policy) WithDefaults() Policy {
 	d := DefaultPolicy()
 	if p.AllowedCommands != nil {

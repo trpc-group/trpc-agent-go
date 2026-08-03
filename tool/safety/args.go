@@ -24,6 +24,7 @@ const (
 	skillDefaultTimeoutSec         = 300
 	skillDefaultOutputFileBytes    = 4 * 1024 * 1024
 	skillDefaultOutputTotalBytes   = 64 * 1024 * 1024
+	skillDefaultOutputGlob         = "out/**"
 )
 
 type parserKind string
@@ -261,6 +262,10 @@ func parseExecArgs(
 		if err != nil {
 			return nil, err
 		}
+		if skillUsesImplicitOutputCollection(raw) {
+			collectionPaths = []string{skillDefaultOutputGlob}
+			requestedOutputBytes = skillDefaultOutputTotalBytes
+		}
 	}
 	env, err := stringMapField(raw, "env")
 	if err != nil {
@@ -350,6 +355,15 @@ func outputLimitField(raw map[string]json.RawMessage) (int64, error) {
 		limit = int64(maxTotalBytes)
 	}
 	return limit, nil
+}
+
+func skillUsesImplicitOutputCollection(raw map[string]json.RawMessage) bool {
+	outputFiles, err := stringSliceField(raw, "output_files")
+	if err != nil || len(outputFiles) > 0 {
+		return false
+	}
+	outputs, ok := raw["outputs"]
+	return !ok || string(outputs) == "null"
 }
 
 type inputPathSpec struct {
