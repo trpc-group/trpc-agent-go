@@ -453,6 +453,20 @@ func NewTool(agent agent.Agent, opts ...Option) *Tool {
 	}
 }
 
+// IsConcurrencySafe reports false: an agent tool must not run on the parallel
+// path.
+//
+// Parallel execution gives each call a session view cloned before the workers
+// start, so siblings cannot race one another's persisted results. The wrapped
+// agent, however, runs a full loop that appends its own events to the real
+// session and then reads them back to decide its next step. Against a frozen
+// clone it never sees that progress, so it can repeat the same step until it
+// reaches its iteration cap.
+//
+// Returning false here keeps agent tools on the sequential path while leaving
+// ordinary tools in the same turn free to run concurrently.
+func (at *Tool) IsConcurrencySafe() bool { return false }
+
 // Call executes the agent tool with the provided JSON arguments.
 func (at *Tool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 	// Dynamic AgentTool mode runs a short-lived sub-agent whose capability

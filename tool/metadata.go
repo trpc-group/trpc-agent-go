@@ -13,9 +13,11 @@ import "context"
 // ToolMetadata describes execution properties that hosts and policies can use
 // before deciding whether a tool is safe to expose or execute.
 //
-// Metadata is descriptive. The framework does not change scheduling or loading
-// behavior from these fields alone; callers can opt in by using filters,
-// permission policies, or custom runners.
+// Metadata is descriptive, with one exception: ConcurrencySafe is load-bearing
+// for scheduling. A tool that publishes it as false is never run on the parallel
+// tool path. The remaining fields change no scheduling or loading behavior on
+// their own; callers can opt in by using filters, permission policies, or custom
+// runners.
 type ToolMetadata struct {
 	// ReadOnly reports that the tool does not intentionally mutate external
 	// state. Read-only tools can still be expensive or read sensitive data.
@@ -24,7 +26,9 @@ type ToolMetadata struct {
 	// irreversibly change external state.
 	Destructive bool
 	// ConcurrencySafe reports that independent calls to the same tool can run at
-	// the same time without corrupting shared state.
+	// the same time without corrupting shared state. Publishing false keeps the
+	// tool off the parallel tool path; see IsConcurrencySafe for how an
+	// unpublished value is read.
 	ConcurrencySafe bool
 	// SearchOrRead reports that the tool primarily searches or reads data.
 	SearchOrRead bool
@@ -70,6 +74,28 @@ func MetadataOf(t Tool) ToolMetadata {
 		return ToolMetadata{ConcurrencySafe: aware.IsConcurrencySafe()}
 	}
 	return ToolMetadata{}
+}
+
+// IsConcurrencySafe reports whether a tool tolerates running at the same time as
+// other tools in the same turn.
+//
+// A tool that publishes neither MetadataProvider nor ConcurrencyAware reads as
+// safe. That default cannot be expressed through MetadataOf, which collapses
+// "published false" and "published nothing" into the same zero value, so callers
+// that schedule work must ask here rather than reading
+// ToolMetadata.ConcurrencySafe directly — otherwise every tool written before
+// metadata existed looks unsafe.
+func IsConcurrencySafe(t Tool) bool {
+	if t == nil {
+		return true
+	}
+	if provider, ok := t.(MetadataProvider); ok {
+		return provider.ToolMetadata().ConcurrencySafe
+	}
+	if aware, ok := t.(ConcurrencyAware); ok {
+		return aware.IsConcurrencySafe()
+	}
+	return true
 }
 
 // ShouldDefer reports whether a tool asks host-side loading logic to defer

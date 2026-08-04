@@ -94,6 +94,31 @@ func TestMetadataOf_UsesConcurrencyAwareFallback(t *testing.T) {
 	}
 }
 
+// A tool publishing neither interface must read as SAFE. MetadataOf cannot
+// distinguish "published false" from "published nothing", so a scheduler reading
+// its zero value would mark every tool written before metadata existed unsafe.
+func TestIsConcurrencySafe(t *testing.T) {
+	tests := []struct {
+		name string
+		tool Tool
+		want bool
+	}{
+		{"publishes nothing", newMockTool(testToolName), true},
+		{"nil tool", nil, true},
+		{"concurrency-aware true", &concurrencyTool{safe: true}, true},
+		{"concurrency-aware false", &concurrencyTool{safe: false}, false},
+		{"provider true", &metadataTool{metadata: ToolMetadata{ConcurrencySafe: true}}, true},
+		{"provider false", &metadataTool{metadata: ToolMetadata{ConcurrencySafe: false}}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsConcurrencySafe(tt.tool); got != tt.want {
+				t.Fatalf("IsConcurrencySafe() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestShouldDefer(t *testing.T) {
 	if !ShouldDefer(context.Background(), &deferredTool{deferTool: true}) {
 		t.Fatalf("expected deferred tool to ask for deferral")
