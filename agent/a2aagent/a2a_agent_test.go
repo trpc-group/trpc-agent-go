@@ -5018,6 +5018,108 @@ func TestA2AAgentRunStreamingPreservesResponseID(t *testing.T) {
 	})
 }
 
+func TestA2AAgentProcessStreamingEventsUsesBufferedResponseIDWhenFlushing(t *testing.T) {
+	textEvent := func(responseID string) protocol.StreamingMessageEvent {
+		return protocol.StreamingMessageEvent{Result: &protocol.TaskArtifactUpdateEvent{
+			Kind:      protocol.KindTaskArtifactUpdate,
+			TaskID:    "task-1",
+			ContextID: "ctx-1",
+			Artifact: protocol.Artifact{
+				ArtifactID: responseID,
+				Parts: []protocol.Part{
+					&protocol.TextPart{Kind: protocol.KindText, Text: "preface"},
+				},
+			},
+		}}
+	}
+	toolCallEvent := func(responseID, callID string) protocol.StreamingMessageEvent {
+		return protocol.StreamingMessageEvent{Result: &protocol.TaskArtifactUpdateEvent{
+			Kind:      protocol.KindTaskArtifactUpdate,
+			TaskID:    "task-1",
+			ContextID: "ctx-1",
+			Artifact: protocol.Artifact{
+				ArtifactID: responseID,
+				Parts: []protocol.Part{
+					buildToolCallDataPart(callID, "lookup", `{}`),
+				},
+			},
+		}}
+	}
+	tests := []struct {
+		name                 string
+		streamEvents         []protocol.StreamingMessageEvent
+		wantResponseID       string
+		wantFlushedID        string
+		wantToolCallEventIDs []string
+	}{
+		{
+			name: "preserves buffered response ID",
+			streamEvents: []protocol.StreamingMessageEvent{
+				textEvent("resp-text"),
+				toolCallEvent("resp-tool", "call-1"),
+			},
+			wantResponseID:       "resp-tool",
+			wantFlushedID:        "resp-text",
+			wantToolCallEventIDs: []string{"resp-tool"},
+		},
+		{
+			name: "falls back to trigger ID when buffered text has no ID",
+			streamEvents: []protocol.StreamingMessageEvent{
+				toolCallEvent("resp-old", "call-old"),
+				textEvent(""),
+				toolCallEvent("resp-tool", "call-1"),
+			},
+			wantResponseID:       "resp-tool",
+			wantFlushedID:        "resp-tool",
+			wantToolCallEventIDs: []string{"resp-old", "resp-tool"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			streamChan := make(chan protocol.StreamingMessageEvent, len(tc.streamEvents))
+			for _, streamEvent := range tc.streamEvents {
+				streamChan <- streamEvent
+			}
+			close(streamChan)
+
+			a := &A2AAgent{
+				name:           "test-agent",
+				eventConverter: &defaultA2AEventConverter{},
+			}
+			invocation := &agent.Invocation{InvocationID: "inv-test"}
+			eventChan := make(chan *event.Event, len(tc.streamEvents)+1)
+			result := a.processStreamingEvents(
+				context.Background(),
+				invocation,
+				eventChan,
+				streamChan,
+				nil,
+			)
+			close(eventChan)
+
+			var flushedResponseID string
+			var toolCallResponseIDs []string
+			for evt := range eventChan {
+				if evt == nil || evt.Response == nil || len(evt.Response.Choices) == 0 {
+					continue
+				}
+				choice := evt.Response.Choices[0]
+				if !evt.Response.IsPartial &&
+					choice.Message.Content == "preface" &&
+					len(choice.Message.ToolCalls) == 0 {
+					flushedResponseID = evt.Response.ID
+				}
+				if len(choice.Message.ToolCalls) == 1 {
+					toolCallResponseIDs = append(toolCallResponseIDs, evt.Response.ID)
+				}
+			}
+			require.Equal(t, tc.wantResponseID, result.responseID)
+			require.Equal(t, tc.wantFlushedID, flushedResponseID)
+			require.Equal(t, tc.wantToolCallEventIDs, toolCallResponseIDs)
+		})
+	}
+}
+
 func TestA2AAgentRunStreamingPreservesTerminalMessageContentParts(
 	t *testing.T,
 ) {

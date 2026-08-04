@@ -1728,6 +1728,7 @@ func (r *A2AAgent) processStreamingEvents(
 ) streamingEventResult {
 	var result streamingEventResult
 	var contentBuilder strings.Builder
+	var bufferedResponseID string
 
 	for streamEvent := range streamChan {
 		if err := agent.CheckContextCancelled(ctx); err != nil {
@@ -1757,16 +1758,22 @@ func (r *A2AAgent) processStreamingEvents(
 				currentResponseID = evt.Response.ID
 			}
 			if evt.Response != nil && !evt.Response.IsPartial {
+				flushResponseID := bufferedResponseID
+				if flushResponseID == "" {
+					flushResponseID = currentResponseID
+				}
 				r.flushBufferedContent(
 					ctx,
 					invocation,
 					eventChan,
-					currentResponseID,
+					flushResponseID,
 					evt.Timestamp,
 					&contentBuilder,
 					anonymousCookie,
 				)
+				bufferedResponseID = ""
 			}
+			previousContentLen := contentBuilder.Len()
 			var terminalError *model.ResponseError
 			result.responseID, terminalError = r.aggregateEventContent(
 				ctx,
@@ -1778,6 +1785,11 @@ func (r *A2AAgent) processStreamingEvents(
 				anonymousCookie,
 				&result.aggregatedContentParts,
 			)
+			if contentBuilder.Len() > previousContentLen &&
+				bufferedResponseID == "" &&
+				evt.Response != nil {
+				bufferedResponseID = evt.Response.ID
+			}
 			if terminalError != nil {
 				result.aggregatedContent = contentBuilder.String()
 				result.terminalError = terminalError
