@@ -2690,21 +2690,26 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 	if !isPermissionResult(result) && !suppressDefaultToolMessage {
 		formatter = resultFormatterForTool(tl)
 	}
-	// Merged stream content is likewise not a result the tool declared, so
-	// skipping keeps the output the call would have had without a formatter
-	// instead of failing over a value the formatter was never meant to
-	// receive. Warn so that a formatter that never applies is not a silent
-	// no-op.
+	// Merged stream content and before-tool substitutions are likewise not
+	// results the tool declared, so skipping keeps the output the call would
+	// have had without a formatter instead of failing over a value the
+	// formatter was never meant to receive.
 	if formatter != nil {
-		if _, ok := undeclaredToolResult(ctx); ok {
-			log.WarnfContext(
-				ctx,
-				"Skipping result formatter for %s: the stream ended without "+
-					"a tool.FinalResultChunk, so the final result is the "+
-					"merged stream content rather than the tool's declared "+
-					"result",
-				toolCall.Function.Name,
-			)
+		if reason, ok := undeclaredToolResult(ctx); ok {
+			// A short-circuited call never ran the tool, so its formatter
+			// not applying is expected. A configured formatter that a
+			// completed stream never reaches is a contract mismatch worth
+			// reporting.
+			if reason == undeclaredReasonMergedStream {
+				log.WarnfContext(
+					ctx,
+					"Skipping result formatter for %s: the stream ended "+
+						"without a tool.FinalResultChunk, so the final "+
+						"result is the merged stream content rather than "+
+						"the tool's declared result",
+					toolCall.Function.Name,
+				)
+			}
 			formatter = nil
 		}
 	}
@@ -3388,6 +3393,10 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 	rememberExecutingToolArgs(ctx, toolCall.Function.Arguments)
 	if customResult != nil {
 		ctx = withStateDeltaSessionBaseline(ctx, invocation)
+		ctx = withUndeclaredToolResult(
+			ctx,
+			undeclaredReasonBeforeToolShortCircuit,
+		)
 		return ctx, customResult, toolCall.Function.Arguments, false,
 			false, nil
 	}
@@ -3402,6 +3411,10 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 	ctx = withStateDeltaSessionBaseline(ctx, invocation)
 	rememberExecutingToolArgs(ctx, toolCall.Function.Arguments)
 	if customResult != nil {
+		ctx = withUndeclaredToolResult(
+			ctx,
+			undeclaredReasonBeforeToolShortCircuit,
+		)
 		return ctx, customResult, toolCall.Function.Arguments, false,
 			false, nil
 	}
@@ -3892,6 +3905,10 @@ const (
 	// tool.FinalResultChunk. Its type is whatever tool.Merge produced from
 	// the emitted chunks, not the tool's declared output type.
 	undeclaredReasonMergedStream undeclaredToolResultReason = iota + 1
+	// undeclaredReasonBeforeToolShortCircuit marks a result a before-tool
+	// callback or plugin substituted for the call. The tool never ran, so
+	// the value is whatever the callback layer chose to report.
+	undeclaredReasonBeforeToolShortCircuit
 )
 
 // withUndeclaredToolResult records why the final result of the tool call in

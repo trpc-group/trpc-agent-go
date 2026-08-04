@@ -524,8 +524,11 @@ Formatter 接收 `AfterTool` callback 处理后的最终结果，仅改变
 - formatter 返回错误或发生 panic 时，本次工具结果会报告错误；框架不会回退 JSON，
   也不会重新执行已经完成的工具。格式化失败只是展示失败，工具已经执行完毕，它的会话
   状态更新照常写入。
-- `tool.PermissionResult` 和仅携带状态的流式最终结果不经过 formatter；其他
-  `StreamableTool` 只格式化最终结果，中间事件不变。流式工具必须通过
+- formatter 只接收工具自己声明的结果。框架或 callback 层替换出来的最终结果不经过
+  formatter，一律保持默认 JSON，包括 `tool.PermissionResult`、仅携带状态的流式最终
+  结果，以及 `BeforeTool` callback 或插件短路本次调用时返回的 `CustomResult`——工具
+  根本没有执行，这个值不是它声明的输出类型。
+- 其他 `StreamableTool` 只格式化最终结果，中间事件不变。流式工具必须通过
   `tool.FinalResultChunk` 声明这个最终结果。若数据流结束时没有 final chunk，最终
   结果就是框架合并出的流内容，而不是工具声明的输出类型，此时框架跳过 formatter、
   保持默认 JSON，并打印一条告警；`AfterTool` callback 即使替换了合并内容，本次调用

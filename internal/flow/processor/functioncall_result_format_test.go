@@ -1543,11 +1543,14 @@ func newMergedStreamResultFormatTool(
 	)
 }
 
-func executeMergedStreamToolCall(
+// executeToolCallWithHooks runs a single tool call with both callback layers
+// wired, so tests can pin how a result substituted by either layer is treated.
+func executeToolCallWithHooks(
 	t *testing.T,
 	callbacks *tool.Callbacks,
 	plugins *plugin.Manager,
-	streamTool tool.Tool,
+	name string,
+	tl tool.Tool,
 ) (toolCallExecution, error) {
 	t.Helper()
 	return NewFunctionCallResponseProcessor(false, callbacks).executeToolCall(
@@ -1561,13 +1564,29 @@ func executeMergedStreamToolCall(
 		model.ToolCall{
 			ID: "call-1",
 			Function: model.FunctionDefinitionParam{
-				Name:      "merged_stream",
+				Name:      name,
 				Arguments: []byte(`{}`),
 			},
 		},
-		map[string]tool.Tool{"merged_stream": streamTool},
+		map[string]tool.Tool{name: tl},
 		0,
 		make(chan *event.Event, 32),
+	)
+}
+
+func executeMergedStreamToolCall(
+	t *testing.T,
+	callbacks *tool.Callbacks,
+	plugins *plugin.Manager,
+	streamTool tool.Tool,
+) (toolCallExecution, error) {
+	t.Helper()
+	return executeToolCallWithHooks(
+		t,
+		callbacks,
+		plugins,
+		"merged_stream",
+		streamTool,
 	)
 }
 
@@ -1713,5 +1732,104 @@ func TestExecuteToolCall_MergedStreamResultSkipsResultFormatterAfterContextRepla
 	require.NoError(t, err)
 	require.Len(t, execution.choices, 1)
 	assert.Equal(t, `"hello world"`, execution.choices[0].Message.Content)
+	assert.Zero(t, formatterCalls.Load())
+}
+
+// newShortCircuitResultFormatTool returns a formatted tool whose function must
+// never run, so a before-tool short-circuit test fails loudly if it does.
+func newShortCircuitResultFormatTool(
+	toolCalls *atomic.Int32,
+	formatterCalls *atomic.Int32,
+) tool.Tool {
+	return function.NewFunctionTool(
+		func(context.Context, struct{}) (resultFormatTestResult, error) {
+			toolCalls.Add(1)
+			return resultFormatTestResult{Output: "ran"}, nil
+		},
+		function.WithName("guarded"),
+		function.WithResultFormatter(
+			resultformat.FormatterFunc[resultFormatTestResult](func(
+				_ context.Context,
+				result resultFormatTestResult,
+			) (string, error) {
+				formatterCalls.Add(1)
+				return "formatted:" + result.Output, nil
+			}),
+		),
+	)
+}
+
+// TestExecuteToolCall_BeforeToolPluginShortCircuitSkipsResultFormatter pins
+// that a plugin short-circuiting a call keeps its own message intact. Framework
+// plugins such as guardrail/approval and toolsearch return plain strings, which
+// a formatter typed on the tool's output cannot accept; formatting them would
+// replace the plugin's explanation with a type error in the model's context.
+func TestExecuteToolCall_BeforeToolPluginShortCircuitSkipsResultFormatter(
+	t *testing.T,
+) {
+	var toolCalls, formatterCalls atomic.Int32
+	plugins := plugin.MustNewManager(&hookPlugin{
+		name: "short-circuit",
+		reg: func(r *plugin.Registry) {
+			r.BeforeTool(func(
+				context.Context,
+				*tool.BeforeToolArgs,
+			) (*tool.BeforeToolResult, error) {
+				return &tool.BeforeToolResult{
+					CustomResult: "Tool call denied by the approval policy.",
+				}, nil
+			})
+		},
+	})
+
+	execution, err := executeToolCallWithHooks(
+		t,
+		nil,
+		plugins,
+		"guarded",
+		newShortCircuitResultFormatTool(&toolCalls, &formatterCalls),
+	)
+
+	require.NoError(t, err)
+	require.Len(t, execution.choices, 1)
+	assert.Equal(
+		t,
+		`"Tool call denied by the approval policy."`,
+		execution.choices[0].Message.Content,
+	)
+	assert.Zero(t, toolCalls.Load())
+	assert.Zero(t, formatterCalls.Load())
+}
+
+// TestExecuteToolCall_BeforeToolCallbackShortCircuitSkipsResultFormatter pins
+// the same rule for the agent-level callback layer.
+func TestExecuteToolCall_BeforeToolCallbackShortCircuitSkipsResultFormatter(
+	t *testing.T,
+) {
+	var toolCalls, formatterCalls atomic.Int32
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterBeforeTool(func(
+		context.Context,
+		*tool.BeforeToolArgs,
+	) (*tool.BeforeToolResult, error) {
+		return &tool.BeforeToolResult{CustomResult: "cached answer"}, nil
+	})
+
+	execution, err := executeToolCallWithHooks(
+		t,
+		callbacks,
+		nil,
+		"guarded",
+		newShortCircuitResultFormatTool(&toolCalls, &formatterCalls),
+	)
+
+	require.NoError(t, err)
+	require.Len(t, execution.choices, 1)
+	assert.Equal(
+		t,
+		`"cached answer"`,
+		execution.choices[0].Message.Content,
+	)
+	assert.Zero(t, toolCalls.Load())
 	assert.Zero(t, formatterCalls.Load())
 }
