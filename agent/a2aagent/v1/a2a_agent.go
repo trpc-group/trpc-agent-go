@@ -495,6 +495,7 @@ func (r *A2AAgent) processStreamingEvents(
 	streamChan <-chan protocol.StreamResponse,
 ) (result streamingEventResult) {
 	var contentBuilder strings.Builder
+	var bufferedResponseID string
 	artifactContent := make(map[string]string)
 	artifactContentParts := make(map[string][]model.ContentPart)
 	var artifactOrder []string
@@ -543,21 +544,32 @@ func (r *A2AAgent) processStreamingEvents(
 				currentResponseID = evt.Response.ID
 			}
 			if evt.Response != nil && !evt.Response.IsPartial {
+				flushResponseID := bufferedResponseID
+				if flushResponseID == "" {
+					flushResponseID = currentResponseID
+				}
 				r.flushBufferedContent(
 					ctx,
 					invocation,
 					eventChan,
-					currentResponseID,
+					flushResponseID,
 					evt.Timestamp,
 					&contentBuilder,
 				)
+				bufferedResponseID = ""
 			}
+			previousContentLen := contentBuilder.Len()
 			result.responseID = r.aggregateEventContent(
 				evt,
 				result.responseID,
 				&contentBuilder,
 				&result.aggregatedContentParts,
 			)
+			if contentBuilder.Len() > previousContentLen &&
+				bufferedResponseID == "" &&
+				evt.Response != nil {
+				bufferedResponseID = evt.Response.ID
+			}
 			r.aggregateArtifactEventContent(
 				artifactUpdate,
 				evt,

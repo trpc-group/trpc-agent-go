@@ -367,6 +367,98 @@ func TestProcessStreamingEventsFlushesAndStopsOnTerminalError(t *testing.T) {
 	}
 }
 
+func TestProcessStreamingEventsUsesBufferedResponseIDWhenFlushing(t *testing.T) {
+	tests := []struct {
+		name           string
+		textResponseID string
+		wantFlushedID  string
+	}{
+		{
+			name:           "preserves buffered response ID",
+			textResponseID: "resp-text",
+			wantFlushedID:  "resp-text",
+		},
+		{
+			name:          "falls back to triggering response ID",
+			wantFlushedID: "resp-tool",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			call := 0
+			converter := &responseConverterFunc{stream: func(
+				protocol.StreamResponse,
+				string,
+				*agent.Invocation,
+			) ([]*event.Event, error) {
+				call++
+				if call == 1 {
+					return []*event.Event{event.New(
+						"invocation",
+						"remote",
+						event.WithResponse(&model.Response{
+							ID:        tt.textResponseID,
+							IsPartial: true,
+							Choices: []model.Choice{{Delta: model.Message{
+								Content: "buffered",
+							}}},
+						}),
+					)}, nil
+				}
+				return []*event.Event{event.New(
+					"invocation",
+					"remote",
+					event.WithResponse(&model.Response{
+						ID: "resp-tool",
+						Choices: []model.Choice{{Message: model.Message{
+							Role: model.RoleAssistant,
+							ToolCalls: []model.ToolCall{{
+								ID: "call-1",
+							}},
+						}}},
+					}),
+				)}, nil
+			}}
+			remote := &A2AAgent{name: "remote", eventConverter: converter}
+			stream := make(chan protocol.StreamResponse, 2)
+			message := protocol.NewMessage(protocol.MessageRoleAgent, nil)
+			stream <- protocol.NewStreamResponseMessage(&message)
+			stream <- protocol.NewStreamResponseMessage(&message)
+			close(stream)
+			out := make(chan *event.Event, 3)
+
+			result := remote.processStreamingEvents(
+				context.Background(),
+				&agent.Invocation{InvocationID: "invocation"},
+				out,
+				stream,
+			)
+			close(out)
+
+			if result.terminalError != nil || result.responseID != "resp-tool" {
+				t.Fatalf("stream result = %#v", result)
+			}
+			var flushedResponseID string
+			for evt := range out {
+				if evt == nil || evt.Response == nil || evt.Response.IsPartial ||
+					len(evt.Response.Choices) == 0 {
+					continue
+				}
+				if evt.Response.Choices[0].Message.Content == "buffered" {
+					flushedResponseID = evt.Response.ID
+				}
+			}
+			if flushedResponseID != tt.wantFlushedID {
+				t.Fatalf(
+					"flushed response ID = %q, want %q",
+					flushedResponseID,
+					tt.wantFlushedID,
+				)
+			}
+		})
+	}
+}
+
 func TestProcessStreamingEventsConverterErrorAndCancellation(t *testing.T) {
 	wantErr := errors.New("convert")
 	remote := &A2AAgent{
