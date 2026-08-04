@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -2695,7 +2696,7 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 	// instead of failing over a value the formatter was never meant to
 	// receive. Warn so that a formatter that never applies is not a silent
 	// no-op.
-	if formatter != nil && hasMergedStreamToolResult(ctx) {
+	if formatter != nil && mergedStreamToolResultUnchanged(ctx, result) {
 		log.WarnfContext(
 			ctx,
 			"Skipping result formatter for %s: the stream ended without a "+
@@ -3286,15 +3287,12 @@ func (p *FunctionCallResponseProcessor) runAfterToolPluginCallbacks(
 			fmt.Errorf("tool callback error: %w", err)
 	}
 	if afterResult != nil && afterResult.Context != nil {
-		ctx = afterResult.Context
+		ctx = preserveMergedStreamToolResult(ctx, afterResult.Context)
 	}
 	skipSummarization := afterResult != nil &&
 		afterResult.SkipSummarization
 	if afterResult != nil && afterResult.CustomResult != nil {
-		// The replacement is a value the plugin chose, so it is eligible for
-		// result formatting even when the tool only streamed content.
-		return clearMergedStreamToolResult(ctx), afterResult.CustomResult,
-			true, skipSummarization, nil
+		return ctx, afterResult.CustomResult, true, skipSummarization, nil
 	}
 	return ctx, toolResult, false, skipSummarization, nil
 }
@@ -3332,15 +3330,12 @@ func (p *FunctionCallResponseProcessor) runAfterToolCallbacks(
 	}
 
 	if afterResult != nil && afterResult.Context != nil {
-		ctx = afterResult.Context
+		ctx = preserveMergedStreamToolResult(ctx, afterResult.Context)
 	}
 	skipSummarization := afterResult != nil &&
 		afterResult.SkipSummarization
 	if afterResult != nil && afterResult.CustomResult != nil {
 		toolResult = afterResult.CustomResult
-		// The replacement is a value the callback chose, so it is eligible for
-		// result formatting even when the tool only streamed content.
-		ctx = clearMergedStreamToolResult(ctx)
 	}
 	return ctx, toolResult, skipSummarization, nil
 }
@@ -3850,7 +3845,8 @@ func (f *FunctionCallResponseProcessor) executeStreamableTool(
 	// turn (to satisfy providers that require tool messages). The UI example
 	// suppresses printing these aggregated strings to avoid duplication; they are
 	// primarily for model consumption.
-	return markMergedStreamToolResult(ctx), tool.Merge(contents), false, nil
+	merged := tool.Merge(contents)
+	return withMergedStreamToolResult(ctx, merged), merged, false, nil
 }
 
 type streamFinalResult struct {
@@ -3883,33 +3879,100 @@ func hasSyntheticStateOnlyToolChoice(ctx context.Context) bool {
 
 type mergedStreamToolResultKey struct{}
 
-// markMergedStreamToolResult records that the final tool result is the stream
-// content merged by the framework rather than a value the tool declared
-// through tool.FinalResultChunk. Its type is whatever tool.Merge produced from
-// the emitted chunks, so it is not the streamable tool's declared output type.
-func markMergedStreamToolResult(ctx context.Context) context.Context {
+// mergedStreamToolResultValue holds the stream content the framework merged
+// because a streamable tool ended its stream without a tool.FinalResultChunk.
+// The wrapper keeps a merged nil value distinguishable from an absent record.
+type mergedStreamToolResultValue struct {
+	value any
+}
+
+// withMergedStreamToolResult records that the tool result is the stream content
+// merged by the framework rather than a value the tool declared through
+// tool.FinalResultChunk. Its type is whatever tool.Merge produced from the
+// emitted chunks, so it is not the streamable tool's declared output type.
+func withMergedStreamToolResult(
+	ctx context.Context,
+	merged any,
+) context.Context {
 	if ctx == nil {
 		return ctx
 	}
-	return context.WithValue(ctx, mergedStreamToolResultKey{}, true)
+	return context.WithValue(
+		ctx,
+		mergedStreamToolResultKey{},
+		&mergedStreamToolResultValue{value: merged},
+	)
 }
 
-// clearMergedStreamToolResult records that a callback replaced the merged
-// stream content, so the final result is again a value an implementation
-// chose deliberately.
-func clearMergedStreamToolResult(ctx context.Context) context.Context {
-	if ctx == nil || !hasMergedStreamToolResult(ctx) {
-		return ctx
-	}
-	return context.WithValue(ctx, mergedStreamToolResultKey{}, false)
-}
-
-func hasMergedStreamToolResult(ctx context.Context) bool {
+// mergedStreamToolResult returns the stream content the framework merged for
+// the tool call in flight, if the result came from a merged stream.
+func mergedStreamToolResult(ctx context.Context) (any, bool) {
 	if ctx == nil {
+		return nil, false
+	}
+	merged, ok := ctx.Value(
+		mergedStreamToolResultKey{},
+	).(*mergedStreamToolResultValue)
+	if !ok {
+		return nil, false
+	}
+	return merged.value, true
+}
+
+// preserveMergedStreamToolResult carries the merged stream content onto a
+// context a callback replaced wholesale. Provenance cannot depend on callbacks
+// propagating framework context values: losing it would hand a formatter the
+// merged content the tool never declared.
+func preserveMergedStreamToolResult(
+	prev context.Context,
+	next context.Context,
+) context.Context {
+	merged, ok := mergedStreamToolResult(prev)
+	if !ok {
+		return next
+	}
+	return withMergedStreamToolResult(next, merged)
+}
+
+// mergedStreamToolResultUnchanged reports whether result is still the stream
+// content the framework merged. The recorded value, not the callback outcome,
+// decides this: tool.Callbacks reports an unchanged result as a CustomResult,
+// so a callback returning one does not mean the result was replaced.
+func mergedStreamToolResultUnchanged(
+	ctx context.Context,
+	result any,
+) bool {
+	merged, ok := mergedStreamToolResult(ctx)
+	if !ok {
 		return false
 	}
-	merged, _ := ctx.Value(mergedStreamToolResultKey{}).(bool)
-	return merged
+	return sameToolResultValue(merged, result)
+}
+
+// sameToolResultValue reports whether result is still the merged value. Passing
+// a result through keeps the same value, so identity rather than deep equality
+// answers the question. Values Go cannot compare count as unchanged: keeping
+// the default JSON never turns a successful call into an error, while
+// formatting merged content does.
+func sameToolResultValue(merged any, result any) bool {
+	if merged == nil || result == nil {
+		return merged == nil && result == nil
+	}
+	mergedType := reflect.TypeOf(merged)
+	if mergedType != reflect.TypeOf(result) {
+		return false
+	}
+	switch mergedType.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Map, reflect.Pointer,
+		reflect.Slice, reflect.UnsafePointer:
+		return reflect.ValueOf(merged).Pointer() ==
+			reflect.ValueOf(result).Pointer()
+	default:
+		if !mergedType.Comparable() {
+			return true
+		}
+		return merged == result
+	}
 }
 
 // consumeStream reads all chunks from the reader and processes them.

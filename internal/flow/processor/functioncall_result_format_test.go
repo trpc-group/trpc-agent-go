@@ -24,6 +24,7 @@ import (
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/plugin"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
@@ -1545,6 +1546,7 @@ func newMergedStreamResultFormatTool(
 func executeMergedStreamToolCall(
 	t *testing.T,
 	callbacks *tool.Callbacks,
+	plugins *plugin.Manager,
 	streamTool tool.Tool,
 ) (toolCallExecution, error) {
 	t.Helper()
@@ -1554,6 +1556,7 @@ func executeMergedStreamToolCall(
 			InvocationID: "invocation",
 			AgentName:    "agent",
 			Model:        &mockModel{},
+			Plugins:      plugins,
 		},
 		model.ToolCall{
 			ID: "call-1",
@@ -1578,6 +1581,7 @@ func TestExecuteToolCall_MergedStreamResultSkipsResultFormatter(t *testing.T) {
 
 	execution, err := executeMergedStreamToolCall(
 		t,
+		nil,
 		nil,
 		newMergedStreamResultFormatTool(&formatterCalls),
 	)
@@ -1610,6 +1614,7 @@ func TestExecuteToolCall_MergedStreamResultFormattedAfterCallbackReplacement(
 	execution, err := executeMergedStreamToolCall(
 		t,
 		callbacks,
+		nil,
 		newMergedStreamResultFormatTool(&formatterCalls),
 	)
 
@@ -1617,4 +1622,154 @@ func TestExecuteToolCall_MergedStreamResultFormattedAfterCallbackReplacement(
 	require.Len(t, execution.choices, 1)
 	assert.Equal(t, "formatted:declared", execution.choices[0].Message.Content)
 	assert.Equal(t, int32(1), formatterCalls.Load())
+}
+
+// TestExecuteToolCall_MergedStreamResultSkipsResultFormatterWithToolCallbacks
+// pins that the skip does not depend on whether an agent configures tool
+// callbacks. tool.Callbacks reports an unchanged result as a CustomResult, so
+// merely having a callbacks object, even without an after-tool callback, must
+// not make merged stream content look like a result the tool declared.
+func TestExecuteToolCall_MergedStreamResultSkipsResultFormatterWithToolCallbacks(
+	t *testing.T,
+) {
+	var formatterCalls atomic.Int32
+
+	execution, err := executeMergedStreamToolCall(
+		t,
+		tool.NewCallbacks(),
+		nil,
+		newMergedStreamResultFormatTool(&formatterCalls),
+	)
+
+	require.NoError(t, err)
+	require.Len(t, execution.choices, 1)
+	assert.Equal(t, `"hello world"`, execution.choices[0].Message.Content)
+	assert.Zero(t, formatterCalls.Load())
+}
+
+// TestExecuteToolCall_MergedStreamResultSkipsResultFormatterWithPluginCallbacks
+// pins the same rule for the plugin callback path, where a plugin that inspects
+// a result without replacing it also yields a synthesized CustomResult.
+func TestExecuteToolCall_MergedStreamResultSkipsResultFormatterWithPluginCallbacks(
+	t *testing.T,
+) {
+	var formatterCalls atomic.Int32
+	var pluginCalls atomic.Int32
+	plugins := plugin.MustNewManager(&hookPlugin{
+		name: "merged-stream-observer",
+		reg: func(r *plugin.Registry) {
+			r.AfterTool(func(
+				context.Context,
+				*tool.AfterToolArgs,
+			) (*tool.AfterToolResult, error) {
+				pluginCalls.Add(1)
+				return nil, nil
+			})
+		},
+	})
+
+	execution, err := executeMergedStreamToolCall(
+		t,
+		nil,
+		plugins,
+		newMergedStreamResultFormatTool(&formatterCalls),
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, int32(1), pluginCalls.Load())
+	require.Len(t, execution.choices, 1)
+	assert.Equal(t, `"hello world"`, execution.choices[0].Message.Content)
+	assert.Zero(t, formatterCalls.Load())
+}
+
+// TestExecuteToolCall_MergedStreamResultSkipsResultFormatterAfterContextReplacement
+// pins that an after-tool callback replacing the context wholesale does not
+// discard the merged stream provenance. The callback keeps the tool result, so
+// the formatter must still be skipped.
+func TestExecuteToolCall_MergedStreamResultSkipsResultFormatterAfterContextReplacement(
+	t *testing.T,
+) {
+	var formatterCalls atomic.Int32
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterAfterTool(func(
+		context.Context,
+		*tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		return &tool.AfterToolResult{Context: context.Background()}, nil
+	})
+
+	execution, err := executeMergedStreamToolCall(
+		t,
+		callbacks,
+		nil,
+		newMergedStreamResultFormatTool(&formatterCalls),
+	)
+
+	require.NoError(t, err)
+	require.Len(t, execution.choices, 1)
+	assert.Equal(t, `"hello world"`, execution.choices[0].Message.Content)
+	assert.Zero(t, formatterCalls.Load())
+}
+
+// TestSameToolResultValue covers the merged stream content types a streamable
+// tool can produce. Merged content is whatever tool.Merge built from the
+// emitted chunks, so the comparison must answer without assuming the value is
+// comparable: an uncomparable value must not panic the tool call.
+func TestSameToolResultValue(t *testing.T) {
+	sharedMap := map[string]any{"a": 1}
+	sharedSlice := []string{"a"}
+	uncomparable := struct{ items []string }{items: []string{"a"}}
+
+	tests := []struct {
+		name   string
+		merged any
+		result any
+		want   bool
+	}{
+		{name: "both nil", merged: nil, result: nil, want: true},
+		{name: "merged nil", merged: nil, result: "x", want: false},
+		{name: "result nil", merged: "x", result: nil, want: false},
+		{name: "equal strings", merged: "hello", result: "hello", want: true},
+		{name: "different strings", merged: "hello", result: "bye", want: false},
+		{
+			name:   "different types",
+			merged: "hello",
+			result: resultFormatTestResult{Output: "hello"},
+			want:   false,
+		},
+		{name: "same map", merged: sharedMap, result: sharedMap, want: true},
+		{
+			name:   "different maps",
+			merged: sharedMap,
+			result: map[string]any{"a": 1},
+			want:   false,
+		},
+		{
+			name:   "same slice",
+			merged: sharedSlice,
+			result: sharedSlice,
+			want:   true,
+		},
+		{
+			name:   "different slices",
+			merged: sharedSlice,
+			result: []string{"a"},
+			want:   false,
+		},
+		{
+			name:   "uncomparable value keeps default JSON",
+			merged: uncomparable,
+			result: uncomparable,
+			want:   true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(
+				t,
+				tt.want,
+				sameToolResultValue(tt.merged, tt.result),
+			)
+		})
+	}
 }
