@@ -1593,11 +1593,12 @@ func TestExecuteToolCall_MergedStreamResultSkipsResultFormatter(t *testing.T) {
 	assert.Zero(t, formatterCalls.Load())
 }
 
-// TestExecuteToolCall_MergedStreamResultFormattedAfterCallbackReplacement pins
-// the other half of that rule: once an AfterTool callback replaces the merged
-// content with a result it chose, the value is declared again and formatting
-// applies.
-func TestExecuteToolCall_MergedStreamResultFormattedAfterCallbackReplacement(
+// TestExecuteToolCall_MergedStreamResultNotFormattedAfterCallbackReplacement
+// pins that the skip holds for the whole call. An AfterTool callback replacing
+// the merged content does not make the result a declared one: nothing
+// constrains what a callback may substitute, so the framework keeps the
+// default JSON of whatever the callback chose.
+func TestExecuteToolCall_MergedStreamResultNotFormattedAfterCallbackReplacement(
 	t *testing.T,
 ) {
 	var formatterCalls atomic.Int32
@@ -1620,8 +1621,12 @@ func TestExecuteToolCall_MergedStreamResultFormattedAfterCallbackReplacement(
 
 	require.NoError(t, err)
 	require.Len(t, execution.choices, 1)
-	assert.Equal(t, "formatted:declared", execution.choices[0].Message.Content)
-	assert.Equal(t, int32(1), formatterCalls.Load())
+	assert.Equal(
+		t,
+		`{"exit_code":0,"output":"declared"}`,
+		execution.choices[0].Message.Content,
+	)
+	assert.Zero(t, formatterCalls.Load())
 }
 
 // TestExecuteToolCall_MergedStreamResultSkipsResultFormatterWithToolCallbacks
@@ -1709,67 +1714,4 @@ func TestExecuteToolCall_MergedStreamResultSkipsResultFormatterAfterContextRepla
 	require.Len(t, execution.choices, 1)
 	assert.Equal(t, `"hello world"`, execution.choices[0].Message.Content)
 	assert.Zero(t, formatterCalls.Load())
-}
-
-// TestSameToolResultValue covers the merged stream content types a streamable
-// tool can produce. Merged content is whatever tool.Merge built from the
-// emitted chunks, so the comparison must answer without assuming the value is
-// comparable: an uncomparable value must not panic the tool call.
-func TestSameToolResultValue(t *testing.T) {
-	sharedMap := map[string]any{"a": 1}
-	sharedSlice := []string{"a"}
-	uncomparable := struct{ items []string }{items: []string{"a"}}
-
-	tests := []struct {
-		name   string
-		merged any
-		result any
-		want   bool
-	}{
-		{name: "both nil", merged: nil, result: nil, want: true},
-		{name: "merged nil", merged: nil, result: "x", want: false},
-		{name: "result nil", merged: "x", result: nil, want: false},
-		{name: "equal strings", merged: "hello", result: "hello", want: true},
-		{name: "different strings", merged: "hello", result: "bye", want: false},
-		{
-			name:   "different types",
-			merged: "hello",
-			result: resultFormatTestResult{Output: "hello"},
-			want:   false,
-		},
-		{name: "same map", merged: sharedMap, result: sharedMap, want: true},
-		{
-			name:   "different maps",
-			merged: sharedMap,
-			result: map[string]any{"a": 1},
-			want:   false,
-		},
-		{
-			name:   "same slice",
-			merged: sharedSlice,
-			result: sharedSlice,
-			want:   true,
-		},
-		{
-			name:   "different slices",
-			merged: sharedSlice,
-			result: []string{"a"},
-			want:   false,
-		},
-		{
-			name:   "uncomparable value keeps default JSON",
-			merged: uncomparable,
-			result: uncomparable,
-			want:   true,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(
-				t,
-				tt.want,
-				sameToolResultValue(tt.merged, tt.result),
-			)
-		})
-	}
 }

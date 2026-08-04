@@ -378,7 +378,9 @@ func (t *StreamableFunctionTool[I, O]) SkipSummarization() bool {
 // formatted; intermediate events are not. The tool must declare that result
 // with tool.FinalResultChunk. When a stream ends without one, the final result
 // is the stream content merged by the framework rather than O, so the
-// framework keeps its default JSON representation instead of formatting it.
+// framework keeps its default JSON representation instead of formatting it,
+// and an after-tool callback replacing that content does not make the call
+// eligible for formatting again.
 func (t *StreamableFunctionTool[I, O]) ResultFormatter() resultformat.Formatter {
 	return t.resultFormatter
 }

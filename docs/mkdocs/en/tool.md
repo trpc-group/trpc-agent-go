@@ -552,8 +552,8 @@ role, name, tool call ID, ordering, events, and session persistence.
   final result is the stream content merged by the framework rather than the
   tool's declared output type, so the formatter is skipped, the default JSON is
   kept, and the framework logs a warning. An `AfterTool` callback that replaces
-  the merged content with its own result makes the call eligible for formatting
-  again.
+  the merged content does not make the call eligible for formatting again; emit
+  `tool.FinalResultChunk` to have a streamable result formatted.
 - For tools that update session state, the state update consumes the tool
   message content the framework would send without a formatter, which is the
   JSON of the result produced after `AfterTool` callbacks. A formatter is not
