@@ -40,6 +40,11 @@ import (
 const (
 	functionToolType       = "function"
 	claudeMythosPreview    = "claude-mythos-preview"
+	claudeFable5           = "claude-fable-5"
+	claudeMythos5          = "claude-mythos-5"
+	claudeOpus5            = "claude-opus-5"
+	claudeSonnet5          = "claude-sonnet-5"
+	claudeOpus48           = "claude-opus-4-8"
 	claudeOpus47           = "claude-opus-4-7"
 	claudeOpus46           = "claude-opus-4-6"
 	claudeOpus46Alias      = "claude-4.6-opus"
@@ -414,6 +419,11 @@ func supportsAdaptiveThinking(modelName string) bool {
 	return modelNameMatches(
 		modelName,
 		claudeMythosPreview,
+		claudeFable5,
+		claudeMythos5,
+		claudeOpus5,
+		claudeSonnet5,
+		claudeOpus48,
 		claudeOpus47,
 		claudeOpus46,
 		claudeOpus46Alias,
