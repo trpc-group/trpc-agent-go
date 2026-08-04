@@ -5580,8 +5580,10 @@ func TestContentRequestProcessor_ToolTranscriptModeDoesNotCreateAssistantToolTur
 	).getIncrementMessages(inv, time.Time{})
 
 	require.Len(t, messages, 2)
+	require.Equal(t, model.RoleAssistant, messages[0].Role)
 	require.Equal(t, "old preface", messages[0].Content)
 	require.Empty(t, messages[0].ToolCalls)
+	require.Equal(t, model.RoleAssistant, messages[1].Role)
 	require.Empty(t, messages[1].Content)
 	require.Len(t, messages[1].ToolCalls, 1)
 	require.Equal(t, "call_2", messages[1].ToolCalls[0].ID)

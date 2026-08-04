@@ -181,6 +181,14 @@ func TestModel_convertMessages(t *testing.T) {
 		want   []*genai.Content
 	}{
 		{
+			name:   "empty message",
+			fields: fields{m: &Model{}},
+			args: args{messages: []model.Message{{
+				Role: model.RoleUser,
+			}}},
+			want: []*genai.Content{},
+		},
+		{
 			name: "text",
 			fields: fields{
 				m: &Model{},

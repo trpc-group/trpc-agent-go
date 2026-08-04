@@ -205,6 +205,23 @@ func TestProjectCurrentInvocationMessages_NormalizesAssistantToolTurnAfterProjec
 		require.Len(t, messages[0].ToolCalls, 1)
 	})
 
+	t.Run("appends tool call text verbatim", func(t *testing.T) {
+		eventsWithToolText := []event.Event{
+			cloneEventForContentSnapshot(events[0]),
+			cloneEventForContentSnapshot(events[1]),
+		}
+		eventsWithToolText[1].Choices[0].Message.Content = " checking"
+
+		messages := NewContentRequestProcessor().projectCurrentInvocationMessages(
+			inv,
+			eventsWithToolText,
+		)
+
+		require.Len(t, messages, 1)
+		require.Equal(t, "hello world checking", messages[0].Content)
+		require.Len(t, messages[0].ToolCalls, 1)
+	})
+
 	t.Run("refuses unsafe projector output", func(t *testing.T) {
 		processor := NewContentRequestProcessor(
 			WithEventMessageProjector(func(

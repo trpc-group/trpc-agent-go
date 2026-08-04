@@ -368,19 +368,64 @@ func TestProcessStreamingEventsFlushesAndStopsOnTerminalError(t *testing.T) {
 }
 
 func TestProcessStreamingEventsUsesBufferedResponseIDWhenFlushing(t *testing.T) {
+	partialText := func(responseID, content string) *model.Response {
+		return &model.Response{
+			ID:        responseID,
+			IsPartial: true,
+			Choices: []model.Choice{{Delta: model.Message{
+				Content: content,
+			}}},
+		}
+	}
+	toolCall := func(responseID, callID string) *model.Response {
+		return &model.Response{
+			ID: responseID,
+			Choices: []model.Choice{{Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					ID: callID,
+				}},
+			}}},
+		}
+	}
 	tests := []struct {
-		name           string
-		textResponseID string
-		wantFlushedID  string
+		name             string
+		responses        []*model.Response
+		wantResponseID   string
+		wantFlushedIDs   []string
+		wantToolEventIDs []string
 	}{
 		{
-			name:           "preserves buffered response ID",
-			textResponseID: "resp-text",
-			wantFlushedID:  "resp-text",
+			name: "preserves buffered response ID",
+			responses: []*model.Response{
+				partialText("resp-text", "buffered"),
+				toolCall("resp-tool", "call-1"),
+			},
+			wantResponseID:   "resp-tool",
+			wantFlushedIDs:   []string{"resp-text"},
+			wantToolEventIDs: []string{"resp-tool"},
 		},
 		{
-			name:          "falls back to triggering response ID",
-			wantFlushedID: "resp-tool",
+			name: "falls back to triggering response ID",
+			responses: []*model.Response{
+				partialText("", "buffered"),
+				toolCall("resp-tool", "call-1"),
+			},
+			wantResponseID:   "resp-tool",
+			wantFlushedIDs:   []string{"resp-tool"},
+			wantToolEventIDs: []string{"resp-tool"},
+		},
+		{
+			name: "resets buffered response ID after each flush",
+			responses: []*model.Response{
+				partialText("resp-text-1", "first"),
+				toolCall("resp-tool-1", "call-1"),
+				partialText("resp-text-2", "second"),
+				toolCall("resp-tool-2", "call-2"),
+			},
+			wantResponseID:   "resp-tool-2",
+			wantFlushedIDs:   []string{"resp-text-1", "resp-text-2"},
+			wantToolEventIDs: []string{"resp-tool-1", "resp-tool-2"},
 		},
 	}
 	for _, tt := range tests {
@@ -391,41 +436,22 @@ func TestProcessStreamingEventsUsesBufferedResponseIDWhenFlushing(t *testing.T) 
 				string,
 				*agent.Invocation,
 			) ([]*event.Event, error) {
+				response := tt.responses[call].Clone()
 				call++
-				if call == 1 {
-					return []*event.Event{event.New(
-						"invocation",
-						"remote",
-						event.WithResponse(&model.Response{
-							ID:        tt.textResponseID,
-							IsPartial: true,
-							Choices: []model.Choice{{Delta: model.Message{
-								Content: "buffered",
-							}}},
-						}),
-					)}, nil
-				}
 				return []*event.Event{event.New(
 					"invocation",
 					"remote",
-					event.WithResponse(&model.Response{
-						ID: "resp-tool",
-						Choices: []model.Choice{{Message: model.Message{
-							Role: model.RoleAssistant,
-							ToolCalls: []model.ToolCall{{
-								ID: "call-1",
-							}},
-						}}},
-					}),
+					event.WithResponse(response),
 				)}, nil
 			}}
 			remote := &A2AAgent{name: "remote", eventConverter: converter}
-			stream := make(chan protocol.StreamResponse, 2)
+			stream := make(chan protocol.StreamResponse, len(tt.responses))
 			message := protocol.NewMessage(protocol.MessageRoleAgent, nil)
-			stream <- protocol.NewStreamResponseMessage(&message)
-			stream <- protocol.NewStreamResponseMessage(&message)
+			for range tt.responses {
+				stream <- protocol.NewStreamResponseMessage(&message)
+			}
 			close(stream)
-			out := make(chan *event.Event, 3)
+			out := make(chan *event.Event, len(tt.responses)*2)
 
 			result := remote.processStreamingEvents(
 				context.Background(),
@@ -435,25 +461,29 @@ func TestProcessStreamingEventsUsesBufferedResponseIDWhenFlushing(t *testing.T) 
 			)
 			close(out)
 
-			if result.terminalError != nil || result.responseID != "resp-tool" {
+			if result.terminalError != nil || result.responseID != tt.wantResponseID {
 				t.Fatalf("stream result = %#v", result)
 			}
-			var flushedResponseID string
+			var flushedResponseIDs []string
+			var toolEventResponseIDs []string
 			for evt := range out {
 				if evt == nil || evt.Response == nil || evt.Response.IsPartial ||
 					len(evt.Response.Choices) == 0 {
 					continue
 				}
-				if evt.Response.Choices[0].Message.Content == "buffered" {
-					flushedResponseID = evt.Response.ID
+				message := evt.Response.Choices[0].Message
+				if message.Content != "" && len(message.ToolCalls) == 0 {
+					flushedResponseIDs = append(flushedResponseIDs, evt.Response.ID)
+				}
+				if len(message.ToolCalls) > 0 {
+					toolEventResponseIDs = append(toolEventResponseIDs, evt.Response.ID)
 				}
 			}
-			if flushedResponseID != tt.wantFlushedID {
-				t.Fatalf(
-					"flushed response ID = %q, want %q",
-					flushedResponseID,
-					tt.wantFlushedID,
-				)
+			if strings.Join(flushedResponseIDs, ",") != strings.Join(tt.wantFlushedIDs, ",") {
+				t.Fatalf("flushed response IDs = %v, want %v", flushedResponseIDs, tt.wantFlushedIDs)
+			}
+			if strings.Join(toolEventResponseIDs, ",") != strings.Join(tt.wantToolEventIDs, ",") {
+				t.Fatalf("tool event response IDs = %v, want %v", toolEventResponseIDs, tt.wantToolEventIDs)
 			}
 		})
 	}

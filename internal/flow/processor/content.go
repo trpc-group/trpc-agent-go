@@ -2573,6 +2573,11 @@ func nonTerminalAssistantToolCallPairs(
 	return pairs
 }
 
+// mergeProjectedAssistantToolCallMessages combines one assistant text event
+// with its following assistant tool-call event for model-facing history. Any
+// text on the tool-call event is appended verbatim because event content owns
+// its whitespace; the processor must not invent a separator. Rich fields that
+// cannot be combined without changing provider semantics cause rejection.
 func mergeProjectedAssistantToolCallMessages(
 	textMessages []model.Message,
 	toolCallMessages []model.Message,

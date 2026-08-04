@@ -752,7 +752,7 @@ func (m *Model) convertMessages(messages []model.Message) []*genai.Content {
 	return result
 }
 
-// convertMessageContent converts one model message to one Gemini content.
+// convertMessageContent converts one model message to at most one Gemini content.
 func (m *Model) convertMessageContent(
 	msg model.Message,
 ) []*genai.Content {
