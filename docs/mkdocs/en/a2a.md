@@ -1015,12 +1015,18 @@ a2aAgent, err := a2aagent.New(
 )
 ```
 
-Strict mode fails the invocation before contacting the remote agent if there
-is no stable persistent session key or the session service does not implement
-the coordination capability. The cookie record remains private session state and
-is not emitted in event state deltas. Lease fencing prevents an expired owner
-from committing over a newer owner, but a remote principal can still be
-orphaned if a process dies after the remote response and before persistence.
+The option defaults to `false`. When enabled, strict mode fails the invocation
+before contacting the remote agent if there is no stable persistent session key
+or the session service does not implement the coordination capability. This
+capability check cannot determine whether separate service instances actually
+share coordination state. Deployments requiring cross-process coordination
+must configure a shared backend such as Redis instead of separate in-memory
+services.
+
+The cookie record remains private session state and is not emitted in event
+state deltas. Lease fencing prevents an expired owner from committing over a
+newer owner, but a remote principal can still be orphaned if a process dies
+after the remote response and before persistence.
 
 This session-backed path is separate from `NewAnonymousA2AClient`, which has no
 framework session service and remains scoped to its own client and cookie jar.

@@ -105,7 +105,12 @@ func anonymousCookiePathIntersectsScope(cookiePath, scopePath string) bool {
 }
 
 func anonymousCookieTombstoneValue() []byte {
-	return []byte(`{"version":1,"deleted":true}`)
+	// The envelope contains only fields supported by encoding/json.
+	value, _ := json.Marshal(anonymousCookieRecordEnvelope{
+		Version: anonymousCookieRecordVersion,
+		Deleted: true,
+	})
+	return value
 }
 
 func (s *anonymousCookieState) canonicalStateKey() string {
@@ -352,6 +357,12 @@ func (h *anonymousCookieHTTPReqHandler) handleCoordinatedInitialization(
 	if err != nil {
 		if errors.Is(err, errAnonymousCookieNotCaptured) &&
 			!h.requireCoordination {
+			if ownerResponse == nil && ownerErr == nil {
+				return nil, fmt.Errorf(
+					"coordinate anonymous A2A identity: initializer returned no response: %w",
+					err,
+				)
+			}
 			return ownerResponse, ownerErr
 		}
 		closeAnonymousCookieResponse(ownerResponse)

@@ -11,6 +11,7 @@ package inmemory
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -261,6 +262,7 @@ func TestLoadOrInitializeSessionStateFencesDeletedAndRecreatedSession(t *testing
 	<-ownerStarted
 
 	waiterObservedGeneration := make(chan struct{})
+	var waiterObservedGenerationOnce sync.Once
 	var waiterCallbackCalls atomic.Int32
 	waiterDone := make(chan error, 1)
 	go func() {
@@ -270,7 +272,9 @@ func TestLoadOrInitializeSessionStateFencesDeletedAndRecreatedSession(t *testing
 			"state",
 			func(value []byte) bool {
 				if string(value) == "invalid" {
-					close(waiterObservedGeneration)
+					waiterObservedGenerationOnce.Do(func() {
+						close(waiterObservedGeneration)
+					})
 				}
 				return string(value) == "new"
 			},

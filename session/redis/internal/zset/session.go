@@ -81,11 +81,13 @@ func (c *Client) runScript(
 
 // SessionState is the state of a session (ZSet structure).
 type SessionState struct {
-	ID         string           `json:"id"`
-	State      session.StateMap `json:"state"`
-	Generation string           `json:"generation,omitempty"`
-	CreatedAt  time.Time        `json:"createdAt"`
-	UpdatedAt  time.Time        `json:"updatedAt"`
+	ID    string           `json:"id"`
+	State session.StateMap `json:"state"`
+	// Generation fences coordinated state initialization across session recreation.
+	// An empty value identifies a legacy record and is populated on first use.
+	Generation string    `json:"generation,omitempty"`
+	CreatedAt  time.Time `json:"createdAt"`
+	UpdatedAt  time.Time `json:"updatedAt"`
 }
 
 func buildListedSession(

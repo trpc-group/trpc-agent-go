@@ -135,7 +135,7 @@ func TestLoadSessionStateValue(t *testing.T) {
 }
 
 func TestCommitStateInitialization(t *testing.T) {
-	_, redisClient := setupMiniredis(t)
+	mr, redisClient := setupMiniredis(t)
 	client := NewClient(redisClient, defaultConfig())
 	ctx := context.Background()
 
@@ -227,6 +227,8 @@ func TestCommitStateInitialization(t *testing.T) {
 		} {
 			t.Run(test.name, func(t *testing.T) {
 				key, generation := createSession(t, "ttl-"+test.name)
+				metaKey := client.keys.SessionMetaKey(key)
+				ttlBefore := mr.TTL(metaKey)
 				leaseKey := setLease(t, key, "owner")
 				cfg := defaultConfig()
 				cfg.SessionTTL = test.ttl
@@ -236,6 +238,11 @@ func TestCommitStateInitialization(t *testing.T) {
 				)
 				require.NoError(t, err)
 				require.Equal(t, 1, result)
+				if test.ttl > 0 {
+					require.Equal(t, time.Millisecond, mr.TTL(metaKey))
+				} else {
+					require.Equal(t, ttlBefore, mr.TTL(metaKey))
+				}
 			})
 		}
 	})
@@ -249,6 +256,7 @@ func TestCommitStateInitialization(t *testing.T) {
 			ctx, key, "state", []byte("value"), "generation", leaseKey, "owner",
 		)
 		require.ErrorContains(t, err, "commit state initialization")
+		require.Zero(t, redisClient.Exists(ctx, leaseKey).Val())
 	})
 }
 

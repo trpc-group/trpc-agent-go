@@ -979,10 +979,14 @@ a2aAgent, err := a2aagent.New(
 )
 ```
 
-strict 模式在缺少稳定持久化 session key，或 `SessionService` 不支持协调能力时，
-会在联系远端 agent 前使调用失败。Cookie record 仍然是私有 session state，
-不会出现在 event state delta 中。lease fencing 可以阻止过期 owner 覆盖新的 owner，
-但如果进程在远端返回后、持久化前退出，远端 principal 仍可能成为孤儿。
+该选项默认为 `false`。启用后，strict 模式在缺少稳定持久化 session key，或
+`SessionService` 不支持协调能力时，会在联系远端 agent 前使调用失败。该能力检查
+无法判断不同 service 实例是否实际共享协调状态。需要跨进程协调的部署必须使用
+Redis 等共享后端，而不能使用相互独立的 in-memory service。
+
+Cookie record 仍然是私有 session state，不会出现在 event state delta 中。
+lease fencing 可以阻止过期 owner 覆盖新的 owner，但如果进程在远端返回后、
+持久化前退出，远端 principal 仍可能成为孤儿。
 
 这条基于 session 的路径与 `NewAnonymousA2AClient` 相互独立；后者没有框架级
 session service，只在自身 client 和 Cookie Jar 范围内生效。

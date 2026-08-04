@@ -305,6 +305,9 @@ func (s *Service) initializeSessionState(
 		return nil, false, callbackErr
 	}
 	if err := initializeCtx.Err(); err != nil {
+		if renewalErr != nil {
+			return nil, false, errors.Join(renewalErr, err)
+		}
 		return nil, false, err
 	}
 	if renewalErr != nil {

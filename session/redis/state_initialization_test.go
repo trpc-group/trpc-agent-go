@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -206,6 +207,15 @@ func TestLoadOrInitializeSessionStateRenewsLease(t *testing.T) {
 		ownerDone <- ownerErr
 	}()
 	<-ownerStarted
+	route, err := ownerService.resolveStateInitializationRoute(
+		context.Background(), key,
+	)
+	require.NoError(t, err)
+	leaseKey := ownerService.stateInitializationLeaseKey(route, key, "state")
+	ownerToken, err := ownerService.redisClient.Get(
+		context.Background(), leaseKey,
+	).Result()
+	require.NoError(t, err)
 
 	waiterDone := make(chan error, 1)
 	go func() {
@@ -224,12 +234,14 @@ func TestLoadOrInitializeSessionStateRenewsLease(t *testing.T) {
 
 	for i := 0; i < 4; i++ {
 		mr.FastForward(80 * time.Millisecond)
-		time.Sleep(35 * time.Millisecond)
-		select {
-		case err := <-waiterDone:
-			t.Fatalf("waiter completed before owner commit: %v", err)
-		default:
-		}
+		require.Eventually(t, func() bool {
+			currentToken, getErr := ownerService.redisClient.Get(
+				context.Background(), leaseKey,
+			).Result()
+			return getErr == nil &&
+				currentToken == ownerToken &&
+				mr.TTL(leaseKey) > 80*time.Millisecond
+		}, time.Second, 5*time.Millisecond)
 	}
 	close(releaseOwner)
 	require.NoError(t, <-ownerDone)
@@ -369,6 +381,7 @@ func TestLoadOrInitializeSessionStateFencesDeletedAndRecreatedSession(t *testing
 			<-ownerStarted
 
 			waiterObservedGeneration := make(chan struct{})
+			var waiterObservedGenerationOnce sync.Once
 			var waiterCallbackCalls atomic.Int32
 			waiterDone := make(chan error, 1)
 			go func() {
@@ -378,7 +391,9 @@ func TestLoadOrInitializeSessionStateFencesDeletedAndRecreatedSession(t *testing
 					"state",
 					func(value []byte) bool {
 						if string(value) == "invalid" {
-							close(waiterObservedGeneration)
+							waiterObservedGenerationOnce.Do(func() {
+								close(waiterObservedGeneration)
+							})
 						}
 						return string(value) == "new"
 					},
@@ -693,6 +708,65 @@ func TestLoadOrInitializeSessionStateRenewalLossCancelsOwner(t *testing.T) {
 	}
 }
 
+func TestLoadOrInitializeSessionStateRenewalLossPreservesCauseWhenCallbackReturnsValue(
+	t *testing.T,
+) {
+	redisURL, cleanup := setupTestRedis(t)
+	t.Cleanup(cleanup)
+	service := newStateInitializationTestService(t, redisURL, CompatModeNone)
+	service.stateInitializationLeaseTTL = time.Second
+	service.stateInitializationRenewInterval = 10 * time.Millisecond
+	key := stateInitializationTestKey()
+	_, err := service.CreateSession(context.Background(), key, nil)
+	require.NoError(t, err)
+
+	ownerStarted := make(chan struct{})
+	ownerDone := make(chan stateInitializationTestResult, 1)
+	go func() {
+		value, initialized, ownerErr := service.LoadOrInitializeSessionState(
+			context.Background(),
+			key,
+			"state",
+			func(value []byte) bool { return len(value) > 0 },
+			func(ctx context.Context) ([]byte, error) {
+				close(ownerStarted)
+				<-ctx.Done()
+				return []byte("ignored-cancellation"), nil
+			},
+		)
+		ownerDone <- stateInitializationTestResult{
+			value:         value,
+			didInitialize: initialized,
+			err:           ownerErr,
+		}
+	}()
+	<-ownerStarted
+
+	route, err := service.resolveStateInitializationRoute(context.Background(), key)
+	require.NoError(t, err)
+	leaseKey := service.stateInitializationLeaseKey(route, key, "state")
+	require.NoError(t, service.redisClient.Set(
+		context.Background(),
+		leaseKey,
+		"replacement-owner",
+		time.Minute,
+	).Err())
+
+	select {
+	case result := <-ownerDone:
+		require.Nil(t, result.value)
+		require.False(t, result.didInitialize)
+		require.ErrorContains(t, result.err, "ownership lost")
+		require.ErrorIs(t, result.err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("lease renewal loss did not finish the initializer")
+	}
+	stored, err := service.GetSession(context.Background(), key)
+	require.NoError(t, err)
+	_, present := stored.GetState("state")
+	require.False(t, present)
+}
+
 func TestLoadOrInitializeSessionStatePersistsNilValue(t *testing.T) {
 	for _, mode := range []CompatMode{CompatModeNone, CompatModeTransition} {
 		redisURL, cleanup := setupTestRedis(t)
@@ -918,6 +992,34 @@ func TestStateInitializationOwnerRecheckAndFailurePaths(t *testing.T) {
 			},
 		)
 		require.ErrorIs(t, err, context.Canceled)
+	})
+
+	t.Run("releases lease before callback panic propagates", func(t *testing.T) {
+		fixture := newOwner(t, nil)
+		require.PanicsWithValue(t, "boom", func() {
+			_, _, _ = run(
+				fixture,
+				context.Background(),
+				fixture.route,
+				fixture.generation,
+				func([]byte) bool { return false },
+				func(context.Context) ([]byte, error) { panic("boom") },
+			)
+		})
+		require.Zero(t, fixture.service.redisClient.Exists(
+			context.Background(), fixture.leaseKey,
+		).Val())
+
+		value, initialized, err := fixture.service.LoadOrInitializeSessionState(
+			context.Background(),
+			fixture.key,
+			"state",
+			func(value []byte) bool { return string(value) == "valid" },
+			func(context.Context) ([]byte, error) { return []byte("valid"), nil },
+		)
+		require.NoError(t, err)
+		require.True(t, initialized)
+		require.Equal(t, "valid", string(value))
 	})
 
 	t.Run("reports session deleted during callback", func(t *testing.T) {

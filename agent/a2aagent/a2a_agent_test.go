@@ -1728,6 +1728,47 @@ func TestAnonymousCookieRequestHandlerMissingIdentityCookiePolicy(t *testing.T) 
 	}
 }
 
+func TestAnonymousCookieRequestHandlerRejectsNilLenientFallback(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer srv.Close()
+	service := sessionmemory.NewSessionService()
+	t.Cleanup(func() { require.NoError(t, service.Close()) })
+	persistedSession, err := service.CreateSession(
+		context.Background(),
+		session.Key{
+			AppName:   "app",
+			UserID:    "user-1",
+			SessionID: "session-a",
+		},
+		nil,
+	)
+	require.NoError(t, err)
+	scope := anonymousCookieURLScopeFromAgentURL(srv.URL)
+	handler := &anonymousCookieHTTPReqHandler{
+		next: httpReqHandlerFunc(func(
+			context.Context,
+			*http.Client,
+			*http.Request,
+		) (*http.Response, error) {
+			return nil, nil
+		}),
+		cookie: newAnonymousCookieState(
+			persistedSession.Clone(),
+			persistedSession,
+			service,
+			anonymousCookieStateKey(srv.URL),
+			scope,
+		),
+		scope: scope,
+	}
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/a2a", nil)
+	require.NoError(t, err)
+	resp, err := handler.Handle(context.Background(), srv.Client(), req)
+	require.Nil(t, resp)
+	require.ErrorContains(t, err, "initializer returned no response")
+	require.ErrorIs(t, err, errAnonymousCookieNotCaptured)
+}
+
 func TestAnonymousCookieRequestHandlerClosesOwnerResponseOnCommitFailure(
 	t *testing.T,
 ) {
@@ -1776,6 +1817,74 @@ func TestAnonymousCookieRequestHandlerClosesOwnerResponseOnCommitFailure(
 	require.Nil(t, resp)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	require.True(t, body.closed.Load())
+}
+
+func TestAnonymousCookieRequestHandlerClosesResponseOnCommittedValueMismatch(
+	t *testing.T,
+) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer srv.Close()
+	scope := anonymousCookieURLScopeFromAgentURL(srv.URL)
+	stateKey := anonymousCookieStateKey(srv.URL)
+	existingValue, err := encodeAnonymousCookieRecord(anonymousCookieRecord{
+		value: anonymousTestCookieValue(20),
+		path:  "/",
+	})
+	require.NoError(t, err)
+	committedValue, err := encodeAnonymousCookieRecord(anonymousCookieRecord{
+		value: anonymousTestCookieValue(21),
+		path:  "/",
+	})
+	require.NoError(t, err)
+	persistedSession := session.NewSession("app", "user-1", "session-a")
+	persistedSession.SetState(
+		stateKey+anonymousCookieRecordStateKeySuffix,
+		existingValue,
+	)
+	baseService := sessionmemory.NewSessionService()
+	t.Cleanup(func() { require.NoError(t, baseService.Close()) })
+	service := &mismatchedStateInitializationService{
+		Service:   baseService,
+		committed: committedValue,
+	}
+	state := newAnonymousCookieState(
+		persistedSession.Clone(),
+		persistedSession,
+		service,
+		stateKey,
+		scope,
+	)
+	body := &trackingReadCloser{Reader: strings.NewReader("ok")}
+	handler := &anonymousCookieHTTPReqHandler{
+		next: httpReqHandlerFunc(func(
+			_ context.Context,
+			_ *http.Client,
+			req *http.Request,
+		) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Set-Cookie": []string{
+						anonymousUserIDCookieName + "=" +
+							anonymousTestCookieValue(22) + "; Path=/",
+					},
+				},
+				Body:    body,
+				Request: req,
+			}, nil
+		}),
+		cookie: state,
+		scope:  scope,
+	}
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/a2a", nil)
+	require.NoError(t, err)
+	resp, err := handler.Handle(context.Background(), srv.Client(), req)
+	require.Nil(t, resp)
+	require.ErrorContains(t, err, "committed value differs")
+	require.True(t, body.closed.Load())
+	stored, present := persistedSession.GetState(state.canonicalStateKey())
+	require.True(t, present)
+	require.Equal(t, existingValue, stored)
 }
 
 func TestA2AAgent_AnonymousCookieInitializationDoesNotBlockIndependentScopes(t *testing.T) {
@@ -6574,6 +6683,13 @@ type failingStateInitializationService struct {
 	err error
 }
 
+// mismatchedStateInitializationService deliberately violates the coordination
+// contract to verify that the caller fails closed on a rejected committed value.
+type mismatchedStateInitializationService struct {
+	session.Service
+	committed []byte
+}
+
 type controlledStateInitializationService struct {
 	cancelBeforeInitialize bool
 	cancel                 context.CancelFunc
@@ -6647,6 +6763,16 @@ func (s *failingStateInitializationService) LoadOrInitializeSessionState(
 		return nil, false, errors.New("initialized value is invalid")
 	}
 	return nil, false, s.err
+}
+
+func (s *mismatchedStateInitializationService) LoadOrInitializeSessionState(
+	context.Context,
+	session.Key,
+	string,
+	func([]byte) bool,
+	func(context.Context) ([]byte, error),
+) ([]byte, bool, error) {
+	return append([]byte(nil), s.committed...), false, nil
 }
 
 type trackingReadCloser struct {

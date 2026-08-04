@@ -85,13 +85,15 @@ func (c *Client) runScript(
 
 // sessionMeta is the session metadata structure for HashIdx.
 type sessionMeta struct {
-	ID         string           `json:"id"`
-	AppName    string           `json:"appName"`
-	UserID     string           `json:"userID"`
-	State      session.StateMap `json:"state"`
-	Generation string           `json:"generation,omitempty"`
-	CreatedAt  time.Time        `json:"createdAt"`
-	UpdatedAt  time.Time        `json:"updatedAt"`
+	ID      string           `json:"id"`
+	AppName string           `json:"appName"`
+	UserID  string           `json:"userID"`
+	State   session.StateMap `json:"state"`
+	// Generation fences coordinated state initialization across session recreation.
+	// An empty value identifies a legacy record and is populated on first use.
+	Generation string    `json:"generation,omitempty"`
+	CreatedAt  time.Time `json:"createdAt"`
+	UpdatedAt  time.Time `json:"updatedAt"`
 }
 
 // CreateSession creates a new session using HashIdx logic.
