@@ -611,6 +611,38 @@ func (p *FunctionCallResponseProcessor) shouldEmitToolResultEventPerToolCall(
 	return true
 }
 
+// hasConcurrentBatch reports whether this turn's tool calls may run on the
+// parallel path.
+//
+// A batch qualifies only when every call is concurrency-safe. The parallel path
+// gives each worker a session view cloned before any of them start, which a tool
+// that reads back its own persisted events cannot work against (see
+// tool.ConcurrencyAware); running the whole turn sequentially is the behaviour
+// such a tool already relies on.
+//
+// Requiring the WHOLE batch to be safe — rather than splitting it into runs of
+// safe and unsafe calls — keeps the model's requested ordering intact without
+// introducing a second execution schedule. A mixed turn therefore falls back to
+// the sequential path it would have taken before parallel tools were enabled.
+//
+// A tool the request does not declare is treated as safe: it never executes, it
+// produces a terminal error result, so it cannot constrain its siblings.
+func hasConcurrentBatch(toolCalls []model.ToolCall, tools map[string]tool.Tool) bool {
+	if len(toolCalls) <= 1 {
+		return false
+	}
+	for _, tc := range toolCalls {
+		tl, ok := tools[tc.Function.Name]
+		if !ok {
+			continue
+		}
+		if !tool.IsConcurrencySafe(tl) {
+			return false
+		}
+	}
+	return true
+}
+
 func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendPerCallResultEventsWithRequest(
 	ctx context.Context,
 	invocation *agent.Invocation,
@@ -627,7 +659,7 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendPerCallResultE
 	}
 	toolCalls := llmResponse.Choices[0].Message.ToolCalls
 	execute := p.executeToolCallsSequentiallyAndEmitPerCallResultEvents
-	if p.enableParallelTools {
+	if p.enableParallelTools && hasConcurrentBatch(toolCalls, tools) {
 		execute = p.executeToolCallsInParallelAndEmitPerCallResultEvents
 	}
 	lastEvent, err := execute(
@@ -820,8 +852,10 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsWithRequest(
 	}
 	toolCalls := llmResponse.Choices[0].Message.ToolCalls
 
-	// If parallel tools are enabled AND multiple tool calls, execute concurrently
-	if p.enableParallelTools && len(toolCalls) > 1 {
+	// If parallel tools are enabled AND there is a run of concurrency-safe calls to
+	// batch, execute those concurrently. Tools that declare themselves unsafe (an
+	// agent tool, which cannot work against a frozen session view) stay sequential.
+	if p.enableParallelTools && hasConcurrentBatch(toolCalls, tools) {
 		mergedEvent, toolResults, err := p.executeToolCallsInParallel(
 			ctx,
 			invocation,
