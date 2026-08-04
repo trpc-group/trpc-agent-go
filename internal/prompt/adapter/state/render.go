@@ -23,6 +23,8 @@ import (
 const (
 	// Prefix for current invocation-scoped state variables from invocation.state
 	stateInvocationKey = "invocation:"
+	// Prefix for run-scoped state variables from RunOptions.RuntimeState.
+	stateRuntimeKey = "runtime:"
 )
 
 // Option configures [Render].
@@ -32,8 +34,9 @@ type renderConfig struct {
 	session *session.Session
 }
 
-// WithSession overrides the session used for non-invocation placeholders.
-// {invocation:*} placeholders continue to read from invocation state.
+// WithSession overrides the session used for session-backed placeholders.
+// {invocation:*} and {runtime:*} placeholders continue to read from the
+// invocation.
 func WithSession(sess *session.Session) Option {
 	return func(cfg *renderConfig) {
 		cfg.session = sess
@@ -41,7 +44,7 @@ func WithSession(sess *session.Session) Option {
 }
 
 // Render replaces supported placeholders in template with values from
-// invocation state and session state.
+// invocation state, runtime state, and session state.
 //
 // This adapter accepts the legacy state-injection subset of mixed-brace
 // placeholders:
@@ -49,9 +52,11 @@ func WithSession(sess *session.Session) Option {
 //   - {name?} or {{name?}} for optional identifiers
 //   - {app:key}, {user:key}, or {temp:key} for namespaced session state
 //   - {invocation:key} for invocation-scoped state
+//   - {runtime:key} for run-scoped state from RunOptions.RuntimeState
 //   - {artifact.filename} or {artifact.filename?} for artifact references
 //
-// {invocation:*} placeholders are resolved only from invocation state. Other
+// {invocation:*} placeholders are resolved only from invocation state, and
+// {runtime:*} placeholders only from invocation.RunOptions.RuntimeState. Other
 // supported placeholders are resolved from invocation.Session. Supported
 // optional placeholders collapse to an empty string when unresolved, while
 // unresolved non-optional placeholders remain literal. Placeholders outside
@@ -120,6 +125,18 @@ func (r stateResolver) Resolve(name string) (string, bool, error) {
 		}
 		return "", false, nil
 	}
+	if stateKey, ok := strings.CutPrefix(name, stateRuntimeKey); ok {
+		if r.invocation != nil && r.invocation.RunOptions.RuntimeState != nil {
+			if val, exists := r.invocation.RunOptions.RuntimeState[stateKey]; exists && val != nil {
+				rendered, err := renderRuntimeStateValue(val)
+				if err != nil {
+					return "", false, err
+				}
+				return rendered, true, nil
+			}
+		}
+		return "", false, nil
+	}
 
 	// Get the value from session state.
 	sessionToUse := r.session
@@ -164,6 +181,20 @@ func renderStateValue(raw []byte) string {
 	}
 }
 
+// renderRuntimeStateValue converts a runtime-state value to a stable prompt
+// representation. Strings are rendered without JSON quotes, objects and arrays
+// remain JSON, and raw byte slices retain the session-state rendering behavior.
+func renderRuntimeStateValue(value any) (string, error) {
+	if raw, ok := value.([]byte); ok {
+		return renderStateValue(raw), nil
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return "", fmt.Errorf("marshal runtime state value: %w", err)
+	}
+	return renderStateValue(raw), nil
+}
+
 // isValidStateName checks whether a placeholder name belongs to the legacy
 // state-injection subset.
 //
@@ -192,6 +223,7 @@ func isValidStateName(varName string) bool {
 			session.StateUserPrefix,
 			session.StateTempPrefix,
 			stateInvocationKey,
+			stateRuntimeKey,
 		}
 		for _, validPrefix := range validPrefixes {
 			if prefix == validPrefix {
