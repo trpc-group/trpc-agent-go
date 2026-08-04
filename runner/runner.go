@@ -41,6 +41,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/sessionroute"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryfork"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryview"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/toolresultround"
 	"trpc.group/trpc-go/trpc-agent-go/internal/summarytrigger"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -2597,7 +2598,6 @@ func (r *runner) handleEventPersistence(
 		return false
 	}
 	finishRunnerLatencySpan(appendSpan, appendStarted, nil)
-
 	if shouldAppendSummaryForkResponse(agentEvent) {
 		summaryfork.AppendResponse(invocation, agentEvent.Response)
 	}
@@ -2648,6 +2648,9 @@ func (r *runner) handleEventPersistence(
 			summaryCtx,
 			parentRequest,
 		)
+	}
+	if view, ok := summaryview.Snapshot(invocation); ok {
+		summaryCtx = summaryview.ContextWithView(summaryCtx, view)
 	}
 	if err := r.sessionService.EnqueueSummaryJob(
 		summaryCtx, persistSession, agentEvent.FilterKey, false,

@@ -21,6 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/modelcontext"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryview"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -352,15 +353,13 @@ func (s *sessionSummarizer) evaluateTrigger(
 	if sess == nil || len(sess.Events) == 0 {
 		return Trigger{}
 	}
-	summaryInputEvents := filterSummaryInputEventsForSession(
-		s.filterEventsForSummary(sess.Events),
-		sess,
-	)
+	selection := s.selectSummaryEvents(ctx, sess)
+	summaryInputEvents := selection.events
 	if !s.hasSummarizableContent(summaryInputEvents) {
 		return Trigger{}
 	}
 
-	checkSess := s.buildCheckSession(sess)
+	checkSess := s.buildCheckSessionWithSelection(sess, selection)
 	if len(s.checks) == 0 {
 		return Trigger{
 			Fired:     true,
@@ -442,6 +441,114 @@ type summaryPromptInput struct {
 	previousSummary  string
 }
 
+type summaryEventSelection struct {
+	events      []event.Event
+	hookEvents  []event.Event
+	itemIndexes []int
+	boundary    summaryview.Boundary
+	effective   bool
+}
+
+func (s *sessionSummarizer) selectSummaryEvents(
+	ctx context.Context,
+	sess *session.Session,
+) summaryEventSelection {
+	view, ok := modelVisibleViewForSession(ctx, sess)
+	if !ok {
+		events := filterSummaryInputEventsForSession(
+			s.filterEventsForSummary(sess.Events),
+			sess,
+		)
+		return summaryEventSelection{events: events, hookEvents: events}
+	}
+
+	viewEvents := view.Events()
+	events := make([]event.Event, 0, len(viewEvents)+1)
+	itemIndexes := make([]int, 0, len(viewEvents))
+	for i := range viewEvents {
+		if len(filterSummaryInputEventsForSession(
+			[]event.Event{viewEvents[i]},
+			sess,
+		)) == 0 {
+			continue
+		}
+		events = append(events, viewEvents[i])
+		itemIndexes = append(itemIndexes, i)
+	}
+	hasPreviousSummaryHead := view.PreviousSummary != "" &&
+		!view.PreviousSummaryInItems
+	if hasPreviousSummaryHead {
+		events = append(
+			[]event.Event{previousSummaryEvent(view.PreviousSummary)},
+			events...,
+		)
+	}
+	events = s.filterEventsForSummary(events)
+	itemCount := len(events)
+	if hasPreviousSummaryHead && itemCount > 0 {
+		itemCount--
+	}
+	if itemCount < len(itemIndexes) {
+		itemIndexes = itemIndexes[:itemCount]
+	}
+	selection := summaryEventSelection{
+		events:      events,
+		hookEvents:  events,
+		itemIndexes: itemIndexes,
+		effective:   true,
+	}
+	if boundary, found := view.BoundaryForItems(itemIndexes); found {
+		selection.boundary = boundary
+		if source := sourceEventsThroughBoundary(sess.Events, boundary); len(source) > 0 {
+			selection.hookEvents = filterSummaryInputEventsForSession(source, sess)
+		}
+	} else if len(itemIndexes) > 0 {
+		// A summary must never advance persistence past content that has no
+		// structural mapping to a stored event. This can happen for context-only
+		// anchors or a user message that has not been persisted yet.
+		selection.events = nil
+		selection.hookEvents = nil
+		selection.itemIndexes = nil
+	}
+	return selection
+}
+
+func previousSummaryEvent(text string) event.Event {
+	return event.Event{
+		Author: authorSystem,
+		Response: &model.Response{Choices: []model.Choice{{
+			Message: model.NewSystemMessage(text),
+		}}},
+	}
+}
+
+func sourceEventsThroughBoundary(
+	events []event.Event,
+	boundary summaryview.Boundary,
+) []event.Event {
+	if boundary.IsZero() {
+		return nil
+	}
+	if boundary.EventID != "" {
+		for i := range events {
+			if events[i].ID == boundary.EventID {
+				return events[:i+1]
+			}
+		}
+	}
+	if boundary.Timestamp.IsZero() {
+		return nil
+	}
+	end := 0
+	for i := range events {
+		if events[i].Timestamp.After(boundary.Timestamp) {
+			break
+		}
+		end = i + 1
+	}
+	return events[:end]
+}
+
 func (in summaryPromptInput) characterCount() int {
 	return len(in.conversationText) + len(in.previousSummary)
 }
@@ -460,15 +567,18 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 
 	// Extract conversation text from events. Use filtered events for summarization
 	// to skip recent events while ensuring proper context.
-	eventsToSummarize := filterSummaryInputEventsForSession(
-		s.filterEventsForSummary(sess.Events),
-		sess,
-	)
+	selection := s.selectSummaryEvents(ctx, sess)
+	eventsToSummarize := selection.events
 	conversationEvents := eventsToSummarize
+	hookEvents := selection.hookEvents
 	input := summaryPromptInput{}
 	if separatePreviousSummary {
 		conversationEvents = removePreviousSummaryEvent(
 			conversationEvents,
+			previousSummary,
+		)
+		hookEvents = removePreviousSummaryEvent(
+			hookEvents,
 			previousSummary,
 		)
 		input.previousSummary = previousSummary
@@ -478,7 +588,7 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 	ctx, input, err := s.runPreSummaryHook(
 		ctx,
 		sess,
-		conversationEvents,
+		hookEvents,
 		input,
 		separatePreviousSummary,
 	)
@@ -488,13 +598,20 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 	if input.conversationText == "" && input.previousSummary == "" {
 		return "", fmt.Errorf("no conversation text extracted for session %s (events=%d)", sess.ID, len(eventsToSummarize))
 	}
+	if selection.effective && len(selection.itemIndexes) > 0 {
+		ctx = contextWithModelVisibleItems(ctx, selection.itemIndexes)
+	}
 
 	ctx, summaryText, err := s.generateSummary(ctx, sess, input)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate summary for session %s: %w", sess.ID, err)
 	}
 
-	s.recordLastIncludedBoundary(sess, eventsToSummarize)
+	if selection.effective && !selection.boundary.IsZero() {
+		s.recordIncludedBoundary(sess, selection.boundary)
+	} else {
+		s.recordLastIncludedBoundary(sess, eventsToSummarize)
+	}
 
 	if s.postHook != nil {
 		hookCtx := &PostSummaryHookContext{
@@ -630,15 +747,52 @@ func (s *sessionSummarizer) recordLastIncludedBoundary(sess *session.Session, ev
 	sess.SetState(lastIncludedEventIDKey, []byte(last.ID))
 }
 
+func (s *sessionSummarizer) recordIncludedBoundary(
+	sess *session.Session,
+	boundary summaryview.Boundary,
+) {
+	if sess == nil || boundary.Timestamp.IsZero() {
+		return
+	}
+	sess.SetState(
+		lastIncludedTsKey,
+		[]byte(boundary.Timestamp.UTC().Format(time.RFC3339Nano)),
+	)
+	if boundary.EventID == "" {
+		sess.DeleteState(lastIncludedEventIDKey)
+		return
+	}
+	sess.SetState(lastIncludedEventIDKey, []byte(boundary.EventID))
+}
+
 func (s *sessionSummarizer) buildCheckSession(
 	sess *session.Session,
 ) *session.Session {
 	if sess == nil {
 		return nil
 	}
+	return s.buildCheckSessionWithSelection(
+		sess,
+		s.selectSummaryEvents(context.Background(), sess),
+	)
+}
+
+func (s *sessionSummarizer) buildCheckSessionWithSelection(
+	sess *session.Session,
+	selection summaryEventSelection,
+) *session.Session {
+	if sess == nil {
+		return nil
+	}
 	checkSess := sess.Clone()
-	delta := filterDeltaEvents(checkSess)
-	filtered := s.filterEventsForSummary(delta)
+	var filtered []event.Event
+	if selection.effective {
+		filtered = selection.events
+		checkSess.Events = append([]event.Event(nil), filtered...)
+	} else {
+		delta := filterDeltaEvents(checkSess)
+		filtered = s.filterEventsForSummary(delta)
+	}
 	thresholdEvents := filterThresholdEventsForSession(filtered, checkSess)
 	var thresholdMessage model.Message
 	summaryInputEvents := filterSummaryInputEventsForSession(filtered, checkSess)
@@ -1242,6 +1396,28 @@ func (s *sessionSummarizer) buildSummaryRequest(
 ) (*model.Request, string, error) {
 	if s.cacheSafeForking {
 		if parent, ok := CacheSafeForkRequestFromContext(ctx); ok {
+			if itemIndexes, hasItems := modelVisibleItemsFromContext(ctx); hasItems {
+				view, hasView := summaryview.FromContext(ctx)
+				if hasView {
+					messages, bound := view.MessagesForItems(
+						parent.Messages,
+						itemIndexes,
+					)
+					if bound {
+						request, err := s.buildCacheSafeForkRequestWithMessages(
+							parent,
+							messages,
+						)
+						return request, callModeCacheSafeFork, err
+					}
+				}
+				log.DebugfContext(
+					ctx,
+					"cache-safe summary prefix could not be bound to the parent request; falling back to standalone summary request",
+				)
+				request, err := s.buildStandaloneSummaryRequest(input)
+				return request, callModeStandalone, err
+			}
 			request, err := s.buildCacheSafeForkRequest(parent)
 			return request, callModeCacheSafeFork, err
 		}
@@ -1274,9 +1450,19 @@ func (s *sessionSummarizer) buildStandaloneSummaryRequest(
 func (s *sessionSummarizer) buildCacheSafeForkRequest(
 	parent *model.Request,
 ) (*model.Request, error) {
+	return s.buildCacheSafeForkRequestWithMessages(parent, nil)
+}
+
+func (s *sessionSummarizer) buildCacheSafeForkRequestWithMessages(
+	parent *model.Request,
+	messages []model.Message,
+) (*model.Request, error) {
 	request := cloneRequestForCacheSafeFork(parent)
 	if request == nil {
 		return nil, errors.New("parent request is nil")
+	}
+	if messages != nil {
+		request.Messages = cloneMessagesForCacheSafeFork(messages)
 	}
 	if !hasSummarySourceContent(request.Messages) {
 		return nil, errors.New("cache-safe summary request has no conversation content")
