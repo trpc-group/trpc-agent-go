@@ -331,6 +331,16 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 	)
 	requestProcessors = append(requestProcessors, instructionProcessor)
 
+	// 3b. Parallel-tools processor - names the tools that must run alone, so the
+	// model can form batches that actually run concurrently. Only meaningful
+	// when parallel tool execution is on.
+	if options.EnableParallelTools {
+		requestProcessors = append(
+			requestProcessors,
+			processor.NewParallelToolsRequestProcessor(),
+		)
+	}
+
 	// 4. Identity processor - sets agent identity.
 	if a.name != "" || options.Description != "" {
 		identityProcessor := processor.NewIdentityRequestProcessor(
