@@ -107,6 +107,8 @@ func TestRedactString_RedactsRemainingNetworkCredentialFlags(t *testing.T) {
 		{`curl --proxy-pass=proxy-passphrase https://allowed.example`, "proxy-passphrase"},
 		{`wget --ftp-user ftp-user-value https://allowed.example`, "ftp-user-value"},
 		{`wget --ftp-password=ftp-password-value https://allowed.example`, "ftp-password-value"},
+		{`wget --http-user http-user-value https://allowed.example`, "http-user-value"},
+		{`wget --http-password=http-password-value https://allowed.example`, "http-password-value"},
 		{`wget --proxy-password proxy-password-value https://allowed.example`, "proxy-password-value"},
 		{`wget --password=wget-password-value https://allowed.example`, "wget-password-value"},
 	}
@@ -123,6 +125,25 @@ func TestRedactString_RedactsNetworkCredentialsWhenShellParsingFails(t *testing.
 	require.True(t, redacted)
 	require.NotContains(t, out, "alice:s3cr3t")
 	require.NotContains(t, out, "s3cr3t")
+}
+
+func TestRedactString_RedactsNetworkCredentialsAfterLeadingAssignments(t *testing.T) {
+	input := `FOO=1 curl -u alice:s3cr3t https://allowed.example > out.txt`
+	out, redacted := redactString(input)
+	require.True(t, redacted)
+	require.NotContains(t, out, "alice:s3cr3t")
+	require.NotContains(t, out, "s3cr3t")
+}
+
+func TestRedactString_DoesNotTreatWgetUserAgentAsCredential(t *testing.T) {
+	for _, input := range []string{
+		`wget -U Mozilla https://allowed.example`,
+		`wget -UMozilla https://allowed.example`,
+	} {
+		out, redacted := redactString(input)
+		require.False(t, redacted, input)
+		require.Equal(t, input, out)
+	}
 }
 
 func TestRedactString_ScopesNetworkCredentialFlagsToCommandSegment(t *testing.T) {

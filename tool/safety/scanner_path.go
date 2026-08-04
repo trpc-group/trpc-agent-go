@@ -244,7 +244,7 @@ func globRegexp(pattern string) *regexp.Regexp {
 
 func (s *DefaultScanner) scanSensitivePaths(req ScanRequest, argv []string) []Finding {
 	var findings []Finding
-	for _, arg := range argv[1:] {
+	for _, arg := range argv {
 		for _, denied := range s.policy.DeniedPaths {
 			if sensitivePathMatch(arg, denied) || sensitivePathMatch(joinCwdPath(req.Cwd, arg), denied) {
 				rule := "path.sensitive_credentials"

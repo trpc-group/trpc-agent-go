@@ -30,7 +30,6 @@ max_script_bytes: 1048576
 env_allowlist:
   # PATH and other process-control variables are denied independently and
   # cannot be re-enabled through this ordinary environment allowlist.
-  - HOME
   - GOPATH
   - GOCACHE
 dependency_install_action: ask

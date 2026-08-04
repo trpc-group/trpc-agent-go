@@ -159,6 +159,8 @@ func (r Report) ToolSafetyAttributes() []attribute.KeyValue {
 }
 
 // Scanner scans one request and returns a structured report.
+// Permission-policy adapters may call a Scanner concurrently for parallel
+// tool execution, so implementations must be safe for concurrent use.
 type Scanner interface {
 	Scan(ctx context.Context, req ScanRequest) (Report, error)
 }

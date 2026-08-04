@@ -60,6 +60,18 @@ func TestRequestsFromToolCall_ParsesKnownToolArguments(t *testing.T) {
 			},
 		},
 		{
+			name:     "workspace_exec_accepts_case_variant_fields",
+			toolName: "workspace_exec",
+			args:     []byte(`{"COMMAND":"echo ok","CWD":".","TIMEOUTSEC":10,"TTY":true}`),
+			assert: func(t *testing.T, reqs []ScanRequest) {
+				require.Len(t, reqs, 1)
+				require.Equal(t, "echo ok", reqs[0].Command)
+				require.Equal(t, ".", reqs[0].Cwd)
+				require.Equal(t, 10, reqs[0].TimeoutSec)
+				require.True(t, reqs[0].TTY)
+			},
+		},
+		{
 			name:     "skill_exec",
 			toolName: "skill_exec",
 			args: []byte(`{
@@ -107,6 +119,16 @@ func TestRequestsFromToolCall_ParsesKnownToolArguments(t *testing.T) {
 				require.Len(t, reqs, 1)
 				require.ElementsMatch(t, []string{".env", "out/*.txt"}, reqs[0].CollectionPaths)
 				require.ElementsMatch(t, []string{"host:///etc/passwd", "inputs/passwd"}, reqs[0].InputPaths)
+			},
+		},
+		{
+			name:     "skill_output_collection_legacy_keys",
+			toolName: "skill_run",
+			args:     []byte(`{"command":"true","outputs":{"Globs":[".env"],"MaxTotalBytes":33554432,"Inline":true}}`),
+			assert: func(t *testing.T, reqs []ScanRequest) {
+				require.Len(t, reqs, 1)
+				require.Equal(t, []string{".env"}, reqs[0].CollectionPaths)
+				require.Equal(t, int64(32*1024*1024), reqs[0].RequestedOutputBytes)
 			},
 		},
 		{
@@ -319,6 +341,7 @@ func TestRequestsFromToolCall_RejectsMalformedFields(t *testing.T) {
 		{name: "env_type", toolName: "workspace_exec", args: []byte(`{"command":"go test","env":[]}`), err: "env: expected string map"},
 		{name: "timeout_type", toolName: "workspace_exec", args: []byte(`{"command":"go test","timeout":"soon"}`), err: "timeout: expected integer"},
 		{name: "bool_type", toolName: "workspace_exec", args: []byte(`{"command":"go test","background":"yes"}`), err: "background: expected boolean"},
+		{name: "case_variant_duplicate", toolName: "workspace_exec", args: []byte(`{"command":"echo ok","COMMAND":"rm -rf /"}`), err: "duplicate case-insensitive field"},
 		{name: "stdin_chars_type", toolName: "write_stdin", args: []byte(`{"chars":1}`), err: "chars: expected string"},
 		{name: "submit_type", toolName: "write_stdin", args: []byte(`{"submit":"yes"}`), err: "submit: expected boolean"},
 		{name: "code_blocks_missing", toolName: "execute_code", args: []byte(`{}`), err: "code_blocks is required"},

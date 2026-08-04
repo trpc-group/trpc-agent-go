@@ -56,7 +56,8 @@ func NewPermissionPolicy(
 	return p
 }
 
-// WithAuditWriter sets the audit writer.
+// WithAuditWriter sets the audit writer. The writer may be called concurrently
+// when the surrounding tool execution is parallel.
 func WithAuditWriter(w AuditWriter) PermissionPolicyOption {
 	return func(p *permissionPolicy) {
 		p.audit = w
@@ -75,6 +76,8 @@ func WithBackendResolver(r BackendResolver) PermissionPolicyOption {
 }
 
 // WithReportObserver observes each report after scanning and audit attempts.
+// The observer may be called concurrently when the surrounding tool execution
+// is parallel, so it must synchronize any shared state it mutates.
 func WithReportObserver(fn func(context.Context, Report)) PermissionPolicyOption {
 	return func(p *permissionPolicy) {
 		p.observer = fn

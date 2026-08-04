@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	internaltool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -219,8 +220,8 @@ func parseExecArgs(
 	metadata map[string]any,
 	parserTool tool.Tool,
 ) ([]ScanRequest, error) {
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(args, &raw); err != nil {
+	raw, err := normalizedJSONObject(args)
+	if err != nil {
 		return nil, fmt.Errorf("invalid args: %w", err)
 	}
 	command, err := stringField(raw, "command")
@@ -319,32 +320,18 @@ func outputLimitField(raw map[string]json.RawMessage) (int64, error) {
 	if len(outputFiles) > 0 {
 		limit = skillDefaultOutputTotalBytes
 	}
-	outputRaw, ok := raw["outputs"]
-	if !ok || string(outputRaw) == "null" {
+	outputs, ok, err := outputSpecField(raw)
+	if err != nil {
+		return 0, err
+	}
+	if !ok || len(outputs.Globs) == 0 {
 		return limit, nil
 	}
-	var outputs map[string]json.RawMessage
-	if err := json.Unmarshal(outputRaw, &outputs); err != nil {
-		return 0, fmt.Errorf("outputs: expected object: %w", err)
-	}
-	globs, err := stringSliceField(outputs, "globs")
-	if err != nil {
-		return 0, fmt.Errorf("outputs.globs: %w", err)
-	}
-	if len(globs) == 0 {
-		return limit, nil
-	}
-	maxFileBytes, err := intField(outputs, "max_file_bytes")
-	if err != nil {
-		return 0, fmt.Errorf("outputs.max_file_bytes: %w", err)
-	}
+	maxFileBytes := outputs.MaxFileBytes
 	if maxFileBytes <= 0 {
 		maxFileBytes = skillDefaultOutputFileBytes
 	}
-	maxTotalBytes, err := intField(outputs, "max_total_bytes")
-	if err != nil {
-		return 0, fmt.Errorf("outputs.max_total_bytes: %w", err)
-	}
+	maxTotalBytes := outputs.MaxTotalBytes
 	if maxTotalBytes <= 0 {
 		maxTotalBytes = skillDefaultOutputTotalBytes
 	}
@@ -408,18 +395,24 @@ func collectionPathsField(raw map[string]json.RawMessage) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if outputRaw, ok := raw["outputs"]; ok && string(outputRaw) != "null" {
-		var outputs map[string]json.RawMessage
-		if err := json.Unmarshal(outputRaw, &outputs); err != nil {
-			return nil, fmt.Errorf("outputs: expected object: %w", err)
-		}
-		globs, err := stringSliceField(outputs, "globs")
-		if err != nil {
-			return nil, fmt.Errorf("outputs.globs: %w", err)
-		}
-		paths = append(paths, globs...)
+	if outputs, ok, err := outputSpecField(raw); err != nil {
+		return nil, err
+	} else if ok {
+		paths = append(paths, outputs.Globs...)
 	}
 	return dedupeStrings(paths), nil
+}
+
+func outputSpecField(raw map[string]json.RawMessage) (codeexecutor.OutputSpec, bool, error) {
+	outputRaw, ok := raw["outputs"]
+	if !ok || strings.TrimSpace(string(outputRaw)) == "null" {
+		return codeexecutor.OutputSpec{}, false, nil
+	}
+	var outputs codeexecutor.OutputSpec
+	if err := json.Unmarshal(outputRaw, &outputs); err != nil {
+		return codeexecutor.OutputSpec{}, false, fmt.Errorf("outputs: expected object: %w", err)
+	}
+	return outputs, true, nil
 }
 
 func stringSliceField(raw map[string]json.RawMessage, key string) ([]string, error) {
@@ -453,8 +446,8 @@ func parseWriteStdinArgs(
 	args []byte,
 	metadata map[string]any,
 ) ([]ScanRequest, error) {
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(args, &raw); err != nil {
+	raw, err := normalizedJSONObject(args)
+	if err != nil {
 		return nil, fmt.Errorf("invalid args: %w", err)
 	}
 	chars, err := stringField(raw, "chars")
@@ -600,7 +593,7 @@ func timeoutField(toolName string, raw map[string]json.RawMessage) (int, error) 
 	case "workspace_exec":
 		// workspace_exec first selects timeout_sec/timeoutSec, then falls
 		// back to timeout when the selected value is non-positive.
-		timeout, err = intField(raw, "timeout_sec", "timeoutSec")
+		timeout, err = intField(raw, "timeout_sec", "timeoutsec")
 		if err != nil {
 			return 0, err
 		}
@@ -609,7 +602,7 @@ func timeoutField(toolName string, raw map[string]json.RawMessage) (int, error) 
 		}
 	case "exec_command":
 		// exec_command does not expose the workspace_exec timeout alias.
-		timeout, err = intField(raw, "timeout_sec", "timeoutSec")
+		timeout, err = intField(raw, "timeout_sec", "timeoutsec")
 	case "skill_run", "skill_exec":
 		// Skill tools use timeout directly and ignore timeout_sec aliases.
 		timeout, err = intField(raw, "timeout")
@@ -632,6 +625,22 @@ func timeoutField(toolName string, raw map[string]json.RawMessage) (int, error) 
 	default:
 		return 0, nil
 	}
+}
+
+func normalizedJSONObject(data []byte) (map[string]json.RawMessage, error) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, err
+	}
+	normalized := make(map[string]json.RawMessage, len(raw))
+	for key, value := range raw {
+		canonical := strings.ToLower(key)
+		if _, exists := normalized[canonical]; exists {
+			return nil, fmt.Errorf("duplicate case-insensitive field %q", key)
+		}
+		normalized[canonical] = value
+	}
+	return normalized, nil
 }
 
 func boolField(raw map[string]json.RawMessage, key string) (bool, error) {

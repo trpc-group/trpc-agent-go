@@ -35,7 +35,10 @@ type AuditEvent struct {
 	Recommendation   string    `json:"recommendation,omitempty"`
 }
 
-// AuditWriter writes one safety audit event.
+// AuditWriter writes one safety audit event. Permission-policy adapters may
+// call an AuditWriter concurrently for parallel tool execution, so custom
+// implementations must be safe for concurrent use. JSONLAuditWriter provides
+// that synchronization for its destination writer.
 type AuditWriter interface {
 	WriteAuditEvent(context.Context, AuditEvent) error
 }

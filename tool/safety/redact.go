@@ -31,7 +31,9 @@ var secretPatterns = []*regexp.Regexp{
 
 var credentialFlagPattern = regexp.MustCompile(`(?i)(--(?:api[-_]?key|access[-_]?token|refresh[-_]?token|id[-_]?token|oauth[-_]?token|session[-_]?token|csrf[-_]?token|xsrf[-_]?token|jwt[-_]?token|client[-_]?secret|password|passwd|secret|token)\b(?:\s+|=))(?:"[^"]+"|'[^']+'|[^\s]+)`)
 
-var networkCredentialFlagPattern = regexp.MustCompile(`(?i)(--(?:user|proxy-user|oauth2-bearer|pass|proxy-pass|ftp-user|ftp-password|password|proxy-password)\b(?:\s+|=))(?:"[^"]+"|'[^']+'|[^\s]+)`)
+var curlNetworkCredentialFlagPattern = regexp.MustCompile(`(?i)(--(?:oauth2-bearer|pass|proxy-pass|proxy-user|user)\b(?:\s+|=))(?:"[^"]+"|'[^']+'|[^\s]+)`)
+
+var wgetNetworkCredentialFlagPattern = regexp.MustCompile(`(?i)(--(?:ftp-password|ftp-user|http-password|http-user|password|proxy-password|proxy-user|user)\b(?:\s+|=))(?:"[^"]+"|'[^']+'|[^\s]+)`)
 
 var networkShortCredentialFlagPattern = regexp.MustCompile(`(?i)(^|[\s])(-[uU])(?:(\s+)(?:"[^"]+"|'[^']+'|[^\s]+)|(?:"[^"]+"|'[^']+'|[^\s]+))`)
 
@@ -125,22 +127,58 @@ func redactNetworkCredentialCommandSpans(
 }
 
 func redactNetworkCredentialSegment(segment, command string) (string, bool) {
-	if command != "curl" && command != "wget" {
+	var longFlags *regexp.Regexp
+	switch command {
+	case "curl":
+		longFlags = curlNetworkCredentialFlagPattern
+	case "wget":
+		longFlags = wgetNetworkCredentialFlagPattern
+	default:
 		return segment, false
 	}
-	out := networkCredentialFlagPattern.ReplaceAllString(
+	out := longFlags.ReplaceAllString(
 		segment, `${1}<redacted>`)
-	out = networkShortCredentialFlagPattern.ReplaceAllString(
-		out, `${1}${2}${3}<redacted>`)
+	if command == "curl" {
+		out = networkShortCredentialFlagPattern.ReplaceAllString(
+			out, `${1}${2}${3}<redacted>`)
+	}
 	return out, out != segment
 }
 
 func rawNetworkCommandName(segment string) string {
 	fields := strings.Fields(segment)
-	if len(fields) == 0 {
-		return ""
+	for _, field := range fields {
+		field = strings.Trim(field, `"'`)
+		if isShellAssignment(field) {
+			continue
+		}
+		return normalizeCommand(field)
 	}
-	return normalizeCommand(strings.Trim(fields[0], `"'`))
+	return ""
+}
+
+func isShellAssignment(field string) bool {
+	equals := strings.IndexByte(field, '=')
+	if equals <= 0 {
+		return false
+	}
+	name := field[:equals]
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if i == 0 {
+			if !((c >= 'A' && c <= 'Z') ||
+				(c >= 'a' && c <= 'z') || c == '_') {
+				return false
+			}
+			continue
+		}
+		if !((c >= 'A' && c <= 'Z') ||
+			(c >= 'a' && c <= 'z') ||
+			(c >= '0' && c <= '9') || c == '_') {
+			return false
+		}
+	}
+	return true
 }
 
 type shellCommandSpan struct {

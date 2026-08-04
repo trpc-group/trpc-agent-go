@@ -1716,3 +1716,66 @@ func TestDefaultScanner_PerformanceSamples(t *testing.T) {
 	require.NoError(t, err)
 	require.LessOrEqual(t, time.Since(start), time.Second)
 }
+
+func TestDefaultScanner_NetworkAllowlistCoversGenericURLSchemes(t *testing.T) {
+	scanner := MustDefaultScanner(Policy{
+		NetworkAllowlist: []string{"allowed.example"},
+	})
+	for _, command := range []string{
+		"psql postgres://evil.example/app",
+		"redis-cli redis://evil.example/0",
+		"wget -U Mozilla https://allowed.example/file",
+	} {
+		report, err := scanner.Scan(context.Background(), ScanRequest{
+			ToolName: "workspace_exec",
+			Backend:  BackendWorkspace,
+			Command:  command,
+		})
+		require.NoError(t, err, command)
+		if strings.HasPrefix(command, "wget ") {
+			require.Equal(t, DecisionAllow, report.Decision, command)
+			require.False(t, report.Redacted, command)
+			continue
+		}
+		require.Equal(t, DecisionDeny, report.Decision, command)
+		require.Equal(t, "network.non_allowlisted_domain", report.RuleID, command)
+	}
+}
+
+func TestDefaultScanner_DeniesDeniedExecutablePath(t *testing.T) {
+	scanner := MustDefaultScanner(Policy{
+		DeniedPaths: []string{"./.env"},
+	})
+	for _, req := range []ScanRequest{
+		{
+			ToolName: "workspace_exec",
+			Backend:  BackendWorkspace,
+			Command:  "./.env --print",
+		},
+		{
+			ToolName: "workspace_exec",
+			Backend:  BackendWorkspace,
+			Args:     []string{"./.env", "--print"},
+		},
+	} {
+		report, err := scanner.Scan(context.Background(), req)
+		require.NoError(t, err)
+		require.Equal(t, DecisionDeny, report.Decision)
+		require.Equal(t, "path.secret_file", report.RuleID)
+	}
+}
+
+func TestDefaultScanner_RedactsCredentialsAfterShellParseFailure(t *testing.T) {
+	report, err := MustDefaultScanner(Policy{}).Scan(
+		context.Background(),
+		ScanRequest{
+			ToolName: "workspace_exec",
+			Backend:  BackendWorkspace,
+			Command:  "FOO=1 curl -u alice:s3cr3t https://allowed.example > out.txt",
+		},
+	)
+	require.NoError(t, err)
+	require.NotContains(t, report.Command, "alice:s3cr3t")
+	require.NotContains(t, report.Command, "s3cr3t")
+	require.True(t, report.Redacted)
+}

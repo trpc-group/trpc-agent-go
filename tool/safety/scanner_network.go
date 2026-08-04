@@ -378,7 +378,7 @@ func wgetLongOptionTakesValue(option string) bool {
 		"--certificate-type", "--config", "--connect-timeout", "--cut-dirs",
 		"--directory-prefix", "--domains", "--exclude-directories",
 		"--exclude-domains", "--execute", "--follow-tags", "--ftp-password",
-		"--ftp-user", "--header", "--ignore-tags", "--include-directories",
+		"--ftp-user", "--header", "--http-password", "--http-user", "--ignore-tags", "--include-directories",
 		"--input-file", "--level", "--limit-rate", "--load-cookies",
 		"--local-encoding", "--output-document", "--output-file", "--password",
 		"--post-data", "--post-file", "--private-key", "--private-key-type",
@@ -402,7 +402,7 @@ func isHighRiskNetworkCommand(cmd string) bool {
 	}
 }
 
-var urlLikePattern = regexp.MustCompile(`(?i)\b(?:https?|ftp)://[^\s"'<>]+`)
+var urlLikePattern = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://[^\s"'<>]+`)
 
 func extractHosts(text string) []string {
 	seen := make(map[string]struct{})
