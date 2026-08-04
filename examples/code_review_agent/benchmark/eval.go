@@ -47,8 +47,8 @@ type Result struct {
 	Hit               int      `json:"hit"`
 	TotalNegative     int      `json:"total_negative"`
 	FalsePositive     int      `json:"false_positive"`
-	Recall            float64  `json:"recall"`               // 检出率
-	FalsePositiveRate float64  `json:"false_positive_rate"`  // 误报率
+	Recall            float64  `json:"recall"`              // 检出率
+	FalsePositiveRate float64  `json:"false_positive_rate"` // 误报率
 	Pass              bool     `json:"pass"`
 	Details           []Detail `json:"details"`
 }

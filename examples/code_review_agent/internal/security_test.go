@@ -91,7 +91,7 @@ func TestDetectSensitiveInfo_AddedLinesOnly(t *testing.T) {
 func TestMaskSensitive_CoversDetection(t *testing.T) {
 	// 每个 Description 对应一条能命中 detectRe 的真实样例。
 	samples := map[string]string{
-		"API Key / 令牌 / 密码等凭据": `apiToken = "abcdef1234567890"`,
+		"API Key / 令牌 / 密码等凭据":    `apiToken = "abcdef1234567890"`,
 		"OpenAI API Key":          `sk-abcdefghijklmnopqrstuvwxyz`,
 		"Anthropic API Key":       `sk-ant-api03-abcdefghijklmnopqrstuv`,
 		"AWS Access Key":          `AKIAIOSFODNN7EXAMPLE`,
@@ -100,7 +100,7 @@ func TestMaskSensitive_CoversDetection(t *testing.T) {
 		"GitLab PAT":              `glpat-abcdefghijklmnopqrstuvwx`,
 		"Slack token":             `xoxb-1234567890-abcdefghij-ABCDEFGHIJ`,
 		"私钥":                      "-----BEGIN RSA PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFA\n-----END RSA PRIVATE KEY-----",
-		"信用卡号":                   `4242 4242 4242 4242`,
+		"信用卡号":                    `4242 4242 4242 4242`,
 	}
 
 	covered := 0

@@ -295,7 +295,7 @@ func defaultRules() []Rule {
 			Description: "检测到代码中包含硬编码的 API Key、token 或密钥字符串。",
 			// Patterns 由 sensitivePatterns 注册表派生，保证检出侧与脱敏侧
 			// （MaskSensitive）大小写/格式一致，消除检出命中但脱敏不到的漂移。
-			Patterns: credentialPatterns(),
+			Patterns:   credentialPatterns(),
 			Suggestion: "将密钥存储在环境变量中，使用 os.Getenv() 读取。",
 		},
 		{
