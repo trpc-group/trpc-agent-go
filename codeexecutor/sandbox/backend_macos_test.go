@@ -384,6 +384,11 @@ func TestMacOSSandboxExecNoAccessGlobIntegration(t *testing.T) {
 		WithWorkspaceRoot(t.TempDir()),
 		WithPermissionProfile(WorkspaceWriteProfile().WithNoAccessGlobs("work/*.env")),
 	)
+	t.Cleanup(func() {
+		if err := rt.Close(); err != nil {
+			t.Errorf("close runtime: %v", err)
+		}
+	})
 	if _, err := rt.macosPreflight(); err != nil {
 		t.Skipf("sandbox-exec preflight unavailable: %v", err)
 	}

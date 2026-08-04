@@ -87,6 +87,11 @@ for _, denial := range diagnostics.Denials {
 }
 ```
 
+`Denials` contains at most one entry for each operation and target pair. When
+the unified log reports the same pair more than once, the first event retained
+after filtering supplies `Raw`, `Timestamp`, `Source`, and `Confidence`. This
+coalescing does not set `Diagnostics.Truncated`.
+
 `Diagnostics.Truncated` is true when the shared denial ring dropped one or more
 raw events after this run began and before its collection snapshot (the ring
 keeps at most 100 events). Callers must not treat `Denials` as complete when
@@ -148,12 +153,13 @@ rt := sandbox.NewRuntime(
 `DenialIgnoreRule` supports optional `Command` substring matching against
 `RunProgramSpec.Cmd` only, `Operations`, structured `Targets`
 (`Exact`, `Prefix`, `Suffix`, `Glob`), and `RawContains`. `RawRegex` is
-intentionally not supported.
+intentionally not supported. Empty `RawContains` entries are ignored; a list
+containing only empty strings is treated as unset.
 
 Zero-value `DenialFilter` keeps automatic filters enabled. Rules in `Ignore` are
 disjunctive (any matching rule suppresses a denial). Within a rule, configured
 constraints are conjunctive. Within one `DenialTargetMatcher`, non-empty fields
-are alternatives. A rule with no constraints is ignored.
+are alternatives. A rule with no effective constraints is ignored.
 
 Set `DisableAutomatic: true` to make the three default daemon denials visible.
 

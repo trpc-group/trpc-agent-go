@@ -60,6 +60,11 @@ const (
 
 // Diagnostics captures sandbox-specific diagnostics for one program run.
 type Diagnostics struct {
+	// Denials contains sandbox denial diagnostics. The macOS backend returns at
+	// most one entry for each operation and target pair. When multiple events
+	// have the same pair, the first event retained after filtering supplies the
+	// entry's Raw, Timestamp, Source, and Confidence fields. This coalescing
+	// does not set Truncated.
 	Denials []Denial
 	// Truncated reports that the shared denial ring dropped one or more events
 	// after this run began and before its collection snapshot. Callers must not
@@ -83,8 +88,9 @@ type DenialTargetMatcher struct {
 // Matching is conjunctive across configured constraints: a non-empty Command
 // must be a substring of RunProgramSpec.Cmd, Operations must contain the denial
 // operation when set, Targets must match via any listed matcher when set, and
-// RawContains must find at least one substring in Denial.Raw when set. A rule
-// with every constraint empty is ignored.
+// RawContains must find at least one non-empty substring in Denial.Raw when set.
+// Empty RawContains entries are ignored, and an all-empty list is treated as
+// unset. A rule with every effective constraint empty is ignored.
 type DenialIgnoreRule struct {
 	// Command, when non-empty, must be a substring of RunProgramSpec.Cmd. It
 	// intentionally does not match Args because arguments may contain secrets.

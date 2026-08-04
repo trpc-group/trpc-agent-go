@@ -101,14 +101,35 @@ func TestSandboxDenialDisableAutomatic(t *testing.T) {
 }
 
 func TestSandboxDenialDeduplicatesByOperationAndTarget(t *testing.T) {
+	firstTimestamp := time.Date(2026, 7, 30, 1, 2, 3, 0, time.UTC)
 	denials := []Denial{
-		{Operation: "file-read-data", Target: "/private/tmp/foo", Raw: "first"},
-		{Operation: "file-read-data", Target: "/private/tmp/foo", Raw: "second"},
+		{
+			Operation:  "file-read-data",
+			Target:     "/private/tmp/foo",
+			Raw:        "first",
+			Timestamp:  firstTimestamp,
+			Source:     "first-source",
+			Confidence: "first-confidence",
+		},
+		{
+			Operation:  "file-read-data",
+			Target:     "/private/tmp/foo",
+			Raw:        "second",
+			Timestamp:  firstTimestamp.Add(time.Second),
+			Source:     "second-source",
+			Confidence: "second-confidence",
+		},
 		{Operation: "file-read-metadata", Target: "/private/tmp/foo", Raw: "third"},
 	}
 	filtered := applyMacOSSandboxDenialFilters(denials, "/bin/cat", DenialFilter{})
 	if len(filtered) != 2 {
 		t.Fatalf("deduped denials = %#v, want two operation+target pairs", filtered)
+	}
+	if filtered[0].Raw != "first" ||
+		!filtered[0].Timestamp.Equal(firstTimestamp) ||
+		filtered[0].Source != "first-source" ||
+		filtered[0].Confidence != "first-confidence" {
+		t.Fatalf("deduped denial = %#v, want first event metadata", filtered[0])
 	}
 }
 
@@ -619,6 +640,32 @@ func TestShouldFilterMacOSSandboxDenialSkipsNonMatchingRawContains(t *testing.T)
 	}
 	if shouldFilterMacOSSandboxDenial(denial, "/bin/cat", filter) {
 		t.Fatal("raw mismatch should not filter denial")
+	}
+}
+
+func TestShouldFilterMacOSSandboxDenialIgnoresEmptyRawContains(t *testing.T) {
+	denial := Denial{
+		Operation: "file-read-data",
+		Target:    "/private/tmp/foo",
+		Raw:       "keep me",
+	}
+	if shouldFilterMacOSSandboxDenial(denial, "/bin/cat", DenialFilter{
+		Ignore: []DenialIgnoreRule{{RawContains: []string{"", ""}}},
+	}) {
+		t.Fatal("all-empty RawContains should not filter denial")
+	}
+	if !shouldFilterMacOSSandboxDenial(denial, "/bin/cat", DenialFilter{
+		Ignore: []DenialIgnoreRule{{
+			Operations:  []string{"file-read-data"},
+			RawContains: []string{""},
+		}},
+	}) {
+		t.Fatal("all-empty RawContains should be unset when another constraint matches")
+	}
+	if !shouldFilterMacOSSandboxDenial(denial, "/bin/cat", DenialFilter{
+		Ignore: []DenialIgnoreRule{{RawContains: []string{"", "keep"}}},
+	}) {
+		t.Fatal("empty RawContains entry should not prevent a non-empty match")
 	}
 }
 

@@ -1147,6 +1147,7 @@ func shouldFilterMacOSSandboxDenial(
 		return true
 	}
 	for _, rule := range filter.Ignore {
+		hasRawContains := stringSliceHasNonEmpty(rule.RawContains)
 		if rule.Command != "" && !strings.Contains(cmd, rule.Command) {
 			continue
 		}
@@ -1156,11 +1157,11 @@ func shouldFilterMacOSSandboxDenial(
 		if len(rule.Targets) > 0 && !macosDenialTargetMatches(denial.Target, rule.Targets) {
 			continue
 		}
-		if len(rule.RawContains) > 0 && !stringSliceContainsSubstring(rule.RawContains, denial.Raw) {
+		if hasRawContains && !stringSliceContainsSubstring(rule.RawContains, denial.Raw) {
 			continue
 		}
 		if rule.Command == "" && len(rule.Operations) == 0 &&
-			len(rule.Targets) == 0 && len(rule.RawContains) == 0 {
+			len(rule.Targets) == 0 && !hasRawContains {
 			continue
 		}
 		return true
@@ -1200,7 +1201,16 @@ func stringSliceContains(values []string, want string) bool {
 
 func stringSliceContainsSubstring(values []string, raw string) bool {
 	for _, value := range values {
-		if strings.Contains(raw, value) {
+		if value != "" && strings.Contains(raw, value) {
+			return true
+		}
+	}
+	return false
+}
+
+func stringSliceHasNonEmpty(values []string) bool {
+	for _, value := range values {
+		if value != "" {
 			return true
 		}
 	}
