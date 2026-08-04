@@ -79,6 +79,29 @@ func TestEvaluateRedactsFindingEvidence(t *testing.T) {
 	}
 }
 
+func TestEvaluateRedactsNonSecretFindingFromSecretBearingLine(t *testing.T) {
+	diff := "diff --git a/pkg/file.go b/pkg/file.go\n--- a/pkg/file.go\n+++ b/pkg/file.go\n@@ -1,0 +1,6 @@\n+package pkg\n+import \"os\"\n+func Load() error {\n+\tf, _ := os.Open(\"password=supersecretvalue\")\n+\treturn nil\n+}\n"
+	files, err := diffparse.Parse(diff)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	findings := Evaluate(files)
+	var sawResource bool
+	for _, finding := range findings {
+		for _, value := range []string{finding.ID, finding.File, finding.Title, finding.Evidence, finding.Recommendation, finding.Source, finding.RuleID, finding.Status, finding.Fingerprint} {
+			if strings.Contains(value, "supersecretvalue") {
+				t.Fatalf("finding leaked secret: %#v", finding)
+			}
+		}
+		if finding.RuleID == "resource.close_missing" {
+			sawResource = true
+		}
+	}
+	if !sawResource {
+		t.Fatalf("findings = %#v, want resource.close_missing", findings)
+	}
+}
+
 func evaluateFixture(t *testing.T, name string) []review.Finding {
 	t.Helper()
 	raw, err := os.ReadFile("../../testdata/fixtures/" + name)

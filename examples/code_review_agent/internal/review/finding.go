@@ -13,6 +13,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sort"
+
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/redacttext"
 )
 
 // Config controls confidence routing and deterministic finding cleanup.
@@ -36,6 +38,7 @@ func NormalizeFindings(findings []Finding, cfg Config) []Finding {
 	}
 	best := make(map[string]Finding)
 	for _, finding := range findings {
+		finding = redactFinding(finding)
 		finding.Status = routeStatus(finding, cfg)
 		finding.Fingerprint = Fingerprint(finding)
 		existing, ok := best[finding.Fingerprint]
@@ -60,6 +63,21 @@ func NormalizeFindings(findings []Finding, cfg Config) []Finding {
 		return out[i].Title < out[j].Title
 	})
 	return out
+}
+
+func redactFinding(finding Finding) Finding {
+	finding.ID = redacttext.Text(finding.ID).Text
+	finding.Severity = redacttext.Text(finding.Severity).Text
+	finding.Category = redacttext.Text(finding.Category).Text
+	finding.File = redacttext.Text(finding.File).Text
+	finding.Title = redacttext.Text(finding.Title).Text
+	finding.Evidence = redacttext.Text(finding.Evidence).Text
+	finding.Recommendation = redacttext.Text(finding.Recommendation).Text
+	finding.Source = redacttext.Text(finding.Source).Text
+	finding.RuleID = redacttext.Text(finding.RuleID).Text
+	finding.Status = redacttext.Text(finding.Status).Text
+	finding.Fingerprint = redacttext.Text(finding.Fingerprint).Text
+	return finding
 }
 
 // Fingerprint returns the stable duplicate key requested by the issue.

@@ -32,3 +32,19 @@ func TestEvaluatePublicFixturesMeetsAcceptanceThresholds(t *testing.T) {
 		t.Fatalf("RedactionRecall = %.2f, want >= 0.95", result.RedactionRecall)
 	}
 }
+
+func TestExpectedSecretWithoutSecurityFindingDoesNotCountAsRedacted(t *testing.T) {
+	result, err := EvaluatePublicFixtures(context.Background(), filepath.Join("..", "..", "testdata", "fixtures"), []ExpectedFixture{{
+		Name:         "clean.diff",
+		ExpectSecret: true,
+	}})
+	if err != nil {
+		t.Fatalf("EvaluatePublicFixtures() error = %v", err)
+	}
+	if result.SecretSampleCount != 1 {
+		t.Fatalf("SecretSampleCount = %d, want 1", result.SecretSampleCount)
+	}
+	if result.RedactedSampleCount != 0 || result.RedactionRecall != 0 {
+		t.Fatalf("redaction metrics = %d/%.2f, want 0/0 for missing secret finding", result.RedactedSampleCount, result.RedactionRecall)
+	}
+}

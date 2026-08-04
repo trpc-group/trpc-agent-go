@@ -141,6 +141,69 @@ func TestRunRecordsConfiguredModelPlan(t *testing.T) {
 	}
 }
 
+func TestPlanReviewBoundsChangedFilePayload(t *testing.T) {
+	type observedRequest struct {
+		body       chatCompletionRequest
+		contentLen int64
+		err        error
+	}
+	observed := make(chan observedRequest, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body chatCompletionRequest
+		err := json.NewDecoder(r.Body).Decode(&body)
+		observed <- observedRequest{body: body, contentLen: r.ContentLength, err: err}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"commands\":[\"go test ./...\"]}"}}]}`))
+	}))
+	defer server.Close()
+
+	files := make([]review.DiffFile, maxModelPlanningFiles+10)
+	for index := range files {
+		files[index].NewPath = strings.Repeat("p", 512) + ".go"
+	}
+	_, err := (EnvPlanner{
+		APIKey:     "test-key",
+		BaseURL:    server.URL,
+		HTTPClient: server.Client(),
+	}).PlanReview(context.Background(), PlanRequest{Model: "gpt-review", Runtime: "container", Files: files})
+	if err != nil {
+		t.Fatalf("PlanReview() error = %v", err)
+	}
+	request := <-observed
+	if request.err != nil {
+		t.Fatalf("decode model request: %v", request.err)
+	}
+	if request.contentLen <= 0 || request.contentLen > maxModelPlanningRequestBytes {
+		t.Fatalf("model request content length = %d, want 0 < length <= %d", request.contentLen, maxModelPlanningRequestBytes)
+	}
+	if len(request.body.Messages) < 2 {
+		t.Fatalf("model planning request missing user message: %#v", request.body.Messages)
+	}
+	var prompt struct {
+		ChangedFiles          []string `json:"changed_files"`
+		ChangedFileCount      int      `json:"changed_file_count"`
+		ChangedFilesTruncated bool     `json:"changed_files_truncated"`
+	}
+	if err := json.Unmarshal([]byte(request.body.Messages[1].Content), &prompt); err != nil {
+		t.Fatalf("decode bounded planning prompt: %v", err)
+	}
+	if prompt.ChangedFileCount != len(files) {
+		t.Fatalf("changed file count = %d, want %d", prompt.ChangedFileCount, len(files))
+	}
+	if len(prompt.ChangedFiles) > maxModelPlanningFiles {
+		t.Fatalf("changed file sample count = %d, want <= %d", len(prompt.ChangedFiles), maxModelPlanningFiles)
+	}
+	encodedFiles, err := json.Marshal(prompt.ChangedFiles)
+	if err != nil {
+		t.Fatalf("encode changed file sample: %v", err)
+	}
+	if len(encodedFiles) > maxModelPlanningFileBytes {
+		t.Fatalf("encoded changed file sample = %d, want <= %d", len(encodedFiles), maxModelPlanningFileBytes)
+	}
+	if !prompt.ChangedFilesTruncated {
+		t.Fatal("changed_files_truncated = false, want true")
+	}
+}
+
 func TestPlanReviewPreservesModelPlannedCommandsForAudit(t *testing.T) {
 	modelServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body chatCompletionRequest
@@ -882,6 +945,44 @@ func TestRunRedactsMultilinePEMInReportAndStore(t *testing.T) {
 	}
 }
 
+func TestRunReturnsRedactedFindingsBeforeReportWriting(t *testing.T) {
+	diffPath := filepath.Join(t.TempDir(), "secret-resource.diff")
+	diff := "diff --git a/pkg/file.go b/pkg/file.go\n--- a/pkg/file.go\n+++ b/pkg/file.go\n@@ -1,0 +1,6 @@\n+package pkg\n+import \"os\"\n+func Load() error {\n+\tf, _ := os.Open(\"password=supersecretvalue\")\n+\treturn nil\n+}\n"
+	if err := os.WriteFile(diffPath, []byte(diff), 0o600); err != nil {
+		t.Fatalf("WriteFile(diff) error = %v", err)
+	}
+	outDir := t.TempDir()
+	result, err := Run(context.Background(), Options{
+		DiffFile: diffPath,
+		OutDir:   outDir,
+		DBPath:   filepath.Join(outDir, "review_agent.db"),
+		Runtime:  "fake",
+		Now:      fixedTestTime(),
+		Planner: plannerFunc(func(ctx context.Context, req PlanRequest) (review.ReviewPlan, error) {
+			return review.ReviewPlan{Model: "test", Provider: "test", Source: "test", Skill: defaultSkillName, Runtime: "fake"}, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	var sawResource bool
+	for _, finding := range result.Report.Findings {
+		raw, marshalErr := json.Marshal(finding)
+		if marshalErr != nil {
+			t.Fatalf("Marshal(finding) error = %v", marshalErr)
+		}
+		if strings.Contains(string(raw), "supersecretvalue") {
+			t.Fatalf("Run() returned raw secret finding: %s", raw)
+		}
+		if finding.RuleID == "resource.close_missing" {
+			sawResource = true
+		}
+	}
+	if !sawResource {
+		t.Fatalf("Run() findings = %#v, want resource.close_missing", result.Report.Findings)
+	}
+}
+
 func TestStandaloneDiffFileCanUseSelectedRepositoryWorkspace(t *testing.T) {
 	diffPath := filepath.Join(t.TempDir(), "change.diff")
 	if err := os.WriteFile(diffPath, []byte("diff --git a/pkg/a.go b/pkg/a.go\n--- a/pkg/a.go\n+++ b/pkg/a.go\n@@ -1 +1 @@\n-package pkg\n+package pkg\n"), 0o600); err != nil {
@@ -1025,6 +1126,69 @@ func TestBuildReviewSnapshotRestrictsUntrackedFilesToSubmittedPaths(t *testing.T
 	}
 	if _, err := os.Stat(filepath.Join(snapshot, "private.txt")); !os.IsNotExist(err) {
 		t.Fatalf("non-selected untracked file was staged, stat err=%v", err)
+	}
+}
+
+func TestStagedSnapshotDerivesDependencyModeFromFilteredSnapshot(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	repo := t.TempDir()
+	runGitCommand(t, repo, "init")
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("vendor/\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(.gitignore) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module example.test\n\ngo 1.21\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(go.mod) error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(repo, "vendor"), 0o700); err != nil {
+		t.Fatalf("MkdirAll(vendor) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "vendor", "modules.txt"), []byte("# ignored vendor\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(vendor/modules.txt) error = %v", err)
+	}
+	runGitCommand(t, repo, "add", ".gitignore", "go.mod")
+
+	fs := &recordingStageFS{}
+	cleanup, mode, err := stageReviewWorkspaceWithSnapshotPathsAndMode(context.Background(), fs, codeexecutor.Workspace{Path: "/work"}, "e2b", repo, "", true, nil)
+	if err != nil {
+		t.Fatalf("stageReviewWorkspaceWithSnapshotPathsAndMode() error = %v", err)
+	}
+	defer cleanup()
+	if mode == dependencyModeVendor {
+		t.Fatalf("dependency mode = %q, want mode derived without omitted vendor directory", mode)
+	}
+	if got := workspaceRuntimeEnvForDependencyMode("e2b", mode)["GOFLAGS"]; got == "-mod=vendor" {
+		t.Fatalf("GOFLAGS = %q, want prepared-cache mode without vendor", got)
+	}
+	if _, err := os.Stat(filepath.Join(fs.src, "vendor")); !os.IsNotExist(err) {
+		t.Fatalf("filtered snapshot contains ignored vendor directory, stat err=%v", err)
+	}
+}
+
+func TestSelectedUntrackedReviewFilesUseBoundedPathspecBatches(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	repo := t.TempDir()
+	runGitCommand(t, repo, "init")
+	selected := []string{"selected-a.go", "selected-b.go", "selected-c.go"}
+	for _, name := range selected {
+		if err := os.WriteFile(filepath.Join(repo, name), []byte(name+"\n"), 0o600); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", name, err)
+		}
+	}
+	allowed := snapshotPathSet(selected)
+	var files []reviewSnapshotFile
+	if err := appendUntrackedReviewFilesInBatches(context.Background(), repo, len(selected), allowed, &files, selected, 1, int64(len(selected[0])+1)); err != nil {
+		t.Fatalf("appendUntrackedReviewFilesInBatches() error = %v", err)
+	}
+	got := make([]string, 0, len(files))
+	for _, file := range files {
+		got = append(got, file.Path)
+	}
+	if !reflect.DeepEqual(got, selected) {
+		t.Fatalf("selected untracked files = %#v, want %#v", got, selected)
 	}
 }
 

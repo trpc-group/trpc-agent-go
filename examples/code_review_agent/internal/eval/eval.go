@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/diffparse"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/redact"
@@ -125,12 +126,45 @@ func stringSet(values []string) map[string]bool {
 }
 
 func allFindingsRedacted(findings []review.Finding) bool {
+	if !hasSecretFinding(findings) {
+		return false
+	}
 	for _, finding := range findings {
-		if redact.ContainsSecret(finding.Evidence) || redact.ContainsSecret(finding.Recommendation) {
+		if findingContainsSecret(finding) {
 			return false
 		}
 	}
 	return true
+}
+
+func hasSecretFinding(findings []review.Finding) bool {
+	for _, finding := range findings {
+		if strings.HasPrefix(finding.RuleID, "security.") {
+			return true
+		}
+	}
+	return false
+}
+
+func findingContainsSecret(finding review.Finding) bool {
+	for _, value := range []string{
+		finding.ID,
+		finding.Severity,
+		finding.Category,
+		finding.File,
+		finding.Title,
+		finding.Evidence,
+		finding.Recommendation,
+		finding.Source,
+		finding.RuleID,
+		finding.Status,
+		finding.Fingerprint,
+	} {
+		if redact.ContainsSecret(value) {
+			return true
+		}
+	}
+	return false
 }
 
 func highConfidenceFindingCount(findings []review.Finding) int {

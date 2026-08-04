@@ -11,6 +11,7 @@ package scripts
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -48,6 +49,26 @@ func TestGoChecksReturnsFindings(t *testing.T) {
 	}
 	if !sawSecret {
 		t.Fatalf("GoChecks() findings = %#v, want security.secret_leak", findings)
+	}
+}
+
+func TestGoChecksRedactsNonSecretFindingEvidence(t *testing.T) {
+	diff := "diff --git a/pkg/file.go b/pkg/file.go\n--- a/pkg/file.go\n+++ b/pkg/file.go\n@@ -1,0 +1,6 @@\n+package pkg\n+import \"os\"\n+func Load() error {\n+\tf, _ := os.Open(\"password=supersecretvalue\")\n+\treturn nil\n+}\n"
+	findings, err := GoChecks(diff)
+	if err != nil {
+		t.Fatalf("GoChecks() error = %v", err)
+	}
+	var sawResource bool
+	for _, finding := range findings {
+		if strings.Contains(finding.Evidence, "supersecretvalue") || strings.Contains(finding.Recommendation, "supersecretvalue") {
+			t.Fatalf("GoChecks() leaked secret: %#v", finding)
+		}
+		if finding.RuleID == "resource.close_missing" {
+			sawResource = true
+		}
+	}
+	if !sawResource {
+		t.Fatalf("GoChecks() findings = %#v, want resource.close_missing", findings)
 	}
 }
 

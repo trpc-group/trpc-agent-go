@@ -47,27 +47,32 @@ import (
 )
 
 const (
-	defaultMaxSandboxOutput = 4096
-	defaultSkillName        = "code-review"
-	defaultSandboxTimeout   = 30 * time.Second
-	failedTaskFinishTimeout = 3 * time.Second
-	containerCPULimit       = int64(1_000_000_000)
-	containerPIDsLimit      = int64(128)
-	containerStorageLimit   = "512m"
-	containerUser           = "65532:65532"
-	containerSandboxImage   = "golang:1.24.6"
-	containerGoBuildCache   = "/tmp/go-build"
-	containerGoModCache     = "/go/pkg/mod"
-	dependencyPrepTimeout   = 2 * time.Minute
-	dependencyPrepMaxBytes  = int64(512 << 20)
-	dependencyPrepMaxOutput = 32 << 10
-	reviewSnapshotMaxBytes  = int64(512 << 20)
-	maxReviewSnapshotFiles  = 100_000
-	maxModelPlanCommands    = 32
-	maxModelCommandBytes    = 4 << 10
-	maxGoMetadataBytes      = int64(1 << 20)
-	reviewAgentModuleDir    = "examples/code_review_agent"
-	rootModuleDecl          = "module trpc.group/trpc-go/trpc-agent-go"
+	defaultMaxSandboxOutput       = 4096
+	defaultSkillName              = "code-review"
+	defaultSandboxTimeout         = 30 * time.Second
+	failedTaskFinishTimeout       = 3 * time.Second
+	containerCPULimit             = int64(1_000_000_000)
+	containerPIDsLimit            = int64(128)
+	containerStorageLimit         = "512m"
+	containerUser                 = "65532:65532"
+	containerSandboxImage         = "golang:1.24.6"
+	containerGoBuildCache         = "/tmp/go-build"
+	containerGoModCache           = "/go/pkg/mod"
+	dependencyPrepTimeout         = 2 * time.Minute
+	dependencyPrepMaxBytes        = int64(512 << 20)
+	dependencyPrepMaxOutput       = 32 << 10
+	reviewSnapshotMaxBytes        = int64(512 << 20)
+	maxReviewSnapshotFiles        = 100_000
+	maxModelPlanningFiles         = 256
+	maxModelPlanningFileBytes     = 16 << 10
+	maxModelPlanningRequestBytes  = 64 << 10
+	maxModelPlanCommands          = 32
+	maxModelCommandBytes          = 4 << 10
+	maxGoMetadataBytes            = int64(1 << 20)
+	maxSnapshotPathspecBatchPaths = 256
+	maxSnapshotPathspecBatchBytes = 32 << 10
+	reviewAgentModuleDir          = "examples/code_review_agent"
+	rootModuleDecl                = "module trpc.group/trpc-go/trpc-agent-go"
 )
 
 var workspaceCleanupTimeout = 2 * time.Second
@@ -253,6 +258,9 @@ func (p EnvPlanner) requestModelPlan(ctx context.Context, modelName string, req 
 	if err != nil {
 		return modelPlanEnvelope{}, fmt.Errorf("encode model request: %w", err)
 	}
+	if len(body) > maxModelPlanningRequestBytes {
+		return modelPlanEnvelope{}, fmt.Errorf("model planning request exceeded %d bytes", maxModelPlanningRequestBytes)
+	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, chatCompletionsURL(p.BaseURL), bytes.NewReader(body))
 	if err != nil {
 		return modelPlanEnvelope{}, fmt.Errorf("build model request: %w", err)
@@ -299,16 +307,14 @@ func chatCompletionsURL(baseURL string) string {
 }
 
 func buildPlanningPrompt(req PlanRequest) string {
-	var files []string
-	for _, file := range req.Files {
-		files = append(files, redact.Text(file.NewPath).Text)
-	}
-	sort.Strings(files)
+	files, fileCount, filesTruncated := boundedPlanningFiles(req.Files)
 	payload := map[string]any{
-		"skill":            req.Skill,
-		"runtime":          req.Runtime,
-		"changed_files":    files,
-		"allowed_commands": newSandboxWorkspace(req.WorkDir).commandAllowlist(),
+		"skill":                   req.Skill,
+		"runtime":                 req.Runtime,
+		"changed_files":           files,
+		"changed_file_count":      fileCount,
+		"changed_files_truncated": filesTruncated,
+		"allowed_commands":        newSandboxWorkspace(req.WorkDir).commandAllowlist(),
 		"rule_sources": []string{
 			"skills/code-review/SKILL.md",
 			"skills/code-review/docs/rules.md",
@@ -323,6 +329,32 @@ func buildPlanningPrompt(req PlanRequest) string {
 		return "{}"
 	}
 	return string(raw)
+}
+
+func boundedPlanningFiles(files []review.DiffFile) ([]string, int, bool) {
+	sample := make([]string, 0, minInt(len(files), maxModelPlanningFiles))
+	encodedBytes := 2 // The opening and closing brackets of the JSON array.
+	truncated := false
+	for _, file := range files {
+		path := redact.Text(file.NewPath).Text
+		encodedPath, err := json.Marshal(path)
+		if err != nil {
+			truncated = true
+			continue
+		}
+		candidateBytes := encodedBytes + len(encodedPath)
+		if len(sample) > 0 {
+			candidateBytes++ // The comma between JSON array elements.
+		}
+		if len(sample) >= maxModelPlanningFiles || candidateBytes > maxModelPlanningFileBytes {
+			truncated = true
+			continue
+		}
+		sample = append(sample, path)
+		encodedBytes = candidateBytes
+	}
+	sort.Strings(sample)
+	return sample, len(files), truncated
 }
 
 func redactStrings(in []string) []string {
@@ -931,12 +963,6 @@ func newWorkspaceRuntimeWithSnapshotPaths(ctx context.Context, runtimeName strin
 	var eng codeexecutor.Engine
 	var closeFn func() error
 	dependencyMode := dependencyModeNone
-	if runtimeName == "container" || runtimeName == "e2b" {
-		dependencyMode, err = vendorDependencyMode(filepath.Join(repoRoot, filepath.FromSlash(workspace.dependencySubdir())))
-		if err != nil {
-			return nil, nil, err
-		}
-	}
 	switch runtimeName {
 	case "local":
 		if err := validateRuntimePolicy(runtimeName, allowTrustedLocal); err != nil {
@@ -992,7 +1018,7 @@ func newWorkspaceRuntimeWithSnapshotPaths(ctx context.Context, runtimeName strin
 			snapshotCleanup()
 		}
 	})
-	snapshotCleanup, err = stageReviewWorkspaceWithSnapshotPaths(ctx, eng.FS(), ws, runtimeName, repoRoot, workspace.dependencySubdir(), allowTrustedHostPreparation, snapshotPaths)
+	snapshotCleanup, dependencyMode, err = stageReviewWorkspaceWithSnapshotPathsAndMode(ctx, eng.FS(), ws, runtimeName, repoRoot, workspace.dependencySubdir(), allowTrustedHostPreparation, snapshotPaths)
 	if err != nil {
 		cleanup(context.Background())
 		return nil, nil, err
@@ -1068,26 +1094,33 @@ func cleanupWorkspaceResources(ctx context.Context, manager codeexecutor.Workspa
 }
 
 func stageReviewWorkspace(ctx context.Context, fs codeexecutor.WorkspaceFS, ws codeexecutor.Workspace, runtimeName string, repoRoot string, dependencySubdir string, allowTrustedHostPreparation bool) (func(), error) {
-	return stageReviewWorkspaceWithSnapshotPaths(ctx, fs, ws, runtimeName, repoRoot, dependencySubdir, allowTrustedHostPreparation, nil)
+	cleanup, _, err := stageReviewWorkspaceWithSnapshotPathsAndMode(ctx, fs, ws, runtimeName, repoRoot, dependencySubdir, allowTrustedHostPreparation, nil)
+	return cleanup, err
 }
 
 func stageReviewWorkspaceWithSnapshotPaths(ctx context.Context, fs codeexecutor.WorkspaceFS, ws codeexecutor.Workspace, runtimeName string, repoRoot string, dependencySubdir string, allowTrustedHostPreparation bool, snapshotPaths []string) (func(), error) {
+	cleanup, _, err := stageReviewWorkspaceWithSnapshotPathsAndMode(ctx, fs, ws, runtimeName, repoRoot, dependencySubdir, allowTrustedHostPreparation, snapshotPaths)
+	return cleanup, err
+}
+
+func stageReviewWorkspaceWithSnapshotPathsAndMode(ctx context.Context, fs codeexecutor.WorkspaceFS, ws codeexecutor.Workspace, runtimeName string, repoRoot string, dependencySubdir string, allowTrustedHostPreparation bool, snapshotPaths []string) (func(), sandboxDependencyMode, error) {
 	if runtimeName == "local" {
-		return nil, nil
+		return nil, dependencyModeNone, nil
 	}
 	stageRoot, snapshotCleanup, err := buildReviewSnapshotWithSnapshotPaths(ctx, repoRoot, snapshotPaths)
 	if err != nil {
-		return nil, err
+		return nil, dependencyModeNone, err
 	}
 	if runtimeName == "container" {
 		if err := validateContainerToolchain(stageRoot, dependencySubdir); err != nil {
 			snapshotCleanup()
-			return nil, err
+			return nil, dependencyModeNone, err
 		}
 	}
-	if err := prepareSandboxDependencies(ctx, stageRoot, dependencySubdir, allowTrustedHostPreparation); err != nil {
+	dependencyMode, err := prepareSandboxDependenciesWithMode(ctx, stageRoot, dependencySubdir, allowTrustedHostPreparation)
+	if err != nil {
 		snapshotCleanup()
-		return nil, err
+		return nil, dependencyModeNone, err
 	}
 	if err := lockReviewSnapshotSource(stageRoot, []string{
 		filepath.Join(stageRoot, ".gopath"),
@@ -1095,15 +1128,15 @@ func stageReviewWorkspaceWithSnapshotPaths(ctx context.Context, fs codeexecutor.
 		filepath.Join(stageRoot, ".gocache"),
 	}); err != nil {
 		snapshotCleanup()
-		return nil, err
+		return nil, dependencyModeNone, err
 	}
 	if err := fs.StageDirectory(ctx, ws, stageRoot, codeexecutor.DirWork, codeexecutor.StageOptions{AllowMount: true}); err != nil {
 		if snapshotCleanup != nil {
 			snapshotCleanup()
 		}
-		return nil, err
+		return nil, dependencyModeNone, err
 	}
-	return snapshotCleanup, nil
+	return snapshotCleanup, dependencyMode, nil
 }
 
 func buildReviewSnapshot(ctx context.Context, repoRoot string) (string, func(), error) {
@@ -1243,6 +1276,11 @@ func restoreReviewSnapshotPermissions(root string) error {
 }
 
 func prepareSandboxDependencies(ctx context.Context, snapshotRoot string, dependencySubdir string, allowTrustedHostPreparation bool) error {
+	_, err := prepareSandboxDependenciesWithMode(ctx, snapshotRoot, dependencySubdir, allowTrustedHostPreparation)
+	return err
+}
+
+func prepareSandboxDependenciesWithMode(ctx context.Context, snapshotRoot string, dependencySubdir string, allowTrustedHostPreparation bool) (sandboxDependencyMode, error) {
 	moduleDir := filepath.Join(snapshotRoot, filepath.FromSlash(dependencySubdir))
 	cacheRoot := filepath.Join(snapshotRoot, ".gopath")
 	modCache := filepath.Join(snapshotRoot, ".gomodcache")
@@ -1251,25 +1289,25 @@ func prepareSandboxDependencies(ctx context.Context, snapshotRoot string, depend
 	tmpDir := filepath.Join(snapshotRoot, ".tmp")
 	for _, dir := range []string{cacheRoot, modCache, buildCache, homeDir, tmpDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return fmt.Errorf("create sandbox dependency cache: %w", err)
+			return dependencyModeNone, fmt.Errorf("create sandbox dependency cache: %w", err)
 		}
 	}
 	_, moduleErr := os.Stat(filepath.Join(moduleDir, "go.mod"))
 	if errors.Is(moduleErr, os.ErrNotExist) {
-		return makeSandboxCachesWritable(snapshotRoot, []string{cacheRoot, modCache, buildCache})
+		return dependencyModeNone, makeSandboxCachesWritable(snapshotRoot, []string{cacheRoot, modCache, buildCache})
 	}
 	if moduleErr != nil {
-		return fmt.Errorf("stat sandbox go.mod: %w", moduleErr)
+		return dependencyModeNone, fmt.Errorf("stat sandbox go.mod: %w", moduleErr)
 	}
 	dependencyMode, err := dependencyModeForModule(moduleDir, modCache)
 	if err != nil {
-		return fmt.Errorf("inspect sandbox dependencies: %w", err)
+		return dependencyModeNone, fmt.Errorf("inspect sandbox dependencies: %w", err)
 	}
 	if dependencyMode == dependencyModeHostPreparation && !allowTrustedHostPreparation {
-		return fmt.Errorf("host-side dependency preparation is disabled for untrusted review input; vendor dependencies or pre-provision .gomodcache, or rerun with --allow-trusted-host-preparation")
+		return dependencyModeNone, fmt.Errorf("host-side dependency preparation is disabled for untrusted review input; vendor dependencies or pre-provision .gomodcache, or rerun with --allow-trusted-host-preparation")
 	}
 	if dependencyMode == dependencyModeVendor || dependencyMode == dependencyModePreProvisioned {
-		return makeSandboxCachesWritable(snapshotRoot, []string{cacheRoot, modCache, buildCache})
+		return dependencyMode, makeSandboxCachesWritable(snapshotRoot, []string{cacheRoot, modCache, buildCache})
 	}
 	prepCtx, cancel := context.WithTimeout(ctx, dependencyPrepTimeout)
 	defer cancel()
@@ -1282,32 +1320,17 @@ func prepareSandboxDependencies(ctx context.Context, snapshotRoot string, depend
 	cmd.Stderr = &output
 	if err := cmd.Run(); err != nil {
 		if errors.Is(prepCtx.Err(), context.DeadlineExceeded) {
-			return fmt.Errorf("prepare sandbox dependencies timed out after %s", dependencyPrepTimeout)
+			return dependencyModeNone, fmt.Errorf("prepare sandbox dependencies timed out after %s", dependencyPrepTimeout)
 		}
-		return fmt.Errorf("prepare sandbox dependencies: %w: %s", err, redact.Text(strings.TrimSpace(output.String())).Text)
+		return dependencyModeNone, fmt.Errorf("prepare sandbox dependencies: %w: %s", err, redact.Text(strings.TrimSpace(output.String())).Text)
 	}
 	if err := ensureDependencyCacheWithinLimit([]string{cacheRoot, modCache, buildCache}, dependencyPrepMaxBytes); err != nil {
-		return err
-	}
-	if err := makeSandboxCachesWritable(snapshotRoot, []string{cacheRoot, modCache, buildCache}); err != nil {
-		return err
-	}
-	return nil
-}
-
-func vendorDependencyMode(moduleDir string) (sandboxDependencyMode, error) {
-	path := filepath.Join(moduleDir, "vendor", "modules.txt")
-	info, err := os.Lstat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return dependencyModeNone, nil
-	}
-	if err != nil {
 		return dependencyModeNone, err
 	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return dependencyModeNone, fmt.Errorf("vendor modules manifest %s must be a regular file", path)
+	if err := makeSandboxCachesWritable(snapshotRoot, []string{cacheRoot, modCache, buildCache}); err != nil {
+		return dependencyModeNone, err
 	}
-	return dependencyModeVendor, nil
+	return dependencyModeHostPreparation, nil
 }
 
 func dependencyModeForModule(moduleDir string, modCache string) (sandboxDependencyMode, error) {
@@ -1496,7 +1519,6 @@ func trackedReviewFilesWithPaths(ctx context.Context, repoRoot string, maxFiles 
 		return nil, fmt.Errorf("list tracked review files: %w", err)
 	}
 	allowed := snapshotPathSet(snapshotPaths)
-	args := []string{"ls-files", "-z", "--others", "--exclude-standard"}
 	if allowed != nil {
 		if len(allowed) == 0 {
 			return files, nil
@@ -1506,14 +1528,50 @@ func trackedReviewFilesWithPaths(ctx context.Context, repoRoot string, maxFiles 
 			selected = append(selected, path)
 		}
 		sort.Strings(selected)
-		args = append([]string{"--literal-pathspecs"}, args...)
-		args = append(args, "--")
-		args = append(args, selected...)
+		if err := appendUntrackedReviewFilesInBatches(ctx, repoRoot, maxFiles, allowed, &files, selected, maxSnapshotPathspecBatchPaths, maxSnapshotPathspecBatchBytes); err != nil {
+			return nil, fmt.Errorf("list selected untracked review files: %w", err)
+		}
+		return files, nil
 	}
-	if err := appendReviewFiles(ctx, repoRoot, maxFiles, false, allowed, &files, args...); err != nil {
+	if err := appendReviewFiles(ctx, repoRoot, maxFiles, false, allowed, &files, "ls-files", "-z", "--others", "--exclude-standard"); err != nil {
 		return nil, fmt.Errorf("list untracked review files: %w", err)
 	}
 	return files, nil
+}
+
+func appendUntrackedReviewFilesInBatches(ctx context.Context, repoRoot string, maxFiles int, allowed map[string]struct{}, files *[]reviewSnapshotFile, selected []string, maxBatchPaths int, maxBatchBytes int64) error {
+	if len(selected) == 0 {
+		return nil
+	}
+	if maxBatchPaths <= 0 || maxBatchBytes <= 0 {
+		return fmt.Errorf("invalid untracked pathspec batch limits")
+	}
+	flush := func(batch []string) error {
+		if len(batch) == 0 {
+			return nil
+		}
+		args := []string{"--literal-pathspecs", "ls-files", "-z", "--others", "--exclude-standard", "--"}
+		args = append(args, batch...)
+		return appendReviewFiles(ctx, repoRoot, maxFiles, false, allowed, files, args...)
+	}
+	batch := make([]string, 0, maxBatchPaths)
+	var batchBytes int64
+	for _, path := range selected {
+		pathBytes := int64(len(path) + 1)
+		if pathBytes > maxBatchBytes {
+			return fmt.Errorf("untracked pathspec %q exceeds %d bytes", path, maxBatchBytes)
+		}
+		if len(batch) > 0 && (len(batch) >= maxBatchPaths || batchBytes+pathBytes > maxBatchBytes) {
+			if err := flush(batch); err != nil {
+				return err
+			}
+			batch = batch[:0]
+			batchBytes = 0
+		}
+		batch = append(batch, path)
+		batchBytes += pathBytes
+	}
+	return flush(batch)
 }
 
 func snapshotPathSet(paths []string) map[string]struct{} {
