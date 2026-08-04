@@ -52,7 +52,7 @@ func WithSession(sess *session.Session) Option {
 //   - {name?} or {{name?}} for optional identifiers
 //   - {app:key}, {user:key}, or {temp:key} for namespaced session state
 //   - {invocation:key} for invocation-scoped state
-//   - {runtime:key} for run-scoped state from RunOptions.RuntimeState
+//   - {runtime:key} or {runtime:key?} for run-scoped state from RunOptions.RuntimeState
 //   - {artifact.filename} or {artifact.filename?} for artifact references
 //
 // {invocation:*} placeholders are resolved only from invocation state, and
