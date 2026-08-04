@@ -200,8 +200,10 @@ func TestModel_convertMessages(t *testing.T) {
 				},
 			},
 			want: []*genai.Content{
-				genai.NewContentFromText(text, genai.RoleModel),
-				genai.NewContentFromText(subText, genai.RoleModel),
+				genai.NewContentFromParts([]*genai.Part{
+					{Text: text},
+					{Text: subText},
+				}, genai.RoleModel),
 			},
 		},
 		{
@@ -233,8 +235,6 @@ func TestModel_convertMessages(t *testing.T) {
 			want: []*genai.Content{
 				genai.NewContentFromParts([]*genai.Part{
 					genai.NewPartFromURI(imageURL, ""),
-				}, genai.RoleUser),
-				genai.NewContentFromParts([]*genai.Part{
 					genai.NewPartFromBytes([]byte(imageData), ""),
 				}, genai.RoleUser),
 			},
@@ -274,8 +274,6 @@ func TestModel_convertMessages(t *testing.T) {
 			want: []*genai.Content{
 				genai.NewContentFromParts([]*genai.Part{
 					genai.NewPartFromURI(audioURL, "audio/mpeg"),
-				}, genai.RoleUser),
-				genai.NewContentFromParts([]*genai.Part{
 					genai.NewPartFromBytes([]byte(audioData), "audio/wav"),
 				}, genai.RoleUser),
 			},
@@ -315,8 +313,6 @@ func TestModel_convertMessages(t *testing.T) {
 			want: []*genai.Content{
 				genai.NewContentFromParts([]*genai.Part{
 					genai.NewPartFromURI(videoURL, "video/mp4"),
-				}, genai.RoleUser),
-				genai.NewContentFromParts([]*genai.Part{
 					genai.NewPartFromBytes([]byte(videoData), "video/mp4"),
 				}, genai.RoleUser),
 			},
@@ -1153,6 +1149,82 @@ func TestModel_convertMessageContent_PreservesFunctionCallThoughtSignature(t *te
 	assert.Equal(t, signature, part.ThoughtSignature)
 }
 
+func TestModel_convertMessageContent_KeepsTextAndToolCallInOneAssistantTurn(t *testing.T) {
+	message := model.Message{
+		Role:    model.RoleAssistant,
+		Content: "calling tool",
+		ToolCalls: []model.ToolCall{{
+			ID: "call-1",
+			Function: model.FunctionDefinitionParam{
+				Name:      "weather",
+				Arguments: []byte(`{"city":"shenzhen"}`),
+			},
+		}},
+	}
+
+	contents := (&Model{}).convertMessageContent(message)
+
+	require.Len(t, contents, 1)
+	require.Equal(t, genai.RoleModel, contents[0].Role)
+	require.Len(t, contents[0].Parts, 2)
+	assert.Equal(t, "calling tool", contents[0].Parts[0].Text)
+	require.NotNil(t, contents[0].Parts[1].FunctionCall)
+	assert.Equal(t, "call-1", contents[0].Parts[1].FunctionCall.ID)
+}
+
+func TestModel_convertMessageContent_TextSignatureDoesNotCoverAssistantToolCall(t *testing.T) {
+	signature := []byte("text-thought-signature")
+	message := model.Message{
+		Role:               model.RoleAssistant,
+		Content:            "calling tool",
+		ReasoningSignature: base64.StdEncoding.EncodeToString(signature),
+		ToolCalls: []model.ToolCall{{
+			ID: "call-1",
+			Function: model.FunctionDefinitionParam{
+				Name:      "weather",
+				Arguments: []byte(`{"city":"shenzhen"}`),
+			},
+		}},
+	}
+
+	contents := (&Model{}).convertMessageContent(message)
+
+	require.Len(t, contents, 1)
+	require.Len(t, contents[0].Parts, 2)
+	assert.Equal(t, signature, contents[0].Parts[0].ThoughtSignature)
+	require.NotNil(t, contents[0].Parts[1].FunctionCall)
+	assert.Equal(
+		t,
+		[]byte(geminiSkipThoughtSignatureValidator),
+		contents[0].Parts[1].ThoughtSignature,
+	)
+}
+
+func TestModel_convertMessageContent_UnemittedTextSignatureDoesNotCoverToolCall(t *testing.T) {
+	message := model.Message{
+		Role:               model.RoleAssistant,
+		ReasoningSignature: base64.StdEncoding.EncodeToString([]byte("unused-signature")),
+		ToolCalls: []model.ToolCall{{
+			ID: "call-1",
+			Function: model.FunctionDefinitionParam{
+				Name:      "weather",
+				Arguments: []byte(`{"city":"shenzhen"}`),
+			},
+		}},
+	}
+
+	contents := (&Model{}).convertMessageContent(message)
+
+	require.Len(t, contents, 1)
+	require.Len(t, contents[0].Parts, 1)
+	require.NotNil(t, contents[0].Parts[0].FunctionCall)
+	assert.Equal(
+		t,
+		[]byte(geminiSkipThoughtSignatureValidator),
+		contents[0].Parts[0].ThoughtSignature,
+	)
+}
+
 func TestModel_convertMessageContent_InjectsSkipValidatorForCrossProviderFunctionCall(t *testing.T) {
 	args := []byte(`{"command":"echo hi"}`)
 	message := model.Message{
@@ -1186,6 +1258,43 @@ func TestModel_convertMessageContent_InjectsSkipValidatorForCrossProviderFunctio
 	require.NotNil(t, second.FunctionCall)
 	assert.Equal(t, []byte(geminiSkipThoughtSignatureValidator), first.ThoughtSignature)
 	assert.Empty(t, second.ThoughtSignature)
+}
+
+func TestModel_convertMessageContent_FirstParallelFunctionCallNeedsSignature(t *testing.T) {
+	signature := []byte("later-call-signature")
+	message := model.Message{
+		Role: model.RoleAssistant,
+		ToolCalls: []model.ToolCall{
+			{
+				ID: "call-1",
+				Function: model.FunctionDefinitionParam{
+					Name:      "weather",
+					Arguments: []byte(`{"city":"shenzhen"}`),
+				},
+			},
+			{
+				ID: "call-2",
+				Function: model.FunctionDefinitionParam{
+					Name:      "weather",
+					Arguments: []byte(`{"city":"guangzhou"}`),
+				},
+				ExtraFields: map[string]any{
+					geminiThoughtSignatureKey: signature,
+				},
+			},
+		},
+	}
+
+	contents := (&Model{}).convertMessageContent(message)
+
+	require.Len(t, contents, 1)
+	require.Len(t, contents[0].Parts, 2)
+	assert.Equal(
+		t,
+		[]byte(geminiSkipThoughtSignatureValidator),
+		contents[0].Parts[0].ThoughtSignature,
+	)
+	assert.Equal(t, signature, contents[0].Parts[1].ThoughtSignature)
 }
 
 func TestModel_convertMessageContent_PreservesGeminiParallelFunctionCalls(t *testing.T) {

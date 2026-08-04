@@ -742,7 +742,7 @@ func normalizeThinkingLevel(level string) genai.ThinkingLevel {
 	return genai.ThinkingLevel(strings.TrimSpace(level))
 }
 
-// convertMessages converts our Message format to OpenAI's format.
+// convertMessages converts model messages to Gemini contents.
 func (m *Model) convertMessages(messages []model.Message) []*genai.Content {
 	result := make([]*genai.Content, 0, len(messages))
 
@@ -752,7 +752,7 @@ func (m *Model) convertMessages(messages []model.Message) []*genai.Content {
 	return result
 }
 
-// convertMessageContent converts message content to user message content union.
+// convertMessageContent converts one model message to one Gemini content.
 func (m *Model) convertMessageContent(
 	msg model.Message,
 ) []*genai.Content {
@@ -775,42 +775,35 @@ func (m *Model) convertMessageContent(
 		}
 		return []*genai.Content{genai.NewContentFromParts([]*genai.Part{part}, genai.RoleUser)}
 	}
-	var (
-		contentParts []*genai.Content
-	)
+	parts := make([]*genai.Part, 0, 1+len(msg.ContentParts)+len(msg.ToolCalls))
 	role := genai.RoleUser
 	if msg.Role == model.RoleAssistant {
 		role = genai.RoleModel
 	}
+	messageSignature := thoughtSignatureFromString(msg.ReasoningSignature)
 	// Add Content as a text part if present.
 	if msg.Content != "" {
-		if signature := thoughtSignatureFromString(msg.ReasoningSignature); len(signature) > 0 {
-			contentParts = append(
-				contentParts,
-				genai.NewContentFromParts([]*genai.Part{{
-					Text:             msg.Content,
-					ThoughtSignature: signature,
-				}}, genai.Role(role)),
-			)
-		} else {
-			contentParts = append(
-				contentParts,
-				genai.NewContentFromText(msg.Content, genai.Role(role)),
-			)
-		}
+		parts = append(parts, &genai.Part{
+			Text:             msg.Content,
+			ThoughtSignature: messageSignature,
+		})
 	}
 	for _, part := range msg.ContentParts {
 		contentPart := m.convertContentPart(part)
 		if contentPart == nil {
 			continue
 		}
-		// For non-file or non-skipped file types, add to contentParts.
-		contentParts = append(contentParts, genai.NewContentFromParts([]*genai.Part{contentPart}, genai.Role(role)))
+		parts = append(parts, contentPart)
 	}
 	if toolCallParts := m.convertAssistantToolCallParts(msg.ToolCalls); len(toolCallParts) > 0 {
-		contentParts = append(contentParts, genai.NewContentFromParts(toolCallParts, genai.Role(role)))
+		parts = append(parts, toolCallParts...)
 	}
-	return contentParts
+	if len(parts) == 0 {
+		return nil
+	}
+	return []*genai.Content{
+		genai.NewContentFromParts(parts, genai.Role(role)),
+	}
 }
 
 // convertAssistantToolCallParts builds function-call parts for one assistant step.
@@ -833,17 +826,13 @@ func (m *Model) convertAssistantToolCallParts(toolCalls []model.ToolCall) []*gen
 }
 
 func assistantStepNeedsBypassSignature(toolCalls []model.ToolCall) bool {
-	hasEmitted := false
 	for _, toolCall := range toolCalls {
 		if toolCall.Function.Name == "" {
 			continue
 		}
-		hasEmitted = true
-		if len(thoughtSignatureFromExtraFields(toolCall.ExtraFields)) > 0 {
-			return false
-		}
+		return len(thoughtSignatureFromExtraFields(toolCall.ExtraFields)) == 0
 	}
-	return hasEmitted
+	return false
 }
 
 func (m *Model) convertToolCallPart(toolCall model.ToolCall, injectBypass bool) *genai.Part {
