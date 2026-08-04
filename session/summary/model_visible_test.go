@@ -21,6 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryview"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	isummarycontext "trpc.group/trpc-go/trpc-agent-go/session/internal/summarycontext"
 	isummaryscope "trpc.group/trpc-go/trpc-agent-go/session/internal/summaryscope"
 )
 
@@ -349,6 +350,185 @@ func TestSummarizeScopesModelVisibleItemsBeforeSkipping(t *testing.T) {
 	lastEventID, ok := sess.GetState(lastIncludedEventIDKey)
 	require.True(t, ok)
 	require.Equal(t, "event-branch", string(lastEventID))
+}
+
+func TestModelVisibleViewMatchesSummaryScope(t *testing.T) {
+	view := &summaryview.View{
+		SessionID:       "session",
+		FilterKey:       "branch",
+		PreviousSummary: "previous",
+	}
+	ctx := summaryview.ContextWithView(context.Background(), view)
+
+	sess := &session.Session{ID: "session"}
+	_, ok := modelVisibleViewForSession(ctx, sess)
+	require.False(t, ok)
+
+	isummaryscope.SetScopeFilterKey(sess, "branch")
+	_, ok = modelVisibleViewForSession(
+		isummarycontext.WithPreviousSummary(ctx, "different"),
+		sess,
+	)
+	require.False(t, ok)
+
+	other := &session.Session{ID: "other"}
+	isummaryscope.SetScopeFilterKey(other, "branch")
+	_, ok = modelVisibleViewForSession(ctx, other)
+	require.False(t, ok)
+
+	composite := &session.Session{ID: "session:branch"}
+	isummaryscope.SetScopeFilterKey(composite, "branch")
+	matched, ok := modelVisibleViewForSession(
+		isummarycontext.WithPreviousSummary(ctx, "previous"),
+		composite,
+	)
+	require.True(t, ok)
+	require.Equal(t, "session", matched.SessionID)
+}
+
+func TestModelVisibleItemContextIsIsolated(t *testing.T) {
+	ctx := contextWithModelVisibleItems(nil, []int{1, 3})
+	indexes, ok := modelVisibleItemsFromContext(ctx)
+	require.True(t, ok)
+	require.Equal(t, []int{1, 3}, indexes)
+
+	indexes[0] = 99
+	again, ok := modelVisibleItemsFromContext(ctx)
+	require.True(t, ok)
+	require.Equal(t, []int{1, 3}, again)
+
+	_, ok = modelVisibleItemsFromContext(nil)
+	require.False(t, ok)
+	_, ok = modelVisibleItemsFromContext(context.Background())
+	require.False(t, ok)
+	_, ok = modelVisibleItemsFromContext(contextWithModelVisibleItems(
+		context.Background(),
+		nil,
+	))
+	require.False(t, ok)
+	_, ok = modelVisibleItemsFromContext(context.WithValue(
+		context.Background(),
+		modelVisibleItemsContextKey{},
+		"invalid",
+	))
+	require.False(t, ok)
+}
+
+func TestSelectSummaryEventsPrependsPreviousSummary(t *testing.T) {
+	now := time.Now()
+	raw := modelVisibleTestEvent(
+		"event-1",
+		"user",
+		model.NewUserMessage("visible"),
+		now,
+	)
+	view := &summaryview.View{
+		SessionID:       "session",
+		PreviousSummary: "previous summary",
+		Items: []summaryview.Item{{
+			Message:        raw.Response.Choices[0].Message,
+			EffectiveEvent: raw,
+			Boundary: summaryview.Boundary{
+				EventID:   raw.ID,
+				Timestamp: raw.Timestamp,
+			},
+		}},
+	}
+	sess := &session.Session{ID: "session", Events: []event.Event{raw}}
+	selection := (&sessionSummarizer{}).selectSummaryEvents(
+		summaryview.ContextWithView(context.Background(), view),
+		sess,
+	)
+
+	require.True(t, selection.effective)
+	require.Len(t, selection.events, 2)
+	require.Equal(t, model.RoleSystem, selection.events[0].Response.Choices[0].Message.Role)
+	require.Equal(
+		t,
+		"previous summary",
+		selection.events[0].Response.Choices[0].Message.Content,
+	)
+	require.Equal(t, []int{0}, selection.itemIndexes)
+	require.Equal(t, "event-1", selection.boundary.EventID)
+	require.Equal(t, []event.Event{raw}, selection.sourceEvents)
+}
+
+func TestSourceEventsThroughBoundaryFallbacks(t *testing.T) {
+	baseTime := time.Now()
+	events := []event.Event{
+		{ID: "first", Timestamp: baseTime},
+		{ID: "second", Timestamp: baseTime.Add(time.Second)},
+		{ID: "third", Timestamp: baseTime.Add(2 * time.Second)},
+	}
+
+	require.Nil(t, sourceEventsThroughBoundary(events, summaryview.Boundary{}))
+	require.Equal(t, events[:2], sourceEventsThroughBoundary(
+		events,
+		summaryview.Boundary{EventID: "second"},
+	))
+	require.Nil(t, sourceEventsThroughBoundary(
+		events,
+		summaryview.Boundary{EventID: "missing"},
+	))
+	require.Equal(t, events[:2], sourceEventsThroughBoundary(
+		events,
+		summaryview.Boundary{
+			EventID:   "missing",
+			Timestamp: baseTime.Add(time.Second),
+		},
+	))
+	require.Equal(t, events, sourceEventsThroughBoundary(
+		events,
+		summaryview.Boundary{Timestamp: baseTime.Add(3 * time.Second)},
+	))
+}
+
+func TestSummaryBoundaryAndEffectiveCheckSession(t *testing.T) {
+	now := time.Now()
+	summarizer := &sessionSummarizer{}
+	summarizer.recordIncludedBoundary(nil, summaryview.Boundary{Timestamp: now})
+
+	sess := &session.Session{ID: "session"}
+	sess.SetState(lastIncludedEventIDKey, []byte("old"))
+	summarizer.recordIncludedBoundary(sess, summaryview.Boundary{})
+	lastEventID, ok := sess.GetState(lastIncludedEventIDKey)
+	require.True(t, ok)
+	require.Equal(t, "old", string(lastEventID))
+
+	summarizer.recordIncludedBoundary(sess, summaryview.Boundary{Timestamp: now})
+	_, ok = sess.GetState(lastIncludedEventIDKey)
+	require.False(t, ok)
+	lastTimestamp, ok := sess.GetState(lastIncludedTsKey)
+	require.True(t, ok)
+	require.Equal(t, now.UTC().Format(time.RFC3339Nano), string(lastTimestamp))
+
+	summarizer.recordIncludedBoundary(sess, summaryview.Boundary{
+		EventID:   "event-1",
+		Timestamp: now,
+	})
+	lastEventID, ok = sess.GetState(lastIncludedEventIDKey)
+	require.True(t, ok)
+	require.Equal(t, "event-1", string(lastEventID))
+
+	effective := modelVisibleTestEvent(
+		"event-1",
+		"user",
+		model.NewUserMessage("effective"),
+		now,
+	)
+	check := summarizer.buildCheckSessionWithSelection(
+		sess,
+		summaryEventSelection{
+			events:    []event.Event{effective},
+			effective: true,
+		},
+	)
+	require.Len(t, check.Events, 1)
+	require.Equal(
+		t,
+		"effective",
+		check.Events[0].Response.Choices[0].Message.Content,
+	)
 }
 
 func modelVisibleTestEvent(

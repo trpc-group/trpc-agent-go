@@ -249,3 +249,111 @@ func TestFinalizeLeavesUnmatchedProjectionUnbound(t *testing.T) {
 	Finalize(nil, &model.Request{}, 1)
 	Finalize(invocation, nil, 1)
 }
+
+func TestViewBoundaryAndBindingEdgeCases(t *testing.T) {
+	view := &View{Items: []Item{{Boundary: Boundary{}}}}
+	_, ok := view.PrefixBoundary(2)
+	require.False(t, ok)
+
+	parent := []model.Message{model.NewUserMessage("visible")}
+	invalidFirst := &View{
+		Bound: true,
+		Items: []Item{{
+			RequestIndex: -1,
+		}},
+	}
+	_, ok = invalidFirst.MessagesForItems(parent, []int{0})
+	require.False(t, ok)
+	invalidFirst.Items[0].RequestIndex = len(parent) + 1
+	_, ok = invalidFirst.MessagesForItems(parent, []int{0})
+	require.False(t, ok)
+
+	invalidItem := &View{
+		Bound: true,
+		Items: []Item{
+			{RequestIndex: 0},
+			{RequestIndex: len(parent)},
+		},
+	}
+	_, ok = invalidItem.MessagesForItems(parent, []int{1})
+	require.False(t, ok)
+
+	require.False(t, bindItems(nil, parent))
+	require.False(t, bindItems(&View{}, parent))
+	require.False(t, bindItems(view, nil))
+
+	messages := []model.Message{
+		model.NewUserMessage("different"),
+		model.NewUserMessage("visible"),
+	}
+	require.Equal(t, 1, findItem(
+		messages,
+		model.NewUserMessage("visible"),
+		0,
+		0,
+		0,
+	))
+	require.Equal(t, -1, findItem(
+		messages,
+		model.NewAssistantMessage("missing"),
+		0,
+		0,
+		0,
+	))
+
+	require.Nil(t, cloneView(nil))
+	setEffectiveMessage(nil, model.NewUserMessage("ignored"))
+	effective := event.Event{Response: &model.Response{
+		Choices: []model.Choice{{Message: model.NewAssistantMessage("old")}},
+	}}
+	setEffectiveMessage(&effective, model.NewAssistantMessage("new"))
+	require.Equal(
+		t,
+		"new",
+		effective.Response.Choices[0].Message.Content,
+	)
+}
+
+func TestMessageIdentityMatchesStableFields(t *testing.T) {
+	require.False(t, messageIdentityMatches(
+		model.NewAssistantMessage("same"),
+		model.NewUserMessage("same"),
+	))
+	require.True(t, messageIdentityMatches(
+		model.NewToolMessage("call", "renamed", "new payload"),
+		model.NewToolMessage("call", "lookup", "old payload"),
+	))
+	require.False(t, messageIdentityMatches(
+		model.NewToolMessage("other", "lookup", "payload"),
+		model.NewToolMessage("call", "lookup", "payload"),
+	))
+
+	wantToolCalls := model.NewAssistantMessage("old")
+	wantToolCalls.ToolCalls = []model.ToolCall{{ID: "call"}}
+	gotToolCalls := model.NewAssistantMessage("new")
+	gotToolCalls.ToolCalls = []model.ToolCall{{
+		ID: "call",
+		Function: model.FunctionDefinitionParam{
+			Name:      "lookup",
+			Arguments: []byte(`{"query":"new"}`),
+		},
+	}}
+	require.True(t, messageIdentityMatches(gotToolCalls, wantToolCalls))
+	gotToolCalls.ToolCalls[0].ID = "other"
+	require.False(t, messageIdentityMatches(gotToolCalls, wantToolCalls))
+
+	wantContent := model.NewUserMessage("same")
+	wantContent.ReasoningContent = "reasoning"
+	gotContent := wantContent
+	gotContent.ReasoningSignature = "provider-specific-signature"
+	require.True(t, messageIdentityMatches(gotContent, wantContent))
+	gotContent.Content = "different"
+	require.False(t, messageIdentityMatches(gotContent, wantContent))
+
+	require.Nil(t, toolCallIDs(nil))
+	require.Equal(
+		t,
+		[]string{"first", "second"},
+		toolCallIDs([]model.ToolCall{{ID: "first"}, {ID: "second"}}),
+	)
+}

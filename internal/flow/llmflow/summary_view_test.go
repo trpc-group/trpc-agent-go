@@ -11,6 +11,7 @@ package llmflow
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -24,13 +25,14 @@ import (
 
 type fixedSummaryViewTokenCounter struct {
 	tokens int
+	err    error
 }
 
 func (c fixedSummaryViewTokenCounter) CountTokens(
 	context.Context,
 	model.Message,
 ) (int, error) {
-	return c.tokens, nil
+	return c.tokens, c.err
 }
 
 func (c fixedSummaryViewTokenCounter) CountTokensRange(
@@ -39,7 +41,7 @@ func (c fixedSummaryViewTokenCounter) CountTokensRange(
 	int,
 	int,
 ) (int, error) {
-	return c.tokens, nil
+	return c.tokens, c.err
 }
 
 func TestFinalizeSummaryViewUsesFinalRequest(t *testing.T) {
@@ -74,4 +76,66 @@ func TestFinalizeSummaryViewUsesFinalRequest(t *testing.T) {
 	require.True(t, view.Bound)
 	require.Equal(t, 42, view.RequestTokens)
 	require.Equal(t, 1, view.Items[0].RequestIndex)
+}
+
+func TestFinalizeSummaryViewHandlesUnavailableInputs(t *testing.T) {
+	counter := fixedSummaryViewTokenCounter{tokens: 42}
+	finalizeSummaryView(context.Background(), nil, &model.Request{}, counter)
+	finalizeSummaryView(context.Background(), agent.NewInvocation(), nil, counter)
+	finalizeSummaryView(
+		context.Background(),
+		agent.NewInvocation(),
+		&model.Request{},
+		counter,
+	)
+}
+
+func TestFinalizeSummaryViewLeavesProjectionOnCountFailure(t *testing.T) {
+	invocation := agent.NewInvocation()
+	summaryview.AttachProjection(invocation, &summaryview.View{
+		ContentRequestLength: 1,
+		Items: []summaryview.Item{{
+			Message:      model.NewUserMessage("visible"),
+			RequestIndex: 0,
+		}},
+	})
+
+	finalizeSummaryView(
+		context.Background(),
+		invocation,
+		&model.Request{Messages: []model.Message{
+			model.NewUserMessage("visible"),
+		}},
+		fixedSummaryViewTokenCounter{err: errors.New("count failed")},
+	)
+
+	view, ok := summaryview.Snapshot(invocation)
+	require.True(t, ok)
+	require.False(t, view.Bound)
+	require.Zero(t, view.RequestTokens)
+}
+
+func TestFinalizeSummaryViewUsesDefaultCounter(t *testing.T) {
+	invocation := agent.NewInvocation()
+	summaryview.AttachProjection(invocation, &summaryview.View{
+		ContentRequestLength: 1,
+		Items: []summaryview.Item{{
+			Message:      model.NewUserMessage("visible"),
+			RequestIndex: 0,
+		}},
+	})
+
+	finalizeSummaryView(
+		context.Background(),
+		invocation,
+		&model.Request{Messages: []model.Message{
+			model.NewUserMessage("visible"),
+		}},
+		nil,
+	)
+
+	view, ok := summaryview.Snapshot(invocation)
+	require.True(t, ok)
+	require.True(t, view.Bound)
+	require.Positive(t, view.RequestTokens)
 }
