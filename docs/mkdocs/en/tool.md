@@ -545,11 +545,14 @@ role, name, tool call ID, ordering, events, and session persistence.
 - A formatting error or panic is reported as an error. The framework does not
   fall back to JSON or run the completed tool again. Formatting is presentation
   only, so a tool that already ran still applies its session state updates.
-- A formatter only receives a result the tool declared. Final results the
-  framework or the callback layer substituted bypass it and keep the default
-  JSON: permission results, state-only final stream results, and the
-  `CustomResult` a `BeforeTool` callback or plugin returns to short-circuit the
-  call, where the tool never ran and the value is not its declared output type.
+- A formatter runs only when the tool declared a result for the call. When it
+  did not, the framework keeps the default JSON: permission results, state-only
+  final stream results, the `CustomResult` a `BeforeTool` callback or plugin
+  returns to short-circuit the call, and stream content the framework merged
+  because a stream ended without `tool.FinalResultChunk` (see below). An
+  `AfterTool` callback replacing the result of a tool that did run is a
+  different case: the replacement is formatted, so it has to be a value the
+  formatter accepts.
 - For other streamable results, only the final result is formatted;
   intermediate events are unchanged. A streamable tool must declare that final
   result with `tool.FinalResultChunk`. When a stream ends without one, the

@@ -121,12 +121,15 @@ func WithOutputSchema(schema *tool.Schema) Option {
 // the default model-visible tool message content; the framework continues to
 // manage the message role, tool name, tool call ID, ordering, and session
 // persistence. When formatter is nil, the framework uses its default JSON
-// representation. A formatter only receives a result the tool returned: when a
-// before-tool callback or plugin short-circuits the call with its own result,
-// the tool never runs and the framework keeps its default JSON. A streamable
-// tool must declare its final result with tool.FinalResultChunk to be
-// formatted; see StreamableFunctionTool.ResultFormatter. Repeated
-// configuration is last-writer-wins.
+// representation. A formatter runs only when the tool declared a result for
+// the call: when a before-tool callback or plugin short-circuits the call with
+// its own result, the tool never runs and the framework keeps its default
+// JSON. An after-tool callback replacing the result of a tool that did run is
+// a different case: the replacement is formatted, so it has to be a value the
+// formatter accepts. A streamable tool must declare its final result with
+// tool.FinalResultChunk to be formatted; see
+// StreamableFunctionTool.ResultFormatter. Repeated configuration is
+// last-writer-wins.
 func WithResultFormatter(formatter resultformat.Formatter) Option {
 	return func(opts *functionToolOptions) {
 		opts.resultFormatter = formatter
