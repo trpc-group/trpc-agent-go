@@ -63,12 +63,14 @@ events, err := runner.Run(
 对整批声明做原子校验，并在本次 invocation 的工具构建与请求处理过程中
 复用预检选中的 repository。`SKILL.md` 始终加载；`Docs` 选择额外的
 Skill 相对路径文档，`IncludeAllDocs` 选择全部辅助文档，二者不能同时
-设置。非空 `Docs` 会替换当前文档选择；二者都未设置时会沿用已有选择，
-与 `skill_load` 保持一致。在默认 `turn` 模式下，上一轮选择会先被清空。
-同一 Skill 的等价声明会在规范化后合并，包括由多个 `WithSkillLoads`
-追加的声明；等价要求规范化后的 `Docs` 集合与 `IncludeAllDocs` 值相同。
-同一 Skill 的选择冲突则视为无效，`MaxLoadedSkills` 按合并后的 Skill 数量
-计算。任一声明失败都会阻止第一次模型请求，业务可通过
+设置。非空 `Docs` 会替换当前文档选择；二者都未设置时，声明本身不会改写
+当前选择，与 `skill_load` 保持一致。在默认 `turn` 模式下，框架会将本轮
+重置与声明合并为同一个原子更新；重置会移除上一轮选择，因此不会继承该
+选择。不执行 `turn` 重置的模式（包括 `session`）会保留仍然存在的选择。
+同一 Skill 的等价声明会在规范化后合并，包括由多个 `WithSkillLoads` 追加的
+声明；等价要求规范化后的 `Docs` 集合与 `IncludeAllDocs` 值相同。同一
+Skill 的选择冲突则视为无效，`MaxLoadedSkills` 按合并后的 Skill 数量计算。
+任一声明失败都会阻止第一次模型请求，业务可通过
 `skill.ErrInvalidLoadRequest` 或 `skill.ErrSkillUnavailable` 识别直接返回的
 初始化错误。Candidate Selector、Ralph Loop 等异步执行 inner Agent 的
 Runner wrapper 仍沿用既有错误事件语义，但同样不会发起模型请求。

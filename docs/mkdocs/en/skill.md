@@ -66,13 +66,16 @@ request processing throughout that invocation. `SKILL.md` is always loaded;
 `Docs` selects additional skill-relative documents, while `IncludeAllDocs`
 selects all supporting documents and cannot be combined with `Docs`. A
 non-empty `Docs` replaces the current document selection. When both fields are
-unset, the existing selection is preserved, matching `skill_load`; under the
-default `turn` mode, the previous turn's selection has already been cleared.
-Equivalent declarations for the same skill are coalesced after normalization,
-including when separate `WithSkillLoads` options append them. Equivalence
-requires the same normalized `Docs` set and `IncludeAllDocs` value. Conflicting
-selections for one skill are invalid, and `MaxLoadedSkills` counts the
-coalesced skills. A failed declaration prevents the first model request and
+unset, the declaration itself leaves any current selection unchanged, matching
+`skill_load`. In the default `turn` mode, the turn reset and declaration are
+applied atomically; the reset removes the previous turn's selection, so it is
+not inherited. Modes without a turn reset, including `session`, preserve a
+selection that is still present. Equivalent declarations for the same skill
+are coalesced after normalization, including when separate `WithSkillLoads`
+options append them. Equivalence requires the same normalized `Docs` set and
+`IncludeAllDocs` value. Conflicting selections for one skill are invalid, and
+`MaxLoadedSkills` counts the coalesced skills. A failed declaration prevents
+the first model request and
 can be classified with `skill.ErrInvalidLoadRequest` or
 `skill.ErrSkillUnavailable` when the agent returns the setup error directly.
 Runner wrappers that execute inner agents asynchronously, such as candidate

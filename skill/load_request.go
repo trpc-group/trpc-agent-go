@@ -30,11 +30,14 @@ var (
 // path. SKILL.md is always loaded. Docs contains additional paths relative to
 // the skill root. IncludeAllDocs loads every supporting document exposed by
 // the repository and is mutually exclusive with Docs. When Docs is empty and
-// IncludeAllDocs is false, an existing document selection is preserved. Under
-// the default turn load mode, the previous turn's selection is cleared before
-// this request is applied. Within one declaration batch, entries with the same
-// normalized Name, Docs set, and IncludeAllDocs value are coalesced; conflicting
-// selections for the same skill are invalid.
+// IncludeAllDocs is false, the request itself leaves any current document
+// selection unchanged. In the default turn load mode, the turn reset and this
+// request are applied atomically; the reset removes the previous turn's
+// selection, so it is not inherited. Modes without a turn reset, including
+// session mode, preserve a selection that is still present. Within one
+// declaration batch, entries with the same normalized Name, Docs set, and
+// IncludeAllDocs value are coalesced; conflicting selections for the same
+// skill are invalid.
 type LoadRequest struct {
 	Name           string
 	Docs           []string
