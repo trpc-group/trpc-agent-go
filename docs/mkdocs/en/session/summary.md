@@ -190,13 +190,24 @@ Before sending either form of request, the summarizer admits it against the
 summary model's effective input budget. The framework uses the smaller of the
 provider-specific input budget, when the model exposes one, and a conservative
 ceiling of 70% of the model context window. An oversized fork is reduced without
-mutating the parent request: unused tool schemas are removed first, older
-complete source rounds can be dropped while the latest round is protected, and
-large tool argument/result payloads are replaced as needed. If the fork still
-cannot fit, the summarizer rebuilds a bounded standalone request. This fallback
-truncates the `{conversation_text}` and `{previous_summary}` payloads with
-head-and-tail preservation; the fixed system prompt and user-prompt template
-remain intact.
+mutating the parent request: unused tool schemas are removed first, and large
+tool argument/result payloads are replaced with explicit omission markers as
+needed. Source conversation turns are not dropped. If the fork still cannot
+fit, the summarizer rebuilds a bounded standalone request. The standalone path
+preserves newly uncovered conversation and, when `{previous_summary}` is used,
+may bound only that previous rolling summary; the fixed system prompt and
+user-prompt template remain intact.
+
+If all newly uncovered conversation cannot fit in one standalone request, the
+summarizer can process a complete older prefix and leave the remaining events
+uncovered for a later summary pass. A prefix must end at a stable event boundary
+and cannot split response chunks or an open tool call/result round. The summary
+boundary advances only through the selected prefix after model generation and
+post-summary processing are complete. If even the smallest complete prefix does
+not fit, the request fails before calling the model and the existing boundary
+remains unchanged. Partial-prefix fallback is disabled when
+`WithPreSummaryHook(...)` is configured because hook-rewritten text cannot be
+mapped safely back to an event boundary.
 
 Budget fitting and the fork-to-standalone decision happen before the
 `BeforeModel` callback. The callback therefore receives the actual request that
@@ -205,7 +216,8 @@ callback makes it exceed the budget, the call fails explicitly instead of
 silently replacing the callback-modified request. If a provider still returns a
 context-length error, or a non-custom model call returns an empty summary, the
 summarizer makes one bounded standalone retry at half of the first attempt's
-input budget.
+input budget. That retry may select a smaller complete prefix under the same
+boundary rules.
 
 One important branch-summary behavior: after `WithCacheSafeForking(true)` is
 enabled, a non-empty branch trigger may fork the current parent request for the
