@@ -19,11 +19,16 @@ import (
 // prompt contains {previous_summary}, Events and Text contain only newly
 // uncovered conversation content and PreviousSummary carries the prior rolling
 // summary. Prompts without that placeholder retain the legacy merged view in
-// Events and Text.
+// Events and Text. When request-side projection is available, Events and Text
+// reflect the model-visible conversation while SourceEvents retains the stored
+// source prefix for hooks that need persistence-level metadata or payloads.
 type PreSummaryHookContext struct {
-	Ctx             context.Context
-	Session         *session.Session
-	Events          []event.Event
+	Ctx     context.Context
+	Session *session.Session
+	Events  []event.Event
+	// SourceEvents contains stored source events through the selected summary
+	// boundary. Without a request-side projection, it is the same as Events.
+	SourceEvents    []event.Event
 	Text            string
 	PreviousSummary string
 }

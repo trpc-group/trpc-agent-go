@@ -93,6 +93,70 @@ func TestSummaryDoesNotAdvanceWithoutStoredBoundary(t *testing.T) {
 	))
 }
 
+func TestPreSummaryHookSeparatesModelVisibleAndSourceEvents(t *testing.T) {
+	now := time.Now()
+	raw := modelVisibleTestEvent(
+		"event-1",
+		"tool",
+		model.NewToolMessage(
+			"call-1",
+			"lookup",
+			"raw tool payload",
+		),
+		now,
+	)
+	effectiveMessage := model.NewToolMessage(
+		"call-1",
+		"lookup",
+		"projected tool result",
+	)
+	effective := modelVisibleTestEvent(
+		raw.ID,
+		raw.Author,
+		effectiveMessage,
+		now,
+	)
+	ctx := summaryview.ContextWithView(context.Background(), &summaryview.View{
+		SessionID: "session",
+		Bound:     true,
+		Items: []summaryview.Item{{
+			Message:        effectiveMessage,
+			EffectiveEvent: effective,
+			Boundary: summaryview.Boundary{
+				EventID:   raw.ID,
+				Timestamp: raw.Timestamp,
+			},
+		}},
+	})
+	mdl := &echoPromptModel{}
+	summarizer := NewSummarizer(
+		mdl,
+		WithPreSummaryHook(func(in *PreSummaryHookContext) error {
+			require.Len(t, in.Events, 1)
+			require.Equal(
+				t,
+				"projected tool result",
+				in.Events[0].Response.Choices[0].Message.Content,
+			)
+			require.Len(t, in.SourceEvents, 1)
+			require.Equal(
+				t,
+				"raw tool payload",
+				in.SourceEvents[0].Response.Choices[0].Message.Content,
+			)
+			// Rebuild from Events to exercise the hook fallback path.
+			in.Text = ""
+			return nil
+		}),
+	)
+	sess := &session.Session{ID: "session", Events: []event.Event{raw}}
+
+	result, err := summarizer.Summarize(ctx, sess)
+	require.NoError(t, err)
+	require.Contains(t, result, "projected tool result")
+	require.NotContains(t, result, "raw tool payload")
+}
+
 func TestSummarizeUsesModelVisiblePrefix(t *testing.T) {
 	baseTime := time.Now().Add(-time.Minute)
 	rawEvents := []event.Event{

@@ -2393,7 +2393,12 @@ func (f *Flow) callLLM(
 		)
 	}
 	ctx = contextWithModelRetryCallbacks(ctx, f, invocation, callModel)
-	finalizeSummaryView(ctx, invocation, llmRequest)
+	finalizeSummaryView(
+		ctx,
+		invocation,
+		llmRequest,
+		f.summaryViewTokenCounter(),
+	)
 	summaryfork.Attach(invocation, llmRequest)
 	seq, err := f.generateContentSeq(ctx, invocation, llmRequest, callModel)
 	if err != nil {
@@ -2406,11 +2411,15 @@ func finalizeSummaryView(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	req *model.Request,
+	counter model.TokenCounter,
 ) {
 	if invocation == nil || req == nil || len(req.Messages) == 0 {
 		return
 	}
-	tokens, err := model.NewSimpleTokenCounter().CountTokensRange(
+	if counter == nil {
+		counter = model.NewSimpleTokenCounter()
+	}
+	tokens, err := counter.CountTokensRange(
 		ctx,
 		req.Messages,
 		0,
@@ -2421,6 +2430,16 @@ func finalizeSummaryView(
 		return
 	}
 	summaryview.Finalize(invocation, req, tokens)
+}
+
+func (f *Flow) summaryViewTokenCounter() model.TokenCounter {
+	for i := len(f.requestProcessors) - 1; i >= 0; i-- {
+		contentProcessor, ok := f.requestProcessors[i].(*processor.ContentRequestProcessor)
+		if ok {
+			return contentProcessor.ContextCompactionConfig.TokenCounter
+		}
+	}
+	return nil
 }
 
 func (f *Flow) runBeforeModelCallbacks(

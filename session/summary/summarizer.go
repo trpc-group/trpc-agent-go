@@ -442,11 +442,11 @@ type summaryPromptInput struct {
 }
 
 type summaryEventSelection struct {
-	events      []event.Event
-	hookEvents  []event.Event
-	itemIndexes []int
-	boundary    summaryview.Boundary
-	effective   bool
+	events       []event.Event
+	sourceEvents []event.Event
+	itemIndexes  []int
+	boundary     summaryview.Boundary
+	effective    bool
 }
 
 func (s *sessionSummarizer) selectSummaryEvents(
@@ -459,7 +459,7 @@ func (s *sessionSummarizer) selectSummaryEvents(
 			s.filterEventsForSummary(sess.Events),
 			sess,
 		)
-		return summaryEventSelection{events: events, hookEvents: events}
+		return summaryEventSelection{events: events, sourceEvents: events}
 	}
 
 	viewEvents := view.Events()
@@ -492,22 +492,22 @@ func (s *sessionSummarizer) selectSummaryEvents(
 		itemIndexes = itemIndexes[:itemCount]
 	}
 	selection := summaryEventSelection{
-		events:      events,
-		hookEvents:  events,
-		itemIndexes: itemIndexes,
-		effective:   true,
+		events:       events,
+		sourceEvents: events,
+		itemIndexes:  itemIndexes,
+		effective:    true,
 	}
 	if boundary, found := view.BoundaryForItems(itemIndexes); found {
 		selection.boundary = boundary
 		if source := sourceEventsThroughBoundary(sess.Events, boundary); len(source) > 0 {
-			selection.hookEvents = filterSummaryInputEventsForSession(source, sess)
+			selection.sourceEvents = filterSummaryInputEventsForSession(source, sess)
 		}
 	} else if len(itemIndexes) > 0 {
 		// A summary must never advance persistence past content that has no
 		// structural mapping to a stored event. This can happen for context-only
 		// anchors or a user message that has not been persisted yet.
 		selection.events = nil
-		selection.hookEvents = nil
+		selection.sourceEvents = nil
 		selection.itemIndexes = nil
 	}
 	return selection
@@ -570,15 +570,15 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 	selection := s.selectSummaryEvents(ctx, sess)
 	eventsToSummarize := selection.events
 	conversationEvents := eventsToSummarize
-	hookEvents := selection.hookEvents
+	sourceEvents := selection.sourceEvents
 	input := summaryPromptInput{}
 	if separatePreviousSummary {
 		conversationEvents = removePreviousSummaryEvent(
 			conversationEvents,
 			previousSummary,
 		)
-		hookEvents = removePreviousSummaryEvent(
-			hookEvents,
+		sourceEvents = removePreviousSummaryEvent(
+			sourceEvents,
 			previousSummary,
 		)
 		input.previousSummary = previousSummary
@@ -588,7 +588,8 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 	ctx, input, err := s.runPreSummaryHook(
 		ctx,
 		sess,
-		hookEvents,
+		conversationEvents,
+		sourceEvents,
 		input,
 		separatePreviousSummary,
 	)
@@ -637,6 +638,7 @@ func (s *sessionSummarizer) runPreSummaryHook(
 	ctx context.Context,
 	sess *session.Session,
 	events []event.Event,
+	sourceEvents []event.Event,
 	input summaryPromptInput,
 	separatePreviousSummary bool,
 ) (context.Context, summaryPromptInput, error) {
@@ -647,6 +649,7 @@ func (s *sessionSummarizer) runPreSummaryHook(
 		Ctx:             ctx,
 		Session:         sess,
 		Events:          events,
+		SourceEvents:    sourceEvents,
 		Text:            input.conversationText,
 		PreviousSummary: input.previousSummary,
 	}

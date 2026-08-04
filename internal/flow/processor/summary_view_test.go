@@ -141,6 +141,60 @@ func TestContentRequestProcessorSummaryViewFollowsMaxHistoryRuns(t *testing.T) {
 	require.Equal(t, "recent", view.Items[1].Message.Content)
 }
 
+func TestContentRequestProcessorSummaryViewSkipsOrphanedToolResult(t *testing.T) {
+	now := time.Now()
+	sess := &session.Session{ID: "session", Events: []event.Event{
+		{
+			ID:        "event-call",
+			Author:    "assistant",
+			Timestamp: now,
+			Response: &model.Response{Choices: []model.Choice{{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{{
+						ID: "call-1",
+						Function: model.FunctionDefinitionParam{
+							Name: "lookup",
+						},
+					}},
+				},
+			}}},
+		},
+		{
+			ID:        "event-result",
+			Author:    "tool",
+			Timestamp: now.Add(time.Second),
+			Response: &model.Response{Choices: []model.Choice{{
+				Message: model.NewToolMessage("call-1", "lookup", "orphaned"),
+			}}},
+		},
+		{
+			ID:        "event-user",
+			Author:    "user",
+			Timestamp: now.Add(2 * time.Second),
+			Response: &model.Response{Choices: []model.Choice{{
+				Message: model.NewUserMessage("retained"),
+			}}},
+		},
+	}}
+	processor := NewContentRequestProcessor(
+		WithAddContextPrefix(false),
+		WithMaxHistoryRuns(2),
+	)
+	invocation := agent.NewInvocation(agent.WithInvocationSession(sess))
+	request := &model.Request{}
+
+	processor.ProcessRequest(context.Background(), invocation, request, nil)
+
+	require.Len(t, request.Messages, 1)
+	require.Equal(t, "retained", request.Messages[0].Content)
+	view, ok := summaryview.Snapshot(invocation)
+	require.True(t, ok)
+	require.Len(t, view.Items, 1)
+	require.Equal(t, "event-user", view.Items[0].Boundary.EventID)
+	require.Equal(t, request.Messages[0], view.Items[0].Message)
+}
+
 func TestContentRequestProcessorSummaryViewSupportsIsolatedHistory(t *testing.T) {
 	now := time.Now()
 	sess := &session.Session{ID: "session"}

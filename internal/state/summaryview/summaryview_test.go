@@ -11,6 +11,7 @@ package summaryview
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -200,7 +201,10 @@ func TestSnapshotClonesEffectiveEventMetadata(t *testing.T) {
 			}}},
 			LongRunningToolIDs: map[string]struct{}{"call": {}},
 			StateDelta:         map[string][]byte{"key": []byte("value")},
-			Actions:            &event.EventActions{SkipSummarization: true},
+			Extensions: map[string]json.RawMessage{
+				"metadata": json.RawMessage(`{"value":"original"}`),
+			},
+			Actions: &event.EventActions{SkipSummarization: true},
 		},
 	}}})
 
@@ -208,12 +212,18 @@ func TestSnapshotClonesEffectiveEventMetadata(t *testing.T) {
 	require.True(t, ok)
 	first.Items[0].EffectiveEvent.LongRunningToolIDs["other"] = struct{}{}
 	first.Items[0].EffectiveEvent.StateDelta["key"][0] = 'x'
+	first.Items[0].EffectiveEvent.Extensions["metadata"][10] = 'x'
 	first.Items[0].EffectiveEvent.Actions.SkipSummarization = false
 
 	second, ok := Snapshot(invocation)
 	require.True(t, ok)
 	require.NotContains(t, second.Items[0].EffectiveEvent.LongRunningToolIDs, "other")
 	require.Equal(t, "value", string(second.Items[0].EffectiveEvent.StateDelta["key"]))
+	require.JSONEq(
+		t,
+		`{"value":"original"}`,
+		string(second.Items[0].EffectiveEvent.Extensions["metadata"]),
+	)
 	require.True(t, second.Items[0].EffectiveEvent.Actions.SkipSummarization)
 	require.Len(t, second.Events(), 1)
 }

@@ -13,6 +13,7 @@ package summaryview
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"time"
 
@@ -323,6 +324,12 @@ func cloneEvent(evt event.Event) event.Event {
 	if evt.Actions != nil {
 		actions := *evt.Actions
 		cloned.Actions = &actions
+	}
+	if evt.Extensions != nil {
+		cloned.Extensions = make(map[string]json.RawMessage, len(evt.Extensions))
+		for key, value := range evt.Extensions {
+			cloned.Extensions[key] = append(json.RawMessage(nil), value...)
+		}
 	}
 	return cloned
 }

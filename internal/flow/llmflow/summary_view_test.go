@@ -16,9 +16,31 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	iflow "trpc.group/trpc-go/trpc-agent-go/internal/flow"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryview"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
+
+type fixedSummaryViewTokenCounter struct {
+	tokens int
+}
+
+func (c fixedSummaryViewTokenCounter) CountTokens(
+	context.Context,
+	model.Message,
+) (int, error) {
+	return c.tokens, nil
+}
+
+func (c fixedSummaryViewTokenCounter) CountTokensRange(
+	context.Context,
+	[]model.Message,
+	int,
+	int,
+) (int, error) {
+	return c.tokens, nil
+}
 
 func TestFinalizeSummaryViewUsesFinalRequest(t *testing.T) {
 	invocation := agent.NewInvocation()
@@ -33,12 +55,23 @@ func TestFinalizeSummaryViewUsesFinalRequest(t *testing.T) {
 		model.NewSystemMessage("added after content processing"),
 		model.NewUserMessage("visible"),
 	}}
+	counter := fixedSummaryViewTokenCounter{tokens: 42}
+	flow := &Flow{requestProcessors: []iflow.RequestProcessor{
+		processor.NewContentRequestProcessor(
+			processor.WithContextCompactionTokenCounter(counter),
+		),
+	}}
 
-	finalizeSummaryView(context.Background(), invocation, request)
+	finalizeSummaryView(
+		context.Background(),
+		invocation,
+		request,
+		flow.summaryViewTokenCounter(),
+	)
 
 	view, ok := summaryview.Snapshot(invocation)
 	require.True(t, ok)
 	require.True(t, view.Bound)
-	require.Positive(t, view.RequestTokens)
+	require.Equal(t, 42, view.RequestTokens)
 	require.Equal(t, 1, view.Items[0].RequestIndex)
 }

@@ -1411,12 +1411,14 @@ func (p *ContentRequestProcessor) getIncrementHistoryAfterCutoff(
 
 	// Apply MaxHistoryRuns limit when AddSessionSummary is false.
 	if !p.AddSessionSummary && p.MaxHistoryRuns > 0 {
-		trimmed := applyMaxHistoryRuns(history.messages, p.MaxHistoryRuns)
-		if len(history.items) == len(history.messages) &&
-			len(trimmed) <= len(history.items) {
-			history.items = history.items[len(history.items)-len(trimmed):]
+		startIdx := maxHistoryRunsStartIndex(
+			history.messages,
+			p.MaxHistoryRuns,
+		)
+		if len(history.items) == len(history.messages) {
+			history.items = history.items[startIdx:]
 		}
-		history.messages = trimmed
+		history.messages = history.messages[startIdx:]
 	}
 	history.messages = annotateUserMessagesWithAttachedFiles(history.messages)
 	for i := range history.items {
@@ -2266,20 +2268,21 @@ func fileNameFromArtifactRef(fileID string) string {
 	return base
 }
 
-// applyMaxHistoryRuns trims messages to at most maxRuns entries from the tail.
+// maxHistoryRunsStartIndex returns the first retained message when trimming to
+// at most maxRuns entries from the tail.
 // If the trim boundary falls on a tool-result message whose corresponding
 // tool_use was truncated, the boundary is advanced past any such orphaned
 // results to prevent API 400 "unexpected tool_use_id" errors.
-func applyMaxHistoryRuns(messages []model.Message, maxRuns int) []model.Message {
+func maxHistoryRunsStartIndex(messages []model.Message, maxRuns int) int {
 	if len(messages) <= maxRuns {
-		return messages
+		return 0
 	}
 	startIdx := len(messages) - maxRuns
 
 	// Only scan the truncated prefix when the boundary actually falls on a
 	// tool-result message; otherwise there's nothing to skip.
 	if messages[startIdx].Role != model.RoleTool || messages[startIdx].ToolID == "" {
-		return messages[startIdx:]
+		return startIdx
 	}
 
 	// Collect tool-call IDs that will be truncated (before startIdx).
@@ -2303,7 +2306,7 @@ func applyMaxHistoryRuns(messages []model.Message, maxRuns int) []model.Message 
 		break
 	}
 
-	return messages[startIdx:]
+	return startIdx
 }
 
 // processReasoningContent applies reasoning content stripping based on the
@@ -2401,6 +2404,15 @@ func (p *ContentRequestProcessor) getCurrentInvocationHistory(
 		}
 	}
 	history = p.mergeProjectedUserMessages(history)
+	if len(history.items) != len(history.messages) {
+		history.messages = p.truncateOversizedToolResultMessages(
+			history.messages,
+		)
+		history.messages = annotateUserMessagesWithAttachedFiles(
+			history.messages,
+		)
+		return history
+	}
 	for i := range history.items {
 		truncated := p.truncateOversizedToolResultMessages(
 			[]model.Message{history.items[i].Message},
