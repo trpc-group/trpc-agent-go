@@ -61,13 +61,13 @@ func (f *responseConverterFunc) ConvertStreamingToEvents(
 	return f.stream(response, name, invocation)
 }
 
-func TestNewFetchesCardAndInstallsDefaultMapper(t *testing.T) {
+func TestNewDiscoversCardAndInstallsDefaultMapper(t *testing.T) {
 	card := protocolserver.AgentCard{
 		Name:        "remote",
 		Description: "description",
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/custom-card.json" {
+		if r.URL.Path != protocol.AgentCardPath {
 			http.NotFound(w, r)
 			return
 		}
@@ -83,7 +83,7 @@ func TestNewFetchesCardAndInstallsDefaultMapper(t *testing.T) {
 		return false, nil
 	}
 	remote, err := New(
-		WithAgentCardURL(server.URL+"/custom-card.json"),
+		WithAgentCardURL(server.URL),
 		WithA2ADataPartMapper(mapper),
 	)
 	if err != nil {
@@ -112,6 +112,48 @@ func TestNewFetchesCardAndInstallsDefaultMapper(t *testing.T) {
 	)
 	if err != nil || remote.eventConverter != custom {
 		t.Fatalf("custom converter agent = %#v, err = %v", remote, err)
+	}
+}
+
+func TestNewDiscoversCardFromPathPrefixWithLegacyFallback(t *testing.T) {
+	card := protocolserver.AgentCard{
+		Name:        "legacy-remote",
+		Description: "legacy description",
+	}
+	const pathPrefix = "/api/v1"
+	wantPaths := []string{
+		pathPrefix + protocol.AgentCardPath,
+		pathPrefix + protocol.OldAgentCardPath,
+	}
+	var requestPaths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestPaths = append(requestPaths, r.URL.Path)
+		switch r.URL.Path {
+		case wantPaths[0]:
+			http.NotFound(w, r)
+		case wantPaths[1]:
+			card.URL = "http://" + r.Host
+			w.Header().Set("Content-Type", "application/json")
+			if err := json.NewEncoder(w).Encode(card); err != nil {
+				t.Errorf("encode card: %v", err)
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	remote, err := New(WithAgentCardURL(server.URL + pathPrefix))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	if remote.agentCard == nil || remote.agentCard.Name != card.Name {
+		t.Fatalf("agent card = %#v, want %q", remote.agentCard, card.Name)
+	}
+	if len(requestPaths) != len(wantPaths) ||
+		requestPaths[0] != wantPaths[0] ||
+		requestPaths[1] != wantPaths[1] {
+		t.Fatalf("request paths = %#v, want %#v", requestPaths, wantPaths)
 	}
 }
 
