@@ -80,19 +80,22 @@ llmAgent := llmagent.New(
 
 <a id="placeholder-variables-session-state-injection"></a>
 
-### 占位符变量（会话状态注入）
+### 占位符变量（状态注入）
 
-LLMAgent 会自动在 `Instruction` 和可选的 `SystemPrompt` 中注入会话状态。支持的占位符语法：
+LLMAgent 会自动在 `Instruction` 和可选的 `SystemPrompt` 中注入状态。支持的占位符语法：
 
 - `{key}`：替换为会话状态中键 `key` 对应的字符串值（可通过 `invocation.Session.SetState("key", ...)` 或 SessionService 写入）
 - `{key?}`：可选；如果不存在，替换为空字符串
 - `{user:subkey}` / `{app:subkey}` / `{temp:subkey}`：访问用户/应用/临时命名空间（SessionService 会把 app/user 作用域的状态合并进 session，并带上前缀）
 - `{invocation:subkey}` ：替换为 fmt.Sprintf("%+v",`invocation.state["subkey"]`) 的值，（可以通过 invocation.SetState(k,v) 来设置）。
+- `{runtime:subkey}`：读取 `RunOptions.RuntimeState` 中的请求级状态（通过 `agent.WithRuntimeState` 或 `agent.MergeRuntimeState` 设置）
 
 注意：
 
 - 对于非可选的 `{key}`，若找不到则保留原样（便于 LLM 感知缺失上下文）
-- 值读取自会话状态（Runner + SessionService 会自动设置/合并）
+- 所有受支持的占位符都可以在右花括号前添加 `?` 表示可选，例如 `{runtime:document?}`
+- 无前缀及 app/user/temp 前缀读取会话状态；`invocation:` 和 `runtime:` 只读取各自的状态，不会回退到会话状态
+- RuntimeState 中的字符串按原文注入，基本类型使用 JSON 文本表示，对象和数组以 JSON 注入
 
 示例：
 
@@ -103,12 +106,16 @@ llm := llmagent.New(
   llmagent.WithInstruction(
     "You are a research assistant. Focus: {research_topics}. " +
     "User interests: {user:topics?}. App banner: {app:banner?}." +
-    "Invocation case: {invocation:case}",
+    "Invocation case: {invocation:case}. Draft: {runtime:document?}",
   ),
 )
 
 inv := agent.NewInvocation()
 inv.SetState("case", "case-1")
+
+runOptions := []agent.RunOption{
+  agent.WithRuntimeState(map[string]any{"document": "Current draft"}),
+}
 
 // 通过 SessionService 初始化状态（用户态/应用态 + 会话本地键）
 _ = sessionService.UpdateUserState(ctx, session.UserKey{AppName: app, UserID: user}, session.StateMap{
