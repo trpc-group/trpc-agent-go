@@ -24,7 +24,6 @@ const reportSchemaVersion = "promptiter-regression/v2"
 
 // ReportPaths identifies one atomically published report generation.
 type ReportPaths struct {
-	Directory    string
 	JSONPath     string
 	MarkdownPath string
 }
@@ -268,7 +267,6 @@ func WriteReports(outputDir string, report *Report) (ReportPaths, error) {
 	}
 	published = true
 	return ReportPaths{
-		Directory:    finalDir,
 		JSONPath:     filepath.Join(finalDir, "optimization_report.json"),
 		MarkdownPath: filepath.Join(finalDir, "optimization_report.md"),
 	}, nil

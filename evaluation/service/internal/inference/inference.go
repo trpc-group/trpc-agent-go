@@ -205,17 +205,15 @@ func inferenceInvocation(
 		responseIndex int
 	}
 	var (
-		invocationID     string
-		selectedFinal    finalResponseCandidate
-		hasSelectedFinal bool
-		finalByInvID     = make(map[string]finalResponseCandidate)
-		fallbackFinal    finalResponseCandidate
-		hasFallbackFinal bool
-		executionTrace   *trace.Trace
-		eventErr         error
-		tools            = make([]*evalset.Tool, 0)
-		responses        = make([]*model.Message, 0)
-		toolIDIdx        = make(map[string]int)
+		invocationID   string
+		selectedFinal  finalResponseCandidate
+		finalByInvID   = make(map[string]finalResponseCandidate)
+		fallbackFinal  finalResponseCandidate
+		executionTrace *trace.Trace
+		eventErr       error
+		tools          = make([]*evalset.Tool, 0)
+		responses      = make([]*model.Message, 0)
+		toolIDIdx      = make(map[string]int)
 	)
 	for event := range events {
 		if event == nil {
@@ -236,12 +234,10 @@ func inferenceInvocation(
 			responses = append(responses, message)
 			if event.IsRunnerCompletion() {
 				selectedFinal = candidate
-				hasSelectedFinal = true
 			} else if event.InvocationID != "" {
 				finalByInvID[event.InvocationID] = candidate
 			} else {
 				fallbackFinal = candidate
-				hasFallbackFinal = true
 			}
 		}
 		if event.Error != nil {
@@ -278,15 +274,14 @@ func inferenceInvocation(
 			}
 		}
 	}
-	if !hasSelectedFinal && invocationID != "" {
-		selectedFinal, hasSelectedFinal = finalByInvID[invocationID]
+	if selectedFinal.message == nil && invocationID != "" {
+		selectedFinal = finalByInvID[invocationID]
 	}
-	if !hasSelectedFinal && hasFallbackFinal {
+	if selectedFinal.message == nil {
 		selectedFinal = fallbackFinal
-		hasSelectedFinal = true
 	}
 	var finalResponse *model.Message
-	if hasSelectedFinal {
+	if selectedFinal.message != nil {
 		finalResponse = selectedFinal.message
 		responses = append(
 			responses[:selectedFinal.responseIndex],

@@ -356,9 +356,12 @@ func TestNormalizeAgentEvaluationMarksMissingInvocationUsageUnmeasured(t *testin
 			}},
 			RunDetails: []*evaluation.EvaluationCaseRunDetails{{
 				Inference: &evaluation.EvaluationInferenceDetails{
+					Inferences: []*evalset.Invocation{{
+						FinalResponse: &model.Message{Role: model.RoleAssistant},
+					}},
 					ExecutionTraces: []*atrace.Trace{{
 						Status: atrace.TraceStatusCompleted,
-						Steps:  []atrace.Step{{NodeType: "llm"}},
+						Usage:  &model.Usage{TotalTokens: 1},
 					}},
 				},
 			}, nil},

@@ -32,6 +32,12 @@ func TestDecideAcceptsValidationImprovement(t *testing.T) {
 	if !decision.Accepted {
 		t.Fatalf("decision = %+v, want accepted", decision)
 	}
+	if len(decision.Reasons) != 1 || decision.Reasons[0] != "candidate satisfies every configured release gate" {
+		t.Fatalf("decision reasons = %v, want successful-gate audit reason", decision.Reasons)
+	}
+	if decision.ScoreDelta != 0.5 {
+		t.Fatalf("score delta = %v, want 0.5", decision.ScoreDelta)
+	}
 }
 
 func TestDecideRejectsNoGain(t *testing.T) {
