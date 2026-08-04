@@ -1010,6 +1010,11 @@ type eventHistoryCutoff struct {
 	lastEventIndex int
 }
 
+type historyTurnKey struct {
+	requestID    string
+	invocationID string
+}
+
 func newEventHistoryCutoff(
 	events []event.Event,
 	cutoff summaryHistoryCutoff,
@@ -1322,38 +1327,13 @@ func (p *ContentRequestProcessor) getIncrementMessagesAfterCutoff(
 			inv.AgentName,
 		)
 	}
-
-	// Get current request ID for reasoning content filtering.
-	currentRequestID := inv.RunOptions.RequestID
-
-	toolCallRequestIDs := requestIDsWithToolCalls(resultEvents)
-
-	// Convert events to messages with reasoning content handling.
-	var messages []model.Message
-	for _, evt := range resultEvents {
-		// Convert foreign events or keep as-is.
-		ev := evt
-		if p.isOtherAgentReply(inv.AgentName, inv.Branch, &ev) {
-			ev = p.convertForeignEvent(&ev)
-		}
-		if len(ev.Choices) > 0 {
-			for _, choice := range ev.Choices {
-				msg := choice.Message
-				// Apply reasoning content stripping based on mode.
-				msg = p.processReasoningContent(
-					msg,
-					evt.RequestID,
-					currentRequestID,
-					requestHasToolCalls(toolCallRequestIDs, evt.RequestID),
-				)
-				msg = p.projectEventMessage(inv, evt, msg)
-				if message.IsEmptyAssistantMessage(msg) {
-					continue
-				}
-				messages = append(messages, msg)
-			}
-		}
-	}
+	messages := p.projectMessagesAcrossSummaryCutoff(
+		resultEvents,
+		sessionEvents,
+		inv,
+		filter,
+		eventCutoff,
+	)
 
 	messages = p.mergeUserMessages(messages)
 
@@ -1469,6 +1449,140 @@ func (p *ContentRequestProcessor) canMatchToolRound(
 	return isEventEligibleForInclusion(evt) &&
 		p.passTimelineFilter(evt, inv) &&
 		p.passBranchFilter(evt, filter)
+}
+
+func (p *ContentRequestProcessor) projectMessagesAcrossSummaryCutoff(
+	retained []event.Event,
+	all []event.Event,
+	inv *agent.Invocation,
+	filter string,
+	cutoff eventHistoryCutoff,
+) []model.Message {
+	// Decide whether a turn needs its covered user anchor only after projection.
+	// A projector may remove or rewrite the retained assistant or tool message.
+	currentRequestID := inv.RunOptions.RequestID
+	toolCallRequestIDs := requestIDsWithToolCalls(retained)
+	coveredUsers := p.coveredUserEventsBeforeCutoff(
+		all,
+		inv,
+		filter,
+		cutoff,
+	)
+
+	var messages []model.Message
+	seenTurns := make(map[historyTurnKey]struct{})
+	for _, evt := range retained {
+		projected := p.projectMessagesForEvent(
+			inv,
+			evt,
+			currentRequestID,
+			toolCallRequestIDs,
+		)
+		if len(projected) == 0 {
+			continue
+		}
+		key, hasKey := historyTurnKeyForEvent(evt)
+		_, seen := seenTurns[key]
+		if hasKey && !seen {
+			seenTurns[key] = struct{}{}
+			role, _ := historyRoleForMessages(projected)
+			if userEvt, ok := coveredUsers[key]; ok &&
+				(role == model.RoleAssistant || role == model.RoleTool) {
+				messages = append(
+					messages,
+					p.projectMessagesForEvent(
+						inv,
+						userEvt,
+						currentRequestID,
+						toolCallRequestIDs,
+					)...,
+				)
+			}
+		}
+		messages = append(messages, projected...)
+	}
+	return messages
+}
+
+func (p *ContentRequestProcessor) coveredUserEventsBeforeCutoff(
+	events []event.Event,
+	inv *agent.Invocation,
+	filter string,
+	cutoff eventHistoryCutoff,
+) map[historyTurnKey]event.Event {
+	coveredUsers := make(map[historyTurnKey]event.Event)
+	tailStarted := make(map[historyTurnKey]struct{})
+	// Keep replacing each candidate until its retained tail begins, so only
+	// the final eligible pre-cutoff user event can be restored for that turn.
+	for i, evt := range events {
+		if !p.canMatchToolRound(evt, inv, filter) ||
+			messageorigin.IsSeedHistory(inv, evt.ID) {
+			continue
+		}
+		key, ok := historyTurnKeyForEvent(evt)
+		if !ok {
+			continue
+		}
+		role, ok := historyRoleForEvent(evt)
+		if !ok {
+			continue
+		}
+		if _, ok := tailStarted[key]; ok {
+			continue
+		}
+		if !cutoff.excludesEvent(i, evt) {
+			tailStarted[key] = struct{}{}
+			continue
+		}
+		if role == model.RoleUser {
+			coveredUsers[key] = evt
+		}
+	}
+	return coveredUsers
+}
+
+func historyTurnKeyForEvent(evt event.Event) (historyTurnKey, bool) {
+	if evt.InvocationID == "" {
+		return historyTurnKey{}, false
+	}
+	return historyTurnKey{
+		requestID:    evt.RequestID,
+		invocationID: evt.InvocationID,
+	}, true
+}
+
+func historyRoleForEvent(evt event.Event) (model.Role, bool) {
+	for _, choice := range evt.Choices {
+		if role, ok := historyRoleForMessage(choice.Message); ok {
+			return role, true
+		}
+	}
+	return "", false
+}
+
+func historyRoleForMessages(messages []model.Message) (model.Role, bool) {
+	for _, msg := range messages {
+		if role, ok := historyRoleForMessage(msg); ok {
+			return role, true
+		}
+	}
+	return "", false
+}
+
+func historyRoleForMessage(msg model.Message) (model.Role, bool) {
+	if userLikeRole(msg.Role) && model.HasPayload(msg) {
+		return model.RoleUser, true
+	}
+	if msg.Role.IsValid() {
+		return msg.Role, true
+	}
+	if msg.ToolID != "" {
+		return model.RoleTool, true
+	}
+	if len(msg.ToolCalls) > 0 {
+		return model.RoleAssistant, true
+	}
+	return "", false
 }
 
 func addToolCallIDToRestore(
