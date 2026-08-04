@@ -320,6 +320,52 @@ clear 必须来自用户明确且不包含范围或例外条件的“遗忘全�
 
 回退时删除该 option，或将其设置为 `UpdatePolicyMergeSimilar` 即可，不需要数据迁移。
 
+### 可选的 Assistant Episode 提取
+
+Auto extraction 默认使用标准 fact 和 episode 工具。如果应用还需要在后续对话中
+召回 assistant 曾经提供的可复用信息，可以在构造 extractor 时显式开启 assistant
+episode 提取：
+
+```go
+memExtractor := extractor.NewExtractor(
+    extractorModel,
+    extractor.WithAssistantEpisodeExtraction(),
+)
+memoryService := memoryinmemory.NewMemoryService(
+    memoryinmemory.WithExtractor(memExtractor),
+)
+```
+
+该 option 使用两个彼此隔离的提取阶段。第一阶段继续使用标准 memory tools，
+仅从 user message 提取普通用户事实和事件。如果最新一组 user/assistant message
+包含用户明确要求的可复用结果，例如列表、推荐、分类或数量，提取器才会发起第二次
+请求，并且只暴露私有的 `memory_assistant_episode` 工具。该工具不会暴露给应用的
+Agent。
+
+Assistant 输出会被记录为“带归属的对话历史”，而不是已经验证的事实或用户偏好。
+框架将每个通过校验的调用固定转换为普通 `KindEpisode` add 操作，将 participants
+设置为 `User` 和 `Assistant`；如果 extraction context 带有 reference date，则将其
+作为 event time。例如：
+
+```json
+{
+  "memory": "Assistant-provided conversation episode: 当用户询问适合紧凑厨房的产品时，assistant 推荐了 Alpha 和 Beta。",
+  "kind": "episode",
+  "participants": ["User", "Assistant"]
+}
+```
+
+第二阶段模型只能提供 episode 正文和可选的检索 topics，不能覆盖 memory kind、
+participants、event time 或 location。正文为空、超过 4,096 bytes，或包含当前
+conversation pair 中不存在的数字时，调用会被拒绝。为了限制可选请求的规模，
+每条 source message 都会被表示为确定性的 8,192-byte 摘录，并保留首尾内容。
+
+该功能与存储后端无关，不会新增 memory kind、字段、数据库列、数据表或迁移，也
+只会在 conversation pair 通过确定性 eligibility 检查时增加一次模型调用；普通
+对话仍只有一次 extraction 调用。该 option 在 extractor 生命周期内不可修改。
+需要关闭时，应重新构造一个未传入该 option 的 extractor。此前已经保存的
+assistant episode 仍是普通 episodic memory，会继续参与正常检索。
+
 ### 两种模式配置对比
 
 | 步骤         | 工具驱动模式（Agentic）             | 自动提取模式（Auto）                   |

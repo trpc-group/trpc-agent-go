@@ -45,7 +45,8 @@ type memoryExtractor struct {
 	prompt   string
 	checkers []Checker
 
-	updatePolicy UpdatePolicy
+	updatePolicy               UpdatePolicy
+	assistantEpisodeExtraction bool
 
 	enabledTools map[string]struct{}
 
@@ -121,60 +122,80 @@ func (e *memoryExtractor) Extract(
 	if len(messages) == 0 {
 		return nil, nil
 	}
+	if e.assistantEpisodeExtraction {
+		return e.extractWithAssistantEpisodes(ctx, messages, existing)
+	}
+	return e.extractOperations(ctx, messages, existing)
+}
 
-	// Build request with tool declarations.
+func (e *memoryExtractor) extractOperations(
+	ctx context.Context,
+	messages []model.Message,
+	existing []*memory.Entry,
+) ([]*Operation, error) {
 	req := &model.Request{
 		Messages: e.buildMessages(ctx, messages, existing),
 		Tools:    e.extractionTools(),
 	}
-
-	// Call model.
-	ctx, rspChan, err := e.runBeforeModelCallbacks(ctx, req)
+	var ops []*Operation
+	_, err := e.runExtractionRequest(ctx, req, func(
+		callCtx context.Context,
+		call model.ToolCall,
+	) {
+		if op := e.parseToolCall(callCtx, call); op != nil {
+			ops = append(ops, op)
+		}
+	})
 	if err != nil {
 		return nil, err
+	}
+	return ops, nil
+}
+
+func (e *memoryExtractor) runExtractionRequest(
+	ctx context.Context,
+	req *model.Request,
+	handleCall func(context.Context, model.ToolCall),
+) (context.Context, error) {
+	ctx, rspChan, err := e.runBeforeModelCallbacks(ctx, req)
+	if err != nil {
+		return ctx, err
 	}
 	if rspChan == nil {
 		rspChan, err = e.model.GenerateContent(ctx, req)
 		if err != nil {
 			log.WarnfContext(ctx, "extractor: model call failed: %v", err)
-			return nil, fmt.Errorf("model call failed: %w", err)
+			return ctx, fmt.Errorf("model call failed: %w", err)
 		}
 	}
 	if rspChan == nil {
-		return nil, errors.New("model returned nil response channel")
+		return ctx, errors.New("model returned nil response channel")
 	}
 
-	// Parse tool calls into operations.
-	var ops []*Operation
 	for {
 		select {
 		case <-ctx.Done():
-			return nil, fmt.Errorf("memory extraction canceled: %w", ctx.Err())
+			return ctx, fmt.Errorf("memory extraction canceled: %w", ctx.Err())
 		case rsp, ok := <-rspChan:
 			if !ok {
-				return ops, nil
+				return ctx, nil
 			}
 			ctx, rsp, err = e.runAfterModelCallbacks(ctx, req, rsp)
 			if err != nil {
-				return nil, err
+				return ctx, err
 			}
 			if rsp == nil {
 				continue
 			}
 			if rsp.Error != nil {
-				return nil, fmt.Errorf("model error: %s", rsp.Error.Message)
+				return ctx, fmt.Errorf("model error: %s", rsp.Error.Message)
 			}
 			if len(rsp.Choices) == 0 {
 				continue
 			}
-			// Choices are alternative candidates rather than cumulative
-			// tool-call batches, so only the selected primary choice
-			// should be converted into operations.
+			// Choices are alternatives, so only the primary choice is used.
 			for _, call := range rsp.Choices[0].Message.ToolCalls {
-				op := e.parseToolCall(ctx, call)
-				if op != nil {
-					ops = append(ops, op)
-				}
+				handleCall(ctx, call)
 			}
 		}
 	}
@@ -227,10 +248,14 @@ func (e *memoryExtractor) Metadata() map[string]any {
 		modelName = e.model.Info().Name
 		modelAvailable = true
 	}
-	return map[string]any{
+	metadata := map[string]any{
 		metadataKeyModelName:      modelName,
 		metadataKeyModelAvailable: modelAvailable,
 	}
+	if e.assistantEpisodeExtraction {
+		metadata[metadataKeyConversationExtraction] = assistantEpisodeMetadataValue
+	}
+	return metadata
 }
 
 // extractionUserSuffix is appended as a trailing user message

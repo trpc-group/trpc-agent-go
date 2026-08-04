@@ -351,6 +351,59 @@ can retry the same events.
 To roll back, remove the option or set it to `UpdatePolicyMergeSimilar`. No data
 migration is required.
 
+### Opt-in Assistant Episode Extraction
+
+Auto extraction normally uses the standard fact and episode tools. Applications
+that also need to recall reusable information from earlier assistant responses
+can enable assistant episode extraction when constructing the extractor:
+
+```go
+memExtractor := extractor.NewExtractor(
+    extractorModel,
+    extractor.WithAssistantEpisodeExtraction(),
+)
+memoryService := memoryinmemory.NewMemoryService(
+    memoryinmemory.WithExtractor(memExtractor),
+)
+```
+
+The option uses two isolated extraction stages. The first stage keeps the
+standard memory tools and extracts ordinary user facts and events from user
+messages. If the latest user/assistant pair contains an explicit reusable
+result, such as a requested list, recommendation, classification, or quantity,
+the extractor makes a second request that exposes only the private
+`memory_assistant_episode` tool. This tool is never visible to the application
+Agent.
+
+Assistant output is stored as attributed conversation history rather than as a
+verified fact or user preference. The framework converts every accepted call
+to an ordinary `KindEpisode` add operation, fixes the participants to `User`
+and `Assistant`, and uses the extraction reference date as the event time when
+one is present. For example:
+
+```json
+{
+  "memory": "Assistant-provided conversation episode: When the user asked for compact-kitchen products, the assistant recommended Alpha and Beta.",
+  "kind": "episode",
+  "participants": ["User", "Assistant"]
+}
+```
+
+The second-stage model supplies only the episode text and optional retrieval
+topics. It cannot override the memory kind, participants, event time, or
+location. The framework rejects empty text, text over 4,096 bytes, and numeric
+details that do not occur in the selected conversation pair. To keep the
+optional request bounded, each source message is represented by a deterministic
+8,192-byte excerpt that preserves its beginning and end.
+
+This feature is backend-neutral. It does not add a memory kind, field, database
+column, table, or migration. It can add one model call only for a pair that
+passes the deterministic eligibility check; ordinary conversations retain one
+extraction call. The option is fixed for the lifetime of the extractor. To
+disable it, construct a new extractor without the option. Previously stored
+assistant episodes remain ordinary episodic memories and continue to
+participate in normal retrieval.
+
 ### Configuration Comparison
 
 | Step                | Agentic Mode                        | Auto Mode                              |
