@@ -1,0 +1,8 @@
+diff --git a/query.go b/query.go
+--- a/query.go
++++ b/query.go
+@@ -1,0 +1,4 @@
++package query
++func purge(id int) {
++    _, _ = db.Exec("DELETE FROM t WHERE id = ?", id)
++}

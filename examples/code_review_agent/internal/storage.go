@@ -51,6 +51,9 @@ type MonitoringSummary struct {
 	ToolCallsCount       int    `json:"tool_calls_count"`
 	PermissionIntercepts int    `json:"permission_intercepts"`
 	FindingCount         int    `json:"finding_count"`
+	// 异常分布（验收标准 8）：超时 / 非超时失败计数。
+	TimeoutCount        int `json:"timeout_count"`
+	SandboxFailureCount int `json:"sandbox_failure_count"`
 }
 
 // Store SQLite 持久化存储。
@@ -100,7 +103,10 @@ func (s *Store) initDB(ctx context.Context) error {
 			low_count INTEGER DEFAULT 0,
 			warning_count INTEGER DEFAULT 0,
 			duration_ms INTEGER DEFAULT 0,
-			error_message TEXT DEFAULT ''
+			error_message TEXT DEFAULT '',
+			report_json_path TEXT DEFAULT '',
+			report_md_path TEXT DEFAULT '',
+			report_generated_at INTEGER DEFAULT 0
 		)`,
 		`CREATE TABLE IF NOT EXISTS findings (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -148,12 +154,23 @@ func (s *Store) initDB(ctx context.Context) error {
 			sandbox_duration_ms INTEGER DEFAULT 0,
 			tool_calls_count INTEGER DEFAULT 0,
 			permission_intercepts INTEGER DEFAULT 0,
-			finding_count INTEGER DEFAULT 0
+			finding_count INTEGER DEFAULT 0,
+			timeout_count INTEGER DEFAULT 0,
+			sandbox_failure_count INTEGER DEFAULT 0
+		)`,
+		`CREATE TABLE IF NOT EXISTS model_calls (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			task_id TEXT NOT NULL,
+			model TEXT NOT NULL DEFAULT '',
+			latency_ms INTEGER DEFAULT 0,
+			response_len INTEGER DEFAULT 0,
+			created_at INTEGER NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_findings_task ON findings(task_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_findings_dedup ON findings(task_id, dedup_key)`,
 		`CREATE INDEX IF NOT EXISTS idx_sandbox_task ON sandbox_runs(task_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_permissions_task ON permission_decisions(task_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_model_calls_task ON model_calls(task_id)`,
 	}
 
 	for _, schema := range schemas {
@@ -162,7 +179,55 @@ func (s *Store) initDB(ctx context.Context) error {
 		}
 	}
 
+	// 旧库（已存在的 review.db）迁移：CREATE TABLE IF NOT EXISTS 不会给
+	// 旧表补新列，这里用 PRAGMA table_info 守卫做幂等 ALTER。
+	return s.migrate(ctx)
+}
+
+// migrate 为旧库补齐新增列，幂等（列已存在则跳过）。
+func (s *Store) migrate(ctx context.Context) error {
+	migrations := []struct{ table, column, ddl string }{
+		{"review_tasks", "report_json_path", `ALTER TABLE review_tasks ADD COLUMN report_json_path TEXT DEFAULT ''`},
+		{"review_tasks", "report_md_path", `ALTER TABLE review_tasks ADD COLUMN report_md_path TEXT DEFAULT ''`},
+		{"review_tasks", "report_generated_at", `ALTER TABLE review_tasks ADD COLUMN report_generated_at INTEGER DEFAULT 0`},
+		{"monitoring_summary", "timeout_count", `ALTER TABLE monitoring_summary ADD COLUMN timeout_count INTEGER DEFAULT 0`},
+		{"monitoring_summary", "sandbox_failure_count", `ALTER TABLE monitoring_summary ADD COLUMN sandbox_failure_count INTEGER DEFAULT 0`},
+	}
+	for _, m := range migrations {
+		exists, err := s.columnExists(ctx, m.table, m.column)
+		if err != nil {
+			return err
+		}
+		if exists {
+			continue
+		}
+		if _, err := s.db.ExecContext(ctx, m.ddl); err != nil {
+			return fmt.Errorf("迁移 %s.%s 失败: %w", m.table, m.column, err)
+		}
+	}
 	return nil
+}
+
+// columnExists 检查表中是否存在指定列。
+func (s *Store) columnExists(ctx context.Context, table, column string) (bool, error) {
+	rows, err := s.db.QueryContext(ctx, "PRAGMA table_info("+table+")")
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notNull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notNull, &dflt, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 // SaveTask 保存或更新审查任务。
@@ -170,8 +235,9 @@ func (s *Store) SaveTask(ctx context.Context, task *ReviewTask) error {
 	query := `INSERT OR REPLACE INTO review_tasks
 		(id, input_type, input_hash, status, created_at, completed_at,
 		 total_files, total_findings, critical_count, high_count,
-		 medium_count, low_count, warning_count, duration_ms, error_message)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		 medium_count, low_count, warning_count, duration_ms, error_message,
+		 report_json_path, report_md_path, report_generated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	_, err := s.db.ExecContext(ctx, query,
 		task.ID, task.InputType, task.InputHash, task.Status,
@@ -180,7 +246,15 @@ func (s *Store) SaveTask(ctx context.Context, task *ReviewTask) error {
 		task.Summary.Critical, task.Summary.High,
 		task.Summary.Medium, task.Summary.Low, task.Summary.Warning,
 		task.DurationMs, task.ErrorMessage,
+		task.ReportJSONPath, task.ReportMDPath, task.ReportGeneratedAt,
 	)
+	return err
+}
+
+// SaveReportMeta 记录报告路径与生成时间（验收标准 3：报告可经 DB 定位到磁盘文件）。
+func (s *Store) SaveReportMeta(ctx context.Context, taskID, jsonPath, mdPath string, genAt int64) error {
+	query := `UPDATE review_tasks SET report_json_path = ?, report_md_path = ?, report_generated_at = ? WHERE id = ?`
+	_, err := s.db.ExecContext(ctx, query, jsonPath, mdPath, genAt, taskID)
 	return err
 }
 
@@ -289,16 +363,49 @@ func (s *Store) InsertPermissionDecision(ctx context.Context, d PermissionDecisi
 	return err
 }
 
+// InsertModelCall 插入一次模型调用记录（fake-model 审计）。
+func (s *Store) InsertModelCall(ctx context.Context, mc ModelCall) error {
+	query := `INSERT INTO model_calls (task_id, model, latency_ms, response_len, created_at)
+		VALUES (?, ?, ?, ?, ?)`
+	_, err := s.db.ExecContext(ctx, query,
+		mc.TaskID, mc.Model, mc.LatencyMs, mc.ResponseLen, mc.CreatedAt,
+	)
+	return err
+}
+
+// GetModelCallsByTask 查询某个任务的所有模型调用记录。
+func (s *Store) GetModelCallsByTask(ctx context.Context, taskID string) ([]ModelCall, error) {
+	query := `SELECT id, task_id, model, latency_ms, response_len, created_at
+		FROM model_calls WHERE task_id = ? ORDER BY id`
+	rows, err := s.db.QueryContext(ctx, query, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var calls []ModelCall
+	for rows.Next() {
+		var mc ModelCall
+		if err := rows.Scan(&mc.ID, &mc.TaskID, &mc.Model,
+			&mc.LatencyMs, &mc.ResponseLen, &mc.CreatedAt); err != nil {
+			return nil, err
+		}
+		calls = append(calls, mc)
+	}
+	return calls, rows.Err()
+}
+
 // SaveMonitoringSummary 保存监控摘要。
 func (s *Store) SaveMonitoringSummary(ctx context.Context, m MonitoringSummary) error {
 	query := `INSERT OR REPLACE INTO monitoring_summary
 		(task_id, total_duration_ms, sandbox_duration_ms, tool_calls_count,
-		 permission_intercepts, finding_count)
-		VALUES (?, ?, ?, ?, ?, ?)`
+		 permission_intercepts, finding_count, timeout_count, sandbox_failure_count)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 
 	_, err := s.db.ExecContext(ctx, query,
 		m.TaskID, m.TotalDurationMs, m.SandboxDurationMs,
 		m.ToolCallsCount, m.PermissionIntercepts, m.FindingCount,
+		m.TimeoutCount, m.SandboxFailureCount,
 	)
 	return err
 }
@@ -306,12 +413,14 @@ func (s *Store) SaveMonitoringSummary(ctx context.Context, m MonitoringSummary) 
 // GetMonitoringSummary 按 task ID 查询监控摘要。
 func (s *Store) GetMonitoringSummary(ctx context.Context, taskID string) (MonitoringSummary, error) {
 	query := `SELECT task_id, total_duration_ms, sandbox_duration_ms,
-		tool_calls_count, permission_intercepts, finding_count
+		tool_calls_count, permission_intercepts, finding_count,
+		timeout_count, sandbox_failure_count
 		FROM monitoring_summary WHERE task_id = ?`
 	var m MonitoringSummary
 	err := s.db.QueryRowContext(ctx, query, taskID).Scan(
 		&m.TaskID, &m.TotalDurationMs, &m.SandboxDurationMs,
 		&m.ToolCallsCount, &m.PermissionIntercepts, &m.FindingCount,
+		&m.TimeoutCount, &m.SandboxFailureCount,
 	)
 	return m, err
 }
@@ -370,7 +479,8 @@ func (s *Store) GetPermissionDecisionsByTask(ctx context.Context, taskID string)
 func (s *Store) GetTask(ctx context.Context, taskID string) (*ReviewTask, error) {
 	query := `SELECT id, input_type, input_hash, status, created_at, completed_at,
 		total_files, total_findings, critical_count, high_count,
-		medium_count, low_count, warning_count, duration_ms, error_message
+		medium_count, low_count, warning_count, duration_ms, error_message,
+		report_json_path, report_md_path, report_generated_at
 		FROM review_tasks WHERE id = ?`
 
 	var t ReviewTask
@@ -381,6 +491,7 @@ func (s *Store) GetTask(ctx context.Context, taskID string) (*ReviewTask, error)
 		&t.Summary.Critical, &t.Summary.High,
 		&t.Summary.Medium, &t.Summary.Low, &t.Summary.Warning,
 		&t.DurationMs, &t.ErrorMessage,
+		&t.ReportJSONPath, &t.ReportMDPath, &t.ReportGeneratedAt,
 	)
 	if err != nil {
 		return nil, err

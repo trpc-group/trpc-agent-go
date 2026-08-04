@@ -1,0 +1,19 @@
+diff --git a/server.go b/server.go
+--- a/server.go
++++ b/server.go
+@@ -1,0 +1,10 @@
++package main
++func serve() error {
++    ln, err := net.Listen("tcp", ":8080")
++    if err != nil {
++        return err
++    }
++    defer ln.Close()
++    for {
++        conn, err := ln.Accept()
++        if err != nil {
++            return err
++        }
++        handle(conn)
++    }
++}

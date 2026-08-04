@@ -1,0 +1,8 @@
+diff --git a/worker.go b/worker.go
+--- a/worker.go
++++ b/worker.go
+@@ -1,0 +1,5 @@
++package worker
++func stop() {
++    go worker(shutdownCh)
++}

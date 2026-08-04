@@ -1,0 +1,10 @@
+diff --git a/repo.go b/repo.go
+--- a/repo.go
++++ b/repo.go
+@@ -1,0 +1,5 @@
++package repo
++func find(db *sql.DB, id string) (string, error) {
++    var name string
++    err := db.QueryRowContext(context.Background(), "SELECT name FROM users WHERE id = ?", id).Scan(&name)
++    return name, err
++}

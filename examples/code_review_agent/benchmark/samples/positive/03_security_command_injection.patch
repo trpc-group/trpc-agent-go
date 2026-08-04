@@ -1,0 +1,9 @@
+diff --git a/exec.go b/exec.go
+--- a/exec.go
++++ b/exec.go
+@@ -1,0 +1,4 @@
++package main
++func run(url string) {
++    cmd := exec.Command("sh", "-c", "curl "+url)
++    _ = cmd.Run()
++}

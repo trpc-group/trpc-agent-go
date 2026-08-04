@@ -16,11 +16,13 @@ import (
 	"time"
 )
 
-// ReportMeta 携带报告所需的治理拦截与沙箱执行数据。
+// ReportMeta 携带报告所需的治理拦截、沙箱执行与模型调用数据。
 type ReportMeta struct {
 	Monitoring          MonitoringSummary
 	PermissionDecisions []PermissionDecision
 	SandboxRuns         []SandboxRun
+	ModelCalls          []ModelCall
+	ModelSummary        string // fake model 输出（如启用）
 }
 
 // ReportConfig 控制报告生成行为。
@@ -53,6 +55,10 @@ func GenerateJSONReport(path string, task *ReviewTask, dedupCount int, cfg Repor
 		ToolCallsCount       int                  `json:"tool_calls_count"`
 		PermissionIntercepts int                  `json:"permission_intercepts"`
 		SandboxDurationMs    int64                `json:"sandbox_duration_ms"`
+		TimeoutCount         int                  `json:"timeout_count"`
+		SandboxFailureCount  int                  `json:"sandbox_failure_count"`
+		ModelSummary         string               `json:"model_summary,omitempty"`
+		ModelCalls           []ModelCall          `json:"model_calls,omitempty"`
 	}
 
 	entry := reportEntry{
@@ -73,6 +79,10 @@ func GenerateJSONReport(path string, task *ReviewTask, dedupCount int, cfg Repor
 		ToolCallsCount:       cfg.Meta.Monitoring.ToolCallsCount,
 		PermissionIntercepts: cfg.Meta.Monitoring.PermissionIntercepts,
 		SandboxDurationMs:    cfg.Meta.Monitoring.SandboxDurationMs,
+		TimeoutCount:         cfg.Meta.Monitoring.TimeoutCount,
+		SandboxFailureCount:  cfg.Meta.Monitoring.SandboxFailureCount,
+		ModelSummary:         cfg.Meta.ModelSummary,
+		ModelCalls:           cfg.Meta.ModelCalls,
 	}
 
 	if len(task.Findings) == 0 {
@@ -264,6 +274,12 @@ func GenerateMarkdownReport(path string, task *ReviewTask, cfg ReportConfig) err
 		sb.WriteString("\n")
 	}
 
+	// 模型审查摘要（fake-model / 真实模型输出）
+	if cfg.Meta.ModelSummary != "" {
+		sb.WriteString("## 模型审查摘要\n\n")
+		sb.WriteString(fmt.Sprintf("> %s\n\n", cfg.Meta.ModelSummary))
+	}
+
 	// 监控指标
 	sb.WriteString("## 监控指标\n\n")
 	sb.WriteString(fmt.Sprintf("- 总耗时: %dms\n", task.DurationMs))
@@ -272,6 +288,8 @@ func GenerateMarkdownReport(path string, task *ReviewTask, cfg ReportConfig) err
 	sb.WriteString(fmt.Sprintf("- 工具调用次数: %d\n", cfg.Meta.Monitoring.ToolCallsCount))
 	sb.WriteString(fmt.Sprintf("- Permission 拦截次数: %d\n", cfg.Meta.Monitoring.PermissionIntercepts))
 	sb.WriteString(fmt.Sprintf("- Finding 数量: %d\n", cfg.Meta.Monitoring.FindingCount))
+	sb.WriteString(fmt.Sprintf("- 沙箱超时次数: %d\n", cfg.Meta.Monitoring.TimeoutCount))
+	sb.WriteString(fmt.Sprintf("- 沙箱失败次数: %d\n", cfg.Meta.Monitoring.SandboxFailureCount))
 	sb.WriteString("\n")
 
 	// 页脚

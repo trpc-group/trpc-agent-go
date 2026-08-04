@@ -1,0 +1,12 @@
+diff --git a/db.go b/db.go
+--- a/db.go
++++ b/db.go
+@@ -1,0 +1,6 @@
++package db
++func connect() (*sql.DB, error) {
++    db, err := sql.Open("sqlite3", "x.db")
++    if err != nil {
++        return nil, err
++    }
++    return db, nil
++}

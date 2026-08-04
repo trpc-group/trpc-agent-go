@@ -129,3 +129,53 @@ func TestRunGoVet_DryRun(t *testing.T) {
 		t.Errorf("dry-run 输出应包含标记, 实际 %q", res.Stdout)
 	}
 }
+
+// allowEnvScanner 返回放行 env 命令的扫描器（默认 allowlist 无 env）。
+func allowEnvScanner() *safety.Scanner {
+	p := safety.DefaultPolicy()
+	p.AllowedCommands = append(p.AllowedCommands, "env")
+	p.Rules = nil
+	return safety.NewScanner(p)
+}
+
+// TestSandboxEnv_Allowlist 验证 sandboxEnv() 白名单过滤逻辑：
+// 白名单外变量丢弃、白名单内变量保留（验收标准 4/8 安全边界）。
+func TestSandboxEnv_Allowlist(t *testing.T) {
+	t.Setenv("CR_TEST_SECRET_XYZ", "topsecret-value")
+	t.Setenv("PATH", "/usr/bin:/bin")
+
+	env := sandboxEnv()
+	joined := strings.Join(env, "\n")
+	if strings.Contains(joined, "topsecret-value") {
+		t.Error("白名单外的环境变量不应透传")
+	}
+	foundPath := false
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "PATH=") {
+			foundPath = true
+		}
+	}
+	if !foundPath {
+		t.Error("白名单内的 PATH 应被保留")
+	}
+}
+
+// TestRunCommand_EnvNotLeaked 端到端验证沙箱子进程拿不到白名单外的密钥变量。
+func TestRunCommand_EnvNotLeaked(t *testing.T) {
+	t.Setenv("CR_TEST_SECRET_XYZ", "topsecret-value")
+	se := NewSandboxExecutor(DefaultSandboxConfig(), false)
+	se.gate = &SafetyGate{scanner: allowEnvScanner()}
+	res, err := se.RunCommand(context.Background(), "env", t.TempDir())
+	if err != nil {
+		t.Fatalf("env 命令失败: %v", err)
+	}
+	if res.Intercepted {
+		t.Fatal("env 不应被安全策略拦截")
+	}
+	if strings.Contains(res.Stdout, "topsecret-value") {
+		t.Error("沙箱子进程不应透传白名单外的环境变量")
+	}
+	if !strings.Contains(res.Stdout, "PATH=") {
+		t.Error("白名单内的 PATH 应被透传")
+	}
+}

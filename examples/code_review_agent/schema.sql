@@ -17,7 +17,10 @@ CREATE TABLE IF NOT EXISTS review_tasks (
     low_count INTEGER DEFAULT 0,
     warning_count INTEGER DEFAULT 0,
     duration_ms INTEGER DEFAULT 0,
-    error_message TEXT DEFAULT ''
+    error_message TEXT DEFAULT '',
+    report_json_path TEXT DEFAULT '',      -- 生成的 review_report.json 磁盘路径
+    report_md_path TEXT DEFAULT '',        -- 生成的 review_report.md 磁盘路径
+    report_generated_at INTEGER DEFAULT 0  -- 报告生成时间戳
 );
 
 -- 审查发现表
@@ -73,7 +76,19 @@ CREATE TABLE IF NOT EXISTS monitoring_summary (
     sandbox_duration_ms INTEGER DEFAULT 0,
     tool_calls_count INTEGER DEFAULT 0,
     permission_intercepts INTEGER DEFAULT 0,
-    finding_count INTEGER DEFAULT 0
+    finding_count INTEGER DEFAULT 0,
+    timeout_count INTEGER DEFAULT 0,          -- 沙箱超时次数
+    sandbox_failure_count INTEGER DEFAULT 0  -- 沙箱非超时失败次数
+);
+
+-- 模型调用记录表（fake-model / 真实模型审计）
+CREATE TABLE IF NOT EXISTS model_calls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id TEXT NOT NULL,
+    model TEXT NOT NULL DEFAULT '',           -- fake | 真实模型名
+    latency_ms INTEGER DEFAULT 0,
+    response_len INTEGER DEFAULT 0,
+    created_at INTEGER NOT NULL
 );
 
 -- 索引
@@ -82,3 +97,4 @@ CREATE INDEX IF NOT EXISTS idx_findings_dedup ON findings(task_id, dedup_key);
 CREATE INDEX IF NOT EXISTS idx_findings_severity ON findings(task_id, severity);
 CREATE INDEX IF NOT EXISTS idx_sandbox_task ON sandbox_runs(task_id);
 CREATE INDEX IF NOT EXISTS idx_permissions_task ON permission_decisions(task_id);
+CREATE INDEX IF NOT EXISTS idx_model_calls_task ON model_calls(task_id);

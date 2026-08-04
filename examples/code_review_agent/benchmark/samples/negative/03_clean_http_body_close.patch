@@ -1,0 +1,13 @@
+diff --git a/http.go b/http.go
+--- a/http.go
++++ b/http.go
+@@ -1,0 +1,9 @@
++package main
++func get(url string) ([]byte, error) {
++    resp, err := http.Get(url)
++    if err != nil {
++        return nil, err
++    }
++    defer resp.Body.Close()
++    return io.ReadAll(resp.Body)
++}

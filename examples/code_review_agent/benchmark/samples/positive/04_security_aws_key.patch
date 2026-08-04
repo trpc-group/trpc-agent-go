@@ -1,0 +1,7 @@
+diff --git a/s3.go b/s3.go
+--- a/s3.go
++++ b/s3.go
+@@ -1,0 +1,3 @@
++package main
++var accessKey = "AKIAIOSFODNN7EXAMPLE"
++var secretKey = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"

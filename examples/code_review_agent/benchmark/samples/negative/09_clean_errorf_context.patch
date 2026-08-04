@@ -1,0 +1,8 @@
+diff --git a/err.go b/err.go
+--- a/err.go
++++ b/err.go
+@@ -1,0 +1,4 @@
++package main
++func save(id int) error {
++    return fmt.Errorf("create user %d failed: %w", id, err)
++}

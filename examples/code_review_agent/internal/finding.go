@@ -259,6 +259,10 @@ type ReviewTask struct {
 	Findings      []Finding     `json:"findings"`
 	DurationMs    int64         `json:"duration_ms"`
 	ErrorMessage  string        `json:"error_message,omitempty"`
+	// 报告落库元数据（验收标准 3：报告可经 DB 按 task 查询到）。
+	ReportJSONPath    string `json:"report_json_path,omitempty"`
+	ReportMDPath      string `json:"report_md_path,omitempty"`
+	ReportGeneratedAt int64  `json:"report_generated_at,omitempty"`
 }
 
 // NewReviewTask 创建一个新的审查任务。

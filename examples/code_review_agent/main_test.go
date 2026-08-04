@@ -37,14 +37,13 @@ func TestPipeline_SecurityIssue(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	task, dedup, err := runPipeline(
-		"diff_file", content,
-		"", // no repo path
-		dir+"/test.db",
-		dir,
-		true, // dry-run
-		"", "", "",
-	)
+	task, dedup, err := internal.RunReview(context.Background(), internal.RunReviewInput{
+		InputType:    "diff_file",
+		InputContent: content,
+		DBPath:       dir + "/test.db",
+		OutputDir:    dir,
+		DryRun:       true,
+	})
 	if err != nil {
 		t.Fatalf("管线执行失败: %v", err)
 	}
@@ -89,9 +88,13 @@ func TestPipeline_CleanDiff(t *testing.T) {
 +    return "Hello, " + name
 +}
 `
-	task, _, err := runPipeline(
-		"diff_file", content, "", dir+"/test.db", dir, true, "", "", "",
-	)
+	task, _, err := internal.RunReview(context.Background(), internal.RunReviewInput{
+		InputType:    "diff_file",
+		InputContent: content,
+		DBPath:       dir + "/test.db",
+		OutputDir:    dir,
+		DryRun:       true,
+	})
 	if err != nil {
 		t.Fatalf("管线执行失败: %v", err)
 	}
@@ -120,9 +123,13 @@ func TestPipeline_GoroutineLeak(t *testing.T) {
 +    }()
 +}
 `
-	task, _, err := runPipeline(
-		"diff_file", content, "", dir+"/test.db", dir, true, "", "", "",
-	)
+	task, _, err := internal.RunReview(context.Background(), internal.RunReviewInput{
+		InputType:    "diff_file",
+		InputContent: content,
+		DBPath:       dir + "/test.db",
+		OutputDir:    dir,
+		DryRun:       true,
+	})
 	if err != nil {
 		t.Fatalf("管线执行失败: %v", err)
 	}
@@ -157,9 +164,13 @@ func TestPipeline_ResourceLeak(t *testing.T) {
 +    return os.ReadAll(f)
 +}
 `
-	task, _, err := runPipeline(
-		"diff_file", content, "", dir+"/test.db", dir, true, "", "", "",
-	)
+	task, _, err := internal.RunReview(context.Background(), internal.RunReviewInput{
+		InputType:    "diff_file",
+		InputContent: content,
+		DBPath:       dir + "/test.db",
+		OutputDir:    dir,
+		DryRun:       true,
+	})
 	if err != nil {
 		t.Fatalf("管线执行失败: %v", err)
 	}
@@ -191,9 +202,13 @@ func TestPipeline_DuplicateFindings(t *testing.T) {
 +var password = "super-secret-123"
 +var endpoint = "https://api.example.com"
 `
-	task, dedup, err := runPipeline(
-		"diff_file", content, "", dir+"/test.db", dir, true, "", "", "",
-	)
+	task, dedup, err := internal.RunReview(context.Background(), internal.RunReviewInput{
+		InputType:    "diff_file",
+		InputContent: content,
+		DBPath:       dir + "/test.db",
+		OutputDir:    dir,
+		DryRun:       true,
+	})
 	if err != nil {
 		t.Fatalf("管线执行失败: %v", err)
 	}
@@ -228,9 +243,13 @@ func TestPipeline_DuplicateFindings(t *testing.T) {
 func TestPipeline_EmptyDiff(t *testing.T) {
 	dir := t.TempDir()
 
-	task, _, err := runPipeline(
-		"diff_file", "", "", dir+"/test.db", dir, true, "", "", "",
-	)
+	task, _, err := internal.RunReview(context.Background(), internal.RunReviewInput{
+		InputType:    "diff_file",
+		InputContent: "",
+		DBPath:       dir + "/test.db",
+		OutputDir:    dir,
+		DryRun:       true,
+	})
 	if err != nil {
 		t.Fatalf("管线执行失败: %v", err)
 	}
@@ -282,9 +301,13 @@ diff --git a/complex.go b/complex.go
 `
 
 	start := time.Now()
-	task, _, err := runPipeline(
-		"diff_file", diffContent, "", dir+"/test.db", dir, true, "", "", "",
-	)
+	task, _, err := internal.RunReview(context.Background(), internal.RunReviewInput{
+		InputType:    "diff_file",
+		InputContent: diffContent,
+		DBPath:       dir + "/test.db",
+		OutputDir:    dir,
+		DryRun:       true,
+	})
 	elapsed := time.Since(start)
 
 	if err != nil {
@@ -312,9 +335,13 @@ func TestPipeline_DatabasePersistence(t *testing.T) {
 +func connect() { sql.Open("sqlite3", "test.db") }
 `
 
-	task, _, err := runPipeline(
-		"diff_file", content, "", dbPath, dir, true, "", "", "",
-	)
+	task, _, err := internal.RunReview(context.Background(), internal.RunReviewInput{
+		InputType:    "diff_file",
+		InputContent: content,
+		DBPath:       dbPath,
+		OutputDir:    dir,
+		DryRun:       true,
+	})
 	if err != nil {
 		t.Fatalf("管线执行失败: %v", err)
 	}
@@ -344,6 +371,21 @@ func TestPipeline_DatabasePersistence(t *testing.T) {
 
 		if retrieved.ID != task.ID {
 			t.Errorf("task ID 不匹配: %q != %q", retrieved.ID, task.ID)
+		}
+
+		// 验收标准 3：报告路径必须已落库，且磁盘文件存在。
+		if retrieved.ReportJSONPath == "" || retrieved.ReportMDPath == "" {
+			t.Error("report 路径应已写入 review_tasks")
+		} else {
+			if _, err := os.Stat(retrieved.ReportJSONPath); err != nil {
+				t.Errorf("JSON 报告文件应存在: %v", err)
+			}
+			if _, err := os.Stat(retrieved.ReportMDPath); err != nil {
+				t.Errorf("MD 报告文件应存在: %v", err)
+			}
+		}
+		if retrieved.ReportGeneratedAt == 0 {
+			t.Error("report_generated_at 应为非 0")
 		}
 
 		findings, err := store.GetFindingsByTask(ctx, task.ID)
@@ -391,9 +433,13 @@ func TestPipeline_AllFixtures(t *testing.T) {
 				t.Fatalf("读取 fixture 失败: %v", err)
 			}
 			dir := t.TempDir()
-			task, _, err := runPipeline(
-				"diff_file", string(patch), "", dir+"/test.db", dir, true, "", "", "",
-			)
+			task, _, err := internal.RunReview(context.Background(), internal.RunReviewInput{
+				InputType:    "diff_file",
+				InputContent: string(patch),
+				DBPath:       dir + "/test.db",
+				OutputDir:    dir,
+				DryRun:       true,
+			})
 			if err != nil {
 				t.Fatalf("fixture %s 管线执行失败: %v", name, err)
 			}
@@ -440,9 +486,13 @@ func TestPipeline_MonitoringPersisted(t *testing.T) {
 +func connect() { sql.Open("sqlite3", "test.db") }
 `
 
-	task, _, err := runPipeline(
-		"diff_file", content, "", dbPath, dir, true, "", "", "",
-	)
+	task, _, err := internal.RunReview(context.Background(), internal.RunReviewInput{
+		InputType:    "diff_file",
+		InputContent: content,
+		DBPath:       dbPath,
+		OutputDir:    dir,
+		DryRun:       true,
+	})
 	if err != nil {
 		t.Fatalf("管线执行失败: %v", err)
 	}
@@ -487,4 +537,80 @@ func TestPipeline_MonitoringPersisted(t *testing.T) {
 
 	t.Logf("审计链路: sandbox_runs=%d, permission_decisions=%d, tool_calls=%d, intercepts=%d",
 		len(runs), len(decisions), mon.ToolCallsCount, mon.PermissionIntercepts)
+}
+
+// TestPipeline_FakeModel_RecordsToolCall 验证 --fake-model 模式可跑通、耗时 < 2min、
+// 模型调用落库并计入 tool_calls、报告包含模型摘要（验收标准 6）。
+func TestPipeline_FakeModel_RecordsToolCall(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "review.db")
+
+	content := `diff --git a/config.go b/config.go
+--- a/config.go
++++ b/config.go
+@@ -1,0 +1,3 @@
++package config
++var apiKey = "sk-abc123def456ghi789jkl012mno345pqr678stu901vwx"
++var endpoint = "https://api.example.com"
+`
+
+	start := time.Now()
+	task, _, err := internal.RunReview(context.Background(), internal.RunReviewInput{
+		InputType:    "diff_file",
+		InputContent: content,
+		DBPath:       dbPath,
+		OutputDir:    dir,
+		DryRun:       true,
+		FakeModel:    true,
+	})
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("管线执行失败: %v", err)
+	}
+	if elapsed > 2*time.Minute {
+		t.Errorf("fake-model 模式耗时 %v 超过 2 分钟限制", elapsed)
+	}
+
+	store, err := internal.NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("打开数据库失败: %v", err)
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+	calls, err := store.GetModelCallsByTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("查询 model calls 失败: %v", err)
+	}
+	if len(calls) != 1 {
+		t.Errorf("应有 1 条 model call, 实际 %d", len(calls))
+	} else if calls[0].Model != "fake" {
+		t.Errorf("model 名应为 fake, 实际 %q", calls[0].Model)
+	}
+
+	mon, err := store.GetMonitoringSummary(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("查询监控摘要失败: %v", err)
+	}
+	if mon.ToolCallsCount < 1 {
+		t.Errorf("模型调用应计入 tool_calls_count, 实际 %d", mon.ToolCallsCount)
+	}
+
+	// 报告包含 fake model 摘要。
+	mdData, err := os.ReadFile(filepath.Join(dir, "review_report.md"))
+	if err != nil {
+		t.Fatalf("读取 MD 报告失败: %v", err)
+	}
+	if !strings.Contains(string(mdData), "FakeModel 摘要") {
+		t.Error("MD 报告应包含 fake model 摘要")
+	}
+	jsonData, err := os.ReadFile(filepath.Join(dir, "review_report.json"))
+	if err != nil {
+		t.Fatalf("读取 JSON 报告失败: %v", err)
+	}
+	if !strings.Contains(string(jsonData), "model_summary") {
+		t.Error("JSON 报告应包含 model_summary 字段")
+	}
+
+	t.Logf("fake-model 耗时 %v, task=%s", elapsed, task.ID)
 }

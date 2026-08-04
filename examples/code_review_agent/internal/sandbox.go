@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool/safety"
@@ -104,7 +105,7 @@ func (se *SandboxExecutor) RunGoVet(ctx context.Context, dir string) (SandboxRes
 	start := time.Now()
 	cmd := exec.CommandContext(timedCtx, "go", "vet", "./...")
 	cmd.Dir = dir
-	cmd.Env = os.Environ()
+	cmd.Env = sandboxEnv()
 	// 超时杀进程后，若子进程继续持有输出管道，Wait 会无限阻塞；
 	// WaitDelay 强制关闭管道让调用方在超时后尽快返回。
 	cmd.WaitDelay = time.Second
@@ -178,7 +179,7 @@ func (se *SandboxExecutor) RunCommand(ctx context.Context, command string, dir s
 	start := time.Now()
 	cmd := exec.CommandContext(timedCtx, "sh", "-c", command)
 	cmd.Dir = dir
-	cmd.Env = os.Environ()
+	cmd.Env = sandboxEnv()
 	// 超时杀进程后，若子进程继续持有输出管道，Wait 会无限阻塞；
 	// WaitDelay 强制关闭管道让调用方在超时后尽快返回。
 	cmd.WaitDelay = time.Second
@@ -253,4 +254,29 @@ func (b *limitedBuffer) String() string {
 		return string(b.buf) + "\n... (输出已截断)"
 	}
 	return string(b.buf)
+}
+
+// sandboxEnvAllowlist 是沙箱子进程的环境变量白名单：仅透传构建 / 运行所需
+// 变量，杜绝宿主密钥（AWS / GitHub / 数据库等）流入子进程环境（纵深防御，
+// 验收标准 4/8 安全边界）。
+var sandboxEnvAllowlist = []string{
+	"PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE", "TERM",
+	"GOPATH", "GOROOT", "GOCACHE", "GOENV", "GOMODCACHE", "GOWORK",
+	"GOPROXY", "GOSUMDB", "GOPRIVATE", "GOFLAGS", "GOVERSION", "GOTOOLCHAIN",
+	"SSH_AUTH_SOCK", // go 工具链拉取私有依赖时所需的 git 凭据代理
+}
+
+// sandboxEnv 返回过滤后的环境变量列表（白名单保留，其余丢弃）。
+func sandboxEnv() []string {
+	allow := make(map[string]bool, len(sandboxEnvAllowlist))
+	for _, k := range sandboxEnvAllowlist {
+		allow[k] = true
+	}
+	var env []string
+	for _, kv := range os.Environ() {
+		if i := strings.IndexByte(kv, '='); i > 0 && allow[kv[:i]] {
+			env = append(env, kv)
+		}
+	}
+	return env
 }

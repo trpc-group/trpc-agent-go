@@ -84,3 +84,46 @@ func TestDetectSensitiveInfo_AddedLinesOnly(t *testing.T) {
 		t.Error("新增行中的敏感信息应被检出")
 	}
 }
+
+// TestMaskSensitive_CoversDetection 验证"检出必被脱敏"不变量（验收标准 5）：
+// sensitivePatterns 注册表中每个检出模式（detectRe）能命中的样例，
+// MaskSensitive 必须同样命中并脱敏，杜绝大小写/格式漂移导致明文泄漏。
+func TestMaskSensitive_CoversDetection(t *testing.T) {
+	// 每个 Description 对应一条能命中 detectRe 的真实样例。
+	samples := map[string]string{
+		"API Key / 令牌 / 密码等凭据": `apiToken = "abcdef1234567890"`,
+		"OpenAI API Key":          `sk-abcdefghijklmnopqrstuvwxyz`,
+		"Anthropic API Key":       `sk-ant-api03-abcdefghijklmnopqrstuv`,
+		"AWS Access Key":          `AKIAIOSFODNN7EXAMPLE`,
+		"GitHub fine-grained PAT": `github_pat_11AZZJUYA0KF2ao68ScGLT_X8BHm0mZE27E8tkX4Sxo`,
+		"GitHub classic PAT":      `ghp_1234567890abcdefghij`,
+		"GitLab PAT":              `glpat-abcdefghijklmnopqrstuvwx`,
+		"Slack token":             `xoxb-1234567890-abcdefghij-ABCDEFGHIJ`,
+		"私钥":                      "-----BEGIN RSA PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFA\n-----END RSA PRIVATE KEY-----",
+		"信用卡号":                   `4242 4242 4242 4242`,
+	}
+
+	covered := 0
+	for _, sp := range sensitivePatterns {
+		input, ok := samples[sp.Description]
+		if !ok {
+			continue
+		}
+		covered++
+		t.Run(sp.Description, func(t *testing.T) {
+			if !sp.detectRe().MatchString(input) {
+				t.Fatalf("样例未命中检出正则: %q", input)
+			}
+			masked, count := MaskSensitive(input)
+			if count < 1 {
+				t.Fatalf("检出命中的敏感信息必须被脱敏 (count=%d)", count)
+			}
+			if strings.Contains(masked, input) {
+				t.Errorf("脱敏后仍包含原始值: %q", masked)
+			}
+		})
+	}
+	if covered != len(samples) {
+		t.Fatalf("样例与注册表未对齐: covered=%d samples=%d", covered, len(samples))
+	}
+}

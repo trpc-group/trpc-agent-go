@@ -1,0 +1,9 @@
+diff --git a/repo.go b/repo.go
+--- a/repo.go
++++ b/repo.go
+@@ -1,0 +1,4 @@
++package repo
++func GetUser(db *sql.DB, id string) (*User, error) {
++    sqlStr := fmt.Sprintf("SELECT * FROM users WHERE id = %s", id)
++    return nil, nil
++}
