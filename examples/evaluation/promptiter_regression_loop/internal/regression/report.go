@@ -182,8 +182,17 @@ func WriteMarkdown(writer io.Writer, report *Report) error {
 		fmt.Fprintln(&buffer)
 		fmt.Fprintln(&buffer, "| Case | Baseline | Accepted | Candidate | Baseline delta | Accepted delta | Transition |")
 		fmt.Fprintln(&buffer, "| --- | ---: | ---: | ---: | ---: | ---: | --- |")
+		baselineCases, err := indexDeltaCases("baseline delta", round.BaselineDelta)
+		if err != nil {
+			return err
+		}
 		for _, evalCase := range round.Delta.Cases {
-			baselineCase := findCaseDelta(round.BaselineDelta, evalCase.CaseID)
+			key := caseKey{evalSetID: evalCase.EvalSetID, caseID: evalCase.CaseID}
+			baselineCase, ok := baselineCases[key]
+			if !ok {
+				return fmt.Errorf("baseline delta is missing case %q in eval set %q",
+					evalCase.CaseID, evalCase.EvalSetID)
+			}
 			fmt.Fprintf(&buffer, "| %s | %.4f | %.4f | %.4f | %+.4f | %+.4f | %s |\n",
 				markdownTable(evalCase.CaseID), baselineCase.BaselineScore,
 				evalCase.BaselineScore, evalCase.CandidateScore,
@@ -318,21 +327,57 @@ func validateRound(round RoundReport) error {
 	if round.Train == nil || round.Validation == nil || round.Delta == nil || round.BaselineDelta == nil {
 		return fmt.Errorf("round %d evaluation artifacts are incomplete", round.Attempt)
 	}
+	if err := validateDeltaCaseSets(round.Delta, round.BaselineDelta); err != nil {
+		return fmt.Errorf("round %d: %w", round.Attempt, err)
+	}
 	if len(round.Gate.Reasons) == 0 {
 		return fmt.Errorf("round %d gate has no explanation", round.Attempt)
 	}
 	return nil
 }
 
-func findCaseDelta(delta *DeltaSummary, caseID string) CaseDelta {
-	if delta != nil {
-		for _, evalCase := range delta.Cases {
-			if evalCase.CaseID == caseID {
-				return evalCase
-			}
+func validateDeltaCaseSets(delta, baselineDelta *DeltaSummary) error {
+	deltaCases, err := indexDeltaCases("accepted delta", delta)
+	if err != nil {
+		return err
+	}
+	baselineCases, err := indexDeltaCases("baseline delta", baselineDelta)
+	if err != nil {
+		return err
+	}
+	if len(deltaCases) != len(baselineCases) {
+		return fmt.Errorf("delta case sets differ: accepted=%d baseline=%d",
+			len(deltaCases), len(baselineCases))
+	}
+	for key := range deltaCases {
+		if _, ok := baselineCases[key]; !ok {
+			return fmt.Errorf("baseline delta is missing case %q in eval set %q",
+				key.caseID, key.evalSetID)
 		}
 	}
-	return CaseDelta{CaseID: caseID}
+	return nil
+}
+
+func indexDeltaCases(label string, delta *DeltaSummary) (map[caseKey]CaseDelta, error) {
+	if delta == nil {
+		return nil, fmt.Errorf("%s is nil", label)
+	}
+	if len(delta.Cases) == 0 {
+		return nil, fmt.Errorf("%s has no cases", label)
+	}
+	result := make(map[caseKey]CaseDelta, len(delta.Cases))
+	for _, evalCase := range delta.Cases {
+		if strings.TrimSpace(evalCase.EvalSetID) == "" || strings.TrimSpace(evalCase.CaseID) == "" {
+			return nil, fmt.Errorf("%s contains an empty case identity", label)
+		}
+		key := caseKey{evalSetID: evalCase.EvalSetID, caseID: evalCase.CaseID}
+		if _, ok := result[key]; ok {
+			return nil, fmt.Errorf("%s contains duplicate case %q in eval set %q",
+				label, key.caseID, key.evalSetID)
+		}
+		result[key] = evalCase
+	}
+	return result, nil
 }
 
 func validateRunID(runID string) error {

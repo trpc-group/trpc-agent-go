@@ -341,6 +341,75 @@ func TestNormalizeEngineEvaluationUsesStableStatusSeverityAndScores(t *testing.T
 	}
 }
 
+func TestNormalizeEngineEvaluationRejectsInvalidIdentities(t *testing.T) {
+	validResult := func() *promptiterengine.EvaluationResult {
+		return &promptiterengine.EvaluationResult{
+			OverallScore: 1,
+			EvalSets: []promptiterengine.EvalSetResult{{
+				EvalSetID: "validation",
+				Cases: []promptiterengine.CaseResult{{
+					EvalCaseID: "case-1",
+					Metrics: []promptiterengine.MetricResult{{
+						MetricName: "quality",
+						Score:      1,
+						Status:     status.EvalStatusPassed,
+					}},
+				}},
+			}},
+		}
+	}
+	tests := []struct {
+		name   string
+		mutate func(*promptiterengine.EvaluationResult)
+	}{
+		{
+			name: "empty eval set id",
+			mutate: func(result *promptiterengine.EvaluationResult) {
+				result.EvalSets[0].EvalSetID = ""
+			},
+		},
+		{
+			name: "empty case id",
+			mutate: func(result *promptiterengine.EvaluationResult) {
+				result.EvalSets[0].Cases[0].EvalCaseID = ""
+			},
+		},
+		{
+			name: "empty metric name",
+			mutate: func(result *promptiterengine.EvaluationResult) {
+				result.EvalSets[0].Cases[0].Metrics[0].MetricName = ""
+			},
+		},
+		{
+			name: "duplicate case",
+			mutate: func(result *promptiterengine.EvaluationResult) {
+				result.EvalSets[0].Cases = append(
+					result.EvalSets[0].Cases,
+					result.EvalSets[0].Cases[0],
+				)
+			},
+		},
+		{
+			name: "duplicate metric",
+			mutate: func(result *promptiterengine.EvaluationResult) {
+				result.EvalSets[0].Cases[0].Metrics = append(
+					result.EvalSets[0].Cases[0].Metrics,
+					result.EvalSets[0].Cases[0].Metrics[0],
+				)
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := validResult()
+			test.mutate(result)
+			if _, err := NormalizeEngineEvaluation(result); err == nil {
+				t.Fatal("NormalizeEngineEvaluation() error = nil, want identity error")
+			}
+		})
+	}
+}
+
 func TestNormalizeAgentEvaluationMarksMissingInvocationUsageUnmeasured(t *testing.T) {
 	result, err := NormalizeAgentEvaluation(&evaluation.EvaluationResult{
 		EvalSetID:     "validation",

@@ -20,6 +20,7 @@ import (
 
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
+	promptiterengine "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
 	"trpc.group/trpc-go/trpc-agent-go/examples/evaluation/promptiter_regression_loop/internal/regression"
 )
 
@@ -199,6 +200,23 @@ func TestPrintCompletionOnlyForSuccessfulRun(t *testing.T) {
 				t.Fatalf("printCompletion() output = %q, want %q", got, test.wantOutput)
 			}
 		})
+	}
+}
+
+func TestRequireSingleRoundRejectsMissingBaselineValidation(t *testing.T) {
+	evaluationResult := &promptiterengine.EvaluationResult{}
+	result := &promptiterengine.RunResult{
+		Status: promptiterengine.RunStatusSucceeded,
+		Rounds: []promptiterengine.RoundResult{{
+			OutputProfile: &promptiter.Profile{},
+			Train:         evaluationResult,
+			Validation:    evaluationResult,
+			Acceptance:    &promptiterengine.AcceptanceDecision{},
+		}},
+	}
+	_, err := requireSingleRound(result, 1)
+	if err == nil || err.Error() != "PromptIter attempt 1 baseline validation is missing" {
+		t.Fatalf("requireSingleRound() error = %v, want missing baseline validation", err)
 	}
 }
 

@@ -222,6 +222,9 @@ func requireSingleRound(
 	if result.Status != promptiterengine.RunStatusSucceeded {
 		return nil, fmt.Errorf("PromptIter attempt %d status is %q", attempt, result.Status)
 	}
+	if result.BaselineValidation == nil {
+		return nil, fmt.Errorf("PromptIter attempt %d baseline validation is missing", attempt)
+	}
 	if len(result.Rounds) != oneRound {
 		return nil, fmt.Errorf("PromptIter attempt %d returned %d rounds, want one", attempt, len(result.Rounds))
 	}
@@ -332,8 +335,8 @@ func handleRuntimeClose(
 	return resultErr
 }
 
-func runID(startedAt time.Time, configHash string) string {
-	hash := strings.TrimSpace(configHash)
+func runID(startedAt time.Time, inputHash string) string {
+	hash := strings.TrimSpace(inputHash)
 	if len(hash) > 12 {
 		hash = hash[:12]
 	}

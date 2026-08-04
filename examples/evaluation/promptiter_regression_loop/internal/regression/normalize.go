@@ -330,23 +330,46 @@ func NormalizeEngineEvaluation(result *promptiterengine.EvaluationResult) (*Eval
 	if !finite(result.OverallScore) {
 		return nil, errors.New("PromptIter evaluation score is not finite")
 	}
+	seenCases := make(map[caseKey]struct{})
 	for _, evalSet := range result.EvalSets {
+		if strings.TrimSpace(evalSet.EvalSetID) == "" {
+			return nil, errors.New("PromptIter evaluation contains an empty eval set id")
+		}
 		if normalized.EvalSetID == "" {
 			normalized.EvalSetID = evalSet.EvalSetID
 		}
 		for _, evalCase := range evalSet.Cases {
+			if strings.TrimSpace(evalCase.EvalCaseID) == "" {
+				return nil, errors.New("PromptIter evaluation contains an empty case id")
+			}
+			key := caseKey{evalSetID: evalSet.EvalSetID, caseID: evalCase.EvalCaseID}
+			if _, ok := seenCases[key]; ok {
+				return nil, fmt.Errorf("PromptIter evaluation contains duplicate case %q in eval set %q",
+					evalCase.EvalCaseID, evalSet.EvalSetID)
+			}
+			seenCases[key] = struct{}{}
 			caseResult := CaseResult{
 				EvalSetID: evalSet.EvalSetID, CaseID: evalCase.EvalCaseID,
 				Metrics: make([]MetricResult, 0, len(evalCase.Metrics)), Passed: true,
 				Trace: normalizeTrace(evalCase.Trace),
 			}
 			evaluatedMetrics := 0
+			seenMetrics := make(map[string]struct{}, len(evalCase.Metrics))
 			for _, metricResult := range evalCase.Metrics {
+				name := strings.TrimSpace(metricResult.MetricName)
+				if name == "" {
+					return nil, fmt.Errorf("PromptIter case %q has an empty metric name", evalCase.EvalCaseID)
+				}
+				if _, ok := seenMetrics[name]; ok {
+					return nil, fmt.Errorf("PromptIter case %q has duplicate metric %q",
+						evalCase.EvalCaseID, name)
+				}
+				seenMetrics[name] = struct{}{}
 				if !finite(metricResult.Score) {
-					return nil, fmt.Errorf("PromptIter metric %q score is not finite", metricResult.MetricName)
+					return nil, fmt.Errorf("PromptIter metric %q score is not finite", name)
 				}
 				caseResult.Metrics = append(caseResult.Metrics, MetricResult{
-					Name: metricResult.MetricName, Score: metricResult.Score,
+					Name: name, Score: metricResult.Score,
 					Status: metricResult.Status, Reason: metricResult.Reason,
 				})
 				if metricResult.Status != status.EvalStatusNotEvaluated {

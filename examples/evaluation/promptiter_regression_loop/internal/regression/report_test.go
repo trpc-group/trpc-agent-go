@@ -53,6 +53,52 @@ func TestReportRejectsIncompleteRound(t *testing.T) {
 	}
 }
 
+func TestReportRejectsMismatchedOrDuplicateDeltaCases(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*RoundReport)
+	}{
+		{
+			name: "missing baseline case",
+			mutate: func(round *RoundReport) {
+				round.Delta.Cases = append(round.Delta.Cases, CaseDelta{
+					EvalSetID: "validation",
+					CaseID:    "case-2",
+				})
+			},
+		},
+		{
+			name: "duplicate baseline case",
+			mutate: func(round *RoundReport) {
+				round.BaselineDelta.Cases = append(
+					round.BaselineDelta.Cases,
+					round.BaselineDelta.Cases[0],
+				)
+			},
+		},
+		{
+			name: "empty case sets",
+			mutate: func(round *RoundReport) {
+				round.Delta.Cases = nil
+				round.BaselineDelta.Cases = nil
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			report := newTestReport(t)
+			round := testRound(t, 1, "candidate", true)
+			baselineDelta := *round.BaselineDelta
+			baselineDelta.Cases = append([]CaseDelta(nil), round.BaselineDelta.Cases...)
+			round.BaselineDelta = &baselineDelta
+			test.mutate(&round)
+			if err := AppendRound(report, round); err == nil {
+				t.Fatal("AppendRound() error = nil, want invalid delta cases error")
+			}
+		})
+	}
+}
+
 func TestWriteMarkdownUsesAcceptedDeltaTransition(t *testing.T) {
 	report := newTestReport(t)
 	original := testEvaluation("validation", testCaseSpec{id: "case-1", score: 0, passed: false})
