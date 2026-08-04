@@ -28,6 +28,7 @@ forbidden_paths:
   - /etc/passwd
   - /etc/shadow
   - ~/.ssh
+  - $HOME/.ssh
   - .env
   - .env.local
   - credentials.json
@@ -78,6 +79,7 @@ rules:
     description: "Detect credential file access"
     patterns:
       - "~/\\.ssh"
+      - "\\.ssh"
       - "\\.env"
       - "credentials"
       - "id_rsa"

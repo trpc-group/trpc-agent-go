@@ -16,6 +16,7 @@ package safety
 // Decision is the outcome of a safety scan.
 type Decision string
 
+// Decision values returned by a scan, from least to most restrictive.
 const (
 	DecisionAllow       Decision = "allow"
 	DecisionDeny        Decision = "deny"
@@ -26,6 +27,7 @@ const (
 // RiskLevel categorizes the severity of a detected risk.
 type RiskLevel string
 
+// RiskLevel values, from least to most severe.
 const (
 	RiskLow      RiskLevel = "low"
 	RiskMedium   RiskLevel = "medium"

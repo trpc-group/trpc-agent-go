@@ -636,7 +636,7 @@ func TestCompileRules_InvalidRegexWarning(t *testing.T) {
 }
 
 // =============================================================================
-// ShellSafe integration (issue requirement: unparseable commands fail closed)
+// ShellSafe integration (issue requirement: unparsable commands fail closed)
 // =============================================================================
 
 func TestScan_ShellCommandSubstitutionDenied(t *testing.T) {
@@ -765,8 +765,23 @@ func TestScan_HostExecLongSessionAsked(t *testing.T) {
 	assert.Equal(t, "hostexec_long_session", report.RuleID)
 }
 
-func TestScan_HostExecSafeCommandAllowed(t *testing.T) {
+func TestScan_HostExecRequiresAskByDefault(t *testing.T) {
 	s := newTestScanner()
+	report := s.Scan(context.Background(), ScanRequest{
+		ToolName: "host_shell",
+		Command:  "echo hi",
+		Backend:  "hostexec",
+	})
+	// DefaultPolicy sets HostExecRequiresAsk=true: host shell commands must
+	// be confirmed by a human, even benign ones.
+	assert.Equal(t, DecisionAsk, report.Decision)
+	assert.Equal(t, "hostexec_requires_ask", report.RuleID)
+}
+
+func TestScan_HostExecAskDisabledAllows(t *testing.T) {
+	p := DefaultPolicy()
+	p.HostExecRequiresAsk = false
+	s := NewScanner(p)
 	report := s.Scan(context.Background(), ScanRequest{
 		ToolName: "host_shell",
 		Command:  "echo hi",
@@ -799,8 +814,8 @@ func TestScan_ReportCommandRedacted(t *testing.T) {
 func TestLoadPolicy_RejectsUnknownKeys(t *testing.T) {
 	dir := t.TempDir()
 	path := dir + "/bad.yaml"
-	// "allowd_commands" is a typo of "allowed_commands" — strict loading must reject it.
-	content := "version: \"1.0\"\nallowd_commands:\n  - echo\n"
+	// A misspelled variant of "allowed_commands" must be rejected by strict loading.
+	content := "version: \"1.0\"\npermit_commands:\n  - echo\n"
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 	_, err := LoadPolicy(path)
 	require.Error(t, err, "unknown key must be rejected, not silently ignored")
@@ -846,7 +861,7 @@ func TestLoadPolicy_RejectsInvalidEnums(t *testing.T) {
     category: "dangerous_commands"
     patterns: ["rm -rf /"]
     risk_level: "critical"
-    action: "allowd"
+    action: "permit"
 `
 	require.NoError(t, os.WriteFile(path, []byte(badAction), 0o600))
 	_, err = LoadPolicy(path)
@@ -876,7 +891,7 @@ func TestScan_HomeEnvPathForbidden(t *testing.T) {
 func TestScan_UnknownRuleActionFailsClosed(t *testing.T) {
 	p := DefaultPolicy()
 	p.Rules = []Rule{
-		{ID: "typo_action", Category: "test", Patterns: []string{`echo`}, RiskLevel: RiskLow, Action: "allowd"},
+		{ID: "typo_action", Category: "test", Patterns: []string{`echo`}, RiskLevel: RiskLow, Action: "permit"},
 	}
 	s := NewScanner(p)
 	report := s.Scan(context.Background(), ScanRequest{Command: "echo hello"})

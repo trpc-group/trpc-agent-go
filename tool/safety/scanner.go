@@ -133,11 +133,14 @@ func (s *Scanner) Scan(ctx context.Context, req ScanRequest) ScanReport {
 	s.applyConcurrency(fullCommand, &report)
 	s.applyHostExec(req, fullCommand, &report)
 
-	// Desensitize the command and evidence stored in the report so secrets
-	// never leak into reports, logs, or audit events.
+	// Desensitize the command, evidence and recommendation stored in the
+	// report so secrets never leak into reports, logs, or audit events.
+	// Recommendations embed untrusted command text (cmdName, option values,
+	// target hosts) and are persisted downstream as permission reasons.
 	fullCommand = redactSecrets(fullCommand)
 	report.Command = fullCommand
 	report.Evidence = redactSecrets(report.Evidence)
+	report.Recommendation = redactSecrets(report.Recommendation)
 
 	// Record decision.
 	if report.Decision != DecisionAllow {
@@ -162,7 +165,7 @@ func (s *Scanner) Scan(ctx context.Context, req ScanRequest) ScanReport {
 // applyParseChecks is the conservative parsing step: shell commands that
 // shellsafe cannot parse fail closed to deny; non-shell code that cannot be
 // structurally modelled fails closed to ask (unless a stricter rule already
-// matched). The issue requires unparseable commands to return deny or ask,
+// matched). The issue requires unparsable commands to return deny or ask,
 // never a default allow.
 func (s *Scanner) applyParseChecks(req ScanRequest, fullCommand string, report *ScanReport) {
 	if fullCommand == "" {
@@ -555,6 +558,23 @@ func (s *Scanner) applyConcurrency(fullCommand string, report *ScanReport) {
 func (s *Scanner) applyHostExec(req ScanRequest, fullCommand string, report *ScanReport) {
 	if req.Backend != "hostexec" {
 		return
+	}
+	// hostexec 直接在宿主 shell 执行。策略要求确认时（hostexec_requires_ask），
+	// 所有 hostexec 命令都升级为 ask，除非已有更严格决策；长会话规则随后
+	// 可在更严格的方向上覆盖 RuleID。
+	if s.policy.HostExecRequiresAsk {
+		if riskOrder(RiskMedium) > riskOrder(report.RiskLevel) {
+			report.RiskLevel = RiskMedium
+		}
+		if actionOrder(DecisionAsk) > actionOrder(report.Decision) {
+			report.Decision = DecisionAsk
+		}
+		if metadataUpgrades(*report, RiskMedium, DecisionAsk) {
+			report.RuleID = "hostexec_requires_ask"
+			report.Evidence = extractCommandName(fullCommand)
+			report.Category = "host_execution"
+			report.Recommendation = "hostexec runs directly on the host shell; ask required by policy"
+		}
 	}
 	session, isLongSession := matchesHostExecRisk(fullCommand)
 	if !isLongSession {
@@ -1384,7 +1404,7 @@ func extractCommandFromArgs(args []byte) string {
 		if argsVal, ok := m[argKey]; ok {
 			var argList []string
 			switch v := argsVal.(type) {
-			case []interface{}:
+			case []any:
 				for _, a := range v {
 					if s, ok := a.(string); ok {
 						argList = append(argList, s)
@@ -1478,7 +1498,8 @@ func actionOrder(d Decision) int {
 		// built rule) never upgrades a verdict.
 		return 0
 	default:
-		// Unknown actions (e.g. a YAML typo "allowd") fail closed: they rank
+		// Unknown action values (e.g. a misspelled action in policy YAML) fail
+		// closed: they rank
 		// above every known action, so an unknown decision is never downgraded
 		// and the resulting non-allow decision intercepts execution.
 		return 100

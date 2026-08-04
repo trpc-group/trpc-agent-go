@@ -244,7 +244,7 @@ func TestForeignCodeFailClosed(t *testing.T) {
 		Backend:  "codeexec",
 		Language: "python",
 	})
-	assert.Equal(t, DecisionAsk, r.Decision, "unparseable foreign code must ask, got %s", r.Decision)
+	assert.Equal(t, DecisionAsk, r.Decision, "unparsable foreign code must ask, got %s", r.Decision)
 	assert.Equal(t, "foreign_code_unscanned", r.RuleID)
 }
 

@@ -125,8 +125,8 @@ func LoadPolicy(path string) (*Policy, error) {
 
 	// Start from safe defaults, then overlay file values.
 	policy := *DefaultPolicy()
-	// KnownFields(true) rejects unknown keys so a typo (e.g. "allowd_commands")
-	// cannot silently drop the allowlist and weaken the policy.
+	// KnownFields(true) rejects unknown keys so a typo cannot silently drop
+	// the allowlist and weaken the policy.
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 	if err := dec.Decode(&policy); err != nil {
