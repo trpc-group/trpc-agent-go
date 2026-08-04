@@ -88,8 +88,7 @@ const (
 	summaryToolArgumentsOmitted = `{"_trpc_summary_note":"tool arguments omitted to fit the summary context"}`
 	summaryToolResultOmittedFmt = "[Tool result omitted to fit the summary context; " +
 		"tool_name=%q, tool_call_id=%q. The tool call completed before summarization.]"
-	summaryConversationOmitted = "\n[... middle conversation omitted to fit the summary context ...]\n"
-	summaryPreviousOmitted     = "\n[... previous summary omitted to fit the summary context ...]\n"
+	summaryPreviousOmitted = "\n[... previous summary omitted to fit the summary context ...]\n"
 )
 
 // formatResponseError formats a model.ResponseError into a human-readable error.
@@ -1357,29 +1356,41 @@ func (s *sessionSummarizer) buildBoundedStandaloneSummaryRequest(
 		return request, nil
 	}
 
-	minimal, err := s.buildStandaloneSummaryRequest(summaryPromptInput{})
+	sourceOnlyInput := summaryPromptInput{
+		conversationText: input.conversationText,
+	}
+	sourceOnly, err := s.buildStandaloneSummaryRequest(sourceOnlyInput)
 	if err != nil {
 		return nil, err
 	}
-	minimalTokens, err := countSummaryRequestTokens(ctx, minimal)
+	sourceTokens, err := countSummaryRequestTokens(ctx, sourceOnly)
 	if err != nil {
 		return nil, err
 	}
-	if minimalTokens >= budget {
+	if sourceTokens > budget {
 		return nil, fmt.Errorf(
-			"summary prompt requires %d tokens but input budget is %d",
-			minimalTokens,
+			"summary source conversation requires %d tokens but input budget is %d; refusing to omit unsummarized conversation",
+			sourceTokens,
 			budget,
 		)
 	}
+	if input.previousSummary == "" {
+		return sourceOnly, nil
+	}
 
-	totalRunes := len([]rune(input.conversationText)) + len([]rune(input.previousSummary))
-	best := (*model.Request)(nil)
-	low, high := 1, totalRunes
+	previousRunes := []rune(input.previousSummary)
+	best := sourceOnly
+	low, high := 1, len(previousRunes)
 	for low <= high {
 		mid := low + (high-low)/2
 		candidate, buildErr := s.buildStandaloneSummaryRequest(
-			truncateSummaryPromptInput(input, mid),
+			summaryPromptInput{
+				conversationText: input.conversationText,
+				previousSummary: truncatePreviousSummary(
+					previousRunes,
+					mid,
+				),
+			},
 		)
 		if buildErr != nil {
 			return nil, buildErr
@@ -1395,17 +1406,7 @@ func (s *sessionSummarizer) buildBoundedStandaloneSummaryRequest(
 		}
 		high = mid - 1
 	}
-	if best == nil {
-		return nil, fmt.Errorf(
-			"summary input cannot fit a non-empty source within budget %d",
-			budget,
-		)
-	}
 	return best, nil
-}
-
-func truncateSummaryConversation(runes []rune, retain int) string {
-	return truncateSummaryText(runes, retain, summaryConversationOmitted)
 }
 
 func truncatePreviousSummary(runes []rune, retain int) string {
@@ -1427,43 +1428,6 @@ func truncateSummaryText(runes []rune, retain int, marker string) string {
 	result = append(result, markerRunes...)
 	result = append(result, runes[len(runes)-tail:]...)
 	return string(result)
-}
-
-func truncateSummaryPromptInput(input summaryPromptInput, retain int) summaryPromptInput {
-	conversationRunes := []rune(input.conversationText)
-	previousRunes := []rune(input.previousSummary)
-	total := len(conversationRunes) + len(previousRunes)
-	if retain >= total {
-		return input
-	}
-	if retain <= 0 {
-		return summaryPromptInput{}
-	}
-	if len(previousRunes) == 0 {
-		return summaryPromptInput{
-			conversationText: truncateSummaryConversation(conversationRunes, retain),
-		}
-	}
-	if len(conversationRunes) == 0 {
-		return summaryPromptInput{
-			previousSummary: truncatePreviousSummary(previousRunes, retain),
-		}
-	}
-
-	previousRetain := 0
-	conversationRetain := 1
-	if retain > 1 {
-		previousRetain = retain * len(previousRunes) / total
-		if previousRetain < 1 {
-			previousRetain = 1
-		}
-		conversationRetain = retain - previousRetain
-	}
-
-	return summaryPromptInput{
-		conversationText: truncateSummaryConversation(conversationRunes, conversationRetain),
-		previousSummary:  truncatePreviousSummary(previousRunes, previousRetain),
-	}
 }
 
 func summaryRequestFits(
