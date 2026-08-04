@@ -80,14 +80,26 @@ func TestFinalizeSummaryViewUsesFinalRequest(t *testing.T) {
 
 func TestFinalizeSummaryViewHandlesUnavailableInputs(t *testing.T) {
 	counter := fixedSummaryViewTokenCounter{tokens: 42}
-	finalizeSummaryView(context.Background(), nil, &model.Request{}, counter)
-	finalizeSummaryView(context.Background(), agent.NewInvocation(), nil, counter)
+	require.NotPanics(t, func() {
+		finalizeSummaryView(context.Background(), nil, &model.Request{}, counter)
+	})
+
+	nilRequest := agent.NewInvocation()
+	finalizeSummaryView(context.Background(), nilRequest, nil, counter)
+	_, ok := summaryview.Snapshot(nilRequest)
+	require.False(t, ok)
+
+	missingProjection := agent.NewInvocation()
 	finalizeSummaryView(
 		context.Background(),
-		agent.NewInvocation(),
-		&model.Request{},
+		missingProjection,
+		&model.Request{Messages: []model.Message{
+			model.NewUserMessage("visible"),
+		}},
 		counter,
 	)
+	_, ok = summaryview.Snapshot(missingProjection)
+	require.False(t, ok)
 }
 
 func TestFinalizeSummaryViewLeavesProjectionOnCountFailure(t *testing.T) {
