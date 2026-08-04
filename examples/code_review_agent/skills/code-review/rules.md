@@ -14,7 +14,7 @@ Rule IDs:
 - `security.insecure_tls`: high severity finding when TLS certificate
   verification is disabled.
 - `concurrency.goroutine_context_leak`: medium severity finding for goroutines
-  not tied to cancellation context.
+  whose spawned work does not receive or observe a cancellable context.
 - `resource.unclosed_file`: medium severity finding for opened files without a
   close path.
 - `resource.unclosed_http_body`: medium severity finding for HTTP responses

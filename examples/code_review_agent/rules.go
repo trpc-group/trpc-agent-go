@@ -96,11 +96,11 @@ func runRulesWithLifecycleStats(
 	repoRoot string,
 ) ([]ruleMatch, lifecycleAnalysisStats) {
 	candidates := parsed.candidateLines()
+	goroutineLeaks, _ := analyzeGoroutineCandidates(parsed.Files, repoRoot, candidates)
 	evaluations := make([][]ruleEvaluation, len(candidates))
 	var lifecycleCandidates []lifecycleCandidate
 	for candidateIndex, candidate := range candidates {
 		file := parsed.Files[candidate.FileIndex]
-		hunk := file.Hunks[candidate.HunkIndex]
 		trimmed := strings.TrimSpace(candidate.Text)
 		evaluations[candidateIndex] = appendImmediateRuleMatches(
 			evaluations[candidateIndex],
@@ -108,7 +108,7 @@ func runRulesWithLifecycleStats(
 		)
 		evaluations[candidateIndex] = appendImmediateRuleMatches(
 			evaluations[candidateIndex],
-			concurrencyRuleMatches(candidate, file, hunk, trimmed),
+			concurrencyRuleMatches(candidate, goroutineLeaks[candidateIndex]),
 		)
 		evaluations[candidateIndex] = appendLifecycleRuleEvaluations(
 			evaluations[candidateIndex],
@@ -206,8 +206,8 @@ func securityRuleMatches(candidate candidateLine, line string) []ruleMatch {
 	return matches
 }
 
-func concurrencyRuleMatches(candidate candidateLine, file changedFile, hunk diffHunk, line string) []ruleMatch {
-	if !file.isGoFile() || !isLikelyGoroutineContextLeak(line, hunk) {
+func concurrencyRuleMatches(candidate candidateLine, leaks bool) []ruleMatch {
+	if !leaks {
 		return nil
 	}
 	return []ruleMatch{newRuleMatch(candidate, ruleGoroutineContextLeak, "medium", "concurrency",
@@ -458,18 +458,6 @@ func leadingStringLiteralEnd(value string) (int, bool) {
 	return 0, false
 }
 
-func isLikelyGoroutineContextLeak(line string, hunk diffHunk) bool {
-	if !strings.HasPrefix(line, "go ") {
-		return false
-	}
-	combined := hunkText(hunk)
-	if strings.Contains(combined, "context.Background()") ||
-		strings.Contains(combined, "context.TODO()") {
-		return true
-	}
-	return !strings.Contains(combined, "ctx") && !strings.Contains(combined, "context.Context")
-}
-
 func firstCapture(pattern *regexp.Regexp, line string) string {
 	matches := pattern.FindStringSubmatch(line)
 	if len(matches) < 2 || matches[1] == "_" {
@@ -608,18 +596,6 @@ func isFunctionStartLine(line diffLine) bool {
 		return false
 	}
 	return strings.HasPrefix(strings.TrimSpace(line.Text), "func ")
-}
-
-func hunkText(hunk diffHunk) string {
-	var builder strings.Builder
-	for _, line := range hunk.Lines {
-		if line.Kind != diffLineAdded && line.Kind != diffLineContext {
-			continue
-		}
-		builder.WriteString(line.Text)
-		builder.WriteByte('\n')
-	}
-	return builder.String()
 }
 
 func isExplicitIgnoredError(line string) bool {
