@@ -19,9 +19,13 @@ import (
 )
 
 const (
-	diffLineContext = "context"
-	diffLineAdded   = "added"
-	diffLineDeleted = "deleted"
+	diffLineContext         = "context"
+	diffLineAdded           = "added"
+	diffLineDeleted         = "deleted"
+	minDiffObjectIDLength   = 7
+	maxDiffObjectIDLength   = 64
+	emptyBlobSHA1ObjectID   = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+	emptyBlobSHA256ObjectID = "473a0f4c3be8a93681a267e3b1e9a7dcda1185436fe141f7749120a303721813"
 )
 
 var hunkHeaderPattern = regexp.MustCompile(`^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@`)
@@ -56,6 +60,14 @@ type changedFile struct {
 	hasNewMode           bool
 	newMode              string
 	newModeValid         bool
+	hasIndex             bool
+	indexLine            int
+	indexMetadata        string
+	indexOldObjectID     string
+	indexNewObjectID     string
+	indexHasMode         bool
+	indexMode            string
+	indexValid           bool
 	hasSimilarityIndex   bool
 	similarityIndex      int
 	similarityValid      bool
@@ -237,6 +249,8 @@ func (p *diffParser) consumeFileMetadata(file *changedFile, line string, inputLi
 			&file.newMode,
 			&file.newModeValid,
 		)
+	case line == "index", strings.HasPrefix(line, "index "):
+		p.consumeIndexMetadata(file, line, inputLine)
 	case strings.HasPrefix(line, "similarity index "):
 		p.consumeSimilarityIndex(file, line, inputLine)
 	case strings.HasPrefix(line, "rename from "):
@@ -297,6 +311,64 @@ func validDiffFileMode(value string) bool {
 	}
 	for _, char := range value {
 		if char < '0' || char > '7' {
+			return false
+		}
+	}
+	return true
+}
+
+func (p *diffParser) consumeIndexMetadata(file *changedFile, line string, inputLine int) {
+	value := strings.TrimSpace(strings.TrimPrefix(line, "index"))
+	if file.hasIndex {
+		message := "duplicate index metadata"
+		if file.indexMetadata != value {
+			message = "conflicting index metadata"
+		}
+		file.indexValid = false
+		p.addWarning(file.reviewPath(), inputLine, message)
+		return
+	}
+	file.hasIndex = true
+	file.indexLine = inputLine
+	file.indexMetadata = value
+
+	fields := strings.Fields(value)
+	if len(fields) < 1 || len(fields) > 2 {
+		p.addWarning(file.reviewPath(), inputLine, "malformed index metadata")
+		return
+	}
+	objectIDs := fields[0]
+	if strings.Count(objectIDs, "..") != 1 {
+		p.addWarning(file.reviewPath(), inputLine, "malformed index metadata")
+		return
+	}
+	separator := strings.Index(objectIDs, "..")
+	oldObjectID := objectIDs[:separator]
+	newObjectID := objectIDs[separator+2:]
+	file.indexOldObjectID = oldObjectID
+	file.indexNewObjectID = newObjectID
+	if !validDiffObjectID(oldObjectID) || !validDiffObjectID(newObjectID) ||
+		len(oldObjectID) != len(newObjectID) {
+		p.addWarning(file.reviewPath(), inputLine, "malformed index metadata")
+		return
+	}
+	if len(fields) == 2 {
+		file.indexHasMode = true
+		file.indexMode = fields[1]
+		if !validDiffFileMode(file.indexMode) {
+			p.addWarning(file.reviewPath(), inputLine, "malformed index metadata")
+			return
+		}
+	}
+	file.indexValid = true
+}
+
+func validDiffObjectID(value string) bool {
+	if len(value) < minDiffObjectIDLength || len(value) > maxDiffObjectIDLength {
+		return false
+	}
+	for _, char := range value {
+		if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
 			return false
 		}
 	}
@@ -529,6 +601,7 @@ func (p *diffParser) validateCurrentFileStatus() {
 		file.oldMode == file.newMode {
 		warn("old mode and new mode must be different")
 	}
+	p.validateCurrentFileIndex(file)
 
 	if file.IsNew {
 		if !file.hasNewFileMode {
@@ -609,6 +682,22 @@ func (p *diffParser) validateCurrentFileStatus() {
 	p.validateCurrentFileCompleteness(file, newStatusTrusted, deletedStatusTrusted, warn)
 }
 
+func (p *diffParser) validateCurrentFileIndex(file *changedFile) {
+	if !file.hasIndex || !file.indexValid || !file.indexHasMode {
+		return
+	}
+	if file.IsNew && (!file.hasNewFileMode || !file.newFileModeValid || file.indexMode != file.newFileMode) {
+		file.indexValid = false
+		p.addWarning(file.reviewPath(), file.indexLine, "index mode does not match new file mode metadata")
+		return
+	}
+	if file.IsDeleted && (!file.hasDeletedFileMode || !file.deletedFileModeValid ||
+		file.indexMode != file.deletedFileMode) {
+		file.indexValid = false
+		p.addWarning(file.reviewPath(), file.indexLine, "index mode does not match deleted file mode metadata")
+	}
+}
+
 func (p *diffParser) validateCurrentFileCompleteness(
 	file *changedFile,
 	newStatusTrusted bool,
@@ -628,8 +717,8 @@ func (p *diffParser) validateCurrentFileCompleteness(
 		return
 	}
 
-	emptyNew := file.IsNew && newStatusTrusted && !file.hasOldMarker && !file.hasNewMarker
-	emptyDeleted := file.IsDeleted && deletedStatusTrusted && !file.hasOldMarker && !file.hasNewMarker
+	emptyNew := trustedEmptyNewFile(*file, newStatusTrusted)
+	emptyDeleted := trustedEmptyDeletedFile(*file, deletedStatusTrusted)
 	modeOnly := !file.IsNew && !file.IsDeleted && !file.IsRename && !file.isCopy &&
 		file.hasOldMode && file.oldModeValid && file.hasNewMode && file.newModeValid &&
 		file.oldMode != file.newMode && !file.hasOldMarker && !file.hasNewMarker
@@ -645,6 +734,38 @@ func (p *diffParser) validateCurrentFileCompleteness(
 		return
 	}
 	warn("text file change is missing a hunk")
+}
+
+func trustedEmptyNewFile(file changedFile, statusTrusted bool) bool {
+	return file.IsNew && statusTrusted && !file.hasOldMarker && !file.hasNewMarker &&
+		len(file.Hunks) == 0 && file.hasIndex && file.indexValid &&
+		isNullDiffObjectID(file.indexOldObjectID) && isEmptyBlobDiffObjectID(file.indexNewObjectID)
+}
+
+func trustedEmptyDeletedFile(file changedFile, statusTrusted bool) bool {
+	return file.IsDeleted && statusTrusted && !file.hasOldMarker && !file.hasNewMarker &&
+		len(file.Hunks) == 0 && file.hasIndex && file.indexValid &&
+		isEmptyBlobDiffObjectID(file.indexOldObjectID) && isNullDiffObjectID(file.indexNewObjectID)
+}
+
+func isNullDiffObjectID(value string) bool {
+	if !validDiffObjectID(value) {
+		return false
+	}
+	for _, char := range value {
+		if char != '0' {
+			return false
+		}
+	}
+	return true
+}
+
+func isEmptyBlobDiffObjectID(value string) bool {
+	if !validDiffObjectID(value) {
+		return false
+	}
+	return (len(value) <= len(emptyBlobSHA1ObjectID) && strings.HasPrefix(emptyBlobSHA1ObjectID, value)) ||
+		(len(value) <= len(emptyBlobSHA256ObjectID) && strings.HasPrefix(emptyBlobSHA256ObjectID, value))
 }
 
 func trustedNewFileStatus(file changedFile) bool {
@@ -1060,7 +1181,6 @@ func parseHunkNumber(value string, defaultValue int, label string, header string
 
 func isKnownDiffMetadata(line string) bool {
 	prefixes := []string{
-		"index ",
 		"old mode ",
 		"new mode ",
 		"similarity index ",
