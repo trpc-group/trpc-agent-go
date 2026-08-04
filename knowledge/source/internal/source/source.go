@@ -99,10 +99,10 @@ func buildReaderOptions(config *ReaderConfig) []reader.Option {
 	var opts []reader.Option
 
 	// Pass chunking configurations to readers
-	if config.chunkSize > 0 {
+	if config.chunkSize != 0 {
 		opts = append(opts, reader.WithChunkSize(config.chunkSize))
 	}
-	if config.chunkOverlap > 0 {
+	if config.chunkOverlap != 0 {
 		opts = append(opts, reader.WithChunkOverlap(config.chunkOverlap))
 	}
 	if config.customChunkingStrategy != nil {

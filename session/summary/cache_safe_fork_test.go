@@ -75,8 +75,12 @@ func TestCloneRequestForCacheSafeFork_DeepClonesMutableFields(t *testing.T) {
 						Audio: &model.Audio{Data: []byte{3, 4}, Format: "wav"},
 					},
 					{
+						Type:  model.ContentTypeVideo,
+						Video: &model.Video{Data: []byte{5, 6}, Format: "mp4"},
+					},
+					{
 						Type: model.ContentTypeFile,
-						File: &model.File{Name: "a.txt", Data: []byte{5, 6}, MimeType: "text/plain"},
+						File: &model.File{Name: "a.txt", Data: []byte{7, 8}, MimeType: "text/plain"},
 					},
 				},
 				ToolCalls: []model.ToolCall{{
@@ -109,7 +113,8 @@ func TestCloneRequestForCacheSafeFork_DeepClonesMutableFields(t *testing.T) {
 	require.NotSame(t, parent.Messages[0].ContentParts[0].Text, cloned.Messages[0].ContentParts[0].Text)
 	require.NotSame(t, parent.Messages[0].ContentParts[1].Image, cloned.Messages[0].ContentParts[1].Image)
 	require.NotSame(t, parent.Messages[0].ContentParts[2].Audio, cloned.Messages[0].ContentParts[2].Audio)
-	require.NotSame(t, parent.Messages[0].ContentParts[3].File, cloned.Messages[0].ContentParts[3].File)
+	require.NotSame(t, parent.Messages[0].ContentParts[3].Video, cloned.Messages[0].ContentParts[3].Video)
+	require.NotSame(t, parent.Messages[0].ContentParts[4].File, cloned.Messages[0].ContentParts[4].File)
 	require.NotSame(t, parent.Messages[0].ToolCalls[0].Index, cloned.Messages[0].ToolCalls[0].Index)
 	require.NotSame(t, parent.StructuredOutput, cloned.StructuredOutput)
 	require.NotSame(t, parent.StructuredOutput.JSONSchema, cloned.StructuredOutput.JSONSchema)
@@ -117,7 +122,8 @@ func TestCloneRequestForCacheSafeFork_DeepClonesMutableFields(t *testing.T) {
 	*cloned.Messages[0].ContentParts[0].Text = "changed"
 	cloned.Messages[0].ContentParts[1].Image.Data[0] = 9
 	cloned.Messages[0].ContentParts[2].Audio.Data[0] = 9
-	cloned.Messages[0].ContentParts[3].File.Data[0] = 9
+	cloned.Messages[0].ContentParts[3].Video.Data[0] = 9
+	cloned.Messages[0].ContentParts[4].File.Data[0] = 9
 	cloned.Messages[0].ToolCalls[0].Function.Arguments[0] = '['
 	*cloned.Messages[0].ToolCalls[0].Index = 8
 	cloned.Messages[0].ToolCalls[0].ExtraFields["nested"].(map[string]any)["k"] = "changed"
@@ -131,7 +137,8 @@ func TestCloneRequestForCacheSafeFork_DeepClonesMutableFields(t *testing.T) {
 	require.Equal(t, "text part", *parent.Messages[0].ContentParts[0].Text)
 	require.Equal(t, byte(1), parent.Messages[0].ContentParts[1].Image.Data[0])
 	require.Equal(t, byte(3), parent.Messages[0].ContentParts[2].Audio.Data[0])
-	require.Equal(t, byte(5), parent.Messages[0].ContentParts[3].File.Data[0])
+	require.Equal(t, byte(5), parent.Messages[0].ContentParts[3].Video.Data[0])
+	require.Equal(t, byte(7), parent.Messages[0].ContentParts[4].File.Data[0])
 	require.Equal(t, byte('{'), parent.Messages[0].ToolCalls[0].Function.Arguments[0])
 	require.Equal(t, 3, *parent.Messages[0].ToolCalls[0].Index)
 	require.Equal(t, "v", parent.Messages[0].ToolCalls[0].ExtraFields["nested"].(map[string]any)["k"])

@@ -405,6 +405,7 @@ func TestOmittedAttachmentHint(t *testing.T) {
 		name       string
 		imageCount int
 		audioCount int
+		videoCount int
 		fileCount  int
 		want       string
 	}{
@@ -422,9 +423,10 @@ func TestOmittedAttachmentHint(t *testing.T) {
 			name:       "plural attachments",
 			imageCount: 2,
 			audioCount: 2,
+			videoCount: 2,
 			fileCount:  2,
 			want: "Omitted non-text attachments for this provider: " +
-				"2 images, 2 audio clips, 2 files.",
+				"2 images, 2 audio clips, 2 videos, 2 files.",
 		},
 	}
 
@@ -436,6 +438,7 @@ func TestOmittedAttachmentHint(t *testing.T) {
 				omittedAttachmentHint(
 					tt.imageCount,
 					tt.audioCount,
+					tt.videoCount,
 					tt.fileCount,
 				),
 			)
@@ -3295,6 +3298,37 @@ func TestConvertUserMessageContentWithAudio(t *testing.T) {
 	assert.NotNilf(t, contentPart.OfInputAudio, "Expected audio content part to be set")
 }
 
+func TestConvertUserMessageContentAddsUnsupportedMediaHint(t *testing.T) {
+	text := "Describe the attachments"
+	message := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{Type: model.ContentTypeText, Text: &text},
+			{
+				Type:  model.ContentTypeAudio,
+				Audio: &model.Audio{URL: "https://example.com/audio.mp3"},
+			},
+			{
+				Type:  model.ContentTypeVideo,
+				Video: &model.Video{URL: "https://example.com/video.mp4"},
+			},
+		},
+	}
+
+	m := &Model{}
+	content, extraFields := m.convertUserMessageContent(message)
+
+	assert.Empty(t, extraFields)
+	require.Len(t, content.OfArrayOfContentParts, 2)
+	require.NotNil(t, content.OfArrayOfContentParts[0].OfText)
+	assert.Equal(t,
+		"Omitted non-text attachments for this provider: 1 audio clip, 1 video.",
+		content.OfArrayOfContentParts[0].OfText.Text,
+	)
+	require.NotNil(t, content.OfArrayOfContentParts[1].OfText)
+	assert.Equal(t, text, content.OfArrayOfContentParts[1].OfText.Text)
+}
+
 func TestConvertUserMessageContentWithFile(t *testing.T) {
 	// Test converting user message with file content parts
 	filePart := model.ContentPart{
@@ -3395,6 +3429,19 @@ func TestConvertContentPart(t *testing.T) {
 	assert.NotNilf(t, contentPart, "Expected image content part to be converted")
 
 	assert.NotNilf(t, contentPart.OfImageURL, "Expected image content part to be set")
+
+	// Chat Completions does not support URL-based audio or video inputs.
+	audioURLPart := model.ContentPart{
+		Type:  model.ContentTypeAudio,
+		Audio: &model.Audio{URL: "https://example.com/audio.mp3"},
+	}
+	assert.Nil(t, m.convertContentPart(audioURLPart))
+
+	videoPart := model.ContentPart{
+		Type:  model.ContentTypeVideo,
+		Video: &model.Video{URL: "https://example.com/video.mp4"},
+	}
+	assert.Nil(t, m.convertContentPart(videoPart))
 
 	// Test unknown content part type
 	unknownPart := model.ContentPart{

@@ -607,6 +607,119 @@ func TestProcessStreamingResponses_RepairsToolCallArgumentsWhenEnabled(t *testin
 	require.Equal(t, "{\"a\":2}", string(response.Choices[0].Message.ToolCalls[0].Function.Arguments))
 }
 
+func TestProcessStreamingResponses_RejectsEmptyCompletedToolCallNameBeforeEmit(t *testing.T) {
+	f := New(nil, nil, Options{})
+	inv := agent.NewInvocation(agent.WithInvocationID("inv-empty-tool-name"))
+	response := &model.Response{
+		Done: true,
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{
+						{
+							ID: "call-empty-name",
+							Function: model.FunctionDefinitionParam{
+								Arguments: []byte(`{"command":"pwd"}`),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	responseSeq := func(yield func(*model.Response) bool) {
+		yield(response)
+	}
+
+	eventChan := make(chan *event.Event, 1)
+	tracer := oteltrace.NewNoopTracerProvider().Tracer("t")
+	ctx, span := tracer.Start(context.Background(), "s")
+	defer span.End()
+
+	lastEvent, err := f.processStreamingResponses(
+		ctx,
+		inv,
+		nil,
+		&model.Request{},
+		responseSeq,
+		eventChan,
+		span,
+		true,
+	)
+	require.ErrorContains(t, err, "tool call function name is empty")
+	require.ErrorContains(t, err, `id="call-empty-name"`)
+	require.Nil(t, lastEvent)
+	require.Empty(t, eventChan)
+}
+
+func TestValidateCompletedToolCallNames(t *testing.T) {
+	validCall := model.ToolCall{
+		ID: "call-valid",
+		Function: model.FunctionDefinitionParam{
+			Name:      "shell",
+			Arguments: []byte(`{"command":"pwd"}`),
+		},
+	}
+	emptyCall := validCall
+	emptyCall.ID = "call-empty"
+	emptyCall.Function.Name = " \t"
+
+	tests := []struct {
+		name     string
+		response *model.Response
+		wantErr  bool
+	}{
+		{name: "nil response"},
+		{
+			name: "partial response may have incomplete name",
+			response: &model.Response{
+				IsPartial: true,
+				Choices: []model.Choice{{
+					Delta: model.Message{ToolCalls: []model.ToolCall{emptyCall}},
+				}},
+			},
+		},
+		{
+			name: "completed message with valid name",
+			response: &model.Response{
+				Choices: []model.Choice{{
+					Message: model.Message{ToolCalls: []model.ToolCall{validCall}},
+				}},
+			},
+		},
+		{
+			name: "completed message with empty name",
+			response: &model.Response{
+				Choices: []model.Choice{{
+					Message: model.Message{ToolCalls: []model.ToolCall{emptyCall}},
+				}},
+			},
+			wantErr: true,
+		},
+		{
+			name: "completed delta with empty name",
+			response: &model.Response{
+				Choices: []model.Choice{{
+					Delta: model.Message{ToolCalls: []model.ToolCall{emptyCall}},
+				}},
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateCompletedToolCallNames(tt.response)
+			if tt.wantErr {
+				require.ErrorContains(t, err, "tool call function name is empty")
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestRunOneStep_DisableTracingSkipsSpanCreation(t *testing.T) {
 	recorder := useSpanRecorder(t)
 	f := New([]flow.RequestProcessor{&seedMessagesRequestProcessor{

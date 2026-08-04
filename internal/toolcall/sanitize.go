@@ -34,16 +34,17 @@ const (
 
 var (
 	errArgumentsNotValidJSON = errors.New("arguments are not valid JSON")
+	errFunctionNameEmpty     = errors.New("function name is empty")
 )
 
 // SanitizeMessagesWithTools downgrades invalid tool calls and tool results into user messages.
 //
-// Some model providers require tool call arguments to be valid JSON, and often a JSON object.
-// When a model produces invalid tool call arguments (for example, malformed JSON or a JSON
-// value that does not match the tool input schema), the tool call can poison the conversation
-// history and cause future model requests to fail (e.g., HTTP 400 Bad Request). This function
-// removes such tool calls from assistant messages and emits equivalent user messages that
-// preserve the original payload for context.
+// Some model providers require tool call function names to be non-empty and arguments to be
+// valid JSON, often a JSON object. When a model produces an invalid tool call (for example, an
+// empty function name, malformed JSON, or a value that does not match the tool input schema),
+// the tool call can poison the conversation history and cause future model requests to fail
+// (e.g., HTTP 400 Bad Request). This function removes such tool calls from assistant messages
+// and emits equivalent user messages that preserve the original payload for context.
 //
 // This function also downgrades orphan tool calls that are not associated with a kept
 // tool result message, and orphan tool result messages that are not associated with a
@@ -178,6 +179,9 @@ func validateToolCalls(toolCalls []model.ToolCall, tools map[string]tool.Tool) t
 
 // validateToolCall validates and normalizes a single tool call.
 func validateToolCall(tc model.ToolCall, tools map[string]tool.Tool) (model.ToolCall, bool, string) {
+	if strings.TrimSpace(tc.Function.Name) == "" {
+		return tc, false, errFunctionNameEmpty.Error()
+	}
 	normalizedArgs, decoded, err := normalizeAndDecodeArguments(tc.Function.Arguments)
 	if err != nil {
 		return tc, false, err.Error()

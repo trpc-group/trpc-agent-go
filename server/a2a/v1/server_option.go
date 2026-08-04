@@ -317,7 +317,8 @@ func WithDebugLogging(debug bool) Option {
 	}
 }
 
-// WithErrorHandler sets a custom error handler.
+// WithErrorHandler sets a custom error handler. A nil handler is ignored and
+// preserves the previously configured or default handler.
 func WithErrorHandler(handler ErrorHandler) Option {
 	return func(opts *options) {
 		if handler == nil {

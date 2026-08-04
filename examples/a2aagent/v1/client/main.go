@@ -33,10 +33,10 @@ const (
 )
 
 var (
-	agentCardURL = flag.String(
+	agentURL = flag.String(
 		"url",
-		"http://127.0.0.1:8888/.well-known/agent-card.json",
-		"A2A agent card URL",
+		"http://127.0.0.1:8888",
+		"A2A agent base URL",
 	)
 	initialSessionID = flag.String(
 		"session",
@@ -49,7 +49,7 @@ func main() {
 	flag.Parse()
 
 	remoteAgent, err := a2aagent.New(
-		a2aagent.WithAgentCardURL(*agentCardURL),
+		a2aagent.WithAgentCardURL(*agentURL),
 	)
 	if err != nil {
 		log.Fatalf("connect A2A agent: %v", err)

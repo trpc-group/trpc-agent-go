@@ -943,6 +943,11 @@ func (p *streamingResponseProcessor) process(
 	responseusage.AttachTiming(response, p.timingInfo, &p.partialUsageState)
 	p.repairToolCallArguments(response)
 	p.repairToolCallTextAndStats(response)
+	if err := validateCompletedToolCallNames(response); err != nil {
+		*p.err = err
+		responseErr = err
+		return false
+	}
 	if p.shouldBufferToolCallTextPartial(response) {
 		if err := agent.CheckContextCancelled(p.ctx); err != nil {
 			*p.err = err
@@ -988,6 +993,37 @@ func (p *streamingResponseProcessor) process(
 		responseSpan.SetAttributes(latencyResponseAttrs(response)...)
 	}
 	return true
+}
+
+func validateCompletedToolCallNames(response *model.Response) error {
+	if response == nil || response.IsPartial {
+		return nil
+	}
+	for choiceIndex, choice := range response.Choices {
+		messages := []struct {
+			location  string
+			toolCalls []model.ToolCall
+		}{
+			{location: "message", toolCalls: choice.Message.ToolCalls},
+			{location: "delta", toolCalls: choice.Delta.ToolCalls},
+		}
+		for _, message := range messages {
+			for toolCallIndex, toolCall := range message.toolCalls {
+				if strings.TrimSpace(toolCall.Function.Name) != "" {
+					continue
+				}
+				return fmt.Errorf(
+					"invalid model response: tool call function name is empty: response_id=%q choice=%d location=%s tool_call=%d id=%q",
+					response.ID,
+					choiceIndex,
+					message.location,
+					toolCallIndex,
+					toolCall.ID,
+				)
+			}
+		}
+	}
+	return nil
 }
 
 func (p *streamingResponseProcessor) recordResponseStats(response *model.Response) {
@@ -1827,6 +1863,13 @@ func cloneContentPartForContextCompaction(
 			audio.Data = append([]byte(nil), part.Audio.Data...)
 		}
 		cloned.Audio = &audio
+	}
+	if part.Video != nil {
+		video := *part.Video
+		if part.Video.Data != nil {
+			video.Data = append([]byte(nil), part.Video.Data...)
+		}
+		cloned.Video = &video
 	}
 	if part.File != nil {
 		file := *part.File

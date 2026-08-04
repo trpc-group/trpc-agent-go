@@ -20,6 +20,12 @@ Most examples accept:
 
 ## Examples
 
+### chunking/
+
+Offline text and interactive web viewers that show each Reader's default
+strategy, with advanced comparisons for FixedSizeChunking, RecursiveChunking,
+MarkdownChunking, and JSONChunking.
+
 ### basic/
 Basic example with file source and in-memory vector store.
 

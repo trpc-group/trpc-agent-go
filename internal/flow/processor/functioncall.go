@@ -1069,6 +1069,11 @@ func cloneToolResultContentParts(
 			audio.Data = append([]byte(nil), part.Audio.Data...)
 			cloned[i].Audio = &audio
 		}
+		if part.Video != nil {
+			video := *part.Video
+			video.Data = append([]byte(nil), part.Video.Data...)
+			cloned[i].Video = &video
+		}
 		if part.File != nil {
 			file := *part.File
 			file.Data = append([]byte(nil), part.File.Data...)
