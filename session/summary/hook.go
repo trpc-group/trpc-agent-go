@@ -15,13 +15,14 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
-// PreSummaryHookContext carries all inputs for pre-summary hooks. When the
-// prompt contains {previous_summary}, Events and Text contain only newly
-// uncovered conversation content and PreviousSummary carries the prior rolling
-// summary. Prompts without that placeholder retain the legacy merged view in
-// Events and Text. When request-side projection is available, Events and Text
-// reflect the model-visible conversation while SourceEvents retains the stored
-// source prefix for hooks that need persistence-level metadata or payloads.
+// PreSummaryHookContext carries all inputs for pre-summary hooks. Events and
+// Text reflect the conversation rendered for summarization. With request-side
+// projection, that conversation is model-visible while SourceEvents retains
+// the stored source events through the selected summary boundary. Without
+// request-side projection, SourceEvents equals Events. When the prompt contains
+// {previous_summary}, Events and Text contain only newly uncovered conversation
+// content and PreviousSummary carries the prior rolling summary. Prompts
+// without that placeholder retain the legacy merged view in Events and Text.
 type PreSummaryHookContext struct {
 	Ctx     context.Context
 	Session *session.Session
