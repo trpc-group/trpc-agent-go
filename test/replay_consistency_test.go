@@ -1275,6 +1275,61 @@ func TestReplayConsistencyMatrix_BasicCases(t *testing.T) {
 	require.NoError(t, writeReplayDiffReport("", allDiffs))
 }
 
+func TestReplayConsistencyMatrix_PrefixedEventDeltasRemainSessionLocal(t *testing.T) {
+	ctx := context.Background()
+	backends := makeReplayBackends(t)
+	appStateKey := session.StateAppPrefix + "event_only_feature"
+	userStateKey := session.StateUserPrefix + "event_only_locale"
+	tc := replayCase{
+		name: "prefixed_event_deltas_remain_session_local",
+		events: []eventSpec{
+			replayUserEvent(
+				"set event-only scoped-looking state",
+				withReplayInvocation("event-only-state-root"),
+				withReplayBranch("root/state"),
+				withReplayStateDelta(session.StateMap{
+					appStateKey:  []byte(`{"enabled":false,"revision":1}`),
+					userStateKey: []byte(`"en-US"`),
+				}),
+			),
+			replayAssistantEvent(
+				"overwrite event-only scoped-looking state",
+				withReplayInvocation("event-only-state-root"),
+				withReplayBranch("root/state"),
+				withReplayStateDelta(session.StateMap{
+					appStateKey:  []byte(`{"enabled":true,"revision":2}`),
+					userStateKey: []byte(`"zh-CN"`),
+				}),
+			),
+		},
+	}
+	wantState := normalizeReplayState(t, session.StateMap{
+		appStateKey:  []byte(`{"enabled":true,"revision":2}`),
+		userStateKey: []byte(`"zh-CN"`),
+	})
+	runNamespace := newReplayRunNamespace(t)
+	results := make([]replayCaseResult, 0, len(backends))
+	for _, backend := range backends {
+		result := runReplayCaseOnBackend(t, ctx, runNamespace, backend, tc)
+		results = append(results, result)
+		require.Equal(t, wantState[appStateKey], result.snapshot.State[appStateKey], "backend=%s", result.backend)
+		require.Equal(t, wantState[userStateKey], result.snapshot.State[userStateKey], "backend=%s", result.backend)
+
+		appState, err := backend.sessionService.ListAppStates(ctx, result.key.AppName)
+		require.NoError(t, err, "backend=%s", result.backend)
+		require.Empty(t, appState, "backend=%s", result.backend)
+		userState, err := backend.sessionService.ListUserStates(ctx, session.UserKey{
+			AppName: result.key.AppName,
+			UserID:  result.key.UserID,
+		})
+		require.NoError(t, err, "backend=%s", result.backend)
+		require.Empty(t, userState, "backend=%s", result.backend)
+	}
+
+	diffs := compareReplayCaseResults(t, tc, results)
+	require.Emptyf(t, diffs, "unexpected replay diffs: %+v", diffs)
+}
+
 func TestReplayConsistencyRunNamespace_AllowsSQLiteRerun(t *testing.T) {
 	ctx := context.Background()
 	backends := makeReplayBackends(t)
@@ -1509,6 +1564,18 @@ func requireReplayCaseSemantics(
 			}
 			require.Equal(t, wantPayloads, gotPayloads, "backend=%s", result.backend)
 		}
+	case "state_scopes":
+		wantState := normalizeReplayState(t, session.StateMap{
+			session.StateAppPrefix + "feature_flags": []byte(`{"replay":true}`),
+			session.StateUserPrefix + "locale":       []byte(`"zh-CN"`),
+			session.StateAppPrefix + "event_feature": []byte(`{"enabled":true,"revision":2}`),
+			session.StateUserPrefix + "event_locale": []byte(`"fr-FR"`),
+		})
+		for _, result := range results {
+			for key, want := range wantState {
+				require.Equal(t, want, result.snapshot.State[key], "backend=%s state=%s", result.backend, key)
+			}
+		}
 	}
 }
 
@@ -1616,13 +1683,19 @@ func basicReplayCases() []replayCase {
 					withReplayInvocation("state-root"),
 					withReplayBranch("root/state"),
 					withReplayStateDelta(session.StateMap{
-						"session:last_user_intent": []byte(`{"intent":"state"}`),
+						"session:last_user_intent":               []byte(`{"intent":"state"}`),
+						session.StateAppPrefix + "event_feature": []byte(`{"enabled":false,"revision":1}`),
+						session.StateUserPrefix + "event_locale": []byte(`"en-US"`),
 					}),
 				),
 				replayAssistantEvent(
 					"scoped state applied",
 					withReplayInvocation("state-root"),
 					withReplayBranch("root/state"),
+					withReplayStateDelta(session.StateMap{
+						session.StateAppPrefix + "event_feature": []byte(`{"enabled":true,"revision":2}`),
+						session.StateUserPrefix + "event_locale": []byte(`"fr-FR"`),
+					}),
 				),
 			},
 		},

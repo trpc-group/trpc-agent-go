@@ -454,6 +454,9 @@ func appendTracks(
 		if err != nil {
 			return fmt.Errorf("get session before track %d for case %q: %w", i, caseName, err)
 		}
+		if got == nil {
+			return fmt.Errorf("get session before track %d for case %q returned nil", i, caseName)
+		}
 		if err := backend.TrackService.AppendTrackEvent(ctx, got, &session.TrackEvent{
 			Track:     session.Track(track.name),
 			Payload:   track.payload,
@@ -507,7 +510,7 @@ func assertMemoryQueries(ctx context.Context, backend Backend, userKey memory.Us
 }
 
 func validateStateScopes(ctx context.Context, backend Backend, key session.Key, tc Case) (err error) {
-	appState, userState, validate := expectedStateScopes(tc)
+	appState, userState, validate := expectedDirectStateScopes(tc)
 	if !validate {
 		return nil
 	}
@@ -562,34 +565,14 @@ func validateStateScopes(ctx context.Context, backend Backend, key session.Key, 
 	return requireStateScope(tc.Name, backend.Name, "peer", peer.SnapshotState(), peerState)
 }
 
-func expectedStateScopes(tc Case) (appState, userState session.StateMap, validate bool) {
+// expectedDirectStateScopes returns the independently stored state expected
+// from the explicit state update APIs. AppendEvent does not define prefixed
+// state-delta routing, so event keys do not imply app or user store updates.
+func expectedDirectStateScopes(tc Case) (appState, userState session.StateMap, validate bool) {
 	appState = stateWithoutPrefix(tc.AppState, session.StateAppPrefix)
 	userState = stateWithoutPrefix(tc.UserState, session.StateUserPrefix)
 	validate = len(tc.AppState) > 0 || len(tc.UserState) > 0 || len(tc.SessionState) > 0
-	for _, evt := range tc.Events {
-		if evt == nil {
-			continue
-		}
-		for key, value := range evt.StateDelta {
-			switch {
-			case strings.HasPrefix(key, session.StateAppPrefix):
-				setStateValue(appState, strings.TrimPrefix(key, session.StateAppPrefix), value)
-				validate = true
-			case strings.HasPrefix(key, session.StateUserPrefix):
-				setStateValue(userState, strings.TrimPrefix(key, session.StateUserPrefix), value)
-				validate = true
-			}
-		}
-	}
 	return appState, userState, validate
-}
-
-func setStateValue(state session.StateMap, key string, value []byte) {
-	if value == nil {
-		state[key] = nil
-		return
-	}
-	state[key] = append([]byte(nil), value...)
 }
 
 func requireStateScope(caseName, backendName, scope string, got, want session.StateMap) error {

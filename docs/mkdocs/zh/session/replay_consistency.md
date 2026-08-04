@@ -89,9 +89,9 @@ Memory 操作别名按完整 canonical identity 解析，而不是只比较 cont
 
 当 event 无法归一化、memory entry 为 nil、entry 的 `Memory` payload 为 nil、summary map 条目的值为 nil，或 track map 条目含 nil `TrackEvents` 容器时，snapshot 构建会返回错误。这些情况表示 fixture 非法或后端数据损坏，不会在 normalize 时被丢弃，也不能通过 `allowed_diff` 放行；非 nil 的合法空 track 容器仍然有效。即使 session 为 nil，`BuildSnapshot` 也会校验并归一化传入的 memories，因此空 session 形式不会隐藏合法或损坏的 memory 数据。
 
-包含直接 app/user/session state，或在 `Event.StateDelta` 中包含 `app:` / `user:` 值的 case，还会直接验证作用域契约。app/user 期望值先应用直接更新，再按 event 顺序折叠带前缀的 delta；与 `ListAppStates` / `ListUserStates` 比较前会去掉前缀。Runner 随后在同一 app/user 下创建临时 peer session，并要求它只继承合并后的 app/user 值。每次 peer 创建尝试后都会使用脱离调用方取消信号的限时 context 尝试删除，包括已经落盘但返回错误的 ambiguous fail-after-write。app/user 传播缺失、session/temp state 泄漏和 peer 清理失败都是 runner error，不属于 snapshot diff，也不能通过 `allowed_diff` 放行。
+包含直接 `Case.AppState`、`Case.UserState` 或 `Case.SessionState` 更新的 case，还会把这些 API 已明确区分的作用域作为后端契约直接校验。Runner 使用 `ListAppStates` / `ListUserStates` 比较直接 app/user 更新，随后在同一 app/user 下创建临时 peer session，并要求它只继承这些 app/user 值。每次 peer 创建尝试后都会使用脱离调用方取消信号的限时 context 尝试删除，包括已经落盘但返回错误的 ambiguous fail-after-write。app/user 传播缺失、session/temp state 泄漏和 peer 清理失败都是 runner error，不属于 snapshot diff，也不能通过 `allowed_diff` 放行。
 
-当前 InMemory/SQLite 轻量矩阵不会新增 prefixed-event scope case，因为这两个实现目前会把 event delta 保留在 session-local state。本契约由 replaytest 定向 fake 覆盖，不修改生产后端行为。
+`Event.StateDelta` 遵循 `SessionService.AppendEvent` 自身的路由语义。Replay runner 不会仅凭 key 带有 `app:` 或 `user:` 前缀，就推导出必须写入独立 app/user store 的契约。当前支持的 InMemory/SQLite 矩阵会把这类 event delta 保留在 session-local state；真实矩阵用例会覆盖多次 prefixed delta 及覆盖顺序，检查独立 app/user store 保持不变，并比较最终 snapshot。MongoDB 不属于当前矩阵，也不属于本契约的支持范围。未来若接入具有不同路由语义的后端，必须先通过显式的 case/backend policy 声明预期，不能再由通用 runner 隐式推导。
 
 ## Summary 与 Track 策略
 

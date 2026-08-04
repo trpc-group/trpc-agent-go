@@ -642,6 +642,78 @@ func TestRunAcceptsFullTrackPayloadDomain(t *testing.T) {
 	}, trackPayloads(track.Events))
 }
 
+func TestRunRejectsNilSessionBeforeTrackAppend(t *testing.T) {
+	tests := []struct {
+		name                  string
+		caseName              string
+		trackCount            int
+		nilGetSessionCall     int
+		wantGetSessionCalls   int
+		wantTrackServiceCalls int
+		wantErr               string
+	}{
+		{
+			name:                  "nil on first track read",
+			caseName:              "nil-track-session-first",
+			trackCount:            1,
+			nilGetSessionCall:     1,
+			wantGetSessionCalls:   1,
+			wantTrackServiceCalls: 0,
+			wantErr:               `get session before track 0 for case "nil-track-session-first" returned nil`,
+		},
+		{
+			name:                  "nil on second track read",
+			caseName:              "nil-track-session-second",
+			trackCount:            2,
+			nilGetSessionCall:     2,
+			wantGetSessionCalls:   2,
+			wantTrackServiceCalls: 1,
+			wantErr:               `get session before track 1 for case "nil-track-session-second" returned nil`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			getSessionCalls := 0
+			sessionService := sessinmemory.NewSessionService(
+				sessinmemory.WithGetSessionHook(func(
+					_ *session.GetSessionContext,
+					next func() (*session.Session, error),
+				) (*session.Session, error) {
+					getSessionCalls++
+					if getSessionCalls == test.nilGetSessionCall {
+						return nil, nil
+					}
+					return next()
+				}),
+			)
+			defer sessionService.Close()
+			memoryService := meminmemory.NewMemoryService()
+			defer memoryService.Close()
+			trackService := &recordingTrackService{delegate: sessionService}
+			tracks := make([]TrackSpec, test.trackCount)
+			for i := range tracks {
+				tracks[i] = TrackSpec{
+					Name:      "nil-session-track",
+					Payload:   map[string]any{"index": i},
+					Timestamp: time.Date(2026, 8, 4, 0, 0, i, 0, time.UTC),
+				}
+			}
+
+			_, err := Run(context.Background(), testRunNamespace, Backend{
+				Name:            "in_memory",
+				SessionService:  sessionService,
+				TrackService:    trackService,
+				MemoryService:   memoryService,
+				ReadAllMemories: completeMemoryReader(memoryService),
+			}, Case{Name: test.caseName, Tracks: tracks})
+			require.EqualError(t, err, test.wantErr)
+			require.Equal(t, test.wantGetSessionCalls, getSessionCalls)
+			require.Equal(t, test.wantTrackServiceCalls, trackService.calls)
+		})
+	}
+}
+
 func TestRunPropagatesBackendErrors(t *testing.T) {
 	tests := []struct {
 		name string
@@ -1020,104 +1092,48 @@ func TestRunValidatesStateScopesAndCleansPeer(t *testing.T) {
 	}, mergeScopedState(session.StateMap{"nil": nil}, session.StateMap{"nil": nil}))
 }
 
-func TestExpectedStateScopesIncludesPrefixedEventDeltas(t *testing.T) {
+func TestExpectedDirectStateScopesIgnoresEventDeltas(t *testing.T) {
 	tc := Case{
 		AppState: session.StateMap{
-			session.StateAppPrefix + "overridden": []byte(`"direct"`),
+			session.StateAppPrefix + "direct": []byte(`"app"`),
 		},
 		UserState: session.StateMap{
 			session.StateUserPrefix + "direct": []byte(`"user"`),
 		},
 		Events: []*event.Event{
 			{StateDelta: session.StateMap{
-				session.StateAppPrefix + "overridden": []byte(`"event-one"`),
-				session.StateUserPrefix + "event":     []byte(`"first"`),
-				"session:local":                       []byte(`"ignored"`),
-				session.StateTempPrefix + "scratch":   []byte(`"ignored"`),
-			}},
-			{StateDelta: session.StateMap{
-				session.StateAppPrefix + "overridden": []byte(`"event-two"`),
-				session.StateAppPrefix + "added":      nil,
-				session.StateUserPrefix + "event":     []byte(`"second"`),
+				session.StateAppPrefix + "direct":   []byte(`"event"`),
+				session.StateAppPrefix + "event":    []byte(`"app-event"`),
+				session.StateUserPrefix + "event":   []byte(`"user-event"`),
+				"session:local":                     []byte(`"ignored"`),
+				session.StateTempPrefix + "scratch": []byte(`"ignored"`),
 			}},
 		},
 	}
 
-	appState, userState, validate := expectedStateScopes(tc)
+	appState, userState, validate := expectedDirectStateScopes(tc)
 	require.True(t, validate)
-	require.Equal(t, session.StateMap{
-		"overridden": []byte(`"event-two"`),
-		"added":      nil,
-	}, appState)
-	require.Equal(t, session.StateMap{
-		"direct": []byte(`"user"`),
-		"event":  []byte(`"second"`),
-	}, userState)
+	require.Equal(t, session.StateMap{"direct": []byte(`"app"`)}, appState)
+	require.Equal(t, session.StateMap{"direct": []byte(`"user"`)}, userState)
 
-	_, _, validate = expectedStateScopes(Case{Events: []*event.Event{{StateDelta: session.StateMap{
-		"session:local":                     []byte("value"),
-		session.StateTempPrefix + "scratch": []byte("value"),
-	}}}})
+	appState, userState, validate = expectedDirectStateScopes(Case{
+		Events: []*event.Event{{StateDelta: session.StateMap{
+			session.StateAppPrefix + "event":    []byte("value"),
+			session.StateUserPrefix + "event":   []byte("value"),
+			"session:local":                     []byte("value"),
+			session.StateTempPrefix + "scratch": []byte("value"),
+		}}},
+	})
 	require.False(t, validate)
-}
+	require.Empty(t, appState)
+	require.Empty(t, userState)
 
-func TestRunValidatesPrefixedEventStateScopesWithTargetedFake(t *testing.T) {
-	newCase := func(name string) Case {
-		first := replayTimelineEvent("scoped-event-first", time.Now().UTC())
-		first.StateDelta = session.StateMap{
-			session.StateAppPrefix + "feature":  []byte(`{"source":"event-one"}`),
-			session.StateUserPrefix + "locale":  []byte(`"event-one"`),
-			"session:local":                     []byte(`"kept"`),
-			session.StateTempPrefix + "scratch": []byte(`"temporary"`),
-		}
-		second := replayTimelineEvent("scoped-event-second", time.Now().UTC().Add(time.Second))
-		second.StateDelta = session.StateMap{
-			session.StateAppPrefix + "feature": []byte(`{"source":"event-two"}`),
-			session.StateUserPrefix + "locale": []byte(`"event-two"`),
-		}
-		return Case{
-			Name: name,
-			AppState: session.StateMap{
-				session.StateAppPrefix + "feature": []byte(`{"source":"direct"}`),
-			},
-			UserState: session.StateMap{
-				session.StateUserPrefix + "locale": []byte(`"direct"`),
-			},
-			Events: []*event.Event{first, second},
-		}
-	}
-	tests := []struct {
-		name       string
-		routeState bool
-		wantErr    string
-	}{
-		{name: "correct routing", routeState: true},
-		{name: "session local routing", wantErr: "app state for case"},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			base := sessinmemory.NewSessionService()
-			defer base.Close()
-			memoryService := meminmemory.NewMemoryService()
-			defer memoryService.Close()
-			sessionService := &scopeSessionService{
-				Service: base, routeScopedEventState: test.routeState,
-			}
-
-			_, err := Run(context.Background(), testRunNamespace, Backend{
-				Name: "scope_fake", SessionService: sessionService, MemoryService: memoryService,
-				ReadAllMemories: completeMemoryReader(memoryService),
-			}, newCase(strings.ReplaceAll(test.name, " ", "-")))
-			if test.wantErr == "" {
-				require.NoError(t, err)
-				require.Equal(t, 1, sessionService.deleteCalls)
-				return
-			}
-			require.ErrorContains(t, err, test.wantErr)
-			require.Zero(t, sessionService.deleteCalls)
-		})
-	}
+	appState, userState, validate = expectedDirectStateScopes(Case{
+		SessionState: session.StateMap{"session:mode": []byte(`"direct"`)},
+	})
+	require.True(t, validate)
+	require.Empty(t, appState)
+	require.Empty(t, userState)
 }
 
 func TestRunCleansStateScopePeerAfterCallerCancellation(t *testing.T) {
@@ -1414,7 +1430,6 @@ func replayStateScopeCase(name string) Case {
 type scopeSessionService struct {
 	session.Service
 	emptyAppState                bool
-	routeScopedEventState        bool
 	stripPeerState               bool
 	deleteErr                    error
 	listAppErr                   error
@@ -1435,43 +1450,19 @@ type scopeSessionService struct {
 	deleteContextValue           any
 }
 
-func (s *scopeSessionService) AppendEvent(
+type recordingTrackService struct {
+	delegate session.TrackService
+	calls    int
+}
+
+func (s *recordingTrackService) AppendTrackEvent(
 	ctx context.Context,
 	sess *session.Session,
-	evt *event.Event,
+	trackEvent *session.TrackEvent,
 	opts ...session.Option,
 ) error {
-	if !s.routeScopedEventState || evt == nil {
-		return s.Service.AppendEvent(ctx, sess, evt, opts...)
-	}
-	appState := make(session.StateMap)
-	userState := make(session.StateMap)
-	localState := make(session.StateMap)
-	for key, value := range evt.StateDelta {
-		switch {
-		case strings.HasPrefix(key, session.StateAppPrefix):
-			setStateValue(appState, strings.TrimPrefix(key, session.StateAppPrefix), value)
-		case strings.HasPrefix(key, session.StateUserPrefix):
-			setStateValue(userState, strings.TrimPrefix(key, session.StateUserPrefix), value)
-		default:
-			setStateValue(localState, key, value)
-		}
-	}
-	if len(appState) > 0 {
-		if err := s.Service.UpdateAppState(ctx, sess.AppName, appState); err != nil {
-			return err
-		}
-	}
-	if len(userState) > 0 {
-		if err := s.Service.UpdateUserState(ctx, session.UserKey{
-			AppName: sess.AppName, UserID: sess.UserID,
-		}, userState); err != nil {
-			return err
-		}
-	}
-	delegated := evt.Clone()
-	delegated.StateDelta = localState
-	return s.Service.AppendEvent(ctx, sess, delegated, opts...)
+	s.calls++
+	return s.delegate.AppendTrackEvent(ctx, sess, trackEvent, opts...)
 }
 
 type malformedSnapshotSessionService struct {
