@@ -198,7 +198,8 @@ system prompt 和 user prompt 模板也会保持完整。
 只有模型生成与 post-summary 处理都完成后，summary boundary 才会推进到所选前缀。
 如果连最小的完整前缀都放不下，请求会在调用模型前失败，原 boundary 保持不变。
 配置 `WithPreSummaryHook(...)` 时不会启用部分前缀 fallback，因为 hook 重写后的文本
-无法安全映射回 event boundary。
+无法安全映射回 event boundary。前缀摘要始终使用 standalone 请求，不会复用
+cache-safe fork。
 
 预算适配和 fork → standalone 的选择发生在 `BeforeModel` callback 之前，因此
 callback 看到并修改的就是最终准备送模的请求。callback 返回后框架会再次计数；
@@ -915,6 +916,11 @@ type PostSummaryHookContext struct {
 
 type PostSummaryHook func(in *PostSummaryHookContext) error
 ```
+
+Hook 会看到本次 summary source 对应的临时 boundary。Hook 成功，或其错误被配置为
+不中断流程时，摘要器会在 Hook 返回后恢复该 source 的精确 boundary，因此 Hook 对
+summary boundary state 的写入不会保留。Hook 以错误中断或发生 panic 时，则恢复本次
+摘要尝试前的 boundary。
 
 ### 使用示例
 

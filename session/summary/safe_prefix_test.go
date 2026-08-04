@@ -590,6 +590,36 @@ func TestSessionSummarizer_RetryShrinksSafePrefix(t *testing.T) {
 	)
 }
 
+func TestSessionSummarizer_SafePrefixRequiresStrictProgress(t *testing.T) {
+	s := NewSummarizer(
+		&cacheSafeCaptureModel{response: "summary", contextWindow: 100_000},
+		WithPrompt("Conversation:\n{conversation_text}\n\nSummary:"),
+	).(*sessionSummarizer)
+	events := newSummaryPrefixRounds(1, 8)
+	texts := s.extractConversationEventTexts(events)
+	input := summaryPromptInput{conversationText: joinSummaryEventTexts(texts)}
+	source := &summarySource{
+		input:          input,
+		boundaryEvents: events,
+		prefixEvents:   events,
+		prefixTexts:    texts,
+		allowPrefix:    true,
+	}
+	budget := summaryPrefixRequestTokens(t, s, events)
+
+	request, selected, err := s.buildSafeSummaryPrefixRequest(
+		context.Background(),
+		source,
+		budget,
+	)
+	require.NoError(t, err)
+	require.False(t, selected)
+	require.Nil(t, request)
+	require.Equal(t, input, source.input)
+	require.Len(t, source.prefixEvents, len(events))
+	require.Len(t, source.boundaryEvents, len(events))
+}
+
 func TestSessionSummarizer_CommitsBoundaryAfterPostHook(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	evt := newSummaryPrefixEvent(

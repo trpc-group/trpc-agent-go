@@ -1381,7 +1381,7 @@ func (s *sessionSummarizer) runSummaryAttemptWithPrefixFallback(
 			result.err = fmt.Errorf("build safe summary prefix request: %w", err)
 			return result
 		}
-		if !selected {
+		if !selected || len(source.prefixEvents) >= totalEvents {
 			return result
 		}
 

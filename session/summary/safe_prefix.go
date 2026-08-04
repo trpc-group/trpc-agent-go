@@ -73,6 +73,12 @@ func (s *sessionSummarizer) buildSafeSummaryPrefixRequest(
 		}
 		ends = mappedEnds
 	}
+	// A fallback must consume fewer events than the request that just failed.
+	// Exclude the full source even if it is itself a structurally safe boundary,
+	// so callers can treat selected=true as a strict progress guarantee.
+	for len(ends) > 0 && ends[len(ends)-1] >= len(source.prefixEvents) {
+		ends = ends[:len(ends)-1]
+	}
 	if len(ends) == 0 {
 		return nil, false, nil
 	}

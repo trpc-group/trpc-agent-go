@@ -207,7 +207,8 @@ post-summary processing are complete. If even the smallest complete prefix does
 not fit, the request fails before calling the model and the existing boundary
 remains unchanged. Partial-prefix fallback is disabled when
 `WithPreSummaryHook(...)` is configured because hook-rewritten text cannot be
-mapped safely back to an event boundary.
+mapped safely back to an event boundary. Prefix summaries always use a
+standalone request; they do not reuse the cache-safe fork.
 
 Budget fitting and the fork-to-standalone decision happen before the
 `BeforeModel` callback. The callback therefore receives the actual request that
@@ -966,6 +967,12 @@ type PostSummaryHookContext struct {
 
 type PostSummaryHook func(in *PostSummaryHookContext) error
 ```
+
+The hook observes the provisional boundary for the source used to generate the
+summary. When the hook succeeds, or when its error is configured as non-aborting,
+the summarizer restores that exact source boundary after the hook; hook writes to
+the summary boundary state therefore do not persist. An aborting error or panic
+restores the boundary that existed before the summary attempt.
 
 ### Usage Example
 
