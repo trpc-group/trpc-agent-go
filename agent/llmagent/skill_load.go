@@ -18,6 +18,13 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
 
+const preparedSkillRepositoryStateKey = "__trpc_agent_internal_prepared_skill_repository__"
+
+type preparedSkillRepositoryState struct {
+	invocationID string
+	repository   skill.Repository
+}
+
 // prepareSkillLoads validates and normalizes all declared loads before
 // updating the invocation or activating tools. If any request fails,
 // inv.RunOptions.SkillLoads remains unchanged and no partial load is committed.
@@ -43,42 +50,88 @@ func (a *LLMAgent) prepareSkillLoads(
 		)
 	}
 
-	if max := a.option.MaxLoadedSkills; max > 0 &&
-		len(inv.RunOptions.SkillLoads) > max {
-		return fmt.Errorf(
-			"%w: requested %d skills exceeds maximum %d",
-			skill.ErrInvalidLoadRequest,
-			len(inv.RunOptions.SkillLoads),
-			max,
-		)
-	}
-
 	normalized := make([]skill.LoadRequest, 0, len(inv.RunOptions.SkillLoads))
-	seenSkills := make(map[string]struct{}, len(inv.RunOptions.SkillLoads))
+	seenSkills := make(
+		map[string]skill.LoadRequest,
+		len(inv.RunOptions.SkillLoads),
+	)
 	for _, requested := range inv.RunOptions.SkillLoads {
-		load, err := normalizeSkillLoadRequest(ctx, repo, requested)
+		load, err := normalizeSkillLoadRequest(requested)
 		if err != nil {
 			return err
 		}
-		if _, ok := seenSkills[load.Name]; ok {
-			return fmt.Errorf(
-				"%w: duplicate skill %q",
-				skill.ErrInvalidLoadRequest,
-				load.Name,
-			)
+		if existing, ok := seenSkills[load.Name]; ok {
+			if !sameSkillLoadRequest(existing, load) {
+				return fmt.Errorf(
+					"%w: conflicting declarations for skill %q",
+					skill.ErrInvalidLoadRequest,
+					load.Name,
+				)
+			}
+			continue
 		}
-		seenSkills[load.Name] = struct{}{}
+		seenSkills[load.Name] = load
 		normalized = append(normalized, load)
+	}
+	if max := a.option.MaxLoadedSkills; max > 0 && len(normalized) > max {
+		return fmt.Errorf(
+			"%w: requested %d skills exceeds maximum %d",
+			skill.ErrInvalidLoadRequest,
+			len(normalized),
+			max,
+		)
+	}
+	for _, load := range normalized {
+		if err := validateSkillLoadRequest(ctx, repo, load); err != nil {
+			return err
+		}
 	}
 
 	inv.RunOptions.SkillLoads = normalized
+	inv.SetState(preparedSkillRepositoryStateKey, preparedSkillRepositoryState{
+		invocationID: inv.InvocationID,
+		repository:   repo,
+	})
 	a.activatePreparedSkillLoads(inv, normalized)
 	return nil
 }
 
+func sameSkillLoadRequest(a, b skill.LoadRequest) bool {
+	if a.Name != b.Name || a.IncludeAllDocs != b.IncludeAllDocs ||
+		len(a.Docs) != len(b.Docs) {
+		return false
+	}
+	docs := make(map[string]struct{}, len(a.Docs))
+	for _, doc := range a.Docs {
+		docs[doc] = struct{}{}
+	}
+	for _, doc := range b.Docs {
+		if _, ok := docs[doc]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func preparedSkillRepositoryForInvocation(
+	inv *agent.Invocation,
+) (skill.Repository, bool) {
+	if inv == nil {
+		return nil, false
+	}
+	raw, ok := inv.GetState(preparedSkillRepositoryStateKey)
+	if !ok {
+		return nil, false
+	}
+	prepared, ok := raw.(preparedSkillRepositoryState)
+	if !ok || prepared.invocationID != inv.InvocationID ||
+		prepared.repository == nil {
+		return nil, false
+	}
+	return prepared.repository, true
+}
+
 func normalizeSkillLoadRequest(
-	ctx context.Context,
-	repo skill.Repository,
 	requested skill.LoadRequest,
 ) (skill.LoadRequest, error) {
 	name := strings.TrimSpace(requested.Name)
@@ -96,33 +149,6 @@ func normalizeSkillLoadRequest(
 		)
 	}
 
-	if !skillSummaryAvailable(ctx, repo, name) {
-		return skill.LoadRequest{}, fmt.Errorf(
-			"%w: skill %q",
-			skill.ErrSkillUnavailable,
-			name,
-		)
-	}
-	resolved, err := skill.GetForContext(ctx, repo, name)
-	if err != nil {
-		return skill.LoadRequest{}, fmt.Errorf(
-			"load skill %q: %w",
-			name,
-			err,
-		)
-	}
-	if resolved == nil {
-		return skill.LoadRequest{}, fmt.Errorf(
-			"%w: skill %q",
-			skill.ErrSkillUnavailable,
-			name,
-		)
-	}
-
-	availableDocs := make(map[string]struct{}, len(resolved.Docs))
-	for _, doc := range resolved.Docs {
-		availableDocs[doc.Path] = struct{}{}
-	}
 	docs := make([]string, 0, len(requested.Docs))
 	seenDocs := make(map[string]struct{}, len(requested.Docs))
 	for _, requestedDoc := range requested.Docs {
@@ -143,14 +169,6 @@ func normalizeSkillLoadRequest(
 				name,
 			)
 		}
-		if _, ok := availableDocs[doc]; !ok {
-			return skill.LoadRequest{}, fmt.Errorf(
-				"%w: document %q for skill %q",
-				skill.ErrSkillUnavailable,
-				doc,
-				name,
-			)
-		}
 		seenDocs[doc] = struct{}{}
 		docs = append(docs, doc)
 	}
@@ -160,6 +178,51 @@ func normalizeSkillLoadRequest(
 		Docs:           docs,
 		IncludeAllDocs: requested.IncludeAllDocs,
 	}, nil
+}
+
+func validateSkillLoadRequest(
+	ctx context.Context,
+	repo skill.Repository,
+	load skill.LoadRequest,
+) error {
+	if !skillSummaryAvailable(ctx, repo, load.Name) {
+		return fmt.Errorf(
+			"%w: skill %q",
+			skill.ErrSkillUnavailable,
+			load.Name,
+		)
+	}
+	resolved, err := skill.GetForContext(ctx, repo, load.Name)
+	if err != nil {
+		return fmt.Errorf(
+			"load skill %q: %w",
+			load.Name,
+			err,
+		)
+	}
+	if resolved == nil {
+		return fmt.Errorf(
+			"%w: skill %q",
+			skill.ErrSkillUnavailable,
+			load.Name,
+		)
+	}
+
+	availableDocs := make(map[string]struct{}, len(resolved.Docs))
+	for _, doc := range resolved.Docs {
+		availableDocs[doc.Path] = struct{}{}
+	}
+	for _, doc := range load.Docs {
+		if _, ok := availableDocs[doc]; !ok {
+			return fmt.Errorf(
+				"%w: document %q for skill %q",
+				skill.ErrSkillUnavailable,
+				doc,
+				load.Name,
+			)
+		}
+	}
+	return nil
 }
 
 func skillSummaryAvailable(

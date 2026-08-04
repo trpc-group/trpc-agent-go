@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -28,6 +29,7 @@ type skillLoadTestRepository struct {
 	skills    map[string]*skill.Skill
 	summaries []skill.Summary
 	err       error
+	getCalls  *atomic.Int32
 }
 
 func (r *skillLoadTestRepository) Summaries() []skill.Summary {
@@ -42,6 +44,9 @@ func (r *skillLoadTestRepository) Summaries() []skill.Summary {
 }
 
 func (r *skillLoadTestRepository) Get(name string) (*skill.Skill, error) {
+	if r.getCalls != nil {
+		r.getCalls.Add(1)
+	}
 	if r.err != nil {
 		return nil, r.err
 	}
@@ -123,8 +128,11 @@ func TestPrepareSkillLoadsNormalizesCompleteBatch(t *testing.T) {
 		Name: "review",
 		Docs: []string{"guide.md"},
 	}}, inv.RunOptions.SkillLoads)
-	_, loaded := inv.Session.GetState(skill.LoadedKey("tester", "review"))
-	require.False(t, loaded, "preflight must not partially commit state")
+	require.Empty(
+		t,
+		inv.Session.SnapshotState(),
+		"preflight must not partially commit state",
+	)
 }
 
 func TestPrepareSkillLoadsFailsAtomically(t *testing.T) {
@@ -181,12 +189,16 @@ func TestPrepareSkillLoadsRejectsConflictingDocSelection(t *testing.T) {
 func TestPrepareSkillLoadsRejectsInvalidRequests(t *testing.T) {
 	reviewSkill := &skill.Skill{
 		Summary: skill.Summary{Name: "review"},
-		Docs: []skill.Doc{{
-			Path: "guide.md",
-		}},
+		Docs: []skill.Doc{
+			{Path: "guide.md"},
+			{Path: "other.md"},
+		},
 	}
 	repo := &skillLoadTestRepository{
-		skills: map[string]*skill.Skill{"review": reviewSkill},
+		skills: map[string]*skill.Skill{
+			"review": reviewSkill,
+			"other":  {Summary: skill.Summary{Name: "other"}},
+		},
 	}
 	nilSkillRepo := &skillLoadTestRepository{
 		skills:    map[string]*skill.Skill{"review": nil},
@@ -218,12 +230,22 @@ func TestPrepareSkillLoadsRejectsInvalidRequests(t *testing.T) {
 			wantErr: skill.ErrInvalidLoadRequest,
 		},
 		{
-			name:    "duplicate skill",
+			name:    "conflicting skill declarations",
 			repo:    repo,
 			session: &session.Session{},
 			loads: []skill.LoadRequest{
+				{Name: "review", Docs: []string{"guide.md"}},
+				{Name: " review ", Docs: []string{"other.md"}},
+			},
+			wantErr: skill.ErrInvalidLoadRequest,
+		},
+		{
+			name:    "conflicting include all declarations",
+			repo:    repo,
+			session: &session.Session{},
+			loads: []skill.LoadRequest{
+				{Name: "review", IncludeAllDocs: true},
 				{Name: "review"},
-				{Name: " review "},
 			},
 			wantErr: skill.ErrInvalidLoadRequest,
 		},
@@ -307,6 +329,82 @@ func TestPrepareSkillLoadsRejectsInvalidRequests(t *testing.T) {
 			if inv.Session != nil {
 				require.Empty(t, inv.Session.SnapshotState())
 			}
+		})
+	}
+}
+
+func TestPrepareSkillLoadsCoalescesEquivalentDeclarations(t *testing.T) {
+	tests := []struct {
+		name  string
+		loads []skill.LoadRequest
+		want  skill.LoadRequest
+	}{
+		{
+			name: "same document set",
+			loads: []skill.LoadRequest{
+				{
+					Name: " review ",
+					Docs: []string{" guide.md ", "security.md"},
+				},
+				{
+					Name: "review",
+					Docs: []string{" security.md ", "guide.md"},
+				},
+			},
+			want: skill.LoadRequest{
+				Name: "review",
+				Docs: []string{"guide.md", "security.md"},
+			},
+		},
+		{
+			name: "include all documents",
+			loads: []skill.LoadRequest{
+				{Name: " review ", IncludeAllDocs: true},
+				{Name: "review", IncludeAllDocs: true},
+			},
+			want: skill.LoadRequest{
+				Name:           "review",
+				Docs:           []string{},
+				IncludeAllDocs: true,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var getCalls atomic.Int32
+			repo := &skillLoadTestRepository{
+				getCalls: &getCalls,
+				skills: map[string]*skill.Skill{
+					"review": {
+						Summary: skill.Summary{Name: "review"},
+						Docs: []skill.Doc{
+							{Path: "guide.md"},
+							{Path: "security.md"},
+						},
+					},
+				},
+			}
+			agt := New(
+				"tester",
+				WithSkills(repo),
+				WithMaxLoadedSkills(1),
+			)
+			runOptions := agent.NewRunOptions(
+				agent.WithSkillLoads(tt.loads[0]),
+				agent.WithSkillLoads(tt.loads[1]),
+			)
+			inv := agent.NewInvocation(
+				agent.WithInvocationSession(&session.Session{}),
+				agent.WithInvocationRunOptions(runOptions),
+			)
+			agt.setupInvocation(inv)
+
+			err := agt.prepareSkillLoads(context.Background(), inv)
+			require.NoError(t, err)
+			require.Equal(t, []skill.LoadRequest{tt.want}, inv.RunOptions.SkillLoads)
+			require.Empty(t, inv.Session.SnapshotState())
+			require.Equal(t, int32(1), getCalls.Load())
 		})
 	}
 }
@@ -416,12 +514,14 @@ func skillLoadTestSystemContent(req *model.Request) string {
 	return system
 }
 
-func TestPrepareSkillLoadsActivatesToolsForFirstModelRequest(t *testing.T) {
+func TestDeclaredSkillLoadActivatesToolsForFirstModelRequest(t *testing.T) {
 	repo := &skillLoadTestRepository{skills: map[string]*skill.Skill{
 		"review": {Summary: skill.Summary{Name: "review"}},
 	}}
+	modelStub := &captureModel{}
 	agt := New(
 		"tester",
+		WithModel(modelStub),
 		WithSkills(repo),
 		WithActivatableToolSets([]tool.ToolSet{
 			activationToolSet{
@@ -436,17 +536,141 @@ func TestPrepareSkillLoadsActivatesToolsForFirstModelRequest(t *testing.T) {
 	)
 	inv := agent.NewInvocation(
 		agent.WithInvocationSession(&session.Session{}),
+		agent.WithInvocationMessage(model.NewUserMessage("review")),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			SkillLoads: []skill.LoadRequest{{Name: "review"}},
+		}),
+	)
+
+	events, err := agt.Run(context.Background(), inv)
+	require.NoError(t, err)
+	for range events {
+	}
+
+	require.NotNil(t, modelStub.got)
+	require.Contains(t, modelStub.got.Tools, "review-tools_inspect")
+	records := invocationToolActivationRecords(inv)
+	require.Len(t, records, 1)
+	require.Equal(t, "review-tools", records[0].ToolSetName)
+}
+
+func TestDeclaredSkillLoadsReusePreparedRepository(t *testing.T) {
+	repo := &skillLoadTestRepository{skills: map[string]*skill.Skill{
+		"review": {
+			Summary: skill.Summary{Name: "review"},
+			Body:    "Pinned review body",
+		},
+	}}
+	tests := []struct {
+		name    string
+		options []Option
+	}{
+		{name: "system prompt mode"},
+		{
+			name: "tool result mode",
+			options: []Option{
+				WithSkillsLoadedContentInToolResults(true),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var providerCalls atomic.Int32
+			provider := skill.RepositoryProviderFunc(
+				func(context.Context, skill.SkillScope) (skill.Repository, error) {
+					if providerCalls.Add(1) == 1 {
+						return repo, nil
+					}
+					return nil, errors.New("transient repository failure")
+				},
+			)
+			modelStub := &captureModel{}
+			options := []Option{
+				WithModel(modelStub),
+				WithSkillRepositoryProvider(provider),
+				WithSkillScopeMode(skill.SkillScopeApp),
+			}
+			options = append(options, tt.options...)
+			agt := New("tester", options...)
+			inv := agent.NewInvocation(
+				agent.WithInvocationSession(&session.Session{AppName: "app"}),
+				agent.WithInvocationMessage(model.NewUserMessage("review")),
+				agent.WithInvocationRunOptions(agent.RunOptions{
+					SkillLoads: []skill.LoadRequest{{Name: "review"}},
+				}),
+			)
+
+			events, err := agt.Run(context.Background(), inv)
+			require.NoError(t, err)
+			for range events {
+			}
+
+			require.Equal(t, int32(1), providerCalls.Load())
+			require.NotNil(t, modelStub.got)
+			require.Contains(
+				t,
+				skillLoadTestSystemContent(modelStub.got),
+				"Pinned review body",
+			)
+			require.Contains(t, modelStub.got.Tools, "skill_load")
+		})
+	}
+}
+
+func TestPreparedSkillRepositoryDoesNotLeakToClone(t *testing.T) {
+	repoA := &skillLoadTestRepository{skills: map[string]*skill.Skill{
+		"review": {Summary: skill.Summary{Name: "review"}},
+	}}
+	repoB := &skillLoadTestRepository{skills: map[string]*skill.Skill{
+		"other": {Summary: skill.Summary{Name: "other"}},
+	}}
+	var providerCalls atomic.Int32
+	provider := skill.RepositoryProviderFunc(
+		func(context.Context, skill.SkillScope) (skill.Repository, error) {
+			if providerCalls.Add(1) == 1 {
+				return repoA, nil
+			}
+			return repoB, nil
+		},
+	)
+	agt := New(
+		"tester",
+		WithSkillRepositoryProvider(provider),
+		WithSkillScopeMode(skill.SkillScopeApp),
+	)
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{AppName: "app"}),
 		agent.WithInvocationRunOptions(agent.RunOptions{
 			SkillLoads: []skill.LoadRequest{{Name: "review"}},
 		}),
 	)
 	agt.setupInvocation(inv)
 
-	err := agt.prepareSkillLoads(context.Background(), inv)
-	require.NoError(t, err)
-	records := invocationToolActivationRecords(inv)
-	require.Len(t, records, 1)
-	require.Equal(t, "review-tools", records[0].ToolSetName)
+	require.NoError(t, agt.prepareSkillLoads(context.Background(), inv))
+	require.Same(
+		t,
+		repoA,
+		agt.skillRepositoryForInvocation(context.Background(), inv),
+	)
+	require.Equal(t, int32(1), providerCalls.Load())
+
+	view := inv.View()
+	require.Same(
+		t,
+		repoA,
+		agt.skillRepositoryForInvocation(context.Background(), view),
+	)
+	require.Equal(t, int32(1), providerCalls.Load())
+
+	child := inv.Clone()
+	require.Empty(t, child.RunOptions.SkillLoads)
+	require.Same(
+		t,
+		repoB,
+		agt.skillRepositoryForInvocation(context.Background(), child),
+	)
+	require.Equal(t, int32(2), providerCalls.Load())
 }
 
 func TestSkillLoadsUseContextReturnedByBeforeAgent(t *testing.T) {

@@ -1142,7 +1142,9 @@ type RunOptions struct {
 
 	// SkillLoads declares skills that the selected agent must load before its
 	// first model request. The declarations are validated and applied
-	// atomically against the invocation's effective skill repository.
+	// atomically against the invocation's effective skill repository. Equivalent
+	// declarations for one skill are coalesced; conflicting document sets are
+	// invalid.
 	//
 	// Use WithSkillLoads to avoid retaining caller-owned slices.
 	SkillLoads []skill.LoadRequest

@@ -60,6 +60,9 @@ func (a *LLMAgent) skillRepositoryForInvocation(
 	ctx context.Context,
 	inv *agent.Invocation,
 ) skill.Repository {
+	if repo, ok := preparedSkillRepositoryForInvocation(inv); ok {
+		return repo
+	}
 	if patch, ok := a.rootSurfacePatch(inv); ok {
 		if repo, ok := patch.SkillRepository(); ok {
 			return repo

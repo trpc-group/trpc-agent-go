@@ -60,14 +60,20 @@ events, err := runner.Run(
 ```
 
 The declarations are validated as one atomic batch against the invocation's
-effective repository, including context-aware visibility filters. `SKILL.md`
-is always loaded; `Docs` selects additional skill-relative documents, while
-`IncludeAllDocs` selects all supporting documents and cannot be combined with
-`Docs`. A non-empty `Docs` replaces the current document selection. When both
-fields are unset, the existing selection is preserved, matching `skill_load`;
-under the default `turn` mode, the previous turn's selection has already been
-cleared. A failed declaration prevents the first model request and can be
-classified with `skill.ErrInvalidLoadRequest` or
+effective repository, including context-aware visibility filters. The
+repository selected during preflight is reused for tool construction and
+request processing throughout that invocation. `SKILL.md` is always loaded;
+`Docs` selects additional skill-relative documents, while `IncludeAllDocs`
+selects all supporting documents and cannot be combined with `Docs`. A
+non-empty `Docs` replaces the current document selection. When both fields are
+unset, the existing selection is preserved, matching `skill_load`; under the
+default `turn` mode, the previous turn's selection has already been cleared.
+Equivalent declarations for the same skill are coalesced after normalization,
+including when separate `WithSkillLoads` options append them. Equivalence
+requires the same normalized `Docs` set and `IncludeAllDocs` value. Conflicting
+selections for one skill are invalid, and `MaxLoadedSkills` counts the
+coalesced skills. A failed declaration prevents the first model request and
+can be classified with `skill.ErrInvalidLoadRequest` or
 `skill.ErrSkillUnavailable` when the agent returns the setup error directly.
 Runner wrappers that execute inner agents asynchronously, such as candidate
 selection and Ralph Loop, retain their existing error-event delivery

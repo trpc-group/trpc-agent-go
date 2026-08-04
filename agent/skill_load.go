@@ -36,8 +36,11 @@ type InvocationSkillLoadSupport interface {
 // first model request.
 //
 // The selected agent validates the complete declaration before changing skill
-// state. Empty loads are a no-op. Skill load declarations apply only to the
-// entry invocation and are not inherited by cloned child invocations.
+// state. Repeated declarations for the same skill are coalesced when their
+// normalized Docs sets and IncludeAllDocs values match; conflicting selections
+// are invalid.
+// Empty loads are a no-op. Skill load declarations apply only to the entry
+// invocation and are not inherited by cloned child invocations.
 //
 // Runner enforces InvocationSkillLoadSupport for the selected entry agent.
 // Callers that construct an Invocation and invoke Agent.Run directly are

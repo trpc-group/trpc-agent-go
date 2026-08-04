@@ -32,7 +32,9 @@ var (
 // the repository and is mutually exclusive with Docs. When Docs is empty and
 // IncludeAllDocs is false, an existing document selection is preserved. Under
 // the default turn load mode, the previous turn's selection is cleared before
-// this request is applied.
+// this request is applied. Within one declaration batch, entries with the same
+// normalized Name, Docs set, and IncludeAllDocs value are coalesced; conflicting
+// selections for the same skill are invalid.
 type LoadRequest struct {
 	Name           string
 	Docs           []string
