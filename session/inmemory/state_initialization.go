@@ -51,12 +51,14 @@ func (s *SessionService) LoadOrInitializeSessionState(
 	stateKey string,
 	validate func([]byte) bool,
 	initialize func(context.Context) ([]byte, error),
+	projections ...session.StateInitializationProjection,
 ) ([]byte, bool, error) {
 	if err := validateStateInitializationArguments(
 		key,
 		stateKey,
 		validate,
 		initialize,
+		projections,
 	); err != nil {
 		return nil, false, err
 	}
@@ -94,6 +96,7 @@ func (s *SessionService) LoadOrInitializeSessionState(
 				stateKey,
 				validate,
 				initialize,
+				projections,
 				expectedGeneration,
 				coordinationKey,
 				gate,
@@ -125,10 +128,40 @@ func validateStateInitializationArguments(
 	stateKey string,
 	validate func([]byte) bool,
 	initialize func(context.Context) ([]byte, error),
+	projections []session.StateInitializationProjection,
 ) error {
 	if err := key.CheckSessionKey(); err != nil {
 		return err
 	}
+	if err := validateStateInitializationStateKey(stateKey); err != nil {
+		return err
+	}
+	if validate == nil {
+		return errors.New("state validation function is required")
+	}
+	if initialize == nil {
+		return errors.New("state initialization function is required")
+	}
+	seen := map[string]struct{}{stateKey: {}}
+	for _, projection := range projections {
+		if err := validateStateInitializationStateKey(projection.StateKey); err != nil {
+			return fmt.Errorf("state initialization projection: %w", err)
+		}
+		if _, exists := seen[projection.StateKey]; exists {
+			return fmt.Errorf(
+				"state initialization projection: duplicate state key %q",
+				projection.StateKey,
+			)
+		}
+		seen[projection.StateKey] = struct{}{}
+		if projection.Project == nil {
+			return errors.New("state initialization projection is required")
+		}
+	}
+	return nil
+}
+
+func validateStateInitializationStateKey(stateKey string) error {
 	if strings.TrimSpace(stateKey) == "" {
 		return errors.New("state key is required")
 	}
@@ -144,12 +177,6 @@ func validateStateInitializationArguments(
 			stateKey,
 		)
 	}
-	if validate == nil {
-		return errors.New("state validation function is required")
-	}
-	if initialize == nil {
-		return errors.New("state initialization function is required")
-	}
 	return nil
 }
 
@@ -159,6 +186,7 @@ func (s *SessionService) initializeSessionState(
 	stateKey string,
 	validate func([]byte) bool,
 	initialize func(context.Context) ([]byte, error),
+	projections []session.StateInitializationProjection,
 	expectedGeneration *sessionWithTTL,
 	coordinationKey stateInitializationKey,
 	gate *stateInitializationGate,
@@ -218,12 +246,15 @@ func (s *SessionService) initializeSessionState(
 	if !validate(cloneStateInitializationValue(value)) {
 		return nil, false, errors.New("initialize session state: callback returned an invalid value")
 	}
+	state, err := projectInitializedSessionState(stateKey, value, projections)
+	if err != nil {
+		return nil, false, err
+	}
 	if err := s.commitInitializedSessionState(
 		initializeCtx,
 		key,
-		stateKey,
 		generation,
-		value,
+		state,
 	); err != nil {
 		return nil, false, err
 	}
@@ -318,9 +349,8 @@ func (s *SessionService) loadSessionStateValue(
 func (s *SessionService) commitInitializedSessionState(
 	ctx context.Context,
 	key session.Key,
-	stateKey string,
 	generation *sessionWithTTL,
-	value []byte,
+	state session.StateMap,
 ) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -352,12 +382,30 @@ func (s *SessionService) commitInitializedSessionState(
 			"memory session service initialize session state failed: session generation changed",
 		)
 	}
-	stored.session.SetState(stateKey, value)
+	for stateKey, value := range state {
+		stored.session.SetState(stateKey, value)
+	}
 	stored.session.UpdatedAt = time.Now()
 	if s.opts.sessionTTL > 0 {
 		stored.expiredAt = calculateExpiredAt(s.opts.sessionTTL)
 	}
 	return nil
+}
+
+func projectInitializedSessionState(
+	stateKey string,
+	value []byte,
+	projections []session.StateInitializationProjection,
+) (session.StateMap, error) {
+	state := session.StateMap{stateKey: cloneStateInitializationValue(value)}
+	for _, projection := range projections {
+		projected, err := projection.Project(cloneStateInitializationValue(value))
+		if err != nil {
+			return nil, fmt.Errorf("project initialized session state: %w", err)
+		}
+		state[projection.StateKey] = cloneStateInitializationValue(projected)
+	}
+	return state, nil
 }
 
 func cloneStateInitializationValue(value []byte) []byte {

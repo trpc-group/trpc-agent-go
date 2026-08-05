@@ -199,6 +199,52 @@ func (s *anonymousCookieState) storeCanonicalValue(value []byte) error {
 	return nil
 }
 
+func (s *anonymousCookieState) legacyStateProjection(
+	value []byte,
+) (session.StateMap, error) {
+	if s == nil || s.key == "" {
+		return nil, errors.New("project anonymous A2A cookie record: state is unavailable")
+	}
+	var envelope anonymousCookieRecordEnvelope
+	if len(value) == 0 || json.Unmarshal(value, &envelope) != nil ||
+		envelope.Version != anonymousCookieRecordVersion {
+		return nil, errors.New("project anonymous A2A cookie record: value is invalid")
+	}
+	if envelope.Deleted {
+		return anonymousCookieClearedStateMap(s.key), nil
+	}
+	record, ok := decodeAnonymousCookieRecord(value, s.scope)
+	if !ok {
+		return nil, errors.New("project anonymous A2A cookie record: value is invalid")
+	}
+	return anonymousCookieRecordStateMap(s.key, record), nil
+}
+
+func (s *anonymousCookieState) legacyStateProjections() []session.StateInitializationProjection {
+	keys := []string{
+		s.key,
+		s.key + anonymousUserIDCookieSecureKeySuffix,
+		s.key + anonymousUserIDCookiePathKeySuffix,
+		s.key + anonymousUserIDCookieDomainKeySuffix,
+		s.key + anonymousUserIDCookieExpiryKeySuffix,
+	}
+	projections := make([]session.StateInitializationProjection, 0, len(keys))
+	for _, stateKey := range keys {
+		stateKey := stateKey
+		projections = append(projections, session.StateInitializationProjection{
+			StateKey: stateKey,
+			Project: func(value []byte) ([]byte, error) {
+				state, err := s.legacyStateProjection(value)
+				if err != nil {
+					return nil, err
+				}
+				return state[stateKey], nil
+			},
+		})
+	}
+	return projections
+}
+
 func (s *anonymousCookieState) storeRecordLocally(record anonymousCookieRecord) {
 	if s == nil {
 		return
@@ -353,6 +399,7 @@ func (h *anonymousCookieHTTPReqHandler) handleCoordinatedInitialization(
 			}
 			return encodeAnonymousCookieRecord(record)
 		},
+		cookie.legacyStateProjections()...,
 	)
 	if err != nil {
 		if errors.Is(err, errAnonymousCookieNotCaptured) &&

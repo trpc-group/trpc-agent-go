@@ -1043,8 +1043,24 @@ type WindowService interface {
 	) (*EventWindow, error)
 }
 
+// StateInitializationProjection derives one related session-state value that
+// must be committed atomically with a newly initialized primary value.
+// Projections are evaluated before the commit only for a valid initialize
+// callback result; they are not evaluated when an existing value is returned.
+type StateInitializationProjection struct {
+	// StateKey is the static session-scoped key receiving the projected value.
+	// It must be non-empty, differ from the primary and other projection keys,
+	// and not use the app: or user: prefixes.
+	StateKey string
+	// Project derives the value stored at StateKey. Its input is caller-owned
+	// and its result is copied before persistence. A nil result persists an
+	// explicit null state value. Project must not perform blocking or externally
+	// visible work.
+	Project func(value []byte) ([]byte, error)
+}
+
 // StateInitializationService extends Service with coordinated initialization
-// of individual session-state values.
+// of individual session-state values and their atomic projections.
 //
 // Implementations coordinate callers that share the same backing service. The
 // coordination mechanism and its lifecycle are owned by the implementation;
@@ -1065,6 +1081,9 @@ type StateInitializationService interface {
 	//
 	// A successful return guarantees that value was observed in, or atomically
 	// committed to, the session generation first observed by this method call.
+	// When initialize produces the committed value, every projection is evaluated
+	// before the commit and all returned state is committed atomically with value.
+	// Projection failures abort the commit and remain inspectable with errors.Is.
 	// The call must not cross a deletion and recreation of the same key while
 	// waiting for or holding ownership. A recreated session is a different
 	// generation and must not accept the old call's callback result.
@@ -1076,13 +1095,15 @@ type StateInitializationService interface {
 	//
 	// A nil ctx is treated as context.Background. The session must already exist.
 	// stateKey must be non-empty and must not use the app: or user: prefixes.
-	// validate and initialize must be non-nil.
+	// Projection keys must satisfy the same restrictions and be unique. validate,
+	// initialize, and every projection function must be non-nil.
 	LoadOrInitializeSessionState(
 		ctx context.Context,
 		key Key,
 		stateKey string,
 		validate func([]byte) bool,
 		initialize func(context.Context) ([]byte, error),
+		projections ...StateInitializationProjection,
 	) (value []byte, didInitialize bool, err error)
 }
 

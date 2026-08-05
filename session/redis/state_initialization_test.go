@@ -113,6 +113,65 @@ func TestLoadOrInitializeSessionStateCoordinatesServiceInstances(t *testing.T) {
 	}
 }
 
+func TestLoadOrInitializeSessionStateCommitsProjection(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		mode CompatMode
+	}{
+		{name: "hashidx", mode: CompatModeNone},
+		{name: "zset", mode: CompatModeTransition},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			redisURL, cleanup := setupTestRedis(t)
+			t.Cleanup(cleanup)
+			service := newStateInitializationTestService(t, redisURL, test.mode)
+			key := stateInitializationTestKey()
+			_, err := service.CreateSession(context.Background(), key, session.StateMap{
+				"cleared": []byte("stale"),
+			})
+			require.NoError(t, err)
+
+			legacyValue := []byte("legacy")
+			value, initialized, err := service.LoadOrInitializeSessionState(
+				context.Background(),
+				key,
+				"canonical",
+				func(value []byte) bool { return string(value) == "canonical" },
+				func(context.Context) ([]byte, error) { return []byte("canonical"), nil },
+				session.StateInitializationProjection{
+					StateKey: "legacy",
+					Project: func(value []byte) ([]byte, error) {
+						value[0] = 'X'
+						return legacyValue, nil
+					},
+				},
+				session.StateInitializationProjection{
+					StateKey: "cleared",
+					Project: func([]byte) ([]byte, error) {
+						return nil, nil
+					},
+				},
+			)
+			require.NoError(t, err)
+			require.True(t, initialized)
+			require.Equal(t, "canonical", string(value))
+			legacyValue[0] = 'X'
+
+			stored, err := service.GetSession(context.Background(), key)
+			require.NoError(t, err)
+			canonical, present := stored.GetState("canonical")
+			require.True(t, present)
+			require.Equal(t, "canonical", string(canonical))
+			legacy, present := stored.GetState("legacy")
+			require.True(t, present)
+			require.Equal(t, "legacy", string(legacy))
+			cleared, present := stored.GetState("cleared")
+			require.True(t, present)
+			require.Nil(t, cleared)
+		})
+	}
+}
+
 func TestLoadOrInitializeSessionStateWaiterCancellation(t *testing.T) {
 	redisURL, cleanup := setupTestRedis(t)
 	t.Cleanup(cleanup)
@@ -299,6 +358,7 @@ func TestLoadOrInitializeSessionStateDoesNotCallbackAfterLeaseExpiryBeforeRechec
 			callbackCalls.Add(1)
 			return []byte("stale"), nil
 		},
+		nil,
 	)
 	require.Error(t, err)
 	require.Zero(t, callbackCalls.Load())
@@ -898,6 +958,7 @@ func TestStateInitializationOwnerRecheckAndFailurePaths(t *testing.T) {
 			generation,
 			validate,
 			initialize,
+			nil,
 		)
 	}
 
@@ -1079,7 +1140,7 @@ func TestStateInitializationHelpers(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			require.Error(t, validateStateInitializationArguments(
-				test.key, test.stateKey, test.validate, test.init,
+				test.key, test.stateKey, test.validate, test.init, nil,
 			))
 		})
 	}
@@ -1111,6 +1172,7 @@ func TestStateInitializationHelpers(t *testing.T) {
 		"generation",
 		"lease",
 		"owner",
+		nil,
 	)
 	require.ErrorContains(t, err, "unknown storage route")
 

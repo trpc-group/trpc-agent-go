@@ -335,6 +335,7 @@ func (r *recordingStateInitializer) LoadOrInitializeSessionState(
 	_ string,
 	_ func([]byte) bool,
 	_ func(context.Context) ([]byte, error),
+	_ ...session.StateInitializationProjection,
 ) ([]byte, bool, error) {
 	r.key = key
 	return []byte("value"), true, nil
@@ -748,6 +749,12 @@ func TestWrapSessionService_PreservesStateInitializationService(t *testing.T) {
 		"private-state",
 		func(value []byte) bool { return string(value) == "value" },
 		func(context.Context) ([]byte, error) { return []byte("value"), nil },
+		session.StateInitializationProjection{
+			StateKey: "legacy-state",
+			Project: func([]byte) ([]byte, error) {
+				return []byte("legacy"), nil
+			},
+		},
 	)
 	require.NoError(t, err)
 	require.True(t, didInitialize)
@@ -762,6 +769,9 @@ func TestWrapSessionService_PreservesStateInitializationService(t *testing.T) {
 	persistedValue, present := persisted.GetState("private-state")
 	require.True(t, present)
 	require.Equal(t, "value", string(persistedValue))
+	legacy, present := persisted.GetState("legacy-state")
+	require.True(t, present)
+	require.Equal(t, "legacy", string(legacy))
 }
 
 func TestWrapSessionService_PreservesStateInitializationCombinations(

@@ -72,7 +72,7 @@ func TestAttemptSessionService_OverlayListStateAndDelete(t *testing.T) {
 	assert.NotContains(t, scope.DirectStateDelta(), "direct")
 }
 
-func TestAttemptSessionService_DelegatesCoordinatedStateInitialization(t *testing.T) {
+func TestAttemptSessionService_DoesNotBypassAttemptStateIsolation(t *testing.T) {
 	ctx := context.Background()
 	base := sessioninmemory.NewSessionService()
 	t.Cleanup(func() { require.NoError(t, base.Close()) })
@@ -81,25 +81,17 @@ func TestAttemptSessionService_DelegatesCoordinatedStateInitialization(t *testin
 	require.NoError(t, err)
 
 	scope := newAttemptSessionService(base, root.Clone())
-	initializer, ok := scope.Service().(session.StateInitializationService)
-	require.True(t, ok)
-	value, didInitialize, err := initializer.LoadOrInitializeSessionState(
-		ctx,
-		key,
-		"private-state",
-		func(value []byte) bool { return string(value) == "value" },
-		func(context.Context) ([]byte, error) { return []byte("value"), nil },
-	)
-	require.NoError(t, err)
-	require.True(t, didInitialize)
-	require.Equal(t, "value", string(value))
-	require.NotContains(t, scope.DirectStateDelta(), "private-state")
+	_, initializesState := scope.Service().(session.StateInitializationService)
+	require.False(t, initializesState)
+	require.NoError(t, scope.UpdateSessionState(ctx, key, session.StateMap{
+		"private-state": []byte("value"),
+	}))
+	require.Equal(t, "value", string(scope.DirectStateDelta()["private-state"]))
 
 	persisted, err := base.GetSession(ctx, key)
 	require.NoError(t, err)
-	persistedValue, present := persisted.GetState("private-state")
-	require.True(t, present)
-	require.Equal(t, "value", string(persistedValue))
+	_, present := persisted.GetState("private-state")
+	require.False(t, present)
 }
 
 func TestAttemptSessionService_RejectsInvalidKeysAndProtectedState(t *testing.T) {

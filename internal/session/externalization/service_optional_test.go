@@ -121,6 +121,7 @@ func (stateInitializationStub) LoadOrInitializeSessionState(
 	string,
 	func([]byte) bool,
 	func(context.Context) ([]byte, error),
+	...session.StateInitializationProjection,
 ) ([]byte, bool, error) {
 	return []byte("value"), true, nil
 }

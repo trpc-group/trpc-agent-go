@@ -49,34 +49,7 @@ func newAttemptSessionService(
 }
 
 func (s *attemptSessionService) Service() session.Service {
-	if initializer, ok := s.base.(session.StateInitializationService); ok {
-		return &coordinatedAttemptSessionService{
-			attemptSessionService: s,
-			initializer:           initializer,
-		}
-	}
 	return s
-}
-
-type coordinatedAttemptSessionService struct {
-	*attemptSessionService
-	initializer session.StateInitializationService
-}
-
-func (s *coordinatedAttemptSessionService) LoadOrInitializeSessionState(
-	ctx context.Context,
-	key session.Key,
-	stateKey string,
-	validate func([]byte) bool,
-	initialize func(context.Context) ([]byte, error),
-) ([]byte, bool, error) {
-	return s.initializer.LoadOrInitializeSessionState(
-		ctx,
-		key,
-		stateKey,
-		validate,
-		initialize,
-	)
 }
 
 func (s *attemptSessionService) CreateSession(

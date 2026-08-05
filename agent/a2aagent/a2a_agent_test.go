@@ -1114,6 +1114,70 @@ func TestAnonymousCookieStateCanonicalMutationsUseCoordinator(t *testing.T) {
 	require.Equal(t, anonymousCookieTombstoneValue(), tombstone)
 }
 
+func TestAnonymousCookieStateKeepsLegacyProjectionForRollingUpgrade(t *testing.T) {
+	ctx := context.Background()
+	service := &canonicalStateTrackingService{
+		SessionService: sessionmemory.NewSessionService(),
+	}
+	t.Cleanup(func() { require.NoError(t, service.Close()) })
+	key := session.Key{AppName: "app", UserID: "user-1", SessionID: "session-a"}
+	persisted, err := service.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	agentURL := "https://agent.example.com/a2a"
+	scope := anonymousCookieURLScopeFromAgentURL(agentURL)
+	stateKey := anonymousCookieStateKey(agentURL)
+	state := newAnonymousCookieState(
+		persisted.Clone(),
+		persisted,
+		service,
+		stateKey,
+		scope,
+	)
+	readLegacy := func(t *testing.T) (anonymousCookieRecord, bool, *session.Session) {
+		t.Helper()
+		stored, loadErr := service.GetSession(ctx, key)
+		require.NoError(t, loadErr)
+		record, ok := loadAnonymousCookieStateFromSession(stored, stateKey)
+		return record, ok, stored
+	}
+
+	first := anonymousCookieRecord{
+		value:   anonymousTestCookieValue(31),
+		secure:  true,
+		path:    "/a2a",
+		domain:  "agent.example.com",
+		expires: time.Now().Add(time.Hour).UTC(),
+	}
+	require.NoError(t, state.persist(ctx, first))
+	legacy, ok, _ := readLegacy(t)
+	require.True(t, ok)
+	require.True(t, first.equal(legacy))
+
+	rotated := anonymousCookieRecord{
+		value:   anonymousTestCookieValue(32),
+		secure:  true,
+		path:    "/a2a/tasks",
+		domain:  "agent.example.com",
+		expires: time.Now().Add(2 * time.Hour).UTC(),
+	}
+	require.NoError(t, state.persist(ctx, rotated))
+	legacy, ok, _ = readLegacy(t)
+	require.True(t, ok)
+	require.True(t, rotated.equal(legacy))
+
+	require.NoError(t, state.clear(ctx))
+	_, ok, stored := readLegacy(t)
+	require.False(t, ok)
+	require.True(t, anonymousCookieStatePresent(stored, stateKey))
+	legacyValue, present := stored.GetState(stateKey)
+	require.True(t, present)
+	require.Nil(t, legacyValue)
+	tombstone, present := stored.GetState(state.canonicalStateKey())
+	require.True(t, present)
+	require.Equal(t, anonymousCookieTombstoneValue(), tombstone)
+	require.Zero(t, service.directUpdates.Load())
+}
+
 func TestAnonymousCoordinationRecordAndSyncEdgeCases(t *testing.T) {
 	scope := anonymousCookieURLScopeFromAgentURL("https://agent.example.com/a2a")
 	stateKey := anonymousCookieStateKey("https://agent.example.com/a2a")
@@ -3158,8 +3222,9 @@ func TestAnonymousCookieRequestHandlerHonorsCookieDeletionAndExpiry(t *testing.T
 		SessionID: "session-a",
 	})
 	require.NoError(t, err)
-	_, stateExists := persistedSession.GetState(stateKey)
-	require.False(t, stateExists)
+	legacyValue, stateExists := persistedSession.GetState(stateKey)
+	require.True(t, stateExists)
+	require.Nil(t, legacyValue)
 	stateValue, stateExists := persistedSession.GetState(
 		stateKey + anonymousCookieRecordStateKeySuffix,
 	)
@@ -6701,6 +6766,7 @@ func (s *controlledStateInitializationService) LoadOrInitializeSessionState(
 	_ string,
 	validate func([]byte) bool,
 	initialize func(context.Context) ([]byte, error),
+	_ ...session.StateInitializationProjection,
 ) ([]byte, bool, error) {
 	initializeCtx, cancel := context.WithCancel(context.Background())
 	s.cancel = cancel
@@ -6738,6 +6804,7 @@ func (s *canonicalStateTrackingService) LoadOrInitializeSessionState(
 	stateKey string,
 	validate func([]byte) bool,
 	initialize func(context.Context) ([]byte, error),
+	projections ...session.StateInitializationProjection,
 ) ([]byte, bool, error) {
 	return s.SessionService.LoadOrInitializeSessionState(
 		ctx,
@@ -6745,6 +6812,7 @@ func (s *canonicalStateTrackingService) LoadOrInitializeSessionState(
 		stateKey,
 		validate,
 		initialize,
+		projections...,
 	)
 }
 
@@ -6754,6 +6822,7 @@ func (s *failingStateInitializationService) LoadOrInitializeSessionState(
 	_ string,
 	validate func([]byte) bool,
 	initialize func(context.Context) ([]byte, error),
+	_ ...session.StateInitializationProjection,
 ) ([]byte, bool, error) {
 	value, err := initialize(ctx)
 	if err != nil {
@@ -6771,6 +6840,7 @@ func (s *mismatchedStateInitializationService) LoadOrInitializeSessionState(
 	string,
 	func([]byte) bool,
 	func(context.Context) ([]byte, error),
+	...session.StateInitializationProjection,
 ) ([]byte, bool, error) {
 	return append([]byte(nil), s.committed...), false, nil
 }
@@ -6807,6 +6877,7 @@ func (s *observingStateInitializationService) LoadOrInitializeSessionState(
 	stateKey string,
 	validate func([]byte) bool,
 	initialize func(context.Context) ([]byte, error),
+	projections ...session.StateInitializationProjection,
 ) ([]byte, bool, error) {
 	if s.calls.Add(1) == 2 {
 		s.secondOnce.Do(func() { close(s.secondCall) })
@@ -6817,6 +6888,7 @@ func (s *observingStateInitializationService) LoadOrInitializeSessionState(
 		stateKey,
 		validate,
 		initialize,
+		projections...,
 	)
 }
 

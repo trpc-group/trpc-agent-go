@@ -13,6 +13,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -65,10 +66,10 @@ func (c *Client) LoadSessionStateValue(
 	return cloneStateInitializationValue(value), present, meta.Generation, true, nil
 }
 
-// CommitStateInitialization atomically persists a value and releases its
-// owner-token-checked lease. It returns 1 on success, 0 when ownership was
-// lost, -1 when the session disappeared, and -2 when the session generation
-// changed.
+// CommitStateInitialization atomically persists a primary value and its
+// projections, then releases the owner-token-checked lease. It returns 1 on
+// success, 0 when ownership was lost, -1 when the session disappeared, and -2
+// when the session generation changed.
 func (c *Client) CommitStateInitialization(
 	ctx context.Context,
 	key session.Key,
@@ -77,26 +78,37 @@ func (c *Client) CommitStateInitialization(
 	generation string,
 	leaseKey string,
 	ownerToken string,
+	projections ...session.StateMap,
 ) (int, error) {
 	ttlMillis := c.cfg.SessionTTL.Milliseconds()
 	if c.cfg.SessionTTL > 0 && ttlMillis == 0 {
 		ttlMillis = 1
 	}
-	valueIsNil := 0
-	encodedValue := ""
-	if value == nil {
-		valueIsNil = 1
-	} else {
-		encodedValue = base64.StdEncoding.EncodeToString(value)
+	nilSentinel := "__TRPC_AGENT_GO_STATE_INITIALIZATION_NULL_" +
+		strings.ReplaceAll(uuid.NewString(), "-", "") + "__"
+	state := map[string]string{stateKey: encodeStateInitializationValue(value, nilSentinel)}
+	for _, projection := range projections {
+		for projectedKey, projectedValue := range projection {
+			if _, exists := state[projectedKey]; exists {
+				return 0, fmt.Errorf(
+					"commit state initialization: duplicate state key %q",
+					projectedKey,
+				)
+			}
+			state[projectedKey] = encodeStateInitializationValue(projectedValue, nilSentinel)
+		}
+	}
+	encodedState, err := json.Marshal(state)
+	if err != nil {
+		return 0, fmt.Errorf("commit state initialization: marshal state: %w", err)
 	}
 	result, err := c.runScript(
 		ctx,
 		luaCommitStateInitialization,
 		[]string{leaseKey, c.keys.SessionMetaKey(key)},
 		ownerToken,
-		stateKey,
-		encodedValue,
-		valueIsNil,
+		string(encodedState),
+		nilSentinel,
 		generation,
 		time.Now().UTC().Format(time.RFC3339Nano),
 		ttlMillis,
@@ -105,6 +117,13 @@ func (c *Client) CommitStateInitialization(
 		return 0, fmt.Errorf("commit state initialization: %w", err)
 	}
 	return result, nil
+}
+
+func encodeStateInitializationValue(value []byte, nilSentinel string) string {
+	if value == nil {
+		return nilSentinel
+	}
+	return base64.StdEncoding.EncodeToString(value)
 }
 
 func cloneStateInitializationValue(value []byte) []byte {

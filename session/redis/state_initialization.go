@@ -64,12 +64,14 @@ func (s *Service) LoadOrInitializeSessionState(
 	stateKey string,
 	validate func([]byte) bool,
 	initialize func(context.Context) ([]byte, error),
+	projections ...session.StateInitializationProjection,
 ) ([]byte, bool, error) {
 	if err := validateStateInitializationArguments(
 		key,
 		stateKey,
 		validate,
 		initialize,
+		projections,
 	); err != nil {
 		return nil, false, err
 	}
@@ -125,6 +127,7 @@ func (s *Service) LoadOrInitializeSessionState(
 				expectedGeneration,
 				validate,
 				initialize,
+				projections,
 			)
 		}
 
@@ -169,10 +172,40 @@ func validateStateInitializationArguments(
 	stateKey string,
 	validate func([]byte) bool,
 	initialize func(context.Context) ([]byte, error),
+	projections []session.StateInitializationProjection,
 ) error {
 	if err := key.CheckSessionKey(); err != nil {
 		return err
 	}
+	if err := validateStateInitializationStateKey(stateKey); err != nil {
+		return err
+	}
+	if validate == nil {
+		return errors.New("state validation function is required")
+	}
+	if initialize == nil {
+		return errors.New("state initialization function is required")
+	}
+	seen := map[string]struct{}{stateKey: {}}
+	for _, projection := range projections {
+		if err := validateStateInitializationStateKey(projection.StateKey); err != nil {
+			return fmt.Errorf("state initialization projection: %w", err)
+		}
+		if _, exists := seen[projection.StateKey]; exists {
+			return fmt.Errorf(
+				"state initialization projection: duplicate state key %q",
+				projection.StateKey,
+			)
+		}
+		seen[projection.StateKey] = struct{}{}
+		if projection.Project == nil {
+			return errors.New("state initialization projection is required")
+		}
+	}
+	return nil
+}
+
+func validateStateInitializationStateKey(stateKey string) error {
 	if strings.TrimSpace(stateKey) == "" {
 		return errors.New("state key is required")
 	}
@@ -188,12 +221,6 @@ func validateStateInitializationArguments(
 			stateKey,
 		)
 	}
-	if validate == nil {
-		return errors.New("state validation function is required")
-	}
-	if initialize == nil {
-		return errors.New("state initialization function is required")
-	}
 	return nil
 }
 
@@ -208,6 +235,7 @@ func (s *Service) initializeSessionState(
 	expectedGeneration string,
 	validate func([]byte) bool,
 	initialize func(context.Context) ([]byte, error),
+	projections []session.StateInitializationProjection,
 ) ([]byte, bool, error) {
 	owned := true
 	initializeCtx, cancelInitialize := context.WithCancel(ctx)
@@ -317,6 +345,10 @@ func (s *Service) initializeSessionState(
 	if !validate(cloneStateInitializationValue(value)) {
 		return nil, false, errors.New("initialize session state: callback returned an invalid value")
 	}
+	projection, err := projectInitializedSessionState(stateKey, value, projections)
+	if err != nil {
+		return nil, false, err
+	}
 
 	result, err := s.commitStateInitialization(
 		initializeCtx,
@@ -327,6 +359,7 @@ func (s *Service) initializeSessionState(
 		expectedGeneration,
 		leaseKey,
 		ownerToken,
+		projection,
 	)
 	if err != nil {
 		return nil, false, err
@@ -434,6 +467,7 @@ func (s *Service) commitStateInitialization(
 	generation string,
 	leaseKey string,
 	ownerToken string,
+	projection session.StateMap,
 ) (int, error) {
 	switch route {
 	case stateInitializationRouteHashIdx:
@@ -445,6 +479,7 @@ func (s *Service) commitStateInitialization(
 			generation,
 			leaseKey,
 			ownerToken,
+			projection,
 		)
 	case stateInitializationRouteZSet:
 		return s.zsetClient.CommitStateInitialization(
@@ -455,10 +490,27 @@ func (s *Service) commitStateInitialization(
 			generation,
 			leaseKey,
 			ownerToken,
+			projection,
 		)
 	default:
 		return 0, fmt.Errorf("initialize session state: unknown storage route %d", route)
 	}
+}
+
+func projectInitializedSessionState(
+	stateKey string,
+	value []byte,
+	projections []session.StateInitializationProjection,
+) (session.StateMap, error) {
+	projectedState := make(session.StateMap)
+	for _, projection := range projections {
+		projected, err := projection.Project(cloneStateInitializationValue(value))
+		if err != nil {
+			return nil, fmt.Errorf("project initialized session state: %w", err)
+		}
+		projectedState[projection.StateKey] = cloneStateInitializationValue(projected)
+	}
+	return projectedState, nil
 }
 
 func (s *Service) runStateInitializationScript(

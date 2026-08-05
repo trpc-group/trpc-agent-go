@@ -129,6 +129,7 @@ func (s *stateInitializationForwarder) LoadOrInitializeSessionState(
 	stateKey string,
 	validate func([]byte) bool,
 	initialize func(context.Context) ([]byte, error),
+	projections ...session.StateInitializationProjection,
 ) ([]byte, bool, error) {
 	return s.initializer.LoadOrInitializeSessionState(
 		ctx,
@@ -136,6 +137,7 @@ func (s *stateInitializationForwarder) LoadOrInitializeSessionState(
 		stateKey,
 		validate,
 		initialize,
+		projections...,
 	)
 }
 

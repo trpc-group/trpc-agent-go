@@ -80,6 +80,95 @@ func TestLoadOrInitializeSessionStateExistingAndReplacement(t *testing.T) {
 	})
 }
 
+func TestLoadOrInitializeSessionStateCommitsProjection(t *testing.T) {
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	service := NewSessionService()
+	t.Cleanup(func() { require.NoError(t, service.Close()) })
+	_, err := service.CreateSession(ctx, key, session.StateMap{
+		"cleared": []byte("stale"),
+	})
+	require.NoError(t, err)
+
+	legacyValue := []byte("legacy")
+	value, initialized, err := service.LoadOrInitializeSessionState(
+		ctx,
+		key,
+		"canonical",
+		func(value []byte) bool { return string(value) == "canonical" },
+		func(context.Context) ([]byte, error) { return []byte("canonical"), nil },
+		session.StateInitializationProjection{
+			StateKey: "legacy",
+			Project: func(value []byte) ([]byte, error) {
+				value[0] = 'X'
+				return legacyValue, nil
+			},
+		},
+		session.StateInitializationProjection{
+			StateKey: "cleared",
+			Project: func([]byte) ([]byte, error) {
+				return nil, nil
+			},
+		},
+	)
+	require.NoError(t, err)
+	require.True(t, initialized)
+	require.Equal(t, "canonical", string(value))
+	legacyValue[0] = 'X'
+
+	stored, err := service.GetSession(ctx, key)
+	require.NoError(t, err)
+	canonical, present := stored.GetState("canonical")
+	require.True(t, present)
+	require.Equal(t, "canonical", string(canonical))
+	legacy, present := stored.GetState("legacy")
+	require.True(t, present)
+	require.Equal(t, "legacy", string(legacy))
+	cleared, present := stored.GetState("cleared")
+	require.True(t, present)
+	require.Nil(t, cleared)
+}
+
+func TestLoadOrInitializeSessionStateProjectionFailureDoesNotCommit(t *testing.T) {
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	service := NewSessionService()
+	t.Cleanup(func() { require.NoError(t, service.Close()) })
+	_, err := service.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	wantErr := errors.New("projection failed")
+
+	_, initialized, err := service.LoadOrInitializeSessionState(
+		ctx,
+		key,
+		"canonical",
+		func(value []byte) bool { return string(value) == "canonical" },
+		func(context.Context) ([]byte, error) { return []byte("canonical"), nil },
+		session.StateInitializationProjection{
+			StateKey: "legacy",
+			Project: func([]byte) ([]byte, error) {
+				return nil, wantErr
+			},
+		},
+	)
+	require.ErrorIs(t, err, wantErr)
+	require.False(t, initialized)
+	stored, err := service.GetSession(ctx, key)
+	require.NoError(t, err)
+	_, present := stored.GetState("canonical")
+	require.False(t, present)
+	value, initialized, err := service.LoadOrInitializeSessionState(
+		ctx,
+		key,
+		"canonical",
+		func(value []byte) bool { return string(value) == "canonical" },
+		func(context.Context) ([]byte, error) { return []byte("canonical"), nil },
+	)
+	require.NoError(t, err)
+	require.True(t, initialized)
+	require.Equal(t, "canonical", string(value))
+}
+
 func TestLoadOrInitializeSessionStateCoordinatesCallers(t *testing.T) {
 	ctx := context.Background()
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
@@ -323,13 +412,15 @@ func TestLoadOrInitializeSessionStateValidatesBeforeCallback(t *testing.T) {
 		return []byte("value"), nil
 	}
 	validate := func([]byte) bool { return true }
+	project := func([]byte) ([]byte, error) { return []byte("projected"), nil }
 
 	tests := []struct {
-		name       string
-		key        session.Key
-		stateKey   string
-		validate   func([]byte) bool
-		initialize func(context.Context) ([]byte, error)
+		name        string
+		key         session.Key
+		stateKey    string
+		validate    func([]byte) bool
+		initialize  func(context.Context) ([]byte, error)
+		projections []session.StateInitializationProjection
 	}{
 		{name: "invalid session key", key: session.Key{}, stateKey: "state", validate: validate, initialize: initialize},
 		{name: "missing state key", key: validKey, validate: validate, initialize: initialize},
@@ -337,6 +428,26 @@ func TestLoadOrInitializeSessionStateValidatesBeforeCallback(t *testing.T) {
 		{name: "user state", key: validKey, stateKey: session.StateUserPrefix + "state", validate: validate, initialize: initialize},
 		{name: "missing validator", key: validKey, stateKey: "state", initialize: initialize},
 		{name: "missing initializer", key: validKey, stateKey: "state", validate: validate},
+		{
+			name:       "projection reuses primary key",
+			key:        validKey,
+			stateKey:   "state",
+			validate:   validate,
+			initialize: initialize,
+			projections: []session.StateInitializationProjection{
+				{StateKey: "state", Project: project},
+			},
+		},
+		{
+			name:       "projection function missing",
+			key:        validKey,
+			stateKey:   "state",
+			validate:   validate,
+			initialize: initialize,
+			projections: []session.StateInitializationProjection{
+				{StateKey: "projected"},
+			},
+		},
 		{name: "missing session", key: validKey, stateKey: "state", validate: validate, initialize: initialize},
 	}
 	for _, test := range tests {
@@ -347,6 +458,7 @@ func TestLoadOrInitializeSessionStateValidatesBeforeCallback(t *testing.T) {
 				test.stateKey,
 				test.validate,
 				test.initialize,
+				test.projections...,
 			)
 			require.Error(t, err)
 		})
@@ -551,6 +663,7 @@ func TestInitializeSessionStateOwnerRecheckPaths(t *testing.T) {
 				t.Fatal("initializer must not run for a valid rechecked value")
 				return nil, nil
 			},
+			nil,
 			generation,
 			coordinationKey,
 			gate,
@@ -573,6 +686,7 @@ func TestInitializeSessionStateOwnerRecheckPaths(t *testing.T) {
 			"state",
 			func([]byte) bool { return false },
 			func(context.Context) ([]byte, error) { return []byte("value"), nil },
+			nil,
 			&sessionWithTTL{},
 			coordinationKey,
 			gate,
@@ -591,6 +705,7 @@ func TestInitializeSessionStateOwnerRecheckPaths(t *testing.T) {
 			"state",
 			func([]byte) bool { return false },
 			func(context.Context) ([]byte, error) { return []byte("value"), nil },
+			nil,
 			nil,
 			coordinationKey,
 			gate,
@@ -649,14 +764,18 @@ func TestStateInitializationGateAndStorageHelpers(t *testing.T) {
 		cancel()
 		require.ErrorIs(
 			t,
-			service.commitInitializedSessionState(canceledCtx, key, "state", stored, []byte("value")),
+			service.commitInitializedSessionState(
+				canceledCtx, key, stored, session.StateMap{"state": []byte("value")},
+			),
 			context.Canceled,
 		)
 
 		close(service.stateInitializationClosed)
 		require.ErrorIs(
 			t,
-			service.commitInitializedSessionState(ctx, key, "state", stored, []byte("value")),
+			service.commitInitializedSessionState(
+				ctx, key, stored, session.StateMap{"state": []byte("value")},
+			),
 			errStateInitializationClosed,
 		)
 		service.stateInitializationClosed = make(chan struct{})
@@ -664,7 +783,9 @@ func TestStateInitializationGateAndStorageHelpers(t *testing.T) {
 		delete(service.apps, key.AppName)
 		require.ErrorContains(
 			t,
-			service.commitInitializedSessionState(ctx, key, "state", stored, []byte("value")),
+			service.commitInitializedSessionState(
+				ctx, key, stored, session.StateMap{"state": []byte("value")},
+			),
 			"session not found",
 		)
 		service, stored = newStoredService()
@@ -672,28 +793,32 @@ func TestStateInitializationGateAndStorageHelpers(t *testing.T) {
 		delete(app.sessions, key.UserID)
 		require.ErrorContains(
 			t,
-			service.commitInitializedSessionState(ctx, key, "state", stored, []byte("value")),
+			service.commitInitializedSessionState(
+				ctx, key, stored, session.StateMap{"state": []byte("value")},
+			),
 			"session not found",
 		)
 		app.sessions[key.UserID] = map[string]*sessionWithTTL{key.SessionID: stored}
 		stored.expiredAt = time.Now().Add(-time.Second)
 		require.ErrorContains(
 			t,
-			service.commitInitializedSessionState(ctx, key, "state", stored, []byte("value")),
+			service.commitInitializedSessionState(
+				ctx, key, stored, session.StateMap{"state": []byte("value")},
+			),
 			"session expired",
 		)
 		stored.expiredAt = time.Time{}
 		require.ErrorContains(
 			t,
 			service.commitInitializedSessionState(
-				ctx, key, "state", &sessionWithTTL{}, []byte("value"),
+				ctx, key, &sessionWithTTL{}, session.StateMap{"state": []byte("value")},
 			),
 			"session generation changed",
 		)
 
 		service.opts.sessionTTL = time.Minute
 		require.NoError(t, service.commitInitializedSessionState(
-			ctx, key, "state", stored, []byte("value"),
+			ctx, key, stored, session.StateMap{"state": []byte("value")},
 		))
 		require.False(t, stored.expiredAt.IsZero())
 		value, present := stored.session.GetState("state")

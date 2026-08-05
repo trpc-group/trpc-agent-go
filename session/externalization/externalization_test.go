@@ -79,10 +79,21 @@ func TestWrapPreservesCoordinatedStateInitializationCapability(t *testing.T) {
 		"private-state",
 		func(value []byte) bool { return string(value) == "value" },
 		func(context.Context) ([]byte, error) { return []byte("value"), nil },
+		session.StateInitializationProjection{
+			StateKey: "legacy-state",
+			Project: func([]byte) ([]byte, error) {
+				return []byte("legacy"), nil
+			},
+		},
 	)
 	require.NoError(t, err)
 	require.True(t, didInitialize)
 	require.Equal(t, "value", string(value))
+	persisted, err := inner.GetSession(ctx, key)
+	require.NoError(t, err)
+	legacy, present := persisted.GetState("legacy-state")
+	require.True(t, present)
+	require.Equal(t, "legacy", string(legacy))
 
 	withoutCapability := Wrap(
 		&requiredSessionServiceOnly{Service: inner},

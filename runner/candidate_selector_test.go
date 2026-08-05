@@ -719,7 +719,7 @@ func TestAttemptSessionService_DoesNotExposeUnsupportedOptionalInterfaces(t *tes
 	assert.False(t, searchable)
 	assert.False(t, window)
 	assert.False(t, track)
-	assert.True(t, initializesState)
+	assert.False(t, initializesState)
 
 	unsupported := newAttemptSessionService(nil, nil).Service()
 	_, initializesState = unsupported.(session.StateInitializationService)

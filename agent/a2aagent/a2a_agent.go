@@ -721,6 +721,7 @@ func (s *anonymousCookieState) persistCanonicalValue(
 		s.canonicalStateKey(),
 		func(existing []byte) bool { return bytes.Equal(existing, value) },
 		func(context.Context) ([]byte, error) { return value, nil },
+		s.legacyStateProjections()...,
 	)
 	if err != nil {
 		return fmt.Errorf("persist anonymous A2A cookie state: %w", err)

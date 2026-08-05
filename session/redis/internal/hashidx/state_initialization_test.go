@@ -247,6 +247,25 @@ func TestCommitStateInitialization(t *testing.T) {
 		}
 	})
 
+	t.Run("clamps a zero millisecond remaining ttl", func(t *testing.T) {
+		key, generation := createSession(t, "near-expiry")
+		metaKey := client.keys.SessionMetaKey(key)
+		mr.SetTTL(metaKey, time.Nanosecond)
+		remainingTTL, err := redisClient.PTTL(ctx, metaKey).Result()
+		require.NoError(t, err)
+		require.Zero(t, remainingTTL)
+		leaseKey := setLease(t, key, "owner")
+		cfg := defaultConfig()
+		cfg.SessionTTL = 0
+		ttlClient := NewClient(redisClient, cfg)
+		result, err := ttlClient.CommitStateInitialization(
+			ctx, key, "state", []byte("value"), generation, leaseKey, "owner",
+		)
+		require.NoError(t, err)
+		require.Equal(t, 1, result)
+		require.Equal(t, time.Millisecond, mr.TTL(metaKey))
+	})
+
 	t.Run("returns script error", func(t *testing.T) {
 		key := stateInitializationHashIdxKey("bad-commit")
 		metaKey := client.keys.SessionMetaKey(key)
