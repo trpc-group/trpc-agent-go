@@ -494,15 +494,14 @@ func (r *A2AAgent) processStreamingEvents(
 	eventChan chan<- *event.Event,
 	streamChan <-chan protocol.StreamResponse,
 ) (result streamingEventResult) {
-	var contentBuilder strings.Builder
-	var bufferedResponseID string
+	var contentBuffer ia2a.StreamingTextBuffer
 	artifactContent := make(map[string]string)
 	artifactContentParts := make(map[string][]model.ContentPart)
 	var artifactOrder []string
 	defer func() {
 		finalizeStreamingContent(
 			&result,
-			&contentBuilder,
+			&contentBuffer,
 			artifactContent,
 			artifactContentParts,
 			artifactOrder,
@@ -523,6 +522,7 @@ func (r *A2AAgent) processStreamingEvents(
 		)
 		var artifactChunk strings.Builder
 		var artifactChunkParts []model.ContentPart
+		artifactContentRecorded := false
 
 		events, err := r.eventConverter.ConvertStreamingToEvents(streamEvent, r.name, invocation)
 		if err != nil {
@@ -544,38 +544,53 @@ func (r *A2AAgent) processStreamingEvents(
 				currentResponseID = evt.Response.ID
 			}
 			if evt.Response != nil && !evt.Response.IsPartial {
-				flushResponseID := bufferedResponseID
-				if flushResponseID == "" {
-					flushResponseID = currentResponseID
-				}
 				r.flushBufferedContent(
 					ctx,
 					invocation,
 					eventChan,
-					flushResponseID,
+					currentResponseID,
 					evt.Timestamp,
-					&contentBuilder,
+					&contentBuffer,
 				)
-				bufferedResponseID = ""
 			}
-			previousContentLen := contentBuilder.Len()
+			var eventContent strings.Builder
+			var eventContentParts []model.ContentPart
 			result.responseID = r.aggregateEventContent(
 				evt,
 				result.responseID,
-				&contentBuilder,
-				&result.aggregatedContentParts,
+				&eventContent,
+				&eventContentParts,
 			)
-			if contentBuilder.Len() > previousContentLen &&
-				bufferedResponseID == "" &&
-				evt.Response != nil {
-				bufferedResponseID = evt.Response.ID
+			responseID := ""
+			if evt.Response != nil {
+				responseID = evt.Response.ID
 			}
-			r.aggregateArtifactEventContent(
-				artifactUpdate,
-				evt,
-				&artifactChunk,
-				&artifactChunkParts,
-			)
+			if artifactUpdate == nil {
+				contentBuffer.Append(responseID, eventContent.String())
+				result.aggregatedContentParts = append(
+					result.aggregatedContentParts,
+					eventContentParts...,
+				)
+			} else {
+				r.aggregateArtifactMessageContent(
+					evt,
+					&eventContent,
+					&eventContentParts,
+				)
+				content := eventContent.String()
+				artifactChunk.WriteString(content)
+				artifactChunkParts = append(
+					artifactChunkParts,
+					eventContentParts...,
+				)
+				contentBuffer.UpdateArtifact(
+					responseID,
+					artifactUpdate.Artifact.ArtifactID,
+					content,
+					replacesArtifact && !artifactContentRecorded,
+				)
+				artifactContentRecorded = true
+			}
 			// A repeated append=false update replaces the previous artifact
 			// value. Expose it as a Message snapshot so consumers do not append
 			// it to an earlier Delta.
@@ -588,6 +603,12 @@ func (r *A2AAgent) processStreamingEvents(
 				return result
 			}
 		}
+		clearFilteredArtifactReplacement(
+			&contentBuffer,
+			artifactUpdate,
+			replacesArtifact,
+			artifactContentRecorded,
+		)
 		recordArtifactChunk(
 			artifactUpdate,
 			artifactChunk.String(),
@@ -606,6 +627,23 @@ func (r *A2AAgent) processStreamingEvents(
 		)
 	}
 	return result
+}
+
+func clearFilteredArtifactReplacement(
+	contentBuffer *ia2a.StreamingTextBuffer,
+	update *protocol.TaskArtifactUpdateEvent,
+	replacesArtifact bool,
+	artifactContentRecorded bool,
+) {
+	if update == nil || !replacesArtifact || artifactContentRecorded {
+		return
+	}
+	contentBuffer.UpdateArtifact(
+		"",
+		update.Artifact.ArtifactID,
+		"",
+		true,
+	)
 }
 
 func artifactUpdateReplacesSnapshot(
@@ -643,13 +681,13 @@ func markArtifactReplacementSnapshot(evt *event.Event, replacement bool) {
 
 func finalizeStreamingContent(
 	result *streamingEventResult,
-	contentBuilder *strings.Builder,
+	contentBuffer *ia2a.StreamingTextBuffer,
 	artifactContent map[string]string,
 	artifactContentParts map[string][]model.ContentPart,
 	artifactOrder []string,
 ) {
 	if len(artifactOrder) == 0 {
-		result.aggregatedContent = contentBuilder.String()
+		result.aggregatedContent = contentBuffer.Content()
 		return
 	}
 	var artifacts strings.Builder
@@ -662,16 +700,15 @@ func finalizeStreamingContent(
 	result.aggregatedContentParts = parts
 }
 
-func (r *A2AAgent) aggregateArtifactEventContent(
-	update *protocol.TaskArtifactUpdateEvent,
+func (r *A2AAgent) aggregateArtifactMessageContent(
 	evt *event.Event,
 	contentBuilder *strings.Builder,
 	contentParts *[]model.ContentPart,
 ) {
-	if update == nil || evt == nil {
+	if evt == nil || contentBuilder.Len() > 0 ||
+		contentParts != nil && len(*contentParts) > 0 {
 		return
 	}
-	r.aggregateEventContent(evt, "", contentBuilder, contentParts)
 	if evt.Response == nil || evt.Response.Error != nil ||
 		!evt.Response.IsPartial || len(evt.Response.Choices) == 0 {
 		return
@@ -759,16 +796,14 @@ func (r *A2AAgent) flushBufferedContent(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
-	responseID string,
+	fallbackResponseID string,
 	anchorTimestamp time.Time,
-	contentBuilder *strings.Builder,
+	contentBuffer *ia2a.StreamingTextBuffer,
 ) {
-	if contentBuilder == nil || contentBuilder.Len() == 0 {
+	responseID, content, ok := contentBuffer.Take(fallbackResponseID)
+	if !ok {
 		return
 	}
-
-	content := contentBuilder.String()
-	contentBuilder.Reset()
 
 	flushTime := time.Now()
 	if !anchorTimestamp.IsZero() {

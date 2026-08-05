@@ -5120,6 +5120,142 @@ func TestA2AAgentProcessStreamingEventsUsesBufferedResponseIDWhenFlushing(t *tes
 	}
 }
 
+func TestA2AAgentProcessStreamingEventsBuffersV0ArtifactUpdates(t *testing.T) {
+	textEvent := func(
+		responseID string,
+		content string,
+		object string,
+		appendChunk *bool,
+	) protocol.StreamingMessageEvent {
+		var metadata map[string]any
+		if object != "" {
+			metadata = map[string]any{
+				ia2a.MessageMetadataObjectTypeKey: object,
+			}
+		}
+		return protocol.StreamingMessageEvent{Result: &protocol.TaskArtifactUpdateEvent{
+			Kind:      protocol.KindTaskArtifactUpdate,
+			TaskID:    "task-1",
+			ContextID: "ctx-1",
+			Artifact: protocol.Artifact{
+				ArtifactID: responseID,
+				Parts: []protocol.Part{
+					&protocol.TextPart{Kind: protocol.KindText, Text: content},
+				},
+			},
+			Append:   appendChunk,
+			Metadata: metadata,
+		}}
+	}
+	toolCallEvent := protocol.StreamingMessageEvent{
+		Result: &protocol.TaskArtifactUpdateEvent{
+			Kind:      protocol.KindTaskArtifactUpdate,
+			TaskID:    "task-1",
+			ContextID: "ctx-1",
+			Artifact: protocol.Artifact{
+				ArtifactID: "tool-response",
+				Parts: []protocol.Part{
+					buildToolCallDataPart("call-1", "lookup", `{}`),
+				},
+			},
+		},
+	}
+	appendChunk := true
+	replaceChunk := false
+	tests := []struct {
+		name       string
+		textEvents []protocol.StreamingMessageEvent
+		want       string
+	}{
+		{
+			name: "replaces current server aggregate snapshot",
+			textEvents: []protocol.StreamingMessageEvent{
+				textEvent(
+					"text-response",
+					"hello",
+					model.ObjectTypeChatCompletionChunk,
+					nil,
+				),
+				textEvent(
+					"text-response",
+					"hello world",
+					model.ObjectTypeChatCompletion,
+					nil,
+				),
+			},
+			want: "hello world",
+		},
+		{
+			name: "appends legacy metadata-free chunks",
+			textEvents: []protocol.StreamingMessageEvent{
+				textEvent("text-response", "hello", "", nil),
+				textEvent("text-response", " world", "", nil),
+			},
+			want: "hello world",
+		},
+		{
+			name: "honors explicit append",
+			textEvents: []protocol.StreamingMessageEvent{
+				textEvent("text-response", "hello", "", nil),
+				textEvent("text-response", " world", "", &appendChunk),
+			},
+			want: "hello world",
+		},
+		{
+			name: "honors explicit replacement",
+			textEvents: []protocol.StreamingMessageEvent{
+				textEvent("text-response", "stale", "", nil),
+				textEvent("text-response", "replacement", "", &replaceChunk),
+			},
+			want: "replacement",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			streamChan := make(
+				chan protocol.StreamingMessageEvent,
+				len(tc.textEvents)+1,
+			)
+			for _, streamEvent := range tc.textEvents {
+				streamChan <- streamEvent
+			}
+			streamChan <- toolCallEvent
+			close(streamChan)
+
+			remote := &A2AAgent{
+				name:           "remote",
+				eventConverter: &defaultA2AEventConverter{},
+			}
+			eventChan := make(chan *event.Event, len(tc.textEvents)+2)
+			result := remote.processStreamingEvents(
+				context.Background(),
+				&agent.Invocation{InvocationID: "invocation"},
+				eventChan,
+				streamChan,
+				nil,
+			)
+			close(eventChan)
+			require.Nil(t, result.terminalError)
+
+			var flushed *model.Response
+			for evt := range eventChan {
+				if evt == nil || evt.Response == nil ||
+					evt.Response.IsPartial || len(evt.Response.Choices) == 0 {
+					continue
+				}
+				message := evt.Response.Choices[0].Message
+				if message.Role == model.RoleAssistant &&
+					len(message.ToolCalls) == 0 && message.Content != "" {
+					flushed = evt.Response
+				}
+			}
+			require.NotNil(t, flushed)
+			require.Equal(t, "text-response", flushed.ID)
+			require.Equal(t, tc.want, flushed.Choices[0].Message.Content)
+		})
+	}
+}
+
 func TestA2AAgentRunStreamingPreservesTerminalMessageContentParts(
 	t *testing.T,
 ) {

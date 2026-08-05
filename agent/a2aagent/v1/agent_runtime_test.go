@@ -23,6 +23,7 @@ import (
 	protocolserver "trpc.group/trpc-go/trpc-a2a-go/v2/server"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -489,6 +490,115 @@ func TestProcessStreamingEventsUsesBufferedResponseIDWhenFlushing(t *testing.T) 
 	}
 }
 
+func TestProcessStreamingEventsFlushesV1ArtifactSnapshot(t *testing.T) {
+	responses := []*model.Response{
+		{
+			ID:        "text-response",
+			IsPartial: true,
+			Choices: []model.Choice{{Delta: model.Message{
+				Role:    model.RoleAssistant,
+				Content: "stale",
+			}}},
+		},
+		{
+			ID:        "text-response",
+			IsPartial: true,
+			Choices: []model.Choice{{Message: model.Message{
+				Role:    model.RoleAssistant,
+				Content: "replacement",
+			}}},
+		},
+		{
+			ID: "tool-response",
+			Choices: []model.Choice{{Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					ID: "call-1",
+				}},
+			}}},
+		},
+	}
+	call := 0
+	remote := &A2AAgent{
+		name: "remote",
+		eventConverter: &responseConverterFunc{stream: func(
+			protocol.StreamResponse,
+			string,
+			*agent.Invocation,
+		) ([]*event.Event, error) {
+			if call == len(responses) {
+				return nil, nil
+			}
+			response := responses[call].Clone()
+			call++
+			return []*event.Event{event.New(
+				"invocation",
+				"remote",
+				event.WithResponse(response),
+			)}, nil
+		}},
+	}
+	stream := make(chan protocol.StreamResponse, 4)
+	stream <- protocol.NewStreamResponseArtifactUpdate(
+		&protocol.TaskArtifactUpdateEvent{
+			TaskID: "task",
+			Artifact: protocol.Artifact{
+				ArtifactID: "artifact",
+				Parts:      []*protocol.Part{protocol.NewTextPart("stale")},
+			},
+		},
+	)
+	appendChunk := false
+	stream <- protocol.NewStreamResponseArtifactUpdate(
+		&protocol.TaskArtifactUpdateEvent{
+			TaskID: "task",
+			Artifact: protocol.Artifact{
+				ArtifactID: "artifact",
+				Parts:      []*protocol.Part{protocol.NewTextPart("replacement")},
+			},
+			Append: &appendChunk,
+		},
+	)
+	message := protocol.NewMessage(protocol.MessageRoleAgent, nil)
+	stream <- protocol.NewStreamResponseMessage(&message)
+	completed := protocol.NewTaskStatusUpdateEvent(
+		"task",
+		"context",
+		protocol.TaskStatus{State: protocol.TaskStateCompleted},
+		true,
+	)
+	stream <- protocol.NewStreamResponseStatusUpdate(&completed)
+	close(stream)
+
+	out := make(chan *event.Event, 4)
+	result := remote.processStreamingEvents(
+		context.Background(),
+		&agent.Invocation{InvocationID: "invocation"},
+		out,
+		stream,
+	)
+	close(out)
+	if result.terminalError != nil || result.responseID != "tool-response" {
+		t.Fatalf("stream result = %#v", result)
+	}
+
+	var flushed *model.Response
+	for evt := range out {
+		if evt == nil || evt.Response == nil || evt.Response.IsPartial ||
+			len(evt.Response.Choices) == 0 {
+			continue
+		}
+		message := evt.Response.Choices[0].Message
+		if message.Content != "" && len(message.ToolCalls) == 0 {
+			flushed = evt.Response
+		}
+	}
+	if flushed == nil || flushed.ID != "text-response" ||
+		flushed.Choices[0].Message.Content != "replacement" {
+		t.Fatalf("flushed response = %#v", flushed)
+	}
+}
+
 func TestProcessStreamingEventsConverterErrorAndCancellation(t *testing.T) {
 	wantErr := errors.New("convert")
 	remote := &A2AAgent{
@@ -568,7 +678,8 @@ func TestStreamingLifecycleAndAggregationHelpers(t *testing.T) {
 	}
 
 	out := make(chan *event.Event, 1)
-	builder.WriteString("buffered")
+	var contentBuffer ia2a.StreamingTextBuffer
+	contentBuffer.Append("response", "buffered")
 	anchor := time.Now()
 	remote.flushBufferedContent(
 		context.Background(),
@@ -576,7 +687,7 @@ func TestStreamingLifecycleAndAggregationHelpers(t *testing.T) {
 		out,
 		"response",
 		anchor,
-		builder,
+		&contentBuffer,
 	)
 	flushed := <-out
 	if flushed.Response.Choices[0].Message.Content != "buffered" ||

@@ -1727,14 +1727,15 @@ func (r *A2AAgent) processStreamingEvents(
 	anonymousCookie *anonymousCookieState,
 ) streamingEventResult {
 	var result streamingEventResult
-	var contentBuilder strings.Builder
-	var bufferedResponseID string
+	var contentBuffer ia2a.StreamingTextBuffer
 
 	for streamEvent := range streamChan {
 		if err := agent.CheckContextCancelled(ctx); err != nil {
-			result.aggregatedContent = contentBuilder.String()
+			result.aggregatedContent = contentBuffer.Content()
 			return result
 		}
+		artifactUpdate, _ := streamEvent.Result.(*protocol.TaskArtifactUpdateEvent)
+		artifactContentRecorded := false
 
 		events, err := r.eventConverter.ConvertStreamingToEvents(streamEvent, r.name, invocation)
 		if err != nil {
@@ -1745,9 +1746,13 @@ func (r *A2AAgent) processStreamingEvents(
 				fmt.Errorf("custom event converter failed: %w", err),
 				anonymousCookie,
 			)
-			result.aggregatedContent = contentBuilder.String()
+			result.aggregatedContent = contentBuffer.Content()
 			return result
 		}
+		replacesArtifact := v0ArtifactUpdateReplacesBufferedContent(
+			artifactUpdate,
+			events,
+		)
 
 		for _, evt := range events {
 			if evt == nil {
@@ -1758,22 +1763,17 @@ func (r *A2AAgent) processStreamingEvents(
 				currentResponseID = evt.Response.ID
 			}
 			if evt.Response != nil && !evt.Response.IsPartial {
-				flushResponseID := bufferedResponseID
-				if flushResponseID == "" {
-					flushResponseID = currentResponseID
-				}
 				r.flushBufferedContent(
 					ctx,
 					invocation,
 					eventChan,
-					flushResponseID,
+					currentResponseID,
 					evt.Timestamp,
-					&contentBuilder,
+					&contentBuffer,
 					anonymousCookie,
 				)
-				bufferedResponseID = ""
 			}
-			previousContentLen := contentBuilder.Len()
+			var eventContent strings.Builder
 			var terminalError *model.ResponseError
 			result.responseID, terminalError = r.aggregateEventContent(
 				ctx,
@@ -1781,17 +1781,28 @@ func (r *A2AAgent) processStreamingEvents(
 				eventChan,
 				evt,
 				result.responseID,
-				&contentBuilder,
+				&eventContent,
 				anonymousCookie,
 				&result.aggregatedContentParts,
 			)
-			if contentBuilder.Len() > previousContentLen &&
-				bufferedResponseID == "" &&
-				evt.Response != nil {
-				bufferedResponseID = evt.Response.ID
+			responseID := ""
+			if evt.Response != nil {
+				responseID = evt.Response.ID
+			}
+			if artifactUpdate == nil {
+				contentBuffer.Append(responseID, eventContent.String())
+			} else {
+				replace := !artifactContentRecorded && replacesArtifact
+				contentBuffer.UpdateArtifact(
+					responseID,
+					artifactUpdate.Artifact.ArtifactID,
+					eventContent.String(),
+					replace,
+				)
+				artifactContentRecorded = true
 			}
 			if terminalError != nil {
-				result.aggregatedContent = contentBuilder.String()
+				result.aggregatedContent = contentBuffer.Content()
 				result.terminalError = terminalError
 				return result
 			}
@@ -1799,14 +1810,42 @@ func (r *A2AAgent) processStreamingEvents(
 			if evt.Response != nil &&
 				evt.Response.Error != nil &&
 				evt.Response.Done {
-				result.aggregatedContent = contentBuilder.String()
+				result.aggregatedContent = contentBuffer.Content()
 				result.terminalError = evt.Response.Error
 				return result
 			}
 		}
+		if artifactUpdate != nil && replacesArtifact &&
+			!artifactContentRecorded {
+			contentBuffer.UpdateArtifact(
+				"",
+				artifactUpdate.Artifact.ArtifactID,
+				"",
+				true,
+			)
+		}
 	}
-	result.aggregatedContent = contentBuilder.String()
+	result.aggregatedContent = contentBuffer.Content()
 	return result
+}
+
+func v0ArtifactUpdateReplacesBufferedContent(
+	update *protocol.TaskArtifactUpdateEvent,
+	events []*event.Event,
+) bool {
+	if update == nil {
+		return false
+	}
+	if update.Append != nil {
+		return !*update.Append
+	}
+	for _, evt := range events {
+		if evt != nil && evt.Response != nil &&
+			evt.Response.Object == model.ObjectTypeChatCompletion {
+			return true
+		}
+	}
+	return false
 }
 
 // flushBufferedContent emits buffered streaming text as a complete assistant
@@ -1816,17 +1855,15 @@ func (r *A2AAgent) flushBufferedContent(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
-	responseID string,
+	fallbackResponseID string,
 	anchorTimestamp time.Time,
-	contentBuilder *strings.Builder,
+	contentBuffer *ia2a.StreamingTextBuffer,
 	anonymousCookie *anonymousCookieState,
 ) {
-	if contentBuilder == nil || contentBuilder.Len() == 0 {
+	responseID, content, ok := contentBuffer.Take(fallbackResponseID)
+	if !ok {
 		return
 	}
-
-	content := contentBuilder.String()
-	contentBuilder.Reset()
 
 	flushTime := time.Now()
 	if !anchorTimestamp.IsZero() {
