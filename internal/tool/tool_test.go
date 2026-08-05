@@ -276,11 +276,10 @@ func TestNamedTool_MetadataAndPermissionDelegation(t *testing.T) {
 		name:  "fs",
 		tools: []tool.Tool{&simpleTool{name: "plain"}},
 	}).Tools(ctx)[0].(*NamedTool)
-	// ConcurrencySafe is the one field a wrapper cannot pass through untouched.
-	// MetadataOf returns the zero value for a tool that publishes nothing, and
-	// republishing that zero would declare the tool unsafe on its behalf — which
-	// the scheduler acts on. Every other field stays at its zero value.
-	require.Equal(t, tool.ToolMetadata{ConcurrencySafe: true}, plain.ToolMetadata())
+	require.Equal(t, tool.ToolMetadata{}, plain.ToolMetadata())
+	// IsConcurrencySafe does not read the metadata above: a tool that publishes
+	// nothing raises no objection to running beside its siblings, and this wrapper
+	// must not raise one on its behalf.
 	require.True(t, plain.IsConcurrencySafe())
 	require.False(t, plain.ShouldDefer(ctx))
 	decision, err = plain.CheckPermission(ctx, &tool.PermissionRequest{})

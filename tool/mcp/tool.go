@@ -84,15 +84,12 @@ func newMCPTool(mcpToolData mcp.Tool, sessionManager *mcpSessionManager) *mcpToo
 
 // ToolMetadata converts explicit MCP tool annotations into framework metadata.
 func (t *mcpTool) ToolMetadata() tool.ToolMetadata {
-	// MCP annotations carry no concurrency hint, so ConcurrencySafe is set from
-	// the framework default rather than left at the zero value — which would
-	// declare every MCP tool unsafe and serialize any turn one appears in.
 	if t == nil || t.mcpToolRef == nil || t.mcpToolRef.Annotations == nil {
-		return tool.ToolMetadata{ConcurrencySafe: true}
+		return tool.ToolMetadata{}
 	}
 
 	annotations := t.mcpToolRef.Annotations
-	metadata := tool.ToolMetadata{ConcurrencySafe: true}
+	var metadata tool.ToolMetadata
 	if annotations.ReadOnlyHint != nil {
 		metadata.ReadOnly = *annotations.ReadOnlyHint
 	}
