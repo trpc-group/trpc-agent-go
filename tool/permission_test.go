@@ -103,9 +103,14 @@ func TestMetadataOf_UsesConcurrencyAwareFallback(t *testing.T) {
 	}
 }
 
-// A tool publishing neither interface must read as SAFE. MetadataOf cannot
-// distinguish "published false" from "published nothing", so a scheduler reading
-// its zero value would mark every tool written before metadata existed unsafe.
+// Admission is objection-based: only ConcurrencyAware is consulted, and every
+// other tool is admitted.
+//
+// The alternative — reading ToolMetadata.ConcurrencySafe — cannot work, because a
+// struct field's zero value is indistinguishable from an unset one. It would read
+// a tool that publishes a single ReadOnly hint as objecting, and it would also
+// reinterpret an existing true (documented as same-tool reentrancy) as a promise
+// about arbitrary siblings that no external tool ever made.
 func TestIsConcurrencySafe(t *testing.T) {
 	tests := []struct {
 		name string
@@ -116,30 +121,31 @@ func TestIsConcurrencySafe(t *testing.T) {
 		{"nil tool", nil, true},
 		{"concurrency-aware true", &concurrencyTool{safe: true}, true},
 		{"concurrency-aware false", &concurrencyTool{safe: false}, false},
-		{"provider true", &metadataTool{metadata: ToolMetadata{ConcurrencySafe: true}}, true},
-		{"provider false", &metadataTool{metadata: ToolMetadata{ConcurrencySafe: false}}, false},
-		// When a tool publishes both, the narrow interface wins. Implementing
-		// ConcurrencyAware is a deliberate statement; a ToolMetadata literal is not,
-		// because its bool is false when simply unset. A wrapper that republishes
-		// another tool's metadata is the common case, and reading the struct first
-		// would have it declare every plain tool unsafe on that tool's behalf.
-		{"conflict resolves to the narrow interface", &conflictingTool{
-			metadata: ToolMetadata{ConcurrencySafe: false},
-			aware:    true,
+		// Metadata is descriptive and never objects, in either direction. A
+		// provider that wants to stay off the parallel path implements
+		// ConcurrencyAware.
+		{"provider true does not promise more than it means", &metadataTool{
+			metadata: ToolMetadata{ConcurrencySafe: true},
 		}, true},
-		{"conflict resolves to the narrow interface, unsafe", &conflictingTool{
+		{"provider false does not object", &metadataTool{
+			metadata: ToolMetadata{ConcurrencySafe: false},
+		}, true},
+		// The regression that matters: an external tool written against the
+		// descriptive metadata contract publishes an unrelated hint and never
+		// considered concurrency at all. It keeps the admission it has today.
+		{"provider of unrelated metadata keeps the default", &metadataTool{
+			metadata: ToolMetadata{ReadOnly: true},
+		}, true},
+		// A tool publishing both is answered by the narrow interface, which is the
+		// only one that can express an objection.
+		{"the narrow interface decides, overriding metadata", &conflictingTool{
 			metadata: ToolMetadata{ConcurrencySafe: true},
 			aware:    false,
 		}, false},
-		// A provider is taken at its word, and this is the one sharp edge left: a
-		// tool that publishes only ReadOnly reads as unsafe, because a bool cannot
-		// say "unset". Implementing MetadataProvider is at least a deliberate act,
-		// and the cost is a serialized turn rather than a correctness bug — but a
-		// tri-state field is what would remove the edge entirely. Pinned here so the
-		// behaviour is a decision rather than a surprise.
-		{"a provider that never considered concurrency reads as unsafe", &metadataTool{
-			metadata: ToolMetadata{ReadOnly: true},
-		}, false},
+		{"the narrow interface decides when metadata is false", &conflictingTool{
+			metadata: ToolMetadata{ConcurrencySafe: false},
+			aware:    true,
+		}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

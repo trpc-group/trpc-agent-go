@@ -152,6 +152,16 @@ func (t *declarationTool) originalTool() tool.Tool {
 	return t.base
 }
 
+// IsConcurrencySafe delegates to the wrapped tool.
+//
+// A declaration overlay changes only what the model is shown, so it must not
+// change how the call is scheduled. Without this, patching an objecting tool's
+// description or schema would hide the objection behind a wrapper that
+// implements no optional interfaces, and put the tool back on the parallel path.
+func (t *declarationTool) IsConcurrencySafe() bool {
+	return tool.IsConcurrencySafe(t.base)
+}
+
 type callableDeclarationTool struct {
 	*declarationTool
 	callable tool.CallableTool
@@ -265,21 +275,16 @@ func (t *NamedTool) Original() tool.Tool {
 }
 
 // ToolMetadata delegates to the original tool.
-//
-// ConcurrencySafe is resolved through tool.IsConcurrencySafe rather than read off
-// MetadataOf, because this wrapper publishes metadata on behalf of tools that
-// publish none. MetadataOf cannot tell "published false" from "published
-// nothing", so republishing its zero value would turn every plain tool in a
-// toolset into one that actively declares itself unsafe — and take the whole
-// turn it appears in off the parallel path.
 func (t *NamedTool) ToolMetadata() tool.ToolMetadata {
-	metadata := tool.MetadataOf(t.original)
-	metadata.ConcurrencySafe = tool.IsConcurrencySafe(t.original)
-	return metadata
+	return tool.MetadataOf(t.original)
 }
 
-// IsConcurrencySafe delegates to the original tool, preserving the default a
-// tool that publishes nothing is entitled to.
+// IsConcurrencySafe delegates to the original tool.
+//
+// It resolves through tool.IsConcurrencySafe rather than reading
+// MetadataOf(...).ConcurrencySafe, so a wrapped tool that publishes no
+// concurrency objection keeps the default admission it is entitled to instead of
+// having this wrapper object on its behalf.
 func (t *NamedTool) IsConcurrencySafe() bool {
 	return tool.IsConcurrencySafe(t.original)
 }

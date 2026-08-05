@@ -372,12 +372,13 @@ func (t *renamedTool) SkipSummarization() bool {
 
 // ToolMetadata delegates to the original tool.
 func (t *renamedTool) ToolMetadata() tool.ToolMetadata {
-	// ConcurrencySafe goes through IsConcurrencySafe so wrapping a tool that
-	// publishes no metadata does not republish the zero value as a declaration
-	// that it is unsafe. See NamedTool.ToolMetadata.
-	metadata := tool.MetadataOf(t.original)
-	metadata.ConcurrencySafe = tool.IsConcurrencySafe(t.original)
-	return metadata
+	return tool.MetadataOf(t.original)
+}
+
+// IsConcurrencySafe delegates to the original tool. Without this, renaming a
+// tool would hide an objection it raised and put it back on the parallel path.
+func (t *renamedTool) IsConcurrencySafe() bool {
+	return tool.IsConcurrencySafe(t.original)
 }
 
 // StreamableCall delegates to the original streamable tool.
