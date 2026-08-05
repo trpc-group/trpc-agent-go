@@ -1696,6 +1696,44 @@ func TestInvariant_Isolation_EmptySessionRejected(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestInvariant_Isolation_ExplicitLabelRejectedForInvalidSession ensures
+// that a placeholder session (empty ID) cannot use an explicit label to
+// obtain a durable PerSession workspace. Two such sessions sharing the
+// same label would otherwise collide on the same workspace.
+func TestInvariant_Isolation_ExplicitLabelRejectedForInvalidSession(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	u, err := url.Parse(m.server.URL)
+	require.NoError(t, err)
+	exec, err := New(
+		WithDomain(u.Host),
+		WithProtocol("http"),
+		WithAPIKey("test-key"),
+		WithWorkspacePersistence(WorkspacePersistencePerSession),
+	)
+	require.NoError(t, err)
+	defer exec.Close()
+
+	ctxPlaceholder := agent.NewInvocationContext(context.Background(), &agent.Invocation{
+		Session: &session.Session{}, // empty ID = invalid
+	})
+
+	// An explicit label must not be trusted as a durable key when the
+	// session identity is incomplete.
+	_, err = exec.CreateWorkspace(ctxPlaceholder, "shared-label",
+		codeexecutor.WorkspacePolicy{})
+	require.Error(t, err, "PerSession must reject explicit labels for invalid sessions")
+	require.Contains(t, err.Error(), "session identity is incomplete")
+
+	// ExecuteCode with an explicit ExecutionID must also fail.
+	blocks := []codeexecutor.CodeBlock{{Language: "bash", Code: "echo ok"}}
+	_, err = exec.ExecuteCode(ctxPlaceholder, codeexecutor.CodeExecutionInput{
+		ExecutionID: "shared-label",
+		CodeBlocks:  blocks,
+	})
+	require.Error(t, err, "PerSession must reject explicit ExecutionID for invalid sessions")
+}
+
 // TestInvariant_Error_DirectStubUsesNeutralSentinel locks one errors.Is path
 // for declarative I/O whether via Engine.FS or direct CodeExecutor methods.
 func TestInvariant_Error_DirectStubUsesNeutralSentinel(t *testing.T) {

@@ -1065,6 +1065,17 @@ func (c *CodeExecutor) resolveWorkspaceExecID(
 					"require a stable ID",
 			)
 		}
+		if sessionPresentInContext(ctx) {
+			// A session exists but its identity is incomplete (empty ID).
+			// Do not trust the explicit label as a durable key: two
+			// placeholder sessions sharing the same label would collide
+			// on the same PerSession workspace.
+			return "", errors.New(
+				"opensandbox: session identity is incomplete for " +
+					"WorkspacePersistencePerSession; provide a session " +
+					"with a non-empty ID or switch to PerTurn mode",
+			)
+		}
 		return explicit, nil
 	}
 
@@ -1098,6 +1109,16 @@ func executionIDFromContext(ctx context.Context) string {
 		return ""
 	}
 	return encodeSessionWorkspaceKey(app, user, id)
+}
+
+// sessionPresentInContext reports whether an invocation session exists
+// in ctx, even if its identity is incomplete (empty ID). This lets
+// resolveWorkspaceExecID distinguish "no session" (caller is trusted
+// with explicit IDs) from "invalid session" (explicit labels could
+// collide across placeholder sessions sharing the same label).
+func sessionPresentInContext(ctx context.Context) bool {
+	inv, ok := agent.InvocationFromContext(ctx)
+	return ok && inv != nil && inv.Session != nil
 }
 
 // sessionIdentityOK reports whether the session fields form a stable

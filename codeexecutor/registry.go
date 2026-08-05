@@ -105,7 +105,10 @@ func (r *WorkspaceRegistry) acquire(
 		if rel, ok := r.releasing[id]; ok {
 			r.mu.Unlock()
 			if err := waitWorkspaceRelease(ctx, rel); err != nil {
-				_ = err
+				// ctx was canceled while cleanup is still in flight.
+				// Return instead of spinning until the detached
+				// cleanup completes.
+				return workspaceRegistryEntry{}, err
 			}
 			continue
 		}
@@ -302,7 +305,17 @@ func (r *WorkspaceRegistry) Release(
 		if call, ok := r.inflight[id]; ok {
 			r.mu.Unlock()
 			if _, err := waitWorkspaceCreate(ctx, call); err != nil {
-				return nil
+				// Creation runs with WithoutCancel, so a canceled
+				// wait does not mean creation failed. A live entry
+				// may still be installed later; do not report nil.
+				select {
+				case <-call.done:
+					// Creation finished (with error): nothing to release.
+					return nil
+				default:
+					// Creation still in flight; release did not complete.
+					return ctx.Err()
+				}
 			}
 			continue
 		}
@@ -361,7 +374,17 @@ func (r *WorkspaceRegistry) ReleaseHandle(
 		if call, ok := r.inflight[id]; ok {
 			r.mu.Unlock()
 			if _, err := waitWorkspaceCreate(ctx, call); err != nil {
-				return nil
+				// Creation runs with WithoutCancel, so a canceled
+				// wait does not mean creation failed. A live entry
+				// may still be installed later; do not report nil.
+				select {
+				case <-call.done:
+					// Creation finished (with error): nothing to release.
+					return nil
+				default:
+					// Creation still in flight; release did not complete.
+					return ctx.Err()
+				}
 			}
 			continue
 		}

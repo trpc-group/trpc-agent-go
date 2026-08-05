@@ -832,3 +832,119 @@ func TestWorkspaceRegistry_ReleaseHandle_WaitsInflightCreate(t *testing.T) {
 	require.True(t, ok)
 	require.NotEqual(t, h1.Workspace.Path, got.Path)
 }
+
+// Regression: Acquire must return ctx.Err() promptly when a Release cleanup
+// is in flight and ctx is canceled. Previously the error was discarded and
+// the loop spun until the detached cleanup finished.
+func TestWorkspaceRegistry_Acquire_ReturnsCanceledWhenReleaseInFlight(t *testing.T) {
+	r := NewWorkspaceRegistry()
+	entered := make(chan struct{})
+	block := make(chan struct{})
+	wm := &countingCleanupWM{entered: entered, block: block}
+	ctx := context.Background()
+
+	_, err := r.Acquire(ctx, wm, "spin-guard")
+	require.NoError(t, err)
+
+	// Start a Release that blocks inside Cleanup.
+	go func() { _ = r.Release(ctx, wm, "spin-guard") }()
+	<-entered // releasing[id] is now installed
+
+	// A concurrent Acquire with a canceled context must return promptly.
+	acqCtx, acqCancel := context.WithCancel(context.Background())
+	acqDone := make(chan error, 1)
+	go func() {
+		_, err := r.Acquire(acqCtx, wm, "spin-guard")
+		acqDone <- err
+	}()
+
+	// Give the goroutine time to enter waitWorkspaceRelease.
+	time.Sleep(50 * time.Millisecond)
+	acqCancel()
+
+	select {
+	case err := <-acqDone:
+		require.ErrorIs(t, err, context.Canceled,
+			"Acquire must return ctx.Err() instead of spinning")
+	case <-time.After(2 * time.Second):
+		t.Fatal("Acquire spun instead of returning on canceled context")
+	}
+
+	close(block)
+}
+
+// Regression: Release must return ctx.Err() (not nil) when an in-flight
+// CreateWorkspace is still running and the caller's context is canceled.
+// Previously the error was silently converted to nil (false success).
+func TestWorkspaceRegistry_Release_ReturnsCanceledWhenCreateInFlight(t *testing.T) {
+	r := NewWorkspaceRegistry()
+	wm := &secondCallBlocksWM{
+		secondEntered: make(chan struct{}),
+		releaseSecond: make(chan struct{}),
+	}
+	ctx := context.Background()
+
+	// First acquire succeeds immediately; invalidate to force a second create.
+	h1, err := r.AcquireHandle(ctx, wm, "release-cancel")
+	require.NoError(t, err)
+	require.True(t, r.Invalidate(h1))
+
+	// Start a second acquire that blocks in CreateWorkspace.
+	acqDone := make(chan error, 1)
+	go func() {
+		_, err := r.AcquireHandle(ctx, wm, "release-cancel")
+		acqDone <- err
+	}()
+	<-wm.secondEntered // inflight[id] is now set
+
+	// Release with a short-timeout context must not report success.
+	relCtx, relCancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer relCancel()
+	err = r.Release(relCtx, wm, "release-cancel")
+	require.ErrorIs(t, err, context.DeadlineExceeded,
+		"Release must return ctx.Err() when creation is still in flight")
+
+	// Let creation finish and verify the entry was installed.
+	close(wm.releaseSecond)
+	require.NoError(t, <-acqDone)
+	got, ok := r.Get("release-cancel")
+	require.True(t, ok, "entry must still be installed after create finishes")
+	require.NotEqual(t, h1.Workspace.Path, got.Path)
+
+	// A retry Release should now succeed (entry exists, no in-flight create).
+	require.NoError(t, r.Release(ctx, wm, "release-cancel"))
+}
+
+// Regression: ReleaseHandle must return ctx.Err() (not nil) when an
+// in-flight CreateWorkspace is still running and the caller's context
+// is canceled.
+func TestWorkspaceRegistry_ReleaseHandle_ReturnsCanceledWhenCreateInFlight(t *testing.T) {
+	r := NewWorkspaceRegistry()
+	wm := &secondCallBlocksWM{
+		secondEntered: make(chan struct{}),
+		releaseSecond: make(chan struct{}),
+	}
+	ctx := context.Background()
+
+	h1, err := r.AcquireHandle(ctx, wm, "handle-cancel")
+	require.NoError(t, err)
+	require.True(t, r.Invalidate(h1))
+
+	// Start a second acquire that blocks in CreateWorkspace.
+	acqDone := make(chan error, 1)
+	go func() {
+		_, err := r.AcquireHandle(ctx, wm, "handle-cancel")
+		acqDone <- err
+	}()
+	<-wm.secondEntered
+
+	// ReleaseHandle with a short-timeout context must not report success.
+	relCtx, relCancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer relCancel()
+	err = r.ReleaseHandle(relCtx, wm, h1)
+	require.ErrorIs(t, err, context.DeadlineExceeded,
+		"ReleaseHandle must return ctx.Err() when creation is still in flight")
+
+	close(wm.releaseSecond)
+	require.NoError(t, <-acqDone)
+}

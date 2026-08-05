@@ -304,6 +304,39 @@ func TestKeyFromInvocation_RejectsEmptyID(t *testing.T) {
 	require.NotEqual(t, "", KeyFromInvocation(&agent.Invocation{Session: &session.Session{ID: "x"}}))
 }
 
+func TestLegacyKeyFromInvocation_MatchesOldFormat(t *testing.T) {
+	// Full identity: old format was "app/user/id".
+	require.Equal(t, "app/user/sid",
+		LegacyKeyFromInvocation(&agent.Invocation{Session: &session.Session{
+			AppName: "app", UserID: "user", ID: "sid",
+		}}))
+
+	// Missing app or user: old format fell back to just "id".
+	require.Equal(t, "sid",
+		LegacyKeyFromInvocation(&agent.Invocation{Session: &session.Session{
+			ID: "sid",
+		}}))
+	require.Equal(t, "sid",
+		LegacyKeyFromInvocation(&agent.Invocation{Session: &session.Session{
+			AppName: "app", ID: "sid",
+		}}))
+
+	// Empty ID: returns "" (same as new format).
+	require.Equal(t, "",
+		LegacyKeyFromInvocation(&agent.Invocation{Session: &session.Session{}}))
+
+	// Nil safety.
+	require.Equal(t, "", LegacyKeyFromInvocation(nil))
+}
+
+func TestKeyFromInvocation_DiffersFromLegacy(t *testing.T) {
+	inv := &agent.Invocation{Session: &session.Session{
+		AppName: "app", UserID: "user", ID: "sid",
+	}}
+	require.NotEqual(t, KeyFromInvocation(inv), LegacyKeyFromInvocation(inv),
+		"new and legacy keys must differ to justify the migration")
+}
+
 func TestResolver_CreateWorkspace_EmptySessionIDUsesEphemeralKey(t *testing.T) {
 	mgr := &resolverStubMgr{}
 	eng := newResolverStubEngine(mgr)
