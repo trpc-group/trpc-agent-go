@@ -188,9 +188,9 @@ summarizer := summary.NewSummarizer(
 70%”这层保守上限中的较小值。fork 请求超预算时，框架只修改 clone，不会污染父
 请求：先移除摘要调用不会使用的 tool schemas，必要时再用明确的省略标记替换较大
 的 tool arguments/results payload，但不会删除 source conversation turn。如果仍然
-放不下，再重建为 bounded standalone 请求。standalone 路径会完整保留尚未覆盖的
-新对话；使用 `{previous_summary}` 时，只允许压缩这块上一版滚动摘要。固定的
-system prompt 和 user prompt 模板也会保持完整。
+放不下，再重建为 bounded standalone 请求。当预算能够容纳全部尚未覆盖的新对话时，
+standalone 路径会完整保留这些内容；使用 `{previous_summary}` 时，只允许压缩这块
+上一版滚动摘要。固定的 system prompt 和 user prompt 模板也会保持完整。
 
 如果尚未覆盖的新对话无法一次放进 standalone 请求，摘要器可以先处理较旧的完整
 前缀，其余 events 保持未覆盖，留待后续摘要。前缀只能结束在稳定的 event 边界，

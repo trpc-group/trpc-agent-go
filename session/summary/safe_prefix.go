@@ -63,13 +63,6 @@ func (s *sessionSummarizer) buildSafeSummaryPrefixRequest(
 	if len(ends) == 0 {
 		return nil, false, nil
 	}
-	for len(ends) > 0 &&
-		joinSummaryEventTexts(source.prefixTexts[:ends[0]]) == "" {
-		ends = ends[1:]
-	}
-	if len(ends) == 0 {
-		return nil, false, nil
-	}
 
 	buildCandidate := func(end int) (
 		*model.Request,
@@ -160,7 +153,23 @@ func safeSummaryPrefixEndsForSource(source *summarySource) ([]int, error) {
 	for len(ends) > 0 && ends[len(ends)-1] >= len(source.prefixEvents) {
 		ends = ends[:len(ends)-1]
 	}
-	return ends, nil
+	return summaryPrefixEndsWithNewText(ends, source.prefixTexts), nil
+}
+
+func summaryPrefixEndsWithNewText(ends []int, texts []string) []int {
+	textIndex := 0
+	out := ends[:0]
+	for _, end := range ends {
+		for textIndex < end && texts[textIndex] == "" {
+			textIndex++
+		}
+		if textIndex >= end {
+			continue
+		}
+		out = append(out, end)
+		textIndex = end
+	}
+	return out
 }
 
 func (s *sessionSummarizer) extractConversationEventTexts(

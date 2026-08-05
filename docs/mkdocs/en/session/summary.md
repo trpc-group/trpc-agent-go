@@ -193,10 +193,10 @@ ceiling of 70% of the model context window. An oversized fork is reduced without
 mutating the parent request: unused tool schemas are removed first, and large
 tool argument/result payloads are replaced with explicit omission markers as
 needed. Source conversation turns are not dropped. If the fork still cannot
-fit, the summarizer rebuilds a bounded standalone request. The standalone path
-preserves newly uncovered conversation and, when `{previous_summary}` is used,
-may bound only that previous rolling summary; the fixed system prompt and
-user-prompt template remain intact.
+fit, the summarizer rebuilds a bounded standalone request. When that request can
+fit all newly uncovered conversation, the standalone path preserves it in full
+and, when `{previous_summary}` is used, may bound only that previous rolling
+summary; the fixed system prompt and user-prompt template remain intact.
 
 If all newly uncovered conversation cannot fit in one standalone request, the
 summarizer can process a complete older prefix and leave the remaining events
