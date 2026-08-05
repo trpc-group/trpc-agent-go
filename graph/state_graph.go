@@ -5534,6 +5534,9 @@ func admitsParallelToolCalls(config toolCallsConfig) bool {
 // own goroutine here, and the exported guarantee would hold on only one of the
 // two schedulers that can run it. A name this node cannot resolve is admissible —
 // it produces a terminal error result instead of executing.
+//
+// The check goes through itool.IsConcurrencySafe so a declaration overlay cannot
+// hide the objection.
 func admitsConcurrentToolCalls(
 	toolCalls []model.ToolCall,
 	tools map[string]tool.Tool,
@@ -5543,7 +5546,7 @@ func admitsConcurrentToolCalls(
 		if !ok {
 			continue
 		}
-		if !tool.IsConcurrencySafe(tl) {
+		if !itool.IsConcurrencySafe(tl) {
 			return false
 		}
 	}

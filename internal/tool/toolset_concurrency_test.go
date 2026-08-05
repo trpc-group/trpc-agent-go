@@ -56,10 +56,13 @@ func TestNamedToolPreservesDeclaredUnsafety(t *testing.T) {
 }
 
 // A declaration overlay changes only what the model is shown, so it must not
-// change how the call is scheduled. The overlay wrapper implements none of the
-// wrapped tool's optional interfaces, so without an explicit delegation a host
-// that patches an objecting tool's description would silently put it back on the
-// parallel path — the one place the objection was meant to be honored.
+// change how the call is scheduled.
+//
+// The overlay wrapper deliberately exposes none of the wrapped tool's optional
+// interfaces, which is why schedulers must resolve through IsConcurrencySafe
+// here rather than calling tool.IsConcurrencySafe on what they are handed. Asked
+// directly, the wrapper reports the default and a host that merely patched an
+// objecting tool's description would put it back on the parallel path.
 func TestApplyDeclarationsPreservesConcurrencyObjection(t *testing.T) {
 	patched := ApplyDeclarations(
 		[]tool.Tool{unsafeTool{}},
@@ -69,8 +72,16 @@ func TestApplyDeclarationsPreservesConcurrencyObjection(t *testing.T) {
 	if got := patched.Declaration().Description; got != "patched" {
 		t.Fatalf("declaration overlay was not applied: description = %q", got)
 	}
-	if tool.IsConcurrencySafe(patched) {
+	if IsConcurrencySafe(patched) {
 		t.Error("a patched declaration must not discard the tool's objection")
+	}
+	// The wrapper itself stays opaque; that isolation is what ApplyDeclarations is
+	// for, and it is why the resolving helper exists.
+	if !tool.IsConcurrencySafe(patched) {
+		t.Error("the overlay wrapper must not publish the objection itself")
+	}
+	if got := tool.MetadataOf(patched); got != (tool.ToolMetadata{}) {
+		t.Errorf("the overlay wrapper must publish no metadata, got %+v", got)
 	}
 }
 
@@ -81,7 +92,21 @@ func TestApplyDeclarationsPreservesConcurrencyDefault(t *testing.T) {
 		[]tool.Declaration{{Name: "plain", Description: "patched"}},
 	)[0]
 
-	if !tool.IsConcurrencySafe(patched) {
+	if !IsConcurrencySafe(patched) {
 		t.Error("a patched declaration must leave an unobjecting tool admissible")
+	}
+}
+
+// A NamedTool from a toolset is the other wrapper schedulers see, so the helper
+// must resolve through it too.
+func TestIsConcurrencySafeResolvesNamedTools(t *testing.T) {
+	if IsConcurrencySafe(NewUnprefixedNamedTool(unsafeTool{})) {
+		t.Error("a named wrapper must not hide the objection")
+	}
+	if !IsConcurrencySafe(NewUnprefixedNamedTool(plainTool{})) {
+		t.Error("a named wrapper must not manufacture an objection")
+	}
+	if !IsConcurrencySafe(nil) {
+		t.Error("a nil tool cannot object")
 	}
 }
