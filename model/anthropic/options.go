@@ -12,6 +12,7 @@ package anthropic
 
 import (
 	"context"
+	"time"
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -24,6 +25,19 @@ const (
 	defaultCacheSystemPrompt = false // Disabled by default; opt-in for system prompt caching
 	defaultCacheTools        = false // Disabled by default; opt-in for tools caching
 	defaultCacheMessages     = false // Disabled by default; opt-in for multi-turn conversation caching
+
+	// defaultStreamMaxRetries is the retry budget applied when WithStreamRetry
+	// is called with maxRetries=0 (explicit opt-in to package defaults).
+	// Three attempts (initial + two retries) balances surviving brief
+	// connection hiccups against latency tax for genuinely fatal errors.
+	defaultStreamMaxRetries = 2
+	// defaultStreamRetryBaseBackoff is the initial sleep before the first
+	// stream-retry attempt. Subsequent attempts double this (exponential
+	// backoff capped at defaultStreamRetryMaxBackoff).
+	defaultStreamRetryBaseBackoff = 500 * time.Millisecond
+	// defaultStreamRetryMaxBackoff caps the per-attempt backoff so we don't
+	// stall the workflow when the provider is consistently dropping us.
+	defaultStreamRetryMaxBackoff = 5 * time.Second
 )
 
 // ChatRequestCallbackFunc is the function type for the chat request callback.
@@ -102,6 +116,25 @@ type options struct {
 	// showToolCallDelta controls whether to expose tool call argument deltas in
 	// streaming responses.
 	showToolCallDelta bool
+
+	// streamMaxRetries is the maximum number of automatic retries that
+	// handleStreamingResponse will perform when a streaming request is
+	// interrupted by a transport-level error BEFORE the first chunk is
+	// delivered to the caller. Retries after caller-visible output are
+	// skipped. Zero means "use defaultStreamMaxRetries" once stream retry
+	// is opted in via WithStreamRetry; negative disables retries even when
+	// opted in.
+	streamMaxRetries int
+	// streamRetryEnabled is true only after WithStreamRetry is called.
+	// Zero-option models keep legacy at-most-one streaming attempt behaviour.
+	streamRetryEnabled bool
+	// streamRetryBaseBackoff is the initial sleep between stream-retry
+	// attempts (doubles each attempt, capped at streamRetryMaxBackoff).
+	// Zero means "use default".
+	streamRetryBaseBackoff time.Duration
+	// streamRetryMaxBackoff caps the per-attempt sleep. Zero means "use
+	// default".
+	streamRetryMaxBackoff time.Duration
 }
 
 var (
@@ -218,6 +251,34 @@ func WithChatStreamCompleteCallback(fn ChatStreamCompleteCallbackFunc) Option {
 func WithShowToolCallDelta(show bool) Option {
 	return func(opts *options) {
 		opts.showToolCallDelta = show
+	}
+}
+
+// WithStreamRetry opts into automatic retries for transport-level failures in
+// streaming requests (e.g. TCP RST mid-handshake, idle timeout before the
+// first chunk). Without this option, streaming makes a single provider call
+// (legacy behaviour). Retries are only applied BEFORE caller-visible output;
+// once any partial content or chunk callback is delivered, the stream error
+// is surfaced as-is.
+//
+//   - maxRetries: retry attempts after the initial request. 0 uses
+//     defaultStreamMaxRetries; negative disables retries for this model.
+//   - baseBackoff: initial sleep before the first retry (doubles each attempt,
+//     capped at maxBackoff). 0 keeps the package default.
+//   - maxBackoff: ceiling for per-attempt backoff. 0 keeps the package default.
+func WithStreamRetry(maxRetries int, baseBackoff, maxBackoff time.Duration) Option {
+	return func(opts *options) {
+		opts.streamRetryEnabled = true
+		// Always assign so a later WithStreamRetry(0) can restore the documented
+		// default after an earlier WithStreamRetry(N). Zero-option New() still
+		// never retries because streamRetryEnabled stays false unless opted in.
+		opts.streamMaxRetries = maxRetries
+		if baseBackoff > 0 {
+			opts.streamRetryBaseBackoff = baseBackoff
+		}
+		if maxBackoff > 0 {
+			opts.streamRetryMaxBackoff = maxBackoff
+		}
 	}
 }
 
