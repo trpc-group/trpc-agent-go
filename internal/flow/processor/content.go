@@ -2534,32 +2534,10 @@ func nonTerminalAssistantToolCallPairs(
 	for i := 0; i+1 < len(events); i++ {
 		textEvent := events[i]
 		toolCallEvent := events[i+1]
-		if textEvent.ID == "" || toolCallEvent.ID == "" ||
-			textEvent.Response == nil || toolCallEvent.Response == nil ||
-			textEvent.Response.ID == "" || toolCallEvent.Response.ID == "" ||
-			textEvent.RequestID == "" ||
-			textEvent.RequestID != toolCallEvent.RequestID ||
-			textEvent.InvocationID == "" ||
-			textEvent.InvocationID != toolCallEvent.InvocationID ||
-			textEvent.ParentInvocationID != toolCallEvent.ParentInvocationID ||
-			textEvent.Author != toolCallEvent.Author ||
-			textEvent.Branch != toolCallEvent.Branch ||
-			textEvent.FilterKey != toolCallEvent.FilterKey ||
-			textEvent.Error != nil || toolCallEvent.Error != nil ||
-			textEvent.IsPartial || toolCallEvent.IsPartial ||
-			textEvent.Done || toolCallEvent.Done ||
-			len(textEvent.Choices) != 1 || len(toolCallEvent.Choices) != 1 ||
-			(textEvent.Object != "" && textEvent.Object != model.ObjectTypeChatCompletion) ||
-			(toolCallEvent.Object != "" && toolCallEvent.Object != model.ObjectTypeChatCompletion) ||
-			messageorigin.IsSeedHistory(inv, textEvent.ID) !=
-				messageorigin.IsSeedHistory(inv, toolCallEvent.ID) ||
-			messageorigin.IsCurrentTurn(inv, textEvent.ID) !=
-				messageorigin.IsCurrentTurn(inv, toolCallEvent.ID) {
-			continue
-		}
-		if (textEvent.ParentMetadata == nil) != (toolCallEvent.ParentMetadata == nil) ||
-			textEvent.ParentMetadata != nil &&
-				*textEvent.ParentMetadata != *toolCallEvent.ParentMetadata {
+		if !sameAssistantTurnIdentity(textEvent, toolCallEvent) ||
+			!sameAssistantTurnContext(textEvent, toolCallEvent) ||
+			!mergeableAssistantEventShape(textEvent, toolCallEvent) ||
+			!sameAssistantEventOrigin(inv, textEvent, toolCallEvent) {
 			continue
 		}
 		if _, ok := mergeProjectedAssistantToolCallMessages(
@@ -2571,6 +2549,55 @@ func nonTerminalAssistantToolCallPairs(
 		pairs[textEvent.ID] = toolCallEvent.ID
 	}
 	return pairs
+}
+
+func sameAssistantTurnIdentity(textEvent, toolCallEvent event.Event) bool {
+	return textEvent.ID != "" && toolCallEvent.ID != "" &&
+		textEvent.Response != nil && toolCallEvent.Response != nil &&
+		textEvent.Response.ID != "" && toolCallEvent.Response.ID != "" &&
+		textEvent.RequestID != "" &&
+		textEvent.RequestID == toolCallEvent.RequestID &&
+		textEvent.InvocationID != "" &&
+		textEvent.InvocationID == toolCallEvent.InvocationID
+}
+
+func sameAssistantTurnContext(textEvent, toolCallEvent event.Event) bool {
+	if textEvent.ParentInvocationID != toolCallEvent.ParentInvocationID ||
+		textEvent.Author != toolCallEvent.Author ||
+		textEvent.Branch != toolCallEvent.Branch ||
+		textEvent.FilterKey != toolCallEvent.FilterKey {
+		return false
+	}
+	if (textEvent.ParentMetadata == nil) !=
+		(toolCallEvent.ParentMetadata == nil) {
+		return false
+	}
+	return textEvent.ParentMetadata == nil ||
+		*textEvent.ParentMetadata == *toolCallEvent.ParentMetadata
+}
+
+func mergeableAssistantEventShape(textEvent, toolCallEvent event.Event) bool {
+	return textEvent.Error == nil && toolCallEvent.Error == nil &&
+		!textEvent.IsPartial && !toolCallEvent.IsPartial &&
+		!textEvent.Done && !toolCallEvent.Done &&
+		len(textEvent.Choices) == 1 && len(toolCallEvent.Choices) == 1 &&
+		mergeableAssistantObject(textEvent.Object) &&
+		mergeableAssistantObject(toolCallEvent.Object)
+}
+
+func mergeableAssistantObject(object string) bool {
+	return object == "" || object == model.ObjectTypeChatCompletion
+}
+
+func sameAssistantEventOrigin(
+	inv *agent.Invocation,
+	textEvent event.Event,
+	toolCallEvent event.Event,
+) bool {
+	return messageorigin.IsSeedHistory(inv, textEvent.ID) ==
+		messageorigin.IsSeedHistory(inv, toolCallEvent.ID) &&
+		messageorigin.IsCurrentTurn(inv, textEvent.ID) ==
+			messageorigin.IsCurrentTurn(inv, toolCallEvent.ID)
 }
 
 // mergeProjectedAssistantToolCallMessages combines one assistant text event
@@ -2587,24 +2614,37 @@ func mergeProjectedAssistantToolCallMessages(
 	}
 	text := textMessages[0]
 	toolCall := toolCallMessages[0]
-	if text.Role != model.RoleAssistant || text.Content == "" ||
-		len(text.ContentParts) > 0 || text.ToolID != "" ||
-		text.ToolName != "" || len(text.ToolCalls) > 0 ||
-		text.ReasoningContent != "" || text.ReasoningSignature != "" ||
-		toolCall.Role != model.RoleAssistant || len(toolCall.ToolCalls) == 0 ||
-		len(toolCall.ContentParts) > 0 || toolCall.ToolID != "" ||
-		toolCall.ToolName != "" || toolCall.ReasoningContent != "" ||
-		toolCall.ReasoningSignature != "" {
+	if !mergeableAssistantTextMessage(text) ||
+		!mergeableAssistantToolCallMessage(toolCall) ||
+		!mergeableAssistantToolCalls(toolCall.ToolCalls) {
 		return model.Message{}, false
-	}
-	for _, call := range toolCall.ToolCalls {
-		if call.Index != nil || len(call.ExtraFields) > 0 {
-			return model.Message{}, false
-		}
 	}
 	combined := toolCall
 	combined.Content = text.Content + toolCall.Content
 	return combined, true
+}
+
+func mergeableAssistantTextMessage(message model.Message) bool {
+	return message.Role == model.RoleAssistant && message.Content != "" &&
+		len(message.ContentParts) == 0 && message.ToolID == "" &&
+		message.ToolName == "" && len(message.ToolCalls) == 0 &&
+		message.ReasoningContent == "" && message.ReasoningSignature == ""
+}
+
+func mergeableAssistantToolCallMessage(message model.Message) bool {
+	return message.Role == model.RoleAssistant && len(message.ToolCalls) > 0 &&
+		len(message.ContentParts) == 0 && message.ToolID == "" &&
+		message.ToolName == "" && message.ReasoningContent == "" &&
+		message.ReasoningSignature == ""
+}
+
+func mergeableAssistantToolCalls(toolCalls []model.ToolCall) bool {
+	for _, call := range toolCalls {
+		if call.Index != nil || len(call.ExtraFields) > 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func (p *ContentRequestProcessor) projectMessagesForEvent(

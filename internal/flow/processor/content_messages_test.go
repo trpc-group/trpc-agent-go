@@ -195,10 +195,8 @@ func TestProjectCurrentInvocationMessages_NormalizesAssistantToolTurnAfterProjec
 	}
 
 	t.Run("merges current invocation events", func(t *testing.T) {
-		messages := NewContentRequestProcessor().projectCurrentInvocationMessages(
-			inv,
-			events,
-		)
+		inv.Session = &session.Session{Events: events}
+		messages := NewContentRequestProcessor().getCurrentInvocationMessages(inv)
 
 		require.Len(t, messages, 1)
 		require.Equal(t, "hello world", messages[0].Content)
@@ -212,10 +210,8 @@ func TestProjectCurrentInvocationMessages_NormalizesAssistantToolTurnAfterProjec
 		}
 		eventsWithToolText[1].Choices[0].Message.Content = " checking"
 
-		messages := NewContentRequestProcessor().projectCurrentInvocationMessages(
-			inv,
-			eventsWithToolText,
-		)
+		inv.Session = &session.Session{Events: eventsWithToolText}
+		messages := NewContentRequestProcessor().getCurrentInvocationMessages(inv)
 
 		require.Len(t, messages, 1)
 		require.Equal(t, "hello world checking", messages[0].Content)
@@ -236,7 +232,8 @@ func TestProjectCurrentInvocationMessages_NormalizesAssistantToolTurnAfterProjec
 			}),
 		)
 
-		messages := processor.projectCurrentInvocationMessages(inv, events)
+		inv.Session = &session.Session{Events: events}
+		messages := processor.getCurrentInvocationMessages(inv)
 
 		require.Len(t, messages, 2)
 		require.Equal(t, "signature", messages[0].ReasoningSignature)
