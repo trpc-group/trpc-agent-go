@@ -8,11 +8,15 @@
 
 package a2a
 
-import "strings"
+import (
+	"strings"
 
-// StreamingTextBuffer keeps pending streaming text together with the response
-// that owns it. Artifact snapshots can replace an earlier value without
-// disturbing the order of other pending text.
+	"trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+// StreamingTextBuffer keeps pending streaming content together with the
+// response that owns it. Artifact snapshots can replace earlier text and rich
+// content parts without disturbing the order of other pending content.
 type StreamingTextBuffer struct {
 	chunks    []streamingTextChunk
 	artifacts map[string]int
@@ -20,17 +24,32 @@ type StreamingTextBuffer struct {
 
 type streamingTextChunk struct {
 	responseID string
-	content    string
+	fragments  []string
+	parts      []model.ContentPart
 }
 
 // Append adds an ordinary streaming text delta.
 func (b *StreamingTextBuffer) Append(responseID, content string) {
-	if b == nil || content == "" {
+	b.AppendContent(responseID, content, nil)
+}
+
+// AppendContent adds ordinary streaming text and rich content parts.
+func (b *StreamingTextBuffer) AppendContent(
+	responseID string,
+	content string,
+	parts []model.ContentPart,
+) {
+	if b == nil || content == "" && len(parts) == 0 {
 		return
+	}
+	var fragments []string
+	if content != "" {
+		fragments = []string{content}
 	}
 	b.chunks = append(b.chunks, streamingTextChunk{
 		responseID: responseID,
-		content:    content,
+		fragments:  fragments,
+		parts:      append([]model.ContentPart(nil), parts...),
 	})
 }
 
@@ -42,38 +61,61 @@ func (b *StreamingTextBuffer) UpdateArtifact(
 	content string,
 	replace bool,
 ) {
+	b.UpdateArtifactContent(responseID, artifactID, content, nil, replace)
+}
+
+// UpdateArtifactContent adds or replaces pending content for one artifact.
+func (b *StreamingTextBuffer) UpdateArtifactContent(
+	responseID string,
+	artifactID string,
+	content string,
+	parts []model.ContentPart,
+	replace bool,
+) {
 	if b == nil {
 		return
 	}
 	if artifactID == "" {
-		b.Append(responseID, content)
+		b.AppendContent(responseID, content, parts)
 		return
 	}
 	if index, ok := b.artifacts[artifactID]; ok {
 		chunk := &b.chunks[index]
 		if replace {
-			chunk.content = content
+			chunk.fragments = nil
+			chunk.parts = append([]model.ContentPart(nil), parts...)
+			if content != "" {
+				chunk.fragments = []string{content}
+			}
 			if responseID != "" {
 				chunk.responseID = responseID
 			}
 			return
 		}
-		chunk.content += content
+		if content != "" {
+			chunk.fragments = append(chunk.fragments, content)
+		}
+		chunk.parts = append(chunk.parts, parts...)
 		if chunk.responseID == "" {
 			chunk.responseID = responseID
 		}
 		return
 	}
-	if content == "" {
+	if content == "" && len(parts) == 0 {
 		return
 	}
 	if b.artifacts == nil {
 		b.artifacts = make(map[string]int)
 	}
+	var fragments []string
+	if content != "" {
+		fragments = []string{content}
+	}
 	b.artifacts[artifactID] = len(b.chunks)
 	b.chunks = append(b.chunks, streamingTextChunk{
 		responseID: responseID,
-		content:    content,
+		fragments:  fragments,
+		parts:      append([]model.ContentPart(nil), parts...),
 	})
 }
 
@@ -84,9 +126,23 @@ func (b *StreamingTextBuffer) Content() string {
 	}
 	var content strings.Builder
 	for _, chunk := range b.chunks {
-		content.WriteString(chunk.content)
+		for _, fragment := range chunk.fragments {
+			content.WriteString(fragment)
+		}
 	}
 	return content.String()
+}
+
+// ContentParts returns the pending rich content parts in stream order.
+func (b *StreamingTextBuffer) ContentParts() []model.ContentPart {
+	if b == nil || len(b.chunks) == 0 {
+		return nil
+	}
+	var parts []model.ContentPart
+	for _, chunk := range b.chunks {
+		parts = append(parts, chunk.parts...)
+	}
+	return parts
 }
 
 // Take returns and clears the pending text. Its response ID comes from the
@@ -95,21 +151,31 @@ func (b *StreamingTextBuffer) Content() string {
 func (b *StreamingTextBuffer) Take(
 	fallbackResponseID string,
 ) (responseID string, content string, ok bool) {
+	responseID, content, _, ok = b.TakeContent(fallbackResponseID)
+	return responseID, content, ok
+}
+
+// TakeContent returns and clears all pending text and rich content parts.
+func (b *StreamingTextBuffer) TakeContent(
+	fallbackResponseID string,
+) (responseID string, content string, parts []model.ContentPart, ok bool) {
 	if b == nil {
-		return "", "", false
+		return "", "", nil, false
 	}
 	content = b.Content()
-	if content != "" {
+	parts = b.ContentParts()
+	if content != "" || len(parts) > 0 {
 		responseID = fallbackResponseID
 		for _, chunk := range b.chunks {
-			if chunk.content != "" && chunk.responseID != "" {
+			if (len(chunk.fragments) > 0 || len(chunk.parts) > 0) &&
+				chunk.responseID != "" {
 				responseID = chunk.responseID
 				break
 			}
 		}
 	}
 	b.Reset()
-	return responseID, content, content != ""
+	return responseID, content, parts, content != "" || len(parts) > 0
 }
 
 // Reset clears all pending text and artifact ownership.

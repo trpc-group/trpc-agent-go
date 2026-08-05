@@ -599,6 +599,123 @@ func TestProcessStreamingEventsFlushesV1ArtifactSnapshot(t *testing.T) {
 	}
 }
 
+func TestProcessStreamingEventsSnapshotToolCallOwnsText(t *testing.T) {
+	call := 0
+	remote := &A2AAgent{
+		name: "remote",
+		eventConverter: &responseConverterFunc{stream: func(
+			protocol.StreamResponse,
+			string,
+			*agent.Invocation,
+		) ([]*event.Event, error) {
+			call++
+			switch call {
+			case 1:
+				return []*event.Event{event.New(
+					"invocation",
+					"remote",
+					event.WithResponse(&model.Response{
+						ID:        "text-response",
+						IsPartial: true,
+						Choices: []model.Choice{{Delta: model.Message{
+							Role:    model.RoleAssistant,
+							Content: "stale",
+						}}},
+					}),
+				)}, nil
+			case 2:
+				return []*event.Event{event.New(
+					"invocation",
+					"remote",
+					event.WithResponse(&model.Response{
+						ID: "text-response",
+						Choices: []model.Choice{{Message: model.Message{
+							Role:    model.RoleAssistant,
+							Content: "replacement",
+							ToolCalls: []model.ToolCall{{
+								ID:   "call-1",
+								Type: "function",
+							}},
+						}}},
+					}),
+				)}, nil
+			default:
+				return nil, nil
+			}
+		}},
+	}
+	appendChunk := true
+	replaceChunk := false
+	stream := make(chan protocol.StreamResponse, 3)
+	stream <- protocol.NewStreamResponseArtifactUpdate(
+		&protocol.TaskArtifactUpdateEvent{
+			TaskID: "task",
+			Artifact: protocol.Artifact{
+				ArtifactID: "artifact",
+				Parts:      []*protocol.Part{protocol.NewTextPart("stale")},
+			},
+			Append: &appendChunk,
+		},
+	)
+	stream <- protocol.NewStreamResponseArtifactUpdate(
+		&protocol.TaskArtifactUpdateEvent{
+			TaskID: "task",
+			Artifact: protocol.Artifact{
+				ArtifactID: "artifact",
+				Parts:      []*protocol.Part{protocol.NewTextPart("replacement")},
+			},
+			Append: &replaceChunk,
+		},
+	)
+	completed := protocol.NewTaskStatusUpdateEvent(
+		"task",
+		"context",
+		protocol.TaskStatus{State: protocol.TaskStateCompleted},
+		true,
+	)
+	stream <- protocol.NewStreamResponseStatusUpdate(&completed)
+	close(stream)
+
+	out := make(chan *event.Event, 4)
+	result := remote.processStreamingEvents(
+		context.Background(),
+		&agent.Invocation{InvocationID: "invocation"},
+		out,
+		stream,
+	)
+	close(out)
+	if result.terminalError != nil {
+		t.Fatalf("terminal error = %v, want nil", result.terminalError)
+	}
+
+	var standaloneText []string
+	var toolCallMessage *model.Message
+	for evt := range out {
+		if evt == nil || evt.Response == nil || len(evt.Response.Choices) == 0 {
+			continue
+		}
+		choice := evt.Response.Choices[0]
+		if !evt.Response.IsPartial && len(choice.Message.ToolCalls) == 0 &&
+			choice.Message.Content != "" {
+			standaloneText = append(standaloneText, choice.Message.Content)
+		}
+		if len(choice.Message.ToolCalls) > 0 {
+			message := choice.Message
+			toolCallMessage = &message
+		}
+	}
+	if len(standaloneText) != 0 {
+		t.Fatalf("standalone text events = %v, want none", standaloneText)
+	}
+	if toolCallMessage == nil || toolCallMessage.Content != "replacement" ||
+		len(toolCallMessage.ToolCalls) != 1 {
+		t.Fatalf(
+			"tool call message = %#v, want replacement text with one tool call",
+			toolCallMessage,
+		)
+	}
+}
+
 func TestProcessStreamingEventsConverterErrorAndCancellation(t *testing.T) {
 	wantErr := errors.New("convert")
 	remote := &A2AAgent{
@@ -703,32 +820,4 @@ func TestStreamingLifecycleAndAggregationHelpers(t *testing.T) {
 		nil,
 	)
 
-	artifactContent := make(map[string]string)
-	artifactParts := make(map[string][]model.ContentPart)
-	var artifactOrder []string
-	recordArtifactChunk(
-		&protocol.TaskArtifactUpdateEvent{
-			Artifact: protocol.Artifact{ArtifactID: "artifact"},
-		},
-		"one",
-		nil,
-		artifactContent,
-		artifactParts,
-		&artifactOrder,
-	)
-	appendChunk := true
-	recordArtifactChunk(
-		&protocol.TaskArtifactUpdateEvent{
-			Artifact: protocol.Artifact{ArtifactID: "artifact"},
-			Append:   &appendChunk,
-		},
-		"two",
-		nil,
-		artifactContent,
-		artifactParts,
-		&artifactOrder,
-	)
-	if artifactContent["artifact"] != "onetwo" || len(artifactOrder) != 1 {
-		t.Fatalf("appended artifact = %#v, order = %#v", artifactContent, artifactOrder)
-	}
 }

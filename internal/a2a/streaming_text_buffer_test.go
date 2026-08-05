@@ -8,7 +8,11 @@
 
 package a2a
 
-import "testing"
+import (
+	"testing"
+
+	"trpc.group/trpc-go/trpc-agent-go/model"
+)
 
 func TestStreamingTextBufferPreservesContentOwnership(t *testing.T) {
 	var buffer StreamingTextBuffer
@@ -75,5 +79,41 @@ func TestStreamingTextBufferCanClearArtifactSnapshot(t *testing.T) {
 			content,
 			ok,
 		)
+	}
+}
+
+func TestStreamingTextBufferReplacesArtifactContentParts(t *testing.T) {
+	var buffer StreamingTextBuffer
+	stale := model.ContentPart{Type: model.ContentTypeFile, File: &model.File{Name: "stale"}}
+	replacement := model.ContentPart{Type: model.ContentTypeFile, File: &model.File{Name: "replacement"}}
+	buffer.UpdateArtifactContent("stale-response", "artifact", "stale", []model.ContentPart{stale}, false)
+	buffer.UpdateArtifactContent(
+		"replacement-response",
+		"artifact",
+		"replacement",
+		[]model.ContentPart{replacement},
+		true,
+	)
+
+	responseID, content, parts, ok := buffer.TakeContent("fallback")
+	if !ok || responseID != "replacement-response" || content != "replacement" {
+		t.Fatalf("TakeContent() = (%q, %q, %v), want replacement snapshot", responseID, content, ok)
+	}
+	if len(parts) != 1 || parts[0].File == nil || parts[0].File.Name != "replacement" {
+		t.Fatalf("replacement parts = %#v", parts)
+	}
+}
+
+func TestStreamingTextBufferKeepsAppendFragments(t *testing.T) {
+	var buffer StreamingTextBuffer
+	buffer.UpdateArtifact("response", "artifact", "one", false)
+	buffer.UpdateArtifact("response", "artifact", "two", false)
+	buffer.UpdateArtifact("response", "artifact", "three", false)
+
+	if len(buffer.chunks) != 1 || len(buffer.chunks[0].fragments) != 3 {
+		t.Fatalf("buffer chunks = %#v, want three append fragments", buffer.chunks)
+	}
+	if got := buffer.Content(); got != "onetwothree" {
+		t.Fatalf("Content() = %q, want onetwothree", got)
 	}
 }

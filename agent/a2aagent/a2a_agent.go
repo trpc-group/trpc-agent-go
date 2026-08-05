@@ -1725,9 +1725,19 @@ func (r *A2AAgent) processStreamingEvents(
 	eventChan chan<- *event.Event,
 	streamChan <-chan protocol.StreamingMessageEvent,
 	anonymousCookie *anonymousCookieState,
-) streamingEventResult {
-	var result streamingEventResult
+) (result streamingEventResult) {
 	var contentBuffer ia2a.StreamingTextBuffer
+	artifactContentParts := make(map[string][]model.ContentPart)
+	var artifactOrder []string
+	defer func() {
+		result.aggregatedContent = contentBuffer.Content()
+		for _, artifactID := range artifactOrder {
+			result.aggregatedContentParts = append(
+				result.aggregatedContentParts,
+				artifactContentParts[artifactID]...,
+			)
+		}
+	}()
 
 	for streamEvent := range streamChan {
 		if err := agent.CheckContextCancelled(ctx); err != nil {
@@ -1735,6 +1745,7 @@ func (r *A2AAgent) processStreamingEvents(
 			return result
 		}
 		artifactUpdate, _ := streamEvent.Result.(*protocol.TaskArtifactUpdateEvent)
+		var artifactChunkParts []model.ContentPart
 		artifactContentRecorded := false
 
 		events, err := r.eventConverter.ConvertStreamingToEvents(streamEvent, r.name, invocation)
@@ -1763,6 +1774,16 @@ func (r *A2AAgent) processStreamingEvents(
 				currentResponseID = evt.Response.ID
 			}
 			if evt.Response != nil && !evt.Response.IsPartial {
+				if artifactUpdate != nil && replacesArtifact {
+					// The complete event owns this artifact snapshot. Remove its
+					// stale partial text before flushing unrelated pending text.
+					contentBuffer.UpdateArtifact(
+						"",
+						artifactUpdate.Artifact.ArtifactID,
+						"",
+						true,
+					)
+				}
 				r.flushBufferedContent(
 					ctx,
 					invocation,
@@ -1774,6 +1795,7 @@ func (r *A2AAgent) processStreamingEvents(
 				)
 			}
 			var eventContent strings.Builder
+			var eventContentParts []model.ContentPart
 			var terminalError *model.ResponseError
 			result.responseID, terminalError = r.aggregateEventContent(
 				ctx,
@@ -1783,22 +1805,38 @@ func (r *A2AAgent) processStreamingEvents(
 				result.responseID,
 				&eventContent,
 				anonymousCookie,
-				&result.aggregatedContentParts,
+				&eventContentParts,
 			)
 			responseID := ""
 			if evt.Response != nil {
 				responseID = evt.Response.ID
 			}
 			if artifactUpdate == nil {
-				contentBuffer.Append(responseID, eventContent.String())
-			} else {
-				replace := !artifactContentRecorded && replacesArtifact
-				contentBuffer.UpdateArtifact(
+				contentBuffer.AppendContent(
 					responseID,
-					artifactUpdate.Artifact.ArtifactID,
 					eventContent.String(),
-					replace,
+					eventContentParts,
 				)
+				result.aggregatedContentParts = append(
+					result.aggregatedContentParts,
+					eventContentParts...,
+				)
+			} else {
+				content := eventContent.String()
+				artifactChunkParts = append(
+					artifactChunkParts,
+					eventContentParts...,
+				)
+				if evt.Response == nil || evt.Response.IsPartial {
+					replace := !artifactContentRecorded && replacesArtifact
+					contentBuffer.UpdateArtifactContent(
+						responseID,
+						artifactUpdate.Artifact.ArtifactID,
+						content,
+						eventContentParts,
+						replace,
+					)
+				}
 				artifactContentRecorded = true
 			}
 			if terminalError != nil {
@@ -1824,9 +1862,42 @@ func (r *A2AAgent) processStreamingEvents(
 				true,
 			)
 		}
+		recordV0ArtifactContentParts(
+			artifactUpdate,
+			artifactChunkParts,
+			replacesArtifact,
+			artifactContentParts,
+			&artifactOrder,
+		)
 	}
-	result.aggregatedContent = contentBuffer.Content()
 	return result
+}
+
+func recordV0ArtifactContentParts(
+	update *protocol.TaskArtifactUpdateEvent,
+	contentParts []model.ContentPart,
+	replace bool,
+	artifactContentParts map[string][]model.ContentPart,
+	artifactOrder *[]string,
+) {
+	if update == nil {
+		return
+	}
+	artifactID := update.Artifact.ArtifactID
+	if _, ok := artifactContentParts[artifactID]; !ok {
+		*artifactOrder = append(*artifactOrder, artifactID)
+	}
+	if replace {
+		artifactContentParts[artifactID] = append(
+			[]model.ContentPart(nil),
+			contentParts...,
+		)
+		return
+	}
+	artifactContentParts[artifactID] = append(
+		artifactContentParts[artifactID],
+		contentParts...,
+	)
 }
 
 func v0ArtifactUpdateReplacesBufferedContent(
@@ -1841,8 +1912,23 @@ func v0ArtifactUpdateReplacesBufferedContent(
 	}
 	for _, evt := range events {
 		if evt != nil && evt.Response != nil &&
-			evt.Response.Object == model.ObjectTypeChatCompletion {
+			evt.Response.Object == model.ObjectTypeChatCompletion &&
+			responseHasSnapshotContent(evt.Response) {
 			return true
+		}
+	}
+	return false
+}
+
+func responseHasSnapshotContent(response *model.Response) bool {
+	if response == nil {
+		return false
+	}
+	for _, choice := range response.Choices {
+		for _, message := range []model.Message{choice.Message, choice.Delta} {
+			if message.Content != "" || len(message.ContentParts) > 0 {
+				return true
+			}
 		}
 	}
 	return false
@@ -1860,7 +1946,9 @@ func (r *A2AAgent) flushBufferedContent(
 	contentBuffer *ia2a.StreamingTextBuffer,
 	anonymousCookie *anonymousCookieState,
 ) {
-	responseID, content, ok := contentBuffer.Take(fallbackResponseID)
+	responseID, content, contentParts, ok := contentBuffer.TakeContent(
+		fallbackResponseID,
+	)
 	if !ok {
 		return
 	}
@@ -1882,8 +1970,9 @@ func (r *A2AAgent) flushBufferedContent(
 			Created:   flushTime.Unix(),
 			Choices: []model.Choice{{
 				Message: model.Message{
-					Role:    model.RoleAssistant,
-					Content: content,
+					Role:         model.RoleAssistant,
+					Content:      content,
+					ContentParts: contentParts,
 				},
 			}},
 		}),
