@@ -171,6 +171,8 @@ type Node struct {
 	// When true, multiple tool calls in a single assistant response are executed concurrently.
 	// Default is false (serial execution) for compatibility and safety.
 	enableParallelTools bool
+	// toolConcurrencyConfig limits active calls for parallel Tools nodes.
+	toolConcurrencyConfig tool.ConcurrencyConfig
 
 	// llmGenerationConfig stores per-node generation configuration for LLM nodes.
 	// If set, AddLLMNode forwards it to the underlying LLM runner.

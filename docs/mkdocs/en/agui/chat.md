@@ -317,6 +317,8 @@ server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithRunOptio
 
 `StateResolver` converts `RunAgentInput.State` into RuntimeState for the current run. The returned map is passed to Runner as `agent.WithRuntimeState(...)` and only affects the current run.
 
+An LLMAgent can read a resolved value in its `Instruction` or `SystemPrompt` with a `{runtime:key}` placeholder. Use `{runtime:key?}` when the value is optional.
+
 Returning `nil` means RuntimeState is not set. Returning an empty map sets an empty RuntimeState.
 
 ```go

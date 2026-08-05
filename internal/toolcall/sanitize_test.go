@@ -68,6 +68,46 @@ func TestSanitizeMessagesWithTools_DowngradesInvalidToolCallAndResult(t *testing
 	}
 }
 
+func TestSanitizeMessagesWithTools_DowngradesEmptyToolNameAndResult(t *testing.T) {
+	for _, name := range []string{"", " \t\n"} {
+		t.Run(fmt.Sprintf("name_%q", name), func(t *testing.T) {
+			in := []model.Message{
+				{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{
+						{
+							ID: "call_empty_name",
+							Function: model.FunctionDefinitionParam{
+								Name:      name,
+								Arguments: []byte(`{"command":"pwd"}`),
+							},
+						},
+					},
+				},
+				{
+					Role:     model.RoleTool,
+					ToolID:   "call_empty_name",
+					ToolName: name,
+					Content:  "tool error",
+				},
+			}
+
+			out := SanitizeMessagesWithTools(context.Background(), in, nil)
+			if assert.Len(t, out, 2) {
+				assert.Equal(t, model.RoleUser, out[0].Role)
+				assert.Contains(t, out[0].Content, invalidToolCallTag)
+				assert.Contains(t, out[0].Content, errFunctionNameEmpty.Error())
+				assert.Equal(t, model.RoleUser, out[1].Role)
+				assert.Contains(t, out[1].Content, invalidToolResultTag)
+			}
+			for _, msg := range out {
+				assert.NotEqual(t, model.RoleTool, msg.Role)
+				assert.Empty(t, msg.ToolCalls)
+			}
+		})
+	}
+}
+
 func TestSanitizeMessagesWithTools_WarnsOnDowngradeWithoutPayload(t *testing.T) {
 	original := agentlog.WarnfContext
 	var messages []string

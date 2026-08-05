@@ -2397,14 +2397,84 @@ agent := llmagent.New("ai-assistant",
     llmagent.WithTools(tools),
     llmagent.WithToolSets(toolSets),
     llmagent.WithEnableParallelTools(true), // 启用并行执行
+    llmagent.WithToolConcurrencyConfig(tool.ConcurrencyConfig{
+        Groups: []tool.ConcurrencyGroup{
+            {
+                ToolNames: []string{"subagent"},
+                Limit:     3,
+            },
+            {
+                // search 调用串行执行
+                ToolNames: []string{"search"},
+                Limit:     1,
+            },
+            {
+                // fetch 调用串行执行
+                ToolNames: []string{"fetch"},
+                Limit:     1,
+            },
+        },
+    }),
 )
 ```
 
 Graph 工作流下也可以在工具节点开启并行：
 
 ```go
-stateGraph.AddToolsNode("tools", tools, graph.WithEnableParallelTools(true))
+stateGraph.AddToolsNode(
+    "tools",
+    tools,
+    graph.WithEnableParallelTools(true),
+    graph.WithToolConcurrencyConfig(tool.ConcurrencyConfig{
+        Groups: []tool.ConcurrencyGroup{
+            {ToolNames: []string{"subagent"}, Limit: 3},
+            {ToolNames: []string{"search"}, Limit: 1},
+            {ToolNames: []string{"fetch"}, Limit: 1},
+        },
+    }),
+)
 ```
+
+`MaxConcurrency` 和分组上限会同时生效。每个直接工具调用都会占用正数的整体
+并发额度；属于某个分组的调用还必须同时取得该分组的额度。同一组内的多个工具名
+共享活跃调用上限。当 `MaxConcurrency` 为非正数时，不设置整体上限：正数的
+分组上限仍然生效，分组外的工具不受该配置的并发限制。
+
+每次 `LLMAgent.Run` 以及每次 Graph Tools 节点调用都有独立额度。同一个 Agent
+的并发 Run 不会相互占用额度。例如 `subagent` 的 `Limit` 为 3 时，同一个
+Agent 的两个并发 Run 可以各自同时执行最多 3 个直接 `subagent` 调用。这些
+配置用于控制单次 invocation 的并行宽度，不会保护多个 Run、Agent 实例、进程
+或服务副本共享的下游容量；此类共享限制应放在拥有资源的工具或下游 client 中。
+
+并发限制跟随工具的执行方。所属 Agent 或 Tools 节点只限制自己直接执行的工具。
+如果名为 `subagent` 的工具运行了一个子 Agent，外层 `subagent` 在运行期间
+仍然占用所属 Agent 或节点的额度，但子 Agent 内部执行的 `search`、`fetch`
+等工具不会额外占用所属 Agent 或节点的工具额度。需要在每个提供这些工具的子
+Agent 上分别配置：
+
+```go
+child := llmagent.New(
+    "worker",
+    llmagent.WithModel(model),
+    llmagent.WithTools([]tool.Tool{searchTool, fetchTool}),
+    llmagent.WithEnableParallelTools(true),
+    llmagent.WithToolConcurrencyConfig(tool.ConcurrencyConfig{
+        Groups: []tool.ConcurrencyGroup{
+            {ToolNames: []string{"search"}, Limit: 1},
+            {ToolNames: []string{"fetch"}, Limit: 1},
+        },
+    }),
+)
+```
+
+拆成两个分组后，`search` 和 `fetch` 各自串行，但两者之间仍可以各运行一个、
+相互并行。每次子 Agent invocation 都有独立额度，即使多个并发 invocation
+复用同一个子 Agent 实例也是如此。因此 3 个并发子 Agent invocation 合计最多
+可以同时运行 3 个 `search` 和 3 个 `fetch`。
+
+只有显式开启工具并行执行后，该配置才会生效。非正数的分组上限会被忽略。每个
+工具名只能出现在一个正数上限的组中；重复配置会导致
+`WithToolConcurrencyConfig` panic。
 
 **并行执行效果：**
 

@@ -32,6 +32,11 @@ go run ./client -url http://localhost:8888/agents/math -msg "2+2"
 go run ./client -url http://localhost:8888/agents/weather -msg "How is it?"
 ```
 
+The direct A2A client in this example installs an HTTP cookie jar. This is
+required for anonymous callers that do not send a trusted user ID header: the
+server returns an HTTP-only anonymous-principal cookie, and the jar preserves
+that principal across multiple calls to the same agent path.
+
 You can also fetch each agent's AgentCard:
 
 ```bash

@@ -33,6 +33,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/toolresultround"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolretry"
 	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -1094,6 +1095,11 @@ func cloneToolResultContentParts(
 			audio := *part.Audio
 			audio.Data = append([]byte(nil), part.Audio.Data...)
 			cloned[i].Audio = &audio
+		}
+		if part.Video != nil {
+			video := *part.Video
+			video.Data = append([]byte(nil), part.Video.Data...)
+			cloned[i].Video = &video
 		}
 		if part.File != nil {
 			file := *part.File
@@ -2645,6 +2651,19 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 	execution.shouldIgnoreError = shouldIgnoreError
 	if err != nil || tl == nil {
 		return execution, err
+	}
+	if limiter := toolcall.LimiterFromContext(ctx); limiter != nil {
+		release, err := limiter.Acquire(
+			ctx,
+			toolCall.Function.Name,
+		)
+		if err != nil {
+			return execution, fmt.Errorf(
+				"wait for tool concurrency: %w",
+				err,
+			)
+		}
+		defer release()
 	}
 
 	log.DebugfContext(

@@ -293,7 +293,7 @@ func (p *InstructionRequestProcessor) combineInstructions(
 	return jsonInstructions
 }
 
-// injectStateIntoContent injects session state into the given content.
+// injectStateIntoContent injects supported state into the given content.
 func (p *InstructionRequestProcessor) injectStateIntoContent(
 	ctx context.Context,
 	invocation *agent.Invocation,

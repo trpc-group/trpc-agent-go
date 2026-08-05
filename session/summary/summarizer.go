@@ -88,8 +88,7 @@ const (
 	summaryToolArgumentsOmitted = `{"_trpc_summary_note":"tool arguments omitted to fit the summary context"}`
 	summaryToolResultOmittedFmt = "[Tool result omitted to fit the summary context; " +
 		"tool_name=%q, tool_call_id=%q. The tool call completed before summarization.]"
-	summaryConversationOmitted = "\n[... middle conversation omitted to fit the summary context ...]\n"
-	summaryPreviousOmitted     = "\n[... previous summary omitted to fit the summary context ...]\n"
+	summaryPreviousOmitted = "\n[... previous summary omitted to fit the summary context ...]\n"
 )
 
 // formatResponseError formats a model.ResponseError into a human-readable error.
@@ -1313,18 +1312,24 @@ func (s *sessionSummarizer) prepareSummaryRequest(
 		)
 		return bounded, mode, err
 	}
-	if err := s.ensureSummaryRequestFits(
+	fitErr := s.ensureSummaryRequestFits(
 		ctx,
 		request,
 		true,
 		budget,
-	); err == nil {
+	)
+	if fitErr == nil {
 		return request, mode, nil
 	}
 
 	// Cache-safe forking is an optimization. When the parent prefix cannot be
-	// made safe without dropping its last source round, fall back to a bounded
+	// made safe without dropping source conversation, fall back to a bounded
 	// standalone prompt whose final user message contains the source itself.
+	log.DebugfContext(
+		ctx,
+		"cache-safe summary request does not fit; falling back to standalone summary request: %v",
+		fitErr,
+	)
 	bounded, err := s.buildBoundedStandaloneSummaryRequest(
 		ctx,
 		input,
@@ -1351,29 +1356,41 @@ func (s *sessionSummarizer) buildBoundedStandaloneSummaryRequest(
 		return request, nil
 	}
 
-	minimal, err := s.buildStandaloneSummaryRequest(summaryPromptInput{})
+	sourceOnlyInput := summaryPromptInput{
+		conversationText: input.conversationText,
+	}
+	sourceOnly, err := s.buildStandaloneSummaryRequest(sourceOnlyInput)
 	if err != nil {
 		return nil, err
 	}
-	minimalTokens, err := countSummaryRequestTokens(ctx, minimal)
+	sourceTokens, err := countSummaryRequestTokens(ctx, sourceOnly)
 	if err != nil {
 		return nil, err
 	}
-	if minimalTokens >= budget {
+	if sourceTokens > budget {
 		return nil, fmt.Errorf(
-			"summary prompt requires %d tokens but input budget is %d",
-			minimalTokens,
+			"summary source conversation requires %d tokens but input budget is %d; refusing to omit unsummarized conversation",
+			sourceTokens,
 			budget,
 		)
 	}
+	if input.previousSummary == "" {
+		return sourceOnly, nil
+	}
 
-	totalRunes := len([]rune(input.conversationText)) + len([]rune(input.previousSummary))
-	best := (*model.Request)(nil)
-	low, high := 1, totalRunes
+	previousRunes := []rune(input.previousSummary)
+	best := sourceOnly
+	low, high := 1, len(previousRunes)
 	for low <= high {
 		mid := low + (high-low)/2
 		candidate, buildErr := s.buildStandaloneSummaryRequest(
-			truncateSummaryPromptInput(input, mid),
+			summaryPromptInput{
+				conversationText: input.conversationText,
+				previousSummary: truncatePreviousSummary(
+					previousRunes,
+					mid,
+				),
+			},
 		)
 		if buildErr != nil {
 			return nil, buildErr
@@ -1389,17 +1406,7 @@ func (s *sessionSummarizer) buildBoundedStandaloneSummaryRequest(
 		}
 		high = mid - 1
 	}
-	if best == nil {
-		return nil, fmt.Errorf(
-			"summary input cannot fit a non-empty source within budget %d",
-			budget,
-		)
-	}
 	return best, nil
-}
-
-func truncateSummaryConversation(runes []rune, retain int) string {
-	return truncateSummaryText(runes, retain, summaryConversationOmitted)
 }
 
 func truncatePreviousSummary(runes []rune, retain int) string {
@@ -1421,43 +1428,6 @@ func truncateSummaryText(runes []rune, retain int, marker string) string {
 	result = append(result, markerRunes...)
 	result = append(result, runes[len(runes)-tail:]...)
 	return string(result)
-}
-
-func truncateSummaryPromptInput(input summaryPromptInput, retain int) summaryPromptInput {
-	conversationRunes := []rune(input.conversationText)
-	previousRunes := []rune(input.previousSummary)
-	total := len(conversationRunes) + len(previousRunes)
-	if retain >= total {
-		return input
-	}
-	if retain <= 0 {
-		return summaryPromptInput{}
-	}
-	if len(previousRunes) == 0 {
-		return summaryPromptInput{
-			conversationText: truncateSummaryConversation(conversationRunes, retain),
-		}
-	}
-	if len(conversationRunes) == 0 {
-		return summaryPromptInput{
-			previousSummary: truncatePreviousSummary(previousRunes, retain),
-		}
-	}
-
-	previousRetain := 0
-	conversationRetain := 1
-	if retain > 1 {
-		previousRetain = retain * len(previousRunes) / total
-		if previousRetain < 1 {
-			previousRetain = 1
-		}
-		conversationRetain = retain - previousRetain
-	}
-
-	return summaryPromptInput{
-		conversationText: truncateSummaryConversation(conversationRunes, conversationRetain),
-		previousSummary:  truncatePreviousSummary(previousRunes, previousRetain),
-	}
 }
 
 func summaryRequestFits(
@@ -1503,17 +1473,9 @@ func (s *sessionSummarizer) ensureSummaryRequestFits(
 	if tokens <= budget {
 		return nil
 	}
-	// Prefer dropping source rounds already represented by newer context before
-	// erasing payloads from the latest complete round.
-	for dropOldestSummarySourceRound(request) {
-		tokens, err = countSummaryRequestTokens(ctx, request)
-		if err != nil {
-			return fmt.Errorf("count pruned summary request tokens: %w", err)
-		}
-		if tokens <= budget {
-			return nil
-		}
-	}
+	// Preserve every source turn. Tool payloads may be represented by explicit
+	// omission markers, but the conversation structure must remain intact so a
+	// successful summary can safely advance the history cutoff.
 	candidates, err := summaryToolPayloadCandidates(ctx, request.Messages)
 	if err != nil {
 		return fmt.Errorf("build summary payload candidates: %w", err)
@@ -1529,7 +1491,7 @@ func (s *sessionSummarizer) ensureSummaryRequestFits(
 		}
 	}
 	return fmt.Errorf(
-		"cache-safe summary request input too large after semantic compaction: estimated %d tokens exceeds budget %d",
+		"cache-safe summary request input too large without dropping source conversation after semantic compaction: estimated %d tokens exceeds budget %d",
 		tokens,
 		budget,
 	)
@@ -1561,45 +1523,6 @@ func (s *sessionSummarizer) summaryRequestInputBudget(
 		return 1
 	}
 	return budget
-}
-
-func dropOldestSummarySourceRound(request *model.Request) bool {
-	if request == nil || len(request.Messages) < 3 {
-		return false
-	}
-	sourceEnd := len(request.Messages) - 1
-	rounds := summarySourceRounds(request.Messages[:sourceEnd])
-	if len(rounds) <= 1 {
-		return false
-	}
-	drop := make(map[int]struct{}, len(rounds[0]))
-	for _, index := range rounds[0] {
-		drop[index] = struct{}{}
-	}
-	messages := make([]model.Message, 0, len(request.Messages)-len(drop))
-	for i, message := range request.Messages {
-		if _, ok := drop[i]; ok {
-			continue
-		}
-		messages = append(messages, message)
-	}
-	request.Messages = messages
-	return true
-}
-
-func summarySourceRounds(messages []model.Message) [][]int {
-	var rounds [][]int
-	for i, message := range messages {
-		if message.Role == model.RoleSystem {
-			continue
-		}
-		if len(rounds) == 0 ||
-			(message.Role == model.RoleUser && len(rounds[len(rounds)-1]) > 0) {
-			rounds = append(rounds, nil)
-		}
-		rounds[len(rounds)-1] = append(rounds[len(rounds)-1], i)
-	}
-	return rounds
 }
 
 func isSummaryContextLengthError(err error, response *model.Response) bool {

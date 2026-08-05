@@ -53,6 +53,17 @@ func TestWithSessionTTL(t *testing.T) {
 	assert.Equal(t, ttl, opts.sessionTTL)
 }
 
+func TestWithTrackEventTTL(t *testing.T) {
+	opts := &ServiceOpts{sessionTTL: time.Hour}
+	assert.Equal(t, time.Hour, opts.effectiveTrackEventTTL())
+	WithTrackEventTTL(0)(opts)
+	require.NotNil(t, opts.trackEventTTL)
+	assert.Equal(t, time.Duration(0), opts.effectiveTrackEventTTL())
+	WithTrackEventTTL(30 * time.Minute)(opts)
+	require.NotNil(t, opts.trackEventTTL)
+	assert.Equal(t, 30*time.Minute, opts.effectiveTrackEventTTL())
+}
+
 func TestWithAppStateTTL(t *testing.T) {
 	opts := &ServiceOpts{}
 	ttl := 48 * time.Hour

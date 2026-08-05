@@ -42,6 +42,10 @@ type FunctionTool[I, O any] struct {
 	// resultFormatter optionally formats the final tool result as model-visible
 	// message content. When nil, the framework keeps its default JSON behavior.
 	resultFormatter resultformat.Formatter
+	// concurrencySafe reports whether this tool may share a turn with others on
+	// the parallel tool path. It defaults to true, which is how a tool that
+	// publishes nothing at all is already read.
+	concurrencySafe bool
 }
 
 // Option is a function that configures a FunctionTool.
@@ -54,6 +58,7 @@ type functionToolOptions struct {
 	unmarshaler       unmarshaler
 	longRunning       bool
 	skipSummarization bool
+	concurrencySafe   bool
 	inputSchema       *tool.Schema
 	outputSchema      *tool.Schema
 	resultFormatter   resultformat.Formatter
@@ -95,6 +100,20 @@ func WithLongRunning(longRunning bool) Option {
 func WithSkipSummarization(skip bool) Option {
 	return func(opts *functionToolOptions) {
 		opts.skipSummarization = skip
+	}
+}
+
+// WithConcurrencySafe sets whether the function tool tolerates running at the
+// same time as the other tool calls in a turn. It defaults to true.
+//
+// Set it to false for a tool whose calls contend for something the caller cannot
+// see — a shared working directory, an external process, a session the tool
+// reads back after writing. The value is published through tool.ConcurrencyAware
+// so schedulers and host policies can honor it; a tool that says nothing is read
+// as safe, which is why the default here is true.
+func WithConcurrencySafe(safe bool) Option {
+	return func(opts *functionToolOptions) {
+		opts.concurrencySafe = safe
 	}
 }
 
@@ -147,7 +166,8 @@ func WithResultFormatter(formatter resultformat.Formatter) Option {
 func NewFunctionTool[I, O any](fn func(context.Context, I) (O, error), opts ...Option) *FunctionTool[I, O] {
 	// Set default options
 	options := &functionToolOptions{
-		unmarshaler: &jsonUnmarshaler{},
+		unmarshaler:     &jsonUnmarshaler{},
+		concurrencySafe: true,
 	}
 
 	// Apply provided options
@@ -190,6 +210,7 @@ func NewFunctionTool[I, O any](fn func(context.Context, I) (O, error), opts ...O
 		outputSchema:      oSchema,
 		skipSummarization: options.skipSummarization,
 		resultFormatter:   options.resultFormatter,
+		concurrencySafe:   options.concurrencySafe,
 	}
 }
 
@@ -230,6 +251,13 @@ func (ft *FunctionTool[I, O]) ResultFormatter() resultformat.Formatter {
 	return ft.resultFormatter
 }
 
+// IsConcurrencySafe reports whether this tool may run at the same time as the
+// other tool calls in a turn, implementing tool.ConcurrencyAware. It is true
+// unless WithConcurrencySafe(false) was given.
+func (ft *FunctionTool[I, O]) IsConcurrencySafe() bool {
+	return ft.concurrencySafe
+}
+
 // Declaration returns the tool's declaration information.
 // It provides metadata about the tool including its name, description,
 // and JSON schema for the expected input arguments.
@@ -268,6 +296,8 @@ type StreamableFunctionTool[I, O any] struct {
 	// resultFormatter optionally formats the final tool result as model-visible
 	// message content. Intermediate stream events are unaffected.
 	resultFormatter resultformat.Formatter
+	// concurrencySafe has the same meaning as in FunctionTool.
+	concurrencySafe bool
 }
 
 // NewStreamableFunctionTool creates a new StreamableFunctionTool instance.
@@ -282,7 +312,8 @@ type StreamableFunctionTool[I, O any] struct {
 func NewStreamableFunctionTool[I, O any](fn func(context.Context, I) (*tool.StreamReader, error), opts ...Option) *StreamableFunctionTool[I, O] {
 	// Set default options
 	options := &functionToolOptions{
-		unmarshaler: &jsonUnmarshaler{},
+		unmarshaler:     &jsonUnmarshaler{},
+		concurrencySafe: true,
 	}
 
 	// Apply provided options
@@ -319,6 +350,7 @@ func NewStreamableFunctionTool[I, O any](fn func(context.Context, I) (*tool.Stre
 		outputSchema:      oSchema,
 		skipSummarization: options.skipSummarization,
 		resultFormatter:   options.resultFormatter,
+		concurrencySafe:   options.concurrencySafe,
 	}
 }
 
@@ -388,6 +420,13 @@ func (t *StreamableFunctionTool[I, O]) SkipSummarization() bool {
 // eligible for formatting again.
 func (t *StreamableFunctionTool[I, O]) ResultFormatter() resultformat.Formatter {
 	return t.resultFormatter
+}
+
+// IsConcurrencySafe reports whether this tool may run at the same time as the
+// other tool calls in a turn, implementing tool.ConcurrencyAware. It is true
+// unless WithConcurrencySafe(false) was given.
+func (t *StreamableFunctionTool[I, O]) IsConcurrencySafe() bool {
+	return t.concurrencySafe
 }
 
 type unmarshaler interface {
