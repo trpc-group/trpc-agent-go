@@ -1,0 +1,27 @@
+[
+  {
+    "metricName": "headline_format_validity",
+    "evaluatorName": "final_response_avg_score",
+    "threshold": 1.0,
+    "criterion": {
+      "finalResponse": {
+        "json": {
+          "valid": true,
+          "matchStrategy": "skip"
+        }
+      }
+    }
+  },
+  {
+    "metricName": "headline_exact_match",
+    "evaluatorName": "final_response_avg_score",
+    "threshold": 1.0,
+    "criterion": {
+      "finalResponse": {
+        "text": {
+          "matchStrategy": "exact"
+        }
+      }
+    }
+  }
+]

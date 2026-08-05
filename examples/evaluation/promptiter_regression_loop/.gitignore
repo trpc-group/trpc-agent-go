@@ -1,0 +1,3 @@
+# Raw per-run eval result artifacts are regenerated on every pipeline run.
+# Only the curated example reports under output/ are committed.
+output/headline-card-app/
