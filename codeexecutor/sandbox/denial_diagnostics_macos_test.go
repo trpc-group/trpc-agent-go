@@ -15,8 +15,10 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -104,20 +106,16 @@ func TestSandboxDenialDeduplicatesByOperationAndTarget(t *testing.T) {
 	firstTimestamp := time.Date(2026, 7, 30, 1, 2, 3, 0, time.UTC)
 	denials := []Denial{
 		{
-			Operation:  "file-read-data",
-			Target:     "/private/tmp/foo",
-			Raw:        "first",
-			Timestamp:  firstTimestamp,
-			Source:     "first-source",
-			Confidence: "first-confidence",
+			Operation: "file-read-data",
+			Target:    "/private/tmp/foo",
+			Raw:       "first",
+			Timestamp: firstTimestamp,
 		},
 		{
-			Operation:  "file-read-data",
-			Target:     "/private/tmp/foo",
-			Raw:        "second",
-			Timestamp:  firstTimestamp.Add(time.Second),
-			Source:     "second-source",
-			Confidence: "second-confidence",
+			Operation: "file-read-data",
+			Target:    "/private/tmp/foo",
+			Raw:       "second",
+			Timestamp: firstTimestamp.Add(time.Second),
 		},
 		{Operation: "file-read-metadata", Target: "/private/tmp/foo", Raw: "third"},
 	}
@@ -125,10 +123,7 @@ func TestSandboxDenialDeduplicatesByOperationAndTarget(t *testing.T) {
 	if len(filtered) != 2 {
 		t.Fatalf("deduped denials = %#v, want two operation+target pairs", filtered)
 	}
-	if filtered[0].Raw != "first" ||
-		!filtered[0].Timestamp.Equal(firstTimestamp) ||
-		filtered[0].Source != "first-source" ||
-		filtered[0].Confidence != "first-confidence" {
+	if filtered[0].Raw != "first" || !filtered[0].Timestamp.Equal(firstTimestamp) {
 		t.Fatalf("deduped denial = %#v, want first event metadata", filtered[0])
 	}
 }
@@ -340,7 +335,7 @@ func TestIncompleteDiagnosticsProbePreservesCallerCancellation(t *testing.T) {
 func TestInitDenialMonitorHonorsCachedCapsWithoutEventStream(t *testing.T) {
 	resetDiagnosticsCapsCacheForTest()
 	t.Cleanup(resetDiagnosticsCapsCacheForTest)
-	storeCachedDiagnosticsCaps(DiagnosticsCapability{
+	storeCachedDiagnosticsCaps(context.Background(), DiagnosticsCapability{
 		Supported:            true,
 		ProbeCompleted:       true,
 		EventStreamAvailable: false,
@@ -365,10 +360,133 @@ func TestInitDenialMonitorHonorsCachedCapsWithoutEventStream(t *testing.T) {
 	}
 }
 
+func TestActivateDenialMonitorKeepsIncompleteProbeRetryable(t *testing.T) {
+	rt := NewRuntime()
+	d := rt.macosDenialDiagnostics()
+	d.mu.Lock()
+	d.state = macosDenialStarting
+	d.mu.Unlock()
+
+	if err := rt.activateDenialMonitor(context.Background(), d, DiagnosticsCapability{
+		Supported:            true,
+		ProbeCompleted:       false,
+		EventStreamAvailable: false,
+	}); err != nil {
+		t.Fatalf("activateDenialMonitor: %v", err)
+	}
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	if d.state != macosDenialIdle {
+		t.Fatalf("diagnostics state = %v, want idle for incomplete probe", d.state)
+	}
+}
+
+func TestEnsureDenialMonitorRetriesAfterTransientMonitorStartFailure(t *testing.T) {
+	resetDiagnosticsCapsCacheForTest()
+	t.Cleanup(resetDiagnosticsCapsCacheForTest)
+	storeCachedDiagnosticsCaps(context.Background(), DiagnosticsCapability{
+		Supported:            true,
+		ProbeCompleted:       true,
+		EventStreamAvailable: true,
+		StrongCorrelation:    true,
+	})
+
+	calls := 0
+	oldStart := startMacOSLogStreamMonitorFn
+	startMacOSLogStreamMonitorFn = func(
+		ctx context.Context,
+		suffix string,
+	) (*macosLogStreamMonitor, error) {
+		calls++
+		if calls == 1 {
+			return nil, errors.New("transient log stream start failure")
+		}
+		ready := make(chan struct{})
+		close(ready)
+		done := make(chan struct{})
+		var stopOnce sync.Once
+		return &macosLogStreamMonitor{
+			cancel: func() {
+				stopOnce.Do(func() { close(done) })
+			},
+			done:  done,
+			ready: ready,
+			ring:  &macosDenialRing{},
+		}, nil
+	}
+	t.Cleanup(func() {
+		startMacOSLogStreamMonitorFn = oldStart
+	})
+
+	rt := NewRuntime()
+	t.Cleanup(func() { _ = rt.Close() })
+	if err := rt.ensureDenialMonitor(context.Background()); err != nil {
+		t.Fatalf("first ensureDenialMonitor: %v", err)
+	}
+	d := rt.macosDenialDiagnostics()
+	d.mu.RLock()
+	firstState := d.state
+	d.mu.RUnlock()
+	if firstState != macosDenialIdle {
+		t.Fatalf("after transient failure state = %v, want idle", firstState)
+	}
+	if rt.sandboxDenialCollectingReady() {
+		t.Fatal("collecting ready after transient failure")
+	}
+
+	if err := rt.ensureDenialMonitor(context.Background()); err != nil {
+		t.Fatalf("second ensureDenialMonitor: %v", err)
+	}
+	if !rt.sandboxDenialCollectingReady() {
+		t.Fatal("second ensureDenialMonitor did not recover monitor")
+	}
+	if calls != 2 {
+		t.Fatalf("start calls = %d, want 2", calls)
+	}
+}
+
+func TestMacOSVersionKeyHonorsContextCancellation(t *testing.T) {
+	resetDiagnosticsCapsCacheForTest()
+	t.Cleanup(resetDiagnosticsCapsCacheForTest)
+
+	started := make(chan struct{})
+	oldCommand := macOSVersionCommand
+	macOSVersionCommand = func(ctx context.Context) *exec.Cmd {
+		select {
+		case <-started:
+		default:
+			close(started)
+		}
+		return exec.CommandContext(ctx, "/bin/sleep", "30")
+	}
+	t.Cleanup(func() {
+		macOSVersionCommand = oldCommand
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := macOSVersionKey(ctx)
+		errCh <- err
+	}()
+	<-started
+	cancel()
+	err := <-errCh
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("macOSVersionKey error = %v, want context.Canceled", err)
+	}
+
+	canceled, cancelCached := context.WithCancel(context.Background())
+	cancelCached()
+	if _, _, err := loadCachedDiagnosticsCaps(canceled); !errors.Is(err, context.Canceled) {
+		t.Fatalf("loadCachedDiagnosticsCaps error = %v, want context.Canceled", err)
+	}
+}
+
 func TestInitDenialMonitorUsesCachedCapsWithAvailableEventStream(t *testing.T) {
 	resetDiagnosticsCapsCacheForTest()
 	t.Cleanup(resetDiagnosticsCapsCacheForTest)
-	storeCachedDiagnosticsCaps(DiagnosticsCapability{
+	storeCachedDiagnosticsCaps(context.Background(), DiagnosticsCapability{
 		Supported:            true,
 		ProbeCompleted:       true,
 		EventStreamAvailable: true,
@@ -728,7 +846,7 @@ func TestMacOSLogStreamMonitorStopTimesOutWhenDoneNeverCloses(t *testing.T) {
 func TestRuntimeCloseStopsDenialMonitor(t *testing.T) {
 	resetDiagnosticsCapsCacheForTest()
 	t.Cleanup(resetDiagnosticsCapsCacheForTest)
-	storeCachedDiagnosticsCaps(DiagnosticsCapability{
+	storeCachedDiagnosticsCaps(context.Background(), DiagnosticsCapability{
 		Supported:            true,
 		ProbeCompleted:       true,
 		EventStreamAvailable: true,
@@ -756,7 +874,7 @@ func TestRuntimeCloseStopsDenialMonitor(t *testing.T) {
 func TestLiveProdMonitorClearsDeadMonitorAndRestarts(t *testing.T) {
 	resetDiagnosticsCapsCacheForTest()
 	t.Cleanup(resetDiagnosticsCapsCacheForTest)
-	storeCachedDiagnosticsCaps(DiagnosticsCapability{
+	storeCachedDiagnosticsCaps(context.Background(), DiagnosticsCapability{
 		Supported:            true,
 		ProbeCompleted:       true,
 		EventStreamAvailable: true,

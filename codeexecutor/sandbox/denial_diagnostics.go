@@ -37,34 +37,15 @@ type Denial struct {
 	Raw string
 	// Timestamp is the backend-reported event time. It is zero when the backend
 	// omits the timestamp or its format is not recognized.
-	Timestamp  time.Time
-	Source     DenialSource
-	Confidence DenialConfidence
+	Timestamp time.Time
 }
-
-// DenialSource identifies where a denial diagnostic came from.
-type DenialSource string
-
-const (
-	// DenialSourceMacOSUnifiedLog reports denials parsed from the macOS unified log.
-	DenialSourceMacOSUnifiedLog DenialSource = "macos-unified-log"
-)
-
-// DenialConfidence reports the correlation strength for a denial diagnostic.
-type DenialConfidence string
-
-const (
-	// DenialConfidenceStrong reports a denial strongly correlated to the run.
-	DenialConfidenceStrong DenialConfidence = "strong"
-)
 
 // Diagnostics captures sandbox-specific diagnostics for one program run.
 type Diagnostics struct {
 	// Denials contains sandbox denial diagnostics. The macOS backend returns at
 	// most one entry for each operation and target pair. When multiple events
 	// have the same pair, the first event retained after filtering supplies the
-	// entry's Raw, Timestamp, Source, and Confidence fields. This coalescing
-	// does not set Truncated.
+	// entry's Raw and Timestamp fields. This coalescing does not set Truncated.
 	Denials []Denial
 	// Truncated reports that the shared denial ring dropped one or more events
 	// after this run began and before its collection snapshot. Callers must not

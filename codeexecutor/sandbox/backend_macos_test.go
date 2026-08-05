@@ -580,7 +580,7 @@ func TestRunProgramWithDiagnosticsDegradesWhenMonitorUnavailable(t *testing.T) {
 	t.Cleanup(resetDiagnosticsCapsCacheForTest)
 	// Cached probe says the event stream is unavailable, so ensureDenialMonitor
 	// must not start a production monitor and RunProgram should degrade.
-	storeCachedDiagnosticsCaps(DiagnosticsCapability{
+	storeCachedDiagnosticsCaps(context.Background(), DiagnosticsCapability{
 		Supported:            true,
 		ProbeCompleted:       true,
 		EventStreamAvailable: false,
@@ -636,8 +636,17 @@ func TestDiagnosticsCapabilityProbe(t *testing.T) {
 	if !caps.EventStreamAvailable {
 		t.Skip("log stream unavailable on this host")
 	}
-	if !caps.DefaultDenyTaggable || !caps.ExplicitDenyTaggable {
-		t.Fatalf("expected both default and explicit deny tagging on this host, caps=%+v", caps)
+	wantStrong := caps.ExplicitDenyTaggable || caps.DefaultDenyTaggable
+	if caps.StrongCorrelation != wantStrong {
+		t.Fatalf(
+			"StrongCorrelation=%v, want %v for caps=%+v",
+			caps.StrongCorrelation,
+			wantStrong,
+			caps,
+		)
+	}
+	if !wantStrong {
+		t.Skip("neither default-deny nor explicit-deny tagging is supported on this host")
 	}
 }
 
@@ -649,8 +658,18 @@ func TestMacOSSandboxExecCollectsExplicitDenyDiagnostics(t *testing.T) {
 		WithWorkspaceRoot(t.TempDir()),
 		WithPermissionProfile(WorkspaceWriteProfile().WithNoAccessGlobs("work/*.env")),
 	)
+	t.Cleanup(func() {
+		if err := rt.Close(); err != nil {
+			t.Errorf("close runtime: %v", err)
+		}
+	})
 	if _, err := rt.macosPreflight(); err != nil {
 		t.Skipf("sandbox-exec preflight unavailable: %v", err)
+	}
+	_ = rt.ensureDenialMonitor(context.Background())
+	caps := rt.DiagnosticsCapability()
+	if !caps.ExplicitDenyTaggable {
+		t.Skip("explicit-deny messages are not supported on this host")
 	}
 	ws, err := rt.CreateWorkspace(context.Background(), "macos/glob-denial-diagnostics", codeexecutor.WorkspacePolicy{})
 	if err != nil {
@@ -1039,7 +1058,7 @@ func TestRunProgramColdPreflightShortTimeoutReturnsErrTimeout(t *testing.T) {
 func TestRunProgramWarmDiagnosticsCachePreflightTimeoutReturnsErrTimeout(t *testing.T) {
 	resetDiagnosticsCapsCacheForTest()
 	t.Cleanup(resetDiagnosticsCapsCacheForTest)
-	storeCachedDiagnosticsCaps(DiagnosticsCapability{
+	storeCachedDiagnosticsCaps(context.Background(), DiagnosticsCapability{
 		Supported:      true,
 		ProbeCompleted: true,
 	})

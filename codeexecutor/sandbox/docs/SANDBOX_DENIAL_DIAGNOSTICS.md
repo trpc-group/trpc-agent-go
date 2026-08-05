@@ -41,6 +41,12 @@ context is already canceled or the run deadline expires during initialization,
 context remains valid but monitoring is unavailable, the command still runs and
 diagnostics are omitted.
 
+A completed probe that finds no usable event stream is treated as a confirmed
+host limitation for that runtime and is not retried. Incomplete probes and
+transient production-monitor startup failures remain retryable on later
+diagnostics-enabled runs. `Close` still permanently disables diagnostics for
+the runtime.
+
 The first diagnostics-enabled `RunProgram` may spend a short time probing when
 the process cache is cold. Later runs reuse the cached capability result and the
 already-running monitor. If the monitor process exits, capability reporting and
@@ -89,8 +95,8 @@ for _, denial := range diagnostics.Denials {
 
 `Denials` contains at most one entry for each operation and target pair. When
 the unified log reports the same pair more than once, the first event retained
-after filtering supplies `Raw`, `Timestamp`, `Source`, and `Confidence`. This
-coalescing does not set `Diagnostics.Truncated`.
+after filtering supplies `Raw` and `Timestamp`. This coalescing does not set
+`Diagnostics.Truncated`.
 
 `Diagnostics.Truncated` is true when the shared denial ring dropped one or more
 raw events after this run began and before its collection snapshot (the ring

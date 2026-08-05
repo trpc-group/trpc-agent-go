@@ -38,12 +38,21 @@ const (
 )
 
 var (
-	macosDenyRe          = regexp.MustCompile(`deny\([^)]+\)\s+([^\s]+)(?:\s+(.+))?`)
-	denialCapsCacheMu    sync.Mutex
-	denialCapsByMacOSVer = map[string]DiagnosticsCapability{}
-	randomHexFallbackSeq atomic.Uint64
-	errDiagnosticsClosed = errors.New("sandbox denial diagnostics closed")
+	macosDenyRe                  = regexp.MustCompile(`deny\([^)]+\)\s+([^\s]+)(?:\s+(.+))?`)
+	denialCapsCacheMu            sync.Mutex
+	denialCapsByMacOSVer         = map[string]DiagnosticsCapability{}
+	randomHexFallbackSeq         atomic.Uint64
+	errDiagnosticsClosed         = errors.New("sandbox denial diagnostics closed")
+	macosVersionMu               sync.Mutex
+	macosVersionCached           string
+	macosVersionReady            bool
+	macOSVersionCommand          = defaultMacOSVersionCommand
+	startMacOSLogStreamMonitorFn = startMacOSLogStreamMonitor
 )
+
+func defaultMacOSVersionCommand(ctx context.Context) *exec.Cmd {
+	return exec.CommandContext(ctx, "/usr/bin/sw_vers", "-productVersion")
+}
 
 type macosLogEntry struct {
 	EventMessage string `json:"eventMessage"`
@@ -367,7 +376,9 @@ func (r *Runtime) ensureDenialMonitor(ctx context.Context) error {
 		} else if d.prodMonitor != nil {
 			d.state = macosDenialRunning
 		} else if d.state == macosDenialStarting {
-			d.state = macosDenialDegraded
+			// activateDenialMonitor should have already chosen Idle or
+			// Degraded. Keep retryable Idle if state was left unchanged.
+			d.state = macosDenialIdle
 		}
 	}
 	d.mu.Unlock()
@@ -396,7 +407,9 @@ func (r *Runtime) initDenialMonitor(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if cached, ok := loadCachedDiagnosticsCaps(); ok {
+	if cached, ok, err := loadCachedDiagnosticsCaps(ctx); err != nil {
+		return err
+	} else if ok {
 		caps := cached
 		caps.ProbeCompleted = true
 		return r.activateDenialMonitor(ctx, d, caps)
@@ -407,7 +420,9 @@ func (r *Runtime) initDenialMonitor(
 		return err
 	}
 	if caps.ProbeCompleted {
-		storeCachedDiagnosticsCaps(caps)
+		if err := storeCachedDiagnosticsCaps(ctx, caps); err != nil {
+			return err
+		}
 	}
 	return r.activateDenialMonitor(ctx, d, caps)
 }
@@ -421,7 +436,14 @@ func (r *Runtime) activateDenialMonitor(
 		d.mu.Lock()
 		if d.state != macosDenialClosed {
 			d.caps = caps
-			d.state = macosDenialDegraded
+			if caps.ProbeCompleted {
+				// Completed probe with no event stream is a confirmed host
+				// limitation for this runtime.
+				d.state = macosDenialDegraded
+			} else {
+				// Incomplete probes stay retryable on later diagnostics runs.
+				d.state = macosDenialIdle
+			}
 		}
 		d.mu.Unlock()
 		return nil
@@ -429,7 +451,7 @@ func (r *Runtime) activateDenialMonitor(
 	d.mu.RLock()
 	sessionSuffix := d.sessionSuffix
 	d.mu.RUnlock()
-	monitor, err := startMacOSLogStreamMonitor(ctx, sessionSuffix)
+	monitor, err := startMacOSLogStreamMonitorFn(ctx, sessionSuffix)
 	if err != nil {
 		if monitor != nil {
 			retainInitializationMonitor(d, monitor, err)
@@ -437,12 +459,12 @@ func (r *Runtime) activateDenialMonitor(
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
-		caps.EventStreamAvailable = false
-		caps.StrongCorrelation = false
+		// Transient production-monitor startup failure: keep probe caps and
+		// remain retryable so a later diagnostics request can start again.
 		d.mu.Lock()
 		if d.state != macosDenialClosed {
 			d.caps = caps
-			d.state = macosDenialDegraded
+			d.state = macosDenialIdle
 		}
 		d.mu.Unlock()
 		return nil
@@ -1070,12 +1092,10 @@ func parseMacOSSandboxDenialEvent(
 		target = strings.TrimSpace(denyMatch[2])
 	}
 	return Denial{
-		Operation:  denyMatch[1],
-		Target:     target,
-		Raw:        raw,
-		Timestamp:  parseMacOSLogTimestamp(timestamp),
-		Source:     DenialSourceMacOSUnifiedLog,
-		Confidence: DenialConfidenceStrong,
+		Operation: denyMatch[1],
+		Target:    target,
+		Raw:       raw,
+		Timestamp: parseMacOSLogTimestamp(timestamp),
 	}, tagged, true
 }
 
@@ -1279,29 +1299,71 @@ func randomHex(n int) string {
 	return hex.EncodeToString(b)
 }
 
-func macOSVersionKey() string {
-	out, err := exec.Command("/usr/bin/sw_vers", "-productVersion").Output()
-	if err != nil {
-		return "unknown"
+func macOSVersionKey(ctx context.Context) (string, error) {
+	macosVersionMu.Lock()
+	if macosVersionReady {
+		key := macosVersionCached
+		macosVersionMu.Unlock()
+		return key, nil
 	}
-	return strings.TrimSpace(string(out))
+	macosVersionMu.Unlock()
+
+	cmd := macOSVersionCommand(ctx)
+	out, err := cmd.Output()
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", ctxErr
+		}
+		out = []byte("unknown")
+	}
+	key := strings.TrimSpace(string(out))
+	if key == "" {
+		key = "unknown"
+	}
+
+	macosVersionMu.Lock()
+	defer macosVersionMu.Unlock()
+	if !macosVersionReady {
+		macosVersionCached = key
+		macosVersionReady = true
+	}
+	return macosVersionCached, nil
 }
 
-func loadCachedDiagnosticsCaps() (DiagnosticsCapability, bool) {
+func loadCachedDiagnosticsCaps(
+	ctx context.Context,
+) (DiagnosticsCapability, bool, error) {
+	key, err := macOSVersionKey(ctx)
+	if err != nil {
+		return DiagnosticsCapability{}, false, err
+	}
 	denialCapsCacheMu.Lock()
 	defer denialCapsCacheMu.Unlock()
-	caps, ok := denialCapsByMacOSVer[macOSVersionKey()]
-	return caps, ok
+	caps, ok := denialCapsByMacOSVer[key]
+	return caps, ok, nil
 }
 
-func storeCachedDiagnosticsCaps(caps DiagnosticsCapability) {
+func storeCachedDiagnosticsCaps(
+	ctx context.Context,
+	caps DiagnosticsCapability,
+) error {
+	key, err := macOSVersionKey(ctx)
+	if err != nil {
+		return err
+	}
 	denialCapsCacheMu.Lock()
 	defer denialCapsCacheMu.Unlock()
-	denialCapsByMacOSVer[macOSVersionKey()] = caps
+	denialCapsByMacOSVer[key] = caps
+	return nil
 }
 
 func resetDiagnosticsCapsCacheForTest() {
 	denialCapsCacheMu.Lock()
-	defer denialCapsCacheMu.Unlock()
 	denialCapsByMacOSVer = map[string]DiagnosticsCapability{}
+	denialCapsCacheMu.Unlock()
+
+	macosVersionMu.Lock()
+	macosVersionCached = ""
+	macosVersionReady = false
+	macosVersionMu.Unlock()
 }
