@@ -186,18 +186,27 @@ summarizer := summary.NewSummarizer(
 无论最终使用哪种请求，发送前都会按摘要模型的有效输入预算做准入检查：如果模型
 能够提供 provider-specific input budget，框架会取它与“模型 context window 的
 70%”这层保守上限中的较小值。fork 请求超预算时，框架只修改 clone，不会污染父
-请求：先移除摘要调用不会使用的 tool schemas，再按完整 source round 从旧到新
-缩减并保护最新一轮，必要时替换较大的 tool arguments/results payload。如果仍然
-放不下，再重建为 bounded standalone 请求。standalone fallback 会对
-`{conversation_text}` 和 `{previous_summary}` 两块 payload 做首尾保留截断，
-固定的 system prompt 和 user prompt 模板不会被截坏。
+请求：先移除摘要调用不会使用的 tool schemas，必要时再用明确的省略标记替换较大
+的 tool arguments/results payload，但不会删除 source conversation turn。如果仍然
+放不下，再重建为 bounded standalone 请求。当预算能够容纳全部尚未覆盖的新对话时，
+standalone 路径会完整保留这些内容；使用 `{previous_summary}` 时，只允许压缩这块
+上一版滚动摘要。固定的 system prompt 和 user prompt 模板也会保持完整。
+
+如果尚未覆盖的新对话无法一次放进 standalone 请求，摘要器可以先处理较旧的完整
+前缀，其余 events 保持未覆盖，留待后续摘要。前缀只能结束在稳定的 event 边界，
+不能拆开同一 response 的 chunks，也不能拆开仍未闭合的 tool call/result round。
+只有模型生成与 post-summary 处理都完成后，summary boundary 才会推进到所选前缀。
+如果连最小的完整前缀都放不下，请求会在调用模型前失败，原 boundary 保持不变。
+配置 `WithPreSummaryHook(...)` 时不会启用部分前缀 fallback，因为 hook 重写后的文本
+无法安全映射回 event boundary。前缀摘要始终使用 standalone 请求，不会复用
+cache-safe fork。
 
 预算适配和 fork → standalone 的选择发生在 `BeforeModel` callback 之前，因此
 callback 看到并修改的就是最终准备送模的请求。callback 返回后框架会再次计数；
 如果 callback 自己把请求扩到超预算，会明确失败，而不是再次换请求并静默丢失
 callback 的修改。如果 provider 仍返回 context-length error，或者非 custom 的
 模型调用返回空 summary，摘要器会用第一次输入预算的一半再做一次 bounded
-standalone 重试。
+standalone 重试；这次重试也可以按相同的边界规则选择更小的完整前缀。
 
 这里有一个重要的 branch 摘要行为：开启 `WithCacheSafeForking(true)` 后，非空
 branch 触发摘要时，可以用当前父请求 fork 来生成 branch 摘要；但同一轮 summary
@@ -907,6 +916,11 @@ type PostSummaryHookContext struct {
 
 type PostSummaryHook func(in *PostSummaryHookContext) error
 ```
+
+Hook 会看到本次 summary source 对应的临时 boundary。Hook 成功，或其错误被配置为
+不中断流程时，摘要器会在 Hook 返回后恢复该 source 的精确 boundary，因此 Hook 对
+summary boundary state 的写入不会保留。Hook 以错误中断或发生 panic 时，则恢复本次
+摘要尝试前的 boundary。
 
 ### 使用示例
 
