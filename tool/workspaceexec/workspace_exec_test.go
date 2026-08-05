@@ -1962,6 +1962,13 @@ func TestExecTool_InstanceRotationReRunsBootstrapCommand(t *testing.T) {
 		"bootstrap must run once on first workspace use")
 	require.Equal(t, 1, manager.createCount())
 
+	got, err = tl.Call(context.Background(), args)
+	require.NoError(t, err)
+	require.Equal(t, "ok", got.(execOutput).Output)
+	require.Equal(t, 1, runner.bootstrapCount(),
+		"same instance should skip bootstrap on cache hit")
+	require.Equal(t, 1, manager.createCount())
+
 	bootstrapBeforeRotate := runner.bootstrapCount()
 	manager.setInstanceID("instance-2")
 

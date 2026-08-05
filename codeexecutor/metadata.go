@@ -284,8 +284,9 @@ type WorkspaceMetadata struct {
 }
 
 // InvalidatePreparedForInstance clears Prepared when instanceID differs
-// from the metadata's recorded backend generation. Legacy callers pass
-// an empty instanceID, which preserves existing Prepared semantics.
+// from the metadata's recorded backend generation. An empty instanceID
+// preserves existing Prepared semantics for legacy managers. An empty
+// recorded BackendInstanceID is treated as an unknown generation.
 func InvalidatePreparedForInstance(
 	md *WorkspaceMetadata,
 	instanceID WorkspaceInstanceID,
@@ -293,9 +294,13 @@ func InvalidatePreparedForInstance(
 	if md == nil || instanceID == "" {
 		return
 	}
-	if md.BackendInstanceID != "" && md.BackendInstanceID != instanceID {
-		md.Prepared = map[string]PreparedRecord{}
+	if md.BackendInstanceID == instanceID {
+		return
 	}
+	if len(md.Prepared) == 0 {
+		return
+	}
+	md.Prepared = map[string]PreparedRecord{}
 }
 
 // PreparedRecord captures a single successfully-applied workspace

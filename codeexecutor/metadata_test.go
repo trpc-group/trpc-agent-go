@@ -348,12 +348,24 @@ func TestInvalidatePreparedForInstance(t *testing.T) {
 			"bootstrap": {Key: "bootstrap"},
 		},
 	}
-	InvalidatePreparedForInstance(&md, "")
+	require.False(t, func() bool {
+		before := len(md.Prepared)
+		InvalidatePreparedForInstance(&md, "")
+		return before != len(md.Prepared)
+	}())
 	require.Len(t, md.Prepared, 1)
 
 	InvalidatePreparedForInstance(&md, "instance-1")
 	require.Len(t, md.Prepared, 1)
 
 	InvalidatePreparedForInstance(&md, "instance-2")
+	require.Empty(t, md.Prepared)
+
+	md = WorkspaceMetadata{
+		Prepared: map[string]PreparedRecord{
+			"bootstrap": {Key: "bootstrap"},
+		},
+	}
+	InvalidatePreparedForInstance(&md, "instance-1")
 	require.Empty(t, md.Prepared)
 }

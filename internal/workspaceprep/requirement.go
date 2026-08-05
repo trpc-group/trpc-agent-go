@@ -142,6 +142,13 @@ type Reconciler interface {
 	// requirement failures. When a required requirement fails Apply,
 	// Reconcile returns the corresponding error and the remaining
 	// requirements are skipped.
+	//
+	// instanceID carries the physical workspace generation from
+	// [codeexecutor.WorkspaceHandle.InstanceID]. An empty value
+	// preserves legacy behavior for managers without
+	// [codeexecutor.WorkspaceInstanceProvider]. A different non-empty
+	// instanceID invalidates previously prepared records before
+	// reconciliation and is persisted as backend_instance_id.
 	Reconcile(
 		ctx context.Context,
 		eng codeexecutor.Engine,

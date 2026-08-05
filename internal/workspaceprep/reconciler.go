@@ -80,6 +80,7 @@ func (r *defaultReconciler) Reconcile(
 	if md.Prepared == nil {
 		md.Prepared = map[string]codeexecutor.PreparedRecord{}
 	}
+	loadedBackendInstanceID := md.BackendInstanceID
 	codeexecutor.InvalidatePreparedForInstance(&md, instanceID)
 	baseMD := cloneReconcileMetadata(md)
 
@@ -148,10 +149,12 @@ func (r *defaultReconciler) Reconcile(
 			changedKeys = append(changedKeys, req.Key())
 		}
 	}
-	if changed {
-		if instanceID != "" {
-			md.BackendInstanceID = instanceID
-		}
+	instanceBackendChanged := instanceID != "" &&
+		instanceID != loadedBackendInstanceID
+	if instanceID != "" {
+		md.BackendInstanceID = instanceID
+	}
+	if changed || instanceBackendChanged {
 		if err := r.saveReconcileMetadata(
 			ctx, eng, ws, baseMD, md, changedKeys,
 		); err != nil {
@@ -218,6 +221,18 @@ func mergeReconcileMetadata(
 ) codeexecutor.WorkspaceMetadata {
 	merged := latest
 	mergeDirectMetadataChanges(&merged, base, updated)
+	if updated.BackendInstanceID != "" &&
+		updated.BackendInstanceID != latest.BackendInstanceID {
+		prepared := make(
+			map[string]codeexecutor.PreparedRecord,
+			len(updated.Prepared),
+		)
+		for key, rec := range updated.Prepared {
+			prepared[key] = rec
+		}
+		merged.Prepared = prepared
+		return merged
+	}
 	prepared := make(
 		map[string]codeexecutor.PreparedRecord,
 		len(merged.Prepared)+len(changedKeys),

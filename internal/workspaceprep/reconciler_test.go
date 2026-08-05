@@ -793,6 +793,86 @@ func TestReconciler_InstanceRotationClearsPrepared(t *testing.T) {
 		"instance rotation must re-apply bootstrap files")
 }
 
+func TestReconciler_LegacyPreparedMetadataRotatesBootstrap(t *testing.T) {
+	ctx := context.Background()
+	eng, ws := newTestEngine(t)
+	rec := NewReconciler()
+
+	req, err := NewFileRequirement(FileSpec{
+		Target:  "work/seed.txt",
+		Content: []byte("seed-v2"),
+	})
+	require.NoError(t, err)
+
+	legacy := codeexecutor.WorkspaceMetadata{
+		Version: 1,
+		Prepared: map[string]codeexecutor.PreparedRecord{
+			req.Key(): {Key: req.Key(), Fingerprint: "stale"},
+		},
+	}
+	require.NoError(t, codeexecutor.SaveMetadata(ws.Path, legacy))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(ws.Path, "work/seed.txt"),
+		[]byte("seed-v1"),
+		0o644,
+	))
+
+	_, err = rec.Reconcile(
+		ctx, eng, ws, "instance-2", []Requirement{req},
+	)
+	require.NoError(t, err)
+
+	got, err := os.ReadFile(filepath.Join(ws.Path, "work/seed.txt"))
+	require.NoError(t, err)
+	require.Equal(t, "seed-v2", string(got))
+
+	md, err := codeexecutor.LoadMetadata(ws.Path)
+	require.NoError(t, err)
+	require.Equal(t, codeexecutor.WorkspaceInstanceID("instance-2"),
+		md.BackendInstanceID)
+}
+
+func TestReconciler_InstanceRotationReplacesPreparedOnDisk(t *testing.T) {
+	ctx := context.Background()
+	eng, ws := newTestEngine(t)
+	rec := NewReconciler()
+
+	reqA, err := NewFileRequirement(FileSpec{
+		Key:     "file-a",
+		Target:  "work/a.txt",
+		Content: []byte("a"),
+	})
+	require.NoError(t, err)
+	reqB, err := NewFileRequirement(FileSpec{
+		Key:     "file-b",
+		Target:  "work/b.txt",
+		Content: []byte("b"),
+	})
+	require.NoError(t, err)
+
+	legacy := codeexecutor.WorkspaceMetadata{
+		Version:           1,
+		BackendInstanceID: "instance-1",
+		Prepared: map[string]codeexecutor.PreparedRecord{
+			reqA.Key(): {Key: reqA.Key()},
+			reqB.Key(): {Key: reqB.Key()},
+		},
+	}
+	require.NoError(t, codeexecutor.SaveMetadata(ws.Path, legacy))
+
+	_, err = rec.Reconcile(
+		ctx, eng, ws, "instance-2", []Requirement{reqA},
+	)
+	require.NoError(t, err)
+
+	md, err := codeexecutor.LoadMetadata(ws.Path)
+	require.NoError(t, err)
+	require.Equal(t, codeexecutor.WorkspaceInstanceID("instance-2"),
+		md.BackendInstanceID)
+	require.Contains(t, md.Prepared, reqA.Key())
+	require.NotContains(t, md.Prepared, reqB.Key())
+}
+
 // observe the reconciler's phase ordering and locking semantics.
 type orderReq struct {
 	key      string
