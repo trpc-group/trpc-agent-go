@@ -338,10 +338,11 @@ memoryService := memoryinmemory.NewMemoryService(
 
 该 option 使用两个彼此隔离的提取阶段。第一阶段继续使用标准 memory tools，
 仅从 user message 提取普通用户事实和事件。随后，提取器会按时间顺序检查当前
-extraction delta 中所有符合条件的 user/assistant pair。每当一组 pair 包含用户明确
-要求的可复用结果，例如列表、推荐、分类或数量，提取器就会发起第二次请求，并且只
-暴露私有的 `memory_assistant_episode` 工具。该工具不会暴露给应用的 Agent。
-通过 `WithPrompt` 或 `SetPrompt` 配置的应用提取约束同样适用于这些第二阶段请求。
+extraction delta 中符合条件的 user/assistant pair，并把前 16 组包含明确可复用结果
+的 pair（例如列表、推荐、分类或数量）合并到一次第二阶段请求中。超出的候选会被
+跳过，避免 backlog 让 assistant 提取的工作量无限增长。第二阶段只暴露私有的
+`memory_assistant_episode` 工具，该工具不会暴露给应用的 Agent。通过 `WithPrompt`
+或 `SetPrompt` 配置的应用提取约束同样适用于第二阶段请求。
 
 Assistant 输出会被记录为“带归属的对话历史”，而不是已经验证的事实或用户偏好。
 框架将每个通过校验的调用固定转换为普通 `KindEpisode` add 操作，将 participants
@@ -363,16 +364,18 @@ participants、event time 或 location。正文为空、超过 4,096 bytes，或
 请求的规模，每条 source message 都会被表示为确定性的 8,192-byte 摘录，并保留
 首尾内容。
 
-一次 extraction delta 对调用方保持原子性。如果任一 assistant 阶段发生模型调用、
-工具参数或 grounding 校验错误，extractor 会返回错误，并且不会返回该 delta 中的
+一次 extraction delta 对可重试失败保持原子性。如果 assistant 阶段的模型调用失败、
+callback 失败或 context 被取消，extractor 会返回错误，并且不会返回该 delta 中的
 任何 operation。Auto memory worker 因此不会推进 extraction watermark，后续可以
-重试整个 delta，避免静默丢失较早的 pair 或持久化部分结果。
+重试整个 delta。工具参数非法、正文过长或数量缺少依据等确定性模型输出拒绝只会跳过
+对应的 assistant episode，避免它永久阻塞普通记忆提取。
 
-该功能与存储后端无关，不会新增 memory kind、字段、数据库列、数据表或迁移，也
-只会为通过确定性 eligibility 检查的 pair 增加一次模型调用；如果一个 delta 中有
-多组符合条件的 pair，则可能增加多次模型调用。普通对话仍只有一次 extraction
-调用。该 option 在 extractor 生命周期内不可修改。需要关闭时，应重新构造一个
-未传入该 option 的 extractor。此前已经保存的 assistant episode 仍是普通 episodic
+该功能与存储后端无关，不会新增 memory kind、字段、数据库列、数据表或迁移。
+同一 delta 中最多 16 组通过确定性 eligibility 检查的 pair 会合并到一次第二阶段
+模型请求中，因此每个 delta 最多调用模型两次：一次普通提取和一次 assistant 提取。
+只有一组 eligible pair 时仍使用原有的独立请求格式。普通对话仍只有一次 extraction
+调用。该 option 在 extractor 生命周期内不可修改。需要关闭时，应重新构造一个未
+传入该 option 的 extractor。此前已经保存的 assistant episode 仍是普通 episodic
 memory，会继续参与正常检索。
 
 ### 两种模式配置对比

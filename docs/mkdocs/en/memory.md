@@ -369,13 +369,14 @@ memoryService := memoryinmemory.NewMemoryService(
 
 The option uses two isolated extraction stages. The first stage keeps the
 standard memory tools and extracts ordinary user facts and events from user
-messages. The extractor then considers every eligible user/assistant pair in
-the extraction delta in chronological order. For each pair that contains an
-explicit reusable result, such as a requested list, recommendation,
-classification, or quantity, it makes a second request that exposes only the
-private `memory_assistant_episode` tool. This tool is never visible to the
-application Agent. An application policy configured through `WithPrompt` or
-`SetPrompt` also constrains these second-stage requests.
+messages. The extractor then considers eligible user/assistant pairs in the
+extraction delta in chronological order. Up to the first 16 pairs that contain
+an explicit reusable result, such as a requested list, recommendation,
+classification, or quantity, are combined into one second request that exposes
+only the private `memory_assistant_episode` tool. Additional candidates are
+skipped so a backlog cannot make assistant extraction unbounded. This tool is
+never visible to the application Agent. An application policy configured
+through `WithPrompt` or `SetPrompt` also constrains the second-stage request.
 
 Assistant output is stored as attributed conversation history rather than as a
 verified fact or user preference. The framework converts every accepted call
@@ -400,21 +401,22 @@ while accepting equivalent forms such as `$5` and `USD 5`. To keep the
 optional request bounded, each source message is represented by a
 deterministic 8,192-byte excerpt that preserves its beginning and end.
 
-Extraction of one delta is atomic from the caller's perspective. If any
-assistant-stage model call, tool argument, or grounding check fails, the
-extractor returns an error and no operations from that delta. The auto-memory
-worker therefore leaves its extraction watermark unchanged and can retry the
-whole delta instead of silently losing an earlier pair or persisting a partial
-result.
+Extraction of one delta is atomic for retryable failures. If the assistant-stage
+model request, callback, or context fails, the extractor returns an error and no
+operations from that delta. The auto-memory worker therefore leaves its
+extraction watermark unchanged and can retry the whole delta. Deterministic
+model-output rejections, such as invalid tool arguments, oversized text, or an
+ungrounded quantity, skip only the affected assistant episode so they cannot
+permanently block ordinary memory extraction.
 
 This feature is backend-neutral. It does not add a memory kind, field, database
-column, table, or migration. It can add one model call only for a pair that
-passes the deterministic eligibility check, so a delta containing multiple
-eligible pairs can add multiple model calls; ordinary conversations retain one
-extraction call. The option is fixed for the lifetime of the extractor. To
-disable it, construct a new extractor without the option. Previously stored
-assistant episodes remain ordinary episodic memories and continue to
-participate in normal retrieval.
+column, table, or migration. Up to 16 eligible pairs in the same delta are
+combined into one second-stage model request, so extraction uses at most two
+model calls per delta: one ordinary request and one assistant request. A single
+eligible pair keeps the same dedicated request format. The option is fixed for
+the lifetime of the extractor. To disable it, construct a new extractor without
+the option. Previously stored assistant episodes remain ordinary episodic
+memories and continue to participate in normal retrieval.
 
 ### Configuration Comparison
 

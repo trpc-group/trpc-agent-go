@@ -18,6 +18,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -27,8 +28,10 @@ const (
 	metadataKeyConversationExtraction = "conversation_extraction"
 	assistantEpisodeMetadataValue     = "assistant-episode"
 	assistantEpisodeToolName          = "memory_assistant_episode"
+	assistantEpisodePairIDKey         = "pair_id"
 	assistantEpisodeMaxBytes          = 4096
 	assistantEpisodeSourceMaxBytes    = 8192
+	assistantEpisodeMaxPairsPerDelta  = 16
 	assistantEpisodePrefix            = "Assistant-provided conversation episode: "
 	assistantEpisodeTruncationMarker  = "\n...[truncated]...\n"
 	assistantEpisodeCurrencyPattern   = `[$€£¥]|USD|EUR|GBP|JPY|CNY|RMB`
@@ -65,88 +68,52 @@ var (
 			`(?:` + assistantEpisodeUnitPattern + `)` +
 			`(?:[ \t]*/[ \t]*(?:` + assistantEpisodeUnitPattern + `))?))?`,
 	)
-	assistantEpisodeUnitAliases = map[string]string{
-		"%":           "%",
-		"percent":     "%",
-		"percentage":  "%",
-		"°c":          "°c",
-		"°f":          "°f",
-		"°k":          "°k",
-		"kg":          "kg",
-		"kgs":         "kg",
-		"kilogram":    "kg",
-		"kilograms":   "kg",
-		"mg":          "mg",
-		"milligram":   "mg",
-		"milligrams":  "mg",
-		"g":           "g",
-		"gram":        "g",
-		"grams":       "g",
-		"lb":          "lb",
-		"lbs":         "lb",
-		"pound":       "lb",
-		"pounds":      "lb",
-		"km":          "km",
-		"kilometer":   "km",
-		"kilometers":  "km",
-		"kilometre":   "km",
-		"kilometres":  "km",
-		"mi":          "mi",
-		"mile":        "mi",
-		"miles":       "mi",
-		"cm":          "cm",
-		"centimeter":  "cm",
-		"centimeters": "cm",
-		"centimetre":  "cm",
-		"centimetres": "cm",
-		"mm":          "mm",
-		"millimeter":  "mm",
-		"millimeters": "mm",
-		"millimetre":  "mm",
-		"millimetres": "mm",
-		"m":           "m",
-		"meter":       "m",
-		"meters":      "m",
-		"metre":       "m",
-		"metres":      "m",
-		"ml":          "ml",
-		"milliliter":  "ml",
-		"milliliters": "ml",
-		"millilitre":  "ml",
-		"millilitres": "ml",
-		"l":           "l",
-		"liter":       "l",
-		"liters":      "l",
-		"litre":       "l",
-		"litres":      "l",
-		"h":           "h",
-		"hr":          "h",
-		"hrs":         "h",
-		"hour":        "h",
-		"hours":       "h",
-		"min":         "min",
-		"mins":        "min",
-		"minute":      "min",
-		"minutes":     "min",
-		"s":           "s",
-		"sec":         "s",
-		"secs":        "s",
-		"second":      "s",
-		"seconds":     "s",
-		"day":         "day",
-		"days":        "day",
-		"week":        "week",
-		"weeks":       "week",
-		"month":       "month",
-		"months":      "month",
-		"year":        "year",
-		"years":       "year",
-	}
+	assistantEpisodeUnitAliases = buildAssistantEpisodeUnitAliases()
 )
+
+func buildAssistantEpisodeUnitAliases() map[string]string {
+	groups := map[string][]string{
+		"%":     {"%", "percent", "percentage"},
+		"°c":    {"°c"},
+		"°f":    {"°f"},
+		"°k":    {"°k"},
+		"kg":    {"kg", "kgs", "kilogram", "kilograms"},
+		"mg":    {"mg", "milligram", "milligrams"},
+		"g":     {"g", "gram", "grams"},
+		"lb":    {"lb", "lbs", "pound", "pounds"},
+		"km":    {"km", "kilometer", "kilometers", "kilometre", "kilometres"},
+		"mi":    {"mi", "mile", "miles"},
+		"cm":    {"cm", "centimeter", "centimeters", "centimetre", "centimetres"},
+		"mm":    {"mm", "millimeter", "millimeters", "millimetre", "millimetres"},
+		"m":     {"m", "meter", "meters", "metre", "metres"},
+		"ml":    {"ml", "milliliter", "milliliters", "millilitre", "millilitres"},
+		"l":     {"l", "liter", "liters", "litre", "litres"},
+		"h":     {"h", "hr", "hrs", "hour", "hours"},
+		"min":   {"min", "mins", "minute", "minutes"},
+		"s":     {"s", "sec", "secs", "second", "seconds"},
+		"day":   {"day", "days"},
+		"week":  {"week", "weeks"},
+		"month": {"month", "months"},
+		"year":  {"year", "years"},
+	}
+	aliases := make(map[string]string)
+	for canonical, names := range groups {
+		for _, name := range names {
+			aliases[name] = canonical
+		}
+	}
+	return aliases
+}
 
 type assistantEpisodePair struct {
 	user      model.Message
 	assistant model.Message
+}
+
+type assistantEpisodeSource struct {
+	id            string
+	userText      string
+	assistantText string
 }
 
 type assistantEpisodeQuantity struct {
@@ -202,30 +169,54 @@ func (e *memoryExtractor) extractWithAssistantEpisodes(
 	if containsForgetOperation(ordinaryOps) || !e.assistantEpisodeAddEnabled() {
 		return ordinaryOps, nil
 	}
-	for _, pair := range selectAssistantEpisodePairs(messages) {
+	pairs := selectAssistantEpisodePairs(messages)
+	candidates := make([]assistantEpisodePair, 0, len(pairs))
+	for _, pair := range pairs {
 		if !strongAssistantEpisodeCandidate(
 			assistantEpisodeMessageText(pair.user),
 			assistantEpisodeMessageText(pair.assistant),
 		) {
 			continue
 		}
-		var assistantOp *Operation
-		var err error
-		nextCtx, assistantOp, err = e.extractAssistantEpisode(
-			nextCtx,
-			pair.user,
-			pair.assistant,
-		)
-		if err != nil {
-			// Returning no operations keeps the extraction delta atomic. The
-			// auto-memory worker only advances its watermark after a successful
-			// extraction, so the complete delta remains available for retry.
-			return nil, fmt.Errorf("extract assistant episode: %w", err)
-		}
-		if assistantOp != nil {
-			ordinaryOps = append(ordinaryOps, assistantOp)
-		}
+		candidates = append(candidates, pair)
 	}
+	if len(candidates) == 0 {
+		return ordinaryOps, nil
+	}
+	if len(candidates) > assistantEpisodeMaxPairsPerDelta {
+		log.WarnfContext(
+			ctx,
+			"extractor: assistant episode candidates capped at %d; skipped %d",
+			assistantEpisodeMaxPairsPerDelta,
+			len(candidates)-assistantEpisodeMaxPairsPerDelta,
+		)
+		candidates = candidates[:assistantEpisodeMaxPairsPerDelta]
+	}
+
+	var assistantOps []*Operation
+	var err error
+	if len(candidates) == 1 {
+		var assistantOp *Operation
+		_, assistantOp, err = e.extractAssistantEpisode(
+			nextCtx,
+			candidates[0].user,
+			candidates[0].assistant,
+		)
+		if assistantOp != nil {
+			assistantOps = append(assistantOps, assistantOp)
+		}
+	} else {
+		_, assistantOps, err = e.extractAssistantEpisodeBatch(
+			nextCtx,
+			candidates,
+		)
+	}
+	if err != nil {
+		// Transport, callback, and cancellation failures remain atomic. The
+		// worker leaves its watermark unchanged so the delta can be retried.
+		return nil, fmt.Errorf("extract assistant episode: %w", err)
+	}
+	ordinaryOps = append(ordinaryOps, assistantOps...)
 	return ordinaryOps, nil
 }
 
@@ -242,7 +233,7 @@ func (e *memoryExtractor) extractAssistantEpisode(
 	)
 	req := &model.Request{
 		Messages: []model.Message{
-			model.NewSystemMessage(e.assistantEpisodePrompt(ctx)),
+			model.NewSystemMessage(e.assistantEpisodePrompt(ctx, false)),
 			model.NewUserMessage(userText),
 			model.NewAssistantMessage(assistantText),
 			model.NewUserMessage(
@@ -254,40 +245,139 @@ func (e *memoryExtractor) extractAssistantEpisode(
 		},
 	}
 	var assistantOp *Operation
-	var parseErr error
+	rejected := false
 	nextCtx, err := e.runExtractionRequest(ctx, req, func(
 		callCtx context.Context,
 		call model.ToolCall,
 	) {
-		if assistantOp != nil || parseErr != nil ||
+		if assistantOp != nil || rejected ||
 			call.Function.Name != assistantEpisodeToolName {
 			return
 		}
 		var args map[string]any
 		if err := json.Unmarshal(call.Function.Arguments, &args); err != nil {
-			parseErr = fmt.Errorf("parse assistant episode arguments: %w", err)
+			rejected = true
+			logAssistantEpisodeRejection(callCtx, "invalid tool arguments")
 			return
 		}
+		var parseErr error
 		assistantOp, parseErr = e.parseAssistantEpisode(
 			callCtx,
 			args,
 			userText+"\n"+assistantText,
 		)
+		if parseErr != nil {
+			rejected = true
+			assistantOp = nil
+			logAssistantEpisodeRejection(callCtx, "content validation failed")
+		}
 	})
 	if err != nil {
 		return nextCtx, nil, err
 	}
-	if parseErr != nil {
-		return nextCtx, nil, parseErr
-	}
 	return nextCtx, assistantOp, nil
 }
 
-func (e *memoryExtractor) assistantEpisodePrompt(ctx context.Context) string {
-	if e.prompt == defaultPrompt {
-		return assistantEpisodeSystemPrompt
+func (e *memoryExtractor) extractAssistantEpisodeBatch(
+	ctx context.Context,
+	pairs []assistantEpisodePair,
+) (context.Context, []*Operation, error) {
+	sources := make([]assistantEpisodeSource, 0, len(pairs))
+	messages := make([]model.Message, 0, len(pairs)*2+2)
+	messages = append(messages, model.NewSystemMessage(e.assistantEpisodePrompt(ctx, true)))
+	for i, pair := range pairs {
+		source := assistantEpisodeSource{
+			id: fmt.Sprintf("pair-%c", 'a'+rune(i)),
+			userText: assistantEpisodeSourceExcerpt(
+				assistantEpisodeMessageText(pair.user),
+			),
+			assistantText: assistantEpisodeSourceExcerpt(
+				assistantEpisodeMessageText(pair.assistant),
+			),
+		}
+		sources = append(sources, source)
+		messages = append(
+			messages,
+			model.NewUserMessage(source.id+" user request:\n"+source.userText),
+			model.NewAssistantMessage(source.id+" assistant response:\n"+source.assistantText),
+		)
 	}
-	return assistantEpisodeSystemPrompt + `
+	messages = append(messages, model.NewUserMessage(
+		"Extract each reusable assistant result. Set pair_id to the pair label "+
+			"shown with its source, and call the tool at most once per pair.",
+	))
+	sourceByID := make(map[string]assistantEpisodeSource, len(sources))
+	indexByID := make(map[string]int, len(sources))
+	for i, source := range sources {
+		sourceByID[source.id] = source
+		indexByID[source.id] = i
+	}
+	operations := make([]*Operation, len(sources))
+	seenIDs := make(map[string]struct{}, len(sources))
+	nextCtx, err := e.runExtractionRequest(ctx, &model.Request{
+		Messages: messages,
+		Tools: map[string]tool.Tool{
+			assistantEpisodeToolName: assistantEpisodeBatchTool,
+		},
+	}, func(callCtx context.Context, call model.ToolCall) {
+		if call.Function.Name != assistantEpisodeToolName {
+			return
+		}
+		var args map[string]any
+		if err := json.Unmarshal(call.Function.Arguments, &args); err != nil {
+			logAssistantEpisodeRejection(callCtx, "invalid tool arguments")
+			return
+		}
+		pairID, _ := args[assistantEpisodePairIDKey].(string)
+		source, ok := sourceByID[pairID]
+		if !ok {
+			logAssistantEpisodeRejection(callCtx, "unknown pair id")
+			return
+		}
+		index := indexByID[pairID]
+		if _, ok := seenIDs[pairID]; ok {
+			logAssistantEpisodeRejection(callCtx, "duplicate pair id")
+			return
+		}
+		seenIDs[pairID] = struct{}{}
+		operation, parseErr := e.parseAssistantEpisode(
+			callCtx,
+			args,
+			source.userText+"\n"+source.assistantText,
+		)
+		if parseErr != nil {
+			logAssistantEpisodeRejection(callCtx, "content validation failed")
+			return
+		}
+		operations[index] = operation
+	})
+	if err != nil {
+		return nextCtx, nil, err
+	}
+	result := make([]*Operation, 0, len(operations))
+	for _, operation := range operations {
+		if operation != nil {
+			result = append(result, operation)
+		}
+	}
+	return nextCtx, result, nil
+}
+
+func logAssistantEpisodeRejection(ctx context.Context, reason string) {
+	log.WarnfContext(ctx, "extractor: skipped invalid assistant episode: %s", reason)
+}
+
+func (e *memoryExtractor) assistantEpisodePrompt(ctx context.Context, batch bool) string {
+	base := assistantEpisodeSystemPrompt
+	if batch {
+		base = strings.Replace(base, "- Call memory_assistant_episode at most once.",
+			"- Call memory_assistant_episode at most once for each labeled pair.",
+			1)
+	}
+	if e.prompt == defaultPrompt {
+		return base
+	}
+	return base + `
 
 The following application-defined extraction policy also applies to this
 request. If it conflicts with the assistant episode instructions, do not
@@ -399,16 +489,47 @@ func assistantEpisodeSourceExcerpt(text string) string {
 	available := assistantEpisodeSourceMaxBytes -
 		len(assistantEpisodeTruncationMarker)
 	headBytes := available / 2
-	tailBytes := available - headBytes
-	head := text[:headBytes]
-	for !utf8.ValidString(head) {
-		head = head[:len(head)-1]
+	headEnd := trimSplitUTF8End(text, headBytes)
+	tailStart := trimSplitUTF8Start(text, len(text)-(available-headBytes))
+	return text[:headEnd] + assistantEpisodeTruncationMarker + text[tailStart:]
+}
+
+func trimSplitUTF8End(text string, end int) int {
+	if end <= 0 || end >= len(text) || utf8.RuneStart(text[end]) {
+		return end
 	}
-	tail := text[len(text)-tailBytes:]
-	for !utf8.ValidString(tail) {
-		tail = tail[1:]
+	start := end - 1
+	lowerBound := max(0, end-(utf8.UTFMax-1))
+	for start > lowerBound && !utf8.RuneStart(text[start]) {
+		start--
 	}
-	return head + assistantEpisodeTruncationMarker + tail
+	if !utf8.RuneStart(text[start]) {
+		return end
+	}
+	_, size := utf8.DecodeRuneInString(text[start:])
+	if size > end-start {
+		return start
+	}
+	return end
+}
+
+func trimSplitUTF8Start(text string, start int) int {
+	if start <= 0 || start >= len(text) || utf8.RuneStart(text[start]) {
+		return start
+	}
+	runeStart := start - 1
+	lowerBound := max(0, start-(utf8.UTFMax-1))
+	for runeStart > lowerBound && !utf8.RuneStart(text[runeStart]) {
+		runeStart--
+	}
+	if !utf8.RuneStart(text[runeStart]) {
+		return start
+	}
+	_, size := utf8.DecodeRuneInString(text[runeStart:])
+	if size > start-runeStart {
+		return runeStart + size
+	}
+	return start
 }
 
 func strongAssistantEpisodeCandidate(userText, assistantText string) bool {
@@ -628,29 +749,43 @@ func containsForgetOperation(operations []*Operation) bool {
 	return false
 }
 
-var assistantEpisodeTool = &declarationOnlyTool{
-	decl: &tool.Declaration{
+var (
+	assistantEpisodeTool      = newAssistantEpisodeTool(false)
+	assistantEpisodeBatchTool = newAssistantEpisodeTool(true)
+)
+
+func newAssistantEpisodeTool(batch bool) *declarationOnlyTool {
+	properties := map[string]*tool.Schema{
+		argKeyMemory: {
+			Type: "string",
+			Description: "A concise, self-contained account of the user's " +
+				"request and the result supplied by the assistant.",
+		},
+		argKeyTopics: {
+			Type:        "array",
+			Description: "Optional retrieval topics.",
+			Items:       &tool.Schema{Type: "string"},
+		},
+	}
+	required := []string{argKeyMemory}
+	if batch {
+		properties[assistantEpisodePairIDKey] = &tool.Schema{
+			Type:        "string",
+			Description: "The pair label associated with this result.",
+		}
+		required = append(required, assistantEpisodePairIDKey)
+	}
+	return &declarationOnlyTool{decl: &tool.Declaration{
 		Name: assistantEpisodeToolName,
 		Description: "Record a reusable result supplied by the assistant as " +
 			"attributed conversation history.",
 		InputSchema: &tool.Schema{
-			Type: "object",
-			Properties: map[string]*tool.Schema{
-				argKeyMemory: {
-					Type: "string",
-					Description: "A concise, self-contained account of the user's " +
-						"request and the result supplied by the assistant.",
-				},
-				argKeyTopics: {
-					Type:        "array",
-					Description: "Optional retrieval topics.",
-					Items:       &tool.Schema{Type: "string"},
-				},
-			},
-			Required:             []string{argKeyMemory},
+			Type:                 "object",
+			Properties:           properties,
+			Required:             required,
 			AdditionalProperties: false,
 		},
-	},
+	}}
 }
 
 const assistantEpisodeSystemPrompt = `You extract durable results previously

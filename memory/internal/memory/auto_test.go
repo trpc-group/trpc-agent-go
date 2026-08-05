@@ -1033,6 +1033,63 @@ func (m *mockModel) Info() model.Info {
 	return model.Info{Name: m.name}
 }
 
+type assistantRetryModel struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (m *assistantRetryModel) GenerateContent(
+	ctx context.Context,
+	_ *model.Request,
+) (<-chan *model.Response, error) {
+	m.mu.Lock()
+	call := m.calls
+	m.calls++
+	m.mu.Unlock()
+
+	switch call {
+	case 0, 2:
+		return responseChannel(nil), nil
+	case 1:
+		<-ctx.Done()
+		return nil, ctx.Err()
+	case 3:
+		return responseChannel([]model.ToolCall{
+			assistantEpisodeCall("pair-a", "The assistant recommended Alpha and Beta."),
+			assistantEpisodeCall("pair-b", "The assistant recommended Gamma and Delta."),
+		}), nil
+	default:
+		return nil, fmt.Errorf("unexpected model call %d", call)
+	}
+}
+
+func (m *assistantRetryModel) Info() model.Info {
+	return model.Info{Name: "assistant-retry-model"}
+}
+
+func responseChannel(calls []model.ToolCall) <-chan *model.Response {
+	responses := make(chan *model.Response, 1)
+	responses <- &model.Response{Choices: []model.Choice{{
+		Message: model.Message{ToolCalls: calls},
+	}}}
+	close(responses)
+	return responses
+}
+
+func assistantEpisodeCall(pairID, memoryText string) model.ToolCall {
+	arguments, _ := json.Marshal(map[string]string{
+		"pair_id": pairID,
+		"memory":  memoryText,
+	})
+	return model.ToolCall{
+		Type: "function",
+		Function: model.FunctionDefinitionParam{
+			Name:      "memory_assistant_episode",
+			Arguments: arguments,
+		},
+	}
+}
+
 // newMockModelWithToolCalls creates a mock model that returns tool calls.
 func newMockModelWithToolCalls(toolCalls []model.ToolCall) *mockModel {
 	return &mockModel{
@@ -1589,6 +1646,45 @@ func TestAutoMemoryWorker_WritesLastExtractAt_OnSuccess(t *testing.T) {
 	ts, parseErr := time.Parse(time.RFC3339Nano, string(raw))
 	require.NoError(t, parseErr)
 	assert.True(t, ts.Equal(t2.UTC()))
+}
+
+func TestAutoMemoryWorker_AssistantBatchRetryAdvancesWatermark(t *testing.T) {
+	extractionModel := &assistantRetryModel{}
+	ext := extractor.NewExtractor(extractionModel, extractor.WithAssistantEpisodeExtraction())
+	op := newMockOperator()
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{
+		Extractor:        ext,
+		MemoryJobTimeout: 10 * time.Millisecond,
+	}, op)
+
+	sess := newTestSession("test-app", "user-1")
+	latest := time.Now().UTC()
+	job := &MemoryJob{
+		Ctx:      context.Background(),
+		UserKey:  memory.UserKey{AppName: "test-app", UserID: "user-1"},
+		Session:  sess,
+		LatestTs: latest,
+		Messages: []model.Message{
+			model.NewUserMessage("Recommend two options."),
+			model.NewAssistantMessage("1. Alpha\n2. Beta"),
+			model.NewUserMessage("Suggest two alternatives."),
+			model.NewAssistantMessage("1. Gamma\n2. Delta"),
+		},
+	}
+
+	worker.processJob(job)
+	_, ok := sess.GetState(memory.SessionStateKeyAutoMemoryLastExtractAt)
+	assert.False(t, ok, "failed attempt advanced the watermark")
+	assert.Equal(t, 0, op.addCalls)
+
+	worker.processJob(job)
+	raw, ok := sess.GetState(memory.SessionStateKeyAutoMemoryLastExtractAt)
+	require.True(t, ok, "successful retry did not advance the watermark")
+	watermark, err := time.Parse(time.RFC3339Nano, string(raw))
+	require.NoError(t, err)
+	assert.True(t, watermark.Equal(latest))
+	assert.Equal(t, 2, op.addCalls)
+	assert.Equal(t, 4, extractionModel.calls, "each attempt should use two bounded model calls")
 }
 
 // configurableExtractor is a mock extractor implementing
