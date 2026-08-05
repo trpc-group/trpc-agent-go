@@ -1599,8 +1599,10 @@ func (p *ContentRequestProcessor) projectHistoryAcrossSummaryCutoff(
 		key, hasKey := historyTurnKeyForEvent(evt)
 		_, seen := seenTurns[key]
 		if hasKey && !seen {
-			seenTurns[key] = struct{}{}
 			role, _ := historyRoleForMessages(projected)
+			if role != model.RoleSystem {
+				seenTurns[key] = struct{}{}
+			}
 			if userEvt, ok := coveredUsers[key]; ok &&
 				(role == model.RoleAssistant || role == model.RoleTool) {
 				appendEvent(userEvt, summaryview.Boundary{})

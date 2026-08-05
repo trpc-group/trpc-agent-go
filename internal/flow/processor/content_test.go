@@ -4537,6 +4537,41 @@ func TestContentRequestProcessor_getIncrementMessages_RestoresUserAcrossSummaryC
 			wantText: []string{"question", "answer"},
 		},
 		{
+			name: "retained system prefix does not suppress user restoration",
+			events: []event.Event{
+				messageEvent(
+					"user",
+					"request-1",
+					"invocation-1",
+					baseTime,
+					model.NewUserMessage("question"),
+				),
+				messageEvent(
+					"system",
+					"request-1",
+					"invocation-1",
+					baseTime.Add(2*time.Second),
+					model.NewSystemMessage("system context"),
+				),
+				messageEvent(
+					"assistant",
+					"request-1",
+					"invocation-1",
+					baseTime.Add(3*time.Second),
+					model.NewAssistantMessage("answer"),
+				),
+			},
+			cutoff: summaryHistoryCutoffFromTime(
+				baseTime.Add(time.Second),
+			),
+			wantRole: []model.Role{
+				model.RoleSystem,
+				model.RoleUser,
+				model.RoleAssistant,
+			},
+			wantText: []string{"system context", "question", "answer"},
+		},
+		{
 			name: "empty role payload restores user-like anchor",
 			events: []event.Event{
 				messageEvent(
