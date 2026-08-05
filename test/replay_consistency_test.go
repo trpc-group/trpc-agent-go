@@ -410,9 +410,6 @@ func diffReplaySnapshots(
 	return diffs
 }
 
-func replayMissingValue() map[string]string {
-	return map[string]string{"replay": "missing"}
-}
 func replayDiffReportPath() string {
 	if override := strings.TrimSpace(os.Getenv("TRPC_AGENT_REPLAY_REPORT_PATH")); override != "" {
 		return override
@@ -901,7 +898,14 @@ func requireReplayDiff(
 	return diffEntry{}
 }
 
-func requireSummaryLastEventIndexDiff(t *testing.T, diffs []diffEntry, wantLeft any, wantRight any) {
+func requireSummaryLastEventIndexDiff(
+	t *testing.T,
+	diffs []diffEntry,
+	wantLeft any,
+	wantRight any,
+	wantLeftMissing bool,
+	wantRightMissing bool,
+) {
 	t.Helper()
 
 	diff := requireReplayDiff(
@@ -912,8 +916,18 @@ func requireSummaryLastEventIndexDiff(t *testing.T, diffs []diffEntry, wantLeft 
 		map[string]any{"summary_filter_key": "branch/a"},
 	)
 	require.Equal(t, `$.summary["branch/a"].boundary.last_event_index`, diff.Path)
-	require.Equal(t, wantLeft, diff.Left)
-	require.Equal(t, wantRight, diff.Right)
+	if wantLeftMissing {
+		require.Nil(t, diff.Left)
+	} else {
+		require.Equal(t, wantLeft, diff.Left)
+	}
+	if wantRightMissing {
+		require.Nil(t, diff.Right)
+	} else {
+		require.Equal(t, wantRight, diff.Right)
+	}
+	require.Equal(t, wantLeftMissing, diff.LeftMissing)
+	require.Equal(t, wantRightMissing, diff.RightMissing)
 	require.False(t, diff.Allowed)
 }
 
@@ -940,6 +954,18 @@ func requireReplayReportFields(t *testing.T, reportPath string) []map[string]any
 			"context",
 		} {
 			require.Contains(t, entry, key)
+		}
+		_, hasLeftMissing := entry["left_missing"]
+		_, hasRightMissing := entry["right_missing"]
+		require.False(t, hasLeftMissing && hasRightMissing)
+		for _, key := range []string{"left_missing", "right_missing"} {
+			value, ok := entry[key]
+			if !ok {
+				continue
+			}
+			missing, ok := value.(bool)
+			require.Truef(t, ok, "%s must be a boolean", key)
+			require.Truef(t, missing, "%s must only be emitted when true", key)
 		}
 	}
 	return rawReport
@@ -2100,7 +2126,7 @@ func TestReplayConsistencySnapshotNormalize_UsesSummaryLastEventAnchor(t *testin
 			right,
 			nil,
 		)
-		requireSummaryLastEventIndexDiff(t, diffs, json.Number("0"), replayMissingValue())
+		requireSummaryLastEventIndexDiff(t, diffs, json.Number("0"), nil, false, true)
 	})
 
 	t.Run("unmatched anchor uses sentinel", func(t *testing.T) {
@@ -2133,7 +2159,9 @@ func TestReplayConsistencySnapshotNormalize_UsesSummaryLastEventAnchor(t *testin
 			right,
 			nil,
 		)
-		requireSummaryLastEventIndexDiff(t, diffs, json.Number("0"), json.Number("-1"))
+		requireSummaryLastEventIndexDiff(
+			t, diffs, json.Number("0"), json.Number("-1"), false, false,
+		)
 	})
 }
 
@@ -2638,6 +2666,51 @@ func TestReplayConsistencyReport_AllowedDiffAndEnvPath(t *testing.T) {
 	require.Equal(t, reportPath, replayDiffReportPath())
 	require.NoError(t, writeReplayDiffReport("", diffs))
 	requireReplayReportFields(t, reportPath)
+}
+
+func TestReplayConsistencyReport_DistinguishesMissingValues(t *testing.T) {
+	legacySentinel := map[string]any{"replay": "missing"}
+	tests := []struct {
+		name      string
+		right     any
+		wantRight any
+	}{
+		{name: "json null", right: nil, wantRight: nil},
+		{name: "legacy sentinel value", right: legacySentinel, wantRight: legacySentinel},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			diffs := diffReplaySnapshots(
+				t,
+				"missing-report-"+strings.ReplaceAll(test.name, " ", "-"),
+				"session-1",
+				"in_memory",
+				"sqlite",
+				replaySnapshot{State: map[string]any{}},
+				replaySnapshot{State: map[string]any{"value": test.right}},
+				nil,
+			)
+			require.Len(t, diffs, 1)
+			require.Nil(t, diffs[0].Left)
+			require.True(t, diffs[0].LeftMissing)
+			require.False(t, diffs[0].RightMissing)
+
+			reportPath := filepath.Join(t.TempDir(), "replay-report.json")
+			require.NoError(t, writeReplayDiffReport(reportPath, diffs))
+			report := requireReplayReportFields(t, reportPath)
+			require.Len(t, report, 1)
+			entry := report[0]
+			require.Nil(t, entry["left"])
+			if test.wantRight == nil {
+				require.Nil(t, entry["right"])
+			} else {
+				require.Equal(t, test.wantRight, entry["right"])
+			}
+			require.Equal(t, true, entry["left_missing"])
+			require.NotContains(t, entry, "right_missing")
+		})
+	}
 }
 
 func requireReplayRetryStats(

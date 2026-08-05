@@ -64,6 +64,24 @@ CGO_ENABLED=1 TRPC_AGENT_REPLAY_REPORT_PATH=replay-report.json go test ./... -ru
 }
 ```
 
+当 map key 或 list index 只存在于一侧时，缺失侧的值保持为 `null`，并在
+diff entry 层增加 `left_missing: true` 或 `right_missing: true`。missing
+字段未出现表示该侧存在，即使它的真实值是 JSON `null`。例如，左侧缺失、
+右侧合法用户值恰好为 `{"replay":"missing"}` 时，报告编码为：
+
+```json
+{
+  "left": null,
+  "right": {"replay": "missing"},
+  "left_missing": true
+}
+```
+
+库不会生成左右两侧同时 missing 的 diff。missing 标记不用于 nil snapshot
+section：section 级 nil 仍是一个存在的 `null` 值，与空 map 或 list 比较时会
+产生普通 diff，但不会设置 missing 标记。旧报告仍是合法 JSON，但其中原有
+`{"replay":"missing"}` sentinel 的历史歧义无法事后恢复。
+
 `context` 会按 section 携带定位信息，例如 `event_index`、`summary_filter_key`、`memory_key`、`left_memory_id`、`right_memory_id`、`track_name`、`track_event_index`。
 
 ## 比较范围

@@ -64,6 +64,26 @@ Each diff report entry contains:
 }
 ```
 
+When a map key or list index exists on only one side, the missing side remains
+`null` and the report adds `left_missing: true` or `right_missing: true` at the
+diff-entry level. An omitted missing flag means that side is present, even when
+its value is JSON `null`. For example, a missing left value compared with the
+valid user value `{"replay":"missing"}` is encoded as:
+
+```json
+{
+  "left": null,
+  "right": {"replay": "missing"},
+  "left_missing": true
+}
+```
+
+The library never marks both sides missing. These flags do not apply to a nil
+snapshot section: section-level nil remains a present `null` value and still
+differs from an empty map or list without a missing flag. Older reports remain
+valid JSON, but the ambiguity of their former `{"replay":"missing"}` sentinel
+cannot be reconstructed after the fact.
+
 The `context` object carries section-specific location data such as `event_index`, `summary_filter_key`, `memory_key`, `left_memory_id`, `right_memory_id`, `track_name`, and `track_event_index`.
 
 ## Compared Data

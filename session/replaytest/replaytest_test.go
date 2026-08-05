@@ -2186,6 +2186,136 @@ func TestCompareSnapshotsAddsContextAndAppliesExplicitRule(t *testing.T) {
 	require.False(t, HasUnallowedDiffs(diffs))
 }
 
+func TestCompareSnapshotsDistinguishesMissingValues(t *testing.T) {
+	legacySentinel := map[string]any{"replay": "missing"}
+	tests := []struct {
+		name                              string
+		left, right                       map[string]any
+		wantPath                          string
+		wantLeft, wantRight               any
+		wantLeftMissing, wantRightMissing bool
+	}{
+		{
+			name: "map left missing versus legacy sentinel",
+			left: map[string]any{}, right: map[string]any{"value": legacySentinel},
+			wantPath: "$.state.value", wantLeft: nil, wantRight: legacySentinel,
+			wantLeftMissing: true,
+		},
+		{
+			name: "map right missing versus legacy sentinel",
+			left: map[string]any{"value": legacySentinel}, right: map[string]any{},
+			wantPath: "$.state.value", wantLeft: legacySentinel, wantRight: nil,
+			wantRightMissing: true,
+		},
+		{
+			name: "list left missing versus legacy sentinel",
+			left: map[string]any{"items": []any{}}, right: map[string]any{"items": []any{legacySentinel}},
+			wantPath: "$.state.items[0]", wantLeft: nil, wantRight: legacySentinel,
+			wantLeftMissing: true,
+		},
+		{
+			name: "list right missing versus legacy sentinel",
+			left: map[string]any{"items": []any{legacySentinel}}, right: map[string]any{"items": []any{}},
+			wantPath: "$.state.items[0]", wantLeft: legacySentinel, wantRight: nil,
+			wantRightMissing: true,
+		},
+		{
+			name: "map left missing versus json null",
+			left: map[string]any{}, right: map[string]any{"value": nil},
+			wantPath: "$.state.value", wantLeft: nil, wantRight: nil,
+			wantLeftMissing: true,
+		},
+		{
+			name: "map right missing versus json null",
+			left: map[string]any{"value": nil}, right: map[string]any{},
+			wantPath: "$.state.value", wantLeft: nil, wantRight: nil,
+			wantRightMissing: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			diffs := compareSnapshotsForTest(
+				t, test.name, "session-1", "left", "right",
+				Snapshot{State: test.left}, Snapshot{State: test.right}, nil,
+			)
+			require.Len(t, diffs, 1)
+			diff := diffs[0]
+			require.Equal(t, test.wantPath, diff.Path)
+			if test.wantLeft == nil {
+				require.Nil(t, diff.Left)
+			} else {
+				require.Equal(t, test.wantLeft, diff.Left)
+			}
+			if test.wantRight == nil {
+				require.Nil(t, diff.Right)
+			} else {
+				require.Equal(t, test.wantRight, diff.Right)
+			}
+			require.Equal(t, test.wantLeftMissing, diff.LeftMissing)
+			require.Equal(t, test.wantRightMissing, diff.RightMissing)
+			require.False(t, diff.LeftMissing && diff.RightMissing)
+		})
+	}
+
+	t.Run("normal value diff has no missing side", func(t *testing.T) {
+		diffs := compareSnapshotsForTest(
+			t, "normal", "session-1", "left", "right",
+			Snapshot{State: map[string]any{"value": "left"}},
+			Snapshot{State: map[string]any{"value": "right"}}, nil,
+		)
+		require.Len(t, diffs, 1)
+		require.False(t, diffs[0].LeftMissing)
+		require.False(t, diffs[0].RightMissing)
+	})
+
+	t.Run("allowed rule still applies to missing diff", func(t *testing.T) {
+		diffs := compareSnapshotsForTest(
+			t, "allowed-missing", "session-1", "left", "right",
+			Snapshot{State: map[string]any{}},
+			Snapshot{State: map[string]any{"value": legacySentinel}},
+			[]AllowedDiffRule{{
+				Section: "state", Path: "$.state.value",
+				BackendA: "left", BackendB: "right", Reason: "known missing value",
+			}},
+		)
+		require.Len(t, diffs, 1)
+		require.True(t, diffs[0].LeftMissing)
+		require.True(t, diffs[0].Allowed)
+		require.Equal(t, "known missing value", diffs[0].Reason)
+		require.False(t, HasUnallowedDiffs(diffs))
+	})
+}
+
+func TestCompareSnapshotsKeepsSectionNilAsPresentValue(t *testing.T) {
+	tests := []struct {
+		name      string
+		right     map[string]any
+		wantRight map[string]any
+	}{
+		{name: "nil versus empty map", right: map[string]any{}, wantRight: map[string]any{}},
+		{
+			name:  "nil versus populated map",
+			right: map[string]any{"value": "right"}, wantRight: map[string]any{"value": "right"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			diffs := compareSnapshotsForTest(
+				t, test.name, "session-1", "left", "right",
+				Snapshot{State: nil}, Snapshot{State: test.right}, nil,
+			)
+			require.Len(t, diffs, 1)
+			require.Equal(t, "$.state", diffs[0].Path)
+			require.Nil(t, diffs[0].Left)
+			require.Equal(t, test.wantRight, diffs[0].Right)
+			require.False(t, diffs[0].LeftMissing)
+			require.False(t, diffs[0].RightMissing)
+		})
+	}
+}
+
 func TestCompareSnapshotsReturnsJSONConversionErrors(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -2362,6 +2492,69 @@ func TestWriteReportUsesEmptyArrayForNilDiffs(t *testing.T) {
 	require.Equal(t, "[]\n", out.String())
 	require.Error(t, WriteReport(nil, nil))
 	require.ErrorContains(t, WriteReport(errorWriter{}, []Diff{{Case: "case"}}), "encode replay diff report")
+}
+
+func TestWriteReportEncodesMissingValuesUnambiguously(t *testing.T) {
+	legacySentinel := map[string]any{"replay": "missing"}
+	encode := func(t *testing.T, diffs []Diff) map[string]any {
+		t.Helper()
+		var out bytes.Buffer
+		require.NoError(t, WriteReport(&out, diffs))
+		var report []map[string]any
+		require.NoError(t, json.Unmarshal(out.Bytes(), &report))
+		require.Len(t, report, 1)
+		return report[0]
+	}
+
+	t.Run("missing versus json null", func(t *testing.T) {
+		diffs := compareSnapshotsForTest(
+			t, "missing-null", "session-1", "left", "right",
+			Snapshot{State: map[string]any{}},
+			Snapshot{State: map[string]any{"value": nil}}, nil,
+		)
+		entry := encode(t, diffs)
+		require.Nil(t, entry["left"])
+		require.Nil(t, entry["right"])
+		require.Equal(t, true, entry["left_missing"])
+		require.NotContains(t, entry, "right_missing")
+	})
+
+	t.Run("missing versus legacy sentinel value", func(t *testing.T) {
+		diffs := compareSnapshotsForTest(
+			t, "missing-sentinel", "session-1", "left", "right",
+			Snapshot{State: map[string]any{}},
+			Snapshot{State: map[string]any{"value": legacySentinel}}, nil,
+		)
+		entry := encode(t, diffs)
+		require.Nil(t, entry["left"])
+		require.Equal(t, legacySentinel, entry["right"])
+		require.Equal(t, true, entry["left_missing"])
+		require.NotContains(t, entry, "right_missing")
+	})
+
+	t.Run("legacy sentinel value versus right missing", func(t *testing.T) {
+		diffs := compareSnapshotsForTest(
+			t, "sentinel-missing", "session-1", "left", "right",
+			Snapshot{State: map[string]any{"value": legacySentinel}},
+			Snapshot{State: map[string]any{}}, nil,
+		)
+		entry := encode(t, diffs)
+		require.Equal(t, legacySentinel, entry["left"])
+		require.Nil(t, entry["right"])
+		require.NotContains(t, entry, "left_missing")
+		require.Equal(t, true, entry["right_missing"])
+	})
+
+	t.Run("normal diff omits missing fields", func(t *testing.T) {
+		diffs := compareSnapshotsForTest(
+			t, "normal", "session-1", "left", "right",
+			Snapshot{State: map[string]any{"value": "left"}},
+			Snapshot{State: map[string]any{"value": "right"}}, nil,
+		)
+		entry := encode(t, diffs)
+		require.NotContains(t, entry, "left_missing")
+		require.NotContains(t, entry, "right_missing")
+	})
 }
 
 type errorWriter struct{}

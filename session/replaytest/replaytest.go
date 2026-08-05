@@ -230,17 +230,24 @@ type StateBytesSnapshot struct {
 
 // Diff describes one normalized difference between two replay results.
 type Diff struct {
-	Case      string         `json:"case"`
-	SessionID string         `json:"session_id"`
-	BackendA  string         `json:"backend_a"`
-	BackendB  string         `json:"backend_b"`
-	Section   string         `json:"section"`
-	Path      string         `json:"path"`
-	Left      any            `json:"left"`
-	Right     any            `json:"right"`
-	Allowed   bool           `json:"allowed"`
-	Reason    string         `json:"reason"`
-	Context   map[string]any `json:"context"`
+	Case      string `json:"case"`
+	SessionID string `json:"session_id"`
+	BackendA  string `json:"backend_a"`
+	BackendB  string `json:"backend_b"`
+	Section   string `json:"section"`
+	Path      string `json:"path"`
+	Left      any    `json:"left"`
+	Right     any    `json:"right"`
+	// LeftMissing and RightMissing distinguish an absent map key or list
+	// index from a present JSON null. An omitted false value means that side
+	// is present, even when Left or Right is nil. Compare and CompareSnapshots
+	// set at most one flag, only for missing map keys or list indexes; a nil
+	// snapshot section leaves both flags false.
+	LeftMissing  bool           `json:"left_missing,omitempty"`
+	RightMissing bool           `json:"right_missing,omitempty"`
+	Allowed      bool           `json:"allowed"`
+	Reason       string         `json:"reason"`
+	Context      map[string]any `json:"context"`
 }
 
 // AllowedDiffRule explicitly permits one backend-specific normalized diff.
@@ -1259,9 +1266,11 @@ func Compare(tc Case, results []Result) ([]Diff, error) {
 }
 
 type valueDiff struct {
-	Path  string
-	Left  any
-	Right any
+	Path         string
+	Left         any
+	Right        any
+	LeftMissing  bool
+	RightMissing bool
 }
 
 // CompareSnapshots compares two normalized replay snapshots. It converts the
@@ -1300,6 +1309,7 @@ func CompareSnapshots(caseName, sessionID, backendA, backendB string, left, righ
 			entries = append(entries, Diff{
 				Case: caseName, SessionID: sessionID, BackendA: backendA, BackendB: backendB,
 				Section: section.name, Path: d.Path, Left: d.Left, Right: d.Right,
+				LeftMissing: d.LeftMissing, RightMissing: d.RightMissing,
 				Context: diffContext(section.name, d.Path, left, right),
 			})
 		}
@@ -1363,9 +1373,13 @@ func recursiveMapDiff(path string, left, right map[string]any) []valueDiff {
 		rightValue, rightOK := right[key]
 		switch {
 		case !leftOK:
-			diffs = append(diffs, valueDiff{Path: childPath, Left: missingValue(), Right: rightValue})
+			diffs = append(diffs, valueDiff{
+				Path: childPath, Left: nil, Right: rightValue, LeftMissing: true,
+			})
 		case !rightOK:
-			diffs = append(diffs, valueDiff{Path: childPath, Left: leftValue, Right: missingValue()})
+			diffs = append(diffs, valueDiff{
+				Path: childPath, Left: leftValue, Right: nil, RightMissing: true,
+			})
 		default:
 			diffs = append(diffs, recursiveDiff(childPath, leftValue, rightValue)...)
 		}
@@ -1383,17 +1397,19 @@ func recursiveListDiff(path string, left, right []any) []valueDiff {
 		childPath := fmt.Sprintf("%s[%d]", path, i)
 		switch {
 		case i >= len(left):
-			diffs = append(diffs, valueDiff{Path: childPath, Left: missingValue(), Right: right[i]})
+			diffs = append(diffs, valueDiff{
+				Path: childPath, Left: nil, Right: right[i], LeftMissing: true,
+			})
 		case i >= len(right):
-			diffs = append(diffs, valueDiff{Path: childPath, Left: left[i], Right: missingValue()})
+			diffs = append(diffs, valueDiff{
+				Path: childPath, Left: left[i], Right: nil, RightMissing: true,
+			})
 		default:
 			diffs = append(diffs, recursiveDiff(childPath, left[i], right[i])...)
 		}
 	}
 	return diffs
 }
-
-func missingValue() map[string]string { return map[string]string{"replay": "missing"} }
 
 func appendPath(path, key string) string {
 	if isPathIdent(key) {
