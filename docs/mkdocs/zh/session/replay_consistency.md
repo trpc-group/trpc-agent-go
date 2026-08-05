@@ -4,7 +4,7 @@
 
 可复用的 case、runner、snapshot、normalize、compare 和 report 编码位于 `session/replaytest`。`test/replay_consistency_test.go` 只负责 InMemory/SQLite wiring、具体 cases、故障注入和断言，因此新增后端可以复用同一执行与比较逻辑，而不必复制 e2e 测试实现。
 
-`replaytest.Run` 要求传入非空且没有首尾空白的 run namespace。同一次逻辑比较中的所有后端必须复用同一个 namespace；重新运行同一个 case 时必须生成新的 namespace。namespace 与 case name 会共同写入 app、user 和 session 身份，从而在持久化服务上隔离 session state、memory、summary 和 track。`Run` 会刻意保留已持久化的回放数据，便于检查异常注入、刷新 snapshot 和比较重跑结果；如需清理，应由调用方管理该生命周期。
+`replaytest.Run` 要求传入非空且没有首尾空白的 run namespace。同一次逻辑比较中的所有后端必须复用同一个 namespace；重新运行同一个 case 时必须生成新的 namespace。namespace 与 case name 会共同写入 app、user 和 session 身份，从而在持久化服务上隔离 session state、memory、summary 和 track。创建 session 前，`Run` 会按 track、event、summary、顺序 memory、并发 memory 的固定顺序预检所有可静态判断的 fixture 错误。无效 track 配置、nil 或无法归一化的 event、非法 summary prefix、未知或缺失 alias 的顺序 memory 操作，以及非 add 的并发 memory 操作都不会触发后端调用或留下 session。越过该边界后的后端相关失败仍可能保留部分回放数据；如需清理，应由调用方管理该生命周期。
 
 ## 运行方式
 
@@ -105,7 +105,7 @@ Track payload fixture 支持完整 JSON 值域：object、array、string、numbe
 
 Memory 操作别名按完整 canonical identity 解析，而不是只比较 content。Add alias 会比较 app、user、content、kind、event time、participants 和 location，并刻意排除 topics。Update 每次都会用后端返回的有效 ID 推进原 `Ref` alias，因此内容或身份元数据导致 ID 轮换后，后续 update/delete 不会继续使用旧 ID。
 
-当 event 无法归一化、memory entry 为 nil、entry 的 `Memory` payload 为 nil、summary map 条目的值为 nil，或 track map 条目含 nil `TrackEvents` 容器时，snapshot 构建会返回错误。这些情况表示 fixture 非法或后端数据损坏，不会在 normalize 时被丢弃，也不能通过 `allowed_diff` 放行；非 nil 的合法空 track 容器仍然有效。即使 session 为 nil，`BuildSnapshot` 也会校验并归一化传入的 memories，因此空 session 形式不会隐藏合法或损坏的 memory 数据。
+Fixture event 预检与最终 snapshot 构建共用同一套 marshal-and-decode normalization。预检会在持久化前拒绝调用方提供的损坏 event；最终 snapshot 仍保留相同校验，用于发现执行后由后端或故障注入产生的污染。memory entry 为 nil、entry 的 `Memory` payload 为 nil、summary map 条目的值为 nil，或 track map 条目含 nil `TrackEvents` 容器时，snapshot 构建同样返回错误。这些情况不会在 normalize 时被丢弃，也不能通过 `allowed_diff` 放行；非 nil 的合法空 track 容器仍然有效。即使 session 为 nil，`BuildSnapshot` 也会校验并归一化传入的 memories，因此空 session 形式不会隐藏合法或损坏的 memory 数据。
 
 包含直接 `Case.AppState`、`Case.UserState` 或 `Case.SessionState` 更新的 case，还会把这些 API 已明确区分的作用域作为后端契约直接校验。Runner 使用 `ListAppStates` / `ListUserStates` 比较直接 app/user 更新，随后在同一 app/user 下创建临时 peer session，并要求它只继承这些 app/user 值。每次 peer 创建尝试后都会使用脱离调用方取消信号的限时 context 尝试删除，包括已经落盘但返回错误的 ambiguous fail-after-write。app/user 传播缺失、session/temp state 泄漏和 peer 清理失败都是 runner error，不属于 snapshot diff，也不能通过 `allowed_diff` 放行。
 
@@ -115,7 +115,7 @@ Memory 操作别名按完整 canonical identity 解析，而不是只比较 cont
 
 Go 版 summary 使用原生 session summary 语义，不生成 Python 风格的 summary event，也不比较 historical summary event。
 
-每个 `SummaryStep` 可以通过 `EventPrefix` 指定执行 summary 前应已追加的 `Case.Events` 前缀长度。前缀必须位于事件列表范围内并保持单调不减，允许相同前缀；nil 保持默认的“全部事件后执行”。因此用例可以表达“追加事件、总结、继续追加、再次总结”，并验证持久化 boundary 确实推进。
+每个 `SummaryStep` 可以通过 `EventPrefix` 指定执行 summary 前应已追加的 `Case.Events` 前缀长度。Runner 会在持久化前一次性解析完整 prefix 序列：前缀必须位于事件列表范围内并保持单调不减，允许相同前缀，nil 表示全部事件；时间线执行阶段只消费这些已验证 target。因此用例可以表达“追加事件、总结、继续追加、再次总结”，同时避免较晚的 fixture 错误在较早 event/summary 已落盘后才被发现。
 
 提供 `Backend.CreateSummary` 时，该回调负责单个 step 的完整操作，包括 fixture 特定的 summary 准备和持久化，并且必须支持共享 backend 的并发 `Run`。回调为 nil 时，runner 直接调用 `SessionService.CreateSessionSummary`。
 

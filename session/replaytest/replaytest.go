@@ -127,6 +127,11 @@ type preparedTrack struct {
 	timestamp time.Time
 }
 
+type preparedCase struct {
+	preparedTracks []preparedTrack
+	summaryTargets []int
+}
+
 // Case is a backend-independent replay scenario.
 type Case struct {
 	Name               string
@@ -262,8 +267,10 @@ type AllowedDiffRule struct {
 // Run executes a replay case against one backend and returns a normalized snapshot.
 // runNamespace must be non-empty, must not contain surrounding whitespace, and
 // must be shared by all backends participating in one comparison. Callers must
-// use a new namespace for every rerun. Run retains all persisted case data and
-// leaves any cleanup lifecycle to the caller.
+// use a new namespace for every rerun. Run rejects statically detectable fixture
+// errors before creating a session or mutating a backend. Runtime failures may
+// still leave partially persisted case data; Run leaves that cleanup lifecycle
+// to the caller.
 func Run(ctx context.Context, runNamespace string, backend Backend, tc Case) (Result, error) {
 	if err := validateBackend(backend); err != nil {
 		return Result{}, err
@@ -271,7 +278,7 @@ func Run(ctx context.Context, runNamespace string, backend Backend, tc Case) (Re
 	if err := validateRunNamespace(runNamespace); err != nil {
 		return Result{}, err
 	}
-	tracks, err := prepareTracks(backend, tc)
+	prepared, err := prepareCase(backend, tc)
 	if err != nil {
 		return Result{}, err
 	}
@@ -279,10 +286,10 @@ func Run(ctx context.Context, runNamespace string, backend Backend, tc Case) (Re
 	if err := createSessionAndState(ctx, backend, key, tc); err != nil {
 		return Result{}, err
 	}
-	if err := runEventSummaryTimeline(ctx, backend, key, tc); err != nil {
+	if err := runEventSummaryTimeline(ctx, backend, key, tc, prepared.summaryTargets); err != nil {
 		return Result{}, err
 	}
-	if err := appendTracks(ctx, backend, key, tc.Name, tracks); err != nil {
+	if err := appendTracks(ctx, backend, key, tc.Name, prepared.preparedTracks); err != nil {
 		return Result{}, err
 	}
 	userKey := memory.UserKey{AppName: key.AppName, UserID: key.UserID}
@@ -329,6 +336,115 @@ func validateRunNamespace(runNamespace string) error {
 	return nil
 }
 
+func prepareCase(backend Backend, tc Case) (preparedCase, error) {
+	tracks, err := prepareTracks(backend, tc)
+	if err != nil {
+		return preparedCase{}, err
+	}
+	if err := validateFixtureEvents(tc); err != nil {
+		return preparedCase{}, err
+	}
+	targets, err := prepareSummaryTargets(tc)
+	if err != nil {
+		return preparedCase{}, err
+	}
+	if err := validateSequentialMemoryOperations(tc); err != nil {
+		return preparedCase{}, err
+	}
+	if err := validateConcurrentMemoryOperations(tc); err != nil {
+		return preparedCase{}, err
+	}
+	return preparedCase{preparedTracks: tracks, summaryTargets: targets}, nil
+}
+
+func validateFixtureEvents(tc Case) error {
+	for i, evt := range tc.Events {
+		if evt == nil {
+			return fmt.Errorf("event %d for case %q is nil", i, tc.Name)
+		}
+		if _, err := normalizeEvent(i, *evt); err != nil {
+			return fmt.Errorf("validate events for case %q: %w", tc.Name, err)
+		}
+	}
+	return nil
+}
+
+func prepareSummaryTargets(tc Case) ([]int, error) {
+	targets := make([]int, 0, len(tc.Summaries))
+	appended := 0
+	for i, spec := range tc.Summaries {
+		target := len(tc.Events)
+		if spec.EventPrefix != nil {
+			target = *spec.EventPrefix
+		}
+		if target < 0 || target > len(tc.Events) {
+			return nil, fmt.Errorf(
+				"summary step %d for case %q has event prefix %d outside [0,%d]",
+				i, tc.Name, target, len(tc.Events),
+			)
+		}
+		if target < appended {
+			return nil, fmt.Errorf(
+				"summary step %d for case %q has event prefix %d before already appended prefix %d",
+				i, tc.Name, target, appended,
+			)
+		}
+		targets = append(targets, target)
+		appended = target
+	}
+	return targets, nil
+}
+
+func validateSequentialMemoryOperations(tc Case) error {
+	aliases := make(map[string]struct{})
+	for i, op := range tc.Memories {
+		if err := validateSequentialMemoryOperation(aliases, op); err != nil {
+			return fmt.Errorf("memory operation %d for case %q: %w", i, tc.Name, err)
+		}
+	}
+	return nil
+}
+
+func validateSequentialMemoryOperation(aliases map[string]struct{}, op MemoryOp) error {
+	switch op.Operation {
+	case MemoryAdd:
+		if op.ResultAlias != "" {
+			aliases[op.ResultAlias] = struct{}{}
+		}
+	case MemoryUpdate:
+		if _, ok := aliases[op.Ref]; !ok {
+			return fmt.Errorf("missing memory alias %q", op.Ref)
+		}
+		aliases[op.Ref] = struct{}{}
+		if op.ResultAlias != "" {
+			aliases[op.ResultAlias] = struct{}{}
+		}
+	case MemoryDelete:
+		if _, ok := aliases[op.Ref]; !ok {
+			return fmt.Errorf("missing memory alias %q", op.Ref)
+		}
+	default:
+		return fmt.Errorf("unknown memory operation %q (%s)", op.Operation, op.Name)
+	}
+	return nil
+}
+
+func validateConcurrentMemoryOperations(tc Case) error {
+	var errs []error
+	for i, op := range tc.ConcurrentMemories {
+		if op.Operation != MemoryAdd {
+			errs = append(errs, fmt.Errorf(
+				"concurrent memory operation %d: unsupported concurrent memory operation %q",
+				i, op.Operation,
+			))
+		}
+	}
+	if len(errs) == 0 {
+		return nil
+	}
+	return fmt.Errorf("concurrent memory operations for case %q: %w", tc.Name, errors.Join(errs...))
+}
+
 func replayKey(runNamespace, caseName string) session.Key {
 	scope := fmt.Sprintf("%d-%s-%s", len(runNamespace), runNamespace, caseName)
 	return session.Key{
@@ -367,13 +483,16 @@ func createSessionAndState(ctx context.Context, backend Backend, key session.Key
 	return nil
 }
 
-func runEventSummaryTimeline(ctx context.Context, backend Backend, key session.Key, tc Case) error {
+func runEventSummaryTimeline(
+	ctx context.Context,
+	backend Backend,
+	key session.Key,
+	tc Case,
+	summaryTargets []int,
+) error {
 	appended := 0
 	for i, spec := range tc.Summaries {
-		target, err := summaryEventPrefix(tc, i, appended)
-		if err != nil {
-			return err
-		}
+		target := summaryTargets[i]
 		if err := appendEventRange(ctx, backend, key, tc, appended, target); err != nil {
 			return err
 		}
@@ -383,27 +502,6 @@ func runEventSummaryTimeline(ctx context.Context, backend Backend, key session.K
 		}
 	}
 	return appendEventRange(ctx, backend, key, tc, appended, len(tc.Events))
-}
-
-func summaryEventPrefix(tc Case, stepIndex, appended int) (int, error) {
-	spec := tc.Summaries[stepIndex]
-	target := len(tc.Events)
-	if spec.EventPrefix != nil {
-		target = *spec.EventPrefix
-	}
-	if target < 0 || target > len(tc.Events) {
-		return 0, fmt.Errorf(
-			"summary step %d for case %q has event prefix %d outside [0,%d]",
-			stepIndex, tc.Name, target, len(tc.Events),
-		)
-	}
-	if target < appended {
-		return 0, fmt.Errorf(
-			"summary step %d for case %q has event prefix %d before already appended prefix %d",
-			stepIndex, tc.Name, target, appended,
-		)
-	}
-	return target, nil
 }
 
 func appendEventRange(ctx context.Context, backend Backend, key session.Key, tc Case, start, end int) error {
@@ -1016,30 +1114,38 @@ func cloneTracks(sess *session.Session) map[session.Track]*session.TrackEvents {
 func normalizeEvents(events []event.Event) ([]EventSnapshot, error) {
 	out := make([]EventSnapshot, 0, len(events))
 	for i, evt := range events {
-		encoded, err := json.Marshal(evt)
+		normalized, err := normalizeEvent(i, evt)
 		if err != nil {
-			return nil, fmt.Errorf("normalize event %d: marshal: %w", i, err)
+			return nil, err
 		}
-		var normalized map[string]any
-		if err := decodeJSON(encoded, &normalized); err != nil {
-			return nil, fmt.Errorf("normalize event %d: decode: %w", i, err)
-		}
-		delete(normalized, "id")
-		normalized["timestamp"] = normalizeTime(evt.Timestamp)
-		delete(normalized, "created")
-		if response, ok := normalized["response"].(map[string]any); ok {
-			delete(response, "id")
-			delete(response, "timestamp")
-			if len(response) == 0 {
-				delete(normalized, "response")
-			}
-		}
-		if evt.StateDelta != nil {
-			normalized["stateDelta"] = normalizeState(session.StateMap(evt.StateDelta))
-		}
-		out = append(out, EventSnapshot(normalized))
+		out = append(out, normalized)
 	}
 	return out, nil
+}
+
+func normalizeEvent(index int, evt event.Event) (EventSnapshot, error) {
+	encoded, err := json.Marshal(evt)
+	if err != nil {
+		return nil, fmt.Errorf("normalize event %d: marshal: %w", index, err)
+	}
+	var normalized map[string]any
+	if err := decodeJSON(encoded, &normalized); err != nil {
+		return nil, fmt.Errorf("normalize event %d: decode: %w", index, err)
+	}
+	delete(normalized, "id")
+	normalized["timestamp"] = normalizeTime(evt.Timestamp)
+	delete(normalized, "created")
+	if response, ok := normalized["response"].(map[string]any); ok {
+		delete(response, "id")
+		delete(response, "timestamp")
+		if len(response) == 0 {
+			delete(normalized, "response")
+		}
+	}
+	if evt.StateDelta != nil {
+		normalized["stateDelta"] = normalizeState(session.StateMap(evt.StateDelta))
+	}
+	return EventSnapshot(normalized), nil
 }
 
 func normalizeState(state session.StateMap) map[string]any {

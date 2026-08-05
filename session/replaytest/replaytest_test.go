@@ -298,6 +298,7 @@ func TestRunRejectsCorruptMemoryReads(t *testing.T) {
 }
 
 func TestRunReportsInvalidCaseOperations(t *testing.T) {
+	zero, one, tooLarge := 0, 1, 3
 	tests := []struct {
 		name                string
 		tc                  Case
@@ -353,11 +354,28 @@ func TestRunReportsInvalidCaseOperations(t *testing.T) {
 			want: `concurrent memory operations for case "concurrent-update": concurrent memory operation 0: unsupported concurrent memory operation "update"`,
 		},
 		{
-			name: "query contents mismatch",
-			tc: Case{Name: "query", Queries: []MemoryQuery{{
-				Query: "missing", ExpectedContents: []string{"missing memory"},
-			}}},
-			want: `memory query 0 for case "query" returned contents [], want ["missing memory"]`,
+			name: "decreasing summary prefix",
+			tc: Case{
+				Name:   "decreasing-summary-prefix",
+				Events: []*event.Event{{}, {}},
+				Summaries: []SummaryStep{
+					{EventPrefix: &one},
+					{EventPrefix: &zero},
+				},
+			},
+			want: `summary step 1 for case "decreasing-summary-prefix" has event prefix 0 before already appended prefix 1`,
+		},
+		{
+			name: "summary prefix out of range",
+			tc: Case{
+				Name:   "summary-prefix-out-of-range",
+				Events: []*event.Event{{}, {}},
+				Summaries: []SummaryStep{
+					{EventPrefix: &one},
+					{EventPrefix: &tooLarge},
+				},
+			},
+			want: `summary step 1 for case "summary-prefix-out-of-range" has event prefix 3 outside [0,2]`,
 		},
 	}
 
@@ -379,13 +397,283 @@ func TestRunReportsInvalidCaseOperations(t *testing.T) {
 				ReadAllMemories: completeMemoryReader(memoryService),
 			}, test.tc)
 			require.EqualError(t, err, test.want)
-			if len(test.tc.Tracks) > 0 {
-				got, getErr := sessionService.GetSession(context.Background(), replayKey(testRunNamespace, test.tc.Name))
-				require.NoError(t, getErr)
-				require.Nil(t, got)
-			}
+			got, getErr := sessionService.GetSession(context.Background(), replayKey(testRunNamespace, test.tc.Name))
+			require.NoError(t, getErr)
+			require.Nil(t, got)
 		})
 	}
+}
+
+func TestRunReportsMemoryQueryMismatch(t *testing.T) {
+	sessionService := sessinmemory.NewSessionService()
+	defer sessionService.Close()
+	memoryService := meminmemory.NewMemoryService()
+	defer memoryService.Close()
+
+	tc := Case{Name: "query", Queries: []MemoryQuery{{
+		Query: "missing", ExpectedContents: []string{"missing memory"},
+	}}}
+	_, err := Run(context.Background(), testRunNamespace, Backend{
+		Name: "in_memory", SessionService: sessionService,
+		MemoryService: memoryService, ReadAllMemories: completeMemoryReader(memoryService),
+	}, tc)
+	require.EqualError(t, err, `memory query 0 for case "query" returned contents [], want ["missing memory"]`)
+
+	got, getErr := sessionService.GetSession(context.Background(), replayKey(testRunNamespace, tc.Name))
+	require.NoError(t, getErr)
+	require.NotNil(t, got)
+}
+
+func TestRunRejectsStaticFixtureBeforePersistence(t *testing.T) {
+	zero, one, outOfRange := 0, 1, 3
+	validEvent := func(id string) *event.Event {
+		return replayTimelineEvent(id, time.Date(2026, time.August, 5, 12, 0, 0, 0, time.UTC))
+	}
+	tests := []struct {
+		name         string
+		tc           Case
+		want         string
+		wantContains []string
+	}{
+		{
+			name: "later summary prefix decreases",
+			tc: Case{
+				Name:   "preflight-summary-decreases",
+				Events: []*event.Event{validEvent("event-0"), validEvent("event-1")},
+				Summaries: []SummaryStep{
+					{Name: "first", Force: true, Text: "first summary", EventPrefix: &one},
+					{Name: "second", Force: true, Text: "second summary", EventPrefix: &zero},
+				},
+			},
+			want: `summary step 1 for case "preflight-summary-decreases" has event prefix 0 before already appended prefix 1`,
+		},
+		{
+			name: "later summary prefix is out of range",
+			tc: Case{
+				Name:   "preflight-summary-out-of-range",
+				Events: []*event.Event{validEvent("event-0"), validEvent("event-1")},
+				Summaries: []SummaryStep{
+					{Name: "first", Force: true, Text: "first summary", EventPrefix: &one},
+					{Name: "second", Force: true, Text: "second summary", EventPrefix: &outOfRange},
+				},
+			},
+			want: `summary step 1 for case "preflight-summary-out-of-range" has event prefix 3 outside [0,2]`,
+		},
+		{
+			name: "middle event is nil",
+			tc: Case{
+				Name: "preflight-nil-event",
+				Events: []*event.Event{
+					validEvent("event-0"), nil, validEvent("event-2"),
+				},
+			},
+			want: `event 1 for case "preflight-nil-event" is nil`,
+		},
+		{
+			name: "event contains channel",
+			tc: Case{
+				Name:   "preflight-channel-event",
+				Events: []*event.Event{validEvent("event-0"), replayMalformedEvent()},
+			},
+			wantContains: []string{
+				`validate events for case "preflight-channel-event"`,
+				"normalize event 1: marshal",
+				"unsupported type: chan int",
+			},
+		},
+		{
+			name: "event contains function",
+			tc: Case{
+				Name: "preflight-function-event",
+				Events: []*event.Event{
+					validEvent("event-0"), replayMalformedEventWithExtra(func() {}),
+				},
+			},
+			wantContains: []string{
+				`validate events for case "preflight-function-event"`,
+				"normalize event 1: marshal",
+				"unsupported type: func()",
+			},
+		},
+		{
+			name: "event contains malformed raw message",
+			tc: Case{
+				Name: "preflight-raw-message-event",
+				Events: []*event.Event{
+					validEvent("event-0"),
+					{Extensions: map[string]json.RawMessage{"broken": json.RawMessage("{")}},
+				},
+			},
+			wantContains: []string{
+				`validate events for case "preflight-raw-message-event"`,
+				"normalize event 1: marshal",
+			},
+		},
+		{
+			name: "later memory operation is unknown",
+			tc: Case{
+				Name: "preflight-late-unknown-memory",
+				Memories: []MemoryOp{
+					{Operation: MemoryAdd, Content: "first", ResultAlias: "first"},
+					{Name: "bad", Operation: MemoryOperation("replace")},
+				},
+			},
+			want: `memory operation 1 for case "preflight-late-unknown-memory": unknown memory operation "replace" (bad)`,
+		},
+		{
+			name: "later memory operation has missing alias",
+			tc: Case{
+				Name: "preflight-late-missing-alias",
+				Memories: []MemoryOp{
+					{Operation: MemoryAdd, Content: "first", ResultAlias: "first"},
+					{Operation: MemoryUpdate, Ref: "missing", Content: "updated"},
+				},
+			},
+			want: `memory operation 1 for case "preflight-late-missing-alias": missing memory alias "missing"`,
+		},
+		{
+			name: "concurrent operations contain update and delete",
+			tc: Case{
+				Name: "preflight-concurrent-invalid",
+				ConcurrentMemories: []MemoryOp{
+					{Operation: MemoryAdd, Content: "valid"},
+					{Operation: MemoryUpdate},
+					{Operation: MemoryDelete},
+				},
+			},
+			want: "concurrent memory operations for case \"preflight-concurrent-invalid\": " +
+				"concurrent memory operation 1: unsupported concurrent memory operation \"update\"\n" +
+				"concurrent memory operation 2: unsupported concurrent memory operation \"delete\"",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			backend, sessionService, calls := newPreflightRecordingBackend(t)
+			tc := test.tc
+			addPreflightProbeState(&tc)
+
+			_, err := Run(context.Background(), testRunNamespace, backend, tc)
+			if test.want != "" {
+				require.EqualError(t, err, test.want)
+			} else {
+				require.Error(t, err)
+				for _, want := range test.wantContains {
+					require.ErrorContains(t, err, want)
+				}
+			}
+			require.Empty(t, calls.snapshot())
+
+			got, getErr := sessionService.GetSession(
+				context.Background(), replayKey(testRunNamespace, tc.Name),
+			)
+			require.NoError(t, getErr)
+			require.Nil(t, got)
+		})
+	}
+}
+
+func TestPrepareCaseValidationPriority(t *testing.T) {
+	two := 2
+	validEvent := replayTimelineEvent(
+		"valid", time.Date(2026, time.August, 5, 12, 0, 0, 0, time.UTC),
+	)
+	invalidMemory := []MemoryOp{{Name: "bad", Operation: MemoryOperation("replace")}}
+	invalidConcurrentMemory := []MemoryOp{{Operation: MemoryUpdate}}
+	tests := []struct {
+		name string
+		tc   Case
+		want string
+	}{
+		{
+			name: "track before event",
+			tc: Case{
+				Name: "priority-track", Tracks: []TrackSpec{{Name: " "}},
+				Events: []*event.Event{nil}, Summaries: []SummaryStep{{EventPrefix: &two}},
+				Memories: invalidMemory, ConcurrentMemories: invalidConcurrentMemory,
+			},
+			want: `track 0 for case "priority-track" has empty name`,
+		},
+		{
+			name: "event before summary",
+			tc: Case{
+				Name: "priority-event", Events: []*event.Event{nil},
+				Summaries: []SummaryStep{{EventPrefix: &two}},
+				Memories:  invalidMemory, ConcurrentMemories: invalidConcurrentMemory,
+			},
+			want: `event 0 for case "priority-event" is nil`,
+		},
+		{
+			name: "summary before sequential memory",
+			tc: Case{
+				Name: "priority-summary", Events: []*event.Event{validEvent},
+				Summaries: []SummaryStep{{EventPrefix: &two}},
+				Memories:  invalidMemory, ConcurrentMemories: invalidConcurrentMemory,
+			},
+			want: `summary step 0 for case "priority-summary" has event prefix 2 outside [0,1]`,
+		},
+		{
+			name: "sequential before concurrent memory",
+			tc: Case{
+				Name: "priority-sequential", Events: []*event.Event{validEvent},
+				Memories: invalidMemory, ConcurrentMemories: invalidConcurrentMemory,
+			},
+			want: `memory operation 0 for case "priority-sequential": unknown memory operation "replace" (bad)`,
+		},
+		{
+			name: "concurrent memory last",
+			tc: Case{
+				Name: "priority-concurrent", Events: []*event.Event{validEvent},
+				ConcurrentMemories: invalidConcurrentMemory,
+			},
+			want: `concurrent memory operations for case "priority-concurrent": concurrent memory operation 0: unsupported concurrent memory operation "update"`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			backend, sessionService, calls := newPreflightRecordingBackend(t)
+			tc := test.tc
+			addPreflightProbeState(&tc)
+
+			_, err := Run(context.Background(), testRunNamespace, backend, tc)
+			require.EqualError(t, err, test.want)
+			require.Empty(t, calls.snapshot())
+			got, getErr := sessionService.GetSession(
+				context.Background(), replayKey(testRunNamespace, tc.Name),
+			)
+			require.NoError(t, getErr)
+			require.Nil(t, got)
+		})
+	}
+}
+
+func TestValidateSequentialMemoryOperationPreservesAliasSemantics(t *testing.T) {
+	aliases := make(map[string]struct{})
+	require.NoError(t, validateSequentialMemoryOperation(aliases, MemoryOp{
+		Operation: MemoryAdd, ResultAlias: "current",
+	}))
+	require.Contains(t, aliases, "current")
+
+	require.NoError(t, validateSequentialMemoryOperation(aliases, MemoryOp{
+		Operation: MemoryUpdate, Ref: "current", ResultAlias: "next",
+	}))
+	require.Contains(t, aliases, "current")
+	require.Contains(t, aliases, "next")
+
+	require.NoError(t, validateSequentialMemoryOperation(aliases, MemoryOp{
+		Operation: MemoryDelete, Ref: "current",
+	}))
+	require.Contains(t, aliases, "current")
+	require.NoError(t, validateSequentialMemoryOperation(aliases, MemoryOp{
+		Operation: MemoryUpdate, Ref: "current", ResultAlias: "after-delete",
+	}))
+	require.Contains(t, aliases, "after-delete")
+
+	require.NoError(t, validateSequentialMemoryOperation(aliases, MemoryOp{
+		Operation: MemoryAdd, ResultAlias: "next",
+	}))
+	require.Contains(t, aliases, "next")
 }
 
 func TestApplyMemoriesConcurrentlyAggregatesErrorsDeterministically(t *testing.T) {
@@ -416,39 +704,54 @@ func TestApplyMemoriesConcurrentlyAggregatesErrorsDeterministically(t *testing.T
 	}
 }
 
-func TestSummaryEventPrefixValidation(t *testing.T) {
+func TestPrepareSummaryTargets(t *testing.T) {
 	zero, one, two, negative, tooLarge := 0, 1, 2, -1, 3
 	tests := []struct {
-		name     string
-		prefix   *int
-		appended int
-		want     int
-		wantErr  string
+		name      string
+		summaries []SummaryStep
+		want      []int
+		wantErr   string
 	}{
-		{name: "nil means all", want: 2},
-		{name: "zero", prefix: &zero, want: 0},
-		{name: "same prefix", prefix: &one, appended: 1, want: 1},
-		{name: "increasing prefix", prefix: &two, appended: 1, want: 2},
+		{name: "no summaries", want: []int{}},
+		{name: "nil means all", summaries: []SummaryStep{{}}, want: []int{2}},
+		{name: "zero", summaries: []SummaryStep{{EventPrefix: &zero}}, want: []int{0}},
 		{
-			name: "negative", prefix: &negative,
+			name: "same and increasing prefixes",
+			summaries: []SummaryStep{
+				{EventPrefix: &one},
+				{EventPrefix: &one},
+				{EventPrefix: &two},
+				{},
+			},
+			want: []int{1, 1, 2, 2},
+		},
+		{
+			name: "negative", summaries: []SummaryStep{{EventPrefix: &negative}},
 			wantErr: `summary step 0 for case "timeline" has event prefix -1 outside [0,2]`,
 		},
 		{
-			name: "too large", prefix: &tooLarge,
-			wantErr: `summary step 0 for case "timeline" has event prefix 3 outside [0,2]`,
+			name: "later prefix too large",
+			summaries: []SummaryStep{
+				{EventPrefix: &one},
+				{EventPrefix: &tooLarge},
+			},
+			wantErr: `summary step 1 for case "timeline" has event prefix 3 outside [0,2]`,
 		},
 		{
-			name: "decreasing", prefix: &one, appended: 2,
-			wantErr: `summary step 0 for case "timeline" has event prefix 1 before already appended prefix 2`,
+			name: "later prefix decreases",
+			summaries: []SummaryStep{
+				{EventPrefix: &two},
+				{EventPrefix: &one},
+			},
+			wantErr: `summary step 1 for case "timeline" has event prefix 1 before already appended prefix 2`,
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			tc := Case{
-				Name: "timeline", Events: []*event.Event{{}, {}},
-				Summaries: []SummaryStep{{EventPrefix: test.prefix}},
+				Name: "timeline", Events: []*event.Event{{}, {}}, Summaries: test.summaries,
 			}
-			got, err := summaryEventPrefix(tc, 0, test.appended)
+			got, err := prepareSummaryTargets(tc)
 			if test.wantErr != "" {
 				require.EqualError(t, err, test.wantErr)
 				return
@@ -1318,6 +1621,200 @@ func TestRunRejectsIncorrectStateScopes(t *testing.T) {
 
 type emptyUpdateResultMemoryService struct {
 	memory.Service
+}
+
+type fixtureCallRecorder struct {
+	mu    sync.Mutex
+	calls map[string]int
+}
+
+func (r *fixtureCallRecorder) record(name string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.calls == nil {
+		r.calls = make(map[string]int)
+	}
+	r.calls[name]++
+}
+
+func (r *fixtureCallRecorder) snapshot() map[string]int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make(map[string]int, len(r.calls))
+	for name, count := range r.calls {
+		out[name] = count
+	}
+	return out
+}
+
+type preflightRecordingSessionService struct {
+	session.Service
+	calls *fixtureCallRecorder
+}
+
+func (s *preflightRecordingSessionService) CreateSession(
+	ctx context.Context,
+	key session.Key,
+	state session.StateMap,
+	opts ...session.Option,
+) (*session.Session, error) {
+	s.calls.record("session.create")
+	return s.Service.CreateSession(ctx, key, state, opts...)
+}
+
+func (s *preflightRecordingSessionService) UpdateAppState(
+	ctx context.Context,
+	appName string,
+	state session.StateMap,
+) error {
+	s.calls.record("session.update_app_state")
+	return s.Service.UpdateAppState(ctx, appName, state)
+}
+
+func (s *preflightRecordingSessionService) UpdateUserState(
+	ctx context.Context,
+	key session.UserKey,
+	state session.StateMap,
+) error {
+	s.calls.record("session.update_user_state")
+	return s.Service.UpdateUserState(ctx, key, state)
+}
+
+func (s *preflightRecordingSessionService) UpdateSessionState(
+	ctx context.Context,
+	key session.Key,
+	state session.StateMap,
+) error {
+	s.calls.record("session.update_session_state")
+	return s.Service.UpdateSessionState(ctx, key, state)
+}
+
+func (s *preflightRecordingSessionService) AppendEvent(
+	ctx context.Context,
+	sess *session.Session,
+	evt *event.Event,
+	opts ...session.Option,
+) error {
+	s.calls.record("session.append_event")
+	return s.Service.AppendEvent(ctx, sess, evt, opts...)
+}
+
+func (s *preflightRecordingSessionService) CreateSessionSummary(
+	ctx context.Context,
+	sess *session.Session,
+	filterKey string,
+	force bool,
+) error {
+	s.calls.record("session.create_summary")
+	return s.Service.CreateSessionSummary(ctx, sess, filterKey, force)
+}
+
+type preflightRecordingMemoryService struct {
+	memory.Service
+	calls *fixtureCallRecorder
+}
+
+func (s *preflightRecordingMemoryService) AddMemory(
+	ctx context.Context,
+	userKey memory.UserKey,
+	content string,
+	topics []string,
+	opts ...memory.AddOption,
+) error {
+	s.calls.record("memory.add")
+	return s.Service.AddMemory(ctx, userKey, content, topics, opts...)
+}
+
+func (s *preflightRecordingMemoryService) UpdateMemory(
+	ctx context.Context,
+	key memory.Key,
+	content string,
+	topics []string,
+	opts ...memory.UpdateOption,
+) error {
+	s.calls.record("memory.update")
+	return s.Service.UpdateMemory(ctx, key, content, topics, opts...)
+}
+
+func (s *preflightRecordingMemoryService) DeleteMemory(
+	ctx context.Context,
+	key memory.Key,
+) error {
+	s.calls.record("memory.delete")
+	return s.Service.DeleteMemory(ctx, key)
+}
+
+func (s *preflightRecordingMemoryService) SearchMemories(
+	ctx context.Context,
+	userKey memory.UserKey,
+	query string,
+	opts ...memory.SearchOption,
+) ([]*memory.Entry, error) {
+	s.calls.record("memory.search")
+	return s.Service.SearchMemories(ctx, userKey, query, opts...)
+}
+
+type preflightRecordingTrackService struct {
+	delegate session.TrackService
+	calls    *fixtureCallRecorder
+}
+
+func (s *preflightRecordingTrackService) AppendTrackEvent(
+	ctx context.Context,
+	sess *session.Session,
+	trackEvent *session.TrackEvent,
+	opts ...session.Option,
+) error {
+	s.calls.record("track.append")
+	return s.delegate.AppendTrackEvent(ctx, sess, trackEvent, opts...)
+}
+
+func newPreflightRecordingBackend(
+	t *testing.T,
+) (Backend, session.Service, *fixtureCallRecorder) {
+	t.Helper()
+	calls := &fixtureCallRecorder{}
+	summarizer := &recordingSummarizer{}
+	baseSessionService := sessinmemory.NewSessionService(sessinmemory.WithSummarizer(summarizer))
+	baseMemoryService := meminmemory.NewMemoryService()
+	t.Cleanup(func() { require.NoError(t, baseMemoryService.Close()) })
+	t.Cleanup(func() { require.NoError(t, baseSessionService.Close()) })
+
+	sessionService := &preflightRecordingSessionService{
+		Service: baseSessionService,
+		calls:   calls,
+	}
+	memoryService := &preflightRecordingMemoryService{
+		Service: baseMemoryService,
+		calls:   calls,
+	}
+	trackService := &preflightRecordingTrackService{
+		delegate: baseSessionService,
+		calls:    calls,
+	}
+	backend := Backend{
+		Name:           "preflight_recording",
+		SessionService: sessionService,
+		TrackService:   trackService,
+		MemoryService:  memoryService,
+		ReadAllMemories: func(ctx context.Context, userKey memory.UserKey) ([]*memory.Entry, bool, error) {
+			calls.record("memory.read_all")
+			entries, err := baseMemoryService.ReadMemories(ctx, userKey, 0)
+			return entries, err == nil, err
+		},
+		CreateSummary: func(ctx context.Context, sess *session.Session, step SummaryStep) error {
+			calls.record("summary.callback")
+			return summarizer.createSummary(ctx, sessionService, sess, step)
+		},
+	}
+	return backend, baseSessionService, calls
+}
+
+func addPreflightProbeState(tc *Case) {
+	tc.InitialState = session.StateMap{"initial": []byte(`"probe"`)}
+	tc.AppState = session.StateMap{session.StateAppPrefix + "probe": []byte(`"app"`)}
+	tc.UserState = session.StateMap{session.StateUserPrefix + "probe": []byte(`"user"`)}
+	tc.SessionState = session.StateMap{"session:probe": []byte(`"session"`)}
 }
 
 func (s *emptyUpdateResultMemoryService) UpdateMemory(
@@ -2686,6 +3183,10 @@ func replayTrackSession(container session.Track, payload json.RawMessage) *sessi
 }
 
 func replayMalformedEvent() *event.Event {
+	return replayMalformedEventWithExtra(make(chan int))
+}
+
+func replayMalformedEventWithExtra(value any) *event.Event {
 	return &event.Event{
 		Response: &model.Response{Choices: []model.Choice{{
 			Message: model.Message{
@@ -2693,7 +3194,7 @@ func replayMalformedEvent() *event.Event {
 				ToolCalls: []model.ToolCall{{
 					Type: "function",
 					ExtraFields: map[string]any{
-						"unsupported": make(chan int),
+						"unsupported": value,
 					},
 				}},
 			},
