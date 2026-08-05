@@ -67,7 +67,9 @@ func WithSystemPrompt(prompt string) Option {
 // summarizer clones the parent request and appends a compacting user message
 // instead of sending a standalone summary prompt. If no parent request is
 // available, or the parent cannot fit the summary model's input budget,
-// summarization falls back to a bounded standalone prompt.
+// summarization falls back to a bounded standalone prompt. Framework-provided
+// model-request views restrict the fork to the same history prefix selected by
+// WithSkipRecent, excluding later responses appended after that request.
 //
 // This is disabled by default.
 func WithCacheSafeForking(enable bool) Option {
@@ -101,9 +103,11 @@ func WithMaxSummaryWords(maxWords int) Option {
 }
 
 // WithSkipRecent sets a custom function to determine how many of the most recent
-// events (from the tail) should be skipped during summarization. The function
-// receives all events and returns the count of tail events to skip. Return 0 to
-// skip none.
+// events (from the tail) should be skipped during summarization. In the normal
+// Runner LLM flow, the function receives the projected session history visible
+// to the model, after history filtering and request-side compaction. Standalone
+// summarization without a model-request view preserves the legacy raw-session
+// input. Return 0 to skip none.
 //
 // Example:
 //
@@ -131,7 +135,10 @@ func WithSkipRecent(skipFunc SkipRecentFunc) Option {
 	}
 }
 
-// WithTokenThreshold appends a token-based check.
+// WithTokenThreshold appends a token-based check. When the normal Runner LLM
+// flow provides a finalized model-request view, the check uses that request's
+// estimated token count, including the retained recent tail. Standalone
+// summarization preserves legacy event-text estimation.
 // Note: all checks in a summarizer are combined with global AND semantics.
 // If you call multiple threshold options (e.g. token + event), all must pass.
 func WithTokenThreshold(tokenCount int) Option {
