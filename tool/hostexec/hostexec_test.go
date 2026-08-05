@@ -256,6 +256,7 @@ func TestNewToolSet_ForegroundDetachesStdin(t *testing.T) {
 	res := out.(map[string]any)
 	require.Equal(t, programStatusExited, res["status"])
 	require.Contains(t, outputField(res), "reached-eof")
+	require.EqualValues(t, 0, res["exit_code"])
 }
 
 func TestNewToolSet_WriteStdin_ReturnsWhenProcessExits(t *testing.T) {
