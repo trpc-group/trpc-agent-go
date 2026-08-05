@@ -96,80 +96,101 @@ func (r *defaultReconciler) Reconcile(
 		rctx.Invocation = inv
 	}
 
-	var warnings []string
-	changed := false
-	commandMayHaveStarted := false
-	var changedKeys []string
+	run, err := r.runReconcileRequirements(
+		ctx, eng, ws, baseMD, rctx, reqs,
+	)
+	if err != nil {
+		return run.warnings, err
+	}
+	instanceBackendChanged := instanceID != "" &&
+		instanceID != loadedBackendInstanceID
+	if run.changed || instanceBackendChanged {
+		if err := r.saveReconcileMetadata(
+			ctx, eng, ws, baseMD, md, run.changedKeys,
+		); err != nil {
+			if staleErr := staleRetryError(
+				err,
+				run.commandMayHaveStarted,
+			); staleErr != nil {
+				return run.warnings, staleErr
+			}
+			run.warnings = append(run.warnings, fmt.Sprintf(
+				"save metadata: %v", err,
+			))
+		}
+	}
+	return run.warnings, nil
+}
+
+type reconcileRunResult struct {
+	warnings              []string
+	changed               bool
+	changedKeys           []string
+	commandMayHaveStarted bool
+}
+
+func (r *defaultReconciler) runReconcileRequirements(
+	ctx context.Context,
+	eng codeexecutor.Engine,
+	ws codeexecutor.Workspace,
+	baseMD codeexecutor.WorkspaceMetadata,
+	rctx ApplyContext,
+	reqs []Requirement,
+) (reconcileRunResult, error) {
+	var run reconcileRunResult
 	for _, req := range reqs {
 		applied, applyAttempted, warn, err := r.runOne(ctx, rctx, req)
 		if warn != "" {
-			warnings = append(warnings, warn)
+			run.warnings = append(run.warnings, warn)
 		}
 		if staleErr := staleRetryError(
 			err,
-			commandMayHaveStarted,
+			run.commandMayHaveStarted,
 		); staleErr != nil {
-			return warnings, staleErr
+			return run, staleErr
 		}
 		if applyAttempted && req.Kind() == KindCommand {
 			// A non-stale command result does not prove that the command
 			// avoided side effects. This includes optional timeouts,
 			// non-zero exits, and failures after successful execution.
-			commandMayHaveStarted = true
+			run.commandMayHaveStarted = true
 		}
 		if err != nil {
 			if !req.Required() {
-				warnings = append(warnings, fmt.Sprintf(
+				run.warnings = append(run.warnings, fmt.Sprintf(
 					"optional requirement %q failed: %v",
 					req.Key(), err,
 				))
 				continue
 			}
-			if changed {
+			if run.changed {
 				if saveErr := r.saveReconcileMetadata(
-					ctx, eng, ws, baseMD, md, changedKeys,
+					ctx, eng, ws, baseMD, *rctx.Metadata, run.changedKeys,
 				); saveErr != nil {
 					if staleErr := staleRetryError(
 						saveErr,
-						commandMayHaveStarted,
+						run.commandMayHaveStarted,
 					); staleErr != nil {
-						return warnings, staleErr
+						return run, staleErr
 					}
-					return warnings, fmt.Errorf(
+					return run, fmt.Errorf(
 						"workspaceprep: save metadata after "+
 							"partial apply: %w",
 						saveErr,
 					)
 				}
 			}
-			return warnings, fmt.Errorf(
+			return run, fmt.Errorf(
 				"workspaceprep: required requirement %q failed: %w",
 				req.Key(), err,
 			)
 		}
 		if applied {
-			changed = true
-			changedKeys = append(changedKeys, req.Key())
+			run.changed = true
+			run.changedKeys = append(run.changedKeys, req.Key())
 		}
 	}
-	instanceBackendChanged := instanceID != "" &&
-		instanceID != loadedBackendInstanceID
-	if changed || instanceBackendChanged {
-		if err := r.saveReconcileMetadata(
-			ctx, eng, ws, baseMD, md, changedKeys,
-		); err != nil {
-			if staleErr := staleRetryError(
-				err,
-				commandMayHaveStarted,
-			); staleErr != nil {
-				return warnings, staleErr
-			}
-			warnings = append(warnings, fmt.Sprintf(
-				"save metadata: %v", err,
-			))
-		}
-	}
-	return warnings, nil
+	return run, nil
 }
 
 // invalidatePreparedForInstance clears Prepared when instanceID differs
