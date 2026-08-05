@@ -743,6 +743,35 @@ func TestReconciler_StaleRetryDisposition(t *testing.T) {
 	})
 }
 
+func TestInvalidatePreparedForInstance(t *testing.T) {
+	md := codeexecutor.WorkspaceMetadata{
+		BackendInstanceID: "instance-1",
+		Prepared: map[string]codeexecutor.PreparedRecord{
+			"bootstrap": {Key: "bootstrap"},
+		},
+	}
+	require.False(t, func() bool {
+		before := len(md.Prepared)
+		invalidatePreparedForInstance(&md, "")
+		return before != len(md.Prepared)
+	}())
+	require.Len(t, md.Prepared, 1)
+
+	invalidatePreparedForInstance(&md, "instance-1")
+	require.Len(t, md.Prepared, 1)
+
+	invalidatePreparedForInstance(&md, "instance-2")
+	require.Empty(t, md.Prepared)
+
+	md = codeexecutor.WorkspaceMetadata{
+		Prepared: map[string]codeexecutor.PreparedRecord{
+			"bootstrap": {Key: "bootstrap"},
+		},
+	}
+	invalidatePreparedForInstance(&md, "instance-1")
+	require.Empty(t, md.Prepared)
+}
+
 func TestReconciler_InstanceRotationClearsPrepared(t *testing.T) {
 	ctx := context.Background()
 	eng, ws := newTestEngine(t)

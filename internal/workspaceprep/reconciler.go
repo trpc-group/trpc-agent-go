@@ -81,7 +81,7 @@ func (r *defaultReconciler) Reconcile(
 		md.Prepared = map[string]codeexecutor.PreparedRecord{}
 	}
 	loadedBackendInstanceID := md.BackendInstanceID
-	codeexecutor.InvalidatePreparedForInstance(&md, instanceID)
+	invalidatePreparedForInstance(&md, instanceID)
 	baseMD := cloneReconcileMetadata(md)
 
 	rctx := ApplyContext{
@@ -170,6 +170,26 @@ func (r *defaultReconciler) Reconcile(
 		}
 	}
 	return warnings, nil
+}
+
+// invalidatePreparedForInstance clears Prepared when instanceID differs
+// from the metadata's recorded backend generation. An empty instanceID
+// preserves existing Prepared semantics for legacy managers. An empty
+// recorded BackendInstanceID is treated as an unknown generation.
+func invalidatePreparedForInstance(
+	md *codeexecutor.WorkspaceMetadata,
+	instanceID codeexecutor.WorkspaceInstanceID,
+) {
+	if md == nil || instanceID == "" {
+		return
+	}
+	if md.BackendInstanceID == instanceID {
+		return
+	}
+	if len(md.Prepared) == 0 {
+		return
+	}
+	md.Prepared = map[string]codeexecutor.PreparedRecord{}
 }
 
 func staleRetryError(err error, unsafe bool) error {

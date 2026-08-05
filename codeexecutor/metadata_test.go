@@ -340,32 +340,3 @@ func TestWithWorkspaceMetadataLock_CanceledContext(t *testing.T) {
 
 	require.ErrorIs(t, err, context.Canceled)
 }
-
-func TestInvalidatePreparedForInstance(t *testing.T) {
-	md := WorkspaceMetadata{
-		BackendInstanceID: "instance-1",
-		Prepared: map[string]PreparedRecord{
-			"bootstrap": {Key: "bootstrap"},
-		},
-	}
-	require.False(t, func() bool {
-		before := len(md.Prepared)
-		InvalidatePreparedForInstance(&md, "")
-		return before != len(md.Prepared)
-	}())
-	require.Len(t, md.Prepared, 1)
-
-	InvalidatePreparedForInstance(&md, "instance-1")
-	require.Len(t, md.Prepared, 1)
-
-	InvalidatePreparedForInstance(&md, "instance-2")
-	require.Empty(t, md.Prepared)
-
-	md = WorkspaceMetadata{
-		Prepared: map[string]PreparedRecord{
-			"bootstrap": {Key: "bootstrap"},
-		},
-	}
-	InvalidatePreparedForInstance(&md, "instance-1")
-	require.Empty(t, md.Prepared)
-}
