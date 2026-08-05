@@ -25,10 +25,16 @@ import (
 // sessions.
 //
 // The client installs a cookie jar when the configured HTTP client does not
-// have one and serializes requests that race before a valid anonymous cookie
-// is available. The serialization guarantee is limited to this client
-// instance. Callers using multiple clients or processes must coordinate those
-// clients separately.
+// have one and serializes requests that race before anonymous cookie
+// initialization is confirmed. The serialization guarantee is limited to this
+// client instance. Callers using multiple clients or processes must coordinate
+// those clients separately.
+//
+// Initialization is confirmed only after the client observes a valid anonymous
+// cookie from a response or custom handler and the configured jar accepts the
+// same value for the agent URL. A preloaded cookie is sent but does not by
+// itself release the gate; custom servers must return an accepted anonymous
+// cookie with Set-Cookie. The built-in A2A server already does this.
 func NewAnonymousA2AClient(agentURL string, opts ...client.Option) (*client.A2AClient, error) {
 	clientOpts := make([]client.Option, 0, len(opts)+1)
 	// Register the gate first so it remains the outermost middleware even when
@@ -357,18 +363,26 @@ func (j *anonymousA2AClientRequestCookieJar) RoundTrip(req *http.Request) (*http
 		transport = http.DefaultTransport
 	}
 	request := req.Clone(req.Context())
-	j.replaceJarCookies(request)
+	// net/http sets Request.Response only for redirect requests. Keep cleanup
+	// for initial sends and retries, but preserve cookies added by redirect hooks.
+	removeInitialJarCookies := req.Response == nil
+	j.replaceJarCookies(request, removeInitialJarCookies)
 	return transport.RoundTrip(request)
 }
 
-func (j *anonymousA2AClientRequestCookieJar) replaceJarCookies(req *http.Request) {
+func (j *anonymousA2AClientRequestCookieJar) replaceJarCookies(
+	req *http.Request,
+	removeInitialJarCookies bool,
+) {
 	if j == nil || j.base == nil || req == nil || req.URL == nil {
 		return
 	}
 	jarCookies := j.base.Cookies(req.URL)
 	jarCookieNames := make(map[string]struct{}, len(j.initialJarCookieNames)+len(jarCookies))
-	for name := range j.initialJarCookieNames {
-		jarCookieNames[name] = struct{}{}
+	if removeInitialJarCookies {
+		for name := range j.initialJarCookieNames {
+			jarCookieNames[name] = struct{}{}
+		}
 	}
 	for _, cookie := range jarCookies {
 		if cookie != nil {
