@@ -33,6 +33,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/toolresultround"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolretry"
 	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -2535,6 +2536,17 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 	if err != nil || tl == nil {
 		return ctx, nil, toolCall.Function.Arguments, shouldIgnoreError,
 			false, err
+	}
+	if limiter := toolcall.LimiterFromContext(ctx); limiter != nil {
+		release, err := limiter.Acquire(
+			ctx,
+			toolCall.Function.Name,
+		)
+		if err != nil {
+			return ctx, nil, toolCall.Function.Arguments, false, false,
+				fmt.Errorf("wait for tool concurrency: %w", err)
+		}
+		defer release()
 	}
 
 	log.DebugfContext(

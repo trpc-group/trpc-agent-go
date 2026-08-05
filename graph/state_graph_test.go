@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"reflect"
 	"strings"
@@ -27,6 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	ichannel "trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
 	"trpc.group/trpc-go/trpc-agent-go/internal/agenttoolgraph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
@@ -136,6 +138,40 @@ func TestWithToolSets_CopiesSlice(t *testing.T) {
 	if node.toolSets[0] == originalToolSets[0] {
 		t.Fatalf("expected node toolsets slice to be copied")
 	}
+}
+
+func TestWithToolConcurrencyConfigCopiesGroups(t *testing.T) {
+	config := tool.ConcurrencyConfig{
+		MaxConcurrency: 4,
+		Groups: []tool.ConcurrencyGroup{{
+			ToolNames: []string{"search", "fetch"},
+			Limit:     1,
+		}},
+	}
+	option := WithToolConcurrencyConfig(config)
+	config.Groups[0].ToolNames[0] = "changed"
+
+	node := &Node{}
+	option(node)
+
+	require.Equal(t, 4, node.toolConcurrencyConfig.MaxConcurrency)
+	require.Equal(
+		t,
+		[]string{"search", "fetch"},
+		node.toolConcurrencyConfig.Groups[0].ToolNames,
+	)
+	require.Equal(t, 1, node.toolConcurrencyConfig.Groups[0].Limit)
+}
+
+func TestWithToolConcurrencyConfigRejectsDuplicateGroups(t *testing.T) {
+	require.Panics(t, func() {
+		WithToolConcurrencyConfig(tool.ConcurrencyConfig{
+			Groups: []tool.ConcurrencyGroup{
+				{ToolNames: []string{"search"}, Limit: 1},
+				{ToolNames: []string{"search"}, Limit: 2},
+			},
+		})
+	})
 }
 
 func TestMergeToolsWithToolSets_EmitsConflictWarning(t *testing.T) {
@@ -420,6 +456,135 @@ func TestProcessToolCalls_SerialVsParallel(t *testing.T) {
 			t.Fatalf("order not preserved: %s then %s", msgs[0].ToolName, msgs[1].ToolName)
 		}
 	})
+}
+
+func TestToolsNodeToolConcurrencyLimitsOneInvocation(t *testing.T) {
+	started := make(chan string, 4)
+	release := make(chan struct{})
+	tools := map[string]tool.Tool{
+		"subagent": &blockingTool{
+			name:       "subagent",
+			startedCh:  started,
+			proceedCh:  release,
+			result:     map[string]string{"status": "done"},
+			respectCtx: true,
+		},
+	}
+	nodeFunc := NewToolsNodeFunc(
+		tools,
+		WithEnableParallelTools(true),
+		WithToolConcurrencyConfig(tool.ConcurrencyConfig{
+			Groups: []tool.ConcurrencyGroup{{
+				ToolNames: []string{"subagent"},
+				Limit:     2,
+			}},
+		}),
+	)
+	toolCalls := make([]model.ToolCall, 4)
+	for i := range toolCalls {
+		toolCalls[i] = model.ToolCall{
+			ID: fmt.Sprintf("call-%d", i),
+			Function: model.FunctionDefinitionParam{
+				Name:      "subagent",
+				Arguments: []byte(`{}`),
+			},
+		}
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, err := nodeFunc(context.Background(), State{
+			StateKeyMessages: []model.Message{{
+				Role:      model.RoleAssistant,
+				ToolCalls: toolCalls,
+			}},
+		})
+		result <- err
+	}()
+
+	for i := 0; i < 2; i++ {
+		select {
+		case name := <-started:
+			require.Equal(t, "subagent", name)
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for limited tool call to start")
+		}
+	}
+	select {
+	case <-started:
+		t.Fatal("more tool calls started than the invocation limit")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case err := <-result:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for tool invocation to finish")
+	}
+}
+
+func TestToolsNodeToolConcurrencyIndependentAcrossInvocations(t *testing.T) {
+	started := make(chan string, 4)
+	release := make(chan struct{})
+	tools := map[string]tool.Tool{
+		"subagent": &blockingTool{
+			name:       "subagent",
+			startedCh:  started,
+			proceedCh:  release,
+			result:     map[string]string{"status": "done"},
+			respectCtx: true,
+		},
+	}
+	nodeFunc := NewToolsNodeFunc(
+		tools,
+		WithEnableParallelTools(true),
+		WithToolConcurrencyConfig(tool.ConcurrencyConfig{
+			Groups: []tool.ConcurrencyGroup{{
+				ToolNames: []string{"subagent"},
+				Limit:     2,
+			}},
+		}),
+	)
+
+	results := make(chan error, 4)
+	for i := 0; i < 4; i++ {
+		i := i
+		go func() {
+			_, err := nodeFunc(context.Background(), State{
+				StateKeyMessages: []model.Message{{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{{
+						ID: fmt.Sprintf("call-%d", i),
+						Function: model.FunctionDefinitionParam{
+							Name:      "subagent",
+							Arguments: []byte(`{}`),
+						},
+					}},
+				}},
+			})
+			results <- err
+		}()
+	}
+
+	for i := 0; i < 4; i++ {
+		select {
+		case name := <-started:
+			require.Equal(t, "subagent", name)
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for independent tool call to start")
+		}
+	}
+
+	close(release)
+	for i := 0; i < 4; i++ {
+		select {
+		case err := <-results:
+			require.NoError(t, err)
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for limited tool call to finish")
+		}
+	}
 }
 
 func TestProcessAgentEventStream_UnmarshalErrorLogged(t *testing.T) {
@@ -1331,6 +1496,44 @@ func TestProcessToolCalls_ParallelCancelOnFirstError(t *testing.T) {
 	}
 }
 
+func TestProcessToolCalls_ParallelLimiterWaiterPreservesCausalError(
+	t *testing.T,
+) {
+	const blockedToolName = "blocked"
+	limiter := toolcall.NewLimiter(tool.ConcurrencyConfig{
+		Groups: []tool.ConcurrencyGroup{{
+			ToolNames: []string{blockedToolName},
+			Limit:     1,
+		}},
+	})
+	release, err := limiter.Acquire(context.Background(), blockedToolName)
+	require.NoError(t, err)
+	defer release()
+
+	causalErr := errors.New("causal tool failure")
+	tools := map[string]tool.Tool{
+		blockedToolName: &blockingTool{
+			name:   blockedToolName,
+			result: "unexpected",
+		},
+		"fail": &blockingTool{
+			name:      "fail",
+			returnErr: causalErr,
+		},
+	}
+	_, err = processToolCalls(context.Background(), toolCallsConfig{
+		ToolCalls:      makeToolCalls(blockedToolName, "fail"),
+		Tools:          tools,
+		InvocationID:   "inv",
+		Span:           oteltrace.SpanFromContext(context.Background()),
+		State:          State{},
+		EnableParallel: true,
+		Concurrency:    limiter,
+	})
+	require.ErrorIs(t, err, causalErr)
+	require.NotErrorIs(t, err, context.Canceled)
+}
+
 func TestProcessToolCalls_ParallelPrefersAgentToolGraphInterrupt(t *testing.T) {
 	const nodeID = "tools"
 	metadata := testAgentToolInterruptMetadata()
@@ -1395,11 +1598,14 @@ func TestProcessToolCalls_OrdinaryErrorClearsCompletedToolMessages(t *testing.T)
 
 func TestSelectToolCallError_PrefersAgentToolGraphInterrupt(t *testing.T) {
 	agentInterrupt := testAgentToolInterruptError(t, testAgentToolInterruptMetadata())
-	err := selectToolCallError([]error{
-		context.Canceled,
-		agentInterrupt,
-		assertAnError{},
-	})
+	err := selectToolCallError(
+		[]error{
+			context.Canceled,
+			agentInterrupt,
+			assertAnError{},
+		},
+		nil,
+	)
 	require.ErrorIs(t, err, agentInterrupt)
 }
 
@@ -1408,10 +1614,13 @@ func TestSelectToolCallError_RejectsMultipleAgentToolGraphInterrupts(t *testing.
 	secondMetadata := firstMetadata
 	secondMetadata.ToolCallID = "call_other"
 	secondMetadata.ToolCallKey = "2:interrupt:call_other"
-	err := selectToolCallError([]error{
-		testAgentToolInterruptError(t, firstMetadata),
-		testAgentToolInterruptError(t, secondMetadata),
-	})
+	err := selectToolCallError(
+		[]error{
+			testAgentToolInterruptError(t, firstMetadata),
+			testAgentToolInterruptError(t, secondMetadata),
+		},
+		nil,
+	)
 	require.ErrorContains(t, err, "multiple agent tool graph interrupts")
 }
 
