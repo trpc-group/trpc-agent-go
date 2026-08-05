@@ -47,6 +47,7 @@ const (
 	claudeOpus48           = "claude-opus-4-8"
 	claudeOpus48Alias      = "claude-4.8-opus"
 	claudeOpus47           = "claude-opus-4-7"
+	claudeOpus47Alias      = "claude-4.7-opus"
 	claudeOpus46           = "claude-opus-4-6"
 	claudeOpus46Alias      = "claude-4.6-opus"
 	claudeSonnet46         = "claude-sonnet-4-6"
@@ -427,6 +428,7 @@ func supportsAdaptiveThinking(modelName string) bool {
 		claudeOpus48,
 		claudeOpus48Alias,
 		claudeOpus47,
+		claudeOpus47Alias,
 		claudeOpus46,
 		claudeOpus46Alias,
 		claudeSonnet46,

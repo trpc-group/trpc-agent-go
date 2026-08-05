@@ -35,6 +35,7 @@ func TestSupportsAdaptiveThinking(t *testing.T) {
 		"claude-opus-4-8",
 		"claude-4.8-opus",
 		"claude-opus-4-7",
+		"claude-4.7-opus",
 		"claude-opus-4-6",
 		"claude-4.6-opus",
 		"claude-sonnet-4-6",
@@ -96,7 +97,11 @@ func TestApplyThinkingConfigDisabled(t *testing.T) {
 	// An adaptive model that CAN be disabled says so explicitly, so the server-side
 	// default does not decide instead.
 	t.Run("disableable adaptive models send disabled", func(t *testing.T) {
-		for _, name := range []string{"claude-opus-5", "claude-sonnet-5", "claude-opus-4-8", "claude-4.8-opus"} {
+		for _, name := range []string{
+			"claude-opus-5", "claude-sonnet-5",
+			"claude-opus-4-8", "claude-4.8-opus",
+			"claude-opus-4-7", "claude-4.7-opus",
+		} {
 			t.Run(name, func(t *testing.T) {
 				chatReq, err := disabledThinkingRequest(t, name)
 				require.NoError(t, err)
