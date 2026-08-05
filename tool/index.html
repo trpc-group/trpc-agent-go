@@ -8325,25 +8325,101 @@ silently treated as <code>"auto"</code>.</p>
 </span></code></pre></div></td></tr></table></div>
 <p><strong>Reason:</strong> LLMs may know about tool existence and usage from context or memory and attempt to call them. Tool filtering reduces this possibility but cannot completely prevent it.</p>
 <h3 id="parallel-tool-execution">Parallel Tool Execution</h3>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-59-1">1</a></span>
-<span class="normal"><a href="#__codelineno-59-2">2</a></span>
-<span class="normal"><a href="#__codelineno-59-3">3</a></span>
-<span class="normal"><a href="#__codelineno-59-4">4</a></span>
-<span class="normal"><a href="#__codelineno-59-5">5</a></span>
-<span class="normal"><a href="#__codelineno-59-6">6</a></span>
-<span class="normal"><a href="#__codelineno-59-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-59-1"><a id="__codelineno-59-1" name="__codelineno-59-1"></a><span class="c1">// Enable parallel tool execution (optional, for performance optimization).</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-59-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-59-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-59-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-59-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-59-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-59-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-59-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-59-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-59-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-59-10">10</a></span>
+<span class="normal"><a href="#__codelineno-59-11">11</a></span>
+<span class="normal"><a href="#__codelineno-59-12">12</a></span>
+<span class="normal"><a href="#__codelineno-59-13">13</a></span>
+<span class="normal"><a href="#__codelineno-59-14">14</a></span>
+<span class="normal"><a href="#__codelineno-59-15">15</a></span>
+<span class="normal"><a href="#__codelineno-59-16">16</a></span>
+<span class="normal"><a href="#__codelineno-59-17">17</a></span>
+<span class="normal"><a href="#__codelineno-59-18">18</a></span>
+<span class="normal"><a href="#__codelineno-59-19">19</a></span>
+<span class="normal"><a href="#__codelineno-59-20">20</a></span>
+<span class="normal"><a href="#__codelineno-59-21">21</a></span>
+<span class="normal"><a href="#__codelineno-59-22">22</a></span>
+<span class="normal"><a href="#__codelineno-59-23">23</a></span>
+<span class="normal"><a href="#__codelineno-59-24">24</a></span>
+<span class="normal"><a href="#__codelineno-59-25">25</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-59-1"><a id="__codelineno-59-1" name="__codelineno-59-1"></a><span class="c1">// Enable parallel tool execution (optional, for performance optimization).</span>
 </span><span id="__span-59-2"><a id="__codelineno-59-2" name="__codelineno-59-2"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;ai-assistant&quot;</span><span class="p">,</span>
 </span><span id="__span-59-3"><a id="__codelineno-59-3" name="__codelineno-59-3"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">model</span><span class="p">),</span>
 </span><span id="__span-59-4"><a id="__codelineno-59-4" name="__codelineno-59-4"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">(</span><span class="nx">tools</span><span class="p">),</span>
 </span><span id="__span-59-5"><a id="__codelineno-59-5" name="__codelineno-59-5"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithToolSets</span><span class="p">(</span><span class="nx">toolSets</span><span class="p">),</span>
 </span><span id="__span-59-6"><a id="__codelineno-59-6" name="__codelineno-59-6"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithEnableParallelTools</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span><span class="w"> </span><span class="c1">// Enable parallel execution.</span>
-</span><span id="__span-59-7"><a id="__codelineno-59-7" name="__codelineno-59-7"></a><span class="p">)</span>
+</span><span id="__span-59-7"><a id="__codelineno-59-7" name="__codelineno-59-7"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithToolConcurrencyConfig</span><span class="p">(</span><span class="nx">tool</span><span class="p">.</span><span class="nx">ConcurrencyConfig</span><span class="p">{</span>
+</span><span id="__span-59-8"><a id="__codelineno-59-8" name="__codelineno-59-8"></a><span class="w">        </span><span class="nx">Groups</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">ConcurrencyGroup</span><span class="p">{</span>
+</span><span id="__span-59-9"><a id="__codelineno-59-9" name="__codelineno-59-9"></a><span class="w">            </span><span class="p">{</span>
+</span><span id="__span-59-10"><a id="__codelineno-59-10" name="__codelineno-59-10"></a><span class="w">                </span><span class="nx">ToolNames</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;subagent&quot;</span><span class="p">},</span>
+</span><span id="__span-59-11"><a id="__codelineno-59-11" name="__codelineno-59-11"></a><span class="w">                </span><span class="nx">Limit</span><span class="p">:</span><span class="w">     </span><span class="mi">3</span><span class="p">,</span>
+</span><span id="__span-59-12"><a id="__codelineno-59-12" name="__codelineno-59-12"></a><span class="w">            </span><span class="p">},</span>
+</span><span id="__span-59-13"><a id="__codelineno-59-13" name="__codelineno-59-13"></a><span class="w">            </span><span class="p">{</span>
+</span><span id="__span-59-14"><a id="__codelineno-59-14" name="__codelineno-59-14"></a><span class="w">                </span><span class="c1">// search calls are serial.</span>
+</span><span id="__span-59-15"><a id="__codelineno-59-15" name="__codelineno-59-15"></a><span class="w">                </span><span class="nx">ToolNames</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;search&quot;</span><span class="p">},</span>
+</span><span id="__span-59-16"><a id="__codelineno-59-16" name="__codelineno-59-16"></a><span class="w">                </span><span class="nx">Limit</span><span class="p">:</span><span class="w">     </span><span class="mi">1</span><span class="p">,</span>
+</span><span id="__span-59-17"><a id="__codelineno-59-17" name="__codelineno-59-17"></a><span class="w">            </span><span class="p">},</span>
+</span><span id="__span-59-18"><a id="__codelineno-59-18" name="__codelineno-59-18"></a><span class="w">            </span><span class="p">{</span>
+</span><span id="__span-59-19"><a id="__codelineno-59-19" name="__codelineno-59-19"></a><span class="w">                </span><span class="c1">// fetch calls are serial.</span>
+</span><span id="__span-59-20"><a id="__codelineno-59-20" name="__codelineno-59-20"></a><span class="w">                </span><span class="nx">ToolNames</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;fetch&quot;</span><span class="p">},</span>
+</span><span id="__span-59-21"><a id="__codelineno-59-21" name="__codelineno-59-21"></a><span class="w">                </span><span class="nx">Limit</span><span class="p">:</span><span class="w">     </span><span class="mi">1</span><span class="p">,</span>
+</span><span id="__span-59-22"><a id="__codelineno-59-22" name="__codelineno-59-22"></a><span class="w">            </span><span class="p">},</span>
+</span><span id="__span-59-23"><a id="__codelineno-59-23" name="__codelineno-59-23"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-59-24"><a id="__codelineno-59-24" name="__codelineno-59-24"></a><span class="w">    </span><span class="p">}),</span>
+</span><span id="__span-59-25"><a id="__codelineno-59-25" name="__codelineno-59-25"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p>Graph workflows can also enable parallelism for a Tools node:</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-60-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-60-1"><a id="__codelineno-60-1" name="__codelineno-60-1"></a><span class="nx">stateGraph</span><span class="p">.</span><span class="nx">AddToolsNode</span><span class="p">(</span><span class="s">&quot;tools&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">tools</span><span class="p">,</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">WithEnableParallelTools</span><span class="p">(</span><span class="kc">true</span><span class="p">))</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-60-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-60-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-60-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-60-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-60-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-60-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-60-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-60-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-60-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-60-10">10</a></span>
+<span class="normal"><a href="#__codelineno-60-11">11</a></span>
+<span class="normal"><a href="#__codelineno-60-12">12</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-60-1"><a id="__codelineno-60-1" name="__codelineno-60-1"></a><span class="nx">stateGraph</span><span class="p">.</span><span class="nx">AddToolsNode</span><span class="p">(</span>
+</span><span id="__span-60-2"><a id="__codelineno-60-2" name="__codelineno-60-2"></a><span class="w">    </span><span class="s">&quot;tools&quot;</span><span class="p">,</span>
+</span><span id="__span-60-3"><a id="__codelineno-60-3" name="__codelineno-60-3"></a><span class="w">    </span><span class="nx">tools</span><span class="p">,</span>
+</span><span id="__span-60-4"><a id="__codelineno-60-4" name="__codelineno-60-4"></a><span class="w">    </span><span class="nx">graph</span><span class="p">.</span><span class="nx">WithEnableParallelTools</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-60-5"><a id="__codelineno-60-5" name="__codelineno-60-5"></a><span class="w">    </span><span class="nx">graph</span><span class="p">.</span><span class="nx">WithToolConcurrencyConfig</span><span class="p">(</span><span class="nx">tool</span><span class="p">.</span><span class="nx">ConcurrencyConfig</span><span class="p">{</span>
+</span><span id="__span-60-6"><a id="__codelineno-60-6" name="__codelineno-60-6"></a><span class="w">        </span><span class="nx">Groups</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">ConcurrencyGroup</span><span class="p">{</span>
+</span><span id="__span-60-7"><a id="__codelineno-60-7" name="__codelineno-60-7"></a><span class="w">            </span><span class="p">{</span><span class="nx">ToolNames</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;subagent&quot;</span><span class="p">},</span><span class="w"> </span><span class="nx">Limit</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">},</span>
+</span><span id="__span-60-8"><a id="__codelineno-60-8" name="__codelineno-60-8"></a><span class="w">            </span><span class="p">{</span><span class="nx">ToolNames</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;search&quot;</span><span class="p">},</span><span class="w"> </span><span class="nx">Limit</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">},</span>
+</span><span id="__span-60-9"><a id="__codelineno-60-9" name="__codelineno-60-9"></a><span class="w">            </span><span class="p">{</span><span class="nx">ToolNames</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;fetch&quot;</span><span class="p">},</span><span class="w"> </span><span class="nx">Limit</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">},</span>
+</span><span id="__span-60-10"><a id="__codelineno-60-10" name="__codelineno-60-10"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-60-11"><a id="__codelineno-60-11" name="__codelineno-60-11"></a><span class="w">    </span><span class="p">}),</span>
+</span><span id="__span-60-12"><a id="__codelineno-60-12" name="__codelineno-60-12"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-<p><strong>Parallel execution effect:</strong></p>
-<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-61-1"> 1</a></span>
+<p><code>MaxConcurrency</code> and group limits are cumulative. Every direct tool call
+counts toward a positive overall limit, while a call in a group must also
+acquire capacity from that group. A group containing multiple tool names
+limits their combined active calls. When <code>MaxConcurrency</code> is non-positive,
+there is no overall limit: positive group limits still apply, and tools
+outside those groups have no limit from this configuration.</p>
+<p>Each <code>LLMAgent.Run</code> and each invocation of a Graph Tools node gets independent
+capacity. Concurrent runs of the same Agent do not consume one another's
+limits. For example, if <code>subagent</code> has <code>Limit: 3</code>, two concurrent runs of the
+same Agent may each execute up to three direct <code>subagent</code> calls. These limits
+control per-invocation fan-out; they do not protect capacity shared across
+multiple runs, Agent instances, processes, or service replicas. Put such a
+shared limit in the resource-owning tool or downstream client.</p>
+<p>Limits follow execution ownership. An owning Agent or Tools node limits only
+the tools it executes directly. If a tool named <code>subagent</code> runs a child Agent,
+the outer <code>subagent</code> call remains subject to the owner's limit while it is
+running, but <code>search</code>, <code>fetch</code>, and other tools executed inside the child are
+not additional calls for the owner. Configure those limits on every child
+Agent that provides these tools:</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-61-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-61-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-61-3"> 3</a></span>
 <span class="normal"><a href="#__codelineno-61-4"> 4</a></span>
@@ -8353,17 +8429,51 @@ silently treated as <code>"auto"</code>.</p>
 <span class="normal"><a href="#__codelineno-61-8"> 8</a></span>
 <span class="normal"><a href="#__codelineno-61-9"> 9</a></span>
 <span class="normal"><a href="#__codelineno-61-10">10</a></span>
-<span class="normal"><a href="#__codelineno-61-11">11</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-61-1"><a id="__codelineno-61-1" name="__codelineno-61-1"></a><span class="c1"># Parallel execution (enabled).</span>
-</span><span id="__span-61-2"><a id="__codelineno-61-2" name="__codelineno-61-2"></a>Tool<span class="w"> </span><span class="m">1</span>:<span class="w"> </span>get_weather<span class="w">     </span><span class="o">[====]</span><span class="w"> </span>50ms
-</span><span id="__span-61-3"><a id="__codelineno-61-3" name="__codelineno-61-3"></a>Tool<span class="w"> </span><span class="m">2</span>:<span class="w"> </span>get_population<span class="w">  </span><span class="o">[====]</span><span class="w"> </span>50ms
-</span><span id="__span-61-4"><a id="__codelineno-61-4" name="__codelineno-61-4"></a>Tool<span class="w"> </span><span class="m">3</span>:<span class="w"> </span>get_time<span class="w">       </span><span class="o">[====]</span><span class="w"> </span>50ms
-</span><span id="__span-61-5"><a id="__codelineno-61-5" name="__codelineno-61-5"></a>Total<span class="w"> </span>time:<span class="w"> </span>~50ms<span class="w"> </span><span class="o">(</span>executed<span class="w"> </span>simultaneously<span class="o">)</span>
-</span><span id="__span-61-6"><a id="__codelineno-61-6" name="__codelineno-61-6"></a>
-</span><span id="__span-61-7"><a id="__codelineno-61-7" name="__codelineno-61-7"></a><span class="c1"># Serial execution (default).</span>
-</span><span id="__span-61-8"><a id="__codelineno-61-8" name="__codelineno-61-8"></a>Tool<span class="w"> </span><span class="m">1</span>:<span class="w"> </span>get_weather<span class="w">     </span><span class="o">[====]</span><span class="w"> </span>50ms
-</span><span id="__span-61-9"><a id="__codelineno-61-9" name="__codelineno-61-9"></a>Tool<span class="w"> </span><span class="m">2</span>:<span class="w"> </span>get_population<span class="w">       </span><span class="o">[====]</span><span class="w"> </span>50ms
-</span><span id="__span-61-10"><a id="__codelineno-61-10" name="__codelineno-61-10"></a>Tool<span class="w"> </span><span class="m">3</span>:<span class="w"> </span>get_time<span class="w">                  </span><span class="o">[====]</span><span class="w"> </span>50ms
-</span><span id="__span-61-11"><a id="__codelineno-61-11" name="__codelineno-61-11"></a>Total<span class="w"> </span>time:<span class="w"> </span>~150ms<span class="w"> </span><span class="o">(</span>executed<span class="w"> </span>sequentially<span class="o">)</span>
+<span class="normal"><a href="#__codelineno-61-11">11</a></span>
+<span class="normal"><a href="#__codelineno-61-12">12</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-61-1"><a id="__codelineno-61-1" name="__codelineno-61-1"></a><span class="nx">child</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-61-2"><a id="__codelineno-61-2" name="__codelineno-61-2"></a><span class="w">    </span><span class="s">&quot;worker&quot;</span><span class="p">,</span>
+</span><span id="__span-61-3"><a id="__codelineno-61-3" name="__codelineno-61-3"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">model</span><span class="p">),</span>
+</span><span id="__span-61-4"><a id="__codelineno-61-4" name="__codelineno-61-4"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span><span class="p">{</span><span class="nx">searchTool</span><span class="p">,</span><span class="w"> </span><span class="nx">fetchTool</span><span class="p">}),</span>
+</span><span id="__span-61-5"><a id="__codelineno-61-5" name="__codelineno-61-5"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithEnableParallelTools</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-61-6"><a id="__codelineno-61-6" name="__codelineno-61-6"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithToolConcurrencyConfig</span><span class="p">(</span><span class="nx">tool</span><span class="p">.</span><span class="nx">ConcurrencyConfig</span><span class="p">{</span>
+</span><span id="__span-61-7"><a id="__codelineno-61-7" name="__codelineno-61-7"></a><span class="w">        </span><span class="nx">Groups</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">ConcurrencyGroup</span><span class="p">{</span>
+</span><span id="__span-61-8"><a id="__codelineno-61-8" name="__codelineno-61-8"></a><span class="w">            </span><span class="p">{</span><span class="nx">ToolNames</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;search&quot;</span><span class="p">},</span><span class="w"> </span><span class="nx">Limit</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">},</span>
+</span><span id="__span-61-9"><a id="__codelineno-61-9" name="__codelineno-61-9"></a><span class="w">            </span><span class="p">{</span><span class="nx">ToolNames</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;fetch&quot;</span><span class="p">},</span><span class="w"> </span><span class="nx">Limit</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">},</span>
+</span><span id="__span-61-10"><a id="__codelineno-61-10" name="__codelineno-61-10"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-61-11"><a id="__codelineno-61-11" name="__codelineno-61-11"></a><span class="w">    </span><span class="p">}),</span>
+</span><span id="__span-61-12"><a id="__codelineno-61-12" name="__codelineno-61-12"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>The separate groups make <code>search</code> and <code>fetch</code> individually serial while still
+allowing one of each to run at the same time. Each child Agent invocation gets
+independent limits, even when concurrent invocations reuse the same child
+Agent instance. Therefore, three concurrent child invocations can run up to
+three <code>search</code> calls and three <code>fetch</code> calls in total.</p>
+<p>The configuration has no effect unless parallel tool execution is enabled.
+Non-positive group limits are ignored. Each tool name may appear in only one
+positive-limit group; duplicate membership causes
+<code>WithToolConcurrencyConfig</code> to panic.</p>
+<p><strong>Parallel execution effect:</strong></p>
+<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-62-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-62-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-62-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-62-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-62-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-62-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-62-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-62-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-62-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-62-10">10</a></span>
+<span class="normal"><a href="#__codelineno-62-11">11</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-62-1"><a id="__codelineno-62-1" name="__codelineno-62-1"></a><span class="c1"># Parallel execution (enabled).</span>
+</span><span id="__span-62-2"><a id="__codelineno-62-2" name="__codelineno-62-2"></a>Tool<span class="w"> </span><span class="m">1</span>:<span class="w"> </span>get_weather<span class="w">     </span><span class="o">[====]</span><span class="w"> </span>50ms
+</span><span id="__span-62-3"><a id="__codelineno-62-3" name="__codelineno-62-3"></a>Tool<span class="w"> </span><span class="m">2</span>:<span class="w"> </span>get_population<span class="w">  </span><span class="o">[====]</span><span class="w"> </span>50ms
+</span><span id="__span-62-4"><a id="__codelineno-62-4" name="__codelineno-62-4"></a>Tool<span class="w"> </span><span class="m">3</span>:<span class="w"> </span>get_time<span class="w">       </span><span class="o">[====]</span><span class="w"> </span>50ms
+</span><span id="__span-62-5"><a id="__codelineno-62-5" name="__codelineno-62-5"></a>Total<span class="w"> </span>time:<span class="w"> </span>~50ms<span class="w"> </span><span class="o">(</span>executed<span class="w"> </span>simultaneously<span class="o">)</span>
+</span><span id="__span-62-6"><a id="__codelineno-62-6" name="__codelineno-62-6"></a>
+</span><span id="__span-62-7"><a id="__codelineno-62-7" name="__codelineno-62-7"></a><span class="c1"># Serial execution (default).</span>
+</span><span id="__span-62-8"><a id="__codelineno-62-8" name="__codelineno-62-8"></a>Tool<span class="w"> </span><span class="m">1</span>:<span class="w"> </span>get_weather<span class="w">     </span><span class="o">[====]</span><span class="w"> </span>50ms
+</span><span id="__span-62-9"><a id="__codelineno-62-9" name="__codelineno-62-9"></a>Tool<span class="w"> </span><span class="m">2</span>:<span class="w"> </span>get_population<span class="w">       </span><span class="o">[====]</span><span class="w"> </span>50ms
+</span><span id="__span-62-10"><a id="__codelineno-62-10" name="__codelineno-62-10"></a>Tool<span class="w"> </span><span class="m">3</span>:<span class="w"> </span>get_time<span class="w">                  </span><span class="o">[====]</span><span class="w"> </span>50ms
+</span><span id="__span-62-11"><a id="__codelineno-62-11" name="__codelineno-62-11"></a>Total<span class="w"> </span>time:<span class="w"> </span>~150ms<span class="w"> </span><span class="o">(</span>executed<span class="w"> </span>sequentially<span class="o">)</span>
 </span></code></pre></div></td></tr></table></div>
 <h3 id="dynamic-toolset-management-runtime">Dynamic ToolSet Management (Runtime)</h3>
 <p><code>WithToolSets</code> is a <strong>static</strong> configuration: it wires ToolSets when constructing the Agent. In many real‑world scenarios you also need to <strong>add, remove, or replace ToolSets at runtime</strong> without recreating the Agent.</p>
@@ -8388,49 +8498,49 @@ silently treated as <code>"auto"</code>.</p>
 <p>If you created those ToolSet instances, you still need to close them
 explicitly at the right time.</p>
 <p><strong>Typical usage pattern:</strong></p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-62-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-62-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-62-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-62-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-62-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-62-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-62-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-62-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-62-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-62-10">10</a></span>
-<span class="normal"><a href="#__codelineno-62-11">11</a></span>
-<span class="normal"><a href="#__codelineno-62-12">12</a></span>
-<span class="normal"><a href="#__codelineno-62-13">13</a></span>
-<span class="normal"><a href="#__codelineno-62-14">14</a></span>
-<span class="normal"><a href="#__codelineno-62-15">15</a></span>
-<span class="normal"><a href="#__codelineno-62-16">16</a></span>
-<span class="normal"><a href="#__codelineno-62-17">17</a></span>
-<span class="normal"><a href="#__codelineno-62-18">18</a></span>
-<span class="normal"><a href="#__codelineno-62-19">19</a></span>
-<span class="normal"><a href="#__codelineno-62-20">20</a></span>
-<span class="normal"><a href="#__codelineno-62-21">21</a></span>
-<span class="normal"><a href="#__codelineno-62-22">22</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-62-1"><a id="__codelineno-62-1" name="__codelineno-62-1"></a><span class="c1">// 1. Create Agent with base tools only.</span>
-</span><span id="__span-62-2"><a id="__codelineno-62-2" name="__codelineno-62-2"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;dynamic-assistant&quot;</span><span class="p">,</span>
-</span><span id="__span-62-3"><a id="__codelineno-62-3" name="__codelineno-62-3"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">model</span><span class="p">),</span>
-</span><span id="__span-62-4"><a id="__codelineno-62-4" name="__codelineno-62-4"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span><span class="p">{</span><span class="nx">calculatorTool</span><span class="p">}),</span>
-</span><span id="__span-62-5"><a id="__codelineno-62-5" name="__codelineno-62-5"></a><span class="p">)</span>
-</span><span id="__span-62-6"><a id="__codelineno-62-6" name="__codelineno-62-6"></a>
-</span><span id="__span-62-7"><a id="__codelineno-62-7" name="__codelineno-62-7"></a><span class="c1">// 2. Later, attach an MCP ToolSet at runtime.</span>
-</span><span id="__span-62-8"><a id="__codelineno-62-8" name="__codelineno-62-8"></a><span class="nx">mcpToolSet</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">mcp</span><span class="p">.</span><span class="nx">NewMCPToolSet</span><span class="p">(</span><span class="nx">connectionConfig</span><span class="p">)</span>
-</span><span id="__span-62-9"><a id="__codelineno-62-9" name="__codelineno-62-9"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">mcpToolSet</span><span class="p">.</span><span class="nx">Init</span><span class="p">(</span><span class="nx">ctx</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-62-10"><a id="__codelineno-62-10" name="__codelineno-62-10"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;failed to init MCP ToolSet: %w&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-62-11"><a id="__codelineno-62-11" name="__codelineno-62-11"></a><span class="p">}</span>
-</span><span id="__span-62-12"><a id="__codelineno-62-12" name="__codelineno-62-12"></a><span class="nx">agent</span><span class="p">.</span><span class="nx">AddToolSet</span><span class="p">(</span><span class="nx">mcpToolSet</span><span class="p">)</span>
-</span><span id="__span-62-13"><a id="__codelineno-62-13" name="__codelineno-62-13"></a>
-</span><span id="__span-62-14"><a id="__codelineno-62-14" name="__codelineno-62-14"></a><span class="c1">// 3. Replace all ToolSets from configuration (declarative control plane).</span>
-</span><span id="__span-62-15"><a id="__codelineno-62-15" name="__codelineno-62-15"></a><span class="nx">toolSetsFromConfig</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="p">[]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">ToolSet</span><span class="p">{</span><span class="nx">mcpToolSet</span><span class="p">,</span><span class="w"> </span><span class="nx">fileToolSet</span><span class="p">}</span>
-</span><span id="__span-62-16"><a id="__codelineno-62-16" name="__codelineno-62-16"></a><span class="nx">agent</span><span class="p">.</span><span class="nx">SetToolSets</span><span class="p">(</span><span class="nx">toolSetsFromConfig</span><span class="p">)</span>
-</span><span id="__span-62-17"><a id="__codelineno-62-17" name="__codelineno-62-17"></a>
-</span><span id="__span-62-18"><a id="__codelineno-62-18" name="__codelineno-62-18"></a><span class="c1">// 4. Remove a ToolSet by name (e.g., feature rollback).</span>
-</span><span id="__span-62-19"><a id="__codelineno-62-19" name="__codelineno-62-19"></a><span class="nx">removed</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">RemoveToolSet</span><span class="p">(</span><span class="nx">mcpToolSet</span><span class="p">.</span><span class="nx">Name</span><span class="p">())</span>
-</span><span id="__span-62-20"><a id="__codelineno-62-20" name="__codelineno-62-20"></a><span class="k">if</span><span class="w"> </span><span class="p">!</span><span class="nx">removed</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-62-21"><a id="__codelineno-62-21" name="__codelineno-62-21"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;ToolSet %q not found&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">mcpToolSet</span><span class="p">.</span><span class="nx">Name</span><span class="p">())</span>
-</span><span id="__span-62-22"><a id="__codelineno-62-22" name="__codelineno-62-22"></a><span class="p">}</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-63-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-63-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-63-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-63-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-63-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-63-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-63-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-63-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-63-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-63-10">10</a></span>
+<span class="normal"><a href="#__codelineno-63-11">11</a></span>
+<span class="normal"><a href="#__codelineno-63-12">12</a></span>
+<span class="normal"><a href="#__codelineno-63-13">13</a></span>
+<span class="normal"><a href="#__codelineno-63-14">14</a></span>
+<span class="normal"><a href="#__codelineno-63-15">15</a></span>
+<span class="normal"><a href="#__codelineno-63-16">16</a></span>
+<span class="normal"><a href="#__codelineno-63-17">17</a></span>
+<span class="normal"><a href="#__codelineno-63-18">18</a></span>
+<span class="normal"><a href="#__codelineno-63-19">19</a></span>
+<span class="normal"><a href="#__codelineno-63-20">20</a></span>
+<span class="normal"><a href="#__codelineno-63-21">21</a></span>
+<span class="normal"><a href="#__codelineno-63-22">22</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-63-1"><a id="__codelineno-63-1" name="__codelineno-63-1"></a><span class="c1">// 1. Create Agent with base tools only.</span>
+</span><span id="__span-63-2"><a id="__codelineno-63-2" name="__codelineno-63-2"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;dynamic-assistant&quot;</span><span class="p">,</span>
+</span><span id="__span-63-3"><a id="__codelineno-63-3" name="__codelineno-63-3"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">model</span><span class="p">),</span>
+</span><span id="__span-63-4"><a id="__codelineno-63-4" name="__codelineno-63-4"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span><span class="p">{</span><span class="nx">calculatorTool</span><span class="p">}),</span>
+</span><span id="__span-63-5"><a id="__codelineno-63-5" name="__codelineno-63-5"></a><span class="p">)</span>
+</span><span id="__span-63-6"><a id="__codelineno-63-6" name="__codelineno-63-6"></a>
+</span><span id="__span-63-7"><a id="__codelineno-63-7" name="__codelineno-63-7"></a><span class="c1">// 2. Later, attach an MCP ToolSet at runtime.</span>
+</span><span id="__span-63-8"><a id="__codelineno-63-8" name="__codelineno-63-8"></a><span class="nx">mcpToolSet</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">mcp</span><span class="p">.</span><span class="nx">NewMCPToolSet</span><span class="p">(</span><span class="nx">connectionConfig</span><span class="p">)</span>
+</span><span id="__span-63-9"><a id="__codelineno-63-9" name="__codelineno-63-9"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">mcpToolSet</span><span class="p">.</span><span class="nx">Init</span><span class="p">(</span><span class="nx">ctx</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-63-10"><a id="__codelineno-63-10" name="__codelineno-63-10"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;failed to init MCP ToolSet: %w&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-63-11"><a id="__codelineno-63-11" name="__codelineno-63-11"></a><span class="p">}</span>
+</span><span id="__span-63-12"><a id="__codelineno-63-12" name="__codelineno-63-12"></a><span class="nx">agent</span><span class="p">.</span><span class="nx">AddToolSet</span><span class="p">(</span><span class="nx">mcpToolSet</span><span class="p">)</span>
+</span><span id="__span-63-13"><a id="__codelineno-63-13" name="__codelineno-63-13"></a>
+</span><span id="__span-63-14"><a id="__codelineno-63-14" name="__codelineno-63-14"></a><span class="c1">// 3. Replace all ToolSets from configuration (declarative control plane).</span>
+</span><span id="__span-63-15"><a id="__codelineno-63-15" name="__codelineno-63-15"></a><span class="nx">toolSetsFromConfig</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="p">[]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">ToolSet</span><span class="p">{</span><span class="nx">mcpToolSet</span><span class="p">,</span><span class="w"> </span><span class="nx">fileToolSet</span><span class="p">}</span>
+</span><span id="__span-63-16"><a id="__codelineno-63-16" name="__codelineno-63-16"></a><span class="nx">agent</span><span class="p">.</span><span class="nx">SetToolSets</span><span class="p">(</span><span class="nx">toolSetsFromConfig</span><span class="p">)</span>
+</span><span id="__span-63-17"><a id="__codelineno-63-17" name="__codelineno-63-17"></a>
+</span><span id="__span-63-18"><a id="__codelineno-63-18" name="__codelineno-63-18"></a><span class="c1">// 4. Remove a ToolSet by name (e.g., feature rollback).</span>
+</span><span id="__span-63-19"><a id="__codelineno-63-19" name="__codelineno-63-19"></a><span class="nx">removed</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">RemoveToolSet</span><span class="p">(</span><span class="nx">mcpToolSet</span><span class="p">.</span><span class="nx">Name</span><span class="p">())</span>
+</span><span id="__span-63-20"><a id="__codelineno-63-20" name="__codelineno-63-20"></a><span class="k">if</span><span class="w"> </span><span class="p">!</span><span class="nx">removed</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-63-21"><a id="__codelineno-63-21" name="__codelineno-63-21"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;ToolSet %q not found&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">mcpToolSet</span><span class="p">.</span><span class="nx">Name</span><span class="p">())</span>
+</span><span id="__span-63-22"><a id="__codelineno-63-22" name="__codelineno-63-22"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>Runtime ToolSet updates integrate seamlessly with the <strong>tool filtering</strong> logic described earlier:</p>
 <ul>
@@ -8443,183 +8553,20 @@ explicitly at the right time.</p>
 <p>Some models may emit non-strict JSON arguments for <code>tool_calls</code> (for example, unquoted object keys or trailing commas), which can break tool execution or external parsing.</p>
 <p>Tool call arguments auto repair is useful when the caller needs to parse <code>toolCall.Function.Arguments</code> outside the framework, or when tools require strictly valid JSON input.</p>
 <p>When <code>agent.WithToolCallArgumentsJSONRepairEnabled(true)</code> is enabled in <code>runner.Run</code>, the framework will attempt to repair <code>toolCall.Function.Arguments</code> on a best-effort basis.</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-63-1">1</a></span>
-<span class="normal"><a href="#__codelineno-63-2">2</a></span>
-<span class="normal"><a href="#__codelineno-63-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-63-1"><a id="__codelineno-63-1" name="__codelineno-63-1"></a><span class="nx">ch</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;...&quot;</span><span class="p">),</span>
-</span><span id="__span-63-2"><a id="__codelineno-63-2" name="__codelineno-63-2"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithToolCallArgumentsJSONRepairEnabled</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
-</span><span id="__span-63-3"><a id="__codelineno-63-3" name="__codelineno-63-3"></a><span class="p">)</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-64-1">1</a></span>
+<span class="normal"><a href="#__codelineno-64-2">2</a></span>
+<span class="normal"><a href="#__codelineno-64-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-64-1"><a id="__codelineno-64-1" name="__codelineno-64-1"></a><span class="nx">ch</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;...&quot;</span><span class="p">),</span>
+</span><span id="__span-64-2"><a id="__codelineno-64-2" name="__codelineno-64-2"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithToolCallArgumentsJSONRepairEnabled</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-64-3"><a id="__codelineno-64-3" name="__codelineno-64-3"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <h2 id="quick-start">Quick Start</h2>
 <h3 id="environment-setup">Environment Setup</h3>
-<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-64-1">1</a></span>
-<span class="normal"><a href="#__codelineno-64-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-64-1"><a id="__codelineno-64-1" name="__codelineno-64-1"></a><span class="c1"># Set API key.</span>
-</span><span id="__span-64-2"><a id="__codelineno-64-2" name="__codelineno-64-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">OPENAI_API_KEY</span><span class="o">=</span><span class="s2">&quot;your-api-key&quot;</span>
+<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-65-1">1</a></span>
+<span class="normal"><a href="#__codelineno-65-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-65-1"><a id="__codelineno-65-1" name="__codelineno-65-1"></a><span class="c1"># Set API key.</span>
+</span><span id="__span-65-2"><a id="__codelineno-65-2" name="__codelineno-65-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">OPENAI_API_KEY</span><span class="o">=</span><span class="s2">&quot;your-api-key&quot;</span>
 </span></code></pre></div></td></tr></table></div>
 <h3 id="simple-example">Simple Example</h3>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-65-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-65-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-65-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-65-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-65-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-65-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-65-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-65-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-65-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-65-10">10</a></span>
-<span class="normal"><a href="#__codelineno-65-11">11</a></span>
-<span class="normal"><a href="#__codelineno-65-12">12</a></span>
-<span class="normal"><a href="#__codelineno-65-13">13</a></span>
-<span class="normal"><a href="#__codelineno-65-14">14</a></span>
-<span class="normal"><a href="#__codelineno-65-15">15</a></span>
-<span class="normal"><a href="#__codelineno-65-16">16</a></span>
-<span class="normal"><a href="#__codelineno-65-17">17</a></span>
-<span class="normal"><a href="#__codelineno-65-18">18</a></span>
-<span class="normal"><a href="#__codelineno-65-19">19</a></span>
-<span class="normal"><a href="#__codelineno-65-20">20</a></span>
-<span class="normal"><a href="#__codelineno-65-21">21</a></span>
-<span class="normal"><a href="#__codelineno-65-22">22</a></span>
-<span class="normal"><a href="#__codelineno-65-23">23</a></span>
-<span class="normal"><a href="#__codelineno-65-24">24</a></span>
-<span class="normal"><a href="#__codelineno-65-25">25</a></span>
-<span class="normal"><a href="#__codelineno-65-26">26</a></span>
-<span class="normal"><a href="#__codelineno-65-27">27</a></span>
-<span class="normal"><a href="#__codelineno-65-28">28</a></span>
-<span class="normal"><a href="#__codelineno-65-29">29</a></span>
-<span class="normal"><a href="#__codelineno-65-30">30</a></span>
-<span class="normal"><a href="#__codelineno-65-31">31</a></span>
-<span class="normal"><a href="#__codelineno-65-32">32</a></span>
-<span class="normal"><a href="#__codelineno-65-33">33</a></span>
-<span class="normal"><a href="#__codelineno-65-34">34</a></span>
-<span class="normal"><a href="#__codelineno-65-35">35</a></span>
-<span class="normal"><a href="#__codelineno-65-36">36</a></span>
-<span class="normal"><a href="#__codelineno-65-37">37</a></span>
-<span class="normal"><a href="#__codelineno-65-38">38</a></span>
-<span class="normal"><a href="#__codelineno-65-39">39</a></span>
-<span class="normal"><a href="#__codelineno-65-40">40</a></span>
-<span class="normal"><a href="#__codelineno-65-41">41</a></span>
-<span class="normal"><a href="#__codelineno-65-42">42</a></span>
-<span class="normal"><a href="#__codelineno-65-43">43</a></span>
-<span class="normal"><a href="#__codelineno-65-44">44</a></span>
-<span class="normal"><a href="#__codelineno-65-45">45</a></span>
-<span class="normal"><a href="#__codelineno-65-46">46</a></span>
-<span class="normal"><a href="#__codelineno-65-47">47</a></span>
-<span class="normal"><a href="#__codelineno-65-48">48</a></span>
-<span class="normal"><a href="#__codelineno-65-49">49</a></span>
-<span class="normal"><a href="#__codelineno-65-50">50</a></span>
-<span class="normal"><a href="#__codelineno-65-51">51</a></span>
-<span class="normal"><a href="#__codelineno-65-52">52</a></span>
-<span class="normal"><a href="#__codelineno-65-53">53</a></span>
-<span class="normal"><a href="#__codelineno-65-54">54</a></span>
-<span class="normal"><a href="#__codelineno-65-55">55</a></span>
-<span class="normal"><a href="#__codelineno-65-56">56</a></span>
-<span class="normal"><a href="#__codelineno-65-57">57</a></span>
-<span class="normal"><a href="#__codelineno-65-58">58</a></span>
-<span class="normal"><a href="#__codelineno-65-59">59</a></span>
-<span class="normal"><a href="#__codelineno-65-60">60</a></span>
-<span class="normal"><a href="#__codelineno-65-61">61</a></span>
-<span class="normal"><a href="#__codelineno-65-62">62</a></span>
-<span class="normal"><a href="#__codelineno-65-63">63</a></span>
-<span class="normal"><a href="#__codelineno-65-64">64</a></span>
-<span class="normal"><a href="#__codelineno-65-65">65</a></span>
-<span class="normal"><a href="#__codelineno-65-66">66</a></span>
-<span class="normal"><a href="#__codelineno-65-67">67</a></span>
-<span class="normal"><a href="#__codelineno-65-68">68</a></span>
-<span class="normal"><a href="#__codelineno-65-69">69</a></span>
-<span class="normal"><a href="#__codelineno-65-70">70</a></span>
-<span class="normal"><a href="#__codelineno-65-71">71</a></span>
-<span class="normal"><a href="#__codelineno-65-72">72</a></span>
-<span class="normal"><a href="#__codelineno-65-73">73</a></span>
-<span class="normal"><a href="#__codelineno-65-74">74</a></span>
-<span class="normal"><a href="#__codelineno-65-75">75</a></span>
-<span class="normal"><a href="#__codelineno-65-76">76</a></span>
-<span class="normal"><a href="#__codelineno-65-77">77</a></span>
-<span class="normal"><a href="#__codelineno-65-78">78</a></span>
-<span class="normal"><a href="#__codelineno-65-79">79</a></span>
-<span class="normal"><a href="#__codelineno-65-80">80</a></span>
-<span class="normal"><a href="#__codelineno-65-81">81</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-65-1"><a id="__codelineno-65-1" name="__codelineno-65-1"></a><span class="kn">package</span><span class="w"> </span><span class="nx">main</span>
-</span><span id="__span-65-2"><a id="__codelineno-65-2" name="__codelineno-65-2"></a>
-</span><span id="__span-65-3"><a id="__codelineno-65-3" name="__codelineno-65-3"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-65-4"><a id="__codelineno-65-4" name="__codelineno-65-4"></a><span class="w">    </span><span class="s">&quot;context&quot;</span>
-</span><span id="__span-65-5"><a id="__codelineno-65-5" name="__codelineno-65-5"></a><span class="w">    </span><span class="s">&quot;fmt&quot;</span>
-</span><span id="__span-65-6"><a id="__codelineno-65-6" name="__codelineno-65-6"></a>
-</span><span id="__span-65-7"><a id="__codelineno-65-7" name="__codelineno-65-7"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
-</span><span id="__span-65-8"><a id="__codelineno-65-8" name="__codelineno-65-8"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
-</span><span id="__span-65-9"><a id="__codelineno-65-9" name="__codelineno-65-9"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/openai&quot;</span>
-</span><span id="__span-65-10"><a id="__codelineno-65-10" name="__codelineno-65-10"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
-</span><span id="__span-65-11"><a id="__codelineno-65-11" name="__codelineno-65-11"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/tool/function&quot;</span>
-</span><span id="__span-65-12"><a id="__codelineno-65-12" name="__codelineno-65-12"></a><span class="p">)</span>
-</span><span id="__span-65-13"><a id="__codelineno-65-13" name="__codelineno-65-13"></a>
-</span><span id="__span-65-14"><a id="__codelineno-65-14" name="__codelineno-65-14"></a><span class="kd">func</span><span class="w"> </span><span class="nx">main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-65-15"><a id="__codelineno-65-15" name="__codelineno-65-15"></a><span class="w">    </span><span class="c1">// 1. Create a simple tool.</span>
-</span><span id="__span-65-16"><a id="__codelineno-65-16" name="__codelineno-65-16"></a><span class="w">    </span><span class="nx">calculatorTool</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">function</span><span class="p">.</span><span class="nx">NewFunctionTool</span><span class="p">(</span>
-</span><span id="__span-65-17"><a id="__codelineno-65-17" name="__codelineno-65-17"></a><span class="w">        </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-65-18"><a id="__codelineno-65-18" name="__codelineno-65-18"></a><span class="w">            </span><span class="nx">Operation</span><span class="w"> </span><span class="kt">string</span><span class="w">  </span><span class="s">`json:&quot;operation&quot; jsonschema:&quot;description=Operation type e.g. add/multiply&quot;`</span>
-</span><span id="__span-65-19"><a id="__codelineno-65-19" name="__codelineno-65-19"></a><span class="w">            </span><span class="nx">A</span><span class="w">         </span><span class="kt">float64</span><span class="w"> </span><span class="s">`json:&quot;a&quot; jsonschema:&quot;description=First operand&quot;`</span>
-</span><span id="__span-65-20"><a id="__codelineno-65-20" name="__codelineno-65-20"></a><span class="w">            </span><span class="nx">B</span><span class="w">         </span><span class="kt">float64</span><span class="w"> </span><span class="s">`json:&quot;b&quot; jsonschema:&quot;description=Second operand&quot;`</span>
-</span><span id="__span-65-21"><a id="__codelineno-65-21" name="__codelineno-65-21"></a><span class="w">        </span><span class="p">})</span><span class="w"> </span><span class="p">(</span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kd">interface</span><span class="p">{},</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-65-22"><a id="__codelineno-65-22" name="__codelineno-65-22"></a><span class="w">            </span><span class="kd">var</span><span class="w"> </span><span class="nx">result</span><span class="w"> </span><span class="kt">float64</span>
-</span><span id="__span-65-23"><a id="__codelineno-65-23" name="__codelineno-65-23"></a><span class="w">            </span><span class="k">switch</span><span class="w"> </span><span class="nx">req</span><span class="p">.</span><span class="nx">Operation</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-65-24"><a id="__codelineno-65-24" name="__codelineno-65-24"></a><span class="w">            </span><span class="k">case</span><span class="w"> </span><span class="s">&quot;add&quot;</span><span class="p">:</span>
-</span><span id="__span-65-25"><a id="__codelineno-65-25" name="__codelineno-65-25"></a><span class="w">                </span><span class="nx">result</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">req</span><span class="p">.</span><span class="nx">A</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">req</span><span class="p">.</span><span class="nx">B</span>
-</span><span id="__span-65-26"><a id="__codelineno-65-26" name="__codelineno-65-26"></a><span class="w">            </span><span class="k">case</span><span class="w"> </span><span class="s">&quot;multiply&quot;</span><span class="p">:</span>
-</span><span id="__span-65-27"><a id="__codelineno-65-27" name="__codelineno-65-27"></a><span class="w">                </span><span class="nx">result</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">req</span><span class="p">.</span><span class="nx">A</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="nx">req</span><span class="p">.</span><span class="nx">B</span>
-</span><span id="__span-65-28"><a id="__codelineno-65-28" name="__codelineno-65-28"></a><span class="w">            </span><span class="k">default</span><span class="p">:</span>
-</span><span id="__span-65-29"><a id="__codelineno-65-29" name="__codelineno-65-29"></a><span class="w">                </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;unsupported operation&quot;</span><span class="p">)</span>
-</span><span id="__span-65-30"><a id="__codelineno-65-30" name="__codelineno-65-30"></a><span class="w">            </span><span class="p">}</span>
-</span><span id="__span-65-31"><a id="__codelineno-65-31" name="__codelineno-65-31"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kd">interface</span><span class="p">{}{</span><span class="s">&quot;result&quot;</span><span class="p">:</span><span class="w"> </span><span class="nx">result</span><span class="p">},</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-65-32"><a id="__codelineno-65-32" name="__codelineno-65-32"></a><span class="w">        </span><span class="p">},</span>
-</span><span id="__span-65-33"><a id="__codelineno-65-33" name="__codelineno-65-33"></a><span class="w">        </span><span class="nx">function</span><span class="p">.</span><span class="nx">WithName</span><span class="p">(</span><span class="s">&quot;calculator&quot;</span><span class="p">),</span>
-</span><span id="__span-65-34"><a id="__codelineno-65-34" name="__codelineno-65-34"></a><span class="w">        </span><span class="nx">function</span><span class="p">.</span><span class="nx">WithDescription</span><span class="p">(</span><span class="s">&quot;Simple calculator.&quot;</span><span class="p">),</span>
-</span><span id="__span-65-35"><a id="__codelineno-65-35" name="__codelineno-65-35"></a><span class="w">    </span><span class="p">)</span>
-</span><span id="__span-65-36"><a id="__codelineno-65-36" name="__codelineno-65-36"></a>
-</span><span id="__span-65-37"><a id="__codelineno-65-37" name="__codelineno-65-37"></a><span class="w">    </span><span class="c1">// 2. Create model and Agent.</span>
-</span><span id="__span-65-38"><a id="__codelineno-65-38" name="__codelineno-65-38"></a><span class="w">    </span><span class="nx">llmModel</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;deepseek-v4-flash&quot;</span><span class="p">)</span>
-</span><span id="__span-65-39"><a id="__codelineno-65-39" name="__codelineno-65-39"></a><span class="w">    </span><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;calculator-assistant&quot;</span><span class="p">,</span>
-</span><span id="__span-65-40"><a id="__codelineno-65-40" name="__codelineno-65-40"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">llmModel</span><span class="p">),</span>
-</span><span id="__span-65-41"><a id="__codelineno-65-41" name="__codelineno-65-41"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithInstruction</span><span class="p">(</span><span class="s">&quot;You are a math assistant.&quot;</span><span class="p">),</span>
-</span><span id="__span-65-42"><a id="__codelineno-65-42" name="__codelineno-65-42"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span><span class="p">{</span><span class="nx">calculatorTool</span><span class="p">}),</span>
-</span><span id="__span-65-43"><a id="__codelineno-65-43" name="__codelineno-65-43"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithGenerationConfig</span><span class="p">(</span><span class="nx">model</span><span class="p">.</span><span class="nx">GenerationConfig</span><span class="p">{</span><span class="nx">Stream</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">}),</span><span class="w"> </span><span class="c1">// Enable streaming output.</span>
-</span><span id="__span-65-44"><a id="__codelineno-65-44" name="__codelineno-65-44"></a><span class="w">    </span><span class="p">)</span>
-</span><span id="__span-65-45"><a id="__codelineno-65-45" name="__codelineno-65-45"></a>
-</span><span id="__span-65-46"><a id="__codelineno-65-46" name="__codelineno-65-46"></a><span class="w">    </span><span class="c1">// 3. Create Runner and execute.</span>
-</span><span id="__span-65-47"><a id="__codelineno-65-47" name="__codelineno-65-47"></a><span class="w">    </span><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">&quot;math-app&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">agent</span><span class="p">)</span>
-</span><span id="__span-65-48"><a id="__codelineno-65-48" name="__codelineno-65-48"></a>
-</span><span id="__span-65-49"><a id="__codelineno-65-49" name="__codelineno-65-49"></a><span class="w">    </span><span class="nx">ctx</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">()</span>
-</span><span id="__span-65-50"><a id="__codelineno-65-50" name="__codelineno-65-50"></a><span class="w">    </span><span class="nx">userMessage</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;Please calculate 25 times 4.&quot;</span><span class="p">)</span>
-</span><span id="__span-65-51"><a id="__codelineno-65-51" name="__codelineno-65-51"></a>
-</span><span id="__span-65-52"><a id="__codelineno-65-52" name="__codelineno-65-52"></a><span class="w">    </span><span class="nx">eventChan</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;user1&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;session1&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">userMessage</span><span class="p">)</span>
-</span><span id="__span-65-53"><a id="__codelineno-65-53" name="__codelineno-65-53"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-65-54"><a id="__codelineno-65-54" name="__codelineno-65-54"></a><span class="w">        </span><span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-65-55"><a id="__codelineno-65-55" name="__codelineno-65-55"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-65-56"><a id="__codelineno-65-56" name="__codelineno-65-56"></a>
-</span><span id="__span-65-57"><a id="__codelineno-65-57" name="__codelineno-65-57"></a><span class="w">    </span><span class="c1">// 4. Handle responses.</span>
-</span><span id="__span-65-58"><a id="__codelineno-65-58" name="__codelineno-65-58"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">eventChan</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-65-59"><a id="__codelineno-65-59" name="__codelineno-65-59"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Error</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-65-60"><a id="__codelineno-65-60" name="__codelineno-65-60"></a><span class="w">            </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Error: %s\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Error</span><span class="p">.</span><span class="nx">Message</span><span class="p">)</span>
-</span><span id="__span-65-61"><a id="__codelineno-65-61" name="__codelineno-65-61"></a><span class="w">            </span><span class="k">continue</span>
-</span><span id="__span-65-62"><a id="__codelineno-65-62" name="__codelineno-65-62"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-65-63"><a id="__codelineno-65-63" name="__codelineno-65-63"></a>
-</span><span id="__span-65-64"><a id="__codelineno-65-64" name="__codelineno-65-64"></a><span class="w">        </span><span class="c1">// Display tool calls.</span>
-</span><span id="__span-65-65"><a id="__codelineno-65-65" name="__codelineno-65-65"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">Message</span><span class="p">.</span><span class="nx">ToolCalls</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-65-66"><a id="__codelineno-65-66" name="__codelineno-65-66"></a><span class="w">            </span><span class="k">for</span><span class="w"> </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">toolCall</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">Message</span><span class="p">.</span><span class="nx">ToolCalls</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-65-67"><a id="__codelineno-65-67" name="__codelineno-65-67"></a><span class="w">                </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;🔧 Call tool: %s\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">toolCall</span><span class="p">.</span><span class="nx">Function</span><span class="p">.</span><span class="nx">Name</span><span class="p">)</span>
-</span><span id="__span-65-68"><a id="__codelineno-65-68" name="__codelineno-65-68"></a><span class="w">                </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;   Params: %s\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nb">string</span><span class="p">(</span><span class="nx">toolCall</span><span class="p">.</span><span class="nx">Function</span><span class="p">.</span><span class="nx">Arguments</span><span class="p">))</span>
-</span><span id="__span-65-69"><a id="__codelineno-65-69" name="__codelineno-65-69"></a><span class="w">            </span><span class="p">}</span>
-</span><span id="__span-65-70"><a id="__codelineno-65-70" name="__codelineno-65-70"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-65-71"><a id="__codelineno-65-71" name="__codelineno-65-71"></a>
-</span><span id="__span-65-72"><a id="__codelineno-65-72" name="__codelineno-65-72"></a><span class="w">        </span><span class="c1">// Display streaming content.</span>
-</span><span id="__span-65-73"><a id="__codelineno-65-73" name="__codelineno-65-73"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-65-74"><a id="__codelineno-65-74" name="__codelineno-65-74"></a><span class="w">            </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Print</span><span class="p">(</span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">Delta</span><span class="p">.</span><span class="nx">Content</span><span class="p">)</span>
-</span><span id="__span-65-75"><a id="__codelineno-65-75" name="__codelineno-65-75"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-65-76"><a id="__codelineno-65-76" name="__codelineno-65-76"></a>
-</span><span id="__span-65-77"><a id="__codelineno-65-77" name="__codelineno-65-77"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Done</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-65-78"><a id="__codelineno-65-78" name="__codelineno-65-78"></a><span class="w">            </span><span class="k">break</span>
-</span><span id="__span-65-79"><a id="__codelineno-65-79" name="__codelineno-65-79"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-65-80"><a id="__codelineno-65-80" name="__codelineno-65-80"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-65-81"><a id="__codelineno-65-81" name="__codelineno-65-81"></a><span class="p">}</span>
-</span></code></pre></div></td></tr></table></div>
-<h3 id="run-the-examples">Run the Examples</h3>
-<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-66-1"> 1</a></span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-66-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-66-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-66-3"> 3</a></span>
 <span class="normal"><a href="#__codelineno-66-4"> 4</a></span>
@@ -8630,18 +8577,181 @@ explicitly at the right time.</p>
 <span class="normal"><a href="#__codelineno-66-9"> 9</a></span>
 <span class="normal"><a href="#__codelineno-66-10">10</a></span>
 <span class="normal"><a href="#__codelineno-66-11">11</a></span>
-<span class="normal"><a href="#__codelineno-66-12">12</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-66-1"><a id="__codelineno-66-1" name="__codelineno-66-1"></a><span class="c1"># Enter the tool example directory.</span>
-</span><span id="__span-66-2"><a id="__codelineno-66-2" name="__codelineno-66-2"></a><span class="nb">cd</span><span class="w"> </span>examples/tool
-</span><span id="__span-66-3"><a id="__codelineno-66-3" name="__codelineno-66-3"></a>go<span class="w"> </span>run<span class="w"> </span>.
-</span><span id="__span-66-4"><a id="__codelineno-66-4" name="__codelineno-66-4"></a>
-</span><span id="__span-66-5"><a id="__codelineno-66-5" name="__codelineno-66-5"></a><span class="c1"># Enter the MCP tool example directory.</span>
-</span><span id="__span-66-6"><a id="__codelineno-66-6" name="__codelineno-66-6"></a><span class="nb">cd</span><span class="w"> </span>examples/mcp_tool
-</span><span id="__span-66-7"><a id="__codelineno-66-7" name="__codelineno-66-7"></a>
-</span><span id="__span-66-8"><a id="__codelineno-66-8" name="__codelineno-66-8"></a><span class="c1"># Start the external server.</span>
-</span><span id="__span-66-9"><a id="__codelineno-66-9" name="__codelineno-66-9"></a><span class="nb">cd</span><span class="w"> </span>streamalbe_server<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>main.go<span class="w"> </span><span class="p">&amp;</span>
-</span><span id="__span-66-10"><a id="__codelineno-66-10" name="__codelineno-66-10"></a>
-</span><span id="__span-66-11"><a id="__codelineno-66-11" name="__codelineno-66-11"></a><span class="c1"># Run the main program.</span>
-</span><span id="__span-66-12"><a id="__codelineno-66-12" name="__codelineno-66-12"></a>go<span class="w"> </span>run<span class="w"> </span>main.go<span class="w"> </span>-model<span class="o">=</span><span class="s2">&quot;deepseek-v4-flash&quot;</span>
+<span class="normal"><a href="#__codelineno-66-12">12</a></span>
+<span class="normal"><a href="#__codelineno-66-13">13</a></span>
+<span class="normal"><a href="#__codelineno-66-14">14</a></span>
+<span class="normal"><a href="#__codelineno-66-15">15</a></span>
+<span class="normal"><a href="#__codelineno-66-16">16</a></span>
+<span class="normal"><a href="#__codelineno-66-17">17</a></span>
+<span class="normal"><a href="#__codelineno-66-18">18</a></span>
+<span class="normal"><a href="#__codelineno-66-19">19</a></span>
+<span class="normal"><a href="#__codelineno-66-20">20</a></span>
+<span class="normal"><a href="#__codelineno-66-21">21</a></span>
+<span class="normal"><a href="#__codelineno-66-22">22</a></span>
+<span class="normal"><a href="#__codelineno-66-23">23</a></span>
+<span class="normal"><a href="#__codelineno-66-24">24</a></span>
+<span class="normal"><a href="#__codelineno-66-25">25</a></span>
+<span class="normal"><a href="#__codelineno-66-26">26</a></span>
+<span class="normal"><a href="#__codelineno-66-27">27</a></span>
+<span class="normal"><a href="#__codelineno-66-28">28</a></span>
+<span class="normal"><a href="#__codelineno-66-29">29</a></span>
+<span class="normal"><a href="#__codelineno-66-30">30</a></span>
+<span class="normal"><a href="#__codelineno-66-31">31</a></span>
+<span class="normal"><a href="#__codelineno-66-32">32</a></span>
+<span class="normal"><a href="#__codelineno-66-33">33</a></span>
+<span class="normal"><a href="#__codelineno-66-34">34</a></span>
+<span class="normal"><a href="#__codelineno-66-35">35</a></span>
+<span class="normal"><a href="#__codelineno-66-36">36</a></span>
+<span class="normal"><a href="#__codelineno-66-37">37</a></span>
+<span class="normal"><a href="#__codelineno-66-38">38</a></span>
+<span class="normal"><a href="#__codelineno-66-39">39</a></span>
+<span class="normal"><a href="#__codelineno-66-40">40</a></span>
+<span class="normal"><a href="#__codelineno-66-41">41</a></span>
+<span class="normal"><a href="#__codelineno-66-42">42</a></span>
+<span class="normal"><a href="#__codelineno-66-43">43</a></span>
+<span class="normal"><a href="#__codelineno-66-44">44</a></span>
+<span class="normal"><a href="#__codelineno-66-45">45</a></span>
+<span class="normal"><a href="#__codelineno-66-46">46</a></span>
+<span class="normal"><a href="#__codelineno-66-47">47</a></span>
+<span class="normal"><a href="#__codelineno-66-48">48</a></span>
+<span class="normal"><a href="#__codelineno-66-49">49</a></span>
+<span class="normal"><a href="#__codelineno-66-50">50</a></span>
+<span class="normal"><a href="#__codelineno-66-51">51</a></span>
+<span class="normal"><a href="#__codelineno-66-52">52</a></span>
+<span class="normal"><a href="#__codelineno-66-53">53</a></span>
+<span class="normal"><a href="#__codelineno-66-54">54</a></span>
+<span class="normal"><a href="#__codelineno-66-55">55</a></span>
+<span class="normal"><a href="#__codelineno-66-56">56</a></span>
+<span class="normal"><a href="#__codelineno-66-57">57</a></span>
+<span class="normal"><a href="#__codelineno-66-58">58</a></span>
+<span class="normal"><a href="#__codelineno-66-59">59</a></span>
+<span class="normal"><a href="#__codelineno-66-60">60</a></span>
+<span class="normal"><a href="#__codelineno-66-61">61</a></span>
+<span class="normal"><a href="#__codelineno-66-62">62</a></span>
+<span class="normal"><a href="#__codelineno-66-63">63</a></span>
+<span class="normal"><a href="#__codelineno-66-64">64</a></span>
+<span class="normal"><a href="#__codelineno-66-65">65</a></span>
+<span class="normal"><a href="#__codelineno-66-66">66</a></span>
+<span class="normal"><a href="#__codelineno-66-67">67</a></span>
+<span class="normal"><a href="#__codelineno-66-68">68</a></span>
+<span class="normal"><a href="#__codelineno-66-69">69</a></span>
+<span class="normal"><a href="#__codelineno-66-70">70</a></span>
+<span class="normal"><a href="#__codelineno-66-71">71</a></span>
+<span class="normal"><a href="#__codelineno-66-72">72</a></span>
+<span class="normal"><a href="#__codelineno-66-73">73</a></span>
+<span class="normal"><a href="#__codelineno-66-74">74</a></span>
+<span class="normal"><a href="#__codelineno-66-75">75</a></span>
+<span class="normal"><a href="#__codelineno-66-76">76</a></span>
+<span class="normal"><a href="#__codelineno-66-77">77</a></span>
+<span class="normal"><a href="#__codelineno-66-78">78</a></span>
+<span class="normal"><a href="#__codelineno-66-79">79</a></span>
+<span class="normal"><a href="#__codelineno-66-80">80</a></span>
+<span class="normal"><a href="#__codelineno-66-81">81</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-66-1"><a id="__codelineno-66-1" name="__codelineno-66-1"></a><span class="kn">package</span><span class="w"> </span><span class="nx">main</span>
+</span><span id="__span-66-2"><a id="__codelineno-66-2" name="__codelineno-66-2"></a>
+</span><span id="__span-66-3"><a id="__codelineno-66-3" name="__codelineno-66-3"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-66-4"><a id="__codelineno-66-4" name="__codelineno-66-4"></a><span class="w">    </span><span class="s">&quot;context&quot;</span>
+</span><span id="__span-66-5"><a id="__codelineno-66-5" name="__codelineno-66-5"></a><span class="w">    </span><span class="s">&quot;fmt&quot;</span>
+</span><span id="__span-66-6"><a id="__codelineno-66-6" name="__codelineno-66-6"></a>
+</span><span id="__span-66-7"><a id="__codelineno-66-7" name="__codelineno-66-7"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
+</span><span id="__span-66-8"><a id="__codelineno-66-8" name="__codelineno-66-8"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
+</span><span id="__span-66-9"><a id="__codelineno-66-9" name="__codelineno-66-9"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/openai&quot;</span>
+</span><span id="__span-66-10"><a id="__codelineno-66-10" name="__codelineno-66-10"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
+</span><span id="__span-66-11"><a id="__codelineno-66-11" name="__codelineno-66-11"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/tool/function&quot;</span>
+</span><span id="__span-66-12"><a id="__codelineno-66-12" name="__codelineno-66-12"></a><span class="p">)</span>
+</span><span id="__span-66-13"><a id="__codelineno-66-13" name="__codelineno-66-13"></a>
+</span><span id="__span-66-14"><a id="__codelineno-66-14" name="__codelineno-66-14"></a><span class="kd">func</span><span class="w"> </span><span class="nx">main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-66-15"><a id="__codelineno-66-15" name="__codelineno-66-15"></a><span class="w">    </span><span class="c1">// 1. Create a simple tool.</span>
+</span><span id="__span-66-16"><a id="__codelineno-66-16" name="__codelineno-66-16"></a><span class="w">    </span><span class="nx">calculatorTool</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">function</span><span class="p">.</span><span class="nx">NewFunctionTool</span><span class="p">(</span>
+</span><span id="__span-66-17"><a id="__codelineno-66-17" name="__codelineno-66-17"></a><span class="w">        </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-66-18"><a id="__codelineno-66-18" name="__codelineno-66-18"></a><span class="w">            </span><span class="nx">Operation</span><span class="w"> </span><span class="kt">string</span><span class="w">  </span><span class="s">`json:&quot;operation&quot; jsonschema:&quot;description=Operation type e.g. add/multiply&quot;`</span>
+</span><span id="__span-66-19"><a id="__codelineno-66-19" name="__codelineno-66-19"></a><span class="w">            </span><span class="nx">A</span><span class="w">         </span><span class="kt">float64</span><span class="w"> </span><span class="s">`json:&quot;a&quot; jsonschema:&quot;description=First operand&quot;`</span>
+</span><span id="__span-66-20"><a id="__codelineno-66-20" name="__codelineno-66-20"></a><span class="w">            </span><span class="nx">B</span><span class="w">         </span><span class="kt">float64</span><span class="w"> </span><span class="s">`json:&quot;b&quot; jsonschema:&quot;description=Second operand&quot;`</span>
+</span><span id="__span-66-21"><a id="__codelineno-66-21" name="__codelineno-66-21"></a><span class="w">        </span><span class="p">})</span><span class="w"> </span><span class="p">(</span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kd">interface</span><span class="p">{},</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-66-22"><a id="__codelineno-66-22" name="__codelineno-66-22"></a><span class="w">            </span><span class="kd">var</span><span class="w"> </span><span class="nx">result</span><span class="w"> </span><span class="kt">float64</span>
+</span><span id="__span-66-23"><a id="__codelineno-66-23" name="__codelineno-66-23"></a><span class="w">            </span><span class="k">switch</span><span class="w"> </span><span class="nx">req</span><span class="p">.</span><span class="nx">Operation</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-66-24"><a id="__codelineno-66-24" name="__codelineno-66-24"></a><span class="w">            </span><span class="k">case</span><span class="w"> </span><span class="s">&quot;add&quot;</span><span class="p">:</span>
+</span><span id="__span-66-25"><a id="__codelineno-66-25" name="__codelineno-66-25"></a><span class="w">                </span><span class="nx">result</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">req</span><span class="p">.</span><span class="nx">A</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">req</span><span class="p">.</span><span class="nx">B</span>
+</span><span id="__span-66-26"><a id="__codelineno-66-26" name="__codelineno-66-26"></a><span class="w">            </span><span class="k">case</span><span class="w"> </span><span class="s">&quot;multiply&quot;</span><span class="p">:</span>
+</span><span id="__span-66-27"><a id="__codelineno-66-27" name="__codelineno-66-27"></a><span class="w">                </span><span class="nx">result</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">req</span><span class="p">.</span><span class="nx">A</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="nx">req</span><span class="p">.</span><span class="nx">B</span>
+</span><span id="__span-66-28"><a id="__codelineno-66-28" name="__codelineno-66-28"></a><span class="w">            </span><span class="k">default</span><span class="p">:</span>
+</span><span id="__span-66-29"><a id="__codelineno-66-29" name="__codelineno-66-29"></a><span class="w">                </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;unsupported operation&quot;</span><span class="p">)</span>
+</span><span id="__span-66-30"><a id="__codelineno-66-30" name="__codelineno-66-30"></a><span class="w">            </span><span class="p">}</span>
+</span><span id="__span-66-31"><a id="__codelineno-66-31" name="__codelineno-66-31"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kd">interface</span><span class="p">{}{</span><span class="s">&quot;result&quot;</span><span class="p">:</span><span class="w"> </span><span class="nx">result</span><span class="p">},</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-66-32"><a id="__codelineno-66-32" name="__codelineno-66-32"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-66-33"><a id="__codelineno-66-33" name="__codelineno-66-33"></a><span class="w">        </span><span class="nx">function</span><span class="p">.</span><span class="nx">WithName</span><span class="p">(</span><span class="s">&quot;calculator&quot;</span><span class="p">),</span>
+</span><span id="__span-66-34"><a id="__codelineno-66-34" name="__codelineno-66-34"></a><span class="w">        </span><span class="nx">function</span><span class="p">.</span><span class="nx">WithDescription</span><span class="p">(</span><span class="s">&quot;Simple calculator.&quot;</span><span class="p">),</span>
+</span><span id="__span-66-35"><a id="__codelineno-66-35" name="__codelineno-66-35"></a><span class="w">    </span><span class="p">)</span>
+</span><span id="__span-66-36"><a id="__codelineno-66-36" name="__codelineno-66-36"></a>
+</span><span id="__span-66-37"><a id="__codelineno-66-37" name="__codelineno-66-37"></a><span class="w">    </span><span class="c1">// 2. Create model and Agent.</span>
+</span><span id="__span-66-38"><a id="__codelineno-66-38" name="__codelineno-66-38"></a><span class="w">    </span><span class="nx">llmModel</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;deepseek-v4-flash&quot;</span><span class="p">)</span>
+</span><span id="__span-66-39"><a id="__codelineno-66-39" name="__codelineno-66-39"></a><span class="w">    </span><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;calculator-assistant&quot;</span><span class="p">,</span>
+</span><span id="__span-66-40"><a id="__codelineno-66-40" name="__codelineno-66-40"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">llmModel</span><span class="p">),</span>
+</span><span id="__span-66-41"><a id="__codelineno-66-41" name="__codelineno-66-41"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithInstruction</span><span class="p">(</span><span class="s">&quot;You are a math assistant.&quot;</span><span class="p">),</span>
+</span><span id="__span-66-42"><a id="__codelineno-66-42" name="__codelineno-66-42"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span><span class="p">{</span><span class="nx">calculatorTool</span><span class="p">}),</span>
+</span><span id="__span-66-43"><a id="__codelineno-66-43" name="__codelineno-66-43"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithGenerationConfig</span><span class="p">(</span><span class="nx">model</span><span class="p">.</span><span class="nx">GenerationConfig</span><span class="p">{</span><span class="nx">Stream</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">}),</span><span class="w"> </span><span class="c1">// Enable streaming output.</span>
+</span><span id="__span-66-44"><a id="__codelineno-66-44" name="__codelineno-66-44"></a><span class="w">    </span><span class="p">)</span>
+</span><span id="__span-66-45"><a id="__codelineno-66-45" name="__codelineno-66-45"></a>
+</span><span id="__span-66-46"><a id="__codelineno-66-46" name="__codelineno-66-46"></a><span class="w">    </span><span class="c1">// 3. Create Runner and execute.</span>
+</span><span id="__span-66-47"><a id="__codelineno-66-47" name="__codelineno-66-47"></a><span class="w">    </span><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">&quot;math-app&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">agent</span><span class="p">)</span>
+</span><span id="__span-66-48"><a id="__codelineno-66-48" name="__codelineno-66-48"></a>
+</span><span id="__span-66-49"><a id="__codelineno-66-49" name="__codelineno-66-49"></a><span class="w">    </span><span class="nx">ctx</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">()</span>
+</span><span id="__span-66-50"><a id="__codelineno-66-50" name="__codelineno-66-50"></a><span class="w">    </span><span class="nx">userMessage</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;Please calculate 25 times 4.&quot;</span><span class="p">)</span>
+</span><span id="__span-66-51"><a id="__codelineno-66-51" name="__codelineno-66-51"></a>
+</span><span id="__span-66-52"><a id="__codelineno-66-52" name="__codelineno-66-52"></a><span class="w">    </span><span class="nx">eventChan</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;user1&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;session1&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">userMessage</span><span class="p">)</span>
+</span><span id="__span-66-53"><a id="__codelineno-66-53" name="__codelineno-66-53"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-66-54"><a id="__codelineno-66-54" name="__codelineno-66-54"></a><span class="w">        </span><span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-66-55"><a id="__codelineno-66-55" name="__codelineno-66-55"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-66-56"><a id="__codelineno-66-56" name="__codelineno-66-56"></a>
+</span><span id="__span-66-57"><a id="__codelineno-66-57" name="__codelineno-66-57"></a><span class="w">    </span><span class="c1">// 4. Handle responses.</span>
+</span><span id="__span-66-58"><a id="__codelineno-66-58" name="__codelineno-66-58"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">eventChan</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-66-59"><a id="__codelineno-66-59" name="__codelineno-66-59"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Error</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-66-60"><a id="__codelineno-66-60" name="__codelineno-66-60"></a><span class="w">            </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Error: %s\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Error</span><span class="p">.</span><span class="nx">Message</span><span class="p">)</span>
+</span><span id="__span-66-61"><a id="__codelineno-66-61" name="__codelineno-66-61"></a><span class="w">            </span><span class="k">continue</span>
+</span><span id="__span-66-62"><a id="__codelineno-66-62" name="__codelineno-66-62"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-66-63"><a id="__codelineno-66-63" name="__codelineno-66-63"></a>
+</span><span id="__span-66-64"><a id="__codelineno-66-64" name="__codelineno-66-64"></a><span class="w">        </span><span class="c1">// Display tool calls.</span>
+</span><span id="__span-66-65"><a id="__codelineno-66-65" name="__codelineno-66-65"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">Message</span><span class="p">.</span><span class="nx">ToolCalls</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-66-66"><a id="__codelineno-66-66" name="__codelineno-66-66"></a><span class="w">            </span><span class="k">for</span><span class="w"> </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">toolCall</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">Message</span><span class="p">.</span><span class="nx">ToolCalls</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-66-67"><a id="__codelineno-66-67" name="__codelineno-66-67"></a><span class="w">                </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;🔧 Call tool: %s\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">toolCall</span><span class="p">.</span><span class="nx">Function</span><span class="p">.</span><span class="nx">Name</span><span class="p">)</span>
+</span><span id="__span-66-68"><a id="__codelineno-66-68" name="__codelineno-66-68"></a><span class="w">                </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;   Params: %s\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nb">string</span><span class="p">(</span><span class="nx">toolCall</span><span class="p">.</span><span class="nx">Function</span><span class="p">.</span><span class="nx">Arguments</span><span class="p">))</span>
+</span><span id="__span-66-69"><a id="__codelineno-66-69" name="__codelineno-66-69"></a><span class="w">            </span><span class="p">}</span>
+</span><span id="__span-66-70"><a id="__codelineno-66-70" name="__codelineno-66-70"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-66-71"><a id="__codelineno-66-71" name="__codelineno-66-71"></a>
+</span><span id="__span-66-72"><a id="__codelineno-66-72" name="__codelineno-66-72"></a><span class="w">        </span><span class="c1">// Display streaming content.</span>
+</span><span id="__span-66-73"><a id="__codelineno-66-73" name="__codelineno-66-73"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-66-74"><a id="__codelineno-66-74" name="__codelineno-66-74"></a><span class="w">            </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Print</span><span class="p">(</span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">Delta</span><span class="p">.</span><span class="nx">Content</span><span class="p">)</span>
+</span><span id="__span-66-75"><a id="__codelineno-66-75" name="__codelineno-66-75"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-66-76"><a id="__codelineno-66-76" name="__codelineno-66-76"></a>
+</span><span id="__span-66-77"><a id="__codelineno-66-77" name="__codelineno-66-77"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Done</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-66-78"><a id="__codelineno-66-78" name="__codelineno-66-78"></a><span class="w">            </span><span class="k">break</span>
+</span><span id="__span-66-79"><a id="__codelineno-66-79" name="__codelineno-66-79"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-66-80"><a id="__codelineno-66-80" name="__codelineno-66-80"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-66-81"><a id="__codelineno-66-81" name="__codelineno-66-81"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<h3 id="run-the-examples">Run the Examples</h3>
+<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-67-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-67-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-67-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-67-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-67-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-67-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-67-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-67-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-67-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-67-10">10</a></span>
+<span class="normal"><a href="#__codelineno-67-11">11</a></span>
+<span class="normal"><a href="#__codelineno-67-12">12</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-67-1"><a id="__codelineno-67-1" name="__codelineno-67-1"></a><span class="c1"># Enter the tool example directory.</span>
+</span><span id="__span-67-2"><a id="__codelineno-67-2" name="__codelineno-67-2"></a><span class="nb">cd</span><span class="w"> </span>examples/tool
+</span><span id="__span-67-3"><a id="__codelineno-67-3" name="__codelineno-67-3"></a>go<span class="w"> </span>run<span class="w"> </span>.
+</span><span id="__span-67-4"><a id="__codelineno-67-4" name="__codelineno-67-4"></a>
+</span><span id="__span-67-5"><a id="__codelineno-67-5" name="__codelineno-67-5"></a><span class="c1"># Enter the MCP tool example directory.</span>
+</span><span id="__span-67-6"><a id="__codelineno-67-6" name="__codelineno-67-6"></a><span class="nb">cd</span><span class="w"> </span>examples/mcp_tool
+</span><span id="__span-67-7"><a id="__codelineno-67-7" name="__codelineno-67-7"></a>
+</span><span id="__span-67-8"><a id="__codelineno-67-8" name="__codelineno-67-8"></a><span class="c1"># Start the external server.</span>
+</span><span id="__span-67-9"><a id="__codelineno-67-9" name="__codelineno-67-9"></a><span class="nb">cd</span><span class="w"> </span>streamalbe_server<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>main.go<span class="w"> </span><span class="p">&amp;</span>
+</span><span id="__span-67-10"><a id="__codelineno-67-10" name="__codelineno-67-10"></a>
+</span><span id="__span-67-11"><a id="__codelineno-67-11" name="__codelineno-67-11"></a><span class="c1"># Run the main program.</span>
+</span><span id="__span-67-12"><a id="__codelineno-67-12" name="__codelineno-67-12"></a>go<span class="w"> </span>run<span class="w"> </span>main.go<span class="w"> </span>-model<span class="o">=</span><span class="s2">&quot;deepseek-v4-flash&quot;</span>
 </span></code></pre></div></td></tr></table></div>
 <h2 id="summary">Summary</h2>
 <p>The Tool system provides rich extensibility for tRPC-Agent-Go, supporting Function Tools, the DuckDuckGo Search Tool, and MCP protocol tools.</p>
@@ -8667,7 +8777,7 @@ explicitly at the right time.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="July 17, 2026 02:38:26 UTC">2026-07-17 02:38:26</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="August 5, 2026 03:05:57 UTC">2026-08-05 03:05:57</span>
   </span>
 
     
