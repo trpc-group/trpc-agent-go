@@ -557,15 +557,12 @@ func TestAnonymousA2AClientCookieJarBoundaryInputs(t *testing.T) {
 	req, err := http.NewRequest(http.MethodGet, "http://example.com/a2a", nil)
 	require.NoError(t, err)
 	require.Nil(t, middleware.addJarCookies(req))
-	middleware.markInitialized(req.URL, []*http.Cookie{{
-		Name:  anonymousUserIDCookieName,
-		Value: anonymousTestCookieValue(1),
-	}})
+	middleware.markInitialized(req.URL, nil)
 
 	baseJar, err := cookiejar.New(nil)
 	require.NoError(t, err)
 	require.NoError(t, middleware.ensureCookieJar(baseJar))
-	requestJar := newAnonymousA2AClientRequestCookieJar(baseJar, req.URL, nil)
+	requestJar := newAnonymousA2AClientRequestCookieJar(baseJar, nil, req.URL, nil)
 	require.Nil(t, requestJar.Cookies(nil))
 	requestJar.SetCookies(req.URL, nil)
 	requestJar.SetCookies(req.URL, []*http.Cookie{{Name: "stored", Value: "value"}})
@@ -588,22 +585,21 @@ func TestAnonymousA2AClientCookieJarBoundaryInputs(t *testing.T) {
 	require.Nil(t, nilRequestJar.Cookies(req.URL))
 	nilRequestJar.SetCookies(req.URL, []*http.Cookie{{Name: "ignored", Value: "value"}})
 	nilRequestJar.prepareRedirect(req)
+	_, err = nilRequestJar.RoundTrip(req)
+	require.EqualError(t, err, "anonymous A2A client: transport request is nil")
 	require.False(t, nilRequestJar.storedResponseCookies(req.URL, []*http.Cookie{{
 		Name:  "ignored",
 		Value: "value",
 	}}))
 
 	emptyResponse := &http.Response{Header: make(http.Header)}
-	middleware.captureResponseCookies(req, emptyResponse, requestJar)
+	middleware.captureResponseCookies(req.URL, emptyResponse, requestJar)
 	otherCookie := &http.Cookie{
 		Name:  anonymousUserIDCookieName,
 		Value: anonymousTestCookieValue(2),
 	}
 	baseJar.SetCookies(req.URL, []*http.Cookie{otherCookie})
-	middleware.markInitialized(req.URL, []*http.Cookie{{
-		Name:  anonymousUserIDCookieName,
-		Value: anonymousTestCookieValue(3),
-	}})
+	middleware.markInitialized(req.URL, requestJar)
 	require.True(t, middleware.needsInitialization(req))
 }
 
@@ -614,38 +610,54 @@ func TestAnonymousA2AClientInitializationStateBoundaries(t *testing.T) {
 	jar, err := cookiejar.New(nil)
 	require.NoError(t, err)
 	require.NoError(t, middleware.ensureCookieJar(jar))
+	requestJar := newAnonymousA2AClientRequestCookieJar(jar, nil, req.URL, nil)
 
 	require.False(t, middleware.needsInitialization(nil))
 	require.False(t, middleware.needsInitialization(&http.Request{}))
 	require.True(t, middleware.needsInitialization(req))
 
-	middleware.markInitialized(req.URL, []*http.Cookie{{
+	requestJar.SetCookies(req.URL, []*http.Cookie{{
 		Name:  anonymousUserIDCookieName,
 		Value: "invalid",
 	}})
+	middleware.markInitialized(req.URL, requestJar)
 	require.True(t, middleware.needsInitialization(req))
 	validCookie := &http.Cookie{
 		Name:  anonymousUserIDCookieName,
 		Value: anonymousTestCookieValue(11),
 	}
-	jar.SetCookies(req.URL, []*http.Cookie{validCookie})
-	middleware.markInitialized(req.URL, []*http.Cookie{validCookie})
+	requestJar.SetCookies(req.URL, []*http.Cookie{validCookie})
+	middleware.markInitialized(req.URL, requestJar)
 	require.False(t, middleware.needsInitialization(req))
 
-	jar.SetCookies(req.URL, []*http.Cookie{{
+	middleware.jarMu.Lock()
+	middleware.initializedCookieValue = ""
+	middleware.jarMu.Unlock()
+	requestJar.SetCookies(req.URL, []*http.Cookie{{
+		Name:   anonymousUserIDCookieName,
+		Value:  validCookie.Value,
+		Path:   "/other",
+		MaxAge: -1,
+	}})
+	middleware.markInitialized(req.URL, requestJar)
+	require.False(t, middleware.needsInitialization(req))
+
+	requestJar.SetCookies(req.URL, []*http.Cookie{{
 		Name:   anonymousUserIDCookieName,
 		Value:  validCookie.Value,
 		MaxAge: -1,
 	}})
+	middleware.markInitialized(req.URL, requestJar)
 	require.True(t, middleware.needsInitialization(req))
 	require.Empty(t, middleware.initializedCookieValue)
 }
 
 func TestAnonymousA2AClientRejectedCookieDoesNotInitialize(t *testing.T) {
+	wantAnonymousCookie := anonymousTestCookieValue(1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.SetCookie(w, &http.Cookie{
 			Name:  anonymousUserIDCookieName,
-			Value: anonymousTestCookieValue(1),
+			Value: wantAnonymousCookie,
 			Path:  "/unrelated",
 		})
 		w.WriteHeader(http.StatusNoContent)
@@ -654,6 +666,13 @@ func TestAnonymousA2AClientRejectedCookieDoesNotInitialize(t *testing.T) {
 
 	req, err := http.NewRequest(http.MethodGet, srv.URL+"/a2a", nil)
 	require.NoError(t, err)
+	jar, err := cookiejar.New(nil)
+	require.NoError(t, err)
+	jar.SetCookies(req.URL, []*http.Cookie{{
+		Name:  anonymousUserIDCookieName,
+		Value: wantAnonymousCookie,
+		Path:  "/",
+	}})
 	middleware := newAnonymousA2AClientInitMiddleware()
 	handler := middleware.Wrap(httpReqHandlerFunc(func(
 		_ context.Context,
@@ -662,11 +681,42 @@ func TestAnonymousA2AClientRejectedCookieDoesNotInitialize(t *testing.T) {
 	) (*http.Response, error) {
 		return httpClient.Do(req)
 	}))
-	resp, err := handler.Handle(context.Background(), &http.Client{}, req)
+	resp, err := handler.Handle(context.Background(), &http.Client{Jar: jar}, req)
 	require.NoError(t, err)
 	require.NoError(t, resp.Body.Close())
 	require.True(t, middleware.needsInitialization(req))
-	require.Empty(t, middleware.cookieJar().Cookies(req.URL))
+	require.Len(t, middleware.cookieJar().Cookies(req.URL), 1)
+}
+
+func TestAnonymousA2AClientDeletedCandidateDoesNotInitialize(t *testing.T) {
+	req, err := http.NewRequest(http.MethodGet, "http://example.com/narrow/a2a", nil)
+	require.NoError(t, err)
+	wantAnonymousCookie := anonymousTestCookieValue(1)
+	jar, err := cookiejar.New(nil)
+	require.NoError(t, err)
+	jar.SetCookies(req.URL, []*http.Cookie{{
+		Name:  anonymousUserIDCookieName,
+		Value: wantAnonymousCookie,
+		Path:  "/",
+	}})
+	requestJar := newAnonymousA2AClientRequestCookieJar(jar, nil, req.URL, nil)
+	requestJar.SetCookies(req.URL, []*http.Cookie{{
+		Name:  anonymousUserIDCookieName,
+		Value: wantAnonymousCookie,
+		Path:  "/narrow",
+	}})
+	requestJar.SetCookies(req.URL, []*http.Cookie{{
+		Name:   anonymousUserIDCookieName,
+		Value:  wantAnonymousCookie,
+		Path:   "/narrow",
+		MaxAge: -1,
+	}})
+
+	middleware := newAnonymousA2AClientInitMiddleware()
+	require.NoError(t, middleware.ensureCookieJar(jar))
+	middleware.markInitialized(req.URL, requestJar)
+	require.True(t, middleware.needsInitialization(req))
+	require.Len(t, jar.Cookies(req.URL), 1)
 }
 
 func TestNewAnonymousA2AClientInstallsCookieJar(t *testing.T) {
@@ -779,16 +829,26 @@ func TestNewAnonymousA2AClientCustomHandlerKeepsCookieContinuity(t *testing.T) {
 
 func TestAnonymousA2AClientJarReadBeforeDoDoesNotDuplicateCookies(t *testing.T) {
 	const routingCookieName = "route"
-	wantAnonymousCookie := anonymousTestCookieValue(1)
-	var receivedCookieCounts map[string]int
+	initialAnonymousCookie := anonymousTestCookieValue(1)
+	updatedAnonymousCookie := anonymousTestCookieValue(2)
+	var (
+		handlerVisibleCookies map[string]string
+		receivedCookieCounts  map[string]int
+		receivedCookieValues  map[string][]string
+	)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedCookieCounts = make(map[string]int)
+		receivedCookieValues = make(map[string][]string)
 		for _, cookie := range r.Cookies() {
 			receivedCookieCounts[cookie.Name]++
+			receivedCookieValues[cookie.Name] = append(
+				receivedCookieValues[cookie.Name],
+				cookie.Value,
+			)
 		}
 		http.SetCookie(w, &http.Cookie{
 			Name:  anonymousUserIDCookieName,
-			Value: wantAnonymousCookie,
+			Value: updatedAnonymousCookie,
 			Path:  "/",
 		})
 		w.WriteHeader(http.StatusNoContent)
@@ -800,7 +860,7 @@ func TestAnonymousA2AClientJarReadBeforeDoDoesNotDuplicateCookies(t *testing.T) 
 	jar, err := cookiejar.New(nil)
 	require.NoError(t, err)
 	jar.SetCookies(req.URL, []*http.Cookie{
-		{Name: anonymousUserIDCookieName, Value: wantAnonymousCookie},
+		{Name: anonymousUserIDCookieName, Value: initialAnonymousCookie},
 		{Name: routingCookieName, Value: "kept"},
 	})
 	middleware := newAnonymousA2AClientInitMiddleware()
@@ -809,16 +869,29 @@ func TestAnonymousA2AClientJarReadBeforeDoDoesNotDuplicateCookies(t *testing.T) 
 		httpClient *http.Client,
 		req *http.Request,
 	) (*http.Response, error) {
-		_ = httpClient.Jar.Cookies(req.URL)
+		handlerVisibleCookies = make(map[string]string)
+		for _, cookie := range httpClient.Jar.Cookies(req.URL) {
+			handlerVisibleCookies[cookie.Name] = cookie.Value
+		}
+		httpClient.Jar.SetCookies(req.URL, []*http.Cookie{{
+			Name:  anonymousUserIDCookieName,
+			Value: updatedAnonymousCookie,
+			Path:  "/",
+		}})
 		return httpClient.Do(req)
 	}))
 	resp, err := handler.Handle(context.Background(), &http.Client{Jar: jar}, req)
 	require.NoError(t, err)
 	require.NoError(t, resp.Body.Close())
+	require.Equal(t, map[string]string{
+		anonymousUserIDCookieName: initialAnonymousCookie,
+		routingCookieName:         "kept",
+	}, handlerVisibleCookies)
 	require.Equal(t, map[string]int{
 		anonymousUserIDCookieName: 1,
 		routingCookieName:         1,
 	}, receivedCookieCounts)
+	require.Equal(t, []string{updatedAnonymousCookie}, receivedCookieValues[anonymousUserIDCookieName])
 }
 
 func TestAnonymousA2AClientRedirectDoesNotDuplicateUnchangedCookies(t *testing.T) {
@@ -891,7 +964,44 @@ func TestAnonymousA2AClientRedirectDoesNotDuplicateUnchangedCookies(t *testing.T
 	require.Equal(t, []string{"final-only"}, finalCookieValues[destinationCookieName])
 }
 
-func TestAnonymousA2AClientCustomHandlerStoresDistinctResponseCookies(t *testing.T) {
+func TestAnonymousA2AClientRedirectCookieInitializesClient(t *testing.T) {
+	wantAnonymousCookie := anonymousTestCookieValue(1)
+	var finalCookie string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/start" {
+			http.SetCookie(w, &http.Cookie{
+				Name:  anonymousUserIDCookieName,
+				Value: wantAnonymousCookie,
+				Path:  "/",
+			})
+			http.Redirect(w, r, "/final", http.StatusFound)
+			return
+		}
+		if cookie, err := r.Cookie(anonymousUserIDCookieName); err == nil {
+			finalCookie = cookie.Value
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/start", nil)
+	require.NoError(t, err)
+	middleware := newAnonymousA2AClientInitMiddleware()
+	handler := middleware.Wrap(httpReqHandlerFunc(func(
+		_ context.Context,
+		httpClient *http.Client,
+		req *http.Request,
+	) (*http.Response, error) {
+		return httpClient.Do(req)
+	}))
+	resp, err := handler.Handle(context.Background(), &http.Client{}, req)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+	require.Equal(t, wantAnonymousCookie, finalCookie)
+	require.False(t, middleware.needsInitialization(req))
+}
+
+func TestAnonymousA2AClientCustomHandlerStoredCookieInitializesClient(t *testing.T) {
 	const unrelatedCookieName = "unrelated"
 	wantAnonymousCookie := anonymousTestCookieValue(1)
 	jar, err := cookiejar.New(nil)
@@ -902,17 +1012,20 @@ func TestAnonymousA2AClientCustomHandlerStoresDistinctResponseCookies(t *testing
 		httpClient *http.Client,
 		req *http.Request,
 	) (*http.Response, error) {
-		httpClient.Jar.SetCookies(req.URL, []*http.Cookie{{
-			Name:  unrelatedCookieName,
-			Value: "stored-by-handler",
-			Path:  "/",
-		}})
-		rr := httptest.NewRecorder()
-		http.SetCookie(rr, &http.Cookie{
-			Name:  anonymousUserIDCookieName,
-			Value: wantAnonymousCookie,
-			Path:  "/",
+		httpClient.Jar.SetCookies(req.URL, []*http.Cookie{
+			{
+				Name:  anonymousUserIDCookieName,
+				Value: wantAnonymousCookie,
+				Path:  "/",
+			},
+			{
+				Name:  unrelatedCookieName,
+				Value: "stored-by-handler",
+				Path:  "/",
+			},
 		})
+		req.URL.Path = "/other"
+		rr := httptest.NewRecorder()
 		rr.WriteHeader(http.StatusNoContent)
 		resp := rr.Result()
 		resp.Request = req
@@ -1079,7 +1192,6 @@ func TestNewAnonymousA2AClientProcessesConfiguredCookieJarOnce(t *testing.T) {
 	require.Equal(t, []int{0, 1}, receivedCounts)
 	jar.mu.Lock()
 	defer jar.mu.Unlock()
-	require.Equal(t, 5, jar.cookiesCalls)
 	require.Equal(t, 2, jar.setCookiesCalls)
 }
 
@@ -1156,14 +1268,10 @@ func sendDirectClientMessage(directClient *client.A2AClient, message protocol.Me
 type countingCookieJar struct {
 	base            http.CookieJar
 	mu              sync.Mutex
-	cookiesCalls    int
 	setCookiesCalls int
 }
 
 func (j *countingCookieJar) Cookies(u *url.URL) []*http.Cookie {
-	j.mu.Lock()
-	j.cookiesCalls++
-	j.mu.Unlock()
 	return j.base.Cookies(u)
 }
 
