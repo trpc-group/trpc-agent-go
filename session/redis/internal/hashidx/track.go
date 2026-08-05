@@ -33,8 +33,9 @@ func (c *Client) AppendTrackEvent(ctx context.Context, key session.Key, trackEve
 	}
 
 	ttlSeconds := int64(0)
-	if c.cfg.SessionTTL > 0 {
-		ttlSeconds = int64(c.cfg.SessionTTL.Seconds())
+	trackTTL := c.cfg.effectiveTrackEventTTL()
+	if trackTTL > 0 {
+		ttlSeconds = ttlSecondsCeil(trackTTL)
 	}
 
 	// Encode tracksState as base64 to match Go's json.Marshal behavior for []byte.
@@ -49,12 +50,15 @@ func (c *Client) AppendTrackEvent(ctx context.Context, key session.Key, trackEve
 		c.keys.TrackDataKey(key, track),
 		c.keys.TrackTimeIndexKey(key, track),
 		c.keys.SessionMetaKey(key),
+		c.keys.TrackIndexKey(key),
 	}
 	args := []any{
 		string(eventJSON),
 		trackEvent.Timestamp.UnixNano(),
 		ttlSeconds,
+		boolToInt(c.cfg.TrackEventTTL != nil),
 		tracksVal,
+		string(track),
 	}
 
 	result, err := c.runScript(ctx, luaAppendTrackEvent, keys, args...).Int64()
@@ -65,6 +69,17 @@ func (c *Client) AppendTrackEvent(ctx context.Context, key session.Key, trackEve
 		return fmt.Errorf("session not found")
 	}
 	return nil
+}
+
+func ttlSecondsCeil(ttl time.Duration) int64 {
+	if ttl <= 0 {
+		return 0
+	}
+	seconds := ttl / time.Second
+	if ttl%time.Second != 0 {
+		seconds++
+	}
+	return int64(seconds)
 }
 
 // GetTrackEvents retrieves track events for a session using Hash+ZSet structure.

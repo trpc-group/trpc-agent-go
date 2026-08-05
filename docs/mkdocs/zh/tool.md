@@ -477,6 +477,90 @@ toolCallID, ok := agent.GetRuntimeStateValueFromContext[string](
 因此，如果你会在回调里替换 context，记得把已有的 context value
 一并透传。
 
+## 工具结果格式化
+
+Function Tool 默认使用 JSON 构造模型可见的工具结果消息。当某个工具需要 XML-like
+observation 等自定义文本时，可以使用 `function.WithResultFormatter`，无需自行构造
+`model.Message` 或维护 tool call ID。
+
+当前支持：
+
+- 注册到 LLMAgent，并由其默认工具调用流程执行的 Function Tool。
+
+当前暂不支持：
+
+- Graph ToolsNode；
+- ToolPipe；
+- 替换或重新包装工具实例的扩展及业务 wrapper；
+- 直接调用 `Tool.Call`，或自行构造工具结果消息的其他执行链路。
+
+```go
+import (
+    "context"
+
+    "trpc.group/trpc-go/trpc-agent-go/tool/function"
+    "trpc.group/trpc-go/trpc-agent-go/tool/resultformat"
+)
+
+bashTool := function.NewFunctionTool(
+    runBash,
+    function.WithName("bash"),
+    function.WithResultFormatter(
+        resultformat.FormatterFunc[BashResult](func(
+            _ context.Context,
+            result BashResult,
+        ) (string, error) {
+            return formatBashObservation(result), nil
+        }),
+    ),
+)
+```
+
+Formatter 接收 `AfterTool` callback 处理后的最终结果，仅改变
+`DefaultToolMessage.Content`。消息角色、工具名、tool call ID 配对、顺序、事件和
+会话记录仍由框架维护。
+
+- 未配置 formatter 时，现有默认 JSON 输出保持不变。
+- formatter 返回错误或发生 panic 时，本次工具结果会报告错误；框架不会回退 JSON，
+  也不会重新执行已经完成的工具。格式化失败只是展示失败，工具已经执行完毕，它的会话
+  状态更新照常写入。
+- formatter 只在工具为本次调用声明了结果时才会运行。工具没有声明结果时，框架保持
+  默认 JSON：`tool.PermissionResult`、仅携带状态的流式最终结果、`BeforeTool`
+  callback 或插件短路本次调用时返回的 `CustomResult`，以及流结束时没有
+  `tool.FinalResultChunk` 而由框架合并出的流内容（见下一条）。工具确实执行并声明了
+  结果时，`AfterTool` callback 的替换值属于另一种情况：它会被格式化，因此必须是
+  formatter 能接受的类型。
+- 其他 `StreamableTool` 只格式化最终结果，中间事件不变。流式工具必须通过
+  `tool.FinalResultChunk` 声明这个最终结果。若数据流结束时没有 final chunk，最终
+  结果就是框架合并出的流内容，而不是工具声明的输出类型，此时框架跳过 formatter、
+  保持默认 JSON，并打印一条告警；`AfterTool` callback 即使替换了合并内容，本次调用
+  也不会重新具备格式化资格。要让流式结果被格式化，请发出
+  `tool.FinalResultChunk`。
+- 对于会更新会话状态的工具，状态更新消费的是「未配置 formatter 时框架会发出的那条
+  工具消息内容」，也就是 `AfterTool` callback 处理后结果的 JSON。formatter 不参与
+  状态协议：即使它违反只读契约、原地修改了指针或 map 类型的结果，写入会话的仍然是
+  修改前的内容。如果 `ToolResultMessages` 改写了工具消息内容，则以改写后的内容为
+  准——这与引入 formatter 之前的行为一致。
+- `ToolResultMessages` callback 仍会在默认工具结果消息生成后执行，并可用其返回的消息
+  覆盖默认消息；多消息、多模态内容或完全接管消息协议的场景继续使用该 callback。注意
+  formatter 是按工具配置的，而 `ToolResultMessages` 是整个 Agent 全局的：对配置了
+  formatter 的工具，回调拿到的 `DefaultToolMessage.Content` 是格式化后的文本而不是
+  JSON。回调如果需要结构化数据，请读取 `ToolResultMessagesInput.Result`，不要解析
+  `DefaultToolMessage.Content`。
+
+Formatter 返回的文本会直接写入默认工具结果消息，可以在格式化函数中按业务协议处理
+转义、截断和格式校验。Formatter 必须把入参结果视为只读：同一个结果对象随后会作为
+`ToolResultMessagesInput.Result` 交给回调，原地修改会让同一次工具调用的不同消费方
+看到不一致的结果。Formatter 可能被并发调用；若持有可变状态，需要自行保证并发安全。
+
+框架通过语义工具上的 `ResultFormatter() resultformat.Formatter` 方法发现该能力；
+语义工具指的是框架解开自身的声明包装和名称包装之后剩下的那个工具。
+`function.FunctionTool` 和 `function.StreamableFunctionTool` 提供了该方法；
+`tool/function` 之外的工具实现只要暴露同名方法，就按同样的规则和同样的支持范围参与。
+
+完整可运行示例见
+[examples/toolresultformat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/toolresultformat)。
+
 ## 内置工具类型
 
 ### Tool 调用重试
@@ -2313,14 +2397,84 @@ agent := llmagent.New("ai-assistant",
     llmagent.WithTools(tools),
     llmagent.WithToolSets(toolSets),
     llmagent.WithEnableParallelTools(true), // 启用并行执行
+    llmagent.WithToolConcurrencyConfig(tool.ConcurrencyConfig{
+        Groups: []tool.ConcurrencyGroup{
+            {
+                ToolNames: []string{"subagent"},
+                Limit:     3,
+            },
+            {
+                // search 调用串行执行
+                ToolNames: []string{"search"},
+                Limit:     1,
+            },
+            {
+                // fetch 调用串行执行
+                ToolNames: []string{"fetch"},
+                Limit:     1,
+            },
+        },
+    }),
 )
 ```
 
 Graph 工作流下也可以在工具节点开启并行：
 
 ```go
-stateGraph.AddToolsNode("tools", tools, graph.WithEnableParallelTools(true))
+stateGraph.AddToolsNode(
+    "tools",
+    tools,
+    graph.WithEnableParallelTools(true),
+    graph.WithToolConcurrencyConfig(tool.ConcurrencyConfig{
+        Groups: []tool.ConcurrencyGroup{
+            {ToolNames: []string{"subagent"}, Limit: 3},
+            {ToolNames: []string{"search"}, Limit: 1},
+            {ToolNames: []string{"fetch"}, Limit: 1},
+        },
+    }),
+)
 ```
+
+`MaxConcurrency` 和分组上限会同时生效。每个直接工具调用都会占用正数的整体
+并发额度；属于某个分组的调用还必须同时取得该分组的额度。同一组内的多个工具名
+共享活跃调用上限。当 `MaxConcurrency` 为非正数时，不设置整体上限：正数的
+分组上限仍然生效，分组外的工具不受该配置的并发限制。
+
+每次 `LLMAgent.Run` 以及每次 Graph Tools 节点调用都有独立额度。同一个 Agent
+的并发 Run 不会相互占用额度。例如 `subagent` 的 `Limit` 为 3 时，同一个
+Agent 的两个并发 Run 可以各自同时执行最多 3 个直接 `subagent` 调用。这些
+配置用于控制单次 invocation 的并行宽度，不会保护多个 Run、Agent 实例、进程
+或服务副本共享的下游容量；此类共享限制应放在拥有资源的工具或下游 client 中。
+
+并发限制跟随工具的执行方。所属 Agent 或 Tools 节点只限制自己直接执行的工具。
+如果名为 `subagent` 的工具运行了一个子 Agent，外层 `subagent` 在运行期间
+仍然占用所属 Agent 或节点的额度，但子 Agent 内部执行的 `search`、`fetch`
+等工具不会额外占用所属 Agent 或节点的工具额度。需要在每个提供这些工具的子
+Agent 上分别配置：
+
+```go
+child := llmagent.New(
+    "worker",
+    llmagent.WithModel(model),
+    llmagent.WithTools([]tool.Tool{searchTool, fetchTool}),
+    llmagent.WithEnableParallelTools(true),
+    llmagent.WithToolConcurrencyConfig(tool.ConcurrencyConfig{
+        Groups: []tool.ConcurrencyGroup{
+            {ToolNames: []string{"search"}, Limit: 1},
+            {ToolNames: []string{"fetch"}, Limit: 1},
+        },
+    }),
+)
+```
+
+拆成两个分组后，`search` 和 `fetch` 各自串行，但两者之间仍可以各运行一个、
+相互并行。每次子 Agent invocation 都有独立额度，即使多个并发 invocation
+复用同一个子 Agent 实例也是如此。因此 3 个并发子 Agent invocation 合计最多
+可以同时运行 3 个 `search` 和 3 个 `fetch`。
+
+只有显式开启工具并行执行后，该配置才会生效。非正数的分组上限会被忽略。每个
+工具名只能出现在一个正数上限的组中；重复配置会导致
+`WithToolConcurrencyConfig` panic。
 
 **并行执行效果：**
 

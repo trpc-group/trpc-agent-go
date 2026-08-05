@@ -96,19 +96,22 @@ llmAgent := llmagent.New(
 )
 ```
 
-### Placeholder Variables (Session State Injection)
+### Placeholder Variables (State Injection)
 
-LLMAgent automatically injects session state into `Instruction` and the optional `SystemPrompt` via placeholder variables. Supported patterns:
+LLMAgent automatically injects state into `Instruction` and the optional `SystemPrompt` via placeholder variables. Supported patterns:
 
 - `{key}`: Replaced with the string value corresponding to the key `key` in the session state (write via `invocation.Session.SetState("key", ...)` or SessionService)
 - `{key?}`: Optional; if missing, replaced with an empty string
 - `{user:subkey}` / `{app:subkey}` / `{temp:subkey}`: Use user/app/temp scoped keys (session services merge app/user state into session with these prefixes)
 - `{invocation:subkey}`: Replaces with the value of fmt.Sprintf("%+v", `invocation.state["subkey"]`). (The state can be set via invocation.SetState(k, v))
+- `{runtime:subkey}`: Reads request-scoped data from `RunOptions.RuntimeState` (set via `agent.WithRuntimeState` or `agent.MergeRuntimeState`)
 
 Notes:
 
 - If a non-optional key is not found, the original `{key}` is preserved (helps the LLM notice missing context)
-- Values are read from session state (Runner + SessionService set/merge this automatically)
+- Add `?` before the closing brace to make any supported placeholder optional, for example `{runtime:document?}`
+- Bare and app/user/temp-prefixed keys read session state; `invocation:` and `runtime:` read only their respective state stores and do not fall back to session state
+- Runtime strings are injected as plain text; primitive values use their JSON text representation, and objects and arrays are injected as JSON
 
 Example:
 
@@ -118,12 +121,17 @@ llm := llmagent.New(
   llmagent.WithModel(modelInstance),
   llmagent.WithInstruction(
     "You are a research assistant. Focus: {research_topics}. " +
-    "User interests: {user:topics?}. App banner: {app:banner?}.",
+    "User interests: {user:topics?}. App banner: {app:banner?}. " +
+    "Draft: {runtime:document?}.",
   ),
 )
 
 inv := agent.NewInvocation()
 inv.SetState("case", "case-1")
+
+runOptions := []agent.RunOption{
+  agent.WithRuntimeState(map[string]any{"document": "Current draft"}),
+}
 
 // Initialize session state (Runner + SessionService)
 _ = sessionService.UpdateUserState(ctx, session.UserKey{AppName: app, UserID: user}, session.StateMap{

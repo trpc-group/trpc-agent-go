@@ -39,6 +39,7 @@ import (
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	toolcurrenttime "trpc.group/trpc-go/trpc-agent-go/internal/tool/currenttime"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
 	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
 	"trpc.group/trpc-go/trpc-agent-go/internal/tracecapture"
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
@@ -388,6 +389,14 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 			options.skillsFilePathHints,
 		),
 	)
+	if len(options.toolActivationRules) > 0 {
+		skillsOpts = append(
+			skillsOpts,
+			processor.WithSkillLoadStateDeltaHook(
+				a.handleToolActivationPostToolResult,
+			),
+		)
+	}
 	if options.MaxLoadedSkills > 0 {
 		skillsOpts = append(
 			skillsOpts,
@@ -1644,6 +1653,11 @@ func (a *LLMAgent) executeAgentFlow(ctx context.Context, invocation *agent.Invoc
 		}
 	}
 
+	if err := a.prepareSkillLoads(ctx, invocation); err != nil {
+		return ctx, nil, fmt.Errorf("prepare skill loads: %w", err)
+	}
+	ctx = a.withToolConcurrencyLimiter(ctx)
+
 	// Use the underlying flow to execute the agent logic.
 	flowEventChan, err := a.flow.Run(ctx, invocation)
 	if err != nil {
@@ -1651,6 +1665,16 @@ func (a *LLMAgent) executeAgentFlow(ctx context.Context, invocation *agent.Invoc
 	}
 
 	return ctx, flowEventChan, nil
+}
+
+func (a *LLMAgent) withToolConcurrencyLimiter(
+	ctx context.Context,
+) context.Context {
+	var limiter *toolcall.Limiter
+	if a.option.EnableParallelTools {
+		limiter = toolcall.NewLimiter(a.option.ToolConcurrencyConfig)
+	}
+	return toolcall.WithLimiter(ctx, limiter)
 }
 
 // haveCustomResponseError represents an early return due to a custom response from before agent callbacks.

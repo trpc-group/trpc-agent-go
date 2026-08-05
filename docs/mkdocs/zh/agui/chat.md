@@ -317,6 +317,8 @@ server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithRunOptio
 
 `StateResolver` 用于把 `RunAgentInput.State` 转换为本次运行的 RuntimeState。返回的 map 会作为 `agent.WithRuntimeState(...)` 传入 Runner，只作用于当前这次运行。
 
+LLMAgent 可以在 `Instruction` 或 `SystemPrompt` 中通过 `{runtime:key}` 读取解析后的值；如果该值可选，则使用 `{runtime:key?}`。
+
 返回 `nil` 表示不设置 RuntimeState；返回空 map 表示设置一个空的 RuntimeState。
 
 ```go

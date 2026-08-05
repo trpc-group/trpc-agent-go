@@ -1356,30 +1356,39 @@ func (m *Model) appendUserContentParts(
 }
 
 func (m *Model) omittedContentHint(parts []model.ContentPart) string {
-	if !m.variantConfig.textOnlyMessageContent {
-		return ""
-	}
-
-	var imageCount, audioCount, fileCount int
+	var imageCount, audioCount, videoCount, fileCount int
 	for _, part := range parts {
 		switch part.Type {
 		case model.ContentTypeImage:
-			imageCount++
+			if m.variantConfig.textOnlyMessageContent {
+				imageCount++
+			}
 		case model.ContentTypeAudio:
-			audioCount++
+			if m.variantConfig.textOnlyMessageContent ||
+				(part.Audio != nil && part.Audio.URL != "") {
+				audioCount++
+			}
+		case model.ContentTypeVideo:
+			if m.variantConfig.textOnlyMessageContent || part.Video != nil {
+				videoCount++
+			}
 		case model.ContentTypeFile:
+			if !m.variantConfig.textOnlyMessageContent {
+				continue
+			}
 			if fileURLFallbackText(part.File) != "" {
 				continue
 			}
 			fileCount++
 		}
 	}
-	return omittedAttachmentHint(imageCount, audioCount, fileCount)
+	return omittedAttachmentHint(imageCount, audioCount, videoCount, fileCount)
 }
 
 func omittedAttachmentHint(
 	imageCount int,
 	audioCount int,
+	videoCount int,
 	fileCount int,
 ) string {
 	const (
@@ -1389,11 +1398,13 @@ func omittedAttachmentHint(
 		omittedImagePlural = "%d images"
 		omittedAudioSingle = "1 audio clip"
 		omittedAudioPlural = "%d audio clips"
+		omittedVideoSingle = "1 video"
+		omittedVideoPlural = "%d videos"
 		omittedFileSingle  = "1 file"
 		omittedFilePlural  = "%d files"
 	)
 
-	parts := make([]string, 0, 3)
+	parts := make([]string, 0, 4)
 	if imageCount == 1 {
 		parts = append(parts, omittedImageSingle)
 	} else if imageCount > 1 {
@@ -1403,6 +1414,11 @@ func omittedAttachmentHint(
 		parts = append(parts, omittedAudioSingle)
 	} else if audioCount > 1 {
 		parts = append(parts, fmt.Sprintf(omittedAudioPlural, audioCount))
+	}
+	if videoCount == 1 {
+		parts = append(parts, omittedVideoSingle)
+	} else if videoCount > 1 {
+		parts = append(parts, fmt.Sprintf(omittedVideoPlural, videoCount))
 	}
 	if fileCount == 1 {
 		parts = append(parts, omittedFileSingle)
@@ -1545,7 +1561,7 @@ func (m *Model) convertContentPart(part model.ContentPart) *openai.ChatCompletio
 			}
 		}
 	case model.ContentTypeAudio:
-		if part.Audio != nil {
+		if part.Audio != nil && part.Audio.URL == "" && len(part.Audio.Data) > 0 {
 			return &openai.ChatCompletionContentPartUnionParam{
 				OfInputAudio: &openai.ChatCompletionContentPartInputAudioParam{
 					InputAudio: openai.ChatCompletionContentPartInputAudioInputAudioParam{
@@ -1555,6 +1571,9 @@ func (m *Model) convertContentPart(part model.ContentPart) *openai.ChatCompletio
 				},
 			}
 		}
+	case model.ContentTypeVideo:
+		// Chat Completions does not define a video input content part.
+		return nil
 	case model.ContentTypeFile:
 		if part.File != nil {
 			params, ok := fileToParamsOK(part.File)

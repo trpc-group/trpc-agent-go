@@ -532,10 +532,14 @@ const (
 	kimiAPIHost      = "api.moonshot.ai"
 	kimiCNAPIHost    = "api.moonshot.cn"
 
-	openAIAPIKeyEnvName  = "OPENAI_API_KEY"
-	openAIBaseURLEnvName = "OPENAI_BASE_URL"
-	openAIHeadersEnvName = "OPENAI_HEADERS"
-	openAIModelEnvName   = "OPENAI_MODEL"
+	openAIAPIKeyEnvName   = "OPENAI_API_KEY"
+	deepSeekAPIKeyEnvName = "DEEPSEEK_API_KEY"
+	qwenAPIKeyEnvName     = "DASHSCOPE_API_KEY"
+	miniMaxAPIKeyEnvName  = "MINIMAX_API_KEY"
+	kimiAPIKeyEnvName     = "MOONSHOT_API_KEY"
+	openAIBaseURLEnvName  = "OPENAI_BASE_URL"
+	openAIHeadersEnvName  = "OPENAI_HEADERS"
+	openAIModelEnvName    = "OPENAI_MODEL"
 
 	errClaudeCodeAgentNoPrompts = "claude-code agent does not support " +
 		"agent prompts"
@@ -660,6 +664,7 @@ func runtimeStartupLines(
 	stateDir string,
 	channels []channel.Channel,
 	needsModel bool,
+	catalogs ...resolvedModelCatalog,
 ) []startupLogLine {
 	return []startupLogLine{
 		{text: fmt.Sprintf("App name: %s", strings.TrimSpace(opts.AppName))},
@@ -674,7 +679,7 @@ func runtimeStartupLines(
 		)},
 		{text: fmt.Sprintf(
 			"Model: %s",
-			modelStartupSummary(opts, needsModel),
+			modelStartupSummary(opts, needsModel, catalogs...),
 		)},
 		{text: fmt.Sprintf(
 			"Storage: session=%s memory=%s",
@@ -715,9 +720,17 @@ func channelStartupSummary(channels []channel.Channel) string {
 func modelStartupSummary(
 	opts runOptions,
 	needsModel bool,
+	catalogs ...resolvedModelCatalog,
 ) string {
 	if !needsModel {
 		return "disabled"
+	}
+	if len(catalogs) > 0 && catalogs[0].explicit {
+		return fmt.Sprintf(
+			"%s (%d configured)",
+			catalogs[0].defaultAlias(),
+			len(catalogs[0].models),
+		)
 	}
 	mode := strings.ToLower(strings.TrimSpace(opts.ModelMode))
 	if mode == "" {
@@ -820,6 +833,8 @@ type Runtime struct {
 	modelCallBudgetFinalizeOnLast bool
 	modelCallBudgetDeadlineWindow time.Duration
 	modelCallBudgetFinalRequest   modelCallBudgetFinalRequestConfig
+	modelCatalog                  resolvedModelCatalog
+	modelRunOptions               runOptions
 }
 
 // Gateway provides the HTTP handler and routes served by OpenClaw.
@@ -1064,6 +1079,16 @@ func NewRuntimeWithOptions(
 			Err:  fmt.Errorf("agent config failed: %w", err),
 		}
 	}
+	if err := validateModelCatalogAgentType(
+		agentType,
+		opts,
+		runtimeOpts,
+	); err != nil {
+		return nil, &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("agent config failed: %w", err),
+		}
+	}
 
 	mentionPatterns := splitCSV(opts.Mention)
 
@@ -1100,16 +1125,29 @@ func NewRuntimeWithOptions(
 		opts.SessionSummaryEnabled ||
 		opts.MemoryAutoEnabled
 
-	var mdl model.Model
+	var (
+		mdl          model.Model
+		modelCatalog resolvedModelCatalog
+	)
 	if needsModel {
-		mdl, err = modelFromOptions(opts)
+		modelCatalog, err = resolveModelCatalog(opts, runtimeOpts)
 		if err != nil {
 			return nil, &exitError{
 				Code: 1,
 				Err:  fmt.Errorf("create model failed: %w", err),
 			}
 		}
-		mdl = newModelCallBudgetModel(mdl)
+		mdl = modelCatalog.defaultModel()
+		if err := validateRuntimeProfileModels(
+			agentType,
+			opts.RuntimeProfiles,
+			modelCatalog,
+		); err != nil {
+			return nil, &exitError{
+				Code: 1,
+				Err:  fmt.Errorf("model catalog validation failed: %w", err),
+			}
+		}
 	}
 
 	instanceID := runtimeInstanceID(
@@ -1117,6 +1155,7 @@ func NewRuntimeWithOptions(
 		opts,
 		needsModel,
 		resolvedStateDir,
+		modelCatalog,
 	)
 	log.Infof("Instance: %s", instanceID)
 	rt.appName = opts.AppName
@@ -1225,6 +1264,7 @@ func NewRuntimeWithOptions(
 		)
 		agentCfg := agentConfig{
 			AppName:                 opts.AppName,
+			Models:                  modelCatalog.models,
 			AddSessionSummary:       opts.AddSessionSummary,
 			EnableContextCompaction: opts.EnableContextCompaction,
 			ContextCompactionOversizedToolResultMaxTokens: opts.
@@ -1324,8 +1364,10 @@ func NewRuntimeWithOptions(
 	rt.modelCallBudgetLimit = opts.MaxLLMCalls
 	rt.modelCallBudgetFinalizeOnLast = opts.FinalizeBeforeMaxLLMCalls
 	rt.modelCallBudgetDeadlineWindow = opts.DeadlineFinalizationWindow
+	rt.modelCatalog = modelCatalog
+	rt.modelRunOptions = opts
 	rt.modelCallBudgetFinalRequest = modelCallBudgetFinalRequestFromOptions(
-		opts,
+		modelCatalog.runOptionsForModel(opts, modelCatalog.defaultName),
 	)
 	rt.toolSets = toolSets
 	rt.tools = runtimeTools
@@ -1396,12 +1438,16 @@ func NewRuntimeWithOptions(
 		runtimeProfileResolver,
 		runtimeProfileRequired,
 	)
-	gwOpts = appendModelCallBudgetGatewayOption(
+	if agentType == agentTypeLLM {
+		gwOpts = appendModelCatalogGatewayOptions(gwOpts, modelCatalog)
+	}
+	gwOpts = appendModelCatalogCallBudgetGatewayOption(
 		gwOpts,
+		opts,
+		modelCatalog,
 		opts.MaxLLMCalls,
 		opts.FinalizeBeforeMaxLLMCalls,
 		opts.DeadlineFinalizationWindow,
-		modelCallBudgetFinalRequestFromOptions(opts),
 	)
 	if langfuseRT != nil && langfuseRT.runOptionResolver != nil {
 		gwOpts = append(
@@ -1442,7 +1488,11 @@ func NewRuntimeWithOptions(
 			),
 		),
 	)
-	gwOpts = appendModelCompatibilityGatewayRunOptions(gwOpts, opts)
+	gwOpts = appendModelCompatibilityGatewayRunOptions(
+		gwOpts,
+		opts,
+		modelCatalog,
+	)
 	gwOpts = appendRuntimeGatewayRunOptions(gwOpts, runtimeOpts)
 	gwSrv, err := gateway.New(r, gwOpts...)
 	if err != nil {
@@ -1564,7 +1614,7 @@ func NewRuntimeWithOptions(
 	if opts.AdminEnabled {
 		adminURL := listenURL(opts.AdminAddr)
 		adminCfg := buildAdminConfig(
-			opts,
+			modelCatalog.adminRunOptions(opts),
 			agentType,
 			instanceID,
 			langfuseStatus,
@@ -1589,7 +1639,7 @@ func NewRuntimeWithOptions(
 			fileMemoryStore,
 			rt.SessionService(),
 		)
-		setRuntimeAdminOptions(rt, buildAdminOptions(opts))
+		setRuntimeAdminOptions(rt, buildAdminOptions(opts, modelCatalog))
 		rt.applyAdminConfig(adminCfg)
 	}
 
@@ -1607,6 +1657,10 @@ func (r *Runtime) Run(
 	if r == nil || r.runner == nil {
 		return nil, errors.New("openclaw runtime runner is not configured")
 	}
+	if r.modelCatalog.explicit {
+		runOpts = append(runOpts, r.modelCatalogRunOption())
+		return r.runner.Run(ctx, userID, sessionID, message, runOpts...)
+	}
 	defaultRunOpts := modelCallBudgetRunOptions(
 		r.modelCallBudgetLimit,
 		r.modelCallBudgetFinalizeOnLast,
@@ -1620,6 +1674,86 @@ func (r *Runtime) Run(
 		runOpts = merged
 	}
 	return r.runner.Run(ctx, userID, sessionID, message, runOpts...)
+}
+
+func (r *Runtime) modelCatalogRunOption() agent.RunOption {
+	return func(opts *agent.RunOptions) {
+		if opts == nil {
+			return
+		}
+		name := r.modelCatalog.defaultName
+		if opts.Model != nil {
+			selected := r.modelCatalog.runOptionsForModel(
+				r.modelRunOptions,
+				name,
+			)
+			r.applyModelCallBudgetDefaults(opts, selected)
+			return
+		}
+		requested := strings.TrimSpace(opts.ModelName)
+		opts.ModelName = requested
+		if requested != "" {
+			name = requested
+		}
+		if _, ok := r.modelCatalog.models[name]; !ok {
+			opts.ModelName = ""
+			message := fmt.Sprintf("model %q is not configured", name)
+			if opts.ModelSelector != nil {
+				message += " and cannot be combined with a custom model selector"
+			}
+			opts.ModelSelector = func(
+				context.Context,
+				*agent.Invocation,
+			) (model.Model, error) {
+				return nil, errors.New(message)
+			}
+			return
+		}
+		selected := r.modelCatalog.runOptionsForModel(
+			r.modelRunOptions,
+			name,
+		)
+		r.applyModelCallBudgetDefaults(opts, selected)
+		if opts.ModelSelector == nil {
+			applyModelCompatibilityDefaults(opts, selected)
+		}
+	}
+}
+
+func (r *Runtime) applyModelCallBudgetDefaults(
+	opts *agent.RunOptions,
+	selected runOptions,
+) {
+	factory := newModelCallBudgetFactory(
+		r.modelCallBudgetLimit,
+		r.modelCallBudgetFinalizeOnLast,
+		r.modelCallBudgetDeadlineWindow,
+		modelCallBudgetFinalRequestFromOptions(selected),
+	)
+	if factory == nil {
+		return
+	}
+	if opts.RuntimeState == nil {
+		opts.RuntimeState = make(map[string]any, 1)
+	}
+	if _, exists := opts.RuntimeState[modelCallBudgetRuntimeStateKey]; !exists {
+		opts.RuntimeState[modelCallBudgetRuntimeStateKey] = factory
+	}
+}
+
+func applyModelCompatibilityDefaults(
+	opts *agent.RunOptions,
+	selected runOptions,
+) {
+	if len(modelCompatibilityRunOptions(selected)) == 0 {
+		return
+	}
+	if opts.ToolCallArgumentsJSONRepairEnabled == nil {
+		agent.WithToolCallArgumentsJSONRepairEnabled(true)(opts)
+	}
+	if opts.ToolCallTextRepairEnabled == nil {
+		agent.WithToolCallTextRepairEnabled(true)(opts)
+	}
 }
 
 // Close releases owned resources (session/memory services, toolsets, runner).
@@ -1691,6 +1825,16 @@ func run(
 			Err:  fmt.Errorf("agent config failed: %w", err),
 		}
 	}
+	if err := validateModelCatalogAgentType(
+		agentType,
+		opts,
+		runtimeOpts,
+	); err != nil {
+		return &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("agent config failed: %w", err),
+		}
+	}
 
 	mentionPatterns := splitCSV(opts.Mention)
 
@@ -1749,16 +1893,29 @@ func run(
 		opts.SessionSummaryEnabled ||
 		opts.MemoryAutoEnabled
 
-	var mdl model.Model
+	var (
+		mdl          model.Model
+		modelCatalog resolvedModelCatalog
+	)
 	if needsModel {
-		mdl, err = modelFromOptions(opts)
+		modelCatalog, err = resolveModelCatalog(opts, runtimeOpts)
 		if err != nil {
 			return &exitError{
 				Code: 1,
 				Err:  fmt.Errorf("create model failed: %w", err),
 			}
 		}
-		mdl = newModelCallBudgetModel(mdl)
+		mdl = modelCatalog.defaultModel()
+		if err := validateRuntimeProfileModels(
+			agentType,
+			opts.RuntimeProfiles,
+			modelCatalog,
+		); err != nil {
+			return &exitError{
+				Code: 1,
+				Err:  fmt.Errorf("model catalog validation failed: %w", err),
+			}
+		}
 	}
 
 	instanceID := runtimeInstanceID(
@@ -1766,6 +1923,7 @@ func run(
 		opts,
 		needsModel,
 		resolvedStateDir,
+		modelCatalog,
 	)
 	log.Infof("Instance: %s", instanceID)
 
@@ -1885,6 +2043,7 @@ func run(
 		)
 		agentCfg := agentConfig{
 			AppName:                 opts.AppName,
+			Models:                  modelCatalog.models,
 			AddSessionSummary:       opts.AddSessionSummary,
 			EnableContextCompaction: opts.EnableContextCompaction,
 			ContextCompactionOversizedToolResultMaxTokens: opts.
@@ -2044,12 +2203,16 @@ func run(
 		runtimeProfileResolver,
 		runtimeProfileRequired,
 	)
-	gwOpts = appendModelCallBudgetGatewayOption(
+	if agentType == agentTypeLLM {
+		gwOpts = appendModelCatalogGatewayOptions(gwOpts, modelCatalog)
+	}
+	gwOpts = appendModelCatalogCallBudgetGatewayOption(
 		gwOpts,
+		opts,
+		modelCatalog,
 		opts.MaxLLMCalls,
 		opts.FinalizeBeforeMaxLLMCalls,
 		opts.DeadlineFinalizationWindow,
-		modelCallBudgetFinalRequestFromOptions(opts),
 	)
 	if langfuseRT != nil && langfuseRT.runOptionResolver != nil {
 		gwOpts = append(
@@ -2090,7 +2253,11 @@ func run(
 			),
 		),
 	)
-	gwOpts = appendModelCompatibilityGatewayRunOptions(gwOpts, opts)
+	gwOpts = appendModelCompatibilityGatewayRunOptions(
+		gwOpts,
+		opts,
+		modelCatalog,
+	)
 	gwOpts = appendRuntimeGatewayRunOptions(gwOpts, runtimeOpts)
 	gwSrv, err := gateway.New(r, gwOpts...)
 	if err != nil {
@@ -2252,7 +2419,7 @@ func run(
 		}
 		adminSvc := admin.New(
 			buildAdminConfig(
-				opts,
+				modelCatalog.adminRunOptions(opts),
 				agentType,
 				instanceID,
 				langfuseStatus,
@@ -2277,7 +2444,7 @@ func run(
 				fileMemoryStore,
 				bridgedSessionSvc,
 			),
-			buildAdminOptions(opts)...,
+			buildAdminOptions(opts, modelCatalog)...,
 		)
 		adminSrv = &http.Server{
 			Handler:           adminSvc.Handler(),
@@ -2296,6 +2463,7 @@ func run(
 		resolvedStateDir,
 		channels,
 		needsModel,
+		modelCatalog,
 	))
 	logStartupLines(browserServerSup.startupLines())
 	logStartupLines(gatewayStartupLines(httpSrv.Addr, gwSrv))
@@ -2512,8 +2680,14 @@ func runtimeInstanceID(
 	opts runOptions,
 	needsModel bool,
 	stateDir string,
+	catalogs ...resolvedModelCatalog,
 ) string {
 	if agentType == agentTypeLLM {
+		if len(catalogs) > 0 && catalogs[0].explicit {
+			parts := []string{agentType, stateDir}
+			parts = append(parts, catalogs[0].identityParts()...)
+			return configFingerprint(parts...)
+		}
 		return configFingerprint(
 			opts.ModelMode,
 			opts.OpenAIModel,
@@ -2528,7 +2702,11 @@ func runtimeInstanceID(
 		stateDir,
 	}
 	if needsModel {
-		parts = append(parts, opts.ModelMode, opts.OpenAIModel)
+		if len(catalogs) > 0 && catalogs[0].explicit {
+			parts = append(parts, catalogs[0].identityParts()...)
+		} else {
+			parts = append(parts, opts.ModelMode, opts.OpenAIModel)
+		}
 	}
 	return configFingerprint(parts...)
 }
@@ -3425,6 +3603,7 @@ func channelsFromRegistry(
 
 type agentConfig struct {
 	AppName string
+	Models  map[string]model.Model
 
 	AddSessionSummary                             bool
 	EnableContextCompaction                       bool
@@ -3906,10 +4085,7 @@ func modelFromOptions(opts runOptions) (model.Model, error) {
 		return nil, fmt.Errorf("unsupported mode: %s", mode)
 	}
 
-	baseURL := strings.TrimSpace(opts.OpenAIBaseURL)
-	if baseURL == "" {
-		baseURL = strings.TrimSpace(os.Getenv(openAIBaseURLEnvName))
-	}
+	baseURL := resolvedOpenAIBaseURL(opts)
 	var headers map[string]string
 	if mode == modeOpenAI {
 		resolved, err := resolveOpenAIHeaders(opts.OpenAIHeaders)
@@ -3919,7 +4095,10 @@ func modelFromOptions(opts runOptions) (model.Model, error) {
 		headers = resolved
 	}
 
-	apiKey := strings.TrimSpace(os.Getenv(openAIAPIKeyEnvName))
+	apiKey, err := openAIAPIKeyFromOptions(opts)
+	if err != nil {
+		return nil, err
+	}
 	spec := registry.ModelSpec{
 		Type:                         mode,
 		Name:                         opts.OpenAIModel,
@@ -3941,6 +4120,44 @@ func modelFromOptions(opts runOptions) (model.Model, error) {
 		return nil, err
 	}
 	return newModelTimeoutModel(mdl, opts.OpenAITimeout), nil
+}
+
+func openAIAPIKeyFromOptions(opts runOptions) (string, error) {
+	envName := openAIAPIKeyEnvName
+	if opts.OpenAIUseVariantAPIKey &&
+		strings.EqualFold(strings.TrimSpace(opts.ModelMode), modeOpenAI) {
+		variant, err := parseOpenAIVariant(
+			opts.OpenAIVariant,
+			resolvedOpenAIBaseURL(opts),
+		)
+		if err != nil {
+			return "", err
+		}
+		switch variant {
+		case openai.VariantDeepSeek:
+			envName = deepSeekAPIKeyEnvName
+		case openai.VariantQwen:
+			envName = qwenAPIKeyEnvName
+		case openai.VariantMiniMax:
+			envName = miniMaxAPIKeyEnvName
+		case openai.VariantKimi:
+			envName = kimiAPIKeyEnvName
+		}
+	}
+	if envName != openAIAPIKeyEnvName {
+		if apiKey := strings.TrimSpace(os.Getenv(envName)); apiKey != "" {
+			return apiKey, nil
+		}
+	}
+	return strings.TrimSpace(os.Getenv(openAIAPIKeyEnvName)), nil
+}
+
+func resolvedOpenAIBaseURL(opts runOptions) string {
+	baseURL := strings.TrimSpace(opts.OpenAIBaseURL)
+	if baseURL != "" {
+		return baseURL
+	}
+	return strings.TrimSpace(os.Getenv(openAIBaseURLEnvName))
 }
 
 func openAIMaxRetriesPtr(maxRetries int, set bool) *int {
@@ -4102,7 +4319,21 @@ func parseOpenAIVariant(
 func appendModelCompatibilityGatewayRunOptions(
 	opts []gateway.Option,
 	runOpts runOptions,
+	catalog resolvedModelCatalog,
 ) []gateway.Option {
+	if catalog.explicit && len(catalog.models) > 0 {
+		return append(
+			opts,
+			gateway.WithRunOptionResolver(func(
+				ctx context.Context,
+				input gateway.RunOptionInput,
+			) (context.Context, []agent.RunOption, error) {
+				name := catalog.selectedModelName(ctx, input.ModelName)
+				selected := catalog.runOptionsForModel(runOpts, name)
+				return ctx, modelCompatibilityRunOptions(selected), nil
+			}),
+		)
+	}
 	staticRunOpts := modelCompatibilityRunOptions(runOpts)
 	if len(staticRunOpts) == 0 {
 		return opts

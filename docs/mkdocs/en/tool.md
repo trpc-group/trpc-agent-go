@@ -495,6 +495,108 @@ bare context, downstream tool code will no longer see that ID.
 So if you replace the context inside callbacks, make sure you preserve the
 existing context values you still need.
 
+## Tool Result Formatting
+
+Function Tools use JSON for model-visible tool result messages by default. Use
+`function.WithResultFormatter` when a tool needs custom text, such as an
+XML-like observation, without constructing `model.Message` or managing the tool
+call ID.
+
+Currently supported:
+
+- Function Tools registered with an LLMAgent and executed by its default
+  tool-call flow.
+
+Not currently supported:
+
+- Graph ToolsNode;
+- ToolPipe;
+- extensions or application wrappers that replace or re-wrap the tool instance;
+- direct `Tool.Call` consumers or other execution paths that construct their
+  own tool-result messages.
+
+```go
+import (
+    "context"
+
+    "trpc.group/trpc-go/trpc-agent-go/tool/function"
+    "trpc.group/trpc-go/trpc-agent-go/tool/resultformat"
+)
+
+bashTool := function.NewFunctionTool(
+    runBash,
+    function.WithName("bash"),
+    function.WithResultFormatter(
+        resultformat.FormatterFunc[BashResult](func(
+            _ context.Context,
+            result BashResult,
+        ) (string, error) {
+            return formatBashObservation(result), nil
+        }),
+    ),
+)
+```
+
+The formatter receives the final result after `AfterTool` callbacks. It changes
+only `DefaultToolMessage.Content`; the framework still manages the tool message
+role, name, tool call ID, ordering, events, and session persistence.
+
+- Without a formatter, existing JSON output remains unchanged.
+- A formatting error or panic is reported as an error. The framework does not
+  fall back to JSON or run the completed tool again. Formatting is presentation
+  only, so a tool that already ran still applies its session state updates.
+- A formatter runs only when the tool declared a result for the call. When it
+  did not, the framework keeps the default JSON: permission results, state-only
+  final stream results, the `CustomResult` a `BeforeTool` callback or plugin
+  returns to short-circuit the call, and stream content the framework merged
+  because a stream ended without `tool.FinalResultChunk` (see below). An
+  `AfterTool` callback replacing the result of a tool that did run is a
+  different case: the replacement is formatted, so it has to be a value the
+  formatter accepts.
+- For other streamable results, only the final result is formatted;
+  intermediate events are unchanged. A streamable tool must declare that final
+  result with `tool.FinalResultChunk`. When a stream ends without one, the
+  final result is the stream content merged by the framework rather than the
+  tool's declared output type, so the formatter is skipped, the default JSON is
+  kept, and the framework logs a warning. An `AfterTool` callback that replaces
+  the merged content does not make the call eligible for formatting again; emit
+  `tool.FinalResultChunk` to have a streamable result formatted.
+- For tools that update session state, the state update consumes the tool
+  message content the framework would send without a formatter, which is the
+  JSON of the result produced after `AfterTool` callbacks. A formatter is not
+  part of the state protocol: even if a formatter breaks the read-only contract
+  and mutates a pointer or map result in place, the session records the value
+  from before that mutation. When
+  `ToolResultMessages` rewrites the tool message content, the rewritten content
+  wins, exactly as it did before formatting existed.
+- The `ToolResultMessages` callback still runs after the default tool result
+  message is prepared and may replace it with the messages returned by the
+  callback. Continue using it for multiple messages, multimodal content, or
+  complete control of the message protocol. Note that a formatter is configured
+  per tool while `ToolResultMessages` is registered for the whole agent: for a
+  tool with a formatter, the callback receives formatted text in
+  `DefaultToolMessage.Content` rather than JSON. A callback that needs
+  structured data should read `ToolResultMessagesInput.Result` instead of
+  parsing `DefaultToolMessage.Content`.
+
+The formatter's return value becomes the default tool result message. The
+formatting function can apply any escaping, truncation, or validation required
+by the application's message format. A formatter must treat its input result as
+read-only: the same value is handed to the `ToolResultMessages` callback as
+`ToolResultMessagesInput.Result`, so mutating it in place makes consumers of one
+tool call disagree about what the tool returned. A formatter may be called
+concurrently and must synchronize any mutable state it owns.
+
+The framework discovers a formatter through a
+`ResultFormatter() resultformat.Formatter` method on the semantic tool, meaning
+the tool that remains after the framework unwraps its own declaration and name
+wrappers. `function.FunctionTool` and `function.StreamableFunctionTool` provide
+that method; a tool implemented outside `tool/function` that exposes the same
+method participates on the same terms and under the same support scope.
+
+For a runnable end-to-end example, see
+[examples/toolresultformat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/toolresultformat).
+
 ## Built-in Tools
 
 ### Tool Call Retry
@@ -2550,14 +2652,91 @@ agent := llmagent.New("ai-assistant",
     llmagent.WithTools(tools),
     llmagent.WithToolSets(toolSets),
     llmagent.WithEnableParallelTools(true), // Enable parallel execution.
+    llmagent.WithToolConcurrencyConfig(tool.ConcurrencyConfig{
+        Groups: []tool.ConcurrencyGroup{
+            {
+                ToolNames: []string{"subagent"},
+                Limit:     3,
+            },
+            {
+                // search calls are serial.
+                ToolNames: []string{"search"},
+                Limit:     1,
+            },
+            {
+                // fetch calls are serial.
+                ToolNames: []string{"fetch"},
+                Limit:     1,
+            },
+        },
+    }),
 )
 ```
 
 Graph workflows can also enable parallelism for a Tools node:
 
 ```go
-stateGraph.AddToolsNode("tools", tools, graph.WithEnableParallelTools(true))
+stateGraph.AddToolsNode(
+    "tools",
+    tools,
+    graph.WithEnableParallelTools(true),
+    graph.WithToolConcurrencyConfig(tool.ConcurrencyConfig{
+        Groups: []tool.ConcurrencyGroup{
+            {ToolNames: []string{"subagent"}, Limit: 3},
+            {ToolNames: []string{"search"}, Limit: 1},
+            {ToolNames: []string{"fetch"}, Limit: 1},
+        },
+    }),
+)
 ```
+
+`MaxConcurrency` and group limits are cumulative. Every direct tool call
+counts toward a positive overall limit, while a call in a group must also
+acquire capacity from that group. A group containing multiple tool names
+limits their combined active calls. When `MaxConcurrency` is non-positive,
+there is no overall limit: positive group limits still apply, and tools
+outside those groups have no limit from this configuration.
+
+Each `LLMAgent.Run` and each invocation of a Graph Tools node gets independent
+capacity. Concurrent runs of the same Agent do not consume one another's
+limits. For example, if `subagent` has `Limit: 3`, two concurrent runs of the
+same Agent may each execute up to three direct `subagent` calls. These limits
+control per-invocation fan-out; they do not protect capacity shared across
+multiple runs, Agent instances, processes, or service replicas. Put such a
+shared limit in the resource-owning tool or downstream client.
+
+Limits follow execution ownership. An owning Agent or Tools node limits only
+the tools it executes directly. If a tool named `subagent` runs a child Agent,
+the outer `subagent` call remains subject to the owner's limit while it is
+running, but `search`, `fetch`, and other tools executed inside the child are
+not additional calls for the owner. Configure those limits on every child
+Agent that provides these tools:
+
+```go
+child := llmagent.New(
+    "worker",
+    llmagent.WithModel(model),
+    llmagent.WithTools([]tool.Tool{searchTool, fetchTool}),
+    llmagent.WithEnableParallelTools(true),
+    llmagent.WithToolConcurrencyConfig(tool.ConcurrencyConfig{
+        Groups: []tool.ConcurrencyGroup{
+            {ToolNames: []string{"search"}, Limit: 1},
+            {ToolNames: []string{"fetch"}, Limit: 1},
+        },
+    }),
+)
+```
+
+The separate groups make `search` and `fetch` individually serial while still
+allowing one of each to run at the same time. Each child Agent invocation gets
+independent limits, even when concurrent invocations reuse the same child
+Agent instance. Therefore, three concurrent child invocations can run up to
+three `search` calls and three `fetch` calls in total.
+
+The configuration has no effect unless parallel tool execution is enabled.
+Non-positive group limits are ignored. Each tool name may appear in only one
+positive-limit group; duplicate membership causes
+`WithToolConcurrencyConfig` to panic.
 
 **Parallel execution effect:**
 

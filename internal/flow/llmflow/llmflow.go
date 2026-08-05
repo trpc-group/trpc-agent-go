@@ -38,6 +38,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/responseusage"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryfork"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryview"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
@@ -531,6 +532,9 @@ func (f *Flow) maybeSyncSummaryIntraRun(
 			parentRequest,
 		)
 	}
+	if view, ok := summaryview.Snapshot(invocation); ok {
+		summaryCtx = summaryview.ContextWithView(summaryCtx, view)
+	}
 
 	err = invocation.SessionService.CreateSessionSummary(
 		summaryCtx,
@@ -951,6 +955,11 @@ func (p *streamingResponseProcessor) process(
 	responseusage.AttachTiming(response, p.timingInfo, &p.partialUsageState)
 	p.repairToolCallArguments(response)
 	p.repairToolCallTextAndStats(response)
+	if err := validateCompletedToolCallNames(response); err != nil {
+		*p.err = err
+		responseErr = err
+		return false
+	}
 	if p.shouldBufferToolCallTextPartial(response) {
 		if err := agent.CheckContextCancelled(p.ctx); err != nil {
 			*p.err = err
@@ -996,6 +1005,37 @@ func (p *streamingResponseProcessor) process(
 		responseSpan.SetAttributes(latencyResponseAttrs(response)...)
 	}
 	return true
+}
+
+func validateCompletedToolCallNames(response *model.Response) error {
+	if response == nil || response.IsPartial {
+		return nil
+	}
+	for choiceIndex, choice := range response.Choices {
+		messages := []struct {
+			location  string
+			toolCalls []model.ToolCall
+		}{
+			{location: "message", toolCalls: choice.Message.ToolCalls},
+			{location: "delta", toolCalls: choice.Delta.ToolCalls},
+		}
+		for _, message := range messages {
+			for toolCallIndex, toolCall := range message.toolCalls {
+				if strings.TrimSpace(toolCall.Function.Name) != "" {
+					continue
+				}
+				return fmt.Errorf(
+					"invalid model response: tool call function name is empty: response_id=%q choice=%d location=%s tool_call=%d id=%q",
+					response.ID,
+					choiceIndex,
+					message.location,
+					toolCallIndex,
+					toolCall.ID,
+				)
+			}
+		}
+	}
+	return nil
 }
 
 func (p *streamingResponseProcessor) recordResponseStats(response *model.Response) {
@@ -1568,6 +1608,9 @@ func (f *Flow) maybeCompactContextBeforeLLM(
 		f.contextCompactionThresholdRatio,
 		rebuildPlan.contentProcessor.ContextCompactionConfig.TokenCounter,
 	)
+	if decision.err == nil {
+		summaryview.Finalize(invocation, req, decision.tokenCount)
+	}
 	if started {
 		span.SetAttributes(contextCompactionAttrs(decision, req)...)
 	}
@@ -1623,6 +1666,9 @@ func (f *Flow) runContextCompaction(
 		contextCompactionAttrs(decision, req)...,
 	)
 	summaryCtx = summary.ContextWithCacheSafeForkRequest(summaryCtx, req)
+	if view, ok := summaryview.Snapshot(invocation); ok {
+		summaryCtx = summaryview.ContextWithView(summaryCtx, view)
+	}
 	err := invocation.SessionService.CreateSessionSummary(
 		summaryCtx,
 		invocation.Session,
@@ -1689,6 +1735,23 @@ func (f *Flow) runContextCompaction(
 			invocation.AgentName,
 		)
 		return req
+	}
+	postDecision := syncCompactContextDecision(
+		rebuildCtx,
+		invocation,
+		rebuilt,
+		f.contextCompactionThresholdRatio,
+		rebuildPlan.contentProcessor.ContextCompactionConfig.TokenCounter,
+	)
+	if postDecision.err == nil {
+		summaryview.Finalize(invocation, rebuilt, postDecision.tokenCount)
+	} else {
+		log.DebugfContext(
+			ctx,
+			"Post-compaction request token count failed for agent %s: %v",
+			invocation.AgentName,
+			postDecision.err,
+		)
 	}
 
 	if err != nil {
@@ -1835,6 +1898,13 @@ func cloneContentPartForContextCompaction(
 			audio.Data = append([]byte(nil), part.Audio.Data...)
 		}
 		cloned.Audio = &audio
+	}
+	if part.Video != nil {
+		video := *part.Video
+		if part.Video.Data != nil {
+			video.Data = append([]byte(nil), part.Video.Data...)
+		}
+		cloned.Video = &video
 	}
 	if part.File != nil {
 		file := *part.File
@@ -2345,6 +2415,12 @@ func (f *Flow) callLLM(
 		)
 	}
 	ctx = contextWithModelRetryCallbacks(ctx, f, invocation, callModel)
+	finalizeSummaryView(
+		ctx,
+		invocation,
+		llmRequest,
+		f.summaryViewTokenCounter(),
+	)
 	summaryfork.Attach(invocation, llmRequest)
 	seq, err := f.generateContentSeq(ctx, invocation, llmRequest, callModel)
 	if err != nil {
@@ -2385,6 +2461,41 @@ func enforceCallLimitFinalizationToolFree(
 	req.Tools = nil
 	imodelrequest.DeleteToolControlFields(req.ExtraFields)
 	return imodelrequest.WithToolsDisabled(ctx)
+}
+
+func finalizeSummaryView(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	req *model.Request,
+	counter model.TokenCounter,
+) {
+	if invocation == nil || req == nil || len(req.Messages) == 0 {
+		return
+	}
+	if counter == nil {
+		counter = model.NewSimpleTokenCounter()
+	}
+	tokens, err := counter.CountTokensRange(
+		ctx,
+		req.Messages,
+		0,
+		len(req.Messages),
+	)
+	if err != nil {
+		log.DebugfContext(ctx, "final model-visible request token count failed: %v", err)
+		return
+	}
+	summaryview.Finalize(invocation, req, tokens)
+}
+
+func (f *Flow) summaryViewTokenCounter() model.TokenCounter {
+	for i := len(f.requestProcessors) - 1; i >= 0; i-- {
+		contentProcessor, ok := f.requestProcessors[i].(*processor.ContentRequestProcessor)
+		if ok {
+			return contentProcessor.ContextCompactionConfig.TokenCounter
+		}
+	}
+	return nil
 }
 
 func (f *Flow) runBeforeModelCallbacks(

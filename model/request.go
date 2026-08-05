@@ -218,6 +218,20 @@ func (m *Message) AddImageData(data []byte, detail, format string) {
 	})
 }
 
+// AddAudioURL adds URL-based audio to the message.
+// Format may be a media subtype such as "mpeg" or a full MIME type such as
+// "audio/mpeg". An empty format leaves media type resolution to the model
+// provider.
+func (m *Message) AddAudioURL(url, format string) {
+	m.ContentParts = append(m.ContentParts, ContentPart{
+		Type: ContentTypeAudio,
+		Audio: &Audio{
+			URL:    url,
+			Format: format,
+		},
+	})
+}
+
 // AddAudioFilePath adds an audio file path to the message.
 func (m *Message) AddAudioFilePath(path string) error {
 	content, err := os.ReadFile(path)
@@ -251,6 +265,32 @@ func (m *Message) AddAudioData(data []byte, format string) {
 	})
 }
 
+// AddVideoURL adds URL-based video to the message.
+// Format may be a media subtype such as "mp4" or a full MIME type such as
+// "video/mp4". An empty format leaves media type resolution to the model
+// provider.
+func (m *Message) AddVideoURL(url, format string) {
+	m.ContentParts = append(m.ContentParts, ContentPart{
+		Type: ContentTypeVideo,
+		Video: &Video{
+			URL:    url,
+			Format: format,
+		},
+	})
+}
+
+// AddVideoData adds inline video data to the message.
+// The argument of data is the raw video data without base64 encoding.
+func (m *Message) AddVideoData(data []byte, format string) {
+	m.ContentParts = append(m.ContentParts, ContentPart{
+		Type: ContentTypeVideo,
+		Video: &Video{
+			Data:   data,
+			Format: format,
+		},
+	})
+}
+
 // ContentType represents the type of content.
 type ContentType string
 
@@ -259,12 +299,14 @@ const (
 	ContentTypeText  ContentType = "text"
 	ContentTypeImage ContentType = "image"
 	ContentTypeAudio ContentType = "audio"
+	// ContentTypeVideo identifies video content.
+	ContentTypeVideo ContentType = "video"
 	ContentTypeFile  ContentType = "file"
 )
 
 // ContentPart represents a single content part in a multimodal message.
 type ContentPart struct {
-	// Type is the type of content: "text", "image", "audio", "file"
+	// Type is the type of content: "text", "image", "audio", "video", "file".
 	Type ContentType `json:"type"`
 	// Text is the text content.
 	Text *string `json:"text,omitempty"`
@@ -272,6 +314,8 @@ type ContentPart struct {
 	Image *Image `json:"image,omitempty"`
 	// Audio is the audio data.
 	Audio *Audio `json:"audio,omitempty"`
+	// Video is the video data.
+	Video *Video `json:"video,omitempty"`
 	// File is the file data.
 	File *File `json:"file,omitempty"`
 	// ContentRef is an internal reference to externalized content.
@@ -355,10 +399,28 @@ type Image struct {
 
 // Audio represents audio input for audio models.
 type Audio struct {
+	// URL is the URL of the audio. When URL and Data are both set, URL takes
+	// precedence.
+	URL string `json:"url,omitempty"`
 	// Data is the raw audio data.
 	Data []byte `json:"data"`
-	// Format is the format of the encoded audio data. Currently supports "wav" and "mp3".
+	// Format is the format of the encoded audio data.
+	// Data-backed audio usually uses a subtype such as "wav" or "mp3".
+	// URL-backed audio may use a full MIME type such as "audio/mpeg".
 	Format string `json:"format"`
+}
+
+// Video represents video input for multimodal models.
+type Video struct {
+	// URL is the URL of the video. When URL and Data are both set, URL takes
+	// precedence.
+	URL string `json:"url,omitempty"`
+	// Data is the raw video data.
+	Data []byte `json:"data"`
+	// Format is the video format.
+	// Data-backed video usually uses a subtype such as "mp4".
+	// URL-backed video may use a full MIME type such as "video/mp4".
+	Format string `json:"format,omitempty"`
 }
 
 // NewSystemMessage creates a new system message.

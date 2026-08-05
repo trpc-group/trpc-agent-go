@@ -28,6 +28,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	iflow "trpc.group/trpc-go/trpc-agent-go/internal/flow"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/messageorigin"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryview"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/toolresultround"
 	"trpc.group/trpc-go/trpc-agent-go/internal/util/message"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -235,6 +237,11 @@ type ContentRequestProcessor struct {
 
 type contentRequestRuntimeConfig struct {
 	includeMode string
+}
+
+type projectedHistory struct {
+	messages []model.Message
+	items    []summaryview.Item
 }
 
 // EventMessageProjector projects one event-derived message into the
@@ -661,6 +668,7 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		return
 	}
 	invocation.DeleteState(contentHasCompactedToolResultsStateKey)
+	summaryview.Clear(invocation)
 
 	cfg := p.runtimeConfigFromInvocation(invocation)
 	skipHistory := cfg.includeMode == "none"
@@ -668,7 +676,7 @@ func (p *ContentRequestProcessor) ProcessRequest(
 	p.injectInjectedContextMessages(invocation, req)
 	p.injectFewShotMessages(invocation, req)
 	// Append per-filter messages from session events when allowed.
-	needToAddInvocationMessage := p.appendSessionMessages(
+	needToAddInvocationMessage, modelVisibleView := p.appendSessionMessages(
 		ctx,
 		invocation,
 		req,
@@ -693,6 +701,10 @@ func (p *ContentRequestProcessor) ProcessRequest(
 	}
 
 	p.injectLateContextMessages(invocation, req)
+	if modelVisibleView != nil {
+		modelVisibleView.ContentRequestLength = len(req.Messages)
+		summaryview.AttachProjection(invocation, modelVisibleView)
+	}
 
 	// Send a preprocessing event.
 	agent.EmitEvent(ctx, invocation, ch, event.New(
@@ -740,9 +752,9 @@ func (p *ContentRequestProcessor) appendSessionMessages(
 	req *model.Request,
 	skipHistory bool,
 	includeInvocationMessage bool,
-) bool {
+) (bool, *summaryview.View) {
 	if invocation == nil || invocation.Session == nil {
-		return true
+		return true, nil
 	}
 
 	var userContextBlocks []string
@@ -767,13 +779,14 @@ func (p *ContentRequestProcessor) appendSessionMessages(
 		userContextBlocks,
 	)
 
-	messages := p.sessionMessagesAfterCutoff(
+	history := p.sessionHistoryAfterCutoff(
 		invocation,
 		req,
 		skipHistory,
 		includeInvocationMessage,
 		summaryCutoff,
 	)
+	messages := history.messages
 
 	// When user-mode injection is active for summary or preload context, prepend
 	// it as user content near history. Prefer merging into the first user
@@ -789,8 +802,60 @@ func (p *ContentRequestProcessor) appendSessionMessages(
 		)
 	}
 
+	messageStart := len(req.Messages)
 	req.Messages = append(req.Messages, messages...)
-	return len(messages) == 0
+	view := modelVisibleHistoryView(
+		invocation,
+		history,
+		messages,
+		messageStart,
+		summaryText,
+		p.SessionSummaryInjectionMode == SessionSummaryInjectionUser,
+	)
+	return len(messages) == 0, view
+}
+
+func modelVisibleHistoryView(
+	invocation *agent.Invocation,
+	history projectedHistory,
+	appended []model.Message,
+	messageStart int,
+	previousSummary string,
+	previousSummaryInItems bool,
+) *summaryview.View {
+	if invocation == nil || invocation.Session == nil || len(history.items) == 0 {
+		return nil
+	}
+	offset := len(appended) - len(history.items)
+	if offset < 0 || offset > 1 {
+		return nil
+	}
+	items := make([]summaryview.Item, len(history.items))
+	summaryMergedIntoItems := false
+	for i := range history.items {
+		messageIndex := i + offset
+		if messageIndex >= len(appended) {
+			return nil
+		}
+		items[i] = history.items[i]
+		if previousSummary != "" && previousSummaryInItems &&
+			items[i].Message.Content != appended[messageIndex].Content {
+			summaryMergedIntoItems = true
+		}
+		items[i].Message = appended[messageIndex]
+		items[i].RequestIndex = messageStart + messageIndex
+		items[i].EffectiveEvent = effectiveEventForMessage(
+			items[i].EffectiveEvent,
+			items[i].Message,
+		)
+	}
+	return &summaryview.View{
+		SessionID:              invocation.Session.ID,
+		FilterKey:              invocation.GetEventFilterKey(),
+		Items:                  items,
+		PreviousSummary:        previousSummary,
+		PreviousSummaryInItems: summaryMergedIntoItems,
+	}
 }
 
 func (p *ContentRequestProcessor) sessionSummaryForRequest(
@@ -873,24 +938,24 @@ func (p *ContentRequestProcessor) appendPreloadSessionRecallContext(
 	return userContextBlocks
 }
 
-func (p *ContentRequestProcessor) sessionMessagesAfterCutoff(
+func (p *ContentRequestProcessor) sessionHistoryAfterCutoff(
 	invocation *agent.Invocation,
 	req *model.Request,
 	skipHistory bool,
 	includeInvocationMessage bool,
 	summaryCutoff summaryHistoryCutoff,
-) []model.Message {
+) projectedHistory {
 	if skipHistory {
 		// When include_contents=none, only get events from current invocation to
 		// preserve tool call history within the current ReAct loop. This fixes
 		// the infinite loop issue where the agent doesn't see its own tool calls
 		// when running as an isolated subgraph.
 		if includeInvocationMessage {
-			return p.getCurrentInvocationMessages(invocation)
+			return p.getCurrentInvocationHistory(invocation)
 		}
-		return nil
+		return projectedHistory{}
 	}
-	messages := p.getIncrementMessagesAfterCutoff(
+	history := p.getIncrementHistoryAfterCutoff(
 		invocation,
 		req,
 		summaryCutoff,
@@ -898,7 +963,7 @@ func (p *ContentRequestProcessor) sessionMessagesAfterCutoff(
 	if p.hasCompactedCurrentInvocationToolResultsAfterCutoff(invocation, summaryCutoff) {
 		invocation.SetState(contentHasCompactedToolResultsStateKey, true)
 	}
-	return messages
+	return history
 }
 
 // injectSystemContextMessage injects summary or memory context into request.
@@ -1007,6 +1072,11 @@ func (c summaryHistoryCutoff) CutoffTime() time.Time {
 type eventHistoryCutoff struct {
 	summaryHistoryCutoff
 	lastEventIndex int
+}
+
+type historyTurnKey struct {
+	requestID    string
+	invocationID string
 }
 
 func newEventHistoryCutoff(
@@ -1232,8 +1302,16 @@ func (p *ContentRequestProcessor) getIncrementMessagesAfterCutoff(
 	req *model.Request,
 	cutoff summaryHistoryCutoff,
 ) []model.Message {
+	return p.getIncrementHistoryAfterCutoff(inv, req, cutoff).messages
+}
+
+func (p *ContentRequestProcessor) getIncrementHistoryAfterCutoff(
+	inv *agent.Invocation,
+	req *model.Request,
+	cutoff summaryHistoryCutoff,
+) projectedHistory {
 	if inv.Session == nil {
-		return nil
+		return projectedHistory{}
 	}
 	filter := inv.GetEventFilterKey()
 	var includedInvocationMessage bool
@@ -1321,47 +1399,38 @@ func (p *ContentRequestProcessor) getIncrementMessagesAfterCutoff(
 			inv.AgentName,
 		)
 	}
+	history := p.projectHistoryAcrossSummaryCutoff(
+		resultEvents,
+		sessionEvents,
+		inv,
+		filter,
+		eventCutoff,
+	)
 
-	// Get current request ID for reasoning content filtering.
-	currentRequestID := inv.RunOptions.RequestID
-
-	toolCallRequestIDs := requestIDsWithToolCalls(resultEvents)
-
-	// Convert events to messages with reasoning content handling.
-	var messages []model.Message
-	for _, evt := range resultEvents {
-		// Convert foreign events or keep as-is.
-		ev := evt
-		if p.isOtherAgentReply(inv.AgentName, inv.Branch, &ev) {
-			ev = p.convertForeignEvent(&ev)
-		}
-		if len(ev.Choices) > 0 {
-			for _, choice := range ev.Choices {
-				msg := choice.Message
-				// Apply reasoning content stripping based on mode.
-				msg = p.processReasoningContent(
-					msg,
-					evt.RequestID,
-					currentRequestID,
-					requestHasToolCalls(toolCallRequestIDs, evt.RequestID),
-				)
-				msg = p.projectEventMessage(inv, evt, msg)
-				if message.IsEmptyAssistantMessage(msg) {
-					continue
-				}
-				messages = append(messages, msg)
-			}
-		}
-	}
-
-	messages = p.mergeUserMessages(messages)
+	history = p.mergeProjectedUserMessages(history)
 
 	// Apply MaxHistoryRuns limit when AddSessionSummary is false.
 	if !p.AddSessionSummary && p.MaxHistoryRuns > 0 {
-		messages = applyMaxHistoryRuns(messages, p.MaxHistoryRuns)
+		startIdx := maxHistoryRunsStartIndex(
+			history.messages,
+			p.MaxHistoryRuns,
+		)
+		if len(history.items) == len(history.messages) {
+			history.items = history.items[startIdx:]
+		}
+		history.messages = history.messages[startIdx:]
 	}
-	messages = annotateUserMessagesWithAttachedFiles(messages)
-	return messages
+	history.messages = annotateUserMessagesWithAttachedFiles(history.messages)
+	for i := range history.items {
+		history.items[i].Message = annotateUserMessageWithAttachedFiles(
+			history.items[i].Message,
+		)
+		history.items[i].EffectiveEvent = effectiveEventForMessage(
+			history.items[i].EffectiveEvent,
+			history.items[i].Message,
+		)
+	}
+	return history
 }
 
 func sessionEventsSnapshot(sess *session.Session) []event.Event {
@@ -1470,6 +1539,244 @@ func (p *ContentRequestProcessor) canMatchToolRound(
 		p.passBranchFilter(evt, filter)
 }
 
+func (p *ContentRequestProcessor) projectHistoryAcrossSummaryCutoff(
+	retained []event.Event,
+	all []event.Event,
+	inv *agent.Invocation,
+	filter string,
+	cutoff eventHistoryCutoff,
+) projectedHistory {
+	// Decide whether a turn needs its covered user anchor only after projection.
+	// A projector may remove or rewrite the retained assistant or tool message.
+	currentRequestID := inv.RunOptions.RequestID
+	toolCallRequestIDs := requestIDsWithToolCalls(retained)
+	coveredUsers := p.coveredUserEventsBeforeCutoff(
+		all,
+		inv,
+		filter,
+		cutoff,
+	)
+
+	eligibleBoundaries := make(map[string]summaryview.Boundary)
+	for i, evt := range all {
+		if evt.ID == "" || cutoff.excludesEvent(i, evt) {
+			continue
+		}
+		eligibleBoundaries[evt.ID] = summaryview.Boundary{
+			EventID:   evt.ID,
+			Timestamp: evt.Timestamp,
+		}
+	}
+
+	var history projectedHistory
+	appendEvent := func(evt event.Event, boundary summaryview.Boundary) {
+		for _, msg := range p.projectMessagesForEvent(
+			inv,
+			evt,
+			currentRequestID,
+			toolCallRequestIDs,
+		) {
+			effective := effectiveEventForMessage(evt, msg)
+			history.messages = append(history.messages, msg)
+			history.items = append(history.items, summaryview.Item{
+				Message:        msg,
+				EffectiveEvent: effective,
+				Boundary:       boundary,
+			})
+		}
+	}
+	seenTurns := make(map[historyTurnKey]struct{})
+	for _, evt := range retained {
+		projected := p.projectMessagesForEvent(
+			inv,
+			evt,
+			currentRequestID,
+			toolCallRequestIDs,
+		)
+		if len(projected) == 0 {
+			continue
+		}
+		key, hasKey := historyTurnKeyForEvent(evt)
+		_, seen := seenTurns[key]
+		if hasKey && !seen {
+			role, _ := historyRoleForMessages(projected)
+			if role != model.RoleSystem {
+				seenTurns[key] = struct{}{}
+			}
+			if userEvt, ok := coveredUsers[key]; ok &&
+				(role == model.RoleAssistant || role == model.RoleTool) {
+				appendEvent(userEvt, summaryview.Boundary{})
+			}
+		}
+		boundary := eligibleBoundaries[evt.ID]
+		for _, msg := range projected {
+			effective := effectiveEventForMessage(evt, msg)
+			history.messages = append(history.messages, msg)
+			history.items = append(history.items, summaryview.Item{
+				Message:        msg,
+				EffectiveEvent: effective,
+				Boundary:       boundary,
+			})
+		}
+	}
+	return history
+}
+
+func effectiveEventForMessage(
+	evt event.Event,
+	msg model.Message,
+) event.Event {
+	effective := cloneEventForContentSnapshot(evt)
+	if effective.Response == nil {
+		effective.Response = &model.Response{}
+	}
+	effective.Response.Choices = []model.Choice{{Message: msg}}
+	return effective
+}
+
+func (p *ContentRequestProcessor) mergeProjectedUserMessages(
+	history projectedHistory,
+) projectedHistory {
+	if len(history.messages) <= 1 || !p.AddContextPrefix {
+		return history
+	}
+	if len(history.messages) != len(history.items) {
+		history.messages = p.mergeUserMessages(history.messages)
+		history.items = nil
+		return history
+	}
+
+	var merged projectedHistory
+	var current *summaryview.Item
+	appendCurrent := func() {
+		if current == nil {
+			return
+		}
+		current.EffectiveEvent = effectiveEventForMessage(
+			current.EffectiveEvent,
+			current.Message,
+		)
+		merged.messages = append(merged.messages, current.Message)
+		merged.items = append(merged.items, *current)
+		current = nil
+	}
+	for i := range history.items {
+		item := history.items[i]
+		msg := item.Message
+		if msg.Role != model.RoleUser ||
+			!strings.HasPrefix(msg.Content, contextPrefix) {
+			appendCurrent()
+			merged.messages = append(merged.messages, msg)
+			merged.items = append(merged.items, item)
+			continue
+		}
+		if current == nil {
+			cloned := item
+			current = &cloned
+			continue
+		}
+		if msg.Content != "" {
+			if current.Message.Content == "" {
+				current.Message.Content = msg.Content
+			} else {
+				current.Message.Content += mergedUserSeparator + msg.Content
+			}
+		}
+		if len(msg.ContentParts) > 0 {
+			current.Message.ContentParts = append(
+				current.Message.ContentParts,
+				msg.ContentParts...,
+			)
+		}
+		if !item.Boundary.IsZero() {
+			current.Boundary = item.Boundary
+		}
+	}
+	appendCurrent()
+	return merged
+}
+
+func (p *ContentRequestProcessor) coveredUserEventsBeforeCutoff(
+	events []event.Event,
+	inv *agent.Invocation,
+	filter string,
+	cutoff eventHistoryCutoff,
+) map[historyTurnKey]event.Event {
+	coveredUsers := make(map[historyTurnKey]event.Event)
+	tailStarted := make(map[historyTurnKey]struct{})
+	// Keep replacing each candidate until its retained tail begins, so only
+	// the final eligible pre-cutoff user event can be restored for that turn.
+	for i, evt := range events {
+		if !p.canMatchToolRound(evt, inv, filter) ||
+			messageorigin.IsSeedHistory(inv, evt.ID) {
+			continue
+		}
+		key, ok := historyTurnKeyForEvent(evt)
+		if !ok {
+			continue
+		}
+		role, ok := historyRoleForEvent(evt)
+		if !ok {
+			continue
+		}
+		if _, ok := tailStarted[key]; ok {
+			continue
+		}
+		if !cutoff.excludesEvent(i, evt) {
+			tailStarted[key] = struct{}{}
+			continue
+		}
+		if role == model.RoleUser {
+			coveredUsers[key] = evt
+		}
+	}
+	return coveredUsers
+}
+
+func historyTurnKeyForEvent(evt event.Event) (historyTurnKey, bool) {
+	if evt.InvocationID == "" {
+		return historyTurnKey{}, false
+	}
+	return historyTurnKey{
+		requestID:    evt.RequestID,
+		invocationID: evt.InvocationID,
+	}, true
+}
+
+func historyRoleForEvent(evt event.Event) (model.Role, bool) {
+	for _, choice := range evt.Choices {
+		if role, ok := historyRoleForMessage(choice.Message); ok {
+			return role, true
+		}
+	}
+	return "", false
+}
+
+func historyRoleForMessages(messages []model.Message) (model.Role, bool) {
+	for _, msg := range messages {
+		if role, ok := historyRoleForMessage(msg); ok {
+			return role, true
+		}
+	}
+	return "", false
+}
+
+func historyRoleForMessage(msg model.Message) (model.Role, bool) {
+	if userLikeRole(msg.Role) && model.HasPayload(msg) {
+		return model.RoleUser, true
+	}
+	if msg.Role.IsValid() {
+		return msg.Role, true
+	}
+	if msg.ToolID != "" {
+		return model.RoleTool, true
+	}
+	if len(msg.ToolCalls) > 0 {
+		return model.RoleAssistant, true
+	}
+	return "", false
+}
+
 func addToolCallIDToRestore(
 	idsByEvent map[int]map[string]struct{},
 	eventIndex int,
@@ -1533,8 +1840,9 @@ func (p *ContentRequestProcessor) isCoveredCurrentInvocationEvent(
 	filter string,
 	cutoff eventHistoryCutoff,
 ) bool {
-	return evt.RequestID == inv.RunOptions.RequestID &&
-		evt.InvocationID == inv.InvocationID &&
+	return !messageorigin.IsSeedHistory(inv, evt.ID) &&
+		!messageorigin.IsCurrentTurn(inv, evt.ID) &&
+		isCurrentInvocationEvent(evt, inv) &&
 		cutoff.excludesEvent(index, evt) &&
 		p.canMatchToolRound(evt, inv, filter)
 }
@@ -1962,20 +2270,21 @@ func fileNameFromArtifactRef(fileID string) string {
 	return base
 }
 
-// applyMaxHistoryRuns trims messages to at most maxRuns entries from the tail.
+// maxHistoryRunsStartIndex returns the first retained message when trimming to
+// at most maxRuns entries from the tail.
 // If the trim boundary falls on a tool-result message whose corresponding
 // tool_use was truncated, the boundary is advanced past any such orphaned
 // results to prevent API 400 "unexpected tool_use_id" errors.
-func applyMaxHistoryRuns(messages []model.Message, maxRuns int) []model.Message {
+func maxHistoryRunsStartIndex(messages []model.Message, maxRuns int) int {
 	if len(messages) <= maxRuns {
-		return messages
+		return 0
 	}
 	startIdx := len(messages) - maxRuns
 
 	// Only scan the truncated prefix when the boundary actually falls on a
 	// tool-result message; otherwise there's nothing to skip.
 	if messages[startIdx].Role != model.RoleTool || messages[startIdx].ToolID == "" {
-		return messages[startIdx:]
+		return startIdx
 	}
 
 	// Collect tool-call IDs that will be truncated (before startIdx).
@@ -1999,7 +2308,7 @@ func applyMaxHistoryRuns(messages []model.Message, maxRuns int) []model.Message 
 		break
 	}
 
-	return messages[startIdx:]
+	return startIdx
 }
 
 // processReasoningContent applies reasoning content stripping based on the
@@ -2050,21 +2359,75 @@ func (p *ContentRequestProcessor) projectEventMessage(
 // This is used when include_contents=none to preserve tool call history within
 // the current ReAct loop while isolating from parent/other branch history.
 func (p *ContentRequestProcessor) getCurrentInvocationMessages(inv *agent.Invocation) []model.Message {
+	return p.getCurrentInvocationHistory(inv).messages
+}
+
+func (p *ContentRequestProcessor) getCurrentInvocationHistory(
+	inv *agent.Invocation,
+) projectedHistory {
 	if inv.Session == nil {
-		return nil
+		return projectedHistory{}
 	}
 
 	events := p.collectCurrentInvocationEvents(inv)
+	persistedBoundaries := make(map[string]summaryview.Boundary, len(events))
+	for _, evt := range events {
+		if evt.ID == "" {
+			continue
+		}
+		persistedBoundaries[evt.ID] = summaryview.Boundary{
+			EventID:   evt.ID,
+			Timestamp: evt.Timestamp,
+		}
+	}
 	if !containsInvocationMessage(events, inv.Message) &&
 		model.HasPayload(inv.Message) {
 		events = p.insertInvocationMessage(events, inv)
 	}
 
-	messages := p.projectCurrentInvocationMessages(inv, events)
-	messages = p.mergeUserMessages(messages)
-	messages = p.truncateOversizedToolResultMessages(messages)
-	messages = annotateUserMessagesWithAttachedFiles(messages)
-	return messages
+	resultEvents := p.rearrangeLatestFuncResp(events)
+	resultEvents = p.rearrangeAsyncFuncRespHist(resultEvents)
+	currentRequestID := inv.RunOptions.RequestID
+	toolCallRequestIDs := requestIDsWithToolCalls(resultEvents)
+	var history projectedHistory
+	for _, evt := range resultEvents {
+		for _, msg := range p.projectMessagesForEvent(
+			inv,
+			evt,
+			currentRequestID,
+			toolCallRequestIDs,
+		) {
+			history.messages = append(history.messages, msg)
+			history.items = append(history.items, summaryview.Item{
+				Message:        msg,
+				EffectiveEvent: effectiveEventForMessage(evt, msg),
+				Boundary:       persistedBoundaries[evt.ID],
+			})
+		}
+	}
+	history = p.mergeProjectedUserMessages(history)
+	if len(history.items) != len(history.messages) {
+		history.messages = p.truncateOversizedToolResultMessages(
+			history.messages,
+		)
+		history.messages = annotateUserMessagesWithAttachedFiles(
+			history.messages,
+		)
+		return history
+	}
+	for i := range history.items {
+		truncated := p.truncateOversizedToolResultMessages(
+			[]model.Message{history.items[i].Message},
+		)[0]
+		truncated = annotateUserMessageWithAttachedFiles(truncated)
+		history.items[i].Message = truncated
+		history.items[i].EffectiveEvent = effectiveEventForMessage(
+			history.items[i].EffectiveEvent,
+			truncated,
+		)
+		history.messages[i] = truncated
+	}
+	return history
 }
 
 func (p *ContentRequestProcessor) collectCurrentInvocationEvents(
@@ -2118,30 +2481,6 @@ func containsInvocationMessage(
 		}
 	}
 	return false
-}
-
-func (p *ContentRequestProcessor) projectCurrentInvocationMessages(
-	inv *agent.Invocation,
-	events []event.Event,
-) []model.Message {
-	resultEvents := p.rearrangeLatestFuncResp(events)
-	resultEvents = p.rearrangeAsyncFuncRespHist(resultEvents)
-
-	currentRequestID := inv.RunOptions.RequestID
-	toolCallRequestIDs := requestIDsWithToolCalls(resultEvents)
-	var messages []model.Message
-	for _, evt := range resultEvents {
-		messages = append(
-			messages,
-			p.projectMessagesForEvent(
-				inv,
-				evt,
-				currentRequestID,
-				toolCallRequestIDs,
-			)...,
-		)
-	}
-	return messages
 }
 
 func (p *ContentRequestProcessor) projectMessagesForEvent(
@@ -2331,15 +2670,25 @@ func (p *ContentRequestProcessor) shouldIncludeEvent(
 	if !isEventEligibleForInclusion(evt) {
 		return false, false
 	}
+	// Caller-supplied seed history shares the current request and invocation
+	// identifiers, but remains ordinary history for summary-cutoff purposes.
+	seededHistory := messageorigin.IsSeedHistory(inv, evt.ID)
+	// UserMessageRewriter may expand the active turn into an ordered,
+	// mixed-role transcript. Preserve that input as a unit even when an
+	// intra-run summary covers its session timestamps.
+	if messageorigin.IsCurrentTurn(inv, evt.ID) &&
+		isCurrentInvocationEvent(evt, inv) {
+		return true, isStrictInvocationMessage(evt, inv)
+	}
 	// Exact invocation message match keeps existing semantics.
-	if isStrictInvocationMessage(evt, inv) {
+	if !seededHistory && isStrictInvocationMessage(evt, inv) {
 		return true, true
 	}
 	// Keep the current invocation user message even when the summary cutoff
 	// would otherwise exclude it. This preserves the original request while
 	// still allowing same-turn tool/assistant history already covered by the
 	// summary to be compacted out of the next prompt.
-	if isCurrentInvocationUserMessage(evt, inv) {
+	if !seededHistory && isCurrentInvocationUserMessage(evt, inv) {
 		return true, false
 	}
 	if cutoff.excludesEvent(eventIndex, evt) {
@@ -2479,12 +2828,17 @@ func isStrictInvocationMessage(evt event.Event, inv *agent.Invocation) bool {
 // RequestID + InvocationID matching avoids preserving unrelated user messages
 // from other invocations that may share the same request scope.
 func isCurrentInvocationUserMessage(evt event.Event, inv *agent.Invocation) bool {
-	return inv.RunOptions.RequestID != "" &&
-		inv.RunOptions.RequestID == evt.RequestID &&
-		inv.InvocationID != "" &&
-		inv.InvocationID == evt.InvocationID &&
+	return isCurrentInvocationEvent(evt, inv) &&
 		len(evt.Choices) > 0 &&
 		evt.Choices[0].Message.Role == model.RoleUser
+}
+
+func isCurrentInvocationEvent(evt event.Event, inv *agent.Invocation) bool {
+	return inv != nil &&
+		inv.RunOptions.RequestID != "" &&
+		inv.RunOptions.RequestID == evt.RequestID &&
+		inv.InvocationID != "" &&
+		inv.InvocationID == evt.InvocationID
 }
 
 // hasCompactedCurrentInvocationToolResults reports whether the bounded resume
@@ -2530,11 +2884,13 @@ func (p *ContentRequestProcessor) hasCompactedCurrentInvocationToolResultsAfterC
 	// Keep the predicate useful for callers inspecting partially persisted
 	// histories where the matching tool-call event is not available yet.
 	for i, evt := range events {
-		if evt.RequestID != inv.RunOptions.RequestID ||
-			evt.InvocationID != inv.InvocationID ||
-			!eventCutoff.excludesEvent(i, evt) ||
-			!isEventEligibleForInclusion(evt) ||
-			!p.passBranchFilter(evt, filter) {
+		if !p.isCoveredCurrentInvocationEvent(
+			i,
+			evt,
+			inv,
+			filter,
+			eventCutoff,
+		) {
 			continue
 		}
 		if eventWouldCompactCurrentToolResult(

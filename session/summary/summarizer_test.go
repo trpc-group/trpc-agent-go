@@ -626,13 +626,18 @@ func TestSessionSummarizer_CacheSafeForking(t *testing.T) {
 			inputBudget:   220,
 		}
 		s := NewSummarizer(capture, WithCacheSafeForking(true))
-		oversized := strings.Repeat("provider-budget-content ", 200)
+		oversizedParent := strings.Repeat("provider-budget-content ", 200)
 		parent := &model.Request{Messages: []model.Message{
 			model.NewSystemMessage("stable system"),
-			model.NewUserMessage(oversized),
+			model.NewUserMessage(oversizedParent),
 		}}
 		ctx := ContextWithCacheSafeForkRequest(context.Background(), parent)
-		sess := &session.Session{ID: "provider-budget", Events: []event.Event{newEventWithContent(oversized)}}
+		sess := &session.Session{
+			ID: "provider-budget",
+			Events: []event.Event{newEventWithContent(
+				strings.Repeat("provider event ", 20),
+			)},
+		}
 
 		text, err := s.Summarize(ctx, sess)
 		require.NoError(t, err)
@@ -672,9 +677,9 @@ func TestSessionSummarizer_CacheSafeForking(t *testing.T) {
 		require.Nil(t, capture.request)
 	})
 
-	t.Run("falls back to a bounded standalone request for oversized source content", func(t *testing.T) {
+	t.Run("rejects oversized standalone source without advancing boundary", func(t *testing.T) {
 		capture := &cacheSafeCaptureModel{
-			response:      "bounded standalone summary",
+			response:      "must not be called",
 			contextWindow: 1000,
 		}
 		s := NewSummarizer(capture, WithCacheSafeForking(true))
@@ -684,18 +689,20 @@ func TestSessionSummarizer_CacheSafeForking(t *testing.T) {
 			model.NewUserMessage(oversized),
 		}}
 		ctx := ContextWithCacheSafeForkRequest(context.Background(), parent)
-		sess := &session.Session{ID: "oversized-cache-safe", Events: []event.Event{newEventWithContent(oversized)}}
+		first := newEventWithContent(strings.Repeat("first event ", 500))
+		first.ID = "event-1"
+		second := newEventWithContent(strings.Repeat("second event ", 500))
+		second.ID = "event-2"
+		sess := &session.Session{
+			ID:     "oversized-cache-safe",
+			Events: []event.Event{first, second},
+		}
 
-		text, err := s.Summarize(ctx, sess)
-		require.NoError(t, err)
-		require.Equal(t, "bounded standalone summary", text)
-		require.NotNil(t, capture.request)
-		require.Len(t, capture.request.Messages, 1)
-		require.Contains(t, capture.request.Messages[0].Content, summaryConversationOmitted)
-		require.NotContains(t, capture.request.Messages[0].Content, "Summarize the user, assistant")
-		tokens, err := countSummaryRequestTokens(context.Background(), capture.request)
-		require.NoError(t, err)
-		require.LessOrEqual(t, tokens, 700)
+		_, err := s.Summarize(ctx, sess)
+		require.ErrorContains(t, err, "refusing to omit unsummarized conversation")
+		require.Nil(t, capture.request)
+		assert.NotContains(t, sess.State, lastIncludedTsKey)
+		assert.NotContains(t, sess.State, lastIncludedEventIDKey)
 	})
 }
 
@@ -760,9 +767,9 @@ func TestSessionSummarizer_RetriesCacheSafeFailureWithStandaloneSource(t *testin
 	}
 }
 
-func TestSessionSummarizer_BoundsOversizedStandaloneRequest(t *testing.T) {
+func TestSessionSummarizer_RejectsOversizedStandaloneRequest(t *testing.T) {
 	capture := &cacheSafeCaptureModel{
-		response:      "bounded standalone summary",
+		response:      "must not be called",
 		contextWindow: 1000,
 	}
 	s := NewSummarizer(
@@ -777,14 +784,11 @@ func TestSessionSummarizer_BoundsOversizedStandaloneRequest(t *testing.T) {
 		}}},
 	}}}
 
-	text, err := s.Summarize(context.Background(), sess)
-	require.NoError(t, err)
-	require.Equal(t, "bounded standalone summary", text)
-	require.NotNil(t, capture.request)
-	require.Contains(t, capture.request.Messages[0].Content, summaryConversationOmitted)
-	tokens, err := countSummaryRequestTokens(context.Background(), capture.request)
-	require.NoError(t, err)
-	require.LessOrEqual(t, tokens, 700)
+	_, err := s.Summarize(context.Background(), sess)
+	require.ErrorContains(t, err, "refusing to omit unsummarized conversation")
+	require.Nil(t, capture.request)
+	assert.NotContains(t, sess.State, lastIncludedTsKey)
+	assert.NotContains(t, sess.State, lastIncludedEventIDKey)
 }
 
 func TestSessionSummarizer_BoundsPreviousSummaryAndConversation(t *testing.T) {
@@ -797,7 +801,7 @@ func TestSessionSummarizer_BoundsPreviousSummaryAndConversation(t *testing.T) {
 		WithPrompt("Previous:\n{previous_summary}\n\nConversation:\n{conversation_text}\n\nSummary:"),
 	)
 	previous := strings.Repeat("large-previous-summary ", 1000)
-	conversation := strings.Repeat("large-conversation-event ", 1000)
+	conversation := "new conversation event"
 	sess := &session.Session{ID: "oversized-previous", Events: []event.Event{
 		{
 			Author:    authorSystem,
@@ -816,48 +820,24 @@ func TestSessionSummarizer_BoundsPreviousSummaryAndConversation(t *testing.T) {
 	require.NotNil(t, capture.request)
 	prompt := capture.request.Messages[0].Content
 	require.Contains(t, prompt, summaryPreviousOmitted)
-	require.Contains(t, prompt, summaryConversationOmitted)
+	require.Contains(t, prompt, conversation)
 	tokens, err := countSummaryRequestTokens(context.Background(), capture.request)
 	require.NoError(t, err)
 	require.LessOrEqual(t, tokens, 700)
 }
 
-func TestTruncateSummaryPromptInput(t *testing.T) {
-	input := summaryPromptInput{
-		conversationText: "conversation",
-		previousSummary:  "previous",
-	}
+func TestTruncatePreviousSummary(t *testing.T) {
+	previous := []rune("previous")
 
-	require.Equal(t, input, truncateSummaryPromptInput(input, 20))
-	require.Equal(t, summaryPromptInput{}, truncateSummaryPromptInput(input, 0))
-
-	conversationOnly := truncateSummaryPromptInput(summaryPromptInput{
-		conversationText: "conversation",
-	}, 4)
-	require.Empty(t, conversationOnly.previousSummary)
-	require.Contains(t, conversationOnly.conversationText,
-		summaryConversationOmitted)
-
-	previousOnly := truncateSummaryPromptInput(summaryPromptInput{
-		previousSummary: "previous",
-	}, 4)
-	require.Empty(t, previousOnly.conversationText)
-	require.Contains(t, previousOnly.previousSummary,
+	require.Equal(t, "previous", truncatePreviousSummary(previous, 8))
+	require.Empty(t, truncatePreviousSummary(previous, 0))
+	require.Contains(t, truncatePreviousSummary(previous, 4),
 		summaryPreviousOmitted)
-
-	oneRune := truncateSummaryPromptInput(input, 1)
-	require.Empty(t, oneRune.previousSummary)
-	require.Contains(t, oneRune.conversationText,
-		summaryConversationOmitted)
-
-	both := truncateSummaryPromptInput(input, 6)
-	require.Contains(t, both.previousSummary, summaryPreviousOmitted)
-	require.Contains(t, both.conversationText, summaryConversationOmitted)
 }
 
-func TestSessionSummarizer_BoundsOnlyStandaloneConversationContent(t *testing.T) {
+func TestSessionSummarizer_RejectsOversizedSourceWithFixedPrompt(t *testing.T) {
 	capture := &cacheSafeCaptureModel{
-		response:      "bounded standalone summary",
+		response:      "must not be called",
 		contextWindow: 1000,
 	}
 	s := NewSummarizer(
@@ -873,21 +853,11 @@ func TestSessionSummarizer_BoundsOnlyStandaloneConversationContent(t *testing.T)
 		Events: []event.Event{newEventWithContent(oversized)},
 	}
 
-	text, err := s.Summarize(context.Background(), sess)
-	require.NoError(t, err)
-	require.Equal(t, "bounded standalone summary", text)
-	require.NotNil(t, capture.request)
-	require.Len(t, capture.request.Messages, 1)
-	require.True(t, strings.HasPrefix(
-		capture.request.Messages[0].Content,
-		"fixed-prefix\n<conversation>\n",
-	))
-	require.True(t, strings.HasSuffix(
-		capture.request.Messages[0].Content,
-		"\n</conversation>\nfixed-suffix",
-	))
-	require.Contains(t, capture.request.Messages[0].Content,
-		summaryConversationOmitted)
+	_, err := s.Summarize(context.Background(), sess)
+	require.ErrorContains(t, err, "refusing to omit unsummarized conversation")
+	require.Nil(t, capture.request)
+	assert.NotContains(t, sess.State, lastIncludedTsKey)
+	assert.NotContains(t, sess.State, lastIncludedEventIDKey)
 }
 
 func TestSessionSummarizer_RetriesEmptyStandaloneSummary(t *testing.T) {
@@ -921,7 +891,7 @@ func TestSessionSummarizer_RetriesEmptyStandaloneSummary(t *testing.T) {
 		"event text for standalone fallback")
 }
 
-func TestEnsureSummaryRequestFitsDropsOldestCompleteRound(t *testing.T) {
+func TestEnsureSummaryRequestFitsPreservesSourceRounds(t *testing.T) {
 	s := NewSummarizer(&cacheSafeCaptureModel{}).(*sessionSummarizer)
 	request := &model.Request{Messages: []model.Message{
 		model.NewSystemMessage("stable system"),
@@ -931,8 +901,9 @@ func TestEnsureSummaryRequestFitsDropsOldestCompleteRound(t *testing.T) {
 			ToolCalls: []model.ToolCall{{
 				ID: "old-call",
 				Function: model.FunctionDefinitionParam{
-					Name:      "lookup",
-					Arguments: []byte(`{"query":"old"}`),
+					Name: "lookup",
+					Arguments: []byte(`{"query":"` +
+						strings.Repeat("old ", 100) + `"}`),
 				},
 			}},
 		},
@@ -948,17 +919,49 @@ func TestEnsureSummaryRequestFitsDropsOldestCompleteRound(t *testing.T) {
 		true,
 		200,
 	)
-	require.NoError(t, err)
-	require.Len(t, request.Messages, 4)
+	require.ErrorContains(t, err, "without dropping source conversation")
+	require.Len(t, request.Messages, 7)
 	require.Equal(t, model.RoleSystem, request.Messages[0].Role)
-	require.Equal(t, "latest source", request.Messages[1].Content)
-	require.Equal(t, "latest answer", request.Messages[2].Content)
-	require.Equal(t, "Summarize the conversation above.", request.Messages[3].Content)
-	for _, message := range request.Messages {
-		require.NotContains(t, message.Content, "old source")
-		require.Empty(t, message.ToolCalls)
-		require.NotEqual(t, "old-call", message.ToolID)
+	require.Contains(t, request.Messages[1].Content, "old source")
+	require.JSONEq(
+		t,
+		summaryToolArgumentsOmitted,
+		string(request.Messages[2].ToolCalls[0].Function.Arguments),
+	)
+	require.Equal(t, "latest source", request.Messages[4].Content)
+	require.Equal(t, "latest answer", request.Messages[5].Content)
+	require.Equal(t, "Summarize the conversation above.", request.Messages[6].Content)
+}
+
+func TestPrepareSummaryRequestFallsBackBeforeDroppingSourceRounds(t *testing.T) {
+	s := NewSummarizer(
+		&cacheSafeCaptureModel{},
+		WithPrompt("Conversation:\n{conversation_text}"),
+	).(*sessionSummarizer)
+	request := &model.Request{Messages: []model.Message{
+		model.NewSystemMessage("stable system"),
+		model.NewUserMessage(strings.Repeat("large source ", 400)),
+		model.NewAssistantMessage("latest progress"),
+		model.NewUserMessage("continue"),
+		model.NewUserMessage("Summarize the conversation above."),
+	}}
+	input := summaryPromptInput{
+		conversationText: "user: original request\nassistant: latest progress",
 	}
+
+	prepared, mode, err := s.prepareSummaryRequest(
+		context.Background(),
+		request,
+		callModeCacheSafeFork,
+		input,
+		200,
+	)
+	require.NoError(t, err)
+	require.Equal(t, callModeStandalone, mode)
+	require.Len(t, prepared.Messages, 1)
+	require.Contains(t, prepared.Messages[0].Content, "original request")
+	require.Contains(t, prepared.Messages[0].Content, "latest progress")
+	require.NotContains(t, prepared.Messages[0].Content, "continue")
 }
 
 // fakeModel is a minimal model that returns the conversation content back to simulate LLM.

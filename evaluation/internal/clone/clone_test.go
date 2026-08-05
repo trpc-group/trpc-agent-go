@@ -209,6 +209,7 @@ func TestCloneEvalSetResult_NilInput(t *testing.T) {
 func TestCloneEvalCase_DeepCopy(t *testing.T) {
 	srcText := "hello"
 	audioBytes := []byte{3, 2, 1}
+	videoBytes := []byte{4, 5, 6}
 	fileBytes := []byte{7, 8, 9}
 	src := &evalset.EvalCase{
 		EvalID: "case-1",
@@ -220,6 +221,7 @@ func TestCloneEvalCase_DeepCopy(t *testing.T) {
 					{Type: model.ContentTypeText, Text: &srcText},
 					{Type: model.ContentTypeImage, Image: &model.Image{Data: []byte{1, 2, 3}}},
 					{Type: model.ContentTypeAudio, Audio: &model.Audio{Data: audioBytes, Format: "wav"}},
+					{Type: model.ContentTypeVideo, Video: &model.Video{Data: videoBytes, Format: "mp4"}},
 					{Type: model.ContentTypeFile, File: &model.File{Name: "input.txt", Data: fileBytes, MimeType: "text/plain"}},
 				},
 				ToolCalls: []model.ToolCall{
@@ -374,8 +376,11 @@ func TestCloneEvalCase_DeepCopy(t *testing.T) {
 	dst.ContextMessages[0].ContentParts[2].Audio.Data[0] = 0
 	assert.Equal(t, byte(3), src.ContextMessages[0].ContentParts[2].Audio.Data[0])
 
-	dst.ContextMessages[0].ContentParts[3].File.Data[0] = 0
-	assert.Equal(t, byte(7), src.ContextMessages[0].ContentParts[3].File.Data[0])
+	dst.ContextMessages[0].ContentParts[3].Video.Data[0] = 0
+	assert.Equal(t, byte(4), src.ContextMessages[0].ContentParts[3].Video.Data[0])
+
+	dst.ContextMessages[0].ContentParts[4].File.Data[0] = 0
+	assert.Equal(t, byte(7), src.ContextMessages[0].ContentParts[4].File.Data[0])
 
 	dst.ContextMessages[0].ToolCalls[0].Function.Arguments[0] = 'X'
 	assert.Equal(t, byte('{'), src.ContextMessages[0].ToolCalls[0].Function.Arguments[0])
@@ -1003,6 +1008,7 @@ func TestCloneHelpers_NilInputs(t *testing.T) {
 	assert.Nil(t, cloneStringPtr(nil))
 	assert.Nil(t, cloneImage(nil))
 	assert.Nil(t, cloneAudio(nil))
+	assert.Nil(t, cloneVideo(nil))
 	assert.Nil(t, cloneFile(nil))
 }
 
