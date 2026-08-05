@@ -102,6 +102,10 @@ func TestMCPTool_Declaration(t *testing.T) {
 	}
 }
 
+// MCP annotations describe safety, not concurrency: there is no hint for it in
+// the protocol. ConcurrencySafe therefore always carries the framework default,
+// because leaving it at the zero value would declare every MCP tool unsafe and
+// serialize any turn one takes part in.
 func TestMCPTool_ToolMetadata(t *testing.T) {
 	testCases := []struct {
 		name        string
@@ -110,14 +114,14 @@ func TestMCPTool_ToolMetadata(t *testing.T) {
 	}{
 		{
 			name: "nil annotations",
-			want: tool.ToolMetadata{},
+			want: tool.ToolMetadata{ConcurrencySafe: true},
 		},
 		{
 			name: "title only annotations",
 			annotations: &mcp.ToolAnnotations{
 				Title: "Human title",
 			},
-			want: tool.ToolMetadata{},
+			want: tool.ToolMetadata{ConcurrencySafe: true},
 		},
 		{
 			name: "explicit safety hints",
@@ -127,9 +131,10 @@ func TestMCPTool_ToolMetadata(t *testing.T) {
 				OpenWorldHint:   mcp.BoolPtr(true),
 			},
 			want: tool.ToolMetadata{
-				ReadOnly:    true,
-				Destructive: true,
-				OpenWorld:   true,
+				ReadOnly:        true,
+				Destructive:     true,
+				OpenWorld:       true,
+				ConcurrencySafe: true,
 			},
 		},
 		{
@@ -138,7 +143,8 @@ func TestMCPTool_ToolMetadata(t *testing.T) {
 				ReadOnlyHint: mcp.BoolPtr(true),
 			},
 			want: tool.ToolMetadata{
-				ReadOnly: true,
+				ReadOnly:        true,
+				ConcurrencySafe: true,
 			},
 		},
 		{
@@ -147,16 +153,16 @@ func TestMCPTool_ToolMetadata(t *testing.T) {
 				Title:          "Ignored title",
 				IdempotentHint: mcp.BoolPtr(true),
 			},
-			want: tool.ToolMetadata{},
+			want: tool.ToolMetadata{ConcurrencySafe: true},
 		},
 		{
-			name: "explicit false stays zero value",
+			name: "explicit false leaves the safety fields zero",
 			annotations: &mcp.ToolAnnotations{
 				ReadOnlyHint:    mcp.BoolPtr(false),
 				DestructiveHint: mcp.BoolPtr(false),
 				OpenWorldHint:   mcp.BoolPtr(false),
 			},
-			want: tool.ToolMetadata{},
+			want: tool.ToolMetadata{ConcurrencySafe: true},
 		},
 	}
 
