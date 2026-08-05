@@ -22,6 +22,7 @@ import (
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/resultformat"
 )
 
 // FunctionTool implements the CallableTool interface for executing functions with arguments.
@@ -38,6 +39,9 @@ type FunctionTool[I, O any] struct {
 	// skipSummarization indicates whether the outer flow should skip
 	// the post-tool summarization step after this tool returns.
 	skipSummarization bool
+	// resultFormatter optionally formats the final tool result as model-visible
+	// message content. When nil, the framework keeps its default JSON behavior.
+	resultFormatter resultformat.Formatter
 	// concurrencySafe reports whether this tool may share a turn with others on
 	// the parallel tool path. It defaults to true, which is how a tool that
 	// publishes nothing at all is already read.
@@ -57,6 +61,7 @@ type functionToolOptions struct {
 	concurrencySafe   bool
 	inputSchema       *tool.Schema
 	outputSchema      *tool.Schema
+	resultFormatter   resultformat.Formatter
 }
 
 // WithName sets the name of the function tool.
@@ -128,6 +133,28 @@ func WithOutputSchema(schema *tool.Schema) Option {
 	}
 }
 
+// WithResultFormatter sets the formatter for the function tool's final result.
+// It is currently supported by LLMAgent's default tool-call flow. Graph
+// ToolsNode, ToolPipe, wrappers that replace tool instances, and direct
+// Tool.Call consumers do not currently apply it. The formatter changes only
+// the default model-visible tool message content; the framework continues to
+// manage the message role, tool name, tool call ID, ordering, and session
+// persistence. When formatter is nil, the framework uses its default JSON
+// representation. A formatter runs only when the tool declared a result for
+// the call: when a before-tool callback or plugin short-circuits the call with
+// its own result, the tool never runs and the framework keeps its default
+// JSON. An after-tool callback replacing the result of a tool that did run is
+// a different case: the replacement is formatted, so it has to be a value the
+// formatter accepts. A streamable tool must declare its final result with
+// tool.FinalResultChunk to be formatted; see
+// StreamableFunctionTool.ResultFormatter. Repeated configuration is
+// last-writer-wins.
+func WithResultFormatter(formatter resultformat.Formatter) Option {
+	return func(opts *functionToolOptions) {
+		opts.resultFormatter = formatter
+	}
+}
+
 // NewFunctionTool creates and returns a new instance of FunctionTool with the specified
 // function implementation and optional configuration.
 // Parameters:
@@ -182,6 +209,7 @@ func NewFunctionTool[I, O any](fn func(context.Context, I) (O, error), opts ...O
 		inputSchema:       iSchema,
 		outputSchema:      oSchema,
 		skipSummarization: options.skipSummarization,
+		resultFormatter:   options.resultFormatter,
 		concurrencySafe:   options.concurrencySafe,
 	}
 }
@@ -214,6 +242,13 @@ func (ft *FunctionTool[I, O]) LongRunning() bool {
 // outer-agent summarization after tool.response.
 func (ft *FunctionTool[I, O]) SkipSummarization() bool {
 	return ft.skipSummarization
+}
+
+// ResultFormatter returns the formatter configured by WithResultFormatter.
+// It is used by LLMAgent's default tool-call flow; configure formatting with
+// WithResultFormatter rather than calling this method directly.
+func (ft *FunctionTool[I, O]) ResultFormatter() resultformat.Formatter {
+	return ft.resultFormatter
 }
 
 // IsConcurrencySafe reports whether this tool may run at the same time as the
@@ -258,6 +293,9 @@ type StreamableFunctionTool[I, O any] struct {
 	unmarshaler  unmarshaler
 	// skipSummarization has the same meaning as in FunctionTool.
 	skipSummarization bool
+	// resultFormatter optionally formats the final tool result as model-visible
+	// message content. Intermediate stream events are unaffected.
+	resultFormatter resultformat.Formatter
 	// concurrencySafe has the same meaning as in FunctionTool.
 	concurrencySafe bool
 }
@@ -311,6 +349,7 @@ func NewStreamableFunctionTool[I, O any](fn func(context.Context, I) (*tool.Stre
 		inputSchema:       iSchema,
 		outputSchema:      oSchema,
 		skipSummarization: options.skipSummarization,
+		resultFormatter:   options.resultFormatter,
 		concurrencySafe:   options.concurrencySafe,
 	}
 }
@@ -369,6 +408,18 @@ func (t *StreamableFunctionTool[I, O]) LongRunning() bool {
 // outer-agent summarization after tool.response.
 func (t *StreamableFunctionTool[I, O]) SkipSummarization() bool {
 	return t.skipSummarization
+}
+
+// ResultFormatter returns the formatter configured by WithResultFormatter.
+// In LLMAgent's default tool-call flow, only the final streamable result is
+// formatted; intermediate events are not. The tool must declare that result
+// with tool.FinalResultChunk. When a stream ends without one, the final result
+// is the stream content merged by the framework rather than O, so the
+// framework keeps its default JSON representation instead of formatting it,
+// and an after-tool callback replacing that content does not make the call
+// eligible for formatting again.
+func (t *StreamableFunctionTool[I, O]) ResultFormatter() resultformat.Formatter {
+	return t.resultFormatter
 }
 
 // IsConcurrencySafe reports whether this tool may run at the same time as the
