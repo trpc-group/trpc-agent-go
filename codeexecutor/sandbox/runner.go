@@ -141,27 +141,7 @@ func (r *Runtime) runProgram(
 		Duration: duration,
 		TimedOut: timedOut,
 	}
-	if diagnostics.enabled {
-		collectCtx := runCtx
-		if timedOut {
-			// runCtx is already canceled after a deadline; collection needs its
-			// own live bounded context so settle waits can still observe denials.
-			var collectCancel context.CancelFunc
-			collectCtx, collectCancel = context.WithTimeout(
-				context.Background(),
-				sandboxDenialSettleTimeout,
-			)
-			defer collectCancel()
-		}
-		denials, truncated := r.collectSandboxDenials(
-			collectCtx,
-			diagnostics,
-			spec.Cmd,
-			sandboxDenialSettleTimeout,
-		)
-		runDiagnostics.Denials = denials
-		runDiagnostics.Truncated = truncated
-	}
+	runDiagnostics = r.collectRunDiagnostics(runCtx, diagnostics, spec.Cmd, timedOut)
 	if timedOut {
 		return result, &sandboxError{
 			Kind:    ErrTimeout,
@@ -171,6 +151,36 @@ func (r *Runtime) runProgram(
 		}
 	}
 	return result, nil
+}
+
+// collectRunDiagnostics collects denial diagnostics for a finished run. A run
+// that hit its deadline leaves runCtx canceled, so collection then uses its own
+// bounded context to keep settle waits effective.
+func (r *Runtime) collectRunDiagnostics(
+	runCtx context.Context,
+	run sandboxDenialRun,
+	cmd string,
+	timedOut bool,
+) Diagnostics {
+	if !run.enabled {
+		return Diagnostics{}
+	}
+	collectCtx := runCtx
+	if timedOut {
+		var cancel context.CancelFunc
+		collectCtx, cancel = context.WithTimeout(
+			context.Background(),
+			sandboxDenialSettleTimeout,
+		)
+		defer cancel()
+	}
+	denials, truncated := r.collectSandboxDenials(
+		collectCtx,
+		run,
+		cmd,
+		sandboxDenialSettleTimeout,
+	)
+	return Diagnostics{Denials: denials, Truncated: truncated}
 }
 
 func runContextResult(
