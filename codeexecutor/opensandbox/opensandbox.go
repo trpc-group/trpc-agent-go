@@ -426,10 +426,15 @@ func NewWithContext(ctx context.Context, opts ...Option) (*CodeExecutor, error) 
 	// HTTP client before the per-command execution timeout fires. Clamp
 	// requestTimeout to at least executionTimeout + requestTimeoutBuffer
 	// so streaming /command calls can run for the full execution timeout.
-	effectiveExecTimeout := c.executionTimeout
-	if effectiveExecTimeout <= 0 {
-		effectiveExecTimeout = defaultRunTimeout
+	//
+	// Persist the resolved default back into c.executionTimeout so that
+	// ExecuteCode's timeout marker ("[timeout: execution exceeded %s]")
+	// reports the actual run timeout rather than the sentinel 0s or a
+	// negative value the caller may have configured.
+	if c.executionTimeout <= 0 {
+		c.executionTimeout = defaultRunTimeout
 	}
+	effectiveExecTimeout := c.executionTimeout
 	minRequestTimeout := effectiveExecTimeout + requestTimeoutBuffer
 	if c.requestTimeout < minRequestTimeout {
 		c.requestTimeout = minRequestTimeout

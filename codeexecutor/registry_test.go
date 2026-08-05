@@ -571,7 +571,7 @@ func TestWorkspaceRegistry_ReleaseHandle_IgnoresNewerGeneration(t *testing.T) {
 	require.NotEqual(t, h1.Workspace.Path, h2.Workspace.Path)
 
 	// Releasing the stale handle must not cleanup the newer workspace.
-	require.NoError(t, r.ReleaseHandle(ctx, wm, h1))
+	require.NoError(t, r.ReleaseHandle(ctx, h1))
 	wm.mu.Lock()
 	require.Equal(t, 0, wm.cleans)
 	wm.mu.Unlock()
@@ -579,7 +579,7 @@ func TestWorkspaceRegistry_ReleaseHandle_IgnoresNewerGeneration(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, h2.Workspace.Path, got.Path)
 
-	require.NoError(t, r.ReleaseHandle(ctx, wm, h2))
+	require.NoError(t, r.ReleaseHandle(ctx, h2))
 	wm.mu.Lock()
 	require.Equal(t, 1, wm.cleans)
 	require.Equal(t, []string{h2.Workspace.Path}, wm.paths)
@@ -601,7 +601,7 @@ func TestWorkspaceRegistry_Release_WaitsInflightCreateAndCleans(t *testing.T) {
 	}()
 	<-entered
 	relErr := make(chan error, 1)
-	go func() { relErr <- r.Release(ctx, wm, "inflight-rel") }()
+	go func() { relErr <- r.Release(ctx, "inflight-rel") }()
 	select {
 	case e := <-relErr:
 		t.Fatalf("Release returned before create finished: %v", e)
@@ -646,12 +646,12 @@ func TestWorkspaceRegistry_Release_RetryAfterCleanupFailure(t *testing.T) {
 	ctx := context.Background()
 	_, err := r.Acquire(ctx, wm, "retry")
 	require.NoError(t, err)
-	err = r.Release(ctx, wm, "retry")
+	err = r.Release(ctx, "retry")
 	require.Error(t, err)
 	_, ok := r.Get("retry")
 	require.True(t, ok, "entry restored after failed cleanup")
 	wm.fail = nil
-	require.NoError(t, r.Release(ctx, wm, "retry"))
+	require.NoError(t, r.Release(ctx, "retry"))
 	_, ok = r.Get("retry")
 	require.False(t, ok)
 }
@@ -666,13 +666,13 @@ func TestWorkspaceRegistry_Release_CallerCancelDoesNotAbortCleanup(t *testing.T)
 	require.NoError(t, err)
 	callCtx, cancel := context.WithCancel(ctx)
 	errCh := make(chan error, 1)
-	go func() { errCh <- r.Release(callCtx, wm, "cancel-rel") }()
+	go func() { errCh <- r.Release(callCtx, "cancel-rel") }()
 	<-entered
 	cancel()
 	require.ErrorIs(t, <-errCh, context.Canceled)
 	close(block)
 	// Coalesced waiters / later Release should finish cleanup.
-	require.NoError(t, r.Release(ctx, wm, "cancel-rel"))
+	require.NoError(t, r.Release(ctx, "cancel-rel"))
 	_, ok := r.Get("cancel-rel")
 	require.False(t, ok)
 }
@@ -683,7 +683,7 @@ func TestWorkspaceRegistry_ReleaseHandle_NilAndInvalidHandle(t *testing.T) {
 
 	// nil receiver is a safe no-op.
 	var nilReg *WorkspaceRegistry
-	require.NoError(t, nilReg.ReleaseHandle(ctx, wm, WorkspaceHandle{}))
+	require.NoError(t, nilReg.ReleaseHandle(ctx, WorkspaceHandle{}))
 
 	r := NewWorkspaceRegistry()
 
@@ -691,10 +691,10 @@ func TestWorkspaceRegistry_ReleaseHandle_NilAndInvalidHandle(t *testing.T) {
 	other := NewWorkspaceRegistry()
 	h, err := other.AcquireHandle(ctx, wm, "foreign")
 	require.NoError(t, err)
-	require.NoError(t, r.ReleaseHandle(ctx, wm, h))
+	require.NoError(t, r.ReleaseHandle(ctx, h))
 
 	// Zero entryToken is a no-op even when registry matches.
-	require.NoError(t, r.ReleaseHandle(ctx, wm, WorkspaceHandle{
+	require.NoError(t, r.ReleaseHandle(ctx, WorkspaceHandle{
 		registry:   r,
 		registryID: "zero-token",
 	}))
@@ -708,7 +708,7 @@ func TestWorkspaceRegistry_ReleaseHandle_RestoresEntryOnCleanupFailure(t *testin
 	handle, err := r.AcquireHandle(ctx, wm, "fail-clean")
 	require.NoError(t, err)
 
-	require.Error(t, r.ReleaseHandle(ctx, wm, handle))
+	require.Error(t, r.ReleaseHandle(ctx, handle))
 	// Entry restored after failed cleanup so Release is retryable.
 	got, ok := r.Get("fail-clean")
 	require.True(t, ok)
@@ -716,7 +716,7 @@ func TestWorkspaceRegistry_ReleaseHandle_RestoresEntryOnCleanupFailure(t *testin
 
 	// Retry succeeds once cleanup stops failing.
 	wm.fail = nil
-	require.NoError(t, r.ReleaseHandle(ctx, wm, handle))
+	require.NoError(t, r.ReleaseHandle(ctx, handle))
 	_, ok = r.Get("fail-clean")
 	require.False(t, ok)
 }
@@ -735,7 +735,7 @@ func TestWorkspaceRegistry_ReleaseHandle_CoalescesInflightRelease(t *testing.T) 
 	// entered is closed, releasing[id] is set and the first caller is
 	// blocked in waitWorkspaceRelease.
 	firstErr := make(chan error, 1)
-	go func() { firstErr <- r.ReleaseHandle(ctx, wm, handle) }()
+	go func() { firstErr <- r.ReleaseHandle(ctx, handle) }()
 	<-entered
 
 	// Unblock the cleanup shortly so the synchronous second call below
@@ -749,7 +749,7 @@ func TestWorkspaceRegistry_ReleaseHandle_CoalescesInflightRelease(t *testing.T) 
 	// close(block) unblocks the cleanup goroutine. If it does NOT coalesce,
 	// it returns nil immediately (the entry was already deleted) — the test
 	// timeout would then fire because the first caller is still blocked.
-	require.NoError(t, r.ReleaseHandle(ctx, wm, handle))
+	require.NoError(t, r.ReleaseHandle(ctx, handle))
 	require.NoError(t, <-firstErr)
 
 	wm.mu.Lock()
@@ -817,7 +817,7 @@ func TestWorkspaceRegistry_ReleaseHandle_WaitsInflightCreate(t *testing.T) {
 	// ReleaseHandle with the stale handle waits for the in-flight create,
 	// then finds a newer token and returns without cleaning up.
 	relDone := make(chan error, 1)
-	go func() { relDone <- r.ReleaseHandle(ctx, wm, h1) }()
+	go func() { relDone <- r.ReleaseHandle(ctx, h1) }()
 
 	// Give ReleaseHandle time to lock, find inflight[id], and enter
 	// waitWorkspaceCreate before the create completes and deletes it.
@@ -847,7 +847,7 @@ func TestWorkspaceRegistry_Acquire_ReturnsCanceledWhenReleaseInFlight(t *testing
 	require.NoError(t, err)
 
 	// Start a Release that blocks inside Cleanup.
-	go func() { _ = r.Release(ctx, wm, "spin-guard") }()
+	go func() { _ = r.Release(ctx, "spin-guard") }()
 	<-entered // releasing[id] is now installed
 
 	// A concurrent Acquire with a canceled context must return promptly.
@@ -900,7 +900,7 @@ func TestWorkspaceRegistry_Release_ReturnsCanceledWhenCreateInFlight(t *testing.
 	// Release with a short-timeout context must not report success.
 	relCtx, relCancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer relCancel()
-	err = r.Release(relCtx, wm, "release-cancel")
+	err = r.Release(relCtx, "release-cancel")
 	require.ErrorIs(t, err, context.DeadlineExceeded,
 		"Release must return ctx.Err() when creation is still in flight")
 
@@ -912,7 +912,7 @@ func TestWorkspaceRegistry_Release_ReturnsCanceledWhenCreateInFlight(t *testing.
 	require.NotEqual(t, h1.Workspace.Path, got.Path)
 
 	// A retry Release should now succeed (entry exists, no in-flight create).
-	require.NoError(t, r.Release(ctx, wm, "release-cancel"))
+	require.NoError(t, r.Release(ctx, "release-cancel"))
 }
 
 // Regression: ReleaseHandle must return ctx.Err() (not nil) when an
@@ -941,10 +941,45 @@ func TestWorkspaceRegistry_ReleaseHandle_ReturnsCanceledWhenCreateInFlight(t *te
 	// ReleaseHandle with a short-timeout context must not report success.
 	relCtx, relCancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer relCancel()
-	err = r.ReleaseHandle(relCtx, wm, h1)
+	err = r.ReleaseHandle(relCtx, h1)
 	require.ErrorIs(t, err, context.DeadlineExceeded,
 		"ReleaseHandle must return ctx.Err() when creation is still in flight")
 
 	close(wm.releaseSecond)
 	require.NoError(t, <-acqDone)
+}
+
+// TestWorkspaceRegistry_Acquire_RejectsNilManager verifies that Acquire and
+// AcquireHandle reject a nil WorkspaceManager. Without this, createWorkspace
+// would panic when calling m.CreateWorkspace, and Release would silently skip
+// Cleanup (reporting success while leaking the workspace).
+func TestWorkspaceRegistry_Acquire_RejectsNilManager(t *testing.T) {
+	r := NewWorkspaceRegistry()
+	ctx := context.Background()
+
+	_, err := r.Acquire(ctx, nil, "nil-mgr")
+	require.ErrorIs(t, err, errWorkspaceManagerNil)
+
+	_, err = r.AcquireHandle(ctx, nil, "nil-mgr")
+	require.ErrorIs(t, err, errWorkspaceManagerNil)
+}
+
+// TestWorkspaceRegistry_Release_UsesStoredManager verifies that Release
+// cleans up through the manager stored at Acquire time, not through a
+// caller-supplied parameter. This prevents nil from skipping Cleanup and
+// a mismatched manager from running it against the wrong backend.
+func TestWorkspaceRegistry_Release_UsesStoredManager(t *testing.T) {
+	r := NewWorkspaceRegistry()
+	wm := &countingCleanupWM{}
+	ctx := context.Background()
+
+	_, err := r.Acquire(ctx, wm, "stored-mgr")
+	require.NoError(t, err)
+
+	// Release no longer takes a manager parameter; it always uses the
+	// one stored during Acquire.
+	require.NoError(t, r.Release(ctx, "stored-mgr"))
+	wm.mu.Lock()
+	require.Equal(t, 1, wm.cleans, "Release must clean up through the stored manager")
+	wm.mu.Unlock()
 }

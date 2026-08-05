@@ -1652,6 +1652,30 @@ func TestWorkspace_ListFilesByGlob_EmptyPatterns(t *testing.T) {
 	assert.Nil(t, out)
 }
 
+// TestWorkspace_ListFilesByGlob_PreservesSpacesInPatterns verifies that
+// the generated bash script sets IFS= (empty) before expanding glob
+// patterns, preventing word splitting on patterns with interior spaces
+// (e.g. "out/reports 2026/*.csv"). Without IFS=, such a pattern would
+// be split into "out/reports" and "2026/*.csv", silently missing files.
+func TestWorkspace_ListFilesByGlob_PreservesSpacesInPatterns(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-space", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	_, _ = exec.rt.listFilesByGlob(
+		context.Background(), ws.Path,
+		[]string{"out/reports 2026/*.csv"},
+	)
+
+	cmd := m.lastCommand()
+	assert.Contains(t, cmd, "IFS=;",
+		"glob expansion must set IFS= (empty) to prevent word splitting on patterns with spaces")
+}
+
 // TestWorkspace_CreateWorkspace_PerSession_EmptyExecID verifies that
 // PerSession mode rejects an empty execID.
 func TestWorkspace_CreateWorkspace_PerSession_EmptyExecID(t *testing.T) {

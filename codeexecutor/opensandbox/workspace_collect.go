@@ -362,8 +362,17 @@ func (r *workspaceRuntime) listFilesByGlob(
 	// Note: in bash case patterns, ** is NOT globstar — it behaves as
 	// *, so we must NOT include |** in the pattern or it would match
 	// every non-empty string and make the *) branch dead code.
-	cmd.WriteString(" case \"$p\" in */*) ;; *) p=\"**/$p\";; esac; ")
-	cmd.WriteString("for f in $p; do")
+	cmd.WriteString(" case=\"$p\" in */*) ;; *) p=\"**/$p\";; esac; ")
+	// Set IFS to empty so $p undergoes pathname expansion without word
+	// splitting. Without this, a pattern like "out/reports 2026/*.csv"
+	// would be split on spaces into two unrelated words, silently
+	// missing the requested files. Pathname expansion results are
+	// always separate words regardless of IFS, so multiple matches
+	// still iterate correctly.
+	// Use IFS= (unquoted empty assignment) instead of IFS='' so the
+	// script survives shellQuote: single quotes in IFS='' would be
+	// escaped to '\'''\'' by shellQuote, corrupting the assignment.
+	cmd.WriteString(" IFS=; for f in $p; do")
 	cmd.WriteString(" if [ \"$__osb_count\" -ge \"$__osb_cap\" ]; then break 2; fi; ")
 	cmd.WriteString("if [ -f \"$f\" ]; then ")
 	cmd.WriteString("__osb_rp=$(readlink -f \"$f\" 2>/dev/null || echo \"$(pwd)/$f\"); ")

@@ -23,6 +23,10 @@ var errWorkspaceRegistryTokenExhausted = errors.New(
 	"codeexecutor: workspace registry entry token exhausted",
 )
 
+var errWorkspaceManagerNil = errors.New(
+	"codeexecutor: WorkspaceManager must not be nil",
+)
+
 // WorkspaceRegistry keeps a process-level mapping of logical IDs to
 // created workspaces for reuse within a session.
 type WorkspaceRegistry struct {
@@ -44,6 +48,11 @@ type workspaceRegistryEntry struct {
 	ws                Workspace
 	backendInstanceID WorkspaceInstanceID
 	entryToken        uint64
+	// manager is the WorkspaceManager that created this workspace.
+	// Release/ReleaseHandler always clean up through this manager,
+	// preventing callers from accidentally skipping Cleanup (nil) or
+	// running it against the wrong backend (mismatched manager).
+	manager WorkspaceManager
 }
 
 type workspaceCreateCall struct {
@@ -74,6 +83,9 @@ func NewWorkspaceRegistry() *WorkspaceRegistry {
 func (r *WorkspaceRegistry) Acquire(
 	ctx context.Context, m WorkspaceManager, id string,
 ) (Workspace, error) {
+	if m == nil {
+		return Workspace{}, errWorkspaceManagerNil
+	}
 	handle, err := r.AcquireHandle(ctx, m, id)
 	return handle.Workspace, err
 }
@@ -86,6 +98,9 @@ func (r *WorkspaceRegistry) AcquireHandle(
 	m WorkspaceManager,
 	id string,
 ) (WorkspaceHandle, error) {
+	if m == nil {
+		return WorkspaceHandle{}, errWorkspaceManagerNil
+	}
 	provider, _ := m.(WorkspaceInstanceProvider)
 	entry, err := r.acquire(ctx, m, provider, id)
 	if err != nil {
@@ -197,6 +212,7 @@ func (r *WorkspaceRegistry) createWorkspace(
 	entry := workspaceRegistryEntry{
 		ws:                ws,
 		backendInstanceID: before,
+		manager:           m,
 	}
 	if err == nil && provider != nil {
 		after, probeErr := provider.InstanceID(ctx)
@@ -287,6 +303,11 @@ func (r *WorkspaceRegistry) Get(id string) (Workspace, bool) {
 // Release removes the current cache entry for id (generation-blind).
 // Prefer ReleaseHandle when holding a WorkspaceHandle.
 //
+// Cleanup always runs through the WorkspaceManager that was passed to
+// Acquire/AcquireHandle, stored in the registry entry. This prevents
+// callers from accidentally skipping Cleanup (nil manager) or running
+// it against the wrong backend (mismatched manager).
+//
 // Lifecycle symmetry (all wings):
 //   - concurrent Acquire waits for in-flight Release
 //   - Release waits for in-flight Create before cleaning
@@ -294,7 +315,7 @@ func (r *WorkspaceRegistry) Get(id string) (Workspace, bool) {
 //   - failed Cleanup restores the entry so Release is retryable
 //   - concurrent Release coalesces on the same releasing call
 func (r *WorkspaceRegistry) Release(
-	ctx context.Context, m WorkspaceManager, id string,
+	ctx context.Context, id string,
 ) error {
 	for {
 		r.mu.Lock()
@@ -335,8 +356,8 @@ func (r *WorkspaceRegistry) Release(
 
 		go func(entry workspaceRegistryEntry, rel *workspaceReleaseCall) {
 			var err error
-			if m != nil {
-				err = m.Cleanup(cleanupCtx, entry.ws)
+			if entry.manager != nil {
+				err = entry.manager.Cleanup(cleanupCtx, entry.ws)
 			}
 			r.mu.Lock()
 			if err != nil {
@@ -358,8 +379,11 @@ func (r *WorkspaceRegistry) Release(
 // ReleaseHandle destroys only the exact generation in handle. If the cache
 // already holds a newer token, this is a no-op and does not Cleanup the newer
 // workspace.
+//
+// Cleanup always runs through the WorkspaceManager that was passed to
+// Acquire/AcquireHandle, stored in the registry entry.
 func (r *WorkspaceRegistry) ReleaseHandle(
-	ctx context.Context, m WorkspaceManager, handle WorkspaceHandle,
+	ctx context.Context, handle WorkspaceHandle,
 ) error {
 	if r == nil || handle.registry != r || handle.entryToken == 0 {
 		return nil
@@ -404,8 +428,8 @@ func (r *WorkspaceRegistry) ReleaseHandle(
 
 		go func(entry workspaceRegistryEntry, rel *workspaceReleaseCall) {
 			var err error
-			if m != nil {
-				err = m.Cleanup(cleanupCtx, entry.ws)
+			if entry.manager != nil {
+				err = entry.manager.Cleanup(cleanupCtx, entry.ws)
 			}
 			r.mu.Lock()
 			if err != nil {

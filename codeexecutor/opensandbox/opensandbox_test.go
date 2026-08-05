@@ -769,7 +769,9 @@ func TestExecuteCode_NilSandbox(t *testing.T) {
 
 // TestNew_ExecutionTimeoutZero_ClampsToDefault verifies that
 // NewWithContext uses defaultRunTimeout as the floor when
-// executionTimeout is set to 0.
+// executionTimeout is set to 0, and persists the resolved default
+// back into c.executionTimeout so ExecuteCode's timeout marker
+// reports the actual run timeout rather than 0s.
 func TestNew_ExecutionTimeoutZero_ClampsToDefault(t *testing.T) {
 	m := newMockServer(t)
 	defer m.close()
@@ -784,7 +786,10 @@ func TestNew_ExecutionTimeoutZero_ClampsToDefault(t *testing.T) {
 	require.NoError(t, err)
 	defer exec.Close()
 	want := defaultRunTimeout + requestTimeoutBuffer
-	assert.Equal(t, want, exec.requestTimeout)
+	assert.Equal(t, want, exec.requestTimeout,
+		"requestTimeout must be clamped to defaultRunTimeout + buffer")
+	assert.Equal(t, defaultRunTimeout, exec.executionTimeout,
+		"executionTimeout must be persisted as defaultRunTimeout so the timeout marker is correct")
 }
 
 // TestNew_ConnectError verifies NewWithContext returns an error when
