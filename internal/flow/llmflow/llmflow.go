@@ -139,9 +139,10 @@ type contextCompactionTailProcessor interface {
 }
 
 type contextCompactionRebuildPlan struct {
-	beforeContent    *model.Request
-	contentProcessor *processor.ContentRequestProcessor
-	tailProcessors   []contextCompactionTailProcessor
+	beforeContent                *model.Request
+	contentProcessor             *processor.ContentRequestProcessor
+	tailProcessors               []contextCompactionTailProcessor
+	callLimitFinalizationMessage *model.Message
 }
 
 type summarySnapshot struct {
@@ -698,6 +699,13 @@ func (f *Flow) runOneStep(
 	rebuildPlan := f.preprocess(ctx, invocation, llmRequest, eventChan)
 	if invocation.EndInvocation {
 		return lastEvent, nil
+	}
+	if instruction, ok := calllimit.PreviewForLLM(
+		invocation,
+		invocation.MaxLLMCalls,
+	); ok && rebuildPlan != nil {
+		message := model.NewUserMessage(instruction)
+		rebuildPlan.callLimitFinalizationMessage = &message
 	}
 	llmRequest = f.maybeCompactContextBeforeLLM(
 		ctx,
@@ -1601,18 +1609,22 @@ func (f *Flow) maybeCompactContextBeforeLLM(
 		}
 		return req
 	}
+	decisionRequest := requestWithCallLimitFinalizationMessage(
+		req,
+		rebuildPlan.callLimitFinalizationMessage,
+	)
 	decision := syncCompactContextDecision(
 		ctx,
 		invocation,
-		req,
+		decisionRequest,
 		f.contextCompactionThresholdRatio,
 		rebuildPlan.contentProcessor.ContextCompactionConfig.TokenCounter,
 	)
 	if decision.err == nil {
-		summaryview.Finalize(invocation, req, decision.tokenCount)
+		summaryview.Finalize(invocation, decisionRequest, decision.tokenCount)
 	}
 	if started {
-		span.SetAttributes(contextCompactionAttrs(decision, req)...)
+		span.SetAttributes(contextCompactionAttrs(decision, decisionRequest)...)
 	}
 	if decision.err != nil {
 		if started {
@@ -1641,6 +1653,10 @@ func (f *Flow) runContextCompaction(
 	rebuildPlan *contextCompactionRebuildPlan,
 	decision contextCompactionDecision,
 ) *model.Request {
+	decisionRequest := requestWithCallLimitFinalizationMessage(
+		req,
+		rebuildPlan.callLimitFinalizationMessage,
+	)
 	filterKey := invocation.GetEventFilterKey()
 	before := snapshotSummary(invocation.Session, filterKey)
 	emitLatencyDiagnosticEvent(
@@ -1654,8 +1670,8 @@ func (f *Flow) runContextCompaction(
 			TokenCount:    decision.tokenCount,
 			Threshold:     decision.threshold,
 			ContextWindow: decision.contextWindow,
-			MessageCount:  len(req.Messages),
-			ToolCount:     len(req.Tools),
+			MessageCount:  len(decisionRequest.Messages),
+			ToolCount:     len(decisionRequest.Tools),
 			FilterKey:     filterKey,
 		},
 	)
@@ -1663,7 +1679,7 @@ func (f *Flow) runContextCompaction(
 		ctx,
 		invocation,
 		latencySpanContextSummary,
-		contextCompactionAttrs(decision, req)...,
+		contextCompactionAttrs(decision, decisionRequest)...,
 	)
 	summaryCtx = summary.ContextWithCacheSafeForkRequest(summaryCtx, req)
 	if view, ok := summaryview.Snapshot(invocation); ok {
@@ -1696,8 +1712,8 @@ func (f *Flow) runContextCompaction(
 			TokenCount:    decision.tokenCount,
 			Threshold:     decision.threshold,
 			ContextWindow: decision.contextWindow,
-			MessageCount:  len(req.Messages),
-			ToolCount:     len(req.Tools),
+			MessageCount:  len(decisionRequest.Messages),
+			ToolCount:     len(decisionRequest.Tools),
 			FilterKey:     filterKey,
 			Updated:       &updated,
 		},
@@ -1736,15 +1752,23 @@ func (f *Flow) runContextCompaction(
 		)
 		return req
 	}
+	postDecisionRequest := requestWithCallLimitFinalizationMessage(
+		rebuilt,
+		rebuildPlan.callLimitFinalizationMessage,
+	)
 	postDecision := syncCompactContextDecision(
 		rebuildCtx,
 		invocation,
-		rebuilt,
+		postDecisionRequest,
 		f.contextCompactionThresholdRatio,
 		rebuildPlan.contentProcessor.ContextCompactionConfig.TokenCounter,
 	)
 	if postDecision.err == nil {
-		summaryview.Finalize(invocation, rebuilt, postDecision.tokenCount)
+		summaryview.Finalize(
+			invocation,
+			postDecisionRequest,
+			postDecision.tokenCount,
+		)
 	} else {
 		log.DebugfContext(
 			ctx,
@@ -1839,6 +1863,21 @@ func cloneRequestForContextCompaction(req *model.Request) *model.Request {
 			cloned.Tools[name] = t
 		}
 	}
+	return &cloned
+}
+
+func requestWithCallLimitFinalizationMessage(
+	req *model.Request,
+	message *model.Message,
+) *model.Request {
+	if req == nil || message == nil {
+		return req
+	}
+	cloned := *req
+	cloned.Messages = append(
+		append([]model.Message(nil), req.Messages...),
+		*message,
+	)
 	return &cloned
 }
 
@@ -2383,8 +2422,9 @@ func (f *Flow) callLLM(
 		invocation,
 		llmLimitReached,
 	)
+	var finalizationMessage *callLimitFinalizationMessage
 	if finalizing {
-		appendCallLimitFinalizationMessage(
+		finalizationMessage = appendCallLimitFinalizationMessage(
 			llmRequest,
 			finalizationInstruction,
 		)
@@ -2421,7 +2461,13 @@ func (f *Flow) callLLM(
 		llmRequest,
 		f.summaryViewTokenCounter(),
 	)
-	summaryfork.Attach(invocation, llmRequest)
+	summaryfork.Attach(
+		invocation,
+		requestWithoutCallLimitFinalizationMessage(
+			llmRequest,
+			finalizationMessage,
+		),
+	)
 	seq, err := f.generateContentSeq(ctx, invocation, llmRequest, callModel)
 	if err != nil {
 		return ctx, nil, true, err
@@ -2429,20 +2475,90 @@ func (f *Flow) callLLM(
 	return ctx, seq, true, nil
 }
 
+type callLimitFinalizationMessage struct {
+	instruction  string
+	index        int
+	priorMatches int
+}
+
 // appendCallLimitFinalizationMessage adds the request-scoped instruction as
-// the final user message. The request is not the session event history, so this
-// does not create or persist a user event.
+// the final user message and returns its cache-safe exclusion marker. The
+// request is not the session event history, so this does not create or persist
+// a user event.
 func appendCallLimitFinalizationMessage(
 	req *model.Request,
 	instruction string,
-) {
+) *callLimitFinalizationMessage {
 	if req == nil {
-		return
+		return nil
+	}
+	marker := &callLimitFinalizationMessage{
+		instruction: instruction,
+		index:       len(req.Messages),
+	}
+	for _, message := range req.Messages {
+		if isCallLimitFinalizationMessage(message, instruction) {
+			marker.priorMatches++
+		}
 	}
 	req.Messages = append(
 		req.Messages,
 		model.NewUserMessage(instruction),
 	)
+	return marker
+}
+
+// requestWithoutCallLimitFinalizationMessage returns a request view for
+// cache-safe summarization without the transient finalization instruction.
+// The provider request remains unchanged.
+func requestWithoutCallLimitFinalizationMessage(
+	req *model.Request,
+	marker *callLimitFinalizationMessage,
+) *model.Request {
+	if req == nil || marker == nil {
+		return req
+	}
+	index := -1
+	if marker.index < len(req.Messages) && isCallLimitFinalizationMessage(
+		req.Messages[marker.index],
+		marker.instruction,
+	) {
+		index = marker.index
+	} else {
+		remainingPriorMatches := marker.priorMatches
+		for i, message := range req.Messages {
+			if !isCallLimitFinalizationMessage(message, marker.instruction) {
+				continue
+			}
+			if remainingPriorMatches == 0 {
+				index = i
+				break
+			}
+			remainingPriorMatches--
+		}
+	}
+	if index < 0 {
+		return req
+	}
+	cloned := *req
+	cloned.Messages = make([]model.Message, 0, len(req.Messages)-1)
+	cloned.Messages = append(cloned.Messages, req.Messages[:index]...)
+	cloned.Messages = append(cloned.Messages, req.Messages[index+1:]...)
+	return &cloned
+}
+
+func isCallLimitFinalizationMessage(
+	message model.Message,
+	instruction string,
+) bool {
+	return message.Role == model.RoleUser &&
+		message.Content == instruction &&
+		len(message.ContentParts) == 0 &&
+		message.ToolID == "" &&
+		message.ToolName == "" &&
+		len(message.ToolCalls) == 0 &&
+		message.ReasoningContent == "" &&
+		message.ReasoningSignature == ""
 }
 
 // enforceCallLimitFinalizationToolFree keeps finalization requests tool-free

@@ -79,6 +79,30 @@ func RecordLLMCall(invocation *agent.Invocation, limit int) bool {
 		current.llmCalls == limit
 }
 
+// PreviewForLLM reports the finalization instruction that the next allowed
+// LLM call would activate without advancing call-limit state. Framework code
+// uses the preview only to budget the transient instruction before the call.
+func PreviewForLLM(
+	invocation *agent.Invocation,
+	limit int,
+) (string, bool) {
+	current, ok := load(invocation)
+	if !ok {
+		return "", false
+	}
+	if current.phase == phaseActive {
+		return current.instruction, true
+	}
+	if limit > 0 && current.llmCalls+1 == limit &&
+		current.llmPolicy.enabled {
+		return resolveInstruction(current.llmPolicy), true
+	}
+	if current.phase != phasePending {
+		return "", false
+	}
+	return current.instruction, true
+}
+
 // RecordToolIteration records one allowed tool-call iteration and reports
 // whether it reached the configured tool limit with finalization enabled.
 func RecordToolIteration(invocation *agent.Invocation, limit int) bool {

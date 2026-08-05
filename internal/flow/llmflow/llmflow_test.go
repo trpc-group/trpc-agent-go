@@ -3329,6 +3329,47 @@ func TestFlow_CallLLM_FinalizesOnLastAllowedCall(t *testing.T) {
 	require.True(t, calllimit.Active(inv))
 }
 
+func TestFlow_CallLLM_FinalizationIsExcludedFromSummaryFork(t *testing.T) {
+	instruction := "finish with the available context"
+	response := &model.Response{
+		Done: true,
+		Choices: []model.Choice{{
+			Message: model.NewAssistantMessage("final answer"),
+		}},
+	}
+	modelStub := &mockModel{responses: []*model.Response{response}}
+	f := New(nil, nil, Options{})
+	inv := agent.NewInvocation(agent.WithInvocationModel(modelStub))
+	inv.MaxLLMCalls = 1
+	calllimit.Configure(inv, &instruction, nil)
+	req := &model.Request{Messages: []model.Message{
+		model.NewUserMessage("real user question"),
+	}}
+
+	_, _, modelCalled, err := f.callLLM(
+		context.Background(),
+		inv,
+		req,
+		inv.Model,
+	)
+
+	require.NoError(t, err)
+	require.True(t, modelCalled)
+	require.Len(t, req.Messages, 2)
+	require.Equal(t, instruction, req.Messages[1].Content)
+	fork, ok := summaryfork.Request(inv)
+	require.True(t, ok)
+	require.Len(t, fork.Messages, 1)
+	require.Equal(t, "real user question", fork.Messages[0].Content)
+
+	summaryfork.AppendResponse(inv, response)
+	fork, ok = summaryfork.Request(inv)
+	require.True(t, ok)
+	require.Len(t, fork.Messages, 2)
+	require.Equal(t, "real user question", fork.Messages[0].Content)
+	require.Equal(t, "final answer", fork.Messages[1].Content)
+}
+
 func TestAppendCallLimitFinalizationMessage_PreservesSystemContentParts(
 	t *testing.T,
 ) {
@@ -3356,6 +3397,29 @@ func TestAppendCallLimitFinalizationMessage_PreservesSystemContentParts(
 	require.Equal(t, partText, *req.Messages[0].ContentParts[0].Text)
 	require.Equal(t, model.RoleUser, req.Messages[2].Role)
 	require.Equal(t, "finalize now", req.Messages[2].Content)
+}
+
+func TestRequestWithoutCallLimitFinalizationMessage_KeepsMatchingUserMessage(
+	t *testing.T,
+) {
+	instruction := "finalize now"
+	req := &model.Request{Messages: []model.Message{
+		model.NewUserMessage(instruction),
+	}}
+	marker := appendCallLimitFinalizationMessage(req, instruction)
+	require.Len(t, req.Messages, 2)
+
+	filtered := requestWithoutCallLimitFinalizationMessage(req, marker)
+	require.Len(t, filtered.Messages, 1)
+	require.Equal(t, instruction, filtered.Messages[0].Content)
+	require.Len(t, req.Messages, 2)
+
+	// If a callback removes the transient message, filtering must not remove
+	// the pre-existing user message with identical content.
+	req.Messages = req.Messages[:1]
+	filtered = requestWithoutCallLimitFinalizationMessage(req, marker)
+	require.Same(t, req, filtered)
+	require.Len(t, filtered.Messages, 1)
 }
 
 func TestRunOneStep_LLMCallLimitFinalizationEndsInvocation(t *testing.T) {

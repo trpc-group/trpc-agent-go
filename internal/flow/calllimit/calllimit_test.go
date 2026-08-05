@@ -21,11 +21,18 @@ func TestLLMFinalizationUsesCustomInstruction(t *testing.T) {
 	instruction := "finish now"
 	Configure(invocation, &instruction, nil)
 
+	got, ok := PreviewForLLM(invocation, 2)
+	require.False(t, ok)
+	require.Empty(t, got)
+
 	require.False(t, RecordLLMCall(invocation, 2))
 	require.False(t, Active(invocation))
+	got, ok = PreviewForLLM(invocation, 2)
+	require.True(t, ok)
+	require.Equal(t, instruction, got)
 	require.True(t, RecordLLMCall(invocation, 2))
 
-	got, ok := ActivateForLLM(invocation, true)
+	got, ok = ActivateForLLM(invocation, true)
 	require.True(t, ok)
 	require.Equal(t, instruction, got)
 	require.True(t, Active(invocation))
@@ -56,9 +63,12 @@ func TestLLMFinalizationTakesPriorityOverPendingToolFinalization(t *testing.T) {
 
 	require.True(t, RecordToolIteration(invocation, 1))
 	ScheduleToolFinalization(invocation)
+	got, ok := PreviewForLLM(invocation, 1)
+	require.True(t, ok)
+	require.Equal(t, llmInstruction, got)
 	require.True(t, RecordLLMCall(invocation, 1))
 
-	got, ok := ActivateForLLM(invocation, true)
+	got, ok = ActivateForLLM(invocation, true)
 	require.True(t, ok)
 	require.Equal(t, llmInstruction, got)
 }
@@ -86,8 +96,28 @@ func TestNonPositiveLimitsDoNotAdvanceFinalization(t *testing.T) {
 
 	require.False(t, RecordLLMCall(invocation, 0))
 	require.False(t, RecordToolIteration(invocation, -1))
-	_, ok := ActivateForLLM(invocation, false)
+	_, ok := PreviewForLLM(invocation, 0)
 	require.False(t, ok)
+	_, ok = ActivateForLLM(invocation, false)
+	require.False(t, ok)
+}
+
+func TestPreviewForLLMReportsPendingToolFinalizationWithoutMutation(t *testing.T) {
+	invocation := agent.NewInvocation()
+	instruction := "finish for tool limit"
+	Configure(invocation, nil, &instruction)
+
+	require.True(t, RecordToolIteration(invocation, 1))
+	ScheduleToolFinalization(invocation)
+
+	got, ok := PreviewForLLM(invocation, 0)
+	require.True(t, ok)
+	require.Equal(t, instruction, got)
+	require.False(t, Active(invocation))
+
+	got, ok = ActivateForLLM(invocation, false)
+	require.True(t, ok)
+	require.Equal(t, instruction, got)
 }
 
 func TestFinalizationStateIsNotInheritedByClone(t *testing.T) {
