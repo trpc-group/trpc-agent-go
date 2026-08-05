@@ -1536,6 +1536,20 @@ func (r cancelingRuntime) Run(ctx context.Context, _ string) (sandboxrun.Result,
 	return sandboxrun.Result{}, ctx.Err()
 }
 
+type cancelOnSecondPermissionStore struct {
+	store.Store
+	cancel          context.CancelFunc
+	permissionCalls int
+}
+
+func (s *cancelOnSecondPermissionStore) RecordPermissionDecision(ctx context.Context, decision review.PermissionDecisionRecord) error {
+	s.permissionCalls++
+	if s.permissionCalls == 2 {
+		s.cancel()
+	}
+	return s.Store.RecordPermissionDecision(ctx, decision)
+}
+
 func TestCanceledSandboxRunIsPersistedWithFailedTask(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1594,6 +1608,74 @@ func TestCanceledSandboxRunIsPersistedWithFailedTask(t *testing.T) {
 	}
 	if len(loaded.SandboxRuns) != 1 || loaded.SandboxRuns[0].ErrorType != sandboxrun.ErrorCanceled {
 		t.Fatalf("loaded sandbox runs = %#v, want canceled run", loaded.SandboxRuns)
+	}
+}
+
+func TestCompletedSandboxRunIsPersistedWhenNextPermissionIsCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	path := filepath.Join(t.TempDir(), "review_agent.db")
+	st, err := store.NewSQLite(context.Background(), path)
+	if err != nil {
+		t.Fatalf("NewSQLite() error = %v", err)
+	}
+	task := review.ReviewTask{ID: "task-partial-cancellation", Status: review.TaskStatusRunning}
+	if err := st.CreateTask(context.Background(), task); err != nil {
+		st.Close()
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+	wrapped := &cancelOnSecondPermissionStore{Store: st, cancel: cancel}
+	_, runs, err := executePlannedCommandsWithFactory(
+		ctx,
+		wrapped,
+		task.ID,
+		"fake",
+		false,
+		false,
+		[]string{"go test ./...", "go vet ./..."},
+		fixedTestTime(),
+		time.Second,
+		"",
+		func(context.Context, string, string, string, time.Duration, string, bool, bool) (sandboxrun.Runtime, func(), *review.SandboxRun) {
+			return sandboxrun.FakeRuntime{}, nil, nil
+		},
+	)
+	if !errors.Is(err, context.Canceled) {
+		st.Close()
+		t.Fatalf("executePlannedCommandsWithFactory() error = %v, want context.Canceled", err)
+	}
+	if len(runs) != 1 || runs[0].Status != sandboxrun.StatusPassed {
+		st.Close()
+		t.Fatalf("runs = %#v, want one completed run", runs)
+	}
+	if err := recordSandboxRuns(ctx, wrapped, runs); err != nil {
+		st.Close()
+		t.Fatalf("recordSandboxRuns() error = %v", err)
+	}
+	finishCtx, finishCancel := failedTaskContext(ctx)
+	if err := st.FinishTask(finishCtx, task.ID, review.TaskStatusFailed, context.Canceled.Error(), fixedTestTime()); err != nil {
+		finishCancel()
+		st.Close()
+		t.Fatalf("FinishTask() error = %v", err)
+	}
+	finishCancel()
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	reopened, err := store.NewSQLite(context.Background(), path)
+	if err != nil {
+		t.Fatalf("reopen NewSQLite() error = %v", err)
+	}
+	defer reopened.Close()
+	loaded, err := reopened.LoadTaskReport(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("LoadTaskReport() error = %v", err)
+	}
+	if loaded.Task.Status != review.TaskStatusFailed {
+		t.Fatalf("loaded status = %q, want failed", loaded.Task.Status)
+	}
+	if len(loaded.SandboxRuns) != 1 || loaded.SandboxRuns[0].Status != sandboxrun.StatusPassed {
+		t.Fatalf("loaded sandbox runs = %#v, want completed run", loaded.SandboxRuns)
 	}
 }
 

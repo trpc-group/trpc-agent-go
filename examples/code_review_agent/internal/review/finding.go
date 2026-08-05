@@ -38,9 +38,9 @@ func NormalizeFindings(findings []Finding, cfg Config) []Finding {
 	}
 	best := make(map[string]Finding)
 	for _, finding := range findings {
+		finding.Fingerprint = Fingerprint(finding)
 		finding = redactFinding(finding)
 		finding.Status = routeStatus(finding, cfg)
-		finding.Fingerprint = Fingerprint(finding)
 		existing, ok := best[finding.Fingerprint]
 		if !ok || findingRank(finding) > findingRank(existing) {
 			best[finding.Fingerprint] = finding

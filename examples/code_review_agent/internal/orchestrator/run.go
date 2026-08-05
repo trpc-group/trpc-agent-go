@@ -613,6 +613,9 @@ func Run(ctx context.Context, opts Options) (result Result, err error) {
 	if sandboxValidationAvailable(input) {
 		decisions, runs, err = executePlannedCommandsWithSnapshotPaths(ctx, st, task.ID, opts.Runtime, opts.AllowTrustedLocal, opts.AllowTrustedHostPreparation, opts.AllowTrustedRemote, plan.Commands, now, opts.SandboxTimeout, input.WorkDir, snapshotUntrackedPaths(input, files))
 		if err != nil {
+			if persistErr := recordSandboxRuns(ctx, st, runs); persistErr != nil {
+				err = errors.Join(err, fmt.Errorf("record sandbox runs after execution failure: %w", persistErr))
+			}
 			return Result{}, failTask(err)
 		}
 		if err := recordSandboxRuns(ctx, st, runs); err != nil {
@@ -817,7 +820,7 @@ func executePlannedCommandsWithFactory(ctx context.Context, st store.Store, task
 		if !allowed {
 			decision := allowlistRejectedDecision(taskID, suffix, command, now)
 			if err := st.RecordPermissionDecision(ctx, decision); err != nil {
-				return nil, nil, err
+				return decisions, runs, err
 			}
 			decisions = append(decisions, decision)
 			runs = append(runs, review.SandboxRun{
@@ -840,7 +843,7 @@ func executePlannedCommandsWithFactory(ctx context.Context, st store.Store, task
 			Now:      now,
 		})
 		if err := st.RecordPermissionDecision(ctx, decision); err != nil {
-			return nil, nil, err
+			return decisions, runs, err
 		}
 		decisions = append(decisions, decision)
 		runID := taskID + "-sandbox-" + suffix
