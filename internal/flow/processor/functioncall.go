@@ -850,9 +850,14 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsWithRequest(
 	}
 	toolCalls := llmResponse.Choices[0].Message.ToolCalls
 
-	// If parallel tools are enabled AND there is a run of concurrency-safe calls to
-	// batch, execute those concurrently. Tools that declare themselves unsafe (an
-	// agent tool, which cannot work against a frozen session view) stay sequential.
+	// Parallel execution is admitted only when parallel tools are enabled AND EVERY
+	// call in the batch is concurrency-safe. Admission is all-or-nothing by design:
+	// a single unsafe call (an agent tool, which cannot work against a frozen
+	// session view) keeps the WHOLE turn sequential rather than being split out of
+	// it, because the guarantee a tool publishes is that it can run beside the other
+	// calls in its turn — partitioning the batch would run its safe siblings
+	// concurrently with each other while the unsafe one is still in flight, which is
+	// exactly what it declared it cannot tolerate.
 	if p.enableParallelTools && hasConcurrentBatch(toolCalls, tools) {
 		mergedEvent, err := p.executeToolCallsInParallel(
 			ctx,
