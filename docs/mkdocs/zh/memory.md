@@ -338,11 +338,14 @@ memoryService := memoryinmemory.NewMemoryService(
 
 该 option 使用两个彼此隔离的提取阶段。第一阶段继续使用标准 memory tools，
 仅从 user message 提取普通用户事实和事件。随后，提取器会按时间顺序检查当前
-extraction delta 中符合条件的 user/assistant pair，并把前 16 组包含明确可复用结果
-的 pair（例如列表、推荐、分类或数量）合并到一次第二阶段请求中。超出的候选会被
-跳过，避免 backlog 让 assistant 提取的工作量无限增长。第二阶段只暴露私有的
-`memory_assistant_episode` 工具，该工具不会暴露给应用的 Agent。通过 `WithPrompt`
-或 `SetPrompt` 配置的应用提取约束同样适用于第二阶段请求。
+extraction delta 中符合条件的 user/assistant pair。确定性的 eligibility 检查仅在
+assistant 返回至少两个 Markdown 或编号列表项时接受结构化请求；对于数量问题，
+则要求回答引入一个未出现在问题中的数值答案。单段 prose 形式的分类、翻译、转换
+或总结目前不会触发第二阶段，除非回答同时满足上述列表形态。前 16 组 eligible pair
+会合并到一次第二阶段请求中；超出的候选会被跳过，避免 backlog 让 assistant 提取
+的工作量无限增长。第二阶段只暴露私有的 `memory_assistant_episode` 工具，该工具
+不会暴露给应用的 Agent。通过 `WithPrompt` 或 `SetPrompt` 配置的应用提取约束同样
+适用于第二阶段请求。
 
 Assistant 输出会被记录为“带归属的对话历史”，而不是已经验证的事实或用户偏好。
 框架将每个通过校验的调用固定转换为普通 `KindEpisode` add 操作，将 participants

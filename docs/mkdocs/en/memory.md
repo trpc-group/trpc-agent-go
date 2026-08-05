@@ -370,13 +370,18 @@ memoryService := memoryinmemory.NewMemoryService(
 The option uses two isolated extraction stages. The first stage keeps the
 standard memory tools and extracts ordinary user facts and events from user
 messages. The extractor then considers eligible user/assistant pairs in the
-extraction delta in chronological order. Up to the first 16 pairs that contain
-an explicit reusable result, such as a requested list, recommendation,
-classification, or quantity, are combined into one second request that exposes
-only the private `memory_assistant_episode` tool. Additional candidates are
-skipped so a backlog cannot make assistant extraction unbounded. This tool is
-never visible to the application Agent. An application policy configured
-through `WithPrompt` or `SetPrompt` also constrains the second-stage request.
+extraction delta in chronological order. The deterministic eligibility check
+accepts a structured request only when the assistant response contains at
+least two Markdown or numbered list items. It also accepts a quantitative
+question when the response introduces a numeric answer that is not already in
+the question. A single prose result, including a classification, translation,
+conversion, or summary, does not currently trigger the second stage unless it
+has the required list shape. Up to the first 16 eligible pairs are combined
+into one second request that exposes only the private
+`memory_assistant_episode` tool. Additional candidates are skipped so a
+backlog cannot make assistant extraction unbounded. This tool is never visible
+to the application Agent. An application policy configured through
+`WithPrompt` or `SetPrompt` also constrains the second-stage request.
 
 Assistant output is stored as attributed conversation history rather than as a
 verified fact or user preference. The framework converts every accepted call
