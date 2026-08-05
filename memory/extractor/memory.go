@@ -37,7 +37,7 @@ func referenceDate(ctx context.Context) time.Time {
 const (
 	metadataKeyModelName      = "model_name"
 	metadataKeyModelAvailable = "model_available"
-	metadataKeyUpdatePolicy   = "update_policy"
+	metadataKeyUpdatePolicy   = "trpc-agent-go/memory-extractor/update-policy"
 )
 
 // memoryExtractor implements the MemoryExtractor interface.

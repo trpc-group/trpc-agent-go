@@ -322,10 +322,10 @@ forget all stored information.
 
 The update policy does not change `memory.Service`, `MemoryExtractor`, the stored
 JSON representation, memory IDs, or database schemas. It does not rewrite
-existing entries. With Preserve History or Append Only, persistence failures
-are returned by Auto extraction and do not advance its session watermark, so a
-retry can process the same events. Merge Similar retains its existing
-best-effort persistence behavior.
+existing entries. Memory writes remain best effort for every policy: a failed
+operation is logged, the remaining operations are still attempted, and the
+extraction watermark advances after the pass. A permanently failing backend
+operation therefore cannot block newer session events.
 
 To roll back, remove the option or set it to `UpdatePolicyMergeSimilar`. No data
 migration is required.

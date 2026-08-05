@@ -298,9 +298,9 @@ Preserve History reconcile 只比较已经提供给 extractor 的 existing entri
 clear 必须来自用户明确的“遗忘全部存储信息”请求。
 
 该 update policy 不会修改 `memory.Service`、`MemoryExtractor`、持久化 JSON、memory ID
-或数据库 schema，也不会重写存量记忆。使用 Preserve History 或 Append Only 时，
-Auto extraction 的持久化错误会返回给调用方，并且不会推进 session watermark，
-因此重试仍会处理同一批事件；Merge Similar 继续保持原有的 best-effort 持久化行为。
+或数据库 schema，也不会重写存量记忆。所有 policy 都保留 Auto 原有的 best-effort
+写入语义：某个 operation 写入失败时会记录日志并继续尝试其余 operation；本轮结束后
+仍推进 extraction watermark，避免永久失败的后端操作阻塞后续 session event。
 
 回退时删除该 option，或将其设置为 `UpdatePolicyMergeSimilar` 即可，不需要数据迁移。
 

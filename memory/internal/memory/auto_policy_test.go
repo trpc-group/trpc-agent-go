@@ -11,19 +11,15 @@ package memory
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 	"trpc.group/trpc-go/trpc-agent-go/model"
-	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 type countingOperator struct {
@@ -32,155 +28,22 @@ type countingOperator struct {
 	searchQueries []string
 }
 
-type invalidUpdatePolicyExtractor struct {
-	*mockExtractor
-}
-
-func (*invalidUpdatePolicyExtractor) UpdatePolicy() extractor.UpdatePolicy {
-	return extractor.UpdatePolicy("invalid")
+type failFirstAddOperator struct {
+	*mockOperator
+	attempts int
 }
 
 type customUpdatePolicyExtractor struct {
 	*mockExtractor
+	metadata map[string]any
 }
 
 func (*customUpdatePolicyExtractor) UpdatePolicy() extractor.UpdatePolicy {
 	return extractor.UpdatePolicyPreserveHistory
 }
 
-type countingModel struct {
-	*mockModel
-	calls int
-}
-
-type blockingCountingModel struct {
-	*mockModel
-	mu            sync.Mutex
-	calls         int
-	firstStarted  chan struct{}
-	secondStarted chan struct{}
-	releaseFirst  chan struct{}
-}
-
-func (m *blockingCountingModel) GenerateContent(
-	ctx context.Context,
-	request *model.Request,
-) (<-chan *model.Response, error) {
-	m.mu.Lock()
-	m.calls++
-	call := m.calls
-	m.mu.Unlock()
-	if call == 1 {
-		close(m.firstStarted)
-		select {
-		case <-m.releaseFirst:
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-	} else if call == 2 {
-		close(m.secondStarted)
-	}
-	return m.mockModel.GenerateContent(ctx, request)
-}
-
-func (m *blockingCountingModel) callCount() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.calls
-}
-
-type failingUpdateSessionService struct {
-	session.Service
-	err error
-}
-
-type stateOnlyReloadSessionService struct {
-	session.Service
-}
-
-type failingGetSessionService struct {
-	session.Service
-}
-
-func (s *failingGetSessionService) GetSession(
-	context.Context,
-	session.Key,
-	...session.Option,
-) (*session.Session, error) {
-	return nil, assert.AnError
-}
-
-func (s *stateOnlyReloadSessionService) GetSession(
-	ctx context.Context,
-	key session.Key,
-	opts ...session.Option,
-) (*session.Session, error) {
-	sess, err := s.Service.GetSession(ctx, key, opts...)
-	if sess != nil {
-		sess.Events = nil
-	}
-	return sess, err
-}
-
-func (s *failingUpdateSessionService) UpdateSessionState(
-	context.Context,
-	session.Key,
-	session.StateMap,
-) error {
-	return s.err
-}
-
-func newPersistedAutoMemorySession(
-	t *testing.T,
-	service session.Service,
-	ts time.Time,
-	msg model.Message,
-) (*session.Session, session.Key) {
-	t.Helper()
-	key := session.Key{AppName: "app", UserID: "u1", SessionID: "test-session"}
-	sess, err := service.CreateSession(
-		context.Background(), key, nil,
-	)
-	require.NoError(t, err)
-	require.NoError(t, service.AppendEvent(
-		context.Background(), sess, &event.Event{
-			Timestamp: ts,
-			Response:  &model.Response{Choices: []model.Choice{{Message: msg}}},
-		},
-	))
-	loaded, err := service.GetSession(context.Background(), key)
-	require.NoError(t, err)
-	return loaded, key
-}
-
-func (m *countingModel) GenerateContent(
-	ctx context.Context,
-	request *model.Request,
-) (<-chan *model.Response, error) {
-	m.calls++
-	return m.mockModel.GenerateContent(ctx, request)
-}
-
-type failOnceAddOperator struct {
-	*mockOperator
-	failMemory string
-	failed     bool
-	attempted  []string
-}
-
-func (o *failOnceAddOperator) AddMemory(
-	ctx context.Context,
-	userKey memory.UserKey,
-	memoryText string,
-	topics []string,
-	opts ...memory.AddOption,
-) error {
-	o.attempted = append(o.attempted, memoryText)
-	if memoryText == o.failMemory && !o.failed {
-		o.failed = true
-		return assert.AnError
-	}
-	return o.mockOperator.AddMemory(ctx, userKey, memoryText, topics, opts...)
+func (e *customUpdatePolicyExtractor) Metadata() map[string]any {
+	return e.metadata
 }
 
 func (o *countingOperator) SearchMemories(
@@ -192,6 +55,20 @@ func (o *countingOperator) SearchMemories(
 	o.searchCalls++
 	o.searchQueries = append(o.searchQueries, query)
 	return o.mockOperator.SearchMemories(ctx, userKey, query, opts...)
+}
+
+func (o *failFirstAddOperator) AddMemory(
+	ctx context.Context,
+	userKey memory.UserKey,
+	memoryText string,
+	topics []string,
+	opts ...memory.AddOption,
+) error {
+	o.attempts++
+	if o.attempts == 1 {
+		return assert.AnError
+	}
+	return o.mockOperator.AddMemory(ctx, userKey, memoryText, topics, opts...)
 }
 
 func newExtractorWithOperation(
@@ -247,33 +124,7 @@ func newExtractorWithOperation(
 	)
 }
 
-func newCountingAddExtractor(
-	t *testing.T,
-	policy extractor.UpdatePolicy,
-	memoryText string,
-	checker extractor.Checker,
-) (*countingModel, extractor.MemoryExtractor) {
-	t.Helper()
-	args, err := json.Marshal(map[string]any{
-		"memory": memoryText,
-		"topics": []string{"test"},
-	})
-	require.NoError(t, err)
-	mdl := &countingModel{mockModel: newMockModelWithToolCalls([]model.ToolCall{{
-		Type: "function",
-		Function: model.FunctionDefinitionParam{
-			Name:      memory.AddToolName,
-			Arguments: args,
-		},
-	}})}
-	opts := []extractor.Option{extractor.WithUpdatePolicy(policy)}
-	if checker != nil {
-		opts = append(opts, extractor.WithChecker(checker))
-	}
-	return mdl, extractor.NewExtractor(mdl, opts...)
-}
-
-func TestUpdatePolicyFor_UsesBuiltInExtractorPolicy(t *testing.T) {
+func TestUpdatePolicyFor_UsesTypedExtractorMetadata(t *testing.T) {
 	for _, policy := range []extractor.UpdatePolicy{
 		extractor.UpdatePolicyMergeSimilar,
 		extractor.UpdatePolicyPreserveHistory,
@@ -285,13 +136,95 @@ func TestUpdatePolicyFor_UsesBuiltInExtractorPolicy(t *testing.T) {
 		)
 		assert.Equal(t, policy, updatePolicyFor(builtin))
 	}
+	assert.Equal(t, extractor.UpdatePolicyMergeSimilar, updatePolicyFor(nil))
 	assert.Equal(t, extractor.UpdatePolicyMergeSimilar, updatePolicyFor(&mockExtractor{}))
-	assert.Equal(t, extractor.UpdatePolicyMergeSimilar, updatePolicyFor(
-		&invalidUpdatePolicyExtractor{mockExtractor: &mockExtractor{}},
-	))
 	assert.Equal(t, extractor.UpdatePolicyMergeSimilar, updatePolicyFor(
 		&customUpdatePolicyExtractor{mockExtractor: &mockExtractor{}},
 	))
+	assert.Equal(t, extractor.UpdatePolicyMergeSimilar, updatePolicyFor(
+		&customUpdatePolicyExtractor{
+			mockExtractor: &mockExtractor{},
+			metadata: map[string]any{
+				"update_policy": extractor.UpdatePolicyPreserveHistory,
+			},
+		},
+	))
+	assert.Equal(t, extractor.UpdatePolicyMergeSimilar, updatePolicyFor(
+		&customUpdatePolicyExtractor{
+			mockExtractor: &mockExtractor{},
+			metadata: map[string]any{
+				extractorMetadataUpdatePolicy: "preserve_history",
+			},
+		},
+	))
+}
+
+func TestUpdatePolicies_KeepOperationFailuresBestEffort(t *testing.T) {
+	for _, policy := range []extractor.UpdatePolicy{
+		extractor.UpdatePolicyMergeSimilar,
+		extractor.UpdatePolicyPreserveHistory,
+		extractor.UpdatePolicyAppendOnly,
+	} {
+		t.Run(string(policy), func(t *testing.T) {
+			ext := &customUpdatePolicyExtractor{
+				mockExtractor: &mockExtractor{ops: []*extractor.Operation{
+					{Type: extractor.OperationAdd, Memory: "User likes tea."},
+					{Type: extractor.OperationAdd, Memory: "User likes coffee."},
+				}},
+				metadata: map[string]any{
+					extractorMetadataUpdatePolicy: policy,
+				},
+			}
+			operator := &failFirstAddOperator{mockOperator: newMockOperator()}
+			worker := NewAutoMemoryWorker(
+				AutoMemoryConfig{Extractor: ext}, operator,
+			)
+
+			err := worker.createAutoMemory(
+				context.Background(),
+				reconcileUserKey(),
+				[]model.Message{model.NewUserMessage("I like tea and coffee.")},
+			)
+
+			require.NoError(t, err)
+			assert.Equal(t, 2, operator.attempts)
+			assert.Equal(t, 1, operator.addCalls)
+		})
+	}
+}
+
+func TestUpdatePolicies_OperationFailureDoesNotBlockNewEvents(t *testing.T) {
+	for _, policy := range []extractor.UpdatePolicy{
+		extractor.UpdatePolicyPreserveHistory,
+		extractor.UpdatePolicyAppendOnly,
+	} {
+		t.Run(string(policy), func(t *testing.T) {
+			ext := &customUpdatePolicyExtractor{
+				mockExtractor: &mockExtractor{ops: []*extractor.Operation{{
+					Type: extractor.OperationAdd, Memory: "User likes tea.",
+				}}},
+				metadata: map[string]any{
+					extractorMetadataUpdatePolicy: policy,
+				},
+			}
+			operator := newMockOperator()
+			operator.addErr = assert.AnError
+			worker := NewAutoMemoryWorker(
+				AutoMemoryConfig{Extractor: ext}, operator,
+			)
+			sess := newTestSession("app", "user")
+			first := time.Date(2026, 8, 5, 10, 0, 0, 0, time.UTC)
+			second := first.Add(time.Minute)
+			appendSessionMessage(sess, first, model.NewUserMessage("I like tea."))
+
+			require.NoError(t, worker.EnqueueJob(context.Background(), sess))
+			assert.True(t, readLastExtractAt(sess).Equal(first))
+
+			appendSessionMessage(sess, second, model.NewUserMessage("I like coffee."))
+			require.NoError(t, worker.EnqueueJob(context.Background(), sess))
+			assert.True(t, readLastExtractAt(sess).Equal(second))
+		})
+	}
 }
 
 func TestPreserveHistoryPolicy_AliceTimeEnrichmentUpdates(t *testing.T) {
@@ -1019,339 +952,195 @@ func TestPolicyComparisonHelpers(t *testing.T) {
 
 }
 
-func TestExecuteOperation_ReturnsPersistenceErrors(t *testing.T) {
+func TestExplicitDestructiveRequest(t *testing.T) {
 	tests := []struct {
-		name      string
-		op        *extractor.Operation
-		configure func(*mockOperator)
-		want      string
+		name        string
+		messages    []model.Message
+		allowDelete bool
+		allowClear  bool
 	}{
 		{
-			name: "add",
-			op:   &extractor.Operation{Type: extractor.OperationAdd, Memory: "memory"},
-			configure: func(operator *mockOperator) {
-				operator.addErr = assert.AnError
-			},
-			want: "add memory",
+			name:        "explicit delete",
+			messages:    []model.Message{model.NewUserMessage("Please forget my coffee preference.")},
+			allowDelete: true,
 		},
 		{
-			name: "update",
-			op: &extractor.Operation{
-				Type: extractor.OperationUpdate, MemoryID: "memory-id", Memory: "memory",
-			},
-			configure: func(operator *mockOperator) {
-				operator.updateErr = assert.AnError
-			},
-			want: "update memory",
+			name:        "explicit clear",
+			messages:    []model.Message{model.NewUserMessage("Could you please clear all my memories?")},
+			allowDelete: true,
+			allowClear:  true,
 		},
 		{
-			name: "delete",
-			op:   &extractor.Operation{Type: extractor.OperationDelete, MemoryID: "memory-id"},
-			configure: func(operator *mockOperator) {
-				operator.deleteErr = assert.AnError
-			},
-			want: "delete memory",
+			name:        "specific delete cannot authorize clear",
+			messages:    []model.Message{model.NewUserMessage("Delete my coffee preference.")},
+			allowDelete: true,
 		},
 		{
-			name: "clear",
-			op:   &extractor.Operation{Type: extractor.OperationClear},
-			configure: func(operator *mockOperator) {
-				operator.clearErr = assert.AnError
+			name:     "negated request",
+			messages: []model.Message{model.NewUserMessage("Please do not delete my coffee preference.")},
+		},
+		{
+			name:     "assistant request is ignored",
+			messages: []model.Message{model.NewAssistantMessage("Please forget everything about the user.")},
+		},
+		{
+			name:        "explicit chinese delete",
+			messages:    []model.Message{model.NewUserMessage("请删除我的咖啡偏好。")},
+			allowDelete: true,
+		},
+		{
+			name:        "explicit chinese clear",
+			messages:    []model.Message{model.NewUserMessage("请清空所有记忆。")},
+			allowDelete: true,
+			allowClear:  true,
+		},
+		{
+			name:     "negated chinese request",
+			messages: []model.Message{model.NewUserMessage("请不要删除我的咖啡偏好。")},
+		},
+		{
+			name: "latest negation wins",
+			messages: []model.Message{
+				model.NewUserMessage("Please clear all my memories."),
+				model.NewUserMessage("Do not clear my memories."),
 			},
-			want: "clear memories",
+		},
+		{
+			name: "latest specific request narrows clear",
+			messages: []model.Message{
+				model.NewUserMessage("Please clear all my memories."),
+				model.NewUserMessage("Actually, please delete only my coffee preference."),
+			},
+			allowDelete: true,
+		},
+		{
+			name:     "partial clear does not authorize clear",
+			messages: []model.Message{model.NewUserMessage("Clear everything except my coffee preference.")},
+		},
+		{
+			name:     "partial chinese clear does not authorize clear",
+			messages: []model.Message{model.NewUserMessage("请清空除了咖啡偏好以外的所有记忆。")},
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			operator := newMockOperator()
-			test.configure(operator)
-			worker := NewAutoMemoryWorker(AutoMemoryConfig{}, operator)
-			err := worker.executeOperation(context.Background(), reconcileUserKey(), test.op)
-			assert.ErrorContains(t, err, test.want)
-			assert.ErrorIs(t, err, assert.AnError)
+			request := latestExplicitDestructiveRequest(test.messages)
+			assert.Equal(t, test.allowDelete, request.explicit && !request.partial)
+			assert.Equal(t, test.allowClear, request.clearAll && !request.partial)
 		})
 	}
 }
 
-func TestExecuteOperation_DeleteRetryIsIdempotent(t *testing.T) {
-	operator := newMockOperator()
-	operator.deleteErr = errors.New("memory with id memory-id not found")
-	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, operator)
-	err := worker.executeOperation(
-		context.Background(),
-		reconcileUserKey(),
-		&extractor.Operation{Type: extractor.OperationDelete, MemoryID: "memory-id"},
-	)
-	assert.NoError(t, err)
-}
+func TestPreserveHistoryPolicy_DeleteAuthorization(t *testing.T) {
+	entry := func(id, text string, topics ...string) *memory.Entry {
+		return &memory.Entry{
+			ID: id,
+			Memory: &memory.Memory{
+				Memory: text,
+				Topics: topics,
+			},
+		}
+	}
+	deleteOps := func(ids ...string) []*extractor.Operation {
+		operations := make([]*extractor.Operation, 0, len(ids))
+		for _, id := range ids {
+			operations = append(operations, &extractor.Operation{
+				Type:     extractor.OperationDelete,
+				MemoryID: id,
+			})
+		}
+		return operations
+	}
 
-func TestAutoMemoryWorker_MergeSimilarPersistenceFailureRemainsBestEffort(t *testing.T) {
-	operator := newMockOperator()
-	operator.addErr = assert.AnError
-	ext := &mockExtractor{ops: []*extractor.Operation{
-		{
-			Type:   extractor.OperationAdd,
-			Memory: "User likes tea.",
-		},
-		{
-			Type:     extractor.OperationUpdate,
-			MemoryID: "existing-memory",
-			Memory:   "User likes green tea.",
-		},
-	}}
-	worker := NewAutoMemoryWorker(AutoMemoryConfig{Extractor: ext}, operator)
-	sess := newTestSession("app", "u1")
-	appendSessionMessage(sess, time.Now(), model.NewUserMessage("I like tea."))
+	coffee := entry("coffee", "User prefers dark roast coffee.", "coffee", "preference", "咖啡", "偏好")
+	address := entry("address", "User has a home address in Shenzhen.", "home", "address", "住址")
+	office := entry("office", "User converted a bedroom into a home office.", "home", "office")
+	employer := entry("employer", "User's former employer was Acme.", "former employer", "Acme")
+	hobby := entry("hobby", "User enjoys hiking.", "hiking")
 
-	require.NoError(t, worker.EnqueueJob(context.Background(), sess))
-	_, ok := sess.GetState(memory.SessionStateKeyAutoMemoryLastExtractAt)
-	assert.True(t, ok)
-	_, ok = sess.GetState(pendingAutoMemoryBatchStateKey)
-	assert.False(t, ok)
-	assert.Equal(t, 1, operator.updateCalls)
-}
-
-func TestAutoMemoryWorker_PreserveHistoryPersistenceFailureDoesNotAdvanceWatermark(t *testing.T) {
-	operator := newMockOperator()
-	operator.addErr = assert.AnError
-	ext := newExtractorWithOperation(t, extractor.UpdatePolicyPreserveHistory, &extractor.Operation{
-		Type:   extractor.OperationAdd,
-		Memory: "User likes tea.",
-	})
-	worker := NewAutoMemoryWorker(AutoMemoryConfig{Extractor: ext}, operator)
-	sess := newTestSession("app", "u1")
-	appendSessionMessage(sess, time.Now(), model.NewUserMessage("I like tea."))
-
-	err := worker.EnqueueJob(context.Background(), sess)
-	require.Error(t, err)
-	_, ok := sess.GetState(memory.SessionStateKeyAutoMemoryLastExtractAt)
-	assert.False(t, ok)
-
-	operator.addErr = nil
-	require.NoError(t, worker.EnqueueJob(context.Background(), sess))
-	_, ok = sess.GetState(memory.SessionStateKeyAutoMemoryLastExtractAt)
-	assert.True(t, ok)
-}
-
-func TestAutoMemoryWorker_PreserveHistoryCompletesNewOperationBatch(t *testing.T) {
-	_, ext := newCountingAddExtractor(
-		t, extractor.UpdatePolicyPreserveHistory, "User likes tea.", nil,
-	)
-	operator := newMockOperator()
-	worker := NewAutoMemoryWorker(AutoMemoryConfig{Extractor: ext}, operator)
-	sess := newTestSession("app", "u1")
-	eventTime := time.Date(2026, 8, 5, 10, 0, 0, 0, time.UTC)
-	appendSessionMessage(sess, eventTime, model.NewUserMessage("I like tea."))
-
-	require.NoError(t, worker.EnqueueJob(context.Background(), sess))
-	assert.Equal(t, 1, operator.addCalls)
-	assert.True(t, readLastExtractAt(sess).Equal(eventTime))
-	_, ok := sess.GetState(pendingAutoMemoryBatchStateKey)
-	assert.False(t, ok)
-}
-
-func TestAutoMemoryWorker_PreserveHistoryHandlesNewDeltaAfterPendingBatch(t *testing.T) {
-	for _, test := range []struct {
-		name             string
-		shouldExtract    bool
-		wantAddCalls     int
-		wantModelCalls   int
-		wantWatermarkLag bool
+	tests := []struct {
+		name       string
+		request    string
+		existing   []*memory.Entry
+		operations []*extractor.Operation
+		wantIDs    []string
 	}{
 		{
-			name:           "extract new delta",
-			shouldExtract:  true,
-			wantAddCalls:   2,
-			wantModelCalls: 1,
+			name:       "target bound",
+			request:    "Please forget my coffee preference.",
+			existing:   []*memory.Entry{coffee, address},
+			operations: deleteOps("coffee", "address", "missing"),
+			wantIDs:    []string{"coffee"},
 		},
 		{
-			name:             "checker skips new delta",
-			shouldExtract:    false,
-			wantAddCalls:     1,
-			wantModelCalls:   0,
-			wantWatermarkLag: true,
+			name:       "partial target match",
+			request:    "Please forget my home address.",
+			existing:   []*memory.Entry{address, office},
+			operations: deleteOps("address", "office"),
+			wantIDs:    []string{"address"},
 		},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			checkerCalls := 0
-			mdl, ext := newCountingAddExtractor(
-				t,
-				extractor.UpdatePolicyPreserveHistory,
-				"User likes fresh tea.",
-				func(*extractor.ExtractionContext) bool {
-					checkerCalls++
-					return test.shouldExtract
-				},
-			)
-			operator := newMockOperator()
-			worker := NewAutoMemoryWorker(AutoMemoryConfig{Extractor: ext}, operator)
-			sess := newTestSession("app", "u1")
-			pendingTime := time.Date(2026, 8, 5, 10, 0, 0, 0, time.UTC)
-			latestTime := pendingTime.Add(time.Minute)
-			appendSessionMessage(sess, pendingTime, model.NewUserMessage("I like tea."))
-			appendSessionMessage(sess, latestTime, model.NewUserMessage("I like fresh tea."))
-			require.NoError(t, persistPendingAutoMemoryBatch(
-				context.Background(), sess, &pendingAutoMemoryBatch{
-					Version:  pendingAutoMemoryBatchVersion,
-					LatestTs: pendingTime,
-					Operations: []*extractor.Operation{{
-						Type:   extractor.OperationAdd,
-						Memory: "User likes tea.",
-					}},
-				},
-			))
+		{
+			name:       "chinese target",
+			request:    "请删除我的咖啡偏好。",
+			existing:   []*memory.Entry{coffee, address},
+			operations: deleteOps("coffee", "address"),
+			wantIDs:    []string{"coffee"},
+		},
+		{
+			name:     "scoped everything",
+			request:  "Please forget everything about my former employer.",
+			existing: []*memory.Entry{employer, hobby},
+			operations: append(
+				deleteOps("employer", "hobby"),
+				&extractor.Operation{Type: extractor.OperationClear},
+			),
+			wantIDs: []string{"employer"},
+		},
+		{
+			name:       "global clear authorizes delete",
+			request:    "Please clear all my memories.",
+			existing:   []*memory.Entry{coffee},
+			operations: deleteOps("coffee"),
+			wantIDs:    []string{"coffee"},
+		},
+		{
+			name:     "qualified clear stays scoped",
+			request:  "Please forget everything I told you about coffee.",
+			existing: []*memory.Entry{coffee, address},
+			operations: append(
+				deleteOps("coffee", "address"),
+				&extractor.Operation{Type: extractor.OperationClear},
+			),
+			wantIDs: []string{"coffee"},
+		},
+		{
+			name:     "qualified chinese clear stays scoped",
+			request:  "请删除关于咖啡的所有记忆。",
+			existing: []*memory.Entry{coffee, address},
+			operations: append(
+				deleteOps("coffee", "address"),
+				&extractor.Operation{Type: extractor.OperationClear},
+			),
+			wantIDs: []string{"coffee"},
+		},
+	}
 
-			require.NoError(t, worker.EnqueueJob(context.Background(), sess))
-			assert.Equal(t, 1, checkerCalls)
-			assert.Equal(t, test.wantAddCalls, operator.addCalls)
-			assert.Equal(t, test.wantModelCalls, mdl.calls)
-			_, ok := sess.GetState(pendingAutoMemoryBatchStateKey)
-			assert.False(t, ok)
-			if test.wantWatermarkLag {
-				assert.True(t, readLastExtractAt(sess).Equal(pendingTime))
-				return
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			out := worker.reconcilePreserveHistoryOps(
+				context.Background(),
+				reconcileUserKey(),
+				test.operations,
+				test.existing,
+				[]model.Message{model.NewUserMessage(test.request)},
+			)
+			ids := make([]string, 0, len(out))
+			for _, operation := range out {
+				assert.Equal(t, extractor.OperationDelete, operation.Type)
+				ids = append(ids, operation.MemoryID)
 			}
-			assert.True(t, readLastExtractAt(sess).Equal(latestTime))
+			assert.Equal(t, test.wantIDs, ids)
 		})
 	}
-}
-
-func TestAutoMemoryWorker_PreserveHistoryStalePendingBatchHonorsChecker(t *testing.T) {
-	checkerCalls := 0
-	mdl, ext := newCountingAddExtractor(
-		t,
-		extractor.UpdatePolicyPreserveHistory,
-		"User likes coffee.",
-		func(*extractor.ExtractionContext) bool {
-			checkerCalls++
-			return false
-		},
-	)
-	operator := newMockOperator()
-	worker := NewAutoMemoryWorker(AutoMemoryConfig{Extractor: ext}, operator)
-	sess := newTestSession("app", "u1")
-	watermark := time.Date(2026, 8, 5, 10, 0, 0, 0, time.UTC)
-	writeLastExtractAt(sess, watermark)
-	appendSessionMessage(sess, watermark.Add(time.Minute), model.NewUserMessage("I like coffee."))
-	require.NoError(t, persistPendingAutoMemoryBatch(
-		context.Background(), sess, &pendingAutoMemoryBatch{
-			Version:  pendingAutoMemoryBatchVersion,
-			LatestTs: watermark,
-			Operations: []*extractor.Operation{{
-				Type:   extractor.OperationAdd,
-				Memory: "stale operation",
-			}},
-		},
-	))
-
-	require.NoError(t, worker.EnqueueJob(context.Background(), sess))
-	assert.Equal(t, 1, checkerCalls)
-	assert.Zero(t, mdl.calls)
-	assert.Zero(t, operator.addCalls)
-	assert.True(t, readLastExtractAt(sess).Equal(watermark))
-	_, ok := sess.GetState(pendingAutoMemoryBatchStateKey)
-	assert.False(t, ok)
-}
-
-func TestProcessAutoMemoryDelta_HandlesPreparationOutcomes(t *testing.T) {
-	userKey := reconcileUserKey()
-	latestTime := time.Date(2026, 8, 5, 10, 0, 0, 0, time.UTC)
-	messages := []model.Message{model.NewUserMessage("I like tea.")}
-
-	t.Run("pending state error", func(t *testing.T) {
-		_, ext := newCountingAddExtractor(
-			t, extractor.UpdatePolicyPreserveHistory, "User likes tea.", nil,
-		)
-		worker := NewAutoMemoryWorker(AutoMemoryConfig{Extractor: ext}, newMockOperator())
-		sess := newTestSession("app", "u1")
-		sess.SetState(pendingAutoMemoryBatchStateKey, []byte(`{`))
-		err := worker.processAutoMemoryDelta(
-			context.Background(), userKey, sess, latestTime, messages,
-		)
-		assert.ErrorContains(t, err, "decode pending operation batch")
-	})
-
-	t.Run("extract error", func(t *testing.T) {
-		ext := extractor.NewExtractor(
-			&mockModel{err: assert.AnError},
-			extractor.WithUpdatePolicy(extractor.UpdatePolicyPreserveHistory),
-		)
-		worker := NewAutoMemoryWorker(AutoMemoryConfig{Extractor: ext}, newMockOperator())
-		sess := newTestSession("app", "u1")
-		appendSessionMessage(sess, latestTime, messages[0])
-		err := worker.processAutoMemoryDelta(
-			context.Background(), userKey, sess, latestTime, messages,
-		)
-		assert.ErrorIs(t, err, assert.AnError)
-	})
-
-	t.Run("empty operation batch", func(t *testing.T) {
-		ext := extractor.NewExtractor(
-			newMockModelWithToolCalls(nil),
-			extractor.WithUpdatePolicy(extractor.UpdatePolicyPreserveHistory),
-		)
-		worker := NewAutoMemoryWorker(AutoMemoryConfig{Extractor: ext}, newMockOperator())
-		sess := newTestSession("app", "u1")
-		appendSessionMessage(sess, latestTime, messages[0])
-		require.NoError(t, worker.processAutoMemoryDelta(
-			context.Background(), userKey, sess, latestTime, messages,
-		))
-		assert.True(t, readLastExtractAt(sess).Equal(latestTime))
-		_, ok := sess.GetState(pendingAutoMemoryBatchStateKey)
-		assert.False(t, ok)
-	})
-}
-
-func TestExecuteAutoMemoryOperations_NonDefaultPolicyReturnsError(t *testing.T) {
-	operator := newMockOperator()
-	operator.addErr = assert.AnError
-	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, operator)
-	err := worker.executeAutoMemoryOperations(
-		context.Background(),
-		reconcileUserKey(),
-		[]*extractor.Operation{{
-			Type:   extractor.OperationAdd,
-			Memory: "User likes tea.",
-		}},
-		extractor.UpdatePolicyPreserveHistory,
-	)
-	assert.ErrorIs(t, err, assert.AnError)
-}
-
-func TestPersistPendingAutoMemoryBatch_RejectsUnencodableOperation(t *testing.T) {
-	sess := newTestSession("app", "u1")
-	invalidTime := time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)
-	err := persistPendingAutoMemoryBatch(context.Background(), sess, &pendingAutoMemoryBatch{
-		Version:  pendingAutoMemoryBatchVersion,
-		LatestTs: time.Date(2026, 8, 5, 10, 0, 0, 0, time.UTC),
-		Operations: []*extractor.Operation{{
-			Type:      extractor.OperationAdd,
-			Memory:    "User likes tea.",
-			EventTime: &invalidTime,
-		}},
-	})
-	assert.ErrorContains(t, err, "encode pending operation batch")
-}
-
-func TestExecutePendingAutoMemoryBatch_ReturnsCheckpointError(t *testing.T) {
-	operator := newMockOperator()
-	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, operator)
-	sess := newTestSession("app", "u1")
-	invalidTime := time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)
-	pending := &pendingAutoMemoryBatch{
-		Version:  pendingAutoMemoryBatchVersion,
-		LatestTs: time.Date(2026, 8, 5, 10, 0, 0, 0, time.UTC),
-		Operations: []*extractor.Operation{{
-			Type:      extractor.OperationAdd,
-			Memory:    "User likes tea.",
-			EventTime: &invalidTime,
-		}},
-	}
-
-	err := worker.executePendingAutoMemoryBatch(
-		context.Background(), reconcileUserKey(), sess, pending,
-	)
-	assert.ErrorContains(t, err, "encode pending operation batch")
-	assert.Equal(t, 1, operator.addCalls)
-	assert.Equal(t, 1, pending.Next)
 }

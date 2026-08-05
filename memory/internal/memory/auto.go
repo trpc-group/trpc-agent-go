@@ -18,7 +18,6 @@ import (
 	"sync"
 	"time"
 
-	"trpc.group/trpc-go/trpc-agent-go/internal/state/sessionstate"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
@@ -31,7 +30,6 @@ const (
 	DefaultAsyncMemoryNum   = 1
 	DefaultMemoryQueueSize  = 10
 	DefaultMemoryJobTimeout = 30 * time.Second
-	autoMemoryUserLockCount = 64
 
 	memoryNotFoundErrSubstr = "memory with id"
 	memoryNotFoundErrMarker = "not found"
@@ -195,13 +193,13 @@ type MemoryOperator interface {
 
 // AutoMemoryWorker manages async memory extraction workers.
 type AutoMemoryWorker struct {
-	config   AutoMemoryConfig
-	operator MemoryOperator
-	jobChans []chan *MemoryJob
-	userLock [autoMemoryUserLockCount]sync.Mutex
-	wg       sync.WaitGroup
-	mu       sync.RWMutex
-	started  bool
+	config       AutoMemoryConfig
+	operator     MemoryOperator
+	updatePolicy extractor.UpdatePolicy
+	jobChans     []chan *MemoryJob
+	wg           sync.WaitGroup
+	mu           sync.RWMutex
+	started      bool
 }
 
 // NewAutoMemoryWorker creates a new auto memory worker.
@@ -213,8 +211,9 @@ func NewAutoMemoryWorker(
 ) *AutoMemoryWorker {
 	config.EnabledTools = maps.Clone(config.EnabledTools)
 	return &AutoMemoryWorker{
-		config:   config,
-		operator: operator,
+		config:       config,
+		operator:     operator,
+		updatePolicy: updatePolicyFor(config.Extractor),
 	}
 }
 
@@ -287,20 +286,9 @@ func (w *AutoMemoryWorker) EnqueueJob(ctx context.Context, sess *session.Session
 		return nil
 	}
 
-	policy := updatePolicyFor(w.config.Extractor)
 	since := readLastExtractAt(sess)
 	latestTs, messages := scanDeltaSince(sess, since)
-	hasPendingBatch := false
-	if policy != extractor.UpdatePolicyMergeSimilar {
-		pending, err := readPendingAutoMemoryBatch(sess)
-		if err != nil {
-			return err
-		}
-		hasPendingBatch = pending != nil
-	}
-	_, hasPersistentSession := sessionstate.ServiceFromContext(ctx)
-	if len(messages) == 0 && !hasPendingBatch &&
-		(policy == extractor.UpdatePolicyMergeSimilar || !hasPersistentSession) {
+	if len(messages) == 0 {
 		log.DebugfContext(ctx, "auto_memory: skipped due to no new messages for user %s/%s",
 			userKey.AppName, userKey.UserID)
 		return nil
@@ -317,8 +305,7 @@ func (w *AutoMemoryWorker) EnqueueJob(ctx context.Context, sess *session.Session
 		LastExtractAt: lastExtractAtPtr,
 	}
 
-	if policy == extractor.UpdatePolicyMergeSimilar &&
-		!w.config.Extractor.ShouldExtract(extractCtx) {
+	if !w.config.Extractor.ShouldExtract(extractCtx) {
 		log.DebugfContext(ctx, "auto_memory: skipped by checker for user %s/%s",
 			userKey.AppName, userKey.UserID)
 		return nil
@@ -347,11 +334,10 @@ func (w *AutoMemoryWorker) EnqueueJob(ctx context.Context, sess *session.Session
 	}
 	syncCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
 	defer cancel()
-	if err := w.processAutoMemoryDelta(
-		syncCtx, userKey, sess, latestTs, messages,
-	); err != nil {
+	if err := w.createAutoMemory(syncCtx, userKey, messages); err != nil {
 		return err
 	}
+	writeLastExtractAt(sess, latestTs)
 	return nil
 }
 
@@ -407,13 +393,12 @@ func (w *AutoMemoryWorker) processJob(job *MemoryJob) {
 	ctx, cancel = context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	if err := w.processAutoMemoryDelta(
-		ctx, job.UserKey, job.Session, job.LatestTs, job.Messages,
-	); err != nil {
+	if err := w.createAutoMemory(ctx, job.UserKey, job.Messages); err != nil {
 		log.WarnfContext(ctx, "auto_memory: job failed for user %s/%s: %v",
 			job.UserKey.AppName, job.UserKey.UserID, err)
 		return
 	}
+	writeLastExtractAt(job.Session, job.LatestTs)
 }
 
 func (w *AutoMemoryWorker) shouldSkipSession(sess *session.Session) bool {
@@ -434,9 +419,8 @@ func (w *AutoMemoryWorker) createAutoMemory(
 	if err != nil {
 		return err
 	}
-	return w.executeAutoMemoryOperations(
-		ctx, userKey, ops, updatePolicyFor(w.config.Extractor),
-	)
+	w.executeAutoMemoryOperations(ctx, userKey, ops)
+	return nil
 }
 
 func (w *AutoMemoryWorker) prepareAutoMemoryOperations(
@@ -475,23 +459,18 @@ func (w *AutoMemoryWorker) executeAutoMemoryOperations(
 	ctx context.Context,
 	userKey memory.UserKey,
 	ops []*extractor.Operation,
-	updatePolicy extractor.UpdatePolicy,
-) error {
+) {
 	for _, op := range ops {
 		if err := w.executeOperation(ctx, userKey, op); err != nil {
-			// Preserve the historical best-effort behavior for existing users.
-			if updatePolicy == extractor.UpdatePolicyMergeSimilar {
-				log.WarnfContext(ctx,
-					"auto_memory: merge_similar operation failed for user %s/%s: %v",
-					userKey.AppName, userKey.UserID, err,
-				)
-				continue
-			}
-			return err
+			// Memory writes have historically been best effort. Keep that
+			// contract for every policy so a permanent backend error cannot
+			// block later session events behind an uncommittable operation.
+			log.WarnfContext(ctx,
+				"auto_memory: operation failed for user %s/%s: %v",
+				userKey.AppName, userKey.UserID, err,
+			)
 		}
 	}
-
-	return nil
 }
 
 // searchRelevantMemories builds a query from the conversation messages

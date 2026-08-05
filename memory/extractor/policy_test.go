@@ -21,8 +21,6 @@ import (
 func TestExtractorUpdatePolicy_DefaultsToMergeSimilar(t *testing.T) {
 	ext := NewExtractor(nil).(*memoryExtractor)
 	assert.Equal(t, UpdatePolicyMergeSimilar, ext.configuredUpdatePolicy())
-	assert.Equal(t, UpdatePolicyMergeSimilar, ConfiguredUpdatePolicy(ext))
-	assert.Equal(t, UpdatePolicyMergeSimilar, ConfiguredUpdatePolicy(nil))
 	assert.NotContains(t, ext.Metadata(), metadataKeyUpdatePolicy)
 }
 
@@ -38,8 +36,6 @@ func TestExtractorUpdatePolicy_OptIn(t *testing.T) {
 		WithUpdatePolicy(UpdatePolicyPreserveHistory),
 	).(*memoryExtractor)
 	assert.Equal(t, UpdatePolicyPreserveHistory, ext.configuredUpdatePolicy())
-	assert.Equal(t, UpdatePolicyPreserveHistory, ext.UpdatePolicy())
-	assert.Equal(t, UpdatePolicyPreserveHistory, ConfiguredUpdatePolicy(ext))
 	assert.Equal(t, UpdatePolicyPreserveHistory, ext.Metadata()[metadataKeyUpdatePolicy])
 }
 

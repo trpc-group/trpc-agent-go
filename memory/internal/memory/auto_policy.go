@@ -23,8 +23,9 @@ import (
 )
 
 const (
-	preserveHistoryOldCoverage = 0.95
-	preserveHistoryNewCoverage = 0.70
+	preserveHistoryOldCoverage    = 0.95
+	preserveHistoryNewCoverage    = 0.70
+	extractorMetadataUpdatePolicy = "trpc-agent-go/memory-extractor/update-policy"
 )
 
 var (
@@ -100,7 +101,20 @@ type destructiveRequest struct {
 }
 
 func updatePolicyFor(ext extractor.MemoryExtractor) extractor.UpdatePolicy {
-	return extractor.ConfiguredUpdatePolicy(ext)
+	if ext == nil {
+		return extractor.UpdatePolicyMergeSimilar
+	}
+	policy, ok := ext.Metadata()[extractorMetadataUpdatePolicy].(extractor.UpdatePolicy)
+	if !ok {
+		return extractor.UpdatePolicyMergeSimilar
+	}
+	switch policy {
+	case extractor.UpdatePolicyPreserveHistory,
+		extractor.UpdatePolicyAppendOnly:
+		return policy
+	default:
+		return extractor.UpdatePolicyMergeSimilar
+	}
 }
 
 func (w *AutoMemoryWorker) applyUpdatePolicy(
@@ -110,7 +124,7 @@ func (w *AutoMemoryWorker) applyUpdatePolicy(
 	existing []*memory.Entry,
 	messages []model.Message,
 ) []*extractor.Operation {
-	switch updatePolicyFor(w.config.Extractor) {
+	switch w.updatePolicy {
 	case extractor.UpdatePolicyPreserveHistory:
 		return w.reconcilePreserveHistoryOps(ctx, userKey, ops, existing, messages)
 	case extractor.UpdatePolicyAppendOnly:

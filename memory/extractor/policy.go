@@ -33,29 +33,6 @@ func WithUpdatePolicy(policy UpdatePolicy) Option {
 	}
 }
 
-type updatePolicyProvider interface {
-	configuredUpdatePolicy() UpdatePolicy
-}
-
-// ConfiguredUpdatePolicy returns the update policy configured on the built-in
-// extractor. Custom extractor implementations always use Merge Similar because
-// the policy also controls the built-in prompt and tool surface.
-func ConfiguredUpdatePolicy(ext MemoryExtractor) UpdatePolicy {
-	provider, ok := ext.(updatePolicyProvider)
-	if !ok {
-		return UpdatePolicyMergeSimilar
-	}
-	return normalizeUpdatePolicy(provider.configuredUpdatePolicy())
-}
-
-// UpdatePolicy returns the extractor's configured auto-memory update policy.
-// It is retained for callers that inspect the built-in extractor through a
-// capability interface; the auto-memory worker uses the private capability
-// above so custom extractors cannot accidentally opt in to built-in behavior.
-func (e *memoryExtractor) UpdatePolicy() UpdatePolicy {
-	return e.configuredUpdatePolicy()
-}
-
 func (e *memoryExtractor) configuredUpdatePolicy() UpdatePolicy {
 	return normalizeUpdatePolicy(e.updatePolicy)
 }
