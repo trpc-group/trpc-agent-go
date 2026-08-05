@@ -265,13 +265,23 @@ func (t *NamedTool) Original() tool.Tool {
 }
 
 // ToolMetadata delegates to the original tool.
+//
+// ConcurrencySafe is resolved through tool.IsConcurrencySafe rather than read off
+// MetadataOf, because this wrapper publishes metadata on behalf of tools that
+// publish none. MetadataOf cannot tell "published false" from "published
+// nothing", so republishing its zero value would turn every plain tool in a
+// toolset into one that actively declares itself unsafe — and take the whole
+// turn it appears in off the parallel path.
 func (t *NamedTool) ToolMetadata() tool.ToolMetadata {
-	return tool.MetadataOf(t.original)
+	metadata := tool.MetadataOf(t.original)
+	metadata.ConcurrencySafe = tool.IsConcurrencySafe(t.original)
+	return metadata
 }
 
-// IsConcurrencySafe delegates to the original tool.
+// IsConcurrencySafe delegates to the original tool, preserving the default a
+// tool that publishes nothing is entitled to.
 func (t *NamedTool) IsConcurrencySafe() bool {
-	return tool.MetadataOf(t.original).ConcurrencySafe
+	return tool.IsConcurrencySafe(t.original)
 }
 
 // ShouldDefer delegates to the original tool.

@@ -372,7 +372,12 @@ func (t *renamedTool) SkipSummarization() bool {
 
 // ToolMetadata delegates to the original tool.
 func (t *renamedTool) ToolMetadata() tool.ToolMetadata {
-	return tool.MetadataOf(t.original)
+	// ConcurrencySafe goes through IsConcurrencySafe so wrapping a tool that
+	// publishes no metadata does not republish the zero value as a declaration
+	// that it is unsafe. See NamedTool.ToolMetadata.
+	metadata := tool.MetadataOf(t.original)
+	metadata.ConcurrencySafe = tool.IsConcurrencySafe(t.original)
+	return metadata
 }
 
 // StreamableCall delegates to the original streamable tool.
