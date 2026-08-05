@@ -14,16 +14,20 @@ import (
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 func processParallelTools(req *model.Request) {
-	NewParallelToolsRequestProcessor().ProcessRequest(
+	annotateParallelTools(req, tool.ConcurrencyConfig{})
+}
+
+func annotateParallelTools(req *model.Request, concurrency tool.ConcurrencyConfig) {
+	NewToolBatchingNotice(concurrency).Annotate(
 		context.Background(),
 		&agent.Invocation{},
 		req,
-		nil,
 	)
 }
 
@@ -39,10 +43,11 @@ func TestParallelToolsNamesExclusiveTools(t *testing.T) {
 	req := &model.Request{
 		Messages: []model.Message{model.NewSystemMessage("base")},
 		Tools: map[string]tool.Tool{
-			"read":  safeStubTool{name: "read"},
-			"grep":  safeStubTool{name: "grep"},
-			"agent": unsafeStubTool{name: "agent"},
-			"write": metadataStubTool{name: "write", safe: false},
+			"read":     safeStubTool{name: "read"},
+			"grep":     safeStubTool{name: "grep"},
+			"transfer": unsafeStubTool{name: "transfer"},
+			"await":    unsafeStubTool{name: "await"},
+			"write":    metadataStubTool{name: "write", safe: false},
 		},
 	}
 	processParallelTools(req)
@@ -51,15 +56,21 @@ func TestParallelToolsNamesExclusiveTools(t *testing.T) {
 	if !strings.HasPrefix(got, "base\n\n") {
 		t.Fatalf("the existing system message must be preserved, got %q", got)
 	}
-	for _, want := range []string{"`agent`", "`write`"} {
+	for _, want := range []string{"`await`", "`transfer`"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("note must name %s, got %q", want, got)
 		}
 	}
 	for _, unwanted := range []string{"`read`", "`grep`"} {
 		if strings.Contains(got, unwanted) {
-			t.Errorf("note must not name the safe tool %s, got %q", unwanted, got)
+			t.Errorf("note must not name the admissible tool %s, got %q", unwanted, got)
 		}
+	}
+	// Metadata is descriptive and never objects, so a tool that merely publishes
+	// ConcurrencySafe: false is not an exception the model needs to hear about —
+	// the scheduler will batch it. Naming it would restrict the model for nothing.
+	if strings.Contains(got, "`write`") {
+		t.Errorf("note must not name a tool that only publishes metadata, got %q", got)
 	}
 }
 
@@ -154,4 +165,100 @@ func TestParallelToolsCreatesSystemMessage(t *testing.T) {
 
 func TestParallelToolsNilRequest(t *testing.T) {
 	processParallelTools(nil)
+}
+
+// The notice must describe the concurrency this run actually grants.
+//
+// Run-scoped tool concurrency limits can withhold parallelism the scheduler would
+// otherwise allow, so an unconditional promise that a turn's calls run
+// concurrently is not generally true.
+func TestParallelToolsReflectsConcurrencyLimits(t *testing.T) {
+	newRequest := func() *model.Request {
+		return &model.Request{
+			Messages: []model.Message{model.NewSystemMessage("base")},
+			Tools: map[string]tool.Tool{
+				"read":  safeStubTool{name: "read"},
+				"agent": unsafeStubTool{name: "agent"},
+			},
+		}
+	}
+
+	t.Run("no limits promise concurrency outright", func(t *testing.T) {
+		req := newRequest()
+		annotateParallelTools(req, tool.ConcurrencyConfig{})
+		got := systemContent(req)
+		if !strings.Contains(got, noticeRunsConcurrently) {
+			t.Errorf("an unlimited run should state calls run concurrently, got %q", got)
+		}
+		if strings.Contains(got, noticeMayRunLimited) {
+			t.Errorf("an unlimited run must not mention limits, got %q", got)
+		}
+	})
+
+	t.Run("an overall limit softens the claim", func(t *testing.T) {
+		req := newRequest()
+		annotateParallelTools(req, tool.ConcurrencyConfig{MaxConcurrency: 2})
+		got := systemContent(req)
+		if !strings.Contains(got, noticeMayRunLimited) {
+			t.Errorf("a limited run must not promise concurrency outright, got %q", got)
+		}
+		if !strings.Contains(got, "`agent`") {
+			t.Errorf("the exclusive tool must still be named, got %q", got)
+		}
+	})
+
+	t.Run("a group limit softens the claim", func(t *testing.T) {
+		req := newRequest()
+		annotateParallelTools(req, tool.ConcurrencyConfig{
+			Groups: []tool.ConcurrencyGroup{{ToolNames: []string{"read"}, Limit: 1}},
+		})
+		if got := systemContent(req); !strings.Contains(got, noticeMayRunLimited) {
+			t.Errorf("a grouped run must not promise concurrency outright, got %q", got)
+		}
+	})
+
+	// With an overall limit of one, nothing in the run ever runs beside anything
+	// else. There is no parallelism for an exclusive tool to cost, so describing
+	// the exception would only advertise a capability every tool is denied.
+	t.Run("an overall limit of one says nothing", func(t *testing.T) {
+		req := newRequest()
+		annotateParallelTools(req, tool.ConcurrencyConfig{MaxConcurrency: 1})
+		if got := systemContent(req); got != "base" {
+			t.Errorf("expected an untouched prompt, got %q", got)
+		}
+	})
+
+	// A group whose limit is zero is ignored by the limiter, so it must not change
+	// the wording either.
+	t.Run("an inert group is ignored", func(t *testing.T) {
+		req := newRequest()
+		annotateParallelTools(req, tool.ConcurrencyConfig{
+			Groups: []tool.ConcurrencyGroup{{ToolNames: []string{"read"}}, {Limit: 3}},
+		})
+		if got := systemContent(req); !strings.Contains(got, noticeRunsConcurrently) {
+			t.Errorf("an inert group must leave the wording unchanged, got %q", got)
+		}
+	})
+}
+
+// A declaration overlay hides the wrapped tool's optional interfaces, so the
+// notice has to resolve the objection through tool.IsConcurrencySafe rather than
+// type-asserting the wrapper it is handed.
+func TestParallelToolsSeesThroughDeclarationOverlays(t *testing.T) {
+	patched := itool.ApplyDeclarations(
+		[]tool.Tool{unsafeStubTool{name: "agent"}},
+		[]tool.Declaration{{Name: "agent", Description: "patched by a host surface"}},
+	)[0]
+	req := &model.Request{
+		Messages: []model.Message{model.NewSystemMessage("base")},
+		Tools: map[string]tool.Tool{
+			"read":  safeStubTool{name: "read"},
+			"agent": patched,
+		},
+	}
+	processParallelTools(req)
+
+	if got := systemContent(req); !strings.Contains(got, "`agent`") {
+		t.Errorf("a patched declaration must not hide the tool from the notice, got %q", got)
+	}
 }
