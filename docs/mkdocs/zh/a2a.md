@@ -119,13 +119,23 @@ server, _ := a2aserver.New(
 
 ```go
 import (
+	"context"
+	"net/http"
+	"net/http/cookiejar"
+
+	"trpc.group/trpc-go/trpc-agent-go/agent/a2aagent"
 	"trpc.group/trpc-go/trpc-a2a-go/client"
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 )
 
 func main() {
-	// 连接到 A2A 服务
-	client, _ := client.NewA2AClient("http://localhost:8080/")
+	jar, _ := cookiejar.New(nil)
+	httpClient := &http.Client{Jar: jar}
+	// 该 helper 会持久化匿名 Cookie，并在 principal 建立前串行化同一 client 的首次并发请求。
+	a2aClient, _ := a2aagent.NewAnonymousA2AClient(
+		"http://localhost:8080/",
+		client.WithHTTPClient(httpClient),
+	)
 
 	// 发送消息给 Agent
 	message := protocol.NewMessage(
@@ -134,10 +144,29 @@ func main() {
 	)
 
 	// Agent 会自动处理并返回结果
-	response, _ := client.SendMessage(context.Background(),
+	response, _ := a2aClient.SendMessage(context.Background(),
 		protocol.SendMessageParams{Message: message})
 }
 ```
+
+匿名直连 client 应复用同一个 client 和 Cookie Jar。`NewAnonymousA2AClient`
+会在服务端建立匿名 principal 期间，串行化该 client 发出的首次请求。
+这个保证只覆盖单个 client 实例；不同 client 需要自行协调。匿名直连 client
+会在 Cookie Jar 中遵循 anonymous `Set-Cookie` 的 Path、Domain、过期和删除指令。
+它不会接入 `SessionService`，也不负责持久化 session state。
+应先完成一次初始请求，再开始并发匿名消息发送，或者提供可信用户身份。
+
+#### 匿名 Principal 行为
+
+当请求没有通过配置的 UserID header（默认是 `X-User-ID`）提供非空身份时，
+内置 A2A Server 认证会生成带有 `A2A_ANONYMOUS_` 前缀的随机 principal。
+服务端通过 HTTP-only Cookie `trpc_agent_a2a_anon` 返回该 principal，并利用
+这个 Cookie 维持后续请求的匿名身份连续性。A2A `contextID` 仍然用于标识
+session，不再作为 principal 的来源。
+
+需要保持连续性的客户端必须复用 Cookie Jar；不保留 Cookie 的客户端或独立请求，
+每次都可能获得新的匿名 principal。请求携带非空 UserID header 时，服务端使用
+header 中的身份，不走匿名 Cookie 流程。
 
 ### 高级配置
 
@@ -928,7 +957,8 @@ subAgent, _ := a2aagent.New(
 | `WithErrorHandler(handler)` | 自定义错误处理 |
 | `WithA2AToAgentConverter(conv)` | 自定义 A2A→Agent 消息转换 |
 | `WithEventToA2AConverter(conv)` | 自定义 Event→A2A 消息转换 |
-| `WithExtraA2AOptions(opts...)` | 透传底层 A2A Server 选项 |
+| `WithExtraA2AOptions(opts...)` | 透传底层 A2A Server 选项；其中 middleware 可读取最终认证用户。自定义认证 provider 必须返回非空 UserID，空身份会被拒绝 |
+| `WithPreAuthA2AMiddleware(middlewares...)` | 添加必须在匿名 Cookie 认证前执行的请求 middleware |
 | `WithDebugLogging(enabled)` | 开启调试日志 |
 
 ### A2AAgent 完整配置项一览

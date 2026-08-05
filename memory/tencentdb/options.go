@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -26,6 +27,7 @@ const (
 	defaultIngestWorkers    = 1
 	defaultIngestQueueSize  = 10
 	defaultIngestJobTimeout = 30 * time.Second
+	defaultCompactionRatio  = 0.5
 )
 
 // SessionKeyFunc maps a framework session to the TencentDB Agent Memory
@@ -34,19 +36,36 @@ const (
 type SessionKeyFunc func(*session.Session) string
 
 // ContextOffloadConfig configures the optional TencentDB Agent Memory context
-// offload gateway integration. Zero values reuse the Service gateway settings.
+// offload v2 integration. GatewayURL and APIKey reuse the Service settings when
+// empty; ServiceID is required when Enabled is true.
 type ContextOffloadConfig struct {
-	// Enabled controls whether ContextOffloadPlugin and companion tools are
+	// Enabled controls whether ContextOffloadPlugin and its companion tool are
 	// active.
 	Enabled bool
 
 	// GatewayURL optionally overrides Service.GatewayURL for context offload
-	// hook and drill-down tool calls. Empty reuses Service.GatewayURL.
+	// API calls. Empty reuses Service.GatewayURL.
 	GatewayURL string
 
 	// APIKey optionally overrides Service.APIKey for context offload calls.
 	// Empty reuses Service.APIKey.
 	APIKey string
+
+	// ServiceID identifies the TencentDB Agent Memory service instance used by
+	// the v2 offload API. It is required when Enabled is true.
+	ServiceID string
+
+	// CompactionRatio is the context-window utilization at which the plugin
+	// asks the gateway to compact model messages. Zero selects the default 0.5;
+	// non-zero values must be in (0, 2].
+	CompactionRatio float64
+
+	// TokenCounter estimates per-message tokens for the local CompactionRatio
+	// trigger and for gateway request metadata. Nil uses
+	// model.NewSimpleTokenCounter. If counting fails or returns a negative
+	// value, the plugin retries token counting with the simple counter for that
+	// model call.
+	TokenCounter model.TokenCounter
 }
 
 // Options configures Service.
@@ -101,12 +120,18 @@ func defaultOptions() Options {
 }
 
 func defaultContextOffloadConfig() ContextOffloadConfig {
-	return ContextOffloadConfig{}
+	return ContextOffloadConfig{
+		CompactionRatio: defaultCompactionRatio,
+	}
 }
 
 func normalizeContextOffloadConfig(cfg ContextOffloadConfig) ContextOffloadConfig {
 	cfg.GatewayURL = strings.TrimRight(strings.TrimSpace(cfg.GatewayURL), "/")
 	cfg.APIKey = strings.TrimSpace(cfg.APIKey)
+	cfg.ServiceID = strings.TrimSpace(cfg.ServiceID)
+	if cfg.CompactionRatio == 0 {
+		cfg.CompactionRatio = defaultCompactionRatio
+	}
 	return cfg
 }
 
@@ -248,9 +273,9 @@ func WithToolPrefix(prefix string) Option {
 }
 
 // WithContextOffload configures the explicit TencentDB Agent Memory context
-// offload gateway integration and companion drill-down tools. It is disabled
-// by default; set ContextOffloadConfig.Enabled to true before registering
-// ContextOffloadPlugin.
+// offload v2 integration and its result-reference reader tool. It is disabled
+// by default. When enabling it, configure ContextOffloadConfig.ServiceID and
+// an API key before registering ContextOffloadPlugin.
 func WithContextOffload(cfg ContextOffloadConfig) Option {
 	return func(o *Options) {
 		o.ContextOffload = normalizeContextOffloadConfig(cfg)

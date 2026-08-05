@@ -368,6 +368,26 @@ func (a *LLMAgent) handleToolActivationPostToolResult(
 	}
 }
 
+func (a *LLMAgent) activatePreparedSkillLoads(
+	inv *agent.Invocation,
+	loads []skill.LoadRequest,
+) {
+	if inv == nil || len(loads) == 0 {
+		return
+	}
+	loaded := make(map[string]bool, len(loads))
+	for _, load := range loads {
+		loaded[load.Name] = true
+	}
+	records := a.activationRecordsForLoadedSkills(loaded)
+	if len(records) == 0 {
+		return
+	}
+	if addInvocationToolActivationRecords(inv, records) {
+		toolsnapshot.Invalidate(inv)
+	}
+}
+
 func loadedSkillsFromStateDelta(
 	agentName string,
 	delta map[string][]byte,

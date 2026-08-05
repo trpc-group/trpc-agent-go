@@ -4476,6 +4476,7 @@ func TestContentRequestProcessor_getIncrementMessages_RestoresUserAcrossSummaryC
 		events    []event.Event
 		cutoff    summaryHistoryCutoff
 		configure func(*agent.Invocation)
+		projector EventMessageProjector
 		wantRole  []model.Role
 		wantText  []string
 	}{
@@ -4536,6 +4537,65 @@ func TestContentRequestProcessor_getIncrementMessages_RestoresUserAcrossSummaryC
 			wantText: []string{"question", "answer"},
 		},
 		{
+			name: "retained system prefix does not suppress user restoration",
+			events: []event.Event{
+				messageEvent(
+					"user",
+					"request-1",
+					"invocation-1",
+					baseTime,
+					model.NewUserMessage("question"),
+				),
+				messageEvent(
+					"system",
+					"request-1",
+					"invocation-1",
+					baseTime.Add(2*time.Second),
+					model.NewSystemMessage("system context"),
+				),
+				messageEvent(
+					"assistant",
+					"request-1",
+					"invocation-1",
+					baseTime.Add(3*time.Second),
+					model.NewAssistantMessage("answer"),
+				),
+			},
+			cutoff: summaryHistoryCutoffFromTime(
+				baseTime.Add(time.Second),
+			),
+			wantRole: []model.Role{
+				model.RoleSystem,
+				model.RoleUser,
+				model.RoleAssistant,
+			},
+			wantText: []string{"system context", "question", "answer"},
+		},
+		{
+			name: "empty role payload restores user-like anchor",
+			events: []event.Event{
+				messageEvent(
+					"user",
+					"request-1",
+					"invocation-1",
+					baseTime,
+					model.Message{Content: "question"},
+				),
+				messageEvent(
+					"assistant",
+					"request-1",
+					"invocation-1",
+					baseTime.Add(2*time.Second),
+					model.NewAssistantMessage("answer"),
+				),
+			},
+			cutoff: summaryHistoryCutoffFromTime(
+				baseTime.Add(time.Second),
+			),
+			wantRole: []model.Role{"", model.RoleAssistant},
+			wantText: []string{"question", "answer"},
+		},
+		{
 			name: "retained user already anchors turn",
 			events: []event.Event{
 				messageEvent(
@@ -4589,6 +4649,110 @@ func TestContentRequestProcessor_getIncrementMessages_RestoresUserAcrossSummaryC
 			),
 			wantRole: []model.Role{model.RoleAssistant},
 			wantText: []string{"answer"},
+		},
+		{
+			name: "missing request identifier restores by invocation",
+			events: []event.Event{
+				messageEvent(
+					"legacy-user",
+					"",
+					"invocation-1",
+					baseTime,
+					model.NewUserMessage("legacy question"),
+				),
+				messageEvent(
+					"legacy-assistant",
+					"",
+					"invocation-1",
+					baseTime.Add(2*time.Second),
+					model.NewAssistantMessage("answer"),
+				),
+			},
+			cutoff: summaryHistoryCutoffFromTime(
+				baseTime.Add(time.Second),
+			),
+			wantRole: []model.Role{model.RoleUser, model.RoleAssistant},
+			wantText: []string{"legacy question", "answer"},
+		},
+		{
+			name: "missing request identifier keeps invocations isolated",
+			events: []event.Event{
+				messageEvent(
+					"legacy-user",
+					"",
+					"invocation-1",
+					baseTime,
+					model.NewUserMessage("unrelated question"),
+				),
+				messageEvent(
+					"legacy-assistant",
+					"",
+					"invocation-2",
+					baseTime.Add(2*time.Second),
+					model.NewAssistantMessage("answer"),
+				),
+			},
+			cutoff: summaryHistoryCutoffFromTime(
+				baseTime.Add(time.Second),
+			),
+			wantRole: []model.Role{model.RoleAssistant},
+			wantText: []string{"answer"},
+		},
+		{
+			name: "missing invocation identifier skips restoration",
+			events: []event.Event{
+				messageEvent(
+					"user",
+					"request-1",
+					"",
+					baseTime,
+					model.NewUserMessage("question"),
+				),
+				messageEvent(
+					"assistant",
+					"request-1",
+					"",
+					baseTime.Add(2*time.Second),
+					model.NewAssistantMessage("answer"),
+				),
+			},
+			cutoff: summaryHistoryCutoffFromTime(
+				baseTime.Add(time.Second),
+			),
+			wantRole: []model.Role{model.RoleAssistant},
+			wantText: []string{"answer"},
+		},
+		{
+			name: "projected away tail does not restore covered user",
+			events: []event.Event{
+				messageEvent(
+					"user",
+					"request-1",
+					"invocation-1",
+					baseTime,
+					model.NewUserMessage("question"),
+				),
+				messageEvent(
+					"assistant",
+					"request-1",
+					"invocation-1",
+					baseTime.Add(2*time.Second),
+					model.NewAssistantMessage("answer"),
+				),
+			},
+			cutoff: summaryHistoryCutoffFromTime(
+				baseTime.Add(time.Second),
+			),
+			projector: func(
+				_ *agent.Invocation,
+				_ event.Event,
+				msg model.Message,
+			) model.Message {
+				if msg.Role == model.RoleAssistant {
+					msg.Content = ""
+				}
+				return msg
+			},
 		},
 		{
 			name: "seed history user is not restored",
@@ -4660,7 +4824,10 @@ func TestContentRequestProcessor_getIncrementMessages_RestoresUserAcrossSummaryC
 			if tt.configure != nil {
 				tt.configure(inv)
 			}
-			p := NewContentRequestProcessor(WithAddSessionSummary(true))
+			p := NewContentRequestProcessor(
+				WithAddSessionSummary(true),
+				WithEventMessageProjector(tt.projector),
+			)
 
 			messages := p.getIncrementMessagesAfterCutoff(
 				inv,

@@ -2060,10 +2060,10 @@ memSvc, err := memorytencentdb.NewService(
     // Opt-in cross-session/user reads; enable only for a trusted/isolated gateway.
     memorytencentdb.WithRecallEnabled(true),
     memorytencentdb.WithMemorySearchTool(true),
-    // Optional short-term tool result offload; requires a gateway that supports
-    // /offload/v1/hooks/* and /offload/v1/tools/*.
+    // Optional short-term context offload through the gateway v2 API.
     // memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{
-    //     Enabled: true,
+    //     Enabled:   true,
+    //     ServiceID: os.Getenv("TDAI_SERVICE_ID"),
     // }),
     // memorytencentdb.WithAPIKey(os.Getenv("TDAI_GATEWAY_API_KEY")),
 )
@@ -2100,27 +2100,28 @@ defer r.Close()
 - Use `runner.WithPlugins(memSvc.Plugin())` to enable automatic `/recall`
   before model calls
 - Use `runner.WithPlugins(memSvc.ContextOffloadPlugin())` only when
-  `WithContextOffload(memorytencentdb.ContextOffloadConfig{Enabled: true})` is
-  set and you want short-term tool result offload. Companion tools
-  `tdai_read_offload_ref`,
-  `tdai_read_offload_node`, and `tdai_search_offload_index` are exposed
-  through `memSvc.Tools()` when enabled.
+  `WithContextOffload(...)` is enabled and you want short-term context
+  offload. The companion `tdai_read_offload_ref` tool is exposed through
+  `memSvc.Tools()` when enabled.
 - Do **not** use `runner.WithMemoryService(...)` with this integration
 
 ### Enable Context Offload
 
-Context offload is a separate, opt-in path for large tool results. Use it only
-with a TencentDB Agent Memory gateway build that exposes the offload routes
-listed in the notes below. The Go adapter does not provide local storage,
-summarization models, or local/backend/collect modes.
+Context offload is a separate, opt-in integration with TencentDB Agent Memory's
+v2 offload API. It sends tool results to the gateway for asynchronous
+processing, asks the gateway to compact model context when the configured
+utilization threshold is reached, and exposes one tool for bounded recovery of
+archived results.
 
 Minimal setup:
 
 ```go
 memSvc, err := memorytencentdb.NewService(
     memorytencentdb.WithGatewayURL(gatewayURL),
+    memorytencentdb.WithAPIKey(os.Getenv("TDAI_GATEWAY_API_KEY")),
     memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{
-        Enabled: true,
+        Enabled:   true,
+        ServiceID: os.Getenv("TDAI_SERVICE_ID"),
     }),
 )
 if err != nil {
@@ -2142,29 +2143,57 @@ r := runner.NewRunner(
 )
 ```
 
-If offload traffic should use a different gateway or key from normal
-capture/search/recall traffic, set `GatewayURL` and `APIKey` on
-`ContextOffloadConfig`:
+The v2 API requires both `Authorization: Bearer <key>` and
+`X-TDAI-Service-Id`. For the standalone upstream gateway, use the conventional
+values `local` and `default`; for a managed service, use the credentials
+assigned to the memory instance.
+
+If offload traffic should use a different gateway or API key from normal
+capture/search/recall traffic, override them on `ContextOffloadConfig`:
 
 ```go
 memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{
     Enabled:    true,
-    GatewayURL: "http://127.0.0.1:8420",
-    APIKey:     os.Getenv("TDAI_OFFLOAD_GATEWAY_API_KEY"),
+    GatewayURL: offloadGatewayURL,
+    APIKey:     os.Getenv("TDAI_OFFLOAD_API_KEY"),
+    ServiceID:  os.Getenv("TDAI_SERVICE_ID"),
 })
 ```
 
 At runtime:
 
-- `ContextOffloadPlugin()` calls the gateway after tool execution. The gateway
-  may replace large tool result messages with compact references or summaries.
-- Before the next model call, the plugin asks the gateway whether the current
-  request should be rewritten with offloaded context.
-- `memSvc.Tools()` exposes `tdai_read_offload_ref`,
-  `tdai_read_offload_node`, and `tdai_search_offload_index` when context
-  offload is enabled, so the model can drill into gateway-owned offload data.
-- Do not configure local directories, local models, or L0-L3 policies in the Go
-  adapter; those concerns belong to TencentDB Agent Memory.
+- After tool execution, `ContextOffloadPlugin()` sends real tool call/result
+  pairs to `POST /v2/offload/ingest`, together with the latest user prompt and
+  bounded recent conversation context. This does not rewrite the current tool
+  result message.
+- Before each model call, the plugin sends an ingest with no tool pairs for
+  L1.5 task judgment. That request still includes the latest user prompt and
+  bounded recent conversation context. The plugin then estimates message
+  tokens and calls
+  `POST /v2/offload/compact` after `CompactionRatio` is reached. Failures are
+  best effort: the original model context is retained.
+- `memSvc.Tools()` exposes only `tdai_read_offload_ref`, backed by
+  `POST /v2/offload/read-ref`. It supports full, query-centered, or line-range
+  recovery, bounded by `max_tokens`.
+- The adapter deliberately limits its integration to the three routes needed
+  by this lifecycle. Storage, summaries, task maps, and offload policy remain
+  gateway responsibilities.
+
+Both ingest paths can send up to 10 recent user or assistant messages after
+filtering, truncated to 400 Unicode code points each. The latest user prompt is
+sent separately and truncated to 500 code points. Tool messages, assistant
+tool-call messages, the duplicated current prompt, and recognized internal
+control messages are omitted from `recent_messages`.
+
+The compaction trigger is evaluated locally. The context window is resolved in
+this order: `agent.WithModelContextWindow(...)` for the current run, the
+model's `Info().ContextWindow` (which providers can expose through options such
+as `WithContextWindow(...)`), a value registered for the model name through
+`model.RegisterModelContextWindow(...)`, and finally 128,000 tokens.
+`TokenCounter` supplies the per-message counts used for both the local
+`CompactionRatio` decision and compact request metadata. If it is nil, or if a
+custom counter fails or returns a negative value, the plugin uses the simple
+token estimator for that model call.
 
 ### Interactive Example
 
@@ -2215,9 +2244,12 @@ modes and does not write local offload state.
 
 | Field | Purpose | Default |
 | ----- | ------- | ------- |
-| `Enabled` | Enable context offload plugin and companion tools. | `false` |
-| `GatewayURL` | Optional gateway URL override for context offload hook/tool calls. Empty reuses `WithGatewayURL`. | none |
-| `APIKey` | Optional API key override for context offload hook/tool calls. Empty reuses `WithAPIKey`. | none |
+| `Enabled` | Enable the context offload plugin and result-reference tool. | `false` |
+| `GatewayURL` | Optional gateway URL override for v2 offload calls. Empty reuses `WithGatewayURL`. | none |
+| `APIKey` | Optional Bearer key override for v2 offload calls. Empty reuses `WithAPIKey`. | none |
+| `ServiceID` | Memory service ID sent as `X-TDAI-Service-Id`; required when enabled. | none |
+| `CompactionRatio` | Context-window utilization that triggers `/v2/offload/compact`; must be in `(0, 2]`. | `0.5` |
+| `TokenCounter` | Optional `model.TokenCounter` used for the local `CompactionRatio` trigger and compact request metadata; failures fall back to the simple estimator. | simple estimator |
 
 ### Notes
 
@@ -2233,17 +2265,16 @@ modes and does not write local offload state.
   searchable.
 - `tdai_conversation_search` searches conversation history and defaults to the
   current gateway `session_key`.
-- Context offload is opt-in and gateway-owned. It does not call `/capture` or
-  `/recall`, and enabling recall alone will not rewrite tool result messages or
-  create Mermaid task maps.
-- The Go adapter calls gateway hook endpoints
-  `/offload/v1/hooks/after-tool-messages` and
-  `/offload/v1/hooks/before-model`. It does not create `.tdai-offload`, local
-  refs, JSONL indexes, Mermaid files, or local state.
-- The offload tools call gateway drill-down endpoints
-  `/offload/v1/tools/read-ref`, `/offload/v1/tools/read-node`, and
-  `/offload/v1/tools/search-index`. Scope validation, storage ACLs, byte
-  limits, and persistence are gateway responsibilities.
+- Context offload is opt-in and gateway-owned. It uses only
+  `/v2/offload/ingest`, `/v2/offload/compact`, and `/v2/offload/read-ref`; it
+  does not call `/capture` or `/recall`.
+- The gateway may replace archived tool results with messages such as
+  "原始工具结果已存档，如需查看完整内容请调用 Offload V2 result_ref 恢复接口".
+  Register `memSvc.Tools()` so the model can satisfy that instruction through
+  `tdai_read_offload_ref`.
+- The adapter does not create local refs, JSONL indexes, Mermaid files, or
+  local offload state. Scope validation, storage ACLs, token limits, and
+  persistence are gateway responsibilities.
 - Call `Close()` on the service so background capture workers shut down cleanly.
 
 ## References
@@ -2253,6 +2284,6 @@ modes and does not write local offload state.
 - [Auto Mode Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory/auto)
 - [mem0 Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory/mem0)
 - [TencentDB Agent Memory Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory/tencentdb)
-- [TencentDB Agent Memory SDK](https://github.com/Tencent/TencentDB-Agent-Memory)
+- [TencentDB Agent Memory SDK](https://github.com/TencentCloud/TencentDB-Agent-Memory)
 - [Ecosystem Guide](https://github.com/trpc-group/trpc-agent-go/blob/main/docs/mkdocs/en/ecosystem.md)
 - [API Documentation](https://pkg.go.dev/trpc.group/trpc-go/trpc-agent-go/memory)

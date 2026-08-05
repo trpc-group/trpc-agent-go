@@ -180,6 +180,39 @@ func WithEnableParallelTools(enable bool) Option {
 	}
 }
 
+// WithToolConcurrencyConfig configures overall and per-group limits for
+// parallel tool execution. Each invocation of the Tools node has independent
+// limits. The configuration only takes effect with
+// WithEnableParallelTools(true).
+// It panics if a tool name appears in more than one positive-limit group.
+func WithToolConcurrencyConfig(config tool.ConcurrencyConfig) Option {
+	if err := toolcall.ValidateConcurrencyConfig(config); err != nil {
+		panic(err)
+	}
+	snapshot := cloneToolConcurrencyConfig(config)
+	return func(node *Node) {
+		node.toolConcurrencyConfig = cloneToolConcurrencyConfig(snapshot)
+	}
+}
+
+func cloneToolConcurrencyConfig(
+	config tool.ConcurrencyConfig,
+) tool.ConcurrencyConfig {
+	cloned := config
+	if config.Groups == nil {
+		return cloned
+	}
+	cloned.Groups = make([]tool.ConcurrencyGroup, len(config.Groups))
+	for i, group := range config.Groups {
+		cloned.Groups[i] = group
+		cloned.Groups[i].ToolNames = append(
+			[]string(nil),
+			group.ToolNames...,
+		)
+	}
+	return cloned
+}
+
 // WithCacheKeyFields sets a cache key selector that derives the cache key
 // input from a subset of fields in the sanitized input map. This helps avoid
 // including unrelated or volatile keys in the cache key.
@@ -2363,6 +2396,12 @@ func newToolsNodeRuntime(
 	configuredRetryPolicy := node.toolCallRetryPolicy
 
 	return func(ctx context.Context, state State) (any, error) {
+		var concurrencyLimiter *toolcall.Limiter
+		if parallel {
+			concurrencyLimiter = toolcall.NewLimiter(
+				node.toolConcurrencyConfig,
+			)
+		}
 		ctx, span, startedSpan := startNodeSpan(ctx, itelemetry.NewWorkflowSpanName("execute_tools_node"))
 		var workflow *itelemetry.Workflow
 		if startedSpan {
@@ -2408,6 +2447,7 @@ func newToolsNodeRuntime(
 			State:          state,
 			NodeID:         nodeID,
 			EnableParallel: parallel,
+			Concurrency:    concurrencyLimiter,
 			ToolCallbacks:  toolCallbacks,
 			RetryPolicy:    configuredRetryPolicy,
 		})
@@ -3942,6 +3982,9 @@ func applyAgentNodeRunOptions(runOptions *agent.RunOptions, opts []agent.RunOpti
 
 func detachAgentNodeMutableRunOptions(in agent.RunOptions) agent.RunOptions {
 	out := in
+	// Caller-declared skill loads target the entry invocation. A graph node
+	// may opt in explicitly through its own node run options.
+	out.SkillLoads = nil
 	// Detach only parent-owned mutable containers.
 	// Standard run options can append to or merge into these containers.
 	out.InjectedContextMessages = slices.Clip(out.InjectedContextMessages)
@@ -5450,6 +5493,21 @@ type toolCallsConfig struct {
 	ToolCallbacks *tool.Callbacks
 	// RetryPolicy specifies callable tool-call retry policy for this tools node.
 	RetryPolicy *tool.RetryPolicy
+	// Concurrency limits active calls across invocations of the owning node.
+	Concurrency *toolcall.Limiter
+}
+
+type parallelToolCallCancelCause struct {
+	owner *int
+	err   error
+}
+
+func (c *parallelToolCallCancelCause) Error() string {
+	return c.err.Error()
+}
+
+func (c *parallelToolCallCancelCause) Unwrap() error {
+	return c.err
 }
 
 // processToolCalls executes all tool calls and returns the resulting messages.
@@ -5480,6 +5538,7 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 				ToolCallbacks: toolCallbacks,
 				State:         config.State,
 				RetryPolicy:   config.RetryPolicy,
+				Concurrency:   config.Concurrency,
 			})
 			if err != nil {
 				if IsInterruptError(err) {
@@ -5509,8 +5568,9 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 		err error
 	}
 
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	cancelOwner := new(int)
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
 
 	out := make([]model.Message, len(config.ToolCalls))
 	pendingCalls := make([]pendingCall, 0, len(config.ToolCalls))
@@ -5545,10 +5605,14 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 				ToolCallbacks: toolCallbacks,
 				State:         config.State,
 				RetryPolicy:   config.RetryPolicy,
+				Concurrency:   config.Concurrency,
 			})
 			// On error, cancel siblings but still report result so collector can exit cleanly.
 			if err != nil {
-				cancel()
+				cancel(&parallelToolCallCancelCause{
+					owner: cancelOwner,
+					err:   err,
+				})
 				results <- result{idx: i, err: err}
 				return
 			}
@@ -5575,7 +5639,15 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 			completedThisRun[completedKey] = r.msg
 		}
 	}
-	if err := selectToolCallError(errsByIndex); err != nil {
+	cancelCause, _ := context.Cause(ctx).(*parallelToolCallCancelCause)
+	var causalError error
+	if cancelCause != nil && cancelCause.owner == cancelOwner {
+		causalError = cancelCause.err
+	}
+	if err := selectToolCallError(
+		errsByIndex,
+		causalError,
+	); err != nil {
 		if IsInterruptError(err) {
 			recordCompletedToolMessages(config.State, config.NodeID, completedThisRun)
 			setAgentToolInterruptStateFromError(config.State, err)
@@ -5588,7 +5660,7 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 	return out, nil
 }
 
-func selectToolCallError(errs []error) error {
+func selectToolCallError(errs []error, causalError error) error {
 	var agentToolInterrupt error
 	var interrupt error
 	var first error
@@ -5615,6 +5687,11 @@ func selectToolCallError(errs []error) error {
 	}
 	if interrupt != nil {
 		return interrupt
+	}
+	// Context-only errors from sibling cancellation must not replace the tool
+	// failure that caused that cancellation.
+	if causalError != nil {
+		return causalError
 	}
 	return first
 }
@@ -5719,6 +5796,7 @@ type singleToolCallConfig struct {
 	ToolCallbacks *tool.Callbacks
 	State         State
 	RetryPolicy   *tool.RetryPolicy
+	Concurrency   *toolcall.Limiter
 }
 
 // executeSingleToolCall executes a single tool call with event emission.
@@ -5728,6 +5806,17 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 	if t == nil {
 		config.Span.SetAttributes(attribute.String("trpc.go.agent.error", fmt.Sprintf("tool %s not found", name)))
 		return model.Message{}, fmt.Errorf("tool %s not found", name)
+	}
+	if config.Concurrency != nil {
+		release, err := config.Concurrency.Acquire(ctx, name)
+		if err != nil {
+			return model.Message{}, fmt.Errorf(
+				"wait for tool %s concurrency: %w",
+				name,
+				err,
+			)
+		}
+		defer release()
 	}
 
 	startTime := time.Now()

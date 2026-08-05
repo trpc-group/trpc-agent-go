@@ -34,6 +34,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/sessionroute"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/toolresultround"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	knowledgedoc "trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	knowledgegraph "trpc.group/trpc-go/trpc-agent-go/knowledge/graph"
@@ -11528,4 +11529,113 @@ func TestMarshalChunkToText_StringPassthrough(t *testing.T) {
 	// String values bypass JSON marshaling entirely.
 	input := "<-done && x > 0"
 	assert.Equal(t, input, marshalChunkToText(input))
+}
+
+type concurrencyBlockingTool struct {
+	name    string
+	started chan<- struct{}
+	release <-chan struct{}
+	active  atomic.Int64
+	max     atomic.Int64
+}
+
+func (t *concurrencyBlockingTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: t.name}
+}
+
+func (t *concurrencyBlockingTool) Call(
+	ctx context.Context,
+	_ []byte,
+) (any, error) {
+	active := t.active.Add(1)
+	defer t.active.Add(-1)
+	for {
+		maxActive := t.max.Load()
+		if active <= maxActive || t.max.CompareAndSwap(maxActive, active) {
+			break
+		}
+	}
+	select {
+	case t.started <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	select {
+	case <-t.release:
+		return "done", nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func TestFunctionCallResponseProcessor_ToolConcurrencyScopeLimitsCalls(
+	t *testing.T,
+) {
+	started := make(chan struct{}, 4)
+	release := make(chan struct{})
+	blocking := &concurrencyBlockingTool{
+		name:    "subagent",
+		started: started,
+		release: release,
+	}
+	tools := map[string]tool.Tool{"subagent": blocking}
+	processor := NewFunctionCallResponseProcessor(
+		true,
+		nil,
+	)
+	ctx := toolcall.WithLimiter(
+		context.Background(),
+		toolcall.NewLimiter(tool.ConcurrencyConfig{
+			Groups: []tool.ConcurrencyGroup{{
+				ToolNames: []string{"subagent"},
+				Limit:     2,
+			}},
+		}),
+	)
+
+	results := make(chan error, 4)
+	for i := 0; i < 4; i++ {
+		i := i
+		go func() {
+			_, _, _, _, _, err := processor.executeToolCall(
+				ctx,
+				nil,
+				model.ToolCall{
+					ID: fmt.Sprintf("call-%d", i),
+					Function: model.FunctionDefinitionParam{
+						Name:      "subagent",
+						Arguments: []byte(`{}`),
+					},
+				},
+				tools,
+				i,
+				nil,
+			)
+			results <- err
+		}()
+	}
+
+	for i := 0; i < 2; i++ {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for limited tool call to start")
+		}
+	}
+	select {
+	case <-started:
+		t.Fatal("more tool calls started than the configured group limit")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(release)
+	for i := 0; i < 4; i++ {
+		select {
+		case err := <-results:
+			require.NoError(t, err)
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for limited tool call to finish")
+		}
+	}
+	require.Equal(t, int64(2), blocking.max.Load())
 }
