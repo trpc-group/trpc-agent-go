@@ -20,6 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow/calllimit"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -576,6 +577,102 @@ func TestMaybeCompactContextBeforeLLM_PassesParentRequestForCacheSafeFork(t *tes
 	require.Equal(t, 1, service.Calls())
 	require.Same(t, req, service.ParentRequest())
 	require.NotSame(t, req, rebuilt)
+}
+
+func TestRunOneStep_CallLimitFinalizationParticipatesInContextBudget(
+	t *testing.T,
+) {
+	baseSvc := inmemory.NewSessionService()
+	t.Cleanup(func() {
+		require.NoError(t, baseSvc.Close())
+	})
+
+	service := &contextCapturingSummaryService{Service: baseSvc}
+	oldContent := strings.Repeat("h", 1995)
+	sess := &session.Session{Events: []event.Event{{
+		RequestID: "req-old",
+		Timestamp: time.Now().Add(-time.Hour),
+		Response: &model.Response{Done: true, Choices: []model.Choice{{
+			Message: model.NewUserMessage(oldContent),
+		}}},
+	}}}
+	modelStub := &mockModel{responses: []*model.Response{{
+		Done: true,
+		Choices: []model.Choice{{
+			Message: model.NewAssistantMessage("final answer"),
+		}},
+	}}}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationSessionService(service),
+		agent.WithInvocationMessage(model.NewUserMessage("q")),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithRequestID("req-current"),
+			agent.WithModelContextWindow(4000),
+		)),
+		agent.WithInvocationModel(modelStub),
+	)
+	inv.MaxLLMCalls = 1
+	instruction := strings.Repeat("f", 10)
+	calllimit.Configure(inv, &instruction, nil)
+	counter := model.NewSimpleTokenCounter(
+		model.WithApproxRunesPerToken(1),
+	)
+	f := New(
+		[]flow.RequestProcessor{
+			processor.NewContentRequestProcessor(
+				processor.WithAddSessionSummary(true),
+				processor.WithContextCompactionTokenCounter(counter),
+			),
+		},
+		nil,
+		Options{
+			EnableContextCompaction:         true,
+			ContextCompactionThresholdRatio: 0.5,
+		},
+	)
+
+	lastEvent, err := f.runOneStep(
+		context.Background(),
+		inv,
+		make(chan *event.Event, 8),
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, lastEvent)
+	require.Equal(t, 1, service.Calls())
+	parent := service.ParentRequest()
+	require.NotNil(t, parent)
+	require.Len(t, parent.Messages, 2)
+	require.Equal(t, oldContent, parent.Messages[0].Content)
+	require.Equal(t, "q", parent.Messages[1].Content)
+	baseTokens, err := counter.CountTokensRange(
+		context.Background(),
+		parent.Messages,
+		0,
+		len(parent.Messages),
+	)
+	require.NoError(t, err)
+	require.Less(t, baseTokens, 2000)
+	budgetMessages := append(
+		append([]model.Message(nil), parent.Messages...),
+		model.NewUserMessage(instruction),
+	)
+	budgetTokens, err := counter.CountTokensRange(
+		context.Background(),
+		budgetMessages,
+		0,
+		len(budgetMessages),
+	)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, budgetTokens, 2000)
+
+	providerRequest := modelStub.LastRequest()
+	require.NotNil(t, providerRequest)
+	require.Len(t, providerRequest.Messages, 3)
+	require.Contains(t, providerRequest.Messages[0].Content, "compressed with captured parent")
+	require.Equal(t, "q", providerRequest.Messages[1].Content)
+	require.Equal(t, instruction, providerRequest.Messages[2].Content)
 }
 
 func TestMaybeCompactContextBeforeLLM_SkipsWithoutSummaryAwareProcessor(t *testing.T) {

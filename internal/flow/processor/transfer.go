@@ -18,6 +18,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow/calllimit"
 	istructure "trpc.group/trpc-go/trpc-agent-go/internal/structure"
 	itransfer "trpc.group/trpc-go/trpc-agent-go/internal/transfer"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -55,6 +56,14 @@ func (p *TransferResponseProcessor) ProcessResponse(
 	ch chan<- *event.Event,
 ) {
 	if invocation == nil || rsp == nil || rsp.IsPartial {
+		return
+	}
+	if calllimit.Active(invocation) {
+		// Finalization is a bounded, tool-free terminal step. Discard any
+		// transfer left by the preceding tool iteration so a failed handoff is
+		// not retried after the model has produced its final response.
+		invocation.TransferInfo = nil
+		invocation.EndInvocation = true
 		return
 	}
 

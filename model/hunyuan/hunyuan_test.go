@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	imodelrequest "trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/hunyuan/internal/hunyuan"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -217,6 +218,60 @@ func TestGenerateContentNilRequest(t *testing.T) {
 	if err == nil {
 		t.Error("Expected error for nil request, got nil")
 	}
+}
+
+func TestGenerateContentToolsDisabledAfterCallback(t *testing.T) {
+	var captured map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&captured))
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
+			"Response": hunyuan.ChatCompletionResponse{
+				Id: "test-id",
+				Choices: []*hunyuan.ChatCompletionResponseChoice{{
+					Index:        0,
+					FinishReason: "stop",
+					Message: &hunyuan.ChatCompletionMessageParam{
+						Role:    "assistant",
+						Content: "ok",
+					},
+				}},
+			},
+		}))
+	}))
+	defer server.Close()
+
+	m := New(
+		"hunyuan-lite",
+		WithSecretId("test-secret-id"),
+		WithSecretKey("test-secret-key"),
+		WithBaseUrl(server.URL),
+		WithHost("test-host"),
+		WithChatRequestCallback(func(
+			_ context.Context,
+			request *hunyuan.ChatCompletionNewParams,
+		) {
+			request.Tools = []*hunyuan.ChatCompletionMessageTool{{}}
+			request.ToolChoice = "required"
+			request.CustomTool = &hunyuan.ChatCompletionMessageTool{}
+		}),
+	)
+	ctx := imodelrequest.WithToolsDisabled(context.Background())
+
+	responseChan, err := m.GenerateContent(ctx, &model.Request{
+		Messages: []model.Message{model.NewUserMessage("test")},
+	})
+	require.NoError(t, err)
+	for range responseChan {
+	}
+
+	require.NotNil(t, captured)
+	require.NotContains(t, captured, "Tools")
+	require.NotContains(t, captured, "ToolChoice")
+	require.NotContains(t, captured, "CustomTool")
 }
 
 func TestGenerateContentWithMockServer(t *testing.T) {
