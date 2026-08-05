@@ -160,17 +160,21 @@ clean environment settings, timeout and output limits, and restricted artifacts.
 E2B is the production-style runtime; fake mode is deterministic for tests;
 local mode is an explicit development fallback rather than a hostile-code
 boundary.
-Complete repository snapshots resolve changed Go source and module metadata to
-the modules that must be checked. Changes to `go.mod` select that module,
-changes to `go.sum` select the nearest module, and changes to `go.work` or
-`go.work.sum` conservatively select every module in the snapshot. Changed
-workspaces are recorded separately and a fixed `go work edit -json` validation
-runs before module checks. Module selection also considers both sides of a
-rename: deleted or renamed-away Go paths walk upward from the missing old leaf,
-while surviving paths, including binary-diff paths and module metadata, must
-exist as regular snapshot files. Go or module metadata changes that cannot
-obtain a complete snapshot or safe mapping require human review instead of
-receiving a pass. The snapshot root contains the reserved
+Complete repository snapshots resolve changed Go source, module metadata, and
+other changed files beneath a Go module to the modules that must be checked.
+This conservative mapping includes build-relevant non-Go inputs such as
+`go:embed` resources, assembly, and cgo files without relying on an extension
+allowlist. Ordinary files outside every Go module do not create an empty module
+manifest or schedule repository-dependent checks. Changes to `go.mod` select
+that module, changes to `go.sum` select the nearest module, and changes to
+`go.work` or `go.work.sum` conservatively select every module in the snapshot.
+Changed workspaces are recorded separately and a fixed `go work edit -json`
+validation runs before module checks. Module selection also considers both
+sides of a rename: deleted or renamed-away paths walk upward from the missing
+old leaf, while surviving paths, including binary-diff paths and module
+metadata, must exist as regular snapshot files. Go or module metadata changes
+that cannot obtain a complete snapshot or safe mapping require human review
+instead of receiving a pass. The snapshot root contains the reserved
 `.trpc-agent-review-modules` manifest with
 sorted NUL-separated `<module-path>\0<module-token>\0` records; `.` names the
 root module. Each token is freshly generated for the review as
@@ -182,10 +186,14 @@ registered by that review. Old, malformed, or unknown `==>` control lines fail
 closed and retain a generic sandbox warning for human review. Workspace
 directories remain NUL-separated paths in `.trpc-agent-review-workspaces`; the
 script logs them with shell escaping and without the `==>` control prefix.
-Snapshot enumeration and copying share a 30-second deadline and enforce fixed
-limits for tracked entries, unique directories, path bytes, and actual copied
-content. A timeout or limit failure skips repository-dependent checks and
-produces a human-review warning. All evidence, sandbox output, governance
+Snapshot enumeration and copying preserve the identity returned by
+`git ls-files -z`: POSIX backslashes remain literal filename characters, while
+unrepresentable Windows backslash identities fail closed rather than being
+translated to another path. Enumeration and copying share a 30-second deadline
+and enforce fixed limits for tracked entries, unique directories, path bytes,
+and actual copied content. A timeout or limit failure skips
+repository-dependent checks and produces a human-review warning. All evidence,
+sandbox output, governance
 reasons, reports, and stored fields pass through redaction before persistence.
 When explicitly enabled, `go test` stdout and stderr are controlled by reviewed
 tests, package initializers, and `TestMain`, so they remain only in the redacted

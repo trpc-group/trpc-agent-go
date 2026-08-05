@@ -14,7 +14,9 @@ Rule IDs:
 - `security.insecure_tls`: high severity finding when TLS certificate
   verification is disabled.
 - `concurrency.goroutine_context_leak`: medium severity finding for goroutines
-  whose spawned work does not receive or observe a cancellable context.
+  whose spawned work does not receive or observe a cancellable context. Go
+  statements are recognized lexically and through the AST, independent of
+  whether the keyword is separated by spaces, tabs, comments, or newlines.
 - `resource.unclosed_file`: medium severity finding for opened files without a
   close path.
 - `resource.unclosed_http_body`: medium severity finding for HTTP responses
@@ -27,7 +29,8 @@ Rule IDs:
   commit or rollback.
 - `database.sql_open_lifecycle`: medium severity finding for database handles
   without a close or documented owner.
-- `tests.missing_tests`: low severity warning for changed exported Go behavior
+- `tests.missing_tests`: low severity warning for changed exported Go behavior,
+  including body-only changes to existing exported functions and methods,
   without matching test updates.
 - `governance.command_blocked`: low confidence warning for command-gate deny.
 - `governance.permission_error`: low confidence warning for permission deny,

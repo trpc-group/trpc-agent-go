@@ -11,6 +11,9 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -30,7 +33,7 @@ func TestRunMissingTestsRuleUsesPrecomputedIndexInStableOrder(t *testing.T) {
 		{File: "covered/service_test.go", Line: 4, Text: "func TestExported() {}", FileIndex: 3},
 	}
 
-	index := newMissingTestsRuleIndex(files, candidates)
+	index := newMissingTestsRuleIndex(files, "", candidates)
 	matches := runMissingTestsRule(files, index)
 	if len(matches) != 2 {
 		t.Fatalf("match count = %d, want 2: %+v", len(matches), matches)
@@ -71,7 +74,7 @@ func TestRunMissingTestsRuleHandlesHighFileCount(t *testing.T) {
 		})
 	}
 
-	index := newMissingTestsRuleIndex(files, candidates)
+	index := newMissingTestsRuleIndex(files, "", candidates)
 	matches := runMissingTestsRule(files, index)
 	wantCount := productionFileCount - testFileCount
 	if len(matches) != wantCount {
@@ -92,6 +95,11 @@ func TestRunMissingTestsRuleHandlesHighFileCount(t *testing.T) {
 
 var benchmarkMissingTestsMatches []ruleMatch
 
+var (
+	benchmarkMissingTestsExported []bool
+	benchmarkMissingTestsStats    missingTestsAnalysisStats
+)
+
 func BenchmarkRunMissingTestsRule(b *testing.B) {
 	for _, fileCount := range []int{128, 1024, 8192} {
 		b.Run(fmt.Sprintf("files=%d", fileCount), func(b *testing.B) {
@@ -99,11 +107,51 @@ func BenchmarkRunMissingTestsRule(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				index := newMissingTestsRuleIndex(files, candidates)
+				index := newMissingTestsRuleIndex(files, "", candidates)
 				benchmarkMissingTestsMatches = runMissingTestsRule(files, index)
 			}
 		})
 	}
+}
+
+func BenchmarkMissingTestsBodyAnalysis(b *testing.B) {
+	for _, mode := range []string{"diff-only", "repository"} {
+		for _, candidateCount := range []int{128, 1024} {
+			b.Run(fmt.Sprintf("%s/%d", mode, candidateCount), func(b *testing.B) {
+				before := benchmarkMissingTestsBodySource(candidateCount, 0)
+				after := benchmarkMissingTestsBodySource(candidateCount, 1)
+				parsed := parseUnifiedDiff([]byte(singleFileReplacementDiff("pkg/api.go", before, after)))
+				candidates := parsed.candidateLines()
+				repoRoot := ""
+				if mode == "repository" {
+					repoRoot = b.TempDir()
+					path := filepath.Join(repoRoot, "pkg", "api.go")
+					if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+						b.Fatal(err)
+					}
+					if err := os.WriteFile(path, []byte(after), 0o600); err != nil {
+						b.Fatal(err)
+					}
+				}
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					benchmarkMissingTestsExported, benchmarkMissingTestsStats =
+						analyzeExportedBehaviorCandidates(parsed.Files, repoRoot, candidates)
+				}
+			})
+		}
+	}
+}
+
+func benchmarkMissingTestsBodySource(candidateCount int, offset int) string {
+	var source strings.Builder
+	source.WriteString("package pkg\n\nfunc Exported() int {\n\tvalue := 0\n")
+	for index := 0; index < candidateCount; index++ {
+		fmt.Fprintf(&source, "\tvalue += %d\n", index+offset)
+	}
+	source.WriteString("\treturn value\n}\n")
+	return source.String()
 }
 
 func benchmarkMissingTestsInput(fileCount int) ([]changedFile, []candidateLine) {

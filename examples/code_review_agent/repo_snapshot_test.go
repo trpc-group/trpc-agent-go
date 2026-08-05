@@ -16,6 +16,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -125,6 +126,72 @@ func TestRepositorySnapshotPathLimitAllowsExactBoundary(t *testing.T) {
 	defer os.RemoveAll(snapshot.Root)
 	if snapshot.Files != 1 {
 		t.Fatalf("snapshot = %+v, want one exact-boundary path", snapshot)
+	}
+}
+
+func TestCleanTrackedPathPreservesOrRejectsBackslashByPlatform(t *testing.T) {
+	const raw = `dir\tracked.txt`
+	clean, err := cleanTrackedPath(raw)
+	if runtime.GOOS == "windows" {
+		if err == nil || !strings.Contains(err.Error(), "backslash") {
+			t.Fatalf("cleanTrackedPath(%q) = %q, %v, want backslash rejection", raw, clean, err)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatalf("cleanTrackedPath(%q): %v", raw, err)
+	}
+	if clean != raw {
+		t.Fatalf("cleanTrackedPath(%q) = %q, want literal identity", raw, clean)
+	}
+}
+
+func TestRepositorySnapshotPreservesPOSIXBackslashIdentity(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows cannot represent a backslash as a filename character")
+	}
+	repoRoot := t.TempDir()
+	mustRunGit(t, repoRoot, "init")
+	const trackedPath = `dir\tracked.txt`
+	const trackedContent = "tracked content\n"
+	const untrackedContent = "password = \"untracked-secret\"\n"
+	mustWriteFile(t, filepath.Join(repoRoot, trackedPath), trackedContent)
+	mustWriteFile(t, filepath.Join(repoRoot, "dir", "tracked.txt"), untrackedContent)
+	mustRunGit(t, repoRoot, "--literal-pathspecs", "add", "--", trackedPath)
+
+	for _, test := range []struct {
+		name  string
+		scope []string
+	}{
+		{name: "complete"},
+		{name: "scoped", scope: []string{trackedPath}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			snapshot, err := prepareSandboxRepoSnapshot(
+				context.Background(),
+				repoRoot,
+				test.scope,
+				defaultSandboxSnapshotLimits(),
+			)
+			if err != nil {
+				t.Fatalf("prepare snapshot: %v", err)
+			}
+			defer os.RemoveAll(snapshot.Root)
+
+			content, err := os.ReadFile(filepath.Join(snapshot.Root, trackedPath))
+			if err != nil {
+				t.Fatalf("read tracked backslash path: %v", err)
+			}
+			if string(content) != trackedContent {
+				t.Fatalf("tracked content = %q, want %q", content, trackedContent)
+			}
+			if _, err := os.Stat(filepath.Join(snapshot.Root, "dir", "tracked.txt")); !os.IsNotExist(err) {
+				t.Fatalf("untracked slash path stat error = %v, want not exist", err)
+			}
+			if bytes.Contains(content, []byte("untracked-secret")) {
+				t.Fatalf("snapshot copied untracked secret: %q", content)
+			}
+		})
 	}
 }
 

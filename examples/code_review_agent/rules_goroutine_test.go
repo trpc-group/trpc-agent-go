@@ -211,6 +211,41 @@ func handle(ctx context.Context) {
 				"go worker(ctx); go work()",
 			},
 		},
+		{
+			name:   "legal token separators are classified",
+			source: "package review\n\nimport \"context\"\n\nfunc worker(context.Context) {}\nfunc refreshCache() {}\n\nfunc\thandle(ctx context.Context) {\n\tgo\tworker(ctx)\n\tgo/*comment*/worker(ctx)\n\tgo\trefreshCache()\n\tgo/*comment*/refreshCache()\n\twork(); go refreshCache()\n}\n",
+			wantEvidence: []string{
+				"go\trefreshCache()",
+				"go/*comment*/refreshCache()",
+				"work(); go refreshCache()",
+			},
+		},
+		{
+			name: "comments and strings do not create go candidates",
+			source: `package review
+
+func start() {
+	_ = "go refreshCache()"
+	// go refreshCache()
+	/*
+	go refreshCache()
+	*/
+}
+`,
+		},
+		{
+			name: "multiline go statement uses keyword line",
+			source: `package review
+
+func refreshCache() {}
+
+func start() {
+	go
+		refreshCache()
+}
+`,
+			wantEvidence: []string{"go"},
+		},
 	}
 
 	for _, mode := range []string{"diff-only", "repository"} {
@@ -267,6 +302,28 @@ func TestDiffOnlyGoroutineFallback(t *testing.T) {
 			t.Fatalf("parse warnings = %+v", parsed.Warnings)
 		}
 		want := []string{"go refreshCache()"}
+		if got := goroutineFindingEvidence(runRules(parsed, "")); !reflect.DeepEqual(got, want) {
+			t.Fatalf("goroutine evidence = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("token-separated orphan candidates are classified", func(t *testing.T) {
+		diff := strings.Join([]string{
+			"diff --git a/review.go b/review.go",
+			"index 1111111..2222222 100644",
+			"--- a/review.go",
+			"+++ b/review.go",
+			"@@ -10 +10,4 @@",
+			" \twork()",
+			"+\tgo\tworker(ctx)",
+			"+\tgo/*comment*/refreshCache()",
+			"+\twork(); go refreshCache()",
+		}, "\n")
+		parsed := parseUnifiedDiff([]byte(diff))
+		if len(parsed.Warnings) != 0 {
+			t.Fatalf("parse warnings = %+v", parsed.Warnings)
+		}
+		want := []string{"go/*comment*/refreshCache()", "work(); go refreshCache()"}
 		if got := goroutineFindingEvidence(runRules(parsed, "")); !reflect.DeepEqual(got, want) {
 			t.Fatalf("goroutine evidence = %q, want %q", got, want)
 		}

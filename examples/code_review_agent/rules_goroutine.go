@@ -64,7 +64,7 @@ func analyzeGoroutineCandidates(
 	for index, candidate := range candidates {
 		if candidate.FileIndex < 0 || candidate.FileIndex >= len(files) ||
 			!files[candidate.FileIndex].isGoFile() ||
-			!strings.HasPrefix(strings.TrimSpace(candidate.Text), "go ") {
+			!lineContainsCodeToken(candidate.Text, token.GO) {
 			continue
 		}
 		leaks[index] = true
@@ -155,6 +155,7 @@ func analyzeRepositoryGoroutineCandidates(
 			false,
 			stats,
 		)
+		markUnmatchedGoroutineCandidatesSafe(group.candidates, leaks, matched)
 	}
 }
 
@@ -194,6 +195,13 @@ func analyzeDiffGoroutineCandidates(
 
 	for _, group := range ordered {
 		hunk := files[group.key.file].Hunks[group.key.hunk]
+		clearLexicallyExcludedGoroutineCandidates(
+			hunk,
+			group.candidates,
+			candidates,
+			leaks,
+			matched,
+		)
 		var functionStarts []int
 		for lineIndex, line := range hunk.Lines {
 			stats.SourceLinesVisited++
@@ -275,6 +283,11 @@ func analyzeDiffGoroutineCandidates(
 				false,
 				stats,
 			)
+			windowIndexes := make([]int, 0, len(sourceCandidates))
+			for _, candidate := range sourceCandidates {
+				windowIndexes = append(windowIndexes, candidate.index)
+			}
+			markUnmatchedGoroutineCandidatesSafe(windowIndexes, leaks, matched)
 		}
 
 		var fallbackSource strings.Builder
@@ -323,6 +336,67 @@ func analyzeDiffGoroutineCandidates(
 			true,
 			stats,
 		)
+	}
+}
+
+func clearLexicallyExcludedGoroutineCandidates(
+	hunk diffHunk,
+	indexes []int,
+	candidates []candidateLine,
+	leaks []bool,
+	matched []bool,
+) {
+	source := make([]byte, 0, len(hunk.Lines)*32)
+	sourceLineToHunkLine := make([]int, 0, len(hunk.Lines))
+	visibleHunkLines := make([]bool, len(hunk.Lines))
+	for lineIndex, line := range hunk.Lines {
+		if line.Kind != diffLineAdded && line.Kind != diffLineContext {
+			continue
+		}
+		visibleHunkLines[lineIndex] = true
+		sourceLineToHunkLine = append(sourceLineToHunkLine, lineIndex)
+		source = append(source, line.Text...)
+		source = append(source, '\n')
+	}
+
+	fset := token.NewFileSet()
+	file := fset.AddFile("review_hunk_tokens.go", fset.Base(), len(source))
+	var lexical scanner.Scanner
+	lexical.Init(file, source, nil, scanner.ScanComments)
+	goHunkLines := make([]bool, len(hunk.Lines))
+	for {
+		position, scanned, _ := lexical.Scan()
+		if scanned == token.EOF {
+			break
+		}
+		if scanned == token.GO {
+			sourceLine := fset.Position(position).Line
+			if sourceLine >= 1 && sourceLine <= len(sourceLineToHunkLine) {
+				goHunkLines[sourceLineToHunkLine[sourceLine-1]] = true
+			}
+		}
+	}
+	if lexical.ErrorCount != 0 {
+		return
+	}
+	for _, candidateIndex := range indexes {
+		hunkLine := candidates[candidateIndex].HunkLineIndex
+		if hunkLine < 0 || hunkLine >= len(hunk.Lines) ||
+			!visibleHunkLines[hunkLine] || goHunkLines[hunkLine] {
+			continue
+		}
+		matched[candidateIndex] = true
+		leaks[candidateIndex] = false
+	}
+}
+
+func markUnmatchedGoroutineCandidatesSafe(indexes []int, leaks []bool, matched []bool) {
+	for _, candidateIndex := range indexes {
+		if matched[candidateIndex] {
+			continue
+		}
+		matched[candidateIndex] = true
+		leaks[candidateIndex] = false
 	}
 }
 
@@ -798,14 +872,13 @@ func isContextFallbackName(name string) bool {
 }
 
 func isCompleteSingleLineGoStatement(line string) bool {
-	if !strings.HasPrefix(line, "go ") || strings.ContainsAny(line, "\r\n") {
+	if strings.ContainsAny(line, "\r\n") || !lineContainsCodeToken(line, token.GO) {
 		return false
 	}
 	fset := token.NewFileSet()
 	file := fset.AddFile("review_line.go", fset.Base(), len(line))
 	var lexical scanner.Scanner
 	lexical.Init(file, []byte(line), nil, scanner.ScanComments)
-	first := true
 	seenGo := false
 	parentheses := 0
 	brackets := 0
@@ -821,13 +894,8 @@ func isCompleteSingleLineGoStatement(line string) bool {
 		if scanned == token.COMMENT || scanned == token.SEMICOLON {
 			continue
 		}
-		if first {
-			first = false
-			if scanned != token.GO {
-				return false
-			}
+		if scanned == token.GO {
 			seenGo = true
-			continue
 		}
 		switch scanned {
 		case token.LPAREN:

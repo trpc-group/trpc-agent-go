@@ -226,11 +226,13 @@ func runGovernance(
 				nil,
 				limits,
 			)
+			manifestReady := false
 			if snapshotErr == nil {
 				var manifest sandboxModuleManifest
 				manifest, snapshotErr = prepareAffectedModuleManifest(snapshotCtx, snapshot.Root, parsed)
-				if snapshotErr == nil {
+				if snapshotErr == nil && len(manifest.ModulesByToken) > 0 {
 					plannedInput.sandboxDiagnosticModules = cloneStringMap(manifest.ModulesByToken)
+					manifestReady = true
 				}
 			}
 			cancel()
@@ -245,9 +247,11 @@ func runGovernance(
 					"Repository snapshot is unavailable",
 					snapshotErr.Error(),
 				)
-			} else {
+			} else if manifestReady {
 				plannedInput.sandboxRepoRoot = snapshot.Root
 				defer os.RemoveAll(snapshot.Root)
+			} else if snapshot.Root != "" {
+				_ = os.RemoveAll(snapshot.Root)
 			}
 		}
 	}
@@ -562,7 +566,8 @@ func planCommands(cfg config, input reviewInput, parsed parsedDiff) []commandSpe
 	commands := []commandSpec{
 		newCommandSpec(commandCheckGoVersion, nil, nil),
 	}
-	if !shouldRunRepositoryChecks(input, parsed) || input.sandboxRepoRoot == "" {
+	if !shouldRunRepositoryChecks(input, parsed) || input.sandboxRepoRoot == "" ||
+		len(input.sandboxDiagnosticModules) == 0 {
 		return commands
 	}
 

@@ -573,7 +573,9 @@ func normalizeFileFilters(raw []string) (repeatedStrings, error) {
 			return nil, fmt.Errorf("--files path %q contains a NUL byte", item)
 		}
 
-		value = strings.ReplaceAll(value, "\\", "/")
+		if runtime.GOOS == "windows" {
+			value = strings.ReplaceAll(value, "\\", "/")
+		}
 		if strings.HasPrefix(value, "/") || strings.HasPrefix(value, "//") ||
 			hasWindowsDrive(value) {
 			return nil, fmt.Errorf("--files path %q must be relative", item)

@@ -10,7 +10,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -45,15 +47,23 @@ func TestRepositoryValidationTargetsCoverBothRenameSides(t *testing.T) {
 			}},
 		},
 		{
+			name: "modified non Go",
+			file: changedFile{OldPath: "pkg/guest.py", NewPath: "pkg/guest.py"},
+			targets: []repositoryValidationTarget{{
+				path: "pkg/guest.py", requireRegularFile: true, kind: repositoryValidationTargetOptionalModule,
+			}},
+		},
+		{
 			name: "rename away",
 			file: changedFile{
 				OldPath:  "old/review.go",
 				NewPath:  "old/review.txt",
 				IsRename: true,
 			},
-			targets: []repositoryValidationTarget{{
-				path: "old/review.go", kind: repositoryValidationTargetModule,
-			}},
+			targets: []repositoryValidationTarget{
+				{path: "old/review.go", kind: repositoryValidationTargetModule},
+				{path: "old/review.txt", requireRegularFile: true, kind: repositoryValidationTargetOptionalModule},
+			},
 		},
 		{
 			name: "rename into Go",
@@ -62,9 +72,10 @@ func TestRepositoryValidationTargetsCoverBothRenameSides(t *testing.T) {
 				NewPath:  "new/review.go",
 				IsRename: true,
 			},
-			targets: []repositoryValidationTarget{{
-				path: "new/review.go", requireRegularFile: true, kind: repositoryValidationTargetModule,
-			}},
+			targets: []repositoryValidationTarget{
+				{path: "old/review.txt", kind: repositoryValidationTargetOptionalModule},
+				{path: "new/review.go", requireRegularFile: true, kind: repositoryValidationTargetModule},
+			},
 		},
 		{
 			name: "cross module Go rename",
@@ -98,9 +109,187 @@ func TestRepositoryValidationTargetsCoverBothRenameSides(t *testing.T) {
 				t.Fatalf("targets = %#v, want %#v", got, tt.targets)
 			}
 			if !hasRepositoryValidationChange(parsed) {
-				t.Fatal("Go-impacting change was not considered reviewable")
+				t.Fatal("repository-impacting change was not considered reviewable")
 			}
 		})
+	}
+}
+
+func TestPrepareAffectedModuleManifestMapsOptionalNonGoPaths(t *testing.T) {
+	t.Run("added modified and same-module renamed paths", func(t *testing.T) {
+		root := t.TempDir()
+		mustWriteFile(t, filepath.Join(root, "go.mod"), "module example.com/root\n\ngo 1.21\n")
+		mustWriteFile(t, filepath.Join(root, "added.yaml"), "enabled: true\n")
+		mustWriteFile(t, filepath.Join(root, "modified.txt"), "modified\n")
+		mustWriteFile(t, filepath.Join(root, "renamed-new.bin"), "renamed\n")
+
+		manifest, err := prepareAffectedModuleManifest(
+			context.Background(),
+			root,
+			parsedDiff{Files: []changedFile{
+				{NewPath: "added.yaml", IsNew: true},
+				{OldPath: "modified.txt", NewPath: "modified.txt"},
+				{OldPath: "renamed-old.bin", NewPath: "renamed-new.bin", IsRename: true},
+			}},
+		)
+		if err != nil {
+			t.Fatalf("prepare optional manifest: %v", err)
+		}
+		if want := []string{"."}; !reflect.DeepEqual(sandboxModulePaths(manifest), want) {
+			t.Fatalf("modules = %#v, want %#v", sandboxModulePaths(manifest), want)
+		}
+	})
+
+	t.Run("modified and deleted paths inside modules", func(t *testing.T) {
+		root := t.TempDir()
+		mustWriteFile(t, filepath.Join(root, "old", "go.mod"), "module example.com/old\n\ngo 1.21\n")
+		mustWriteFile(t, filepath.Join(root, "new", "go.mod"), "module example.com/new\n\ngo 1.21\n")
+		mustWriteFile(t, filepath.Join(root, "new", "guest.py"), "print('new')\n")
+
+		manifest, err := prepareAffectedModuleManifest(
+			context.Background(),
+			root,
+			parsedDiff{Files: []changedFile{
+				{OldPath: "old/guest.py", IsDeleted: true},
+				{OldPath: "old/asset.txt", NewPath: "new/guest.py", IsRename: true},
+			}},
+		)
+		if err != nil {
+			t.Fatalf("prepare optional manifest: %v", err)
+		}
+		if want := []string{"new", "old"}; !reflect.DeepEqual(sandboxModulePaths(manifest), want) {
+			t.Fatalf("modules = %#v, want %#v", sandboxModulePaths(manifest), want)
+		}
+	})
+
+	t.Run("paths outside modules return an empty manifest", func(t *testing.T) {
+		root := t.TempDir()
+		mustWriteFile(t, filepath.Join(root, "README.md"), "documentation\n")
+		manifest, err := prepareAffectedModuleManifest(
+			context.Background(),
+			root,
+			parsedDiff{Files: []changedFile{{
+				OldPath: "README.md", NewPath: "README.md",
+			}}},
+		)
+		if err != nil {
+			t.Fatalf("prepare outside-module manifest: %v", err)
+		}
+		if len(manifest.Records) != 0 || len(manifest.ModulesByToken) != 0 {
+			t.Fatalf("manifest = %+v, want empty", manifest)
+		}
+		if _, err := os.Stat(filepath.Join(root, reviewModuleManifestName)); !os.IsNotExist(err) {
+			t.Fatalf("empty module manifest stat error = %v, want not exist", err)
+		}
+	})
+
+	t.Run("required Go target without a module fails", func(t *testing.T) {
+		root := t.TempDir()
+		mustWriteFile(t, filepath.Join(root, "review.go"), "package review\n")
+		_, err := prepareAffectedModuleManifest(
+			context.Background(),
+			root,
+			parsedDiff{Files: []changedFile{{
+				OldPath: "review.go", NewPath: "review.go",
+			}}},
+		)
+		if !errors.Is(err, errNoGoModule) {
+			t.Fatalf("prepare required manifest error = %v, want no module", err)
+		}
+	})
+}
+
+func TestNonGoRepositoryChangesPlanModuleChecks(t *testing.T) {
+	t.Run("inside module", func(t *testing.T) {
+		repoRoot := t.TempDir()
+		mustRunGit(t, repoRoot, "init")
+		mustWriteFile(t, filepath.Join(repoRoot, "go.mod"), "module example.com/review\n\ngo 1.21\n")
+		mustWriteFile(t, filepath.Join(repoRoot, "guest.py"), "print('guest')\n")
+		mustRunGit(t, repoRoot, "add", "go.mod", "guest.py")
+
+		runner := &recordingSandboxRunner{}
+		governance, err := runGovernance(
+			context.Background(),
+			config{},
+			reviewInput{kind: inputKindRepoPath, repoRoot: repoRoot},
+			parsedDiff{Files: []changedFile{{OldPath: "guest.py", NewPath: "guest.py"}}},
+			runtimeHooks{sandboxRunner: runner},
+		)
+		if err != nil {
+			t.Fatalf("run governance: %v", err)
+		}
+		if len(governance.Matches) != 0 {
+			t.Fatalf("governance warnings = %+v, want none", governance.Matches)
+		}
+		want := []commandKind{commandCheckGoVersion, commandCheckGoTest, commandCheckGoVet}
+		got := make([]commandKind, 0, len(runner.calls))
+		for _, call := range runner.calls {
+			got = append(got, call.Kind)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("commands = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("outside module", func(t *testing.T) {
+		repoRoot := t.TempDir()
+		mustRunGit(t, repoRoot, "init")
+		mustWriteFile(t, filepath.Join(repoRoot, "README.md"), "documentation\n")
+		mustRunGit(t, repoRoot, "add", "README.md")
+
+		runner := &recordingSandboxRunner{}
+		governance, err := runGovernance(
+			context.Background(),
+			config{},
+			reviewInput{kind: inputKindRepoPath, repoRoot: repoRoot},
+			parsedDiff{Files: []changedFile{{OldPath: "README.md", NewPath: "README.md"}}},
+			runtimeHooks{sandboxRunner: runner},
+		)
+		if err != nil {
+			t.Fatalf("run governance: %v", err)
+		}
+		if len(governance.Matches) != 0 {
+			t.Fatalf("governance warnings = %+v, want none", governance.Matches)
+		}
+		if len(runner.calls) != 1 || runner.calls[0].Kind != commandCheckGoVersion {
+			t.Fatalf("commands = %+v, want only go version", runner.calls)
+		}
+	})
+}
+
+func TestRunChecksDetectsDeletedEmbeddedAsset(t *testing.T) {
+	for _, toolName := range []string{"bash", "go"} {
+		if _, err := exec.LookPath(toolName); err != nil {
+			t.Skipf("%s unavailable: %v", toolName, err)
+		}
+	}
+	root := t.TempDir()
+	mustWriteFile(t, filepath.Join(root, "go.mod"), "module example.com/embedcheck\n\ngo 1.21\n")
+	mustWriteFile(t, filepath.Join(root, "embed.go"), "package embedcheck\n\nimport _ \"embed\"\n\n//go:embed guest.py\nvar guest string\n")
+	manifest, err := prepareAffectedModuleManifest(
+		context.Background(),
+		root,
+		parsedDiff{Files: []changedFile{{OldPath: "guest.py", IsDeleted: true}}},
+	)
+	if err != nil {
+		t.Fatalf("prepare embedded asset manifest: %v", err)
+	}
+	if want := []string{"."}; !reflect.DeepEqual(sandboxModulePaths(manifest), want) {
+		t.Fatalf("modules = %#v, want %#v", sandboxModulePaths(manifest), want)
+	}
+
+	scriptPath, err := filepath.Abs(filepath.Join("skills", "code-review", "scripts", "run_checks.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", filepath.ToSlash(scriptPath), "vet")
+	cmd.Env = append(os.Environ(), "REVIEW_REPO_DIR="+filepath.ToSlash(root))
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("run_checks succeeded with deleted embedded asset: %s", output)
+	}
+	if !strings.Contains(string(output), "guest.py") {
+		t.Fatalf("run_checks output = %s, want embedded asset evidence", output)
 	}
 }
 

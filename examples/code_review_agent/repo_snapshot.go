@@ -40,6 +40,7 @@ const (
 var (
 	errSnapshotCopyLimit       = errors.New("snapshot copy exceeds remaining byte limit")
 	errGitPathOutputTerminator = errors.New("git ls-files output is not NUL terminated")
+	errNoGoModule              = errors.New("no go.mod found in snapshot ancestors")
 )
 
 type snapshotLimits struct {
@@ -79,6 +80,7 @@ type repositoryValidationTargetKind uint8
 const (
 	repositoryValidationTargetModule repositoryValidationTargetKind = iota + 1
 	repositoryValidationTargetWorkspace
+	repositoryValidationTargetOptionalModule
 )
 
 type repositoryValidationTarget struct {
@@ -302,6 +304,7 @@ func prepareAffectedModuleManifest(
 	}
 	modules := make(map[string]bool)
 	workspaces := make(map[string]bool)
+	requiredTarget := false
 	for _, target := range repositoryValidationTargets(parsed) {
 		if err := ctx.Err(); err != nil {
 			return sandboxModuleManifest{}, fmt.Errorf("prepare affected module manifest: %w", err)
@@ -312,12 +315,14 @@ func prepareAffectedModuleManifest(
 		}
 		switch target.kind {
 		case repositoryValidationTargetModule:
+			requiredTarget = true
 			module, err := nearestGoModule(ctx, root, rel, target.requireRegularFile)
 			if err != nil {
 				return sandboxModuleManifest{}, fmt.Errorf("resolve affected module for %q: %w", rel, err)
 			}
 			modules[module] = true
 		case repositoryValidationTargetWorkspace:
+			requiredTarget = true
 			workspace, err := repositoryWorkspaceDirectory(
 				root,
 				rel,
@@ -327,6 +332,15 @@ func prepareAffectedModuleManifest(
 				return sandboxModuleManifest{}, fmt.Errorf("resolve affected workspace for %q: %w", rel, err)
 			}
 			workspaces[workspace] = true
+		case repositoryValidationTargetOptionalModule:
+			module, err := nearestGoModule(ctx, root, rel, target.requireRegularFile)
+			if errors.Is(err, errNoGoModule) {
+				continue
+			}
+			if err != nil {
+				return sandboxModuleManifest{}, fmt.Errorf("resolve optional affected module for %q: %w", rel, err)
+			}
+			modules[module] = true
 		default:
 			return sandboxModuleManifest{}, fmt.Errorf("unknown repository validation target kind")
 		}
@@ -341,6 +355,9 @@ func prepareAffectedModuleManifest(
 		}
 	}
 	if len(modules) == 0 {
+		if !requiredTarget {
+			return sandboxModuleManifest{}, nil
+		}
 		return sandboxModuleManifest{}, fmt.Errorf("no affected Go modules were found")
 	}
 
@@ -448,6 +465,9 @@ func isGoRepositoryMetadataPath(candidate string) bool {
 }
 
 func repositoryValidationKind(candidate string) repositoryValidationTargetKind {
+	if candidate == "" {
+		return 0
+	}
 	if isGoSourcePath(candidate) {
 		return repositoryValidationTargetModule
 	}
@@ -457,7 +477,7 @@ func repositoryValidationKind(candidate string) repositoryValidationTargetKind {
 	case "go.work", "go.work.sum":
 		return repositoryValidationTargetWorkspace
 	default:
-		return 0
+		return repositoryValidationTargetOptionalModule
 	}
 }
 
@@ -665,7 +685,7 @@ func nearestGoModule(
 		}
 		dir = parent
 	}
-	return "", fmt.Errorf("no go.mod found in snapshot ancestors")
+	return "", errNoGoModule
 }
 
 func canonicalSnapshotRelativePath(snapshotRoot string, relativePath string) (string, error) {
@@ -816,7 +836,10 @@ func cleanTrackedPath(raw string) (string, error) {
 	if strings.ContainsRune(raw, '\x00') {
 		return "", fmt.Errorf("tracked path contains a NUL byte")
 	}
-	normalized := strings.ReplaceAll(raw, "\\", "/")
+	if os.PathSeparator == '\\' && strings.ContainsRune(raw, '\\') {
+		return "", fmt.Errorf("tracked path %q contains a backslash that cannot be represented safely", raw)
+	}
+	normalized := raw
 	if path.IsAbs(normalized) || hasWindowsDrive(normalized) {
 		return "", fmt.Errorf("tracked path %q must be relative", raw)
 	}

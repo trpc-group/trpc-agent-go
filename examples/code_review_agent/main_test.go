@@ -809,7 +809,11 @@ func TestFilesAreNormalizedAndPassedToGit(t *testing.T) {
 }
 
 func TestNormalizeFileFiltersPreservesLiteralWhitespace(t *testing.T) {
-	want := repeatedStrings{" leading.go", "trailing.go ", "   ", "pkg/file.go"}
+	separatorPath := `pkg\file.go`
+	if runtime.GOOS == "windows" {
+		separatorPath = "pkg/file.go"
+	}
+	want := repeatedStrings{" leading.go", "trailing.go ", "   ", separatorPath}
 	got, err := normalizeFileFilters([]string{
 		" leading.go",
 		"trailing.go ",
@@ -1101,6 +1105,21 @@ func TestPlanCommandsStagesRepoForEveryRepositoryCheck(t *testing.T) {
 	commands[1].DiagnosticModules[testRootModuleToken] = "changed"
 	if commands[2].DiagnosticModules[testRootModuleToken] != "." {
 		t.Fatalf("planned diagnostic module maps alias each other: %#v", commands[2].DiagnosticModules)
+	}
+}
+
+func TestPlanCommandsRejectsEmptyDiagnosticModuleMap(t *testing.T) {
+	commands := planCommands(
+		config{enableStaticcheck: true},
+		reviewInput{
+			kind:            inputKindRepoPath,
+			repoRoot:        t.TempDir(),
+			sandboxRepoRoot: t.TempDir(),
+		},
+		parseUnifiedDiff([]byte(minimalDiff())),
+	)
+	if len(commands) != 1 || commands[0].Kind != commandCheckGoVersion {
+		t.Fatalf("commands = %+v, want only go version", commands)
 	}
 }
 

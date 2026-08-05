@@ -12,6 +12,7 @@ package main
 import (
 	"go/ast"
 	"go/parser"
+	"go/scanner"
 	"go/token"
 	"go/types"
 	"path/filepath"
@@ -140,7 +141,7 @@ func runRulesWithLifecycleStats(
 		}
 	}
 
-	missingTestsIndex := newMissingTestsRuleIndex(parsed.Files, candidates)
+	missingTestsIndex := newMissingTestsRuleIndex(parsed.Files, repoRoot, candidates)
 	matches = append(matches, runMissingTestsRule(parsed.Files, missingTestsIndex)...)
 	return matches, stats
 }
@@ -595,7 +596,51 @@ func isFunctionStartLine(line diffLine) bool {
 	if line.Kind != diffLineAdded && line.Kind != diffLineContext {
 		return false
 	}
-	return strings.HasPrefix(strings.TrimSpace(line.Text), "func ")
+	first, ok := firstCodeToken(line.Text)
+	return ok && first == token.FUNC
+}
+
+func firstCodeToken(line string) (token.Token, bool) {
+	fset := token.NewFileSet()
+	file := fset.AddFile("review_line.go", fset.Base(), len(line))
+	var lexical scanner.Scanner
+	lexical.Init(file, []byte(line), nil, scanner.ScanComments)
+	for {
+		_, scanned, literal := lexical.Scan()
+		switch scanned {
+		case token.EOF:
+			return token.ILLEGAL, false
+		case token.COMMENT:
+			continue
+		case token.SEMICOLON:
+			if literal == "\n" {
+				continue
+			}
+			return scanned, true
+		case token.ILLEGAL:
+			return token.ILLEGAL, false
+		default:
+			return scanned, true
+		}
+	}
+}
+
+func lineContainsCodeToken(line string, wanted token.Token) bool {
+	fset := token.NewFileSet()
+	file := fset.AddFile("review_line.go", fset.Base(), len(line))
+	var lexical scanner.Scanner
+	lexical.Init(file, []byte(line), nil, scanner.ScanComments)
+	for {
+		_, scanned, _ := lexical.Scan()
+		switch scanned {
+		case token.EOF:
+			return false
+		case token.COMMENT, token.SEMICOLON:
+			continue
+		case wanted:
+			return true
+		}
+	}
 }
 
 func isExplicitIgnoredError(line string) bool {
@@ -628,19 +673,33 @@ func isExplicitIgnoredError(line string) bool {
 }
 
 type missingTestsRuleIndex struct {
-	changedTestDirs  map[string]struct{}
-	candidatesByFile map[int][]candidateLine
+	changedTestDirs           map[string]struct{}
+	candidatesByFile          map[int][]candidateLine
+	firstExportedChangeByFile map[int]candidateLine
 }
 
-func newMissingTestsRuleIndex(files []changedFile, candidates []candidateLine) missingTestsRuleIndex {
+func newMissingTestsRuleIndex(
+	files []changedFile,
+	repoRoot string,
+	candidates []candidateLine,
+) missingTestsRuleIndex {
 	index := missingTestsRuleIndex{
-		changedTestDirs:  make(map[string]struct{}),
-		candidatesByFile: make(map[int][]candidateLine),
+		changedTestDirs:           make(map[string]struct{}),
+		candidatesByFile:          make(map[int][]candidateLine),
+		firstExportedChangeByFile: make(map[int]candidateLine),
 	}
-	for _, candidate := range candidates {
+	exportedChanges, _ := analyzeExportedBehaviorCandidates(files, repoRoot, candidates)
+	for candidateIndex, candidate := range candidates {
 		index.candidatesByFile[candidate.FileIndex] = append(
 			index.candidatesByFile[candidate.FileIndex], candidate,
 		)
+		if _, exists := index.firstExportedChangeByFile[candidate.FileIndex]; exists {
+			continue
+		}
+		if exportedChanges[candidateIndex] ||
+			exportedFuncRegex.MatchString(strings.TrimSpace(candidate.Text)) {
+			index.firstExportedChangeByFile[candidate.FileIndex] = candidate
+		}
 	}
 	for fileIndex, file := range files {
 		if file.IsDeleted || file.IsBinary ||
@@ -673,14 +732,11 @@ func runMissingTestsRule(files []changedFile, index missingTestsRuleIndex) []rul
 				confidenceWarning))
 			continue
 		}
-		for _, candidate := range candidates {
-			if exportedFuncRegex.MatchString(strings.TrimSpace(candidate.Text)) {
-				matches = append(matches, newRuleMatch(candidate, ruleMissingTests, "low", "testing",
-					"Exported Go behavior changed without tests",
-					"Add or update tests for the exported behavior.",
-					confidenceWarning))
-				break
-			}
+		if candidate, ok := index.firstExportedChangeByFile[fileIndex]; ok {
+			matches = append(matches, newRuleMatch(candidate, ruleMissingTests, "low", "testing",
+				"Exported Go behavior changed without tests",
+				"Add or update tests for the exported behavior.",
+				confidenceWarning))
 		}
 	}
 	return matches
