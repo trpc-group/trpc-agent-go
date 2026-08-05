@@ -309,11 +309,17 @@ the existing tool semantics.
 | `UpdatePolicyPreserveHistory` | Drops exact duplicates, updates only for non-conflicting enrichment, keeps changes as separate entries, and allows automatic delete/clear only after an explicit user request. |
 | `UpdatePolicyAppendOnly` | Emits only non-duplicate adds: updates become adds, while delete and clear operations are filtered. |
 
-Preserve History reconciliation compares only the existing entries already
-supplied to the extractor. Retrieval scores rank candidates but cannot by
-themselves authorize an update or drop. Event identity, meaningful old tokens,
-numbers, dates, negation, participants, and locations must remain
-compatible. Topics are merged only after an update has passed these checks.
+Preserve History candidate reconciliation compares only the existing entries
+already supplied to the extractor. Exact duplicate checks also consider earlier
+operations from the same extraction batch, but distinct operations are not
+merged. Retrieval scores rank candidates but cannot by themselves authorize an
+update or drop. Event identity, meaningful old tokens, numbers, dates, negation,
+participants, and locations must remain compatible. Topics are merged only
+after an update has passed these checks.
+The directional token-coverage bounds (`0.95` for the existing memory and
+`0.70` for the candidate) are conservative implementation heuristics, not
+values selected by benchmark tuning. When the checks cannot establish a safe
+enrichment, the policy keeps the candidate as a separate memory.
 For example, adding a time to the same dated visit may update that visit;
 changing an employer or describing a visit on another date creates a new
 entry. Destructive operations are never inferred from contradictions: delete
@@ -327,10 +333,10 @@ extraction. Tool calls and tool results are excluded from this query.
 
 The update policy does not change `memory.Service`, `MemoryExtractor`, the stored
 JSON representation, memory IDs, or database schemas. It does not rewrite
-existing entries. Memory writes remain best effort for every policy: a failed
-operation is logged, the remaining operations are still attempted, and the
-extraction watermark advances after the pass. A permanently failing backend
-operation therefore cannot block newer session events.
+existing entries. Merge Similar retains its historical best-effort persistence
+behavior. With Preserve History or Append Only, a persistence failure is
+returned and does not advance the session extraction watermark, so a later job
+can retry the same events.
 
 To roll back, remove the option or set it to `UpdatePolicyMergeSimilar`. No data
 migration is required.

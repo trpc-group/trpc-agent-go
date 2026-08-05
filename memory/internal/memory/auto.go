@@ -419,8 +419,7 @@ func (w *AutoMemoryWorker) createAutoMemory(
 	if err != nil {
 		return err
 	}
-	w.executeAutoMemoryOperations(ctx, userKey, ops)
-	return nil
+	return w.executeAutoMemoryOperations(ctx, userKey, ops)
 }
 
 func (w *AutoMemoryWorker) prepareAutoMemoryOperations(
@@ -459,18 +458,20 @@ func (w *AutoMemoryWorker) executeAutoMemoryOperations(
 	ctx context.Context,
 	userKey memory.UserKey,
 	ops []*extractor.Operation,
-) {
+) error {
 	for _, op := range ops {
 		if err := w.executeOperation(ctx, userKey, op); err != nil {
-			// Memory writes have historically been best effort. Keep that
-			// contract for every policy so a permanent backend error cannot
-			// block later session events behind an uncommittable operation.
-			log.WarnfContext(ctx,
-				"auto_memory: operation failed for user %s/%s: %v",
-				userKey.AppName, userKey.UserID, err,
-			)
+			if w.updatePolicy == extractor.UpdatePolicyMergeSimilar {
+				log.WarnfContext(ctx,
+					"auto_memory: operation failed for user %s/%s: %v",
+					userKey.AppName, userKey.UserID, err,
+				)
+				continue
+			}
+			return err
 		}
 	}
+	return nil
 }
 
 // searchRelevantMemories builds a query from the conversation messages

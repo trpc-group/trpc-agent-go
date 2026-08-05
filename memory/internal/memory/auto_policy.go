@@ -20,6 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
+	"trpc.group/trpc-go/trpc-agent-go/memory/internal/updatepolicy"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -28,7 +29,6 @@ const (
 	preserveHistoryNewCoverage    = 0.70
 	maxAutoMemorySearchQueryBytes = 7 * 1024
 	searchQueryOmissionMarker     = "\n...\n"
-	extractorMetadataUpdatePolicy = "trpc-agent-go/memory-extractor/update-policy"
 )
 
 var (
@@ -104,13 +104,7 @@ type destructiveRequest struct {
 }
 
 func updatePolicyFor(ext extractor.MemoryExtractor) extractor.UpdatePolicy {
-	if ext == nil {
-		return extractor.UpdatePolicyMergeSimilar
-	}
-	policy, ok := ext.Metadata()[extractorMetadataUpdatePolicy].(extractor.UpdatePolicy)
-	if !ok {
-		return extractor.UpdatePolicyMergeSimilar
-	}
+	policy := extractor.UpdatePolicy(updatepolicy.From(ext))
 	switch policy {
 	case extractor.UpdatePolicyPreserveHistory,
 		extractor.UpdatePolicyAppendOnly:
@@ -343,16 +337,17 @@ func appendPreserveHistoryAdd(
 	op *extractor.Operation,
 	existing []*memory.Entry,
 ) []*extractor.Operation {
-	if coalesced, ok := coalescePreserveHistoryAddWithStaged(out, op); ok {
-		return coalesced
+	if hasExactMemoryDuplicate(op, existing, out) {
+		logPreserveHistoryDecision(ctx, userKey, op, nil, "no-op", "exact duplicate")
+		return out
 	}
 	if !w.isToolEnabled(memory.AddToolName) {
-		return appendOrReplaceEquivalentOperation(out, op)
+		return append(out, op)
 	}
 	match := selectPreserveHistoryCandidate(op, existing)
 	if match == nil {
 		logPreserveHistoryDecision(ctx, userKey, op, nil, "add", "no safe candidate")
-		return appendOrReplaceEquivalentOperation(out, op)
+		return append(out, op)
 	}
 	if match.duplicate {
 		logPreserveHistoryDecision(ctx, userKey, op, match, "no-op", "exact duplicate")
@@ -360,57 +355,11 @@ func appendPreserveHistoryAdd(
 	}
 	if !w.isToolEnabled(memory.UpdateToolName) {
 		logPreserveHistoryDecision(ctx, userKey, op, match, "add", "update tool disabled")
-		return appendOrReplaceEquivalentOperation(out, op)
+		return append(out, op)
 	}
 	updated := toUpdateOp(op, match.entry)
 	logPreserveHistoryDecision(ctx, userKey, op, match, "update", "safe enrichment")
-	return appendOrReplaceEquivalentOperation(out, updated)
-}
-
-func coalescePreserveHistoryAddWithStaged(
-	accepted []*extractor.Operation,
-	op *extractor.Operation,
-) ([]*extractor.Operation, bool) {
-	for index, candidate := range accepted {
-		if candidate == nil || (candidate.Type != extractor.OperationAdd &&
-			candidate.Type != extractor.OperationUpdate) {
-			continue
-		}
-		merged := inheritStagedOperationMetadata(op, candidate)
-		match := classifyPreserveHistoryCandidate(merged, &memory.Entry{
-			ID:     "pending-operation",
-			Memory: operationMemory(candidate),
-		})
-		if match == nil {
-			continue
-		}
-		merged.Type = candidate.Type
-		merged.MemoryID = candidate.MemoryID
-		merged.Topics = mergeTopics(candidate.Topics, merged.Topics)
-		accepted[index] = merged
-		return accepted, true
-	}
-	return accepted, false
-}
-
-func inheritStagedOperationMetadata(
-	op *extractor.Operation,
-	candidate *extractor.Operation,
-) *extractor.Operation {
-	merged := *op
-	if merged.MemoryKind == "" {
-		merged.MemoryKind = candidate.MemoryKind
-	}
-	if merged.EventTime == nil {
-		merged.EventTime = candidate.EventTime
-	}
-	if len(merged.Participants) == 0 {
-		merged.Participants = candidate.Participants
-	}
-	if merged.Location == "" {
-		merged.Location = candidate.Location
-	}
-	return &merged
+	return append(out, updated)
 }
 
 func appendPreserveHistoryUpdate(
@@ -429,40 +378,13 @@ func appendPreserveHistoryUpdate(
 	if match != nil && w.isToolEnabled(memory.UpdateToolName) {
 		updated := toUpdateOp(op, existing)
 		logPreserveHistoryDecision(ctx, userKey, op, match, "update", "safe enrichment")
-		return appendOrReplaceEquivalentOperation(out, updated)
+		return append(out, updated)
 	}
 	add := *op
 	add.Type = extractor.OperationAdd
 	add.MemoryID = ""
 	logPreserveHistoryDecision(ctx, userKey, op, match, "add", "unsafe or unknown update target")
-	return appendOrReplaceEquivalentOperation(out, &add)
-}
-
-func appendOrReplaceEquivalentOperation(
-	accepted []*extractor.Operation,
-	op *extractor.Operation,
-) []*extractor.Operation {
-	for index, candidate := range accepted {
-		if candidate == nil || candidate.Type != op.Type ||
-			candidate.MemoryID != op.MemoryID {
-			continue
-		}
-		match := classifyPreserveHistoryCandidate(op, &memory.Entry{
-			ID:     "pending-operation",
-			Memory: operationMemory(candidate),
-		})
-		if match != nil {
-			accepted[index] = op
-			return accepted
-		}
-		if op.Type == extractor.OperationUpdate {
-			add := *op
-			add.Type = extractor.OperationAdd
-			add.MemoryID = ""
-			return append(accepted, &add)
-		}
-	}
-	return append(accepted, op)
+	return append(out, &add)
 }
 
 func selectPreserveHistoryCandidate(

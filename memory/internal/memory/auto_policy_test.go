@@ -126,7 +126,7 @@ func newExtractorWithOperation(
 	)
 }
 
-func TestUpdatePolicyFor_UsesTypedExtractorMetadata(t *testing.T) {
+func TestUpdatePolicyFor_UsesSealedExtractorCapability(t *testing.T) {
 	for _, policy := range []extractor.UpdatePolicy{
 		extractor.UpdatePolicyMergeSimilar,
 		extractor.UpdatePolicyPreserveHistory,
@@ -155,47 +155,35 @@ func TestUpdatePolicyFor_UsesTypedExtractorMetadata(t *testing.T) {
 		&customUpdatePolicyExtractor{
 			mockExtractor: &mockExtractor{},
 			metadata: map[string]any{
-				extractorMetadataUpdatePolicy: "preserve_history",
+				"trpc-agent-go/memory-extractor/update-policy": extractor.UpdatePolicyPreserveHistory,
 			},
 		},
 	))
 }
 
-func TestUpdatePolicies_KeepOperationFailuresBestEffort(t *testing.T) {
-	for _, policy := range []extractor.UpdatePolicy{
-		extractor.UpdatePolicyMergeSimilar,
-		extractor.UpdatePolicyPreserveHistory,
-		extractor.UpdatePolicyAppendOnly,
-	} {
-		t.Run(string(policy), func(t *testing.T) {
-			ext := &customUpdatePolicyExtractor{
-				mockExtractor: &mockExtractor{ops: []*extractor.Operation{
-					{Type: extractor.OperationAdd, Memory: "User likes tea."},
-					{Type: extractor.OperationAdd, Memory: "User likes coffee."},
-				}},
-				metadata: map[string]any{
-					extractorMetadataUpdatePolicy: policy,
-				},
-			}
-			operator := &failFirstAddOperator{mockOperator: newMockOperator()}
-			worker := NewAutoMemoryWorker(
-				AutoMemoryConfig{Extractor: ext}, operator,
-			)
-
-			err := worker.createAutoMemory(
-				context.Background(),
-				reconcileUserKey(),
-				[]model.Message{model.NewUserMessage("I like tea and coffee.")},
-			)
-
-			require.NoError(t, err)
-			assert.Equal(t, 2, operator.attempts)
-			assert.Equal(t, 1, operator.addCalls)
-		})
+func TestUpdatePolicyMergeSimilar_KeepsOperationFailuresBestEffort(t *testing.T) {
+	ext := &customUpdatePolicyExtractor{
+		mockExtractor: &mockExtractor{ops: []*extractor.Operation{
+			{Type: extractor.OperationAdd, Memory: "User likes tea."},
+			{Type: extractor.OperationAdd, Memory: "User likes coffee."},
+		}},
+		metadata: map[string]any{},
 	}
+	operator := &failFirstAddOperator{mockOperator: newMockOperator()}
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{Extractor: ext}, operator)
+
+	err := worker.createAutoMemory(
+		context.Background(),
+		reconcileUserKey(),
+		[]model.Message{model.NewUserMessage("I like tea and coffee.")},
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, 2, operator.attempts)
+	assert.Equal(t, 1, operator.addCalls)
 }
 
-func TestUpdatePolicies_OperationFailureDoesNotBlockNewEvents(t *testing.T) {
+func TestUpdatePolicies_PersistenceFailureRetriesSameEvents(t *testing.T) {
 	for _, policy := range []extractor.UpdatePolicy{
 		extractor.UpdatePolicyPreserveHistory,
 		extractor.UpdatePolicyAppendOnly,
@@ -205,26 +193,23 @@ func TestUpdatePolicies_OperationFailureDoesNotBlockNewEvents(t *testing.T) {
 				mockExtractor: &mockExtractor{ops: []*extractor.Operation{{
 					Type: extractor.OperationAdd, Memory: "User likes tea.",
 				}}},
-				metadata: map[string]any{
-					extractorMetadataUpdatePolicy: policy,
-				},
 			}
-			operator := newMockOperator()
-			operator.addErr = assert.AnError
+			operator := &failFirstAddOperator{mockOperator: newMockOperator()}
 			worker := NewAutoMemoryWorker(
 				AutoMemoryConfig{Extractor: ext}, operator,
 			)
+			worker.updatePolicy = policy
 			sess := newTestSession("app", "user")
 			first := time.Date(2026, 8, 5, 10, 0, 0, 0, time.UTC)
-			second := first.Add(time.Minute)
 			appendSessionMessage(sess, first, model.NewUserMessage("I like tea."))
+
+			require.Error(t, worker.EnqueueJob(context.Background(), sess))
+			assert.True(t, readLastExtractAt(sess).IsZero())
 
 			require.NoError(t, worker.EnqueueJob(context.Background(), sess))
 			assert.True(t, readLastExtractAt(sess).Equal(first))
-
-			appendSessionMessage(sess, second, model.NewUserMessage("I like coffee."))
-			require.NoError(t, worker.EnqueueJob(context.Background(), sess))
-			assert.True(t, readLastExtractAt(sess).Equal(second))
+			assert.Equal(t, 2, operator.attempts)
+			assert.Equal(t, 1, operator.addCalls)
 		})
 	}
 }
@@ -280,7 +265,7 @@ func TestPreserveHistoryPolicy_ExactDuplicateIgnoresTopicDrift(t *testing.T) {
 	assert.Empty(t, out)
 }
 
-func TestPreserveHistoryPolicy_CoalescesEquivalentBatchOperations(t *testing.T) {
+func TestPreserveHistoryPolicy_FiltersExactBatchDuplicate(t *testing.T) {
 	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
 	first := &extractor.Operation{
 		Type:       extractor.OperationAdd,
@@ -299,11 +284,10 @@ func TestPreserveHistoryPolicy_CoalescesEquivalentBatchOperations(t *testing.T) 
 		[]*extractor.Operation{first, last}, nil, nil,
 	)
 	require.Len(t, out, 1)
-	assert.Equal(t, last, out[0])
-	assert.Equal(t, []string{"coffee", "preference"}, out[0].Topics)
+	assert.Same(t, first, out[0])
 }
 
-func TestPreserveHistoryPolicy_CoalescesStagedEnrichments(t *testing.T) {
+func TestPreserveHistoryPolicy_KeepsDistinctBatchAdds(t *testing.T) {
 	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
 	ops := []*extractor.Operation{
 		{Type: extractor.OperationAdd, Memory: "Alice likes coffee."},
@@ -313,70 +297,7 @@ func TestPreserveHistoryPolicy_CoalescesStagedEnrichments(t *testing.T) {
 	out := worker.reconcilePreserveHistoryOps(
 		context.Background(), reconcileUserKey(), ops, nil, nil,
 	)
-	require.Len(t, out, 1)
-	assert.Equal(t, extractor.OperationAdd, out[0].Type)
-	assert.Equal(t, "Alice likes dark roast coffee.", out[0].Memory)
-}
-
-func TestPreserveHistoryPolicy_CoalescesStagedUpdates(t *testing.T) {
-	existing := []*memory.Entry{{
-		ID: "alice-coffee",
-		Memory: &memory.Memory{
-			Memory: "Alice likes coffee.",
-			Kind:   memory.KindFact,
-		},
-	}}
-	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
-	out := worker.reconcilePreserveHistoryOps(
-		context.Background(), reconcileUserKey(), []*extractor.Operation{
-			{Type: extractor.OperationAdd, Memory: "Alice likes dark coffee."},
-			{Type: extractor.OperationAdd, Memory: "Alice likes dark roast coffee."},
-		}, existing, nil,
-	)
-	require.Len(t, out, 1)
-	assert.Equal(t, extractor.OperationUpdate, out[0].Type)
-	assert.Equal(t, "alice-coffee", out[0].MemoryID)
-	assert.Equal(t, "Alice likes dark roast coffee.", out[0].Memory)
-}
-
-func TestPreserveHistoryPolicy_PreservesConflictingStagedUpdates(t *testing.T) {
-	existing := []*memory.Entry{{
-		ID: "alice-job",
-		Memory: &memory.Memory{
-			Memory: "Alice works at Acme as an engineer.",
-			Kind:   memory.KindFact,
-		},
-	}}
-	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
-	out := worker.reconcilePreserveHistoryOps(
-		context.Background(), reconcileUserKey(), []*extractor.Operation{
-			{Type: extractor.OperationAdd, Memory: "Alice works at Acme as a senior engineer."},
-			{Type: extractor.OperationAdd, Memory: "Alice works at Acme as a principal engineer."},
-		}, existing, nil,
-	)
-	require.Len(t, out, 2)
-	assert.Equal(t, extractor.OperationUpdate, out[0].Type)
-	assert.Equal(t, "alice-job", out[0].MemoryID)
-	assert.Equal(t, extractor.OperationAdd, out[1].Type)
-	assert.Empty(t, out[1].MemoryID)
-}
-
-func TestAppendOrReplaceEquivalentOperation_KeepsDistinctOperations(t *testing.T) {
-	first := &extractor.Operation{
-		Type:   extractor.OperationAdd,
-		Memory: "User likes coffee.",
-	}
-	second := &extractor.Operation{
-		Type:     extractor.OperationUpdate,
-		MemoryID: "memory-id",
-		Memory:   "User likes coffee.",
-	}
-	out := appendOrReplaceEquivalentOperation(
-		[]*extractor.Operation{first}, second,
-	)
-	require.Len(t, out, 2)
-	assert.Same(t, first, out[0])
-	assert.Same(t, second, out[1])
+	require.Equal(t, ops, out)
 }
 
 func TestPreserveHistoryPolicy_ChangesRemainAdditive(t *testing.T) {

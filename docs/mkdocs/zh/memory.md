@@ -290,9 +290,14 @@ Update policy 只约束后台 Auto extraction 产生的操作。Agent 或应用�
 | `UpdatePolicyPreserveHistory` | 完全重复时不写入；只更新无冲突的增量信息；变化内容单独追加；只有用户明确请求时才允许自动 delete/clear。 |
 | `UpdatePolicyAppendOnly` | 最终只产生非重复 add：update 转为 add，delete/clear 被过滤。 |
 
-Preserve History reconcile 只比较已经提供给 extractor 的 existing entries。检索分数只能用于
-候选排序，不能单独决定 update 或丢弃。事件身份、有意义的旧 token、数值、
-日期、否定关系、参与者和地点必须兼容；topics 只有在 update 已通过检查后才合并。
+Preserve History 的候选 reconcile 只比较已经提供给 extractor 的 existing entries。
+精确重复检查还会考虑同一次 extraction 中已经接受的 operation，但不会合并不同的
+operation。检索分数只能用于候选排序，不能单独决定 update 或丢弃。事件身份、
+有意义的旧 token、数值、日期、否定关系、参与者和地点必须兼容；topics 只有在
+update 已通过检查后才合并。
+方向性 token coverage 的边界（旧记忆 `0.95`、候选记忆 `0.70`）是保守的实现
+启发式，并非通过 benchmark 调参得到。无法确认属于安全补充时，该策略会将候选
+保留为独立记忆。
 例如，同一次且同一日期的访问补充具体时刻可以更新；更换雇主或另一个日期的访问
 会追加为新条目。矛盾信息不能授权破坏性操作：delete 必须来自用户明确的遗忘请求，
 clear 必须来自用户明确的“遗忘全部存储信息”请求。
@@ -302,9 +307,9 @@ Merge Similar 继续使用历史的 user-only query 选择 existing memories。P
 extraction 会处理两个角色的消息；tool call 和 tool result 不会进入该 query。
 
 该 update policy 不会修改 `memory.Service`、`MemoryExtractor`、持久化 JSON、memory ID
-或数据库 schema，也不会重写存量记忆。所有 policy 都保留 Auto 原有的 best-effort
-写入语义：某个 operation 写入失败时会记录日志并继续尝试其余 operation；本轮结束后
-仍推进 extraction watermark，避免永久失败的后端操作阻塞后续 session event。
+或数据库 schema，也不会重写存量记忆。Merge Similar 继续保持原有的 best-effort
+持久化行为。Preserve History 或 Append Only 的持久化失败会返回给调用方，并且不会
+推进 session extraction watermark，因此后续任务可以重试同一批事件。
 
 回退时删除该 option，或将其设置为 `UpdatePolicyMergeSimilar` 即可，不需要数据迁移。
 
