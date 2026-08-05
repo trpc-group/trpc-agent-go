@@ -461,6 +461,13 @@ func (s *sessionSummarizer) selectSummaryEvents(
 		)
 		return summaryEventSelection{events: events, sourceEvents: events}
 	}
+	if !view.Bound {
+		// Final request tokens are still trustworthy when binding fails, but
+		// projected items may differ from messages changed by later processors
+		// or before-model callbacks. Do not summarize or advance persistence
+		// from content that is not proven to have been visible to the model.
+		return summaryEventSelection{effective: true}
+	}
 
 	viewEvents := view.Events()
 	events := make([]event.Event, 0, len(viewEvents)+1)

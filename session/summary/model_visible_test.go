@@ -94,6 +94,58 @@ func TestSummaryDoesNotAdvanceWithoutStoredBoundary(t *testing.T) {
 	))
 }
 
+func TestUnboundModelVisibleViewDoesNotSummarize(t *testing.T) {
+	now := time.Now()
+	raw := modelVisibleTestEvent(
+		"event-1",
+		"user",
+		model.NewUserMessage("stored history"),
+		now,
+	)
+	ctx := summaryview.ContextWithView(context.Background(), &summaryview.View{
+		SessionID:     "session",
+		RequestTokens: 130_000,
+		Items: []summaryview.Item{{
+			Message: model.NewUserMessage("stale projected history"),
+			EffectiveEvent: modelVisibleTestEvent(
+				"event-1",
+				"user",
+				model.NewUserMessage("stale projected history"),
+				now,
+			),
+			Boundary: summaryview.Boundary{
+				EventID:   raw.ID,
+				Timestamp: raw.Timestamp,
+			},
+		}},
+	})
+	sess := &session.Session{ID: "session", Events: []event.Event{raw}}
+	skipCalls := 0
+	summarizer := NewSummarizer(
+		&fakeModel{},
+		WithTokenThreshold(1),
+		WithSkipRecent(func([]event.Event) int {
+			skipCalls++
+			return 0
+		}),
+	)
+
+	selection := summarizer.(*sessionSummarizer).selectSummaryEvents(ctx, sess)
+	require.True(t, selection.effective)
+	require.Empty(t, selection.events)
+	require.Empty(t, selection.itemIndexes)
+	require.True(t, selection.boundary.IsZero())
+	require.False(t, summarizer.(ContextAwareSummarizer).ShouldSummarizeWithContext(
+		ctx,
+		sess,
+	))
+	_, err := summarizer.Summarize(ctx, sess)
+	require.ErrorContains(t, err, "no conversation text extracted")
+	require.Zero(t, skipCalls)
+	_, ok := sess.GetState(lastIncludedEventIDKey)
+	require.False(t, ok)
+}
+
 func TestPreSummaryHookSeparatesModelVisibleAndSourceEvents(t *testing.T) {
 	now := time.Now()
 	raw := modelVisibleTestEvent(
@@ -425,6 +477,7 @@ func TestSelectSummaryEventsPrependsPreviousSummary(t *testing.T) {
 	view := &summaryview.View{
 		SessionID:       "session",
 		PreviousSummary: "previous summary",
+		Bound:           true,
 		Items: []summaryview.Item{{
 			Message:        raw.Response.Choices[0].Message,
 			EffectiveEvent: raw,

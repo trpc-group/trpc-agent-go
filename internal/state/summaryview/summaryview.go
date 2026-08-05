@@ -77,8 +77,9 @@ func Clear(inv *agent.Invocation) {
 }
 
 // Finalize binds projected history items to their positions in the final model
-// request and records the request token count. A view remains useful for token
-// checks and standalone summarization when binding is unavailable.
+// request and records the request token count. RequestTokens remains useful
+// when binding is unavailable, but unbound items must not be treated as content
+// proven to be visible to the model.
 func Finalize(inv *agent.Invocation, req *model.Request, requestTokens int) {
 	if inv == nil || req == nil {
 		return
