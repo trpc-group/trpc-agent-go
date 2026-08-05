@@ -33,8 +33,30 @@ func WithUpdatePolicy(policy UpdatePolicy) Option {
 	}
 }
 
-// UpdatePolicy returns the configured auto-memory update policy.
+type updatePolicyProvider interface {
+	configuredUpdatePolicy() UpdatePolicy
+}
+
+// ConfiguredUpdatePolicy returns the update policy configured on the built-in
+// extractor. Custom extractor implementations always use Merge Similar because
+// the policy also controls the built-in prompt and tool surface.
+func ConfiguredUpdatePolicy(ext MemoryExtractor) UpdatePolicy {
+	provider, ok := ext.(updatePolicyProvider)
+	if !ok {
+		return UpdatePolicyMergeSimilar
+	}
+	return normalizeUpdatePolicy(provider.configuredUpdatePolicy())
+}
+
+// UpdatePolicy returns the extractor's configured auto-memory update policy.
+// It is retained for callers that inspect the built-in extractor through a
+// capability interface; the auto-memory worker uses the private capability
+// above so custom extractors cannot accidentally opt in to built-in behavior.
 func (e *memoryExtractor) UpdatePolicy() UpdatePolicy {
+	return e.configuredUpdatePolicy()
+}
+
+func (e *memoryExtractor) configuredUpdatePolicy() UpdatePolicy {
 	return normalizeUpdatePolicy(e.updatePolicy)
 }
 
@@ -50,7 +72,7 @@ func normalizeUpdatePolicy(policy UpdatePolicy) UpdatePolicy {
 }
 
 func (e *memoryExtractor) updatePolicyPromptBlock() string {
-	switch e.UpdatePolicy() {
+	switch e.configuredUpdatePolicy() {
 	case UpdatePolicyPreserveHistory:
 		return `
 
@@ -82,7 +104,7 @@ func (e *memoryExtractor) updatePolicyPromptBlock() string {
 }
 
 func (e *memoryExtractor) updatePolicyEnabledTools() map[string]struct{} {
-	if e.UpdatePolicy() != UpdatePolicyAppendOnly {
+	if e.configuredUpdatePolicy() != UpdatePolicyAppendOnly {
 		return nil
 	}
 	return map[string]struct{}{
@@ -93,7 +115,7 @@ func (e *memoryExtractor) updatePolicyEnabledTools() map[string]struct{} {
 func (e *memoryExtractor) extractionTools() map[string]tool.Tool {
 	tools := backgroundTools
 	if len(e.enabledTools) > 0 ||
-		(e.UpdatePolicy() != UpdatePolicyMergeSimilar && e.enabledTools != nil) {
+		(e.configuredUpdatePolicy() != UpdatePolicyMergeSimilar && e.enabledTools != nil) {
 		tools = filterTools(backgroundTools, e.enabledTools)
 	}
 	if policyTools := e.updatePolicyEnabledTools(); policyTools != nil {
@@ -103,7 +125,7 @@ func (e *memoryExtractor) extractionTools() map[string]tool.Tool {
 }
 
 func (e *memoryExtractor) updatePolicyToolDescription(name, description string) string {
-	if e.UpdatePolicy() == UpdatePolicyPreserveHistory && name == memory.DeleteToolName {
+	if e.configuredUpdatePolicy() == UpdatePolicyPreserveHistory && name == memory.DeleteToolName {
 		return "Delete a memory only when the user explicitly asks to forget or delete that information."
 	}
 	return description

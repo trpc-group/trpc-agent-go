@@ -232,7 +232,7 @@ func (e *memoryExtractor) Metadata() map[string]any {
 		metadataKeyModelName:      modelName,
 		metadataKeyModelAvailable: modelAvailable,
 	}
-	if policy := e.UpdatePolicy(); policy != UpdatePolicyMergeSimilar {
+	if policy := e.configuredUpdatePolicy(); policy != UpdatePolicyMergeSimilar {
 		metadata[metadataKeyUpdatePolicy] = policy
 	}
 	return metadata

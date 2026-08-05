@@ -39,6 +39,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/livesession"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/messageorigin"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/sessionroute"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/sessionstate"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryfork"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/toolresultround"
@@ -4217,6 +4218,7 @@ func (r *runner) enqueueAutoMemoryJob(ctx context.Context, sess *session.Session
 	if r.memoryService == nil || sess == nil {
 		return
 	}
+	ctx = sessionstate.ContextWithService(ctx, r.sessionService)
 	if err := r.memoryService.EnqueueAutoMemoryJob(ctx, sess); err != nil {
 		log.DebugfContext(ctx, "Auto memory extraction skipped or failed: %v", err)
 		return

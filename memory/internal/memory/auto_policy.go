@@ -74,6 +74,15 @@ var (
 		regexp.MustCompile(`(?i)\b(?:except|excluding|other\s+than|but\s+keep)\b`),
 		regexp.MustCompile(`(?:除了|除去|排除).{0,12}(?:以外|之外|外)?|(?:但是|但要|保留).{0,12}`),
 	}
+	destructiveRequestGenericTokens = stringSet([]string{
+		"a", "absolutely", "about", "all", "an", "and", "any", "anything", "can", "clear", "completely",
+		"could", "data", "delete", "detail", "details", "entirely", "erase", "ever", "everything",
+		"fact", "facts", "forget", "from", "have", "i", "information", "know", "memory", "memories",
+		"me", "my", "need", "or", "please", "regarding", "related", "remove", "said", "shared",
+		"should", "stored", "the", "to", "told", "want", "will", "would", "you",
+		"全部", "关于", "记忆", "请", "清除", "清空", "删除", "数据", "所有", "忘记",
+		"帮我", "麻烦", "我的", "我", "希望", "信息", "移除", "细节",
+	})
 )
 
 type preserveHistoryCandidate struct {
@@ -83,24 +92,15 @@ type preserveHistoryCandidate struct {
 	newCoverage float64
 }
 
-type updatePolicyProvider interface {
-	UpdatePolicy() extractor.UpdatePolicy
+type destructiveRequest struct {
+	text     string
+	explicit bool
+	clearAll bool
+	partial  bool
 }
 
 func updatePolicyFor(ext extractor.MemoryExtractor) extractor.UpdatePolicy {
-	provider, ok := ext.(updatePolicyProvider)
-	if !ok {
-		return extractor.UpdatePolicyMergeSimilar
-	}
-	policy := provider.UpdatePolicy()
-	switch policy {
-	case extractor.UpdatePolicyMergeSimilar,
-		extractor.UpdatePolicyPreserveHistory,
-		extractor.UpdatePolicyAppendOnly:
-		return policy
-	default:
-		return extractor.UpdatePolicyMergeSimilar
-	}
+	return extractor.ConfiguredUpdatePolicy(ext)
 }
 
 func (w *AutoMemoryWorker) applyUpdatePolicy(
@@ -170,8 +170,7 @@ func (w *AutoMemoryWorker) reconcilePreserveHistoryOps(
 	existing []*memory.Entry,
 	messages []model.Message,
 ) []*extractor.Operation {
-	allowDelete := hasExplicitDestructiveRequest(messages, extractor.OperationDelete)
-	allowClear := hasExplicitDestructiveRequest(messages, extractor.OperationClear)
+	request := latestExplicitDestructiveRequest(messages)
 	byID := make(map[string]*memory.Entry, len(existing))
 	for _, entry := range existing {
 		if entry != nil && entry.Memory != nil && entry.ID != "" {
@@ -189,13 +188,13 @@ func (w *AutoMemoryWorker) reconcilePreserveHistoryOps(
 		case extractor.OperationUpdate:
 			out = appendPreserveHistoryUpdate(ctx, w, userKey, out, op, byID[op.MemoryID])
 		case extractor.OperationDelete:
-			if allowDelete {
+			if request.authorizesDelete(byID[op.MemoryID]) {
 				out = append(out, op)
 				continue
 			}
 			logPreserveHistoryDestructiveRejection(ctx, userKey, op)
 		case extractor.OperationClear:
-			if allowClear {
+			if request.clearAll && !request.partial {
 				out = append(out, op)
 				continue
 			}
@@ -236,10 +235,7 @@ func operationMemory(op *extractor.Operation) *memory.Memory {
 	}
 }
 
-func hasExplicitDestructiveRequest(
-	messages []model.Message,
-	opType extractor.OperationType,
-) bool {
+func latestExplicitDestructiveRequest(messages []model.Message) destructiveRequest {
 	for index := len(messages) - 1; index >= 0; index-- {
 		msg := messages[index]
 		if msg.Role != model.RoleUser {
@@ -256,19 +252,50 @@ func hasExplicitDestructiveRequest(
 			continue
 		}
 		if !explicit {
-			return false
+			return destructiveRequest{}
 		}
-		switch opType {
-		case extractor.OperationDelete:
-			return true
-		case extractor.OperationClear:
-			return matchesAnyPattern(text, explicitClearAllRequestPatterns) &&
-				!matchesAnyPattern(text, partialClearRequestPatterns)
-		default:
+		clearAll := matchesAnyPattern(text, explicitClearAllRequestPatterns) &&
+			len(destructiveTargetTokens(text)) == 0
+		return destructiveRequest{
+			text:     text,
+			explicit: true,
+			clearAll: clearAll,
+			partial:  matchesAnyPattern(text, partialClearRequestPatterns),
+		}
+	}
+	return destructiveRequest{}
+}
+
+func (r destructiveRequest) authorizesDelete(entry *memory.Entry) bool {
+	if !r.explicit || r.partial {
+		return false
+	}
+	if r.clearAll {
+		return true
+	}
+	if entry == nil || entry.Memory == nil {
+		return false
+	}
+	targetTokens := destructiveTargetTokens(r.text)
+	if len(targetTokens) == 0 {
+		return false
+	}
+	entryText := entry.Memory.Memory + " " + strings.Join(entry.Memory.Topics, " ")
+	entryTokens := stringSet(BuildSearchTokens(entryText))
+	for token := range targetTokens {
+		if _, ok := entryTokens[token]; !ok {
 			return false
 		}
 	}
-	return false
+	return true
+}
+
+func destructiveTargetTokens(text string) map[string]struct{} {
+	tokens := stringSet(BuildSearchTokens(text))
+	for token := range destructiveRequestGenericTokens {
+		delete(tokens, token)
+	}
+	return tokens
 }
 
 func matchesAnyPattern(text string, patterns []*regexp.Regexp) bool {
@@ -286,7 +313,7 @@ func logPreserveHistoryDestructiveRejection(
 	op *extractor.Operation,
 ) {
 	log.DebugfContext(ctx,
-		"auto_memory: preserve_history policy; filtering %s without explicit user request for user %s/%s",
+		"auto_memory: preserve_history policy; filtering %s without a matching explicit user request for user %s/%s",
 		op.Type, userKey.AppName, userKey.UserID,
 	)
 }
@@ -299,13 +326,16 @@ func appendPreserveHistoryAdd(
 	op *extractor.Operation,
 	existing []*memory.Entry,
 ) []*extractor.Operation {
+	if coalesced, ok := coalescePreserveHistoryAddWithStaged(out, op); ok {
+		return coalesced
+	}
 	if !w.isToolEnabled(memory.AddToolName) {
-		return append(out, op)
+		return appendOrReplaceEquivalentOperation(out, op)
 	}
 	match := selectPreserveHistoryCandidate(op, existing)
 	if match == nil {
 		logPreserveHistoryDecision(ctx, userKey, op, nil, "add", "no safe candidate")
-		return append(out, op)
+		return appendOrReplaceEquivalentOperation(out, op)
 	}
 	if match.duplicate {
 		logPreserveHistoryDecision(ctx, userKey, op, match, "no-op", "exact duplicate")
@@ -313,11 +343,57 @@ func appendPreserveHistoryAdd(
 	}
 	if !w.isToolEnabled(memory.UpdateToolName) {
 		logPreserveHistoryDecision(ctx, userKey, op, match, "add", "update tool disabled")
-		return append(out, op)
+		return appendOrReplaceEquivalentOperation(out, op)
 	}
 	updated := toUpdateOp(op, match.entry)
 	logPreserveHistoryDecision(ctx, userKey, op, match, "update", "safe enrichment")
-	return append(out, updated)
+	return appendOrReplaceEquivalentOperation(out, updated)
+}
+
+func coalescePreserveHistoryAddWithStaged(
+	accepted []*extractor.Operation,
+	op *extractor.Operation,
+) ([]*extractor.Operation, bool) {
+	for index, candidate := range accepted {
+		if candidate == nil || (candidate.Type != extractor.OperationAdd &&
+			candidate.Type != extractor.OperationUpdate) {
+			continue
+		}
+		merged := inheritStagedOperationMetadata(op, candidate)
+		match := classifyPreserveHistoryCandidate(merged, &memory.Entry{
+			ID:     "pending-operation",
+			Memory: operationMemory(candidate),
+		})
+		if match == nil {
+			continue
+		}
+		merged.Type = candidate.Type
+		merged.MemoryID = candidate.MemoryID
+		merged.Topics = mergeTopics(candidate.Topics, merged.Topics)
+		accepted[index] = merged
+		return accepted, true
+	}
+	return accepted, false
+}
+
+func inheritStagedOperationMetadata(
+	op *extractor.Operation,
+	candidate *extractor.Operation,
+) *extractor.Operation {
+	merged := *op
+	if merged.MemoryKind == "" {
+		merged.MemoryKind = candidate.MemoryKind
+	}
+	if merged.EventTime == nil {
+		merged.EventTime = candidate.EventTime
+	}
+	if len(merged.Participants) == 0 {
+		merged.Participants = candidate.Participants
+	}
+	if merged.Location == "" {
+		merged.Location = candidate.Location
+	}
+	return &merged
 }
 
 func appendPreserveHistoryUpdate(
@@ -336,13 +412,40 @@ func appendPreserveHistoryUpdate(
 	if match != nil && w.isToolEnabled(memory.UpdateToolName) {
 		updated := toUpdateOp(op, existing)
 		logPreserveHistoryDecision(ctx, userKey, op, match, "update", "safe enrichment")
-		return append(out, updated)
+		return appendOrReplaceEquivalentOperation(out, updated)
 	}
 	add := *op
 	add.Type = extractor.OperationAdd
 	add.MemoryID = ""
 	logPreserveHistoryDecision(ctx, userKey, op, match, "add", "unsafe or unknown update target")
-	return append(out, &add)
+	return appendOrReplaceEquivalentOperation(out, &add)
+}
+
+func appendOrReplaceEquivalentOperation(
+	accepted []*extractor.Operation,
+	op *extractor.Operation,
+) []*extractor.Operation {
+	for index, candidate := range accepted {
+		if candidate == nil || candidate.Type != op.Type ||
+			candidate.MemoryID != op.MemoryID {
+			continue
+		}
+		match := classifyPreserveHistoryCandidate(op, &memory.Entry{
+			ID:     "pending-operation",
+			Memory: operationMemory(candidate),
+		})
+		if match != nil {
+			accepted[index] = op
+			return accepted
+		}
+		if op.Type == extractor.OperationUpdate {
+			add := *op
+			add.Type = extractor.OperationAdd
+			add.MemoryID = ""
+			return append(accepted, &add)
+		}
+	}
+	return append(accepted, op)
 }
 
 func selectPreserveHistoryCandidate(

@@ -16,6 +16,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/sessionstate"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -25,9 +26,10 @@ import (
 
 // mockMemoryServiceForAutoMemory implements memory.Service for testing auto memory.
 type mockMemoryServiceForAutoMemory struct {
-	enqueueCalled bool
-	enqueueErr    error
-	sess          *session.Session
+	enqueueCalled         bool
+	enqueueErr            error
+	sess                  *session.Session
+	sessionServicePresent bool
 }
 
 type mockIngestor struct {
@@ -108,6 +110,7 @@ func (m *mockMemoryServiceForAutoMemory) Tools() []tool.Tool {
 func (m *mockMemoryServiceForAutoMemory) EnqueueAutoMemoryJob(ctx context.Context, sess *session.Session) error {
 	m.enqueueCalled = true
 	m.sess = sess
+	_, m.sessionServicePresent = sessionstate.ServiceFromContext(ctx)
 	return m.enqueueErr
 }
 
@@ -138,6 +141,18 @@ func TestEnqueueAutoMemoryJob(t *testing.T) {
 		r.enqueueAutoMemoryJob(context.Background(), sess)
 		require.True(t, mockSvc.enqueueCalled)
 		require.Same(t, sess, mockSvc.sess)
+		require.False(t, mockSvc.sessionServicePresent)
+	})
+
+	t.Run("attaches session service", func(t *testing.T) {
+		mockSvc := &mockMemoryServiceForAutoMemory{}
+		sessionSvc := sessioninmemory.NewSessionService()
+		r := &runner{memoryService: mockSvc, sessionService: sessionSvc}
+		sess := session.NewSession("app", "user", "sess")
+
+		r.enqueueAutoMemoryJob(context.Background(), sess)
+
+		require.True(t, mockSvc.sessionServicePresent)
 	})
 
 	t.Run("handles enqueue error gracefully", func(t *testing.T) {
