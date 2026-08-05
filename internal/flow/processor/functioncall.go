@@ -612,26 +612,39 @@ func (p *FunctionCallResponseProcessor) shouldEmitToolResultEventPerToolCall(
 // hasConcurrentBatch reports whether this turn's tool calls may run on the
 // parallel path.
 //
-// A batch qualifies only when every call is concurrency-safe. The parallel path
-// gives each worker a session view cloned before any of them start, which a tool
-// that reads back its own persisted events cannot work against (see
-// tool.ConcurrencyAware); running the whole turn sequentially is the behaviour
-// such a tool already relies on.
+// A batch qualifies only when NO call objects to running beside its siblings.
+// The parallel path hands each worker its own invocation view, cloned before any
+// of them start; a tool whose observable effect is a mutation of that invocation
+// rather than its returned result loses that mutation when the view is discarded
+// (see tool.ConcurrencyAware). Running the whole turn sequentially is the
+// behavior such a tool already relies on.
 //
-// Requiring the WHOLE batch to be safe — rather than splitting it into runs of
-// safe and unsafe calls — keeps the model's requested ordering intact without
-// introducing a second execution schedule. A mixed turn therefore falls back to
-// the sequential path it would have taken before parallel tools were enabled.
+// Requiring the WHOLE batch to be admissible — rather than splitting it into
+// runs of objecting and non-objecting calls — keeps the model's requested
+// ordering intact without introducing a second execution schedule. A mixed turn
+// therefore falls back to the sequential path it would have taken before
+// parallel tools were enabled.
 //
-// A tool the request does not declare is treated as safe: it never executes, it
-// produces a terminal error result, so it cannot constrain its siblings.
-func hasConcurrentBatch(toolCalls []model.ToolCall, tools map[string]tool.Tool) bool {
+// Admission resolves each name the way execution does, through
+// resolveToolCallTarget's compatibility mapping: a call naming a sub-agent
+// directly is really a transfer_to_agent call, and checking the raw name would
+// miss the objection the mapped tool raises. A name that resolves to nothing is
+// admissible — it never executes, it produces a terminal error result, so it
+// cannot constrain its siblings.
+func hasConcurrentBatch(
+	toolCalls []model.ToolCall,
+	tools map[string]tool.Tool,
+	invocation *agent.Invocation,
+) bool {
 	if len(toolCalls) <= 1 {
 		return false
 	}
 	for _, tc := range toolCalls {
 		tl, ok := tools[tc.Function.Name]
 		if !ok {
+			tl = findCompatibleTool(tc.Function.Name, tools, invocation)
+		}
+		if tl == nil {
 			continue
 		}
 		if !tool.IsConcurrencySafe(tl) {
@@ -657,7 +670,7 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendPerCallResultE
 	}
 	toolCalls := llmResponse.Choices[0].Message.ToolCalls
 	execute := p.executeToolCallsSequentiallyAndEmitPerCallResultEvents
-	if p.enableParallelTools && hasConcurrentBatch(toolCalls, tools) {
+	if p.enableParallelTools && hasConcurrentBatch(toolCalls, tools, invocation) {
 		execute = p.executeToolCallsInParallelAndEmitPerCallResultEvents
 	}
 	lastEvent, err := execute(
@@ -850,15 +863,13 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsWithRequest(
 	}
 	toolCalls := llmResponse.Choices[0].Message.ToolCalls
 
-	// Parallel execution is admitted only when parallel tools are enabled AND EVERY
-	// call in the batch is concurrency-safe. Admission is all-or-nothing by design:
-	// a single unsafe call (an agent tool, which cannot work against a frozen
-	// session view) keeps the WHOLE turn sequential rather than being split out of
-	// it, because the guarantee a tool publishes is that it can run beside the other
-	// calls in its turn — partitioning the batch would run its safe siblings
-	// concurrently with each other while the unsafe one is still in flight, which is
-	// exactly what it declared it cannot tolerate.
-	if p.enableParallelTools && hasConcurrentBatch(toolCalls, tools) {
+	// Parallel execution is admitted only when parallel tools are enabled AND NO
+	// call in the batch objects to running beside its siblings. Admission is
+	// all-or-nothing by design: a single objecting call keeps the WHOLE turn
+	// sequential rather than being split out of it, because partitioning would
+	// still run the objecting call concurrently with the rest of the batch — see
+	// hasConcurrentBatch.
+	if p.enableParallelTools && hasConcurrentBatch(toolCalls, tools, invocation) {
 		mergedEvent, err := p.executeToolCallsInParallel(
 			ctx,
 			invocation,

@@ -102,10 +102,6 @@ func TestMCPTool_Declaration(t *testing.T) {
 	}
 }
 
-// MCP annotations describe safety, not concurrency: there is no hint for it in
-// the protocol. ConcurrencySafe therefore always carries the framework default,
-// because leaving it at the zero value would declare every MCP tool unsafe and
-// serialize any turn one takes part in.
 func TestMCPTool_ToolMetadata(t *testing.T) {
 	testCases := []struct {
 		name        string
@@ -114,14 +110,14 @@ func TestMCPTool_ToolMetadata(t *testing.T) {
 	}{
 		{
 			name: "nil annotations",
-			want: tool.ToolMetadata{ConcurrencySafe: true},
+			want: tool.ToolMetadata{},
 		},
 		{
 			name: "title only annotations",
 			annotations: &mcp.ToolAnnotations{
 				Title: "Human title",
 			},
-			want: tool.ToolMetadata{ConcurrencySafe: true},
+			want: tool.ToolMetadata{},
 		},
 		{
 			name: "explicit safety hints",
@@ -131,10 +127,9 @@ func TestMCPTool_ToolMetadata(t *testing.T) {
 				OpenWorldHint:   mcp.BoolPtr(true),
 			},
 			want: tool.ToolMetadata{
-				ReadOnly:        true,
-				Destructive:     true,
-				OpenWorld:       true,
-				ConcurrencySafe: true,
+				ReadOnly:    true,
+				Destructive: true,
+				OpenWorld:   true,
 			},
 		},
 		{
@@ -143,8 +138,7 @@ func TestMCPTool_ToolMetadata(t *testing.T) {
 				ReadOnlyHint: mcp.BoolPtr(true),
 			},
 			want: tool.ToolMetadata{
-				ReadOnly:        true,
-				ConcurrencySafe: true,
+				ReadOnly: true,
 			},
 		},
 		{
@@ -153,16 +147,16 @@ func TestMCPTool_ToolMetadata(t *testing.T) {
 				Title:          "Ignored title",
 				IdempotentHint: mcp.BoolPtr(true),
 			},
-			want: tool.ToolMetadata{ConcurrencySafe: true},
+			want: tool.ToolMetadata{},
 		},
 		{
-			name: "explicit false leaves the safety fields zero",
+			name: "explicit false stays zero value",
 			annotations: &mcp.ToolAnnotations{
 				ReadOnlyHint:    mcp.BoolPtr(false),
 				DestructiveHint: mcp.BoolPtr(false),
 				OpenWorldHint:   mcp.BoolPtr(false),
 			},
-			want: tool.ToolMetadata{ConcurrencySafe: true},
+			want: tool.ToolMetadata{},
 		},
 	}
 

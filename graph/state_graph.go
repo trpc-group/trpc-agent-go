@@ -5510,6 +5510,31 @@ func (c *parallelToolCallCancelCause) Unwrap() error {
 	return c.err
 }
 
+// admitsConcurrentToolCalls reports whether no tool in the batch objects to
+// running beside its siblings.
+//
+// tool.ConcurrencyAware is a framework-wide contract, so WithEnableParallelTools
+// honors it for the same reason the LLMAgent function-call processor does: a tool
+// that declares it cannot share a turn would otherwise still be launched in its
+// own goroutine here, and the exported guarantee would hold on only one of the
+// two schedulers that can run it. A name this node cannot resolve is admissible —
+// it produces a terminal error result instead of executing.
+func admitsConcurrentToolCalls(
+	toolCalls []model.ToolCall,
+	tools map[string]tool.Tool,
+) bool {
+	for _, tc := range toolCalls {
+		tl, ok := tools[tc.Function.Name]
+		if !ok {
+			continue
+		}
+		if !tool.IsConcurrencySafe(tl) {
+			return false
+		}
+	}
+	return true
+}
+
 // processToolCalls executes all tool calls and returns the resulting messages.
 func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Message, error) {
 	// Use callbacks from config if provided; otherwise extract from state.
@@ -5518,8 +5543,9 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 		toolCallbacks, _ = extractToolCallbacks(config.State)
 	}
 	completedMessages := completedToolMessagesForNode(config.State, config.NodeID)
-	// Serial path or single tool call.
-	if !config.EnableParallel || len(config.ToolCalls) <= 1 {
+	// Serial path, single tool call, or a batch some tool objects to sharing.
+	if !config.EnableParallel || len(config.ToolCalls) <= 1 ||
+		!admitsConcurrentToolCalls(config.ToolCalls, config.Tools) {
 		newMessages := make([]model.Message, 0, len(config.ToolCalls))
 		completedThisRun := make(map[string]model.Message)
 		for i, toolCall := range config.ToolCalls {
