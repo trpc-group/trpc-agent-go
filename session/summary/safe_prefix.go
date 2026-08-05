@@ -63,6 +63,13 @@ func (s *sessionSummarizer) buildSafeSummaryPrefixRequest(
 	if len(ends) == 0 {
 		return nil, false, nil
 	}
+	for len(ends) > 0 &&
+		joinSummaryEventTexts(source.prefixTexts[:ends[0]]) == "" {
+		ends = ends[1:]
+	}
+	if len(ends) == 0 {
+		return nil, false, nil
+	}
 
 	buildCandidate := func(end int) (
 		*model.Request,
@@ -73,9 +80,6 @@ func (s *sessionSummarizer) buildSafeSummaryPrefixRequest(
 		input := summaryPromptInput{
 			conversationText: joinSummaryEventTexts(source.prefixTexts[:end]),
 			previousSummary:  source.input.previousSummary,
-		}
-		if input.conversationText == "" {
-			return nil, input, false, nil
 		}
 		request, err := s.buildBoundedStandaloneSummaryRequest(
 			ctx,

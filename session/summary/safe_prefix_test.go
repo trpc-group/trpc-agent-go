@@ -339,6 +339,73 @@ func TestSessionSummarizer_SafePrefixFormatsEachToolPayloadOnce(t *testing.T) {
 	)
 }
 
+func TestSessionSummarizer_SafePrefixSkipsEmptyBoundaries(t *testing.T) {
+	capture := &cacheSafeCaptureModel{
+		response:      "prefix summary",
+		contextWindow: 100_000,
+	}
+	s := NewSummarizer(
+		capture,
+		WithPrompt("Conversation:\n{conversation_text}\n\nSummary:"),
+		WithToolCallFormatter(func(model.ToolCall) string { return "" }),
+		WithToolResultFormatter(func(model.Message) string { return "" }),
+	).(*sessionSummarizer)
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	events := []event.Event{
+		{
+			ID:        "tool-call-event",
+			Author:    "agent",
+			Timestamp: now,
+			Response: &model.Response{Choices: []model.Choice{{Message: model.Message{
+				Role:      model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{ID: "call-1"}},
+			}}}},
+		},
+		{
+			ID:        "tool-result-event",
+			Author:    "agent",
+			Timestamp: now.Add(time.Second),
+			Response: &model.Response{Choices: []model.Choice{{
+				Message: model.NewToolMessage("call-1", "lookup", "result"),
+			}}},
+		},
+		newSummaryPrefixEvent(
+			"user-event", "user-response", authorUser, model.RoleUser,
+			"small request", now.Add(2*time.Second),
+		),
+		newSummaryPrefixEvent(
+			"assistant-event", "assistant-response", "agent",
+			model.RoleAssistant, "small response", now.Add(3*time.Second),
+		),
+		newSummaryPrefixEvent(
+			"large-user-event", "large-user-response", authorUser,
+			model.RoleUser, strings.Repeat("later request ", 96),
+			now.Add(4*time.Second),
+		),
+		newSummaryPrefixEvent(
+			"large-assistant-event", "large-assistant-response", "agent",
+			model.RoleAssistant, strings.Repeat("later response ", 96),
+			now.Add(5*time.Second),
+		),
+	}
+	prefixTokens := summaryPrefixRequestTokens(t, s, events[:4])
+	allTokens := summaryPrefixRequestTokens(t, s, events)
+	require.Greater(t, allTokens, prefixTokens)
+	capture.inputBudget = prefixTokens + (allTokens-prefixTokens)/2
+	sess := &session.Session{ID: "empty-boundary-session", Events: events}
+
+	text, err := s.Summarize(context.Background(), sess)
+	require.NoError(t, err)
+	require.Equal(t, "prefix summary", text)
+	require.Contains(t, capture.request.Messages[0].Content, "small response")
+	require.NotContains(t, capture.request.Messages[0].Content, "later request")
+	require.Equal(
+		t,
+		"assistant-event",
+		string(sess.State[lastIncludedEventIDKey]),
+	)
+}
+
 func TestSafeSummaryPrefixEnds_RejectsIncompleteBoundaries(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
