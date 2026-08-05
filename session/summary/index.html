@@ -4162,13 +4162,24 @@ falls back to the standalone request path.</p>
 summary model's effective input budget. The framework uses the smaller of the
 provider-specific input budget, when the model exposes one, and a conservative
 ceiling of 70% of the model context window. An oversized fork is reduced without
-mutating the parent request: unused tool schemas are removed first, older
-complete source rounds can be dropped while the latest round is protected, and
-large tool argument/result payloads are replaced as needed. If the fork still
-cannot fit, the summarizer rebuilds a bounded standalone request. This fallback
-truncates the <code>{conversation_text}</code> and <code>{previous_summary}</code> payloads with
-head-and-tail preservation; the fixed system prompt and user-prompt template
-remain intact.</p>
+mutating the parent request: unused tool schemas are removed first, and large
+tool argument/result payloads are replaced with explicit omission markers as
+needed. Source conversation turns are not dropped. If the fork still cannot
+fit, the summarizer rebuilds a bounded standalone request. When that request can
+fit all newly uncovered conversation, the standalone path preserves it in full
+and, when <code>{previous_summary}</code> is used, may bound only that previous rolling
+summary; the fixed system prompt and user-prompt template remain intact.</p>
+<p>If all newly uncovered conversation cannot fit in one standalone request, the
+summarizer can process a complete older prefix and leave the remaining events
+uncovered for a later summary pass. A prefix must end at a stable event boundary
+and cannot split response chunks or an open tool call/result round. The summary
+boundary advances only through the selected prefix after model generation and
+post-summary processing are complete. If even the smallest complete prefix does
+not fit, the request fails before calling the model and the existing boundary
+remains unchanged. Partial-prefix fallback is disabled when
+<code>WithPreSummaryHook(...)</code> is configured because hook-rewritten text cannot be
+mapped safely back to an event boundary. Prefix summaries always use a
+standalone request; they do not reuse the cache-safe fork.</p>
 <p>Budget fitting and the fork-to-standalone decision happen before the
 <code>BeforeModel</code> callback. The callback therefore receives the actual request that
 will be sent. The framework counts the request again after the callback; if the
@@ -4176,7 +4187,8 @@ callback makes it exceed the budget, the call fails explicitly instead of
 silently replacing the callback-modified request. If a provider still returns a
 context-length error, or a non-custom model call returns an empty summary, the
 summarizer makes one bounded standalone retry at half of the first attempt's
-input budget.</p>
+input budget. That retry may select a smaller complete prefix under the same
+boundary rules.</p>
 <p>One important branch-summary behavior: after <code>WithCacheSafeForking(true)</code> is
 enabled, a non-empty branch trigger may fork the current parent request for the
 branch summary, but it will not also run the cascaded full-session summary in
@@ -5284,6 +5296,11 @@ and install it once during application initialization with
 </span><span id="__span-24-6"><a id="__codelineno-24-6" name="__codelineno-24-6"></a>
 </span><span id="__span-24-7"><a id="__codelineno-24-7" name="__codelineno-24-7"></a><span class="kd">type</span><span class="w"> </span><span class="nx">PostSummaryHook</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">in</span><span class="w"> </span><span class="o">*</span><span class="nx">PostSummaryHookContext</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
 </span></code></pre></div></td></tr></table></div>
+<p>The hook observes the provisional boundary for the source used to generate the
+summary. When the hook succeeds, or when its error is configured as non-aborting,
+the summarizer restores that exact source boundary after the hook; hook writes to
+the summary boundary state therefore do not persist. An aborting error or panic
+restores the boundary that existed before the summary attempt.</p>
 <h3 id="usage-example">Usage Example</h3>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-25-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-25-2"> 2</a></span>
@@ -6289,7 +6306,7 @@ cascade:</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="July 20, 2026 02:18:03 UTC">2026-07-20 02:18:03</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="August 5, 2026 07:51:03 UTC">2026-08-05 07:51:03</span>
   </span>
 
     
