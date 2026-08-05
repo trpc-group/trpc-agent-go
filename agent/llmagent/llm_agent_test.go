@@ -26,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow/calllimit"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
@@ -2572,6 +2573,40 @@ func TestLLMAgent_SetupInvocation_PropagatesMaxLimits(t *testing.T) {
 	llmNoLimits.setupInvocation(invNoLimits)
 	require.Equal(t, 0, invNoLimits.MaxLLMCalls)
 	require.Equal(t, 0, invNoLimits.MaxToolIterations)
+}
+
+func TestLLMAgent_SetupInvocation_ConfiguresCallLimitFinalization(t *testing.T) {
+	const toolInstruction = "finish with the available tool results"
+	llmAgent := New(
+		"limits-agent",
+		WithModel(newDummyModel()),
+		WithMaxLLMCalls(2),
+		WithMaxToolIterations(1),
+		WithLLMCallLimitFinalization(""),
+		WithToolIterationLimitFinalization(toolInstruction),
+	)
+
+	llmInvocation := agent.NewInvocation()
+	llmAgent.setupInvocation(llmInvocation)
+	require.False(t, calllimit.RecordLLMCall(llmInvocation, 2))
+	require.True(t, calllimit.RecordLLMCall(llmInvocation, 2))
+	instruction, ok := calllimit.ActivateForLLM(llmInvocation, true)
+	require.True(t, ok)
+	require.Equal(t, calllimit.DefaultInstruction, instruction)
+
+	toolInvocation := agent.NewInvocation()
+	llmAgent.setupInvocation(toolInvocation)
+	require.True(t, calllimit.RecordToolIteration(toolInvocation, 1))
+	calllimit.ScheduleToolFinalization(toolInvocation)
+	instruction, ok = calllimit.ActivateForLLM(toolInvocation, false)
+	require.True(t, ok)
+	require.Equal(t, toolInstruction, instruction)
+
+	defaultAgent := New("default-agent", WithModel(newDummyModel()))
+	defaultInvocation := agent.NewInvocation()
+	defaultAgent.setupInvocation(defaultInvocation)
+	require.False(t, calllimit.RecordLLMCall(defaultInvocation, 1))
+	require.False(t, calllimit.RecordToolIteration(defaultInvocation, 1))
 }
 
 func TestLLMAgent_MessageFilterMode(t *testing.T) {

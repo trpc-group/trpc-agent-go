@@ -30,6 +30,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow/calllimit"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/sessionroute"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/toolresultround"
@@ -4004,6 +4005,171 @@ func TestFunctionCallResponseProcessor_ToolIterationLimitEmitsFlowError(t *testi
 	require.True(t, inv.EndInvocation, "invocation should be marked as ended")
 }
 
+func TestFunctionCallResponseProcessor_SchedulesToolLimitFinalization(t *testing.T) {
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+	instruction := "finish using the tool result"
+	inv := &agent.Invocation{
+		InvocationID:      "inv-finalize",
+		AgentName:         "test-agent",
+		MaxToolIterations: 1,
+	}
+	calllimit.Configure(inv, nil, &instruction)
+	var callCount atomic.Int32
+	req := &model.Request{
+		Tools: map[string]tool.Tool{
+			"echo": &mockCallableTool{
+				declaration: &tool.Declaration{Name: "echo"},
+				callFn: func(context.Context, []byte) (any, error) {
+					callCount.Add(1)
+					return "result", nil
+				},
+			},
+		},
+	}
+	rsp := &model.Response{
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					ID:   "call-1",
+					Type: "function",
+					Function: model.FunctionDefinitionParam{
+						Name:      "echo",
+						Arguments: []byte(`{}`),
+					},
+				}},
+			},
+		}},
+	}
+	eventChan := make(chan *event.Event, 2)
+
+	p.ProcessResponse(ctx, inv, req, rsp, eventChan)
+
+	require.Equal(t, int32(1), callCount.Load())
+	require.False(t, inv.EndInvocation)
+	select {
+	case evt := <-eventChan:
+		require.NotNil(t, evt.Response)
+		require.True(t, evt.Response.IsToolResultResponse())
+	default:
+		t.Fatal("expected a tool result event")
+	}
+	got, ok := calllimit.ActivateForLLM(inv, false)
+	require.True(t, ok)
+	require.Equal(t, instruction, got)
+}
+
+func TestFunctionCallResponseProcessor_SchedulesToolLimitFinalizationOnError(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterToolResultMessages(func(
+		context.Context,
+		*tool.ToolResultMessagesInput,
+	) (any, error) {
+		return nil, errors.New("callback failure")
+	})
+	p := NewFunctionCallResponseProcessor(false, callbacks)
+	instruction := "finish after the tool error"
+	inv := &agent.Invocation{
+		InvocationID:      "inv-finalize-error",
+		AgentName:         "test-agent",
+		MaxToolIterations: 1,
+	}
+	calllimit.Configure(inv, nil, &instruction)
+	req := &model.Request{
+		Tools: map[string]tool.Tool{
+			"echo": &mockCallableTool{
+				declaration: &tool.Declaration{Name: "echo"},
+				callFn: func(context.Context, []byte) (any, error) {
+					return "result", nil
+				},
+			},
+		},
+	}
+	rsp := &model.Response{
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					ID:   "call-1",
+					Type: "function",
+					Function: model.FunctionDefinitionParam{
+						Name:      "echo",
+						Arguments: []byte(`{}`),
+					},
+				}},
+			},
+		}},
+	}
+	eventChan := make(chan *event.Event, 2)
+
+	p.ProcessResponse(ctx, inv, req, rsp, eventChan)
+
+	got, ok := calllimit.ActivateForLLM(inv, false)
+	require.True(t, ok)
+	require.Equal(t, instruction, got)
+}
+
+func TestFunctionCallResponseProcessor_RejectsToolCallDuringFinalization(t *testing.T) {
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+	instruction := ""
+	inv := &agent.Invocation{
+		InvocationID: "inv-finalizing",
+		AgentName:    "test-agent",
+		MaxLLMCalls:  1,
+	}
+	calllimit.Configure(inv, &instruction, nil)
+	require.True(t, calllimit.RecordLLMCall(inv, inv.MaxLLMCalls))
+	_, ok := calllimit.ActivateForLLM(inv, true)
+	require.True(t, ok)
+	var callCount atomic.Int32
+	req := &model.Request{
+		Tools: map[string]tool.Tool{
+			"echo": &mockCallableTool{
+				declaration: &tool.Declaration{Name: "echo"},
+				callFn: func(context.Context, []byte) (any, error) {
+					callCount.Add(1)
+					return "result", nil
+				},
+			},
+		},
+	}
+	rsp := &model.Response{
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					ID:   "call-1",
+					Type: "function",
+					Function: model.FunctionDefinitionParam{
+						Name:      "echo",
+						Arguments: []byte(`{}`),
+					},
+				}},
+			},
+		}},
+	}
+	eventChan := make(chan *event.Event, 1)
+
+	p.ProcessResponse(ctx, inv, req, rsp, eventChan)
+
+	require.Zero(t, callCount.Load())
+	require.True(t, inv.EndInvocation)
+	select {
+	case evt := <-eventChan:
+		require.NotNil(t, evt.Response)
+		require.NotNil(t, evt.Response.Error)
+		require.Equal(t, model.ErrorTypeFlowError, evt.Response.Error.Type)
+		require.Contains(t, evt.Response.Error.Message, "disabled")
+	default:
+		t.Fatal("expected a flow error event")
+	}
+}
+
 func TestFunctionCallResponseProcessor_ToolExecutionFilter_AllDeferred(
 	t *testing.T,
 ) {
@@ -4064,7 +4230,7 @@ func TestFunctionCallResponseProcessor_ToolExecutionFilter_AllDeferred(
 	require.True(t, inv.EndInvocation)
 }
 
-func TestFunctionCallResponseProcessor_WithExternalTools_AllDeferred(
+func TestFunctionCallResponseProcessor_WithExternalTools_AllDeferredDoesNotFinalize(
 	t *testing.T,
 ) {
 	const (
@@ -4083,12 +4249,15 @@ func TestFunctionCallResponseProcessor_WithExternalTools_AllDeferred(
 	}
 
 	inv := &agent.Invocation{
-		InvocationID: "inv-external-tool",
-		AgentName:    "test-agent",
+		InvocationID:      "inv-external-tool",
+		AgentName:         "test-agent",
+		MaxToolIterations: 1,
 		RunOptions: agent.NewRunOptions(
 			agent.WithExternalTools([]tool.Tool{externalTool}),
 		),
 	}
+	instruction := "finish after the tool result"
+	calllimit.Configure(inv, nil, &instruction)
 
 	req := &model.Request{
 		Tools: map[string]tool.Tool{
@@ -4125,6 +4294,9 @@ func TestFunctionCallResponseProcessor_WithExternalTools_AllDeferred(
 	}
 	assert.Zero(t, callCount.Load())
 	require.True(t, inv.EndInvocation)
+	require.Equal(t, 1, inv.ToolIterationCount())
+	_, finalizing := calllimit.ActivateForLLM(inv, false)
+	require.False(t, finalizing)
 }
 
 func TestFunctionCallResponseProcessor_WithExternalTools_UnknownStops(
@@ -5376,7 +5548,7 @@ func TestFunctionCallResponseProcessor_ToolExecutionDecision(t *testing.T) {
 	})
 }
 
-func TestFunctionCallResponseProcessor_ToolExecutionFilter_MixedStops(
+func TestFunctionCallResponseProcessor_ToolExecutionFilter_MixedStopsWithoutFinalization(
 	t *testing.T,
 ) {
 	const (
@@ -5391,14 +5563,17 @@ func TestFunctionCallResponseProcessor_ToolExecutionFilter_MixedStops(
 	p := NewFunctionCallResponseProcessor(false, nil)
 
 	inv := &agent.Invocation{
-		InvocationID: "inv-mixed",
-		AgentName:    "test-agent",
+		InvocationID:      "inv-mixed",
+		AgentName:         "test-agent",
+		MaxToolIterations: 1,
 		RunOptions: agent.RunOptions{
 			ToolExecutionFilter: tool.NewIncludeToolNamesFilter(
 				autoToolName,
 			),
 		},
 	}
+	instruction := "finish after the tool result"
+	calllimit.Configure(inv, nil, &instruction)
 
 	req := &model.Request{
 		Tools: map[string]tool.Tool{
@@ -5459,6 +5634,9 @@ func TestFunctionCallResponseProcessor_ToolExecutionFilter_MixedStops(
 		t.Fatalf("expected a tool response event")
 	}
 	require.True(t, inv.EndInvocation)
+	require.Equal(t, 1, inv.ToolIterationCount())
+	_, finalizing := calllimit.ActivateForLLM(inv, false)
+	require.False(t, finalizing)
 }
 
 func TestFunctionCallResponseProcessor_ToolExecutionFilter_NoPlaceholders(
