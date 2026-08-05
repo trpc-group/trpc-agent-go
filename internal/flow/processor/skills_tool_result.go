@@ -246,6 +246,7 @@ func (p *SkillsToolResultRequestProcessor) applyLoadedSkillContext(
 	if fallbackContent == "" {
 		p.removeLoadedContextMessage(req)
 	} else if p.skipFallbackOnSessionSummary &&
+		len(inv.RunOptions.SkillLoads) == 0 &&
 		hasSessionSummary(inv) &&
 		!hasCompactedToolResultMessages(inv) {
 		p.removeLoadedContextMessage(req)

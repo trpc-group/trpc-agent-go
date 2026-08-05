@@ -388,6 +388,14 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 			options.skillsFilePathHints,
 		),
 	)
+	if len(options.toolActivationRules) > 0 {
+		skillsOpts = append(
+			skillsOpts,
+			processor.WithSkillLoadStateDeltaHook(
+				a.handleToolActivationPostToolResult,
+			),
+		)
+	}
 	if options.MaxLoadedSkills > 0 {
 		skillsOpts = append(
 			skillsOpts,
@@ -1644,6 +1652,9 @@ func (a *LLMAgent) executeAgentFlow(ctx context.Context, invocation *agent.Invoc
 		}
 	}
 
+	if err := a.prepareSkillLoads(ctx, invocation); err != nil {
+		return ctx, nil, fmt.Errorf("prepare skill loads: %w", err)
+	}
 	ctx = a.withToolConcurrencyLimiter(ctx)
 
 	// Use the underlying flow to execute the agent logic.
