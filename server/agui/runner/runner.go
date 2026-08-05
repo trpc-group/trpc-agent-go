@@ -386,7 +386,7 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 		return nil, fmt.Errorf("resolve state: %w", err)
 	}
 	if runtimeState != nil {
-		runOption = append(runOption, agent.WithRuntimeState(runtimeState))
+		runOption = append(runOption, agent.MergeRuntimeState(runtimeState))
 	}
 	if len(messages.toolMessages) > 0 {
 		runOption = append(runOption, withToolResultMessageRewriter(messages.toolMessages))
