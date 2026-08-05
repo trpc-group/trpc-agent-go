@@ -11,6 +11,7 @@ package retriever
 
 import (
 	"context"
+	"errors"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/embedder"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/query"
@@ -71,6 +72,9 @@ func New(opts ...Option) *DefaultRetriever {
 
 // Retrieve implements the Retriever interface by executing the complete RAG pipeline.
 func (dr *DefaultRetriever) Retrieve(ctx context.Context, q *Query) (*Result, error) {
+	if dr.vectorStore == nil {
+		return nil, errors.New("vector store not configured")
+	}
 	// Step 1: Enhance query (if enhancer is available).
 	finalQuery := q.Text
 	if dr.queryEnhancer != nil && shouldEnhanceQuery(q) {

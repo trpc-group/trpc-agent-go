@@ -65,7 +65,7 @@ const (
 // requested retrieval semantics. Query always carries the original text;
 // Vector optionally carries a caller-produced embedding. In vector or hybrid
 // mode, a backend that encapsulates its own embedder may receive Query with an
-// empty Vector and produce the vector internally. Filter is ANDed with the
+// empty Vector and produce the vector internally. Filter is combined with the
 // retrieval condition. The request must be non-nil.
 type SearchNodesRequest struct {
 	// Query is the original text query for keyword or hybrid search.

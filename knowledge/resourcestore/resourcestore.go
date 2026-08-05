@@ -61,7 +61,9 @@ type ResourceInfo struct {
 // indexes. Write methods are used by ingestion; read methods are used at Agent
 // runtime. Implementations must be safe for concurrent use and honor context
 // cancellation. All writes and deletes should be idempotent so a failed import
-// can be retried safely.
+// can be retried safely. This interface does not provide an atomic transaction
+// with vector stores; a failed import may leave completed resource writes that
+// a retry must replace.
 type Store interface {
 	// PutSource inserts or updates safe metadata for one logical source.
 	PutSource(ctx context.Context, source *SourceInfo) error

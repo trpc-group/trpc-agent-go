@@ -11,17 +11,21 @@
 package file
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/extractor"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/internal/encoding"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/ocr"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	isource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/internal/source"
@@ -38,6 +42,7 @@ type Source struct {
 	name                   string
 	metadata               map[string]any
 	readers                map[string]reader.Reader
+	resourceReaders        map[string]reader.Reader
 	chunkSize              int
 	chunkOverlap           int
 	customChunkingStrategy chunking.Strategy
@@ -46,6 +51,8 @@ type Source struct {
 	fileReaderType         source.FileReaderType
 	contentExtractor       extractor.Extractor
 }
+
+var _ source.ResourceSource = (*Source)(nil)
 
 // New creates a new file knowledge source.
 func New(filePaths []string, opts ...Option) *Source {
@@ -83,6 +90,18 @@ func New(filePaths []string, opts ...Option) *Source {
 	// Initialize readers with configuration
 	s.readers = isource.GetReaders(readerOpts...)
 
+	// Resource readers return the complete normalized representation. Keep them
+	// separate from the chunking readers so ReadResources never reconstructs the
+	// source text from chunks.
+	resourceReaderOpts := []isource.ReaderOption{isource.WithChunk(false)}
+	if s.ocrExtractor != nil {
+		resourceReaderOpts = append(resourceReaderOpts, isource.WithOCRExtractor(s.ocrExtractor))
+	}
+	if len(s.transformers) > 0 {
+		resourceReaderOpts = append(resourceReaderOpts, isource.WithTransformers(s.transformers...))
+	}
+	s.resourceReaders = isource.GetReaders(resourceReaderOpts...)
+
 	return s
 }
 
@@ -100,6 +119,34 @@ func (s *Source) ReadDocuments(ctx context.Context) ([]*document.Document, error
 		allDocuments = append(allDocuments, documents...)
 	}
 	return allDocuments, nil
+}
+
+// ReadResources reads complete source representations and the documents
+// derived from the same file snapshots.
+func (s *Source) ReadResources(ctx context.Context) ([]*source.Resource, error) {
+	if len(s.filePaths) == 0 {
+		return nil, nil
+	}
+
+	resources := make([]*source.Resource, 0, len(s.filePaths))
+	seenPaths := make(map[string]string, len(s.filePaths))
+	for _, filePath := range s.filePaths {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		resourcePath := filepath.ToSlash(filepath.Base(filepath.Clean(filePath)))
+		if previous, ok := seenPaths[resourcePath]; ok {
+			return nil, fmt.Errorf("duplicate resource path %q from files %q and %q", resourcePath, previous, filePath)
+		}
+		seenPaths[resourcePath] = filePath
+
+		resource, err := s.processResource(ctx, filePath, resourcePath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to process resource %s: %w", filePath, err)
+		}
+		resources = append(resources, resource)
+	}
+	return resources, nil
 }
 
 // Name returns the name of this source.
@@ -137,28 +184,10 @@ func (s *Source) processFile(ctx context.Context, filePath string) ([]*document.
 		return nil, err
 	}
 
-	// Create metadata for this file.
-	metadata := make(map[string]any)
-	for k, v := range s.metadata {
-		metadata[k] = v
-	}
-	metadata[source.MetaSource] = source.TypeFile
-	metadata[source.MetaFilePath] = filePath
-	metadata[source.MetaFileName] = filepath.Base(filePath)
-	metadata[source.MetaFileExt] = filepath.Ext(filePath)
-	metadata[source.MetaFileSize] = fileInfo.Size()
-	metadata[source.MetaFileMode] = fileInfo.Mode().String()
-	metadata[source.MetaModifiedAt] = fileInfo.ModTime().UTC()
-
-	// Get absolute path for URI
-	// Not include ip address and port
-	absPath, err := filepath.Abs(filePath)
+	metadata, err := s.buildFileMetadata(filePath, fileInfo)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get absolute path: %w", err)
+		return nil, err
 	}
-	fileURL := (&url.URL{Scheme: "file", Path: absPath}).String()
-	metadata[source.MetaURI] = fileURL
-	metadata[source.MetaSourceName] = s.name
 
 	// Add metadata to all documents.
 	for _, doc := range documents {
@@ -170,6 +199,145 @@ func (s *Source) processFile(ctx context.Context, filePath string) ([]*document.
 		}
 	}
 	return documents, nil
+}
+
+func (s *Source) processResource(
+	ctx context.Context,
+	filePath string,
+	resourcePath string,
+) (*source.Resource, error) {
+	fileInfo, err := os.Stat(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat file: %w", err)
+	}
+	if !fileInfo.Mode().IsRegular() {
+		return nil, fmt.Errorf("not a regular file: %s", filePath)
+	}
+
+	snapshot, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file snapshot: %w", err)
+	}
+	if len(snapshot) == 0 {
+		return &source.Resource{
+			Path:       resourcePath,
+			ModifiedAt: fileInfo.ModTime().UTC(),
+		}, nil
+	}
+	fileType := isource.ResolveFileType(string(s.fileReaderType), isource.GetFileType(filePath))
+	readerName := resourceReaderName(filePath, fileType)
+
+	ext := strings.ToLower(filepath.Ext(filePath))
+	if s.contentExtractor != nil && extractor.Supports(s.contentExtractor, ext) {
+		result, err := s.contentExtractor.ExtractFromReader(ctx, bytes.NewReader(snapshot))
+		if err != nil {
+			return nil, fmt.Errorf("content extraction failed: %w", err)
+		}
+		if result == nil || result.Reader == nil {
+			return nil, fmt.Errorf("content extraction returned no content")
+		}
+		snapshot, err = io.ReadAll(result.Reader)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read extracted content: %w", err)
+		}
+		fileType = result.Format
+		readerName = filepath.Base(filePath)
+	}
+
+	chunkReader, ok := s.readers[fileType]
+	if !ok {
+		return nil, fmt.Errorf("no reader available for file type: %s", fileType)
+	}
+	resourceReader, ok := s.resourceReaders[fileType]
+	if !ok {
+		return nil, fmt.Errorf("no resource reader available for file type: %s", fileType)
+	}
+
+	fullDocuments, err := resourceReader.ReadFromReader(readerName, bytes.NewReader(snapshot))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read complete resource: %w", err)
+	}
+	content, err := completeResourceContent(fullDocuments)
+	if err != nil {
+		return nil, err
+	}
+	documents, err := chunkReader.ReadFromReader(readerName, bytes.NewReader(snapshot))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read resource documents: %w", err)
+	}
+
+	metadata, err := s.buildFileMetadata(filePath, fileInfo)
+	if err != nil {
+		return nil, err
+	}
+	metadata[source.MetaResourcePath] = resourcePath
+	if err := addMetadata(documents, metadata); err != nil {
+		return nil, err
+	}
+
+	return &source.Resource{
+		Path:       resourcePath,
+		Content:    content,
+		ModifiedAt: fileInfo.ModTime().UTC(),
+		Documents:  documents,
+	}, nil
+}
+
+func (s *Source) buildFileMetadata(filePath string, fileInfo os.FileInfo) (map[string]any, error) {
+	metadata := make(map[string]any, len(s.metadata)+10)
+	for k, v := range s.metadata {
+		metadata[k] = v
+	}
+	metadata[source.MetaSource] = source.TypeFile
+	metadata[source.MetaFilePath] = filePath
+	metadata[source.MetaFileName] = filepath.Base(filePath)
+	metadata[source.MetaFileExt] = filepath.Ext(filePath)
+	metadata[source.MetaFileSize] = fileInfo.Size()
+	metadata[source.MetaFileMode] = fileInfo.Mode().String()
+	metadata[source.MetaModifiedAt] = fileInfo.ModTime().UTC()
+
+	absPath, err := filepath.Abs(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get absolute path: %w", err)
+	}
+	metadata[source.MetaURI] = (&url.URL{Scheme: "file", Path: absPath}).String()
+	metadata[source.MetaSourceName] = s.name
+	return metadata, nil
+}
+
+func addMetadata(documents []*document.Document, metadata map[string]any) error {
+	for _, doc := range documents {
+		if doc == nil {
+			return fmt.Errorf("reader returned a nil document")
+		}
+		if doc.Metadata == nil {
+			doc.Metadata = make(map[string]any)
+		}
+		for k, v := range metadata {
+			doc.Metadata[k] = v
+		}
+	}
+	return nil
+}
+
+func completeResourceContent(documents []*document.Document) (string, error) {
+	if len(documents) != 1 || documents[0] == nil {
+		return "", fmt.Errorf("resource reader returned %d documents, want exactly one", len(documents))
+	}
+	content, _ := encoding.SmartProcessText(documents[0].Content)
+	if !utf8.ValidString(content) {
+		content = strings.ToValidUTF8(content, "\uFFFD")
+	}
+	return content, nil
+}
+
+func resourceReaderName(filePath, fileType string) string {
+	switch fileType {
+	case "go", "proto", "python":
+		return filePath
+	default:
+		return strings.TrimSuffix(filepath.Base(filePath), filepath.Ext(filePath))
+	}
 }
 
 // extractAndRead uses the content extractor to convert the file, then pipes
@@ -212,6 +380,20 @@ func (s *Source) readWithReader(filePath string) ([]*document.Document, error) {
 // SetReader sets a custom reader for a specific file type.
 func (s *Source) SetReader(fileType string, reader reader.Reader) {
 	s.readers[fileType] = reader
+	// A chunk reader does not necessarily expose an unchunked representation.
+	// Require callers that enable resource ingestion to provide the matching
+	// reader explicitly instead of silently pairing incompatible readers.
+	delete(s.resourceReaders, fileType)
+}
+
+// SetResourceReader sets the reader that must return exactly one complete
+// representation for a file type configured through SetReader.
+func (s *Source) SetResourceReader(fileType string, resourceReader reader.Reader) {
+	if resourceReader == nil {
+		delete(s.resourceReaders, fileType)
+		return
+	}
+	s.resourceReaders[fileType] = resourceReader
 }
 
 // SetMetadata sets metadata for this source.

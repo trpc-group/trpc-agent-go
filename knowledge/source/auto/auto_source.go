@@ -19,12 +19,14 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/text"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/extractor"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/internal/encoding"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/ocr"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	dirsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/dir"
@@ -44,6 +46,7 @@ type Source struct {
 	name                   string
 	metadata               map[string]any
 	textReader             reader.Reader
+	resourceTextReader     reader.Reader
 	chunkSize              int
 	chunkOverlap           int
 	customChunkingStrategy chunking.Strategy
@@ -52,6 +55,8 @@ type Source struct {
 	fileReaderType         source.FileReaderType
 	contentExtractor       extractor.Extractor
 }
+
+var _ source.ResourceSource = (*Source)(nil)
 
 // New creates a new auto knowledge source.
 func New(inputs []string, opts ...Option) *Source {
@@ -114,6 +119,17 @@ func (s *Source) initializeReaders() {
 				s.fileReaderType, available)
 		}
 	}
+
+	resourceOpts := []reader.Option{reader.WithChunk(false)}
+	if len(s.transformers) > 0 {
+		resourceOpts = append(resourceOpts, reader.WithTransformers(s.transformers...))
+	}
+	s.resourceTextReader = text.New(resourceOpts...)
+	if s.fileReaderType != "" {
+		if resourceReader, exists := reader.GetAllReaders(resourceOpts...)[string(s.fileReaderType)]; exists {
+			s.resourceTextReader = resourceReader
+		}
+	}
 }
 
 // ReadDocuments automatically detects the source type and reads documents.
@@ -130,6 +146,69 @@ func (s *Source) ReadDocuments(ctx context.Context) ([]*document.Document, error
 		allDocuments = append(allDocuments, documents...)
 	}
 	return allDocuments, nil
+}
+
+// ReadResources delegates file, directory, and URL inputs to their native
+// resource readers. Direct text inputs are stored under a stable content hash.
+func (s *Source) ReadResources(ctx context.Context) ([]*source.Resource, error) {
+	if len(s.inputs) == 0 {
+		return nil, nil
+	}
+
+	var resources []*source.Resource
+	seenPaths := make(map[string]struct{})
+	for _, input := range s.inputs {
+		inputResources, err := s.processInputResources(ctx, input)
+		if err != nil {
+			return nil, fmt.Errorf("failed to process input %s: %w", input, err)
+		}
+		for _, resource := range inputResources {
+			if resource == nil {
+				return nil, fmt.Errorf("input %s returned a nil resource", input)
+			}
+			if _, exists := seenPaths[resource.Path]; exists {
+				return nil, fmt.Errorf("duplicate resource path %q", resource.Path)
+			}
+			seenPaths[resource.Path] = struct{}{}
+			for _, doc := range resource.Documents {
+				if doc == nil {
+					return nil, fmt.Errorf("resource %q returned a nil document", resource.Path)
+				}
+				if doc.Metadata == nil {
+					doc.Metadata = make(map[string]any)
+				}
+				doc.Metadata[source.MetaSourceName] = s.name
+				doc.Metadata[source.MetaResourcePath] = resource.Path
+			}
+			resources = append(resources, resource)
+		}
+	}
+	return resources, nil
+}
+
+func (s *Source) processInputResources(ctx context.Context, input string) ([]*source.Resource, error) {
+	if s.isURL(input) {
+		return readDelegatedResources(ctx, s.newURLSource(input))
+	}
+	if s.isDirectory(input) {
+		return readDelegatedResources(ctx, s.newDirectorySource(input))
+	}
+	if s.isFile(input) {
+		return readDelegatedResources(ctx, s.newFileSource(input))
+	}
+	resource, err := s.processAsTextResource(input)
+	if err != nil {
+		return nil, err
+	}
+	return []*source.Resource{resource}, nil
+}
+
+func readDelegatedResources(ctx context.Context, src source.Source) ([]*source.Resource, error) {
+	resourceSource, ok := src.(source.ResourceSource)
+	if !ok {
+		return nil, fmt.Errorf("source type %s does not support resources", src.Type())
+	}
+	return resourceSource.ReadResources(ctx)
 }
 
 // Name returns the name of this source.
@@ -180,6 +259,10 @@ func (s *Source) isFile(input string) bool {
 
 // processAsURL processes the input as a URL.
 func (s *Source) processAsURL(ctx context.Context, input string) ([]*document.Document, error) {
+	return s.newURLSource(input).ReadDocuments(ctx)
+}
+
+func (s *Source) newURLSource(input string) *urlsource.Source {
 	var opts []urlsource.Option
 	opts = append(opts, urlsource.WithChunkSize(s.chunkSize))
 	opts = append(opts, urlsource.WithChunkOverlap(s.chunkOverlap))
@@ -195,11 +278,15 @@ func (s *Source) processAsURL(ctx context.Context, input string) ([]*document.Do
 	for k, v := range s.metadata {
 		urlSource.SetMetadata(k, v)
 	}
-	return urlSource.ReadDocuments(ctx)
+	return urlSource
 }
 
 // processAsDirectory processes the input as a directory.
 func (s *Source) processAsDirectory(ctx context.Context, input string) ([]*document.Document, error) {
+	return s.newDirectorySource(input).ReadDocuments(ctx)
+}
+
+func (s *Source) newDirectorySource(input string) *dirsource.Source {
 	var opts []dirsource.Option
 
 	// If a custom chunking strategy is set, use it
@@ -229,11 +316,15 @@ func (s *Source) processAsDirectory(ctx context.Context, input string) ([]*docum
 	for k, v := range s.metadata {
 		dirSource.SetMetadata(k, v)
 	}
-	return dirSource.ReadDocuments(ctx)
+	return dirSource
 }
 
 // processAsFile processes the input as a file.
 func (s *Source) processAsFile(ctx context.Context, input string) ([]*document.Document, error) {
+	return s.newFileSource(input).ReadDocuments(ctx)
+}
+
+func (s *Source) newFileSource(input string) *filesource.Source {
 	var opts []filesource.Option
 
 	// If a custom chunking strategy is set, use it
@@ -264,7 +355,7 @@ func (s *Source) processAsFile(ctx context.Context, input string) ([]*document.D
 	for k, v := range s.metadata {
 		fileSource.SetMetadata(k, v)
 	}
-	return fileSource.ReadDocuments(ctx)
+	return fileSource
 }
 
 // processAsText processes the input as text content.
@@ -297,6 +388,47 @@ func (s *Source) processAsText(input string) ([]*document.Document, error) {
 	}
 
 	return docs, nil
+}
+
+func (s *Source) processAsTextResource(input string) (*source.Resource, error) {
+	hash := sha256.Sum256([]byte(input))
+	resourcePath := "text/" + hex.EncodeToString(hash[:]) + ".txt"
+	if input == "" {
+		return &source.Resource{Path: resourcePath}, nil
+	}
+	documents, err := s.processAsText(input)
+	if err != nil {
+		return nil, err
+	}
+	resourceDocuments, err := s.resourceTextReader.ReadFromReader("text_input", strings.NewReader(input))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read complete text resource: %w", err)
+	}
+	if len(resourceDocuments) != 1 || resourceDocuments[0] == nil {
+		return nil, fmt.Errorf(
+			"resource reader returned %d documents, want exactly one",
+			len(resourceDocuments),
+		)
+	}
+
+	for _, doc := range documents {
+		if doc == nil {
+			return nil, fmt.Errorf("text reader returned a nil document")
+		}
+		if doc.Metadata == nil {
+			doc.Metadata = make(map[string]any)
+		}
+		doc.Metadata[source.MetaResourcePath] = resourcePath
+	}
+	content, _ := encoding.SmartProcessText(resourceDocuments[0].Content)
+	if !utf8.ValidString(content) {
+		content = strings.ToValidUTF8(content, "\uFFFD")
+	}
+	return &source.Resource{
+		Path:      resourcePath,
+		Content:   content,
+		Documents: documents,
+	}, nil
 }
 
 // SetMetadata sets metadata for this source.

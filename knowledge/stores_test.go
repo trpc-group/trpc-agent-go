@@ -122,8 +122,8 @@ func TestBuiltinKnowledgeGraphAvailability(t *testing.T) {
 func TestBuiltinKnowledgeGraphOnlySearchFailsExplicitly(t *testing.T) {
 	kb := New(WithStores(Stores{Graph: &storesTestSearchableGraphStore{}}))
 	_, err := kb.Search(context.Background(), &SearchRequest{Query: "document query"})
-	if err == nil || err.Error() != "retriever not configured" {
-		t.Fatalf("Search() error = %v, want retriever not configured", err)
+	if err == nil || err.Error() != "retrieval failed: vector store not configured" {
+		t.Fatalf("Search() error = %v, want missing vector store error", err)
 	}
 }
 

@@ -17,6 +17,7 @@ import (
 	goparser "go/parser"
 	"go/token"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,7 +35,11 @@ import (
 
 func init() {
 	docreader.RegisterReader([]string{".go"}, func(opts ...docreader.Option) docreader.Reader {
-		return &testGoReader{}
+		config := &docreader.Config{Chunk: true}
+		for _, opt := range opts {
+			opt(config)
+		}
+		return &testGoReader{chunk: config.Chunk}
 	})
 	docreader.RegisterReader([]string{".proto"}, func(opts ...docreader.Option) docreader.Reader {
 		return &testProtoReader{}
@@ -247,6 +252,301 @@ func (s *Service) Do(ctx context.Context) error { return nil }
 	}
 	if !methodDocFound {
 		t.Fatal("expected method document not found")
+	}
+}
+
+func TestReadResourcesFromLocalRepo(t *testing.T) {
+	repoRoot := t.TempDir()
+	goModContent := "module example.com/demo\n\ngo 1.21\n"
+	serviceContent := `package demo
+
+// Service serves requests.
+type Service struct{}
+
+// Do runs the service logic.
+func (s *Service) Do() {}
+`
+	writeRepoFile(t, filepath.Join(repoRoot, "go.mod"), goModContent)
+	writeRepoFile(t, filepath.Join(repoRoot, "service.go"), serviceContent)
+
+	src := New(WithRepository(Repository{Dir: repoRoot}))
+	resources, err := src.ReadResources(context.Background())
+	if err != nil {
+		t.Fatalf("ReadResources() error = %v", err)
+	}
+	if len(resources) != 2 {
+		t.Fatalf("len(resources) = %d, want 2", len(resources))
+	}
+	if resources[0].Path != "go.mod" || resources[1].Path != "service.go" {
+		t.Fatalf("resource paths = [%s %s], want [go.mod service.go]", resources[0].Path, resources[1].Path)
+	}
+
+	wantContents := map[string]string{
+		"go.mod":     goModContent,
+		"service.go": serviceContent,
+	}
+	var resourceDocumentCount int
+	for _, resource := range resources {
+		if resource.Content != wantContents[resource.Path] {
+			t.Fatalf("resource %s content = %q, want complete unchunked content %q", resource.Path, resource.Content, wantContents[resource.Path])
+		}
+		if resource.ModifiedAt.IsZero() {
+			t.Fatalf("resource %s has zero ModifiedAt", resource.Path)
+		}
+		for _, doc := range resource.Documents {
+			resourceDocumentCount++
+			if got := doc.Metadata[source.MetaFilePath]; got != resource.Path {
+				t.Fatalf("document resource path = %v, want %s", got, resource.Path)
+			}
+		}
+	}
+	if resourceDocumentCount == 0 {
+		t.Fatal("expected documents to be grouped under resources")
+	}
+
+	documents, err := src.ReadDocuments(context.Background())
+	if err != nil {
+		t.Fatalf("ReadDocuments() error = %v", err)
+	}
+	if len(documents) != resourceDocumentCount {
+		t.Fatalf("ReadDocuments() returned %d documents, resources contain %d", len(documents), resourceDocumentCount)
+	}
+}
+
+func TestReadResourcesSnapshotKeepsParserContext(t *testing.T) {
+	repoRoot := t.TempDir()
+	writeRepoFile(t, filepath.Join(repoRoot, "go.mod"), "module example.com/context\n\ngo 1.21\n")
+	writeRepoFile(t, filepath.Join(repoRoot, "service.go"), "package demo\n\ntype Service struct{}\n")
+
+	resources, err := New(
+		WithRepository(Repository{Dir: repoRoot}),
+		WithFileExtensions([]string{".go"}),
+	).ReadResources(context.Background())
+	if err != nil {
+		t.Fatalf("ReadResources() error = %v", err)
+	}
+	if len(resources) != 1 || resources[0].Path != "service.go" {
+		t.Fatalf("resources = %+v, want only service.go", resources)
+	}
+	foundModuleIdentity := false
+	for _, doc := range resources[0].Documents {
+		if doc.Metadata["trpc_ast_full_name"] == "example.com/context.Service" {
+			foundModuleIdentity = true
+			break
+		}
+	}
+	if !foundModuleIdentity {
+		t.Fatalf("parser lost go.mod context: %+v", resources[0].Documents)
+	}
+}
+
+func TestReadResourcesSnapshotKeepsParentParserContext(t *testing.T) {
+	repoRoot := t.TempDir()
+	writeRepoFile(t, filepath.Join(repoRoot, "go.mod"), "module example.com/context\n\ngo 1.21\n")
+	writeRepoFile(t, filepath.Join(repoRoot, "internal", "service.go"), "package internal\n\ntype Service struct{}\n")
+
+	resources, err := New(
+		WithRepository(Repository{Dir: repoRoot, Subdir: "internal"}),
+		WithFileExtensions([]string{".go"}),
+	).ReadResources(context.Background())
+	if err != nil {
+		t.Fatalf("ReadResources() error = %v", err)
+	}
+	if len(resources) != 1 || resources[0].Path != "internal/service.go" {
+		t.Fatalf("resources = %+v, want only internal/service.go", resources)
+	}
+	foundModuleIdentity := false
+	for _, doc := range resources[0].Documents {
+		if doc.Metadata["trpc_ast_full_name"] == "example.com/context/internal.Service" {
+			foundModuleIdentity = true
+			break
+		}
+	}
+	if !foundModuleIdentity {
+		t.Fatalf("parser lost parent go.mod context: %+v", resources[0].Documents)
+	}
+}
+
+func TestReadResourcesUsesUnchunkedReaderContent(t *testing.T) {
+	repoRoot := t.TempDir()
+	filePath := filepath.Join(repoRoot, "notes.txt")
+	writeRepoFile(t, filePath, "raw file content")
+
+	src := New(
+		WithRepository(Repository{Dir: repoRoot}),
+		WithFileExtensions([]string{".txt"}),
+	)
+	src.readers["text"] = &stubReader{fileDocs: []*document.Document{
+		{Content: "chunk one"},
+		{Content: "chunk two"},
+	}}
+	src.resourceReaders["text"] = &stubReader{fileDocs: []*document.Document{{
+		Content: "normalized complete text",
+	}}}
+
+	resources, err := src.ReadResources(context.Background())
+	if err != nil {
+		t.Fatalf("ReadResources() error = %v", err)
+	}
+	if len(resources) != 1 {
+		t.Fatalf("len(resources) = %d, want 1", len(resources))
+	}
+	resource := resources[0]
+	if resource.Content != "normalized complete text" {
+		t.Fatalf("resource content = %q, want unchunked reader content", resource.Content)
+	}
+	if len(resource.Documents) != 2 {
+		t.Fatalf("len(resource.Documents) = %d, want 2 chunks", len(resource.Documents))
+	}
+}
+
+func TestReadResourcesSnapshotsLocalRepository(t *testing.T) {
+	repoRoot := t.TempDir()
+	filePath := filepath.Join(repoRoot, "notes.txt")
+	writeRepoFile(t, filePath, "snapshot content")
+
+	src := New(
+		WithRepository(Repository{Dir: repoRoot}),
+		WithFileExtensions([]string{".txt"}),
+	)
+	src.readers["text"] = &mutatingRepoReader{afterRead: func() error {
+		return os.WriteFile(filePath, []byte("changed content"), 0o644)
+	}}
+	src.resourceReaders["text"] = &mutatingRepoReader{}
+
+	resources, err := src.ReadResources(context.Background())
+	if err != nil {
+		t.Fatalf("ReadResources() error = %v", err)
+	}
+	if len(resources) != 1 || len(resources[0].Documents) != 1 {
+		t.Fatalf("resources = %+v, want one resource with one document", resources)
+	}
+	if resources[0].Content != "snapshot content" ||
+		resources[0].Documents[0].Content != "snapshot content" {
+		t.Fatalf(
+			"resource/doc content = %q/%q, want the same snapshot",
+			resources[0].Content,
+			resources[0].Documents[0].Content,
+		)
+	}
+	if got := resources[0].Documents[0].Metadata[source.MetaRepoPath]; got != repoRoot {
+		t.Fatalf("repo path metadata = %v, want %s", got, repoRoot)
+	}
+	wantURI := (&url.URL{Scheme: "file", Path: filePath}).String()
+	if got := resources[0].Documents[0].Metadata[source.MetaURI]; got != wantURI {
+		t.Fatalf("URI metadata = %v, want %s", got, wantURI)
+	}
+}
+
+func TestReadResourcesPreservesEmptyFile(t *testing.T) {
+	repoRoot := t.TempDir()
+	writeRepoFile(t, filepath.Join(repoRoot, "empty.txt"), "")
+
+	resources, err := New(
+		WithRepository(Repository{Dir: repoRoot}),
+		WithFileExtensions([]string{".txt"}),
+	).ReadResources(context.Background())
+	if err != nil {
+		t.Fatalf("ReadResources() error = %v", err)
+	}
+	if len(resources) != 1 || resources[0].Path != "empty.txt" ||
+		resources[0].Content != "" || len(resources[0].Documents) != 0 {
+		t.Fatalf("empty resource = %+v", resources)
+	}
+}
+
+func TestReadResourcesRejectsMultipleUnchunkedDocuments(t *testing.T) {
+	repoRoot := t.TempDir()
+	writeRepoFile(t, filepath.Join(repoRoot, "notes.txt"), "raw file content")
+
+	src := New(
+		WithRepository(Repository{Dir: repoRoot}),
+		WithFileExtensions([]string{".txt"}),
+	)
+	src.readers["text"] = &stubReader{fileDocs: []*document.Document{{Content: "chunk"}}}
+	src.resourceReaders["text"] = &stubReader{fileDocs: []*document.Document{
+		{Content: "first"},
+		{Content: "second"},
+	}}
+
+	_, err := src.ReadResources(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "want exactly one") {
+		t.Fatalf("ReadResources() error = %v, want unchunked document count error", err)
+	}
+}
+
+func TestBuildResourcesRejectsUngroupedDocuments(t *testing.T) {
+	repoRoot := t.TempDir()
+	filePath := filepath.Join(repoRoot, "notes.txt")
+	writeRepoFile(t, filePath, "notes")
+	src := New()
+
+	tests := []struct {
+		name      string
+		documents []*document.Document
+		wantError string
+	}{
+		{name: "nil document", documents: []*document.Document{nil}, wantError: "cannot be nil"},
+		{name: "missing path", documents: []*document.Document{{Name: "orphan"}}, wantError: "has no resource path"},
+		{name: "unknown path", documents: []*document.Document{{
+			Name:     "unknown",
+			Metadata: map[string]any{source.MetaFilePath: "missing.txt"},
+		}}, wantError: "references unknown resource"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := src.buildResources(repoRoot, []string{filePath}, test.documents)
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("buildResources() error = %v, want containing %q", err, test.wantError)
+			}
+		})
+	}
+}
+
+func TestReadResourcesFromRemoteRepoKeepsOneSnapshot(t *testing.T) {
+	serviceContent := "package demo\n\nfunc Remote() {}\n"
+	remoteURL, _ := createRemoteRepo(t, []repoCommit{{
+		branch: "main",
+		files: map[string]string{
+			"go.mod":     "module example.com/demo\n\ngo 1.21\n",
+			"service.go": serviceContent,
+		},
+	}}, nil)
+
+	src := New(WithRepository(Repository{URL: remoteURL, Branch: "main"}))
+	resources, err := src.ReadResources(context.Background())
+	if err != nil {
+		t.Fatalf("ReadResources() error = %v", err)
+	}
+	var service *source.Resource
+	var snapshotPath string
+	for _, resource := range resources {
+		if resource.Path == "service.go" {
+			service = resource
+		}
+		for _, doc := range resource.Documents {
+			path, _ := doc.Metadata[source.MetaRepoPath].(string)
+			if path == "" {
+				t.Fatalf("document for %s has no repository snapshot path", resource.Path)
+			}
+			if snapshotPath == "" {
+				snapshotPath = path
+			} else if path != snapshotPath {
+				t.Fatalf("documents use multiple repository snapshots: %q and %q", snapshotPath, path)
+			}
+		}
+	}
+	if service == nil {
+		t.Fatal("service.go resource not found")
+	}
+	if service.Content != serviceContent {
+		t.Fatalf("service.go content = %q, want %q", service.Content, serviceContent)
+	}
+	if snapshotPath == "" {
+		t.Fatal("repository snapshot path not found")
+	}
+	if _, err := os.Stat(snapshotPath); !os.IsNotExist(err) {
+		t.Fatalf("temporary repository snapshot still exists after ReadResources: stat error = %v", err)
 	}
 }
 
@@ -922,12 +1222,17 @@ func TestResolveRepositoryRejectsInvalidStructuredInputs(t *testing.T) {
 	}
 }
 
-type testGoReader struct{}
+type testGoReader struct {
+	chunk bool
+}
 
 func (r *testGoReader) ReadFromReader(name string, rd io.Reader) ([]*document.Document, error) {
 	content, err := io.ReadAll(rd)
 	if err != nil {
 		return nil, err
+	}
+	if !r.chunk {
+		return []*document.Document{{Name: filepath.Base(name), Content: string(content)}}, nil
 	}
 	result, err := r.parseFiles(filepath.Dir(name), []testGoFile{{path: name, content: string(content)}})
 	if err != nil {
@@ -940,6 +1245,9 @@ func (r *testGoReader) ReadFromFile(filePath string) ([]*document.Document, erro
 	content, err := os.ReadFile(filePath)
 	if err != nil {
 		return nil, err
+	}
+	if !r.chunk {
+		return []*document.Document{{Name: filepath.Base(filePath), Content: string(content)}}, nil
 	}
 	result, err := r.parseFiles(filepath.Dir(filePath), []testGoFile{{path: filePath, content: string(content)}})
 	if err != nil {
@@ -1264,6 +1572,36 @@ type stubReader struct {
 	fileDocs []*document.Document
 	fileErr  error
 }
+
+type mutatingRepoReader struct {
+	afterRead func() error
+}
+
+func (r *mutatingRepoReader) ReadFromReader(_ string, input io.Reader) ([]*document.Document, error) {
+	content, err := io.ReadAll(input)
+	if err != nil {
+		return nil, err
+	}
+	return []*document.Document{{Content: string(content)}}, nil
+}
+
+func (r *mutatingRepoReader) ReadFromFile(filePath string) ([]*document.Document, error) {
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, err
+	}
+	if r.afterRead != nil {
+		if err := r.afterRead(); err != nil {
+			return nil, err
+		}
+		r.afterRead = nil
+	}
+	return []*document.Document{{Content: string(content)}}, nil
+}
+
+func (*mutatingRepoReader) ReadFromURL(string) ([]*document.Document, error) { return nil, nil }
+func (*mutatingRepoReader) Name() string                                     { return "snapshot" }
+func (*mutatingRepoReader) SupportedExtensions() []string                    { return []string{".txt"} }
 
 func (s *stubReader) ReadFromReader(_ string, _ io.Reader) ([]*document.Document, error) {
 	return nil, nil
