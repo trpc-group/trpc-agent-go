@@ -83,6 +83,9 @@ func (r *defaultReconciler) Reconcile(
 	loadedBackendInstanceID := md.BackendInstanceID
 	invalidatePreparedForInstance(&md, instanceID)
 	baseMD := cloneReconcileMetadata(md)
+	if instanceID != "" {
+		md.BackendInstanceID = instanceID
+	}
 
 	rctx := ApplyContext{
 		Engine:    eng,
@@ -151,9 +154,6 @@ func (r *defaultReconciler) Reconcile(
 	}
 	instanceBackendChanged := instanceID != "" &&
 		instanceID != loadedBackendInstanceID
-	if instanceID != "" {
-		md.BackendInstanceID = instanceID
-	}
 	if changed || instanceBackendChanged {
 		if err := r.saveReconcileMetadata(
 			ctx, eng, ws, baseMD, md, changedKeys,

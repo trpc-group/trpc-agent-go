@@ -833,13 +833,20 @@ func TestReconciler_LegacyPreparedMetadataRotatesBootstrap(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	legacy := codeexecutor.WorkspaceMetadata{
-		Version: 1,
-		Prepared: map[string]codeexecutor.PreparedRecord{
-			req.Key(): {Key: req.Key(), Fingerprint: "stale"},
-		},
-	}
-	require.NoError(t, codeexecutor.SaveMetadata(ws.Path, legacy))
+	_, err = rec.Reconcile(
+		ctx, eng, ws, "instance-1", []Requirement{req},
+	)
+	require.NoError(t, err)
+
+	md, err := codeexecutor.LoadMetadata(ws.Path)
+	require.NoError(t, err)
+	require.Equal(t, codeexecutor.WorkspaceInstanceID("instance-1"),
+		md.BackendInstanceID)
+	require.Contains(t, md.Prepared, req.Key())
+	require.NotEmpty(t, md.Prepared[req.Key()].Fingerprint)
+
+	md.BackendInstanceID = ""
+	require.NoError(t, codeexecutor.SaveMetadata(ws.Path, md))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(ws.Path, "work/seed.txt"),
 		[]byte("seed-v1"),
@@ -855,10 +862,43 @@ func TestReconciler_LegacyPreparedMetadataRotatesBootstrap(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "seed-v2", string(got))
 
-	md, err := codeexecutor.LoadMetadata(ws.Path)
+	md, err = codeexecutor.LoadMetadata(ws.Path)
 	require.NoError(t, err)
 	require.Equal(t, codeexecutor.WorkspaceInstanceID("instance-2"),
 		md.BackendInstanceID)
+}
+
+func TestReconciler_PartialSaveRecordsBackendInstanceID(t *testing.T) {
+	ctx := context.Background()
+	eng, ws := newTestEngine(t)
+
+	applied := &orderReq{
+		key:   "applied",
+		kind:  KindCommand,
+		phase: PhaseCommand,
+		apply: func() {},
+	}
+	requiredFail := &orderReq{
+		key:      "bad",
+		kind:     KindCommand,
+		phase:    PhaseCommand,
+		applyErr: fmt.Errorf("boom"),
+	}
+
+	_, err := NewReconciler().Reconcile(
+		ctx,
+		eng,
+		ws,
+		"instance-1",
+		[]Requirement{applied, requiredFail},
+	)
+	require.ErrorContains(t, err, "required requirement \"bad\" failed")
+
+	md, err := codeexecutor.LoadMetadata(ws.Path)
+	require.NoError(t, err)
+	require.Equal(t, codeexecutor.WorkspaceInstanceID("instance-1"),
+		md.BackendInstanceID)
+	require.Contains(t, md.Prepared, applied.Key())
 }
 
 func TestReconciler_InstanceRotationReplacesPreparedOnDisk(t *testing.T) {
