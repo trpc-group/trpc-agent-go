@@ -61,8 +61,9 @@ events, err := runner.Run(
 
 框架会基于本次 invocation 的有效 repository（包括上下文可见性过滤）
 对整批声明做原子校验，并在本次 invocation 的工具构建与请求处理过程中
-复用预检选中的 repository。`SKILL.md` 始终加载；`Docs` 选择额外的
-Skill 相对路径文档，`IncludeAllDocs` 选择全部辅助文档，二者不能同时
+复用预检选中的 repository 以及声明 Skill 的已验证内容。`SKILL.md` 始终
+加载；`Docs` 选择额外的 Skill 相对路径文档，`IncludeAllDocs` 选择全部辅助
+文档，二者不能同时
 设置。非空 `Docs` 会替换当前文档选择；二者都未设置时，声明本身不会改写
 当前选择，与 `skill_load` 保持一致。在默认 `turn` 模式下，框架会将本轮
 重置与声明合并为同一个原子更新；重置会移除上一轮选择，因此不会继承该

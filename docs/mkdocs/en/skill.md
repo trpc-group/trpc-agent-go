@@ -61,8 +61,9 @@ events, err := runner.Run(
 
 The declarations are validated as one atomic batch against the invocation's
 effective repository, including context-aware visibility filters. The
-repository selected during preflight is reused for tool construction and
-request processing throughout that invocation. `SKILL.md` is always loaded;
+repository selected during preflight and the validated contents of declared
+skills are reused for tool construction and request processing throughout that
+invocation. `SKILL.md` is always loaded;
 `Docs` selects additional skill-relative documents, while `IncludeAllDocs`
 selects all supporting documents and cannot be combined with `Docs`. A
 non-empty `Docs` replaces the current document selection. When both fields are

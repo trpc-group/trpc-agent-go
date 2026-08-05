@@ -30,6 +30,7 @@ type skillLoadTestRepository struct {
 	summaries []skill.Summary
 	err       error
 	getCalls  *atomic.Int32
+	getFunc   func(string, int32) (*skill.Skill, error)
 }
 
 func (r *skillLoadTestRepository) Summaries() []skill.Summary {
@@ -44,8 +45,12 @@ func (r *skillLoadTestRepository) Summaries() []skill.Summary {
 }
 
 func (r *skillLoadTestRepository) Get(name string) (*skill.Skill, error) {
+	var call int32
 	if r.getCalls != nil {
-		r.getCalls.Add(1)
+		call = r.getCalls.Add(1)
+	}
+	if r.getFunc != nil {
+		return r.getFunc(name, call)
 	}
 	if r.err != nil {
 		return nil, r.err
@@ -554,13 +559,39 @@ func TestDeclaredSkillLoadActivatesToolsForFirstModelRequest(t *testing.T) {
 	require.Equal(t, "review-tools", records[0].ToolSetName)
 }
 
-func TestDeclaredSkillLoadsReusePreparedRepository(t *testing.T) {
-	repo := &skillLoadTestRepository{skills: map[string]*skill.Skill{
-		"review": {
-			Summary: skill.Summary{Name: "review"},
-			Body:    "Pinned review body",
-		},
+func TestPreparedSkillRepositoryCopiesValidatedContent(t *testing.T) {
+	resolved := &skill.Skill{
+		Summary: skill.Summary{Name: "review"},
+		Body:    "validated body",
+		Docs: []skill.Doc{{
+			Path:    "guide.md",
+			Content: "validated guide",
+		}},
+	}
+	base := &skillLoadTestRepository{skills: map[string]*skill.Skill{
+		"review": resolved,
 	}}
+	repo := newPreparedSkillRepository(
+		base,
+		map[string]*skill.Skill{"review": resolved},
+	)
+
+	resolved.Body = "changed body"
+	resolved.Docs[0].Content = "changed guide"
+	first, err := repo.Get("review")
+	require.NoError(t, err)
+	require.Equal(t, "validated body", first.Body)
+	require.Equal(t, "validated guide", first.Docs[0].Content)
+
+	first.Body = "consumer mutation"
+	first.Docs[0].Content = "consumer mutation"
+	second, err := repo.Get("review")
+	require.NoError(t, err)
+	require.Equal(t, "validated body", second.Body)
+	require.Equal(t, "validated guide", second.Docs[0].Content)
+}
+
+func TestDeclaredSkillLoadsReusePreparedRepository(t *testing.T) {
 	tests := []struct {
 		name    string
 		options []Option
@@ -577,6 +608,24 @@ func TestDeclaredSkillLoadsReusePreparedRepository(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var providerCalls atomic.Int32
+			var getCalls atomic.Int32
+			repo := &skillLoadTestRepository{
+				summaries: []skill.Summary{{Name: "review"}},
+				getCalls:  &getCalls,
+				getFunc: func(_ string, call int32) (*skill.Skill, error) {
+					if call == 1 {
+						return &skill.Skill{
+							Summary: skill.Summary{Name: "review"},
+							Body:    "Pinned review body",
+							Docs: []skill.Doc{{
+								Path:    "guide.md",
+								Content: "Pinned guide body",
+							}},
+						}, nil
+					}
+					return nil, errors.New("transient skill read failure")
+				},
+			}
 			provider := skill.RepositoryProviderFunc(
 				func(context.Context, skill.SkillScope) (skill.Repository, error) {
 					if providerCalls.Add(1) == 1 {
@@ -597,7 +646,10 @@ func TestDeclaredSkillLoadsReusePreparedRepository(t *testing.T) {
 				agent.WithInvocationSession(&session.Session{AppName: "app"}),
 				agent.WithInvocationMessage(model.NewUserMessage("review")),
 				agent.WithInvocationRunOptions(agent.RunOptions{
-					SkillLoads: []skill.LoadRequest{{Name: "review"}},
+					SkillLoads: []skill.LoadRequest{{
+						Name: "review",
+						Docs: []string{"guide.md"},
+					}},
 				}),
 			)
 
@@ -607,12 +659,11 @@ func TestDeclaredSkillLoadsReusePreparedRepository(t *testing.T) {
 			}
 
 			require.Equal(t, int32(1), providerCalls.Load())
+			require.Equal(t, int32(1), getCalls.Load())
 			require.NotNil(t, modelStub.got)
-			require.Contains(
-				t,
-				skillLoadTestSystemContent(modelStub.got),
-				"Pinned review body",
-			)
+			system := skillLoadTestSystemContent(modelStub.got)
+			require.Contains(t, system, "Pinned review body")
+			require.Contains(t, system, "Pinned guide body")
 			require.Contains(t, modelStub.got.Tools, "skill_load")
 		})
 	}
@@ -648,17 +699,26 @@ func TestPreparedSkillRepositoryDoesNotLeakToClone(t *testing.T) {
 	agt.setupInvocation(inv)
 
 	require.NoError(t, agt.prepareSkillLoads(context.Background(), inv))
+	preparedRepo := agt.skillRepositoryForInvocation(context.Background(), inv)
+	require.NotSame(t, repoA, preparedRepo)
+	resolved, err := skill.GetForContext(
+		context.Background(),
+		preparedRepo,
+		"review",
+	)
+	require.NoError(t, err)
+	require.Equal(t, "review", resolved.Summary.Name)
+	require.Equal(t, int32(1), providerCalls.Load())
 	require.Same(
 		t,
 		repoA,
-		agt.skillRepositoryForInvocation(context.Background(), inv),
+		agt.InvocationSkillRepository(context.Background(), inv),
 	)
-	require.Equal(t, int32(1), providerCalls.Load())
 
 	view := inv.View()
 	require.Same(
 		t,
-		repoA,
+		preparedRepo,
 		agt.skillRepositoryForInvocation(context.Background(), view),
 	)
 	require.Equal(t, int32(1), providerCalls.Load())

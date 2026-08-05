@@ -25,6 +25,27 @@ type preparedSkillRepositoryState struct {
 	repository   skill.Repository
 }
 
+// preparedSkillRepository freezes the contents of declared skills while
+// delegating all other repository behavior to the invocation's effective
+// repository.
+type preparedSkillRepository struct {
+	base      skill.Repository
+	validated map[string]*skill.Skill
+}
+
+type preparedSkillRunEnvProvider interface {
+	SkillRunEnv(
+		ctx context.Context,
+		skillName string,
+	) (map[string]string, error)
+}
+
+var (
+	_ skill.ContextRepository     = (*preparedSkillRepository)(nil)
+	_ skill.RootedRepository      = (*preparedSkillRepository)(nil)
+	_ preparedSkillRunEnvProvider = (*preparedSkillRepository)(nil)
+)
+
 // prepareSkillLoads validates and normalizes all declared loads before
 // updating the invocation or activating tools. If any request fails,
 // inv.RunOptions.SkillLoads remains unchanged and no partial load is committed.
@@ -81,16 +102,19 @@ func (a *LLMAgent) prepareSkillLoads(
 			max,
 		)
 	}
+	validated := make(map[string]*skill.Skill, len(normalized))
 	for _, load := range normalized {
-		if err := validateSkillLoadRequest(ctx, repo, load); err != nil {
+		resolved, err := validateSkillLoadRequest(ctx, repo, load)
+		if err != nil {
 			return err
 		}
+		validated[load.Name] = resolved
 	}
 
 	inv.RunOptions.SkillLoads = normalized
 	inv.SetState(preparedSkillRepositoryStateKey, preparedSkillRepositoryState{
 		invocationID: inv.InvocationID,
-		repository:   repo,
+		repository:   newPreparedSkillRepository(repo, validated),
 	})
 	a.activatePreparedSkillLoads(inv, normalized)
 	return nil
@@ -129,6 +153,96 @@ func preparedSkillRepositoryForInvocation(
 		return nil, false
 	}
 	return prepared.repository, true
+}
+
+func repositoryWithoutPreparedSkills(repo skill.Repository) skill.Repository {
+	for {
+		prepared, ok := repo.(*preparedSkillRepository)
+		if !ok || prepared == nil {
+			return repo
+		}
+		repo = prepared.base
+	}
+}
+
+func newPreparedSkillRepository(
+	base skill.Repository,
+	validated map[string]*skill.Skill,
+) skill.Repository {
+	snapshots := make(map[string]*skill.Skill, len(validated))
+	for name, resolved := range validated {
+		snapshots[name] = clonePreparedSkill(resolved)
+	}
+	return &preparedSkillRepository{
+		base:      base,
+		validated: snapshots,
+	}
+}
+
+func clonePreparedSkill(resolved *skill.Skill) *skill.Skill {
+	if resolved == nil {
+		return nil
+	}
+	cloned := *resolved
+	cloned.Docs = append([]skill.Doc(nil), resolved.Docs...)
+	return &cloned
+}
+
+func (r *preparedSkillRepository) Summaries() []skill.Summary {
+	return r.base.Summaries()
+}
+
+func (r *preparedSkillRepository) Get(name string) (*skill.Skill, error) {
+	if resolved, ok := r.validated[name]; ok {
+		return clonePreparedSkill(resolved), nil
+	}
+	return r.base.Get(name)
+}
+
+func (r *preparedSkillRepository) Path(name string) (string, error) {
+	return r.base.Path(name)
+}
+
+func (r *preparedSkillRepository) Roots() []string {
+	rooted, ok := r.base.(skill.RootedRepository)
+	if !ok || rooted == nil {
+		return nil
+	}
+	return rooted.Roots()
+}
+
+func (r *preparedSkillRepository) SummariesForContext(
+	ctx context.Context,
+) []skill.Summary {
+	return skill.SummariesForContext(ctx, r.base)
+}
+
+func (r *preparedSkillRepository) GetForContext(
+	ctx context.Context,
+	name string,
+) (*skill.Skill, error) {
+	if resolved, ok := r.validated[name]; ok {
+		return clonePreparedSkill(resolved), nil
+	}
+	return skill.GetForContext(ctx, r.base, name)
+}
+
+func (r *preparedSkillRepository) PathForContext(
+	ctx context.Context,
+	name string,
+) (string, error) {
+	return skill.PathForContext(ctx, r.base, name)
+}
+
+func (r *preparedSkillRepository) SkillRunEnv(
+	ctx context.Context,
+	skillName string,
+) (map[string]string, error) {
+	provider, ok := r.base.(preparedSkillRunEnvProvider)
+	if !ok || provider == nil {
+		return nil, nil
+	}
+	return provider.SkillRunEnv(ctx, skillName)
 }
 
 func normalizeSkillLoadRequest(
@@ -184,9 +298,9 @@ func validateSkillLoadRequest(
 	ctx context.Context,
 	repo skill.Repository,
 	load skill.LoadRequest,
-) error {
+) (*skill.Skill, error) {
 	if !skillSummaryAvailable(ctx, repo, load.Name) {
-		return fmt.Errorf(
+		return nil, fmt.Errorf(
 			"%w: skill %q",
 			skill.ErrSkillUnavailable,
 			load.Name,
@@ -194,19 +308,20 @@ func validateSkillLoadRequest(
 	}
 	resolved, err := skill.GetForContext(ctx, repo, load.Name)
 	if err != nil {
-		return fmt.Errorf(
+		return nil, fmt.Errorf(
 			"load skill %q: %w",
 			load.Name,
 			err,
 		)
 	}
 	if resolved == nil {
-		return fmt.Errorf(
+		return nil, fmt.Errorf(
 			"%w: skill %q",
 			skill.ErrSkillUnavailable,
 			load.Name,
 		)
 	}
+	resolved = clonePreparedSkill(resolved)
 
 	availableDocs := make(map[string]struct{}, len(resolved.Docs))
 	for _, doc := range resolved.Docs {
@@ -214,7 +329,7 @@ func validateSkillLoadRequest(
 	}
 	for _, doc := range load.Docs {
 		if _, ok := availableDocs[doc]; !ok {
-			return fmt.Errorf(
+			return nil, fmt.Errorf(
 				"%w: document %q for skill %q",
 				skill.ErrSkillUnavailable,
 				doc,
@@ -222,7 +337,7 @@ func validateSkillLoadRequest(
 			)
 		}
 	}
-	return nil
+	return resolved, nil
 }
 
 func skillSummaryAvailable(

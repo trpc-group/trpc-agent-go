@@ -936,8 +936,9 @@ func WithSkills(repo skill.Repository) Option {
 // using a repository selected from the current app/user scope.
 //
 // When an invocation declares SkillLoads, LLMAgent resolves the effective
-// repository once after BeforeAgent callbacks and reuses it for preflight,
-// tool construction, and request processing in that invocation.
+// repository once after BeforeAgent callbacks and retains the Skill contents
+// validated during preflight for tool construction and request processing in
+// that invocation.
 func WithSkillRepositoryProvider(provider skill.RepositoryProvider) Option {
 	return func(opts *Options) {
 		opts.skillsRepositoryProvider = provider

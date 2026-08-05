@@ -149,7 +149,9 @@ func (a *LLMAgent) InvocationSkillRepository(
 	if a == nil {
 		return nil
 	}
-	return a.skillRepositoryForInvocation(ctx, inv)
+	return repositoryWithoutPreparedSkills(
+		a.skillRepositoryForInvocation(ctx, inv),
+	)
 }
 
 // SupportsInvocationSkillLoads reports that LLMAgent consumes invocation
