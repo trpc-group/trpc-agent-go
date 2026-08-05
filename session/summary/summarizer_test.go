@@ -1028,6 +1028,7 @@ func (m *cacheSafeCaptureModel) InputTokenBudget(
 
 type retrySummaryModel struct {
 	contextWindow int
+	inputBudget   int
 	requests      []*model.Request
 	responses     []*model.Response
 }
@@ -1050,6 +1051,13 @@ func (m *retrySummaryModel) GenerateContent(
 	ch <- response
 	close(ch)
 	return ch, nil
+}
+
+func (m *retrySummaryModel) InputTokenBudget(
+	context.Context,
+	*model.Request,
+) int {
+	return m.inputBudget
 }
 
 type testTool struct {

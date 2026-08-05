@@ -220,7 +220,11 @@ func WithPreSummaryHook(h PreSummaryHook) Option {
 	}
 }
 
-// WithPostSummaryHook sets a post-summary hook to modify the summary before returning.
+// WithPostSummaryHook sets a post-summary hook to modify the summary before
+// returning. The hook observes the provisional boundary for the summarized
+// source. A successful or non-aborting hook keeps that exact boundary, replacing
+// any hook changes to the summary boundary state. An aborting or panicking hook
+// restores the boundary that existed before the summary attempt.
 func WithPostSummaryHook(h PostSummaryHook) Option {
 	return func(s *sessionSummarizer) {
 		s.postHook = h
