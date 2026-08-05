@@ -9,6 +9,7 @@
 package safety
 
 import (
+	"os"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -156,7 +157,25 @@ func hostInputMayContainDenied(inputPath, denied string) bool {
 		return strings.TrimSpace(denied) != ""
 	}
 	deniedPath := normalizePathForMatch(denied)
-	return strings.HasPrefix(deniedPath, strings.TrimRight(raw, "/")+"/")
+	if strings.HasPrefix(deniedPath, strings.TrimRight(raw, "/")+"/") {
+		return true
+	}
+	if !relativeDeniedPathMayBeStaged(raw, deniedPath) {
+		return false
+	}
+	info, err := os.Stat(filepath.FromSlash(raw))
+	// A host source that cannot be inspected must not be allowed to stage an
+	// unknown directory tree around a relative denied path.
+	return err != nil || info.IsDir()
+}
+
+func relativeDeniedPathMayBeStaged(hostPath, deniedPath string) bool {
+	if hostPath == "" || deniedPath == "" ||
+		strings.HasPrefix(deniedPath, "/") ||
+		strings.HasPrefix(deniedPath, "~/") {
+		return false
+	}
+	return !(len(deniedPath) >= 3 && deniedPath[1] == ':' && deniedPath[2] == '/')
 }
 
 func sensitivePathOrGlobMatch(value, denied string) bool {

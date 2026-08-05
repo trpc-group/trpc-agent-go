@@ -78,6 +78,17 @@ func TestLoadPolicyJSON_RejectsTrailingInput(t *testing.T) {
 	}
 }
 
+func TestLoadPolicyJSON_RejectsDuplicateSecurityFields(t *testing.T) {
+	for _, input := range []string{
+		`{"network_allowlist":["allowed.example"],"network_allowlist":["evil.example"]}`,
+		`{"denied_paths":["/etc/passwd"],"denied_paths":[".env"]}`,
+		`{"secret_action":"deny","SECRET_ACTION":"ask"}`,
+	} {
+		_, err := LoadPolicyJSON(strings.NewReader(input))
+		require.ErrorContains(t, err, "duplicate JSON object key")
+	}
+}
+
 func TestLoadPolicyYAML_RejectsTrailingDocuments(t *testing.T) {
 	tests := []struct {
 		name  string

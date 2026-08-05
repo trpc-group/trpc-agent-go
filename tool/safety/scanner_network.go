@@ -607,5 +607,6 @@ func containsDownloaderOrURL(lower string) bool {
 		strings.Contains(lower, "curl ") ||
 		strings.Contains(lower, "wget ") ||
 		strings.Contains(lower, "http://") ||
-		strings.Contains(lower, "https://")
+		strings.Contains(lower, "https://") ||
+		len(extractHosts(lower)) > 0
 }

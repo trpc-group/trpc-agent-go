@@ -534,6 +534,19 @@ func TestPermissionPolicy_UsesBackendResolverAndNilFallbacks(t *testing.T) {
 	require.Equal(t, BackendSandbox, observed.Backend)
 }
 
+func TestPermissionPolicy_TypedNilDefaultScannerUsesDefault(t *testing.T) {
+	var scanner *DefaultScanner
+	require.NotPanics(t, func() {
+		policy := NewPermissionPolicy(scanner)
+		decision, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+			ToolName:  "workspace_exec",
+			Arguments: []byte(`{"command":"echo ok"}`),
+		})
+		require.NoError(t, err)
+		require.Equal(t, tool.PermissionActionAllow, decision.Action)
+	})
+}
+
 func TestPermissionHelpers(t *testing.T) {
 	require.Equal(t, tool.PermissionActionAllow, permissionDecisionForReport(Report{Decision: DecisionAllow}, nil).Action)
 	require.Equal(t, tool.PermissionActionDeny, permissionDecisionForReport(Report{Decision: DecisionDeny}, nil).Action)

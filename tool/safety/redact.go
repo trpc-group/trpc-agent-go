@@ -78,9 +78,7 @@ func redactNetworkCredentialFlags(s string) (string, bool) {
 	}
 	commands := make([]string, len(pipe.Commands))
 	for i, argv := range pipe.Commands {
-		if len(argv) > 0 {
-			commands[i] = normalizeCommand(argv[0])
-		}
+		commands[i] = networkCommandName(argv)
 	}
 	return redactNetworkCredentialCommandSpans(s, spans, commands)
 }
@@ -146,15 +144,43 @@ func redactNetworkCredentialSegment(segment, command string) (string, bool) {
 }
 
 func rawNetworkCommandName(segment string) string {
-	fields := strings.Fields(segment)
-	for _, field := range fields {
-		field = strings.Trim(field, `"'`)
-		if isShellAssignment(field) {
-			continue
-		}
-		return normalizeCommand(field)
+	return networkCommandName(strings.Fields(segment))
+}
+
+func networkCommandName(argv []string) string {
+	if len(argv) == 0 {
+		return ""
 	}
-	return ""
+	index := 0
+	for index < len(argv) {
+		field := strings.Trim(argv[index], `"'`)
+		if !isShellAssignment(field) {
+			break
+		}
+		index++
+	}
+	if index >= len(argv) {
+		return ""
+	}
+	if normalizeCommand(argv[index]) == "env" {
+		index++
+		for index < len(argv) {
+			field := strings.Trim(argv[index], `"'`)
+			if isShellAssignment(field) {
+				index++
+				continue
+			}
+			if strings.HasPrefix(field, "-") {
+				index++
+				continue
+			}
+			break
+		}
+	}
+	if index >= len(argv) {
+		return ""
+	}
+	return normalizeCommand(strings.Trim(argv[index], `"'`))
 }
 
 func isShellAssignment(field string) bool {

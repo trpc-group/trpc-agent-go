@@ -135,6 +135,14 @@ func TestRedactString_RedactsNetworkCredentialsAfterLeadingAssignments(t *testin
 	require.NotContains(t, out, "s3cr3t")
 }
 
+func TestRedactString_RedactsNetworkCredentialsThroughEnvWrapper(t *testing.T) {
+	input := `env FOO=1 curl -u alice:s3cr3t https://allowed.example`
+	out, redacted := redactString(input)
+	require.True(t, redacted)
+	require.NotContains(t, out, "alice:s3cr3t")
+	require.NotContains(t, out, "s3cr3t")
+}
+
 func TestRedactString_DoesNotTreatWgetUserAgentAsCredential(t *testing.T) {
 	for _, input := range []string{
 		`wget -U Mozilla https://allowed.example`,

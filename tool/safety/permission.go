@@ -39,8 +39,11 @@ func NewPermissionPolicy(
 	if scanner == nil {
 		scanner = MustDefaultScanner(Policy{})
 	}
+	if defaultScanner, ok := scanner.(*DefaultScanner); ok && defaultScanner == nil {
+		scanner = MustDefaultScanner(Policy{})
+	}
 	auditMode := AuditFailureModeBestEffort
-	if defaultScanner, ok := scanner.(*DefaultScanner); ok {
+	if defaultScanner, ok := scanner.(*DefaultScanner); ok && defaultScanner != nil {
 		auditMode = defaultScanner.policy.AuditFailureMode
 	}
 	p := &permissionPolicy{
@@ -203,7 +206,7 @@ func (p *permissionPolicy) writeAudit(
 }
 
 func auditDeniedPathsForScanner(scanner Scanner) []string {
-	if defaultScanner, ok := scanner.(*DefaultScanner); ok {
+	if defaultScanner, ok := scanner.(*DefaultScanner); ok && defaultScanner != nil {
 		if !defaultScanner.initialized {
 			return append([]string(nil), DefaultPolicy().DeniedPaths...)
 		}

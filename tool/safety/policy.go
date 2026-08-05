@@ -9,6 +9,7 @@
 package safety
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -177,8 +178,15 @@ func (p Policy) Validate() error {
 
 // LoadPolicyJSON loads a strict JSON policy.
 func LoadPolicyJSON(r io.Reader) (Policy, error) {
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return Policy{}, err
+	}
+	if err := rejectDuplicateJSONKeys(data); err != nil {
+		return Policy{}, err
+	}
 	var p Policy
-	dec := json.NewDecoder(r)
+	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&p); err != nil {
 		return Policy{}, err
@@ -188,6 +196,69 @@ func LoadPolicyJSON(r io.Reader) (Policy, error) {
 	}
 	p = p.WithDefaults()
 	return p, p.Validate()
+}
+
+type duplicateJSONKeyError struct {
+	key string
+}
+
+func (e duplicateJSONKeyError) Error() string {
+	return fmt.Sprintf("duplicate JSON object key %q", e.key)
+}
+
+func rejectDuplicateJSONKeys(data []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	if err := scanJSONValueForDuplicateKeys(dec); err != nil {
+		if _, ok := err.(duplicateJSONKeyError); ok {
+			return err
+		}
+	}
+	return nil
+}
+
+func scanJSONValueForDuplicateKeys(dec *json.Decoder) error {
+	token, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	delim, ok := token.(json.Delim)
+	if !ok {
+		return nil
+	}
+	switch delim {
+	case '{':
+		seen := make(map[string]struct{})
+		for dec.More() {
+			keyToken, err := dec.Token()
+			if err != nil {
+				return err
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return fmt.Errorf("JSON object key is not a string")
+			}
+			canonical := strings.ToLower(key)
+			if _, exists := seen[canonical]; exists {
+				return duplicateJSONKeyError{key: key}
+			}
+			seen[canonical] = struct{}{}
+			if err := scanJSONValueForDuplicateKeys(dec); err != nil {
+				return err
+			}
+		}
+		_, err := dec.Token()
+		return err
+	case '[':
+		for dec.More() {
+			if err := scanJSONValueForDuplicateKeys(dec); err != nil {
+				return err
+			}
+		}
+		_, err := dec.Token()
+		return err
+	default:
+		return nil
+	}
 }
 
 // LoadPolicyYAML loads a strict YAML policy.

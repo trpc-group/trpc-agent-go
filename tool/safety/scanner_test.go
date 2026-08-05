@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -565,6 +566,22 @@ func TestDefaultScanner_GatesSecretInputStaging(t *testing.T) {
 			require.True(t, report.Redacted)
 		})
 	}
+}
+
+func TestDefaultScanner_GatesRecursiveHostInputAgainstRelativeDenies(t *testing.T) {
+	hostDir := filepath.ToSlash(t.TempDir())
+	report, err := MustDefaultScanner(Policy{
+		DisableDefaultDenies: true,
+		DeniedPaths:          []string{"nested/secret.txt"},
+	}).Scan(context.Background(), ScanRequest{
+		ToolName:   "skill_run",
+		Backend:    BackendHost,
+		Command:    "true",
+		InputPaths: []string{"host://" + hostDir},
+	})
+	require.NoError(t, err)
+	require.Equal(t, DecisionDeny, report.Decision)
+	require.Equal(t, "path.input_staging", report.RuleID)
 }
 
 func TestDefaultScanner_ScansSkillEditorText(t *testing.T) {
@@ -1739,6 +1756,42 @@ func TestDefaultScanner_NetworkAllowlistCoversGenericURLSchemes(t *testing.T) {
 		}
 		require.Equal(t, DecisionDeny, report.Decision, command)
 		require.Equal(t, "network.non_allowlisted_domain", report.RuleID, command)
+	}
+}
+
+func TestDefaultScanner_NetworkAllowlistCoversGenericURLInRawAndCode(t *testing.T) {
+	scanner := MustDefaultScanner(Policy{
+		NetworkAllowlist: []string{"allowed.example"},
+	})
+	cases := []struct {
+		name string
+		req  ScanRequest
+	}{
+		{
+			name: "workspace raw arguments",
+			req: ScanRequest{
+				ToolName:     "custom_tool",
+				Backend:      BackendWorkspace,
+				RawArguments: []byte(`{"dsn":"postgres://evil.example/db"}`),
+			},
+		},
+		{
+			name: "python code",
+			req: ScanRequest{
+				ToolName: "execute_code",
+				Backend:  BackendCodeExec,
+				Language: "python",
+				Code:     `dsn = "postgres://evil.example/db"`,
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			report, err := scanner.Scan(context.Background(), tc.req)
+			require.NoError(t, err)
+			require.Equal(t, DecisionDeny, report.Decision)
+			require.Equal(t, "network.non_allowlisted_domain", report.RuleID)
+		})
 	}
 }
 
