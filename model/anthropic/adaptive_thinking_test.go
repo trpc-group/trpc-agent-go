@@ -33,6 +33,7 @@ func TestSupportsAdaptiveThinking(t *testing.T) {
 		"claude-opus-5",
 		"claude-sonnet-5",
 		"claude-opus-4-8",
+		"claude-4.8-opus",
 		"claude-opus-4-7",
 		"claude-opus-4-6",
 		"claude-4.6-opus",
@@ -73,4 +74,54 @@ func TestApplyThinkingConfigAdaptiveCarriesEffort(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, chatReq.Thinking.OfAdaptive, "adaptive thinking config was not applied")
 	assert.Equal(t, anthropicsdk.OutputConfigEffort("medium"), chatReq.OutputConfig.Effort)
+}
+
+// ThinkingEnabled=false takes three different paths, and only one of them is a
+// no-op — so the false branch needs covering per model family, not once.
+func TestApplyThinkingConfigDisabled(t *testing.T) {
+	// Always-on models reject `thinking.type=disabled` with a 400, so the request
+	// is refused here rather than sent. Anthropic documents Fable 5 and Mythos 5
+	// alongside Mythos Preview as always-on:
+	// https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking#supported-models
+	t.Run("always-on models are refused", func(t *testing.T) {
+		for _, name := range []string{"claude-mythos-preview", "claude-fable-5", "claude-mythos-5"} {
+			t.Run(name, func(t *testing.T) {
+				_, err := disabledThinkingRequest(t, name)
+				require.Error(t, err, "%s cannot have thinking disabled", name)
+				assert.Contains(t, err.Error(), name, "the error must name the model the caller passed")
+			})
+		}
+	})
+
+	// An adaptive model that CAN be disabled says so explicitly, so the server-side
+	// default does not decide instead.
+	t.Run("disableable adaptive models send disabled", func(t *testing.T) {
+		for _, name := range []string{"claude-opus-5", "claude-sonnet-5", "claude-opus-4-8", "claude-4.8-opus"} {
+			t.Run(name, func(t *testing.T) {
+				chatReq, err := disabledThinkingRequest(t, name)
+				require.NoError(t, err)
+				assert.NotNil(t, chatReq.Thinking.OfDisabled, "%s should send thinking.type=disabled", name)
+			})
+		}
+	})
+
+	// A pre-adaptive model has no thinking field to disable; sending one would be
+	// rejected, so the request carries nothing.
+	t.Run("pre-adaptive models send no thinking field", func(t *testing.T) {
+		chatReq, err := disabledThinkingRequest(t, "claude-haiku-4-5")
+		require.NoError(t, err)
+		assert.Nil(t, chatReq.Thinking.OfDisabled)
+		assert.Nil(t, chatReq.Thinking.OfAdaptive)
+		assert.Nil(t, chatReq.Thinking.OfEnabled)
+	})
+}
+
+func disabledThinkingRequest(t *testing.T, modelName string) (*anthropicsdk.MessageNewParams, error) {
+	t.Helper()
+	thinking := false
+	return New(modelName).buildChatRequest(&model.Request{
+		Messages:         []model.Message{model.NewUserMessage("u")},
+		GenerationConfig: model.GenerationConfig{ThinkingEnabled: &thinking},
+		Tools:            map[string]tool.Tool{},
+	})
 }

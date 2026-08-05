@@ -45,6 +45,7 @@ const (
 	claudeOpus5            = "claude-opus-5"
 	claudeSonnet5          = "claude-sonnet-5"
 	claudeOpus48           = "claude-opus-4-8"
+	claudeOpus48Alias      = "claude-4.8-opus"
 	claudeOpus47           = "claude-opus-4-7"
 	claudeOpus46           = "claude-opus-4-6"
 	claudeOpus46Alias      = "claude-4.6-opus"
@@ -383,7 +384,7 @@ func (m *Model) applyThinkingConfig(
 		return nil
 	}
 	if !*request.ThinkingEnabled {
-		if isClaudeMythosPreview(m.name) {
+		if isAlwaysThinking(m.name) {
 			return fmt.Errorf("anthropic: thinking cannot be disabled for model %s", m.name)
 		}
 		if !supportsAdaptiveThinking(m.name) {
@@ -424,6 +425,7 @@ func supportsAdaptiveThinking(modelName string) bool {
 		claudeOpus5,
 		claudeSonnet5,
 		claudeOpus48,
+		claudeOpus48Alias,
 		claudeOpus47,
 		claudeOpus46,
 		claudeOpus46Alias,
@@ -432,8 +434,12 @@ func supportsAdaptiveThinking(modelName string) bool {
 	)
 }
 
-func isClaudeMythosPreview(modelName string) bool {
-	return modelNameMatches(modelName, claudeMythosPreview)
+// isAlwaysThinking reports whether a model thinks unconditionally, so that
+// `thinking.type=disabled` is not merely ignored but rejected by the API.
+// Sending it for one of these turns a caller's explicit ThinkingEnabled=false
+// into a 400, so the request is refused here with a message naming the model.
+func isAlwaysThinking(modelName string) bool {
+	return modelNameMatches(modelName, claudeMythosPreview, claudeFable5, claudeMythos5)
 }
 
 func modelNameMatches(modelName string, targets ...string) bool {
