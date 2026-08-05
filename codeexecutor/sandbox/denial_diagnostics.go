@@ -25,6 +25,13 @@ type sandboxDenialRun struct {
 	droppedAtStart       uint64
 	defaultDenyTaggable  bool
 	explicitDenyTaggable bool
+	// collectGeneration is a read-only handle to the denial ring that was
+	// active when this run began. On macOS it stores
+	// *macosDenialCollectGeneration so collection keeps reading that ring even
+	// if the log process later exits and another workspace installs a
+	// replacement monitor. It does not own cancel/stop for the underlying
+	// monitor process. Other platforms leave it nil.
+	collectGeneration any
 }
 
 // Denial describes a sandbox denial observed during program execution.

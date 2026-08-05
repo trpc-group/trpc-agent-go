@@ -51,10 +51,34 @@ The first diagnostics-enabled `RunProgram` may spend a short time probing when
 the process cache is cold. Later runs reuse the cached capability result and the
 already-running monitor. If the monitor process exits, capability reporting and
 collection readiness become unavailable and a later `ensureDenialMonitor` may
-start a new monitor, unless `Close` has been called.
+start a new monitor, unless `Close` has been called. Each diagnostics-enabled
+run captures a read-only generation handle for the ring active at start and
+collects from that ring even if the log process later exits and another run
+installs a replacement monitor. Generation handles do not own cancel/stop for
+the underlying monitor; `Runtime.Close()` / `CodeExecutor.Close()` remain the
+sole shutdown owners.
 
-Probe events use a separate temporary monitor and suffix (`_PROBE_SBX`) so they
-never pollute the production ring buffer.
+When a run hits its deadline, denial collection uses a separate bounded context
+so settle waits are not cut short by the already-canceled run context. Normal
+completion and caller cancellation continue to inherit the run context.
+
+Probe events use a separate temporary monitor so they never pollute the
+production ring buffer. The probe monitor predicate is scoped to the probe
+suffix and the two probe target paths, so ambient `Sandbox:` traffic cannot
+complete the probe or overflow the probe ring. The probe waits independently for
+default-deny and explicit-deny forms. For each form it requires a target-path
+denial as evidence:
+
+- target denial with the expected tag → that form is taggable
+- target denial without the expected tag after the full window → that form is
+  not taggable
+- missing target denial → the probe stays incomplete and is not cached
+
+`ProbeCompleted` is set only when both forms have target-level evidence.
+`EventStreamAvailable` is established from those same probe-target events, not
+from an arbitrary first log line. That lets a host report a completed probe with
+both tag forms false when tagging is unsupported, without falsely caching that
+result from unrelated sandbox noise.
 
 The probe creates temporary empty files outside the workspace and then attempts
 to read them under a probe Seatbelt profile. This is intentional: on macOS, a

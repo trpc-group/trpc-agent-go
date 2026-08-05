@@ -32,9 +32,10 @@ import (
 )
 
 const (
-	macosLogPath                 = "/usr/bin/log"
-	macosSandboxDenialBufferSize = 100
-	macosDenialCloseTimeout      = time.Second
+	macosLogPath                         = "/usr/bin/log"
+	macosSandboxDenialBufferSize         = 100
+	macosDenialCloseTimeout              = time.Second
+	macosDenialMonitorStopTimeoutDefault = 500 * time.Millisecond
 )
 
 var (
@@ -75,6 +76,17 @@ type macosLogStreamMonitor struct {
 	done   chan struct{}
 	ready  chan struct{}
 	ring   *macosDenialRing
+	// stopTimeout bounds how long stop waits for the log-stream goroutine.
+	// Zero uses macosDenialMonitorStopTimeoutDefault.
+	stopTimeout time.Duration
+}
+
+// macosDenialCollectGeneration is a read-only handle to the denial ring that
+// was active when a diagnostics-enabled run began. It intentionally omits
+// cancel/stop so collection cannot own or extend the monitor process lifetime.
+type macosDenialCollectGeneration struct {
+	ring *macosDenialRing
+	done <-chan struct{}
 }
 
 type macosDenialCloseAttempt struct {
@@ -172,25 +184,29 @@ func (r *Runtime) newSandboxDenialRun(
 	if profile.enforcement() != enforcementManaged {
 		return sandboxDenialRun{}
 	}
-	d.mu.RLock()
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	if d.state == macosDenialClosed {
-		d.mu.RUnlock()
 		return sandboxDenialRun{}
 	}
-	caps := d.caps
-	sessionSuffix := d.sessionSuffix
-	monitor := d.prodMonitor
-	d.mu.RUnlock()
-	var droppedAtStart uint64
-	if monitor != nil && monitor.ring != nil {
-		droppedAtStart = monitor.ring.dropCount()
+	monitor := r.liveProdMonitorLocked(d)
+	if monitor == nil || monitor.ring == nil {
+		return sandboxDenialRun{}
+	}
+	var done <-chan struct{}
+	if monitor.done != nil {
+		done = monitor.done
 	}
 	return sandboxDenialRun{
 		enabled:              true,
-		runTag:               newMacOSSandboxDenialRunTag(sessionSuffix),
-		droppedAtStart:       droppedAtStart,
-		defaultDenyTaggable:  caps.DefaultDenyTaggable,
-		explicitDenyTaggable: caps.ExplicitDenyTaggable,
+		runTag:               newMacOSSandboxDenialRunTag(d.sessionSuffix),
+		droppedAtStart:       monitor.ring.dropCount(),
+		defaultDenyTaggable:  d.caps.DefaultDenyTaggable,
+		explicitDenyTaggable: d.caps.ExplicitDenyTaggable,
+		collectGeneration: &macosDenialCollectGeneration{
+			ring: monitor.ring,
+			done: done,
+		},
 	}
 }
 
@@ -198,7 +214,7 @@ func (r *Runtime) sandboxDenialRunForCollecting(
 	profile PermissionProfile,
 ) sandboxDenialRun {
 	run := r.newSandboxDenialRun(profile)
-	if !run.enabled || !r.sandboxDenialCollectingReady() {
+	if !run.enabled || run.collectGeneration == nil {
 		return sandboxDenialRun{}
 	}
 	return run
@@ -535,24 +551,26 @@ func installDenialMonitor(
 
 func (r *Runtime) collectSandboxDenials(
 	ctx context.Context,
-	runTag string,
-	droppedAtStart uint64,
+	run sandboxDenialRun,
 	cmd string,
 	settleTimeout time.Duration,
 ) ([]Denial, bool) {
+	gen, _ := run.collectGeneration.(*macosDenialCollectGeneration)
 	d := r.macosDenialDiagnostics()
 	d.mu.Lock()
-	monitor := r.liveProdMonitorLocked(d)
 	filter := cloneDenialFilter(d.filter)
+	// Reap a dead current production monitor so later runs can restart it,
+	// without switching this collection away from the run-start ring.
+	_ = r.liveProdMonitorLocked(d)
 	d.mu.Unlock()
-	if runTag == "" || monitor == nil {
+	if run.runTag == "" || gen == nil || gen.ring == nil {
 		return nil, false
 	}
-	_ = monitor.ring.waitForRunTagSettle(ctx, runTag, settleTimeout)
-	events, truncated := monitor.ring.snapshotSince(droppedAtStart)
+	_ = gen.ring.waitForRunTagSettle(ctx, run.runTag, settleTimeout)
+	events, truncated := gen.ring.snapshotSince(run.droppedAtStart)
 	var tagged []Denial
 	for _, event := range events {
-		if !event.tagged || !containsExactSandboxTag(event.denial.Raw, runTag) {
+		if !event.tagged || !containsExactSandboxTag(event.denial.Raw, run.runTag) {
 			continue
 		}
 		tagged = append(tagged, event.denial)
@@ -638,7 +656,12 @@ func (r *Runtime) runDiagnosticsCapabilityProbe(
 		}
 	}
 
-	monitor, err := startMacOSLogStreamMonitor(ctx, probeSuffix)
+	monitor, err := startMacOSProbeLogStreamMonitor(
+		ctx,
+		probeSuffix,
+		probeDefaultPath,
+		probeExplicitPath,
+	)
 	if err != nil {
 		if monitor != nil {
 			retainInitializationMonitor(d, monitor, err)
@@ -689,32 +712,114 @@ func (r *Runtime) runDiagnosticsCapabilityProbe(
 		}
 	}
 
-	if err := monitor.ring.waitForSettle(ctx, sandboxDenialProbeTimeout); err != nil {
-		return caps, false, err
-	}
-	events, _ := monitor.ring.snapshot()
-	if len(events) == 0 {
-		return incompleteDiagnosticsProbe(ctx, caps)
-	}
-
-	caps.EventStreamAvailable = true
-	caps.ProbeCompleted = true
-	if probeMatched(events, probeExpectation{
+	defaultExp := probeExpectation{
 		Tag:       probeTag,
 		Operation: "file-read*",
 		Target:    probeDefaultPath,
-	}) {
-		caps.DefaultDenyTaggable = true
 	}
-	if probeMatched(events, probeExpectation{
+	explicitExp := probeExpectation{
 		Tag:       explicitTag,
 		Operation: "file-read*",
 		Target:    probeExplicitPath,
-	}) {
-		caps.ExplicitDenyTaggable = true
 	}
-	caps.StrongCorrelation = caps.ExplicitDenyTaggable || caps.DefaultDenyTaggable
+	// Wait independently for each deny form. Only probe-target denials count as
+	// evidence; ambient Sandbox noise cannot complete or cache the probe.
+	defaultRes, explicitRes, err := waitForProbeFormCapabilities(
+		ctx,
+		monitor.ring,
+		defaultExp,
+		explicitExp,
+		sandboxDenialProbeTimeout,
+	)
+	if err != nil {
+		return caps, false, err
+	}
+	if !defaultRes.targetObserved || !explicitRes.targetObserved {
+		return incompleteDiagnosticsProbe(ctx, caps)
+	}
+	caps = diagnosticsCapabilityFromProbe(
+		true,
+		defaultRes.tagMatched,
+		explicitRes.tagMatched,
+	)
 	return caps, true, nil
+}
+
+// startMacOSProbeLogStreamMonitor starts a temporary probe monitor scoped to
+// this probe's suffix and target paths. Ambient Sandbox: traffic is excluded so
+// it cannot establish EventStreamAvailable or overflow the probe ring.
+func startMacOSProbeLogStreamMonitor(
+	ctx context.Context,
+	suffix, defaultPath, explicitPath string,
+) (*macosLogStreamMonitor, error) {
+	return startMacOSLogStreamMonitorWithPredicate(
+		ctx,
+		macosProbeLogStreamPredicate(suffix, defaultPath, explicitPath),
+	)
+}
+
+func macosProbeLogStreamPredicate(suffix, defaultPath, explicitPath string) string {
+	return fmt.Sprintf(
+		`eventMessage ENDSWITH %q OR eventMessage CONTAINS %q OR eventMessage CONTAINS %q`,
+		suffix,
+		defaultPath,
+		explicitPath,
+	)
+}
+
+type probeFormResult struct {
+	targetObserved bool
+	tagMatched     bool
+}
+
+func waitForProbeFormCapabilities(
+	ctx context.Context,
+	ring *macosDenialRing,
+	defaultExp, explicitExp probeExpectation,
+	timeout time.Duration,
+) (defaultRes, explicitRes probeFormResult, err error) {
+	if ring == nil {
+		return probeFormResult{}, probeFormResult{}, nil
+	}
+	type result struct {
+		form probeFormResult
+		err  error
+	}
+	defaultCh := make(chan result, 1)
+	explicitCh := make(chan result, 1)
+	go func() {
+		form, waitErr := ring.waitForProbeForm(ctx, defaultExp, timeout)
+		defaultCh <- result{form: form, err: waitErr}
+	}()
+	go func() {
+		form, waitErr := ring.waitForProbeForm(ctx, explicitExp, timeout)
+		explicitCh <- result{form: form, err: waitErr}
+	}()
+	defaultOut := <-defaultCh
+	explicitOut := <-explicitCh
+	if defaultOut.err != nil {
+		return probeFormResult{}, probeFormResult{}, defaultOut.err
+	}
+	if explicitOut.err != nil {
+		return probeFormResult{}, probeFormResult{}, explicitOut.err
+	}
+	return defaultOut.form, explicitOut.form, nil
+}
+
+func diagnosticsCapabilityFromProbe(
+	streamAvailable bool,
+	defaultMatched, explicitMatched bool,
+) DiagnosticsCapability {
+	caps := DiagnosticsCapability{Supported: true}
+	if !streamAvailable {
+		return caps
+	}
+	caps.EventStreamAvailable = true
+	caps.ProbeCompleted = true
+	caps.DefaultDenyTaggable = defaultMatched
+	caps.ExplicitDenyTaggable = explicitMatched
+	caps.StrongCorrelation = defaultMatched || explicitMatched
+	return caps
 }
 
 func incompleteDiagnosticsProbe(
@@ -738,6 +843,19 @@ func probeMatched(events []macosSandboxDenialEvent, exp probeExpectation) bool {
 		if !containsExactSandboxTag(event.denial.Raw, exp.Tag) {
 			continue
 		}
+		if !probeOperationMatches(event.denial.Operation, exp.Operation) {
+			continue
+		}
+		if !probeTargetMatches(event.denial.Target, exp.Target) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func probeTargetObserved(events []macosSandboxDenialEvent, exp probeExpectation) bool {
+	for _, event := range events {
 		if !probeOperationMatches(event.denial.Operation, exp.Operation) {
 			continue
 		}
@@ -899,10 +1017,14 @@ func (m *macosLogStreamMonitor) stop() error {
 	if m.done == nil {
 		return nil
 	}
+	timeout := m.stopTimeout
+	if timeout <= 0 {
+		timeout = macosDenialMonitorStopTimeoutDefault
+	}
 	select {
 	case <-m.done:
 		return nil
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(timeout):
 		return errors.New("timed out stopping macOS log stream monitor")
 	}
 }
@@ -1047,6 +1169,43 @@ func (ring *macosDenialRing) waitForRunTagSettle(
 		}
 	}
 	return nil
+}
+
+// waitForProbeForm waits until the expected tag matches or the full timeout
+// elapses. A target denial without the expected tag is not enough to finish
+// early; the wait continues so a delayed tag can still arrive.
+func (ring *macosDenialRing) waitForProbeForm(
+	ctx context.Context,
+	exp probeExpectation,
+	timeout time.Duration,
+) (probeFormResult, error) {
+	if timeout <= 0 {
+		timeout = sandboxDenialProbeTimeout
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		events, _ := ring.snapshot()
+		if probeMatched(events, exp) {
+			return probeFormResult{targetObserved: true, tagMatched: true}, nil
+		}
+		if err := ctx.Err(); err != nil {
+			return probeFormResult{}, err
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return probeFormResult{
+				targetObserved: probeTargetObserved(events, exp),
+				tagMatched:     false,
+			}, nil
+		}
+		sleep := 10 * time.Millisecond
+		if sleep > remaining {
+			sleep = remaining
+		}
+		if err := waitCtx(ctx, sleep); err != nil {
+			return probeFormResult{}, err
+		}
+	}
 }
 
 func parseMacOSSandboxDenialLogLine(

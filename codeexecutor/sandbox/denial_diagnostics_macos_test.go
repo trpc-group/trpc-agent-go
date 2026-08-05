@@ -23,6 +23,30 @@ import (
 	"time"
 )
 
+func denialRunForMonitor(
+	runTag string,
+	monitor *macosLogStreamMonitor,
+	droppedAtStart uint64,
+) sandboxDenialRun {
+	var done <-chan struct{}
+	var ring *macosDenialRing
+	if monitor != nil {
+		ring = monitor.ring
+		if monitor.done != nil {
+			done = monitor.done
+		}
+	}
+	return sandboxDenialRun{
+		enabled:        true,
+		runTag:         runTag,
+		droppedAtStart: droppedAtStart,
+		collectGeneration: &macosDenialCollectGeneration{
+			ring: ring,
+			done: done,
+		},
+	}
+}
+
 func TestMacOSSandboxDenialAutoNoiseFilter(t *testing.T) {
 	for _, denial := range []Denial{
 		{Operation: "mach-lookup", Target: "mDNSResponder"},
@@ -251,7 +275,8 @@ func TestCollectSandboxDenialsAppliesRuntimeDenialFilter(t *testing.T) {
 	}
 	d := rt.macosDenialDiagnostics()
 	d.mu.Lock()
-	d.prodMonitor = &macosLogStreamMonitor{ring: ring}
+	monitor := &macosLogStreamMonitor{ring: ring}
+	d.prodMonitor = monitor
 	d.caps = DiagnosticsCapability{
 		EventStreamAvailable: true,
 		StrongCorrelation:    true,
@@ -260,7 +285,10 @@ func TestCollectSandboxDenialsAppliesRuntimeDenialFilter(t *testing.T) {
 	d.mu.Unlock()
 
 	denials, _ := rt.collectSandboxDenials(
-		context.Background(), runTag, 0, "/bin/cat", time.Millisecond,
+		context.Background(),
+		denialRunForMonitor(runTag, monitor, 0),
+		"/bin/cat",
+		time.Millisecond,
 	)
 	if len(denials) != 1 || denials[0].Target != "/private/tmp/keep" {
 		t.Fatalf("filtered denials = %#v, want only /private/tmp/keep", denials)
@@ -292,7 +320,8 @@ func TestCollectSandboxDenialsFiltersAutomaticNoise(t *testing.T) {
 	}
 	d := rt.macosDenialDiagnostics()
 	d.mu.Lock()
-	d.prodMonitor = &macosLogStreamMonitor{ring: ring}
+	monitor := &macosLogStreamMonitor{ring: ring}
+	d.prodMonitor = monitor
 	d.caps = DiagnosticsCapability{
 		EventStreamAvailable: true,
 		StrongCorrelation:    true,
@@ -301,7 +330,10 @@ func TestCollectSandboxDenialsFiltersAutomaticNoise(t *testing.T) {
 	d.mu.Unlock()
 
 	denials, _ := rt.collectSandboxDenials(
-		context.Background(), runTag, 0, "/bin/cat", time.Millisecond,
+		context.Background(),
+		denialRunForMonitor(runTag, monitor, 0),
+		"/bin/cat",
+		time.Millisecond,
 	)
 	if len(denials) != 1 || denials[0].Target != "/private/tmp/keep" {
 		t.Fatalf("auto-filtered denials = %#v, want only user-relevant denial", denials)
@@ -833,12 +865,19 @@ func TestParseMacOSSandboxDenialEventUsesRunTagForTagging(t *testing.T) {
 
 func TestMacOSLogStreamMonitorStopTimesOutWhenDoneNeverCloses(t *testing.T) {
 	monitor := &macosLogStreamMonitor{
-		cancel: func() {},
-		done:   make(chan struct{}),
+		cancel:      func() {},
+		done:        make(chan struct{}),
+		stopTimeout: 50 * time.Millisecond,
 	}
 	start := time.Now()
-	monitor.stop()
-	if time.Since(start) < 400*time.Millisecond {
+	err := monitor.stop()
+	if err == nil {
+		t.Fatal("stop() = nil, want timeout error")
+	}
+	if !strings.Contains(err.Error(), "timed out stopping macOS log stream monitor") {
+		t.Fatalf("stop() error = %v, want timed out stopping macOS log stream monitor", err)
+	}
+	if time.Since(start) < 40*time.Millisecond {
 		t.Fatalf("stop returned too quickly: %s", time.Since(start))
 	}
 }
@@ -951,14 +990,18 @@ func TestCollectSandboxDenialsReportsTruncated(t *testing.T) {
 	}
 	d := rt.macosDenialDiagnostics()
 	d.mu.Lock()
-	d.prodMonitor = &macosLogStreamMonitor{ring: ring}
+	monitor := &macosLogStreamMonitor{ring: ring}
+	d.prodMonitor = monitor
 	d.caps = DiagnosticsCapability{
 		EventStreamAvailable: true,
 		ProbeCompleted:       true,
 	}
 	d.mu.Unlock()
 	denials, truncated := rt.collectSandboxDenials(
-		context.Background(), runTag, 0, "/bin/cat", time.Millisecond,
+		context.Background(),
+		denialRunForMonitor(runTag, monitor, 0),
+		"/bin/cat",
+		time.Millisecond,
 	)
 	if !truncated {
 		t.Fatal("truncated = false, want true after ring overflow")
@@ -1228,9 +1271,10 @@ func TestMacOSDenialRingTruncationUsesRunBaseline(t *testing.T) {
 
 func TestCollectSandboxDenialsHonorsCanceledContext(t *testing.T) {
 	rt := NewRuntime()
+	monitor := &macosLogStreamMonitor{ring: &macosDenialRing{}}
 	d := rt.macosDenialDiagnostics()
 	d.mu.Lock()
-	d.prodMonitor = &macosLogStreamMonitor{ring: &macosDenialRing{}}
+	d.prodMonitor = monitor
 	d.caps.EventStreamAvailable = true
 	d.mu.Unlock()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1238,12 +1282,338 @@ func TestCollectSandboxDenialsHonorsCanceledContext(t *testing.T) {
 	start := time.Now()
 	_, _ = rt.collectSandboxDenials(
 		ctx,
-		"TRPC_RUN_canceled_END_0123456789abcdef_SBX",
-		0,
+		denialRunForMonitor(
+			"TRPC_RUN_canceled_END_0123456789abcdef_SBX",
+			monitor,
+			0,
+		),
 		"/bin/cat",
 		2*time.Second,
 	)
 	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
 		t.Fatalf("collection ignored canceled context and took %s", elapsed)
+	}
+}
+
+func TestCollectSandboxDenialsUsesRunStartMonitorAfterRestart(t *testing.T) {
+	runTag := "TRPC_RUN_gen_END_0123456789abcdef_SBX"
+	rt := NewRuntime()
+
+	oldRing := &macosDenialRing{}
+	oldRing.addLine([]byte(
+		`{"eventMessage":"Sandbox: cat deny(1) file-read-data /private/tmp/keep\n`+
+			runTag+`"}`,
+	), runTag)
+	for i := 0; i < macosSandboxDenialBufferSize; i++ {
+		oldRing.addLine([]byte(
+			`{"eventMessage":"Sandbox: cat deny(1) file-read-data /private/tmp/x`+
+				string(rune('a'+i%26))+`\n`+runTag+`"}`,
+		), runTag)
+	}
+	oldDone := make(chan struct{})
+	close(oldDone)
+	oldMonitor := &macosLogStreamMonitor{ring: oldRing, done: oldDone}
+
+	newReady := make(chan struct{})
+	close(newReady)
+	newMonitor := &macosLogStreamMonitor{
+		ring:  &macosDenialRing{},
+		ready: newReady,
+		done:  make(chan struct{}),
+	}
+
+	d := rt.macosDenialDiagnostics()
+	d.mu.Lock()
+	d.prodMonitor = newMonitor
+	d.caps.EventStreamAvailable = true
+	d.state = macosDenialRunning
+	d.mu.Unlock()
+
+	denials, truncated := rt.collectSandboxDenials(
+		context.Background(),
+		denialRunForMonitor(runTag, oldMonitor, 0),
+		"/bin/cat",
+		time.Millisecond,
+	)
+	if len(denials) == 0 {
+		t.Fatal("denials empty after monitor restart, want events from run-start ring")
+	}
+	if !truncated {
+		t.Fatal("truncated = false, want true from run-start ring overflow")
+	}
+	if !rt.sandboxDenialCollectingReady() {
+		t.Fatal("replacement monitor should keep collecting ready")
+	}
+}
+
+func TestCollectSandboxDenialsReapsDeadCurrentMonitor(t *testing.T) {
+	runTag := "TRPC_RUN_reap_END_0123456789abcdef_SBX"
+	rt := NewRuntime()
+	ring := &macosDenialRing{}
+	ring.addLine([]byte(
+		`{"eventMessage":"Sandbox: cat deny(1) file-read-data /private/tmp/keep\n`+
+			runTag+`"}`,
+	), runTag)
+	done := make(chan struct{})
+	close(done)
+	monitor := &macosLogStreamMonitor{ring: ring, done: done}
+
+	d := rt.macosDenialDiagnostics()
+	d.mu.Lock()
+	d.prodMonitor = monitor
+	d.caps.EventStreamAvailable = true
+	d.state = macosDenialRunning
+	d.mu.Unlock()
+
+	denials, _ := rt.collectSandboxDenials(
+		context.Background(),
+		denialRunForMonitor(runTag, monitor, 0),
+		"/bin/cat",
+		time.Millisecond,
+	)
+	if len(denials) != 1 || denials[0].Target != "/private/tmp/keep" {
+		t.Fatalf("denials=%#v, want event from dead monitor ring", denials)
+	}
+	if rt.sandboxDenialCollectingReady() {
+		t.Fatal("sandboxDenialCollectingReady = true after reaping dead monitor")
+	}
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	if d.prodMonitor != nil {
+		t.Fatal("prodMonitor still set after reaping dead monitor")
+	}
+}
+
+func TestCollectSandboxDenialsSettlesWithFreshContextAfterCancel(t *testing.T) {
+	runTag := "TRPC_RUN_freshctx_END_0123456789abcdef_SBX"
+	rt := NewRuntime()
+	ring := &macosDenialRing{}
+	monitor := &macosLogStreamMonitor{ring: ring}
+	d := rt.macosDenialDiagnostics()
+	d.mu.Lock()
+	d.prodMonitor = monitor
+	d.caps.EventStreamAvailable = true
+	d.mu.Unlock()
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	go func() {
+		time.Sleep(40 * time.Millisecond)
+		ring.addLine([]byte(
+			`{"eventMessage":"Sandbox: cat deny(1) file-read-data /private/tmp/keep\n`+
+				runTag+`"}`,
+		), runTag)
+	}()
+
+	collectCtx, collectCancel := context.WithTimeout(
+		context.Background(),
+		200*time.Millisecond,
+	)
+	defer collectCancel()
+	denials, _ := rt.collectSandboxDenials(
+		collectCtx,
+		denialRunForMonitor(runTag, monitor, 0),
+		"/bin/cat",
+		200*time.Millisecond,
+	)
+	if len(denials) != 1 || denials[0].Target != "/private/tmp/keep" {
+		t.Fatalf("denials=%#v, want delayed event under fresh collect context", denials)
+	}
+
+	start := time.Now()
+	_, _ = rt.collectSandboxDenials(
+		runCtx,
+		denialRunForMonitor(runTag, monitor, 0),
+		"/bin/cat",
+		200*time.Millisecond,
+	)
+	if elapsed := time.Since(start); elapsed > 50*time.Millisecond {
+		t.Fatalf("canceled run context collection took %s, want immediate return", elapsed)
+	}
+}
+
+func TestDiagnosticsCapabilityFromProbeAllowsNeitherTaggable(t *testing.T) {
+	caps := diagnosticsCapabilityFromProbe(true, false, false)
+	if !caps.Supported || !caps.EventStreamAvailable || !caps.ProbeCompleted {
+		t.Fatalf("caps=%+v, want completed stream-available probe", caps)
+	}
+	if caps.DefaultDenyTaggable || caps.ExplicitDenyTaggable || caps.StrongCorrelation {
+		t.Fatalf("caps=%+v, want both tag forms false", caps)
+	}
+	incomplete := diagnosticsCapabilityFromProbe(false, true, true)
+	if incomplete.EventStreamAvailable || incomplete.ProbeCompleted ||
+		incomplete.DefaultDenyTaggable || incomplete.ExplicitDenyTaggable {
+		t.Fatalf("incomplete caps=%+v, want only Supported", incomplete)
+	}
+}
+
+func TestWaitForProbeFormAcceptsDelayedSecondMatch(t *testing.T) {
+	ring := &macosDenialRing{}
+	defaultTag := "TRPC_RUN_PROBE_D_delayed_END_abc_PROBE_SBX"
+	explicitTag := "TRPC_RUN_PROBE_E_delayed_END_abc_PROBE_SBX"
+	defaultPath := "/private/tmp/.trpc_sbx_probe/default_target"
+	explicitPath := "/private/tmp/.trpc_sbx_probe/explicit_target"
+	defaultExp := probeExpectation{
+		Tag:       defaultTag,
+		Operation: "file-read*",
+		Target:    defaultPath,
+	}
+	explicitExp := probeExpectation{
+		Tag:       explicitTag,
+		Operation: "file-read*",
+		Target:    explicitPath,
+	}
+
+	ring.addLine([]byte(
+		`{"eventMessage":"Sandbox: cat(1) deny(1) file-read-data `+defaultPath+`\n`+
+			defaultTag+`"}`,
+	), defaultTag)
+
+	go func() {
+		time.Sleep(80 * time.Millisecond)
+		ring.addLine([]byte(
+			`{"eventMessage":"Sandbox: cat(1) deny(1) file-read-data `+explicitPath+`\n`+
+				explicitTag+`"}`,
+		), explicitTag)
+	}()
+
+	// Old settle behavior would finalize after the first event + 50ms idle and
+	// miss the delayed explicit event. Independent waits must still observe it.
+	defaultRes, explicitRes, err := waitForProbeFormCapabilities(
+		context.Background(),
+		ring,
+		defaultExp,
+		explicitExp,
+		250*time.Millisecond,
+	)
+	if err != nil {
+		t.Fatalf("waitForProbeFormCapabilities: %v", err)
+	}
+	if !defaultRes.tagMatched || !explicitRes.tagMatched {
+		t.Fatalf(
+			"matched default=%+v explicit=%+v, want both tagged after delayed second event",
+			defaultRes,
+			explicitRes,
+		)
+	}
+}
+
+func TestWaitForProbeFormTimesOutWithoutTarget(t *testing.T) {
+	ring := &macosDenialRing{}
+	ring.addLine([]byte(
+		`{"eventMessage":"Sandbox: cat(1) deny(1) file-read-data /tmp/other\n`+
+			`TRPC_RUN_PROBE_D_other_END_abc_PROBE_SBX"}`,
+	), "TRPC_RUN_PROBE_D_other_END_abc_PROBE_SBX")
+	start := time.Now()
+	form, err := ring.waitForProbeForm(
+		context.Background(),
+		probeExpectation{
+			Tag:       "TRPC_RUN_PROBE_E_missing_END_abc_PROBE_SBX",
+			Operation: "file-read*",
+			Target:    "/private/tmp/.trpc_sbx_probe/explicit_target",
+		},
+		80*time.Millisecond,
+	)
+	if err != nil {
+		t.Fatalf("waitForProbeForm: %v", err)
+	}
+	if form.targetObserved || form.tagMatched {
+		t.Fatalf("waitForProbeForm = %+v, want no target evidence", form)
+	}
+	if elapsed := time.Since(start); elapsed < 70*time.Millisecond {
+		t.Fatalf("waitForProbeForm returned too quickly: %s", elapsed)
+	}
+}
+
+func TestWaitForProbeFormReportsUntaggedTargetAsNotTaggable(t *testing.T) {
+	ring := &macosDenialRing{}
+	defaultPath := "/private/tmp/.trpc_sbx_probe/default_target"
+	explicitPath := "/private/tmp/.trpc_sbx_probe/explicit_target"
+	ring.addLine([]byte(
+		`{"eventMessage":"Sandbox: cat(1) deny(1) file-read-data `+defaultPath+`"}`,
+	), "")
+	ring.addLine([]byte(
+		`{"eventMessage":"Sandbox: cat(1) deny(1) file-read-data `+explicitPath+`"}`,
+	), "")
+	defaultRes, explicitRes, err := waitForProbeFormCapabilities(
+		context.Background(),
+		ring,
+		probeExpectation{
+			Tag:       "TRPC_RUN_PROBE_D_untagged_END_abc_PROBE_SBX",
+			Operation: "file-read*",
+			Target:    defaultPath,
+		},
+		probeExpectation{
+			Tag:       "TRPC_RUN_PROBE_E_untagged_END_abc_PROBE_SBX",
+			Operation: "file-read*",
+			Target:    explicitPath,
+		},
+		50*time.Millisecond,
+	)
+	if err != nil {
+		t.Fatalf("waitForProbeFormCapabilities: %v", err)
+	}
+	if !defaultRes.targetObserved || defaultRes.tagMatched {
+		t.Fatalf("default form=%+v, want target without tag", defaultRes)
+	}
+	if !explicitRes.targetObserved || explicitRes.tagMatched {
+		t.Fatalf("explicit form=%+v, want target without tag", explicitRes)
+	}
+	caps := diagnosticsCapabilityFromProbe(
+		true,
+		defaultRes.tagMatched,
+		explicitRes.tagMatched,
+	)
+	if !caps.ProbeCompleted || caps.DefaultDenyTaggable || caps.ExplicitDenyTaggable {
+		t.Fatalf("caps=%+v, want completed false/false", caps)
+	}
+}
+
+func TestProbeIncompleteWithoutTargetEvidence(t *testing.T) {
+	ring := &macosDenialRing{}
+	// Ambient Sandbox noise without the probe targets must not complete probe.
+	ring.addLine([]byte(
+		`{"eventMessage":"Sandbox: other(1) deny(1) file-read-data /private/tmp/unrelated"}`,
+	), "")
+	defaultRes, explicitRes, err := waitForProbeFormCapabilities(
+		context.Background(),
+		ring,
+		probeExpectation{
+			Tag:       "TRPC_RUN_PROBE_D_noise_END_abc_PROBE_SBX",
+			Operation: "file-read*",
+			Target:    "/private/tmp/.trpc_sbx_probe/default_target",
+		},
+		probeExpectation{
+			Tag:       "TRPC_RUN_PROBE_E_noise_END_abc_PROBE_SBX",
+			Operation: "file-read*",
+			Target:    "/private/tmp/.trpc_sbx_probe/explicit_target",
+		},
+		40*time.Millisecond,
+	)
+	if err != nil {
+		t.Fatalf("waitForProbeFormCapabilities: %v", err)
+	}
+	if defaultRes.targetObserved || explicitRes.targetObserved {
+		t.Fatalf(
+			"ambient noise produced target evidence: default=%+v explicit=%+v",
+			defaultRes,
+			explicitRes,
+		)
+	}
+}
+
+func TestStartMacOSProbeLogStreamMonitorPredicateIsTargetScoped(t *testing.T) {
+	suffix := "_END_abc_PROBE_SBX"
+	defaultPath := "/private/tmp/.trpc_sbx_probe_xyz/default_target"
+	explicitPath := "/private/tmp/.trpc_sbx_probe_xyz/explicit_target"
+	predicate := macosProbeLogStreamPredicate(suffix, defaultPath, explicitPath)
+	if strings.Contains(predicate, `CONTAINS "Sandbox: "`) {
+		t.Fatalf("probe predicate still accepts ambient Sandbox traffic: %s", predicate)
+	}
+	if !strings.Contains(predicate, defaultPath) || !strings.Contains(predicate, explicitPath) {
+		t.Fatalf("probe predicate missing target paths: %s", predicate)
+	}
+	if !strings.Contains(predicate, suffix) {
+		t.Fatalf("probe predicate missing suffix: %s", predicate)
 	}
 }

@@ -191,7 +191,7 @@ func TestWithDenialFilterOption(t *testing.T) {
 		WithDenialFilter(filter),
 	)
 	if denials, _ := rt.collectSandboxDenials(
-		context.Background(), "", 0, "/bin/cat", time.Millisecond,
+		context.Background(), sandboxDenialRun{}, "/bin/cat", time.Millisecond,
 	); denials != nil {
 		t.Fatalf("collectSandboxDenials with empty tag = %#v, want nil", denials)
 	}

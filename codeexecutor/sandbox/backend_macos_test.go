@@ -541,7 +541,8 @@ func TestCollectSandboxDenialsWaitsForCurrentRunTag(t *testing.T) {
 	rt := NewRuntime()
 	d := rt.macosDenialDiagnostics()
 	d.mu.Lock()
-	d.prodMonitor = &macosLogStreamMonitor{ring: ring}
+	monitor := &macosLogStreamMonitor{ring: ring}
+	d.prodMonitor = monitor
 	d.caps = DiagnosticsCapability{
 		EventStreamAvailable: true,
 		ProbeCompleted:       true,
@@ -562,8 +563,7 @@ func TestCollectSandboxDenialsWaitsForCurrentRunTag(t *testing.T) {
 	}()
 	denials, _ := rt.collectSandboxDenials(
 		context.Background(),
-		runTag,
-		0,
+		denialRunForMonitor(runTag, monitor, 0),
 		"/bin/cat",
 		2*time.Second,
 	)
@@ -698,6 +698,67 @@ func TestMacOSSandboxExecCollectsExplicitDenyDiagnostics(t *testing.T) {
 	}
 	if strings.Contains(res.Stderr, "[sandbox diagnostics]") {
 		t.Fatalf("stderr contains framework sandbox diagnostics: %q", res.Stderr)
+	}
+}
+
+func TestMacOSSandboxExecTimeoutStillDeliversDenialDiagnostics(t *testing.T) {
+	if _, err := os.Stat(macosSandboxExecPath); err != nil {
+		t.Skip("sandbox-exec not available")
+	}
+	rt := NewRuntime(
+		WithWorkspaceRoot(t.TempDir()),
+		WithPermissionProfile(WorkspaceWriteProfile().WithNoAccessGlobs("work/*.env")),
+	)
+	t.Cleanup(func() {
+		if err := rt.Close(); err != nil {
+			t.Errorf("close runtime: %v", err)
+		}
+	})
+	if _, err := rt.macosPreflight(); err != nil {
+		t.Skipf("sandbox-exec preflight unavailable: %v", err)
+	}
+	_ = rt.ensureDenialMonitor(context.Background())
+	caps := rt.DiagnosticsCapability()
+	if !caps.ExplicitDenyTaggable {
+		t.Skip("explicit-deny messages are not supported on this host")
+	}
+	if !rt.sandboxDenialCollectingReady() {
+		t.Skip("log stream unavailable on this host")
+	}
+	ws, err := rt.CreateWorkspace(
+		context.Background(),
+		"macos/glob-denial-timeout-diagnostics",
+		codeexecutor.WorkspacePolicy{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(ws.Path, "work", "app.env"),
+		[]byte("TOKEN=secret"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	ctx, diagnosticsCh := WithDiagnostics(context.Background())
+	res, err := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+		Cmd:     "/bin/sh",
+		Args:    []string{"-c", "cat app.env; sleep 2"},
+		Timeout: 200 * time.Millisecond,
+	})
+	diagnostics := <-diagnosticsCh
+	if !isKind(err, ErrTimeout) || !res.TimedOut {
+		t.Fatalf("timeout run = result:%#v err:%v, want ErrTimeout", res, err)
+	}
+	if len(diagnostics.Denials) == 0 {
+		t.Fatalf(
+			"sandbox denials empty after timeout, result=%#v diagnostics=%#v",
+			res,
+			diagnostics,
+		)
+	}
+	if !strings.Contains(diagnostics.Denials[0].Operation, "file-read") {
+		t.Fatalf("sandbox denial = %#v, want file-read operation", diagnostics.Denials[0])
 	}
 }
 

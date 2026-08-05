@@ -37,7 +37,7 @@ func TestNonDarwinDenialDiagnosticsStubs(t *testing.T) {
 		t.Fatalf("sandboxDenialCollectingReady = true, want false")
 	}
 	denials, truncated := rt.collectSandboxDenials(
-		context.Background(), "tag", 0, "/bin/cat", time.Millisecond,
+		context.Background(), sandboxDenialRun{runTag: "tag"}, "/bin/cat", time.Millisecond,
 	)
 	if denials != nil || truncated {
 		t.Fatalf("collectSandboxDenials = (%#v, %v), want nil/false", denials, truncated)

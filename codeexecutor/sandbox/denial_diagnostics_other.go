@@ -43,15 +43,13 @@ func (r *Runtime) ensureDenialMonitor(ctx context.Context) error {
 
 func (r *Runtime) collectSandboxDenials(
 	ctx context.Context,
-	runTag string,
-	droppedAtStart uint64,
+	run sandboxDenialRun,
 	cmd string,
 	settleTimeout time.Duration,
 ) ([]Denial, bool) {
 	_ = r
 	_ = ctx
-	_ = runTag
-	_ = droppedAtStart
+	_ = run
 	_ = cmd
 	_ = settleTimeout
 	return nil, false
