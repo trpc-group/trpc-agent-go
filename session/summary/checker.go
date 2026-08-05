@@ -285,7 +285,8 @@ func countTokenThresholdMessage(
 // threshold. Full-session checks count only primary-agent activity, while
 // branch-scoped checks count the scoped branch and its descendants. When a
 // summarizer injects effective summary text into the session state, that text
-// takes precedence over the default event extraction logic.
+// takes precedence over the default event extraction logic. Context-aware
+// framework calls use the finalized model request size when available.
 //
 // Note:
 // Token accounting via model usage is not stable once session summary
@@ -326,6 +327,12 @@ func evaluateTokenThreshold(tokenCount int) checkEvaluator {
 			Metric:    metricTokens,
 			Threshold: tokenCount,
 			Unit:      unitTokens,
+		}
+		if view, ok := modelVisibleViewForSession(ctx, sess); ok &&
+			view.RequestTokens > 0 {
+			check.Value = view.RequestTokens
+			check.Passed = view.RequestTokens > tokenCount
+			return check
 		}
 
 		var message model.Message
