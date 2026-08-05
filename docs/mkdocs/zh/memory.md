@@ -302,10 +302,6 @@ update 已通过检查后才合并。
 会追加为新条目。矛盾信息不能授权破坏性操作：delete 必须来自用户明确的遗忘请求，
 clear 必须来自用户明确的“遗忘全部存储信息”请求。
 
-Merge Similar 继续使用历史的 user-only query 选择 existing memories。Preserve History
-和 Append Only 使用同时包含 user 与 assistant 对话文本的 bounded query，因为 Auto
-extraction 会处理两个角色的消息；tool call 和 tool result 不会进入该 query。
-
 该 update policy 不会修改 `memory.Service`、`MemoryExtractor`、持久化 JSON、memory ID
 或数据库 schema，也不会重写存量记忆。Merge Similar 继续保持原有的 best-effort
 持久化行为。Preserve History 或 Append Only 的持久化失败会返回给调用方，并且不会

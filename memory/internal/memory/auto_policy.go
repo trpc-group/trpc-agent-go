@@ -15,7 +15,6 @@ import (
 	"strings"
 	"time"
 	"unicode"
-	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
@@ -25,10 +24,8 @@ import (
 )
 
 const (
-	preserveHistoryOldCoverage    = 0.95
-	preserveHistoryNewCoverage    = 0.70
-	maxAutoMemorySearchQueryBytes = 7 * 1024
-	searchQueryOmissionMarker     = "\n...\n"
+	preserveHistoryOldCoverage = 0.95
+	preserveHistoryNewCoverage = 0.70
 )
 
 var (
@@ -626,54 +623,6 @@ func stringSet(values []string) map[string]struct{} {
 		}
 	}
 	return result
-}
-
-// buildPolicySearchQuery includes both sides of the conversation because
-// opt-in policies reconcile memories extracted from both user and assistant
-// messages. Tool protocol messages are excluded, and the query is bounded to
-// stay within embedding-provider input limits.
-func buildPolicySearchQuery(messages []model.Message) string {
-	parts := make([]string, 0, len(messages))
-	for _, msg := range messages {
-		if msg.Role != model.RoleUser && msg.Role != model.RoleAssistant {
-			continue
-		}
-		if msg.ToolID != "" || len(msg.ToolCalls) > 0 {
-			continue
-		}
-		if text := messageSearchText(msg); text != "" {
-			parts = append(parts, text)
-		}
-	}
-	return limitSearchQuery(strings.Join(parts, " "))
-}
-
-func limitSearchQuery(query string) string {
-	if len(query) <= maxAutoMemorySearchQueryBytes {
-		return query
-	}
-	contentBudget := maxAutoMemorySearchQueryBytes - len(searchQueryOmissionMarker)
-	prefixBudget := contentBudget / 2
-	suffixBudget := contentBudget - prefixBudget
-	prefixEnd := utf8PrefixBoundary(query, prefixBudget)
-	suffixStart := utf8SuffixBoundary(query, len(query)-suffixBudget)
-	return strings.TrimSpace(
-		query[:prefixEnd] + searchQueryOmissionMarker + query[suffixStart:],
-	)
-}
-
-func utf8PrefixBoundary(text string, limit int) int {
-	for limit > 0 && !utf8.RuneStart(text[limit]) {
-		limit--
-	}
-	return limit
-}
-
-func utf8SuffixBoundary(text string, start int) int {
-	for start < len(text) && !utf8.RuneStart(text[start]) {
-		start++
-	}
-	return start
 }
 
 func logPreserveHistoryDecision(

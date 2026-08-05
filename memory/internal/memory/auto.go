@@ -487,9 +487,6 @@ func (w *AutoMemoryWorker) searchRelevantMemories(
 	messages []model.Message,
 ) ([]*memory.Entry, error) {
 	query := buildSearchQuery(messages)
-	if w.updatePolicy != extractor.UpdatePolicyMergeSimilar {
-		query = buildPolicySearchQuery(messages)
-	}
 	if query == "" {
 		return nil, nil
 	}
