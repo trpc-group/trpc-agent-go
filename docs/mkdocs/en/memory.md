@@ -309,6 +309,11 @@ the existing tool semantics.
 | `UpdatePolicyPreserveHistory` | Drops exact duplicates, updates only for non-conflicting enrichment, keeps changes as separate entries, and allows automatic delete/clear only after an explicit user request. |
 | `UpdatePolicyAppendOnly` | Emits only non-duplicate adds: updates become adds, while delete and clear operations are filtered. |
 
+Merge Similar retains the historical user-only query when retrieving existing
+memories. Preserve History and Append Only use user and assistant conversation
+text, excluding tool protocol messages, to retrieve the entries evaluated by
+their policy rules. This query is bounded to 7 KiB with UTF-8-safe truncation.
+
 Preserve History candidate reconciliation compares only the existing entries
 already supplied to the extractor. Exact duplicate checks also consider earlier
 operations from the same extraction batch, but distinct operations are not

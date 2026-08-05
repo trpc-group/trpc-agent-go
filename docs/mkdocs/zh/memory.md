@@ -290,6 +290,10 @@ Update policy 只约束后台 Auto extraction 产生的操作。Agent 或应用�
 | `UpdatePolicyPreserveHistory` | 完全重复时不写入；只更新无冲突的增量信息；变化内容单独追加；只有用户明确请求时才允许自动 delete/clear。 |
 | `UpdatePolicyAppendOnly` | 最终只产生非重复 add：update 转为 add，delete/clear 被过滤。 |
 
+Merge Similar 在检索 existing memories 时保持原有的 user-only query。
+Preserve History 和 Append Only 使用 user 与 assistant 的对话文本检索候选，
+但排除 tool protocol message；该 query 使用 UTF-8 安全的方式限制为 7 KiB。
+
 Preserve History 的候选 reconcile 只比较已经提供给 extractor 的 existing entries。
 精确重复检查还会考虑同一次 extraction 中已经接受的 operation，但不会合并不同的
 operation。检索分数只能用于候选排序，不能单独决定 update 或丢弃。事件身份、

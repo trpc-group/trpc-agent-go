@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
@@ -26,6 +27,8 @@ import (
 const (
 	preserveHistoryOldCoverage = 0.95
 	preserveHistoryNewCoverage = 0.70
+	maxPolicySearchQueryBytes  = 7 * 1024
+	searchQueryOmissionMarker  = "\n...\n"
 )
 
 var (
@@ -623,6 +626,54 @@ func stringSet(values []string) map[string]struct{} {
 		}
 	}
 	return result
+}
+
+// buildPolicySearchQuery includes conversational user and assistant text while
+// excluding tool protocol messages. Preserve History and Append Only use this
+// broader context to retrieve candidates for their policy decisions.
+func buildPolicySearchQuery(messages []model.Message) string {
+	parts := make([]string, 0, len(messages))
+	for _, msg := range messages {
+		if msg.Role != model.RoleUser && msg.Role != model.RoleAssistant {
+			continue
+		}
+		if msg.ToolID != "" || len(msg.ToolCalls) > 0 {
+			continue
+		}
+		text := messageSearchText(msg)
+		if text != "" {
+			parts = append(parts, text)
+		}
+	}
+	return limitPolicySearchQuery(strings.Join(parts, " "))
+}
+
+func limitPolicySearchQuery(query string) string {
+	if len(query) <= maxPolicySearchQueryBytes {
+		return query
+	}
+	contentBudget := maxPolicySearchQueryBytes - len(searchQueryOmissionMarker)
+	prefixBudget := contentBudget / 2
+	suffixBudget := contentBudget - prefixBudget
+	prefixEnd := utf8PrefixBoundary(query, prefixBudget)
+	suffixStart := utf8SuffixBoundary(query, len(query)-suffixBudget)
+	return strings.TrimSpace(
+		query[:prefixEnd] + searchQueryOmissionMarker + query[suffixStart:],
+	)
+}
+
+func utf8PrefixBoundary(text string, limit int) int {
+	for limit > 0 && !utf8.RuneStart(text[limit]) {
+		limit--
+	}
+	return limit
+}
+
+func utf8SuffixBoundary(text string, start int) int {
+	for start < len(text) && !utf8.RuneStart(text[start]) {
+		start++
+	}
+	return start
 }
 
 func logPreserveHistoryDecision(

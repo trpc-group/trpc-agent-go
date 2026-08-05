@@ -11,8 +11,10 @@ package memory
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -552,24 +554,24 @@ func TestUpdatePolicies_SearchBehavior(t *testing.T) {
 			searchQuery: "I like tea.",
 		},
 		{
-			name:   "preserve history keeps user-only search",
+			name:   "preserve history includes assistant context",
 			policy: extractor.UpdatePolicyPreserveHistory,
 			operation: &extractor.Operation{
 				Type: extractor.OperationAdd, Memory: "User likes coffee.",
 			},
 			searchCalls: 1,
 			addCalls:    1,
-			searchQuery: "I like tea.",
+			searchQuery: "I like tea. Assistant-only detail.",
 		},
 		{
-			name:   "append-only keeps user-only search",
+			name:   "append-only includes assistant context",
 			policy: extractor.UpdatePolicyAppendOnly,
 			operation: &extractor.Operation{
 				Type: extractor.OperationUpdate, MemoryID: "stored", Memory: "User likes coffee.",
 			},
 			searchCalls: 1,
 			addCalls:    1,
-			searchQuery: "I like tea.",
+			searchQuery: "I like tea. Assistant-only detail.",
 		},
 	}
 	for _, test := range tests {
@@ -593,6 +595,34 @@ func TestUpdatePolicies_SearchBehavior(t *testing.T) {
 			assert.Equal(t, test.searchQuery, operator.searchQueries[0])
 		})
 	}
+}
+
+func TestPolicySearchQuery_IncludesAssistantAndBoundsUTF8(t *testing.T) {
+	query := buildPolicySearchQuery([]model.Message{
+		model.NewUserMessage("user fact"),
+		model.NewAssistantMessage("assistant fact"),
+		model.NewToolMessage("call", "tool", "ignored"),
+		{
+			Role:    model.RoleAssistant,
+			Content: "assistant tool result ignored",
+			ToolID:  "tool-call",
+		},
+		{
+			Role:      model.RoleAssistant,
+			Content:   "assistant tool call ignored",
+			ToolCalls: []model.ToolCall{{Type: "function"}},
+		},
+	})
+	assert.Contains(t, query, "user fact")
+	assert.Contains(t, query, "assistant fact")
+	assert.NotContains(t, query, "ignored")
+
+	query = buildPolicySearchQuery([]model.Message{
+		model.NewUserMessage(strings.Repeat("history ", maxPolicySearchQueryBytes)),
+		model.NewAssistantMessage(strings.Repeat("中文", maxPolicySearchQueryBytes)),
+	})
+	assert.LessOrEqual(t, len(query), maxPolicySearchQueryBytes)
+	assert.True(t, utf8.ValidString(query))
 }
 
 func TestPreserveHistoryPolicy_ToolGatesAndUnknownOperations(t *testing.T) {
