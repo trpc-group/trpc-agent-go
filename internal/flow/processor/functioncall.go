@@ -633,6 +633,9 @@ func (p *FunctionCallResponseProcessor) shouldEmitToolResultEventPerToolCall(
 // miss the objection the mapped tool raises. A name that resolves to nothing is
 // admissible — it never executes, it produces a terminal error result, so it
 // cannot constrain its siblings.
+//
+// The check goes through itool.IsConcurrencySafe so a host that patched a tool's
+// declaration cannot hide the objection behind an overlay wrapper.
 func hasConcurrentBatch(
 	toolCalls []model.ToolCall,
 	tools map[string]tool.Tool,
@@ -649,7 +652,7 @@ func hasConcurrentBatch(
 		if tl == nil {
 			continue
 		}
-		if !tool.IsConcurrencySafe(tl) {
+		if !itool.IsConcurrencySafe(tl) {
 			return false
 		}
 	}
