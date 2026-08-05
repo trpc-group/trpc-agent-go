@@ -320,6 +320,11 @@ entry. Destructive operations are never inferred from contradictions: delete
 requires an explicit user request, and clear requires an explicit request to
 forget all stored information.
 
+Merge Similar retains the historical user-only query for selecting existing
+memories. Preserve History and Append Only use a bounded query containing both
+user and assistant conversational text because both roles are input to Auto
+extraction. Tool calls and tool results are excluded from this query.
+
 The update policy does not change `memory.Service`, `MemoryExtractor`, the stored
 JSON representation, memory IDs, or database schemas. It does not rewrite
 existing entries. Memory writes remain best effort for every policy: a failed

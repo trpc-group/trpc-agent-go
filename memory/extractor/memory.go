@@ -385,7 +385,11 @@ func (e *memoryExtractor) parseToolCall(ctx context.Context, call model.ToolCall
 		log.WarnfContext(ctx, "extractor: failed to parse tool args: %v", err)
 		return nil
 	}
-	return parseToolCallArgs(call.Function.Name, args)
+	op := parseToolCallArgs(call.Function.Name, args)
+	if op == nil {
+		log.WarnfContext(ctx, "extractor: invalid %s arguments", call.Function.Name)
+	}
+	return op
 }
 
 func (e *memoryExtractor) runBeforeModelCallbacks(

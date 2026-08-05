@@ -11,8 +11,10 @@ package memory
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -605,7 +607,7 @@ func TestPreserveHistoryPolicy_DoesNotSearchPerOperation(t *testing.T) {
 	assert.Equal(t, 1, operator.updateCalls)
 }
 
-func TestUpdatePolicies_PreserveMergeSimilarSearchBehavior(t *testing.T) {
+func TestUpdatePolicies_SearchBehavior(t *testing.T) {
 	existing := &memory.Entry{
 		ID: "stored",
 		Memory: &memory.Memory{
@@ -619,6 +621,7 @@ func TestUpdatePolicies_PreserveMergeSimilarSearchBehavior(t *testing.T) {
 		operation   *extractor.Operation
 		searchCalls int
 		addCalls    int
+		searchQuery string
 	}{
 		{
 			name:   "mergeSimilar keeps per-add reconciliation",
@@ -627,15 +630,27 @@ func TestUpdatePolicies_PreserveMergeSimilarSearchBehavior(t *testing.T) {
 				Type: extractor.OperationAdd, Memory: "User likes tea.",
 			},
 			searchCalls: 2,
+			searchQuery: "I like tea.",
 		},
 		{
-			name:   "append-only converts update without reconciliation",
+			name:   "preserve history searches both conversation roles",
+			policy: extractor.UpdatePolicyPreserveHistory,
+			operation: &extractor.Operation{
+				Type: extractor.OperationAdd, Memory: "User likes coffee.",
+			},
+			searchCalls: 1,
+			addCalls:    1,
+			searchQuery: "I like tea. Assistant-only detail.",
+		},
+		{
+			name:   "append-only searches both conversation roles",
 			policy: extractor.UpdatePolicyAppendOnly,
 			operation: &extractor.Operation{
 				Type: extractor.OperationUpdate, MemoryID: "stored", Memory: "User likes coffee.",
 			},
 			searchCalls: 1,
 			addCalls:    1,
+			searchQuery: "I like tea. Assistant-only detail.",
 		},
 	}
 	for _, test := range tests {
@@ -656,9 +671,37 @@ func TestUpdatePolicies_PreserveMergeSimilarSearchBehavior(t *testing.T) {
 			assert.Equal(t, test.searchCalls, operator.searchCalls)
 			assert.Equal(t, test.addCalls, operator.addCalls)
 			require.NotEmpty(t, operator.searchQueries)
-			assert.Equal(t, "I like tea.", operator.searchQueries[0])
+			assert.Equal(t, test.searchQuery, operator.searchQueries[0])
 		})
 	}
+}
+
+func TestPolicySearchQuery_IncludesAssistantAndBoundsUTF8(t *testing.T) {
+	query := buildPolicySearchQuery([]model.Message{
+		model.NewUserMessage("user fact"),
+		model.NewAssistantMessage("assistant fact"),
+		model.NewToolMessage("call", "tool", "ignored"),
+		{
+			Role:    model.RoleAssistant,
+			Content: "assistant tool result ignored",
+			ToolID:  "tool-call",
+		},
+		{
+			Role:      model.RoleAssistant,
+			Content:   "assistant tool call ignored",
+			ToolCalls: []model.ToolCall{{Type: "function"}},
+		},
+	})
+	assert.Contains(t, query, "user fact")
+	assert.Contains(t, query, "assistant fact")
+	assert.NotContains(t, query, "ignored")
+
+	query = buildPolicySearchQuery([]model.Message{
+		model.NewUserMessage(strings.Repeat("history ", maxAutoMemorySearchQueryBytes)),
+		model.NewAssistantMessage(strings.Repeat("中文", maxAutoMemorySearchQueryBytes)),
+	})
+	assert.LessOrEqual(t, len(query), maxAutoMemorySearchQueryBytes)
+	assert.True(t, utf8.ValidString(query))
 }
 
 func TestPreserveHistoryPolicy_ToolGatesAndUnknownOperations(t *testing.T) {
