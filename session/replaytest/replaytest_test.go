@@ -573,6 +573,104 @@ func TestRunRejectsStaticFixtureBeforePersistence(t *testing.T) {
 	}
 }
 
+func TestRunRejectsInvalidStateMapPrefixesBeforePersistence(t *testing.T) {
+	tests := []struct {
+		name string
+		tc   Case
+		want string
+	}{
+		{
+			name: "user state rejects app prefix",
+			tc: Case{
+				Name: "user-state-app-prefix",
+				UserState: session.StateMap{
+					session.StateAppPrefix + "bad":   []byte(`"bad"`),
+					session.StateUserPrefix + "good": []byte(`"good"`),
+				},
+			},
+			want: `user state for case "user-state-app-prefix" has key "app:bad" with disallowed prefix "app:"`,
+		},
+		{
+			name: "user state rejects temp prefix",
+			tc: Case{
+				Name: "user-state-temp-prefix",
+				UserState: session.StateMap{
+					session.StateTempPrefix + "bad": []byte(`"bad"`),
+				},
+			},
+			want: `user state for case "user-state-temp-prefix" has key "temp:bad" with disallowed prefix "temp:"`,
+		},
+		{
+			name: "session state rejects app prefix",
+			tc: Case{
+				Name: "session-state-app-prefix",
+				UserState: session.StateMap{
+					session.StateUserPrefix + "good": []byte(`"good"`),
+				},
+				SessionState: session.StateMap{
+					session.StateAppPrefix + "bad":   []byte(`"bad"`),
+					session.StateTempPrefix + "good": []byte(`"good"`),
+				},
+			},
+			want: `session state for case "session-state-app-prefix" has key "app:bad" with disallowed prefix "app:"`,
+		},
+		{
+			name: "session state rejects user prefix",
+			tc: Case{
+				Name: "session-state-user-prefix",
+				SessionState: session.StateMap{
+					session.StateUserPrefix + "bad": []byte(`"bad"`),
+					"session:good":                  []byte(`"good"`),
+				},
+			},
+			want: `session state for case "session-state-user-prefix" has key "user:bad" with disallowed prefix "user:"`,
+		},
+		{
+			name: "user state and sorted key take priority",
+			tc: Case{
+				Name: "state-prefix-priority",
+				UserState: session.StateMap{
+					session.StateTempPrefix + "later": []byte(`"later"`),
+					session.StateAppPrefix + "first":  []byte(`"first"`),
+				},
+				SessionState: session.StateMap{
+					session.StateAppPrefix + "also-invalid": []byte(`"bad"`),
+				},
+			},
+			want: `user state for case "state-prefix-priority" has key "app:first" with disallowed prefix "app:"`,
+		},
+		{
+			name: "session state sorted key takes priority",
+			tc: Case{
+				Name: "session-state-prefix-priority",
+				SessionState: session.StateMap{
+					session.StateUserPrefix + "later": []byte(`"later"`),
+					session.StateAppPrefix + "first":  []byte(`"first"`),
+				},
+			},
+			want: `session state for case "session-state-prefix-priority" has key "app:first" with disallowed prefix "app:"`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			backend, sessionService, calls := newPreflightRecordingBackend(t)
+			tc := test.tc
+			addPreflightProbeState(&tc)
+
+			_, err := Run(context.Background(), testRunNamespace, backend, tc)
+			require.EqualError(t, err, test.want)
+			require.Empty(t, calls.snapshot())
+
+			got, getErr := sessionService.GetSession(
+				context.Background(), replayKey(testRunNamespace, tc.Name),
+			)
+			require.NoError(t, getErr)
+			require.Nil(t, got)
+		})
+	}
+}
+
 func TestPrepareCaseValidationPriority(t *testing.T) {
 	two := 2
 	validEvent := replayTimelineEvent(
@@ -580,6 +678,9 @@ func TestPrepareCaseValidationPriority(t *testing.T) {
 	)
 	invalidMemory := []MemoryOp{{Name: "bad", Operation: MemoryOperation("replace")}}
 	invalidConcurrentMemory := []MemoryOp{{Operation: MemoryUpdate}}
+	invalidState := session.StateMap{
+		session.StateAppPrefix + "bad": []byte(`"bad"`),
+	}
 	tests := []struct {
 		name string
 		tc   Case
@@ -590,7 +691,8 @@ func TestPrepareCaseValidationPriority(t *testing.T) {
 			tc: Case{
 				Name: "priority-track", Tracks: []TrackSpec{{Name: " "}},
 				Events: []*event.Event{nil}, Summaries: []SummaryStep{{EventPrefix: &two}},
-				Memories: invalidMemory, ConcurrentMemories: invalidConcurrentMemory,
+				SessionState: invalidState,
+				Memories:     invalidMemory, ConcurrentMemories: invalidConcurrentMemory,
 			},
 			want: `track 0 for case "priority-track" has empty name`,
 		},
@@ -598,8 +700,9 @@ func TestPrepareCaseValidationPriority(t *testing.T) {
 			name: "event before summary",
 			tc: Case{
 				Name: "priority-event", Events: []*event.Event{nil},
-				Summaries: []SummaryStep{{EventPrefix: &two}},
-				Memories:  invalidMemory, ConcurrentMemories: invalidConcurrentMemory,
+				Summaries:    []SummaryStep{{EventPrefix: &two}},
+				SessionState: invalidState,
+				Memories:     invalidMemory, ConcurrentMemories: invalidConcurrentMemory,
 			},
 			want: `event 0 for case "priority-event" is nil`,
 		},
@@ -607,10 +710,20 @@ func TestPrepareCaseValidationPriority(t *testing.T) {
 			name: "summary before sequential memory",
 			tc: Case{
 				Name: "priority-summary", Events: []*event.Event{validEvent},
-				Summaries: []SummaryStep{{EventPrefix: &two}},
-				Memories:  invalidMemory, ConcurrentMemories: invalidConcurrentMemory,
+				Summaries:    []SummaryStep{{EventPrefix: &two}},
+				SessionState: invalidState,
+				Memories:     invalidMemory, ConcurrentMemories: invalidConcurrentMemory,
 			},
 			want: `summary step 0 for case "priority-summary" has event prefix 2 outside [0,1]`,
+		},
+		{
+			name: "state before sequential memory",
+			tc: Case{
+				Name: "priority-state", Events: []*event.Event{validEvent},
+				SessionState: invalidState,
+				Memories:     invalidMemory, ConcurrentMemories: invalidConcurrentMemory,
+			},
+			want: `session state for case "priority-state" has key "app:bad" with disallowed prefix "app:"`,
 		},
 		{
 			name: "sequential before concurrent memory",
@@ -1811,10 +1924,18 @@ func newPreflightRecordingBackend(
 }
 
 func addPreflightProbeState(tc *Case) {
-	tc.InitialState = session.StateMap{"initial": []byte(`"probe"`)}
-	tc.AppState = session.StateMap{session.StateAppPrefix + "probe": []byte(`"app"`)}
-	tc.UserState = session.StateMap{session.StateUserPrefix + "probe": []byte(`"user"`)}
-	tc.SessionState = session.StateMap{"session:probe": []byte(`"session"`)}
+	add := func(state session.StateMap, key string, value []byte) session.StateMap {
+		out := cloneStateMap(state)
+		if out == nil {
+			out = make(session.StateMap)
+		}
+		out[key] = append([]byte(nil), value...)
+		return out
+	}
+	tc.InitialState = add(tc.InitialState, "initial", []byte(`"probe"`))
+	tc.AppState = add(tc.AppState, session.StateAppPrefix+"probe", []byte(`"app"`))
+	tc.UserState = add(tc.UserState, session.StateUserPrefix+"probe", []byte(`"user"`))
+	tc.SessionState = add(tc.SessionState, "session:probe", []byte(`"session"`))
 }
 
 func (s *emptyUpdateResultMemoryService) UpdateMemory(

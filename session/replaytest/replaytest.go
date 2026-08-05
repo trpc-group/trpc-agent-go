@@ -267,10 +267,17 @@ type AllowedDiffRule struct {
 // Run executes a replay case against one backend and returns a normalized snapshot.
 // runNamespace must be non-empty, must not contain surrounding whitespace, and
 // must be shared by all backends participating in one comparison. Callers must
-// use a new namespace for every rerun. Run rejects statically detectable fixture
-// errors before creating a session or mutating a backend. Runtime failures may
-// still leave partially persisted case data; Run leaves that cleanup lifecycle
-// to the caller.
+// use a new namespace for every rerun. Before creating a session, Run preflights
+// statically detectable fixture errors in the fixed order track, event, summary,
+// direct state-map prefix, sequential memory, then concurrent memory. UserState
+// permits unprefixed and user: keys but rejects app: and temp: keys. SessionState
+// permits unprefixed and temp: keys but rejects app: and user: keys. An invalid
+// direct state map returns before any backend call. The UserState restriction is
+// replay matrix policy rather than a general session.Service contract; the
+// SessionState restriction mirrors that service contract. AppState, InitialState,
+// and Event.StateDelta retain their existing semantics. Runtime failures may still
+// leave partially persisted case data; Run leaves that cleanup lifecycle to the
+// caller.
 func Run(ctx context.Context, runNamespace string, backend Backend, tc Case) (Result, error) {
 	if err := validateBackend(backend); err != nil {
 		return Result{}, err
@@ -348,6 +355,9 @@ func prepareCase(backend Backend, tc Case) (preparedCase, error) {
 	if err != nil {
 		return preparedCase{}, err
 	}
+	if err := validateFixtureStateMaps(tc); err != nil {
+		return preparedCase{}, err
+	}
 	if err := validateSequentialMemoryOperations(tc); err != nil {
 		return preparedCase{}, err
 	}
@@ -355,6 +365,49 @@ func prepareCase(backend Backend, tc Case) (preparedCase, error) {
 		return preparedCase{}, err
 	}
 	return preparedCase{preparedTracks: tracks, summaryTargets: targets}, nil
+}
+
+func validateFixtureStateMaps(tc Case) error {
+	if err := validateFixtureStateMapPrefixes(
+		tc.Name,
+		"user state",
+		tc.UserState,
+		session.StateAppPrefix,
+		session.StateTempPrefix,
+	); err != nil {
+		return err
+	}
+	return validateFixtureStateMapPrefixes(
+		tc.Name,
+		"session state",
+		tc.SessionState,
+		session.StateAppPrefix,
+		session.StateUserPrefix,
+	)
+}
+
+func validateFixtureStateMapPrefixes(
+	caseName string,
+	fieldName string,
+	state session.StateMap,
+	disallowedPrefixes ...string,
+) error {
+	keys := make([]string, 0, len(state))
+	for key := range state {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		for _, prefix := range disallowedPrefixes {
+			if strings.HasPrefix(key, prefix) {
+				return fmt.Errorf(
+					"%s for case %q has key %q with disallowed prefix %q",
+					fieldName, caseName, key, prefix,
+				)
+			}
+		}
+	}
+	return nil
 }
 
 func validateFixtureEvents(tc Case) error {
