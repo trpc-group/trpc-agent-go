@@ -44,6 +44,15 @@ func (c *concurrencyTool) IsConcurrencySafe() bool {
 	return c.safe
 }
 
+type conflictingTool struct {
+	metadata ToolMetadata
+	aware    bool
+}
+
+func (c *conflictingTool) Declaration() *Declaration  { return &Declaration{Name: testToolName} }
+func (c *conflictingTool) ToolMetadata() ToolMetadata { return c.metadata }
+func (c *conflictingTool) IsConcurrencySafe() bool    { return c.aware }
+
 type deferredTool struct {
 	deferTool bool
 }
@@ -109,6 +118,28 @@ func TestIsConcurrencySafe(t *testing.T) {
 		{"concurrency-aware false", &concurrencyTool{safe: false}, false},
 		{"provider true", &metadataTool{metadata: ToolMetadata{ConcurrencySafe: true}}, true},
 		{"provider false", &metadataTool{metadata: ToolMetadata{ConcurrencySafe: false}}, false},
+		// When a tool publishes both, the narrow interface wins. Implementing
+		// ConcurrencyAware is a deliberate statement; a ToolMetadata literal is not,
+		// because its bool is false when simply unset. A wrapper that republishes
+		// another tool's metadata is the common case, and reading the struct first
+		// would have it declare every plain tool unsafe on that tool's behalf.
+		{"conflict resolves to the narrow interface", &conflictingTool{
+			metadata: ToolMetadata{ConcurrencySafe: false},
+			aware:    true,
+		}, true},
+		{"conflict resolves to the narrow interface, unsafe", &conflictingTool{
+			metadata: ToolMetadata{ConcurrencySafe: true},
+			aware:    false,
+		}, false},
+		// A provider is taken at its word, and this is the one sharp edge left: a
+		// tool that publishes only ReadOnly reads as unsafe, because a bool cannot
+		// say "unset". Implementing MetadataProvider is at least a deliberate act,
+		// and the cost is a serialized turn rather than a correctness bug — but a
+		// tri-state field is what would remove the edge entirely. Pinned here so the
+		// behaviour is a decision rather than a surprise.
+		{"a provider that never considered concurrency reads as unsafe", &metadataTool{
+			metadata: ToolMetadata{ReadOnly: true},
+		}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

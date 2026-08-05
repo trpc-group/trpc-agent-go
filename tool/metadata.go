@@ -25,10 +25,15 @@ type ToolMetadata struct {
 	// Destructive reports that the tool may delete, overwrite, or otherwise
 	// irreversibly change external state.
 	Destructive bool
-	// ConcurrencySafe reports that independent calls to the same tool can run at
-	// the same time without corrupting shared state. Publishing false keeps the
-	// tool off the parallel tool path; see IsConcurrencySafe for how an
-	// unpublished value is read.
+	// ConcurrencySafe reports that a call to this tool can run at the same time as
+	// any other tool call in the same turn — not merely alongside other calls to
+	// itself. That is the guarantee the scheduler needs, because a batch mixes
+	// different tools, and it is the weaker per-tool reading that would let two
+	// individually "safe" tools contend over the same working directory.
+	//
+	// There is deliberately no compatibility matrix: a tool that is safe only
+	// beside particular siblings should publish false. See IsConcurrencySafe for
+	// how an unpublished value is read.
 	ConcurrencySafe bool
 	// SearchOrRead reports that the tool primarily searches or reads data.
 	SearchOrRead bool
@@ -89,11 +94,18 @@ func IsConcurrencySafe(t Tool) bool {
 	if t == nil {
 		return true
 	}
-	if provider, ok := t.(MetadataProvider); ok {
-		return provider.ToolMetadata().ConcurrencySafe
-	}
+	// ConcurrencyAware is consulted FIRST, and this ordering is the whole point.
+	// It is the narrow, single-purpose interface: implementing it is a deliberate
+	// statement about concurrency, so its answer is never ambiguous.
+	// MetadataProvider is not — ToolMetadata is a struct with a bool that is false
+	// when unset, so a tool publishing only ReadOnly, or a wrapper republishing
+	// another tool's metadata, would otherwise be read as declaring itself unsafe
+	// and would silently take its whole turn off the parallel path.
 	if aware, ok := t.(ConcurrencyAware); ok {
 		return aware.IsConcurrencySafe()
+	}
+	if provider, ok := t.(MetadataProvider); ok {
+		return provider.ToolMetadata().ConcurrencySafe
 	}
 	return true
 }
