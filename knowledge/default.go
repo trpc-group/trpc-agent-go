@@ -14,6 +14,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"runtime"
@@ -28,10 +29,12 @@ import (
 	"github.com/panjf2000/ants/v2"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/embedder"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/graphstore"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/internal/loader"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/query"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/reranker"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/reranker/topk"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/resourcestore"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/retriever"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
@@ -52,6 +55,8 @@ const (
 // BuiltinKnowledge implements the Knowledge interface with a built-in retriever.
 type BuiltinKnowledge struct {
 	vectorStore   vectorstore.VectorStore
+	graphStore    graphstore.Store
+	resourceStore resourcestore.Store
 	embedder      embedder.Embedder
 	retriever     retriever.Retriever
 	queryEnhancer query.Enhancer
@@ -67,6 +72,8 @@ type BuiltinKnowledge struct {
 	processingIDMu   sync.Mutex                       // mutex for make consistent of read and write processingDocIDs
 	enableSourceSync bool                             // enable source sync, if true, will keep document in vectorstore be synced with source
 	dataOperationMu  sync.RWMutex                     // mutex for make sequence of data operations
+	closeOnce        sync.Once
+	closeErr         error
 }
 
 // BuiltinDocumentInfo stores the basic information of a document for incremental sync
@@ -119,8 +126,10 @@ func New(opts ...Option) *BuiltinKnowledge {
 		opt(dk)
 	}
 
-	// Create built-in retriever if not provided.
-	if dk.retriever == nil {
+	// Create the built-in retriever only when its required vector backend is
+	// configured. Graph-only and resource-only instances remain valid and make
+	// document Search fail explicitly instead of dereferencing a nil store.
+	if dk.retriever == nil && dk.vectorStore != nil {
 		// Use defaults if not specified.
 		if dk.queryEnhancer == nil {
 			dk.queryEnhancer = query.NewPassthroughEnhancer()
@@ -1134,21 +1143,34 @@ func hasSearchFilter(filter *SearchFilter) bool {
 
 // Close closes the knowledge base and releases resources.
 func (dk *BuiltinKnowledge) Close() error {
-	dk.dataOperationMu.Lock()
-	defer dk.dataOperationMu.Unlock()
+	dk.closeOnce.Do(func() {
+		dk.dataOperationMu.Lock()
+		defer dk.dataOperationMu.Unlock()
 
-	// Close components if they support closing.
-	if dk.retriever != nil {
-		if err := dk.retriever.Close(); err != nil {
-			return fmt.Errorf("failed to close retriever: %w", err)
+		var errs []error
+		if dk.retriever != nil {
+			if err := dk.retriever.Close(); err != nil {
+				errs = append(errs, fmt.Errorf("failed to close retriever: %w", err))
+			}
 		}
-	}
-	if dk.vectorStore != nil {
-		if err := dk.vectorStore.Close(); err != nil {
-			return fmt.Errorf("failed to close vector store: %w", err)
+		if dk.vectorStore != nil {
+			if err := dk.vectorStore.Close(); err != nil {
+				errs = append(errs, fmt.Errorf("failed to close vector store: %w", err))
+			}
 		}
-	}
-	return nil
+		if dk.graphStore != nil {
+			if err := dk.graphStore.Close(); err != nil {
+				errs = append(errs, fmt.Errorf("failed to close graph store: %w", err))
+			}
+		}
+		if dk.resourceStore != nil {
+			if err := dk.resourceStore.Close(); err != nil {
+				errs = append(errs, fmt.Errorf("failed to close resource store: %w", err))
+			}
+		}
+		dk.closeErr = errors.Join(errs...)
+	})
+	return dk.closeErr
 }
 
 // convertQueryFilter converts retriever.QueryFilter to vectorstore.SearchFilter.

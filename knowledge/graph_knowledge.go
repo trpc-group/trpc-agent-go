@@ -21,3 +21,11 @@ type GraphKnowledge interface {
 	Traverse(ctx context.Context, query *graph.TraverseQuery) (*graph.TraverseResult, error)
 	FindPaths(ctx context.Context, query *graph.PathQuery) (*graph.PathResult, error)
 }
+
+// GraphProvider is an optional capability for discovering a graph-native view
+// without changing the document-RAG semantics of Knowledge.Search.
+type GraphProvider interface {
+	// Graph returns the graph view and whether its store and seed-search
+	// capability are both configured.
+	Graph() (GraphKnowledge, bool)
+}

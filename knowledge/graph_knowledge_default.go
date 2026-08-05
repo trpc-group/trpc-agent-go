@@ -442,6 +442,9 @@ func (gk *BuiltinGraphKnowledge) retrieveSeedNodes(
 	ctx context.Context,
 	req *SearchRequest,
 ) ([]*graphSeed, error) {
+	if searcher, ok := gk.store.(graphstore.Searcher); ok {
+		return gk.retrieveNativeSeedNodes(ctx, searcher, req)
+	}
 	if gk.vectorStore == nil {
 		return nil, errors.New("graph vector store is not configured")
 	}
@@ -498,6 +501,67 @@ func (gk *BuiltinGraphKnowledge) retrieveSeedNodes(
 		})
 	}
 	return seeds, nil
+}
+
+func (gk *BuiltinGraphKnowledge) retrieveNativeSeedNodes(
+	ctx context.Context,
+	searcher graphstore.Searcher,
+	req *SearchRequest,
+) ([]*graphSeed, error) {
+	maxSeeds := resolvePositiveInt(req.MaxResults, defaultGraphSearchMaxSeeds)
+	result, err := searcher.SearchNodes(ctx, &graphstore.SearchNodesRequest{
+		Query:    strings.TrimSpace(req.Query),
+		Mode:     nativeGraphSearchMode(req),
+		Limit:    maxSeeds,
+		MinScore: req.MinScore,
+		Filter:   convertGraphSearchFilter(req.SearchFilter),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("search graph seeds: %w", err)
+	}
+	if result == nil {
+		return nil, nil
+	}
+	seeds := make([]*graphSeed, 0, len(result.Nodes))
+	seen := make(map[string]struct{}, len(result.Nodes))
+	for _, scored := range result.Nodes {
+		if scored == nil || scored.Node == nil || scored.Node.ID == "" {
+			continue
+		}
+		if _, ok := seen[scored.Node.ID]; ok {
+			continue
+		}
+		seen[scored.Node.ID] = struct{}{}
+		seeds = append(seeds, &graphSeed{node: scored.Node, score: scored.Score})
+	}
+	return seeds, nil
+}
+
+func nativeGraphSearchMode(req *SearchRequest) graphstore.SearchMode {
+	if strings.TrimSpace(req.Query) == "" && hasSearchFilter(req.SearchFilter) {
+		return graphstore.SearchModeFilter
+	}
+	switch vectorstore.SearchMode(req.SearchMode) {
+	case vectorstore.SearchModeVector:
+		return graphstore.SearchModeVector
+	case vectorstore.SearchModeKeyword:
+		return graphstore.SearchModeKeyword
+	case vectorstore.SearchModeFilter:
+		return graphstore.SearchModeFilter
+	default:
+		return graphstore.SearchModeHybrid
+	}
+}
+
+func convertGraphSearchFilter(filter *SearchFilter) *graphstore.SearchNodesFilter {
+	if filter == nil {
+		return nil
+	}
+	return &graphstore.SearchNodesFilter{
+		NodeIDs:         filter.DocumentIDs,
+		Metadata:        filter.Metadata,
+		FilterCondition: filter.FilterCondition,
+	}
 }
 
 type graphSeed struct {
