@@ -1358,6 +1358,33 @@ func TestAutoMemoryWorker_DeltaMessages_UsesTimestamp(t *testing.T) {
 	assert.True(t, capturedLastExtractAt.Equal(t1.UTC()))
 }
 
+func TestAutoMemoryWorker_DeltaMessages_UsesPrimaryChoice(t *testing.T) {
+	var capturedMessages []model.Message
+	ext := &mockExtractorWithCapture{
+		shouldExtract: false,
+		captureCtx: func(ctx *extractor.ExtractionContext) {
+			capturedMessages = append(capturedMessages, ctx.Messages...)
+		},
+	}
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{Extractor: ext}, newMockOperator())
+	sess := newTestSession("test-app", "user-1")
+	now := time.Now()
+	appendSessionMessage(sess, now, model.NewUserMessage("Recommend two options."))
+	sess.Events = append(sess.Events, event.Event{
+		Timestamp: now.Add(time.Second),
+		Response: &model.Response{Choices: []model.Choice{
+			{Index: 0, Message: model.NewAssistantMessage("1. Alpha\n2. Beta")},
+			{Index: 1, Message: model.NewAssistantMessage("1. Gamma\n2. Delta")},
+		}},
+	})
+
+	err := worker.EnqueueJob(context.Background(), sess)
+	require.NoError(t, err)
+	require.Len(t, capturedMessages, 2)
+	assert.Equal(t, "Recommend two options.", capturedMessages[0].Content)
+	assert.Equal(t, "1. Alpha\n2. Beta", capturedMessages[1].Content)
+}
+
 func TestAutoMemoryWorker_EnqueueJob_NilSession(t *testing.T) {
 	ext := &mockExtractor{}
 	op := newMockOperator()

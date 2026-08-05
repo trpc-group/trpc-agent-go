@@ -745,22 +745,24 @@ func scanDeltaSince(
 			continue
 		}
 
-		// Extract messages from response choices, excluding tool-related messages.
-		for _, choice := range e.Response.Choices {
-			msg := choice.Message
-			// Skip tool messages and messages with tool calls.
-			if msg.Role == model.RoleTool || msg.ToolID != "" {
-				continue
-			}
-			// Skip messages with no content (neither text nor content parts).
-			if msg.Content == "" && len(msg.ContentParts) == 0 {
-				continue
-			}
-			if len(msg.ToolCalls) > 0 {
-				continue
-			}
-			messages = append(messages, msg)
+		// Choices are alternative completions for one response event. Only the
+		// primary choice belongs to the conversation observed by the user.
+		if len(e.Response.Choices) == 0 {
+			continue
 		}
+		msg := e.Response.Choices[0].Message
+		// Skip tool messages and messages with tool calls.
+		if msg.Role == model.RoleTool || msg.ToolID != "" {
+			continue
+		}
+		// Skip messages with no content (neither text nor content parts).
+		if msg.Content == "" && len(msg.ContentParts) == 0 {
+			continue
+		}
+		if len(msg.ToolCalls) > 0 {
+			continue
+		}
+		messages = append(messages, msg)
 	}
 	return latestTs, messages
 }
