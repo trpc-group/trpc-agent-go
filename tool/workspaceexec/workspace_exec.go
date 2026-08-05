@@ -704,7 +704,12 @@ func (t *ExecTool) executeWorkspaceAttempt(
 	}
 	req.workspaceHandle = handle
 	req.ws = handle.Workspace
-	if err := t.reconcileWorkspace(ctx, req.eng, req.ws); err != nil {
+	if err := t.reconcileWorkspace(
+		ctx,
+		req.eng,
+		req.ws,
+		req.workspaceHandle.InstanceID,
+	); err != nil {
 		return execOutput{}, true, err
 	}
 	if t.sessional {
@@ -1009,6 +1014,7 @@ func (t *ExecTool) reconcileWorkspace(
 	ctx context.Context,
 	eng codeexecutor.Engine,
 	ws codeexecutor.Workspace,
+	instanceID codeexecutor.WorkspaceInstanceID,
 ) error {
 	if t == nil || len(t.providers) == 0 {
 		_, warnings, err := workspaceinput.StageConversationFiles(ctx, eng, ws)
@@ -1032,7 +1038,9 @@ func (t *ExecTool) reconcileWorkspace(
 		}
 		all = append(all, reqs...)
 	}
-	warnings, err := t.reconciler.Reconcile(ctx, eng, ws, all)
+	warnings, err := t.reconciler.Reconcile(
+		ctx, eng, ws, instanceID, all,
+	)
 	for _, warning := range warnings {
 		log.WarnfContext(
 			ctx,

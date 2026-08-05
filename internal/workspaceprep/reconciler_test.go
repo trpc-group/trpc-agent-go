@@ -58,7 +58,7 @@ func TestFileRequirement_InlineContentAppliesAndSkips(t *testing.T) {
 	rec := NewReconciler()
 
 	warnings, err := rec.Reconcile(
-		ctx, eng, ws, []Requirement{req},
+		ctx, eng, ws, "", []Requirement{req},
 	)
 	require.NoError(t, err)
 	require.Empty(t, warnings)
@@ -72,7 +72,7 @@ func TestFileRequirement_InlineContentAppliesAndSkips(t *testing.T) {
 	// counting FS writes via a new fingerprint.
 	infoBefore, err := os.Stat(filepath.Join(ws.Path, "work/config.json"))
 	require.NoError(t, err)
-	_, err = rec.Reconcile(ctx, eng, ws, []Requirement{req})
+	_, err = rec.Reconcile(ctx, eng, ws, "", []Requirement{req})
 	require.NoError(t, err)
 	infoAfter, err := os.Stat(filepath.Join(ws.Path, "work/config.json"))
 	require.NoError(t, err)
@@ -86,7 +86,7 @@ func TestFileRequirement_InlineContentAppliesAndSkips(t *testing.T) {
 		Content: []byte(`{"v":2}`),
 	})
 	require.NoError(t, err)
-	_, err = rec.Reconcile(ctx, eng, ws, []Requirement{req2})
+	_, err = rec.Reconcile(ctx, eng, ws, "", []Requirement{req2})
 	require.NoError(t, err)
 	got, err = os.ReadFile(filepath.Join(ws.Path, "work/config.json"))
 	require.NoError(t, err)
@@ -104,13 +104,13 @@ func TestFileRequirement_SentinelMissingTriggersReapply(t *testing.T) {
 	require.NoError(t, err)
 	rec := NewReconciler()
 
-	_, err = rec.Reconcile(ctx, eng, ws, []Requirement{req})
+	_, err = rec.Reconcile(ctx, eng, ws, "", []Requirement{req})
 	require.NoError(t, err)
 	require.NoError(t, os.Remove(
 		filepath.Join(ws.Path, "work/marker.txt"),
 	))
 
-	_, err = rec.Reconcile(ctx, eng, ws, []Requirement{req})
+	_, err = rec.Reconcile(ctx, eng, ws, "", []Requirement{req})
 	require.NoError(t, err)
 	got, err := os.ReadFile(filepath.Join(ws.Path, "work/marker.txt"))
 	require.NoError(t, err)
@@ -132,7 +132,7 @@ func TestCommandRequirement_MarkerPathSelfHeals(t *testing.T) {
 	require.NoError(t, err)
 	rec := NewReconciler()
 
-	_, err = rec.Reconcile(ctx, eng, ws, []Requirement{cmd})
+	_, err = rec.Reconcile(ctx, eng, ws, "", []Requirement{cmd})
 	require.NoError(t, err)
 	logBefore, err := os.ReadFile(filepath.Join(ws.Path, "work/cmd.log"))
 	require.NoError(t, err)
@@ -145,7 +145,7 @@ func TestCommandRequirement_MarkerPathSelfHeals(t *testing.T) {
 		filepath.Join(ws.Path, "work/cmd.log"),
 		[]byte("preserved"), 0o644,
 	))
-	_, err = rec.Reconcile(ctx, eng, ws, []Requirement{cmd})
+	_, err = rec.Reconcile(ctx, eng, ws, "", []Requirement{cmd})
 	require.NoError(t, err)
 	got, err := os.ReadFile(filepath.Join(ws.Path, "work/cmd.log"))
 	require.NoError(t, err)
@@ -156,7 +156,7 @@ func TestCommandRequirement_MarkerPathSelfHeals(t *testing.T) {
 	require.NoError(t, os.Remove(
 		filepath.Join(ws.Path, "work/.cmd-marker"),
 	))
-	_, err = rec.Reconcile(ctx, eng, ws, []Requirement{cmd})
+	_, err = rec.Reconcile(ctx, eng, ws, "", []Requirement{cmd})
 	require.NoError(t, err)
 	got, err = os.ReadFile(filepath.Join(ws.Path, "work/cmd.log"))
 	require.NoError(t, err)
@@ -217,7 +217,7 @@ func TestReconciler_FixedPhaseOrder(t *testing.T) {
 		recordPhase("file-2"),
 	}
 	rec := NewReconciler()
-	_, err := rec.Reconcile(ctx, eng, ws, reqs)
+	_, err := rec.Reconcile(ctx, eng, ws, "", reqs)
 	require.NoError(t, err)
 	require.Equal(t,
 		[]string{"file-1", "file-2", "skill-1", "cmd-1", "cmd-2"},
@@ -261,7 +261,7 @@ func TestReconciler_ConcurrentReconcileIsSerialized(t *testing.T) {
 			defer wg.Done()
 			req := makeReq(fmt.Sprintf("serialize-%d", i))
 			_, err := rec.Reconcile(
-				ctx, eng, ws, []Requirement{req},
+				ctx, eng, ws, "", []Requirement{req},
 			)
 			require.NoError(t, err)
 		}()
@@ -309,6 +309,7 @@ func TestReconciler_ConcurrentInstancesMergePreparedMetadata(
 				ctx,
 				eng,
 				ws,
+				"",
 				[]Requirement{req},
 			)
 			errs <- err
@@ -528,6 +529,7 @@ func TestReconciler_RequiredFailurePropagatesPartialSaveError(
 		ctx,
 		eng,
 		ws,
+		"",
 		[]Requirement{metadataDirectory, requiredFail},
 	)
 	require.Empty(t, warnings)
@@ -554,7 +556,7 @@ func TestReconciler_OptionalRequirementFailureIsWarning(t *testing.T) {
 	}
 	rec := NewReconciler()
 	warnings, err := rec.Reconcile(
-		ctx, eng, ws, []Requirement{bad, good},
+		ctx, eng, ws, "", []Requirement{bad, good},
 	)
 	require.NoError(t, err)
 	require.NotEmpty(t, warnings)
@@ -576,6 +578,7 @@ func TestReconciler_StaleRetryDisposition(t *testing.T) {
 			context.Background(),
 			eng,
 			codeexecutor.Workspace{ID: "ws", Path: t.TempDir()},
+			"",
 			[]Requirement{req},
 		)
 		require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
@@ -592,7 +595,7 @@ func TestReconciler_StaleRetryDisposition(t *testing.T) {
 		}
 
 		warnings, err := NewReconciler().Reconcile(
-			context.Background(), eng, ws, []Requirement{req},
+			context.Background(), eng, ws, "", []Requirement{req},
 		)
 		require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
 		require.False(t, errors.Is(err, ErrReconcileRetryUnsafe))
@@ -617,7 +620,7 @@ func TestReconciler_StaleRetryDisposition(t *testing.T) {
 		}
 
 		_, err := NewReconciler().Reconcile(
-			context.Background(), eng, ws,
+			context.Background(), eng, ws, "",
 			[]Requirement{success, later},
 		)
 		require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
@@ -645,7 +648,7 @@ func TestReconciler_StaleRetryDisposition(t *testing.T) {
 			}
 
 			warnings, err := NewReconciler().Reconcile(
-				context.Background(), eng, ws,
+				context.Background(), eng, ws, "",
 				[]Requirement{optionalFailure, laterStale},
 			)
 			require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
@@ -673,7 +676,7 @@ func TestReconciler_StaleRetryDisposition(t *testing.T) {
 		}
 
 		warnings, err := NewReconciler().Reconcile(
-			context.Background(), eng, ws,
+			context.Background(), eng, ws, "",
 			[]Requirement{optional, next},
 		)
 		require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
@@ -705,6 +708,7 @@ func TestReconciler_StaleRetryDisposition(t *testing.T) {
 					ID:   "ws",
 					Path: t.TempDir(),
 				},
+				"",
 				[]Requirement{req},
 			)
 			require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
@@ -731,6 +735,7 @@ func TestReconciler_StaleRetryDisposition(t *testing.T) {
 			context.Background(),
 			eng,
 			codeexecutor.Workspace{ID: "ws", Path: t.TempDir()},
+			"",
 			[]Requirement{req},
 		)
 		require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
@@ -738,7 +743,56 @@ func TestReconciler_StaleRetryDisposition(t *testing.T) {
 	})
 }
 
-// orderReq is a minimal Requirement implementation used by tests to
+func TestReconciler_InstanceRotationClearsPrepared(t *testing.T) {
+	ctx := context.Background()
+	eng, ws := newTestEngine(t)
+	rec := NewReconciler()
+
+	req, err := NewFileRequirement(FileSpec{
+		Target:  "work/seed.txt",
+		Content: []byte("seed"),
+	})
+	require.NoError(t, err)
+
+	_, err = rec.Reconcile(
+		ctx, eng, ws, "instance-1", []Requirement{req},
+	)
+	require.NoError(t, err)
+
+	md, err := codeexecutor.LoadMetadata(ws.Path)
+	require.NoError(t, err)
+	require.Equal(t, codeexecutor.WorkspaceInstanceID("instance-1"),
+		md.BackendInstanceID)
+
+	target := filepath.Join(ws.Path, "work/seed.txt")
+	infoBefore, err := os.Stat(target)
+	require.NoError(t, err)
+
+	_, err = rec.Reconcile(
+		ctx, eng, ws, "instance-1", []Requirement{req},
+	)
+	require.NoError(t, err)
+	infoUnchanged, err := os.Stat(target)
+	require.NoError(t, err)
+	require.Equal(t, infoBefore.ModTime(), infoUnchanged.ModTime(),
+		"same instance should skip unchanged bootstrap files")
+
+	_, err = rec.Reconcile(
+		ctx, eng, ws, "instance-2", []Requirement{req},
+	)
+	require.NoError(t, err)
+
+	md, err = codeexecutor.LoadMetadata(ws.Path)
+	require.NoError(t, err)
+	require.Equal(t, codeexecutor.WorkspaceInstanceID("instance-2"),
+		md.BackendInstanceID)
+
+	infoAfter, err := os.Stat(target)
+	require.NoError(t, err)
+	require.NotEqual(t, infoBefore.ModTime(), infoAfter.ModTime(),
+		"instance rotation must re-apply bootstrap files")
+}
+
 // observe the reconciler's phase ordering and locking semantics.
 type orderReq struct {
 	key      string

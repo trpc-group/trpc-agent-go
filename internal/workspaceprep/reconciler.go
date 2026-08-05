@@ -57,6 +57,7 @@ func (r *defaultReconciler) Reconcile(
 	ctx context.Context,
 	eng codeexecutor.Engine,
 	ws codeexecutor.Workspace,
+	instanceID codeexecutor.WorkspaceInstanceID,
 	reqs []Requirement,
 ) ([]string, error) {
 	if len(reqs) == 0 {
@@ -79,6 +80,7 @@ func (r *defaultReconciler) Reconcile(
 	if md.Prepared == nil {
 		md.Prepared = map[string]codeexecutor.PreparedRecord{}
 	}
+	codeexecutor.InvalidatePreparedForInstance(&md, instanceID)
 	baseMD := cloneReconcileMetadata(md)
 
 	rctx := ApplyContext{
@@ -147,6 +149,9 @@ func (r *defaultReconciler) Reconcile(
 		}
 	}
 	if changed {
+		if instanceID != "" {
+			md.BackendInstanceID = instanceID
+		}
 		if err := r.saveReconcileMetadata(
 			ctx, eng, ws, baseMD, md, changedKeys,
 		); err != nil {
@@ -255,6 +260,9 @@ func mergeDirectMetadataChanges(
 	}
 	if !reflect.DeepEqual(updated.Outputs, base.Outputs) {
 		merged.Outputs = updated.Outputs
+	}
+	if updated.BackendInstanceID != base.BackendInstanceID {
+		merged.BackendInstanceID = updated.BackendInstanceID
 	}
 }
 

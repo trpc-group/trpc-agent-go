@@ -275,6 +275,27 @@ type WorkspaceMetadata struct {
 	// still present. The map is a local per-workspace cache; session
 	// state remains the authoritative source of "what should exist".
 	Prepared map[string]PreparedRecord `json:"prepared,omitempty"`
+	// BackendInstanceID records the physical execution-environment
+	// generation for which Prepared was last converged. When a
+	// [WorkspaceInstanceProvider] reports a different non-empty ID,
+	// workspaceprep clears Prepared before reconciling bootstrap work.
+	// Empty means legacy managers that do not expose instance identity.
+	BackendInstanceID WorkspaceInstanceID `json:"backend_instance_id,omitempty"`
+}
+
+// InvalidatePreparedForInstance clears Prepared when instanceID differs
+// from the metadata's recorded backend generation. Legacy callers pass
+// an empty instanceID, which preserves existing Prepared semantics.
+func InvalidatePreparedForInstance(
+	md *WorkspaceMetadata,
+	instanceID WorkspaceInstanceID,
+) {
+	if md == nil || instanceID == "" {
+		return
+	}
+	if md.BackendInstanceID != "" && md.BackendInstanceID != instanceID {
+		md.Prepared = map[string]PreparedRecord{}
+	}
 }
 
 // PreparedRecord captures a single successfully-applied workspace

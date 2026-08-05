@@ -149,12 +149,12 @@ func TestCommandRequirement_FingerprintInputsChangeForcesReRun(t *testing.T) {
 	require.NoError(t, err)
 
 	rec := NewReconciler()
-	_, err = rec.Reconcile(ctx, eng, ws, []Requirement{req})
+	_, err = rec.Reconcile(ctx, eng, ws, "", []Requirement{req})
 	require.NoError(t, err)
 
 	// Second reconcile with identical requirements.txt is a pure
 	// fingerprint+marker skip.
-	_, err = rec.Reconcile(ctx, eng, ws, []Requirement{req})
+	_, err = rec.Reconcile(ctx, eng, ws, "", []Requirement{req})
 	require.NoError(t, err)
 	got, err := os.ReadFile(counterPath)
 	require.NoError(t, err)
@@ -163,7 +163,7 @@ func TestCommandRequirement_FingerprintInputsChangeForcesReRun(t *testing.T) {
 
 	// Edit the input file; the next reconcile must re-run the command.
 	require.NoError(t, os.WriteFile(reqsPath, []byte("v2"), 0o644))
-	_, err = rec.Reconcile(ctx, eng, ws, []Requirement{req})
+	_, err = rec.Reconcile(ctx, eng, ws, "", []Requirement{req})
 	require.NoError(t, err)
 	got, err = os.ReadFile(counterPath)
 	require.NoError(t, err)
@@ -187,7 +187,7 @@ func TestCommandRequirement_NonZeroExitFails(t *testing.T) {
 	require.NoError(t, err)
 
 	rec := NewReconciler()
-	_, err = rec.Reconcile(ctx, eng, ws, []Requirement{req})
+	_, err = rec.Reconcile(ctx, eng, ws, "", []Requirement{req})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "exited 3")
 	require.Contains(t, err.Error(), "boom")
@@ -210,7 +210,7 @@ func TestCommandRequirement_NonZeroExitStdoutFallback(t *testing.T) {
 	require.NoError(t, err)
 
 	rec := NewReconciler()
-	_, err = rec.Reconcile(ctx, eng, ws, []Requirement{req})
+	_, err = rec.Reconcile(ctx, eng, ws, "", []Requirement{req})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "exited 7")
 	require.Contains(t, err.Error(), "only-stdout")
@@ -242,13 +242,13 @@ func TestCommandRequirement_ObservedPathsSentinel(t *testing.T) {
 	require.NoError(t, err)
 
 	rec := NewReconciler()
-	_, err = rec.Reconcile(ctx, eng, ws, []Requirement{req})
+	_, err = rec.Reconcile(ctx, eng, ws, "", []Requirement{req})
 	require.NoError(t, err)
 
 	require.NoError(t, os.Remove(
 		filepath.Join(ws.Path, "work/observed.txt"),
 	))
-	_, err = rec.Reconcile(ctx, eng, ws, []Requirement{req})
+	_, err = rec.Reconcile(ctx, eng, ws, "", []Requirement{req})
 	require.NoError(t, err)
 	got, err := os.ReadFile(filepath.Join(ws.Path, "work/observed.txt"))
 	require.NoError(t, err)
@@ -299,7 +299,7 @@ func TestReconciler_NilEngineReturnsError(t *testing.T) {
 	require.NoError(t, err)
 	rec := NewReconciler()
 	_, err = rec.Reconcile(
-		context.Background(), nil, ws, []Requirement{req},
+		context.Background(), nil, ws, "", []Requirement{req},
 	)
 	require.Error(t, err)
 }
@@ -308,7 +308,7 @@ func TestReconciler_EmptyReqsIsNoop(t *testing.T) {
 	eng, ws := newTestEngine(t)
 	rec := NewReconciler()
 	warnings, err := rec.Reconcile(
-		context.Background(), eng, ws, nil,
+		context.Background(), eng, ws, "", nil,
 	)
 	require.NoError(t, err)
 	require.Empty(t, warnings)
@@ -331,7 +331,7 @@ func TestReconciler_DropsNilAndEmptyKeyedRequirements(t *testing.T) {
 
 	rec := NewReconciler()
 	warnings, err := rec.Reconcile(
-		ctx, eng, ws, []Requirement{nil, emptyKey, good},
+		ctx, eng, ws, "", []Requirement{nil, emptyKey, good},
 	)
 	require.NoError(t, err)
 	require.Empty(t, warnings)
@@ -357,7 +357,7 @@ func TestReconciler_RequiredRequirementErrorBubbles(t *testing.T) {
 		applyErr: fmt.Errorf("boom"),
 	}
 	rec := NewReconciler()
-	_, err := rec.Reconcile(ctx, eng, ws, []Requirement{bad})
+	_, err := rec.Reconcile(ctx, eng, ws, "", []Requirement{bad})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "bad")
 	require.Contains(t, err.Error(), "boom")

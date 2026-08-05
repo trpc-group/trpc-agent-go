@@ -1925,6 +1925,144 @@ func (r *nonInteractiveRunner) RunProgram(
 	}, nil
 }
 
+func TestExecTool_InstanceRotationReRunsBootstrapCommand(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "workspace")
+	rt := localexec.NewRuntimeWithOptions(
+		root,
+		localexec.WithRuntimeWorkspaceMode(
+			localexec.WorkspaceModeTrustedLocal,
+		),
+		localexec.WithAutoInputs(false),
+	)
+	manager := &instanceAwareTrustedManager{
+		Runtime:    rt,
+		instanceID: "instance-1",
+	}
+	reg := codeexecutor.NewWorkspaceRegistry()
+	runner := &bootstrapCountingRunner{inner: rt}
+	exec := &instanceAwareExec{
+		eng: codeexecutor.NewEngine(manager, rt, runner),
+	}
+	tl := NewExecTool(
+		exec,
+		WithWorkspaceRegistry(reg),
+		WithWorkspaceBootstrap(codeexecutor.WorkspaceBootstrapSpec{
+			Commands: []codeexecutor.WorkspaceCommand{{
+				Cmd: "true",
+			}},
+		}),
+	)
+	args, err := json.Marshal(execInput{Command: "printf ok"})
+	require.NoError(t, err)
+
+	got, err := tl.Call(context.Background(), args)
+	require.NoError(t, err)
+	require.Equal(t, "ok", got.(execOutput).Output)
+	require.Equal(t, 1, runner.bootstrapCount(),
+		"bootstrap must run once on first workspace use")
+	require.Equal(t, 1, manager.createCount())
+
+	bootstrapBeforeRotate := runner.bootstrapCount()
+	manager.setInstanceID("instance-2")
+
+	got, err = tl.Call(context.Background(), args)
+	require.NoError(t, err)
+	require.Equal(t, "ok", got.(execOutput).Output)
+	require.Equal(t, 2, manager.createCount(),
+		"instance change must recreate the workspace")
+	require.Equal(t, bootstrapBeforeRotate+1, runner.bootstrapCount(),
+		"bootstrap must rerun after instance rotation")
+}
+
+type instanceAwareTrustedManager struct {
+	*localexec.Runtime
+
+	mu         sync.Mutex
+	instanceID codeexecutor.WorkspaceInstanceID
+	creates    int
+}
+
+func (m *instanceAwareTrustedManager) CreateWorkspace(
+	ctx context.Context,
+	id string,
+	pol codeexecutor.WorkspacePolicy,
+) (codeexecutor.Workspace, error) {
+	m.mu.Lock()
+	m.creates++
+	m.mu.Unlock()
+	return m.Runtime.CreateWorkspace(ctx, id, pol)
+}
+
+func (m *instanceAwareTrustedManager) InstanceID(
+	context.Context,
+) (codeexecutor.WorkspaceInstanceID, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.instanceID, nil
+}
+
+func (m *instanceAwareTrustedManager) setInstanceID(
+	id codeexecutor.WorkspaceInstanceID,
+) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.instanceID = id
+}
+
+func (m *instanceAwareTrustedManager) createCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.creates
+}
+
+type instanceAwareExec struct {
+	eng codeexecutor.Engine
+}
+
+func (*instanceAwareExec) ExecuteCode(
+	context.Context,
+	codeexecutor.CodeExecutionInput,
+) (codeexecutor.CodeExecutionResult, error) {
+	return codeexecutor.CodeExecutionResult{}, nil
+}
+
+func (*instanceAwareExec) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
+	return codeexecutor.CodeBlockDelimiter{Start: "```", End: "```"}
+}
+
+func (e *instanceAwareExec) Engine() codeexecutor.Engine {
+	return e.eng
+}
+
+type bootstrapCountingRunner struct {
+	inner codeexecutor.ProgramRunner
+
+	mu     sync.Mutex
+	starts int
+}
+
+func (r *bootstrapCountingRunner) RunProgram(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+	spec codeexecutor.RunProgramSpec,
+) (codeexecutor.RunResult, error) {
+	if spec.Cmd == "true" && len(spec.Args) == 0 {
+		r.mu.Lock()
+		r.starts++
+		r.mu.Unlock()
+	}
+	if r.inner == nil {
+		return codeexecutor.RunResult{ExitCode: 0}, nil
+	}
+	return r.inner.RunProgram(ctx, ws, spec)
+}
+
+func (r *bootstrapCountingRunner) bootstrapCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.starts
+}
+
 func boolPtr(v bool) *bool { return &v }
 
 func intPtr(v int) *int { return &v }

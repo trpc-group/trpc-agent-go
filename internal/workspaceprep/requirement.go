@@ -146,6 +146,7 @@ type Reconciler interface {
 		ctx context.Context,
 		eng codeexecutor.Engine,
 		ws codeexecutor.Workspace,
+		instanceID codeexecutor.WorkspaceInstanceID,
 		reqs []Requirement,
 	) ([]string, error)
 }
