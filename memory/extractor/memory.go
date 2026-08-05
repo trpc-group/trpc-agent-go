@@ -310,20 +310,10 @@ func (e *memoryExtractor) buildSystemPrompt(
 ) string {
 	var sb strings.Builder
 
-	dateStr := refDate.UTC().Format(time.DateOnly)
-	renderedPrompt, err := prompt.Text{Template: e.prompt}.Render(prompt.RenderEnv{
-		Vars: prompt.Vars{
-			"current_date": dateStr,
-		},
-	})
-	if err != nil {
-		renderedPrompt = e.prompt
-	}
-	sb.WriteString(renderedPrompt)
+	sb.WriteString(e.renderPrompt(refDate))
 	if policyBlock := e.updatePolicyPromptBlock(); policyBlock != "" {
 		sb.WriteString(policyBlock)
 	}
-
 	// Append available actions.
 	sb.WriteString("\n<available_actions>\n")
 	sb.WriteString(e.availableActionsBlock())
@@ -342,6 +332,18 @@ func (e *memoryExtractor) buildSystemPrompt(
 	}
 
 	return sb.String()
+}
+
+func (e *memoryExtractor) renderPrompt(refDate time.Time) string {
+	rendered, err := prompt.Text{Template: e.prompt}.Render(prompt.RenderEnv{
+		Vars: prompt.Vars{
+			"current_date": refDate.UTC().Format(time.DateOnly),
+		},
+	})
+	if err != nil {
+		return e.prompt
+	}
+	return rendered
 }
 
 // toolActionDescriptions maps background tool names to their

@@ -171,6 +171,9 @@ func TestAssistantEpisodeExtractionUsesConditionalSecondStage(t *testing.T) {
 	if _, ok := m.requests[1].Tools[assistantEpisodeToolName]; !ok {
 		t.Fatal("second stage does not expose the assistant episode tool")
 	}
+	if got := m.requests[1].Messages[0].Content; got != assistantEpisodeSystemPrompt {
+		t.Fatalf("default second-stage prompt changed:\n%s", got)
+	}
 	if len(operations) != 2 {
 		t.Fatalf("operation count = %d, want 2", len(operations))
 	}
@@ -193,7 +196,7 @@ func TestAssistantEpisodeExtractionUsesConditionalSecondStage(t *testing.T) {
 	}
 }
 
-func TestAssistantEpisodeExtractionFailureKeepsOrdinaryOperations(t *testing.T) {
+func TestAssistantEpisodeExtractionFailureReturnsError(t *testing.T) {
 	m := &assistantTestModel{steps: []assistantModelStep{
 		{calls: []model.ToolCall{makeToolCall(memory.AddToolName, []byte(`{
 			"memory":"User wants two recommendations."
@@ -205,11 +208,202 @@ func TestAssistantEpisodeExtractionFailureKeepsOrdinaryOperations(t *testing.T) 
 		model.NewUserMessage("Recommend two options."),
 		model.NewAssistantMessage("1. Alpha\n2. Beta"),
 	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "assistant model unavailable") {
+		t.Fatalf("error = %v, want assistant-stage failure", err)
+	}
+	if operations != nil {
+		t.Fatalf("operations = %#v, want nil", operations)
+	}
+}
+
+func TestAssistantEpisodeExtractionUsesCustomPromptInBothStages(t *testing.T) {
+	const customPolicy = "Never retain medical information from any conversation."
+	const customPrompt = customPolicy + " Current date: {current_date}."
+	reference := time.Date(2026, time.August, 5, 10, 30, 0, 0, time.UTC)
+	tests := []struct {
+		name      string
+		configure func(*memoryExtractor)
+	}{
+		{
+			name: "constructor option",
+			configure: func(e *memoryExtractor) {
+				WithPrompt(customPrompt)(e)
+			},
+		},
+		{
+			name: "setter",
+			configure: func(e *memoryExtractor) {
+				e.SetPrompt(customPrompt)
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			m := &assistantTestModel{steps: []assistantModelStep{{}, {}}}
+			ext := NewExtractor(m, WithAssistantEpisodeExtraction()).(*memoryExtractor)
+			test.configure(ext)
+			_, err := ext.Extract(WithReferenceDate(context.Background(), reference), []model.Message{
+				model.NewUserMessage("Recommend two options."),
+				model.NewAssistantMessage("1. Alpha\n2. Beta"),
+			}, nil)
+			if err != nil {
+				t.Fatalf("extract: %v", err)
+			}
+			if len(m.requests) != 2 {
+				t.Fatalf("model calls = %d, want 2", len(m.requests))
+			}
+			for requestIndex, request := range m.requests {
+				if !requestContainsRoleSubstring(request, model.RoleSystem, customPolicy) ||
+					!requestContainsRoleSubstring(request, model.RoleSystem, "Current date: 2026-08-05.") {
+					t.Fatalf("request %d does not contain rendered custom prompt", requestIndex)
+				}
+				if requestContainsRoleSubstring(request, model.RoleSystem, "{current_date}") {
+					t.Fatalf("request %d contains an unrendered current_date variable", requestIndex)
+				}
+			}
+		})
+	}
+}
+
+func TestAssistantEpisodeExtractionProcessesAllEligiblePairs(t *testing.T) {
+	m := &assistantTestModel{steps: []assistantModelStep{
+		{},
+		{calls: []model.ToolCall{assistantEpisodeToolCall(`{
+			"memory":"The assistant recommended Alpha and Beta."
+		}`)}},
+		{calls: []model.ToolCall{assistantEpisodeToolCall(`{
+			"memory":"The assistant recommended Gamma and Delta."
+		}`)}},
+	}}
+	ext := NewExtractor(m, WithAssistantEpisodeExtraction())
+	operations, err := ext.Extract(context.Background(), []model.Message{
+		model.NewUserMessage("Recommend two options."),
+		model.NewAssistantMessage("Let me check."),
+		model.NewAssistantMessage("1. Alpha\n2. Beta"),
+		model.NewUserMessage("Suggest two alternatives."),
+		model.NewAssistantMessage("1. Gamma\n2. Delta"),
+	}, nil)
 	if err != nil {
 		t.Fatalf("extract: %v", err)
 	}
-	if len(operations) != 1 || operations[0].Memory != "User wants two recommendations." {
-		t.Fatalf("ordinary operations = %#v", operations)
+	if len(m.requests) != 3 {
+		t.Fatalf("model calls = %d, want 3", len(m.requests))
+	}
+	if !requestContainsRoleContent(m.requests[1], model.RoleAssistant, "1. Alpha\n2. Beta") ||
+		requestContainsRoleContent(m.requests[1], model.RoleAssistant, "Let me check.") {
+		t.Fatal("first assistant stage did not use the final reply for its user turn")
+	}
+	if !requestContainsRoleContent(m.requests[2], model.RoleAssistant, "1. Gamma\n2. Delta") {
+		t.Fatal("second assistant stage is not associated with the second user turn")
+	}
+	if len(operations) != 2 {
+		t.Fatalf("operations = %#v, want 2 assistant episodes", operations)
+	}
+	for _, expected := range []string{"Alpha and Beta", "Gamma and Delta"} {
+		if !slices.ContainsFunc(operations, func(operation *Operation) bool {
+			return strings.Contains(operation.Memory, expected)
+		}) {
+			t.Fatalf("operations do not contain %q: %#v", expected, operations)
+		}
+	}
+}
+
+func TestAssistantEpisodeExtractionTreatsEveryUserTurnAsBoundary(t *testing.T) {
+	m := &assistantTestModel{steps: []assistantModelStep{
+		{},
+		{calls: []model.ToolCall{assistantEpisodeToolCall(`{
+			"memory":"The assistant recommended Alpha and Beta."
+		}`)}},
+	}}
+	ext := NewExtractor(m, WithAssistantEpisodeExtraction())
+	imageOnlyUser := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{Type: model.ContentTypeImage},
+		},
+	}
+	operations, err := ext.Extract(context.Background(), []model.Message{
+		model.NewUserMessage("Recommend two options."),
+		model.NewAssistantMessage("1. Alpha\n2. Beta"),
+		imageOnlyUser,
+		model.NewAssistantMessage("1. Gamma\n2. Delta"),
+	}, nil)
+	if err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	if len(m.requests) != 2 {
+		t.Fatalf("model calls = %d, want 2", len(m.requests))
+	}
+	if !requestContainsRoleContent(m.requests[1], model.RoleAssistant, "1. Alpha\n2. Beta") ||
+		requestContainsRoleContent(m.requests[1], model.RoleAssistant, "1. Gamma\n2. Delta") {
+		t.Fatal("assistant reply crossed a non-text user-turn boundary")
+	}
+	if len(operations) != 1 || !strings.Contains(operations[0].Memory, "Alpha and Beta") {
+		t.Fatalf("operations = %#v, want the first user turn only", operations)
+	}
+}
+
+func TestAssistantEpisodeExtractionDiscardsAllOperationsWhenLaterPairFails(t *testing.T) {
+	m := &assistantTestModel{steps: []assistantModelStep{
+		{calls: []model.ToolCall{makeToolCall(memory.AddToolName, []byte(`{
+			"memory":"User wants recommendations."
+		}`))}},
+		{calls: []model.ToolCall{assistantEpisodeToolCall(`{
+			"memory":"The assistant recommended Alpha and Beta."
+		}`)}},
+		{err: errors.New("temporary assistant-stage failure")},
+	}}
+	ext := NewExtractor(m, WithAssistantEpisodeExtraction())
+	operations, err := ext.Extract(context.Background(), []model.Message{
+		model.NewUserMessage("Recommend two options."),
+		model.NewAssistantMessage("1. Alpha\n2. Beta"),
+		model.NewUserMessage("Suggest two alternatives."),
+		model.NewAssistantMessage("1. Gamma\n2. Delta"),
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "temporary assistant-stage failure") {
+		t.Fatalf("error = %v, want later pair failure", err)
+	}
+	if operations != nil {
+		t.Fatalf("operations = %#v, want nil", operations)
+	}
+}
+
+func TestAssistantEpisodeExtractionRetriesEntireDeltaAfterFailure(t *testing.T) {
+	m := &assistantTestModel{steps: []assistantModelStep{
+		{},
+		{err: errors.New("temporary assistant-stage failure")},
+		{},
+		{calls: []model.ToolCall{assistantEpisodeToolCall(`{
+			"memory":"The assistant recommended Alpha and Beta."
+		}`)}},
+		{calls: []model.ToolCall{assistantEpisodeToolCall(`{
+			"memory":"The assistant recommended Gamma and Delta."
+		}`)}},
+	}}
+	ext := NewExtractor(m, WithAssistantEpisodeExtraction())
+	messages := []model.Message{
+		model.NewUserMessage("Recommend two options."),
+		model.NewAssistantMessage("1. Alpha\n2. Beta"),
+		model.NewUserMessage("Suggest two alternatives."),
+		model.NewAssistantMessage("1. Gamma\n2. Delta"),
+	}
+	operations, err := ext.Extract(context.Background(), messages, nil)
+	if err == nil || !strings.Contains(err.Error(), "temporary assistant-stage failure") {
+		t.Fatalf("first error = %v, want temporary failure", err)
+	}
+	if operations != nil {
+		t.Fatalf("first operations = %#v, want nil", operations)
+	}
+
+	operations, err = ext.Extract(context.Background(), messages, nil)
+	if err != nil {
+		t.Fatalf("retry extract: %v", err)
+	}
+	if len(operations) != 2 {
+		t.Fatalf("retry operations = %#v, want 2 assistant episodes", operations)
+	}
+	if len(m.requests) != 5 {
+		t.Fatalf("model calls = %d, want 5", len(m.requests))
 	}
 }
 
@@ -343,7 +537,7 @@ func TestExtractAssistantEpisodeRejectsInvalidArguments(t *testing.T) {
 		},
 	}}}
 	ext := NewExtractor(m, WithAssistantEpisodeExtraction()).(*memoryExtractor)
-	_, err := ext.extractAssistantEpisode(
+	_, _, err := ext.extractAssistantEpisode(
 		context.Background(),
 		model.NewUserMessage("Recommend two options."),
 		model.NewAssistantMessage("1. Alpha\n2. Beta"),
@@ -360,7 +554,7 @@ func TestExtractAssistantEpisodeUsesFirstValidCall(t *testing.T) {
 		assistantEpisodeToolCall(`{"memory":"The assistant recommended Gamma and Delta."}`),
 	}}}}
 	ext := NewExtractor(m, WithAssistantEpisodeExtraction()).(*memoryExtractor)
-	op, err := ext.extractAssistantEpisode(
+	_, op, err := ext.extractAssistantEpisode(
 		context.Background(),
 		model.NewUserMessage("Recommend two options."),
 		model.NewAssistantMessage("1. Alpha\n2. Beta"),
@@ -426,7 +620,7 @@ func TestParseAssistantEpisodeValidation(t *testing.T) {
 	}
 }
 
-func TestSelectAssistantEpisodePair(t *testing.T) {
+func TestSelectAssistantEpisodePairs(t *testing.T) {
 	toolAssistant := model.NewAssistantMessage("1. Alpha\n2. Beta")
 	toolAssistant.ToolID = "tool-call"
 	callingAssistant := model.NewAssistantMessage("1. Alpha\n2. Beta")
@@ -458,11 +652,244 @@ func TestSelectAssistantEpisodePair(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, _, ok := selectAssistantEpisodePair(test.messages)
-			if ok {
-				t.Fatal("unexpected assistant episode pair")
+			if pairs := selectAssistantEpisodePairs(test.messages); len(pairs) != 0 {
+				t.Fatalf("pairs = %#v, want none", pairs)
 			}
 		})
+	}
+}
+
+func TestValidateAssistantEpisodeQuantities(t *testing.T) {
+	tests := []struct {
+		name       string
+		source     string
+		memoryText string
+		wantError  bool
+	}{
+		{
+			name:       "equivalent normalized quantities",
+			source:     "The result was -5°C, cost $5, weighed 1,000.25 kg, measured 5 m, lasted 5 min, held 5 ml, and reached 20%.",
+			memoryText: "The result was -5 °C, cost USD 5, weighed 1000.25 kilograms, measured 5 meters, lasted 5 minutes, held 5 milliliters, and reached 20 percent.",
+		},
+		{
+			name:       "ordinary count nouns are not units",
+			source:     "The assistant proposed 3 meals.",
+			memoryText: "The assistant provided 3 recipes.",
+		},
+		{
+			name:       "date separators are not negative signs",
+			source:     "The event happened on 2023-04-15.",
+			memoryText: "The recorded date was 2023-04-15.",
+		},
+		{
+			name:       "removed negative sign",
+			source:     "The temperature was -5°C.",
+			memoryText: "The temperature was 5°C.",
+			wantError:  true,
+		},
+		{
+			name:       "removed sign before currency",
+			source:     "The adjustment was -$5.",
+			memoryText: "The adjustment was $5.",
+			wantError:  true,
+		},
+		{
+			name:       "equivalent sign placement around currency",
+			source:     "The adjustment was -$5.",
+			memoryText: "The adjustment was $-5.",
+		},
+		{
+			name:       "equivalent decimal currency",
+			source:     "The price was $5.00.",
+			memoryText: "The price was USD 5.",
+		},
+		{
+			name:       "changed currency",
+			source:     "The price was $5.",
+			memoryText: "The price was €5.",
+			wantError:  true,
+		},
+		{
+			name:       "changed unit",
+			source:     "The package weighed 5 kg.",
+			memoryText: "The package weighed 5 lb.",
+			wantError:  true,
+		},
+		{
+			name:       "removed percentage",
+			source:     "The discount was 20%.",
+			memoryText: "The discount was 20.",
+			wantError:  true,
+		},
+		{
+			name:       "changed time unit",
+			source:     "The plan takes 5 days.",
+			memoryText: "The plan takes 5 weeks.",
+			wantError:  true,
+		},
+		{
+			name:       "changed prefix-sharing time unit",
+			source:     "The plan takes 5 minutes.",
+			memoryText: "The plan takes 5 months.",
+			wantError:  true,
+		},
+		{
+			name:       "removed time unit",
+			source:     "The plan takes 5 minutes.",
+			memoryText: "The plan takes 5.",
+			wantError:  true,
+		},
+		{
+			name:       "percentage followed by text",
+			source:     "The offer is 20%off.",
+			memoryText: "The offer is 20 off.",
+			wantError:  true,
+		},
+		{
+			name:       "equivalent compound unit",
+			source:     "The speed was 5 km/h.",
+			memoryText: "The speed was 5 kilometers/hour.",
+		},
+		{
+			name:       "changed compound unit",
+			source:     "The speed was 5 km/h.",
+			memoryText: "The speed was 5 km/s.",
+			wantError:  true,
+		},
+		{
+			name:       "attached identifier cannot hide a changed number",
+			source:     "The selected model is item5.",
+			memoryText: "The selected model is item6.",
+			wantError:  true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateAssistantEpisodeQuantities(test.memoryText, test.source)
+			if test.wantError && err == nil {
+				t.Fatal("quantity change was accepted")
+			}
+			if !test.wantError && err != nil {
+				t.Fatalf("valid quantities were rejected: %v", err)
+			}
+		})
+	}
+}
+
+func TestParseAssistantEpisodeQuantityBoundariesAndCurrencies(t *testing.T) {
+	if _, ok := parseAssistantEpisodeQuantity("", nil); ok {
+		t.Fatal("invalid match indexes were accepted")
+	}
+
+	parse := func(text string) (assistantEpisodeQuantity, bool) {
+		t.Helper()
+		match := assistantEpisodeQuantityPattern.FindStringSubmatchIndex(text)
+		if match == nil {
+			t.Fatalf("quantity pattern did not match %q", text)
+		}
+		return parseAssistantEpisodeQuantity(text, match)
+	}
+	for _, text := range []string{"item5", "5items"} {
+		quantity, ok := parse(text)
+		if !ok || quantity.value != "5" {
+			t.Fatalf("identifier-embedded quantity %q was not grounded: %#v", text, quantity)
+		}
+	}
+
+	tests := []struct {
+		text string
+		want assistantEpisodeQuantity
+	}{
+		{
+			text: "5 EUR",
+			want: assistantEpisodeQuantity{value: "5", currency: "eur"},
+		},
+		{
+			text: "$5 EUR",
+			want: assistantEpisodeQuantity{value: "5", currency: "usd/eur"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.text, func(t *testing.T) {
+			got, ok := parse(test.text)
+			if !ok {
+				t.Fatalf("quantity %q was rejected", test.text)
+			}
+			if got != test.want {
+				t.Fatalf("quantity = %#v, want %#v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeAssistantEpisodeNumber(t *testing.T) {
+	tests := map[string]string{
+		"1000":     "1000",
+		"1,000":    "1000",
+		"1,000.25": "1000.25",
+		"5.00":     "5",
+		"5.20":     "5.2",
+		"1234,567": "1234,567",
+		"1,23":     "1,23",
+	}
+	for input, want := range tests {
+		if got := normalizeAssistantEpisodeNumber(input); got != want {
+			t.Fatalf("normalize %q = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestNormalizeAssistantEpisodeCurrency(t *testing.T) {
+	tests := map[string]string{
+		"$":       "usd",
+		" usd ":   "usd",
+		"€":       "eur",
+		"GBP":     "gbp",
+		"¥":       "yen-yuan",
+		"JPY":     "jpy",
+		"RMB":     "cny",
+		"unknown": "",
+	}
+	for input, want := range tests {
+		if got := normalizeAssistantEpisodeCurrency(input); got != want {
+			t.Fatalf("normalize %q = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestNormalizeAssistantEpisodeUnit(t *testing.T) {
+	tests := map[string]string{
+		"percentage":  "%",
+		"° C":         "°c",
+		"°F":          "°f",
+		"°K":          "°k",
+		"kilograms":   "kg",
+		"milligrams":  "mg",
+		"grams":       "g",
+		"pounds":      "lb",
+		"kilometres":  "km",
+		"miles":       "mi",
+		"centimetres": "cm",
+		"millimetres": "mm",
+		"metres":      "m",
+		"millilitres": "ml",
+		"litres":      "l",
+		"hours":       "h",
+		"minutes":     "min",
+		"seconds":     "s",
+		"days":        "day",
+		"weeks":       "week",
+		"months":      "month",
+		"years":       "year",
+		"km / hours":  "km/h",
+		"unknown":     "",
+		"km/unknown":  "",
+		"km/h/s":      "",
+	}
+	for input, want := range tests {
+		if got := normalizeAssistantEpisodeUnit(input); got != want {
+			t.Fatalf("normalize %q = %q, want %q", input, got, want)
+		}
 	}
 }
 
@@ -632,6 +1059,19 @@ func requestContainsRoleContent(
 ) bool {
 	for _, message := range request.Messages {
 		if message.Role == role && message.Content == content {
+			return true
+		}
+	}
+	return false
+}
+
+func requestContainsRoleSubstring(
+	request *model.Request,
+	role model.Role,
+	content string,
+) bool {
+	for _, message := range request.Messages {
+		if message.Role == role && strings.Contains(message.Content, content) {
 			return true
 		}
 	}

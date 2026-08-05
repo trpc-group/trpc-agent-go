@@ -337,10 +337,11 @@ memoryService := memoryinmemory.NewMemoryService(
 ```
 
 该 option 使用两个彼此隔离的提取阶段。第一阶段继续使用标准 memory tools，
-仅从 user message 提取普通用户事实和事件。如果最新一组 user/assistant message
-包含用户明确要求的可复用结果，例如列表、推荐、分类或数量，提取器才会发起第二次
-请求，并且只暴露私有的 `memory_assistant_episode` 工具。该工具不会暴露给应用的
-Agent。
+仅从 user message 提取普通用户事实和事件。随后，提取器会按时间顺序检查当前
+extraction delta 中所有符合条件的 user/assistant pair。每当一组 pair 包含用户明确
+要求的可复用结果，例如列表、推荐、分类或数量，提取器就会发起第二次请求，并且只
+暴露私有的 `memory_assistant_episode` 工具。该工具不会暴露给应用的 Agent。
+通过 `WithPrompt` 或 `SetPrompt` 配置的应用提取约束同样适用于这些第二阶段请求。
 
 Assistant 输出会被记录为“带归属的对话历史”，而不是已经验证的事实或用户偏好。
 框架将每个通过校验的调用固定转换为普通 `KindEpisode` add 操作，将 participants
@@ -356,15 +357,23 @@ Assistant 输出会被记录为“带归属的对话历史”，而不是已经�
 ```
 
 第二阶段模型只能提供 episode 正文和可选的检索 topics，不能覆盖 memory kind、
-participants、event time 或 location。正文为空、超过 4,096 bytes，或包含当前
-conversation pair 中不存在的数字时，调用会被拒绝。为了限制可选请求的规模，
-每条 source message 都会被表示为确定性的 8,192-byte 摘录，并保留首尾内容。
+participants、event time 或 location。正文为空、超过 4,096 bytes，或包含无法在
+当前 conversation pair 中找到依据的数量时，调用会被拒绝。数量校验会保留正负号、
+币种、百分号和已识别单位，同时允许 `$5` 与 `USD 5` 等等价写法。为了限制可选
+请求的规模，每条 source message 都会被表示为确定性的 8,192-byte 摘录，并保留
+首尾内容。
+
+一次 extraction delta 对调用方保持原子性。如果任一 assistant 阶段发生模型调用、
+工具参数或 grounding 校验错误，extractor 会返回错误，并且不会返回该 delta 中的
+任何 operation。Auto memory worker 因此不会推进 extraction watermark，后续可以
+重试整个 delta，避免静默丢失较早的 pair 或持久化部分结果。
 
 该功能与存储后端无关，不会新增 memory kind、字段、数据库列、数据表或迁移，也
-只会在 conversation pair 通过确定性 eligibility 检查时增加一次模型调用；普通
-对话仍只有一次 extraction 调用。该 option 在 extractor 生命周期内不可修改。
-需要关闭时，应重新构造一个未传入该 option 的 extractor。此前已经保存的
-assistant episode 仍是普通 episodic memory，会继续参与正常检索。
+只会为通过确定性 eligibility 检查的 pair 增加一次模型调用；如果一个 delta 中有
+多组符合条件的 pair，则可能增加多次模型调用。普通对话仍只有一次 extraction
+调用。该 option 在 extractor 生命周期内不可修改。需要关闭时，应重新构造一个
+未传入该 option 的 extractor。此前已经保存的 assistant episode 仍是普通 episodic
+memory，会继续参与正常检索。
 
 ### 两种模式配置对比
 

@@ -369,11 +369,13 @@ memoryService := memoryinmemory.NewMemoryService(
 
 The option uses two isolated extraction stages. The first stage keeps the
 standard memory tools and extracts ordinary user facts and events from user
-messages. If the latest user/assistant pair contains an explicit reusable
-result, such as a requested list, recommendation, classification, or quantity,
-the extractor makes a second request that exposes only the private
-`memory_assistant_episode` tool. This tool is never visible to the application
-Agent.
+messages. The extractor then considers every eligible user/assistant pair in
+the extraction delta in chronological order. For each pair that contains an
+explicit reusable result, such as a requested list, recommendation,
+classification, or quantity, it makes a second request that exposes only the
+private `memory_assistant_episode` tool. This tool is never visible to the
+application Agent. An application policy configured through `WithPrompt` or
+`SetPrompt` also constrains these second-stage requests.
 
 Assistant output is stored as attributed conversation history rather than as a
 verified fact or user preference. The framework converts every accepted call
@@ -391,14 +393,24 @@ one is present. For example:
 
 The second-stage model supplies only the episode text and optional retrieval
 topics. It cannot override the memory kind, participants, event time, or
-location. The framework rejects empty text, text over 4,096 bytes, and numeric
-details that do not occur in the selected conversation pair. To keep the
-optional request bounded, each source message is represented by a deterministic
-8,192-byte excerpt that preserves its beginning and end.
+location. The framework rejects empty text, text over 4,096 bytes, and
+quantities that are not grounded in the selected conversation pair. Quantity
+validation preserves signs, currencies, percentages, and recognized units
+while accepting equivalent forms such as `$5` and `USD 5`. To keep the
+optional request bounded, each source message is represented by a
+deterministic 8,192-byte excerpt that preserves its beginning and end.
+
+Extraction of one delta is atomic from the caller's perspective. If any
+assistant-stage model call, tool argument, or grounding check fails, the
+extractor returns an error and no operations from that delta. The auto-memory
+worker therefore leaves its extraction watermark unchanged and can retry the
+whole delta instead of silently losing an earlier pair or persisting a partial
+result.
 
 This feature is backend-neutral. It does not add a memory kind, field, database
 column, table, or migration. It can add one model call only for a pair that
-passes the deterministic eligibility check; ordinary conversations retain one
+passes the deterministic eligibility check, so a delta containing multiple
+eligible pairs can add multiple model calls; ordinary conversations retain one
 extraction call. The option is fixed for the lifetime of the extractor. To
 disable it, construct a new extractor without the option. Previously stored
 assistant episodes remain ordinary episodic memories and continue to
