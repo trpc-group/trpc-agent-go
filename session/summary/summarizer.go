@@ -643,6 +643,15 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 	if err != nil {
 		return "", fmt.Errorf("failed to generate summary for session %s: %w", sess.ID, err)
 	}
+	return s.finalizeSummary(ctx, sess, source, summaryText)
+}
+
+func (s *sessionSummarizer) finalizeSummary(
+	ctx context.Context,
+	sess *session.Session,
+	source *summarySource,
+	summaryText string,
+) (string, error) {
 	if s.postHook == nil {
 		s.recordSummarySourceBoundary(sess, source)
 		return summaryText, nil
@@ -1388,7 +1397,7 @@ func (s *sessionSummarizer) runSummaryAttemptWithPrefixFallback(
 		log.DebugfContext(
 			result.ctx,
 			"summary source exceeds input budget; retrying a complete prefix: included_events=%d total_events=%d budget=%d",
-			len(source.boundaryEvents),
+			len(source.prefixEvents),
 			totalEvents,
 			result.budget,
 		)

@@ -56,28 +56,9 @@ func (s *sessionSummarizer) buildSafeSummaryPrefixRequest(
 	if source == nil || len(source.prefixEvents) == 0 {
 		return nil, false, nil
 	}
-	if len(source.prefixTexts) != len(source.prefixEvents) {
-		return nil, false, errors.New("summary prefix text does not match events")
-	}
-	if source.prefixBoundaries != nil &&
-		len(source.prefixBoundaries) != len(source.prefixEvents) {
-		return nil, false, errors.New("summary prefix boundary does not match events")
-	}
-	ends := safeSummaryPrefixEnds(source.prefixEvents)
-	if source.prefixBoundaries != nil {
-		mappedEnds := ends[:0]
-		for _, end := range ends {
-			if !source.prefixBoundaries[end-1].IsZero() {
-				mappedEnds = append(mappedEnds, end)
-			}
-		}
-		ends = mappedEnds
-	}
-	// A fallback must consume fewer events than the request that just failed.
-	// Exclude the full source even if it is itself a structurally safe boundary,
-	// so callers can treat selected=true as a strict progress guarantee.
-	for len(ends) > 0 && ends[len(ends)-1] >= len(source.prefixEvents) {
-		ends = ends[:len(ends)-1]
+	ends, err := safeSummaryPrefixEndsForSource(source)
+	if err != nil {
+		return nil, false, err
 	}
 	if len(ends) == 0 {
 		return nil, false, nil
@@ -149,6 +130,33 @@ func (s *sessionSummarizer) buildSafeSummaryPrefixRequest(
 		source.hasBoundary = false
 	}
 	return bestRequest, true, nil
+}
+
+func safeSummaryPrefixEndsForSource(source *summarySource) ([]int, error) {
+	if len(source.prefixTexts) != len(source.prefixEvents) {
+		return nil, errors.New("summary prefix text does not match events")
+	}
+	if source.prefixBoundaries != nil &&
+		len(source.prefixBoundaries) != len(source.prefixEvents) {
+		return nil, errors.New("summary prefix boundary does not match events")
+	}
+	ends := safeSummaryPrefixEnds(source.prefixEvents)
+	if source.prefixBoundaries != nil {
+		mappedEnds := ends[:0]
+		for _, end := range ends {
+			if !source.prefixBoundaries[end-1].IsZero() {
+				mappedEnds = append(mappedEnds, end)
+			}
+		}
+		ends = mappedEnds
+	}
+	// A fallback must consume fewer events than the request that just failed.
+	// Exclude the full source even if it is itself a structurally safe boundary,
+	// so callers can treat selected=true as a strict progress guarantee.
+	for len(ends) > 0 && ends[len(ends)-1] >= len(source.prefixEvents) {
+		ends = ends[:len(ends)-1]
+	}
+	return ends, nil
 }
 
 func (s *sessionSummarizer) extractConversationEventTexts(
