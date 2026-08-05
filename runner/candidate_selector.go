@@ -113,6 +113,8 @@ type candidateSelectorAgent struct {
 	opts     candidateSelectOptions
 }
 
+var _ agent.InvocationSkillLoadSupport = (*candidateSelectorAgent)(nil)
+
 func (a *candidateSelectorAgent) Info() agent.Info {
 	if a == nil || a.inner == nil {
 		return agent.Info{}
@@ -139,6 +141,14 @@ func (a *candidateSelectorAgent) FindSubAgent(name string) agent.Agent {
 		return nil
 	}
 	return a.inner.FindSubAgent(name)
+}
+
+func (a *candidateSelectorAgent) SupportsInvocationSkillLoads() bool {
+	if a == nil || a.inner == nil {
+		return false
+	}
+	support, ok := a.inner.(agent.InvocationSkillLoadSupport)
+	return ok && support.SupportsInvocationSkillLoads()
 }
 
 func (a *candidateSelectorAgent) Run(

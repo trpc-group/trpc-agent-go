@@ -3982,6 +3982,9 @@ func applyAgentNodeRunOptions(runOptions *agent.RunOptions, opts []agent.RunOpti
 
 func detachAgentNodeMutableRunOptions(in agent.RunOptions) agent.RunOptions {
 	out := in
+	// Caller-declared skill loads target the entry invocation. A graph node
+	// may opt in explicitly through its own node run options.
+	out.SkillLoads = nil
 	// Detach only parent-owned mutable containers.
 	// Standard run options can append to or merge into these containers.
 	out.InjectedContextMessages = slices.Clip(out.InjectedContextMessages)
