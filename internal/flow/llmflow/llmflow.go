@@ -2478,6 +2478,7 @@ func (f *Flow) callLLM(
 type callLimitFinalizationMessage struct {
 	instruction  string
 	index        int
+	messageCount int
 	priorMatches int
 }
 
@@ -2493,8 +2494,9 @@ func appendCallLimitFinalizationMessage(
 		return nil
 	}
 	marker := &callLimitFinalizationMessage{
-		instruction: instruction,
-		index:       len(req.Messages),
+		instruction:  instruction,
+		index:        len(req.Messages),
+		messageCount: len(req.Messages) + 1,
 	}
 	for _, message := range req.Messages {
 		if isCallLimitFinalizationMessage(message, instruction) {
@@ -2536,6 +2538,13 @@ func requestWithoutCallLimitFinalizationMessage(
 			}
 			remainingPriorMatches--
 		}
+	}
+	// A callback may rewrite fields on the synthetic message while leaving the
+	// message slice structurally unchanged. In that case its original slot is
+	// the provenance marker even though its payload no longer matches.
+	if index < 0 && len(req.Messages) == marker.messageCount &&
+		marker.index < len(req.Messages) {
+		index = marker.index
 	}
 	if index < 0 {
 		return req

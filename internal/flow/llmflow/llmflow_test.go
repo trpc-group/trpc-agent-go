@@ -3331,6 +3331,28 @@ func TestFlow_CallLLM_FinalizesOnLastAllowedCall(t *testing.T) {
 
 func TestFlow_CallLLM_FinalizationIsExcludedFromSummaryFork(t *testing.T) {
 	instruction := "finish with the available context"
+	rewrittenInstruction := "rewritten finalization instruction"
+	callbackPart := "callback-added content part"
+	callbacks := model.NewCallbacks().RegisterBeforeModel(
+		func(
+			_ context.Context,
+			args *model.BeforeModelArgs,
+		) (*model.BeforeModelResult, error) {
+			require.NotNil(t, args.Request)
+			require.NotEmpty(t, args.Request.Messages)
+			tail := &args.Request.Messages[len(args.Request.Messages)-1]
+			require.Equal(t, instruction, tail.Content)
+			tail.Content = rewrittenInstruction
+			tail.ContentParts = append(
+				tail.ContentParts,
+				model.ContentPart{
+					Type: model.ContentTypeText,
+					Text: &callbackPart,
+				},
+			)
+			return nil, nil
+		},
+	)
 	response := &model.Response{
 		Done: true,
 		Choices: []model.Choice{{
@@ -3338,7 +3360,7 @@ func TestFlow_CallLLM_FinalizationIsExcludedFromSummaryFork(t *testing.T) {
 		}},
 	}
 	modelStub := &mockModel{responses: []*model.Response{response}}
-	f := New(nil, nil, Options{})
+	f := New(nil, nil, Options{ModelCallbacks: callbacks})
 	inv := agent.NewInvocation(agent.WithInvocationModel(modelStub))
 	inv.MaxLLMCalls = 1
 	calllimit.Configure(inv, &instruction, nil)
@@ -3356,7 +3378,9 @@ func TestFlow_CallLLM_FinalizationIsExcludedFromSummaryFork(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, modelCalled)
 	require.Len(t, req.Messages, 2)
-	require.Equal(t, instruction, req.Messages[1].Content)
+	require.Equal(t, rewrittenInstruction, req.Messages[1].Content)
+	require.Len(t, req.Messages[1].ContentParts, 1)
+	require.Equal(t, callbackPart, *req.Messages[1].ContentParts[0].Text)
 	fork, ok := summaryfork.Request(inv)
 	require.True(t, ok)
 	require.Len(t, fork.Messages, 1)
