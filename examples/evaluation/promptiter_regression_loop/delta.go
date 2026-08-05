@@ -37,12 +37,12 @@ type CaseDelta struct {
 
 // DeltaSummary aggregates the per-case deltas into counters.
 type DeltaSummary struct {
-	Total           int
-	NewlyPassed     int
-	NewlyFailed     int
-	ScoreImproved   int
-	ScoreRegressed  int
-	Unchanged       int
+	Total             int
+	NewlyPassed       int
+	NewlyFailed       int
+	ScoreImproved     int
+	ScoreRegressed    int
+	Unchanged         int
 	PassedAtCandidate int
 }
 

@@ -51,7 +51,7 @@ func EvaluateGate(
 	}
 	gain := candidateScore - baselineScore
 	scoreCheck := GateCheck{
-		Name: "validation_score_gain",
+		Name:   "validation_score_gain",
 		Passed: gain >= cfg.MinScoreGain,
 		Detail: fmt.Sprintf("validation %.3f -> %.3f (delta %+.3f), threshold %+.3f", baselineScore, candidateScore, gain, cfg.MinScoreGain),
 	}
@@ -90,7 +90,7 @@ func EvaluateGate(
 		}
 	}
 	keyCheck := GateCheck{
-		Name: "key_cases_no_regression",
+		Name:   "key_cases_no_regression",
 		Passed: len(regressedKeys) == 0,
 	}
 	if len(regressedKeys) == 0 {

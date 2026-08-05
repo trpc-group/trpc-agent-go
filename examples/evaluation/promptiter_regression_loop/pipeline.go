@@ -42,21 +42,21 @@ const (
 // PipelineResult carries every observable result of one pipeline run. It feeds
 // the audit report generator and keeps report.go free of engine dependencies.
 type PipelineResult struct {
-	Config          *Config
-	RunID           string
-	StartedAt       string
-	DurationMs      int64
-	BaselinePrompt  string
-	BaselineTrain   *EvalResult
-	BaselineValidation *EvalResult
-	Rounds          []PipelineRound
+	Config               *Config
+	RunID                string
+	StartedAt            string
+	DurationMs           int64
+	BaselinePrompt       string
+	BaselineTrain        *EvalResult
+	BaselineValidation   *EvalResult
+	Rounds               []PipelineRound
 	FinalAcceptedRound   int
 	FinalCandidatePrompt string
-	FinalGate        *GateDecision
-	BaselineAttribution []CaseAttribution
-	Recommendation   string
-	ModelCalls       int
-	LatencyMs        int64
+	FinalGate            *GateDecision
+	BaselineAttribution  []CaseAttribution
+	Recommendation       string
+	ModelCalls           int
+	LatencyMs            int64
 }
 
 // PipelineRound captures one optimization round after both engine and gate.
@@ -244,21 +244,21 @@ func RunPipeline(ctx context.Context, cfg *Config) (*PipelineResult, error) {
 
 	durationMs := time.Since(started).Milliseconds()
 	return &PipelineResult{
-		Config:              cfg,
-		RunID:               runID,
-		StartedAt:           startedAt,
-		DurationMs:          durationMs,
-		BaselinePrompt:      baselinePrompt,
-		BaselineTrain:       baselineTrain,
-		BaselineValidation:  baselineValidation,
-		Rounds:              pipelineRounds,
-		FinalAcceptedRound:  finalAcceptedRound,
+		Config:               cfg,
+		RunID:                runID,
+		StartedAt:            startedAt,
+		DurationMs:           durationMs,
+		BaselinePrompt:       baselinePrompt,
+		BaselineTrain:        baselineTrain,
+		BaselineValidation:   baselineValidation,
+		Rounds:               pipelineRounds,
+		FinalAcceptedRound:   finalAcceptedRound,
 		FinalCandidatePrompt: finalCandidatePrompt,
-		FinalGate:           finalGate,
-		BaselineAttribution: baselineAttribution,
-		Recommendation:      recommendation,
-		ModelCalls:          fake.CallCount(),
-		LatencyMs:           durationMs,
+		FinalGate:            finalGate,
+		BaselineAttribution:  baselineAttribution,
+		Recommendation:       recommendation,
+		ModelCalls:           fake.CallCount(),
+		LatencyMs:            durationMs,
 	}, nil
 }
 

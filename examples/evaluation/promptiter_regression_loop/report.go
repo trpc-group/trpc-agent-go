@@ -20,14 +20,14 @@ import (
 // attribution, cost/latency and the final write-back recommendation so the whole
 // loop is reproducible and reviewable.
 type OptimizationReport struct {
-	Pipeline       PipelineInfo   `json:"pipeline"`
-	Input          InputInfo      `json:"input"`
-	Baseline       BaselineInfo   `json:"baseline"`
+	Pipeline       PipelineInfo     `json:"pipeline"`
+	Input          InputInfo        `json:"input"`
+	Baseline       BaselineInfo     `json:"baseline"`
 	Optimization   OptimizationInfo `json:"optimization"`
-	Gate           GateInfo       `json:"gate"`
-	Attribution    AttributionInfo `json:"attribution"`
-	Cost           CostInfo       `json:"cost"`
-	Recommendation string         `json:"recommendation"`
+	Gate           GateInfo         `json:"gate"`
+	Attribution    AttributionInfo  `json:"attribution"`
+	Cost           CostInfo         `json:"cost"`
+	Recommendation string           `json:"recommendation"`
 }
 
 // PipelineInfo records run-level audit metadata.
@@ -46,13 +46,13 @@ type PipelineInfo struct {
 
 // InputInfo records the pipeline inputs.
 type InputInfo struct {
-	TrainEvalSetID       string `json:"trainEvalSetId"`
-	ValidationEvalSetID  string `json:"validationEvalSetId"`
-	MetricFileID         string `json:"metricFileId"`
-	BaselinePromptFile   string `json:"baselinePromptFile"`
-	TargetSurfaceID      string `json:"targetSurfaceId"`
-	MaxRounds            int    `json:"maxRounds"`
-	BaselinePrompt       string `json:"baselinePrompt"`
+	TrainEvalSetID      string `json:"trainEvalSetId"`
+	ValidationEvalSetID string `json:"validationEvalSetId"`
+	MetricFileID        string `json:"metricFileId"`
+	BaselinePromptFile  string `json:"baselinePromptFile"`
+	TargetSurfaceID     string `json:"targetSurfaceId"`
+	MaxRounds           int    `json:"maxRounds"`
+	BaselinePrompt      string `json:"baselinePrompt"`
 }
 
 // BaselineInfo records the baseline evaluation on train and validation.
@@ -65,10 +65,10 @@ type BaselineInfo struct {
 
 // CaseReport is the per-case audit record.
 type CaseReport struct {
-	EvalCaseID string          `json:"evalCaseId"`
-	Passed     bool            `json:"passed"`
-	Score      float64         `json:"score"`
-	Metrics    []MetricReport  `json:"metrics"`
+	EvalCaseID  string           `json:"evalCaseId"`
+	Passed      bool             `json:"passed"`
+	Score       float64          `json:"score"`
+	Metrics     []MetricReport   `json:"metrics"`
 	Attribution *CaseAttribution `json:"attribution,omitempty"`
 }
 
@@ -84,33 +84,33 @@ type MetricReport struct {
 type OptimizationInfo struct {
 	Rounds []RoundReport `json:"rounds"`
 	// FinalAcceptedRound is the one-based round whose candidate was accepted; 0 means none.
-	FinalAcceptedRound int    `json:"finalAcceptedRound"`
+	FinalAcceptedRound   int    `json:"finalAcceptedRound"`
 	FinalCandidatePrompt string `json:"finalCandidatePrompt"`
 }
 
 // RoundReport records one optimization round's audit trail.
 type RoundReport struct {
-	Round             int            `json:"round"`
-	CandidatePrompt   string         `json:"candidatePrompt"`
-	TrainScore        float64        `json:"trainScore"`
-	ValidationScore   float64        `json:"validationScore"`
-	EngineAccepted    bool           `json:"engineAccepted"`
-	EngineReason      string         `json:"engineReason,omitempty"`
-	GateAccepted      bool           `json:"gateAccepted"`
-	GateReason        string         `json:"gateReason,omitempty"`
-	DeltaSummary      DeltaSummary   `json:"deltaSummary"`
-	Deltas            []DeltaReport  `json:"deltas,omitempty"`
-	Attribution       AttributionInfo `json:"attribution"`
-	ModelCalls        int            `json:"modelCalls"`
+	Round           int             `json:"round"`
+	CandidatePrompt string          `json:"candidatePrompt"`
+	TrainScore      float64         `json:"trainScore"`
+	ValidationScore float64         `json:"validationScore"`
+	EngineAccepted  bool            `json:"engineAccepted"`
+	EngineReason    string          `json:"engineReason,omitempty"`
+	GateAccepted    bool            `json:"gateAccepted"`
+	GateReason      string          `json:"gateReason,omitempty"`
+	DeltaSummary    DeltaSummary    `json:"deltaSummary"`
+	Deltas          []DeltaReport   `json:"deltas,omitempty"`
+	Attribution     AttributionInfo `json:"attribution"`
+	ModelCalls      int             `json:"modelCalls"`
 }
 
 // DeltaReport records one per-case delta in the audit trail.
 type DeltaReport struct {
-	EvalCaseID      string  `json:"evalCaseId"`
-	BaselineScore   float64 `json:"baselineScore"`
-	CandidateScore  float64 `json:"candidateScore"`
-	Delta           float64 `json:"delta"`
-	Outcome         DeltaOutcome `json:"outcome"`
+	EvalCaseID     string       `json:"evalCaseId"`
+	BaselineScore  float64      `json:"baselineScore"`
+	CandidateScore float64      `json:"candidateScore"`
+	Delta          float64      `json:"delta"`
+	Outcome        DeltaOutcome `json:"outcome"`
 }
 
 // GateInfo records the final gate decision and each check.
@@ -130,7 +130,7 @@ type AttributionInfo struct {
 
 // CostInfo records cost and latency.
 type CostInfo struct {
-	ModelCalls  int   `json:"modelCalls"`
+	ModelCalls     int   `json:"modelCalls"`
 	TotalLatencyMs int64 `json:"totalLatencyMs"`
 	MaxModelCalls  int   `json:"maxModelCalls"`
 	MaxLatencyMs   int64 `json:"maxLatencyMs"`

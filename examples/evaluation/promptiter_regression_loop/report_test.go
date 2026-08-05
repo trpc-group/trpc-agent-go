@@ -44,11 +44,11 @@ func samplePipelineResult() *PipelineResult {
 			Gate:                GateConfig{MinScoreGain: 0.05, MaxNewHardFails: 0, MaxModelCalls: 200, MaxLatencyMs: 180000},
 			Model:               ModelConfig{Provider: "fake", Name: "scripted", Seed: 42},
 		},
-		RunID:          "run-test",
-		StartedAt:      "2026-08-05T00:00:00Z",
-		DurationMs:     1500,
-		BaselinePrompt: "baseline prompt",
-		BaselineTrain:  &EvalResult{OverallScore: 0.0},
+		RunID:              "run-test",
+		StartedAt:          "2026-08-05T00:00:00Z",
+		DurationMs:         1500,
+		BaselinePrompt:     "baseline prompt",
+		BaselineTrain:      &EvalResult{OverallScore: 0.0},
 		BaselineValidation: baselineValidation,
 		Rounds: []PipelineRound{
 			{
