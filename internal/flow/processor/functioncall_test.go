@@ -4230,7 +4230,7 @@ func TestFunctionCallResponseProcessor_ToolExecutionFilter_AllDeferred(
 	require.True(t, inv.EndInvocation)
 }
 
-func TestFunctionCallResponseProcessor_WithExternalTools_AllDeferred(
+func TestFunctionCallResponseProcessor_WithExternalTools_AllDeferredDoesNotFinalize(
 	t *testing.T,
 ) {
 	const (
@@ -4249,12 +4249,15 @@ func TestFunctionCallResponseProcessor_WithExternalTools_AllDeferred(
 	}
 
 	inv := &agent.Invocation{
-		InvocationID: "inv-external-tool",
-		AgentName:    "test-agent",
+		InvocationID:      "inv-external-tool",
+		AgentName:         "test-agent",
+		MaxToolIterations: 1,
 		RunOptions: agent.NewRunOptions(
 			agent.WithExternalTools([]tool.Tool{externalTool}),
 		),
 	}
+	instruction := "finish after the tool result"
+	calllimit.Configure(inv, nil, &instruction)
 
 	req := &model.Request{
 		Tools: map[string]tool.Tool{
@@ -4291,6 +4294,9 @@ func TestFunctionCallResponseProcessor_WithExternalTools_AllDeferred(
 	}
 	assert.Zero(t, callCount.Load())
 	require.True(t, inv.EndInvocation)
+	require.Equal(t, 1, inv.ToolIterationCount())
+	_, finalizing := calllimit.ActivateForLLM(inv, false)
+	require.False(t, finalizing)
 }
 
 func TestFunctionCallResponseProcessor_WithExternalTools_UnknownStops(
@@ -5542,7 +5548,7 @@ func TestFunctionCallResponseProcessor_ToolExecutionDecision(t *testing.T) {
 	})
 }
 
-func TestFunctionCallResponseProcessor_ToolExecutionFilter_MixedStops(
+func TestFunctionCallResponseProcessor_ToolExecutionFilter_MixedStopsWithoutFinalization(
 	t *testing.T,
 ) {
 	const (
@@ -5557,14 +5563,17 @@ func TestFunctionCallResponseProcessor_ToolExecutionFilter_MixedStops(
 	p := NewFunctionCallResponseProcessor(false, nil)
 
 	inv := &agent.Invocation{
-		InvocationID: "inv-mixed",
-		AgentName:    "test-agent",
+		InvocationID:      "inv-mixed",
+		AgentName:         "test-agent",
+		MaxToolIterations: 1,
 		RunOptions: agent.RunOptions{
 			ToolExecutionFilter: tool.NewIncludeToolNamesFilter(
 				autoToolName,
 			),
 		},
 	}
+	instruction := "finish after the tool result"
+	calllimit.Configure(inv, nil, &instruction)
 
 	req := &model.Request{
 		Tools: map[string]tool.Tool{
@@ -5625,6 +5634,9 @@ func TestFunctionCallResponseProcessor_ToolExecutionFilter_MixedStops(
 		t.Fatalf("expected a tool response event")
 	}
 	require.True(t, inv.EndInvocation)
+	require.Equal(t, 1, inv.ToolIterationCount())
+	_, finalizing := calllimit.ActivateForLLM(inv, false)
+	require.False(t, finalizing)
 }
 
 func TestFunctionCallResponseProcessor_ToolExecutionFilter_NoPlaceholders(

@@ -501,7 +501,7 @@ To prevent Agents from entering infinite loops or consuming excessive resources,
 | `llmagent.WithMaxLLMCalls(n)` | Limits the maximum number of LLM calls per invocation. Takes effect when `n > 0`; no limit when `n <= 0` (default). |
 | `llmagent.WithMaxToolIterations(n)` | Limits the maximum number of tool-call iterations per invocation. Takes effect when `n > 0`; no limit when `n <= 0` (default). |
 | `llmagent.WithLLMCallLimitFinalization(instruction)` | Uses the last call allowed by `WithMaxLLMCalls` for a tool-free final response. |
-| `llmagent.WithToolIterationLimitFinalization(instruction)` | Requests a tool-free final response after the last iteration allowed by `WithMaxToolIterations`, if the LLM-call budget permits another call. |
+| `llmagent.WithToolIterationLimitFinalization(instruction)` | Requests a tool-free final response after the last fully framework-executed iteration allowed by `WithMaxToolIterations`, if the current invocation and LLM-call budget permit another call. |
 
 **Usage Example:**
 
@@ -528,6 +528,7 @@ agent := llmagent.New(
   - **`WithMaxToolIterations`** emits a `flow_error` response event when the count exceeds the limit.
 - Each finalization option is independent and opt-in. Pass `""` to use the framework's default finalization instruction, or pass a non-empty string to provide a custom instruction.
 - LLM-limit finalization uses the final call inside `MaxLLMCalls`. Tool-limit finalization uses the next LLM call after the final allowed tool iteration.
+- Tool-limit finalization requires every tool call in the limit-reaching iteration to be framework-executed. If any call is external or deferred by `WithToolExecutionFilter`, the response still counts toward `MaxToolIterations`, but the current run follows the existing caller-executed lifecycle and ends without a finalization call. A later caller continuation is a new invocation with independent limits.
 - `MaxLLMCalls` remains a strict outer budget. Finalization calls count toward it, so reserve an LLM call when combining tool-limit finalization with `WithMaxLLMCalls`.
 - For the final model request, the instruction is appended as a transient tail user message without changing the existing system prompt. It is visible to before-model callbacks but is not emitted or persisted as a user event.
 - During finalization, tools and forced tool-choice fields are removed before before-model callbacks and scrubbed again after callbacks. If a tool call is still produced, the framework rejects it without executing the tool.

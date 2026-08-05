@@ -844,11 +844,16 @@ func WithLLMCallLimitFinalization(instruction string) Option {
 }
 
 // WithToolIterationLimitFinalization requests one tool-free final model
-// response after the last iteration allowed by WithMaxToolIterations. The
-// finalization call counts toward MaxLLMCalls when that limit is configured,
-// and is not attempted if that budget is exhausted. An empty instruction uses
-// the framework default. This option has no effect when the tool iteration
-// limit is not positive.
+// response after the last fully framework-executed iteration allowed by
+// WithMaxToolIterations, when normal flow can continue to another LLM call.
+// The finalization call counts toward MaxLLMCalls when that limit is configured,
+// and is not attempted if that budget is exhausted.
+// If the limit-reaching response contains any caller-executed tool, including
+// an external tool or one deferred by the execution filter, the existing
+// deferred-tool lifecycle ends the current invocation without a finalization
+// call. That response still counts toward MaxToolIterations. An empty
+// instruction uses the framework default. This option has no effect when the
+// tool iteration limit is not positive.
 // The instruction is appended as a transient tail user message for the final
 // model request; it is not emitted or persisted as a user event. Before-model
 // callbacks observe the tool-free finalization request.

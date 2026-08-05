@@ -349,7 +349,10 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 	}
 
 	functioncallResponseEvent, err := p.handleFunctionCallsAndSendEventWithRequest(ctx, invocation, req, rsp, ch)
-	if toolLimitReached {
+	// Tool-limit finalization needs this invocation to continue to another LLM
+	// call. A deferred tool preserves the caller-executed lifecycle and ends the
+	// current invocation, so do not leave unreachable finalization state behind.
+	if toolLimitReached && !deferred {
 		calllimit.ScheduleToolFinalization(invocation)
 	}
 
