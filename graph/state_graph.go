@@ -5516,6 +5516,15 @@ func (c *parallelToolCallCancelCause) Unwrap() error {
 	return c.err
 }
 
+// admitsParallelToolCalls reports whether this node may run its tool calls
+// concurrently. A lone call has nothing to run beside it.
+func admitsParallelToolCalls(config toolCallsConfig) bool {
+	if !config.EnableParallel || len(config.ToolCalls) <= 1 {
+		return false
+	}
+	return admitsConcurrentToolCalls(config.ToolCalls, config.Tools)
+}
+
 // admitsConcurrentToolCalls reports whether no tool in the batch objects to
 // running beside its siblings.
 //
@@ -5550,8 +5559,7 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 	}
 	completedMessages := completedToolMessagesForNode(config.State, config.NodeID)
 	// Serial path, single tool call, or a batch some tool objects to sharing.
-	if !config.EnableParallel || len(config.ToolCalls) <= 1 ||
-		!admitsConcurrentToolCalls(config.ToolCalls, config.Tools) {
+	if !admitsParallelToolCalls(config) {
 		newMessages := make([]model.Message, 0, len(config.ToolCalls))
 		completedThisRun := make(map[string]model.Message)
 		for i, toolCall := range config.ToolCalls {
