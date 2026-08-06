@@ -11,6 +11,7 @@ package manager
 import (
 	"context"
 	"errors"
+	"math"
 	"os"
 	"testing"
 	"time"
@@ -297,6 +298,7 @@ func TestSlimRunResultOmitsConfiguredFields(t *testing.T) {
 				},
 			},
 		},
+		InitialProfile: &promptiter.Profile{StructureID: "structure_1"},
 		AcceptedProfile: &promptiter.Profile{
 			StructureID: "structure_1",
 			Overrides: []promptiter.SurfaceOverride{
@@ -327,8 +329,15 @@ func TestSlimRunResultOmitsConfiguredFields(t *testing.T) {
 				},
 				OutputProfile: &promptiter.Profile{StructureID: "structure_1"},
 				Validation:    &promptiterengine.EvaluationResult{OverallScore: 0.7},
-				Acceptance:    &promptiterengine.AcceptanceDecision{Accepted: true},
-				Stop:          &promptiterengine.StopDecision{ShouldStop: true},
+				CandidateTrain: &promptiterengine.EvaluationResult{
+					OverallScore: 0.8,
+					EvalSets: []promptiterengine.EvalSetResult{{
+						EvalSetID: "train",
+						Cases:     []promptiterengine.CaseResult{{EvalSetID: "train", EvalCaseID: "case_1"}},
+					}},
+				},
+				Acceptance: &promptiterengine.AcceptanceDecision{Accepted: true},
+				Stop:       &promptiterengine.StopDecision{ShouldStop: true},
 			},
 		},
 	}
@@ -343,6 +352,7 @@ func TestSlimRunResultOmitsConfiguredFields(t *testing.T) {
 		OmitLosses:          true,
 	})
 	require.NotSame(t, result, slimmed)
+	assert.Nil(t, slimmed.InitialProfile)
 	assert.Nil(t, slimmed.AcceptedProfile)
 	require.NotNil(t, slimmed.BaselineValidation)
 	require.Len(t, slimmed.BaselineValidation.EvalSets, 1)
@@ -358,6 +368,9 @@ func TestSlimRunResultOmitsConfiguredFields(t *testing.T) {
 	require.NotNil(t, round.Train)
 	require.Len(t, round.Train.EvalSets, 1)
 	assert.Empty(t, round.Train.EvalSets[0].Cases)
+	require.NotNil(t, round.CandidateTrain)
+	require.Len(t, round.CandidateTrain.EvalSets, 1)
+	assert.Empty(t, round.CandidateTrain.EvalSets[0].Cases)
 	require.NotNil(t, round.Acceptance)
 	require.NotNil(t, round.Stop)
 	require.Len(t, result.BaselineValidation.EvalSets[0].Cases, 1)
@@ -709,6 +722,11 @@ func TestRunObserverBuildsIncrementalRun(t *testing.T) {
 		Payload: newEvaluationResult(0.75),
 	}))
 	require.NoError(t, observer.append(context.Background(), &promptiterengine.Event{
+		Kind:    promptiterengine.EventKindRoundCandidateTrainEvaluation,
+		Round:   1,
+		Payload: newEvaluationResult(0.80),
+	}))
+	require.NoError(t, observer.append(context.Background(), &promptiterengine.Event{
 		Kind:  promptiterengine.EventKindRoundCompleted,
 		Round: 1,
 		Payload: &promptiterengine.RoundCompleted{
@@ -730,6 +748,8 @@ func TestRunObserverBuildsIncrementalRun(t *testing.T) {
 	assert.InDelta(t, 0.60, current.Rounds[0].Train.OverallScore, 0.0001)
 	require.NotNil(t, current.Rounds[0].Validation)
 	assert.InDelta(t, 0.75, current.Rounds[0].Validation.OverallScore, 0.0001)
+	require.NotNil(t, current.Rounds[0].CandidateTrain)
+	assert.InDelta(t, 0.80, current.Rounds[0].CandidateTrain.OverallScore, 0.0001)
 	require.NotNil(t, current.Rounds[0].Acceptance)
 	assert.True(t, current.Rounds[0].Acceptance.Accepted)
 	require.NotNil(t, current.Rounds[0].Stop)
@@ -929,6 +949,15 @@ func TestRunObserverRejectsInvalidEvents(t *testing.T) {
 				Payload: "invalid",
 			},
 			errContain: `event "round_validation" payload is invalid`,
+		},
+		{
+			name: "invalid candidate train payload",
+			event: &promptiterengine.Event{
+				Kind:    promptiterengine.EventKindRoundCandidateTrainEvaluation,
+				Round:   1,
+				Payload: "invalid",
+			},
+			errContain: `event "round_candidate_train_evaluation" payload is invalid`,
 		},
 		{
 			name: "invalid completed payload",
@@ -1482,6 +1511,37 @@ func TestValidateRunRequest(t *testing.T) {
 		MaxRounds:        1,
 		TargetSurfaceIDs: []string{""},
 	}), "target surface ids must not contain empty values")
+	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
+		Train:            testEvalSetInputs("train"),
+		Validation:       testEvalSetInputs("validation"),
+		MaxRounds:        1,
+		TargetSurfaceIDs: []string{"candidate#instruction"},
+		EvaluationOptions: promptiterengine.EvaluationOptions{
+			NumRuns: -1,
+		},
+	}), "evaluation num runs must be non-negative")
+	for _, test := range []struct {
+		name   string
+		mutate func(*promptiterengine.RunRequest)
+		want   string
+	}{
+		{name: "negative evaluation parallelism", mutate: func(request *promptiterengine.RunRequest) { request.EvaluationOptions.EvalCaseParallelism = -1 }, want: "evaluation case parallelism must be non-negative"},
+		{name: "non-finite minimum gain", mutate: func(request *promptiterengine.RunRequest) { request.AcceptancePolicy.MinScoreGain = math.NaN() }, want: "acceptance minimum score gain must be finite"},
+		{name: "negative stop rounds", mutate: func(request *promptiterengine.RunRequest) { request.StopPolicy.MaxRoundsWithoutAcceptance = -1 }, want: "max rounds without acceptance must be non-negative"},
+		{name: "non-finite target score", mutate: func(request *promptiterengine.RunRequest) {
+			value := math.Inf(1)
+			request.StopPolicy.TargetScore = &value
+		}, want: "stop target score must be finite"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := &promptiterengine.RunRequest{
+				Train: testEvalSetInputs("train"), Validation: testEvalSetInputs("validation"),
+				MaxRounds: 1, TargetSurfaceIDs: []string{"candidate#instruction"},
+			}
+			test.mutate(request)
+			assert.EqualError(t, validateRunRequest(request), test.want)
+		})
+	}
 	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
 		Train:      testEvalSetInputs("train"),
 		Validation: testEvalSetInputs("validation"),

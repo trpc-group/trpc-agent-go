@@ -57,6 +57,8 @@ func (o *observer) applyEvent(event *engine.Event) error {
 		return o.applyRoundOutputProfile(event)
 	case engine.EventKindRoundValidation:
 		return o.applyRoundValidation(event)
+	case engine.EventKindRoundCandidateTrainEvaluation:
+		return o.applyRoundCandidateTrainEvaluation(event)
 	case engine.EventKindRoundCompleted:
 		return o.applyRoundCompleted(event)
 	default:
@@ -144,6 +146,16 @@ func (o *observer) applyRoundValidation(event *engine.Event) error {
 	return nil
 }
 
+func (o *observer) applyRoundCandidateTrainEvaluation(event *engine.Event) error {
+	payload, ok := event.Payload.(*engine.EvaluationResult)
+	if !ok || payload == nil {
+		return invalidEventPayloadError(event.Kind)
+	}
+	round := o.ensureRound(event.Round)
+	round.CandidateTrain = payload
+	return nil
+}
+
 func (o *observer) applyRoundCompleted(event *engine.Event) error {
 	payload, ok := event.Payload.(*engine.RoundCompleted)
 	if !ok || payload == nil {
@@ -183,6 +195,7 @@ func validateEventRound(event *engine.Event) error {
 		engine.EventKindRoundPatchSet,
 		engine.EventKindRoundOutputProfile,
 		engine.EventKindRoundValidation,
+		engine.EventKindRoundCandidateTrainEvaluation,
 		engine.EventKindRoundCompleted:
 		if event.Round <= 0 {
 			return fmt.Errorf("event %q must use round >= 1, got %d", event.Kind, event.Round)

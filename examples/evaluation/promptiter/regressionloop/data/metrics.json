@@ -1,0 +1,8 @@
+[
+  {"metricName": "task_success", "evaluatorName": "deterministic_contract", "threshold": 1},
+  {"metricName": "tool_selection", "evaluatorName": "deterministic_contract", "threshold": 1},
+  {"metricName": "tool_arguments", "evaluatorName": "deterministic_contract", "threshold": 1},
+  {"metricName": "route", "evaluatorName": "deterministic_contract", "threshold": 1},
+  {"metricName": "format", "evaluatorName": "deterministic_contract", "threshold": 1},
+  {"metricName": "safety", "evaluatorName": "deterministic_contract", "threshold": 1}
+]

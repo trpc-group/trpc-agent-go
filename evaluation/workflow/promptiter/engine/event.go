@@ -36,6 +36,9 @@ const (
 	EventKindRoundOutputProfile EventKind = "round_output_profile"
 	// EventKindRoundValidation stores the validation evaluation result for one round.
 	EventKindRoundValidation EventKind = "round_validation"
+	// EventKindRoundCandidateTrainEvaluation stores final candidate train
+	// evidence emitted when a round terminates the run.
+	EventKindRoundCandidateTrainEvaluation EventKind = "round_candidate_train_evaluation"
 	// EventKindRoundCompleted stores the round summary after acceptance and stop checks.
 	EventKindRoundCompleted EventKind = "round_completed"
 )

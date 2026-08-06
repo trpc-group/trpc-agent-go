@@ -140,6 +140,24 @@ func TestSurfacePatch_Setters_ApplyAllSupportedSurfaces(t *testing.T) {
 	require.True(t, stored.SuppressSubAgentTransfer())
 }
 
+func TestInvocationInstructionOverride(t *testing.T) {
+	var patch SurfacePatch
+	patch.SetInstruction("patched instruction")
+	opts := NewRunOptions(WithSurfacePatchForNode("root", patch))
+	invocation := &Invocation{RunOptions: opts}
+
+	instruction, ok := InvocationInstructionOverride(invocation, "root")
+	require.True(t, ok)
+	require.Equal(t, "patched instruction", instruction)
+
+	_, ok = InvocationInstructionOverride(invocation, "missing")
+	require.False(t, ok)
+	_, ok = InvocationInstructionOverride(nil, "root")
+	require.False(t, ok)
+	_, ok = InvocationInstructionOverride(invocation, "")
+	require.False(t, ok)
+}
+
 func TestWithSurfacePatchForNode_IgnoresEmptyInputs(t *testing.T) {
 	require.NotPanics(t, func() {
 		WithSurfacePatchForNode("root", SurfacePatch{})(nil)

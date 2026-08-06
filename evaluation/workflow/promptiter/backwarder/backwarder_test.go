@@ -185,6 +185,7 @@ func TestBackwardUsesRunnerStructuredOutput(t *testing.T) {
 				},
 			},
 		},
+		Usage: promptiter.Usage{Calls: 1},
 	}, rsp)
 }
 
@@ -464,6 +465,7 @@ func TestBackwardAllowsEmptyResultForRootControlStep(t *testing.T) {
 	assert.Equal(t, &Result{
 		Gradients: []promptiter.SurfaceGradient{},
 		Upstream:  []Propagation{},
+		Usage:     promptiter.Usage{Complete: true},
 	}, rsp)
 	assert.Equal(t, 0, r.runCalls)
 }

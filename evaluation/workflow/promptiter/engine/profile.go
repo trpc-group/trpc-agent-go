@@ -75,7 +75,7 @@ func applyPatchSet(
 	}
 	overrideIndex := buildOverrideIndex(normalizedProfile)
 	if patchSet == nil {
-		return buildProfileFromOverrideIndex(structure, overrideIndex), nil
+		return normalizeProfile(structure, buildProfileFromOverrideIndex(structure, overrideIndex))
 	}
 	seenPatches := make(map[string]struct{}, len(patchSet.Patches))
 	for _, patch := range patchSet.Patches {
@@ -99,7 +99,7 @@ func applyPatchSet(
 			Value:     value,
 		}
 	}
-	return buildProfileFromOverrideIndex(structure, overrideIndex), nil
+	return normalizeProfile(structure, buildProfileFromOverrideIndex(structure, overrideIndex))
 }
 
 func buildOverrideIndex(profile *promptiter.Profile) map[string]promptiter.SurfaceOverride {

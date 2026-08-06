@@ -44,9 +44,6 @@ func (e *engine) loss(result *EvaluationResult, inputs []EvalSetInput) ([]prompt
 	losses := make([]promptiter.CaseLoss, 0)
 	for _, evalSet := range result.EvalSets {
 		for _, evalCase := range evalSet.Cases {
-			if evalCase.Trace != nil && evalCase.Trace.Status == atrace.TraceStatusIncomplete {
-				continue
-			}
 			caseLoss := promptiter.CaseLoss{
 				EvalSetID:      evalCase.EvalSetID,
 				EvalCaseID:     evalCase.EvalCaseID,
@@ -54,6 +51,13 @@ func (e *engine) loss(result *EvaluationResult, inputs []EvalSetInput) ([]prompt
 			}
 			for _, metric := range evalCase.Metrics {
 				if metric.Status != status.EvalStatusFailed {
+					continue
+				}
+				trace := evalCase.Trace
+				if metricTrace := evalCase.MetricTraces[metric.MetricName]; metricTrace != nil {
+					trace = metricTrace
+				}
+				if trace != nil && trace.Status == atrace.TraceStatusIncomplete {
 					continue
 				}
 				if strings.TrimSpace(metric.Reason) == "" {
@@ -67,7 +71,7 @@ func (e *engine) loss(result *EvaluationResult, inputs []EvalSetInput) ([]prompt
 					evalSetID:  evalCase.EvalSetID,
 					metricName: metric.MetricName,
 				}]; ok {
-					stepID, matched, err := traceLastStepIDForNode(evalCase.Trace, target.NodeID)
+					stepID, matched, err := traceLastStepIDForNode(trace, target.NodeID)
 					if err != nil {
 						return nil, fmt.Errorf(
 							"resolve loss target for eval case %q metric %q: %w",
@@ -88,7 +92,7 @@ func (e *engine) loss(result *EvaluationResult, inputs []EvalSetInput) ([]prompt
 					})
 					continue
 				}
-				terminalStepIDs, err := traceTerminalStepIDs(evalCase.Trace)
+				terminalStepIDs, err := traceTerminalStepIDs(trace)
 				if err != nil {
 					return nil, fmt.Errorf(
 						"resolve terminal step for eval case %q: %w",

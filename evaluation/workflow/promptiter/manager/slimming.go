@@ -16,6 +16,7 @@ func slimRunResult(result *engine.RunResult, slimming engine.RunResultSlimming) 
 	}
 	slimmed := *result
 	if slimming.OmitProfiles {
+		slimmed.InitialProfile = nil
 		slimmed.AcceptedProfile = nil
 	}
 	slimmed.BaselineValidation = slimEvaluationResult(result.BaselineValidation, slimming)
@@ -57,6 +58,7 @@ func slimRounds(rounds []engine.RoundResult, slimming engine.RunResultSlimming) 
 		}
 		next.Train = slimEvaluationResult(round.Train, slimming)
 		next.Validation = slimEvaluationResult(round.Validation, slimming)
+		next.CandidateTrain = slimEvaluationResult(round.CandidateTrain, slimming)
 		slimmed[i] = next
 	}
 	return slimmed

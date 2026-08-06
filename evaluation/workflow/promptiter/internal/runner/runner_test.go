@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -47,9 +48,11 @@ func TestCaptureOutputCollectsStructuredOutputAndFinalContent(t *testing.T) {
 
 	output, err := CaptureOutput(events)
 
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, map[string]any{"k": "v"}, output.StructuredOutput)
 	assert.Equal(t, "final content", output.FinalContent)
+	assert.Equal(t, 1, output.Usage.Calls)
+	assert.False(t, output.Usage.Complete)
 }
 
 func TestCaptureOutputReturnsRunnerErrors(t *testing.T) {
@@ -61,4 +64,73 @@ func TestCaptureOutputReturnsRunnerErrors(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Nil(t, output)
+}
+
+func TestCaptureOutputSummarizesCompleteAndMissingUsage(t *testing.T) {
+	events := make(chan *event.Event, 2)
+	events <- event.NewResponseEvent("invocation-id", "runner", &model.Response{
+		ID: "call-1", Done: true,
+		Usage: &model.Usage{PromptTokens: 3, CompletionTokens: 2, TotalTokens: 5},
+	})
+	events <- event.NewResponseEvent("invocation-id", "runner", &model.Response{
+		ID: "call-2", Done: true,
+	})
+	close(events)
+
+	output, err := CaptureOutput(events)
+	assert.NoError(t, err)
+	assert.Equal(t, 2, output.Usage.Calls)
+	assert.Equal(t, int64(5), output.Usage.TotalTokens)
+	assert.False(t, output.Usage.Complete)
+}
+
+func TestCaptureOutputCountsUsageFromCompletedToolCallWithoutDone(t *testing.T) {
+	events := make(chan *event.Event, 1)
+	events <- event.NewResponseEvent("invocation-id", "runner", &model.Response{
+		ID: "tool-call", Usage: &model.Usage{PromptTokens: 3, CompletionTokens: 2, TotalTokens: 5},
+		Choices: []model.Choice{{Message: model.Message{ToolCalls: []model.ToolCall{{ID: "tool-1"}}}}},
+	})
+	close(events)
+
+	output, err := CaptureOutput(events)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, output.Usage.Calls)
+	assert.Equal(t, int64(5), output.Usage.TotalTokens)
+	assert.True(t, output.Usage.Complete)
+}
+
+func TestCaptureOutputMarksPrematureStreamIncomplete(t *testing.T) {
+	events := make(chan *event.Event, 1)
+	events <- event.NewResponseEvent("invocation-id", "runner", &model.Response{
+		ID: "call-1",
+		Choices: []model.Choice{{
+			Message: model.NewAssistantMessage("partial"),
+		}},
+	})
+	close(events)
+
+	output, err := CaptureOutput(events)
+
+	assert.NoError(t, err)
+	assert.Equal(t, 1, output.Usage.Calls)
+	assert.False(t, output.Usage.Complete)
+}
+
+func TestCaptureOutputGroupsAnonymousPartialAndDoneEvents(t *testing.T) {
+	events := make(chan *event.Event, 2)
+	events <- event.NewResponseEvent("invocation-id", "runner", &model.Response{
+		Choices: []model.Choice{{Message: model.NewAssistantMessage("partial")}},
+	})
+	events <- event.NewResponseEvent("invocation-id", "runner", &model.Response{
+		Done:  true,
+		Usage: &model.Usage{PromptTokens: 2, CompletionTokens: 1, TotalTokens: 3},
+	})
+	close(events)
+
+	output, err := CaptureOutput(events)
+
+	assert.NoError(t, err)
+	assert.Equal(t, 1, output.Usage.Calls)
+	assert.Equal(t, int64(3), output.Usage.TotalTokens)
+	assert.True(t, output.Usage.Complete)
 }

@@ -43,6 +43,8 @@ type Request struct {
 type Result struct {
 	// Patch is the proposed change for the requested surface.
 	Patch *promptiter.SurfacePatch
+	// Usage contains model-call telemetry for this optimization request.
+	Usage promptiter.Usage `json:"-"`
 }
 
 type surfacePatchProposal struct {
@@ -156,7 +158,7 @@ func (o *optimizer) Optimize(ctx context.Context, request *Request) (*Result, er
 		if err != nil {
 			return nil, fmt.Errorf("sanitize tool description proposal: %w", err)
 		}
-		return &Result{Patch: patch}, nil
+		return &Result{Patch: patch, Usage: output.Usage}, nil
 	}
 	proposal, err := idecode.DecodeOutputJSON[surfacePatchProposal](output)
 	if err != nil {
@@ -169,7 +171,7 @@ func (o *optimizer) Optimize(ctx context.Context, request *Request) (*Result, er
 	if err != nil {
 		return nil, fmt.Errorf("sanitize surface patch proposal: %w", err)
 	}
-	return &Result{Patch: patch}, nil
+	return &Result{Patch: patch, Usage: output.Usage}, nil
 }
 
 func toolDescriptionStructuredOutput() agent.RunOption {

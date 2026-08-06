@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"slices"
 	"strings"
@@ -268,6 +269,17 @@ func validateRunRequest(request *engine.RunRequest) error {
 		return errors.New("target surface ids must not be empty")
 	case slices.Contains(request.TargetSurfaceIDs, ""):
 		return errors.New("target surface ids must not contain empty values")
+	case request.EvaluationOptions.NumRuns < 0:
+		return errors.New("evaluation num runs must be non-negative")
+	case request.EvaluationOptions.EvalCaseParallelism < 0:
+		return errors.New("evaluation case parallelism must be non-negative")
+	case math.IsNaN(request.AcceptancePolicy.MinScoreGain) || math.IsInf(request.AcceptancePolicy.MinScoreGain, 0):
+		return errors.New("acceptance minimum score gain must be finite")
+	case request.StopPolicy.MaxRoundsWithoutAcceptance < 0:
+		return errors.New("max rounds without acceptance must be non-negative")
+	case request.StopPolicy.TargetScore != nil &&
+		(math.IsNaN(*request.StopPolicy.TargetScore) || math.IsInf(*request.StopPolicy.TargetScore, 0)):
+		return errors.New("stop target score must be finite")
 	case request.BackwardOptions.CaseParallelism < 0:
 		return errors.New("backward case parallelism must be non-negative")
 	case request.AggregationOptions.SurfaceParallelism < 0:
