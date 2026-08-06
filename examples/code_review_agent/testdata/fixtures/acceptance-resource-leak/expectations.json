@@ -1,0 +1,16 @@
+{
+  "name": "acceptance-resource-leak",
+  "description": "An opened file is read without closing the file descriptor.",
+  "expected_categories": ["resource_lifecycle"],
+  "expected_result_kind": "finding",
+  "sandbox_expectation": "success",
+  "changed_files": ["file.go"],
+  "minimum_secret_signals": 0,
+  "forbidden_plaintext": [],
+  "required_snapshot_fragments": {
+    "file.go": ["os.Open(path)", "io.ReadAll(file)"]
+  },
+  "forbidden_snapshot_fragments": {
+    "file.go": ["file.Close()"]
+  }
+}

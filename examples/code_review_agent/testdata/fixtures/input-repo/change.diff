@@ -1,0 +1,9 @@
+diff --git a/value.go b/value.go
+--- a/value.go
++++ b/value.go
+@@ -10,4 +10,4 @@
+ 
+ package fixture
+ 
+-func Value() int { return 1 }
++func Value() int { return 2 }

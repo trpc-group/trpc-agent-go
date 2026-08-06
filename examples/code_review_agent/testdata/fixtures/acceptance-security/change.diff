@@ -1,0 +1,12 @@
+diff --git a/command.go b/command.go
+--- a/command.go
++++ b/command.go
+@@ -11,6 +11,6 @@ package security
+ 
+ import "os/exec"
+ 
+-func Run(name string) error {
+-	return exec.Command(name).Run()
++func Run(input string) error {
++	return exec.Command("sh", "-c", input).Run()
+ }

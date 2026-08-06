@@ -1,0 +1,16 @@
+diff --git a/database.go b/database.go
+--- a/database.go
++++ b/database.go
+@@ -14,6 +14,10 @@ import (
+ 	"database/sql"
+ )
+ 
+-func Check(ctx context.Context, db *sql.DB) error {
+-	return db.PingContext(ctx)
++func Load(ctx context.Context, db *sql.DB) error {
++	rows, err := db.QueryContext(ctx, "SELECT value FROM settings")
++	if err != nil {
++		return err
++	}
++	return rows.Err()
+ }

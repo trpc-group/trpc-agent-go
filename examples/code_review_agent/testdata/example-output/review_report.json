@@ -1,0 +1,149 @@
+{
+  "schema_version": "1.0",
+  "task": {
+    "task_id": "review-1785085032324910463",
+    "app_name": "code_review_agent",
+    "user_id": "code_reviewer",
+    "session_id": "review-1785085032324910463",
+    "status": "completed",
+    "started_at": "2026-07-26T16:57:12.324913238Z",
+    "finished_at": "2026-07-26T16:57:20.156849425Z"
+  },
+  "input": {
+    "kind": "fixture",
+    "summary": {
+      "input_kind": "fixture",
+      "review_mode": "repo_backed",
+      "changed_files": [
+        {
+          "path": "command.go",
+          "status": "modified",
+          "language": "go",
+          "is_go": true,
+          "is_test": false,
+          "has_complete_context": true,
+          "hunk_count": 1,
+          "added_lines": 1,
+          "changed_lines": 1,
+          "deleted_lines": 1,
+          "binary": false
+        }
+      ],
+      "go_packages": [
+        {
+          "module_path": "example.com/code-review-fixture/security",
+          "directory": ".",
+          "package_name": "security",
+          "import_path": "example.com/code-review-fixture/security",
+          "suggested_test_arg": ".",
+          "complete": true
+        }
+      ],
+      "hunk_count": 1,
+      "candidate_line_count": 2,
+      "secret_signals": null,
+      "redactions": {
+        "count": 0
+      }
+    },
+    "artifact_name": "review_input.diff",
+    "artifact_version": 0
+  },
+  "monitoring": {
+    "total_duration_ms": 7831,
+    "sandbox_duration_ms": 5575,
+    "tool_call_count": 5,
+    "permission_interception_count": 1,
+    "finding_count": 1,
+    "result_kind_distribution": {
+      "finding": 1
+    },
+    "severity_distribution": {
+      "critical": 1
+    },
+    "exception_distribution": {}
+  },
+  "permission_decisions": [
+    {
+      "tool_call_id": "fake-acceptance-security-skill_load-1",
+      "tool_name": "skill_load",
+      "operation": "skill_load",
+      "command_preview": "{\"docs\":[\"references/rules.md\"],\"skill\":\"code-review\"}",
+      "decision": "allow",
+      "decided_at": "2026-07-26T16:57:12.939579904Z"
+    },
+    {
+      "tool_call_id": "fake-acceptance-security-workspace_exec-1",
+      "tool_name": "workspace_exec",
+      "operation": "workspace_exec",
+      "command_preview": "skills/code-review/scripts/run-go-checks.sh work/inputs/repo",
+      "decision": "ask",
+      "reason": "Call request_tool_permission with this target tool and its exact arguments, then retry the target tool only if permission is granted.",
+      "decided_at": "2026-07-26T16:57:12.94386905Z"
+    },
+    {
+      "tool_call_id": "fake-acceptance-security-request_tool_permission-1",
+      "tool_name": "request_tool_permission",
+      "operation": "request_tool_permission",
+      "command_preview": "{\"reason\":\"Run the affected module's bundled checks to collect observed go test and go vet evidence for the review.\",\"target_arguments\":{\"command\":\"skills/code-review/scripts/run-go-checks.sh work/inputs/repo\",\"timeout_sec\":120},\"target_tool\":\"workspace_exec\"}",
+      "decision": "allow",
+      "decided_at": "2026-07-26T16:57:12.948402042Z"
+    },
+    {
+      "tool_call_id": "fake-acceptance-security-request_tool_permission-1",
+      "tool_name": "workspace_exec",
+      "operation": "workspace_exec",
+      "command_preview": "{\"command\":\"skills/code-review/scripts/run-go-checks.sh work/inputs/repo\",\"timeout_sec\":120}",
+      "decision": "allow",
+      "reason": "Run the affected module's bundled checks to collect observed go test and go vet evidence for the review.",
+      "decided_at": "2026-07-26T16:57:12.94896252Z"
+    },
+    {
+      "tool_call_id": "fake-acceptance-security-workspace_exec-2",
+      "tool_name": "workspace_exec",
+      "operation": "workspace_exec",
+      "command_preview": "skills/code-review/scripts/run-go-checks.sh work/inputs/repo",
+      "decision": "allow",
+      "decided_at": "2026-07-26T16:57:12.953705434Z"
+    },
+    {
+      "tool_call_id": "fake-acceptance-security-submit_review_results-1",
+      "tool_name": "submit_review_results",
+      "operation": "submit_review_results",
+      "command_preview": "{\"findings\":[{\"severity\":\"critical\",\"category\":\"security\",\"file\":\"command.go\",\"line\":15,\"title\":\"User input is executed by a shell\",\"evidence\":\"The changed code passes input to exec.Command(\\\"sh\\\", \\\"-c\\\", input), enabling command injection.\",\"recommendation\":\"Avoid a shell and pass validated arguments directly to a fixed executable.\",\"confidence\":0.99,\"source\":\"agent\",\"rule_id\":\"GO-SEC-001\"}],\"conclusion\":\"One actionable issue found. Go checks completed successfully.\"}",
+      "decision": "allow",
+      "decided_at": "2026-07-26T16:57:18.533145789Z"
+    }
+  ],
+  "sandbox_runs": [
+    {
+      "tool_call_id": "fake-acceptance-security-workspace_exec-2",
+      "backend": "container",
+      "command_preview": "skills/code-review/scripts/run-go-checks.sh work/inputs/repo",
+      "status": "succeeded",
+      "exit_code": 0,
+      "timed_out": false,
+      "output_summary": "==\u003e go test ./...\n?   \texample.com/code-review-fixture/security\t[no test files]\n==\u003e go vet ./...\n",
+      "output_truncated": false,
+      "redaction_count": 0,
+      "duration_ms": 5575
+    }
+  ],
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "security",
+      "file": "command.go",
+      "line": 15,
+      "title": "User input is executed by a shell",
+      "evidence": "The changed code passes input to exec.Command(\"sh\", \"-c\", input), enabling command injection.",
+      "recommendation": "Avoid a shell and pass validated arguments directly to a fixed executable.",
+      "confidence": 0.99,
+      "source": "agent",
+      "rule_id": "GO-SEC-001"
+    }
+  ],
+  "warnings": [],
+  "needs_human_review": [],
+  "conclusion": "One actionable issue found. Go checks completed successfully."
+}

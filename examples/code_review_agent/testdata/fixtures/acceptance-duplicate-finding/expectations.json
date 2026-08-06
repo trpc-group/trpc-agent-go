@@ -1,0 +1,16 @@
+{
+  "name": "acceptance-duplicate-finding",
+  "description": "One missing response-body close is used to verify duplicate observations collapse to one rule-location finding.",
+  "expected_categories": ["resource_lifecycle"],
+  "expected_result_kind": "finding",
+  "sandbox_expectation": "success",
+  "changed_files": ["http.go"],
+  "minimum_secret_signals": 0,
+  "forbidden_plaintext": [],
+  "required_snapshot_fragments": {
+    "http.go": ["http.Get(url)", "status := response.StatusCode"]
+  },
+  "forbidden_snapshot_fragments": {
+    "http.go": ["response.Body.Close()"]
+  }
+}

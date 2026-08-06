@@ -1,0 +1,9 @@
+diff --git a/config.go b/config.go
+--- a/config.go
++++ b/config.go
+@@ -10,3 +10,5 @@
+ package secretredaction
+ 
+ const Endpoint = "https://example.invalid"
++
++const APIKey = "sk-fixture0123456789abcd"

@@ -1,0 +1,16 @@
+{
+  "name": "acceptance-database-lifecycle",
+  "description": "Rows returned by database/sql are not closed before the function returns.",
+  "expected_categories": ["database_lifecycle"],
+  "expected_result_kind": "finding",
+  "sandbox_expectation": "success",
+  "changed_files": ["database.go"],
+  "minimum_secret_signals": 0,
+  "forbidden_plaintext": [],
+  "required_snapshot_fragments": {
+    "database.go": ["db.QueryContext", "return rows.Err()"]
+  },
+  "forbidden_snapshot_fragments": {
+    "database.go": ["rows.Close()"]
+  }
+}
