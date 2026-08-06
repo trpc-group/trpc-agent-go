@@ -1,0 +1,346 @@
+[
+  {
+    "name": "safe_go_test",
+    "scan": {
+      "decision": "allow",
+      "risk_level": "low",
+      "rule_id": "TSG000",
+      "evidence": "no configured safety rule matched",
+      "recommendation": "Execute with runtime isolation, limits, and audit collection enabled.",
+      "tool_name": "workspace_exec",
+      "command": "go test ./tool/...",
+      "backend": "workspace",
+      "blocked": false,
+      "redacted": false,
+      "duration_us": 37
+    }
+  },
+  {
+    "name": "dangerous_delete",
+    "scan": {
+      "decision": "deny",
+      "risk_level": "critical",
+      "rule_id": "TSG001",
+      "evidence": "command can recursively delete or overwrite a broad filesystem scope",
+      "recommendation": "Use a narrowly scoped file API and require explicit approval for destructive paths.",
+      "tool_name": "workspace_exec",
+      "command": "rm -rf /",
+      "backend": "workspace",
+      "blocked": true,
+      "redacted": false,
+      "duration_us": 28,
+      "findings": [
+        {
+          "decision": "deny",
+          "risk_level": "critical",
+          "rule_id": "TSG001",
+          "evidence": "command can recursively delete or overwrite a broad filesystem scope",
+          "recommendation": "Use a narrowly scoped file API and require explicit approval for destructive paths."
+        },
+        {
+          "decision": "deny",
+          "risk_level": "critical",
+          "rule_id": "TSG016",
+          "evidence": "command \"rm\" is denied by policy",
+          "recommendation": "Use a non-destructive allowlisted command or update policy after review."
+        }
+      ]
+    }
+  },
+  {
+    "name": "read_private_key",
+    "scan": {
+      "decision": "deny",
+      "risk_level": "critical",
+      "rule_id": "TSG002",
+      "evidence": "path \".ssh\" is forbidden or credential-sensitive",
+      "recommendation": "Use a workspace-scoped non-sensitive path and a dedicated secret provider.",
+      "tool_name": "workspace_exec",
+      "command": "cat ~/.ssh/id_rsa",
+      "backend": "workspace",
+      "blocked": true,
+      "redacted": false,
+      "duration_us": 19,
+      "findings": [
+        {
+          "decision": "deny",
+          "risk_level": "critical",
+          "rule_id": "TSG002",
+          "evidence": "path \".ssh\" is forbidden or credential-sensitive",
+          "recommendation": "Use a workspace-scoped non-sensitive path and a dedicated secret provider."
+        }
+      ]
+    }
+  },
+  {
+    "name": "blocked_network",
+    "scan": {
+      "decision": "deny",
+      "risk_level": "high",
+      "rule_id": "TSG003",
+      "evidence": "network target \"collector.invalid\" is not allowlisted",
+      "recommendation": "Use an approved domain or add it to network.allowed_domains after review.",
+      "tool_name": "workspace_exec",
+      "command": "curl https://collector.invalid/upload",
+      "backend": "workspace",
+      "blocked": true,
+      "redacted": false,
+      "duration_us": 28,
+      "findings": [
+        {
+          "decision": "deny",
+          "risk_level": "high",
+          "rule_id": "TSG003",
+          "evidence": "network target \"collector.invalid\" is not allowlisted",
+          "recommendation": "Use an approved domain or add it to network.allowed_domains after review."
+        }
+      ]
+    }
+  },
+  {
+    "name": "allowed_network",
+    "scan": {
+      "decision": "allow",
+      "risk_level": "low",
+      "rule_id": "TSG000",
+      "evidence": "no configured safety rule matched",
+      "recommendation": "Execute with runtime isolation, limits, and audit collection enabled.",
+      "tool_name": "workspace_exec",
+      "command": "curl https://proxy.golang.org",
+      "backend": "workspace",
+      "blocked": false,
+      "redacted": false,
+      "duration_us": 16
+    }
+  },
+  {
+    "name": "shell_wrapper",
+    "scan": {
+      "decision": "deny",
+      "risk_level": "high",
+      "rule_id": "TSG004",
+      "evidence": "shell or command wrapper \"bash\" can bypass argv policy",
+      "recommendation": "Invoke an allowlisted executable directly with literal arguments.",
+      "tool_name": "exec_command",
+      "command": "bash -c 'go test ./...'",
+      "backend": "host",
+      "blocked": true,
+      "redacted": false,
+      "duration_us": 45,
+      "findings": [
+        {
+          "decision": "deny",
+          "risk_level": "high",
+          "rule_id": "TSG004",
+          "evidence": "shell or command wrapper \"bash\" can bypass argv policy",
+          "recommendation": "Invoke an allowlisted executable directly with literal arguments."
+        },
+        {
+          "decision": "ask",
+          "risk_level": "medium",
+          "rule_id": "TSG017",
+          "evidence": "command \"bash\" is not in the policy allowlist",
+          "recommendation": "Use an allowlisted command or request a reviewed policy update."
+        }
+      ]
+    }
+  },
+  {
+    "name": "safe_pipeline",
+    "scan": {
+      "decision": "allow",
+      "risk_level": "low",
+      "rule_id": "TSG000",
+      "evidence": "no configured safety rule matched",
+      "recommendation": "Execute with runtime isolation, limits, and audit collection enabled.",
+      "tool_name": "workspace_exec",
+      "command": "go test ./... | head -n 20",
+      "backend": "workspace",
+      "blocked": false,
+      "redacted": false,
+      "duration_us": 25
+    }
+  },
+  {
+    "name": "dependency_install",
+    "scan": {
+      "decision": "ask",
+      "risk_level": "medium",
+      "rule_id": "TSG007",
+      "evidence": "dependency or system environment change requested by \"go\"",
+      "recommendation": "Pin and review the dependency, then install it during a controlled build step.",
+      "tool_name": "workspace_exec",
+      "command": "go install example.com/cmd/tool@latest",
+      "backend": "workspace",
+      "blocked": true,
+      "redacted": false,
+      "duration_us": 30,
+      "findings": [
+        {
+          "decision": "ask",
+          "risk_level": "medium",
+          "rule_id": "TSG007",
+          "evidence": "dependency or system environment change requested by \"go\"",
+          "recommendation": "Pin and review the dependency, then install it during a controlled build step."
+        }
+      ]
+    }
+  },
+  {
+    "name": "long_sleep",
+    "scan": {
+      "decision": "deny",
+      "risk_level": "high",
+      "rule_id": "TSG009",
+      "evidence": "sleep duration 3600 seconds exceeds policy limit 120 seconds",
+      "recommendation": "Use a short bounded delay below the configured timeout.",
+      "tool_name": "workspace_exec",
+      "command": "sleep 3600",
+      "backend": "workspace",
+      "blocked": true,
+      "redacted": false,
+      "duration_us": 20,
+      "findings": [
+        {
+          "decision": "deny",
+          "risk_level": "high",
+          "rule_id": "TSG009",
+          "evidence": "sleep duration 3600 seconds exceeds policy limit 120 seconds",
+          "recommendation": "Use a short bounded delay below the configured timeout."
+        }
+      ]
+    }
+  },
+  {
+    "name": "unbounded_output",
+    "scan": {
+      "decision": "deny",
+      "risk_level": "high",
+      "rule_id": "TSG010",
+      "evidence": "yes produces output without a natural bound",
+      "recommendation": "Use a bounded generator and retain the runtime output cap.",
+      "tool_name": "workspace_exec",
+      "command": "yes",
+      "backend": "workspace",
+      "blocked": true,
+      "redacted": false,
+      "duration_us": 11,
+      "findings": [
+        {
+          "decision": "deny",
+          "risk_level": "high",
+          "rule_id": "TSG010",
+          "evidence": "yes produces output without a natural bound",
+          "recommendation": "Use a bounded generator and retain the runtime output cap."
+        }
+      ]
+    }
+  },
+  {
+    "name": "host_pty_session",
+    "scan": {
+      "decision": "ask",
+      "risk_level": "high",
+      "rule_id": "TSG013",
+      "evidence": "host execution requested a PTY session",
+      "recommendation": "Require human review, a short timeout, output limits, and process-group cleanup.",
+      "tool_name": "exec_command",
+      "command": "go test ./...",
+      "backend": "host",
+      "blocked": true,
+      "redacted": false,
+      "duration_us": 17,
+      "findings": [
+        {
+          "decision": "ask",
+          "risk_level": "high",
+          "rule_id": "TSG013",
+          "evidence": "host execution requested a PTY session",
+          "recommendation": "Require human review, a short timeout, output limits, and process-group cleanup."
+        }
+      ]
+    }
+  },
+  {
+    "name": "human_review",
+    "scan": {
+      "decision": "ask",
+      "risk_level": "medium",
+      "rule_id": "TSG017",
+      "evidence": "command \"git\" is not in the policy allowlist",
+      "recommendation": "Use an allowlisted command or request a reviewed policy update.",
+      "tool_name": "workspace_exec",
+      "command": "git status",
+      "backend": "workspace",
+      "blocked": true,
+      "redacted": false,
+      "duration_us": 16,
+      "findings": [
+        {
+          "decision": "ask",
+          "risk_level": "medium",
+          "rule_id": "TSG017",
+          "evidence": "command \"git\" is not in the policy allowlist",
+          "recommendation": "Use an allowlisted command or request a reviewed policy update."
+        }
+      ]
+    }
+  },
+  {
+    "name": "environment_injection",
+    "scan": {
+      "decision": "deny",
+      "risk_level": "high",
+      "rule_id": "TSG014",
+      "evidence": "environment variable \"LD_PRELOAD\" is not allowlisted",
+      "recommendation": "Remove the variable or add its name to the reviewed policy allowlist.",
+      "tool_name": "exec_command",
+      "command": "go test ./...",
+      "backend": "host",
+      "blocked": true,
+      "redacted": false,
+      "duration_us": 19,
+      "findings": [
+        {
+          "decision": "deny",
+          "risk_level": "high",
+          "rule_id": "TSG014",
+          "evidence": "environment variable \"LD_PRELOAD\" is not allowlisted",
+          "recommendation": "Remove the variable or add its name to the reviewed policy allowlist."
+        }
+      ]
+    }
+  },
+  {
+    "name": "code_infinite_loop",
+    "scan": {
+      "decision": "deny",
+      "risk_level": "high",
+      "rule_id": "TSG011",
+      "evidence": "script contains a statically unbounded loop",
+      "recommendation": "Use a bounded iteration count and an executor-enforced timeout.",
+      "tool_name": "execute_code",
+      "command": "while true; do echo busy; done",
+      "backend": "codeexecutor",
+      "blocked": true,
+      "redacted": false,
+      "duration_us": 63,
+      "findings": [
+        {
+          "decision": "deny",
+          "risk_level": "high",
+          "rule_id": "TSG011",
+          "evidence": "script contains a statically unbounded loop",
+          "recommendation": "Use a bounded iteration count and an executor-enforced timeout."
+        },
+        {
+          "decision": "ask",
+          "risk_level": "high",
+          "rule_id": "TSG005",
+          "evidence": "line 1: shell structure could not be safely parsed: while/until loop is not allowed",
+          "recommendation": "Rewrite as literal argv without expansion, substitution, redirection, or control flow."
+        }
+      ]
+    }
+  }
+]

@@ -1,0 +1,57 @@
+version: 1
+
+allowed_commands:
+  - cat
+  - curl
+  - echo
+  - go
+  - head
+  - seq
+  - sleep
+  - yes
+
+denied_commands:
+  - dd
+  - mkfs
+  - rm
+  - sudo
+
+forbidden_paths:
+  - /etc
+  - /proc
+  - /root
+  - /sys
+  - ~/.ssh
+  - .env
+  - .aws/credentials
+  - .config/gcloud
+  - .netrc
+  - .npmrc
+
+network:
+  allowed_domains:
+    - example.com
+    - proxy.golang.org
+  deny_by_default: true
+
+limits:
+  max_timeout_seconds: 120
+  max_input_bytes: 1048576
+  max_output_bytes: 1048576
+  max_concurrency: 8
+
+allowed_environment_variables:
+  - CI
+  - GOCACHE
+  - GOMODCACHE
+  - HOME
+  - LANG
+  - PATH
+  - TMPDIR
+
+actions:
+  unparsable: ask
+  command_not_allowed: ask
+  dependency_change: ask
+  host_background: deny
+  host_tty: ask
