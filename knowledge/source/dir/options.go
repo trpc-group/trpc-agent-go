@@ -71,16 +71,28 @@ func WithCustomChunkingStrategy(strategy chunking.Strategy) Option {
 }
 
 // WithChunkSize sets the chunk size for the reader's default chunking strategy.
+// The unit is Unicode runes unless WithChunkLengthFunc is configured.
 func WithChunkSize(size int) Option {
 	return func(s *Source) {
 		s.chunkSize = size
 	}
 }
 
-// WithChunkOverlap sets the chunk overlap for the reader's default chunking strategy.
+// WithChunkOverlap sets the chunk overlap for the reader's default chunking
+// strategy. The unit is Unicode runes unless WithChunkLengthFunc is configured.
 func WithChunkOverlap(overlap int) Option {
 	return func(s *Source) {
 		s.chunkOverlap = overlap
+	}
+}
+
+// WithChunkLengthFunc sets the function used by supported default chunking
+// strategies to measure chunk size and overlap.
+func WithChunkLengthFunc(
+	lengthFunc func(string) (int, error),
+) Option {
+	return func(s *Source) {
+		s.chunkLengthFunc = lengthFunc
 	}
 }
 

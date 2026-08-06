@@ -150,6 +150,26 @@ func TestWithChunkSize(t *testing.T) {
 	}
 }
 
+func TestWithChunkLengthFunc(t *testing.T) {
+	lengthFunc := func(text string) (int, error) {
+		return len(text), nil
+	}
+	config := &Config{}
+
+	WithChunkLengthFunc(lengthFunc)(config)
+
+	if config.ChunkLengthFunc == nil {
+		t.Fatal("WithChunkLengthFunc() did not set the length function")
+	}
+	if got, err := config.ChunkLengthFunc("text"); err != nil || got != 4 {
+		t.Fatalf("configured length function returned (%d, %v), want (4, nil)",
+			got, err)
+	}
+	if !config.Chunk {
+		t.Fatal("WithChunkLengthFunc() should enable chunking")
+	}
+}
+
 func TestWithChunkOverlap(t *testing.T) {
 	tests := []struct {
 		name            string

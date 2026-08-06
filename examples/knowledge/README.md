@@ -38,6 +38,7 @@ Different data source types:
 | directory-source/ | Recursively load entire directory |
 | url-source/ | Fetch and parse web pages |
 | auto-source/ | Auto-detect source type from path |
+| token-aware-chunking/ | Keep Markdown chunk content within a tokenizer-based budget |
 
 ### vectorstores/
 Persistent vector storage options:

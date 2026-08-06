@@ -42,6 +42,7 @@ type Source struct {
 	recursive              bool     // Whether to process subdirectories
 	chunkSize              int
 	chunkOverlap           int
+	chunkLengthFunc        func(string) (int, error)
 	customChunkingStrategy chunking.Strategy
 	ocrExtractor           ocr.Extractor
 	transformers           []transform.Transformer
@@ -80,6 +81,12 @@ func (s *Source) initializeReaders() {
 	}
 	if s.chunkOverlap != 0 {
 		readerOpts = append(readerOpts, isource.WithChunkOverlap(s.chunkOverlap))
+	}
+	if s.chunkLengthFunc != nil {
+		readerOpts = append(
+			readerOpts,
+			isource.WithChunkLengthFunc(s.chunkLengthFunc),
+		)
 	}
 	if s.customChunkingStrategy != nil {
 		readerOpts = append(readerOpts, isource.WithCustomChunkingStrategy(s.customChunkingStrategy))

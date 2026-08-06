@@ -10,6 +10,7 @@
 package chunking
 
 import (
+	"strings"
 	"testing"
 	"unicode/utf8"
 
@@ -327,6 +328,128 @@ func TestSplitTextAtNaturalBoundaryPreservesSentenceAtoms(t *testing.T) {
 	}
 }
 
+func TestSplitTextAtNaturalBoundaryByLengthHandlesNonMonotonicPrefixes(
+	t *testing.T,
+) {
+	lengths := map[string]int{
+		"c":      1,
+		"ct":     1,
+		"cti":    2,
+		"ctio":   2,
+		"ction":  1,
+		"ctionX": 2,
+	}
+	lengthFunc := func(text string) (int, error) {
+		if length, ok := lengths[text]; ok {
+			return length, nil
+		}
+		return utf8.RuneCountInString(text), nil
+	}
+
+	prefix, remaining, err := splitTextAtNaturalBoundaryByLength(
+		"ctionX",
+		1,
+		lengthFunc,
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, "ction", prefix)
+	require.Equal(t, "X", remaining)
+}
+
+func TestSplitTextAtNaturalBoundaryByLengthPreservesSentenceAtoms(
+	t *testing.T,
+) {
+	tests := []struct {
+		name          string
+		content       string
+		maxSize       int
+		wantPrefix    string
+		wantRemaining string
+	}{
+		{
+			name:          "decimal",
+			content:       "prefix 12.6 suffix",
+			maxSize:       10,
+			wantPrefix:    "prefix",
+			wantRemaining: "12.6 suffix",
+		},
+		{
+			name:          "dotted section",
+			content:       "prefix 2.8.12 suffix",
+			maxSize:       11,
+			wantPrefix:    "prefix",
+			wantRemaining: "2.8.12 suffix",
+		},
+		{
+			name:          "semantic version",
+			content:       "prefix v1.2.3 suffix",
+			maxSize:       11,
+			wantPrefix:    "prefix",
+			wantRemaining: "v1.2.3 suffix",
+		},
+		{
+			name:          "CJK punctuation cluster",
+			content:       "12345678？！ tail",
+			maxSize:       9,
+			wantPrefix:    "12345678",
+			wantRemaining: "？！ tail",
+		},
+	}
+	lengthFunc := func(text string) (int, error) {
+		return utf8.RuneCountInString(text), nil
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prefix, remaining, err :=
+				splitTextAtNaturalBoundaryByLength(
+					tt.content,
+					tt.maxSize,
+					lengthFunc,
+				)
+			require.NoError(t, err)
+			require.Equal(t, tt.wantPrefix, prefix)
+			require.Equal(t, tt.wantRemaining, remaining)
+		})
+	}
+}
+
+func TestJoinWithOverlapByLengthUsesBoundedCandidates(t *testing.T) {
+	calls := 0
+	lengthFunc := func(text string) (int, error) {
+		calls++
+		return utf8.RuneCountInString(text), nil
+	}
+	previous := strings.Repeat("alpha beta gamma ", 250) +
+		"final sentence."
+
+	content, overlap, err := joinWithOverlapSeparatorByLength(
+		previous,
+		"next",
+		20,
+		30,
+		"\n\n",
+		false,
+		lengthFunc,
+	)
+
+	require.NoError(t, err)
+	require.Positive(t, overlap)
+	require.Contains(t, content, "\n\nnext")
+	require.LessOrEqual(t, utf8.RuneCountInString(content), 30)
+	require.Less(t, calls, 200,
+		"overlap selection should not tokenize every rune suffix")
+}
+
+func TestMeasureTextLengthRejectsNegativeLength(t *testing.T) {
+	_, err := measureTextLength(func(string) (int, error) {
+		return -1, nil
+	}, "content")
+
+	require.ErrorContains(t, err, "negative length")
+}
+
 // TestDefaultConstants tests the default constants
 func TestDefaultConstants(t *testing.T) {
 	assert.Equal(t, 1024, defaultChunkSize)
@@ -385,4 +508,12 @@ func boundaryOverlap(previous, current string, limit int) int {
 		}
 	}
 	return 0
+}
+
+func documentContents(documents []*document.Document) []string {
+	contents := make([]string, len(documents))
+	for i, doc := range documents {
+		contents[i] = doc.Content
+	}
+	return contents
 }

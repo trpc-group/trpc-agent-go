@@ -57,7 +57,16 @@ func New(opts ...reader.Option) reader.Reader {
 	}
 
 	// Build chunking strategy using the default builder for CSV
-	strategy := reader.BuildChunkingStrategy(config, buildDefaultChunkingStrategy)
+	strategy := reader.BuildChunkingStrategy(
+		config,
+		func(chunkSize, overlap int) chunking.Strategy {
+			return buildDefaultChunkingStrategyWithLength(
+				chunkSize,
+				overlap,
+				config.ChunkLengthFunc,
+			)
+		},
+	)
 
 	// Create reader from config
 	return &Reader{
@@ -71,12 +80,27 @@ func New(opts ...reader.Option) reader.Reader {
 // Newlines keep complete records together whenever one record fits the budget.
 // Oversized records are refined by natural text boundaries.
 func buildDefaultChunkingStrategy(chunkSize, overlap int) chunking.Strategy {
+	return buildDefaultChunkingStrategyWithLength(
+		chunkSize,
+		overlap,
+		nil,
+	)
+}
+
+func buildDefaultChunkingStrategyWithLength(
+	chunkSize int,
+	overlap int,
+	lengthFunc func(string) (int, error),
+) chunking.Strategy {
 	opts := []chunking.Option{chunking.WithPreserveLines()}
 	if chunkSize != 0 {
 		opts = append(opts, chunking.WithChunkSize(chunkSize))
 	}
 	if overlap != 0 {
 		opts = append(opts, chunking.WithOverlap(overlap))
+	}
+	if lengthFunc != nil {
+		opts = append(opts, chunking.WithLengthFunc(lengthFunc))
 	}
 	return chunking.NewFixedSizeChunking(opts...)
 }

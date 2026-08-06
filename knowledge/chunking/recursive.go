@@ -11,6 +11,7 @@
 package chunking
 
 import (
+	"fmt"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
@@ -23,19 +24,22 @@ type RecursiveChunking struct {
 	chunkSize  int
 	overlap    int
 	separators []string
+	lengthFunc func(string) (int, error)
 }
 
 // RecursiveOption represents a functional option for configuring RecursiveChunking.
 type RecursiveOption func(*RecursiveChunking)
 
-// WithRecursiveChunkSize sets the maximum size of each chunk in Unicode runes.
+// WithRecursiveChunkSize sets the maximum size of each chunk. The unit is
+// Unicode runes unless WithRecursiveLengthFunc is configured.
 func WithRecursiveChunkSize(size int) RecursiveOption {
 	return func(rc *RecursiveChunking) {
 		rc.chunkSize = size
 	}
 }
 
-// WithRecursiveOverlap sets the maximum number of Unicode runes to overlap between chunks.
+// WithRecursiveOverlap sets the maximum overlap between chunks. The unit is
+// Unicode runes unless WithRecursiveLengthFunc is configured.
 func WithRecursiveOverlap(overlap int) RecursiveOption {
 	return func(rc *RecursiveChunking) {
 		rc.overlap = overlap
@@ -46,6 +50,18 @@ func WithRecursiveOverlap(overlap int) RecursiveOption {
 func WithRecursiveSeparators(separators []string) RecursiveOption {
 	return func(rc *RecursiveChunking) {
 		rc.separators = separators
+	}
+}
+
+// WithRecursiveLengthFunc sets the function used to measure chunk size and
+// overlap. By default, RecursiveChunking measures Unicode runes. The function
+// must return a deterministic, non-negative length that broadly grows with its
+// input. Local non-monotonic behavior from tokenizers is supported.
+func WithRecursiveLengthFunc(
+	lengthFunc func(string) (int, error),
+) RecursiveOption {
+	return func(rc *RecursiveChunking) {
+		rc.lengthFunc = lengthFunc
 	}
 }
 
@@ -86,6 +102,9 @@ func (r *RecursiveChunking) Chunk(doc *document.Document) ([]*document.Document,
 	}
 
 	content := cleanText(doc.Content)
+	if r.lengthFunc != nil {
+		return r.chunkByLength(doc, content)
+	}
 	coreSize := r.chunkSize
 	if r.overlap > 0 {
 		coreSize = r.chunkSize - r.overlap
@@ -102,6 +121,288 @@ func (r *RecursiveChunking) Chunk(doc *document.Document) ([]*document.Document,
 		chunks = r.applyOverlap(content, chunks)
 	}
 	return chunks, nil
+}
+
+func (r *RecursiveChunking) chunkByLength(
+	doc *document.Document,
+	content string,
+) ([]*document.Document, error) {
+	coreSize := r.chunkSize
+	if r.overlap > 0 {
+		coreSize = r.chunkSize - r.overlap
+	}
+	fragments, err := r.recursiveSplitByLength(
+		content,
+		r.separators,
+		coreSize,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("recursive chunking: %w", err)
+	}
+	textChunks, err := r.mergeFragmentsByLength(
+		fragments,
+		r.chunkSize,
+		coreSize,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("recursive chunking: %w", err)
+	}
+	chunks := make([]*document.Document, 0, len(textChunks))
+	for i, chunkText := range textChunks {
+		chunks = append(chunks, createChunk(doc, chunkText, i+1))
+	}
+	if r.overlap > 0 {
+		chunks, err = r.applyOverlapByLength(content, chunks)
+		if err != nil {
+			return nil, fmt.Errorf("recursive chunking: %w", err)
+		}
+	}
+	for i, chunk := range chunks {
+		size, err := measureTextLength(r.lengthFunc, chunk.Content)
+		if err != nil {
+			return nil, fmt.Errorf("recursive chunking: %w", err)
+		}
+		if size > r.chunkSize {
+			return nil, fmt.Errorf(
+				"recursive chunking: final chunk %d has length %d, exceeds chunk size %d",
+				i+1,
+				size,
+				r.chunkSize,
+			)
+		}
+	}
+	return chunks, nil
+}
+
+func (r *RecursiveChunking) recursiveSplitByLength(
+	text string,
+	separators []string,
+	maxSize int,
+) ([]string, error) {
+	textSize, err := measureTextLength(r.lengthFunc, text)
+	if err != nil {
+		return nil, err
+	}
+	if textSize <= maxSize {
+		return []string{text}, nil
+	}
+	if len(separators) == 0 {
+		return []string{text}, nil
+	}
+
+	separator := separators[0]
+	if separator == "" {
+		return []string{text}, nil
+	}
+	if !strings.Contains(text, separator) {
+		return r.recursiveSplitByLength(
+			text,
+			separators[1:],
+			maxSize,
+		)
+	}
+
+	splits := strings.SplitAfter(text, separator)
+	separatorRunes := []rune(separator)
+	if len(separatorRunes) == 1 &&
+		isSentencePunctuation(separatorRunes[0]) {
+		lastNonEmpty := -1
+		for i := range splits {
+			splitRunes := []rune(splits[i])
+			clusterEnd := 0
+			for clusterEnd < len(splitRunes) &&
+				isSentencePunctuation(splitRunes[clusterEnd]) {
+				clusterEnd++
+			}
+			if lastNonEmpty >= 0 && clusterEnd > 0 {
+				splits[lastNonEmpty] += string(splitRunes[:clusterEnd])
+				splits[i] = string(splitRunes[clusterEnd:])
+			}
+			if splits[i] != "" {
+				lastNonEmpty = i
+			}
+		}
+	}
+
+	var fragments []string
+	for _, split := range splits {
+		if split == "" {
+			continue
+		}
+		splitSize, err := measureTextLength(r.lengthFunc, split)
+		if err != nil {
+			return nil, err
+		}
+		if splitSize <= maxSize {
+			fragments = append(fragments, split)
+			continue
+		}
+		refined, err := r.recursiveSplitByLength(
+			split,
+			separators[1:],
+			maxSize,
+		)
+		if err != nil {
+			return nil, err
+		}
+		fragments = append(fragments, refined...)
+	}
+	return fragments, nil
+}
+
+func (r *RecursiveChunking) mergeFragmentsByLength(
+	fragments []string,
+	firstChunkSize int,
+	nextChunkSize int,
+) ([]string, error) {
+	var chunks []string
+	var current string
+
+	flush := func() {
+		content := strings.TrimSpace(current)
+		if content != "" {
+			chunks = append(chunks, content)
+		}
+		current = ""
+	}
+
+	for _, fragment := range fragments {
+		remaining := fragment
+		for remaining != "" {
+			chunkSize := nextChunkSize
+			if len(chunks) == 0 {
+				chunkSize = firstChunkSize
+			}
+			candidate := current + remaining
+			candidateSize, err := measureTextLength(
+				r.lengthFunc,
+				candidate,
+			)
+			if err != nil {
+				return nil, err
+			}
+			if candidateSize <= chunkSize {
+				current = candidate
+				break
+			}
+
+			remainingSize, err := measureTextLength(
+				r.lengthFunc,
+				remaining,
+			)
+			if err != nil {
+				return nil, err
+			}
+			if current != "" && remainingSize <= nextChunkSize {
+				flush()
+				continue
+			}
+
+			lengthFunc := r.lengthFunc
+			if current != "" {
+				currentContent := current
+				firstRune := string([]rune(remaining)[:1])
+				firstSize, err := measureTextLength(
+					r.lengthFunc,
+					currentContent+firstRune,
+				)
+				if err != nil {
+					return nil, err
+				}
+				if firstSize > chunkSize {
+					flush()
+					continue
+				}
+				lengthFunc = func(text string) (int, error) {
+					return measureTextLength(
+						r.lengthFunc,
+						currentContent+text,
+					)
+				}
+			}
+
+			var prefix, rest string
+			if current == "" {
+				prefix, rest, err = splitTextWithBalancedTailByLength(
+					remaining,
+					chunkSize,
+					lengthFunc,
+				)
+			} else {
+				prefix, rest, err = splitTextAtNaturalBoundaryByLength(
+					remaining,
+					chunkSize,
+					lengthFunc,
+				)
+			}
+			if err != nil {
+				return nil, err
+			}
+			if prefix == "" {
+				return nil, fmt.Errorf(
+					"unable to split recursive fragment within chunk size %d",
+					chunkSize,
+				)
+			}
+			current += prefix
+			remaining = rest
+			if remaining != "" {
+				flush()
+			}
+		}
+	}
+	flush()
+	return chunks, nil
+}
+
+func (r *RecursiveChunking) applyOverlapByLength(
+	content string,
+	chunks []*document.Document,
+) ([]*document.Document, error) {
+	if len(chunks) <= 1 {
+		return chunks, nil
+	}
+	rawContents := make([]string, len(chunks))
+	for i, chunk := range chunks {
+		rawContents[i] = chunk.Content
+	}
+	separators := sourceChunkSeparators(content, rawContents, " ")
+	overlappedChunks := []*document.Document{chunks[0]}
+	for i := 1; i < len(chunks); i++ {
+		metadata := make(map[string]any)
+		for key, value := range chunks[i].Metadata {
+			metadata[key] = value
+		}
+		overlappedContent, actualOverlap, err :=
+			joinWithOverlapSeparatorByLength(
+				overlappedChunks[len(overlappedChunks)-1].Content,
+				chunks[i].Content,
+				r.overlap,
+				r.chunkSize,
+				separators[i],
+				false,
+				r.lengthFunc,
+			)
+		if err != nil {
+			return nil, err
+		}
+		if actualOverlap > 0 {
+			metadata[source.MetaOverlappedContentSize] =
+				encoding.RuneCount(overlappedContent)
+		}
+		overlappedChunks = append(
+			overlappedChunks,
+			&document.Document{
+				ID:        chunks[i].ID,
+				Name:      chunks[i].Name,
+				Content:   overlappedContent,
+				Metadata:  metadata,
+				CreatedAt: chunks[i].CreatedAt,
+				UpdatedAt: chunks[i].UpdatedAt,
+			},
+		)
+	}
+	return overlappedChunks, nil
 }
 
 // recursiveSplit is the core recursive function that splits text using separator hierarchy.

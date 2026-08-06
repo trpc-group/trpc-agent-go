@@ -12,6 +12,7 @@ package chunking
 
 import (
 	"bytes"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -37,25 +38,40 @@ func (c *chunkCounter) Count() int {
 
 // MarkdownChunking implements a chunking strategy optimized for markdown documents.
 type MarkdownChunking struct {
-	chunkSize int
-	overlap   int
-	md        goldmark.Markdown
+	chunkSize  int
+	overlap    int
+	md         goldmark.Markdown
+	lengthFunc func(string) (int, error)
 }
 
 // MarkdownOption represents a functional option for configuring MarkdownChunking.
 type MarkdownOption func(*MarkdownChunking)
 
-// WithMarkdownChunkSize sets the maximum size of each chunk in Unicode runes.
+// WithMarkdownChunkSize sets the maximum size of each chunk. The unit is
+// Unicode runes unless WithMarkdownLengthFunc is configured.
 func WithMarkdownChunkSize(size int) MarkdownOption {
 	return func(mc *MarkdownChunking) {
 		mc.chunkSize = size
 	}
 }
 
-// WithMarkdownOverlap sets the maximum number of Unicode runes to overlap between chunks.
+// WithMarkdownOverlap sets the maximum overlap between chunks. The unit is
+// Unicode runes unless WithMarkdownLengthFunc is configured.
 func WithMarkdownOverlap(overlap int) MarkdownOption {
 	return func(mc *MarkdownChunking) {
 		mc.overlap = overlap
+	}
+}
+
+// WithMarkdownLengthFunc sets the function used to measure chunk size and
+// overlap. By default, MarkdownChunking measures Unicode runes. The function
+// must return a deterministic, non-negative length that broadly grows with its
+// input. Local non-monotonic behavior from tokenizers is supported.
+func WithMarkdownLengthFunc(
+	lengthFunc func(string) (int, error),
+) MarkdownOption {
+	return func(mc *MarkdownChunking) {
+		mc.lengthFunc = lengthFunc
 	}
 }
 
@@ -89,14 +105,24 @@ func (m *MarkdownChunking) Chunk(doc *document.Document) ([]*document.Document, 
 	content := cleanText(doc.Content)
 
 	// If content is small enough, return as single chunk.
-	if encoding.RuneCount(content) <= m.chunkSize {
+	contentSize, err := measureTextLength(m.lengthFunc, content)
+	if err != nil {
+		return nil, fmt.Errorf("markdown chunking: %w", err)
+	}
+	if contentSize <= m.chunkSize {
 		chunk := m.createMarkdownChunk(doc, content, 1)
 		return []*document.Document{chunk}, nil
 	}
 
 	// Parse Markdown structure, then pack adjacent semantic units.
-	rawChunks := m.splitRecursively(content)
-	rawChunks = m.mergeAdjacentChunks(content, rawChunks)
+	rawChunks, err := m.splitRecursively(content)
+	if err != nil {
+		return nil, fmt.Errorf("markdown chunking: %w", err)
+	}
+	rawChunks, err = m.mergeAdjacentChunks(content, rawChunks)
+	if err != nil {
+		return nil, fmt.Errorf("markdown chunking: %w", err)
+	}
 	chunks := make([]*document.Document, len(rawChunks))
 	for i, chunk := range rawChunks {
 		chunks[i] = m.createMarkdownChunkWithPath(
@@ -109,7 +135,24 @@ func (m *MarkdownChunking) Chunk(doc *document.Document) ([]*document.Document, 
 
 	// Apply overlap if specified.
 	if m.overlap > 0 {
-		chunks = m.applyOverlap(content, chunks)
+		chunks, err = m.applyOverlap(content, chunks)
+		if err != nil {
+			return nil, fmt.Errorf("markdown chunking: %w", err)
+		}
+	}
+	for i, chunk := range chunks {
+		size, err := measureTextLength(m.lengthFunc, chunk.Content)
+		if err != nil {
+			return nil, fmt.Errorf("markdown chunking: %w", err)
+		}
+		if size > m.chunkSize {
+			return nil, fmt.Errorf(
+				"markdown chunking: final chunk %d has length %d, exceeds chunk size %d",
+				i+1,
+				size,
+				m.chunkSize,
+			)
+		}
 	}
 
 	return chunks, nil
@@ -132,7 +175,9 @@ type markdownChunk struct {
 
 // splitRecursively splits content by headers recursively (similar to LangChain).
 // It tries to split by headers from level 1 to 6, then by double newlines, then by fixed size.
-func (m *MarkdownChunking) splitRecursively(content string) []markdownChunk {
+func (m *MarkdownChunking) splitRecursively(
+	content string,
+) ([]markdownChunk, error) {
 	counter := new(chunkCounter)
 	return m.splitRecursivelyWithPath(content, nil, counter, 1)
 }
@@ -143,16 +188,19 @@ func (m *MarkdownChunking) splitRecursivelyWithPath(
 	headerPath []string,
 	counter *chunkCounter,
 	startHeaderLevel int,
-) []markdownChunk {
+) ([]markdownChunk, error) {
 	var chunks []markdownChunk
 
-	contentSize := encoding.RuneCount(content)
+	contentSize, err := measureTextLength(m.lengthFunc, content)
+	if err != nil {
+		return nil, err
+	}
 	chunkSize := m.nextChunkSize(counter)
 
 	// Base case: content fits in one chunk
 	if contentSize <= chunkSize {
 		counter.Advance()
-		return []markdownChunk{newMarkdownChunk(content, headerPath)}
+		return []markdownChunk{newMarkdownChunk(content, headerPath)}, nil
 	}
 
 	// Try splitting by headers from the next unprocessed level to level 6.
@@ -181,7 +229,13 @@ func (m *MarkdownChunking) splitRecursivelyWithPath(
 					fullContent = sectionContent
 				}
 
-				sectionSize := encoding.RuneCount(fullContent)
+				sectionSize, err := measureTextLength(
+					m.lengthFunc,
+					fullContent,
+				)
+				if err != nil {
+					return nil, err
+				}
 				chunkSize = m.nextChunkSize(counter)
 
 				// Build new header path
@@ -199,16 +253,19 @@ func (m *MarkdownChunking) splitRecursivelyWithPath(
 					chunks = append(chunks, newMarkdownChunk(fullContent, newPath))
 				} else {
 					// Section is too large, split recursively
-					subChunks := m.splitRecursivelyWithPath(
+					subChunks, err := m.splitRecursivelyWithPath(
 						fullContent,
 						newPath,
 						counter,
 						level+1,
 					)
+					if err != nil {
+						return nil, err
+					}
 					chunks = append(chunks, subChunks...)
 				}
 			}
-			return chunks
+			return chunks, nil
 		}
 	}
 
@@ -217,27 +274,63 @@ func (m *MarkdownChunking) splitRecursivelyWithPath(
 	// create unrelated, undersized chunks.
 	paragraphs := splitMarkdownParagraphs(content)
 	if len(paragraphs) > 1 {
-		chunks = m.mergeSmallParagraphsWithPath(
+		chunks, err = m.mergeSmallParagraphsWithPath(
 			paragraphs,
 			headerPath,
 			counter,
 		)
+		if err != nil {
+			return nil, err
+		}
 		if len(chunks) > 0 {
-			return chunks
+			return chunks, nil
 		}
 	}
 
-	// Still too large, split at the best available text boundary. Balance the
-	// final pair instead of leaving a tiny hard-split tail.
+	return m.splitRemainingTextWithPath(
+		content,
+		headerPath,
+		counter,
+	)
+}
+
+// splitRemainingTextWithPath splits content at the best available text
+// boundary after structural Markdown splitters have been exhausted.
+func (m *MarkdownChunking) splitRemainingTextWithPath(
+	content string,
+	headerPath []string,
+	counter *chunkCounter,
+) ([]markdownChunk, error) {
+	var chunks []markdownChunk
 	remainingText := content
 	for remainingText != "" {
-		chunkSize = m.nextChunkSize(counter)
-		chunkText, rest := splitTextWithBalancedTail(
-			remainingText,
-			chunkSize,
-			splitMarkdownText,
-		)
+		chunkSize := m.nextChunkSize(counter)
+		var chunkText, rest string
+		var err error
+		if m.lengthFunc == nil {
+			chunkText, rest = splitTextWithBalancedTail(
+				remainingText,
+				chunkSize,
+				splitMarkdownText,
+			)
+		} else {
+			chunkText, rest, err =
+				splitTextWithBalancedTailByLength(
+					remainingText,
+					chunkSize,
+					m.lengthFunc,
+				)
+			if err != nil {
+				return nil, err
+			}
+		}
 		if strings.TrimSpace(chunkText) == "" {
+			if m.lengthFunc != nil {
+				return nil, fmt.Errorf(
+					"unable to split markdown within chunk size %d",
+					chunkSize,
+				)
+			}
 			textChunks := encoding.SafeSplitBySize(remainingText, chunkSize)
 			chunkText = textChunks[0]
 			rest = remainingText[len(chunkText):]
@@ -247,7 +340,7 @@ func (m *MarkdownChunking) splitRecursivelyWithPath(
 		remainingText = rest
 	}
 
-	return chunks
+	return chunks, nil
 }
 
 // splitByHeader splits content by a specific header level.
@@ -710,7 +803,14 @@ func (m *MarkdownChunking) mergeSmallParagraphsWithPath(
 	paragraphs []string,
 	headerPath []string,
 	counter *chunkCounter,
-) []markdownChunk {
+) ([]markdownChunk, error) {
+	if m.lengthFunc != nil {
+		return m.mergeSmallParagraphsWithPathByLength(
+			paragraphs,
+			headerPath,
+			counter,
+		)
+	}
 	var chunks []markdownChunk
 	var currentChunk strings.Builder
 
@@ -774,7 +874,106 @@ func (m *MarkdownChunking) mergeSmallParagraphsWithPath(
 		}
 	}
 	flush()
-	return chunks
+	return chunks, nil
+}
+
+func (m *MarkdownChunking) mergeSmallParagraphsWithPathByLength(
+	paragraphs []string,
+	headerPath []string,
+	counter *chunkCounter,
+) ([]markdownChunk, error) {
+	var chunks []markdownChunk
+	var currentChunk string
+
+	flush := func() {
+		if currentChunk == "" {
+			return
+		}
+		counter.Advance()
+		chunks = append(chunks, newMarkdownChunk(currentChunk, headerPath))
+		currentChunk = ""
+	}
+
+	for _, paragraph := range paragraphs {
+		remainingText := strings.TrimSpace(paragraph)
+		for remainingText != "" {
+			chunkSize := m.nextChunkSize(counter)
+			candidate := remainingText
+			if currentChunk != "" {
+				candidate = currentChunk + "\n\n" + remainingText
+			}
+			candidateSize, err := measureTextLength(
+				m.lengthFunc,
+				candidate,
+			)
+			if err != nil {
+				return nil, err
+			}
+			if candidateSize <= chunkSize {
+				currentChunk = candidate
+				break
+			}
+
+			if currentChunk != "" {
+				if isMarkdownHeading(currentChunk) {
+					current := currentChunk
+					firstRune := string([]rune(remainingText)[:1])
+					incrementalLength := func(
+						text string,
+					) (int, error) {
+						return measureTextLength(
+							m.lengthFunc,
+							current+"\n\n"+text,
+						)
+					}
+					firstSize, err := incrementalLength(firstRune)
+					if err != nil {
+						return nil, err
+					}
+					if firstSize <= chunkSize {
+						prefix, rest, err :=
+							splitTextAtNaturalBoundaryByLength(
+								remainingText,
+								chunkSize,
+								incrementalLength,
+							)
+						if err != nil {
+							return nil, err
+						}
+						if prefix != "" {
+							currentChunk += "\n\n" + prefix
+							remainingText = rest
+						}
+					}
+				}
+				flush()
+				continue
+			}
+
+			prefix, rest, err :=
+				splitTextWithBalancedTailByLength(
+					remainingText,
+					chunkSize,
+					m.lengthFunc,
+				)
+			if err != nil {
+				return nil, err
+			}
+			if prefix == "" {
+				return nil, fmt.Errorf(
+					"unable to split markdown paragraph within chunk size %d",
+					chunkSize,
+				)
+			}
+			currentChunk = prefix
+			remainingText = rest
+			if remainingText != "" {
+				flush()
+			}
+		}
+	}
+	flush()
+	return chunks, nil
 }
 
 func (m *MarkdownChunking) nextChunkSize(counter *chunkCounter) int {
@@ -825,9 +1024,9 @@ func newMarkdownChunk(content string, headerPath []string) markdownChunk {
 func (m *MarkdownChunking) mergeAdjacentChunks(
 	content string,
 	chunks []markdownChunk,
-) []markdownChunk {
+) ([]markdownChunk, error) {
 	if len(chunks) <= 1 {
-		return chunks
+		return chunks, nil
 	}
 
 	rawContents := make([]string, len(chunks))
@@ -841,7 +1040,7 @@ func (m *MarkdownChunking) mergeAdjacentChunks(
 
 	groups := make([][]markdownChunk, 0, len(chunks))
 	currentGroup := []markdownChunk{chunks[0]}
-	currentSize := encoding.RuneCount(chunks[0].content)
+	currentContent := chunks[0].content
 
 	for i := 1; i < len(chunks); i++ {
 		nextChunk := chunks[i]
@@ -857,30 +1056,40 @@ func (m *MarkdownChunking) mergeAdjacentChunks(
 			!markdownChunksOnlyHeadings(currentGroup) {
 			groups = append(groups, currentGroup)
 			currentGroup = []markdownChunk{nextChunk}
-			currentSize = encoding.RuneCount(nextChunk.content)
+			currentContent = nextChunk.content
 			continue
 		}
 
-		nextSize := encoding.RuneCount(nextChunk.separator) +
-			encoding.RuneCount(nextChunk.content)
-		if currentSize+nextSize <= limit {
+		candidateContent := currentContent + nextChunk.separator +
+			nextChunk.content
+		candidateSize, err := measureTextLength(
+			m.lengthFunc,
+			candidateContent,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if candidateSize <= limit {
 			currentGroup = append(currentGroup, nextChunk)
-			currentSize += nextSize
+			currentContent = candidateContent
 			continue
 		}
 
 		groups = append(groups, currentGroup)
 		currentGroup = []markdownChunk{nextChunk}
-		currentSize = encoding.RuneCount(nextChunk.content)
+		currentContent = nextChunk.content
 	}
 	groups = append(groups, currentGroup)
-	groups = m.rebalanceMarkdownTail(groups)
+	groups, err := m.rebalanceMarkdownTail(groups)
+	if err != nil {
+		return nil, err
+	}
 
 	mergedChunks := make([]markdownChunk, len(groups))
 	for i, group := range groups {
 		mergedChunks[i] = mergeMarkdownChunkGroup(group)
 	}
-	return mergedChunks
+	return mergedChunks, nil
 }
 
 func markdownChunksOnlyHeadings(chunks []markdownChunk) bool {
@@ -897,9 +1106,9 @@ func markdownChunksOnlyHeadings(chunks []markdownChunk) bool {
 
 func (m *MarkdownChunking) rebalanceMarkdownTail(
 	groups [][]markdownChunk,
-) [][]markdownChunk {
+) ([][]markdownChunk, error) {
 	if len(groups) < 2 {
-		return groups
+		return groups, nil
 	}
 
 	leftIndex := len(groups) - 2
@@ -907,12 +1116,18 @@ func (m *MarkdownChunking) rebalanceMarkdownTail(
 	left := groups[leftIndex]
 	right := groups[rightIndex]
 	if markdownChunksOnlyHeadings(right) {
-		return groups
+		return groups, nil
 	}
 
 	rightLimit := m.chunkSize - m.overlap
-	leftSize := markdownChunkGroupSize(left)
-	rightSize := markdownChunkGroupSize(right)
+	leftSize, err := m.markdownChunkGroupSize(left)
+	if err != nil {
+		return nil, err
+	}
+	rightSize, err := m.markdownChunkGroupSize(right)
+	if err != nil {
+		return nil, err
+	}
 	for len(left) > 1 {
 		nextLeft := left[:len(left)-1]
 		moved := left[len(left)-1]
@@ -920,8 +1135,14 @@ func (m *MarkdownChunking) rebalanceMarkdownTail(
 		nextRight = append(nextRight, moved)
 		nextRight = append(nextRight, right...)
 
-		nextLeftSize := markdownChunkGroupSize(nextLeft)
-		nextRightSize := markdownChunkGroupSize(nextRight)
+		nextLeftSize, err := m.markdownChunkGroupSize(nextLeft)
+		if err != nil {
+			return nil, err
+		}
+		nextRightSize, err := m.markdownChunkGroupSize(nextRight)
+		if err != nil {
+			return nil, err
+		}
 		if nextRightSize > rightLimit ||
 			absInt(nextLeftSize-nextRightSize) >=
 				absInt(leftSize-rightSize) {
@@ -935,19 +1156,19 @@ func (m *MarkdownChunking) rebalanceMarkdownTail(
 	}
 	groups[leftIndex] = left
 	groups[rightIndex] = right
-	return groups
+	return groups, nil
 }
 
-func markdownChunkGroupSize(chunks []markdownChunk) int {
+func (m *MarkdownChunking) markdownChunkGroupSize(
+	chunks []markdownChunk,
+) (int, error) {
 	if len(chunks) == 0 {
-		return 0
+		return 0, nil
 	}
-	size := encoding.RuneCount(chunks[0].content)
-	for i := 1; i < len(chunks); i++ {
-		size += encoding.RuneCount(chunks[i].separator)
-		size += encoding.RuneCount(chunks[i].content)
-	}
-	return size
+	return measureTextLength(
+		m.lengthFunc,
+		mergeMarkdownChunkGroup(chunks).content,
+	)
 }
 
 func mergeMarkdownChunkGroup(chunks []markdownChunk) markdownChunk {
@@ -1041,9 +1262,9 @@ func (m *MarkdownChunking) createMarkdownChunkWithPath(
 func (m *MarkdownChunking) applyOverlap(
 	content string,
 	chunks []*document.Document,
-) []*document.Document {
+) ([]*document.Document, error) {
 	if len(chunks) <= 1 {
-		return chunks
+		return chunks, nil
 	}
 
 	rawContents := make([]string, len(chunks))
@@ -1060,13 +1281,32 @@ func (m *MarkdownChunking) applyOverlap(
 			metadata[k] = v
 		}
 
-		overlappedContent, actualOverlap := joinWithOverlap(
-			overlappedChunks[len(overlappedChunks)-1].Content,
-			chunks[i].Content,
-			m.overlap,
-			m.chunkSize,
-			separators[i],
-		)
+		var overlappedContent string
+		var actualOverlap int
+		if m.lengthFunc == nil {
+			overlappedContent, actualOverlap = joinWithOverlap(
+				overlappedChunks[len(overlappedChunks)-1].Content,
+				chunks[i].Content,
+				m.overlap,
+				m.chunkSize,
+				separators[i],
+			)
+		} else {
+			var err error
+			overlappedContent, actualOverlap, err =
+				joinWithOverlapSeparatorByLength(
+					overlappedChunks[len(overlappedChunks)-1].Content,
+					chunks[i].Content,
+					m.overlap,
+					m.chunkSize,
+					separators[i],
+					false,
+					m.lengthFunc,
+				)
+			if err != nil {
+				return nil, err
+			}
+		}
 		if actualOverlap > 0 {
 			metadata[source.MetaOverlappedContentSize] = encoding.RuneCount(overlappedContent)
 		}
@@ -1081,5 +1321,5 @@ func (m *MarkdownChunking) applyOverlap(
 		}
 		overlappedChunks = append(overlappedChunks, overlappedChunk)
 	}
-	return overlappedChunks
+	return overlappedChunks, nil
 }

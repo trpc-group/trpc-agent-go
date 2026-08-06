@@ -246,9 +246,9 @@ Reader，让它注册到 Reader registry。
 
 | 参数 | 默认值 | 说明 |
 |-----|-------|------|
-| ChunkSize | 1024 | FixedSizeChunking、RecursiveChunking、MarkdownChunking 的最大 Unicode rune 数 |
+| ChunkSize | 1024 | FixedSizeChunking、RecursiveChunking、MarkdownChunking 的最大 Unicode rune 数；配置长度函数后使用该函数的计量单位 |
 | JSON ChunkSize | 2000 | JSONChunking 序列化后的最大字节数 |
-| Overlap | 0 | 相邻分块之间的最大 Unicode rune 数 |
+| Overlap | 0 | 相邻分块之间的最大 Unicode rune 数；配置长度函数后使用该函数的计量单位 |
 
 > `overlap` 仅对 FixedSizeChunking、RecursiveChunking、MarkdownChunking 生效。它表示上限：策略可以把 overlap 起点移动到自然边界，也可以缩小实际 overlap，以保证最终分块不超过 `chunkSize`。较大的 overlap 会压缩新正文的空间，因此产生更多 chunk。JSONChunking 不支持 overlap。
 
@@ -281,11 +281,42 @@ fileSrc := filesource.New(
 )
 ```
 
+### 按 Token 限制分块预算
+
+FixedSizeChunking、RecursiveChunking 和 MarkdownChunking 支持使用自定义长度函数代替 Unicode rune 计数。推荐在 Source 上配置，这样 Reader 仍会根据文档格式选择默认策略。例如 Markdown 文件仍使用 MarkdownChunking，并保留标题路径：
+
+```go
+import (
+    tiktoken "trpc.group/trpc-go/trpc-agent-go/model/tiktoken"
+    filesource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
+)
+
+counter, err := tiktoken.New("text-embedding-3-small")
+if err != nil {
+    return err
+}
+
+fileSrc := filesource.New(
+    []string{"./data/document.md"},
+    filesource.WithChunkSize(512),             // 最大 token 数
+    filesource.WithChunkOverlap(64),           // 最大重叠 token 数
+    filesource.WithChunkLengthFunc(counter.CountText),
+)
+```
+
+DirSource、URLSource、AutoSource 和 Reader 也提供 `WithChunkLengthFunc`。文本策略会对包含分隔符和 overlap 的完整候选内容重新计数，确保 chunker 输出的每个 `Document.Content` 不超过预算。长度函数可能被重复、并发调用，因此应在本地执行、结果确定、并发安全、无副作用，并返回随输入文本整体增长的非负值。实现支持 BPE tokenizer 局部不单调的情况，但不适用于不具备文本长度计量语义的任意函数；函数返回的错误会由 `Chunk` 向上传递。
+
+应选择与 embedding 模型匹配的 tokenizer，并为后续处理预留余量。Reader postprocessor 可以继续修改 `Document.Content`，knowledge service 构造 `EmbeddingText` 时也可能添加 file、chunk、section metadata；这些后续内容不属于 chunking 预算的保证范围。
+
+为保持向后兼容，`MetaChunkSize` 和 `MetaOverlappedContentSize` 仍记录 Unicode rune 数，不会切换为 token 数。
+
+这个 option 会作用于 Reader 默认选择的 FixedSizeChunking 和 MarkdownChunking。JSONChunking 仍按序列化字节数限制，基于 AST 的代码 Reader 也保持原有结构化分块语义。自定义策略会覆盖 Source 的 size、overlap 和长度函数配置；需要分别使用 `WithLengthFunc`、`WithRecursiveLengthFunc` 或 `WithMarkdownLengthFunc` 在策略内部配置。
+
 ### 自定义分块策略
 
 使用 `WithCustomChunkingStrategy` 可覆盖默认分块策略。
 
-> **注意**：自定义分块策略会完全覆盖 `WithChunkSize` 和 `WithChunkOverlap` 的配置，分块参数需在自定义策略内部设置。
+> **注意**：自定义分块策略会完全覆盖 `WithChunkSize`、`WithChunkOverlap` 和 `WithChunkLengthFunc` 的配置，分块参数需在自定义策略内部设置。
 
 #### FixedSizeChunking - 固定大小分块
 

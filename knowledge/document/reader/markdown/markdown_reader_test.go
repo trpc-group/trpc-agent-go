@@ -16,9 +16,11 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
 )
 
@@ -110,6 +112,49 @@ func TestMarkdownReader_WithTransformers(t *testing.T) {
 	// Expect "# TitleContent" because newline is removed
 	if docs[0].Content != "# TitleContent" {
 		t.Errorf("expected '# TitleContent', got '%s'", docs[0].Content)
+	}
+}
+
+func TestMarkdownReader_WithChunkLengthFunc(t *testing.T) {
+	lengthFunc := func(text string) (int, error) {
+		return 2 * utf8.RuneCountInString(text), nil
+	}
+	const chunkSize = 60
+	rdr := New(
+		reader.WithChunkSize(chunkSize),
+		reader.WithChunkOverlap(10),
+		reader.WithChunkLengthFunc(lengthFunc),
+	)
+	content := "# Root\n\n## Section\n\n" +
+		strings.Repeat("Token-aware markdown content. ", 12)
+
+	docs, err := rdr.ReadFromReader(
+		"token-aware.md",
+		strings.NewReader(content),
+	)
+
+	if err != nil {
+		t.Fatalf("ReadFromReader() error = %v", err)
+	}
+	if len(docs) <= 1 {
+		t.Fatalf("ReadFromReader() returned %d document, want multiple", len(docs))
+	}
+	foundPath := false
+	for i, doc := range docs {
+		size, err := lengthFunc(doc.Content)
+		if err != nil {
+			t.Fatalf("lengthFunc() error = %v", err)
+		}
+		if size > chunkSize {
+			t.Fatalf("document %d size = %d, exceeds %d", i, size, chunkSize)
+		}
+		if doc.Metadata[source.MetaMarkdownHeaderPath] ==
+			"Root > Section" {
+			foundPath = true
+		}
+	}
+	if !foundPath {
+		t.Fatal("Markdown header path was not preserved")
 	}
 }
 

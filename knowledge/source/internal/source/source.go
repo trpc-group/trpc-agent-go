@@ -37,6 +37,7 @@ var (
 type ReaderConfig struct {
 	chunkSize              int
 	chunkOverlap           int
+	chunkLengthFunc        func(string) (int, error)
 	customChunkingStrategy chunking.Strategy
 	ocrExtractor           ocr.Extractor
 	transformers           []transform.Transformer
@@ -56,6 +57,15 @@ func WithChunkSize(size int) ReaderOption {
 func WithChunkOverlap(overlap int) ReaderOption {
 	return func(c *ReaderConfig) {
 		c.chunkOverlap = overlap
+	}
+}
+
+// WithChunkLengthFunc sets the chunk length function for readers.
+func WithChunkLengthFunc(
+	lengthFunc func(string) (int, error),
+) ReaderOption {
+	return func(c *ReaderConfig) {
+		c.chunkLengthFunc = lengthFunc
 	}
 }
 
@@ -104,6 +114,12 @@ func buildReaderOptions(config *ReaderConfig) []reader.Option {
 	}
 	if config.chunkOverlap != 0 {
 		opts = append(opts, reader.WithChunkOverlap(config.chunkOverlap))
+	}
+	if config.chunkLengthFunc != nil {
+		opts = append(
+			opts,
+			reader.WithChunkLengthFunc(config.chunkLengthFunc),
+		)
 	}
 	if config.customChunkingStrategy != nil {
 		opts = append(opts, reader.WithCustomChunkingStrategy(config.customChunkingStrategy))
