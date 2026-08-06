@@ -761,6 +761,33 @@ func TestRunFinishesFailedTaskAfterCancellation(t *testing.T) {
 	})
 }
 
+func TestRunPersistsDeterministicFindingsBeforePlannerFailure(t *testing.T) {
+	outDir := t.TempDir()
+	dbPath := filepath.Join(outDir, "review_agent.db")
+	plannerErr := errors.New("planner unavailable")
+	_, err := Run(context.Background(), Options{
+		FixtureDir: filepath.Join("..", "..", "testdata", "fixtures"),
+		OutDir:     outDir,
+		DBPath:     dbPath,
+		Runtime:    "fake",
+		Now:        fixedTestTime(),
+		Planner: plannerFunc(func(context.Context, PlanRequest) (review.ReviewPlan, error) {
+			return review.ReviewPlan{}, plannerErr
+		}),
+	})
+	if !errors.Is(err, plannerErr) {
+		t.Fatalf("Run() error = %v, want planner error", err)
+	}
+	assertStoredTask(t, dbPath, fixedTestTime(), func(report store.TaskReport) {
+		if report.Task.Status != review.TaskStatusFailed {
+			t.Fatalf("stored task status = %q, want failed", report.Task.Status)
+		}
+		if len(report.Findings) == 0 {
+			t.Fatal("stored findings = 0, want deterministic findings preserved after planner failure")
+		}
+	})
+}
+
 func TestRunUsesSharedInjectedCompletionTimestamp(t *testing.T) {
 	outDir := t.TempDir()
 	startedAt := fixedTestTime()
@@ -1096,6 +1123,56 @@ func TestBuildReviewSnapshotExcludesGitIgnoredAndEnvironmentFiles(t *testing.T) 
 	}
 	if _, err := os.Stat(filepath.Join(containerFS.src, "review_report_fixture.json")); err != nil {
 		t.Fatalf("container staged snapshot missing tracked report fixture: %v", err)
+	}
+}
+
+func TestBuildReviewSnapshotExcludesConfiguredStoreAndOutputPaths(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	repo := t.TempDir()
+	runGitCommand(t, repo, "init")
+	if err := os.WriteFile(filepath.Join(repo, "tracked.go"), []byte("package tracked\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(tracked.go) error = %v", err)
+	}
+	runGitCommand(t, repo, "add", "tracked.go")
+	customDB := filepath.Join(repo, "review-state", "audit-store.data")
+	customOut := filepath.Join(repo, "review-output")
+	customReport := filepath.Join(customOut, "nested", "report.json")
+	if err := os.MkdirAll(filepath.Dir(customDB), 0o700); err != nil {
+		t.Fatalf("MkdirAll(custom db) error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(customReport), 0o700); err != nil {
+		t.Fatalf("MkdirAll(custom report) error = %v", err)
+	}
+	customStore, err := store.NewSQLite(context.Background(), customDB)
+	if err != nil {
+		t.Fatalf("NewSQLite(custom db) error = %v", err)
+	}
+	defer customStore.Close()
+	if err := os.WriteFile(customReport, []byte("private report\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(custom report) error = %v", err)
+	}
+	if _, err := os.Stat(customDB + ".lock"); err != nil {
+		t.Fatalf("custom store lock missing: %v", err)
+	}
+
+	exclusions, err := reviewSnapshotArtifactPaths(repo, customDB, customOut)
+	if err != nil {
+		t.Fatalf("reviewSnapshotArtifactPaths() error = %v", err)
+	}
+	snapshot, cleanup, err := buildReviewSnapshotWithSnapshotPathsAndExclusions(context.Background(), repo, nil, exclusions)
+	if err != nil {
+		t.Fatalf("buildReviewSnapshotWithSnapshotPathsAndExclusions() error = %v", err)
+	}
+	defer cleanup()
+	if _, err := os.Stat(filepath.Join(snapshot, "tracked.go")); err != nil {
+		t.Fatalf("snapshot missing tracked.go: %v", err)
+	}
+	for _, excluded := range []string{"review-state", "review-output"} {
+		if _, err := os.Stat(filepath.Join(snapshot, excluded)); !os.IsNotExist(err) {
+			t.Fatalf("configured artifact %s present in snapshot, stat err=%v", excluded, err)
+		}
 	}
 }
 

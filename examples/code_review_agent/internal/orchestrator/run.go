@@ -587,6 +587,10 @@ func Run(ctx context.Context, opts Options) (result Result, err error) {
 	if err := validateRemoteRuntimePolicy(opts.Runtime, opts.AllowTrustedRemote); err != nil {
 		return Result{}, failTask(err)
 	}
+	findings := rules.Evaluate(files)
+	if err := st.SaveFindings(ctx, task.ID, findings); err != nil {
+		return Result{}, failTask(err)
+	}
 
 	planner := opts.Planner
 	if planner == nil {
@@ -603,15 +607,14 @@ func Run(ctx context.Context, opts Options) (result Result, err error) {
 		return Result{}, failTask(err)
 	}
 
-	findings := rules.Evaluate(files)
-	if err := st.SaveFindings(ctx, task.ID, findings); err != nil {
-		return Result{}, failTask(err)
-	}
-
 	var decisions []review.PermissionDecisionRecord
 	var runs []review.SandboxRun
 	if sandboxValidationAvailable(input) {
-		decisions, runs, err = executePlannedCommandsWithSnapshotPaths(ctx, st, task.ID, opts.Runtime, opts.AllowTrustedLocal, opts.AllowTrustedHostPreparation, opts.AllowTrustedRemote, plan.Commands, now, opts.SandboxTimeout, input.WorkDir, snapshotUntrackedPaths(input, files))
+		snapshotExclusionPaths, exclusionErr := reviewSnapshotArtifactPaths(input.WorkDir, opts.DBPath, opts.OutDir)
+		if exclusionErr != nil {
+			return Result{}, failTask(fmt.Errorf("resolve review snapshot artifact paths: %w", exclusionErr))
+		}
+		decisions, runs, err = executePlannedCommandsWithSnapshotPathsAndExclusions(ctx, st, task.ID, opts.Runtime, opts.AllowTrustedLocal, opts.AllowTrustedHostPreparation, opts.AllowTrustedRemote, plan.Commands, now, opts.SandboxTimeout, input.WorkDir, snapshotUntrackedPaths(input, files), snapshotExclusionPaths)
 		if err != nil {
 			if persistErr := recordSandboxRuns(ctx, st, runs); persistErr != nil {
 				err = errors.Join(err, fmt.Errorf("record sandbox runs after execution failure: %w", persistErr))
@@ -792,8 +795,12 @@ func executePlannedCommands(ctx context.Context, st store.Store, taskID string, 
 }
 
 func executePlannedCommandsWithSnapshotPaths(ctx context.Context, st store.Store, taskID string, runtimeName string, allowTrustedLocal bool, allowTrustedHostPreparation bool, allowTrustedRemote bool, commands []string, now time.Time, timeout time.Duration, workDir string, snapshotPaths []string) ([]review.PermissionDecisionRecord, []review.SandboxRun, error) {
+	return executePlannedCommandsWithSnapshotPathsAndExclusions(ctx, st, taskID, runtimeName, allowTrustedLocal, allowTrustedHostPreparation, allowTrustedRemote, commands, now, timeout, workDir, snapshotPaths, nil)
+}
+
+func executePlannedCommandsWithSnapshotPathsAndExclusions(ctx context.Context, st store.Store, taskID string, runtimeName string, allowTrustedLocal bool, allowTrustedHostPreparation bool, allowTrustedRemote bool, commands []string, now time.Time, timeout time.Duration, workDir string, snapshotPaths []string, snapshotExclusionPaths []string) ([]review.PermissionDecisionRecord, []review.SandboxRun, error) {
 	factory := func(factoryCtx context.Context, name string, factoryTaskID string, suffix string, factoryTimeout time.Duration, factoryWorkDir string, trustedLocal bool, trustedHostPreparation bool) (sandboxrun.Runtime, func(), *review.SandboxRun) {
-		return runtimeForNameWithSnapshotPaths(factoryCtx, name, factoryTaskID, suffix, factoryTimeout, factoryWorkDir, trustedLocal, trustedHostPreparation, allowTrustedRemote, snapshotPaths)
+		return runtimeForNameWithSnapshotPathsAndExclusions(factoryCtx, name, factoryTaskID, suffix, factoryTimeout, factoryWorkDir, trustedLocal, trustedHostPreparation, allowTrustedRemote, snapshotPaths, snapshotExclusionPaths)
 	}
 	return executePlannedCommandsWithFactory(ctx, st, taskID, runtimeName, allowTrustedLocal, allowTrustedHostPreparation, commands, now, timeout, workDir, factory)
 }
@@ -927,6 +934,10 @@ func runtimeForName(ctx context.Context, name string, taskID string, suffix stri
 }
 
 func runtimeForNameWithSnapshotPaths(ctx context.Context, name string, taskID string, suffix string, timeout time.Duration, workDir string, allowTrustedLocal bool, allowTrustedHostPreparation bool, allowTrustedRemote bool, snapshotPaths []string) (sandboxrun.Runtime, func(), *review.SandboxRun) {
+	return runtimeForNameWithSnapshotPathsAndExclusions(ctx, name, taskID, suffix, timeout, workDir, allowTrustedLocal, allowTrustedHostPreparation, allowTrustedRemote, snapshotPaths, nil)
+}
+
+func runtimeForNameWithSnapshotPathsAndExclusions(ctx context.Context, name string, taskID string, suffix string, timeout time.Duration, workDir string, allowTrustedLocal bool, allowTrustedHostPreparation bool, allowTrustedRemote bool, snapshotPaths []string, snapshotExclusionPaths []string) (sandboxrun.Runtime, func(), *review.SandboxRun) {
 	normalized := strings.ToLower(strings.TrimSpace(name))
 	if normalized == "" {
 		normalized = "container"
@@ -934,7 +945,7 @@ func runtimeForNameWithSnapshotPaths(ctx context.Context, name string, taskID st
 	if normalized == "fake" {
 		return sandboxrun.FakeRuntime{RuntimeName: normalized}, nil, nil
 	}
-	rt, cleanup, err := newWorkspaceRuntimeWithSnapshotPaths(ctx, normalized, taskID, timeout, workDir, allowTrustedLocal, allowTrustedHostPreparation, allowTrustedRemote, snapshotPaths)
+	rt, cleanup, err := newWorkspaceRuntimeWithSnapshotPathsAndExclusions(ctx, normalized, taskID, timeout, workDir, allowTrustedLocal, allowTrustedHostPreparation, allowTrustedRemote, snapshotPaths, snapshotExclusionPaths)
 	if err != nil {
 		run := review.SandboxRun{
 			ID:             taskID + "-sandbox-init-" + suffix,
@@ -955,6 +966,10 @@ func newWorkspaceRuntime(ctx context.Context, runtimeName string, taskID string,
 }
 
 func newWorkspaceRuntimeWithSnapshotPaths(ctx context.Context, runtimeName string, taskID string, timeout time.Duration, workDir string, allowTrustedLocal bool, allowTrustedHostPreparation bool, allowTrustedRemote bool, snapshotPaths []string) (sandboxrun.Runtime, func(), error) {
+	return newWorkspaceRuntimeWithSnapshotPathsAndExclusions(ctx, runtimeName, taskID, timeout, workDir, allowTrustedLocal, allowTrustedHostPreparation, allowTrustedRemote, snapshotPaths, nil)
+}
+
+func newWorkspaceRuntimeWithSnapshotPathsAndExclusions(ctx context.Context, runtimeName string, taskID string, timeout time.Duration, workDir string, allowTrustedLocal bool, allowTrustedHostPreparation bool, allowTrustedRemote bool, snapshotPaths []string, snapshotExclusionPaths []string) (sandboxrun.Runtime, func(), error) {
 	workspace := newSandboxWorkspace(workDir)
 	repoRoot, err := workspace.root()
 	if err != nil {
@@ -1021,7 +1036,7 @@ func newWorkspaceRuntimeWithSnapshotPaths(ctx context.Context, runtimeName strin
 			snapshotCleanup()
 		}
 	})
-	snapshotCleanup, dependencyMode, err = stageReviewWorkspaceWithSnapshotPathsAndMode(ctx, eng.FS(), ws, runtimeName, repoRoot, workspace.dependencySubdir(), allowTrustedHostPreparation, snapshotPaths)
+	snapshotCleanup, dependencyMode, err = stageReviewWorkspaceWithSnapshotPathsAndModeAndExclusions(ctx, eng.FS(), ws, runtimeName, repoRoot, workspace.dependencySubdir(), allowTrustedHostPreparation, snapshotPaths, snapshotExclusionPaths)
 	if err != nil {
 		cleanup(context.Background())
 		return nil, nil, err
@@ -1102,15 +1117,19 @@ func stageReviewWorkspace(ctx context.Context, fs codeexecutor.WorkspaceFS, ws c
 }
 
 func stageReviewWorkspaceWithSnapshotPaths(ctx context.Context, fs codeexecutor.WorkspaceFS, ws codeexecutor.Workspace, runtimeName string, repoRoot string, dependencySubdir string, allowTrustedHostPreparation bool, snapshotPaths []string) (func(), error) {
-	cleanup, _, err := stageReviewWorkspaceWithSnapshotPathsAndMode(ctx, fs, ws, runtimeName, repoRoot, dependencySubdir, allowTrustedHostPreparation, snapshotPaths)
+	cleanup, _, err := stageReviewWorkspaceWithSnapshotPathsAndModeAndExclusions(ctx, fs, ws, runtimeName, repoRoot, dependencySubdir, allowTrustedHostPreparation, snapshotPaths, nil)
 	return cleanup, err
 }
 
 func stageReviewWorkspaceWithSnapshotPathsAndMode(ctx context.Context, fs codeexecutor.WorkspaceFS, ws codeexecutor.Workspace, runtimeName string, repoRoot string, dependencySubdir string, allowTrustedHostPreparation bool, snapshotPaths []string) (func(), sandboxDependencyMode, error) {
+	return stageReviewWorkspaceWithSnapshotPathsAndModeAndExclusions(ctx, fs, ws, runtimeName, repoRoot, dependencySubdir, allowTrustedHostPreparation, snapshotPaths, nil)
+}
+
+func stageReviewWorkspaceWithSnapshotPathsAndModeAndExclusions(ctx context.Context, fs codeexecutor.WorkspaceFS, ws codeexecutor.Workspace, runtimeName string, repoRoot string, dependencySubdir string, allowTrustedHostPreparation bool, snapshotPaths []string, snapshotExclusionPaths []string) (func(), sandboxDependencyMode, error) {
 	if runtimeName == "local" {
 		return nil, dependencyModeNone, nil
 	}
-	stageRoot, snapshotCleanup, err := buildReviewSnapshotWithSnapshotPaths(ctx, repoRoot, snapshotPaths)
+	stageRoot, snapshotCleanup, err := buildReviewSnapshotWithSnapshotPathsAndExclusions(ctx, repoRoot, snapshotPaths, snapshotExclusionPaths)
 	if err != nil {
 		return nil, dependencyModeNone, err
 	}
@@ -1159,6 +1178,14 @@ func buildReviewSnapshotWithSnapshotPaths(ctx context.Context, repoRoot string, 
 }
 
 func buildReviewSnapshotWithLimitsAndPaths(ctx context.Context, repoRoot string, maxBytes int64, maxFiles int, snapshotPaths []string) (string, func(), error) {
+	return buildReviewSnapshotWithLimitsAndPathsAndExclusions(ctx, repoRoot, maxBytes, maxFiles, snapshotPaths, nil)
+}
+
+func buildReviewSnapshotWithSnapshotPathsAndExclusions(ctx context.Context, repoRoot string, snapshotPaths []string, snapshotExclusionPaths []string) (string, func(), error) {
+	return buildReviewSnapshotWithLimitsAndPathsAndExclusions(ctx, repoRoot, reviewSnapshotMaxBytes, maxReviewSnapshotFiles, snapshotPaths, snapshotExclusionPaths)
+}
+
+func buildReviewSnapshotWithLimitsAndPathsAndExclusions(ctx context.Context, repoRoot string, maxBytes int64, maxFiles int, snapshotPaths []string, snapshotExclusionPaths []string) (string, func(), error) {
 	files, err := trackedReviewFilesWithPaths(ctx, repoRoot, maxFiles, snapshotPaths)
 	if err != nil {
 		return "", nil, err
@@ -1174,7 +1201,7 @@ func buildReviewSnapshotWithLimitsAndPaths(ctx context.Context, repoRoot string,
 			cleanup()
 			return "", nil, fmt.Errorf("unsupported tracked git submodule %q", file.Path)
 		}
-		if excludedReviewSnapshotPath(file.Path) && (!file.Tracked || sensitiveReviewSnapshotPath(file.Path)) {
+		if configuredReviewSnapshotPath(file.Path, snapshotExclusionPaths) || (excludedReviewSnapshotPath(file.Path) && (!file.Tracked || sensitiveReviewSnapshotPath(file.Path))) {
 			continue
 		}
 		rel := filepath.FromSlash(file.Path)
@@ -1710,6 +1737,74 @@ func minInt(a int, b int) int {
 		return a
 	}
 	return b
+}
+
+func reviewSnapshotArtifactPaths(repoRoot string, dbPath string, outDir string) ([]string, error) {
+	if strings.TrimSpace(repoRoot) == "" {
+		return nil, nil
+	}
+	root, err := filepath.Abs(repoRoot)
+	if err != nil {
+		return nil, fmt.Errorf("resolve repository root %q: %w", repoRoot, err)
+	}
+	root = filepath.Clean(root)
+	paths := make([]string, 0, 2)
+	add := func(configured string) error {
+		if strings.TrimSpace(configured) == "" {
+			return nil
+		}
+		absolute, err := filepath.Abs(configured)
+		if err != nil {
+			return fmt.Errorf("resolve configured path %q: %w", configured, err)
+		}
+		relative, err := filepath.Rel(root, absolute)
+		if err != nil {
+			if rootVolume, pathVolume := filepath.VolumeName(root), filepath.VolumeName(absolute); rootVolume != "" && pathVolume != "" && !strings.EqualFold(rootVolume, pathVolume) {
+				return nil
+			}
+			return fmt.Errorf("relativize configured path %q: %w", configured, err)
+		}
+		relative = filepath.Clean(relative)
+		if relative == "." {
+			return fmt.Errorf("configured path %q resolves to the repository root", configured)
+		}
+		if relative == ".." || strings.HasPrefix(relative, ".."+string(os.PathSeparator)) {
+			return nil
+		}
+		paths = append(paths, filepath.ToSlash(relative))
+		return nil
+	}
+	if err := add(dbPath); err != nil {
+		return nil, err
+	}
+	if err := add(dbPath + ".lock"); err != nil {
+		return nil, err
+	}
+	if err := add(outDir); err != nil {
+		return nil, err
+	}
+	sort.Strings(paths)
+	unique := paths[:0]
+	for _, path := range paths {
+		if len(unique) == 0 || unique[len(unique)-1] != path {
+			unique = append(unique, path)
+		}
+	}
+	return unique, nil
+}
+
+func configuredReviewSnapshotPath(file string, configured []string) bool {
+	file = filepath.ToSlash(filepath.Clean(file))
+	for _, excluded := range configured {
+		excluded = filepath.ToSlash(filepath.Clean(excluded))
+		if excluded == "." || excluded == "" {
+			continue
+		}
+		if file == excluded || strings.HasPrefix(file, excluded+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func excludedReviewSnapshotPath(file string) bool {
