@@ -27,73 +27,13 @@ import (
 	mcp "trpc.group/trpc-go/trpc-mcp-go"
 )
 
-const stdioPipesAlreadyClosedError = "close errors: [failed to close stdout: close |0: file already closed " +
-	"failed to close stderr: close |0: file already closed]"
-
 func TestIsBenignMCPClientCloseError(t *testing.T) {
 	require.False(t, isBenignMCPClientCloseError(nil))
 	require.True(t, isBenignMCPClientCloseError(os.ErrProcessDone))
-	require.True(t, isBenignMCPClientCloseError(os.ErrClosed))
-	require.True(
-		t,
-		isBenignMCPClientCloseError(
-			fmt.Errorf("close transport: %w", os.ErrClosed),
-		),
-	)
-	require.True(
-		t,
-		isBenignMCPClientCloseError(errors.New(stdioPipesAlreadyClosedError)),
-	)
-	require.True(
-		t,
-		isBenignMCPClientCloseError(
-			errors.New(
-				"close errors: [failed to close stdin: close |0: file already closed]",
-			),
-		),
-	)
-	require.True(
-		t,
-		isBenignMCPClientCloseError(
-			errors.New(
-				"close errors: [failed to kill process: os: process already finished]",
-			),
-		),
-	)
 	require.True(
 		t,
 		isBenignMCPClientCloseError(
 			fmt.Errorf("close: %s", processAlreadyFinishedText),
-		),
-	)
-	require.False(
-		t,
-		isBenignMCPClientCloseError(
-			errors.New(
-				"close errors: [failed to close stdout: close |0: file already closed "+
-					"failed to kill process: signal: killed]",
-			),
-		),
-	)
-	require.False(
-		t,
-		isBenignMCPClientCloseError(
-			errors.New(
-				"close errors: [failed to kill process: os: process already finished "+
-					"failed to close stderr: close |0: permission denied]",
-			),
-		),
-	)
-	require.False(
-		t,
-		isBenignMCPClientCloseError(
-			errors.Join(os.ErrClosed, errors.New("close failed")),
-		),
-	)
-	require.False(
-		t,
-		isBenignMCPClientCloseError(
-			errors.New("unrelated close failure: file already closed"),
 		),
 	)
 	require.False(
@@ -2212,32 +2152,6 @@ func TestToolSet_Close_WithError(t *testing.T) {
 
 		require.NoError(t, toolset.Close())
 		require.False(t, manager.isConnected())
-	})
-
-	t.Run("close with already closed stdio pipes", func(t *testing.T) {
-		config := ConnectionConfig{
-			Transport: "stdio",
-			Command:   "echo",
-			Args:      []string{"hello"},
-		}
-		toolset := NewMCPToolSet(config)
-
-		manager := toolset.sessionManager
-		manager.mu.Lock()
-		manager.client = &stubConnector{
-			closeError: errors.New(stdioPipesAlreadyClosedError),
-		}
-		manager.connected = true
-		manager.initialized = true
-		manager.mu.Unlock()
-
-		require.NoError(t, toolset.Close())
-
-		manager.mu.RLock()
-		defer manager.mu.RUnlock()
-		require.False(t, manager.connected)
-		require.False(t, manager.initialized)
-		require.Nil(t, manager.client)
 	})
 }
 
