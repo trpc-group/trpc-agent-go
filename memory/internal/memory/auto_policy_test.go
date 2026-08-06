@@ -126,7 +126,7 @@ func newExtractorWithOperation(
 	)
 }
 
-func TestUpdatePolicyFor_PreservesPolicyThroughDecorator(t *testing.T) {
+func TestUpdatePolicyFor_RecognizesOnlyBuiltInExtractor(t *testing.T) {
 	for _, policy := range []extractor.UpdatePolicy{
 		extractor.UpdatePolicyMergeSimilar,
 		extractor.UpdatePolicyPreserveHistory,
@@ -137,7 +137,7 @@ func TestUpdatePolicyFor_PreservesPolicyThroughDecorator(t *testing.T) {
 			extractor.WithUpdatePolicy(policy),
 		)
 		assert.Equal(t, policy, updatePolicyFor(builtin))
-		assert.Equal(t, policy, updatePolicyFor(&decoratedExtractor{
+		assert.Equal(t, extractor.UpdatePolicyMergeSimilar, updatePolicyFor(&decoratedExtractor{
 			MemoryExtractor: builtin,
 		}))
 	}
@@ -582,9 +582,7 @@ func TestUpdatePolicies_SearchBehavior(t *testing.T) {
 			baseOperator := newMockOperator()
 			baseOperator.searchResults = []*memory.Entry{existing}
 			operator := &countingOperator{mockOperator: baseOperator}
-			ext := &decoratedExtractor{MemoryExtractor: newExtractorWithOperation(
-				t, test.policy, test.operation,
-			)}
+			ext := newExtractorWithOperation(t, test.policy, test.operation)
 			worker := NewAutoMemoryWorker(AutoMemoryConfig{Extractor: ext}, operator)
 			require.NoError(t, worker.createAutoMemory(
 				context.Background(),

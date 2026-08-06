@@ -19,7 +19,6 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
-	"trpc.group/trpc-go/trpc-agent-go/memory/internal/updatepolicy"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/prompt"
 )
@@ -228,14 +227,10 @@ func (e *memoryExtractor) Metadata() map[string]any {
 		modelName = e.model.Info().Name
 		modelAvailable = true
 	}
-	metadata := map[string]any{
+	return map[string]any{
 		metadataKeyModelName:      modelName,
 		metadataKeyModelAvailable: modelAvailable,
 	}
-	if policy := e.configuredUpdatePolicy(); policy != UpdatePolicyMergeSimilar {
-		metadata[updatepolicy.MetadataKey] = updatepolicy.Value(policy)
-	}
-	return metadata
 }
 
 // extractionUserSuffix is appended as a trailing user message

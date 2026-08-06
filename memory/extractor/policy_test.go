@@ -22,13 +22,13 @@ import (
 func TestExtractorUpdatePolicy_DefaultsToMergeSimilar(t *testing.T) {
 	ext := NewExtractor(nil).(*memoryExtractor)
 	assert.Equal(t, UpdatePolicyMergeSimilar, ext.configuredUpdatePolicy())
-	assert.Empty(t, updatepolicy.From(ext))
+	assert.Equal(t, updatepolicy.Value(UpdatePolicyMergeSimilar), updatepolicy.From(ext))
 }
 
 func TestExtractorUpdatePolicy_ZeroValueUsesMergeSimilar(t *testing.T) {
 	var ext memoryExtractor
 	assert.Equal(t, UpdatePolicyMergeSimilar, ext.configuredUpdatePolicy())
-	assert.Empty(t, updatepolicy.From(&ext))
+	assert.Equal(t, updatepolicy.Value(UpdatePolicyMergeSimilar), updatepolicy.From(&ext))
 }
 
 func TestExtractorUpdatePolicy_OptIn(t *testing.T) {

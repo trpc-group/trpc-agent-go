@@ -10,22 +10,18 @@
 // the memory package boundary without exposing policy discovery publicly.
 package updatepolicy
 
-// MetadataKey identifies the opaque policy value in extractor metadata.
-const MetadataKey = "trpc-agent-go/memory-extractor/update-policy"
-
 // Value identifies an update policy configured by a built-in extractor.
 type Value string
 
-type metadataProvider interface {
-	Metadata() map[string]any
+type provider interface {
+	ConfiguredUpdatePolicy() Value
 }
 
-// From returns the policy carried by extractor metadata.
+// From returns the policy carried by a built-in extractor.
 func From(value any) Value {
-	provider, ok := value.(metadataProvider)
+	provider, ok := value.(provider)
 	if !ok {
 		return ""
 	}
-	policy, _ := provider.Metadata()[MetadataKey].(Value)
-	return policy
+	return provider.ConfiguredUpdatePolicy()
 }

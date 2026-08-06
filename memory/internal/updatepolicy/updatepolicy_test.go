@@ -15,22 +15,17 @@ import (
 )
 
 type testProvider struct {
-	metadata map[string]any
+	policy Value
 }
 
-func (p testProvider) Metadata() map[string]any {
-	return p.metadata
+func (p testProvider) ConfiguredUpdatePolicy() Value {
+	return p.policy
 }
 
 func TestFrom(t *testing.T) {
 	assert.Equal(t, Value("preserve_history"), From(testProvider{
-		metadata: map[string]any{
-			MetadataKey: Value("preserve_history"),
-		},
+		policy: Value("preserve_history"),
 	}))
-	assert.Empty(t, From(testProvider{metadata: map[string]any{
-		MetadataKey: "preserve_history",
-	}}))
 	assert.Empty(t, From(testProvider{}))
 	assert.Empty(t, From(struct{}{}))
 	assert.Empty(t, From(nil))

@@ -46,8 +46,6 @@ type MemoryExtractor interface {
 	SetModel(m model.Model)
 
 	// Metadata returns metadata about the extractor configuration.
-	// Decorators that augment this metadata should preserve unknown entries,
-	// which may carry opaque framework configuration.
 	Metadata() map[string]any
 }
 

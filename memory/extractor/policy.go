@@ -10,6 +10,7 @@ package extractor
 
 import (
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/internal/updatepolicy"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -35,6 +36,13 @@ func WithUpdatePolicy(policy UpdatePolicy) Option {
 
 func (e *memoryExtractor) configuredUpdatePolicy() UpdatePolicy {
 	return normalizeUpdatePolicy(e.updatePolicy)
+}
+
+// ConfiguredUpdatePolicy carries the built-in extractor policy through an
+// internal-only type. External extractors cannot accidentally implement this
+// capability because its return type is in an internal package.
+func (e *memoryExtractor) ConfiguredUpdatePolicy() updatepolicy.Value {
+	return updatepolicy.Value(e.configuredUpdatePolicy())
 }
 
 func normalizeUpdatePolicy(policy UpdatePolicy) UpdatePolicy {
