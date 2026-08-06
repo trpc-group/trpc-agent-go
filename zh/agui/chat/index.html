@@ -3638,7 +3638,7 @@
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a><span class="w">    </span><span class="nx">ThreadID</span><span class="w">       </span><span class="kt">string</span><span class="w">          </span><span class="c1">// 会话线程 ID，框架会将其作为 SessionID。</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a><span class="w">    </span><span class="nx">RunID</span><span class="w">          </span><span class="kt">string</span><span class="w">          </span><span class="c1">// 本次运行 ID，用于关联运行生命周期事件。</span>
 </span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a><span class="w">    </span><span class="nx">ParentRunID</span><span class="w">    </span><span class="o">*</span><span class="kt">string</span><span class="w">         </span><span class="c1">// 父运行 ID，可选。</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a><span class="w">    </span><span class="nx">State</span><span class="w">          </span><span class="kt">any</span><span class="w">             </span><span class="c1">// 任意状态，可通过 StateResolver 写入 RuntimeState。</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a><span class="w">    </span><span class="nx">State</span><span class="w">          </span><span class="kt">any</span><span class="w">             </span><span class="c1">// 任意状态；对象类型的值默认会合并到 RuntimeState。</span>
 </span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6"></a><span class="w">    </span><span class="nx">Messages</span><span class="w">       </span><span class="p">[]</span><span class="nx">Message</span><span class="w">       </span><span class="c1">// 消息列表，用于传递本次用户输入或外部工具结果。</span>
 </span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7"></a><span class="w">    </span><span class="nx">Tools</span><span class="w">          </span><span class="p">[]</span><span class="nx">Tool</span><span class="w">          </span><span class="c1">// 工具定义列表，协议字段，可选。</span>
 </span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8"></a><span class="w">    </span><span class="nx">Context</span><span class="w">        </span><span class="p">[]</span><span class="nx">Context</span><span class="w">       </span><span class="c1">// 上下文列表，协议字段，可选。</span>
@@ -4063,9 +4063,10 @@
 </span><span id="__span-10-31"><a id="__codelineno-10-31" name="__codelineno-10-31"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">runner</span><span class="p">,</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithAGUIRunnerOptions</span><span class="p">(</span><span class="nx">aguirunner</span><span class="p">.</span><span class="nx">WithRunOptionResolver</span><span class="p">(</span><span class="nx">resolver</span><span class="p">)))</span>
 </span></code></pre></div></td></tr></table></div>
 <h2 id="stateresolver">自定义 <code>StateResolver</code></h2>
-<p><code>StateResolver</code> 用于把 <code>RunAgentInput.State</code> 转换为本次运行的 RuntimeState。返回的 map 会作为 <code>agent.WithRuntimeState(...)</code> 传入 Runner，只作用于当前这次运行。</p>
+<p>默认情况下，对象类型的 <code>RunAgentInput.State</code> 会合并到本次运行的 RuntimeState 中。RuntimeState 中不冲突的已有字段会保留；如果存在同名字段，则以 AG-UI state 为准。非对象类型的 state 不会被自动投影。</p>
+<p>当需要过滤、重命名或转换 state 时，可以通过 <code>StateResolver</code> 自定义转换逻辑。它返回的 map 会通过 <code>agent.MergeRuntimeState(...)</code> 合并到 RuntimeState 中，只作用于当前这次运行。AG-UI state 由客户端提供；涉及安全敏感值时，应先进行过滤，不应将其当作可信的服务端上下文。</p>
 <p>LLMAgent 可以在 <code>Instruction</code> 或 <code>SystemPrompt</code> 中通过 <code>{runtime:key}</code> 读取解析后的值；如果该值可选，则使用 <code>{runtime:key?}</code>。</p>
-<p>返回 <code>nil</code> 表示不设置 RuntimeState；返回空 map 表示设置一个空的 RuntimeState。</p>
+<p>返回 <code>nil</code> 表示不合并 state；返回空 map 不会添加任何字段。</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-11-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-11-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-11-3"> 3</a></span>
@@ -5809,7 +5810,7 @@ resolver 只需要返回业务额外需要的 run options。</p>
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年8月4日 04:41:50 UTC">2026-08-04 04:41:50</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年8月6日 02:05:42 UTC">2026-08-06 02:05:42</span>
   </span>
 
     

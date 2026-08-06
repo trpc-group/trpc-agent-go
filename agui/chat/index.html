@@ -3638,7 +3638,7 @@
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a><span class="w">    </span><span class="nx">ThreadID</span><span class="w">       </span><span class="kt">string</span><span class="w">          </span><span class="c1">// Conversation thread ID. The framework uses it as SessionID.</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a><span class="w">    </span><span class="nx">RunID</span><span class="w">          </span><span class="kt">string</span><span class="w">          </span><span class="c1">// Run ID, used to correlate run lifecycle events.</span>
 </span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a><span class="w">    </span><span class="nx">ParentRunID</span><span class="w">    </span><span class="o">*</span><span class="kt">string</span><span class="w">         </span><span class="c1">// Parent run ID. Optional.</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a><span class="w">    </span><span class="nx">State</span><span class="w">          </span><span class="kt">any</span><span class="w">             </span><span class="c1">// Arbitrary state that can be written into RuntimeState through StateResolver.</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a><span class="w">    </span><span class="nx">State</span><span class="w">          </span><span class="kt">any</span><span class="w">             </span><span class="c1">// Arbitrary state; object-shaped values are merged into RuntimeState by default.</span>
 </span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6"></a><span class="w">    </span><span class="nx">Messages</span><span class="w">       </span><span class="p">[]</span><span class="nx">Message</span><span class="w">       </span><span class="c1">// Message list used to pass the current user input or external tool results.</span>
 </span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7"></a><span class="w">    </span><span class="nx">Tools</span><span class="w">          </span><span class="p">[]</span><span class="nx">Tool</span><span class="w">          </span><span class="c1">// Tool definitions. Protocol field. Optional.</span>
 </span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8"></a><span class="w">    </span><span class="nx">Context</span><span class="w">        </span><span class="p">[]</span><span class="nx">Context</span><span class="w">       </span><span class="c1">// Context list. Protocol field. Optional.</span>
@@ -4063,9 +4063,10 @@
 </span><span id="__span-10-31"><a id="__codelineno-10-31" name="__codelineno-10-31"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">runner</span><span class="p">,</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithAGUIRunnerOptions</span><span class="p">(</span><span class="nx">aguirunner</span><span class="p">.</span><span class="nx">WithRunOptionResolver</span><span class="p">(</span><span class="nx">resolver</span><span class="p">)))</span>
 </span></code></pre></div></td></tr></table></div>
 <h2 id="custom-stateresolver">Custom <code>StateResolver</code></h2>
-<p><code>StateResolver</code> converts <code>RunAgentInput.State</code> into RuntimeState for the current run. The returned map is passed to Runner as <code>agent.WithRuntimeState(...)</code> and only affects the current run.</p>
+<p>By default, object-shaped <code>RunAgentInput.State</code> is merged into RuntimeState for the current run. Existing RuntimeState keys are preserved, while AG-UI state wins when the same key is present in both maps. Non-object state is not projected automatically.</p>
+<p><code>StateResolver</code> customizes this conversion when the state must be filtered, renamed, or converted. Its returned map is merged into RuntimeState with <code>agent.MergeRuntimeState(...)</code> and only affects the current run. AG-UI state is supplied by the client; filter security-sensitive values instead of treating them as trusted server context.</p>
 <p>An LLMAgent can read a resolved value in its <code>Instruction</code> or <code>SystemPrompt</code> with a <code>{runtime:key}</code> placeholder. Use <code>{runtime:key?}</code> when the value is optional.</p>
-<p>Returning <code>nil</code> means RuntimeState is not set. Returning an empty map sets an empty RuntimeState.</p>
+<p>Returning <code>nil</code> means no state is merged. Returning an empty map does not add any values.</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-11-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-11-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-11-3"> 3</a></span>
@@ -5812,7 +5813,7 @@ custom resolver only needs to return additional run options.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="August 4, 2026 04:41:50 UTC">2026-08-04 04:41:50</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="August 6, 2026 02:05:42 UTC">2026-08-06 02:05:42</span>
   </span>
 
     
