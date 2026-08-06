@@ -1,0 +1,66 @@
+{
+  "evalSetId": "train",
+  "name": "train",
+  "evalCases": [
+    {
+      "evalId": "train_01_red_vs_blue",
+      "conversation": [
+        {
+          "invocationId": "train_01_red_vs_blue-1",
+          "userContent": {
+            "role": "user",
+            "content": "红队 vs 蓝队，比分 100-90，胜者 红队"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "红队以100-90战胜蓝队。"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "eval-optimization-app",
+        "userId": "eval-optimization-demo-user"
+      }
+    },
+    {
+      "evalId": "train_02_green_vs_yellow",
+      "conversation": [
+        {
+          "invocationId": "train_02_green_vs_yellow-1",
+          "userContent": {
+            "role": "user",
+            "content": "绿队 vs 黄队，比分 77-70，胜者 绿队"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "绿队以77-70战胜黄队。"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "eval-optimization-app",
+        "userId": "eval-optimization-demo-user"
+      }
+    },
+    {
+      "evalId": "train_03_black_vs_white",
+      "conversation": [
+        {
+          "invocationId": "train_03_black_vs_white-1",
+          "userContent": {
+            "role": "user",
+            "content": "黑队 vs 白队，比分 3-2，胜者 黑队"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "黑队以3-2战胜白队。"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "eval-optimization-app",
+        "userId": "eval-optimization-demo-user"
+      }
+    }
+  ]
+}

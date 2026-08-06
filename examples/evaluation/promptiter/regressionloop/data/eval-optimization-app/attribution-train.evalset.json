@@ -1,0 +1,43 @@
+{
+  "evalSetId": "attribution-train",
+  "name": "attribution-train",
+  "evalCases": [
+    {
+      "evalId": "attr_train_01_calculator",
+      "conversation": [
+        {
+          "invocationId": "attr_train_01_calculator-1",
+          "userContent": {
+            "role": "user",
+            "content": "用计算器算 4 加 5"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "结果是9。"
+          },
+          "tools": [
+            {
+              "id": "call_1",
+              "name": "calculator",
+              "arguments": {
+                "operation": "add",
+                "a": 4,
+                "b": 5
+              },
+              "result": {
+                "operation": "add",
+                "a": 4,
+                "b": 5,
+                "result": 9
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "eval-optimization-app",
+        "userId": "eval-optimization-demo-user"
+      }
+    }
+  ]
+}
