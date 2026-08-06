@@ -12,8 +12,10 @@ package codeexec
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -77,6 +79,43 @@ func NewTool(exec codeexecutor.CodeExecutor, opts ...Option) tool.CallableTool {
 type executeCodeTool struct {
 	executor codeexecutor.CodeExecutor
 	cfg      config
+}
+
+var _ tool.CodeExecPermissionContextResolver = (*executeCodeTool)(nil)
+
+// ResolveCodeExecPermissionContext reports the executor timeout without
+// starting code execution.
+func (t *executeCodeTool) ResolveCodeExecPermissionContext() (
+	tool.ExecPermissionContext, error,
+) {
+	provider, ok := t.executor.(codeexecutor.ExecutionTimeoutProvider)
+	if !ok {
+		return tool.ExecPermissionContext{}, errors.New(
+			"code executor does not report an execution timeout",
+		)
+	}
+	timeout, bounded := provider.CodeExecutionTimeout()
+	if !bounded {
+		return tool.ExecPermissionContext{TimeoutSeconds: -1}, nil
+	}
+	return tool.ExecPermissionContext{
+		TimeoutSeconds: timeoutSecondsCeil(timeout),
+	}, nil
+}
+
+func timeoutSecondsCeil(timeout time.Duration) int {
+	if timeout <= 0 {
+		return 0
+	}
+	seconds := int64(timeout / time.Second)
+	if timeout%time.Second != 0 {
+		seconds++
+	}
+	maxInt := int64(^uint(0) >> 1)
+	if seconds > maxInt {
+		return int(maxInt)
+	}
+	return int(seconds)
 }
 
 // Declaration returns the tool's declaration.

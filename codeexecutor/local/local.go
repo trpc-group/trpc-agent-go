@@ -37,6 +37,13 @@ type CodeExecutor struct {
 	workspaceMode      WorkspaceMode
 }
 
+var _ codeexecutor.ExecutionTimeoutProvider = (*CodeExecutor)(nil)
+
+// CodeExecutionTimeout reports the timeout enforced for each code block.
+func (e *CodeExecutor) CodeExecutionTimeout() (time.Duration, bool) {
+	return e.Timeout, true
+}
+
 // CodeExecutorOption configures a local CodeExecutor.
 type CodeExecutorOption func(*CodeExecutor)
 

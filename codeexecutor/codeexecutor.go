@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // CodeExecutor executes code blocks via a friendly front-door API.
@@ -27,6 +28,12 @@ type CodeExecutor interface {
 	ExecuteCode(context.Context, CodeExecutionInput) (CodeExecutionResult, error)
 	// CodeBlockDelimiter returns the delimiters used for code blocks.
 	CodeBlockDelimiter() CodeBlockDelimiter
+}
+
+// ExecutionTimeoutProvider reports the effective per-execution timeout of a
+// CodeExecutor. The boolean is false when execution has no finite timeout.
+type ExecutionTimeoutProvider interface {
+	CodeExecutionTimeout() (time.Duration, bool)
 }
 
 // CodeExecutionInput is the input for code execution.

@@ -171,6 +171,14 @@ type CodeExecutor struct {
 	owned bool
 }
 
+var _ codeexecutor.ExecutionTimeoutProvider = (*CodeExecutor)(nil)
+
+// CodeExecutionTimeout reports the configured per-cell timeout. A negative or
+// zero duration disables a finite timeout.
+func (c *CodeExecutor) CodeExecutionTimeout() (time.Duration, bool) {
+	return c.executionTimeout, c.executionTimeout > 0
+}
+
 // New creates a new CodeExecutor. When `WithSandboxID` is supplied it connects
 // to an existing sandbox; otherwise a new sandbox is created.
 func New(opts ...Option) (*CodeExecutor, error) {

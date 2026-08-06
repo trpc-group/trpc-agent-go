@@ -12,6 +12,7 @@ package codeexecutor
 import (
 	"context"
 	"runtime"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/envscrub"
 )
@@ -129,8 +130,19 @@ type envCodeExecutor struct {
 	provider RunEnvProvider
 }
 
+var _ ExecutionTimeoutProvider = (*envCodeExecutor)(nil)
+
 func (e *envCodeExecutor) Engine() Engine {
 	return NewEnvInjectingEngine(e.ep.Engine(), e.provider)
+}
+
+// CodeExecutionTimeout preserves the wrapped executor's timeout capability.
+func (e *envCodeExecutor) CodeExecutionTimeout() (time.Duration, bool) {
+	provider, ok := e.CodeExecutor.(ExecutionTimeoutProvider)
+	if !ok {
+		return 0, false
+	}
+	return provider.CodeExecutionTimeout()
 }
 
 // mergeProviderEnv builds a fresh Env map that contains all entries
