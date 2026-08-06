@@ -41,7 +41,10 @@ var (
 	negationPattern = regexp.MustCompile(
 		`(?i)(?:\bnot\b|\bno\b|\bnever\b|\bwithout\b|n't|不再|不是|没有|从未|未|无)`,
 	)
-	capitalizedTokenPattern           = regexp.MustCompile(`\b[A-Z][A-Za-z0-9_-]*\b`)
+	capitalizedTokenPattern        = regexp.MustCompile(`\b[A-Z][A-Za-z0-9_-]*\b`)
+	destructiveFactBoundaryPattern = regexp.MustCompile(
+		`(?i)[.!?;。！？；]+|\s+(?:and|but|or|while|whereas)\s+|(?:，|,)?(?:并且|但是|但|而且|同时|然后)(?:，|,)?`,
+	)
 	negatedDestructiveRequestPatterns = []*regexp.Regexp{
 		regexp.MustCompile(
 			`(?i)\b(?:do\s+not|don't|dont|never|should\s+not|shouldn't)\s+(?:forget|delete|remove|erase|clear)\b`,
@@ -309,17 +312,46 @@ func (r destructiveRequest) authorizesDelete(entry *memory.Entry) bool {
 	// A limited inflection match can bridge phrasing such as live/lives, but it
 	// cannot authorize deletion by itself. At least one specific target token
 	// must still match the selected memory exactly.
+	matched, usedInflection := destructiveTokensMatch(targetTokens, entryTokens)
+	if !matched {
+		return false
+	}
+	if usedInflection && !destructiveTargetBoundToFact(targetTokens, entry.Memory.Memory) {
+		return false
+	}
+	return true
+}
+
+func destructiveTokensMatch(
+	targetTokens map[string]struct{},
+	candidateTokens map[string]struct{},
+) (bool, bool) {
 	exactAnchor := false
+	usedInflection := false
 	for token := range targetTokens {
-		if _, ok := entryTokens[token]; ok {
+		if _, ok := candidateTokens[token]; ok {
 			exactAnchor = true
 			continue
 		}
-		if !matchesInflectedToken(token, entryTokens) {
-			return false
+		if !matchesInflectedToken(token, candidateTokens) {
+			return false, false
+		}
+		usedInflection = true
+	}
+	return exactAnchor, usedInflection
+}
+
+func destructiveTargetBoundToFact(
+	targetTokens map[string]struct{},
+	memoryText string,
+) bool {
+	for _, fact := range destructiveFactBoundaryPattern.Split(memoryText, -1) {
+		factTokens := stringSet(BuildSearchTokens(fact))
+		if matched, _ := destructiveTokensMatch(targetTokens, factTokens); matched {
+			return true
 		}
 	}
-	return exactAnchor
+	return false
 }
 
 func matchesInflectedToken(target string, candidates map[string]struct{}) bool {

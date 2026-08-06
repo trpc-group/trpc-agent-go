@@ -335,7 +335,9 @@ entry. Destructive operations are never inferred from contradictions: delete
 requires an explicit user request, and clear requires an explicit request to
 forget all stored information without a scoped target or exception. A scoped
 forget request can authorize only deletes whose memory content matches that
-target. A later explicit cancellation revokes the earlier authorization.
+target. A tolerated inflection must match the target inside one fact segment;
+tokens from separate facts cannot jointly authorize deletion. A later explicit
+cancellation revokes the earlier authorization.
 
 The update policy does not change `memory.Service`, `MemoryExtractor`, the stored
 JSON representation, memory IDs, or database schemas. It does not rewrite

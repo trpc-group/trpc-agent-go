@@ -1074,6 +1074,12 @@ func TestPreserveHistoryPolicy_DeleteAuthorization(t *testing.T) {
 	parisHome := entry("paris-home", "User lives in Paris.", "Paris", "home")
 	parisTrip := entry("paris-trip", "User visited Paris last summer.", "Paris", "travel")
 	londonHome := entry("london-home", "User lives in London.", "London", "home")
+	mixedParis := entry(
+		"mixed-paris",
+		"User lives in London and visited Paris.",
+		"Paris",
+		"London",
+	)
 
 	tests := []struct {
 		name       string
@@ -1106,8 +1112,8 @@ func TestPreserveHistoryPolicy_DeleteAuthorization(t *testing.T) {
 		{
 			name:       "target tolerates limited verb inflection",
 			request:    "Please forget that I live in Paris.",
-			existing:   []*memory.Entry{parisHome, parisTrip, londonHome},
-			operations: deleteOps("paris-home", "paris-trip", "london-home"),
+			existing:   []*memory.Entry{parisHome, parisTrip, londonHome, mixedParis},
+			operations: deleteOps("paris-home", "paris-trip", "london-home", "mixed-paris"),
 			wantIDs:    []string{"paris-home"},
 		},
 		{
