@@ -1,0 +1,38 @@
+diff --git a/file.go b/file.go
+new file mode 100644
+--- /dev/null
++++ b/file.go
+@@ -0,0 +1,30 @@
++package main
++
++import (
++	"fmt"
++	"os"
++)
++
++func readFile(path string) error {
++	// 问题: 资源泄漏 - 文件未关闭
++	f, err := os.Open(path)
++	if err != nil {
++		return err
++	}
++
++	buf := make([]byte, 1024)
++	_, err = f.Read(buf)
++	if err != nil {
++		return err
++	}
++
++	fmt.Println(string(buf))
++	return nil
++}
++
++func readMultipleFiles(paths []string) error {
++	for _, path := range paths {
++		// 问题: 资源泄漏 - 文件未关闭
++		f, _ := os.Open(path)
++		buf := make([]byte, 1024)
++		f.Read(buf)
++	}
++	return nil
++}

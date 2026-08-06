@@ -1,0 +1,22 @@
+diff --git a/db.go b/db.go
+new file mode 100644
+--- /dev/null
++++ b/db.go
+@@ -0,0 +1,15 @@
++package main
++
++import (
++	"database/sql"
++	"fmt"
++)
++
++func queryUser(db *sql.DB, username string) error {
++	// 安全问题: SQL 注入
++	query := fmt.Sprintf("SELECT * FROM users WHERE name = '%s'", username)
++	rows, err := db.Query(query)
++	if err != nil {
++		return err
++	}
++	defer rows.Close()
++	return nil
++}

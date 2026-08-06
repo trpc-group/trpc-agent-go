@@ -1,0 +1,29 @@
+# 编译产物
+*.exe
+code_review_agent
+
+# 运行时数据库
+*.db
+
+# 环境变量（包含敏感信息）
+.env
+
+# 报告输出
+review_report.json
+review_report.md
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 临时文件
+*.tmp
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 依赖目录
+vendor/

@@ -1,0 +1,36 @@
+diff --git a/service.go b/service.go
+new file mode 100644
+--- /dev/null
++++ b/service.go
+@@ -0,0 +1,25 @@
++package main
++
++import (
++	"errors"
++	"fmt"
++)
++
++func processData(data []byte) error {
++	if len(data) == 0 {
++		return errors.New("empty data")
++	}
++
++	// 问题: 错误处理不当 - 忽略错误
++	result := transform(data)
++	fmt.Println(result)
++
++	return nil
++}
++
++func transform(data []byte) ([]byte, error) {
++	if len(data) > 1024 {
++		return nil, errors.New("data too large")
++	}
++	return data, nil
++}
++
++func anotherBadExample() {
++	// 问题: 错误处理不当 - 错误被忽略
++	f, _ := os.Open("file.txt")
++	defer f.Close()
++}
