@@ -1,0 +1,47 @@
+{
+  "appName": "promptiter-regression-loop",
+  "targetSurfaceId": "candidate#instruction",
+  "maxRounds": 2,
+  "seed": 20260724,
+  "inputs": {
+    "trainEvalSet": "train.evalset.json",
+    "validationEvalSet": "validation.evalset.json",
+    "metrics": "metrics.json",
+    "promptSource": "baseline_prompt.txt"
+  },
+  "fakeModel": {
+    "name": "deterministic-promptiter-v1",
+    "promptCostPerMillionTokens": 0.2,
+    "outputCostPerMillionTokens": 0.8,
+    "latencyMillis": 4
+  },
+  "gate": {
+    "minValidationScoreGain": 0.05,
+    "allowNewHardFails": false,
+    "criticalCaseIds": [
+      "validation_direct_critical"
+    ],
+    "maxCriticalScoreDrop": 0,
+    "maxEstimatedCostUsd": 0.01,
+    "maxToolCalls": 2
+  },
+  "candidates": [
+    {
+      "id": "balanced-routing-and-format",
+      "append": "Use lookup tools only for lookup tasks. Emit strict JSON for structured tasks. Preserve direct answers without tools.\n[use_lookup_for_lookup_tasks]\n[emit_json_for_structured_tasks]",
+      "reason": "Training failures show missing lookup calls and invalid structured output.",
+      "targetFailures": [
+        "route_error",
+        "format_error"
+      ]
+    },
+    {
+      "id": "knowledge-overfit",
+      "append": "Search knowledge before every non-lookup task.\n[search_knowledge_for_all_non_lookup_tasks]",
+      "reason": "The remaining training failure lacks retrieved knowledge, but this broad rule may overfit.",
+      "targetFailures": [
+        "knowledge_recall_insufficient"
+      ]
+    }
+  ]
+}

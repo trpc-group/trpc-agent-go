@@ -1,0 +1,93 @@
+{
+  "evalSetId": "regression-train",
+  "name": "regression-train",
+  "description": "Training cases for deterministic prompt optimization.",
+  "evalCases": [
+    {
+      "evalId": "train_lookup_weather",
+      "conversation": [
+        {
+          "invocationId": "train_lookup_weather-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\"intent\":\"lookup\",\"query\":\"weather:shenzhen\",\"answer\":\"Shenzhen weather is sunny.\",\"tool\":{\"name\":\"lookup_record\",\"arguments\":{\"query\":\"weather:shenzhen\"},\"result\":{\"condition\":\"sunny\",\"location\":\"Shenzhen\"}}}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Shenzhen weather is sunny."
+          },
+          "tools": [
+            {
+              "id": "expected-train-lookup",
+              "name": "lookup_record",
+              "arguments": {
+                "query": "weather:shenzhen"
+              },
+              "result": {
+                "condition": "sunny",
+                "location": "Shenzhen"
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-loop",
+        "userId": "evaluation-user"
+      }
+    },
+    {
+      "evalId": "train_structured_order",
+      "conversation": [
+        {
+          "invocationId": "train_structured_order-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\"intent\":\"structured\",\"query\":\"order summary\",\"answer\":\"{\\\"status\\\":\\\"ok\\\",\\\"total\\\":42}\",\"output\":{\"status\":\"ok\",\"total\":42}}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "{\"status\":\"ok\",\"total\":42}"
+          },
+          "tools": []
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-loop",
+        "userId": "evaluation-user"
+      }
+    },
+    {
+      "evalId": "train_knowledge_retention",
+      "conversation": [
+        {
+          "invocationId": "train_knowledge_retention-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\"intent\":\"knowledge\",\"query\":\"document retention\",\"answer\":\"Document retention is 30 days.\",\"tool\":{\"name\":\"knowledge_search\",\"arguments\":{\"query\":\"document retention\"},\"result\":{\"answer\":\"Document retention is 30 days.\"}}}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Document retention is 30 days."
+          },
+          "tools": [
+            {
+              "id": "expected-train-knowledge",
+              "name": "knowledge_search",
+              "arguments": {
+                "query": "document retention"
+              },
+              "result": {
+                "answer": "Document retention is 30 days."
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-loop",
+        "userId": "evaluation-user"
+      }
+    }
+  ]
+}
