@@ -430,6 +430,101 @@ func TestMarkdownChunking_WhitespaceModes(t *testing.T) {
 	)
 }
 
+func TestMarkdownChunking_WhitespaceModesWithOverlap(t *testing.T) {
+	const (
+		chunkSize = 30
+		overlap   = 10
+	)
+	content := "prefix line\n\treturn 1\n\n" + strings.Repeat("next ", 10)
+	doc := &document.Document{ID: "overlap-whitespace", Content: content}
+
+	chunks, err := NewMarkdownChunking(
+		WithMarkdownChunkSize(chunkSize),
+		WithMarkdownOverlap(overlap),
+	).Chunk(doc)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(chunks), 2)
+	require.Contains(t, chunks[1].Content, "\treturn 1")
+	for _, chunk := range chunks {
+		require.LessOrEqual(
+			t,
+			utf8.RuneCountInString(chunk.Content),
+			chunkSize,
+		)
+	}
+
+	legacyChunks, err := NewMarkdownChunking(
+		WithMarkdownChunkSize(chunkSize),
+		WithMarkdownOverlap(overlap),
+		WithMarkdownWhitespaceTrimming(),
+	).Chunk(doc)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(legacyChunks), 2)
+	require.NotContains(t, legacyChunks[1].Content, "\treturn 1")
+	require.Contains(t, legacyChunks[1].Content, "return 1")
+	for _, chunk := range legacyChunks {
+		require.LessOrEqual(
+			t,
+			utf8.RuneCountInString(chunk.Content),
+			chunkSize,
+		)
+	}
+}
+
+func TestMarkdownChunking_PreservesWhitespaceOnlyParagraphBoundary(t *testing.T) {
+	const chunkSize = 20
+	content := "first\n \t\nsecond\n\n" + strings.Repeat("x", 30)
+	doc := &document.Document{ID: "paragraph-boundary", Content: content}
+
+	chunks, err := NewMarkdownChunking(
+		WithMarkdownChunkSize(chunkSize),
+	).Chunk(doc)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(chunks), 2)
+	require.Equal(t, "first\n \t\nsecond", chunks[0].Content)
+
+	legacyChunks, err := NewMarkdownChunking(
+		WithMarkdownChunkSize(chunkSize),
+		WithMarkdownWhitespaceTrimming(),
+	).Chunk(doc)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(legacyChunks), 2)
+	require.Equal(t, "first\n\nsecond", legacyChunks[0].Content)
+}
+
+func TestMarkdownChunking_PreservesSeparatorAtChunkBoundary(t *testing.T) {
+	const chunkSize = 5
+	content := "aaaa\n \t\nbbbb"
+	doc := &document.Document{ID: "separator-boundary", Content: content}
+
+	chunks, err := NewMarkdownChunking(
+		WithMarkdownChunkSize(chunkSize),
+	).Chunk(doc)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(chunks), 2)
+	var rebuilt strings.Builder
+	for _, chunk := range chunks {
+		require.LessOrEqual(
+			t,
+			utf8.RuneCountInString(chunk.Content),
+			chunkSize,
+		)
+		rebuilt.WriteString(chunk.Content)
+	}
+	require.Equal(t, content, rebuilt.String())
+
+	legacyChunks, err := NewMarkdownChunking(
+		WithMarkdownChunkSize(chunkSize),
+		WithMarkdownWhitespaceTrimming(),
+	).Chunk(doc)
+	require.NoError(t, err)
+	var legacyContent strings.Builder
+	for _, chunk := range legacyChunks {
+		legacyContent.WriteString(chunk.Content)
+	}
+	require.NotContains(t, legacyContent.String(), " \t")
+}
+
 func TestMarkdownChunking_CombineSectionPreservesWhitespace(t *testing.T) {
 	section := headerSection{
 		Header:  "# Title",

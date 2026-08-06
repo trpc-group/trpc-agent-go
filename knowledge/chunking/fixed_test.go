@@ -319,6 +319,34 @@ func TestFixedSizeChunking_WhitespaceOnlyDocument(t *testing.T) {
 	require.Nil(t, chunks)
 }
 
+func TestFixedSizeChunking_PreserveLinesKeepsWhitespaceBoundaries(t *testing.T) {
+	const chunkSize = 5
+	content := " \t\naaaaa\n\t "
+	doc := &document.Document{ID: "blank-lines", Content: content}
+
+	chunks, err := NewFixedSizeChunking(
+		WithChunkSize(chunkSize),
+		WithPreserveLines(),
+	).Chunk(doc)
+	require.NoError(t, err)
+	require.Len(t, chunks, 3)
+	require.Equal(t, " \t", chunks[0].Content)
+	require.Equal(t, "aaaaa", chunks[1].Content)
+	require.Equal(t, "\t ", chunks[2].Content)
+	for _, chunk := range chunks {
+		require.LessOrEqual(t, utf8.RuneCountInString(chunk.Content), chunkSize)
+	}
+
+	legacyChunks, err := NewFixedSizeChunking(
+		WithChunkSize(chunkSize),
+		WithPreserveLines(),
+		WithWhitespaceTrimming(),
+	).Chunk(doc)
+	require.NoError(t, err)
+	require.Len(t, legacyChunks, 1)
+	require.Equal(t, "aaaaa", legacyChunks[0].Content)
+}
+
 func TestFixedSizeChunking_PreservesCompleteLines(t *testing.T) {
 	const chunkSize = 120
 	lines := []string{

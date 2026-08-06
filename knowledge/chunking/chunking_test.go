@@ -385,6 +385,22 @@ func TestJoinWithOverlapPreservesIndentedSuffix(t *testing.T) {
 	require.Equal(t, 8, legacyOverlapSize)
 }
 
+func TestSourceChunkSeparatorsWhitespaceModes(t *testing.T) {
+	content := "before\n \t\nafter"
+	chunks := []string{"before", "after"}
+
+	separators := sourceChunkSeparators(content, chunks, "\n\n", false)
+	require.Equal(t, []string{"", "\n \t\n"}, separators)
+
+	legacySeparators := sourceChunkSeparators(
+		content,
+		chunks,
+		"\n\n",
+		true,
+	)
+	require.Equal(t, []string{"", "\n"}, legacySeparators)
+}
+
 // TestDefaultConstants tests the default constants
 func TestDefaultConstants(t *testing.T) {
 	assert.Equal(t, 1024, defaultChunkSize)

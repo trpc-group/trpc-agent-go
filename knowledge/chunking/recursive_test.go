@@ -327,6 +327,34 @@ func TestRecursiveChunking_WhitespaceOnlyDocument(t *testing.T) {
 	require.Nil(t, chunks)
 }
 
+func TestRecursiveChunking_PreservesWhitespaceBoundaryFragments(t *testing.T) {
+	const chunkSize = 4
+	content := "   aaa   "
+	doc := &document.Document{ID: "boundary-whitespace", Content: content}
+
+	chunks, err := NewRecursiveChunking(
+		WithRecursiveChunkSize(chunkSize),
+		WithRecursiveSeparators([]string{" "}),
+	).Chunk(doc)
+	require.NoError(t, err)
+	require.Len(t, chunks, 3)
+	require.Equal(t, "   ", chunks[0].Content)
+	require.Equal(t, "aaa ", chunks[1].Content)
+	require.Equal(t, "  ", chunks[2].Content)
+	for _, chunk := range chunks {
+		require.LessOrEqual(t, utf8.RuneCountInString(chunk.Content), chunkSize)
+	}
+
+	legacyChunks, err := NewRecursiveChunking(
+		WithRecursiveChunkSize(chunkSize),
+		WithRecursiveSeparators([]string{" "}),
+		WithRecursiveWhitespaceTrimming(),
+	).Chunk(doc)
+	require.NoError(t, err)
+	require.Len(t, legacyChunks, 1)
+	require.Equal(t, "aaa", legacyChunks[0].Content)
+}
+
 func TestRecursiveChunking_PreservesSentenceAtoms(t *testing.T) {
 	tests := []struct {
 		name      string

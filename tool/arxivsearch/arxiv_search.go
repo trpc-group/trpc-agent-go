@@ -19,6 +19,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf"
@@ -207,7 +208,11 @@ func (t *ToolSet) search(
 	var pdfReader reader.Reader
 	maxContentRunes := normalizedMaxContentRunes(req.MaxContentRunes)
 	if req.ReadArxivPapers {
-		pdfReader = pdf.New()
+		pdfReader = pdf.New(reader.WithCustomChunkingStrategy(
+			chunking.NewFixedSizeChunking(
+				chunking.WithWhitespaceTrimming(),
+			),
+		))
 	}
 	for _, result := range results {
 		arti := article{

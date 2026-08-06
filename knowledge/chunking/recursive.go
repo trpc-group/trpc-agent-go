@@ -194,11 +194,8 @@ func (r *RecursiveChunking) mergeFragments(
 	currentSize := 0
 
 	flush := func() {
-		content := current.String()
-		if r.trimWhitespace {
-			content = strings.TrimSpace(content)
-		}
-		if !isBlankText(content) {
+		content, ok := r.finalizeFragment(current.String())
+		if ok {
 			chunks = append(chunks, content)
 		}
 		current.Reset()
@@ -269,6 +266,13 @@ func (r *RecursiveChunking) mergeFragments(
 	return chunks
 }
 
+func (r *RecursiveChunking) finalizeFragment(content string) (string, bool) {
+	if r.trimWhitespace {
+		content = strings.TrimSpace(content)
+	}
+	return content, content != ""
+}
+
 // applyOverlap applies overlap between consecutive chunks.
 func (r *RecursiveChunking) applyOverlap(
 	content string,
@@ -281,7 +285,12 @@ func (r *RecursiveChunking) applyOverlap(
 	for i, chunk := range chunks {
 		rawContents[i] = chunk.Content
 	}
-	separators := sourceChunkSeparators(content, rawContents, " ")
+	separators := sourceChunkSeparators(
+		content,
+		rawContents,
+		" ",
+		r.trimWhitespace,
+	)
 	overlappedChunks := []*document.Document{chunks[0]}
 	for i := 1; i < len(chunks); i++ {
 		// Create new metadata for overlapped chunk.

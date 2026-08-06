@@ -138,7 +138,12 @@ func (f *FixedSizeChunking) Chunk(doc *document.Document) ([]*document.Document,
 	for i, textChunk := range textChunks {
 		rawContents[i] = textChunk.content
 	}
-	separators := sourceChunkSeparators(content, rawContents, " ")
+	separators := sourceChunkSeparators(
+		content,
+		rawContents,
+		" ",
+		f.trimWhitespace,
+	)
 	for i, textChunk := range textChunks {
 		finalContent := textChunk.content
 		actualOverlap := 0
@@ -199,7 +204,12 @@ func splitFixedLines(
 		return nextChunkSize
 	}
 	flush := func() {
-		if !hasCurrent || strings.TrimSpace(current) == "" {
+		if !hasCurrent {
+			current = ""
+			hasCurrent = false
+			return
+		}
+		if trimWhitespace && strings.TrimSpace(current) == "" {
 			current = ""
 			hasCurrent = false
 			return

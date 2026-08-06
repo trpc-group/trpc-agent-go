@@ -220,7 +220,7 @@ func (m *MarkdownChunking) splitRecursivelyWithPath(
 	// No headers found or only one section, try splitting by Markdown blocks.
 	// Keep fenced code intact here so blank lines inside the fence do not
 	// create unrelated, undersized chunks.
-	paragraphs := splitMarkdownParagraphsWithWhitespaceTrimming(
+	paragraphs := splitMarkdownParagraphsWithSeparators(
 		content,
 		m.trimWhitespace,
 	)
@@ -640,27 +640,77 @@ func splitMarkdownParagraphs(content string) []string {
 	return splitMarkdownParagraphsWithWhitespaceTrimming(content, false)
 }
 
+type markdownParagraph struct {
+	content   string
+	separator string
+}
+
 func splitMarkdownParagraphsWithWhitespaceTrimming(
 	content string,
 	trimWhitespace bool,
 ) []string {
+	paragraphs := splitMarkdownParagraphsWithSeparators(
+		content,
+		trimWhitespace,
+	)
+	contents := make([]string, 0, len(paragraphs))
+	for _, paragraph := range paragraphs {
+		contents = append(contents, paragraph.content)
+	}
+	return contents
+}
+
+func splitMarkdownParagraphsWithSeparators(
+	content string,
+	trimWhitespace bool,
+) []markdownParagraph {
 	lines := strings.SplitAfter(content, "\n")
-	paragraphs := make([]string, 0, len(lines))
+	paragraphs := make([]markdownParagraph, 0, len(lines))
 	var current strings.Builder
+	var pendingSeparator strings.Builder
 	var fenceMarker byte
 	fenceLength := 0
 
 	flush := func() {
 		paragraph := current.String()
+		current.Reset()
+		if paragraph == "" {
+			return
+		}
 		if trimWhitespace {
 			paragraph = strings.TrimSpace(paragraph)
+			if paragraph == "" {
+				return
+			}
+			separator := ""
+			if len(paragraphs) > 0 {
+				separator = "\n\n"
+			}
+			paragraphs = append(paragraphs, markdownParagraph{
+				content:   paragraph,
+				separator: separator,
+			})
+			pendingSeparator.Reset()
+			return
+		}
+
+		body := strings.TrimSuffix(paragraph, "\n")
+		trailingSeparator := paragraph[len(body):]
+		separator := pendingSeparator.String()
+		pendingSeparator.Reset()
+		if len(paragraphs) == 0 {
+			body = separator + body
+			separator = ""
+		}
+		if body != "" {
+			paragraphs = append(paragraphs, markdownParagraph{
+				content:   body,
+				separator: separator,
+			})
 		} else {
-			paragraph = strings.Trim(paragraph, "\n")
+			pendingSeparator.WriteString(separator)
 		}
-		if !isBlankText(paragraph) {
-			paragraphs = append(paragraphs, paragraph)
-		}
-		current.Reset()
+		pendingSeparator.WriteString(trailingSeparator)
 	}
 
 	for _, line := range lines {
@@ -679,11 +729,19 @@ func splitMarkdownParagraphsWithWhitespaceTrimming(
 
 		if fenceMarker == 0 && strings.TrimSpace(line) == "" {
 			flush()
+			if !trimWhitespace {
+				pendingSeparator.WriteString(line)
+			}
 			continue
 		}
 		current.WriteString(line)
 	}
 	flush()
+	if !trimWhitespace && pendingSeparator.Len() > 0 {
+		paragraphs = append(paragraphs, markdownParagraph{
+			content: pendingSeparator.String(),
+		})
+	}
 	return paragraphs
 }
 
@@ -728,7 +786,7 @@ func (m *MarkdownChunking) extractText(node ast.Node, source []byte) string {
 
 // mergeSmallParagraphsWithPath merges paragraphs with header path tracking.
 func (m *MarkdownChunking) mergeSmallParagraphsWithPath(
-	paragraphs []string,
+	paragraphs []markdownParagraph,
 	headerPath []string,
 	counter *chunkCounter,
 ) []markdownChunk {
@@ -748,25 +806,30 @@ func (m *MarkdownChunking) mergeSmallParagraphsWithPath(
 	}
 
 	for _, paragraph := range paragraphs {
-		remainingText := m.trimBlockEdges(paragraph)
+		remainingText := paragraph.content
+		if m.trimWhitespace {
+			remainingText = m.trimBlockEdges(remainingText)
+		}
 		for remainingText != "" {
 			chunkSize := m.nextChunkSize(counter)
 			currentSize := encoding.RuneCount(currentChunk.String())
-			remainingSize := encoding.RuneCount(remainingText)
-			separatorSize := 0
+			separator := ""
 			if currentSize > 0 {
-				separatorSize = 2
+				separator = paragraph.separator
 			}
+			remainingSize := encoding.RuneCount(remainingText)
+			separatorSize := encoding.RuneCount(separator)
 
 			if currentSize+separatorSize+remainingSize <= chunkSize {
 				if separatorSize > 0 {
-					currentChunk.WriteString("\n\n")
+					currentChunk.WriteString(separator)
 				}
 				currentChunk.WriteString(remainingText)
 				break
 			}
 
 			if currentSize > 0 {
+				separatorAdded := false
 				availableSize := chunkSize - currentSize - separatorSize
 				if isMarkdownHeading(currentChunk.String()) && availableSize > 0 {
 					var prefix string
@@ -775,11 +838,15 @@ func (m *MarkdownChunking) mergeSmallParagraphsWithPath(
 						availableSize,
 					)
 					if prefix != "" {
-						currentChunk.WriteString("\n\n")
+						currentChunk.WriteString(separator)
 						currentChunk.WriteString(prefix)
+						separatorAdded = true
 					}
 				}
 				flush()
+				if !m.trimWhitespace && separator != "" && !separatorAdded {
+					remainingText = separator + remainingText
+				}
 				continue
 			}
 
@@ -902,7 +969,12 @@ func (m *MarkdownChunking) mergeAdjacentChunks(
 	for i, chunk := range chunks {
 		rawContents[i] = chunk.content
 	}
-	separators := sourceChunkSeparators(content, rawContents, "\n\n")
+	separators := sourceChunkSeparators(
+		content,
+		rawContents,
+		"\n\n",
+		m.trimWhitespace,
+	)
 	for i := range chunks {
 		chunks[i].separator = separators[i]
 	}
@@ -1118,7 +1190,12 @@ func (m *MarkdownChunking) applyOverlap(
 	for i, chunk := range chunks {
 		rawContents[i] = chunk.Content
 	}
-	separators := sourceChunkSeparators(content, rawContents, "\n\n")
+	separators := sourceChunkSeparators(
+		content,
+		rawContents,
+		"\n\n",
+		m.trimWhitespace,
+	)
 	overlappedChunks := []*document.Document{chunks[0]}
 
 	for i := 1; i < len(chunks); i++ {

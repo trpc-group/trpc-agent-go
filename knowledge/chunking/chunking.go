@@ -238,6 +238,7 @@ func sourceChunkSeparators(
 	content string,
 	chunks []string,
 	fallback string,
+	trimWhitespace bool,
 ) []string {
 	separators := make([]string, len(chunks))
 	searchFrom := 0
@@ -252,10 +253,12 @@ func sourceChunkSeparators(
 		}
 		start := searchFrom + position
 		if i > 0 {
-			separators[i] = sourceGapSeparator(
-				content[previousEnd:start],
-				fallback,
-			)
+			gap := content[previousEnd:start]
+			if !trimWhitespace && strings.TrimSpace(gap) == "" {
+				separators[i] = gap
+			} else {
+				separators[i] = sourceGapSeparator(gap, fallback)
+			}
 		}
 		previousEnd = start + len(chunk)
 		searchFrom = previousEnd
