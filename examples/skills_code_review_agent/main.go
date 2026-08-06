@@ -68,7 +68,7 @@ func main() {
 	defer cancel()
 
 	input := ReviewTaskInput{
-		TaskID:   fmt.Sprintf("task-%d", time.Now().Unix()),
+		TaskID:   fmt.Sprintf("task-%d", time.Now().UnixNano()),
 		RepoPath: *repoPath,
 		DiffText: diffContent,
 	}

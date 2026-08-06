@@ -178,7 +178,7 @@ func (r *CodeReviewer) ExecuteReview(ctx context.Context, input ReviewTaskInput)
 	}
 
 	// Step 2: Apply static rules & Skill guidelines
-	findings := AnalyzeFileChanges(input.TaskID, fileChanges)
+	findings := AnalyzeFileChanges(input.TaskID, input.RepoPath, fileChanges)
 	result.Findings = findings
 
 	// Step 3: Sandbox execution & Permission Governance
@@ -200,8 +200,8 @@ func (r *CodeReviewer) ExecuteReview(ctx context.Context, input ReviewTaskInput)
 			execInput := codeexecutor.CodeExecutionInput{
 				CodeBlocks: []codeexecutor.CodeBlock{
 					{
-						Code:     "package main\nimport \"fmt\"\nfunc main(){ fmt.Println(\"vet pass\") }",
-						Language: "go",
+						Code:     "go vet ./...",
+						Language: "sh",
 					},
 				},
 			}
@@ -218,6 +218,10 @@ func (r *CodeReviewer) ExecuteReview(ctx context.Context, input ReviewTaskInput)
 				outputSnippet = err.Error()
 			} else {
 				outputSnippet = resp.Output
+				if strings.Contains(outputSnippet, "unsupported language") || strings.Contains(outputSnippet, "exit status") {
+					status = "error"
+					exitCode = 1
+				}
 			}
 
 			runInfo := SandboxRunInfo{

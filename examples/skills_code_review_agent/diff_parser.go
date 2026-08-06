@@ -61,7 +61,12 @@ func ParseUnifiedDiff(diff string) ([]FileChange, error) {
 	for scanner.Scan() {
 		line := scanner.Text()
 
-		if strings.HasPrefix(line, "--- ") {
+		if strings.HasPrefix(line, "diff --git") {
+			currentHunk = nil
+			continue
+		}
+
+		if currentHunk == nil && strings.HasPrefix(line, "--- ") {
 			path := strings.TrimPrefix(line, "--- ")
 			path = strings.TrimPrefix(path, "a/")
 			if currentFile == nil {
@@ -72,7 +77,7 @@ func ParseUnifiedDiff(diff string) ([]FileChange, error) {
 			continue
 		}
 
-		if strings.HasPrefix(line, "+++ ") {
+		if currentHunk == nil && strings.HasPrefix(line, "+++ ") {
 			path := strings.TrimPrefix(line, "+++ ")
 			path = strings.TrimPrefix(path, "b/")
 			if currentFile == nil {
@@ -114,9 +119,17 @@ func ParseUnifiedDiff(diff string) ([]FileChange, error) {
 			continue
 		}
 
-		if currentHunk != nil && len(line) > 0 {
-			lineType := line[:1]
-			content := line[1:]
+		if currentHunk != nil {
+			if strings.HasPrefix(line, `\`) {
+				continue
+			}
+
+			lineType := " "
+			content := ""
+			if len(line) > 0 {
+				lineType = line[:1]
+				content = line[1:]
+			}
 
 			if len(changes) > 0 {
 				targetFile := changes[len(changes)-1]

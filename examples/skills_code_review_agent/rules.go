@@ -11,6 +11,8 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -40,7 +42,7 @@ var (
 )
 
 // AnalyzeFileChanges applies all static rules to parsed file changes.
-func AnalyzeFileChanges(taskID string, changes []FileChange) []Finding {
+func AnalyzeFileChanges(taskID, repoPath string, changes []FileChange) []Finding {
 	var rawFindings []Finding
 
 	for _, file := range changes {
@@ -52,6 +54,12 @@ func AnalyzeFileChanges(taskID string, changes []FileChange) []Finding {
 				if other.NewPath == testPath {
 					hasTestFile = true
 					break
+				}
+			}
+			if !hasTestFile && repoPath != "" {
+				fullTestPath := filepath.Join(repoPath, testPath)
+				if _, err := os.Stat(fullTestPath); err == nil {
+					hasTestFile = true
 				}
 			}
 
