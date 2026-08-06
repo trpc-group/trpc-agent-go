@@ -1,0 +1,72 @@
+{
+  "evalSetId": "validation",
+  "name": "validation",
+  "evalCases": [
+    {
+      "evalId": "val_prompt_fix_generalizes",
+      "conversation": [
+        {
+          "userContent": {"role": "user", "content": "Which team handles invoices?"},
+          "finalResponse": {"role": "assistant", "content": "billing"}
+        }
+      ],
+      "sessionInput": {
+        "appName": "eval-optimization-regression-app",
+        "userId": "demo",
+        "state": {
+          "metricName": "tool_trajectory",
+          "baselineScore": 0,
+          "baselineStatus": "failed",
+          "baselineReason": "missing tool call: invoice question was not sent to billing_lookup",
+          "candidateScore": 1,
+          "candidateStatus": "passed",
+          "candidateReason": "candidate routes invoice question to billing"
+        }
+      }
+    },
+    {
+      "evalId": "val_optimization_ineffective",
+      "conversation": [
+        {
+          "userContent": {"role": "user", "content": "Return status as JSON."},
+          "finalResponse": {"role": "assistant", "content": "{\"status\":\"ok\"}"}
+        }
+      ],
+      "sessionInput": {
+        "appName": "eval-optimization-regression-app",
+        "userId": "demo",
+        "state": {
+          "metricName": "json_format",
+          "baselineScore": 0,
+          "baselineStatus": "failed",
+          "baselineReason": "format error: response uses prose instead of JSON",
+          "candidateScore": 0.5,
+          "candidateStatus": "failed",
+          "candidateReason": "partial JSON improvement but still fails schema"
+        }
+      }
+    },
+    {
+      "evalId": "val_overfit_refund_policy",
+      "conversation": [
+        {
+          "userContent": {"role": "user", "content": "What is the refund cutoff date?"},
+          "finalResponse": {"role": "assistant", "content": "2026-08-31"}
+        }
+      ],
+      "sessionInput": {
+        "appName": "eval-optimization-regression-app",
+        "userId": "demo",
+        "state": {
+          "metricName": "final_response",
+          "baselineScore": 1,
+          "baselineStatus": "passed",
+          "baselineReason": "baseline preserves the validation refund cutoff date",
+          "candidateScore": 0,
+          "candidateStatus": "failed",
+          "candidateReason": "final response mismatch: candidate overfits train date and drops 2026-08-31"
+        }
+      }
+    }
+  ]
+}
