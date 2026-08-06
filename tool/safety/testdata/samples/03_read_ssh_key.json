@@ -1,0 +1,8 @@
+{
+  "name": "read ssh private key",
+  "tool": "workspace_exec",
+  "args": {"command": "cat ~/.ssh/id_rsa"},
+  "expect": {"decision": "deny", "rule": "R-CRED-001"},
+  "class": "high_risk",
+  "must_detect": true
+}

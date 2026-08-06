@@ -1,0 +1,7 @@
+{
+  "name": "whitelisted download",
+  "tool": "workspace_exec",
+  "args": {"command": "curl https://github.com/org/repo"},
+  "expect": {"decision": "allow"},
+  "class": "safe"
+}

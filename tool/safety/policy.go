@@ -1,0 +1,871 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
+package safety
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path"
+	"path/filepath"
+	"regexp"
+	"strings"
+
+	"github.com/bmatcuk/doublestar/v4"
+	"gopkg.in/yaml.v3"
+
+	"trpc.group/trpc-go/trpc-agent-go/internal/shellsafe"
+)
+
+// Action is a safety decision applied before a tool executes.
+type Action string
+
+const (
+	// ActionAllow lets the tool call proceed.
+	ActionAllow Action = "allow"
+	// ActionDeny blocks the tool call.
+	ActionDeny Action = "deny"
+	// ActionAsk routes the tool call to human / model approval. The policy
+	// keyword "needs_human_review" is normalized to this value.
+	ActionAsk Action = "ask"
+)
+
+// RiskLevel ranks the severity of a finding. It is defined here because the
+// policy's rule overrides reference it; the rule engine and report reuse the
+// same type.
+type RiskLevel string
+
+const (
+	// RiskNone means no risk was detected.
+	RiskNone RiskLevel = "none"
+	// RiskLow is an informational finding.
+	RiskLow RiskLevel = "low"
+	// RiskMedium is a finding that warrants human review.
+	RiskMedium RiskLevel = "medium"
+	// RiskHigh is a finding that should be blocked by default.
+	RiskHigh RiskLevel = "high"
+	// RiskCritical is an unconditionally dangerous finding.
+	RiskCritical RiskLevel = "critical"
+)
+
+// Backend identifiers used by the report and the backend mapping. These are
+// the canonical backend names; the concrete tool names that map to each are
+// configured under Policy.Backends so a renamed tool (hostexec/codeexec allow
+// WithName) does not silently bypass the guard.
+const (
+	// BackendWorkspace is the workspace_exec backend (sandboxed workspace).
+	BackendWorkspace = "workspace_exec"
+	// BackendHost is the host shell backend (hostexec exec_command).
+	BackendHost = "host"
+	// BackendCode is the code executor backend (codeexec execute_code).
+	BackendCode = "code"
+	// BackendUnscanned labels a report/audit event for a tool call the guard did
+	// not scan: a non-exec tool (under audit_unscanned) or a session-input tool
+	// while session_input.scan is off. It is never a configurable backend name.
+	BackendUnscanned = "unscanned"
+)
+
+// CommandPolicy holds the executable-name allow/deny lists handed to
+// internal/shellsafe. shellsafe owns argv[0] allow/deny plus its built-in
+// shell-wrapper deny set; the safety rules only add argument-level checks.
+type CommandPolicy struct {
+	Allowed []string `yaml:"allowed" json:"allowed"`
+	Denied  []string `yaml:"denied" json:"denied"`
+	// ReviewPipelines (opt-in) routes any multi-segment pipeline or command
+	// chain to human review, a coarse posture on top of the per-command rules.
+	// Off by default so legitimate pipes ("cat a | grep b") stay allowed.
+	ReviewPipelines bool `yaml:"review_pipelines" json:"review_pipelines"`
+}
+
+// NetworkPolicy configures outbound-network detection.
+//
+// Contract: allowed_domains statically vets the destinations named in the
+// command itself — the initial request URL and every host smuggled through a
+// connection-redirect/proxy option. It is an initial-target check, not a full
+// egress boundary: a whitelisted endpoint can still HTTP-redirect the client
+// to a non-whitelisted host at runtime (curl only with -L/--location; wget by
+// default). Enable RequireRedirectFree to fail redirect-following invocations
+// closed, or enforce the boundary at runtime (sandbox egress rules).
+type NetworkPolicy struct {
+	DownloadCommands []string `yaml:"download_commands" json:"download_commands"`
+	AllowedDomains   []string `yaml:"allowed_domains" json:"allowed_domains"`
+	OnNonWhitelisted Action   `yaml:"on_non_whitelisted" json:"on_non_whitelisted"`
+	// RequireRedirectFree upgrades allowed_domains from an initial-target check
+	// to a static egress boundary: a curl invocation that follows redirects
+	// (-L/--location/--location-trusted) and a wget invocation that does not
+	// disable them (--max-redirect=0; wget follows redirects by default) fail
+	// closed via OnNonWhitelisted, because the redirect target cannot be
+	// statically verified. Off by default so common whitelisted usage
+	// ("curl -sSL https://host", plain wget) stays allowed.
+	RequireRedirectFree bool `yaml:"require_redirect_free" json:"require_redirect_free"`
+	// CurlRequireDisabledConfig fails a curl invocation closed (via
+	// OnNonWhitelisted) unless its first option is -q/--disable. curl reads an
+	// implicit default config (~/.curlrc, $CURL_HOME/.curlrc,
+	// $XDG_CONFIG_HOME/curlrc) that can inject url/proxy/resolve egress the
+	// guard cannot see; -q/--disable as the first parameter is the only way to
+	// suppress it. Off by default so a plain whitelisted "curl https://host"
+	// still allows; opt in for defence-in-depth without a code change. The
+	// explicit -K/--config file is always failed closed regardless of this flag.
+	CurlRequireDisabledConfig bool `yaml:"curl_require_disabled_config" json:"curl_require_disabled_config"`
+}
+
+// ResourcePolicy configures resource-abuse limits. Static detection here is
+// best-effort (MaxOutputBytes, for example, only catches a size that is
+// explicit in the command, such as "head -c N"); the guard does not wire these
+// values into the runtime, so the executor's own timeout / output limits must
+// be configured separately for real enforcement.
+type ResourcePolicy struct {
+	MaxTimeoutSec        int  `yaml:"max_timeout_sec" json:"max_timeout_sec"`
+	MaxOutputBytes       int  `yaml:"max_output_bytes" json:"max_output_bytes"`
+	MaxSleepSec          int  `yaml:"max_sleep_sec" json:"max_sleep_sec"`
+	DenyBackgroundOnHost bool `yaml:"deny_background_on_host" json:"deny_background_on_host"`
+	DenyPTYOnHost        bool `yaml:"deny_pty_on_host" json:"deny_pty_on_host"`
+}
+
+// EnvPolicy configures environment-variable handling.
+type EnvPolicy struct {
+	AllowedKeys []string `yaml:"allowed_keys" json:"allowed_keys"`
+}
+
+// SessionInputPolicy configures scanning of the characters written into an
+// already established exec session (hostexec write_stdin, workspaceexec
+// workspace_write_stdin).
+//
+// The guard normally intercepts at the session-establishment point
+// (exec_command / workspace_exec). Everything typed into the session afterwards
+// arrives through a separate tool whose payload is a session id plus raw
+// characters, which is a full bypass of every command rule: an allowed
+// "python3" or "bash" session accepts "import os; os.system('rm -rf /')" as
+// stdin and the guard never sees it.
+//
+// Scan is off by default because session input is not necessarily a command.
+// Answering an interactive prompt ("y", a password, a control character) would
+// be parsed as a command line, and under a policy with commands.allowed that
+// means an allow-list miss (R-CMD-001) or, for input shellsafe cannot tokenize,
+// the fail-closed unparsable_action. Turn it on for non-interactive
+// deployments, where every write_stdin really is a command; the tool calls are
+// audited either way (see Policy.AuditUnscanned).
+type SessionInputPolicy struct {
+	// Scan enables scanning the session-input tools listed in Tools. When
+	// false, those tools are not scanned but are still audited, so the blind
+	// spot is visible in the audit trail rather than silent.
+	Scan bool `yaml:"scan" json:"scan"`
+	// Tools maps a backend identifier to the session-input tool names that feed
+	// it. Defaults to the real framework tool names; override when a tool set
+	// was renamed. A tool listed here must not also appear under Backends.
+	Tools map[string][]string `yaml:"tools" json:"tools"`
+}
+
+// SecretPolicy lists regular expressions whose matches are redacted from
+// command strings, evidence, env values, reports and audit events.
+type SecretPolicy struct {
+	Patterns []string `yaml:"patterns" json:"patterns"`
+}
+
+// Subcommand matches a command plus an argument prefix, e.g. {cmd: go,
+// args_prefix: [install]} matches "go install ...".
+type Subcommand struct {
+	Cmd        string   `yaml:"cmd" json:"cmd"`
+	ArgsPrefix []string `yaml:"args_prefix" json:"args_prefix"`
+}
+
+// Override replaces the action and/or risk level produced for a rule id. A
+// blank Action leaves the rule's action unchanged (risk-only override).
+type Override struct {
+	Action    Action    `yaml:"action" json:"action"`
+	RiskLevel RiskLevel `yaml:"risk_level" json:"risk_level"`
+}
+
+// Policy is the file-driven safety configuration. Editing the YAML/JSON file
+// changes allow/deny lists, forbidden paths, the network whitelist and limits
+// without code changes.
+type Policy struct {
+	Version          int                 `yaml:"version" json:"version"`
+	UnparsableAction Action              `yaml:"unparsable_action" json:"unparsable_action"`
+	DefaultAction    Action              `yaml:"default_action" json:"default_action"`
+	Backends         map[string][]string `yaml:"backends" json:"backends"`
+	// WorkspaceIsolated declares that the tools mapped to the workspace backend
+	// really run inside sandbox isolation (container, e2b, ...). The guard sees
+	// only the tool's argument schema, not the executor behind it, and
+	// workspace_exec can be backed by codeexecutor/local, which starts the
+	// command directly on the host. The host-risk rule (R-HOST-001:
+	// background/PTY denial, sudo/nohup) therefore also applies to the
+	// workspace backend unless this is explicitly set to true (fail closed).
+	WorkspaceIsolated bool `yaml:"workspace_isolated" json:"workspace_isolated"`
+	// AuditUnscanned emits an audit event (decision allow, backend "unscanned")
+	// for every tool call the guard does not scan, so an operator can see what
+	// passed through untouched. Off by default because it logs one line per
+	// non-exec tool call (webfetch, file tools, ...). Session-input tools whose
+	// scanning is disabled are audited regardless of this flag: they are a
+	// known bypass of the command rules and must never be silent.
+	AuditUnscanned    bool                `yaml:"audit_unscanned" json:"audit_unscanned"`
+	SessionInput      SessionInputPolicy  `yaml:"session_input" json:"session_input"`
+	Commands          CommandPolicy       `yaml:"commands" json:"commands"`
+	DeniedSubcommands []Subcommand        `yaml:"denied_subcommands" json:"denied_subcommands"`
+	ForbiddenPaths    []string            `yaml:"forbidden_paths" json:"forbidden_paths"`
+	Network           NetworkPolicy       `yaml:"network" json:"network"`
+	Resources         ResourcePolicy      `yaml:"resources" json:"resources"`
+	Env               EnvPolicy           `yaml:"env" json:"env"`
+	Secrets           SecretPolicy        `yaml:"secrets" json:"secrets"`
+	RuleOverrides     map[string]Override `yaml:"rule_overrides" json:"rule_overrides"`
+
+	// compiled holds the precompiled, read-only matchers. It is populated by
+	// compile and is safe for concurrent reads.
+	compiled compiledPolicy `yaml:"-" json:"-"`
+}
+
+// compiledPolicy holds the precompiled matchers derived from a Policy. All
+// fields are read-only after compile and safe for concurrent use.
+type compiledPolicy struct {
+	forbiddenGlobs []string
+	secretRes      []*regexp.Regexp
+	allowedDomains []domainMatcher
+	shellPolicy    shellsafe.Policy
+	backendIndex   map[string]string // tool name -> backend identifier
+	// sessionInputIndex maps a session-input tool name to the backend it feeds.
+	// It is always built, even when SessionInput.Scan is false, so the guard can
+	// audit the unscanned call instead of dropping it silently.
+	sessionInputIndex map[string]string
+}
+
+// domainMatcher matches a host against one allowed_domains entry. A "*."
+// prefix marks a wildcard that also matches the bare base domain.
+type domainMatcher struct {
+	base     string
+	suffix   string
+	wildcard bool
+}
+
+// DefaultPolicy returns the built-in safe defaults: unparsable commands are
+// denied, anything not matched by a rule is allowed, and the backend map
+// points at the real tool names. The defaults are protective out of the box —
+// obviously destructive binaries and privilege escalation are denied,
+// well-known credential paths are forbidden and common secret shapes are
+// flagged/redacted — while leaving no command allow-list, so ordinary commands
+// still run. Network checking is INACTIVE until configured: the defaults set
+// neither network.download_commands nor network.allowed_domains, so the
+// default guard allows "curl https://anything" — on_non_whitelisted: deny only
+// takes effect once a policy configures download commands and a domain
+// whitelist. Note that a non-empty denied list activates shellsafe, which also
+// rejects shell wrappers (bash -c, eval, ...); a policy file can override
+// every list.
+//
+// The denied list covers both platforms: hostexec runs commands through
+// cmd.exe on Windows, so the native destructive utilities (format, diskpart,
+// vssadmin, ...) and the runas privilege escalation are denied alongside their
+// Unix counterparts, and R-DEL-001 additionally understands del / erase / rd /
+// rmdir argument semantics (see ruleDangerousArgs).
+func DefaultPolicy() Policy {
+	return Policy{
+		Version:          1,
+		UnparsableAction: ActionDeny,
+		DefaultAction:    ActionAllow,
+		Commands: CommandPolicy{
+			Denied: append(unixDeniedCommands(), windowsDeniedCommands()...),
+		},
+		ForbiddenPaths: []string{
+			"~/.ssh", "**/id_rsa", "**/id_ed25519", "**/.env",
+			"**/credentials", "/etc/shadow",
+		},
+		Network: NetworkPolicy{OnNonWhitelisted: ActionDeny},
+		Secrets: SecretPolicy{Patterns: defaultSecretPatterns()},
+		Backends: map[string][]string{
+			BackendWorkspace: {"workspace_exec"},
+			BackendHost:      {"exec_command"},
+			BackendCode:      {"execute_code"},
+		},
+		SessionInput: SessionInputPolicy{
+			Scan: false,
+			Tools: map[string][]string{
+				BackendWorkspace: {"workspace_write_stdin"},
+				BackendHost:      {"write_stdin"},
+			},
+		},
+	}
+}
+
+// unixDeniedCommands are the destructive / privilege-escalating binaries
+// denied by default on Unix-like hosts.
+func unixDeniedCommands() []string {
+	return []string{
+		"dd", "mkfs", "mount", "umount", "shutdown", "reboot",
+		"halt", "poweroff", "sudo", "su", "doas",
+	}
+}
+
+// windowsDeniedCommands are their native Windows equivalents: disk and volume
+// destruction, boot configuration, shadow-copy deletion (the classic
+// ransomware step), ownership/ACL rewriting and privilege escalation. They are
+// denied by default so a policy inherited from DefaultPolicy protects a
+// Windows host as well as a Unix one.
+func windowsDeniedCommands() []string {
+	return []string{
+		"format", "diskpart", "fsutil", "vssadmin", "wbadmin",
+		"bcdedit", "bootrec", "cipher", "takeown", "icacls", "runas",
+	}
+}
+
+// defaultSecretPatterns are the built-in secret shapes: provider token formats
+// (AWS, GitHub, OpenAI-style sk-, Slack xox), private-key material, bearer
+// headers, and a name-based key=value heuristic that catches a secret-named
+// assignment whatever the value looks like. Pattern order matters for
+// redaction: the bounded full PEM block (header, base64 body and END marker)
+// must be replaced before the bare-header pattern, which otherwise would eat
+// the header and leave the key body behind in a report sink; the bare-header
+// pattern remains so a truncated key (no END marker) is still redacted. The
+// bearer charset covers the full RFC 6750 token68 alphabet (incl. +, /, ~, =)
+// so no token suffix survives redaction.
+func defaultSecretPatterns() []string {
+	return []string{
+		`AKIA[0-9A-Z]{16}`,
+		`ghp_[0-9A-Za-z]{36}`,
+		`sk-[A-Za-z0-9_-]{12,}`,
+		`xox[baprs]-[A-Za-z0-9-]{10,}`,
+		`-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----`,
+		`-----BEGIN [A-Z ]*PRIVATE KEY-----`,
+		`(?i)bearer\s+[a-z0-9._~+/=-]+`,
+		`(?i)(api[_-]?key|token|password|passwd|secret|private[_-]?key|credential)[a-z0-9_]*=["']?[^\s"']+`,
+	}
+}
+
+// LoadPolicy reads a YAML or JSON policy file, layers it over DefaultPolicy and
+// compiles it. Decoding is strict: an unknown field (a typo such as
+// network.download_command) is rejected at load time instead of silently
+// producing a weaker policy than the operator configured. A bad regex or glob
+// in the file also surfaces as an error here, at startup, rather than at
+// request time. An explicit "version: 0" is rejected as well: only a
+// programmatically built policy may leave the version unset, and in a file the
+// zero is an unsupported version, not an omission.
+func LoadPolicy(policyPath string) (*Policy, error) {
+	raw, err := os.ReadFile(policyPath)
+	if err != nil {
+		return nil, fmt.Errorf("read policy %q: %w", policyPath, err)
+	}
+	if err := checkExplicitVersion(policyPath, raw); err != nil {
+		return nil, err
+	}
+	p := DefaultPolicy()
+	switch ext := strings.ToLower(filepath.Ext(policyPath)); ext {
+	case ".yaml", ".yml":
+		dec := yaml.NewDecoder(bytes.NewReader(raw))
+		dec.KnownFields(true)
+		// io.EOF marks an empty document; the defaults stand.
+		err := dec.Decode(&p)
+		if err != nil && !errors.Is(err, io.EOF) {
+			return nil, fmt.Errorf("parse yaml policy %q: %w", policyPath, err)
+		}
+		// Exactly one document: a second "---" document would be decoded
+		// nowhere and silently ignored, letting an operator deploy a file whose
+		// trailing restrictions never load. Only the first Decode consuming a
+		// document needs the check (an empty file is already at EOF).
+		if err == nil {
+			var extra any
+			if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+				return nil, fmt.Errorf(
+					"parse yaml policy %q: unexpected second document; the policy must be a single YAML document",
+					policyPath)
+			}
+		}
+	case ".json":
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&p); err != nil {
+			return nil, fmt.Errorf("parse json policy %q: %w", policyPath, err)
+		}
+		// Exactly one value: a second JSON value (or trailing garbage) would be
+		// ignored while the operator believes it applies.
+		var extra any
+		if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+			return nil, fmt.Errorf(
+				"parse json policy %q: unexpected trailing content; the policy must be a single JSON value",
+				policyPath)
+		}
+	default:
+		return nil, fmt.Errorf(
+			"unsupported policy extension %q (want .yaml, .yml or .json)", ext)
+	}
+	if err := p.compile(); err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
+// checkExplicitVersion rejects a policy file that spells out "version: 0".
+// compile normalizes a zero version to the current one so a programmatically
+// built Policy can leave the field at its zero value, which would otherwise
+// make an explicit 0 in a file indistinguishable from an omitted key and let an
+// unsupported version load silently. Probing for the key restores the loud
+// failure an explicit version 2 already gets.
+func checkExplicitVersion(policyPath string, raw []byte) error {
+	var probe struct {
+		Version *int `yaml:"version" json:"version"`
+	}
+	switch strings.ToLower(filepath.Ext(policyPath)) {
+	case ".yaml", ".yml":
+		// Errors are ignored: the real decode below reports them with context.
+		_ = yaml.Unmarshal(raw, &probe)
+	case ".json":
+		_ = json.Unmarshal(raw, &probe)
+	}
+	if probe.Version != nil && *probe.Version == 0 {
+		return fmt.Errorf(
+			"parse policy %q: unsupported policy version 0 (want 1; omit the key to accept the default)",
+			policyPath)
+	}
+	return nil
+}
+
+// compile validates and precompiles the policy. It normalizes the action
+// keywords (including needs_human_review -> ask), compiles every regex and
+// glob, and builds the domain and backend indexes.
+func (p *Policy) compile() error {
+	if err := p.normalizeActions(); err != nil {
+		return err
+	}
+	if err := p.normalizeRuleOverrides(); err != nil {
+		return err
+	}
+	var c compiledPolicy
+	if err := p.compileMatchers(&c); err != nil {
+		return err
+	}
+	if err := p.compileToolIndexes(&c); err != nil {
+		return err
+	}
+	p.compiled = c
+	return nil
+}
+
+// normalizeActions validates the policy version and rewrites every action
+// keyword to its canonical form.
+func (p *Policy) normalizeActions() error {
+	var err error
+	switch p.Version {
+	case 0:
+		// Unset: a programmatically built policy may leave the zero value.
+		p.Version = 1
+	case 1:
+	default:
+		return fmt.Errorf("unsupported policy version %d (want 1)", p.Version)
+	}
+	if p.UnparsableAction, err = resolveAction(p.UnparsableAction, ActionDeny); err != nil {
+		return fmt.Errorf("unparsable_action: %w", err)
+	}
+	if p.DefaultAction, err = resolveAction(p.DefaultAction, ActionAllow); err != nil {
+		return fmt.Errorf("default_action: %w", err)
+	}
+	if p.Network.OnNonWhitelisted, err = resolveAction(
+		p.Network.OnNonWhitelisted, ActionDeny); err != nil {
+		return fmt.Errorf("network.on_non_whitelisted: %w", err)
+	}
+	return nil
+}
+
+// normalizeRuleOverrides canonicalizes each override in place, rejecting an
+// unknown rule id, action or risk level.
+func (p *Policy) normalizeRuleOverrides() error {
+	for id, ov := range p.RuleOverrides {
+		if !knownRuleIDs[id] {
+			return fmt.Errorf("rule_overrides[%s]: unknown rule id", id)
+		}
+		changed := false
+		if strings.TrimSpace(string(ov.Action)) != "" {
+			ca, ok := canonicalAction(ov.Action)
+			if !ok {
+				return fmt.Errorf("rule_overrides[%s]: unknown action %q", id, ov.Action)
+			}
+			ov.Action = ca
+			changed = true
+		}
+		if strings.TrimSpace(string(ov.RiskLevel)) != "" {
+			cr, ok := canonicalRisk(ov.RiskLevel)
+			if !ok {
+				return fmt.Errorf("rule_overrides[%s]: unknown risk_level %q", id, ov.RiskLevel)
+			}
+			ov.RiskLevel = cr
+			changed = true
+		}
+		if changed {
+			p.RuleOverrides[id] = ov
+		}
+	}
+	return nil
+}
+
+// compileMatchers precompiles the secret regexps, forbidden-path globs, domain
+// matchers and the shellsafe policy into c.
+func (p *Policy) compileMatchers(c *compiledPolicy) error {
+	var err error
+	if c.secretRes, err = compileRegexps(p.Secrets.Patterns, "secrets.patterns"); err != nil {
+		return err
+	}
+	c.forbiddenGlobs = expandForbiddenPaths(p.ForbiddenPaths)
+	for _, g := range c.forbiddenGlobs {
+		if !doublestar.ValidatePattern(g) {
+			return fmt.Errorf("forbidden_paths: invalid glob %q", g)
+		}
+	}
+	c.allowedDomains = compileDomains(p.Network.AllowedDomains)
+	c.shellPolicy = shellsafe.PolicyFromLists(p.Commands.Allowed, p.Commands.Denied)
+	return nil
+}
+
+// compileToolIndexes builds the tool→backend indexes for the command entry
+// points and the session-input tools, applying the default-inheritance rules
+// and rejecting a configuration that would leave the guard scanning nothing or
+// resolving a tool ambiguously.
+func (p *Policy) compileToolIndexes(c *compiledPolicy) error {
+	var err error
+	// A partial programmatic policy (WithPolicy(&Policy{ForbiddenPaths: ...}))
+	// leaves Backends nil; compiled as-is it would produce an empty backend
+	// index, every exec tool would resolve to backend "" and be allowed without
+	// scanning — the restriction the caller configured would silently never
+	// run. Inherit the default tool→backend mapping instead, so a partial
+	// policy tightens the defaults rather than disabling the guard.
+	if len(p.Backends) == 0 {
+		p.Backends = DefaultPolicy().Backends
+	}
+	if c.backendIndex, err = buildBackendIndex("backends", p.Backends); err != nil {
+		return err
+	}
+	// A backend map that names backends but maps no tool (e.g. all-blank tool
+	// lists) is rejected rather than defaulted: it is an explicit, malformed
+	// configuration, and compiling it would also leave every tool unscanned.
+	if len(c.backendIndex) == 0 {
+		return errors.New(
+			"backends: no tool is mapped to any backend; the guard would scan nothing " +
+				"(omit backends entirely to inherit the defaults)")
+	}
+	// Same inheritance as Backends: a partial programmatic policy leaves the
+	// session-input tools nil, and defaulting them keeps the audit trail over
+	// the known bypass tools intact. An explicitly empty (non-nil) map opts out.
+	if p.SessionInput.Tools == nil {
+		p.SessionInput.Tools = DefaultPolicy().SessionInput.Tools
+	}
+	if c.sessionInputIndex, err = buildBackendIndex(
+		"session_input.tools", p.SessionInput.Tools); err != nil {
+		return err
+	}
+	// A tool cannot be both a command entry point and a session-input sink: the
+	// two carry different argument schemas, and resolving the overlap by map
+	// lookup order would scan the wrong field.
+	for t := range c.sessionInputIndex {
+		if b, ok := c.backendIndex[t]; ok {
+			return fmt.Errorf(
+				"session_input.tools: tool %q is already mapped to backend %q under backends", t, b)
+		}
+	}
+	return nil
+}
+
+// clone returns a deep copy of the policy's mutable fields. WithPolicy uses it
+// so that compile() (which rewrites RuleOverrides in place) and subsequent
+// concurrent checks operate on the guard's own maps and slices: caller
+// mutations after NewGuard cannot change live policy behavior or race with a
+// check. The compiled field is intentionally reset; the caller recompiles.
+func (p *Policy) clone() Policy {
+	cp := *p
+	cp.compiled = compiledPolicy{}
+	cp.Backends = cloneStringSliceMap(p.Backends)
+	cp.SessionInput.Tools = cloneStringSliceMap(p.SessionInput.Tools)
+	cp.Commands.Allowed = cloneStrings(p.Commands.Allowed)
+	cp.Commands.Denied = cloneStrings(p.Commands.Denied)
+	cp.ForbiddenPaths = cloneStrings(p.ForbiddenPaths)
+	cp.Network.DownloadCommands = cloneStrings(p.Network.DownloadCommands)
+	cp.Network.AllowedDomains = cloneStrings(p.Network.AllowedDomains)
+	cp.Env.AllowedKeys = cloneStrings(p.Env.AllowedKeys)
+	cp.Secrets.Patterns = cloneStrings(p.Secrets.Patterns)
+	if p.DeniedSubcommands != nil {
+		subs := make([]Subcommand, len(p.DeniedSubcommands))
+		for i, s := range p.DeniedSubcommands {
+			s.ArgsPrefix = cloneStrings(s.ArgsPrefix)
+			subs[i] = s
+		}
+		cp.DeniedSubcommands = subs
+	}
+	if p.RuleOverrides != nil {
+		ov := make(map[string]Override, len(p.RuleOverrides))
+		for k, v := range p.RuleOverrides {
+			ov[k] = v
+		}
+		cp.RuleOverrides = ov
+	}
+	return cp
+}
+
+// cloneStrings returns a copy of s, preserving nil.
+func cloneStrings(s []string) []string {
+	if s == nil {
+		return nil
+	}
+	out := make([]string, len(s))
+	copy(out, s)
+	return out
+}
+
+// cloneStringSliceMap returns a deep copy of m, preserving nil.
+func cloneStringSliceMap(m map[string][]string) map[string][]string {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string][]string, len(m))
+	for k, v := range m {
+		out[k] = cloneStrings(v)
+	}
+	return out
+}
+
+// backendFor returns the backend identifier configured for toolName, or an
+// empty string when the tool is not an exec backend (and is therefore allowed
+// without scanning).
+func (p *Policy) backendFor(toolName string) string {
+	return p.compiled.backendIndex[toolName]
+}
+
+// sessionInputBackendFor returns the backend a session-input tool feeds, or an
+// empty string when toolName is not one. It resolves regardless of
+// SessionInput.Scan; the caller decides between scanning and audit-only.
+func (p *Policy) sessionInputBackendFor(toolName string) string {
+	return p.compiled.sessionInputIndex[toolName]
+}
+
+// shellPolicy exposes the compiled shellsafe policy to the rule engine.
+func (p *Policy) shellPolicy() shellsafe.Policy {
+	return p.compiled.shellPolicy
+}
+
+// hostRiskBackend reports whether backend executes with host-level risk for
+// the host-risk rule: the host backend always, and the workspace backend
+// unless the policy explicitly declares it sandboxed (workspace_isolated).
+// workspace_exec is an argument schema, not an isolation guarantee — a
+// deployment backed by codeexecutor/local runs the command directly on the
+// host.
+func (p *Policy) hostRiskBackend(backend string) bool {
+	switch backend {
+	case BackendHost:
+		return true
+	case BackendWorkspace:
+		return !p.WorkspaceIsolated
+	default:
+		return false
+	}
+}
+
+// forbiddenMatch reports whether candidate (an argv word or cwd) hits any
+// forbidden path. Non-glob entries also match as a directory prefix, so
+// "~/.ssh" matches "~/.ssh/id_rsa". The candidate is lexically normalized
+// first (separators and dot segments), so "/etc/../etc/shadow" cannot dodge a
+// "/etc/shadow" pattern. It returns the matched pattern for use as finding
+// evidence.
+func (p *Policy) forbiddenMatch(candidate string) (string, bool) {
+	cand := normalizePathCandidate(candidate)
+	if cand == "" {
+		return "", false
+	}
+	for _, g := range p.compiled.forbiddenGlobs {
+		if globHit(g, cand) {
+			return g, true
+		}
+	}
+	return "", false
+}
+
+// normalizePathCandidate normalizes a path candidate before matching:
+// backslashes become slashes (the scanned command may target a Windows path
+// even when the guard runs elsewhere, where filepath.ToSlash is a no-op) and
+// "." / ".." segments are resolved lexically. The same representation feeds
+// forbidden-path matching and, via the caller, keeps deny rules aligned with
+// how the OS resolves the path.
+func normalizePathCandidate(candidate string) string {
+	cand := strings.ReplaceAll(strings.TrimSpace(candidate), "\\", "/")
+	if cand == "" {
+		return ""
+	}
+	return path.Clean(cand)
+}
+
+// domainAllowed reports whether host is in the network allow list. host should
+// already be free of any port (pass url.URL.Hostname()).
+func (p *Policy) domainAllowed(host string) bool {
+	host = strings.ToLower(strings.TrimSpace(host))
+	if host == "" {
+		return false
+	}
+	for _, m := range p.compiled.allowedDomains {
+		if m.wildcard {
+			if host == m.base || strings.HasSuffix(host, m.suffix) {
+				return true
+			}
+			continue
+		}
+		if host == m.base {
+			return true
+		}
+	}
+	return false
+}
+
+// canonicalAction maps an action keyword (case-insensitive, trimmed) to its
+// canonical form. needs_human_review is an alias for ask.
+func canonicalAction(a Action) (Action, bool) {
+	switch strings.ToLower(strings.TrimSpace(string(a))) {
+	case "allow":
+		return ActionAllow, true
+	case "deny":
+		return ActionDeny, true
+	case "ask", "needs_human_review":
+		return ActionAsk, true
+	default:
+		return "", false
+	}
+}
+
+// canonicalRisk maps a risk-level keyword (case-insensitive, trimmed) to its
+// canonical form. An unknown keyword is rejected so a typo or unsupported level
+// cannot silently map to no action and let the default action permit a finding.
+func canonicalRisk(r RiskLevel) (RiskLevel, bool) {
+	switch strings.ToLower(strings.TrimSpace(string(r))) {
+	case "none":
+		return RiskNone, true
+	case "low":
+		return RiskLow, true
+	case "medium":
+		return RiskMedium, true
+	case "high":
+		return RiskHigh, true
+	case "critical":
+		return RiskCritical, true
+	default:
+		return "", false
+	}
+}
+
+// resolveAction returns the canonical action, falling back when blank and
+// erroring on an unknown keyword.
+func resolveAction(a, fallback Action) (Action, error) {
+	if strings.TrimSpace(string(a)) == "" {
+		return fallback, nil
+	}
+	ca, ok := canonicalAction(a)
+	if !ok {
+		return "", fmt.Errorf("unknown action %q", a)
+	}
+	return ca, nil
+}
+
+// compileRegexps compiles each pattern, attributing a parse error to field.
+func compileRegexps(patterns []string, field string) ([]*regexp.Regexp, error) {
+	var out []*regexp.Regexp
+	for _, pat := range patterns {
+		if strings.TrimSpace(pat) == "" {
+			continue
+		}
+		re, err := regexp.Compile(pat)
+		if err != nil {
+			return nil, fmt.Errorf("%s: compile %q: %w", field, pat, err)
+		}
+		out = append(out, re)
+	}
+	return out, nil
+}
+
+// expandForbiddenPaths normalizes patterns to forward slashes and, for entries
+// rooted at "~", adds a $HOME-expanded variant so both the literal "~/.ssh"
+// and an absolute "/home/user/.ssh" form are caught.
+func expandForbiddenPaths(patterns []string) []string {
+	home, _ := os.UserHomeDir()
+	var out []string
+	for _, p := range patterns {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		norm := filepath.ToSlash(p)
+		out = append(out, norm)
+		if home != "" && (norm == "~" || strings.HasPrefix(norm, "~/")) {
+			expanded := filepath.ToSlash(filepath.Join(home, strings.TrimPrefix(norm, "~")))
+			out = append(out, expanded)
+		}
+	}
+	return out
+}
+
+// compileDomains parses allowed_domains entries into matchers. A "*." prefix
+// marks a wildcard that also accepts the bare base domain.
+func compileDomains(domains []string) []domainMatcher {
+	var out []domainMatcher
+	for _, d := range domains {
+		d = strings.ToLower(strings.TrimSpace(d))
+		if d == "" {
+			continue
+		}
+		if strings.HasPrefix(d, "*.") {
+			base := d[2:]
+			out = append(out, domainMatcher{base: base, suffix: "." + base, wildcard: true})
+			continue
+		}
+		out = append(out, domainMatcher{base: d})
+	}
+	return out
+}
+
+// buildBackendIndex inverts a backend->tools map into a tool->backend index.
+// field names the policy key being compiled, so the same builder serves both
+// backends and session_input.tools. It rejects unknown backend names (a typo
+// like "hostexec" would otherwise silently disable backend-specific checks) and
+// duplicate tool mappings (the same tool under two backends would otherwise be
+// resolved by map iteration order). Both surface at compile time, not at
+// request time.
+func buildBackendIndex(field string, backends map[string][]string) (map[string]string, error) {
+	idx := make(map[string]string)
+	for backend, tools := range backends {
+		switch backend {
+		case BackendWorkspace, BackendHost, BackendCode:
+		default:
+			return nil, fmt.Errorf("%s: unknown backend %q (want %q, %q or %q)",
+				field, backend, BackendWorkspace, BackendHost, BackendCode)
+		}
+		for _, t := range tools {
+			t = strings.TrimSpace(t)
+			if t == "" {
+				continue
+			}
+			if prev, ok := idx[t]; ok && prev != backend {
+				return nil, fmt.Errorf(
+					"%s: tool %q is mapped to both %q and %q", field, t, prev, backend)
+			}
+			idx[t] = backend
+		}
+	}
+	return idx, nil
+}
+
+// globHit reports whether candidate matches pattern. A pattern without glob
+// metacharacters matches the exact path or any path under it; a glob pattern
+// is matched with doublestar.
+func globHit(pattern, candidate string) bool {
+	if pattern == candidate {
+		return true
+	}
+	if !strings.ContainsAny(pattern, "*?[{") {
+		trimmed := strings.TrimRight(pattern, "/")
+		if trimmed == "" {
+			// Root ("/") only matches exactly (handled by the equality check
+			// above); treating it as a prefix would flag every absolute path.
+			// Deleting the root itself is caught by the dangerous-command rule.
+			return false
+		}
+		return strings.HasPrefix(candidate, trimmed+"/")
+	}
+	ok, err := doublestar.Match(pattern, candidate)
+	return err == nil && ok
+}

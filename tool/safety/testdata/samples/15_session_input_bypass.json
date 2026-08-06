@@ -1,0 +1,8 @@
+{
+  "name": "destructive command written into a live session",
+  "tool": "write_stdin",
+  "args": {"session_id": "sess-1", "chars": "rm -rf /", "append_newline": true},
+  "expect": {"decision": "deny", "rule": "R-DEL-001"},
+  "class": "high_risk",
+  "must_detect": true
+}

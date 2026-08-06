@@ -1,0 +1,7 @@
+{
+  "name": "safe code block",
+  "tool": "execute_code",
+  "args": {"code_blocks": [{"language": "python", "code": "import json\nprint(json.dumps({'credentials': 'redacted'}))\nopen('/tmp/out.txt', 'w').write('done')"}]},
+  "expect": {"decision": "allow"},
+  "class": "safe"
+}
