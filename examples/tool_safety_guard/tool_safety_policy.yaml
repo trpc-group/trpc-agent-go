@@ -1,0 +1,105 @@
+# Tool Execution Safety Guard policy.
+#
+# This file is loaded at runtime by tool/safety.LoadPolicy. Every value
+# is merged over the conservative built-in defaults (safety.DefaultPolicy):
+# list fields replace the defaults when present, scalar fields replace
+# when non-zero. Change enforcement behaviour here without recompiling.
+
+version: 1
+
+# Executable allow/deny lists applied to every pipeline segment via
+# internal/shellsafe. Leave allowed_commands empty to permit any
+# executable that is not otherwise denied. shellsafe additionally
+# enforces a built-in deny set of shell wrappers (sh, bash, eval,
+# xargs, env, sudo, ...) that cannot be re-enabled here.
+allowed_commands: []
+# curl/wget are intentionally NOT denied outright: they are governed by
+# the network egress allowlist below, so a request to an allowlisted
+# host is permitted while any other destination is denied. Raw-socket
+# tools with no legitimate build-time use are denied here.
+denied_commands:
+  - nc
+  - ncat
+  - netcat
+  - telnet
+  - socat
+
+# Path fragments that must never appear in a command or code block.
+# Substring match after lowercasing; keep entries specific.
+denied_paths:
+  - "~/.ssh"
+  - "/.ssh/"
+  - "/root/.ssh"
+  - "id_rsa"
+  - "id_ed25519"
+  - ".env"
+  - "/etc/shadow"
+  - "/etc/sudoers"
+  - ".aws/credentials"
+  - ".kube/config"
+  - ".netrc"
+  - ".git-credentials"
+  - ".npmrc"
+  - ".pypirc"
+  - "credentials.json"
+  - "secrets.json"
+
+# Extra destructive literals in addition to the built-in set
+# (rm -rf /, mkfs, dd of=/dev/..., fork bombs, ...).
+destructive_patterns:
+  - "kubectl delete ns"
+  - "helm uninstall"
+
+# Network egress rule. curl/wget/nc/ssh/... may only reach hosts in
+# allowed_hosts; anything else gets the configured decision. A host of
+# the form "*.example.com" matches any subdomain and the apex.
+network:
+  allowed_hosts:
+    - "proxy.golang.org"
+    - "*.golang.org"
+    - "github.com"
+    - "*.githubusercontent.com"
+    - "registry.npmjs.org"
+    - "pypi.org"
+    - "*.pythonhosted.org"
+  decision: deny
+
+# Resource limits evaluated before execution.
+limits:
+  max_timeout_sec: 600
+  max_output_bytes: 10485760   # 10 MiB
+  max_sleep_sec: 120
+  max_pipeline_segments: 8
+
+# Environment-variable rules. denied_names always win; leave
+# allowed_names empty to accept any name (values are still scanned
+# for secrets).
+env:
+  allowed_names: []
+  denied_names:
+    - LD_PRELOAD
+    - LD_LIBRARY_PATH
+    - DYLD_INSERT_LIBRARIES
+    - GIT_SSH_COMMAND
+    - BASH_ENV
+    - ENV
+    - PROMPT_COMMAND
+
+# Host-execution session rules. Background and PTY host sessions are
+# high risk (process residue, no per-command log); require review.
+host_exec:
+  allow_background: false
+  allow_pty: false
+  decision: ask
+
+# Decision applied to package-manager installs (go install, pip
+# install, npm install, apt install, ...).
+dependency_install_decision: ask
+
+# Decision applied when shellsafe cannot parse a command
+# conservatively (command substitution, redirection, background
+# operators, variable expansion). Must never be "allow".
+parse_error_decision: deny
+
+# Mask detected secrets in reports and audit events.
+redact_secrets: true
