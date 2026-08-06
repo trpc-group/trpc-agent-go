@@ -1,0 +1,42 @@
+{
+  "evalSetId": "regression-loop-validation",
+  "name": "regression-loop-validation",
+  "evalCases": [
+    {
+      "evalId": "val_refund_billing",
+      "conversation": [
+        {
+          "invocationId": "val_refund_billing-1",
+          "userContent": { "role": "user", "content": "please refund my recent purchase" },
+          "finalResponse": { "role": "assistant", "content": "category: billing" },
+          "tools": []
+        }
+      ],
+      "sessionInput": { "appName": "promptiter-regression-loop-app", "userId": "user" }
+    },
+    {
+      "evalId": "val_resolved_freeform_KEY",
+      "conversation": [
+        {
+          "invocationId": "val_resolved_freeform_KEY-1",
+          "userContent": { "role": "user", "content": "thanks, that already fixed it" },
+          "finalResponse": { "role": "assistant", "content": "Glad it is resolved!" },
+          "tools": []
+        }
+      ],
+      "sessionInput": { "appName": "promptiter-regression-loop-app", "userId": "user" }
+    },
+    {
+      "evalId": "val_parcel_shipping",
+      "conversation": [
+        {
+          "invocationId": "val_parcel_shipping-1",
+          "userContent": { "role": "user", "content": "my parcel has not arrived yet" },
+          "finalResponse": { "role": "assistant", "content": "category: shipping" },
+          "tools": []
+        }
+      ],
+      "sessionInput": { "appName": "promptiter-regression-loop-app", "userId": "user" }
+    }
+  ]
+}

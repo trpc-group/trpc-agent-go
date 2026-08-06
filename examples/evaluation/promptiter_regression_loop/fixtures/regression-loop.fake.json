@@ -1,0 +1,27 @@
+{
+  "candidate": {
+    "answers": [
+      { "instructionContains": "STRICT", "inputContains": "refund", "answer": "category: billing" },
+      { "instructionContains": "STRICT", "inputContains": "log into", "answer": "category: account" },
+      { "instructionContains": "STRICT", "inputContains": "parcel", "answer": "category: shipping" },
+      { "instructionContains": "STRICT", "inputContains": "already fixed", "answer": "category: unknown" },
+      { "instructionContains": "STRICT", "inputContains": "package", "answer": "category: unclear" },
+
+      { "inputContains": "refund", "answer": "This looks like billing." },
+      { "inputContains": "log into", "answer": "Probably an account problem." },
+      { "inputContains": "parcel", "answer": "Sounds like a shipping question." },
+      { "inputContains": "package", "answer": "Some shipping thing." },
+      { "inputContains": "already fixed", "answer": "Glad it is resolved!" }
+    ],
+    "default": "category: unknown"
+  },
+  "optimizer": {
+    "transitions": [
+      {
+        "fromContains": "Reply with the category",
+        "toInstruction": "STRICT OUTPUT: read the support message and reply with exactly one line 'category: <billing|account|shipping>' and nothing else.",
+        "reason": "The baseline instruction is too vague and yields free-form answers; enforce a strict single-line category format so tool-graded cases pass."
+      }
+    ]
+  }
+}

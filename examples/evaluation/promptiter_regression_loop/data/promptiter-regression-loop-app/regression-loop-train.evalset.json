@@ -1,0 +1,42 @@
+{
+  "evalSetId": "regression-loop-train",
+  "name": "regression-loop-train",
+  "evalCases": [
+    {
+      "evalId": "train_refund_billing",
+      "conversation": [
+        {
+          "invocationId": "train_refund_billing-1",
+          "userContent": { "role": "user", "content": "I need a refund for my order" },
+          "finalResponse": { "role": "assistant", "content": "category: billing" },
+          "tools": []
+        }
+      ],
+      "sessionInput": { "appName": "promptiter-regression-loop-app", "userId": "user" }
+    },
+    {
+      "evalId": "train_login_account",
+      "conversation": [
+        {
+          "invocationId": "train_login_account-1",
+          "userContent": { "role": "user", "content": "I cannot log into my account anymore" },
+          "finalResponse": { "role": "assistant", "content": "category: account" },
+          "tools": []
+        }
+      ],
+      "sessionInput": { "appName": "promptiter-regression-loop-app", "userId": "user" }
+    },
+    {
+      "evalId": "train_package_shipping",
+      "conversation": [
+        {
+          "invocationId": "train_package_shipping-1",
+          "userContent": { "role": "user", "content": "when will my package be delivered" },
+          "finalResponse": { "role": "assistant", "content": "category: shipping" },
+          "tools": []
+        }
+      ],
+      "sessionInput": { "appName": "promptiter-regression-loop-app", "userId": "user" }
+    }
+  ]
+}

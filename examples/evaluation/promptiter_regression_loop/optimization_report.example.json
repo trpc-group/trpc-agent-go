@@ -1,0 +1,328 @@
+{
+  "generatedAt": "2026-07-26T00:57:38Z",
+  "app": "promptiter-regression-loop-app",
+  "modelSource": "fake",
+  "targetSurfaceId": "candidate#instruction",
+  "baselineInstruction": "You classify a customer support message. Reply with the category.",
+  "candidateInstruction": "STRICT OUTPUT: read the support message and reply with exactly one line 'category: \u003cbilling|account|shipping\u003e' and nothing else.",
+  "engineAccepted": true,
+  "gateAccepted": false,
+  "decision": "reject",
+  "config": {
+    "modelSource": "fake",
+    "maxRounds": 3,
+    "minScoreGain": 0.01,
+    "gateMinValidationGain": 0.01,
+    "maxCandidateModelCalls": 0,
+    "targetScore": 1,
+    "keyCaseIds": [
+      "val_resolved_freeform_KEY"
+    ],
+    "baselinePromptFile": "./data/promptiter-regression-loop-app/baseline-prompt.txt",
+    "fixtureFile": "fixtures/regression-loop.fake.json",
+    "dataDir": "./data"
+  },
+  "determinism": {
+    "deterministic": true,
+    "seed": null,
+    "note": "scripted fake model + deterministic collaborators; no RNG"
+  },
+  "costLatency": {
+    "totalWallClockMs": 109,
+    "baselineEvalMs": 24,
+    "candidateEvalMs": 18,
+    "candidateModelCalls": 33,
+    "note": "fake mode: no monetary token cost; candidate model calls and latency are the cost proxy"
+  },
+  "baselineTrain": {
+    "evalSetId": "regression-loop-train",
+    "overallStatus": "failed",
+    "meanScore": 0,
+    "executionTimeMs": 11,
+    "cases": [
+      {
+        "evalCaseId": "train_refund_billing",
+        "passed": false,
+        "score": 0,
+        "failureCategory": "response_mismatch",
+        "reason": "final response mismatch: text mismatch: source This looks like billing. and target category: billing do not match"
+      },
+      {
+        "evalCaseId": "train_login_account",
+        "passed": false,
+        "score": 0,
+        "failureCategory": "response_mismatch",
+        "reason": "final response mismatch: text mismatch: source Probably an account problem. and target category: account do not match"
+      },
+      {
+        "evalCaseId": "train_package_shipping",
+        "passed": false,
+        "score": 0,
+        "failureCategory": "response_mismatch",
+        "reason": "final response mismatch: text mismatch: source Some shipping thing. and target category: shipping do not match"
+      }
+    ],
+    "attributionStats": [
+      {
+        "category": "response_mismatch",
+        "count": 3
+      }
+    ]
+  },
+  "baselineValidation": {
+    "evalSetId": "regression-loop-validation",
+    "overallStatus": "failed",
+    "meanScore": 0.3333333333333333,
+    "executionTimeMs": 13,
+    "cases": [
+      {
+        "evalCaseId": "val_refund_billing",
+        "passed": false,
+        "score": 0,
+        "failureCategory": "response_mismatch",
+        "reason": "final response mismatch: text mismatch: source This looks like billing. and target category: billing do not match"
+      },
+      {
+        "evalCaseId": "val_resolved_freeform_KEY",
+        "passed": true,
+        "score": 1
+      },
+      {
+        "evalCaseId": "val_parcel_shipping",
+        "passed": false,
+        "score": 0,
+        "failureCategory": "response_mismatch",
+        "reason": "final response mismatch: text mismatch: source Sounds like a shipping question. and target category: shipping do not match"
+      }
+    ],
+    "attributionStats": [
+      {
+        "category": "response_mismatch",
+        "count": 2
+      }
+    ]
+  },
+  "candidateTrain": {
+    "evalSetId": "regression-loop-train",
+    "overallStatus": "failed",
+    "meanScore": 0.6666666666666666,
+    "executionTimeMs": 9,
+    "cases": [
+      {
+        "evalCaseId": "train_refund_billing",
+        "passed": true,
+        "score": 1
+      },
+      {
+        "evalCaseId": "train_login_account",
+        "passed": true,
+        "score": 1
+      },
+      {
+        "evalCaseId": "train_package_shipping",
+        "passed": false,
+        "score": 0,
+        "failureCategory": "response_mismatch",
+        "reason": "final response mismatch: text mismatch: source category: unclear and target category: shipping do not match"
+      }
+    ],
+    "attributionStats": [
+      {
+        "category": "response_mismatch",
+        "count": 1
+      }
+    ]
+  },
+  "candidateValidation": {
+    "evalSetId": "regression-loop-validation",
+    "overallStatus": "failed",
+    "meanScore": 0.6666666666666666,
+    "executionTimeMs": 9,
+    "cases": [
+      {
+        "evalCaseId": "val_refund_billing",
+        "passed": true,
+        "score": 1
+      },
+      {
+        "evalCaseId": "val_resolved_freeform_KEY",
+        "passed": false,
+        "score": 0,
+        "failureCategory": "response_mismatch",
+        "reason": "final response mismatch: text mismatch: source category: unknown and target Glad it is resolved! do not match"
+      },
+      {
+        "evalCaseId": "val_parcel_shipping",
+        "passed": true,
+        "score": 1
+      }
+    ],
+    "attributionStats": [
+      {
+        "category": "response_mismatch",
+        "count": 1
+      }
+    ]
+  },
+  "trainDeltas": [
+    {
+      "evalCaseId": "train_refund_billing",
+      "baselinePassed": false,
+      "candidatePassed": true,
+      "baselineScore": 0,
+      "candidateScore": 1,
+      "scoreDelta": 1,
+      "class": "new_pass"
+    },
+    {
+      "evalCaseId": "train_login_account",
+      "baselinePassed": false,
+      "candidatePassed": true,
+      "baselineScore": 0,
+      "candidateScore": 1,
+      "scoreDelta": 1,
+      "class": "new_pass"
+    },
+    {
+      "evalCaseId": "train_package_shipping",
+      "baselinePassed": false,
+      "candidatePassed": false,
+      "baselineScore": 0,
+      "candidateScore": 0,
+      "scoreDelta": 0,
+      "class": "unchanged"
+    }
+  ],
+  "validationDeltas": [
+    {
+      "evalCaseId": "val_refund_billing",
+      "baselinePassed": false,
+      "candidatePassed": true,
+      "baselineScore": 0,
+      "candidateScore": 1,
+      "scoreDelta": 1,
+      "class": "new_pass"
+    },
+    {
+      "evalCaseId": "val_resolved_freeform_KEY",
+      "baselinePassed": true,
+      "candidatePassed": false,
+      "baselineScore": 1,
+      "candidateScore": 0,
+      "scoreDelta": -1,
+      "class": "new_fail"
+    },
+    {
+      "evalCaseId": "val_parcel_shipping",
+      "baselinePassed": false,
+      "candidatePassed": true,
+      "baselineScore": 0,
+      "candidateScore": 1,
+      "scoreDelta": 1,
+      "class": "new_pass"
+    }
+  ],
+  "gate": {
+    "accepted": false,
+    "criteria": [
+      {
+        "name": "has_validation_evidence",
+        "passed": true,
+        "detail": "3 validation case(s) evaluated"
+      },
+      {
+        "name": "validation_improves",
+        "passed": true,
+        "detail": "validation mean 0.333 → 0.667 (gain +0.333, required ≥ 0.010)"
+      },
+      {
+        "name": "no_new_hard_fail",
+        "passed": false,
+        "detail": "1 case(s) regressed pass→fail: [val_resolved_freeform_KEY]"
+      },
+      {
+        "name": "key_cases_protected",
+        "passed": false,
+        "detail": "KEY case issue — not passing in candidate: [val_resolved_freeform_KEY]"
+      },
+      {
+        "name": "within_budget",
+        "passed": true,
+        "detail": "no budget configured (candidate model calls: 33)"
+      }
+    ],
+    "reasons": [
+      "rejected: KEY validation case(s) [val_resolved_freeform_KEY] regressed pass→fail (overfitting)"
+    ],
+    "baselineValidationMean": 0.3333333333333333,
+    "candidateValidationMean": 0.6666666666666666,
+    "validationGain": 0.3333333333333333,
+    "regressions": [
+      "val_resolved_freeform_KEY"
+    ],
+    "keyRegressions": [
+      "val_resolved_freeform_KEY"
+    ],
+    "validationDeltas": [
+      {
+        "evalCaseId": "val_refund_billing",
+        "baselinePassed": false,
+        "candidatePassed": true,
+        "baselineScore": 0,
+        "candidateScore": 1,
+        "scoreDelta": 1,
+        "class": "new_pass"
+      },
+      {
+        "evalCaseId": "val_resolved_freeform_KEY",
+        "baselinePassed": true,
+        "candidatePassed": false,
+        "baselineScore": 1,
+        "candidateScore": 0,
+        "scoreDelta": -1,
+        "class": "new_fail"
+      },
+      {
+        "evalCaseId": "val_parcel_shipping",
+        "baselinePassed": false,
+        "candidatePassed": true,
+        "baselineScore": 0,
+        "candidateScore": 1,
+        "scoreDelta": 1,
+        "class": "new_pass"
+      }
+    ]
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "instruction": "STRICT OUTPUT: read the support message and reply with exactly one line 'category: \u003cbilling|account|shipping\u003e' and nothing else.",
+      "trainScore": 0,
+      "validationScore": 0.6666666666666666,
+      "accepted": true,
+      "scoreDelta": 0.3333333333333333,
+      "stopped": false,
+      "stopReason": "continue optimization"
+    },
+    {
+      "round": 2,
+      "instruction": "STRICT OUTPUT: read the support message and reply with exactly one line 'category: \u003cbilling|account|shipping\u003e' and nothing else.",
+      "trainScore": 0.6666666666666666,
+      "validationScore": 0.6666666666666666,
+      "accepted": false,
+      "scoreDelta": 0,
+      "stopped": false,
+      "stopReason": "continue optimization"
+    },
+    {
+      "round": 3,
+      "instruction": "STRICT OUTPUT: read the support message and reply with exactly one line 'category: \u003cbilling|account|shipping\u003e' and nothing else.",
+      "trainScore": 0.6666666666666666,
+      "validationScore": 0.6666666666666666,
+      "accepted": false,
+      "scoreDelta": 0,
+      "stopped": true,
+      "stopReason": "max rounds reached"
+    }
+  ]
+}
