@@ -1,0 +1,17 @@
+diff --git a/io/read.go b/io/read.go
+index 1111111..2222222 100644
+--- a/io/read.go
++++ b/io/read.go
+@@ -1,5 +1,10 @@
+ package io
+
+ import "os"
+
+ func Read(path string) error {
++    f, err := os.Open(path)
++    if err != nil {
++        return err
++    }
++    _ = f
+     return nil
+ }

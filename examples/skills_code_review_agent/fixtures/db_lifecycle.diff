@@ -1,0 +1,15 @@
+diff --git a/store/store.go b/store/store.go
+index 1111111..2222222 100644
+--- a/store/store.go
++++ b/store/store.go
+@@ -3,5 +3,10 @@ package store
+ import "database/sql"
+
+ func Save(db *sql.DB) error {
++    tx, err := db.Begin()
++    if err != nil {
++        return err
++    }
++    _ = tx
+     return nil
+ }

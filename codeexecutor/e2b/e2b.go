@@ -264,8 +264,9 @@ func (c *CodeExecutor) ExecuteCode(
 	for i, block := range input.CodeBlocks {
 		lang := pickLanguage(block.Language, c.defaultLanguage)
 		exec, err := c.sbx.RunCode(ctx, block.Code, &ci.RunCodeOpts{
-			Language: lang,
-			Timeout:  c.executionTimeout,
+			Language:    lang,
+			Timeout:     c.executionTimeout,
+			DiscardLogs: true,
 			OnStdout: func(m ci.OutputMessage) {
 				out.WriteString(m.Line)
 			},

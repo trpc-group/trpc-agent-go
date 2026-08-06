@@ -183,7 +183,7 @@ func (r *workspaceRuntime) CreateWorkspace(
 	sb.WriteString(path.Join(wsPath, codeexecutor.MetaFileName))
 	sb.WriteString("'")
 	cmd := []string{"/bin/bash", "-lc", sb.String()}
-	_, _, _, _, err := r.execCmd(
+	_, _, _, _, _, err := r.execCmd(
 		ctx, cmd, time.Duration(defaultCreateTimeoutSec)*time.Second,
 	)
 	if err != nil {
@@ -217,7 +217,7 @@ func (r *workspaceRuntime) Cleanup(
 	}
 	cmd := []string{"/bin/bash", "-lc",
 		"rm -rf '" + ws.Path + "'"}
-	_, _, _, _, err := r.execCmd(
+	_, _, _, _, _, err := r.execCmd(
 		ctx, cmd, time.Duration(defaultRmTimeoutSec)*time.Second,
 	)
 	return err
@@ -288,7 +288,7 @@ func (r *workspaceRuntime) PutDirectory(
 			cmd := []string{"/bin/bash", "-lc",
 				"mkdir -p '" + dest + "' && cp -a '" + src +
 					"/.' '" + dest + "'"}
-			_, _, _, _, err := r.execCmd(
+			_, _, _, _, _, err := r.execCmd(
 				ctx, cmd,
 				time.Duration(defaultStageTimeoutSec)*time.Second,
 			)
@@ -313,7 +313,7 @@ func (r *workspaceRuntime) PutDirectory(
 	// Ensure destination exists in container.
 	mk := []string{"/bin/bash", "-lc",
 		"mkdir -p '" + dest + "'"}
-	if _, _, _, _, err = r.execCmd(
+	if _, _, _, _, _, err = r.execCmd(
 		ctx, mk, time.Duration(defaultStageTimeoutSec)*time.Second,
 	); err != nil {
 		span.SetStatus(codes.Error, err.Error())
@@ -368,7 +368,7 @@ func (r *workspaceRuntime) StageDirectory(
 			if opt.ReadOnly {
 				cmd[2] += " && chmod -R a-w '" + dest + "'"
 			}
-			_, _, _, _, err := r.execCmd(ctx, cmd,
+			_, _, _, _, _, err := r.execCmd(ctx, cmd,
 				time.Duration(defaultStageTimeoutSec)*time.Second)
 			if err != nil {
 				span.SetStatus(codes.Error, err.Error())
@@ -390,7 +390,7 @@ func (r *workspaceRuntime) StageDirectory(
 		}
 		cmd := []string{"/bin/bash", "-lc",
 			"chmod -R a-w '" + dest + "'"}
-		if _, _, _, _, err := r.execCmd(
+		if _, _, _, _, _, err := r.execCmd(
 			ctx, cmd, time.Duration(defaultStageTimeoutSec)*time.Second,
 		); err != nil {
 			span.SetStatus(codes.Error, err.Error())
@@ -469,19 +469,21 @@ func (r *workspaceRuntime) RunProgram(
 	if spec.CleanEnv {
 		execEnv = cleanWrapperEnv()
 	}
-	out, errOut, code, timed, err := r.execCmdWithStdin(
+	out, errOut, code, timed, truncated, err := r.execCmdWithStdin(
 		ctx,
 		argv,
 		t,
 		spec.Stdin,
 		execEnv,
+		spec.MaxOutputBytes,
 	)
 	res := codeexecutor.RunResult{
-		Stdout:   out,
-		Stderr:   errOut,
-		ExitCode: code,
-		Duration: t,
-		TimedOut: timed,
+		Stdout:          out,
+		Stderr:          errOut,
+		ExitCode:        code,
+		Duration:        t,
+		TimedOut:        timed,
+		OutputTruncated: truncated,
 	}
 	span.SetAttributes(
 		attribute.Int(codeexecutor.AttrExitCode, res.ExitCode),
@@ -524,7 +526,7 @@ func (r *workspaceRuntime) Collect(
 	cmd.WriteString("done; done")
 
 	argv := []string{"/bin/bash", "-lc", cmd.String()}
-	outS, _, _, _, err := r.execCmd(ctx, argv, time.Second*5)
+	outS, _, _, _, _, err := r.execCmd(ctx, argv, time.Second*5)
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
 		return nil, err
@@ -704,7 +706,7 @@ func (r *workspaceRuntime) stageHostInput(
 					"mkdir -p '" + path.Dir(dest) + "' && " +
 						"cp -a '" + csrc + "' '" + dest + "'"}
 			}
-			_, _, _, _, err := r.execCmd(
+			_, _, _, _, _, err := r.execCmd(
 				ctx,
 				cmd,
 				time.Duration(defaultStageTimeoutSec)*time.Second,
@@ -739,7 +741,7 @@ func (r *workspaceRuntime) stageWorkspaceInput(
 			"mkdir -p '" + path.Dir(dest) + "' && cp -a '" +
 				src + "' '" + dest + "'"}
 	}
-	_, _, _, _, err := r.execCmd(ctx, cmd,
+	_, _, _, _, _, err := r.execCmd(ctx, cmd,
 		time.Duration(defaultStageTimeoutSec)*time.Second)
 	return rel, nil, err
 }
@@ -764,7 +766,7 @@ func (r *workspaceRuntime) stageSkillInput(
 			"mkdir -p '" + path.Dir(dest) + "' && cp -a '" +
 				src + "' '" + dest + "'"}
 	}
-	_, _, _, _, err := r.execCmd(ctx, cmd,
+	_, _, _, _, _, err := r.execCmd(ctx, cmd,
 		time.Duration(defaultStageTimeoutSec)*time.Second)
 	return src, nil, err
 }
@@ -843,7 +845,7 @@ func (r *workspaceRuntime) saveWorkspaceMetadata(
 	sb.WriteString("echo \"metadata path is a directory\" >&2; exit 1; ")
 	sb.WriteString("fi; mv -f \"$tmp\" \"$dest\"")
 	sb.WriteString("; trap - EXIT")
-	_, stderr, code, _, err := r.execCmd(
+	_, stderr, code, _, _, err := r.execCmd(
 		ctx,
 		[]string{"/bin/bash", "-lc", sb.String()},
 		time.Duration(defaultStageTimeoutSec)*time.Second,
@@ -914,7 +916,7 @@ func (r *workspaceRuntime) cleanupMetadataTemp(
 		return
 	}
 	cleanupCtx := context.WithoutCancel(ctx)
-	_, _, _, _, _ = r.execCmd(
+	_, _, _, _, _, _ = r.execCmd(
 		cleanupCtx,
 		[]string{
 			"/bin/bash",
@@ -945,7 +947,7 @@ func (r *workspaceRuntime) CollectOutputs(
 	cmd.WriteString("; do for f in $p; do if [ -f \"$f\" ]; then ")
 	cmd.WriteString("echo \"$(pwd)/$f\"; fi; done; done")
 	argv := []string{"/bin/bash", "-lc", cmd.String()}
-	outS, _, _, _, err := r.execCmd(ctx, argv, time.Second*5)
+	outS, _, _, _, _, err := r.execCmd(ctx, argv, time.Second*5)
 	if err != nil {
 		return codeexecutor.OutputManifest{}, err
 	}
@@ -1056,7 +1058,7 @@ func (r *workspaceRuntime) copyBytesTo(
 	// Ensure parent exists.
 	mk := []string{"/bin/bash", "-lc",
 		"mkdir -p '" + path.Dir(dest) + "'"}
-	if _, _, _, _, err := r.execCmd(ctx, mk,
+	if _, _, _, _, _, err := r.execCmd(ctx, mk,
 		time.Duration(defaultStageTimeoutSec)*time.Second); err != nil {
 		return err
 	}
@@ -1155,8 +1157,8 @@ func (r *workspaceRuntime) execCmd(
 	ctx context.Context,
 	argv []string,
 	timeout time.Duration,
-) (string, string, int, bool, error) {
-	return r.execCmdWithStdin(ctx, argv, timeout, "", nil)
+) (string, string, int, bool, bool, error) {
+	return r.execCmdWithStdin(ctx, argv, timeout, "", nil, 0)
 }
 
 // execCmdWithStdin runs argv in the container. execEnv, when
@@ -1171,7 +1173,8 @@ func (r *workspaceRuntime) execCmdWithStdin(
 	timeout time.Duration,
 	stdin string,
 	execEnv []string,
-) (string, string, int, bool, error) {
+	maxOutputBytes int,
+) (string, string, int, bool, bool, error) {
 	tctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	ec := tcontainer.ExecOptions{
@@ -1185,13 +1188,13 @@ func (r *workspaceRuntime) execCmdWithStdin(
 		tctx, r.ce.container.ID, ec,
 	)
 	if err != nil {
-		return "", "", 0, false, err
+		return "", "", 0, false, false, err
 	}
 	hj, err := r.ce.client.ContainerExecAttach(
 		tctx, ex.ID, tcontainer.ExecStartOptions{},
 	)
 	if err != nil {
-		return "", "", 0, false, err
+		return "", "", 0, false, false, err
 	}
 	defer hj.Close()
 
@@ -1207,23 +1210,25 @@ func (r *workspaceRuntime) execCmdWithStdin(
 		}()
 	}
 
-	var stdout, stderr bytes.Buffer
-	_, err = stdcopy.StdCopy(&stdout, &stderr, hj.Reader)
+	outputLimiter := codeexecutor.NewOutputLimiter(maxOutputBytes)
+	stdout := outputLimiter.NewWriter()
+	stderr := outputLimiter.NewWriter()
+	_, err = stdcopy.StdCopy(stdout, stderr, hj.Reader)
 	if stdin != "" {
 		if writeErr := <-writeDone; err == nil && writeErr != nil {
 			err = writeErr
 		}
 	}
 	if err != nil {
-		return "", "", 0, false, err
+		return "", "", 0, false, outputLimiter.Truncated(), err
 	}
 	insp, err := r.ce.client.ContainerExecInspect(tctx, ex.ID)
 	if err != nil {
 		timed := errors.Is(tctx.Err(), context.DeadlineExceeded)
-		return stdout.String(), stderr.String(), 0, timed, err
+		return stdout.String(), stderr.String(), 0, timed, outputLimiter.Truncated(), err
 	}
 	timed := errors.Is(tctx.Err(), context.DeadlineExceeded)
-	return stdout.String(), stderr.String(), insp.ExitCode, timed, nil
+	return stdout.String(), stderr.String(), insp.ExitCode, timed, outputLimiter.Truncated(), nil
 }
 
 func sanitize(s string) string {

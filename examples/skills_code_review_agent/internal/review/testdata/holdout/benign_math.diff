@@ -1,0 +1,16 @@
+diff --git a/service/math.go b/service/math.go
+--- a/service/math.go
++++ b/service/math.go
+@@ -1,2 +1,6 @@
+ package service
+
++func Add(a, b int) int {
++	return a + b
++}
+diff --git a/service/math_test.go b/service/math_test.go
+--- a/service/math_test.go
++++ b/service/math_test.go
+@@ -1,2 +1,5 @@
+ package service
+
++func TestAdd(t *testing.T) {}

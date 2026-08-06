@@ -14,6 +14,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -158,6 +159,54 @@ func TestRuntimeRunProgramDisabledProfile(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(ws.Path, "work", "new-dir")); err != nil {
 		t.Fatalf("run cwd was not materialized: %v", err)
+	}
+}
+
+func TestRuntimeRunProgramPerRunOutputCannotExceedRuntimeCeiling(t *testing.T) {
+	rt := NewRuntime(
+		WithWorkspaceRoot(t.TempDir()),
+		WithPermissionProfile(DangerFullAccessProfile()),
+		WithOutputMaxBytes(3),
+	)
+	ws, err := rt.CreateWorkspace(context.Background(), "run/output-ceiling", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := "bash"
+	args := []string{"-c", "printf 123456789"}
+	if runtime.GOOS == "windows" {
+		cmd = "cmd.exe"
+		args = []string{"/d", "/c", "echo 123456789"}
+	}
+	res, err := rt.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{
+		Cmd:            cmd,
+		Args:           args,
+		MaxOutputBytes: 100,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Stdout != "123" {
+		t.Fatalf("stdout = %q, want runtime-capped output %q", res.Stdout, "123")
+	}
+	if !res.OutputTruncated {
+		t.Fatalf("expected runtime ceiling to preserve truncation signal: %#v", res)
+	}
+}
+
+func TestEffectiveOutputMaxBytesPreservesRuntimeCeilingAndTruncation(t *testing.T) {
+	limit := effectiveOutputMaxBytes(3, 100)
+	if limit != 3 {
+		t.Fatalf("effective output limit = %d, want 3", limit)
+	}
+	limiter := codeexecutor.NewOutputLimiter(limit)
+	writer := limiter.NewWriter()
+	if _, err := writer.Write([]byte("123456789")); err != nil {
+		t.Fatal(err)
+	}
+	if writer.String() != "123" || !limiter.Truncated() {
+		t.Fatalf("output limiter result = %q truncated=%t, want capped output and truncation", writer.String(), limiter.Truncated())
 	}
 }
 

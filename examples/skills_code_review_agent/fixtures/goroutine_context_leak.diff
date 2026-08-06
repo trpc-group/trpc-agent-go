@@ -1,0 +1,13 @@
+diff --git a/worker/worker.go b/worker/worker.go
+index 1111111..2222222 100644
+--- a/worker/worker.go
++++ b/worker/worker.go
+@@ -4,5 +4,10 @@ import "time"
+
+ func Start() {
++    go func() {
++        for {
++            time.Sleep(time.Second)
++        }
++    }()
+ }

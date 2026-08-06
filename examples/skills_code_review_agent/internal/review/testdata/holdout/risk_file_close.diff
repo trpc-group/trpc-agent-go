@@ -1,0 +1,12 @@
+diff --git a/service/file.go b/service/file.go
+--- a/service/file.go
++++ b/service/file.go
+@@ -1,2 +1,9 @@
+ package service
+
++func Write(path string) error {
++	f, err := os.Create(path)
++	if err != nil { return err }
++	_, err = f.WriteString("x")
++	return err
++}

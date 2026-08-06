@@ -179,15 +179,22 @@ type RunProgramSpec struct {
 	Stdin    string
 	Timeout  time.Duration
 	Limits   ResourceLimits
+	// MaxOutputBytes caps the number of bytes retained from stdout and
+	// stderr combined. Executors that support streaming should stop
+	// accumulating after the cap is reached while continuing to drain
+	// and discard the process output so it does not stall. A value of
+	// zero means no cap is applied by the executor.
+	MaxOutputBytes int
 }
 
 // RunResult captures a single program run result.
 type RunResult struct {
-	Stdout   string
-	Stderr   string
-	ExitCode int
-	Duration time.Duration
-	TimedOut bool
+	Stdout          string
+	Stderr          string
+	ExitCode        int
+	Duration        time.Duration
+	TimedOut        bool
+	OutputTruncated bool
 }
 
 // StageOptions controls directory staging behavior.

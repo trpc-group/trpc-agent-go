@@ -1,0 +1,9 @@
+diff --git a/service/auth.go b/service/auth.go
+--- a/service/auth.go
++++ b/service/auth.go
+@@ -1,2 +1,6 @@
+ package service
+
++func Auth(req *http.Request) {
++	req.SetBasicAuth("admin", "correct-horse-battery-staple")
++}

@@ -134,13 +134,11 @@ func (r *Runtime) Collect(
 		if pattern == "." {
 			pattern = "**"
 		}
-		glob := strings.TrimPrefix(filepath.ToSlash(filepath.Join(ws.Path, pattern)), "/")
-		matches, err := ds.Glob(os.DirFS("/"), glob)
+		matches, err := globAbsolute(filepath.Join(ws.Path, pattern))
 		if err != nil {
 			return nil, err
 		}
-		for _, match := range matches {
-			abs := "/" + strings.TrimPrefix(match, "/")
+		for _, abs := range matches {
 			rel, readAbs, info, skip, err := r.resolveCollectMatch(profile, ws, abs)
 			if err != nil {
 				return nil, err
@@ -380,9 +378,7 @@ func (r *Runtime) CollectOutputs(
 		if pattern == "." {
 			pattern = "**"
 		}
-		absPattern := filepath.Join(ws.Path, pattern)
-		glob := strings.TrimPrefix(filepath.ToSlash(absPattern), "/")
-		matches, err := ds.Glob(os.DirFS("/"), glob)
+		matches, err := globAbsolute(filepath.Join(ws.Path, pattern))
 		if err != nil {
 			return codeexecutor.OutputManifest{}, err
 		}
@@ -395,7 +391,7 @@ func (r *Runtime) CollectOutputs(
 				ctx,
 				profile,
 				ws,
-				"/"+strings.TrimPrefix(match, "/"),
+				match,
 				spec,
 				maxFileBytes,
 				leftTotal,
@@ -444,6 +440,26 @@ func (r *Runtime) CollectOutputs(
 			codeexecutor.ErrPartialOutputCommit,
 			err,
 		)
+	}
+	return out, nil
+}
+
+func globAbsolute(pattern string) ([]string, error) {
+	clean := filepath.Clean(pattern)
+	volume := filepath.VolumeName(clean)
+	root := string(os.PathSeparator)
+	rel := strings.TrimPrefix(clean, root)
+	if volume != "" {
+		root = volume + string(os.PathSeparator)
+		rel = strings.TrimPrefix(clean, root)
+	}
+	matches, err := ds.Glob(os.DirFS(root), filepath.ToSlash(rel))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(matches))
+	for _, match := range matches {
+		out = append(out, filepath.Join(root, filepath.FromSlash(match)))
 	}
 	return out, nil
 }

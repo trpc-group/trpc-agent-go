@@ -1,0 +1,109 @@
+{
+  "task_id": "review-92d75268a95063c75fc76c54",
+  "status": "completed",
+  "input": {
+    "files_changed": 2,
+    "go_files": 2,
+    "added_lines": 10,
+    "deleted_lines": 0
+  },
+  "packages": [
+    {
+      "package_path": "calc",
+      "package_name": "calc",
+      "files": [
+        "calc/calc.go",
+        "calc/calc_test.go"
+      ]
+    }
+  ],
+  "severity_counts": {},
+  "error_type_counts": {},
+  "permission_summary": {
+    "allow_count": 4,
+    "deny_count": 0,
+    "ask_count": 0,
+    "needs_human_review_count": 0
+  },
+  "sandbox_summary": [
+    {
+      "id": "run-85267b2bb3ad8bc526a71c22",
+      "task_id": "review-92d75268a95063c75fc76c54",
+      "command": "bash",
+      "args": [
+        "skills/code-review/scripts/diff_summary.sh",
+        "work/change.diff",
+        "out/diff_summary.json"
+      ],
+      "executor": "container",
+      "status": "success",
+      "exit_code": 0,
+      "started_at": "2026-07-17T12:36:52.44375+08:00",
+      "duration_ms": 45,
+      "timed_out": false,
+      "output_truncated": false
+    },
+    {
+      "id": "run-5079f2a5c8b83e93c6693a4f",
+      "task_id": "review-92d75268a95063c75fc76c54",
+      "command": "go",
+      "args": [
+        "test",
+        "./..."
+      ],
+      "executor": "container",
+      "status": "success",
+      "exit_code": 0,
+      "stdout": "ok  \texample.com/container-smoke/calc\t0.001s\n",
+      "started_at": "2026-07-17T12:36:52.489655+08:00",
+      "duration_ms": 5687,
+      "timed_out": false,
+      "output_truncated": false
+    },
+    {
+      "id": "run-87143b3a0f9f2cae788e6c93",
+      "task_id": "review-92d75268a95063c75fc76c54",
+      "command": "go",
+      "args": [
+        "vet",
+        "./..."
+      ],
+      "executor": "container",
+      "status": "success",
+      "exit_code": 0,
+      "started_at": "2026-07-17T12:36:58.177449+08:00",
+      "duration_ms": 492,
+      "timed_out": false,
+      "output_truncated": false
+    },
+    {
+      "id": "run-e4e9b257d3f11a4ac759574d",
+      "task_id": "review-92d75268a95063c75fc76c54",
+      "command": "staticcheck",
+      "args": [
+        "./..."
+      ],
+      "executor": "container",
+      "status": "success",
+      "exit_code": 0,
+      "started_at": "2026-07-17T12:36:58.669742+08:00",
+      "duration_ms": 1242,
+      "timed_out": false,
+      "output_truncated": false
+    }
+  ],
+  "artifact_policy": {
+    "max_artifacts": 5,
+    "max_bytes_per_file": 1048576,
+    "allowed_file_names": [
+      "review_report.json",
+      "review_report.md",
+      "review_diagnostics.json",
+      "review_report.zh.md",
+      "diff_summary.json"
+    ],
+    "retained_count": 5,
+    "rejected_count": 0
+  },
+  "conclusion": "No high-confidence code review issues were detected. Review sandbox warnings before merging if any checks were skipped or unavailable."
+}
