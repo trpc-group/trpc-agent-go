@@ -1,0 +1,35 @@
+{
+  "appName": "headline-card-app",
+  "candidateName": "candidate",
+  "dataDir": "data",
+  "outputDir": "output",
+  "trainEvalSetID": "train",
+  "validationEvalSetID": "validation",
+  "metricFileID": "headline-card",
+  "baselinePromptFile": "data/headline-card-app/prompt.txt",
+  "targetSurfaceID": "candidate#instruction",
+  "maxRounds": 3,
+  "evalCaseParallelism": 4,
+  "parallelInference": true,
+  "parallelEvaluation": true,
+  "model": {
+    "provider": "fake",
+    "name": "scripted-headline-card",
+    "seed": 42
+  },
+  "acceptancePolicy": {
+    "minScoreGain": 0.01
+  },
+  "stopPolicy": {
+    "maxRoundsWithoutAcceptance": 3
+  },
+  "gate": {
+    "minScoreGain": 0.05,
+    "maxNewHardFails": 0,
+    "keyCaseIDs": [
+      "validation_02_ice_hockey"
+    ],
+    "maxModelCalls": 200,
+    "maxLatencyMs": 180000
+  }
+}

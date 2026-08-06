@@ -1,0 +1,419 @@
+{
+  "pipeline": {
+    "name": "promptiter_regression_loop",
+    "version": "1.0.0",
+    "runId": "run-1785910298180",
+    "startedAt": "2026-08-05T14:11:38+08:00",
+    "durationMs": 24,
+    "randomSeed": 42,
+    "model": {
+      "provider": "fake",
+      "name": "scripted-headline-card"
+    }
+  },
+  "input": {
+    "trainEvalSetId": "train",
+    "validationEvalSetId": "validation",
+    "metricFileId": "headline-card",
+    "baselinePromptFile": "data/headline-card-app/prompt.txt",
+    "targetSurfaceId": "candidate#instruction",
+    "maxRounds": 3,
+    "baselinePrompt": "根据输入生成一条中文体育头条\n"
+  },
+  "baseline": {
+    "trainScore": 0,
+    "validationScore": 0,
+    "trainCases": [
+      {
+        "evalCaseId": "train_01_basketball",
+        "passed": false,
+        "score": 0,
+        "metrics": [
+          {
+            "metricName": "headline_exact_match",
+            "score": 0,
+            "passed": false
+          },
+          {
+            "metricName": "headline_format_validity",
+            "score": 0,
+            "passed": false
+          }
+        ],
+        "attribution": {
+          "evalCaseId": "train_01_basketball",
+          "category": "final_response_mismatch",
+          "reason": "",
+          "confidence": 0.9
+        }
+      },
+      {
+        "evalCaseId": "train_02_tennis",
+        "passed": false,
+        "score": 0,
+        "metrics": [
+          {
+            "metricName": "headline_exact_match",
+            "score": 0,
+            "passed": false
+          },
+          {
+            "metricName": "headline_format_validity",
+            "score": 0,
+            "passed": false
+          }
+        ],
+        "attribution": {
+          "evalCaseId": "train_02_tennis",
+          "category": "final_response_mismatch",
+          "reason": "",
+          "confidence": 0.9
+        }
+      },
+      {
+        "evalCaseId": "train_03_football",
+        "passed": false,
+        "score": 0,
+        "metrics": [
+          {
+            "metricName": "headline_format_validity",
+            "score": 0,
+            "passed": false
+          },
+          {
+            "metricName": "headline_exact_match",
+            "score": 0,
+            "passed": false
+          }
+        ],
+        "attribution": {
+          "evalCaseId": "train_03_football",
+          "category": "format_error",
+          "reason": "",
+          "confidence": 0.9
+        }
+      }
+    ],
+    "validationCases": [
+      {
+        "evalCaseId": "validation_01_baseball",
+        "passed": false,
+        "score": 0,
+        "metrics": [
+          {
+            "metricName": "headline_format_validity",
+            "score": 0,
+            "passed": false
+          },
+          {
+            "metricName": "headline_exact_match",
+            "score": 0,
+            "passed": false
+          }
+        ],
+        "attribution": {
+          "evalCaseId": "validation_01_baseball",
+          "category": "format_error",
+          "reason": "",
+          "confidence": 0.9
+        }
+      },
+      {
+        "evalCaseId": "validation_02_ice_hockey",
+        "passed": false,
+        "score": 0,
+        "metrics": [
+          {
+            "metricName": "headline_format_validity",
+            "score": 0,
+            "passed": false
+          },
+          {
+            "metricName": "headline_exact_match",
+            "score": 0,
+            "passed": false
+          }
+        ],
+        "attribution": {
+          "evalCaseId": "validation_02_ice_hockey",
+          "category": "format_error",
+          "reason": "",
+          "confidence": 0.9
+        }
+      },
+      {
+        "evalCaseId": "validation_03_badminton",
+        "passed": false,
+        "score": 0,
+        "metrics": [
+          {
+            "metricName": "headline_format_validity",
+            "score": 0,
+            "passed": false
+          },
+          {
+            "metricName": "headline_exact_match",
+            "score": 0,
+            "passed": false
+          }
+        ],
+        "attribution": {
+          "evalCaseId": "validation_03_badminton",
+          "category": "format_error",
+          "reason": "",
+          "confidence": 0.9
+        }
+      }
+    ]
+  },
+  "optimization": {
+    "rounds": [
+      {
+        "round": 1,
+        "candidatePrompt": "[STAGE_GOOD] 严格输出包含 headline 与 source 字段的 JSON 对象,headline 必须原样使用输入中的 headline 字段",
+        "trainScore": 0,
+        "validationScore": 1,
+        "engineAccepted": true,
+        "engineReason": "candidate score gain satisfies acceptance policy",
+        "gateAccepted": true,
+        "gateReason": "all gate checks passed",
+        "deltaSummary": {
+          "Total": 3,
+          "NewlyPassed": 3,
+          "NewlyFailed": 0,
+          "ScoreImproved": 0,
+          "ScoreRegressed": 0,
+          "Unchanged": 0,
+          "PassedAtCandidate": 3
+        },
+        "deltas": [
+          {
+            "evalCaseId": "validation_01_baseball",
+            "baselineScore": 0,
+            "candidateScore": 1,
+            "delta": 1,
+            "outcome": "newly_passed"
+          },
+          {
+            "evalCaseId": "validation_02_ice_hockey",
+            "baselineScore": 0,
+            "candidateScore": 1,
+            "delta": 1,
+            "outcome": "newly_passed"
+          },
+          {
+            "evalCaseId": "validation_03_badminton",
+            "baselineScore": 0,
+            "candidateScore": 1,
+            "delta": 1,
+            "outcome": "newly_passed"
+          }
+        ],
+        "attribution": {
+          "distribution": {},
+          "count": 0,
+          "coverage": 0
+        },
+        "modelCalls": 40
+      },
+      {
+        "round": 2,
+        "candidatePrompt": "[STAGE_OVERFIT] 仅对训练样本原样输出 headline 字段,验证样本一律输出固定文案",
+        "trainScore": 0.6666666666666666,
+        "validationScore": 0.6666666666666666,
+        "engineAccepted": false,
+        "engineReason": "candidate score gain does not satisfy acceptance policy",
+        "gateAccepted": false,
+        "gateReason": "gate rejected candidate: validation_score_gain, no_new_hard_fail",
+        "deltaSummary": {
+          "Total": 3,
+          "NewlyPassed": 0,
+          "NewlyFailed": 2,
+          "ScoreImproved": 0,
+          "ScoreRegressed": 0,
+          "Unchanged": 1,
+          "PassedAtCandidate": 1
+        },
+        "deltas": [
+          {
+            "evalCaseId": "validation_01_baseball",
+            "baselineScore": 1,
+            "candidateScore": 0.5,
+            "delta": -0.5,
+            "outcome": "newly_failed"
+          },
+          {
+            "evalCaseId": "validation_02_ice_hockey",
+            "baselineScore": 1,
+            "candidateScore": 1,
+            "delta": 0,
+            "outcome": "unchanged"
+          },
+          {
+            "evalCaseId": "validation_03_badminton",
+            "baselineScore": 1,
+            "candidateScore": 0.5,
+            "delta": -0.5,
+            "outcome": "newly_failed"
+          }
+        ],
+        "attribution": {
+          "distribution": {
+            "final_response_mismatch": 2
+          },
+          "count": 2,
+          "coverage": 1,
+          "cases": [
+            {
+              "evalCaseId": "validation_01_baseball",
+              "category": "final_response_mismatch",
+              "reason": "final response mismatch: text mismatch: source {\"headline\":\"固定文案头条\",\"source\":\"固定来源\"} and target {\"headline\":\"红人九下再见安打逆转小熊\",\"source\":\"MLB 2026-05-01\"} do not match",
+              "confidence": 0.9
+            },
+            {
+              "evalCaseId": "validation_03_badminton",
+              "category": "final_response_mismatch",
+              "reason": "final response mismatch: text mismatch: source {\"headline\":\"固定文案头条\",\"source\":\"固定来源\"} and target {\"headline\":\"王岚连扳两局逆转晋级\",\"source\":\"亚洲羽毛球挑战赛 2026-04-08\"} do not match",
+              "confidence": 0.9
+            }
+          ]
+        },
+        "modelCalls": 40
+      },
+      {
+        "round": 3,
+        "candidatePrompt": "[STAGE_INEFFECTIVE] 无论输入是什么都输出同一句固定文案",
+        "trainScore": 0.6666666666666666,
+        "validationScore": 0,
+        "engineAccepted": false,
+        "engineReason": "candidate score gain does not satisfy acceptance policy",
+        "gateAccepted": false,
+        "gateReason": "gate rejected candidate: validation_score_gain, no_new_hard_fail, key_cases_no_regression",
+        "deltaSummary": {
+          "Total": 3,
+          "NewlyPassed": 0,
+          "NewlyFailed": 3,
+          "ScoreImproved": 0,
+          "ScoreRegressed": 0,
+          "Unchanged": 0,
+          "PassedAtCandidate": 0
+        },
+        "deltas": [
+          {
+            "evalCaseId": "validation_01_baseball",
+            "baselineScore": 1,
+            "candidateScore": 0,
+            "delta": -1,
+            "outcome": "newly_failed"
+          },
+          {
+            "evalCaseId": "validation_02_ice_hockey",
+            "baselineScore": 1,
+            "candidateScore": 0,
+            "delta": -1,
+            "outcome": "newly_failed"
+          },
+          {
+            "evalCaseId": "validation_03_badminton",
+            "baselineScore": 1,
+            "candidateScore": 0,
+            "delta": -1,
+            "outcome": "newly_failed"
+          }
+        ],
+        "attribution": {
+          "distribution": {
+            "format_error": 3
+          },
+          "count": 3,
+          "coverage": 1,
+          "cases": [
+            {
+              "evalCaseId": "validation_01_baseball",
+              "category": "format_error",
+              "reason": "final response mismatch: json mismatch: parse actual raw json: invalid character 'å' looking for beginning of value",
+              "confidence": 0.9
+            },
+            {
+              "evalCaseId": "validation_02_ice_hockey",
+              "category": "format_error",
+              "reason": "final response mismatch: json mismatch: parse actual raw json: invalid character 'å' looking for beginning of value",
+              "confidence": 0.9
+            },
+            {
+              "evalCaseId": "validation_03_badminton",
+              "category": "format_error",
+              "reason": "final response mismatch: json mismatch: parse actual raw json: invalid character 'å' looking for beginning of value",
+              "confidence": 0.9
+            }
+          ]
+        },
+        "modelCalls": 40
+      }
+    ],
+    "finalAcceptedRound": 1,
+    "finalCandidatePrompt": "[STAGE_GOOD] 严格输出包含 headline 与 source 字段的 JSON 对象,headline 必须原样使用输入中的 headline 字段"
+  },
+  "gate": {
+    "accepted": true,
+    "reason": "all gate checks passed",
+    "checks": [
+      {
+        "name": "validation_score_gain",
+        "passed": true,
+        "detail": "validation 0.000 -\u003e 1.000 (delta +1.000), threshold +0.050"
+      },
+      {
+        "name": "no_new_hard_fail",
+        "passed": true,
+        "detail": "0 new hard fails"
+      },
+      {
+        "name": "key_cases_no_regression",
+        "passed": true,
+        "detail": "1 key case(s) checked, no regression"
+      },
+      {
+        "name": "budget_within_limit",
+        "passed": true,
+        "detail": "40 model calls / 24 ms"
+      }
+    ]
+  },
+  "attribution": {
+    "distribution": {
+      "final_response_mismatch": 2,
+      "format_error": 1
+    },
+    "count": 3,
+    "coverage": 1,
+    "cases": [
+      {
+        "evalCaseId": "train_01_basketball",
+        "category": "final_response_mismatch",
+        "reason": "",
+        "confidence": 0.9
+      },
+      {
+        "evalCaseId": "train_02_tennis",
+        "category": "final_response_mismatch",
+        "reason": "",
+        "confidence": 0.9
+      },
+      {
+        "evalCaseId": "train_03_football",
+        "category": "format_error",
+        "reason": "",
+        "confidence": 0.9
+      }
+    ]
+  },
+  "cost": {
+    "modelCalls": 40,
+    "totalLatencyMs": 24,
+    "maxModelCalls": 200,
+    "maxLatencyMs": 180000,
+    "withinBudget": true
+  },
+  "recommendation": "接受并回写第 1 轮候选 prompt(验证集 0.000 → 1.000),已通过全部门禁检查。建议将 \"[STAGE_GOOD] 严格输出包含 headline 与 source 字段的 JSON 对象,headline 必须原样使用输入中的 headline 字段\" 更新到源 prompt 并归档本报告。"
+}

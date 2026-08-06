@@ -1,0 +1,67 @@
+{
+  "evalSetId": "validation",
+  "name": "headline-card-validation",
+  "description": "Validation set for the structured headline-card task. Case validation_02 is marked as a key case in the pipeline config and must never regress.",
+  "evalCases": [
+    {
+      "evalId": "validation_01_baseball",
+      "conversation": [
+        {
+          "invocationId": "validation_01_baseball-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\"caseId\":\"validation_01_baseball\",\"split\":\"validation\",\"sport\":\"baseball\",\"headline\":\"红人九下再见安打逆转小熊\",\"source\":\"MLB 2026-05-01\"}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "{\"headline\":\"红人九下再见安打逆转小熊\",\"source\":\"MLB 2026-05-01\"}"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "headline-card-app",
+        "userId": "demo-user"
+      }
+    },
+    {
+      "evalId": "validation_02_ice_hockey",
+      "conversation": [
+        {
+          "invocationId": "validation_02_ice_hockey-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\"caseId\":\"validation_02_ice_hockey\",\"split\":\"validation\",\"sport\":\"ice_hockey\",\"headline\":\"雪原狼加时绝杀湖湾骑士\",\"source\":\"East Ice Center 2026-02-14\"}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "{\"headline\":\"雪原狼加时绝杀湖湾骑士\",\"source\":\"East Ice Center 2026-02-14\"}"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "headline-card-app",
+        "userId": "demo-user"
+      }
+    },
+    {
+      "evalId": "validation_03_badminton",
+      "conversation": [
+        {
+          "invocationId": "validation_03_badminton-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\"caseId\":\"validation_03_badminton\",\"split\":\"validation\",\"sport\":\"badminton\",\"headline\":\"王岚连扳两局逆转晋级\",\"source\":\"亚洲羽毛球挑战赛 2026-04-08\"}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "{\"headline\":\"王岚连扳两局逆转晋级\",\"source\":\"亚洲羽毛球挑战赛 2026-04-08\"}"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "headline-card-app",
+        "userId": "demo-user"
+      }
+    }
+  ]
+}

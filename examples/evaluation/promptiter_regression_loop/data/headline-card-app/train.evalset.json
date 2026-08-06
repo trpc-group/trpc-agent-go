@@ -1,0 +1,67 @@
+{
+  "evalSetId": "train",
+  "name": "headline-card-train",
+  "description": "Training set for the structured headline-card task. Each case feeds one compact JSON object as input and expects a JSON card with headline and source fields.",
+  "evalCases": [
+    {
+      "evalId": "train_01_basketball",
+      "conversation": [
+        {
+          "invocationId": "train_01_basketball-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\"caseId\":\"train_01_basketball\",\"split\":\"train\",\"sport\":\"basketball\",\"headline\":\"掘金128比104大胜开拓者\",\"source\":\"NBA 2026-01-12\"}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "{\"headline\":\"掘金128比104大胜开拓者\",\"source\":\"NBA 2026-01-12\"}"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "headline-card-app",
+        "userId": "demo-user"
+      }
+    },
+    {
+      "evalId": "train_02_tennis",
+      "conversation": [
+        {
+          "invocationId": "train_02_tennis-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\"caseId\":\"train_02_tennis\",\"split\":\"train\",\"sport\":\"tennis\",\"headline\":\"陈林五盘逆转晋级\",\"source\":\"上海大师赛 2026-03-04\"}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "{\"headline\":\"陈林五盘逆转晋级\",\"source\":\"上海大师赛 2026-03-04\"}"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "headline-card-app",
+        "userId": "demo-user"
+      }
+    },
+    {
+      "evalId": "train_03_football",
+      "conversation": [
+        {
+          "invocationId": "train_03_football-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\"caseId\":\"train_03_football\",\"split\":\"train\",\"sport\":\"football\",\"headline\":\"滨河FC补时绝杀逆转\",\"source\":\"城市杯半决赛 2026-04-20\"}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "{\"headline\":\"滨河FC补时绝杀逆转\",\"source\":\"城市杯半决赛 2026-04-20\"}"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "headline-card-app",
+        "userId": "demo-user"
+      }
+    }
+  ]
+}
