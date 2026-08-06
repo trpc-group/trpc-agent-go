@@ -20,6 +20,7 @@ import (
 	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/internal/assistantmemory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -72,16 +73,19 @@ func TestAssistantEpisodeExtractionIsOptIn(t *testing.T) {
 	if disabled.assistantEpisodeExtraction {
 		t.Fatal("assistant episode extraction is enabled by default")
 	}
-	if _, ok := disabled.Metadata()[metadataKeyConversationExtraction]; ok {
-		t.Fatal("default extractor reports assistant episode metadata")
+	if assistantmemory.Enabled(disabled) {
+		t.Fatal("default extractor reports assistant episode capability")
 	}
 
 	enabled := NewExtractor(nil, WithAssistantEpisodeExtraction()).(*memoryExtractor)
 	if !enabled.assistantEpisodeExtraction {
 		t.Fatal("assistant episode extraction was not enabled")
 	}
-	if got := enabled.Metadata()[metadataKeyConversationExtraction]; got != assistantEpisodeMetadataValue {
-		t.Fatalf("assistant episode metadata = %v, want %q", got, assistantEpisodeMetadataValue)
+	if !assistantmemory.Enabled(enabled) {
+		t.Fatal("enabled extractor does not report assistant episode capability")
+	}
+	if !reflect.DeepEqual(disabled.Metadata(), enabled.Metadata()) {
+		t.Fatal("assistant option changed descriptive extractor metadata")
 	}
 }
 
@@ -103,6 +107,25 @@ func TestAssistantEpisodeExtractionDisabledPreservesRequest(t *testing.T) {
 	}
 	if !requestContainsRoleContent(m.requests[0], model.RoleAssistant, "- Alpha\n- Beta") {
 		t.Fatal("default request no longer contains the assistant message")
+	}
+}
+
+func TestAssistantEpisodeExtractionFallsBackWhenWorkerCapabilityIsHidden(t *testing.T) {
+	m := &assistantTestModel{steps: []assistantModelStep{{}}}
+	ext := NewExtractor(m, WithAssistantEpisodeExtraction())
+	ctx := assistantmemory.WithWorkerConfiguration(context.Background(), false)
+
+	if _, err := ext.Extract(ctx, []model.Message{
+		model.NewUserMessage("Recommend two options."),
+		model.NewAssistantMessage("- Alpha\n- Beta"),
+	}, nil); err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	if len(m.requests) != 1 {
+		t.Fatalf("model calls = %d, want 1", len(m.requests))
+	}
+	if !requestContainsRoleContent(m.requests[0], model.RoleAssistant, "- Alpha\n- Beta") {
+		t.Fatal("worker-disabled fallback omitted the ordinary assistant message")
 	}
 }
 
@@ -623,6 +646,52 @@ func TestAssistantEpisodeExtractionRespectsEnabledTools(t *testing.T) {
 	}
 }
 
+func TestAssistantEpisodeOrdinaryStageUsesUpdatePolicyTools(t *testing.T) {
+	tests := []struct {
+		name        string
+		policy      UpdatePolicy
+		wantTools   int
+		wantAddOnly bool
+	}{
+		{name: "merge similar", policy: UpdatePolicyMergeSimilar, wantTools: len(backgroundTools)},
+		{name: "preserve history", policy: UpdatePolicyPreserveHistory, wantTools: len(backgroundTools)},
+		{name: "append only", policy: UpdatePolicyAppendOnly, wantTools: 1, wantAddOnly: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			m := &assistantTestModel{steps: []assistantModelStep{{}}}
+			ext := NewExtractor(
+				m,
+				WithUpdatePolicy(test.policy),
+				WithAssistantEpisodeExtraction(),
+			)
+			_, err := ext.Extract(context.Background(), []model.Message{
+				model.NewUserMessage("Remember this preference."),
+			}, nil)
+			if err != nil {
+				t.Fatalf("extract: %v", err)
+			}
+			if got := len(m.requests[0].Tools); got != test.wantTools {
+				t.Fatalf("tool count = %d, want %d", got, test.wantTools)
+			}
+			if test.wantAddOnly {
+				if _, ok := m.requests[0].Tools[memory.AddToolName]; !ok {
+					t.Fatal("append-only ordinary stage omitted memory_add")
+				}
+				for _, name := range []string{
+					memory.UpdateToolName,
+					memory.DeleteToolName,
+					memory.ClearToolName,
+				} {
+					if _, ok := m.requests[0].Tools[name]; ok {
+						t.Fatalf("append-only ordinary stage exposed %s", name)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestAssistantEpisodeExtractionSkipsAfterForget(t *testing.T) {
 	m := &assistantTestModel{steps: []assistantModelStep{{calls: []model.ToolCall{
 		makeToolCall(memory.ClearToolName, []byte(`{}`)),
@@ -640,6 +709,50 @@ func TestAssistantEpisodeExtractionSkipsAfterForget(t *testing.T) {
 	}
 	if len(operations) != 1 || operations[0].Type != OperationClear {
 		t.Fatalf("operations = %#v", operations)
+	}
+}
+
+func TestAssistantEpisodeExtractionIgnoresUnrequestedDeleteOperation(t *testing.T) {
+	m := &assistantTestModel{steps: []assistantModelStep{
+		{calls: []model.ToolCall{makeToolCall(memory.DeleteToolName, []byte(`{
+			"memory_id":"stale"
+		}`))}},
+		{},
+	}}
+	ext := NewExtractor(m, WithAssistantEpisodeExtraction())
+	_, err := ext.Extract(context.Background(), []model.Message{
+		model.NewUserMessage("Recommend two options."),
+		model.NewAssistantMessage("1. Alpha\n2. Beta"),
+	}, nil)
+	if err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	if len(m.requests) != 2 {
+		t.Fatalf("model calls = %d, want 2", len(m.requests))
+	}
+}
+
+func TestAssistantEpisodeExtractionHonorsLatestCancellation(t *testing.T) {
+	m := &assistantTestModel{steps: []assistantModelStep{
+		{calls: []model.ToolCall{makeToolCall(memory.DeleteToolName, []byte(`{
+			"memory_id":"stale"
+		}`))}},
+		{},
+	}}
+	ext := NewExtractor(m, WithAssistantEpisodeExtraction())
+	_, err := ext.Extract(context.Background(), []model.Message{
+		model.NewUserMessage("Please forget my old recommendation."),
+		model.NewAssistantMessage("Understood."),
+		model.NewUserMessage("Never mind, keep it."),
+		model.NewAssistantMessage("Understood."),
+		model.NewUserMessage("Recommend two options."),
+		model.NewAssistantMessage("1. Alpha\n2. Beta"),
+	}, nil)
+	if err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	if len(m.requests) != 2 {
+		t.Fatalf("model calls = %d, want 2", len(m.requests))
 	}
 }
 
@@ -1177,17 +1290,6 @@ func TestAssistantEpisodeToolAvailability(t *testing.T) {
 				t.Fatalf("assistant add enabled = %v, want %v", got, test.want)
 			}
 		})
-	}
-}
-
-func TestContainsForgetOperation(t *testing.T) {
-	if containsForgetOperation([]*Operation{nil, {Type: OperationAdd}}) {
-		t.Fatal("ordinary operations were treated as forget operations")
-	}
-	for _, operationType := range []OperationType{OperationDelete, OperationClear} {
-		if !containsForgetOperation([]*Operation{{Type: operationType}}) {
-			t.Fatalf("operation %q was not treated as a forget operation", operationType)
-		}
 	}
 }
 

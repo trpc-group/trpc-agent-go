@@ -336,8 +336,11 @@ memoryService := memoryinmemory.NewMemoryService(
 )
 ```
 
-该 option 使用两个彼此隔离的提取阶段。第一阶段继续使用标准 memory tools，
-仅从 user message 提取普通用户事实和事件。随后，提取器会按时间顺序检查当前
+该 option 使用两个彼此隔离的提取阶段。第一阶段继续使用标准 memory tools；如果
+配置了 `WithUpdatePolicy` 或 enabled tools，也会应用对应的工具约束，并且仅从
+user message 提取普通用户事实和事件。收集 session delta 时，功能开启后只使用每个
+模型响应事件的 primary choice，不会把同一响应的备选 choice 当作连续的 assistant
+回复。随后，提取器会按时间顺序检查当前
 extraction delta 中符合条件的 user/assistant pair。确定性的 eligibility 检查仅在
 assistant 返回至少两个 Markdown 或编号列表项时接受结构化请求；对于数量问题，
 则要求回答引入一个未出现在问题中的数值答案。单段 prose 形式的分类、翻译、转换
@@ -345,7 +348,9 @@ assistant 返回至少两个 Markdown 或编号列表项时接受结构化请求
 顺序进入私有的单次请求 pair 数量和 source 体积预算；超出预算的候选会被忽略，因为
 assistant 结果提取采用 best-effort 语义。入选的 pair 会合并到一次第二阶段请求中，
 并且只暴露私有的 `memory_assistant_episode` 工具。该工具不会暴露给应用的 Agent。
-通过 `WithPrompt` 或 `SetPrompt` 配置的应用提取约束同样适用于第二阶段请求。
+通过 `WithPrompt` 或 `SetPrompt` 配置的应用提取约束同样适用于第二阶段请求。当前
+用户明确要求 delete 或 clear 时会跳过可选阶段；模型在没有用户授权时自行生成的
+Delete 或 Clear operation 不会抑制该阶段。
 
 Assistant 输出会被记录为“带归属的对话历史”，而不是已经验证的事实或用户偏好。
 框架将每个通过校验的调用固定转换为普通 `KindEpisode` add 操作，将 participants
@@ -376,8 +381,12 @@ operation 的持久化预留时间。子 deadline 到期、可选请求失败或
 该功能与存储后端无关，不会新增 memory kind、字段、数据库列、数据表或迁移。同一
 delta 中入选的 pair 共用一次第二阶段模型请求，因此每个 delta 最多调用模型两次：
 一次普通提取和一次 assistant 提取。普通对话仍只有一次
-extraction 调用。该 option 在 extractor 生命周期内不可修改。需要关闭时，应重新
-构造一个未传入该 option 的 extractor。此前已经保存的 assistant episode 仍是普通
+extraction 调用。该 option 在 extractor 生命周期内不可修改，并由 Auto memory
+worker 在构造时读取和固定；它不会改变 extractor 的描述性 `Metadata()`。需要关闭
+时，应重新构造未传入该 option 的 extractor 和 memory service。内置 extractor
+应直接传给 memory service；自定义 decorator 不会把该内部能力传给 Auto memory
+worker，因此 worker 会完整保留普通单阶段提取，而不会只开启部分功能。此前已经
+保存的 assistant episode 仍是普通
 episodic memory，会继续参与正常检索。功能开启期间，这些 episode 不参与普通记忆的
 提取上下文和 reconcile，避免其覆盖或吸收来源于用户的记忆。
 

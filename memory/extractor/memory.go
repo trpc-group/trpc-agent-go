@@ -19,6 +19,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/internal/assistantmemory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/prompt"
 )
@@ -123,6 +124,9 @@ func (e *memoryExtractor) Extract(
 		return nil, nil
 	}
 	if e.assistantEpisodeExtraction {
+		if enabled, managed := assistantmemory.WorkerConfiguration(ctx); managed && !enabled {
+			return e.extractOperations(ctx, messages, existing)
+		}
 		return e.extractWithAssistantEpisodes(ctx, messages, existing)
 	}
 	return e.extractOperations(ctx, messages, existing)
@@ -248,14 +252,10 @@ func (e *memoryExtractor) Metadata() map[string]any {
 		modelName = e.model.Info().Name
 		modelAvailable = true
 	}
-	metadata := map[string]any{
+	return map[string]any{
 		metadataKeyModelName:      modelName,
 		metadataKeyModelAvailable: modelAvailable,
 	}
-	if e.assistantEpisodeExtraction {
-		metadata[metadataKeyConversationExtraction] = assistantEpisodeMetadataValue
-	}
-	return metadata
 }
 
 // extractionUserSuffix is appended as a trailing user message

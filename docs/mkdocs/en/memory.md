@@ -368,8 +368,12 @@ memoryService := memoryinmemory.NewMemoryService(
 ```
 
 The option uses two isolated extraction stages. The first stage keeps the
-standard memory tools and extracts ordinary user facts and events from user
-messages. The extractor then considers eligible user/assistant pairs in the
+standard memory tools, restricted by `WithUpdatePolicy` and enabled-tool
+configuration when present, and extracts ordinary user facts and events from
+user messages. When collecting a session delta, the enabled option uses only
+the primary choice from each model response event; alternative choices are not
+treated as consecutive assistant replies. The extractor then considers
+eligible user/assistant pairs in the
 extraction delta in chronological order. The deterministic eligibility check
 accepts a structured request only when the assistant response contains at
 least two Markdown or numbered list items. It also accepts a quantitative
@@ -382,7 +386,9 @@ that budget are omitted because assistant-result extraction is best effort.
 The selected pairs are combined into one second request that exposes only the
 private `memory_assistant_episode` tool. This tool is never visible to the
 application Agent. An application policy configured through `WithPrompt` or
-`SetPrompt` also constrains the second-stage request.
+`SetPrompt` also constrains the second-stage request. An explicit, current user
+request to delete or clear memory suppresses the optional stage; a Delete or
+Clear operation produced by the model without that authorization does not.
 
 Assistant output is stored as attributed conversation history rather than as a
 verified fact or user preference. The framework converts every accepted call
@@ -421,8 +427,14 @@ This feature is backend-neutral. It does not add a memory kind, field, database
 column, table, or migration. Selected pairs in the same delta share one
 second-stage model request, so extraction uses at most two model calls per
 delta: one ordinary request and one assistant request. The option is fixed for
-the lifetime of the extractor. To disable it, construct a new extractor without
-the option. Previously stored assistant episodes remain ordinary episodic
+the lifetime of the extractor and is captured by the Auto memory worker when it
+is constructed; it does not alter the extractor's descriptive `Metadata()`.
+To disable it, construct a new extractor and memory service without the option.
+Pass the configured built-in extractor directly to the memory service; a custom
+decorator does not carry this internal capability to the Auto memory worker,
+so the worker keeps ordinary single-stage extraction instead of partially
+enabling the feature.
+Previously stored assistant episodes remain ordinary episodic
 memories and continue to participate in normal retrieval. While the option is
 enabled, they are excluded from ordinary extraction and reconciliation so they
 cannot replace or absorb user-originated memories.

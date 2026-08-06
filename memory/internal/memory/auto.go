@@ -198,13 +198,14 @@ type MemoryOperator interface {
 
 // AutoMemoryWorker manages async memory extraction workers.
 type AutoMemoryWorker struct {
-	config       AutoMemoryConfig
-	operator     MemoryOperator
-	updatePolicy extractor.UpdatePolicy
-	jobChans     []chan *MemoryJob
-	wg           sync.WaitGroup
-	mu           sync.RWMutex
-	started      bool
+	config                     AutoMemoryConfig
+	operator                   MemoryOperator
+	updatePolicy               extractor.UpdatePolicy
+	assistantEpisodeExtraction bool
+	jobChans                   []chan *MemoryJob
+	wg                         sync.WaitGroup
+	mu                         sync.RWMutex
+	started                    bool
 }
 
 // NewAutoMemoryWorker creates a new auto memory worker.
@@ -216,9 +217,10 @@ func NewAutoMemoryWorker(
 ) *AutoMemoryWorker {
 	config.EnabledTools = maps.Clone(config.EnabledTools)
 	return &AutoMemoryWorker{
-		config:       config,
-		operator:     operator,
-		updatePolicy: updatePolicyFor(config.Extractor),
+		config:                     config,
+		operator:                   operator,
+		updatePolicy:               updatePolicyFor(config.Extractor),
+		assistantEpisodeExtraction: assistantmemory.Enabled(config.Extractor),
 	}
 }
 
@@ -292,7 +294,11 @@ func (w *AutoMemoryWorker) EnqueueJob(ctx context.Context, sess *session.Session
 	}
 
 	since := readLastExtractAt(sess)
-	latestTs, messages := scanDeltaSince(sess, since)
+	latestTs, messages := scanDeltaSince(
+		sess,
+		since,
+		w.assistantEpisodeExtraction,
+	)
 	if len(messages) == 0 {
 		log.DebugfContext(ctx, "auto_memory: skipped due to no new messages for user %s/%s",
 			userKey.AppName, userKey.UserID)
@@ -447,14 +453,33 @@ func (w *AutoMemoryWorker) prepareAutoMemoryOperations(
 		return nil, fmt.Errorf("auto_memory: prepare existing memories failed: %w", err)
 	}
 
-	// Extract memory operations.
-	ops, err := w.config.Extractor.Extract(ctx, messages, existing)
+	// Extract memory operations. The worker-owned context marker prevents a
+	// decorator that hides an optional built-in capability from half-enabling
+	// assistant extraction without the corresponding worker isolation.
+	extractionCtx := assistantmemory.WithWorkerConfiguration(
+		ctx,
+		w.assistantEpisodeExtraction,
+	)
+	ops, err := w.config.Extractor.Extract(extractionCtx, messages, existing)
 	if err != nil {
 		log.WarnfContext(ctx, "auto_memory: extraction failed for user %s/%s: %v",
 			userKey.AppName, userKey.UserID, err)
 		return nil, fmt.Errorf("auto_memory: extract failed: %w", err)
 	}
 
+	if w.assistantEpisodeExtraction {
+		ordinaryOps, assistantOps := partitionAssistantEpisodeOps(ops)
+		ordinaryOps = protectAssistantEpisodeUpdates(ordinaryOps, existing)
+		ordinaryExisting := withoutAssistantEpisodeEntries(existing)
+		ordinaryOps = w.applyUpdatePolicy(
+			ctx,
+			userKey,
+			ordinaryOps,
+			ordinaryExisting,
+			messages,
+		)
+		return append(ordinaryOps, assistantOps...), nil
+	}
 	ops = w.applyUpdatePolicy(ctx, userKey, ops, existing, messages)
 	return ops, nil
 }
@@ -728,6 +753,7 @@ func writeLastExtractAt(sess *session.Session, ts time.Time) {
 func scanDeltaSince(
 	sess *session.Session,
 	since time.Time,
+	primaryResponseOnly bool,
 ) (time.Time, []model.Message) {
 	var latestTs time.Time
 	var messages []model.Message
@@ -750,8 +776,18 @@ func scanDeltaSince(
 			continue
 		}
 
+		choices := e.Response.Choices
+		if primaryResponseOnly {
+			choices = nil
+			for index := range e.Response.Choices {
+				if e.Response.Choices[index].Index == 0 {
+					choices = e.Response.Choices[index : index+1]
+					break
+				}
+			}
+		}
 		// Extract messages from response choices, excluding tool-related messages.
-		for _, choice := range e.Response.Choices {
+		for _, choice := range choices {
 			msg := choice.Message
 			// Skip tool messages and messages with tool calls.
 			if msg.Role == model.RoleTool || msg.ToolID != "" {
@@ -842,9 +878,7 @@ func (w *AutoMemoryWorker) decideAddOp(
 	if query == "" {
 		return op
 	}
-	protectAssistantEpisodes := assistantEpisodeExtractionEnabled(
-		w.config.Extractor,
-	)
+	protectAssistantEpisodes := w.assistantEpisodeExtraction
 	maxResults := reconcileTopK
 	if protectAssistantEpisodes {
 		maxResults = reconcileAssistantCandidateLimit
@@ -930,14 +964,6 @@ func (w *AutoMemoryWorker) decideAddOp(
 	}
 }
 
-func assistantEpisodeExtractionEnabled(ext extractor.MemoryExtractor) bool {
-	if ext == nil {
-		return false
-	}
-	value, ok := ext.Metadata()[assistantmemory.MetadataKey].(string)
-	return ok && value == assistantmemory.MetadataValue
-}
-
 func partitionAssistantEpisodeOps(
 	ops []*extractor.Operation,
 ) ([]*extractor.Operation, []*extractor.Operation) {
@@ -985,6 +1011,20 @@ func protectAssistantEpisodeUpdates(
 		protected = append(protected, &converted)
 	}
 	return protected
+}
+
+func withoutAssistantEpisodeEntries(
+	entries []*memory.Entry,
+) []*memory.Entry {
+	filtered := make([]*memory.Entry, 0, len(entries))
+	for _, entry := range entries {
+		if entry != nil && entry.Memory != nil &&
+			assistantmemory.IsText(entry.Memory.Memory) {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	return filtered
 }
 
 func reconcileCandidateEligible(

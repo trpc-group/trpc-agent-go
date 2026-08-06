@@ -22,17 +22,16 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory/internal/assistantmemory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/internal/updatepolicy"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 const (
-	metadataKeyConversationExtraction = assistantmemory.MetadataKey
-	assistantEpisodeMetadataValue     = assistantmemory.MetadataValue
-	assistantEpisodeToolName          = "memory_assistant_episode"
-	assistantEpisodePairIDKey         = "pair_id"
-	assistantEpisodeMaxBytes          = 4096
-	assistantEpisodeSourceMaxBytes    = 8192
+	assistantEpisodeToolName       = "memory_assistant_episode"
+	assistantEpisodePairIDKey      = "pair_id"
+	assistantEpisodeMaxBytes       = 4096
+	assistantEpisodeSourceMaxBytes = 8192
 	// These private limits bound the optional request; overflow is best effort.
 	assistantEpisodeRequestMaxPairs       = 32
 	assistantEpisodeRequestMaxSourceBytes = 64 * 1024
@@ -138,6 +137,12 @@ func WithAssistantEpisodeExtraction() Option {
 	}
 }
 
+// ConfiguredAssistantEpisodeExtraction carries the built-in extractor setting
+// through an internal-only capability used by the auto-memory worker.
+func (e *memoryExtractor) ConfiguredAssistantEpisodeExtraction() assistantmemory.Value {
+	return assistantmemory.Value(e.assistantEpisodeExtraction)
+}
+
 func (e *memoryExtractor) extractWithAssistantEpisodes(
 	ctx context.Context,
 	messages []model.Message,
@@ -152,10 +157,7 @@ func (e *memoryExtractor) extractWithAssistantEpisodes(
 	if len(ordinaryMessages) > 0 {
 		ordinaryExtractor := *e
 		ordinaryExtractor.assistantEpisodeExtraction = false
-		ordinaryTools := filterTools(
-			backgroundTools,
-			ordinaryExtractor.enabledTools,
-		)
+		ordinaryTools := ordinaryExtractor.extractionTools()
 		if len(ordinaryTools) == 0 {
 			return nil, nil
 		}
@@ -182,7 +184,8 @@ func (e *memoryExtractor) extractWithAssistantEpisodes(
 		}
 	}
 
-	if containsForgetOperation(ordinaryOps) || !e.assistantEpisodeAddEnabled() {
+	if updatepolicy.HasExplicitDestructiveRequest(messages) ||
+		!e.assistantEpisodeAddEnabled() {
 		return ordinaryOps, nil
 	}
 	pairs := selectAssistantEpisodePairs(messages)
@@ -726,18 +729,6 @@ func (e *memoryExtractor) assistantEpisodeAddEnabled() bool {
 	}
 	_, ok := e.enabledTools[memory.AddToolName]
 	return ok
-}
-
-func containsForgetOperation(operations []*Operation) bool {
-	for _, operation := range operations {
-		if operation == nil {
-			continue
-		}
-		if operation.Type == OperationDelete || operation.Type == OperationClear {
-			return true
-		}
-	}
-	return false
 }
 
 func newAssistantEpisodeTool(
