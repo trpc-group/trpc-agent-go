@@ -129,12 +129,12 @@ type PermissionDecisionInfo struct {
 
 // ReviewMetrics tracks execution metrics for monitoring.
 type ReviewMetrics struct {
-	TotalDurationMs    int64          `json:"total_duration_ms"`
-	SandboxDurationMs  int64          `json:"sandbox_duration_ms"`
-	ToolCallCount      int            `json:"tool_call_count"`
-	PermissionDenials  int            `json:"permission_denials"`
-	FindingCount       int            `json:"finding_count"`
-	SeverityCounts     map[string]int `json:"severity_counts"`
+	TotalDurationMs   int64          `json:"total_duration_ms"`
+	SandboxDurationMs int64          `json:"sandbox_duration_ms"`
+	ToolCallCount     int            `json:"tool_call_count"`
+	PermissionDenials int            `json:"permission_denials"`
+	FindingCount      int            `json:"finding_count"`
+	SeverityCounts    map[string]int `json:"severity_counts"`
 }
 
 // CheckPermission evaluates if a command is allowed to execute.
@@ -197,10 +197,14 @@ func (r *CodeReviewer) ExecuteReview(ctx context.Context, input ReviewTaskInput)
 
 		if decision == string(tool.PermissionActionAllow) {
 			sandStart := time.Now()
+			vetCmd := "go vet ./..."
+			if input.RepoPath != "" && input.RepoPath != "." {
+				vetCmd = fmt.Sprintf("cd %s && go vet ./...", input.RepoPath)
+			}
 			execInput := codeexecutor.CodeExecutionInput{
 				CodeBlocks: []codeexecutor.CodeBlock{
 					{
-						Code:     "go vet ./...",
+						Code:     vetCmd,
 						Language: "sh",
 					},
 				},

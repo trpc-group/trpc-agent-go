@@ -29,7 +29,7 @@ type Finding struct {
 	Evidence       string  `json:"evidence"`
 	Recommendation string  `json:"recommendation"`
 	Confidence     float64 `json:"confidence"`
-	Source         string  `json:"source"`  // "static_rule", "skill", "sandbox"
+	Source         string  `json:"source"` // "static_rule", "skill", "sandbox"
 	RuleID         string  `json:"rule_id"`
 }
 
@@ -41,11 +41,27 @@ var (
 	exportedFuncRegex = regexp.MustCompile(`^func\s+([A-Z][a-zA-Z0-9_]*)\s*\(`)
 )
 
+// isSafePath checks if a relative path avoids path traversal outside its root.
+func isSafePath(path string) bool {
+	if path == "" {
+		return false
+	}
+	clean := filepath.Clean(path)
+	if strings.HasPrefix(clean, "..") || filepath.IsAbs(clean) {
+		return false
+	}
+	return true
+}
+
 // AnalyzeFileChanges applies all static rules to parsed file changes.
 func AnalyzeFileChanges(taskID, repoPath string, changes []FileChange) []Finding {
 	var rawFindings []Finding
 
 	for _, file := range changes {
+		if !isSafePath(file.NewPath) && file.NewPath != "" {
+			continue
+		}
+
 		// Rule 5: Check missing test coverage
 		if strings.HasSuffix(file.NewPath, ".go") && !strings.HasSuffix(file.NewPath, "_test.go") {
 			hasTestFile := false
@@ -56,7 +72,7 @@ func AnalyzeFileChanges(taskID, repoPath string, changes []FileChange) []Finding
 					break
 				}
 			}
-			if !hasTestFile && repoPath != "" {
+			if !hasTestFile && repoPath != "" && isSafePath(testPath) {
 				fullTestPath := filepath.Join(repoPath, testPath)
 				if _, err := os.Stat(fullTestPath); err == nil {
 					hasTestFile = true
