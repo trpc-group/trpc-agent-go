@@ -1,0 +1,7 @@
+# Local build and review outputs.
+/skills_code_review_agent
+/review_report.json
+/review_report.md
+/reviews.db
+/reviews.db-shm
+/reviews.db-wal

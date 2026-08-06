@@ -1,0 +1,14 @@
+diff --git a/math.go b/math.go
+--- a/math.go
++++ b/math.go
+@@ -1 +1,3 @@
+ package math
++// Double returns twice the input.
++func Double(value int) int { return value * 2 }
+diff --git a/math_test.go b/math_test.go
+--- a/math_test.go
++++ b/math_test.go
+@@ -1 +1,3 @@
+ package math
++func TestDouble(t *testing.T) {}
++

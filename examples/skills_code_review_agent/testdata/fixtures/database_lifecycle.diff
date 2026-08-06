@@ -1,0 +1,13 @@
+diff --git a/store.go b/store.go
+--- a/store.go
++++ b/store.go
+@@ -1 +1,9 @@
+ package store
++func update(db *sql.DB) error {
++	rows, err := db.Query("SELECT id FROM jobs")
++	if err != nil { return err }
++	tx, err := db.Begin()
++	if err != nil { return err }
++	_ = rows
++	return tx.Commit()
++}
