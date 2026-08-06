@@ -1321,16 +1321,22 @@ func TestReplayConsistencyMatrix_PrefixedEventDeltasRemainSessionLocal(t *testin
 	backends := makeReplayBackends(t)
 	appStateKey := session.StateAppPrefix + "event_only_feature"
 	userStateKey := session.StateUserPrefix + "event_only_locale"
+	bareStateKey := "event_only_bare"
+	tempStateKey := session.StateTempPrefix + "event_only_temp"
+	unknownStateKey := "session:event_only_custom"
 	tc := replayCase{
-		name: "prefixed_event_deltas_remain_session_local",
+		name: "scoped-looking-event-deltas-remain-session-local",
 		events: []eventSpec{
 			replayUserEvent(
 				"set event-only scoped-looking state",
 				withReplayInvocation("event-only-state-root"),
 				withReplayBranch("root/state"),
 				withReplayStateDelta(session.StateMap{
-					appStateKey:  []byte(`{"enabled":false,"revision":1}`),
-					userStateKey: []byte(`"en-US"`),
+					appStateKey:     []byte(`{"enabled":false,"revision":1}`),
+					userStateKey:    []byte(`"en-US"`),
+					bareStateKey:    []byte(`"first"`),
+					tempStateKey:    []byte(`"temp-first"`),
+					unknownStateKey: []byte(`"custom-first"`),
 				}),
 			),
 			replayAssistantEvent(
@@ -1338,15 +1344,21 @@ func TestReplayConsistencyMatrix_PrefixedEventDeltasRemainSessionLocal(t *testin
 				withReplayInvocation("event-only-state-root"),
 				withReplayBranch("root/state"),
 				withReplayStateDelta(session.StateMap{
-					appStateKey:  []byte(`{"enabled":true,"revision":2}`),
-					userStateKey: []byte(`"zh-CN"`),
+					appStateKey:     []byte(`{"enabled":true,"revision":2}`),
+					userStateKey:    []byte(`"zh-CN"`),
+					bareStateKey:    []byte(`"second"`),
+					tempStateKey:    []byte(`"temp-second"`),
+					unknownStateKey: []byte(`"custom-second"`),
 				}),
 			),
 		},
 	}
 	wantState := normalizeReplayState(t, session.StateMap{
-		appStateKey:  []byte(`{"enabled":true,"revision":2}`),
-		userStateKey: []byte(`"zh-CN"`),
+		appStateKey:     []byte(`{"enabled":true,"revision":2}`),
+		userStateKey:    []byte(`"zh-CN"`),
+		bareStateKey:    []byte(`"second"`),
+		tempStateKey:    []byte(`"temp-second"`),
+		unknownStateKey: []byte(`"custom-second"`),
 	})
 	runNamespace := newReplayRunNamespace(t)
 	results := make([]replayCaseResult, 0, len(backends))
@@ -1355,6 +1367,9 @@ func TestReplayConsistencyMatrix_PrefixedEventDeltasRemainSessionLocal(t *testin
 		results = append(results, result)
 		require.Equal(t, wantState[appStateKey], result.snapshot.State[appStateKey], "backend=%s", result.backend)
 		require.Equal(t, wantState[userStateKey], result.snapshot.State[userStateKey], "backend=%s", result.backend)
+		require.Equal(t, wantState[bareStateKey], result.snapshot.State[bareStateKey], "backend=%s", result.backend)
+		require.Equal(t, wantState[tempStateKey], result.snapshot.State[tempStateKey], "backend=%s", result.backend)
+		require.Equal(t, wantState[unknownStateKey], result.snapshot.State[unknownStateKey], "backend=%s", result.backend)
 
 		appState, err := backend.sessionService.ListAppStates(ctx, result.key.AppName)
 		require.NoError(t, err, "backend=%s", result.backend)
@@ -1365,6 +1380,68 @@ func TestReplayConsistencyMatrix_PrefixedEventDeltasRemainSessionLocal(t *testin
 		})
 		require.NoError(t, err, "backend=%s", result.backend)
 		require.Empty(t, userState, "backend=%s", result.backend)
+	}
+
+	diffs := compareReplayCaseResults(t, tc, results)
+	require.Emptyf(t, diffs, "unexpected replay diffs: %+v", diffs)
+}
+
+func TestReplayConsistencyMatrix_BareDirectStatesRemainScoped(t *testing.T) {
+	ctx := context.Background()
+	backends := makeReplayBackends(t)
+	tc := replayCase{
+		name: "bare_direct_states",
+		appState: session.StateMap{
+			"shared":                        []byte(`"app"`),
+			"custom:app":                    []byte(`"custom-app"`),
+			session.StateAppPrefix + "flag": []byte(`true`),
+		},
+		userState: session.StateMap{
+			"shared":                           []byte(`"user"`),
+			"custom:user":                      []byte(`"custom-user"`),
+			session.StateUserPrefix + "locale": []byte(`"zh-CN"`),
+		},
+		sessionState: session.StateMap{
+			"shared":                            []byte(`"session"`),
+			session.StateTempPrefix + "scratch": []byte(`"temp"`),
+			"session:mode":                      []byte(`"custom-session"`),
+		},
+	}
+	wantState := normalizeReplayState(t, session.StateMap{
+		session.StateAppPrefix + "shared":       []byte(`"app"`),
+		session.StateAppPrefix + "custom:app":   []byte(`"custom-app"`),
+		session.StateAppPrefix + "flag":         []byte(`true`),
+		session.StateUserPrefix + "shared":      []byte(`"user"`),
+		session.StateUserPrefix + "custom:user": []byte(`"custom-user"`),
+		session.StateUserPrefix + "locale":      []byte(`"zh-CN"`),
+		"shared":                                []byte(`"session"`),
+		session.StateTempPrefix + "scratch":     []byte(`"temp"`),
+		"session:mode":                          []byte(`"custom-session"`),
+	})
+	runNamespace := newReplayRunNamespace(t)
+	results := make([]replayCaseResult, 0, len(backends))
+	for _, backend := range backends {
+		result := runReplayCaseOnBackend(t, ctx, runNamespace, backend, tc)
+		results = append(results, result)
+		require.Equal(t, wantState, result.snapshot.State, "backend=%s", result.backend)
+
+		appState, err := backend.sessionService.ListAppStates(ctx, result.key.AppName)
+		require.NoError(t, err, "backend=%s", result.backend)
+		require.Equal(t, session.StateMap{
+			"shared":     []byte(`"app"`),
+			"custom:app": []byte(`"custom-app"`),
+			"flag":       []byte(`true`),
+		}, appState, "backend=%s", result.backend)
+		userState, err := backend.sessionService.ListUserStates(ctx, session.UserKey{
+			AppName: result.key.AppName,
+			UserID:  result.key.UserID,
+		})
+		require.NoError(t, err, "backend=%s", result.backend)
+		require.Equal(t, session.StateMap{
+			"shared":      []byte(`"user"`),
+			"custom:user": []byte(`"custom-user"`),
+			"locale":      []byte(`"zh-CN"`),
+		}, userState, "backend=%s", result.backend)
 	}
 
 	diffs := compareReplayCaseResults(t, tc, results)

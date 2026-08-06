@@ -272,16 +272,18 @@ type AllowedDiffRule struct {
 // must be shared by all backends participating in one comparison. Callers must
 // use a new namespace for every rerun. Before creating a session, Run preflights
 // statically detectable fixture errors in the fixed order track, event, summary,
-// direct state-map prefix, sequential memory, then concurrent memory. AppState
-// keys must carry the app: prefix and UserState keys must carry the user: prefix;
-// SessionState keeps its service-compatible rule and rejects only app: and user:
-// keys. An invalid direct state map returns before any backend call. The strict
-// AppState/UserState rule is replay-harness policy rather than a general
-// session.Service contract. AppState/UserState expected values are normalized
-// without their one required prefix for independent scope checks, while writes
-// retain the original prefixed keys. InitialState and Event.StateDelta retain
-// their existing semantics. Runtime failures may still leave partially persisted
-// case data; Run leaves that cleanup lifecycle to the caller.
+// direct state-map scope, sequential memory, then concurrent memory. Direct
+// AppState and UserState keys may be bare or carry their matching app:/user:
+// prefix; known cross-scope prefixes remain rejected by replay-matrix policy.
+// SessionState rejects only app:/user: prefixes and preserves temp: as part of
+// the session-local key. An invalid direct state map returns before any backend
+// call. The cross-scope rule is replay-harness policy rather than a general
+// session.Service contract. Direct-state expected values are normalized for
+// independent scope checks, while writes retain the caller's accepted key forms
+// so the service API's input behavior is exercised. InitialState and
+// Event.StateDelta retain their session-local semantics. Runtime failures may
+// still leave partially persisted case data; Run leaves that cleanup lifecycle
+// to the caller.
 func Run(ctx context.Context, runNamespace string, backend Backend, tc Case) (Result, error) {
 	if err := validateBackend(backend); err != nil {
 		return Result{}, err
@@ -391,50 +393,72 @@ func prepareCase(backend Backend, tc Case) (preparedCase, error) {
 
 func validateFixtureStateMaps(tc Case) error {
 	// Keep this order stable: AppState, UserState, then SessionState.
-	if err := validateRequiredStateMapPrefixes(
-		tc.Name, "app state", tc.AppState, session.StateAppPrefix,
-		session.StateUserPrefix, session.StateTempPrefix,
-	); err != nil {
+	if err := validateScopedStateMap(tc.Name, appStateScopePolicy(), tc.AppState); err != nil {
 		return err
 	}
-	if err := validateRequiredStateMapPrefixes(
-		tc.Name, "user state", tc.UserState, session.StateUserPrefix,
-		session.StateAppPrefix, session.StateTempPrefix,
-	); err != nil {
+	if err := validateScopedStateMap(tc.Name, userStateScopePolicy(), tc.UserState); err != nil {
 		return err
 	}
-	return validateFixtureStateMapPrefixes(tc.Name, "session state", tc.SessionState,
-		session.StateAppPrefix, session.StateUserPrefix)
+	return validateScopedStateMap(tc.Name, sessionStateScopePolicy(), tc.SessionState)
 }
 
-// validateRequiredStateMapPrefixes enforces the harness contract for a map
-// whose keys belong to one explicit scope. Known cross-scope prefixes retain
-// the historical disallowed-prefix error; unprefixed and unknown-prefix keys
-// receive the more specific missing-required-prefix error.
-func validateRequiredStateMapPrefixes(
+type stateScopePolicy struct {
+	fieldName          string
+	ownPrefix          string
+	disallowedPrefixes []string
+	stripOwnPrefix     bool
+}
+
+func appStateScopePolicy() stateScopePolicy {
+	return stateScopePolicy{
+		fieldName:          "app state",
+		ownPrefix:          session.StateAppPrefix,
+		disallowedPrefixes: []string{session.StateUserPrefix, session.StateTempPrefix},
+		stripOwnPrefix:     true,
+	}
+}
+
+func userStateScopePolicy() stateScopePolicy {
+	return stateScopePolicy{
+		fieldName:          "user state",
+		ownPrefix:          session.StateUserPrefix,
+		disallowedPrefixes: []string{session.StateAppPrefix, session.StateTempPrefix},
+		stripOwnPrefix:     true,
+	}
+}
+
+func sessionStateScopePolicy() stateScopePolicy {
+	return stateScopePolicy{
+		fieldName:          "session state",
+		ownPrefix:          session.StateTempPrefix,
+		disallowedPrefixes: []string{session.StateAppPrefix, session.StateUserPrefix},
+		// temp: is a session-local namespace marker, not a routing prefix.
+		stripOwnPrefix: false,
+	}
+}
+
+// validateScopedStateMap validates only the outermost known scope prefix.
+// Bare keys and unknown prefixes are ordinary keys; a known prefix belonging
+// to another direct-state scope is rejected to keep the InMemory/SQLite
+// replay matrix deterministic.
+func validateScopedStateMap(
 	caseName string,
-	fieldName string,
+	policy stateScopePolicy,
 	state session.StateMap,
-	requiredPrefix string,
-	disallowedPrefixes ...string,
 ) error {
 	keys := sortedStateKeys(state)
 	for _, key := range keys {
-		if strings.HasPrefix(key, requiredPrefix) {
+		if policy.ownPrefix != "" && strings.HasPrefix(key, policy.ownPrefix) {
 			continue
 		}
-		for _, prefix := range disallowedPrefixes {
+		for _, prefix := range policy.disallowedPrefixes {
 			if strings.HasPrefix(key, prefix) {
 				return fmt.Errorf(
 					"%s for case %q has key %q with disallowed prefix %q",
-					fieldName, caseName, key, prefix,
+					policy.fieldName, caseName, key, prefix,
 				)
 			}
 		}
-		return fmt.Errorf(
-			"%s for case %q has key %q without required prefix %q",
-			fieldName, caseName, key, requiredPrefix,
-		)
 	}
 	return nil
 }
@@ -448,51 +472,59 @@ func sortedStateKeys(state session.StateMap) []string {
 	return keys
 }
 
-func validateFixtureStateMapPrefixes(
-	caseName string,
-	fieldName string,
-	state session.StateMap,
-	disallowedPrefixes ...string,
-) error {
-	keys := sortedStateKeys(state)
-	for _, key := range keys {
-		for _, prefix := range disallowedPrefixes {
-			if strings.HasPrefix(key, prefix) {
-				return fmt.Errorf(
-					"%s for case %q has key %q with disallowed prefix %q",
-					fieldName, caseName, key, prefix,
-				)
-			}
-		}
-	}
-	return nil
-}
-
 // prepareExpectedDirectStateMaps creates the canonical maps used by the
 // independent app/user scope assertions. The backend writes continue to use
-// the caller's explicitly prefixed maps (deep-copied by createSessionAndState).
+// the caller's accepted maps (deep-copied by createSessionAndState).
 func prepareExpectedDirectStateMaps(tc Case) (session.StateMap, session.StateMap, error) {
-	appState, err := canonicalizeScopedState(tc.AppState, session.StateAppPrefix)
+	appState, err := canonicalizeScopedStateWithPolicy(
+		tc.AppState, appStateScopePolicy(), stateMapFixtureInput,
+	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("app state for case %q has %w", tc.Name, err)
 	}
-	userState, err := canonicalizeScopedState(tc.UserState, session.StateUserPrefix)
+	userState, err := canonicalizeScopedStateWithPolicy(
+		tc.UserState, userStateScopePolicy(), stateMapFixtureInput,
+	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("user state for case %q has %w", tc.Name, err)
 	}
 	return appState, userState, nil
 }
 
-// canonicalizeScopedState removes one scope prefix and deep-copies values.
-// It deliberately remains useful independently of the required-prefix
-// validator as a defensive layer: callers that bypass validation can still get
-// a deterministic collision error when multiple source keys map to one
-// canonical key.
+type stateMapRepresentation uint8
+
+const (
+	stateMapFixtureInput stateMapRepresentation = iota
+	stateMapStoredOutput
+)
+
+// canonicalizeScopedState keeps the original helper signature for package
+// tests and callers that describe a raw fixture map with one scope prefix.
 func canonicalizeScopedState(state session.StateMap, prefix string) (session.StateMap, error) {
+	return canonicalizeScopedStateWithPolicy(state, stateScopePolicy{
+		ownPrefix:      prefix,
+		stripOwnPrefix: true,
+	}, stateMapFixtureInput)
+}
+
+// canonicalizeScopedStateWithPolicy applies one deterministic normalization
+// implementation to both fixture inputs and backend reads. Fixture inputs have
+// one outer matching prefix removed; List*States results are already in the
+// backend's stored-key representation and therefore must not be stripped a
+// second time (important for app:app:flag-style keys). Values are copied and
+// source keys that collapse to one canonical key are rejected.
+func canonicalizeScopedStateWithPolicy(
+	state session.StateMap,
+	policy stateScopePolicy,
+	representation stateMapRepresentation,
+) (session.StateMap, error) {
 	keys := sortedStateKeys(state)
 	sources := make(map[string][]string, len(state))
 	for _, sourceKey := range keys {
-		canonicalKey := strings.TrimPrefix(sourceKey, prefix)
+		canonicalKey := sourceKey
+		if representation == stateMapFixtureInput && policy.stripOwnPrefix {
+			canonicalKey = strings.TrimPrefix(sourceKey, policy.ownPrefix)
+		}
 		sources[canonicalKey] = append(sources[canonicalKey], sourceKey)
 	}
 	canonicalKeys := make([]string, 0, len(sources))
@@ -511,7 +543,10 @@ func canonicalizeScopedState(state session.StateMap, prefix string) (session.Sta
 
 	out := make(session.StateMap, len(state))
 	for _, sourceKey := range keys {
-		canonicalKey := strings.TrimPrefix(sourceKey, prefix)
+		canonicalKey := sourceKey
+		if representation == stateMapFixtureInput && policy.stripOwnPrefix {
+			canonicalKey = strings.TrimPrefix(sourceKey, policy.ownPrefix)
+		}
 		value := state[sourceKey]
 		if value == nil {
 			out[canonicalKey] = nil
@@ -570,9 +605,11 @@ type memoryAliasGroup[K comparable] struct {
 	live    bool
 }
 
-// memoryAliasRegistry tracks alias groups while keeping the preflight and
-// runtime lifecycle rules identical. The registry is intentionally local to a
-// single Run and is not shared between concurrent runs.
+// memoryAliasRegistry tracks alias groups and their live identity/ID
+// transitions. Preflight records every canonical identity, including adds
+// without an alias; runtime records backend IDs when an alias or update makes
+// one available. The registry is intentionally local to a single Run and is
+// not shared between concurrent runs.
 type memoryAliasRegistry[K comparable] struct {
 	aliases    map[string]*memoryAliasGroup[K]
 	liveGroups map[K]*memoryAliasGroup[K]
@@ -597,15 +634,14 @@ func (r *memoryAliasRegistry[K]) resolve(alias string) (*memoryAliasGroup[K], er
 }
 
 func (r *memoryAliasRegistry[K]) bind(alias string, key K) *memoryAliasGroup[K] {
-	if alias == "" {
-		return nil
-	}
 	group := r.liveGroups[key]
 	if group == nil {
 		group = &memoryAliasGroup[K]{key: key, aliases: make(map[string]struct{}), live: true}
 		r.liveGroups[key] = group
 	}
-	r.bindToGroup(alias, group)
+	if alias != "" {
+		r.bindToGroup(alias, group)
+	}
 	return group
 }
 
@@ -633,34 +669,27 @@ func (r *memoryAliasRegistry[K]) removeEmptyLiveGroup(group *memoryAliasGroup[K]
 	}
 }
 
-// transition moves a live group to a new identity/ID. If another live group
-// already owns the destination, the two groups are merged so every alias
-// follows the effective memory identity.
+// transition moves a live group to a new identity/ID. A destination owned by
+// another live group is an identity collision; groups are never merged.
 func (r *memoryAliasRegistry[K]) transition(
 	group *memoryAliasGroup[K],
 	newKey K,
-) *memoryAliasGroup[K] {
+) (*memoryAliasGroup[K], error) {
 	if group == nil || !group.live {
-		return group
+		return group, nil
 	}
 	if target := r.liveGroups[newKey]; target != nil && target != group {
-		if current, ok := r.liveGroups[group.key]; ok && current == group {
-			delete(r.liveGroups, group.key)
-		}
-		for alias := range group.aliases {
-			target.aliases[alias] = struct{}{}
-			r.aliases[alias] = target
-		}
-		group.aliases = nil
-		group.live = false
-		return target
+		return nil, fmt.Errorf(
+			"memory identity collision: current identity %+v already targets live identity %+v",
+			group.key, newKey,
+		)
 	}
 	if current, ok := r.liveGroups[group.key]; ok && current == group && group.key != newKey {
 		delete(r.liveGroups, group.key)
 	}
 	group.key = newKey
 	r.liveGroups[newKey] = group
-	return group
+	return group, nil
 }
 
 func (r *memoryAliasRegistry[K]) invalidate(group *memoryAliasGroup[K]) {
@@ -694,9 +723,10 @@ func validateSequentialMemoryOperation(
 ) error {
 	switch op.Operation {
 	case MemoryAdd:
-		if op.ResultAlias != "" {
-			aliases.bind(op.ResultAlias, canonicalMemoryOpIdentity(userKey, op))
-		}
+		// Register every live identity, including adds without a result alias.
+		// An alias is only an optional handle; it must not determine whether an
+		// active identity participates in collision preflight.
+		aliases.bind(op.ResultAlias, canonicalMemoryOpIdentity(userKey, op))
 	case MemoryUpdate:
 		group, err := aliases.resolve(op.Ref)
 		if err != nil {
@@ -706,7 +736,13 @@ func validateSequentialMemoryOperation(
 		// are inherited from the current memory. Keep preflight identity tracking
 		// aligned with that backend behavior so a later idempotent Add can join
 		// the same alias group after an update that omitted metadata.
-		group = aliases.transition(group, canonicalMemoryUpdateIdentity(userKey, op, group.key))
+		group, err = aliases.transition(
+			group,
+			canonicalMemoryUpdateIdentity(userKey, op, group.key),
+		)
+		if err != nil {
+			return err
+		}
 		if op.ResultAlias != "" {
 			aliases.bindToGroup(op.ResultAlias, group)
 		}
@@ -924,6 +960,18 @@ func validateStateScopes(
 	if err != nil {
 		return fmt.Errorf("list app state for case %q on backend %q: %w", caseName, backend.Name, err)
 	}
+	gotAppState, err = canonicalizeScopedStateWithPolicy(
+		gotAppState, appStateScopePolicy(), stateMapStoredOutput,
+	)
+	if err != nil {
+		return fmt.Errorf("normalize app state for case %q on backend %q: %w", caseName, backend.Name, err)
+	}
+	appState, err = canonicalizeScopedStateWithPolicy(
+		appState, appStateScopePolicy(), stateMapStoredOutput,
+	)
+	if err != nil {
+		return fmt.Errorf("normalize expected app state for case %q: %w", caseName, err)
+	}
 	if err := requireStateScope(caseName, backend.Name, "app", gotAppState, appState); err != nil {
 		return err
 	}
@@ -932,6 +980,18 @@ func validateStateScopes(
 	gotUserState, err := backend.SessionService.ListUserStates(ctx, userKey)
 	if err != nil {
 		return fmt.Errorf("list user state for case %q on backend %q: %w", caseName, backend.Name, err)
+	}
+	gotUserState, err = canonicalizeScopedStateWithPolicy(
+		gotUserState, userStateScopePolicy(), stateMapStoredOutput,
+	)
+	if err != nil {
+		return fmt.Errorf("normalize user state for case %q on backend %q: %w", caseName, backend.Name, err)
+	}
+	userState, err = canonicalizeScopedStateWithPolicy(
+		userState, userStateScopePolicy(), stateMapStoredOutput,
+	)
+	if err != nil {
+		return fmt.Errorf("normalize expected user state for case %q: %w", caseName, err)
 	}
 	if err := requireStateScope(caseName, backend.Name, "user", gotUserState, userState); err != nil {
 		return err
@@ -1108,7 +1168,10 @@ func applyMemoryOp(
 		if result.MemoryID == "" {
 			return fmt.Errorf("memory update returned empty ID")
 		}
-		group = aliases.transition(group, result.MemoryID)
+		group, err = aliases.transition(group, result.MemoryID)
+		if err != nil {
+			return err
+		}
 		if op.ResultAlias != "" {
 			aliases.bindToGroup(op.ResultAlias, group)
 		}
