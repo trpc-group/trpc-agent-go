@@ -1,0 +1,49 @@
+rules:
+  # 检测硬编码端口号
+  - id: SEC-CUSTOM-001
+    name: "检测硬编码端口"
+    severity: medium
+    category: security
+    description: "端口号不应硬编码在代码中，应使用配置文件或环境变量"
+    match:
+      token_facts:
+        - kind: identifier
+          value_contains: ["port", "addr"]
+        - kind: string_literal
+          value_pattern: "^\"?\\d{4,5}\"?$"
+    exclude:
+      line_contains: ["localhost", "127.0.0.1", "test", "example"]
+    message: "疑似硬编码端口号"
+    recommendation: "使用配置文件或环境变量管理端口"
+    confidence: 0.75
+
+  # 检测不安全的 HTTP 连接
+  - id: SEC-CUSTOM-002
+    name: "检测不安全的 HTTP 连接"
+    severity: medium
+    category: security
+    description: "应使用 HTTPS 替代 HTTP"
+    match:
+      token_facts:
+        - kind: string_literal
+          value_contains: ["http://"]
+      line_not_contains: ["localhost", "127.0.0.1", "test"]
+    exclude:
+      line_contains: ["localhost", "127.0.0.1", "// nolint"]
+    message: "使用了不安全的 HTTP 连接"
+    recommendation: "使用 HTTPS 替代 HTTP"
+    confidence: 0.80
+
+  # 检测 TODO/FIXME 标记
+  - id: CODE-CUSTOM-001
+    name: "检测 TODO/FIXME 标记"
+    severity: info
+    category: testing
+    description: "代码中的 TODO/FIXME 应该被跟踪"
+    match:
+      line_contains: ["TODO", "FIXME", "HACK", "XXX"]
+    exclude:
+      line_contains: ["nolint", "ignore"]
+    message: "代码中包含 TODO/FIXME 标记"
+    recommendation: "将 TODO/FIXME 转为 issue 跟踪"
+    confidence: 0.90

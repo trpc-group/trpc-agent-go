@@ -1,0 +1,12 @@
+--- a/processor.go
++++ b/processor.go
+@@ -5,3 +5,8 @@
+
+ func process() error {
++	cmd := exec.Command("nonexistent-tool", "--flag")
++	output, err := cmd.CombinedOutput()
++	if err != nil {
++		return fmt.Errorf("command failed: %w, output: %s", err, output)
++	}
++	return nil
+ }

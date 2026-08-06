@@ -1,0 +1,13 @@
+--- a/service/worker.go
++++ b/service/worker.go
+@@ -10,3 +10,10 @@
+
+ func (w *Worker) Start() {
++	go func() {
++		for {
++			time.Sleep(5 * time.Minute)
++			w.refreshCache()
++			w.syncData()
++		}
++	}()
+ }

@@ -1,0 +1,21 @@
+--- a/hello.go
++++ b/hello.go
+@@ -1,8 +1,10 @@
+ package main
+
+ import (
+ 	"fmt"
+ 	"os"
+ )
+
+-func main() {
+-	fmt.Println("hello")
++func main() {
++	msg := greet("world")
++	fmt.Println(msg)
++	os.Exit(0)
++}
++
++func greet(name string) string {
++	return fmt.Sprintf("hello, %s", name)
+ }
