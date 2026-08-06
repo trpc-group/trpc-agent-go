@@ -10,6 +10,11 @@ package main
 
 import (
 	"fmt"
+	"go/ast"
+	"go/importer"
+	"go/parser"
+	"go/token"
+	"go/types"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -192,6 +197,91 @@ func handle(parent stdctx.Context, request *http.Request) {
 			wantEvidence: []string{"go worker(background)"},
 		},
 		{
+			name: "context-shaped declarations require assignability",
+			source: `package review
+
+import (
+	"context"
+	"net/http"
+)
+
+func worker(context.Context) {}
+
+
+func handle(request *http.Request) {
+	type Ctx context.Context
+	type MyAlias = context.Context
+	type Context struct{}
+	type FakeCtx interface{ Foo() int }
+	var (
+		ctx Ctx
+		alias MyAlias
+		custom Context
+		fake FakeCtx
+	)
+	go worker(ctx)
+	go worker(alias)
+	go worker(custom)
+	go worker(fake)
+	go worker(request.Context())
+}
+`,
+			wantEvidence: []string{
+				"go worker(custom)",
+				"go worker(fake)",
+			},
+		},
+		{
+			name: "custom context method result is typed",
+			source: `package review
+
+import "context"
+
+func worker(context.Context) {}
+
+func handle(
+	obj interface{ Context() string },
+	valid interface{ Context() context.Context },
+) {
+	go worker(obj.Context())
+	go worker(valid.Context())
+}
+`,
+			wantEvidence: []string{"go worker(obj.Context())"},
+		},
+		{
+			name: "multi-return context method results are typed",
+			source: `package review
+
+import "context"
+
+func worker(any) {}
+
+func handle(
+	valid interface{ Context() (context.Context, error) },
+	invalid interface{ Context() (string, error) },
+) {
+	ctx, _ := valid.Context()
+	go worker(ctx)
+
+	var declared, declaredErr = valid.Context()
+	_ = declaredErr
+	go worker(declared)
+
+	bad, _ := invalid.Context()
+	go worker(bad)
+
+	var badDeclared, badErr = invalid.Context()
+	_ = badErr
+	go worker(badDeclared)
+}
+`,
+			wantEvidence: []string{
+				"go worker(bad)",
+				"go worker(badDeclared)",
+			},
+		},
+		{
 			name: "mixed statements preserve unsafe lines",
 			source: `package review
 
@@ -304,6 +394,25 @@ func TestDiffOnlyGoroutineFallback(t *testing.T) {
 		want := []string{"go refreshCache()"}
 		if got := goroutineFindingEvidence(runRules(parsed, "")); !reflect.DeepEqual(got, want) {
 			t.Fatalf("goroutine evidence = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("unresolved Context method retains conservative fallback", func(t *testing.T) {
+		diff := strings.Join([]string{
+			"diff --git a/review.go b/review.go",
+			"index 1111111..2222222 100644",
+			"--- a/review.go",
+			"+++ b/review.go",
+			"@@ -10 +10,2 @@",
+			" \twork()",
+			"+\tgo worker(request.Context())",
+		}, "\n")
+		parsed := parseUnifiedDiff([]byte(diff))
+		if len(parsed.Warnings) != 0 {
+			t.Fatalf("parse warnings = %+v", parsed.Warnings)
+		}
+		if got := goroutineFindingEvidence(runRules(parsed, "")); len(got) != 0 {
+			t.Fatalf("goroutine evidence = %q, want none", got)
 		}
 	})
 
@@ -474,6 +583,140 @@ func goroutineFindingEvidence(matches []ruleMatch) []string {
 	}
 	sort.Strings(evidence)
 	return evidence
+}
+
+func TestContextResultsValueClassifiesKnownTuples(t *testing.T) {
+	contextPackage, err := importer.Default().Import("context")
+	if err != nil {
+		t.Fatal(err)
+	}
+	contextObject := contextPackage.Scope().Lookup("Context")
+	if contextObject == nil {
+		t.Fatal("context.Context is unavailable")
+	}
+	contextType := contextObject.Type()
+	contextVar := types.NewVar(token.NoPos, nil, "ctx", contextType)
+	stringVar := types.NewVar(token.NoPos, nil, "value", types.Typ[types.String])
+	intVar := types.NewVar(token.NoPos, nil, "err", types.Typ[types.Int])
+	unknownVar := types.NewVar(token.NoPos, nil, "unknown", nil)
+	tests := []struct {
+		name    string
+		results *types.Tuple
+		want    goroutineContextValue
+		known   bool
+	}{
+		{
+			name:    "context plus second result",
+			results: types.NewTuple(contextVar, intVar),
+			want:    goroutineContextCancellable,
+			known:   true,
+		},
+		{
+			name:    "non-context results",
+			results: types.NewTuple(stringVar, intVar),
+			want:    goroutineContextNonCancellable,
+			known:   true,
+		},
+		{
+			name:    "empty tuple",
+			results: types.NewTuple(),
+			want:    goroutineContextNonCancellable,
+			known:   true,
+		},
+		{
+			name:    "unknown element type",
+			results: types.NewTuple(unknownVar),
+			want:    goroutineContextUnknown,
+			known:   false,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, known := contextResultsValue(test.results, contextType)
+			if got != test.want || known != test.known {
+				t.Fatalf(
+					"contextResultsValue() = (%v, %v), want (%v, %v)",
+					got,
+					known,
+					test.want,
+					test.known,
+				)
+			}
+		})
+	}
+	t.Run("known signature without results", func(t *testing.T) {
+		got, known := contextSignatureResultValue(
+			types.NewSignature(nil, nil, nil, false),
+			contextType,
+		)
+		if got != goroutineContextNonCancellable || !known {
+			t.Fatalf("contextSignatureResultValue() = (%v, %v), want (%v, true)", got, known, goroutineContextNonCancellable)
+		}
+	})
+}
+
+func TestContextCallTypeValueUsesMultiResultSignatureFallback(t *testing.T) {
+	const source = `package review
+
+import "context"
+
+type validProvider interface {
+	Context() (context.Context, error)
+}
+
+type invalidProvider interface {
+	Context() (string, error)
+}
+
+func use(valid validProvider, invalid invalidProvider) {
+	valid.Context()
+	invalid.Context()
+}
+`
+	fset := token.NewFileSet()
+	parsedFile, err := parser.ParseFile(fset, "review.go", source, parser.AllErrors)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, contextType := goroutineTypeInfo(fset, parsedFile)
+	type callInfo struct {
+		call     *ast.CallExpr
+		selector *ast.SelectorExpr
+		want     goroutineContextValue
+	}
+	var calls []callInfo
+	ast.Inspect(parsedFile, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		selector, ok := unparenthesizedExpression(call.Fun).(*ast.SelectorExpr)
+		if !ok || selector.Sel.Name != "Context" {
+			return true
+		}
+		want := goroutineContextNonCancellable
+		if receiver, ok := selector.X.(*ast.Ident); ok && receiver.Name == "valid" {
+			want = goroutineContextCancellable
+		}
+		calls = append(calls, callInfo{call: call, selector: selector, want: want})
+		return true
+	})
+	if len(calls) != 2 {
+		t.Fatalf("found %d Context calls, want 2", len(calls))
+	}
+	for _, test := range calls {
+		delete(info.Types, test.call)
+		got, known := contextCallTypeValue(test.call, info, contextType)
+		if got != test.want || !known {
+			t.Fatalf("selection fallback = (%v, %v), want (%v, true)", got, known, test.want)
+		}
+	}
+	valid := calls[0]
+	delete(info.Selections, valid.selector)
+	got, known := contextCallTypeValue(valid.call, info, contextType)
+	if got != goroutineContextCancellable || !known {
+		t.Fatalf("uses fallback = (%v, %v), want (%v, true)", got, known, goroutineContextCancellable)
+	}
 }
 
 func goroutineNewFileDiff(source string) string {

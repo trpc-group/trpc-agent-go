@@ -280,7 +280,7 @@ func analyzeDiffGoroutineCandidates(
 				sourceCandidates,
 				leaks,
 				matched,
-				false,
+				true,
 				stats,
 			)
 			windowIndexes := make([]int, 0, len(sourceCandidates))
@@ -494,17 +494,26 @@ func newGoroutineContextBindings(
 		}
 		switch typed := node.(type) {
 		case *ast.Field:
-			if !isContextTypeSyntax(typed.Type) {
-				return true
-			}
 			for _, name := range typed.Names {
-				bindings.setObjectValue(bindingObject(info, name), goroutineContextCancellable)
+				value := contextDeclarationValue(
+					typed.Type,
+					bindingObject(info, name),
+					info,
+					contextType,
+					allowNameFallback,
+				)
+				bindings.setObjectValue(bindingObject(info, name), value)
 			}
 		case *ast.ValueSpec:
-			if isContextTypeSyntax(typed.Type) {
-				for _, name := range typed.Names {
-					bindings.setObjectValue(bindingObject(info, name), goroutineContextCancellable)
-				}
+			for _, name := range typed.Names {
+				value := contextDeclarationValue(
+					typed.Type,
+					bindingObject(info, name),
+					info,
+					contextType,
+					allowNameFallback,
+				)
+				bindings.setObjectValue(bindingObject(info, name), value)
 			}
 			bindings.collectValueSpecBindings(typed, &edges)
 		case *ast.AssignStmt:
@@ -521,7 +530,9 @@ func (b *goroutineContextBindings) collectValueSpecBindings(
 	edges *[]goroutineBindingEdge,
 ) {
 	if len(spec.Values) == 1 && len(spec.Names) > 1 {
-		if value := bindingExpressionValue(spec.Values[0], b.info, b.contextType); value != goroutineContextUnknown {
+		if value := bindingExpressionValue(
+			spec.Values[0], b.info, b.contextType, b.allowNameFallback,
+		); value != goroutineContextUnknown {
 			b.setObjectValue(bindingObject(b.info, spec.Names[0]), value)
 		}
 		return
@@ -547,7 +558,9 @@ func (b *goroutineContextBindings) collectAssignmentBindings(
 		if !ok {
 			return
 		}
-		if value := bindingExpressionValue(assignment.Rhs[0], b.info, b.contextType); value != goroutineContextUnknown {
+		if value := bindingExpressionValue(
+			assignment.Rhs[0], b.info, b.contextType, b.allowNameFallback,
+		); value != goroutineContextUnknown {
 			b.setObjectValue(bindingObject(b.info, identifier), value)
 		}
 		return
@@ -578,7 +591,9 @@ func (b *goroutineContextBindings) collectBinding(
 			return
 		}
 	}
-	if value := bindingExpressionValue(expression, b.info, b.contextType); value != goroutineContextUnknown {
+	if value := bindingExpressionValue(
+		expression, b.info, b.contextType, b.allowNameFallback,
+	); value != goroutineContextUnknown {
 		b.setObjectValue(target, value)
 	}
 }
@@ -634,10 +649,126 @@ func (b *goroutineContextBindings) setObjectValue(
 	return true
 }
 
+func contextDeclarationValue(
+	typeExpression ast.Expr,
+	object types.Object,
+	info *types.Info,
+	contextType types.Type,
+	allowNameFallback bool,
+) goroutineContextValue {
+	value, known := contextExpressionTypeValue(typeExpression, object, info, contextType)
+	if known {
+		if value == goroutineContextCancellable || isContextTypeSyntax(typeExpression) {
+			return value
+		}
+		return goroutineContextUnknown
+	}
+	if allowNameFallback && isContextTypeSyntax(typeExpression) {
+		return goroutineContextCancellable
+	}
+	return goroutineContextUnknown
+}
+
+func contextExpressionTypeValue(
+	expression ast.Expr,
+	object types.Object,
+	info *types.Info,
+	contextType types.Type,
+) (goroutineContextValue, bool) {
+	if info != nil && expression != nil {
+		if value := info.TypeOf(expression); value != nil {
+			return contextTypeValue(value, contextType)
+		}
+	}
+	if object != nil && object.Type() != nil {
+		return contextTypeValue(object.Type(), contextType)
+	}
+	return goroutineContextUnknown, false
+}
+
+func contextCallTypeValue(
+	call *ast.CallExpr,
+	info *types.Info,
+	contextType types.Type,
+) (goroutineContextValue, bool) {
+	if call == nil || info == nil {
+		return goroutineContextUnknown, false
+	}
+	if value := info.TypeOf(call); value != nil {
+		if results, ok := value.(*types.Tuple); ok {
+			return contextResultsValue(results, contextType)
+		}
+		return contextTypeValue(value, contextType)
+	}
+	selector, ok := unparenthesizedExpression(call.Fun).(*ast.SelectorExpr)
+	if !ok {
+		return goroutineContextUnknown, false
+	}
+	if selection := info.Selections[selector]; selection != nil {
+		if signature, ok := selection.Type().(*types.Signature); ok {
+			return contextSignatureResultValue(signature, contextType)
+		}
+	}
+	if function, ok := info.Uses[selector.Sel].(*types.Func); ok {
+		if signature, ok := function.Type().(*types.Signature); ok {
+			return contextSignatureResultValue(signature, contextType)
+		}
+	}
+	return goroutineContextUnknown, false
+}
+
+func contextSignatureResultValue(
+	signature *types.Signature,
+	contextType types.Type,
+) (goroutineContextValue, bool) {
+	if signature == nil {
+		return goroutineContextUnknown, false
+	}
+	return contextResultsValue(signature.Results(), contextType)
+}
+
+func contextResultsValue(
+	results *types.Tuple,
+	contextType types.Type,
+) (goroutineContextValue, bool) {
+	if contextType == nil {
+		return goroutineContextUnknown, false
+	}
+	if results == nil || results.Len() == 0 {
+		return goroutineContextNonCancellable, true
+	}
+	sawKnownType := false
+	for index := 0; index < results.Len(); index++ {
+		result := results.At(index)
+		if result == nil || result.Type() == nil {
+			continue
+		}
+		sawKnownType = true
+		if types.AssignableTo(result.Type(), contextType) {
+			return goroutineContextCancellable, true
+		}
+	}
+	if sawKnownType {
+		return goroutineContextNonCancellable, true
+	}
+	return goroutineContextUnknown, false
+}
+
+func contextTypeValue(value types.Type, contextType types.Type) (goroutineContextValue, bool) {
+	if value == nil || contextType == nil {
+		return goroutineContextUnknown, false
+	}
+	if types.AssignableTo(value, contextType) {
+		return goroutineContextCancellable, true
+	}
+	return goroutineContextNonCancellable, true
+}
+
 func bindingExpressionValue(
 	expression ast.Expr,
 	info *types.Info,
 	contextType types.Type,
+	allowNameFallback bool,
 ) goroutineContextValue {
 	expression = unparenthesizedExpression(expression)
 	call, ok := expression.(*ast.CallExpr)
@@ -653,7 +784,13 @@ func bindingExpressionValue(
 		}
 		if selector, ok := unparenthesizedExpression(call.Fun).(*ast.SelectorExpr); ok &&
 			selector.Sel.Name == "Context" && len(call.Args) == 0 {
-			return goroutineContextCancellable
+			if value, known := contextCallTypeValue(call, info, contextType); known {
+				return value
+			}
+			if allowNameFallback {
+				return goroutineContextCancellable
+			}
+			return goroutineContextUnknown
 		}
 	}
 	if expressionHasContextType(expression, info, contextType) {
@@ -689,7 +826,10 @@ func (b *goroutineContextBindings) isCancellableContextExpression(
 		}
 		if selector, ok := unparenthesizedExpression(call.Fun).(*ast.SelectorExpr); ok &&
 			selector.Sel.Name == "Context" && len(call.Args) == 0 {
-			return true
+			if value, known := contextCallTypeValue(call, b.info, b.contextType); known {
+				return value == goroutineContextCancellable
+			}
+			return b.allowNameFallback
 		}
 	}
 	return expressionHasContextType(expression, b.info, b.contextType)
