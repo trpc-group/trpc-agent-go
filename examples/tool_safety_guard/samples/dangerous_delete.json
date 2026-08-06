@@ -1,0 +1,7 @@
+{
+  "id": "dangerous_delete",
+  "tool_name": "workspace_exec",
+  "backend": "workspaceexec",
+  "command": "rm -rf /tmp/project",
+  "cwd": "."
+}

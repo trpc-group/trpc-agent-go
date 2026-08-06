@@ -569,6 +569,32 @@ func TestPolicy_BuiltinDenyUnconditional(t *testing.T) {
 	}
 }
 
+func TestIsImplicitlyDeniedCommand(t *testing.T) {
+	for _, command := range []string{"env", "/usr/bin/xargs", "timeout", "BUSYBOX"} {
+		if !IsImplicitlyDeniedCommand(command) {
+			t.Fatalf("IsImplicitlyDeniedCommand(%q) = false", command)
+		}
+	}
+	if IsImplicitlyDeniedCommand("git") {
+		t.Fatal("git unexpectedly matched implicit deny policy")
+	}
+}
+
+func TestWindowsExecutableSuffixesAreDenied(t *testing.T) {
+	p := PolicyFromLists(nil, []string{"rm"})
+	for _, command := range []string{"rm.com", "rm.ps1"} {
+		if err := p.checkSegmentForGOOS([]string{command}, "windows"); err == nil {
+			t.Fatalf("explicit deny accepted %q", command)
+		}
+	}
+	p = PolicyFromLists([]string{"echo"}, nil)
+	for _, command := range []string{"sh.com", "sh.ps1"} {
+		if err := p.checkSegmentForGOOS([]string{command}, "windows"); err == nil {
+			t.Fatalf("implicit deny accepted %q", command)
+		}
+	}
+}
+
 // TestPolicy_AllowRejectsPathfulBasenameBypass guards the
 // asymmetric matching contract documented on Policy: an allow
 // entry "echo" must let through bare "echo" but reject "./echo",

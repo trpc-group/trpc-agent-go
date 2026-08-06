@@ -1,0 +1,125 @@
+version: "1"
+default_action: ask
+parse_error_action: deny
+
+allowed_commands:
+  - go
+  - git
+  - grep
+  - rg
+  - sed
+  - awk
+  - cat
+  - ls
+  - pwd
+  - echo
+  - wc
+  - curl
+  - wget
+  - nc
+  - netcat
+  - ssh
+  - scp
+  - npm
+  - pip
+  - pip3
+  - apt
+  - apt-get
+  - sleep
+  - yes
+
+denied_commands:
+  - rm
+  - rmdir
+  - sudo
+  - su
+  - doas
+  - dd
+  - mkfs
+
+forbidden_paths:
+  - ".env"
+  - "**/.env"
+  - ".env.*"
+  - "**/.env.*"
+  - "~/.ssh/**"
+  - ".ssh/**"
+  - "**/.ssh/**"
+  - "**/*credential*"
+  - "**/*secret*"
+  - "**/*token*"
+  - "**/*private*key*"
+  - "/etc/**"
+  - "/var/**"
+  - "/usr/**"
+  - "/bin/**"
+  - "/sbin/**"
+
+allowed_network_domains:
+  - proxy.example.test
+  - "*.trusted.example"
+
+denied_network_domains:
+  - evil.example
+  - "*.exfil.example"
+
+dependency_commands:
+  - command: go
+    subcommands: ["install", "get"]
+    action: ask
+  - command: npm
+    subcommands: ["install", "i", "add"]
+    action: ask
+  - command: pip
+    subcommands: ["install"]
+    action: ask
+  - command: pip3
+    subcommands: ["install"]
+    action: ask
+  - command: apt
+    subcommands: ["install", "remove", "upgrade"]
+    action: deny
+  - command: apt-get
+    subcommands: ["install", "remove", "upgrade"]
+    action: deny
+
+env_allowlist:
+  - PATH
+  - HOME
+  - TMPDIR
+  - GOCACHE
+  - GOMODCACHE
+  - GOPATH
+  - GOPROXY
+  - NO_COLOR
+
+resource_limits:
+  max_timeout_ms: 300000
+  max_output_bytes: 4194304
+  max_command_bytes: 16384
+  max_segments: 32
+  max_sleep_seconds: 60
+  max_parallelism_hint: 32
+
+backend_rules:
+  workspaceexec:
+    require_workspace_relative_cwd: true
+    deny_tty: false
+    background_action: ask
+  hostexec:
+    default_action: ask
+    deny_tty: false
+    background_action: ask
+    max_timeout_ms: 300000
+  codeexec:
+    allowed_languages: ["bash", "sh", "python", "python3", "go"]
+    bash_action: ask
+
+audit:
+  enabled: true
+  path: examples/tool_safety_guard/tool_safety_audit.jsonl
+  fail_closed: true
+
+redaction:
+  enabled: true
+  replacement: "[REDACTED]"
