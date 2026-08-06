@@ -1,0 +1,20 @@
+{
+  "version": "1.0.0",
+  "generated_at": null,
+  "decision": "deny",
+  "risk_level": "critical",
+  "findings": [
+    {
+      "rule_id": "R-DEL-001",
+      "rule_name": "Dangerous Command",
+      "risk_level": "critical",
+      "decision": "deny",
+      "evidence": "rm -rf",
+      "recommendation": "Remove or restrict the destructive command; use safer alternatives."
+    }
+  ],
+  "tool_name": "workspace_exec",
+  "command": "rm -rf /tmp/important",
+  "backend": "workspaceexec",
+  "intercepted": true
+}

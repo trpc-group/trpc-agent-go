@@ -1,0 +1,97 @@
+# Tool Safety Policy Configuration
+# Version: v1
+#
+# This file configures the Tool Execution Safety Guard.
+# Modify this file to change safety policies without changing code.
+
+version: v1
+
+# Default action when no rule explicitly matches.
+# Must be "allow", "deny", or "ask".
+# Using "deny" ensures fail-closed behavior.
+default_action: deny
+
+# Commands that are explicitly allowed.
+# Only effective when non-empty; commands not in this list are denied.
+allowed_commands:
+  - ls
+  - cat
+  - echo
+  - git
+  - go
+  - python3
+  - node
+  - npm
+  - make
+  - grep
+  - find
+  - wc
+  - head
+  - tail
+  - sort
+  - diff
+  - pwd
+  - which
+  - whoami
+
+# Commands that are always denied, regardless of allowed_commands.
+denied_commands:
+  - rm
+  - rmdir
+  - mkfs
+  - dd
+  - fdisk
+  - format
+  - chown
+  - chmod
+
+# Paths that must never be accessed.
+denied_paths:
+  - ~/.ssh
+  - ~/.gnupg
+  - ~/.aws
+  - ~/.kube
+  - ~/.config/gcloud
+  - ~/.credentials
+  - /etc/shadow
+  - /etc/passwd
+  - /etc/ssh
+  - /boot
+  - .env
+
+# Domains allowed for network access.
+# Empty list means all network access is denied.
+# Supports wildcards: *.example.com matches sub.example.com
+network_allowlist:
+  - api.github.com
+  - pypi.org
+  - registry.npmjs.org
+  - proxy.golang.org
+  - "*.googleapis.com"
+
+# Maximum command execution timeout in seconds.
+max_timeout_sec: 300
+
+# Maximum output size in bytes.
+max_output_bytes: 1048576
+
+# Environment variables that are allowed.
+# Empty list means all env vars are allowed (subject to denied_env_vars).
+allowed_env_vars: []
+
+# Environment variables that are always denied.
+denied_env_vars:
+  - HOME
+  - PATH
+  - LD_PRELOAD
+  - LD_LIBRARY_PATH
+  - BASH_ENV
+  - PYTHONPATH
+  - GOPATH
+  - AWS_SECRET_ACCESS_KEY
+  - AWS_ACCESS_KEY_ID
+
+# Tools that require human review before execution.
+ask_for_review_tools:
+  - workspace_exec
+  - exec_command

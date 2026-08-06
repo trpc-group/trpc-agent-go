@@ -1,0 +1,3 @@
+{"timestamp":"2025-07-15T10:00:00Z","tool_name":"workspace_exec","decision":"deny","risk_level":"critical","rule_id":"R-DEL-001","duration_ms":0,"redacted":false,"intercepted":true,"backend":"workspaceexec"}
+{"timestamp":"2025-07-15T10:00:01Z","tool_name":"workspace_exec","decision":"allow","risk_level":"info","rule_id":"","duration_ms":0,"redacted":false,"intercepted":false,"backend":"workspaceexec"}
+{"timestamp":"2025-07-15T10:00:02Z","tool_name":"exec_command","decision":"ask","risk_level":"medium","rule_id":"R-DEP-001","duration_ms":0,"redacted":false,"intercepted":true,"backend":"hostexec"}
