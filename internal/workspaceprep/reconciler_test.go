@@ -973,7 +973,7 @@ func TestReconciler_InstanceRotationReplacesPreparedOnDisk(t *testing.T) {
 	require.NoError(t, err)
 
 	legacy := codeexecutor.WorkspaceMetadata{
-		Version:           1,
+		Version:    1,
 		InstanceID: "instance-1",
 		Prepared: map[string]codeexecutor.PreparedRecord{
 			reqA.Key(): {Key: reqA.Key()},
