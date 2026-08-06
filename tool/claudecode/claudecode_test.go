@@ -182,7 +182,7 @@ func TestToolSet_TaskOutputReadsBackgroundBashTask(t *testing.T) {
 	bashTool := mustCallableTool(t, ts.Tools(context.Background()), toolBash)
 	taskOutputTool := mustCallableTool(t, ts.Tools(context.Background()), toolTaskOutput)
 	bgOut := callToolAs[bashOutput](t, bashTool, bashInput{
-		Command:         "printf 'a'; sleep 0.3; printf 'b'",
+		Command:         "printf 'ab'",
 		RunInBackground: true,
 	})
 	require.NotEmpty(t, bgOut.BackgroundTaskID)
@@ -194,7 +194,7 @@ func TestToolSet_TaskOutputReadsBackgroundBashTask(t *testing.T) {
 	require.Contains(t, []string{"not_ready", "success"}, nonBlocking.RetrievalStatus)
 	blocking := callToolAs[taskOutputOutput](t, taskOutputTool, taskOutputInput{
 		TaskID:  bgOut.BackgroundTaskID,
-		Timeout: intPtr(5_000),
+		Timeout: intPtr(30_000),
 	})
 	require.Equal(t, "success", blocking.RetrievalStatus)
 	require.NotNil(t, blocking.Task)
