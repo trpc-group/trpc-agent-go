@@ -1,0 +1,103 @@
+# Tool Safety Policy Configuration
+#
+# This file configures the Tool Execution Safety Guard.  Modify it
+# to change allowed commands, forbidden paths, network whitelist,
+# resource limits, and sensitive patterns WITHOUT changing code.
+#
+# See tool/safety/README.md for the full documentation.
+
+version: "1.0"
+
+# Default verdict when no rule fires.  "allow" is recommended for
+# development; "ask" is recommended for production.
+default_verdict: allow
+
+# Allowed and denied executable names.
+# Denied entries take precedence over allowed entries.
+# Shell wrappers (sh, bash, eval, etc.) are always denied by the
+# built-in shellsafe policy and cannot be overridden here.
+commands:
+  allowed:
+    - ls
+    - cat
+    - grep
+    - find
+    - git
+    - go
+    - python
+    - echo
+    - pwd
+    - head
+    - tail
+    - wc
+    - sort
+    - uniq
+    - diff
+    - make
+    - test
+    - mkdir
+    - cp
+    - mv
+    - touch
+  denied:
+    - rm
+    - dd
+    - mkfs
+    - shutdown
+    - reboot
+    - halt
+    - poweroff
+    - killall
+    - pkill
+
+# Paths that must never be read or written.
+# Supports glob wildcards (* matches any sequence).
+forbidden_paths:
+  - ~/.ssh
+  - ~/.aws
+  - ~/.gnupg
+  - /etc/passwd
+  - /etc/shadow
+  - "*.env"
+  - "*credentials*"
+  - "*secret*"
+
+# Allowed hostnames for network egress.
+# Supports wildcard patterns like "*.github.com".
+network_whitelist:
+  - github.com
+  - api.github.com
+  - proxy.golang.org
+  - pypi.org
+  - registry.npmjs.org
+
+# Resource limits for command execution.
+resource_limits:
+  allowed_sleep_seconds: 60
+
+# Dependency installation policy.
+dependency_policy:
+  allowed_managers:
+    - go
+    - npm
+    - pip
+  denied_packages: []
+
+# Regex patterns that match sensitive information.
+# Matches are redacted in audit logs and block execution.
+sensitive_patterns:
+  - "sk-[a-zA-Z0-9]{32,}"                    # OpenAI API key
+  - "ghp_[a-zA-Z0-9]{36}"                    # GitHub token
+  - "-----BEGIN.*PRIVATE KEY-----"           # Private key header
+  - "(?i)password\\s*=\\s*['\"][^'\"]+['\"]" # password="..."
+  - "(?i)api[_-]?key\\s*=\\s*['\"][^'\"]+['\"]"
+  - "(?i)token\\s*=\\s*['\"][^'\"]+['\"]"
+
+# Per-backend overrides.
+backend_policies:
+  workspaceexec:
+    allow_background: false
+    require_human_review: false
+  hostexec:
+    allow_background: false
+    require_human_review: true

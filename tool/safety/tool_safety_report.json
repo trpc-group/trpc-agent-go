@@ -1,0 +1,19 @@
+{
+  "timestamp": "2026-07-22T10:30:45.123456789Z",
+  "tool_name": "workspace_exec",
+  "command": "rm -rf /tmp/test",
+  "backend": "workspaceexec",
+  "verdict": "deny",
+  "risk_level": "critical",
+  "risks": [
+    {
+      "rule_id": "dangerous_command",
+      "rule_name": "Dangerous Command",
+      "level": "critical",
+      "evidence": "destructive 'rm -rf' detected: rm -rf /tmp/test",
+      "suggestion": "specify precise paths and avoid recursive force delete",
+      "should_block": true
+    }
+  ],
+  "recommendation": "Security scan detected 1 risk(s):\n- [critical] Dangerous Command: destructive 'rm -rf' detected: rm -rf /tmp/test → specify precise paths and avoid recursive force delete"
+}
