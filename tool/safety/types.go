@@ -89,9 +89,11 @@ func (b Backend) Valid() bool {
 	}
 }
 
-// ScanRequest describes one pending tool call or script execution. Command and
-// Args are mutually exclusive representations; Args is an already-split argv
-// and must include argv[0] as the executable name.
+// ScanRequest describes one pending tool call or script execution. Command,
+// Args, and Code are mutually exclusive primary executable representations;
+// Args is an already-split argv and must include argv[0] as the executable
+// name. RawArguments is supplementary tool payload data and is never treated
+// as a second executable representation.
 type ScanRequest struct {
 	ToolName             string            `json:"tool_name"`
 	ToolCallID           string            `json:"tool_call_id,omitempty"`
@@ -115,6 +117,7 @@ type ScanRequest struct {
 
 	cwdResolutionRequired bool
 	cwdResolved           bool
+	sessionSubmit         bool
 }
 
 // Finding describes one scanner finding.

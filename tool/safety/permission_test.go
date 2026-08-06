@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 
@@ -545,6 +546,53 @@ func TestPermissionPolicy_TypedNilDefaultScannerUsesDefault(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, tool.PermissionActionAllow, decision.Action)
 	})
+}
+
+func TestPermissionPolicy_BoundsArgumentsBeforeParsing(t *testing.T) {
+	var observed Report
+	policy := NewPermissionPolicy(
+		MustDefaultScanner(Policy{MaxCommandBytes: 32}),
+		WithReportObserver(func(_ context.Context, report Report) {
+			observed = report
+		}),
+	)
+	args := []byte(`{"command":"echo ok","padding":"` + strings.Repeat("x", 64) + `"}`)
+	decision, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: args,
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionAsk, decision.Action)
+	require.Equal(t, DecisionNeedsHumanReview, observed.Decision)
+	require.Equal(t, "tool.arguments_too_large", observed.RuleID)
+	require.NotContains(t, observed.Evidence, "padding")
+}
+
+func TestPermissionPolicy_RedactsCompleteAuthorizationHeader(t *testing.T) {
+	const secret = "dXNlcjpwYXNz"
+	var observed Report
+	var audit bytes.Buffer
+	policy := NewPermissionPolicy(
+		MustDefaultScanner(Policy{
+			NetworkAllowlist: []string{"allowed.example"},
+		}),
+		WithAuditWriter(NewJSONLAuditWriter(&audit)),
+		WithReportObserver(func(_ context.Context, report Report) {
+			observed = report
+		}),
+	)
+	decision, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"curl -H 'Authorization: Basic ` + secret + ` ' https://allowed.example"}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	reportJSON, err := json.Marshal(observed)
+	require.NoError(t, err)
+	require.NotContains(t, observed.Command, secret)
+	require.NotContains(t, string(reportJSON), secret)
+	require.NotContains(t, audit.String(), secret)
+	require.NotContains(t, decision.Reason, secret)
 }
 
 func TestPermissionHelpers(t *testing.T) {

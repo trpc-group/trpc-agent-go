@@ -137,6 +137,15 @@ func (s *DefaultScanner) scanRequestContent(
 			Recommendation: "provide either command or args; args must include argv[0]",
 		}}
 	}
+	if req.Code != "" && (req.Command != "" || len(req.Args) > 0) {
+		return []Finding{{
+			RuleID:         "request.payload_conflict",
+			RiskLevel:      RiskHigh,
+			Decision:       DecisionDeny,
+			Evidence:       "code conflicts with command or args",
+			Recommendation: "provide exactly one primary executable representation: command, args, or code",
+		}}
+	}
 	switch {
 	case req.Command != "":
 		if !sizeResult.commandTooLarge {
@@ -165,6 +174,15 @@ func (s *DefaultScanner) scanRequestContent(
 			Decision:       DecisionNeedsHumanReview,
 			Evidence:       "non-empty stdin without a complete submitted command",
 			Recommendation: "scan complete submitted session lines or require review",
+		})
+	}
+	if req.sessionSubmit && req.Command == "" && req.Stdin == "" {
+		findings = append(findings, Finding{
+			RuleID:         "stdin.session_submit",
+			RiskLevel:      RiskHigh,
+			Decision:       DecisionNeedsHumanReview,
+			Evidence:       "session submission was requested without submitted input",
+			Recommendation: "review session submission when pending input is not available to the scanner",
 		})
 	}
 	return findings

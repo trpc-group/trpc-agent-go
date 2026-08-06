@@ -13,6 +13,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -160,13 +161,44 @@ func hostInputMayContainDenied(inputPath, denied string) bool {
 	if strings.HasPrefix(deniedPath, strings.TrimRight(raw, "/")+"/") {
 		return true
 	}
+	if hostInputPathHasSymlink(raw) {
+		return true
+	}
 	if !relativeDeniedPathMayBeStaged(raw, deniedPath) {
 		return false
 	}
-	info, err := os.Stat(filepath.FromSlash(raw))
+	info, err := os.Lstat(filepath.FromSlash(raw))
 	// A host source that cannot be inspected must not be allowed to stage an
 	// unknown directory tree around a relative denied path.
-	return err != nil || info.IsDir()
+	if err != nil || info.Mode()&os.ModeSymlink != 0 {
+		return true
+	}
+	return info.IsDir()
+}
+
+func hostInputPathHasSymlink(raw string) bool {
+	sourcePath := filepath.FromSlash(raw)
+	info, err := os.Lstat(sourcePath)
+	if err != nil {
+		return false
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return true
+	}
+	absolutePath, err := filepath.Abs(sourcePath)
+	if err != nil {
+		return true
+	}
+	resolvedPath, err := filepath.EvalSymlinks(absolutePath)
+	if err != nil {
+		return true
+	}
+	absolutePath = filepath.Clean(absolutePath)
+	resolvedPath = filepath.Clean(resolvedPath)
+	if runtime.GOOS == "windows" {
+		return !strings.EqualFold(absolutePath, resolvedPath)
+	}
+	return absolutePath != resolvedPath
 }
 
 func relativeDeniedPathMayBeStaged(hostPath, deniedPath string) bool {

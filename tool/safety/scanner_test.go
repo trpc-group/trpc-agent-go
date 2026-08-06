@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -342,7 +343,8 @@ func TestDefaultScanner_EnvAllowlistBlocksUnknownEnv(t *testing.T) {
 func TestDefaultScanner_ProcessControlEnvironmentMatchesEnvScrub(t *testing.T) {
 	for _, key := range []string{
 		"HOME", "SHELL", "IFS", "PS4", "SHELLOPTS", "BASHOPTS",
-		"PATH=.", "BASH_FUNC_demo()",
+		"PATH=.", "BASH_FUNC_demo()", "GIT_SSH_COMMAND", "GIT_PROXY_COMMAND",
+		"GIT_CONFIG_PARAMETERS", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0",
 	} {
 		report, err := MustDefaultScanner(Policy{}).Scan(
 			context.Background(),
@@ -768,16 +770,23 @@ func TestDefaultScanner_EdgeCoverageCases(t *testing.T) {
 			MaxCommandBytes: 4,
 			MaxScriptBytes:  4,
 		})
-		report, err := scanner.Scan(context.Background(), ScanRequest{
+		commandReport, err := scanner.Scan(context.Background(), ScanRequest{
+			ToolName: "workspace_exec",
+			Backend:  BackendWorkspace,
+			Command:  "echo too long",
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionNeedsHumanReview, commandReport.Decision)
+		require.Equal(t, "command.too_large", commandReport.RuleID)
+		scriptReport, err := scanner.Scan(context.Background(), ScanRequest{
 			ToolName: "execute_code",
 			Backend:  BackendCodeExec,
 			Language: "python",
 			Code:     "print('too long')",
-			Command:  "echo too long",
 		})
 		require.NoError(t, err)
-		require.Equal(t, DecisionNeedsHumanReview, report.Decision)
-		require.Contains(t, []string{"command.too_large", "script.too_large"}, report.RuleID)
+		require.Equal(t, DecisionNeedsHumanReview, scriptReport.Decision)
+		require.Equal(t, "script.too_large", scriptReport.RuleID)
 	})
 
 	t.Run("oversized structured payloads stop content scanning", func(t *testing.T) {
@@ -932,10 +941,20 @@ func TestDefaultScanner_NetworkAndCodeEdges(t *testing.T) {
 				decision: DecisionAllow,
 				ruleID:   "evaluation.none",
 			},
+			{
+				command:  "git clone git@evil:repo",
+				decision: DecisionDeny,
+				ruleID:   "network.non_allowlisted_domain",
+			},
+			{
+				command:  "git clone git@allowed:repo",
+				decision: DecisionAllow,
+				ruleID:   "evaluation.none",
+			},
 		}
 		for _, tc := range cases {
 			report, err := MustDefaultScanner(Policy{
-				NetworkAllowlist: []string{"allowed.example"},
+				NetworkAllowlist: []string{"allowed.example", "allowed"},
 			}).Scan(context.Background(), ScanRequest{
 				ToolName: "workspace_exec",
 				Backend:  BackendWorkspace,
@@ -988,6 +1007,8 @@ func TestDefaultScanner_NetworkAndCodeEdges(t *testing.T) {
 			"curl -xhttp://proxy.example:8080 https://allowed.example",
 			"curl -Lxhttp://proxy.example:8080 https://allowed.example",
 			"curl --proxy1.0 proxy.example:8080 https://allowed.example",
+			"curl --alt-svc alt-svc.cache https://allowed.example",
+			"curl --alt-svc=alt-svc.cache https://allowed.example",
 		}
 		for _, command := range commands {
 			report, err := MustDefaultScanner(Policy{
@@ -1831,4 +1852,158 @@ func TestDefaultScanner_RedactsCredentialsAfterShellParseFailure(t *testing.T) {
 	require.NotContains(t, report.Command, "alice:s3cr3t")
 	require.NotContains(t, report.Command, "s3cr3t")
 	require.True(t, report.Redacted)
+}
+
+func TestDefaultScanner_RequiresReviewForSubmitOnlySessionInput(t *testing.T) {
+	reqs, err := requestsFromToolCall(
+		"write_stdin", "call-1", "", []byte(`{"submit":true}`), nil,
+	)
+	require.NoError(t, err)
+	require.Len(t, reqs, 1)
+	report, err := MustDefaultScanner(Policy{}).Scan(context.Background(), reqs[0])
+	require.NoError(t, err)
+	require.Equal(t, DecisionNeedsHumanReview, report.Decision)
+	require.Equal(t, "stdin.session_submit", report.RuleID)
+}
+
+func TestDefaultScanner_RejectsConflictingExecutablePayloads(t *testing.T) {
+	scanner := MustDefaultScanner(Policy{})
+	for _, req := range []ScanRequest{
+		{
+			ToolName: "execute_code",
+			Backend:  BackendCodeExec,
+			Command:  "echo safe",
+			Code:     "while True: pass",
+		},
+		{
+			ToolName: "execute_code",
+			Backend:  BackendCodeExec,
+			Args:     []string{"echo", "safe"},
+			Code:     "while True: pass",
+		},
+	} {
+		report, err := scanner.Scan(context.Background(), req)
+		require.NoError(t, err)
+		require.Equal(t, DecisionDeny, report.Decision)
+		require.Equal(t, "request.payload_conflict", report.RuleID)
+	}
+}
+
+func TestDefaultScanner_UnknownArgumentsApplyNetworkAllowlistToSchemelessDestinations(t *testing.T) {
+	scanner := MustDefaultScanner(Policy{
+		NetworkAllowlist: []string{"allowed.example"},
+	})
+	cases := []struct {
+		name     string
+		args     string
+		decision Decision
+		ruleID   string
+	}{
+		{
+			name:     "allowlisted url field",
+			args:     `{"url":"allowed.example/path"}`,
+			decision: DecisionAllow,
+			ruleID:   "evaluation.none",
+		},
+		{
+			name:     "non allowlisted url field",
+			args:     `{"url":"evil.example/path"}`,
+			decision: DecisionDeny,
+			ruleID:   "network.non_allowlisted_domain",
+		},
+		{
+			name:     "non allowlisted endpoint field",
+			args:     `{"endpoint":"evil.example:443"}`,
+			decision: DecisionDeny,
+			ruleID:   "network.non_allowlisted_domain",
+		},
+		{
+			name:     "network path reference field",
+			args:     `{"url":"//evil.example/path"}`,
+			decision: DecisionDeny,
+			ruleID:   "network.non_allowlisted_domain",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			report, err := scanner.Scan(context.Background(), ScanRequest{
+				ToolName:     "mcp_call",
+				Backend:      BackendUnknown,
+				RawArguments: []byte(tc.args),
+			})
+			require.NoError(t, err)
+			require.Equal(t, tc.decision, report.Decision)
+			require.Equal(t, tc.ruleID, report.RuleID)
+		})
+	}
+}
+
+func TestDefaultScanner_DoesNotTreatLoopTextInCommentsOrStringsAsExecutable(t *testing.T) {
+	cases := []struct {
+		name     string
+		language string
+		code     string
+	}{
+		{name: "python string", language: "python", code: `print("while True:")`},
+		{name: "python comment", language: "python", code: "# while True:\nprint(1)"},
+		{name: "go comment", language: "go", code: "// for {\npackage main"},
+		{name: "javascript string", language: "javascript", code: `console.log("while (true)")`},
+		{name: "python docstring", language: "python", code: "'''\nwhile True:\n'''\nprint(1)"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			report, err := MustDefaultScanner(Policy{}).Scan(context.Background(), ScanRequest{
+				ToolName: "execute_code",
+				Backend:  BackendCodeExec,
+				Language: tc.language,
+				Code:     tc.code,
+			})
+			require.NoError(t, err)
+			require.NotEqual(t, "resource.long_running", report.RuleID)
+			require.NotEqual(t, DecisionDeny, report.Decision)
+		})
+	}
+}
+
+func TestDefaultScanner_GatesHostInputSymlinkAgainstRelativeDenies(t *testing.T) {
+	hostDir := t.TempDir()
+	deniedTarget := filepath.Join(hostDir, "secret.txt")
+	require.NoError(t, os.WriteFile(deniedTarget, []byte("secret"), 0o600))
+	symlink := filepath.Join(hostDir, "innocent.txt")
+	if err := os.Symlink(deniedTarget, symlink); err != nil {
+		t.Skipf("symlinks are unavailable: %v", err)
+	}
+	report, err := MustDefaultScanner(Policy{
+		DisableDefaultDenies: true,
+		DeniedPaths:          []string{"secret.txt"},
+	}).Scan(context.Background(), ScanRequest{
+		ToolName:   "skill_run",
+		Backend:    BackendHost,
+		Command:    "true",
+		InputPaths: []string{"host://" + filepath.ToSlash(symlink)},
+	})
+	require.NoError(t, err)
+	require.Equal(t, DecisionDeny, report.Decision)
+	require.Equal(t, "path.input_staging", report.RuleID)
+
+	targetDir := filepath.Join(hostDir, "secret-root")
+	require.NoError(t, os.Mkdir(targetDir, 0o700))
+	targetFile := filepath.Join(targetDir, "innocent.txt")
+	require.NoError(t, os.WriteFile(targetFile, []byte("secret"), 0o600))
+	linkDir := filepath.Join(hostDir, "innocent-dir")
+	if err := os.Symlink(targetDir, linkDir); err != nil {
+		t.Skipf("directory symlinks are unavailable: %v", err)
+	}
+	report, err = MustDefaultScanner(Policy{
+		DisableDefaultDenies: true,
+		DeniedPaths:          []string{"secret-root/innocent.txt"},
+	}).Scan(context.Background(), ScanRequest{
+		ToolName:   "skill_run",
+		Backend:    BackendHost,
+		Command:    "true",
+		InputPaths: []string{"host://" + filepath.ToSlash(filepath.Join(linkDir, "innocent.txt"))},
+	})
+	require.NoError(t, err)
+	require.Equal(t, DecisionDeny, report.Decision)
+	require.Equal(t, "path.input_staging", report.RuleID)
 }

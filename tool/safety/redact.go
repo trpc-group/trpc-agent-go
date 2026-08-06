@@ -21,6 +21,7 @@ const secretKeyPattern = `api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?
 
 var secretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)"(` + secretKeyPattern + `)"\s*:\s*"[^"\\]+(\\.[^"\\]*)*"`),
+	regexp.MustCompile(`(?i)(authorization\s*:\s*)(?:"[^"]*"|'[^']*'|[^\s"'<>]+(?:\s+[^\s"'<>]+)*)`),
 	regexp.MustCompile(`(?i)(` + secretKeyPattern + `)\s*[:=]\s*(?:"[^"]+"|'[^']+'|[^\s]+)`),
 	regexp.MustCompile(`(?i)(authorization\s*:\s*bearer)\s+[A-Za-z0-9._~+/-]+=*`),
 	regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`),
@@ -36,6 +37,10 @@ var curlNetworkCredentialFlagPattern = regexp.MustCompile(`(?i)(--(?:oauth2-bear
 var wgetNetworkCredentialFlagPattern = regexp.MustCompile(`(?i)(--(?:ftp-password|ftp-user|http-password|http-user|password|proxy-password|proxy-user|user)\b(?:\s+|=))(?:"[^"]+"|'[^']+'|[^\s]+)`)
 
 var networkShortCredentialFlagPattern = regexp.MustCompile(`(?i)(^|[\s])(-[uU])(?:(\s+)(?:"[^"]+"|'[^']+'|[^\s]+)|(?:"[^"]+"|'[^']+'|[^\s]+))`)
+
+var curlCertificateCredentialFlagPattern = regexp.MustCompile(`(?i)((?:--(?:proxy-)?cert\b(?:\s+|=)|-E(?:\s+|=)?))(["'])([^"']*):([^"']*)(["'])`)
+
+var curlUnquotedCertificateCredentialFlagPattern = regexp.MustCompile(`(?i)((?:--(?:proxy-)?cert\b(?:\s+|=)|-E(?:\s+|=)?)[^:\s"']+):([^\s"']+)`)
 
 func redactString(s string) (string, bool) {
 	redacted := false
@@ -137,6 +142,10 @@ func redactNetworkCredentialSegment(segment, command string) (string, bool) {
 	out := longFlags.ReplaceAllString(
 		segment, `${1}<redacted>`)
 	if command == "curl" {
+		out = curlCertificateCredentialFlagPattern.ReplaceAllString(
+			out, `${1}${2}<redacted>${5}`)
+		out = curlUnquotedCertificateCredentialFlagPattern.ReplaceAllString(
+			out, `${1}<redacted>`)
 		out = networkShortCredentialFlagPattern.ReplaceAllString(
 			out, `${1}${2}${3}<redacted>`)
 	}
@@ -163,24 +172,92 @@ func networkCommandName(argv []string) string {
 		return ""
 	}
 	if normalizeCommand(argv[index]) == "env" {
-		index++
-		for index < len(argv) {
-			field := strings.Trim(argv[index], `"'`)
-			if isShellAssignment(field) {
-				index++
-				continue
+		var splitString string
+		index, splitString = skipEnvWrapperOptions(argv, index+1)
+		if splitString != "" {
+			if pipe, err := shellsafe.Parse(splitString); err == nil && len(pipe.Commands) > 0 {
+				return networkCommandName(pipe.Commands[0])
 			}
-			if strings.HasPrefix(field, "-") {
-				index++
-				continue
-			}
-			break
+			return rawNetworkCommandName(splitString)
 		}
 	}
 	if index >= len(argv) {
 		return ""
 	}
 	return normalizeCommand(strings.Trim(argv[index], `"'`))
+}
+
+func skipEnvWrapperOptions(argv []string, index int) (int, string) {
+	for index < len(argv) {
+		field := strings.Trim(argv[index], `"'`)
+		if isShellAssignment(field) {
+			index++
+			continue
+		}
+		if field == "--" {
+			return index + 1, ""
+		}
+		if strings.HasPrefix(field, "--") {
+			name, value, hasValue := strings.Cut(field, "=")
+			switch strings.ToLower(name) {
+			case "--unset", "--chdir":
+				index++
+				if !hasValue && index < len(argv) {
+					index++
+				}
+				continue
+			case "--split-string":
+				if hasValue {
+					return index + 1, value
+				}
+				index++
+				if index < len(argv) {
+					return index + 1, strings.Trim(argv[index], `"'`)
+				}
+				return index, ""
+			case "--block-signal", "--default-signal", "--ignore-signal", "--argv0":
+				index++
+				if !hasValue && index < len(argv) {
+					index++
+				}
+				continue
+			default:
+				index++
+				continue
+			}
+		}
+		if strings.HasPrefix(field, "-") && field != "-" {
+			cluster := strings.TrimPrefix(field, "-")
+			consumedValue := false
+			for i := 0; i < len(cluster); i++ {
+				if cluster[i] != 'u' && cluster[i] != 'C' && cluster[i] != 'S' {
+					continue
+				}
+				consumedValue = true
+				if i+1 >= len(cluster) {
+					index++
+					if index < len(argv) {
+						if cluster[i] == 'S' {
+							return index + 1, strings.Trim(argv[index], `"'`)
+						}
+						index++
+					}
+				} else {
+					if cluster[i] == 'S' {
+						return index + 1, cluster[i+1:]
+					}
+					index++
+				}
+				break
+			}
+			if !consumedValue {
+				index++
+			}
+			continue
+		}
+		break
+	}
+	return index, ""
 }
 
 func isShellAssignment(field string) bool {

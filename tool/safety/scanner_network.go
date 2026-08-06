@@ -257,7 +257,7 @@ func curlDestinationOverrideOption(option string) bool {
 	switch option {
 	case "-x", "--resolve", "--connect-to", "--unix-socket",
 		"--abstract-unix-socket", "--proxy", "--proxy1.0", "--preproxy",
-		"--socks4", "--socks4a", "--socks5", "--socks5-hostname":
+		"--socks4", "--socks4a", "--socks5", "--socks5-hostname", "--alt-svc":
 		return true
 	default:
 		return false
@@ -506,24 +506,47 @@ func networkArgHost(cmd, arg string) (string, bool) {
 	case "nc", "netcat":
 	}
 	arg = strings.TrimSuffix(arg, ".")
-	if !looksLikeHost(arg) {
+	if cmd == "git" {
+		if !looksLikeGitHost(arg) {
+			return "", false
+		}
+	} else if !looksLikeHost(arg) {
 		return "", false
 	}
 	return arg, true
 }
 
 func gitRemoteHost(arg string) (string, bool) {
-	host, _, ok := strings.Cut(arg, ":")
+	host, path, ok := strings.Cut(arg, ":")
 	if !ok {
+		return "", false
+	}
+	if len(host) == 1 && strings.ContainsAny(host, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ") &&
+		strings.HasPrefix(path, "/") {
 		return "", false
 	}
 	if _, userHost, ok := strings.Cut(host, "@"); ok {
 		host = userHost
 	}
-	if !looksLikeHost(host) {
+	if !looksLikeGitHost(host) {
 		return "", false
 	}
 	return host, true
+}
+
+func looksLikeGitHost(s string) bool {
+	if looksLikeHost(s) {
+		return true
+	}
+	if s == "" || strings.ContainsAny(s, ":/\\") {
+		return false
+	}
+	for _, r := range s {
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '-' {
+			return false
+		}
+	}
+	return true
 }
 
 func appendHosts(hosts []string, seen map[string]struct{}, values ...string) []string {

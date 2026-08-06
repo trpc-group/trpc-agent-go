@@ -16,6 +16,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
+const maxPermissionArgumentsBytes = 16 * 1024 * 1024
+
 // BackendResolver resolves the safety backend for a permission request.
 type BackendResolver func(*tool.PermissionRequest) Backend
 
@@ -112,6 +114,21 @@ func (p *permissionPolicy) CheckToolPermission(
 	if backend == BackendUnknown && p.resolver != nil {
 		backend = p.resolver(req)
 	}
+	if limit := permissionArgumentsLimit(p.scanner); limit > 0 &&
+		len(req.Arguments) > limit {
+		report := Report{
+			ToolName:       req.ToolName,
+			ToolCallID:     req.ToolCallID,
+			Backend:        backend,
+			Decision:       DecisionNeedsHumanReview,
+			RiskLevel:      RiskHigh,
+			RuleID:         "tool.arguments_too_large",
+			Evidence:       fmt.Sprintf("arguments have %d bytes, exceeds adapter limit=%d", len(req.Arguments), limit),
+			Recommendation: "review or reduce the tool argument payload before parsing",
+			Blocked:        true,
+		}
+		return p.finish(ctx, report)
+	}
 	scanReqs, err := requestsFromPermissionRequest(req, backend, metadata)
 	if err != nil {
 		decision := DecisionDeny
@@ -168,6 +185,17 @@ func (p *permissionPolicy) CheckToolPermission(
 		}
 	}
 	return p.finish(ctx, final)
+}
+
+func permissionArgumentsLimit(scanner Scanner) int {
+	limit := maxPermissionArgumentsBytes
+	if defaultScanner, ok := scanner.(*DefaultScanner); ok &&
+		defaultScanner != nil && defaultScanner.initialized &&
+		defaultScanner.policy.MaxCommandBytes > 0 &&
+		defaultScanner.policy.MaxCommandBytes < limit {
+		limit = defaultScanner.policy.MaxCommandBytes
+	}
+	return limit
 }
 
 func (p *permissionPolicy) finish(

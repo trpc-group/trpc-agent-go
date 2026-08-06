@@ -67,6 +67,20 @@ func TestRedactString_RedactsURLUsernameOnly(t *testing.T) {
 	require.Contains(t, out, "https://allowed.example/path")
 }
 
+func TestRedactString_RedactsCompleteAuthorizationHeader(t *testing.T) {
+	input := `curl -H 'Authorization: Basic dXNlcjpwYXNz' https://allowed.example`
+	out, redacted := redactString(input)
+	require.True(t, redacted)
+	require.NotContains(t, out, "dXNlcjpwYXNz")
+	require.Contains(t, out, "<redacted>")
+
+	input = `curl -H 'Authorization: Digest username=alice, realm=private' https://allowed.example`
+	out, redacted = redactString(input)
+	require.True(t, redacted)
+	require.NotContains(t, out, "alice")
+	require.NotContains(t, out, "private")
+}
+
 func TestRedactString_RedactsSpaceSeparatedCredentialFlags(t *testing.T) {
 	input := `cli --token abc123 --password "hunter 2"`
 	out, redacted := redactString(input)
@@ -117,6 +131,26 @@ func TestRedactString_RedactsRemainingNetworkCredentialFlags(t *testing.T) {
 		require.True(t, redacted, tc.input)
 		require.NotContains(t, out, tc.secret, tc.input)
 	}
+	out, redacted := redactString(`curl --cert "client.pem:quoted-secret" https://allowed.example`)
+	require.True(t, redacted)
+	require.Equal(t, `curl --cert "<redacted>" https://allowed.example`, out)
+}
+
+func TestRedactString_RedactsCurlCertificatePasswords(t *testing.T) {
+	cases := []struct {
+		input  string
+		secret string
+	}{
+		{`curl --cert client.pem:cert-secret https://allowed.example`, "cert-secret"},
+		{`curl -Eclient.pem:short-secret https://allowed.example`, "short-secret"},
+		{`curl --proxy-cert proxy.pem:proxy-secret https://allowed.example`, "proxy-secret"},
+		{`curl --cert "client.pem:quoted-secret" https://allowed.example`, "quoted-secret"},
+	}
+	for _, tc := range cases {
+		out, redacted := redactString(tc.input)
+		require.True(t, redacted, tc.input)
+		require.NotContains(t, out, tc.secret, tc.input)
+	}
 }
 
 func TestRedactString_RedactsNetworkCredentialsWhenShellParsingFails(t *testing.T) {
@@ -141,6 +175,20 @@ func TestRedactString_RedactsNetworkCredentialsThroughEnvWrapper(t *testing.T) {
 	require.True(t, redacted)
 	require.NotContains(t, out, "alice:s3cr3t")
 	require.NotContains(t, out, "s3cr3t")
+}
+
+func TestRedactString_RedactsNetworkCredentialsThroughEnvOptions(t *testing.T) {
+	for _, input := range []string{
+		`env -u OLD curl -u alice:s3cr3t https://allowed.example`,
+		`env -C /tmp curl -u alice:s3cr3t https://allowed.example`,
+		`env -S 'FOO=1 curl -u alice:s3cr3t https://allowed.example'`,
+		`env --unset=OLD --argv0 argv0 curl -u alice:s3cr3t https://allowed.example`,
+	} {
+		out, redacted := redactString(input)
+		require.True(t, redacted, input)
+		require.NotContains(t, out, "alice:s3cr3t", input)
+		require.NotContains(t, out, "s3cr3t", input)
+	}
 }
 
 func TestRedactString_DoesNotTreatWgetUserAgentAsCredential(t *testing.T) {

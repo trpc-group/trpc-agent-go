@@ -273,6 +273,7 @@ func TestRequestsFromToolCall_ParsesKnownToolArguments(t *testing.T) {
 				require.Equal(t, BackendWorkspace, reqs[0].Backend)
 				require.Empty(t, reqs[0].Command)
 				require.NotEmpty(t, reqs[0].RawArguments)
+				require.True(t, reqs[0].sessionSubmit)
 			},
 		},
 		{

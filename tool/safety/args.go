@@ -468,12 +468,13 @@ func parseWriteStdinArgs(
 		}}, nil
 	}
 	return []ScanRequest{{
-		ToolName:     toolName,
-		ToolCallID:   toolCallID,
-		Backend:      backend,
-		Stdin:        chars,
-		RawArguments: append([]byte(nil), args...),
-		Metadata:     metadata,
+		ToolName:      toolName,
+		ToolCallID:    toolCallID,
+		Backend:       backend,
+		Stdin:         chars,
+		sessionSubmit: chars == "" && submit,
+		RawArguments:  append([]byte(nil), args...),
+		Metadata:      metadata,
 	}}, nil
 }
 
