@@ -1,0 +1,20 @@
+[
+  {
+    "metricName": "final_response_exact",
+    "evaluatorName": "final_response_avg_score",
+    "threshold": 1.0,
+    "criterion": {"finalResponse": {"json": {"matchStrategy": "exact"}}}
+  },
+  {
+    "metricName": "json_schema",
+    "evaluatorName": "final_response_avg_score",
+    "threshold": 1.0,
+    "criterion": {"finalResponse": {"json": {"valid": true, "matchStrategy": "skip"}}}
+  },
+  {
+    "metricName": "tooltrajectory",
+    "evaluatorName": "tool_trajectory_avg_score",
+    "threshold": 1.0,
+    "criterion": {"toolTrajectory": {"orderSensitive": true, "subsetMatching": false, "defaultStrategy": {"name": {"matchStrategy": "exact"}, "arguments": {"matchStrategy": "exact"}}}}
+  }
+]
