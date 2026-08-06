@@ -89,7 +89,8 @@ func (p *toolErrorPlugin) afterTool(
 	if p.resolver != nil {
 		if details, ok := p.resolver(ctx, args); ok {
 			return &tool.AfterToolResult{
-				CustomResult: failure(normalizeDetails(details, args.Error)),
+				CustomResult:        failure(normalizeDetails(details, args.Error)),
+				SkipResultFormatter: true,
 			}, nil
 		}
 	}
@@ -98,7 +99,8 @@ func (p *toolErrorPlugin) afterTool(
 		return nil, nil
 	}
 	return &tool.AfterToolResult{
-		CustomResult: failure(details),
+		CustomResult:        failure(details),
+		SkipResultFormatter: true,
 	}, nil
 }
 

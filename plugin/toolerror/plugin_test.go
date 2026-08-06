@@ -28,6 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
+	"trpc.group/trpc-go/trpc-agent-go/tool/resultformat"
 	"trpc.group/trpc-go/trpc-agent-go/tool/transfer"
 )
 
@@ -417,6 +418,7 @@ func TestAfterToolClassifiesExecutionErrors(t *testing.T) {
 			)
 			require.NoError(t, err)
 			require.NotNil(t, result)
+			require.True(t, result.SkipResultFormatter)
 			failure := requireFailure(t, result.CustomResult)
 			require.Equal(t, test.source, failure.Error.Source)
 			require.Equal(t, test.kind, failure.Error.Kind)
@@ -467,6 +469,7 @@ func TestAfterToolResolverClassifiesBusinessFailure(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.NotNil(t, result)
+	require.True(t, result.SkipResultFormatter)
 	failure := requireFailure(t, result.CustomResult)
 	require.Equal(t, "quota_exceeded", failure.Error.Code)
 	require.True(t, failure.Error.Retryable)
@@ -772,6 +775,7 @@ func TestPluginIntegrationExecutionErrorReachesModel(t *testing.T) {
 		arguments: []byte(`{"query":"weather"}`),
 	}
 	var callCount atomic.Int32
+	var formatterCalls atomic.Int32
 	lookup := function.NewFunctionTool(
 		func(_ context.Context, _ requiredInput) (string, error) {
 			callCount.Add(1)
@@ -779,6 +783,13 @@ func TestPluginIntegrationExecutionErrorReachesModel(t *testing.T) {
 		},
 		function.WithName("lookup"),
 		function.WithDescription("Looks up a query."),
+		function.WithResultFormatter(resultformat.FormatterFunc[string](func(
+			_ context.Context,
+			result string,
+		) (string, error) {
+			formatterCalls.Add(1)
+			return "formatted:" + result, nil
+		})),
 	)
 	agentInstance := llmagent.New(
 		"assistant",
@@ -803,6 +814,7 @@ func TestPluginIntegrationExecutionErrorReachesModel(t *testing.T) {
 	for range events {
 	}
 	require.Equal(t, int32(1), callCount.Load())
+	require.Zero(t, formatterCalls.Load())
 	requests := modelStub.Requests()
 	require.Len(t, requests, 2)
 	var failure Failure

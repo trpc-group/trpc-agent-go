@@ -695,7 +695,9 @@ tool argument JSON repair has run. Invalid JSON and schema constraints such as
 `required`, `type`, `enum`, `pattern`, and `additionalProperties` short-circuit
 the call, so the tool is not executed. Non-nil errors returned by a tool are
 classified in `AfterTool`. Framework-generated unknown-tool responses are
-normalized before their tool result event is emitted.
+normalized before their tool result event is emitted. Failure envelopes bypass
+the tool's configured result formatter, because they replace the tool's
+declared output rather than represent a successful value of that output type.
 
 Handled failures use this envelope while successful tool results remain
 unchanged:

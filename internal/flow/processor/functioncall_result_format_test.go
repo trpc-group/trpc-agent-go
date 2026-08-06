@@ -292,6 +292,55 @@ func TestExecuteToolCall_ResultFormatterUsesAfterToolResult(t *testing.T) {
 	assert.Equal(t, 1, toolCalls)
 }
 
+func TestExecuteToolCall_AfterToolResultCanSkipResultFormatter(t *testing.T) {
+	var formatterCalls atomic.Int32
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterAfterTool(func(
+		context.Context,
+		*tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		return &tool.AfterToolResult{
+			CustomResult: map[string]any{
+				"ok": false,
+				"error": map[string]any{
+					"code": "execution",
+				},
+			},
+			SkipResultFormatter: true,
+		}, nil
+	})
+	ft := function.NewFunctionTool(
+		func(context.Context, struct{}) (resultFormatTestResult, error) {
+			return resultFormatTestResult{Output: "original"}, nil
+		},
+		function.WithName("bash"),
+		function.WithResultFormatter(
+			resultformat.FormatterFunc[resultFormatTestResult](func(
+				context.Context,
+				resultFormatTestResult,
+			) (string, error) {
+				formatterCalls.Add(1)
+				return "unexpected", nil
+			}),
+		),
+	)
+
+	choices := requireResultFormatToolCall(
+		t,
+		NewFunctionCallResponseProcessor(false, callbacks),
+		"bash",
+		ft,
+	)
+
+	require.Len(t, choices, 1)
+	assert.JSONEq(
+		t,
+		`{"ok":false,"error":{"code":"execution"}}`,
+		choices[0].Message.Content,
+	)
+	assert.Zero(t, formatterCalls.Load())
+}
+
 func TestExecuteToolCall_ToolResultMessagesOverridesFormattedDefault(t *testing.T) {
 	result := resultFormatTestResult{ExitCode: 0, Output: "formatted"}
 	var callbackResult any

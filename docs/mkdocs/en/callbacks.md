@@ -181,9 +181,10 @@ type AfterToolArgs struct {
 }
 
 type AfterToolResult struct {
-    Context      context.Context  // Optional context for subsequent operations
-    CustomResult any              // If non-nil, replaces the original result
-    SkipSummarization bool        // If true, end the turn after tool.response
+    Context             context.Context  // Optional context for subsequent operations
+    CustomResult        any              // If non-nil, replaces the original result
+    SkipResultFormatter bool             // Use default JSON for CustomResult
+    SkipSummarization   bool             // If true, end the turn after tool.response
 }
 ```
 
@@ -203,6 +204,10 @@ Key points:
   assigning `args.Arguments` only affects later logic that reads that field in the same callback chain.
 - If BeforeToolCallbackStructured returns a non-nil custom result, the tool is skipped and that result is used directly.
 - `ToolCallID` is available in `BeforeToolArgs` and `AfterToolArgs`.
+- `AfterToolResult.SkipResultFormatter` keeps a non-nil `CustomResult` out of
+  the tool's configured result formatter and uses default JSON serialization.
+  This is useful when the replacement is a protocol or error envelope rather
+  than a value of the tool's declared output type.
 - `AfterToolResult.SkipSummarization` lets a callback end the turn after
   `tool.response` when the tool result should be surfaced directly.
 - `SkipSummarization` only skips the extra summarization LLM call. The true

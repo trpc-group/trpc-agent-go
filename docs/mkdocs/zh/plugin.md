@@ -701,7 +701,8 @@ defer runnerInstance.Close()
 JSON repair，校验发生在 repair 之后。无效 JSON，以及 `required`、`type`、`enum`、
 `pattern`、`additionalProperties` 等 Schema 约束失败会直接短路调用，不再执行工具。
 工具返回的非 `nil error` 会在 `AfterTool` 中分类；框架生成的未知工具名消息则会在工具
-结果事件发出前完成标准化。
+结果事件发出前完成标准化。错误 envelope 会跳过工具配置的 result formatter，因为它
+替换的是工具声明的成功输出，而不是该输出类型的一个成功值。
 
 插件处理的失败采用以下 envelope；成功的工具结果保持原样：
 

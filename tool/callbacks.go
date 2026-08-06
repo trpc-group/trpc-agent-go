@@ -118,6 +118,10 @@ type AfterToolResult struct {
 	Context context.Context
 	// CustomResult if not nil, will replace the original result.
 	CustomResult any
+	// SkipResultFormatter requests default JSON serialization for CustomResult
+	// instead of applying the tool's configured result formatter. It is ignored
+	// when CustomResult is nil.
+	SkipResultFormatter bool
 	// SkipSummarization requests ending the turn after the tool response.
 	SkipSummarization bool
 }
@@ -127,6 +131,9 @@ type AfterToolResult struct {
 // - result: contains optional custom result and context for subsequent operations.
 //   - CustomResult: if not nil, this result will be used instead of the actual tool result.
 //   - Context: if not nil, will be used by the framework for subsequent operations.
+//   - SkipResultFormatter: if true and CustomResult is non-nil, the framework
+//     serializes CustomResult with its default JSON representation instead of
+//     applying the tool's configured result formatter.
 //   - SkipSummarization: if true, the framework will skip the extra
 //     post-tool LLM summarization step.
 //
@@ -483,7 +490,10 @@ func (c *Callbacks) processAfterToolResult(
 			merged.Context = (*lastResult).Context
 		}
 		if merged.CustomResult == nil {
+			// The formatting preference belongs to the retained custom result.
 			merged.CustomResult = (*lastResult).CustomResult
+			merged.SkipResultFormatter =
+				(*lastResult).SkipResultFormatter
 		}
 		merged.SkipSummarization = merged.SkipSummarization ||
 			(*lastResult).SkipSummarization
