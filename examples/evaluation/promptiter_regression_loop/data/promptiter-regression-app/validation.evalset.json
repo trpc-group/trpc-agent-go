@@ -1,0 +1,136 @@
+{
+  "evalSetId": "validation",
+  "name": "E-commerce support validation set",
+  "evalCases": [
+    {
+      "evalId": "validation_return_shipping",
+      "conversation": [
+        {
+          "invocationId": "validation_return_shipping-1",
+          "userContent": {
+            "role": "user",
+            "content": "Who pays the return shipping for a 7-day no-reason return?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "For a change-of-mind return, the customer pays return shipping; the merchant pays when the item is defective."
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-app",
+        "userId": "offline-demo"
+      }
+    },
+    {
+      "evalId": "validation_delivery_trace",
+      "evalMode": "trace",
+      "conversation": [
+        {
+          "invocationId": "validation_delivery_trace-1",
+          "userContent": {
+            "role": "user",
+            "content": "Tracking says the parcel is out for delivery. Where should I check for updates?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "The parcel is out for delivery; check the order details page for the courier's latest update."
+          },
+          "tools": [
+            {
+              "id": "validation-delivery-tool-1",
+              "name": "lookup_shipment",
+              "arguments": {
+                "order_id": "ORDER-1042"
+              },
+              "result": {
+                "status": "out_for_delivery"
+              }
+            }
+          ]
+        }
+      ],
+      "actualConversation": [
+        {
+          "invocationId": "validation_delivery_trace-1",
+          "userContent": {
+            "role": "user",
+            "content": "Tracking says the parcel is out for delivery. Where should I check for updates?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "The parcel is out for delivery; check the order details page for the courier's latest update."
+          },
+          "tools": [
+            {
+              "id": "validation-delivery-tool-1",
+              "name": "lookup_shipment",
+              "arguments": {
+                "order_id": "ORDER-1042"
+              },
+              "result": {
+                "status": "out_for_delivery"
+              }
+            }
+          ],
+          "executionTrace": {
+            "RootAgentName": "candidate",
+            "RootInvocationID": "validation-delivery-trace-root",
+            "SessionID": "validation-delivery-trace-session",
+            "StartedAt": "2026-07-21T00:00:00Z",
+            "EndedAt": "2026-07-21T00:00:00.001Z",
+            "Status": "completed",
+            "Input": {
+              "Text": "Tracking says the parcel is out for delivery. Where should I check for updates?"
+            },
+            "Output": {
+              "Text": "The parcel is out for delivery; check the order details page for the courier's latest update."
+            },
+            "Usage": null,
+            "Steps": [
+              {
+                "StepID": "validation-delivery-tool-1",
+                "InvocationID": "validation_delivery_trace-1",
+                "AgentName": "candidate",
+                "NodeID": "lookup_shipment",
+                "NodeType": "tool",
+                "StartedAt": "2026-07-21T00:00:00Z",
+                "EndedAt": "2026-07-21T00:00:00.001Z",
+                "Input": {
+                  "Text": "{\"order_id\":\"ORDER-1042\"}"
+                },
+                "Output": {
+                  "Text": "{\"status\":\"out_for_delivery\"}"
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-app",
+        "userId": "offline-demo"
+      }
+    },
+    {
+      "evalId": "validation_account_security",
+      "conversation": [
+        {
+          "invocationId": "validation_account_security-1",
+          "userContent": {
+            "role": "user",
+            "content": "A caller claiming to be platform support asked for my SMS verification code. Should I share it?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Do not share the verification code. Platform support will never ask for it."
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-app",
+        "userId": "offline-demo"
+      }
+    }
+  ]
+}
