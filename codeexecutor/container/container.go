@@ -52,6 +52,10 @@ type CodeExecutor struct {
 	ws              *workspaceRuntime    // workspace runtime
 	// autoInputs controls mapping of inputs-host into workspace.
 	autoInputs bool
+	// skipPythonVerification disables the init-time `which python3` probe.
+	// Use this for images that intentionally ship only a non-Python toolchain
+	// (for example golang:*-bookworm used by the code-review sandbox).
+	skipPythonVerification bool
 }
 
 // New creates a new CodeExecutor instance
@@ -165,6 +169,21 @@ func WithBindMount(src, dest, mode string) Option {
 			spec += ":" + mode
 		}
 		c.hostConfig.Binds = append(c.hostConfig.Binds, spec)
+	}
+}
+
+// WithSkipPythonVerification disables the init-time python3 capability probe.
+//
+// By default New verifies that `python3` is installed because Execute defaults
+// code blocks to the Python interpreter. Callers that only use the Engine
+// ProgramRunner API (for example Go-only review sandboxes) may skip the probe
+// so non-Python base images such as golang:*-bookworm can be used.
+//
+// Skipping the probe does not install python3; Execute of python/empty-language
+// blocks will still fail at runtime if the image lacks the interpreter.
+func WithSkipPythonVerification(skip bool) Option {
+	return func(c *CodeExecutor) {
+		c.skipPythonVerification = skip
 	}
 }
 
@@ -548,9 +567,11 @@ func (c *CodeExecutor) initContainer() error {
 
 	log.DebugfContext(ctx, "Container %s started successfully and is running", c.container.ID)
 
-	// Verify python3 installation
-	if err := c.verifyPythonInstallation(ctx); err != nil {
-		return err
+	// Verify python3 installation unless the caller opted out (Go-only images).
+	if !c.skipPythonVerification {
+		if err := c.verifyPythonInstallation(ctx); err != nil {
+			return err
+		}
 	}
 
 	return nil

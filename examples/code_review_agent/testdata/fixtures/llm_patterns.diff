@@ -1,0 +1,13 @@
+diff --git a/creds.go b/creds.go
+new file mode 100644
+--- /dev/null
++++ b/creds.go
+@@ -0,0 +1,7 @@
++package example
++
++// TODO: rotate these credentials quarterly
++const password = "super-secret-value-12345"
++
++func debug() {
++	fmt.Println("debug: entering handler")
++}

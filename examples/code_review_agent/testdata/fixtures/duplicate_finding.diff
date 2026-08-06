@@ -1,0 +1,8 @@
+diff --git a/dup.go b/dup.go
+new file mode 100644
+--- /dev/null
++++ b/dup.go
+@@ -0,0 +1,3 @@
++package example
++
++const API_KEY = "sk-duplicate001test002value003"

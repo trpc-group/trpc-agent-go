@@ -1,0 +1,10 @@
+diff --git a/exec.go b/exec.go
+new file mode 100644
+--- /dev/null
++++ b/exec.go
+@@ -0,0 +1,5 @@
++package main
++
++import "os/exec"
++
++func run(userInput string) { exec.Command("bash", "-c", userInput) }

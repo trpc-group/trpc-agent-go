@@ -1,0 +1,26 @@
+diff --git a/db_query.go b/db_query.go
+new file mode 100644
+--- /dev/null
++++ b/db_query.go
+@@ -0,0 +1,16 @@
++package example
++
++import (
++	"database/sql"
++)
++
++func queryUsers(db *sql.DB) ([]string, error) {
++	rows, err := db.Query("SELECT name FROM users")
++	if err != nil {
++		return nil, err
++	}
++	var names []string
++	for rows.Next() {
++		var name string
++		if err := rows.Scan(&name); err != nil {
++			return nil, err
++		}
++		names = append(names, name)
++	}
++	return names, nil
++}

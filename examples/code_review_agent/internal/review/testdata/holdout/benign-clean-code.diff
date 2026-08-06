@@ -1,0 +1,10 @@
+diff --git a/hello.go b/hello.go
+new file mode 100644
+--- /dev/null
++++ b/hello.go
+@@ -0,0 +1,5 @@
++package main
++
++import "fmt"
++
++func main() { fmt.Println("hello, world") }

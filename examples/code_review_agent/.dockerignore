@@ -1,0 +1,32 @@
+# .dockerignore for the code-review-agent sandbox image.
+#
+# Excludes everything not needed at build time so the Docker build
+# context is small and cache-friendly. The Dockerfile only needs the
+# Go toolchain (already in the base image) to build staticcheck; it
+# does not need the agent source code.
+
+# Version control
+.git
+.gitignore
+
+# IDE / editor
+.vscode
+.idea
+*.swp
+
+# Build artifacts
+out/
+*.db
+*.log
+
+# Documentation not needed inside the image
+*.md
+docs/
+
+# Test fixtures (the repo under review is staged separately at runtime)
+testdata/
+examples/code_review_agent/testdata/
+
+# OS-specific noise
+.DS_Store
+Thumbs.db

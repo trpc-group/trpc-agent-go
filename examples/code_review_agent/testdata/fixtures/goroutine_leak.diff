@@ -1,0 +1,10 @@
+diff --git a/worker.go b/worker.go
+new file mode 100644
+--- /dev/null
++++ b/worker.go
+@@ -0,0 +1,5 @@
++package example
++
++func runWorker() {
++	go func() { println("working") }()
++}

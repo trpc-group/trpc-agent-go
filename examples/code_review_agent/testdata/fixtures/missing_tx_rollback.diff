@@ -1,0 +1,14 @@
+diff --git a/db_tx.go b/db_tx.go
+new file mode 100644
+--- /dev/null
++++ b/db_tx.go
+@@ -0,0 +1,7 @@
++package example
++
++import "database/sql"
++
++func doTx(db *sql.DB) {
++	defer db.Close()
++	tx, _ := db.Begin()
++	_ = tx
++}

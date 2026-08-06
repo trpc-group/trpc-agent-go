@@ -1,0 +1,8 @@
+diff --git a/broken.go b/broken.go
+new file mode 100644
+--- /dev/null
++++ b/broken.go
+@@ -0,0 +1,3 @@
++package example
++
++func broken(
