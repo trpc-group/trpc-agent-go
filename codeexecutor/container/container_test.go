@@ -14,6 +14,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -121,6 +122,28 @@ func writeHijackStream(t *testing.T, conn net.Conn, buf *bufio.ReadWriter, stdou
 	}()
 }
 
+// writeHijackStreamEOF finishes the response with a TCP half-close. Lifecycle
+// tests can make several short attach requests in one sequence, so they use
+// this helper rather than a delayed full close that may reset a later reader
+// on Windows before it observes the framed EOF.
+func writeHijackStreamEOF(t *testing.T, conn net.Conn, buf *bufio.ReadWriter, stdout, stderr string) {
+	t.Helper()
+	_, err := buf.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: tcp\r\nContent-Type: application/vnd.docker.raw-stream\r\n\r\n")
+	require.NoError(t, err)
+	if stdout != "" {
+		writeDockerFrame(t, buf, 1, stdout)
+	}
+	if stderr != "" {
+		writeDockerFrame(t, buf, 2, stderr)
+	}
+	require.NoError(t, buf.Flush())
+	if closer, ok := conn.(interface{ CloseWrite() error }); ok {
+		require.NoError(t, closer.CloseWrite())
+		return
+	}
+	require.NoError(t, conn.Close())
+}
+
 func writeDockerFrame(t *testing.T, w io.Writer, streamType byte, data string) {
 	t.Helper()
 
@@ -183,6 +206,25 @@ func TestNew_WithMissingImageAndDockerfile(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestNewWithContextRejectsNilAndHonorsCancellation(t *testing.T) {
+	if _, err := NewWithContext(nil); err == nil {
+		t.Fatal("nil context was accepted")
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer server.Close()
+	parsed, err := url.Parse(server.URL)
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = NewWithContext(ctx,
+		WithHost(fmt.Sprintf("tcp://%s", parsed.Host)),
+		WithContainerConfig(tcontainer.Config{Image: "python:3.9-slim"}),
+	)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("NewWithContext() error = %v, want context cancellation", err)
+	}
+}
+
 func TestNew_WithDockerFilePathSetsAbsolute(t *testing.T) {
 	tempDir := t.TempDir()
 
@@ -228,9 +270,9 @@ func TestCodeExecutor_WrapperMethods_Basic(t *testing.T) {
 	require.NotNil(t, eng)
 
 	// ensureWS caches instance.
-	rt1, err := c.ensureWS()
+	rt1, err := c.ensureWS(context.Background())
 	require.NoError(t, err)
-	rt2, err := c.ensureWS()
+	rt2, err := c.ensureWS(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, rt1, rt2)
 
@@ -356,12 +398,235 @@ func TestWithBindMountOption(t *testing.T) {
 
 func TestEnsureWS_CachesRuntime(t *testing.T) {
 	c := &CodeExecutor{}
-	rt1, err := c.ensureWS()
+	rt1, err := c.ensureWS(context.Background())
 	assert.NoError(t, err)
 	assert.NotNil(t, rt1)
-	rt2, err := c.ensureWS()
+	rt2, err := c.ensureWS(context.Background())
 	assert.NoError(t, err)
 	assert.Same(t, rt1, rt2)
+}
+
+func TestWorkspaceGenerationInvalidatesOldHandles(t *testing.T) {
+	c := &CodeExecutor{generation: 1}
+	ws := codeexecutor.Workspace{ID: "task", Path: "/tmp/run/ws_task"}
+	c.rememberWorkspace(ws, 1)
+	_, err := c.InstanceID(context.Background())
+	require.Error(t, err, "a zero-value executor has no physical instance")
+
+	// This models abortContainer after a timed-out attach. The old workspace
+	// remains known, but the physical execution instance has been replaced.
+	c.containerMu.Lock()
+	c.generation++
+	c.containerMu.Unlock()
+	require.ErrorIs(t, c.validateWorkspace(ws), codeexecutor.ErrWorkspaceStale)
+
+	_, err = c.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{Cmd: "true"})
+	require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
+	_, ok := c.Engine().Manager().(codeexecutor.WorkspaceInstanceProvider)
+	assert.True(t, ok)
+}
+
+func TestCleanupForgetsOnlyCurrentWorkspaceGeneration(t *testing.T) {
+	c := &CodeExecutor{generation: 3, workspaceGen: map[string]uint64{
+		"/tmp/current": 3,
+		"/tmp/stale":   2,
+	}}
+	c.forgetWorkspace(codeexecutor.Workspace{Path: "/tmp/current"}, 3)
+	assert.NotContains(t, c.workspaceGen, "/tmp/current")
+	c.forgetWorkspace(codeexecutor.Workspace{Path: "/tmp/stale"}, 3)
+	assert.Equal(t, uint64(2), c.workspaceGen["/tmp/stale"])
+}
+
+func TestInstanceIDRecreatesInvalidatedContainerBeforeReportingGeneration(t *testing.T) {
+	var replacementExecCalls int
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/old/kill"):
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/containers/old"):
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/images/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[{"RepoTags":["python:3.9-slim"]}]`))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/create"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"replacement"}`))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/replacement/start"):
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/containers/replacement/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ID":"replacement","State":{"Running":true,"Status":"running"}}`))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/old/exec"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"old-workspace"}`))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/replacement/exec"):
+			w.Header().Set("Content-Type", "application/json")
+			replacementExecCalls++
+			if replacementExecCalls == 1 {
+				_, _ = w.Write([]byte(`{"Id":"verify"}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"Id":"replacement-workspace"}`))
+		case r.Method == http.MethodPost && (strings.Contains(r.URL.Path, "/exec/verify/start") ||
+			strings.Contains(r.URL.Path, "/exec/old-workspace/start") ||
+			strings.Contains(r.URL.Path, "/exec/replacement-workspace/start")):
+			conn, buf, err := w.(http.Hijacker).Hijack()
+			require.NoError(t, err)
+			writeHijackStreamEOF(t, conn, buf, "", "")
+		case r.Method == http.MethodGet && (strings.Contains(r.URL.Path, "/exec/verify/json") ||
+			strings.Contains(r.URL.Path, "/exec/old-workspace/json") ||
+			strings.Contains(r.URL.Path, "/exec/replacement-workspace/json")):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ExitCode":0}`))
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+		}
+	}
+	cli, cleanup := newFakeDockerClient(t, handler)
+	defer cleanup()
+	exec := &CodeExecutor{client: cli, container: &tcontainer.Summary{ID: "old"}, generation: 1, containerConfig: tcontainer.Config{Image: defaultImageTag}}
+	registry := codeexecutor.NewWorkspaceRegistry()
+	firstWorkspace, err := registry.Acquire(context.Background(), exec, "task")
+	require.NoError(t, err)
+	require.NotEmpty(t, firstWorkspace.Path)
+
+	exec.abortContainer()
+	// A fresh runtime may be requested before the registry performs its
+	// instance probe. It must recreate the physical container with the caller's
+	// context while preserving the old workspace generation as stale.
+	runtime, err := exec.ensureWS(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, runtime)
+	assert.Equal(t, uint64(3), runtime.generation)
+
+	secondWorkspace, err := registry.Acquire(context.Background(), exec, "task")
+	require.NoError(t, err)
+	require.NotEmpty(t, secondWorkspace.Path)
+	assert.NotEqual(t, firstWorkspace.Path, secondWorkspace.Path)
+
+	first, err := exec.InstanceID(context.Background())
+	require.NoError(t, err)
+	second, err := exec.InstanceID(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, first, second)
+	assert.NotNil(t, exec.container)
+	assert.Equal(t, codeexecutor.WorkspaceInstanceID("container-3"), first)
+}
+
+func TestEnsureWSHonorsCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := (&CodeExecutor{}).ensureWS(ctx)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestLifecycleGuardsRejectInvalidState(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	ws := codeexecutor.Workspace{Path: "/work"}
+
+	zero := &CodeExecutor{}
+	_, err := zero.ensureWS(nil)
+	require.Error(t, err)
+	_, err = zero.InstanceID(nil)
+	require.Error(t, err)
+	_, err = zero.runtimeForWorkspace(ctx, ws)
+	require.ErrorIs(t, err, context.Canceled)
+	_, _, err = zero.containerClientForGeneration(1)
+	require.Error(t, err)
+	require.Error(t, zero.requireContainer())
+
+	stale := &CodeExecutor{generation: 2}
+	stale.rememberWorkspace(ws, 1)
+	_, err = stale.runtimeForWorkspace(context.Background(), ws)
+	require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
+
+	closed := &CodeExecutor{closed: true}
+	_, err = closed.ensureWS(context.Background())
+	require.Error(t, err)
+	_, err = closed.InstanceID(context.Background())
+	require.Error(t, err)
+	_, _, err = closed.containerClientForGeneration(0)
+	require.Error(t, err)
+	require.Error(t, closed.requireContainer())
+	closed.abortContainer() // A closed or unconfigured executor is a safe no-op.
+}
+
+func TestInitializationContextsAreBoundedAndCleanupUsesRemainingBudget(t *testing.T) {
+	initCtx, cancel, err := initializationContext(context.Background())
+	require.NoError(t, err)
+	defer cancel()
+	initDeadline, ok := initCtx.Deadline()
+	require.True(t, ok)
+	require.WithinDuration(t, time.Now().Add(defaultInitTimeoutSec*time.Second), initDeadline, time.Second)
+
+	parent, parentCancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer parentCancel()
+	cleanupCtx, cleanupCancel := failedInitializationCleanupContext(parent)
+	defer cleanupCancel()
+	cleanupDeadline, ok := cleanupCtx.Deadline()
+	require.True(t, ok)
+	parentDeadline, ok := parent.Deadline()
+	require.True(t, ok)
+	require.WithinDuration(t, parentDeadline, cleanupDeadline, time.Millisecond)
+	select {
+	case <-parent.Done():
+	case <-time.After(time.Second):
+		t.Fatal("initialization deadline did not expire")
+	}
+	select {
+	case <-cleanupCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("cleanup exceeded the initialization deadline")
+	}
+}
+
+func TestStaleRuntimeRunProgramDoesNotRecreateContainer(t *testing.T) {
+	var requests atomic.Int32
+	cli, cleanup := newFakeDockerClient(t, func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		t.Errorf("stale runtime unexpectedly contacted Docker: %s %s", r.Method, r.URL.Path)
+	})
+	defer cleanup()
+
+	// The runtime belongs to a container that was already invalidated. A
+	// replacement has not been created yet; stale work must fail before it can
+	// issue a Docker request or recreate one behind the old workspace handle.
+	c := &CodeExecutor{client: cli, generation: 2}
+	runtime := &workspaceRuntime{ce: c, generation: 1}
+	_, err := runtime.RunProgram(context.Background(), codeexecutor.Workspace{Path: "/work"}, codeexecutor.RunProgramSpec{Cmd: "true"})
+	require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
+	assert.Zero(t, requests.Load())
+}
+
+func TestRegistryContainerRebuildHonorsCallerDeadline(t *testing.T) {
+	started := make(chan struct{})
+	finished := make(chan struct{})
+	cli, cleanup := newFakeDockerClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || !strings.Contains(r.URL.Path, "/images/json") {
+			t.Errorf("unexpected Docker request: %s %s", r.Method, r.URL.Path)
+			return
+		}
+		close(started)
+		<-r.Context().Done()
+		close(finished)
+	})
+	defer cleanup()
+	c := &CodeExecutor{client: cli, containerConfig: tcontainer.Config{Image: defaultImageTag}}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	_, err := codeexecutor.NewWorkspaceRegistry().Acquire(ctx, c, "deadline")
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("registry did not start container initialization")
+	}
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("container initialization did not observe the registry deadline")
+	}
 }
 
 func TestEngine_NonNil(t *testing.T) {
@@ -373,6 +638,7 @@ func TestEngine_NonNil(t *testing.T) {
 func TestWorkspaceWrappers_MinimalPaths(t *testing.T) {
 	c := &CodeExecutor{}
 	ctx := context.Background()
+	ws := codeexecutor.Workspace{ID: "id", Path: "/work"}
 
 	// CreateWorkspace should fail when executor is not ready.
 	_, err := c.CreateWorkspace(ctx, "id", codeexecutor.WorkspacePolicy{})
@@ -390,6 +656,20 @@ func TestWorkspaceWrappers_MinimalPaths(t *testing.T) {
 	err = c.PutDirectory(ctx, codeexecutor.Workspace{}, "", "to")
 	assert.Error(t, err)
 
+	// Forwarding wrappers must preserve runtime failures rather than hiding
+	// missing container state. These calls exercise the same lifecycle guard
+	// used by real workspace operations without needing a Docker daemon.
+	err = c.PutFiles(ctx, ws, []codeexecutor.PutFile{{Path: "note.txt", Content: []byte("note")}})
+	assert.Error(t, err)
+	err = c.StageDirectory(ctx, ws, filepath.Join(t.TempDir(), "missing"), "work", codeexecutor.StageOptions{})
+	assert.Error(t, err)
+	err = c.StageInputs(ctx, ws, []codeexecutor.InputSpec{{From: "host:///missing", To: "work/input"}})
+	assert.Error(t, err)
+	_, err = c.CollectOutputs(ctx, ws, codeexecutor.OutputSpec{Globs: []string{"**"}})
+	assert.Error(t, err)
+	_, err = c.Collect(ctx, ws, []string{"**"})
+	assert.Error(t, err)
+
 	// ExecuteInline should fail when executor is not ready.
 	_, err = c.ExecuteInline(ctx, "id", nil, time.Second)
 	assert.Error(t, err)
@@ -397,7 +677,7 @@ func TestWorkspaceWrappers_MinimalPaths(t *testing.T) {
 
 func TestWrappers_RunProgram_And_Collect(t *testing.T) {
 	const execID = "exec-wrap"
-	var startCalls int
+	var startCalls atomic.Int32
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost &&
@@ -412,12 +692,14 @@ func TestWrappers_RunProgram_And_Collect(t *testing.T) {
 			assert.True(t, ok)
 			conn, buf, err := hj.Hijack()
 			assert.NoError(t, err)
-			if startCalls == 0 {
+			call := startCalls.Add(1) - 1
+			if call == 0 {
 				writeHijackStream(t, conn, buf, "ok\n", "")
+			} else if call == 1 {
+				writeHijackStream(t, conn, buf, "abcdef", "")
 			} else {
 				writeHijackStream(t, conn, buf, "", "")
 			}
-			startCalls++
 		case r.Method == http.MethodGet &&
 			strings.Contains(r.URL.Path, "/exec/"+execID+"/json"):
 			w.Header().Set("Content-Type", "application/json")
@@ -444,6 +726,20 @@ func TestWrappers_RunProgram_And_Collect(t *testing.T) {
 	})
 	assert.NoError(t, err)
 	assert.Contains(t, res.Stdout, "ok")
+
+	// Bounded output is surfaced through structured truncation metadata rather
+	// than a sentinel string. Supplying stdin also exercises the attach writer
+	// close path used by interactive commands.
+	res, err = c.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+		Cmd:            "bash",
+		Args:           []string{"-lc", "echo abcdef"},
+		Stdin:          "input\n",
+		Timeout:        time.Second,
+		MaxOutputBytes: 2,
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, "ab", res.Stdout)
+	assert.True(t, res.StdoutTruncated)
 
 	// Collect with no patterns should return empty without copy out.
 	files, err := c.Collect(ctx, ws, nil)
@@ -1056,7 +1352,7 @@ func TestInitContainer_CreateError(t *testing.T) {
 		containerName: "test",
 	}
 
-	err := exec.initContainer()
+	err := exec.initContainer(context.Background())
 	assert.Error(t, err)
 	assert.True(t, createCalled)
 }
@@ -1074,6 +1370,8 @@ func TestInitContainer_StartError(t *testing.T) {
 		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/cid/start"):
 			startCalled = true
 			http.Error(w, "start fail", http.StatusInternalServerError)
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/containers/cid"):
+			w.WriteHeader(http.StatusNoContent)
 		default:
 			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
 			return
@@ -1092,9 +1390,10 @@ func TestInitContainer_StartError(t *testing.T) {
 		containerName: "test",
 	}
 
-	err := exec.initContainer()
+	err := exec.initContainer(context.Background())
 	assert.Error(t, err)
 	assert.True(t, startCalled)
+	assert.Nil(t, exec.container)
 }
 
 func TestInitContainer_WaitError(t *testing.T) {
@@ -1118,6 +1417,8 @@ func TestInitContainer_WaitError(t *testing.T) {
 			}
 			assert.Failf(t, "unexpected inspect call", "%d", inspectCalls)
 			return
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/containers/cid"):
+			w.WriteHeader(http.StatusNoContent)
 		default:
 			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
 			return
@@ -1136,9 +1437,10 @@ func TestInitContainer_WaitError(t *testing.T) {
 		containerName: "test",
 	}
 
-	err := exec.initContainer()
+	err := exec.initContainer(context.Background())
 	assert.Error(t, err)
 	assert.Equal(t, 1, inspectCalls)
+	assert.Nil(t, exec.container)
 }
 
 func TestInitContainer_InspectError(t *testing.T) {
@@ -1161,6 +1463,8 @@ func TestInitContainer_InspectError(t *testing.T) {
 				return
 			}
 			http.Error(w, "inspect fail", http.StatusInternalServerError)
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/containers/cid"):
+			w.WriteHeader(http.StatusNoContent)
 		default:
 			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
 			return
@@ -1179,9 +1483,10 @@ func TestInitContainer_InspectError(t *testing.T) {
 		containerName: "test",
 	}
 
-	err := exec.initContainer()
+	err := exec.initContainer(context.Background())
 	assert.Error(t, err)
 	assert.Equal(t, 2, inspectCalls)
+	assert.Nil(t, exec.container)
 }
 
 func TestInitContainer_NotRunning(t *testing.T) {
@@ -1205,6 +1510,8 @@ func TestInitContainer_NotRunning(t *testing.T) {
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"State":{"Running":false,"Status":"created","ExitCode":0}}`))
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/containers/cid"):
+			w.WriteHeader(http.StatusNoContent)
 		default:
 			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
 			return
@@ -1223,9 +1530,10 @@ func TestInitContainer_NotRunning(t *testing.T) {
 		containerName: "test",
 	}
 
-	err := exec.initContainer()
+	err := exec.initContainer(context.Background())
 	assert.Error(t, err)
 	assert.Equal(t, 2, inspectCalls)
+	assert.Nil(t, exec.container)
 }
 
 func TestInitContainer_VerifyError(t *testing.T) {
@@ -1252,6 +1560,8 @@ func TestInitContainer_VerifyError(t *testing.T) {
 		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/cid/exec"):
 			execCreateCalled = true
 			http.Error(w, "exec fail", http.StatusInternalServerError)
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/containers/cid"):
+			w.WriteHeader(http.StatusNoContent)
 		default:
 			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
 			return
@@ -1270,10 +1580,11 @@ func TestInitContainer_VerifyError(t *testing.T) {
 		containerName: "test",
 	}
 
-	err := exec.initContainer()
+	err := exec.initContainer(context.Background())
 	assert.Error(t, err)
 	assert.Equal(t, 2, inspectCalls)
 	assert.True(t, execCreateCalled)
+	assert.Nil(t, exec.container)
 }
 
 func TestInitContainer_Success(t *testing.T) {
@@ -1328,7 +1639,7 @@ func TestInitContainer_Success(t *testing.T) {
 		containerName: "test",
 	}
 
-	assert.NoError(t, exec.initContainer())
+	assert.NoError(t, exec.initContainer(context.Background()))
 	assert.NotNil(t, exec.container)
 	assert.Equal(t, "cid", exec.container.ID)
 }
@@ -1359,7 +1670,7 @@ func TestInitContainer_EnsureImageError(t *testing.T) {
 		containerName: "test",
 	}
 
-	err := exec.initContainer()
+	err := exec.initContainer(context.Background())
 	assert.Error(t, err)
 	assert.True(t, listCalled)
 }
@@ -1393,7 +1704,7 @@ func TestInitContainer_BuildError(t *testing.T) {
 	// Ensure Dockerfile exists to avoid context error.
 	assert.NoError(t, os.WriteFile(filepath.Join(exec.dockerFilePath, "Dockerfile"), []byte("FROM scratch\n"), 0o644))
 
-	err := exec.initContainer()
+	err := exec.initContainer(context.Background())
 	assert.Error(t, err)
 	assert.True(t, buildCalled)
 }
@@ -1450,7 +1761,7 @@ func TestCleanup_StopRemoveError(t *testing.T) {
 
 func TestInitContainerWithoutClient(t *testing.T) {
 	exec := &CodeExecutor{}
-	err := exec.initContainer()
+	err := exec.initContainer(context.Background())
 	assert.Error(t, err)
 }
 
@@ -1627,6 +1938,67 @@ func TestCleanupStopsAndRemovesContainer(t *testing.T) {
 	defer mu.Unlock()
 	assert.Equal(t, 1, stopCount)
 	assert.Equal(t, 1, removeCount)
+}
+
+func TestCodeExecutor_AbortContainerRemovesTimedOutContainer(t *testing.T) {
+	var killCount, removeCount int
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/test-id/kill"):
+			killCount++
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/containers/test-id"):
+			removeCount++
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+		}
+	}
+	cli, cleanup := newFakeDockerClient(t, handler)
+	defer cleanup()
+	exec := &CodeExecutor{client: cli, container: &tcontainer.Summary{ID: "test-id"}}
+
+	exec.abortContainer()
+
+	assert.Equal(t, 1, killCount)
+	assert.Equal(t, 1, removeCount)
+	assert.Nil(t, exec.container)
+	assert.Nil(t, exec.ws)
+}
+
+func TestCodeExecutor_CloseAndAbortSerializeLifecycle(t *testing.T) {
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/test-id/kill"):
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/test-id/stop"):
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/containers/test-id"):
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+		}
+	}
+	cli, cleanup := newFakeDockerClient(t, handler)
+	defer cleanup()
+	exec := &CodeExecutor{client: cli, container: &tcontainer.Summary{ID: "test-id"}}
+	start := make(chan struct{})
+	done := make(chan error, 2)
+	go func() {
+		<-start
+		exec.abortContainer()
+		done <- nil
+	}()
+	go func() {
+		<-start
+		done <- exec.Close()
+	}()
+	close(start)
+	for range 2 {
+		require.NoError(t, <-done)
+	}
+	_, _, err := exec.containerClient()
+	require.Error(t, err)
 }
 
 func TestContainerCodeExecutor_Basic(t *testing.T) {

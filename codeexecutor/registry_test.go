@@ -108,6 +108,18 @@ func (b *blockingWM) callCount() int {
 	return b.calls
 }
 
+type deadlineWM struct{ seen chan context.Context }
+
+func (w deadlineWM) CreateWorkspace(
+	ctx context.Context, _ string, _ WorkspacePolicy,
+) (Workspace, error) {
+	w.seen <- ctx
+	<-ctx.Done()
+	return Workspace{}, ctx.Err()
+}
+
+func (deadlineWM) Cleanup(context.Context, Workspace) error { return nil }
+
 func TestWorkspaceRegistry_Acquire_CreateIgnoresLeaderCancel(t *testing.T) {
 	r := NewWorkspaceRegistry()
 	wm := &blockingWM{
@@ -143,6 +155,26 @@ func TestWorkspaceRegistry_Acquire_CreateIgnoresLeaderCancel(t *testing.T) {
 	require.ErrorIs(t, <-leaderDone, context.Canceled)
 	require.NoError(t, <-followerDone)
 	require.Equal(t, 1, wm.callCount())
+}
+
+func TestWorkspaceRegistry_Acquire_CreatePreservesLeaderDeadline(t *testing.T) {
+	r := NewWorkspaceRegistry()
+	w := deadlineWM{seen: make(chan context.Context, 1)}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	_, err := r.Acquire(ctx, w, "deadline")
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	createCtx := <-w.seen
+	deadline, ok := createCtx.Deadline()
+	require.True(t, ok)
+	require.WithinDuration(t, time.Now(), deadline, time.Second)
+	select {
+	case <-createCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("shared creation context did not observe the leader deadline")
+	}
+	require.ErrorIs(t, createCtx.Err(), context.DeadlineExceeded)
 }
 
 func TestWorkspaceRegistry_Acquire_CanceledMissDoesNotCreate(t *testing.T) {

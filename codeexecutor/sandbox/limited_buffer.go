@@ -9,48 +9,41 @@
 
 package sandbox
 
+import "trpc.group/trpc-go/trpc-agent-go/codeexecutor/internal/outputlimit"
+
 // limitedBuffer records up to max bytes and discards the rest while still
-// reporting successful writes to avoid blocking child processes.
+// reporting successful writes to avoid blocking child processes. Positive
+// limits use the shared executor implementation; the zero-value behavior is
+// retained for this internal sandbox helper, where a disabled capture records
+// no output and marks any write as truncated.
 type limitedBuffer struct {
-	buf       []byte
-	max       int
-	truncated bool
+	buffer  outputlimit.Buffer
+	discard bool
+	wrote   bool
 }
 
 func newLimitedBuffer(max int) *limitedBuffer {
-	return &limitedBuffer{max: max}
+	if max <= 0 {
+		return &limitedBuffer{discard: true}
+	}
+	return &limitedBuffer{buffer: outputlimit.NewBuffer(max)}
 }
 
 func (b *limitedBuffer) Write(p []byte) (int, error) {
-	if b.max <= 0 {
-		b.truncated = b.truncated || len(p) > 0
+	if b.discard {
+		b.wrote = b.wrote || len(p) > 0
 		return len(p), nil
 	}
-	remaining := b.max - len(b.buf)
-	if remaining > 0 {
-		if len(p) <= remaining {
-			b.buf = append(b.buf, p...)
-		} else {
-			b.buf = append(b.buf, p[:remaining]...)
-			b.truncated = true
-		}
-	} else if len(p) > 0 {
-		b.truncated = true
-	}
-	return len(p), nil
+	return b.buffer.Write(p)
 }
 
 func (b *limitedBuffer) String() string {
 	if b == nil {
 		return ""
 	}
-	out := string(b.buf)
-	if b.truncated {
-		out += "\n[truncated]\n"
-	}
-	return out
+	return b.buffer.String()
 }
 
 func (b *limitedBuffer) Truncated() bool {
-	return b != nil && b.truncated
+	return b != nil && (b.wrote || b.buffer.Truncated())
 }

@@ -1,6 +1,5 @@
 //
-// Tencent is pleased to support the open source community by making
-// trpc-agent-go available.
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -23,9 +22,11 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	tcontainer "github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
 	archive "github.com/moby/go-archive"
 	"go.opentelemetry.io/otel/attribute"
@@ -33,6 +34,7 @@ import (
 	atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/internal/outputlimit"
 )
 
 const (
@@ -59,8 +61,52 @@ const (
 
 // workspaceRuntime provides workspace execution on Docker.
 type workspaceRuntime struct {
-	ce  *CodeExecutor
-	cfg runtimeConfig
+	ce         *CodeExecutor
+	cfg        runtimeConfig
+	mu         sync.Mutex
+	bound      bool
+	generation uint64
+}
+
+func (r *workspaceRuntime) containerClient() (*client.Client, string, error) {
+	if r == nil || r.ce == nil {
+		return nil, "", fmt.Errorf("container executor not ready")
+	}
+	r.mu.Lock()
+	generation := r.generation
+	r.mu.Unlock()
+	return r.ce.containerClientForGeneration(generation)
+}
+
+// prepareContainer initializes an unbound runtime once, but never lets a
+// runtime whose container generation was invalidated recreate a replacement.
+func (r *workspaceRuntime) prepareContainer(ctx context.Context) error {
+	if r == nil || r.ce == nil {
+		return fmt.Errorf("container executor not ready")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.ce.containerMu.Lock()
+	defer r.ce.containerMu.Unlock()
+	if r.ce.closed {
+		return fmt.Errorf("container executor is closed")
+	}
+	if (r.bound || r.generation != 0) && r.generation != r.ce.generation {
+		return fmt.Errorf("%w: container generation %d replaced runtime generation %d", codeexecutor.ErrWorkspaceStale, r.ce.generation, r.generation)
+	}
+	if r.ce.container != nil {
+		r.bound = true
+		return nil
+	}
+	if r.ce.client == nil {
+		return fmt.Errorf("container not initialized")
+	}
+	if err := r.ce.ensureContainerLocked(ctx); err != nil {
+		return err
+	}
+	r.generation = r.ce.generation
+	r.bound = true
+	return nil
 }
 
 type runtimeConfig struct {
@@ -92,7 +138,7 @@ func newWorkspaceRuntime(c *CodeExecutor) (*workspaceRuntime, error) {
 		)
 		cfg.autoMapInputs = c.autoInputs
 	}
-	return &workspaceRuntime{ce: c, cfg: cfg}, nil
+	return &workspaceRuntime{ce: c, cfg: cfg, bound: c.container != nil, generation: c.generation}, nil
 }
 
 // findBindSource returns the host path whose bind dest equals dest.
@@ -152,9 +198,9 @@ func (r *workspaceRuntime) CreateWorkspace(
 	span.SetAttributes(attribute.String("exec_id", execID))
 	defer span.End()
 	_ = pol
-	if r.ce == nil || r.ce.client == nil || r.ce.container == nil {
+	if _, _, err := r.containerClient(); err != nil {
 		return codeexecutor.Workspace{},
-			fmt.Errorf("container executor not ready")
+			err
 	}
 	safe := sanitize(execID)
 	// Make workspace path unique to avoid collisions.
@@ -242,8 +288,12 @@ func (r *workspaceRuntime) PutFiles(
 		return err
 	}
 	defer tr.Close()
-	err = r.ce.client.CopyToContainer(
-		ctx, r.ce.container.ID, ws.Path, tr,
+	client, containerID, err := r.containerClient()
+	if err != nil {
+		return err
+	}
+	err = client.CopyToContainer(
+		ctx, containerID, ws.Path, tr,
 		tcontainer.CopyToContainerOptions{},
 	)
 	if err != nil {
@@ -319,8 +369,12 @@ func (r *workspaceRuntime) PutDirectory(
 		span.SetStatus(codes.Error, err.Error())
 		return err
 	}
-	err = r.ce.client.CopyToContainer(
-		ctx, r.ce.container.ID, dest, rd,
+	client, containerID, err := r.containerClient()
+	if err != nil {
+		return err
+	}
+	err = client.CopyToContainer(
+		ctx, containerID, dest, rd,
 		tcontainer.CopyToContainerOptions{},
 	)
 	if err != nil {
@@ -408,17 +462,28 @@ func (r *workspaceRuntime) RunProgram(
 	ws codeexecutor.Workspace,
 	spec codeexecutor.RunProgramSpec,
 ) (codeexecutor.RunResult, error) {
-	_, span := atrace.Tracer.Start(ctx,
+	t := spec.Timeout
+	if t <= 0 {
+		t = 10 * time.Second
+	}
+	runCtx, cancel := context.WithTimeout(ctx, t)
+	defer cancel()
+	// This runtime is bound to the generation that created its workspace. It
+	// must not recreate a container after a timeout invalidates that generation:
+	// the caller must reacquire and provision a new workspace through the
+	// registry instead. An unbound, newly constructed runtime may perform its
+	// first initialization within the command deadline; after it has a
+	// generation, an invalidated runtime is rejected rather than recreated.
+	if err := r.prepareContainer(runCtx); err != nil {
+		return codeexecutor.RunResult{}, err
+	}
+	_, span := atrace.Tracer.Start(runCtx,
 		codeexecutor.SpanWorkspaceRun)
 	span.SetAttributes(
 		attribute.String(codeexecutor.AttrCmd, spec.Cmd),
 		attribute.String(codeexecutor.AttrCwd, spec.Cwd),
 	)
 	defer span.End()
-	t := spec.Timeout
-	if t <= 0 {
-		t = 10 * time.Second
-	}
 	cwd := ws.Path
 	if spec.Cwd != "" {
 		cwd = path.Join(ws.Path, filepath.ToSlash(spec.Cwd))
@@ -469,19 +534,22 @@ func (r *workspaceRuntime) RunProgram(
 	if spec.CleanEnv {
 		execEnv = cleanWrapperEnv()
 	}
-	out, errOut, code, timed, err := r.execCmdWithStdin(
-		ctx,
+	out, errOut, code, timed, stdoutCut, stderrCut, err := r.execCmdWithStdin(
+		runCtx,
 		argv,
 		t,
 		spec.Stdin,
 		execEnv,
+		spec.MaxOutputBytes,
 	)
 	res := codeexecutor.RunResult{
-		Stdout:   out,
-		Stderr:   errOut,
-		ExitCode: code,
-		Duration: t,
-		TimedOut: timed,
+		Stdout:          out,
+		Stderr:          errOut,
+		ExitCode:        code,
+		Duration:        t,
+		TimedOut:        timed,
+		StdoutTruncated: stdoutCut,
+		StderrTruncated: stderrCut,
 	}
 	span.SetAttributes(
 		attribute.Int(codeexecutor.AttrExitCode, res.ExitCode),
@@ -583,8 +651,8 @@ func (r *workspaceRuntime) stageInputsLocked(
 	ws codeexecutor.Workspace,
 	specs []codeexecutor.InputSpec,
 ) error {
-	if r.ce == nil || r.ce.client == nil || r.ce.container == nil {
-		return fmt.Errorf("container executor not ready")
+	if _, _, err := r.containerClient(); err != nil {
+		return err
 	}
 	md, err := r.loadWorkspaceMetadata(ctx, ws)
 	if err != nil {
@@ -1062,8 +1130,12 @@ func (r *workspaceRuntime) copyBytesTo(
 	}
 	// Copy to parent dir.
 	parent := path.Dir(dest)
-	return r.ce.client.CopyToContainer(
-		ctx, r.ce.container.ID, parent,
+	client, containerID, err := r.containerClient()
+	if err != nil {
+		return err
+	}
+	return client.CopyToContainer(
+		ctx, containerID, parent,
 		io.NopCloser(bytes.NewReader(buf.Bytes())),
 		tcontainer.CopyToContainerOptions{},
 	)
@@ -1156,7 +1228,10 @@ func (r *workspaceRuntime) execCmd(
 	argv []string,
 	timeout time.Duration,
 ) (string, string, int, bool, error) {
-	return r.execCmdWithStdin(ctx, argv, timeout, "", nil)
+	out, errOut, code, timed, _, _, err := r.execCmdWithStdin(
+		ctx, argv, timeout, "", nil, 0,
+	)
+	return out, errOut, code, timed, err
 }
 
 // execCmdWithStdin runs argv in the container. execEnv, when
@@ -1171,7 +1246,8 @@ func (r *workspaceRuntime) execCmdWithStdin(
 	timeout time.Duration,
 	stdin string,
 	execEnv []string,
-) (string, string, int, bool, error) {
+	maxOutputBytes int,
+) (string, string, int, bool, bool, bool, error) {
 	tctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	ec := tcontainer.ExecOptions{
@@ -1181,17 +1257,21 @@ func (r *workspaceRuntime) execCmdWithStdin(
 		AttachStderr: true,
 		AttachStdin:  stdin != "",
 	}
-	ex, err := r.ce.client.ContainerExecCreate(
-		tctx, r.ce.container.ID, ec,
+	client, containerID, err := r.containerClient()
+	if err != nil {
+		return "", "", 0, false, false, false, err
+	}
+	ex, err := client.ContainerExecCreate(
+		tctx, containerID, ec,
 	)
 	if err != nil {
-		return "", "", 0, false, err
+		return "", "", 0, false, false, false, err
 	}
-	hj, err := r.ce.client.ContainerExecAttach(
+	hj, err := client.ContainerExecAttach(
 		tctx, ex.ID, tcontainer.ExecStartOptions{},
 	)
 	if err != nil {
-		return "", "", 0, false, err
+		return "", "", 0, false, false, false, err
 	}
 	defer hj.Close()
 
@@ -1207,23 +1287,52 @@ func (r *workspaceRuntime) execCmdWithStdin(
 		}()
 	}
 
-	var stdout, stderr bytes.Buffer
-	_, err = stdcopy.StdCopy(&stdout, &stderr, hj.Reader)
+	stdout := outputlimit.NewBuffer(maxOutputBytes)
+	stderr := outputlimit.NewBuffer(maxOutputBytes)
+	copyDone := make(chan error, 1)
+	go func() {
+		_, copyErr := stdcopy.StdCopy(&stdout, &stderr, hj.Reader)
+		copyDone <- copyErr
+	}()
+	timed := false
+	select {
+	case err = <-copyDone:
+	case <-tctx.Done():
+		timed = errors.Is(tctx.Err(), context.DeadlineExceeded)
+		// The Docker attach stream is hijacked, so its Read is not governed by
+		// the request context. Closing it releases StdCopy promptly; killing the
+		// container prevents the attached exec from continuing in the background.
+		hj.Close()
+		<-copyDone
+		r.ce.abortContainer()
+		err = tctx.Err()
+	}
 	if stdin != "" {
-		if writeErr := <-writeDone; err == nil && writeErr != nil {
-			err = writeErr
+		select {
+		case writeErr := <-writeDone:
+			if err == nil && writeErr != nil {
+				err = writeErr
+			}
+		case <-tctx.Done():
+			if err == nil {
+				timed = errors.Is(tctx.Err(), context.DeadlineExceeded)
+				err = tctx.Err()
+			}
 		}
 	}
 	if err != nil {
-		return "", "", 0, false, err
+		return stdout.String(), stderr.String(), 0, timed,
+			stdout.Truncated(), stderr.Truncated(), err
 	}
-	insp, err := r.ce.client.ContainerExecInspect(tctx, ex.ID)
+	insp, err := client.ContainerExecInspect(tctx, ex.ID)
 	if err != nil {
-		timed := errors.Is(tctx.Err(), context.DeadlineExceeded)
-		return stdout.String(), stderr.String(), 0, timed, err
+		timed = errors.Is(tctx.Err(), context.DeadlineExceeded)
+		return stdout.String(), stderr.String(), 0, timed,
+			stdout.Truncated(), stderr.Truncated(), err
 	}
-	timed := errors.Is(tctx.Err(), context.DeadlineExceeded)
-	return stdout.String(), stderr.String(), insp.ExitCode, timed, nil
+	timed = errors.Is(tctx.Err(), context.DeadlineExceeded)
+	return stdout.String(), stderr.String(), insp.ExitCode, timed,
+		stdout.Truncated(), stderr.Truncated(), nil
 }
 
 func sanitize(s string) string {
@@ -1334,8 +1443,12 @@ func (r *workspaceRuntime) copyFileOut(
 	ctx context.Context,
 	fullPath string,
 ) ([]byte, int64, string, string, error) {
-	rc, _, err := r.ce.client.CopyFromContainer(
-		ctx, r.ce.container.ID, fullPath,
+	client, containerID, err := r.containerClient()
+	if err != nil {
+		return nil, 0, "", "", err
+	}
+	rc, _, err := client.CopyFromContainer(
+		ctx, containerID, fullPath,
 	)
 	if err != nil {
 		return nil, 0, "", "", err

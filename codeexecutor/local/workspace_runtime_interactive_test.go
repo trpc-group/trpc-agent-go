@@ -1,6 +1,5 @@
 //
-// Tencent is pleased to support the open source community by making
-// trpc-agent-go available.
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -22,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/internal/outputlimit"
 )
 
 func TestInteractiveSession_PollLogAndTrim(t *testing.T) {
@@ -124,6 +124,19 @@ func TestRuntime_StartProgramInteractivePipes(t *testing.T) {
 			strings.Contains(result.Stderr, "err:hello")
 	}, 5*time.Second, 50*time.Millisecond)
 	require.NoError(t, proc.Close())
+}
+
+func TestRuntime_StartProgramInteractiveBoundsRetainedOutput(t *testing.T) {
+	sess := newInteractiveSession("bounded", "test", 20)
+	sess.stdout = outputlimit.NewBuffer(4)
+	sess.stderr = outputlimit.NewBuffer(4)
+	sess.appendOutput("123456", "stdout")
+	sess.appendOutput("abcdef", "stderr")
+	result := sess.RunResult()
+	require.Equal(t, "1234", result.Stdout)
+	require.Equal(t, "abcd", result.Stderr)
+	require.True(t, result.StdoutTruncated)
+	require.True(t, result.StderrTruncated)
 }
 
 func TestRuntime_StartProgramInteractiveTTY(t *testing.T) {

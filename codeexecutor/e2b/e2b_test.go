@@ -216,6 +216,12 @@ func TestCloseWithoutSandbox(t *testing.T) {
 	assert.NoError(t, c.Close())
 }
 
+func TestNewWithContextRejectsNil(t *testing.T) {
+	if _, err := NewWithContext(nil); err == nil {
+		t.Fatal("nil context was accepted")
+	}
+}
+
 // TestNewMissingAPIKey verifies New surfaces authentication errors when no
 // API key is available. The test ensures E2B_API_KEY is unset for the run.
 func TestNewMissingAPIKey(t *testing.T) {

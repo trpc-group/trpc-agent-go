@@ -16,7 +16,9 @@ import (
 )
 
 const (
-	defaultOutputMaxBytes = 1 << 20
+	// DefaultOutputMaxBytes is the per-stream capture limit enforced by the
+	// sandbox runtime when no more restrictive RunProgramSpec limit is set.
+	DefaultOutputMaxBytes = 1 << 20
 	defaultRunTimeout     = 30 * time.Second
 )
 
@@ -63,7 +65,9 @@ func WithWorkspaceRoot(root string) Option {
 	}
 }
 
-// WithOutputMaxBytes limits stdout/stderr capture per stream.
+// WithOutputMaxBytes limits stdout/stderr capture per stream. Non-positive
+// values retain DefaultOutputMaxBytes. A positive RunProgramSpec.MaxOutputBytes
+// can only lower this limit for an individual program run.
 func WithOutputMaxBytes(n int) Option {
 	return func(r *Runtime) {
 		if n > 0 {

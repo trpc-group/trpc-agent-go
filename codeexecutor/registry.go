@@ -108,10 +108,13 @@ func (r *WorkspaceRegistry) acquire(
 		}
 		if !cached {
 			call := r.newCreateCallLocked(id)
-			createCtx := context.WithoutCancel(ctx)
+			createCtx, cancelCreate := workspaceCreateContext(ctx)
 			r.mu.Unlock()
 
-			go r.createWorkspace(createCtx, m, provider, id, call)
+			go func() {
+				defer cancelCreate()
+				r.createWorkspace(createCtx, m, provider, id, call)
+			}()
 			return waitWorkspaceCreate(ctx, call)
 		}
 		r.mu.Unlock()
@@ -139,12 +142,27 @@ func (r *WorkspaceRegistry) acquire(
 			return entry, nil
 		}
 		call := r.newCreateCallLocked(id)
-		createCtx := context.WithoutCancel(ctx)
+		createCtx, cancelCreate := workspaceCreateContext(ctx)
 		r.mu.Unlock()
 
-		go r.createWorkspace(createCtx, m, provider, id, call)
+		go func() {
+			defer cancelCreate()
+			r.createWorkspace(createCtx, m, provider, id, call)
+		}()
 		return waitWorkspaceCreate(ctx, call)
 	}
+}
+
+// workspaceCreateContext decouples shared workspace creation from the leader's
+// cancellation while retaining a caller deadline. A canceled leader therefore
+// cannot abandon a creation already awaited by other callers, but no provider
+// can continue past a deadline supplied for that shared operation.
+func workspaceCreateContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	shared := context.WithoutCancel(ctx)
+	if deadline, ok := ctx.Deadline(); ok {
+		return context.WithDeadline(shared, deadline)
+	}
+	return shared, func() {}
 }
 
 func (r *WorkspaceRegistry) newCreateCallLocked(id string) *workspaceCreateCall {

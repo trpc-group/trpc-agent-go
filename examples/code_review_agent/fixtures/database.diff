@@ -1,0 +1,8 @@
+diff --git a/store/order.go b/store/order.go
+--- a/store/order.go
++++ b/store/order.go
+@@ -1,2 +1,5 @@
+ package store
++tx, err := db.BeginTx(ctx, nil)
++if err != nil { return err }
++return tx.Commit()

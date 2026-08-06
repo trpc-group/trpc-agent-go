@@ -1,6 +1,5 @@
 //
-// Tencent is pleased to support the open source community by making
-// trpc-agent-go available.
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -50,8 +49,15 @@ func (r *Runtime) RunProgram(
 	if cleanup != nil {
 		defer cleanup()
 	}
-	stdout := newLimitedBuffer(r.outputMaxBytes)
-	stderr := newLimitedBuffer(r.outputMaxBytes)
+	outputLimit := r.outputMaxBytes
+	if outputLimit <= 0 {
+		outputLimit = DefaultOutputMaxBytes
+	}
+	if spec.MaxOutputBytes > 0 && spec.MaxOutputBytes < outputLimit {
+		outputLimit = spec.MaxOutputBytes
+	}
+	stdout := newLimitedBuffer(outputLimit)
+	stderr := newLimitedBuffer(outputLimit)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	if spec.Stdin != "" {
@@ -79,11 +85,13 @@ func (r *Runtime) RunProgram(
 		return codeexecutor.RunResult{}, err
 	}
 	result := codeexecutor.RunResult{
-		Stdout:   stdout.String(),
-		Stderr:   stderr.String(),
-		ExitCode: exitCode,
-		Duration: duration,
-		TimedOut: timedOut,
+		Stdout:          stdout.String(),
+		Stderr:          stderr.String(),
+		ExitCode:        exitCode,
+		Duration:        duration,
+		TimedOut:        timedOut,
+		StdoutTruncated: stdout.Truncated(),
+		StderrTruncated: stderr.Truncated(),
 	}
 	if timedOut {
 		return result, &sandboxError{

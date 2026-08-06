@@ -1,6 +1,5 @@
 //
-// Tencent is pleased to support the open source community by making
-// trpc-agent-go available.
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights
 // reserved.
@@ -16,6 +15,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -283,15 +283,17 @@ func TestWorkspaceRuntime_PutFilesAndRun(t *testing.T) {
 	rr, err := rt.RunProgram(
 		context.Background(), ws,
 		codeexecutor.RunProgramSpec{
-			Cmd:     "bash",
-			Args:    []string{"-lc", "echo ok"},
-			Env:     map[string]string{"FOO": "BAR"},
-			Timeout: time.Duration(waitShortSec) * time.Second,
+			Cmd:            "bash",
+			Args:           []string{"-lc", "echo ok"},
+			Env:            map[string]string{"FOO": "BAR"},
+			Timeout:        time.Duration(waitShortSec) * time.Second,
+			MaxOutputBytes: 4,
 		},
 	)
 	require.NoError(t, err)
 	require.Equal(t, 0, rr.ExitCode)
-	require.Contains(t, rr.Stdout, "run-out")
+	require.Equal(t, "run-", rr.Stdout)
+	require.True(t, rr.StdoutTruncated)
 }
 
 func TestWorkspaceRuntime_RunProgram_InsertsWorkspaceEnv(t *testing.T) {
@@ -1414,6 +1416,98 @@ func TestWorkspaceRuntime_RunProgram_TimedOut(t *testing.T) {
 	)
 	require.Error(t, err)
 	require.True(t, res.TimedOut)
+}
+
+func TestWorkspaceRuntime_RunProgram_BoundsContainerSetup(t *testing.T) {
+	setupStarted := make(chan struct{})
+	setupCanceled := make(chan struct{})
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || !strings.Contains(r.URL.Path, "/images/json") {
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+		close(setupStarted)
+		select {
+		case <-r.Context().Done():
+			close(setupCanceled)
+		case <-time.After(time.Second):
+			t.Error("container setup request was not canceled")
+		}
+	}
+	cli, cleanup := fakeDocker(t, handler)
+	defer cleanup()
+	rt := &workspaceRuntime{
+		ce:  &CodeExecutor{client: cli},
+		cfg: runtimeConfig{runContainerBase: testRunBase},
+	}
+
+	started := time.Now()
+	_, err := rt.RunProgram(context.Background(), codeexecutor.Workspace{ID: "setup-timeout", Path: path.Join(testRunBase, "setup-timeout")}, codeexecutor.RunProgramSpec{Cmd: "true", Timeout: 20 * time.Millisecond})
+	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("setup timeout error = %v, want context deadline exceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("container setup returned too late: %s", elapsed)
+	}
+	select {
+	case <-setupStarted:
+	case <-time.After(time.Second):
+		t.Fatal("container setup did not start")
+	}
+	select {
+	case <-setupCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("container setup did not observe cancellation")
+	}
+}
+
+func TestWorkspaceRuntime_RunProgram_InterruptsBlockedAttachOnTimeout(t *testing.T) {
+	killed := make(chan struct{}, 1)
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/"+testCID+"/exec"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"` + testExec1 + `"}`))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/exec/"+testExec1+"/start"):
+			hijacker, ok := w.(http.Hijacker)
+			if !ok {
+				t.Fatal("response writer cannot hijack")
+			}
+			conn, buf, err := hijacker.Hijack()
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _ = buf.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: tcp\r\nContent-Type: application/vnd.docker.raw-stream\r\n\r\n")
+			_ = buf.Flush()
+			_, _ = io.Copy(io.Discard, conn)
+			_ = conn.Close()
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/"+testCID+"/kill"):
+			select {
+			case killed <- struct{}{}:
+			default:
+			}
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/containers/"+testCID):
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}
+	cli, cleanup := fakeDocker(t, handler)
+	defer cleanup()
+	rt := &workspaceRuntime{ce: &CodeExecutor{client: cli, container: &tcontainer.Summary{ID: testCID}}, cfg: runtimeConfig{runContainerBase: testRunBase}}
+	started := time.Now()
+	result, err := rt.RunProgram(context.Background(), codeexecutor.Workspace{ID: "timeout", Path: path.Join(testRunBase, "timeout")}, codeexecutor.RunProgramSpec{Cmd: "bash", Args: []string{"-lc", "sleep 60"}, Timeout: 20 * time.Millisecond})
+	if err == nil || !result.TimedOut {
+		t.Fatalf("blocked attach returned result=%+v err=%v", result, err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("blocked attach returned too late: %s", elapsed)
+	}
+	select {
+	case <-killed:
+	case <-time.After(time.Second):
+		t.Fatal("timeout did not terminate the container")
+	}
 }
 
 func TestWorkspaceRuntime_RunProgram_NoDupWorkspaceEnv(t *testing.T) {

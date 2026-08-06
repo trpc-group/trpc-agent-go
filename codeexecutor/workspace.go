@@ -179,6 +179,13 @@ type RunProgramSpec struct {
 	Stdin    string
 	Timeout  time.Duration
 	Limits   ResourceLimits
+	// MaxOutputBytes requests an upper bound on bytes retained separately for
+	// stdout and stderr. A non-positive value preserves the historical
+	// unbounded behavior. A runtime may enforce a lower policy limit.
+	// Truncation is reported by
+	// RunResult's truncation fields; runtimes do not append marker text beyond
+	// the effective limit.
+	MaxOutputBytes int
 }
 
 // RunResult captures a single program run result.
@@ -188,6 +195,10 @@ type RunResult struct {
 	ExitCode int
 	Duration time.Duration
 	TimedOut bool
+	// StdoutTruncated reports whether the runtime truncated stdout.
+	StdoutTruncated bool
+	// StderrTruncated reports whether the runtime truncated stderr.
+	StderrTruncated bool
 }
 
 // StageOptions controls directory staging behavior.
