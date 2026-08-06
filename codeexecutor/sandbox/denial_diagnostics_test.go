@@ -236,6 +236,43 @@ func TestRunProgramWithDiagnosticsTimeoutStillDeliversResult(t *testing.T) {
 	}
 }
 
+func TestCollectRunDiagnosticsDisabledReturnsZeroValue(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	got := rt.collectRunDiagnostics(
+		context.Background(),
+		sandboxDenialRun{},
+		"/bin/cat",
+		true,
+	)
+	if len(got.Denials) != 0 || got.Truncated {
+		t.Fatalf("disabled collect = %#v, want zero value", got)
+	}
+}
+
+func TestCollectRunDiagnosticsEnabledPaths(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	run := sandboxDenialRun{enabled: true, runTag: "coverage-tag"}
+
+	got := rt.collectRunDiagnostics(
+		context.Background(),
+		run,
+		"/bin/cat",
+		false,
+	)
+	if len(got.Denials) != 0 || got.Truncated {
+		t.Fatalf("non-timeout collect = %#v, want zero value", got)
+	}
+
+	// A canceled runCtx must not block timeout collection: that path installs
+	// its own bounded Background context before calling collectSandboxDenials.
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	got = rt.collectRunDiagnostics(canceled, run, "/bin/cat", true)
+	if len(got.Denials) != 0 || got.Truncated {
+		t.Fatalf("timeout collect = %#v, want zero value", got)
+	}
+}
+
 func readDiagnostics(t *testing.T, ch <-chan Diagnostics) Diagnostics {
 	t.Helper()
 	select {
