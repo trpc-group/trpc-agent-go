@@ -1,0 +1,873 @@
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+
+package replaytest
+
+import (
+	"context"
+	"fmt"
+	"sort"
+	"sync"
+	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/session"
+)
+
+// Harness runs replay cases across named backends.
+type Harness struct {
+	backends   []NamedBackend
+	opts       HarnessOpts
+	normalizer *Normalizer
+	comparator *Comparator
+}
+
+// NewHarness creates a replay harness.
+func NewHarness(opts HarnessOpts) *Harness {
+	d := DefaultHarnessOpts()
+	if opts.ComparisonMode == "" {
+		opts.ComparisonMode = d.ComparisonMode
+	}
+	if opts.Mode == "" {
+		opts.Mode = d.Mode
+	}
+	if opts.ComparisonMode == ComparisonReference && opts.ReferenceBackend == "" {
+		opts.ReferenceBackend = d.ReferenceBackend
+	}
+	return &Harness{
+		opts:       opts,
+		normalizer: NewNormalizer(),
+		comparator: NewComparator(),
+	}
+}
+
+// AddBackend registers a backend for replay execution.
+func (h *Harness) AddBackend(b NamedBackend) {
+	if b.Name == "" {
+		b.Name = b.Profile.Name
+	}
+	h.backends = append(h.backends, b)
+}
+
+// Run executes cases and returns an aggregated report.
+func (h *Harness) Run(ctx context.Context, cases []ReplayCase) (*Report, error) {
+	if err := validateComparisonMode(h.opts.ComparisonMode); err != nil {
+		return nil, err
+	}
+	if err := validateBackends(h.backends); err != nil {
+		return nil, err
+	}
+	if err := validateReferenceBackend(h.opts, h.backends); err != nil {
+		return nil, err
+	}
+	for _, tc := range cases {
+		if err := validateAllowedDiffs(tc); err != nil {
+			return nil, err
+		}
+	}
+	results := make([]CaseResult, 0, len(cases))
+	var flat []Diff
+	for _, tc := range cases {
+		cr, err := h.runCase(ctx, tc)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, cr)
+		flat = append(flat, cr.Diffs...)
+	}
+	return BuildReport(results, flat, h.backendNames(), h.opts), nil
+}
+
+func (h *Harness) backendNames() []string {
+	names := make([]string, 0, len(h.backends))
+	for _, b := range h.backends {
+		names = append(names, b.Name)
+	}
+	return names
+}
+
+func (h *Harness) runCase(ctx context.Context, tc ReplayCase) (CaseResult, error) {
+	cr := CaseResult{CaseName: tc.Name, Status: StatusPassed}
+	if err := h.validateReferenceCaseCaps(tc); err != nil {
+		return cr, err
+	}
+	snaps, profiles, err := h.collectCaseSnapshots(ctx, tc, &cr)
+	if err != nil {
+		return cr, err
+	}
+	if len(snaps) == 0 {
+		if cr.Status == "" {
+			cr.Status = StatusSkipped
+		}
+		return cr, nil
+	}
+	if len(snaps) == 1 {
+		applySingleBackendStatus(&cr)
+		return cr, nil
+	}
+	pairs, err := buildComparisonPairs(h.opts.ComparisonMode, h.opts.ReferenceBackend, snaps)
+	if err != nil {
+		return cr, err
+	}
+	diffs := h.compareSnapshotPairs(tc, snaps, profiles, pairs)
+	finalizeCaseStatus(&cr, diffs)
+	return cr, nil
+}
+
+func (h *Harness) validateReferenceCaseCaps(tc ReplayCase) error {
+	if h.opts.ComparisonMode == ComparisonAllPairs || len(h.backends) < 2 {
+		return nil
+	}
+	ref := h.opts.ReferenceBackend
+	if ref == "" {
+		ref = DefaultHarnessOpts().ReferenceBackend
+	}
+	for _, b := range h.backends {
+		name := b.Name
+		if name == "" {
+			name = b.Profile.Name
+		}
+		if name != ref {
+			continue
+		}
+		missing := MissingCaps(tc.RequiredCaps, b.Profile)
+		if tc.RequiredCaps.NeedsMemory && b.MemoryService == nil && !containsString(missing, "memory") {
+			missing = append(missing, "memory")
+		}
+		if len(missing) > 0 {
+			return fmt.Errorf("reference backend %q unsupported for case %q: %v", ref, tc.Name, missing)
+		}
+		return nil
+	}
+	// validateReferenceBackend catches this at Run entry; direct runCase callers
+	// can still exercise skip/fallback helpers without registering the default ref.
+	return nil
+}
+
+func containsString(values []string, want string) bool {
+	for _, v := range values {
+		if v == want {
+			return true
+		}
+	}
+	return false
+}
+
+func validateComparisonMode(mode ComparisonMode) error {
+	switch mode {
+	case ComparisonReference, ComparisonAllPairs:
+		return nil
+	default:
+		return fmt.Errorf("unknown comparison mode %q (want %q or %q)", mode, ComparisonReference, ComparisonAllPairs)
+	}
+}
+
+func validateBackends(backends []NamedBackend) error {
+	if len(backends) == 0 {
+		// Empty config would leave every CaseResult at the default "passed"
+		// without executing steps or comparing snapshots.
+		return fmt.Errorf("no backends registered")
+	}
+	seen := map[string]struct{}{}
+	for i, b := range backends {
+		name := b.Name
+		if name == "" {
+			name = b.Profile.Name
+		}
+		if name == "" {
+			return fmt.Errorf("backend[%d]: empty name", i)
+		}
+		if _, ok := seen[name]; ok {
+			return fmt.Errorf("duplicate backend name %q", name)
+		}
+		// SessionService is required for every backend; a nil service panics in
+		// ensureSession. MemoryService stays optional until a memory step runs.
+		if b.SessionService == nil {
+			return fmt.Errorf("backend %q: SessionService is nil", name)
+		}
+		seen[name] = struct{}{}
+	}
+	return nil
+}
+
+// validateReferenceBackend ensures reference mode names a registered backend.
+func validateReferenceBackend(opts HarnessOpts, backends []NamedBackend) error {
+	if opts.ComparisonMode == ComparisonAllPairs {
+		return nil
+	}
+	ref := opts.ReferenceBackend
+	if ref == "" {
+		ref = DefaultHarnessOpts().ReferenceBackend
+	}
+	for _, b := range backends {
+		name := b.Name
+		if name == "" {
+			name = b.Profile.Name
+		}
+		if name == ref {
+			return nil
+		}
+	}
+	return fmt.Errorf("reference backend %q is not registered", ref)
+}
+
+func validateAllowedDiffs(tc ReplayCase) error {
+
+	for i, rule := range tc.AllowedDiffs {
+		switch rule.Rule {
+		case RuleIgnore, RuleWithinDelta, RuleNotEmpty, RuleSameType:
+			// ok
+		case "":
+			return fmt.Errorf("case %q AllowedDiffs[%d]: empty rule is not allowed; use %q explicitly", tc.Name, i, RuleIgnore)
+		default:
+			return fmt.Errorf("case %q AllowedDiffs[%d]: unknown rule %q", tc.Name, i, rule.Rule)
+		}
+	}
+	return nil
+}
+
+func hasErrorDiff(diffs []Diff) bool {
+	for _, d := range diffs {
+		if !d.Allowed {
+			return true
+		}
+	}
+	return false
+}
+
+func executeCase(ctx context.Context, tc ReplayCase, backend NamedBackend) (*Snapshot, error) {
+	ex := &caseExecutor{
+		backend:  backend,
+		sessions: map[session.Key]*session.Session{},
+		inFlight: map[session.Key]*sessionInit{},
+		keyMu:    map[session.Key]*sync.Mutex{},
+		snapshot: &Snapshot{Backend: backend.Name},
+	}
+	for _, step := range tc.Steps {
+		if err := ex.execute(ctx, step); err != nil {
+			return nil, fmt.Errorf("%s %s: %w", tc.Name, step.Key(), err)
+		}
+	}
+	if ex.getSnapshotSession() == nil {
+		for i, key := range ex.sessionKeys() {
+			if err := ex.captureSessionWithPrimary(ctx, key, i == 0); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return ex.snapshot, nil
+}
+
+// caseExecutor runs steps. sessions/snapshot are shared across ParallelGroupStep
+// workers and must only be accessed under mu (except the backend itself).
+type caseExecutor struct {
+	backend  NamedBackend
+	sessions map[session.Key]*session.Session
+	inFlight map[session.Key]*sessionInit
+	keyMu    map[session.Key]*sync.Mutex // serializes mutating ops per session key
+	snapshot *Snapshot
+	mu       sync.Mutex
+}
+
+// sessionInit coordinates a single Get/Create for one session key.
+type sessionInit struct {
+	done chan struct{}
+	sess *session.Session
+	err  error
+}
+
+func (e *caseExecutor) execute(ctx context.Context, step Step) error {
+	switch s := step.(type) {
+	case AppendEventStep:
+		return e.appendEvent(ctx, s)
+	case UpdateStateStep:
+		return e.updateState(ctx, s)
+	case AddMemoryStep:
+		return e.addMemory(ctx, s)
+	case UpdateMemoryStep:
+		return e.updateMemory(ctx, s)
+	case DeleteMemoryStep:
+		return e.deleteMemory(ctx, s)
+	case CaptureMemoryStep:
+		return e.captureMemory(ctx, s)
+	case CreateSummaryStep:
+		return e.createSummary(ctx, s)
+	case WaitSummaryStep:
+		return e.waitSummary(ctx, s)
+	case AppendTrackStep:
+		return e.appendTrack(ctx, s)
+	case GetSessionStep:
+		return e.getSession(ctx, s)
+	case ListAppStatesStep:
+		return e.listAppStates(ctx, s)
+	case ListUserStatesStep:
+		return e.listUserStates(ctx, s)
+	case ListUserSessionsStep:
+		return e.listUserSessions(ctx, s)
+	case ReloadSessionStep:
+		return e.reloadSession(ctx, s)
+	case ParallelGroupStep:
+		return e.parallelGroup(ctx, s)
+	default:
+		return fmt.Errorf("unknown step type %T", step)
+	}
+}
+
+func (e *caseExecutor) sessionKeys() []session.Key {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	keys := make([]session.Key, 0, len(e.sessions))
+	for k := range e.sessions {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].AppName != keys[j].AppName {
+			return keys[i].AppName < keys[j].AppName
+		}
+		if keys[i].UserID != keys[j].UserID {
+			return keys[i].UserID < keys[j].UserID
+		}
+		return keys[i].SessionID < keys[j].SessionID
+	})
+	return keys
+}
+
+func (e *caseExecutor) getSnapshotSession() *session.Session {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.snapshot.Session
+}
+
+func (e *caseExecutor) setSnapshotSessionID(id string) {
+	e.mu.Lock()
+	e.snapshot.SessionID = id
+	e.mu.Unlock()
+}
+
+func (e *caseExecutor) getSnapshotSessionID() string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.snapshot.SessionID
+}
+
+func (e *caseExecutor) storeSession(key session.Key, sess *session.Session) {
+	e.mu.Lock()
+	e.sessions[key] = sess
+	e.mu.Unlock()
+}
+
+// lockSessionKey serializes mutating backend ops that share a *session.Session
+// pointer (e.g. concurrent AppendEvent on the same key). Different keys still
+// run fully in parallel under ParallelGroupStep.
+func (e *caseExecutor) lockSessionKey(key session.Key) func() {
+	e.mu.Lock()
+	m, ok := e.keyMu[key]
+	if !ok {
+		m = &sync.Mutex{}
+		e.keyMu[key] = m
+	}
+	e.mu.Unlock()
+	m.Lock()
+	return m.Unlock
+}
+
+func (e *caseExecutor) ensureSession(ctx context.Context, key session.Key) (*session.Session, error) {
+	e.mu.Lock()
+	if sess, ok := e.sessions[key]; ok && sess != nil {
+		e.mu.Unlock()
+		return sess, nil
+	}
+	if init, ok := e.inFlight[key]; ok {
+		e.mu.Unlock()
+		<-init.done
+		return init.sess, init.err
+	}
+	init := &sessionInit{done: make(chan struct{})}
+	e.inFlight[key] = init
+	e.mu.Unlock()
+
+	// Single loader for this key: GetSession, then Create only on (nil, nil).
+	existing, err := e.backend.SessionService.GetSession(ctx, key)
+	if err != nil {
+		init.err = err
+		e.mu.Lock()
+		delete(e.inFlight, key)
+		e.mu.Unlock()
+		close(init.done)
+		return nil, err
+	}
+	if existing != nil {
+		init.sess = existing
+		e.mu.Lock()
+		e.sessions[key] = existing
+		delete(e.inFlight, key)
+		e.mu.Unlock()
+		close(init.done)
+		return existing, nil
+	}
+	sess, err := e.backend.SessionService.CreateSession(ctx, key, session.StateMap{})
+	init.sess, init.err = sess, err
+	e.mu.Lock()
+	if err == nil && sess != nil {
+		// Prefer any concurrent cache fill; otherwise store our create result.
+		if cached, ok := e.sessions[key]; ok && cached != nil {
+			init.sess = cached
+			sess = cached
+		} else {
+			e.sessions[key] = sess
+		}
+	}
+	delete(e.inFlight, key)
+	e.mu.Unlock()
+	close(init.done)
+	return sess, err
+}
+
+func (e *caseExecutor) appendEvent(ctx context.Context, step AppendEventStep) error {
+	if step.Event == nil {
+		return fmt.Errorf("append_event %q: Event is nil", step.StepKey)
+	}
+	key, err := e.resolveAppendSessionKey(step)
+	if err != nil {
+		return err
+	}
+	sess, err := e.ensureSession(ctx, key)
+	if err != nil {
+		return err
+	}
+	e.setSnapshotSessionID(key.SessionID)
+	evt := *step.Event
+	event.WithTag(step.StepKey)(&evt)
+	logical := step.LogicalKey
+	if logical == "" {
+		logical = step.StepKey
+	}
+	if err := event.SetExtension(&evt, EventLogicalKeyExtension, logical); err != nil {
+		return err
+	}
+	if evt.Timestamp.IsZero() {
+		evt.Timestamp = FixedTimestamp
+	}
+	// Same session pointer must not be mutated by concurrent AppendEvent.
+	unlock := e.lockSessionKey(key)
+	defer unlock()
+	return e.backend.SessionService.AppendEvent(ctx, sess, &evt)
+}
+
+func (e *caseExecutor) resolveAppendSessionKey(step AppendEventStep) (session.Key, error) {
+	if step.SessionKey.SessionID != "" {
+		return step.SessionKey, nil
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if sess := e.snapshot.Session; sess != nil && sess.ID != "" && sess.AppName != "" && sess.UserID != "" {
+		return session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}, nil
+	}
+	if len(e.sessions) == 1 {
+		for key := range e.sessions {
+			return key, nil
+		}
+	}
+	if len(e.sessions) > 1 {
+		return session.Key{}, fmt.Errorf("append_event %q: empty session key is ambiguous across %d cached sessions", step.StepKey, len(e.sessions))
+	}
+	return session.Key{}, fmt.Errorf("append_event %q: empty session key requires an existing captured or cached session", step.StepKey)
+}
+
+func (e *caseExecutor) updateState(ctx context.Context, step UpdateStateStep) error {
+	switch step.Scope {
+	case "app":
+		if step.DeleteKey != "" {
+			return e.backend.SessionService.DeleteAppState(ctx, step.AppName, step.DeleteKey)
+		}
+		return e.backend.SessionService.UpdateAppState(ctx, step.AppName, step.State)
+	case "user":
+		if step.DeleteKey != "" {
+			return e.backend.SessionService.DeleteUserState(ctx, step.UserKey, step.DeleteKey)
+		}
+		return e.backend.SessionService.UpdateUserState(ctx, step.UserKey, step.State)
+	case "", "session":
+		// Empty scope keeps zero-value compatibility; "session" is explicit.
+		if step.DeleteKey != "" {
+			return fmt.Errorf("update_state %q: DeleteKey is not supported for session scope", step.StepKey)
+		}
+		if _, err := e.ensureSession(ctx, step.SessionKey); err != nil {
+			return err
+		}
+		e.setSnapshotSessionID(step.SessionKey.SessionID)
+		unlock := e.lockSessionKey(step.SessionKey)
+		defer unlock()
+		return e.backend.SessionService.UpdateSessionState(ctx, step.SessionKey, step.State)
+	default:
+		// Reject typos like "users" before any backend write (would silently
+		// hit session state on every backend and false-green the matrix).
+		return fmt.Errorf("update_state %q: unknown scope %q (want \"\", \"session\", \"app\", or \"user\")",
+			step.StepKey, step.Scope)
+	}
+}
+
+func (e *caseExecutor) addMemory(ctx context.Context, step AddMemoryStep) error {
+	if e.backend.MemoryService == nil {
+		return fmt.Errorf("memory service required")
+	}
+	return e.backend.MemoryService.AddMemory(ctx, step.UserKey, step.Memory, step.Topics, addMemoryOptions(step.Metadata)...)
+}
+
+func (e *caseExecutor) updateMemory(ctx context.Context, step UpdateMemoryStep) error {
+	if e.backend.MemoryService == nil {
+		return fmt.Errorf("memory service required")
+	}
+	key, err := e.resolveMemoryKey(step.UserKey, step.MemoryID, step.MatchContent)
+	if err != nil {
+		return err
+	}
+	return e.backend.MemoryService.UpdateMemory(ctx, key, step.Memory, step.Topics, updateMemoryOptions(step.Metadata)...)
+}
+
+func addMemoryOptions(md *MemoryMetadata) []memory.AddOption {
+	if md == nil {
+		return nil
+	}
+	return []memory.AddOption{memory.WithMetadata(toMemoryMetadata(md))}
+}
+
+func updateMemoryOptions(md *MemoryMetadata) []memory.UpdateOption {
+	if md == nil {
+		return nil
+	}
+	return []memory.UpdateOption{memory.WithUpdateMetadata(toMemoryMetadata(md))}
+}
+
+func toMemoryMetadata(md *MemoryMetadata) *memory.Metadata {
+	if md == nil {
+		return nil
+	}
+	out := &memory.Metadata{
+		Kind:         md.Kind,
+		Participants: append([]string(nil), md.Participants...),
+		Location:     md.Location,
+	}
+	if md.EventTime != nil {
+		t := md.EventTime.UTC()
+		out.EventTime = &t
+	}
+	return out
+}
+
+func (e *caseExecutor) deleteMemory(ctx context.Context, step DeleteMemoryStep) error {
+	if e.backend.MemoryService == nil {
+		return fmt.Errorf("memory service required")
+	}
+	key, err := e.resolveMemoryKey(step.UserKey, step.MemoryID, step.MatchContent)
+	if err != nil {
+		return err
+	}
+	return e.backend.MemoryService.DeleteMemory(ctx, key)
+}
+
+// resolveMemoryKey picks a memory.Key by explicit ID or by content match on the
+// last CaptureMemory snapshot (raw backend IDs, pre-normalizer).
+func (e *caseExecutor) resolveMemoryKey(userKey memory.UserKey, memoryID, matchContent string) (memory.Key, error) {
+	id := memoryID
+	if id == "" {
+		if matchContent == "" {
+			return memory.Key{}, fmt.Errorf("memory id or match content required")
+		}
+		e.mu.Lock()
+		mems := append([]*memory.Entry(nil), e.snapshot.Memories...)
+		e.mu.Unlock()
+		matches := make([]string, 0, 1)
+		for _, m := range mems {
+			if m == nil || m.Memory == nil {
+				continue
+			}
+			if m.Memory.Memory == matchContent {
+				matches = append(matches, m.ID)
+			}
+		}
+		switch len(matches) {
+		case 0:
+			return memory.Key{}, fmt.Errorf("memory not found for match content %q", matchContent)
+		case 1:
+			id = matches[0]
+		default:
+			sort.Strings(matches)
+			return memory.Key{}, fmt.Errorf("memory match content %q is ambiguous across %d entries", matchContent, len(matches))
+		}
+	}
+	return memory.Key{
+		AppName:  userKey.AppName,
+		UserID:   userKey.UserID,
+		MemoryID: id,
+	}, nil
+}
+
+func (e *caseExecutor) captureMemory(ctx context.Context, step CaptureMemoryStep) error {
+	if e.backend.MemoryService == nil {
+		return fmt.Errorf("memory service required")
+	}
+	limit := step.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+	mems, err := e.backend.MemoryService.ReadMemories(ctx, step.UserKey, limit)
+	if err != nil {
+		return err
+	}
+	e.mu.Lock()
+	e.snapshot.Memories = mems
+	e.mu.Unlock()
+	return nil
+}
+
+func (e *caseExecutor) createSummary(ctx context.Context, step CreateSummaryStep) error {
+	sess, err := e.ensureSession(ctx, step.SessionKey)
+	if err != nil {
+		return err
+	}
+	latest, err := e.backend.SessionService.GetSession(ctx, step.SessionKey)
+	if err != nil {
+		return err
+	}
+	if latest != nil {
+		sess = latest
+		e.storeSession(step.SessionKey, latest)
+	}
+	e.setSnapshotSessionID(step.SessionKey.SessionID)
+	unlock := e.lockSessionKey(step.SessionKey)
+	defer unlock()
+	if step.Async {
+		return e.backend.SessionService.EnqueueSummaryJob(ctx, sess, step.FilterKey, step.Force)
+	}
+	return e.backend.SessionService.CreateSessionSummary(ctx, sess, step.FilterKey, step.Force)
+}
+
+func (e *caseExecutor) waitSummary(ctx context.Context, step WaitSummaryStep) error {
+	timeout := step.Timeout
+	if timeout <= 0 {
+		timeout = time.Second
+	}
+	poll := step.PollInterval
+	if poll <= 0 {
+		poll = 10 * time.Millisecond
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		sess, err := e.backend.SessionService.GetSession(ctx, step.SessionKey)
+		if err != nil {
+			return err
+		}
+		e.storeSession(step.SessionKey, sess)
+		if sess != nil {
+			sess.SummariesMu.RLock()
+			sum := sess.Summaries[step.FilterKey]
+			sess.SummariesMu.RUnlock()
+			if sum != nil && sum.Summary != "" {
+				return e.captureSession(ctx, step.SessionKey)
+			}
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timeout waiting for summary filter=%q", step.FilterKey)
+		}
+		if err := waitPollOrContext(ctx, poll); err != nil {
+			return err
+		}
+	}
+}
+
+func waitPollOrContext(ctx context.Context, poll time.Duration) error {
+	timer := time.NewTimer(poll)
+	defer func() {
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+	}()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func (e *caseExecutor) appendTrack(ctx context.Context, step AppendTrackStep) error {
+	sess, err := e.ensureSession(ctx, step.SessionKey)
+	if err != nil {
+		return err
+	}
+	latest, err := e.backend.SessionService.GetSession(ctx, step.SessionKey)
+	if err != nil {
+		return err
+	}
+	if latest != nil {
+		sess = latest
+		e.storeSession(step.SessionKey, latest)
+	}
+	e.setSnapshotSessionID(step.SessionKey.SessionID)
+	ts, ok := e.backend.SessionService.(session.TrackService)
+	if !ok {
+		return fmt.Errorf("backend does not implement session.TrackService")
+	}
+	unlock := e.lockSessionKey(step.SessionKey)
+	defer unlock()
+	return ts.AppendTrackEvent(ctx, sess, step.Event)
+}
+
+func (e *caseExecutor) getSession(ctx context.Context, step GetSessionStep) error {
+	e.setSnapshotSessionID(step.SessionKey.SessionID)
+	return e.captureSession(ctx, step.SessionKey)
+}
+
+func (e *caseExecutor) captureSession(ctx context.Context, key session.Key) error {
+	return e.captureSessionWithPrimary(ctx, key, true)
+}
+
+func (e *caseExecutor) captureSessionWithPrimary(ctx context.Context, key session.Key, primary bool) error {
+	sess, err := e.backend.SessionService.GetSession(ctx, key)
+	if err != nil {
+		return err
+	}
+	e.mu.Lock()
+	e.sessions[key] = sess
+	if primary {
+		e.snapshot.Session = sess
+		e.snapshot.SessionID = key.SessionID
+	}
+	if e.snapshot.Sessions == nil {
+		e.snapshot.Sessions = map[string]*session.Session{}
+	}
+	if sess != nil {
+		e.snapshot.Sessions[key.SessionID] = sess
+	}
+	e.mu.Unlock()
+	return nil
+}
+
+func (e *caseExecutor) reloadSession(ctx context.Context, step ReloadSessionStep) error {
+	key := step.SessionKey
+	e.mu.Lock()
+	delete(e.sessions, key)
+	e.mu.Unlock()
+	sess, err := e.backend.SessionService.GetSession(ctx, key)
+	if err != nil {
+		return err
+	}
+	if sess == nil {
+		return fmt.Errorf("reload_session: session not found: %s", key.SessionID)
+	}
+	e.mu.Lock()
+	e.sessions[key] = sess
+	e.snapshot.Session = sess
+	e.snapshot.SessionID = key.SessionID
+	if e.snapshot.Sessions == nil {
+		e.snapshot.Sessions = map[string]*session.Session{}
+	}
+	e.snapshot.Sessions[key.SessionID] = sess
+	e.mu.Unlock()
+	return nil
+}
+
+func (e *caseExecutor) parallelGroup(ctx context.Context, step ParallelGroupStep) error {
+	if len(step.Branches) == 0 {
+		return nil
+	}
+	var start sync.WaitGroup
+	start.Add(1)
+	errCh := make(chan error, len(step.Branches))
+	var workers sync.WaitGroup
+	for _, branch := range step.Branches {
+		br := branch
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			start.Wait() // barrier: all workers start together
+			for _, st := range br {
+				if err := e.execute(ctx, st); err != nil {
+					errCh <- err
+					return
+				}
+			}
+		}()
+	}
+	start.Done()
+	workers.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (e *caseExecutor) listAppStates(ctx context.Context, step ListAppStatesStep) error {
+	st, err := e.backend.SessionService.ListAppStates(ctx, step.AppName)
+	if err != nil {
+		return err
+	}
+	e.mu.Lock()
+	e.snapshot.AppState = st
+	if step.StepKey != "" {
+		if e.snapshot.AppStateCaptures == nil {
+			e.snapshot.AppStateCaptures = map[string]session.StateMap{}
+		}
+		e.snapshot.AppStateCaptures[step.StepKey] = cloneState(st)
+	}
+	e.mu.Unlock()
+	return nil
+}
+
+func (e *caseExecutor) listUserStates(ctx context.Context, step ListUserStatesStep) error {
+	st, err := e.backend.SessionService.ListUserStates(ctx, step.UserKey)
+	if err != nil {
+		return err
+	}
+	e.mu.Lock()
+	e.snapshot.UserState = st
+	if step.StepKey != "" {
+		if e.snapshot.UserStateCaptures == nil {
+			e.snapshot.UserStateCaptures = map[string]session.StateMap{}
+		}
+		e.snapshot.UserStateCaptures[step.StepKey] = cloneState(st)
+	}
+	e.mu.Unlock()
+	return nil
+}
+
+func (e *caseExecutor) listUserSessions(ctx context.Context, step ListUserSessionsStep) error {
+	list, err := e.backend.SessionService.ListSessions(ctx, step.UserKey)
+	if err != nil {
+		return err
+	}
+	e.mu.Lock()
+	if e.snapshot.Sessions == nil {
+		e.snapshot.Sessions = map[string]*session.Session{}
+	}
+	e.mu.Unlock()
+	// Re-fetch each session for full events/state; ListSessions may be meta-only.
+	for _, meta := range list {
+		if meta == nil || meta.ID == "" {
+			continue
+		}
+		key := session.Key{AppName: step.UserKey.AppName, UserID: step.UserKey.UserID, SessionID: meta.ID}
+		full, err := e.backend.SessionService.GetSession(ctx, key)
+		if err != nil {
+			return err
+		}
+		if full == nil {
+			full = meta
+		}
+		e.mu.Lock()
+		e.sessions[key] = full
+		e.snapshot.Sessions[key.SessionID] = full
+		e.mu.Unlock()
+	}
+	return nil
+}
