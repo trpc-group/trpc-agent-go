@@ -1,0 +1,23 @@
+{
+	"appName": "promptiter-regression-app",
+	"targetSurfaceIds": ["agent.system_prompt"],
+	"optimization": {
+		"maxRounds": 3,
+		"minScoreGain": 0.01,
+		"stopPolicy": {
+			"maxRoundsWithoutAcceptance": 5
+		},
+		"acceptancePolicy": {
+			"minScoreGain": 0.05
+		}
+	},
+	"backward": {
+		"caseParallelism": 4
+	},
+	"aggregation": {
+		"surfaceParallelism": 4
+	},
+	"optimizer": {
+		"surfaceParallelism": 4
+	}
+}
