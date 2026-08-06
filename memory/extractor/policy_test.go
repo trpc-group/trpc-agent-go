@@ -15,19 +15,20 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/internal/updatepolicy"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 func TestExtractorUpdatePolicy_DefaultsToMergeSimilar(t *testing.T) {
 	ext := NewExtractor(nil).(*memoryExtractor)
 	assert.Equal(t, UpdatePolicyMergeSimilar, ext.configuredUpdatePolicy())
-	assert.NotContains(t, ext.Metadata(), metadataKeyUpdatePolicy)
+	assert.Empty(t, updatepolicy.From(ext))
 }
 
 func TestExtractorUpdatePolicy_ZeroValueUsesMergeSimilar(t *testing.T) {
 	var ext memoryExtractor
 	assert.Equal(t, UpdatePolicyMergeSimilar, ext.configuredUpdatePolicy())
-	assert.NotContains(t, ext.Metadata(), metadataKeyUpdatePolicy)
+	assert.Empty(t, updatepolicy.From(&ext))
 }
 
 func TestExtractorUpdatePolicy_OptIn(t *testing.T) {
@@ -36,7 +37,7 @@ func TestExtractorUpdatePolicy_OptIn(t *testing.T) {
 		WithUpdatePolicy(UpdatePolicyPreserveHistory),
 	).(*memoryExtractor)
 	assert.Equal(t, UpdatePolicyPreserveHistory, ext.configuredUpdatePolicy())
-	assert.Equal(t, UpdatePolicyPreserveHistory, ext.Metadata()[metadataKeyUpdatePolicy])
+	assert.Equal(t, updatepolicy.Value(UpdatePolicyPreserveHistory), updatepolicy.From(ext))
 }
 
 func TestExtractorUpdatePolicy_InvalidValueUsesMergeSimilar(t *testing.T) {

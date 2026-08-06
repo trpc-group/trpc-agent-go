@@ -40,12 +40,12 @@ type customUpdatePolicyExtractor struct {
 	metadata map[string]any
 }
 
-func (*customUpdatePolicyExtractor) UpdatePolicy() extractor.UpdatePolicy {
-	return extractor.UpdatePolicyPreserveHistory
-}
-
 func (e *customUpdatePolicyExtractor) Metadata() map[string]any {
 	return e.metadata
+}
+
+type decoratedExtractor struct {
+	extractor.MemoryExtractor
 }
 
 func (o *countingOperator) SearchMemories(
@@ -126,7 +126,7 @@ func newExtractorWithOperation(
 	)
 }
 
-func TestUpdatePolicyFor_UsesSealedExtractorCapability(t *testing.T) {
+func TestUpdatePolicyFor_PreservesPolicyThroughDecorator(t *testing.T) {
 	for _, policy := range []extractor.UpdatePolicy{
 		extractor.UpdatePolicyMergeSimilar,
 		extractor.UpdatePolicyPreserveHistory,
@@ -137,6 +137,9 @@ func TestUpdatePolicyFor_UsesSealedExtractorCapability(t *testing.T) {
 			extractor.WithUpdatePolicy(policy),
 		)
 		assert.Equal(t, policy, updatePolicyFor(builtin))
+		assert.Equal(t, policy, updatePolicyFor(&decoratedExtractor{
+			MemoryExtractor: builtin,
+		}))
 	}
 	assert.Equal(t, extractor.UpdatePolicyMergeSimilar, updatePolicyFor(nil))
 	assert.Equal(t, extractor.UpdatePolicyMergeSimilar, updatePolicyFor(&mockExtractor{}))
@@ -579,7 +582,9 @@ func TestUpdatePolicies_SearchBehavior(t *testing.T) {
 			baseOperator := newMockOperator()
 			baseOperator.searchResults = []*memory.Entry{existing}
 			operator := &countingOperator{mockOperator: baseOperator}
-			ext := newExtractorWithOperation(t, test.policy, test.operation)
+			ext := &decoratedExtractor{MemoryExtractor: newExtractorWithOperation(
+				t, test.policy, test.operation,
+			)}
 			worker := NewAutoMemoryWorker(AutoMemoryConfig{Extractor: ext}, operator)
 			require.NoError(t, worker.createAutoMemory(
 				context.Background(),

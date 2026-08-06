@@ -299,6 +299,10 @@ memExtractor := extractor.NewExtractor(
 )
 ```
 
+Extractor decorators must forward unknown entries returned by `Metadata()`.
+The built-in extractor uses an opaque metadata value to preserve the selected
+policy through wrappers; decorators do not need to inspect that value.
+
 The update policies affect only operations produced by background Auto
 extraction. An agent or application explicitly calling `memory_update` keeps
 the existing tool semantics.

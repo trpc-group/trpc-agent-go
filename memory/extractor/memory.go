@@ -19,6 +19,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/internal/updatepolicy"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/prompt"
 )
@@ -37,7 +38,6 @@ func referenceDate(ctx context.Context) time.Time {
 const (
 	metadataKeyModelName      = "model_name"
 	metadataKeyModelAvailable = "model_available"
-	metadataKeyUpdatePolicy   = "trpc-agent-go/memory-extractor/update-policy"
 )
 
 // memoryExtractor implements the MemoryExtractor interface.
@@ -233,7 +233,7 @@ func (e *memoryExtractor) Metadata() map[string]any {
 		metadataKeyModelAvailable: modelAvailable,
 	}
 	if policy := e.configuredUpdatePolicy(); policy != UpdatePolicyMergeSimilar {
-		metadata[metadataKeyUpdatePolicy] = policy
+		metadata[updatepolicy.MetadataKey] = updatepolicy.Value(policy)
 	}
 	return metadata
 }

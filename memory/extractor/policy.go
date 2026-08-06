@@ -10,7 +10,6 @@ package extractor
 
 import (
 	"trpc.group/trpc-go/trpc-agent-go/memory"
-	"trpc.group/trpc-go/trpc-agent-go/memory/internal/updatepolicy"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -36,12 +35,6 @@ func WithUpdatePolicy(policy UpdatePolicy) Option {
 
 func (e *memoryExtractor) configuredUpdatePolicy() UpdatePolicy {
 	return normalizeUpdatePolicy(e.updatePolicy)
-}
-
-// AutoMemoryUpdatePolicy exposes the policy only through the internal sealed
-// capability consumed by the auto-memory worker.
-func (e *memoryExtractor) AutoMemoryUpdatePolicy() updatepolicy.Value {
-	return updatepolicy.Value(e.configuredUpdatePolicy())
 }
 
 func normalizeUpdatePolicy(policy UpdatePolicy) UpdatePolicy {
