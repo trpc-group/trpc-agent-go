@@ -24,7 +24,7 @@ Supported input modes:
 - `--diff-file path/to/change.diff` for a unified diff; add
   `--repo-path path/to/repo` when sandbox checks should run against the patched checkout.
 - `--repo-path path/to/repo` for `git diff --no-ext-diff --binary`; sandbox commands run in that repository.
-- `--file-list path/to/files.txt --repo-path path/to/repo` for a newline-delimited changed-file list tied to the repository that owns those paths. Without `--repo-path`, sandbox validation is skipped. The repository path controls planner context, sandbox CWD, and `go test`/`go vet` scope; content-based deterministic rules require diff input.
+- `--file-list path/to/files.txt --repo-path path/to/repo` for a newline-delimited changed-file list tied to the repository that owns those paths. Empty lines and lines beginning with `# ` or `#\t` are comments; other non-empty lines are literal paths. Without `--repo-path`, sandbox validation is skipped. The repository path controls planner context, sandbox CWD, and `go test`/`go vet` scope; content-based deterministic rules require diff input.
 
 The CLI reads diff fixtures, asks an OpenAI-compatible model for the execution
 plan, records a review task, writes task-specific `review_report_<task-id>.json`

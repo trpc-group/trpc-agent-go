@@ -1129,6 +1129,36 @@ func TestBuildReviewSnapshotRestrictsUntrackedFilesToSubmittedPaths(t *testing.T
 	}
 }
 
+func TestFileListPreservesHashPathInUntrackedSnapshot(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	repo := t.TempDir()
+	runGitCommand(t, repo, "init")
+	if err := os.WriteFile(filepath.Join(repo, "#config.go"), []byte("package config\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(#config.go) error = %v", err)
+	}
+	fileList := filepath.Join(t.TempDir(), "files.txt")
+	if err := os.WriteFile(fileList, []byte("# comment\n#\tcomment\n#config.go\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(file list) error = %v", err)
+	}
+	source, err := inputsource.Read(context.Background(), inputsource.Options{FileList: fileList, RepoPath: repo})
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if !reflect.DeepEqual(source.FileList, []string{"#config.go"}) {
+		t.Fatalf("FileList = %#v, want #config.go", source.FileList)
+	}
+	snapshot, cleanup, err := buildReviewSnapshotWithSnapshotPaths(context.Background(), repo, snapshotUntrackedPaths(source, nil))
+	if err != nil {
+		t.Fatalf("buildReviewSnapshotWithSnapshotPaths() error = %v", err)
+	}
+	defer cleanup()
+	if _, err := os.Stat(filepath.Join(snapshot, "#config.go")); err != nil {
+		t.Fatalf("hash-prefixed untracked path missing from snapshot: %v", err)
+	}
+}
+
 func TestStagedSnapshotDerivesDependencyModeFromFilteredSnapshot(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is not installed")

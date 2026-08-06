@@ -633,7 +633,7 @@ func readFileListWithLimits(path string, repoPath string, maxBytes int64, maxFil
 	scanner.Buffer(make([]byte, 4096), len(raw)+1)
 	for scanner.Scan() {
 		file := strings.TrimSuffix(scanner.Text(), "\r")
-		if file == "" || strings.HasPrefix(file, "#") {
+		if file == "" || isFileListComment(file) {
 			continue
 		}
 		if len(files) >= maxFiles {
@@ -660,6 +660,10 @@ func readFileListWithLimits(path string, repoPath string, maxBytes int64, maxFil
 		WorkDir:  absRepo,
 		Summary:  summary,
 	}, nil
+}
+
+func isFileListComment(file string) bool {
+	return strings.HasPrefix(file, "# ") || strings.HasPrefix(file, "#\t")
 }
 
 func minInt64(a int64, b int64) int64 {

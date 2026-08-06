@@ -44,7 +44,7 @@ The agent supports four input modes:
 - `--fixture-dir`: loads a directory of test diffs and expected review scenarios.
 - `--diff-file`: reads one unified diff file directly; it may be combined with `--repo-path` to associate sandbox validation with the patched checkout.
 - `--repo-path`: inspects a Git workspace, derives current changes, and runs sandbox commands in that workspace.
-- `--file-list`: reads a newline-delimited list of file paths for planning and sandbox context; it may be combined with `--repo-path` to identify the repository that owns those paths. Without a repository, sandbox validation is skipped. Content-based deterministic rules require diff input.
+- `--file-list`: reads a newline-delimited list of file paths for planning and sandbox context; empty lines and lines beginning with `# ` or `#\t` are comments, while other non-empty lines are literal paths. It may be combined with `--repo-path` to identify the repository that owns those paths. Without a repository, sandbox validation is skipped. Content-based deterministic rules require diff input.
 
 Unified diffs are parsed into files, hunks, added/deleted/context lines, and candidate line numbers. Go package information is extracted when available so checks can be scoped to the right module or package. Fixture mode is primarily used for deterministic acceptance tests, while repo and diff modes are closer to real review usage.
 
@@ -54,7 +54,7 @@ Agent 支持四种输入模式：
 - `--fixture-dir`：读取测试 fixture 目录中的 diff 和审查场景。
 - `--diff-file`：直接读取一个 unified diff 文件；可以与 `--repo-path` 组合，将 sandbox 校验关联到补丁所属 checkout。
 - `--repo-path`：检查 Git 工作区、提取当前变更，并在该工作区运行沙箱命令。
-- `--file-list`：读取按行分隔的文件路径列表，用于 planning 和 sandbox 上下文；可以与 `--repo-path` 组合以明确路径所属仓库；未提供仓库时跳过 sandbox 校验；基于内容的确定性规则需要 diff 输入。
+- `--file-list`：读取按行分隔的文件路径列表；空行以及以 `# ` 或 `#\t` 开头的行视为注释，其他非空行按字面路径处理；用于 planning 和 sandbox 上下文；可以与 `--repo-path` 组合以明确路径所属仓库；未提供仓库时跳过 sandbox 校验；基于内容的确定性规则需要 diff 输入。
 
 Unified diff 会被解析为文件、hunk、新增/删除/上下文行以及候选行号。对于 Go 代码，会尽量提取 package 信息，便于把检查限定到正确的 module 或 package。fixture 模式主要用于确定性验收测试，repo 和 diff 模式更接近真实审查场景。
 

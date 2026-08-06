@@ -112,7 +112,7 @@ func TestReadFixturesRejectsTooManyDiffFiles(t *testing.T) {
 func TestReadFileList(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "files.txt")
-	if err := os.WriteFile(path, []byte("pkg/a.go\n# comment\npkg/b_test.go\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("pkg/a.go\n# comment\n#\tcomment\n#config.go\npkg/b_test.go\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	src, err := Read(context.Background(), Options{FileList: path})
@@ -122,7 +122,7 @@ func TestReadFileList(t *testing.T) {
 	if src.Type != review.InputTypeFileList {
 		t.Fatalf("Type = %q, want %q", src.Type, review.InputTypeFileList)
 	}
-	if got, want := strings.Join(src.FileList, ","), "pkg/a.go,pkg/b_test.go"; got != want {
+	if got, want := strings.Join(src.FileList, ","), "#config.go,pkg/a.go,pkg/b_test.go"; got != want {
 		t.Fatalf("FileList = %q, want %q", got, want)
 	}
 }
