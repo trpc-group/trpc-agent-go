@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"time"
 
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
@@ -59,15 +60,16 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 	if sum == nil {
 		return nil
 	}
+	write := sessionrevision.NewWrite(ctx, sess)
 
 	// Fast path: use version tag from session
 	switch ver := getSessionVersion(sess); ver {
 	case util.StorageTypeHashIdx:
 		s.recordStorageRoute(ctx, opCreateSessionSummary, util.StorageTypeHashIdx)
-		return s.hashidxClient.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL)
+		return s.hashidxClient.CreateSummaryWithRevision(ctx, key, filterKey, sum, s.opts.sessionTTL, write)
 	case util.StorageTypeZset:
 		s.recordStorageRoute(ctx, opCreateSessionSummary, util.StorageTypeZset)
-		return s.zsetClient.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL)
+		return s.zsetClient.CreateSummaryWithRevision(ctx, key, filterKey, sum, s.opts.sessionTTL, write)
 	}
 
 	// Slow path: check which storage has the session
@@ -78,11 +80,11 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 
 	if s.compatEnabled() && zsetExists {
 		s.recordStorageRoute(ctx, opCreateSessionSummary, util.StorageTypeZset)
-		return s.zsetClient.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL)
+		return s.zsetClient.CreateSummaryWithRevision(ctx, key, filterKey, sum, s.opts.sessionTTL, write)
 	}
 	if hashidxExists {
 		s.recordStorageRoute(ctx, opCreateSessionSummary, util.StorageTypeHashIdx)
-		return s.hashidxClient.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL)
+		return s.hashidxClient.CreateSummaryWithRevision(ctx, key, filterKey, sum, s.opts.sessionTTL, write)
 	}
 
 	log.WarnfContext(ctx, "session not found when creating summary: %s/%s/%s", key.AppName, key.UserID, key.SessionID)

@@ -25,6 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	trunner "trpc.group/trpc-go/trpc-agent-go/runner"
@@ -157,21 +158,23 @@ type sessionContext struct {
 }
 
 type runInput struct {
-	key             session.Key
-	threadID        string
-	runID           string
-	userID          string
-	messages        *runAgentMessages
-	runOption       []agent.RunOption
-	translator      translator.Translator
-	enableTrack     bool
-	startTrackFlush func()
-	span            trace.Span
-	resume          *resumeInfo
-	terminalEmitted bool
-	runAgentInput   *adapter.RunAgentInput
-	done            chan struct{}
-	consumerDone    <-chan struct{}
+	key               session.Key
+	threadID          string
+	runID             string
+	requestID         string
+	userID            string
+	messages          *runAgentMessages
+	runOption         []agent.RunOption
+	translator        translator.Translator
+	enableTrack       bool
+	startTrackFlush   func()
+	span              trace.Span
+	resume            *resumeInfo
+	replaceLatestTurn bool
+	terminalEmitted   bool
+	runAgentInput     *adapter.RunAgentInput
+	done              chan struct{}
+	consumerDone      <-chan struct{}
 }
 
 type runAgentResult struct {
@@ -372,10 +375,15 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 	if err != nil {
 		return nil, fmt.Errorf("resolve user ID: %w", err)
 	}
-	runOption, err := r.runOptionResolver(ctx, runAgentInput)
+	runOption := make([]agent.RunOption, 0, 1)
+	if runID != "" {
+		runOption = append(runOption, agent.WithRequestID(runID))
+	}
+	resolvedRunOption, err := r.runOptionResolver(ctx, runAgentInput)
 	if err != nil {
 		return nil, fmt.Errorf("resolve run option: %w", err)
 	}
+	runOption = append(runOption, resolvedRunOption...)
 	runOption, err = appendExternalToolRunOption(runOption, runAgentInput)
 	if err != nil {
 		return nil, fmt.Errorf(errResolveExternalTools, err)
@@ -396,6 +404,20 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 	}
 	if appName != "" {
 		runOption = append(runOption, agent.WithAppName(appName))
+	}
+	resolvedOptions := agent.NewRunOptions(runOption...)
+	requestID := resolvedOptions.RequestID
+	if requestID == "" && resolvedOptions.LatestTurnReplacement != nil {
+		requestID = resolvedOptions.LatestTurnReplacement.RequestID
+	}
+	if requestID == "" {
+		requestID = runID
+		if requestID == "" {
+			requestID = uuid.NewString()
+		}
+	}
+	if resolvedOptions.RequestID == "" {
+		runOption = append(runOption, agent.WithRequestID(requestID))
 	}
 	ctx, span, err := r.startSpan(ctx, runAgentInput)
 	if err != nil {
@@ -423,18 +445,20 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 			UserID:    userID,
 			SessionID: runAgentInput.ThreadID,
 		},
-		threadID:      threadID,
-		runID:         runID,
-		userID:        userID,
-		messages:      messages,
-		runOption:     runOption,
-		translator:    trans,
-		enableTrack:   r.tracker != nil,
-		span:          span,
-		resume:        parseResumeInfo(runOption),
-		runAgentInput: runAgentInput,
-		done:          make(chan struct{}),
-		consumerDone:  consumerDone,
+		threadID:          threadID,
+		runID:             runID,
+		requestID:         requestID,
+		userID:            userID,
+		messages:          messages,
+		runOption:         runOption,
+		translator:        trans,
+		enableTrack:       r.tracker != nil,
+		span:              span,
+		resume:            parseResumeInfo(&resolvedOptions),
+		replaceLatestTurn: resolvedOptions.LatestTurnReplacement != nil,
+		runAgentInput:     runAgentInput,
+		done:              make(chan struct{}),
+		consumerDone:      consumerDone,
 	}
 	events := make(chan aguievents.Event)
 	ctx, cancel := r.newExecutionContext(ctx, r.timeout)
@@ -475,19 +499,66 @@ func (r *runner) run(ctx context.Context, cancel context.CancelCauseFunc, key se
 		input.span.End()
 		close(events)
 	}()
+	hookEvents := make(chan hookEvent, defaultRunHookEventBuffer)
+	run := newRun(input.runAgentInput, hookEvents, input.done)
+	ctx = newRunContext(ctx, run)
+	var (
+		hookDone      <-chan error
+		hookRemaining int
+		hooksStarted  bool
+	)
+	agentRun := make(chan runAgentResult, 1)
+	agentRunDone := make(chan struct{})
+	agentRunStarted := false
+	startAgentRun := func() {
+		agentRunStarted = true
+		go func() {
+			defer close(agentRunDone)
+			ch, err := r.runner.Run(
+				ctx,
+				input.userID,
+				threadID,
+				*input.messages.inputMessage,
+				input.runOption...,
+			)
+			sessionrevision.CompleteRunPreparation(ctx, err)
+			agentRun <- runAgentResult{events: ch, err: err}
+		}()
+	}
+	if input.replaceLatestTurn && input.enableTrack {
+		hookDone, hookRemaining = r.startRunHooks(ctx, run)
+		hooksStarted = true
+		var preparation <-chan error
+		ctx, preparation = sessionrevision.ContextWithRunPreparation(ctx)
+		startAgentRun()
+		select {
+		case err := <-preparation:
+			if err != nil {
+				input.enableTrack = false
+			}
+		case <-ctx.Done():
+			input.enableTrack = false
+		}
+	}
 	if input.enableTrack {
 		var stopTrackFlush func()
 		var startTrackFlushOnce sync.Once
 		input.startTrackFlush = func() {
 			startTrackFlushOnce.Do(func() {
-				stopTrackFlush = r.startTrackFlushLoop(ctx, input.key, threadID, runID)
+				stopTrackFlush = r.startTrackFlushLoop(
+					ctx,
+					input.key,
+					input.requestID,
+					threadID,
+					runID,
+				)
 			})
 		}
 		defer func() {
 			if stopTrackFlush != nil {
 				stopTrackFlush()
 			}
-			if err := r.closeTrack(ctx, input.key); err != nil {
+			if err := r.closeTrack(ctx, input.key, input.requestID); err != nil {
 				log.WarnfContext(
 					ctx,
 					"agui run: threadID: %s, runID: %s, "+
@@ -526,17 +597,12 @@ func (r *runner) run(ctx context.Context, cancel context.CancelCauseFunc, key se
 			return
 		}
 	}
-	hookEvents := make(chan hookEvent, defaultRunHookEventBuffer)
-	run := newRun(input.runAgentInput, hookEvents, input.done)
-	ctx = newRunContext(ctx, run)
-	hookDone, hookRemaining := r.startRunHooks(ctx, run)
-	agentRun := make(chan runAgentResult, 1)
-	agentRunDone := make(chan struct{})
-	go func() {
-		defer close(agentRunDone)
-		ch, err := r.runner.Run(ctx, input.userID, threadID, *input.messages.inputMessage, input.runOption...)
-		agentRun <- runAgentResult{events: ch, err: err}
-	}()
+	if !hooksStarted {
+		hookDone, hookRemaining = r.startRunHooks(ctx, run)
+	}
+	if !agentRunStarted {
+		startAgentRun()
+	}
 	hookDone, hookRemaining = r.runEventLoop(
 		ctx, cancel, closeDone, events, input, agentRun, hookEvents, hookDone, hookRemaining)
 	closeDone()
@@ -751,19 +817,35 @@ func (r *runner) handleHookEvent(ctx context.Context, events chan<- aguievents.E
 	return true
 }
 
-func (r *runner) flushTrack(ctx context.Context, key session.Key) error {
+func (r *runner) flushTrack(
+	ctx context.Context,
+	key session.Key,
+	requestID string,
+) error {
 	flushCtx, cancel := r.newTrackPersistenceContext(ctx)
 	defer cancel()
+	flushCtx = track.ContextWithRequestID(flushCtx, requestID)
 	return r.tracker.Flush(flushCtx, key)
 }
 
-func (r *runner) closeTrack(ctx context.Context, key session.Key) error {
+func (r *runner) closeTrack(
+	ctx context.Context,
+	key session.Key,
+	requestID string,
+) error {
 	closeCtx, cancel := r.newTrackPersistenceContext(ctx)
 	defer cancel()
+	closeCtx = track.ContextWithRequestID(closeCtx, requestID)
 	return r.tracker.Close(closeCtx, key)
 }
 
-func (r *runner) startTrackFlushLoop(ctx context.Context, key session.Key, threadID, runID string) func() {
+func (r *runner) startTrackFlushLoop(
+	ctx context.Context,
+	key session.Key,
+	requestID string,
+	threadID string,
+	runID string,
+) func() {
 	if r.flushInterval <= 0 {
 		return nil
 	}
@@ -776,7 +858,7 @@ func (r *runner) startTrackFlushLoop(ctx context.Context, key session.Key, threa
 		for {
 			select {
 			case <-ticker.C:
-				if err := r.flushTrack(ctx, key); err != nil {
+				if err := r.flushTrack(ctx, key, requestID); err != nil {
 					log.WarnfContext(ctx, "agui run: threadID: %s, runID: %s, flush track events: %v",
 						threadID, runID, err)
 				}
@@ -863,13 +945,9 @@ func (r *runner) emitPostRunFinalizationEvents(ctx context.Context, events chan<
 	return err
 }
 
-func parseResumeInfo(opt []agent.RunOption) *resumeInfo {
-	if len(opt) == 0 {
+func parseResumeInfo(opts *agent.RunOptions) *resumeInfo {
+	if opts == nil {
 		return nil
-	}
-	opts := &agent.RunOptions{}
-	for _, o := range opt {
-		o(opts)
 	}
 	state := opts.RuntimeState
 	if len(state) == 0 {
@@ -1170,7 +1248,7 @@ func (r *runner) writeEvent(ctx context.Context, events chan<- aguievents.Event,
 		input.runID,
 	)
 	if input.enableTrack && r.shouldTrackEvent(event) {
-		if err := r.recordTrackEvent(ctx, input.key, event); err != nil {
+		if err := r.recordTrackEvent(ctx, input.key, input.requestID, event); err != nil {
 			log.WarnfContext(
 				ctx,
 				"agui emit event: record track event failed: "+
@@ -1181,6 +1259,19 @@ func (r *runner) writeEvent(ctx context.Context, events chan<- aguievents.Event,
 			)
 		} else if input.startTrackFlush != nil {
 			input.startTrackFlush()
+		}
+	}
+	if isTerminal && input.enableTrack {
+		if err := r.flushTrack(ctx, input.key, input.requestID); err != nil {
+			log.WarnfContext(
+				ctx,
+				"agui emit terminal event: flush track events failed: "+
+					"threadID: %s, runID: %s, err: %v",
+				input.threadID,
+				input.runID,
+				err,
+			)
+			return false
 		}
 	}
 	select {
@@ -1239,7 +1330,7 @@ func (r *runner) recordUserMessage(ctx context.Context, input *runInput) error {
 	if metadata, ok := r.forwardedPropsSourceMetadata(ctx, input); ok {
 		evt.GetBaseEvent().RawEvent = metadata
 	}
-	if err := r.recordTrackEvent(ctx, input.key, evt); err != nil {
+	if err := r.recordTrackEvent(ctx, input.key, input.requestID, evt); err != nil {
 		return fmt.Errorf("record track event: %w", err)
 	}
 	return nil
@@ -1351,9 +1442,15 @@ func (r *runner) unregister(key session.Key) {
 	delete(r.running, key)
 }
 
-func (r *runner) recordTrackEvent(ctx context.Context, key session.Key, event aguievents.Event) error {
+func (r *runner) recordTrackEvent(
+	ctx context.Context,
+	key session.Key,
+	requestID string,
+	event aguievents.Event,
+) error {
 	trackCtx, cancel := r.newTrackPersistenceContext(ctx)
 	defer cancel()
+	trackCtx = track.ContextWithRequestID(trackCtx, requestID)
 	return r.tracker.AppendEvent(trackCtx, key, event)
 }
 

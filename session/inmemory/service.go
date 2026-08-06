@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/hook"
+	"trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/internal/sessionopt"
 	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
@@ -37,6 +38,7 @@ type stateWithTTL struct {
 type sessionWithTTL struct {
 	session   *session.Session
 	expiredAt time.Time
+	revision  *latestTurnRevision
 }
 
 var (
@@ -310,6 +312,7 @@ func (s *SessionService) CreateSession(
 
 	// Create a copy and merge state for return
 	copiedSess := sess.Clone()
+	revision.SetGeneration(copiedSess, 0)
 	appState := getValidState(app.appState)
 	userState := getValidState(app.userState[key.UserID])
 	if appState == nil {
@@ -373,6 +376,7 @@ func (s *SessionService) getSession(ctx context.Context, key session.Key, opt *s
 	}
 
 	copiedSess := sess.Clone()
+	revision.SetGeneration(copiedSess, sessWithTTL.revisionGeneration())
 
 	// apply filtering options if provided
 	copiedSess.ApplyEventFiltering(
@@ -484,6 +488,7 @@ func (s *SessionService) ListSessions(
 			copiedSess.ApplyEventFiltering(opts...)
 			applyTrackFiltering(copiedSess, opt)
 		}
+		revision.SetGeneration(copiedSess, sWithTTL.revisionGeneration())
 
 		sessList = append(sessList, mergeState(appState, userState, copiedSess))
 	}
@@ -669,7 +674,6 @@ func (s *SessionService) UpdateSessionState(ctx context.Context, key session.Key
 	if isExpired(sessWithTTL.expiredAt) {
 		return fmt.Errorf("memory session service update session state failed: session expired")
 	}
-
 	// Validate: disallow app: and user: prefixes
 	for k := range state {
 		if strings.HasPrefix(k, session.StateAppPrefix) {
@@ -678,6 +682,9 @@ func (s *SessionService) UpdateSessionState(ctx context.Context, key session.Key
 		if strings.HasPrefix(k, session.StateUserPrefix) {
 			return fmt.Errorf("memory session service update session state failed: %s is not allowed, use UpdateUserState instead", k)
 		}
+	}
+	if err := sessWithTTL.applyRevisionWrite(ctx, nil); err != nil {
+		return err
 	}
 
 	// Update session state (allow temp: prefix and unprefixed keys)
@@ -792,8 +799,6 @@ func (s *SessionService) appendEvent(
 	key session.Key,
 	opts ...session.Option,
 ) error {
-	sess.UpdateUserSession(evt, opts...)
-
 	app, ok := s.getAppSessions(key.AppName)
 	if !ok {
 		return fmt.Errorf("app not found: %s", key.AppName)
@@ -818,10 +823,13 @@ func (s *SessionService) appendEvent(
 	if storedSession == nil {
 		return fmt.Errorf("session expired: %s", key.SessionID)
 	}
+	if err := storedSessionWithTTL.applyEventRevisionWrite(ctx, sess, evt); err != nil {
+		return err
+	}
+	sess.UpdateUserSession(evt, opts...)
 
 	// update stored session with the given event
 	s.updateStoredSession(storedSession, evt)
-
 	// Update the session in the wrapper and refresh TTL.
 	storedSessionWithTTL.session = storedSession
 	storedSessionWithTTL.expiredAt = calculateExpiredAt(s.opts.sessionTTL)
@@ -835,8 +843,8 @@ func (s *SessionService) AppendTrackEvent(
 	trackEvent *session.TrackEvent,
 	opts ...session.Option,
 ) error {
-	if err := sess.AppendTrackEvent(trackEvent, opts...); err != nil {
-		return fmt.Errorf("append track event: %w", err)
+	if sess == nil {
+		return session.ErrNilSession
 	}
 	key := session.Key{
 		AppName:   sess.AppName,
@@ -845,6 +853,10 @@ func (s *SessionService) AppendTrackEvent(
 	}
 	if err := key.CheckSessionKey(); err != nil {
 		return err
+	}
+	validated := sess.Clone()
+	if err := validated.AppendTrackEvent(trackEvent, opts...); err != nil {
+		return fmt.Errorf("append track event: %w", err)
 	}
 
 	app, ok := s.getAppSessions(key.AppName)
@@ -871,9 +883,22 @@ func (s *SessionService) AppendTrackEvent(
 	if storedSession == nil {
 		return fmt.Errorf("session expired: %s", key.SessionID)
 	}
+	if _, err := storedSessionWithTTL.checkRevisionGeneration(ctx, sess); err != nil {
+		return err
+	}
 
 	// Append track event to the session.
 	if err := storedSession.AppendTrackEvent(trackEvent, opts...); err != nil {
+		return fmt.Errorf("append track event: %w", err)
+	}
+	if err := storedSessionWithTTL.applyTrackRevisionWrite(
+		ctx,
+		sess,
+		trackEvent,
+	); err != nil {
+		return err
+	}
+	if err := sess.AppendTrackEvent(trackEvent, opts...); err != nil {
 		return fmt.Errorf("append track event: %w", err)
 	}
 

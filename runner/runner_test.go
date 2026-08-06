@@ -38,6 +38,7 @@ import (
 	artifactinmemory "trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/sessionroute"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
@@ -162,6 +163,425 @@ func (m *mockAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-ch
 
 func (m *mockAgent) Tools() []tool.Tool {
 	return []tool.Tool{}
+}
+
+func TestRunnerLatestTurnReplacementRestoresPreTurnSession(t *testing.T) {
+	ctx := context.Background()
+	service := sessioninmemory.NewSessionService()
+	t.Cleanup(func() { require.NoError(t, service.Close()) })
+	r := NewRunner("app", &mockAgent{name: "agent"}, WithSessionService(service))
+
+	events, err := r.Run(
+		ctx,
+		"user",
+		"session",
+		model.NewUserMessage("original"),
+		agent.WithRequestID("request-original"),
+	)
+	require.NoError(t, err)
+	for range events {
+	}
+
+	events, err = r.Run(
+		ctx,
+		"user",
+		"session",
+		model.NewUserMessage("edited"),
+		agent.WithLatestTurnReplacement(
+			"request-original",
+			"request-edited",
+		),
+	)
+	require.NoError(t, err)
+	for range events {
+	}
+	active, err := service.GetSession(ctx, session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "session",
+	})
+	require.NoError(t, err)
+	require.Len(t, active.Events, 2)
+	assert.Equal(t, "request-edited", active.Events[0].RequestID)
+	assert.Equal(t, "edited", active.Events[0].Response.Choices[0].Message.Content)
+}
+
+func TestRunnerLatestTurnReplacementRestoresUnfinishedTurn(t *testing.T) {
+	ctx := context.Background()
+	service := sessioninmemory.NewSessionService()
+	t.Cleanup(func() { require.NoError(t, service.Close()) })
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	sess, err := service.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	start := event.NewResponseEvent(
+		"unfinished-invocation",
+		authorUser,
+		&model.Response{Choices: []model.Choice{{
+			Message: model.NewUserMessage("unfinished"),
+		}}},
+	)
+	start.ID = "unfinished-user"
+	start.RequestID = "request-unfinished"
+	require.NoError(t, service.AppendEvent(
+		revision.ContextWithTurnStart(ctx, revision.TurnStart{
+			RequestID:    start.RequestID,
+			InvocationID: start.InvocationID,
+		}),
+		sess,
+		start,
+	))
+
+	r := NewRunner("app", &mockAgent{name: "agent"}, WithSessionService(service))
+	events, err := r.Run(
+		ctx,
+		"user",
+		"session",
+		model.NewUserMessage("edited"),
+		agent.WithLatestTurnReplacement(
+			"request-unfinished",
+			"request-edited",
+		),
+	)
+	require.NoError(t, err)
+	for range events {
+	}
+	active, err := service.GetSession(ctx, key)
+	require.NoError(t, err)
+	require.Len(t, active.Events, 2)
+	assert.Equal(t, "request-edited", active.Events[0].RequestID)
+	assert.Equal(t, "edited", active.Events[0].Response.Choices[0].Message.Content)
+}
+
+type interruptThenRespondAgent struct {
+	name string
+	mu   sync.Mutex
+	runs int
+}
+
+func (a *interruptThenRespondAgent) Info() agent.Info {
+	return agent.Info{Name: a.name}
+}
+
+func (a *interruptThenRespondAgent) SubAgents() []agent.Agent { return nil }
+
+func (a *interruptThenRespondAgent) FindSubAgent(string) agent.Agent { return nil }
+
+func (a *interruptThenRespondAgent) Tools() []tool.Tool { return nil }
+
+func (a *interruptThenRespondAgent) Run(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) (<-chan *event.Event, error) {
+	a.mu.Lock()
+	a.runs++
+	run := a.runs
+	a.mu.Unlock()
+	events := make(chan *event.Event, 1)
+	if run == 1 {
+		go func() {
+			<-ctx.Done()
+			close(events)
+		}()
+		return events, nil
+	}
+	events <- event.NewResponseEvent(
+		invocation.InvocationID,
+		a.name,
+		&model.Response{Done: true, Choices: []model.Choice{{
+			Message: model.NewAssistantMessage("edited response"),
+		}}},
+	)
+	close(events)
+	return events, nil
+}
+
+func TestRunnerLatestTurnReplacementWaitsForActiveRunToStop(t *testing.T) {
+	ctx := context.Background()
+	service := sessioninmemory.NewSessionService()
+	t.Cleanup(func() { require.NoError(t, service.Close()) })
+	r := NewRunner(
+		"app",
+		&interruptThenRespondAgent{name: "agent"},
+		WithSessionService(service),
+	).(ManagedRunner)
+
+	oldEvents, err := r.Run(
+		ctx,
+		"user",
+		"session",
+		model.NewUserMessage("original"),
+		agent.WithRequestID("request-original"),
+	)
+	require.NoError(t, err)
+	events, err := r.Run(
+		ctx,
+		"user",
+		"session",
+		model.NewUserMessage("edited"),
+		agent.WithLatestTurnReplacement(
+			"request-original",
+			"request-edited",
+		),
+	)
+	require.Nil(t, events)
+	require.ErrorIs(t, err, ErrLatestTurnReplacementUnavailable)
+	require.ErrorContains(t, err, "still running")
+
+	require.True(t, r.Cancel("request-original"))
+	for range oldEvents {
+	}
+	events, err = r.Run(
+		ctx,
+		"user",
+		"session",
+		model.NewUserMessage("edited"),
+		agent.WithLatestTurnReplacement(
+			"request-original",
+			"request-edited",
+		),
+	)
+	require.NoError(t, err)
+	for range events {
+	}
+	active, err := service.GetSession(ctx, session.Key{
+		AppName: "app", UserID: "user", SessionID: "session",
+	})
+	require.NoError(t, err)
+	require.Len(t, active.Events, 2)
+	assert.Equal(t, "edited", active.Events[0].Response.Choices[0].Message.Content)
+}
+
+func TestResolveLatestTurnReplacement(t *testing.T) {
+	tests := []struct {
+		name    string
+		opts    agent.RunOptions
+		wantID  string
+		wantErr string
+	}{
+		{name: "ordinary run"},
+		{
+			name: "replacement",
+			opts: agent.NewRunOptions(agent.WithLatestTurnReplacement(
+				"old-request", "new-request",
+			)),
+			wantID: "new-request",
+		},
+		{
+			name: "matching request option",
+			opts: agent.NewRunOptions(
+				agent.WithRequestID("new-request"),
+				agent.WithLatestTurnReplacement("old-request", "new-request"),
+			),
+			wantID: "new-request",
+		},
+		{
+			name: "empty expected request",
+			opts: agent.NewRunOptions(agent.WithLatestTurnReplacement(
+				"", "new-request",
+			)),
+			wantErr: "expected request id is empty",
+		},
+		{
+			name: "empty new request",
+			opts: agent.NewRunOptions(agent.WithLatestTurnReplacement(
+				"old-request", "",
+			)),
+			wantErr: "replacement request id is empty",
+		},
+		{
+			name: "same request",
+			opts: agent.NewRunOptions(agent.WithLatestTurnReplacement(
+				"request", "request",
+			)),
+			wantErr: "request ids must differ",
+		},
+		{
+			name: "conflicting request option",
+			opts: agent.NewRunOptions(
+				agent.WithRequestID("other-request"),
+				agent.WithLatestTurnReplacement("old-request", "new-request"),
+			),
+			wantErr: "request id conflicts",
+		},
+		{
+			name: "resume",
+			opts: agent.NewRunOptions(
+				agent.WithLatestTurnReplacement("old-request", "new-request"),
+				agent.WithResume(true),
+			),
+			wantErr: "cannot resume",
+		},
+		{
+			name: "graph resume command",
+			opts: agent.NewRunOptions(
+				agent.WithLatestTurnReplacement("old-request", "new-request"),
+				agent.WithRuntimeState(map[string]any{
+					graph.StateKeyCommand: &graph.Command{Resume: "answer"},
+				}),
+			),
+			wantErr: "cannot resume",
+		},
+		{
+			name: "graph resume channel",
+			opts: agent.NewRunOptions(
+				agent.WithLatestTurnReplacement("old-request", "new-request"),
+				agent.WithRuntimeState(map[string]any{
+					graph.ResumeChannel: nil,
+				}),
+			),
+			wantErr: "cannot resume",
+		},
+		{
+			name: "seed history",
+			opts: agent.NewRunOptions(
+				agent.WithLatestTurnReplacement("old-request", "new-request"),
+				agent.WithMessages([]model.Message{model.NewUserMessage("seed")}),
+			),
+			wantErr: "cannot seed session history",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := resolveLatestTurnReplacement(&tt.opts)
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantID, tt.opts.RequestID)
+		})
+	}
+}
+
+func TestRunnerLatestTurnReplacementUnsupported(t *testing.T) {
+	r := NewRunner(
+		"app",
+		&mockAgent{name: "agent"},
+		WithSessionService(&mockSessionService{}),
+	)
+
+	events, err := r.Run(
+		context.Background(),
+		"user",
+		"session",
+		model.NewUserMessage("edited"),
+		agent.WithLatestTurnReplacement("old-request", "new-request"),
+	)
+
+	require.Nil(t, events)
+	require.ErrorIs(t, err, ErrLatestTurnReplacementUnsupported)
+}
+
+func TestRunnerLatestTurnReplacementRequiresMessagePayload(t *testing.T) {
+	r := NewRunner(
+		"app",
+		&mockAgent{name: "agent"},
+		WithSessionService(sessioninmemory.NewSessionService()),
+	)
+	t.Cleanup(func() { require.NoError(t, r.Close()) })
+
+	events, err := r.Run(
+		context.Background(),
+		"user",
+		"session",
+		model.Message{},
+		agent.WithLatestTurnReplacement("old-request", "new-request"),
+	)
+
+	require.Nil(t, events)
+	require.ErrorContains(t, err, "replacement message has no payload")
+}
+
+func TestRunnerLatestTurnReplacementRejectsConflictingRequestID(t *testing.T) {
+	r := NewRunner(
+		"app",
+		&mockAgent{name: "agent"},
+		WithSessionService(sessioninmemory.NewSessionService()),
+	)
+	t.Cleanup(func() { require.NoError(t, r.Close()) })
+
+	events, err := r.Run(
+		context.Background(),
+		"user",
+		"session",
+		model.NewUserMessage("edited"),
+		agent.WithRequestID("conflicting-request"),
+		agent.WithLatestTurnReplacement("old-request", "new-request"),
+	)
+
+	require.Nil(t, events)
+	require.ErrorContains(t, err, "request id conflicts")
+}
+
+func TestRunnerRoutedPersistenceMakesLatestTurnUnavailable(t *testing.T) {
+	ctx := context.Background()
+	service := sessioninmemory.NewSessionService()
+	t.Cleanup(func() { require.NoError(t, service.Close()) })
+	rootKey := session.Key{AppName: "app", UserID: "user", SessionID: "root"}
+	routedKey := session.Key{AppName: "app", UserID: "user", SessionID: "routed"}
+	root, err := service.CreateSession(ctx, rootKey, nil)
+	require.NoError(t, err)
+	routed, err := service.CreateSession(ctx, routedKey, nil)
+	require.NoError(t, err)
+
+	invocation := agent.NewInvocation(
+		agent.WithInvocationSession(root),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithRequestID("request"),
+		)),
+	)
+	start := event.NewResponseEvent(
+		invocation.InvocationID,
+		authorUser,
+		&model.Response{Choices: []model.Choice{{
+			Message: model.NewUserMessage("question"),
+		}}},
+	)
+	start.RequestID = "request"
+	require.NoError(t, service.AppendEvent(
+		revision.ContextWithTurnStart(ctx, revision.TurnStart{
+			RequestID: "request", InvocationID: invocation.InvocationID,
+		}),
+		root,
+		start,
+	))
+
+	sessionroute.AttachEventRouter(invocation, staticSessionRouter{sess: routed})
+	r := NewRunner(
+		"app",
+		&noOpAgent{name: "agent"},
+		WithSessionService(service),
+	).(*runner)
+	loop := &eventLoopContext{
+		sess:             root,
+		invocation:       invocation,
+		processedEventCh: make(chan *event.Event, 1),
+		streamFilter:     graph.NewStreamModeFilter(false, nil),
+	}
+	routedEvent := event.NewResponseEvent(
+		invocation.InvocationID,
+		"agent",
+		&model.Response{Done: true, Choices: []model.Choice{{
+			Message: model.NewAssistantMessage("routed"),
+		}}},
+	)
+	routedEvent.RequestID = "request"
+	require.NoError(t, r.processSingleAgentEvent(ctx, loop, routedEvent))
+
+	completion := event.NewResponseEvent(
+		invocation.InvocationID,
+		"app",
+		&model.Response{Done: true, Object: model.ObjectTypeRunnerCompletion},
+	)
+	completion.RequestID = "request"
+	require.NoError(t, service.AppendEvent(ctx, root, completion))
+	_, err = revision.ReplaceLatestTurn(ctx, service, revision.LatestTurnReplacementRequest{
+		Key:               rootKey,
+		ExpectedRequestID: "request",
+		IdempotencyKey:    "replacement",
+	})
+	require.ErrorIs(t, err, revision.ErrLatestTurnReplacementUnavailable)
 }
 
 type capturingRoleAgent struct {

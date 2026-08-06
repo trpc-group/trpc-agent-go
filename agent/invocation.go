@@ -662,6 +662,29 @@ func WithRequestID(requestID string) RunOption {
 	}
 }
 
+// LatestTurnReplacement identifies one run that replaces the latest persisted
+// request of a session.
+type LatestTurnReplacement struct {
+	// ExpectedRequestID identifies the latest request to replace.
+	ExpectedRequestID string
+	// RequestID identifies the new replacement run and its session transition.
+	RequestID string
+}
+
+// WithLatestTurnReplacement makes this run replace the latest persisted turn.
+// expectedRequestID identifies the request to replace, while requestID
+// identifies the new run. The replaced turn may be completed or unfinished.
+// Callers must stop any active execution and wait for its event stream to close
+// before replacing it. Both IDs are required and must differ.
+func WithLatestTurnReplacement(expectedRequestID, requestID string) RunOption {
+	return func(opts *RunOptions) {
+		opts.LatestTurnReplacement = &LatestTurnReplacement{
+			ExpectedRequestID: expectedRequestID,
+			RequestID:         requestID,
+		}
+	}
+}
+
 // WithEventFilterKey sets the invocation event filter key for this run.
 //
 // This controls the FilterKey injected into emitted events and the default
@@ -1262,6 +1285,10 @@ type RunOptions struct {
 
 	// RequestID is the request id of the request.
 	RequestID string
+
+	// LatestTurnReplacement describes the latest persisted turn replaced by this
+	// run. A nil value preserves ordinary Run behavior.
+	LatestTurnReplacement *LatestTurnReplacement
 
 	// DetachedCancel controls whether Runner ignores parent context
 	// cancellation for this run.

@@ -22,6 +22,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/redis/internal/util"
 )
@@ -236,14 +237,28 @@ func (c *Client) ExistsPipelined(ctx context.Context, pipe redis.Pipeliner, key 
 
 // AppendEvent persists an event to ZSet storage.
 func (c *Client) AppendEvent(ctx context.Context, key session.Key, event *event.Event) error {
+	return c.AppendEventWithRevision(ctx, key, event, sessionrevision.Write{})
+}
+
+// AppendEventWithRevision persists an event and its private revision metadata
+// in the same optimistic Redis transaction.
+func (c *Client) AppendEventWithRevision(
+	ctx context.Context,
+	key session.Key,
+	event *event.Event,
+	write sessionrevision.Write,
+) error {
 	eventBytes, err := json.Marshal(event)
 	if err != nil {
 		return fmt.Errorf("marshal event failed: %w", err)
 	}
 
-	return c.updateSessionStateCAS(
+	return c.updateSessionStateCASWithRevision(
 		ctx,
 		key,
+		write,
+		event,
+		nil,
 		func(sessState *SessionState) error {
 			sessState.UpdatedAt = time.Now()
 			session.ApplyEventStateDeltaMap(sessState.State, event)
@@ -340,9 +355,22 @@ func (c *Client) ListSessions(
 
 // UpdateSessionState updates session state in ZSet.
 func (c *Client) UpdateSessionState(ctx context.Context, key session.Key, state session.StateMap) error {
-	return c.updateSessionStateCAS(
+	return c.UpdateSessionStateWithRevision(ctx, key, state, sessionrevision.Write{})
+}
+
+// UpdateSessionStateWithRevision updates session state under a revision fence.
+func (c *Client) UpdateSessionStateWithRevision(
+	ctx context.Context,
+	key session.Key,
+	state session.StateMap,
+	write sessionrevision.Write,
+) error {
+	return c.updateSessionStateCASWithRevision(
 		ctx,
 		key,
+		write,
+		nil,
+		nil,
 		func(sessState *SessionState) error {
 			for k, v := range state {
 				if v == nil {
@@ -374,6 +402,7 @@ func (c *Client) DeleteSession(ctx context.Context, key session.Key) error {
 		txPipe.Del(ctx, c.trackKey(key, track))
 	}
 	txPipe.Del(ctx, c.trackIndexKey(key))
+	txPipe.Del(ctx, c.revisionKey(key), c.revisionArchiveKey(key))
 	if _, err := txPipe.Exec(ctx); err != nil && err != redis.Nil {
 		return fmt.Errorf("delete session state failed: %w", err)
 	}
@@ -382,14 +411,27 @@ func (c *Client) DeleteSession(ctx context.Context, key session.Key) error {
 
 // AppendTrackEvent persists a track event to ZSet storage.
 func (c *Client) AppendTrackEvent(ctx context.Context, key session.Key, trackEvent *session.TrackEvent) error {
+	return c.AppendTrackEventWithRevision(ctx, key, trackEvent, sessionrevision.Write{})
+}
+
+// AppendTrackEventWithRevision persists a track event under a revision fence.
+func (c *Client) AppendTrackEventWithRevision(
+	ctx context.Context,
+	key session.Key,
+	trackEvent *session.TrackEvent,
+	write sessionrevision.Write,
+) error {
 	eventBytes, err := json.Marshal(trackEvent)
 	if err != nil {
 		return fmt.Errorf("marshal track event failed: %w", err)
 	}
 
-	return c.updateSessionStateCAS(
+	return c.updateSessionStateCASWithRevision(
 		ctx,
 		key,
+		write,
+		nil,
+		trackEvent,
 		func(sessState *SessionState) error {
 			sess := &session.Session{
 				ID:      key.SessionID,
@@ -430,7 +472,29 @@ func (c *Client) updateSessionStateCAS(
 	mutate func(sessState *SessionState) error,
 	extra func(pipe redis.Pipeliner),
 ) error {
+	return c.updateSessionStateCASWithRevision(
+		ctx,
+		key,
+		sessionrevision.Write{},
+		nil,
+		nil,
+		mutate,
+		extra,
+	)
+}
+
+func (c *Client) updateSessionStateCASWithRevision(
+	ctx context.Context,
+	key session.Key,
+	write sessionrevision.Write,
+	evt *event.Event,
+	trackEvent *session.TrackEvent,
+	mutate func(sessState *SessionState) error,
+	extra func(pipe redis.Pipeliner),
+) error {
 	sessKey := c.sessionStateKey(key)
+	revisionKey := c.revisionKey(key)
+	revisionArchiveKey := c.revisionArchiveKey(key)
 	retryDelay := 5 * time.Millisecond
 	for {
 		if err := ctx.Err(); err != nil {
@@ -453,6 +517,37 @@ func (c *Client) updateSessionStateCAS(
 			if sessState.State == nil {
 				sessState.State = make(session.StateMap)
 			}
+			record, exists, err := readRevisionRecord(ctx, tx, revisionKey)
+			if err != nil {
+				return err
+			}
+			if write.HasExpectedGeneration &&
+				record.Generation != write.ExpectedGeneration {
+				return sessionrevision.ErrStaleGeneration
+			}
+			if write.HasExpectedHead && record.Head != write.ExpectedHead {
+				return sessionrevision.ErrStaleProjection
+			}
+			var revisionChanged bool
+			switch {
+			case evt != nil:
+				persisted := evt.Response != nil && !evt.IsPartial &&
+					evt.IsValidContent()
+				revisionChanged = sessionrevision.ApplyEventWrite(
+					record,
+					write,
+					evt,
+					persisted,
+				)
+			case trackEvent != nil:
+				revisionChanged = sessionrevision.ApplyTrackWrite(
+					record,
+					write,
+					trackEvent,
+				)
+			default:
+				revisionChanged = sessionrevision.ApplyWrite(record, write)
+			}
 			if err := mutate(sessState); err != nil {
 				return err
 			}
@@ -462,10 +557,25 @@ func (c *Client) updateSessionStateCAS(
 				return fmt.Errorf("marshal session state failed: %w", err)
 			}
 
+			var revisionBytes []byte
+			if revisionChanged || write.HasExpectedGeneration {
+				revisionBytes, err = json.Marshal(record)
+				if err != nil {
+					return fmt.Errorf("marshal revision metadata: %w", err)
+				}
+			}
 			_, err = tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
 				pipe.HSet(ctx, sessKey, key.SessionID, string(updatedStateBytes))
+				if len(revisionBytes) > 0 {
+					pipe.Set(ctx, revisionKey, revisionBytes, c.cfg.SessionTTL)
+				} else if exists && c.cfg.SessionTTL > 0 {
+					pipe.Expire(ctx, revisionKey, c.cfg.SessionTTL)
+				}
 				if c.cfg.SessionTTL > 0 {
 					pipe.Expire(ctx, sessKey, c.cfg.SessionTTL)
+					pipe.Expire(ctx, revisionArchiveKey, c.cfg.SessionTTL)
+				} else {
+					pipe.Persist(ctx, revisionArchiveKey)
 				}
 				if extra != nil {
 					extra(pipe)
@@ -473,7 +583,7 @@ func (c *Client) updateSessionStateCAS(
 				return nil
 			})
 			return err
-		}, sessKey)
+		}, sessKey, revisionKey)
 		if err == nil {
 			return nil
 		}
@@ -591,7 +701,7 @@ func (c *Client) getEventsList(
 		sess := &session.Session{
 			Events: events,
 		}
-		if limit <= 0 {
+		if limit == 0 {
 			limit = c.cfg.SessionEventLimit
 		}
 		sess.ApplyEventFiltering(session.WithEventNum(limit), session.WithEventTime(afterTime))
@@ -774,6 +884,16 @@ func (c *Client) sessionStateKey(key session.Key) string {
 // sessionSummaryKey returns the Redis key for session summaries (with prefix).
 func (c *Client) sessionSummaryKey(key session.Key) string {
 	return c.prefixedKey(fmt.Sprintf("sesssum:{%s}:%s", key.AppName, key.UserID))
+}
+
+// revisionKey returns the private latest-turn revision metadata key.
+func (c *Client) revisionKey(key session.Key) string {
+	return c.prefixedKey(fmt.Sprintf("revision:{%s}:%s:%s", key.AppName, key.UserID, key.SessionID))
+}
+
+// revisionArchiveKey returns the private discarded-revision archive hash.
+func (c *Client) revisionArchiveKey(key session.Key) string {
+	return c.prefixedKey(fmt.Sprintf("revision-archive:{%s}:%s:%s", key.AppName, key.UserID, key.SessionID))
 }
 
 // UpdateAppState updates app-level state in ZSet.
@@ -1034,18 +1154,37 @@ func (c *Client) TrimConversations(ctx context.Context, key session.Key, count i
 		return nil, nil
 	}
 
-	// Batch remove from ZSet and refresh TTL.
-	pipe := c.client.TxPipeline()
-	pipe.ZRem(ctx, eventKey, toDelete...)
-
 	sessKey := c.sessionStateKey(key)
+	trimArgs := make([]any, 1, len(toDelete)+1)
+	trimArgs[0] = key.SessionID
+	trimArgs = append(trimArgs, toDelete...)
+	if _, err := c.runScript(
+		ctx,
+		luaTrimEventsWithRevision,
+		[]string{
+			eventKey,
+			sessKey,
+			c.revisionKey(key),
+			c.revisionArchiveKey(key),
+		},
+		trimArgs...,
+	).Result(); err != nil {
+		return nil, fmt.Errorf("trim events: remove events: %w", err)
+	}
+
+	// Preserve the legacy sliding-TTL behavior after the atomic mutation.
+	pipe := c.client.TxPipeline()
 	sumKey := c.sessionSummaryKey(key)
 	appStateKey := c.appStateKey(key.AppName)
 	userStateKey := c.userStateKey(key)
 	c.appendSessionTTL(ctx, pipe, key, sessKey, sumKey, appStateKey, userStateKey)
+	if c.cfg.SessionTTL > 0 {
+		pipe.Expire(ctx, c.revisionKey(key), c.cfg.SessionTTL)
+		pipe.Expire(ctx, c.revisionArchiveKey(key), c.cfg.SessionTTL)
+	}
 
 	if _, err := pipe.Exec(ctx); err != nil {
-		return nil, fmt.Errorf("trim events: remove events: %w", err)
+		return nil, fmt.Errorf("trim events: refresh TTL: %w", err)
 	}
 
 	// Reverse to return events in chronological order.
@@ -1066,6 +1205,18 @@ func (c *Client) CreateSummary(
 	sum *session.Summary,
 	ttl time.Duration,
 ) error {
+	return c.CreateSummaryWithRevision(ctx, key, filterKey, sum, ttl, sessionrevision.Write{})
+}
+
+// CreateSummaryWithRevision creates or updates a summary under a revision fence.
+func (c *Client) CreateSummaryWithRevision(
+	ctx context.Context,
+	key session.Key,
+	filterKey string,
+	sum *session.Summary,
+	ttl time.Duration,
+	write sessionrevision.Write,
+) error {
 	payload, err := json.Marshal(sum)
 	if err != nil {
 		return fmt.Errorf("marshal summary failed: %w", err)
@@ -1074,12 +1225,27 @@ func (c *Client) CreateSummary(
 	sumKey := c.sessionSummaryKey(key)
 	hashField := key.SessionID
 
-	if _, err := c.runScript(
-		ctx, luaSummariesSetIfNewer, []string{sumKey}, hashField, filterKey, string(payload),
-	).Result(); err != nil {
+	result, err := c.runScript(
+		ctx,
+		luaSummariesSetIfNewer,
+		[]string{
+			sumKey,
+			c.revisionKey(key),
+			c.sessionStateKey(key),
+			c.revisionArchiveKey(key),
+		},
+		hashField,
+		filterKey,
+		string(payload),
+		boolToInt(write.HasExpectedGeneration),
+		write.ExpectedGeneration,
+	).Int()
+	if err != nil {
 		return fmt.Errorf("store summary (lua) failed: %w", err)
 	}
-
+	if result == -1 {
+		return sessionrevision.ErrStaleGeneration
+	}
 	if ttl > 0 {
 		if err := c.client.Expire(ctx, sumKey, ttl).Err(); err != nil {
 			return fmt.Errorf("expire summary failed: %w", err)

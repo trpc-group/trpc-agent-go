@@ -11,12 +11,14 @@ package hashidx
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/redis/internal/util"
 )
@@ -355,6 +357,17 @@ func (c *Client) loadAndAttachTrackEvents(
 //   - StateDelta is always applied to session state (regardless of event content)
 //   - Event is only stored in event list if: Response != nil && !IsPartial && IsValidContent()
 func (c *Client) AppendEvent(ctx context.Context, key session.Key, evt *event.Event) error {
+	return c.AppendEventWithRevision(ctx, key, evt, sessionrevision.Write{})
+}
+
+// AppendEventWithRevision persists an event and its private revision metadata
+// in one Redis script.
+func (c *Client) AppendEventWithRevision(
+	ctx context.Context,
+	key session.Key,
+	evt *event.Event,
+	write sessionrevision.Write,
+) error {
 	evtJSON, err := json.Marshal(evt)
 	if err != nil {
 		return fmt.Errorf("marshal event: %w", err)
@@ -371,6 +384,14 @@ func (c *Client) AppendEvent(ctx context.Context, key session.Key, evt *event.Ev
 		c.keys.SessionMetaKey(key),
 		c.keys.EventDataKey(key),
 		c.keys.EventTimeIndexKey(key),
+		c.keys.RevisionKey(key),
+		c.keys.RevisionArchiveKey(key),
+	}
+	startRequestID := ""
+	startInvocationID := ""
+	if write.Start != nil {
+		startRequestID = write.Start.RequestID
+		startInvocationID = write.Start.InvocationID
 	}
 	args := []any{
 		evt.ID,
@@ -378,6 +399,14 @@ func (c *Client) AppendEvent(ctx context.Context, key session.Key, evt *event.Ev
 		evt.Timestamp.UnixNano(),
 		ttlSeconds,
 		boolToInt(shouldStoreEvent),
+		boolToInt(write.HasExpectedGeneration),
+		write.ExpectedGeneration,
+		startRequestID,
+		startInvocationID,
+		base64.StdEncoding.EncodeToString(write.Snapshot),
+		boolToInt(evt != nil && evt.IsRunnerCompletion()),
+		boolToInt(write.HasExpectedHead),
+		write.ExpectedHead,
 	}
 
 	result, err := c.runScript(ctx, luaAppendEvent, keys, args...).Int()
@@ -386,6 +415,12 @@ func (c *Client) AppendEvent(ctx context.Context, key session.Key, evt *event.Ev
 	}
 	if result == 0 {
 		return fmt.Errorf("session not found")
+	}
+	if result == -1 {
+		return sessionrevision.ErrStaleGeneration
+	}
+	if result == -2 {
+		return sessionrevision.ErrStaleProjection
 	}
 	return nil
 }
@@ -474,6 +509,9 @@ func (c *Client) TrimConversations(ctx context.Context, key session.Key, count i
 	keys := []string{
 		c.keys.EventDataKey(key),
 		c.keys.EventTimeIndexKey(key),
+		c.keys.SessionMetaKey(key),
+		c.keys.RevisionKey(key),
+		c.keys.RevisionArchiveKey(key),
 	}
 
 	result, err := c.runScript(ctx, luaTrimConversations, keys, count).StringSlice()

@@ -18,10 +18,189 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	artifactmem "trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessionmem "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
+
+func TestReplaceLatestTurnHydratesRestoredSession(t *testing.T) {
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+	inner := sessionmem.NewSessionService()
+	t.Cleanup(func() { _ = inner.Close() })
+	artifacts := artifactmem.NewService()
+	svc := Wrap(inner, artifacts, Config{Enabled: true})
+	if !revision.SupportsLatestTurnReplacement(svc) {
+		t.Fatal("wrapped service does not report latest-turn replacement support")
+	}
+	sess, err := svc.CreateSession(ctx, key, nil)
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+	baseline := imageEvent([]byte("image-bytes"))
+	baseline.RequestID = "baseline"
+	baseline.InvocationID = "baseline-invocation"
+	if err := svc.AppendEvent(ctx, sess, baseline); err != nil {
+		t.Fatalf("AppendEvent(baseline) error = %v", err)
+	}
+
+	turnCtx := revision.ContextWithTurnStart(ctx, revision.TurnStart{
+		RequestID:    "latest",
+		InvocationID: "latest-invocation",
+	})
+	latest := responseEvent(model.NewUserMessage("latest"))
+	latest.RequestID = "latest"
+	latest.InvocationID = "latest-invocation"
+	if err := svc.AppendEvent(turnCtx, sess, latest); err != nil {
+		t.Fatalf("AppendEvent(latest) error = %v", err)
+	}
+	completion := event.NewResponseEvent(
+		"latest-invocation",
+		"app",
+		&model.Response{Done: true, Object: model.ObjectTypeRunnerCompletion},
+	)
+	completion.RequestID = "latest"
+	if err := svc.AppendEvent(ctx, sess, completion); err != nil {
+		t.Fatalf("AppendEvent(completion) error = %v", err)
+	}
+
+	result, err := revision.ReplaceLatestTurn(ctx, svc, revision.LatestTurnReplacementRequest{
+		Key:               key,
+		ExpectedRequestID: "latest",
+		IdempotencyKey:    "replacement",
+	})
+	if err != nil {
+		t.Fatalf("ReplaceLatestTurn() error = %v", err)
+	}
+	if !result.Applied || len(result.ActiveSession.Events) != 1 {
+		t.Fatalf("ReplaceLatestTurn() result = %#v", result)
+	}
+	part := result.ActiveSession.Events[0].Response.Choices[0].Message.ContentParts[0]
+	if string(part.Image.Data) != "image-bytes" || part.ContentRef != nil {
+		t.Fatalf("hydrated restored part = %#v", part)
+	}
+
+	rawService := Wrap(inner, artifacts, Config{})
+	rawResult, err := revision.ReplaceLatestTurn(
+		ctx,
+		rawService,
+		revision.LatestTurnReplacementRequest{
+			Key:               key,
+			ExpectedRequestID: "latest",
+			IdempotencyKey:    "replacement",
+		},
+	)
+	if err != nil {
+		t.Fatalf("ReplaceLatestTurn(disabled externalization) error = %v", err)
+	}
+	rawPart := rawResult.ActiveSession.Events[0].Response.Choices[0].Message.ContentParts[0]
+	if len(rawPart.Image.Data) != 0 || rawPart.ContentRef == nil {
+		t.Fatalf("unhydrated restored part = %#v", rawPart)
+	}
+}
+
+func TestReplaceLatestTurnHydrationFailureCanBeConfirmedByRetry(t *testing.T) {
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+	inner := sessionmem.NewSessionService()
+	t.Cleanup(func() { _ = inner.Close() })
+	artifacts := &toggleLoadArtifactService{Service: artifactmem.NewService()}
+	svc := Wrap(inner, artifacts, Config{Enabled: true})
+	sess, err := svc.CreateSession(ctx, key, nil)
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+	baseline := imageEvent([]byte("image-bytes"))
+	baseline.RequestID = "baseline"
+	baseline.InvocationID = "baseline-invocation"
+	if err := svc.AppendEvent(ctx, sess, baseline); err != nil {
+		t.Fatalf("AppendEvent(baseline) error = %v", err)
+	}
+
+	turnCtx := revision.ContextWithTurnStart(ctx, revision.TurnStart{
+		RequestID: "latest", InvocationID: "latest-invocation",
+	})
+	latest := responseEvent(model.NewUserMessage("latest"))
+	latest.RequestID = "latest"
+	latest.InvocationID = "latest-invocation"
+	if err := svc.AppendEvent(turnCtx, sess, latest); err != nil {
+		t.Fatalf("AppendEvent(latest) error = %v", err)
+	}
+	completion := event.NewResponseEvent(
+		"latest-invocation",
+		"app",
+		&model.Response{Done: true, Object: model.ObjectTypeRunnerCompletion},
+	)
+	completion.RequestID = "latest"
+	if err := svc.AppendEvent(ctx, sess, completion); err != nil {
+		t.Fatalf("AppendEvent(completion) error = %v", err)
+	}
+
+	req := revision.LatestTurnReplacementRequest{
+		Key: key, ExpectedRequestID: "latest", IdempotencyKey: "replacement",
+	}
+	artifacts.failLoad = true
+	result, err := revision.ReplaceLatestTurn(ctx, svc, req)
+	if result != nil || err == nil || !strings.Contains(err.Error(), "load failed") {
+		t.Fatalf("ReplaceLatestTurn(first) = %#v, %v", result, err)
+	}
+
+	artifacts.failLoad = false
+	result, err = revision.ReplaceLatestTurn(ctx, svc, req)
+	if err != nil {
+		t.Fatalf("ReplaceLatestTurn(retry) error = %v", err)
+	}
+	if result.Applied {
+		t.Fatal("ReplaceLatestTurn(retry) Applied = true, want false")
+	}
+	part := result.ActiveSession.Events[0].Response.Choices[0].Message.ContentParts[0]
+	if string(part.Image.Data) != "image-bytes" || part.ContentRef != nil {
+		t.Fatalf("hydrated restored part = %#v", part)
+	}
+}
+
+func TestReplaceLatestTurnUnsupportedWrappedService(t *testing.T) {
+	svc := Wrap(&unsupportedReplacementService{}, artifactmem.NewService(), Config{Enabled: true})
+	if revision.SupportsLatestTurnReplacement(svc) {
+		t.Fatal("wrapped service reports unsupported latest-turn replacement capability")
+	}
+	_, err := revision.ReplaceLatestTurn(
+		context.Background(),
+		svc,
+		revision.LatestTurnReplacementRequest{
+			Key: session.Key{
+				AppName: "app", UserID: "user", SessionID: "session",
+			},
+			ExpectedRequestID: "request",
+			IdempotencyKey:    "replacement",
+		},
+	)
+	if !errors.Is(err, revision.ErrLatestTurnReplacementUnsupported) {
+		t.Fatalf("ReplaceLatestTurn() error = %v", err)
+	}
+	replacer, ok := svc.(latestTurnReplacer)
+	if !ok {
+		t.Fatal("wrapped service does not expose replacement method")
+	}
+	_, err = replacer.ReplaceLatestTurn(
+		context.Background(),
+		revision.LatestTurnReplacementRequest{
+			Key: session.Key{
+				AppName: "app", UserID: "user", SessionID: "session",
+			},
+			ExpectedRequestID: "request",
+			IdempotencyKey:    "replacement",
+		},
+	)
+	if !errors.Is(err, revision.ErrLatestTurnReplacementUnsupported) {
+		t.Fatalf("Service.ReplaceLatestTurn() error = %v", err)
+	}
+}
+
+type unsupportedReplacementService struct {
+	session.Service
+}
 
 func TestAppendEventExternalizesAndGetSessionHydrates(t *testing.T) {
 	ctx := context.Background()
@@ -1596,6 +1775,23 @@ type loadArtifactService struct {
 	artifact.Service
 	artifact *artifact.Artifact
 	err      error
+}
+
+type toggleLoadArtifactService struct {
+	artifact.Service
+	failLoad bool
+}
+
+func (s *toggleLoadArtifactService) LoadArtifact(
+	ctx context.Context,
+	sessionInfo artifact.SessionInfo,
+	filename string,
+	version *int,
+) (*artifact.Artifact, error) {
+	if s.failLoad {
+		return nil, errors.New("load failed")
+	}
+	return s.Service.LoadArtifact(ctx, sessionInfo, filename, version)
 }
 
 func (s *loadArtifactService) LoadArtifact(

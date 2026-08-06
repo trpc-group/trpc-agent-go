@@ -12,6 +12,12 @@ Redis 存储适用于生产环境和分布式应用，提供高性能和自动�
 - 会话摘要（Summary）异步生成
 - AppendEvent / GetSession Hook 扩展点
 
+HashIdx 与 ZSet/compat 两种存储 layout 都支持通过 `Runner.Run` 替换最新一轮。
+操作会先 drain 目标 Session 的异步 event 与 Track 持久化队列，再原子归档被丢弃的
+投影并恢复 turn 前 checkpoint，然后开始 replacement run。私有 revision key 与
+Session 使用相同 hash slot，不会写入用户 Session 索引。Revision key 与恢复后投影
+都保留源 key 的剩余 TTL，不会刷新生命周期。
+
 ## Redis 兼容性
 
 Redis Session Service 使用的命令兼容 Redis OSS 4.0 及以上版本。Redis 4.0 是文档声明的兼容下限，并非生产环境推荐版本；生产环境应使用 Redis 厂商仍在维护的版本。

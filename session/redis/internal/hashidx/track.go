@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -27,6 +28,17 @@ import (
 // that will be set on the session meta atomically.
 // This operation is atomic via Lua script.
 func (c *Client) AppendTrackEvent(ctx context.Context, key session.Key, trackEvent *session.TrackEvent, tracksState []byte) error {
+	return c.AppendTrackEventWithRevision(ctx, key, trackEvent, tracksState, sessionrevision.Write{})
+}
+
+// AppendTrackEventWithRevision persists a track event under a revision fence.
+func (c *Client) AppendTrackEventWithRevision(
+	ctx context.Context,
+	key session.Key,
+	trackEvent *session.TrackEvent,
+	tracksState []byte,
+	write sessionrevision.Write,
+) error {
 	eventJSON, err := json.Marshal(trackEvent)
 	if err != nil {
 		return fmt.Errorf("marshal track event: %w", err)
@@ -51,6 +63,8 @@ func (c *Client) AppendTrackEvent(ctx context.Context, key session.Key, trackEve
 		c.keys.TrackTimeIndexKey(key, track),
 		c.keys.SessionMetaKey(key),
 		c.keys.TrackIndexKey(key),
+		c.keys.RevisionKey(key),
+		c.keys.RevisionArchiveKey(key),
 	}
 	args := []any{
 		string(eventJSON),
@@ -59,6 +73,8 @@ func (c *Client) AppendTrackEvent(ctx context.Context, key session.Key, trackEve
 		boolToInt(c.cfg.TrackEventTTL != nil),
 		tracksVal,
 		string(track),
+		boolToInt(write.HasExpectedGeneration),
+		write.ExpectedGeneration,
 	}
 
 	result, err := c.runScript(ctx, luaAppendTrackEvent, keys, args...).Int64()
@@ -67,6 +83,9 @@ func (c *Client) AppendTrackEvent(ctx context.Context, key session.Key, trackEve
 	}
 	if result == 0 {
 		return fmt.Errorf("session not found")
+	}
+	if result == -1 {
+		return sessionrevision.ErrStaleGeneration
 	}
 	return nil
 }

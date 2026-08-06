@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -51,8 +52,14 @@ func (s *Service) UpdateSessionState(
 	s.stateWriteMu.Lock()
 	defer s.stateWriteMu.Unlock()
 
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin update session state: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	var current []byte
-	err := s.db.QueryRowContext(
+	err = tx.QueryRowContext(
 		ctx,
 		fmt.Sprintf(
 			`SELECT state FROM %s
@@ -70,6 +77,15 @@ AND deleted_at IS NULL`,
 	if err != nil {
 		return fmt.Errorf("get session state: %w", err)
 	}
+	write := sessionrevision.NewWrite(ctx, nil)
+	record, revisionSupported, err := s.readRevisionForWrite(ctx, tx, key)
+	if err != nil {
+		return err
+	}
+	if err := checkRevisionGeneration(record, write); err != nil {
+		return err
+	}
+	revisionChanged := sessionrevision.ApplyWrite(record, write)
 
 	var sessState SessionState
 	if len(current) > 0 {
@@ -99,7 +115,7 @@ AND deleted_at IS NULL`,
 
 	expiresAt := calculateExpiresAt(now, s.opts.sessionTTL)
 
-	_, err = s.db.ExecContext(
+	_, err = tx.ExecContext(
 		ctx,
 		fmt.Sprintf(
 			`UPDATE %s
@@ -117,6 +133,14 @@ AND deleted_at IS NULL`,
 	)
 	if err != nil {
 		return fmt.Errorf("update session state: %w", err)
+	}
+	if revisionSupported && (revisionChanged || write.HasExpectedGeneration) {
+		if err := s.writeRevisionTx(ctx, tx, key, record, expiresAt); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit update session state: %w", err)
 	}
 	return nil
 }

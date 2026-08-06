@@ -224,6 +224,73 @@ The following inputs are not re-hosted by this feature:
 
 Failure behavior is fail-closed: if Artifact storage is required but unavailable, or if artifact save/load fails, the operation returns an error instead of silently dropping content. If externalization fails before the event is handed to the session backend, the framework submits best-effort delete requests for artifacts saved by that attempt. After the append has been handed to the backend, artifacts are retained on ambiguous errors to avoid deleting content that a persisted event may already reference.
 
+### Replacing the Latest Turn
+
+Use `Runner.Run` with `agent.WithLatestTurnReplacement` to edit and resend the
+latest persisted turn, including one interrupted before a final response. The
+logical `SessionID` stays unchanged. The old and new request IDs form one
+guarded transition: the first identifies the turn that must still be latest,
+and the second identifies the replacement run.
+
+```go
+events, err := r.Run(
+    ctx,
+    "user123",
+    "session-001",
+    model.NewUserMessage("edited message"),
+    agent.WithLatestTurnReplacement(
+        "request-before-edit",
+        "request-after-edit",
+    ),
+)
+```
+
+Consume `events` exactly as for an ordinary run. The replacement option supplies
+the new request ID, so a separate `agent.WithRequestID` is unnecessary. If both
+are supplied, the IDs must match. Replacement cannot be combined with resume or
+history seeding through `RunOptions.Messages`, and the replacement message must
+carry a payload.
+
+Before starting the new run, Runner atomically restores session-scoped events,
+state, summaries, and Track events to the complete checkpoint before the old
+request. The discarded projection is retained in backend-private revision
+storage. App state, user state, model/tool calls, artifact writes, and other
+external side effects are intentionally not rolled back.
+
+Safety rules:
+
+- The latest canonical Runner turn can be replaced whether it completed or was
+  interrupted. If it is still active in the same Runner, cancel it and consume
+  its event stream until the channel closes before replacing it. An earlier
+  attempt returns `runner.ErrLatestTurnReplacementUnavailable`.
+- A persisted user turn left unfinished by a process failure remains
+  replaceable after restart. Missing checkpoints, already-replaced turns, and
+  ambiguously attributed history return
+  `runner.ErrLatestTurnReplacementUnavailable`.
+- A latest-request mismatch or conflicting retry returns
+  `runner.ErrLatestTurnReplacementConflict`.
+- Unsupported storage returns `runner.ErrLatestTurnReplacementUnsupported`
+  before the replacement run starts.
+- Session projections loaded before a successful replacement are stale.
+  Supporting backends fence their later event, state, summary, and Track writes.
+- Custom Track producers should populate `TrackEvent.RequestID`. The AG-UI
+  tracker does this automatically and flushes Track persistence before a
+  terminal Runner event becomes visible.
+- A turn that persists routed output into another session is unavailable for
+  replacement because a single-session projection cannot restore it atomically.
+- Replacement preserves the source session's remaining TTL; it does not extend
+  the session lifetime.
+- Each replacement retains one complete discarded projection. There is no
+  implicit revision-count or byte-size cap. Session deletion and expiry remove
+  private revisions.
+
+The capability does not expand `session.Service` and has no separate public
+session mutation API. Memory, SQLite, and Redis HashIdx/ZSet support it. The
+externalization wrapper forwards support from its wrapped service. Noop,
+PostgreSQL, PGVector, MySQL, ClickHouse, and MongoDB return unsupported. SQLite
+users that disable automatic DDL with `WithSkipDBInit(true)` must provision the
+private revision tables described in the [SQLite storage documentation](sqlite.md).
+
 ## Core Concepts
 
 ### Session Structure

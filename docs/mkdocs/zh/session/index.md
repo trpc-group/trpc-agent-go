@@ -225,6 +225,62 @@ r := runner.NewRunner(
 
 失败语义采用 fail-closed：如果开启能力但 Artifact storage 不可用，或 artifact save/load 失败，操作会返回错误，不会静默丢内容。如果在 event 交给 session backend 前 externalization 失败，框架会对本次尝试已保存的 artifacts 提交 best-effort 删除请求；一旦 append 已交给 backend，遇到结果不确定的错误时会保留 artifacts，避免删除已被持久化 event 引用的内容。
 
+### 替换最新一轮
+
+编辑并重发最新一个已持久化的 turn（包括在 final response 之前中断的 turn）时，继续
+使用 `Runner.Run`，并传入 `agent.WithLatestTurnReplacement`。逻辑 `SessionID` 保持
+不变；旧、新 RequestID 共同构成一次带校验的转换：前者必须仍是最新 turn，后者标识
+新的执行。
+
+```go
+events, err := r.Run(
+    ctx,
+    "user123",
+    "session-001",
+    model.NewUserMessage("修改后的问题"),
+    agent.WithLatestTurnReplacement(
+        "request-before-edit",
+        "request-after-edit",
+    ),
+)
+```
+
+`events` 的消费方式与普通 Run 完全相同。Replacement option 已经携带新的 RequestID，
+无需再传 `agent.WithRequestID`；如果两者同时出现，ID 必须一致。Replacement 不能与
+resume 或 `RunOptions.Messages` 历史 seed 同时使用，并且替换消息必须包含有效 payload。
+
+新 Run 开始前，Runner 会把 Session 级 events、state、summaries 和 Track events
+原子恢复到旧 Request 之前的完整 checkpoint，并把被丢弃的投影保存在 backend 私有
+revision 存储中。app state、user state、模型/工具调用、artifact 写入和其他外部副作用
+不会被回滚。
+
+安全规则：
+
+- 最新一个有规范持久化起点的 Runner turn，无论正常完成还是中断，都可以替换。如果
+  它在同一个 Runner 中仍处于执行状态，应先取消，并持续消费旧事件流直至 channel
+  关闭；在此之前尝试替换会返回 `runner.ErrLatestTurnReplacementUnavailable`。
+- 进程异常退出留下的未完成 user turn，在重启后仍可替换。缺少 checkpoint、已经被
+  替换或无法可靠归属的历史返回 `runner.ErrLatestTurnReplacementUnavailable`。
+- 最新 Request 不匹配或重试发生冲突时返回
+  `runner.ErrLatestTurnReplacementConflict`。
+- 存储后端不支持时，在新 Run 开始前返回
+  `runner.ErrLatestTurnReplacementUnsupported`。
+- 成功替换前加载的 Session 投影已经过期，后续 event、state、summary 和 Track 写入
+  会被支持该能力的 backend 拒绝。
+- 自定义 Track producer 应填写 `TrackEvent.RequestID`。AG-UI tracker 会自动填写，
+  并在 terminal Runner event 对外可见前 flush Track 持久化。
+- 把 routed output 持久化到其他 Session 的 turn 无法通过单 Session 投影原子恢复，
+  因此不可替换。
+- Replacement 保留源 Session 的剩余 TTL，不会延长 Session 生命周期。
+- 每次 replacement 会保留一份完整废弃投影，系统不会隐式限制 revision 数量或字节数；
+  删除 Session 或 Session 到期时会一并清理。
+
+该能力不会扩展 `session.Service`，也没有独立的公开 Session mutation API。Memory、
+SQLite、Redis HashIdx/ZSet 支持 replacement；Externalization wrapper 透传底层能力；
+Noop、PostgreSQL、PGVector、MySQL、ClickHouse 和 MongoDB 返回 unsupported。SQLite
+用户如果通过 `WithSkipDBInit(true)` 禁用自动 DDL，需要自行创建
+[SQLite 存储文档](sqlite.md)中列出的私有 revision 表。
+
 ## 核心概念
 
 ### Session 结构

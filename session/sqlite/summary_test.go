@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -535,4 +536,124 @@ func TestSessionSQLite_GetSessionSummaryText_InvalidInput(t *testing.T) {
 	invalid := session.NewSession("", "", "s1")
 	_, ok = svc.GetSessionSummaryText(context.Background(), invalid)
 	require.False(t, ok)
+}
+
+func TestSessionSQLite_CreateSessionSummaryRevisionFailures(t *testing.T) {
+	newService := func(t *testing.T) *Service {
+		t.Helper()
+		db, _, cleanup := openTempSQLiteDB(t)
+		t.Cleanup(cleanup)
+		service, err := NewService(db, WithSummarizer(&fakeSummarizer{}))
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, service.Close()) })
+		return service
+	}
+	newSession := func(t *testing.T, service *Service) (*session.Session, session.Key) {
+		t.Helper()
+		ctx := context.Background()
+		key := session.Key{AppName: "app", UserID: "user", SessionID: t.Name()}
+		sess, err := service.CreateSession(ctx, key, nil)
+		require.NoError(t, err)
+		require.NoError(t, service.AppendEvent(ctx, sess, newUserEvent("hello")))
+		return sess, key
+	}
+
+	t.Run("session not found", func(t *testing.T) {
+		service := newService(t)
+		sess := session.NewSession("app", "user", "missing")
+		sess.UpdateUserSession(newUserEvent("hello"))
+		err := service.CreateSessionSummary(
+			context.Background(),
+			sess,
+			session.SummaryFilterKeyAllContents,
+			true,
+		)
+		require.ErrorContains(t, err, "session not found")
+	})
+
+	t.Run("cancelled transaction", func(t *testing.T) {
+		service := newService(t)
+		sess, _ := newSession(t, service)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		err := service.CreateSessionSummary(
+			ctx,
+			sess,
+			session.SummaryFilterKeyAllContents,
+			true,
+		)
+		require.ErrorIs(t, err, context.Canceled)
+	})
+
+	t.Run("corrupt revision metadata", func(t *testing.T) {
+		service := newService(t)
+		sess, key := newSession(t, service)
+		_, err := service.db.ExecContext(
+			context.Background(),
+			"UPDATE "+service.tableSessionRevisions+" SET record = ? "+
+				"WHERE app_name = ? AND user_id = ? AND session_id = ?",
+			[]byte("not-json"),
+			key.AppName,
+			key.UserID,
+			key.SessionID,
+		)
+		require.NoError(t, err)
+		err = service.CreateSessionSummary(
+			context.Background(),
+			sess,
+			session.SummaryFilterKeyAllContents,
+			true,
+		)
+		require.ErrorContains(t, err, "decode revision metadata")
+	})
+
+	t.Run("stale generation", func(t *testing.T) {
+		service := newService(t)
+		sess, key := newSession(t, service)
+		ctx := context.Background()
+		turnCtx := sessionrevision.ContextWithTurnStart(ctx, sessionrevision.TurnStart{
+			RequestID: "request", InvocationID: "invocation",
+		})
+		require.NoError(t, service.AppendEvent(
+			turnCtx,
+			sess,
+			sqliteTestMessageEvent("turn", "request", "invocation", "latest"),
+		))
+		require.NoError(t, service.AppendEvent(
+			ctx,
+			sess,
+			sqliteTestCompletionEvent("request", "invocation"),
+		))
+		_, err := service.ReplaceLatestTurn(
+			ctx,
+			sessionrevision.LatestTurnReplacementRequest{
+				Key: key, ExpectedRequestID: "request", IdempotencyKey: "replacement",
+			},
+		)
+		require.NoError(t, err)
+		err = service.CreateSessionSummary(
+			ctx,
+			sess,
+			session.SummaryFilterKeyAllContents,
+			true,
+		)
+		require.ErrorIs(t, err, sessionrevision.ErrStaleGeneration)
+	})
+
+	t.Run("missing revision archive", func(t *testing.T) {
+		service := newService(t)
+		sess, _ := newSession(t, service)
+		_, err := service.db.ExecContext(
+			context.Background(),
+			"DROP TABLE "+service.tableRevisionArchives,
+		)
+		require.NoError(t, err)
+		err = service.CreateSessionSummary(
+			context.Background(),
+			sess,
+			session.SummaryFilterKeyAllContents,
+			true,
+		)
+		require.ErrorContains(t, err, "refresh revision archive expiration")
+	})
 }

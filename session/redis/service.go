@@ -21,6 +21,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/hook"
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/internal/sessionopt"
@@ -58,6 +59,8 @@ type sessionEventPair struct {
 	key     session.Key
 	event   *event.Event
 	version string
+	write   sessionrevision.Write
+	done    chan error
 }
 
 type trackEventPair struct {
@@ -65,6 +68,8 @@ type trackEventPair struct {
 	event       *session.TrackEvent
 	version     string
 	tracksState []byte // serialized tracks state from session.State["tracks"]
+	done        chan error
+	write       sessionrevision.Write
 }
 
 // compatEnabled returns true if zset storage awareness is needed.
@@ -284,6 +289,9 @@ func (s *Service) CreateSession(
 		if err != nil {
 			return nil, err
 		}
+		if err := s.attachRevisionGeneration(ctx, key, sess, util.StorageTypeZset); err != nil {
+			return nil, err
+		}
 		span.SetAttributes(attribute.String("storage", util.StorageTypeZset))
 		s.recordStorageRoute(ctx, opCreateSession, util.StorageTypeZset)
 		return sess, nil
@@ -298,6 +306,9 @@ func (s *Service) CreateSession(
 	// Merge appState and userState into session (matches zset behavior)
 	sess, err = s.mergeAppUserState(ctx, key, sess)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.attachRevisionGeneration(ctx, key, sess, util.StorageTypeHashIdx); err != nil {
 		return nil, err
 	}
 	span.SetAttributes(attribute.String("storage", util.StorageTypeHashIdx))
@@ -412,15 +423,46 @@ func (s *Service) getSessionInternal(
 
 	if s.compatEnabled() && zsetExists {
 		sess, err := s.zsetClient.GetSession(ctx, key, eventLimit, opts.EventTime)
+		if err == nil {
+			err = s.attachRevisionGeneration(ctx, key, sess, util.StorageTypeZset)
+		}
 		return sess, util.StorageTypeZset, err
 	}
 
 	if hashidxExists {
 		sess, err := s.hashidxClient.GetSession(ctx, key, eventLimit, opts.EventTime)
+		if err == nil {
+			err = s.attachRevisionGeneration(ctx, key, sess, util.StorageTypeHashIdx)
+		}
 		return sess, util.StorageTypeHashIdx, err
 	}
 
 	return nil, "", nil
+}
+
+func (s *Service) attachRevisionGeneration(
+	ctx context.Context,
+	key session.Key,
+	sess *session.Session,
+	storageType string,
+) error {
+	if sess == nil {
+		return nil
+	}
+	var (
+		record *sessionrevision.PersistedRecord
+		err    error
+	)
+	if storageType == util.StorageTypeZset {
+		record, err = s.zsetClient.Revision(ctx, key)
+	} else {
+		record, err = s.hashidxClient.Revision(ctx, key)
+	}
+	if err != nil {
+		return err
+	}
+	sessionrevision.SetGeneration(sess, record.Generation)
+	return nil
 }
 
 // getEffectiveEventLimit returns the effective event limit.
@@ -454,6 +496,18 @@ func (s *Service) ListSessions(
 	if err != nil {
 		return nil, fmt.Errorf("list sessions (hashidx): %w", err)
 	}
+	for _, sess := range hashidxSessions {
+		if err := s.attachRevisionGeneration(
+			ctx,
+			session.Key{
+				AppName: userKey.AppName, UserID: userKey.UserID, SessionID: sess.ID,
+			},
+			sess,
+			util.StorageTypeHashIdx,
+		); err != nil {
+			return nil, fmt.Errorf("attach hashidx session revision: %w", err)
+		}
+	}
 
 	// List zset (if zset awareness is enabled: transition or legacy)
 	if !s.compatEnabled() {
@@ -464,6 +518,18 @@ func (s *Service) ListSessions(
 	zsetSessions, err := s.zsetClient.ListSessions(ctx, userKey, eventLimit, opt.EventTime, opt.ListSessionOnlyMeta)
 	if err != nil {
 		return nil, fmt.Errorf("list sessions (zset): %w", err)
+	}
+	for _, sess := range zsetSessions {
+		if err := s.attachRevisionGeneration(
+			ctx,
+			session.Key{
+				AppName: userKey.AppName, UserID: userKey.UserID, SessionID: sess.ID,
+			},
+			sess,
+			util.StorageTypeZset,
+		); err != nil {
+			return nil, fmt.Errorf("attach zset session revision: %w", err)
+		}
 	}
 
 	// Merge: zset priority for duplicates (zset data is more complete during migration)
@@ -530,6 +596,9 @@ func (s *Service) AppendEvent(
 	event *event.Event,
 	opts ...session.Option,
 ) error {
+	if sess == nil {
+		return session.ErrNilSession
+	}
 	key := session.Key{
 		AppName:   sess.AppName,
 		UserID:    sess.UserID,
@@ -559,11 +628,34 @@ func (s *Service) appendEventInternal(
 	key session.Key,
 	opts ...session.Option,
 ) error {
+	write := sessionrevision.NewWrite(ctx, sess)
+	if s.opts.enableAsyncPersist && write.Start != nil {
+		if err := s.flushRevisionPersistence(ctx, key); err != nil {
+			return fmt.Errorf("flush persistence before runner turn: %w", err)
+		}
+	} else if s.opts.enableAsyncPersist && e != nil && e.IsRunnerCompletion() {
+		if err := flushTrackPairChannel(
+			ctx,
+			s.trackEventChans,
+			sess.Hash,
+		); err != nil {
+			return fmt.Errorf("flush track persistence before runner completion: %w", err)
+		}
+	}
 	// update user session with the given event
 	sess.UpdateUserSession(e, opts...)
 
 	// persist event to redis asynchronously
 	if s.opts.enableAsyncPersist {
+		if write.Start != nil {
+			return s.persistEventWithRevision(
+				ctx,
+				getSessionVersion(sess),
+				e,
+				key,
+				write,
+			)
+		}
 		defer func() {
 			if r := recover(); r != nil {
 				if err, ok := r.(error); ok &&
@@ -582,7 +674,7 @@ func (s *Service) appendEventInternal(
 		ver := getSessionVersion(sess)
 		index := sess.Hash % len(s.eventPairChans)
 		select {
-		case s.eventPairChans[index] <- &sessionEventPair{key: key, event: e, version: ver}:
+		case s.eventPairChans[index] <- &sessionEventPair{key: key, event: e, version: ver, write: write}:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -590,7 +682,7 @@ func (s *Service) appendEventInternal(
 	}
 
 	// Sync Persist
-	return s.persistEvent(ctx, getSessionVersion(sess), e, key)
+	return s.persistEventWithRevision(ctx, getSessionVersion(sess), e, key, write)
 }
 
 // getSessionVersion returns the version tag from session's ServiceMeta.
@@ -603,59 +695,59 @@ func getSessionVersion(sess *session.Session) string {
 }
 
 func (s *Service) persistEvent(ctx context.Context, ver string, e *event.Event, key session.Key) error {
+	return s.persistEventWithRevision(ctx, ver, e, key, sessionrevision.Write{})
+}
+
+func (s *Service) persistEventWithRevision(
+	ctx context.Context,
+	ver string,
+	e *event.Event,
+	key session.Key,
+	write sessionrevision.Write,
+) error {
 	ctx, span := s.startSpan(ctx, "append_event", key)
 	defer span.End()
 
-	// fast path: use version tag
-	switch ver {
-	case util.StorageTypeHashIdx:
-		err := s.hashidxClient.AppendEvent(ctx, key, e)
+	if ver != util.StorageTypeHashIdx && ver != util.StorageTypeZset {
+		zsetExists, hashidxExists, err := s.checkSessionExists(ctx, key)
 		if err != nil {
-			log.WarnfContext(ctx, "append_event failed: storage=hashidx err=%v", err)
+			return fmt.Errorf("check session exists before append event: %w", err)
+		}
+		switch {
+		case s.compatEnabled() && zsetExists:
+			ver = util.StorageTypeZset
+		case hashidxExists:
+			ver = util.StorageTypeHashIdx
+		default:
+			return fmt.Errorf(
+				"session not found: %s/%s/%s",
+				key.AppName,
+				key.UserID,
+				key.SessionID,
+			)
+		}
+	}
+	if write.Start != nil {
+		var err error
+		write, err = s.prepareTurnStartWrite(ctx, ver, key, write)
+		if err != nil {
 			return err
 		}
-		span.SetAttributes(attribute.String("storage", util.StorageTypeHashIdx))
-		s.recordStorageRoute(ctx, opAppendEvent, util.StorageTypeHashIdx)
-		return nil
-	case util.StorageTypeZset:
-		err := s.zsetClient.AppendEvent(ctx, key, e)
-		if err != nil {
-			log.WarnfContext(ctx, "append_event failed: storage=zset err=%v", err)
-			return err
-		}
-		span.SetAttributes(attribute.String("storage", util.StorageTypeZset))
-		s.recordStorageRoute(ctx, opAppendEvent, util.StorageTypeZset)
-		return nil
 	}
 
-	// Slow path: no version tag, check storage.
-	zsetExists, hashidxExists, err := s.checkSessionExists(ctx, key)
+	var err error
+	if ver == util.StorageTypeZset {
+		err = s.zsetClient.AppendEventWithRevision(ctx, key, e, write)
+	} else {
+		err = s.hashidxClient.AppendEventWithRevision(ctx, key, e, write)
+	}
 	if err != nil {
-		log.WarnfContext(ctx, "checkSessionExists in persistEvent failed: %v", err)
+		log.WarnfContext(ctx, "append_event failed: storage=%s err=%v", ver, err)
+		return err
 	}
-
-	if s.compatEnabled() && zsetExists {
-		err := s.zsetClient.AppendEvent(ctx, key, e)
-		if err != nil {
-			log.WarnfContext(ctx, "append_event failed: storage=zset err=%v", err)
-			return err
-		}
-		span.SetAttributes(attribute.String("storage", util.StorageTypeZset))
-		s.recordStorageRoute(ctx, opAppendEvent, util.StorageTypeZset)
-		return nil
-	}
-	if hashidxExists {
-		err := s.hashidxClient.AppendEvent(ctx, key, e)
-		if err != nil {
-			log.WarnfContext(ctx, "append_event failed: storage=hashidx err=%v", err)
-			return err
-		}
-		span.SetAttributes(attribute.String("storage", util.StorageTypeHashIdx))
-		s.recordStorageRoute(ctx, opAppendEvent, util.StorageTypeHashIdx)
-		return nil
-	}
-
-	return fmt.Errorf("session not found: %s/%s/%s", key.AppName, key.UserID, key.SessionID)
+	span.SetAttributes(attribute.String("storage", ver))
+	s.recordStorageRoute(ctx, opAppendEvent, ver)
+	return nil
 }
 
 // trimEventOptions defines trimming behavior.
@@ -751,9 +843,16 @@ func (s *Service) startAsyncPersistWorker() {
 	for _, eventPairChan := range s.eventPairChans {
 		go func(eventPairChan chan *sessionEventPair) {
 			defer s.persistWg.Done()
+			var pendingErr error
 			for eventPair := range eventPairChan {
+				if eventPair.done != nil {
+					eventPair.done <- pendingErr
+					pendingErr = nil
+					continue
+				}
 				ctx, cancel := context.WithTimeout(context.Background(), defaultAsyncPersistTimeout)
-				if err := s.persistEvent(ctx, eventPair.version, eventPair.event, eventPair.key); err != nil {
+				if err := s.persistEventWithRevision(ctx, eventPair.version, eventPair.event, eventPair.key, eventPair.write); err != nil {
+					pendingErr = err
 					log.ErrorfContext(ctx, "async persist event failed: %v", err)
 				}
 				cancel()
@@ -766,9 +865,16 @@ func (s *Service) startAsyncPersistWorker() {
 	for _, trackEventChan := range s.trackEventChans {
 		go func(trackEventChan chan *trackEventPair) {
 			defer s.persistWg.Done()
+			var pendingErr error
 			for trackPair := range trackEventChan {
+				if trackPair.done != nil {
+					trackPair.done <- pendingErr
+					pendingErr = nil
+					continue
+				}
 				ctx, cancel := context.WithTimeout(context.Background(), defaultAsyncPersistTimeout)
-				if err := s.persistTrackEvent(ctx, trackPair.version, trackPair.key, trackPair.event, trackPair.tracksState); err != nil {
+				if err := s.persistTrackEventWithRevision(ctx, trackPair.version, trackPair.key, trackPair.event, trackPair.tracksState, trackPair.write); err != nil {
+					pendingErr = err
 					log.ErrorfContext(ctx, "async persist track event failed: %v", err)
 				}
 				cancel()

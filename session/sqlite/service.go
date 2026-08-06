@@ -24,6 +24,7 @@ import (
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/hook"
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
@@ -31,6 +32,11 @@ import (
 
 var _ session.Service = (*Service)(nil)
 var _ session.TrackService = (*Service)(nil)
+
+const (
+	tableNameSessionRevisions        = "session_revisions"
+	tableNameSessionRevisionArchives = "session_revision_archives"
+)
 
 // SessionState is the state of a session.
 type SessionState struct {
@@ -65,16 +71,22 @@ type Service struct {
 	tableSessionSummaries string
 	tableAppStates        string
 	tableUserStates       string
+	tableSessionRevisions string
+	tableRevisionArchives string
 }
 
 type sessionEventPair struct {
 	key   session.Key
 	event *event.Event
+	write sessionrevision.Write
+	done  chan error
 }
 
 type trackEventPair struct {
 	key   session.Key
 	event *session.TrackEvent
+	write sessionrevision.Write
+	done  chan error
 }
 
 // NewService creates a new sqlite session service.
@@ -125,6 +137,14 @@ func NewService(db *sql.DB, options ...ServiceOpt) (*Service, error) {
 		tableUserStates: sqldb.BuildTableName(
 			opts.tablePrefix,
 			sqldb.TableNameUserStates,
+		),
+		tableSessionRevisions: sqldb.BuildTableName(
+			opts.tablePrefix,
+			tableNameSessionRevisions,
+		),
+		tableRevisionArchives: sqldb.BuildTableName(
+			opts.tablePrefix,
+			tableNameSessionRevisionArchives,
 		),
 	}
 
@@ -210,6 +230,10 @@ func (s *Service) fullTableName(base string) string {
 		return s.tableAppStates
 	case sqldb.TableNameUserStates:
 		return s.tableUserStates
+	case tableNameSessionRevisions:
+		return s.tableSessionRevisions
+	case tableNameSessionRevisionArchives:
+		return s.tableRevisionArchives
 	default:
 		return sqldb.BuildTableName(s.opts.tablePrefix, base)
 	}
@@ -273,16 +297,45 @@ func (s *Service) CreateSession(
 
 	expiresAt := calculateExpiresAt(now, s.opts.sessionTTL)
 
-	exists, existingExpiresAt, err := s.checkSessionExists(ctx, key)
+	s.stateWriteMu.Lock()
+	err = func() error {
+		defer s.stateWriteMu.Unlock()
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("begin create session: %w", err)
+		}
+		defer func() { _ = tx.Rollback() }()
+		exists, existingExpiresAt, err := s.checkSessionExistsWith(
+			ctx,
+			tx,
+			key,
+		)
+		if err != nil {
+			return err
+		}
+		if exists && !isExpired(existingExpiresAt, now) {
+			return fmt.Errorf("session already exists and has not expired")
+		}
+		if err := s.upsertSessionStateWith(
+			ctx,
+			tx,
+			key,
+			stateBytes,
+			now,
+			expiresAt,
+			exists,
+		); err != nil {
+			return err
+		}
+		if err := s.deleteRevisionMetadata(ctx, tx, key); err != nil {
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit create session: %w", err)
+		}
+		return nil
+	}()
 	if err != nil {
-		return nil, err
-	}
-	if exists && !isExpired(existingExpiresAt, now) {
-		return nil, fmt.Errorf("session already exists and has not expired")
-	}
-
-	if err := s.upsertSessionState(ctx, key, stateBytes, now, expiresAt,
-		exists); err != nil {
 		return nil, err
 	}
 
@@ -306,16 +359,18 @@ func (s *Service) CreateSession(
 		session.WithSessionCreatedAt(sessState.CreatedAt),
 		session.WithSessionUpdatedAt(sessState.UpdatedAt),
 	)
+	sessionrevision.SetGeneration(sess, 0)
 
 	return mergeState(appState, userState, sess), nil
 }
 
-func (s *Service) checkSessionExists(
+func (s *Service) checkSessionExistsWith(
 	ctx context.Context,
+	query revisionRowQuerier,
 	key session.Key,
 ) (bool, sql.NullInt64, error) {
 	var expiresAt sql.NullInt64
-	err := s.db.QueryRowContext(
+	err := query.QueryRowContext(
 		ctx,
 		fmt.Sprintf(
 			`SELECT expires_at FROM %s
@@ -346,8 +401,9 @@ func isExpired(expiresAt sql.NullInt64, now time.Time) bool {
 	return unixNanoToTime(expiresAt.Int64).Before(now)
 }
 
-func (s *Service) upsertSessionState(
+func (s *Service) upsertSessionStateWith(
 	ctx context.Context,
+	exec revisionExecer,
 	key session.Key,
 	stateBytes []byte,
 	now time.Time,
@@ -355,7 +411,7 @@ func (s *Service) upsertSessionState(
 	exists bool,
 ) error {
 	if exists {
-		_, err := s.db.ExecContext(
+		_, err := exec.ExecContext(
 			ctx,
 			fmt.Sprintf(
 				`UPDATE %s
@@ -379,7 +435,7 @@ AND deleted_at IS NULL`,
 		return nil
 	}
 
-	_, err := s.db.ExecContext(
+	_, err := exec.ExecContext(
 		ctx,
 		fmt.Sprintf(
 			`INSERT INTO %s (
@@ -475,6 +531,8 @@ func (s *Service) DeleteSession(
 	if err := key.CheckSessionKey(); err != nil {
 		return err
 	}
+	s.stateWriteMu.Lock()
+	defer s.stateWriteMu.Unlock()
 	return s.deleteSessionState(ctx, key)
 }
 

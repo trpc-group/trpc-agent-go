@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -132,6 +133,9 @@ AND deleted_at IS NULL`
 			}
 		}
 	}
+	if err := s.attachRevisionGeneration(ctx, key, sess); err != nil {
+		return nil, err
+	}
 
 	return mergeState(appState, userState, sess), nil
 }
@@ -210,6 +214,13 @@ ORDER BY updated_at DESC, session_id DESC`, s.tableSessionStates)
 				session.WithSessionCreatedAt(st.CreatedAt),
 				session.WithSessionUpdatedAt(st.UpdatedAt),
 			)
+			if err := s.attachRevisionGeneration(ctx, session.Key{
+				AppName:   key.AppName,
+				UserID:    key.UserID,
+				SessionID: st.ID,
+			}, sess); err != nil {
+				return nil, err
+			}
 			out = append(out, mergeState(appState, userState, sess))
 		}
 		return out, nil
@@ -292,27 +303,36 @@ ORDER BY updated_at DESC, session_id DESC`, s.tableSessionStates)
 				}
 			}
 		}
+		if err := s.attachRevisionGeneration(ctx, sessionKeys[i], sess); err != nil {
+			return nil, err
+		}
 		out = append(out, mergeState(appState, userState, sess))
 	}
 
 	return out, nil
 }
 
-func (s *Service) addEvent(
+func (s *Service) addEventWithRevision(
 	ctx context.Context,
 	key session.Key,
 	evt *event.Event,
+	write sessionrevision.Write,
 ) error {
 	s.stateWriteMu.Lock()
 	defer s.stateWriteMu.Unlock()
 
 	now := time.Now().UTC()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
 
 	var (
 		stateBytes []byte
 		expiresAt  sql.NullInt64
 	)
-	err := s.db.QueryRowContext(
+	err = tx.QueryRowContext(
 		ctx,
 		fmt.Sprintf(
 			`SELECT state, expires_at FROM %s
@@ -346,6 +366,30 @@ AND deleted_at IS NULL`,
 			key.SessionID,
 		)
 	}
+	record, revisionSupported, err := s.readRevisionForWrite(ctx, tx, key)
+	if err != nil {
+		return err
+	}
+	if err := checkRevisionGeneration(record, write); err != nil {
+		return err
+	}
+	if revisionSupported && write.Start != nil {
+		current, _, err := s.loadActiveSessionTx(ctx, tx, key)
+		if err != nil {
+			return fmt.Errorf("load authoritative pre-turn session: %w", err)
+		}
+		write.Snapshot, err = sessionrevision.Snapshot(current)
+		if err != nil {
+			return fmt.Errorf("snapshot session before latest turn: %w", err)
+		}
+	}
+	shouldStoreEvent := evt.Response != nil && !evt.IsPartial && evt.IsValidContent()
+	revisionChanged := sessionrevision.ApplyEventWrite(
+		record,
+		write,
+		evt,
+		shouldStoreEvent,
+	)
 
 	sessState.UpdatedAt = now
 	if sessState.State == nil {
@@ -364,12 +408,6 @@ AND deleted_at IS NULL`,
 	}
 
 	newExpires := calculateExpiresAt(now, s.opts.sessionTTL)
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
 
 	_, err = tx.ExecContext(
 		ctx,
@@ -391,7 +429,7 @@ AND deleted_at IS NULL`,
 		return fmt.Errorf("update session state: %w", err)
 	}
 
-	if evt.Response != nil && !evt.IsPartial && evt.IsValidContent() {
+	if shouldStoreEvent {
 		_, err = tx.ExecContext(
 			ctx,
 			fmt.Sprintf(
@@ -411,6 +449,11 @@ AND deleted_at IS NULL`,
 			return fmt.Errorf("insert event: %w", err)
 		}
 	}
+	if revisionSupported && (revisionChanged || write.HasExpectedGeneration) {
+		if err := s.writeRevisionTx(ctx, tx, key, record, newExpires); err != nil {
+			return err
+		}
+	}
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit tx: %w", err)
@@ -418,21 +461,27 @@ AND deleted_at IS NULL`,
 	return nil
 }
 
-func (s *Service) addTrackEvent(
+func (s *Service) addTrackEventWithRevision(
 	ctx context.Context,
 	key session.Key,
 	trackEvent *session.TrackEvent,
+	write sessionrevision.Write,
 ) error {
 	s.stateWriteMu.Lock()
 	defer s.stateWriteMu.Unlock()
 
 	now := time.Now().UTC()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
 
 	var (
 		stateBytes []byte
 		expiresAt  sql.NullInt64
 	)
-	err := s.db.QueryRowContext(
+	err = tx.QueryRowContext(
 		ctx,
 		fmt.Sprintf(
 			`SELECT state, expires_at FROM %s
@@ -466,6 +515,14 @@ AND deleted_at IS NULL`,
 			key.SessionID,
 		)
 	}
+	record, revisionSupported, err := s.readRevisionForWrite(ctx, tx, key)
+	if err != nil {
+		return err
+	}
+	if err := checkRevisionGeneration(record, write); err != nil {
+		return err
+	}
+	revisionChanged := sessionrevision.ApplyTrackWrite(record, write, trackEvent)
 
 	sess := &session.Session{
 		ID:      key.SessionID,
@@ -491,12 +548,6 @@ AND deleted_at IS NULL`,
 
 	sessionExpires := calculateExpiresAt(now, s.opts.sessionTTL)
 	trackExpires := calculateExpiresAt(now, s.opts.effectiveTrackEventTTL())
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
 
 	_, err = tx.ExecContext(
 		ctx,
@@ -539,6 +590,11 @@ AND deleted_at IS NULL`,
 	)
 	if err != nil {
 		return fmt.Errorf("insert track event: %w", err)
+	}
+	if revisionSupported && (revisionChanged || write.HasExpectedGeneration) {
+		if err := s.writeRevisionTx(ctx, tx, key, record, sessionExpires); err != nil {
+			return err
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -605,7 +661,7 @@ AND deleted_at IS NULL`,
 			return fmt.Errorf("soft delete from %s: %w", table, err)
 		}
 	}
-	return nil
+	return s.deleteRevisionMetadata(ctx, tx, key)
 }
 
 func (s *Service) hardDeleteSessionTx(
@@ -614,6 +670,8 @@ func (s *Service) hardDeleteSessionTx(
 	key session.Key,
 ) error {
 	tables := []string{
+		s.tableRevisionArchives,
+		s.tableSessionRevisions,
 		s.tableSessionEvents,
 		s.tableSessionTracks,
 		s.tableSessionSummaries,
