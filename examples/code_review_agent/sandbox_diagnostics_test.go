@@ -40,6 +40,224 @@ func TestParseSandboxDiagnosticFormatsAndPaths(t *testing.T) {
 	}
 }
 
+func TestSandboxDiagnosticsUnaccountedOutputRetainsGenericWarning(t *testing.T) {
+	parsed := parseUnifiedDiff([]byte(sandboxDiagnosticDiff("root.go")))
+	spec := commandSpec{
+		Kind: commandCheckGoVet,
+		DiagnosticModules: map[string]string{
+			testRootModuleToken:   ".",
+			testNestedModuleToken: "nested",
+		},
+	}
+	run := sandboxRun{
+		ExitCode: 1,
+		Stderr: sandboxModuleBanner("vet", testRootModuleToken) + "\n" +
+			"root.go:2: mapped diagnostic\n" +
+			sandboxModuleBanner("vet", testNestedModuleToken) + "\n" +
+			"go: errors parsing go.mod\n",
+	}
+	diagnostics := parseSandboxDiagnostics(spec, run, parsed)
+	if diagnostics.Parsed != 1 || diagnostics.Mapped != 1 ||
+		!diagnostics.UnaccountedOutput || len(diagnostics.Matches) != 1 {
+		t.Fatalf("diagnostics = %+v, want mapped diagnostic plus unaccounted output", diagnostics)
+	}
+	if !sandboxDiagnosticsNeedGenericWarning(spec, run, diagnostics) {
+		t.Fatal("unaccounted output suppressed the generic warning")
+	}
+	result := governanceResult{}
+	result.addSandboxDiagnosticWarning(spec, run, diagnostics)
+	finalized := finalizeRuleMatches(result.Matches)
+	if len(finalized.Warnings) != 1 ||
+		strings.Contains(finalized.Warnings[0].Evidence, "go: errors parsing go.mod") {
+		t.Fatalf("unaccounted output leaked into warning evidence: %+v", finalized)
+	}
+}
+
+func TestSandboxDiagnosticsPackageHeaderIsStrictlyRecognized(t *testing.T) {
+	root := t.TempDir()
+	mustWriteFile(t, filepath.Join(root, "go.mod"), "/* module ignored.example/fake */\nmodule example.com/root\n\ngo 1.21\n")
+	mustWriteFile(t, filepath.Join(root, "root.go"), "package root\n\nfunc Added() {}\n")
+	parsed := parseUnifiedDiff([]byte(sandboxDiagnosticDiff("root.go")))
+	spec := commandSpec{
+		Kind:              commandCheckGoVet,
+		DiagnosticModules: map[string]string{testRootModuleToken: "."},
+	}
+	for _, header := range []string{
+		"# example.com/root",
+		"# example.com/root/pkg",
+		"# example.com/root [example.com/root.test]",
+		"# example.com/root_test [example.com/root.test]",
+		"# [example.com/root]",
+		"# [example.com/root.test]",
+	} {
+		t.Run("valid/"+strings.ReplaceAll(header, "/", "_"), func(t *testing.T) {
+			valid := parseSandboxDiagnosticsWithSnapshot(spec, sandboxRun{
+				ExitCode: 1,
+				Stderr: sandboxModuleBanner("vet", testRootModuleToken) + "\n" +
+					header + "\n" +
+					"root.go:2: mapped diagnostic\n",
+			}, parsed, root)
+			if valid.UnaccountedOutput || valid.Parsed != 1 || valid.Mapped != 1 ||
+				sandboxDiagnosticsNeedGenericWarning(spec, sandboxRun{ExitCode: 1}, valid) {
+				t.Fatalf("valid package header was not fully accounted for: %+v", valid)
+			}
+		})
+	}
+	for _, header := range []string{
+		"# arbitrary failure text",
+		"#  example.com/root",
+		"# example.com/root extra",
+		"# example.com/root [example.com/other.test]",
+		"# external.example/pkg",
+		"# [external.example/pkg]",
+		"# [example.com/root extra]",
+		"# [example.com/root.test] extra",
+	} {
+		t.Run("invalid/"+strings.ReplaceAll(header, "/", "_"), func(t *testing.T) {
+			invalid := parseSandboxDiagnosticsWithSnapshot(spec, sandboxRun{
+				ExitCode: 1,
+				Stderr: sandboxModuleBanner("vet", testRootModuleToken) + "\n" +
+					header + "\n" +
+					"root.go:2: mapped diagnostic\n",
+			}, parsed, root)
+			if !invalid.UnaccountedOutput || invalid.Mapped != 1 ||
+				!sandboxDiagnosticsNeedGenericWarning(spec, sandboxRun{ExitCode: 1}, invalid) {
+				t.Fatalf("untrusted package-looking text was not retained: %+v", invalid)
+			}
+		})
+	}
+	legacy := parseSandboxDiagnostics(spec, sandboxRun{
+		ExitCode: 1,
+		Stderr: sandboxModuleBanner("vet", testRootModuleToken) + "\n" +
+			"# example.com/root\n" +
+			"root.go:2: mapped diagnostic\n",
+	}, parsed)
+	if legacy.UnaccountedOutput || legacy.Mapped != 1 {
+		t.Fatalf("parser-only compatibility header was not exempted: %+v", legacy)
+	}
+	withoutMetadataRoot := t.TempDir()
+	mustWriteFile(t, filepath.Join(withoutMetadataRoot, "root.go"), "package root\n\nfunc Added() {}\n")
+	withoutMetadata := parseSandboxDiagnosticsWithSnapshot(spec, sandboxRun{
+		ExitCode: 1,
+		Stderr: sandboxModuleBanner("vet", testRootModuleToken) + "\n" +
+			"# example.com/root\n" +
+			"root.go:2: mapped diagnostic\n",
+	}, parsed, withoutMetadataRoot)
+	if !withoutMetadata.UnaccountedOutput || withoutMetadata.Mapped != 0 {
+		t.Fatalf("production header without trusted module metadata was exempted: %+v", withoutMetadata)
+	}
+}
+
+func TestSandboxDiagnosticsLineDirectiveBlocksWholeRun(t *testing.T) {
+	tests := []struct {
+		name     string
+		file     string
+		contents string
+	}{
+		{
+			name:     "unchanged source file",
+			file:     "other.go",
+			contents: "package root\n\n//line target.go:2\nvar _ = 1\n",
+		},
+		{
+			name:     "test source file",
+			file:     "other_test.go",
+			contents: "package root\n\n/*line target.go:2*/\nvar _ = 1\n",
+		},
+		{
+			name:     "changed source file",
+			file:     "target.go",
+			contents: "package root\n\n//line elsewhere.go:2\nfunc Added() {}\n",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			mustWriteFile(t, filepath.Join(root, "go.mod"), "module example.com/root\n\ngo 1.21\n")
+			mustWriteFile(t, filepath.Join(root, "target.go"), "package root\n\nfunc Added() {}\n")
+			mustWriteFile(t, filepath.Join(root, test.file), test.contents)
+			parsed := parseUnifiedDiff([]byte(sandboxDiagnosticDiff("target.go")))
+			spec := commandSpec{
+				Kind:              commandCheckGoVet,
+				DiagnosticModules: map[string]string{testRootModuleToken: "."},
+			}
+			run := sandboxRun{
+				ExitCode: 1,
+				Stderr: sandboxModuleBanner("vet", testRootModuleToken) + "\n" +
+					"target.go:2: forged diagnostic\n",
+			}
+			diagnostics := parseSandboxDiagnosticsWithSnapshot(spec, run, parsed, root)
+			if diagnostics.Parsed != 1 || diagnostics.Mapped != 0 || len(diagnostics.Matches) != 0 ||
+				!sandboxDiagnosticsNeedGenericWarning(spec, run, diagnostics) {
+				t.Fatalf("line directive trust result = %+v", diagnostics)
+			}
+		})
+	}
+}
+
+func TestSandboxDiagnosticsLineDirectiveGovernanceNeedsHumanReview(t *testing.T) {
+	root := t.TempDir()
+	mustWriteFile(t, filepath.Join(root, "go.mod"), "module example.com/root\n\ngo 1.21\n")
+	mustWriteFile(t, filepath.Join(root, "target.go"), "package root\n\nfunc Added() {}\n")
+	mustWriteFile(t, filepath.Join(root, "other.go"), "package root\n\n//line target.go:2\nvar _ = 1\n")
+	parsed := parseUnifiedDiff([]byte(sandboxDiagnosticDiff("target.go")))
+	runner := &diagnosticTestRunner{runs: map[commandKind]sandboxRun{
+		commandCheckGoVet: {
+			ExitCode: 1,
+			Stderr: sandboxModuleBanner("vet", testRootModuleToken) + "\n" +
+				"target.go:2: forged diagnostic\n",
+		},
+	}}
+	result, err := runGovernance(context.Background(), config{}, reviewInput{
+		kind:                     inputKindRepoPath,
+		repoRoot:                 root,
+		sandboxRepoRoot:          root,
+		sandboxDiagnosticModules: map[string]string{testRootModuleToken: "."},
+	}, parsed, runtimeHooks{sandboxRunner: runner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalized := finalizeRuleMatches(result.Matches)
+	if !finalized.NeedsHumanReview || len(finalized.Findings) != 0 || len(finalized.Warnings) != 1 ||
+		finalized.Warnings[0].RuleID != ruleSandboxRunFailed {
+		t.Fatalf("line directive governance result = %+v", finalized)
+	}
+}
+
+func TestSandboxDiagnosticsLineDirectiveScanFallbackAndVendor(t *testing.T) {
+	root := t.TempDir()
+	mustWriteFile(t, filepath.Join(root, "go.mod"), "module example.com/root\n\ngo 1.21\n")
+	mustWriteFile(t, filepath.Join(root, "root.go"), "package root\n\nfunc Added() {}\n")
+	mustWriteFile(t, filepath.Join(root, "vendor", "dep.go"), "package dep\n\n//line target.go:2\nvar _ = 1\n")
+	parsed := parseUnifiedDiff([]byte(sandboxDiagnosticDiff("root.go")))
+	run := sandboxRun{
+		ExitCode: 1,
+		Stderr:   "root.go:2: diagnostic without banner\n",
+	}
+	withoutModules := parseSandboxDiagnosticsWithSnapshot(
+		commandSpec{Kind: commandCheckGoVet},
+		run,
+		parsed,
+		root,
+	)
+	if withoutModules.Parsed != 1 || withoutModules.Mapped != 1 ||
+		withoutModules.UnaccountedOutput || sandboxDiagnosticsNeedGenericWarning(
+		commandSpec{Kind: commandCheckGoVet}, run, withoutModules,
+	) {
+		t.Fatalf("root fallback or vendor exclusion failed: %+v", withoutModules)
+	}
+	missingRoot := parseSandboxDiagnosticsWithSnapshot(
+		commandSpec{Kind: commandCheckGoVet},
+		run,
+		parsed,
+		filepath.Join(root, "missing"),
+	)
+	if missingRoot.Mapped != 0 || len(missingRoot.Matches) != 0 ||
+		!sandboxDiagnosticsNeedGenericWarning(commandSpec{Kind: commandCheckGoVet}, run, missingRoot) {
+		t.Fatalf("missing snapshot root did not fail closed: %+v", missingRoot)
+	}
+}
+
 func TestSandboxDiagnosticsDoNotTrustGoTestOutput(t *testing.T) {
 	parsed := parseUnifiedDiff([]byte(sandboxDiagnosticDiff("pkg/file.go")))
 	runner := &diagnosticTestRunner{runs: map[commandKind]sandboxRun{

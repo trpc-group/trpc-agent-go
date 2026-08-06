@@ -28,11 +28,12 @@ var goDiagnosticPattern = regexp.MustCompile(`^(.*\.go):([0-9]+)(?::([0-9]+))?:\
 const invalidSandboxDiagnosticModule = "\x00"
 
 type sandboxDiagnosticResult struct {
-	Matches         []ruleMatch
-	Parsed          int
-	Mapped          int
-	Overflow        bool
-	ProtocolInvalid bool
+	Matches           []ruleMatch
+	Parsed            int
+	Mapped            int
+	Overflow          bool
+	ProtocolInvalid   bool
+	UnaccountedOutput bool
 }
 
 type parsedSandboxDiagnostic struct {
@@ -55,6 +56,34 @@ func parseSandboxDiagnostics(
 	run sandboxRun,
 	parsed parsedDiff,
 ) sandboxDiagnosticResult {
+	// This compatibility entry point is intentionally retained for parser-only
+	// unit tests. Governance uses parseSandboxDiagnosticsWithSnapshot so that
+	// physical source locations are authenticated before mapping.
+	return parseSandboxDiagnosticsInternal(spec, run, parsed, true, sandboxSourceTrust{
+		MappingAllowed: true,
+	})
+}
+
+func parseSandboxDiagnosticsWithSnapshot(
+	spec commandSpec,
+	run sandboxRun,
+	parsed parsedDiff,
+	snapshotRoot string,
+) sandboxDiagnosticResult {
+	trust := sandboxSourceTrust{MappingAllowed: true}
+	if spec.Kind == commandCheckGoVet || spec.Kind == commandCheckStaticcheck {
+		trust = inspectSandboxSourceTrust(snapshotRoot, spec.DiagnosticModules)
+	}
+	return parseSandboxDiagnosticsInternal(spec, run, parsed, false, trust)
+}
+
+func parseSandboxDiagnosticsInternal(
+	spec commandSpec,
+	run sandboxRun,
+	parsed parsedDiff,
+	legacyMapping bool,
+	trust sandboxSourceTrust,
+) sandboxDiagnosticResult {
 	metadata, ok := diagnosticMetadataForCommand(spec.Kind)
 	if !ok {
 		return sandboxDiagnosticResult{}
@@ -65,6 +94,10 @@ func parseSandboxDiagnostics(
 	for _, output := range []string{run.Stdout, run.Stderr} {
 		activeModule := ""
 		for _, line := range strings.Split(output, "\n") {
+			trimmedLine := strings.TrimSpace(strings.TrimSuffix(line, "\r"))
+			if trimmedLine == "" {
+				continue
+			}
 			if module, ok := parseSandboxModuleBanner(spec, line); ok {
 				activeModule = module
 				if module == invalidSandboxDiagnosticModule {
@@ -74,6 +107,19 @@ func parseSandboxDiagnostics(
 			}
 			diagnostic, ok := parseSandboxDiagnosticLine(line)
 			if !ok {
+				if sandboxPackageHeaderAllowed(
+					line,
+					activeModule,
+					moduleAuthenticationRequired,
+					trust.ModuleImports,
+				) || (legacyMapping && isLegacySandboxPackageHeader(line)) {
+					// The legacy branch is reachable only from parser-only tests;
+					// governance always supplies snapshot-backed module metadata.
+					continue
+				}
+				// Keep only the completeness bit; untrusted text is never emitted
+				// as a structured diagnostic finding or finding evidence.
+				result.UnaccountedOutput = true
 				continue
 			}
 			key := fmt.Sprintf("%s\x00%s\x00%d\x00%d\x00%s",
@@ -89,6 +135,9 @@ func parseSandboxDiagnostics(
 			}
 			if moduleAuthenticationRequired &&
 				(activeModule == "" || activeModule == invalidSandboxDiagnosticModule) {
+				continue
+			}
+			if !legacyMapping && !trust.MappingAllowed {
 				continue
 			}
 			repositoryPath, exactOnly, pathOK := repositoryDiagnosticPath(
@@ -122,6 +171,11 @@ func parseSandboxDiagnostics(
 		}
 	}
 	return result
+}
+
+func isLegacySandboxPackageHeader(line string) bool {
+	_, _, ok := parseSandboxPackageHeader(line)
+	return ok
 }
 
 func parseSandboxModuleBanner(spec commandSpec, line string) (string, bool) {
@@ -317,5 +371,6 @@ func sandboxDiagnosticsNeedGenericWarning(
 		len(run.Warnings) > 0 || diagnostics.Overflow || diagnostics.ProtocolInvalid {
 		return true
 	}
-	return diagnostics.Parsed == 0 || diagnostics.Mapped != diagnostics.Parsed
+	return diagnostics.UnaccountedOutput || diagnostics.Parsed == 0 ||
+		diagnostics.Mapped != diagnostics.Parsed
 }

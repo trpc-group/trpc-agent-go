@@ -369,10 +369,15 @@ func runGovernance(
 		}
 		run = result.addSandboxRun(run)
 		if sandboxRunNeedsWarning(run) {
-			diagnostics := parseSandboxDiagnostics(spec, run, parsed)
+			diagnostics := parseSandboxDiagnosticsWithSnapshot(
+				spec,
+				run,
+				parsed,
+				plannedInput.sandboxRepoRoot,
+			)
 			result.Matches = append(result.Matches, diagnostics.Matches...)
 			if sandboxDiagnosticsNeedGenericWarning(spec, run, diagnostics) {
-				result.addSandboxWarning(spec, run)
+				result.addSandboxDiagnosticWarning(spec, run, diagnostics)
 			}
 		}
 		if spec.Kind == commandCheckGoVersion && sandboxRunFailed(run) {
@@ -416,6 +421,21 @@ func (r *governanceResult) addSandboxWarning(spec commandSpec, run sandboxRun) {
 		title,
 		sandboxWarningReason(spec, run),
 	)
+}
+
+func (r *governanceResult) addSandboxDiagnosticWarning(
+	spec commandSpec,
+	run sandboxRun,
+	diagnostics sandboxDiagnosticResult,
+) {
+	if diagnostics.UnaccountedOutput {
+		// Unrecognized checker text is only a completeness signal. Do not copy
+		// it into the warning's report evidence; retain trusted status fields so
+		// the failure remains visible and requires human review.
+		run.Stdout = ""
+		run.Stderr = ""
+	}
+	r.addSandboxWarning(spec, run)
 }
 
 func sandboxWarningReason(spec commandSpec, run sandboxRun) string {
