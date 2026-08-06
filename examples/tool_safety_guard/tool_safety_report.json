@@ -1,0 +1,19 @@
+{
+  "decision": "deny",
+  "risk_level": "critical",
+  "tool_name": "workspace_exec",
+  "backend": "workspaceexec",
+  "command": "rm -rf /important/data",
+  "findings": [
+    {
+      "rule_id": "R1-DANGEROUS-DELETE",
+      "risk_level": "critical",
+      "category": "dangerous_cmd",
+      "evidence": "rm -rf /important/data (recursive force remove detected)",
+      "recommendation": "Replace destructive deletion with safer alternatives (e.g. move to trash, use versioned storage)."
+    }
+  ],
+  "intercepted": true,
+  "duration_ms": 0,
+  "timestamp": "2026-01-15T10:30:00Z"
+}
