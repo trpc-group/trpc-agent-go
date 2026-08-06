@@ -20,6 +20,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -61,11 +63,12 @@ func TestRunRequiresModelForNonFakeRuntime(t *testing.T) {
 	outDir := t.TempDir()
 	dbPath := filepath.Join(outDir, "review_agent.db")
 	_, err := Run(context.Background(), Options{
-		FixtureDir: filepath.Join("..", "..", "testdata", "fixtures"),
-		OutDir:     outDir,
-		DBPath:     dbPath,
-		Runtime:    "container",
-		Now:        fixedTestTime(),
+		FixtureDir:        filepath.Join("..", "..", "testdata", "fixtures"),
+		OutDir:            outDir,
+		DBPath:            dbPath,
+		Runtime:           "local",
+		AllowTrustedLocal: true,
+		Now:               fixedTestTime(),
 	})
 	if err == nil {
 		t.Fatal("Run() error = nil, want model configuration error")
@@ -111,14 +114,18 @@ func TestRunRecordsConfiguredModelPlan(t *testing.T) {
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"{\"commands\":[\"go test ./...\"],\"rule_sources\":[\"skills/code-review/SKILL.md\",\"skills/code-review/docs/rules.md\"]}"}}]}`))
 	}))
 	defer modelServer.Close()
+	planner := EnvPlanner{APIKey: "test-key", BaseURL: modelServer.URL, HTTPClient: modelServer.Client()}
 	result, err := Run(context.Background(), Options{
 		FixtureDir: filepath.Join("..", "..", "testdata", "fixtures"),
 		OutDir:     outDir,
 		DBPath:     filepath.Join(outDir, "review_agent.db"),
 		Model:      "gpt-review",
-		Runtime:    "container",
+		Runtime:    "fake",
 		Now:        fixedTestTime(),
-		Planner:    EnvPlanner{APIKey: "test-key", BaseURL: modelServer.URL, HTTPClient: modelServer.Client()},
+		Planner: plannerFunc(func(ctx context.Context, req PlanRequest) (review.ReviewPlan, error) {
+			req.Runtime = "container"
+			return planner.PlanReview(ctx, req)
+		}),
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -665,6 +672,50 @@ func TestValidateRuntimePolicyRejectsUntrustedLocalRuntime(t *testing.T) {
 	}
 }
 
+func TestValidateContainerRuntimePolicyFailsClosed(t *testing.T) {
+	if err := validateContainerRuntimePolicy("container"); err == nil {
+		t.Fatal("validateContainerRuntimePolicy(container) error = nil, want fail-closed rejection")
+	} else if !strings.Contains(err.Error(), "context-aware constructor") {
+		t.Fatalf("validateContainerRuntimePolicy() error = %q, want upstream constructor guidance", err)
+	}
+	if err := validateContainerRuntimePolicy("fake"); err != nil {
+		t.Fatalf("validateContainerRuntimePolicy(fake) error = %v, want nil", err)
+	}
+}
+
+func TestRunFailsClosedForContainerInitialization(t *testing.T) {
+	outDir := t.TempDir()
+	calledPlanner := false
+	_, err := Run(context.Background(), Options{
+		FixtureDir: filepath.Join("..", "..", "testdata", "fixtures"),
+		OutDir:     outDir,
+		DBPath:     filepath.Join(outDir, "review_agent.db"),
+		Runtime:    "container",
+		Now:        fixedTestTime(),
+		Planner: plannerFunc(func(ctx context.Context, req PlanRequest) (review.ReviewPlan, error) {
+			calledPlanner = true
+			return review.ReviewPlan{}, errors.New("planner should not be called")
+		}),
+	})
+	if err == nil {
+		t.Fatal("Run() error = nil, want container fail-closed rejection")
+	}
+	if !strings.Contains(err.Error(), "fail-closed") {
+		t.Fatalf("Run() error = %q, want fail-closed message", err)
+	}
+	if calledPlanner {
+		t.Fatal("planner was called before container policy rejection")
+	}
+	assertStoredTask(t, filepath.Join(outDir, "review_agent.db"), fixedTestTime(), func(report store.TaskReport) {
+		if report.Task.Status != review.TaskStatusFailed {
+			t.Fatalf("stored task status = %q, want failed", report.Task.Status)
+		}
+		if !strings.Contains(report.Task.Error, "fail-closed") {
+			t.Fatalf("stored task error = %q, want fail-closed message", report.Task.Error)
+		}
+	})
+}
+
 func TestValidateRemoteRuntimePolicyRejectsUntrustedE2B(t *testing.T) {
 	if err := validateRemoteRuntimePolicy("e2b", false); err == nil {
 		t.Fatal("validateRemoteRuntimePolicy(e2b, false) error = nil, want rejection")
@@ -979,6 +1030,7 @@ func TestRunReturnsRedactedFindingsBeforeReportWriting(t *testing.T) {
 		t.Fatalf("WriteFile(diff) error = %v", err)
 	}
 	outDir := t.TempDir()
+	var plannedFiles []review.DiffFile
 	result, err := Run(context.Background(), Options{
 		DiffFile: diffPath,
 		OutDir:   outDir,
@@ -986,11 +1038,24 @@ func TestRunReturnsRedactedFindingsBeforeReportWriting(t *testing.T) {
 		Runtime:  "fake",
 		Now:      fixedTestTime(),
 		Planner: plannerFunc(func(ctx context.Context, req PlanRequest) (review.ReviewPlan, error) {
+			plannedFiles = req.Files
 			return review.ReviewPlan{Model: "test", Provider: "test", Source: "test", Skill: defaultSkillName, Runtime: "fake"}, nil
 		}),
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
+	}
+	for name, files := range map[string][]review.DiffFile{
+		"planner request": plannedFiles,
+		"caller report":   result.Report.ChangedFiles,
+	} {
+		raw, marshalErr := json.Marshal(files)
+		if marshalErr != nil {
+			t.Fatalf("Marshal(%s) error = %v", name, marshalErr)
+		}
+		if strings.Contains(string(raw), "supersecretvalue") {
+			t.Fatalf("%s leaked raw diff secret: %s", name, raw)
+		}
 	}
 	var sawResource bool
 	for _, finding := range result.Report.Findings {
@@ -1176,6 +1241,52 @@ func TestBuildReviewSnapshotExcludesConfiguredStoreAndOutputPaths(t *testing.T) 
 	}
 }
 
+func TestReviewSnapshotArtifactPathsResolveSymlinkAliases(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	repo := t.TempDir()
+	aliasParent := t.TempDir()
+	aliasRoot := filepath.Join(aliasParent, "repo-alias")
+	if err := os.Symlink(repo, aliasRoot); err != nil {
+		t.Skipf("symlink creation is not supported in this environment: %v", err)
+	}
+	runGitCommand(t, repo, "init")
+	if err := os.WriteFile(filepath.Join(repo, "tracked.go"), []byte("package tracked\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(tracked.go) error = %v", err)
+	}
+	runGitCommand(t, repo, "add", "tracked.go")
+	customDB := filepath.Join(aliasRoot, "review-state", "audit-store.data")
+	customOut := filepath.Join(aliasRoot, "review-output")
+	customReport := filepath.Join(customOut, "nested", "report.json")
+	if err := os.MkdirAll(filepath.Dir(customDB), 0o700); err != nil {
+		t.Fatalf("MkdirAll(custom db) error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(customReport), 0o700); err != nil {
+		t.Fatalf("MkdirAll(custom report) error = %v", err)
+	}
+	for _, path := range []string{customDB, customDB + ".lock", customReport} {
+		if err := os.WriteFile(path, []byte("private artifact\n"), 0o600); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", path, err)
+		}
+	}
+
+	exclusions, err := reviewSnapshotArtifactPaths(repo, customDB, customOut)
+	if err != nil {
+		t.Fatalf("reviewSnapshotArtifactPaths() error = %v", err)
+	}
+	snapshot, cleanup, err := buildReviewSnapshotWithSnapshotPathsAndExclusions(context.Background(), repo, nil, exclusions)
+	if err != nil {
+		t.Fatalf("buildReviewSnapshotWithSnapshotPathsAndExclusions() error = %v", err)
+	}
+	defer cleanup()
+	for _, excluded := range []string{"review-state", "review-output"} {
+		if _, err := os.Stat(filepath.Join(snapshot, excluded)); !os.IsNotExist(err) {
+			t.Fatalf("symlink-aliased artifact %s present in snapshot, stat err=%v", excluded, err)
+		}
+	}
+}
+
 func TestBuildReviewSnapshotRestrictsUntrackedFilesToSubmittedPaths(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is not installed")
@@ -1206,33 +1317,47 @@ func TestBuildReviewSnapshotRestrictsUntrackedFilesToSubmittedPaths(t *testing.T
 	}
 }
 
-func TestFileListPreservesHashPathInUntrackedSnapshot(t *testing.T) {
+func TestFileListPreservesHashPathsInUntrackedSnapshot(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is not installed")
 	}
 	repo := t.TempDir()
 	runGitCommand(t, repo, "init")
-	if err := os.WriteFile(filepath.Join(repo, "#config.go"), []byte("package config\n"), 0o600); err != nil {
-		t.Fatalf("WriteFile(#config.go) error = %v", err)
+	selected := []string{"#config.go", "# config.go"}
+	if runtime.GOOS != "windows" {
+		selected = append(selected, "#\tconfig.go")
+	}
+	for _, name := range selected {
+		if err := os.WriteFile(filepath.Join(repo, name), []byte("package config\n"), 0o600); err != nil {
+			t.Fatalf("WriteFile(%q) error = %v", name, err)
+		}
 	}
 	fileList := filepath.Join(t.TempDir(), "files.txt")
-	if err := os.WriteFile(fileList, []byte("# comment\n#\tcomment\n#config.go\n"), 0o600); err != nil {
+	fileListContent := "# comment\n#\tcomment\n#config.go\n\\# config.go\n"
+	if runtime.GOOS != "windows" {
+		fileListContent += "\\#\tconfig.go\n"
+	}
+	if err := os.WriteFile(fileList, []byte(fileListContent), 0o600); err != nil {
 		t.Fatalf("WriteFile(file list) error = %v", err)
 	}
 	source, err := inputsource.Read(context.Background(), inputsource.Options{FileList: fileList, RepoPath: repo})
 	if err != nil {
 		t.Fatalf("Read() error = %v", err)
 	}
-	if !reflect.DeepEqual(source.FileList, []string{"#config.go"}) {
-		t.Fatalf("FileList = %#v, want #config.go", source.FileList)
+	wantFiles := append([]string(nil), selected...)
+	sort.Strings(wantFiles)
+	if !reflect.DeepEqual(source.FileList, wantFiles) {
+		t.Fatalf("FileList = %#v, want %#v", source.FileList, wantFiles)
 	}
 	snapshot, cleanup, err := buildReviewSnapshotWithSnapshotPaths(context.Background(), repo, snapshotUntrackedPaths(source, nil))
 	if err != nil {
 		t.Fatalf("buildReviewSnapshotWithSnapshotPaths() error = %v", err)
 	}
 	defer cleanup()
-	if _, err := os.Stat(filepath.Join(snapshot, "#config.go")); err != nil {
-		t.Fatalf("hash-prefixed untracked path missing from snapshot: %v", err)
+	for _, name := range selected {
+		if _, err := os.Stat(filepath.Join(snapshot, name)); err != nil {
+			t.Fatalf("hash-prefixed untracked path %q missing from snapshot: %v", name, err)
+		}
 	}
 }
 
@@ -1643,6 +1768,17 @@ func (r cancelingRuntime) Run(ctx context.Context, _ string) (sandboxrun.Result,
 	return sandboxrun.Result{}, ctx.Err()
 }
 
+type timeoutRecordingRuntime struct {
+	commands []string
+}
+
+func (r *timeoutRecordingRuntime) Name() string { return "timeout-test" }
+
+func (r *timeoutRecordingRuntime) Run(_ context.Context, command string) (sandboxrun.Result, error) {
+	r.commands = append(r.commands, command)
+	return sandboxrun.Result{TimedOut: true}, nil
+}
+
 type cancelOnSecondPermissionStore struct {
 	store.Store
 	cancel          context.CancelFunc
@@ -1783,6 +1919,80 @@ func TestCompletedSandboxRunIsPersistedWhenNextPermissionIsCanceled(t *testing.T
 	}
 	if len(loaded.SandboxRuns) != 1 || loaded.SandboxRuns[0].Status != sandboxrun.StatusPassed {
 		t.Fatalf("loaded sandbox runs = %#v, want completed run", loaded.SandboxRuns)
+	}
+}
+
+func TestTimeoutAuditsRemainingPlannedCommands(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "review_agent.db")
+	st, err := store.NewSQLite(context.Background(), path)
+	if err != nil {
+		t.Fatalf("NewSQLite() error = %v", err)
+	}
+	task := review.ReviewTask{ID: "task-timeout-audit", Status: review.TaskStatusRunning}
+	if err := st.CreateTask(context.Background(), task); err != nil {
+		st.Close()
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+	runtime := &timeoutRecordingRuntime{}
+	commands := []string{"go test ./...", "go vet ./...", "go test ./skills/code-review/scripts"}
+	decisions, runs, err := executePlannedCommandsWithFactory(
+		context.Background(),
+		st,
+		task.ID,
+		"fake",
+		false,
+		false,
+		commands,
+		fixedTestTime(),
+		time.Second,
+		"",
+		func(context.Context, string, string, string, time.Duration, string, bool, bool) (sandboxrun.Runtime, func(), *review.SandboxRun) {
+			return runtime, nil, nil
+		},
+	)
+	if err != nil {
+		st.Close()
+		t.Fatalf("executePlannedCommandsWithFactory() error = %v", err)
+	}
+	if !reflect.DeepEqual(runtime.commands, []string{"go test ./..."}) {
+		t.Fatalf("executed commands = %#v, want only first command", runtime.commands)
+	}
+	if len(decisions) != len(commands) || len(runs) != len(commands) {
+		st.Close()
+		t.Fatalf("records = decisions:%d runs:%d, want %d each", len(decisions), len(runs), len(commands))
+	}
+	if runs[0].ErrorType != sandboxrun.ErrorTimeout {
+		st.Close()
+		t.Fatalf("first run error type = %q, want timeout", runs[0].ErrorType)
+	}
+	for index := 1; index < len(commands); index++ {
+		if runs[index].Status != sandboxrun.StatusSkipped || runs[index].ErrorType != sandboxrun.ErrorTimeout {
+			st.Close()
+			t.Fatalf("remaining run %d = %#v, want timeout skipped record", index, runs[index])
+		}
+		if !strings.Contains(decisions[index].Reason, "not executed") {
+			st.Close()
+			t.Fatalf("remaining decision %d = %#v, want skip reason", index, decisions[index])
+		}
+	}
+	if err := recordSandboxRuns(context.Background(), st, runs); err != nil {
+		st.Close()
+		t.Fatalf("recordSandboxRuns() error = %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	reopened, err := store.NewSQLite(context.Background(), path)
+	if err != nil {
+		t.Fatalf("reopen NewSQLite() error = %v", err)
+	}
+	defer reopened.Close()
+	loaded, err := reopened.LoadTaskReport(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("LoadTaskReport() error = %v", err)
+	}
+	if len(loaded.PermissionDecisions) != len(commands) || len(loaded.SandboxRuns) != len(commands) {
+		t.Fatalf("reopened audit records = decisions:%d runs:%d, want %d each", len(loaded.PermissionDecisions), len(loaded.SandboxRuns), len(commands))
 	}
 }
 

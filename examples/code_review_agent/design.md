@@ -54,7 +54,7 @@ Agent 支持四种输入模式：
 - `--fixture-dir`：读取测试 fixture 目录中的 diff 和审查场景。
 - `--diff-file`：直接读取一个 unified diff 文件；可以与 `--repo-path` 组合，将 sandbox 校验关联到补丁所属 checkout。
 - `--repo-path`：检查 Git 工作区、提取当前变更，并在该工作区运行沙箱命令。
-- `--file-list`：读取按行分隔的文件路径列表；空行以及以 `# ` 或 `#\t` 开头的行视为注释，其他非空行按字面路径处理；用于 planning 和 sandbox 上下文；可以与 `--repo-path` 组合以明确路径所属仓库；未提供仓库时跳过 sandbox 校验；基于内容的确定性规则需要 diff 输入。
+- `--file-list`：读取按行分隔的文件路径列表；空行以及以 `# ` 或 `#\t` 开头的行视为注释，若路径本身以这两种形式开头则加前缀反斜杠（例如 `\# config.go`）来按字面路径读取；其他非空行按字面路径处理；用于 planning 和 sandbox 上下文；可以与 `--repo-path` 组合以明确路径所属仓库；未提供仓库时跳过 sandbox 校验；基于内容的确定性规则需要 diff 输入。
 
 Unified diff 会被解析为文件、hunk、新增/删除/上下文行以及候选行号。对于 Go 代码，会尽量提取 package 信息，便于把检查限定到正确的 module 或 package。fixture 模式主要用于确定性验收测试，repo 和 diff 模式更接近真实审查场景。
 
@@ -93,7 +93,7 @@ The implementation also tracks status and fingerprint metadata. High-confidence 
 ## 5. Sandbox Isolation Strategy / 沙箱隔离策略
 
 English:
-For the container runtime, the orchestrator stages a filtered review snapshot into an isolated workspace. Fixture inputs run commands from the example module directory so the sample's review scripts and rules are available. Standalone diff and file-list inputs without `--repo-path` skip sandbox validation; associated `--repo-path` inputs run commands from the selected repository root, and the command allowlist is limited to checks that are valid in an arbitrary Go repository, such as `go test ./...` and `go vet ./...`. The container is unprivileged, auto-removed, resource-limited, and receives only the filtered snapshot, not the developer's original checkout. Network mode is explicitly set to `none`; before offline execution the orchestrator uses vendored or pre-provisioned dependencies, and only an explicit trusted-input opt-in permits host-side `go mod download` preparation. Any preparation cache is isolated per review under the staged snapshot and `GOMODCACHE`, `GOCACHE`, and `GOPATH` point at workspace-local paths. The host-wide module cache is never mounted.
+The container path is intentionally fail-closed in the current example. The upstream `codeexecutor/container.New` API cannot receive cancellation during image pull/create/start or guarantee cleanup of partial initialization, so this example rejects `container` before planner or host-side dependency preparation. Once an upstream context-aware constructor with partial-initialization cleanup is available, the intended path is to stage a filtered review snapshot into an isolated workspace. Fixture inputs run commands from the example module directory so the sample's review scripts and rules are available. Standalone diff and file-list inputs without `--repo-path` skip sandbox validation; associated `--repo-path` inputs run commands from the selected repository root, and the command allowlist is limited to checks that are valid in an arbitrary Go repository, such as `go test ./...` and `go vet ./...`. The intended container is unprivileged, auto-removed, resource-limited, and receives only the filtered snapshot, not the developer's original checkout. Network mode is explicitly set to `none`; offline execution uses vendored or pre-provisioned dependencies, while host-side `go mod download` remains an explicit trusted-input opt-in and is not a real-time protection for the review host's disk. Any preparation cache is isolated per review under the staged snapshot and `GOMODCACHE`, `GOCACHE`, and `GOPATH` point at workspace-local paths. The host-wide module cache is never mounted.
 
 For E2B, the upload boundary uses the same temporary review snapshot built from Git's tracked inventory. Repository-workspace review may include non-ignored untracked files; fixture, standalone-diff, and file-list review restrict untracked files to submitted paths. Git metadata, ignored files, environment files, and local report/store artifacts are excluded before `StageDirectory` uploads the snapshot. Because this example cannot configure an enforced E2B egress policy, E2B is fail-closed by default; `--allow-trusted-remote` is required for explicitly trusted input and documents acceptance of the networked remote boundary.
 
@@ -101,7 +101,7 @@ For E2B, the upload boundary uses the same temporary review snapshot built from 
 Execution is bounded by command timeouts and output size limits. Stdout and stderr are redacted before they are stored or reported. Sandbox failures, command failures, timeouts, and truncated output are recorded as sandbox run records instead of crashing the whole review task.
 
 中文：
-在 container runtime 中，orchestrator 会把过滤后的 review snapshot staging 到隔离 workspace。fixture 输入会从示例模块目录执行命令，便于使用示例自带的 review scripts 和 rules。未提供 `--repo-path` 的单独 diff 和 file-list 输入会跳过 sandbox 校验；关联 `--repo-path` 的输入会从用户选择的仓库根目录执行命令，并将命令 allowlist 限制为适用于任意 Go 仓库的检查，例如 `go test ./...` 和 `go vet ./...`。容器以非特权方式运行，执行结束后自动删除，并设置资源上限；容器只接收过滤后的 snapshot，不会挂载开发者原始 checkout。网络模式显式设置为 `none`；离线执行前优先使用 vendored 或预置依赖，只有显式 trusted-input opt-in 才允许宿主机执行 `go mod download`，并把每次审查的准备缓存隔离在 staged snapshot 下，将 `GOMODCACHE`、`GOCACHE` 和 `GOPATH` 指向 workspace-local 路径，绝不挂载宿主机全局 module cache。
+当前示例中的 container 路径会 fail-closed。由于上游 `codeexecutor/container.New` 无法在镜像 pull/create/start 期间接收取消，也无法保证初始化部分失败时的清理，本示例会在 planner 和宿主机依赖准备之前拒绝 `container`。待上游提供支持 context 且能清理部分初始化资源的构造函数后，目标路径才会把过滤后的 review snapshot staging 到隔离 workspace。fixture 输入会从示例模块目录执行命令，便于使用示例自带的 review scripts 和 rules。未提供 `--repo-path` 的单独 diff 和 file-list 输入会跳过 sandbox 校验；关联 `--repo-path` 的输入会从用户选择的仓库根目录执行命令，并将命令 allowlist 限制为适用于任意 Go 仓库的检查，例如 `go test ./...` 和 `go vet ./...`。目标 container 以非特权方式运行，执行结束后自动删除，并设置资源上限；只接收过滤后的 snapshot，不会挂载开发者原始 checkout。网络模式显式设置为 `none`；离线执行优先使用 vendored 或预置依赖，宿主机 `go mod download` 仍是显式 trusted-input opt-in，且不能实时保护审查机磁盘。每次审查的准备缓存隔离在 staged snapshot 下，将 `GOMODCACHE`、`GOCACHE` 和 `GOPATH` 指向 workspace-local 路径，绝不挂载宿主机全局 module cache。
 
 对于 E2B，上传边界使用同一个基于 Git tracked inventory 构建的临时 review snapshot。仓库工作区审查可以包含未忽略的 untracked 文件；fixture、独立 diff 和 file-list 审查只包含提交路径命中的 untracked 文件。在 `StageDirectory` 上传前会排除 Git 元数据、ignored 文件、环境文件以及本地 report/store 产物。由于本示例无法配置强制的 E2B 出站网络策略，E2B 默认 fail-closed；只有显式提供 `--allow-trusted-remote` 才能对明确可信的输入执行，并明确接受远程联网边界。
 
@@ -211,7 +211,7 @@ The security boundary is enforced across input handling, command execution, envi
 
 Key controls include:
 
-- Runtime separation: production-oriented execution uses `container`; `e2b` is disabled unless explicitly trusted because this example cannot enforce its egress boundary, and `local` is disabled for untrusted input.
+- Runtime separation: the CLI defaults to `fake` for a runnable deterministic path; `container` is fail-closed until the upstream constructor is context-aware, `e2b` is disabled unless explicitly trusted because this example cannot enforce its egress boundary, and `local` is disabled for untrusted input.
 - Permission gate: planned commands must pass safety decisions before execution.
 - Timeout control: sandbox commands are bounded and failures are recorded.
 - Output cap: large stdout/stderr streams are truncated and marked.
@@ -227,7 +227,7 @@ This boundary is especially important because code review agents operate on untr
 
 关键控制包括：
 
-- Runtime 隔离：面向生产的默认执行使用 `container`；由于示例无法强制 E2B 出站网络边界，`e2b` 默认禁用，只有显式 trusted remote opt-in 才能启用；对不可信输入禁用 `local`。
+- Runtime 隔离：CLI 默认使用可运行且确定性的 `fake`；在上游构造函数支持 context 之前，`container` fail-closed；由于示例无法强制 E2B 出站网络边界，`e2b` 默认禁用，只有显式 trusted remote opt-in 才能启用；对不可信输入禁用 `local`。
 - Permission gate：计划命令必须先通过安全决策才能执行。
 - Timeout 控制：沙箱命令有执行时间边界，失败会被记录。
 - 输出限制：过大的 stdout/stderr 会被截断并标记。
@@ -268,13 +268,13 @@ go run . -fixture-dir testdata\fixtures -out-dir .\out -runtime fake
 go run . -diff-file testdata\fixtures\security_secret.diff -out-dir .\out-diff -runtime fake
 ```
 
-The fake runtime validates diff parsing, rule-only review, sandbox-run recording, storage, redaction, report generation, and deterministic fixtures without requiring a real model API key. Container validation should be used when checking the default production sandbox behavior; E2B additionally requires `-allow-trusted-remote` because this example cannot enforce its egress boundary. The checked-in fixture workspace is trusted in the following command, so host dependency preparation is explicitly enabled:
+The fake runtime validates diff parsing, rule-only review, sandbox-run recording, storage, redaction, report generation, and deterministic fixtures without requiring a real model API key. Container execution is intentionally unavailable in the current example until the upstream constructor becomes context-aware; the fail-closed behavior is covered by `TestRunFailsClosedForContainerInitialization`. E2B additionally requires `-allow-trusted-remote` because this example cannot enforce its egress boundary. Host-side dependency preparation remains an explicit trusted-input opt-in and its post-download check cannot provide a real-time host disk quota:
 
 ```powershell
-go run . -fixture-dir testdata\fixtures -out-dir .\out-real -model $env:MODEL -runtime container -allow-trusted-host-preparation
+go run . -fixture-dir testdata\fixtures -out-dir .\out-real -model $env:MODEL -runtime local -allow-trusted-local -allow-trusted-host-preparation
 ```
 
-For a passing container sandbox run, `sandbox_runs` should show `runtime=container`, command status should be recorded, duration should be greater than zero for real execution, and `metrics.sandbox_duration_ms` should reflect the sum of sandbox execution time. A review may still conclude `needs_human_review` when the fixture intentionally contains high-risk or ambiguous findings; that conclusion is expected and different from infrastructure failure.
+For a passing trusted local sandbox run, `sandbox_runs` should show `runtime=local`, command status should be recorded, duration should be greater than zero for real execution, and `metrics.sandbox_duration_ms` should reflect the sum of sandbox execution time. A review may still conclude `needs_human_review` when the fixture intentionally contains high-risk or ambiguous findings; that conclusion is expected and different from infrastructure failure.
 
 中文：
 确定性验收路径如下：
@@ -286,10 +286,10 @@ go run . -fixture-dir testdata\fixtures -out-dir .\out -runtime fake
 go run . -diff-file testdata\fixtures\security_secret.diff -out-dir .\out-diff -runtime fake
 ```
 
-fake runtime 可以在没有真实模型 API Key 的情况下验证 diff 解析、规则审查、sandbox run 记录、落库、脱敏、报告生成和确定性 fixture。检查默认生产沙箱行为时应使用 container；E2B 还需要 `-allow-trusted-remote`，因为本示例无法强制其出站网络边界。下列命令明确将仓库内置 fixture workspace 视为可信输入，因此显式允许宿主机准备依赖：
+fake runtime 可以在没有真实模型 API Key 的情况下验证 diff 解析、规则审查、sandbox run 记录、落库、脱敏、报告生成和确定性 fixture。当前示例在上游构造函数支持 context 之前不会执行 container，而是覆盖 fail-closed 行为；E2B 还需要 `-allow-trusted-remote`，因为本示例无法强制其出站网络边界。宿主机依赖准备仍需显式 trusted-input opt-in，且下载后的检查不能提供实时宿主机磁盘 quota：
 
 ```powershell
-go run . -fixture-dir testdata\fixtures -out-dir .\out-real -model $env:MODEL -runtime container -allow-trusted-host-preparation
+go run . -fixture-dir testdata\fixtures -out-dir .\out-real -model $env:MODEL -runtime local -allow-trusted-local -allow-trusted-host-preparation
 ```
 
-如果 container 沙箱真正运行成功，`sandbox_runs` 应显示 `runtime=container`，命令状态应完整记录，真实执行的 `duration_ms` 应大于 0，`metrics.sandbox_duration_ms` 应体现沙箱执行耗时之和。当 fixture 本身包含高风险或模糊 finding 时，最终结论仍可能是 `needs_human_review`；这是预期的审查结论，不等同于基础设施失败。
+如果可信 local sandbox 真正运行成功，`sandbox_runs` 应显示 `runtime=local`，命令状态应完整记录，真实执行的 `duration_ms` 应大于 0，`metrics.sandbox_duration_ms` 应体现沙箱执行耗时之和。当 fixture 本身包含高风险或模糊 finding 时，最终结论仍可能是 `needs_human_review`；这是预期的审查结论，不等同于基础设施失败。

@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -127,6 +128,23 @@ func TestReadFileList(t *testing.T) {
 	}
 }
 
+func TestReadFileListEscapesCommentPrefixedPaths(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "files.txt")
+	raw := "\\# config.go\n\\#\tconfig.go\n# comment\n#\tcomment\n"
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	src, err := Read(context.Background(), Options{FileList: path})
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	want := []string{"# config.go", "#\tconfig.go"}
+	sort.Strings(want)
+	if !reflect.DeepEqual(src.FileList, want) {
+		t.Fatalf("FileList = %#v, want %#v", src.FileList, want)
+	}
+}
+
 func TestReadFileListPreservesPathWhitespace(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "files.txt")
@@ -223,6 +241,28 @@ func TestUntrackedFileDiffQuotesAndPreservesSpecialPath(t *testing.T) {
 	}
 	if len(files) != 1 || files[0].NewPath != filepath.ToSlash(file) {
 		t.Fatalf("parsed generated path = %#v, want %q", files, filepath.ToSlash(file))
+	}
+}
+
+func TestUntrackedFileDiffPreservesSingleBlankLine(t *testing.T) {
+	repo := t.TempDir()
+	path := filepath.Join(repo, "blank.txt")
+	if err := os.WriteFile(path, []byte("\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	diff, err := untrackedFileDiff(repo, "blank.txt")
+	if err != nil {
+		t.Fatalf("untrackedFileDiff() error = %v", err)
+	}
+	if !strings.Contains(diff, "@@ -0,0 +1 @@\n") || !strings.Contains(diff, "+\n") {
+		t.Fatalf("single blank line was omitted from generated diff:\n%s", diff)
+	}
+	files, err := diffparse.Parse(diff)
+	if err != nil {
+		t.Fatalf("Parse(generated diff) error = %v", err)
+	}
+	if len(files) != 1 || len(files[0].Hunks) != 1 || files[0].Hunks[0].NewLines != 1 || len(files[0].Hunks[0].Lines) != 1 || files[0].Hunks[0].Lines[0].Content != "" {
+		t.Fatalf("parsed single blank line = %#v, want one empty added line", files)
 	}
 }
 

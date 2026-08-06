@@ -568,7 +568,8 @@ func Run(ctx context.Context, opts Options) (result Result, err error) {
 	if err != nil {
 		return Result{}, failTask(err)
 	}
-	changedFilesJSON, err := json.Marshal(redact.DiffFiles(files))
+	redactedFiles := redact.DiffFiles(files)
+	changedFilesJSON, err := json.Marshal(redactedFiles)
 	if err != nil {
 		return Result{}, failTask(fmt.Errorf("marshal changed files: %w", err))
 	}
@@ -591,6 +592,9 @@ func Run(ctx context.Context, opts Options) (result Result, err error) {
 	if err := st.SaveFindings(ctx, task.ID, findings); err != nil {
 		return Result{}, failTask(err)
 	}
+	if err := validateContainerRuntimePolicy(opts.Runtime); err != nil {
+		return Result{}, failTask(err)
+	}
 
 	planner := opts.Planner
 	if planner == nil {
@@ -601,7 +605,7 @@ func Run(ctx context.Context, opts Options) (result Result, err error) {
 		Runtime: opts.Runtime,
 		Skill:   defaultSkillName,
 		WorkDir: input.WorkDir,
-		Files:   files,
+		Files:   redactedFiles,
 	})
 	if err != nil {
 		return Result{}, failTask(err)
@@ -642,7 +646,7 @@ func Run(ctx context.Context, opts Options) (result Result, err error) {
 		Task:                task,
 		Summary:             summarizeOutcome(input, files, findings, runs, plan),
 		Plan:                plan,
-		ChangedFiles:        files,
+		ChangedFiles:        redactedFiles,
 		Findings:            findings,
 		SandboxRuns:         runs,
 		PermissionDecisions: decisions,
@@ -895,10 +899,75 @@ func executePlannedCommandsWithFactory(ctx context.Context, st store.Store, task
 		runs = append(runs, run)
 		cancel()
 		if run.ErrorType == sandboxrun.ErrorTimeout || run.ErrorType == sandboxrun.ErrorCanceled || ctx.Err() != nil {
+			terminationType := run.ErrorType
+			if terminationType == "" && ctx.Err() != nil {
+				terminationType = sandboxrun.ErrorCanceled
+			}
+			remainingDecisions, remainingRuns, recordErr := recordSkippedCommandsAfterTermination(
+				ctx, st, taskID, runtimeName, commands, index+1, now, workDir, allowedCommands, terminationType,
+			)
+			decisions = append(decisions, remainingDecisions...)
+			runs = append(runs, remainingRuns...)
+			if recordErr != nil {
+				return decisions, runs, recordErr
+			}
 			break
 		}
 	}
 	return decisions, runs, nil
+}
+
+func recordSkippedCommandsAfterTermination(ctx context.Context, st store.Store, taskID string, runtimeName string, commands []string, start int, now time.Time, workDir string, allowedCommands map[string]string, terminationType string) ([]review.PermissionDecisionRecord, []review.SandboxRun, error) {
+	if start >= len(commands) {
+		return nil, nil, nil
+	}
+	if terminationType == "" {
+		terminationType = sandboxrun.ErrorCanceled
+	}
+	auditCtx, cancel := failedTaskContext(ctx)
+	defer cancel()
+	decisions := make([]review.PermissionDecisionRecord, 0, len(commands)-start)
+	runs := make([]review.SandboxRun, 0, len(commands)-start)
+	for index := start; index < len(commands); index++ {
+		suffix := fmt.Sprintf("%03d", index+1)
+		planned := commands[index]
+		canonical := canonicalCommand(planned)
+		command, allowed := allowedCommands[canonical]
+		var decision review.PermissionDecisionRecord
+		if !allowed {
+			decision = allowlistRejectedDecision(taskID, suffix, planned, now)
+		} else {
+			decision = safetywrap.Decide(safetywrap.PlannedCommand{
+				ID:       taskID + "-permission-" + suffix,
+				TaskID:   taskID,
+				ToolName: "workspace_exec",
+				Command:  command,
+				Now:      now,
+			})
+		}
+		decision.Reason += fmt.Sprintf(" Command was not executed because a prior sandbox command ended with %s.", terminationType)
+		if err := st.RecordPermissionDecision(auditCtx, decision); err != nil {
+			return decisions, runs, err
+		}
+		decisions = append(decisions, decision)
+		runs = append(runs, review.SandboxRun{
+			ID:             taskID + "-sandbox-" + suffix,
+			TaskID:         taskID,
+			Runtime:        runtimeName,
+			Command:        redact.Text(commandOrPlanned(command, planned)).Text,
+			Status:         sandboxrun.StatusSkipped,
+			ErrorType:      terminationType,
+			DurationMillis: 0,
+		})
+	}
+	return decisions, runs, nil
+}
+
+func commandOrPlanned(command string, planned string) string {
+	if command != "" {
+		return command
+	}
+	return planned
 }
 
 func allowlistRejectedDecision(taskID string, suffix string, command string, now time.Time) review.PermissionDecisionRecord {
@@ -970,6 +1039,9 @@ func newWorkspaceRuntimeWithSnapshotPaths(ctx context.Context, runtimeName strin
 }
 
 func newWorkspaceRuntimeWithSnapshotPathsAndExclusions(ctx context.Context, runtimeName string, taskID string, timeout time.Duration, workDir string, allowTrustedLocal bool, allowTrustedHostPreparation bool, allowTrustedRemote bool, snapshotPaths []string, snapshotExclusionPaths []string) (sandboxrun.Runtime, func(), error) {
+	if err := validateContainerRuntimePolicy(runtimeName); err != nil {
+		return nil, nil, err
+	}
 	workspace := newSandboxWorkspace(workDir)
 	repoRoot, err := workspace.root()
 	if err != nil {
@@ -1743,17 +1815,16 @@ func reviewSnapshotArtifactPaths(repoRoot string, dbPath string, outDir string) 
 	if strings.TrimSpace(repoRoot) == "" {
 		return nil, nil
 	}
-	root, err := filepath.Abs(repoRoot)
+	root, err := resolvePhysicalPath(repoRoot)
 	if err != nil {
 		return nil, fmt.Errorf("resolve repository root %q: %w", repoRoot, err)
 	}
-	root = filepath.Clean(root)
 	paths := make([]string, 0, 2)
 	add := func(configured string) error {
 		if strings.TrimSpace(configured) == "" {
 			return nil
 		}
-		absolute, err := filepath.Abs(configured)
+		absolute, err := resolvePhysicalPath(configured)
 		if err != nil {
 			return fmt.Errorf("resolve configured path %q: %w", configured, err)
 		}
@@ -1793,6 +1864,35 @@ func reviewSnapshotArtifactPaths(repoRoot string, dbPath string, outDir string) 
 	return unique, nil
 }
 
+func resolvePhysicalPath(path string) (string, error) {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	current := filepath.Clean(absolute)
+	var suffix []string
+	for {
+		if _, err := os.Lstat(current); err == nil {
+			resolved, err := filepath.EvalSymlinks(current)
+			if err != nil {
+				return "", err
+			}
+			for index := len(suffix) - 1; index >= 0; index-- {
+				resolved = filepath.Join(resolved, suffix[index])
+			}
+			return filepath.Clean(resolved), nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", fmt.Errorf("no existing ancestor for %q", path)
+		}
+		suffix = append(suffix, filepath.Base(current))
+		current = parent
+	}
+}
+
 func configuredReviewSnapshotPath(file string, configured []string) bool {
 	file = filepath.ToSlash(filepath.Clean(file))
 	for _, excluded := range configured {
@@ -1830,6 +1930,14 @@ func validateRuntimePolicy(runtimeName string, allowTrustedLocal bool) error {
 		return nil
 	}
 	return fmt.Errorf("runtime %q is disabled for untrusted review input; rerun only for explicitly trusted input with AllowTrustedLocal or --allow-trusted-local", normalized)
+}
+
+func validateContainerRuntimePolicy(runtimeName string) error {
+	normalized := strings.ToLower(strings.TrimSpace(runtimeName))
+	if normalized != "container" {
+		return nil
+	}
+	return fmt.Errorf("runtime %q is fail-closed because codeexecutor/container.New cannot receive cancellation during image pull/create/start; use fake or wait for an upstream context-aware constructor with partial-initialization cleanup", normalized)
 }
 
 func validateRemoteRuntimePolicy(runtimeName string, allowTrustedRemote bool) error {

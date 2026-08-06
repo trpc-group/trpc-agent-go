@@ -513,7 +513,11 @@ func untrackedFileDiffWithLimit(repoPath string, file string, maxBytes int64) (s
 	if lineCount == 0 {
 		return b.String(), readBytes, nil
 	}
-	if err := write(fmt.Sprintf("@@ -0,0 +1,%d @@\n", lineCount)); err != nil {
+	newRange := "+1"
+	if lineCount != 1 {
+		newRange = fmt.Sprintf("+1,%d", lineCount)
+	}
+	if err := write(fmt.Sprintf("@@ -0,0 %s @@\n", newRange)); err != nil {
 		return "", 0, err
 	}
 	if _, err := in.Seek(0, io.SeekStart); err != nil {
@@ -590,9 +594,6 @@ func scanUntrackedFile(reader *bufio.Reader, maxBytes int64) (int, bool, bool, e
 		}
 		return 0, false, false, err
 	}
-	if readBytes == 1 && lineCount == 1 && !noNewline {
-		lineCount = 0
-	}
 	return lineCount, noNewline, false, nil
 }
 
@@ -633,7 +634,8 @@ func readFileListWithLimits(path string, repoPath string, maxBytes int64, maxFil
 	scanner.Buffer(make([]byte, 4096), len(raw)+1)
 	for scanner.Scan() {
 		file := strings.TrimSuffix(scanner.Text(), "\r")
-		if file == "" || isFileListComment(file) {
+		file, include := parseFileListEntry(file)
+		if !include {
 			continue
 		}
 		if len(files) >= maxFiles {
@@ -664,6 +666,16 @@ func readFileListWithLimits(path string, repoPath string, maxBytes int64, maxFil
 
 func isFileListComment(file string) bool {
 	return strings.HasPrefix(file, "# ") || strings.HasPrefix(file, "#\t")
+}
+
+func parseFileListEntry(file string) (string, bool) {
+	if file == "" || isFileListComment(file) {
+		return "", false
+	}
+	if strings.HasPrefix(file, "\\# ") || strings.HasPrefix(file, "\\#\t") {
+		return file[1:], true
+	}
+	return file, true
 }
 
 func minInt64(a int64, b int64) int64 {

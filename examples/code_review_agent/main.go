@@ -30,7 +30,7 @@ func main() {
 		outDir                      = flag.String("out-dir", "./out", "directory for reports and the default durable JSON store")
 		dbPath                      = flag.String("db-path", "", "durable JSON store path; defaults to <out-dir>/review_agent.db")
 		modelName                   = flag.String("model", os.Getenv("MODEL"), "OpenAI-compatible model name")
-		runtime                     = flag.String("runtime", "container", "workspace runtime: container, e2b, local, or fake; local requires --allow-trusted-local")
+		runtime                     = flag.String("runtime", "fake", "workspace runtime: fake (default), container (currently fail-closed), e2b, or local")
 		allowTrustedLocal           = flag.Bool("allow-trusted-local", false, "allow trusted local host execution for explicitly trusted review input")
 		allowTrustedHostPreparation = flag.Bool("allow-trusted-host-preparation", false, "allow host-side dependency preparation for explicitly trusted review input")
 		allowTrustedRemote          = flag.Bool("allow-trusted-remote", false, "allow E2B execution for explicitly trusted input despite its networked remote boundary")
