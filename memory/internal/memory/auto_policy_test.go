@@ -1064,7 +1064,12 @@ func TestPreserveHistoryPolicy_DeleteAuthorization(t *testing.T) {
 		return operations
 	}
 
-	coffee := entry("coffee", "User prefers dark roast coffee.", "coffee", "preference", "咖啡", "偏好")
+	coffee := entry(
+		"coffee",
+		"User prefers dark roast coffee.",
+		"coffee preference",
+		"咖啡偏好",
+	)
 	address := entry("address", "User has a home address in Shenzhen.", "home", "address", "住址")
 	office := entry("office", "User converted a bedroom into a home office.", "home", "office")
 	employer := entry("employer", "User's former employer was Acme.", "former employer", "Acme")
@@ -1078,6 +1083,22 @@ func TestPreserveHistoryPolicy_DeleteAuthorization(t *testing.T) {
 		"Paris",
 		"London",
 	)
+	crossFactExact := entry(
+		"cross-fact-exact",
+		"User visited London and lives in Paris.",
+	)
+	crossBodyTopic := entry(
+		"cross-body-topic",
+		"User visited London.",
+		"Paris",
+	)
+	crossTopics := entry(
+		"cross-topics",
+		"User enjoys hiking.",
+		"visited",
+		"Paris",
+	)
+	parisVisit := entry("paris-visit", "User visited Paris.")
 
 	tests := []struct {
 		name       string
@@ -1113,6 +1134,23 @@ func TestPreserveHistoryPolicy_DeleteAuthorization(t *testing.T) {
 			existing:   []*memory.Entry{parisHome, parisTrip, londonHome, mixedParis},
 			operations: deleteOps("paris-home", "paris-trip", "london-home", "mixed-paris"),
 			wantIDs:    []string{"paris-home"},
+		},
+		{
+			name:    "exact target tokens must share one fact",
+			request: "Please forget that I visited Paris.",
+			existing: []*memory.Entry{
+				crossFactExact,
+				crossBodyTopic,
+				crossTopics,
+				parisVisit,
+			},
+			operations: deleteOps(
+				"cross-fact-exact",
+				"cross-body-topic",
+				"cross-topics",
+				"paris-visit",
+			),
+			wantIDs: []string{"paris-visit"},
 		},
 		{
 			name:     "scoped everything",

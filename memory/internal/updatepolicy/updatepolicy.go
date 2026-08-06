@@ -10,8 +10,73 @@
 // the memory package boundary without exposing policy discovery publicly.
 package updatepolicy
 
+import (
+	"regexp"
+	"strings"
+
+	"trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+var (
+	negatedDestructiveRequestPatterns = []*regexp.Regexp{
+		regexp.MustCompile(
+			`(?i)\b(?:do\s+not|don't|dont|never|should\s+not|shouldn't)\s+(?:forget|delete|remove|erase|clear)\b`,
+		),
+		regexp.MustCompile(
+			`(?i)\b(?:do\s+not|don't|dont)\s+(?:want|need)\s+(?:me\s+|you\s+)?to\s+(?:forget|delete|remove|erase|clear)\b`,
+		),
+		regexp.MustCompile(`(?:不要|别|请勿|不必|不应该)(?:再)?(?:忘记|删除|移除|清除|清空)`),
+	}
+	destructiveRequestCancellationPatterns = []*regexp.Regexp{
+		regexp.MustCompile(
+			`(?i)^\s*(?:actually[,.]?\s*)?(?:never\s*mind(?:[,.]?\s*keep\s+(?:it|that|them))?|cancel\s+(?:that|it|the\s+request)|keep\s+(?:it|that|them)|do\s+nothing\s+with\s+(?:it|that|them)|do\s+not\s+(?:do|process|change)\s+(?:it|that|them))\s*[.!?]*\s*$`,
+		),
+		regexp.MustCompile(
+			`^\s*(?:(?:还是|那就)?算了(?:[，,\s]*(?:保留(?:它|这些|原样)?|不要(?:处理|操作|改动)(?:它|这些|任何内容)?))?|取消(?:刚才|之前)?(?:的)?(?:请求|操作)?|保留(?:它|这些|原样)?|不要(?:处理|操作|改动)(?:它|这些|任何内容)?)\s*[。！？!?]*\s*$`,
+		),
+	}
+	explicitDestructiveRequestPatterns = []*regexp.Regexp{
+		regexp.MustCompile(`(?im)^\s*(?:please\s+)?(?:forget|delete|remove|erase|clear)\b`),
+		regexp.MustCompile(`(?i)\bplease\s+(?:forget|delete|remove|erase|clear)\b`),
+		regexp.MustCompile(
+			`(?i)\b(?:can|could|would|will)\s+you\s+(?:please\s+)?(?:forget|delete|remove|erase|clear)\b`,
+		),
+		regexp.MustCompile(
+			`(?i)\bi\s+(?:want|need|would\s+like)\s+you\s+to\s+(?:forget|delete|remove|erase|clear)\b`,
+		),
+		regexp.MustCompile(
+			`(?:^|[\n。！？!?])\s*(?:(?:请|麻烦)(?:你)?|帮我)?(?:忘记|删除|移除|清除|清空)`,
+		),
+		regexp.MustCompile(`(?:我(?:想|希望|要求)(?:让)?你|请你|麻烦你|帮我)(?:忘记|删除|移除|清除|清空)`),
+	}
+	explicitClearAllRequestPatterns = []*regexp.Regexp{
+		regexp.MustCompile(
+			`(?i)\bforget\s+(?:(?:absolutely\s+)?everything|all(?:\s+of)?\s+(?:my\s+)?(?:stored\s+)?(?:memories|memory|data|information))\b`,
+		),
+		regexp.MustCompile(
+			`(?i)\b(?:delete|remove|erase|clear)\s+(?:(?:all(?:\s+of)?\s+)(?:my\s+)?(?:stored\s+)?(?:memories|memory|data|information)|(?:my\s+)?memories|everything)\b`,
+		),
+		regexp.MustCompile(`忘记(?:关于我(?:的)?)?(?:一切|全部|所有)(?:已(?:经)?(?:存储|保存)(?:的)?)?(?:记忆|信息|数据)?`),
+		regexp.MustCompile(`(?:删除|移除|清除|清空)(?:我(?:的)?)?(?:全部|所有)(?:的)?(?:已(?:经)?(?:存储|保存)(?:的)?)?(?:记忆|信息|数据)`),
+		regexp.MustCompile(`清空(?:我(?:的)?)?(?:全部|所有)?(?:的)?(?:已(?:经)?(?:存储|保存)(?:的)?)?(?:记忆|信息|数据|记忆库)`),
+	}
+	partialClearRequestPatterns = []*regexp.Regexp{
+		regexp.MustCompile(`(?i)\b(?:except|excluding|other\s+than|but\s+keep)\b`),
+		regexp.MustCompile(`(?:除了|除去|排除).{0,12}(?:以外|之外|外)?|(?:但是|但要|保留).{0,12}`),
+	}
+)
+
 // Value identifies an update policy configured by a built-in extractor.
 type Value string
+
+// DestructiveRequest describes the latest explicit user request to remove
+// memory. It is internal to the memory implementation.
+type DestructiveRequest struct {
+	Text     string
+	Explicit bool
+	ClearAll bool
+	Partial  bool
+}
 
 type provider interface {
 	ConfiguredUpdatePolicy() Value
@@ -24,4 +89,69 @@ func From(value any) Value {
 		return ""
 	}
 	return provider.ConfiguredUpdatePolicy()
+}
+
+// LatestDestructiveRequest returns the latest explicit, non-negated user
+// request to remove memory. A later cancellation supersedes an earlier request.
+func LatestDestructiveRequest(messages []model.Message) DestructiveRequest {
+	for index := len(messages) - 1; index >= 0; index-- {
+		message := messages[index]
+		if message.Role != model.RoleUser {
+			continue
+		}
+		text := messageText(message)
+		if matchesAnyPattern(text, destructiveRequestCancellationPatterns) {
+			return DestructiveRequest{}
+		}
+		negated := false
+		for _, pattern := range negatedDestructiveRequestPatterns {
+			negated = negated || pattern.MatchString(text)
+			text = pattern.ReplaceAllString(text, "")
+		}
+		explicit := matchesAnyPattern(text, explicitDestructiveRequestPatterns)
+		if !explicit && !negated {
+			continue
+		}
+		if !explicit {
+			return DestructiveRequest{}
+		}
+		return DestructiveRequest{
+			Text:     text,
+			Explicit: true,
+			ClearAll: matchesAnyPattern(text, explicitClearAllRequestPatterns),
+			Partial:  matchesAnyPattern(text, partialClearRequestPatterns),
+		}
+	}
+	return DestructiveRequest{}
+}
+
+// HasExplicitDestructiveRequest reports whether the latest relevant user
+// instruction explicitly requests removal of memory.
+func HasExplicitDestructiveRequest(messages []model.Message) bool {
+	return LatestDestructiveRequest(messages).Explicit
+}
+
+func messageText(message model.Message) string {
+	parts := make([]string, 0, len(message.ContentParts)+1)
+	if text := strings.TrimSpace(message.Content); text != "" {
+		parts = append(parts, text)
+	}
+	for _, part := range message.ContentParts {
+		if part.Type != model.ContentTypeText || part.Text == nil {
+			continue
+		}
+		if text := strings.TrimSpace(*part.Text); text != "" {
+			parts = append(parts, text)
+		}
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n"))
+}
+
+func matchesAnyPattern(text string, patterns []*regexp.Regexp) bool {
+	for _, pattern := range patterns {
+		if pattern.MatchString(text) {
+			return true
+		}
+	}
+	return false
 }

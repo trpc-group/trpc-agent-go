@@ -45,52 +45,6 @@ var (
 	destructiveFactBoundaryPattern = regexp.MustCompile(
 		`(?i)[.!?;。！？；]+|\s+(?:and|but|or|while|whereas)\s+|(?:，|,)?(?:并且|但是|但|而且|同时|然后)(?:，|,)?`,
 	)
-	negatedDestructiveRequestPatterns = []*regexp.Regexp{
-		regexp.MustCompile(
-			`(?i)\b(?:do\s+not|don't|dont|never|should\s+not|shouldn't)\s+(?:forget|delete|remove|erase|clear)\b`,
-		),
-		regexp.MustCompile(
-			`(?i)\b(?:do\s+not|don't|dont)\s+(?:want|need)\s+(?:me\s+|you\s+)?to\s+(?:forget|delete|remove|erase|clear)\b`,
-		),
-		regexp.MustCompile(`(?:不要|别|请勿|不必|不应该)(?:再)?(?:忘记|删除|移除|清除|清空)`),
-	}
-	destructiveRequestCancellationPatterns = []*regexp.Regexp{
-		regexp.MustCompile(
-			`(?i)^\s*(?:actually[,.]?\s*)?(?:never\s*mind|cancel\s+(?:that|it|the\s+request)|keep\s+(?:it|that|them)|do\s+nothing\s+with\s+(?:it|that|them)|do\s+not\s+(?:do|process|change)\s+(?:it|that|them))\s*[.!?]*\s*$`,
-		),
-		regexp.MustCompile(
-			`^\s*(?:(?:还是|那就)?算了(?:[，,\s]*(?:保留(?:它|这些|原样)?|不要(?:处理|操作|改动)(?:它|这些|任何内容)?))?|取消(?:刚才|之前)?(?:的)?(?:请求|操作)?|保留(?:它|这些|原样)?|不要(?:处理|操作|改动)(?:它|这些|任何内容)?)\s*[。！？!?]*\s*$`,
-		),
-	}
-	explicitDestructiveRequestPatterns = []*regexp.Regexp{
-		regexp.MustCompile(`(?im)^\s*(?:please\s+)?(?:forget|delete|remove|erase|clear)\b`),
-		regexp.MustCompile(`(?i)\bplease\s+(?:forget|delete|remove|erase|clear)\b`),
-		regexp.MustCompile(
-			`(?i)\b(?:can|could|would|will)\s+you\s+(?:please\s+)?(?:forget|delete|remove|erase|clear)\b`,
-		),
-		regexp.MustCompile(
-			`(?i)\bi\s+(?:want|need|would\s+like)\s+you\s+to\s+(?:forget|delete|remove|erase|clear)\b`,
-		),
-		regexp.MustCompile(
-			`(?:^|[\n。！？!?])\s*(?:(?:请|麻烦)(?:你)?|帮我)?(?:忘记|删除|移除|清除|清空)`,
-		),
-		regexp.MustCompile(`(?:我(?:想|希望|要求)(?:让)?你|请你|麻烦你|帮我)(?:忘记|删除|移除|清除|清空)`),
-	}
-	explicitClearAllRequestPatterns = []*regexp.Regexp{
-		regexp.MustCompile(
-			`(?i)\bforget\s+(?:(?:absolutely\s+)?everything|all(?:\s+of)?\s+(?:my\s+)?(?:stored\s+)?(?:memories|memory|data|information))\b`,
-		),
-		regexp.MustCompile(
-			`(?i)\b(?:delete|remove|erase|clear)\s+(?:(?:all(?:\s+of)?\s+)(?:my\s+)?(?:stored\s+)?(?:memories|memory|data|information)|(?:my\s+)?memories|everything)\b`,
-		),
-		regexp.MustCompile(`忘记(?:关于我(?:的)?)?(?:一切|全部|所有)(?:已(?:经)?(?:存储|保存)(?:的)?)?(?:记忆|信息|数据)?`),
-		regexp.MustCompile(`(?:删除|移除|清除|清空)(?:我(?:的)?)?(?:全部|所有)(?:的)?(?:已(?:经)?(?:存储|保存)(?:的)?)?(?:记忆|信息|数据)`),
-		regexp.MustCompile(`清空(?:我(?:的)?)?(?:全部|所有)?(?:的)?(?:已(?:经)?(?:存储|保存)(?:的)?)?(?:记忆|信息|数据|记忆库)`),
-	}
-	partialClearRequestPatterns = []*regexp.Regexp{
-		regexp.MustCompile(`(?i)\b(?:except|excluding|other\s+than|but\s+keep)\b`),
-		regexp.MustCompile(`(?:除了|除去|排除).{0,12}(?:以外|之外|外)?|(?:但是|但要|保留).{0,12}`),
-	}
 	destructiveRequestGenericTokens = stringSet([]string{
 		"a", "absolutely", "about", "all", "an", "and", "any", "anything", "can", "clear", "completely",
 		"could", "data", "delete", "detail", "details", "entirely", "erase", "ever", "everything",
@@ -260,37 +214,13 @@ func operationMemory(op *extractor.Operation) *memory.Memory {
 }
 
 func latestExplicitDestructiveRequest(messages []model.Message) destructiveRequest {
-	for index := len(messages) - 1; index >= 0; index-- {
-		msg := messages[index]
-		if msg.Role != model.RoleUser {
-			continue
-		}
-		text := messageSearchText(msg)
-		if matchesAnyPattern(text, destructiveRequestCancellationPatterns) {
-			return destructiveRequest{}
-		}
-		negated := false
-		for _, pattern := range negatedDestructiveRequestPatterns {
-			negated = negated || pattern.MatchString(text)
-			text = pattern.ReplaceAllString(text, "")
-		}
-		explicit := matchesAnyPattern(text, explicitDestructiveRequestPatterns)
-		if !explicit && !negated {
-			continue
-		}
-		if !explicit {
-			return destructiveRequest{}
-		}
-		clearAll := matchesAnyPattern(text, explicitClearAllRequestPatterns) &&
-			len(destructiveTargetTokens(text)) == 0
-		return destructiveRequest{
-			text:     text,
-			explicit: true,
-			clearAll: clearAll,
-			partial:  matchesAnyPattern(text, partialClearRequestPatterns),
-		}
+	request := updatepolicy.LatestDestructiveRequest(messages)
+	return destructiveRequest{
+		text:     request.Text,
+		explicit: request.Explicit,
+		clearAll: request.ClearAll && len(destructiveTargetTokens(request.Text)) == 0,
+		partial:  request.Partial,
 	}
-	return destructiveRequest{}
 }
 
 func (r destructiveRequest) authorizesDelete(entry *memory.Entry) bool {
@@ -307,47 +237,48 @@ func (r destructiveRequest) authorizesDelete(entry *memory.Entry) bool {
 	if len(targetTokens) == 0 {
 		return false
 	}
-	entryText := entry.Memory.Memory + " " + strings.Join(entry.Memory.Topics, " ")
-	entryTokens := stringSet(BuildSearchTokens(entryText))
-	// A limited inflection match can bridge phrasing such as live/lives, but it
-	// cannot authorize deletion by itself. At least one specific target token
-	// must still match the selected memory exactly.
-	matched, usedInflection := destructiveTokensMatch(targetTokens, entryTokens)
-	if !matched {
-		return false
-	}
-	if usedInflection && !destructiveTargetBoundToFact(targetTokens, entry.Memory.Memory) {
-		return false
-	}
-	return true
+	return destructiveTargetBoundToEvidence(
+		targetTokens,
+		entry.Memory.Memory,
+		entry.Memory.Topics,
+	)
 }
 
 func destructiveTokensMatch(
 	targetTokens map[string]struct{},
 	candidateTokens map[string]struct{},
-) (bool, bool) {
+) bool {
 	exactAnchor := false
-	usedInflection := false
 	for token := range targetTokens {
 		if _, ok := candidateTokens[token]; ok {
 			exactAnchor = true
 			continue
 		}
 		if !matchesInflectedToken(token, candidateTokens) {
-			return false, false
+			return false
 		}
-		usedInflection = true
 	}
-	return exactAnchor, usedInflection
+	// Limited inflection matching may bridge live/lives, but it cannot
+	// authorize deletion without at least one exact target token.
+	return exactAnchor
 }
 
-func destructiveTargetBoundToFact(
+func destructiveTargetBoundToEvidence(
 	targetTokens map[string]struct{},
 	memoryText string,
+	topics []string,
 ) bool {
 	for _, fact := range destructiveFactBoundaryPattern.Split(memoryText, -1) {
 		factTokens := stringSet(BuildSearchTokens(fact))
-		if matched, _ := destructiveTokensMatch(targetTokens, factTokens); matched {
+		if destructiveTokensMatch(targetTokens, factTokens) {
+			return true
+		}
+	}
+	// Topics are independent evidence segments. Never combine topics with one
+	// another or with body text to authorize a destructive operation.
+	for _, topic := range topics {
+		topicTokens := stringSet(BuildSearchTokens(topic))
+		if destructiveTokensMatch(targetTokens, topicTokens) {
 			return true
 		}
 	}
@@ -384,15 +315,6 @@ func destructiveTargetTokens(text string) map[string]struct{} {
 		delete(tokens, token)
 	}
 	return tokens
-}
-
-func matchesAnyPattern(text string, patterns []*regexp.Regexp) bool {
-	for _, pattern := range patterns {
-		if pattern.MatchString(text) {
-			return true
-		}
-	}
-	return false
 }
 
 func logPreserveHistoryDestructiveRejection(
