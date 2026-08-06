@@ -6,6 +6,19 @@ Pre-exec check that plugs into `tool.PermissionPolicy`. It leans on
 Wire it with `agent.WithToolPermissionPolicy`. Spawn isolation, CleanEnv, and
 real timeouts still live in workspaceexec / hostexec / codeexecutor.
 
+## Acceptance map (#2002)
+
+| Criterion | Evidence |
+|---|---|
+| ≥12 samples + structured report | `testdata/acceptance_corpus.json` (22) + `TestAcceptanceCorpus_QualityGates` |
+| High-risk ≥90% / safe FP ≤10% | same test (hard-coded rate gates) |
+| Secret / delete / egress 100% | `must_catch` labels in corpus |
+| 500 segments ≤1s | `TestAcceptanceCorpus_500SegmentUnderOneSecond` |
+| Report fields | non-allow asserts `rule_id` / `evidence` / `recommendation` |
+| Policy without code change | `LoadPolicyFile` / omit-deny keeps `DefaultPolicy` denials |
+| Pre-exec intercept + audit | `internal/flow/processor/safety_guard_integration_test.go` |
+| Not a sandbox substitute | sections below + residual bypass table |
+
 ## What this actually covers
 
 Guard looks at the JSON arguments of a tool call before the tool runs:
