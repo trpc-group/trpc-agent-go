@@ -1,0 +1,14 @@
+diff --git a/pkg/db/query.go b/pkg/db/query.go
+new file mode 100644
+--- /dev/null
++++ b/pkg/db/query.go
+@@ -0,0 +1,8 @@
++package db
++
++import "database/sql"
++
++func GetUser(db *sql.DB, name string) {
++	rows, err := db.Query("SELECT * FROM users WHERE name = '" + name + "'")
++	_ = rows
++	_ = err
++}

@@ -1,0 +1,11 @@
+--- a/worker.go
++++ b/worker.go
+@@ -5,8 +5,12 @@ package main
+
+ func process(items []int) {
++	for _, item := range items {
++		go func() {
++			handle(item)
++		}()
++	}
+ }

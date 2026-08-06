@@ -1,0 +1,10 @@
+--- a/reader.go
++++ b/reader.go
+@@ -5,6 +5,9 @@ package main
+ import "os"
+
+ func readFile(name string) {
++	f, err := os.Open(name)
++	_ = err
++	doRead(f)
+ }

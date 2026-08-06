@@ -1,0 +1,9 @@
+--- a/cache.go
++++ b/cache.go
+@@ -8,7 +8,10 @@ package main
+
+ func (c *Cache) Set(key string, val interface{}) {
++	c.mu.Lock()
++	c.data[key] = val
++	c.mu.Unlock()
+ }

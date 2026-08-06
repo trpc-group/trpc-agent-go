@@ -1,0 +1,11 @@
+--- a/db.go
++++ b/db.go
+@@ -1,7 +1,12 @@ package db
+
+ import "database/sql"
+
+ func connect(dsn string) *sql.DB {
++	db, err := sql.Open("sqlite3", dsn)
++	_ = err
++	return db
+ }
