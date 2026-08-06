@@ -1,0 +1,12 @@
+diff --git a/utils/helpers.go b/utils/helpers.go
+index 1234567..abcdefg 100644
+--- a/utils/helpers.go
++++ b/utils/helpers.go
+@@ -5,3 +5,7 @@ package utils
+ func IsEmpty(s string) bool {
+ 	return len(s) == 0
+ }
++
++func IsNotEmpty(s string) bool {
++	return len(s) > 0
++}

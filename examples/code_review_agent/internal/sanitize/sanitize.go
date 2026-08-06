@@ -1,0 +1,132 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
+// sanitize provides WriteInterceptor hooks for sensitive data redaction.
+// Called at five mandatory checkpoints per design spec:
+//
+//	DiffParser → SandboxRunner → LLMAnalyzer → ReportGenerator → StorageWriter
+package sanitize
+
+import (
+	"regexp"
+	"strings"
+)
+
+// DefaultPatterns is the built-in set of sensitive data patterns.
+// Coverage targets: API keys, tokens, passwords, connection strings,
+// JWTs, and base64-encoded credentials (Issue #2004: ≥95% detection).
+var DefaultPatterns = []string{
+	// API key / secret / token / password assignment
+	`(?i)(api[_-]?key|secret|token|password|passwd)\s*[:=]\s*["'][A-Za-z0-9_\-\.]{8,}["']`,
+	// OpenAI-style keys, Anthropic-style keys
+	`(?i)(sk-[A-Za-z0-9_\-]{20,})`,
+	// Bearer tokens
+	`(?i)(Bearer\s+[A-Za-z0-9_\-\.]{20,})`,
+	// PEM private key headers (RSA, EC, DSA, Ed25519)
+	`(?i)(-----BEGIN\s+(RSA\s+|EC\s+|DSA\s+|ED25519\s+)?PRIVATE\s+KEY-----)`,
+	// JWT tokens (three base64url segments separated by dots)
+	`eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}`,
+	// Database connection strings with embedded passwords
+	`(?i)((?:postgres|mysql|mongodb|sqlserver|redis)://[^:]+):([^@\s]{4,})@`,
+	// Long base64-encoded strings (potential encoded credentials)
+	`(?i)([A-Za-z0-9+/]{40,}={0,2})`,
+}
+
+// Redactor performs regex-based sensitive data redaction.
+type Redactor struct {
+	patterns    []*regexp.Regexp
+	replacement string
+}
+
+// NewRedactor creates a Redactor with the given patterns and replacement string.
+func NewRedactor(patterns []string, replacement string) *Redactor {
+	if replacement == "" {
+		replacement = "***REDACTED***"
+	}
+	if len(patterns) == 0 {
+		patterns = DefaultPatterns
+	}
+	compiled := make([]*regexp.Regexp, 0, len(patterns))
+	for _, p := range patterns {
+		re, err := regexp.Compile(p)
+		if err == nil {
+			compiled = append(compiled, re)
+		}
+	}
+	return &Redactor{patterns: compiled, replacement: replacement}
+}
+
+// Redact applies all patterns to the input string and returns the sanitized version.
+func (r *Redactor) Redact(s string) string {
+	for _, re := range r.patterns {
+		s = re.ReplaceAllString(s, r.replacement)
+	}
+	return s
+}
+
+// RedactFinding sanitizes sensitive data in a finding's Evidence field.
+func (r *Redactor) RedactFinding(evidence string) string {
+	return r.Redact(evidence)
+}
+
+// RedactSandboxOutput sanitizes sandbox stdout/stderr.
+func (r *Redactor) RedactSandboxOutput(output string) string {
+	return r.Redact(output)
+}
+
+// RedactReport sanitizes the entire report text before writing.
+func (r *Redactor) RedactReport(report string) string {
+	return r.Redact(report)
+}
+
+// ContainsSensitive checks whether the text likely contains sensitive data.
+func (r *Redactor) ContainsSensitive(s string) bool {
+	for _, re := range r.patterns {
+		if re.MatchString(s) {
+			return true
+		}
+	}
+	return false
+}
+
+// SanitizeFinding is a convenience function that creates a Redactor and sanitizes a finding's evidence.
+func SanitizeFinding(evidence string, patterns []string, replacement string) string {
+	r := NewRedactor(patterns, replacement)
+	return r.RedactFinding(evidence)
+}
+
+// SanitizeOutput is a convenience function that creates a Redactor and sanitizes sandbox output.
+func SanitizeOutput(output string, patterns []string, replacement string) string {
+	r := NewRedactor(patterns, replacement)
+	return r.RedactSandboxOutput(output)
+}
+
+// DiffsPresent reports whether anything was redacted by comparing before/after.
+func DiffsPresent(before, after string) bool {
+	return before != after
+}
+
+// Summary produces a one-line report of what was redacted.
+func Summary(before, after string) string {
+	if before == after {
+		return "no sensitive data detected"
+	}
+	var redacted []string
+	for _, p := range DefaultPatterns {
+		re := regexp.MustCompile(p)
+		matches := re.FindAllString(before, -1)
+		for _, m := range matches {
+			redacted = append(redacted, m[:min(len(m), 40)]+"...")
+		}
+	}
+	if len(redacted) == 0 {
+		return "sensitive data redacted"
+	}
+	return "redacted " + strings.Join(redacted, ", ")
+}

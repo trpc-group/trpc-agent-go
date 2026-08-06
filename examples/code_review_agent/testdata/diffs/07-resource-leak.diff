@@ -1,0 +1,19 @@
+diff --git a/io/reader.go b/io/reader.go
+index 1234567..abcdefg 100644
+--- a/io/reader.go
++++ b/io/reader.go
+@@ -5,6 +5,14 @@ import (
+ 	"os"
+ )
+
++func ReadConfig(path string) ([]byte, error) {
++	f, err := os.Open(path)
++	if err != nil {
++		return nil, err
++	}
++	return io.ReadAll(f)
++}
++
+ func WriteConfig(path string, data []byte) error {
+ 	f, err := os.Create(path)
+ 	if err != nil {

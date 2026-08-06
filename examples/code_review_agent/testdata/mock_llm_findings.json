@@ -1,0 +1,30 @@
+[
+  {
+    "id": "mock-001",
+    "match_file": "worker/pool.go",
+    "severity": "high",
+    "category": "goroutine_leak",
+    "file": "worker/pool.go",
+    "line": 14,
+    "title": "Goroutine 无限循环无退出条件 (mock)",
+    "evidence": "go func() { for { result := heavyProcess(data); p.results <- result } }()",
+    "recommendation": "添加 context.Context 参数，在 select 中监听 ctx.Done() 或使用 sync.WaitGroup",
+    "confidence": 0.85,
+    "source": "llm",
+    "decision_kind": "heuristic"
+  },
+  {
+    "id": "mock-002",
+    "match_file": "worker/pool.go",
+    "severity": "medium",
+    "category": "goroutine_leak",
+    "file": "worker/pool.go",
+    "line": 13,
+    "title": "Context 未传递给异步处理函数 (mock)",
+    "evidence": "func (p *Pool) ProcessAsync(data []byte) { go func() {",
+    "recommendation": "将 ctx context.Context 作为第一参数传递",
+    "confidence": 0.75,
+    "source": "llm",
+    "decision_kind": "heuristic"
+  }
+]

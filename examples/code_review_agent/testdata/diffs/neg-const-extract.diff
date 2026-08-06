@@ -1,0 +1,13 @@
+diff --git a/config/defaults.go b/config/defaults.go
+index 1234567..abcdefg 100644
+--- a/config/defaults.go
++++ b/config/defaults.go
+@@ -3,6 +3,8 @@ package config
+
+ import "time"
+
++const DefaultTimeout = 30 * time.Second
++const MaxRetries = 3
+
+ func NewConfig() *Config {
+ 	return &Config{

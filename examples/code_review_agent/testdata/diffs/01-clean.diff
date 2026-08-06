@@ -1,0 +1,12 @@
+diff --git a/utils/math.go b/utils/math.go
+index 1234567..abcdefg 100644
+--- a/utils/math.go
++++ b/utils/math.go
+@@ -5,6 +5,8 @@ package utils
+
+ import "math"
+
++// RoundToInt 将 float64 四舍五入到 int，是 math.Round 的便捷封装。
+ func RoundToInt(f float64) int {
+ 	return int(math.Round(f))
+ }

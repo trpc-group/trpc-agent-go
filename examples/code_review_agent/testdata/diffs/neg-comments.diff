@@ -1,0 +1,14 @@
+diff --git a/api/handler.go b/api/handler.go
+index 1234567..abcdefg 100644
+--- a/api/handler.go
++++ b/api/handler.go
+@@ -5,6 +5,9 @@ package api
+
+ import "net/http"
+
++// TODO: add rate limiting here
++// The API key should be loaded from env: os.Getenv("API_KEY")
++// Password validation happens upstream at the auth middleware
+ func HandleRequest(w http.ResponseWriter, r *http.Request) {
+ 	w.WriteHeader(http.StatusOK)
+ }

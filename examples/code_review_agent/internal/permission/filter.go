@@ -1,0 +1,256 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
+// Package permission implements the PermissionFilter GraphAgent node.
+package permission
+
+import (
+	"context"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/config"
+	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/state"
+	"github.com/trpc-group/trpc-agent-go/examples/code_review_agent/internal/types"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+// Run is the PermissionFilter GraphAgent node.
+// Reads file_changes and executor config from state, writes allowed_commands
+// and permission_decisions.
+func Run(ctx context.Context, gs graph.State) (any, error) {
+	start := time.Now()
+	defer func() {
+		gs[state.StateKeyNodePermissionFilterMs] = time.Since(start).Milliseconds()
+	}()
+
+	changes, _ := gs[state.StateKeyFileChanges].([]types.FileChange)
+	cfg, _ := gs[state.StateKeyExecutorConfig].(types.ExecutorConfig)
+
+	// Build policy: start with secure defaults, overlay configured entries.
+	// Unknown risk levels default to deny (fail closed).
+	policy := map[string]string{
+		"low":    "allow",
+		"medium": "allow",
+		"high":   "deny",
+	}
+	permCfg, _ := gs[state.StateKeyPermissionConfig].(config.PermissionConfig)
+	for level, decision := range permCfg.DefaultPolicy {
+		policy[level] = decision
+	}
+
+	var allowed []types.SandboxCommand
+	var decisions []types.PermissionDecision
+
+	for _, cmd := range cfg.Commands {
+		riskLevel := cmd.RiskLevel
+		if riskLevel == "" {
+			riskLevel = "low"
+		}
+
+		decision := "deny" // fail closed: unknown risk → deny
+		if d, ok := policy[riskLevel]; ok {
+			decision = d
+		}
+
+		// Apply command-specific overrides to refine the default policy
+		// before the mandatory deny-list runs.
+		fullCmd := strings.Join(append([]string{cmd.Cmd}, cmd.Args...), " ")
+		for _, o := range permCfg.Overrides {
+			if matchOverride(o.Pattern, fullCmd) {
+				decision = o.Decision
+				break
+			}
+		}
+
+		// Hard deny-list runs last — overrides can refine policy but cannot
+		// disable mandatory safety controls.
+		if isBlocked(fullCmd) {
+			decision = "deny"
+		}
+
+		decisions = append(decisions, types.PermissionDecision{
+			Command:   fullCmd,
+			RiskLevel: riskLevel,
+			Decision:  decision,
+			Reason:    riskReason(decision, riskLevel),
+			DecidedAt: time.Now(),
+		})
+
+		if decision == "allow" {
+			if cmd.Timeout == 0 {
+				cmd.Timeout = 30000
+			}
+			allowed = append(allowed, cmd)
+		}
+	}
+
+	gs[state.StateKeyAllowedCommands] = allowed
+	gs[state.StateKeyPermissionDecisions] = decisions
+	_ = changes // available for future per-file permission logic
+	return gs, nil
+}
+
+// isBlocked checks whether a command should be denied based on token-level
+// matching. Parsing the command into tokens avoids substring-based bypass
+// (e.g., "echo rm -rf" or "rm\t-rf"). The first token is matched as the
+// command name; dangerous argument patterns are matched against individual
+// tokens with word boundaries.
+func isBlocked(cmd string) bool {
+	tokens := tokenize(cmd)
+	if len(tokens) == 0 {
+		return false
+	}
+	base := resolveCommand(tokens)
+
+	// Block entire dangerous command families.
+	switch base {
+	case "sudo", "mkfs", "dd":
+		return true
+	case "chmod":
+		// Block any recursive or permissive chmod
+		for _, t := range tokens[1:] {
+			if t == "-R" || t == "-r" || t == "777" || t == "a+rwx" {
+				return true
+			}
+		}
+		return false
+	case "rm":
+		// Only block recursive force removal
+		for _, t := range tokens[1:] {
+			if (t == "-rf" || t == "-fr" || t == "-r" || t == "-f") && hasRecursiveRemove(tokens) {
+				return true
+			}
+		}
+		return false
+	case "curl", "wget":
+		return true
+	case "sh", "bash":
+		// Block inline scripts that embed dangerous commands inside the -c argument
+		for _, t := range tokens[1:] {
+			if t == "-c" {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Block output redirection to device files. Only the exact >/dev/null
+	// form is allowed (common in go test); >/dev/sda and friends can write
+	// straight through to block devices.
+	for _, t := range tokens {
+		if t == ">/dev/null" {
+			continue
+		}
+		if strings.HasPrefix(t, ">/dev/") {
+			return true
+		}
+		if strings.HasPrefix(t, ">") && strings.Contains(t, "/dev/") {
+			return true
+		}
+	}
+	return false
+}
+
+// hasRecursiveRemove checks whether the token list includes recursive + force
+// flags that make rm dangerous.
+func hasRecursiveRemove(tokens []string) bool {
+	hasR, hasF := false, false
+	for _, t := range tokens {
+		if t == "-rf" || t == "-fr" || t == "-r" || t == "--recursive" {
+			hasR = true
+		}
+		if t == "-f" || t == "-rf" || t == "-fr" || t == "--force" {
+			hasF = true
+		}
+	}
+	return hasR && hasF
+}
+
+// tokenize splits a command string into tokens respecting quoted strings.
+func tokenize(cmd string) []string {
+	var tokens []string
+	var current strings.Builder
+	inSingle, inDouble := false, false
+
+	for _, r := range cmd {
+		switch {
+		case r == '\'' && !inDouble:
+			inSingle = !inSingle
+		case r == '"' && !inSingle:
+			inDouble = !inDouble
+		case r == ' ' || r == '\t':
+			if inSingle || inDouble {
+				current.WriteRune(r)
+			} else if current.Len() > 0 {
+				tokens = append(tokens, current.String())
+				current.Reset()
+			}
+		default:
+			current.WriteRune(r)
+		}
+	}
+	if current.Len() > 0 {
+		tokens = append(tokens, current.String())
+	}
+	return tokens
+}
+
+// resolveCommand normalizes the base executable from a tokenized command.
+// Strips directory paths, unwraps env/command (skipping options like -i, -p
+// and env assignments like FOO=1), and returns the resolved executable name.
+// For unsupported wrapper syntax, falls through to the path-stripped base.
+func resolveCommand(tokens []string) string {
+	if len(tokens) == 0 {
+		return ""
+	}
+	base := filepath.Base(tokens[0])
+
+	// Only handle recognized wrappers.
+	if base != "env" && base != "command" {
+		return base
+	}
+
+	// Walk past the wrapper to find the real executable, skipping
+	// supported options (-i, -p, -S) and env assignments (KEY=VALUE).
+	for i := 1; i < len(tokens); i++ {
+		t := tokens[i]
+		// Skip known wrapper options.
+		if strings.HasPrefix(t, "-") {
+			continue
+		}
+		// Skip environment variable assignments.
+		if strings.Contains(t, "=") {
+			continue
+		}
+		// Found the real executable — strip path and return.
+		return filepath.Base(t)
+	}
+
+	// No executable found after the wrapper — fail closed.
+	return base
+}
+
+func riskReason(decision, riskLevel string) string {
+	if decision == "deny" {
+		return "blocked by deny-list"
+	}
+	return "allowed by risk matrix (" + riskLevel + ")"
+}
+
+// matchOverride checks whether an override pattern matches a command string.
+// Supports wildcard patterns like "sudo *" (matches "sudo anything").
+func matchOverride(pattern, cmd string) bool {
+	if strings.HasSuffix(pattern, " *") {
+		prefix := strings.TrimSuffix(pattern, " *")
+		return strings.HasPrefix(cmd, prefix+" ")
+	}
+	return cmd == pattern
+}

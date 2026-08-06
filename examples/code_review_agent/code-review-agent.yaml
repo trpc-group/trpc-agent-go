@@ -1,0 +1,128 @@
+# Code Review Agent Configuration
+# ================================
+# This configuration file controls the tRPC-Agent-Go code review agent's behavior.
+# All top-level sections are required; sub-fields have sensible defaults.
+
+# Run mode: "live" calls the real LLM; "dry_run" uses mock findings for testing
+# without consuming LLM quota.
+mode: dry_run
+
+# Maximum wall-clock time for a dry_run (prevents runaway test runs).
+dry_run_timeout: 120s
+
+input:
+  # Source type: "diff_file" (path to .diff file), "diff_text" (inline text),
+  #             or "repo_path" (git repository for automatic diff extraction).
+  type: diff_file
+  # Path to the diff file or repository path. Empty means must be provided via CLI.
+  source: ""
+  # Git base ref used when input type is "repo_path".
+  base_ref: origin/main
+
+output:
+  # Directory for generated JSON and Markdown reports.
+  dir: ./output
+  # Output formats: "json" and/or "md".
+  formats: [json, md]
+
+executor:
+  # Sandbox executor type: "local" uses os/exec (no Docker needed);
+  #                        "container" uses Docker (requires Docker daemon).
+  type: local
+  # Per-command execution timeout in seconds.
+  timeout_sec: 30
+  # Maximum output capture size per command (MB).
+  max_output_mb: 10
+  # Maximum artifact file size (MB).
+  max_artifact_mb: 10
+  # Environment variables permitted inside the sandbox.
+  env_whitelist: [PATH, HOME, GOPATH, GOROOT, GOFLAGS, GONOSUMCHECK, GONOSUMDB, GOPRIVATE, GOPROXY]
+  # Static analysis commands to run in the sandbox.
+  commands:
+    - name: go_vet
+      cmd: go
+      args: ["vet", "./..."]
+      timeout_sec: 30
+      risk_level: low
+    - name: staticcheck
+      cmd: staticcheck
+      args: ["./..."]
+      timeout_sec: 30
+      risk_level: low
+    - name: go_build
+      cmd: go
+      args: ["build", "./..."]
+      timeout_sec: 60
+      risk_level: low
+    - name: go_test
+      cmd: go
+      args: ["test", "./...", "-cover", "-timeout=90s"]
+      timeout_sec: 90
+      risk_level: medium
+
+llm:
+  # Model provider used in "live" mode. Only "openai" (OpenAI-compatible
+  # protocol) is wired up; any other value fails validation.
+  provider: openai
+  # LLM model identifier used in "live" mode.
+  model_name: claude-sonnet-5
+  # API key for the provider. Empty = fall back to the provider env var
+  # (e.g. OPENAI_API_KEY).
+  api_key: ""
+  # Optional custom endpoint for OpenAI-compatible APIs.
+  base_url: ""
+  # Sampling temperature: 0.0 for deterministic, higher for creative.
+  temperature: 0.0
+  # Maximum tokens in the LLM response.
+  max_tokens: 4096
+
+dedup:
+  # Similarity threshold below which findings are considered distinct (0.0-1.0).
+  confidence_threshold: 0.6
+  # Maximum findings per file to avoid overwhelming reports.
+  max_findings_per_file: 20
+  # Total findings cap across all files.
+  max_total_findings: 100
+
+sanitize:
+  # Redact sensitive data (tokens, secrets) from findings before output.
+  enabled: true
+  # Text to replace redacted content with.
+  replacement: "***REDACTED***"
+
+database:
+  # Backend driver: "sqlite" (default), "postgres", or "mysql".
+  driver: sqlite
+  # Data source name (file path for SQLite, connection string for others).
+  dsn: "./data/code_review.db"
+
+skill:
+  # Root directory for the code review skill definition and rules.
+  dir: ./skills/code-review
+  # Glob pattern for loading rule markdown files.
+  rules_glob: "rules/*.md"
+  # Directory containing sandbox shell scripts.
+  scripts_dir: "scripts"
+
+permissions:
+  # Default allow/deny policy by risk level.
+  default_policy:
+    low: allow
+    medium: allow
+    high: deny
+  # Command-specific permission overrides (pattern matched against command text).
+  overrides:
+    - pattern: "rm -rf"
+      decision: deny
+      reason: "Destructive command"
+    - pattern: "sudo *"
+      decision: deny
+      reason: "Privilege escalation"
+
+telemetry:
+  # Enable telemetry export (reserved for future use).
+  enabled: false
+  # Exporter type: "otlp", "stdout", or "none".
+  exporter: none
+  # Endpoint URL for the telemetry exporter.
+  endpoint: ""
