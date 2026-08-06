@@ -1,0 +1,601 @@
+{
+  "metadata": {
+    "seed": 42,
+    "model": {
+      "name": "deterministic-rule-v1",
+      "temperature": 0
+    },
+    "mode": "deterministic",
+    "promptiterIntegration": "evaluation/workflow/promptiter.PatchSet"
+  },
+  "baseline": {
+    "prompt": "You are a reliable assistant. format=json concise=true",
+    "train": {
+      "setName": "prompt-regression-train",
+      "score": 0.3333333333333333,
+      "passed": 1,
+      "failed": 2,
+      "cases": [
+        {
+          "id": "train-structured-output",
+          "score": 1,
+          "passed": true,
+          "hard": true,
+          "trace": [
+            "input:train-structured-output",
+            "require:format=json",
+            "matched:format=json"
+          ]
+        },
+        {
+          "id": "train-search-routing",
+          "score": 0,
+          "passed": false,
+          "reason": "required signal \"route=search\" is missing",
+          "category": "route_error",
+          "trace": [
+            "input:train-search-routing",
+            "require:route=search",
+            "missing:route=search"
+          ]
+        },
+        {
+          "id": "train-source-grounding",
+          "score": 0,
+          "passed": false,
+          "reason": "required signal \"cite=sources\" is missing",
+          "category": "knowledge_recall",
+          "trace": [
+            "input:train-source-grounding",
+            "require:cite=sources",
+            "missing:cite=sources"
+          ]
+        }
+      ],
+      "attributions": [
+        {
+          "caseId": "train-search-routing",
+          "category": "route_error",
+          "reason": "required signal \"route=search\" is missing",
+          "signal": "prompt_surface"
+        },
+        {
+          "caseId": "train-source-grounding",
+          "category": "knowledge_recall",
+          "reason": "required signal \"cite=sources\" is missing",
+          "signal": "prompt_surface"
+        }
+      ],
+      "cost": {
+        "calls": 3,
+        "estimatedTokens": 100,
+        "latencyMillis": 15
+      }
+    },
+    "validation": {
+      "setName": "prompt-regression-validation",
+      "score": 0.6666666666666666,
+      "passed": 2,
+      "failed": 1,
+      "cases": [
+        {
+          "id": "validation-json-contract",
+          "score": 1,
+          "passed": true,
+          "hard": true,
+          "trace": [
+            "input:validation-json-contract",
+            "require:format=json",
+            "matched:format=json"
+          ]
+        },
+        {
+          "id": "validation-grounded-search",
+          "score": 0,
+          "passed": false,
+          "hard": true,
+          "reason": "required signal \"route=search\" is missing",
+          "category": "tool_or_grounding_error",
+          "trace": [
+            "input:validation-grounded-search",
+            "require:route=search",
+            "missing:route=search"
+          ]
+        },
+        {
+          "id": "validation-held-out-style",
+          "score": 1,
+          "passed": true,
+          "trace": [
+            "input:validation-held-out-style",
+            "require:concise=true",
+            "matched:concise=true",
+            "forbid:memorize=train",
+            "absent:memorize=train"
+          ]
+        }
+      ],
+      "attributions": [
+        {
+          "caseId": "validation-grounded-search",
+          "category": "tool_or_grounding_error",
+          "reason": "required signal \"route=search\" is missing",
+          "signal": "prompt_surface"
+        }
+      ],
+      "cost": {
+        "calls": 3,
+        "estimatedTokens": 116,
+        "latencyMillis": 15
+      }
+    }
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "candidateId": "ineffective",
+      "prompt": "You are a reliable assistant. format=json concise=true tone=neutral",
+      "patchReason": "Add a neutral tone without addressing observed tool and grounding failures.",
+      "train": {
+        "setName": "prompt-regression-train",
+        "score": 0.3333333333333333,
+        "passed": 1,
+        "failed": 2,
+        "cases": [
+          {
+            "id": "train-structured-output",
+            "score": 1,
+            "passed": true,
+            "hard": true,
+            "trace": [
+              "input:train-structured-output",
+              "require:format=json",
+              "matched:format=json"
+            ]
+          },
+          {
+            "id": "train-search-routing",
+            "score": 0,
+            "passed": false,
+            "reason": "required signal \"route=search\" is missing",
+            "category": "route_error",
+            "trace": [
+              "input:train-search-routing",
+              "require:route=search",
+              "missing:route=search"
+            ]
+          },
+          {
+            "id": "train-source-grounding",
+            "score": 0,
+            "passed": false,
+            "reason": "required signal \"cite=sources\" is missing",
+            "category": "knowledge_recall",
+            "trace": [
+              "input:train-source-grounding",
+              "require:cite=sources",
+              "missing:cite=sources"
+            ]
+          }
+        ],
+        "attributions": [
+          {
+            "caseId": "train-search-routing",
+            "category": "route_error",
+            "reason": "required signal \"route=search\" is missing",
+            "signal": "prompt_surface"
+          },
+          {
+            "caseId": "train-source-grounding",
+            "category": "knowledge_recall",
+            "reason": "required signal \"cite=sources\" is missing",
+            "signal": "prompt_surface"
+          }
+        ],
+        "cost": {
+          "calls": 3,
+          "estimatedTokens": 106,
+          "latencyMillis": 15
+        }
+      },
+      "validation": {
+        "setName": "prompt-regression-validation",
+        "score": 0.6666666666666666,
+        "passed": 2,
+        "failed": 1,
+        "cases": [
+          {
+            "id": "validation-json-contract",
+            "score": 1,
+            "passed": true,
+            "hard": true,
+            "trace": [
+              "input:validation-json-contract",
+              "require:format=json",
+              "matched:format=json"
+            ]
+          },
+          {
+            "id": "validation-grounded-search",
+            "score": 0,
+            "passed": false,
+            "hard": true,
+            "reason": "required signal \"route=search\" is missing",
+            "category": "tool_or_grounding_error",
+            "trace": [
+              "input:validation-grounded-search",
+              "require:route=search",
+              "missing:route=search"
+            ]
+          },
+          {
+            "id": "validation-held-out-style",
+            "score": 1,
+            "passed": true,
+            "trace": [
+              "input:validation-held-out-style",
+              "require:concise=true",
+              "matched:concise=true",
+              "forbid:memorize=train",
+              "absent:memorize=train"
+            ]
+          }
+        ],
+        "attributions": [
+          {
+            "caseId": "validation-grounded-search",
+            "category": "tool_or_grounding_error",
+            "reason": "required signal \"route=search\" is missing",
+            "signal": "prompt_surface"
+          }
+        ],
+        "cost": {
+          "calls": 3,
+          "estimatedTokens": 122,
+          "latencyMillis": 15
+        }
+      },
+      "validationDelta": [
+        {
+          "caseId": "validation-json-contract",
+          "baselineScore": 1,
+          "candidateScore": 1,
+          "delta": 0,
+          "status": "unchanged",
+          "hard": true
+        },
+        {
+          "caseId": "validation-grounded-search",
+          "baselineScore": 0,
+          "candidateScore": 0,
+          "delta": 0,
+          "status": "unchanged",
+          "hard": true
+        },
+        {
+          "caseId": "validation-held-out-style",
+          "baselineScore": 1,
+          "candidateScore": 1,
+          "delta": 0,
+          "status": "unchanged"
+        }
+      ],
+      "attributionSummary": {
+        "knowledge_recall": 1,
+        "route_error": 1,
+        "tool_or_grounding_error": 1
+      },
+      "cost": {
+        "calls": 6,
+        "estimatedTokens": 228,
+        "latencyMillis": 30
+      },
+      "gate": {
+        "accepted": false,
+        "reasons": [
+          "validation gain 0.000 is below required 0.200"
+        ]
+      }
+    },
+    {
+      "round": 2,
+      "candidateId": "training-overfit",
+      "prompt": "You are a reliable assistant. format=json concise=true route=search cite=sources memorize=train",
+      "patchReason": "Fit every training signal using a training-only shortcut that must fail held-out validation.",
+      "train": {
+        "setName": "prompt-regression-train",
+        "score": 1,
+        "passed": 3,
+        "failed": 0,
+        "cases": [
+          {
+            "id": "train-structured-output",
+            "score": 1,
+            "passed": true,
+            "hard": true,
+            "trace": [
+              "input:train-structured-output",
+              "require:format=json",
+              "matched:format=json"
+            ]
+          },
+          {
+            "id": "train-search-routing",
+            "score": 1,
+            "passed": true,
+            "trace": [
+              "input:train-search-routing",
+              "require:route=search",
+              "matched:route=search"
+            ],
+            "toolTrajectory": [
+              "route:search"
+            ]
+          },
+          {
+            "id": "train-source-grounding",
+            "score": 1,
+            "passed": true,
+            "trace": [
+              "input:train-source-grounding",
+              "require:cite=sources",
+              "matched:cite=sources"
+            ]
+          }
+        ],
+        "cost": {
+          "calls": 3,
+          "estimatedTokens": 118,
+          "latencyMillis": 15
+        }
+      },
+      "validation": {
+        "setName": "prompt-regression-validation",
+        "score": 0.6666666666666666,
+        "passed": 2,
+        "failed": 1,
+        "cases": [
+          {
+            "id": "validation-json-contract",
+            "score": 1,
+            "passed": true,
+            "hard": true,
+            "trace": [
+              "input:validation-json-contract",
+              "require:format=json",
+              "matched:format=json"
+            ]
+          },
+          {
+            "id": "validation-grounded-search",
+            "score": 1,
+            "passed": true,
+            "hard": true,
+            "trace": [
+              "input:validation-grounded-search",
+              "require:route=search",
+              "matched:route=search",
+              "require:cite=sources",
+              "matched:cite=sources"
+            ],
+            "toolTrajectory": [
+              "route:search"
+            ]
+          },
+          {
+            "id": "validation-held-out-style",
+            "score": 0,
+            "passed": false,
+            "reason": "forbidden training-only signal \"memorize=train\" is present",
+            "category": "overfit",
+            "trace": [
+              "input:validation-held-out-style",
+              "require:concise=true",
+              "matched:concise=true",
+              "forbid:memorize=train",
+              "present:memorize=train"
+            ]
+          }
+        ],
+        "attributions": [
+          {
+            "caseId": "validation-held-out-style",
+            "category": "overfit",
+            "reason": "forbidden training-only signal \"memorize=train\" is present",
+            "signal": "validation_guard"
+          }
+        ],
+        "cost": {
+          "calls": 3,
+          "estimatedTokens": 134,
+          "latencyMillis": 15
+        }
+      },
+      "validationDelta": [
+        {
+          "caseId": "validation-json-contract",
+          "baselineScore": 1,
+          "candidateScore": 1,
+          "delta": 0,
+          "status": "unchanged",
+          "hard": true
+        },
+        {
+          "caseId": "validation-grounded-search",
+          "baselineScore": 0,
+          "candidateScore": 1,
+          "delta": 1,
+          "status": "new_pass",
+          "hard": true
+        },
+        {
+          "caseId": "validation-held-out-style",
+          "baselineScore": 1,
+          "candidateScore": 0,
+          "delta": -1,
+          "status": "new_failure"
+        }
+      ],
+      "attributionSummary": {
+        "overfit": 1
+      },
+      "cost": {
+        "calls": 6,
+        "estimatedTokens": 252,
+        "latencyMillis": 30
+      },
+      "gate": {
+        "accepted": false,
+        "reasons": [
+          "validation gain 0.000 is below required 0.200",
+          "case validation-held-out-style became a new failure"
+        ]
+      }
+    },
+    {
+      "round": 3,
+      "candidateId": "generalized",
+      "prompt": "You are a reliable assistant. format=json concise=true route=search cite=sources",
+      "patchReason": "Address routing and grounding failures without adding a training-set shortcut.",
+      "train": {
+        "setName": "prompt-regression-train",
+        "score": 1,
+        "passed": 3,
+        "failed": 0,
+        "cases": [
+          {
+            "id": "train-structured-output",
+            "score": 1,
+            "passed": true,
+            "hard": true,
+            "trace": [
+              "input:train-structured-output",
+              "require:format=json",
+              "matched:format=json"
+            ]
+          },
+          {
+            "id": "train-search-routing",
+            "score": 1,
+            "passed": true,
+            "trace": [
+              "input:train-search-routing",
+              "require:route=search",
+              "matched:route=search"
+            ],
+            "toolTrajectory": [
+              "route:search"
+            ]
+          },
+          {
+            "id": "train-source-grounding",
+            "score": 1,
+            "passed": true,
+            "trace": [
+              "input:train-source-grounding",
+              "require:cite=sources",
+              "matched:cite=sources"
+            ]
+          }
+        ],
+        "cost": {
+          "calls": 3,
+          "estimatedTokens": 112,
+          "latencyMillis": 15
+        }
+      },
+      "validation": {
+        "setName": "prompt-regression-validation",
+        "score": 1,
+        "passed": 3,
+        "failed": 0,
+        "cases": [
+          {
+            "id": "validation-json-contract",
+            "score": 1,
+            "passed": true,
+            "hard": true,
+            "trace": [
+              "input:validation-json-contract",
+              "require:format=json",
+              "matched:format=json"
+            ]
+          },
+          {
+            "id": "validation-grounded-search",
+            "score": 1,
+            "passed": true,
+            "hard": true,
+            "trace": [
+              "input:validation-grounded-search",
+              "require:route=search",
+              "matched:route=search",
+              "require:cite=sources",
+              "matched:cite=sources"
+            ],
+            "toolTrajectory": [
+              "route:search"
+            ]
+          },
+          {
+            "id": "validation-held-out-style",
+            "score": 1,
+            "passed": true,
+            "trace": [
+              "input:validation-held-out-style",
+              "require:concise=true",
+              "matched:concise=true",
+              "forbid:memorize=train",
+              "absent:memorize=train"
+            ]
+          }
+        ],
+        "cost": {
+          "calls": 3,
+          "estimatedTokens": 128,
+          "latencyMillis": 15
+        }
+      },
+      "validationDelta": [
+        {
+          "caseId": "validation-json-contract",
+          "baselineScore": 1,
+          "candidateScore": 1,
+          "delta": 0,
+          "status": "unchanged",
+          "hard": true
+        },
+        {
+          "caseId": "validation-grounded-search",
+          "baselineScore": 0,
+          "candidateScore": 1,
+          "delta": 1,
+          "status": "new_pass",
+          "hard": true
+        },
+        {
+          "caseId": "validation-held-out-style",
+          "baselineScore": 1,
+          "candidateScore": 1,
+          "delta": 0,
+          "status": "unchanged"
+        }
+      ],
+      "attributionSummary": {},
+      "cost": {
+        "calls": 6,
+        "estimatedTokens": 240,
+        "latencyMillis": 30
+      },
+      "gate": {
+        "accepted": true,
+        "reasons": [
+          "validation gain 0.333 passed all regression and budget gates"
+        ]
+      }
+    }
+  ],
+  "acceptedCandidateId": "generalized",
+  "acceptedPrompt": "You are a reliable assistant. format=json concise=true route=search cite=sources",
+  "decision": "accept_candidate"
+}

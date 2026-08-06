@@ -1,0 +1,29 @@
+{
+  "name": "prompt-regression-validation",
+  "cases": [
+    {
+      "id": "validation-json-contract",
+      "input": "Produce a machine-readable answer",
+      "expected": "A valid JSON object",
+      "required": ["format=json"],
+      "failureCategory": "format_error",
+      "hard": true
+    },
+    {
+      "id": "validation-grounded-search",
+      "input": "Look up a fact and explain where it came from",
+      "expected": "Search and cite the source",
+      "required": ["route=search", "cite=sources"],
+      "failureCategory": "tool_or_grounding_error",
+      "hard": true
+    },
+    {
+      "id": "validation-held-out-style",
+      "input": "Give a short answer to an unseen request",
+      "expected": "A concise answer without training-set shortcuts",
+      "required": ["concise=true"],
+      "forbidden": ["memorize=train"],
+      "failureCategory": "response_mismatch"
+    }
+  ]
+}
