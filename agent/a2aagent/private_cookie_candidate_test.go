@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -30,9 +31,12 @@ import (
 
 func TestA2AAgent_CandidateCookieRotationIsPrivateAndCommitsWinner(t *testing.T) {
 	var (
-		serverURL string
-		calls     atomic.Int32
+		serverURL       string
+		calls           atomic.Int32
+		receivedCookies []string
+		receivedMu      sync.Mutex
 	)
+	oldCookieValue := anonymousTestCookieValue(99)
 	handlerErrors := make(chan error, 1)
 	reportHandlerError := func(err error) {
 		select {
@@ -59,6 +63,13 @@ func TestA2AAgent_CandidateCookieRotationIsPrivateAndCommitsWinner(t *testing.T)
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
+		requestCookieValue := ""
+		if requestCookie, err := r.Cookie(anonymousUserIDCookieName); err == nil {
+			requestCookieValue = requestCookie.Value
+		}
+		receivedMu.Lock()
+		receivedCookies = append(receivedCookies, requestCookieValue)
+		receivedMu.Unlock()
 		call := calls.Add(1)
 		responseCookie := anonymousTestCookieValue(int(call))
 		http.SetCookie(w, &http.Cookie{
@@ -95,7 +106,7 @@ func TestA2AAgent_CandidateCookieRotationIsPrivateAndCommitsWinner(t *testing.T)
 	stateKey := anonymousCookieStateKey(serverURL)
 	scope := anonymousCookieURLScopeFromAgentURL(serverURL)
 	oldRecord := anonymousCookieRecord{
-		value:   anonymousTestCookieValue(99),
+		value:   oldCookieValue,
 		path:    "/",
 		expires: time.Now().Add(time.Hour).UTC(),
 	}
@@ -130,6 +141,10 @@ func TestA2AAgent_CandidateCookieRotationIsPrivateAndCommitsWinner(t *testing.T)
 		emitted = append(emitted, evt)
 	}
 	require.EqualValues(t, 2, calls.Load())
+	receivedMu.Lock()
+	gotReceivedCookies := append([]string(nil), receivedCookies...)
+	receivedMu.Unlock()
+	require.Equal(t, []string{oldCookieValue, oldCookieValue}, gotReceivedCookies)
 	select {
 	case err := <-handlerErrors:
 		require.NoError(t, err)
@@ -194,6 +209,11 @@ func TestAnonymousCookieState_DirectCanonicalFallbackKeepsLegacyProjection(t *te
 	require.NoError(t, state.persist(ctx, rotated))
 	stored, err := base.GetSession(ctx, key)
 	require.NoError(t, err)
+	canonicalValue, present := stored.GetState(stateKey + anonymousCookieRecordStateKeySuffix)
+	require.True(t, present)
+	canonicalRecord, ok := decodeAnonymousCookieRecord(canonicalValue, scope)
+	require.True(t, ok)
+	require.True(t, rotated.equal(canonicalRecord))
 	legacy, ok := loadAnonymousCookieStateFromSession(stored, stateKey)
 	require.True(t, ok)
 	require.True(t, rotated.equal(legacy))

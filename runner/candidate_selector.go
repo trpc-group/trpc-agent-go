@@ -31,6 +31,10 @@ import (
 
 const defaultCandidateAttempts = 2
 
+var errCandidatePrivateStateMultipleSessions = errors.New(
+	"candidate selector: private state updates span multiple sessions",
+)
+
 // CandidateSelector selects the winning candidate from one candidate selection run.
 type CandidateSelector interface {
 	// Select chooses one candidate attempt as the winner.
@@ -349,6 +353,9 @@ func persistCandidatePrivateState(
 ) error {
 	if base == nil {
 		return nil
+	}
+	if len(updates) > 1 {
+		return errCandidatePrivateStateMultipleSessions
 	}
 	for _, update := range updates {
 		if err := privatestate.Update(

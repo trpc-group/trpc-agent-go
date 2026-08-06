@@ -142,6 +142,36 @@ func TestRunnerCandidateSelector_PrivateStatePersistFailureHidesWinner(t *testin
 	assert.False(t, ok)
 }
 
+func TestPersistCandidatePrivateState_RejectsMultipleSessionsBeforeWrite(t *testing.T) {
+	ctx := context.Background()
+	base := sessioninmemory.NewSessionService()
+	t.Cleanup(func() { require.NoError(t, base.Close()) })
+	firstKey := session.Key{AppName: "app", UserID: "user", SessionID: "first"}
+	secondKey := session.Key{AppName: "app", UserID: "user", SessionID: "second"}
+	_, err := base.CreateSession(ctx, firstKey, nil)
+	require.NoError(t, err)
+	_, err = base.CreateSession(ctx, secondKey, nil)
+	require.NoError(t, err)
+
+	err = persistCandidatePrivateState(
+		ctx,
+		&agent.Invocation{SessionService: base},
+		[]privatestate.UpdateRequest{
+			{Key: firstKey, State: session.StateMap{"first": []byte("value")}},
+			{Key: secondKey, State: session.StateMap{"second": []byte("value")}},
+		},
+	)
+	require.ErrorIs(t, err, errCandidatePrivateStateMultipleSessions)
+	first, err := base.GetSession(ctx, firstKey)
+	require.NoError(t, err)
+	second, err := base.GetSession(ctx, secondKey)
+	require.NoError(t, err)
+	_, firstPresent := first.GetState("first")
+	_, secondPresent := second.GetState("second")
+	assert.False(t, firstPresent)
+	assert.False(t, secondPresent)
+}
+
 func TestCandidateSelectorAgent_NewAttemptInvocationMemoryReader(t *testing.T) {
 	selectorAgent := &candidateSelectorAgent{
 		inner: &candidateScriptAgent{name: "candidate"},
