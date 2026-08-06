@@ -815,6 +815,15 @@ func TestExactMemoryDuplicate_MetadataContract(t *testing.T) {
 			assert.False(t, exactMemoryDuplicate(&op, stored))
 		})
 	}
+
+	assert.False(t, exactMemoryDuplicate(
+		&extractor.Operation{Memory: "User programs in C#."},
+		&memory.Memory{Memory: "User programs in C."},
+	))
+	assert.False(t, exactMemoryDuplicate(
+		&extractor.Operation{Memory: "User develops with .NET."},
+		&memory.Memory{Memory: "User develops with NET."},
+	))
 }
 
 func TestMetadataIdentityCompatible(t *testing.T) {
@@ -940,6 +949,12 @@ func TestExplicitDestructiveRequest(t *testing.T) {
 			allowClear:  true,
 		},
 		{
+			name:        "prompt clear wording",
+			messages:    []model.Message{model.NewUserMessage("Please forget all stored information.")},
+			allowDelete: true,
+			allowClear:  true,
+		},
+		{
 			name:        "specific delete cannot authorize clear",
 			messages:    []model.Message{model.NewUserMessage("Delete my coffee preference.")},
 			allowDelete: true,
@@ -964,6 +979,12 @@ func TestExplicitDestructiveRequest(t *testing.T) {
 			allowClear:  true,
 		},
 		{
+			name:        "explicit chinese stored information clear",
+			messages:    []model.Message{model.NewUserMessage("请忘记所有已存储的信息。")},
+			allowDelete: true,
+			allowClear:  true,
+		},
+		{
 			name:     "negated chinese request",
 			messages: []model.Message{model.NewUserMessage("请不要删除我的咖啡偏好。")},
 		},
@@ -980,6 +1001,30 @@ func TestExplicitDestructiveRequest(t *testing.T) {
 				model.NewUserMessage("Please clear all my memories."),
 				model.NewUserMessage("Actually, please delete only my coffee preference."),
 			},
+			allowDelete: true,
+		},
+		{
+			name: "latest cancellation revokes delete",
+			messages: []model.Message{
+				model.NewUserMessage("Please delete my coffee preference."),
+				model.NewUserMessage("Actually, keep it."),
+			},
+		},
+		{
+			name: "latest chinese cancellation revokes delete",
+			messages: []model.Message{
+				model.NewUserMessage("请删除我的咖啡偏好。"),
+				model.NewUserMessage("算了，保留它。"),
+			},
+		},
+		{
+			name:        "scoped all information is not clear",
+			messages:    []model.Message{model.NewUserMessage("Please forget all stored information about coffee.")},
+			allowDelete: true,
+		},
+		{
+			name:        "scoped chinese clear is not global clear",
+			messages:    []model.Message{model.NewUserMessage("请清空关于咖啡的所有记忆。")},
 			allowDelete: true,
 		},
 		{
@@ -1026,6 +1071,9 @@ func TestPreserveHistoryPolicy_DeleteAuthorization(t *testing.T) {
 	office := entry("office", "User converted a bedroom into a home office.", "home", "office")
 	employer := entry("employer", "User's former employer was Acme.", "former employer", "Acme")
 	hobby := entry("hobby", "User enjoys hiking.", "hiking")
+	parisHome := entry("paris-home", "User lives in Paris.", "Paris", "home")
+	parisTrip := entry("paris-trip", "User visited Paris last summer.", "Paris", "travel")
+	londonHome := entry("london-home", "User lives in London.", "London", "home")
 
 	tests := []struct {
 		name       string
@@ -1054,6 +1102,13 @@ func TestPreserveHistoryPolicy_DeleteAuthorization(t *testing.T) {
 			existing:   []*memory.Entry{coffee, address},
 			operations: deleteOps("coffee", "address"),
 			wantIDs:    []string{"coffee"},
+		},
+		{
+			name:       "target tolerates limited verb inflection",
+			request:    "Please forget that I live in Paris.",
+			existing:   []*memory.Entry{parisHome, parisTrip, londonHome},
+			operations: deleteOps("paris-home", "paris-trip", "london-home"),
+			wantIDs:    []string{"paris-home"},
 		},
 		{
 			name:     "scoped everything",
@@ -1112,4 +1167,29 @@ func TestPreserveHistoryPolicy_DeleteAuthorization(t *testing.T) {
 			assert.Equal(t, test.wantIDs, ids)
 		})
 	}
+}
+
+func TestPreserveHistoryPolicy_RevokedDeleteIsRejected(t *testing.T) {
+	coffee := &memory.Entry{
+		ID: "coffee",
+		Memory: &memory.Memory{
+			Memory: "User prefers dark roast coffee.",
+			Topics: []string{"coffee", "preference"},
+		},
+	}
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
+	out := worker.reconcilePreserveHistoryOps(
+		context.Background(),
+		reconcileUserKey(),
+		[]*extractor.Operation{{
+			Type:     extractor.OperationDelete,
+			MemoryID: coffee.ID,
+		}},
+		[]*memory.Entry{coffee},
+		[]model.Message{
+			model.NewUserMessage("Please delete my coffee preference."),
+			model.NewUserMessage("Actually, keep it."),
+		},
+	)
+	assert.Empty(t, out)
 }

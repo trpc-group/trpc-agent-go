@@ -51,6 +51,14 @@ var (
 		),
 		regexp.MustCompile(`(?:不要|别|请勿|不必|不应该)(?:再)?(?:忘记|删除|移除|清除|清空)`),
 	}
+	destructiveRequestCancellationPatterns = []*regexp.Regexp{
+		regexp.MustCompile(
+			`(?i)^\s*(?:actually[,.]?\s*)?(?:never\s*mind|cancel\s+(?:that|it|the\s+request)|keep\s+(?:it|that|them)|do\s+nothing\s+with\s+(?:it|that|them)|do\s+not\s+(?:do|process|change)\s+(?:it|that|them))\s*[.!?]*\s*$`,
+		),
+		regexp.MustCompile(
+			`^\s*(?:(?:还是|那就)?算了(?:[，,\s]*(?:保留(?:它|这些|原样)?|不要(?:处理|操作|改动)(?:它|这些|任何内容)?))?|取消(?:刚才|之前)?(?:的)?(?:请求|操作)?|保留(?:它|这些|原样)?|不要(?:处理|操作|改动)(?:它|这些|任何内容)?)\s*[。！？!?]*\s*$`,
+		),
+	}
 	explicitDestructiveRequestPatterns = []*regexp.Regexp{
 		regexp.MustCompile(`(?im)^\s*(?:please\s+)?(?:forget|delete|remove|erase|clear)\b`),
 		regexp.MustCompile(`(?i)\bplease\s+(?:forget|delete|remove|erase|clear)\b`),
@@ -66,13 +74,15 @@ var (
 		regexp.MustCompile(`(?:我(?:想|希望|要求)(?:让)?你|请你|麻烦你|帮我)(?:忘记|删除|移除|清除|清空)`),
 	}
 	explicitClearAllRequestPatterns = []*regexp.Regexp{
-		regexp.MustCompile(`(?i)\bforget\s+(?:absolutely\s+)?everything\b`),
 		regexp.MustCompile(
-			`(?i)\b(?:delete|remove|erase|clear)\s+(?:(?:all(?:\s+of)?\s+)(?:my\s+)?(?:memories|memory|data|information)|(?:my\s+)?memories|everything)\b`,
+			`(?i)\bforget\s+(?:(?:absolutely\s+)?everything|all(?:\s+of)?\s+(?:my\s+)?(?:stored\s+)?(?:memories|memory|data|information))\b`,
 		),
-		regexp.MustCompile(`忘记.{0,8}(?:关于我(?:的)?(?:一切|全部|所有)|(?:一切|全部|所有)(?:记忆|信息|数据)?)`),
-		regexp.MustCompile(`(?:删除|移除|清除|清空).{0,8}(?:(?:全部|所有)(?:的)?(?:记忆|信息|数据)|记忆库)`),
-		regexp.MustCompile(`清空.{0,4}(?:记忆|信息|数据)`),
+		regexp.MustCompile(
+			`(?i)\b(?:delete|remove|erase|clear)\s+(?:(?:all(?:\s+of)?\s+)(?:my\s+)?(?:stored\s+)?(?:memories|memory|data|information)|(?:my\s+)?memories|everything)\b`,
+		),
+		regexp.MustCompile(`忘记(?:关于我(?:的)?)?(?:一切|全部|所有)(?:已(?:经)?(?:存储|保存)(?:的)?)?(?:记忆|信息|数据)?`),
+		regexp.MustCompile(`(?:删除|移除|清除|清空)(?:我(?:的)?)?(?:全部|所有)(?:的)?(?:已(?:经)?(?:存储|保存)(?:的)?)?(?:记忆|信息|数据)`),
+		regexp.MustCompile(`清空(?:我(?:的)?)?(?:全部|所有)?(?:的)?(?:已(?:经)?(?:存储|保存)(?:的)?)?(?:记忆|信息|数据|记忆库)`),
 	}
 	partialClearRequestPatterns = []*regexp.Regexp{
 		regexp.MustCompile(`(?i)\b(?:except|excluding|other\s+than|but\s+keep)\b`),
@@ -85,7 +95,7 @@ var (
 		"me", "my", "need", "or", "please", "regarding", "related", "remove", "said", "shared",
 		"should", "stored", "the", "to", "told", "want", "will", "would", "you",
 		"全部", "关于", "记忆", "请", "清除", "清空", "删除", "数据", "所有", "忘记",
-		"帮我", "麻烦", "我的", "我", "希望", "信息", "移除", "细节",
+		"保存", "存储", "已保存", "已存储", "帮我", "麻烦", "我的", "我", "希望", "信息", "移除", "细节",
 	})
 )
 
@@ -253,6 +263,9 @@ func latestExplicitDestructiveRequest(messages []model.Message) destructiveReque
 			continue
 		}
 		text := messageSearchText(msg)
+		if matchesAnyPattern(text, destructiveRequestCancellationPatterns) {
+			return destructiveRequest{}
+		}
 		negated := false
 		for _, pattern := range negatedDestructiveRequestPatterns {
 			negated = negated || pattern.MatchString(text)
@@ -293,12 +306,44 @@ func (r destructiveRequest) authorizesDelete(entry *memory.Entry) bool {
 	}
 	entryText := entry.Memory.Memory + " " + strings.Join(entry.Memory.Topics, " ")
 	entryTokens := stringSet(BuildSearchTokens(entryText))
+	// A limited inflection match can bridge phrasing such as live/lives, but it
+	// cannot authorize deletion by itself. At least one specific target token
+	// must still match the selected memory exactly.
+	exactAnchor := false
 	for token := range targetTokens {
-		if _, ok := entryTokens[token]; !ok {
+		if _, ok := entryTokens[token]; ok {
+			exactAnchor = true
+			continue
+		}
+		if !matchesInflectedToken(token, entryTokens) {
 			return false
 		}
 	}
-	return true
+	return exactAnchor
+}
+
+func matchesInflectedToken(target string, candidates map[string]struct{}) bool {
+	if !isASCIIWord(target) || len(target) < 4 {
+		return false
+	}
+	for candidate := range candidates {
+		if !isASCIIWord(candidate) || len(candidate) < 4 {
+			continue
+		}
+		if target+"s" == candidate || candidate+"s" == target {
+			return true
+		}
+	}
+	return false
+}
+
+func isASCIIWord(value string) bool {
+	for _, r := range value {
+		if r < 'a' || r > 'z' {
+			return false
+		}
+	}
+	return value != ""
 }
 
 func destructiveTargetTokens(text string) map[string]struct{} {
@@ -570,10 +615,12 @@ func negationSignature(text string) string {
 }
 
 func normalizeMemoryText(value string) string {
+	// Exact duplicate checks intentionally retain punctuation inside the text:
+	// symbols in identifiers such as C#, .NET, and email addresses are semantic.
 	var normalized strings.Builder
 	spacePending := false
 	for _, r := range value {
-		if unicode.IsSpace(r) || unicode.IsPunct(r) {
+		if unicode.IsSpace(r) {
 			spacePending = normalized.Len() > 0
 			continue
 		}
@@ -583,7 +630,17 @@ func normalizeMemoryText(value string) string {
 		}
 		normalized.WriteRune(unicode.ToLower(r))
 	}
-	return normalized.String()
+	return strings.TrimSpace(strings.TrimRightFunc(
+		strings.TrimSpace(normalized.String()),
+		func(r rune) bool {
+			switch r {
+			case '.', '!', '?', '。', '！', '？':
+				return true
+			default:
+				return false
+			}
+		},
+	))
 }
 
 func equalOptionalTime(left, right *time.Time) bool {
