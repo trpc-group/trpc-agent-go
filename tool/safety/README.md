@@ -10,7 +10,7 @@ real timeouts still live in workspaceexec / hostexec / codeexecutor.
 
 | Criterion | Evidence |
 |---|---|
-| ≥12 samples + structured report | `testdata/acceptance_corpus.json` (22) + `TestAcceptanceCorpus_QualityGates` |
+| ≥12 samples + structured report | `testdata/acceptance_corpus.json` (40) + `TestAcceptanceCorpus_QualityGates` |
 | High-risk ≥90% / safe FP ≤10% | same test (hard-coded rate gates) |
 | Secret / delete / egress 100% | `must_catch` labels in corpus |
 | 500 segments ≤1s | `TestAcceptanceCorpus_500SegmentUnderOneSecond` |

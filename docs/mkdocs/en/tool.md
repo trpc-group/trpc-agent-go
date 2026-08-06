@@ -123,6 +123,9 @@ Keep the boundaries clear:
 - `agent.WithToolPermissionPolicy(...)`: checks permission for every tool the framework is about to execute.
 - Tool callbacks and guardrail plugins still work for authorization, audit, and review workflows. Use the permission policy for simple deterministic allow/deny/ask checks.
 
+For a reusable argument scanner that implements `tool.PermissionPolicy`, see
+[Tool Execution Safety](tool-safety.md) (`tool/safety`).
+
 #### 📦 ToolSet
 
 A ToolSet is a collection of related tools that implements the `tool.ToolSet` interface. A ToolSet manages the lifecycle of tools, connections, and resource cleanup.

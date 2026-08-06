@@ -26,14 +26,16 @@ import (
 // corpusSample mirrors testdata/acceptance_corpus.json entries used as
 // hard gates for issue #2002 acceptance criteria 1–5.
 type corpusSample struct {
-	ID         string         `json:"id"`
-	Class      string         `json:"class"` // "safe" | "high"
-	MustCatch  string         `json:"must_catch,omitempty"`
-	Tool       string         `json:"tool"`
-	Args       map[string]any `json:"args"`
-	Expect     string         `json:"expect"` // allow|deny|ask
-	AllowHosts []string       `json:"allow_hosts,omitempty"`
-	StdinPad   int            `json:"stdin_pad,omitempty"`
+	ID                  string         `json:"id"`
+	Class               string         `json:"class"` // "safe" | "high"
+	Category            string         `json:"category,omitempty"`
+	AcceptanceScenario  string         `json:"acceptance_scenario,omitempty"`
+	MustCatch           string         `json:"must_catch,omitempty"`
+	Tool                string         `json:"tool"`
+	Args                map[string]any `json:"args"`
+	Expect              string         `json:"expect"` // allow|deny|ask
+	AllowHosts          []string       `json:"allow_hosts,omitempty"`
+	StdinPad            int            `json:"stdin_pad,omitempty"`
 }
 
 func loadAcceptanceCorpus(t *testing.T) []corpusSample {
@@ -43,7 +45,7 @@ func loadAcceptanceCorpus(t *testing.T) []corpusSample {
 	require.NoError(t, err)
 	var samples []corpusSample
 	require.NoError(t, json.Unmarshal(raw, &samples))
-	require.GreaterOrEqual(t, len(samples), 12)
+	require.GreaterOrEqual(t, len(samples), 35)
 	return samples
 }
 
@@ -75,10 +77,18 @@ func TestAcceptanceCorpus_QualityGates(t *testing.T) {
 		safeTotal, safeFP     int
 		mustCatch             = map[string]int{"secret": 0, "delete": 0, "egress": 0}
 		mustCatchOK           = map[string]int{"secret": 0, "delete": 0, "egress": 0}
+		categories            = map[string]int{}
+		scenarios             = map[string]int{}
 	)
 
 	for _, s := range samples {
 		s := s
+		if s.Category != "" {
+			categories[s.Category]++
+		}
+		if s.AcceptanceScenario != "" {
+			scenarios[s.AcceptanceScenario]++
+		}
 		g := guardForSample(s)
 		raw, err := json.Marshal(expandArgs(s))
 		require.NoError(t, err)
@@ -136,6 +146,10 @@ func TestAcceptanceCorpus_QualityGates(t *testing.T) {
 		require.Greater(t, n, 0, "corpus missing must_catch=%s", kind)
 		require.Equal(t, n, mustCatchOK[kind], "must_catch %s deny rate", kind)
 	}
+	require.GreaterOrEqual(t, len(categories), 8, "category coverage")
+	require.GreaterOrEqual(t, len(scenarios), 10, "acceptance_scenario coverage")
+	require.GreaterOrEqual(t, safeTotal, 8)
+	require.GreaterOrEqual(t, highTotal, 20)
 }
 
 func TestAcceptanceCorpus_500SegmentUnderOneSecond(t *testing.T) {

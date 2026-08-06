@@ -176,6 +176,12 @@ func scanShellCommand(res Result, ex Extracted, policy Policy) Result {
 	if f, ok := scanRemoteGoRun(pipe); ok {
 		return finalize(res, f)
 	}
+	if f, ok := scanOpaqueNetworkConfig(pipe); ok {
+		return finalize(res, f)
+	}
+	if f, ok := scanGitAliasInjection(pipe); ok {
+		return finalize(res, f)
+	}
 	shellPol := policy.shellPolicy()
 	// shellsafe.Check only applies its built-in wrapper denies when the
 	// policy is Active(); the sentinel keeps Deny non-empty without matching
@@ -642,6 +648,72 @@ func looksLikeRemoteGoPkg(pkg string) bool {
 	}
 	// Module paths look like github.com/org/repo[…].
 	return strings.Contains(host, ".")
+}
+
+// scanOpaqueNetworkConfig denies curl/wget config-file options that can hide
+// destinations from argv-level host extraction (-K/--config and wget -e).
+func scanOpaqueNetworkConfig(pipe *shellsafe.Pipeline) (Finding, bool) {
+	if pipe == nil {
+		return Finding{}, false
+	}
+	for _, argv := range pipe.Commands {
+		base := commandBase(argv)
+		if base != "curl" && base != "wget" && base != "fetch" {
+			continue
+		}
+		for i := 1; i < len(argv); i++ {
+			a := argv[i]
+			switch {
+			case a == "-K" || a == "--config" || strings.HasPrefix(a, "--config="):
+				return Finding{
+					RuleID:   "network.config_file",
+					Decision: DecisionDeny,
+					Risk:     RiskHigh,
+					Evidence: base + " config-file option obscures request targets",
+					Advice:   "pass explicit URLs on the command line; avoid -K/--config",
+				}, true
+			case base == "wget" && (a == "-e" || strings.HasPrefix(a, "--execute")):
+				return Finding{
+					RuleID:   "network.config_file",
+					Decision: DecisionDeny,
+					Risk:     RiskHigh,
+					Evidence: "wget -e can inject proxy or wgetrc directives",
+					Advice:   "avoid wget -e; use explicit URL flags only",
+				}, true
+			}
+		}
+	}
+	return Finding{}, false
+}
+
+// scanGitAliasInjection denies `git -c alias.*=!...` which runs a shell
+// command through git's configuration alias mechanism.
+func scanGitAliasInjection(pipe *shellsafe.Pipeline) (Finding, bool) {
+	if pipe == nil {
+		return Finding{}, false
+	}
+	for _, argv := range pipe.Commands {
+		if commandBase(argv) != "git" {
+			continue
+		}
+		for i := 1; i+1 < len(argv); i++ {
+			if argv[i] != "-c" {
+				continue
+			}
+			spec := argv[i+1]
+			lower := strings.ToLower(spec)
+			if strings.HasPrefix(lower, "alias.") && strings.Contains(spec, "!") {
+				return Finding{
+					RuleID:   "shell.git_alias",
+					Decision: DecisionDeny,
+					Risk:     RiskHigh,
+					Evidence: "git -c alias.*='!...' executes a shell command",
+					Advice:   "do not pass shell aliases via git -c; run the intended binary directly",
+				}, true
+			}
+		}
+	}
+	return Finding{}, false
 }
 
 func commandBase(argv []string) string {

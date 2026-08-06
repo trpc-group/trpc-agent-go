@@ -14,6 +14,7 @@ Default `go run .` shows the full host wiring reviewers expect:
 
 ```bash
 go run .
+go test .
 ```
 
 Reads:
