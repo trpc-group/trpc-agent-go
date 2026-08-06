@@ -37,6 +37,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
+	"trpc.group/trpc-go/trpc-agent-go/internal/session/privatestate"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -696,7 +697,7 @@ func (s *anonymousCookieState) persist(
 		UserID:    s.persistSession.UserID,
 		SessionID: s.persistSession.ID,
 	}
-	if err := s.sessionService.UpdateSessionState(ctx, key, state); err != nil {
+	if err := privatestate.Update(ctx, s.sessionService, key, state); err != nil {
 		return fmt.Errorf("persist anonymous A2A cookie state: %w", err)
 	}
 	storeAnonymousCookieRecord(s.persistSession, s.key, record)
@@ -740,11 +741,12 @@ func (s *anonymousCookieState) persistCanonicalValueDirectly(
 	if s == nil || s.sessionService == nil {
 		return nil
 	}
-	if err := s.sessionService.UpdateSessionState(
-		ctx,
-		key,
-		session.StateMap{s.canonicalStateKey(): value},
-	); err != nil {
+	state, err := s.legacyStateProjection(value)
+	if err != nil {
+		return fmt.Errorf("persist anonymous A2A cookie state: %w", err)
+	}
+	state[s.canonicalStateKey()] = append([]byte(nil), value...)
+	if err := privatestate.Update(ctx, s.sessionService, key, state); err != nil {
 		return fmt.Errorf("persist anonymous A2A cookie state: %w", err)
 	}
 	return nil
@@ -772,8 +774,9 @@ func (s *anonymousCookieState) clear(ctx context.Context) error {
 				return fmt.Errorf("clear anonymous A2A cookie state: %w", err)
 			}
 		} else {
-			if err := s.sessionService.UpdateSessionState(
+			if err := privatestate.Update(
 				ctx,
+				s.sessionService,
 				key,
 				anonymousCookieClearedStateMap(s.key),
 			); err != nil {

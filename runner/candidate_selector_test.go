@@ -26,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/session/privatestate"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/plugin"
@@ -67,6 +68,78 @@ func TestRunnerCandidateSelector_CommitsOnlyWinner(t *testing.T) {
 	state, ok := sess.GetState("attempt")
 	require.True(t, ok)
 	assert.Equal(t, "1", string(state))
+}
+
+func TestRunnerCandidateSelector_CommitsOnlyWinnerPrivateState(t *testing.T) {
+	ctx := context.Background()
+	sessionService := sessioninmemory.NewSessionService()
+	ag := &candidatePrivateStateAgent{name: "candidate"}
+	r := NewRunner(
+		"app",
+		ag,
+		WithSessionService(sessionService),
+		WithCandidateSelector(&fixedCandidateSelector{winner: 0}, WithCandidateAttempts(2)),
+	)
+	t.Cleanup(func() { require.NoError(t, r.Close()) })
+
+	ch, err := r.Run(ctx, "user", "session", model.NewUserMessage("question"))
+	require.NoError(t, err)
+	var events []*event.Event
+	for evt := range ch {
+		events = append(events, evt)
+		if evt == nil || evt.StateDelta == nil {
+			continue
+		}
+		assert.NotContains(t, evt.StateDelta, "private")
+	}
+
+	sess, err := sessionService.GetSession(ctx, session.Key{
+		AppName: "app", UserID: "user", SessionID: "session",
+	})
+	require.NoError(t, err)
+	value, ok := sess.GetState("private")
+	require.True(t, ok)
+	assert.Equal(t, "private-0", string(value))
+	assert.Equal(t, []string{"answer-0"}, responseContents(events))
+}
+
+func TestRunnerCandidateSelector_PrivateStatePersistFailureHidesWinner(t *testing.T) {
+	ctx := context.Background()
+	base := sessioninmemory.NewSessionService()
+	service := &failingPrivateStateService{Service: base}
+	r := NewRunner(
+		"app",
+		&candidatePrivateStateAgent{name: "candidate"},
+		WithSessionService(service),
+		WithCandidateSelector(&fixedCandidateSelector{winner: 0}, WithCandidateAttempts(2)),
+	)
+	t.Cleanup(func() {
+		require.NoError(t, r.Close())
+		require.NoError(t, base.Close())
+	})
+
+	ch, err := r.Run(ctx, "user", "session", model.NewUserMessage("question"))
+	require.NoError(t, err)
+	var (
+		events   []*event.Event
+		gotError bool
+	)
+	for evt := range ch {
+		events = append(events, evt)
+		if evt != nil && evt.Response != nil && evt.Response.Error != nil &&
+			strings.Contains(evt.Response.Error.Message, "persist private session state") {
+			gotError = true
+		}
+	}
+	require.True(t, gotError)
+	assert.NotContains(t, responseContents(events), "answer-0")
+	assert.NotContains(t, responseContents(events), "answer-1")
+	sess, err := base.GetSession(ctx, session.Key{
+		AppName: "app", UserID: "user", SessionID: "session",
+	})
+	require.NoError(t, err)
+	_, ok := sess.GetState("private")
+	assert.False(t, ok)
 }
 
 func TestCandidateSelectorAgent_NewAttemptInvocationMemoryReader(t *testing.T) {
@@ -768,6 +841,58 @@ type candidateScriptAgent struct {
 	mu   sync.Mutex
 	next int
 }
+
+type candidatePrivateStateAgent struct {
+	name string
+	mu   sync.Mutex
+	next int
+}
+
+type failingPrivateStateService struct {
+	session.Service
+}
+
+func (s *failingPrivateStateService) UpdateSessionState(
+	context.Context,
+	session.Key,
+	session.StateMap,
+) error {
+	return fmt.Errorf("private state persist failed")
+}
+
+func (a *candidatePrivateStateAgent) Run(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) (<-chan *event.Event, error) {
+	a.mu.Lock()
+	index := a.next
+	a.next++
+	a.mu.Unlock()
+	key := session.Key{
+		AppName:   invocation.Session.AppName,
+		UserID:    invocation.Session.UserID,
+		SessionID: invocation.Session.ID,
+	}
+	if err := privatestate.Update(ctx, invocation.SessionService, key, session.StateMap{
+		"private": []byte(fmt.Sprintf("private-%d", index)),
+	}); err != nil {
+		return nil, err
+	}
+	out := make(chan *event.Event, 1)
+	out <- responseEvent(invocation, a.name, fmt.Sprintf("answer-%d", index))
+	close(out)
+	return out, nil
+}
+
+func (a *candidatePrivateStateAgent) Tools() []tool.Tool { return nil }
+
+func (a *candidatePrivateStateAgent) Info() agent.Info {
+	return agent.Info{Name: a.name}
+}
+
+func (a *candidatePrivateStateAgent) SubAgents() []agent.Agent { return nil }
+
+func (a *candidatePrivateStateAgent) FindSubAgent(string) agent.Agent { return nil }
 
 func (a *candidateScriptAgent) Run(
 	ctx context.Context,

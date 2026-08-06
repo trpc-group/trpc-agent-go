@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/session/privatestate"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
@@ -92,6 +93,40 @@ func TestAttemptSessionService_DoesNotBypassAttemptStateIsolation(t *testing.T) 
 	require.NoError(t, err)
 	_, present := persisted.GetState("private-state")
 	require.False(t, present)
+}
+
+func TestAttemptSessionService_PrivateStateIsolatedFromDirectDelta(t *testing.T) {
+	ctx := context.Background()
+	base := sessioninmemory.NewSessionService()
+	t.Cleanup(func() { require.NoError(t, base.Close()) })
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	root, err := base.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	scope := newAttemptSessionService(base, root.Clone())
+	_, privateWriter := scope.Service().(privatestate.Writer)
+	require.True(t, privateWriter)
+	require.NoError(t, privatestate.Update(ctx, scope.Service(), key, session.StateMap{
+		"private": []byte("value"),
+	}))
+
+	assert.Empty(t, scope.DirectStateDelta())
+	updates := scope.privateStateUpdates()
+	require.Len(t, updates, 1)
+	assert.Equal(t, key, updates[0].Key)
+	assert.Equal(t, "value", string(updates[0].State["private"]))
+	updates[0].State["private"][0] = 'X'
+	assert.Equal(t, "value", string(scope.privateStateUpdates()[0].State["private"]))
+
+	overlay, err := scope.GetSession(ctx, key)
+	require.NoError(t, err)
+	value, ok := overlay.GetState("private")
+	require.True(t, ok)
+	assert.Equal(t, "value", string(value))
+	persisted, err := base.GetSession(ctx, key)
+	require.NoError(t, err)
+	_, ok = persisted.GetState("private")
+	assert.False(t, ok)
 }
 
 func TestAttemptSessionService_RejectsInvalidKeysAndProtectedState(t *testing.T) {
