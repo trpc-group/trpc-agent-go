@@ -1,0 +1,5 @@
+--- a/client.go
++++ b/client.go
+@@ -8,3 +8,3 @@ func FetchData() {
++	resp, err := http.Get("https://api.example.com/data")
+ }

@@ -1,0 +1,6 @@
+--- a/repo.go
++++ b/repo.go
+@@ -15,3 +15,3 @@ func UpdateUser() {
++	tx, err := db.Begin()
++	tx.Exec("UPDATE users SET status = 1")
+ }

@@ -1,0 +1,56 @@
+{
+  "task_id": "task-1785987194",
+  "status": "completed",
+  "repo_path": ".",
+  "summary": {
+    "total_findings": 1,
+    "high_severity": 1,
+    "medium_severity": 0,
+    "low_severity": 0,
+    "warnings": 0
+  },
+  "findings": [
+    {
+      "id": "task-1785987194-finding-1",
+      "task_id": "task-1785987194",
+      "severity": "high",
+      "category": "Security Risk",
+      "file": "config.go",
+      "line": 5,
+      "title": "Hardcoded credential or API secret detected",
+      "evidence": "apiKey := \"sk****ue\"",
+      "recommendation": "Remove hardcoded secret and load from environment or secret manager.",
+      "confidence": 0.99,
+      "source": "static_rule",
+      "rule_id": "GOP-004"
+    }
+  ],
+  "sandbox_runs": [
+    {
+      "id": "run-1785987194104796200",
+      "command": "go vet ./...",
+      "status": "success",
+      "exit_code": 0,
+      "output_snippet": "Error executing code block 0: unsupported language: go\n",
+      "duration_ms": 1
+    }
+  ],
+  "permission_decisions": [
+    {
+      "id": "dec-1785987194103724000",
+      "command": "go vet ./...",
+      "decision": "allow",
+      "reason": "Approved by PermissionPolicy"
+    }
+  ],
+  "metrics": {
+    "total_duration_ms": 21,
+    "sandbox_duration_ms": 1,
+    "tool_call_count": 0,
+    "permission_denials": 0,
+    "finding_count": 1,
+    "severity_counts": {
+      "high": 1
+    }
+  }
+}

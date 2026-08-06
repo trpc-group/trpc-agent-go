@@ -1,0 +1,6 @@
+--- a/main.go
++++ b/main.go
+@@ -10,3 +10,3 @@ func add(a, b int) int {
+-	return a + b
++	return a + b
+ }
