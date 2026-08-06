@@ -15,27 +15,32 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/internal/assistantmemory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 const (
-	metadataKeyConversationExtraction = "conversation_extraction"
-	assistantEpisodeMetadataValue     = "assistant-episode"
+	metadataKeyConversationExtraction = assistantmemory.MetadataKey
+	assistantEpisodeMetadataValue     = assistantmemory.MetadataValue
 	assistantEpisodeToolName          = "memory_assistant_episode"
 	assistantEpisodePairIDKey         = "pair_id"
 	assistantEpisodeMaxBytes          = 4096
 	assistantEpisodeSourceMaxBytes    = 8192
-	assistantEpisodeMaxPairsPerDelta  = 16
-	assistantEpisodePrefix            = "Assistant-provided conversation episode: "
-	assistantEpisodeTruncationMarker  = "\n...[truncated]...\n"
-	assistantEpisodeCurrencyPattern   = `[$€£¥]|USD|EUR|GBP|JPY|CNY|RMB`
-	assistantEpisodeUnitPattern       = `percent(?:age)?|%|°[ \t]*(?:C|F|K)|` +
+	// These private limits bound the optional request; overflow is best effort.
+	assistantEpisodeRequestMaxPairs       = 32
+	assistantEpisodeRequestMaxSourceBytes = 64 * 1024
+	assistantEpisodeDeadlineReserve       = 5 * time.Second
+	assistantEpisodePrefix                = assistantmemory.Prefix
+	assistantEpisodeTruncationMarker      = "\n...[truncated]...\n"
+	assistantEpisodeCurrencyPattern       = `[$€£¥]|USD|EUR|GBP|JPY|CNY|RMB`
+	assistantEpisodeUnitPattern           = `percent(?:age)?|%|°[ \t]*(?:C|F|K)|` +
 		`kilograms?|milligrams?|grams?|pounds?|` +
 		`kilometers?|kilometres?|miles?|` +
 		`centimeters?|centimetres?|millimeters?|millimetres?|` +
@@ -46,7 +51,7 @@ const (
 
 var (
 	assistantEpisodeListItemPattern = regexp.MustCompile(
-		`(?m)^\s*(?:[-*]\s+|\d{1,2}[.)]\s+)\S`,
+		`(?m)^\s*(?:[-*•]\s+|\d{1,2}[.)]\s+)\S`,
 	)
 	assistantEpisodeStructuredRequestPattern = regexp.MustCompile(
 		`(?i)\b(?:recommend(?:ation)?s?|suggest(?:ion)?s?|examples?|list|` +
@@ -147,9 +152,20 @@ func (e *memoryExtractor) extractWithAssistantEpisodes(
 	if len(ordinaryMessages) > 0 {
 		ordinaryExtractor := *e
 		ordinaryExtractor.assistantEpisodeExtraction = false
+		ordinaryTools := filterTools(
+			backgroundTools,
+			ordinaryExtractor.enabledTools,
+		)
+		if len(ordinaryTools) == 0 {
+			return nil, nil
+		}
 		req := &model.Request{
-			Messages: ordinaryExtractor.buildMessages(ctx, ordinaryMessages, existing),
-			Tools:    filterTools(backgroundTools, ordinaryExtractor.enabledTools),
+			Messages: ordinaryExtractor.buildMessages(
+				ctx,
+				ordinaryMessages,
+				withoutAssistantEpisodeEntries(existing),
+			),
+			Tools: ordinaryTools,
 		}
 		var err error
 		nextCtx, err = ordinaryExtractor.runExtractionRequest(
@@ -183,111 +199,80 @@ func (e *memoryExtractor) extractWithAssistantEpisodes(
 	if len(candidates) == 0 {
 		return ordinaryOps, nil
 	}
-	if len(candidates) > assistantEpisodeMaxPairsPerDelta {
+	candidates, skipped := boundAssistantEpisodeCandidates(candidates)
+	if skipped > 0 {
 		log.WarnfContext(
-			ctx,
-			"extractor: assistant episode candidates capped at %d; skipped %d",
-			assistantEpisodeMaxPairsPerDelta,
-			len(candidates)-assistantEpisodeMaxPairsPerDelta,
+			nextCtx,
+			"extractor: assistant episode request budget skipped %d of %d candidates",
+			skipped,
+			skipped+len(candidates),
 		)
-		candidates = candidates[:assistantEpisodeMaxPairsPerDelta]
 	}
 
-	var assistantOps []*Operation
-	var err error
-	if len(candidates) == 1 {
-		var assistantOp *Operation
-		_, assistantOp, err = e.extractAssistantEpisode(
-			nextCtx,
-			candidates[0].user,
-			candidates[0].assistant,
-		)
-		if assistantOp != nil {
-			assistantOps = append(assistantOps, assistantOp)
-		}
-	} else {
-		_, assistantOps, err = e.extractAssistantEpisodeBatch(
-			nextCtx,
-			candidates,
-		)
-	}
+	assistantCallCtx, cancel := assistantEpisodeRequestContext(nextCtx)
+	defer cancel()
+	_, assistantOps, err := e.extractAssistantEpisodes(assistantCallCtx, candidates)
 	if err != nil {
-		// Transport, callback, and cancellation failures remain atomic. The
-		// worker leaves its watermark unchanged so the delta can be retried.
-		return nil, fmt.Errorf("extract assistant episode: %w", err)
+		if nextCtx.Err() != nil {
+			return nil, fmt.Errorf("extract assistant episodes: %w", err)
+		}
+		log.WarnfContext(
+			nextCtx,
+			"extractor: optional assistant episode extraction failed: %v",
+			err,
+		)
+		return ordinaryOps, nil
 	}
 	ordinaryOps = append(ordinaryOps, assistantOps...)
 	return ordinaryOps, nil
 }
 
-func (e *memoryExtractor) extractAssistantEpisode(
-	ctx context.Context,
-	userMessage model.Message,
-	assistantMessage model.Message,
-) (context.Context, *Operation, error) {
-	userText := assistantEpisodeSourceExcerpt(
-		assistantEpisodeMessageText(userMessage),
-	)
-	assistantText := assistantEpisodeSourceExcerpt(
-		assistantEpisodeMessageText(assistantMessage),
-	)
-	req := &model.Request{
-		Messages: []model.Message{
-			model.NewSystemMessage(e.assistantEpisodePrompt(ctx, false)),
-			model.NewUserMessage(userText),
-			model.NewAssistantMessage(assistantText),
-			model.NewUserMessage(
-				"Extract the reusable result from the assistant response.",
-			),
-		},
-		Tools: map[string]tool.Tool{
-			assistantEpisodeToolName: assistantEpisodeTool,
-		},
+func boundAssistantEpisodeCandidates(
+	pairs []assistantEpisodePair,
+) ([]assistantEpisodePair, int) {
+	limit := min(len(pairs), assistantEpisodeRequestMaxPairs)
+	bounded := make([]assistantEpisodePair, 0, limit)
+	sourceBytes := 0
+	for _, pair := range pairs[:limit] {
+		pairBytes := len(assistantEpisodeSourceExcerpt(
+			assistantEpisodeMessageText(pair.user),
+		)) + len(assistantEpisodeSourceExcerpt(
+			assistantEpisodeMessageText(pair.assistant),
+		))
+		if sourceBytes+pairBytes > assistantEpisodeRequestMaxSourceBytes {
+			break
+		}
+		bounded = append(bounded, pair)
+		sourceBytes += pairBytes
 	}
-	var assistantOp *Operation
-	rejected := false
-	nextCtx, err := e.runExtractionRequest(ctx, req, func(
-		callCtx context.Context,
-		call model.ToolCall,
-	) {
-		if assistantOp != nil || rejected ||
-			call.Function.Name != assistantEpisodeToolName {
-			return
-		}
-		var args map[string]any
-		if err := json.Unmarshal(call.Function.Arguments, &args); err != nil {
-			rejected = true
-			logAssistantEpisodeRejection(callCtx, "invalid tool arguments")
-			return
-		}
-		var parseErr error
-		assistantOp, parseErr = e.parseAssistantEpisode(
-			callCtx,
-			args,
-			userText+"\n"+assistantText,
-		)
-		if parseErr != nil {
-			rejected = true
-			assistantOp = nil
-			logAssistantEpisodeRejection(callCtx, "content validation failed")
-		}
-	})
-	if err != nil {
-		return nextCtx, nil, err
-	}
-	return nextCtx, assistantOp, nil
+	return bounded, len(pairs) - len(bounded)
 }
 
-func (e *memoryExtractor) extractAssistantEpisodeBatch(
+func assistantEpisodeRequestContext(
+	ctx context.Context,
+) (context.Context, context.CancelFunc) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return context.WithCancel(ctx)
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return context.WithDeadline(ctx, deadline)
+	}
+	reserve := min(assistantEpisodeDeadlineReserve, remaining/2)
+	return context.WithDeadline(ctx, deadline.Add(-reserve))
+}
+
+func (e *memoryExtractor) extractAssistantEpisodes(
 	ctx context.Context,
 	pairs []assistantEpisodePair,
 ) (context.Context, []*Operation, error) {
 	sources := make([]assistantEpisodeSource, 0, len(pairs))
 	messages := make([]model.Message, 0, len(pairs)*2+2)
-	messages = append(messages, model.NewSystemMessage(e.assistantEpisodePrompt(ctx, true)))
+	messages = append(messages, model.NewSystemMessage(e.assistantEpisodePrompt(ctx)))
 	for i, pair := range pairs {
 		source := assistantEpisodeSource{
-			id: fmt.Sprintf("pair-%c", 'a'+rune(i)),
+			id: fmt.Sprintf("pair-%d", i+1),
 			userText: assistantEpisodeSourceExcerpt(
 				assistantEpisodeMessageText(pair.user),
 			),
@@ -303,8 +288,8 @@ func (e *memoryExtractor) extractAssistantEpisodeBatch(
 		)
 	}
 	messages = append(messages, model.NewUserMessage(
-		"Extract each reusable assistant result. Set pair_id to the pair label "+
-			"shown with its source, and call the tool at most once per pair.",
+		"Extract every eligible assistant result. Set pair_id to the pair label "+
+			"shown with its source, and call the tool at most once for each pair.",
 	))
 	sourceByID := make(map[string]assistantEpisodeSource, len(sources))
 	indexByID := make(map[string]int, len(sources))
@@ -317,7 +302,7 @@ func (e *memoryExtractor) extractAssistantEpisodeBatch(
 	nextCtx, err := e.runExtractionRequest(ctx, &model.Request{
 		Messages: messages,
 		Tools: map[string]tool.Tool{
-			assistantEpisodeToolName: assistantEpisodeBatchTool,
+			assistantEpisodeToolName: newAssistantEpisodeTool(sources),
 		},
 	}, func(callCtx context.Context, call model.ToolCall) {
 		if call.Function.Name != assistantEpisodeToolName {
@@ -334,12 +319,10 @@ func (e *memoryExtractor) extractAssistantEpisodeBatch(
 			logAssistantEpisodeRejection(callCtx, "unknown pair id")
 			return
 		}
-		index := indexByID[pairID]
 		if _, ok := seenIDs[pairID]; ok {
 			logAssistantEpisodeRejection(callCtx, "duplicate pair id")
 			return
 		}
-		seenIDs[pairID] = struct{}{}
 		operation, parseErr := e.parseAssistantEpisode(
 			callCtx,
 			args,
@@ -349,7 +332,8 @@ func (e *memoryExtractor) extractAssistantEpisodeBatch(
 			logAssistantEpisodeRejection(callCtx, "content validation failed")
 			return
 		}
-		operations[index] = operation
+		seenIDs[pairID] = struct{}{}
+		operations[indexByID[pairID]] = operation
 	})
 	if err != nil {
 		return nextCtx, nil, err
@@ -367,13 +351,8 @@ func logAssistantEpisodeRejection(ctx context.Context, reason string) {
 	log.WarnfContext(ctx, "extractor: skipped invalid assistant episode: %s", reason)
 }
 
-func (e *memoryExtractor) assistantEpisodePrompt(ctx context.Context, batch bool) string {
+func (e *memoryExtractor) assistantEpisodePrompt(ctx context.Context) string {
 	base := assistantEpisodeSystemPrompt
-	if batch {
-		base = strings.Replace(base, "- Call memory_assistant_episode at most once.",
-			"- Call memory_assistant_episode at most once for each labeled pair.",
-			1)
-	}
 	if e.prompt == defaultPrompt {
 		return base
 	}
@@ -404,7 +383,7 @@ func (e *memoryExtractor) parseAssistantEpisode(
 	}
 	op := &Operation{
 		Type:         OperationAdd,
-		Memory:       assistantEpisodePrefix + memoryText,
+		Memory:       assistantmemory.Prefix + memoryText,
 		Topics:       toStringSlice(args[argKeyTopics]),
 		MemoryKind:   memory.KindEpisode,
 		Participants: []string{"User", "Assistant"},
@@ -465,6 +444,18 @@ func assistantEpisodeUserMessages(messages []model.Message) []model.Message {
 		}
 	}
 	return result
+}
+
+func withoutAssistantEpisodeEntries(entries []*memory.Entry) []*memory.Entry {
+	filtered := make([]*memory.Entry, 0, len(entries))
+	for _, entry := range entries {
+		if entry != nil && entry.Memory != nil &&
+			assistantmemory.IsText(entry.Memory.Memory) {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	return filtered
 }
 
 func assistantEpisodeMessageText(message model.Message) string {
@@ -749,12 +740,9 @@ func containsForgetOperation(operations []*Operation) bool {
 	return false
 }
 
-var (
-	assistantEpisodeTool      = newAssistantEpisodeTool(false)
-	assistantEpisodeBatchTool = newAssistantEpisodeTool(true)
-)
-
-func newAssistantEpisodeTool(batch bool) *declarationOnlyTool {
+func newAssistantEpisodeTool(
+	sources []assistantEpisodeSource,
+) *declarationOnlyTool {
 	properties := map[string]*tool.Schema{
 		argKeyMemory: {
 			Type: "string",
@@ -767,22 +755,23 @@ func newAssistantEpisodeTool(batch bool) *declarationOnlyTool {
 			Items:       &tool.Schema{Type: "string"},
 		},
 	}
-	required := []string{argKeyMemory}
-	if batch {
-		properties[assistantEpisodePairIDKey] = &tool.Schema{
-			Type:        "string",
-			Description: "The pair label associated with this result.",
-		}
-		required = append(required, assistantEpisodePairIDKey)
+	pairIDs := make([]any, 0, len(sources))
+	for _, source := range sources {
+		pairIDs = append(pairIDs, source.id)
+	}
+	properties[assistantEpisodePairIDKey] = &tool.Schema{
+		Type:        "string",
+		Description: "The pair label associated with this result.",
+		Enum:        pairIDs,
 	}
 	return &declarationOnlyTool{decl: &tool.Declaration{
 		Name: assistantEpisodeToolName,
-		Description: "Record a reusable result supplied by the assistant as " +
-			"attributed conversation history.",
+		Description: "Record one durable, reusable result supplied by an " +
+			"assistant response as attributed conversation history.",
 		InputSchema: &tool.Schema{
 			Type:                 "object",
 			Properties:           properties,
-			Required:             required,
+			Required:             []string{argKeyMemory, assistantEpisodePairIDKey},
 			AdditionalProperties: false,
 		},
 	}}
@@ -791,10 +780,11 @@ func newAssistantEpisodeTool(batch bool) *declarationOnlyTool {
 const assistantEpisodeSystemPrompt = `You extract durable results previously
 provided by the assistant as attributed conversation episodes.
 
-- Call memory_assistant_episode at most once.
-- Preserve the user's request and the assistant's material result, including
-  exact names, quantities, dates, negation, and qualifications.
-- Do not rewrite assistant output as verified truth, a user preference, or a
-  user action.
-- Do not record filler, acknowledgments, hidden reasoning, credentials, tool
-  calls, or tool results.`
+- Call memory_assistant_episode at most once for each labeled pair that
+  contains a durable, reusable result.
+- Preserve the paired user request and the assistant's exact material result,
+  including names, quantities, dates, durations, negation, and qualifications.
+- Preserve item-to-detail relationships in lists and procedures.
+- Record attributed conversation history, not verified truth or a user fact.
+- Skip acknowledgments, refusals, follow-up questions, generic explanations,
+  hidden reasoning, credentials, tool arguments, and raw tool results.`

@@ -341,11 +341,11 @@ memoryService := memoryinmemory.NewMemoryService(
 extraction delta 中符合条件的 user/assistant pair。确定性的 eligibility 检查仅在
 assistant 返回至少两个 Markdown 或编号列表项时接受结构化请求；对于数量问题，
 则要求回答引入一个未出现在问题中的数值答案。单段 prose 形式的分类、翻译、转换
-或总结目前不会触发第二阶段，除非回答同时满足上述列表形态。前 16 组 eligible pair
-会合并到一次第二阶段请求中；超出的候选会被跳过，避免 backlog 让 assistant 提取
-的工作量无限增长。第二阶段只暴露私有的 `memory_assistant_episode` 工具，该工具
-不会暴露给应用的 Agent。通过 `WithPrompt` 或 `SetPrompt` 配置的应用提取约束同样
-适用于第二阶段请求。
+或总结目前不会触发第二阶段，除非回答同时满足上述列表形态。Eligible pair 按时间
+顺序进入私有的单次请求 pair 数量和 source 体积预算；超出预算的候选会被忽略，因为
+assistant 结果提取采用 best-effort 语义。入选的 pair 会合并到一次第二阶段请求中，
+并且只暴露私有的 `memory_assistant_episode` 工具。该工具不会暴露给应用的 Agent。
+通过 `WithPrompt` 或 `SetPrompt` 配置的应用提取约束同样适用于第二阶段请求。
 
 Assistant 输出会被记录为“带归属的对话历史”，而不是已经验证的事实或用户偏好。
 框架将每个通过校验的调用固定转换为普通 `KindEpisode` add 操作，将 participants
@@ -363,23 +363,23 @@ Assistant 输出会被记录为“带归属的对话历史”，而不是已经�
 第二阶段模型只能提供 episode 正文和可选的检索 topics，不能覆盖 memory kind、
 participants、event time 或 location。正文为空、超过 4,096 bytes，或包含无法在
 当前 conversation pair 中找到依据的数量时，调用会被拒绝。数量校验会保留正负号、
-币种、百分号和已识别单位，同时允许 `$5` 与 `USD 5` 等等价写法。为了限制可选
-请求的规模，每条 source message 都会被表示为确定性的 8,192-byte 摘录，并保留
-首尾内容。
+币种、百分号和已识别单位，同时允许 `$5` 与 `USD 5` 等等价写法。为了限制每条
+source message 对可选请求的体积贡献，每条消息都会被表示为确定性的 8,192-byte
+摘录，并保留首尾内容。
 
-一次 extraction delta 对可重试失败保持原子性。如果 assistant 阶段的模型调用失败、
-callback 失败或 context 被取消，extractor 会返回错误，并且不会返回该 delta 中的
-任何 operation。Auto memory worker 因此不会推进 extraction watermark，后续可以
-重试整个 delta。工具参数非法、正文过长或数量缺少依据等确定性模型输出拒绝只会跳过
-对应的 assistant episode，避免它永久阻塞普通记忆提取。
+Assistant 请求使用早于父 extraction deadline 结束的子 deadline，为第一阶段普通
+operation 的持久化预留时间。子 deadline 到期、可选请求失败或 callback 失败都只会
+记录日志，并保留第一阶段已经生成的普通 operation；只有父 context 真正取消时才会
+中止整个提取。工具参数非法、正文过长或数量缺少依据等确定性模型输出拒绝只跳过对应
+的 assistant episode；同一响应中某一 pair 的无效调用不会丢弃其他 pair 的有效调用。
 
-该功能与存储后端无关，不会新增 memory kind、字段、数据库列、数据表或迁移。
-同一 delta 中最多 16 组通过确定性 eligibility 检查的 pair 会合并到一次第二阶段
-模型请求中，因此每个 delta 最多调用模型两次：一次普通提取和一次 assistant 提取。
-只有一组 eligible pair 时仍使用原有的独立请求格式。普通对话仍只有一次 extraction
-调用。该 option 在 extractor 生命周期内不可修改。需要关闭时，应重新构造一个未
-传入该 option 的 extractor。此前已经保存的 assistant episode 仍是普通 episodic
-memory，会继续参与正常检索。
+该功能与存储后端无关，不会新增 memory kind、字段、数据库列、数据表或迁移。同一
+delta 中入选的 pair 共用一次第二阶段模型请求，因此每个 delta 最多调用模型两次：
+一次普通提取和一次 assistant 提取。普通对话仍只有一次
+extraction 调用。该 option 在 extractor 生命周期内不可修改。需要关闭时，应重新
+构造一个未传入该 option 的 extractor。此前已经保存的 assistant episode 仍是普通
+episodic memory，会继续参与正常检索。功能开启期间，这些 episode 不参与普通记忆的
+提取上下文和 reconcile，避免其覆盖或吸收来源于用户的记忆。
 
 ### 两种模式配置对比
 

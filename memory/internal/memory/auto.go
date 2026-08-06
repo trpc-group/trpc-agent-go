@@ -21,6 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
+	"trpc.group/trpc-go/trpc-agent-go/memory/internal/assistantmemory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -70,6 +71,10 @@ const (
 	// return per reconcile probe. Keeping this small bounds the extra
 	// cost while still surfacing the closest match reliably.
 	reconcileTopK = 3
+	// reconcileAssistantCandidateLimit over-fetches only while assistant
+	// episode extraction is enabled. Filtering assistant episodes after a
+	// top-three query could otherwise hide all ordinary reconcile candidates.
+	reconcileAssistantCandidateLimit = 32
 
 	// reconcileSkipScore: at or above this search Score the candidate
 	// is treated as an equivalent memory. The add is either dropped or
@@ -837,11 +842,18 @@ func (w *AutoMemoryWorker) decideAddOp(
 	if query == "" {
 		return op
 	}
+	protectAssistantEpisodes := assistantEpisodeExtractionEnabled(
+		w.config.Extractor,
+	)
+	maxResults := reconcileTopK
+	if protectAssistantEpisodes {
+		maxResults = reconcileAssistantCandidateLimit
+	}
 	candidates, err := w.operator.SearchMemories(
 		ctx, userKey, query,
 		memory.WithSearchOptions(memory.SearchOptions{
 			Query:               query,
-			MaxResults:          reconcileTopK,
+			MaxResults:          maxResults,
 			SimilarityThreshold: reconcileMinProbeScore,
 			// Kind / TimeAfter / TimeBefore intentionally left zero:
 			// a new candidate should be compared against every stored
@@ -860,10 +872,12 @@ func (w *AutoMemoryWorker) decideAddOp(
 	var best *memory.Entry
 	bestJaccard := 0.0
 	bestTier := -1
+	eligibleCount := 0
 	for _, c := range candidates {
-		if c == nil || c.Memory == nil {
+		if !reconcileCandidateEligible(c, protectAssistantEpisodes) {
 			continue
 		}
+		eligibleCount++
 		j := tokenJaccard(op.Memory, c.Memory.Memory)
 		tier := reconcileDecisionTier(c.Score, j)
 		if best == nil ||
@@ -874,6 +888,9 @@ func (w *AutoMemoryWorker) decideAddOp(
 			best = c
 			bestJaccard = j
 			bestTier = tier
+		}
+		if eligibleCount == reconcileTopK {
+			break
 		}
 	}
 	if best == nil || best.Memory == nil || best.ID == "" {
@@ -911,6 +928,74 @@ func (w *AutoMemoryWorker) decideAddOp(
 	default:
 		return op
 	}
+}
+
+func assistantEpisodeExtractionEnabled(ext extractor.MemoryExtractor) bool {
+	if ext == nil {
+		return false
+	}
+	value, ok := ext.Metadata()[assistantmemory.MetadataKey].(string)
+	return ok && value == assistantmemory.MetadataValue
+}
+
+func partitionAssistantEpisodeOps(
+	ops []*extractor.Operation,
+) ([]*extractor.Operation, []*extractor.Operation) {
+	ordinary := make([]*extractor.Operation, 0, len(ops))
+	assistant := make([]*extractor.Operation, 0, len(ops))
+	for _, op := range ops {
+		if op != nil && op.Type == extractor.OperationAdd &&
+			assistantmemory.IsText(op.Memory) {
+			assistant = append(assistant, op)
+			continue
+		}
+		ordinary = append(ordinary, op)
+	}
+	return ordinary, assistant
+}
+
+func protectAssistantEpisodeUpdates(
+	ops []*extractor.Operation,
+	existing []*memory.Entry,
+) []*extractor.Operation {
+	existingByID := make(map[string]*memory.Entry, len(existing))
+	for _, entry := range existing {
+		if entry != nil && entry.ID != "" {
+			existingByID[entry.ID] = entry
+		}
+	}
+
+	protected := make([]*extractor.Operation, 0, len(ops))
+	for _, op := range ops {
+		if op == nil || op.Type != extractor.OperationUpdate {
+			protected = append(protected, op)
+			continue
+		}
+		target, ok := existingByID[op.MemoryID]
+		if ok && target.Memory != nil &&
+			!assistantmemory.IsText(target.Memory.Memory) {
+			protected = append(protected, op)
+			continue
+		}
+		// The ordinary extraction stage never receives assistant episodes. An
+		// update to one, or to an unavailable target, is therefore unsafe.
+		converted := *op
+		converted.Type = extractor.OperationAdd
+		converted.MemoryID = ""
+		protected = append(protected, &converted)
+	}
+	return protected
+}
+
+func reconcileCandidateEligible(
+	entry *memory.Entry,
+	protectAssistantEpisodes bool,
+) bool {
+	if entry == nil || entry.Memory == nil {
+		return false
+	}
+	return !protectAssistantEpisodes ||
+		!assistantmemory.IsText(entry.Memory.Memory)
 }
 
 // tokenJaccard returns the token-level Jaccard similarity between two

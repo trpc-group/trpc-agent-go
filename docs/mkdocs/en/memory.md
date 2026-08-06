@@ -376,12 +376,13 @@ least two Markdown or numbered list items. It also accepts a quantitative
 question when the response introduces a numeric answer that is not already in
 the question. A single prose result, including a classification, translation,
 conversion, or summary, does not currently trigger the second stage unless it
-has the required list shape. Up to the first 16 eligible pairs are combined
-into one second request that exposes only the private
-`memory_assistant_episode` tool. Additional candidates are skipped so a
-backlog cannot make assistant extraction unbounded. This tool is never visible
-to the application Agent. An application policy configured through
-`WithPrompt` or `SetPrompt` also constrains the second-stage request.
+has the required list shape. Eligible pairs are considered in chronological
+order within a private per-request pair and source-size budget. Candidates past
+that budget are omitted because assistant-result extraction is best effort.
+The selected pairs are combined into one second request that exposes only the
+private `memory_assistant_episode` tool. This tool is never visible to the
+application Agent. An application policy configured through `WithPrompt` or
+`SetPrompt` also constrains the second-stage request.
 
 Assistant output is stored as attributed conversation history rather than as a
 verified fact or user preference. The framework converts every accepted call
@@ -402,26 +403,29 @@ topics. It cannot override the memory kind, participants, event time, or
 location. The framework rejects empty text, text over 4,096 bytes, and
 quantities that are not grounded in the selected conversation pair. Quantity
 validation preserves signs, currencies, percentages, and recognized units
-while accepting equivalent forms such as `$5` and `USD 5`. To keep the
-optional request bounded, each source message is represented by a
-deterministic 8,192-byte excerpt that preserves its beginning and end.
+while accepting equivalent forms such as `$5` and `USD 5`. To bound each
+source's contribution to the optional request, every source message is
+represented by a deterministic 8,192-byte excerpt that preserves its beginning
+and end.
 
-Extraction of one delta is atomic for retryable failures. If the assistant-stage
-model request, callback, or context fails, the extractor returns an error and no
-operations from that delta. The auto-memory worker therefore leaves its
-extraction watermark unchanged and can retry the whole delta. Deterministic
+The assistant request uses a child deadline that ends before the parent
+extraction deadline, reserving time to persist ordinary first-stage operations.
+If that child deadline expires, or if the optional request or its callbacks
+fail, the failure is logged and the ordinary operations are preserved. A true
+parent-context cancellation still aborts the complete extraction. Deterministic
 model-output rejections, such as invalid tool arguments, oversized text, or an
-ungrounded quantity, skip only the affected assistant episode so they cannot
-permanently block ordinary memory extraction.
+ungrounded quantity, skip only the affected assistant episode. A rejected call
+for one pair does not discard valid calls for other pairs in the same response.
 
 This feature is backend-neutral. It does not add a memory kind, field, database
-column, table, or migration. Up to 16 eligible pairs in the same delta are
-combined into one second-stage model request, so extraction uses at most two
-model calls per delta: one ordinary request and one assistant request. A single
-eligible pair keeps the same dedicated request format. The option is fixed for
+column, table, or migration. Selected pairs in the same delta share one
+second-stage model request, so extraction uses at most two model calls per
+delta: one ordinary request and one assistant request. The option is fixed for
 the lifetime of the extractor. To disable it, construct a new extractor without
 the option. Previously stored assistant episodes remain ordinary episodic
-memories and continue to participate in normal retrieval.
+memories and continue to participate in normal retrieval. While the option is
+enabled, they are excluded from ordinary extraction and reconciliation so they
+cannot replace or absorb user-originated memories.
 
 ### Configuration Comparison
 
