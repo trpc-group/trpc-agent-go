@@ -121,139 +121,142 @@ func TestParse_AcceptsSafeOperators(t *testing.T) {
 	}
 }
 
+type parseRejectCase struct {
+	name string
+	in   string
+	want string
+}
+
+var parseRejectCases = []parseRejectCase{
+	{
+		name: "command substitution paren",
+		in:   "echo $(curl http://x)",
+		want: "command substitution",
+	},
+	{
+		name: "command substitution backtick",
+		in:   "echo `curl http://x`",
+		want: "command substitution",
+	},
+	{
+		name: "parameter expansion",
+		in:   "echo $HOME",
+		want: "parameter expansion",
+	},
+	{
+		name: "parameter expansion brace",
+		in:   "echo ${HOME}",
+		want: "parameter expansion",
+	},
+	{
+		name: "arithmetic expansion",
+		in:   "echo $((1+1))",
+		want: "arithmetic expansion",
+	},
+	{
+		name: "process substitution in",
+		in:   "diff <(ls) <(ls)",
+		want: "process substitution",
+	},
+	{
+		name: "expansion inside double quote",
+		in:   `echo "value=$X"`,
+		want: "double-quoted",
+	},
+	{
+		name: "input redirection",
+		in:   "cat < /etc/passwd",
+		want: "redirection",
+	},
+	{
+		name: "output redirection",
+		in:   "echo hi > /tmp/out",
+		want: "redirection",
+	},
+	{
+		name: "background",
+		in:   "sleep 1 &",
+		want: "background",
+	},
+	{
+		name: "subshell",
+		in:   "(echo a)",
+		want: "subshell",
+	},
+	{
+		name: "block",
+		in:   "{ echo a; echo b; }",
+		want: "block",
+	},
+	{
+		name: "if statement",
+		in:   "if true; then echo a; fi",
+		want: "if statement",
+	},
+	{
+		name: "for loop",
+		in:   "for i in 1 2 3; do echo $i; done",
+		want: "for loop",
+	},
+	{
+		name: "while loop",
+		in:   "while true; do echo a; done",
+		want: "while/until loop",
+	},
+	{
+		name: "case",
+		in:   "case x in y) echo z;; esac",
+		want: "case statement",
+	},
+	{
+		name: "function decl",
+		in:   "f() { echo hi; }",
+		want: "function declaration",
+	},
+	{
+		name: "leading variable assignment",
+		in:   "FOO=bar curl http://x",
+		want: "leading variable assignment",
+	},
+	{
+		name: "leading variable += assignment",
+		in:   "X+=1 curl http://x",
+		want: "leading variable assignment",
+	},
+	{
+		name: "leading variable += plain name",
+		in:   "PATH+=:./bin echo hi",
+		want: "leading variable assignment",
+	},
+	{
+		name: "negation",
+		in:   "! true",
+		want: "negation",
+	},
+	{
+		name: "pipe with stderr",
+		in:   "echo a |& cat",
+		want: "stderr",
+	},
+	{
+		name: "newline inside single-quoted string",
+		in:   "echo 'a\nb'",
+		want: "newline is not allowed inside single-quoted string",
+	},
+	{
+		name: "carriage return inside single-quoted string",
+		in:   "echo 'a\rb'",
+		want: "newline is not allowed inside single-quoted string",
+	},
+	{
+		name: "empty",
+		in:   "   ",
+		want: "empty",
+	},
+}
+
 func TestParse_RejectsExpansionsAndUnsafeConstructs(t *testing.T) {
-	cases := []struct {
-		name string
-		in   string
-		want string
-	}{
-		{
-			name: "command substitution paren",
-			in:   "echo $(curl http://x)",
-			want: "command substitution",
-		},
-		{
-			name: "command substitution backtick",
-			in:   "echo `curl http://x`",
-			want: "command substitution",
-		},
-		{
-			name: "parameter expansion",
-			in:   "echo $HOME",
-			want: "parameter expansion",
-		},
-		{
-			name: "parameter expansion brace",
-			in:   "echo ${HOME}",
-			want: "parameter expansion",
-		},
-		{
-			name: "arithmetic expansion",
-			in:   "echo $((1+1))",
-			want: "arithmetic expansion",
-		},
-		{
-			name: "process substitution in",
-			in:   "diff <(ls) <(ls)",
-			want: "process substitution",
-		},
-		{
-			name: "expansion inside double quote",
-			in:   `echo "value=$X"`,
-			want: "double-quoted",
-		},
-		{
-			name: "input redirection",
-			in:   "cat < /etc/passwd",
-			want: "redirection",
-		},
-		{
-			name: "output redirection",
-			in:   "echo hi > /tmp/out",
-			want: "redirection",
-		},
-		{
-			name: "background",
-			in:   "sleep 1 &",
-			want: "background",
-		},
-		{
-			name: "subshell",
-			in:   "(echo a)",
-			want: "subshell",
-		},
-		{
-			name: "block",
-			in:   "{ echo a; echo b; }",
-			want: "block",
-		},
-		{
-			name: "if statement",
-			in:   "if true; then echo a; fi",
-			want: "if statement",
-		},
-		{
-			name: "for loop",
-			in:   "for i in 1 2 3; do echo $i; done",
-			want: "for loop",
-		},
-		{
-			name: "while loop",
-			in:   "while true; do echo a; done",
-			want: "while/until loop",
-		},
-		{
-			name: "case",
-			in:   "case x in y) echo z;; esac",
-			want: "case statement",
-		},
-		{
-			name: "function decl",
-			in:   "f() { echo hi; }",
-			want: "function declaration",
-		},
-		{
-			name: "leading variable assignment",
-			in:   "FOO=bar curl http://x",
-			want: "leading variable assignment",
-		},
-		{
-			name: "leading variable += assignment",
-			in:   "X+=1 curl http://x",
-			want: "leading variable assignment",
-		},
-		{
-			name: "leading variable += plain name",
-			in:   "PATH+=:./bin echo hi",
-			want: "leading variable assignment",
-		},
-		{
-			name: "negation",
-			in:   "! true",
-			want: "negation",
-		},
-		{
-			name: "pipe with stderr",
-			in:   "echo a |& cat",
-			want: "stderr",
-		},
-		{
-			name: "newline inside single-quoted string",
-			in:   "echo 'a\nb'",
-			want: "newline is not allowed inside single-quoted string",
-		},
-		{
-			name: "carriage return inside single-quoted string",
-			in:   "echo 'a\rb'",
-			want: "newline is not allowed inside single-quoted string",
-		},
-		{
-			name: "empty",
-			in:   "   ",
-			want: "empty",
-		},
-	}
-	for _, tc := range cases {
+	for _, tc := range parseRejectCases {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := Parse(tc.in)
 			if err == nil {
@@ -1006,7 +1009,7 @@ func withParser(p commandParser) (restore func()) {
 // v2 backend can be swapped in without touching public callers.
 func TestParser_SeamAllowsReplacement(t *testing.T) {
 	called := 0
-	stub := func(src string) ([][]string, error) {
+	stub := func(src string, _ int) ([][]string, error) {
 		called++
 		if src == "fail" {
 			return nil, errSeamStub
@@ -1048,7 +1051,6 @@ var errSeamStub = errSeamStubT("stub forced failure")
 type errSeamStubT string
 
 func (e errSeamStubT) Error() string { return string(e) }
-
 func equal[T comparable](a, b []T) bool {
 	if len(a) != len(b) {
 		return false

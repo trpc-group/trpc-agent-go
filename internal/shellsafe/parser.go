@@ -73,7 +73,7 @@ type Pipeline struct {
 // requires implementing a function with this signature and updating
 // the line below; nothing else in the package depends on the parser
 // internals.
-type commandParser func(src string) ([][]string, error)
+type commandParser func(src string, segmentLimit int) ([][]string, error)
 
 // parseCommand is wired at package init by the implementation file.
 var parseCommand commandParser = parseCommandSimple
@@ -83,11 +83,27 @@ var parseCommand commandParser = parseCommandSimple
 // error mentions the first construct that caused the rejection so
 // callers can surface it verbatim to the model.
 func Parse(command string) (*Pipeline, error) {
+	return parse(command, maxSegments)
+}
+
+// ParseWithMaxSegments validates command with an explicit bounded segment
+// limit. It is intended for callers that scan generated command batches.
+func ParseWithMaxSegments(command string, segmentLimit int) (*Pipeline, error) {
+	if segmentLimit < 1 || segmentLimit > maxConfigurableSegments {
+		return nil, fmt.Errorf(
+			"max segments must be between 1 and %d: got %d",
+			maxConfigurableSegments, segmentLimit,
+		)
+	}
+	return parse(command, segmentLimit)
+}
+
+func parse(command string, segmentLimit int) (*Pipeline, error) {
 	src := strings.TrimSpace(command)
 	if src == "" {
 		return nil, errors.New("command is empty")
 	}
-	cmds, err := parseCommand(src)
+	cmds, err := parseCommand(src, segmentLimit)
 	if err != nil {
 		return nil, err
 	}

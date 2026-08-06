@@ -251,6 +251,25 @@ func TestSimple_DosCaps(t *testing.T) {
 	})
 }
 
+func TestParseWithMaxSegments(t *testing.T) {
+	command := strings.Repeat("echo ok | ", 499) + "echo ok"
+	pipeline, err := ParseWithMaxSegments(command, maxConfigurableSegments)
+	if err != nil {
+		t.Fatalf("parse 500 segments: %v", err)
+	}
+	if got := len(pipeline.Commands); got != 500 {
+		t.Fatalf("parsed segments: got %d want 500", got)
+	}
+	if _, err := Parse(command); err == nil || !strings.Contains(err.Error(), "max 32") {
+		t.Fatalf("default limit should remain 32, got: %v", err)
+	}
+	for _, limit := range []int{0, maxConfigurableSegments + 1} {
+		if _, err := ParseWithMaxSegments("echo ok", limit); err == nil {
+			t.Fatalf("limit %d should fail", limit)
+		}
+	}
+}
+
 // TestSimple_LeadingAssignmentDetector pins down the heuristic that
 // decides whether argv[0] should be rejected as "FOO=bar". A pure
 // command name that happens to contain '=' later (like "a=b" passed
