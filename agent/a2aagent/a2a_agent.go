@@ -224,7 +224,10 @@ func isolateCoordinatedAnonymousCookieSessions(
 	persistentSession *session.Session,
 	service session.Service,
 ) (*session.Session, *session.Session) {
-	if _, ok := service.(session.StateInitializationService); !ok {
+	if _, ok := service.(session.StateInitializationService); !ok ||
+		!hasPersistentSessionKey(persistentSession) {
+		// Without a stable persistent key, coordination cannot be used and the
+		// existing fallback must keep sharing transient session state.
 		return invocationSession, persistentSession
 	}
 	// HTTP callbacks may outlive runner reads of the invocation session. Keep
