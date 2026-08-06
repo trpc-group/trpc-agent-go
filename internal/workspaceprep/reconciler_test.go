@@ -489,6 +489,58 @@ func TestReconciler_MergePreservesAllDirectMetadataChanges(t *testing.T) {
 	require.Contains(t, got.Prepared, "changed")
 }
 
+func TestMergeReconcileMetadata_WriterRotationReplacesPrepared(t *testing.T) {
+	latest := codeexecutor.WorkspaceMetadata{
+		InstanceID: "instance-1",
+		Prepared: map[string]codeexecutor.PreparedRecord{
+			"stale-b": {Key: "stale-b"},
+		},
+	}
+	base := codeexecutor.WorkspaceMetadata{
+		InstanceID: "instance-1",
+	}
+	updated := codeexecutor.WorkspaceMetadata{
+		InstanceID: "instance-2",
+		Prepared: map[string]codeexecutor.PreparedRecord{
+			"fresh-a": {Key: "fresh-a"},
+		},
+	}
+
+	got := mergeReconcileMetadata(latest, base, updated, nil)
+
+	require.Equal(t, codeexecutor.WorkspaceInstanceID("instance-2"),
+		got.InstanceID)
+	require.Contains(t, got.Prepared, "fresh-a")
+	require.NotContains(t, got.Prepared, "stale-b")
+}
+
+func TestMergeReconcileMetadata_RejectsStaleGenerationPrepared(t *testing.T) {
+	latest := codeexecutor.WorkspaceMetadata{
+		InstanceID: "instance-2",
+		Prepared: map[string]codeexecutor.PreparedRecord{
+			"new-gen": {Key: "new-gen", Fingerprint: "v2"},
+		},
+	}
+	base := codeexecutor.WorkspaceMetadata{
+		InstanceID: "instance-1",
+	}
+	updated := codeexecutor.WorkspaceMetadata{
+		InstanceID: "instance-1",
+		Prepared: map[string]codeexecutor.PreparedRecord{
+			"old-gen": {Key: "old-gen", Fingerprint: "v1"},
+		},
+	}
+
+	got := mergeReconcileMetadata(
+		latest, base, updated, []string{"old-gen"},
+	)
+
+	require.Equal(t, codeexecutor.WorkspaceInstanceID("instance-2"),
+		got.InstanceID)
+	require.Contains(t, got.Prepared, "new-gen")
+	require.NotContains(t, got.Prepared, "old-gen")
+}
+
 func TestReconciler_SavePreparedReturnsLoadMetadataError(t *testing.T) {
 	rec := NewReconciler().(*defaultReconciler)
 	err := rec.saveReconcileMetadata(

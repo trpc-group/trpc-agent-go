@@ -262,7 +262,19 @@ func mergeReconcileMetadata(
 ) codeexecutor.WorkspaceMetadata {
 	merged := latest
 	mergeDirectMetadataChanges(&merged, base, updated)
+
+	rotationInWriter := updated.InstanceID != "" &&
+		updated.InstanceID != base.InstanceID
 	if updated.InstanceID != "" &&
+		latest.InstanceID != "" &&
+		updated.InstanceID != latest.InstanceID &&
+		!rotationInWriter {
+		// A newer generation already persisted; ignore this writer's
+		// Prepared overlay so stale records cannot replace the latest
+		// map while mergeDirectMetadataChanges keeps latest.InstanceID.
+		return merged
+	}
+	if rotationInWriter &&
 		updated.InstanceID != latest.InstanceID {
 		prepared := make(
 			map[string]codeexecutor.PreparedRecord,
