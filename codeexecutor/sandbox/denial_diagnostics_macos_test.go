@@ -349,6 +349,99 @@ func TestRandomHexProducesExpectedLength(t *testing.T) {
 	}
 }
 
+func TestCreateMacOSProbeDirIgnoresSymlinkCollision(t *testing.T) {
+	victim, err := os.MkdirTemp("/private/tmp", "trpc-probe-victim-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(victim) })
+	marker := filepath.Join(victim, "outside-marker")
+	if err := os.WriteFile(marker, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Pre-create a symlink that the old MkdirAll path would have adopted.
+	collision := filepath.Join("/private/tmp", ".trpc_sbx_probe_symlink_collision")
+	_ = os.Remove(collision)
+	if err := os.Symlink(victim, collision); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(collision) })
+
+	probeDir, err := createMacOSProbeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if probeDir == collision {
+		t.Fatalf("createMacOSProbeDir reused symlink collision path %q", probeDir)
+	}
+	info, err := os.Lstat(probeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		t.Fatalf("probe dir = %#v, want a real directory", info)
+	}
+
+	for _, name := range []string{"default_target", "explicit_target"} {
+		if err := os.WriteFile(filepath.Join(probeDir, name), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.RemoveAll(probeDir); err != nil {
+		t.Fatalf("lexical cleanup: %v", err)
+	}
+
+	got, err := os.ReadFile(marker)
+	if err != nil || string(got) != "keep" {
+		t.Fatalf("outside marker = %q err=%v, want keep", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(victim, "default_target")); !os.IsNotExist(err) {
+		t.Fatalf("victim polluted by probe write: err=%v", err)
+	}
+	if _, err := os.Lstat(collision); err != nil {
+		t.Fatalf("collision symlink removed unexpectedly: %v", err)
+	}
+}
+
+func TestMacOSProbeDirLexicalCleanupDoesNotFollowReplacedSymlink(t *testing.T) {
+	probeDir, err := createMacOSProbeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Intentionally do not defer RemoveAll(probeDir): the test replaces it.
+
+	victim, err := os.MkdirTemp("/private/tmp", "trpc-probe-victim-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(victim) })
+	marker := filepath.Join(victim, "outside-marker")
+	if err := os.WriteFile(marker, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.RemoveAll(probeDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, probeDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(probeDir) })
+
+	// Cleaning the lexical path must remove only the symlink, not the target.
+	if err := os.RemoveAll(probeDir); err != nil {
+		t.Fatalf("lexical cleanup after symlink replace: %v", err)
+	}
+	got, err := os.ReadFile(marker)
+	if err != nil || string(got) != "keep" {
+		t.Fatalf("outside marker = %q err=%v, want keep", got, err)
+	}
+	if _, err := os.Stat(victim); err != nil {
+		t.Fatalf("victim directory removed by lexical cleanup: %v", err)
+	}
+}
+
 func TestIncompleteDiagnosticsProbePreservesCallerCancellation(t *testing.T) {
 	caps := DiagnosticsCapability{Supported: true}
 	got, ok, err := incompleteDiagnosticsProbe(context.Background(), caps)

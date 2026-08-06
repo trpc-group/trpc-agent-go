@@ -638,23 +638,23 @@ func (r *Runtime) runDiagnosticsCapabilityProbe(
 	probeSuffix := newMacOSProbeSuffix()
 	probeTag := "TRPC_RUN_PROBE_D_" + randomHex(8) + probeSuffix
 	explicitTag := "TRPC_RUN_PROBE_E_" + randomHex(8) + probeSuffix
-	probeDir := filepath.Join("/private/tmp", ".trpc_sbx_probe_"+randomHex(4))
-	if err := os.MkdirAll(probeDir, 0o700); err != nil {
-		probeDir = filepath.Join(os.TempDir(), ".trpc_sbx_probe_"+randomHex(4))
-		_ = os.MkdirAll(probeDir, 0o700)
-	}
-	probeDirCanon, err := canonicalizeExistingPath(probeDir)
+	probeDir, err := createMacOSProbeDir()
 	if err != nil {
-		probeDirCanon = probeDir
+		return incompleteDiagnosticsProbe(ctx, caps)
 	}
-	defer os.RemoveAll(probeDirCanon)
-	probeDefaultPath := filepath.Join(probeDirCanon, "default_target")
-	probeExplicitPath := filepath.Join(probeDirCanon, "explicit_target")
-	for _, path := range []string{probeDefaultPath, probeExplicitPath} {
+	// Clean the lexical MkdirTemp path so a replaced symlink cannot redirect
+	// RemoveAll onto an outside directory.
+	defer os.RemoveAll(probeDir)
+	probeDefaultLexical := filepath.Join(probeDir, "default_target")
+	probeExplicitLexical := filepath.Join(probeDir, "explicit_target")
+	for _, path := range []string{probeDefaultLexical, probeExplicitLexical} {
 		if err := os.WriteFile(path, nil, 0o600); err != nil {
 			return incompleteDiagnosticsProbe(ctx, caps)
 		}
 	}
+	// Seatbelt/log matching needs canonical paths; cleanup above stays lexical.
+	probeDefaultPath := canonicalizeProbePath(probeDefaultLexical)
+	probeExplicitPath := canonicalizeProbePath(probeExplicitLexical)
 
 	monitor, err := startMacOSProbeLogStreamMonitor(
 		ctx,
@@ -702,7 +702,7 @@ func (r *Runtime) runDiagnosticsCapabilityProbe(
 		}
 		cmdArgs := append([]string{"-f", profilePath, "--"}, spec.args...)
 		cmd := exec.CommandContext(probeCtx, seatbelt, cmdArgs...)
-		cmd.Dir = probeDirCanon
+		cmd.Dir = probeDir
 		cmd.Env = []string{"PATH=/usr/bin:/bin", "LC_ALL=C", "LANG=C"}
 		if err := cmd.Run(); err == nil {
 			return incompleteDiagnosticsProbe(ctx, caps)
@@ -1456,6 +1456,28 @@ func randomHex(n int) string {
 		return hex.EncodeToString(sum[:])[:n*2]
 	}
 	return hex.EncodeToString(b)
+}
+
+// createMacOSProbeDir atomically creates the capability-probe working directory.
+// Callers must remove the returned lexical path (not a canonicalized form) so
+// cleanup cannot follow a replaced symlink onto an outside tree.
+func createMacOSProbeDir() (string, error) {
+	dir, err := os.MkdirTemp("/private/tmp", ".trpc_sbx_probe_")
+	if err != nil {
+		dir, err = os.MkdirTemp(os.TempDir(), ".trpc_sbx_probe_")
+		if err != nil {
+			return "", err
+		}
+	}
+	return dir, nil
+}
+
+func canonicalizeProbePath(path string) string {
+	canon, err := canonicalizeExistingPath(path)
+	if err != nil {
+		return path
+	}
+	return canon
 }
 
 func macOSVersionKey(ctx context.Context) (string, error) {
