@@ -80,11 +80,11 @@ func (r *defaultReconciler) Reconcile(
 	if md.Prepared == nil {
 		md.Prepared = map[string]codeexecutor.PreparedRecord{}
 	}
-	loadedBackendInstanceID := md.BackendInstanceID
+	loadedInstanceID := md.InstanceID
 	invalidatePreparedForInstance(&md, instanceID)
 	baseMD := cloneReconcileMetadata(md)
 	if instanceID != "" {
-		md.BackendInstanceID = instanceID
+		md.InstanceID = instanceID
 	}
 
 	rctx := ApplyContext{
@@ -102,9 +102,9 @@ func (r *defaultReconciler) Reconcile(
 	if err != nil {
 		return run.warnings, err
 	}
-	instanceBackendChanged := instanceID != "" &&
-		instanceID != loadedBackendInstanceID
-	if run.changed || instanceBackendChanged {
+	instanceIDChanged := instanceID != "" &&
+		instanceID != loadedInstanceID
+	if run.changed || instanceIDChanged {
 		if err := r.saveReconcileMetadata(
 			ctx, eng, ws, baseMD, md, run.changedKeys,
 		); err != nil {
@@ -196,7 +196,7 @@ func (r *defaultReconciler) runReconcileRequirements(
 // invalidatePreparedForInstance clears Prepared when instanceID differs
 // from the metadata's recorded backend generation. An empty instanceID
 // preserves existing Prepared semantics for legacy managers. An empty
-// recorded BackendInstanceID is treated as an unknown generation.
+// recorded InstanceID is treated as an unknown generation.
 func invalidatePreparedForInstance(
 	md *codeexecutor.WorkspaceMetadata,
 	instanceID codeexecutor.WorkspaceInstanceID,
@@ -204,7 +204,7 @@ func invalidatePreparedForInstance(
 	if md == nil || instanceID == "" {
 		return
 	}
-	if md.BackendInstanceID == instanceID {
+	if md.InstanceID == instanceID {
 		return
 	}
 	if len(md.Prepared) == 0 {
@@ -262,8 +262,8 @@ func mergeReconcileMetadata(
 ) codeexecutor.WorkspaceMetadata {
 	merged := latest
 	mergeDirectMetadataChanges(&merged, base, updated)
-	if updated.BackendInstanceID != "" &&
-		updated.BackendInstanceID != latest.BackendInstanceID {
+	if updated.InstanceID != "" &&
+		updated.InstanceID != latest.InstanceID {
 		prepared := make(
 			map[string]codeexecutor.PreparedRecord,
 			len(updated.Prepared),
@@ -317,8 +317,8 @@ func mergeDirectMetadataChanges(
 	if !reflect.DeepEqual(updated.Outputs, base.Outputs) {
 		merged.Outputs = updated.Outputs
 	}
-	if updated.BackendInstanceID != base.BackendInstanceID {
-		merged.BackendInstanceID = updated.BackendInstanceID
+	if updated.InstanceID != base.InstanceID {
+		merged.InstanceID = updated.InstanceID
 	}
 }
 

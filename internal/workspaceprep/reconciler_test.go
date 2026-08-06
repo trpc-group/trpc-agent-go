@@ -745,7 +745,7 @@ func TestReconciler_StaleRetryDisposition(t *testing.T) {
 
 func TestInvalidatePreparedForInstance(t *testing.T) {
 	md := codeexecutor.WorkspaceMetadata{
-		BackendInstanceID: "instance-1",
+		InstanceID: "instance-1",
 		Prepared: map[string]codeexecutor.PreparedRecord{
 			"bootstrap": {Key: "bootstrap"},
 		},
@@ -791,7 +791,7 @@ func TestReconciler_InstanceRotationClearsPrepared(t *testing.T) {
 	md, err := codeexecutor.LoadMetadata(ws.Path)
 	require.NoError(t, err)
 	require.Equal(t, codeexecutor.WorkspaceInstanceID("instance-1"),
-		md.BackendInstanceID)
+		md.InstanceID)
 
 	target := filepath.Join(ws.Path, "work/seed.txt")
 	infoBefore, err := os.Stat(target)
@@ -814,7 +814,7 @@ func TestReconciler_InstanceRotationClearsPrepared(t *testing.T) {
 	md, err = codeexecutor.LoadMetadata(ws.Path)
 	require.NoError(t, err)
 	require.Equal(t, codeexecutor.WorkspaceInstanceID("instance-2"),
-		md.BackendInstanceID)
+		md.InstanceID)
 
 	infoAfter, err := os.Stat(target)
 	require.NoError(t, err)
@@ -841,11 +841,11 @@ func TestReconciler_LegacyPreparedMetadataRotatesBootstrap(t *testing.T) {
 	md, err := codeexecutor.LoadMetadata(ws.Path)
 	require.NoError(t, err)
 	require.Equal(t, codeexecutor.WorkspaceInstanceID("instance-1"),
-		md.BackendInstanceID)
+		md.InstanceID)
 	require.Contains(t, md.Prepared, req.Key())
 	require.NotEmpty(t, md.Prepared[req.Key()].Fingerprint)
 
-	md.BackendInstanceID = ""
+	md.InstanceID = ""
 	require.NoError(t, codeexecutor.SaveMetadata(ws.Path, md))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(ws.Path, "work/seed.txt"),
@@ -865,10 +865,10 @@ func TestReconciler_LegacyPreparedMetadataRotatesBootstrap(t *testing.T) {
 	md, err = codeexecutor.LoadMetadata(ws.Path)
 	require.NoError(t, err)
 	require.Equal(t, codeexecutor.WorkspaceInstanceID("instance-2"),
-		md.BackendInstanceID)
+		md.InstanceID)
 }
 
-func TestReconciler_PartialSaveRecordsBackendInstanceID(t *testing.T) {
+func TestReconciler_PartialSaveRecordsInstanceID(t *testing.T) {
 	ctx := context.Background()
 	eng, ws := newTestEngine(t)
 
@@ -897,7 +897,7 @@ func TestReconciler_PartialSaveRecordsBackendInstanceID(t *testing.T) {
 	md, err := codeexecutor.LoadMetadata(ws.Path)
 	require.NoError(t, err)
 	require.Equal(t, codeexecutor.WorkspaceInstanceID("instance-1"),
-		md.BackendInstanceID)
+		md.InstanceID)
 	require.Contains(t, md.Prepared, applied.Key())
 }
 
@@ -921,7 +921,7 @@ func TestReconciler_InstanceRotationReplacesPreparedOnDisk(t *testing.T) {
 
 	legacy := codeexecutor.WorkspaceMetadata{
 		Version:           1,
-		BackendInstanceID: "instance-1",
+		InstanceID: "instance-1",
 		Prepared: map[string]codeexecutor.PreparedRecord{
 			reqA.Key(): {Key: reqA.Key()},
 			reqB.Key(): {Key: reqB.Key()},
@@ -937,7 +937,7 @@ func TestReconciler_InstanceRotationReplacesPreparedOnDisk(t *testing.T) {
 	md, err := codeexecutor.LoadMetadata(ws.Path)
 	require.NoError(t, err)
 	require.Equal(t, codeexecutor.WorkspaceInstanceID("instance-2"),
-		md.BackendInstanceID)
+		md.InstanceID)
 	require.Contains(t, md.Prepared, reqA.Key())
 	require.NotContains(t, md.Prepared, reqB.Key())
 }

@@ -148,7 +148,7 @@ type Reconciler interface {
 	// preserves legacy behavior for managers without
 	// [codeexecutor.WorkspaceInstanceProvider]. A different non-empty
 	// instanceID invalidates previously prepared records before
-	// reconciliation and is persisted as backend_instance_id.
+	// reconciliation and is persisted as instance_id.
 	Reconcile(
 		ctx context.Context,
 		eng codeexecutor.Engine,
