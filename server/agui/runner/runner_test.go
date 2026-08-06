@@ -3524,7 +3524,7 @@ func TestRunRunOptionResolverOptions(t *testing.T) {
 	assert.Equal(t, 1, underlying.calls)
 }
 
-func TestRunStateResolverOverridesRuntimeState(t *testing.T) {
+func TestRunStateResolverMergesRuntimeState(t *testing.T) {
 	var runOpts agent.RunOptions
 	underlying := &fakeRunner{
 		run: func(ctx context.Context,
@@ -3568,8 +3568,37 @@ func TestRunStateResolverOverridesRuntimeState(t *testing.T) {
 	require.NotNil(t, runOpts.RuntimeState)
 	assert.Equal(t, "v1", runOpts.RuntimeState["k1"])
 	assert.Equal(t, "from-state", runOpts.RuntimeState[graph.CfgKeyLineageID])
-	_, ok := runOpts.RuntimeState["k2"]
-	assert.False(t, ok)
+	assert.Equal(t, "v2", runOpts.RuntimeState["k2"])
+}
+
+func TestRunDefaultStateResolverForwardsObjectState(t *testing.T) {
+	var runOpts agent.RunOptions
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			opts ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			for _, opt := range opts {
+				opt(&runOpts)
+			}
+			ch := make(chan *agentevent.Event)
+			close(ch)
+			return ch, nil
+		},
+	}
+	r := New(underlying)
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		State:    map[string]any{"document": "hello"},
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	eventsCh, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	_ = collectEvents(t, eventsCh)
+
+	require.NotNil(t, runOpts.RuntimeState)
+	assert.Equal(t, "hello", runOpts.RuntimeState["document"])
 }
 
 func TestRunStateResolverError(t *testing.T) {

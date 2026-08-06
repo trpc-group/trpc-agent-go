@@ -22,7 +22,7 @@ type RunAgentInput struct {
 	ThreadID       string          // 会话线程 ID，框架会将其作为 SessionID。
 	RunID          string          // 本次运行 ID，用于关联运行生命周期事件。
 	ParentRunID    *string         // 父运行 ID，可选。
-	State          any             // 任意状态，可通过 StateResolver 写入 RuntimeState。
+	State          any             // 任意状态；对象类型的值默认会合并到 RuntimeState。
 	Messages       []Message       // 消息列表，用于传递本次用户输入或外部工具结果。
 	Tools          []Tool          // 工具定义列表，协议字段，可选。
 	Context        []Context       // 上下文列表，协议字段，可选。
@@ -315,11 +315,13 @@ server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithRunOptio
 
 ## 自定义 `StateResolver`
 
-`StateResolver` 用于把 `RunAgentInput.State` 转换为本次运行的 RuntimeState。返回的 map 会作为 `agent.WithRuntimeState(...)` 传入 Runner，只作用于当前这次运行。
+默认情况下，对象类型的 `RunAgentInput.State` 会合并到本次运行的 RuntimeState 中。RuntimeState 中不冲突的已有字段会保留；如果存在同名字段，则以 AG-UI state 为准。非对象类型的 state 不会被自动投影。
+
+当需要过滤、重命名或转换 state 时，可以通过 `StateResolver` 自定义转换逻辑。它返回的 map 会通过 `agent.MergeRuntimeState(...)` 合并到 RuntimeState 中，只作用于当前这次运行。AG-UI state 由客户端提供；涉及安全敏感值时，应先进行过滤，不应将其当作可信的服务端上下文。
 
 LLMAgent 可以在 `Instruction` 或 `SystemPrompt` 中通过 `{runtime:key}` 读取解析后的值；如果该值可选，则使用 `{runtime:key?}`。
 
-返回 `nil` 表示不设置 RuntimeState；返回空 map 表示设置一个空的 RuntimeState。
+返回 `nil` 表示不合并 state；返回空 map 不会添加任何字段。
 
 ```go
 import (
