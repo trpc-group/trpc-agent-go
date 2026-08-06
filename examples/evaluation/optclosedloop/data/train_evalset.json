@@ -1,0 +1,67 @@
+{
+  "evalSetId": "train",
+  "name": "Prompt Optimization Training Set",
+  "description": "Training set used by the optclosedloop pipeline to drive PromptIter gradient signal. Contains three cases covering two categories: optimizable (baseline fails, patched prompt fixes it) and noeffect (stable pass anchor). The degrade category is intentionally absent from train so the optimiser can only learn from clearly fixable signals.",
+  "evalCases": [
+    {
+      "evalId": "train_case_opt_01",
+      "labels": ["train", "optimizable", "response_mismatch", "system_prompt"],
+      "mode": "final_response",
+      "userTurns": [
+        {
+          "role": "user",
+          "message": "What is the capital city of France? Just state the name and cite the source: World Factbook."
+        }
+      ],
+      "expected": {
+        "finalResponse": "Paris (source: World Factbook)"
+      },
+      "ideal": {
+        "category": "final_response_mismatch_when_hedging",
+        "notes": "Baseline system prompt is vague and hedges. Tight system_prompt (round 1 patch) should push the model to direct answer + cite."
+      }
+    },
+    {
+      "evalId": "train_case_opt_02",
+      "labels": ["train", "optimizable", "tool_arg_error", "tool_desc_calc"],
+      "mode": "tool_trajectory",
+      "userTurns": [
+        {
+          "role": "user",
+          "message": "Compute five plus three using the calculator."
+        }
+      ],
+      "expected": {
+        "toolTrajectory": [
+          {
+            "toolName": "calculator",
+            "args": {"a": 5, "b": 3, "op": "+"},
+            "output": "8"
+          }
+        ]
+      },
+      "ideal": {
+        "category": "tool_argument_error_string_word",
+        "notes": "Baseline tool description is too vague. Better tool_desc_calc patch fixes argument typing."
+      }
+    },
+    {
+      "evalId": "train_case_opt_03",
+      "labels": ["train", "noeffect", "stable_anchor"],
+      "mode": "final_response",
+      "userTurns": [
+        {
+          "role": "user",
+          "message": "Compute the answer: 6 * 7 using the calculator."
+        }
+      ],
+      "expected": {
+        "finalResponse": "42"
+      },
+      "ideal": {
+        "category": "no_effect_should_stay_pass",
+        "notes": "This case should always pass. It is an anchor used to detect over-fitting on the other two train cases."
+      }
+    }
+  ]
+}

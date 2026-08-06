@@ -1,0 +1,44 @@
+{
+  "evalSetId": "train",
+  "metrics": [
+    {
+      "name": "overall",
+      "description": "Overall case-level pass/fail metric. 1.0 for fully passing case, 0.0 for failing. Threshold 0.80 => cases with aggregate score >= 0.80 are treated as pass.",
+      "threshold": 0.80,
+      "weight": 1.0,
+      "criterion": {
+        "kind": "composite",
+        "components": [
+          {"name": "final_response_match", "weight": 0.50},
+          {"name": "tool_trajectory_match", "weight": 0.35},
+          {"name": "format_validity", "weight": 0.15}
+        ]
+      }
+    },
+    {
+      "name": "final_response_match",
+      "description": "Normalized overlap / LLM-as-judge score comparing agent final response against expected.",
+      "threshold": 0.80,
+      "weight": 0.50,
+      "criterion": {"kind": "text_similarity", "model": "rouge_l_f1"}
+    },
+    {
+      "name": "tool_trajectory_match",
+      "description": "Tool trajectory match: ordered list of tool calls + argument types vs expected.",
+      "threshold": 0.80,
+      "weight": 0.35,
+      "criterion": {"kind": "trajectory_ordered", "strictArgs": true}
+    },
+    {
+      "name": "format_validity",
+      "description": "Output format validity: JSON parses, required sections present, no truncation.",
+      "threshold": 0.95,
+      "weight": 0.15,
+      "criterion": {"kind": "format_json_schema"}
+    }
+  ],
+  "validation": {
+    "evalSetId": "validation",
+    "extendsTrainMetrics": true
+  }
+}
