@@ -85,6 +85,9 @@ type eventSpec struct {
 	author             string
 	message            model.Message
 	object             string
+	responseID         string
+	responseCreated    *int64
+	responseTimestamp  time.Time
 	branch             string
 	filterKey          string
 	tag                string
@@ -999,13 +1002,25 @@ func buildReplayEvent(caseName string, index int, spec eventSpec) *event.Event {
 	if invocationID == "" {
 		invocationID = fmt.Sprintf("%s-invocation-%d", caseName, index)
 	}
+	responseID := spec.responseID
+	if responseID == "" {
+		responseID = fmt.Sprintf("%s-response-%d", caseName, index)
+	}
+	responseCreated := int64(index + 1)
+	if spec.responseCreated != nil {
+		responseCreated = *spec.responseCreated
+	}
+	responseTimestamp := replaySpecTime(index)
+	if !spec.responseTimestamp.IsZero() {
+		responseTimestamp = spec.responseTimestamp
+	}
 
 	evt := &event.Event{
 		Response: &model.Response{
-			ID:        fmt.Sprintf("%s-response-%d", caseName, index),
+			ID:        responseID,
 			Object:    responseObject,
-			Created:   int64(index + 1),
-			Timestamp: replaySpecTime(index),
+			Created:   responseCreated,
+			Timestamp: responseTimestamp,
 			Done:      true,
 			Choices: []model.Choice{{
 				Index:   0,
@@ -1590,6 +1605,20 @@ func requireReplayCaseSemantics(
 			}
 			require.Equal(t, wantPayloads, gotPayloads, "backend=%s", result.backend)
 		}
+	case "response_metadata":
+		for _, result := range results {
+			require.Len(t, result.snapshot.Events, 1, "backend=%s", result.backend)
+			evt := result.snapshot.Events[0]
+			response, ok := evt["response"].(map[string]any)
+			require.True(t, ok, "backend=%s", result.backend)
+			require.Equal(t, "response-metadata-stable", response["id"], "backend=%s", result.backend)
+			require.Equal(t, json.Number("1700000123"), evt["created"], "backend=%s", result.backend)
+			require.Equal(t,
+				"2026-07-01T01:10:11.123456789Z",
+				response["timestamp"],
+				"backend=%s", result.backend,
+			)
+		}
 	case "state_scopes":
 		wantState := normalizeReplayState(t, session.StateMap{
 			session.StateAppPrefix + "feature_flags": []byte(`{"replay":true}`),
@@ -1638,6 +1667,26 @@ func basicReplayCases() []replayCase {
 				replayAssistantEvent("answer one", withReplayInvocation("multi-root"), withReplayBranch("root")),
 				replayUserEvent("turn two", withReplayInvocation("multi-root"), withReplayBranch("root")),
 				replayAssistantEvent("answer two", withReplayInvocation("multi-root"), withReplayBranch("root")),
+			},
+		},
+		{
+			name: "response_metadata",
+			events: []eventSpec{
+				{
+					invocationID: "response-metadata-root",
+					author:       "user",
+					message:      model.NewUserMessage("metadata is stable"),
+					branch:       "root",
+					responseID:   "response-metadata-stable",
+					responseCreated: func() *int64 {
+						value := int64(1700000123)
+						return &value
+					}(),
+					responseTimestamp: time.Date(
+						2026, time.July, 1, 9, 10, 11, 123456789,
+						time.FixedZone("UTC+8", 8*60*60),
+					),
+				},
 			},
 		},
 		{
@@ -3258,10 +3307,10 @@ func newReplaySnapshotFixtureWithSummaryAnchor(
 	toolCallIndex := 0
 	evt := event.Event{
 		Response: &model.Response{
-			ID:        "response-" + generated,
+			ID:        "response-stable",
 			Object:    model.ObjectTypeChatCompletion,
-			Created:   int64(len(generated)),
-			Timestamp: fixed.Add(time.Duration(len(generated)) * time.Second),
+			Created:   1700000000,
+			Timestamp: fixed.Add(time.Duration(4) * time.Second),
 			Done:      true,
 			Choices: []model.Choice{{
 				Index: 0,

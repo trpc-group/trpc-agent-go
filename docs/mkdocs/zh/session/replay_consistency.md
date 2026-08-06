@@ -4,7 +4,7 @@
 
 可复用的 case、runner、snapshot、normalize、compare 和 report 编码位于 `session/replaytest`。`test/replay_consistency_test.go` 只负责 InMemory/SQLite wiring、具体 cases、故障注入和断言，因此新增后端可以复用同一执行与比较逻辑，而不必复制 e2e 测试实现。
 
-`replaytest.Run` 要求传入非空且没有首尾空白的 run namespace。同一次逻辑比较中的所有后端必须复用同一个 namespace；重新运行同一个 case 时必须生成新的 namespace。namespace 与 case name 会共同写入 app、user 和 session 身份，从而在持久化服务上隔离 session state、memory、summary 和 track。创建 session 前，`Run` 会按 track、event、summary、直接 state map 前缀、顺序 memory、并发 memory 的固定顺序预检所有可静态判断的 fixture 错误。无效 track 配置、nil 或无法归一化的 event、非法 summary prefix、直接 state map 中不允许的前缀、未知或缺失 alias 的顺序 memory 操作，以及非 add 的并发 memory 操作都不会触发后端调用或留下 session。越过该边界后的后端相关失败仍可能保留部分回放数据；如需清理，应由调用方管理该生命周期。
+`replaytest.Run` 要求传入非空且没有首尾空白的 run namespace。同一次逻辑比较中的所有后端必须复用同一个 namespace；重新运行同一个 case 时必须生成新的 namespace。namespace 与 case name 会共同写入 app、user 和 session 身份，从而在持久化服务上隔离 session state、memory、summary 和 track。创建 session 前，`Run` 会按 track、event、summary、直接 state map 前缀、顺序 memory、并发 memory 的固定顺序预检所有可静态判断的 fixture 错误。`Case.AppState` 的 key 必须显式使用 `app:`，`Case.UserState` 的 key 必须显式使用 `user:`；`Case.SessionState` 保持服务兼容的拒绝式规则，只拒绝 `app:` 与 `user:`，无前缀、`temp:` 和自定义 key 仍允许。错误作用域前缀继续使用既有 `disallowed prefix` 文案，无前缀或未知前缀的 App/User key 使用 `without required prefix` 文案。无效 track 配置、nil 或无法归一化的 event、非法 summary prefix、直接 state map 中不允许的前缀、已删除或未知 alias 的顺序 memory 操作，以及非 add 的并发 memory 操作都不会触发后端调用或留下 session。越过该边界后的后端相关失败仍可能保留部分回放数据；如需清理，应由调用方管理该生命周期。
 
 ## 运行方式
 
@@ -95,7 +95,7 @@ snapshot 覆盖以下 section：
 - `summary`：`Session.Summaries[filterKey]`、summary text、topics、boundary metadata、`GetSessionSummaryText`
 - `tracks`：track map key、外层 `TrackEvents.Track`、每个事件内嵌的 `TrackEvent.Track`、event order、payload、timestamp
 
-后端重新生成的 event ID、response ID 与时间元数据，以及后端生成的 memory ID 会在 normalize 时移除。调用方提供的 `Event.Timestamp` 会保留为 UTC `RFC3339Nano` 字符串，使持久化时间漂移能够被发现。JSON 归一化使用 `json.Decoder.UseNumber`，避免大整数精度丢失。业务字段差异不会默认放行。
+normalize 时只移除重新生成的顶层 event ID 与后端生成的 memory ID。调用方提供的 `Event.Timestamp` 会保留为 UTC `RFC3339Nano` 字符串；非 nil 的 `Response.ID`、扁平化的 `Response.Created` 和嵌套在 `response.timestamp` 下的 `Response.Timestamp`（同样转为 UTC `RFC3339Nano`）都会保留。nil Response 与非 nil 但 metadata 为空或零值的 Response 保持可区分。JSON 归一化使用 `json.Decoder.UseNumber`，避免大整数精度丢失。业务字段差异不会默认放行。
 
 当调用方手工构造的 snapshot 含 channel、function、NaN 或其他无法转换为 canonical JSON 比较表示的值时，`Compare` 与 `CompareSnapshots` 会返回错误而不是 panic。各 section 按 snapshot 顺序转换，每个 section 先 left 后 right，并在首个错误处停止；失败时不返回部分 diff，也不能通过 `allowed_diff` 放行。
 
@@ -103,11 +103,11 @@ Track payload fixture 支持完整 JSON 值域：object、array、string、numbe
 
 每个 memory query 都声明 `ExpectedContents`。查询结果按照无序的精确内容多重集合比较，因此忽略后端特有的 ID、score 和排序，同时仍能发现缺失、无关、额外和重复结果。
 
-Memory 操作别名按完整 canonical identity 解析，而不是只比较 content。Add alias 会比较 app、user、content、kind、event time、participants 和 location，并刻意排除 topics。Update 每次都会用后端返回的有效 ID 推进原 `Ref` alias，因此内容或身份元数据导致 ID 轮换后，后续 update/delete 不会继续使用旧 ID。
+Memory 操作别名按完整 canonical identity 解析，而不是只比较 content。Add alias 会比较 app、user、content、kind、event time、participants 和 location，并刻意排除 topics；相同 identity（包括幂等 Add）共享同一个 alias group。删除任一 alias 会使该 group 的全部 alias 失效，后续引用会在后端调用前返回 `memory alias "name" refers to deleted memory`；后续 Add 可以显式重新绑定已失效的同名 alias。Update 每次都会用后端返回的有效 ID 推进整个 group，因此内容或身份元数据导致 ID 轮换后，后续 update/delete 不会继续使用旧 ID。
 
 Fixture event 预检与最终 snapshot 构建共用同一套 marshal-and-decode normalization。预检会在持久化前拒绝调用方提供的损坏 event；最终 snapshot 仍保留相同校验，用于发现执行后由后端或故障注入产生的污染。memory entry 为 nil、entry 的 `Memory` payload 为 nil、summary map 条目的值为 nil，或 track map 条目含 nil `TrackEvents` 容器时，snapshot 构建同样返回错误。这些情况不会在 normalize 时被丢弃，也不能通过 `allowed_diff` 放行；非 nil 的合法空 track 容器仍然有效。即使 session 为 nil，`BuildSnapshot` 也会校验并归一化传入的 memories，因此空 session 形式不会隐藏合法或损坏的 memory 数据。
 
-包含直接 `Case.AppState`、`Case.UserState` 或 `Case.SessionState` 更新的 case，还会把这些 API 已明确区分的作用域作为后端契约直接校验。持久化前的 fixture 预检允许 `UserState` 使用无前缀和 `user:` key、拒绝 `app:` 与 `temp:`，并允许 `SessionState` 使用无前缀和 `temp:` key、拒绝 `app:` 与 `user:`。其中 `UserState` 限制是 supported matrix 的 harness 层一致性策略，并非通用 `session.Service` 契约：InMemory 会拒绝这些跨作用域前缀，而 SQLite 当前会接受，因此 preflight 统一提前拒绝。非法直接 state fixture 会在任何后端调用前返回；`AppState` 与 `InitialState` 保持既有 key 语义。Runner 使用 `ListAppStates` / `ListUserStates` 比较直接 app/user 更新，随后在同一 app/user 下创建临时 peer session，并要求它只继承这些 app/user 值。每次 peer 创建尝试后都会使用脱离调用方取消信号的限时 context 尝试删除，包括已经落盘但返回错误的 ambiguous fail-after-write。app/user 传播缺失、session/temp state 泄漏和 peer 清理失败都是 runner error，不属于 snapshot diff，也不能通过 `allowed_diff` 放行。
+包含直接 `Case.AppState`、`Case.UserState` 或 `Case.SessionState` 更新的 case，还会把这些 API 已明确区分的作用域作为后端契约直接校验。持久化前的 fixture 预检要求 `AppState` 显式使用 `app:`、`UserState` 显式使用 `user:`；prepared expected map 在独立校验时只剥离一个对应前缀，写入后端的原始 map 仍保留显式前缀。`SessionState` 继续只拒绝 `app:` 与 `user:`，其余 key 语义不变。这是 harness 层策略，并非通用 `session.Service` 契约；规范化与 canonical collision 检查仍作为绕过 validator 时的防御层，多前缀 key（如 `app:app:flag`）暂不额外拒绝。没有直接 state 的 case 不会触发 ListApp/ListUser 或 peer 作用域校验。非法直接 state fixture 会在任何后端调用前返回；`InitialState` 与 `Event.StateDelta` 保持既有 key 语义。Runner 使用 `ListAppStates` / `ListUserStates` 比较直接 app/user 更新，随后在同一 app/user 下创建临时 peer session，并要求它只继承这些 app/user 值。每次 peer 创建尝试后都会使用脱离调用方取消信号的限时 context 尝试删除，包括已经落盘但返回错误的 ambiguous fail-after-write。app/user 传播缺失、session/temp state 泄漏和 peer 清理失败都是 runner error，不属于 snapshot diff，也不能通过 `allowed_diff` 放行。
 
 `Event.StateDelta` 遵循 `SessionService.AppendEvent` 自身的路由语义。Replay runner 不会仅凭 key 带有 `app:` 或 `user:` 前缀，就推导出必须写入独立 app/user store 的契约。当前支持的 InMemory/SQLite 矩阵会把这类 event delta 保留在 session-local state；真实矩阵用例会覆盖多次 prefixed delta 及覆盖顺序，检查独立 app/user store 保持不变，并比较最终 snapshot。MongoDB 不属于当前矩阵，也不属于本契约的支持范围。未来若接入具有不同路由语义的后端，必须先通过显式的 case/backend policy 声明预期，不能再由通用 runner 隐式推导。
 

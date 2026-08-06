@@ -128,8 +128,11 @@ type preparedTrack struct {
 }
 
 type preparedCase struct {
-	preparedTracks []preparedTrack
-	summaryTargets []int
+	preparedTracks            []preparedTrack
+	summaryTargets            []int
+	preparedAppExpectedState  session.StateMap
+	preparedUserExpectedState session.StateMap
+	validateDirectStateScopes bool
 }
 
 // Case is a backend-independent replay scenario.
@@ -269,15 +272,16 @@ type AllowedDiffRule struct {
 // must be shared by all backends participating in one comparison. Callers must
 // use a new namespace for every rerun. Before creating a session, Run preflights
 // statically detectable fixture errors in the fixed order track, event, summary,
-// direct state-map prefix, sequential memory, then concurrent memory. UserState
-// permits unprefixed and user: keys but rejects app: and temp: keys. SessionState
-// permits unprefixed and temp: keys but rejects app: and user: keys. An invalid
-// direct state map returns before any backend call. The UserState restriction is
-// replay matrix policy rather than a general session.Service contract; the
-// SessionState restriction mirrors that service contract. AppState, InitialState,
-// and Event.StateDelta retain their existing semantics. Runtime failures may still
-// leave partially persisted case data; Run leaves that cleanup lifecycle to the
-// caller.
+// direct state-map prefix, sequential memory, then concurrent memory. AppState
+// keys must carry the app: prefix and UserState keys must carry the user: prefix;
+// SessionState keeps its service-compatible rule and rejects only app: and user:
+// keys. An invalid direct state map returns before any backend call. The strict
+// AppState/UserState rule is replay-harness policy rather than a general
+// session.Service contract. AppState/UserState expected values are normalized
+// without their one required prefix for independent scope checks, while writes
+// retain the original prefixed keys. InitialState and Event.StateDelta retain
+// their existing semantics. Runtime failures may still leave partially persisted
+// case data; Run leaves that cleanup lifecycle to the caller.
 func Run(ctx context.Context, runNamespace string, backend Backend, tc Case) (Result, error) {
 	if err := validateBackend(backend); err != nil {
 		return Result{}, err
@@ -306,7 +310,15 @@ func Run(ctx context.Context, runNamespace string, backend Backend, tc Case) (Re
 	if err := assertMemoryQueries(ctx, backend, userKey, tc); err != nil {
 		return Result{}, err
 	}
-	if err := validateStateScopes(ctx, backend, key, tc); err != nil {
+	if err := validateStateScopes(
+		ctx,
+		backend,
+		key,
+		tc.Name,
+		prepared.preparedAppExpectedState,
+		prepared.preparedUserExpectedState,
+		prepared.validateDirectStateScopes,
+	); err != nil {
 		return Result{}, err
 	}
 	return buildResult(ctx, backend, key, userKey, tc.Name)
@@ -358,32 +370,82 @@ func prepareCase(backend Backend, tc Case) (preparedCase, error) {
 	if err := validateFixtureStateMaps(tc); err != nil {
 		return preparedCase{}, err
 	}
+	preparedAppState, preparedUserState, err := prepareExpectedDirectStateMaps(tc)
+	if err != nil {
+		return preparedCase{}, err
+	}
 	if err := validateSequentialMemoryOperations(tc); err != nil {
 		return preparedCase{}, err
 	}
 	if err := validateConcurrentMemoryOperations(tc); err != nil {
 		return preparedCase{}, err
 	}
-	return preparedCase{preparedTracks: tracks, summaryTargets: targets}, nil
+	return preparedCase{
+		preparedTracks:            tracks,
+		summaryTargets:            targets,
+		preparedAppExpectedState:  preparedAppState,
+		preparedUserExpectedState: preparedUserState,
+		validateDirectStateScopes: len(tc.AppState) > 0 || len(tc.UserState) > 0 || len(tc.SessionState) > 0,
+	}, nil
 }
 
 func validateFixtureStateMaps(tc Case) error {
-	if err := validateFixtureStateMapPrefixes(
-		tc.Name,
-		"user state",
-		tc.UserState,
-		session.StateAppPrefix,
-		session.StateTempPrefix,
+	// Keep this order stable: AppState, UserState, then SessionState.
+	if err := validateRequiredStateMapPrefixes(
+		tc.Name, "app state", tc.AppState, session.StateAppPrefix,
+		session.StateUserPrefix, session.StateTempPrefix,
 	); err != nil {
 		return err
 	}
-	return validateFixtureStateMapPrefixes(
-		tc.Name,
-		"session state",
-		tc.SessionState,
-		session.StateAppPrefix,
-		session.StateUserPrefix,
-	)
+	if err := validateRequiredStateMapPrefixes(
+		tc.Name, "user state", tc.UserState, session.StateUserPrefix,
+		session.StateAppPrefix, session.StateTempPrefix,
+	); err != nil {
+		return err
+	}
+	return validateFixtureStateMapPrefixes(tc.Name, "session state", tc.SessionState,
+		session.StateAppPrefix, session.StateUserPrefix)
+}
+
+// validateRequiredStateMapPrefixes enforces the harness contract for a map
+// whose keys belong to one explicit scope. Known cross-scope prefixes retain
+// the historical disallowed-prefix error; unprefixed and unknown-prefix keys
+// receive the more specific missing-required-prefix error.
+func validateRequiredStateMapPrefixes(
+	caseName string,
+	fieldName string,
+	state session.StateMap,
+	requiredPrefix string,
+	disallowedPrefixes ...string,
+) error {
+	keys := sortedStateKeys(state)
+	for _, key := range keys {
+		if strings.HasPrefix(key, requiredPrefix) {
+			continue
+		}
+		for _, prefix := range disallowedPrefixes {
+			if strings.HasPrefix(key, prefix) {
+				return fmt.Errorf(
+					"%s for case %q has key %q with disallowed prefix %q",
+					fieldName, caseName, key, prefix,
+				)
+			}
+		}
+		return fmt.Errorf(
+			"%s for case %q has key %q without required prefix %q",
+			fieldName, caseName, key, requiredPrefix,
+		)
+	}
+	return nil
+}
+
+func sortedStateKeys(state session.StateMap) []string {
+	keys := make([]string, 0, len(state))
+	for key := range state {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func validateFixtureStateMapPrefixes(
@@ -392,11 +454,7 @@ func validateFixtureStateMapPrefixes(
 	state session.StateMap,
 	disallowedPrefixes ...string,
 ) error {
-	keys := make([]string, 0, len(state))
-	for key := range state {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
+	keys := sortedStateKeys(state)
 	for _, key := range keys {
 		for _, prefix := range disallowedPrefixes {
 			if strings.HasPrefix(key, prefix) {
@@ -408,6 +466,60 @@ func validateFixtureStateMapPrefixes(
 		}
 	}
 	return nil
+}
+
+// prepareExpectedDirectStateMaps creates the canonical maps used by the
+// independent app/user scope assertions. The backend writes continue to use
+// the caller's explicitly prefixed maps (deep-copied by createSessionAndState).
+func prepareExpectedDirectStateMaps(tc Case) (session.StateMap, session.StateMap, error) {
+	appState, err := canonicalizeScopedState(tc.AppState, session.StateAppPrefix)
+	if err != nil {
+		return nil, nil, fmt.Errorf("app state for case %q has %w", tc.Name, err)
+	}
+	userState, err := canonicalizeScopedState(tc.UserState, session.StateUserPrefix)
+	if err != nil {
+		return nil, nil, fmt.Errorf("user state for case %q has %w", tc.Name, err)
+	}
+	return appState, userState, nil
+}
+
+// canonicalizeScopedState removes one scope prefix and deep-copies values.
+// It deliberately remains useful independently of the required-prefix
+// validator as a defensive layer: callers that bypass validation can still get
+// a deterministic collision error when multiple source keys map to one
+// canonical key.
+func canonicalizeScopedState(state session.StateMap, prefix string) (session.StateMap, error) {
+	keys := sortedStateKeys(state)
+	sources := make(map[string][]string, len(state))
+	for _, sourceKey := range keys {
+		canonicalKey := strings.TrimPrefix(sourceKey, prefix)
+		sources[canonicalKey] = append(sources[canonicalKey], sourceKey)
+	}
+	canonicalKeys := make([]string, 0, len(sources))
+	for canonicalKey := range sources {
+		canonicalKeys = append(canonicalKeys, canonicalKey)
+	}
+	sort.Strings(canonicalKeys)
+	for _, canonicalKey := range canonicalKeys {
+		if len(sources[canonicalKey]) > 1 {
+			return nil, fmt.Errorf(
+				"duplicate canonical key %q from keys %q",
+				canonicalKey, sources[canonicalKey],
+			)
+		}
+	}
+
+	out := make(session.StateMap, len(state))
+	for _, sourceKey := range keys {
+		canonicalKey := strings.TrimPrefix(sourceKey, prefix)
+		value := state[sourceKey]
+		if value == nil {
+			out[canonicalKey] = nil
+			continue
+		}
+		out[canonicalKey] = append([]byte(nil), value...)
+	}
+	return out, nil
 }
 
 func validateFixtureEvents(tc Case) error {
@@ -448,34 +560,162 @@ func prepareSummaryTargets(tc Case) ([]int, error) {
 	return targets, nil
 }
 
+// memoryAliasGroup is the lifecycle unit for replay aliases. All aliases in a
+// group refer to one logical memory identity (during preflight) or one backend
+// memory ID (during execution). A deleted group remains attached to its former
+// aliases so later references can report the more useful deleted-memory error.
+type memoryAliasGroup[K comparable] struct {
+	key     K
+	aliases map[string]struct{}
+	live    bool
+}
+
+// memoryAliasRegistry tracks alias groups while keeping the preflight and
+// runtime lifecycle rules identical. The registry is intentionally local to a
+// single Run and is not shared between concurrent runs.
+type memoryAliasRegistry[K comparable] struct {
+	aliases    map[string]*memoryAliasGroup[K]
+	liveGroups map[K]*memoryAliasGroup[K]
+}
+
+func newMemoryAliasRegistry[K comparable]() *memoryAliasRegistry[K] {
+	return &memoryAliasRegistry[K]{
+		aliases:    make(map[string]*memoryAliasGroup[K]),
+		liveGroups: make(map[K]*memoryAliasGroup[K]),
+	}
+}
+
+func (r *memoryAliasRegistry[K]) resolve(alias string) (*memoryAliasGroup[K], error) {
+	group, ok := r.aliases[alias]
+	if !ok {
+		return nil, fmt.Errorf("missing memory alias %q", alias)
+	}
+	if !group.live {
+		return nil, fmt.Errorf("memory alias %q refers to deleted memory", alias)
+	}
+	return group, nil
+}
+
+func (r *memoryAliasRegistry[K]) bind(alias string, key K) *memoryAliasGroup[K] {
+	if alias == "" {
+		return nil
+	}
+	group := r.liveGroups[key]
+	if group == nil {
+		group = &memoryAliasGroup[K]{key: key, aliases: make(map[string]struct{}), live: true}
+		r.liveGroups[key] = group
+	}
+	r.bindToGroup(alias, group)
+	return group
+}
+
+func (r *memoryAliasRegistry[K]) bindToGroup(alias string, group *memoryAliasGroup[K]) {
+	if alias == "" || group == nil {
+		return
+	}
+	if previous, ok := r.aliases[alias]; ok {
+		if previous == group {
+			return
+		}
+		delete(previous.aliases, alias)
+		r.removeEmptyLiveGroup(previous)
+	}
+	group.aliases[alias] = struct{}{}
+	r.aliases[alias] = group
+}
+
+func (r *memoryAliasRegistry[K]) removeEmptyLiveGroup(group *memoryAliasGroup[K]) {
+	if group == nil || !group.live || len(group.aliases) != 0 {
+		return
+	}
+	if current, ok := r.liveGroups[group.key]; ok && current == group {
+		delete(r.liveGroups, group.key)
+	}
+}
+
+// transition moves a live group to a new identity/ID. If another live group
+// already owns the destination, the two groups are merged so every alias
+// follows the effective memory identity.
+func (r *memoryAliasRegistry[K]) transition(
+	group *memoryAliasGroup[K],
+	newKey K,
+) *memoryAliasGroup[K] {
+	if group == nil || !group.live {
+		return group
+	}
+	if target := r.liveGroups[newKey]; target != nil && target != group {
+		if current, ok := r.liveGroups[group.key]; ok && current == group {
+			delete(r.liveGroups, group.key)
+		}
+		for alias := range group.aliases {
+			target.aliases[alias] = struct{}{}
+			r.aliases[alias] = target
+		}
+		group.aliases = nil
+		group.live = false
+		return target
+	}
+	if current, ok := r.liveGroups[group.key]; ok && current == group && group.key != newKey {
+		delete(r.liveGroups, group.key)
+	}
+	group.key = newKey
+	r.liveGroups[newKey] = group
+	return group
+}
+
+func (r *memoryAliasRegistry[K]) invalidate(group *memoryAliasGroup[K]) {
+	if group == nil || !group.live {
+		return
+	}
+	if current, ok := r.liveGroups[group.key]; ok && current == group {
+		delete(r.liveGroups, group.key)
+	}
+	group.live = false
+}
+
 func validateSequentialMemoryOperations(tc Case) error {
-	aliases := make(map[string]struct{})
+	aliases := newMemoryAliasRegistry[canonicalMemoryIdentity]()
+	// AppName/UserID are constant across all operations, so zero values are
+	// sufficient for equality during preflight. canonicalMemoryOpIdentity still
+	// supplies the complete content/metadata identity rules.
+	userKey := memory.UserKey{}
 	for i, op := range tc.Memories {
-		if err := validateSequentialMemoryOperation(aliases, op); err != nil {
+		if err := validateSequentialMemoryOperation(aliases, userKey, op); err != nil {
 			return fmt.Errorf("memory operation %d for case %q: %w", i, tc.Name, err)
 		}
 	}
 	return nil
 }
 
-func validateSequentialMemoryOperation(aliases map[string]struct{}, op MemoryOp) error {
+func validateSequentialMemoryOperation(
+	aliases *memoryAliasRegistry[canonicalMemoryIdentity],
+	userKey memory.UserKey,
+	op MemoryOp,
+) error {
 	switch op.Operation {
 	case MemoryAdd:
 		if op.ResultAlias != "" {
-			aliases[op.ResultAlias] = struct{}{}
+			aliases.bind(op.ResultAlias, canonicalMemoryOpIdentity(userKey, op))
 		}
 	case MemoryUpdate:
-		if _, ok := aliases[op.Ref]; !ok {
-			return fmt.Errorf("missing memory alias %q", op.Ref)
+		group, err := aliases.resolve(op.Ref)
+		if err != nil {
+			return err
 		}
-		aliases[op.Ref] = struct{}{}
+		// UpdateMemory treats metadata as a patch: omitted/zero metadata fields
+		// are inherited from the current memory. Keep preflight identity tracking
+		// aligned with that backend behavior so a later idempotent Add can join
+		// the same alias group after an update that omitted metadata.
+		group = aliases.transition(group, canonicalMemoryUpdateIdentity(userKey, op, group.key))
 		if op.ResultAlias != "" {
-			aliases[op.ResultAlias] = struct{}{}
+			aliases.bindToGroup(op.ResultAlias, group)
 		}
 	case MemoryDelete:
-		if _, ok := aliases[op.Ref]; !ok {
-			return fmt.Errorf("missing memory alias %q", op.Ref)
+		group, err := aliases.resolve(op.Ref)
+		if err != nil {
+			return err
 		}
+		aliases.invalidate(group)
 	default:
 		return fmt.Errorf("unknown memory operation %q (%s)", op.Operation, op.Name)
 	}
@@ -627,7 +867,7 @@ func appendTracks(
 }
 
 func applyMemoryOperations(ctx context.Context, backend Backend, userKey memory.UserKey, tc Case) error {
-	aliases := make(map[string]string)
+	aliases := newMemoryAliasRegistry[string]()
 	for i, op := range tc.Memories {
 		if err := applyMemoryOp(
 			ctx, backend.MemoryService, backend.ReadAllMemories, userKey, aliases, op,
@@ -667,26 +907,33 @@ func assertMemoryQueries(ctx context.Context, backend Backend, userKey memory.Us
 	return nil
 }
 
-func validateStateScopes(ctx context.Context, backend Backend, key session.Key, tc Case) (err error) {
-	appState, userState, validate := expectedDirectStateScopes(tc)
-	if !validate {
+func validateStateScopes(
+	ctx context.Context,
+	backend Backend,
+	key session.Key,
+	caseName string,
+	appState session.StateMap,
+	userState session.StateMap,
+	validateDirectStateScopes bool,
+) (err error) {
+	if !validateDirectStateScopes {
 		return nil
 	}
 
 	gotAppState, err := backend.SessionService.ListAppStates(ctx, key.AppName)
 	if err != nil {
-		return fmt.Errorf("list app state for case %q on backend %q: %w", tc.Name, backend.Name, err)
+		return fmt.Errorf("list app state for case %q on backend %q: %w", caseName, backend.Name, err)
 	}
-	if err := requireStateScope(tc.Name, backend.Name, "app", gotAppState, appState); err != nil {
+	if err := requireStateScope(caseName, backend.Name, "app", gotAppState, appState); err != nil {
 		return err
 	}
 
 	userKey := session.UserKey{AppName: key.AppName, UserID: key.UserID}
 	gotUserState, err := backend.SessionService.ListUserStates(ctx, userKey)
 	if err != nil {
-		return fmt.Errorf("list user state for case %q on backend %q: %w", tc.Name, backend.Name, err)
+		return fmt.Errorf("list user state for case %q on backend %q: %w", caseName, backend.Name, err)
 	}
-	if err := requireStateScope(tc.Name, backend.Name, "user", gotUserState, userState); err != nil {
+	if err := requireStateScope(caseName, backend.Name, "user", gotUserState, userState); err != nil {
 		return err
 	}
 
@@ -700,37 +947,27 @@ func validateStateScopes(ctx context.Context, backend Backend, key session.Key, 
 		if deleteErr := backend.SessionService.DeleteSession(cleanupCtx, peerKey); deleteErr != nil {
 			err = errors.Join(err, fmt.Errorf(
 				"delete state-scope peer %q for case %q on backend %q: %w",
-				peerKey.SessionID, tc.Name, backend.Name, deleteErr,
+				peerKey.SessionID, caseName, backend.Name, deleteErr,
 			))
 		}
 	}()
 	peer, err := backend.SessionService.CreateSession(ctx, peerKey, nil)
 	if err != nil {
-		return fmt.Errorf("create state-scope peer for case %q on backend %q: %w", tc.Name, backend.Name, err)
+		return fmt.Errorf("create state-scope peer for case %q on backend %q: %w", caseName, backend.Name, err)
 	}
 	if peer == nil {
-		return fmt.Errorf("create state-scope peer for case %q on backend %q returned nil", tc.Name, backend.Name)
+		return fmt.Errorf("create state-scope peer for case %q on backend %q returned nil", caseName, backend.Name)
 	}
 
 	peer, err = backend.SessionService.GetSession(ctx, peerKey)
 	if err != nil {
-		return fmt.Errorf("get state-scope peer for case %q on backend %q: %w", tc.Name, backend.Name, err)
+		return fmt.Errorf("get state-scope peer for case %q on backend %q: %w", caseName, backend.Name, err)
 	}
 	if peer == nil {
-		return fmt.Errorf("get state-scope peer for case %q on backend %q returned nil", tc.Name, backend.Name)
+		return fmt.Errorf("get state-scope peer for case %q on backend %q returned nil", caseName, backend.Name)
 	}
 	peerState := mergeScopedState(appState, userState)
-	return requireStateScope(tc.Name, backend.Name, "peer", peer.SnapshotState(), peerState)
-}
-
-// expectedDirectStateScopes returns the independently stored state expected
-// from the explicit state update APIs. AppendEvent does not define prefixed
-// state-delta routing, so event keys do not imply app or user store updates.
-func expectedDirectStateScopes(tc Case) (appState, userState session.StateMap, validate bool) {
-	appState = stateWithoutPrefix(tc.AppState, session.StateAppPrefix)
-	userState = stateWithoutPrefix(tc.UserState, session.StateUserPrefix)
-	validate = len(tc.AppState) > 0 || len(tc.UserState) > 0 || len(tc.SessionState) > 0
-	return appState, userState, validate
+	return requireStateScope(caseName, backend.Name, "peer", peer.SnapshotState(), peerState)
 }
 
 func requireStateScope(caseName, backendName, scope string, got, want session.StateMap) error {
@@ -743,19 +980,6 @@ func requireStateScope(caseName, backendName, scope string, got, want session.St
 		"%s state for case %q on backend %q = %#v, want %#v",
 		scope, caseName, backendName, normalizedGot, normalizedWant,
 	)
-}
-
-func stateWithoutPrefix(state session.StateMap, prefix string) session.StateMap {
-	out := make(session.StateMap, len(state))
-	for key, value := range state {
-		key = strings.TrimPrefix(key, prefix)
-		if value == nil {
-			out[key] = nil
-			continue
-		}
-		out[key] = append([]byte(nil), value...)
-	}
-	return out
 }
 
 func mergeScopedState(appState, userState session.StateMap) session.StateMap {
@@ -845,7 +1069,7 @@ func applyMemoryOp(
 	service memory.Service,
 	readAllMemories ReadAllMemoriesFunc,
 	userKey memory.UserKey,
-	aliases map[string]string,
+	aliases *memoryAliasRegistry[string],
 	op MemoryOp,
 ) error {
 	switch op.Operation {
@@ -862,13 +1086,14 @@ func applyMemoryOp(
 			if err != nil {
 				return err
 			}
-			aliases[op.ResultAlias] = id
+			aliases.bind(op.ResultAlias, id)
 		}
 	case MemoryUpdate:
-		memoryID := aliases[op.Ref]
-		if memoryID == "" {
-			return fmt.Errorf("missing memory alias %q", op.Ref)
+		group, err := aliases.resolve(op.Ref)
+		if err != nil {
+			return err
 		}
+		memoryID := group.key
 		var opts []memory.UpdateOption
 		if op.Metadata != nil {
 			opts = append(opts, memory.WithUpdateMetadata(op.Metadata))
@@ -883,20 +1108,22 @@ func applyMemoryOp(
 		if result.MemoryID == "" {
 			return fmt.Errorf("memory update returned empty ID")
 		}
-		aliases[op.Ref] = result.MemoryID
+		group = aliases.transition(group, result.MemoryID)
 		if op.ResultAlias != "" {
-			aliases[op.ResultAlias] = result.MemoryID
+			aliases.bindToGroup(op.ResultAlias, group)
 		}
 	case MemoryDelete:
-		memoryID := aliases[op.Ref]
-		if memoryID == "" {
-			return fmt.Errorf("missing memory alias %q", op.Ref)
+		group, err := aliases.resolve(op.Ref)
+		if err != nil {
+			return err
 		}
+		memoryID := group.key
 		if err := service.DeleteMemory(ctx, memory.Key{
 			AppName: userKey.AppName, UserID: userKey.UserID, MemoryID: memoryID,
 		}); err != nil {
 			return err
 		}
+		aliases.invalidate(group)
 	default:
 		return fmt.Errorf("unknown memory operation %q (%s)", op.Operation, op.Name)
 	}
@@ -944,6 +1171,51 @@ func canonicalMemoryOpIdentity(userKey memory.UserKey, op MemoryOp) canonicalMem
 		mem.Location = strings.TrimSpace(op.Metadata.Location)
 	}
 	return newCanonicalMemoryIdentity(userKey.AppName, userKey.UserID, mem)
+}
+
+// canonicalMemoryUpdateIdentity applies the same metadata-patch semantics as
+// memory.UpdateMemory. A nil metadata pointer (and zero-valued fields within a
+// non-nil pointer) leaves the corresponding identity component unchanged.
+// Topics are intentionally ignored because they do not participate in memory
+// identity generation.
+func canonicalMemoryUpdateIdentity(
+	userKey memory.UserKey,
+	op MemoryOp,
+	previous canonicalMemoryIdentity,
+) canonicalMemoryIdentity {
+	identity := previous
+	identity.AppName = userKey.AppName
+	identity.UserID = userKey.UserID
+	identity.Content = op.Content
+
+	if op.Metadata != nil {
+		metadata := op.Metadata
+		if metadata.Kind != "" {
+			identity.Kind = metadata.Kind
+		}
+		if metadata.EventTime != nil {
+			identity.EventTime = metadata.EventTime.UTC().Format("2006-01-02T15:04:05Z07:00")
+		}
+		if participants := canonicalIdentityParticipants(metadata.Participants); len(participants) > 0 {
+			identity.Participants = strings.Join(participants, ",")
+		}
+		if location := strings.TrimSpace(metadata.Location); location != "" {
+			identity.Location = location
+		}
+	}
+
+	// GenerateMemoryID treats KindFact as an implicit kind when no episodic
+	// metadata is present, and as an explicit fact kind when any such metadata
+	// exists. Re-normalize that distinction after applying the patch.
+	hasEventMetadata := identity.EventTime != "" || identity.Participants != "" || identity.Location != ""
+	if identity.Kind == memory.KindFact {
+		if !hasEventMetadata {
+			identity.Kind = ""
+		}
+	} else if identity.Kind == "" && hasEventMetadata {
+		identity.Kind = memory.KindFact
+	}
+	return identity
 }
 
 func canonicalIdentityKind(kind memory.Kind, hasEventTime, hasParticipants, hasLocation bool) memory.Kind {
@@ -1187,13 +1459,18 @@ func normalizeEvent(index int, evt event.Event) (EventSnapshot, error) {
 	}
 	delete(normalized, "id")
 	normalized["timestamp"] = normalizeTime(evt.Timestamp)
-	delete(normalized, "created")
-	if response, ok := normalized["response"].(map[string]any); ok {
-		delete(response, "id")
-		delete(response, "timestamp")
-		if len(response) == 0 {
-			delete(normalized, "response")
+	if evt.Response != nil {
+		response, ok := normalized["response"].(map[string]any)
+		if !ok {
+			response = make(map[string]any)
+			normalized["response"] = response
 		}
+		if evt.Response.ID == "" {
+			delete(response, "id")
+		} else {
+			response["id"] = evt.Response.ID
+		}
+		response["timestamp"] = normalizeTime(evt.Response.Timestamp)
 	}
 	if evt.StateDelta != nil {
 		normalized["stateDelta"] = normalizeState(session.StateMap(evt.StateDelta))

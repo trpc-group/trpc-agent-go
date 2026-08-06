@@ -580,6 +580,76 @@ func TestRunRejectsInvalidStateMapPrefixesBeforePersistence(t *testing.T) {
 		want string
 	}{
 		{
+			name: "app state requires app prefix",
+			tc: Case{
+				Name: "app-state-missing-prefix",
+				AppState: session.StateMap{
+					"flag": []byte(`"flag"`),
+				},
+			},
+			want: `app state for case "app-state-missing-prefix" has key "flag" without required prefix "app:"`,
+		},
+		{
+			name: "app state rejects user prefix",
+			tc: Case{
+				Name: "app-state-user-prefix",
+				AppState: session.StateMap{
+					session.StateUserPrefix + "bad": []byte(`"bad"`),
+				},
+			},
+			want: `app state for case "app-state-user-prefix" has key "user:bad" with disallowed prefix "user:"`,
+		},
+		{
+			name: "app state rejects temp prefix",
+			tc: Case{
+				Name: "app-state-temp-prefix",
+				AppState: session.StateMap{
+					session.StateTempPrefix + "bad": []byte(`"bad"`),
+				},
+			},
+			want: `app state for case "app-state-temp-prefix" has key "temp:bad" with disallowed prefix "temp:"`,
+		},
+		{
+			name: "app state rejects unknown prefix",
+			tc: Case{
+				Name: "app-state-unknown-prefix",
+				AppState: session.StateMap{
+					"custom:bad": []byte(`"bad"`),
+				},
+			},
+			want: `app state for case "app-state-unknown-prefix" has key "custom:bad" without required prefix "app:"`,
+		},
+		{
+			name: "user state requires user prefix",
+			tc: Case{
+				Name: "user-state-missing-prefix",
+				UserState: session.StateMap{
+					"locale": []byte(`"locale"`),
+				},
+			},
+			want: `user state for case "user-state-missing-prefix" has key "locale" without required prefix "user:"`,
+		},
+		{
+			name: "user state rejects unknown prefix",
+			tc: Case{
+				Name: "user-state-unknown-prefix",
+				UserState: session.StateMap{
+					"custom:locale": []byte(`"locale"`),
+				},
+			},
+			want: `user state for case "user-state-unknown-prefix" has key "custom:locale" without required prefix "user:"`,
+		},
+		{
+			name: "user state rejects temp prefix",
+			tc: Case{
+				Name: "user-state-temp-prefix-new",
+				UserState: session.StateMap{
+					session.StateTempPrefix + "bad": []byte(`"bad"`),
+				},
+			},
+			want: `user state for case "user-state-temp-prefix-new" has key "temp:bad" with disallowed prefix "temp:"`,
+		},
+		{
 			name: "user state rejects app prefix",
 			tc: Case{
 				Name: "user-state-app-prefix",
@@ -650,6 +720,19 @@ func TestRunRejectsInvalidStateMapPrefixesBeforePersistence(t *testing.T) {
 			},
 			want: `session state for case "session-state-prefix-priority" has key "app:first" with disallowed prefix "app:"`,
 		},
+		{
+			name: "app and user validation order",
+			tc: Case{
+				Name: "state-scope-order",
+				AppState: session.StateMap{
+					session.StateUserPrefix + "bad": []byte(`"bad"`),
+				},
+				UserState: session.StateMap{
+					session.StateAppPrefix + "bad": []byte(`"bad"`),
+				},
+			},
+			want: `app state for case "state-scope-order" has key "user:bad" with disallowed prefix "user:"`,
+		},
 	}
 
 	for _, test := range tests {
@@ -657,6 +740,10 @@ func TestRunRejectsInvalidStateMapPrefixesBeforePersistence(t *testing.T) {
 			backend, sessionService, calls := newPreflightRecordingBackend(t)
 			tc := test.tc
 			addPreflightProbeState(&tc)
+			for i := 0; i < 50; i++ {
+				_, preflightErr := prepareCase(backend, tc)
+				require.EqualError(t, preflightErr, test.want, "iteration=%d", i)
+			}
 
 			_, err := Run(context.Background(), testRunNamespace, backend, tc)
 			require.EqualError(t, err, test.want)
@@ -665,6 +752,151 @@ func TestRunRejectsInvalidStateMapPrefixesBeforePersistence(t *testing.T) {
 			got, getErr := sessionService.GetSession(
 				context.Background(), replayKey(testRunNamespace, tc.Name),
 			)
+			require.NoError(t, getErr)
+			require.Nil(t, got)
+		})
+	}
+}
+
+func TestRunAcceptsSessionStateKeysOutsideAppAndUserPrefixes(t *testing.T) {
+	sessionService := sessinmemory.NewSessionService()
+	defer sessionService.Close()
+	memoryService := meminmemory.NewMemoryService()
+	defer memoryService.Close()
+	tc := Case{
+		Name: "session-state-allowed-keys",
+		SessionState: session.StateMap{
+			"plain":                             []byte(`"plain"`),
+			session.StateTempPrefix + "scratch": []byte(`"temp"`),
+			"session:mode":                      []byte(`"custom"`),
+		},
+	}
+	result, err := Run(context.Background(), testRunNamespace, Backend{
+		Name: "in_memory", SessionService: sessionService, MemoryService: memoryService,
+		ReadAllMemories: completeMemoryReader(memoryService),
+	}, tc)
+	require.NoError(t, err)
+	require.Equal(t, StateBytesSnapshot{Kind: "json", Value: "plain"}, result.Snapshot.State["plain"])
+	require.Equal(t, StateBytesSnapshot{Kind: "json", Value: "temp"}, result.Snapshot.State[session.StateTempPrefix+"scratch"])
+	require.Equal(t, StateBytesSnapshot{Kind: "json", Value: "custom"}, result.Snapshot.State["session:mode"])
+}
+
+func TestRunAllowsAdditionalScopePrefixAfterRequiredPrefix(t *testing.T) {
+	sessionService := sessinmemory.NewSessionService()
+	defer sessionService.Close()
+	memoryService := meminmemory.NewMemoryService()
+	defer memoryService.Close()
+	tc := Case{
+		Name: "additional-scope-prefix",
+		AppState: session.StateMap{
+			session.StateAppPrefix + session.StateAppPrefix + "flag": []byte(`true`),
+		},
+		UserState: session.StateMap{
+			session.StateUserPrefix + session.StateUserPrefix + "locale": []byte(`"zh-CN"`),
+		},
+	}
+	result, err := Run(context.Background(), testRunNamespace, Backend{
+		Name: "in_memory", SessionService: sessionService, MemoryService: memoryService,
+		ReadAllMemories: completeMemoryReader(memoryService),
+	}, tc)
+	require.NoError(t, err)
+	require.Contains(t, result.Snapshot.State, session.StateAppPrefix+session.StateAppPrefix+"flag")
+	require.Contains(t, result.Snapshot.State, session.StateUserPrefix+session.StateUserPrefix+"locale")
+	appState, err := sessionService.ListAppStates(context.Background(), result.Key.AppName)
+	require.NoError(t, err)
+	require.Contains(t, appState, session.StateAppPrefix+"flag")
+	userState, err := sessionService.ListUserStates(context.Background(), session.UserKey{
+		AppName: result.Key.AppName, UserID: result.Key.UserID,
+	})
+	require.NoError(t, err)
+	require.Contains(t, userState, session.StateUserPrefix+"locale")
+}
+
+func TestCanonicalizeScopedStateDetectsSortedCollisionsAndCopiesValues(t *testing.T) {
+	state := session.StateMap{
+		"flag":                          []byte("raw"),
+		session.StateAppPrefix + "flag": []byte("prefixed"),
+		"other":                         []byte("other"),
+	}
+	_, err := canonicalizeScopedState(state, session.StateAppPrefix)
+	require.EqualError(t, err,
+		`duplicate canonical key "flag" from keys ["app:flag" "flag"]`)
+	_, _, err = prepareExpectedDirectStateMaps(Case{
+		Name:     "app-collision",
+		AppState: state,
+	})
+	require.EqualError(t, err,
+		`app state for case "app-collision" has duplicate canonical key "flag" from keys ["app:flag" "flag"]`)
+
+	value := []byte("value")
+	prepared, err := canonicalizeScopedState(session.StateMap{
+		session.StateAppPrefix + "flag": value,
+	}, session.StateAppPrefix)
+	require.NoError(t, err)
+	value[0] = 'X'
+	require.Equal(t, []byte("value"), prepared["flag"])
+}
+
+func TestRunSkipsDirectStateScopeValidationWhenNoDirectState(t *testing.T) {
+	base := sessinmemory.NewSessionService()
+	defer base.Close()
+	sessionService := &scopeSessionService{
+		Service:       base,
+		listAppErr:    errors.New("ListAppStates must not be called"),
+		listUserErr:   errors.New("ListUserStates must not be called"),
+		createPeerErr: errors.New("peer must not be created"),
+	}
+	memoryService := meminmemory.NewMemoryService()
+	defer memoryService.Close()
+	_, err := Run(context.Background(), testRunNamespace, Backend{
+		Name: "no-direct-state", SessionService: sessionService,
+		MemoryService: memoryService, ReadAllMemories: completeMemoryReader(memoryService),
+	}, Case{
+		Name: "no-direct-state",
+		Events: []*event.Event{{StateDelta: session.StateMap{
+			session.StateAppPrefix + "event":  []byte(`"app"`),
+			session.StateUserPrefix + "event": []byte(`"user"`),
+		}}},
+	})
+	require.NoError(t, err)
+}
+
+func TestRunRejectsStateCollisionInputsAtRequiredPrefixStage(t *testing.T) {
+	tests := []struct {
+		name string
+		tc   Case
+		want string
+	}{
+		{
+			name: "app collision-shaped input",
+			tc: Case{
+				Name: "app-collision-shaped",
+				AppState: session.StateMap{
+					"flag":                          []byte(`"raw"`),
+					session.StateAppPrefix + "flag": []byte(`"prefixed"`),
+				},
+			},
+			want: `app state for case "app-collision-shaped" has key "flag" without required prefix "app:"`,
+		},
+		{
+			name: "user collision-shaped input",
+			tc: Case{
+				Name: "user-collision-shaped",
+				UserState: session.StateMap{
+					"locale":                           []byte(`"raw"`),
+					session.StateUserPrefix + "locale": []byte(`"prefixed"`),
+				},
+			},
+			want: `user state for case "user-collision-shaped" has key "locale" without required prefix "user:"`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			backend, sessionService, calls := newPreflightRecordingBackend(t)
+			_, err := Run(context.Background(), testRunNamespace, backend, test.tc)
+			require.EqualError(t, err, test.want)
+			require.Empty(t, calls.snapshot())
+			got, getErr := sessionService.GetSession(context.Background(), replayKey(testRunNamespace, test.tc.Name))
 			require.NoError(t, getErr)
 			require.Nil(t, got)
 		})
@@ -762,31 +994,170 @@ func TestPrepareCaseValidationPriority(t *testing.T) {
 }
 
 func TestValidateSequentialMemoryOperationPreservesAliasSemantics(t *testing.T) {
-	aliases := make(map[string]struct{})
-	require.NoError(t, validateSequentialMemoryOperation(aliases, MemoryOp{
+	aliases := newMemoryAliasRegistry[canonicalMemoryIdentity]()
+	userKey := memory.UserKey{AppName: "app", UserID: "user"}
+	require.NoError(t, validateSequentialMemoryOperation(aliases, userKey, MemoryOp{
 		Operation: MemoryAdd, ResultAlias: "current",
 	}))
-	require.Contains(t, aliases, "current")
+	current, err := aliases.resolve("current")
+	require.NoError(t, err)
 
-	require.NoError(t, validateSequentialMemoryOperation(aliases, MemoryOp{
-		Operation: MemoryUpdate, Ref: "current", ResultAlias: "next",
+	require.NoError(t, validateSequentialMemoryOperation(aliases, userKey, MemoryOp{
+		Operation: MemoryUpdate, Ref: "current", Content: "updated", ResultAlias: "next",
 	}))
-	require.Contains(t, aliases, "current")
-	require.Contains(t, aliases, "next")
+	next, err := aliases.resolve("next")
+	require.NoError(t, err)
+	require.Same(t, current, next)
 
-	require.NoError(t, validateSequentialMemoryOperation(aliases, MemoryOp{
+	require.NoError(t, validateSequentialMemoryOperation(aliases, userKey, MemoryOp{
 		Operation: MemoryDelete, Ref: "current",
 	}))
-	require.Contains(t, aliases, "current")
-	require.NoError(t, validateSequentialMemoryOperation(aliases, MemoryOp{
-		Operation: MemoryUpdate, Ref: "current", ResultAlias: "after-delete",
-	}))
-	require.Contains(t, aliases, "after-delete")
+	_, err = aliases.resolve("current")
+	require.EqualError(t, err, `memory alias "current" refers to deleted memory`)
+	_, err = aliases.resolve("next")
+	require.EqualError(t, err, `memory alias "next" refers to deleted memory`)
 
-	require.NoError(t, validateSequentialMemoryOperation(aliases, MemoryOp{
-		Operation: MemoryAdd, ResultAlias: "next",
+	// A later Add may explicitly rebind a dead alias without reviving the other
+	// aliases that belonged to the deleted group.
+	require.NoError(t, validateSequentialMemoryOperation(aliases, userKey, MemoryOp{
+		Operation: MemoryAdd, Content: "replacement", ResultAlias: "current",
 	}))
-	require.Contains(t, aliases, "next")
+	require.NoError(t, validateSequentialMemoryOperation(aliases, userKey, MemoryOp{
+		Operation: MemoryUpdate, Ref: "current", Content: "replacement-2",
+	}))
+	_, err = aliases.resolve("next")
+	require.EqualError(t, err, `memory alias "next" refers to deleted memory`)
+}
+
+func TestValidateSequentialMemoryOperationSharesIdempotentIdentityGroup(t *testing.T) {
+	aliases := newMemoryAliasRegistry[canonicalMemoryIdentity]()
+	userKey := memory.UserKey{AppName: "app", UserID: "user"}
+	require.NoError(t, validateSequentialMemoryOperation(aliases, userKey, MemoryOp{
+		Operation: MemoryAdd, Content: "same", Topics: []string{"one"}, ResultAlias: "first",
+	}))
+	require.NoError(t, validateSequentialMemoryOperation(aliases, userKey, MemoryOp{
+		Operation: MemoryAdd, Content: "same", Topics: []string{"two"}, ResultAlias: "second",
+	}))
+	first, err := aliases.resolve("first")
+	require.NoError(t, err)
+	second, err := aliases.resolve("second")
+	require.NoError(t, err)
+	require.Same(t, first, second)
+	require.NoError(t, validateSequentialMemoryOperation(aliases, userKey, MemoryOp{
+		Operation: MemoryDelete, Ref: "second",
+	}))
+	_, err = aliases.resolve("first")
+	require.EqualError(t, err, `memory alias "first" refers to deleted memory`)
+}
+
+func TestValidateSequentialMemoryOperationInheritsMetadataOnUpdate(t *testing.T) {
+	userKey := memory.UserKey{AppName: "app", UserID: "user"}
+	eventTime := time.Date(2026, time.July, 1, 1, 2, 3, 0, time.FixedZone("UTC+8", 8*60*60))
+	metadata := &memory.Metadata{
+		Kind:         memory.KindEpisode,
+		EventTime:    &eventTime,
+		Participants: []string{"User", "Ada"},
+		Location:     " Shenzhen ",
+	}
+
+	// The backend keeps all metadata when UpdateMemory is called without an
+	// update metadata patch. The preflight identity must do the same.
+	aliases := newMemoryAliasRegistry[canonicalMemoryIdentity]()
+	require.NoError(t, validateSequentialMemoryOperation(aliases, userKey, MemoryOp{
+		Operation: MemoryAdd, Content: "before", Metadata: metadata, ResultAlias: "first",
+	}))
+	require.NoError(t, validateSequentialMemoryOperation(aliases, userKey, MemoryOp{
+		Operation: MemoryUpdate, Ref: "first", Content: "after",
+	}))
+	require.NoError(t, validateSequentialMemoryOperation(aliases, userKey, MemoryOp{
+		Operation: MemoryAdd, Content: "after", Metadata: metadata, ResultAlias: "second",
+	}))
+
+	first, err := aliases.resolve("first")
+	require.NoError(t, err)
+	second, err := aliases.resolve("second")
+	require.NoError(t, err)
+	require.Same(t, first, second)
+
+	// Deleting either alias must invalidate the shared group.
+	require.NoError(t, validateSequentialMemoryOperation(aliases, userKey, MemoryOp{
+		Operation: MemoryDelete, Ref: "second",
+	}))
+	_, err = aliases.resolve("first")
+	require.EqualError(t, err, `memory alias "first" refers to deleted memory`)
+}
+
+func TestCanonicalMemoryUpdateIdentityAppliesMetadataPatch(t *testing.T) {
+	userKey := memory.UserKey{AppName: "app", UserID: "user"}
+	eventTime := time.Date(2026, time.July, 1, 1, 2, 3, 0, time.UTC)
+	previous := canonicalMemoryOpIdentity(userKey, MemoryOp{
+		Content: "before",
+		Metadata: &memory.Metadata{
+			Kind:         memory.KindEpisode,
+			EventTime:    &eventTime,
+			Participants: []string{"Alice", "Bob"},
+			Location:     "Kyoto",
+		},
+	})
+	got := canonicalMemoryUpdateIdentity(userKey, MemoryOp{
+		Content:  "after",
+		Metadata: &memory.Metadata{Location: "Osaka"},
+	}, previous)
+	want := canonicalMemoryOpIdentity(userKey, MemoryOp{
+		Content: "after",
+		Metadata: &memory.Metadata{
+			Kind:         memory.KindEpisode,
+			EventTime:    &eventTime,
+			Participants: []string{"Alice", "Bob"},
+			Location:     "Osaka",
+		},
+	})
+	require.Equal(t, want, got)
+}
+
+func TestRunRejectsDeletedMemoryAliasesBeforeBackendCalls(t *testing.T) {
+	tests := []struct {
+		name string
+		tc   Case
+		want string
+	}{
+		{
+			name: "idempotent aliases share delete lifecycle",
+			tc: Case{
+				Name: "deleted-idempotent-alias",
+				Memories: []MemoryOp{
+					{Operation: MemoryAdd, Content: "same", ResultAlias: "first"},
+					{Operation: MemoryAdd, Content: "same", Topics: []string{"different"}, ResultAlias: "second"},
+					{Operation: MemoryDelete, Ref: "second"},
+					{Operation: MemoryUpdate, Ref: "first", Content: "updated"},
+				},
+			},
+			want: `memory operation 3 for case "deleted-idempotent-alias": memory alias "first" refers to deleted memory`,
+		},
+		{
+			name: "repeated delete",
+			tc: Case{
+				Name: "deleted-repeated-delete",
+				Memories: []MemoryOp{
+					{Operation: MemoryAdd, Content: "same", ResultAlias: "memory"},
+					{Operation: MemoryDelete, Ref: "memory"},
+					{Operation: MemoryDelete, Ref: "memory"},
+				},
+			},
+			want: `memory operation 2 for case "deleted-repeated-delete": memory alias "memory" refers to deleted memory`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			backend, sessionService, calls := newPreflightRecordingBackend(t)
+			_, err := Run(context.Background(), testRunNamespace, backend, test.tc)
+			require.EqualError(t, err, test.want)
+			require.Empty(t, calls.snapshot())
+			got, getErr := sessionService.GetSession(context.Background(), replayKey(testRunNamespace, test.tc.Name))
+			require.NoError(t, getErr)
+			require.Nil(t, got)
+		})
+	}
 }
 
 func TestApplyMemoriesConcurrentlyAggregatesErrorsDeterministically(t *testing.T) {
@@ -1238,6 +1609,98 @@ func TestRunRefreshesUpdatedMemoryAlias(t *testing.T) {
 	require.Empty(t, result.Snapshot.Memory)
 }
 
+func TestRunMigratesAllAliasesAfterMemoryIDRotation(t *testing.T) {
+	sessionService := sessinmemory.NewSessionService()
+	defer sessionService.Close()
+	memoryService := meminmemory.NewMemoryService()
+	defer memoryService.Close()
+
+	result, err := Run(context.Background(), testRunNamespace, Backend{
+		Name: "in_memory", SessionService: sessionService,
+		MemoryService: memoryService, ReadAllMemories: completeMemoryReader(memoryService),
+	}, Case{
+		Name: "rotated-alias-group",
+		Memories: []MemoryOp{
+			{Operation: MemoryAdd, Content: "v1", ResultAlias: "first"},
+			{Operation: MemoryUpdate, Ref: "first", Content: "v2", ResultAlias: "second"},
+			{Operation: MemoryUpdate, Ref: "second", Content: "v3"},
+			{Operation: MemoryDelete, Ref: "first"},
+		},
+	})
+	require.NoError(t, err)
+	require.Empty(t, result.Snapshot.Memory)
+}
+
+func TestRuntimeMemoryAliasRegistryRejectsDeadAliasesBeforeServiceCall(t *testing.T) {
+	base := meminmemory.NewMemoryService()
+	defer base.Close()
+	service := &recordingMemoryService{Service: base}
+	userKey := memory.UserKey{AppName: "app", UserID: "user"}
+	aliases := newMemoryAliasRegistry[string]()
+	readAll := completeMemoryReader(service)
+
+	require.NoError(t, applyMemoryOp(context.Background(), service, readAll, userKey, aliases, MemoryOp{
+		Operation: MemoryAdd, Content: "memory", ResultAlias: "first",
+	}))
+	require.NoError(t, applyMemoryOp(context.Background(), service, readAll, userKey, aliases, MemoryOp{
+		Operation: MemoryDelete, Ref: "first",
+	}))
+	before := service.updateCalls
+	err := applyMemoryOp(context.Background(), service, readAll, userKey, aliases, MemoryOp{
+		Operation: MemoryUpdate, Ref: "first", Content: "should-not-call",
+	})
+	require.EqualError(t, err, `memory alias "first" refers to deleted memory`)
+	require.Equal(t, before, service.updateCalls)
+}
+
+func TestRuntimeMemoryAliasRegistryPreservesStateWhenDeleteFails(t *testing.T) {
+	base := meminmemory.NewMemoryService()
+	service := &failDeleteOnceMemoryService{Service: base, err: errors.New("delete failed")}
+	defer service.Close()
+	userKey := memory.UserKey{AppName: "app", UserID: "user"}
+	aliases := newMemoryAliasRegistry[string]()
+	readAll := completeMemoryReader(service)
+
+	require.NoError(t, applyMemoryOp(context.Background(), service, readAll, userKey, aliases, MemoryOp{
+		Operation: MemoryAdd, Content: "retry-delete", ResultAlias: "memory",
+	}))
+	err := applyMemoryOp(context.Background(), service, readAll, userKey, aliases, MemoryOp{
+		Operation: MemoryDelete, Ref: "memory",
+	})
+	require.EqualError(t, err, "delete failed")
+	_, err = aliases.resolve("memory")
+	require.NoError(t, err)
+	require.NoError(t, applyMemoryOp(context.Background(), service, readAll, userKey, aliases, MemoryOp{
+		Operation: MemoryDelete, Ref: "memory",
+	}))
+	_, err = aliases.resolve("memory")
+	require.EqualError(t, err, `memory alias "memory" refers to deleted memory`)
+	require.Equal(t, 2, service.calls)
+}
+
+func TestRuntimeMemoryAliasRegistryPreservesStateOnEmptyUpdateID(t *testing.T) {
+	base := meminmemory.NewMemoryService()
+	service := &emptyUpdateResultMemoryService{Service: base}
+	defer service.Close()
+	userKey := memory.UserKey{AppName: "app", UserID: "user"}
+	aliases := newMemoryAliasRegistry[string]()
+	readAll := completeMemoryReader(service)
+
+	require.NoError(t, applyMemoryOp(context.Background(), service, readAll, userKey, aliases, MemoryOp{
+		Operation: MemoryAdd, Content: "before-empty-id", ResultAlias: "memory",
+	}))
+	group, err := aliases.resolve("memory")
+	require.NoError(t, err)
+	oldID := group.key
+	err = applyMemoryOp(context.Background(), service, readAll, userKey, aliases, MemoryOp{
+		Operation: MemoryUpdate, Ref: "memory", Content: "after-empty-id",
+	})
+	require.EqualError(t, err, "memory update returned empty ID")
+	group, err = aliases.resolve("memory")
+	require.NoError(t, err)
+	require.Equal(t, oldID, group.key)
+}
+
 func TestRunRejectsEmptyUpdatedMemoryID(t *testing.T) {
 	sessionService := sessinmemory.NewSessionService()
 	defer sessionService.Close()
@@ -1499,16 +1962,18 @@ func TestRunValidatesStateScopesAndCleansPeer(t *testing.T) {
 	peer, err := sessionService.GetSession(ctx, peerKey)
 	require.NoError(t, err)
 	require.Nil(t, peer)
-	require.Equal(t, session.StateMap{"nil": nil}, stateWithoutPrefix(
+	canonical, err := canonicalizeScopedState(
 		session.StateMap{session.StateAppPrefix + "nil": nil}, session.StateAppPrefix,
-	))
+	)
+	require.NoError(t, err)
+	require.Equal(t, session.StateMap{"nil": nil}, canonical)
 	require.Equal(t, session.StateMap{
 		session.StateAppPrefix + "nil":  nil,
 		session.StateUserPrefix + "nil": nil,
 	}, mergeScopedState(session.StateMap{"nil": nil}, session.StateMap{"nil": nil}))
 }
 
-func TestExpectedDirectStateScopesIgnoresEventDeltas(t *testing.T) {
+func TestPreparedDirectStateScopesIgnoreEventDeltas(t *testing.T) {
 	tc := Case{
 		AppState: session.StateMap{
 			session.StateAppPrefix + "direct": []byte(`"app"`),
@@ -1527,12 +1992,15 @@ func TestExpectedDirectStateScopesIgnoresEventDeltas(t *testing.T) {
 		},
 	}
 
-	appState, userState, validate := expectedDirectStateScopes(tc)
-	require.True(t, validate)
+	appState, userState, err := prepareExpectedDirectStateMaps(tc)
+	require.NoError(t, err)
 	require.Equal(t, session.StateMap{"direct": []byte(`"app"`)}, appState)
 	require.Equal(t, session.StateMap{"direct": []byte(`"user"`)}, userState)
+	prepared, err := prepareCase(Backend{}, tc)
+	require.NoError(t, err)
+	require.True(t, prepared.validateDirectStateScopes)
 
-	appState, userState, validate = expectedDirectStateScopes(Case{
+	appState, userState, err = prepareExpectedDirectStateMaps(Case{
 		Events: []*event.Event{{StateDelta: session.StateMap{
 			session.StateAppPrefix + "event":    []byte("value"),
 			session.StateUserPrefix + "event":   []byte("value"),
@@ -1540,16 +2008,31 @@ func TestExpectedDirectStateScopesIgnoresEventDeltas(t *testing.T) {
 			session.StateTempPrefix + "scratch": []byte("value"),
 		}}},
 	})
-	require.False(t, validate)
+	require.NoError(t, err)
 	require.Empty(t, appState)
 	require.Empty(t, userState)
+	prepared, err = prepareCase(Backend{}, Case{
+		Events: []*event.Event{{StateDelta: session.StateMap{
+			session.StateAppPrefix + "event":    []byte("value"),
+			session.StateUserPrefix + "event":   []byte("value"),
+			"session:local":                     []byte("value"),
+			session.StateTempPrefix + "scratch": []byte("value"),
+		}}},
+	})
+	require.NoError(t, err)
+	require.False(t, prepared.validateDirectStateScopes)
 
-	appState, userState, validate = expectedDirectStateScopes(Case{
+	appState, userState, err = prepareExpectedDirectStateMaps(Case{
 		SessionState: session.StateMap{"session:mode": []byte(`"direct"`)},
 	})
-	require.True(t, validate)
+	require.NoError(t, err)
 	require.Empty(t, appState)
 	require.Empty(t, userState)
+	prepared, err = prepareCase(Backend{}, Case{
+		SessionState: session.StateMap{"session:mode": []byte(`"direct"`)},
+	})
+	require.NoError(t, err)
+	require.True(t, prepared.validateDirectStateScopes)
 }
 
 func TestRunCleansStateScopePeerAfterCallerCancellation(t *testing.T) {
@@ -2250,6 +2733,36 @@ type failingMemoryService struct {
 	useSearchResult bool
 }
 
+type recordingMemoryService struct {
+	memory.Service
+	updateCalls int
+}
+
+func (s *recordingMemoryService) UpdateMemory(
+	ctx context.Context,
+	key memory.Key,
+	content string,
+	topics []string,
+	opts ...memory.UpdateOption,
+) error {
+	s.updateCalls++
+	return s.Service.UpdateMemory(ctx, key, content, topics, opts...)
+}
+
+type failDeleteOnceMemoryService struct {
+	memory.Service
+	err   error
+	calls int
+}
+
+func (s *failDeleteOnceMemoryService) DeleteMemory(ctx context.Context, key memory.Key) error {
+	s.calls++
+	if s.calls == 1 && s.err != nil {
+		return s.err
+	}
+	return s.Service.DeleteMemory(ctx, key)
+}
+
 func (s *failingMemoryService) AddMemory(
 	ctx context.Context,
 	userKey memory.UserKey,
@@ -2359,7 +2872,6 @@ func TestBuildSnapshotNormalizesGeneratedEventFields(t *testing.T) {
 	timestamp := time.Unix(1, 0)
 	leftSession := replayTestSession("left", timestamp)
 	rightSession := replayTestSession("right", timestamp)
-	rightSession.Events[0].Response.Timestamp = timestamp.Add(time.Second)
 	left := buildSnapshotForTest(t, leftSession, nil)
 	right := buildSnapshotForTest(t, rightSession, nil)
 	diffs := compareSnapshotsForTest(t,
@@ -2372,6 +2884,88 @@ func TestBuildSnapshotNormalizesGeneratedEventFields(t *testing.T) {
 		nil,
 	)
 	require.Empty(t, diffs)
+}
+
+func TestBuildSnapshotPreservesResponseMetadata(t *testing.T) {
+	timestamp := time.Date(2026, time.July, 1, 1, 2, 3, 4, time.FixedZone("UTC+8", 8*60*60))
+	base := replayTestSession("same", time.Unix(1, 0))
+	base.Events[0].Response.Timestamp = timestamp
+	base.Events[0].Response.ID = "response-one"
+	base.Events[0].Response.Created = 100
+
+	cloneWith := func(mut func(*event.Event)) *session.Session {
+		clone := base.Clone()
+		mut(&clone.Events[0])
+		return clone
+	}
+	tests := []struct {
+		name       string
+		mutate     func(*event.Event)
+		wantPath   string
+		wantLeft   any
+		wantRight  any
+		wantNoDiff bool
+	}{
+		{
+			name:     "response id",
+			mutate:   func(evt *event.Event) { evt.Response.ID = "response-two" },
+			wantPath: "$.events[0].response.id", wantLeft: "response-one", wantRight: "response-two",
+		},
+		{
+			name:     "response created",
+			mutate:   func(evt *event.Event) { evt.Response.Created = 101 },
+			wantPath: "$.events[0].created", wantLeft: json.Number("100"), wantRight: json.Number("101"),
+		},
+		{
+			name:       "same response instant different zone",
+			mutate:     func(evt *event.Event) { evt.Response.Timestamp = timestamp.UTC() },
+			wantNoDiff: true,
+		},
+		{
+			name:     "response timestamp",
+			mutate:   func(evt *event.Event) { evt.Response.Timestamp = timestamp.Add(time.Second) },
+			wantPath: "$.events[0].response.timestamp",
+			wantLeft: normalizeTime(timestamp), wantRight: normalizeTime(timestamp.Add(time.Second)),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			left := buildSnapshotForTest(t, base, nil)
+			right := buildSnapshotForTest(t, cloneWith(test.mutate), nil)
+			diffs := compareSnapshotsForTest(t, "response-metadata", "session-1", "left", "right", left, right, nil)
+			if test.wantNoDiff {
+				require.Empty(t, diffs)
+				return
+			}
+			require.Len(t, diffs, 1)
+			require.Equal(t, test.wantPath, diffs[0].Path)
+			require.Equal(t, test.wantLeft, diffs[0].Left)
+			require.Equal(t, test.wantRight, diffs[0].Right)
+			require.False(t, diffs[0].Allowed)
+		})
+	}
+}
+
+func TestNormalizeEventDistinguishesNilAndEmptyResponse(t *testing.T) {
+	nilEvent := event.Event{ID: "nil", Timestamp: time.Unix(1, 0), Author: "agent"}
+	emptyEvent := event.Event{
+		ID: "empty", Timestamp: time.Unix(1, 0), Author: "agent", Response: &model.Response{},
+	}
+	nilSnapshot, err := normalizeEvent(0, nilEvent)
+	require.NoError(t, err)
+	emptySnapshot, err := normalizeEvent(0, emptyEvent)
+	require.NoError(t, err)
+	_, nilHasResponse := nilSnapshot["response"]
+	_, nilHasCreated := nilSnapshot["created"]
+	_, emptyHasResponse := emptySnapshot["response"]
+	_, emptyHasCreated := emptySnapshot["created"]
+	require.False(t, nilHasResponse)
+	require.False(t, nilHasCreated)
+	require.True(t, emptyHasResponse)
+	require.True(t, emptyHasCreated)
+	response, ok := emptySnapshot["response"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "", response["timestamp"])
 }
 
 func TestBuildSnapshotNormalizesMemoriesWithNilSession(t *testing.T) {
@@ -3328,9 +3922,10 @@ func replayMalformedEventWithExtra(value any) *event.Event {
 func replayTestSession(generated string, timestamp time.Time) *session.Session {
 	evt := event.Event{
 		Response: &model.Response{
-			ID:        "response-" + generated,
+			ID:        "response-stable",
 			Object:    model.ObjectTypeChatCompletion,
-			Timestamp: timestamp,
+			Created:   1700000000,
+			Timestamp: time.Date(2026, time.July, 1, 1, 2, 3, 4, time.FixedZone("UTC+8", 8*60*60)),
 			Done:      true,
 			Choices: []model.Choice{{
 				Index:   0,
