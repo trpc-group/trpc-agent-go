@@ -15,11 +15,14 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
@@ -58,6 +61,11 @@ func (r *Runtime) osSandboxCommand(
 	if err != nil {
 		return nil, string(BackendLinuxBubblewrap), nil, err
 	}
+	if profile.network.Mode == NetworkRestricted {
+		if err := r.linuxRestrictedPreflight(bwrap, mountProc); err != nil {
+			return nil, string(BackendLinuxBubblewrap), nil, err
+		}
+	}
 	if err := r.prepareProtectedMasks(profile, ws); err != nil {
 		return nil, string(BackendLinuxBubblewrap), nil, err
 	}
@@ -66,29 +74,70 @@ func (r *Runtime) osSandboxCommand(
 		return nil, string(BackendLinuxBubblewrap), nil, err
 	}
 	cmd := exec.CommandContext(ctx, bwrap, setup.args...)
-	var cleanup commandCleanup
-	if setup.needsDenyReadDataFD {
-		nullFile, err := os.Open("/dev/null")
-		if err != nil {
-			return nil, string(BackendLinuxBubblewrap), nil, err
-		}
-		cmd.ExtraFiles = []*os.File{nullFile}
-		cleanup = func() {
-			_ = nullFile.Close()
-			cleanupSyntheticDenyReadMaskTargets(setup.syntheticDenyReadTargets)
-		}
-	} else if len(setup.syntheticDenyReadTargets) != 0 {
-		cleanup = func() {
-			cleanupSyntheticDenyReadMaskTargets(setup.syntheticDenyReadTargets)
-		}
+	extraFiles, cleanup, err := openLinuxSandboxExtraFiles(setup)
+	if err != nil {
+		cleanupSyntheticDenyReadMaskTargets(setup.syntheticDenyReadTargets)
+		return nil, string(BackendLinuxBubblewrap), nil, err
 	}
+	cmd.ExtraFiles = extraFiles
 	return cmd, string(BackendLinuxBubblewrap), cleanup, nil
 }
 
 type linuxSandboxSetup struct {
 	args                     []string
 	syntheticDenyReadTargets []string
+	needsSeccompFD           bool
 	needsDenyReadDataFD      bool
+	denyReadBindDataFD       string
+}
+
+func openLinuxSandboxExtraFiles(setup linuxSandboxSetup) ([]*os.File, commandCleanup, error) {
+	var files []*os.File
+	closeAll := func() {
+		for _, f := range files {
+			if f != nil {
+				_ = f.Close()
+			}
+		}
+	}
+	if setup.needsSeccompFD {
+		seccompFile, err := openSeccompFilterMemfd()
+		if err != nil {
+			return nil, nil, backendError(
+				ErrSetupFailed,
+				string(BackendLinuxBubblewrap),
+				err,
+			)
+		}
+		files = append(files, seccompFile)
+	}
+	if setup.needsDenyReadDataFD {
+		nullFile, err := os.Open("/dev/null")
+		if err != nil {
+			closeAll()
+			return nil, nil, backendError(
+				ErrSetupFailed,
+				string(BackendLinuxBubblewrap),
+				err,
+			)
+		}
+		files = append(files, nullFile)
+	}
+	synthetic := append([]string(nil), setup.syntheticDenyReadTargets...)
+	var once sync.Once
+	cleanup := func() {
+		once.Do(func() {
+			closeAll()
+			cleanupSyntheticDenyReadMaskTargets(synthetic)
+		})
+	}
+	if len(files) == 0 && len(synthetic) == 0 {
+		return nil, nil, nil
+	}
+	if len(files) == 0 {
+		return nil, cleanup, nil
+	}
+	return files, cleanup, nil
 }
 
 func (r *Runtime) linuxSandboxArgs(
@@ -127,8 +176,11 @@ func (r *Runtime) linuxSandboxSetup(
 	} else {
 		args = appendInaccessibleDirMaskArgs(args, "/proc")
 	}
-	if profile.network.Mode == NetworkRestricted {
-		args = append(args, "--unshare-net")
+	needsSeccomp := profile.network.Mode == NetworkRestricted
+	nextExtraFD := 3
+	if needsSeccomp {
+		args = append(args, "--unshare-net", "--seccomp", strconv.Itoa(nextExtraFD))
+		nextExtraFD++
 	}
 	grantArgs, err := r.externalGrantArgs(profile, ws)
 	if err != nil {
@@ -150,7 +202,8 @@ func (r *Runtime) linuxSandboxSetup(
 		return linuxSandboxSetup{}, err
 	}
 	args = append(args, readOnlyArgs...)
-	denySetup, err := r.denyReadMaskSetup(profile, ws)
+	denyReadFD := strconv.Itoa(nextExtraFD)
+	denySetup, err := r.denyReadMaskSetup(profile, ws, denyReadFD)
 	if err != nil {
 		return linuxSandboxSetup{}, err
 	}
@@ -168,7 +221,9 @@ func (r *Runtime) linuxSandboxSetup(
 	return linuxSandboxSetup{
 		args:                     args,
 		syntheticDenyReadTargets: denySetup.syntheticTargets,
+		needsSeccompFD:           needsSeccomp,
 		needsDenyReadDataFD:      denySetup.needsBindDataFD,
+		denyReadBindDataFD:       denyReadFD,
 	}, nil
 }
 
@@ -207,6 +262,79 @@ func (r *Runtime) linuxPreflight() (string, bool, error) {
 		}
 	})
 	return r.bwrapPath, r.bwrapMountProc, r.preflightErr
+}
+
+func (r *Runtime) linuxRestrictedPreflight(bwrap string, mountProc bool) error {
+	r.restrictedPreflightOnce.Do(func() {
+		if _, err := nativeSeccompPolicy(); err != nil {
+			r.restrictedPreflightErr = backendError(
+				ErrUnsupportedBackend,
+				string(BackendLinuxBubblewrap),
+				err,
+			)
+			return
+		}
+		release, err := currentKernelRelease()
+		if err != nil {
+			r.restrictedPreflightErr = backendError(
+				ErrSetupFailed,
+				string(BackendLinuxBubblewrap),
+				fmt.Errorf("read kernel release: %w", err),
+			)
+			return
+		}
+		if err := kernelSupportsRestrictedSeccomp(release); err != nil {
+			r.restrictedPreflightErr = backendError(
+				ErrSetupFailed,
+				string(BackendLinuxBubblewrap),
+				err,
+			)
+			return
+		}
+		seccompFile, err := openSeccompFilterMemfd()
+		if err != nil {
+			r.restrictedPreflightErr = backendError(
+				ErrSetupFailed,
+				string(BackendLinuxBubblewrap),
+				err,
+			)
+			return
+		}
+		defer seccompFile.Close()
+		stderr, err := runBwrapSeccompPreflightProbe(bwrap, mountProc, seccompFile)
+		if err != nil {
+			r.restrictedPreflightErr = backendError(
+				ErrSetupFailed,
+				string(BackendLinuxBubblewrap),
+				bwrapProbeError{
+					err:    err,
+					stderr: stderr,
+					hint:   "restricted AF_UNIX seccomp preflight failed",
+				},
+			)
+			return
+		}
+	})
+	return r.restrictedPreflightErr
+}
+
+// runBwrapSeccompPreflightProbe verifies bubblewrap can load the AF_UNIX
+// seccomp filter before a restricted sandbox command starts.
+func runBwrapSeccompPreflightProbe(bwrap string, mountProc bool, seccompFile *os.File) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	args := buildBwrapPreflightArgs(mountProc)
+	// Insert --seccomp 3 before the final "--" /bin/true pair.
+	args = append(args[:len(args)-2], "--seccomp", "3", "--", "/bin/true")
+	var stderr bytes.Buffer
+	probe := exec.CommandContext(ctx, bwrap, args...)
+	probe.ExtraFiles = []*os.File{seccompFile}
+	probe.Stderr = &stderr
+	err := probe.Run()
+	if ctx.Err() != nil {
+		err = ctx.Err()
+	}
+	return stderr.String(), err
 }
 
 // runBwrapPreflightProbe runs a short-lived bubblewrap probe and captures stderr.
@@ -352,14 +480,12 @@ func (r *Runtime) denyReadMaskArgs(
 	profile PermissionProfile,
 	ws codeexecutor.Workspace,
 ) ([]string, error) {
-	setup, err := r.denyReadMaskSetup(profile, ws)
+	setup, err := r.denyReadMaskSetup(profile, ws, "3")
 	if err != nil {
 		return nil, err
 	}
 	return setup.args, nil
 }
-
-const denyReadBindDataFD = "3"
 
 type denyReadMaskSetup struct {
 	args             []string
@@ -370,6 +496,7 @@ type denyReadMaskSetup struct {
 func (r *Runtime) denyReadMaskSetup(
 	profile PermissionProfile,
 	ws codeexecutor.Workspace,
+	bindDataFD string,
 ) (denyReadMaskSetup, error) {
 	if err := r.validateNoAccessMasksEnforceable(profile, ws); err != nil {
 		return denyReadMaskSetup{}, err
@@ -398,7 +525,7 @@ func (r *Runtime) denyReadMaskSetup(
 		return denyReadMaskSetup{}, err
 	}
 	for _, target := range syntheticTargets {
-		args = append(args, "--perms", "000", "--ro-bind-data", denyReadBindDataFD, target)
+		args = append(args, "--perms", "000", "--ro-bind-data", bindDataFD, target)
 	}
 	return denyReadMaskSetup{
 		args:             args,

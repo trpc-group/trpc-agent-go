@@ -51,6 +51,9 @@ type Runtime struct {
 	bwrapPath      string
 	bwrapMountProc bool
 	seatbeltPath   string
+
+	restrictedPreflightOnce sync.Once
+	restrictedPreflightErr  error
 }
 
 // NewRuntime constructs a sandbox runtime.

@@ -45,9 +45,12 @@ automatically retries without `--proc /proc`. If the retry succeeds, managed
 sandbox runs keep PID isolation but skip mounting a fresh `/proc`.
 
 Managed sandbox runs then add bind mounts for the workspace and granted paths,
-masks for protected paths, and `--unshare-net` when networking is restricted.
-Other namespace, mount, executable lookup, or policy setup failures still make
-managed sandbox startup fail rather than falling back to unsandboxed execution.
+masks for protected paths, and `--unshare-net` plus an AF_UNIX/io_uring seccomp
+filter when networking is restricted. Restricted profiles also require Linux
+4.8+ and a successful `bwrap --seccomp` preflight; failures fail closed rather
+than running without the Unix-socket filter. Other namespace, mount, executable
+lookup, or policy setup failures still make managed sandbox startup fail rather
+than falling back to unsandboxed execution.
 
 ## Default Docker
 

@@ -12,7 +12,8 @@ explicitly selects `NetworkEnabled`.
   reports `NetworkAllowed=false` and asks the backend to block outbound
   networking when the backend can enforce it.
 - `NetworkEnabled` allows the command to use the host network. On Linux this
-  means the command is launched without network namespace isolation.
+  means the command is launched without network namespace isolation and without
+  the AF_UNIX seccomp filter described below.
 
 Profile enforcement is separate from network policy. `DangerFullAccessProfile()`
 intentionally runs without local sandbox enforcement and is normalized to
@@ -27,10 +28,36 @@ line before launching the user process. This creates a fresh network namespace
 for the sandboxed process, so it cannot use the host network stack or host
 interfaces.
 
-When `NetworkEnabled` is selected, the backend simply omits `--unshare-net`.
-The command then shares the host network namespace while still using the rest of
-the configured sandbox controls, such as user, PID, mount, environment, and
-filesystem policy.
+`NetworkRestricted` also loads a classic BPF seccomp filter through
+`bwrap --seccomp FD`. The filter:
+
+- returns `EPERM` for `socket(AF_UNIX, ...)` / `socket(AF_LOCAL, ...)`;
+- returns `EPERM` for `socketpair(AF_UNIX, SOCK_DGRAM, ...)`, including socket
+  type flags, because datagram socketpair endpoints can reconnect to pathname
+  sockets;
+- returns `EPERM` for `io_uring_setup`, `io_uring_enter`, and
+  `io_uring_register`, which otherwise could create sockets without `socket(2)`;
+- leaves `socketpair(AF_UNIX, SOCK_STREAM, ...)` available for anonymous local
+  IPC;
+- does not provide a path-level Unix socket allowlist.
+
+Because the managed Linux profile still uses `--ro-bind / /`, host socket paths
+such as `docker.sock` remain visible in the mount namespace. The seccomp filter
+is what makes them unusable: the guest cannot create a new AF_UNIX file
+descriptor to `connect(2)` them. The same rule also blocks guest-local pathname
+and abstract Unix sockets. Callers that need Unix domain socket IPC must choose
+`NetworkEnabled`, including through temporary `WithAdditionalPermissions`.
+
+Restricted Linux runs fail closed when:
+
+- the GOARCH is not `amd64` or `arm64`;
+- the kernel is older than 4.8 (historical seccomp/ptrace bypass);
+- bubblewrap or the kernel cannot load the filter.
+
+When `NetworkEnabled` is selected, the backend omits `--unshare-net` and the
+seccomp filter. The command then shares the host network namespace and may use
+visible host Unix sockets while still using the rest of the configured sandbox
+controls, such as user, PID, mount, environment, and filesystem policy.
 
 ## macOS Enforcement
 

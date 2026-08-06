@@ -146,6 +146,12 @@ func TestLinuxSandboxArgsToggleProcMount(t *testing.T) {
 	if !hasArg(withoutProc, "--unshare-pid") {
 		t.Fatalf("args = %#v, missing pid isolation", withoutProc)
 	}
+	if !hasArgPair(withProc, "--seccomp", "3") || !hasArgPair(withoutProc, "--seccomp", "3") {
+		t.Fatalf("restricted args missing --seccomp 3: with=%#v without=%#v", withProc, withoutProc)
+	}
+	if !hasArg(withProc, "--unshare-net") || !hasArg(withoutProc, "--unshare-net") {
+		t.Fatalf("restricted args missing --unshare-net")
+	}
 }
 
 func TestLinuxSandboxArgsWorkspaceMountPolicy(t *testing.T) {
@@ -318,7 +324,7 @@ func TestLinuxNoAccessMaskArgsMaskMissingPathUnderWritableMount(t *testing.T) {
 		t.Fatal(err)
 	}
 	missing := filepath.Join(ws.Path, "work", "missing.txt")
-	if !hasArgSequence(args, "--perms", "000", "--ro-bind-data", denyReadBindDataFD, missing) {
+	if !hasArgSequence(args, "--perms", "000", "--ro-bind-data", "3", missing) {
 		t.Fatalf("missing writable no-access path args = %#v, missing placeholder mask", args)
 	}
 	if _, err := os.Stat(missing); !os.IsNotExist(err) {
@@ -338,7 +344,7 @@ func TestLinuxNoAccessMaskArgsMaskFirstMissingPathComponent(t *testing.T) {
 		t.Fatal(err)
 	}
 	firstMissing := filepath.Join(ws.Path, "work", "missing")
-	if !hasArgSequence(args, "--perms", "000", "--ro-bind-data", denyReadBindDataFD, firstMissing) {
+	if !hasArgSequence(args, "--perms", "000", "--ro-bind-data", "3", firstMissing) {
 		t.Fatalf("missing nested no-access path args = %#v, missing first-component placeholder mask", args)
 	}
 }
@@ -486,7 +492,7 @@ func TestLinuxDenyReadMaskSetupPropagatesGlobError(t *testing.T) {
 		t.Fatal(err)
 	}
 	profile := ReadOnlyProfile().WithNoAccessGlobs("[")
-	_, err = rt.denyReadMaskSetup(profile, ws)
+	_, err = rt.denyReadMaskSetup(profile, ws, "3")
 	if err == nil {
 		t.Fatalf("denyReadMaskSetup unexpectedly accepted invalid glob")
 	}
@@ -742,6 +748,7 @@ func TestLinuxSandboxCommandBindsDenyReadDataFDAndCleansSyntheticTargets(t *test
 	rt.preflightOnce.Do(func() {
 		rt.bwrapPath = "/bin/true"
 	})
+	rt.restrictedPreflightOnce.Do(func() {})
 	ws, err := rt.CreateWorkspace(context.Background(), "linux/sandbox-command-cleanup", codeexecutor.WorkspacePolicy{})
 	if err != nil {
 		t.Fatal(err)
@@ -767,13 +774,16 @@ func TestLinuxSandboxCommandBindsDenyReadDataFDAndCleansSyntheticTargets(t *test
 	if cmd.Path != "/bin/true" {
 		t.Fatalf("cmd path = %q, want fake bwrap", cmd.Path)
 	}
-	if len(cmd.ExtraFiles) != 1 {
-		t.Fatalf("extra files = %d, want deny-read data fd", len(cmd.ExtraFiles))
+	if len(cmd.ExtraFiles) != 2 {
+		t.Fatalf("extra files = %d, want seccomp and deny-read data fds", len(cmd.ExtraFiles))
 	}
 	if cleanup == nil {
 		t.Fatalf("cleanup is nil, want deny-read data fd cleanup")
 	}
-	if !hasArgSequence(cmd.Args, "--perms", "000", "--ro-bind-data", denyReadBindDataFD, missing) {
+	if !hasArgPair(cmd.Args, "--seccomp", "3") {
+		t.Fatalf("cmd args = %#v, missing --seccomp 3", cmd.Args)
+	}
+	if !hasArgSequence(cmd.Args, "--perms", "000", "--ro-bind-data", "4", missing) {
 		t.Fatalf("cmd args = %#v, missing bind-data mask for synthetic target", cmd.Args)
 	}
 	if _, err := os.Stat(missing); !os.IsNotExist(err) {
@@ -787,8 +797,10 @@ func TestLinuxSandboxCommandBindsDenyReadDataFDAndCleansSyntheticTargets(t *test
 	if _, err := os.Stat(missing); !os.IsNotExist(err) {
 		t.Fatalf("cleanup did not remove synthetic target, stat err=%v", err)
 	}
-	if _, err := cmd.ExtraFiles[0].Stat(); err == nil {
-		t.Fatalf("cleanup did not close deny-read data fd")
+	for i, f := range cmd.ExtraFiles {
+		if _, err := f.Stat(); err == nil {
+			t.Fatalf("cleanup did not close extra file %d", i)
+		}
 	}
 }
 
@@ -797,6 +809,7 @@ func TestLinuxSandboxCommandPropagatesSetupError(t *testing.T) {
 	rt.preflightOnce.Do(func() {
 		rt.bwrapPath = "/bin/true"
 	})
+	rt.restrictedPreflightOnce.Do(func() {})
 	ws, err := rt.CreateWorkspace(context.Background(), "linux/sandbox-command-setup-error", codeexecutor.WorkspacePolicy{})
 	if err != nil {
 		t.Fatal(err)
@@ -821,6 +834,7 @@ func TestLinuxSandboxCommandPrepareAndArgsErrors(t *testing.T) {
 	rt.preflightOnce.Do(func() {
 		rt.bwrapPath = "/bin/true"
 	})
+	rt.restrictedPreflightOnce.Do(func() {})
 
 	wsPath := filepath.Join(t.TempDir(), "workspace-file")
 	if err := os.WriteFile(wsPath, []byte("not a directory"), 0o600); err != nil {
@@ -1091,4 +1105,99 @@ func hasInaccessibleDirMask(args []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func TestOpenLinuxSandboxExtraFilesSyntheticOnlyCleanup(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "synthetic-mask")
+	if err := os.WriteFile(target, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	files, cleanup, err := openLinuxSandboxExtraFiles(linuxSandboxSetup{
+		syntheticDenyReadTargets: []string{target},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if files != nil {
+		t.Fatalf("files = %#v, want nil when only synthetic targets exist", files)
+	}
+	if cleanup == nil {
+		t.Fatal("expected cleanup for synthetic targets")
+	}
+	cleanup()
+	cleanup()
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("synthetic target still present after cleanup: %v", err)
+	}
+}
+
+func TestOpenLinuxSandboxExtraFilesEmptySetup(t *testing.T) {
+	files, cleanup, err := openLinuxSandboxExtraFiles(linuxSandboxSetup{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if files != nil || cleanup != nil {
+		t.Fatalf("files=%v cleanup=%v, want both nil", files, cleanup)
+	}
+}
+
+func TestLinuxRestrictedPreflightFailsClosedOnBadBwrap(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	err := rt.linuxRestrictedPreflight("/bin/false", true)
+	if err == nil {
+		t.Fatal("expected restricted preflight failure")
+	}
+	if !isKind(err, ErrSetupFailed) {
+		t.Fatalf("err = %v, want ErrSetupFailed", err)
+	}
+	if !strings.Contains(err.Error(), "restricted AF_UNIX seccomp preflight failed") {
+		t.Fatalf("err = %v, want seccomp preflight hint", err)
+	}
+	// Cached failure remains fail-closed.
+	if err2 := rt.linuxRestrictedPreflight("/usr/local/bin/bwrap", true); err2 == nil {
+		t.Fatal("expected cached restricted preflight failure")
+	}
+}
+
+func TestLinuxSandboxCommandFailsClosedWhenRestrictedPreflightCached(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	rt.preflightOnce.Do(func() {
+		rt.bwrapPath = "/bin/true"
+		rt.bwrapMountProc = true
+	})
+	forced := backendError(ErrSetupFailed, string(BackendLinuxBubblewrap), errors.New("forced restricted preflight failure"))
+	rt.restrictedPreflightOnce.Do(func() {
+		rt.restrictedPreflightErr = forced
+	})
+	ws, err := rt.CreateWorkspace(context.Background(), "restricted-preflight-cached", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, err = rt.osSandboxCommand(
+		context.Background(),
+		WorkspaceWriteProfile(),
+		ws,
+		filepath.Join(ws.Path, "work"),
+		nil,
+		codeexecutor.RunProgramSpec{Cmd: "/bin/true"},
+	)
+	if err == nil {
+		t.Fatal("expected osSandboxCommand to fail closed")
+	}
+	if !isKind(err, ErrSetupFailed) {
+		t.Fatalf("err = %v, want ErrSetupFailed", err)
+	}
+}
+
+func TestRunBwrapSeccompPreflightProbeRejectsInvalidBinary(t *testing.T) {
+	filter, err := openSeccompFilterMemfd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer filter.Close()
+	stderr, err := runBwrapSeccompPreflightProbe("/bin/false", true, filter)
+	if err == nil {
+		t.Fatal("expected probe failure")
+	}
+	_ = stderr
 }
