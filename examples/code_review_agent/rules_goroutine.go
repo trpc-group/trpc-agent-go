@@ -202,6 +202,18 @@ func analyzeDiffGoroutineCandidates(
 			leaks,
 			matched,
 		)
+		// A complete hunk often contains the imports, helper declarations, and
+		// interfaces needed to resolve tuple-returning calls. Use that context
+		// when it parses cleanly; partial hunks still fall back to the existing
+		// function-window analysis below.
+		analyzeDiffGoroutineHunk(
+			hunk,
+			group.candidates,
+			candidates,
+			leaks,
+			matched,
+			stats,
+		)
 		var functionStarts []int
 		for lineIndex, line := range hunk.Lines {
 			stats.SourceLinesVisited++
@@ -213,6 +225,9 @@ func analyzeDiffGoroutineCandidates(
 		windowCandidates := make(map[int][]int)
 		var orderedWindows []int
 		for _, candidateIndex := range group.candidates {
+			if matched[candidateIndex] {
+				continue
+			}
 			lineIndex := candidates[candidateIndex].HunkLineIndex
 			position := sort.Search(len(functionStarts), func(index int) bool {
 				return functionStarts[index] > lineIndex
@@ -337,6 +352,85 @@ func analyzeDiffGoroutineCandidates(
 			stats,
 		)
 	}
+}
+
+// analyzeDiffGoroutineHunk attempts to type-check all visible lines in a
+// hunk. A whole-hunk view retains declarations that a per-function synthetic
+// window would otherwise omit (notably helper tuple signatures). It returns
+// no status intentionally: an incomplete hunk simply proceeds through the
+// established window and lexical fallbacks.
+func analyzeDiffGoroutineHunk(
+	hunk diffHunk,
+	indexes []int,
+	candidates []candidateLine,
+	leaks []bool,
+	matched []bool,
+	stats *goroutineAnalysisStats,
+) {
+	hasPackageClause := false
+	for _, line := range hunk.Lines {
+		if line.Kind != diffLineAdded && line.Kind != diffLineContext {
+			continue
+		}
+		if first, ok := firstCodeToken(line.Text); ok && first == token.PACKAGE {
+			hasPackageClause = true
+		}
+	}
+	var source strings.Builder
+	if !hasPackageClause {
+		source.WriteString("package review\n")
+	}
+	lineMap := make(map[int]int, len(hunk.Lines))
+	sourceLine := 0
+	if !hasPackageClause {
+		sourceLine = 1
+	}
+	for lineIndex, line := range hunk.Lines {
+		if line.Kind != diffLineAdded && line.Kind != diffLineContext {
+			continue
+		}
+		sourceLine++
+		lineMap[lineIndex] = sourceLine
+		source.WriteString(line.Text)
+		source.WriteByte('\n')
+	}
+	var sourceCandidates []goroutineSourceCandidate
+	for _, candidateIndex := range indexes {
+		if matched[candidateIndex] {
+			continue
+		}
+		line, ok := lineMap[candidates[candidateIndex].HunkLineIndex]
+		if !ok {
+			continue
+		}
+		sourceCandidates = append(sourceCandidates, goroutineSourceCandidate{
+			index: candidateIndex,
+			line:  line,
+		})
+	}
+	if len(sourceCandidates) == 0 {
+		return
+	}
+	fset := token.NewFileSet()
+	stats.ParsedSourceUnits++
+	parsedFile, err := parser.ParseFile(
+		fset,
+		"review_hunk.go",
+		source.String(),
+		parser.AllErrors,
+	)
+	if err != nil || parsedFile == nil {
+		return
+	}
+	analyzeParsedGoroutineSource(
+		fset,
+		parsedFile,
+		sourceCandidates,
+		leaks,
+		matched,
+		true,
+		stats,
+	)
 }
 
 func clearLexicallyExcludedGoroutineCandidates(
@@ -530,10 +624,22 @@ func (b *goroutineContextBindings) collectValueSpecBindings(
 	edges *[]goroutineBindingEdge,
 ) {
 	if len(spec.Values) == 1 && len(spec.Names) > 1 {
-		if value := bindingExpressionValue(
+		values, known := bindingExpressionResultValues(
 			spec.Values[0], b.info, b.contextType, b.allowNameFallback,
-		); value != goroutineContextUnknown {
-			b.setObjectValue(bindingObject(b.info, spec.Names[0]), value)
+		)
+		for index, name := range spec.Names {
+			if name == nil || name.Name == "_" {
+				continue
+			}
+			object := bindingObject(b.info, name)
+			if !known || index >= len(values) || values[index] == goroutineContextUnknown {
+				// A single RHS with multiple LHS is necessarily a tuple
+				// assignment. If its shape or an element cannot be proven, do
+				// not retain a previously cancellable provenance for that slot.
+				b.invalidateObjectValue(object)
+				continue
+			}
+			b.setObjectValue(object, values[index])
 		}
 		return
 	}
@@ -554,14 +660,23 @@ func (b *goroutineContextBindings) collectAssignmentBindings(
 	edges *[]goroutineBindingEdge,
 ) {
 	if len(assignment.Rhs) == 1 && len(assignment.Lhs) > 1 {
-		identifier, ok := unparenthesizedExpression(assignment.Lhs[0]).(*ast.Ident)
-		if !ok {
-			return
-		}
-		if value := bindingExpressionValue(
+		values, known := bindingExpressionResultValues(
 			assignment.Rhs[0], b.info, b.contextType, b.allowNameFallback,
-		); value != goroutineContextUnknown {
-			b.setObjectValue(bindingObject(b.info, identifier), value)
+		)
+		for index, expression := range assignment.Lhs {
+			identifier, ok := unparenthesizedExpression(expression).(*ast.Ident)
+			if !ok || identifier.Name == "_" {
+				continue
+			}
+			object := bindingObject(b.info, identifier)
+			if !known || index >= len(values) || values[index] == goroutineContextUnknown {
+				// Keep tuple assignment fail-closed when type information is
+				// incomplete: an unknown RHS must invalidate an old context
+				// binding instead of silently preserving it.
+				b.invalidateObjectValue(object)
+				continue
+			}
+			b.setObjectValue(object, values[index])
 		}
 		return
 	}
@@ -649,6 +764,21 @@ func (b *goroutineContextBindings) setObjectValue(
 	return true
 }
 
+func (b *goroutineContextBindings) invalidateObjectValue(object types.Object) bool {
+	if b == nil || object == nil {
+		return false
+	}
+	current, exists := b.objects[object]
+	if !exists && !typeIsContext(object.Type(), b.contextType) {
+		return false
+	}
+	if exists && current == goroutineContextNonCancellable {
+		return false
+	}
+	b.objects[object] = goroutineContextNonCancellable
+	return true
+}
+
 func contextDeclarationValue(
 	typeExpression ast.Expr,
 	object types.Object,
@@ -700,21 +830,42 @@ func contextCallTypeValue(
 		}
 		return contextTypeValue(value, contextType)
 	}
-	selector, ok := unparenthesizedExpression(call.Fun).(*ast.SelectorExpr)
-	if !ok {
-		return goroutineContextUnknown, false
-	}
-	if selection := info.Selections[selector]; selection != nil {
-		if signature, ok := selection.Type().(*types.Signature); ok {
-			return contextSignatureResultValue(signature, contextType)
-		}
-	}
-	if function, ok := info.Uses[selector.Sel].(*types.Func); ok {
-		if signature, ok := function.Type().(*types.Signature); ok {
-			return contextSignatureResultValue(signature, contextType)
-		}
+	if signature, ok := contextCallSignature(call, info); ok {
+		return contextSignatureResultValue(signature, contextType)
 	}
 	return goroutineContextUnknown, false
+}
+
+func contextCallSignature(
+	call *ast.CallExpr,
+	info *types.Info,
+) (*types.Signature, bool) {
+	if call == nil || info == nil {
+		return nil, false
+	}
+	if signature, ok := info.TypeOf(call.Fun).(*types.Signature); ok {
+		return signature, true
+	}
+	switch function := unparenthesizedExpression(call.Fun).(type) {
+	case *ast.SelectorExpr:
+		if selection := info.Selections[function]; selection != nil {
+			if signature, ok := selection.Type().(*types.Signature); ok {
+				return signature, true
+			}
+		}
+		if object, ok := info.Uses[function.Sel].(*types.Func); ok {
+			if signature, ok := object.Type().(*types.Signature); ok {
+				return signature, true
+			}
+		}
+	case *ast.Ident:
+		if object, ok := info.Uses[function].(*types.Func); ok {
+			if signature, ok := object.Type().(*types.Signature); ok {
+				return signature, true
+			}
+		}
+	}
+	return nil, false
 }
 
 func contextSignatureResultValue(
@@ -725,6 +876,79 @@ func contextSignatureResultValue(
 		return goroutineContextUnknown, false
 	}
 	return contextResultsValue(signature.Results(), contextType)
+}
+
+func contextSignatureResultValues(
+	signature *types.Signature,
+	contextType types.Type,
+) ([]goroutineContextValue, bool) {
+	if signature == nil || contextType == nil {
+		return nil, false
+	}
+	return contextTupleResultValues(signature.Results(), contextType), true
+}
+
+func contextCallResultValues(
+	call *ast.CallExpr,
+	info *types.Info,
+	contextType types.Type,
+) ([]goroutineContextValue, bool, bool) {
+	if call == nil || info == nil || contextType == nil {
+		return nil, false, false
+	}
+	if value := info.TypeOf(call); value != nil {
+		if results, ok := value.(*types.Tuple); ok {
+			if results == nil {
+				return nil, true, true
+			}
+			return contextTupleResultValues(results, contextType), true, results.Len() != 1
+		}
+		result, known := contextTypeValue(value, contextType)
+		if !known {
+			return nil, false, false
+		}
+		return []goroutineContextValue{result}, true, false
+	}
+	signature, ok := contextCallSignature(call, info)
+	if !ok {
+		return nil, false, false
+	}
+	results := signature.Results()
+	values, known := contextSignatureResultValues(signature, contextType)
+	resultCount := 0
+	if results != nil {
+		resultCount = results.Len()
+	}
+	return values, known, resultCount != 1
+}
+
+func contextTupleResultValues(
+	results *types.Tuple,
+	contextType types.Type,
+) []goroutineContextValue {
+	if results == nil {
+		return nil
+	}
+	values := make([]goroutineContextValue, results.Len())
+	for index := range values {
+		values[index], _ = contextResultValueAt(results, index, contextType)
+	}
+	return values
+}
+
+func contextResultValueAt(
+	results *types.Tuple,
+	index int,
+	contextType types.Type,
+) (goroutineContextValue, bool) {
+	if results == nil || index < 0 || index >= results.Len() {
+		return goroutineContextUnknown, false
+	}
+	result := results.At(index)
+	if result == nil || result.Type() == nil {
+		return goroutineContextUnknown, false
+	}
+	return contextTypeValue(result.Type(), contextType)
 }
 
 func contextResultsValue(
@@ -749,6 +973,25 @@ func contextResultsValue(
 		}
 	}
 	if sawKnownType {
+		return goroutineContextNonCancellable, true
+	}
+	return goroutineContextUnknown, false
+}
+
+func contextValuesValue(values []goroutineContextValue) (goroutineContextValue, bool) {
+	if len(values) == 0 {
+		return goroutineContextNonCancellable, true
+	}
+	sawKnownValue := false
+	for _, value := range values {
+		switch value {
+		case goroutineContextCancellable:
+			return goroutineContextCancellable, true
+		case goroutineContextNonCancellable:
+			sawKnownValue = true
+		}
+	}
+	if sawKnownValue {
 		return goroutineContextNonCancellable, true
 	}
 	return goroutineContextUnknown, false
@@ -782,6 +1025,10 @@ func bindingExpressionValue(
 				return goroutineContextCancellable
 			}
 		}
+		if values, known, multi := contextCallResultValues(call, info, contextType); known && multi {
+			value, _ := contextValuesValue(values)
+			return value
+		}
 		if selector, ok := unparenthesizedExpression(call.Fun).(*ast.SelectorExpr); ok &&
 			selector.Sel.Name == "Context" && len(call.Args) == 0 {
 			if value, known := contextCallTypeValue(call, info, contextType); known {
@@ -797,6 +1044,46 @@ func bindingExpressionValue(
 		return goroutineContextCancellable
 	}
 	return goroutineContextUnknown
+}
+
+func bindingExpressionResultValues(
+	expression ast.Expr,
+	info *types.Info,
+	contextType types.Type,
+	allowNameFallback bool,
+) ([]goroutineContextValue, bool) {
+	expression = unparenthesizedExpression(expression)
+	call, ok := expression.(*ast.CallExpr)
+	if !ok {
+		return nil, false
+	}
+	if values, known, multi := contextCallResultValues(call, info, contextType); known && multi {
+		return values, true
+	}
+	if name, isContext := contextPackageCallName(call, info); isContext &&
+		allowNameFallback {
+		switch name {
+		case "WithCancel", "WithCancelCause", "WithTimeout", "WithTimeoutCause",
+			"WithDeadline", "WithDeadlineCause":
+			// The syntax identifies the constructor and its first result. Keep
+			// the legacy first-position fallback, but never invent later tuple
+			// positions without type information.
+			return []goroutineContextValue{goroutineContextCancellable}, true
+		}
+	}
+	selector, ok := unparenthesizedExpression(call.Fun).(*ast.SelectorExpr)
+	if !ok || selector.Sel.Name != "Context" || len(call.Args) != 0 {
+		return nil, false
+	}
+	if value, known := contextCallTypeValue(call, info, contextType); known {
+		return []goroutineContextValue{value}, true
+	}
+	if allowNameFallback {
+		// Without type information the legacy fallback can only prove the
+		// first result. Additional tuple positions remain unknown.
+		return []goroutineContextValue{goroutineContextCancellable}, true
+	}
+	return nil, false
 }
 
 func (b *goroutineContextBindings) isCancellableContextExpression(
@@ -823,6 +1110,12 @@ func (b *goroutineContextBindings) isCancellableContextExpression(
 			case "Background", "TODO", "WithoutCancel":
 				return false
 			}
+		}
+		if values, known, multi := contextCallResultValues(call, b.info, b.contextType); known && multi {
+			if value, aggregateKnown := contextValuesValue(values); aggregateKnown {
+				return value == goroutineContextCancellable
+			}
+			return false
 		}
 		if selector, ok := unparenthesizedExpression(call.Fun).(*ast.SelectorExpr); ok &&
 			selector.Sel.Name == "Context" && len(call.Args) == 0 {
@@ -862,29 +1155,107 @@ func functionLiteralContextOverrides(
 	bindings *goroutineContextBindings,
 ) map[types.Object]bool {
 	overrides := make(map[types.Object]bool)
-	parameterIndex := 0
 	if literal.Type.Params == nil {
 		return overrides
 	}
-	for _, field := range literal.Type.Params.List {
+	parameters := make([]types.Object, 0)
+	variadic := false
+	for fieldIndex, field := range literal.Type.Params.List {
+		fieldVariadic := fieldIndex == len(literal.Type.Params.List)-1
+		if fieldVariadic {
+			_, variadic = field.Type.(*ast.Ellipsis)
+		}
 		if len(field.Names) == 0 {
-			parameterIndex++
+			parameters = append(parameters, nil)
 			continue
 		}
 		for _, name := range field.Names {
-			object := bindingObject(bindings.info, name)
-			active := false
-			if parameterIndex < len(arguments) &&
-				bindings.objectCanCarryContext(object) {
-				active = bindings.isCancellableContextExpression(arguments[parameterIndex], nil)
-			}
-			if object != nil {
-				overrides[object] = active
-			}
-			parameterIndex++
+			parameters = append(parameters, bindingObject(bindings.info, name))
 		}
 	}
+	fixedParameterCount := len(parameters)
+	if variadic && fixedParameterCount > 0 {
+		fixedParameterCount--
+	}
+
+	argumentValues := make([]goroutineContextValue, len(parameters))
+	argumentKnown := make([]bool, len(parameters))
+	tupleExpanded := false
+	tupleShapeUnknown := false
+	if len(arguments) == 1 && len(parameters) > 1 {
+		call, isCall := unparenthesizedExpression(arguments[0]).(*ast.CallExpr)
+		if !isCall {
+			// A single argument can fill multiple parameters only when it is a
+			// multi-valued call. Without a call that shape is not provable.
+			tupleShapeUnknown = true
+		} else if values, known, multi := contextCallResultValues(
+			call,
+			bindings.info,
+			bindings.contextType,
+		); !known || !multi || len(values) != len(parameters) {
+			// Do not fall back to assigning the one expression to the first
+			// parameter: that could turn an unknown tuple into a false safe
+			// closure result.
+			tupleShapeUnknown = true
+		} else {
+			copy(argumentValues, values)
+			for index := range values {
+				argumentKnown[index] = true
+			}
+			tupleExpanded = true
+		}
+	}
+	if !tupleExpanded && !tupleShapeUnknown &&
+		(!variadic && len(arguments) != len(parameters) ||
+			variadic && len(arguments) < fixedParameterCount) {
+		// Invalid or unprovable argument arity must not inherit a cancellable
+		// value from the closure's declaration.
+		tupleShapeUnknown = true
+	}
+	if !tupleExpanded && !tupleShapeUnknown {
+		for index, argument := range arguments {
+			if index >= len(argumentValues) {
+				break
+			}
+			argumentValues[index] = contextExpressionValue(
+				argument,
+				bindings,
+			)
+			argumentKnown[index] = true
+		}
+	}
+	for index, object := range parameters {
+		if object == nil || !bindings.objectCanCarryContext(object) {
+			continue
+		}
+		active := false
+		if index < len(argumentValues) && argumentKnown[index] {
+			active = argumentValues[index] == goroutineContextCancellable
+		}
+		overrides[object] = active
+	}
 	return overrides
+}
+
+func contextExpressionValue(
+	expression ast.Expr,
+	bindings *goroutineContextBindings,
+) goroutineContextValue {
+	if bindings == nil {
+		return goroutineContextUnknown
+	}
+	if value := bindingExpressionValue(
+		expression,
+		bindings.info,
+		bindings.contextType,
+		bindings.allowNameFallback,
+	); value != goroutineContextUnknown {
+		return value
+	}
+	if bindings.isCancellableContextExpression(expression, nil) {
+		return goroutineContextCancellable
+	}
+	return goroutineContextNonCancellable
 }
 
 func (b *goroutineContextBindings) objectCanCarryContext(object types.Object) bool {
@@ -946,7 +1317,7 @@ func functionLiteralObservesCancellation(
 }
 
 func contextPackageCallName(call *ast.CallExpr, info *types.Info) (string, bool) {
-	if call == nil {
+	if call == nil || info == nil {
 		return "", false
 	}
 	selector, ok := unparenthesizedExpression(call.Fun).(*ast.SelectorExpr)
