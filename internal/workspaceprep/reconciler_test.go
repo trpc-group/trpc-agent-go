@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -820,6 +821,58 @@ func TestReconciler_InstanceRotationClearsPrepared(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, infoBefore.ModTime(), infoAfter.ModTime(),
 		"instance rotation must re-apply bootstrap files")
+}
+
+func TestReconciler_InstanceRotationRerunsMarkerlessCommand(t *testing.T) {
+	ctx := context.Background()
+	eng, ws := newTestEngine(t)
+	rec := NewReconciler()
+	logPath := filepath.Join(ws.Path, "work/bootstrap.log")
+
+	cmd, err := NewCommandRequirement(CommandSpec{
+		Cmd:  "bash",
+		Args: []string{"-lc", "mkdir -p work && echo run >> work/bootstrap.log"},
+	})
+	require.NoError(t, err)
+
+	countRuns := func() int {
+		data, err := os.ReadFile(logPath)
+		if os.IsNotExist(err) {
+			return 0
+		}
+		require.NoError(t, err)
+		if len(data) == 0 {
+			return 0
+		}
+		return strings.Count(string(data), "run\n")
+	}
+
+	_, err = rec.Reconcile(
+		ctx, eng, ws, "instance-1", []Requirement{cmd},
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1, countRuns(),
+		"first reconcile on instance-1 must run marker-less command")
+
+	_, err = rec.Reconcile(
+		ctx, eng, ws, "instance-1", []Requirement{cmd},
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1, countRuns(),
+		"same instance must skip marker-less command via Prepared")
+
+	_, err = rec.Reconcile(
+		ctx, eng, ws, "instance-2", []Requirement{cmd},
+	)
+	require.NoError(t, err)
+	require.Equal(t, 2, countRuns(),
+		"instance rotation must rerun marker-less command")
+
+	md, err := codeexecutor.LoadMetadata(ws.Path)
+	require.NoError(t, err)
+	require.Equal(t, codeexecutor.WorkspaceInstanceID("instance-2"),
+		md.InstanceID)
+	require.Contains(t, md.Prepared, cmd.Key())
 }
 
 func TestReconciler_LegacyPreparedMetadataRotatesBootstrap(t *testing.T) {
