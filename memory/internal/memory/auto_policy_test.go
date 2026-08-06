@@ -1091,6 +1091,10 @@ func TestPreserveHistoryPolicy_DeleteAuthorization(t *testing.T) {
 		"cross-fact-newline",
 		"User visited London\nUser lives in Paris.",
 	)
+	crossFactComma := entry(
+		"cross-fact-comma",
+		"User visited London, lives in Paris.",
+	)
 	matchingCompound := entry(
 		"matching-compound",
 		"User visited Paris and lives in London.",
@@ -1149,6 +1153,7 @@ func TestPreserveHistoryPolicy_DeleteAuthorization(t *testing.T) {
 			existing: []*memory.Entry{
 				crossFactExact,
 				crossFactNewline,
+				crossFactComma,
 				matchingCompound,
 				crossBodyTopic,
 				crossTopics,
@@ -1157,6 +1162,7 @@ func TestPreserveHistoryPolicy_DeleteAuthorization(t *testing.T) {
 			operations: deleteOps(
 				"cross-fact-exact",
 				"cross-fact-newline",
+				"cross-fact-comma",
 				"matching-compound",
 				"cross-body-topic",
 				"cross-topics",

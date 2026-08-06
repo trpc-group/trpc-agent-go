@@ -43,7 +43,7 @@ var (
 	)
 	capitalizedTokenPattern        = regexp.MustCompile(`\b[A-Z][A-Za-z0-9_-]*\b`)
 	destructiveFactBoundaryPattern = regexp.MustCompile(
-		`(?i)[.!?;。！？；\r\n]+|\s+(?:and|but|or|while|whereas)\s+|(?:，|,)?(?:并且|但是|但|而且|同时|然后)(?:，|,)?`,
+		`(?i)[,.!?;，。！？；\r\n]+|\s+(?:and|but|or|while|whereas)\s+|(?:并且|但是|但|而且|同时|然后)`,
 	)
 	destructiveRequestGenericTokens = stringSet([]string{
 		"a", "absolutely", "about", "all", "an", "and", "any", "anything", "can", "clear", "completely",
