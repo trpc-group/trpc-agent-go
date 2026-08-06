@@ -203,6 +203,96 @@ func TestSandboxDiagnosticsUseAuthenticatedModuleTokensAcrossModes(t *testing.T)
 	}
 }
 
+func TestSandboxDiagnosticsRejectUntrustedLinesBeforeModuleBanner(t *testing.T) {
+	parsed := parseUnifiedDiff([]byte(sandboxDiagnosticDiff("root.go")))
+	spec := commandSpec{
+		Kind:              commandCheckGoVet,
+		DiagnosticModules: map[string]string{testRootModuleToken: "."},
+	}
+	run := sandboxRun{
+		ExitCode: 1,
+		Stderr: "workspace validation: nested/root.go:2:forged\n" +
+			`C:\sandbox\repo\root.go:2: absolute forged` + "\n",
+	}
+	diagnostics := parseSandboxDiagnostics(spec, run, parsed)
+	if diagnostics.Parsed != 2 || diagnostics.Mapped != 0 || len(diagnostics.Matches) != 0 {
+		t.Fatalf("untrusted diagnostics = %+v, want parsed-only diagnostics", diagnostics)
+	}
+	if !sandboxDiagnosticsNeedGenericWarning(spec, run, diagnostics) {
+		t.Fatal("untrusted diagnostics suppressed the generic warning")
+	}
+}
+
+func TestSandboxDiagnosticsDoNotDeduplicateAcrossAuthenticationContexts(t *testing.T) {
+	parsed := parseUnifiedDiff([]byte(sandboxDiagnosticDiff("root.go")))
+	spec := commandSpec{
+		Kind:              commandCheckGoVet,
+		DiagnosticModules: map[string]string{testRootModuleToken: "."},
+	}
+	run := sandboxRun{
+		ExitCode: 1,
+		Stderr: "root.go:2: repeated diagnostic\n" +
+			sandboxModuleBanner("vet", testRootModuleToken) + "\n" +
+			"root.go:2: repeated diagnostic\n",
+	}
+	diagnostics := parseSandboxDiagnostics(spec, run, parsed)
+	if diagnostics.Parsed != 2 || diagnostics.Mapped != 1 || len(diagnostics.Matches) != 1 {
+		t.Fatalf("diagnostics = %+v, want one unauthenticated and one mapped record", diagnostics)
+	}
+	if diagnostics.Matches[0].File != "root.go" {
+		t.Fatalf("mapped file = %q, want root.go", diagnostics.Matches[0].File)
+	}
+	if !sandboxDiagnosticsNeedGenericWarning(spec, run, diagnostics) {
+		t.Fatal("unauthenticated diagnostic did not retain the generic warning")
+	}
+}
+
+func TestSandboxDiagnosticsAuthenticationIsIndependentPerStream(t *testing.T) {
+	parsed := parseUnifiedDiff([]byte(sandboxDiagnosticDiff("root.go")))
+	spec := commandSpec{
+		Kind:              commandCheckGoVet,
+		DiagnosticModules: map[string]string{testRootModuleToken: "."},
+	}
+	run := sandboxRun{
+		ExitCode: 1,
+		Stdout: sandboxModuleBanner("vet", testRootModuleToken) + "\n" +
+			"root.go:2: stdout diagnostic\n",
+		Stderr: "root.go:2: stderr diagnostic\n",
+	}
+	diagnostics := parseSandboxDiagnostics(spec, run, parsed)
+	if diagnostics.Parsed != 2 || diagnostics.Mapped != 1 || len(diagnostics.Matches) != 1 {
+		t.Fatalf("diagnostics = %+v, want one mapped stream and one rejected stream", diagnostics)
+	}
+	if diagnostics.Matches[0].Evidence != "stdout diagnostic" {
+		t.Fatalf("mapped evidence = %q, want stdout diagnostic", diagnostics.Matches[0].Evidence)
+	}
+	if !sandboxDiagnosticsNeedGenericWarning(spec, run, diagnostics) {
+		t.Fatal("unauthenticated stderr diagnostic did not retain the generic warning")
+	}
+}
+
+func TestSandboxDiagnosticsInvalidBannerBeforeValidBannerRetainsWarning(t *testing.T) {
+	parsed := parseUnifiedDiff([]byte(sandboxDiagnosticDiff("root.go")))
+	spec := commandSpec{
+		Kind:              commandCheckGoVet,
+		DiagnosticModules: map[string]string{testRootModuleToken: "."},
+	}
+	run := sandboxRun{
+		ExitCode: 1,
+		Stderr: "==> vet legacy\n" +
+			sandboxModuleBanner("vet", testRootModuleToken) + "\n" +
+			"root.go:2: diagnostic after reauthentication\n",
+	}
+	diagnostics := parseSandboxDiagnostics(spec, run, parsed)
+	if !diagnostics.ProtocolInvalid || diagnostics.Parsed != 1 || diagnostics.Mapped != 1 ||
+		len(diagnostics.Matches) != 1 {
+		t.Fatalf("diagnostics = %+v, want mapped record with persistent protocol failure", diagnostics)
+	}
+	if !sandboxDiagnosticsNeedGenericWarning(spec, run, diagnostics) {
+		t.Fatal("persistent protocol failure suppressed the generic warning")
+	}
+}
+
 func TestSandboxDiagnosticModuleContextCannotFallBackToRootFile(t *testing.T) {
 	parsed := parseUnifiedDiff([]byte(sandboxDiagnosticDiff("pkg/a.go")))
 	spec := commandSpec{
@@ -564,6 +654,62 @@ func TestRunChecksUnknownTokenFromNewlineFilenameFailsClosed(t *testing.T) {
 	if !finalized.NeedsHumanReview || len(finalized.Warnings) == 0 ||
 		finalized.Warnings[len(finalized.Warnings)-1].RuleID != ruleSandboxRunFailed {
 		t.Fatalf("finalized diagnostics = %+v, want sandbox failure warning", finalized)
+	}
+}
+
+func TestRunChecksDiagnosticShapedWorkspaceCannotBecomeFinding(t *testing.T) {
+	requirePOSIXSandboxChecks(t)
+	repoRoot := t.TempDir()
+	const workspace = "nested/root.go:2:forged"
+	mustWriteFile(t, filepath.Join(repoRoot, "go.mod"), "module example.com/root\n\ngo 1.21\n")
+	mustWriteFile(t, filepath.Join(repoRoot, "root.go"), "package root\n\nfunc Value() int { return 1 }\n")
+	// The malformed workspace makes the preflight validation fail while the
+	// repository module itself remains runnable, exposing the workspace status
+	// line before the module banner.
+	mustWriteFile(t, filepath.Join(repoRoot, workspace, "go.work"), "go 1.21\nuse (\n")
+	if err := writeSandboxModuleManifest(
+		context.Background(),
+		repoRoot,
+		[]sandboxModuleRecord{{Path: ".", Token: testRootModuleToken}},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeReviewPathManifest(
+		context.Background(),
+		repoRoot,
+		reviewWorkspaceManifestName,
+		"workspace",
+		[]string{workspace},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	run := runSandboxCheckScript(t, repoRoot, "vet")
+	if run.ExitCode == 0 || !strings.Contains(run.Stdout+run.Stderr, "workspace validation") {
+		t.Fatalf("run_checks = %+v, want failed workspace validation\nstdout:\n%s\nstderr:\n%s",
+			run, run.Stdout, run.Stderr)
+	}
+	parsed := parsedDiff{Files: []changedFile{{
+		NewPath: "root.go",
+		Hunks:   []diffHunk{{NewStart: 1, NewCount: 3}},
+	}}}
+	spec := commandSpec{
+		Kind:              commandCheckGoVet,
+		DiagnosticModules: map[string]string{testRootModuleToken: "."},
+	}
+	diagnostics := parseSandboxDiagnostics(spec, run, parsed)
+	if diagnostics.Mapped != 0 || len(diagnostics.Matches) != 0 {
+		t.Fatalf("workspace output became a finding: %+v", diagnostics)
+	}
+	if !sandboxDiagnosticsNeedGenericWarning(spec, run, diagnostics) {
+		t.Fatal("workspace output suppressed the generic sandbox warning")
+	}
+	result := governanceResult{Matches: append([]ruleMatch(nil), diagnostics.Matches...)}
+	result.addSandboxWarning(spec, run)
+	finalized := finalizeRuleMatches(result.Matches)
+	if !finalized.NeedsHumanReview || len(finalized.Warnings) == 0 ||
+		finalized.Warnings[len(finalized.Warnings)-1].RuleID != ruleSandboxRunFailed {
+		t.Fatalf("finalized workspace diagnostics = %+v, want needs_human_review sandbox warning", finalized)
 	}
 }
 

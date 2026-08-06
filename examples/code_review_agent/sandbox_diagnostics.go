@@ -61,6 +61,7 @@ func parseSandboxDiagnostics(
 	}
 	result := sandboxDiagnosticResult{}
 	seen := map[string]bool{}
+	moduleAuthenticationRequired := len(spec.DiagnosticModules) > 0
 	for _, output := range []string{run.Stdout, run.Stderr} {
 		activeModule := ""
 		for _, line := range strings.Split(output, "\n") {
@@ -75,16 +76,8 @@ func parseSandboxDiagnostics(
 			if !ok {
 				continue
 			}
-			repositoryPath, exactOnly, pathOK := repositoryDiagnosticPath(
-				diagnostic.Path,
-				activeModule,
-			)
-			keyPath := repositoryPath
-			if !pathOK {
-				keyPath = activeModule + "\x00" + diagnostic.Path
-			}
-			key := fmt.Sprintf("%s\x00%d\x00%d\x00%s", keyPath,
-				diagnostic.Line, diagnostic.Column, diagnostic.Message)
+			key := fmt.Sprintf("%s\x00%s\x00%d\x00%d\x00%s",
+				activeModule, diagnostic.Path, diagnostic.Line, diagnostic.Column, diagnostic.Message)
 			if seen[key] {
 				continue
 			}
@@ -94,6 +87,14 @@ func parseSandboxDiagnostics(
 				result.Overflow = true
 				continue
 			}
+			if moduleAuthenticationRequired &&
+				(activeModule == "" || activeModule == invalidSandboxDiagnosticModule) {
+				continue
+			}
+			repositoryPath, exactOnly, pathOK := repositoryDiagnosticPath(
+				diagnostic.Path,
+				activeModule,
+			)
 			if !pathOK {
 				continue
 			}
