@@ -1,0 +1,50 @@
+# Tool Safety Guard Policy Example (YAML)
+
+allowed_commands:
+  - go
+  - git
+  - echo
+  - ls
+  - grep
+  - cat
+  - curl
+  - npm
+  - sleep
+  - top
+
+denied_commands:
+  - rm
+  - dd
+  - mkfs
+  - sudo
+  - su
+  - shutdown
+  - reboot
+
+forbidden_paths:
+  - "~/.ssh"
+  - "/etc"
+  - "*.env"
+  - "*.pem"
+  - "*.key"
+  - "id_rsa"
+
+network_whitelist:
+  - "github.com"
+  - "api.github.com"
+  - "golang.org"
+
+max_timeout: "30s"
+max_output_size: 1048576
+
+allowed_env_vars:
+  - PATH
+  - HOME
+  - USER
+  - LANG
+
+ask_rules:
+  - "npm install"
+  - "pip install"
+  - "apt install"
+  - "go install"

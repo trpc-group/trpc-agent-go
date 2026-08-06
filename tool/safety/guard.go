@@ -1,0 +1,255 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
+// Package safety provides tool invocation safety guards, including policy-based
+// permission control, risk assessment, audit logging, and report generation.
+package safety
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"sync"
+	"time"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+)
+
+const (
+	// BackendWorkspaceExec represents workspace-isolated execution.
+	BackendWorkspaceExec = "workspace_exec"
+	// BackendHostExec represents host terminal PTY execution.
+	BackendHostExec = "hostexec"
+	// BackendHostExecAlias is an alternate tool name for BackendHostExec.
+	BackendHostExecAlias = "host_exec"
+	// BackendHostExecExecCommand is the OpenClaw / hostexec tool name variant.
+	BackendHostExecExecCommand = "exec_command"
+	// BackendHostExecFullAlias is another hostexec tool name variant.
+	BackendHostExecFullAlias = "hostexec_exec_command"
+	// BackendCodeExec represents sandbox code execution.
+	BackendCodeExec = "codeexec"
+	// BackendCodeExecAlias is an alternate tool name for BackendCodeExec.
+	BackendCodeExecAlias = "code_exec"
+)
+
+// SafetyGuard enforces safety policies on tool executions.
+// It implements tool.PermissionPolicy.
+type SafetyGuard struct {
+	mu          sync.RWMutex
+	policy      *Policy
+	auditLogger *AuditLogger
+	reportPath  string
+	lastReport  *Report
+	initErr     error
+}
+
+// Option modifies SafetyGuard settings.
+type Option func(*SafetyGuard)
+
+// WithPolicy sets the policy.
+func WithPolicy(p *Policy) Option {
+	return func(g *SafetyGuard) {
+		if p != nil {
+			g.policy = p
+		}
+	}
+}
+
+// WithPolicyFile loads policy from a JSON or YAML file.
+func WithPolicyFile(filePath string) Option {
+	return func(g *SafetyGuard) {
+		p, err := LoadPolicyFile(filePath)
+		if err != nil {
+			g.initErr = fmt.Errorf("failed to load policy file %q: %w", filePath, err)
+			return
+		}
+		if p != nil {
+			g.policy = p
+		}
+	}
+}
+
+// WithAuditLogger sets the audit logger.
+func WithAuditLogger(logger *AuditLogger) Option {
+	return func(g *SafetyGuard) {
+		g.auditLogger = logger
+	}
+}
+
+// WithReportPath sets the file path to output the latest scan report JSON.
+func WithReportPath(path string) Option {
+	return func(g *SafetyGuard) {
+		g.reportPath = path
+	}
+}
+
+// NewGuard creates a new SafetyGuard with optional configurations.
+func NewGuard(opts ...Option) *SafetyGuard {
+	g := &SafetyGuard{
+		policy: DefaultPolicy(),
+	}
+	for _, opt := range opts {
+		opt(g)
+	}
+	return g
+}
+
+// CheckToolPermission inspects a pending tool execution request and returns a permission decision.
+func (g *SafetyGuard) CheckToolPermission(
+	ctx context.Context,
+	req *tool.PermissionRequest,
+) (tool.PermissionDecision, error) {
+	if req == nil {
+		return tool.AllowPermission(), nil
+	}
+
+	start := time.Now()
+	scanReq := g.extractScanRequest(req)
+	res := EvaluateCommand(scanReq, g.policy)
+
+	duration := time.Since(start).Milliseconds()
+	isBlocked := res.Decision == tool.PermissionActionDeny
+
+	// Prepare structured report
+	command := scanReq.Command
+	if res.IsSanitized {
+		command = SanitizeCommand(scanReq.Command)
+	}
+
+	report := &Report{
+		ToolName:       scanReq.ToolName,
+		Command:        command,
+		Backend:        scanReq.Backend,
+		Decision:       res.Decision,
+		RiskLevel:      res.RiskLevel,
+		RuleID:         res.RuleID,
+		Evidence:       res.Evidence,
+		Recommendation: res.Recommendation,
+		IsBlocked:      isBlocked,
+	}
+
+	g.mu.Lock()
+	g.lastReport = report
+	g.mu.Unlock()
+
+	if g.reportPath != "" {
+		_ = report.SaveJSON(g.reportPath)
+	}
+
+	// Record audit log
+	if g.auditLogger != nil {
+		_ = g.auditLogger.Log(AuditEvent{
+			Timestamp:   start,
+			ToolName:    scanReq.ToolName,
+			Decision:    res.Decision,
+			RiskLevel:   res.RiskLevel,
+			RuleID:      res.RuleID,
+			DurationMS:  duration,
+			IsSanitized: res.IsSanitized,
+			IsBlocked:   isBlocked,
+		})
+	}
+
+	// Set OpenTelemetry Span Attributes if span exists
+	span := trace.SpanFromContext(ctx)
+	if span.IsRecording() {
+		span.SetAttributes(
+			attribute.String("tool.safety.decision", string(res.Decision)),
+			attribute.String("tool.safety.risk_level", string(res.RiskLevel)),
+			attribute.String("tool.safety.rule_id", res.RuleID),
+			attribute.String("tool.safety.backend", scanReq.Backend),
+		)
+	}
+
+	switch res.Decision {
+	case tool.PermissionActionDeny:
+		return tool.DenyPermission(fmt.Sprintf("[%s] %s", res.RuleID, res.Evidence)), nil
+	case tool.PermissionActionAsk:
+		return tool.AskPermission(fmt.Sprintf("[%s] %s", res.RuleID, res.Evidence)), nil
+	default:
+		return tool.AllowPermission(), nil
+	}
+}
+
+// LastReport returns the most recent scan report generated by SafetyGuard.
+func (g *SafetyGuard) LastReport() *Report {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.lastReport
+}
+
+// InitErr returns any initialization error during SafetyGuard setup (e.g. policy file loading failure).
+func (g *SafetyGuard) InitErr() error {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.initErr
+}
+
+func (g *SafetyGuard) extractScanRequest(req *tool.PermissionRequest) *ScanRequest {
+	scanReq := &ScanRequest{
+		ToolName:     req.ToolName,
+		ToolMetadata: req.Metadata,
+		Backend:      BackendWorkspaceExec,
+	}
+
+	// Extract backend from tool name
+	switch req.ToolName {
+	case BackendHostExec, BackendHostExecAlias, BackendHostExecExecCommand, BackendHostExecFullAlias:
+		scanReq.Backend = BackendHostExec
+	case BackendCodeExec, BackendCodeExecAlias:
+		scanReq.Backend = BackendCodeExec
+	}
+
+	if len(req.Arguments) == 0 {
+		return scanReq
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(req.Arguments, &payload); err != nil {
+		scanReq.Command = string(req.Arguments)
+		return scanReq
+	}
+
+	// Common command field names across workspaceexec, hostexec, codeexec
+	for _, k := range []string{"command", "cmd", "script", "code"} {
+		if v, ok := payload[k].(string); ok && v != "" {
+			scanReq.Command = v
+			break
+		}
+	}
+
+	if scanReq.Command == "" {
+		scanReq.Command = string(req.Arguments)
+	}
+
+	if rawArgs, ok := payload["args"].([]any); ok {
+		for _, a := range rawArgs {
+			if s, ok := a.(string); ok {
+				scanReq.Args = append(scanReq.Args, s)
+			}
+		}
+	}
+
+	if cwd, ok := payload["cwd"].(string); ok {
+		scanReq.Cwd = cwd
+	}
+
+	if rawEnv, ok := payload["env"].(map[string]any); ok {
+		scanReq.Env = make(map[string]string)
+		for k, v := range rawEnv {
+			if s, ok := v.(string); ok {
+				scanReq.Env[k] = s
+			}
+		}
+	}
+
+	return scanReq
+}

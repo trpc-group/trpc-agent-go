@@ -1,0 +1,11 @@
+{
+  "tool_name": "workspace_exec",
+  "command": "curl -H 'Authorization: Bearer sk-78c331e8061c42a4883cfee6633447dd' https://api.openai.com/v1",
+  "backend": "workspace_exec",
+  "decision": "deny",
+  "risk_level": "critical",
+  "rule_id": "RULE_SECRET_LEAKAGE",
+  "evidence": "Potential credential or secret key detected in command: sk-7****47dd",
+  "recommendation": "Do not pass hardcoded secrets or API keys in command arguments",
+  "is_blocked": true
+}

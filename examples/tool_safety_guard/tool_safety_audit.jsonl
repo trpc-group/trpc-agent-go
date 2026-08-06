@@ -1,0 +1,14 @@
+{"timestamp":"2026-07-28T11:21:01.8553615+08:00","tool_name":"workspace_exec","decision":"allow","risk_level":"none","rule_id":"RULE_ALLOW_PASSED","duration_ms":0,"is_sanitized":false,"is_blocked":false}
+{"timestamp":"2026-07-28T11:21:01.8670107+08:00","tool_name":"workspace_exec","decision":"deny","risk_level":"high","rule_id":"RULE_DENIED_COMMAND","duration_ms":0,"is_sanitized":false,"is_blocked":true}
+{"timestamp":"2026-07-28T11:21:01.8675278+08:00","tool_name":"workspace_exec","decision":"deny","risk_level":"high","rule_id":"RULE_FORBIDDEN_PATH","duration_ms":0,"is_sanitized":false,"is_blocked":true}
+{"timestamp":"2026-07-28T11:21:01.8680753+08:00","tool_name":"workspace_exec","decision":"deny","risk_level":"high","rule_id":"RULE_NETWORK_NON_WHITELIST","duration_ms":0,"is_sanitized":false,"is_blocked":true}
+{"timestamp":"2026-07-28T11:21:01.8680753+08:00","tool_name":"workspace_exec","decision":"allow","risk_level":"none","rule_id":"RULE_ALLOW_PASSED","duration_ms":0,"is_sanitized":false,"is_blocked":false}
+{"timestamp":"2026-07-28T11:21:01.8680753+08:00","tool_name":"workspace_exec","decision":"ask","risk_level":"medium","rule_id":"RULE_REQUIRES_HUMAN_APPROVAL","duration_ms":0,"is_sanitized":false,"is_blocked":false}
+{"timestamp":"2026-07-28T11:21:01.8686157+08:00","tool_name":"workspace_exec","decision":"deny","risk_level":"critical","rule_id":"RULE_SECRET_LEAKAGE","duration_ms":0,"is_sanitized":true,"is_blocked":true}
+{"timestamp":"2026-07-28T11:22:37.2118904+08:00","tool_name":"workspace_exec","decision":"allow","risk_level":"none","rule_id":"RULE_ALLOW_PASSED","duration_ms":0,"is_sanitized":false,"is_blocked":false}
+{"timestamp":"2026-07-28T11:22:37.2230504+08:00","tool_name":"workspace_exec","decision":"deny","risk_level":"high","rule_id":"RULE_DENIED_COMMAND","duration_ms":0,"is_sanitized":false,"is_blocked":true}
+{"timestamp":"2026-07-28T11:22:37.2236443+08:00","tool_name":"workspace_exec","decision":"deny","risk_level":"high","rule_id":"RULE_FORBIDDEN_PATH","duration_ms":0,"is_sanitized":false,"is_blocked":true}
+{"timestamp":"2026-07-28T11:22:37.2236443+08:00","tool_name":"workspace_exec","decision":"deny","risk_level":"high","rule_id":"RULE_NETWORK_NON_WHITELIST","duration_ms":0,"is_sanitized":false,"is_blocked":true}
+{"timestamp":"2026-07-28T11:22:37.2241564+08:00","tool_name":"workspace_exec","decision":"allow","risk_level":"none","rule_id":"RULE_ALLOW_PASSED","duration_ms":0,"is_sanitized":false,"is_blocked":false}
+{"timestamp":"2026-07-28T11:22:37.2241564+08:00","tool_name":"workspace_exec","decision":"ask","risk_level":"medium","rule_id":"RULE_REQUIRES_HUMAN_APPROVAL","duration_ms":0,"is_sanitized":false,"is_blocked":false}
+{"timestamp":"2026-07-28T11:22:37.2241564+08:00","tool_name":"workspace_exec","decision":"deny","risk_level":"critical","rule_id":"RULE_SECRET_LEAKAGE","duration_ms":0,"is_sanitized":true,"is_blocked":true}
