@@ -1,0 +1,54 @@
+{
+  "task_id": "4d312888-e8db-4b43-a7b8-2954ce98f64c",
+  "status": "completed",
+  "input_summary": "changed files: internal/handler/upload.go",
+  "findings": [
+    {
+      "severity": "medium",
+      "category": "error_handling",
+      "file": "internal/handler/upload.go",
+      "line": 21,
+      "title": "Error ignored or not handled",
+      "evidence": "\t\t_ = err",
+      "recommendation": "Handle or return errors explicitly; avoid blank error branches.",
+      "confidence": 0.9,
+      "source": "rule",
+      "rule_id": "ERR-001"
+    }
+  ],
+  "warnings": [],
+  "permission_decisions": [
+    {
+      "tool_name": "skill_run",
+      "command": "bash scripts/run_checks.sh work/inputs/changes.diff",
+      "action": "allow"
+    }
+  ],
+  "sandbox_runs": [
+    {
+      "command": "bash scripts/run_checks.sh work/inputs/changes.diff",
+      "runtime": "local",
+      "status": "failed",
+      "exit_code": 2,
+      "duration_ms": 0,
+      "error_type": "check_failed",
+      "stderr": "sandbox check: ignored error pattern in diff"
+    }
+  ],
+  "metrics": {
+    "total_duration_ms": 19,
+    "sandbox_duration_ms": 9,
+    "finding_count": 1,
+    "warning_count": 0,
+    "tool_call_count": 1,
+    "permission_deny_count": 0,
+    "severity_counts": {
+      "medium": 1
+    },
+    "exception_counts": {
+      "check_failed": 1
+    }
+  },
+  "dry_run": true,
+  "sandbox_runtime": "local"
+}

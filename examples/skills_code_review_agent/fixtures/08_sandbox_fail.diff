@@ -1,0 +1,10 @@
+diff --git a/internal/handler/upload.go b/internal/handler/upload.go
+--- a/internal/handler/upload.go
++++ b/internal/handler/upload.go
+@@ -20,7 +20,7 @@ func Upload(path string) error {
+ 	if err != nil {
+-		return err
++		_ = err
+ 	}
+ 	return nil
+ }

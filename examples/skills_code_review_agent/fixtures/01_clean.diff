@@ -1,0 +1,11 @@
+diff --git a/internal/user/service.go b/internal/user/service.go
+--- a/internal/user/service.go
++++ b/internal/user/service.go
+@@ -12,7 +12,7 @@ type Service struct {
+ 
+ func (s *Service) Name() string {
+-	return "user-service"
++	return "user-service-v2"
+ }
+ 
+ func (s *Service) IsReady() bool {

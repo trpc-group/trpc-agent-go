@@ -1,0 +1,62 @@
+{
+  "task_id": "7e39ea58-a79f-48b7-8182-fdaccb32b469",
+  "status": "completed",
+  "input_summary": "changed files: internal/auth/query.go",
+  "findings": [
+    {
+      "severity": "high",
+      "category": "security",
+      "file": "internal/auth/query.go",
+      "line": 10,
+      "title": "Potential SQL injection via string concatenation",
+      "evidence": "\tquery := \"SELECT id, name FROM users WHERE id = \" + userID; _ = exec.Command(\"sh\", \"-c\", userID+\"x\")",
+      "recommendation": "Use parameterized queries or prepared statements instead of concatenating SQL strings.",
+      "confidence": 0.9,
+      "source": "rule",
+      "rule_id": "SEC-001"
+    },
+    {
+      "severity": "high",
+      "category": "security",
+      "file": "internal/auth/query.go",
+      "line": 10,
+      "title": "Command execution with variable concatenation",
+      "evidence": "\tquery := \"SELECT id, name FROM users WHERE id = \" + userID; _ = exec.Command(\"sh\", \"-c\", userID+\"x\")",
+      "recommendation": "Avoid building shell commands from user input; validate and sanitize arguments.",
+      "confidence": 0.85,
+      "source": "rule",
+      "rule_id": "SEC-002"
+    }
+  ],
+  "warnings": [],
+  "permission_decisions": [
+    {
+      "tool_name": "skill_run",
+      "command": "bash scripts/run_checks.sh work/inputs/changes.diff",
+      "action": "allow"
+    }
+  ],
+  "sandbox_runs": [
+    {
+      "command": "bash scripts/run_checks.sh work/inputs/changes.diff",
+      "runtime": "local",
+      "status": "completed",
+      "exit_code": 0,
+      "duration_ms": 0,
+      "stdout": "sandbox checks passed (10 diff lines)"
+    }
+  ],
+  "metrics": {
+    "total_duration_ms": 21,
+    "sandbox_duration_ms": 11,
+    "finding_count": 2,
+    "warning_count": 0,
+    "tool_call_count": 1,
+    "permission_deny_count": 0,
+    "severity_counts": {
+      "high": 2
+    }
+  },
+  "dry_run": true,
+  "sandbox_runtime": "local"
+}

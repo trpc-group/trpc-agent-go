@@ -1,0 +1,35 @@
+{
+  "task_id": "c6edc60b-40bd-4d38-a41c-7579ba111cf4",
+  "status": "completed",
+  "input_summary": "changed files: internal/user/service.go",
+  "findings": [],
+  "warnings": [],
+  "permission_decisions": [
+    {
+      "tool_name": "skill_run",
+      "command": "bash scripts/run_checks.sh work/inputs/changes.diff",
+      "action": "allow"
+    }
+  ],
+  "sandbox_runs": [
+    {
+      "command": "bash scripts/run_checks.sh work/inputs/changes.diff",
+      "runtime": "local",
+      "status": "completed",
+      "exit_code": 0,
+      "duration_ms": 0,
+      "stdout": "sandbox checks passed (11 diff lines)"
+    }
+  ],
+  "metrics": {
+    "total_duration_ms": 17,
+    "sandbox_duration_ms": 14,
+    "finding_count": 0,
+    "warning_count": 0,
+    "tool_call_count": 1,
+    "permission_deny_count": 0,
+    "severity_counts": {}
+  },
+  "dry_run": true,
+  "sandbox_runtime": "local"
+}
