@@ -1491,6 +1491,63 @@ func TestRunIgnoresRequestCancelButRespectsBackendTimeout(t *testing.T) {
 	assert.True(t, hasRunErrorEvent(evts))
 }
 
+func TestWriteEventAfterConsumerDone(t *testing.T) {
+	t.Run("active run does not block", func(t *testing.T) {
+		consumerDone := make(chan struct{})
+		close(consumerDone)
+		input := &runInput{
+			threadID:     "thread",
+			runID:        "run",
+			consumerDone: consumerDone,
+		}
+		events := make(chan aguievents.Event)
+		event := aguievents.NewRunFinishedEvent("thread", "run")
+
+		written := (&runner{}).writeEvent(context.Background(), events, event, input)
+
+		assert.True(t, written)
+		assert.True(t, input.terminalEmitted)
+	})
+
+	t.Run("canceled run still stops", func(t *testing.T) {
+		consumerDone := make(chan struct{})
+		close(consumerDone)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		input := &runInput{
+			threadID:     "thread",
+			runID:        "run",
+			consumerDone: consumerDone,
+		}
+		events := make(chan aguievents.Event)
+		event := aguievents.NewRunFinishedEvent("thread", "run")
+
+		written := (&runner{}).writeEvent(ctx, events, event, input)
+
+		assert.False(t, written)
+		assert.False(t, input.terminalEmitted)
+	})
+
+	t.Run("expired deadline still stops", func(t *testing.T) {
+		consumerDone := make(chan struct{})
+		close(consumerDone)
+		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+		defer cancel()
+		input := &runInput{
+			threadID:     "thread",
+			runID:        "run",
+			consumerDone: consumerDone,
+		}
+		events := make(chan aguievents.Event)
+		event := aguievents.NewRunFinishedEvent("thread", "run")
+
+		written := (&runner{}).writeEvent(ctx, events, event, input)
+
+		assert.False(t, written)
+		assert.False(t, input.terminalEmitted)
+	})
+}
+
 func TestRunCancelsOnRequestCancelWhenEnabled(t *testing.T) {
 	ctxCh := make(chan context.Context, 1)
 	underlying := &fakeRunner{
