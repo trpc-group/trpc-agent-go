@@ -8,10 +8,25 @@
 package shellsafe
 
 import (
+	"errors"
 	"runtime"
 	"strings"
 	"testing"
 )
+
+func TestPolicyImplicitDenySupportsErrorsIs(t *testing.T) {
+	pipe, err := Parse("sh -c echo")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	err = PolicyFromLists(nil, []string{"sentinel"}).Check(pipe)
+	if !errors.Is(err, ErrImplicitDeny) {
+		t.Fatalf("Check error = %v, want ErrImplicitDeny", err)
+	}
+	if !strings.HasPrefix(err.Error(), `command "sh" is denied by built-in policy`) {
+		t.Fatalf("Check error text changed: %v", err)
+	}
+}
 
 func TestParse_AcceptsSimpleCommand(t *testing.T) {
 	pipe, err := Parse("echo hello world")

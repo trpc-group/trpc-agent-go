@@ -221,6 +221,10 @@ type Policy struct {
 	Deny  []string
 }
 
+// ErrImplicitDeny identifies a command rejected by the built-in policy that
+// blocks shell wrappers and re-executing builtins.
+var ErrImplicitDeny = errors.New("command is denied by built-in policy")
+
 // PolicyFromLists returns a Policy with the given allow/deny lists.
 // Empty / blank entries are skipped so callers can hand off
 // env-variable splits without further cleanup.
@@ -304,7 +308,15 @@ func (p Policy) checkSegmentForGOOS(argv []string, goos string) error {
 }
 
 func implicitDenyError(cmd string) error {
-	return fmt.Errorf(
+	return &implicitDenyPolicyError{command: cmd}
+}
+
+type implicitDenyPolicyError struct {
+	command string
+}
+
+func (e *implicitDenyPolicyError) Error() string {
+	return fmt.Sprintf(
 		"command %q is denied by built-in policy because it is a "+
 			"shell wrapper or re-executing builtin that can bypass "+
 			"the allow/deny list (eval curl ..., sh -c '...', "+
@@ -312,8 +324,12 @@ func implicitDenyError(cmd string) error {
 			"etc.). This deny is unconditional under policy mode; "+
 			"wrap the desired use in an auditable workspace script "+
 			"and allow the script instead.",
-		cmd,
+		e.command,
 	)
+}
+
+func (e *implicitDenyPolicyError) Unwrap() error {
+	return ErrImplicitDeny
 }
 
 // matchDeny is the permissive direction: an entry matches the
