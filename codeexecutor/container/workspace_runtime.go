@@ -152,9 +152,11 @@ func (r *workspaceRuntime) CreateWorkspace(
 	span.SetAttributes(attribute.String("exec_id", execID))
 	defer span.End()
 	_ = pol
-	if r.ce == nil || r.ce.client == nil || r.ce.container == nil {
-		return codeexecutor.Workspace{},
-			fmt.Errorf("container executor not ready")
+	if r == nil || r.ce == nil {
+		return codeexecutor.Workspace{}, fmt.Errorf("container executor not ready")
+	}
+	if _, _, err := r.ce.executionContainer(); err != nil {
+		return codeexecutor.Workspace{}, err
 	}
 	safe := sanitize(execID)
 	// Make workspace path unique to avoid collisions.
@@ -242,8 +244,12 @@ func (r *workspaceRuntime) PutFiles(
 		return err
 	}
 	defer tr.Close()
-	err = r.ce.client.CopyToContainer(
-		ctx, r.ce.container.ID, ws.Path, tr,
+	dockerClient, containerID, err := r.ce.executionContainer()
+	if err != nil {
+		return err
+	}
+	err = dockerClient.CopyToContainer(
+		ctx, containerID, ws.Path, tr,
 		tcontainer.CopyToContainerOptions{},
 	)
 	if err != nil {
@@ -319,8 +325,12 @@ func (r *workspaceRuntime) PutDirectory(
 		span.SetStatus(codes.Error, err.Error())
 		return err
 	}
-	err = r.ce.client.CopyToContainer(
-		ctx, r.ce.container.ID, dest, rd,
+	dockerClient, containerID, err := r.ce.executionContainer()
+	if err != nil {
+		return err
+	}
+	err = dockerClient.CopyToContainer(
+		ctx, containerID, dest, rd,
 		tcontainer.CopyToContainerOptions{},
 	)
 	if err != nil {
@@ -583,8 +593,11 @@ func (r *workspaceRuntime) stageInputsLocked(
 	ws codeexecutor.Workspace,
 	specs []codeexecutor.InputSpec,
 ) error {
-	if r.ce == nil || r.ce.client == nil || r.ce.container == nil {
+	if r == nil || r.ce == nil {
 		return fmt.Errorf("container executor not ready")
+	}
+	if _, _, err := r.ce.executionContainer(); err != nil {
+		return err
 	}
 	md, err := r.loadWorkspaceMetadata(ctx, ws)
 	if err != nil {
@@ -1062,8 +1075,12 @@ func (r *workspaceRuntime) copyBytesTo(
 	}
 	// Copy to parent dir.
 	parent := path.Dir(dest)
-	return r.ce.client.CopyToContainer(
-		ctx, r.ce.container.ID, parent,
+	dockerClient, containerID, err := r.ce.executionContainer()
+	if err != nil {
+		return err
+	}
+	return dockerClient.CopyToContainer(
+		ctx, containerID, parent,
 		io.NopCloser(bytes.NewReader(buf.Bytes())),
 		tcontainer.CopyToContainerOptions{},
 	)
@@ -1181,13 +1198,17 @@ func (r *workspaceRuntime) execCmdWithStdin(
 		AttachStderr: true,
 		AttachStdin:  stdin != "",
 	}
-	ex, err := r.ce.client.ContainerExecCreate(
-		tctx, r.ce.container.ID, ec,
+	dockerClient, containerID, err := r.ce.executionContainer()
+	if err != nil {
+		return "", "", 0, false, err
+	}
+	ex, err := dockerClient.ContainerExecCreate(
+		tctx, containerID, ec,
 	)
 	if err != nil {
 		return "", "", 0, false, err
 	}
-	hj, err := r.ce.client.ContainerExecAttach(
+	hj, err := dockerClient.ContainerExecAttach(
 		tctx, ex.ID, tcontainer.ExecStartOptions{},
 	)
 	if err != nil {
@@ -1215,9 +1236,10 @@ func (r *workspaceRuntime) execCmdWithStdin(
 		}
 	}
 	if err != nil {
-		return "", "", 0, false, err
+		timed := errors.Is(tctx.Err(), context.DeadlineExceeded)
+		return "", "", 0, timed, err
 	}
-	insp, err := r.ce.client.ContainerExecInspect(tctx, ex.ID)
+	insp, err := dockerClient.ContainerExecInspect(tctx, ex.ID)
 	if err != nil {
 		timed := errors.Is(tctx.Err(), context.DeadlineExceeded)
 		return stdout.String(), stderr.String(), 0, timed, err
@@ -1334,8 +1356,12 @@ func (r *workspaceRuntime) copyFileOut(
 	ctx context.Context,
 	fullPath string,
 ) ([]byte, int64, string, string, error) {
-	rc, _, err := r.ce.client.CopyFromContainer(
-		ctx, r.ce.container.ID, fullPath,
+	dockerClient, containerID, err := r.ce.executionContainer()
+	if err != nil {
+		return nil, 0, "", "", err
+	}
+	rc, _, err := dockerClient.CopyFromContainer(
+		ctx, containerID, fullPath,
 	)
 	if err != nil {
 		return nil, 0, "", "", err

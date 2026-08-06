@@ -142,6 +142,36 @@ func TestWorkspaceRuntime_CreateAndCleanup(t *testing.T) {
 	require.NoError(t, rt.Cleanup(context.Background(), ws))
 }
 
+func TestWorkspaceRuntime_LifecycleGuardBranches(t *testing.T) {
+	var runtime *workspaceRuntime
+	_, err := runtime.CreateWorkspace(
+		context.Background(),
+		"nil-runtime",
+		codeexecutor.WorkspacePolicy{},
+	)
+	require.ErrorContains(t, err, "container executor not ready")
+	require.ErrorContains(
+		t,
+		runtime.stageInputsLocked(
+			context.Background(),
+			codeexecutor.Workspace{},
+			nil,
+		),
+		"container executor not ready",
+	)
+
+	runtime = &workspaceRuntime{ce: &CodeExecutor{closing: true}}
+	require.ErrorContains(
+		t,
+		runtime.stageInputsLocked(
+			context.Background(),
+			codeexecutor.Workspace{},
+			nil,
+		),
+		"closing or closed",
+	)
+}
+
 func TestWorkspaceRuntime_CreateWorkspace_AutoMapsInputs(t *testing.T) {
 	host := t.TempDir()
 	var cmds [][]string
@@ -1414,6 +1444,107 @@ func TestWorkspaceRuntime_RunProgram_TimedOut(t *testing.T) {
 	)
 	require.Error(t, err)
 	require.True(t, res.TimedOut)
+}
+
+func TestWorkspaceRuntime_RunProgram_TimedOutDuringStdCopy(t *testing.T) {
+	const timeout = 20 * time.Millisecond
+	streamAttached := make(chan struct{})
+	releaseStream := make(chan struct{})
+	handlerDone := make(chan struct{})
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/exec"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"` + testExec1 + `"}`))
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/start"):
+			hj, _ := w.(http.Hijacker)
+			conn, buf, _ := hj.Hijack()
+			_, _ = buf.WriteString(
+				"HTTP/1.1 101 Switching Protocols\r\n" +
+					"Connection: Upgrade\r\n" +
+					"Upgrade: tcp\r\n" +
+					"Content-Type: " +
+					"application/vnd.docker.raw-stream\r\n\r\n",
+			)
+			_ = buf.Flush()
+			close(streamAttached)
+			<-releaseStream
+			// Declare a four-byte stdout frame, then close after one byte.
+			// StdCopy must return an error after the timeout has elapsed.
+			_, _ = conn.Write([]byte{1, 0, 0, 0, 0, 0, 0, 4, 'x'})
+			_ = conn.Close()
+			close(handlerDone)
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}
+
+	cli, cleanup := fakeDocker(t, handler)
+	release := func() {
+		select {
+		case <-releaseStream:
+		default:
+			close(releaseStream)
+		}
+	}
+	t.Cleanup(func() {
+		release()
+		cleanup()
+	})
+	rt := &workspaceRuntime{
+		ce: &CodeExecutor{
+			client:    cli,
+			container: &tcontainer.Summary{ID: testCID},
+		},
+		cfg: runtimeConfig{runContainerBase: testRunBase},
+	}
+	type result struct {
+		run codeexecutor.RunResult
+		err error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		run, err := rt.RunProgram(
+			context.Background(),
+			codeexecutor.Workspace{
+				ID:   "w-stream-timeout",
+				Path: path.Join(testRunBase, "w-stream-timeout"),
+			},
+			codeexecutor.RunProgramSpec{
+				Cmd:     "bash",
+				Args:    []string{"-lc", "true"},
+				Timeout: timeout,
+			},
+		)
+		resultCh <- result{run: run, err: err}
+	}()
+
+	select {
+	case <-streamAttached:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Docker attach stream")
+	}
+	timer := time.NewTimer(3 * timeout)
+	defer timer.Stop()
+	<-timer.C
+	release()
+	var got result
+	select {
+	case got = <-resultCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for RunProgram result")
+	}
+	select {
+	case <-handlerDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Docker attach handler")
+	}
+	require.Error(t, got.err)
+	require.True(t, got.run.TimedOut)
 }
 
 func TestWorkspaceRuntime_RunProgram_NoDupWorkspaceEnv(t *testing.T) {

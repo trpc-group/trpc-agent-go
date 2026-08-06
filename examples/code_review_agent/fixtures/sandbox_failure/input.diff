@@ -1,0 +1,8 @@
+diff --git a/broken.go b/broken.go
+--- a/broken.go
++++ b/broken.go
+@@ -10,3 +10,3 @@
+ package broken
+ 
+-func Broken() {}
++func Broken() int { return "not an int" }

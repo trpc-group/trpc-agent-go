@@ -1,0 +1,20 @@
+diff --git a/database.go b/database.go
+new file mode 100644
+--- /dev/null
++++ b/database.go
+@@ -0,0 +1,9 @@
++package fixture
++
++import "database/sql"
++
++func update(db *sql.DB) error {
++	tx, err := db.Begin()
++	_ = tx
++	return err
++}
+diff --git a/database_test.go b/database_test.go
+new file mode 100644
+--- /dev/null
++++ b/database_test.go
+@@ -0,0 +1 @@
++package fixture
