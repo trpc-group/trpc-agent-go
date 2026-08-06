@@ -43,7 +43,7 @@ var (
 	)
 	capitalizedTokenPattern        = regexp.MustCompile(`\b[A-Z][A-Za-z0-9_-]*\b`)
 	destructiveFactBoundaryPattern = regexp.MustCompile(
-		`(?i)[.!?;。！？；]+|\s+(?:and|but|or|while|whereas)\s+|(?:，|,)?(?:并且|但是|但|而且|同时|然后)(?:，|,)?`,
+		`(?i)[.!?;。！？；\r\n]+|\s+(?:and|but|or|while|whereas)\s+|(?:，|,)?(?:并且|但是|但|而且|同时|然后)(?:，|,)?`,
 	)
 	destructiveRequestGenericTokens = stringSet([]string{
 		"a", "absolutely", "about", "all", "an", "and", "any", "anything", "can", "clear", "completely",
@@ -268,11 +268,24 @@ func destructiveTargetBoundToEvidence(
 	memoryText string,
 	topics []string,
 ) bool {
+	facts := make([]string, 0, 1)
 	for _, fact := range destructiveFactBoundaryPattern.Split(memoryText, -1) {
 		factTokens := stringSet(BuildSearchTokens(fact))
-		if destructiveTokensMatch(targetTokens, factTokens) {
-			return true
+		if len(factTokens) > 0 {
+			facts = append(facts, fact)
 		}
+	}
+	// Delete removes the complete entry. Refuse automatic deletion when the
+	// entry contains multiple independent facts, even if one fact matches, so
+	// unrelated information cannot be removed with the requested target.
+	if len(facts) > 1 {
+		return false
+	}
+	if len(facts) == 1 && destructiveTokensMatch(
+		targetTokens,
+		stringSet(BuildSearchTokens(facts[0])),
+	) {
+		return true
 	}
 	// Topics are independent evidence segments. Never combine topics with one
 	// another or with body text to authorize a destructive operation.

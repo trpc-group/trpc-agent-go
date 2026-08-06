@@ -281,8 +281,10 @@ memExtractor := extractor.NewExtractor(
 )
 ```
 
-Extractor decorator 必须原样保留 `Metadata()` 返回的未知条目。内置 extractor
-使用 opaque metadata value 在 wrapper 间保留所选 policy；decorator 不需要解析它。
+Policy 是内置 extractor 的能力，Auto memory worker 在构造时读取并固定该配置。
+`Metadata()` 只提供描述信息，不参与运行时控制。自定义 extractor 或包装内置
+extractor 的 decorator 使用 Merge Similar；如需其他策略，应直接配置并传入内置
+extractor。
 
 Update policy 只约束后台 Auto extraction 产生的操作。Agent 或应用显式调用
 `memory_update` 时，工具语义保持不变。
