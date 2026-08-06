@@ -63,11 +63,25 @@ if [[ -n "${canonical_repo_path}" && "${origin_url}" != *"${canonical_repo_path}
   echo "Detected fork repository (module: ${root_module}, origin: ${origin_url})"
 
   upstream_url="https://github.com/${canonical_repo_path}.git"
-  echo "Attempting to fetch tags from upstream: ${upstream_url}"
-  if git fetch "${upstream_url}" "+refs/tags/*:refs/tags/*" 2>/dev/null; then
-    echo "Successfully fetched upstream tags"
+  echo "Attempting to fetch branches and tags from upstream: ${upstream_url}"
+
+  fetch_args=(
+    --no-recurse-submodules
+    --force
+  )
+
+  # GitHub Actions checkout 默认可能是浅克隆。
+  # 必须补全历史，否则 pseudo-version 对应的 commit 无法被 git cat-file 找到。
+  if [[ "$(git rev-parse --is-shallow-repository 2>/dev/null || echo false)" == "true" ]]; then
+    fetch_args+=(--unshallow)
+  fi
+
+  if git fetch "${fetch_args[@]}" "${upstream_url}" \
+    "+refs/heads/*:refs/remotes/version-check-upstream/*" \
+    "+refs/tags/*:refs/tags/*" 2>/dev/null; then
+    echo "Successfully fetched upstream branches and tags"
   else
-    echo "::warning::Failed to fetch upstream tags, will skip tag validation"
+    echo "::warning::Failed to fetch upstream history, will skip tag validation"
     skip_tag_validation=true
   fi
 elif [[ -z "${canonical_repo_path}" && "${origin_url}" != *"${root_module}"* ]]; then
@@ -140,6 +154,27 @@ flagged_files=()
 is_repo_module_path() {
   local dep_path="$1"
   [[ "${dep_path}" == "${root_module}" || "${dep_path}" == "${root_module}/"* ]]
+}
+
+has_local_replace() {
+  local mod_dir="$1"
+  local dep_path="$2"
+
+  (
+    cd "${mod_dir}" &&
+      go mod edit -json 2>/dev/null |
+      jq -e --arg dep_path "${dep_path}" '
+        [
+          .Replace[]?
+          | select(
+              .Old.Path == $dep_path
+              and ((.New.Version // "") == "")
+              and ((.New.Path // "") != "")
+            )
+        ]
+        | length > 0
+      ' >/dev/null 2>&1
+  )
 }
 
 validate_resolvable_version() {
@@ -229,7 +264,11 @@ for go_mod in "${go_mod_files[@]}"; do
     line_number="$(require_line_number "${go_mod}" "${dep_path}")"
     [ -z "${line_number}" ] && line_number=1
 
-    if ! validate_resolvable_version "${rel_path}" "${line_number}" "${dep_path}" "${dep_ver}"; then
+    # 如果该依赖已经 replace 到本地目录，实际构建不会下载远程模块，
+    # 因此跳过 go mod download，但后面的 tag/pseudo-version commit 校验仍然保留。
+    if has_local_replace "${mod_dir}" "${dep_path}"; then
+      echo "Skipping remote resolution for ${dep_path}@${dep_ver}: local replace found in ${rel_path}"
+    elif ! validate_resolvable_version "${rel_path}" "${line_number}" "${dep_path}" "${dep_ver}"; then
       has_error=true
       has_match=true
     fi

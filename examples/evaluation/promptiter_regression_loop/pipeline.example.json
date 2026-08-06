@@ -1,0 +1,22 @@
+{
+  "promptType": "agent",
+  "trainEvalSetID": "nba-commentary-train",
+  "validationEvalSetID": "nba-commentary-validation",
+  "metricFileID": "sports-commentary",
+  "candidateModelName": "deepseek-v4-flash",
+  "judgeModelName": "deepseek-v4-flash",
+  "workerModelName": "deepseek-v4-flash",
+  "minScoreGain": 0.01,
+  "maxRounds": 4,
+  "targetScore": 1.0,
+  "keyCaseIDs": ["validation_01_nba_empty_48"],
+  "costPerEval": 0.01,
+  "costPerWorker": 0.05,
+  "costBudget": 0,
+  "fake": true,
+  "fakeScenario": "happy",
+  "attribution": "auto",
+  "attributionModelName": "deepseek-v4-flash",
+  "dataDir": "data",
+  "outputDir": "output"
+}

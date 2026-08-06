@@ -11,11 +11,12 @@ package processor
 
 import (
 	"context"
-	"encoding/json"
 	"reflect"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/jsonutils"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -94,7 +95,7 @@ func (p *OutputResponseProcessor) emitStructuredOutput(
 		} else {
 			instance = reflect.New(invocation.StructuredOutputType).Interface()
 		}
-		if err := json.Unmarshal([]byte(jsonObject), instance); err != nil {
+		if err := jsonutils.DecodeFlexibleJSON(sanitizeJSONObject(jsonObject), instance); err != nil {
 			log.ErrorfContext(
 				ctx,
 				"Structured output unmarshal failed: %v",
@@ -118,7 +119,7 @@ func (p *OutputResponseProcessor) emitStructuredOutput(
 		return
 	}
 	var parsed any
-	if err := json.Unmarshal([]byte(jsonObject), &parsed); err != nil {
+	if err := jsonutils.DecodeFlexibleJSON(sanitizeJSONObject(jsonObject), &parsed); err != nil {
 		log.ErrorfContext(
 			ctx,
 			"Structured output unmarshal failed: %v",
@@ -149,7 +150,7 @@ func (p *OutputResponseProcessor) handleOutputKey(ctx context.Context, invocatio
 			return
 		}
 		var parsedJSON any
-		if err := json.Unmarshal([]byte(jsonObject), &parsedJSON); err != nil {
+		if err := jsonutils.DecodeFlexibleJSON(sanitizeJSONObject(jsonObject), &parsedJSON); err != nil {
 			log.WarnfContext(
 				ctx,
 				"Failed to parse output as JSON for output_schema "+
@@ -202,6 +203,60 @@ func extractFirstJSONObject(s string) (string, bool) {
 		return "", false
 	}
 	return scanBalancedJSON(s, start)
+}
+
+// sanitizeJSONObject removes bytes that are not part of valid JSON's structural
+// grammar from outside string literals. Models sometimes emit stray characters
+// (e.g. mojibake such as 'ç') between tokens; dropping them lets an otherwise
+// well-formed object still parse via DecodeFlexibleJSON. Bytes inside string
+// literals are preserved verbatim so legitimate non-ASCII content is untouched.
+func sanitizeJSONObject(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	inString := false
+	escaped := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if inString {
+			b.WriteByte(c)
+			if escaped {
+				escaped = false
+			} else if c == '\\' {
+				escaped = true
+			} else if c == '"' {
+				inString = false
+			}
+			continue
+		}
+		if c == '"' {
+			inString = true
+			b.WriteByte(c)
+			continue
+		}
+		if isJSONGrammarByte(c) {
+			b.WriteByte(c)
+		}
+		// Otherwise the byte is stray (e.g. a non-ASCII character injected by the
+		// model between tokens) and is dropped.
+	}
+	return b.String()
+}
+
+// isJSONGrammarByte reports whether b is a byte that may legitimately appear
+// outside a string literal in JSON (structural chars, whitespace, number chars,
+// and the letters used by the true/false/null literals).
+func isJSONGrammarByte(b byte) bool {
+	switch b {
+	case ' ', '\t', '\n', '\r',
+		'{', '}', '[', ']', ':', ',', '"',
+		'0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
+		'.', '+', '-', 'e', 'E',
+		't', 'f', 'n', 'T', 'F', 'N',
+		'a', 'b', 'c', 'd', 'g', 'h', 'i', 'j', 'k', 'l', 'm',
+		'o', 'p', 'q', 'r', 's', 'u', 'v', 'w', 'x', 'y', 'z':
+		return true
+	}
+	return false
 }
 
 // findJSONStart finds the index of the first opening bracket in s.

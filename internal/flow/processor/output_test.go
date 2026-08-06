@@ -390,3 +390,108 @@ func TestOutputResponseProcessor_ExtractFinalContent(t *testing.T) {
 		t.Fatalf("expected ok content")
 	}
 }
+
+func TestSanitizeJSONObject(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "clean_json_unchanged",
+			input: `{"a":"b"}`,
+			want:  `{"a":"b"}`,
+		},
+		{
+			name:  "stray_cedilla", // original bug: invalid char 'ç' after key:value
+			input: `{"a":"b"}ç`,
+			want:  `{"a":"b"}`,
+		},
+		{
+			name:  "stray_nonascii_between_tokens",
+			input: `{"a"ç:ç"b"ç}`,
+			want:  `{"a":"b"}`,
+		},
+		{
+			name:  "nonascii_inside_string_preserved",
+			input: `{"city":"北京"}`,
+			want:  `{"city":"北京"}`,
+		},
+		{
+			name:  "stray_before_json",
+			input: `ç{"a":"b"}`,
+			want:  `{"a":"b"}`,
+		},
+		{
+			name:  "empty_input",
+			input: "",
+			want:  "",
+		},
+		{
+			name:  "only_stray_chars",
+			input: "ççç",
+			want:  "",
+		},
+		{
+			name:  "escaped_quotes_in_string_preserved",
+			input: `{"text":"a \"quoted\" word"}`,
+			want:  `{"text":"a \"quoted\" word"}`,
+		},
+		{
+			name:  "escaped_backslash_in_string_preserved",
+			input: `{"path":"C:\\dir"}`,
+			want:  `{"path":"C:\\dir"}`,
+		},
+		{
+			name:  "nested_object_with_stray",
+			input: `{"outer":{"inner":"val"}}ç`,
+			want:  `{"outer":{"inner":"val"}}`,
+		},
+		{
+			name:  "array_with_stray",
+			input: `[1,2,3]ç`,
+			want:  `[1,2,3]`,
+		},
+		{
+			name:  "stray_num_and_chinese_inside_string",
+			input: `{"score":42.5,"city":"东京","n":-3}`,
+			want:  `{"score":42.5,"city":"东京","n":-3}`,
+		},
+		{
+			name:  "stray_between_array_items",
+			input: `[1,ç2,ç3]`,
+			want:  `[1,2,3]`,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := sanitizeJSONObject(tc.input)
+			if got != tc.want {
+				t.Fatalf("input=%q: got %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestIsJSONGrammarByte(t *testing.T) {
+	// Valid grammar bytes.
+	valid := []byte{
+		' ', '\t', '\n', '\r',
+		'{', '}', '[', ']', ':', ',', '"',
+		'0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
+		'.', '+', '-', 'e', 'E',
+		't', 'f', 'n',
+	}
+	for _, b := range valid {
+		if !isJSONGrammarByte(b) {
+			t.Errorf("byte %q (0x%02x) should be valid JSON grammar", b, b)
+		}
+	}
+	// Non-grammar bytes.
+	invalid := []byte{0xE7, '(', 'A', 'B', ';', '#', '!', '@', '~', '?'}
+	for _, b := range invalid {
+		if isJSONGrammarByte(b) {
+			t.Errorf("byte %q (0x%02x) should NOT be valid JSON grammar", b, b)
+		}
+	}
+}
