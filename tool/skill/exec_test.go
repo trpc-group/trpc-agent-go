@@ -709,8 +709,8 @@ func TestExecTool_DeclarationsAndHelpers(t *testing.T) {
 	pollTool := NewPollSessionTool(execTool)
 	killTool := NewKillSessionTool(execTool)
 
-	require.Equal(t, "skill_exec", execTool.Declaration().Name)
-	require.Equal(t, "skill_write_stdin", writeTool.Declaration().Name)
+	require.Equal(t, tool.SkillExecToolName, execTool.Declaration().Name)
+	require.Equal(t, tool.SkillWriteStdinToolName, writeTool.Declaration().Name)
 	require.Equal(t, "skill_poll_session", pollTool.Declaration().Name)
 	require.Equal(t, "skill_kill_session", killTool.Declaration().Name)
 

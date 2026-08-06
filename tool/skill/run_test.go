@@ -38,6 +38,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/safety"
 )
 
 const (
@@ -2918,7 +2920,7 @@ func TestRunTool_Declaration(t *testing.T) {
 	rt := NewRunTool(nil, nil)
 	d := rt.Declaration()
 	require.NotNil(t, d)
-	require.Equal(t, "skill_run", d.Name)
+	require.Equal(t, tool.SkillRunToolName, d.Name)
 	require.NotNil(t, d.InputSchema)
 	require.Contains(t, d.InputSchema.Required, "skill")
 	require.Contains(t, d.InputSchema.Required, "command")
@@ -3056,6 +3058,67 @@ func TestRunTool_OutputsSpec_Inline_NoSave(t *testing.T) {
 	require.Equal(t, outATxt, out.OutputFiles[0].Name)
 	require.Contains(t, out.OutputFiles[0].Content, contentHi)
 	require.Len(t, out.ArtifactFiles, 0)
+}
+
+func TestRunTool_OutputsSpec_PostExecutionSafetyBoundsInlineContent(
+	t *testing.T,
+) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	policy := safety.DefaultPolicy()
+	policy.MaxOutputBytes = 10
+	largeContent := strings.Repeat("x", 64)
+	fs := &stubFS{
+		outputManifest: codeexecutor.OutputManifest{
+			Files: []codeexecutor.FileRef{{
+				Name:      outATxt,
+				MIMEType:  "text/plain",
+				Content:   largeContent,
+				SizeBytes: int64(len(largeContent)),
+			}},
+		},
+	}
+	rt := NewRunTool(repo, &engineExec{eng: &managedEngine{
+		m: &stubManager{ws: codeexecutor.Workspace{
+			ID:   "skill-bounded-output",
+			Path: filepath.ToSlash(filepath.Join(root, "ws")),
+		}},
+		f: fs,
+		r: &stubRunner{res: codeexecutor.RunResult{ExitCode: 0}},
+	}}, WithSafetyScanner(safety.NewScanner(policy)))
+
+	args := runInput{
+		Skill:   testSkillName,
+		Command: "echo ok",
+		Outputs: &codeexecutor.OutputSpec{
+			Globs:         []string{outGlobTxt},
+			Inline:        true,
+			MaxTotalBytes: int64(policy.MaxOutputBytes * 4),
+		},
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(context.Background(), enc)
+	require.NoError(t, err)
+	out := res.(runOutput)
+	require.Len(t, fs.collectOutputs, 1)
+	require.Equal(t, args.Outputs.MaxTotalBytes,
+		fs.collectOutputs[0].MaxTotalBytes)
+	require.Greater(t, fs.collectOutputs[0].MaxTotalBytes,
+		int64(policy.MaxOutputBytes))
+	require.Len(t, out.OutputFiles, 1)
+	require.True(t, out.OutputFiles[0].Truncated)
+	require.LessOrEqual(t, len(out.OutputFiles[0].Content),
+		policy.MaxOutputBytes)
+	if out.PrimaryOutput != nil {
+		require.LessOrEqual(t,
+			len(out.OutputFiles[0].Content)+
+				len(out.PrimaryOutput.Content),
+			policy.MaxOutputBytes)
+	}
 }
 
 func TestRunTool_OutputsSpec_PartialMetadataCommitReturnsFiles(
@@ -5124,6 +5187,45 @@ func TestBuildRunOutputWithLimits_UsesDefaultsWhenUnset(t *testing.T) {
 	require.Equal(t, "out/a.txt", out.PrimaryOutput.Name)
 }
 
+func TestRunTool_scanRunOutput_TruncatesInlineContent(t *testing.T) {
+	policy := safety.DefaultPolicy()
+	policy.MaxOutputBytes = 10
+	rt := NewRunTool(nil, nil, WithSafetyScanner(safety.NewScanner(policy)))
+	long := "abcdefghijklmnop"
+	stdout := "abcdef"
+	out := rt.scanRunOutput(context.Background(), runInput{
+		Skill:   testSkillName,
+		Command: "echo ok",
+	}, runOutput{
+		Stdout: stdout,
+		OutputFiles: []runFile{
+			{File: codeexecutor.File{
+				Name:     outATxt,
+				Content:  long,
+				MIMEType: "text/plain",
+			}},
+		},
+		PrimaryOutput: &runFile{File: codeexecutor.File{
+			Name:     outATxt,
+			Content:  long,
+			MIMEType: "text/plain",
+		}},
+	})
+
+	require.Equal(t, stdout, out.Stdout)
+	require.Empty(t, out.Stderr)
+	require.Equal(t, "abcd", out.OutputFiles[0].Content)
+	require.True(t, out.OutputFiles[0].Truncated)
+	require.Equal(t, int64(len(long)), out.OutputFiles[0].SizeBytes)
+	require.Empty(t, out.PrimaryOutput.Content)
+	require.True(t, out.PrimaryOutput.Truncated)
+	require.Equal(t, int64(len(long)), out.PrimaryOutput.SizeBytes)
+	require.LessOrEqual(t,
+		len(out.Stdout)+len(out.Stderr)+
+			len(out.OutputFiles[0].Content)+len(out.PrimaryOutput.Content),
+		policy.MaxOutputBytes)
+}
+
 func TestBuildRunOutputWithLimits_PreservesUTF8Boundary(t *testing.T) {
 	limits := RunOutputLimits{
 		StdoutStderrBytes:  5,
@@ -5554,8 +5656,11 @@ func TestSkillStagingHelpers_EarlyReturns(t *testing.T) {
 }
 
 type stubFS struct {
-	collectFiles []codeexecutor.File
-	collectErr   error
+	collectFiles     []codeexecutor.File
+	collectErr       error
+	outputManifest   codeexecutor.OutputManifest
+	collectOutputs   []codeexecutor.OutputSpec
+	collectOutputErr error
 
 	putErr   error
 	putCalls int
@@ -5637,12 +5742,13 @@ func (*stubFS) StageInputs(
 	return nil
 }
 
-func (*stubFS) CollectOutputs(
+func (s *stubFS) CollectOutputs(
 	_ context.Context,
 	_ codeexecutor.Workspace,
-	_ codeexecutor.OutputSpec,
+	spec codeexecutor.OutputSpec,
 ) (codeexecutor.OutputManifest, error) {
-	return codeexecutor.OutputManifest{}, nil
+	s.collectOutputs = append(s.collectOutputs, spec)
+	return s.outputManifest, s.collectOutputErr
 }
 
 type stubManager struct {

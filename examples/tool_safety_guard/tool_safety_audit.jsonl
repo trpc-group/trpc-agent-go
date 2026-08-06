@@ -1,0 +1,12 @@
+{"tool_name":"workspace_exec","backend":"workspace_exec","decision":"allow","risk_level":"low","duration_ms":0,"redacted":false,"blocked":false,"scanned_at":"1970-01-01T00:00:00Z"}
+{"tool_name":"workspace_exec","backend":"workspace_exec","decision":"deny","risk_level":"critical","rule_id":"TSG-CMD-001","duration_ms":0,"redacted":false,"blocked":true,"scanned_at":"1970-01-01T00:00:00Z"}
+{"tool_name":"workspace_exec","backend":"workspace_exec","decision":"deny","risk_level":"critical","rule_id":"TSG-PATH-001","duration_ms":0,"redacted":true,"blocked":true,"scanned_at":"1970-01-01T00:00:00Z"}
+{"tool_name":"workspace_exec","backend":"workspace_exec","decision":"deny","risk_level":"critical","rule_id":"TSG-NET-001","duration_ms":0,"redacted":false,"blocked":true,"scanned_at":"1970-01-01T00:00:00Z"}
+{"tool_name":"workspace_exec","backend":"workspace_exec","decision":"allow","risk_level":"low","duration_ms":0,"redacted":false,"blocked":false,"scanned_at":"1970-01-01T00:00:00Z"}
+{"tool_name":"workspace_exec","backend":"workspace_exec","decision":"ask","risk_level":"high","rule_id":"TSG-SHELL-001","duration_ms":0,"redacted":false,"blocked":true,"scanned_at":"1970-01-01T00:00:00Z"}
+{"tool_name":"workspace_exec","backend":"workspace_exec","decision":"ask","risk_level":"medium","rule_id":"TSG-SHELL-003","duration_ms":0,"redacted":false,"blocked":true,"scanned_at":"1970-01-01T00:00:00Z"}
+{"tool_name":"workspace_exec","backend":"workspace_exec","decision":"ask","risk_level":"high","rule_id":"TSG-DEP-001","duration_ms":0,"redacted":false,"blocked":true,"scanned_at":"1970-01-01T00:00:00Z"}
+{"tool_name":"workspace_exec","backend":"workspace_exec","decision":"ask","risk_level":"medium","rule_id":"TSG-RES-001","duration_ms":0,"redacted":false,"blocked":true,"scanned_at":"1970-01-01T00:00:00Z"}
+{"tool_name":"workspace_exec","backend":"workspace_exec","decision":"ask","risk_level":"high","rule_id":"TSG-RES-002","duration_ms":0,"redacted":false,"blocked":true,"scanned_at":"1970-01-01T00:00:00Z"}
+{"tool_name":"hostexec_exec_command","backend":"hostexec","decision":"ask","risk_level":"high","rule_id":"TSG-HOST-001","duration_ms":0,"redacted":false,"blocked":true,"scanned_at":"1970-01-01T00:00:00Z"}
+{"tool_name":"workspace_exec","backend":"workspace_exec","decision":"ask","risk_level":"high","rule_id":"TSG-PARSE-001","duration_ms":0,"redacted":false,"blocked":true,"scanned_at":"1970-01-01T00:00:00Z"}
