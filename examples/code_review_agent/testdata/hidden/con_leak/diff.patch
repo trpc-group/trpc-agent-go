@@ -1,0 +1,14 @@
+diff --git a/pkg/bg/run.go b/pkg/bg/run.go
+index 1111111..2222222 100644
+--- a/pkg/bg/run.go
++++ b/pkg/bg/run.go
+@@ -1,4 +1,8 @@
+ package bg
+ 
+-func Run() {}
++func Run() {
++	go func() {
++		work()
++	}()
++}
++func work() {}

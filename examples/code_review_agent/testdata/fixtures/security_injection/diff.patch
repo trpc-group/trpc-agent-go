@@ -1,0 +1,17 @@
+diff --git a/pkg/db/query.go b/pkg/db/query.go
+index 1111111..2222222 100644
+--- a/pkg/db/query.go
++++ b/pkg/db/query.go
+@@ -1,5 +1,12 @@
+ package db
+ 
++import "crypto/tls"
++
+ // FindUser builds a query.
+-func FindUser(id string) string {
+-	return "ok"
++func FindUser(id string) string {
++	q := "SELECT * FROM users WHERE id = '" + id + "'"
++	_ = &tls.Config{InsecureSkipVerify: true}
++	return q
+ }

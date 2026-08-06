@@ -1,0 +1,34 @@
+diff --git a/pkg/ok/ok.go b/pkg/ok/ok.go
+index 1111111..2222222 100644
+--- a/pkg/ok/ok.go
++++ b/pkg/ok/ok.go
+@@ -1,5 +1,10 @@
+ package ok
+
++import "context"
++
+-func Hello(n string) string { return n }
++func Hello(ctx context.Context, n string) string {
++	if ctx.Err() != nil {
++		return ""
++	}
++	return "hi " + n
++}
+diff --git a/pkg/ok/ok_test.go b/pkg/ok/ok_test.go
+index 1111111..2222222 100644
+--- a/pkg/ok/ok_test.go
++++ b/pkg/ok/ok_test.go
+@@ -1,6 +1,9 @@
+ package ok
+
+ import (
++	"context"
+ 	"testing"
+ )
+
+ func TestHello(t *testing.T) {
+-	_ = Hello("x")
++	if Hello(context.Background(), "x") == "" {
++		t.Fatal("empty")
++	}
+ }

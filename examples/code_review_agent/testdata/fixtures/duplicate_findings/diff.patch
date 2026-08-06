@@ -1,0 +1,16 @@
+diff --git a/pkg/worker/worker.go b/pkg/worker/worker.go
+index 1111111..2222222 100644
+--- a/pkg/worker/worker.go
++++ b/pkg/worker/worker.go
+@@ -1,5 +1,10 @@
+ package worker
+ 
+ // Start launches background work.
+-func Start() {}
++func Start() {
++	go func() {
++		doWork()
++	}()
++}
++
++func doWork() {}

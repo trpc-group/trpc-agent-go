@@ -1,0 +1,24 @@
+diff --git a/pkg/noop/noop.go b/pkg/noop/noop.go
+index 1111111..2222222 100644
+--- a/pkg/noop/noop.go
++++ b/pkg/noop/noop.go
+@@ -1,4 +1,5 @@
+ package noop
+ 
+ // N is a no-op helper.
+-func N() {}
++func N() {}
++// sandbox failure is injected by orchestrator for this fixture
+diff --git a/pkg/noop/noop_test.go b/pkg/noop/noop_test.go
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/pkg/noop/noop_test.go
+@@ -0,0 +1,7 @@
++package noop
++
++import "testing"
++
++func TestN(t *testing.T) {
++	N()
++}

@@ -1,0 +1,16 @@
+diff --git a/pkg/config/config.go b/pkg/config/config.go
+index 1111111..2222222 100644
+--- a/pkg/config/config.go
++++ b/pkg/config/config.go
+@@ -1,5 +1,10 @@
+ package config
+ 
+ // Load loads configuration.
+-func Load() string { return "" }
++func Load() map[string]string {
++	return map[string]string{
++		"api_key":  "sk-abcdefghijklmnopqrstuvwxyz012345",
++		"password": "SuperSecretPassword123",
++		"aws_key":  "AKIAIOSFODNN7EXAMPLE",
++	}
++}

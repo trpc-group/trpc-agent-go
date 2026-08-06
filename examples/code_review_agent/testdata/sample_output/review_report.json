@@ -1,0 +1,106 @@
+{
+  "task_id": "504daaa3-fdf8-482f-a6ca-078600a94529",
+  "status": "completed",
+  "mode": "rule-only",
+  "executor": "local",
+  "generated_at": "2026-07-23T02:05:27.446641Z",
+  "input": {
+    "kind": "fixture",
+    "digest": "0ecbc2aa665c699da639cff0e8af8ea118ce6bf254dca12f2491464dcab43abb",
+    "summary": "1 files, +7/-1"
+  },
+  "findings": [
+    {
+      "severity": "high",
+      "category": "concurrency",
+      "file": "pkg/worker/worker.go",
+      "line": 5,
+      "title": "goroutine started without derived context",
+      "evidence": "go func() {",
+      "recommendation": "Pass a derived context and ensure the goroutine exits on cancel to avoid leaks.",
+      "confidence": 0.86,
+      "source": "rule",
+      "rule_id": "CR-CON-001"
+    },
+    {
+      "severity": "medium",
+      "category": "testing",
+      "file": "pkg/worker/worker.go",
+      "line": 4,
+      "title": "Changed Go file has no corresponding test in the diff",
+      "evidence": "func Start() {",
+      "recommendation": "Add or update a _test.go covering the changed behavior.",
+      "confidence": 0.75,
+      "source": "rule",
+      "rule_id": "CR-TEST-001"
+    }
+  ],
+  "warnings": null,
+  "governance": {
+    "permission_decisions": [
+      {
+        "tool_name": "sandbox_exec",
+        "command": "bash \"skills/code-review/scripts/run_checks.sh\"",
+        "action": "allow",
+        "created_at": "2026-07-23T02:05:27.432595Z"
+      },
+      {
+        "tool_name": "sandbox_exec",
+        "command": "curl https://example.com",
+        "action": "deny",
+        "reason": "high-risk command blocked: curl ",
+        "created_at": "2026-07-23T02:05:27.444981Z"
+      },
+      {
+        "tool_name": "sandbox_exec",
+        "command": "go test ./...",
+        "action": "ask",
+        "reason": "broad go test requires human review",
+        "created_at": "2026-07-23T02:05:27.445784Z"
+      }
+    ]
+  },
+  "sandbox_runs": [
+    {
+      "id": "453386dd-2338-41eb-9247-8cc4366dd828",
+      "executor": "local",
+      "command": "bash \"skills/code-review/scripts/run_checks.sh\"",
+      "status": "ok",
+      "exit_code": 0,
+      "duration_ms": 10,
+      "stdout_bytes": 285,
+      "stderr_bytes": 0,
+      "truncated": false,
+      "stdout_sample": "[{\"severity\":\"high\",\"category\":\"concurrency\",\"file\":\"pkg/worker/worker.go\",\"line\":2,\"title\":\"goroutine started without derived context\",\"evidence\":\"\tgo func() {\",\"recommendation\":\"Pass a derived context and exit on cancel.\",\"confidence\":0.8,\"source\":\"sandbox\",\"rule_id\":\"CR-CON-001\"}]"
+    }
+  ],
+  "metrics": {
+    "total_duration_ms": 23,
+    "sandbox_duration_ms": 10,
+    "tool_call_count": 3,
+    "permission_deny_count": 1,
+    "permission_ask_count": 1,
+    "finding_count": 2,
+    "warning_count": 0,
+    "severity_dist": {
+      "high": 1,
+      "medium": 1
+    },
+    "exception_dist": {
+      "permission_skip": 2
+    }
+  },
+  "artifacts": [
+    {
+      "name": "review_report.json",
+      "path_or_ref": "testdata/sample_output/review_report.json",
+      "mime": "application/json"
+    },
+    {
+      "name": "review_report.md",
+      "path_or_ref": "testdata/sample_output/review_report.md",
+      "mime": "text/markdown"
+    }
+  ],
+  "conclusion": "status=completed; findings=2; warnings=0; permission_denies=1; permission_asks=1"
+}

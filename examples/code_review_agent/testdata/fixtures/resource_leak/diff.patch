@@ -1,0 +1,19 @@
+diff --git a/pkg/fileutil/read.go b/pkg/fileutil/read.go
+index 1111111..2222222 100644
+--- a/pkg/fileutil/read.go
++++ b/pkg/fileutil/read.go
+@@ -1,5 +1,12 @@
+ package fileutil
+ 
++import "os"
++
+ // ReadAll reads a file.
+-func ReadAll(path string) ([]byte, error) {
+-	return nil, nil
++func ReadAll(path string) ([]byte, error) {
++	f, err := os.Open(path)
++	if err != nil {
++		return nil, err
++	}
++	return nil, nil
+ }

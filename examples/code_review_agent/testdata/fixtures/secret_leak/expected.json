@@ -1,0 +1,7 @@
+{
+  "expect_rules": [
+    "CR-SEC-002"
+  ],
+  "min_findings": 1,
+  "no_plain_secrets": true
+}

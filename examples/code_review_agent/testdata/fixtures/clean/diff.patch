@@ -1,0 +1,36 @@
+diff --git a/pkg/greeter/greeter.go b/pkg/greeter/greeter.go
+index 1111111..2222222 100644
+--- a/pkg/greeter/greeter.go
++++ b/pkg/greeter/greeter.go
+@@ -1,8 +1,12 @@
+ package greeter
+ 
++import "context"
++
+ // Greet returns a greeting.
+-func Greet(name string) string {
+-	return "hello " + name
++func Greet(ctx context.Context, name string) string {
++	if ctx.Err() != nil {
++		return ""
++	}
++	return "hello " + name
+ }
+diff --git a/pkg/greeter/greeter_test.go b/pkg/greeter/greeter_test.go
+index 3333333..4444444 100644
+--- a/pkg/greeter/greeter_test.go
++++ b/pkg/greeter/greeter_test.go
+@@ -1,6 +1,10 @@
+ package greeter
+ 
+ import (
++	"context"
+ 	"testing"
+ )
+ 
+ func TestGreet(t *testing.T) {
+-	if Greet("a") == "" {
++	if Greet(context.Background(), "a") == "" {
+ 		t.Fatal("empty")
+ 	}
+ }

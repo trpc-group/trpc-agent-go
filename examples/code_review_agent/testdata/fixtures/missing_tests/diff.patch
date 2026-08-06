@@ -1,0 +1,12 @@
+diff --git a/pkg/billing/calc.go b/pkg/billing/calc.go
+index 1111111..2222222 100644
+--- a/pkg/billing/calc.go
++++ b/pkg/billing/calc.go
+@@ -1,5 +1,8 @@
+ package billing
+ 
+ // Total computes the total.
+-func Total(a, b int) int { return a }
++func Total(a, b int) int {
++	return a + b
++}
