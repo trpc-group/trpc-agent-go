@@ -20,9 +20,10 @@ import (
 
 // RecursiveChunking implements a recursive chunking strategy that uses a hierarchy of separators.
 type RecursiveChunking struct {
-	chunkSize  int
-	overlap    int
-	separators []string
+	chunkSize      int
+	overlap        int
+	separators     []string
+	trimWhitespace bool
 }
 
 // RecursiveOption represents a functional option for configuring RecursiveChunking.
@@ -46,6 +47,15 @@ func WithRecursiveOverlap(overlap int) RecursiveOption {
 func WithRecursiveSeparators(separators []string) RecursiveOption {
 	return func(rc *RecursiveChunking) {
 		rc.separators = separators
+	}
+}
+
+// WithRecursiveWhitespaceTrimming enables the legacy behavior that trims
+// leading and trailing whitespace from the document, every line, and chunk
+// boundaries.
+func WithRecursiveWhitespaceTrimming() RecursiveOption {
+	return func(rc *RecursiveChunking) {
+		rc.trimWhitespace = true
 	}
 }
 
@@ -85,7 +95,13 @@ func (r *RecursiveChunking) Chunk(doc *document.Document) ([]*document.Document,
 		return nil, ErrEmptyDocument
 	}
 
-	content := cleanText(doc.Content)
+	content := cleanTextWithWhitespaceTrimming(
+		doc.Content,
+		r.trimWhitespace,
+	)
+	if isBlankText(content) {
+		return nil, ErrEmptyDocument
+	}
 	coreSize := r.chunkSize
 	if r.overlap > 0 {
 		coreSize = r.chunkSize - r.overlap
@@ -178,8 +194,11 @@ func (r *RecursiveChunking) mergeFragments(
 	currentSize := 0
 
 	flush := func() {
-		content := strings.TrimSpace(current.String())
-		if content != "" {
+		content := current.String()
+		if r.trimWhitespace {
+			content = strings.TrimSpace(content)
+		}
+		if !isBlankText(content) {
 			chunks = append(chunks, content)
 		}
 		current.Reset()
@@ -271,12 +290,13 @@ func (r *RecursiveChunking) applyOverlap(
 			metadata[k] = v
 		}
 
-		overlappedContent, actualOverlap := joinWithOverlap(
+		overlappedContent, actualOverlap := joinWithOverlapMode(
 			overlappedChunks[len(overlappedChunks)-1].Content,
 			chunks[i].Content,
 			r.overlap,
 			r.chunkSize,
 			separators[i],
+			r.trimWhitespace,
 		)
 		if actualOverlap > 0 {
 			metadata[source.MetaOverlappedContentSize] =

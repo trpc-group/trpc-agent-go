@@ -19,9 +19,10 @@ import (
 
 // FixedSizeChunking implements a chunking strategy that splits text into fixed-size chunks.
 type FixedSizeChunking struct {
-	chunkSize     int
-	overlap       int
-	preserveLines bool
+	chunkSize      int
+	overlap        int
+	preserveLines  bool
+	trimWhitespace bool
 }
 
 // Option represents a functional option for configuring FixedSizeChunking.
@@ -46,6 +47,14 @@ func WithOverlap(overlap int) Option {
 func WithPreserveLines() Option {
 	return func(fsc *FixedSizeChunking) {
 		fsc.preserveLines = true
+	}
+}
+
+// WithWhitespaceTrimming enables the legacy behavior that trims leading and
+// trailing whitespace from the document, every line, and chunk boundaries.
+func WithWhitespaceTrimming() Option {
+	return func(fsc *FixedSizeChunking) {
+		fsc.trimWhitespace = true
 	}
 }
 
@@ -75,7 +84,13 @@ func (f *FixedSizeChunking) Chunk(doc *document.Document) ([]*document.Document,
 		return nil, ErrEmptyDocument
 	}
 
-	content := cleanText(doc.Content)
+	content := cleanTextWithWhitespaceTrimming(
+		doc.Content,
+		f.trimWhitespace,
+	)
+	if isBlankText(content) {
+		return nil, ErrEmptyDocument
+	}
 	contentLength := encoding.RuneCount(content)
 
 	// If content is smaller than chunk size, return as single chunk.
@@ -89,15 +104,29 @@ func (f *FixedSizeChunking) Chunk(doc *document.Document) ([]*document.Document,
 		coreSize = f.chunkSize - f.overlap
 	}
 	var textChunks []fixedTextChunk
+	split := func(content string, maxSize int) (string, string) {
+		return splitTextAtNaturalBoundaryWithWhitespaceTrimming(
+			content,
+			maxSize,
+			f.trimWhitespace,
+		)
+	}
 	if f.preserveLines {
-		textChunks = splitFixedLines(content, f.chunkSize, coreSize)
+		textChunks = splitFixedLines(
+			content,
+			f.chunkSize,
+			coreSize,
+			split,
+			f.trimWhitespace,
+		)
 	} else {
 		splitChunks := splitFixedText(
 			content,
 			f.chunkSize,
 			coreSize,
-			splitTextAtNaturalBoundary,
+			split,
 			true,
+			f.trimWhitespace,
 		)
 		textChunks = make([]fixedTextChunk, 0, len(splitChunks))
 		for _, chunk := range splitChunks {
@@ -123,13 +152,14 @@ func (f *FixedSizeChunking) Chunk(doc *document.Document) ([]*document.Document,
 					preserveSeparator = true
 				}
 			}
-			finalContent, actualOverlap = joinWithOverlapSeparator(
+			finalContent, actualOverlap = joinWithOverlapSeparatorMode(
 				chunks[i-1].Content,
 				textChunk.content,
 				f.overlap,
 				f.chunkSize,
 				separator,
 				preserveSeparator,
+				f.trimWhitespace,
 			)
 		}
 		chunk := createChunk(doc, textChunk.content, i+1)
@@ -152,6 +182,8 @@ func splitFixedLines(
 	content string,
 	firstChunkSize int,
 	nextChunkSize int,
+	split func(string, int) (string, string),
+	trimWhitespace bool,
 ) []fixedTextChunk {
 	if nextChunkSize <= 0 {
 		nextChunkSize = firstChunkSize
@@ -200,8 +232,9 @@ func splitFixedLines(
 			line,
 			chunkSize(),
 			nextChunkSize,
-			splitTextAtNaturalBoundary,
+			split,
 			true,
+			trimWhitespace,
 		)
 		for i, piece := range pieces {
 			chunks = append(chunks, fixedTextChunk{
@@ -220,6 +253,7 @@ func splitFixedText(
 	nextChunkSize int,
 	split func(string, int) (string, string),
 	balanceTail bool,
+	trimWhitespace bool,
 ) []string {
 	if firstChunkSize <= 0 {
 		return []string{content}
@@ -237,15 +271,16 @@ func splitFixedText(
 		}
 		chunk, rest := split(remaining, chunkSize)
 		if balanceTail {
-			chunk, rest = splitTextWithBalancedTail(
+			chunk, rest = splitTextWithBalancedTailAndWhitespaceTrimming(
 				remaining,
 				chunkSize,
 				split,
+				trimWhitespace,
 			)
 		}
 		if chunk == "" {
-			// The natural-boundary helper trims whitespace. Keep a hard-split
-			// fallback to guarantee progress for whitespace-only input.
+			// Keep a hard-split fallback to guarantee progress when a custom
+			// splitter returns an empty prefix.
 			hardChunks := encoding.SafeSplitBySize(remaining, chunkSize)
 			chunk = hardChunks[0]
 			rest = remaining[len(chunk):]

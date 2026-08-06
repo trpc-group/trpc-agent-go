@@ -245,6 +245,22 @@ func TestFixedSizeChunking_PrefersNearbyWordBoundary(t *testing.T) {
 
 	chunks, err := fsc.Chunk(doc)
 	require.NoError(t, err)
+	require.Equal(t, []string{"alpha beta", " gamma delta"}, []string{
+		chunks[0].Content,
+		chunks[1].Content,
+	})
+}
+
+func TestFixedSizeChunking_WhitespaceTrimmingRestoresBoundaries(t *testing.T) {
+	chunks, err := NewFixedSizeChunking(
+		WithChunkSize(12),
+		WithWhitespaceTrimming(),
+	).Chunk(&document.Document{
+		ID:      "legacy-boundary",
+		Content: "alpha beta gamma delta",
+	})
+
+	require.NoError(t, err)
 	require.Equal(t, []string{"alpha beta", "gamma delta"}, []string{
 		chunks[0].Content,
 		chunks[1].Content,
@@ -268,7 +284,39 @@ func TestFixedSizeChunking_PrefersSentenceBoundary(t *testing.T) {
 	for _, chunk := range chunks {
 		contents = append(contents, chunk.Content)
 	}
-	require.Equal(t, content, strings.Join(contents, " "))
+	require.Equal(t, content, strings.Join(contents, ""))
+}
+
+func TestFixedSizeChunking_WhitespaceModes(t *testing.T) {
+	content := "def f():  \n\tif enabled:\n\t\treturn 1  "
+	doc := &document.Document{ID: "python", Content: content}
+
+	chunks, err := NewFixedSizeChunking(
+		WithChunkSize(128),
+	).Chunk(doc)
+	require.NoError(t, err)
+	require.Len(t, chunks, 1)
+	require.Equal(t, content, chunks[0].Content)
+
+	legacyChunks, err := NewFixedSizeChunking(
+		WithChunkSize(128),
+		WithWhitespaceTrimming(),
+	).Chunk(doc)
+	require.NoError(t, err)
+	require.Len(t, legacyChunks, 1)
+	require.Equal(
+		t,
+		"def f():\nif enabled:\nreturn 1",
+		legacyChunks[0].Content,
+	)
+}
+
+func TestFixedSizeChunking_WhitespaceOnlyDocument(t *testing.T) {
+	chunks, err := NewFixedSizeChunking().Chunk(
+		&document.Document{Content: " \n\t "},
+	)
+	require.ErrorIs(t, err, ErrEmptyDocument)
+	require.Nil(t, chunks)
 }
 
 func TestFixedSizeChunking_PreservesCompleteLines(t *testing.T) {

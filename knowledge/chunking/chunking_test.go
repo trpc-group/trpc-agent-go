@@ -44,12 +44,12 @@ func TestCleanText(t *testing.T) {
 		{
 			name:     "text_with_leading_trailing_spaces",
 			input:    "  Hello World  ",
-			expected: "Hello World",
+			expected: "  Hello World  ",
 		},
 		{
 			name:     "text_with_extra_spaces_in_lines",
 			input:    "Line1  \n  Line2  \n  Line3  ",
-			expected: "Line1\nLine2\nLine3",
+			expected: "Line1  \n  Line2  \n  Line3  ",
 		},
 		{
 			name:     "empty_string",
@@ -74,6 +74,16 @@ func TestCleanText(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestCleanTextWithWhitespaceTrimming(t *testing.T) {
+	input := "  def f():  \r\n\treturn 1\t\r\n"
+
+	require.Equal(
+		t,
+		"def f():\nreturn 1",
+		cleanTextWithWhitespaceTrimming(input, true),
+	)
 }
 
 // TestCreateChunk tests the createChunk function
@@ -290,21 +300,21 @@ func TestSplitTextAtNaturalBoundaryPreservesSentenceAtoms(t *testing.T) {
 			content:       "prefix 12.6 suffix",
 			maxSize:       10,
 			wantPrefix:    "prefix",
-			wantRemaining: "12.6 suffix",
+			wantRemaining: " 12.6 suffix",
 		},
 		{
 			name:          "dotted section",
 			content:       "prefix 2.8.12 suffix",
 			maxSize:       11,
 			wantPrefix:    "prefix",
-			wantRemaining: "2.8.12 suffix",
+			wantRemaining: " 2.8.12 suffix",
 		},
 		{
 			name:          "semantic version",
 			content:       "prefix v1.2.3 suffix",
 			maxSize:       11,
 			wantPrefix:    "prefix",
-			wantRemaining: "v1.2.3 suffix",
+			wantRemaining: " v1.2.3 suffix",
 		},
 		{
 			name:          "CJK punctuation cluster",
@@ -325,6 +335,54 @@ func TestSplitTextAtNaturalBoundaryPreservesSentenceAtoms(t *testing.T) {
 			require.Equal(t, tt.wantRemaining, remaining)
 		})
 	}
+}
+
+func TestSplitTextAtNaturalBoundaryPreservesIndentation(t *testing.T) {
+	prefix, remaining := splitTextAtNaturalBoundary(
+		"header line\n\treturn value",
+		12,
+	)
+
+	require.Equal(t, "header line\n", prefix)
+	require.Equal(t, "\treturn value", remaining)
+}
+
+func TestNaturalTextSuffixPreservesIndentation(t *testing.T) {
+	suffix, natural := naturalTextSuffix("header\n\treturn 1", 9)
+	require.True(t, natural)
+	require.Equal(t, "\treturn 1", suffix)
+
+	legacySuffix, natural := naturalTextSuffixWithWhitespaceTrimming(
+		"header\n\treturn 1",
+		9,
+		true,
+	)
+	require.True(t, natural)
+	require.Equal(t, "return 1", legacySuffix)
+}
+
+func TestJoinWithOverlapPreservesIndentedSuffix(t *testing.T) {
+	content, overlapSize := joinWithOverlapMode(
+		"header\n\treturn 1",
+		"next",
+		9,
+		14,
+		"\n",
+		false,
+	)
+	require.Equal(t, "\treturn 1\nnext", content)
+	require.Equal(t, 9, overlapSize)
+
+	legacyContent, legacyOverlapSize := joinWithOverlapMode(
+		"header\n\treturn 1",
+		"next",
+		9,
+		14,
+		"\n",
+		true,
+	)
+	require.Equal(t, "return 1\nnext", legacyContent)
+	require.Equal(t, 8, legacyOverlapSize)
 }
 
 // TestDefaultConstants tests the default constants

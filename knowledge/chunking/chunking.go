@@ -46,9 +46,16 @@ func validateChunkConfig(chunkSize, overlap int) error {
 	}
 }
 
-// cleanText normalizes whitespace in text content while ensuring UTF-8 safety.
-// It automatically detects encoding and converts to UTF-8 if necessary.
+// cleanText normalizes encoding and line breaks while preserving source
+// whitespace.
 func cleanText(content string) string {
+	return cleanTextWithWhitespaceTrimming(content, false)
+}
+
+func cleanTextWithWhitespaceTrimming(
+	content string,
+	trimWhitespace bool,
+) string {
 	// Intelligently process text based on detected encoding
 	processed, encodingInfo := encoding.SmartProcessText(content)
 
@@ -58,19 +65,28 @@ func cleanText(content string) string {
 			encodingInfo.Encoding, encodingInfo.Confidence, encodingInfo.IsValid)
 	}
 
-	// Trim leading and trailing whitespace.
-	processed = strings.TrimSpace(processed)
+	if trimWhitespace {
+		// Preserve the whitespace normalization used before indentation became
+		// source content by default.
+		processed = strings.TrimSpace(processed)
+	}
 
 	// Normalize line breaks.
 	processed = strings.ReplaceAll(processed, "\r\n", "\n")
 	processed = strings.ReplaceAll(processed, "\r", "\n")
 
-	// Remove excessive whitespace while preserving line breaks.
-	lines := strings.Split(processed, "\n")
-	for i, line := range lines {
-		lines[i] = strings.TrimSpace(line)
+	if trimWhitespace {
+		lines := strings.Split(processed, "\n")
+		for i, line := range lines {
+			lines[i] = strings.TrimSpace(line)
+		}
+		processed = strings.Join(lines, "\n")
 	}
-	return strings.Join(lines, "\n")
+	return processed
+}
+
+func isBlankText(content string) bool {
+	return strings.TrimSpace(content) == ""
 }
 
 // createChunk creates a new document chunk with appropriate metadata.
@@ -112,13 +128,32 @@ func joinWithOverlap(
 	maxSize int,
 	separator string,
 ) (string, int) {
-	return joinWithOverlapSeparator(
+	return joinWithOverlapMode(
 		previous,
 		current,
 		maxOverlap,
 		maxSize,
 		separator,
 		false,
+	)
+}
+
+func joinWithOverlapMode(
+	previous string,
+	current string,
+	maxOverlap int,
+	maxSize int,
+	separator string,
+	trimWhitespace bool,
+) (string, int) {
+	return joinWithOverlapSeparatorMode(
+		previous,
+		current,
+		maxOverlap,
+		maxSize,
+		separator,
+		false,
+		trimWhitespace,
 	)
 }
 
@@ -129,6 +164,26 @@ func joinWithOverlapSeparator(
 	maxSize int,
 	separator string,
 	preserveSeparator bool,
+) (string, int) {
+	return joinWithOverlapSeparatorMode(
+		previous,
+		current,
+		maxOverlap,
+		maxSize,
+		separator,
+		preserveSeparator,
+		false,
+	)
+}
+
+func joinWithOverlapSeparatorMode(
+	previous string,
+	current string,
+	maxOverlap int,
+	maxSize int,
+	separator string,
+	preserveSeparator bool,
+	trimWhitespace bool,
 ) (string, int) {
 	currentSize := encoding.RuneCount(current)
 	separatorSize := encoding.RuneCount(separator)
@@ -152,7 +207,11 @@ func joinWithOverlapSeparator(
 	if overlapSize <= 0 {
 		return current, 0
 	}
-	overlapContent, naturalBoundary := naturalTextSuffix(previous, overlapSize)
+	overlapContent, naturalBoundary := naturalTextSuffixWithWhitespaceTrimming(
+		previous,
+		overlapSize,
+		trimWhitespace,
+	)
 	if !naturalBoundary && separator != "" && !preserveSeparator {
 		// For an unbroken token, preserve the exact source text rather than
 		// inserting a separator in the middle of the token.
@@ -162,7 +221,11 @@ func joinWithOverlapSeparator(
 			maxOverlap,
 			min(availableOverlap, encoding.RuneCount(previous)),
 		)
-		overlapContent, _ = naturalTextSuffix(previous, overlapSize)
+		overlapContent, _ = naturalTextSuffixWithWhitespaceTrimming(
+			previous,
+			overlapSize,
+			trimWhitespace,
+		)
 	}
 	actualOverlap := encoding.RuneCount(overlapContent)
 	if actualOverlap <= 0 {
@@ -221,15 +284,34 @@ func sourceGapSeparator(gap string, fallback string) string {
 // falling back to an exact rune boundary only when the text has no suitable
 // natural boundary.
 func splitTextAtNaturalBoundary(content string, maxSize int) (string, string) {
-	content = strings.TrimSpace(content)
-	contentRunes := []rune(content)
+	return splitTextAtNaturalBoundaryWithWhitespaceTrimming(
+		content,
+		maxSize,
+		false,
+	)
+}
+
+func splitTextAtNaturalBoundaryWithWhitespaceTrimming(
+	content string,
+	maxSize int,
+	trimWhitespace bool,
+) (string, string) {
+	processed := content
+	if trimWhitespace {
+		processed = strings.TrimSpace(processed)
+	}
+	contentRunes := []rune(processed)
 	if maxSize <= 0 || len(contentRunes) <= maxSize {
-		return content, ""
+		return processed, ""
 	}
 
 	splitPosition := preferredTextBoundary(contentRunes, maxSize)
-	prefix := strings.TrimSpace(string(contentRunes[:splitPosition]))
-	remaining := strings.TrimSpace(string(contentRunes[splitPosition:]))
+	prefix := string(contentRunes[:splitPosition])
+	remaining := string(contentRunes[splitPosition:])
+	if trimWhitespace {
+		prefix = strings.TrimSpace(prefix)
+		remaining = strings.TrimSpace(remaining)
+	}
 	return prefix, remaining
 }
 
@@ -242,6 +324,20 @@ func splitTextWithBalancedTail(
 	maxSize int,
 	split func(string, int) (string, string),
 ) (string, string) {
+	return splitTextWithBalancedTailAndWhitespaceTrimming(
+		content,
+		maxSize,
+		split,
+		false,
+	)
+}
+
+func splitTextWithBalancedTailAndWhitespaceTrimming(
+	content string,
+	maxSize int,
+	split func(string, int) (string, string),
+	trimWhitespace bool,
+) (string, string) {
 	prefix, remaining := split(content, maxSize)
 	if remaining == "" || maxSize <= 1 {
 		return prefix, remaining
@@ -252,14 +348,18 @@ func splitTextWithBalancedTail(
 		return prefix, remaining
 	}
 
-	contentSize := encoding.RuneCount(strings.TrimSpace(content))
+	processed := content
+	if trimWhitespace {
+		processed = strings.TrimSpace(processed)
+	}
+	contentSize := encoding.RuneCount(processed)
 	balancedLimit := contentSize - minimumSize
 	if balancedLimit <= 0 || balancedLimit >= maxSize {
 		return prefix, remaining
 	}
 	balancedPrefix, balancedRemaining := split(content, balancedLimit)
 	minimumNaturalSize := max(1, maxSize*2/5)
-	contentRunes := []rune(strings.TrimSpace(content))
+	contentRunes := []rune(processed)
 	balancedPrefixSize := encoding.RuneCount(balancedPrefix)
 	balancedRemainingSize := encoding.RuneCount(balancedRemaining)
 	balancedStart := len(contentRunes) - balancedRemainingSize
@@ -277,8 +377,12 @@ func splitTextWithBalancedTail(
 		if !isNaturalTextStart(contentRunes, position) {
 			continue
 		}
-		naturalPrefix := strings.TrimSpace(string(contentRunes[:position]))
-		naturalRemaining := strings.TrimSpace(string(contentRunes[position:]))
+		naturalPrefix := string(contentRunes[:position])
+		naturalRemaining := string(contentRunes[position:])
+		if trimWhitespace {
+			naturalPrefix = strings.TrimSpace(naturalPrefix)
+			naturalRemaining = strings.TrimSpace(naturalRemaining)
+		}
 		if encoding.RuneCount(naturalPrefix) < minimumNaturalSize ||
 			encoding.RuneCount(naturalRemaining) < minimumNaturalSize {
 			continue
@@ -288,12 +392,12 @@ func splitTextWithBalancedTail(
 
 	for position := min(balancedLimit, len(contentRunes)-1); position >= minimumSize; position-- {
 		position = safeTextSplitPosition(contentRunes, position)
-		hardPrefix := strings.TrimSpace(
-			string(contentRunes[:position]),
-		)
-		hardRemaining := strings.TrimSpace(
-			string(contentRunes[position:]),
-		)
+		hardPrefix := string(contentRunes[:position])
+		hardRemaining := string(contentRunes[position:])
+		if trimWhitespace {
+			hardPrefix = strings.TrimSpace(hardPrefix)
+			hardRemaining = strings.TrimSpace(hardRemaining)
+		}
 		if encoding.RuneCount(hardPrefix) < minimumSize ||
 			encoding.RuneCount(hardRemaining) < minimumSize {
 			continue
@@ -377,6 +481,14 @@ func safeTextSplitPosition(content []rune, position int) int {
 // start would cut through a word, it advances to the next natural boundary.
 // An unbroken token still uses an exact rune suffix so overlap remains useful.
 func naturalTextSuffix(content string, maxSize int) (string, bool) {
+	return naturalTextSuffixWithWhitespaceTrimming(content, maxSize, false)
+}
+
+func naturalTextSuffixWithWhitespaceTrimming(
+	content string,
+	maxSize int,
+	trimWhitespace bool,
+) (string, bool) {
 	contentRunes := []rune(content)
 	if maxSize <= 0 || len(contentRunes) == 0 {
 		return "", false
@@ -387,17 +499,19 @@ func naturalTextSuffix(content string, maxSize int) (string, bool) {
 
 	start := len(contentRunes) - maxSize
 	if isNaturalTextStart(contentRunes, start) {
-		return strings.TrimLeftFunc(
-			string(contentRunes[start:]),
-			unicode.IsSpace,
-		), true
+		suffix := string(contentRunes[start:])
+		if trimWhitespace {
+			suffix = strings.TrimLeftFunc(suffix, unicode.IsSpace)
+		}
+		return suffix, true
 	}
 	for candidate := start + 1; candidate < len(contentRunes); candidate++ {
 		if isNaturalTextStart(contentRunes, candidate) {
-			return strings.TrimLeftFunc(
-				string(contentRunes[candidate:]),
-				unicode.IsSpace,
-			), true
+			suffix := string(contentRunes[candidate:])
+			if trimWhitespace {
+				suffix = strings.TrimLeftFunc(suffix, unicode.IsSpace)
+			}
+			return suffix, true
 		}
 	}
 	return string(contentRunes[start:]), false

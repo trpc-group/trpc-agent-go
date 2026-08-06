@@ -261,6 +261,31 @@ chunk 的头尾分别追加一段重叠内容。
 所需值，然后重新导入受影响的文档。由于 overlap 现在计入 `chunkSize`，
 即使显式配置为 `128`，也不一定能逐字节复现旧的超预算 chunk。
 
+FixedSizeChunking、RecursiveChunking 和 MarkdownChunking 默认保留源文本
+每行首尾的空格与 Tab，避免破坏 Python、YAML、Makefile、Markdown 嵌套结构
+以及 fenced code 的缩进。策略仍会统一文本编码和 `CRLF`/`CR` 换行，并拒绝
+只包含空白字符的文档。
+
+相较于逐行裁剪空白的旧版本，这项默认行为会改变 chunk 正文、边界、metadata
+大小和 embedding 输入。升级后应清理持久化向量数据并重新导入，不能混用两种
+行为生成的索引。如果应用必须保留旧的有损规范化结果，可使用对应的兼容选项
+构造自定义策略：
+
+```go
+fixed := chunking.NewFixedSizeChunking(
+    chunking.WithWhitespaceTrimming(),
+)
+recursive := chunking.NewRecursiveChunking(
+    chunking.WithRecursiveWhitespaceTrimming(),
+)
+markdown := chunking.NewMarkdownChunking(
+    chunking.WithMarkdownWhitespaceTrimming(),
+)
+```
+
+通过 `WithCustomChunkingStrategy` 传入实际使用的策略。每个兼容选项都会按
+旧版本行为裁剪整个文档、每一行和保留的 chunk 边界。
+
 文本分块策略会在调用 `Chunk` 时校验配置：`chunkSize` 必须大于 0，
 `overlap` 必须位于 `[0, chunkSize)`。无效配置会返回
 `ErrInvalidChunkSize`、`ErrInvalidOverlap` 或 `ErrOverlapTooLarge`，而不是

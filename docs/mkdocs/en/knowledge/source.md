@@ -224,6 +224,34 @@ overlap option, then re-ingest the affected documents. Because overlap now
 counts inside `chunkSize`, even an explicit value of `128` may not reproduce
 the old over-budget chunks byte for byte.
 
+FixedSizeChunking, RecursiveChunking, and MarkdownChunking preserve leading and
+trailing spaces and tabs in source lines by default. This keeps indentation in
+Python, YAML, Makefiles, nested Markdown, and fenced code intact. The strategies
+still normalize text encoding and `CRLF`/`CR` line endings, and reject documents
+that contain only whitespace.
+
+This default changes chunk content, boundaries, metadata sizes, and embedding
+inputs compared with releases that trimmed every line. Clear and re-ingest
+persistent vector data after upgrading; do not mix chunks produced by the two
+behaviors. Applications that must retain the previous lossy normalization can
+construct a custom strategy with the corresponding compatibility option:
+
+```go
+fixed := chunking.NewFixedSizeChunking(
+    chunking.WithWhitespaceTrimming(),
+)
+recursive := chunking.NewRecursiveChunking(
+    chunking.WithRecursiveWhitespaceTrimming(),
+)
+markdown := chunking.NewMarkdownChunking(
+    chunking.WithMarkdownWhitespaceTrimming(),
+)
+```
+
+Pass the selected strategy through `WithCustomChunkingStrategy`. Each option
+trims the document, every line, and retained chunk boundaries as earlier
+releases did.
+
 The text strategies validate their configuration when `Chunk` is called:
 `chunkSize` must be greater than zero, and `overlap` must be in
 `[0, chunkSize)`. Invalid values return `ErrInvalidChunkSize`,

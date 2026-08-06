@@ -37,9 +37,10 @@ func (c *chunkCounter) Count() int {
 
 // MarkdownChunking implements a chunking strategy optimized for markdown documents.
 type MarkdownChunking struct {
-	chunkSize int
-	overlap   int
-	md        goldmark.Markdown
+	chunkSize      int
+	overlap        int
+	md             goldmark.Markdown
+	trimWhitespace bool
 }
 
 // MarkdownOption represents a functional option for configuring MarkdownChunking.
@@ -56,6 +57,15 @@ func WithMarkdownChunkSize(size int) MarkdownOption {
 func WithMarkdownOverlap(overlap int) MarkdownOption {
 	return func(mc *MarkdownChunking) {
 		mc.overlap = overlap
+	}
+}
+
+// WithMarkdownWhitespaceTrimming enables the legacy behavior that trims
+// leading and trailing whitespace from the document, every line, and chunk
+// boundaries.
+func WithMarkdownWhitespaceTrimming() MarkdownOption {
+	return func(mc *MarkdownChunking) {
+		mc.trimWhitespace = true
 	}
 }
 
@@ -86,7 +96,13 @@ func (m *MarkdownChunking) Chunk(doc *document.Document) ([]*document.Document, 
 		return nil, ErrEmptyDocument
 	}
 
-	content := cleanText(doc.Content)
+	content := cleanTextWithWhitespaceTrimming(
+		doc.Content,
+		m.trimWhitespace,
+	)
+	if isBlankText(content) {
+		return nil, ErrEmptyDocument
+	}
 
 	// If content is small enough, return as single chunk.
 	if encoding.RuneCount(content) <= m.chunkSize {
@@ -168,18 +184,7 @@ func (m *MarkdownChunking) splitRecursivelyWithPath(
 					continue
 				}
 
-				// Combine header and content for the full section text. Trim
-				// only the section edges so blank lines already represented by
-				// the separator are not duplicated.
-				var fullContent string
-				sectionContent := strings.TrimSpace(section.Content)
-				if section.Header != "" && sectionContent != "" {
-					fullContent = section.Header + "\n\n" + sectionContent
-				} else if section.Header != "" {
-					fullContent = section.Header
-				} else {
-					fullContent = sectionContent
-				}
+				fullContent := m.combineSectionContent(section)
 
 				sectionSize := encoding.RuneCount(fullContent)
 				chunkSize = m.nextChunkSize(counter)
@@ -215,7 +220,10 @@ func (m *MarkdownChunking) splitRecursivelyWithPath(
 	// No headers found or only one section, try splitting by Markdown blocks.
 	// Keep fenced code intact here so blank lines inside the fence do not
 	// create unrelated, undersized chunks.
-	paragraphs := splitMarkdownParagraphs(content)
+	paragraphs := splitMarkdownParagraphsWithWhitespaceTrimming(
+		content,
+		m.trimWhitespace,
+	)
 	if len(paragraphs) > 1 {
 		chunks = m.mergeSmallParagraphsWithPath(
 			paragraphs,
@@ -232,10 +240,11 @@ func (m *MarkdownChunking) splitRecursivelyWithPath(
 	remainingText := content
 	for remainingText != "" {
 		chunkSize = m.nextChunkSize(counter)
-		chunkText, rest := splitTextWithBalancedTail(
+		chunkText, rest := splitTextWithBalancedTailAndWhitespaceTrimming(
 			remainingText,
 			chunkSize,
-			splitMarkdownText,
+			m.splitMarkdownText,
+			m.trimWhitespace,
 		)
 		if strings.TrimSpace(chunkText) == "" {
 			textChunks := encoding.SafeSplitBySize(remainingText, chunkSize)
@@ -628,6 +637,13 @@ func findLineContentStartPos(source []byte, lineStart int) int {
 }
 
 func splitMarkdownParagraphs(content string) []string {
+	return splitMarkdownParagraphsWithWhitespaceTrimming(content, false)
+}
+
+func splitMarkdownParagraphsWithWhitespaceTrimming(
+	content string,
+	trimWhitespace bool,
+) []string {
 	lines := strings.SplitAfter(content, "\n")
 	paragraphs := make([]string, 0, len(lines))
 	var current strings.Builder
@@ -635,8 +651,13 @@ func splitMarkdownParagraphs(content string) []string {
 	fenceLength := 0
 
 	flush := func() {
-		paragraph := strings.TrimSpace(current.String())
-		if paragraph != "" {
+		paragraph := current.String()
+		if trimWhitespace {
+			paragraph = strings.TrimSpace(paragraph)
+		} else {
+			paragraph = strings.Trim(paragraph, "\n")
+		}
+		if !isBlankText(paragraph) {
 			paragraphs = append(paragraphs, paragraph)
 		}
 		current.Reset()
@@ -727,7 +748,7 @@ func (m *MarkdownChunking) mergeSmallParagraphsWithPath(
 	}
 
 	for _, paragraph := range paragraphs {
-		remainingText := strings.TrimSpace(paragraph)
+		remainingText := m.trimBlockEdges(paragraph)
 		for remainingText != "" {
 			chunkSize := m.nextChunkSize(counter)
 			currentSize := encoding.RuneCount(currentChunk.String())
@@ -749,7 +770,7 @@ func (m *MarkdownChunking) mergeSmallParagraphsWithPath(
 				availableSize := chunkSize - currentSize - separatorSize
 				if isMarkdownHeading(currentChunk.String()) && availableSize > 0 {
 					var prefix string
-					prefix, remainingText = splitMarkdownTextWithBalancedTail(
+					prefix, remainingText = m.splitMarkdownTextWithBalancedTail(
 						remainingText,
 						availableSize,
 					)
@@ -763,7 +784,7 @@ func (m *MarkdownChunking) mergeSmallParagraphsWithPath(
 			}
 
 			var prefix string
-			prefix, remainingText = splitMarkdownTextWithBalancedTail(
+			prefix, remainingText = m.splitMarkdownTextWithBalancedTail(
 				remainingText,
 				chunkSize,
 			)
@@ -788,6 +809,17 @@ func splitMarkdownText(content string, chunkSize int) (string, string) {
 	return splitTextAtNaturalBoundary(content, chunkSize)
 }
 
+func (m *MarkdownChunking) splitMarkdownText(
+	content string,
+	chunkSize int,
+) (string, string) {
+	return splitTextAtNaturalBoundaryWithWhitespaceTrimming(
+		content,
+		chunkSize,
+		m.trimWhitespace,
+	)
+}
+
 func splitMarkdownTextWithBalancedTail(
 	content string,
 	chunkSize int,
@@ -797,6 +829,42 @@ func splitMarkdownTextWithBalancedTail(
 		chunkSize,
 		splitMarkdownText,
 	)
+}
+
+func (m *MarkdownChunking) splitMarkdownTextWithBalancedTail(
+	content string,
+	chunkSize int,
+) (string, string) {
+	return splitTextWithBalancedTailAndWhitespaceTrimming(
+		content,
+		chunkSize,
+		m.splitMarkdownText,
+		m.trimWhitespace,
+	)
+}
+
+func (m *MarkdownChunking) trimBlockEdges(content string) string {
+	if m.trimWhitespace {
+		return strings.TrimSpace(content)
+	}
+	return strings.Trim(content, "\n")
+}
+
+func (m *MarkdownChunking) combineSectionContent(section headerSection) string {
+	if section.Header == "" {
+		return m.trimBlockEdges(section.Content)
+	}
+	if section.Content == "" {
+		return section.Header
+	}
+	if m.trimWhitespace {
+		content := strings.TrimSpace(section.Content)
+		if content == "" {
+			return section.Header
+		}
+		return section.Header + "\n\n" + content
+	}
+	return section.Header + "\n" + section.Content
 }
 
 func isMarkdownHeading(content string) bool {
@@ -1060,12 +1128,13 @@ func (m *MarkdownChunking) applyOverlap(
 			metadata[k] = v
 		}
 
-		overlappedContent, actualOverlap := joinWithOverlap(
+		overlappedContent, actualOverlap := joinWithOverlapMode(
 			overlappedChunks[len(overlappedChunks)-1].Content,
 			chunks[i].Content,
 			m.overlap,
 			m.chunkSize,
 			separators[i],
+			m.trimWhitespace,
 		)
 		if actualOverlap > 0 {
 			metadata[source.MetaOverlappedContentSize] = encoding.RuneCount(overlappedContent)
