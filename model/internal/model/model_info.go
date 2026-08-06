@@ -121,6 +121,7 @@ var ModelContextWindows = map[string]int{
 	// Anthropic Claude 5
 	"claude-fable-5":  1000000,
 	"claude-mythos-5": 1000000,
+	"claude-opus-5":   1000000,
 	"claude-sonnet-5": 1000000,
 
 	// Anthropic Claude 4.8
@@ -712,6 +713,7 @@ var ModelMaxOutputTokens = map[string]int{
 	// Anthropic Claude 5
 	"claude-fable-5":  128000,
 	"claude-mythos-5": 128000,
+	"claude-opus-5":   128000,
 	"claude-sonnet-5": 128000,
 
 	// Anthropic Claude 4.8
