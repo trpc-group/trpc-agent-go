@@ -556,7 +556,8 @@ func TestPermissionPolicy_BoundsArgumentsBeforeParsing(t *testing.T) {
 			observed = report
 		}),
 	)
-	args := []byte(`{"command":"echo ok","padding":"` + strings.Repeat("x", 64) + `"}`)
+	args := []byte(`{"command":"echo ok","padding":"` +
+		strings.Repeat("x", maxPermissionArgumentsJSONOverhead+1) + `"}`)
 	decision, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
 		ToolName:  "workspace_exec",
 		Arguments: args,
@@ -566,6 +567,63 @@ func TestPermissionPolicy_BoundsArgumentsBeforeParsing(t *testing.T) {
 	require.Equal(t, DecisionNeedsHumanReview, observed.Decision)
 	require.Equal(t, "tool.arguments_too_large", observed.RuleID)
 	require.NotContains(t, observed.Evidence, "padding")
+}
+
+func TestPermissionPolicy_UsesParserSpecificPayloadLimits(t *testing.T) {
+	t.Run("code execution is not capped by command limit", func(t *testing.T) {
+		var observed Report
+		policy := NewPermissionPolicy(
+			MustDefaultScanner(Policy{
+				MaxCommandBytes: 32,
+				MaxScriptBytes:  1 << 20,
+			}),
+			WithReportObserver(func(_ context.Context, report Report) {
+				observed = report
+			}),
+		)
+		code := strings.Repeat("print(1)\n", 3000)
+		args, err := json.Marshal(map[string]any{
+			"code_blocks": []map[string]string{{
+				"language": "python",
+				"code":     code,
+			}},
+		})
+		require.NoError(t, err)
+		require.Greater(t, len(args), 32)
+
+		decision, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+			ToolName:  "execute_code",
+			Arguments: args,
+		})
+		require.NoError(t, err)
+		require.Equal(t, tool.PermissionActionAllow, decision.Action)
+		require.Equal(t, DecisionAllow, observed.Decision)
+		require.Equal(t, "evaluation.none", observed.RuleID)
+	})
+
+	t.Run("editor text uses the script limit", func(t *testing.T) {
+		var observed Report
+		policy := NewPermissionPolicy(
+			MustDefaultScanner(Policy{
+				MaxCommandBytes: 32,
+				MaxScriptBytes:  64,
+			}),
+			WithReportObserver(func(_ context.Context, report Report) {
+				observed = report
+			}),
+		)
+		args := []byte(`{"command":"true","editor_text":"` +
+			strings.Repeat("x", 80) + `","outputs":{}}`)
+
+		decision, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+			ToolName:  "skill_run",
+			Arguments: args,
+		})
+		require.NoError(t, err)
+		require.Equal(t, tool.PermissionActionAsk, decision.Action)
+		require.Equal(t, DecisionNeedsHumanReview, observed.Decision)
+		require.Equal(t, "script.too_large", observed.RuleID)
+	})
 }
 
 func TestPermissionPolicy_RedactsCompleteAuthorizationHeader(t *testing.T) {

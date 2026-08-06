@@ -189,75 +189,79 @@ func networkCommandName(argv []string) string {
 
 func skipEnvWrapperOptions(argv []string, index int) (int, string) {
 	for index < len(argv) {
-		field := strings.Trim(argv[index], `"'`)
-		if isShellAssignment(field) {
-			index++
-			continue
+		next, splitString, handled := skipEnvWrapperOption(argv, index)
+		if !handled {
+			return index, ""
 		}
-		if field == "--" {
-			return index + 1, ""
+		if splitString != "" {
+			return next, splitString
 		}
-		if strings.HasPrefix(field, "--") {
-			name, value, hasValue := strings.Cut(field, "=")
-			switch strings.ToLower(name) {
-			case "--unset", "--chdir":
-				index++
-				if !hasValue && index < len(argv) {
-					index++
-				}
-				continue
-			case "--split-string":
-				if hasValue {
-					return index + 1, value
-				}
-				index++
-				if index < len(argv) {
-					return index + 1, strings.Trim(argv[index], `"'`)
-				}
-				return index, ""
-			case "--block-signal", "--default-signal", "--ignore-signal", "--argv0":
-				index++
-				if !hasValue && index < len(argv) {
-					index++
-				}
-				continue
-			default:
-				index++
-				continue
-			}
-		}
-		if strings.HasPrefix(field, "-") && field != "-" {
-			cluster := strings.TrimPrefix(field, "-")
-			consumedValue := false
-			for i := 0; i < len(cluster); i++ {
-				if cluster[i] != 'u' && cluster[i] != 'C' && cluster[i] != 'S' {
-					continue
-				}
-				consumedValue = true
-				if i+1 >= len(cluster) {
-					index++
-					if index < len(argv) {
-						if cluster[i] == 'S' {
-							return index + 1, strings.Trim(argv[index], `"'`)
-						}
-						index++
-					}
-				} else {
-					if cluster[i] == 'S' {
-						return index + 1, cluster[i+1:]
-					}
-					index++
-				}
-				break
-			}
-			if !consumedValue {
-				index++
-			}
-			continue
-		}
-		break
+		index = next
 	}
 	return index, ""
+}
+
+func skipEnvWrapperOption(argv []string, index int) (int, string, bool) {
+	field := strings.Trim(argv[index], `"'`)
+	if isShellAssignment(field) || field == "--" {
+		return index + 1, "", true
+	}
+	if strings.HasPrefix(field, "--") {
+		return skipEnvLongOption(argv, index, field)
+	}
+	if strings.HasPrefix(field, "-") && field != "-" {
+		return skipEnvShortOption(argv, index, field)
+	}
+	return index, "", false
+}
+
+func skipEnvLongOption(argv []string, index int, field string) (int, string, bool) {
+	name, value, hasValue := strings.Cut(field, "=")
+	switch strings.ToLower(name) {
+	case "--split-string":
+		if hasValue {
+			return index + 1, value, true
+		}
+		if index+1 < len(argv) {
+			return index + 2, strings.Trim(argv[index+1], `"'`), true
+		}
+		return index + 1, "", true
+	case "--unset", "--chdir", "--block-signal", "--default-signal",
+		"--ignore-signal", "--argv0":
+		return skipEnvLongValue(argv, index, hasValue), "", true
+	default:
+		return index + 1, "", true
+	}
+}
+
+func skipEnvLongValue(argv []string, index int, hasValue bool) int {
+	if hasValue || index+1 >= len(argv) {
+		return index + 1
+	}
+	return index + 2
+}
+
+func skipEnvShortOption(argv []string, index int, field string) (int, string, bool) {
+	cluster := strings.TrimPrefix(field, "-")
+	for i := 0; i < len(cluster); i++ {
+		if cluster[i] != 'u' && cluster[i] != 'C' && cluster[i] != 'S' && cluster[i] != 'a' {
+			continue
+		}
+		if i+1 < len(cluster) {
+			if cluster[i] == 'S' {
+				return index + 1, cluster[i+1:], true
+			}
+			return index + 1, "", true
+		}
+		if index+1 >= len(argv) {
+			return index + 1, "", true
+		}
+		if cluster[i] == 'S' {
+			return index + 2, strings.Trim(argv[index+1], `"'`), true
+		}
+		return index + 2, "", true
+	}
+	return index + 1, "", true
 }
 
 func isShellAssignment(field string) bool {

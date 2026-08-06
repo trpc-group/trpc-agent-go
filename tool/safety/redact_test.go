@@ -182,6 +182,7 @@ func TestRedactString_RedactsNetworkCredentialsThroughEnvOptions(t *testing.T) {
 		`env -u OLD curl -u alice:s3cr3t https://allowed.example`,
 		`env -C /tmp curl -u alice:s3cr3t https://allowed.example`,
 		`env -S 'FOO=1 curl -u alice:s3cr3t https://allowed.example'`,
+		`env -a fake curl -u alice:s3cr3t https://allowed.example`,
 		`env --unset=OLD --argv0 argv0 curl -u alice:s3cr3t https://allowed.example`,
 	} {
 		out, redacted := redactString(input)

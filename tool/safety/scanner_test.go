@@ -343,7 +343,8 @@ func TestDefaultScanner_EnvAllowlistBlocksUnknownEnv(t *testing.T) {
 func TestDefaultScanner_ProcessControlEnvironmentMatchesEnvScrub(t *testing.T) {
 	for _, key := range []string{
 		"HOME", "SHELL", "IFS", "PS4", "SHELLOPTS", "BASHOPTS",
-		"PATH=.", "BASH_FUNC_demo()", "GIT_SSH_COMMAND", "GIT_PROXY_COMMAND",
+		"PATH=.", "BASH_FUNC_demo()", "GIT_SSH_COMMAND", "GIT_ASKPASS", "SSH_ASKPASS",
+		"GIT_PROXY_COMMAND",
 		"GIT_CONFIG_PARAMETERS", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0",
 	} {
 		report, err := MustDefaultScanner(Policy{}).Scan(
@@ -1948,6 +1949,12 @@ func TestDefaultScanner_DoesNotTreatLoopTextInCommentsOrStringsAsExecutable(t *t
 		{name: "python comment", language: "python", code: "# while True:\nprint(1)"},
 		{name: "go comment", language: "go", code: "// for {\npackage main"},
 		{name: "javascript string", language: "javascript", code: `console.log("while (true)")`},
+		{name: "javascript template text", language: "javascript", code: "const text = `while (true)`"},
+		{
+			name:     "javascript template interpolation string",
+			language: "javascript",
+			code:     "const text = `${\"while (true)\"}`",
+		},
 		{name: "python docstring", language: "python", code: "'''\nwhile True:\n'''\nprint(1)"},
 	}
 	for _, tc := range cases {
@@ -1963,6 +1970,18 @@ func TestDefaultScanner_DoesNotTreatLoopTextInCommentsOrStringsAsExecutable(t *t
 			require.NotEqual(t, DecisionDeny, report.Decision)
 		})
 	}
+}
+
+func TestDefaultScanner_DetectsLoopInJavaScriptTemplateInterpolation(t *testing.T) {
+	report, err := MustDefaultScanner(Policy{}).Scan(context.Background(), ScanRequest{
+		ToolName: "execute_code",
+		Backend:  BackendCodeExec,
+		Language: "javascript",
+		Code:     "const value = `${(() => { while (true) {} })()}`",
+	})
+	require.NoError(t, err)
+	require.Equal(t, DecisionDeny, report.Decision)
+	require.Equal(t, "resource.long_running", report.RuleID)
 }
 
 func TestDefaultScanner_GatesHostInputSymlinkAgainstRelativeDenies(t *testing.T) {

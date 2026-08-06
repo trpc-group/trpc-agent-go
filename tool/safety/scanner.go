@@ -127,65 +127,113 @@ func (s *DefaultScanner) scanRequestContent(
 	req ScanRequest,
 	sizeResult scanSizeResult,
 ) []Finding {
-	var findings []Finding
+	if finding, ok := executablePayloadConflict(req); ok {
+		return []Finding{finding}
+	}
+	findings := s.scanPrimaryPayload(req, sizeResult)
+	findings = append(findings, s.scanOversizedCommandStdin(req, sizeResult)...)
+	findings = append(findings, scanSessionInput(req)...)
+	return findings
+}
+
+func executablePayloadConflict(req ScanRequest) (Finding, bool) {
 	if req.Command != "" && len(req.Args) > 0 {
-		return []Finding{{
+		return Finding{
 			RuleID:         "request.command_args_conflict",
 			RiskLevel:      RiskHigh,
 			Decision:       DecisionDeny,
 			Evidence:       "command and args are both set",
 			Recommendation: "provide either command or args; args must include argv[0]",
-		}}
+		}, true
 	}
 	if req.Code != "" && (req.Command != "" || len(req.Args) > 0) {
-		return []Finding{{
+		return Finding{
 			RuleID:         "request.payload_conflict",
 			RiskLevel:      RiskHigh,
 			Decision:       DecisionDeny,
 			Evidence:       "code conflicts with command or args",
 			Recommendation: "provide exactly one primary executable representation: command, args, or code",
-		}}
+		}, true
 	}
+	return Finding{}, false
+}
+
+func (s *DefaultScanner) scanPrimaryPayload(
+	req ScanRequest,
+	sizeResult scanSizeResult,
+) []Finding {
 	switch {
 	case req.Command != "":
-		if !sizeResult.commandTooLarge {
-			findings = append(findings, s.scanCommand(req)...)
-		}
+		return s.scanCommandPayload(req, sizeResult.commandTooLarge)
 	case len(req.Args) > 0:
-		if !sizeResult.argsTooLarge {
-			findings = append(findings, s.scanArgvRequest(req)...)
-		}
+		return s.scanArgvPayload(req, sizeResult.argsTooLarge)
 	case req.Code != "":
-		if !sizeResult.codeTooLarge {
-			findings = append(findings, s.scanCode(req)...)
-		}
+		return s.scanCodePayload(req, sizeResult.codeTooLarge)
 	case len(req.RawArguments) > 0:
-		if !sizeResult.rawArgumentsTooLarge {
-			findings = append(findings, s.scanUnknownArguments(req)...)
-		}
+		return s.scanRawArgumentsPayload(req, sizeResult.rawArgumentsTooLarge)
+	default:
+		return nil
 	}
-	if req.Command != "" && sizeResult.commandTooLarge && !sizeResult.stdinTooLarge {
-		findings = append(findings, s.scanCommandStdin(req)...)
+}
+
+func (s *DefaultScanner) scanCommandPayload(req ScanRequest, tooLarge bool) []Finding {
+	if tooLarge {
+		return nil
 	}
+	return s.scanCommand(req)
+}
+
+func (s *DefaultScanner) scanArgvPayload(req ScanRequest, tooLarge bool) []Finding {
+	if tooLarge {
+		return nil
+	}
+	return s.scanArgvRequest(req)
+}
+
+func (s *DefaultScanner) scanCodePayload(req ScanRequest, tooLarge bool) []Finding {
+	if tooLarge {
+		return nil
+	}
+	return s.scanCode(req)
+}
+
+func (s *DefaultScanner) scanRawArgumentsPayload(req ScanRequest, tooLarge bool) []Finding {
+	if tooLarge {
+		return nil
+	}
+	return s.scanUnknownArguments(req)
+}
+
+func (s *DefaultScanner) scanOversizedCommandStdin(
+	req ScanRequest,
+	sizeResult scanSizeResult,
+) []Finding {
+	if req.Command == "" || !sizeResult.commandTooLarge || sizeResult.stdinTooLarge {
+		return nil
+	}
+	return s.scanCommandStdin(req)
+}
+
+func scanSessionInput(req ScanRequest) []Finding {
 	if req.Stdin != "" && req.Command == "" {
-		findings = append(findings, Finding{
+		return []Finding{{
 			RuleID:         "stdin.session_fragment",
 			RiskLevel:      RiskHigh,
 			Decision:       DecisionNeedsHumanReview,
 			Evidence:       "non-empty stdin without a complete submitted command",
 			Recommendation: "scan complete submitted session lines or require review",
-		})
+		}}
 	}
 	if req.sessionSubmit && req.Command == "" && req.Stdin == "" {
-		findings = append(findings, Finding{
+		return []Finding{{
 			RuleID:         "stdin.session_submit",
 			RiskLevel:      RiskHigh,
 			Decision:       DecisionNeedsHumanReview,
 			Evidence:       "session submission was requested without submitted input",
 			Recommendation: "review session submission when pending input is not available to the scanner",
-		})
+		}}
 	}
-	return findings
+	return nil
 }
 
 func (s *DefaultScanner) scanRequestExecutionControls(
@@ -278,7 +326,8 @@ func (s *DefaultScanner) scanSizeResult(req ScanRequest) scanSizeResult {
 			Recommendation: "review large stdin payloads manually",
 		})
 	}
-	if s.policy.MaxCommandBytes > 0 && len(req.RawArguments) > s.policy.MaxCommandBytes {
+	if rawArgumentsNeedBound(req) && s.policy.MaxCommandBytes > 0 &&
+		len(req.RawArguments) > s.policy.MaxCommandBytes {
 		result.rawArgumentsTooLarge = true
 		findings = append(findings, Finding{
 			RuleID:         "unknown.bounded_scan",
@@ -310,6 +359,11 @@ func (s *DefaultScanner) scanSizeResult(req ScanRequest) scanSizeResult {
 	}
 	result.findings = findings
 	return result
+}
+
+func rawArgumentsNeedBound(req ScanRequest) bool {
+	return len(req.RawArguments) > 0 && req.Command == "" && len(req.Args) == 0 &&
+		len(req.Code) == 0 && req.Stdin == "" && req.EditorText == ""
 }
 
 func argvByteLength(args []string, limit int) (int, bool) {

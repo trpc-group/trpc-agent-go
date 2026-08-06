@@ -16,7 +16,10 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-const maxPermissionArgumentsBytes = 16 * 1024 * 1024
+const (
+	maxPermissionArgumentsBytes        = 16 * 1024 * 1024
+	maxPermissionArgumentsJSONOverhead = 64 * 1024
+)
 
 // BackendResolver resolves the safety backend for a permission request.
 type BackendResolver func(*tool.PermissionRequest) Backend
@@ -114,7 +117,7 @@ func (p *permissionPolicy) CheckToolPermission(
 	if backend == BackendUnknown && p.resolver != nil {
 		backend = p.resolver(req)
 	}
-	if limit := permissionArgumentsLimit(p.scanner); limit > 0 &&
+	if limit := permissionArgumentsLimit(p.scanner, req); limit > 0 &&
 		len(req.Arguments) > limit {
 		report := Report{
 			ToolName:       req.ToolName,
@@ -187,15 +190,83 @@ func (p *permissionPolicy) CheckToolPermission(
 	return p.finish(ctx, final)
 }
 
-func permissionArgumentsLimit(scanner Scanner) int {
-	limit := maxPermissionArgumentsBytes
-	if defaultScanner, ok := scanner.(*DefaultScanner); ok &&
-		defaultScanner != nil && defaultScanner.initialized &&
-		defaultScanner.policy.MaxCommandBytes > 0 &&
-		defaultScanner.policy.MaxCommandBytes < limit {
-		limit = defaultScanner.policy.MaxCommandBytes
+func permissionArgumentsLimit(scanner Scanner, req *tool.PermissionRequest) int {
+	defaultScanner, ok := scanner.(*DefaultScanner)
+	if !ok || defaultScanner == nil || !defaultScanner.initialized {
+		return maxPermissionArgumentsBytes
 	}
-	return limit
+	kind := parserKindForPermissionRequest(req)
+	if kind == parserCodeExec {
+		return maxPermissionArgumentsBytes
+	}
+	limit := defaultScanner.policy.MaxCommandBytes
+	if parserUsesScriptPayload(kind, req.Arguments) &&
+		defaultScanner.policy.MaxScriptBytes > limit {
+		limit = defaultScanner.policy.MaxScriptBytes
+	}
+	return addPermissionArgumentsOverhead(limit)
+}
+
+func parserUsesScriptPayload(kind parserKind, arguments []byte) bool {
+	switch kind {
+	case parserSkillExec:
+		return true
+	case parserWorkspaceExec, parserHostExec:
+		return hasJSONField(arguments, "editor_text")
+	default:
+		return false
+	}
+}
+
+func hasJSONField(data []byte, field string) bool {
+	for index := 0; index < len(data); index++ {
+		if data[index] != '"' {
+			continue
+		}
+		end := index + 1
+		for end < len(data) {
+			if data[end] == '\\' {
+				end += 2
+				continue
+			}
+			if data[end] == '"' {
+				break
+			}
+			end++
+		}
+		if end < len(data) && equalFoldASCII(data[index+1:end], field) {
+			return true
+		}
+		index = end
+	}
+	return false
+}
+
+func equalFoldASCII(value []byte, expected string) bool {
+	if len(value) != len(expected) {
+		return false
+	}
+	for index := range value {
+		left := value[index]
+		right := expected[index]
+		if left >= 'A' && left <= 'Z' {
+			left += 'a' - 'A'
+		}
+		if right >= 'A' && right <= 'Z' {
+			right += 'a' - 'A'
+		}
+		if left != right {
+			return false
+		}
+	}
+	return true
+}
+
+func addPermissionArgumentsOverhead(limit int) int {
+	if limit <= 0 || limit >= maxPermissionArgumentsBytes-maxPermissionArgumentsJSONOverhead {
+		return maxPermissionArgumentsBytes
+	}
+	return limit + maxPermissionArgumentsJSONOverhead
 }
 
 func (p *permissionPolicy) finish(

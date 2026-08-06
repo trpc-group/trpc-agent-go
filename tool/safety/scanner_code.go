@@ -128,6 +128,8 @@ func maskNonExecutableSource(lang, code string) string {
 			i = maskLineComment(code, &out, i)
 		case sourceCommentStart(lang, code, i):
 			i = maskSourceComment(code, &out, i)
+		case isJavaScriptLanguage(lang) && code[i] == '`':
+			i = maskJavaScriptTemplateLiteral(code, &out, i)
 		case sourceQuoteStart(lang, code[i]):
 			i = maskSourceString(lang, code, &out, i)
 		default:
@@ -136,6 +138,97 @@ func maskNonExecutableSource(lang, code string) string {
 		}
 	}
 	return out.String()
+}
+
+func isJavaScriptLanguage(lang string) bool {
+	switch lang {
+	case "javascript", "typescript", "node":
+		return true
+	default:
+		return false
+	}
+}
+
+func maskJavaScriptTemplateLiteral(code string, out *strings.Builder, index int) int {
+	out.WriteByte(' ')
+	return maskJavaScriptTemplateLiteralBody(code, out, index+1)
+}
+
+func maskJavaScriptTemplateLiteralBody(
+	code string,
+	out *strings.Builder,
+	index int,
+) int {
+	for index < len(code) {
+		switch {
+		case code[index] == '\n':
+			out.WriteByte('\n')
+			index++
+		case code[index] == '\\':
+			index = maskEscapedSourceCharacter(code, out, index)
+		case code[index] == '`':
+			out.WriteByte(' ')
+			return index + 1
+		case index+1 < len(code) && code[index] == '$' && code[index+1] == '{':
+			out.WriteString("${")
+			index = maskJavaScriptTemplateExpression(code, out, index+2)
+		default:
+			out.WriteByte(' ')
+			index++
+		}
+	}
+	return index
+}
+
+func maskJavaScriptTemplateExpression(
+	code string,
+	out *strings.Builder,
+	index int,
+) int {
+	depth := 1
+	for index < len(code) {
+		switch {
+		case sourceCommentStart("javascript", code, index):
+			index = maskSourceComment(code, out, index)
+		case code[index] == '`':
+			index = maskJavaScriptTemplateLiteral(code, out, index)
+		case code[index] == '\'' || code[index] == '"':
+			index = maskSourceString("javascript", code, out, index)
+		case code[index] == '{':
+			out.WriteByte(code[index])
+			depth++
+			index++
+		case code[index] == '}':
+			out.WriteByte(code[index])
+			depth--
+			index++
+			if depth == 0 {
+				return index
+			}
+		default:
+			out.WriteByte(code[index])
+			index++
+		}
+	}
+	return index
+}
+
+func maskEscapedSourceCharacter(
+	code string,
+	out *strings.Builder,
+	index int,
+) int {
+	out.WriteByte(' ')
+	index++
+	if index >= len(code) {
+		return index
+	}
+	if code[index] == '\n' {
+		out.WriteByte('\n')
+	} else {
+		out.WriteByte(' ')
+	}
+	return index + 1
 }
 
 func sourceCommentStart(lang, code string, index int) bool {
