@@ -1,0 +1,803 @@
+{
+  "reports": [
+    {
+      "spec_name": "concurrent_writes",
+      "started_at": "2026-07-30T07:00:58.8352657Z",
+      "completed_at": "2026-07-30T07:00:58.9038696Z",
+      "duration_ms": 68,
+      "backends_tested": {
+        "session": [
+          "inmemory",
+          "redis"
+        ],
+        "memory": [
+          "inmemory",
+          "redis"
+        ]
+      },
+      "pass_count": 2,
+      "fail_count": 0,
+      "skip_count": 0,
+      "diff_count": 0,
+      "verifications": [
+        {
+          "what": "events",
+          "reference_backend": "inmemory",
+          "compared_backend": "redis",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-concurrent-1"
+          }
+        },
+        {
+          "what": "session_full",
+          "reference_backend": "inmemory",
+          "compared_backend": "redis",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-concurrent-1"
+          }
+        }
+      ],
+      "summary": "All 2 verifications passed across 2 session + 2 memory backends."
+    },
+    {
+      "spec_name": "error_recovery",
+      "started_at": "2026-07-30T07:00:58.9038696Z",
+      "completed_at": "2026-07-30T07:00:58.9213431Z",
+      "duration_ms": 17,
+      "backends_tested": {
+        "session": [
+          "inmemory",
+          "redis"
+        ],
+        "memory": [
+          "inmemory",
+          "redis"
+        ]
+      },
+      "pass_count": 3,
+      "fail_count": 0,
+      "skip_count": 0,
+      "diff_count": 0,
+      "verifications": [
+        {
+          "what": "events",
+          "reference_backend": "inmemory",
+          "compared_backend": "redis",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-error-1"
+          }
+        },
+        {
+          "what": "state",
+          "reference_backend": "inmemory",
+          "compared_backend": "redis",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-error-1"
+          }
+        },
+        {
+          "what": "memories",
+          "reference_backend": "inmemory",
+          "compared_backend": "redis",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-error-1"
+          },
+          "memory_ids": [
+            "\u003cmem-id-0\u003e"
+          ]
+        }
+      ],
+      "summary": "All 3 verifications passed across 2 session + 2 memory backends."
+    },
+    {
+      "spec_name": "full_cycle",
+      "started_at": "2026-07-30T07:00:58.9213431Z",
+      "completed_at": "2026-07-30T07:00:58.9500532Z",
+      "duration_ms": 28,
+      "backends_tested": {
+        "session": [
+          "inmemory",
+          "redis"
+        ],
+        "memory": [
+          "inmemory",
+          "redis"
+        ]
+      },
+      "pass_count": 5,
+      "fail_count": 0,
+      "skip_count": 0,
+      "diff_count": 0,
+      "verifications": [
+        {
+          "what": "events",
+          "reference_backend": "inmemory",
+          "compared_backend": "redis",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-full-1"
+          },
+          "track_names": [
+            "booking",
+            "flight_search"
+          ]
+        },
+        {
+          "what": "state",
+          "reference_backend": "inmemory",
+          "compared_backend": "redis",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-full-1"
+          },
+          "track_names": [
+            "booking",
+            "flight_search"
+          ]
+        },
+        {
+          "what": "tracks",
+          "reference_backend": "inmemory",
+          "compared_backend": "redis",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-full-1"
+          },
+          "track_names": [
+            "booking",
+            "flight_search"
+          ]
+        },
+        {
+          "what": "session_full",
+          "reference_backend": "inmemory",
+          "compared_backend": "redis",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-full-1"
+          },
+          "track_names": [
+            "booking",
+            "flight_search"
+          ]
+        },
+        {
+          "what": "memories",
+          "reference_backend": "inmemory",
+          "compared_backend": "redis",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-full-1"
+          },
+          "memory_ids": [
+            "\u003cmem-id-0\u003e",
+            "\u003cmem-id-1\u003e"
+          ]
+        }
+      ],
+      "summary": "All 5 verifications passed across 2 session + 2 memory backends."
+    },
+    {
+      "spec_name": "injection_comprehensive",
+      "started_at": "2026-07-30T07:00:58.9505624Z",
+      "completed_at": "2026-07-30T07:00:58.9643039Z",
+      "duration_ms": 13,
+      "backends_tested": {
+        "session": [
+          "inmemory",
+          "redis"
+        ],
+        "memory": [
+          "inmemory",
+          "redis"
+        ]
+      },
+      "pass_count": 6,
+      "fail_count": 0,
+      "skip_count": 0,
+      "diff_count": 0,
+      "verifications": [
+        {
+          "what": "events",
+          "reference_backend": "inmemory",
+          "compared_backend": "redis",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-injection-1"
+          },
+          "summary_filter_keys": [
+            "main"
+          ],
+          "track_names": [
+            "search_timing"
+          ]
+        },
+        {
+          "what": "state",
+          "reference_backend": "inmemory",
+          "compared_backend": "redis",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-injection-1"
+          },
+          "summary_filter_keys": [
+            "main"
+          ],
+          "track_names": [
+            "search_timing"
+          ]
+        },
+        {
+          "what": "summary",
+          "reference_backend": "inmemory",
+          "compared_backend": "redis",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-injection-1"
+          },
+          "summary_filter_keys": [
+            "main"
+          ],
+          "track_names": [
+            "search_timing"
+          ]
+        },
+        {
+          "what": "tracks",
+          "reference_backend": "inmemory",
+          "compared_backend": "redis",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-injection-1"
+          },
+          "summary_filter_keys": [
+            "main"
+          ],
+          "track_names": [
+            "search_timing"
+          ]
+        },
+        {
+          "what": "session_full",
+          "reference_backend": "inmemory",
+          "compared_backend": "redis",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-injection-1"
+          },
+          "summary_filter_keys": [
+            "main"
+          ],
+          "track_names": [
+            "search_timing"
+          ]
+        },
+        {
+          "what": "memories",
+          "reference_backend": "inmemory",
+          "compared_backend": "redis",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-injection-1"
+          },
+          "memory_ids": [
+            "\u003cmem-id-0\u003e",
+            "\u003cmem-id-1\u003e"
+          ]
+        }
+      ],
+      "summary": "All 6 verifications passed across 2 session + 2 memory backends."
+    },
+    {
+      "spec_name": "memory_writes",
+      "started_at": "2026-07-30T07:00:58.9643142Z",
+      "completed_at": "2026-07-30T07:00:58.9712903Z",
+      "duration_ms": 6,
+      "backends_tested": {
+        "session": [
+          "inmemory",
+          "redis"
+        ],
+        "memory": [
+          "inmemory",
+          "redis"
+        ]
+      },
+      "pass_count": 2,
+      "fail_count": 0,
+      "skip_count": 0,
+      "diff_count": 0,
+      "verifications": [
+        {
+          "what": "memories",
+          "reference_backend": "inmemory",
+          "compared_backend": "redis",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-mem-1"
+          },
+          "memory_ids": [
+            "\u003cmem-id-0\u003e",
+            "\u003cmem-id-1\u003e",
+            "\u003cmem-id-2\u003e",
+            "\u003cmem-id-3\u003e"
+          ]
+        },
+        {
+          "what": "memory_search",
+          "reference_backend": "inmemory",
+          "compared_backend": "redis",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-mem-1"
+          },
+          "memory_ids": [
+            "\u003cmem-id-0\u003e",
+            "\u003cmem-id-1\u003e",
+            "\u003cmem-id-2\u003e",
+            "\u003cmem-id-3\u003e"
+          ]
+        }
+      ],
+      "summary": "All 2 verifications passed across 2 session + 2 memory backends."
+    },
+    {
+      "spec_name": "multi_turn",
+      "started_at": "2026-07-30T07:00:58.9718032Z",
+      "completed_at": "2026-07-30T07:00:58.9855593Z",
+      "duration_ms": 13,
+      "backends_tested": {
+        "session": [
+          "inmemory",
+          "redis"
+        ],
+        "memory": [
+          "inmemory",
+          "redis"
+        ]
+      },
+      "pass_count": 1,
+      "fail_count": 0,
+      "skip_count": 0,
+      "diff_count": 0,
+      "verifications": [
+        {
+          "what": "events",
+          "reference_backend": "inmemory",
+          "compared_backend": "redis",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-multi-turn-1"
+          }
+        }
+      ],
+      "summary": "All 1 verifications passed across 2 session + 2 memory backends."
+    },
+    {
+      "spec_name": "out_of_order",
+      "started_at": "2026-07-30T07:00:58.986072Z",
+      "completed_at": "2026-07-30T07:00:58.9983268Z",
+      "duration_ms": 12,
+      "backends_tested": {
+        "session": [
+          "inmemory",
+          "redis"
+        ],
+        "memory": [
+          "inmemory",
+          "redis"
+        ]
+      },
+      "pass_count": 2,
+      "fail_count": 0,
+      "skip_count": 0,
+      "diff_count": 0,
+      "verifications": [
+        {
+          "what": "events",
+          "reference_backend": "inmemory",
+          "compared_backend": "redis",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-order-1"
+          }
+        },
+        {
+          "what": "memories",
+          "reference_backend": "inmemory",
+          "compared_backend": "redis",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-order-1"
+          },
+          "memory_ids": [
+            "\u003cmem-id-0\u003e",
+            "\u003cmem-id-1\u003e",
+            "\u003cmem-id-2\u003e"
+          ]
+        }
+      ],
+      "summary": "All 2 verifications passed across 2 session + 2 memory backends."
+    },
+    {
+      "spec_name": "single_turn",
+      "started_at": "2026-07-30T07:00:58.9988405Z",
+      "completed_at": "2026-07-30T07:00:59.0059954Z",
+      "duration_ms": 7,
+      "backends_tested": {
+        "session": [
+          "inmemory",
+          "redis"
+        ],
+        "memory": [
+          "inmemory",
+          "redis"
+        ]
+      },
+      "pass_count": 2,
+      "fail_count": 0,
+      "skip_count": 0,
+      "diff_count": 0,
+      "verifications": [
+        {
+          "what": "events",
+          "reference_backend": "inmemory",
+          "compared_backend": "redis",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-single-turn-1"
+          }
+        },
+        {
+          "what": "state",
+          "reference_backend": "inmemory",
+          "compared_backend": "redis",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-single-turn-1"
+          }
+        }
+      ],
+      "summary": "All 2 verifications passed across 2 session + 2 memory backends."
+    },
+    {
+      "spec_name": "state_updates",
+      "started_at": "2026-07-30T07:00:59.0065417Z",
+      "completed_at": "2026-07-30T07:00:59.015222Z",
+      "duration_ms": 8,
+      "backends_tested": {
+        "session": [
+          "inmemory",
+          "redis"
+        ],
+        "memory": [
+          "inmemory",
+          "redis"
+        ]
+      },
+      "pass_count": 2,
+      "fail_count": 0,
+      "skip_count": 0,
+      "diff_count": 0,
+      "verifications": [
+        {
+          "what": "state",
+          "reference_backend": "inmemory",
+          "compared_backend": "redis",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-state-1"
+          }
+        },
+        {
+          "what": "session_full",
+          "reference_backend": "inmemory",
+          "compared_backend": "redis",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-state-1"
+          }
+        }
+      ],
+      "summary": "All 2 verifications passed across 2 session + 2 memory backends."
+    },
+    {
+      "spec_name": "summary_generation",
+      "started_at": "2026-07-30T07:00:59.0157431Z",
+      "completed_at": "2026-07-30T07:00:59.0316674Z",
+      "duration_ms": 15,
+      "backends_tested": {
+        "session": [
+          "inmemory",
+          "redis"
+        ],
+        "memory": [
+          "inmemory",
+          "redis"
+        ]
+      },
+      "pass_count": 2,
+      "fail_count": 0,
+      "skip_count": 0,
+      "diff_count": 0,
+      "verifications": [
+        {
+          "what": "summary",
+          "reference_backend": "inmemory",
+          "compared_backend": "redis",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-summary-1"
+          },
+          "summary_filter_keys": [
+            "",
+            "dev",
+            "main"
+          ]
+        },
+        {
+          "what": "events",
+          "reference_backend": "inmemory",
+          "compared_backend": "redis",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-summary-1"
+          },
+          "summary_filter_keys": [
+            "",
+            "dev",
+            "main"
+          ]
+        }
+      ],
+      "summary": "All 2 verifications passed across 2 session + 2 memory backends."
+    },
+    {
+      "spec_name": "summary_truncation",
+      "started_at": "2026-07-30T07:00:59.0316779Z",
+      "completed_at": "2026-07-30T07:00:59.0477695Z",
+      "duration_ms": 16,
+      "backends_tested": {
+        "session": [
+          "inmemory",
+          "redis"
+        ],
+        "memory": [
+          "inmemory",
+          "redis"
+        ]
+      },
+      "pass_count": 3,
+      "fail_count": 0,
+      "skip_count": 0,
+      "diff_count": 0,
+      "verifications": [
+        {
+          "what": "summary",
+          "reference_backend": "inmemory",
+          "compared_backend": "redis",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-trunc-1"
+          },
+          "summary_filter_keys": [
+            "main"
+          ]
+        },
+        {
+          "what": "events",
+          "reference_backend": "inmemory",
+          "compared_backend": "redis",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-trunc-1"
+          },
+          "summary_filter_keys": [
+            "main"
+          ]
+        },
+        {
+          "what": "state",
+          "reference_backend": "inmemory",
+          "compared_backend": "redis",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-trunc-1"
+          },
+          "summary_filter_keys": [
+            "main"
+          ]
+        }
+      ],
+      "summary": "All 3 verifications passed across 2 session + 2 memory backends."
+    },
+    {
+      "spec_name": "tool_calls",
+      "started_at": "2026-07-30T07:00:59.0482835Z",
+      "completed_at": "2026-07-30T07:00:59.0577775Z",
+      "duration_ms": 9,
+      "backends_tested": {
+        "session": [
+          "inmemory",
+          "redis"
+        ],
+        "memory": [
+          "inmemory",
+          "redis"
+        ]
+      },
+      "pass_count": 2,
+      "fail_count": 0,
+      "skip_count": 0,
+      "diff_count": 0,
+      "verifications": [
+        {
+          "what": "state",
+          "reference_backend": "inmemory",
+          "compared_backend": "redis",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-tool-calls-1"
+          }
+        },
+        {
+          "what": "events",
+          "reference_backend": "inmemory",
+          "compared_backend": "redis",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-tool-calls-1"
+          }
+        }
+      ],
+      "summary": "All 2 verifications passed across 2 session + 2 memory backends."
+    },
+    {
+      "spec_name": "track_events",
+      "started_at": "2026-07-30T07:00:59.0577775Z",
+      "completed_at": "2026-07-30T07:00:59.0683157Z",
+      "duration_ms": 10,
+      "backends_tested": {
+        "session": [
+          "inmemory",
+          "redis"
+        ],
+        "memory": [
+          "inmemory",
+          "redis"
+        ]
+      },
+      "pass_count": 1,
+      "fail_count": 0,
+      "skip_count": 0,
+      "diff_count": 0,
+      "verifications": [
+        {
+          "what": "tracks",
+          "reference_backend": "inmemory",
+          "compared_backend": "redis",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-track-1"
+          },
+          "track_names": [
+            "error_log",
+            "sub_task",
+            "tool_execution"
+          ]
+        }
+      ],
+      "summary": "All 1 verifications passed across 2 session + 2 memory backends."
+    }
+  ],
+  "summary": {
+    "total_specs": 13,
+    "total_passed": 13,
+    "total_failed": 0,
+    "total_diffs": 0
+  }
+}
