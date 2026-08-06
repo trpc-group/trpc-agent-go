@@ -1,0 +1,13 @@
+{
+  "decision": "deny",
+  "risk_level": "critical",
+  "rule_id": "CMD_DANGEROUS_DELETE",
+  "evidence": "rm -rf /tmp/data",
+  "recommendation": "command \"rm\" is denied by denied_commands",
+  "tool_name": "workspace_exec",
+  "command": "rm -rf /tmp/data",
+  "backend": "workspaceexec",
+  "blocked": true,
+  "duration_ms": 1,
+  "checkers": ["command:deny", "network:pass", "path:pass", "host:pass", "secret_cmd:pass", "resource:pass"]
+}
