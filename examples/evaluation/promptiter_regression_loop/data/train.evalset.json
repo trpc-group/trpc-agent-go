@@ -1,0 +1,109 @@
+{
+  "evalSetId": "issue-2003-train",
+  "name": "Issue 2003 prompt optimization training set",
+  "evalCases": [
+    {
+      "evalId": "train-response-mismatch",
+      "conversation": [
+        {
+          "invocationId": "train-response-mismatch-1",
+          "userContent": {
+            "role": "user",
+            "content": "Order A-17 has status shipped. Tell the customer the current status in one sentence."
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Order A-17 has shipped."
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-loop",
+        "userId": "train-response-user"
+      },
+      "rubrics": [
+        {
+          "metricName": "quality",
+          "id": "response-status",
+          "type": "final_response",
+          "content": {
+            "text": "The final response must explicitly say that order A-17 has shipped."
+          }
+        }
+      ]
+    },
+    {
+      "evalId": "train-invalid-format",
+      "conversation": [
+        {
+          "invocationId": "train-invalid-format-1",
+          "userContent": {
+            "role": "user",
+            "content": "Return the shipping status for order A-17 as a JSON object with one string field named status."
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "{\"status\":\"shipped\"}"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-loop",
+        "userId": "train-format-user"
+      },
+      "rubrics": [
+        {
+          "metricName": "quality",
+          "id": "shipping-json",
+          "type": "structured_output",
+          "content": {
+            "text": "Return a JSON object whose status field is the string shipped."
+          }
+        }
+      ]
+    },
+    {
+      "evalId": "train-wrong-tool",
+      "conversation": [
+        {
+          "invocationId": "train-wrong-tool-1",
+          "userContent": {
+            "role": "user",
+            "content": "Find current status for order A-17. Select the correct internal operation and arguments before answering."
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "The requested order lookup is complete."
+          },
+          "tools": [
+            {
+              "id": "expected-train-lookup",
+              "name": "lookup_order",
+              "arguments": {
+                "orderId": "A-17"
+              },
+              "result": {
+                "orderId": "A-17",
+                "status": "shipped"
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-loop",
+        "userId": "train-tool-user"
+      },
+      "rubrics": [
+        {
+          "metricName": "quality",
+          "id": "correct-order-tool",
+          "type": "tool_trajectory",
+          "content": {
+            "text": "Use lookup_order with the exact orderId A-17, not search_web."
+          }
+        }
+      ]
+    }
+  ]
+}
