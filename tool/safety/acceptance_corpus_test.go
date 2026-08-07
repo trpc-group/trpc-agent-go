@@ -26,16 +26,16 @@ import (
 // corpusSample mirrors testdata/acceptance_corpus.json entries used as
 // hard gates for issue #2002 acceptance criteria 1–5.
 type corpusSample struct {
-	ID                  string         `json:"id"`
-	Class               string         `json:"class"` // "safe" | "high"
-	Category            string         `json:"category,omitempty"`
-	AcceptanceScenario  string         `json:"acceptance_scenario,omitempty"`
-	MustCatch           string         `json:"must_catch,omitempty"`
-	Tool                string         `json:"tool"`
-	Args                map[string]any `json:"args"`
-	Expect              string         `json:"expect"` // allow|deny|ask
-	AllowHosts          []string       `json:"allow_hosts,omitempty"`
-	StdinPad            int            `json:"stdin_pad,omitempty"`
+	ID                 string         `json:"id"`
+	Class              string         `json:"class"` // "safe" | "high"
+	Category           string         `json:"category,omitempty"`
+	AcceptanceScenario string         `json:"acceptance_scenario,omitempty"`
+	MustCatch          string         `json:"must_catch,omitempty"`
+	Tool               string         `json:"tool"`
+	Args               map[string]any `json:"args"`
+	Expect             string         `json:"expect"` // allow|deny|ask
+	AllowHosts         []string       `json:"allow_hosts,omitempty"`
+	StdinPad           int            `json:"stdin_pad,omitempty"`
 }
 
 func loadAcceptanceCorpus(t *testing.T) []corpusSample {
