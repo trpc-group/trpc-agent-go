@@ -1,0 +1,71 @@
+{
+  "generatedAt": "2026-07-23T09:00:00Z",
+  "summary": "Replay Consistency Test Report\nGenerated: 2026-07-23T09:00:00Z\nTotal cases: 10\nTotal diffs: 3 (allowed: 0, unallowed: 3)\n\n⚠️  3 unallowed difference(s) detected!\n  - case1_single_turn: 2 unallowed diff(s)\n  - case5_memory: 1 unallowed diff(s)",
+  "totalCases": 10,
+  "totalDiffs": 3,
+  "allowedDiffs": 0,
+  "unallowedDiffs": 3,
+  "caseResults": {
+    "case1_single_turn": {
+      "caseName": "case1_single_turn",
+      "backendPairs": ["InMemory <-> SQLite"],
+      "diffCount": 2,
+      "allowedDiffCount": 0,
+      "unallowedDiffCount": 2
+    },
+    "case5_memory": {
+      "caseName": "case5_memory",
+      "backendPairs": ["InMemory <-> SQLite"],
+      "diffCount": 1,
+      "allowedDiffCount": 0,
+      "unallowedDiffCount": 1
+    }
+  },
+  "diffs": [
+    {
+      "caseName": "case1_single_turn",
+      "backendA": "InMemory",
+      "backendB": "SQLite",
+      "fieldPath": "events[0].content",
+      "sessionID": "<session-id>",
+      "eventIndex": 0,
+      "summaryKey": "",
+      "trackName": "",
+      "memoryID": "",
+      "baseline": "Hello, what's the weather today?",
+      "actual": "Hello, what's the weather?",
+      "allowedDiff": false,
+      "diffReason": "string value differs"
+    },
+    {
+      "caseName": "case1_single_turn",
+      "backendA": "InMemory",
+      "backendB": "SQLite",
+      "fieldPath": "events[1].content",
+      "sessionID": "<session-id>",
+      "eventIndex": 1,
+      "summaryKey": "",
+      "trackName": "",
+      "memoryID": "",
+      "baseline": "The weather is sunny with a high of 25°C.",
+      "actual": "The weather is sunny with a high of 25°C.",
+      "allowedDiff": false,
+      "diffReason": "string value differs"
+    },
+    {
+      "caseName": "case5_memory",
+      "backendA": "InMemory",
+      "backendB": "SQLite",
+      "fieldPath": "memories[0].memory.memory",
+      "sessionID": "",
+      "eventIndex": 0,
+      "summaryKey": "",
+      "trackName": "",
+      "memoryID": "<memory-id>",
+      "baseline": "User prefers dark mode over light mode.",
+      "actual": "User prefers dark mode over light mode._tampered",
+      "allowedDiff": false,
+      "diffReason": "memory content differs"
+    }
+  ]
+}
