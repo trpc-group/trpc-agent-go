@@ -1,0 +1,73 @@
+# PromptIter Regression Loop Report
+
+- Run ID: `promptiter-regression-loop-app-20260717`
+- App: `promptiter-regression-loop-app`
+- Mode: `deterministic`
+- Data source: `fake model with deterministic evalset responses`
+- Decision: **REJECT**
+- Target surface: `travel-support#instruction`
+- Engine: `deterministic-promptiter` (`fake-model-v1`)
+
+## Score Summary
+
+| Split | Baseline | Candidate | Delta |
+|---|---:|---:|---:|
+| Train | 0.4444 | 0.8889 | 0.4444 |
+| Validation | 0.7778 | 0.8889 | 0.1111 |
+
+## Gate Decision
+
+- new hard fails 1 exceed limit 0
+- 1 critical validation case(s) regressed
+
+## Validation Case Delta
+
+| Case | Critical | Baseline | Candidate | Delta | Transition |
+|---|---:|---:|---:|---:|---|
+| `val_json_refund` | false | 0.3333 | 1.0000 | 0.6667 | fixed |
+| `val_weather_berlin` | false | 1.0000 | 1.0000 | 0.0000 | stayed_pass |
+| `val_critical_direct_status` | true | 1.0000 | 0.6667 | -0.3333 | regressed |
+
+## Validation Output Evidence
+
+| Case | Baseline actual | Baseline tools | Candidate actual | Candidate tools |
+|---|---|---:|---|---:|
+| `val_json_refund` | Refund request r-204 is approved for 35 USD. | 0 | {"refund_id":"r-204","status":"approved","amount_usd":35} | 0 |
+| `val_weather_berlin` | Berlin is cloudy today at 8 C. | 1 | Berlin is cloudy today at 8 C. | 1 |
+| `val_critical_direct_status` | TR900 is boarding at gate K12. | 0 | {"flight":"TR900","status":"boarding","gate":"K12"} | 0 |
+
+## Failure Attribution
+
+### Baseline
+
+#### Train
+
+- `final_response_mismatch`: 1
+- `format_error`: 2
+- `knowledge_recall_gap`: 1
+- `tool_argument_error`: 1
+
+#### Validation
+
+- `format_error`: 2
+
+### Candidate
+
+#### Train
+
+- `knowledge_recall_gap`: 1
+
+#### Validation
+
+- `final_response_mismatch`: 1
+
+
+## Audit Summary
+
+- Candidate: `round-1-json-tool-overfit`
+- Calls: `12`
+- Estimated cost: `$0.000114`
+- Duration: `0 ms`
+- Seed: `20260717`
+
+The candidate is not automatically safe to publish unless the gate decision is ACCEPT.

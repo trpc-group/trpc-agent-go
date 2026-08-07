@@ -1,0 +1,790 @@
+{
+  "evalSetResultId": "promptiter-regression-loop-app_promptiter-regression-train_5fa4a130-9dd5-463d-911c-d59e702f81b8",
+  "evalSetResultName": "promptiter-regression-loop-app_promptiter-regression-train_5fa4a130-9dd5-463d-911c-d59e702f81b8",
+  "evalSetId": "promptiter-regression-train",
+  "evalCaseResults": [
+    {
+      "evalSetId": "promptiter-regression-train",
+      "evalId": "train_json_invoice",
+      "runId": 1,
+      "finalEvalStatus": "failed",
+      "overallEvalMetricResults": [
+        {
+          "metricName": "structured_output_guard",
+          "evalStatus": "failed",
+          "threshold": 1,
+          "criterion": {
+            "finalResponse": {
+              "compareName": "expected_json_exact_when_requested"
+            }
+          },
+          "details": {
+            "reason": "final response mismatch: actual map[amount:120 status:approved] and expected map[amount_usd:120 invoice_id:inv-100 status:approved] do not match: key amount in actual but not in expected"
+          }
+        },
+        {
+          "metricName": "tool_trajectory_avg_score",
+          "score": 1,
+          "evalStatus": "passed",
+          "threshold": 1,
+          "criterion": {
+            "toolTrajectory": {
+              "defaultStrategy": {
+                "name": {
+                  "matchStrategy": "exact"
+                },
+                "arguments": {
+                  "matchStrategy": "exact"
+                },
+                "result": {
+                  "matchStrategy": "exact"
+                }
+              }
+            }
+          },
+          "details": {
+            "score": 1
+          }
+        },
+        {
+          "metricName": "llm_rubric_critic",
+          "evalStatus": "failed",
+          "threshold": 0.8,
+          "criterion": {
+            "llmJudge": {
+              "rubrics": [
+                {
+                  "id": "answer_fidelity",
+                  "content": {
+                    "text": "The answer must preserve the reference answer's key facts, format request, numeric values, and direct-answer constraints. Fail if JSON is required but not returned, direct text is required but JSON is returned, tool facts are contradicted, or a policy value is unsupported."
+                  },
+                  "description": "The final response preserves the expected answer.",
+                  "type": "FINAL_RESPONSE_QUALITY"
+                }
+              ]
+            }
+          },
+          "details": {
+            "reason": "Golden: requires invoice_id 'inv-100' and amount field 'amount_usd'. Actual: missing invoice_id, uses 'amount' instead of 'amount_usd'. Material mismatch: missing required key and wrong key name.",
+            "rubricScores": [
+              {
+                "id": "answer_fidelity",
+                "reason": "Golden: requires invoice_id 'inv-100' and amount field 'amount_usd'. Actual: missing invoice_id, uses 'amount' instead of 'amount_usd'. Material mismatch: missing required key and wrong key name."
+              }
+            ]
+          }
+        }
+      ],
+      "evalMetricResultPerInvocation": [
+        {
+          "actualInvocation": {
+            "invocationId": "2471e8b5-578b-48ca-a8ee-35118f33bf09",
+            "userContent": {
+              "role": "user",
+              "content": "Return the approval for invoice inv-100 as JSON with status approved and amount 120."
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "{\"status\": \"approved\", \"amount\": 120}"
+            }
+          },
+          "expectedInvocation": {
+            "invocationId": "train_json_invoice-1",
+            "userContent": {
+              "role": "user",
+              "content": "Return the approval for invoice inv-100 as JSON with status approved and amount 120."
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "{\"invoice_id\":\"inv-100\",\"status\":\"approved\",\"amount_usd\":120}"
+            }
+          },
+          "evalMetricResults": [
+            {
+              "metricName": "structured_output_guard",
+              "evalStatus": "failed",
+              "threshold": 1,
+              "criterion": {
+                "finalResponse": {
+                  "compareName": "expected_json_exact_when_requested"
+                }
+              },
+              "details": {
+                "reason": "final response mismatch: actual map[amount:120 status:approved] and expected map[amount_usd:120 invoice_id:inv-100 status:approved] do not match: key amount in actual but not in expected"
+              }
+            },
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 1,
+              "criterion": {
+                "toolTrajectory": {
+                  "defaultStrategy": {
+                    "name": {
+                      "matchStrategy": "exact"
+                    },
+                    "arguments": {
+                      "matchStrategy": "exact"
+                    },
+                    "result": {
+                      "matchStrategy": "exact"
+                    }
+                  }
+                }
+              },
+              "details": {
+                "score": 1
+              }
+            },
+            {
+              "metricName": "llm_rubric_critic",
+              "evalStatus": "failed",
+              "threshold": 0.8,
+              "criterion": {
+                "llmJudge": {
+                  "rubrics": [
+                    {
+                      "id": "answer_fidelity",
+                      "content": {
+                        "text": "The answer must preserve the reference answer's key facts, format request, numeric values, and direct-answer constraints. Fail if JSON is required but not returned, direct text is required but JSON is returned, tool facts are contradicted, or a policy value is unsupported."
+                      },
+                      "description": "The final response preserves the expected answer.",
+                      "type": "FINAL_RESPONSE_QUALITY"
+                    }
+                  ]
+                }
+              },
+              "details": {
+                "reason": "Golden: requires invoice_id 'inv-100' and amount field 'amount_usd'. Actual: missing invoice_id, uses 'amount' instead of 'amount_usd'. Material mismatch: missing required key and wrong key name.",
+                "rubricScores": [
+                  {
+                    "id": "answer_fidelity",
+                    "reason": "Golden: requires invoice_id 'inv-100' and amount field 'amount_usd'. Actual: missing invoice_id, uses 'amount' instead of 'amount_usd'. Material mismatch: missing required key and wrong key name."
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "sessionId": "14ab8a15-7f02-4669-957e-e23caaee8630",
+      "userId": "auditor"
+    },
+    {
+      "evalSetId": "promptiter-regression-train",
+      "evalId": "train_weather_paris",
+      "runId": 1,
+      "finalEvalStatus": "passed",
+      "overallEvalMetricResults": [
+        {
+          "metricName": "structured_output_guard",
+          "score": 1,
+          "evalStatus": "passed",
+          "threshold": 1,
+          "criterion": {
+            "finalResponse": {
+              "compareName": "expected_json_exact_when_requested"
+            }
+          },
+          "details": {
+            "score": 1
+          }
+        },
+        {
+          "metricName": "tool_trajectory_avg_score",
+          "score": 1,
+          "evalStatus": "passed",
+          "threshold": 1,
+          "criterion": {
+            "toolTrajectory": {
+              "defaultStrategy": {
+                "name": {
+                  "matchStrategy": "exact"
+                },
+                "arguments": {
+                  "matchStrategy": "exact"
+                },
+                "result": {
+                  "matchStrategy": "exact"
+                }
+              }
+            }
+          },
+          "details": {
+            "score": 1
+          }
+        },
+        {
+          "metricName": "llm_rubric_critic",
+          "score": 1,
+          "evalStatus": "passed",
+          "threshold": 0.8,
+          "criterion": {
+            "llmJudge": {
+              "rubrics": [
+                {
+                  "id": "answer_fidelity",
+                  "content": {
+                    "text": "The answer must preserve the reference answer's key facts, format request, numeric values, and direct-answer constraints. Fail if JSON is required but not returned, direct text is required but JSON is returned, tool facts are contradicted, or a policy value is unsupported."
+                  },
+                  "description": "The final response preserves the expected answer.",
+                  "type": "FINAL_RESPONSE_QUALITY"
+                }
+              ]
+            }
+          },
+          "details": {
+            "reason": "Golden: 'Paris is rainy today at 12 C.' Actual: 'The weather in Paris today is rainy with a temperature of 12°C.' The actual output preserves the key facts (rainy, 12°C) and is semantically equivalent. No format conflict or contradiction.",
+            "score": 1,
+            "rubricScores": [
+              {
+                "id": "answer_fidelity",
+                "reason": "Golden: 'Paris is rainy today at 12 C.' Actual: 'The weather in Paris today is rainy with a temperature of 12°C.' The actual output preserves the key facts (rainy, 12°C) and is semantically equivalent. No format conflict or contradiction.",
+                "score": 1
+              }
+            ]
+          }
+        }
+      ],
+      "evalMetricResultPerInvocation": [
+        {
+          "actualInvocation": {
+            "invocationId": "34133d16-d76d-4f34-8515-f545f08f8c66",
+            "userContent": {
+              "role": "user",
+              "content": "What is the weather in Paris today?"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "The weather in Paris today is rainy with a temperature of 12°C."
+            },
+            "tools": [
+              {
+                "id": "call_00_WcF8WPWh3M1kGbmDOBY17134",
+                "name": "lookup_weather",
+                "arguments": {
+                  "city": "Paris",
+                  "date": "today"
+                },
+                "result": {
+                  "city": "Paris",
+                  "condition": "rainy",
+                  "temperature_c": 12
+                }
+              }
+            ]
+          },
+          "expectedInvocation": {
+            "invocationId": "train_weather_paris-1",
+            "userContent": {
+              "role": "user",
+              "content": "What is the weather in Paris today?"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "Paris is rainy today at 12 C."
+            },
+            "tools": [
+              {
+                "id": "tool_use_weather_paris",
+                "name": "lookup_weather",
+                "arguments": {
+                  "city": "Paris",
+                  "date": "today"
+                },
+                "result": {
+                  "city": "Paris",
+                  "condition": "rainy",
+                  "temperature_c": 12
+                }
+              }
+            ]
+          },
+          "evalMetricResults": [
+            {
+              "metricName": "structured_output_guard",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 1,
+              "criterion": {
+                "finalResponse": {
+                  "compareName": "expected_json_exact_when_requested"
+                }
+              },
+              "details": {
+                "score": 1
+              }
+            },
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 1,
+              "criterion": {
+                "toolTrajectory": {
+                  "defaultStrategy": {
+                    "name": {
+                      "matchStrategy": "exact"
+                    },
+                    "arguments": {
+                      "matchStrategy": "exact"
+                    },
+                    "result": {
+                      "matchStrategy": "exact"
+                    }
+                  }
+                }
+              },
+              "details": {
+                "score": 1
+              }
+            },
+            {
+              "metricName": "llm_rubric_critic",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 0.8,
+              "criterion": {
+                "llmJudge": {
+                  "rubrics": [
+                    {
+                      "id": "answer_fidelity",
+                      "content": {
+                        "text": "The answer must preserve the reference answer's key facts, format request, numeric values, and direct-answer constraints. Fail if JSON is required but not returned, direct text is required but JSON is returned, tool facts are contradicted, or a policy value is unsupported."
+                      },
+                      "description": "The final response preserves the expected answer.",
+                      "type": "FINAL_RESPONSE_QUALITY"
+                    }
+                  ]
+                }
+              },
+              "details": {
+                "reason": "Golden: 'Paris is rainy today at 12 C.' Actual: 'The weather in Paris today is rainy with a temperature of 12°C.' The actual output preserves the key facts (rainy, 12°C) and is semantically equivalent. No format conflict or contradiction.",
+                "score": 1,
+                "rubricScores": [
+                  {
+                    "id": "answer_fidelity",
+                    "reason": "Golden: 'Paris is rainy today at 12 C.' Actual: 'The weather in Paris today is rainy with a temperature of 12°C.' The actual output preserves the key facts (rainy, 12°C) and is semantically equivalent. No format conflict or contradiction.",
+                    "score": 1
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "sessionId": "970e44a4-8797-4fa2-a0da-44ec369cf6b6",
+      "userId": "traveler"
+    },
+    {
+      "evalSetId": "promptiter-regression-train",
+      "evalId": "train_refund_policy",
+      "runId": 1,
+      "finalEvalStatus": "passed",
+      "overallEvalMetricResults": [
+        {
+          "metricName": "structured_output_guard",
+          "score": 1,
+          "evalStatus": "passed",
+          "threshold": 1,
+          "criterion": {
+            "finalResponse": {
+              "compareName": "expected_json_exact_when_requested"
+            }
+          },
+          "details": {
+            "score": 1
+          }
+        },
+        {
+          "metricName": "tool_trajectory_avg_score",
+          "score": 1,
+          "evalStatus": "passed",
+          "threshold": 1,
+          "criterion": {
+            "toolTrajectory": {
+              "defaultStrategy": {
+                "name": {
+                  "matchStrategy": "exact"
+                },
+                "arguments": {
+                  "matchStrategy": "exact"
+                },
+                "result": {
+                  "matchStrategy": "exact"
+                }
+              }
+            }
+          },
+          "details": {
+            "score": 1
+          }
+        },
+        {
+          "metricName": "llm_rubric_critic",
+          "score": 1,
+          "evalStatus": "passed",
+          "threshold": 0.8,
+          "criterion": {
+            "llmJudge": {
+              "rubrics": [
+                {
+                  "id": "answer_fidelity",
+                  "content": {
+                    "text": "The answer must preserve the reference answer's key facts, format request, numeric values, and direct-answer constraints. Fail if JSON is required but not returned, direct text is required but JSON is returned, tool facts are contradicted, or a policy value is unsupported."
+                  },
+                  "description": "The final response preserves the expected answer.",
+                  "type": "FINAL_RESPONSE_QUALITY"
+                }
+              ]
+            }
+          },
+          "details": {
+            "reason": "Golden: 'Premium members can request refunds within 30 days.' Actual: 'Premium members have a 30-day refund window.' The actual output preserves the key fact (30-day refund window for premium members) and is semantically equivalent. No material defect.",
+            "score": 1,
+            "rubricScores": [
+              {
+                "id": "answer_fidelity",
+                "reason": "Golden: 'Premium members can request refunds within 30 days.' Actual: 'Premium members have a 30-day refund window.' The actual output preserves the key fact (30-day refund window for premium members) and is semantically equivalent. No material defect.",
+                "score": 1
+              }
+            ]
+          }
+        }
+      ],
+      "evalMetricResultPerInvocation": [
+        {
+          "actualInvocation": {
+            "invocationId": "2431d8e8-e16e-43d5-aa98-4e4992edf040",
+            "userContent": {
+              "role": "user",
+              "content": "What refund window applies to premium members?"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "Premium members have a 30-day refund window."
+            }
+          },
+          "expectedInvocation": {
+            "invocationId": "train_refund_policy-1",
+            "userContent": {
+              "role": "user",
+              "content": "What refund window applies to premium members?"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "Premium members can request refunds within 30 days."
+            }
+          },
+          "evalMetricResults": [
+            {
+              "metricName": "structured_output_guard",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 1,
+              "criterion": {
+                "finalResponse": {
+                  "compareName": "expected_json_exact_when_requested"
+                }
+              },
+              "details": {
+                "score": 1
+              }
+            },
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 1,
+              "criterion": {
+                "toolTrajectory": {
+                  "defaultStrategy": {
+                    "name": {
+                      "matchStrategy": "exact"
+                    },
+                    "arguments": {
+                      "matchStrategy": "exact"
+                    },
+                    "result": {
+                      "matchStrategy": "exact"
+                    }
+                  }
+                }
+              },
+              "details": {
+                "score": 1
+              }
+            },
+            {
+              "metricName": "llm_rubric_critic",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 0.8,
+              "criterion": {
+                "llmJudge": {
+                  "rubrics": [
+                    {
+                      "id": "answer_fidelity",
+                      "content": {
+                        "text": "The answer must preserve the reference answer's key facts, format request, numeric values, and direct-answer constraints. Fail if JSON is required but not returned, direct text is required but JSON is returned, tool facts are contradicted, or a policy value is unsupported."
+                      },
+                      "description": "The final response preserves the expected answer.",
+                      "type": "FINAL_RESPONSE_QUALITY"
+                    }
+                  ]
+                }
+              },
+              "details": {
+                "reason": "Golden: 'Premium members can request refunds within 30 days.' Actual: 'Premium members have a 30-day refund window.' The actual output preserves the key fact (30-day refund window for premium members) and is semantically equivalent. No material defect.",
+                "score": 1,
+                "rubricScores": [
+                  {
+                    "id": "answer_fidelity",
+                    "reason": "Golden: 'Premium members can request refunds within 30 days.' Actual: 'Premium members have a 30-day refund window.' The actual output preserves the key fact (30-day refund window for premium members) and is semantically equivalent. No material defect.",
+                    "score": 1
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "sessionId": "d600c002-26a7-4f19-a966-e31b065b94e5",
+      "userId": "member"
+    }
+  ],
+  "summary": {
+    "overallStatus": "failed",
+    "numRuns": 1,
+    "runStatusCounts": {
+      "failed": 1
+    },
+    "runSummaries": [
+      {
+        "runId": 1,
+        "overallStatus": "failed",
+        "caseStatusCounts": {
+          "passed": 2,
+          "failed": 1
+        },
+        "metricSummaries": [
+          {
+            "metricName": "llm_rubric_critic",
+            "averageScore": 0.6666666666666666,
+            "evalStatus": "failed",
+            "threshold": 0.8,
+            "statusCounts": {
+              "passed": 2,
+              "failed": 1
+            }
+          },
+          {
+            "metricName": "structured_output_guard",
+            "averageScore": 0.6666666666666666,
+            "evalStatus": "failed",
+            "threshold": 1,
+            "statusCounts": {
+              "passed": 2,
+              "failed": 1
+            }
+          },
+          {
+            "metricName": "tool_trajectory_avg_score",
+            "averageScore": 1,
+            "evalStatus": "passed",
+            "threshold": 1,
+            "statusCounts": {
+              "passed": 3
+            }
+          }
+        ]
+      }
+    ],
+    "evalCaseSummaries": [
+      {
+        "evalId": "train_json_invoice",
+        "overallStatus": "failed",
+        "runStatusCounts": {
+          "failed": 1
+        },
+        "metricSummaries": [
+          {
+            "metricName": "llm_rubric_critic",
+            "evalStatus": "failed",
+            "threshold": 0.8,
+            "statusCounts": {
+              "failed": 1
+            }
+          },
+          {
+            "metricName": "structured_output_guard",
+            "evalStatus": "failed",
+            "threshold": 1,
+            "statusCounts": {
+              "failed": 1
+            }
+          },
+          {
+            "metricName": "tool_trajectory_avg_score",
+            "averageScore": 1,
+            "evalStatus": "passed",
+            "threshold": 1,
+            "statusCounts": {
+              "passed": 1
+            }
+          }
+        ],
+        "runSummaries": [
+          {
+            "runId": 1,
+            "finalEvalStatus": "failed",
+            "metricResults": [
+              {
+                "metricName": "llm_rubric_critic",
+                "evalStatus": "failed",
+                "threshold": 0.8
+              },
+              {
+                "metricName": "structured_output_guard",
+                "evalStatus": "failed",
+                "threshold": 1
+              },
+              {
+                "metricName": "tool_trajectory_avg_score",
+                "score": 1,
+                "evalStatus": "passed",
+                "threshold": 1
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "evalId": "train_refund_policy",
+        "overallStatus": "passed",
+        "runStatusCounts": {
+          "passed": 1
+        },
+        "metricSummaries": [
+          {
+            "metricName": "llm_rubric_critic",
+            "averageScore": 1,
+            "evalStatus": "passed",
+            "threshold": 0.8,
+            "statusCounts": {
+              "passed": 1
+            }
+          },
+          {
+            "metricName": "structured_output_guard",
+            "averageScore": 1,
+            "evalStatus": "passed",
+            "threshold": 1,
+            "statusCounts": {
+              "passed": 1
+            }
+          },
+          {
+            "metricName": "tool_trajectory_avg_score",
+            "averageScore": 1,
+            "evalStatus": "passed",
+            "threshold": 1,
+            "statusCounts": {
+              "passed": 1
+            }
+          }
+        ],
+        "runSummaries": [
+          {
+            "runId": 1,
+            "finalEvalStatus": "passed",
+            "metricResults": [
+              {
+                "metricName": "llm_rubric_critic",
+                "score": 1,
+                "evalStatus": "passed",
+                "threshold": 0.8
+              },
+              {
+                "metricName": "structured_output_guard",
+                "score": 1,
+                "evalStatus": "passed",
+                "threshold": 1
+              },
+              {
+                "metricName": "tool_trajectory_avg_score",
+                "score": 1,
+                "evalStatus": "passed",
+                "threshold": 1
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "evalId": "train_weather_paris",
+        "overallStatus": "passed",
+        "runStatusCounts": {
+          "passed": 1
+        },
+        "metricSummaries": [
+          {
+            "metricName": "llm_rubric_critic",
+            "averageScore": 1,
+            "evalStatus": "passed",
+            "threshold": 0.8,
+            "statusCounts": {
+              "passed": 1
+            }
+          },
+          {
+            "metricName": "structured_output_guard",
+            "averageScore": 1,
+            "evalStatus": "passed",
+            "threshold": 1,
+            "statusCounts": {
+              "passed": 1
+            }
+          },
+          {
+            "metricName": "tool_trajectory_avg_score",
+            "averageScore": 1,
+            "evalStatus": "passed",
+            "threshold": 1,
+            "statusCounts": {
+              "passed": 1
+            }
+          }
+        ],
+        "runSummaries": [
+          {
+            "runId": 1,
+            "finalEvalStatus": "passed",
+            "metricResults": [
+              {
+                "metricName": "llm_rubric_critic",
+                "score": 1,
+                "evalStatus": "passed",
+                "threshold": 0.8
+              },
+              {
+                "metricName": "structured_output_guard",
+                "score": 1,
+                "evalStatus": "passed",
+                "threshold": 1
+              },
+              {
+                "metricName": "tool_trajectory_avg_score",
+                "score": 1,
+                "evalStatus": "passed",
+                "threshold": 1
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "creationTimestamp": 1784801906.7308345
+}

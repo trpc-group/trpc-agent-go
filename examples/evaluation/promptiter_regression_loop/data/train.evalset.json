@@ -1,0 +1,83 @@
+{
+  "evalSetId": "promptiter-regression-train",
+  "name": "promptiter-regression-train",
+  "evalCases": [
+    {
+      "evalId": "train_json_invoice",
+      "conversation": [
+        {
+          "invocationId": "train_json_invoice-1",
+          "userContent": {
+            "role": "user",
+            "content": "Return the approval for invoice inv-100 as JSON with status approved and amount 120."
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "{\"invoice_id\":\"inv-100\",\"status\":\"approved\",\"amount_usd\":120}"
+          },
+          "tools": []
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-loop-app",
+        "userId": "auditor"
+      }
+    },
+    {
+      "evalId": "train_weather_paris",
+      "conversation": [
+        {
+          "invocationId": "train_weather_paris-1",
+          "userContent": {
+            "role": "user",
+            "content": "What is the weather in Paris today?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Paris is rainy today at 12 C."
+          },
+          "tools": [
+            {
+              "id": "tool_use_weather_paris",
+              "name": "lookup_weather",
+              "arguments": {
+                "city": "Paris",
+                "date": "today"
+              },
+              "result": {
+                "city": "Paris",
+                "condition": "rainy",
+                "temperature_c": 12
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-loop-app",
+        "userId": "traveler"
+      }
+    },
+    {
+      "evalId": "train_refund_policy",
+      "conversation": [
+        {
+          "invocationId": "train_refund_policy-1",
+          "userContent": {
+            "role": "user",
+            "content": "What refund window applies to premium members?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Premium members can request refunds within 30 days."
+          },
+          "tools": []
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-loop-app",
+        "userId": "member"
+      }
+    }
+  ]
+}
