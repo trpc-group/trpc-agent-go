@@ -74,16 +74,16 @@ func (r *defaultReconciler) Reconcile(
 	ws codeexecutor.Workspace,
 	instanceID codeexecutor.WorkspaceInstanceID,
 	reqs []Requirement,
-) ([]string, error) {
+) ([]string, bool, error) {
 	if len(reqs) == 0 {
-		return nil, nil
+		return nil, false, nil
 	}
 	if eng == nil {
-		return nil, fmt.Errorf("workspaceprep: engine is required")
+		return nil, false, fmt.Errorf("workspaceprep: engine is required")
 	}
 	generation, err := r.preparationGeneration(instanceID)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	reqs = dedupeRequirements(reqs)
@@ -94,7 +94,7 @@ func (r *defaultReconciler) Reconcile(
 
 	md, err := r.stager.LoadWorkspaceMetadata(ctx, eng, ws)
 	if err != nil {
-		return nil, fmt.Errorf("workspaceprep: load metadata: %w", err)
+		return nil, false, fmt.Errorf("workspaceprep: load metadata: %w", err)
 	}
 	if md.Prepared == nil {
 		md.Prepared = map[string]codeexecutor.PreparedRecord{}
@@ -114,7 +114,7 @@ func (r *defaultReconciler) Reconcile(
 		ctx, eng, ws, baseMD, rctx, generation, reqs,
 	)
 	if err != nil {
-		return run.warnings, err
+		return run.warnings, run.commandMayHaveStarted, err
 	}
 	if run.changed {
 		if err := r.saveReconcileMetadata(
@@ -124,14 +124,14 @@ func (r *defaultReconciler) Reconcile(
 				err,
 				run.commandMayHaveStarted,
 			); staleErr != nil {
-				return run.warnings, staleErr
+				return run.warnings, run.commandMayHaveStarted, staleErr
 			}
 			run.warnings = append(run.warnings, fmt.Sprintf(
 				"save metadata: %v", err,
 			))
 		}
 	}
-	return run.warnings, nil
+	return run.warnings, run.commandMayHaveStarted, nil
 }
 
 type reconcileRunResult struct {

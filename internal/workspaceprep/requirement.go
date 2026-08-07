@@ -139,9 +139,11 @@ type Reconciler interface {
 	// Reconcile collects requirements from the provided list, decides
 	// which ones already satisfy the workspace, applies the rest in
 	// phase order, and returns warnings collected from optional
-	// requirement failures. When a required requirement fails Apply,
-	// Reconcile returns the corresponding error and the remaining
-	// requirements are skipped.
+	// requirement failures. commandMayHaveStarted reports whether an
+	// arbitrary bootstrap command may have started, so callers can avoid
+	// unsafe automatic replay after a later workspace generation change.
+	// When a required requirement fails Apply, Reconcile returns the
+	// corresponding error and the remaining requirements are skipped.
 	//
 	// instanceID carries the physical workspace generation from
 	// [codeexecutor.WorkspaceHandle.InstanceID]. An empty value
@@ -155,5 +157,5 @@ type Reconciler interface {
 		ws codeexecutor.Workspace,
 		instanceID codeexecutor.WorkspaceInstanceID,
 		reqs []Requirement,
-	) ([]string, error)
+	) (warnings []string, commandMayHaveStarted bool, err error)
 }

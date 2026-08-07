@@ -58,7 +58,7 @@ func TestFileRequirement_InlineContentAppliesAndSkips(t *testing.T) {
 	require.NoError(t, err)
 	rec := NewReconciler()
 
-	warnings, err := rec.Reconcile(
+	warnings, _, err := rec.Reconcile(
 		ctx, eng, ws, "", []Requirement{req},
 	)
 	require.NoError(t, err)
@@ -73,7 +73,7 @@ func TestFileRequirement_InlineContentAppliesAndSkips(t *testing.T) {
 	// counting FS writes via a new fingerprint.
 	infoBefore, err := os.Stat(filepath.Join(ws.Path, "work/config.json"))
 	require.NoError(t, err)
-	_, err = rec.Reconcile(ctx, eng, ws, "", []Requirement{req})
+	_, _, err = rec.Reconcile(ctx, eng, ws, "", []Requirement{req})
 	require.NoError(t, err)
 	infoAfter, err := os.Stat(filepath.Join(ws.Path, "work/config.json"))
 	require.NoError(t, err)
@@ -87,7 +87,7 @@ func TestFileRequirement_InlineContentAppliesAndSkips(t *testing.T) {
 		Content: []byte(`{"v":2}`),
 	})
 	require.NoError(t, err)
-	_, err = rec.Reconcile(ctx, eng, ws, "", []Requirement{req2})
+	_, _, err = rec.Reconcile(ctx, eng, ws, "", []Requirement{req2})
 	require.NoError(t, err)
 	got, err = os.ReadFile(filepath.Join(ws.Path, "work/config.json"))
 	require.NoError(t, err)
@@ -105,13 +105,13 @@ func TestFileRequirement_SentinelMissingTriggersReapply(t *testing.T) {
 	require.NoError(t, err)
 	rec := NewReconciler()
 
-	_, err = rec.Reconcile(ctx, eng, ws, "", []Requirement{req})
+	_, _, err = rec.Reconcile(ctx, eng, ws, "", []Requirement{req})
 	require.NoError(t, err)
 	require.NoError(t, os.Remove(
 		filepath.Join(ws.Path, "work/marker.txt"),
 	))
 
-	_, err = rec.Reconcile(ctx, eng, ws, "", []Requirement{req})
+	_, _, err = rec.Reconcile(ctx, eng, ws, "", []Requirement{req})
 	require.NoError(t, err)
 	got, err := os.ReadFile(filepath.Join(ws.Path, "work/marker.txt"))
 	require.NoError(t, err)
@@ -133,7 +133,7 @@ func TestCommandRequirement_MarkerPathSelfHeals(t *testing.T) {
 	require.NoError(t, err)
 	rec := NewReconciler()
 
-	_, err = rec.Reconcile(ctx, eng, ws, "", []Requirement{cmd})
+	_, _, err = rec.Reconcile(ctx, eng, ws, "", []Requirement{cmd})
 	require.NoError(t, err)
 	logBefore, err := os.ReadFile(filepath.Join(ws.Path, "work/cmd.log"))
 	require.NoError(t, err)
@@ -146,7 +146,7 @@ func TestCommandRequirement_MarkerPathSelfHeals(t *testing.T) {
 		filepath.Join(ws.Path, "work/cmd.log"),
 		[]byte("preserved"), 0o644,
 	))
-	_, err = rec.Reconcile(ctx, eng, ws, "", []Requirement{cmd})
+	_, _, err = rec.Reconcile(ctx, eng, ws, "", []Requirement{cmd})
 	require.NoError(t, err)
 	got, err := os.ReadFile(filepath.Join(ws.Path, "work/cmd.log"))
 	require.NoError(t, err)
@@ -157,7 +157,7 @@ func TestCommandRequirement_MarkerPathSelfHeals(t *testing.T) {
 	require.NoError(t, os.Remove(
 		filepath.Join(ws.Path, "work/.cmd-marker"),
 	))
-	_, err = rec.Reconcile(ctx, eng, ws, "", []Requirement{cmd})
+	_, _, err = rec.Reconcile(ctx, eng, ws, "", []Requirement{cmd})
 	require.NoError(t, err)
 	got, err = os.ReadFile(filepath.Join(ws.Path, "work/cmd.log"))
 	require.NoError(t, err)
@@ -218,7 +218,7 @@ func TestReconciler_FixedPhaseOrder(t *testing.T) {
 		recordPhase("file-2"),
 	}
 	rec := NewReconciler()
-	_, err := rec.Reconcile(ctx, eng, ws, "", reqs)
+	_, _, err := rec.Reconcile(ctx, eng, ws, "", reqs)
 	require.NoError(t, err)
 	require.Equal(t,
 		[]string{"file-1", "file-2", "skill-1", "cmd-1", "cmd-2"},
@@ -261,7 +261,7 @@ func TestReconciler_ConcurrentReconcileIsSerialized(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			req := makeReq(fmt.Sprintf("serialize-%d", i))
-			_, err := rec.Reconcile(
+			_, _, err := rec.Reconcile(
 				ctx, eng, ws, "", []Requirement{req},
 			)
 			require.NoError(t, err)
@@ -306,7 +306,7 @@ func TestReconciler_ConcurrentInstancesMergePreparedMetadata(
 				phase: PhaseCommand,
 				apply: func() {},
 			}
-			_, err := NewReconciler().Reconcile(
+			_, _, err := NewReconciler().Reconcile(
 				ctx,
 				eng,
 				ws,
@@ -526,7 +526,7 @@ func TestReconciler_RequiredFailurePropagatesPartialSaveError(
 		applyErr: fmt.Errorf("boom"),
 	}
 
-	warnings, err := NewReconciler().Reconcile(
+	warnings, _, err := NewReconciler().Reconcile(
 		ctx,
 		eng,
 		ws,
@@ -556,7 +556,7 @@ func TestReconciler_OptionalRequirementFailureIsWarning(t *testing.T) {
 		apply: func() {},
 	}
 	rec := NewReconciler()
-	warnings, err := rec.Reconcile(
+	warnings, _, err := rec.Reconcile(
 		ctx, eng, ws, "", []Requirement{bad, good},
 	)
 	require.NoError(t, err)
@@ -575,7 +575,7 @@ func TestReconciler_StaleRetryDisposition(t *testing.T) {
 			phase: PhaseFile,
 		}
 
-		_, err := NewReconciler().Reconcile(
+		_, _, err := NewReconciler().Reconcile(
 			context.Background(),
 			eng,
 			codeexecutor.Workspace{ID: "ws", Path: t.TempDir()},
@@ -595,7 +595,7 @@ func TestReconciler_StaleRetryDisposition(t *testing.T) {
 			applyErr: stale,
 		}
 
-		warnings, err := NewReconciler().Reconcile(
+		warnings, _, err := NewReconciler().Reconcile(
 			context.Background(), eng, ws, "", []Requirement{req},
 		)
 		require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
@@ -620,7 +620,7 @@ func TestReconciler_StaleRetryDisposition(t *testing.T) {
 			applyErr: stale,
 		}
 
-		_, err := NewReconciler().Reconcile(
+		_, _, err := NewReconciler().Reconcile(
 			context.Background(), eng, ws, "",
 			[]Requirement{success, later},
 		)
@@ -648,7 +648,7 @@ func TestReconciler_StaleRetryDisposition(t *testing.T) {
 				applyErr: stale,
 			}
 
-			warnings, err := NewReconciler().Reconcile(
+			warnings, _, err := NewReconciler().Reconcile(
 				context.Background(), eng, ws, "",
 				[]Requirement{optionalFailure, laterStale},
 			)
@@ -676,7 +676,7 @@ func TestReconciler_StaleRetryDisposition(t *testing.T) {
 			apply: func() { nextCalls++ },
 		}
 
-		warnings, err := NewReconciler().Reconcile(
+		warnings, _, err := NewReconciler().Reconcile(
 			context.Background(), eng, ws, "",
 			[]Requirement{optional, next},
 		)
@@ -702,7 +702,7 @@ func TestReconciler_StaleRetryDisposition(t *testing.T) {
 				apply: func() {},
 			}
 
-			_, err := NewReconciler().Reconcile(
+			_, _, err := NewReconciler().Reconcile(
 				context.Background(),
 				eng,
 				codeexecutor.Workspace{
@@ -732,7 +732,7 @@ func TestReconciler_StaleRetryDisposition(t *testing.T) {
 			},
 		}
 
-		_, err = NewReconciler().Reconcile(
+		_, _, err = NewReconciler().Reconcile(
 			context.Background(),
 			eng,
 			codeexecutor.Workspace{ID: "ws", Path: t.TempDir()},
@@ -773,6 +773,10 @@ func TestPreparationGeneration(t *testing.T) {
 	require.Empty(t, legacy)
 	_, err = broken.preparationGeneration("instance-1")
 	require.ErrorContains(t, err, "entropy unavailable")
+
+	empty := newReconciler("", nil)
+	_, err = empty.preparationGeneration("instance-1")
+	require.ErrorContains(t, err, "process generation epoch is empty")
 }
 
 func TestReconciler_InstanceRotationInvalidatesPreparedRecord(t *testing.T) {
@@ -786,7 +790,7 @@ func TestReconciler_InstanceRotationInvalidatesPreparedRecord(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = rec.Reconcile(
+	_, _, err = rec.Reconcile(
 		ctx, eng, ws, "instance-1", []Requirement{req},
 	)
 	require.NoError(t, err)
@@ -800,7 +804,7 @@ func TestReconciler_InstanceRotationInvalidatesPreparedRecord(t *testing.T) {
 	infoBefore, err := os.Stat(target)
 	require.NoError(t, err)
 
-	_, err = rec.Reconcile(
+	_, _, err = rec.Reconcile(
 		ctx, eng, ws, "instance-1", []Requirement{req},
 	)
 	require.NoError(t, err)
@@ -809,7 +813,7 @@ func TestReconciler_InstanceRotationInvalidatesPreparedRecord(t *testing.T) {
 	require.Equal(t, infoBefore.ModTime(), infoUnchanged.ModTime(),
 		"same instance should skip unchanged bootstrap files")
 
-	_, err = rec.Reconcile(
+	_, _, err = rec.Reconcile(
 		ctx, eng, ws, "instance-2", []Requirement{req},
 	)
 	require.NoError(t, err)
@@ -850,21 +854,21 @@ func TestReconciler_InstanceRotationRerunsMarkerlessCommand(t *testing.T) {
 		return strings.Count(string(data), "run\n")
 	}
 
-	_, err = rec.Reconcile(
+	_, _, err = rec.Reconcile(
 		ctx, eng, ws, "instance-1", []Requirement{cmd},
 	)
 	require.NoError(t, err)
 	require.Equal(t, 1, countRuns(),
 		"first reconcile on instance-1 must run marker-less command")
 
-	_, err = rec.Reconcile(
+	_, _, err = rec.Reconcile(
 		ctx, eng, ws, "instance-1", []Requirement{cmd},
 	)
 	require.NoError(t, err)
 	require.Equal(t, 1, countRuns(),
 		"same instance must skip marker-less command via Prepared")
 
-	_, err = rec.Reconcile(
+	_, _, err = rec.Reconcile(
 		ctx, eng, ws, "instance-2", []Requirement{cmd},
 	)
 	require.NoError(t, err)
@@ -892,7 +896,7 @@ func TestReconciler_LegacyPreparedMetadataRotatesBootstrap(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = rec.Reconcile(
+	_, _, err = rec.Reconcile(
 		ctx, eng, ws, "instance-1", []Requirement{req},
 	)
 	require.NoError(t, err)
@@ -913,7 +917,7 @@ func TestReconciler_LegacyPreparedMetadataRotatesBootstrap(t *testing.T) {
 		0o644,
 	))
 
-	_, err = rec.Reconcile(
+	_, _, err = rec.Reconcile(
 		ctx, eng, ws, "instance-2", []Requirement{req},
 	)
 	require.NoError(t, err)
@@ -947,7 +951,7 @@ func TestReconciler_PartialSaveRecordsGeneration(t *testing.T) {
 		applyErr: fmt.Errorf("boom"),
 	}
 
-	_, err := rec.Reconcile(
+	_, _, err := rec.Reconcile(
 		ctx,
 		eng,
 		ws,
@@ -964,7 +968,7 @@ func TestReconciler_PartialSaveRecordsGeneration(t *testing.T) {
 	require.Equal(t, wantGeneration,
 		md.Prepared[applied.Key()].Generation)
 
-	_, err = rec.Reconcile(
+	_, _, err = rec.Reconcile(
 		ctx, eng, ws, "instance-1", []Requirement{applied},
 	)
 	require.NoError(t, err)
@@ -990,7 +994,7 @@ func TestReconciler_InstanceRotationRetainsInactivePreparedRecords(t *testing.T)
 	})
 	require.NoError(t, err)
 
-	_, err = rec.Reconcile(
+	_, _, err = rec.Reconcile(
 		ctx, eng, ws, "instance-1", []Requirement{reqA, reqB},
 	)
 	require.NoError(t, err)
@@ -998,7 +1002,7 @@ func TestReconciler_InstanceRotationRetainsInactivePreparedRecords(t *testing.T)
 	require.NoError(t, err)
 	oldBGeneration := before.Prepared[reqB.Key()].Generation
 
-	_, err = rec.Reconcile(
+	_, _, err = rec.Reconcile(
 		ctx, eng, ws, "instance-2", []Requirement{reqA},
 	)
 	require.NoError(t, err)
@@ -1010,7 +1014,7 @@ func TestReconciler_InstanceRotationRetainsInactivePreparedRecords(t *testing.T)
 		"inactive records remain cached but cannot satisfy another generation")
 	require.Equal(t, oldBGeneration, md.Prepared[reqB.Key()].Generation)
 
-	_, err = rec.Reconcile(
+	_, _, err = rec.Reconcile(
 		ctx, eng, ws, "instance-2", []Requirement{reqB},
 	)
 	require.NoError(t, err)
@@ -1033,17 +1037,17 @@ func TestReconciler_ProcessRestartInvalidatesReusedInstanceID(t *testing.T) {
 	require.NoError(t, err)
 
 	recA := newReconciler("process-a", nil)
-	_, err = recA.Reconcile(
+	_, _, err = recA.Reconcile(
 		ctx, eng, ws, "reused-instance", []Requirement{cmd},
 	)
 	require.NoError(t, err)
-	_, err = recA.Reconcile(
+	_, _, err = recA.Reconcile(
 		ctx, eng, ws, "reused-instance", []Requirement{cmd},
 	)
 	require.NoError(t, err)
 
 	recB := newReconciler("process-b", nil)
-	_, err = recB.Reconcile(
+	_, _, err = recB.Reconcile(
 		ctx, eng, ws, "reused-instance", []Requirement{cmd},
 	)
 	require.NoError(t, err)
@@ -1079,7 +1083,7 @@ func TestReconciler_ConcurrentRotationsDoNotTrustStaleRecord(t *testing.T) {
 
 	oldDone := make(chan error, 1)
 	go func() {
-		_, err := recA.Reconcile(
+		_, _, err := recA.Reconcile(
 			ctx, eng, ws, "instance-2", []Requirement{oldReq},
 		)
 		oldDone <- err
@@ -1090,7 +1094,7 @@ func TestReconciler_ConcurrentRotationsDoNotTrustStaleRecord(t *testing.T) {
 		t.Fatal("old-generation reconcile did not reach Apply")
 	}
 
-	_, err := recB.Reconcile(
+	_, _, err := recB.Reconcile(
 		ctx, eng, ws, "instance-3", []Requirement{newReq},
 	)
 	require.NoError(t, err)
@@ -1112,7 +1116,7 @@ func TestReconciler_ConcurrentRotationsDoNotTrustStaleRecord(t *testing.T) {
 		phase: PhaseCommand,
 		apply: func() { reapplied.Add(1) },
 	}
-	_, err = recB.Reconcile(
+	_, _, err = recB.Reconcile(
 		ctx, eng, ws, "instance-3", []Requirement{currentReq},
 	)
 	require.NoError(t, err)

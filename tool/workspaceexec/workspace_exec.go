@@ -707,19 +707,21 @@ func (t *ExecTool) executeWorkspaceAttempt(
 	if err := validateWorkspaceHandle(ctx, req.eng, handle); err != nil {
 		return execOutput{}, true, err
 	}
-	if err := t.reconcileWorkspace(
+	commandMayHaveStarted, err := t.reconcileWorkspace(
 		ctx,
 		req.eng,
 		req.ws,
 		req.workspaceHandle.InstanceID,
-	); err != nil {
+	)
+	if err != nil {
 		return execOutput{}, true, err
 	}
 	if err := validateWorkspaceHandle(ctx, req.eng, handle); err != nil {
-		if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
-			// Reconcile may have started an arbitrary bootstrap command.
-			// Without an explicit success disposition, a post-reconcile
-			// generation change is invalidation-only and must not replay.
+		if errors.Is(err, codeexecutor.ErrWorkspaceStale) &&
+			commandMayHaveStarted {
+			// Reconcile may have started an arbitrary bootstrap command,
+			// so a post-reconcile generation change is invalidation-only
+			// and must not replay automatically.
 			err = errors.Join(err, codeexecutor.ErrWorkspaceRetryUnsafe)
 		}
 		return execOutput{}, true, err
@@ -1064,13 +1066,14 @@ func (t *KillSessionTool) Call(_ context.Context, args []byte) (any, error) {
 // the function preserves the legacy behavior of staging conversation
 // files inline; otherwise it delegates to the reconciler which
 // collects Requirements from every provider and applies them in
-// phase order (file -> skill -> command).
+// phase order (file -> skill -> command). The returned boolean reports
+// whether a bootstrap command may have started.
 func (t *ExecTool) reconcileWorkspace(
 	ctx context.Context,
 	eng codeexecutor.Engine,
 	ws codeexecutor.Workspace,
 	instanceID codeexecutor.WorkspaceInstanceID,
-) error {
+) (bool, error) {
 	if t == nil || len(t.providers) == 0 {
 		_, warnings, err := workspaceinput.StageConversationFiles(ctx, eng, ws)
 		for _, warning := range warnings {
@@ -1080,20 +1083,20 @@ func (t *ExecTool) reconcileWorkspace(
 				warning,
 			)
 		}
-		return err
+		return false, err
 	}
 	inv, _ := agent.InvocationFromContext(ctx)
 	var all []workspaceprep.Requirement
 	for _, p := range t.providers {
 		reqs, err := p.Requirements(ctx, inv)
 		if err != nil {
-			return fmt.Errorf(
+			return false, fmt.Errorf(
 				"workspace_exec provider %s: %w", p.Name(), err,
 			)
 		}
 		all = append(all, reqs...)
 	}
-	warnings, err := t.reconciler.Reconcile(
+	warnings, commandMayHaveStarted, err := t.reconciler.Reconcile(
 		ctx, eng, ws, instanceID, all,
 	)
 	for _, warning := range warnings {
@@ -1104,9 +1107,11 @@ func (t *ExecTool) reconcileWorkspace(
 		)
 	}
 	if err != nil {
-		return fmt.Errorf("workspace_exec reconcile: %w", err)
+		return commandMayHaveStarted, fmt.Errorf(
+			"workspace_exec reconcile: %w", err,
+		)
 	}
-	return nil
+	return commandMayHaveStarted, nil
 }
 
 func (t *ExecTool) liveEngine() (codeexecutor.Engine, error) {

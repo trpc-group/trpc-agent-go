@@ -1925,6 +1925,97 @@ func (r *nonInteractiveRunner) RunProgram(
 	}, nil
 }
 
+func TestValidateWorkspaceHandle(t *testing.T) {
+	handle := codeexecutor.WorkspaceHandle{
+		InstanceID: "instance-1",
+	}
+	tests := []struct {
+		name    string
+		eng     codeexecutor.Engine
+		handle  codeexecutor.WorkspaceHandle
+		wantErr string
+		stale   bool
+	}{
+		{
+			name:   "legacy handle needs no provider",
+			handle: codeexecutor.WorkspaceHandle{},
+		},
+		{
+			name:    "missing engine",
+			handle:  handle,
+			wantErr: "workspace manager is unavailable",
+		},
+		{
+			name: "missing manager",
+			eng: codeexecutor.NewEngine(
+				nil, nil, nil,
+			),
+			handle:  handle,
+			wantErr: "workspace manager is unavailable",
+		},
+		{
+			name: "manager loses instance identity capability",
+			eng: codeexecutor.NewEngine(
+				&nonInteractiveMgr{}, nil, nil,
+			),
+			handle:  handle,
+			wantErr: "lost instance identity capability",
+		},
+		{
+			name: "instance probe fails",
+			eng: codeexecutor.NewEngine(
+				&scriptedInstanceManager{}, nil, nil,
+			),
+			handle:  handle,
+			wantErr: "validate workspace instance: unexpected instance probe",
+		},
+		{
+			name: "instance provider returns empty ID",
+			eng: codeexecutor.NewEngine(
+				&instanceAwareTrustedManager{}, nil, nil,
+			),
+			handle:  handle,
+			wantErr: "instance provider returned an empty instance ID",
+		},
+		{
+			name: "instance remains current",
+			eng: codeexecutor.NewEngine(
+				&instanceAwareTrustedManager{instanceID: "instance-1"},
+				nil,
+				nil,
+			),
+			handle: handle,
+		},
+		{
+			name: "instance changed",
+			eng: codeexecutor.NewEngine(
+				&instanceAwareTrustedManager{instanceID: "instance-2"},
+				nil,
+				nil,
+			),
+			handle:  handle,
+			wantErr: "workspace instance changed from \"instance-1\" to \"instance-2\"",
+			stale:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateWorkspaceHandle(
+				context.Background(), tt.eng, tt.handle,
+			)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, tt.wantErr)
+			if tt.stale {
+				require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
+			}
+		})
+	}
+}
+
 func TestExecTool_InstanceRotationReRunsBootstrapCommand(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "workspace")
 	rt := localexec.NewRuntimeWithOptions(
@@ -2076,6 +2167,62 @@ func TestExecTool_RotationDuringReconcileStopsBeforeUserCommand(t *testing.T) {
 		[]string{"bootstrap", "bootstrap", "user"},
 		runner.eventsSnapshot(),
 		"the next call must reconcile the replacement before user execution",
+	)
+}
+
+func TestExecTool_RotationAfterCachedReconcileRetriesSafely(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "workspace")
+	rt := localexec.NewRuntimeWithOptions(
+		root,
+		localexec.WithRuntimeWorkspaceMode(
+			localexec.WorkspaceModeTrustedLocal,
+		),
+		localexec.WithAutoInputs(false),
+	)
+	manager := &scriptedInstanceManager{
+		Runtime: rt,
+		probes: []codeexecutor.WorkspaceInstanceID{
+			"instance-1", // initial create: before
+			"instance-1", // initial create: after
+			"instance-1", // initial pre-reconcile fence
+			"instance-1", // initial post-reconcile fence
+			"instance-1", // cached acquire
+			"instance-1", // cached pre-reconcile fence
+			"instance-2", // cached post-reconcile fence observes rotation
+			"instance-2", // replacement create: before
+			"instance-2", // replacement create: after
+			"instance-2", // replacement pre-reconcile fence
+			"instance-2", // replacement post-reconcile fence
+		},
+	}
+	runner := &fenceOrderRunner{inner: rt}
+	exec := &instanceAwareExec{
+		eng: codeexecutor.NewEngine(manager, rt, runner),
+	}
+	tl := NewExecTool(
+		exec,
+		WithWorkspaceRegistry(codeexecutor.NewWorkspaceRegistry()),
+		WithWorkspaceBootstrap(codeexecutor.WorkspaceBootstrapSpec{
+			Commands: []codeexecutor.WorkspaceCommand{{Cmd: "true"}},
+		}),
+	)
+	args, err := json.Marshal(execInput{Command: "printf ok"})
+	require.NoError(t, err)
+
+	got, err := tl.Call(context.Background(), args)
+	require.NoError(t, err)
+	require.Equal(t, "ok", got.(execOutput).Output)
+	require.Equal(t, 1, manager.createCount())
+
+	got, err = tl.Call(context.Background(), args)
+	require.NoError(t, err)
+	require.Equal(t, "ok", got.(execOutput).Output)
+	require.Equal(t, 2, manager.createCount(),
+		"a safe post-reconcile rotation must reacquire exactly once")
+	require.Equal(t,
+		[]string{"bootstrap", "user", "bootstrap", "user"},
+		runner.eventsSnapshot(),
+		"a skipped cached command must permit replacement reconciliation",
 	)
 }
 

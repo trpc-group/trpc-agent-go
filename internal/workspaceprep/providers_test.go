@@ -48,7 +48,7 @@ func TestBootstrapProvider_FilesAndCommands(t *testing.T) {
 	require.Len(t, reqs, 2)
 
 	rec := NewReconciler()
-	_, err = rec.Reconcile(ctx, eng, ws, "", reqs)
+	_, _, err = rec.Reconcile(ctx, eng, ws, "", reqs)
 	require.NoError(t, err)
 
 	seed, err := os.ReadFile(filepath.Join(ws.Path, "work/seed.txt"))

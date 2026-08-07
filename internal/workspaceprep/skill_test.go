@@ -233,7 +233,7 @@ func TestSkillRequirement_EndToEndViaReconciler(t *testing.T) {
 	})
 	require.NoError(t, err)
 	rec := NewReconciler()
-	warnings, err := rec.Reconcile(ctx, eng, ws, "", []Requirement{req})
+	warnings, _, err := rec.Reconcile(ctx, eng, ws, "", []Requirement{req})
 	require.NoError(t, err)
 	require.Empty(t, warnings)
 
@@ -244,7 +244,7 @@ func TestSkillRequirement_EndToEndViaReconciler(t *testing.T) {
 		ws.Path, "skills", "echoer", "SKILL.md",
 	))
 	require.NoError(t, err)
-	_, err = rec.Reconcile(ctx, eng, ws, "", []Requirement{req})
+	_, _, err = rec.Reconcile(ctx, eng, ws, "", []Requirement{req})
 	require.NoError(t, err)
 	info2, err := os.Stat(filepath.Join(
 		ws.Path, "skills", "echoer", "SKILL.md",
