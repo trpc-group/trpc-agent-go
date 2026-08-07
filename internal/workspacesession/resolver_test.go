@@ -11,6 +11,7 @@ package workspacesession
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -127,6 +128,7 @@ func TestResolver_EnsureEngine(t *testing.T) {
 	require.NotNil(t, fallback.Manager())
 	require.NotNil(t, fallback.FS())
 	require.NotNil(t, fallback.Runner())
+	require.True(t, fallback.Describe().SupportsCleanEnv)
 }
 
 func TestResolver_CreateWorkspace_UsesSessionIDOrFallbackName(t *testing.T) {
@@ -151,13 +153,13 @@ func TestResolver_CreateWorkspace_UsesSessionIDOrFallbackName(t *testing.T) {
 	ctx = agent.NewInvocationContext(context.Background(), inv)
 	ws3, err := r.CreateWorkspace(ctx, eng, "ignored-name")
 	require.NoError(t, err)
-	require.Equal(t, "sess-123", ws3.ID)
-	require.Equal(t, []string{"workspace", "sess-123"}, mgr.created)
+	require.Equal(t, KeyFromInvocation(inv), ws3.ID)
+	require.Equal(t, []string{"workspace", KeyFromInvocation(inv)}, mgr.created)
 
 	ws4, err := r.CreateWorkspace(ctx, eng, "ignored-name")
 	require.NoError(t, err)
 	require.Equal(t, ws3, ws4)
-	require.Equal(t, []string{"workspace", "sess-123"}, mgr.created)
+	require.Equal(t, []string{"workspace", KeyFromInvocation(inv)}, mgr.created)
 
 	inv.Session = &session.Session{
 		AppName: "app",
@@ -167,8 +169,8 @@ func TestResolver_CreateWorkspace_UsesSessionIDOrFallbackName(t *testing.T) {
 	ctx = agent.NewInvocationContext(context.Background(), inv)
 	ws5, err := r.CreateWorkspace(ctx, eng, "ignored-name")
 	require.NoError(t, err)
-	require.Equal(t, "app/user/sess-456", ws5.ID)
-	require.Equal(t, []string{"workspace", "sess-123", "app/user/sess-456"}, mgr.created)
+	require.Equal(t, KeyFromInvocation(inv), ws5.ID)
+	require.Equal(t, []string{"workspace", "0:/0:/8:sess-123", KeyFromInvocation(inv)}, mgr.created)
 }
 
 // artifactProbeManager asserts CreateWorkspace's context can resolve an artifact
@@ -232,7 +234,7 @@ func TestResolver_CreateWorkspace_InjectsArtifactContext(t *testing.T) {
 	r := NewResolver(nil, nil)
 	ws, err := r.CreateWorkspace(ctx, eng, "ignored")
 	require.NoError(t, err)
-	require.Equal(t, "myapp/u1/sess-art", ws.ID)
+	require.Equal(t, KeyFromInvocation(inv), ws.ID)
 	require.True(t, probe.sawOK)
 }
 
@@ -288,4 +290,69 @@ func TestResolver_InvalidateWorkspaceHandle_UsesInvocationKey(t *testing.T) {
 	_, err = r.CreateWorkspace(ctx, eng, "fallback")
 	require.NoError(t, err)
 	require.Equal(t, 2, mgr.creates)
+}
+
+func TestKeyFromInvocation_Injective(t *testing.T) {
+	a := KeyFromInvocation(&agent.Invocation{Session: &session.Session{AppName: "a/b", UserID: "c", ID: "d"}})
+	b := KeyFromInvocation(&agent.Invocation{Session: &session.Session{AppName: "a", UserID: "b/c", ID: "d"}})
+	require.NotEqual(t, a, b)
+}
+
+func TestKeyFromInvocation_RejectsEmptyID(t *testing.T) {
+	require.Equal(t, "", KeyFromInvocation(&agent.Invocation{Session: &session.Session{}}))
+	require.Equal(t, "", KeyFromInvocation(&agent.Invocation{Session: &session.Session{AppName: "a", UserID: "u", ID: ""}}))
+	require.NotEqual(t, "", KeyFromInvocation(&agent.Invocation{Session: &session.Session{ID: "x"}}))
+}
+
+func TestLegacyKeyFromInvocation_MatchesOldFormat(t *testing.T) {
+	// Full identity: old format was "app/user/id".
+	require.Equal(t, "app/user/sid",
+		LegacyKeyFromInvocation(&agent.Invocation{Session: &session.Session{
+			AppName: "app", UserID: "user", ID: "sid",
+		}}))
+
+	// Missing app or user: old format fell back to just "id".
+	require.Equal(t, "sid",
+		LegacyKeyFromInvocation(&agent.Invocation{Session: &session.Session{
+			ID: "sid",
+		}}))
+	require.Equal(t, "sid",
+		LegacyKeyFromInvocation(&agent.Invocation{Session: &session.Session{
+			AppName: "app", ID: "sid",
+		}}))
+
+	// Empty ID: returns "" (same as new format).
+	require.Equal(t, "",
+		LegacyKeyFromInvocation(&agent.Invocation{Session: &session.Session{}}))
+
+	// Nil safety.
+	require.Equal(t, "", LegacyKeyFromInvocation(nil))
+}
+
+func TestKeyFromInvocation_DiffersFromLegacy(t *testing.T) {
+	inv := &agent.Invocation{Session: &session.Session{
+		AppName: "app", UserID: "user", ID: "sid",
+	}}
+	require.NotEqual(t, KeyFromInvocation(inv), LegacyKeyFromInvocation(inv),
+		"new and legacy keys must differ to justify the migration")
+}
+
+func TestResolver_CreateWorkspace_EmptySessionIDUsesEphemeralKey(t *testing.T) {
+	mgr := &resolverStubMgr{}
+	eng := newResolverStubEngine(mgr)
+	r := NewResolver(nil, nil)
+	inv := agent.NewInvocation()
+	inv.Session = &session.Session{AppName: "app", UserID: "u", ID: ""}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	ws1, err := r.CreateWorkspace(ctx, eng, "skill-name")
+	require.NoError(t, err)
+	require.NotEqual(t, "skill-name", ws1.ID)
+	require.True(t, strings.HasPrefix(ws1.ID, "ephemeral-empty-session-"))
+	inv2 := agent.NewInvocation()
+	inv2.Session = &session.Session{}
+	ctx2 := agent.NewInvocationContext(context.Background(), inv2)
+	ws2, err := r.CreateWorkspace(ctx2, eng, "skill-name")
+	require.NoError(t, err)
+	require.NotEqual(t, ws1.ID, ws2.ID)
+	require.NotContains(t, mgr.created, "skill-name")
 }

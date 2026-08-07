@@ -125,8 +125,9 @@ func TestSandboxExecTool_WorkspaceFallsBackWithoutRegistry(t *testing.T) {
 
 	ws, err := tl.workspace(ctx)
 	require.NoError(t, err)
-	require.Equal(t, "app/u1/s1", ws.ID)
-	require.Equal(t, "app/u1/s1", ws.Path)
+	// KeyFromInvocation is length-prefixed: 3:app/2:u1/2:s1
+	require.Equal(t, "3:app/2:u1/2:s1", ws.ID)
+	require.Equal(t, "3:app/2:u1/2:s1", ws.Path)
 	require.Len(t, engine.manager.workspaces, 1)
 	require.Equal(t, ws, engine.manager.workspaces[0])
 }
@@ -260,7 +261,7 @@ func TestSandboxExecTool_ReusesWorkspacePerSession(t *testing.T) {
 	}
 
 	require.Len(t, engine.manager.workspaces, 1)
-	require.Equal(t, "app/u1/s1", engine.manager.workspaces[0].ID)
+	require.Equal(t, "3:app/2:u1/2:s1", engine.manager.workspaces[0].ID)
 }
 
 func TestSandboxExecTool_IsolatesWorkspacesAcrossSessions(t *testing.T) {
@@ -295,8 +296,9 @@ func TestSandboxExecTool_IsolatesWorkspacesAcrossSessions(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Len(t, engine.manager.workspaces, 2)
-	require.Equal(t, "app/u1/s1", engine.manager.workspaces[0].ID)
-	require.Equal(t, "app/u1/s2", engine.manager.workspaces[1].ID)
+	// KeyFromInvocation is length-prefixed: 3:app/2:u1/2:s1 / 3:app/2:u1/2:s2
+	require.Equal(t, "3:app/2:u1/2:s1", engine.manager.workspaces[0].ID)
+	require.Equal(t, "3:app/2:u1/2:s2", engine.manager.workspaces[1].ID)
 }
 
 func TestSandboxExecTool_RejectsUnsupportedSessionModes(t *testing.T) {

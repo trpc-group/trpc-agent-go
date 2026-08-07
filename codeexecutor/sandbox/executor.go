@@ -129,15 +129,12 @@ func executionIDFromContext(ctx context.Context) string {
 	if !ok || inv == nil || inv.Session == nil {
 		return ""
 	}
-	var parts []string
-	if inv.Session.AppName != "" {
-		parts = append(parts, inv.Session.AppName)
+	app := inv.Session.AppName
+	user := inv.Session.UserID
+	id := inv.Session.ID
+	if strings.TrimSpace(id) == "" {
+		return ""
 	}
-	if inv.Session.UserID != "" {
-		parts = append(parts, inv.Session.UserID)
-	}
-	if inv.Session.ID != "" {
-		parts = append(parts, inv.Session.ID)
-	}
-	return strings.Join(parts, "/")
+	return fmt.Sprintf("%d:%s/%d:%s/%d:%s",
+		len(app), app, len(user), user, len(id), id)
 }

@@ -11,6 +11,9 @@ package workspacesession
 
 import (
 	"context"
+	"fmt"
+	"strings"
+	"sync/atomic"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
@@ -18,6 +21,8 @@ import (
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 )
+
+var ephemeralSessionSeq uint64
 
 // Resolver owns shared engine and session-workspace resolution for tools
 // that should operate on the same invocation workspace.
@@ -55,8 +60,7 @@ func (r *Resolver) EnsureEngine() codeexecutor.Engine {
 		"workspacesession: falling back to local engine; " +
 			"executor does not expose EngineProvider",
 	)
-	rt := localexec.NewRuntime("")
-	return codeexecutor.NewEngine(rt, rt, rt)
+	return localexec.New().Engine()
 }
 
 // CreateWorkspace acquires the invocation-scoped workspace for a tool run.
@@ -71,6 +75,10 @@ func (r *Resolver) CreateWorkspace(
 
 // CreateWorkspaceHandle acquires the invocation-scoped workspace together with
 // the registry token required for ABA-safe conditional invalidation.
+//
+// If the invocation carries a Session without a stable ID, an ephemeral
+// workspace key is used so placeholder sessions cannot share a durable
+// tool/skill name key.
 func (r *Resolver) CreateWorkspaceHandle(
 	ctx context.Context,
 	eng codeexecutor.Engine,
@@ -81,9 +89,17 @@ func (r *Resolver) CreateWorkspaceHandle(
 		reg = codeexecutor.NewWorkspaceRegistry()
 		r.reg = reg
 	}
-	sid := workspaceKey(ctx, name)
 	if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
 		ctx = withWorkspaceArtifactContext(ctx, inv)
+	}
+	sid := workspaceKey(ctx, name)
+	if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil && inv.Session != nil {
+		if strings.TrimSpace(inv.Session.ID) == "" {
+			sid = fmt.Sprintf(
+				"ephemeral-empty-session-%d",
+				atomic.AddUint64(&ephemeralSessionSeq, 1),
+			)
+		}
 	}
 	return reg.AcquireHandle(ctx, eng.Manager(), sid)
 }
@@ -109,20 +125,51 @@ func workspaceKey(ctx context.Context, fallback string) string {
 }
 
 // KeyFromInvocation derives the shared workspace key for an invocation.
+//
+// Encoding is injective over (AppName, UserID, ID) via length prefixes.
+// Session.ID is required; empty/whitespace ID returns "".
+//
+// Breaking change: the encoding changed from "app/user/id" (or just "id"
+// when fields were missing) to a length-prefixed "len:app/len:user/len:id"
+// format to prevent separator-collision attacks. After an upgrade, existing
+// PerSession workspaces on disk are orphaned because the same session now
+// hashes to a different directory path. Callers that need to locate legacy
+// workspaces should use LegacyKeyFromInvocation for a one-time migration
+// (e.g. rename or symlink the old directory to the new key's path).
 func KeyFromInvocation(inv *agent.Invocation) string {
 	if inv == nil || inv.Session == nil {
 		return ""
 	}
-	if inv.Session.AppName != "" && inv.Session.UserID != "" && inv.Session.ID != "" {
-		return inv.Session.AppName + "/" + inv.Session.UserID + "/" + inv.Session.ID
+	app := inv.Session.AppName
+	user := inv.Session.UserID
+	id := inv.Session.ID
+	if strings.TrimSpace(id) == "" {
+		return ""
 	}
-	return inv.Session.ID
+	return fmt.Sprintf("%d:%s/%d:%s/%d:%s",
+		len(app), app, len(user), user, len(id), id)
 }
 
-// withWorkspaceArtifactContext mirrors internal/workspaceinput.withArtifactContext:
-// inject artifact service when present, then session info when Session is set.
-// Workspace init hooks and StageInputs during CreateWorkspace then resolve
-// artifact:// references consistently with other artifact-backed staging paths.
+// LegacyKeyFromInvocation reproduces the pre-migration workspace key format
+// ("app/user/id" or just "id") for a one-time upgrade path. Callers should
+// check whether a workspace exists at the legacy key's derived path and
+// migrate it to the new KeyFromInvocation path if found.
+func LegacyKeyFromInvocation(inv *agent.Invocation) string {
+	if inv == nil || inv.Session == nil {
+		return ""
+	}
+	app := inv.Session.AppName
+	user := inv.Session.UserID
+	id := inv.Session.ID
+	if strings.TrimSpace(id) == "" {
+		return ""
+	}
+	if app != "" && user != "" {
+		return app + "/" + user + "/" + id
+	}
+	return id
+}
+
 func withWorkspaceArtifactContext(
 	ctx context.Context,
 	inv *agent.Invocation,
