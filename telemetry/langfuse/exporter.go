@@ -145,6 +145,7 @@ func transformInvokeAgent(span *tracepb.Span) {
 			// Keeping token attributes on InvokeAgent would make Langfuse double count tokens
 			// compared to the old behavior (Chat-only token accounting).
 		case semconvtrace.KeyGenAIUsageInputTokens, semconvtrace.KeyGenAIUsageOutputTokens,
+			semconvtrace.KeyGenAIUsageTotalTokens,
 			semconvtrace.KeyGenAIUsageInputTokensCached, semconvtrace.KeyGenAIUsageInputTokensCacheRead,
 			semconvtrace.KeyGenAIUsageInputTokensCacheCreation:
 		default:
@@ -235,6 +236,8 @@ func collectLLMSpanAttributes(attrs []*commonpb.KeyValue) llmSpanCollected {
 			c.usage.Input = attr.Value.GetIntValue()
 		case semconvtrace.KeyGenAIUsageOutputTokens:
 			c.usage.Output = attr.Value.GetIntValue()
+		case semconvtrace.KeyGenAIUsageTotalTokens:
+			c.usage.Total = attr.Value.GetIntValue()
 		case semconvtrace.KeyGenAIUsageInputTokensCached:
 			c.usage.InputCached = attr.Value.GetIntValue()
 		case semconvtrace.KeyGenAIUsageInputTokensCacheRead:

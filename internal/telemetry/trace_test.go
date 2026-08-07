@@ -740,6 +740,7 @@ func TestTraceAfterInvokeAgent_NilPaths(t *testing.T) {
 			if tt.tokenUsage != nil {
 				require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIUsageInputTokens, int64(tt.tokenUsage.PromptTokens)))
 				require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIUsageOutputTokens, int64(tt.tokenUsage.CompletionTokens)))
+				require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIUsageTotalTokens, int64(tt.tokenUsage.TotalTokens)))
 			}
 			if tt.timeToFirstToken > 0 {
 				require.True(t, hasAttr(span.attrs, semconvtrace.KeyTRPCAgentGoClientTimeToFirstToken, tt.timeToFirstToken.Seconds()))
@@ -1014,11 +1015,23 @@ func TestBuildResponseAttributes(t *testing.T) {
 				Usage: &model.Usage{
 					PromptTokens:     10,
 					CompletionTokens: 20,
+					TotalTokens:      30,
 					PromptTokensDetails: model.PromptTokensDetails{
 						CachedTokens:        7,
 						CacheReadTokens:     11,
 						CacheCreationTokens: 13,
 					},
+				},
+			},
+		},
+		{
+			name: "response with usage without total falls back to sum",
+			rsp: &model.Response{
+				ID:    "resp2",
+				Model: "gpt-4",
+				Usage: &model.Usage{
+					PromptTokens:     4,
+					CompletionTokens: 6,
 				},
 			},
 		},
@@ -1051,8 +1064,15 @@ func TestBuildResponseAttributes(t *testing.T) {
 				require.True(t, hasAttr(attrs, semconvtrace.KeyGenAIResponseModel, tt.rsp.Model))
 				require.True(t, hasAttr(attrs, semconvtrace.KeyGenAIResponseID, tt.rsp.ID))
 
-				// Verify cached prompt tokens attribute when provided
+				// Verify usage token attributes when provided
 				if tt.rsp.Usage != nil {
+					wantTotal := int64(tt.rsp.Usage.TotalTokens)
+					if wantTotal == 0 {
+						wantTotal = int64(tt.rsp.Usage.PromptTokens + tt.rsp.Usage.CompletionTokens)
+					}
+					require.True(t, hasAttr(attrs, semconvtrace.KeyGenAIUsageInputTokens, int64(tt.rsp.Usage.PromptTokens)))
+					require.True(t, hasAttr(attrs, semconvtrace.KeyGenAIUsageOutputTokens, int64(tt.rsp.Usage.CompletionTokens)))
+					require.True(t, hasAttr(attrs, semconvtrace.KeyGenAIUsageTotalTokens, wantTotal))
 					if tt.rsp.Usage.PromptTokensDetails.CachedTokens != 0 {
 						require.True(t, hasAttr(attrs, semconvtrace.KeyGenAIUsageInputTokensCached, int64(tt.rsp.Usage.PromptTokensDetails.CachedTokens)))
 					}
@@ -1278,6 +1298,13 @@ func TestBuildRequestAttributes_JSONMarshalPaths(t *testing.T) {
 	require.True(t, foundRequest)
 	require.True(t, foundLegacyMessages)
 	require.True(t, foundOTelMessages)
+}
+
+func TestTotalTokens(t *testing.T) {
+	require.Equal(t, 30, totalTokens(10, 20, 30))
+	require.Equal(t, 30, totalTokens(10, 20, 0))
+	require.Equal(t, 0, totalTokens(0, 0, 0))
+	require.Equal(t, 42, totalTokens(1, 2, 42))
 }
 
 func TestBuildResponseAttributes_JSONMarshalPaths(t *testing.T) {

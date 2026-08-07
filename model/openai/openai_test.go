@@ -787,6 +787,7 @@ func TestModel_ChatTelemetry_OptInNonStreamingTraceAndMetrics(t *testing.T) {
 	require.Equal(t, "telemetry-non-stream", attrs[semconvtrace.KeyGenAIResponseID].AsString())
 	require.Equal(t, int64(3), attrs[semconvtrace.KeyGenAIUsageInputTokens].AsInt64())
 	require.Equal(t, int64(2), attrs[semconvtrace.KeyGenAIUsageOutputTokens].AsInt64())
+	require.Equal(t, int64(5), attrs[semconvtrace.KeyGenAIUsageTotalTokens].AsInt64())
 
 	var rm metricdata.ResourceMetrics
 	require.NoError(t, reader.Collect(context.Background(), &rm))

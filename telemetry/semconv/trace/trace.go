@@ -86,6 +86,12 @@ const (
 	KeyGenAIUsageOutputTokens = "gen_ai.usage.output_tokens" // #nosec G101 - this is a metric key name, not a credential.
 	// KeyGenAIUsageInputTokens is the attribute key for input token count.
 	KeyGenAIUsageInputTokens = "gen_ai.usage.input_tokens" // #nosec G101 - this is a metric key name, not a credential.
+	// KeyGenAIUsageTotalTokens is the attribute key for total token count
+	// (input + output). Some backends (for example Zhiyan LLM observability)
+	// expect this field alongside input/output token counts.
+	// Note: This is an extension field; it is not part of the upstream GenAI
+	// semantic conventions yet.
+	KeyGenAIUsageTotalTokens = "gen_ai.usage.total_tokens" // #nosec G101 - this is a metric key name, not a credential.
 	// KeyGenAIUsageInputTokensCached is the attribute key for cached input token count.
 	// Note: This is an extension field used to report prompt cache tokens; it is not part of the upstream GenAI semantic conventions yet.
 	KeyGenAIUsageInputTokensCached = "gen_ai.usage.input_tokens.cached" // #nosec G101 - this is a metric key name, not a credential.

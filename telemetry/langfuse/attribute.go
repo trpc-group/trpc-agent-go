@@ -62,6 +62,7 @@ const (
 type usageDetails struct {
 	Input              int64 `json:"input,omitempty"`
 	Output             int64 `json:"output,omitempty"`
+	Total              int64 `json:"total,omitempty"`
 	InputCached        int64 `json:"input_cached,omitempty"`
 	InputCacheRead     int64 `json:"input_cache_read,omitempty"`
 	InputCacheCreation int64 `json:"input_cache_creation,omitempty"`
