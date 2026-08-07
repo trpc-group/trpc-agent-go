@@ -1,0 +1,33 @@
+{
+  "task_id": "03_goroutine_leak",
+  "diff_summary": "1 file, 1 added",
+  "findings": [
+    {
+      "severity": "high",
+      "category": "goroutine_leak",
+      "file": "worker.go",
+      "line": 6,
+      "title": "Goroutine launched without context cancellation handling",
+      "evidence": "go func() {",
+      "recommendation": "Add select with <-ctx.Done() to allow goroutine cleanup on cancellation",
+      "confidence": "medium",
+      "source": "custom_rule",
+      "rule_id": "GO_GOROUTINE_NO_CANCEL"
+    }
+  ],
+  "warnings": [],
+  "risk_summary": {
+    "total": 1,
+    "by_severity": { "high": 1 },
+    "by_category": { "goroutine_leak": 1 },
+    "need_human_review": 0
+  },
+  "sandbox_summary": {},
+  "monitoring": {
+    "total_duration_ms": 5,
+    "finding_count": 1,
+    "severity_distribution": { "high": 1 }
+  },
+  "recommendations": ["Add select with <-ctx.Done() to allow goroutine cleanup on cancellation"],
+  "generated_at": "2026-07-28T09:00:00Z"
+}

@@ -1,0 +1,67 @@
+# Code Review Agent Policy Configuration
+version: "1.0"
+
+# Sandbox execution configuration.
+sandbox:
+  default_backend: "container"
+  default_timeout_s: 120
+  max_output_bytes: 10485760
+  env_whitelist:
+    - "PATH"
+    - "HOME"
+    - "GOPATH"
+    - "GOROOT"
+    - "GOFLAGS"
+
+# Commands allowed in the sandbox.
+allowed_commands:
+  - "go"
+  - "gofmt"
+  - "gosec"
+  - "staticcheck"
+  - "golangci-lint"
+  - "git"
+  - "cat"
+  - "echo"
+  - "diff"
+  - "ls"
+
+# Commands denied in the sandbox (high-risk).
+denied_commands:
+  - "rm"
+  - "dd"
+  - "curl"
+  - "wget"
+  - "sudo"
+  - "apt"
+  - "npm"
+  - "pip"
+
+# Permission decision policy.
+permission:
+  deny_unknown_commands: true
+  ask_on_risk_level: "high"
+
+# Rule enable/disable and severity overrides.
+rules:
+  enabled_rules: []
+  disabled_rules: []
+  severity_overrides:
+    GO_ERROR_SILENT_IGNORE: "low"
+
+# Deduplication settings.
+dedup:
+  enabled: true
+  same_line_same_rule: true
+  same_file_same_msg: true
+  max_warnings: 20
+
+# Sensitive information patterns for redaction.
+sensitive:
+  output_mode: "redact"
+  replacement: "***REDACTED***"
+
+# Audit trail configuration.
+audit:
+  enabled: true
+  log_permission: true

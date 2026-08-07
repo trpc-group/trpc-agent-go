@@ -1,0 +1,18 @@
+diff --git a/exec.go b/exec.go
+index abc..def 100644
+--- /dev/null
++++ b/exec.go
+@@ -0,0 +1,15 @@
++package main
++
++import "os/exec"
++
++// runCmd executes a user-supplied command — high risk for sandbox.
++// The sandbox should timeout or deny this via PermissionPolicy.
++func runCmd(cmd string) (string, error) {
++	out, err := exec.Command("sh", "-c", cmd).Output()
++	if err != nil {
++		return "", err
++	}
++	return string(out), nil
++}

@@ -1,0 +1,19 @@
+diff --git a/readfile.go b/readfile.go
+index abc..def 100644
+--- /dev/null
++++ b/readfile.go
+@@ -0,0 +1,15 @@
++package main
++
++import "os"
++
++func readConfig(path string) ([]byte, error) {
++	f, err := os.Open(path)
++	if err != nil {
++		return nil, err
++	}
++	// f.Close() is never called — resource leak
++	buf := make([]byte, 1024)
++	n, _ := f.Read(buf)
++	return buf[:n], nil
++}

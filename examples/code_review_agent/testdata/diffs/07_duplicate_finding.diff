@@ -1,0 +1,20 @@
+diff --git a/bug.go b/bug.go
+index abc..def 100644
+--- /dev/null
++++ b/bug.go
+@@ -0,0 +1,18 @@
++package main
++
++func processItems() error {
++	// Three occurrences of the same pattern: _ = fn() ignoring errors.
++	// Dedup should report this only once per line.
++	_ = doSomething()
++	_ = doSomething() // same line, same rule — duplicate
++	_ = doSomething() // same line, same rule — duplicate
++
++	return nil
++}
++
++func doSomething() error {
++	return nil
++}

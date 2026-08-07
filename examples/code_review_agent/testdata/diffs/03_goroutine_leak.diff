@@ -1,0 +1,21 @@
+diff --git a/worker.go b/worker.go
+index abc..def 100644
+--- /dev/null
++++ b/worker.go
+@@ -0,0 +1,16 @@
++package main
++
++import (
++	"time"
++)
++
++func startWorker() {
++	go func() {
++		for {
++			// No ctx.Done() check — goroutine leak
++			process()
++		}
++	}()
++}
++
++func process() { time.Sleep(time.Second) }
