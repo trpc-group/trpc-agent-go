@@ -314,54 +314,110 @@ func sourceStringEnd(code string, index int, quote byte, triple bool) bool {
 }
 
 func codeSleepSeconds(lang, code string) (int, bool) {
+	code = maskNonExecutableSource(lang, code)
+	maxSeconds := 0
+	found := false
 	if lang == "go" {
-		if match := goSleepPattern.FindStringSubmatch(code); len(match) == 3 {
-			value, err := strconv.Atoi(match[1])
-			if err != nil {
-				return 0, false
-			}
-			multipliers := map[string]int{
-				"second": 1,
-				"minute": 60,
-				"hour":   60 * 60,
-				"day":    24 * 60 * 60,
-			}
-			return value * multipliers[strings.ToLower(match[2])], true
+		if seconds, ok := maxGoSleepSeconds(code); ok {
+			maxSeconds = seconds
+			found = true
 		}
 	}
-	if lang == "javascript" || lang == "typescript" || lang == "node" {
-		if match := jsSleepPattern.FindStringSubmatch(code); len(match) == 2 {
-			value, err := strconv.Atoi(match[1])
-			if err != nil {
-				return 0, false
+	if isJavaScriptLanguage(lang) {
+		if seconds, ok := maxJavaScriptSleepSeconds(code); ok {
+			if !found || seconds > maxSeconds {
+				maxSeconds = seconds
 			}
-			return value / 1000, true
+			found = true
 		}
 	}
-	if match := codeSleepPattern.FindStringSubmatch(code); len(match) == 3 {
+	if seconds, ok := maxGenericSleepSeconds(code); ok {
+		if !found || seconds > maxSeconds {
+			maxSeconds = seconds
+		}
+		found = true
+	}
+	return maxSeconds, found
+}
+
+func maxGoSleepSeconds(code string) (int, bool) {
+	maxSeconds := 0
+	found := false
+	for _, match := range goSleepPattern.FindAllStringSubmatch(code, -1) {
+		if len(match) != 3 {
+			continue
+		}
 		value, err := strconv.Atoi(match[1])
 		if err != nil {
-			return 0, false
+			continue
 		}
-		multipliers := map[string]int{
-			"":        1,
-			"second":  1,
-			"seconds": 1,
-			"sec":     1,
-			"secs":    1,
-			"minute":  60,
-			"minutes": 60,
-			"min":     60,
-			"mins":    60,
-			"hour":    60 * 60,
-			"hours":   60 * 60,
-			"hr":      60 * 60,
-			"hrs":     60 * 60,
-			"day":     24 * 60 * 60,
-			"days":    24 * 60 * 60,
-			"d":       24 * 60 * 60,
+		multiplier := 1
+		switch strings.ToLower(match[2]) {
+		case "minute":
+			multiplier = 60
+		case "hour":
+			multiplier = 60 * 60
+		case "day":
+			multiplier = 24 * 60 * 60
 		}
-		return value * multipliers[strings.ToLower(match[2])], true
+		seconds := value * multiplier
+		if !found || seconds > maxSeconds {
+			maxSeconds = seconds
+			found = true
+		}
 	}
-	return 0, false
+	return maxSeconds, found
+}
+
+func maxJavaScriptSleepSeconds(code string) (int, bool) {
+	maxSeconds := 0
+	found := false
+	for _, match := range jsSleepPattern.FindAllStringSubmatch(code, -1) {
+		if len(match) != 2 {
+			continue
+		}
+		value, err := strconv.Atoi(match[1])
+		if err != nil {
+			continue
+		}
+		seconds := value / 1000
+		if !found || seconds > maxSeconds {
+			maxSeconds = seconds
+			found = true
+		}
+	}
+	return maxSeconds, found
+}
+
+func maxGenericSleepSeconds(code string) (int, bool) {
+	maxSeconds := 0
+	found := false
+	for _, match := range codeSleepPattern.FindAllStringSubmatch(code, -1) {
+		if len(match) != 3 {
+			continue
+		}
+		value, err := strconv.Atoi(match[1])
+		if err != nil {
+			continue
+		}
+		seconds := value * sleepUnitMultiplier(strings.ToLower(match[2]))
+		if !found || seconds > maxSeconds {
+			maxSeconds = seconds
+			found = true
+		}
+	}
+	return maxSeconds, found
+}
+
+func sleepUnitMultiplier(unit string) int {
+	switch unit {
+	case "minute", "minutes", "min", "mins":
+		return 60
+	case "hour", "hours", "hr", "hrs":
+		return 60 * 60
+	case "day", "days", "d":
+		return 24 * 60 * 60
+	default:
+		return 1
+	}
 }

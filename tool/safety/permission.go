@@ -176,6 +176,7 @@ func (p *permissionPolicy) CheckToolPermission(
 			}
 			return p.finish(ctx, final)
 		}
+		report = normalizeScannerReport(scanReq, report)
 		if !report.Decision.Valid() {
 			failure := invalidScannerDecisionReport(scanReq, report)
 			if i > 0 && reportRank(final) > reportRank(failure) {
@@ -312,6 +313,19 @@ func auditDeniedPathsForScanner(scanner Scanner) []string {
 		return append([]string(nil), defaultScanner.policy.DeniedPaths...)
 	}
 	return append([]string(nil), DefaultPolicy().DeniedPaths...)
+}
+
+func normalizeScannerReport(scanReq ScanRequest, report Report) Report {
+	report.ToolName = scanReq.ToolName
+	report.ToolCallID = scanReq.ToolCallID
+	report.Backend = scanReq.Backend
+	if !report.Backend.Valid() {
+		report.Backend = BackendUnknown
+	}
+	if !report.RiskLevel.Valid() {
+		report.RiskLevel = RiskHigh
+	}
+	return report
 }
 
 func invalidScannerDecisionReport(scanReq ScanRequest, report Report) Report {

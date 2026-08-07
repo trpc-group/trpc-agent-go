@@ -100,8 +100,14 @@ func (s *DefaultScanner) scanSchemelessDestination(
 }
 
 func isNetworkDestinationField(fieldName string) bool {
-	switch strings.ToLower(strings.TrimSpace(fieldName)) {
-	case "url", "uri", "host", "hostname", "endpoint", "address", "destination":
+	fieldName = strings.ToLower(strings.TrimSpace(fieldName))
+	fieldName = strings.NewReplacer("_", "", "-", "").Replace(fieldName)
+	switch fieldName {
+	case "url", "urls", "baseurl", "baseurls",
+		"uri", "uris", "baseuri", "baseuris",
+		"host", "hosts", "hostname", "hostnames",
+		"endpoint", "endpoints", "address", "addresses",
+		"destination", "destinations":
 		return true
 	default:
 		return false

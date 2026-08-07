@@ -214,6 +214,45 @@ func TestPermissionPolicy_NormalizesCustomReportBlocked(t *testing.T) {
 	require.Contains(t, audit.String(), `"blocked":true`)
 }
 
+func TestPermissionPolicy_NormalizesCustomReportIdentityBackendAndRisk(t *testing.T) {
+	var observed Report
+	var audit bytes.Buffer
+	policy := NewPermissionPolicy(
+		ScannerFunc(func(context.Context, ScanRequest) (Report, error) {
+			return Report{
+				ToolName:       "spoofed_tool",
+				ToolCallID:     "spoofed_call",
+				Backend:        BackendHost,
+				Decision:       DecisionAsk,
+				RiskLevel:      RiskLevel("invalid"),
+				RuleID:         "custom.review",
+				Recommendation: "review the request",
+			}, nil
+		}),
+		WithAuditWriter(NewJSONLAuditWriter(&audit)),
+		WithReportObserver(func(_ context.Context, report Report) {
+			observed = report
+		}),
+	)
+	decision, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:   "workspace_exec",
+		ToolCallID: "call-42",
+		Arguments:  []byte(`{"command":"echo ok"}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionAsk, decision.Action)
+	require.Equal(t, "workspace_exec", observed.ToolName)
+	require.Equal(t, "call-42", observed.ToolCallID)
+	require.Equal(t, BackendWorkspace, observed.Backend)
+	require.Equal(t, RiskHigh, observed.RiskLevel)
+	require.Contains(t, audit.String(), `"tool_name":"workspace_exec"`)
+	require.Contains(t, audit.String(), `"tool_call_id":"call-42"`)
+	require.Contains(t, audit.String(), `"backend":"workspace"`)
+	require.Contains(t, audit.String(), `"risk_level":"high"`)
+	require.NotContains(t, audit.String(), "spoofed_tool")
+	require.NotContains(t, audit.String(), "spoofed_call")
+}
+
 func TestPermissionPolicy_CodeExecInvalidArgumentsAsk(t *testing.T) {
 	var observed Report
 	policy := NewPermissionPolicy(

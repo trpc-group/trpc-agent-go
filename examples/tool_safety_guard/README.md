@@ -76,6 +76,16 @@ scanner, err := safety.NewDefaultScanner(policy)
 if err != nil {
     log.Fatalf("create safety scanner: %v", err)
 }
+auditFile, err := os.OpenFile(
+    "tool_safety_audit.jsonl",
+    os.O_CREATE|os.O_WRONLY|os.O_APPEND,
+    0o600,
+)
+if err != nil {
+    log.Fatalf("open safety audit: %v", err)
+}
+defer auditFile.Close()
+auditWriter := safety.NewJSONLAuditWriter(auditFile)
 
 events, err := runner.Run(
     ctx,
@@ -83,10 +93,17 @@ events, err := runner.Run(
     sessionID,
     message,
     agent.WithToolPermissionPolicy(
-        safety.NewPermissionPolicy(scanner),
+        safety.NewPermissionPolicy(scanner,
+            safety.WithAuditWriter(auditWriter),
+        ),
     ),
 )
 ```
+
+Add `os` to the imports when using this audit setup. The caller owns the audit
+destination and is responsible for keeping it open while tool calls run and
+closing it after the agent finishes; `JSONLAuditWriter` only serializes and
+writes events.
 
 The framework still uses `tool.PermissionActionAllow`, `tool.PermissionActionDeny`, and `tool.PermissionActionAsk`. A scanner decision of `needs_human_review` is preserved in reports and audit events, but maps to framework `ask` so the tool is not executed.
 

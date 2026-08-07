@@ -344,6 +344,7 @@ func TestDefaultScanner_ProcessControlEnvironmentMatchesEnvScrub(t *testing.T) {
 	for _, key := range []string{
 		"HOME", "SHELL", "IFS", "PS4", "SHELLOPTS", "BASHOPTS",
 		"PATH=.", "BASH_FUNC_demo()", "GIT_SSH_COMMAND", "GIT_ASKPASS", "SSH_ASKPASS",
+		"GIT_EXTERNAL_DIFF",
 		"GIT_PROXY_COMMAND",
 		"GIT_CONFIG_PARAMETERS", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0",
 	} {
@@ -505,6 +506,42 @@ func TestDefaultScanner_DetectsCodeResourceAbuse(t *testing.T) {
 			require.True(t, report.Blocked)
 		})
 	}
+}
+
+func TestDefaultScanner_SleepScanMasksNonExecutableTextAndUsesMaximum(t *testing.T) {
+	t.Run("ignores an earlier string and finds a later long sleep", func(t *testing.T) {
+		code := "print(\"time.sleep(1)\")\nimport time\ntime.sleep(3600)"
+		seconds, ok := codeSleepSeconds("python", code)
+		require.True(t, ok)
+		require.Equal(t, 3600, seconds)
+
+		report, err := MustDefaultScanner(Policy{}).Scan(context.Background(), ScanRequest{
+			ToolName: "execute_code",
+			Backend:  BackendCodeExec,
+			Language: "python",
+			Code:     code,
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionDeny, report.Decision)
+		require.Equal(t, "resource.long_running", report.RuleID)
+	})
+
+	t.Run("ignores sleep text in a string", func(t *testing.T) {
+		code := `print("time.sleep(99999)")`
+		seconds, ok := codeSleepSeconds("python", code)
+		require.False(t, ok)
+		require.Zero(t, seconds)
+
+		report, err := MustDefaultScanner(Policy{}).Scan(context.Background(), ScanRequest{
+			ToolName: "execute_code",
+			Backend:  BackendCodeExec,
+			Language: "python",
+			Code:     code,
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionAllow, report.Decision)
+		require.Equal(t, "evaluation.none", report.RuleID)
+	})
 }
 
 func TestDefaultScanner_GatesCollectedSecretPaths(t *testing.T) {
@@ -1907,8 +1944,32 @@ func TestDefaultScanner_UnknownArgumentsApplyNetworkAllowlistToSchemelessDestina
 			ruleID:   "evaluation.none",
 		},
 		{
+			name:     "allowlisted base url alias",
+			args:     `{"baseUrl":"allowed.example/path"}`,
+			decision: DecisionAllow,
+			ruleID:   "evaluation.none",
+		},
+		{
+			name:     "allowlisted urls array alias",
+			args:     `{"urls":["allowed.example/path"]}`,
+			decision: DecisionAllow,
+			ruleID:   "evaluation.none",
+		},
+		{
 			name:     "non allowlisted url field",
 			args:     `{"url":"evil.example/path"}`,
+			decision: DecisionDeny,
+			ruleID:   "network.non_allowlisted_domain",
+		},
+		{
+			name:     "non allowlisted base url alias",
+			args:     `{"base_url":"evil.example/path"}`,
+			decision: DecisionDeny,
+			ruleID:   "network.non_allowlisted_domain",
+		},
+		{
+			name:     "non allowlisted urls array alias",
+			args:     `{"urls":["evil.example/path"]}`,
 			decision: DecisionDeny,
 			ruleID:   "network.non_allowlisted_domain",
 		},
