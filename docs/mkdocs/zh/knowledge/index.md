@@ -419,6 +419,12 @@ err := kb.Load(ctx,
 | **Vector Store** | PGVector (CrewAI 使用 ChromaDB) |
 | **Agent 模型** | DeepSeek-V3.2 |
 
+### 面向特定语料的 Contextual Retrieval 试验
+
+[Contextual Retrieval 示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/contextual-retrieval)基于现有公开的 `source.Source` 和 `document.Document.EmbeddingText` 契约，对比原始索引文本与加入上下文后的索引文本，同时仍向 Agent 返回原始 chunk 内容。
+
+这是按语料选择启用的评估方案，不是 Knowledge 的默认行为，也不代表对所有任务均有收益。配对试验需保持模型、Embedder、分块方式、向量存储、检索设置、查询集和评测协议一致；在将父文档发送给配置的上下文模型前，请先阅读示例中的数据处理和成本说明。
+
 
 ## 更多内容
 
