@@ -60,7 +60,7 @@ func (p *toolErrorPlugin) validateArguments(
 		}, true
 	}
 	value, err := jsonschema.UnmarshalJSON(bytes.NewReader(
-		normalizeArguments(raw, schema),
+		normalizeArguments(raw),
 	))
 	if err != nil {
 		return Details{
@@ -121,9 +121,8 @@ func (rejectExternalSchemaLoader) Load(location string) (any, error) {
 	return nil, fmt.Errorf("external schema reference %q is not allowed", location)
 }
 
-func normalizeArguments(raw []byte, schema *tool.Schema) []byte {
-	if len(raw) > 0 || schema == nil || len(schema.Required) > 0 ||
-		len(schema.Properties) > 0 {
+func normalizeArguments(raw []byte) []byte {
+	if len(bytes.TrimSpace(raw)) > 0 {
 		return raw
 	}
 	return []byte("{}")
@@ -177,13 +176,21 @@ func validationCode(err *jsonschema.ValidationError) string {
 	if len(path) == 0 {
 		return "schema"
 	}
-	code := path[len(path)-1]
-	switch code {
-	case "additionalProperties":
-		return "additional_properties"
-	default:
-		return code
+	return snakeCase(path[len(path)-1])
+}
+
+func snakeCase(name string) string {
+	var b strings.Builder
+	for i, r := range name {
+		if r >= 'A' && r <= 'Z' {
+			if i > 0 {
+				b.WriteByte('_')
+			}
+			r += 'a' - 'A'
+		}
+		b.WriteRune(r)
 	}
+	return b.String()
 }
 
 func jsonPointer(tokens []string) string {

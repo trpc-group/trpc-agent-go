@@ -28,7 +28,8 @@ func newOptions(opts ...Option) *options {
 	return o
 }
 
-// WithName sets the plugin name. The name must be unique within a Runner.
+// WithName sets the plugin name. The name must be unique within a Runner. An
+// empty name is ignored and keeps the default name.
 func WithName(name string) Option {
 	return func(o *options) {
 		if name != "" {

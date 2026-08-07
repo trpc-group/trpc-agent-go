@@ -131,9 +131,10 @@ func (p *toolErrorPlugin) afterToolMessages(
 		if isCompatibleSubAgentCall(args, call.Function.Name) {
 			continue
 		}
-		message := strings.TrimSpace(msg.Content)
-		message = strings.TrimPrefix(message, "executeToolCall: ")
-		message = strings.TrimPrefix(message, "Error: ")
+		message, frameworkError := trimFrameworkToolNotFound(msg.Content)
+		if !frameworkError {
+			continue
+		}
 		if message == "" {
 			message = "tool not found: " + call.Function.Name
 		}
@@ -157,6 +158,21 @@ func (p *toolErrorPlugin) afterToolMessages(
 	return &pluginbase.AfterToolMessagesResult{
 		ToolResultMessages: replacements,
 	}, nil
+}
+
+func trimFrameworkToolNotFound(content string) (string, bool) {
+	message := strings.TrimSpace(content)
+	const executionPrefix = "executeToolCall: "
+	if !strings.HasPrefix(message, executionPrefix) {
+		return "", false
+	}
+	message = strings.TrimSpace(strings.TrimPrefix(message, executionPrefix))
+	const errorPrefix = "Error: tool not found"
+	if message != errorPrefix &&
+		!strings.HasPrefix(message, errorPrefix+":") {
+		return "", false
+	}
+	return strings.TrimSpace(strings.TrimPrefix(message, "Error: ")), true
 }
 
 func isCompatibleSubAgentCall(

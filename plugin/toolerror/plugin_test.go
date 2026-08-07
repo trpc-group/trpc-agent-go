@@ -18,6 +18,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
+	"github.com/santhosh-tekuri/jsonschema/v6/kind"
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -185,7 +187,7 @@ func TestBeforeToolAcceptsLocalSchemaReferencesConcurrently(t *testing.T) {
 	}
 	const goroutines = 32
 	var wg sync.WaitGroup
-	errors := make(chan Details, goroutines)
+	rejections := make(chan Details, goroutines)
 	for i := 0; i < goroutines; i++ {
 		wg.Add(1)
 		go func() {
@@ -195,13 +197,13 @@ func TestBeforeToolAcceptsLocalSchemaReferencesConcurrently(t *testing.T) {
 				[]byte(`{"filter":{"query":"weather"}}`),
 				schema,
 			); invalid {
-				errors <- details
+				rejections <- details
 			}
 		}()
 	}
 	wg.Wait()
-	close(errors)
-	for details := range errors {
+	close(rejections)
+	for details := range rejections {
 		t.Fatalf("valid arguments were rejected: %+v", details)
 	}
 }
@@ -210,6 +212,18 @@ func TestBeforeToolNormalizesOmittedArgumentsForZeroParameterTool(t *testing.T) 
 	t.Parallel()
 	manager := newManager(t)
 	result := beforeTool(t, manager, &tool.Schema{Type: "object"}, "")
+	require.Nil(t, result)
+}
+
+func TestBeforeToolAcceptsOmittedOptionalArguments(t *testing.T) {
+	t.Parallel()
+	manager := newManager(t)
+	result := beforeTool(t, manager, &tool.Schema{
+		Type: "object",
+		Properties: map[string]*tool.Schema{
+			"query": {Type: "string"},
+		},
+	}, " \n\t")
 	require.Nil(t, result)
 }
 
@@ -240,6 +254,19 @@ func TestBeforeToolRejectsInvalidArguments(t *testing.T) {
 				},
 			},
 			arguments: `{}`,
+			code:      "required",
+			param:     "/query",
+		},
+		{
+			name: "required with omitted arguments",
+			schema: &tool.Schema{
+				Type:     "object",
+				Required: []string{"query"},
+				Properties: map[string]*tool.Schema{
+					"query": {Type: "string"},
+				},
+			},
+			arguments: "",
 			code:      "required",
 			param:     "/query",
 		},
@@ -314,6 +341,13 @@ func TestBeforeToolRejectsInvalidArguments(t *testing.T) {
 	}
 }
 
+func TestValidationCodeNormalizesMultiwordKeyword(t *testing.T) {
+	t.Parallel()
+	require.Equal(t, "min_length", validationCode(
+		&jsonschema.ValidationError{ErrorKind: &kind.MinLength{}},
+	))
+}
+
 func TestBeforeToolRejectsInvalidSchemaAsConfigurationFailure(t *testing.T) {
 	t.Parallel()
 	manager := newManager(t)
@@ -344,9 +378,8 @@ func TestBeforeToolSkipsMissingDeclarationOrSchema(t *testing.T) {
 
 func TestAfterToolClassifiesExecutionErrors(t *testing.T) {
 	t.Parallel()
-	var syntaxErr error
-	require.Error(t, json.Unmarshal([]byte("{"), &struct{}{}))
-	syntaxErr = json.Unmarshal([]byte("{"), &struct{}{})
+	syntaxErr := json.Unmarshal([]byte("{"), &struct{}{})
+	require.Error(t, syntaxErr)
 	tests := []struct {
 		name      string
 		err       error
@@ -559,6 +592,27 @@ func TestAfterToolMessagesSkipsCompatibilityMappedOrKnownResults(t *testing.T) {
 		name string
 		args *pluginbase.AfterToolMessagesArgs
 	}{
+		{
+			name: "unknown tool with successful result",
+			args: &pluginbase.AfterToolMessagesArgs{
+				Request: &model.Request{Tools: map[string]tool.Tool{
+					"known": &declaredTool{
+						declaration: &tool.Declaration{Name: "known"},
+					},
+				}},
+				ToolCalls: []model.ToolCall{{
+					ID: "call-1",
+					Function: model.FunctionDefinitionParam{
+						Name: "dynamic",
+					},
+				}},
+				ToolResultMessages: []model.Message{{
+					Role:    model.RoleTool,
+					ToolID:  "call-1",
+					Content: `{"result":"ok"}`,
+				}},
+			},
+		},
 		{
 			name: "unknown name with successful mapped result",
 			args: &pluginbase.AfterToolMessagesArgs{

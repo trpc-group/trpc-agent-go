@@ -721,9 +721,10 @@ JSON repair，校验发生在 repair 之后。无效 JSON，以及 `required`、
 ```
 
 `error.source` 用于区分 `model`、`tool` 和 `framework`；`error.kind` 是稳定的一级分类，
-`error.code` 是更具体的原因；`error.param` 如果存在，使用 JSON Pointer 指向出错参数。
-每个失败仍作为对应 Tool Call 自己的结果返回，不会上升为整轮 Run 的
-`Response.Error`，因此并行调用时可以保留其他工具的成功结果。
+`error.code` 是更具体的原因，JSON Schema 关键字统一使用 snake_case；`error.param`
+如果存在，使用 JSON Pointer 指向出错参数。每个失败仍作为对应 Tool Call 自己的结果
+返回，不会上升为整轮 Run 的 `Response.Error`，因此并行调用时可以保留其他工具的成功
+结果。
 
 默认执行错误分类器只处理非 `nil` 的 Go error。error 通过 `ErrorCode()` 或 `Code()`
 携带的错误码会保留在 envelope 中。如果一个工具通过普通 result 表达业务失败、同时

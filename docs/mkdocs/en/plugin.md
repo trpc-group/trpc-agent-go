@@ -718,10 +718,11 @@ unchanged:
 
 `error.source` distinguishes `model`, `tool`, and `framework` failures.
 `error.kind` is the stable high-level category; `error.code` provides the more
-specific reason. `error.param`, when present, is a JSON Pointer into the tool
-arguments. Each failure remains the result of its own tool call, which preserves
-partial success when several tools run in parallel instead of promoting one
-failure to the run-level `Response.Error`.
+specific reason and uses snake_case for JSON Schema keywords. `error.param`,
+when present, is a JSON Pointer into the tool arguments. Each failure remains
+the result of its own tool call, which preserves partial success when several
+tools run in parallel instead of promoting one failure to the run-level
+`Response.Error`.
 
 The default execution classifier handles non-nil Go errors. A tool that encodes
 a code through `ErrorCode()` or `Code()` keeps that code in the envelope. A tool
