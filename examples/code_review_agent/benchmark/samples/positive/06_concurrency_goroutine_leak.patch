@@ -1,0 +1,12 @@
+diff --git a/worker.go b/worker.go
+--- a/worker.go
++++ b/worker.go
+@@ -1,0 +1,7 @@
++package worker
++func start() {
++    go func() {
++        for {
++            process()
++        }
++    }()
++}

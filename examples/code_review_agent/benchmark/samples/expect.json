@@ -1,0 +1,30 @@
+{
+  "positive": {
+    "01_security_hardcoded_apikey.patch": ["sec_hardcoded_key_001"],
+    "02_security_sql_injection.patch": ["sec_sql_injection_001"],
+    "03_security_command_injection.patch": ["sec_command_injection_001"],
+    "04_security_aws_key.patch": ["sec_hardcoded_key_001"],
+    "05_sensitive_github_pat.patch": ["sec_hardcoded_key_001"],
+    "06_concurrency_goroutine_leak.patch": ["concur_goroutine_leak_001"],
+    "07_concurrency_block_loop_no_ctx.patch": ["concur_context_not_checked_001"],
+    "08_resource_file_no_close.patch": ["res_open_without_close_001"],
+    "09_resource_http_body_leak.patch": ["res_http_body_not_closed_001"],
+    "10_db_no_ping_no_close.patch": ["db_no_ping_001", "db_no_close_001"],
+    "11_error_ignored_db_query.patch": ["err_unchecked_001"],
+    "12_sensitive_private_key.patch": ["sens_private_key_001"]
+  },
+  "negative": {
+    "01_clean_error_handling.patch": [],
+    "02_clean_file_defer_close.patch": [],
+    "03_clean_http_body_close.patch": [],
+    "04_clean_db_ping_close.patch": [],
+    "05_clean_pure_util.patch": [],
+    "06_clean_ctx_done_loop.patch": [],
+    "07_clean_server_mainloop.patch": [],
+    "08_clean_env_apikey.patch": [],
+    "09_clean_errorf_context.patch": [],
+    "10_clean_sprintf_format.patch": [],
+    "11_clean_named_goroutine.patch": [],
+    "12_clean_param_query.patch": []
+  }
+}

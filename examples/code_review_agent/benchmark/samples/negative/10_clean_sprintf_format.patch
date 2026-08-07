@@ -1,0 +1,8 @@
+diff --git a/format.go b/format.go
+--- a/format.go
++++ b/format.go
+@@ -1,0 +1,4 @@
++package main
++func addr(host string, port int) string {
++    return fmt.Sprintf("%s:%d", host, port)
++}

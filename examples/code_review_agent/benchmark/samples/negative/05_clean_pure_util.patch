@@ -1,0 +1,9 @@
+diff --git a/util.go b/util.go
+--- a/util.go
++++ b/util.go
+@@ -1,0 +1,5 @@
++package util
++// isValidEmail 校验邮箱格式（纯函数，无 IO / goroutine / 敏感数据）。
++func isValidEmail(s string) bool {
++    return strings.Contains(s, "@") && strings.Contains(s, ".")
++}

@@ -1,0 +1,13 @@
+diff --git a/file.go b/file.go
+--- a/file.go
++++ b/file.go
+@@ -1,0 +1,8 @@
++package main
++func read(path string) ([]byte, error) {
++    f, err := os.Open(path)
++    if err != nil {
++        return nil, err
++    }
++    defer f.Close()
++    return io.ReadAll(f)
++}

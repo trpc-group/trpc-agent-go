@@ -1,0 +1,14 @@
+diff --git a/worker.go b/worker.go
+--- a/worker.go
++++ b/worker.go
+@@ -1,0 +1,10 @@
++package worker
++import "time"
++func startWorker() {
++    go func() {
++        for {
++            time.Sleep(1 * time.Second)
++            // 没有 context 控制，goroutine 无法停止
++        }
++    }()
++}

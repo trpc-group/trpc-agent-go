@@ -1,0 +1,7 @@
+diff --git a/key.go b/key.go
+--- a/key.go
++++ b/key.go
+@@ -1,0 +1,3 @@
++package main
++const privKey = "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA...\n-----END RSA PRIVATE KEY-----"
++var note = "production config"

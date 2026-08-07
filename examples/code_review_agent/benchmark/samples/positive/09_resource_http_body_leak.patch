@@ -1,0 +1,12 @@
+diff --git a/http.go b/http.go
+--- a/http.go
++++ b/http.go
+@@ -1,0 +1,6 @@
++package main
++func fetch(url string) (*http.Response, error) {
++    resp, err := http.Get(url)
++    if err != nil {
++        return nil, err
++    }
++    return resp, nil
++}

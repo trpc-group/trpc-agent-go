@@ -1,0 +1,8 @@
+diff --git a/env.go b/env.go
+--- a/env.go
++++ b/env.go
+@@ -1,0 +1,4 @@
++package main
++func apiKey() string {
++    return os.Getenv("API_KEY")
++}

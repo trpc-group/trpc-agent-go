@@ -1,0 +1,10 @@
+diff --git a/a.go b/a.go
+--- a/a.go
++++ b/a.go
+@@ -1,3 +1,5 @@
+ package main
+-var endpoint = "https://api.example.com"
++// 同一行多次触发相同规则
++var apiKey = "sk-duplicate-test-key-12345"
++var password = "super-secret-123"
++var endpoint = "https://api.example.com"

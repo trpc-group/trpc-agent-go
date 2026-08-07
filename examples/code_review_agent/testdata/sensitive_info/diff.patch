@@ -1,0 +1,12 @@
+diff --git a/payment.go b/payment.go
+--- a/payment.go
++++ b/payment.go
+@@ -1,0 +1,8 @@
++package payment
++// 敏感信息测试
++const (
++    creditCard = "4111-1111-1111-1111"
++    apiToken   = "ghp_1234567890abcdefghij"
++    privateKey = "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA...\n-----END RSA PRIVATE KEY-----"
++    dbPassword = "admin123"
++)

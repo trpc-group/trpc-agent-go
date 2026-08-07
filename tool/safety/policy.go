@@ -1,0 +1,170 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+
+//
+
+package safety
+
+import (
+	"bytes"
+	"fmt"
+	"os"
+	"regexp"
+
+	"gopkg.in/yaml.v3"
+)
+
+// DefaultPolicy returns a reasonable default safety policy.
+// It is used when no policy file is configured.
+func DefaultPolicy() *Policy {
+	return &Policy{
+		Version:         "1.0",
+		AllowedCommands: []string{"echo", "ls", "cat", "go", "python3", "node"},
+		DeniedCommands:  []string{},
+		ForbiddenPaths: []string{
+			"/etc/passwd", "/etc/shadow", "~/.ssh", "$HOME/.ssh",
+			".env", ".env.local", "credentials.json",
+			"/proc/", "/sys/",
+		},
+		AllowlistedHosts:    []string{},
+		MaxTimeoutSec:       300,
+		MaxOutputBytes:      10 * 1024 * 1024, // 10MB
+		HostExecRequiresAsk: true,             // hostexec 直接跑 host shell，默认需 ask
+		EnvAllowlist: []string{
+			"PATH", "HOME", "USER", "LANG",
+			"GOFLAGS", "GOPATH", "GOROOT",
+			"PYTHONPATH", "NODE_PATH",
+		},
+		Rules: []Rule{
+			{
+				ID:          "dangerous_cmd_001",
+				Category:    "dangerous_commands",
+				Description: "Detect rm with recursive/force on sensitive directories",
+				Patterns: []string{
+					`rm\s+.*-[A-Za-z]*[rR][A-Za-z]*\s+/`,
+					`rm\s+.*-[A-Za-z]*[rR][A-Za-z]*[fF][A-Za-z]*`,
+					`rm\s+.*-[A-Za-z]*[fF][A-Za-z]*[rR][A-Za-z]*`,
+					`rm\s+.*--recursive.*--force`,
+					`rm\s+.*--force.*--recursive`,
+				},
+				RiskLevel: RiskCritical,
+				Action:    DecisionDeny,
+			},
+			{
+				ID:          "secrets_001",
+				Category:    "sensitive_info",
+				Description: "Detect credential file access",
+				Patterns:    []string{`~/\.ssh`, `\.ssh`, `\.env`, `credentials`, `id_rsa`, `\.pem`},
+				RiskLevel:   RiskCritical,
+				Action:      DecisionDeny,
+			},
+			{
+				ID:          "network_egress_001",
+				Category:    "network_egress",
+				Description: "Detect curl/wget to external hosts",
+				Patterns:    []string{`curl\s+`, `wget\s+`, `nc\s+`, `ssh\s+`},
+				RiskLevel:   RiskHigh,
+				Action:      DecisionAsk,
+			},
+			{
+				ID:          "shell_bypass_001",
+				Category:    "shell_bypass",
+				Description: "Detect shell wrapper/subshell bypass",
+				Patterns:    []string{`sh\s+-c`, `bash\s+-c`, `eval\s+`, `\$\(`, "`"},
+				RiskLevel:   RiskCritical,
+				Action:      DecisionDeny,
+			},
+			{
+				ID:          "hostexec_risk_001",
+				Category:    "host_execution",
+				Description: "Detect background/privilege escalation commands",
+				Patterns:    []string{`sudo\s+`, `su\s+`, `nohup\s+`, `&\s*$`, `disown`},
+				RiskLevel:   RiskHigh,
+				Action:      DecisionDeny,
+			},
+			{
+				ID:          "dependency_install_001",
+				Category:    "dependency_changes",
+				Description: "Detect package installer invocations",
+				Patterns:    []string{`pip\s+install`, `npm\s+install`, `go\s+install`, `apt\s+install`, `yum\s+install`},
+				RiskLevel:   RiskMedium,
+				Action:      DecisionAsk,
+			},
+			{
+				ID:          "resource_abuse_001",
+				Category:    "resource_abuse",
+				Description: "Detect long sleeps, infinite loops",
+				Patterns:    []string{`sleep\s+\d{3,}`, `while\s+true`, `:\(\)\s*{`},
+				RiskLevel:   RiskMedium,
+				Action:      DecisionDeny,
+			},
+			{
+				ID:          "sensitive_leak_001",
+				Category:    "sensitive_leak",
+				Description: "Detect API key patterns in output",
+				Patterns:    []string{`[A-Za-z0-9_-]{20,}`, `sk-[A-Za-z0-9]{32,}`},
+				RiskLevel:   RiskHigh,
+				Action:      DecisionAsk,
+			},
+		},
+	}
+}
+
+// LoadPolicy reads a safety policy from a YAML file and merges it
+// with DefaultPolicy().  Fields present in the file override
+// defaults; omitted fields keep their safe default values.
+func LoadPolicy(path string) (*Policy, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read policy file: %w", err)
+	}
+
+	// Start from safe defaults, then overlay file values.
+	policy := *DefaultPolicy()
+	// KnownFields(true) rejects unknown keys so a typo cannot silently drop
+	// the allowlist and weaken the policy.
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&policy); err != nil {
+		return nil, fmt.Errorf("parse policy yaml: %w", err)
+	}
+
+	if policy.Version == "" {
+		policy.Version = "1.0"
+	}
+
+	// Validate every rule pattern and enum at load time: a typo (bad regex,
+	// misspelled risk_level/action) must fail loudly instead of silently
+	// turning a deny rule into a no-op or an unknown action into allow.
+	for _, rule := range policy.Rules {
+		if !validRiskLevels[rule.RiskLevel] {
+			return nil, fmt.Errorf(
+				"rule %q has invalid risk_level %q (want one of low/medium/high/critical)",
+				rule.ID, rule.RiskLevel)
+		}
+		if !validActions[rule.Action] {
+			return nil, fmt.Errorf(
+				"rule %q has invalid action %q (want one of allow/deny/ask/needs_human_review)",
+				rule.ID, rule.Action)
+		}
+		for _, pattern := range rule.Patterns {
+			if _, err := regexp.Compile(pattern); err != nil {
+				return nil, fmt.Errorf(
+					"invalid regex in rule %q pattern %q: %w", rule.ID, pattern, err)
+			}
+		}
+	}
+	return &policy, nil
+}
+
+var validRiskLevels = map[RiskLevel]bool{
+	RiskLow: true, RiskMedium: true, RiskHigh: true, RiskCritical: true,
+}
+
+var validActions = map[Decision]bool{
+	DecisionAllow: true, DecisionDeny: true, DecisionAsk: true, DecisionNeedsReview: true,
+}

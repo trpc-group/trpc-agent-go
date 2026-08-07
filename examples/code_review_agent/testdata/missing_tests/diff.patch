@@ -1,0 +1,10 @@
+diff --git a/newpkg/handler.go b/newpkg/handler.go
+new file mode 100644
+--- /dev/null
++++ b/newpkg/handler.go
+@@ -0,0 +1,5 @@
++package newpkg
++type Handler struct{}
++func (h *Handler) Process(data string) (string, error) {
++    return data, nil
++}
