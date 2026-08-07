@@ -765,6 +765,28 @@ func TestAsyncSummaryWorker_ProcessJob(t *testing.T) {
 		assert.True(t, createSummaryCalled)
 		mu.Unlock()
 	})
+
+	t.Run("process failed job with nil context", func(t *testing.T) {
+		var createSummaryCalled bool
+		worker := NewAsyncSummaryWorker(AsyncSummaryConfig{
+			Summarizer: &mockSummarizer{shouldSummarize: true},
+			CreateSummaryFunc: func(context.Context, *session.Session, string, bool) error {
+				createSummaryCalled = true
+				return errors.New("create summary failed")
+			},
+		})
+
+		worker.processJob(&summaryJob{
+			ctx: nil,
+			session: &session.Session{
+				ID:      "test-session",
+				AppName: "test-app",
+				UserID:  "test-user",
+			},
+		})
+
+		assert.True(t, createSummaryCalled)
+	})
 }
 
 func TestAsyncSummaryWorker_ConcurrentEnqueue(t *testing.T) {

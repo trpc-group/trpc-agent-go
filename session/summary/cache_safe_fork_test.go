@@ -210,6 +210,25 @@ func TestSessionSummarizer_CacheSafeStandaloneFallbackEndsWithForkPrompt(
 	)
 }
 
+func TestSessionSummarizer_CacheSafeStandaloneFallbackRejectsInvalidForkPrompt(
+	t *testing.T,
+) {
+	s := NewSummarizer(
+		&fakeModel{},
+		WithPrompt("{conversation_text}"),
+		WithCacheSafeForking(true),
+		WithCacheSafeForkPrompt("Summarize: {previous_summary}"),
+	).(*sessionSummarizer)
+
+	request, mode, err := s.buildSummaryRequest(
+		context.Background(),
+		summaryPromptInput{conversationText: "assistant: unfinished work"},
+	)
+	require.ErrorContains(t, err, "render cache-safe fork prompt")
+	require.Equal(t, callModeStandalone, mode)
+	require.Nil(t, request)
+}
+
 func TestSessionSummarizer_CacheSafeForkingDisabledUsesStandaloneRequest(t *testing.T) {
 	capture := &cacheSafeCaptureModel{response: "summary"}
 	s := NewSummarizer(
