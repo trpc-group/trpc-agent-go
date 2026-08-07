@@ -155,6 +155,7 @@ func (w *AutoMemoryWorker) reconcilePreserveHistoryOps(
 			byID[entry.ID] = entry
 		}
 	}
+	ops = filterPreserveHistoryForgetWrites(ctx, userKey, ops, byID, request)
 	out := make([]*extractor.Operation, 0, len(ops))
 	for _, op := range ops {
 		if op == nil {
@@ -181,7 +182,48 @@ func (w *AutoMemoryWorker) reconcilePreserveHistoryOps(
 			out = append(out, op)
 		}
 	}
-	return out
+	return filterPreserveHistoryForgetWrites(ctx, userKey, out, byID, request)
+}
+
+func filterPreserveHistoryForgetWrites(
+	ctx context.Context,
+	userKey memory.UserKey,
+	ops []*extractor.Operation,
+	existingByID map[string]*memory.Entry,
+	request destructiveRequest,
+) []*extractor.Operation {
+	if !request.explicit || request.partial {
+		return ops
+	}
+	filtered := make([]*extractor.Operation, 0, len(ops))
+	for _, op := range ops {
+		if !preserveHistoryWriteCoveredByForget(op, existingByID, request) {
+			filtered = append(filtered, op)
+			continue
+		}
+		log.DebugfContext(ctx,
+			"auto_memory: preserve_history policy; filtering %s covered by an explicit forget request for user %s/%s",
+			op.Type, userKey.AppName, userKey.UserID,
+		)
+	}
+	return filtered
+}
+
+func preserveHistoryWriteCoveredByForget(
+	op *extractor.Operation,
+	existingByID map[string]*memory.Entry,
+	request destructiveRequest,
+) bool {
+	if op == nil || (op.Type != extractor.OperationAdd && op.Type != extractor.OperationUpdate) {
+		return false
+	}
+	if request.clearAll {
+		return true
+	}
+	if op.Type == extractor.OperationUpdate && request.authorizesDelete(existingByID[op.MemoryID]) {
+		return true
+	}
+	return request.authorizesDelete(&memory.Entry{Memory: operationMemory(op)})
 }
 
 func hasExactMemoryDuplicate(

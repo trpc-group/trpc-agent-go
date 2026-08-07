@@ -1253,3 +1253,85 @@ func TestPreserveHistoryPolicy_RevokedDeleteIsRejected(t *testing.T) {
 	)
 	assert.Empty(t, out)
 }
+
+func TestPreserveHistoryPolicy_ForgetRequestFiltersWrites(t *testing.T) {
+	coffee := &memory.Entry{
+		ID: "coffee",
+		Memory: &memory.Memory{
+			Memory: "User prefers dark roast coffee.",
+			Topics: []string{"coffee preference"},
+		},
+	}
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
+	t.Run("clear followed by add", func(t *testing.T) {
+		out := worker.reconcilePreserveHistoryOps(
+			context.Background(),
+			reconcileUserKey(),
+			[]*extractor.Operation{
+				{Type: extractor.OperationClear},
+				{Type: extractor.OperationAdd, Memory: "User enjoys hiking."},
+			},
+			nil,
+			[]model.Message{model.NewUserMessage("Please clear all my memories.")},
+		)
+		require.Len(t, out, 1)
+		assert.Equal(t, extractor.OperationClear, out[0].Type)
+	})
+
+	t.Run("target update followed by delete", func(t *testing.T) {
+		out := worker.reconcilePreserveHistoryOps(
+			context.Background(),
+			reconcileUserKey(),
+			[]*extractor.Operation{
+				{
+					Type:     extractor.OperationUpdate,
+					MemoryID: coffee.ID,
+					Memory:   "User prefers dark roast coffee in the morning.",
+					Topics:   []string{"coffee preference"},
+				},
+				{Type: extractor.OperationDelete, MemoryID: coffee.ID},
+			},
+			[]*memory.Entry{coffee},
+			[]model.Message{model.NewUserMessage("Please delete my coffee preference.")},
+		)
+		require.Len(t, out, 1)
+		assert.Equal(t, extractor.OperationDelete, out[0].Type)
+		assert.Equal(t, coffee.ID, out[0].MemoryID)
+	})
+
+	t.Run("target add followed by delete", func(t *testing.T) {
+		out := worker.reconcilePreserveHistoryOps(
+			context.Background(),
+			reconcileUserKey(),
+			[]*extractor.Operation{
+				{
+					Type:   extractor.OperationAdd,
+					Memory: "User prefers coffee with oat milk.",
+					Topics: []string{"coffee preference"},
+				},
+				{Type: extractor.OperationDelete, MemoryID: coffee.ID},
+			},
+			[]*memory.Entry{coffee},
+			[]model.Message{model.NewUserMessage("Please delete my coffee preference.")},
+		)
+		require.Len(t, out, 1)
+		assert.Equal(t, extractor.OperationDelete, out[0].Type)
+		assert.Equal(t, coffee.ID, out[0].MemoryID)
+	})
+
+	t.Run("unrelated add remains", func(t *testing.T) {
+		out := worker.reconcilePreserveHistoryOps(
+			context.Background(),
+			reconcileUserKey(),
+			[]*extractor.Operation{
+				{Type: extractor.OperationAdd, Memory: "User enjoys hiking."},
+				{Type: extractor.OperationDelete, MemoryID: coffee.ID},
+			},
+			[]*memory.Entry{coffee},
+			[]model.Message{model.NewUserMessage("Please delete my coffee preference.")},
+		)
+		require.Len(t, out, 2)
+		assert.Equal(t, extractor.OperationAdd, out[0].Type)
+		assert.Equal(t, extractor.OperationDelete, out[1].Type)
+	})
+}
