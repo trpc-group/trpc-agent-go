@@ -1,0 +1,8 @@
+{
+  "max_rounds": 3,
+  "min_val_score_gain": 0.1,
+  "allow_new_hard_fail": false,
+  "key_case_ids": ["val_opt_03"],
+  "max_cost_budget_usd": 0.5,
+  "random_seed": 20260807
+}

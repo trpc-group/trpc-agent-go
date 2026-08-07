@@ -1,0 +1,44 @@
+[
+  {
+    "case_id": "val_opt_01",
+    "name": "Validation factual recall",
+    "prompt": "What is the speed of light in vacuum?",
+    "target_surface": "system_prompt",
+    "expected_response": "299,792,458 m/s",
+    "category": "knowledge_recall_insufficient",
+    "baseline_response": "It is fast, around 300 thousand km/s.",
+    "baseline_score": 0.6,
+    "baseline_pass": false,
+    "candidate_response": "299,792,458 m/s",
+    "candidate_score": 1.0,
+    "candidate_pass": true
+  },
+  {
+    "case_id": "val_opt_02",
+    "name": "Validation routing query (overfitting trap)",
+    "prompt": "Translate 'Hello' to Spanish and log the time",
+    "target_surface": "router_prompt",
+    "expected_response": "Hola [Logged]",
+    "category": "route_error",
+    "baseline_response": "Hola [Logged]",
+    "baseline_score": 0.95,
+    "baseline_pass": true,
+    "candidate_response": "Error: Router sent translation request to calculator agent",
+    "candidate_score": 0.0,
+    "candidate_pass": false
+  },
+  {
+    "case_id": "val_opt_03",
+    "name": "Validation key case anchor",
+    "prompt": "System health check status",
+    "target_surface": "agent_instruction",
+    "expected_response": "All services operational",
+    "category": "none",
+    "baseline_response": "All services operational",
+    "baseline_score": 1.0,
+    "baseline_pass": true,
+    "candidate_response": "All services operational",
+    "candidate_score": 1.0,
+    "candidate_pass": true
+  }
+]
