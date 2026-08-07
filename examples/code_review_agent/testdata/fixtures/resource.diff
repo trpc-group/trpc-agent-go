@@ -1,0 +1,12 @@
+diff --git a/file.go b/file.go
+--- a/file.go
++++ b/file.go
+@@ -1,1 +1,2 @@
+ package app
++func open() { f, _ := os.Open("x"); _ = f }
+diff --git a/file_test.go b/file_test.go
+--- a/file_test.go
++++ b/file_test.go
+@@ -1,1 +1,2 @@
+ package app
++func TestOpen(t *testing.T) {}

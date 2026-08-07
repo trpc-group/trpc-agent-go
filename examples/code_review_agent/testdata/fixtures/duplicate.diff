@@ -1,0 +1,12 @@
+diff --git a/app.go b/app.go
+--- a/app.go
++++ b/app.go
+@@ -1,1 +1,2 @@
+ package app
++func query(db *sql.DB, name string) { db.Query("select * from users where name=" + name) }
+diff --git a/app_test.go b/app_test.go
+--- a/app_test.go
++++ b/app_test.go
+@@ -1,1 +1,2 @@
+ package app
++func TestQuery(t *testing.T) {}

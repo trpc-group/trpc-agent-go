@@ -1,0 +1,6 @@
+diff --git a/app.go b/app.go
+--- a/app.go
++++ b/app.go
+@@ -1,1 +1,2 @@
+ package app
++func ChangedBehavior() bool { return true }

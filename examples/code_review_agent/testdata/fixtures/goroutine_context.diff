@@ -1,0 +1,12 @@
+diff --git a/worker.go b/worker.go
+--- a/worker.go
++++ b/worker.go
+@@ -1,1 +1,2 @@
+ package app
++func leak(ctx context.Context) { go func() { work() }() }
+diff --git a/worker_test.go b/worker_test.go
+--- a/worker_test.go
++++ b/worker_test.go
+@@ -1,1 +1,2 @@
+ package app
++func TestLeak(t *testing.T) {}
