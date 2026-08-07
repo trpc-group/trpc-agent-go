@@ -1,0 +1,19 @@
+allowed_commands:
+  - "go test ./..."
+  - "go vet ./..."
+  - "curl https://api.github.com"
+denied_commands:
+  - "rm -rf"
+  - "eval"
+  - "sh -c"
+denied_paths:
+  - "/.ssh/"
+  - "/.env"
+  - "credentials.json"
+  - "id_rsa"
+allowed_domains:
+  - "github.com"
+  - "tencent.com"
+  - "golang.org"
+max_timeout_sec: 30
+max_output_size_bytes: 1048576
