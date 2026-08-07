@@ -179,17 +179,20 @@ func cloneSnapshot(raw *Snapshot) *Snapshot {
 			SurfaceID: surface.SurfaceID,
 			NodeID:    surface.NodeID,
 			Type:      surface.Type,
-			Value:     cloneSurfaceValue(surface.Value),
+			Value:     CloneSurfaceValue(surface.Value),
 		})
 	}
 	return snapshot
 }
 
-func cloneSurfaceValue(value SurfaceValue) SurfaceValue {
+// CloneSurfaceValue returns a deep copy that callers may mutate independently.
+// It preserves the distinction between nil and non-nil empty collections,
+// including JSON-shaped values stored in tool schemas.
+func CloneSurfaceValue(value SurfaceValue) SurfaceValue {
 	cloned := SurfaceValue{
 		FewShot: cloneFewShot(value.FewShot),
 		Tools:   cloneToolRefs(value.Tools),
-		Skills:  append([]SkillRef(nil), value.Skills...),
+		Skills:  cloneSlice(value.Skills),
 	}
 	if value.Text != nil {
 		text := *value.Text
@@ -208,7 +211,7 @@ func cloneSurfaceValue(value SurfaceValue) SurfaceValue {
 }
 
 func cloneToolRefs(refs []ToolRef) []ToolRef {
-	if len(refs) == 0 {
+	if refs == nil {
 		return nil
 	}
 	out := make([]ToolRef, len(refs))
@@ -231,7 +234,7 @@ func cloneToolSchema(schema *tool.Schema) *tool.Schema {
 		Type:                 schema.Type,
 		Description:          schema.Description,
 		Pattern:              schema.Pattern,
-		Required:             append([]string(nil), schema.Required...),
+		Required:             cloneSlice(schema.Required),
 		Properties:           cloneSchemaMap(schema.Properties),
 		Items:                cloneToolSchema(schema.Items),
 		AdditionalProperties: cloneSchemaValue(schema.AdditionalProperties),
@@ -243,7 +246,7 @@ func cloneToolSchema(schema *tool.Schema) *tool.Schema {
 }
 
 func cloneSchemaMap(in map[string]*tool.Schema) map[string]*tool.Schema {
-	if len(in) == 0 {
+	if in == nil {
 		return nil
 	}
 	out := make(map[string]*tool.Schema, len(in))
@@ -254,7 +257,7 @@ func cloneSchemaMap(in map[string]*tool.Schema) map[string]*tool.Schema {
 }
 
 func cloneSchemaValues(in []any) []any {
-	if len(in) == 0 {
+	if in == nil {
 		return nil
 	}
 	out := make([]any, len(in))
@@ -265,39 +268,86 @@ func cloneSchemaValues(in []any) []any {
 }
 
 func cloneSchemaValue(value any) any {
-	switch current := value.(type) {
-	case nil:
+	if value == nil {
 		return nil
-	case *tool.Schema:
-		return cloneToolSchema(current)
-	case map[string]any:
-		out := make(map[string]any, len(current))
-		for key, item := range current {
-			out[key] = cloneSchemaValue(item)
+	}
+	return cloneJSONValue(reflect.ValueOf(value)).Interface()
+}
+
+func cloneJSONValue(value reflect.Value) reflect.Value {
+	if !value.IsValid() {
+		return value
+	}
+	switch value.Kind() {
+	case reflect.Interface:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		out := reflect.New(value.Type()).Elem()
+		out.Set(cloneJSONValue(value.Elem()))
+		return out
+	case reflect.Pointer:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		if value.Type() == reflect.TypeOf((*tool.Schema)(nil)) {
+			return reflect.ValueOf(cloneToolSchema(value.Interface().(*tool.Schema)))
+		}
+		out := reflect.New(value.Type().Elem())
+		out.Elem().Set(cloneJSONValue(value.Elem()))
+		return out
+	case reflect.Map:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		out := reflect.MakeMapWithSize(value.Type(), value.Len())
+		iterator := value.MapRange()
+		for iterator.Next() {
+			out.SetMapIndex(cloneJSONValue(iterator.Key()), cloneJSONValue(iterator.Value()))
 		}
 		return out
-	case []any:
-		return cloneSchemaValues(current)
-	case []byte:
-		return append([]byte(nil), current...)
+	case reflect.Slice:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		out := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
+		for index := 0; index < value.Len(); index++ {
+			out.Index(index).Set(cloneJSONValue(value.Index(index)))
+		}
+		return out
+	case reflect.Array:
+		out := reflect.New(value.Type()).Elem()
+		for index := 0; index < value.Len(); index++ {
+			out.Index(index).Set(cloneJSONValue(value.Index(index)))
+		}
+		return out
 	default:
-		return current
+		return value
 	}
 }
 
 func cloneFewShot(value []FewShotExample) []FewShotExample {
-	if len(value) == 0 {
+	if value == nil {
 		return nil
 	}
 	out := make([]FewShotExample, len(value))
 	for i, example := range value {
-		out[i].Messages = append([]FewShotMessage(nil), example.Messages...)
+		out[i].Messages = cloneSlice(example.Messages)
 	}
 	return out
 }
 
+func cloneSlice[T any](value []T) []T {
+	if value == nil {
+		return nil
+	}
+	out := make([]T, len(value))
+	copy(out, value)
+	return out
+}
+
 func normalizeSurfaceValue(value SurfaceValue) SurfaceValue {
-	value = cloneSurfaceValue(value)
+	value = canonicalizeSurfaceValue(CloneSurfaceValue(value))
 	if len(value.Tools) > 0 {
 		sort.Slice(value.Tools, func(i, j int) bool {
 			return value.Tools[i].ID < value.Tools[j].ID
@@ -311,6 +361,96 @@ func normalizeSurfaceValue(value SurfaceValue) SurfaceValue {
 		value.Skills = uniqueSkillRefs(value.Skills)
 	}
 	return value
+}
+
+// canonicalizeSurfaceValue preserves the historical representation used to
+// calculate structure IDs while CloneSurfaceValue retains copy fidelity.
+func canonicalizeSurfaceValue(value SurfaceValue) SurfaceValue {
+	if len(value.FewShot) == 0 {
+		value.FewShot = nil
+	} else {
+		for index := range value.FewShot {
+			if len(value.FewShot[index].Messages) == 0 {
+				value.FewShot[index].Messages = nil
+			}
+		}
+	}
+	if len(value.Tools) == 0 {
+		value.Tools = nil
+	} else {
+		for index := range value.Tools {
+			canonicalizeToolSchema(value.Tools[index].InputSchema)
+			canonicalizeToolSchema(value.Tools[index].OutputSchema)
+		}
+	}
+	if len(value.Skills) == 0 {
+		value.Skills = nil
+	}
+	return value
+}
+
+func canonicalizeToolSchema(schema *tool.Schema) {
+	if schema == nil {
+		return
+	}
+	if len(schema.Required) == 0 {
+		schema.Required = nil
+	}
+	if len(schema.Properties) == 0 {
+		schema.Properties = nil
+	} else {
+		for _, property := range schema.Properties {
+			canonicalizeToolSchema(property)
+		}
+	}
+	canonicalizeToolSchema(schema.Items)
+	schema.AdditionalProperties = canonicalizeSchemaValue(schema.AdditionalProperties)
+	schema.Default = canonicalizeSchemaValue(schema.Default)
+	if len(schema.Enum) == 0 {
+		schema.Enum = nil
+	} else {
+		for index := range schema.Enum {
+			schema.Enum[index] = canonicalizeSchemaValue(schema.Enum[index])
+		}
+	}
+	if len(schema.Defs) == 0 {
+		schema.Defs = nil
+	} else {
+		for _, definition := range schema.Defs {
+			canonicalizeToolSchema(definition)
+		}
+	}
+}
+
+func canonicalizeSchemaValue(value any) any {
+	switch current := value.(type) {
+	case *tool.Schema:
+		canonicalizeToolSchema(current)
+		return current
+	case map[string]any:
+		if current == nil {
+			return map[string]any{}
+		}
+		for key, item := range current {
+			current[key] = canonicalizeSchemaValue(item)
+		}
+		return current
+	case []any:
+		if len(current) == 0 {
+			return []any(nil)
+		}
+		for index := range current {
+			current[index] = canonicalizeSchemaValue(current[index])
+		}
+		return current
+	case []byte:
+		if len(current) == 0 {
+			return []byte(nil)
+		}
+		return current
+	default:
+		return current
+	}
 }
 
 func uniqueToolRefs(refs []ToolRef) []ToolRef {

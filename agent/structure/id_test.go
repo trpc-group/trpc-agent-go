@@ -14,6 +14,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 func TestExport_NodeID_IsStableAcrossRepeatedExports(t *testing.T) {
@@ -59,6 +61,55 @@ func TestExport_StructureID_IsStableAcrossRepeatedExports(t *testing.T) {
 	second, err := Export(context.Background(), ag)
 	require.NoError(t, err)
 	assert.Equal(t, first.StructureID, second.StructureID)
+}
+
+func TestExport_StructureID_CanonicalizesEmptyCollections(t *testing.T) {
+	nilCollections := structureIDAgent(t, SurfaceValue{
+		Tools: []ToolRef{{ID: "lookup", InputSchema: &tool.Schema{
+			Default: map[string]any{
+				"nested_map":  map[string]any(nil),
+				"nested_list": []any(nil),
+			},
+			AdditionalProperties: []byte(nil),
+		}}},
+	})
+	emptyCollections := structureIDAgent(t, SurfaceValue{
+		FewShot: []FewShotExample{}, Skills: []SkillRef{},
+		Tools: []ToolRef{{ID: "lookup", InputSchema: &tool.Schema{
+			Required: []string{}, Properties: map[string]*tool.Schema{},
+			Default: map[string]any{
+				"nested_map":  map[string]any{},
+				"nested_list": []any{},
+			},
+			Enum: []any{}, Defs: map[string]*tool.Schema{},
+			AdditionalProperties: []byte{},
+		}}},
+	})
+
+	assert.Equal(t, nilCollections.StructureID, emptyCollections.StructureID)
+	assert.Equal(t,
+		"struct_a4862209a83ac6204e1b59c32cf17a4a390f9823fe7b40210e8cc3ee5daf6e5b",
+		emptyCollections.StructureID,
+	)
+}
+
+func structureIDAgent(t *testing.T, toolValue SurfaceValue) *Snapshot {
+	t.Helper()
+	text := "instruction"
+	snapshot, err := Export(context.Background(), &customExporterAgent{
+		testAgent: &testAgent{name: "root"},
+		snapshot: &Snapshot{
+			EntryNodeID: "root",
+			Nodes:       []Node{{NodeID: "root", Kind: NodeKindAgent, Name: "root"}},
+			Surfaces: []Surface{
+				{NodeID: "root", Type: SurfaceTypeInstruction, Value: SurfaceValue{Text: &text}},
+				{NodeID: "root", Type: SurfaceTypeFewShot, Value: SurfaceValue{FewShot: []FewShotExample{}}},
+				{NodeID: "root", Type: SurfaceTypeTool, Value: toolValue},
+			},
+		},
+	})
+	require.NoError(t, err)
+	return snapshot
 }
 
 func TestExport_StructureID_ChangesWhenNodeChanges(t *testing.T) {

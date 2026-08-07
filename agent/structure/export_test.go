@@ -241,7 +241,7 @@ func TestCloneSurfaceValue_ClonesModelHeaders(t *testing.T) {
 			Headers:  map[string]string{"X-Test": "1"},
 		},
 	}
-	cloned := cloneSurfaceValue(value)
+	cloned := CloneSurfaceValue(value)
 	require.NotNil(t, cloned.Model)
 	require.NotSame(t, value.Model, cloned.Model)
 	require.Equal(t, map[string]string{"X-Test": "1"}, cloned.Model.Headers)
@@ -256,11 +256,64 @@ func TestCloneSurfaceValue_ClonesEmptyModelHeaders(t *testing.T) {
 			Headers: map[string]string{},
 		},
 	}
-	cloned := cloneSurfaceValue(value)
+	cloned := CloneSurfaceValue(value)
 	require.NotNil(t, cloned.Model)
 	require.NotNil(t, cloned.Model.Headers)
 	cloned.Model.Headers["X-Test"] = "1"
 	assert.Empty(t, value.Model.Headers)
+}
+
+func TestCloneSurfaceValue_PreservesEmptyCollections(t *testing.T) {
+	value := SurfaceValue{
+		FewShot: []FewShotExample{{Messages: []FewShotMessage{}}, {}},
+		Tools:   []ToolRef{},
+		Skills:  []SkillRef{},
+	}
+	cloned := CloneSurfaceValue(value)
+	require.NotNil(t, cloned.FewShot)
+	require.NotNil(t, cloned.FewShot[0].Messages)
+	assert.Nil(t, cloned.FewShot[1].Messages)
+	require.NotNil(t, cloned.Tools)
+	require.NotNil(t, cloned.Skills)
+
+	schema := &tool.Schema{
+		Required:   []string{},
+		Properties: map[string]*tool.Schema{},
+		Enum:       []any{},
+		Defs:       map[string]*tool.Schema{},
+		Default:    []byte{},
+	}
+	cloned = CloneSurfaceValue(SurfaceValue{Tools: []ToolRef{{InputSchema: schema}}})
+	input := cloned.Tools[0].InputSchema
+	require.NotNil(t, input.Required)
+	require.NotNil(t, input.Properties)
+	require.NotNil(t, input.Enum)
+	require.NotNil(t, input.Defs)
+	require.NotNil(t, input.Default)
+}
+
+func TestCloneSurfaceValue_ClonesTypedSchemaValues(t *testing.T) {
+	typedMap := map[string]string{"state": "source"}
+	typedSlice := []string{"source"}
+	pointerValue := map[string]any{"state": "source"}
+	typedMapSlice := []map[string]string{{"state": "source"}}
+	value := SurfaceValue{Tools: []ToolRef{{InputSchema: &tool.Schema{
+		AdditionalProperties: &pointerValue,
+		Default:              typedMapSlice,
+		Enum:                 []any{typedMap, typedSlice},
+	}}}}
+
+	cloned := CloneSurfaceValue(value)
+	clonedSchema := cloned.Tools[0].InputSchema
+	clonedSchema.Enum[0].(map[string]string)["state"] = "clone"
+	clonedSchema.Enum[1].([]string)[0] = "clone"
+	(*clonedSchema.AdditionalProperties.(*map[string]any))["state"] = "clone"
+	clonedSchema.Default.([]map[string]string)[0]["state"] = "clone"
+
+	assert.Equal(t, "source", typedMap["state"])
+	assert.Equal(t, "source", typedSlice[0])
+	assert.Equal(t, "source", pointerValue["state"])
+	assert.Equal(t, "source", typedMapSlice[0]["state"])
 }
 
 func TestModelRef_JSONOmitsEmptyFields(t *testing.T) {

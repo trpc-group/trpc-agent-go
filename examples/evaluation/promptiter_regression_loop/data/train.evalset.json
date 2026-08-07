@@ -1,0 +1,36 @@
+{
+  "evalSetId": "regression-train",
+  "name": "Prompt regression training fixtures",
+  "evalCases": [
+    {
+      "evalId": "train-case-1",
+      "conversation": [{
+        "invocationId": "train-case-1-invocation",
+        "userContent": {"role": "user", "content": "basic ping request"},
+        "finalResponse": {"role": "assistant", "content": "pong"},
+        "tools": [{"id": "echo-call", "name": "echo_ping", "arguments": {"value": "ping"}, "result": {"value": "pong"}}]
+      }],
+      "sessionInput": {"appName": "promptiter-regression-loop", "userId": "fixture-user"}
+    },
+    {
+      "evalId": "train-case-2",
+      "conversation": [{
+        "invocationId": "train-case-2-invocation",
+        "userContent": {"role": "user", "content": "polite ping request"},
+        "finalResponse": {"role": "assistant", "content": "pong"},
+        "tools": [{"id": "echo-call", "name": "echo_ping", "arguments": {"value": "ping"}, "result": {"value": "pong"}}]
+      }],
+      "sessionInput": {"appName": "promptiter-regression-loop", "userId": "fixture-user"}
+    },
+    {
+      "evalId": "train-case-3",
+      "conversation": [{
+        "invocationId": "train-case-3-invocation",
+        "userContent": {"role": "user", "content": "noisy ping request"},
+        "finalResponse": {"role": "assistant", "content": "pong"},
+        "tools": [{"id": "echo-call", "name": "echo_ping", "arguments": {"value": "ping"}, "result": {"value": "pong"}}]
+      }],
+      "sessionInput": {"appName": "promptiter-regression-loop", "userId": "fixture-user"}
+    }
+  ]
+}
