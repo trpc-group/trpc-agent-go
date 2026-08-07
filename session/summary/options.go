@@ -78,11 +78,13 @@ func WithCacheSafeForking(enable bool) Option {
 	}
 }
 
-// WithCacheSafeForkPrompt sets the user message appended to a parent request
-// when cache-safe forking is enabled. The prompt may include
-// {max_summary_words}, but it must not include {conversation_text} or
-// {previous_summary}; the parent request already contains the conversation
-// prefix, including any injected summary.
+// WithCacheSafeForkPrompt sets the final summary instruction used when
+// cache-safe forking is enabled. It is appended as a user message to a cloned
+// parent request. When cache-safe forking falls back to a standalone request,
+// it is appended after a source boundary in the standalone user message. The
+// prompt may include {max_summary_words}, but it must not include
+// {conversation_text} or {previous_summary}; the request already contains the
+// conversation prefix, including any injected summary.
 func WithCacheSafeForkPrompt(prompt string) Option {
 	return func(s *sessionSummarizer) {
 		if prompt != "" {
