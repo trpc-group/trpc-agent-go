@@ -1,0 +1,5 @@
+--- a/dups.go
++++ b/dups.go
+@@ -4,3 +4,3 @@ func DuplicateIssue() {
++	resp, err := http.Get("http://example.com")
+ }

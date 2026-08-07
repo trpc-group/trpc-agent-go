@@ -1,0 +1,7 @@
+--- a/worker.go
++++ b/worker.go
+@@ -12,3 +12,3 @@ func StartWorker() {
++	go func() {
++		doWork()
++	}()
+ }
