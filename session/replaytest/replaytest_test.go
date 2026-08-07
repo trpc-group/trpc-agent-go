@@ -854,7 +854,7 @@ func TestCanonicalizeScopedStateDetectsSortedCollisionsAndCopiesValues(t *testin
 	require.Equal(t, []byte("value"), prepared["flag"])
 }
 
-func TestRunSkipsDirectStateScopeValidationWhenNoDirectState(t *testing.T) {
+func TestRunSkipsStateScopeValidationWithoutInitialOrDirectState(t *testing.T) {
 	base := sessinmemory.NewSessionService()
 	defer base.Close()
 	sessionService := &scopeSessionService{
@@ -2258,7 +2258,7 @@ func TestRunRejectsStateScopeJSONByteDrift(t *testing.T) {
 	}
 }
 
-func TestPreparedDirectStateScopesIgnoreEventDeltas(t *testing.T) {
+func TestPreparedStateScopeValidationInputs(t *testing.T) {
 	tc := Case{
 		AppState: session.StateMap{
 			session.StateAppPrefix + "direct": []byte(`"app"`),
@@ -2283,7 +2283,7 @@ func TestPreparedDirectStateScopesIgnoreEventDeltas(t *testing.T) {
 	require.Equal(t, session.StateMap{"direct": []byte(`"user"`)}, userState)
 	prepared, err := prepareCase(Backend{}, tc)
 	require.NoError(t, err)
-	require.True(t, prepared.validateDirectStateScopes)
+	require.True(t, prepared.shouldValidateScopes)
 
 	appState, userState, err = prepareExpectedDirectStateMaps(Case{
 		Events: []*event.Event{{StateDelta: session.StateMap{
@@ -2305,7 +2305,19 @@ func TestPreparedDirectStateScopesIgnoreEventDeltas(t *testing.T) {
 		}}},
 	})
 	require.NoError(t, err)
-	require.False(t, prepared.validateDirectStateScopes)
+	require.False(t, prepared.shouldValidateScopes)
+
+	appState, userState, err = prepareExpectedDirectStateMaps(Case{
+		InitialState: session.StateMap{"initial": []byte(`"session-only"`)},
+	})
+	require.NoError(t, err)
+	require.Empty(t, appState)
+	require.Empty(t, userState)
+	prepared, err = prepareCase(Backend{}, Case{
+		InitialState: session.StateMap{"initial": []byte(`"session-only"`)},
+	})
+	require.NoError(t, err)
+	require.True(t, prepared.shouldValidateScopes)
 
 	appState, userState, err = prepareExpectedDirectStateMaps(Case{
 		SessionState: session.StateMap{"session:mode": []byte(`"direct"`)},
@@ -2317,7 +2329,44 @@ func TestPreparedDirectStateScopesIgnoreEventDeltas(t *testing.T) {
 		SessionState: session.StateMap{"session:mode": []byte(`"direct"`)},
 	})
 	require.NoError(t, err)
-	require.True(t, prepared.validateDirectStateScopes)
+	require.True(t, prepared.shouldValidateScopes)
+}
+
+func TestRunRejectsLeakedInitialStateInPeerSession(t *testing.T) {
+	base := sessinmemory.NewSessionService()
+	defer base.Close()
+	sessionService := &scopeSessionService{
+		Service:                      base,
+		emptyAppState:                true,
+		mirrorInitialStateToAppStore: true,
+	}
+	memoryService := meminmemory.NewMemoryService()
+	defer memoryService.Close()
+	tc := Case{
+		Name: "initial-state-scope-leak",
+		InitialState: session.StateMap{
+			"initial": []byte(`"session-only"`),
+		},
+	}
+
+	_, err := Run(context.Background(), testRunNamespace, Backend{
+		Name: "scope_fake", SessionService: sessionService, MemoryService: memoryService,
+		ReadAllMemories: completeMemoryReader(memoryService),
+	}, tc)
+	require.ErrorContains(t, err, "peer state for case")
+	require.ErrorContains(t, err, `on backend "scope_fake"`)
+	require.ErrorContains(t, err, session.StateAppPrefix+"initial")
+	require.Equal(t, 1, sessionService.deleteCalls)
+
+	appState, listErr := base.ListAppStates(context.Background(), replayKey(testRunNamespace, tc.Name).AppName)
+	require.NoError(t, listErr)
+	require.Equal(t, session.StateMap{"initial": []byte(`"session-only"`)}, appState)
+
+	peerKey := replayKey(testRunNamespace, tc.Name)
+	peerKey.SessionID += "-scope-peer"
+	peer, getErr := base.GetSession(context.Background(), peerKey)
+	require.NoError(t, getErr)
+	require.Nil(t, peer)
 }
 
 func TestRunCleansStateScopePeerAfterCallerCancellation(t *testing.T) {
@@ -2817,6 +2866,7 @@ type scopeSessionService struct {
 	session.Service
 	emptyAppState                bool
 	stripPeerState               bool
+	mirrorInitialStateToAppStore bool
 	mutateAppStateResult         func(session.StateMap)
 	mutateUserStateResult        func(session.StateMap)
 	mutatePeerStateResult        func(*session.Session)
@@ -2949,11 +2999,20 @@ func (s *scopeSessionService) CreateSession(
 	state session.StateMap,
 	opts ...session.Option,
 ) (*session.Session, error) {
-	if strings.HasSuffix(key.SessionID, "-scope-peer") && s.createPeerErr != nil {
+	isPeer := strings.HasSuffix(key.SessionID, "-scope-peer")
+	if isPeer && s.createPeerErr != nil {
 		return nil, s.createPeerErr
 	}
 	got, err := s.Service.CreateSession(ctx, key, state, opts...)
-	if err == nil && strings.HasSuffix(key.SessionID, "-scope-peer") {
+	if err != nil {
+		return got, err
+	}
+	if !isPeer && s.mirrorInitialStateToAppStore && len(state) > 0 {
+		if err := s.Service.UpdateAppState(ctx, key.AppName, cloneStateMap(state)); err != nil {
+			return nil, err
+		}
+	}
+	if isPeer {
 		if s.cancelAfterPeerCreate != nil {
 			s.cancelAfterPeerCreate()
 		}
@@ -2964,7 +3023,7 @@ func (s *scopeSessionService) CreateSession(
 			return nil, s.createPeerAfterWriteErr
 		}
 	}
-	return got, err
+	return got, nil
 }
 
 func (s *scopeSessionService) GetSession(
@@ -3104,9 +3163,14 @@ func (s *failingMemoryService) SearchMemories(
 	return s.Service.SearchMemories(ctx, userKey, query, opts...)
 }
 
-func TestAssertMemoryQueriesValidatesExactContents(t *testing.T) {
+func TestAssertMemoryQueriesValidatesResultScopeAndExactContents(t *testing.T) {
+	userKey := memory.UserKey{AppName: "app", UserID: "user"}
 	entry := func(content string) *memory.Entry {
-		return &memory.Entry{Memory: &memory.Memory{Memory: content}}
+		return &memory.Entry{
+			AppName: userKey.AppName,
+			UserID:  userKey.UserID,
+			Memory:  &memory.Memory{Memory: content},
+		}
 	}
 	tests := []struct {
 		name     string
@@ -3114,6 +3178,11 @@ func TestAssertMemoryQueriesValidatesExactContents(t *testing.T) {
 		expected []string
 		wantErr  string
 	}{
+		{
+			name:     "correct scope",
+			results:  []*memory.Entry{entry("expected")},
+			expected: []string{"expected"},
+		},
 		{
 			name:     "wrong content",
 			results:  []*memory.Entry{entry("wrong")},
@@ -3130,6 +3199,24 @@ func TestAssertMemoryQueriesValidatesExactContents(t *testing.T) {
 			name:     "order ignored",
 			results:  []*memory.Entry{entry("second"), entry("first")},
 			expected: []string{"first", "second"},
+		},
+		{
+			name: "wrong app",
+			results: []*memory.Entry{{
+				AppName: "other-app", UserID: userKey.UserID,
+				Memory: &memory.Memory{Memory: "expected"},
+			}},
+			expected: []string{"expected"},
+			wantErr:  `memory query 0 for case "wrong app" returned result at index 0 for app "other-app" and user "user", want app "app" and user "user"`,
+		},
+		{
+			name: "wrong user",
+			results: []*memory.Entry{{
+				AppName: userKey.AppName, UserID: "other-user",
+				Memory: &memory.Memory{Memory: "expected"},
+			}},
+			expected: []string{"expected"},
+			wantErr:  `memory query 0 for case "wrong user" returned result at index 0 for app "app" and user "other-user", want app "app" and user "user"`,
 		},
 		{
 			name:     "nil result",
@@ -3156,7 +3243,7 @@ func TestAssertMemoryQueriesValidatesExactContents(t *testing.T) {
 			err := assertMemoryQueries(
 				context.Background(),
 				Backend{MemoryService: service},
-				memory.UserKey{AppName: "app", UserID: "user"},
+				userKey,
 				Case{Name: test.name, Queries: []MemoryQuery{{
 					Query: "query", ExpectedContents: test.expected,
 				}}},

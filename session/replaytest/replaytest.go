@@ -96,7 +96,8 @@ type MemoryOp struct {
 	ResultAlias string
 }
 
-// MemoryQuery describes one memory search assertion.
+// MemoryQuery describes one memory search assertion. Run requires every result
+// to belong to the replay app/user before comparing contents.
 type MemoryQuery struct {
 	Query string
 	// ExpectedContents is the exact unordered multiset of result contents.
@@ -134,12 +135,14 @@ type preparedCase struct {
 	summaryTargets            []int
 	preparedAppExpectedState  session.StateMap
 	preparedUserExpectedState session.StateMap
-	validateDirectStateScopes bool
+	shouldValidateScopes      bool
 }
 
 // Case is a backend-independent replay scenario.
 type Case struct {
-	Name               string
+	Name string
+	// InitialState initializes only the primary session and must not populate
+	// app- or user-scoped state.
 	InitialState       session.StateMap
 	AppState           session.StateMap
 	UserState          session.StateMap
@@ -285,9 +288,11 @@ type AllowedDiffRule struct {
 // session.Service contract. Direct-state expected values are normalized for
 // independent scope checks, while writes retain the caller's accepted key forms
 // so the service API's input behavior is exercised. InitialState and
-// Event.StateDelta retain their session-local semantics. Runtime failures may
-// still leave partially persisted case data; Run leaves that cleanup lifecycle
-// to the caller.
+// Event.StateDelta retain their session-local semantics. A non-empty
+// InitialState also enables post-run scope isolation checks but is never
+// included in expected app/user state. Runtime failures may still leave
+// partially persisted case data; Run leaves that cleanup lifecycle to the
+// caller.
 func Run(ctx context.Context, runNamespace string, backend Backend, tc Case) (Result, error) {
 	if err := validateBackend(backend); err != nil {
 		return Result{}, err
@@ -323,7 +328,7 @@ func Run(ctx context.Context, runNamespace string, backend Backend, tc Case) (Re
 		tc.Name,
 		prepared.preparedAppExpectedState,
 		prepared.preparedUserExpectedState,
-		prepared.validateDirectStateScopes,
+		prepared.shouldValidateScopes,
 	); err != nil {
 		return Result{}, err
 	}
@@ -391,7 +396,8 @@ func prepareCase(backend Backend, tc Case) (preparedCase, error) {
 		summaryTargets:            targets,
 		preparedAppExpectedState:  preparedAppState,
 		preparedUserExpectedState: preparedUserState,
-		validateDirectStateScopes: len(tc.AppState) > 0 || len(tc.UserState) > 0 || len(tc.SessionState) > 0,
+		shouldValidateScopes: len(tc.InitialState) > 0 || len(tc.AppState) > 0 ||
+			len(tc.UserState) > 0 || len(tc.SessionState) > 0,
 	}, nil
 }
 
@@ -961,6 +967,12 @@ func assertMemoryQueries(ctx context.Context, backend Backend, userKey memory.Us
 			if result.Memory == nil {
 				return fmt.Errorf("memory query %d for case %q returned result with nil memory at index %d, want contents %q", i, tc.Name, resultIndex, want)
 			}
+			if result.AppName != userKey.AppName || result.UserID != userKey.UserID {
+				return fmt.Errorf(
+					"memory query %d for case %q returned result at index %d for app %q and user %q, want app %q and user %q",
+					i, tc.Name, resultIndex, result.AppName, result.UserID, userKey.AppName, userKey.UserID,
+				)
+			}
 			got = append(got, result.Memory.Memory)
 		}
 		sort.Strings(got)
@@ -978,9 +990,9 @@ func validateStateScopes(
 	caseName string,
 	appState session.StateMap,
 	userState session.StateMap,
-	validateDirectStateScopes bool,
+	shouldValidateScopes bool,
 ) (err error) {
-	if !validateDirectStateScopes {
+	if !shouldValidateScopes {
 		return nil
 	}
 
