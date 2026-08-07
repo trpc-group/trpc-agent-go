@@ -29,14 +29,18 @@ type MockBackend struct {
 
 // NewMockBackend initializes a fresh MockBackend.
 func NewMockBackend(name string) *MockBackend {
-	return &MockBackend{
-		Name:      name,
-		Events:    make(map[string][]string),
-		States:    make(map[string]map[string]string),
-		Memories:  make(map[string]map[string]string),
-		Summaries: make(map[string]map[string]string),
-		Tracks:    make(map[string][]string),
-	}
+	b := &MockBackend{Name: name}
+	b.Reset()
+	return b
+}
+
+// Reset clears all stored session data for case isolation.
+func (b *MockBackend) Reset() {
+	b.Events = make(map[string][]string)
+	b.States = make(map[string]map[string]string)
+	b.Memories = make(map[string]map[string]string)
+	b.Summaries = make(map[string]map[string]string)
+	b.Tracks = make(map[string][]string)
 }
 
 // ReplayHarness orchestrates operations across multiple backends and compares results.
@@ -49,12 +53,13 @@ func NewReplayHarness(backends ...*MockBackend) *ReplayHarness {
 	return &ReplayHarness{backends: backends}
 }
 
-// RunCase executes a ReplayCase on all backends and compares outputs.
+// RunCase executes a ReplayCase on all backends and compares outputs with case isolation.
 func (h *ReplayHarness) RunCase(c ReplayCase) []DiffEntry {
-	var diffs []DiffEntry
+	diffs := make([]DiffEntry, 0)
 
-	// Apply operations
+	// Isolated case execution: reset backends before applying case operations
 	for _, b := range h.backends {
+		b.Reset()
 		for _, op := range c.Ops {
 			h.applyOp(b, op)
 		}
@@ -65,7 +70,7 @@ func (h *ReplayHarness) RunCase(c ReplayCase) []DiffEntry {
 		bA := h.backends[0]
 		bB := h.backends[1]
 
-		// 1. Compare Events
+		// 1. Compare Events (Count, Content, Order)
 		allSessionIDs := make(map[string]bool)
 		for sid := range bA.Events {
 			allSessionIDs[sid] = true
@@ -88,13 +93,45 @@ func (h *ReplayHarness) RunCase(c ReplayCase) []DiffEntry {
 					ValueB:    len(evB),
 					Reason:    "Event sequence count mismatch across backends",
 				})
+			} else {
+				for i := 0; i < len(evA); i++ {
+					if evA[i] != evB[i] {
+						diffs = append(diffs, DiffEntry{
+							CaseID:    c.ID,
+							SessionID: sid,
+							FieldPath: fmt.Sprintf("events[%d]", i),
+							BackendA:  bA.Name,
+							BackendB:  bB.Name,
+							ValueA:    evA[i],
+							ValueB:    evB[i],
+							Reason:    "Event content or order mismatch across backends",
+						})
+					}
+				}
 			}
 		}
 
 		// 2. Compare States
-		for sid, stA := range bA.States {
+		allStateSIDs := make(map[string]bool)
+		for sid := range bA.States {
+			allStateSIDs[sid] = true
+		}
+		for sid := range bB.States {
+			allStateSIDs[sid] = true
+		}
+
+		for sid := range allStateSIDs {
+			stA := bA.States[sid]
 			stB := bB.States[sid]
-			for k, vA := range stA {
+			allKeys := make(map[string]bool)
+			for k := range stA {
+				allKeys[k] = true
+			}
+			for k := range stB {
+				allKeys[k] = true
+			}
+			for k := range allKeys {
+				vA := stA[k]
 				vB := stB[k]
 				if vA != vB {
 					diffs = append(diffs, DiffEntry{
@@ -111,7 +148,27 @@ func (h *ReplayHarness) RunCase(c ReplayCase) []DiffEntry {
 			}
 		}
 
-		// 3. Compare Summaries (Filter-key aware)
+		// 3. Compare Memories
+		for sid, memA := range bA.Memories {
+			memB := bB.Memories[sid]
+			for mid, contentA := range memA {
+				contentB := memB[mid]
+				if contentA != contentB {
+					diffs = append(diffs, DiffEntry{
+						CaseID:    c.ID,
+						SessionID: sid,
+						FieldPath: "memory." + mid,
+						BackendA:  bA.Name,
+						BackendB:  bB.Name,
+						ValueA:    contentA,
+						ValueB:    contentB,
+						Reason:    "Memory content mismatch",
+					})
+				}
+			}
+		}
+
+		// 4. Compare Summaries (Filter-key aware)
 		for sid, sumA := range bA.Summaries {
 			sumB := bB.Summaries[sid]
 			for fk, valA := range sumA {
@@ -128,6 +185,23 @@ func (h *ReplayHarness) RunCase(c ReplayCase) []DiffEntry {
 						Reason:    "Summary filter-key text mismatch",
 					})
 				}
+			}
+		}
+
+		// 5. Compare Tracks
+		for sid, trA := range bA.Tracks {
+			trB := bB.Tracks[sid]
+			if len(trA) != len(trB) {
+				diffs = append(diffs, DiffEntry{
+					CaseID:    c.ID,
+					SessionID: sid,
+					FieldPath: "tracks.count",
+					BackendA:  bA.Name,
+					BackendB:  bB.Name,
+					ValueA:    len(trA),
+					ValueB:    len(trB),
+					Reason:    "Track telemetry count mismatch across backends",
+				})
 			}
 		}
 	}

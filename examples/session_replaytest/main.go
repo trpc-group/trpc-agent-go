@@ -28,7 +28,7 @@ func main() {
 	harness := NewReplayHarness(bInMemory, bSQLite)
 	cases := GetDefaultReplayCases()
 
-	var allDiffs []DiffEntry
+	allDiffs := make([]DiffEntry, 0)
 	for _, c := range cases {
 		diffs := harness.RunCase(c)
 		allDiffs = append(allDiffs, diffs...)
@@ -57,4 +57,8 @@ func main() {
 	fmt.Printf("Consistency Pass Status: %v\n", report.Passed)
 	fmt.Printf("Report Generated at    : '%s'\n", reportPath)
 	fmt.Println("==========================================================================")
+
+	if !report.Passed {
+		os.Exit(1)
+	}
 }
