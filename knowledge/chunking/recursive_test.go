@@ -281,8 +281,78 @@ func TestRecursiveChunking_MergesSmallSeparatorFragments(t *testing.T) {
 	chunks, err := rc.Chunk(doc)
 	require.NoError(t, err)
 	require.Len(t, chunks, 2)
-	require.Equal(t, "alpha beta gamma delta", chunks[0].Content)
+	require.Equal(t, "alpha beta gamma delta ", chunks[0].Content)
 	require.Equal(t, "epsilon zeta eta theta", chunks[1].Content)
+
+	legacyChunks, err := NewRecursiveChunking(
+		WithRecursiveChunkSize(24),
+		WithRecursiveSeparators([]string{" ", ""}),
+		WithRecursiveWhitespaceTrimming(),
+	).Chunk(doc)
+	require.NoError(t, err)
+	require.Len(t, legacyChunks, 2)
+	require.Equal(t, "alpha beta gamma delta", legacyChunks[0].Content)
+	require.Equal(t, "epsilon zeta eta theta", legacyChunks[1].Content)
+}
+
+func TestRecursiveChunking_WhitespaceModes(t *testing.T) {
+	content := "def f():  \n\tif enabled:\n\t\treturn 1  "
+	doc := &document.Document{ID: "python", Content: content}
+
+	chunks, err := NewRecursiveChunking(
+		WithRecursiveChunkSize(128),
+	).Chunk(doc)
+	require.NoError(t, err)
+	require.Len(t, chunks, 1)
+	require.Equal(t, content, chunks[0].Content)
+
+	legacyChunks, err := NewRecursiveChunking(
+		WithRecursiveChunkSize(128),
+		WithRecursiveWhitespaceTrimming(),
+	).Chunk(doc)
+	require.NoError(t, err)
+	require.Len(t, legacyChunks, 1)
+	require.Equal(
+		t,
+		"def f():\nif enabled:\nreturn 1",
+		legacyChunks[0].Content,
+	)
+}
+
+func TestRecursiveChunking_WhitespaceOnlyDocument(t *testing.T) {
+	chunks, err := NewRecursiveChunking().Chunk(
+		&document.Document{Content: " \n\t "},
+	)
+	require.ErrorIs(t, err, ErrEmptyDocument)
+	require.Nil(t, chunks)
+}
+
+func TestRecursiveChunking_PreservesWhitespaceBoundaryFragments(t *testing.T) {
+	const chunkSize = 4
+	content := "   aaa   "
+	doc := &document.Document{ID: "boundary-whitespace", Content: content}
+
+	chunks, err := NewRecursiveChunking(
+		WithRecursiveChunkSize(chunkSize),
+		WithRecursiveSeparators([]string{" "}),
+	).Chunk(doc)
+	require.NoError(t, err)
+	require.Len(t, chunks, 2)
+	require.Equal(t, "   a", chunks[0].Content)
+	require.Equal(t, "aa  ", chunks[1].Content)
+	for _, chunk := range chunks {
+		require.NotEmpty(t, strings.TrimSpace(chunk.Content))
+		require.LessOrEqual(t, utf8.RuneCountInString(chunk.Content), chunkSize)
+	}
+
+	legacyChunks, err := NewRecursiveChunking(
+		WithRecursiveChunkSize(chunkSize),
+		WithRecursiveSeparators([]string{" "}),
+		WithRecursiveWhitespaceTrimming(),
+	).Chunk(doc)
+	require.NoError(t, err)
+	require.Len(t, legacyChunks, 1)
+	require.Equal(t, "aaa", legacyChunks[0].Content)
 }
 
 func TestRecursiveChunking_PreservesSentenceAtoms(t *testing.T) {
