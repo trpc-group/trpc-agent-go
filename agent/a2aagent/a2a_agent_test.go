@@ -1481,6 +1481,103 @@ func TestAnonymousCookieRequestHandlerHonorsInitializationContextCancellation(
 	}
 }
 
+func TestAnonymousCookieRequestHandlerCancelsRequestBeforeHeadersOnInitializationLoss(
+	t *testing.T,
+) {
+	requestStarted := make(chan struct{})
+	requestCanceled := make(chan struct{})
+	releaseHandler := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() { close(releaseHandler) })
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		close(requestStarted)
+		select {
+		case <-r.Context().Done():
+			close(requestCanceled)
+			<-releaseHandler
+		case <-releaseHandler:
+		}
+	}))
+	defer func() {
+		release()
+		srv.Close()
+	}()
+
+	scope := anonymousCookieURLScopeFromAgentURL(srv.URL)
+	stateKey := anonymousCookieStateKey(srv.URL)
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	state := newAnonymousCookieState(
+		session.NewSession(key.AppName, key.UserID, key.SessionID),
+		session.NewSession(key.AppName, key.UserID, key.SessionID),
+		nil,
+		stateKey,
+		scope,
+	)
+	initializer := &controlledStateInitializationService{}
+	handler := &anonymousCookieHTTPReqHandler{
+		next:   &httpClientDoHandler{},
+		cookie: state,
+		scope:  scope,
+	}
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/a2a", nil)
+	require.NoError(t, err)
+	type handleResult struct {
+		response *http.Response
+		err      error
+	}
+	resultCh := make(chan handleResult, 1)
+	go func() {
+		resp, handleErr := handler.handleCoordinatedInitialization(
+			context.Background(),
+			srv.Client(),
+			req,
+			state,
+			initializer,
+			key,
+		)
+		resultCh <- handleResult{response: resp, err: handleErr}
+	}()
+
+	select {
+	case <-requestStarted:
+	case <-time.After(anonymousAgentTestTimeout):
+		t.Fatal("anonymous initialization request did not start")
+	}
+	initializer.cancel()
+
+	canceledBeforeRelease := false
+	select {
+	case <-requestCanceled:
+		canceledBeforeRelease = true
+	case <-time.After(time.Second):
+	}
+
+	var result handleResult
+	returnedBeforeRelease := false
+	if canceledBeforeRelease {
+		select {
+		case result = <-resultCh:
+			returnedBeforeRelease = true
+		case <-time.After(time.Second):
+		}
+	}
+	release()
+	if !returnedBeforeRelease {
+		select {
+		case result = <-resultCh:
+		case <-time.After(anonymousAgentTestTimeout):
+			t.Fatal("anonymous initialization request did not finish")
+		}
+	}
+
+	require.True(t, canceledBeforeRelease, "request did not observe initialization cancellation")
+	require.True(t, returnedBeforeRelease, "request waited for the remote handler to return")
+	require.Nil(t, result.response)
+	require.ErrorIs(t, result.err, context.Canceled)
+}
+
 func TestAnonymousCookieRequestHandlerDoesNotRetryAfterCookieAndHTTPError(
 	t *testing.T,
 ) {

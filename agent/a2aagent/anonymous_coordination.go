@@ -340,9 +340,15 @@ func (h *anonymousCookieHTTPReqHandler) handleCoordinatedInitialization(
 	persistentKey session.Key,
 ) (*http.Response, error) {
 	var (
-		ownerResponse *http.Response
-		ownerErr      error
+		ownerResponse      *http.Response
+		ownerErr           error
+		cancelOwnerRequest context.CancelFunc
 	)
+	cancelOwnerRequestIfNeeded := func() {
+		if cancelOwnerRequest != nil {
+			cancelOwnerRequest()
+		}
+	}
 	value, didInitialize, err := initializer.LoadOrInitializeSessionState(
 		ctx,
 		persistentKey,
@@ -375,20 +381,30 @@ func (h *anonymousCookieHTTPReqHandler) handleCoordinatedInitialization(
 				cookie.key,
 				h.scope,
 			)
-			// The response body outlives this initializer callback, so its request
-			// must remain bound to the invocation context after the lease is closed.
+			// Keep lease-loss cancellation attached until response headers and
+			// cookies are captured. Afterwards the response body remains bound only
+			// to the invocation context and can outlive this initializer callback.
+			requestCtx, cancelRequest := context.WithCancel(ctx)
+			cancelOwnerRequest = cancelRequest
+			stopInitializationCancellation := context.AfterFunc(
+				initializeCtx,
+				cancelRequest,
+			)
 			ownerResponse, ownerErr = h.sendRequest(
-				ctx,
+				requestCtx,
 				httpClient,
 				req,
 				pendingCookie,
 			)
+			stopInitializationCancellation()
 			if ownerErr != nil {
+				cancelOwnerRequestIfNeeded()
 				closeAnonymousCookieResponse(ownerResponse)
 				ownerResponse = nil
 				return nil, ownerErr
 			}
 			if err := initializeCtx.Err(); err != nil {
+				cancelOwnerRequestIfNeeded()
 				closeAnonymousCookieResponse(ownerResponse)
 				ownerResponse = nil
 				return nil, err
@@ -405,6 +421,7 @@ func (h *anonymousCookieHTTPReqHandler) handleCoordinatedInitialization(
 		if errors.Is(err, errAnonymousCookieNotCaptured) &&
 			!h.requireCoordination {
 			if ownerResponse == nil && ownerErr == nil {
+				cancelOwnerRequestIfNeeded()
 				return nil, fmt.Errorf(
 					"coordinate anonymous A2A identity: initializer returned no response: %w",
 					err,
@@ -412,10 +429,12 @@ func (h *anonymousCookieHTTPReqHandler) handleCoordinatedInitialization(
 			}
 			return ownerResponse, ownerErr
 		}
+		cancelOwnerRequestIfNeeded()
 		closeAnonymousCookieResponse(ownerResponse)
 		return nil, fmt.Errorf("coordinate anonymous A2A identity: %w", err)
 	}
 	if err := cookie.storeCanonicalValue(value); err != nil {
+		cancelOwnerRequestIfNeeded()
 		closeAnonymousCookieResponse(ownerResponse)
 		return nil, err
 	}
@@ -423,6 +442,7 @@ func (h *anonymousCookieHTTPReqHandler) handleCoordinatedInitialization(
 		return ownerResponse, ownerErr
 	}
 	if ownerResponse != nil {
+		cancelOwnerRequestIfNeeded()
 		closeAnonymousCookieResponse(ownerResponse)
 		return nil, errors.New(
 			"coordinate anonymous A2A identity: initializer returned a response without committing it",
