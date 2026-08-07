@@ -11,6 +11,7 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -485,6 +486,335 @@ func TestRevisionReadBoundaries(t *testing.T) {
 		session.NewSession(key.AppName, key.UserID, key.SessionID),
 	)
 	require.Error(t, err)
+}
+
+func TestRevisionProjectionReadFailures(t *testing.T) {
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	newService := func(t *testing.T) *Service {
+		t.Helper()
+		db, _, cleanup := openTempSQLiteDB(t)
+		t.Cleanup(cleanup)
+		service, err := NewService(db)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, service.Close()) })
+		_, err = service.CreateSession(context.Background(), key, nil)
+		require.NoError(t, err)
+		return service
+	}
+	load := func(t *testing.T, service *Service) error {
+		t.Helper()
+		tx, err := service.db.BeginTx(context.Background(), nil)
+		require.NoError(t, err)
+		defer tx.Rollback()
+		_, _, err = service.loadActiveSessionTx(context.Background(), tx, key)
+		return err
+	}
+
+	for name, table := range map[string]string{
+		"events": "session_events", "tracks": "session_track_events",
+		"summaries": "session_summaries",
+	} {
+		t.Run(name+" query", func(t *testing.T) {
+			service := newService(t)
+			_, err := service.db.ExecContext(
+				context.Background(), fmt.Sprintf("DROP TABLE %s", table),
+			)
+			require.NoError(t, err)
+			assert.Error(t, load(t, service))
+		})
+	}
+
+	t.Run("event decode", func(t *testing.T) {
+		service := newService(t)
+		now := time.Now().UnixNano()
+		_, err := service.db.ExecContext(context.Background(), fmt.Sprintf(
+			`INSERT INTO %s (app_name, user_id, session_id, event, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?)`, service.tableSessionEvents,
+		), key.AppName, key.UserID, key.SessionID, []byte("{"), now, now)
+		require.NoError(t, err)
+		assert.Error(t, load(t, service))
+	})
+
+	t.Run("track decode", func(t *testing.T) {
+		service := newService(t)
+		now := time.Now().UnixNano()
+		_, err := service.db.ExecContext(context.Background(), fmt.Sprintf(
+			`INSERT INTO %s (app_name, user_id, session_id, track, event, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?)`, service.tableSessionTracks,
+		), key.AppName, key.UserID, key.SessionID, "trace", []byte("{"), now, now)
+		require.NoError(t, err)
+		assert.Error(t, load(t, service))
+	})
+
+	t.Run("summary decode", func(t *testing.T) {
+		service := newService(t)
+		now := time.Now().UnixNano()
+		_, err := service.db.ExecContext(context.Background(), fmt.Sprintf(
+			`INSERT INTO %s (app_name, user_id, session_id, filter_key, summary, updated_at)
+VALUES (?, ?, ?, ?, ?, ?)`, service.tableSessionSummaries,
+		), key.AppName, key.UserID, key.SessionID, "all", []byte("{"), now)
+		require.NoError(t, err)
+		assert.Error(t, load(t, service))
+	})
+}
+
+func TestReplacementResultScopedStateFailures(t *testing.T) {
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	for name, table := range map[string]string{
+		"app": "app_states", "user": "user_states",
+	} {
+		t.Run(name, func(t *testing.T) {
+			db, _, cleanup := openTempSQLiteDB(t)
+			t.Cleanup(cleanup)
+			service, err := NewService(db)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, service.Close()) })
+			_, err = service.db.ExecContext(
+				context.Background(), fmt.Sprintf("DROP TABLE %s", table),
+			)
+			require.NoError(t, err)
+			_, err = service.replacementResultWithScopedState(
+				context.Background(), key,
+				session.NewSession(key.AppName, key.UserID, key.SessionID), false,
+			)
+			assert.Error(t, err)
+		})
+	}
+}
+
+func TestReplaceActiveSessionWriteFailures(t *testing.T) {
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	newService := func(t *testing.T) *Service {
+		t.Helper()
+		db, _, cleanup := openTempSQLiteDB(t)
+		t.Cleanup(cleanup)
+		service, err := NewService(db)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, service.Close()) })
+		_, err = service.CreateSession(context.Background(), key, nil)
+		require.NoError(t, err)
+		return service
+	}
+	restore := func(t *testing.T, service *Service, restored *session.Session) error {
+		t.Helper()
+		tx, err := service.db.BeginTx(context.Background(), nil)
+		require.NoError(t, err)
+		defer tx.Rollback()
+		return service.replaceActiveSessionTx(
+			context.Background(), tx, key, restored, sql.NullInt64{},
+		)
+	}
+	newProjection := func() *session.Session {
+		return session.NewSession(
+			key.AppName, key.UserID, key.SessionID,
+			session.WithSessionCreatedAt(time.Now()),
+			session.WithSessionUpdatedAt(time.Now()),
+		)
+	}
+
+	for name, table := range map[string]string{
+		"state": "session_states", "events": "session_events",
+		"tracks": "session_track_events", "summaries": "session_summaries",
+	} {
+		t.Run(name+" table", func(t *testing.T) {
+			service := newService(t)
+			_, err := service.db.ExecContext(
+				context.Background(), fmt.Sprintf("DROP TABLE %s", table),
+			)
+			require.NoError(t, err)
+			assert.Error(t, restore(t, service, newProjection()))
+		})
+	}
+
+	t.Run("event insert", func(t *testing.T) {
+		service := newService(t)
+		_, err := service.db.ExecContext(context.Background(), fmt.Sprintf(
+			`CREATE TRIGGER fail_event BEFORE INSERT ON %s
+BEGIN SELECT RAISE(ABORT, 'fail'); END`, service.tableSessionEvents,
+		))
+		require.NoError(t, err)
+		restored := newProjection()
+		restored.Events = append(restored.Events, *sqliteTestMessageEvent(
+			"event", "request", "invocation", "content",
+		))
+		assert.ErrorContains(t, restore(t, service, restored), "restore active event")
+	})
+
+	t.Run("track insert", func(t *testing.T) {
+		service := newService(t)
+		_, err := service.db.ExecContext(context.Background(), fmt.Sprintf(
+			`CREATE TRIGGER fail_track BEFORE INSERT ON %s
+BEGIN SELECT RAISE(ABORT, 'fail'); END`, service.tableSessionTracks,
+		))
+		require.NoError(t, err)
+		restored := newProjection()
+		restored.Tracks = map[session.Track]*session.TrackEvents{
+			"trace": {Track: "trace", Events: []session.TrackEvent{{
+				Track: "trace", Payload: json.RawMessage(`{}`), Timestamp: time.Now(),
+			}}},
+		}
+		assert.ErrorContains(t, restore(t, service, restored), "restore active track event")
+	})
+
+	t.Run("summary insert", func(t *testing.T) {
+		service := newService(t)
+		_, err := service.db.ExecContext(context.Background(), fmt.Sprintf(
+			`CREATE TRIGGER fail_summary BEFORE INSERT ON %s
+BEGIN SELECT RAISE(ABORT, 'fail'); END`, service.tableSessionSummaries,
+		))
+		require.NoError(t, err)
+		restored := newProjection()
+		restored.Summaries = map[string]*session.Summary{
+			"all": {Summary: "summary", UpdatedAt: time.Now()},
+		}
+		assert.ErrorContains(t, restore(t, service, restored), "restore active summary")
+	})
+
+	t.Run("projection edges", func(t *testing.T) {
+		service := newService(t)
+		restored := newProjection()
+		evt := sqliteTestMessageEvent(
+			"event", "request", "invocation", "content",
+		)
+		evt.Timestamp = time.Time{}
+		restored.Events = append(restored.Events, *evt)
+		restored.Tracks = map[session.Track]*session.TrackEvents{"nil": nil}
+		restored.Summaries = map[string]*session.Summary{"nil": nil}
+		require.NoError(t, restore(t, service, restored))
+	})
+
+	t.Run("event encoding", func(t *testing.T) {
+		service := newService(t)
+		restored := newProjection()
+		evt := sqliteTestMessageEvent(
+			"event", "request", "invocation", "content",
+		)
+		evt.Extensions = map[string]json.RawMessage{"invalid": {0xff}}
+		restored.Events = append(restored.Events, *evt)
+		assert.Error(t, restore(t, service, restored))
+	})
+
+	t.Run("track event encoding", func(t *testing.T) {
+		service := newService(t)
+		restored := newProjection()
+		restored.Tracks = map[session.Track]*session.TrackEvents{
+			"trace": {Track: "trace", Events: []session.TrackEvent{{
+				Track: "trace", Payload: json.RawMessage{0xff}, Timestamp: time.Now(),
+			}}},
+		}
+		assert.Error(t, restore(t, service, restored))
+	})
+}
+
+func TestReplaceLatestTurnDatabaseFailures(t *testing.T) {
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	req := session.LatestTurnReplacementRequest{
+		Key: key, ExpectedRequestID: "request", IdempotencyKey: "replacement",
+	}
+	newService := func(t *testing.T) *Service {
+		t.Helper()
+		db, _, cleanup := openTempSQLiteDB(t)
+		t.Cleanup(cleanup)
+		service, err := NewService(db)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, service.Close()) })
+		sess, err := service.CreateSession(context.Background(), key, nil)
+		require.NoError(t, err)
+		turnCtx := sessionrevision.ContextWithTurnStart(
+			context.Background(), sessionrevision.TurnStart{
+				RequestID: "request", InvocationID: "invocation",
+			},
+		)
+		require.NoError(t, service.AppendEvent(
+			turnCtx, sess,
+			sqliteTestMessageEvent("latest", "request", "invocation", "latest"),
+		))
+		return service
+	}
+
+	t.Run("load active state", func(t *testing.T) {
+		service := newService(t)
+		_, err := service.db.ExecContext(context.Background(), "DROP TABLE session_states")
+		require.NoError(t, err)
+		_, err = service.ReplaceLatestTurn(context.Background(), req)
+		assert.ErrorContains(t, err, "load active session state")
+	})
+
+	t.Run("archive", func(t *testing.T) {
+		service := newService(t)
+		_, err := service.db.ExecContext(context.Background(), fmt.Sprintf(
+			`CREATE TRIGGER fail_archive BEFORE INSERT ON %s
+BEGIN SELECT RAISE(ABORT, 'fail'); END`, service.tableRevisionArchives,
+		))
+		require.NoError(t, err)
+		_, err = service.ReplaceLatestTurn(context.Background(), req)
+		assert.ErrorContains(t, err, "archive discarded revision")
+	})
+
+	t.Run("restore state", func(t *testing.T) {
+		service := newService(t)
+		_, err := service.db.ExecContext(context.Background(), fmt.Sprintf(
+			`CREATE TRIGGER fail_state BEFORE UPDATE ON %s
+BEGIN SELECT RAISE(ABORT, 'fail'); END`, service.tableSessionStates,
+		))
+		require.NoError(t, err)
+		_, err = service.ReplaceLatestTurn(context.Background(), req)
+		assert.ErrorContains(t, err, "restore session state")
+	})
+
+	t.Run("revision metadata", func(t *testing.T) {
+		service := newService(t)
+		_, err := service.db.ExecContext(context.Background(), fmt.Sprintf(
+			`CREATE TRIGGER fail_revision BEFORE INSERT ON %s
+BEGIN SELECT RAISE(ABORT, 'fail'); END`, service.tableSessionRevisions,
+		))
+		require.NoError(t, err)
+		_, err = service.ReplaceLatestTurn(context.Background(), req)
+		assert.ErrorContains(t, err, "store revision metadata")
+	})
+}
+
+func TestRevisionMetadataWriteFailures(t *testing.T) {
+	db, _, cleanup := openTempSQLiteDB(t)
+	t.Cleanup(cleanup)
+	service, err := NewService(db)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, service.Close()) })
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	_, err = service.db.ExecContext(
+		context.Background(),
+		fmt.Sprintf(
+			`INSERT INTO %s
+(app_name, user_id, session_id, generation, snapshot, created_at)
+VALUES (?, ?, ?, ?, ?, ?)`,
+			service.tableRevisionArchives,
+		),
+		key.AppName,
+		key.UserID,
+		key.SessionID,
+		0,
+		[]byte(`{}`),
+		time.Now().UnixNano(),
+	)
+	require.NoError(t, err)
+
+	_, err = service.db.ExecContext(context.Background(), fmt.Sprintf(
+		`CREATE TRIGGER fail_delete BEFORE DELETE ON %s
+BEGIN SELECT RAISE(ABORT, 'fail'); END`, service.tableRevisionArchives,
+	))
+	require.NoError(t, err)
+	err = service.deleteRevisionMetadata(context.Background(), service.db, key)
+	assert.ErrorContains(t, err, "delete revision metadata")
+
+	_, err = service.db.ExecContext(context.Background(), "DROP TABLE session_revisions")
+	require.NoError(t, err)
+	tx, err := service.db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	err = service.writeRevisionTx(
+		context.Background(), tx, key, &sessionrevision.PersistedRecord{}, nil,
+	)
+	assert.ErrorContains(t, err, "store revision metadata")
+	require.NoError(t, tx.Rollback())
 }
 
 func sessionExpiration(t *testing.T, service *Service, key session.Key) int64 {

@@ -97,6 +97,11 @@ func TestPrepareRevisionEventMutation(t *testing.T) {
 	empty, err := s.prepareRevisionEventMutation(key, nil, time.Now())
 	require.NoError(t, err)
 	assert.Nil(t, empty.eventDoc)
+
+	invalid := nonPartialResponseEvent(t)
+	invalid.Extensions = map[string]json.RawMessage{"invalid": json.RawMessage(`{`)}
+	_, err = s.prepareRevisionEventMutation(key, invalid, time.Now())
+	assert.ErrorContains(t, err, "marshal event")
 }
 
 func TestRevisionMutations(t *testing.T) {
@@ -309,6 +314,14 @@ func TestFlushRevisionPersistence(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	assert.ErrorIs(t, s.flushRevisionPersistence(ctx, key), context.Canceled)
+
+	ctx, cancel = context.WithCancel(context.Background())
+	s.persistChans = []chan *persistJob{make(chan *persistJob)}
+	go func() {
+		<-s.persistChans[0]
+		cancel()
+	}()
+	assert.ErrorIs(t, s.flushRevisionPersistence(ctx, key), context.Canceled)
 }
 
 func TestRevisionMutationErrors(t *testing.T) {
@@ -327,4 +340,610 @@ func TestRevisionMutationErrors(t *testing.T) {
 	}
 	err = s.updateSessionStateWithRevision(context.Background(), key, session.StateMap{"key": []byte("value")})
 	assert.ErrorContains(t, err, "update failed")
+}
+
+func TestLoadActiveRevisionSessionErrors(t *testing.T) {
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	doc := sessionStateDoc{}
+
+	t.Run("events query", func(t *testing.T) {
+		s := newServiceForTest(t, &mockClient{findFn: func(any) (*mongo.Cursor, error) {
+			return nil, errors.New("events failed")
+		}})
+		_, err := s.loadActiveRevisionSession(context.Background(), key, doc)
+		assert.ErrorContains(t, err, "load active events")
+	})
+
+	t.Run("event decode", func(t *testing.T) {
+		s := newServiceForTest(t, &mockClient{findFn: func(any) (*mongo.Cursor, error) {
+			return docsCursor([]any{sessionEventDoc{Event: []byte("{")}})
+		}})
+		_, err := s.loadActiveRevisionSession(context.Background(), key, doc)
+		assert.Error(t, err)
+	})
+
+	t.Run("event document", func(t *testing.T) {
+		s := newServiceForTest(t, &mockClient{findFn: func(any) (*mongo.Cursor, error) {
+			return docsCursor([]any{bson.M{"event": 42}})
+		}})
+		_, err := s.loadActiveRevisionSession(context.Background(), key, doc)
+		assert.Error(t, err)
+	})
+
+	t.Run("tracks query", func(t *testing.T) {
+		calls := 0
+		s := newServiceForTest(t, &mockClient{findFn: func(any) (*mongo.Cursor, error) {
+			calls++
+			if calls == 1 {
+				return emptyCursor()
+			}
+			return nil, errors.New("tracks failed")
+		}})
+		_, err := s.loadActiveRevisionSession(context.Background(), key, doc)
+		assert.ErrorContains(t, err, "load active tracks")
+	})
+
+	t.Run("summaries query", func(t *testing.T) {
+		calls := 0
+		s := newServiceForTest(t, &mockClient{findFn: func(any) (*mongo.Cursor, error) {
+			calls++
+			if calls < 3 {
+				return emptyCursor()
+			}
+			return nil, errors.New("summaries failed")
+		}})
+		_, err := s.loadActiveRevisionSession(context.Background(), key, doc)
+		assert.ErrorContains(t, err, "load active summaries")
+	})
+
+	t.Run("track decode", func(t *testing.T) {
+		calls := 0
+		s := newServiceForTest(t, &mockClient{findFn: func(any) (*mongo.Cursor, error) {
+			calls++
+			if calls == 1 {
+				return emptyCursor()
+			}
+			return docsCursor([]any{sessionTrackDoc{Track: "trace", Event: []byte("{")}})
+		}})
+		_, err := s.loadActiveRevisionSession(context.Background(), key, doc)
+		assert.Error(t, err)
+	})
+
+	t.Run("summary decode", func(t *testing.T) {
+		calls := 0
+		s := newServiceForTest(t, &mockClient{findFn: func(any) (*mongo.Cursor, error) {
+			calls++
+			if calls < 3 {
+				return emptyCursor()
+			}
+			return docsCursor([]any{sessionSummaryDoc{FilterKey: "all", Summary: []byte("{")}})
+		}})
+		_, err := s.loadActiveRevisionSession(context.Background(), key, doc)
+		assert.Error(t, err)
+	})
+
+	for name, failAt := range map[string]int{
+		"event cursor": 1, "track cursor": 2, "summary cursor": 3,
+	} {
+		t.Run(name, func(t *testing.T) {
+			calls := 0
+			s := newServiceForTest(t, &mockClient{findFn: func(any) (*mongo.Cursor, error) {
+				calls++
+				if calls == failAt {
+					return mongo.NewCursorFromDocuments(
+						nil, errors.New("cursor failed"), nil,
+					)
+				}
+				return emptyCursor()
+			}})
+			_, err := s.loadActiveRevisionSession(context.Background(), key, doc)
+			assert.ErrorContains(t, err, "cursor failed")
+		})
+	}
+}
+
+func TestRestoreRevisionProjectionErrors(t *testing.T) {
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	restored := session.NewSession(key.AppName, key.UserID, key.SessionID)
+	record := &sessionrevision.PersistedRecord{}
+
+	t.Run("clear projection", func(t *testing.T) {
+		mc := &mockClient{deleteManyFn: func(any) (*mongo.DeleteResult, error) {
+			return nil, errors.New("delete failed")
+		}}
+		s := newServiceForTest(t, mc)
+		err := s.restoreRevisionProjection(context.Background(), key, restored, sessionStateDoc{}, record)
+		assert.ErrorContains(t, err, "clear discarded session projection")
+	})
+
+	t.Run("missing state", func(t *testing.T) {
+		mc := &mockClient{updateOneFn: func(any, any, []*options.UpdateOptions) (*mongo.UpdateResult, error) {
+			return &mongo.UpdateResult{}, nil
+		}}
+		s := newServiceForTest(t, mc)
+		err := s.restoreRevisionProjection(context.Background(), key, restored, sessionStateDoc{}, record)
+		assert.ErrorIs(t, err, session.ErrLatestTurnReplacementUnavailable)
+	})
+
+	t.Run("restore event", func(t *testing.T) {
+		withEvent := restored.Clone()
+		withEvent.Events = append(withEvent.Events, *nonPartialResponseEvent(t))
+		mc := &mockClient{insertOneFn: func(any) (*mongo.InsertOneResult, error) {
+			return nil, errors.New("insert failed")
+		}}
+		s := newServiceForTest(t, mc)
+		err := s.restoreRevisionProjection(context.Background(), key, withEvent, sessionStateDoc{}, record)
+		assert.ErrorContains(t, err, "restore event")
+	})
+
+	t.Run("event encoding", func(t *testing.T) {
+		withEvent := restored.Clone()
+		evt := nonPartialResponseEvent(t)
+		evt.Extensions = map[string]json.RawMessage{"invalid": {0xff}}
+		withEvent.Events = append(withEvent.Events, *evt)
+		s := newServiceForTest(t, &mockClient{})
+		err := s.restoreRevisionProjection(
+			context.Background(), key, withEvent, sessionStateDoc{}, record,
+		)
+		assert.Error(t, err)
+	})
+
+	t.Run("track encoding", func(t *testing.T) {
+		withTrack := restored.Clone()
+		withTrack.Tracks = map[session.Track]*session.TrackEvents{
+			"trace": {Track: "trace", Events: []session.TrackEvent{{
+				Track: "trace", Payload: json.RawMessage{0xff},
+			}}},
+		}
+		s := newServiceForTest(t, &mockClient{})
+		err := s.restoreRevisionProjection(
+			context.Background(), key, withTrack, sessionStateDoc{}, record,
+		)
+		assert.Error(t, err)
+	})
+
+	t.Run("restore track event", func(t *testing.T) {
+		withTrack := restored.Clone()
+		withTrack.Tracks = map[session.Track]*session.TrackEvents{
+			"trace": {Track: "trace", Events: []session.TrackEvent{{
+				Track: "trace", Payload: json.RawMessage(`{}`),
+			}}},
+		}
+		mc := &mockClient{insertOneFn: func(any) (*mongo.InsertOneResult, error) {
+			return nil, errors.New("insert failed")
+		}}
+		s := newServiceForTest(t, mc)
+		err := s.restoreRevisionProjection(
+			context.Background(), key, withTrack, sessionStateDoc{}, record,
+		)
+		assert.ErrorContains(t, err, "restore track event")
+	})
+
+	t.Run("restore summary", func(t *testing.T) {
+		withSummary := restored.Clone()
+		withSummary.Summaries = map[string]*session.Summary{
+			"all": {Summary: "summary", UpdatedAt: time.Now()},
+		}
+		mc := &mockClient{insertOneFn: func(any) (*mongo.InsertOneResult, error) {
+			return nil, errors.New("insert failed")
+		}}
+		s := newServiceForTest(t, mc)
+		err := s.restoreRevisionProjection(
+			context.Background(), key, withSummary, sessionStateDoc{}, record,
+		)
+		assert.ErrorContains(t, err, "restore summary")
+	})
+
+	t.Run("nil projection entries", func(t *testing.T) {
+		withNilEntries := session.NewSession(key.AppName, key.UserID, key.SessionID)
+		withNilEntries.Tracks = map[session.Track]*session.TrackEvents{"nil": nil}
+		withNilEntries.Summaries = map[string]*session.Summary{"nil": nil}
+		s := newServiceForTest(t, &mockClient{})
+		require.NoError(t, s.restoreRevisionProjection(
+			context.Background(), key, withNilEntries, sessionStateDoc{}, record,
+		))
+	})
+}
+
+func TestRevisionWriteFailurePaths(t *testing.T) {
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	recordRaw, err := encodeRevision(&sessionrevision.PersistedRecord{})
+	require.NoError(t, err)
+	doc := sessionStateDoc{Revision: recordRaw}
+	evt := nonPartialResponseEvent(t)
+
+	t.Run("event encoding", func(t *testing.T) {
+		s, _ := revisionTestService(t, doc)
+		invalid := nonPartialResponseEvent(t)
+		invalid.Extensions = map[string]json.RawMessage{"invalid": {0xff}}
+		err := s.persistEventWithRevision(
+			context.Background(), key, invalid, sessionrevision.Write{},
+		)
+		assert.ErrorContains(t, err, "marshal event")
+	})
+
+	t.Run("event scoped state", func(t *testing.T) {
+		s, mc := revisionTestService(t, doc)
+		mc.updateOneFn = func(any, any, []*options.UpdateOptions) (*mongo.UpdateResult, error) {
+			return nil, errors.New("scoped state failed")
+		}
+		withState := nonPartialResponseEvent(t)
+		withState.StateDelta = session.StateMap{
+			session.StateAppPrefix + "shared": []byte("value"),
+		}
+		err := s.persistEventWithRevision(
+			context.Background(), key, withState, sessionrevision.Write{},
+		)
+		assert.ErrorContains(t, err, "scoped state failed")
+	})
+
+	t.Run("event state update", func(t *testing.T) {
+		s, mc := revisionTestService(t, doc)
+		mc.updateOneFn = func(any, any, []*options.UpdateOptions) (*mongo.UpdateResult, error) {
+			return nil, errors.New("state update failed")
+		}
+		err := s.persistEventWithRevision(
+			context.Background(), key, evt, sessionrevision.Write{},
+		)
+		assert.ErrorContains(t, err, "update session state")
+	})
+
+	t.Run("event state missing", func(t *testing.T) {
+		s, mc := revisionTestService(t, doc)
+		mc.updateOneFn = func(any, any, []*options.UpdateOptions) (*mongo.UpdateResult, error) {
+			return &mongo.UpdateResult{}, nil
+		}
+		err := s.persistEventWithRevision(context.Background(), key, evt, sessionrevision.Write{})
+		assert.ErrorIs(t, err, errSessionNotFound)
+	})
+
+	t.Run("event insert", func(t *testing.T) {
+		s, mc := revisionTestService(t, doc)
+		mc.insertOneFn = func(any) (*mongo.InsertOneResult, error) {
+			return nil, errors.New("insert failed")
+		}
+		err := s.persistEventWithRevision(context.Background(), key, evt, sessionrevision.Write{})
+		assert.ErrorContains(t, err, "insert event")
+	})
+
+	t.Run("nil track", func(t *testing.T) {
+		s, _ := revisionTestService(t, doc)
+		err := s.persistTrackEventWithRevision(context.Background(), key, nil, sessionrevision.Write{})
+		assert.ErrorContains(t, err, "track event is nil")
+	})
+
+	t.Run("invalid track", func(t *testing.T) {
+		s, _ := revisionTestService(t, doc)
+		err := s.persistTrackEventWithRevision(context.Background(), key, &session.TrackEvent{
+			Track: "trace", Payload: json.RawMessage(`{`),
+		}, sessionrevision.Write{})
+		assert.ErrorContains(t, err, "marshal track event")
+	})
+
+	t.Run("transaction", func(t *testing.T) {
+		s, mc := revisionTestService(t, doc)
+		mc.transactionFn = func(func(mongo.SessionContext) error) error {
+			return errors.New("transaction failed")
+		}
+		_, err := s.ReplaceLatestTurn(context.Background(), session.LatestTurnReplacementRequest{
+			Key: key, ExpectedRequestID: "old-request", IdempotencyKey: "new-request",
+		})
+		assert.ErrorContains(t, err, "replace latest turn: transaction failed")
+	})
+
+	t.Run("state missing after update", func(t *testing.T) {
+		s, mc := revisionTestService(t, doc)
+		mc.updateOneFn = func(any, any, []*options.UpdateOptions) (*mongo.UpdateResult, error) {
+			return &mongo.UpdateResult{}, nil
+		}
+		err := s.updateSessionStateWithRevision(
+			context.Background(), key, session.StateMap{"key": []byte("value")},
+		)
+		assert.ErrorContains(t, err, "session not found")
+	})
+}
+
+func TestRevisionDocumentReadFailures(t *testing.T) {
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	trackEvent := &session.TrackEvent{Track: "trace", Payload: json.RawMessage(`{}`)}
+	operations := map[string]func(*Service) error{
+		"event": func(s *Service) error {
+			return s.persistEventWithRevision(context.Background(), key, nil, sessionrevision.Write{})
+		},
+		"track": func(s *Service) error {
+			return s.persistTrackEventWithRevision(context.Background(), key, trackEvent, sessionrevision.Write{})
+		},
+		"state": func(s *Service) error {
+			return s.updateSessionStateWithRevision(context.Background(), key, session.StateMap{"key": []byte("value")})
+		},
+		"summary": func(s *Service) error {
+			return s.persistSummaryWithRevision(context.Background(), key, bson.M{}, bson.M{}, sessionrevision.Write{})
+		},
+	}
+	for name, operation := range operations {
+		operation := operation
+		t.Run(name+" not found", func(t *testing.T) {
+			mc := &mockClient{
+				findOneFn: func(any) *mongo.SingleResult {
+					return mongo.NewSingleResultFromDocument(bson.D{}, mongo.ErrNoDocuments, nil)
+				},
+				transactionFn: func(fn func(mongo.SessionContext) error) error {
+					return fn(mongo.NewSessionContext(context.Background(), nil))
+				},
+			}
+			s := newServiceForTest(t, mc)
+			s.collRevisionArchives = "session_revision_archives"
+			assert.Error(t, operation(s))
+		})
+		t.Run(name+" read error", func(t *testing.T) {
+			mc := &mockClient{
+				findOneFn: func(any) *mongo.SingleResult {
+					return mongo.NewSingleResultFromDocument(bson.D{}, errors.New("read failed"), nil)
+				},
+				transactionFn: func(fn func(mongo.SessionContext) error) error {
+					return fn(mongo.NewSessionContext(context.Background(), nil))
+				},
+			}
+			s := newServiceForTest(t, mc)
+			s.collRevisionArchives = "session_revision_archives"
+			assert.ErrorContains(t, operation(s), "read failed")
+		})
+		t.Run(name+" invalid revision", func(t *testing.T) {
+			doc := sessionStateDoc{Revision: []byte("{")}
+			s, _ := revisionTestService(t, doc)
+			assert.ErrorContains(t, operation(s), "decode session revision")
+		})
+	}
+}
+
+func TestTrackAndSummaryWriteFailures(t *testing.T) {
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	recordRaw, err := encodeRevision(&sessionrevision.PersistedRecord{})
+	require.NoError(t, err)
+	doc := sessionStateDoc{Revision: recordRaw}
+	trackEvent := &session.TrackEvent{Track: "trace", Payload: json.RawMessage(`{}`)}
+
+	t.Run("track state missing", func(t *testing.T) {
+		s, mc := revisionTestService(t, doc)
+		mc.updateOneFn = func(any, any, []*options.UpdateOptions) (*mongo.UpdateResult, error) {
+			return &mongo.UpdateResult{}, nil
+		}
+		assert.ErrorIs(t, s.persistTrackEventWithRevision(
+			context.Background(), key, trackEvent, sessionrevision.Write{},
+		), errSessionNotFound)
+	})
+
+	t.Run("track update", func(t *testing.T) {
+		s, mc := revisionTestService(t, doc)
+		mc.updateOneFn = func(any, any, []*options.UpdateOptions) (*mongo.UpdateResult, error) {
+			return nil, errors.New("update failed")
+		}
+		assert.ErrorContains(t, s.persistTrackEventWithRevision(
+			context.Background(), key, trackEvent, sessionrevision.Write{},
+		), "update session state")
+	})
+
+	t.Run("track insert", func(t *testing.T) {
+		s, mc := revisionTestService(t, doc)
+		mc.insertOneFn = func(any) (*mongo.InsertOneResult, error) {
+			return nil, errors.New("insert failed")
+		}
+		assert.ErrorContains(t, s.persistTrackEventWithRevision(
+			context.Background(), key, trackEvent, sessionrevision.Write{},
+		), "insert track event")
+	})
+
+	t.Run("summary state missing", func(t *testing.T) {
+		s, mc := revisionTestService(t, doc)
+		mc.updateOneFn = func(any, any, []*options.UpdateOptions) (*mongo.UpdateResult, error) {
+			return &mongo.UpdateResult{}, nil
+		}
+		assert.ErrorIs(t, s.persistSummaryWithRevision(
+			context.Background(), key, bson.M{}, bson.M{}, sessionrevision.Write{},
+		), errSessionNotFound)
+	})
+
+	t.Run("summary update", func(t *testing.T) {
+		s, mc := revisionTestService(t, doc)
+		calls := 0
+		mc.updateOneFn = func(any, any, []*options.UpdateOptions) (*mongo.UpdateResult, error) {
+			calls++
+			if calls == 2 {
+				return nil, errors.New("summary failed")
+			}
+			return &mongo.UpdateResult{MatchedCount: 1}, nil
+		}
+		assert.ErrorContains(t, s.persistSummaryWithRevision(
+			context.Background(), key, bson.M{}, bson.M{}, sessionrevision.Write{},
+		), "summary failed")
+	})
+
+	t.Run("summary revision update", func(t *testing.T) {
+		s, mc := revisionTestService(t, doc)
+		mc.updateOneFn = func(any, any, []*options.UpdateOptions) (*mongo.UpdateResult, error) {
+			return nil, errors.New("revision failed")
+		}
+		assert.ErrorContains(t, s.persistSummaryWithRevision(
+			context.Background(), key, bson.M{}, bson.M{}, sessionrevision.Write{},
+		), "revision failed")
+	})
+
+	t.Run("stale writes", func(t *testing.T) {
+		staleRaw, encodeErr := encodeRevision(&sessionrevision.PersistedRecord{Generation: 2})
+		require.NoError(t, encodeErr)
+		staleDoc := sessionStateDoc{Revision: staleRaw}
+		write := sessionrevision.Write{HasExpectedGeneration: true, ExpectedGeneration: 1}
+		s, _ := revisionTestService(t, staleDoc)
+		assert.ErrorIs(t, s.persistTrackEventWithRevision(
+			context.Background(), key, trackEvent, write,
+		), sessionrevision.ErrStaleGeneration)
+		assert.ErrorIs(t, s.persistSummaryWithRevision(
+			context.Background(), key, bson.M{}, bson.M{}, write,
+		), sessionrevision.ErrStaleGeneration)
+		staleCtx := sessionrevision.ContextWithGeneration(context.Background(), 1)
+		assert.ErrorIs(t, s.updateSessionStateWithRevision(
+			staleCtx, key, session.StateMap{},
+		), sessionrevision.ErrStaleGeneration)
+	})
+}
+
+func TestPublicRevisionMutationPaths(t *testing.T) {
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	recordRaw, err := encodeRevision(&sessionrevision.PersistedRecord{})
+	require.NoError(t, err)
+	doc := sessionStateDoc{
+		AppName: key.AppName, UserID: key.UserID, SessionID: key.SessionID,
+		State: bson.M{}, CreatedAt: time.Now(), UpdatedAt: time.Now(), Revision: recordRaw,
+	}
+	s, _ := revisionTestService(t, doc)
+	s.opts.summarizer = &stubSummarizer{text: "summary"}
+	sess := session.NewSession(key.AppName, key.UserID, key.SessionID)
+
+	require.NoError(t, s.AppendEvent(context.Background(), sess, nonPartialResponseEvent(t)))
+	require.NoError(t, s.AppendTrackEvent(context.Background(), sess, &session.TrackEvent{
+		Track: "trace", Payload: json.RawMessage(`{"step":1}`), Timestamp: time.Now(),
+	}))
+	require.NoError(t, s.UpdateSessionState(
+		context.Background(), key, session.StateMap{"updated": []byte("yes")},
+	))
+	require.NoError(t, s.CreateSessionSummary(context.Background(), sess, "all", true))
+}
+
+func TestReplaceLatestTurnProtocolFailures(t *testing.T) {
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	req := session.LatestTurnReplacementRequest{
+		Key: key, ExpectedRequestID: "old-request", IdempotencyKey: "new-request",
+	}
+	active := session.NewSession(key.AppName, key.UserID, key.SessionID)
+	snapshot, err := sessionrevision.Snapshot(active)
+	require.NoError(t, err)
+	checkpoint := &sessionrevision.PersistedCheckpoint{
+		RequestID: "old-request", InvocationID: "invocation", Snapshot: snapshot,
+	}
+
+	s, _ := revisionTestService(t, sessionStateDoc{})
+	_, err = s.ReplaceLatestTurn(context.Background(), session.LatestTurnReplacementRequest{})
+	assert.Error(t, err)
+	s.collRevisionArchives = ""
+	_, err = s.ReplaceLatestTurn(context.Background(), req)
+	assert.ErrorIs(t, err, session.ErrLatestTurnReplacementUnsupported)
+
+	t.Run("flush", func(t *testing.T) {
+		s, _ := revisionTestService(t, sessionStateDoc{})
+		s.opts.enableAsyncPersist = true
+		_, err := s.ReplaceLatestTurn(context.Background(), req)
+		assert.ErrorContains(t, err, "not initialized")
+	})
+
+	for name, findErr := range map[string]error{
+		"state missing": mongo.ErrNoDocuments, "state read": errors.New("read failed"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, mc := revisionTestService(t, sessionStateDoc{})
+			mc.findOneFn = func(any) *mongo.SingleResult {
+				return mongo.NewSingleResultFromDocument(bson.D{}, findErr, nil)
+			}
+			_, err := s.ReplaceLatestTurn(context.Background(), req)
+			assert.Error(t, err)
+		})
+	}
+
+	t.Run("invalid revision", func(t *testing.T) {
+		s, _ := revisionTestService(t, sessionStateDoc{Revision: []byte("{")})
+		_, err := s.ReplaceLatestTurn(context.Background(), req)
+		assert.ErrorContains(t, err, "decode session revision")
+	})
+
+	t.Run("active projection", func(t *testing.T) {
+		record := &sessionrevision.PersistedRecord{Checkpoint: checkpoint}
+		raw, encodeErr := encodeRevision(record)
+		require.NoError(t, encodeErr)
+		s, mc := revisionTestService(t, sessionStateDoc{Revision: raw})
+		mc.findFn = func(any) (*mongo.Cursor, error) {
+			return nil, errors.New("projection failed")
+		}
+		_, err := s.ReplaceLatestTurn(context.Background(), req)
+		assert.ErrorContains(t, err, "load active events")
+	})
+
+	t.Run("checkpoint unavailable", func(t *testing.T) {
+		raw, encodeErr := encodeRevision(&sessionrevision.PersistedRecord{})
+		require.NoError(t, encodeErr)
+		s, _ := revisionTestService(t, sessionStateDoc{Revision: raw})
+		_, err := s.ReplaceLatestTurn(context.Background(), req)
+		assert.ErrorIs(t, err, session.ErrLatestTurnReplacementUnavailable)
+	})
+
+	t.Run("replay conflict", func(t *testing.T) {
+		record := &sessionrevision.PersistedRecord{
+			Generation: 2, Head: 3,
+			Replays: map[string]sessionrevision.PersistedReplay{
+				"new-request": {RequestID: "different", Generation: 2, Head: 3},
+			},
+		}
+		raw, encodeErr := encodeRevision(record)
+		require.NoError(t, encodeErr)
+		s, _ := revisionTestService(t, sessionStateDoc{Revision: raw})
+		_, err := s.ReplaceLatestTurn(context.Background(), req)
+		assert.ErrorIs(t, err, session.ErrLatestTurnReplacementConflict)
+	})
+
+	t.Run("checkpoint decode", func(t *testing.T) {
+		record := &sessionrevision.PersistedRecord{Checkpoint: &sessionrevision.PersistedCheckpoint{
+			RequestID: "old-request", InvocationID: "invocation", Snapshot: []byte("{"),
+		}}
+		raw, encodeErr := encodeRevision(record)
+		require.NoError(t, encodeErr)
+		s, _ := revisionTestService(t, sessionStateDoc{Revision: raw})
+		_, err := s.ReplaceLatestTurn(context.Background(), req)
+		assert.ErrorContains(t, err, "decode latest-turn checkpoint")
+	})
+
+	t.Run("archive", func(t *testing.T) {
+		record := &sessionrevision.PersistedRecord{Checkpoint: checkpoint}
+		raw, encodeErr := encodeRevision(record)
+		require.NoError(t, encodeErr)
+		s, mc := revisionTestService(t, sessionStateDoc{Revision: raw})
+		mc.insertOneFn = func(any) (*mongo.InsertOneResult, error) {
+			return nil, errors.New("archive failed")
+		}
+		_, err := s.ReplaceLatestTurn(context.Background(), req)
+		assert.ErrorContains(t, err, "archive discarded revision")
+	})
+
+	t.Run("restore", func(t *testing.T) {
+		record := &sessionrevision.PersistedRecord{Checkpoint: checkpoint}
+		raw, encodeErr := encodeRevision(record)
+		require.NoError(t, encodeErr)
+		s, mc := revisionTestService(t, sessionStateDoc{Revision: raw})
+		mc.deleteManyFn = func(any) (*mongo.DeleteResult, error) {
+			return nil, errors.New("restore failed")
+		}
+		_, err := s.ReplaceLatestTurn(context.Background(), req)
+		assert.ErrorContains(t, err, "restore failed")
+	})
+
+	for name, failAt := range map[string]int{"app state": 4, "user state": 5} {
+		t.Run(name, func(t *testing.T) {
+			record := &sessionrevision.PersistedRecord{
+				Generation: 1,
+				Replays: map[string]sessionrevision.PersistedReplay{
+					"new-request": {RequestID: "old-request", Generation: 1},
+				},
+			}
+			raw, encodeErr := encodeRevision(record)
+			require.NoError(t, encodeErr)
+			s, mc := revisionTestService(t, sessionStateDoc{Revision: raw})
+			calls := 0
+			mc.findFn = func(any) (*mongo.Cursor, error) {
+				calls++
+				if calls == failAt {
+					return nil, errors.New("scoped state failed")
+				}
+				return emptyCursor()
+			}
+			_, err := s.ReplaceLatestTurn(context.Background(), req)
+			assert.ErrorContains(t, err, "scoped state failed")
+		})
+	}
 }

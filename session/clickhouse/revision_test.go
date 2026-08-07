@@ -263,6 +263,18 @@ func TestFlushRevisionPersistenceErrorsAndBarrier(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	assert.ErrorIs(t, s.flushRevisionPersistence(ctx, key), context.Canceled)
+
+	s.opts.enableAsyncPersist = false
+	require.NoError(t, s.flushRevisionPersistence(context.Background(), key))
+	s.opts.enableAsyncPersist = true
+
+	waitCtx, cancelWait := context.WithCancel(context.Background())
+	s.eventPairChans = []chan *sessionEventPair{make(chan *sessionEventPair)}
+	go func() {
+		<-s.eventPairChans[0]
+		cancelWait()
+	}()
+	assert.ErrorIs(t, s.flushRevisionPersistence(waitCtx, key), context.Canceled)
 }
 
 func TestLoadRevisionHeadErrors(t *testing.T) {
@@ -303,4 +315,439 @@ func TestRevisionCleanupPaths(t *testing.T) {
 	s.cleanupExpiredData(context.Background())
 	s.cleanupDeletedData(context.Background(), time.Now())
 	assert.GreaterOrEqual(t, execs, 8)
+}
+
+func TestRevisionHeadFailurePaths(t *testing.T) {
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+
+	t.Run("scan", func(t *testing.T) {
+		s := &Service{
+			chClient: &mockClient{queryFunc: func(context.Context, string, ...any) (driver.Rows, error) {
+				return &mockRows{data: [][]any{{"record"}}, current: -1, scanFunc: func(...any) error {
+					return errors.New("scan failed")
+				}}, nil
+			}},
+			tableSessionRevisions: "session_revisions",
+		}
+		_, _, err := s.loadRevisionHead(context.Background(), key)
+		assert.ErrorContains(t, err, "scan failed")
+	})
+
+	t.Run("snapshot", func(t *testing.T) {
+		s := &Service{
+			chClient: &mockClient{queryFunc: func(context.Context, string, ...any) (driver.Rows, error) {
+				return newMockRows([][]any{{`{}`, `{`, (*time.Time)(nil)}}), nil
+			}},
+			tableSessionRevisions: "session_revisions",
+		}
+		_, _, err := s.loadRevisionHead(context.Background(), key)
+		assert.ErrorContains(t, err, "decode session revision snapshot")
+	})
+
+	t.Run("publish version", func(t *testing.T) {
+		s := &Service{chClient: &mockClient{}, tableSessionRevisions: "session_revisions"}
+		err := s.publishRevisionHead(context.Background(), key,
+			&sessionrevision.PersistedRecord{Generation: math.MaxUint32 + 1},
+			session.NewSession(key.AppName, key.UserID, key.SessionID), nil, nil)
+		assert.ErrorIs(t, err, session.ErrLatestTurnReplacementUnavailable)
+	})
+
+	t.Run("publish exec", func(t *testing.T) {
+		s := &Service{
+			chClient: &mockClient{execFunc: func(context.Context, string, ...any) error {
+				return errors.New("exec failed")
+			}},
+			tableSessionRevisions: "session_revisions",
+		}
+		err := s.publishRevisionHead(context.Background(), key,
+			&sessionrevision.PersistedRecord{},
+			session.NewSession(key.AppName, key.UserID, key.SessionID), nil, nil)
+		assert.ErrorContains(t, err, "publish session revision")
+	})
+
+	t.Run("publish snapshot", func(t *testing.T) {
+		s := &Service{chClient: &mockClient{}, tableSessionRevisions: "session_revisions"}
+		err := s.publishRevisionHead(
+			context.Background(), key, &sessionrevision.PersistedRecord{}, nil, nil, nil,
+		)
+		assert.ErrorIs(t, err, session.ErrNilSession)
+	})
+
+	t.Run("verify load", func(t *testing.T) {
+		s := &Service{
+			chClient: &mockClient{queryFunc: func(context.Context, string, ...any) (driver.Rows, error) {
+				return nil, errors.New("verify failed")
+			}},
+			tableSessionRevisions: "session_revisions",
+		}
+		err := s.verifyPublishedRevision(
+			context.Background(), key, &sessionrevision.PersistedRecord{},
+		)
+		assert.ErrorContains(t, err, "verify failed")
+	})
+}
+
+func TestRevisionWriteConflicts(t *testing.T) {
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	active := session.NewSession(key.AppName, key.UserID, key.SessionID)
+	s, _ := newRevisionTestService(t,
+		&sessionrevision.PersistedRecord{Generation: 2}, active)
+	write := sessionrevision.Write{HasExpectedGeneration: true, ExpectedGeneration: 1}
+
+	assert.ErrorIs(t, s.addEventWithRevision(
+		context.Background(), key, revisionResponseEvent("request"), write,
+	), sessionrevision.ErrStaleGeneration)
+	staleCtx := sessionrevision.ContextWithGeneration(context.Background(), 1)
+	assert.ErrorIs(t, s.UpdateSessionState(
+		staleCtx, key, session.StateMap{"key": []byte("value")},
+	), sessionrevision.ErrStaleGeneration)
+	assert.ErrorIs(t, s.publishSummaryRevision(
+		context.Background(), key, "all", &session.Summary{}, write,
+	), sessionrevision.ErrStaleGeneration)
+}
+
+func TestReplaceLatestTurnFailurePaths(t *testing.T) {
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	req := session.LatestTurnReplacementRequest{
+		Key: key, ExpectedRequestID: "old-request", IdempotencyKey: "new-request",
+	}
+	active := session.NewSession(key.AppName, key.UserID, key.SessionID)
+
+	s, _ := newRevisionTestService(t, &sessionrevision.PersistedRecord{}, active)
+	_, err := s.ReplaceLatestTurn(context.Background(), session.LatestTurnReplacementRequest{})
+	assert.Error(t, err)
+	_, err = s.ReplaceLatestTurn(context.Background(), req)
+	assert.ErrorIs(t, err, session.ErrLatestTurnReplacementUnavailable)
+
+	s.tableRevisionArchives = ""
+	_, err = s.ReplaceLatestTurn(context.Background(), req)
+	assert.ErrorIs(t, err, session.ErrLatestTurnReplacementUnsupported)
+
+	snapshot, err := sessionrevision.Snapshot(active)
+	require.NoError(t, err)
+	record := &sessionrevision.PersistedRecord{Checkpoint: &sessionrevision.PersistedCheckpoint{
+		RequestID: "old-request", InvocationID: "invocation", Snapshot: snapshot,
+	}}
+	s, _ = newRevisionTestService(t, record, active)
+	client := s.chClient.(*mockClient)
+	client.execFunc = func(context.Context, string, ...any) error {
+		return errors.New("archive failed")
+	}
+	_, err = s.ReplaceLatestTurn(context.Background(), req)
+	assert.ErrorContains(t, err, "archive discarded revision")
+
+	t.Run("load head", func(t *testing.T) {
+		s := &Service{
+			chClient: &mockClient{queryFunc: func(context.Context, string, ...any) (driver.Rows, error) {
+				return nil, errors.New("head failed")
+			}},
+			tableSessionRevisions: "session_revisions",
+			tableRevisionArchives: "session_revision_archives",
+		}
+		_, err := s.ReplaceLatestTurn(context.Background(), req)
+		assert.ErrorContains(t, err, "head failed")
+	})
+
+	t.Run("replay conflict", func(t *testing.T) {
+		record := &sessionrevision.PersistedRecord{
+			Replays: map[string]sessionrevision.PersistedReplay{
+				"new-request": {RequestID: "different"},
+			},
+		}
+		s, _ := newRevisionTestService(t, record, active)
+		_, err := s.ReplaceLatestTurn(context.Background(), req)
+		assert.ErrorIs(t, err, session.ErrLatestTurnReplacementConflict)
+	})
+
+	t.Run("checkpoint decode", func(t *testing.T) {
+		record := &sessionrevision.PersistedRecord{
+			Checkpoint: &sessionrevision.PersistedCheckpoint{
+				RequestID: "old-request", Snapshot: []byte("{"),
+			},
+		}
+		s, _ := newRevisionTestService(t, record, active)
+		_, err := s.ReplaceLatestTurn(context.Background(), req)
+		assert.ErrorContains(t, err, "decode latest-turn checkpoint")
+	})
+
+	t.Run("publish replacement", func(t *testing.T) {
+		record := &sessionrevision.PersistedRecord{
+			Checkpoint: &sessionrevision.PersistedCheckpoint{
+				RequestID: "old-request", Snapshot: snapshot,
+			},
+		}
+		s, _ := newRevisionTestService(t, record, active)
+		client := s.chClient.(*mockClient)
+		baseExec := client.execFunc
+		client.execFunc = func(ctx context.Context, query string, args ...any) error {
+			if strings.Contains(query, "INSERT INTO session_revisions") {
+				return errors.New("publish failed")
+			}
+			return baseExec(ctx, query, args...)
+		}
+		_, err := s.ReplaceLatestTurn(context.Background(), req)
+		assert.ErrorContains(t, err, "publish failed")
+	})
+}
+
+func TestRevisionScopedStateFailures(t *testing.T) {
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	active := session.NewSession(key.AppName, key.UserID, key.SessionID)
+
+	t.Run("app state", func(t *testing.T) {
+		s, _ := newRevisionTestService(t, &sessionrevision.PersistedRecord{}, active)
+		client := s.chClient.(*mockClient)
+		baseQuery := client.queryFunc
+		client.queryFunc = func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+			if strings.Contains(query, "FROM app_states") {
+				return nil, errors.New("app state failed")
+			}
+			return baseQuery(ctx, query, args...)
+		}
+		_, err := s.getSession(context.Background(), key, 0, time.Time{})
+		assert.ErrorContains(t, err, "app state failed")
+		_, err = s.replacementResultWithScopedState(context.Background(), key, active)
+		assert.ErrorContains(t, err, "app state failed")
+		_, err = s.overlayRevisionHeads(context.Background(), []*session.Session{active.Clone()}, false, 0, time.Time{})
+		assert.ErrorContains(t, err, "app state failed")
+	})
+
+	t.Run("user state", func(t *testing.T) {
+		s, _ := newRevisionTestService(t, &sessionrevision.PersistedRecord{}, active)
+		client := s.chClient.(*mockClient)
+		baseQuery := client.queryFunc
+		client.queryFunc = func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+			if strings.Contains(query, "FROM user_states") {
+				return nil, errors.New("user state failed")
+			}
+			return baseQuery(ctx, query, args...)
+		}
+		_, err := s.getSession(context.Background(), key, 0, time.Time{})
+		assert.ErrorContains(t, err, "user state failed")
+		_, err = s.replacementResultWithScopedState(context.Background(), key, active)
+		assert.ErrorContains(t, err, "user state failed")
+		_, err = s.overlayRevisionHeads(context.Background(), []*session.Session{active.Clone()}, false, 0, time.Time{})
+		assert.ErrorContains(t, err, "user state failed")
+	})
+}
+
+func TestRevisionOperationFailures(t *testing.T) {
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	active := session.NewSession(key.AppName, key.UserID, key.SessionID)
+
+	s := &Service{
+		chClient: &mockClient{queryFunc: func(context.Context, string, ...any) (driver.Rows, error) {
+			return nil, errors.New("head failed")
+		}},
+		tableSessionRevisions: "session_revisions",
+	}
+	assert.ErrorContains(t, s.addEventWithRevision(
+		context.Background(), key, revisionResponseEvent("request"), sessionrevision.Write{},
+	), "head failed")
+	assert.ErrorContains(t, s.updateSessionStateWithRevision(
+		context.Background(), key, session.StateMap{"key": []byte("value")},
+	), "head failed")
+	assert.ErrorContains(t, s.publishSummaryRevision(
+		context.Background(), key, "all", &session.Summary{}, sessionrevision.Write{},
+	), "head failed")
+	_, err := s.getSession(context.Background(), key, 0, time.Time{})
+	assert.ErrorContains(t, err, "head failed")
+	_, err = s.overlayRevisionHeads(
+		context.Background(), []*session.Session{active}, false, 0, time.Time{},
+	)
+	assert.ErrorContains(t, err, "head failed")
+
+	s, _ = newRevisionTestService(t, &sessionrevision.PersistedRecord{}, active)
+	client := s.chClient.(*mockClient)
+	client.execFunc = func(context.Context, string, ...any) error {
+		return errors.New("publish failed")
+	}
+	assert.ErrorContains(t, s.publishSummaryRevision(
+		context.Background(), key, "all", &session.Summary{}, sessionrevision.Write{},
+	), "publish failed")
+	assert.ErrorContains(t, s.UpdateSessionState(
+		context.Background(), key, session.StateMap{"key": []byte("value")},
+	), "publish failed")
+
+	s.opts.enableAsyncPersist = true
+	_, err = s.ReplaceLatestTurn(context.Background(), session.LatestTurnReplacementRequest{
+		Key: key, ExpectedRequestID: "old-request", IdempotencyKey: "new-request",
+	})
+	assert.ErrorContains(t, err, "not initialized")
+}
+
+func TestDeleteRevisionHeadFailurePaths(t *testing.T) {
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	s := &Service{
+		chClient: &mockClient{queryFunc: func(context.Context, string, ...any) (driver.Rows, error) {
+			return newMockRows(nil), nil
+		}},
+		tableSessionRevisions: "session_revisions",
+	}
+	require.NoError(t, s.deleteRevisionHead(context.Background(), key))
+
+	active := session.NewSession(key.AppName, key.UserID, key.SessionID)
+	s, _ = newRevisionTestService(t, &sessionrevision.PersistedRecord{}, active)
+	client := s.chClient.(*mockClient)
+	baseExec := client.execFunc
+	client.execFunc = func(ctx context.Context, query string, args ...any) error {
+		if strings.Contains(query, "ALTER TABLE") {
+			return errors.New("delete failed")
+		}
+		return baseExec(ctx, query, args...)
+	}
+	assert.ErrorContains(t, s.deleteRevisionHead(context.Background(), key), "delete session revision archives")
+
+	s, _ = newRevisionTestService(t, &sessionrevision.PersistedRecord{}, active)
+	client = s.chClient.(*mockClient)
+	client.execFunc = func(context.Context, string, ...any) error {
+		return errors.New("publish failed")
+	}
+	assert.ErrorContains(t, s.deleteRevisionHead(context.Background(), key), "publish failed")
+}
+
+func TestAuthoritativeRevisionLegacyFailures(t *testing.T) {
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	s := &Service{
+		chClient: &mockClient{queryFunc: func(context.Context, string, ...any) (driver.Rows, error) {
+			return newMockRows(nil), nil
+		}},
+		tableSessionRevisions: "session_revisions", tableSessionStates: "session_states",
+		tableSessionEvents: "session_events", tableSessionSummaries: "session_summaries",
+	}
+	_, err := s.authoritativeRevisionSession(context.Background(), key)
+	assert.ErrorContains(t, err, "session not found")
+
+	unchanged := session.NewSession(key.AppName, key.UserID, key.SessionID)
+	result, err := s.overlayRevisionHeads(
+		context.Background(), []*session.Session{unchanged}, true, 0, time.Time{},
+	)
+	require.NoError(t, err)
+	assert.Same(t, unchanged, result[0])
+
+	s.chClient = &mockClient{queryFunc: func(_ context.Context, query string, _ ...any) (driver.Rows, error) {
+		if strings.Contains(query, "FROM session_revisions") {
+			return newMockRows(nil), nil
+		}
+		return nil, errors.New("legacy failed")
+	}}
+	_, err = s.authoritativeRevisionSession(context.Background(), key)
+	assert.ErrorContains(t, err, "legacy failed")
+}
+
+func TestRevisionPublishFailurePaths(t *testing.T) {
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	active := session.NewSession(key.AppName, key.UserID, key.SessionID)
+
+	t.Run("event legacy write", func(t *testing.T) {
+		s, _ := newRevisionTestService(t, &sessionrevision.PersistedRecord{}, active)
+		client := s.chClient.(*mockClient)
+		client.execFunc = func(context.Context, string, ...any) error {
+			return errors.New("event failed")
+		}
+		assert.ErrorContains(t, s.addEventWithRevision(
+			context.Background(), key, revisionResponseEvent("request"), sessionrevision.Write{},
+		), "event failed")
+	})
+
+	t.Run("event revision", func(t *testing.T) {
+		s, _ := newRevisionTestService(t, &sessionrevision.PersistedRecord{}, active)
+		client := s.chClient.(*mockClient)
+		baseExec := client.execFunc
+		client.execFunc = func(ctx context.Context, query string, args ...any) error {
+			if strings.Contains(query, "INSERT INTO session_revisions") {
+				return errors.New("revision failed")
+			}
+			return baseExec(ctx, query, args...)
+		}
+		assert.ErrorContains(t, s.addEventWithRevision(
+			context.Background(), key, revisionResponseEvent("request"), sessionrevision.Write{},
+		), "revision failed")
+	})
+
+	t.Run("state revision", func(t *testing.T) {
+		s, _ := newRevisionTestService(t, &sessionrevision.PersistedRecord{}, active)
+		client := s.chClient.(*mockClient)
+		baseExec := client.execFunc
+		client.execFunc = func(ctx context.Context, query string, args ...any) error {
+			if strings.Contains(query, "INSERT INTO session_revisions") {
+				return errors.New("revision failed")
+			}
+			return baseExec(ctx, query, args...)
+		}
+		assert.ErrorContains(t, s.UpdateSessionState(
+			context.Background(), key, session.StateMap{"key": []byte("value")},
+		), "revision failed")
+	})
+}
+
+func TestRevisionBackedServiceLifecycle(t *testing.T) {
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	active := session.NewSession(key.AppName, key.UserID, key.SessionID)
+	s, _ := newRevisionTestService(t, &sessionrevision.PersistedRecord{}, active)
+
+	created, err := s.CreateSession(
+		context.Background(), key, session.StateMap{"created": []byte("yes")},
+	)
+	require.NoError(t, err)
+	generation, ok := sessionrevision.Generation(created)
+	assert.True(t, ok)
+	assert.Zero(t, generation)
+
+	client := s.chClient.(*mockClient)
+	baseQuery := client.queryFunc
+	client.queryFunc = func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+		if strings.Contains(query, "SELECT session_id, toJSONString(state)") {
+			stateRaw, marshalErr := json.Marshal(SessionState{
+				ID: key.SessionID, State: session.StateMap{"listed": []byte("yes")},
+				CreatedAt: active.CreatedAt, UpdatedAt: active.UpdatedAt,
+			})
+			require.NoError(t, marshalErr)
+			return newMockRows([][]any{{key.SessionID, string(stateRaw), active.CreatedAt, active.UpdatedAt}}), nil
+		}
+		return baseQuery(ctx, query, args...)
+	}
+	sessions, err := s.ListSessions(context.Background(), session.UserKey{
+		AppName: key.AppName, UserID: key.UserID,
+	})
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	assert.Equal(t, []byte("yes"), sessions[0].State["created"])
+
+	require.NoError(t, s.DeleteSession(context.Background(), key))
+}
+
+func TestRevisionAsyncWorkerBarrier(t *testing.T) {
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	active := session.NewSession(key.AppName, key.UserID, key.SessionID)
+	s, _ := newRevisionTestService(t, &sessionrevision.PersistedRecord{}, active)
+	s.opts.enableAsyncPersist = true
+	s.opts.asyncPersisterNum = 1
+	s.opts.batchSize = 2
+	s.opts.batchTimeout = time.Hour
+	s.startAsyncPersistWorker()
+	s.eventPairChans[0] <- &sessionEventPair{
+		key: key, event: revisionResponseEvent("request"),
+	}
+	require.NoError(t, s.flushRevisionPersistence(context.Background(), key))
+	close(s.eventPairChans[0])
+	s.persistWg.Wait()
+
+	s = &Service{
+		opts: ServiceOpts{
+			enableAsyncPersist: true, asyncPersisterNum: 1,
+			batchSize: 2, batchTimeout: time.Hour,
+		},
+		chClient: &mockClient{queryFunc: func(context.Context, string, ...any) (driver.Rows, error) {
+			return nil, errors.New("persist failed")
+		}},
+		tableSessionRevisions: "session_revisions",
+	}
+	s.startAsyncPersistWorker()
+	s.eventPairChans[0] <- &sessionEventPair{
+		key: key, event: revisionResponseEvent("request"),
+	}
+	assert.ErrorContains(t, s.flushRevisionPersistence(context.Background(), key), "persist failed")
+	close(s.eventPairChans[0])
+	s.persistWg.Wait()
 }
