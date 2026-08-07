@@ -234,6 +234,24 @@ For Function Tools, the input `req` is automatically converted into a JSON Schem
 - **Compatibility**: `description:"..."` is also supported for legacy code. If both `jsonschema:"description=..."` and `description:"..."` are present, the `jsonschema` description wins.
 - **More flexible schema**: if you need full control over the input schema (e.g. complex JSON Schema constraints), use `function.WithInputSchema(customInputSchema)` to bypass auto-generation.
 
+### Output Schema
+
+`FunctionTool` and `StreamableFunctionTool` automatically derive `Declaration.OutputSchema` from the output type by default. Model adapters with native tool output-schema support can use it directly, while adapters without a native field may append the serialized schema to the tool description. For agents with many tools or large repeated output structures, this can add significant input tokens to every model request that includes those tools.
+
+If the model does not need the return structure, disable automatic generation:
+
+```go
+documentTool := function.NewFunctionTool(
+    getDocument,
+    function.WithDisableOutputSchemaGen(),
+)
+```
+
+- This disables only automatic output schema generation; input schema generation is unchanged.
+- An explicit schema supplied with `function.WithOutputSchema(customOutputSchema)` always takes precedence, including when `WithDisableOutputSchemaGen()` is also present.
+- Without an explicit schema, disabling generation makes `Declaration.OutputSchema` nil, so model adapters neither send it through a native field nor append it to the tool description.
+- Components that reuse `Declaration.OutputSchema` are also affected: Gemini function declarations will not receive `responseJsonSchema`, and CodeAct will skip output validation. Keep automatic generation enabled or provide an explicit schema when those behaviors are required.
+
 ### Streaming Tool Example
 
 ```go
