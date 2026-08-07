@@ -313,6 +313,7 @@ func TestDurableStoreRedactsQuotedChangedFilesBeforeMarshal(t *testing.T) {
 			{Kind: "+", Content: `password="quoted-password-value"`},
 			{Kind: "+", Content: `token="quoted-token-value"`},
 			{Kind: "+", Content: `api_key="quoted-api-key-value"`},
+			{Kind: "+", Content: `{"password":"json-password-value", "token":"json-token-value", "secret":"json-secret-value", "api_key":"json-api-key-value"}`},
 			{Kind: "+", Content: `source := "password=\"source-password!\" token=\'source-token:!\'"`},
 		}}},
 	}})
@@ -326,7 +327,7 @@ func TestDurableStoreRedactsQuotedChangedFilesBeforeMarshal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile(store) error = %v", err)
 	}
-	for _, secret := range []string{"quoted-password-value", "quoted-token-value", "quoted-api-key-value", "source-password!", "source-token:!"} {
+	for _, secret := range []string{"quoted-password-value", "quoted-token-value", "quoted-api-key-value", "json-password-value", "json-token-value", "json-secret-value", "json-api-key-value", "source-password!", "source-token:!"} {
 		if strings.Contains(string(raw), secret) {
 			t.Fatalf("store leaked quoted secret %q: %s", secret, raw)
 		}

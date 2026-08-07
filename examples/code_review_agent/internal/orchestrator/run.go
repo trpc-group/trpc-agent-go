@@ -600,11 +600,12 @@ func Run(ctx context.Context, opts Options) (result Result, err error) {
 	if planner == nil {
 		planner = defaultPlanner()
 	}
+	plannerWorkDir := redact.Text(input.WorkDir).Text
 	plan, err := planner.PlanReview(ctx, PlanRequest{
 		Model:   opts.Model,
 		Runtime: opts.Runtime,
 		Skill:   defaultSkillName,
-		WorkDir: input.WorkDir,
+		WorkDir: plannerWorkDir,
 		Files:   redactedFiles,
 	})
 	if err != nil {

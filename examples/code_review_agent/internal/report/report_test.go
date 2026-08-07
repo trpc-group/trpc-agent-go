@@ -53,7 +53,7 @@ func TestRenderReportsRedactSecrets(t *testing.T) {
 }
 
 func TestJSONRedactsQuotedSecretsBeforeEscaping(t *testing.T) {
-	secrets := []string{"quoted-password-value", "quoted-token-value", "quoted-api-key-value", "source-password!", "source-token:!"}
+	secrets := []string{"quoted-password-value", "quoted-token-value", "quoted-secret-value", "quoted-api-key-value", "json-password-value", "json-token-value", "json-secret-value", "json-api-key-value", "source-password!", "source-token:!"}
 	r := review.Report{
 		Task: review.ReviewTask{
 			ID:       "task-quoted",
@@ -62,7 +62,7 @@ func TestJSONRedactsQuotedSecretsBeforeEscaping(t *testing.T) {
 		},
 		Summary: `password="quoted-password-value" token="quoted-token-value" api_key="quoted-api-key-value"
 source := "password=\"source-password!\" token=\'source-token:!\'"
-json={"note":"quoted-value"}`,
+json={"password":"json-password-value", "token":"json-token-value", "secret":"json-secret-value", "api_key":"json-api-key-value"}`,
 		Findings: []review.Finding{{
 			File:           "pkg/config.go",
 			Evidence:       `password="quoted-password-value"`,

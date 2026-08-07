@@ -16,11 +16,15 @@ const Placeholder = "[REDACTED_SECRET]"
 
 var PrivateKeyPattern = regexp.MustCompile("-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*?-----END [A-Z ]*PRIVATE KEY-----")
 
-var escapedQuotedAssignmentPattern = regexp.MustCompile(`(?i)(api[_-]?key|token|secret|password)\s*[:=]\s*(?:\\"(?:\\.|[^"\\\r\n])*\\"|\\'(?:\\.|[^'\\\r\n])*\\')`)
+const secretAssignmentKey = `(?:api[_-]?key|token|secret|password)`
 
-var quotedAssignmentPattern = regexp.MustCompile("(?i)(api[_-]?key|token|secret|password)\\s*[:=]\\s*(?:\"[^\"\\r\\n]*\"|'[^'\\r\\n]*')")
+const assignmentKeyPattern = `(?:` + secretAssignmentKey + `|["']` + secretAssignmentKey + `["']|\\["']` + secretAssignmentKey + `\\["'])`
 
-var unquotedAssignmentPattern = regexp.MustCompile("(?i)(api[_-]?key|token|secret|password)\\s*[:=]\\s*[A-Za-z0-9_\\-./+=]{8,}")
+var escapedQuotedAssignmentPattern = regexp.MustCompile(`(?i)` + assignmentKeyPattern + `\s*[:=]\s*(?:\\\"(?:\\.|[^\"\\\r\n])*\\\"|\\'(?:\\.|[^'\\\r\n])*\\')`)
+
+var quotedAssignmentPattern = regexp.MustCompile(`(?i)` + assignmentKeyPattern + `\s*[:=]\s*(?:"[^"\r\n]*"|'[^'\r\n]*')`)
+
+var unquotedAssignmentPattern = regexp.MustCompile(`(?i)` + assignmentKeyPattern + `\s*[:=]\s*[A-Za-z0-9_\-./+=]{8,}`)
 
 var patterns = []*regexp.Regexp{
 	escapedQuotedAssignmentPattern,

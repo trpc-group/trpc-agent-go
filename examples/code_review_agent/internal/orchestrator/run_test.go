@@ -28,6 +28,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/inputsource"
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/redact"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/review"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/sandboxrun"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/store"
@@ -1107,6 +1108,48 @@ func TestStandaloneDiffFileCanUseSelectedRepositoryWorkspace(t *testing.T) {
 	}
 	if len(result.Report.SandboxRuns) != 1 {
 		t.Fatalf("sandbox runs = %d, want one for associated workspace", len(result.Report.SandboxRuns))
+	}
+}
+
+func TestPlannerReceivesRedactedWorkspacePath(t *testing.T) {
+	diffPath := filepath.Join(t.TempDir(), "change.diff")
+	if err := os.WriteFile(diffPath, []byte("diff --git a/pkg/a.go b/pkg/a.go\n--- a/pkg/a.go\n+++ b/pkg/a.go\n@@ -1 +1 @@\n-package pkg\n+package pkg\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(diff) error = %v", err)
+	}
+	repo := filepath.Join(t.TempDir(), "password=supersecretvalue")
+	if err := os.MkdirAll(repo, 0o700); err != nil {
+		t.Fatalf("MkdirAll(repo) error = %v", err)
+	}
+	outDir := t.TempDir()
+	var plannedWorkDir string
+	result, err := Run(context.Background(), Options{
+		DiffFile: diffPath,
+		RepoPath: repo,
+		OutDir:   outDir,
+		DBPath:   filepath.Join(outDir, "review_agent.db"),
+		Runtime:  "fake",
+		Now:      fixedTestTime(),
+		Planner: plannerFunc(func(ctx context.Context, req PlanRequest) (review.ReviewPlan, error) {
+			plannedWorkDir = req.WorkDir
+			return review.ReviewPlan{Model: "test", Provider: "test", Source: "test", Skill: defaultSkillName, Runtime: "fake", Commands: []string{"go test ./..."}}, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	wantRepo, err := filepath.Abs(repo)
+	if err != nil {
+		t.Fatalf("Abs(repo) error = %v", err)
+	}
+	if result.Report.Task.RepoPath != wantRepo {
+		t.Fatalf("task RepoPath = %q, want %q", result.Report.Task.RepoPath, wantRepo)
+	}
+	wantPlannerWorkDir := redact.Text(wantRepo).Text
+	if plannedWorkDir != wantPlannerWorkDir {
+		t.Fatalf("planner WorkDir = %q, want redacted %q", plannedWorkDir, wantPlannerWorkDir)
+	}
+	if strings.Contains(plannedWorkDir, "supersecretvalue") {
+		t.Fatalf("planner WorkDir leaked secret: %q", plannedWorkDir)
 	}
 }
 
