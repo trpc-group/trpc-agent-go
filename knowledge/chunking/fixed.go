@@ -204,7 +204,7 @@ func splitFixedLines(
 		return nextChunkSize
 	}
 	flush := func() {
-		if !hasCurrent {
+		if !hasCurrent || current == "" {
 			current = ""
 			hasCurrent = false
 			return

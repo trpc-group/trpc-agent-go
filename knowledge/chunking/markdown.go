@@ -133,10 +133,11 @@ func (m *MarkdownChunking) Chunk(doc *document.Document) ([]*document.Document, 
 
 // headerSection represents a section split by a specific header level.
 type headerSection struct {
-	Header  string   // The header text (e.g., "## Title")
-	Content string   // The content under this header
-	Level   int      // Header level (1-6)
-	Path    []string // Header path (e.g., ["Main", "Sub", "Current"])
+	Header    string   // The header text (e.g., "## Title")
+	separator string   // The source separator after the header
+	Content   string   // The content under this header
+	Level     int      // Header level (1-6)
+	Path      []string // Header path (e.g., ["Main", "Sub", "Current"])
 }
 
 // markdownChunk keeps structural metadata until semantic units are packed.
@@ -180,7 +181,7 @@ func (m *MarkdownChunking) splitRecursivelyWithPath(
 				// Skip only a genuinely empty preamble. A header without
 				// body text is still source content and must be preserved.
 				if section.Header == "" &&
-					strings.TrimSpace(section.Content) == "" {
+					!m.keepSectionContent(section.Content) {
 					continue
 				}
 
@@ -320,7 +321,7 @@ func (m *MarkdownChunking) splitByHeader(content string, level int) []headerSect
 				// Content before first header
 				if headingLineStart > 0 {
 					beforeContent := string(source[0:headingLineStart])
-					if strings.TrimSpace(beforeContent) != "" {
+					if m.keepSectionContent(beforeContent) {
 						sections = append(sections, headerSection{
 							Header:  "",
 							Content: beforeContent,
@@ -331,26 +332,18 @@ func (m *MarkdownChunking) splitByHeader(content string, level int) []headerSect
 				}
 			}
 
-			// Calculate position after the header line (after the newline)
-			var contentStartPos int
-			if heading.Lines().Len() > 0 {
-				lastLine := heading.Lines().At(heading.Lines().Len() - 1)
-				contentStartPos = lastLine.Stop
-				// Skip the newline after the header
-				if contentStartPos < len(source) && source[contentStartPos] == '\n' {
-					contentStartPos++
-				}
-			} else {
-				// Fallback: move to the beginning of the next line so the header line
-				// itself is not duplicated in section content.
-				contentStartPos = findLineContentStartPos(source, headingLineStart)
-			}
+			contentStartPos, headerSeparator := markdownHeaderBoundary(
+				heading,
+				source,
+				headingLineStart,
+			)
 
 			lastHeader = &headerSection{
-				Header:  markdownHeaderContent(source, headingLineStart, level, headerText),
-				Level:   level,
-				Path:    []string{headerText},
-				Content: "", // Will be filled when we find the next header or reach the end
+				Header:    markdownHeaderContent(source, headingLineStart, level, headerText),
+				separator: headerSeparator,
+				Level:     level,
+				Path:      []string{headerText},
+				Content:   "", // Will be filled when we find the next header or reach the end
 			}
 			lastHeaderPos = contentStartPos
 		}
@@ -389,6 +382,27 @@ func markdownHeaderContent(
 		return fallback
 	}
 	return string(bytes.TrimSuffix(rawHeader, []byte{'\r'}))
+}
+
+func markdownHeaderBoundary(
+	heading ast.Node,
+	source []byte,
+	lineStart int,
+) (int, string) {
+	if heading.Lines().Len() > 0 {
+		lastLine := heading.Lines().At(heading.Lines().Len() - 1)
+		contentStart := lastLine.Stop
+		if contentStart < len(source) && source[contentStart] == '\n' {
+			return contentStart + 1, "\n"
+		}
+		return contentStart, ""
+	}
+
+	contentStart := findLineContentStartPos(source, lineStart)
+	if contentStart > lineStart && source[contentStart-1] == '\n' {
+		return contentStart, "\n"
+	}
+	return contentStart, ""
 }
 
 // findNodeStartPos tries to determine the start position of a heading node
@@ -919,10 +933,10 @@ func (m *MarkdownChunking) trimBlockEdges(content string) string {
 
 func (m *MarkdownChunking) combineSectionContent(section headerSection) string {
 	if section.Header == "" {
-		return m.trimBlockEdges(section.Content)
-	}
-	if section.Content == "" {
-		return section.Header
+		if m.trimWhitespace {
+			return m.trimBlockEdges(section.Content)
+		}
+		return section.Content
 	}
 	if m.trimWhitespace {
 		content := strings.TrimSpace(section.Content)
@@ -931,10 +945,18 @@ func (m *MarkdownChunking) combineSectionContent(section headerSection) string {
 		}
 		return section.Header + "\n\n" + content
 	}
-	return section.Header + "\n" + section.Content
+	return section.Header + section.separator + section.Content
+}
+
+func (m *MarkdownChunking) keepSectionContent(content string) bool {
+	if m.trimWhitespace {
+		return strings.TrimSpace(content) != ""
+	}
+	return content != ""
 }
 
 func isMarkdownHeading(content string) bool {
+	content = strings.TrimSuffix(content, "\n")
 	if strings.ContainsRune(content, '\n') {
 		return false
 	}

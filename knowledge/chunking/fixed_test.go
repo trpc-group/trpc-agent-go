@@ -347,6 +347,56 @@ func TestFixedSizeChunking_PreserveLinesKeepsWhitespaceBoundaries(t *testing.T) 
 	require.Equal(t, "aaaaa", legacyChunks[0].Content)
 }
 
+func TestFixedSizeChunking_PreserveLinesSkipsEmptyChunks(t *testing.T) {
+	const chunkSize = 5
+	doc := &document.Document{
+		ID:      "empty-line-boundary",
+		Content: "aaaaa\n\nbbbbb",
+	}
+
+	chunks, err := NewFixedSizeChunking(
+		WithChunkSize(chunkSize),
+		WithPreserveLines(),
+	).Chunk(doc)
+
+	require.NoError(t, err)
+	require.Len(t, chunks, 2)
+	require.Equal(t, []string{"aaaaa", "bbbbb"}, []string{
+		chunks[0].Content,
+		chunks[1].Content,
+	})
+	for _, chunk := range chunks {
+		require.NotEmpty(t, chunk.Content)
+		require.NotZero(t, chunk.Metadata[source.MetaChunkSize])
+		require.LessOrEqual(t, utf8.RuneCountInString(chunk.Content), chunkSize)
+	}
+}
+
+func TestFixedSizeChunking_PreserveLinesOverlapSkipsEmptyChunks(t *testing.T) {
+	const (
+		chunkSize = 5
+		overlap   = 2
+	)
+	doc := &document.Document{
+		ID:      "empty-line-overlap",
+		Content: "aaaaa\n\nbbbbb",
+	}
+
+	chunks, err := NewFixedSizeChunking(
+		WithChunkSize(chunkSize),
+		WithOverlap(overlap),
+		WithPreserveLines(),
+	).Chunk(doc)
+
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(chunks), 2)
+	for _, chunk := range chunks {
+		require.NotEmpty(t, chunk.Content)
+		require.NotZero(t, chunk.Metadata[source.MetaChunkSize])
+		require.LessOrEqual(t, utf8.RuneCountInString(chunk.Content), chunkSize)
+	}
+}
+
 func TestFixedSizeChunking_PreservesCompleteLines(t *testing.T) {
 	const chunkSize = 120
 	lines := []string{

@@ -19,7 +19,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf"
@@ -208,11 +207,7 @@ func (t *ToolSet) search(
 	var pdfReader reader.Reader
 	maxContentRunes := normalizedMaxContentRunes(req.MaxContentRunes)
 	if req.ReadArxivPapers {
-		pdfReader = pdf.New(reader.WithCustomChunkingStrategy(
-			chunking.NewFixedSizeChunking(
-				chunking.WithWhitespaceTrimming(),
-			),
-		))
+		pdfReader = pdf.New()
 	}
 	for _, result := range results {
 		arti := article{
@@ -286,7 +281,10 @@ func appendArticleContent(
 		if doc == nil {
 			continue
 		}
-		text := doc.Content
+		text := normalizePDFText(doc.Content)
+		if text == "" {
+			continue
+		}
 		contentRunes := utf8.RuneCountInString(text)
 		arti.ContentRunes += contentRunes
 		page := content{
@@ -309,6 +307,19 @@ func appendArticleContent(
 		remaining -= returnedRunes
 		arti.Content = append(arti.Content, page)
 	}
+}
+
+// normalizePDFText preserves arxivsearch's historical whitespace normalization
+// after the shared chunking strategies stopped trimming by default.
+func normalizePDFText(text string) string {
+	text = strings.TrimSpace(text)
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		lines[i] = strings.TrimSpace(line)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func truncateRunes(text string, maxRunes int) string {

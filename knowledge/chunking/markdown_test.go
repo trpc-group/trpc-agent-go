@@ -527,8 +527,9 @@ func TestMarkdownChunking_PreservesSeparatorAtChunkBoundary(t *testing.T) {
 
 func TestMarkdownChunking_CombineSectionPreservesWhitespace(t *testing.T) {
 	section := headerSection{
-		Header:  "# Title",
-		Content: " \n\treturn 1  \n",
+		Header:    "# Title",
+		separator: "\n",
+		Content:   " \n\treturn 1  \n",
 	}
 
 	require.Equal(
@@ -543,6 +544,81 @@ func TestMarkdownChunking_CombineSectionPreservesWhitespace(t *testing.T) {
 			WithMarkdownWhitespaceTrimming(),
 		).combineSectionContent(section),
 	)
+}
+
+func TestMarkdownChunking_PreservesWhitespacePreambleBeforeHeader(t *testing.T) {
+	const chunkSize = 24
+	content := "  \n\t  \n# Header\n\n" + strings.Repeat("x", 80)
+	doc := &document.Document{ID: "whitespace-preamble", Content: content}
+
+	chunks, err := NewMarkdownChunking(
+		WithMarkdownChunkSize(chunkSize),
+	).Chunk(doc)
+	require.NoError(t, err)
+
+	var rebuilt strings.Builder
+	for _, chunk := range chunks {
+		require.LessOrEqual(t, utf8.RuneCountInString(chunk.Content), chunkSize)
+		rebuilt.WriteString(chunk.Content)
+	}
+	require.Equal(t, content, rebuilt.String())
+
+	legacyChunks, err := NewMarkdownChunking(
+		WithMarkdownChunkSize(chunkSize),
+		WithMarkdownWhitespaceTrimming(),
+	).Chunk(doc)
+	require.NoError(t, err)
+	require.NotEmpty(t, legacyChunks)
+	require.True(t, strings.HasPrefix(legacyChunks[0].Content, "# Header"))
+}
+
+func TestMarkdownChunking_HeaderOnlyPreservesSourceTerminator(t *testing.T) {
+	const chunkSize = 16
+	header := "## " + strings.Repeat("H", 50)
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{name: "without newline", content: header},
+		{name: "with newline", content: header + "\n"},
+		{name: "consecutive headings", content: "# One\n# Two\n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			doc := &document.Document{ID: tt.name, Content: tt.content}
+			chunks, err := NewMarkdownChunking(
+				WithMarkdownChunkSize(chunkSize),
+			).Chunk(doc)
+			require.NoError(t, err)
+
+			var rebuilt strings.Builder
+			for _, chunk := range chunks {
+				require.NotEmpty(t, chunk.Content)
+				require.LessOrEqual(
+					t,
+					utf8.RuneCountInString(chunk.Content),
+					chunkSize,
+				)
+				rebuilt.WriteString(chunk.Content)
+			}
+			require.Equal(t, tt.content, rebuilt.String())
+
+			legacyChunks, err := NewMarkdownChunking(
+				WithMarkdownChunkSize(chunkSize),
+				WithMarkdownWhitespaceTrimming(),
+			).Chunk(doc)
+			require.NoError(t, err)
+			require.NotEmpty(t, legacyChunks)
+			require.False(
+				t,
+				strings.HasSuffix(
+					legacyChunks[len(legacyChunks)-1].Content,
+					"\n",
+				),
+			)
+		})
+	}
 }
 
 func TestMarkdownChunking_WhitespaceOnlyDocument(t *testing.T) {
@@ -1898,14 +1974,8 @@ func TestMarkdownChunking_OnlyWhitespace(t *testing.T) {
 			mc := NewMarkdownChunking(WithMarkdownChunkSize(50), WithMarkdownOverlap(5))
 
 			chunks, err := mc.Chunk(doc)
-			// cleanText will trim all whitespace, making the document empty
-			// So this should either return ErrEmptyDocument or a single empty chunk
-			if err != nil {
-				require.ErrorIs(t, err, ErrEmptyDocument, "Whitespace-only document should be treated as empty")
-			} else {
-				// If no error, should return valid chunks (some implementations may handle this differently)
-				require.NotEmpty(t, chunks, "Should return at least one chunk")
-			}
+			require.ErrorIs(t, err, ErrEmptyDocument)
+			require.Empty(t, chunks)
 		})
 	}
 }
