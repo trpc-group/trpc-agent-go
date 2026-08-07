@@ -836,6 +836,7 @@ func (s Store) replaceTracks(
 			if createdAt.IsZero() {
 				createdAt = restored.CreatedAt
 			}
+			// #nosec G201 -- table names are assembled from validated service prefixes.
 			statement := fmt.Sprintf(
 				`INSERT INTO %s (app_name, user_id, session_id, track, event, created_at, updated_at, expires_at, deleted_at)
 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NULL)`,
@@ -892,6 +893,7 @@ func (s Store) replaceSummaries(
 		if err != nil {
 			return err
 		}
+		// #nosec G201 -- table names are assembled from validated service prefixes.
 		statement := fmt.Sprintf(
 			`INSERT INTO %s (app_name, user_id, session_id, filter_key, summary, updated_at, expires_at, deleted_at)
 VALUES (%s, %s, %s, %s, %s, %s, %s, NULL)`,
