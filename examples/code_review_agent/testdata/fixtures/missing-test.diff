@@ -1,0 +1,8 @@
+diff --git a/foo.go b/foo.go
+index 1111111..2222222 100644
+--- a/foo.go
++++ b/foo.go
+@@ -1,2 +1,4 @@
+ package foo
++func Add(a, b int) int { return a + b }
+

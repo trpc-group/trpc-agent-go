@@ -1,0 +1,11 @@
+diff --git a/worker.go b/worker.go
+index 1111111..2222222 100644
+--- a/worker.go
++++ b/worker.go
+@@ -1,2 +1,7 @@
+ package foo
++
++func Start() {
++	go func() {
++	}()
++}

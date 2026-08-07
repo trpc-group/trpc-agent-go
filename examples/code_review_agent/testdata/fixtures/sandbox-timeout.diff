@@ -1,0 +1,10 @@
+diff --git a/timeout.go b/timeout.go
+index 1111111..2222222 100644
+--- a/timeout.go
++++ b/timeout.go
+@@ -1,2 +1,5 @@
+ package foo
++
++func Timeout() {
++	// sandbox-timeout fixture reserved for timeout checks.
++}

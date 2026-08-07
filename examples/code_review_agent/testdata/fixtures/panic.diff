@@ -1,0 +1,8 @@
+diff --git a/panic.go b/panic.go
+index 1111111..2222222 100644
+--- a/panic.go
++++ b/panic.go
+@@ -1,2 +1,4 @@
+ package foo
++
++func Crash() { panic("boom") }
