@@ -488,7 +488,6 @@ func TraceAfterInvokeAgent(
 	if tokenUsage != nil {
 		span.SetAttributes(attribute.Int(semconvtrace.KeyGenAIUsageInputTokens, tokenUsage.PromptTokens))
 		span.SetAttributes(attribute.Int(semconvtrace.KeyGenAIUsageOutputTokens, tokenUsage.CompletionTokens))
-		span.SetAttributes(attribute.Int(semconvtrace.KeyGenAIUsageTotalTokens, totalTokens(tokenUsage.PromptTokens, tokenUsage.CompletionTokens, tokenUsage.TotalTokens)))
 	}
 	if timeToFirstToken > 0 {
 		span.SetAttributes(attribute.Float64(semconvtrace.KeyTRPCAgentGoClientTimeToFirstToken, timeToFirstToken.Seconds()))

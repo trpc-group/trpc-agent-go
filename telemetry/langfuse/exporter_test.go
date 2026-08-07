@@ -292,12 +292,6 @@ func TestTransformInvokeAgent(t *testing.T) {
 				},
 			},
 			{
-				Key: semconvtrace.KeyGenAIUsageTotalTokens,
-				Value: &commonpb.AnyValue{
-					Value: &commonpb.AnyValue_IntValue{IntValue: 579},
-				},
-			},
-			{
 				Key: "other.attribute",
 				Value: &commonpb.AnyValue{
 					Value: &commonpb.AnyValue_StringValue{StringValue: "keep-this"},
@@ -324,7 +318,6 @@ func TestTransformInvokeAgent(t *testing.T) {
 	for _, attr := range span.Attributes {
 		assert.NotEqual(t, semconvtrace.KeyGenAIUsageInputTokens, attr.Key)
 		assert.NotEqual(t, semconvtrace.KeyGenAIUsageOutputTokens, attr.Key)
-		assert.NotEqual(t, semconvtrace.KeyGenAIUsageTotalTokens, attr.Key)
 	}
 }
 
@@ -618,7 +611,6 @@ func TestTransformCallLLM_UsageDetails(t *testing.T) {
 		name                string
 		inputTokens         int64
 		outputTokens        int64
-		totalTokens         int64
 		cachedTokens        int64
 		cacheReadTokens     int64
 		cacheCreationTokens int64
@@ -628,8 +620,7 @@ func TestTransformCallLLM_UsageDetails(t *testing.T) {
 			name:          "basic input/output tokens",
 			inputTokens:   100,
 			outputTokens:  50,
-			totalTokens:   150,
-			expectedUsage: map[string]int64{"input": 100, "output": 50, "total": 150},
+			expectedUsage: map[string]int64{"input": 100, "output": 50},
 		},
 		{
 			name:          "with OpenAI cached tokens",
@@ -712,12 +703,6 @@ func TestTransformCallLLM_UsageDetails(t *testing.T) {
 					Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: tt.outputTokens}},
 				})
 			}
-			if tt.totalTokens != 0 {
-				attrs = append(attrs, &commonpb.KeyValue{
-					Key:   semconvtrace.KeyGenAIUsageTotalTokens,
-					Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: tt.totalTokens}},
-				})
-			}
 			if tt.cachedTokens != 0 {
 				attrs = append(attrs, &commonpb.KeyValue{
 					Key:   semconvtrace.KeyGenAIUsageInputTokensCached,
@@ -744,7 +729,6 @@ func TestTransformCallLLM_UsageDetails(t *testing.T) {
 			for _, attr := range span.Attributes {
 				assert.NotEqual(t, semconvtrace.KeyGenAIUsageInputTokens, attr.Key)
 				assert.NotEqual(t, semconvtrace.KeyGenAIUsageOutputTokens, attr.Key)
-				assert.NotEqual(t, semconvtrace.KeyGenAIUsageTotalTokens, attr.Key)
 				assert.NotEqual(t, semconvtrace.KeyGenAIUsageInputTokensCached, attr.Key)
 				assert.NotEqual(t, semconvtrace.KeyGenAIUsageInputTokensCacheRead, attr.Key)
 				assert.NotEqual(t, semconvtrace.KeyGenAIUsageInputTokensCacheCreation, attr.Key)
@@ -796,10 +780,6 @@ func TestTransformInvokeAgent_CacheTokensFiltered(t *testing.T) {
 				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: 50}},
 			},
 			{
-				Key:   semconvtrace.KeyGenAIUsageTotalTokens,
-				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: 150}},
-			},
-			{
 				Key:   semconvtrace.KeyGenAIUsageInputTokensCached,
 				Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: 30}},
 			},
@@ -820,7 +800,6 @@ func TestTransformInvokeAgent_CacheTokensFiltered(t *testing.T) {
 	for _, attr := range span.Attributes {
 		assert.NotEqual(t, semconvtrace.KeyGenAIUsageInputTokens, attr.Key)
 		assert.NotEqual(t, semconvtrace.KeyGenAIUsageOutputTokens, attr.Key)
-		assert.NotEqual(t, semconvtrace.KeyGenAIUsageTotalTokens, attr.Key)
 		assert.NotEqual(t, semconvtrace.KeyGenAIUsageInputTokensCached, attr.Key)
 		assert.NotEqual(t, semconvtrace.KeyGenAIUsageInputTokensCacheRead, attr.Key)
 		assert.NotEqual(t, semconvtrace.KeyGenAIUsageInputTokensCacheCreation, attr.Key)

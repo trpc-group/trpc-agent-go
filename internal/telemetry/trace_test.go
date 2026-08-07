@@ -740,7 +740,6 @@ func TestTraceAfterInvokeAgent_NilPaths(t *testing.T) {
 			if tt.tokenUsage != nil {
 				require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIUsageInputTokens, int64(tt.tokenUsage.PromptTokens)))
 				require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIUsageOutputTokens, int64(tt.tokenUsage.CompletionTokens)))
-				require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIUsageTotalTokens, int64(tt.tokenUsage.TotalTokens)))
 			}
 			if tt.timeToFirstToken > 0 {
 				require.True(t, hasAttr(span.attrs, semconvtrace.KeyTRPCAgentGoClientTimeToFirstToken, tt.timeToFirstToken.Seconds()))
@@ -1015,7 +1014,9 @@ func TestBuildResponseAttributes(t *testing.T) {
 				Usage: &model.Usage{
 					PromptTokens:     10,
 					CompletionTokens: 20,
-					TotalTokens:      30,
+					// Reported total intentionally differs from prompt+completion
+					// so tests assert provider total is preferred over the sum.
+					TotalTokens: 42,
 					PromptTokensDetails: model.PromptTokensDetails{
 						CachedTokens:        7,
 						CacheReadTokens:     11,
