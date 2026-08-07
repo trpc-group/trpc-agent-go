@@ -4,7 +4,7 @@
 
 可复用的 case、runner、snapshot、normalize、compare 和 report 编码位于 `session/replaytest`。`test/replay_consistency_test.go` 只负责 InMemory/SQLite wiring、具体 cases、故障注入和断言，因此新增后端可以复用同一执行与比较逻辑，而不必复制 e2e 测试实现。
 
-`replaytest.Run` 要求传入非空且没有首尾空白的 run namespace。同一次逻辑比较中的所有后端必须复用同一个 namespace；重新运行同一个 case 时必须生成新的 namespace。namespace 与 case name 会共同写入 app、user 和 session 身份，从而在持久化服务上隔离 session state、memory、summary 和 track。创建 session 前，`Run` 会按 track、event、summary、直接 state map 作用域、顺序 memory、并发 memory 的固定顺序预检所有可静态判断的 fixture 错误。`Case.AppState` 和 `Case.UserState` 的 key 可以无前缀，也可以分别使用一层匹配的 `app:` / `user:` 前缀；已知跨作用域前缀仍作为 InMemory/SQLite 矩阵统一策略拒绝，未知前缀按普通 key 文本保留。`Case.SessionState` 只拒绝 `app:` 与 `user:`，无前缀、`temp:` 和自定义 key 保持允许。App/User 规范化只剥离最外层一层匹配前缀，因此 `app:app:flag` 等额外前缀仍保留。无效 track 配置、nil 或无法归一化的 event、非法 summary prefix、直接 state map 中不允许的跨作用域前缀或 canonical collision、已删除或未知 alias 的顺序 memory 操作，以及非 add 的并发 memory 操作都不会触发后端调用或留下 session。越过该边界后的后端相关失败仍可能保留部分回放数据；如需清理，应由调用方管理该生命周期。
+`replaytest.Run` 要求传入非空且没有首尾空白的 run namespace。同一次逻辑比较中的所有后端必须复用同一个 namespace；重新运行同一个 case 时必须生成新的 namespace。namespace 与 case name 会共同写入 app、user 和 session 身份，从而在持久化服务上隔离 session state、memory、summary 和 track。创建 session 前，`Run` 会按 track、event、summary、直接 state map 作用域、顺序 memory、并发 memory 的固定顺序预检所有可静态判断的 fixture 错误。`Case.AppState` 和 `Case.UserState` 的 key 可以无前缀，也可以分别使用一层匹配的 `app:` / `user:` 前缀；已知跨作用域前缀仍作为 InMemory/SQLite 矩阵统一策略拒绝，未知前缀按普通 key 文本保留。`Case.SessionState` 只拒绝 `app:` 与 `user:`，无前缀、`temp:` 和自定义 key 保持允许。App/User 规范化只剥离最外层一层匹配前缀，因此 `app:app:flag` 等额外前缀仍保留。无效 track 配置、nil 或无法归一化的 event、非法 summary prefix、直接 state map 中不允许的跨作用域前缀或 canonical collision、已删除或未知 alias 的顺序 memory 操作、把 live alias 重绑定到另一条 memory，以及非 add 的并发 memory 操作都不会触发后端调用或留下 session。越过该边界后的后端相关失败仍可能保留部分回放数据；如需清理，应由调用方管理该生命周期。
 
 ## 运行方式
 
@@ -105,7 +105,7 @@ Track payload fixture 支持完整 JSON 值域：object、array、string、numbe
 
 每个 memory query 都声明 `ExpectedContents`。查询结果按照无序的精确内容多重集合比较，因此忽略后端特有的 ID、score 和排序，同时仍能发现缺失、无关、额外和重复结果。
 
-Memory 操作别名按完整 canonical identity 解析，而不是只比较 content。Add alias 会比较 app、user、content、kind、event time、participants 和 location，并刻意排除 topics；相同 identity（包括幂等 Add）共享同一个 alias group，即使 Add 没有 `ResultAlias` 也会登记 active identity 供预检冲突检查。删除任一 alias 会使该 group 的全部 alias 失效，后续引用会在后端调用前返回 `memory alias "name" refers to deleted memory`；后续 Add 可以显式重新绑定已失效的同名 alias。Update 每次都会用后端返回的有效 ID 推进整个 group；如果目标 identity 已属于另一个 live group，则返回 collision 且不合并两个 group。因此内容或身份元数据导致 ID 轮换后，后续 update/delete 不会继续使用旧 ID。
+Memory 操作别名按完整 canonical identity 解析，而不是只比较 content。Add alias 会比较 app、user、content、kind、event time、participants 和 location，并刻意排除 topics；相同 identity（包括幂等 Add）共享同一个 alias group，即使 Add 没有 `ResultAlias` 也会登记 active identity 供预检冲突检查。live alias 只能再次绑定到同一 group，不能改绑到另一条仍存活的 memory；这种 fixture 会在任何后端调用前失败，且两个 group 均保持不变。active identity 的存活独立于 alias 数量。删除任一 alias 会使该 group 的全部 alias 失效，后续引用会在后端调用前返回 `memory alias "name" refers to deleted memory`；后续 Add 可以显式重新绑定已失效的同名 alias，但不会复活旧 group 的其他 alias。Update 每次都会用后端返回的有效 ID 推进整个 group；如果目标 identity 已属于另一个 live group，则返回 collision 且不合并两个 group。因此内容或身份元数据导致 ID 轮换后，后续 update/delete 不会继续使用旧 ID。
 
 Fixture event 预检与最终 snapshot 构建共用同一套 marshal-and-decode normalization。预检会在持久化前拒绝调用方提供的损坏 event；最终 snapshot 仍保留相同校验，用于发现执行后由后端或故障注入产生的污染。memory entry 为 nil、entry 的 `Memory` payload 为 nil、summary map 条目的值为 nil，或 track map 条目含 nil `TrackEvents` 容器时，snapshot 构建同样返回错误。这些情况不会在 normalize 时被丢弃，也不能通过 `allowed_diff` 放行；非 nil 的合法空 track 容器仍然有效。即使 session 为 nil，`BuildSnapshot` 也会校验并归一化传入的 memories，因此空 session 形式不会隐藏合法或损坏的 memory 数据。
 

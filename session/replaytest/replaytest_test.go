@@ -1091,10 +1091,50 @@ func TestValidateSequentialMemoryOperationTracksUnaliasedIdentity(t *testing.T) 
 	}), group.key)
 }
 
+func TestMemoryAliasRegistryRejectsLiveAliasRebinding(t *testing.T) {
+	aliases := newMemoryAliasRegistry[string]()
+	first, err := aliases.bind("shared", "id-a")
+	require.NoError(t, err)
+
+	got, err := aliases.bind("shared", "id-b")
+	require.Nil(t, got)
+	require.EqualError(t, err, `memory alias "shared" is already bound to another live memory`)
+	require.Len(t, aliases.liveGroups, 1)
+	require.Same(t, first, aliases.liveGroups["id-a"])
+	require.NotContains(t, aliases.liveGroups, "id-b")
+	resolved, resolveErr := aliases.resolve("shared")
+	require.NoError(t, resolveErr)
+	require.Same(t, first, resolved)
+	require.Contains(t, first.aliases, "shared")
+
+	same, err := aliases.bind("shared", "id-a")
+	require.NoError(t, err)
+	require.Same(t, first, same)
+}
+
+func TestMemoryAliasRegistryAllowsDeadAliasRebinding(t *testing.T) {
+	aliases := newMemoryAliasRegistry[string]()
+	first, err := aliases.bind("current", "id-a")
+	require.NoError(t, err)
+	require.NoError(t, aliases.bindToGroup("next", first))
+	aliases.invalidate(first)
+
+	replacement, err := aliases.bind("current", "id-b")
+	require.NoError(t, err)
+	require.NotSame(t, first, replacement)
+	resolved, resolveErr := aliases.resolve("current")
+	require.NoError(t, resolveErr)
+	require.Same(t, replacement, resolved)
+	_, resolveErr = aliases.resolve("next")
+	require.EqualError(t, resolveErr, `memory alias "next" refers to deleted memory`)
+}
+
 func TestMemoryAliasRegistryRejectsIdentityCollisionWithoutMerging(t *testing.T) {
 	aliases := newMemoryAliasRegistry[string]()
-	first := aliases.bind("first", "id-a")
-	second := aliases.bind("second", "id-b")
+	first, err := aliases.bind("first", "id-a")
+	require.NoError(t, err)
+	second, err := aliases.bind("second", "id-b")
+	require.NoError(t, err)
 
 	got, err := aliases.transition(first, "id-b")
 	require.Nil(t, got)
@@ -1107,6 +1147,57 @@ func TestMemoryAliasRegistryRejectsIdentityCollisionWithoutMerging(t *testing.T)
 	resolvedSecond, resolveErr := aliases.resolve("second")
 	require.NoError(t, resolveErr)
 	require.Same(t, second, resolvedSecond)
+}
+
+func TestValidateSequentialMemoryOperationRejectsLiveResultAliasBeforeTransition(t *testing.T) {
+	aliases := newMemoryAliasRegistry[canonicalMemoryIdentity]()
+	userKey := memory.UserKey{AppName: "app", UserID: "user"}
+	require.NoError(t, validateSequentialMemoryOperation(aliases, userKey, MemoryOp{
+		Operation: MemoryAdd, Content: "A", ResultAlias: "shared",
+	}))
+	require.NoError(t, validateSequentialMemoryOperation(aliases, userKey, MemoryOp{
+		Operation: MemoryAdd, Content: "B", ResultAlias: "second",
+	}))
+	first, err := aliases.resolve("shared")
+	require.NoError(t, err)
+	second, err := aliases.resolve("second")
+	require.NoError(t, err)
+	secondKey := second.key
+
+	err = validateSequentialMemoryOperation(aliases, userKey, MemoryOp{
+		Operation: MemoryUpdate, Ref: "second", Content: "B updated", ResultAlias: "shared",
+	})
+	require.EqualError(t, err, `memory alias "shared" is already bound to another live memory`)
+	resolvedFirst, resolveErr := aliases.resolve("shared")
+	require.NoError(t, resolveErr)
+	require.Same(t, first, resolvedFirst)
+	resolvedSecond, resolveErr := aliases.resolve("second")
+	require.NoError(t, resolveErr)
+	require.Same(t, second, resolvedSecond)
+	require.Equal(t, secondKey, resolvedSecond.key)
+	require.Same(t, second, aliases.liveGroups[secondKey])
+	require.Len(t, aliases.liveGroups, 2)
+}
+
+func TestRunRejectsLiveAliasRebindingBeforeBackendCalls(t *testing.T) {
+	backend, sessionService, calls := newPreflightRecordingBackend(t)
+	tc := Case{
+		Name: "memory-live-alias-rebinding",
+		Memories: []MemoryOp{
+			{Operation: MemoryAdd, Content: "A", ResultAlias: "shared"},
+			{Operation: MemoryAdd, Content: "B", ResultAlias: "shared"},
+			{Operation: MemoryUpdate, Ref: "shared", Content: "A"},
+		},
+	}
+
+	_, err := Run(context.Background(), testRunNamespace, backend, tc)
+	require.EqualError(t, err, `memory operation 1 for case "memory-live-alias-rebinding": memory alias "shared" is already bound to another live memory`)
+	require.Empty(t, calls.snapshot())
+	got, getErr := sessionService.GetSession(
+		context.Background(), replayKey(testRunNamespace, tc.Name),
+	)
+	require.NoError(t, getErr)
+	require.Nil(t, got)
 }
 
 func TestRunRejectsMemoryIdentityCollisionBeforeBackendCalls(t *testing.T) {
@@ -1752,6 +1843,36 @@ func TestRuntimeMemoryAliasRegistryRejectsDeadAliasesBeforeServiceCall(t *testin
 	})
 	require.EqualError(t, err, `memory alias "first" refers to deleted memory`)
 	require.Equal(t, before, service.updateCalls)
+}
+
+func TestRuntimeMemoryAliasRegistryRejectsLiveResultAliasBeforeServiceCall(t *testing.T) {
+	base := meminmemory.NewMemoryService()
+	defer base.Close()
+	service := &recordingMemoryService{Service: base}
+	userKey := memory.UserKey{AppName: "app", UserID: "user"}
+	aliases := newMemoryAliasRegistry[string]()
+	readAll := completeMemoryReader(service)
+
+	require.NoError(t, applyMemoryOp(context.Background(), service, readAll, userKey, aliases, MemoryOp{
+		Operation: MemoryAdd, Content: "A", ResultAlias: "shared",
+	}))
+	require.NoError(t, applyMemoryOp(context.Background(), service, readAll, userKey, aliases, MemoryOp{
+		Operation: MemoryAdd, Content: "B", ResultAlias: "second",
+	}))
+	second, err := aliases.resolve("second")
+	require.NoError(t, err)
+	secondID := second.key
+	before := service.updateCalls
+
+	err = applyMemoryOp(context.Background(), service, readAll, userKey, aliases, MemoryOp{
+		Operation: MemoryUpdate, Ref: "second", Content: "B updated", ResultAlias: "shared",
+	})
+	require.EqualError(t, err, `memory alias "shared" is already bound to another live memory`)
+	require.Equal(t, before, service.updateCalls)
+	resolvedSecond, resolveErr := aliases.resolve("second")
+	require.NoError(t, resolveErr)
+	require.Same(t, second, resolvedSecond)
+	require.Equal(t, secondID, resolvedSecond.key)
 }
 
 func TestRuntimeMemoryAliasRegistryPreservesStateWhenDeleteFails(t *testing.T) {

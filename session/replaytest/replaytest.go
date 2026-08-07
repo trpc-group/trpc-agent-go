@@ -91,6 +91,8 @@ type MemoryOp struct {
 	Topics   []string
 	Metadata *memory.Metadata
 	// ResultAlias optionally binds an additional alias to the operation result.
+	// A live alias cannot be rebound to a different memory, but a deleted alias
+	// may be reused.
 	ResultAlias string
 }
 
@@ -635,19 +637,24 @@ func (r *memoryAliasRegistry[K]) resolve(alias string) (*memoryAliasGroup[K], er
 	return group, nil
 }
 
-func (r *memoryAliasRegistry[K]) bind(alias string, key K) *memoryAliasGroup[K] {
-	group := r.liveGroups[key]
-	if group == nil {
-		group = &memoryAliasGroup[K]{key: key, aliases: make(map[string]struct{}), live: true}
-		r.liveGroups[key] = group
+func (r *memoryAliasRegistry[K]) validateAliasBinding(
+	alias string,
+	group *memoryAliasGroup[K],
+) error {
+	if alias == "" {
+		return nil
 	}
-	if alias != "" {
-		r.bindToGroup(alias, group)
+	previous, ok := r.aliases[alias]
+	if !ok || !previous.live || previous == group {
+		return nil
 	}
-	return group
+	return fmt.Errorf("memory alias %q is already bound to another live memory", alias)
 }
 
-func (r *memoryAliasRegistry[K]) bindToGroup(alias string, group *memoryAliasGroup[K]) {
+func (r *memoryAliasRegistry[K]) commitAliasBinding(
+	alias string,
+	group *memoryAliasGroup[K],
+) {
 	if alias == "" || group == nil {
 		return
 	}
@@ -656,19 +663,36 @@ func (r *memoryAliasRegistry[K]) bindToGroup(alias string, group *memoryAliasGro
 			return
 		}
 		delete(previous.aliases, alias)
-		r.removeEmptyLiveGroup(previous)
 	}
 	group.aliases[alias] = struct{}{}
 	r.aliases[alias] = group
 }
 
-func (r *memoryAliasRegistry[K]) removeEmptyLiveGroup(group *memoryAliasGroup[K]) {
-	if group == nil || !group.live || len(group.aliases) != 0 {
-		return
+func (r *memoryAliasRegistry[K]) bind(
+	alias string,
+	key K,
+) (*memoryAliasGroup[K], error) {
+	group := r.liveGroups[key]
+	if err := r.validateAliasBinding(alias, group); err != nil {
+		return nil, err
 	}
-	if current, ok := r.liveGroups[group.key]; ok && current == group {
-		delete(r.liveGroups, group.key)
+	if group == nil {
+		group = &memoryAliasGroup[K]{key: key, aliases: make(map[string]struct{}), live: true}
+		r.liveGroups[key] = group
 	}
+	r.commitAliasBinding(alias, group)
+	return group, nil
+}
+
+func (r *memoryAliasRegistry[K]) bindToGroup(alias string, group *memoryAliasGroup[K]) error {
+	if alias == "" || group == nil {
+		return nil
+	}
+	if err := r.validateAliasBinding(alias, group); err != nil {
+		return err
+	}
+	r.commitAliasBinding(alias, group)
+	return nil
 }
 
 // transition moves a live group to a new identity/ID. A destination owned by
@@ -728,10 +752,14 @@ func validateSequentialMemoryOperation(
 		// Register every live identity, including adds without a result alias.
 		// An alias is only an optional handle; it must not determine whether an
 		// active identity participates in collision preflight.
-		aliases.bind(op.ResultAlias, canonicalMemoryOpIdentity(userKey, op))
+		_, err := aliases.bind(op.ResultAlias, canonicalMemoryOpIdentity(userKey, op))
+		return err
 	case MemoryUpdate:
 		group, err := aliases.resolve(op.Ref)
 		if err != nil {
+			return err
+		}
+		if err := aliases.validateAliasBinding(op.ResultAlias, group); err != nil {
 			return err
 		}
 		// UpdateMemory treats metadata as a patch: omitted/zero metadata fields
@@ -745,9 +773,7 @@ func validateSequentialMemoryOperation(
 		if err != nil {
 			return err
 		}
-		if op.ResultAlias != "" {
-			aliases.bindToGroup(op.ResultAlias, group)
-		}
+		return aliases.bindToGroup(op.ResultAlias, group)
 	case MemoryDelete:
 		group, err := aliases.resolve(op.Ref)
 		if err != nil {
@@ -1148,11 +1174,16 @@ func applyMemoryOp(
 			if err != nil {
 				return err
 			}
-			aliases.bind(op.ResultAlias, id)
+			if _, err := aliases.bind(op.ResultAlias, id); err != nil {
+				return err
+			}
 		}
 	case MemoryUpdate:
 		group, err := aliases.resolve(op.Ref)
 		if err != nil {
+			return err
+		}
+		if err := aliases.validateAliasBinding(op.ResultAlias, group); err != nil {
 			return err
 		}
 		memoryID := group.key
@@ -1174,9 +1205,7 @@ func applyMemoryOp(
 		if err != nil {
 			return err
 		}
-		if op.ResultAlias != "" {
-			aliases.bindToGroup(op.ResultAlias, group)
-		}
+		return aliases.bindToGroup(op.ResultAlias, group)
 	case MemoryDelete:
 		group, err := aliases.resolve(op.Ref)
 		if err != nil {
