@@ -206,6 +206,14 @@ func TestBeforeToolAcceptsLocalSchemaReferencesConcurrently(t *testing.T) {
 	for details := range rejections {
 		t.Fatalf("valid arguments were rejected: %+v", details)
 	}
+	details, invalid := p.validateArguments(
+		"lookup",
+		[]byte(`{"filter":{}}`),
+		schema,
+	)
+	require.True(t, invalid)
+	require.Equal(t, "required", details.Code)
+	require.Equal(t, "/filter/query", details.Param)
 }
 
 func TestBeforeToolNormalizesOmittedArgumentsForZeroParameterTool(t *testing.T) {
