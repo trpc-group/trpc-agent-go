@@ -1,0 +1,14 @@
+diff --git a/pkg/worker.go b/pkg/worker.go
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/pkg/worker.go
+@@ -0,0 +1,8 @@
++package pkg
++
++func Start() {
++	go func() {
++		for {
++		}
++	}()
++}

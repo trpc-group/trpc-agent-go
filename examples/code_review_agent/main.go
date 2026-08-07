@@ -1,0 +1,71 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2026 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
+package main
+
+import (
+	"context"
+	"flag"
+	"fmt"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"syscall"
+	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/orchestrator"
+)
+
+func main() {
+	var (
+		fixtureDir                  = flag.String("fixture-dir", "testdata/fixtures", "directory containing diff fixtures")
+		diffFile                    = flag.String("diff-file", "", "git or raw unified diff file to review")
+		repoPath                    = flag.String("repo-path", "", "repository path whose git workspace diff should be reviewed")
+		fileList                    = flag.String("file-list", "", "newline-delimited changed file path list; combine with --repo-path to select its workspace")
+		outDir                      = flag.String("out-dir", "./out", "directory for reports and the default durable JSON store")
+		dbPath                      = flag.String("db-path", "", "durable JSON store path; defaults to <out-dir>/review_agent.db")
+		modelName                   = flag.String("model", os.Getenv("MODEL"), "OpenAI-compatible model name")
+		runtime                     = flag.String("runtime", "fake", "workspace runtime: fake (default), container (currently fail-closed), e2b, or local")
+		allowTrustedLocal           = flag.Bool("allow-trusted-local", false, "allow trusted local host execution for explicitly trusted review input")
+		allowTrustedHostPreparation = flag.Bool("allow-trusted-host-preparation", false, "allow host-side dependency preparation for explicitly trusted review input")
+		allowTrustedRemote          = flag.Bool("allow-trusted-remote", false, "allow E2B execution for explicitly trusted input despite its networked remote boundary")
+		timeout                     = flag.Duration("sandbox-timeout", 30*time.Second, "per-command sandbox timeout")
+	)
+	flag.Parse()
+
+	if *dbPath == "" {
+		*dbPath = filepath.Join(*outDir, "review_agent.db")
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	result, err := orchestrator.Run(ctx, orchestrator.Options{
+		FixtureDir:                  *fixtureDir,
+		DiffFile:                    *diffFile,
+		RepoPath:                    *repoPath,
+		FileList:                    *fileList,
+		OutDir:                      *outDir,
+		DBPath:                      *dbPath,
+		Model:                       *modelName,
+		Runtime:                     *runtime,
+		AllowTrustedLocal:           *allowTrustedLocal,
+		AllowTrustedHostPreparation: *allowTrustedHostPreparation,
+		AllowTrustedRemote:          *allowTrustedRemote,
+		SandboxTimeout:              *timeout,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "run review: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Code review completed\n")
+	fmt.Printf("- task:        %s\n", result.TaskID)
+	fmt.Printf("- conclusion:  %s\n", result.Report.Conclusion)
+	fmt.Printf("- findings:    %d\n", len(result.Report.Findings))
+	fmt.Printf("- json report: %s\n", result.JSONPath)
+	fmt.Printf("- md report:   %s\n", result.MarkdownPath)
+	fmt.Printf("- store:       %s\n", result.DBPath)
+}

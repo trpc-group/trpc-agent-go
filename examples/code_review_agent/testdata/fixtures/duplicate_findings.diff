@@ -1,0 +1,12 @@
+diff --git a/pkg/dup.go b/pkg/dup.go
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/pkg/dup.go
+@@ -0,0 +1,6 @@
++package pkg
++
++func Bad() {
++	_ = err
++	_ = err
++}
