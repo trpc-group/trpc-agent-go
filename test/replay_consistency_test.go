@@ -1316,6 +1316,33 @@ func TestReplayConsistencyMatrix_BasicCases(t *testing.T) {
 	require.NoError(t, writeReplayDiffReport("", allDiffs))
 }
 
+func TestReplayConsistencyMatrix_StateByteRepresentationsRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	tc := replayCase{
+		name: "state_byte_representations",
+		initialState: session.StateMap{
+			"nil":        nil,
+			"empty":      []byte{},
+			"whitespace": []byte("  "),
+			"json":       []byte(` {"a":1} `),
+			"binary":     []byte{0xff, 0xfe},
+		},
+	}
+	backends := makeReplayBackends(t)
+	results := make([]replayCaseResult, 0, len(backends))
+	runNamespace := newReplayRunNamespace(t)
+	for _, backend := range backends {
+		results = append(results, runReplayCaseOnBackend(t, ctx, runNamespace, backend, tc))
+	}
+
+	requireReplayCaseIsolation(t, tc, results)
+	wantState := normalizeReplayState(t, tc.initialState)
+	for _, result := range results {
+		require.Equal(t, wantState, result.snapshot.State, "backend=%s", result.backend)
+	}
+	require.Empty(t, compareReplayCaseResults(t, tc, results))
+}
+
 func TestReplayConsistencyMatrix_PrefixedEventDeltasRemainSessionLocal(t *testing.T) {
 	ctx := context.Background()
 	backends := makeReplayBackends(t)
@@ -2173,7 +2200,7 @@ func replayMemoryMetadata(
 
 func TestReplayConsistencySnapshotNormalize_IgnoresGeneratedFields(t *testing.T) {
 	left := newReplaySnapshotFixture(t, "left", `{"a":1,"b":2}`, `{"a":1,"b":2}`, "raw-left")
-	right := newReplaySnapshotFixture(t, "right", `{"b":2,"a":1}`, `{"b":2,"a":1}`, "raw-right")
+	right := newReplaySnapshotFixture(t, "right", `{"a":1,"b":2}`, `{"b":2,"a":1}`, "raw-right")
 
 	diffs := diffReplaySnapshots(
 		t,
@@ -2337,15 +2364,15 @@ func TestReplayConsistencySnapshotNormalize_PreservesLargeJSONNumbers(t *testing
 		t,
 		diffs,
 		"events",
-		"$.events[0].stateDelta.json.value.big",
+		"$.events[0].stateDelta.json.value",
 		map[string]any{"event_index": 0},
 	)
-	require.Equal(t, json.Number(leftBig), eventStateDiff.Left)
-	require.Equal(t, json.Number(rightBig), eventStateDiff.Right)
+	require.Equal(t, `{"big":`+leftBig+`}`, eventStateDiff.Left)
+	require.Equal(t, `{"big":`+rightBig+`}`, eventStateDiff.Right)
 
-	stateDiff := requireReplayDiff(t, diffs, "state", "$.state.json.value.big", nil)
-	require.Equal(t, json.Number(leftBig), stateDiff.Left)
-	require.Equal(t, json.Number(rightBig), stateDiff.Right)
+	stateDiff := requireReplayDiff(t, diffs, "state", "$.state.json.value", nil)
+	require.Equal(t, `{"big":`+leftBig+`}`, stateDiff.Left)
+	require.Equal(t, `{"big":`+rightBig+`}`, stateDiff.Right)
 
 	trackDiff := requireReplayDiff(
 		t,
@@ -2363,16 +2390,17 @@ func TestReplayConsistencySnapshotNormalize_PreservesLargeJSONNumbers(t *testing
 
 func TestReplayConsistencySnapshotNormalize_PreservesStateByteDistinctions(t *testing.T) {
 	tests := []struct {
-		name      string
-		left      []byte
-		right     []byte
-		wantLeft  string
-		wantRight string
+		name                string
+		left                []byte
+		right               []byte
+		path                string
+		wantLeft, wantRight any
 	}{
 		{
 			name:      "raw utf8 string versus json string",
 			left:      []byte("hello"),
 			right:     []byte(`"hello"`),
+			path:      "$.state.value.kind",
 			wantLeft:  "utf8",
 			wantRight: "json",
 		},
@@ -2380,8 +2408,25 @@ func TestReplayConsistencySnapshotNormalize_PreservesStateByteDistinctions(t *te
 			name:      "nil versus json null",
 			left:      nil,
 			right:     []byte("null"),
+			path:      "$.state.value.kind",
 			wantLeft:  "nil",
 			wantRight: "json",
+		},
+		{
+			name:      "json object key order",
+			left:      []byte(`{"a":1,"b":2}`),
+			right:     []byte(`{"b":2,"a":1}`),
+			path:      "$.state.value.value",
+			wantLeft:  `{"a":1,"b":2}`,
+			wantRight: `{"b":2,"a":1}`,
+		},
+		{
+			name:      "json whitespace",
+			left:      []byte(`{"a":1}`),
+			right:     []byte(` {"a":1} `),
+			path:      "$.state.value.value",
+			wantLeft:  `{"a":1}`,
+			wantRight: ` {"a":1} `,
 		},
 	}
 
@@ -2412,7 +2457,7 @@ func TestReplayConsistencySnapshotNormalize_PreservesStateByteDistinctions(t *te
 				right,
 				nil,
 			)
-			diff := requireReplayDiff(t, diffs, "state", "$.state.value.kind", nil)
+			diff := requireReplayDiff(t, diffs, "state", tt.path, nil)
 			require.Equal(t, tt.wantLeft, diff.Left)
 			require.Equal(t, tt.wantRight, diff.Right)
 		})
@@ -2439,14 +2484,11 @@ func TestReplayConsistencySnapshotDiff_MutationsHavePrecisePaths(t *testing.T) {
 		{
 			name:    "state json field",
 			section: "state",
-			path:    "$.state.json.value.a",
+			path:    "$.state.json.value",
 			mutate: func(snapshot *replaySnapshot) {
 				snapshot.State["json"] = replayStateBytesSnapshot{
-					Kind: "json",
-					Value: map[string]any{
-						"a": json.Number("2"),
-						"b": json.Number("2"),
-					},
+					Kind:  "json",
+					Value: `{"a":2,"b":2}`,
 				}
 			},
 		},
@@ -2508,7 +2550,7 @@ func TestReplayConsistencySnapshotDiff_MutationsHavePrecisePaths(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			left := newReplaySnapshotFixture(t, "left", `{"a":1,"b":2}`, `{"a":1,"b":2}`, "raw-left")
-			right := newReplaySnapshotFixture(t, "right", `{"b":2,"a":1}`, `{"b":2,"a":1}`, "raw-right")
+			right := newReplaySnapshotFixture(t, "right", `{"a":1,"b":2}`, `{"b":2,"a":1}`, "raw-right")
 			tt.mutate(&right)
 
 			diffs := diffReplaySnapshots(
@@ -2765,7 +2807,7 @@ func TestReplayConsistencyAnomaly_ServiceContractMutationsDetected(t *testing.T)
 
 func TestReplayConsistencyReport_AllowedDiffAndEnvPath(t *testing.T) {
 	left := newReplaySnapshotFixture(t, "left", `{"a":1,"b":2}`, `{"a":1,"b":2}`, "raw-left")
-	right := newReplaySnapshotFixture(t, "right", `{"b":2,"a":1}`, `{"b":2,"a":1}`, "raw-right")
+	right := newReplaySnapshotFixture(t, "right", `{"a":1,"b":2}`, `{"b":2,"a":1}`, "raw-right")
 	right.Memory[0].Content = "likes coffee"
 	reportPath := filepath.Join(t.TempDir(), "replay-report.json")
 	t.Setenv("TRPC_AGENT_REPLAY_REPORT_PATH", reportPath)
@@ -3067,6 +3109,42 @@ func TestReplayConsistencyAnomaly_SQLitePublicAPIInjection(t *testing.T) {
 			requireReplayReportFields(t, reportPath)
 		})
 	}
+}
+
+func TestReplayConsistencyAnomaly_SQLiteStateJSONByteDrift(t *testing.T) {
+	const (
+		leftState  = `{"case":"single_turn"}`
+		rightState = ` { "case" : "single_turn" } `
+	)
+	ctx := context.Background()
+	reportPath := filepath.Join(t.TempDir(), "replay-state-byte-drift-report.json")
+	t.Setenv("TRPC_AGENT_REPLAY_REPORT_PATH", reportPath)
+
+	diffs := runReplayCaseWithBackendInjection(
+		t,
+		ctx,
+		replayCaseByName(t, "single_turn"),
+		"sqlite",
+		func(t *testing.T, ctx context.Context, backend backendBundle, key session.Key) {
+			require.NoError(t, backend.sessionService.UpdateSessionState(
+				ctx,
+				key,
+				session.StateMap{"seed": []byte(rightState)},
+			))
+		},
+	)
+	require.Len(t, diffs, 1)
+	diff := requireReplayDiff(t, diffs, "state", "$.state.seed.value", nil)
+	require.Equal(t, leftState, diff.Left)
+	require.Equal(t, rightState, diff.Right)
+	require.False(t, diff.Allowed)
+
+	require.NoError(t, writeReplayDiffReport("", diffs))
+	report := requireReplayReportFields(t, reportPath)
+	require.Len(t, report, 1)
+	require.Equal(t, leftState, report[0]["left"])
+	require.Equal(t, rightState, report[0]["right"])
+	require.Equal(t, false, report[0]["allowed"])
 }
 
 func TestReplayConsistencyAnomaly_SQLiteStorageInjection(t *testing.T) {

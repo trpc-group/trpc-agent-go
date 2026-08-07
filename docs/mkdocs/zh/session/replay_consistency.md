@@ -90,14 +90,16 @@ snapshot 覆盖以下 section：
 
 - `session`：session ID、app、user ID
 - `events`：消息、工具调用、工具响应、调用方提供的事件时间戳、branch、filter key、tag、state delta、extensions、actions
-- `state`：session/app/user/temp state 合并后的可见状态，并以带标签的 byte value 表示，确保 nil、JSON、UTF-8 文本和二进制字节可区分
+- `state`：session/app/user/temp state 合并后的可见状态，并以带标签的精确 byte value 表示，确保 nil、JSON 文本、UTF-8 文本和二进制字节可区分
 - `memory`：content、topics、metadata；raw memory ID 只用于 report 定位
 - `summary`：`Session.Summaries[filterKey]`、summary text、topics、boundary metadata、`GetSessionSummaryText`
 - `tracks`：track map key、外层 `TrackEvents.Track`、每个事件内嵌的 `TrackEvent.Track`、event order、payload、timestamp
 
-normalize 时只移除重新生成的顶层 event ID 与后端生成的 memory ID。调用方提供的 `Event.Timestamp` 会保留为 UTC `RFC3339Nano` 字符串；非 nil 的 `Response.ID`、扁平化的 `Response.Created` 和嵌套在 `response.timestamp` 下的 `Response.Timestamp`（同样转为 UTC `RFC3339Nano`）都会保留。nil Response 与非 nil 但 metadata 为空或零值的 Response 保持可区分。JSON 归一化使用 `json.Decoder.UseNumber`，避免大整数精度丢失。业务字段差异不会默认放行。
+normalize 时只移除重新生成的顶层 event ID 与后端生成的 memory ID。调用方提供的 `Event.Timestamp` 会保留为 UTC `RFC3339Nano` 字符串；非 nil 的 `Response.ID`、扁平化的 `Response.Created` 和嵌套在 `response.timestamp` 下的 `Response.Timestamp`（同样转为 UTC `RFC3339Nano`）都会保留。nil Response 与非 nil 但 metadata 为空或零值的 Response 保持可区分。结构化 Event 字段和 Track payload 在 JSON 语义归一化时使用 `json.Decoder.UseNumber`，避免大整数精度丢失；StateMap value 不参与 JSON 语义归一化，而是保留原始字节。业务字段差异不会默认放行。
 
 当调用方手工构造的 snapshot 含 channel、function、NaN 或其他无法转换为 canonical JSON 比较表示的值时，`Compare` 与 `CompareSnapshots` 会返回错误而不是 panic。各 section 按 snapshot 顺序转换，每个 section 先 left 后 right，并在首个错误处停止；失败时不返回部分 diff，也不能通过 `allowed_diff` 放行。
+
+StateMap value 是 opaque bytes，按原始字节精确比较。`StateBytesSnapshot` 使用 `nil`、`json`、`utf8` 和 `base64` kind。合法 UTF-8 JSON 标记为 `json`，但 `value` 保存包括对象 key 顺序、空白、数字写法和转义在内的原始文本；其他合法 UTF-8 文本也原样保存，非法 UTF-8 使用 base64。nil、空字节和纯空白字节因此分别表示为 `nil`、value 为 `""` 的 `utf8`，以及保留原始空白的 `utf8`。大整数精确是保留原文的自然结果。`Event.StateDelta` 使用同一字节契约，Event 的其他结构化字段仍按 JSON 语义归一化。
 
 Track payload fixture 支持完整 JSON 值域：object、array、string、number、boolean 和 null。持久化后的 `json.RawMessage` 使用带标签快照，kind 为 `nil`、`empty`、`json`、`utf8` 或 `base64`。合法 JSON 在 `payload.value` 内做 canonical normalize，同时保留 raw nil、空字节、JSON null、非 JSON UTF-8 文本和二进制字节之间的可观察差异。
 
@@ -107,7 +109,7 @@ Memory 操作别名按完整 canonical identity 解析，而不是只比较 cont
 
 Fixture event 预检与最终 snapshot 构建共用同一套 marshal-and-decode normalization。预检会在持久化前拒绝调用方提供的损坏 event；最终 snapshot 仍保留相同校验，用于发现执行后由后端或故障注入产生的污染。memory entry 为 nil、entry 的 `Memory` payload 为 nil、summary map 条目的值为 nil，或 track map 条目含 nil `TrackEvents` 容器时，snapshot 构建同样返回错误。这些情况不会在 normalize 时被丢弃，也不能通过 `allowed_diff` 放行；非 nil 的合法空 track 容器仍然有效。即使 session 为 nil，`BuildSnapshot` 也会校验并归一化传入的 memories，因此空 session 形式不会隐藏合法或损坏的 memory 数据。
 
-包含直接 `Case.AppState`、`Case.UserState` 或 `Case.SessionState` 更新的 case，还会把这些 API 已明确区分的作用域作为后端契约直接校验。作用域由 case 字段和对应的 service 方法决定，不根据裸 key 猜测。`AppState` / `UserState` 接受无前缀或一层匹配前缀；已知跨作用域前缀仍由 harness 统一拒绝，未知前缀按普通 key 保留。原始 accepted map 会传给后端以覆盖真实 API 输入行为，prepared expected map 只剥离一个对应 App/User 前缀；`List*States` 返回值按已存储 key 形式复制，不会再次剥离。`flag` 与 `app:flag`、`locale` 与 `user:locale` 等 canonical collision 会在任何后端调用前报告，并包含 canonical key 和排序后的原始 key。`SessionState` 继续只拒绝 `app:` 与 `user:`，`temp:` 保留为 session-local key。没有直接 state 的 case 不会触发 ListApp/ListUser 或 peer 作用域校验。非法直接 state fixture 会在任何后端调用前返回；`InitialState` 与 `Event.StateDelta` 保持既有 key 语义。Runner 使用 `ListAppStates` / `ListUserStates` 比较直接 app/user 更新，随后在同一 app/user 下创建临时 peer session，并要求它只继承这些 app/user 值。每次 peer 创建尝试后都会使用脱离调用方取消信号的限时 context 尝试删除，包括已经落盘但返回错误的 ambiguous fail-after-write。app/user 传播缺失、session/temp state 泄漏和 peer 清理失败都是 runner error，不属于 snapshot diff，也不能通过 `allowed_diff` 放行。
+包含直接 `Case.AppState`、`Case.UserState` 或 `Case.SessionState` 更新的 case，还会把这些 API 已明确区分的作用域作为后端契约直接校验。作用域由 case 字段和对应的 service 方法决定，不根据裸 key 猜测。`AppState` / `UserState` 接受无前缀或一层匹配前缀；已知跨作用域前缀仍由 harness 统一拒绝，未知前缀按普通 key 保留。原始 accepted map 会传给后端以覆盖真实 API 输入行为，prepared expected map 只剥离一个对应 App/User 前缀；`List*States` 返回值按已存储 key 形式复制，不会再次剥离。`flag` 与 `app:flag`、`locale` 与 `user:locale` 等 canonical collision 会在任何后端调用前报告，并包含 canonical key 和排序后的原始 key。`SessionState` 继续只拒绝 `app:` 与 `user:`，`temp:` 保留为 session-local key。没有直接 state 的 case 不会触发 ListApp/ListUser 或 peer 作用域校验。非法直接 state fixture 会在任何后端调用前返回；`InitialState` 与 `Event.StateDelta` 保持既有 key 语义。Runner 使用 `ListAppStates` / `ListUserStates` 比较直接 app/user 更新，随后在同一 app/user 下创建临时 peer session，并要求它只继承这些 app/user 值。expected 与 observed app/user/peer value 使用同一套 StateMap 字节精确比较。每次 peer 创建尝试后都会使用脱离调用方取消信号的限时 context 尝试删除，包括已经落盘但返回错误的 ambiguous fail-after-write。字节漂移、app/user 传播缺失、session/temp state 泄漏和 peer 清理失败都是 runner error，不属于 snapshot diff，也不能通过 `allowed_diff` 放行。
 
 `Event.StateDelta` 始终作为 session-local map 原样交给 `SessionService.AppendEvent`。Replay runner 不会把 `app:`、`user:`、`temp:` 或无前缀 key 自动路由到独立 store，也不会根据 key 前缀推断作用域。当前支持的 InMemory/SQLite 矩阵会把 event delta 保留在 session-local state；真实矩阵用例会覆盖多种 key 形态及覆盖顺序，检查独立 app/user store 保持不变，并比较最终 snapshot。MongoDB 不属于当前矩阵，也不属于本契约的支持范围。未来若要支持独立作用域路由，必须增加显式 capability/scope 元数据，并通过真实后端矩阵验证；本轮不实现。
 

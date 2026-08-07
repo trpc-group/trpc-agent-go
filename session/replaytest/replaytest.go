@@ -230,7 +230,9 @@ type TrackPayloadSnapshot struct {
 	Value any    `json:"value,omitempty"`
 }
 
-// StateBytesSnapshot preserves the representation class of state bytes.
+// StateBytesSnapshot preserves the exact representation of state bytes.
+// Value contains the original text for json and utf8 kinds, base64-encoded
+// bytes for the base64 kind, and is omitted for the nil kind.
 type StateBytesSnapshot struct {
 	Kind  string `json:"kind"`
 	Value any    `json:"value,omitempty"`
@@ -1553,17 +1555,17 @@ func normalizeBytes(value []byte) any {
 	if value == nil {
 		return StateBytesSnapshot{Kind: "nil"}
 	}
+	if !utf8.Valid(value) {
+		return StateBytesSnapshot{Kind: "base64", Value: base64.StdEncoding.EncodeToString(value)}
+	}
 	trimmed := bytes.TrimSpace(value)
 	if len(trimmed) > 0 {
 		var decoded any
 		if err := decodeJSON(trimmed, &decoded); err == nil {
-			return StateBytesSnapshot{Kind: "json", Value: canonicalJSON(decoded)}
+			return StateBytesSnapshot{Kind: "json", Value: string(value)}
 		}
 	}
-	if utf8.Valid(value) {
-		return StateBytesSnapshot{Kind: "utf8", Value: string(value)}
-	}
-	return StateBytesSnapshot{Kind: "base64", Value: base64.StdEncoding.EncodeToString(value)}
+	return StateBytesSnapshot{Kind: "utf8", Value: string(value)}
 }
 
 func normalizeTrackPayload(value json.RawMessage) TrackPayloadSnapshot {

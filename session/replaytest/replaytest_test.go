@@ -13,6 +13,7 @@ package replaytest
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"math"
@@ -736,9 +737,9 @@ func TestRunAcceptsSessionStateKeysOutsideAppAndUserPrefixes(t *testing.T) {
 		ReadAllMemories: completeMemoryReader(memoryService),
 	}, tc)
 	require.NoError(t, err)
-	require.Equal(t, StateBytesSnapshot{Kind: "json", Value: "plain"}, result.Snapshot.State["plain"])
-	require.Equal(t, StateBytesSnapshot{Kind: "json", Value: "temp"}, result.Snapshot.State[session.StateTempPrefix+"scratch"])
-	require.Equal(t, StateBytesSnapshot{Kind: "json", Value: "custom"}, result.Snapshot.State["session:mode"])
+	require.Equal(t, StateBytesSnapshot{Kind: "json", Value: `"plain"`}, result.Snapshot.State["plain"])
+	require.Equal(t, StateBytesSnapshot{Kind: "json", Value: `"temp"`}, result.Snapshot.State[session.StateTempPrefix+"scratch"])
+	require.Equal(t, StateBytesSnapshot{Kind: "json", Value: `"custom"`}, result.Snapshot.State["session:mode"])
 }
 
 func TestRunAcceptsBareMatchingAndUnknownDirectStateKeys(t *testing.T) {
@@ -772,11 +773,11 @@ func TestRunAcceptsBareMatchingAndUnknownDirectStateKeys(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.Equal(t, StateBytesSnapshot{Kind: "json", Value: "app"}, result.Snapshot.State[session.StateAppPrefix+"shared"])
-	require.Equal(t, StateBytesSnapshot{Kind: "json", Value: "user"}, result.Snapshot.State[session.StateUserPrefix+"shared"])
-	require.Equal(t, StateBytesSnapshot{Kind: "json", Value: "session"}, result.Snapshot.State["shared"])
-	require.Equal(t, StateBytesSnapshot{Kind: "json", Value: "custom-app"}, result.Snapshot.State[session.StateAppPrefix+"custom:app"])
-	require.Equal(t, StateBytesSnapshot{Kind: "json", Value: "custom-user"}, result.Snapshot.State[session.StateUserPrefix+"custom:user"])
+	require.Equal(t, StateBytesSnapshot{Kind: "json", Value: `"app"`}, result.Snapshot.State[session.StateAppPrefix+"shared"])
+	require.Equal(t, StateBytesSnapshot{Kind: "json", Value: `"user"`}, result.Snapshot.State[session.StateUserPrefix+"shared"])
+	require.Equal(t, StateBytesSnapshot{Kind: "json", Value: `"session"`}, result.Snapshot.State["shared"])
+	require.Equal(t, StateBytesSnapshot{Kind: "json", Value: `"custom-app"`}, result.Snapshot.State[session.StateAppPrefix+"custom:app"])
+	require.Equal(t, StateBytesSnapshot{Kind: "json", Value: `"custom-user"`}, result.Snapshot.State[session.StateUserPrefix+"custom:user"])
 
 	appState, err := sessionService.ListAppStates(context.Background(), result.Key.AppName)
 	require.NoError(t, err)
@@ -2073,6 +2074,69 @@ func TestRunValidatesStateScopesAndCleansPeer(t *testing.T) {
 	}, mergeScopedState(session.StateMap{"nil": nil}, session.StateMap{"nil": nil}))
 }
 
+func TestRunRejectsStateScopeJSONByteDrift(t *testing.T) {
+	tests := []struct {
+		name            string
+		configure       func(*scopeSessionService)
+		wantScope       string
+		wantDeleteCalls int
+	}{
+		{
+			name: "app",
+			configure: func(service *scopeSessionService) {
+				service.mutateAppStateResult = func(state session.StateMap) {
+					state["feature"] = []byte(`{ "enabled" : true }`)
+				}
+			},
+			wantScope: "app state for case",
+		},
+		{
+			name: "user",
+			configure: func(service *scopeSessionService) {
+				service.mutateUserStateResult = func(state session.StateMap) {
+					state["locale"] = []byte(`"\u007a\u0068-CN"`)
+				}
+			},
+			wantScope: "user state for case",
+		},
+		{
+			name: "peer",
+			configure: func(service *scopeSessionService) {
+				service.mutatePeerStateResult = func(sess *session.Session) {
+					sess.SetState(session.StateAppPrefix+"feature", []byte(`{ "enabled" : true }`))
+				}
+			},
+			wantScope:       "peer state for case",
+			wantDeleteCalls: 1,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			base := sessinmemory.NewSessionService()
+			defer base.Close()
+			sessionService := &scopeSessionService{Service: base}
+			test.configure(sessionService)
+			memoryService := meminmemory.NewMemoryService()
+			defer memoryService.Close()
+			tc := replayStateScopeCase("state-scope-byte-drift-" + test.name)
+
+			_, err := Run(context.Background(), testRunNamespace, Backend{
+				Name: "scope_fake", SessionService: sessionService, MemoryService: memoryService,
+				ReadAllMemories: completeMemoryReader(memoryService),
+			}, tc)
+			require.ErrorContains(t, err, test.wantScope)
+			require.Equal(t, test.wantDeleteCalls, sessionService.deleteCalls)
+
+			peerKey := replayKey(testRunNamespace, tc.Name)
+			peerKey.SessionID += "-scope-peer"
+			peer, getErr := base.GetSession(context.Background(), peerKey)
+			require.NoError(t, getErr)
+			require.Nil(t, peer)
+		})
+	}
+}
+
 func TestPreparedDirectStateScopesIgnoreEventDeltas(t *testing.T) {
 	tc := Case{
 		AppState: session.StateMap{
@@ -2632,6 +2696,9 @@ type scopeSessionService struct {
 	session.Service
 	emptyAppState                bool
 	stripPeerState               bool
+	mutateAppStateResult         func(session.StateMap)
+	mutateUserStateResult        func(session.StateMap)
+	mutatePeerStateResult        func(*session.Session)
 	deleteErr                    error
 	listAppErr                   error
 	listUserErr                  error
@@ -2734,7 +2801,11 @@ func (s *scopeSessionService) ListAppStates(ctx context.Context, appName string)
 	if s.emptyAppState {
 		return session.StateMap{}, nil
 	}
-	return s.Service.ListAppStates(ctx, appName)
+	state, err := s.Service.ListAppStates(ctx, appName)
+	if err == nil && s.mutateAppStateResult != nil {
+		s.mutateAppStateResult(state)
+	}
+	return state, err
 }
 
 func (s *scopeSessionService) ListUserStates(
@@ -2744,7 +2815,11 @@ func (s *scopeSessionService) ListUserStates(
 	if s.listUserErr != nil {
 		return nil, s.listUserErr
 	}
-	return s.Service.ListUserStates(ctx, key)
+	state, err := s.Service.ListUserStates(ctx, key)
+	if err == nil && s.mutateUserStateResult != nil {
+		s.mutateUserStateResult(state)
+	}
+	return state, err
 }
 
 func (s *scopeSessionService) CreateSession(
@@ -2788,8 +2863,14 @@ func (s *scopeSessionService) GetSession(
 	if err == nil && strings.HasSuffix(key.SessionID, "-scope-peer") && s.nilGetPeer {
 		return nil, nil
 	}
-	if err != nil || got == nil || !s.stripPeerState || !strings.HasSuffix(key.SessionID, "-scope-peer") {
+	if err != nil || got == nil {
 		return got, err
+	}
+	if strings.HasSuffix(key.SessionID, "-scope-peer") && s.mutatePeerStateResult != nil {
+		s.mutatePeerStateResult(got)
+	}
+	if !s.stripPeerState || !strings.HasSuffix(key.SessionID, "-scope-peer") {
+		return got, nil
 	}
 	for stateKey := range got.SnapshotState() {
 		if strings.HasPrefix(stateKey, session.StateAppPrefix) || strings.HasPrefix(stateKey, session.StateUserPrefix) {
@@ -3344,19 +3425,117 @@ func TestBuildSnapshotPreservesSuppliedEventTimestamp(t *testing.T) {
 	require.Empty(t, compareSnapshotsForTest(t, "timestamp", "session-1", "left", "right", left, sameInstant, nil))
 }
 
-func TestNormalizeStatePreservesJSONNumbersAndByteKinds(t *testing.T) {
-	state := normalizeState(session.StateMap{
-		"large":  []byte(`{"value":9007199254740993}`),
-		"plain":  []byte("hello"),
-		"quoted": []byte(`"hello"`),
-		"nil":    nil,
-	})
-	large, ok := state["large"].(StateBytesSnapshot)
-	require.True(t, ok)
-	require.Equal(t, "json", large.Kind)
-	require.Equal(t, json.Number("9007199254740993"), large.Value.(map[string]any)["value"])
-	require.NotEqual(t, state["plain"], state["quoted"])
-	require.Equal(t, StateBytesSnapshot{Kind: "nil"}, state["nil"])
+func TestNormalizeStatePreservesExactBytesAndKinds(t *testing.T) {
+	invalidJSONFF := []byte{'{', '"', 'a', '"', ':', '"', 0xff, '"', '}'}
+	invalidJSONFE := []byte{'{', '"', 'a', '"', ':', '"', 0xfe, '"', '}'}
+	tests := []struct {
+		name  string
+		value []byte
+		want  StateBytesSnapshot
+	}{
+		{name: "nil", value: nil, want: StateBytesSnapshot{Kind: "nil"}},
+		{name: "empty", value: []byte{}, want: StateBytesSnapshot{Kind: "utf8", Value: ""}},
+		{name: "whitespace", value: []byte("  "), want: StateBytesSnapshot{Kind: "utf8", Value: "  "}},
+		{name: "plain utf8", value: []byte("hello"), want: StateBytesSnapshot{Kind: "utf8", Value: "hello"}},
+		{name: "json string", value: []byte(`"hello"`), want: StateBytesSnapshot{Kind: "json", Value: `"hello"`}},
+		{
+			name: "json keeps surrounding whitespace", value: []byte(` {"a":1} `),
+			want: StateBytesSnapshot{Kind: "json", Value: ` {"a":1} `},
+		},
+		{
+			name: "large json number", value: []byte(`{"value":9007199254740993}`),
+			want: StateBytesSnapshot{Kind: "json", Value: `{"value":9007199254740993}`},
+		},
+		{
+			name: "binary", value: []byte{0xff, 0x00},
+			want: StateBytesSnapshot{Kind: "base64", Value: base64.StdEncoding.EncodeToString([]byte{0xff, 0x00})},
+		},
+		{
+			name: "invalid utf8 ff inside json string", value: invalidJSONFF,
+			want: StateBytesSnapshot{Kind: "base64", Value: base64.StdEncoding.EncodeToString(invalidJSONFF)},
+		},
+		{
+			name: "invalid utf8 fe inside json string", value: invalidJSONFE,
+			want: StateBytesSnapshot{Kind: "base64", Value: base64.StdEncoding.EncodeToString(invalidJSONFE)},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, normalizeBytes(test.value))
+		})
+	}
+
+	distinct := []struct {
+		name        string
+		left, right []byte
+	}{
+		{name: "object key order", left: []byte(`{"a":1,"b":2}`), right: []byte(`{"b":2,"a":1}`)},
+		{name: "json whitespace", left: []byte(`{"a":1}`), right: []byte(`{"a": 1}`)},
+		{name: "surrounding whitespace", left: []byte(`{"a":1}`), right: []byte(` {"a":1} `)},
+		{name: "equivalent escape", left: []byte(`"a"`), right: []byte(`"\u0061"`)},
+		{name: "number representation", left: []byte(`1`), right: []byte(`1.0`)},
+		{
+			name: "adjacent large integers",
+			left: []byte(`{"value":9007199254740992}`), right: []byte(`{"value":9007199254740993}`),
+		},
+		{name: "plain and json string", left: []byte("hello"), right: []byte(`"hello"`)},
+		{name: "nil and json null", left: nil, right: []byte(`null`)},
+		{name: "nil and empty", left: nil, right: []byte{}},
+		{name: "empty and whitespace", left: []byte{}, right: []byte("  ")},
+		{name: "invalid utf8 bytes", left: invalidJSONFF, right: invalidJSONFE},
+	}
+	for _, test := range distinct {
+		t.Run("distinguishes "+test.name, func(t *testing.T) {
+			require.NotEqual(t, normalizeBytes(test.left), normalizeBytes(test.right))
+		})
+	}
+}
+
+func TestCompareSnapshotsPreservesStateJSONBytes(t *testing.T) {
+	const (
+		leftJSON  = `{"a":1,"b":2}`
+		rightJSON = ` {"b":2,"a":1} `
+	)
+	build := func(raw string) Snapshot {
+		stateValue := []byte(raw)
+		sess := session.NewSession(
+			"app",
+			"user",
+			"session",
+			session.WithSessionState(session.StateMap{"json": append([]byte(nil), stateValue...)}),
+			session.WithSessionEvents([]event.Event{{
+				StateDelta: map[string][]byte{"json": append([]byte(nil), stateValue...)},
+			}}),
+		)
+		snapshot, err := BuildSnapshot(sess, nil)
+		require.NoError(t, err)
+		return snapshot
+	}
+
+	diffs, err := CompareSnapshots(
+		"state-json-bytes",
+		"session",
+		"in_memory",
+		"sqlite",
+		build(leftJSON),
+		build(rightJSON),
+		nil,
+	)
+	require.NoError(t, err)
+	require.Len(t, diffs, 2)
+
+	require.Equal(t, "events", diffs[0].Section)
+	require.Equal(t, "$.events[0].stateDelta.json.value", diffs[0].Path)
+	require.Equal(t, leftJSON, diffs[0].Left)
+	require.Equal(t, rightJSON, diffs[0].Right)
+	require.Equal(t, 0, diffs[0].Context["event_index"])
+	require.False(t, diffs[0].Allowed)
+
+	require.Equal(t, "state", diffs[1].Section)
+	require.Equal(t, "$.state.json.value", diffs[1].Path)
+	require.Equal(t, leftJSON, diffs[1].Left)
+	require.Equal(t, rightJSON, diffs[1].Right)
+	require.False(t, diffs[1].Allowed)
 }
 
 func TestNormalizationHandlesInvalidAndEmptyInputs(t *testing.T) {
