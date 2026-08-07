@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 func TestBackgroundTools(t *testing.T) {
@@ -41,6 +42,26 @@ func TestDeclarationOnlyTool(t *testing.T) {
 		assert.NotEmpty(t, decl.Name)
 		assert.NotEmpty(t, decl.Description)
 	}
+}
+
+func TestAssistantResultAddToolHasFocusedSchema(t *testing.T) {
+	decl := assistantResultAddTool.Declaration()
+	require.NotNil(t, decl)
+	require.NotNil(t, decl.InputSchema)
+	assert.Equal(t, assistantResultAddToolName, decl.Name)
+	assert.Equal(t, []string{argKeyMemory}, decl.InputSchema.Required)
+	assert.ElementsMatch(t,
+		[]string{argKeyMemory, argKeyTopics},
+		mapKeys(decl.InputSchema.Properties),
+	)
+}
+
+func mapKeys(values map[string]*tool.Schema) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	return keys
 }
 
 func TestParseToolCallArgs_Add(t *testing.T) {
@@ -294,9 +315,24 @@ func TestToStringSlice(t *testing.T) {
 			expected: []string{"a", "b"},
 		},
 		{
-			name:     "non-slice input",
-			input:    "not a slice",
-			expected: []string{},
+			name:     "plain string",
+			input:    "food delivery",
+			expected: []string{"food delivery"},
+		},
+		{
+			name:     "comma-separated string",
+			input:    "Domino's Pizza, food delivery, pizza",
+			expected: []string{"Domino's Pizza", "food delivery", "pizza"},
+		},
+		{
+			name:     "quoted comma-separated string",
+			input:    `nuts", "food preferences", "dislikes`,
+			expected: []string{"nuts", "food preferences", "dislikes"},
+		},
+		{
+			name:     "native string slice",
+			input:    []string{"a", "b"},
+			expected: []string{"a", "b"},
 		},
 		{
 			name:     "int slice",

@@ -26,6 +26,7 @@ type createMemoryRequest struct {
 	AgentID   string         `json:"agent_id,omitempty"`
 	RunID     string         `json:"run_id,omitempty"`
 	Metadata  map[string]any `json:"metadata,omitempty"`
+	Timestamp any            `json:"timestamp,omitempty"`
 	Infer     bool           `json:"infer"`
 	Async     bool           `json:"async_mode"`
 	Version   string         `json:"version,omitempty"`

@@ -35,9 +35,11 @@ import (
 type mockEmbedder struct {
 	dimension int
 	err       error
+	calls     int
 }
 
 func (m *mockEmbedder) GetEmbedding(ctx context.Context, text string) ([]float64, error) {
+	m.calls++
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -1712,6 +1714,38 @@ func TestService_SearchMemories(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestService_ReusesRequestEmbeddingForSearchAndAdd(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	emb := newMockEmbedder(1536)
+	svc := setupMockService(t, db, mock,
+		WithSkipDBInit(true),
+		WithMemoryLimit(0),
+		WithEmbedder(emb),
+	)
+	defer svc.Close()
+
+	ctx := imemory.WithRequestEmbeddingCache(context.Background())
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+	mock.ExpectQuery(
+		"SELECT memory_id, app_name, user_id, memory_content, topics",
+	).WillReturnRows(sqlmock.NewRows(
+		[]string{"memory_id", "app_name", "user_id", "memory_content", "topics",
+			"memory_kind", "event_time", "participants", "location",
+			"created_at", "updated_at", "similarity"},
+	))
+	mock.ExpectExec("INSERT INTO").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	_, err := svc.SearchMemories(ctx, userKey, "same memory")
+	require.NoError(t, err)
+	require.NoError(t, svc.AddMemory(ctx, userKey, "same memory", nil))
+
+	assert.Equal(t, 1, emb.calls)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestService_SearchMemories_EmptyQuery(t *testing.T) {
 	db, mock := setupMockDB(t)
 	defer db.Close()
@@ -2995,46 +3029,8 @@ func TestExecuteVectorSearch_OrderByEventTimeUsesSimilarityFirst(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestMergeHybridResults(t *testing.T) {
-	entry := func(id string) *memory.Entry {
-		return &memory.Entry{
-			ID:     id,
-			Memory: &memory.Memory{Memory: id},
-		}
-	}
-
-	results := mergeHybridResults(
-		[]*memory.Entry{entry("mem-1"), entry("mem-2")},
-		[]*memory.Entry{entry("mem-2"), entry("mem-3")},
-		0,
-		2,
-	)
-
-	require.Len(t, results, 2)
-	assert.Equal(t, "mem-2", results[0].ID)
-	assert.Greater(t, results[0].Score, results[1].Score)
-}
-
-func TestMergeSearchResults(t *testing.T) {
-	primary := []*memory.Entry{
-		{ID: "mem-1", Memory: &memory.Memory{Memory: "episode one", Kind: memory.KindEpisode}},
-	}
-	fallback := []*memory.Entry{
-		{ID: "mem-1", Memory: &memory.Memory{Memory: "duplicate", Kind: memory.KindEpisode}},
-		{ID: "mem-2", Memory: &memory.Memory{Memory: "episode two", Kind: memory.KindEpisode}},
-		{ID: "mem-3", Memory: &memory.Memory{Memory: "fact", Kind: memory.KindFact}},
-	}
-
-	results := mergeSearchResults(primary, fallback, memory.KindEpisode, 3)
-
-	require.Len(t, results, 3)
-	assert.Equal(t, "mem-1", results[0].ID)
-	assert.Equal(t, "mem-2", results[1].ID)
-	assert.Equal(t, "mem-3", results[2].ID)
-}
-
 func TestDeduplicateResults(t *testing.T) {
-	results := deduplicateResults([]*memory.Entry{
+	results := imemory.DeduplicateResultsPreservingConflicts([]*memory.Entry{
 		{ID: "mem-1", Score: 0.95, Memory: &memory.Memory{Memory: "Alice hiking in Kyoto"}},
 		{ID: "mem-2", Score: 0.90, Memory: &memory.Memory{Memory: "Alice hiking in Kyoto"}},
 		{ID: "mem-3", Score: 0.80, Memory: &memory.Memory{Memory: "Alice studying in Tokyo"}},
@@ -3043,14 +3039,6 @@ func TestDeduplicateResults(t *testing.T) {
 	require.Len(t, results, 2)
 	assert.Equal(t, "mem-1", results[0].ID)
 	assert.Equal(t, "mem-3", results[1].ID)
-}
-
-func TestJaccardSimilarity(t *testing.T) {
-	assert.Equal(t, 1.0, jaccardSimilarity(map[string]struct{}{}, map[string]struct{}{}))
-	assert.InDelta(t, 0.333333, jaccardSimilarity(
-		map[string]struct{}{"alice": {}, "kyoto": {}},
-		map[string]struct{}{"alice": {}, "tokyo": {}},
-	), 0.0001)
 }
 
 func TestService_SearchMemories_ThresholdAndDeduplicate(t *testing.T) {
@@ -3174,7 +3162,7 @@ func TestService_SearchMemories_KindFallbackKeepsRequestedKindFirst(t *testing.T
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestService_SearchMemories_KindFallbackAndHybridSearch(t *testing.T) {
+func TestService_SearchMemories_KindFallbackAndHybridSearchUsesRequestedLimit(t *testing.T) {
 	db, mock := setupMockDB(t)
 	defer db.Close()
 
@@ -3190,18 +3178,18 @@ func TestService_SearchMemories_KindFallbackAndHybridSearch(t *testing.T) {
 		)
 	}
 
-	mock.ExpectQuery("SELECT memory_id, app_name, user_id, memory_content, topics").
+	mock.ExpectQuery("SELECT memory_id.*LIMIT 4").
 		WillReturnRows(rows().AddRow(
 			"mem-1", "test-app", "u1", "Alice hiked in Kyoto", pq.Array([]string{"travel"}),
 			"episode", now, pq.Array([]string{"Alice"}), "Kyoto", now, now, 0.95,
 		))
-	mock.ExpectQuery("SELECT memory_id, app_name, user_id, memory_content, topics").
+	mock.ExpectQuery("SELECT memory_id.*LIMIT 4").
 		WillReturnRows(rows().
 			AddRow("mem-2", "test-app", "u1", "Alice planned a Kyoto trip", pq.Array([]string{"travel"}),
 				"episode", now, pq.Array([]string{"Alice"}), "Kyoto", now, now, 0.89).
 			AddRow("mem-3", "test-app", "u1", "Alice likes coffee", pq.Array([]string{"profile"}),
 				"fact", nil, pq.Array([]string{}), nil, now, now, 0.88))
-	mock.ExpectQuery("SELECT memory_id, app_name, user_id, memory_content, topics").
+	mock.ExpectQuery("SELECT memory_id.*LIMIT 4").
 		WillReturnRows(rows().AddRow(
 			"mem-1", "test-app", "u1", "Alice hiked in Kyoto", pq.Array([]string{"travel"}),
 			"episode", now, pq.Array([]string{"Alice"}), "Kyoto", now, now, 0.50,
