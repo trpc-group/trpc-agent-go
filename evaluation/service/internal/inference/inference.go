@@ -200,14 +200,19 @@ func inferenceInvocation(
 		return nil, nil, fmt.Errorf("runner run: %w", err)
 	}
 	// Capture the invocation ID, final response, tool uses, and tool responses.
+	type finalResponseCandidate struct {
+		message       *model.Message
+		responseIndex int
+	}
 	var (
 		invocationID   string
-		finalResponse  *model.Message
-		finalByInvID   = make(map[string]*model.Message)
-		fallbackFinal  *model.Message
+		selectedFinal  finalResponseCandidate
+		finalByInvID   = make(map[string]finalResponseCandidate)
+		fallbackFinal  finalResponseCandidate
 		executionTrace *trace.Trace
 		eventErr       error
 		tools          = make([]*evalset.Tool, 0)
+		responses      = make([]*model.Message, 0)
 		toolIDIdx      = make(map[string]int)
 	)
 	for event := range events {
@@ -225,12 +230,14 @@ func inferenceInvocation(
 			invocationID = event.InvocationID
 		}
 		if message := eventFinalResponse(event); message != nil {
+			candidate := finalResponseCandidate{message: message, responseIndex: len(responses)}
+			responses = append(responses, message)
 			if event.IsRunnerCompletion() {
-				finalResponse = message
+				selectedFinal = candidate
 			} else if event.InvocationID != "" {
-				finalByInvID[event.InvocationID] = message
+				finalByInvID[event.InvocationID] = candidate
 			} else {
-				fallbackFinal = message
+				fallbackFinal = candidate
 			}
 		}
 		if event.Error != nil {
@@ -242,6 +249,9 @@ func inferenceInvocation(
 		}
 		if event.IsFinalResponse() {
 			continue
+		}
+		if message := eventModelResponse(event); message != nil {
+			responses = append(responses, message)
 		}
 		// Capture tool call uses.
 		if event.IsToolCallResponse() {
@@ -264,22 +274,44 @@ func inferenceInvocation(
 			}
 		}
 	}
-	if finalResponse == nil && invocationID != "" {
-		finalResponse = finalByInvID[invocationID]
+	if selectedFinal.message == nil && invocationID != "" {
+		selectedFinal = finalByInvID[invocationID]
 	}
-	if finalResponse == nil {
-		finalResponse = fallbackFinal
+	if selectedFinal.message == nil {
+		selectedFinal = fallbackFinal
+	}
+	var finalResponse *model.Message
+	if selectedFinal.message != nil {
+		finalResponse = selectedFinal.message
+		responses = append(
+			responses[:selectedFinal.responseIndex],
+			responses[selectedFinal.responseIndex+1:]...,
+		)
 	}
 	result := &evalset.Invocation{
-		InvocationID:  invocationID,
-		UserContent:   invocation.UserContent,
-		FinalResponse: finalResponse,
-		Tools:         tools,
+		InvocationID:          invocationID,
+		UserContent:           invocation.UserContent,
+		FinalResponse:         finalResponse,
+		Tools:                 tools,
+		IntermediateResponses: responses,
 	}
 	if eventErr != nil {
 		return result, executionTrace, eventErr
 	}
 	return result, executionTrace, nil
+}
+
+func eventModelResponse(evt *event.Event) *model.Message {
+	if evt == nil || evt.IsRunnerCompletion() || evt.Response == nil ||
+		evt.Response.IsPartial || evt.Response.IsToolResultResponse() ||
+		len(evt.Response.Choices) == 0 {
+		return nil
+	}
+	message := evt.Response.Choices[0].Message
+	if message.Role != model.RoleAssistant {
+		return nil
+	}
+	return &message
 }
 
 func buildToolMockPlugin(entries []*toolmock.Tool, toolMockRunner runner.Runner) (plugin.Plugin, error) {
