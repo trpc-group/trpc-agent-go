@@ -57,6 +57,20 @@ func TestToolSafetyGuard(t *testing.T) {
 		}
 	})
 
+	t.Run("CheckToolPermission_HostExec_Ask", func(t *testing.T) {
+		req := &tool.PermissionRequest{
+			ToolName:  "host_exec",
+			Arguments: []byte("sudo chmod +x /usr/bin/tool"),
+		}
+		decision, err := guard.CheckToolPermission(context.Background(), req)
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+		if decision.Action != tool.PermissionActionAsk {
+			t.Errorf("Expected ask for hostexec privilege escalation, got %v", decision.Action)
+		}
+	})
+
 	t.Run("Shell_IFS_Expansion_Bypass_Denied", func(t *testing.T) {
 		res := scanner.ScanCommand("workspace_exec", "rm${IFS}-rf${IFS}/tmp/data", "workspaceexec")
 		if res.Decision != "deny" || res.RuleID != "RULE_SHELL_EXPANSION_BYPASS" {

@@ -62,7 +62,11 @@ func (p *SafetyPermissionPolicy) CheckToolPermission(
 	if cmd == "" {
 		cmd = req.ToolName
 	}
-	_, res := p.Evaluate(req.ToolName, cmd, "framework")
+	backend := "workspaceexec"
+	if strings.Contains(req.ToolName, "host") {
+		backend = "hostexec"
+	}
+	_, res := p.Evaluate(req.ToolName, cmd, backend)
 	switch res.Decision {
 	case "deny":
 		return tool.DenyPermission(res.Evidence), nil

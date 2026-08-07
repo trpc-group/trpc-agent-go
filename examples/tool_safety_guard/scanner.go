@@ -41,10 +41,10 @@ func NewScanner(policy *Policy) *Scanner {
 }
 
 // ScanCommand scans a command or script string for security risks.
-func (s *Scanner) ScanCommand(toolName, command, backend string) ScanResult {
+func (s *Scanner) ScanCommand(toolName, command, backend string) (res ScanResult) {
 	start := time.Now()
 	cmdTrimmed := strings.TrimSpace(command)
-	res := ScanResult{
+	res = ScanResult{
 		Decision:       "allow",
 		RiskLevel:      "none",
 		RuleID:         "RULE_PASS",
