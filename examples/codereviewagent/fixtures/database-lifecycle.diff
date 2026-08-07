@@ -1,0 +1,6 @@
+diff --git a/store.go b/store.go
+--- a/store.go
++++ b/store.go
+@@ -7,0 +8,2 @@
++db, err := sql.Open("sqlite", path)
++return db, err

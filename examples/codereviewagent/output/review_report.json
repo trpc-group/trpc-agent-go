@@ -1,0 +1,76 @@
+{
+  "taskId": "review-439afc7c99f4",
+  "status": "needs_attention",
+  "mode": "deterministic-rule-only",
+  "inputSource": "./fixtures/command-injection.diff",
+  "diffSha256": "439afc7c99f4fb4c30c80cc6116ac567c0a96fc822c0acd42ec2e32488f65857",
+  "skill": "code-review",
+  "createdAt": "2026-07-31T10:32:13.6402062Z",
+  "findings": [
+    {
+      "file": "runner.go",
+      "startLine": 11,
+      "endLine": 11,
+      "severity": "P2",
+      "category": "test_coverage",
+      "confidence": 0.72,
+      "source": "skill:code-review",
+      "ruleId": "TST001",
+      "status": "needs_human_review",
+      "message": "production Go code changed without a corresponding test-file change",
+      "suggestion": "add focused regression coverage or document why existing tests fully cover the change"
+    },
+    {
+      "file": "runner.go",
+      "startLine": 12,
+      "endLine": 12,
+      "severity": "P1",
+      "category": "command_injection",
+      "confidence": 0.96,
+      "source": "skill:code-review",
+      "ruleId": "SEC002",
+      "status": "finding",
+      "message": "shell execution accepts a command string at a high-risk boundary",
+      "suggestion": "avoid a shell, pass a fixed executable and validated argument vector"
+    }
+  ],
+  "permission": {
+    "action": "allow",
+    "reason": "fixed go test or go vet argument vector passed policy",
+    "command": [
+      "go",
+      "test",
+      "."
+    ]
+  },
+  "sandbox": {
+    "status": "dry_run",
+    "command": [
+      "go",
+      "test",
+      "."
+    ],
+    "exitCode": 0,
+    "timedOut": false,
+    "output": "sandbox execution skipped in deterministic dry-run mode",
+    "durationMillis": 0,
+    "outputCapped": false
+  },
+  "metrics": {
+    "durationMillis": 1,
+    "sandboxDurationMillis": 0,
+    "toolCalls": 1,
+    "permissionChecks": 1,
+    "findingCount": 2,
+    "bySeverity": {
+      "P1": 1,
+      "P2": 1
+    },
+    "byCategory": {
+      "command_injection": 1,
+      "test_coverage": 1
+    },
+    "warnings": 1
+  },
+  "summary": "Review needs_attention with 1 actionable findings and 1 human-review warnings."
+}

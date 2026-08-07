@@ -1,0 +1,6 @@
+diff --git a/fetch.go b/fetch.go
+--- a/fetch.go
++++ b/fetch.go
+@@ -8,0 +9,2 @@
++response, err := http.Get(endpoint)
++return response, err

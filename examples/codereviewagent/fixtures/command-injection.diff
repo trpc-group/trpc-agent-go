@@ -1,0 +1,8 @@
+diff --git a/runner.go b/runner.go
+--- a/runner.go
++++ b/runner.go
+@@ -10,0 +11,4 @@
++func run(input string) error {
++	cmd := exec.Command("sh", "-c", input)
++	return cmd.Run()
++}
