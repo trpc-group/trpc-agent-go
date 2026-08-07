@@ -221,6 +221,24 @@ Function Tool 的入参 `req` 会自动生成对应的 JSON Schema（用于模�
 - **兼容**：也支持 `description:"..."` 作为字段描述（用于历史代码）；若同时配置 `jsonschema:"description=..."` 与 `description:"..."`，以 `jsonschema` 中的 `description` 为准。
 - **更灵活的 schema**：如果想完全自定义入参 schema（例如需要更复杂的 JSON Schema 结构/约束），可使用 `function.WithInputSchema(customInputSchema)` 跳过自动生成。
 
+### Output Schema（返回值 schema）
+
+`FunctionTool` 和 `StreamableFunctionTool` 默认会根据输出类型自动生成 `Declaration.OutputSchema`。支持原生工具输出 schema 的模型适配器可以直接使用它；不支持原生字段的适配器可能把序列化后的 schema 追加到工具 description。对于工具数量较多，或输出结构较大且重复的 Agent，这会在每次包含这些工具的模型请求中增加较多输入 Token。
+
+如果模型不需要了解工具的返回结构，可以关闭自动生成：
+
+```go
+documentTool := function.NewFunctionTool(
+    getDocument,
+    function.WithDisableOutputSchemaGen(),
+)
+```
+
+- 该选项只关闭 OutputSchema 自动生成，不影响 InputSchema 自动生成。
+- 通过 `function.WithOutputSchema(customOutputSchema)` 显式提供的 schema 始终优先，包括同时传入 `WithDisableOutputSchemaGen()` 的情况。
+- 未显式提供 schema 时，禁用生成会使 `Declaration.OutputSchema` 为 nil，因此模型适配器既不会通过原生字段发送，也不会将其追加到工具 description。
+- 复用 `Declaration.OutputSchema` 的能力也会受影响：Gemini 工具声明将不再包含 `responseJsonSchema`，CodeAct 将跳过输出校验；如果需要这些能力，应保留自动生成或显式提供 schema。
+
 ### 流式工具示例
 
 ```go

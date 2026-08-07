@@ -62,6 +62,7 @@ type functionToolOptions struct {
 	inputSchema       *tool.Schema
 	outputSchema      *tool.Schema
 	resultFormatter   resultformat.Formatter
+	disableOutputGen  bool
 }
 
 // WithName sets the name of the function tool.
@@ -133,6 +134,14 @@ func WithOutputSchema(schema *tool.Schema) Option {
 	}
 }
 
+// WithDisableOutputSchemaGen disables automatic output schema generation. A
+// custom schema provided with WithOutputSchema always takes precedence.
+func WithDisableOutputSchemaGen() Option {
+	return func(opts *functionToolOptions) {
+		opts.disableOutputGen = true
+	}
+}
+
 // WithResultFormatter sets the formatter for the function tool's final result.
 // It is currently supported by LLMAgent's default tool-call flow. Graph
 // ToolsNode, ToolPipe, wrappers that replace tool instances, and direct
@@ -196,7 +205,7 @@ func NewFunctionTool[I, O any](fn func(context.Context, I) (O, error), opts ...O
 	var oSchema *tool.Schema
 	if options.outputSchema != nil {
 		oSchema = options.outputSchema
-	} else {
+	} else if !options.disableOutputGen {
 		oSchema = itool.GenerateJSONSchema(reflect.TypeOf(emptyO))
 	}
 
@@ -336,7 +345,7 @@ func NewStreamableFunctionTool[I, O any](fn func(context.Context, I) (*tool.Stre
 	var oSchema *tool.Schema
 	if options.outputSchema != nil {
 		oSchema = options.outputSchema
-	} else {
+	} else if !options.disableOutputGen {
 		oSchema = itool.GenerateJSONSchema(reflect.TypeOf(emptyO))
 	}
 
