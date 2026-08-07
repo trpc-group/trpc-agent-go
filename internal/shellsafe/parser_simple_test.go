@@ -169,6 +169,21 @@ func TestSimple_RejectsBypassAndUnsafeShapes(t *testing.T) {
 			in:   "echo \"a`b\"",
 			want: "double-quoted",
 		},
+		{
+			name: "empty double quoted command",
+			in:   `""`,
+			want: "command name is empty",
+		},
+		{
+			name: "empty single quoted command",
+			in:   `''`,
+			want: "command name is empty",
+		},
+		{
+			name: "empty command with argument",
+			in:   `"" argument`,
+			want: "command name is empty",
+		},
 		{"newline inside dquote", "echo \"a\nb\"", "newline"},
 		{"trailing pipe", "echo a |", "empty right"},
 		{"trailing and", "echo a &&", "empty right"},

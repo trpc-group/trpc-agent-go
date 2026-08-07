@@ -23,15 +23,17 @@ import (
 )
 
 const (
-	defaultYieldMS    = 10_000
-	defaultTimeoutS   = 1_800
-	defaultLogTail    = 40
-	defaultMaxLines   = 20_000
-	defaultJobTTL     = 30 * time.Minute
-	defaultKillGrace  = 2 * time.Second
-	timeoutKillGrace  = time.Duration(0)
-	defaultIODrain    = 1 * time.Second
-	maxTimeoutSeconds = int64((1<<63)-1) /
+	defaultYieldMS        = 10_000
+	defaultTimeoutS       = 1_800
+	defaultLogTail        = 40
+	defaultMaxLines       = 20_000
+	defaultMaxOutputBytes = 4 << 20
+	maxOutputBytes        = 64 << 20
+	defaultJobTTL         = 30 * time.Minute
+	defaultKillGrace      = 2 * time.Second
+	timeoutKillGrace      = time.Duration(0)
+	defaultIODrain        = 1 * time.Second
+	maxTimeoutSeconds     = int64((1<<63)-1) /
 		int64(time.Second)
 )
 
@@ -55,8 +57,9 @@ type execParams struct {
 	Pty        bool
 	Background bool
 
-	YieldMs  *int
-	TimeoutS *int
+	YieldMs        *int
+	TimeoutS       *int
+	MaxOutputBytes int
 }
 
 type execResult struct {
@@ -64,6 +67,7 @@ type execResult struct {
 	Output    string
 	ExitCode  *int
 	SessionID string
+	Truncated bool
 }
 
 func newManager() *manager {
@@ -87,20 +91,13 @@ func (m *manager) exec(
 	}
 
 	m.cleanupExpired()
-
-	yieldMs := defaultYieldMS
-	if params.YieldMs != nil && *params.YieldMs >= 0 {
-		yieldMs = *params.YieldMs
+	params, yieldMs, timeout, err := normalizeExecParams(params)
+	if err != nil {
+		return execResult{}, err
 	}
-
-	timeoutS := defaultTimeoutS
-	if params.TimeoutS != nil && *params.TimeoutS > 0 {
-		timeoutS = *params.TimeoutS
-	}
-	timeout := timeoutDuration(timeoutS)
 
 	if !params.Background && yieldMs == 0 && !params.Pty {
-		out, code, err := runForeground(
+		out, code, truncated, err := runForegroundLimited(
 			ctx,
 			params,
 			timeout,
@@ -111,9 +108,10 @@ func (m *manager) exec(
 			return execResult{}, err
 		}
 		return execResult{
-			Status:   programStatusExited,
-			Output:   out,
-			ExitCode: intPtr(code),
+			Status:    programStatusExited,
+			Output:    out,
+			ExitCode:  intPtr(code),
+			Truncated: truncated,
 		}, nil
 	}
 
@@ -123,50 +121,80 @@ func (m *manager) exec(
 	}
 
 	if params.Background {
-		return execResult{
-			Status:    programStatusRunning,
-			SessionID: sess.id,
-			Output:    sess.pollTail(defaultLogTail),
-		}, nil
+		return runningExecResult(sess), nil
 	}
 
 	if yieldMs == 0 {
-		select {
-		case <-ctx.Done():
-			_ = m.kill(sess.id)
-			return execResult{}, ctx.Err()
-		case <-sess.doneCh:
-		}
-		out, code := sess.allOutput()
-		_ = m.clearFinished(sess.id)
-		return execResult{
-			Status:   programStatusExited,
-			Output:   out,
-			ExitCode: intPtr(code),
-		}, nil
+		return m.waitForSession(ctx, sess, nil)
 	}
 
 	timer := time.NewTimer(time.Duration(yieldMs) * time.Millisecond)
 	defer timer.Stop()
+	return m.waitForSession(ctx, sess, timer.C)
+}
+
+func normalizeExecParams(
+	params execParams,
+) (execParams, int, time.Duration, error) {
+	yieldMs := defaultYieldMS
+	if params.YieldMs != nil && *params.YieldMs >= 0 {
+		yieldMs = *params.YieldMs
+	}
+	timeoutS := defaultTimeoutS
+	if params.TimeoutS != nil && *params.TimeoutS > 0 {
+		timeoutS = *params.TimeoutS
+	}
+	if params.MaxOutputBytes == 0 {
+		params.MaxOutputBytes = defaultMaxOutputBytes
+	}
+	if params.MaxOutputBytes < 0 {
+		return execParams{}, 0, 0, errors.New(
+			"max_output_bytes must not be negative",
+		)
+	}
+	if params.MaxOutputBytes > maxOutputBytes {
+		return execParams{}, 0, 0, fmt.Errorf(
+			"max_output_bytes must not exceed %d",
+			maxOutputBytes,
+		)
+	}
+	return params, yieldMs, timeoutDuration(timeoutS), nil
+}
+
+func (m *manager) waitForSession(
+	ctx context.Context,
+	sess *session,
+	yield <-chan time.Time,
+) (execResult, error) {
 
 	select {
 	case <-ctx.Done():
 		_ = m.kill(sess.id)
 		return execResult{}, ctx.Err()
 	case <-sess.doneCh:
-		out, code := sess.allOutput()
-		_ = m.clearFinished(sess.id)
-		return execResult{
-			Status:   programStatusExited,
-			Output:   out,
-			ExitCode: intPtr(code),
-		}, nil
-	case <-timer.C:
-		return execResult{
-			Status:    programStatusRunning,
-			SessionID: sess.id,
-			Output:    sess.pollTail(defaultLogTail),
-		}, nil
+		return m.finishedExecResult(sess), nil
+	case <-yield:
+		return runningExecResult(sess), nil
+	}
+}
+
+func (m *manager) finishedExecResult(sess *session) execResult {
+	out, code := sess.allOutput()
+	_ = m.clearFinished(sess.id)
+	return execResult{
+		Status:    programStatusExited,
+		Output:    out,
+		ExitCode:  intPtr(code),
+		Truncated: sess.wasTruncated(),
+	}
+}
+
+func runningExecResult(sess *session) execResult {
+	return execResult{
+		Status:    programStatusRunning,
+		SessionID: sess.id,
+		Output:    sess.pollTail(defaultLogTail),
+		Truncated: sess.wasTruncated(),
 	}
 }
 
@@ -177,6 +205,19 @@ func runForeground(
 	baseEnv map[string]string,
 	maxLines int,
 ) (string, int, error) {
+	out, code, _, err := runForegroundLimited(
+		ctx, params, timeout, baseEnv, maxLines,
+	)
+	return out, code, err
+}
+
+func runForegroundLimited(
+	ctx context.Context,
+	params execParams,
+	timeout time.Duration,
+	baseEnv map[string]string,
+	maxLines int,
+) (string, int, bool, error) {
 	sess, err := startSession(
 		"",
 		params,
@@ -185,18 +226,18 @@ func runForeground(
 		maxLines,
 	)
 	if err != nil {
-		return "", 0, err
+		return "", 0, false, err
 	}
 
 	select {
 	case <-ctx.Done():
 		_ = sess.kill(context.Background(), defaultKillGrace)
-		return "", 0, ctx.Err()
+		return "", 0, false, ctx.Err()
 	case <-sess.doneCh:
 	}
 
 	out, code := sess.allOutput()
-	return out, code, nil
+	return out, code, sess.wasTruncated(), nil
 }
 
 func timeoutDuration(timeoutS int) time.Duration {
@@ -321,6 +362,7 @@ func startSession(
 	cmd.Env = mergedEnv(baseEnv, params.Env)
 
 	sess := newSession(id, params.Command, maxLines)
+	sess.maxOutputBytes = params.MaxOutputBytes
 	sess.cancel = cancel
 	sess.cmd = cmd
 

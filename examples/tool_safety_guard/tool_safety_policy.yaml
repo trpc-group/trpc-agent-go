@@ -1,0 +1,48 @@
+allowed_commands:
+  - go
+  - echo
+  - wc
+  - cat
+  - curl
+  - sh
+  - sleep
+denied_commands:
+  - rm
+  - wget
+  - nc
+  - ssh
+forbidden_paths:
+  - ~/.ssh
+  - .env
+  - .npmrc
+  - .pypirc
+  - .netrc
+  - /etc/passwd
+  - /etc/shadow
+  - /proc/self/environ
+  - /run/secrets
+  - ~/.git-credentials
+  - ~/.docker/config.json
+  - ~/.kube/config
+  - id_rsa
+  - id_ed25519
+  - credentials
+  - application_default_credentials.json
+network_allowlist:
+  - github.com
+  - proxy.golang.org
+  - sum.golang.org
+max_timeout_sec: 60
+max_output_bytes: 1024
+max_concurrency: 128
+env_allowlist:
+  - PATH
+  - HOME
+  - TMPDIR
+parse_failure_action: ask
+unknown_tool_action: ask
+dependency_action: ask
+pipeline_action: ask
+host_pty_action: ask
+background_action: ask
+disallowed_env_action: ask

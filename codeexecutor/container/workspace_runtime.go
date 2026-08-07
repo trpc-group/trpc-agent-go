@@ -33,6 +33,7 @@ import (
 	atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	"trpc.group/trpc-go/trpc-agent-go/internal/outputlimit"
 )
 
 const (
@@ -469,19 +470,22 @@ func (r *workspaceRuntime) RunProgram(
 	if spec.CleanEnv {
 		execEnv = cleanWrapperEnv()
 	}
-	out, errOut, code, timed, err := r.execCmdWithStdin(
-		ctx,
-		argv,
-		t,
-		spec.Stdin,
-		execEnv,
-	)
+	out, errOut, code, timed, truncated, err :=
+		r.execCmdWithStdinLimited(
+			ctx,
+			argv,
+			t,
+			spec.Stdin,
+			execEnv,
+			spec.MaxOutputBytes,
+		)
 	res := codeexecutor.RunResult{
-		Stdout:   out,
-		Stderr:   errOut,
-		ExitCode: code,
-		Duration: t,
-		TimedOut: timed,
+		Stdout:    out,
+		Stderr:    errOut,
+		ExitCode:  code,
+		Duration:  t,
+		TimedOut:  timed,
+		Truncated: truncated,
 	}
 	span.SetAttributes(
 		attribute.Int(codeexecutor.AttrExitCode, res.ExitCode),
@@ -1172,6 +1176,20 @@ func (r *workspaceRuntime) execCmdWithStdin(
 	stdin string,
 	execEnv []string,
 ) (string, string, int, bool, error) {
+	stdout, stderr, code, timed, _, err := r.execCmdWithStdinLimited(
+		ctx, argv, timeout, stdin, execEnv, 0,
+	)
+	return stdout, stderr, code, timed, err
+}
+
+func (r *workspaceRuntime) execCmdWithStdinLimited(
+	ctx context.Context,
+	argv []string,
+	timeout time.Duration,
+	stdin string,
+	execEnv []string,
+	maxOutputBytes int,
+) (string, string, int, bool, bool, error) {
 	tctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	ec := tcontainer.ExecOptions{
@@ -1185,13 +1203,13 @@ func (r *workspaceRuntime) execCmdWithStdin(
 		tctx, r.ce.container.ID, ec,
 	)
 	if err != nil {
-		return "", "", 0, false, err
+		return "", "", 0, false, false, err
 	}
 	hj, err := r.ce.client.ContainerExecAttach(
 		tctx, ex.ID, tcontainer.ExecStartOptions{},
 	)
 	if err != nil {
-		return "", "", 0, false, err
+		return "", "", 0, false, false, err
 	}
 	defer hj.Close()
 
@@ -1207,23 +1225,28 @@ func (r *workspaceRuntime) execCmdWithStdin(
 		}()
 	}
 
-	var stdout, stderr bytes.Buffer
-	_, err = stdcopy.StdCopy(&stdout, &stderr, hj.Reader)
+	output := outputlimit.New(maxOutputBytes)
+	_, err = stdcopy.StdCopy(
+		output.Writer(outputlimit.Stdout),
+		output.Writer(outputlimit.Stderr),
+		hj.Reader,
+	)
 	if stdin != "" {
 		if writeErr := <-writeDone; err == nil && writeErr != nil {
 			err = writeErr
 		}
 	}
 	if err != nil {
-		return "", "", 0, false, err
+		return "", "", 0, false, output.Truncated(), err
 	}
+	stdout, stderr := output.Strings()
 	insp, err := r.ce.client.ContainerExecInspect(tctx, ex.ID)
 	if err != nil {
 		timed := errors.Is(tctx.Err(), context.DeadlineExceeded)
-		return stdout.String(), stderr.String(), 0, timed, err
+		return stdout, stderr, 0, timed, output.Truncated(), err
 	}
 	timed := errors.Is(tctx.Err(), context.DeadlineExceeded)
-	return stdout.String(), stderr.String(), insp.ExitCode, timed, nil
+	return stdout, stderr, insp.ExitCode, timed, output.Truncated(), nil
 }
 
 func sanitize(s string) string {

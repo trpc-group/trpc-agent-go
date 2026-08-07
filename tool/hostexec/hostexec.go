@@ -213,6 +213,14 @@ func (t *execCommandTool) Declaration() *tool.Declaration {
 					Type:        "integer",
 					Description: "Maximum command runtime.",
 				},
+				"max_output_bytes": {
+					Type:    "integer",
+					Default: defaultMaxOutputBytes,
+					Description: "Maximum combined stdout and stderr " +
+						fmt.Sprintf("bytes retained for this execution. "+
+							"Omitting this field or using 0 applies the %d-byte default; "+
+							"the value must not exceed %d.", defaultMaxOutputBytes, maxOutputBytes),
+				},
 				"tty": {
 					Type: "boolean",
 					Description: "Allocate a TTY for " +
@@ -253,22 +261,28 @@ func (t *execCommandTool) Declaration() *tool.Declaration {
 					Description: "Session id for running " +
 						"commands.",
 				},
+				"truncated": {
+					Type: "boolean",
+					Description: "True when output exceeded " +
+						"max_output_bytes; omitted when false.",
+				},
 			},
 		},
 	}
 }
 
 type execInput struct {
-	Command       string            `json:"command"`
-	Workdir       string            `json:"workdir,omitempty"`
-	Env           map[string]string `json:"env,omitempty"`
-	YieldTimeMS   *int              `json:"yield_time_ms,omitempty"`
-	YieldMs       *int              `json:"yieldMs,omitempty"`
-	Background    bool              `json:"background,omitempty"`
-	TimeoutSec    *int              `json:"timeout_sec,omitempty"`
-	TimeoutSecOld *int              `json:"timeoutSec,omitempty"`
-	TTY           *bool             `json:"tty,omitempty"`
-	PTY           *bool             `json:"pty,omitempty"`
+	Command        string            `json:"command"`
+	Workdir        string            `json:"workdir,omitempty"`
+	Env            map[string]string `json:"env,omitempty"`
+	YieldTimeMS    *int              `json:"yield_time_ms,omitempty"`
+	YieldMs        *int              `json:"yieldMs,omitempty"`
+	Background     bool              `json:"background,omitempty"`
+	TimeoutSec     *int              `json:"timeout_sec,omitempty"`
+	TimeoutSecOld  *int              `json:"timeoutSec,omitempty"`
+	MaxOutputBytes int               `json:"max_output_bytes,omitempty"`
+	TTY            *bool             `json:"tty,omitempty"`
+	PTY            *bool             `json:"pty,omitempty"`
 }
 
 func (t *execCommandTool) Call(
@@ -286,6 +300,15 @@ func (t *execCommandTool) Call(
 	if strings.TrimSpace(in.Command) == "" {
 		return nil, errors.New(errCommandRequired)
 	}
+	if in.MaxOutputBytes < 0 {
+		return nil, errors.New("max_output_bytes must not be negative")
+	}
+	if in.MaxOutputBytes > maxOutputBytes {
+		return nil, fmt.Errorf(
+			"max_output_bytes must not exceed %d",
+			maxOutputBytes,
+		)
+	}
 
 	workdir, err := resolveWorkdir(in.Workdir, t.baseDir)
 	if err != nil {
@@ -295,13 +318,14 @@ func (t *execCommandTool) Call(
 	timeout := firstInt(in.TimeoutSec, in.TimeoutSecOld)
 
 	res, err := t.mgr.exec(ctx, execParams{
-		Command:    in.Command,
-		Workdir:    workdir,
-		Env:        in.Env,
-		Pty:        firstBool(in.TTY, in.PTY),
-		Background: in.Background,
-		YieldMs:    yield,
-		TimeoutS:   timeout,
+		Command:        in.Command,
+		Workdir:        workdir,
+		Env:            in.Env,
+		Pty:            firstBool(in.TTY, in.PTY),
+		Background:     in.Background,
+		YieldMs:        yield,
+		TimeoutS:       timeout,
+		MaxOutputBytes: in.MaxOutputBytes,
 	})
 	if err != nil {
 		return nil, err
@@ -521,6 +545,11 @@ func pollOutputSchema(desc string) *tool.Schema {
 				Type:        "integer",
 				Description: "Process exit code when exited.",
 			},
+			"truncated": {
+				Type: "boolean",
+				Description: "True when output exceeded " +
+					"max_output_bytes.",
+			},
 		},
 	}
 }
@@ -535,6 +564,9 @@ func mapExecResult(res execResult) map[string]any {
 	}
 	if res.SessionID != "" {
 		out["session_id"] = res.SessionID
+	}
+	if res.Truncated {
+		out["truncated"] = true
 	}
 	return out
 }
@@ -552,6 +584,9 @@ func mapPollResult(
 	}
 	if poll.ExitCode != nil {
 		out["exit_code"] = *poll.ExitCode
+	}
+	if poll.Truncated {
+		out["truncated"] = true
 	}
 	return out
 }

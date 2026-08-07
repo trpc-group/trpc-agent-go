@@ -1152,6 +1152,66 @@ func TestTraceToolCall_UsesFormattedErrorType(t *testing.T) {
 	require.True(t, hasAttr(span.attrs, semconvtrace.KeyErrorType, "api_error_42"))
 }
 
+func TestTraceToolCall_DefaultOmitsSensitivePayload(t *testing.T) {
+	const (
+		argumentSecret = "argument-secret-value"
+		resultSecret   = "result-secret-value"
+		errorSecret    = "error-secret-value"
+	)
+
+	t.Cleanup(func() { SetSpanAttributePolicy(SpanAttributePolicy{}) })
+	SetSpanAttributePolicy(SpanAttributePolicy{})
+
+	span := newRecordingSpan()
+	evt := event.New(
+		"evt-sensitive",
+		"author",
+		event.WithResponse(&model.Response{
+			Error: &model.ResponseError{
+				Type:    "tool_error",
+				Message: errorSecret,
+			},
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:    model.RoleTool,
+					Content: resultSecret,
+				},
+			}},
+		}),
+	)
+
+	TraceToolCall(
+		span,
+		nil,
+		&tool.Declaration{Name: "sensitive_tool"},
+		[]byte(`{"password":"`+argumentSecret+`"}`),
+		evt,
+		errors.New(errorSecret),
+	)
+
+	for _, attr := range span.attrs {
+		value := attr.Value.Emit()
+		for _, secret := range []string{
+			argumentSecret,
+			resultSecret,
+			errorSecret,
+		} {
+			require.NotContains(t, value, secret)
+		}
+	}
+	require.Equal(t, "tool execution failed", span.statusDesc)
+	require.True(t, hasAttr(
+		span.attrs,
+		semconvtrace.KeyGenAIToolCallArguments,
+		`{"omitted":true}`,
+	))
+	require.True(t, hasAttr(
+		span.attrs,
+		semconvtrace.KeyGenAIToolCallResult,
+		`{"omitted":true}`,
+	))
+}
+
 func TestTraceMergedToolCalls_WithError(t *testing.T) {
 	span := newRecordingSpan()
 

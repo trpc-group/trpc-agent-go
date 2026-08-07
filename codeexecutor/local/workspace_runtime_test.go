@@ -69,6 +69,28 @@ func TestRuntime_RunProgram_Basic(t *testing.T) {
 	require.Contains(t, res.Stdout, "hello runtime")
 }
 
+func TestRuntime_RunProgram_MaxOutputBytes(t *testing.T) {
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx,
+		"rt-max-output",
+		codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	res, err := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+		Cmd:            "bash",
+		Args:           []string{"-c", "printf 0123456789"},
+		Timeout:        5 * time.Second,
+		MaxOutputBytes: 5,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "01234", res.Stdout)
+	require.True(t, res.Truncated)
+}
+
 func TestRuntime_PathListSeparator(t *testing.T) {
 	rt := local.NewRuntime("")
 

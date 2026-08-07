@@ -24,6 +24,50 @@ func TestResolve_DefaultCapture(t *testing.T) {
 	}
 }
 
+func TestResolve_DefaultOmitsToolPayloads(t *testing.T) {
+	t.Cleanup(func() { SetSpanAttributePolicy(SpanAttributePolicy{}) })
+
+	SetSpanAttributePolicy(SpanAttributePolicy{})
+	for _, key := range []string{
+		semconvtrace.KeyGenAIToolCallArguments,
+		semconvtrace.KeyGenAIToolCallResult,
+	} {
+		got := Resolve(OperationExecuteTool, key)
+		if got.Action != AttributeOmit {
+			t.Fatalf(
+				"Resolve(%q) action = %v, want %v",
+				key,
+				got.Action,
+				AttributeOmit,
+			)
+		}
+	}
+}
+
+func TestResolve_ExplicitCaptureRestoresToolPayload(t *testing.T) {
+	t.Cleanup(func() { SetSpanAttributePolicy(SpanAttributePolicy{}) })
+
+	SetSpanAttributePolicy(AppendAttributeRule(
+		SpanAttributePolicy{},
+		AttributeRule{
+			Operation: OperationExecuteTool,
+			Key:       semconvtrace.KeyGenAIToolCallArguments,
+			Action:    AttributeCapture,
+		},
+	))
+	got := Resolve(
+		OperationExecuteTool,
+		semconvtrace.KeyGenAIToolCallArguments,
+	)
+	if got.Action != AttributeCapture {
+		t.Fatalf(
+			"tool argument action = %v, want %v",
+			got.Action,
+			AttributeCapture,
+		)
+	}
+}
+
 func TestResolve_Drop(t *testing.T) {
 	t.Cleanup(func() { SetSpanAttributePolicy(SpanAttributePolicy{}) })
 

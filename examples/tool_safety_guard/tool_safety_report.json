@@ -1,0 +1,368 @@
+[
+  {
+    "decision": "allow",
+    "risk_level": "low",
+    "rule_id": "SAFE-ALLOW",
+    "evidence": [
+      "no safety rule matched"
+    ],
+    "recommendation": "Command is allowed by the current safety policy.",
+    "tool_name": "workspace_exec",
+    "command": "go test ./tool/safety",
+    "backend": "workspaceexec",
+    "blocked": false,
+    "redacted": false,
+    "duration_ms": 0,
+    "otel_attributes": {
+      "tool.safety.backend": "workspaceexec",
+      "tool.safety.decision": "allow",
+      "tool.safety.risk_level": "low",
+      "tool.safety.rule_id": "SAFE-ALLOW"
+    }
+  },
+  {
+    "decision": "deny",
+    "risk_level": "critical",
+    "rule_id": "SAFE-DANGEROUS-DELETE",
+    "evidence": [
+      "command contains recursive/force deletion or targets a system directory",
+      "command \"rm\" is denied by denied_commands"
+    ],
+    "recommendation": "Delete only explicit workspace-relative files after human review.",
+    "tool_name": "workspace_exec",
+    "command": "rm -rf /",
+    "backend": "workspaceexec",
+    "blocked": true,
+    "redacted": false,
+    "duration_ms": 0,
+    "findings": [
+      {
+        "rule_id": "SAFE-DANGEROUS-DELETE",
+        "decision": "deny",
+        "risk_level": "critical",
+        "evidence": "command contains recursive/force deletion or targets a system directory",
+        "recommendation": "Delete only explicit workspace-relative files after human review."
+      },
+      {
+        "rule_id": "SAFE-COMMAND-POLICY",
+        "decision": "deny",
+        "risk_level": "high",
+        "evidence": "command \"rm\" is denied by denied_commands",
+        "recommendation": "Use an allowed command or request a policy update for this workspace."
+      }
+    ],
+    "otel_attributes": {
+      "tool.safety.backend": "workspaceexec",
+      "tool.safety.decision": "deny",
+      "tool.safety.risk_level": "critical",
+      "tool.safety.rule_id": "SAFE-DANGEROUS-DELETE"
+    }
+  },
+  {
+    "decision": "deny",
+    "risk_level": "critical",
+    "rule_id": "SAFE-SENSITIVE-PATH",
+    "evidence": [
+      "command references forbidden path or credential marker: ~/.ssh"
+    ],
+    "recommendation": "Remove credential access and pass required values through approved secret handling.",
+    "tool_name": "workspace_exec",
+    "command": "cat ~/.ssh/id_rsa",
+    "backend": "workspaceexec",
+    "blocked": true,
+    "redacted": false,
+    "duration_ms": 0,
+    "findings": [
+      {
+        "rule_id": "SAFE-SENSITIVE-PATH",
+        "decision": "deny",
+        "risk_level": "critical",
+        "evidence": "command references forbidden path or credential marker: ~/.ssh",
+        "recommendation": "Remove credential access and pass required values through approved secret handling."
+      }
+    ],
+    "otel_attributes": {
+      "tool.safety.backend": "workspaceexec",
+      "tool.safety.decision": "deny",
+      "tool.safety.risk_level": "critical",
+      "tool.safety.rule_id": "SAFE-SENSITIVE-PATH"
+    }
+  },
+  {
+    "decision": "deny",
+    "risk_level": "high",
+    "rule_id": "SAFE-NETWORK-DOMAIN",
+    "evidence": [
+      "network request targets non-allowlisted host: evil.example.com"
+    ],
+    "recommendation": "Add the domain to network_allowlist only after reviewing data exfiltration risk.",
+    "tool_name": "workspace_exec",
+    "command": "curl https://evil.example.com/data",
+    "backend": "workspaceexec",
+    "blocked": true,
+    "redacted": false,
+    "duration_ms": 0,
+    "findings": [
+      {
+        "rule_id": "SAFE-NETWORK-DOMAIN",
+        "decision": "deny",
+        "risk_level": "high",
+        "evidence": "network request targets non-allowlisted host: evil.example.com",
+        "recommendation": "Add the domain to network_allowlist only after reviewing data exfiltration risk."
+      }
+    ],
+    "otel_attributes": {
+      "tool.safety.backend": "workspaceexec",
+      "tool.safety.decision": "deny",
+      "tool.safety.risk_level": "high",
+      "tool.safety.rule_id": "SAFE-NETWORK-DOMAIN"
+    }
+  },
+  {
+    "decision": "allow",
+    "risk_level": "low",
+    "rule_id": "SAFE-ALLOW",
+    "evidence": [
+      "no safety rule matched"
+    ],
+    "recommendation": "Command is allowed by the current safety policy.",
+    "tool_name": "workspace_exec",
+    "command": "curl https://github.com/trpc-group/trpc-agent-go",
+    "backend": "workspaceexec",
+    "blocked": false,
+    "redacted": false,
+    "duration_ms": 0,
+    "otel_attributes": {
+      "tool.safety.backend": "workspaceexec",
+      "tool.safety.decision": "allow",
+      "tool.safety.risk_level": "low",
+      "tool.safety.rule_id": "SAFE-ALLOW"
+    }
+  },
+  {
+    "decision": "deny",
+    "risk_level": "high",
+    "rule_id": "SAFE-COMMAND-POLICY",
+    "evidence": [
+      "command \"sh\" is denied by built-in policy because it is a shell wrapper or re-executing builtin that can bypass the allow/deny list (eval curl ..., sh -c '...', busybox sh ..., xargs ..., env CMD ..., sudo ..., etc.). This deny is unconditional under policy mode; wrap the desired use in an auditable workspace script and allow the script instead.",
+      "network request targets non-allowlisted host: evil.example.com"
+    ],
+    "recommendation": "Use an allowed command or request a policy update for this workspace.",
+    "tool_name": "workspace_exec",
+    "command": "sh -c 'curl https://evil.example.com'",
+    "backend": "workspaceexec",
+    "blocked": true,
+    "redacted": false,
+    "duration_ms": 0,
+    "findings": [
+      {
+        "rule_id": "SAFE-COMMAND-POLICY",
+        "decision": "deny",
+        "risk_level": "high",
+        "evidence": "command \"sh\" is denied by built-in policy because it is a shell wrapper or re-executing builtin that can bypass the allow/deny list (eval curl ..., sh -c '...', busybox sh ..., xargs ..., env CMD ..., sudo ..., etc.). This deny is unconditional under policy mode; wrap the desired use in an auditable workspace script and allow the script instead.",
+        "recommendation": "Use an allowed command or request a policy update for this workspace."
+      },
+      {
+        "rule_id": "SAFE-NETWORK-DOMAIN",
+        "decision": "deny",
+        "risk_level": "high",
+        "evidence": "network request targets non-allowlisted host: evil.example.com",
+        "recommendation": "Add the domain to network_allowlist only after reviewing data exfiltration risk."
+      }
+    ],
+    "otel_attributes": {
+      "tool.safety.backend": "workspaceexec",
+      "tool.safety.decision": "deny",
+      "tool.safety.risk_level": "high",
+      "tool.safety.rule_id": "SAFE-COMMAND-POLICY"
+    }
+  },
+  {
+    "decision": "ask",
+    "risk_level": "medium",
+    "rule_id": "SAFE-SHELL-PIPELINE",
+    "evidence": [
+      "command contains multiple shell segments joined by a pipeline or sequencing operator"
+    ],
+    "recommendation": "Split the work into separate reviewed commands when possible.",
+    "tool_name": "workspace_exec",
+    "command": "echo hello | wc -c",
+    "backend": "workspaceexec",
+    "blocked": true,
+    "redacted": false,
+    "duration_ms": 0,
+    "findings": [
+      {
+        "rule_id": "SAFE-SHELL-PIPELINE",
+        "decision": "ask",
+        "risk_level": "medium",
+        "evidence": "command contains multiple shell segments joined by a pipeline or sequencing operator",
+        "recommendation": "Split the work into separate reviewed commands when possible."
+      }
+    ],
+    "otel_attributes": {
+      "tool.safety.backend": "workspaceexec",
+      "tool.safety.decision": "ask",
+      "tool.safety.risk_level": "medium",
+      "tool.safety.rule_id": "SAFE-SHELL-PIPELINE"
+    }
+  },
+  {
+    "decision": "ask",
+    "risk_level": "high",
+    "rule_id": "SAFE-DEPENDENCY-INSTALL",
+    "evidence": [
+      "command changes dependencies or the host environment: go install"
+    ],
+    "recommendation": "Pin and review dependency changes before allowing installation.",
+    "tool_name": "workspace_exec",
+    "command": "go install github.com/example/tool@latest",
+    "backend": "workspaceexec",
+    "blocked": true,
+    "redacted": false,
+    "duration_ms": 0,
+    "findings": [
+      {
+        "rule_id": "SAFE-DEPENDENCY-INSTALL",
+        "decision": "ask",
+        "risk_level": "high",
+        "evidence": "command changes dependencies or the host environment: go install",
+        "recommendation": "Pin and review dependency changes before allowing installation."
+      }
+    ],
+    "otel_attributes": {
+      "tool.safety.backend": "workspaceexec",
+      "tool.safety.decision": "ask",
+      "tool.safety.risk_level": "high",
+      "tool.safety.rule_id": "SAFE-DEPENDENCY-INSTALL"
+    }
+  },
+  {
+    "decision": "ask",
+    "risk_level": "medium",
+    "rule_id": "SAFE-RESOURCE-TIMEOUT",
+    "evidence": [
+      "sleep duration 600s exceeds max_timeout_sec=60"
+    ],
+    "recommendation": "Use a shorter wait or a bounded polling loop.",
+    "tool_name": "workspace_exec",
+    "command": "sleep 600",
+    "backend": "workspaceexec",
+    "blocked": true,
+    "redacted": false,
+    "duration_ms": 0,
+    "findings": [
+      {
+        "rule_id": "SAFE-RESOURCE-TIMEOUT",
+        "decision": "ask",
+        "risk_level": "medium",
+        "evidence": "sleep duration 600s exceeds max_timeout_sec=60",
+        "recommendation": "Use a shorter wait or a bounded polling loop."
+      }
+    ],
+    "otel_attributes": {
+      "tool.safety.backend": "workspaceexec",
+      "tool.safety.decision": "ask",
+      "tool.safety.risk_level": "medium",
+      "tool.safety.rule_id": "SAFE-RESOURCE-TIMEOUT"
+    }
+  },
+  {
+    "decision": "ask",
+    "risk_level": "medium",
+    "rule_id": "SAFE-RESOURCE-OUTPUT",
+    "evidence": [
+      "requested output limit 1048576 bytes exceeds max_output_bytes=1024"
+    ],
+    "recommendation": "Limit output size or write large artifacts to bounded files.",
+    "tool_name": "workspace_exec",
+    "command": "echo hello",
+    "backend": "workspaceexec",
+    "blocked": true,
+    "redacted": false,
+    "duration_ms": 0,
+    "findings": [
+      {
+        "rule_id": "SAFE-RESOURCE-OUTPUT",
+        "decision": "ask",
+        "risk_level": "medium",
+        "evidence": "requested output limit 1048576 bytes exceeds max_output_bytes=1024",
+        "recommendation": "Limit output size or write large artifacts to bounded files."
+      }
+    ],
+    "otel_attributes": {
+      "tool.safety.backend": "workspaceexec",
+      "tool.safety.decision": "ask",
+      "tool.safety.risk_level": "medium",
+      "tool.safety.rule_id": "SAFE-RESOURCE-OUTPUT"
+    }
+  },
+  {
+    "decision": "ask",
+    "risk_level": "high",
+    "rule_id": "SAFE-HOSTEXEC-PTY",
+    "evidence": [
+      "hostexec requested a PTY session",
+      "command requested background execution"
+    ],
+    "recommendation": "Use non-interactive workspace execution unless host access and cleanup are explicitly approved.",
+    "tool_name": "exec_command",
+    "command": "go test ./...",
+    "backend": "hostexec",
+    "blocked": true,
+    "redacted": false,
+    "duration_ms": 0,
+    "findings": [
+      {
+        "rule_id": "SAFE-HOSTEXEC-PTY",
+        "decision": "ask",
+        "risk_level": "high",
+        "evidence": "hostexec requested a PTY session",
+        "recommendation": "Use non-interactive workspace execution unless host access and cleanup are explicitly approved."
+      },
+      {
+        "rule_id": "SAFE-BACKGROUND-PROCESS",
+        "decision": "ask",
+        "risk_level": "medium",
+        "evidence": "command requested background execution",
+        "recommendation": "Prefer bounded foreground execution or require a human to approve and track session cleanup."
+      }
+    ],
+    "otel_attributes": {
+      "tool.safety.backend": "hostexec",
+      "tool.safety.decision": "ask",
+      "tool.safety.risk_level": "high",
+      "tool.safety.rule_id": "SAFE-HOSTEXEC-PTY"
+    }
+  },
+  {
+    "decision": "ask",
+    "risk_level": "medium",
+    "rule_id": "SAFE-ENV-VAR",
+    "evidence": [
+      "environment variable is not allowlisted: CUSTOM"
+    ],
+    "recommendation": "Pass only explicitly allowed environment variables to tool execution.",
+    "tool_name": "workspace_exec",
+    "command": "echo hello",
+    "backend": "workspaceexec",
+    "blocked": true,
+    "redacted": false,
+    "duration_ms": 0,
+    "findings": [
+      {
+        "rule_id": "SAFE-ENV-VAR",
+        "decision": "ask",
+        "risk_level": "medium",
+        "evidence": "environment variable is not allowlisted: CUSTOM",
+        "recommendation": "Pass only explicitly allowed environment variables to tool execution."
+      }
+    ],
+    "otel_attributes": {
+      "tool.safety.backend": "workspaceexec",
+      "tool.safety.decision": "ask",
+      "tool.safety.risk_level": "medium",
+      "tool.safety.rule_id": "SAFE-ENV-VAR"
+    }
+  }
+]

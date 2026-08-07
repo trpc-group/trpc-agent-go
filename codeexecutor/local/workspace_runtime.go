@@ -13,7 +13,6 @@ package local
 // Workspace runtime provides workspace-based execution on local host.
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -33,6 +32,7 @@ import (
 	atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	"trpc.group/trpc-go/trpc-agent-go/internal/outputlimit"
 )
 
 const (
@@ -361,9 +361,9 @@ func (r *Runtime) RunProgram(
 		cmd.Stdin = strings.NewReader(spec.Stdin)
 	}
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	output := outputlimit.New(spec.MaxOutputBytes)
+	cmd.Stdout = output.Writer(outputlimit.Stdout)
+	cmd.Stderr = output.Writer(outputlimit.Stderr)
 
 	start := time.Now()
 	runErr := cmd.Run()
@@ -382,12 +382,14 @@ func (r *Runtime) RunProgram(
 		}
 	}
 
+	stdout, stderr := output.Strings()
 	res := codeexecutor.RunResult{
-		Stdout:   stdout.String(),
-		Stderr:   stderr.String(),
-		ExitCode: exitCode,
-		Duration: dur,
-		TimedOut: errors.Is(tctx.Err(), context.DeadlineExceeded),
+		Stdout:    stdout,
+		Stderr:    stderr,
+		ExitCode:  exitCode,
+		Duration:  dur,
+		TimedOut:  errors.Is(tctx.Err(), context.DeadlineExceeded),
+		Truncated: output.Truncated(),
 	}
 	span.SetAttributes(
 		attribute.Int(codeexecutor.AttrExitCode, res.ExitCode),

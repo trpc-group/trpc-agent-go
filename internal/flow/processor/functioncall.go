@@ -2706,9 +2706,8 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 
 	log.DebugfContext(
 		ctx,
-		"Executing tool %s with args: %s",
+		"Executing tool %s",
 		toolCall.Function.Name,
-		string(toolCall.Function.Arguments),
 	)
 
 	// Execute the tool with callbacks.
@@ -2834,9 +2833,8 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 
 	log.DebugfContext(
 		ctx,
-		"CallableTool %s executed successfully, result: %s",
+		"CallableTool %s executed successfully",
 		toolCall.Function.Name,
-		defaultMsg.Content,
 	)
 
 	execution.choices = choices
@@ -3502,11 +3500,8 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 	if toolErr != nil {
 		log.WarnfContext(
 			ctx,
-			"tool execute failed, function name: %v, arguments: %s, "+
-				"result: %v, err: %v",
+			"tool execute failed, function name: %v, error type: %T",
 			toolCall.Function.Name,
-			string(toolCall.Function.Arguments),
-			toolResult,
 			toolErr,
 		)
 	}
@@ -3692,7 +3687,7 @@ func (p *FunctionCallResponseProcessor) executeCallableTool(
 		if err != nil {
 			log.ErrorfContext(
 				ctx,
-				"CallableTool execution failed for %s: %v",
+				"CallableTool execution failed for %s, error type: %T",
 				toolCall.Function.Name,
 				err,
 			)
@@ -3719,7 +3714,7 @@ func (p *FunctionCallResponseProcessor) executeCallableTool(
 	if runResult.Error != nil {
 		log.ErrorfContext(
 			ctx,
-			"CallableTool execution failed for %s: %v",
+			"CallableTool execution failed for %s, error type: %T",
 			toolCall.Function.Name,
 			runResult.Error,
 		)
@@ -3886,7 +3881,7 @@ func (f *FunctionCallResponseProcessor) executeStreamableTool(
 	if err != nil {
 		log.ErrorfContext(
 			ctx,
-			"StreamableTool execution failed for %s: %v",
+			"StreamableTool execution failed for %s, error type: %T",
 			toolCall.Function.Name,
 			err,
 		)
@@ -4033,8 +4028,8 @@ func (f *FunctionCallResponseProcessor) consumeStream(
 			log.ErrorfContext(
 				ctx,
 				"StreamableTool execution failed for %s: receive chunk "+
-					"from stream reader failed: %v, may merge "+
-					"incomplete data",
+					"from stream reader failed, error type: %T; "+
+					"may merge incomplete data",
 				toolCall.Function.Name,
 				err,
 			)

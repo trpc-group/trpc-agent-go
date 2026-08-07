@@ -48,12 +48,15 @@ type session struct {
 	finished time.Time
 	exitCode int
 
-	lineBase   int
-	lines      []string
-	partial    string
-	pollCursor int
-	maxLines   int
-	closeOnce  sync.Once
+	lineBase       int
+	lines          []string
+	partial        string
+	pollCursor     int
+	maxLines       int
+	maxOutputBytes int
+	outputBytes    int
+	truncated      bool
+	closeOnce      sync.Once
 }
 
 func newSession(id string, command string, maxLines int) *session {
@@ -122,6 +125,21 @@ func (s *session) appendOutput(chunk string) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if s.maxOutputBytes > 0 {
+		remaining := s.maxOutputBytes - s.outputBytes
+		if remaining < len(text) {
+			if remaining < 0 {
+				remaining = 0
+			}
+			text = text[:remaining]
+			s.truncated = true
+		}
+		s.outputBytes += len(text)
+	}
+	if text == "" {
+		return
+	}
 
 	text = s.partial + text
 	parts := strings.Split(text, "\n")
@@ -201,12 +219,19 @@ func (s *session) allOutput() (string, int) {
 	return out, s.exitCode
 }
 
+func (s *session) wasTruncated() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.truncated
+}
+
 type processPoll struct {
 	Status     string
 	Output     string
 	Offset     int
 	NextOffset int
 	ExitCode   *int
+	Truncated  bool
 }
 
 func (s *session) poll(limit *int) processPoll {
@@ -241,6 +266,7 @@ func (s *session) poll(limit *int) processPoll {
 		Output:     out,
 		Offset:     start,
 		NextOffset: end,
+		Truncated:  s.truncated,
 	}
 	if s.finished.IsZero() {
 		return res
