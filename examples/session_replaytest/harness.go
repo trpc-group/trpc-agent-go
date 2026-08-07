@@ -30,12 +30,12 @@ type MockBackend struct {
 // NewMockBackend initializes a fresh MockBackend.
 func NewMockBackend(name string) *MockBackend {
 	b := &MockBackend{Name: name}
-	b.Reset()
+	b.reset()
 	return b
 }
 
-// Reset clears all stored session data for case isolation.
-func (b *MockBackend) Reset() {
+// reset clears all stored session data for case isolation.
+func (b *MockBackend) reset() {
 	b.Events = make(map[string][]string)
 	b.States = make(map[string]map[string]string)
 	b.Memories = make(map[string]map[string]string)
@@ -59,7 +59,7 @@ func (h *ReplayHarness) RunCase(c ReplayCase) []DiffEntry {
 
 	// Isolated case execution: reset backends before applying case operations
 	for _, b := range h.backends {
-		b.Reset()
+		b.reset()
 		for _, op := range c.Ops {
 			h.applyOp(b, op)
 		}
