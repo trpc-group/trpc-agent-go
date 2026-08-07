@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-08-07T17:30:00Z",
+  "timestamp": "2026-08-07T10:04:14Z",
   "mode": "fake_deterministic",
   "baseline_train_score": 0.5333333333333333,
   "baseline_val_score": 0.85,
@@ -75,19 +75,19 @@
       "val_score": 0.85,
       "gate_decision": {
         "accepted": false,
-        "gate_name": "MinValidationScoreGain",
-        "reason": "Validation score gain (+-0.1333) below required threshold (+0.1000)",
+        "gate_name": "HardFailGuard",
+        "reason": "Candidate introduced new hard fail on case 'val_opt_01'",
         "val_score_delta": -0.1333333333333333,
-        "new_hard_fails": 0,
+        "new_hard_fails": 1,
         "case_deltas": [
           {
             "case_id": "val_opt_01",
-            "baseline_score": 0.6,
+            "baseline_score": 1,
             "candidate_score": 0.6,
-            "score_delta": 0,
-            "baseline_pass": false,
+            "score_delta": -0.4,
+            "baseline_pass": true,
             "candidate_pass": false,
-            "transition": "unchanged"
+            "transition": "degraded"
           },
           {
             "case_id": "val_opt_02",
@@ -126,12 +126,12 @@
         "case_deltas": [
           {
             "case_id": "val_opt_01",
-            "baseline_score": 0.6,
+            "baseline_score": 1,
             "candidate_score": 1,
-            "score_delta": 0.4,
-            "baseline_pass": false,
+            "score_delta": 0,
+            "baseline_pass": true,
             "candidate_pass": true,
-            "transition": "improved"
+            "transition": "unchanged"
           },
           {
             "case_id": "val_opt_02",

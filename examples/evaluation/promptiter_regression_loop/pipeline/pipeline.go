@@ -1,3 +1,12 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2026 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
 // Package pipeline orchestrates the Evaluation + Optimization closed-loop workflow.
 package pipeline
 
@@ -5,6 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/examples/evaluation/promptiter_regression_loop/attribution"
 	"trpc.group/trpc-go/trpc-agent-go/examples/evaluation/promptiter_regression_loop/gates"
@@ -105,8 +115,9 @@ func (p *Pipeline) Run() (*reporter.AuditReport, error) {
 	}
 
 	// Round 2: Tool Description Optimization (Ineffective Gain)
+	// Compare candidate round 2 against previous accepted baseline (bestValScore = 0.9833)
 	r2Deltas := []gates.CaseDelta{
-		{CaseID: "val_opt_01", BaselineScore: 0.6, CandidateScore: 0.6, ScoreDelta: 0.0, BaselinePass: false, CandidatePass: false, Transition: "unchanged"},
+		{CaseID: "val_opt_01", BaselineScore: 1.0, CandidateScore: 0.6, ScoreDelta: -0.4, BaselinePass: true, CandidatePass: false, Transition: "degraded"},
 		{CaseID: "val_opt_02", BaselineScore: 0.95, CandidateScore: 0.95, ScoreDelta: 0.0, BaselinePass: true, CandidatePass: true, Transition: "unchanged"},
 		{CaseID: "val_opt_03", BaselineScore: 1.0, CandidateScore: 1.0, ScoreDelta: 0.0, BaselinePass: true, CandidatePass: true, Transition: "unchanged"},
 	}
@@ -124,8 +135,9 @@ func (p *Pipeline) Run() (*reporter.AuditReport, error) {
 	})
 
 	// Round 3: Router Prompt Optimization (Overfitting Trap - Val Degrades)
+	// Compare candidate round 3 against previous accepted baseline (bestValScore = 0.9833)
 	r3Deltas := []gates.CaseDelta{
-		{CaseID: "val_opt_01", BaselineScore: 0.6, CandidateScore: 1.0, ScoreDelta: 0.4, BaselinePass: false, CandidatePass: true, Transition: "improved"},
+		{CaseID: "val_opt_01", BaselineScore: 1.0, CandidateScore: 1.0, ScoreDelta: 0.0, BaselinePass: true, CandidatePass: true, Transition: "unchanged"},
 		{CaseID: "val_opt_02", BaselineScore: 0.95, CandidateScore: 0.0, ScoreDelta: -0.95, BaselinePass: true, CandidatePass: false, Transition: "new_hard_fail"},
 		{CaseID: "val_opt_03", BaselineScore: 1.0, CandidateScore: 1.0, ScoreDelta: 0.0, BaselinePass: true, CandidatePass: true, Transition: "unchanged"},
 	}
@@ -153,7 +165,7 @@ func (p *Pipeline) Run() (*reporter.AuditReport, error) {
 	}
 
 	report := reporter.AuditReport{
-		Timestamp:           "2026-08-07T17:30:00Z",
+		Timestamp:           time.Now().UTC().Format(time.RFC3339),
 		Mode:                p.cfg.Mode,
 		BaselineTrainScore:  baselineTrainScore,
 		BaselineValScore:    baselineValScore,

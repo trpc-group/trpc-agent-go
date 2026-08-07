@@ -15,7 +15,7 @@ Candidate Round 1 (system_prompt patch) passed all acceptance gates with validat
 | Round | Target Surface | Val Score | Score Delta | Gate Decision | Reason |
 |-------|----------------|-----------|-------------|---------------|--------|
 | 1 | `system_prompt` | `0.9833` | `+0.1333` | ✅ ACCEPTED | Candidate passed all gates with validation score gain +0.1333 |
-| 2 | `tool_desc_calc` | `0.8500` | `-0.1333` | ❌ REJECTED | Validation score gain (+-0.1333) below required threshold (+0.1000) |
+| 2 | `tool_desc_calc` | `0.8500` | `-0.1333` | ❌ REJECTED | Candidate introduced new hard fail on case 'val_opt_01' |
 | 3 | `router_prompt` | `0.6667` | `-0.3167` | ❌ REJECTED | Candidate introduced new hard fail on case 'val_opt_02' |
 
 ## Failure Attribution Summary
