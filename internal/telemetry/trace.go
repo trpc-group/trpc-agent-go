@@ -679,8 +679,10 @@ func buildResponseAttributes(rsp *model.Response, errorTypeFallback string) []at
 		attrs = append(attrs,
 			attribute.Int(semconvtrace.KeyGenAIUsageInputTokens, rsp.Usage.PromptTokens),
 			attribute.Int(semconvtrace.KeyGenAIUsageOutputTokens, rsp.Usage.CompletionTokens),
-			attribute.Int(semconvtrace.KeyGenAIUsageTotalTokens, totalTokens(rsp.Usage.PromptTokens, rsp.Usage.CompletionTokens, rsp.Usage.TotalTokens)),
 		)
+		if rsp.Usage.TotalTokens != 0 {
+			attrs = append(attrs, attribute.Int(semconvtrace.KeyGenAIUsageTotalTokens, rsp.Usage.TotalTokens))
+		}
 		// Prompt cache tokens (if provided by the model provider)
 		if cached := rsp.Usage.PromptTokensDetails.CachedTokens; cached != 0 {
 			// OpenAI: cached_tokens
@@ -723,16 +725,6 @@ func buildResponseAttributes(rsp *model.Response, errorTypeFallback string) []at
 	})
 
 	return attrs
-}
-
-// totalTokens prefers the provider-reported total when present; otherwise it
-// falls back to prompt + completion so exporters always see a total alongside
-// input/output token counts.
-func totalTokens(promptTokens, completionTokens, reportedTotal int) int {
-	if reportedTotal != 0 {
-		return reportedTotal
-	}
-	return promptTokens + completionTokens
 }
 
 func responseErrorAttributes(respErr *model.ResponseError, fallback string) []attribute.KeyValue {

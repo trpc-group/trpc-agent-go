@@ -1026,7 +1026,7 @@ func TestBuildResponseAttributes(t *testing.T) {
 			},
 		},
 		{
-			name: "response with usage without total falls back to sum",
+			name: "response with usage without total omits total attribute",
 			rsp: &model.Response{
 				ID:    "resp2",
 				Model: "gpt-4",
@@ -1067,13 +1067,13 @@ func TestBuildResponseAttributes(t *testing.T) {
 
 				// Verify usage token attributes when provided
 				if tt.rsp.Usage != nil {
-					wantTotal := int64(tt.rsp.Usage.TotalTokens)
-					if wantTotal == 0 {
-						wantTotal = int64(tt.rsp.Usage.PromptTokens + tt.rsp.Usage.CompletionTokens)
-					}
 					require.True(t, hasAttr(attrs, semconvtrace.KeyGenAIUsageInputTokens, int64(tt.rsp.Usage.PromptTokens)))
 					require.True(t, hasAttr(attrs, semconvtrace.KeyGenAIUsageOutputTokens, int64(tt.rsp.Usage.CompletionTokens)))
-					require.True(t, hasAttr(attrs, semconvtrace.KeyGenAIUsageTotalTokens, wantTotal))
+					if tt.rsp.Usage.TotalTokens != 0 {
+						require.True(t, hasAttr(attrs, semconvtrace.KeyGenAIUsageTotalTokens, int64(tt.rsp.Usage.TotalTokens)))
+					} else {
+						require.False(t, hasAttrKey(attrs, semconvtrace.KeyGenAIUsageTotalTokens))
+					}
 					if tt.rsp.Usage.PromptTokensDetails.CachedTokens != 0 {
 						require.True(t, hasAttr(attrs, semconvtrace.KeyGenAIUsageInputTokensCached, int64(tt.rsp.Usage.PromptTokensDetails.CachedTokens)))
 					}
@@ -1299,13 +1299,6 @@ func TestBuildRequestAttributes_JSONMarshalPaths(t *testing.T) {
 	require.True(t, foundRequest)
 	require.True(t, foundLegacyMessages)
 	require.True(t, foundOTelMessages)
-}
-
-func TestTotalTokens(t *testing.T) {
-	require.Equal(t, 30, totalTokens(10, 20, 30))
-	require.Equal(t, 30, totalTokens(10, 20, 0))
-	require.Equal(t, 0, totalTokens(0, 0, 0))
-	require.Equal(t, 42, totalTokens(1, 2, 42))
 }
 
 func TestBuildResponseAttributes_JSONMarshalPaths(t *testing.T) {
