@@ -1,0 +1,201 @@
+# Replay Consistency
+
+Replay consistency tests verify that the same session, memory, summary, and track operations produce equivalent persisted results across backends. The current lightweight matrix only covers `InMemory` and `SQLite`, so it does not require external services and is suitable for local development and PR checks.
+
+Reusable case, runner, snapshot, normalization, comparison, and report-encoding logic lives in `session/replaytest`. `test/replay_consistency_test.go` retains only InMemory/SQLite wiring, concrete cases, fault injection, and assertions, so another backend can reuse the same execution and comparison logic without copying the e2e implementation.
+
+`replaytest.Run` requires a non-empty run namespace with no surrounding whitespace. All backends in one logical comparison must receive the same namespace, while every rerun of the same case must use a new namespace. The namespace and case name are embedded in the app, user, and session identities, isolating session state, memory, summaries, and tracks on persistent services. Before creating a session, `Run` preflights statically detectable fixture errors in the fixed order track, event, summary, direct state-map scope, sequential memory, then concurrent memory. `Case.AppState` and `Case.UserState` accept bare keys or one matching `app:`/`user:` prefix. Known cross-scope prefixes remain rejected as a harness policy for the InMemory/SQLite matrix; unknown prefixes are ordinary key text. `Case.SessionState` rejects only `app:` and `user:` and preserves unprefixed, `temp:`, and custom keys. Only one outer matching prefix is removed for App/User canonical comparison, so keys such as `app:app:flag` retain their extra prefix. Invalid track configuration, nil or non-normalizable events, invalid summary prefixes, invalid direct state scopes or canonical collisions, deleted/missing sequential memory aliases, live aliases rebound to another memory, and non-add concurrent memory operations therefore produce no backend calls or persisted session. Backend-dependent failures after that boundary may still leave partial replay data in place; callers that need cleanup own that lifecycle.
+
+## Running
+
+Run the targeted tests from the repository root:
+
+```bash
+cd test
+CGO_ENABLED=1 go test ./... -run ReplayConsistency -count=1
+```
+
+You can also run the whole e2e module:
+
+```bash
+cd test
+CGO_ENABLED=1 go test ./... -count=1
+```
+
+The SQLite backend uses `github.com/mattn/go-sqlite3`, so CGO and a C compiler are required.
+
+## Report
+
+The default report path is the repository root:
+
+```text
+session_memory_summary_track_diff_report.json
+```
+
+Override it with:
+
+```bash
+CGO_ENABLED=1 TRPC_AGENT_REPLAY_REPORT_PATH=replay-report.json go test ./... -run ReplayConsistency -count=1
+```
+
+A healthy matrix should write:
+
+```json
+[]
+```
+
+Each diff report entry contains:
+
+```json
+{
+  "case": "case_name",
+  "session_id": "session-7-run_123-case_name",
+  "backend_a": "in_memory",
+  "backend_b": "sqlite",
+  "section": "summary",
+  "path": "$.summary[\"root/tools/weather\"].summary",
+  "left": "left value",
+  "right": "right value",
+  "allowed": false,
+  "reason": "",
+  "context": {
+    "summary_filter_key": "root/tools/weather"
+  }
+}
+```
+
+When a map key or list index exists on only one side, the missing side remains
+`null` and the report adds `left_missing: true` or `right_missing: true` at the
+diff-entry level. An omitted missing flag means that side is present, even when
+its value is JSON `null`. For example, a missing left value compared with the
+valid user value `{"replay":"missing"}` is encoded as:
+
+```json
+{
+  "left": null,
+  "right": {"replay": "missing"},
+  "left_missing": true
+}
+```
+
+The library never marks both sides missing. These flags do not apply to a nil
+snapshot section: section-level nil remains a present `null` value and still
+differs from an empty map or list without a missing flag. Older reports remain
+valid JSON, but the ambiguity of their former `{"replay":"missing"}` sentinel
+cannot be reconstructed after the fact.
+
+The `context` object carries section-specific location data such as `event_index`, `summary_filter_key`, `memory_key`, `left_memory_id`, `right_memory_id`, `track_name`, and `track_event_index`.
+
+## Compared Data
+
+Snapshots include these sections:
+
+- `session`: session ID, app, and user ID
+- `events`: messages, tool calls, tool responses, caller-supplied event timestamp, branch, filter key, tag, state delta, extensions, and actions
+- `state`: visible merged session/app/user/temp state, represented as tagged exact byte values so nil, JSON text, UTF-8 text, and binary bytes remain distinct
+- `memory`: content, topics, and metadata; raw memory IDs are only used for report context
+- `summary`: `Session.Summaries[filterKey]`, summary text, topics, boundary metadata, and `GetSessionSummaryText`
+- `tracks`: the track map key, outer `TrackEvents.Track`, each embedded `TrackEvent.Track`, event order, payload, and timestamp
+
+Only the regenerated top-level `Event.ID` and backend-generated memory IDs are omitted during normalization. Caller-supplied `Event.Timestamp` values are retained as UTC `RFC3339Nano` strings, and non-nil `Response.ID`, flattened `Response.Created`, and `Response.Timestamp` (under `response.timestamp`, also UTC `RFC3339Nano`) remain observable. A nil Response is kept distinct from a non-nil Response whose metadata is empty or zero-valued. Structured Event fields and Track payloads use `json.Decoder.UseNumber` during semantic JSON normalization so large integers remain precise. StateMap values are excluded from semantic JSON normalization and preserve their original bytes. Business-field differences are not allowed by default.
+
+`Compare` and `CompareSnapshots` return an error instead of panicking when a caller-constructed snapshot contains a channel, function, NaN, or another value that cannot be converted to the canonical JSON comparison representation. Sections are converted in snapshot order, left before right, and comparison stops at the first error. A failed comparison returns no partial diffs and cannot be accepted by an `allowed_diff` rule.
+
+StateMap values are opaque bytes and are compared exactly. `StateBytesSnapshot` uses `nil`, `json`, `utf8`, and `base64` kinds. A valid UTF-8 JSON value is tagged `json`, but its `value` is the original text, including object-key order, whitespace, numeric spelling, and escapes; other valid UTF-8 text is stored unchanged, and invalid UTF-8 is base64 encoded. Nil, empty bytes, and whitespace-only bytes therefore remain distinct as `nil`, `utf8` with `""`, and `utf8` with the original whitespace. Exact large-number handling is a natural consequence of retaining the text. `Event.StateDelta` uses this same byte contract even though the other structured Event fields use semantic JSON normalization.
+
+Track payload fixtures accept the complete JSON value domain: objects, arrays, strings, numbers, booleans, and null. Persisted `json.RawMessage` values use a tagged snapshot with `nil`, `empty`, `json`, `utf8`, or `base64` kind. Valid JSON is canonicalized inside `payload.value`, while raw nil, empty bytes, JSON null, invalid UTF-8 text, and binary bytes remain distinguishable.
+
+Each memory query declares `ExpectedContents`. Every result must carry the same `AppName` and `UserID` as the query user key; an ownership mismatch is a runner error and cannot be accepted with `allowed_diff`. After ownership validation, search results are compared as an exact unordered content multiset, so backend-specific IDs, scores, and ranking are ignored while missing, unrelated, extra, and duplicate results remain observable.
+
+Memory operation aliases follow canonical memory identity rather than content alone. Add aliases include app, user, content, kind, event time, participants, and location while intentionally excluding topics. Equal identities share one alias group, including idempotent Adds; an Add without `ResultAlias` still registers its active identity for preflight collision checks. A live alias may be reused only for the same group and cannot be rebound to another live memory. Such a fixture fails before any backend call and leaves both groups unchanged; a live identity remains registered independently of how many aliases refer to it. Deleting one alias invalidates every alias in that group; later references return `memory alias "name" refers to deleted memory` before a backend call. A later Add may explicitly rebind a dead alias without reviving its former sibling aliases. An update always advances the whole group to the effective ID returned by the backend, so a later update or delete does not reuse an ID that was rotated after content or identity metadata changed. If the destination identity belongs to another live group, the runner returns an identity-collision error and never merges the groups.
+
+Fixture event preflight and final snapshot construction share the same marshal-and-decode normalization. Preflight rejects malformed caller events before persistence, while final snapshot construction retains the same validation to detect events corrupted by a backend or fault injection after execution. Snapshot construction also returns an error when a memory entry is nil, an entry has a nil `Memory` payload, a summary map entry has a nil value, or a track map entry has a nil `TrackEvents` container. These conditions are never discarded during normalization and cannot be accepted with `allowed_diff`. A non-nil empty track container remains valid. `BuildSnapshot` also validates and normalizes supplied memories when the session is nil, so the empty-session form cannot hide valid or malformed memory data.
+
+Cases with a non-empty `Case.InitialState` or direct `Case.AppState`, `Case.UserState`, or `Case.SessionState` updates validate the independently defined scopes as a backend contract. Scope comes from the case field and the dedicated service method, not from guessing a bare key. `InitialState` belongs only to the primary session and is never included in expected app/user state. Before persistence, the harness rejects only known cross-scope prefixes: `AppState` allows bare/`app:`, `UserState` allows bare/`user:`, and `SessionState` rejects `app:`/`user:` while retaining `temp:`. Unknown prefixes remain ordinary key text. The raw accepted maps are passed to the backend so both bare and prefixed API inputs are exercised; prepared expectations remove one matching App/User prefix, and backend `List*States` results are copied in their already-stored representation without a second strip. Canonical collisions such as `flag` plus `app:flag` are reported with the canonical key and sorted source keys before any backend call. Only a case with empty `InitialState`, `AppState`, `UserState`, and `SessionState` skips ListApp/ListUser and peer-scope validation; `Event.StateDelta` alone does not enable it. The runner compares the direct app/user updates with `ListAppStates` / `ListUserStates`, then creates a temporary peer session under the same app/user and requires it to inherit only those app/user values, never the primary session's InitialState. Expected and observed app, user, and peer values use the same exact-byte StateMap comparison. Peer deletion is attempted after every creation attempt, including ambiguous fail-after-write errors, using a bounded context detached from caller cancellation. Byte drift, missing propagation, leaked session/temp/initial state, and cleanup failures are runner errors; they are not snapshot differences and cannot be accepted with `allowed_diff`.
+
+`Event.StateDelta` is always passed unchanged to `SessionService.AppendEvent` as a session-local map. The replay runner never routes `app:`, `user:`, `temp:`, or bare keys to an independent store and never infers scope from a key prefix. In the current supported InMemory/SQLite matrix, event deltas remain session-local; real matrix coverage exercises multiple key forms and overwrite order, checks that the independent app/user stores remain unchanged, and compares the resulting snapshots. MongoDB is not part of this matrix or this contract. Supporting independent-scope routing in the future requires explicit capability/scope metadata and validation through a real backend matrix; this iteration does not implement it.
+
+## Summary And Track Strategy
+
+The Go version uses native session summary semantics. It does not create Python-style summary events and does not compare historical summary events.
+
+Each `SummaryStep` may set `EventPrefix` to the number of leading case events that must be appended before that summary runs. Before persistence, the runner resolves the complete prefix sequence: prefixes must stay within the event list and be monotonically non-decreasing, equal prefixes are allowed, and nil means all events. Timeline execution only consumes these validated targets. This allows a case to append events, summarize, append more events, and verify that the stored boundary advances without discovering a later fixture error after earlier steps have already been stored.
+
+`Backend.CreateSummary`, when provided, owns the complete per-step operation: fixture-specific summary preparation and summary persistence. The callback must be safe for concurrent `Run` calls that share a backend. When it is nil, the runner calls `SessionService.CreateSessionSummary` directly.
+
+Summary comparison covers:
+
+- full summary: `session.SummaryFilterKeyAllContents`
+- filter-key summaries such as `root/tools/weather`
+- summary overwrite/update
+- `SummaryBoundary` version, filter key, cutoff, and normalized last-event anchor
+- `GetSessionSummaryText` results
+
+A non-empty summary boundary anchor that cannot be mapped to the current snapshot events is reported as `last_event_index: -1`.
+
+Track comparison covers:
+
+- track map-key name
+- outer `TrackEvents.Track` container identity
+- each `TrackEvent.Track` value
+- event order within each track
+- tagged payload representation, with canonical JSON under `payload.value`
+- fixed timestamp
+
+Note that `AppendTrackEvent` maintains `state["tracks"]`. When debugging track diffs, also check the track index in the state section.
+
+## Anomaly Detection
+
+The test harness includes five kinds of anomaly injection:
+
+- snapshot mutation: partial event loss, event timestamp drift, summary loss, wrong session attribution, wrong summary filter key, large JSON-number drift, state byte representation drift, track payload drift, embedded track drift, outer track-container drift, and track order drift
+- service-contract mutation: a stale summary boundary after interleaved event appends, an incorrect outer track identity, and JSON null restored as a nil raw payload
+- in-execution retry: fail-before-write must converge to the single-success baseline when retried with identical input; ambiguous fail-after-write verifies idempotent Memory Add, state update, and summary overwrite results
+- SQLite/public API injection: state pollution, memory pollution, and summary overwrite
+- SQLite/storage injection: a duplicate memory row that simulates storage corruption and verifies that it is reported as an unallowed memory diff
+
+Injected anomalies must produce unallowed diffs by default. The normal replay matrix must have zero false positives.
+
+`AppendEvent` currently does not deduplicate by event ID. The retry test therefore models a successful first write whose response fails, retries the identical event, and requires the shifted event at index 1 and the extra tail event at index 2 to be reported as unallowed diffs. This validates harness diagnostics without changing runtime Session idempotency semantics.
+
+## allowed_diff
+
+`allowed_diff` is only for explicitly recorded known acceptable differences. Business-field differences are not allowed by default.
+
+Example:
+
+```json
+{
+  "section": "memory",
+  "path": "$.memory[*].content",
+  "backend_a": "in_memory",
+  "backend_b": "sqlite",
+  "reason": "known backend-specific normalization gap"
+}
+```
+
+Rules:
+
+- `section` is required and cannot be empty or `*`
+- `path` is required, must start at the declared section root, and must contain a concrete field, quoted key, or fixed index below that root
+- global-root patterns such as `$`, `$*`, `$.*`, and `$[*]`, pure wildcards such as `*`, `**`, and `***`, and section-root patterns such as `$.memory`, `$.memory*`, `$.memory.*`, and `$.memory[*]` are rejected
+- a quoted key contributes specificity only when its decoded value contains a non-`*` literal; quoted `"*"`, `"**"`, and escaped equivalents such as `"\u002a"` are pure wildcards and do not make a rule concrete
+- `backend_a` and `backend_b` are required and cannot be empty or `*`
+- `reason` is required and cannot be blank
+- backend pairs match in either order
+- `path` supports partial globs such as `$.memory[*].content`
+
+ID and timestamp differences should be fixed through normalization or runner changes, not allowed with `allowed_diff`.
+
+## Extending Backends
+
+The current runnable matrix only includes `InMemory` and `SQLite`. External backends such as Redis, PostgreSQL, MySQL, and ClickHouse are deferred and unsupported in the lightweight matrix. Future integrations should use an env-gated backend factory so default tests do not depend on external services.
+
+When adding a backend:
+
+- keep default local tests free of external-service dependencies
+- give the backend a non-empty name with no surrounding whitespace; the name is the report and `allowed_diff` identity
+- provide `Backend.ReadAllMemories`; alias resolution and final snapshots share this callback, and it must return `complete=true` only after backend-specific pagination, total-count validation, or a documented unbounded read proves that every memory was returned
+- normalize backend-generated IDs and response timing metadata while preserving caller-supplied event timestamps
+- preserve summary and track semantics across backends
+- prove new backend differences are precisely locatable through anomaly tests before considering `allowed_diff`
