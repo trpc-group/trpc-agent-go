@@ -669,6 +669,89 @@ If another plugin depends on the final `ToolCall.ID` in `AfterModel`,
 For a complete runnable example, see
 [examples/toolcallid](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/toolcallid).
 
+### ToolError
+
+`toolerror.New(opts...)` from `plugin/toolerror` validates model-produced tool
+arguments and turns recoverable tool call failures into a stable JSON tool
+result. The plugin is opt-in and does not change Runner behavior unless it is
+registered.
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/plugin/toolerror"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+)
+
+runnerInstance := runner.NewRunner(
+	"my-app",
+	agentInstance,
+	runner.WithPlugins(toolerror.New()),
+)
+defer runnerInstance.Close()
+```
+
+The plugin validates `Declaration.InputSchema` in `BeforeTool`, after optional
+tool argument JSON repair has run. Invalid JSON and schema constraints such as
+`required`, `type`, `enum`, `pattern`, and `additionalProperties` short-circuit
+the call, so the tool is not executed. Non-nil errors returned by a tool are
+classified in `AfterTool`. Framework-generated unknown-tool responses are
+normalized before their tool result event is emitted. Failure envelopes bypass
+the tool's configured result formatter, because they replace the tool's
+declared output rather than represent a successful value of that output type.
+They also skip the tool's state-delta provider, so rejected or failed calls do
+not persist state as if the tool had succeeded.
+
+Handled failures use this envelope while successful tool results remain
+unchanged:
+
+```json
+{
+  "ok": false,
+  "error": {
+    "source": "model",
+    "kind": "invalid_arguments",
+    "code": "required",
+    "message": "at '': missing property 'query'",
+    "param": "/query",
+    "retryable": true
+  }
+}
+```
+
+`error.source` distinguishes `model`, `tool`, and `framework` failures.
+`error.kind` is the stable high-level category; `error.code` provides the more
+specific reason and uses snake_case for JSON Schema keywords. `error.param`,
+when present, is a JSON Pointer into the tool arguments. Each failure remains
+the result of its own tool call, which preserves partial success when several
+tools run in parallel instead of promoting one failure to the run-level
+`Response.Error`.
+
+The default execution classifier handles non-nil Go errors. A tool that encodes
+a code through `ErrorCode()` or `Code()` keeps that code in the envelope. A tool
+that encodes a business failure in its result while returning a nil error must
+either return a typed non-nil error instead or provide a resolver:
+
+```go
+normalizer := toolerror.New(toolerror.WithResolver(func(
+	_ context.Context,
+	args *tool.AfterToolArgs,
+) (toolerror.Details, bool) {
+	result, ok := args.Result.(SearchResult)
+	if !ok || result.Status != "error" {
+		return toolerror.Details{}, false
+	}
+	return toolerror.Details{
+		Source:  toolerror.SourceTool,
+		Kind:    toolerror.KindExecution,
+		Code:    result.Code,
+		Message: result.Message,
+	}, true
+}))
+```
+
+Register this plugin before another plugin that rewrites model-facing tool
+result messages, so the later plugin receives the normalized envelope.
+
 ### MessageMerger
 
 `messagemerger.New(opts...)` from `plugin/messagemerger` merges consecutive `system`, `user`, and `assistant` messages before every model request. This is useful when a third-party backend requires a strict alternating chat transcript and rejects adjacent same-role messages such as `user,user` or `assistant,assistant`.
@@ -1051,10 +1134,10 @@ The example includes verified scenarios for:
 - A defensive analysis request that is allowed
 
 The repository currently includes Logging, DebugLog, GlobalInstruction,
-ToolCallID, MessageMerger, ErrorMessage, and Guardrail as built-in plugins.
-Tool Approval, Prompt Injection, and Unsafe Intent are currently built-in
-capabilities under the Guardrail plugin. Additional plugins can be implemented
-as custom plugins.
+ToolCallID, ToolError, MessageMerger, ErrorMessage, and Guardrail as built-in
+plugins. Tool Approval, Prompt Injection, and Unsafe Intent are currently
+built-in capabilities under the Guardrail plugin. Additional plugins can be
+implemented as custom plugins.
 
 ## Writing Your Own Plugin
 

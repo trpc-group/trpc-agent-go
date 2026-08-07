@@ -3266,6 +3266,9 @@ func (p *FunctionCallResponseProcessor) runBeforeToolPluginCallbacks(
 		ctx = result.Context
 	}
 	if result != nil && result.CustomResult != nil {
+		if result.SkipStateDelta {
+			ctx = withSkippedToolStateDelta(ctx)
+		}
 		return ctx, toolCall, result.CustomResult, nil
 	}
 	if result != nil && result.ModifiedArguments != nil {
@@ -3305,6 +3308,9 @@ func (p *FunctionCallResponseProcessor) runBeforeToolCallbacks(
 		ctx = result.Context
 	}
 	if result != nil && result.CustomResult != nil {
+		if result.SkipStateDelta {
+			ctx = withSkippedToolStateDelta(ctx)
+		}
 		return ctx, toolCall, result.CustomResult, nil
 	}
 	if result != nil && result.ModifiedArguments != nil {
@@ -3356,6 +3362,15 @@ func (p *FunctionCallResponseProcessor) runAfterToolPluginCallbacks(
 	skipSummarization := afterResult != nil &&
 		afterResult.SkipSummarization
 	if afterResult != nil && afterResult.CustomResult != nil {
+		if afterResult.SkipResultFormatter {
+			ctx = withUndeclaredToolResult(
+				ctx,
+				undeclaredReasonAfterToolFormatterBypass,
+			)
+		}
+		if afterResult.SkipStateDelta {
+			ctx = withSkippedToolStateDelta(ctx)
+		}
 		return ctx, afterResult.CustomResult, true, skipSummarization, nil
 	}
 	return ctx, toolResult, false, skipSummarization, nil
@@ -3399,6 +3414,15 @@ func (p *FunctionCallResponseProcessor) runAfterToolCallbacks(
 	skipSummarization := afterResult != nil &&
 		afterResult.SkipSummarization
 	if afterResult != nil && afterResult.CustomResult != nil {
+		if afterResult.SkipResultFormatter {
+			ctx = withUndeclaredToolResult(
+				ctx,
+				undeclaredReasonAfterToolFormatterBypass,
+			)
+		}
+		if afterResult.SkipStateDelta {
+			ctx = withSkippedToolStateDelta(ctx)
+		}
 		toolResult = afterResult.CustomResult
 	}
 	return ctx, toolResult, skipSummarization, nil
@@ -3966,6 +3990,10 @@ const (
 	// callback or plugin substituted for the call. The tool never ran, so
 	// the value is whatever the callback layer chose to report.
 	undeclaredReasonBeforeToolShortCircuit
+	// undeclaredReasonAfterToolFormatterBypass marks a result an after-tool
+	// callback or plugin explicitly requested to serialize without the tool's
+	// configured result formatter.
+	undeclaredReasonAfterToolFormatterBypass
 )
 
 // withUndeclaredToolResult records why the final result of the tool call in

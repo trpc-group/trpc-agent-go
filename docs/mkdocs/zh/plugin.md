@@ -677,6 +677,81 @@ defer runnerInstance.Close()
 
 完整示例见 [examples/toolcallid](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/toolcallid)。
 
+### ToolError（工具错误标准化）
+
+`plugin/toolerror` 下的 `toolerror.New(opts...)` 会校验模型生成的工具参数，并把可恢复的
+工具调用失败转换成稳定的 JSON 工具结果。该插件默认不启用，只有通过 Runner 显式注册
+后才会改变工具调用行为。
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/plugin/toolerror"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+)
+
+runnerInstance := runner.NewRunner(
+	"my-app",
+	agentInstance,
+	runner.WithPlugins(toolerror.New()),
+)
+defer runnerInstance.Close()
+```
+
+插件通过 `BeforeTool` 校验 `Declaration.InputSchema`；如果当前 Invocation 开启了工具参数
+JSON repair，校验发生在 repair 之后。无效 JSON，以及 `required`、`type`、`enum`、
+`pattern`、`additionalProperties` 等 Schema 约束失败会直接短路调用，不再执行工具。
+工具返回的非 `nil error` 会在 `AfterTool` 中分类；框架生成的未知工具名消息则会在工具
+结果事件发出前完成标准化。错误 envelope 会跳过工具配置的 result formatter，因为它
+替换的是工具声明的成功输出，而不是该输出类型的一个成功值。错误 envelope 也会跳过
+工具的 state-delta provider，避免把被拒绝或执行失败的调用按成功结果持久化。
+
+插件处理的失败采用以下 envelope；成功的工具结果保持原样：
+
+```json
+{
+  "ok": false,
+  "error": {
+    "source": "model",
+    "kind": "invalid_arguments",
+    "code": "required",
+    "message": "at '': missing property 'query'",
+    "param": "/query",
+    "retryable": true
+  }
+}
+```
+
+`error.source` 用于区分 `model`、`tool` 和 `framework`；`error.kind` 是稳定的一级分类，
+`error.code` 是更具体的原因，JSON Schema 关键字统一使用 snake_case；`error.param`
+如果存在，使用 JSON Pointer 指向出错参数。每个失败仍作为对应 Tool Call 自己的结果
+返回，不会上升为整轮 Run 的 `Response.Error`，因此并行调用时可以保留其他工具的成功
+结果。
+
+默认执行错误分类器只处理非 `nil` 的 Go error。error 通过 `ErrorCode()` 或 `Code()`
+携带的错误码会保留在 envelope 中。如果一个工具通过普通 result 表达业务失败、同时
+返回 `nil error`，应优先让工具返回 typed error，或者配置 Resolver：
+
+```go
+normalizer := toolerror.New(toolerror.WithResolver(func(
+	_ context.Context,
+	args *tool.AfterToolArgs,
+) (toolerror.Details, bool) {
+	result, ok := args.Result.(SearchResult)
+	if !ok || result.Status != "error" {
+		return toolerror.Details{}, false
+	}
+	return toolerror.Details{
+		Source:  toolerror.SourceTool,
+		Kind:    toolerror.KindExecution,
+		Code:    result.Code,
+		Message: result.Message,
+	}, true
+}))
+```
+
+如果还有其他插件会改写模型可见的工具结果消息，请把 ToolError 插件注册在前面，让后续
+插件读取已经标准化的 envelope。
+
 ### Guardrail（护栏）
 
 `plugin/guardrail` 下的 `guardrail.New(...)` 是顶层插件入口，用来把一个或多个护栏能力接到 Runner 上。
@@ -1024,7 +1099,7 @@ FinishReason：
 
 完整示例见 [examples/plugin/errormessage](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/plugin/errormessage)。
 
-说明：目前仓库内置了 Logging、DebugLog、GlobalInstruction、ToolCallID、MessageMerger、ErrorMessage、Guardrail 七类插件。其中 Guardrail 插件当前提供的内置 capability 包括工具审批、Prompt Injection 和 Unsafe Intent。更多插件可通过自定义插件实现。
+说明：目前仓库内置了 Logging、DebugLog、GlobalInstruction、ToolCallID、ToolError、MessageMerger、ErrorMessage、Guardrail 八类插件。其中 Guardrail 插件当前提供的内置 capability 包括工具审批、Prompt Injection 和 Unsafe Intent。更多插件可通过自定义插件实现。
 
 ## 如何扩展：写一个自己的插件
 

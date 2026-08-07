@@ -292,6 +292,55 @@ func TestExecuteToolCall_ResultFormatterUsesAfterToolResult(t *testing.T) {
 	assert.Equal(t, 1, toolCalls)
 }
 
+func TestExecuteToolCall_AfterToolResultCanSkipResultFormatter(t *testing.T) {
+	var formatterCalls atomic.Int32
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterAfterTool(func(
+		context.Context,
+		*tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		return &tool.AfterToolResult{
+			CustomResult: map[string]any{
+				"ok": false,
+				"error": map[string]any{
+					"code": "execution",
+				},
+			},
+			SkipResultFormatter: true,
+		}, nil
+	})
+	ft := function.NewFunctionTool(
+		func(context.Context, struct{}) (resultFormatTestResult, error) {
+			return resultFormatTestResult{Output: "original"}, nil
+		},
+		function.WithName("bash"),
+		function.WithResultFormatter(
+			resultformat.FormatterFunc[resultFormatTestResult](func(
+				context.Context,
+				resultFormatTestResult,
+			) (string, error) {
+				formatterCalls.Add(1)
+				return "unexpected", nil
+			}),
+		),
+	)
+
+	choices := requireResultFormatToolCall(
+		t,
+		NewFunctionCallResponseProcessor(false, callbacks),
+		"bash",
+		ft,
+	)
+
+	require.Len(t, choices, 1)
+	assert.JSONEq(
+		t,
+		`{"ok":false,"error":{"code":"execution"}}`,
+		choices[0].Message.Content,
+	)
+	assert.Zero(t, formatterCalls.Load())
+}
+
 func TestExecuteToolCall_ToolResultMessagesOverridesFormattedDefault(t *testing.T) {
 	result := resultFormatTestResult{ExitCode: 0, Output: "formatted"}
 	var callbackResult any
@@ -974,6 +1023,90 @@ func (t *statefulFunctionTool[I, O]) StateDelta(
 	t.stateDeltaCalls++
 	t.stateContent = append([]byte(nil), content...)
 	return map[string][]byte{"state": []byte("updated")}
+}
+
+func TestExecuteToolCall_CustomResultCanSkipStateDelta(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		configure func(*tool.Callbacks)
+		wantCalls int32
+	}{
+		{
+			name: "before tool",
+			configure: func(callbacks *tool.Callbacks) {
+				callbacks.RegisterBeforeTool(func(
+					context.Context,
+					*tool.BeforeToolArgs,
+				) (*tool.BeforeToolResult, error) {
+					return &tool.BeforeToolResult{
+						CustomResult:   map[string]bool{"ok": false},
+						SkipStateDelta: true,
+					}, nil
+				})
+			},
+		},
+		{
+			name: "after tool",
+			configure: func(callbacks *tool.Callbacks) {
+				callbacks.RegisterAfterTool(func(
+					context.Context,
+					*tool.AfterToolArgs,
+				) (*tool.AfterToolResult, error) {
+					return &tool.AfterToolResult{
+						CustomResult:   map[string]bool{"ok": false},
+						SkipStateDelta: true,
+					}, nil
+				})
+			},
+			wantCalls: 1,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var toolCalls atomic.Int32
+			stateful := &statefulFunctionTool[struct{}, resultFormatTestResult]{
+				FunctionTool: function.NewFunctionTool(
+					func(context.Context, struct{}) (resultFormatTestResult, error) {
+						toolCalls.Add(1)
+						return resultFormatTestResult{Output: "result"}, nil
+					},
+					function.WithName("stateful"),
+				),
+			}
+			callbacks := tool.NewCallbacks()
+			test.configure(callbacks)
+
+			evt, err := NewFunctionCallResponseProcessor(
+				false,
+				callbacks,
+			).executeSingleToolCallSequential(
+				context.Background(),
+				&agent.Invocation{
+					AgentName: "agent",
+					Model:     &mockModel{},
+					Session:   &session.Session{},
+				},
+				&model.Response{},
+				map[string]tool.Tool{"stateful": stateful},
+				make(chan *event.Event, 32),
+				0,
+				model.ToolCall{
+					ID: "call-1",
+					Function: model.FunctionDefinitionParam{
+						Name:      "stateful",
+						Arguments: []byte(`{}`),
+					},
+				},
+			)
+
+			require.NoError(t, err)
+			require.NotNil(t, evt)
+			require.Len(t, evt.Choices, 1)
+			assert.JSONEq(t, `{"ok":false}`, evt.Choices[0].Message.Content)
+			assert.Equal(t, test.wantCalls, toolCalls.Load())
+			assert.Zero(t, stateful.stateDeltaCalls)
+			assert.Empty(t, evt.StateDelta)
+		})
+	}
 }
 
 type mutableResult struct {
