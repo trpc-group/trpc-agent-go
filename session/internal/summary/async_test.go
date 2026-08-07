@@ -457,7 +457,7 @@ func TestAsyncSummaryWorker_EnqueueJob(t *testing.T) {
 		require.NoError(t, err) // Should fallback to sync, not error
 	})
 
-	t.Run("fallback strips parent cancel and deadline", func(t *testing.T) {
+	t.Run("fallback detaches parent cancel and applies job timeout", func(t *testing.T) {
 		type traceKey string
 		const key traceKey = "trace-marker"
 
@@ -499,9 +499,30 @@ func TestAsyncSummaryWorker_EnqueueJob(t *testing.T) {
 		err := worker.EnqueueJob(parentCtx, sess, "", false)
 		require.NoError(t, err)
 		assert.Equal(t, "trace-value", captured)
-		assert.False(t, deadlineSet)
-		assert.True(t, doneNil)
+		assert.True(t, deadlineSet)
+		assert.False(t, doneNil)
 		assert.NoError(t, ctxErr)
+	})
+
+	t.Run("synchronous fallback honors summary job timeout", func(t *testing.T) {
+		summarizer := &mockSummarizer{shouldSummarize: true, summaryText: "test"}
+		config := AsyncSummaryConfig{
+			Summarizer:        summarizer,
+			SummaryJobTimeout: 10 * time.Millisecond,
+			CreateSummaryFunc: func(ctx context.Context, _ *session.Session, _ string, _ bool) error {
+				<-ctx.Done()
+				return ctx.Err()
+			},
+		}
+		worker := NewAsyncSummaryWorker(config)
+		sess := &session.Session{
+			ID:      "test-session",
+			AppName: "test-app",
+			UserID:  "test-user",
+		}
+
+		err := worker.EnqueueJob(context.Background(), sess, "", false)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
 	})
 
 	t.Run("enqueue with filter key", func(t *testing.T) {
