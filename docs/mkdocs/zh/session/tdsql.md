@@ -66,6 +66,15 @@ Session 的所有读写路径天然携带 `user_id`，因此直接使用 `user_i
 
 `app_states` 是应用级配置数据，数据量小、写入频率低，使用广播表可在任意节点本地读取，无需跨分片查询。
 
+## 替换最新一轮
+
+TDSQL 模式支持与 MySQL 相同的 `Runner.Run` latest-turn replacement 能力。Revision
+metadata 与废弃投影使用分片的 `session_revisions` 和
+`session_revision_archives` 表，并继续以 `user_id` 作为 shardkey。使用
+`WithSkipDBInit(true)` 的部署必须先按
+[`session/mysql/schema_tdsql.sql`](https://github.com/trpc-group/trpc-agent-go/blob/main/session/mysql/schema_tdsql.sql)
+完成建表。API 与行为约定见[替换最新一轮](index.md#replace-latest-turn)。
+
 ## 表结构
 
 - **TDSQL schema**：[`session/mysql/schema_tdsql.sql`](https://github.com/trpc-group/trpc-agent-go/blob/main/session/mysql/schema_tdsql.sql)

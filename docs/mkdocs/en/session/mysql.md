@@ -176,6 +176,21 @@ sessionService, err := mysql.NewService(
 )
 ```
 
+## Latest-turn Replacement
+
+MySQL supports editing and resending the latest persisted turn through
+`Runner.Run` and `agent.WithLatestTurnReplacement`. The transition drains
+asynchronous event and Track writes, then restores events, session state,
+summaries, and Tracks in one database transaction.
+
+`NewService` creates the prefixed `session_revisions` and
+`session_revision_archives` tables automatically. Deployments using
+`WithSkipDBInit(true)` must provision both tables from
+[`session/mysql/schema.sql`](https://github.com/trpc-group/trpc-agent-go/blob/main/session/mysql/schema.sql).
+Revision rows retain the source Session's expiration time and are removed with
+the Session. See [Replacing the Latest Turn](index.md#replacing-the-latest-turn)
+for the Runner API and rollback boundaries.
+
 ## Storage Structure
 
 MySQL uses the following table structure (`{{PREFIX}}` represents the table prefix):

@@ -243,6 +243,14 @@ events, err := r.Run(
         "request-after-edit",
     ),
 )
+if err != nil {
+    return err
+}
+for event := range events {
+    if event.Error != nil {
+        return event.Error
+    }
+}
 ```
 
 Consume `events` exactly as for an ordinary run. The replacement option supplies
@@ -287,12 +295,12 @@ Safety rules:
 The capability does not add a method to `session.Service` or a second
 application entry point. Custom storage implementations can opt in through the
 `session.LatestTurnReplacer` SPI; applications continue to call `Runner.Run`.
-Memory, SQLite, Redis HashIdx/ZSet, PostgreSQL, PGVector, MySQL, ClickHouse, and
-MongoDB support replacement. The externalization wrapper forwards support from
-its wrapped service. Noop returns unsupported.
+Memory, SQLite, Redis HashIdx/ZSet, PostgreSQL, PGVector, MySQL/TDSQL,
+ClickHouse, and MongoDB support replacement. The externalization wrapper
+forwards support from its wrapped service. Noop returns unsupported.
 
 Durable backends create private revision storage during normal database
-initialization. PostgreSQL, PGVector, MySQL, and SQLite use
+initialization. PostgreSQL, PGVector, MySQL/TDSQL, and SQLite use
 `session_revisions` plus `session_revision_archives`; MongoDB stores the active
 revision in the session-state document and uses a revision-archive collection;
 ClickHouse stores one versioned canonical projection in `session_revisions`

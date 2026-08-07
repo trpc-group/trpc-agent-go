@@ -193,6 +193,18 @@ sessionService, err := mysql.NewService(
 )
 ```
 
+## 替换最新一轮
+
+MySQL 支持通过 `Runner.Run` 和 `agent.WithLatestTurnReplacement` 编辑并重发最新一个
+已持久化 turn。操作会先 drain 异步 event 与 Track 写入，再在同一个数据库事务中恢复
+events、Session state、summaries 和 Tracks。
+
+`NewService` 会自动创建带表前缀的 `session_revisions` 与
+`session_revision_archives`。使用 `WithSkipDBInit(true)` 的部署必须先按
+[`session/mysql/schema.sql`](https://github.com/trpc-group/trpc-agent-go/blob/main/session/mysql/schema.sql)
+创建这两个表。Revision 沿用源 Session 的过期时间，并随 Session 一起清理。Runner API
+与回滚边界见[替换最新一轮](index.md#replace-latest-turn)。
+
 ## 存储结构
 
 MySQL 使用以下表结构（使用 `{{PREFIX}}` 表示表前缀）：

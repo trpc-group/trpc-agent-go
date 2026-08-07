@@ -225,7 +225,7 @@ r := runner.NewRunner(
 
 失败语义采用 fail-closed：如果开启能力但 Artifact storage 不可用，或 artifact save/load 失败，操作会返回错误，不会静默丢内容。如果在 event 交给 session backend 前 externalization 失败，框架会对本次尝试已保存的 artifacts 提交 best-effort 删除请求；一旦 append 已交给 backend，遇到结果不确定的错误时会保留 artifacts，避免删除已被持久化 event 引用的内容。
 
-### 替换最新一轮
+### 替换最新一轮 {#replace-latest-turn}
 
 编辑并重发最新一个已持久化的 turn（包括在 final response 之前中断的 turn）时，继续
 使用 `Runner.Run`，并传入 `agent.WithLatestTurnReplacement`。逻辑 `SessionID` 保持
@@ -243,6 +243,14 @@ events, err := r.Run(
         "request-after-edit",
     ),
 )
+if err != nil {
+    return err
+}
+for event := range events {
+    if event.Error != nil {
+        return event.Error
+    }
+}
 ```
 
 `events` 的消费方式与普通 Run 完全相同。Replacement option 已经携带新的 RequestID，
@@ -277,11 +285,12 @@ revision 存储中。app state、user state、模型/工具调用、artifact 写
 
 该能力不会给 `session.Service` 增加方法，也不会引入第二个业务入口。自定义存储可以通过
 `session.LatestTurnReplacer` SPI 选择性接入；业务仍只调用 `Runner.Run`。Memory、
-SQLite、Redis HashIdx/ZSet、PostgreSQL、PGVector、MySQL、ClickHouse 和 MongoDB
-均支持 replacement；Externalization wrapper 会透传底层能力；Noop 返回 unsupported。
+SQLite、Redis HashIdx/ZSet、PostgreSQL、PGVector、MySQL/TDSQL、ClickHouse 和
+MongoDB 均支持 replacement；Externalization wrapper 会透传底层能力；Noop 返回
+unsupported。
 
 持久化后端会在正常数据库初始化时创建私有 revision 存储。PostgreSQL、PGVector、
-MySQL 和 SQLite 使用 `session_revisions` 与 `session_revision_archives`；MongoDB
+MySQL/TDSQL 和 SQLite 使用 `session_revisions` 与 `session_revision_archives`；MongoDB
 把当前 revision 保存在 session-state 文档中，并使用 revision archive collection；
 ClickHouse 在 `session_revisions` 中保存单条带版本的权威投影，在
 `session_revision_archives` 中保存废弃投影。使用 `WithSkipDBInit(true)` 的部署必须先按

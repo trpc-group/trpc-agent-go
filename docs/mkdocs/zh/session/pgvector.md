@@ -261,6 +261,19 @@ PGVector 会在事件落库之后继续建立检索索引：
 
 如果开启 `WithSkipDBInit(true)`，请确保扩展、表、列和索引都已存在，并且 `embedding` 列维度与 `WithIndexDimension(...)` 完全一致。
 
+## 替换最新一轮
+
+PGVector 支持通过 `Runner.Run` 和 `agent.WithLatestTurnReplacement` 编辑并重发最新
+一个已持久化 turn，并复用 PostgreSQL backend 的事务式 revision 表。Replacement 只
+删除被丢弃的 event tail，因此保留的前缀会继续保有原来的 `content_text`、role、
+embedding 和全文检索索引数据。
+
+自动初始化会创建 `session_revisions` 与 `session_revision_archives`。使用
+`WithSkipDBInit(true)` 的部署除了常规 PGVector schema 外，还必须按
+[`session/pgvector/schema.sql`](https://github.com/trpc-group/trpc-agent-go/blob/main/session/pgvector/schema.sql)
+创建这两个表及其过期索引。Runner API 与回滚边界见
+[替换最新一轮](index.md#replace-latest-turn)。
+
 ## 存储结构
 
 常规 Session 表结构与 `session/postgres` 保持一致。PGVector 额外扩展了 `session_events`：

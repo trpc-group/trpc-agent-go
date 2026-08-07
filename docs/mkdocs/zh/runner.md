@@ -437,6 +437,30 @@ _ = ok
 managed.Cancel(requestID)
 ```
 
+#### 编辑并重发最新一个持久化 turn
+
+编辑用户消息仍然使用普通的 `Runner.Run` 入口。通过同一个 option 传入待替换 turn 的
+RequestID，以及新 run 的另一个 RequestID：
+
+```go
+events, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    model.NewUserMessage("修改后的问题"),
+    agent.WithLatestTurnReplacement(oldRequestID, newRequestID),
+)
+```
+
+`WithLatestTurnReplacement` 已经提供新 RequestID，因此无需再传 `WithRequestID`；如果
+同时传入，两者必须相同。`events` 的消费方式与普通 run 完全一致。新 Agent 执行开始前，
+Session backend 会恢复到 `oldRequestID` 之前的完整 checkpoint。正常完成或中断的最新
+turn 都可以替换；如果旧 run 在当前 Runner 中仍处于执行状态，需要先取消并持续消费其
+event channel 直至关闭。
+
+后端支持范围、错误语义、持久化要求与回滚边界见
+[替换最新一轮](session/index.md#replace-latest-turn)。
+
 #### 在同一轮 run 中排队插入新的用户消息
 
 有些场景下，你并不想启动第二轮 run，而是希望继续使用当前的

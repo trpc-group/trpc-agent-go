@@ -121,6 +121,19 @@ sessionService, err := clickhouse.NewService(
 )
 ```
 
+## 替换最新一轮
+
+ClickHouse 支持通过 `Runner.Run` 和 `agent.WithLatestTurnReplacement` 编辑并重发
+最新一个已持久化 turn。由于 ClickHouse 不具备与 SQL backend 相同的行事务模型，服务
+会先归档废弃投影，再发布一份带版本的 canonical head。读取只认
+`session_revisions` 中的 canonical head，不会把暂存 archive 当作活跃投影。
+
+`NewService` 会自动创建 `session_revisions` 与 `session_revision_archives`。使用
+`WithSkipDBInit(true)` 的部署必须先按
+[`session/clickhouse/schema.sql`](https://github.com/trpc-group/trpc-agent-go/blob/main/session/clickhouse/schema.sql)
+创建这两个表。Replacement 会 drain 目标 Session 的异步 event 写入，并保留剩余 TTL。
+Runner API 与回滚边界见[替换最新一轮](index.md#replace-latest-turn)。
+
 ## 存储结构
 
 ClickHouse 实现使用了 `ReplacingMergeTree` 引擎来处理数据更新和去重。
