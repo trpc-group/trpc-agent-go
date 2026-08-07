@@ -1,0 +1,3 @@
+/config/promptiter.json text eol=lf
+/sample/optimization_report.json text eol=lf
+/sample/optimization_report.md text eol=lf
