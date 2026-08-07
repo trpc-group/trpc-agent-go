@@ -28,7 +28,12 @@ import "time"
 // (also in declaration order). The reconciler fingerprints each entry and
 // skips work whose fingerprint plus on-disk sentinel are still satisfied. This
 // provides eventual convergence, not exactly-once execution: callers remain
-// responsible for making initialization commands replay-safe.
+// responsible for making initialization commands replay-safe. For an
+// instance-aware workspace manager, each prepared record is scoped to both the
+// physical instance and the current process. A backend rotation or process
+// restart therefore makes that requirement eligible to run again on its next
+// reconciliation. Legacy managers without instance identity retain the prior
+// persisted-cache behavior.
 type WorkspaceBootstrapSpec struct {
 	// Files are static inputs that must exist before commands run.
 	// Each entry maps a workspace-relative Target to either inline
