@@ -139,6 +139,19 @@ func ResolveSemantic(t tool.Tool) tool.Tool {
 	}
 }
 
+// IsConcurrencySafe reports whether a tool objects to running at the same time as
+// the other tool calls in its turn, resolving framework wrappers first.
+//
+// Framework schedulers must ask here rather than calling tool.IsConcurrencySafe
+// directly. Declaration overlays deliberately expose none of the wrapped tool's
+// optional interfaces — that isolation is the point of ApplyDeclarations — so a
+// patched tool would otherwise read as raising no objection no matter what it
+// publishes, and merely changing a tool's description would put it back on the
+// parallel path.
+func IsConcurrencySafe(t tool.Tool) bool {
+	return tool.IsConcurrencySafe(ResolveSemantic(t))
+}
+
 type declarationTool struct {
 	decl tool.Declaration
 	base tool.Tool
@@ -270,8 +283,13 @@ func (t *NamedTool) ToolMetadata() tool.ToolMetadata {
 }
 
 // IsConcurrencySafe delegates to the original tool.
+//
+// It resolves through tool.IsConcurrencySafe rather than reading
+// MetadataOf(...).ConcurrencySafe, so a wrapped tool that publishes no
+// concurrency objection keeps the default admission it is entitled to instead of
+// having this wrapper object on its behalf.
 func (t *NamedTool) IsConcurrencySafe() bool {
-	return tool.MetadataOf(t.original).ConcurrencySafe
+	return tool.IsConcurrencySafe(t.original)
 }
 
 // ShouldDefer delegates to the original tool.
