@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // ScanResult holds the security verdict for a scanned command or script.
@@ -25,6 +26,7 @@ type ScanResult struct {
 	ToolName       string `json:"tool_name"`
 	Command        string `json:"command"`
 	Backend        string `json:"backend"`
+	DurationMs     int64  `json:"duration_ms"`
 	Intercepted    bool   `json:"intercepted"`
 }
 
@@ -40,6 +42,7 @@ func NewScanner(policy *Policy) *Scanner {
 
 // ScanCommand scans a command or script string for security risks.
 func (s *Scanner) ScanCommand(toolName, command, backend string) ScanResult {
+	start := time.Now()
 	cmdTrimmed := strings.TrimSpace(command)
 	res := ScanResult{
 		Decision:       "allow",
@@ -51,6 +54,21 @@ func (s *Scanner) ScanCommand(toolName, command, backend string) ScanResult {
 		Command:        command,
 		Backend:        backend,
 		Intercepted:    false,
+	}
+
+	defer func() {
+		res.DurationMs = time.Since(start).Milliseconds()
+	}()
+
+	// 0. Shell Parameter Expansion Bypass Check (${IFS}, $IFS)
+	if strings.Contains(cmdTrimmed, "${IFS}") || strings.Contains(cmdTrimmed, "$IFS") {
+		res.Decision = "deny"
+		res.RiskLevel = "critical"
+		res.RuleID = "RULE_SHELL_EXPANSION_BYPASS"
+		res.Evidence = "Shell variable expansion obfuscation detected (${IFS})"
+		res.Recommendation = "Reject unparsed shell expansion bypass attempt"
+		res.Intercepted = true
+		return res
 	}
 
 	// 1. Dangerous Commands & Paths (rm -rf, .ssh, .env, credential files)

