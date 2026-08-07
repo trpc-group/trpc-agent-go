@@ -295,6 +295,12 @@ func suppressRepeatedPartialSnapshot(
 	result protocol.StreamEvent,
 	partialParts []*protocol.Part,
 ) protocol.StreamEvent {
+	if artifact, ok := result.(*protocol.TaskArtifactUpdateEvent); ok &&
+		artifact != nil && artifact.Append != nil && !*artifact.Append {
+		// A replacement carries the authoritative artifact snapshot. Keep its
+		// parts so applying append=false cannot clear the accumulated artifact.
+		return result
+	}
 	parts, ok := streamEventParts(result)
 	if !ok || !equivalentPartSnapshots(partialParts, parts) {
 		return result
