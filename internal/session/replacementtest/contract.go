@@ -48,6 +48,83 @@ func Run(t *testing.T, service session.Service) {
 	})
 }
 
+// RunAsync exercises replacement boundaries that must remain durable when the
+// backend acknowledges ordinary writes before they reach persistent storage.
+func RunAsync(t *testing.T, service session.Service) {
+	t.Helper()
+	ctx := context.Background()
+	key := contractKey(t, "async")
+	sess, err := service.CreateSession(
+		ctx,
+		key,
+		session.StateMap{"phase": []byte("before")},
+	)
+	requireNoError(t, err)
+	requireNoError(t, service.AppendEvent(
+		ctx,
+		sess,
+		messageEvent("before", "before", "before-invocation", model.RoleUser),
+	))
+	trackService, hasTracks := service.(session.TrackService)
+	if hasTracks {
+		requireNoError(t, trackService.AppendTrackEvent(ctx, sess, &session.TrackEvent{
+			Track:     "ui",
+			Payload:   []byte(`{"value":"before"}`),
+			Timestamp: time.Now().Add(-time.Second),
+		}))
+	}
+
+	turnCtx := revision.ContextWithTurnStart(ctx, revision.TurnStart{
+		RequestID:    "latest",
+		InvocationID: "latest-invocation",
+	})
+	requireNoError(t, service.AppendEvent(
+		turnCtx,
+		sess,
+		messageEvent("latest", "latest", "latest-invocation", model.RoleUser),
+	))
+	partial := messageEvent(
+		"partial", "latest", "latest-invocation", model.RoleAssistant,
+	)
+	partial.StateDelta = session.StateMap{"phase": []byte("after")}
+	requireNoError(t, service.AppendEvent(ctx, sess, partial))
+	if hasTracks {
+		requireNoError(t, trackService.AppendTrackEvent(ctx, sess, &session.TrackEvent{
+			Track:     "ui",
+			RequestID: "latest",
+			Payload:   []byte(`{"value":"latest"}`),
+			Timestamp: time.Now(),
+		}))
+	}
+
+	result, err := revision.ReplaceLatestTurn(
+		ctx,
+		service,
+		revision.LatestTurnReplacementRequest{
+			Key:               key,
+			ExpectedRequestID: "latest",
+			IdempotencyKey:    "replacement",
+		},
+	)
+	requireNoError(t, err)
+	if len(result.ActiveSession.Events) != 1 ||
+		result.ActiveSession.Events[0].ID != "before" {
+		t.Fatalf("restored async events = %#v", result.ActiveSession.Events)
+	}
+	phase, ok := result.ActiveSession.GetState("phase")
+	if !ok || string(phase) != "before" {
+		t.Fatalf("restored async phase = %q, %v", phase, ok)
+	}
+	if hasTracks {
+		tracks, err := result.ActiveSession.GetTrackEvents("ui")
+		requireNoError(t, err)
+		if len(tracks.Events) != 1 ||
+			string(tracks.Events[0].Payload) != `{"value":"before"}` {
+			t.Fatalf("restored async tracks = %#v", tracks.Events)
+		}
+	}
+}
+
 func testUnfinishedRestoreAndFencing(t *testing.T, service session.Service) {
 	ctx := context.Background()
 	key := contractKey(t, "unfinished")

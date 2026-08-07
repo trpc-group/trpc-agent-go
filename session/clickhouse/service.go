@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/hook"
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -54,6 +55,8 @@ type Service struct {
 	tableSessionStates    string
 	tableSessionEvents    string
 	tableSessionSummaries string
+	tableSessionRevisions string
+	tableRevisionArchives string
 	tableAppStates        string
 	tableUserStates       string
 }
@@ -61,6 +64,8 @@ type Service struct {
 type sessionEventPair struct {
 	key   session.Key
 	event *event.Event
+	write sessionrevision.Write
+	done  chan error
 }
 
 // NewService creates a new ClickHouse session service.
@@ -94,6 +99,8 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	tableSessionStates := sqldb.BuildTableName(opts.tablePrefix, sqldb.TableNameSessionStates)
 	tableSessionEvents := sqldb.BuildTableName(opts.tablePrefix, sqldb.TableNameSessionEvents)
 	tableSessionSummaries := sqldb.BuildTableName(opts.tablePrefix, sqldb.TableNameSessionSummaries)
+	tableSessionRevisions := sqldb.BuildTableName(opts.tablePrefix, sqldb.TableNameSessionRevisions)
+	tableRevisionArchives := sqldb.BuildTableName(opts.tablePrefix, sqldb.TableNameSessionRevisionArchives)
 	tableAppStates := sqldb.BuildTableName(opts.tablePrefix, sqldb.TableNameAppStates)
 	tableUserStates := sqldb.BuildTableName(opts.tablePrefix, sqldb.TableNameUserStates)
 
@@ -104,6 +111,8 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		tableSessionStates:    tableSessionStates,
 		tableSessionEvents:    tableSessionEvents,
 		tableSessionSummaries: tableSessionSummaries,
+		tableSessionRevisions: tableSessionRevisions,
+		tableRevisionArchives: tableRevisionArchives,
 		tableAppStates:        tableAppStates,
 		tableUserStates:       tableUserStates,
 	}
@@ -273,6 +282,14 @@ func (s *Service) CreateSession(
 		session.WithSessionCreatedAt(sessState.CreatedAt),
 		session.WithSessionUpdatedAt(sessState.UpdatedAt),
 	)
+	if s.tableSessionRevisions != "" {
+		if err := s.publishRevisionHead(
+			ctx, key, &sessionrevision.PersistedRecord{}, sess, expiresAt, nil,
+		); err != nil {
+			return nil, fmt.Errorf("create session revision failed: %w", err)
+		}
+		sessionrevision.SetGeneration(sess, 0)
+	}
 
 	return mergeState(appState, userState, sess), nil
 }
@@ -319,16 +336,25 @@ func (s *Service) ListSessions(
 	if err := session.ValidateListSessionsOptions(opt); err != nil {
 		return nil, err
 	}
+	listOnlyMeta := opt.ListSessionOnlyMeta || s.tableSessionRevisions != ""
 	sessList, err := s.listSessions(
 		ctx,
 		userKey,
 		opt.EventNum,
 		opt.EventTime,
-		opt.ListSessionOnlyMeta,
+		listOnlyMeta,
 		opt.ListSessionPage,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("clickhouse session service get session list failed: %w", err)
+	}
+	if s.tableSessionRevisions != "" {
+		sessList, err = s.overlayRevisionHeads(
+			ctx, sessList, opt.ListSessionOnlyMeta, opt.EventNum, opt.EventTime,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("clickhouse session service overlay revisions failed: %w", err)
+		}
 	}
 	return sessList, nil
 }
@@ -344,6 +370,11 @@ func (s *Service) DeleteSession(
 	}
 	if err := s.deleteSessionState(ctx, key); err != nil {
 		return fmt.Errorf("clickhouse session service delete session state failed: %w", err)
+	}
+	if s.tableSessionRevisions != "" {
+		if err := s.deleteRevisionHead(ctx, key); err != nil {
+			return fmt.Errorf("clickhouse session service delete session revision failed: %w", err)
+		}
 	}
 	return nil
 }
@@ -495,6 +526,24 @@ func (s *Service) ListUserStates(ctx context.Context, userKey session.UserKey) (
 
 // UpdateSessionState updates the session-level state directly without appending an event.
 func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state session.StateMap) error {
+	if s.tableSessionRevisions != "" {
+		if err := key.CheckSessionKey(); err != nil {
+			return err
+		}
+		for k := range state {
+			if strings.HasPrefix(k, session.StateAppPrefix) {
+				return fmt.Errorf("clickhouse session service update session state failed: %s is not allowed, use UpdateAppState instead", k)
+			}
+			if strings.HasPrefix(k, session.StateUserPrefix) {
+				return fmt.Errorf("clickhouse session service update session state failed: %s is not allowed, use UpdateUserState instead", k)
+			}
+		}
+		return s.updateSessionStateWithRevision(ctx, key, state)
+	}
+	return s.updateSessionStateLegacy(ctx, key, state)
+}
+
+func (s *Service) updateSessionStateLegacy(ctx context.Context, key session.Key, state session.StateMap) error {
 	if err := key.CheckSessionKey(); err != nil {
 		return err
 	}
@@ -512,7 +561,7 @@ func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state
 	// Get current session state using FINAL
 	var currentStateStr string
 	rows, err := s.chClient.Query(ctx,
-		fmt.Sprintf(`SELECT state FROM %s FINAL WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`, s.tableSessionStates),
+		fmt.Sprintf(`SELECT toJSONString(state) FROM %s FINAL WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`, s.tableSessionStates),
 		key.AppName, key.UserID, key.SessionID)
 
 	if err != nil {
@@ -644,8 +693,20 @@ func (s *Service) appendEventInternal(
 	key session.Key,
 	opts ...session.Option,
 ) error {
+	write := sessionrevision.NewWrite(ctx, sess)
+	if s.opts.enableAsyncPersist && write.Start != nil {
+		if err := s.flushRevisionPersistence(ctx, key); err != nil {
+			return fmt.Errorf("flush persistence before runner turn: %w", err)
+		}
+	}
 	// update user session with the given event
 	sess.UpdateUserSession(e, opts...)
+	if s.opts.enableAsyncPersist && write.Start != nil {
+		if err := s.addEventWithRevision(ctx, key, e, write); err != nil {
+			return fmt.Errorf("clickhouse session service append event failed: %w", err)
+		}
+		return nil
+	}
 
 	// persist event to ClickHouse asynchronously
 	if s.opts.enableAsyncPersist {
@@ -662,14 +723,14 @@ func (s *Service) appendEventInternal(
 		// Hash key to determine which worker channel to use
 		index := sess.Hash % len(s.eventPairChans)
 		select {
-		case s.eventPairChans[index] <- &sessionEventPair{key: key, event: e}:
+		case s.eventPairChans[index] <- &sessionEventPair{key: key, event: e, write: write}:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 		return nil
 	}
 
-	if err := s.addEvent(ctx, key, e); err != nil {
+	if err := s.addEventWithRevision(ctx, key, e, write); err != nil {
 		return fmt.Errorf("clickhouse session service append event failed: %w", err)
 	}
 
@@ -690,6 +751,7 @@ func (s *Service) startAsyncPersistWorker() {
 		go func(eventPairChan chan *sessionEventPair) {
 			defer s.persistWg.Done()
 			batch := make([]*sessionEventPair, 0, s.opts.batchSize)
+			var pendingErr error
 			ticker := time.NewTicker(s.opts.batchTimeout)
 			defer ticker.Stop()
 
@@ -697,17 +759,30 @@ func (s *Service) startAsyncPersistWorker() {
 				select {
 				case pair, ok := <-eventPairChan:
 					if !ok {
-						s.flushEventBatch(batch)
+						_ = s.flushEventBatch(batch)
 						return
+					}
+					if pair.done != nil {
+						if err := s.flushEventBatch(batch); err != nil {
+							pendingErr = err
+						}
+						batch = batch[:0]
+						pair.done <- pendingErr
+						pendingErr = nil
+						continue
 					}
 					batch = append(batch, pair)
 					if len(batch) >= s.opts.batchSize {
-						s.flushEventBatch(batch)
+						if err := s.flushEventBatch(batch); err != nil {
+							pendingErr = err
+						}
 						batch = batch[:0]
 					}
 				case <-ticker.C:
 					if len(batch) > 0 {
-						s.flushEventBatch(batch)
+						if err := s.flushEventBatch(batch); err != nil {
+							pendingErr = err
+						}
 						batch = batch[:0]
 					}
 				}
@@ -717,9 +792,9 @@ func (s *Service) startAsyncPersistWorker() {
 }
 
 // flushEventBatch flushes a batch of events to ClickHouse.
-func (s *Service) flushEventBatch(batch []*sessionEventPair) {
+func (s *Service) flushEventBatch(batch []*sessionEventPair) error {
 	if len(batch) == 0 {
-		return
+		return nil
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), defaultAsyncPersistTimeout)
@@ -727,10 +802,14 @@ func (s *Service) flushEventBatch(batch []*sessionEventPair) {
 
 	// Batch insert all events
 	for _, pair := range batch {
-		if err := s.addEvent(ctx, pair.key, pair.event); err != nil {
+		if err := s.addEventWithRevision(
+			ctx, pair.key, pair.event, pair.write,
+		); err != nil {
 			log.Errorf("async persist event failed: %v", err)
+			return err
 		}
 	}
+	return nil
 }
 
 // startCleanupRoutine starts a background routine to periodically clean up expired data.
@@ -796,6 +875,13 @@ func (s *Service) cleanupExpiredData(ctx context.Context) {
 	if s.opts.userStateTTL > 0 {
 		s.softDeleteExpiredUserStates(ctx, now)
 	}
+	if s.tableRevisionArchives != "" {
+		if err := s.chClient.Exec(ctx,
+			fmt.Sprintf(`ALTER TABLE %s DELETE WHERE expires_at IS NOT NULL AND expires_at <= ?`, s.tableRevisionArchives),
+			now); err != nil {
+			log.Errorf("cleanup expired session revision archives failed: %v", err)
+		}
+	}
 }
 
 // cleanupDeletedData physically removes soft-deleted data past retention period.
@@ -841,6 +927,14 @@ func (s *Service) cleanupDeletedData(ctx context.Context, now time.Time) {
 		cutoff)
 	if err != nil {
 		log.Errorf("cleanup deleted user states failed: %v", err)
+	}
+	if s.tableSessionRevisions != "" {
+		err = s.chClient.Exec(ctx,
+			fmt.Sprintf(`ALTER TABLE %s DELETE WHERE deleted_at IS NOT NULL AND deleted_at <= ?`, s.tableSessionRevisions),
+			cutoff)
+		if err != nil {
+			log.Errorf("cleanup deleted session revisions failed: %v", err)
+		}
 	}
 
 	log.Debugf("cleaned up soft-deleted data older than %v", cutoff)
@@ -901,6 +995,11 @@ func (s *Service) softDeleteExpiredSessions(ctx context.Context, now time.Time) 
 			}
 			s.softDeleteSessionEvents(ctx, key, now)
 			s.softDeleteSessionSummaries(ctx, key, now)
+			if s.tableSessionRevisions != "" {
+				if err := s.deleteRevisionHead(ctx, key); err != nil {
+					log.Errorf("soft delete expired session revision failed: %v", err)
+				}
+			}
 		}
 	}
 }

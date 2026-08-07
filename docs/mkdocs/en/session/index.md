@@ -284,12 +284,21 @@ Safety rules:
   implicit revision-count or byte-size cap. Session deletion and expiry remove
   private revisions.
 
-The capability does not expand `session.Service` and has no separate public
-session mutation API. Memory, SQLite, and Redis HashIdx/ZSet support it. The
-externalization wrapper forwards support from its wrapped service. Noop,
-PostgreSQL, PGVector, MySQL, ClickHouse, and MongoDB return unsupported. SQLite
-users that disable automatic DDL with `WithSkipDBInit(true)` must provision the
-private revision tables described in the [SQLite storage documentation](sqlite.md).
+The capability does not add a method to `session.Service` or a second
+application entry point. Custom storage implementations can opt in through the
+`session.LatestTurnReplacer` SPI; applications continue to call `Runner.Run`.
+Memory, SQLite, Redis HashIdx/ZSet, PostgreSQL, PGVector, MySQL, ClickHouse, and
+MongoDB support replacement. The externalization wrapper forwards support from
+its wrapped service. Noop returns unsupported.
+
+Durable backends create private revision storage during normal database
+initialization. PostgreSQL, PGVector, MySQL, and SQLite use
+`session_revisions` plus `session_revision_archives`; MongoDB stores the active
+revision in the session-state document and uses a revision-archive collection;
+ClickHouse stores one versioned canonical projection in `session_revisions`
+and discarded projections in `session_revision_archives`. Deployments that use
+`WithSkipDBInit(true)` must provision the definitions from the corresponding
+backend package before enabling replacement.
 
 ## Core Concepts
 

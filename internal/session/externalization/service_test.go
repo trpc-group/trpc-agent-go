@@ -179,7 +179,7 @@ func TestReplaceLatestTurnUnsupportedWrappedService(t *testing.T) {
 	if !errors.Is(err, revision.ErrLatestTurnReplacementUnsupported) {
 		t.Fatalf("ReplaceLatestTurn() error = %v", err)
 	}
-	replacer, ok := svc.(latestTurnReplacer)
+	replacer, ok := svc.(session.LatestTurnReplacer)
 	if !ok {
 		t.Fatal("wrapped service does not expose replacement method")
 	}

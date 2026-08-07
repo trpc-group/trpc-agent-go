@@ -25,22 +25,20 @@ import (
 
 const generationServiceMetaKey = "trpc-agent-go.session.revision-generation"
 
+type latestTurnReplacementSupportReporter interface {
+	SupportsLatestTurnReplacement() bool
+}
+
 var (
-	// ErrLatestTurnReplacementUnsupported indicates that the session service
-	// cannot replace the latest persisted turn.
-	ErrLatestTurnReplacementUnsupported = errors.New(
-		"latest-turn replacement is unsupported",
-	)
-	// ErrLatestTurnReplacementConflict indicates that the active latest turn
-	// does not match the expected request.
-	ErrLatestTurnReplacementConflict = errors.New(
-		"latest-turn replacement conflict",
-	)
-	// ErrLatestTurnReplacementUnavailable indicates that the latest turn cannot
-	// be replaced safely.
-	ErrLatestTurnReplacementUnavailable = errors.New(
-		"latest-turn replacement is unavailable",
-	)
+	// ErrLatestTurnReplacementUnsupported is kept as an internal alias for the
+	// public optional session capability contract.
+	ErrLatestTurnReplacementUnsupported = session.ErrLatestTurnReplacementUnsupported
+	// ErrLatestTurnReplacementConflict is kept as an internal alias for the
+	// public optional session capability contract.
+	ErrLatestTurnReplacementConflict = session.ErrLatestTurnReplacementConflict
+	// ErrLatestTurnReplacementUnavailable is kept as an internal alias for the
+	// public optional session capability contract.
+	ErrLatestTurnReplacementUnavailable = session.ErrLatestTurnReplacementUnavailable
 	// ErrStaleGeneration indicates that a write belongs to a session projection
 	// which has already been superseded by a replacement.
 	ErrStaleGeneration = errors.New("stale session revision generation")
@@ -49,31 +47,13 @@ var (
 	ErrStaleProjection = errors.New("stale session revision projection")
 )
 
-// LatestTurnReplacementRequest is the private session-backend mutation used by
-// Runner to restore the checkpoint before the latest persisted turn.
-type LatestTurnReplacementRequest struct {
-	Key               session.Key
-	ExpectedRequestID string
-	IdempotencyKey    string
-}
+// LatestTurnReplacementRequest aliases the public backend SPI request while
+// the checkpoint state machine remains private.
+type LatestTurnReplacementRequest = session.LatestTurnReplacementRequest
 
-// LatestTurnReplacementResult is the authoritative active projection returned
-// to Runner after a replacement transition.
-type LatestTurnReplacementResult struct {
-	ActiveSession *session.Session
-	Applied       bool
-}
-
-type latestTurnReplacer interface {
-	ReplaceLatestTurn(
-		context.Context,
-		LatestTurnReplacementRequest,
-	) (*LatestTurnReplacementResult, error)
-}
-
-type latestTurnReplacementSupportReporter interface {
-	SupportsLatestTurnReplacement() bool
-}
+// LatestTurnReplacementResult aliases the public backend SPI result while the
+// checkpoint state machine remains private.
+type LatestTurnReplacementResult = session.LatestTurnReplacementResult
 
 // SupportsLatestTurnReplacement reports whether service implements the
 // private backend capability required by Runner latest-turn replacement.
@@ -84,7 +64,7 @@ func SupportsLatestTurnReplacement(service session.Service) bool {
 	if reporter, ok := service.(latestTurnReplacementSupportReporter); ok {
 		return reporter.SupportsLatestTurnReplacement()
 	}
-	_, ok := service.(latestTurnReplacer)
+	_, ok := service.(session.LatestTurnReplacer)
 	return ok
 }
 
@@ -98,7 +78,7 @@ func ReplaceLatestTurn(
 	if err := ValidateLatestTurnReplacementRequest(req); err != nil {
 		return nil, err
 	}
-	replacer, ok := service.(latestTurnReplacer)
+	replacer, ok := service.(session.LatestTurnReplacer)
 	if !ok || !SupportsLatestTurnReplacement(service) {
 		return nil, ErrLatestTurnReplacementUnsupported
 	}

@@ -22,7 +22,7 @@ import (
 )
 
 // getSession retrieves a single session with its events and summaries.
-func (s *Service) getSession(
+func (s *Service) getLegacySession(
 	ctx context.Context,
 	key session.Key,
 	limit int,
@@ -31,7 +31,7 @@ func (s *Service) getSession(
 	// Query session state using FINAL for deduplication
 	var sessState *SessionState
 	rows, err := s.chClient.Query(ctx,
-		fmt.Sprintf(`SELECT state, created_at, updated_at FROM %s FINAL 
+		fmt.Sprintf(`SELECT toJSONString(state), created_at, updated_at FROM %s FINAL
 			WHERE app_name = ? AND user_id = ? AND session_id = ? 
 			AND (expires_at IS NULL OR expires_at > ?) AND deleted_at IS NULL`, s.tableSessionStates),
 		key.AppName, key.UserID, key.SessionID, time.Now())
@@ -128,7 +128,7 @@ func (s *Service) listSessions(
 
 	// Query all session states for this user using FINAL
 	var sessStates []*SessionState
-	listQuery := fmt.Sprintf(`SELECT session_id, state, created_at, updated_at FROM %s FINAL
+	listQuery := fmt.Sprintf(`SELECT session_id, toJSONString(state), created_at, updated_at FROM %s FINAL
 			WHERE app_name = ? AND user_id = ?
 			AND (expires_at IS NULL OR expires_at > ?)
 			AND deleted_at IS NULL
@@ -230,7 +230,7 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, evt *event.Even
 	var stateStr string
 	var createdAt time.Time
 	rows, err := s.chClient.Query(ctx,
-		fmt.Sprintf(`SELECT state, created_at FROM %s FINAL
+		fmt.Sprintf(`SELECT toJSONString(state), created_at FROM %s FINAL
 		WHERE app_name = ? AND user_id = ? AND session_id = ?
 		AND deleted_at IS NULL`, s.tableSessionStates),
 		key.AppName, key.UserID, key.SessionID)
@@ -387,7 +387,7 @@ func (s *Service) getEventsList(
 		args = append(args, key.AppName, key.UserID, key.SessionID, sessionCreatedAts[i])
 	}
 
-	query := fmt.Sprintf(`SELECT app_name, user_id, session_id, event FROM %s FINAL
+	query := fmt.Sprintf(`SELECT app_name, user_id, session_id, toJSONString(event) FROM %s FINAL
 		WHERE (%s)
 		AND deleted_at IS NULL
 		ORDER BY app_name, user_id, session_id, created_at ASC`,

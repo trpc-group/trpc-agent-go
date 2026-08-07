@@ -75,6 +75,29 @@ const (
 			deleted_at TIMESTAMP DEFAULT NULL
 		)`
 
+	sqlCreateSessionRevisionsTable = `
+		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
+			app_name VARCHAR(255) NOT NULL,
+			user_id VARCHAR(255) NOT NULL,
+			session_id VARCHAR(255) NOT NULL,
+			record JSONB NOT NULL,
+			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			expires_at TIMESTAMP DEFAULT NULL,
+			PRIMARY KEY (app_name, user_id, session_id)
+		)`
+
+	sqlCreateSessionRevisionArchivesTable = `
+		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
+			app_name VARCHAR(255) NOT NULL,
+			user_id VARCHAR(255) NOT NULL,
+			session_id VARCHAR(255) NOT NULL,
+			generation BIGINT NOT NULL,
+			snapshot JSONB NOT NULL,
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			expires_at TIMESTAMP DEFAULT NULL,
+			PRIMARY KEY (app_name, user_id, session_id, generation)
+		)`
+
 	sqlCreateAppStatesTable = `
 		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
 			id BIGSERIAL PRIMARY KEY,
@@ -140,6 +163,14 @@ const (
 
 	// session_summaries: TTL index on (expires_at) - partial index for non-null values
 	sqlCreateSessionSummariesExpiresIndex = `
+		CREATE INDEX IF NOT EXISTS {{INDEX_NAME}}
+		ON {{TABLE_NAME}}(expires_at) WHERE expires_at IS NOT NULL`
+
+	sqlCreateSessionRevisionsExpiresIndex = `
+		CREATE INDEX IF NOT EXISTS {{INDEX_NAME}}
+		ON {{TABLE_NAME}}(expires_at) WHERE expires_at IS NOT NULL`
+
+	sqlCreateSessionRevisionArchivesExpiresIndex = `
 		CREATE INDEX IF NOT EXISTS {{INDEX_NAME}}
 		ON {{TABLE_NAME}}(expires_at) WHERE expires_at IS NOT NULL`
 
@@ -254,6 +285,33 @@ var expectedSchema = map[string]struct {
 			{sqldb.TableNameSessionSummaries, sqldb.IndexSuffixExpires, []string{"expires_at"}},
 		},
 	},
+	sqldb.TableNameSessionRevisions: {
+		columns: []tableColumn{
+			{"app_name", "character varying", false},
+			{"user_id", "character varying", false},
+			{"session_id", "character varying", false},
+			{"record", "jsonb", false},
+			{"updated_at", "timestamp without time zone", false},
+			{"expires_at", "timestamp without time zone", true},
+		},
+		indexes: []tableIndex{
+			{sqldb.TableNameSessionRevisions, sqldb.IndexSuffixExpires, []string{"expires_at"}},
+		},
+	},
+	sqldb.TableNameSessionRevisionArchives: {
+		columns: []tableColumn{
+			{"app_name", "character varying", false},
+			{"user_id", "character varying", false},
+			{"session_id", "character varying", false},
+			{"generation", "bigint", false},
+			{"snapshot", "jsonb", false},
+			{"created_at", "timestamp without time zone", false},
+			{"expires_at", "timestamp without time zone", true},
+		},
+		indexes: []tableIndex{
+			{sqldb.TableNameSessionRevisionArchives, sqldb.IndexSuffixExpires, []string{"expires_at"}},
+		},
+	},
 	sqldb.TableNameAppStates: {
 		columns: []tableColumn{
 			{"id", "bigint", false},
@@ -308,6 +366,8 @@ var tableDefs = []tableDefinition{
 	{sqldb.TableNameSessionEvents, sqlCreateSessionEventsTable},
 	{sqldb.TableNameSessionTrackEvents, sqlCreateSessionTrackEventsTable},
 	{sqldb.TableNameSessionSummaries, sqlCreateSessionSummariesTable},
+	{sqldb.TableNameSessionRevisions, sqlCreateSessionRevisionsTable},
+	{sqldb.TableNameSessionRevisionArchives, sqlCreateSessionRevisionArchivesTable},
 	{sqldb.TableNameAppStates, sqlCreateAppStatesTable},
 	{sqldb.TableNameUserStates, sqlCreateUserStatesTable},
 }
@@ -327,6 +387,8 @@ var indexDefs = []indexDefinition{
 	{sqldb.TableNameSessionEvents, sqldb.IndexSuffixExpires, sqlCreateSessionEventsExpiresIndex},
 	{sqldb.TableNameSessionTrackEvents, sqldb.IndexSuffixExpires, sqlCreateSessionTracksExpiresIndex},
 	{sqldb.TableNameSessionSummaries, sqldb.IndexSuffixExpires, sqlCreateSessionSummariesExpiresIndex},
+	{sqldb.TableNameSessionRevisions, sqldb.IndexSuffixExpires, sqlCreateSessionRevisionsExpiresIndex},
+	{sqldb.TableNameSessionRevisionArchives, sqldb.IndexSuffixExpires, sqlCreateSessionRevisionArchivesExpiresIndex},
 	{sqldb.TableNameAppStates, sqldb.IndexSuffixExpires, sqlCreateAppStatesExpiresIndex},
 	{sqldb.TableNameUserStates, sqldb.IndexSuffixExpires, sqlCreateUserStatesExpiresIndex},
 }

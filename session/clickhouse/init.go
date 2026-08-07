@@ -75,6 +75,38 @@ const (
 		ORDER BY (app_name, user_id, session_id, filter_key)
 		SETTINGS allow_nullable_key = 1`
 
+	sqlCreateSessionRevisionsTable = `
+		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
+			app_name    String,
+			user_id     String,
+			session_id  String,
+			generation  UInt64,
+			head        UInt64,
+			version     UInt64,
+			record      String,
+			snapshot    String,
+			updated_at  DateTime64(6),
+			expires_at  Nullable(DateTime64(6)),
+			deleted_at  Nullable(DateTime64(6))
+		) ENGINE = ReplacingMergeTree(version)
+		PARTITION BY (app_name, cityHash64(user_id) % 64)
+		ORDER BY (app_name, user_id, session_id)
+		SETTINGS allow_nullable_key = 1`
+
+	sqlCreateSessionRevisionArchivesTable = `
+		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
+			app_name    String,
+			user_id     String,
+			session_id  String,
+			generation  UInt64,
+			snapshot    String,
+			created_at  DateTime64(6),
+			expires_at  Nullable(DateTime64(6))
+		) ENGINE = ReplacingMergeTree(created_at)
+		PARTITION BY (app_name, cityHash64(user_id) % 64)
+		ORDER BY (app_name, user_id, session_id, generation)
+		SETTINGS allow_nullable_key = 1`
+
 	sqlCreateAppStatesTable = `
 		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
 			app_name    String,
@@ -114,6 +146,8 @@ var tableDefs = []tableDefinition{
 	{sqldb.TableNameSessionStates, sqlCreateSessionStatesTable},
 	{sqldb.TableNameSessionEvents, sqlCreateSessionEventsTable},
 	{sqldb.TableNameSessionSummaries, sqlCreateSessionSummariesTable},
+	{sqldb.TableNameSessionRevisions, sqlCreateSessionRevisionsTable},
+	{sqldb.TableNameSessionRevisionArchives, sqlCreateSessionRevisionArchivesTable},
 	{sqldb.TableNameAppStates, sqlCreateAppStatesTable},
 	{sqldb.TableNameUserStates, sqlCreateUserStatesTable},
 }

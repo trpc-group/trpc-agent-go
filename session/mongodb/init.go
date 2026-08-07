@@ -192,6 +192,30 @@ func (s *Service) ensureIndexes(ctx context.Context) error {
 			},
 		},
 	}
+	if s.collRevisionArchives != "" {
+		plan = append(plan, struct {
+			coll   string
+			models []mongo.IndexModel
+		}{
+			coll: s.collRevisionArchives,
+			models: []mongo.IndexModel{
+				{
+					Keys: bson.D{
+						{Key: "app_name", Value: 1},
+						{Key: "user_id", Value: 1},
+						{Key: "session_id", Value: 1},
+						{Key: "generation", Value: 1},
+					},
+					Options: options.Index().
+						SetName(sqldb.BuildIndexName(s.opts.collectionPrefix,
+							sqldb.TableNameSessionRevisionArchives,
+							sqldb.IndexSuffixUniqueActive)).
+						SetUnique(true),
+				},
+				ttlIndex(sqldb.TableNameSessionRevisionArchives),
+			},
+		})
+	}
 
 	for _, p := range plan {
 		if _, err := s.client.CreateMany(ctx, s.database, p.coll, p.models); err != nil {

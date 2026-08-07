@@ -72,13 +72,6 @@ type Service struct {
 	cfg             Config
 }
 
-type latestTurnReplacer interface {
-	ReplaceLatestTurn(
-		context.Context,
-		sessionrevision.LatestTurnReplacementRequest,
-	) (*sessionrevision.LatestTurnReplacementResult, error)
-}
-
 // SupportsLatestTurnReplacement reports the capability of the wrapped service.
 func (s *Service) SupportsLatestTurnReplacement() bool {
 	return s != nil && sessionrevision.SupportsLatestTurnReplacement(s.Service)
@@ -90,7 +83,7 @@ func (s *Service) ReplaceLatestTurn(
 	ctx context.Context,
 	req sessionrevision.LatestTurnReplacementRequest,
 ) (*sessionrevision.LatestTurnReplacementResult, error) {
-	replacer, ok := s.Service.(latestTurnReplacer)
+	replacer, ok := s.Service.(session.LatestTurnReplacer)
 	if !ok {
 		return nil, sessionrevision.ErrLatestTurnReplacementUnsupported
 	}

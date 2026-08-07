@@ -275,11 +275,17 @@ revision 存储中。app state、user state、模型/工具调用、artifact 写
 - 每次 replacement 会保留一份完整废弃投影，系统不会隐式限制 revision 数量或字节数；
   删除 Session 或 Session 到期时会一并清理。
 
-该能力不会扩展 `session.Service`，也没有独立的公开 Session mutation API。Memory、
-SQLite、Redis HashIdx/ZSet 支持 replacement；Externalization wrapper 透传底层能力；
-Noop、PostgreSQL、PGVector、MySQL、ClickHouse 和 MongoDB 返回 unsupported。SQLite
-用户如果通过 `WithSkipDBInit(true)` 禁用自动 DDL，需要自行创建
-[SQLite 存储文档](sqlite.md)中列出的私有 revision 表。
+该能力不会给 `session.Service` 增加方法，也不会引入第二个业务入口。自定义存储可以通过
+`session.LatestTurnReplacer` SPI 选择性接入；业务仍只调用 `Runner.Run`。Memory、
+SQLite、Redis HashIdx/ZSet、PostgreSQL、PGVector、MySQL、ClickHouse 和 MongoDB
+均支持 replacement；Externalization wrapper 会透传底层能力；Noop 返回 unsupported。
+
+持久化后端会在正常数据库初始化时创建私有 revision 存储。PostgreSQL、PGVector、
+MySQL 和 SQLite 使用 `session_revisions` 与 `session_revision_archives`；MongoDB
+把当前 revision 保存在 session-state 文档中，并使用 revision archive collection；
+ClickHouse 在 `session_revisions` 中保存单条带版本的权威投影，在
+`session_revision_archives` 中保存废弃投影。使用 `WithSkipDBInit(true)` 的部署必须先按
+对应 backend package 中的定义完成建表或建 collection，再启用 replacement。
 
 ## 核心概念
 

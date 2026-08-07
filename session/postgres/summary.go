@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"time"
 
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
 )
@@ -70,15 +71,46 @@ func (s *Service) CreateSessionSummary(
 	// Use UPSERT (INSERT ... ON CONFLICT) for atomic operation.
 	// This handles both insert and update in a single, race-condition-free operation.
 	// Note: Last write wins - no timestamp comparison to avoid silent failures.
-	_, err = s.pgClient.ExecContext(ctx,
-		fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, filter_key, summary, updated_at, expires_at, deleted_at)
+	if s.tableSessionRevisions == "" {
+		_, err = s.pgClient.ExecContext(ctx, fmt.Sprintf(
+			`INSERT INTO %s (app_name, user_id, session_id, filter_key, summary, updated_at, expires_at, deleted_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, NULL)
 		 ON CONFLICT (app_name, user_id, session_id, filter_key) WHERE deleted_at IS NULL
 		 DO UPDATE SET
 		   summary = EXCLUDED.summary,
 		   updated_at = EXCLUDED.updated_at,
 		   expires_at = EXCLUDED.expires_at`, s.tableSessionSummaries),
-		sess.AppName, sess.UserID, sess.ID, filterKey, summaryBytes, sum.UpdatedAt, nil)
+			sess.AppName, sess.UserID, sess.ID, filterKey,
+			summaryBytes, sum.UpdatedAt, nil)
+		if err != nil {
+			return fmt.Errorf("upsert summary failed: %w", err)
+		}
+		return nil
+	}
+	write := sessionrevision.NewWrite(ctx, sess)
+	err = s.pgClient.Transaction(ctx, func(tx *sql.Tx) error {
+		_, expiresAt, err := loadSessionStateForUpdate(
+			ctx, tx, s.tableSessionStates, key,
+		)
+		if err != nil {
+			return err
+		}
+		if err := s.revisionStore().ApplyMutation(
+			ctx, tx, key, write, expiresAt,
+		); err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx,
+			fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, filter_key, summary, updated_at, expires_at, deleted_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, NULL)
+		 ON CONFLICT (app_name, user_id, session_id, filter_key) WHERE deleted_at IS NULL
+		 DO UPDATE SET
+		   summary = EXCLUDED.summary,
+		   updated_at = EXCLUDED.updated_at,
+		   expires_at = EXCLUDED.expires_at`, s.tableSessionSummaries),
+			sess.AppName, sess.UserID, sess.ID, filterKey, summaryBytes, sum.UpdatedAt, nil)
+		return err
+	})
 
 	if err != nil {
 		return fmt.Errorf("upsert summary failed: %w", err)

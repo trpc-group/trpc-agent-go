@@ -61,14 +61,55 @@ CREATE TABLE IF NOT EXISTS session_summaries (
     summary     JSON COMMENT 'Summary data in JSON format',
     created_at  DateTime64(6),
     updated_at  DateTime64(6),
+    version_at  DateTime64(9),
     expires_at  Nullable(DateTime64(6)) COMMENT 'Reserved for future use',
     deleted_at  Nullable(DateTime64(6)) COMMENT 'Soft delete timestamp'
-) ENGINE = ReplacingMergeTree(updated_at)
+) ENGINE = ReplacingMergeTree(version_at)
 PARTITION BY (app_name, cityHash64(user_id) % 64)
 -- CRITICAL: Removed deleted_at from ORDER BY to allow ReplacingMergeTree to collapse deleted records
 ORDER BY (app_name, user_id, session_id, filter_key)
 SETTINGS allow_nullable_key = 1
 COMMENT 'Session summaries table';
+
+-- ============================================================================
+-- Table: session_revisions
+-- Description: Canonical versioned session head used for turn replacement
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS session_revisions (
+    app_name    String,
+    user_id     String,
+    session_id  String,
+    generation  UInt64,
+    head        UInt64,
+    version     UInt64,
+    record      String,
+    snapshot    String,
+    updated_at  DateTime64(6),
+    expires_at  Nullable(DateTime64(6)),
+    deleted_at  Nullable(DateTime64(6))
+) ENGINE = ReplacingMergeTree(version)
+PARTITION BY (app_name, cityHash64(user_id) % 64)
+ORDER BY (app_name, user_id, session_id)
+SETTINGS allow_nullable_key = 1
+COMMENT 'Canonical session revision heads';
+
+-- ============================================================================
+-- Table: session_revision_archives
+-- Description: Immutable snapshots retained for replacement replay
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS session_revision_archives (
+    app_name    String,
+    user_id     String,
+    session_id  String,
+    generation  UInt64,
+    snapshot    String,
+    created_at  DateTime64(6),
+    expires_at  Nullable(DateTime64(6))
+) ENGINE = ReplacingMergeTree(created_at)
+PARTITION BY (app_name, cityHash64(user_id) % 64)
+ORDER BY (app_name, user_id, session_id, generation)
+SETTINGS allow_nullable_key = 1
+COMMENT 'Archived session revision snapshots';
 
 -- ============================================================================
 -- Table: app_states

@@ -249,6 +249,9 @@ func TestService_Hooks(t *testing.T) {
 	)
 	assert.NoError(t, err)
 	s.chClient = mockCli
+	// This test isolates hook behavior; its query stub does not model the
+	// revision-head schema.
+	s.tableSessionRevisions = ""
 
 	ctx := context.Background()
 	sess := session.NewSession("app", "user", "sess")

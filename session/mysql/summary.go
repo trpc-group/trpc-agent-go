@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"time"
 
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
 )
@@ -68,8 +69,8 @@ func (s *Service) CreateSessionSummary(
 
 	// Note: expires_at is set to NULL - summaries are bound to session
 	// lifecycle and will be deleted when session is deleted or expires.
-	_, err = s.mysqlClient.Exec(ctx,
-		fmt.Sprintf(
+	if s.tableSessionRevisions == "" {
+		_, err = s.mysqlClient.Exec(ctx, fmt.Sprintf(
 			`INSERT INTO %s (app_name, user_id, session_id, filter_key, summary, updated_at, expires_at, deleted_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
 			ON DUPLICATE KEY UPDATE
@@ -78,8 +79,42 @@ func (s *Service) CreateSessionSummary(
 				expires_at = VALUES(expires_at),
 				deleted_at = NULL`,
 			s.tableSessionSummaries,
-		),
-		key.AppName, key.UserID, key.SessionID, filterKey, string(summaryBytes), sum.UpdatedAt, nil)
+		), key.AppName, key.UserID, key.SessionID, filterKey,
+			string(summaryBytes), sum.UpdatedAt, nil)
+		if err != nil {
+			return fmt.Errorf("upsert summary failed: %w", err)
+		}
+		return nil
+	}
+	write := sessionrevision.NewWrite(ctx, sess)
+	err = s.mysqlClient.Transaction(ctx, func(tx *sql.Tx) error {
+		_, currentExpiresAt, err := loadSessionStateForUpdate(
+			ctx, tx, s.tableSessionStates, key,
+		)
+		if err != nil {
+			return err
+		}
+		var expiresAt *time.Time
+		if currentExpiresAt.Valid {
+			expiresAt = &currentExpiresAt.Time
+		}
+		if err := s.revisionStore().ApplyMutation(
+			ctx, tx, key, write, expiresAt,
+		); err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, fmt.Sprintf(
+			`INSERT INTO %s (app_name, user_id, session_id, filter_key, summary, updated_at, expires_at, deleted_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+			ON DUPLICATE KEY UPDATE
+				summary = VALUES(summary),
+				updated_at = VALUES(updated_at),
+				expires_at = VALUES(expires_at),
+				deleted_at = NULL`,
+			s.tableSessionSummaries,
+		), key.AppName, key.UserID, key.SessionID, filterKey, string(summaryBytes), sum.UpdatedAt, nil)
+		return err
+	})
 	if err != nil {
 		return fmt.Errorf("upsert summary failed: %w", err)
 	}

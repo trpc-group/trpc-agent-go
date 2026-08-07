@@ -26,6 +26,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/hook"
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -70,6 +71,7 @@ type Service struct {
 	collSessionEvents    string
 	collSessionTracks    string
 	collSessionSummaries string
+	collRevisionArchives string
 	collAppStates        string
 	collUserStates       string
 }
@@ -78,6 +80,8 @@ type persistJob struct {
 	key        session.Key
 	event      *event.Event
 	trackEvent *session.TrackEvent
+	write      sessionrevision.Write
+	done       chan error
 }
 
 // buildClientOpts assembles the storage.ClientBuilderOpt list from serviceOpts,
@@ -139,6 +143,7 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		collSessionEvents:    sqldb.BuildTableName(opts.collectionPrefix, sqldb.TableNameSessionEvents),
 		collSessionTracks:    sqldb.BuildTableName(opts.collectionPrefix, collectionNameSessionTracks),
 		collSessionSummaries: sqldb.BuildTableName(opts.collectionPrefix, sqldb.TableNameSessionSummaries),
+		collRevisionArchives: sqldb.BuildTableName(opts.collectionPrefix, sqldb.TableNameSessionRevisionArchives),
 		collAppStates:        sqldb.BuildTableName(opts.collectionPrefix, sqldb.TableNameAppStates),
 		collUserStates:       sqldb.BuildTableName(opts.collectionPrefix, sqldb.TableNameUserStates),
 	}
@@ -254,6 +259,7 @@ func (s *Service) CreateSession(
 		session.WithSessionCreatedAt(doc.CreatedAt),
 		session.WithSessionUpdatedAt(doc.UpdatedAt),
 	)
+	sessionrevision.SetGeneration(sess, 0)
 	return mergeState(appState, userState, sess), nil
 }
 
@@ -299,6 +305,11 @@ func (s *Service) replaceExpiredSession(ctx context.Context, key session.Key, do
 			}
 			if _, err := s.client.DeleteMany(sc, s.database, s.collSessionSummaries, filter); err != nil {
 				return fmt.Errorf("delete expired session summaries: %w", err)
+			}
+		}
+		if s.collRevisionArchives != "" {
+			if _, err := s.client.DeleteMany(sc, s.database, s.collRevisionArchives, filter); err != nil {
+				return fmt.Errorf("delete expired session revision archives: %w", err)
 			}
 		}
 		if _, err := s.client.InsertOne(sc, s.database, s.collSessionStates, doc); err != nil {
@@ -396,6 +407,7 @@ func (s *Service) ListSessions(
 				session.WithSessionCreatedAt(d.CreatedAt),
 				session.WithSessionUpdatedAt(d.UpdatedAt),
 			)
+			s.attachRevisionGeneration(sess, d)
 			sessions = append(sessions, mergeState(appState, userState, sess))
 		}
 		return sessions, nil
@@ -440,6 +452,7 @@ func (s *Service) ListSessions(
 			session.WithSessionCreatedAt(d.CreatedAt),
 			session.WithSessionUpdatedAt(d.UpdatedAt),
 		)
+		s.attachRevisionGeneration(sess, d)
 		attachTrackEvents(sess, trackEventsList[i])
 		sessions = append(sessions, mergeState(appState, userState, sess))
 	}
@@ -478,6 +491,12 @@ func (s *Service) DeleteSession(
 				activeFilterNoExpiry(filter), update); err != nil {
 				return fmt.Errorf("delete session summaries: %w", err)
 			}
+			if s.collRevisionArchives != "" {
+				if _, err := s.client.DeleteMany(sc, s.database, s.collRevisionArchives,
+					filter); err != nil {
+					return fmt.Errorf("delete session revision archives: %w", err)
+				}
+			}
 			return nil
 		}
 		if _, err := s.client.DeleteOne(sc, s.database, s.collSessionStates,
@@ -492,6 +511,11 @@ func (s *Service) DeleteSession(
 		}
 		if _, err := s.client.DeleteMany(sc, s.database, s.collSessionSummaries, filter); err != nil {
 			return fmt.Errorf("delete session summaries: %w", err)
+		}
+		if s.collRevisionArchives != "" {
+			if _, err := s.client.DeleteMany(sc, s.database, s.collRevisionArchives, filter); err != nil {
+				return fmt.Errorf("delete session revision archives: %w", err)
+			}
 		}
 		return nil
 	}, nil)
@@ -689,6 +713,9 @@ func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state
 			return fmt.Errorf("mongodb session service update session state failed: %s is not allowed, use UpdateUserState instead", k)
 		}
 	}
+	if s.collRevisionArchives != "" {
+		return s.updateSessionStateWithRevision(ctx, key, state)
+	}
 
 	now := time.Now()
 	set := bson.M{"updated_at": now}
@@ -876,10 +903,22 @@ func (s *Service) appendEventInternal(
 	key session.Key,
 	opts ...session.Option,
 ) (err error) {
+	write := sessionrevision.NewWrite(ctx, sess)
+	if s.opts.enableAsyncPersist && write.Start != nil {
+		if err := s.flushRevisionPersistence(ctx, key); err != nil {
+			return fmt.Errorf("flush persistence before runner turn: %w", err)
+		}
+	}
 	// Apply the event to the in-memory session first; any error from
 	// persistence below leaves the in-memory copy ahead of disk, matching
 	// the postgres backend's behavior.
 	sess.UpdateUserSession(e, opts...)
+	if s.opts.enableAsyncPersist && write.Start != nil {
+		if err := s.persistEventWithRevision(ctx, key, e, write); err != nil {
+			return fmt.Errorf("mongodb session service append event failed: %w", err)
+		}
+		return nil
+	}
 
 	if s.opts.enableAsyncPersist {
 		defer func() {
@@ -899,14 +938,14 @@ func (s *Service) appendEventInternal(
 		}
 		index := sessionPersistIndex(key, n)
 		select {
-		case s.persistChans[index] <- &persistJob{key: key, event: e}:
+		case s.persistChans[index] <- &persistJob{key: key, event: e, write: write}:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 		return nil
 	}
 
-	if err := s.persistEvent(ctx, key, e); err != nil {
+	if err := s.persistEventWithRevision(ctx, key, e, write); err != nil {
 		return fmt.Errorf("mongodb session service append event failed: %w", err)
 	}
 	return nil
@@ -914,6 +953,10 @@ func (s *Service) appendEventInternal(
 
 // persistEvent writes the state delta + event document atomically.
 func (s *Service) persistEvent(ctx context.Context, key session.Key, e *event.Event) error {
+	return s.persistEventWithRevision(ctx, key, e, sessionrevision.Write{})
+}
+
+func (s *Service) persistEventLegacy(ctx context.Context, key session.Key, e *event.Event) error {
 	now := time.Now()
 
 	// Build the $set update for session_states.
@@ -1017,6 +1060,7 @@ func (s *Service) AppendTrackEvent(
 	if err := key.CheckSessionKey(); err != nil {
 		return err
 	}
+	write := sessionrevision.NewWrite(ctx, sess)
 	if err := sess.AppendTrackEvent(trackEvent, opts...); err != nil {
 		return fmt.Errorf("mongodb session service append track event failed: %w", err)
 	}
@@ -1039,14 +1083,14 @@ func (s *Service) AppendTrackEvent(
 		}
 		index := sessionPersistIndex(key, n)
 		select {
-		case s.persistChans[index] <- &persistJob{key: key, trackEvent: trackEvent}:
+		case s.persistChans[index] <- &persistJob{key: key, trackEvent: trackEvent, write: write}:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 		return nil
 	}
 
-	if err := s.persistTrackEvent(ctx, key, trackEvent); err != nil {
+	if err := s.persistTrackEventWithRevision(ctx, key, trackEvent, write); err != nil {
 		return fmt.Errorf("mongodb session service append track event failed: %w", err)
 	}
 	return nil
@@ -1081,6 +1125,12 @@ func (s *Service) GetTrackEvents(
 }
 
 func (s *Service) persistTrackEvent(ctx context.Context, key session.Key, trackEvent *session.TrackEvent) error {
+	return s.persistTrackEventWithRevision(
+		ctx, key, trackEvent, sessionrevision.Write{},
+	)
+}
+
+func (s *Service) persistTrackEventLegacy(ctx context.Context, key session.Key, trackEvent *session.TrackEvent) error {
 	if trackEvent == nil {
 		return fmt.Errorf("track event is nil")
 	}
@@ -1201,6 +1251,7 @@ func (s *Service) getSession(
 		return nil, fmt.Errorf("get track events: %w", err)
 	}
 	attachTrackEvents(sess, trackEventsList[0])
+	s.attachRevisionGeneration(sess, doc)
 	return mergeState(appState, userState, sess), nil
 }
 

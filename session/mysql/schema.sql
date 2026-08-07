@@ -83,6 +83,37 @@ CREATE TABLE IF NOT EXISTS `{{PREFIX}}session_summaries` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================================================
+-- Table: session_revisions
+-- Description: Stores the active turn checkpoint and write generation
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS `{{PREFIX}}session_revisions` (
+    `app_name` VARCHAR(191) NOT NULL,
+    `user_id` VARCHAR(191) NOT NULL,
+    `session_id` VARCHAR(191) NOT NULL,
+    `record` JSON NOT NULL,
+    `updated_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    `expires_at` TIMESTAMP(6) NULL DEFAULT NULL,
+    PRIMARY KEY (`app_name`,`user_id`,`session_id`),
+    KEY `idx_{{PREFIX}}session_revisions_expires` (`expires_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================================
+-- Table: session_revision_archives
+-- Description: Stores immutable snapshots retained for replacement replay
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS `{{PREFIX}}session_revision_archives` (
+    `app_name` VARCHAR(191) NOT NULL,
+    `user_id` VARCHAR(191) NOT NULL,
+    `session_id` VARCHAR(191) NOT NULL,
+    `generation` BIGINT UNSIGNED NOT NULL,
+    `snapshot` JSON NOT NULL,
+    `created_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    `expires_at` TIMESTAMP(6) NULL DEFAULT NULL,
+    PRIMARY KEY (`app_name`,`user_id`,`session_id`,`generation`),
+    KEY `idx_{{PREFIX}}session_revision_archives_expires` (`expires_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================================
 -- Table: app_states
 -- Description: Stores application-level state data
 -- ============================================================================
@@ -169,6 +200,5 @@ CREATE TABLE IF NOT EXISTS `{{PREFIX}}user_states` (
 --     - All nullable columns use NULL (DEFAULT NULL added for clarity)
 --     - JSON columns can be NULL (empty summary not yet generated)
 --     - TEXT columns for potentially large values (e.g., app_states.value)
-
 
 
