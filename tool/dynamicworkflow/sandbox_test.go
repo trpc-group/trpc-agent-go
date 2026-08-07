@@ -221,9 +221,7 @@ func TestSandboxRunnerKillsDescendantHoldingStderr(t *testing.T) {
 	require.NoError(t, os.WriteFile(
 		wrapper,
 		[]byte(`#!/bin/sh
-# Wait for the host's initial run message before exiting. Without this
-# handshake, the wrapper can close stdin before the host writes it and fail
-# with EPIPE before exercising descendant stderr cleanup.
+# Consume the host run request before exiting so this test isolates process-group cleanup.
 IFS= read -r request || exit 98
 /bin/sleep 30 &
 printf '{"type":"done","result":"done"}\n'

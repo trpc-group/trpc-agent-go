@@ -1,0 +1,937 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2026 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
+package main
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
+	"time"
+)
+
+const (
+	sqliteDriverName    = "sqlite3"
+	reviewSchemaVersion = 2
+
+	decisionKindFilter     = "filter"
+	decisionKindPermission = "permission"
+
+	findingDispositionFinding = "finding"
+	findingDispositionWarning = "warning"
+)
+
+var errReviewTaskNotFound = errors.New("review task not found")
+
+type reviewStore interface {
+	CheckpointReview(context.Context, reviewReport) error
+	SaveReview(context.Context, reviewReport) error
+	LoadReview(context.Context, string) (reviewReport, error)
+	Close() error
+}
+
+type sqliteReviewStore struct {
+	db     *sql.DB
+	dbPath string
+}
+
+type memoryReviewStore struct {
+	mu            sync.Mutex
+	reports       map[string]reviewReport
+	checkpointErr error
+	saveErr       error
+}
+
+const reviewSchemaSQL = `
+CREATE TABLE IF NOT EXISTS review_tasks (
+	task_id TEXT PRIMARY KEY,
+	status TEXT NOT NULL,
+	stage TEXT NOT NULL DEFAULT 'completed',
+	failure_json TEXT,
+	conclusion TEXT NOT NULL CHECK (conclusion IN ('pass', 'findings', 'needs_human_review')),
+	started_at TEXT NOT NULL,
+	finished_at TEXT NOT NULL,
+	duration_ms INTEGER NOT NULL,
+	input_json TEXT NOT NULL,
+	runtime_json TEXT NOT NULL,
+	parse_json TEXT NOT NULL,
+	rules_json TEXT NOT NULL,
+	metrics_json TEXT NOT NULL,
+	report_paths_json TEXT NOT NULL,
+	skill_name TEXT,
+	skill_digest TEXT,
+	commands_planned INTEGER NOT NULL,
+	commands_allowed INTEGER NOT NULL,
+	commands_blocked INTEGER NOT NULL,
+	permission_blocks INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS decisions (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	task_id TEXT NOT NULL REFERENCES review_tasks(task_id) ON DELETE CASCADE,
+	kind TEXT NOT NULL CHECK (kind IN ('filter', 'permission')),
+	ordinal INTEGER NOT NULL,
+	command TEXT NOT NULL,
+	decision TEXT NOT NULL,
+	reason TEXT
+);
+
+CREATE TABLE IF NOT EXISTS sandbox_runs (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	task_id TEXT NOT NULL REFERENCES review_tasks(task_id) ON DELETE CASCADE,
+	ordinal INTEGER NOT NULL,
+	runtime TEXT NOT NULL,
+	command TEXT NOT NULL,
+	exit_code INTEGER NOT NULL,
+	stdout TEXT,
+	stderr TEXT,
+	timed_out INTEGER NOT NULL,
+	duration_ms INTEGER NOT NULL,
+	error TEXT,
+	skipped INTEGER NOT NULL,
+	warnings_json TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS findings (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	task_id TEXT NOT NULL REFERENCES review_tasks(task_id) ON DELETE CASCADE,
+	disposition TEXT NOT NULL CHECK (disposition IN ('finding', 'warning')),
+	ordinal INTEGER NOT NULL,
+	severity TEXT NOT NULL,
+	category TEXT NOT NULL,
+	file TEXT NOT NULL,
+	line INTEGER NOT NULL,
+	title TEXT NOT NULL,
+	evidence TEXT,
+	recommendation TEXT,
+	confidence REAL NOT NULL,
+	source TEXT,
+	rule_id TEXT
+);
+
+CREATE TABLE IF NOT EXISTS artifacts (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	task_id TEXT NOT NULL REFERENCES review_tasks(task_id) ON DELETE CASCADE,
+	ordinal INTEGER NOT NULL,
+	kind TEXT NOT NULL CHECK (kind IN ('review_report_json', 'review_report_markdown')),
+	path TEXT NOT NULL,
+	sha256 TEXT,
+	bytes INTEGER NOT NULL
+);
+`
+
+func openConfiguredReviewStore(ctx context.Context, cfg config, hooks runtimeHooks) (reviewStore, bool, error) {
+	if hooks.reviewStore != nil {
+		return hooks.reviewStore, false, nil
+	}
+	store, err := openSQLiteReviewStore(ctx, cfg.dbPath)
+	return store, true, err
+}
+
+func openSQLiteReviewStore(ctx context.Context, dbPath string) (reviewStore, error) {
+	if !sqlDriverAvailable(sqliteDriverName) {
+		return nil, errors.New("sqlite storage unavailable: sqlite3 driver is not registered; enable CGO to use github.com/mattn/go-sqlite3")
+	}
+	var err error
+	dbPath, err = normalizeSQLiteFilePath(dbPath)
+	if err != nil {
+		return nil, err
+	}
+	if err := prepareSQLitePath(dbPath); err != nil {
+		return nil, err
+	}
+	dsn := dbPath + "?_foreign_keys=1&_journal_mode=DELETE"
+	db, err := sql.Open(sqliteDriverName, dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open sqlite database: %w", err)
+	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	store := &sqliteReviewStore{db: db, dbPath: dbPath}
+	if err := store.init(ctx); err != nil {
+		closeErr := db.Close()
+		secureErr := secureSQLiteArtifacts(dbPath)
+		return nil, errors.Join(err, closeErr, secureErr)
+	}
+	if err := secureSQLiteArtifacts(dbPath); err != nil {
+		closeErr := db.Close()
+		afterCloseErr := secureSQLiteArtifacts(dbPath)
+		return nil, errors.Join(err, closeErr, afterCloseErr)
+	}
+	return store, nil
+}
+
+func normalizeSQLiteFilePath(dbPath string) (string, error) {
+	if strings.TrimSpace(dbPath) == "" {
+		return "", errors.New("sqlite db path must not be empty")
+	}
+	if strings.ContainsRune(dbPath, '\x00') {
+		return "", errors.New("sqlite db path contains a NUL byte")
+	}
+	if strings.ContainsRune(dbPath, '?') {
+		return "", errors.New("sqlite db path must not contain DSN query parameters")
+	}
+	if len(dbPath) >= len("file:") && strings.EqualFold(dbPath[:len("file:")], "file:") {
+		return "", errors.New("sqlite db path must be a filesystem path, not a file URI")
+	}
+	if strings.EqualFold(dbPath, ":memory:") {
+		return "", errors.New("sqlite in-memory databases are not supported")
+	}
+	absolute, err := filepath.Abs(filepath.Clean(dbPath))
+	if err != nil {
+		return "", fmt.Errorf("resolve sqlite db path: %w", err)
+	}
+	return absolute, nil
+}
+
+func prepareSQLitePath(dbPath string) error {
+	dir := filepath.Dir(dbPath)
+	if dir == "" {
+		dir = "."
+	}
+	info, err := os.Lstat(dir)
+	if os.IsNotExist(err) {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return fmt.Errorf("create sqlite directory: %w", err)
+		}
+		info, err = os.Lstat(dir)
+	}
+	if err != nil {
+		return fmt.Errorf("inspect sqlite directory: %w", err)
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("sqlite directory is not a regular directory")
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0o022 != 0 {
+		return fmt.Errorf("sqlite directory permissions %04o allow group or other writes", info.Mode().Perm())
+	}
+
+	if err := secureSQLiteFile(dbPath, true); err != nil {
+		return fmt.Errorf("secure sqlite database: %w", err)
+	}
+	for _, suffix := range []string{"-journal", "-wal", "-shm"} {
+		if err := secureSQLiteFile(dbPath+suffix, false); err != nil {
+			return fmt.Errorf("secure sqlite sidecar %q: %w", suffix, err)
+		}
+	}
+	return nil
+}
+
+func secureSQLiteArtifacts(dbPath string) error {
+	if _, err := os.Lstat(dbPath); err != nil {
+		return fmt.Errorf("inspect sqlite database: %w", err)
+	}
+	if err := secureSQLiteFile(dbPath, false); err != nil {
+		return fmt.Errorf("secure sqlite database: %w", err)
+	}
+	for _, suffix := range []string{"-journal", "-wal", "-shm"} {
+		if err := secureSQLiteFile(dbPath+suffix, false); err != nil {
+			return fmt.Errorf("secure sqlite sidecar %q: %w", suffix, err)
+		}
+	}
+	return nil
+}
+
+func secureSQLiteFile(path string, create bool) error {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		if !create {
+			return nil
+		}
+		file, createErr := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if createErr != nil {
+			if os.IsExist(createErr) {
+				return secureSQLiteFile(path, false)
+			}
+			return createErr
+		}
+		if closeErr := file.Close(); closeErr != nil {
+			return closeErr
+		}
+		info, err = os.Lstat(path)
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return fmt.Errorf("path is not a regular file")
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		return err
+	}
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	verified, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if verified.Mode()&os.ModeSymlink != 0 || !verified.Mode().IsRegular() {
+		return fmt.Errorf("path changed while securing permissions")
+	}
+	if mode := verified.Mode().Perm(); mode != 0o600 {
+		return fmt.Errorf("permissions are %04o, want 0600", mode)
+	}
+	return nil
+}
+
+func sqlDriverAvailable(name string) bool {
+	for _, driver := range sql.Drivers() {
+		if driver == name {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *sqliteReviewStore) init(ctx context.Context) error {
+	var journalMode string
+	if err := s.db.QueryRowContext(ctx, "PRAGMA journal_mode=DELETE").Scan(&journalMode); err != nil {
+		return fmt.Errorf("set sqlite journal mode: %w", err)
+	}
+	if !strings.EqualFold(strings.TrimSpace(journalMode), "delete") {
+		return fmt.Errorf("set sqlite journal mode: got %q, want delete", journalMode)
+	}
+	if _, err := s.db.ExecContext(ctx, "PRAGMA foreign_keys=ON"); err != nil {
+		return fmt.Errorf("enable sqlite foreign keys: %w", err)
+	}
+	var version int
+	if err := s.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+		return fmt.Errorf("read sqlite schema version: %w", err)
+	}
+	if version > reviewSchemaVersion {
+		return fmt.Errorf("sqlite schema version %d is newer than supported version %d", version, reviewSchemaVersion)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin sqlite schema transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	if version == 1 {
+		if _, err := tx.ExecContext(ctx, "ALTER TABLE review_tasks ADD COLUMN stage TEXT NOT NULL DEFAULT 'completed'"); err != nil {
+			return fmt.Errorf("migrate sqlite review stage: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, "ALTER TABLE review_tasks ADD COLUMN failure_json TEXT"); err != nil {
+			return fmt.Errorf("migrate sqlite review failure: %w", err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, reviewSchemaSQL); err != nil {
+		return fmt.Errorf("initialize sqlite schema: %w", err)
+	}
+	if version < reviewSchemaVersion {
+		if _, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version=%d", reviewSchemaVersion)); err != nil {
+			return fmt.Errorf("set sqlite schema version: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit sqlite schema transaction: %w", err)
+	}
+	committed = true
+	return nil
+}
+
+func (s *sqliteReviewStore) CheckpointReview(ctx context.Context, report reviewReport) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin review checkpoint transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	if err := upsertReviewTask(ctx, tx, report); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit review checkpoint transaction: %w", err)
+	}
+	committed = true
+	return secureSQLiteArtifacts(s.dbPath)
+}
+
+func (s *sqliteReviewStore) SaveReview(ctx context.Context, report reviewReport) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin review transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	if err := upsertReviewTask(ctx, tx, report); err != nil {
+		return err
+	}
+	for _, statement := range []string{
+		"DELETE FROM decisions WHERE task_id = ?",
+		"DELETE FROM sandbox_runs WHERE task_id = ?",
+		"DELETE FROM findings WHERE task_id = ?",
+		"DELETE FROM artifacts WHERE task_id = ?",
+	} {
+		if _, err := tx.ExecContext(ctx, statement, report.TaskID); err != nil {
+			return fmt.Errorf("replace review child records: %w", err)
+		}
+	}
+
+	if err := insertDecisions(ctx, tx, report.TaskID, decisionKindFilter, report.Governance.FilterDecisions); err != nil {
+		return err
+	}
+	if err := insertDecisions(ctx, tx, report.TaskID, decisionKindPermission, report.Governance.PermissionDecisions); err != nil {
+		return err
+	}
+	if err := insertSandboxRuns(ctx, tx, report.TaskID, report.Governance.SandboxRuns); err != nil {
+		return err
+	}
+	if err := insertFindings(ctx, tx, report.TaskID, findingDispositionFinding, report.Findings); err != nil {
+		return err
+	}
+	if err := insertFindings(ctx, tx, report.TaskID, findingDispositionWarning, report.Warnings); err != nil {
+		return err
+	}
+	if err := insertArtifacts(ctx, tx, report.TaskID, report.Artifacts); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit review transaction: %w", err)
+	}
+	committed = true
+	if err := secureSQLiteArtifacts(s.dbPath); err != nil {
+		return err
+	}
+	return nil
+}
+
+func upsertReviewTask(ctx context.Context, tx *sql.Tx, report reviewReport) error {
+	inputJSON, err := marshalJSONText(report.Input)
+	if err != nil {
+		return err
+	}
+	runtimeJSON, err := marshalJSONText(report.Runtime)
+	if err != nil {
+		return err
+	}
+	parseJSON, err := marshalJSONText(report.Parse)
+	if err != nil {
+		return err
+	}
+	rulesJSON, err := marshalJSONText(report.Rules)
+	if err != nil {
+		return err
+	}
+	metricsJSON, err := marshalJSONText(report.Metrics)
+	if err != nil {
+		return err
+	}
+	reportPathsJSON, err := marshalJSONText(report.ReportPaths)
+	if err != nil {
+		return err
+	}
+	var failureJSON any
+	if report.Failure != nil {
+		failureJSON, err = marshalJSONText(report.Failure)
+		if err != nil {
+			return err
+		}
+	}
+
+	_, err = tx.ExecContext(ctx, `
+INSERT INTO review_tasks (
+	task_id, status, stage, failure_json, conclusion,
+	started_at, finished_at, duration_ms,
+	input_json, runtime_json, parse_json, rules_json, metrics_json, report_paths_json,
+	skill_name, skill_digest, commands_planned, commands_allowed, commands_blocked,
+	permission_blocks
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(task_id) DO UPDATE SET
+	status = excluded.status,
+	stage = excluded.stage,
+	failure_json = excluded.failure_json,
+	conclusion = excluded.conclusion,
+	started_at = excluded.started_at,
+	finished_at = excluded.finished_at,
+	duration_ms = excluded.duration_ms,
+	input_json = excluded.input_json,
+	runtime_json = excluded.runtime_json,
+	parse_json = excluded.parse_json,
+	rules_json = excluded.rules_json,
+	metrics_json = excluded.metrics_json,
+	report_paths_json = excluded.report_paths_json,
+	skill_name = excluded.skill_name,
+	skill_digest = excluded.skill_digest,
+	commands_planned = excluded.commands_planned,
+	commands_allowed = excluded.commands_allowed,
+	commands_blocked = excluded.commands_blocked,
+	permission_blocks = excluded.permission_blocks`,
+		report.TaskID,
+		report.Status,
+		report.Stage,
+		failureJSON,
+		report.Conclusion,
+		formatReportTime(report.StartedAt),
+		formatReportTime(report.FinishedAt),
+		report.DurationMS,
+		inputJSON,
+		runtimeJSON,
+		parseJSON,
+		rulesJSON,
+		metricsJSON,
+		reportPathsJSON,
+		report.Governance.SkillName,
+		report.Governance.SkillDigest,
+		report.Governance.CommandsPlanned,
+		report.Governance.CommandsAllowed,
+		report.Governance.CommandsBlocked,
+		report.Governance.PermissionBlocks,
+	)
+	if err != nil {
+		return fmt.Errorf("upsert review task: %w", err)
+	}
+	return nil
+}
+
+func insertDecisions(
+	ctx context.Context,
+	tx *sql.Tx,
+	taskID string,
+	kind string,
+	decisions []governanceDecision,
+) error {
+	for i, decision := range decisions {
+		_, err := tx.ExecContext(ctx, `
+INSERT INTO decisions (task_id, kind, ordinal, command, decision, reason)
+VALUES (?, ?, ?, ?, ?, ?)`,
+			taskID, kind, i, decision.Command, decision.Decision, decision.Reason)
+		if err != nil {
+			return fmt.Errorf("insert %s decision: %w", kind, err)
+		}
+	}
+	return nil
+}
+
+func insertSandboxRuns(ctx context.Context, tx *sql.Tx, taskID string, runs []sandboxRun) error {
+	for i, run := range runs {
+		warningsJSON, err := marshalJSONText(run.Warnings)
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `
+INSERT INTO sandbox_runs (
+	task_id, ordinal, runtime, command, exit_code, stdout, stderr, timed_out,
+	duration_ms, error, skipped, warnings_json
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			taskID,
+			i,
+			run.Runtime,
+			run.Command,
+			run.ExitCode,
+			run.Stdout,
+			run.Stderr,
+			boolToInt(run.TimedOut),
+			run.DurationMS,
+			run.Error,
+			boolToInt(run.Skipped),
+			warningsJSON,
+		)
+		if err != nil {
+			return fmt.Errorf("insert sandbox run: %w", err)
+		}
+	}
+	return nil
+}
+
+func insertFindings(
+	ctx context.Context,
+	tx *sql.Tx,
+	taskID string,
+	disposition string,
+	findings []reviewFinding,
+) error {
+	for i, finding := range findings {
+		_, err := tx.ExecContext(ctx, `
+INSERT INTO findings (
+	task_id, disposition, ordinal, severity, category, file, line, title,
+	evidence, recommendation, confidence, source, rule_id
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			taskID,
+			disposition,
+			i,
+			finding.Severity,
+			finding.Category,
+			finding.File,
+			finding.Line,
+			finding.Title,
+			finding.Evidence,
+			finding.Recommendation,
+			finding.Confidence,
+			finding.Source,
+			finding.RuleID,
+		)
+		if err != nil {
+			return fmt.Errorf("insert %s: %w", disposition, err)
+		}
+	}
+	return nil
+}
+
+func insertArtifacts(ctx context.Context, tx *sql.Tx, taskID string, artifacts []reportArtifact) error {
+	for i, artifact := range artifacts {
+		_, err := tx.ExecContext(ctx, `
+INSERT INTO artifacts (task_id, ordinal, kind, path, sha256, bytes)
+VALUES (?, ?, ?, ?, ?, ?)`,
+			taskID, i, artifact.Kind, artifact.Path, artifact.SHA256, artifact.Bytes)
+		if err != nil {
+			return fmt.Errorf("insert artifact: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s *sqliteReviewStore) LoadReview(ctx context.Context, taskID string) (reviewReport, error) {
+	var report reviewReport
+	var failureJSON sql.NullString
+	var startedAt string
+	var finishedAt string
+	var inputJSON string
+	var runtimeJSON string
+	var parseJSON string
+	var rulesJSON string
+	var metricsJSON string
+	var reportPathsJSON string
+	row := s.db.QueryRowContext(ctx, `
+SELECT task_id, status, stage, failure_json, conclusion, started_at, finished_at, duration_ms,
+	input_json, runtime_json, parse_json, rules_json, metrics_json, report_paths_json,
+	skill_name, skill_digest, commands_planned, commands_allowed, commands_blocked,
+	permission_blocks
+FROM review_tasks
+WHERE task_id = ?`, taskID)
+	err := row.Scan(
+		&report.TaskID,
+		&report.Status,
+		&report.Stage,
+		&failureJSON,
+		&report.Conclusion,
+		&startedAt,
+		&finishedAt,
+		&report.DurationMS,
+		&inputJSON,
+		&runtimeJSON,
+		&parseJSON,
+		&rulesJSON,
+		&metricsJSON,
+		&reportPathsJSON,
+		&report.Governance.SkillName,
+		&report.Governance.SkillDigest,
+		&report.Governance.CommandsPlanned,
+		&report.Governance.CommandsAllowed,
+		&report.Governance.CommandsBlocked,
+		&report.Governance.PermissionBlocks,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return reviewReport{}, errReviewTaskNotFound
+	}
+	if err != nil {
+		return reviewReport{}, fmt.Errorf("query review task: %w", err)
+	}
+	if failureJSON.Valid {
+		report.Failure = &reviewFailure{}
+		if err := unmarshalJSONText(failureJSON.String, report.Failure); err != nil {
+			return reviewReport{}, err
+		}
+	}
+	report.StartedAt, err = parseReportTime(startedAt)
+	if err != nil {
+		return reviewReport{}, err
+	}
+	report.FinishedAt, err = parseReportTime(finishedAt)
+	if err != nil {
+		return reviewReport{}, err
+	}
+	if err := unmarshalJSONText(inputJSON, &report.Input); err != nil {
+		return reviewReport{}, err
+	}
+	if err := unmarshalJSONText(runtimeJSON, &report.Runtime); err != nil {
+		return reviewReport{}, err
+	}
+	if err := unmarshalJSONText(parseJSON, &report.Parse); err != nil {
+		return reviewReport{}, err
+	}
+	if err := unmarshalJSONText(rulesJSON, &report.Rules); err != nil {
+		return reviewReport{}, err
+	}
+	if err := unmarshalJSONText(metricsJSON, &report.Metrics); err != nil {
+		return reviewReport{}, err
+	}
+	if err := unmarshalJSONText(reportPathsJSON, &report.ReportPaths); err != nil {
+		return reviewReport{}, err
+	}
+
+	report.Governance.FilterDecisions, err = loadDecisions(ctx, s.db, taskID, decisionKindFilter)
+	if err != nil {
+		return reviewReport{}, err
+	}
+	report.Governance.PermissionDecisions, err = loadDecisions(ctx, s.db, taskID, decisionKindPermission)
+	if err != nil {
+		return reviewReport{}, err
+	}
+	report.Governance.SandboxRuns, err = loadSandboxRuns(ctx, s.db, taskID)
+	if err != nil {
+		return reviewReport{}, err
+	}
+	report.Findings, err = loadFindings(ctx, s.db, taskID, findingDispositionFinding)
+	if err != nil {
+		return reviewReport{}, err
+	}
+	report.Warnings, err = loadFindings(ctx, s.db, taskID, findingDispositionWarning)
+	if err != nil {
+		return reviewReport{}, err
+	}
+	report.Artifacts, err = loadArtifacts(ctx, s.db, taskID)
+	if err != nil {
+		return reviewReport{}, err
+	}
+	return report, nil
+}
+
+func loadDecisions(ctx context.Context, db *sql.DB, taskID string, kind string) ([]governanceDecision, error) {
+	rows, err := db.QueryContext(ctx, `
+SELECT command, decision, reason
+FROM decisions
+WHERE task_id = ? AND kind = ?
+ORDER BY ordinal`, taskID, kind)
+	if err != nil {
+		return nil, fmt.Errorf("query %s decisions: %w", kind, err)
+	}
+	defer rows.Close()
+	var decisions []governanceDecision
+	for rows.Next() {
+		var decision governanceDecision
+		if err := rows.Scan(&decision.Command, &decision.Decision, &decision.Reason); err != nil {
+			return nil, fmt.Errorf("scan %s decision: %w", kind, err)
+		}
+		decisions = append(decisions, decision)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate %s decisions: %w", kind, err)
+	}
+	return decisions, nil
+}
+
+func loadSandboxRuns(ctx context.Context, db *sql.DB, taskID string) ([]sandboxRun, error) {
+	rows, err := db.QueryContext(ctx, `
+SELECT runtime, command, exit_code, stdout, stderr, timed_out, duration_ms,
+	error, skipped, warnings_json
+FROM sandbox_runs
+WHERE task_id = ?
+ORDER BY ordinal`, taskID)
+	if err != nil {
+		return nil, fmt.Errorf("query sandbox runs: %w", err)
+	}
+	defer rows.Close()
+	var runs []sandboxRun
+	for rows.Next() {
+		var run sandboxRun
+		var timedOut int
+		var skipped int
+		var warningsJSON string
+		if err := rows.Scan(
+			&run.Runtime,
+			&run.Command,
+			&run.ExitCode,
+			&run.Stdout,
+			&run.Stderr,
+			&timedOut,
+			&run.DurationMS,
+			&run.Error,
+			&skipped,
+			&warningsJSON,
+		); err != nil {
+			return nil, fmt.Errorf("scan sandbox run: %w", err)
+		}
+		run.TimedOut = timedOut != 0
+		run.Skipped = skipped != 0
+		if err := unmarshalJSONText(warningsJSON, &run.Warnings); err != nil {
+			return nil, err
+		}
+		runs = append(runs, run)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate sandbox runs: %w", err)
+	}
+	return runs, nil
+}
+
+func loadFindings(ctx context.Context, db *sql.DB, taskID string, disposition string) ([]reviewFinding, error) {
+	rows, err := db.QueryContext(ctx, `
+SELECT severity, category, file, line, title, evidence, recommendation,
+	confidence, source, rule_id
+FROM findings
+WHERE task_id = ? AND disposition = ?
+ORDER BY ordinal`, taskID, disposition)
+	if err != nil {
+		return nil, fmt.Errorf("query %s records: %w", disposition, err)
+	}
+	defer rows.Close()
+	var findings []reviewFinding
+	for rows.Next() {
+		var finding reviewFinding
+		if err := rows.Scan(
+			&finding.Severity,
+			&finding.Category,
+			&finding.File,
+			&finding.Line,
+			&finding.Title,
+			&finding.Evidence,
+			&finding.Recommendation,
+			&finding.Confidence,
+			&finding.Source,
+			&finding.RuleID,
+		); err != nil {
+			return nil, fmt.Errorf("scan %s: %w", disposition, err)
+		}
+		findings = append(findings, finding)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate %s records: %w", disposition, err)
+	}
+	return findings, nil
+}
+
+func loadArtifacts(ctx context.Context, db *sql.DB, taskID string) ([]reportArtifact, error) {
+	rows, err := db.QueryContext(ctx, `
+SELECT kind, path, sha256, bytes
+FROM artifacts
+WHERE task_id = ?
+ORDER BY ordinal`, taskID)
+	if err != nil {
+		return nil, fmt.Errorf("query artifacts: %w", err)
+	}
+	defer rows.Close()
+	var artifacts []reportArtifact
+	for rows.Next() {
+		var artifact reportArtifact
+		if err := rows.Scan(&artifact.Kind, &artifact.Path, &artifact.SHA256, &artifact.Bytes); err != nil {
+			return nil, fmt.Errorf("scan artifact: %w", err)
+		}
+		artifacts = append(artifacts, artifact)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate artifacts: %w", err)
+	}
+	return artifacts, nil
+}
+
+func (s *sqliteReviewStore) Close() error {
+	closeErr := s.db.Close()
+	secureErr := secureSQLiteArtifacts(s.dbPath)
+	return errors.Join(closeErr, secureErr)
+}
+
+func newMemoryReviewStore() *memoryReviewStore {
+	return &memoryReviewStore{reports: map[string]reviewReport{}}
+}
+
+func (s *memoryReviewStore) CheckpointReview(_ context.Context, report reviewReport) error {
+	if s.checkpointErr != nil {
+		return s.checkpointErr
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reports[report.TaskID] = cloneReviewReport(report)
+	return nil
+}
+
+func (s *memoryReviewStore) SaveReview(_ context.Context, report reviewReport) error {
+	if s.saveErr != nil {
+		return s.saveErr
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reports[report.TaskID] = cloneReviewReport(report)
+	return nil
+}
+
+func (s *memoryReviewStore) LoadReview(_ context.Context, taskID string) (reviewReport, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	report, ok := s.reports[taskID]
+	if !ok {
+		return reviewReport{}, errReviewTaskNotFound
+	}
+	return cloneReviewReport(report), nil
+}
+
+func (s *memoryReviewStore) Close() error {
+	return nil
+}
+
+func cloneReviewReport(report reviewReport) reviewReport {
+	data, err := json.Marshal(report)
+	if err != nil {
+		return report
+	}
+	var clone reviewReport
+	if err := json.Unmarshal(data, &clone); err != nil {
+		return report
+	}
+	return clone
+}
+
+func marshalJSONText(value any) (string, error) {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return "", fmt.Errorf("marshal storage json: %w", err)
+	}
+	return string(data), nil
+}
+
+func unmarshalJSONText(text string, target any) error {
+	if strings.TrimSpace(text) == "" {
+		text = "null"
+	}
+	if err := json.Unmarshal([]byte(text), target); err != nil {
+		return fmt.Errorf("unmarshal storage json: %w", err)
+	}
+	return nil
+}
+
+func formatReportTime(value time.Time) string {
+	return value.UTC().Format(time.RFC3339Nano)
+}
+
+func parseReportTime(value string) (time.Time, error) {
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parse report time: %w", err)
+	}
+	return parsed, nil
+}
+
+func boolToInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
