@@ -279,6 +279,166 @@ Agent: Nice to meet you, Alice! It's great to connect with someone from TechCorp
 (Background: Extractor analyzes conversation and creates memory automatically)
 ```
 
+### Opt-in Auto Update Policy
+
+The built-in extractor keeps its historical behavior unless a policy is
+explicitly configured. Existing applications therefore require no migration:
+
+```go
+// Merge Similar is the default and preserves the historical behavior.
+memExtractor := extractor.NewExtractor(extractorModel)
+```
+
+For applications that prefer preserving long-term history, enable the update
+policy explicitly:
+
+```go
+memExtractor := extractor.NewExtractor(
+    extractorModel,
+    extractor.WithUpdatePolicy(extractor.UpdatePolicyPreserveHistory),
+)
+```
+
+The policy is a built-in extractor capability captured when the Auto memory
+worker is constructed. `Metadata()` remains descriptive and does not control
+runtime behavior. A custom extractor or a decorator around the built-in
+extractor uses Merge Similar unless it is replaced with a directly configured
+built-in extractor.
+
+The update policies affect only operations produced by background Auto
+extraction. An agent or application explicitly calling `memory_update` keeps
+the existing tool semantics.
+
+| Update policy | Auto extraction behavior |
+| --- | --- |
+| `UpdatePolicyMergeSimilar` | Uses the existing similarity-based reconciliation. This is the default. |
+| `UpdatePolicyPreserveHistory` | Drops exact duplicates, updates only for non-conflicting enrichment, keeps changes as separate entries, and allows automatic delete/clear only after an explicit user request. |
+| `UpdatePolicyAppendOnly` | Emits only non-duplicate adds: updates become adds, while delete and clear operations are filtered. |
+
+Merge Similar retains the historical user-only query when retrieving existing
+memories. Preserve History and Append Only use user and assistant conversation
+text, excluding tool protocol messages, to retrieve the entries evaluated by
+their policy rules. This query is bounded to 7 KiB with UTF-8-safe truncation.
+
+Preserve History candidate reconciliation compares only the existing entries
+already supplied to the extractor. Exact duplicate checks also consider earlier
+operations from the same extraction batch, but distinct operations are not
+merged. Retrieval scores rank candidates but cannot by themselves authorize an
+update or drop. Event identity, meaningful old tokens, numbers, dates, negation,
+participants, and locations must remain compatible. Topics are merged only
+after an update has passed these checks.
+The directional token-coverage bounds (`0.95` for the existing memory and
+`0.70` for the candidate) are conservative implementation heuristics, not
+values selected by benchmark tuning. When the checks cannot establish a safe
+enrichment, the policy keeps the candidate as a separate memory.
+For example, adding a time to the same dated visit may update that visit;
+changing an employer or describing a visit on another date creates a new
+entry. Destructive operations are never inferred from contradictions: delete
+requires an explicit user request, and clear requires an explicit request to
+forget all stored information without a scoped target or exception. A scoped
+forget request can authorize only deletes whose memory content matches that
+target. A tolerated inflection must match the target inside one fact segment;
+tokens from separate facts cannot jointly authorize deletion. A later explicit
+cancellation revokes the earlier authorization.
+
+The update policy does not change `memory.Service`, `MemoryExtractor`, the stored
+JSON representation, memory IDs, or database schemas. It does not rewrite
+existing entries. Merge Similar retains its historical best-effort persistence
+behavior. With Preserve History or Append Only, a persistence failure is
+returned and does not advance the session extraction watermark, so a later job
+can retry the same events.
+
+To roll back, remove the option or set it to `UpdatePolicyMergeSimilar`. No data
+migration is required.
+
+### Opt-in Assistant Episode Extraction
+
+Auto extraction normally uses the standard fact and episode tools. Applications
+that also need to recall reusable information from earlier assistant responses
+can enable assistant episode extraction when constructing the extractor:
+
+```go
+memExtractor := extractor.NewExtractor(
+    extractorModel,
+    extractor.WithAssistantEpisodeExtraction(),
+)
+memoryService := memoryinmemory.NewMemoryService(
+    memoryinmemory.WithExtractor(memExtractor),
+)
+```
+
+The option uses two isolated extraction stages. The first stage keeps the
+standard memory tools, restricted by `WithUpdatePolicy` and enabled-tool
+configuration when present, and extracts ordinary user facts and events from
+user messages. When collecting a session delta, the enabled option uses only
+the primary choice from each model response event; alternative choices are not
+treated as consecutive assistant replies. The extractor then considers
+eligible user/assistant pairs in the
+extraction delta in chronological order. The deterministic eligibility check
+accepts a structured request only when the assistant response contains at
+least two Markdown or numbered list items. It also accepts a quantitative
+question when the response introduces a numeric answer that is not already in
+the question. A single prose result, including a classification, translation,
+conversion, or summary, does not currently trigger the second stage unless it
+has the required list shape. Eligible pairs are considered in chronological
+order within a private per-request pair and source-size budget. Candidates past
+that budget are omitted because assistant-result extraction is best effort.
+The selected pairs are combined into one second request that exposes only the
+private `memory_assistant_episode` tool. This tool is never visible to the
+application Agent. An application policy configured through `WithPrompt` or
+`SetPrompt` also constrains the second-stage request. An explicit, current user
+request to delete or clear memory suppresses the optional stage; a Delete or
+Clear operation produced by the model without that authorization does not.
+
+Assistant output is stored as attributed conversation history rather than as a
+verified fact or user preference. The framework converts every accepted call
+to an ordinary `KindEpisode` add operation, fixes the participants to `User`
+and `Assistant`, and uses the extraction reference date as the event time when
+one is present. For example:
+
+```json
+{
+  "memory": "Assistant-provided conversation episode: When the user asked for compact-kitchen products, the assistant recommended Alpha and Beta.",
+  "kind": "episode",
+  "participants": ["User", "Assistant"]
+}
+```
+
+The second-stage model supplies only the episode text and optional retrieval
+topics. It cannot override the memory kind, participants, event time, or
+location. The framework rejects empty text, text over 4,096 bytes, and
+quantities that are not grounded in the selected conversation pair. Quantity
+validation preserves signs, currencies, percentages, and recognized units
+while accepting equivalent forms such as `$5` and `USD 5`. To bound each
+source's contribution to the optional request, every source message is
+represented by a deterministic 8,192-byte excerpt that preserves its beginning
+and end.
+
+The assistant request uses a child deadline that ends before the parent
+extraction deadline, reserving time to persist ordinary first-stage operations.
+If that child deadline expires, or if the optional request or its callbacks
+fail, the failure is logged and the ordinary operations are preserved. A true
+parent-context cancellation still aborts the complete extraction. Deterministic
+model-output rejections, such as invalid tool arguments, oversized text, or an
+ungrounded quantity, skip only the affected assistant episode. A rejected call
+for one pair does not discard valid calls for other pairs in the same response.
+
+This feature is backend-neutral. It does not add a memory kind, field, database
+column, table, or migration. Selected pairs in the same delta share one
+second-stage model request, so extraction uses at most two model calls per
+delta: one ordinary request and one assistant request. The option is fixed for
+the lifetime of the extractor and is captured by the Auto memory worker when it
+is constructed; it does not alter the extractor's descriptive `Metadata()`.
+To disable it, construct a new extractor and memory service without the option.
+Pass the configured built-in extractor directly to the memory service; a custom
+decorator does not carry this internal capability to the Auto memory worker,
+so the worker keeps ordinary single-stage extraction instead of partially
+enabling the feature.
+Previously stored assistant episodes remain ordinary episodic
+memories and continue to participate in normal retrieval. While the option is
+enabled, they are excluded from ordinary extraction and reconciliation so they
+cannot replace or absorb user-originated memories.
+
 ### Configuration Comparison
 
 | Step                | Agentic Mode                        | Auto Mode                              |

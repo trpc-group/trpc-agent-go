@@ -23,6 +23,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
+	"trpc.group/trpc-go/trpc-agent-go/memory/internal/assistantmemory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/internal/updatepolicy"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -43,6 +45,20 @@ type mockExtractor struct {
 	ops             []*extractor.Operation
 	err             error
 	captureExisting func([]*memory.Entry)
+	metadata        map[string]any
+}
+
+type mockAssistantExtractor struct {
+	*mockExtractor
+	policy updatepolicy.Value
+}
+
+func (m *mockAssistantExtractor) ConfiguredAssistantEpisodeExtraction() assistantmemory.Value {
+	return true
+}
+
+func (m *mockAssistantExtractor) ConfiguredUpdatePolicy() updatepolicy.Value {
+	return m.policy
 }
 
 func (m *mockExtractor) Extract(
@@ -68,6 +84,9 @@ func (m *mockExtractor) SetPrompt(prompt string) {}
 func (m *mockExtractor) SetModel(model model.Model) {}
 
 func (m *mockExtractor) Metadata() map[string]any {
+	if m.metadata != nil {
+		return m.metadata
+	}
 	return map[string]any{}
 }
 
@@ -355,7 +374,7 @@ func TestScanDeltaSince_SkipsToolMessages(t *testing.T) {
 		model.NewToolMessage("call_1", memory.SearchToolName, "{\"count\":0}"))
 	appendSessionMessage(sess, base.Add(assistOffset), model.NewAssistantMessage("answer"))
 
-	latestTs, msgs := scanDeltaSince(sess, time.Time{})
+	latestTs, msgs := scanDeltaSince(sess, time.Time{}, false)
 	require.Equal(t, base.Add(assistOffset), latestTs)
 	require.Len(t, msgs, 2)
 	assert.Equal(t, model.RoleUser, msgs[0].Role)
@@ -1012,12 +1031,14 @@ type mockModel struct {
 	name      string
 	responses []*model.Response
 	err       error
+	calls     int
 }
 
 func (m *mockModel) GenerateContent(
 	ctx context.Context,
 	request *model.Request,
 ) (<-chan *model.Response, error) {
+	m.calls++
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -1031,6 +1052,116 @@ func (m *mockModel) GenerateContent(
 
 func (m *mockModel) Info() model.Info {
 	return model.Info{Name: m.name}
+}
+
+type assistantDeadlineModel struct {
+	calls int
+}
+
+type assistantBestEffortModel struct {
+	calls int
+}
+
+type assistantDeleteModel struct {
+	calls int
+}
+
+func (m *assistantDeleteModel) GenerateContent(
+	_ context.Context,
+	_ *model.Request,
+) (<-chan *model.Response, error) {
+	m.calls++
+	var name string
+	var arguments []byte
+	if m.calls == 1 {
+		name = memory.DeleteToolName
+		arguments, _ = json.Marshal(map[string]string{"memory_id": "existing"})
+	} else {
+		name = "memory_assistant_episode"
+		arguments, _ = json.Marshal(map[string]any{
+			"pair_id": "pair-1",
+			"memory":  "The assistant recommended Alpha and Beta.",
+		})
+	}
+	return responseChannel([]model.ToolCall{{
+		Type: "function",
+		Function: model.FunctionDefinitionParam{
+			Name:      name,
+			Arguments: arguments,
+		},
+	}}), nil
+}
+
+func (m *assistantDeleteModel) Info() model.Info {
+	return model.Info{Name: "assistant-delete-model"}
+}
+
+func (m *assistantBestEffortModel) GenerateContent(
+	_ context.Context,
+	_ *model.Request,
+) (<-chan *model.Response, error) {
+	m.calls++
+	switch m.calls {
+	case 1:
+		arguments, _ := json.Marshal(map[string]string{
+			"memory": "User wants two recommendations.",
+		})
+		return responseChannel([]model.ToolCall{{
+			Type: "function",
+			Function: model.FunctionDefinitionParam{
+				Name:      memory.AddToolName,
+				Arguments: arguments,
+			},
+		}}), nil
+	case 2:
+		return nil, errors.New("assistant stage unavailable")
+	default:
+		return nil, fmt.Errorf("unexpected model call %d", m.calls)
+	}
+}
+
+func (m *assistantBestEffortModel) Info() model.Info {
+	return model.Info{Name: "assistant-best-effort-model"}
+}
+
+func (m *assistantDeadlineModel) GenerateContent(
+	ctx context.Context,
+	_ *model.Request,
+) (<-chan *model.Response, error) {
+	call := m.calls
+	m.calls++
+
+	switch call {
+	case 0:
+		arguments, _ := json.Marshal(map[string]string{
+			"memory": "User wants two recommendations.",
+		})
+		return responseChannel([]model.ToolCall{{
+			Type: "function",
+			Function: model.FunctionDefinitionParam{
+				Name:      memory.AddToolName,
+				Arguments: arguments,
+			},
+		}}), nil
+	case 1:
+		<-ctx.Done()
+		return nil, ctx.Err()
+	default:
+		return nil, fmt.Errorf("unexpected model call %d", call)
+	}
+}
+
+func (m *assistantDeadlineModel) Info() model.Info {
+	return model.Info{Name: "assistant-deadline-model"}
+}
+
+func responseChannel(calls []model.ToolCall) <-chan *model.Response {
+	responses := make(chan *model.Response, 1)
+	responses <- &model.Response{Choices: []model.Choice{{
+		Message: model.Message{ToolCalls: calls},
+	}}}
+	close(responses)
+	return responses
 }
 
 // newMockModelWithToolCalls creates a mock model that returns tool calls.
@@ -1499,11 +1630,80 @@ func TestScanDeltaSince_NilResponse(t *testing.T) {
 	appendSessionMessage(sess, now.Add(time.Second),
 		model.NewUserMessage("hello"))
 
-	latestTs, msgs := scanDeltaSince(sess, time.Time{})
+	latestTs, msgs := scanDeltaSince(sess, time.Time{}, false)
 
 	assert.Equal(t, now.Add(time.Second), latestTs)
 	require.Len(t, msgs, 1)
 	assert.Equal(t, "hello", msgs[0].Content)
+}
+
+func TestScanDeltaSince_PreservesAllResponseChoices(t *testing.T) {
+	sess := newTestSession("test-app", "user-1")
+	now := time.Now()
+	sess.Events = append(sess.Events, event.Event{
+		Timestamp: now,
+		Response: &model.Response{Choices: []model.Choice{
+			{Index: 0, Message: model.NewAssistantMessage("first choice")},
+			{Index: 1, Message: model.NewAssistantMessage("second choice")},
+		}},
+	})
+
+	_, msgs := scanDeltaSince(sess, time.Time{}, false)
+
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "first choice", msgs[0].Content)
+	assert.Equal(t, "second choice", msgs[1].Content)
+}
+
+func TestScanDeltaSince_AssistantExtractionUsesPrimaryResponseChoice(t *testing.T) {
+	sess := newTestSession("test-app", "user-1")
+	now := time.Now()
+	sess.Events = append(sess.Events, event.Event{
+		Timestamp: now,
+		Response: &model.Response{Choices: []model.Choice{
+			{Index: 1, Message: model.NewAssistantMessage("alternative choice")},
+			{Index: 0, Message: model.NewAssistantMessage("primary choice")},
+		}},
+	})
+
+	_, msgs := scanDeltaSince(sess, time.Time{}, true)
+
+	require.Len(t, msgs, 1)
+	assert.Equal(t, "primary choice", msgs[0].Content)
+}
+
+func TestScanDeltaSince_AssistantExtractionRequiresPrimaryResponseChoice(t *testing.T) {
+	sess := newTestSession("test-app", "user-1")
+	now := time.Now()
+	sess.Events = append(sess.Events, event.Event{
+		Timestamp: now,
+		Response: &model.Response{Choices: []model.Choice{
+			{Index: 1, Message: model.NewAssistantMessage("alternative choice")},
+		}},
+	})
+
+	_, msgs := scanDeltaSince(sess, time.Time{}, true)
+
+	assert.Empty(t, msgs)
+}
+
+func TestScanDeltaSince_AssistantExtractionKeepsPrimaryChoicePerEvent(t *testing.T) {
+	sess := newTestSession("test-app", "user-1")
+	now := time.Now()
+	for i, content := range []string{"first event", "second event"} {
+		sess.Events = append(sess.Events, event.Event{
+			Timestamp: now.Add(time.Duration(i) * time.Second),
+			Response: &model.Response{Choices: []model.Choice{
+				{Index: 0, Message: model.NewAssistantMessage(content)},
+			}},
+		})
+	}
+
+	_, msgs := scanDeltaSince(sess, time.Time{}, true)
+
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "first event", msgs[0].Content)
+	assert.Equal(t, "second event", msgs[1].Content)
 }
 
 func TestScanDeltaSince_SkipsMessagesWithToolCalls(t *testing.T) {
@@ -1527,7 +1727,7 @@ func TestScanDeltaSince_SkipsMessagesWithToolCalls(t *testing.T) {
 	appendSessionMessage(sess, now.Add(time.Second),
 		model.NewAssistantMessage("Here is the result."))
 
-	_, msgs := scanDeltaSince(sess, time.Time{})
+	_, msgs := scanDeltaSince(sess, time.Time{}, false)
 
 	// Only the normal message should be included.
 	require.Len(t, msgs, 1)
@@ -1545,7 +1745,7 @@ func TestScanDeltaSince_ContentParts(t *testing.T) {
 		ContentParts: []model.ContentPart{{Type: "text", Text: &textContent}},
 	})
 
-	_, msgs := scanDeltaSince(sess, time.Time{})
+	_, msgs := scanDeltaSince(sess, time.Time{}, false)
 
 	require.Len(t, msgs, 1)
 	assert.Equal(t, model.RoleUser, msgs[0].Role)
@@ -1561,7 +1761,7 @@ func TestScanDeltaSince_EmptyContentSkipped(t *testing.T) {
 		Role: model.RoleAssistant,
 	})
 
-	_, msgs := scanDeltaSince(sess, time.Time{})
+	_, msgs := scanDeltaSince(sess, time.Time{}, false)
 
 	assert.Empty(t, msgs)
 }
@@ -1589,6 +1789,71 @@ func TestAutoMemoryWorker_WritesLastExtractAt_OnSuccess(t *testing.T) {
 	ts, parseErr := time.Parse(time.RFC3339Nano, string(raw))
 	require.NoError(t, parseErr)
 	assert.True(t, ts.Equal(t2.UTC()))
+}
+
+func TestAutoMemoryWorker_AssistantDeadlineAdvancesWatermark(t *testing.T) {
+	extractionModel := &assistantDeadlineModel{}
+	ext := extractor.NewExtractor(extractionModel, extractor.WithAssistantEpisodeExtraction())
+	op := newMockOperator()
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{
+		Extractor:        ext,
+		MemoryJobTimeout: 100 * time.Millisecond,
+	}, op)
+
+	sess := newTestSession("test-app", "user-1")
+	latest := time.Now().UTC()
+	job := &MemoryJob{
+		Ctx:      context.Background(),
+		UserKey:  memory.UserKey{AppName: "test-app", UserID: "user-1"},
+		Session:  sess,
+		LatestTs: latest,
+		Messages: []model.Message{
+			model.NewUserMessage("Recommend two options."),
+			model.NewAssistantMessage("1. Alpha\n2. Beta"),
+			model.NewUserMessage("Suggest two alternatives."),
+			model.NewAssistantMessage("1. Gamma\n2. Delta"),
+		},
+	}
+
+	worker.processJob(job)
+	raw, ok := sess.GetState(memory.SessionStateKeyAutoMemoryLastExtractAt)
+	require.True(t, ok, "optional assistant deadline blocked the watermark")
+	watermark, err := time.Parse(time.RFC3339Nano, string(raw))
+	require.NoError(t, err)
+	assert.True(t, watermark.Equal(latest))
+	assert.Equal(t, 1, op.addCalls, "ordinary user memory was not preserved")
+	assert.Equal(t, 2, extractionModel.calls)
+}
+
+func TestAutoMemoryWorker_AssistantOptionalFailureAdvancesWatermark(t *testing.T) {
+	extractionModel := &assistantBestEffortModel{}
+	ext := extractor.NewExtractor(
+		extractionModel,
+		extractor.WithAssistantEpisodeExtraction(),
+	)
+	op := newMockOperator()
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{Extractor: ext}, op)
+
+	sess := newTestSession("test-app", "user-1")
+	latest := time.Now().UTC()
+	worker.processJob(&MemoryJob{
+		Ctx:      context.Background(),
+		UserKey:  memory.UserKey{AppName: "test-app", UserID: "user-1"},
+		Session:  sess,
+		LatestTs: latest,
+		Messages: []model.Message{
+			model.NewUserMessage("Recommend two options."),
+			model.NewAssistantMessage("1. Alpha\n2. Beta"),
+		},
+	})
+
+	raw, ok := sess.GetState(memory.SessionStateKeyAutoMemoryLastExtractAt)
+	require.True(t, ok, "optional assistant failure blocked the watermark")
+	watermark, err := time.Parse(time.RFC3339Nano, string(raw))
+	require.NoError(t, err)
+	assert.True(t, watermark.Equal(latest))
+	assert.Equal(t, 1, op.addCalls)
+	assert.Equal(t, 2, extractionModel.calls)
 }
 
 // configurableExtractor is a mock extractor implementing
@@ -1954,6 +2219,257 @@ func TestCreateAutoMemory_SearchError_FallsBackToRead(t *testing.T) {
 // reconcileUserKey returns the userKey used by reconcile decision tests.
 func reconcileUserKey() memory.UserKey {
 	return memory.UserKey{AppName: "app", UserID: "u1"}
+}
+
+func TestCreateAutoMemory_AssistantEpisodeBypassesReconcile(t *testing.T) {
+	text := assistantmemory.Prefix + "The assistant recommended Alpha and Beta."
+	ext := &mockAssistantExtractor{mockExtractor: &mockExtractor{
+		ops: []*extractor.Operation{{
+			Type:       extractor.OperationAdd,
+			Memory:     text,
+			MemoryKind: memory.KindEpisode,
+		}},
+	}}
+	op := newMockOperator()
+	op.searchResults = []*memory.Entry{{
+		ID:     "assistant-existing",
+		Memory: &memory.Memory{Memory: text, Kind: memory.KindEpisode},
+		Score:  0.99,
+	}}
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{Extractor: ext}, op)
+
+	err := worker.createAutoMemory(
+		context.Background(),
+		reconcileUserKey(),
+		[]model.Message{model.NewUserMessage("Recommend two options.")},
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, op.addCalls)
+	assert.Equal(t, 0, op.updateCalls)
+}
+
+func TestReconcileOps_AssistantEntriesDoNotHideOrdinaryCandidate(t *testing.T) {
+	ext := &mockAssistantExtractor{mockExtractor: &mockExtractor{}}
+	op := newMockOperator()
+	op.searchResults = []*memory.Entry{
+		{
+			ID: "assistant-existing",
+			Memory: &memory.Memory{Memory: assistantmemory.Prefix +
+				"User works at Acme as a backend engineer."},
+			Score: 0.99,
+		},
+		{
+			ID: "ordinary-existing",
+			Memory: &memory.Memory{
+				Memory: "User works at Acme as a backend engineer.",
+				Topics: []string{"work"},
+			},
+			Score: 0.95,
+		},
+	}
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{Extractor: ext}, op)
+
+	out := worker.reconcileOps(context.Background(), reconcileUserKey(), []*extractor.Operation{{
+		Type:   extractor.OperationAdd,
+		Memory: "User works at Acme as a backend engineer.",
+		Topics: []string{"work"},
+	}})
+
+	require.Empty(t, out, "ordinary duplicate should reconcile against the ordinary entry")
+}
+
+func TestAutoMemoryWorker_DoesNotUseMetadataAsAssistantConfiguration(t *testing.T) {
+	ext := &mockExtractor{metadata: map[string]any{
+		"conversation_extraction": "assistant-episode",
+	}}
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{Extractor: ext}, newMockOperator())
+
+	assert.False(t, worker.assistantEpisodeExtraction)
+}
+
+func TestAutoMemoryWorker_CapturesBuiltInAssistantConfiguration(t *testing.T) {
+	disabled := NewAutoMemoryWorker(AutoMemoryConfig{
+		Extractor: extractor.NewExtractor(nil),
+	}, newMockOperator())
+	assert.False(t, disabled.assistantEpisodeExtraction)
+
+	enabledExtractor := extractor.NewExtractor(
+		nil,
+		extractor.WithAssistantEpisodeExtraction(),
+	)
+	enabled := NewAutoMemoryWorker(AutoMemoryConfig{
+		Extractor: enabledExtractor,
+	}, newMockOperator())
+	assert.True(t, enabled.assistantEpisodeExtraction)
+
+	decorated := NewAutoMemoryWorker(AutoMemoryConfig{
+		Extractor: &decoratedExtractor{MemoryExtractor: enabledExtractor},
+	}, newMockOperator())
+	assert.False(t, decorated.assistantEpisodeExtraction)
+}
+
+func TestAutoMemoryWorker_DecoratorCannotHalfEnableAssistantExtraction(t *testing.T) {
+	m := &mockModel{name: "decorated-assistant"}
+	builtin := extractor.NewExtractor(
+		m,
+		extractor.WithAssistantEpisodeExtraction(),
+	)
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{
+		Extractor: &decoratedExtractor{MemoryExtractor: builtin},
+	}, newMockOperator())
+
+	err := worker.createAutoMemory(
+		context.Background(),
+		reconcileUserKey(),
+		[]model.Message{
+			model.NewUserMessage("Recommend two options."),
+			model.NewAssistantMessage("1. Alpha\n2. Beta"),
+		},
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, m.calls)
+}
+
+func TestPrepareAutoMemoryOperations_ComposesAssistantExtractionWithPolicies(t *testing.T) {
+	for _, policy := range []extractor.UpdatePolicy{
+		extractor.UpdatePolicyMergeSimilar,
+		extractor.UpdatePolicyPreserveHistory,
+		extractor.UpdatePolicyAppendOnly,
+	} {
+		t.Run(string(policy), func(t *testing.T) {
+			ordinary := &extractor.Operation{
+				Type:   extractor.OperationAdd,
+				Memory: "User likes Alpha.",
+				Topics: []string{"Alpha"},
+			}
+			if policy == extractor.UpdatePolicyAppendOnly {
+				ordinary.Type = extractor.OperationUpdate
+				ordinary.MemoryID = "ordinary"
+				ordinary.Memory = "User likes Alpha and Beta."
+			}
+			assistant := &extractor.Operation{
+				Type:       extractor.OperationAdd,
+				Memory:     assistantmemory.Prefix + "The assistant recommended Alpha.",
+				MemoryKind: memory.KindEpisode,
+			}
+			ext := &mockAssistantExtractor{
+				mockExtractor: &mockExtractor{ops: []*extractor.Operation{ordinary, assistant}},
+				policy:        updatepolicy.Value(policy),
+			}
+			op := newMockOperator()
+			op.searchResults = []*memory.Entry{
+				{
+					ID: "assistant-existing",
+					Memory: &memory.Memory{Memory: assistantmemory.Prefix +
+						"The assistant recommended Alpha."},
+					Score: 0.99,
+				},
+				{
+					ID: "ordinary",
+					Memory: &memory.Memory{
+						Memory: "User likes Alpha.",
+						Topics: []string{"Alpha"},
+					},
+					Score: 0.99,
+				},
+			}
+			worker := NewAutoMemoryWorker(AutoMemoryConfig{Extractor: ext}, op)
+
+			operations, err := worker.prepareAutoMemoryOperations(
+				context.Background(),
+				reconcileUserKey(),
+				[]model.Message{model.NewUserMessage("Remember Alpha.")},
+			)
+
+			require.NoError(t, err)
+			if policy == extractor.UpdatePolicyAppendOnly {
+				require.Len(t, operations, 2)
+				assert.Equal(t, extractor.OperationAdd, operations[0].Type)
+				assert.Empty(t, operations[0].MemoryID)
+			} else {
+				require.Len(t, operations, 1)
+			}
+			assert.True(t, assistantmemory.IsText(operations[len(operations)-1].Memory))
+		})
+	}
+}
+
+func TestAutoMemoryWorker_UnrequestedDeleteDoesNotBlockAssistantEpisode(t *testing.T) {
+	m := &assistantDeleteModel{}
+	ext := extractor.NewExtractor(
+		m,
+		extractor.WithUpdatePolicy(extractor.UpdatePolicyPreserveHistory),
+		extractor.WithAssistantEpisodeExtraction(),
+	)
+	op := newMockOperator()
+	op.searchResults = []*memory.Entry{{
+		ID:     "existing",
+		Memory: &memory.Memory{Memory: "User likes coffee."},
+	}}
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{Extractor: ext}, op)
+
+	err := worker.createAutoMemory(
+		context.Background(),
+		reconcileUserKey(),
+		[]model.Message{
+			model.NewUserMessage("Recommend two options."),
+			model.NewAssistantMessage("1. Alpha\n2. Beta"),
+		},
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, 2, m.calls)
+	assert.Equal(t, 0, op.deleteCalls)
+	assert.Equal(t, 1, op.addCalls)
+}
+
+func TestProtectAssistantEpisodeUpdates(t *testing.T) {
+	existing := []*memory.Entry{
+		{
+			ID: "assistant-entry",
+			Memory: &memory.Memory{Memory: assistantmemory.Prefix +
+				"The assistant recommended Alpha."},
+		},
+		{ID: "ordinary-entry", Memory: &memory.Memory{Memory: "User likes Alpha."}},
+	}
+	ops := []*extractor.Operation{
+		{Type: extractor.OperationUpdate, MemoryID: "assistant-entry", Memory: "new fact"},
+		{Type: extractor.OperationUpdate, MemoryID: "ordinary-entry", Memory: "updated fact"},
+		{Type: extractor.OperationUpdate, MemoryID: "missing-entry", Memory: "unknown fact"},
+	}
+
+	protected := protectAssistantEpisodeUpdates(ops, existing)
+
+	require.Len(t, protected, 3)
+	assert.Equal(t, extractor.OperationAdd, protected[0].Type)
+	assert.Empty(t, protected[0].MemoryID)
+	assert.Equal(t, extractor.OperationUpdate, protected[1].Type)
+	assert.Equal(t, "ordinary-entry", protected[1].MemoryID)
+	assert.Equal(t, extractor.OperationAdd, protected[2].Type)
+	assert.Empty(t, protected[2].MemoryID)
+}
+
+func TestReconcileOps_DisabledExtractorKeepsLegacyBehavior(t *testing.T) {
+	text := assistantmemory.Prefix + "The assistant recommended Alpha and Beta."
+	op := newMockOperator()
+	op.searchResults = []*memory.Entry{{
+		ID:     "assistant-existing",
+		Memory: &memory.Memory{Memory: text},
+		Score:  0.99,
+	}}
+	worker := NewAutoMemoryWorker(
+		AutoMemoryConfig{Extractor: &mockExtractor{}},
+		op,
+	)
+
+	out := worker.reconcileOps(context.Background(), reconcileUserKey(), []*extractor.Operation{{
+		Type:   extractor.OperationAdd,
+		Memory: text,
+	}})
+
+	require.Empty(t, out, "disabled extractor must retain legacy reconcile behavior")
 }
 
 // TestReconcileOps_SkipOnHighSimilarity verifies that an Add whose
