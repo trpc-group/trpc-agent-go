@@ -1,0 +1,168 @@
+{
+  "timestamp": "2026-08-07T10:04:14Z",
+  "mode": "fake_deterministic",
+  "baseline_train_score": 0.5333333333333333,
+  "baseline_val_score": 0.85,
+  "best_val_score": 0.9833333333333333,
+  "overall_accepted": true,
+  "total_cost_usd": 0.06,
+  "total_duration_sec": 0.15,
+  "rounds": [
+    {
+      "round_index": 1,
+      "target_surface": "system_prompt",
+      "proposed_patch": "Added explicit constraint to output direct factual answers without hedging.",
+      "train_score": 1,
+      "val_score": 0.9833333333333333,
+      "gate_decision": {
+        "accepted": true,
+        "gate_name": "AllGatesPassed",
+        "reason": "Candidate passed all gates with validation score gain +0.1333",
+        "val_score_delta": 0.1333333333333333,
+        "new_hard_fails": 0,
+        "case_deltas": [
+          {
+            "case_id": "val_opt_01",
+            "baseline_score": 0.6,
+            "candidate_score": 1,
+            "score_delta": 0.4,
+            "baseline_pass": false,
+            "candidate_pass": true,
+            "transition": "improved"
+          },
+          {
+            "case_id": "val_opt_02",
+            "baseline_score": 0.95,
+            "candidate_score": 0.95,
+            "score_delta": 0,
+            "baseline_pass": true,
+            "candidate_pass": true,
+            "transition": "unchanged"
+          },
+          {
+            "case_id": "val_opt_03",
+            "baseline_score": 1,
+            "candidate_score": 1,
+            "score_delta": 0,
+            "baseline_pass": true,
+            "candidate_pass": true,
+            "transition": "unchanged"
+          }
+        ]
+      },
+      "attributions": [
+        {
+          "case_id": "train_opt_01",
+          "category": "final_response_mismatch",
+          "severity": "medium",
+          "evidence": "expected 'Paris', got 'I am not completely sure, but it might be Paris.'",
+          "explanation": "Final assistant text response did not match target expectation."
+        },
+        {
+          "case_id": "train_opt_02",
+          "category": "tool_argument_error",
+          "severity": "high",
+          "evidence": "Error category: tool_argument_error",
+          "explanation": "Tool argument type mismatch or invalid parameter format."
+        }
+      ]
+    },
+    {
+      "round_index": 2,
+      "target_surface": "tool_desc_calc",
+      "proposed_patch": "Updated tool description to specify numeric parameter types explicitly.",
+      "train_score": 1,
+      "val_score": 0.85,
+      "gate_decision": {
+        "accepted": false,
+        "gate_name": "HardFailGuard",
+        "reason": "Candidate introduced new hard fail on case 'val_opt_01'",
+        "val_score_delta": -0.1333333333333333,
+        "new_hard_fails": 1,
+        "case_deltas": [
+          {
+            "case_id": "val_opt_01",
+            "baseline_score": 1,
+            "candidate_score": 0.6,
+            "score_delta": -0.4,
+            "baseline_pass": true,
+            "candidate_pass": false,
+            "transition": "degraded"
+          },
+          {
+            "case_id": "val_opt_02",
+            "baseline_score": 0.95,
+            "candidate_score": 0.95,
+            "score_delta": 0,
+            "baseline_pass": true,
+            "candidate_pass": true,
+            "transition": "unchanged"
+          },
+          {
+            "case_id": "val_opt_03",
+            "baseline_score": 1,
+            "candidate_score": 1,
+            "score_delta": 0,
+            "baseline_pass": true,
+            "candidate_pass": true,
+            "transition": "unchanged"
+          }
+        ]
+      },
+      "attributions": []
+    },
+    {
+      "round_index": 3,
+      "target_surface": "router_prompt",
+      "proposed_patch": "Overly aggressive routing rule favoring calculator agent.",
+      "train_score": 1,
+      "val_score": 0.6666666666666666,
+      "gate_decision": {
+        "accepted": false,
+        "gate_name": "HardFailGuard",
+        "reason": "Candidate introduced new hard fail on case 'val_opt_02'",
+        "val_score_delta": -0.31666666666666665,
+        "new_hard_fails": 1,
+        "case_deltas": [
+          {
+            "case_id": "val_opt_01",
+            "baseline_score": 1,
+            "candidate_score": 1,
+            "score_delta": 0,
+            "baseline_pass": true,
+            "candidate_pass": true,
+            "transition": "unchanged"
+          },
+          {
+            "case_id": "val_opt_02",
+            "baseline_score": 0.95,
+            "candidate_score": 0,
+            "score_delta": -0.95,
+            "baseline_pass": true,
+            "candidate_pass": false,
+            "transition": "new_hard_fail"
+          },
+          {
+            "case_id": "val_opt_03",
+            "baseline_score": 1,
+            "candidate_score": 1,
+            "score_delta": 0,
+            "baseline_pass": true,
+            "candidate_pass": true,
+            "transition": "unchanged"
+          }
+        ]
+      },
+      "attributions": [
+        {
+          "case_id": "val_opt_02",
+          "category": "route_error",
+          "severity": "high",
+          "evidence": "route_error",
+          "explanation": "Request routed to wrong sub-agent or tool handler."
+        }
+      ]
+    }
+  ],
+  "final_recommendation": "Candidate Round 1 (system_prompt patch) passed all acceptance gates with validation gain +0.1333 and zero hard fails. Promoted to production."
+}

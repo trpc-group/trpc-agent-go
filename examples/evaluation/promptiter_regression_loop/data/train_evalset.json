@@ -1,0 +1,44 @@
+[
+  {
+    "case_id": "train_opt_01",
+    "name": "User hedging query",
+    "prompt": "What is the capital of France?",
+    "target_surface": "system_prompt",
+    "expected_response": "Paris",
+    "category": "final_response_mismatch",
+    "baseline_response": "I am not completely sure, but it might be Paris.",
+    "baseline_score": 0.4,
+    "baseline_pass": false,
+    "candidate_response": "Paris",
+    "candidate_score": 1.0,
+    "candidate_pass": true
+  },
+  {
+    "case_id": "train_opt_02",
+    "name": "Tool argument parsing query",
+    "prompt": "Calculate 12 * 8",
+    "target_surface": "tool_desc_calc",
+    "expected_response": "96",
+    "category": "tool_argument_error",
+    "baseline_response": "Error: passed string 'twelve' to calculator",
+    "baseline_score": 0.2,
+    "baseline_pass": false,
+    "candidate_response": "96",
+    "candidate_score": 1.0,
+    "candidate_pass": true
+  },
+  {
+    "case_id": "train_opt_03",
+    "name": "Stable pass anchor case",
+    "prompt": "Who wrote Hamlet?",
+    "target_surface": "agent_instruction",
+    "expected_response": "William Shakespeare",
+    "category": "none",
+    "baseline_response": "William Shakespeare",
+    "baseline_score": 1.0,
+    "baseline_pass": true,
+    "candidate_response": "William Shakespeare",
+    "candidate_score": 1.0,
+    "candidate_pass": true
+  }
+]

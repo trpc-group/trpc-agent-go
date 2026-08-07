@@ -1,0 +1,6 @@
+{
+  "system_prompt": "You are a helpful assistant. Provide concise and accurate answers.",
+  "tool_desc_calc": "Calculator tool: performs basic arithmetic calculations (+, -, *, /).",
+  "router_prompt": "Route user requests to the appropriate agent: 'translator' for translation, 'calculator' for math, 'general' for general QA.",
+  "agent_instruction": "Always check user context before responding and ensure format is clean."
+}

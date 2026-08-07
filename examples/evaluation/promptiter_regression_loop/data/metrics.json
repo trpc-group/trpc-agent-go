@@ -1,0 +1,19 @@
+{
+  "metrics": [
+    {
+      "name": "final_response_match",
+      "type": "exact_match",
+      "threshold": 0.8
+    },
+    {
+      "name": "tool_trajectory_correctness",
+      "type": "trajectory",
+      "threshold": 0.8
+    },
+    {
+      "name": "routing_accuracy",
+      "type": "router",
+      "threshold": 0.9
+    }
+  ]
+}
