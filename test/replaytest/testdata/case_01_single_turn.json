@@ -1,0 +1,41 @@
+{
+  "name": "single_turn",
+  "description": "单轮普通对话：一个 user message 和一个 assistant text event，验证基础事件追加和读取",
+  "app_name": "replay-matrix",
+  "user_id": "user-single-turn",
+  "session_id": "session-single-turn",
+  "steps": [
+    {
+      "type": "create_session",
+      "state": {"seed": "case_01"}
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "user",
+        "role": "user",
+        "content": "hello replay",
+        "branch": "root",
+        "filter_key": "root",
+        "tag": "greeting",
+        "state_delta": {"turn": 1}
+      }
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "agent",
+        "role": "assistant",
+        "content": "hello from agent",
+        "branch": "root",
+        "filter_key": "root",
+        "tag": "response"
+      }
+    },
+    {"type": "get_session"}
+  ],
+  "verify": {
+    "events_count": 2,
+    "events_order_preserved": true
+  }
+}

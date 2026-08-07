@@ -39,3 +39,6 @@ rin = "rin"
 dify = "dify"
 countr = "countr"
 daa = "daa"
+# Intentional misspellings in replay consistency tests.
+desciption = "desciption"
+befor = "befor"

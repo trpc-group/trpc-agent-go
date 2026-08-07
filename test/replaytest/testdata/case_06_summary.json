@@ -1,0 +1,78 @@
+{
+  "name": "summary",
+  "description": "Summary 生成和更新：多个 filter-key 写入 + force 强制更新，验证 summary text、filter-key、版本递增、session 归属",
+  "app_name": "replay-matrix",
+  "user_id": "user-summary",
+  "session_id": "session-summary",
+  "steps": [
+    {"type": "create_session"},
+    {
+      "type": "append_event",
+      "event": {
+        "author": "user", "role": "user",
+        "content": "今天天气怎么样？",
+        "branch": "chat", "filter_key": "chat"
+      }
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "agent", "role": "assistant",
+        "content": "今天天气晴朗，适合户外活动。",
+        "branch": "chat", "filter_key": "chat"
+      }
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "user", "role": "user",
+        "content": "帮我分析一下这段代码的性能问题",
+        "branch": "code", "filter_key": "code"
+      }
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "agent", "role": "assistant",
+        "content": "这段代码的主要性能瓶颈在循环中的数据库查询。",
+        "branch": "code", "filter_key": "code"
+      }
+    },
+    {
+      "type": "create_summary",
+      "summary": {
+        "filter_key": "chat",
+        "text": "用户询问天气，助手回复天气晴朗。",
+        "force": false
+      }
+    },
+    {
+      "type": "create_summary",
+      "summary": {
+        "filter_key": "code",
+        "text": "用户请求代码性能分析，助手指出数据库查询循环问题。",
+        "force": false
+      }
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "user", "role": "user",
+        "content": "那继续说说怎么优化？",
+        "branch": "chat", "filter_key": "chat"
+      }
+    },
+    {
+      "type": "create_summary",
+      "summary": {
+        "filter_key": "chat",
+        "text": "更新后的摘要：用户询问天气，助手回复后用户继续询问优化建议。",
+        "force": true
+      }
+    },
+    {"type": "get_session"}
+  ],
+  "verify": {
+    "events_count": 5
+  }
+}

@@ -5,14 +5,17 @@ go 1.24.4
 require (
 	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260514093510-e9e910b230b9
 	github.com/alicebob/miniredis/v2 v2.35.0
+	github.com/mattn/go-sqlite3 v1.14.32
 	github.com/r3labs/sse/v2 v2.10.0
 	github.com/stretchr/testify v1.11.1
 	trpc.group/trpc-go/trpc-a2a-go v0.2.6-0.20260721084546-18c8244d0acb
 	trpc.group/trpc-go/trpc-a2a-go/v2 v2.0.0-alpha.3.0.20260728070620-f4f0b6dd56ad
-	trpc.group/trpc-go/trpc-agent-go v0.2.0
+	trpc.group/trpc-go/trpc-agent-go v1.6.1-0.20260311094958-7b74ee59e339
+	trpc.group/trpc-go/trpc-agent-go/memory/sqlite v1.10.0
 	trpc.group/trpc-go/trpc-agent-go/server/agui v0.0.0-20260108131845-87b14951638b
 	trpc.group/trpc-go/trpc-agent-go/session/mongodb v0.0.0
 	trpc.group/trpc-go/trpc-agent-go/session/redis v0.0.0
+	trpc.group/trpc-go/trpc-agent-go/session/sqlite v1.10.0
 )
 
 require (
@@ -44,6 +47,7 @@ require (
 	github.com/creack/pty v1.1.24 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 // indirect
+	github.com/go-ego/gse v1.0.0 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/goccy/go-json v0.10.3 // indirect
@@ -60,6 +64,7 @@ require (
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/segmentio/asm v1.2.0 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
+	github.com/vcaesar/cedar v0.20.2 // indirect
 	go.opentelemetry.io/otel v1.41.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.29.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.29.0 // indirect
@@ -94,3 +99,7 @@ replace trpc.group/trpc-go/trpc-agent-go/session/mongodb => ../session/mongodb
 replace trpc.group/trpc-go/trpc-agent-go/storage/redis => ../storage/redis
 
 replace trpc.group/trpc-go/trpc-agent-go/storage/mongodb => ../storage/mongodb
+
+replace trpc.group/trpc-go/trpc-agent-go/memory/sqlite => ../memory/sqlite
+
+replace trpc.group/trpc-go/trpc-agent-go/session/sqlite => ../session/sqlite
