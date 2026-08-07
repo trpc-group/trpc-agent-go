@@ -46,15 +46,15 @@ type ReplayCase struct {
 
 // DiffEntry records a detected discrepancy across backends.
 type DiffEntry struct {
-	CaseID      string      `json:"case_id"`
-	SessionID   string      `json:"session_id"`
-	FieldPath   string      `json:"field_path"`
-	BackendA    string      `json:"backend_a"`
-	BackendB    string      `json:"backend_b"`
-	ValueA      interface{} `json:"value_a"`
-	ValueB      interface{} `json:"value_b"`
-	AllowedDiff bool        `json:"allowed_diff"`
-	Reason      string      `json:"reason"`
+	CaseID      string `json:"case_id"`
+	SessionID   string `json:"session_id"`
+	FieldPath   string `json:"field_path"`
+	BackendA    string `json:"backend_a"`
+	BackendB    string `json:"backend_b"`
+	ValueA      any    `json:"value_a"`
+	ValueB      any    `json:"value_b"`
+	AllowedDiff bool   `json:"allowed_diff"`
+	Reason      string `json:"reason"`
 }
 
 // DiffReport wraps all diffs for a test execution.
