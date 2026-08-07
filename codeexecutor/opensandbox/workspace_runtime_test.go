@@ -1146,6 +1146,36 @@ func TestWorkspace_RunProgram_Timeout(t *testing.T) {
 	assert.True(t, res.TimedOut, "RunResult.TimedOut should be true on timeout")
 }
 
+// TestRunProgram_ExecdSSETimeout_SetsTimedOut verifies that a server-side
+// timeout reported via an SSE error event (not an HTTP 500 APIError) is
+// correctly mapped to RunResult.TimedOut. Real execd (v1.0.18+) kills
+// the process with SIGKILL when the timeout expires, reported as an SSE
+// error event with traceback "signal: killed". The v1.0.3 Go SDK returns
+// a nil Go error for this path, so isTimeoutErr does not catch it.
+func TestRunProgram_ExecdSSETimeout_SetsTimedOut(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	ex := newTestExecutor(t, m)
+	defer ex.Close()
+
+	ws, err := ex.CreateWorkspace(context.Background(), "exec-sse-timeout", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	// Simulate execd's SSE timeout event: CommandExecError, exit -1,
+	// "signal: killed" traceback. The SDK populates exec.Error and
+	// exec.ExitCode but returns a nil Go error.
+	m.setExecutionError("CommandExecError", "-1", []string{"signal: killed"})
+
+	res, err := ex.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{
+		Cmd:     "sleep",
+		Args:    []string{"2"},
+		Timeout: 50 * time.Millisecond,
+	})
+	require.NoError(t, err, "SSE timeout path returns nil Go error")
+	assert.True(t, res.TimedOut, "TimedOut must be true for execd SSE timeout")
+	assert.Equal(t, -1, res.ExitCode)
+}
+
 func TestWorkspace_CreateWorkspace_RunBashError(t *testing.T) {
 	m := newMockServer(t)
 	defer m.close()
@@ -1674,6 +1704,54 @@ func TestWorkspace_ListFilesByGlob_PreservesSpacesInPatterns(t *testing.T) {
 	cmd := m.lastCommand()
 	assert.Contains(t, cmd, "IFS=;",
 		"glob expansion must set IFS= (empty) to prevent word splitting on patterns with spaces")
+}
+
+// TestWorkspace_ListFilesByGlob_BashSyntaxValid runs the generated
+// listFilesByGlob script through `bash -n` to catch syntax errors that
+// command-capture mocks miss. This regression guards against issues
+// like `case="$p" in` (assignment, not a case statement) introduced
+// during IFS-related edits.
+func TestWorkspace_ListFilesByGlob_BashSyntaxValid(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	m := newMockServer(t)
+	defer m.close()
+	ex := newTestExecutor(t, m)
+	defer ex.Close()
+
+	ws, err := ex.CreateWorkspace(context.Background(), "exec-syntax", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	_, _ = ex.rt.listFilesByGlob(
+		context.Background(), ws.Path,
+		[]string{"*.txt", "out/reports 2026/*.csv"},
+	)
+
+	cmdStr := m.lastCommand()
+	prefix := "bash -c "
+	if !strings.HasPrefix(cmdStr, prefix) {
+		t.Fatalf("expected 'bash -c ' prefix, got: %s", cmdStr)
+	}
+	// Unquote shellQuote's single-quote wrapping to recover the raw
+	// script, then validate it with bash -n.
+	quoted := strings.TrimPrefix(cmdStr, prefix)
+	script := unshellQuote(quoted)
+	out, err := exec.Command("bash", "-n", "-c", script).CombinedOutput()
+	if err != nil {
+		t.Fatalf("bash syntax error in generated listFilesByGlob script:\n%s\noutput: %s",
+			script, out)
+	}
+}
+
+// unshellQuote reverses shellQuote's single-quote wrapping.
+// shellQuote wraps input in single quotes and escapes internal single
+// quotes as '\''.
+func unshellQuote(s string) string {
+	if len(s) < 2 || s[0] != '\'' || s[len(s)-1] != '\'' {
+		return s
+	}
+	return strings.ReplaceAll(s[1:len(s)-1], `'\''`, `'`)
 }
 
 // TestWorkspace_CreateWorkspace_PerSession_EmptyExecID verifies that
@@ -2968,10 +3046,11 @@ func TestListFilesByGlob_CountLimit(t *testing.T) {
 
 // --- L3: errNotImplementedV1 exported ---
 
-// TesterrNotImplementedV1_Exported verifies that the exported
-// errNotImplementedV1 sentinel can be detected with errors.Is from
-// external callers.
-func TesterrNotImplementedV1_Exported(t *testing.T) {
+// TestErrNotImplementedV1_PackageSentinel verifies that the
+// package-private errNotImplementedV1 sentinel is detectable with
+// errors.Is, protecting the contract that StageInputs/CollectOutputs
+// return this sentinel for v1 protocol incompatibility.
+func TestErrNotImplementedV1_PackageSentinel(t *testing.T) {
 	m := newMockServer(t)
 	defer m.close()
 	exec := newTestExecutor(t, m)

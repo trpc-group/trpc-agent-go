@@ -18,6 +18,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
+	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
 
 func TestOutputSpecAllowsGlobsOnlyFallback(t *testing.T) {
@@ -214,6 +216,31 @@ func TestPreauthorizeSkillCommand_BeforeMutation(t *testing.T) {
 	require.Error(t, preauthorizeSkillCommand(rt, "curl http://x"))
 	rt2 := &RunTool{deniedCmds: map[string]struct{}{"rm": {}}}
 	require.Error(t, preauthorizeSkillCommand(rt2, "rm -rf /"))
+}
+
+// TestRunTool_Call_DeniedCommandRejectedBeforeMutation verifies that a
+// command denied by denied_commands is rejected in preflight (before
+// workspace acquisition/staging), so no StageInputs or PutFiles
+// mutations occur on a persistent workspace.
+func TestRunTool_Call_DeniedCommandRejectedBeforeMutation(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	rt := NewRunTool(repo, localexec.New())
+	rt.deniedCmds = map[string]struct{}{"rm": {}}
+
+	args := runInput{
+		Skill:   testSkillName,
+		Command: "rm -rf /tmp",
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+	_, err = rt.Call(context.Background(), enc)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "denied",
+		"denied command must be rejected before workspace staging")
 }
 
 func TestPreauthorizeSkillCommand_NilAndEdgeCases(t *testing.T) {

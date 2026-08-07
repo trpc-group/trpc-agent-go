@@ -1951,7 +1951,17 @@ func preflightSkillExecution(eng codeexecutor.Engine, t *RunTool, in runInput) e
 		return err
 	}
 	if t != nil && (len(t.allowedCmds) > 0 || len(t.deniedCmds) > 0) {
-		return checkSkillRunnerSupportsPolicy(eng)
+		if err := checkSkillRunnerSupportsPolicy(eng); err != nil {
+			return err
+		}
+		// Pre-authorize the command before workspace acquisition/staging
+		// so a denied command does not mutate a persistent workspace.
+		// The full skill-path-aware check in buildRunProgramSpec still
+		// runs later; this is a conservative early gate using only the
+		// command name (without venv/skill bin paths).
+		if err := preauthorizeSkillCommand(t, in.Command); err != nil {
+			return err
+		}
 	}
 	return nil
 }

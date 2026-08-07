@@ -362,7 +362,7 @@ func (r *workspaceRuntime) listFilesByGlob(
 	// Note: in bash case patterns, ** is NOT globstar — it behaves as
 	// *, so we must NOT include |** in the pattern or it would match
 	// every non-empty string and make the *) branch dead code.
-	cmd.WriteString(" case=\"$p\" in */*) ;; *) p=\"**/$p\";; esac; ")
+	cmd.WriteString(" case \"$p\" in */*) ;; *) p=\"**/$p\";; esac; ")
 	// Set IFS to empty so $p undergoes pathname expansion without word
 	// splitting. Without this, a pattern like "out/reports 2026/*.csv"
 	// would be split on spaces into two unrelated words, silently

@@ -254,6 +254,15 @@ func (r *workspaceRuntime) executeRunCommand(
 	// Do NOT convert SSE errors into runErr: ExecuteCode aggregates via
 	// ExitCode/stderr and must continue subsequent code blocks.
 	if exec != nil && exec.Error != nil {
+		// Real execd (v1.0.18+) reports command timeouts as SSE error
+		// events (ename=CommandExecError, evalue=-1, traceback
+		// "signal: killed"). The v1.0.3 Go SDK returns a nil Go error
+		// for this path, so isTimeoutErr (which checks APIError) does
+		// not catch it. Detect the SIGKILL signature here so the
+		// RunProgramSpec.Timeout / RunResult.TimedOut contract holds.
+		if isExecdTimeoutError(exec.Error) {
+			res.TimedOut = true
+		}
 		res.Stderr = formatExecutionError(exec.Error, res.Stderr)
 		if exec.ExitCode != nil {
 			res.ExitCode = *exec.ExitCode
@@ -619,6 +628,28 @@ func isTimeoutErr(err error) bool {
 	var apiErr *osb.APIError
 	if errors.As(err, &apiErr) {
 		if strings.EqualFold(apiErr.Response.Code, "timeout") {
+			return true
+		}
+	}
+	return false
+}
+
+// isExecdTimeoutError detects whether an SSE ExecutionError represents
+// a server-side command timeout. Real execd (v1.0.18+) kills the
+// process with SIGKILL when the timeout expires, reported as an SSE
+// error event with traceback containing "signal: killed". The v1.0.3
+// Go SDK returns a nil Go error for this path (only populating
+// exec.Error/exec.ExitCode), so isTimeoutErr (which checks APIError)
+// does not catch it.
+//
+// Minimum compatible execd version: v1.0.18 (execd:v1.0.3 ignores the
+// SDK's timeout field entirely).
+func isExecdTimeoutError(e *osb.ExecutionError) bool {
+	if e == nil {
+		return false
+	}
+	for _, line := range e.Traceback {
+		if strings.Contains(line, "signal: killed") {
 			return true
 		}
 	}
