@@ -1,0 +1,13 @@
+diff --git a/logic.go b/logic.go
+new file mode 100644
+--- /dev/null
++++ b/logic.go
+@@ -0,0 +1,8 @@
++package main
++
++import "os"
++
++func process() {
++	f, _ := os.Open("data.txt")
++	f.Write([]byte("test"))
++}

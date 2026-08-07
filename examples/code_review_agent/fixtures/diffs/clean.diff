@@ -1,0 +1,21 @@
+diff --git a/main.go b/main.go
+index a1b2c3d..e4f5g6h 100644
+--- a/main.go
++++ b/main.go
+@@ -1,5 +1,14 @@
+ package main
+ 
+-import "fmt"
++import (
++	"fmt"
++	"os"
++)
+ 
+ func main() {
+-	fmt.Println("Hello, World!")
++	name := "World"
++	if len(os.Args) > 1 {
++		name = os.Args[1]
++	}
++	fmt.Printf("Hello, %s!\n", name)
+ }

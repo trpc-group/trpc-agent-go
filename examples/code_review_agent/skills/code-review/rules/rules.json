@@ -1,0 +1,67 @@
+{
+  "rules": [
+    {
+      "id": "GO-SECURITY-001",
+      "category": "security",
+      "severity": "critical",
+      "title": "Use of os/exec.Command with unsanitized input",
+      "pattern": "exec\\.Command\\(",
+      "recommendation": "Validate and sanitize all inputs to exec.Command. Consider using exec.CommandContext for timeout support.",
+      "confidence": 0.8
+    },
+    {
+      "id": "GO-GOROUTINE-001",
+      "category": "goroutine_context",
+      "severity": "high",
+      "title": "Goroutine started without context propagation",
+      "pattern": "go\\s+func\\s*\\(\\s*\\)\\s*\\{",
+      "recommendation": "Pass context.Context to goroutines and use select with ctx.Done() for cancellation.",
+      "confidence": 0.7
+    },
+    {
+      "id": "GO-RESOURCE-001",
+      "category": "resource_lifecycle",
+      "severity": "high",
+      "title": "Resource opened without defer close",
+      "pattern": "os\\.Open\\(|os\\.Create\\(",
+      "recommendation": "Use defer to close resources immediately after opening.",
+      "confidence": 0.75
+    },
+    {
+      "id": "GO-RESOURCE-002",
+      "category": "resource_lifecycle",
+      "severity": "medium",
+      "title": "HTTP response body not closed",
+      "pattern": "http\\.Get\\(|http\\.Post\\(|client\\.Do\\(",
+      "recommendation": "Always close http.Response.Body with defer resp.Body.Close().",
+      "confidence": 0.8
+    },
+    {
+      "id": "GO-DB-001",
+      "category": "database_lifecycle",
+      "severity": "high",
+      "title": "Database connection opened without lifecycle management",
+      "pattern": "sql\\.Open\\(",
+      "recommendation": "Use connection pooling (sql.DB). Set connection limits, max lifetime, and ensure Close() on shutdown.",
+      "confidence": 0.8
+    },
+    {
+      "id": "GO-ERROR-001",
+      "category": "error_handling",
+      "severity": "medium",
+      "title": "Error not checked after function call",
+      "pattern": "^\\s*\\w+\\s*,\\s*_\\s*:=\\s*",
+      "recommendation": "Do not ignore returned errors with _. Handle errors explicitly.",
+      "confidence": 0.6
+    },
+    {
+      "id": "GO-ERROR-002",
+      "category": "error_handling",
+      "severity": "low",
+      "title": "Bare panic call in production code",
+      "pattern": "^\\s*panic\\(",
+      "recommendation": "Avoid panic in library/production code. Return errors instead.",
+      "confidence": 0.7
+    }
+  ]
+}

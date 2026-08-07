@@ -1,0 +1,16 @@
+diff --git a/broken.go b/broken.go
+new file mode 100644
+--- /dev/null
++++ b/broken.go
+@@ -0,0 +1,11 @@
++package main
++
++import (
++	"time"
++)
++
++func runForever() {
++	for {
++		time.Sleep(1)
++	}
++}

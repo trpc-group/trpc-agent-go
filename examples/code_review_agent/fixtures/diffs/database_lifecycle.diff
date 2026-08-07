@@ -1,0 +1,16 @@
+diff --git a/db.go b/db.go
+new file mode 100644
+--- /dev/null
++++ b/db.go
+@@ -0,0 +1,11 @@
++package main
++
++import "database/sql"
++
++func connectDB(dsn string) (*sql.DB, error) {
++	db, err := sql.Open("mysql", dsn)
++	if err != nil {
++		return nil, err
++	}
++	return db, nil
++}
