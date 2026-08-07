@@ -3777,6 +3777,43 @@ desired value explicitly with <code>WithChunkOverlap</code> or the strategy-spec
 overlap option, then re-ingest the affected documents. Because overlap now
 counts inside <code>chunkSize</code>, even an explicit value of <code>128</code> may not reproduce
 the old over-budget chunks byte for byte.</p>
+<p>FixedSizeChunking, RecursiveChunking, and MarkdownChunking preserve leading and
+trailing spaces and tabs in source lines by default. This keeps indentation in
+Python, YAML, Makefiles, nested Markdown, and fenced code intact. The strategies
+still normalize text encoding and <code>CRLF</code>/<code>CR</code> line endings, and reject documents
+that contain only whitespace. Every emitted chunk contains at least one
+non-whitespace character and stays within <code>chunkSize</code>, including configured
+overlap. Whitespace-only fragments are attached to adjacent semantic content
+when the active chunk budget permits. Leading, trailing, or unusually long
+whitespace that cannot be attached without producing an empty or oversized
+chunk is discarded.</p>
+<p>This is an intentional default behavior change. It changes chunk content,
+boundaries, metadata sizes, and embedding inputs compared with releases that
+trimmed every line. Clear and re-ingest persistent vector data after upgrading;
+do not mix chunks produced by the two behaviors. The opt-in compatibility mode
+remains available for applications that must retain the previous lossy
+normalization:</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-7-1">1</a></span>
+<span class="normal"><a href="#__codelineno-7-2">2</a></span>
+<span class="normal"><a href="#__codelineno-7-3">3</a></span>
+<span class="normal"><a href="#__codelineno-7-4">4</a></span>
+<span class="normal"><a href="#__codelineno-7-5">5</a></span>
+<span class="normal"><a href="#__codelineno-7-6">6</a></span>
+<span class="normal"><a href="#__codelineno-7-7">7</a></span>
+<span class="normal"><a href="#__codelineno-7-8">8</a></span>
+<span class="normal"><a href="#__codelineno-7-9">9</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1"></a><span class="nx">fixed</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">chunking</span><span class="p">.</span><span class="nx">NewFixedSizeChunking</span><span class="p">(</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2"></a><span class="w">    </span><span class="nx">chunking</span><span class="p">.</span><span class="nx">WithWhitespaceTrimming</span><span class="p">(),</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3"></a><span class="p">)</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4"></a><span class="nx">recursive</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">chunking</span><span class="p">.</span><span class="nx">NewRecursiveChunking</span><span class="p">(</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5"></a><span class="w">    </span><span class="nx">chunking</span><span class="p">.</span><span class="nx">WithRecursiveWhitespaceTrimming</span><span class="p">(),</span>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6"></a><span class="p">)</span>
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7"></a><span class="nx">markdown</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">chunking</span><span class="p">.</span><span class="nx">NewMarkdownChunking</span><span class="p">(</span>
+</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8"></a><span class="w">    </span><span class="nx">chunking</span><span class="p">.</span><span class="nx">WithMarkdownWhitespaceTrimming</span><span class="p">(),</span>
+</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>Pass the selected strategy through <code>WithCustomChunkingStrategy</code>. Each option
+trims the document, every line, and retained chunk boundaries as earlier
+releases did.</p>
 <p>The text strategies validate their configuration when <code>Chunk</code> is called:
 <code>chunkSize</code> must be greater than zero, and <code>overlap</code> must be in
 <code>[0, chunkSize)</code>. Invalid values return <code>ErrInvalidChunkSize</code>,
@@ -3788,15 +3825,15 @@ is split at UTF-8-safe boundaries. If an indivisible value plus its path cannot
 fit within the byte budget, chunking returns an error instead of emitting an
 over-budget chunk.</p>
 <p>Adjust default strategy parameters via <code>WithChunkSize</code> and <code>WithChunkOverlap</code>:</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-7-1">1</a></span>
-<span class="normal"><a href="#__codelineno-7-2">2</a></span>
-<span class="normal"><a href="#__codelineno-7-3">3</a></span>
-<span class="normal"><a href="#__codelineno-7-4">4</a></span>
-<span class="normal"><a href="#__codelineno-7-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1"></a><span class="nx">fileSrc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2"></a><span class="w">    </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;./data/document.txt&quot;</span><span class="p">},</span>
-</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3"></a><span class="w">    </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">WithChunkSize</span><span class="p">(</span><span class="mi">512</span><span class="p">),</span><span class="w">     </span><span class="c1">// Maximum size in Unicode runes</span>
-</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4"></a><span class="w">    </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">WithChunkOverlap</span><span class="p">(</span><span class="mi">64</span><span class="p">),</span><span class="w">   </span><span class="c1">// Maximum overlap in Unicode runes</span>
-</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5"></a><span class="p">)</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-8-1">1</a></span>
+<span class="normal"><a href="#__codelineno-8-2">2</a></span>
+<span class="normal"><a href="#__codelineno-8-3">3</a></span>
+<span class="normal"><a href="#__codelineno-8-4">4</a></span>
+<span class="normal"><a href="#__codelineno-8-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1"></a><span class="nx">fileSrc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2"></a><span class="w">    </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;./data/document.txt&quot;</span><span class="p">},</span>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3"></a><span class="w">    </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">WithChunkSize</span><span class="p">(</span><span class="mi">512</span><span class="p">),</span><span class="w">     </span><span class="c1">// Maximum size in Unicode runes</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4"></a><span class="w">    </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">WithChunkOverlap</span><span class="p">(</span><span class="mi">64</span><span class="p">),</span><span class="w">   </span><span class="c1">// Maximum overlap in Unicode runes</span>
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <h3 id="custom-chunking-strategy">Custom Chunking Strategy</h3>
 <p>Use <code>WithCustomChunkingStrategy</code> to override the default chunking strategy.</p>
@@ -3806,43 +3843,6 @@ over-budget chunk.</p>
 <h4 id="fixedsizechunking-fixed-size-chunking">FixedSizeChunking - Fixed Size Chunking</h4>
 <p>Splits text near the size limit, preferring a nearby line, sentence,
 punctuation, or word boundary, with optional overlap:</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-8-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-8-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-8-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-8-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-8-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-8-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-8-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-8-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-8-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-8-10">10</a></span>
-<span class="normal"><a href="#__codelineno-8-11">11</a></span>
-<span class="normal"><a href="#__codelineno-8-12">12</a></span>
-<span class="normal"><a href="#__codelineno-8-13">13</a></span>
-<span class="normal"><a href="#__codelineno-8-14">14</a></span>
-<span class="normal"><a href="#__codelineno-8-15">15</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/chunking&quot;</span>
-</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3"></a><span class="w">    </span><span class="nx">filesource</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/source/file&quot;</span>
-</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4"></a><span class="p">)</span>
-</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5"></a>
-</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6"></a><span class="c1">// Create fixed-size chunking strategy</span>
-</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7"></a><span class="nx">fixedChunking</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">chunking</span><span class="p">.</span><span class="nx">NewFixedSizeChunking</span><span class="p">(</span>
-</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8"></a><span class="w">    </span><span class="nx">chunking</span><span class="p">.</span><span class="nx">WithChunkSize</span><span class="p">(</span><span class="mi">512</span><span class="p">),</span><span class="w">   </span><span class="c1">// Max 512 Unicode runes per chunk</span>
-</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9"></a><span class="w">    </span><span class="nx">chunking</span><span class="p">.</span><span class="nx">WithOverlap</span><span class="p">(</span><span class="mi">64</span><span class="p">),</span><span class="w">      </span><span class="c1">// Max 64 Unicode runes of overlap</span>
-</span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10"></a><span class="p">)</span>
-</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11"></a>
-</span><span id="__span-8-12"><a id="__codelineno-8-12" name="__codelineno-8-12"></a><span class="nx">fileSrc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-8-13"><a id="__codelineno-8-13" name="__codelineno-8-13"></a><span class="w">    </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;./data/document.md&quot;</span><span class="p">},</span>
-</span><span id="__span-8-14"><a id="__codelineno-8-14" name="__codelineno-8-14"></a><span class="w">    </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">WithCustomChunkingStrategy</span><span class="p">(</span><span class="nx">fixedChunking</span><span class="p">),</span>
-</span><span id="__span-8-15"><a id="__codelineno-8-15" name="__codelineno-8-15"></a><span class="p">)</span>
-</span></code></pre></div></td></tr></table></div>
-<p>Use <code>chunking.WithPreserveLines()</code> when each input line is a logical record.
-Complete lines are packed without splitting whenever they fit the active
-new-content budget; an oversized line still falls back to sentence,
-punctuation, whitespace, and UTF-8-safe rune boundaries. CSVReader enables this
-option by default.</p>
-<h4 id="recursivechunking-recursive-chunking">RecursiveChunking - Recursive Chunking</h4>
-<p>Recursively splits by separator hierarchy, preferring natural boundaries:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-9-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-9-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-9-3"> 3</a></span>
@@ -3857,25 +3857,62 @@ option by default.</p>
 <span class="normal"><a href="#__codelineno-9-12">12</a></span>
 <span class="normal"><a href="#__codelineno-9-13">13</a></span>
 <span class="normal"><a href="#__codelineno-9-14">14</a></span>
-<span class="normal"><a href="#__codelineno-9-15">15</a></span>
-<span class="normal"><a href="#__codelineno-9-16">16</a></span>
-<span class="normal"><a href="#__codelineno-9-17">17</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+<span class="normal"><a href="#__codelineno-9-15">15</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
 </span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/chunking&quot;</span>
 </span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3"></a><span class="w">    </span><span class="nx">filesource</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/source/file&quot;</span>
 </span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4"></a><span class="p">)</span>
 </span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5"></a>
-</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6"></a><span class="c1">// Create recursive chunking strategy</span>
-</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7"></a><span class="nx">recursiveChunking</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">chunking</span><span class="p">.</span><span class="nx">NewRecursiveChunking</span><span class="p">(</span>
-</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8"></a><span class="w">    </span><span class="nx">chunking</span><span class="p">.</span><span class="nx">WithRecursiveChunkSize</span><span class="p">(</span><span class="mi">512</span><span class="p">),</span><span class="w">   </span><span class="c1">// Max chunk size</span>
-</span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9"></a><span class="w">    </span><span class="nx">chunking</span><span class="p">.</span><span class="nx">WithRecursiveOverlap</span><span class="p">(</span><span class="mi">64</span><span class="p">),</span><span class="w">      </span><span class="c1">// Overlap between chunks</span>
-</span><span id="__span-9-10"><a id="__codelineno-9-10" name="__codelineno-9-10"></a><span class="w">    </span><span class="c1">// Custom separator priority (optional)</span>
-</span><span id="__span-9-11"><a id="__codelineno-9-11" name="__codelineno-9-11"></a><span class="w">    </span><span class="nx">chunking</span><span class="p">.</span><span class="nx">WithRecursiveSeparators</span><span class="p">([]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;\n\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;. &quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot; &quot;</span><span class="p">}),</span>
-</span><span id="__span-9-12"><a id="__codelineno-9-12" name="__codelineno-9-12"></a><span class="p">)</span>
-</span><span id="__span-9-13"><a id="__codelineno-9-13" name="__codelineno-9-13"></a>
-</span><span id="__span-9-14"><a id="__codelineno-9-14" name="__codelineno-9-14"></a><span class="nx">fileSrc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-9-15"><a id="__codelineno-9-15" name="__codelineno-9-15"></a><span class="w">    </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;./data/article.txt&quot;</span><span class="p">},</span>
-</span><span id="__span-9-16"><a id="__codelineno-9-16" name="__codelineno-9-16"></a><span class="w">    </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">WithCustomChunkingStrategy</span><span class="p">(</span><span class="nx">recursiveChunking</span><span class="p">),</span>
-</span><span id="__span-9-17"><a id="__codelineno-9-17" name="__codelineno-9-17"></a><span class="p">)</span>
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6"></a><span class="c1">// Create fixed-size chunking strategy</span>
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7"></a><span class="nx">fixedChunking</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">chunking</span><span class="p">.</span><span class="nx">NewFixedSizeChunking</span><span class="p">(</span>
+</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8"></a><span class="w">    </span><span class="nx">chunking</span><span class="p">.</span><span class="nx">WithChunkSize</span><span class="p">(</span><span class="mi">512</span><span class="p">),</span><span class="w">   </span><span class="c1">// Max 512 Unicode runes per chunk</span>
+</span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9"></a><span class="w">    </span><span class="nx">chunking</span><span class="p">.</span><span class="nx">WithOverlap</span><span class="p">(</span><span class="mi">64</span><span class="p">),</span><span class="w">      </span><span class="c1">// Max 64 Unicode runes of overlap</span>
+</span><span id="__span-9-10"><a id="__codelineno-9-10" name="__codelineno-9-10"></a><span class="p">)</span>
+</span><span id="__span-9-11"><a id="__codelineno-9-11" name="__codelineno-9-11"></a>
+</span><span id="__span-9-12"><a id="__codelineno-9-12" name="__codelineno-9-12"></a><span class="nx">fileSrc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-9-13"><a id="__codelineno-9-13" name="__codelineno-9-13"></a><span class="w">    </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;./data/document.md&quot;</span><span class="p">},</span>
+</span><span id="__span-9-14"><a id="__codelineno-9-14" name="__codelineno-9-14"></a><span class="w">    </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">WithCustomChunkingStrategy</span><span class="p">(</span><span class="nx">fixedChunking</span><span class="p">),</span>
+</span><span id="__span-9-15"><a id="__codelineno-9-15" name="__codelineno-9-15"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>Use <code>chunking.WithPreserveLines()</code> when each input line is a logical record.
+Complete lines are packed without splitting whenever they fit the active
+new-content budget; an oversized line still falls back to sentence,
+punctuation, whitespace, and UTF-8-safe rune boundaries. CSVReader enables this
+option by default.</p>
+<h4 id="recursivechunking-recursive-chunking">RecursiveChunking - Recursive Chunking</h4>
+<p>Recursively splits by separator hierarchy, preferring natural boundaries:</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-10-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-10-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-10-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-10-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-10-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-10-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-10-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-10-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-10-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-10-10">10</a></span>
+<span class="normal"><a href="#__codelineno-10-11">11</a></span>
+<span class="normal"><a href="#__codelineno-10-12">12</a></span>
+<span class="normal"><a href="#__codelineno-10-13">13</a></span>
+<span class="normal"><a href="#__codelineno-10-14">14</a></span>
+<span class="normal"><a href="#__codelineno-10-15">15</a></span>
+<span class="normal"><a href="#__codelineno-10-16">16</a></span>
+<span class="normal"><a href="#__codelineno-10-17">17</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/chunking&quot;</span>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3"></a><span class="w">    </span><span class="nx">filesource</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/source/file&quot;</span>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4"></a><span class="p">)</span>
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5"></a>
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6"></a><span class="c1">// Create recursive chunking strategy</span>
+</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7"></a><span class="nx">recursiveChunking</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">chunking</span><span class="p">.</span><span class="nx">NewRecursiveChunking</span><span class="p">(</span>
+</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8"></a><span class="w">    </span><span class="nx">chunking</span><span class="p">.</span><span class="nx">WithRecursiveChunkSize</span><span class="p">(</span><span class="mi">512</span><span class="p">),</span><span class="w">   </span><span class="c1">// Max chunk size</span>
+</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9"></a><span class="w">    </span><span class="nx">chunking</span><span class="p">.</span><span class="nx">WithRecursiveOverlap</span><span class="p">(</span><span class="mi">64</span><span class="p">),</span><span class="w">      </span><span class="c1">// Overlap between chunks</span>
+</span><span id="__span-10-10"><a id="__codelineno-10-10" name="__codelineno-10-10"></a><span class="w">    </span><span class="c1">// Custom separator priority (optional)</span>
+</span><span id="__span-10-11"><a id="__codelineno-10-11" name="__codelineno-10-11"></a><span class="w">    </span><span class="nx">chunking</span><span class="p">.</span><span class="nx">WithRecursiveSeparators</span><span class="p">([]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;\n\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;. &quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot; &quot;</span><span class="p">}),</span>
+</span><span id="__span-10-12"><a id="__codelineno-10-12" name="__codelineno-10-12"></a><span class="p">)</span>
+</span><span id="__span-10-13"><a id="__codelineno-10-13" name="__codelineno-10-13"></a>
+</span><span id="__span-10-14"><a id="__codelineno-10-14" name="__codelineno-10-14"></a><span class="nx">fileSrc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-10-15"><a id="__codelineno-10-15" name="__codelineno-10-15"></a><span class="w">    </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;./data/article.txt&quot;</span><span class="p">},</span>
+</span><span id="__span-10-16"><a id="__codelineno-10-16" name="__codelineno-10-16"></a><span class="w">    </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">WithCustomChunkingStrategy</span><span class="p">(</span><span class="nx">recursiveChunking</span><span class="p">),</span>
+</span><span id="__span-10-17"><a id="__codelineno-10-17" name="__codelineno-10-17"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p><strong>Separator Priority Explanation</strong>:</p>
 <ol>
@@ -3897,67 +3934,67 @@ chunk.</p>
 <blockquote>
 <p>For detailed filter usage guide, please refer to <a href="../filter/">Filter Documentation</a>.</p>
 </blockquote>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-10-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-10-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-10-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-10-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-10-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-10-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-10-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-10-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-10-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-10-10">10</a></span>
-<span class="normal"><a href="#__codelineno-10-11">11</a></span>
-<span class="normal"><a href="#__codelineno-10-12">12</a></span>
-<span class="normal"><a href="#__codelineno-10-13">13</a></span>
-<span class="normal"><a href="#__codelineno-10-14">14</a></span>
-<span class="normal"><a href="#__codelineno-10-15">15</a></span>
-<span class="normal"><a href="#__codelineno-10-16">16</a></span>
-<span class="normal"><a href="#__codelineno-10-17">17</a></span>
-<span class="normal"><a href="#__codelineno-10-18">18</a></span>
-<span class="normal"><a href="#__codelineno-10-19">19</a></span>
-<span class="normal"><a href="#__codelineno-10-20">20</a></span>
-<span class="normal"><a href="#__codelineno-10-21">21</a></span>
-<span class="normal"><a href="#__codelineno-10-22">22</a></span>
-<span class="normal"><a href="#__codelineno-10-23">23</a></span>
-<span class="normal"><a href="#__codelineno-10-24">24</a></span>
-<span class="normal"><a href="#__codelineno-10-25">25</a></span>
-<span class="normal"><a href="#__codelineno-10-26">26</a></span>
-<span class="normal"><a href="#__codelineno-10-27">27</a></span>
-<span class="normal"><a href="#__codelineno-10-28">28</a></span>
-<span class="normal"><a href="#__codelineno-10-29">29</a></span>
-<span class="normal"><a href="#__codelineno-10-30">30</a></span>
-<span class="normal"><a href="#__codelineno-10-31">31</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1"></a><span class="nx">sources</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="p">[]</span><span class="nx">source</span><span class="p">.</span><span class="nx">Source</span><span class="p">{</span>
-</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2"></a><span class="w">    </span><span class="c1">// File source with metadata</span>
-</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3"></a><span class="w">    </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4"></a><span class="w">        </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;./docs/api.md&quot;</span><span class="p">},</span>
-</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5"></a><span class="w">        </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">WithName</span><span class="p">(</span><span class="s">&quot;API Documentation&quot;</span><span class="p">),</span>
-</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6"></a><span class="w">        </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">WithMetadataValue</span><span class="p">(</span><span class="s">&quot;category&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;documentation&quot;</span><span class="p">),</span>
-</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7"></a><span class="w">        </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">WithMetadataValue</span><span class="p">(</span><span class="s">&quot;topic&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;api&quot;</span><span class="p">),</span>
-</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8"></a><span class="w">        </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">WithMetadataValue</span><span class="p">(</span><span class="s">&quot;service_type&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;gateway&quot;</span><span class="p">),</span>
-</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9"></a><span class="w">        </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">WithMetadataValue</span><span class="p">(</span><span class="s">&quot;protocol&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;trpc-go&quot;</span><span class="p">),</span>
-</span><span id="__span-10-10"><a id="__codelineno-10-10" name="__codelineno-10-10"></a><span class="w">        </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">WithMetadataValue</span><span class="p">(</span><span class="s">&quot;version&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;v1.0&quot;</span><span class="p">),</span>
-</span><span id="__span-10-11"><a id="__codelineno-10-11" name="__codelineno-10-11"></a><span class="w">    </span><span class="p">),</span>
-</span><span id="__span-10-12"><a id="__codelineno-10-12" name="__codelineno-10-12"></a>
-</span><span id="__span-10-13"><a id="__codelineno-10-13" name="__codelineno-10-13"></a><span class="w">    </span><span class="c1">// Directory source with metadata</span>
-</span><span id="__span-10-14"><a id="__codelineno-10-14" name="__codelineno-10-14"></a><span class="w">    </span><span class="nx">dirsource</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-10-15"><a id="__codelineno-10-15" name="__codelineno-10-15"></a><span class="w">        </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;./tutorials&quot;</span><span class="p">},</span>
-</span><span id="__span-10-16"><a id="__codelineno-10-16" name="__codelineno-10-16"></a><span class="w">        </span><span class="nx">dirsource</span><span class="p">.</span><span class="nx">WithName</span><span class="p">(</span><span class="s">&quot;Tutorials&quot;</span><span class="p">),</span>
-</span><span id="__span-10-17"><a id="__codelineno-10-17" name="__codelineno-10-17"></a><span class="w">        </span><span class="nx">dirsource</span><span class="p">.</span><span class="nx">WithMetadataValue</span><span class="p">(</span><span class="s">&quot;category&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;tutorial&quot;</span><span class="p">),</span>
-</span><span id="__span-10-18"><a id="__codelineno-10-18" name="__codelineno-10-18"></a><span class="w">        </span><span class="nx">dirsource</span><span class="p">.</span><span class="nx">WithMetadataValue</span><span class="p">(</span><span class="s">&quot;difficulty&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;beginner&quot;</span><span class="p">),</span>
-</span><span id="__span-10-19"><a id="__codelineno-10-19" name="__codelineno-10-19"></a><span class="w">        </span><span class="nx">dirsource</span><span class="p">.</span><span class="nx">WithMetadataValue</span><span class="p">(</span><span class="s">&quot;topic&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;programming&quot;</span><span class="p">),</span>
-</span><span id="__span-10-20"><a id="__codelineno-10-20" name="__codelineno-10-20"></a><span class="w">    </span><span class="p">),</span>
-</span><span id="__span-10-21"><a id="__codelineno-10-21" name="__codelineno-10-21"></a>
-</span><span id="__span-10-22"><a id="__codelineno-10-22" name="__codelineno-10-22"></a><span class="w">    </span><span class="c1">// URL source with metadata</span>
-</span><span id="__span-10-23"><a id="__codelineno-10-23" name="__codelineno-10-23"></a><span class="w">    </span><span class="nx">urlsource</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-10-24"><a id="__codelineno-10-24" name="__codelineno-10-24"></a><span class="w">        </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;https://example.com/wiki/rpc&quot;</span><span class="p">},</span>
-</span><span id="__span-10-25"><a id="__codelineno-10-25" name="__codelineno-10-25"></a><span class="w">        </span><span class="nx">urlsource</span><span class="p">.</span><span class="nx">WithName</span><span class="p">(</span><span class="s">&quot;RPC Wiki&quot;</span><span class="p">),</span>
-</span><span id="__span-10-26"><a id="__codelineno-10-26" name="__codelineno-10-26"></a><span class="w">        </span><span class="nx">urlsource</span><span class="p">.</span><span class="nx">WithMetadataValue</span><span class="p">(</span><span class="s">&quot;category&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;encyclopedia&quot;</span><span class="p">),</span>
-</span><span id="__span-10-27"><a id="__codelineno-10-27" name="__codelineno-10-27"></a><span class="w">        </span><span class="nx">urlsource</span><span class="p">.</span><span class="nx">WithMetadataValue</span><span class="p">(</span><span class="s">&quot;source_type&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;web&quot;</span><span class="p">),</span>
-</span><span id="__span-10-28"><a id="__codelineno-10-28" name="__codelineno-10-28"></a><span class="w">        </span><span class="nx">urlsource</span><span class="p">.</span><span class="nx">WithMetadataValue</span><span class="p">(</span><span class="s">&quot;topic&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;rpc&quot;</span><span class="p">),</span>
-</span><span id="__span-10-29"><a id="__codelineno-10-29" name="__codelineno-10-29"></a><span class="w">        </span><span class="nx">urlsource</span><span class="p">.</span><span class="nx">WithMetadataValue</span><span class="p">(</span><span class="s">&quot;language&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;zh&quot;</span><span class="p">),</span>
-</span><span id="__span-10-30"><a id="__codelineno-10-30" name="__codelineno-10-30"></a><span class="w">    </span><span class="p">),</span>
-</span><span id="__span-10-31"><a id="__codelineno-10-31" name="__codelineno-10-31"></a><span class="p">}</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-11-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-11-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-11-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-11-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-11-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-11-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-11-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-11-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-11-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-11-10">10</a></span>
+<span class="normal"><a href="#__codelineno-11-11">11</a></span>
+<span class="normal"><a href="#__codelineno-11-12">12</a></span>
+<span class="normal"><a href="#__codelineno-11-13">13</a></span>
+<span class="normal"><a href="#__codelineno-11-14">14</a></span>
+<span class="normal"><a href="#__codelineno-11-15">15</a></span>
+<span class="normal"><a href="#__codelineno-11-16">16</a></span>
+<span class="normal"><a href="#__codelineno-11-17">17</a></span>
+<span class="normal"><a href="#__codelineno-11-18">18</a></span>
+<span class="normal"><a href="#__codelineno-11-19">19</a></span>
+<span class="normal"><a href="#__codelineno-11-20">20</a></span>
+<span class="normal"><a href="#__codelineno-11-21">21</a></span>
+<span class="normal"><a href="#__codelineno-11-22">22</a></span>
+<span class="normal"><a href="#__codelineno-11-23">23</a></span>
+<span class="normal"><a href="#__codelineno-11-24">24</a></span>
+<span class="normal"><a href="#__codelineno-11-25">25</a></span>
+<span class="normal"><a href="#__codelineno-11-26">26</a></span>
+<span class="normal"><a href="#__codelineno-11-27">27</a></span>
+<span class="normal"><a href="#__codelineno-11-28">28</a></span>
+<span class="normal"><a href="#__codelineno-11-29">29</a></span>
+<span class="normal"><a href="#__codelineno-11-30">30</a></span>
+<span class="normal"><a href="#__codelineno-11-31">31</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1"></a><span class="nx">sources</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="p">[]</span><span class="nx">source</span><span class="p">.</span><span class="nx">Source</span><span class="p">{</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2"></a><span class="w">    </span><span class="c1">// File source with metadata</span>
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3"></a><span class="w">    </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4"></a><span class="w">        </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;./docs/api.md&quot;</span><span class="p">},</span>
+</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5"></a><span class="w">        </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">WithName</span><span class="p">(</span><span class="s">&quot;API Documentation&quot;</span><span class="p">),</span>
+</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6"></a><span class="w">        </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">WithMetadataValue</span><span class="p">(</span><span class="s">&quot;category&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;documentation&quot;</span><span class="p">),</span>
+</span><span id="__span-11-7"><a id="__codelineno-11-7" name="__codelineno-11-7"></a><span class="w">        </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">WithMetadataValue</span><span class="p">(</span><span class="s">&quot;topic&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;api&quot;</span><span class="p">),</span>
+</span><span id="__span-11-8"><a id="__codelineno-11-8" name="__codelineno-11-8"></a><span class="w">        </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">WithMetadataValue</span><span class="p">(</span><span class="s">&quot;service_type&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;gateway&quot;</span><span class="p">),</span>
+</span><span id="__span-11-9"><a id="__codelineno-11-9" name="__codelineno-11-9"></a><span class="w">        </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">WithMetadataValue</span><span class="p">(</span><span class="s">&quot;protocol&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;trpc-go&quot;</span><span class="p">),</span>
+</span><span id="__span-11-10"><a id="__codelineno-11-10" name="__codelineno-11-10"></a><span class="w">        </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">WithMetadataValue</span><span class="p">(</span><span class="s">&quot;version&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;v1.0&quot;</span><span class="p">),</span>
+</span><span id="__span-11-11"><a id="__codelineno-11-11" name="__codelineno-11-11"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-11-12"><a id="__codelineno-11-12" name="__codelineno-11-12"></a>
+</span><span id="__span-11-13"><a id="__codelineno-11-13" name="__codelineno-11-13"></a><span class="w">    </span><span class="c1">// Directory source with metadata</span>
+</span><span id="__span-11-14"><a id="__codelineno-11-14" name="__codelineno-11-14"></a><span class="w">    </span><span class="nx">dirsource</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-11-15"><a id="__codelineno-11-15" name="__codelineno-11-15"></a><span class="w">        </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;./tutorials&quot;</span><span class="p">},</span>
+</span><span id="__span-11-16"><a id="__codelineno-11-16" name="__codelineno-11-16"></a><span class="w">        </span><span class="nx">dirsource</span><span class="p">.</span><span class="nx">WithName</span><span class="p">(</span><span class="s">&quot;Tutorials&quot;</span><span class="p">),</span>
+</span><span id="__span-11-17"><a id="__codelineno-11-17" name="__codelineno-11-17"></a><span class="w">        </span><span class="nx">dirsource</span><span class="p">.</span><span class="nx">WithMetadataValue</span><span class="p">(</span><span class="s">&quot;category&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;tutorial&quot;</span><span class="p">),</span>
+</span><span id="__span-11-18"><a id="__codelineno-11-18" name="__codelineno-11-18"></a><span class="w">        </span><span class="nx">dirsource</span><span class="p">.</span><span class="nx">WithMetadataValue</span><span class="p">(</span><span class="s">&quot;difficulty&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;beginner&quot;</span><span class="p">),</span>
+</span><span id="__span-11-19"><a id="__codelineno-11-19" name="__codelineno-11-19"></a><span class="w">        </span><span class="nx">dirsource</span><span class="p">.</span><span class="nx">WithMetadataValue</span><span class="p">(</span><span class="s">&quot;topic&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;programming&quot;</span><span class="p">),</span>
+</span><span id="__span-11-20"><a id="__codelineno-11-20" name="__codelineno-11-20"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-11-21"><a id="__codelineno-11-21" name="__codelineno-11-21"></a>
+</span><span id="__span-11-22"><a id="__codelineno-11-22" name="__codelineno-11-22"></a><span class="w">    </span><span class="c1">// URL source with metadata</span>
+</span><span id="__span-11-23"><a id="__codelineno-11-23" name="__codelineno-11-23"></a><span class="w">    </span><span class="nx">urlsource</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-11-24"><a id="__codelineno-11-24" name="__codelineno-11-24"></a><span class="w">        </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;https://example.com/wiki/rpc&quot;</span><span class="p">},</span>
+</span><span id="__span-11-25"><a id="__codelineno-11-25" name="__codelineno-11-25"></a><span class="w">        </span><span class="nx">urlsource</span><span class="p">.</span><span class="nx">WithName</span><span class="p">(</span><span class="s">&quot;RPC Wiki&quot;</span><span class="p">),</span>
+</span><span id="__span-11-26"><a id="__codelineno-11-26" name="__codelineno-11-26"></a><span class="w">        </span><span class="nx">urlsource</span><span class="p">.</span><span class="nx">WithMetadataValue</span><span class="p">(</span><span class="s">&quot;category&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;encyclopedia&quot;</span><span class="p">),</span>
+</span><span id="__span-11-27"><a id="__codelineno-11-27" name="__codelineno-11-27"></a><span class="w">        </span><span class="nx">urlsource</span><span class="p">.</span><span class="nx">WithMetadataValue</span><span class="p">(</span><span class="s">&quot;source_type&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;web&quot;</span><span class="p">),</span>
+</span><span id="__span-11-28"><a id="__codelineno-11-28" name="__codelineno-11-28"></a><span class="w">        </span><span class="nx">urlsource</span><span class="p">.</span><span class="nx">WithMetadataValue</span><span class="p">(</span><span class="s">&quot;topic&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;rpc&quot;</span><span class="p">),</span>
+</span><span id="__span-11-29"><a id="__codelineno-11-29" name="__codelineno-11-29"></a><span class="w">        </span><span class="nx">urlsource</span><span class="p">.</span><span class="nx">WithMetadataValue</span><span class="p">(</span><span class="s">&quot;language&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;zh&quot;</span><span class="p">),</span>
+</span><span id="__span-11-30"><a id="__codelineno-11-30" name="__codelineno-11-30"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-11-31"><a id="__codelineno-11-31" name="__codelineno-11-31"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <h2 id="content-transformer">Content Transformer</h2>
 <blockquote>
@@ -3965,126 +4002,126 @@ chunk.</p>
 </blockquote>
 <p>Transformer is used to preprocess and postprocess content before and after document chunking. This is particularly useful for cleaning text extracted from PDFs, web pages, and other sources, removing excess whitespace, duplicate characters, and other noise.</p>
 <h3 id="processing-flow">Processing Flow</h3>
-<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-11-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1"></a>Document → Preprocess → Processed Document → Chunking → Chunks → Postprocess → Final Chunks
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-12-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1"></a>Document → Preprocess → Processed Document → Chunking → Chunks → Postprocess → Final Chunks
 </span></code></pre></div></td></tr></table></div>
 <h3 id="built-in-transformers">Built-in Transformers</h3>
 <h4 id="charfilter-character-filter">CharFilter - Character Filter</h4>
 <p>Removes specified characters or strings:</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-12-1">1</a></span>
-<span class="normal"><a href="#__codelineno-12-2">2</a></span>
-<span class="normal"><a href="#__codelineno-12-3">3</a></span>
-<span class="normal"><a href="#__codelineno-12-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/transform&quot;</span>
-</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2"></a>
-</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3"></a><span class="c1">// Remove newlines, tabs, and carriage returns</span>
-</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4"></a><span class="nx">filter</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">transform</span><span class="p">.</span><span class="nx">NewCharFilter</span><span class="p">(</span><span class="s">&quot;\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;\t&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;\r&quot;</span><span class="p">)</span>
-</span></code></pre></div></td></tr></table></div>
-<h4 id="chardedup-character-deduplicator">CharDedup - Character Deduplicator</h4>
-<p>Merges consecutive duplicate characters or strings into a single instance:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-13-1">1</a></span>
 <span class="normal"><a href="#__codelineno-13-2">2</a></span>
 <span class="normal"><a href="#__codelineno-13-3">3</a></span>
-<span class="normal"><a href="#__codelineno-13-4">4</a></span>
-<span class="normal"><a href="#__codelineno-13-5">5</a></span>
-<span class="normal"><a href="#__codelineno-13-6">6</a></span>
-<span class="normal"><a href="#__codelineno-13-7">7</a></span>
-<span class="normal"><a href="#__codelineno-13-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/transform&quot;</span>
+<span class="normal"><a href="#__codelineno-13-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/transform&quot;</span>
 </span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2"></a>
-</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3"></a><span class="c1">// Merge multiple consecutive spaces into one, merge multiple newlines into one</span>
-</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4"></a><span class="nx">dedup</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">transform</span><span class="p">.</span><span class="nx">NewCharDedup</span><span class="p">(</span><span class="s">&quot; &quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;\n&quot;</span><span class="p">)</span>
-</span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5"></a>
-</span><span id="__span-13-6"><a id="__codelineno-13-6" name="__codelineno-13-6"></a><span class="c1">// Example:</span>
-</span><span id="__span-13-7"><a id="__codelineno-13-7" name="__codelineno-13-7"></a><span class="c1">// Input:  &quot;hello     world\n\n\nfoo&quot;</span>
-</span><span id="__span-13-8"><a id="__codelineno-13-8" name="__codelineno-13-8"></a><span class="c1">// Output: &quot;hello world\nfoo&quot;</span>
+</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3"></a><span class="c1">// Remove newlines, tabs, and carriage returns</span>
+</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4"></a><span class="nx">filter</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">transform</span><span class="p">.</span><span class="nx">NewCharFilter</span><span class="p">(</span><span class="s">&quot;\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;\t&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;\r&quot;</span><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<h4 id="chardedup-character-deduplicator">CharDedup - Character Deduplicator</h4>
+<p>Merges consecutive duplicate characters or strings into a single instance:</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-14-1">1</a></span>
+<span class="normal"><a href="#__codelineno-14-2">2</a></span>
+<span class="normal"><a href="#__codelineno-14-3">3</a></span>
+<span class="normal"><a href="#__codelineno-14-4">4</a></span>
+<span class="normal"><a href="#__codelineno-14-5">5</a></span>
+<span class="normal"><a href="#__codelineno-14-6">6</a></span>
+<span class="normal"><a href="#__codelineno-14-7">7</a></span>
+<span class="normal"><a href="#__codelineno-14-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/transform&quot;</span>
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2"></a>
+</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3"></a><span class="c1">// Merge multiple consecutive spaces into one, merge multiple newlines into one</span>
+</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4"></a><span class="nx">dedup</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">transform</span><span class="p">.</span><span class="nx">NewCharDedup</span><span class="p">(</span><span class="s">&quot; &quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;\n&quot;</span><span class="p">)</span>
+</span><span id="__span-14-5"><a id="__codelineno-14-5" name="__codelineno-14-5"></a>
+</span><span id="__span-14-6"><a id="__codelineno-14-6" name="__codelineno-14-6"></a><span class="c1">// Example:</span>
+</span><span id="__span-14-7"><a id="__codelineno-14-7" name="__codelineno-14-7"></a><span class="c1">// Input:  &quot;hello     world\n\n\nfoo&quot;</span>
+</span><span id="__span-14-8"><a id="__codelineno-14-8" name="__codelineno-14-8"></a><span class="c1">// Output: &quot;hello world\nfoo&quot;</span>
 </span></code></pre></div></td></tr></table></div>
 <h3 id="usage">Usage</h3>
 <p>Transformers are passed to various document sources via the <code>WithTransformers</code> option:</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-14-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-14-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-14-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-14-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-14-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-14-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-14-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-14-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-14-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-14-10">10</a></span>
-<span class="normal"><a href="#__codelineno-14-11">11</a></span>
-<span class="normal"><a href="#__codelineno-14-12">12</a></span>
-<span class="normal"><a href="#__codelineno-14-13">13</a></span>
-<span class="normal"><a href="#__codelineno-14-14">14</a></span>
-<span class="normal"><a href="#__codelineno-14-15">15</a></span>
-<span class="normal"><a href="#__codelineno-14-16">16</a></span>
-<span class="normal"><a href="#__codelineno-14-17">17</a></span>
-<span class="normal"><a href="#__codelineno-14-18">18</a></span>
-<span class="normal"><a href="#__codelineno-14-19">19</a></span>
-<span class="normal"><a href="#__codelineno-14-20">20</a></span>
-<span class="normal"><a href="#__codelineno-14-21">21</a></span>
-<span class="normal"><a href="#__codelineno-14-22">22</a></span>
-<span class="normal"><a href="#__codelineno-14-23">23</a></span>
-<span class="normal"><a href="#__codelineno-14-24">24</a></span>
-<span class="normal"><a href="#__codelineno-14-25">25</a></span>
-<span class="normal"><a href="#__codelineno-14-26">26</a></span>
-<span class="normal"><a href="#__codelineno-14-27">27</a></span>
-<span class="normal"><a href="#__codelineno-14-28">28</a></span>
-<span class="normal"><a href="#__codelineno-14-29">29</a></span>
-<span class="normal"><a href="#__codelineno-14-30">30</a></span>
-<span class="normal"><a href="#__codelineno-14-31">31</a></span>
-<span class="normal"><a href="#__codelineno-14-32">32</a></span>
-<span class="normal"><a href="#__codelineno-14-33">33</a></span>
-<span class="normal"><a href="#__codelineno-14-34">34</a></span>
-<span class="normal"><a href="#__codelineno-14-35">35</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2"></a><span class="w">    </span><span class="nx">filesource</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/source/file&quot;</span>
-</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3"></a><span class="w">    </span><span class="nx">dirsource</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/source/dir&quot;</span>
-</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4"></a><span class="w">    </span><span class="nx">urlsource</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/source/url&quot;</span>
-</span><span id="__span-14-5"><a id="__codelineno-14-5" name="__codelineno-14-5"></a><span class="w">    </span><span class="nx">autosource</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/source/auto&quot;</span>
-</span><span id="__span-14-6"><a id="__codelineno-14-6" name="__codelineno-14-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/transform&quot;</span>
-</span><span id="__span-14-7"><a id="__codelineno-14-7" name="__codelineno-14-7"></a><span class="p">)</span>
-</span><span id="__span-14-8"><a id="__codelineno-14-8" name="__codelineno-14-8"></a>
-</span><span id="__span-14-9"><a id="__codelineno-14-9" name="__codelineno-14-9"></a><span class="c1">// Create transformers</span>
-</span><span id="__span-14-10"><a id="__codelineno-14-10" name="__codelineno-14-10"></a><span class="nx">filter</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">transform</span><span class="p">.</span><span class="nx">NewCharFilter</span><span class="p">(</span><span class="s">&quot;\t&quot;</span><span class="p">)</span><span class="w">           </span><span class="c1">// Remove tabs</span>
-</span><span id="__span-14-11"><a id="__codelineno-14-11" name="__codelineno-14-11"></a><span class="nx">dedup</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">transform</span><span class="p">.</span><span class="nx">NewCharDedup</span><span class="p">(</span><span class="s">&quot; &quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;\n&quot;</span><span class="p">)</span><span class="w">        </span><span class="c1">// Merge consecutive spaces and newlines</span>
-</span><span id="__span-14-12"><a id="__codelineno-14-12" name="__codelineno-14-12"></a>
-</span><span id="__span-14-13"><a id="__codelineno-14-13" name="__codelineno-14-13"></a><span class="c1">// File source with transformers</span>
-</span><span id="__span-14-14"><a id="__codelineno-14-14" name="__codelineno-14-14"></a><span class="nx">fileSrc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-14-15"><a id="__codelineno-14-15" name="__codelineno-14-15"></a><span class="w">    </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;./data/document.pdf&quot;</span><span class="p">},</span>
-</span><span id="__span-14-16"><a id="__codelineno-14-16" name="__codelineno-14-16"></a><span class="w">    </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">WithTransformers</span><span class="p">(</span><span class="nx">filter</span><span class="p">,</span><span class="w"> </span><span class="nx">dedup</span><span class="p">),</span>
-</span><span id="__span-14-17"><a id="__codelineno-14-17" name="__codelineno-14-17"></a><span class="p">)</span>
-</span><span id="__span-14-18"><a id="__codelineno-14-18" name="__codelineno-14-18"></a>
-</span><span id="__span-14-19"><a id="__codelineno-14-19" name="__codelineno-14-19"></a><span class="c1">// Directory source with transformers</span>
-</span><span id="__span-14-20"><a id="__codelineno-14-20" name="__codelineno-14-20"></a><span class="nx">dirSrc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">dirsource</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-14-21"><a id="__codelineno-14-21" name="__codelineno-14-21"></a><span class="w">    </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;./docs&quot;</span><span class="p">},</span>
-</span><span id="__span-14-22"><a id="__codelineno-14-22" name="__codelineno-14-22"></a><span class="w">    </span><span class="nx">dirsource</span><span class="p">.</span><span class="nx">WithTransformers</span><span class="p">(</span><span class="nx">filter</span><span class="p">,</span><span class="w"> </span><span class="nx">dedup</span><span class="p">),</span>
-</span><span id="__span-14-23"><a id="__codelineno-14-23" name="__codelineno-14-23"></a><span class="p">)</span>
-</span><span id="__span-14-24"><a id="__codelineno-14-24" name="__codelineno-14-24"></a>
-</span><span id="__span-14-25"><a id="__codelineno-14-25" name="__codelineno-14-25"></a><span class="c1">// URL source with transformers</span>
-</span><span id="__span-14-26"><a id="__codelineno-14-26" name="__codelineno-14-26"></a><span class="nx">urlSrc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">urlsource</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-14-27"><a id="__codelineno-14-27" name="__codelineno-14-27"></a><span class="w">    </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;https://example.com/article&quot;</span><span class="p">},</span>
-</span><span id="__span-14-28"><a id="__codelineno-14-28" name="__codelineno-14-28"></a><span class="w">    </span><span class="nx">urlsource</span><span class="p">.</span><span class="nx">WithTransformers</span><span class="p">(</span><span class="nx">filter</span><span class="p">,</span><span class="w"> </span><span class="nx">dedup</span><span class="p">),</span>
-</span><span id="__span-14-29"><a id="__codelineno-14-29" name="__codelineno-14-29"></a><span class="p">)</span>
-</span><span id="__span-14-30"><a id="__codelineno-14-30" name="__codelineno-14-30"></a>
-</span><span id="__span-14-31"><a id="__codelineno-14-31" name="__codelineno-14-31"></a><span class="c1">// Auto source with transformers</span>
-</span><span id="__span-14-32"><a id="__codelineno-14-32" name="__codelineno-14-32"></a><span class="nx">autoSrc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">autosource</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-14-33"><a id="__codelineno-14-33" name="__codelineno-14-33"></a><span class="w">    </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;./mixed-content&quot;</span><span class="p">},</span>
-</span><span id="__span-14-34"><a id="__codelineno-14-34" name="__codelineno-14-34"></a><span class="w">    </span><span class="nx">autosource</span><span class="p">.</span><span class="nx">WithTransformers</span><span class="p">(</span><span class="nx">filter</span><span class="p">,</span><span class="w"> </span><span class="nx">dedup</span><span class="p">),</span>
-</span><span id="__span-14-35"><a id="__codelineno-14-35" name="__codelineno-14-35"></a><span class="p">)</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-15-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-15-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-15-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-15-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-15-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-15-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-15-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-15-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-15-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-15-10">10</a></span>
+<span class="normal"><a href="#__codelineno-15-11">11</a></span>
+<span class="normal"><a href="#__codelineno-15-12">12</a></span>
+<span class="normal"><a href="#__codelineno-15-13">13</a></span>
+<span class="normal"><a href="#__codelineno-15-14">14</a></span>
+<span class="normal"><a href="#__codelineno-15-15">15</a></span>
+<span class="normal"><a href="#__codelineno-15-16">16</a></span>
+<span class="normal"><a href="#__codelineno-15-17">17</a></span>
+<span class="normal"><a href="#__codelineno-15-18">18</a></span>
+<span class="normal"><a href="#__codelineno-15-19">19</a></span>
+<span class="normal"><a href="#__codelineno-15-20">20</a></span>
+<span class="normal"><a href="#__codelineno-15-21">21</a></span>
+<span class="normal"><a href="#__codelineno-15-22">22</a></span>
+<span class="normal"><a href="#__codelineno-15-23">23</a></span>
+<span class="normal"><a href="#__codelineno-15-24">24</a></span>
+<span class="normal"><a href="#__codelineno-15-25">25</a></span>
+<span class="normal"><a href="#__codelineno-15-26">26</a></span>
+<span class="normal"><a href="#__codelineno-15-27">27</a></span>
+<span class="normal"><a href="#__codelineno-15-28">28</a></span>
+<span class="normal"><a href="#__codelineno-15-29">29</a></span>
+<span class="normal"><a href="#__codelineno-15-30">30</a></span>
+<span class="normal"><a href="#__codelineno-15-31">31</a></span>
+<span class="normal"><a href="#__codelineno-15-32">32</a></span>
+<span class="normal"><a href="#__codelineno-15-33">33</a></span>
+<span class="normal"><a href="#__codelineno-15-34">34</a></span>
+<span class="normal"><a href="#__codelineno-15-35">35</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2"></a><span class="w">    </span><span class="nx">filesource</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/source/file&quot;</span>
+</span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3"></a><span class="w">    </span><span class="nx">dirsource</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/source/dir&quot;</span>
+</span><span id="__span-15-4"><a id="__codelineno-15-4" name="__codelineno-15-4"></a><span class="w">    </span><span class="nx">urlsource</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/source/url&quot;</span>
+</span><span id="__span-15-5"><a id="__codelineno-15-5" name="__codelineno-15-5"></a><span class="w">    </span><span class="nx">autosource</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/source/auto&quot;</span>
+</span><span id="__span-15-6"><a id="__codelineno-15-6" name="__codelineno-15-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/transform&quot;</span>
+</span><span id="__span-15-7"><a id="__codelineno-15-7" name="__codelineno-15-7"></a><span class="p">)</span>
+</span><span id="__span-15-8"><a id="__codelineno-15-8" name="__codelineno-15-8"></a>
+</span><span id="__span-15-9"><a id="__codelineno-15-9" name="__codelineno-15-9"></a><span class="c1">// Create transformers</span>
+</span><span id="__span-15-10"><a id="__codelineno-15-10" name="__codelineno-15-10"></a><span class="nx">filter</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">transform</span><span class="p">.</span><span class="nx">NewCharFilter</span><span class="p">(</span><span class="s">&quot;\t&quot;</span><span class="p">)</span><span class="w">           </span><span class="c1">// Remove tabs</span>
+</span><span id="__span-15-11"><a id="__codelineno-15-11" name="__codelineno-15-11"></a><span class="nx">dedup</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">transform</span><span class="p">.</span><span class="nx">NewCharDedup</span><span class="p">(</span><span class="s">&quot; &quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;\n&quot;</span><span class="p">)</span><span class="w">        </span><span class="c1">// Merge consecutive spaces and newlines</span>
+</span><span id="__span-15-12"><a id="__codelineno-15-12" name="__codelineno-15-12"></a>
+</span><span id="__span-15-13"><a id="__codelineno-15-13" name="__codelineno-15-13"></a><span class="c1">// File source with transformers</span>
+</span><span id="__span-15-14"><a id="__codelineno-15-14" name="__codelineno-15-14"></a><span class="nx">fileSrc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-15-15"><a id="__codelineno-15-15" name="__codelineno-15-15"></a><span class="w">    </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;./data/document.pdf&quot;</span><span class="p">},</span>
+</span><span id="__span-15-16"><a id="__codelineno-15-16" name="__codelineno-15-16"></a><span class="w">    </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">WithTransformers</span><span class="p">(</span><span class="nx">filter</span><span class="p">,</span><span class="w"> </span><span class="nx">dedup</span><span class="p">),</span>
+</span><span id="__span-15-17"><a id="__codelineno-15-17" name="__codelineno-15-17"></a><span class="p">)</span>
+</span><span id="__span-15-18"><a id="__codelineno-15-18" name="__codelineno-15-18"></a>
+</span><span id="__span-15-19"><a id="__codelineno-15-19" name="__codelineno-15-19"></a><span class="c1">// Directory source with transformers</span>
+</span><span id="__span-15-20"><a id="__codelineno-15-20" name="__codelineno-15-20"></a><span class="nx">dirSrc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">dirsource</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-15-21"><a id="__codelineno-15-21" name="__codelineno-15-21"></a><span class="w">    </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;./docs&quot;</span><span class="p">},</span>
+</span><span id="__span-15-22"><a id="__codelineno-15-22" name="__codelineno-15-22"></a><span class="w">    </span><span class="nx">dirsource</span><span class="p">.</span><span class="nx">WithTransformers</span><span class="p">(</span><span class="nx">filter</span><span class="p">,</span><span class="w"> </span><span class="nx">dedup</span><span class="p">),</span>
+</span><span id="__span-15-23"><a id="__codelineno-15-23" name="__codelineno-15-23"></a><span class="p">)</span>
+</span><span id="__span-15-24"><a id="__codelineno-15-24" name="__codelineno-15-24"></a>
+</span><span id="__span-15-25"><a id="__codelineno-15-25" name="__codelineno-15-25"></a><span class="c1">// URL source with transformers</span>
+</span><span id="__span-15-26"><a id="__codelineno-15-26" name="__codelineno-15-26"></a><span class="nx">urlSrc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">urlsource</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-15-27"><a id="__codelineno-15-27" name="__codelineno-15-27"></a><span class="w">    </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;https://example.com/article&quot;</span><span class="p">},</span>
+</span><span id="__span-15-28"><a id="__codelineno-15-28" name="__codelineno-15-28"></a><span class="w">    </span><span class="nx">urlsource</span><span class="p">.</span><span class="nx">WithTransformers</span><span class="p">(</span><span class="nx">filter</span><span class="p">,</span><span class="w"> </span><span class="nx">dedup</span><span class="p">),</span>
+</span><span id="__span-15-29"><a id="__codelineno-15-29" name="__codelineno-15-29"></a><span class="p">)</span>
+</span><span id="__span-15-30"><a id="__codelineno-15-30" name="__codelineno-15-30"></a>
+</span><span id="__span-15-31"><a id="__codelineno-15-31" name="__codelineno-15-31"></a><span class="c1">// Auto source with transformers</span>
+</span><span id="__span-15-32"><a id="__codelineno-15-32" name="__codelineno-15-32"></a><span class="nx">autoSrc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">autosource</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-15-33"><a id="__codelineno-15-33" name="__codelineno-15-33"></a><span class="w">    </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;./mixed-content&quot;</span><span class="p">},</span>
+</span><span id="__span-15-34"><a id="__codelineno-15-34" name="__codelineno-15-34"></a><span class="w">    </span><span class="nx">autosource</span><span class="p">.</span><span class="nx">WithTransformers</span><span class="p">(</span><span class="nx">filter</span><span class="p">,</span><span class="w"> </span><span class="nx">dedup</span><span class="p">),</span>
+</span><span id="__span-15-35"><a id="__codelineno-15-35" name="__codelineno-15-35"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <h3 id="combining-multiple-transformers">Combining Multiple Transformers</h3>
 <p>Multiple transformers are executed in sequence:</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-15-1">1</a></span>
-<span class="normal"><a href="#__codelineno-15-2">2</a></span>
-<span class="normal"><a href="#__codelineno-15-3">3</a></span>
-<span class="normal"><a href="#__codelineno-15-4">4</a></span>
-<span class="normal"><a href="#__codelineno-15-5">5</a></span>
-<span class="normal"><a href="#__codelineno-15-6">6</a></span>
-<span class="normal"><a href="#__codelineno-15-7">7</a></span>
-<span class="normal"><a href="#__codelineno-15-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1"></a><span class="c1">// First remove tabs, then merge consecutive spaces</span>
-</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2"></a><span class="nx">filter</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">transform</span><span class="p">.</span><span class="nx">NewCharFilter</span><span class="p">(</span><span class="s">&quot;\t&quot;</span><span class="p">)</span>
-</span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3"></a><span class="nx">dedup</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">transform</span><span class="p">.</span><span class="nx">NewCharDedup</span><span class="p">(</span><span class="s">&quot; &quot;</span><span class="p">)</span>
-</span><span id="__span-15-4"><a id="__codelineno-15-4" name="__codelineno-15-4"></a>
-</span><span id="__span-15-5"><a id="__codelineno-15-5" name="__codelineno-15-5"></a><span class="nx">src</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-15-6"><a id="__codelineno-15-6" name="__codelineno-15-6"></a><span class="w">    </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;./data/messy.txt&quot;</span><span class="p">},</span>
-</span><span id="__span-15-7"><a id="__codelineno-15-7" name="__codelineno-15-7"></a><span class="w">    </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">WithTransformers</span><span class="p">(</span><span class="nx">filter</span><span class="p">,</span><span class="w"> </span><span class="nx">dedup</span><span class="p">),</span><span class="w">  </span><span class="c1">// Executed in order</span>
-</span><span id="__span-15-8"><a id="__codelineno-15-8" name="__codelineno-15-8"></a><span class="p">)</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-16-1">1</a></span>
+<span class="normal"><a href="#__codelineno-16-2">2</a></span>
+<span class="normal"><a href="#__codelineno-16-3">3</a></span>
+<span class="normal"><a href="#__codelineno-16-4">4</a></span>
+<span class="normal"><a href="#__codelineno-16-5">5</a></span>
+<span class="normal"><a href="#__codelineno-16-6">6</a></span>
+<span class="normal"><a href="#__codelineno-16-7">7</a></span>
+<span class="normal"><a href="#__codelineno-16-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1"></a><span class="c1">// First remove tabs, then merge consecutive spaces</span>
+</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2"></a><span class="nx">filter</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">transform</span><span class="p">.</span><span class="nx">NewCharFilter</span><span class="p">(</span><span class="s">&quot;\t&quot;</span><span class="p">)</span>
+</span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3"></a><span class="nx">dedup</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">transform</span><span class="p">.</span><span class="nx">NewCharDedup</span><span class="p">(</span><span class="s">&quot; &quot;</span><span class="p">)</span>
+</span><span id="__span-16-4"><a id="__codelineno-16-4" name="__codelineno-16-4"></a>
+</span><span id="__span-16-5"><a id="__codelineno-16-5" name="__codelineno-16-5"></a><span class="nx">src</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-16-6"><a id="__codelineno-16-6" name="__codelineno-16-6"></a><span class="w">    </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;./data/messy.txt&quot;</span><span class="p">},</span>
+</span><span id="__span-16-7"><a id="__codelineno-16-7" name="__codelineno-16-7"></a><span class="w">    </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">WithTransformers</span><span class="p">(</span><span class="nx">filter</span><span class="p">,</span><span class="w"> </span><span class="nx">dedup</span><span class="p">),</span><span class="w">  </span><span class="c1">// Executed in order</span>
+</span><span id="__span-16-8"><a id="__codelineno-16-8" name="__codelineno-16-8"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <h3 id="typical-use-cases">Typical Use Cases</h3>
 <table>
@@ -4116,13 +4153,13 @@ chunk.</p>
 <h2 id="pdf-file-support">PDF File Support</h2>
 <p>Since the PDF reader depends on third-party libraries, to avoid introducing unnecessary dependencies in the main module, the PDF reader uses a separate <code>go.mod</code>.</p>
 <p>To support PDF file reading, manually import the PDF reader package in your code:</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-16-1">1</a></span>
-<span class="normal"><a href="#__codelineno-16-2">2</a></span>
-<span class="normal"><a href="#__codelineno-16-3">3</a></span>
-<span class="normal"><a href="#__codelineno-16-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2"></a><span class="w">    </span><span class="c1">// Import PDF reader to support .pdf file parsing</span>
-</span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3"></a><span class="w">    </span><span class="nx">_</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf&quot;</span>
-</span><span id="__span-16-4"><a id="__codelineno-16-4" name="__codelineno-16-4"></a><span class="p">)</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-17-1">1</a></span>
+<span class="normal"><a href="#__codelineno-17-2">2</a></span>
+<span class="normal"><a href="#__codelineno-17-3">3</a></span>
+<span class="normal"><a href="#__codelineno-17-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2"></a><span class="w">    </span><span class="c1">// Import PDF reader to support .pdf file parsing</span>
+</span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3"></a><span class="w">    </span><span class="nx">_</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf&quot;</span>
+</span><span id="__span-17-4"><a id="__codelineno-17-4" name="__codelineno-17-4"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <blockquote>
 <p><strong>Note</strong>: Readers for other formats (.txt/.md/.csv/.json, etc.) are automatically registered and don't need manual import.</p>
@@ -4149,7 +4186,7 @@ chunk.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="August 3, 2026 02:17:02 UTC">2026-08-03 02:17:02</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="August 7, 2026 07:48:23 UTC">2026-08-07 07:48:23</span>
   </span>
 
     
