@@ -250,6 +250,40 @@ func handle(
 			wantEvidence: []string{"go worker(obj.Context())"},
 		},
 		{
+			name: "resolved local context receiver uses result types",
+			source: `package review
+
+import stdctx "context"
+
+func worker(any) {}
+
+type stringProvider interface {
+	WithCancel() string
+	WithTimeout() string
+}
+
+type contextProvider interface {
+	WithCancel() stdctx.Context
+}
+
+func handleStrings(context stringProvider) {
+	cancelValue := context.WithCancel()
+	go worker(cancelValue)
+	timeoutValue := context.WithTimeout()
+	go worker(timeoutValue)
+}
+
+func handleContext(context contextProvider) {
+	contextValue := context.WithCancel()
+	go worker(contextValue)
+}
+`,
+			wantEvidence: []string{
+				"go worker(cancelValue)",
+				"go worker(timeoutValue)",
+			},
+		},
+		{
 			name: "multi-return context method results are typed",
 			source: `package review
 
@@ -411,6 +445,117 @@ func start() {
 				}
 			})
 		}
+	}
+}
+
+func TestContextPackageCallNameRequiresPackageIdentity(t *testing.T) {
+	contextPackage, err := importer.Default().Import("context")
+	if err != nil {
+		t.Fatal(err)
+	}
+	contextFunction, ok := contextPackage.Scope().Lookup("WithCancel").(*types.Func)
+	if !ok {
+		t.Fatal("context.WithCancel is unavailable")
+	}
+	localPackage := types.NewPackage("example.com/review", "review")
+	localFunction := types.NewFunc(
+		token.NoPos,
+		localPackage,
+		"WithCancel",
+		types.NewSignature(nil, nil, nil, false),
+	)
+
+	tests := []struct {
+		name     string
+		receiver string
+		setup    func(*types.Info, *ast.Ident, *ast.Ident)
+		want     bool
+	}{
+		{
+			name:     "resolved standard library function",
+			receiver: "context",
+			setup: func(info *types.Info, _ *ast.Ident, selector *ast.Ident) {
+				info.Uses[selector] = contextFunction
+			},
+			want: true,
+		},
+		{
+			name:     "resolved package alias",
+			receiver: "stdctx",
+			setup: func(info *types.Info, receiver, _ *ast.Ident) {
+				info.Uses[receiver] = types.NewPkgName(
+					token.NoPos,
+					localPackage,
+					"stdctx",
+					contextPackage,
+				)
+			},
+			want: true,
+		},
+		{
+			name:     "resolved local function",
+			receiver: "context",
+			setup: func(info *types.Info, _ *ast.Ident, selector *ast.Ident) {
+				info.Uses[selector] = localFunction
+			},
+		},
+		{
+			name:     "resolved local receiver",
+			receiver: "context",
+			setup: func(info *types.Info, receiver, _ *ast.Ident) {
+				info.Uses[receiver] = types.NewVar(
+					token.NoPos,
+					localPackage,
+					"context",
+					types.Typ[types.String],
+				)
+			},
+		},
+		{
+			name:     "unresolved package spelling fallback",
+			receiver: "context",
+			setup:    func(*types.Info, *ast.Ident, *ast.Ident) {},
+			want:     true,
+		},
+		{
+			name:     "unresolved known function fallback",
+			receiver: "ctxpkg",
+			setup:    func(*types.Info, *ast.Ident, *ast.Ident) {},
+			want:     true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			expression, err := parser.ParseExpr(test.receiver + ".WithCancel()")
+			if err != nil {
+				t.Fatal(err)
+			}
+			call, ok := expression.(*ast.CallExpr)
+			if !ok {
+				t.Fatalf("expression type = %T, want *ast.CallExpr", expression)
+			}
+			selector, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				t.Fatalf("call function type = %T, want *ast.SelectorExpr", call.Fun)
+			}
+			receiver, ok := selector.X.(*ast.Ident)
+			if !ok {
+				t.Fatalf("selector receiver type = %T, want *ast.Ident", selector.X)
+			}
+			info := &types.Info{Uses: make(map[*ast.Ident]types.Object)}
+			test.setup(info, receiver, selector.Sel)
+			name, got := contextPackageCallName(call, info)
+			if name != "WithCancel" || got != test.want {
+				t.Fatalf(
+					"contextPackageCallName() = (%q, %v), want (%q, %v)",
+					name,
+					got,
+					"WithCancel",
+					test.want,
+				)
+			}
+		})
 	}
 }
 

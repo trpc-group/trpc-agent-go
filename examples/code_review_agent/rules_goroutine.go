@@ -1324,20 +1324,23 @@ func contextPackageCallName(call *ast.CallExpr, info *types.Info) (string, bool)
 	if !ok {
 		return "", false
 	}
-	if function, ok := info.Uses[selector.Sel].(*types.Func); ok &&
-		function.Pkg() != nil && function.Pkg().Path() == "context" {
-		return selector.Sel.Name, true
+	name := selector.Sel.Name
+	if function, ok := info.Uses[selector.Sel].(*types.Func); ok {
+		return name, function.Pkg() != nil && function.Pkg().Path() == "context"
 	}
 	identifier, ok := unparenthesizedExpression(selector.X).(*ast.Ident)
 	if !ok {
 		return "", false
 	}
-	if packageName, ok := info.Uses[identifier].(*types.PkgName); ok {
-		return selector.Sel.Name,
+	receiver := info.Uses[identifier]
+	if packageName, ok := receiver.(*types.PkgName); ok {
+		return name,
 			packageName.Imported() != nil && packageName.Imported().Path() == "context"
 	}
-	return selector.Sel.Name, identifier.Name == "context" ||
-		info.Uses[identifier] == nil && isKnownContextFunctionName(selector.Sel.Name)
+	if receiver != nil {
+		return name, false
+	}
+	return name, identifier.Name == "context" || isKnownContextFunctionName(name)
 }
 
 func isKnownContextFunctionName(name string) bool {
