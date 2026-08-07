@@ -13,6 +13,7 @@ Tool 工具系统是 tRPC-Agent-Go 框架的核心组件，为 Agent 提供了�
 - **🔁 单次调用重试**：支持在 LLMAgent / Graph ToolsNode 上为单次 `CallableTool` 调用配置重试
 - **🛠️ 配置支持**：提供配置选项和过滤器支持
 - **🧹 参数修复**：可选启用 `agent.WithToolCallArgumentsJSONRepairEnabled(true)`，对 `tool_calls` 的 `arguments` 做一次尽力 JSON 修复，提升工具执行与外部解析的鲁棒性
+- **🛡️ 工具安全防护**：用于可配置的执行前扫描、权限拦截、JSONL 审计日志和 `tool.safety.*` 遥测属性。
 
 ### 核心概念
 

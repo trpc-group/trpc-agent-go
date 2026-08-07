@@ -13,6 +13,7 @@ The Tool system is a core component of the tRPC-Agent-Go framework, enabling Age
 - **🔁 Tool Call Retry**: Supports retrying callable tool calls in LLMAgent and Graph ToolsNode.
 - **🛠️ Configuration Support**: Provides configuration options and filter support.
 - **🧹 Arguments Repair**: Optionally enable `agent.WithToolCallArgumentsJSONRepairEnabled(true)` to best-effort repair `tool_calls` `arguments`, improving robustness for tool execution and external parsing.
+- **🛡️ Tool Safety Guard**: For configurable pre-execution scanning, permission interception, audit JSONL, and `tool.safety.*` telemetry attributes.
 
 ### Core Concepts
 

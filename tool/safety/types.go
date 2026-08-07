@@ -1,0 +1,180 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
+// Package safety provides a configurable pre-execution safety scanner for
+// tool calls that execute commands, scripts, or open-ended tool arguments.
+package safety
+
+import (
+	"context"
+	"errors"
+	"time"
+
+	"go.opentelemetry.io/otel/attribute"
+)
+
+// Decision is the scanner's original safety decision.
+type Decision string
+
+// Safety decisions. When findings are combined, their stable precedence is
+// deny, needs_human_review, ask, then allow. Risk level breaks ties between
+// findings with the same decision.
+const (
+	DecisionAllow Decision = "allow"
+	DecisionDeny  Decision = "deny"
+	// DecisionAsk identifies an understood action that may proceed after normal
+	// policy approval or operator acknowledgement.
+	DecisionAsk Decision = "ask"
+	// DecisionNeedsHumanReview identifies incomplete, ambiguous, or unknown
+	// input whose safety requires substantive human inspection. It outranks
+	// DecisionAsk, although both map to the framework's ask action.
+	DecisionNeedsHumanReview Decision = "needs_human_review"
+)
+
+// Valid reports whether d is a supported decision.
+func (d Decision) Valid() bool {
+	switch d {
+	case DecisionAllow, DecisionDeny, DecisionAsk, DecisionNeedsHumanReview:
+		return true
+	default:
+		return false
+	}
+}
+
+// RiskLevel is the normalized severity vocabulary for findings and reports.
+type RiskLevel string
+
+// Risk levels.
+const (
+	RiskLow      RiskLevel = "low"
+	RiskMedium   RiskLevel = "medium"
+	RiskHigh     RiskLevel = "high"
+	RiskCritical RiskLevel = "critical"
+)
+
+// Valid reports whether r is a supported risk level.
+func (r RiskLevel) Valid() bool {
+	switch r {
+	case RiskLow, RiskMedium, RiskHigh, RiskCritical:
+		return true
+	default:
+		return false
+	}
+}
+
+// Backend identifies the execution surface being scanned.
+type Backend string
+
+// Backend values.
+const (
+	BackendWorkspace Backend = "workspace"
+	BackendHost      Backend = "host"
+	BackendCodeExec  Backend = "codeexec"
+	BackendSandbox   Backend = "sandbox"
+	BackendUnknown   Backend = "unknown"
+)
+
+// Valid reports whether b is a supported backend.
+func (b Backend) Valid() bool {
+	switch b {
+	case BackendWorkspace, BackendHost, BackendCodeExec, BackendSandbox, BackendUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// ScanRequest describes one pending tool call or script execution. Command,
+// Args, and Code are mutually exclusive primary executable representations;
+// Args is an already-split argv and must include argv[0] as the executable
+// name. RawArguments is supplementary tool payload data and is never treated
+// as a second executable representation.
+type ScanRequest struct {
+	ToolName             string            `json:"tool_name"`
+	ToolCallID           string            `json:"tool_call_id,omitempty"`
+	Backend              Backend           `json:"backend"`
+	Command              string            `json:"command,omitempty"`
+	Args                 []string          `json:"args,omitempty"`
+	Cwd                  string            `json:"cwd,omitempty"`
+	Env                  map[string]string `json:"env,omitempty"`
+	Stdin                string            `json:"stdin,omitempty"`
+	EditorText           string            `json:"editor_text,omitempty"`
+	TimeoutSec           int               `json:"timeout_sec,omitempty"`
+	Background           bool              `json:"background,omitempty"`
+	TTY                  bool              `json:"tty,omitempty"`
+	Language             string            `json:"language,omitempty"`
+	Code                 string            `json:"code,omitempty"`
+	RawArguments         []byte            `json:"-"`
+	CollectionPaths      []string          `json:"collection_paths,omitempty"`
+	InputPaths           []string          `json:"input_paths,omitempty"`
+	RequestedOutputBytes int64             `json:"requested_output_bytes,omitempty"`
+	Metadata             map[string]any    `json:"metadata,omitempty"`
+
+	cwdResolutionRequired bool
+	cwdResolved           bool
+	sessionSubmit         bool
+}
+
+// Finding describes one scanner finding.
+type Finding struct {
+	RuleID         string    `json:"rule_id"`
+	RiskLevel      RiskLevel `json:"risk_level"`
+	Decision       Decision  `json:"decision"`
+	Evidence       string    `json:"evidence,omitempty"`
+	Recommendation string    `json:"recommendation"`
+	Redacted       bool      `json:"redacted,omitempty"`
+}
+
+// Report is the structured safety scan result.
+type Report struct {
+	ToolName       string        `json:"tool_name"`
+	ToolCallID     string        `json:"tool_call_id,omitempty"`
+	Backend        Backend       `json:"backend"`
+	Command        string        `json:"command,omitempty"`
+	Decision       Decision      `json:"decision"`
+	RiskLevel      RiskLevel     `json:"risk_level"`
+	RuleID         string        `json:"rule_id,omitempty"`
+	Evidence       string        `json:"evidence,omitempty"`
+	Recommendation string        `json:"recommendation,omitempty"`
+	Blocked        bool          `json:"blocked"`
+	Redacted       bool          `json:"redacted"`
+	Findings       []Finding     `json:"findings,omitempty"`
+	Duration       time.Duration `json:"-"`
+	DurationMS     int64         `json:"duration_ms"`
+	AuditError     string        `json:"audit_error,omitempty"`
+}
+
+// ToolSafetyAttributes returns short OpenTelemetry attributes for the report.
+func (r Report) ToolSafetyAttributes() []attribute.KeyValue {
+	return []attribute.KeyValue{
+		attribute.String("tool.safety.decision", string(r.Decision)),
+		attribute.String("tool.safety.risk_level", string(r.RiskLevel)),
+		attribute.String("tool.safety.rule_id", r.RuleID),
+		attribute.String("tool.safety.backend", string(r.Backend)),
+		attribute.Bool("tool.safety.blocked", r.Blocked),
+		attribute.Bool("tool.safety.redacted", r.Redacted),
+	}
+}
+
+// Scanner scans one request and returns a structured report.
+// Permission-policy adapters may call a Scanner concurrently for parallel
+// tool execution, so implementations must be safe for concurrent use.
+type Scanner interface {
+	Scan(ctx context.Context, req ScanRequest) (Report, error)
+}
+
+// ScannerFunc adapts a function to Scanner.
+type ScannerFunc func(context.Context, ScanRequest) (Report, error)
+
+// Scan implements Scanner.
+func (f ScannerFunc) Scan(ctx context.Context, req ScanRequest) (Report, error) {
+	if f == nil {
+		return Report{}, errors.New("nil scanner function")
+	}
+	return f(ctx, req)
+}

@@ -170,6 +170,11 @@ type execCommandTool struct {
 	baseDir string
 }
 
+// SafetyParserKind identifies the built-in parser required for this tool.
+func (*execCommandTool) SafetyParserKind() tool.SafetyParserKind {
+	return tool.SafetyParserKindHostExec
+}
+
 func (t *execCommandTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name: toolExecCommand,
@@ -309,8 +314,22 @@ func (t *execCommandTool) Call(
 	return mapExecResult(res), nil
 }
 
+// EffectiveWorkdir resolves the model-provided workdir using the configured
+// host tool base directory before permission checks run.
+func (t *execCommandTool) EffectiveWorkdir(raw string) (string, error) {
+	if t == nil {
+		return "", errors.New(errExecToolNotConfigured)
+	}
+	return resolveWorkdir(raw, t.baseDir)
+}
+
 type writeStdinTool struct {
 	mgr *manager
+}
+
+// SafetyParserKind identifies the built-in parser required for this tool.
+func (*writeStdinTool) SafetyParserKind() tool.SafetyParserKind {
+	return tool.SafetyParserKindWriteStdin
 }
 
 func (t *writeStdinTool) Declaration() *tool.Declaration {
@@ -425,6 +444,11 @@ func (t *writeStdinTool) Call(
 
 type killSessionTool struct {
 	mgr *manager
+}
+
+// SafetyParserKind identifies the built-in parser required for this tool.
+func (*killSessionTool) SafetyParserKind() tool.SafetyParserKind {
+	return tool.SafetyParserKindKillSession
 }
 
 func (t *killSessionTool) Declaration() *tool.Declaration {
