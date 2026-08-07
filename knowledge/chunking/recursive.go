@@ -20,9 +20,10 @@ import (
 
 // RecursiveChunking implements a recursive chunking strategy that uses a hierarchy of separators.
 type RecursiveChunking struct {
-	chunkSize  int
-	overlap    int
-	separators []string
+	chunkSize      int
+	overlap        int
+	separators     []string
+	trimWhitespace bool
 }
 
 // RecursiveOption represents a functional option for configuring RecursiveChunking.
@@ -46,6 +47,15 @@ func WithRecursiveOverlap(overlap int) RecursiveOption {
 func WithRecursiveSeparators(separators []string) RecursiveOption {
 	return func(rc *RecursiveChunking) {
 		rc.separators = separators
+	}
+}
+
+// WithRecursiveWhitespaceTrimming enables the legacy behavior that trims
+// leading and trailing whitespace from the document, every line, and chunk
+// boundaries.
+func WithRecursiveWhitespaceTrimming() RecursiveOption {
+	return func(rc *RecursiveChunking) {
+		rc.trimWhitespace = true
 	}
 }
 
@@ -85,16 +95,32 @@ func (r *RecursiveChunking) Chunk(doc *document.Document) ([]*document.Document,
 		return nil, ErrEmptyDocument
 	}
 
-	content := cleanText(doc.Content)
+	content := cleanTextWithWhitespaceTrimming(
+		doc.Content,
+		r.trimWhitespace,
+	)
+	if isBlankText(content) {
+		return nil, ErrEmptyDocument
+	}
 	coreSize := r.chunkSize
 	if r.overlap > 0 {
 		coreSize = r.chunkSize - r.overlap
 	}
 	fragments := r.recursiveSplit(content, r.separators, coreSize)
 	textChunks := r.mergeFragments(fragments, r.chunkSize, coreSize)
+	if !r.trimWhitespace {
+		textChunks = coalesceWhitespaceChunks(
+			textChunks,
+			r.chunkSize,
+			coreSize,
+		)
+	}
 	chunks := make([]*document.Document, 0, len(textChunks))
-	for i, chunkText := range textChunks {
-		chunks = append(chunks, createChunk(doc, chunkText, i+1))
+	for _, chunkText := range textChunks {
+		if isBlankText(chunkText) {
+			continue
+		}
+		chunks = append(chunks, createChunk(doc, chunkText, len(chunks)+1))
 	}
 
 	// Apply overlap if specified.
@@ -178,8 +204,8 @@ func (r *RecursiveChunking) mergeFragments(
 	currentSize := 0
 
 	flush := func() {
-		content := strings.TrimSpace(current.String())
-		if content != "" {
+		content, ok := r.finalizeFragment(current.String())
+		if ok {
 			chunks = append(chunks, content)
 		}
 		current.Reset()
@@ -250,6 +276,13 @@ func (r *RecursiveChunking) mergeFragments(
 	return chunks
 }
 
+func (r *RecursiveChunking) finalizeFragment(content string) (string, bool) {
+	if r.trimWhitespace {
+		content = strings.TrimSpace(content)
+	}
+	return content, content != ""
+}
+
 // applyOverlap applies overlap between consecutive chunks.
 func (r *RecursiveChunking) applyOverlap(
 	content string,
@@ -262,7 +295,12 @@ func (r *RecursiveChunking) applyOverlap(
 	for i, chunk := range chunks {
 		rawContents[i] = chunk.Content
 	}
-	separators := sourceChunkSeparators(content, rawContents, " ")
+	separators := sourceChunkSeparators(
+		content,
+		rawContents,
+		" ",
+		r.trimWhitespace,
+	)
 	overlappedChunks := []*document.Document{chunks[0]}
 	for i := 1; i < len(chunks); i++ {
 		// Create new metadata for overlapped chunk.
@@ -271,12 +309,13 @@ func (r *RecursiveChunking) applyOverlap(
 			metadata[k] = v
 		}
 
-		overlappedContent, actualOverlap := joinWithOverlap(
+		overlappedContent, actualOverlap := joinWithOverlapMode(
 			overlappedChunks[len(overlappedChunks)-1].Content,
 			chunks[i].Content,
 			r.overlap,
 			r.chunkSize,
 			separators[i],
+			r.trimWhitespace,
 		)
 		if actualOverlap > 0 {
 			metadata[source.MetaOverlappedContentSize] =
