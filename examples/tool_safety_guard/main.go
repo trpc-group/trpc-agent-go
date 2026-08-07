@@ -60,6 +60,9 @@ func main() {
 	var results []ScanResult
 	for _, s := range samples {
 		_, res := policyGuard.Evaluate(s.toolName, s.command, s.backend)
+		res.Command = redactSensitive(res.Command)
+		res.Evidence = redactSensitive(res.Evidence)
+		res.Recommendation = redactSensitive(res.Recommendation)
 		results = append(results, res)
 	}
 
@@ -69,7 +72,7 @@ func main() {
 		log.Fatalf("Failed to marshal report: %v", err)
 	}
 
-	if err := os.WriteFile(reportPath, reportData, 0644); err != nil {
+	if err := os.WriteFile(reportPath, reportData, 0600); err != nil {
 		log.Fatalf("Failed to write report: %v", err)
 	}
 

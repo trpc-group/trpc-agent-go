@@ -83,9 +83,11 @@ func (p *SafetyPermissionPolicy) Evaluate(toolName, command, backend string) (to
 	res := p.scanner.ScanCommand(toolName, command, backend)
 	dur := time.Since(start).Milliseconds()
 
-	// Redact command for audit safety
+	// Redact command, evidence, and recommendation for audit safety
 	sanitizedCmd := redactSensitive(command)
-	isSanitised := sanitizedCmd != command
+	sanitizedEvidence := redactSensitive(res.Evidence)
+	sanitizedRec := redactSensitive(res.Recommendation)
+	isSanitised := (sanitizedCmd != command) || (sanitizedEvidence != res.Evidence) || (sanitizedRec != res.Recommendation)
 
 	if p.auditFile != "" {
 		event := AuditEvent{
@@ -95,8 +97,8 @@ func (p *SafetyPermissionPolicy) Evaluate(toolName, command, backend string) (to
 			Decision:       res.Decision,
 			RiskLevel:      res.RiskLevel,
 			RuleID:         res.RuleID,
-			Evidence:       res.Evidence,
-			Recommendation: res.Recommendation,
+			Evidence:       sanitizedEvidence,
+			Recommendation: sanitizedRec,
 			Backend:        backend,
 			DurationMs:     dur,
 			Sanitised:      isSanitised,

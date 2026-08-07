@@ -30,7 +30,7 @@
     "evidence": "Access to sensitive/denied path '/.ssh/' detected",
     "recommendation": "Block access to private credentials or system files",
     "tool_name": "workspace_exec",
-    "command": "cat ~/.ssh/id_rsa",
+    "command": "cat ~/.ssh/[REDACTED]",
     "backend": "workspaceexec",
     "duration_ms": 0,
     "intercepted": true
