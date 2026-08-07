@@ -17,7 +17,7 @@ import (
 
 // ScanResult holds the security verdict for a scanned command or script.
 type ScanResult struct {
-	Decision       string `json:"decision"` // "allow", "deny", "ask"
+	Decision       string `json:"decision"`   // "allow", "deny", "ask"
 	RiskLevel      string `json:"risk_level"` // "critical", "high", "medium", "low", "none"
 	RuleID         string `json:"rule_id"`
 	Evidence       string `json:"evidence"`
