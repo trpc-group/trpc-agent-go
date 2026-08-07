@@ -14,10 +14,33 @@ import (
 	"fmt"
 	"sort"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	"trpc.group/trpc-go/trpc-agent-go/internal/profilecompiler"
 )
+
+// CompileProfile validates snapshot, normalizes profile without mutating either
+// input, and returns run options that apply the normalized overrides with
+// execution tracing enabled. A nil profile represents an empty override set.
+// It returns an error for a nil or invalid snapshot and for a profile with a
+// mismatched structure ID, duplicate or unknown surfaces, or an invalid surface
+// value; on error both returned values are nil. Mutable JSON-visible snapshot
+// and profile data, the normalized profile, and the run options have independent
+// ownership. Treat each returned RunOption as immutable; the options may be
+// applied to independent runs.
+func CompileProfile(
+	snapshot *astructure.Snapshot,
+	profile *promptiter.Profile,
+) (*promptiter.Profile, []agent.RunOption, error) {
+	structure, err := profilecompiler.NewStructure(
+		profilecompiler.CloneSnapshot(snapshot),
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	return compileProfile(structure, profile)
+}
 
 func toCompilerProfile(profile *promptiter.Profile) *profilecompiler.Profile {
 	if profile == nil {
@@ -62,6 +85,36 @@ func normalizeProfile(
 		return nil, err
 	}
 	return fromCompilerProfile(normalized), nil
+}
+
+func compileProfile(
+	structure *profilecompiler.Structure,
+	profile *promptiter.Profile,
+) (*promptiter.Profile, []agent.RunOption, error) {
+	normalizedCompilerProfile, err := structure.NormalizeProfile(
+		toCompilerProfile(profile),
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	runOptions, err := profilecompiler.CompileRunOptions(
+		profilecompiler.CloneProfile(normalizedCompilerProfile),
+		true,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(normalizedCompilerProfile.Overrides) > 0 {
+		runOptions = append(
+			runOptions,
+			profilecompiler.WithProfile(
+				profilecompiler.CloneProfile(normalizedCompilerProfile),
+			),
+		)
+	}
+	return fromCompilerProfile(
+		profilecompiler.CloneProfile(normalizedCompilerProfile),
+	), runOptions, nil
 }
 
 func applyPatchSet(

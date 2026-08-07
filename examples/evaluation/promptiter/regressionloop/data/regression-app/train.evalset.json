@@ -1,0 +1,33 @@
+{
+  "evalSetId": "train",
+  "name": "prompt regression training cases",
+  "evalCases": [
+    {
+      "evalId": "train-return-window",
+      "conversation": [{
+        "invocationId": "train-return-window-1",
+        "userContent": {"role": "user", "content": "train-return"},
+        "finalResponse": {"role": "assistant", "content": "^\\{\"answer\":\"(balanced|overfit-training): train-return\"\\}$"}
+      }],
+      "sessionInput": {"appName": "regression-app", "userId": "demo-user"}
+    },
+    {
+      "evalId": "train-tool-argument",
+      "conversation": [{
+        "invocationId": "train-tool-argument-1",
+        "userContent": {"role": "user", "content": "train-tool"},
+        "finalResponse": {"role": "assistant", "content": "^\\{\"answer\":\"(balanced|overfit-training): train-tool\"\\}$"}
+      }],
+      "sessionInput": {"appName": "regression-app", "userId": "demo-user"}
+    },
+    {
+      "evalId": "train-knowledge-gap",
+      "conversation": [{
+        "invocationId": "train-knowledge-gap-1",
+        "userContent": {"role": "user", "content": "train-knowledge-gap"},
+        "finalResponse": {"role": "assistant", "content": "^\\{\"answer\":\"supported-knowledge\"\\}$"}
+      }],
+      "sessionInput": {"appName": "regression-app", "userId": "demo-user"}
+    }
+  ]
+}

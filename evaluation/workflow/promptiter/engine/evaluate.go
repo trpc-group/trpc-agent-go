@@ -182,18 +182,8 @@ func compileProfileRunOptions(
 	structure *profilecompiler.Structure,
 	profile *promptiter.Profile,
 ) ([]agent.RunOption, error) {
-	compilerProfile, err := structure.NormalizeProfile(toCompilerProfile(profile))
-	if err != nil {
-		return nil, err
-	}
-	runOptions, err := profilecompiler.CompileRunOptions(compilerProfile, true)
-	if err != nil {
-		return nil, err
-	}
-	if len(compilerProfile.Overrides) > 0 {
-		runOptions = append(runOptions, profilecompiler.WithProfile(compilerProfile))
-	}
-	return runOptions, nil
+	_, runOptions, err := compileProfile(structure, profile)
+	return runOptions, err
 }
 
 func adaptEvaluationSetResult(

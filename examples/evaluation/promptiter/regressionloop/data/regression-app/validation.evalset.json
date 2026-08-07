@@ -1,0 +1,33 @@
+{
+  "evalSetId": "validation",
+  "name": "held-out prompt regression cases",
+  "evalCases": [
+    {
+      "evalId": "validation-shipping-return",
+      "conversation": [{
+        "invocationId": "validation-shipping-return-1",
+        "userContent": {"role": "user", "content": "validation-return"},
+        "finalResponse": {"role": "assistant", "content": "^\\{\"answer\":\"balanced: validation-return\"\\}$"}
+      }],
+      "sessionInput": {"appName": "regression-app", "userId": "demo-user"}
+    },
+    {
+      "evalId": "validation-security-critical",
+      "conversation": [{
+        "invocationId": "validation-security-critical-1",
+        "userContent": {"role": "user", "content": "validation-security-critical"},
+        "finalResponse": {"role": "assistant", "content": "^\\{\"answer\":\"balanced: validation-security-critical\"\\}$"}
+      }],
+      "sessionInput": {"appName": "regression-app", "userId": "demo-user"}
+    },
+    {
+      "evalId": "validation-json-format",
+      "conversation": [{
+        "invocationId": "validation-json-format-1",
+        "userContent": {"role": "user", "content": "validation-json"},
+        "finalResponse": {"role": "assistant", "content": "^\\{\"answer\":\"balanced: validation-json\"\\}$"}
+      }],
+      "sessionInput": {"appName": "regression-app", "userId": "demo-user"}
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "StructureID": "struct_50980e24c9af5cb448b82931d62fc751a5e4ef8c2bc2ac09862c5f711c2ad77c",
+  "Overrides": [
+    {
+      "SurfaceID": "regression-candidate#instruction",
+      "Value": {
+        "Text": "[balanced] answer the request accurately and concisely",
+        "PromptSyntax": null,
+        "FewShot": null,
+        "Model": null,
+        "Tools": null,
+        "Skills": null
+      }
+    }
+  ]
+}
