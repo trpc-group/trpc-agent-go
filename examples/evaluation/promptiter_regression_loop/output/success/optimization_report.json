@@ -1,0 +1,166 @@
+{
+  "schemaVersion": "1.0",
+  "generatedAt": "2026-08-03T06:39:15.218834Z",
+  "runStatus": "succeeded",
+  "baselineScore": 0.6,
+  "rounds": [
+    {
+      "round": 1,
+      "deltaFromOriginal": {
+        "baselineScore": 0.6,
+        "candidateScore": 1,
+        "scoreDelta": 0.4,
+        "newPasses": 2,
+        "newFailures": 0,
+        "scoreRegressions": 0,
+        "cases": [
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_account_security",
+            "baselinePassed": true,
+            "candidatePassed": true,
+            "outcome": "unchanged",
+            "metrics": [
+              {
+                "name": "quality",
+                "baselineScore": 1,
+                "candidateScore": 1,
+                "delta": 0,
+                "baselinePassed": true,
+                "candidatePassed": true
+              }
+            ]
+          },
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_refund_format",
+            "baselinePassed": false,
+            "candidatePassed": true,
+            "outcome": "new_pass",
+            "metrics": [
+              {
+                "name": "quality",
+                "baselineScore": 0.4,
+                "candidateScore": 1,
+                "delta": 0.6,
+                "baselinePassed": false,
+                "candidatePassed": true
+              }
+            ]
+          },
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_return_shipping",
+            "baselinePassed": false,
+            "candidatePassed": true,
+            "outcome": "new_pass",
+            "metrics": [
+              {
+                "name": "quality",
+                "baselineScore": 0.4,
+                "candidateScore": 1,
+                "delta": 0.6,
+                "baselinePassed": false,
+                "candidatePassed": true
+              }
+            ]
+          }
+        ]
+      },
+      "deltaFromAccepted": {
+        "baselineScore": 0.6,
+        "candidateScore": 1,
+        "scoreDelta": 0.4,
+        "newPasses": 2,
+        "newFailures": 0,
+        "scoreRegressions": 0,
+        "cases": [
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_account_security",
+            "baselinePassed": true,
+            "candidatePassed": true,
+            "outcome": "unchanged",
+            "metrics": [
+              {
+                "name": "quality",
+                "baselineScore": 1,
+                "candidateScore": 1,
+                "delta": 0,
+                "baselinePassed": true,
+                "candidatePassed": true
+              }
+            ]
+          },
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_refund_format",
+            "baselinePassed": false,
+            "candidatePassed": true,
+            "outcome": "new_pass",
+            "metrics": [
+              {
+                "name": "quality",
+                "baselineScore": 0.4,
+                "candidateScore": 1,
+                "delta": 0.6,
+                "baselinePassed": false,
+                "candidatePassed": true
+              }
+            ]
+          },
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_return_shipping",
+            "baselinePassed": false,
+            "candidatePassed": true,
+            "outcome": "new_pass",
+            "metrics": [
+              {
+                "name": "quality",
+                "baselineScore": 0.4,
+                "candidateScore": 1,
+                "delta": 0.6,
+                "baselinePassed": false,
+                "candidatePassed": true
+              }
+            ]
+          }
+        ]
+      },
+      "usage": {
+        "modelCalls": 3,
+        "toolCalls": 0,
+        "tokens": 300
+      },
+      "decision": {
+        "accepted": true,
+        "reasons": [
+          "all acceptance gates passed"
+        ]
+      },
+      "engineAccepted": true
+    }
+  ],
+  "acceptedRound": 1,
+  "accepted": true,
+  "acceptedProfile": {
+    "StructureID": "deterministic-support-agent",
+    "Overrides": [
+      {
+        "SurfaceID": "support-agent#instruction",
+        "Value": {
+          "Text": "Answer with policy-grounded steps and preserve the required response schema.",
+          "PromptSyntax": null,
+          "FewShot": null,
+          "Model": null,
+          "Tools": null,
+          "Skills": null
+        }
+      }
+    ]
+  },
+  "finalReasons": [
+    "all acceptance gates passed"
+  ]
+}

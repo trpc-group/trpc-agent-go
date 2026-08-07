@@ -1,0 +1,16 @@
+{
+  "maxRounds": 3,
+  "targetSurfaceIds": ["support-agent#instruction"],
+  "acceptancePolicy": {
+    "minScoreGain": 0.05,
+    "maxNewFailures": 0,
+    "maxScoreRegressions": 0,
+    "criticalCaseIds": ["validation_account_security"]
+  },
+  "budgets": {
+    "maxModelCalls": 10,
+    "maxToolCalls": 5,
+    "maxTokens": 1000
+  },
+  "seed": 2003
+}

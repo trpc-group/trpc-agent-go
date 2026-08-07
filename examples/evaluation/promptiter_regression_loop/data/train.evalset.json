@@ -1,0 +1,33 @@
+{
+  "evalSetId": "promptiter-regression-train",
+  "name": "PromptIter regression training cases",
+  "evalCases": [
+    {
+      "evalId": "train_return_policy",
+      "conversation": [{
+        "invocationId": "train_return_policy-1",
+        "userContent": {"role": "user", "content": "Explain the return shipping policy."},
+        "finalResponse": {"role": "assistant", "content": "Explain eligibility, shipping responsibility, and next steps."}
+      }],
+      "sessionInput": {"appName": "promptiter-regression-app", "userId": "offline-user"}
+    },
+    {
+      "evalId": "train_tool_lookup",
+      "conversation": [{
+        "invocationId": "train_tool_lookup-1",
+        "userContent": {"role": "user", "content": "Look up order A-100."},
+        "finalResponse": {"role": "assistant", "content": "Call the order tool with order_id A-100 before answering."}
+      }],
+      "sessionInput": {"appName": "promptiter-regression-app", "userId": "offline-user"}
+    },
+    {
+      "evalId": "train_response_format",
+      "conversation": [{
+        "invocationId": "train_response_format-1",
+        "userContent": {"role": "user", "content": "Return the decision as JSON."},
+        "finalResponse": {"role": "assistant", "content": "{\"decision\":\"review\",\"reason\":\"missing evidence\"}"}
+      }],
+      "sessionInput": {"appName": "promptiter-regression-app", "userId": "offline-user"}
+    }
+  ]
+}

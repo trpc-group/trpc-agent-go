@@ -1,0 +1,13 @@
+[
+  {
+    "metricName": "quality",
+    "threshold": 0.6,
+    "criterion": {
+      "finalResponse": {
+        "text": {
+          "matchStrategy": "exact"
+        }
+      }
+    }
+  }
+]
