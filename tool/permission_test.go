@@ -44,6 +44,15 @@ func (c *concurrencyTool) IsConcurrencySafe() bool {
 	return c.safe
 }
 
+type conflictingTool struct {
+	metadata ToolMetadata
+	aware    bool
+}
+
+func (c *conflictingTool) Declaration() *Declaration  { return &Declaration{Name: testToolName} }
+func (c *conflictingTool) ToolMetadata() ToolMetadata { return c.metadata }
+func (c *conflictingTool) IsConcurrencySafe() bool    { return c.aware }
+
 type deferredTool struct {
 	deferTool bool
 }
@@ -91,6 +100,59 @@ func TestMetadataOf_UsesConcurrencyAwareFallback(t *testing.T) {
 	got := MetadataOf(&concurrencyTool{safe: true})
 	if !got.ConcurrencySafe {
 		t.Fatalf("expected concurrency-aware tool to be marked safe")
+	}
+}
+
+// Admission is objection-based: only ConcurrencyAware is consulted, and every
+// other tool is admitted.
+//
+// The alternative — reading ToolMetadata.ConcurrencySafe — cannot work, because a
+// struct field's zero value is indistinguishable from an unset one. It would read
+// a tool that publishes a single ReadOnly hint as objecting, and it would also
+// reinterpret an existing true (documented as same-tool reentrancy) as a promise
+// about arbitrary siblings that no external tool ever made.
+func TestIsConcurrencySafe(t *testing.T) {
+	tests := []struct {
+		name string
+		tool Tool
+		want bool
+	}{
+		{"publishes nothing", newMockTool(testToolName), true},
+		{"nil tool", nil, true},
+		{"concurrency-aware true", &concurrencyTool{safe: true}, true},
+		{"concurrency-aware false", &concurrencyTool{safe: false}, false},
+		// Metadata is descriptive and never objects, in either direction. A
+		// provider that wants to stay off the parallel path implements
+		// ConcurrencyAware.
+		{"provider true does not promise more than it means", &metadataTool{
+			metadata: ToolMetadata{ConcurrencySafe: true},
+		}, true},
+		{"provider false does not object", &metadataTool{
+			metadata: ToolMetadata{ConcurrencySafe: false},
+		}, true},
+		// The regression that matters: an external tool written against the
+		// descriptive metadata contract publishes an unrelated hint and never
+		// considered concurrency at all. It keeps the admission it has today.
+		{"provider of unrelated metadata keeps the default", &metadataTool{
+			metadata: ToolMetadata{ReadOnly: true},
+		}, true},
+		// A tool publishing both is answered by the narrow interface, which is the
+		// only one that can express an objection.
+		{"the narrow interface decides, overriding metadata", &conflictingTool{
+			metadata: ToolMetadata{ConcurrencySafe: true},
+			aware:    false,
+		}, false},
+		{"the narrow interface decides when metadata is false", &conflictingTool{
+			metadata: ToolMetadata{ConcurrencySafe: false},
+			aware:    true,
+		}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsConcurrencySafe(tt.tool); got != tt.want {
+				t.Fatalf("IsConcurrencySafe() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 

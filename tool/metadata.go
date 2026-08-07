@@ -15,7 +15,9 @@ import "context"
 //
 // Metadata is descriptive. The framework does not change scheduling or loading
 // behavior from these fields alone; callers can opt in by using filters,
-// permission policies, or custom runners.
+// permission policies, or custom runners. A tool that needs to influence
+// scheduling implements ConcurrencyAware instead — see IsConcurrencySafe for
+// why the struct field cannot serve that purpose.
 type ToolMetadata struct {
 	// ReadOnly reports that the tool does not intentionally mutate external
 	// state. Read-only tools can still be expensive or read sensitive data.
@@ -25,6 +27,12 @@ type ToolMetadata struct {
 	Destructive bool
 	// ConcurrencySafe reports that independent calls to the same tool can run at
 	// the same time without corrupting shared state.
+	//
+	// This field does not affect scheduling, and setting it to false does not
+	// keep a tool off the parallel path: a struct field cannot distinguish "set
+	// to false" from "never set", so acting on it would take every tool that
+	// publishes unrelated metadata off that path too. Implement
+	// ConcurrencyAware to make that decision explicit.
 	ConcurrencySafe bool
 	// SearchOrRead reports that the tool primarily searches or reads data.
 	SearchOrRead bool
@@ -43,6 +51,11 @@ type MetadataProvider interface {
 
 // ConcurrencyAware is a small opt-in interface for tools that only need to
 // publish their concurrency property.
+//
+// Returning false is an objection: the framework's parallel tool paths keep the
+// tool's whole turn sequential rather than run it beside its siblings. Returning
+// true, or not implementing this interface at all, raises no objection and
+// promises nothing about specific siblings.
 type ConcurrencyAware interface {
 	IsConcurrencySafe() bool
 }
@@ -70,6 +83,39 @@ func MetadataOf(t Tool) ToolMetadata {
 		return ToolMetadata{ConcurrencySafe: aware.IsConcurrencySafe()}
 	}
 	return ToolMetadata{}
+}
+
+// IsConcurrencySafe reports whether a tool raises no objection to running at the
+// same time as the other tool calls in its turn. It is the question the framework's
+// parallel tool paths ask — the LLMAgent function-call processor and graph Tools
+// nodes — before admitting a batch: a single objection keeps the whole batch
+// sequential.
+//
+// Only ConcurrencyAware is consulted, deliberately. ToolMetadata.ConcurrencySafe
+// is a struct field whose zero value is indistinguishable from an explicit false,
+// so reading it here would turn every tool that publishes unrelated metadata — a
+// single ReadOnly hint, or a wrapper republishing another tool's metadata — into
+// one that appears to declare itself unsafe, and would silently take turns off
+// the parallel path that run concurrently today. Reading only the narrow
+// interface also leaves ToolMetadata.ConcurrencySafe with the same-tool meaning
+// it has always documented, rather than reinterpreting values external tools
+// already publish.
+//
+// A tool that implements neither interface is admitted. That is the pre-existing
+// behavior of every multi-call turn with parallel tools enabled, and it is what
+// makes this an opt-out rather than an opt-in.
+//
+// MetadataOf and this function can therefore disagree: a tool publishing
+// ToolMetadata{ConcurrencySafe: false} without implementing ConcurrencyAware is
+// still admitted here. That is intended — MetadataOf describes, this schedules.
+func IsConcurrencySafe(t Tool) bool {
+	if t == nil {
+		return true
+	}
+	if aware, ok := t.(ConcurrencyAware); ok {
+		return aware.IsConcurrencySafe()
+	}
+	return true
 }
 
 // ShouldDefer reports whether a tool asks host-side loading logic to defer
