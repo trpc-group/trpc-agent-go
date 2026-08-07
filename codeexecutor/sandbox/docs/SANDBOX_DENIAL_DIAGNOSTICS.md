@@ -16,6 +16,12 @@ res, err := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
 diagnostics := <-diagnosticsCh
 ```
 
+Create a fresh `WithDiagnostics` context for each `RunProgram` call and receive
+exactly once. The channel is never closed: do not `range` over it or wait for
+closure after the result arrives; bound the wait with your own timeout or
+cancellation when needed. Reusing a full channel drops later diagnostics so
+`RunProgram` never blocks on delivery.
+
 When the runtime is no longer needed, call `Runtime.Close()` (or
 `CodeExecutor.Close()`) so the production `/usr/bin/log stream` monitor is
 stopped. `Close` is idempotent after successful shutdown. If monitor shutdown
@@ -137,6 +143,14 @@ messages should format `Diagnostics.Denials` in their CLI, UI, or agent layer.
 
 When log streaming or deny-message tagging is unavailable, callers can inspect
 `Runtime.DiagnosticsCapability()` to decide whether to show a degradation notice.
+
+`Denial.Operation` and `Denial.Target` are best-effort backend-native strings,
+not a stable framework vocabulary. Values may evolve with the backend. On macOS
+they are parsed from Seatbelt unified-log text: `Target` may be a filesystem
+path, a Mach service name, another backend-specific value, or empty. Use them
+for display and heuristic filtering; do not persist or switch on them as durable
+identifiers. Filtering and per-run deduplication compare these strings as
+returned by the backend.
 
 `Denial.Raw` contains the backend's original diagnostic text. Treat it as
 diagnostic-only and potentially sensitive: it may include absolute host paths,

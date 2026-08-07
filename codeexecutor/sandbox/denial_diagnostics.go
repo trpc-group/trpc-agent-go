@@ -36,8 +36,16 @@ type sandboxDenialRun struct {
 
 // Denial describes a sandbox denial observed during program execution.
 type Denial struct {
+	// Operation is a best-effort, backend-native operation string parsed from
+	// the diagnostic event. It is not a stable framework vocabulary: values may
+	// evolve with the backend, and callers should treat it as display text or a
+	// heuristic filter key rather than a durable identifier.
 	Operation string
-	Target    string
+	// Target is a best-effort, backend-native target string parsed from the
+	// diagnostic event. It may be a filesystem path, a Mach service name,
+	// another backend-specific value, or empty when the backend omits one. Like
+	// Operation, it is not a normalized stable identifier.
+	Target string
 	// Raw contains the backend's original diagnostic text. It is intended for
 	// human debugging, is not a stable machine-readable format, and may include
 	// host paths or process names.
@@ -104,8 +112,11 @@ type diagnosticsKey struct{}
 
 // WithDiagnostics asks RunProgram to collect sandbox diagnostics for this call.
 // Without this context value, RunProgram keeps its normal zero-overhead
-// execution path. The returned channel is buffered for one Diagnostics value;
-// callers should create a fresh diagnostics context for each RunProgram call.
+// execution path. The returned channel is buffered for one Diagnostics value
+// and is never closed. Callers must perform exactly one receive per fresh
+// diagnostics context, preferably with their own timeout or cancellation;
+// ranging over the channel or waiting for it to close blocks forever.
+// Callers should create a fresh diagnostics context for each RunProgram call.
 // If the channel is already full, later diagnostics are dropped so RunProgram
 // cannot block on diagnostic delivery.
 func WithDiagnostics(ctx context.Context) (context.Context, <-chan Diagnostics) {
