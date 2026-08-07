@@ -1746,7 +1746,7 @@ func TestWorkspace_ListFilesByGlob_BashSyntaxValid(t *testing.T) {
 
 // unshellQuote reverses shellQuote's single-quote wrapping.
 // shellQuote wraps input in single quotes and escapes internal single
-// quotes as '\''.
+// quotes as '\”.
 func unshellQuote(s string) string {
 	if len(s) < 2 || s[0] != '\'' || s[len(s)-1] != '\'' {
 		return s
