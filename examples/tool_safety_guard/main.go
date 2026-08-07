@@ -35,6 +35,7 @@ func main() {
 	}
 
 	auditFile := fmt.Sprintf("%s/tool_safety_audit.jsonl", *outputDir)
+	_ = os.Remove(auditFile) // Clean previous audit log for fresh demonstration
 	policyGuard := NewSafetyPermissionPolicy(scanner, auditFile)
 
 	// 12 Test Sample Commands
