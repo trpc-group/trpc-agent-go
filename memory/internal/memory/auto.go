@@ -193,12 +193,13 @@ type MemoryOperator interface {
 
 // AutoMemoryWorker manages async memory extraction workers.
 type AutoMemoryWorker struct {
-	config   AutoMemoryConfig
-	operator MemoryOperator
-	jobChans []chan *MemoryJob
-	wg       sync.WaitGroup
-	mu       sync.RWMutex
-	started  bool
+	config       AutoMemoryConfig
+	operator     MemoryOperator
+	updatePolicy extractor.UpdatePolicy
+	jobChans     []chan *MemoryJob
+	wg           sync.WaitGroup
+	mu           sync.RWMutex
+	started      bool
 }
 
 // NewAutoMemoryWorker creates a new auto memory worker.
@@ -210,8 +211,9 @@ func NewAutoMemoryWorker(
 ) *AutoMemoryWorker {
 	config.EnabledTools = maps.Clone(config.EnabledTools)
 	return &AutoMemoryWorker{
-		config:   config,
-		operator: operator,
+		config:       config,
+		operator:     operator,
+		updatePolicy: updatePolicyFor(config.Extractor),
 	}
 }
 
@@ -413,8 +415,20 @@ func (w *AutoMemoryWorker) createAutoMemory(
 	userKey memory.UserKey,
 	messages []model.Message,
 ) error {
+	ops, err := w.prepareAutoMemoryOperations(ctx, userKey, messages)
+	if err != nil {
+		return err
+	}
+	return w.executeAutoMemoryOperations(ctx, userKey, ops)
+}
+
+func (w *AutoMemoryWorker) prepareAutoMemoryOperations(
+	ctx context.Context,
+	userKey memory.UserKey,
+	messages []model.Message,
+) ([]*extractor.Operation, error) {
 	if w.config.Extractor == nil {
-		return nil
+		return nil, nil
 	}
 
 	// Search for existing memories relevant to the current conversation
@@ -425,7 +439,7 @@ func (w *AutoMemoryWorker) createAutoMemory(
 	if err != nil {
 		log.WarnfContext(ctx, "auto_memory: failed to prepare existing memories for user %s/%s: %v",
 			userKey.AppName, userKey.UserID, err)
-		return fmt.Errorf("auto_memory: prepare existing memories failed: %w", err)
+		return nil, fmt.Errorf("auto_memory: prepare existing memories failed: %w", err)
 	}
 
 	// Extract memory operations.
@@ -433,21 +447,30 @@ func (w *AutoMemoryWorker) createAutoMemory(
 	if err != nil {
 		log.WarnfContext(ctx, "auto_memory: extraction failed for user %s/%s: %v",
 			userKey.AppName, userKey.UserID, err)
-		return fmt.Errorf("auto_memory: extract failed: %w", err)
+		return nil, fmt.Errorf("auto_memory: extract failed: %w", err)
 	}
 
-	// Reconcile Add operations against the store so that near-duplicate
-	// memories get merged into updates instead of accumulating as
-	// separate rows. Any failure inside reconcile is non-fatal: the
-	// original ops slice is used and the worker keeps its pre-reconcile
-	// behavior.
-	ops = w.reconcileOps(ctx, userKey, ops)
+	ops = w.applyUpdatePolicy(ctx, userKey, ops, existing, messages)
+	return ops, nil
+}
 
-	// Execute operations.
+func (w *AutoMemoryWorker) executeAutoMemoryOperations(
+	ctx context.Context,
+	userKey memory.UserKey,
+	ops []*extractor.Operation,
+) error {
 	for _, op := range ops {
-		w.executeOperation(ctx, userKey, op)
+		if err := w.executeOperation(ctx, userKey, op); err != nil {
+			if w.updatePolicy == extractor.UpdatePolicyMergeSimilar {
+				log.WarnfContext(ctx,
+					"auto_memory: operation failed for user %s/%s: %v",
+					userKey.AppName, userKey.UserID, err,
+				)
+				continue
+			}
+			return err
+		}
 	}
-
 	return nil
 }
 
@@ -464,6 +487,9 @@ func (w *AutoMemoryWorker) searchRelevantMemories(
 	messages []model.Message,
 ) ([]*memory.Entry, error) {
 	query := buildSearchQuery(messages)
+	if w.updatePolicy != extractor.UpdatePolicyMergeSimilar {
+		query = buildPolicySearchQuery(messages)
+	}
 	if query == "" {
 		return nil, nil
 	}
@@ -560,7 +586,7 @@ func (w *AutoMemoryWorker) executeOperation(
 	ctx context.Context,
 	userKey memory.UserKey,
 	op *extractor.Operation,
-) {
+) error {
 	if et := w.config.EnabledTools; et != nil {
 		if name, ok := operationToolName[op.Type]; ok {
 			if _, enabled := et[name]; !enabled {
@@ -568,7 +594,7 @@ func (w *AutoMemoryWorker) executeOperation(
 					"auto_memory: skipping disabled %s "+
 						"operation for user %s/%s",
 					op.Type, userKey.AppName, userKey.UserID)
-				return
+				return nil
 			}
 		}
 	}
@@ -579,9 +605,7 @@ func (w *AutoMemoryWorker) executeOperation(
 		if err := w.operator.AddMemory(ctx, userKey,
 			op.Memory, op.Topics,
 			memory.WithMetadata(ep)); err != nil {
-			log.WarnfContext(ctx,
-				"auto_memory: add memory failed "+
-					"for user %s/%s: %v",
+			return fmt.Errorf("auto_memory: add memory for user %s/%s: %w",
 				userKey.AppName, userKey.UserID, err)
 		}
 	case extractor.OperationUpdate:
@@ -602,27 +626,21 @@ func (w *AutoMemoryWorker) executeOperation(
 							" for user %s/%s, memory_id=%s",
 						userKey.AppName, userKey.UserID,
 						op.MemoryID)
-					return
+					return nil
 				}
 				if addErr := w.operator.AddMemory(
 					ctx, userKey, op.Memory, op.Topics,
 					memory.WithMetadata(ep),
 				); addErr != nil {
-					log.WarnfContext(ctx,
-						"auto_memory: update missing, "+
-							"add memory failed for user "+
-							"%s/%s, memory_id=%s: %v",
-						userKey.AppName, userKey.UserID,
-						op.MemoryID, addErr,
+					return fmt.Errorf(
+						"auto_memory: replace missing update for user %s/%s, memory_id=%s: %w",
+						userKey.AppName, userKey.UserID, op.MemoryID, addErr,
 					)
 				}
-				return
+				return nil
 			}
-			log.WarnfContext(ctx,
-				"auto_memory: update memory failed "+
-					"for user %s/%s, memory_id=%s: %v",
-				userKey.AppName, userKey.UserID,
-				op.MemoryID, err)
+			return fmt.Errorf("auto_memory: update memory for user %s/%s, memory_id=%s: %w",
+				userKey.AppName, userKey.UserID, op.MemoryID, err)
 		}
 	case extractor.OperationDelete:
 		memKey := memory.Key{
@@ -631,18 +649,26 @@ func (w *AutoMemoryWorker) executeOperation(
 			MemoryID: op.MemoryID,
 		}
 		if err := w.operator.DeleteMemory(ctx, memKey); err != nil {
-			log.WarnfContext(ctx, "auto_memory: delete memory failed for user %s/%s, memory_id=%s: %v",
+			if isMemoryNotFoundError(err) {
+				log.DebugfContext(ctx,
+					"auto_memory: delete target already absent for user %s/%s, memory_id=%s",
+					userKey.AppName, userKey.UserID, op.MemoryID,
+				)
+				return nil
+			}
+			return fmt.Errorf("auto_memory: delete memory for user %s/%s, memory_id=%s: %w",
 				userKey.AppName, userKey.UserID, op.MemoryID, err)
 		}
 	case extractor.OperationClear:
 		if err := w.operator.ClearMemories(ctx, userKey); err != nil {
-			log.WarnfContext(ctx, "auto_memory: clear memories failed for user %s/%s: %v",
+			return fmt.Errorf("auto_memory: clear memories for user %s/%s: %w",
 				userKey.AppName, userKey.UserID, err)
 		}
 	default:
 		log.WarnfContext(ctx, "auto_memory: unknown operation type '%s' for user %s/%s",
 			op.Type, userKey.AppName, userKey.UserID)
 	}
+	return nil
 }
 
 // opToMetadata converts extractor.Operation episodic

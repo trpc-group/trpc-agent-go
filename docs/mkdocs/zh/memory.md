@@ -262,6 +262,65 @@ Agent：你好张三！很高兴认识腾讯的朋友。今天有什么可以帮
 （后台：提取器分析对话并自动创建记忆，用户无感知）
 ```
 
+### 可选的自动更新策略
+
+内置提取器只有在显式配置策略时才启用新行为。未配置 option 的现有应用
+继续使用历史逻辑，不需要迁移：
+
+```go
+// 保持原有行为。
+memExtractor := extractor.NewExtractor(extractorModel)
+```
+
+需要尽量保留长期历史时，可以显式开启 update policy：
+
+```go
+memExtractor := extractor.NewExtractor(
+    extractorModel,
+    extractor.WithUpdatePolicy(extractor.UpdatePolicyPreserveHistory),
+)
+```
+
+Policy 是内置 extractor 的能力，Auto memory worker 在构造时读取并固定该配置。
+`Metadata()` 只提供描述信息，不参与运行时控制。自定义 extractor 或包装内置
+extractor 的 decorator 使用 Merge Similar；如需其他策略，应直接配置并传入内置
+extractor。
+
+Update policy 只约束后台 Auto extraction 产生的操作。Agent 或应用显式调用
+`memory_update` 时，工具语义保持不变。
+
+| Update policy | Auto extraction 行为 |
+| --- | --- |
+| `UpdatePolicyMergeSimilar` | 使用现有的相似度 reconcile 逻辑；这是默认值。 |
+| `UpdatePolicyPreserveHistory` | 完全重复时不写入；只更新无冲突的增量信息；变化内容单独追加；只有用户明确请求时才允许自动 delete/clear。 |
+| `UpdatePolicyAppendOnly` | 最终只产生非重复 add：update 转为 add，delete/clear 被过滤。 |
+
+Merge Similar 在检索 existing memories 时保持原有的 user-only query。
+Preserve History 和 Append Only 使用 user 与 assistant 的对话文本检索候选，
+但排除 tool protocol message；该 query 使用 UTF-8 安全的方式限制为 7 KiB。
+
+Preserve History 的候选 reconcile 只比较已经提供给 extractor 的 existing entries。
+精确重复检查还会考虑同一次 extraction 中已经接受的 operation，但不会合并不同的
+operation。检索分数只能用于候选排序，不能单独决定 update 或丢弃。事件身份、
+有意义的旧 token、数值、日期、否定关系、参与者和地点必须兼容；topics 只有在
+update 已通过检查后才合并。
+方向性 token coverage 的边界（旧记忆 `0.95`、候选记忆 `0.70`）是保守的实现
+启发式，并非通过 benchmark 调参得到。无法确认属于安全补充时，该策略会将候选
+保留为独立记忆。
+例如，同一次且同一日期的访问补充具体时刻可以更新；更换雇主或另一个日期的访问
+会追加为新条目。矛盾信息不能授权破坏性操作：delete 必须来自用户明确的遗忘请求，
+clear 必须来自用户明确且不包含范围或例外条件的“遗忘全部存储信息”请求。带目标范围的
+遗忘请求只能授权删除内容与目标匹配的记忆；容许的词形变化必须与目标位于同一事实片段，
+不能由不同事实中的 token 共同授权删除。同一轮提取中的写操作不能重新创建已获授权的
+遗忘请求所覆盖的信息。用户后续明确撤销时，旧请求不再授权删除。
+
+该 update policy 不会修改 `memory.Service`、`MemoryExtractor`、持久化 JSON、memory ID
+或数据库 schema，也不会重写存量记忆。Merge Similar 继续保持原有的 best-effort
+持久化行为。Preserve History 或 Append Only 的持久化失败会返回给调用方，并且不会
+推进 session extraction watermark，因此后续任务可以重试同一批事件。
+
+回退时删除该 option，或将其设置为 `UpdatePolicyMergeSimilar` 即可，不需要数据迁移。
+
 ### 两种模式配置对比
 
 | 步骤         | 工具驱动模式（Agentic）             | 自动提取模式（Auto）                   |
