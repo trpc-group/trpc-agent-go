@@ -948,10 +948,11 @@ func TestPluginIntegrationExecutionErrorReachesModel(t *testing.T) {
 
 func TestPluginIntegrationFailuresSkipToolStateDelta(t *testing.T) {
 	tests := []struct {
-		name          string
-		arguments     []byte
-		callErr       error
-		wantToolCalls int32
+		name                string
+		arguments           []byte
+		callErr             error
+		wantToolCalls       int32
+		wantStateDeltaCalls int32
 	}{
 		{
 			name:          "validation failure",
@@ -963,6 +964,12 @@ func TestPluginIntegrationFailuresSkipToolStateDelta(t *testing.T) {
 			arguments:     []byte(`{"query":"weather"}`),
 			callErr:       errors.New("backend unavailable"),
 			wantToolCalls: 1,
+		},
+		{
+			name:                "successful result control",
+			arguments:           []byte(`{"query":"weather"}`),
+			wantToolCalls:       1,
+			wantStateDeltaCalls: 1,
 		},
 	}
 	for _, test := range tests {
@@ -993,7 +1000,11 @@ func TestPluginIntegrationFailuresSkipToolStateDelta(t *testing.T) {
 			for range events {
 			}
 			require.Equal(t, test.wantToolCalls, lookup.callCount.Load())
-			require.Zero(t, lookup.stateDeltaCalls.Load())
+			require.Equal(
+				t,
+				test.wantStateDeltaCalls,
+				lookup.stateDeltaCalls.Load(),
+			)
 		})
 	}
 }
