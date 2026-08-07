@@ -698,6 +698,8 @@ classified in `AfterTool`. Framework-generated unknown-tool responses are
 normalized before their tool result event is emitted. Failure envelopes bypass
 the tool's configured result formatter, because they replace the tool's
 declared output rather than represent a successful value of that output type.
+They also skip the tool's state-delta provider, so rejected or failed calls do
+not persist state as if the tool had succeeded.
 
 Handled failures use this envelope while successful tool results remain
 unchanged:

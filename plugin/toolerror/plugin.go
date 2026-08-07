@@ -75,7 +75,8 @@ func (p *toolErrorPlugin) beforeTool(
 		return nil, nil
 	}
 	return &tool.BeforeToolResult{
-		CustomResult: failure(details),
+		CustomResult:   failure(details),
+		SkipStateDelta: true,
 	}, nil
 }
 
@@ -91,6 +92,7 @@ func (p *toolErrorPlugin) afterTool(
 			return &tool.AfterToolResult{
 				CustomResult:        failure(normalizeDetails(details, args.Error)),
 				SkipResultFormatter: true,
+				SkipStateDelta:      true,
 			}, nil
 		}
 	}
@@ -101,6 +103,7 @@ func (p *toolErrorPlugin) afterTool(
 	return &tool.AfterToolResult{
 		CustomResult:        failure(details),
 		SkipResultFormatter: true,
+		SkipStateDelta:      true,
 	}, nil
 }
 
@@ -162,6 +165,8 @@ func (p *toolErrorPlugin) afterToolMessages(
 
 func trimFrameworkToolNotFound(content string) (string, bool) {
 	message := strings.TrimSpace(content)
+	const parallelExecutionPrefix = "tool execution error: "
+	message = strings.TrimPrefix(message, parallelExecutionPrefix)
 	const executionPrefix = "executeToolCall: "
 	if !strings.HasPrefix(message, executionPrefix) {
 		return "", false

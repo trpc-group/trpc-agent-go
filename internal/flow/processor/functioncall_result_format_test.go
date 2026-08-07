@@ -1025,6 +1025,90 @@ func (t *statefulFunctionTool[I, O]) StateDelta(
 	return map[string][]byte{"state": []byte("updated")}
 }
 
+func TestExecuteToolCall_CustomResultCanSkipStateDelta(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		configure func(*tool.Callbacks)
+		wantCalls int32
+	}{
+		{
+			name: "before tool",
+			configure: func(callbacks *tool.Callbacks) {
+				callbacks.RegisterBeforeTool(func(
+					context.Context,
+					*tool.BeforeToolArgs,
+				) (*tool.BeforeToolResult, error) {
+					return &tool.BeforeToolResult{
+						CustomResult:   map[string]bool{"ok": false},
+						SkipStateDelta: true,
+					}, nil
+				})
+			},
+		},
+		{
+			name: "after tool",
+			configure: func(callbacks *tool.Callbacks) {
+				callbacks.RegisterAfterTool(func(
+					context.Context,
+					*tool.AfterToolArgs,
+				) (*tool.AfterToolResult, error) {
+					return &tool.AfterToolResult{
+						CustomResult:   map[string]bool{"ok": false},
+						SkipStateDelta: true,
+					}, nil
+				})
+			},
+			wantCalls: 1,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var toolCalls atomic.Int32
+			stateful := &statefulFunctionTool[struct{}, resultFormatTestResult]{
+				FunctionTool: function.NewFunctionTool(
+					func(context.Context, struct{}) (resultFormatTestResult, error) {
+						toolCalls.Add(1)
+						return resultFormatTestResult{Output: "result"}, nil
+					},
+					function.WithName("stateful"),
+				),
+			}
+			callbacks := tool.NewCallbacks()
+			test.configure(callbacks)
+
+			evt, err := NewFunctionCallResponseProcessor(
+				false,
+				callbacks,
+			).executeSingleToolCallSequential(
+				context.Background(),
+				&agent.Invocation{
+					AgentName: "agent",
+					Model:     &mockModel{},
+					Session:   &session.Session{},
+				},
+				&model.Response{},
+				map[string]tool.Tool{"stateful": stateful},
+				make(chan *event.Event, 32),
+				0,
+				model.ToolCall{
+					ID: "call-1",
+					Function: model.FunctionDefinitionParam{
+						Name:      "stateful",
+						Arguments: []byte(`{}`),
+					},
+				},
+			)
+
+			require.NoError(t, err)
+			require.NotNil(t, evt)
+			require.Len(t, evt.Choices, 1)
+			assert.JSONEq(t, `{"ok":false}`, evt.Choices[0].Message.Content)
+			assert.Equal(t, test.wantCalls, toolCalls.Load())
+			assert.Zero(t, stateful.stateDeltaCalls)
+			assert.Empty(t, evt.StateDelta)
+		})
+	}
+}
+
 type mutableResult struct {
 	Output string `json:"output"`
 }

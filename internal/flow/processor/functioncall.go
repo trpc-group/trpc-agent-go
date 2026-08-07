@@ -3266,6 +3266,9 @@ func (p *FunctionCallResponseProcessor) runBeforeToolPluginCallbacks(
 		ctx = result.Context
 	}
 	if result != nil && result.CustomResult != nil {
+		if result.SkipStateDelta {
+			ctx = withSkippedToolStateDelta(ctx)
+		}
 		return ctx, toolCall, result.CustomResult, nil
 	}
 	if result != nil && result.ModifiedArguments != nil {
@@ -3305,6 +3308,9 @@ func (p *FunctionCallResponseProcessor) runBeforeToolCallbacks(
 		ctx = result.Context
 	}
 	if result != nil && result.CustomResult != nil {
+		if result.SkipStateDelta {
+			ctx = withSkippedToolStateDelta(ctx)
+		}
 		return ctx, toolCall, result.CustomResult, nil
 	}
 	if result != nil && result.ModifiedArguments != nil {
@@ -3362,6 +3368,9 @@ func (p *FunctionCallResponseProcessor) runAfterToolPluginCallbacks(
 				undeclaredReasonAfterToolFormatterBypass,
 			)
 		}
+		if afterResult.SkipStateDelta {
+			ctx = withSkippedToolStateDelta(ctx)
+		}
 		return ctx, afterResult.CustomResult, true, skipSummarization, nil
 	}
 	return ctx, toolResult, false, skipSummarization, nil
@@ -3410,6 +3419,9 @@ func (p *FunctionCallResponseProcessor) runAfterToolCallbacks(
 				ctx,
 				undeclaredReasonAfterToolFormatterBypass,
 			)
+		}
+		if afterResult.SkipStateDelta {
+			ctx = withSkippedToolStateDelta(ctx)
 		}
 		toolResult = afterResult.CustomResult
 	}

@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -36,6 +37,46 @@ import (
 
 type declaredTool struct {
 	declaration *tool.Declaration
+}
+
+type stateTrackingTool struct {
+	callErr         error
+	callCount       atomic.Int32
+	stateDeltaCalls atomic.Int32
+}
+
+func (t *stateTrackingTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{
+		Name:        "lookup",
+		Description: "Looks up a query.",
+		InputSchema: &tool.Schema{
+			Type:     "object",
+			Required: []string{"query"},
+			Properties: map[string]*tool.Schema{
+				"query": {Type: "string"},
+			},
+		},
+	}
+}
+
+func (t *stateTrackingTool) Call(
+	_ context.Context,
+	_ []byte,
+) (any, error) {
+	t.callCount.Add(1)
+	if t.callErr != nil {
+		return nil, t.callErr
+	}
+	return "ok", nil
+}
+
+func (t *stateTrackingTool) StateDelta(
+	_ string,
+	_ []byte,
+	_ []byte,
+) map[string][]byte {
+	t.stateDeltaCalls.Add(1)
+	return map[string][]byte{"lookup": []byte("persisted")}
 }
 
 type codedError struct{}
@@ -338,6 +379,7 @@ func TestBeforeToolRejectsInvalidArguments(t *testing.T) {
 			manager := newManager(t)
 			result := beforeTool(t, manager, test.schema, test.arguments)
 			require.NotNil(t, result)
+			require.True(t, result.SkipStateDelta)
 			failure := requireFailure(t, result.CustomResult)
 			require.Equal(t, SourceModel, failure.Error.Source)
 			require.Equal(t, KindInvalidArguments, failure.Error.Kind)
@@ -412,25 +454,29 @@ func TestAfterToolClassifiesExecutionErrors(t *testing.T) {
 			code:   "73001",
 		},
 		{
-			name:      "invalid JSON",
-			err:       syntaxErr,
-			source:    SourceModel,
-			kind:      KindInvalidArguments,
-			code:      "invalid_json",
-			retryable: true,
+			name:   "JSON syntax error from tool",
+			err:    syntaxErr,
+			source: SourceTool,
+			kind:   KindExecution,
+			code:   "tool_execution",
 		},
 		{
-			name: "wrong JSON type",
+			name: "JSON type error from tool",
 			err: &json.UnmarshalTypeError{
 				Value: "string",
 				Type:  reflect.TypeOf(0),
 				Field: "filter.limit",
 			},
-			source:    SourceModel,
-			kind:      KindInvalidArguments,
-			code:      "type",
-			param:     "/filter/limit",
-			retryable: true,
+			source: SourceTool,
+			kind:   KindExecution,
+			code:   "tool_execution",
+		},
+		{
+			name:   "wrapped EOF from tool",
+			err:    fmt.Errorf("decode downstream response: %w", io.EOF),
+			source: SourceTool,
+			kind:   KindExecution,
+			code:   "tool_execution",
 		},
 		{
 			name:      "deadline",
@@ -460,6 +506,7 @@ func TestAfterToolClassifiesExecutionErrors(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, result)
 			require.True(t, result.SkipResultFormatter)
+			require.True(t, result.SkipStateDelta)
 			failure := requireFailure(t, result.CustomResult)
 			require.Equal(t, test.source, failure.Error.Source)
 			require.Equal(t, test.kind, failure.Error.Kind)
@@ -511,6 +558,7 @@ func TestAfterToolResolverClassifiesBusinessFailure(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.True(t, result.SkipResultFormatter)
+	require.True(t, result.SkipStateDelta)
 	failure := requireFailure(t, result.CustomResult)
 	require.Equal(t, "quota_exceeded", failure.Error.Code)
 	require.True(t, failure.Error.Retryable)
@@ -712,6 +760,7 @@ type invalidArgumentLoopModel struct {
 	mu        sync.Mutex
 	requests  [][]model.Message
 	arguments []byte
+	toolCalls []model.ToolCall
 }
 
 func (m *invalidArgumentLoopModel) Info() model.Info {
@@ -739,9 +788,20 @@ func (m *invalidArgumentLoopModel) GenerateContent(
 		}},
 	}
 	if callIndex == 0 {
-		arguments := m.arguments
-		if arguments == nil {
-			arguments = []byte(`{}`)
+		toolCalls := m.toolCalls
+		if len(toolCalls) == 0 {
+			arguments := m.arguments
+			if arguments == nil {
+				arguments = []byte(`{}`)
+			}
+			toolCalls = []model.ToolCall{{
+				ID:   "call-invalid",
+				Type: "function",
+				Function: model.FunctionDefinitionParam{
+					Name:      "lookup",
+					Arguments: arguments,
+				},
+			}}
 		}
 		response = &model.Response{
 			ID:        "rsp-tool",
@@ -750,15 +810,8 @@ func (m *invalidArgumentLoopModel) GenerateContent(
 			Choices: []model.Choice{{
 				Index: 0,
 				Message: model.Message{
-					Role: model.RoleAssistant,
-					ToolCalls: []model.ToolCall{{
-						ID:   "call-invalid",
-						Type: "function",
-						Function: model.FunctionDefinitionParam{
-							Name:      "lookup",
-							Arguments: arguments,
-						},
-					}},
+					Role:      model.RoleAssistant,
+					ToolCalls: toolCalls,
 				},
 			}},
 		}
@@ -891,6 +944,128 @@ func TestPluginIntegrationExecutionErrorReachesModel(t *testing.T) {
 	require.Equal(t, KindExecution, failure.Error.Kind)
 	require.Equal(t, "73001", failure.Error.Code)
 	require.Contains(t, failure.Error.Message, "downstream rejected the request")
+}
+
+func TestPluginIntegrationFailuresSkipToolStateDelta(t *testing.T) {
+	tests := []struct {
+		name          string
+		arguments     []byte
+		callErr       error
+		wantToolCalls int32
+	}{
+		{
+			name:          "validation failure",
+			arguments:     []byte(`{}`),
+			wantToolCalls: 0,
+		},
+		{
+			name:          "execution failure",
+			arguments:     []byte(`{"query":"weather"}`),
+			callErr:       errors.New("backend unavailable"),
+			wantToolCalls: 1,
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			modelStub := &invalidArgumentLoopModel{arguments: test.arguments}
+			lookup := &stateTrackingTool{callErr: test.callErr}
+			agentInstance := llmagent.New(
+				"assistant",
+				llmagent.WithModel(modelStub),
+				llmagent.WithTools([]tool.Tool{lookup}),
+			)
+			runnerInstance := runner.NewRunner(
+				"tool-error-state-delta-app",
+				agentInstance,
+				runner.WithPlugins(New()),
+			)
+			t.Cleanup(func() {
+				require.NoError(t, runnerInstance.Close())
+			})
+			events, err := runnerInstance.Run(
+				context.Background(),
+				"user-1",
+				"session-"+test.name,
+				model.NewUserMessage("look this up"),
+			)
+			require.NoError(t, err)
+			for range events {
+			}
+			require.Equal(t, test.wantToolCalls, lookup.callCount.Load())
+			require.Zero(t, lookup.stateDeltaCalls.Load())
+		})
+	}
+}
+
+func TestPluginIntegrationParallelUnknownToolReachesModel(t *testing.T) {
+	modelStub := &invalidArgumentLoopModel{
+		toolCalls: []model.ToolCall{
+			{
+				ID:   "call-known",
+				Type: "function",
+				Function: model.FunctionDefinitionParam{
+					Name:      "known",
+					Arguments: []byte(`{}`),
+				},
+			},
+			{
+				ID:   "call-missing",
+				Type: "function",
+				Function: model.FunctionDefinitionParam{
+					Name:      "missing",
+					Arguments: []byte(`{}`),
+				},
+			},
+		},
+	}
+	known := function.NewFunctionTool(
+		func(context.Context, struct{}) (string, error) {
+			return "ok", nil
+		},
+		function.WithName("known"),
+		function.WithDescription("Returns a successful result."),
+	)
+	agentInstance := llmagent.New(
+		"assistant",
+		llmagent.WithModel(modelStub),
+		llmagent.WithTools([]tool.Tool{known}),
+		llmagent.WithEnableParallelTools(true),
+	)
+	runnerInstance := runner.NewRunner(
+		"tool-error-parallel-app",
+		agentInstance,
+		runner.WithPlugins(New()),
+	)
+	t.Cleanup(func() {
+		require.NoError(t, runnerInstance.Close())
+	})
+	events, err := runnerInstance.Run(
+		context.Background(),
+		"user-1",
+		"session-1",
+		model.NewUserMessage("run both tools"),
+	)
+	require.NoError(t, err)
+	for range events {
+	}
+	requests := modelStub.Requests()
+	require.Len(t, requests, 2)
+	results := make(map[string]model.Message)
+	for _, message := range requests[1] {
+		if message.Role == model.RoleTool {
+			results[message.ToolID] = message
+		}
+	}
+	require.Len(t, results, 2)
+	require.JSONEq(t, `"ok"`, results["call-known"].Content)
+	missing := results["call-missing"]
+	require.Equal(t, "missing", missing.ToolName)
+	var failure Failure
+	require.NoError(t, json.Unmarshal([]byte(missing.Content), &failure))
+	require.Equal(t, SourceModel, failure.Error.Source)
+	require.Equal(t, KindToolNotFound, failure.Error.Kind)
+	require.Equal(t, string(KindToolNotFound), failure.Error.Code)
 }
 
 func TestPluginIntegrationValidatesArgumentsAfterJSONRepair(t *testing.T) {

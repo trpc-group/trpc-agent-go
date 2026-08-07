@@ -16,7 +16,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
 	"sync"
 
@@ -211,27 +210,6 @@ func classifyExecutionError(err error) (Details, bool) {
 	if err == nil {
 		return Details{}, false
 	}
-	var typeErr *json.UnmarshalTypeError
-	if errors.As(err, &typeErr) {
-		return Details{
-			Source:    SourceModel,
-			Kind:      KindInvalidArguments,
-			Code:      "type",
-			Message:   err.Error(),
-			Param:     fieldJSONPointer(typeErr.Field),
-			Retryable: true,
-		}, true
-	}
-	var syntaxErr *json.SyntaxError
-	if errors.As(err, &syntaxErr) || errors.Is(err, io.EOF) {
-		return Details{
-			Source:    SourceModel,
-			Kind:      KindInvalidArguments,
-			Code:      "invalid_json",
-			Message:   err.Error(),
-			Retryable: true,
-		}, true
-	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return Details{
 			Source:    SourceFramework,
@@ -260,13 +238,6 @@ func classifyExecutionError(err error) (Details, bool) {
 		Code:    code,
 		Message: err.Error(),
 	}, true
-}
-
-func fieldJSONPointer(field string) string {
-	if field == "" {
-		return ""
-	}
-	return jsonPointer(strings.Split(field, "."))
 }
 
 func normalizeDetails(details Details, fallback error) Details {

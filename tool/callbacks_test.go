@@ -838,6 +838,7 @@ func TestRunAfterTool_PreservesSkipSummarizationAcrossCallbacks(t *testing.T) {
 		return &tool.AfterToolResult{
 			CustomResult:        marker,
 			SkipResultFormatter: true,
+			SkipStateDelta:      true,
 		}, nil
 	})
 	callbacks.RegisterAfterTool(func(
@@ -861,6 +862,7 @@ func TestRunAfterTool_PreservesSkipSummarizationAcrossCallbacks(t *testing.T) {
 	require.NotNil(t, result)
 	require.True(t, result.SkipSummarization)
 	require.True(t, result.SkipResultFormatter)
+	require.True(t, result.SkipStateDelta)
 	require.Equal(t, marker, result.CustomResult)
 }
 
@@ -873,6 +875,7 @@ func TestRunAfterTool_SkipResultFormatterFollowsLastCustomResult(t *testing.T) {
 		return &tool.AfterToolResult{
 			CustomResult:        "protocol envelope",
 			SkipResultFormatter: true,
+			SkipStateDelta:      true,
 		}, nil
 	})
 	callbacks.RegisterAfterTool(func(
@@ -891,6 +894,7 @@ func TestRunAfterTool_SkipResultFormatterFollowsLastCustomResult(t *testing.T) {
 	require.NotNil(t, result)
 	require.Equal(t, "declared result", result.CustomResult)
 	require.False(t, result.SkipResultFormatter)
+	require.False(t, result.SkipStateDelta)
 }
 
 func TestRunAfterTool_NoCallbacksPreservesOriginalResultShape(t *testing.T) {

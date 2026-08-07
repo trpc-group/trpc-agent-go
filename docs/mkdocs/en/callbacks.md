@@ -168,6 +168,7 @@ type BeforeToolArgs struct {
 type BeforeToolResult struct {
     Context           context.Context  // Optional context for subsequent operations
     CustomResult      any              // If non-nil, skips tool execution and returns this result
+    SkipStateDelta    bool             // Skip state-delta provider for CustomResult
     ModifiedArguments []byte           // Optional modified arguments for tool execution
 }
 
@@ -184,6 +185,7 @@ type AfterToolResult struct {
     Context             context.Context  // Optional context for subsequent operations
     CustomResult        any              // If non-nil, replaces the original result
     SkipResultFormatter bool             // Use default JSON for CustomResult
+    SkipStateDelta      bool             // Skip state-delta provider for CustomResult
     SkipSummarization   bool             // If true, end the turn after tool.response
 }
 ```
@@ -208,6 +210,9 @@ Key points:
   the tool's configured result formatter and uses default JSON serialization.
   This is useful when the replacement is a protocol or error envelope rather
   than a value of the tool's declared output type.
+- `BeforeToolResult.SkipStateDelta` and `AfterToolResult.SkipStateDelta` keep
+  a non-nil `CustomResult` from invoking the tool's state-delta provider. This
+  is useful when the replacement did not produce a successful tool result.
 - `AfterToolResult.SkipSummarization` lets a callback end the turn after
   `tool.response` when the tool result should be surfaced directly.
 - `SkipSummarization` only skips the extra summarization LLM call. The true
