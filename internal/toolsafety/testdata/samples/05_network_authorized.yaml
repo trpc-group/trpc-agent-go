@@ -1,0 +1,6 @@
+name: "network_authorized"
+description: "Network request to whitelisted domain"
+command: "curl https://api.github.com/repos"
+backend: "workspaceexec"
+expected_decision: "allow"
+expected_risk_level: "none"

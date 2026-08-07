@@ -86,6 +86,16 @@ func TestNewTool(t *testing.T) {
 		assert.Equal(t, []any{"python", "javascript", "go"}, langSchema.Enum)
 	})
 
+	t.Run("with safety scanner", func(t *testing.T) {
+		// WithSafetyScanner should not panic and should accept nil.
+		ct := NewTool(exec, WithSafetyScanner(nil))
+		require.NotNil(t, ct)
+
+		// Verify the tool still works with nil safety.
+		decl := ct.Declaration()
+		assert.Equal(t, "execute_code", decl.Name)
+	})
+
 	t.Run("with multiple options", func(t *testing.T) {
 		ct := NewTool(exec,
 			WithName("custom_exec"),

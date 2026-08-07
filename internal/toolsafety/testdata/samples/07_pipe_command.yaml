@@ -1,0 +1,6 @@
+name: "pipe_command"
+description: "Legitimate pipe command"
+command: "ls | grep test"
+backend: "workspaceexec"
+expected_decision: "allow"
+expected_risk_level: "none"

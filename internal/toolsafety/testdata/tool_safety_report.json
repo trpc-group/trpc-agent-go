@@ -1,0 +1,32 @@
+{
+  "tool_name": "workspace_exec",
+  "command": "rm -rf /",
+  "backend": "workspaceexec",
+  "decision": "deny",
+  "risk_level": "critical",
+  "findings": [
+    {
+      "rule_id": "DESTRUCTIVE_PATH",
+      "risk_level": "critical",
+      "evidence": "rm -rf /",
+      "recommendation": "Destructive recursive delete on root",
+      "severity_score": 10,
+      "matched_pattern": "pattern:rm\\s+(-rf?\\s+)?/\\s",
+      "context": null
+    },
+    {
+      "rule_id": "DANGEROUS_COMMAND",
+      "risk_level": "high",
+      "evidence": "rm -rf /",
+      "recommendation": "Command rm is denied by policy",
+      "severity_score": 8,
+      "matched_pattern": "denied_command:rm",
+      "context": null
+    }
+  ],
+  "is_shell_safe": true,
+  "duration_ms": 0.5,
+  "intercepted": true,
+  "sanitized": false,
+  "timestamp": "2026-07-27T10:00:00Z"
+}

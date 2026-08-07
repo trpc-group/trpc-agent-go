@@ -1,0 +1,7 @@
+name: "dependency_install"
+description: "Dependency install — pip install"
+command: "pip install flask"
+backend: "workspaceexec"
+expected_decision: "deny"
+expected_risk_level: "high"
+expected_rules: ["DEPENDENCY_INSTALL"]

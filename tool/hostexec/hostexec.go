@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolsafety"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -43,11 +44,12 @@ const (
 )
 
 type config struct {
-	baseDir  string
-	name     string
-	maxLines int
-	jobTTL   time.Duration
-	baseEnv  map[string]string
+	baseDir       string
+	name          string
+	maxLines      int
+	jobTTL        time.Duration
+	baseEnv       map[string]string
+	safetyScanner *toolsafety.Scanner
 }
 
 // Option configures the hostexec tool set.
@@ -95,6 +97,13 @@ func WithBaseEnv(env map[string]string) Option {
 	}
 }
 
+// WithSafetyScanner sets an optional safety scanner for hostexec commands.
+func WithSafetyScanner(scanner *toolsafety.Scanner) Option {
+	return func(c *config) {
+		c.safetyScanner = scanner
+	}
+}
+
 func defaultConfig() config {
 	return config{
 		baseDir: defaultBaseDir,
@@ -136,7 +145,7 @@ func NewToolSet(opts ...Option) (tool.ToolSet, error) {
 		set.name = defaultToolSetName
 	}
 	set.tools = []tool.Tool{
-		&execCommandTool{mgr: mgr, baseDir: baseDir},
+		&execCommandTool{mgr: mgr, baseDir: baseDir, safety: cfg.safetyScanner},
 		&writeStdinTool{mgr: mgr},
 		&killSessionTool{mgr: mgr},
 	}
@@ -168,6 +177,7 @@ func (s *toolSet) Name() string {
 type execCommandTool struct {
 	mgr     *manager
 	baseDir string
+	safety  *toolsafety.Scanner
 }
 
 func (t *execCommandTool) Declaration() *tool.Declaration {
@@ -285,6 +295,27 @@ func (t *execCommandTool) Call(
 	}
 	if strings.TrimSpace(in.Command) == "" {
 		return nil, errors.New(errCommandRequired)
+	}
+
+	// Run safety check if a scanner is configured.
+	if t.safety != nil {
+		timeoutS := 0
+		if tv := firstInt(in.TimeoutSec, in.TimeoutSecOld); tv != nil {
+			timeoutS = *tv
+		}
+		report, err := t.safety.Scan(ctx, &toolsafety.ScanRequest{
+			ToolName: toolExecCommand,
+			Command:  in.Command,
+			Backend:  "hostexec",
+			TimeoutS: timeoutS,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("hostexec: safety scan error: %w", err)
+		}
+		if report.Decision == toolsafety.DecisionDeny {
+			return tool.PermissionResultFor(toolExecCommand,
+				tool.DenyPermission(toolsafety.FormatFinding(report))), nil
+		}
 	}
 
 	workdir, err := resolveWorkdir(in.Workdir, t.baseDir)

@@ -1,0 +1,7 @@
+name: "hostexec_long_session"
+description: "Hostexec PTY long session risk"
+command: "top"
+backend: "hostexec"
+expected_decision: "deny"
+expected_risk_level: "medium"
+expected_rules: ["HOSTEXEC_PTY_SESSION"]

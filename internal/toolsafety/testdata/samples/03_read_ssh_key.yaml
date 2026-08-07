@@ -1,0 +1,7 @@
+name: "read_ssh_key"
+description: "Sensitive file read — cat ~/.ssh/id_rsa"
+command: "cat ~/.ssh/id_rsa"
+backend: "workspaceexec"
+expected_decision: "deny"
+expected_risk_level: "critical"
+expected_rules: ["SENSITIVE_PATH"]

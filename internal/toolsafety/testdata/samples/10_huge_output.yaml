@@ -1,0 +1,7 @@
+name: "huge_output"
+description: "Huge output — cat /dev/urandom"
+command: "cat /dev/urandom"
+backend: "workspaceexec"
+expected_decision: "deny"
+expected_risk_level: "high"
+expected_rules: ["RESOURCE_OUTPUT_SIZE"]

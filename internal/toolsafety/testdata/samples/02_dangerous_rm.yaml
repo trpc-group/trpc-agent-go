@@ -1,0 +1,7 @@
+name: "dangerous_rm"
+description: "Dangerous delete — rm -rf /"
+command: "rm -rf /"
+backend: "workspaceexec"
+expected_decision: "deny"
+expected_risk_level: "critical"
+expected_rules: ["DESTRUCTIVE_PATH", "DANGEROUS_COMMAND"]

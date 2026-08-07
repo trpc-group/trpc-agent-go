@@ -694,6 +694,18 @@ func TestExecTool_Call_NotConfigured(t *testing.T) {
 	require.Contains(t, err.Error(), "workspace_exec is not configured")
 }
 
+// TestWithSafetyScanner verifies that WithSafetyScanner can be applied
+// and the option function does not panic.
+func TestWithSafetyScanner(t *testing.T) {
+	exec := localexec.New()
+	opt := WithSafetyScanner(nil)
+	require.NotNil(t, opt)
+
+	// The option should not panic when applied.
+	tool := NewExecTool(exec, opt)
+	require.NotNil(t, tool)
+}
+
 func TestExecTool_WriteStdin_AliasFieldsAndSubmit(t *testing.T) {
 	exec := localexec.New()
 	execTool := NewExecTool(exec)
