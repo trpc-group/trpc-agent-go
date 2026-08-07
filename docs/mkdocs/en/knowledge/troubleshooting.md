@@ -50,6 +50,11 @@ if _, err := embedder.GetEmbedding(ctx, "ping"); err != nil {
 
 **Description**: Since the PDF reader depends on third-party libraries, to avoid introducing unnecessary dependencies in the main module, the PDF reader uses a separate `go.mod`.
 
+> The built-in PDF Reader is intended for basic text-layer extraction. For
+> scanned, image-based, or complex-layout PDFs, use the
+> [Docling Extractor](extractor.md#docling-extractor) for better structure and
+> OCR support.
+
 **Usage**: To support PDF file reading, manually import the PDF reader package in your code:
 ```go
 import (
