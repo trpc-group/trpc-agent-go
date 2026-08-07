@@ -275,13 +275,6 @@ type WorkspaceMetadata struct {
 	// still present. The map is a local per-workspace cache; session
 	// state remains the authoritative source of "what should exist".
 	Prepared map[string]PreparedRecord `json:"prepared,omitempty"`
-	// InstanceID records the physical execution-environment generation
-	// for which Prepared was last converged. It mirrors
-	// [WorkspaceHandle.InstanceID] at reconcile time. When a
-	// [WorkspaceInstanceProvider] reports a different non-empty ID,
-	// workspaceprep clears Prepared before reconciling bootstrap work.
-	// Empty means legacy managers that do not expose instance identity.
-	InstanceID WorkspaceInstanceID `json:"instance_id,omitempty"`
 }
 
 // PreparedRecord captures a single successfully-applied workspace
@@ -293,6 +286,11 @@ type PreparedRecord struct {
 	Fingerprint string    `json:"fingerprint"`
 	Target      string    `json:"target,omitempty"`
 	PreparedAt  time.Time `json:"prepared_at"`
+	// Generation is an opaque, framework-owned identifier for the
+	// process-scoped physical workspace generation in which this record
+	// was prepared. Empty preserves the legacy behavior of managers
+	// without instance identity. Callers should not assign or reuse it.
+	Generation string `json:"generation,omitempty"`
 }
 
 // SkillMeta records a staged skill snapshot.

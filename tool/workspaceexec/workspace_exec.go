@@ -704,6 +704,9 @@ func (t *ExecTool) executeWorkspaceAttempt(
 	}
 	req.workspaceHandle = handle
 	req.ws = handle.Workspace
+	if err := validateWorkspaceHandle(ctx, req.eng, handle); err != nil {
+		return execOutput{}, true, err
+	}
 	if err := t.reconcileWorkspace(
 		ctx,
 		req.eng,
@@ -712,12 +715,64 @@ func (t *ExecTool) executeWorkspaceAttempt(
 	); err != nil {
 		return execOutput{}, true, err
 	}
+	if err := validateWorkspaceHandle(ctx, req.eng, handle); err != nil {
+		if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+			// Reconcile may have started an arbitrary bootstrap command.
+			// Without an explicit success disposition, a post-reconcile
+			// generation change is invalidation-only and must not replay.
+			err = errors.Join(err, codeexecutor.ErrWorkspaceRetryUnsafe)
+		}
+		return execOutput{}, true, err
+	}
 	if t.sessional {
 		out, err := t.callSessional(ctx, *req)
 		return out, true, err
 	}
 	out, err := t.callNonSessional(ctx, *req)
 	return out, true, err
+}
+
+func validateWorkspaceHandle(
+	ctx context.Context,
+	eng codeexecutor.Engine,
+	handle codeexecutor.WorkspaceHandle,
+) error {
+	if handle.InstanceID == "" {
+		return nil
+	}
+	if eng == nil {
+		return errors.New("workspaceexec: workspace manager is unavailable")
+	}
+	manager := eng.Manager()
+	if manager == nil {
+		return errors.New("workspaceexec: workspace manager is unavailable")
+	}
+	provider, ok := manager.(codeexecutor.WorkspaceInstanceProvider)
+	if !ok {
+		return errors.New(
+			"workspaceexec: workspace manager lost instance identity capability",
+		)
+	}
+	current, err := provider.InstanceID(ctx)
+	if err != nil {
+		return fmt.Errorf("workspaceexec: validate workspace instance: %w", err)
+	}
+	if current == "" {
+		return errors.New(
+			"workspaceexec: workspace instance provider returned an empty instance ID",
+		)
+	}
+	if current == handle.InstanceID {
+		return nil
+	}
+	return errors.Join(
+		codeexecutor.ErrWorkspaceStale,
+		fmt.Errorf(
+			"workspaceexec: workspace instance changed from %q to %q",
+			handle.InstanceID,
+			current,
+		),
+	)
 }
 
 // checkCommandPolicy enforces the optional allow/deny lists. When no

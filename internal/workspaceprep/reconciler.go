@@ -11,6 +11,9 @@ package workspaceprep
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"reflect"
@@ -39,16 +42,28 @@ var ErrReconcileRetryUnsafe = codeexecutor.ErrWorkspaceRetryUnsafe
 // through the shared skillstage helpers, and enforces a fixed phase
 // order (PhaseFile -> PhaseSkill -> PhaseCommand).
 type defaultReconciler struct {
-	locker *keyedLocker
-	stager *skillstage.Stager
+	locker          *keyedLocker
+	stager          *skillstage.Stager
+	generationEpoch string
+	generationErr   error
 }
+
+// processGenerationEpoch keeps persisted prepared records within the lifetime
+// in which WorkspaceInstanceID uniqueness is guaranteed by its provider.
+var processGenerationEpoch, processGenerationErr = newProcessGenerationEpoch()
 
 // NewReconciler returns the default Reconciler used by workspace_exec
 // and other workspace-aware tools.
 func NewReconciler() Reconciler {
+	return newReconciler(processGenerationEpoch, processGenerationErr)
+}
+
+func newReconciler(epoch string, epochErr error) *defaultReconciler {
 	return &defaultReconciler{
-		locker: newKeyedLocker(),
-		stager: skillstage.New(),
+		locker:          newKeyedLocker(),
+		stager:          skillstage.New(),
+		generationEpoch: epoch,
+		generationErr:   epochErr,
 	}
 }
 
@@ -66,6 +81,10 @@ func (r *defaultReconciler) Reconcile(
 	if eng == nil {
 		return nil, fmt.Errorf("workspaceprep: engine is required")
 	}
+	generation, err := r.preparationGeneration(instanceID)
+	if err != nil {
+		return nil, err
+	}
 
 	reqs = dedupeRequirements(reqs)
 	sortRequirements(reqs)
@@ -80,12 +99,7 @@ func (r *defaultReconciler) Reconcile(
 	if md.Prepared == nil {
 		md.Prepared = map[string]codeexecutor.PreparedRecord{}
 	}
-	loadedInstanceID := md.InstanceID
-	invalidatePreparedForInstance(&md, instanceID)
 	baseMD := cloneReconcileMetadata(md)
-	if instanceID != "" {
-		md.InstanceID = instanceID
-	}
 
 	rctx := ApplyContext{
 		Engine:    eng,
@@ -97,14 +111,12 @@ func (r *defaultReconciler) Reconcile(
 	}
 
 	run, err := r.runReconcileRequirements(
-		ctx, eng, ws, baseMD, rctx, reqs,
+		ctx, eng, ws, baseMD, rctx, generation, reqs,
 	)
 	if err != nil {
 		return run.warnings, err
 	}
-	instanceIDChanged := instanceID != "" &&
-		instanceID != loadedInstanceID
-	if run.changed || instanceIDChanged {
+	if run.changed {
 		if err := r.saveReconcileMetadata(
 			ctx, eng, ws, baseMD, md, run.changedKeys,
 		); err != nil {
@@ -135,11 +147,14 @@ func (r *defaultReconciler) runReconcileRequirements(
 	ws codeexecutor.Workspace,
 	baseMD codeexecutor.WorkspaceMetadata,
 	rctx ApplyContext,
+	generation string,
 	reqs []Requirement,
 ) (reconcileRunResult, error) {
 	var run reconcileRunResult
 	for _, req := range reqs {
-		applied, applyAttempted, warn, err := r.runOne(ctx, rctx, req)
+		applied, applyAttempted, warn, err := r.runOne(
+			ctx, rctx, generation, req,
+		)
 		if warn != "" {
 			run.warnings = append(run.warnings, warn)
 		}
@@ -193,24 +208,35 @@ func (r *defaultReconciler) runReconcileRequirements(
 	return run, nil
 }
 
-// invalidatePreparedForInstance clears Prepared when instanceID differs
-// from the metadata's recorded backend generation. An empty instanceID
-// preserves existing Prepared semantics for legacy managers. An empty
-// recorded InstanceID is treated as an unknown generation.
-func invalidatePreparedForInstance(
-	md *codeexecutor.WorkspaceMetadata,
+func (r *defaultReconciler) preparationGeneration(
 	instanceID codeexecutor.WorkspaceInstanceID,
-) {
-	if md == nil || instanceID == "" {
-		return
+) (string, error) {
+	if instanceID == "" {
+		return "", nil
 	}
-	if md.InstanceID == instanceID {
-		return
+	if r.generationErr != nil {
+		return "", fmt.Errorf(
+			"workspaceprep: create process generation epoch: %w",
+			r.generationErr,
+		)
 	}
-	if len(md.Prepared) == 0 {
-		return
+	if r.generationEpoch == "" {
+		return "", errors.New(
+			"workspaceprep: process generation epoch is empty",
+		)
 	}
-	md.Prepared = map[string]codeexecutor.PreparedRecord{}
+	sum := sha256.Sum256([]byte(
+		r.generationEpoch + "\x00" + string(instanceID),
+	))
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func newProcessGenerationEpoch() (string, error) {
+	var epoch [16]byte
+	if _, err := rand.Read(epoch[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(epoch[:]), nil
 }
 
 func staleRetryError(err error, unsafe bool) error {
@@ -262,30 +288,6 @@ func mergeReconcileMetadata(
 ) codeexecutor.WorkspaceMetadata {
 	merged := latest
 	mergeDirectMetadataChanges(&merged, base, updated)
-
-	rotationInWriter := updated.InstanceID != "" &&
-		updated.InstanceID != base.InstanceID
-	if updated.InstanceID != "" &&
-		latest.InstanceID != "" &&
-		updated.InstanceID != latest.InstanceID &&
-		!rotationInWriter {
-		// A newer generation already persisted; ignore this writer's
-		// Prepared overlay so stale records cannot replace the latest
-		// map while mergeDirectMetadataChanges keeps latest.InstanceID.
-		return merged
-	}
-	if rotationInWriter &&
-		updated.InstanceID != latest.InstanceID {
-		prepared := make(
-			map[string]codeexecutor.PreparedRecord,
-			len(updated.Prepared),
-		)
-		for key, rec := range updated.Prepared {
-			prepared[key] = rec
-		}
-		merged.Prepared = prepared
-		return merged
-	}
 	prepared := make(
 		map[string]codeexecutor.PreparedRecord,
 		len(merged.Prepared)+len(changedKeys),
@@ -329,9 +331,6 @@ func mergeDirectMetadataChanges(
 	if !reflect.DeepEqual(updated.Outputs, base.Outputs) {
 		merged.Outputs = updated.Outputs
 	}
-	if updated.InstanceID != base.InstanceID {
-		merged.InstanceID = updated.InstanceID
-	}
 }
 
 func cloneReconcileMetadata(
@@ -368,6 +367,7 @@ func cloneReconcileMetadata(
 func (r *defaultReconciler) runOne(
 	ctx context.Context,
 	rctx ApplyContext,
+	generation string,
 	req Requirement,
 ) (bool, bool, string, error) {
 	key := req.Key()
@@ -376,7 +376,8 @@ func (r *defaultReconciler) runOne(
 		return false, false, "", fmt.Errorf("fingerprint: %w", err)
 	}
 	prev, hasPrev := rctx.Metadata.Prepared[key]
-	if hasPrev && prev.Fingerprint == expected {
+	if hasPrev && prev.Generation == generation &&
+		prev.Fingerprint == expected {
 		ok, err := req.SentinelExists(ctx, rctx)
 		if err != nil {
 			return false, false, "", fmt.Errorf("sentinel: %w", err)
@@ -394,6 +395,7 @@ func (r *defaultReconciler) runOne(
 		Fingerprint: expected,
 		Target:      req.Target(),
 		PreparedAt:  time.Now(),
+		Generation:  generation,
 	}
 	return true, true, "", nil
 }

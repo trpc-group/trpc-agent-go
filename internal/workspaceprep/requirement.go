@@ -146,9 +146,9 @@ type Reconciler interface {
 	// instanceID carries the physical workspace generation from
 	// [codeexecutor.WorkspaceHandle.InstanceID]. An empty value
 	// preserves legacy behavior for managers without
-	// [codeexecutor.WorkspaceInstanceProvider]. A different non-empty
-	// instanceID invalidates previously prepared records before
-	// reconciliation and is persisted as instance_id.
+	// [codeexecutor.WorkspaceInstanceProvider]. For a non-empty value,
+	// only prepared records from the same process-scoped generation
+	// may be reused.
 	Reconcile(
 		ctx context.Context,
 		eng codeexecutor.Engine,

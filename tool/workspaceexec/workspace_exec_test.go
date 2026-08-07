@@ -1981,6 +1981,104 @@ func TestExecTool_InstanceRotationReRunsBootstrapCommand(t *testing.T) {
 		"bootstrap must rerun after instance rotation")
 }
 
+func TestExecTool_RotationAfterAcquireReconcilesReplacementBeforeUserCommand(
+	t *testing.T,
+) {
+	root := filepath.Join(t.TempDir(), "workspace")
+	rt := localexec.NewRuntimeWithOptions(
+		root,
+		localexec.WithRuntimeWorkspaceMode(
+			localexec.WorkspaceModeTrustedLocal,
+		),
+		localexec.WithAutoInputs(false),
+	)
+	manager := &scriptedInstanceManager{
+		Runtime: rt,
+		probes: []codeexecutor.WorkspaceInstanceID{
+			"instance-1", // first create: before
+			"instance-1", // first create: after
+			"instance-2", // pre-reconcile fence observes rotation
+			"instance-2", // replacement create: before
+			"instance-2", // replacement create: after
+			"instance-2", // replacement pre-reconcile fence
+			"instance-2", // replacement post-reconcile fence
+		},
+	}
+	runner := &fenceOrderRunner{inner: rt}
+	exec := &instanceAwareExec{
+		eng: codeexecutor.NewEngine(manager, rt, runner),
+	}
+	tl := NewExecTool(
+		exec,
+		WithWorkspaceRegistry(codeexecutor.NewWorkspaceRegistry()),
+		WithWorkspaceBootstrap(codeexecutor.WorkspaceBootstrapSpec{
+			Commands: []codeexecutor.WorkspaceCommand{{Cmd: "true"}},
+		}),
+	)
+	args, err := json.Marshal(execInput{Command: "printf ok"})
+	require.NoError(t, err)
+
+	got, err := tl.Call(context.Background(), args)
+	require.NoError(t, err)
+	require.Equal(t, "ok", got.(execOutput).Output)
+	require.Equal(t, 2, manager.createCount(),
+		"the stale acquired handle must be replaced exactly once")
+	require.Equal(t, []string{"bootstrap", "user"}, runner.eventsSnapshot(),
+		"the user command must start only after replacement bootstrap")
+}
+
+func TestExecTool_RotationDuringReconcileStopsBeforeUserCommand(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "workspace")
+	rt := localexec.NewRuntimeWithOptions(
+		root,
+		localexec.WithRuntimeWorkspaceMode(
+			localexec.WorkspaceModeTrustedLocal,
+		),
+		localexec.WithAutoInputs(false),
+	)
+	manager := &scriptedInstanceManager{
+		Runtime: rt,
+		probes: []codeexecutor.WorkspaceInstanceID{
+			"instance-1", // first create: before
+			"instance-1", // first create: after
+			"instance-1", // first pre-reconcile fence
+			"instance-2", // first post-reconcile fence observes rotation
+			"instance-2", // next call create: before
+			"instance-2", // next call create: after
+			"instance-2", // next call pre-reconcile fence
+			"instance-2", // next call post-reconcile fence
+		},
+	}
+	runner := &fenceOrderRunner{inner: rt}
+	exec := &instanceAwareExec{
+		eng: codeexecutor.NewEngine(manager, rt, runner),
+	}
+	tl := NewExecTool(
+		exec,
+		WithWorkspaceRegistry(codeexecutor.NewWorkspaceRegistry()),
+		WithWorkspaceBootstrap(codeexecutor.WorkspaceBootstrapSpec{
+			Commands: []codeexecutor.WorkspaceCommand{{Cmd: "true"}},
+		}),
+	)
+	args, err := json.Marshal(execInput{Command: "printf ok"})
+	require.NoError(t, err)
+
+	_, err = tl.Call(context.Background(), args)
+	require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
+	require.ErrorIs(t, err, codeexecutor.ErrWorkspaceRetryUnsafe)
+	require.Equal(t, []string{"bootstrap"}, runner.eventsSnapshot(),
+		"a post-reconcile rotation must stop before the user command")
+
+	got, err := tl.Call(context.Background(), args)
+	require.NoError(t, err)
+	require.Equal(t, "ok", got.(execOutput).Output)
+	require.Equal(t,
+		[]string{"bootstrap", "bootstrap", "user"},
+		runner.eventsSnapshot(),
+		"the next call must reconcile the replacement before user execution",
+	)
+}
+
 type instanceAwareTrustedManager struct {
 	*localexec.Runtime
 
@@ -2022,6 +2120,48 @@ func (m *instanceAwareTrustedManager) createCount() int {
 	return m.creates
 }
 
+type scriptedInstanceManager struct {
+	*localexec.Runtime
+
+	mu      sync.Mutex
+	probes  []codeexecutor.WorkspaceInstanceID
+	current codeexecutor.WorkspaceInstanceID
+	creates int
+}
+
+func (m *scriptedInstanceManager) CreateWorkspace(
+	ctx context.Context,
+	id string,
+	pol codeexecutor.WorkspacePolicy,
+) (codeexecutor.Workspace, error) {
+	m.mu.Lock()
+	m.creates++
+	m.mu.Unlock()
+	return m.Runtime.CreateWorkspace(ctx, id, pol)
+}
+
+func (m *scriptedInstanceManager) InstanceID(
+	context.Context,
+) (codeexecutor.WorkspaceInstanceID, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.probes) == 0 {
+		if m.current == "" {
+			return "", errors.New("unexpected instance probe")
+		}
+		return m.current, nil
+	}
+	m.current = m.probes[0]
+	m.probes = m.probes[1:]
+	return m.current, nil
+}
+
+func (m *scriptedInstanceManager) createCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.creates
+}
+
 type instanceAwareExec struct {
 	eng codeexecutor.Engine
 }
@@ -2046,6 +2186,38 @@ type bootstrapCountingRunner struct {
 
 	mu     sync.Mutex
 	starts int
+}
+
+type fenceOrderRunner struct {
+	inner codeexecutor.ProgramRunner
+
+	mu     sync.Mutex
+	events []string
+}
+
+func (r *fenceOrderRunner) RunProgram(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+	spec codeexecutor.RunProgramSpec,
+) (codeexecutor.RunResult, error) {
+	event := ""
+	if spec.Cmd == "true" && len(spec.Args) == 0 {
+		event = "bootstrap"
+	} else if spec.Cmd == "sh" {
+		event = "user"
+	}
+	if event != "" {
+		r.mu.Lock()
+		r.events = append(r.events, event)
+		r.mu.Unlock()
+	}
+	return r.inner.RunProgram(ctx, ws, spec)
+}
+
+func (r *fenceOrderRunner) eventsSnapshot() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.events...)
 }
 
 func (r *bootstrapCountingRunner) RunProgram(
