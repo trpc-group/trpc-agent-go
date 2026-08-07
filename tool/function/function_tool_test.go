@@ -771,6 +771,52 @@ func TestFunctionTool_WithOutputSchema(t *testing.T) {
 	}
 }
 
+func TestFunctionTool_WithDisableOutputSchemaGen(t *testing.T) {
+	type inputArgs struct {
+		A int `json:"a"`
+	}
+	type outputArgs struct {
+		Result int `json:"result"`
+	}
+
+	fn := func(_ context.Context, args inputArgs) (outputArgs, error) {
+		return outputArgs{Result: args.A * 2}, nil
+	}
+
+	t.Run("disabled", func(t *testing.T) {
+		fTool := function.NewFunctionTool(
+			fn,
+			function.WithDisableOutputSchemaGen(),
+		)
+		decl := fTool.Declaration()
+		if decl.InputSchema == nil {
+			t.Fatal("expected non-nil InputSchema")
+		}
+		if decl.OutputSchema != nil {
+			t.Fatalf("expected nil OutputSchema, got %#v", decl.OutputSchema)
+		}
+	})
+
+	t.Run("enabled by default", func(t *testing.T) {
+		fTool := function.NewFunctionTool(fn)
+		if fTool.Declaration().OutputSchema == nil {
+			t.Fatal("expected non-nil OutputSchema")
+		}
+	})
+
+	t.Run("custom schema takes precedence", func(t *testing.T) {
+		customOutputSchema := &tool.Schema{Type: "string"}
+		fTool := function.NewFunctionTool(
+			fn,
+			function.WithOutputSchema(customOutputSchema),
+			function.WithDisableOutputSchemaGen(),
+		)
+		if fTool.Declaration().OutputSchema != customOutputSchema {
+			t.Fatal("expected custom OutputSchema")
+		}
+	})
+}
+
 func TestFunctionTool_WithBothCustomSchemas(t *testing.T) {
 	type inputArgs struct {
 		X int `json:"x"`
@@ -925,6 +971,34 @@ func TestStreamableFunctionTool_WithOutputSchema(t *testing.T) {
 	if decl.OutputSchema.Type != "object" {
 		t.Errorf("expected schema type 'object', got %q", decl.OutputSchema.Type)
 	}
+}
+
+func TestStreamableFunctionTool_WithDisableOutputSchemaGen(t *testing.T) {
+	t.Run("disabled", func(t *testing.T) {
+		st := function.NewStreamableFunctionTool[streamTestInput, streamTestOutput](
+			streamableFunc,
+			function.WithDisableOutputSchemaGen(),
+		)
+		decl := st.Declaration()
+		if decl.InputSchema == nil {
+			t.Fatal("expected non-nil InputSchema")
+		}
+		if decl.OutputSchema != nil {
+			t.Fatalf("expected nil OutputSchema, got %#v", decl.OutputSchema)
+		}
+	})
+
+	t.Run("custom schema takes precedence", func(t *testing.T) {
+		customOutputSchema := &tool.Schema{Type: "string"}
+		st := function.NewStreamableFunctionTool[streamTestInput, streamTestOutput](
+			streamableFunc,
+			function.WithOutputSchema(customOutputSchema),
+			function.WithDisableOutputSchemaGen(),
+		)
+		if st.Declaration().OutputSchema != customOutputSchema {
+			t.Fatal("expected custom OutputSchema")
+		}
+	})
 }
 
 func TestStreamableFunctionTool_WithBothCustomSchemas(t *testing.T) {
