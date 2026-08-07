@@ -46,12 +46,6 @@ func validateChunkConfig(chunkSize, overlap int) error {
 	}
 }
 
-// cleanText normalizes encoding and line breaks while preserving source
-// whitespace.
-func cleanText(content string) string {
-	return cleanTextWithWhitespaceTrimming(content, false)
-}
-
 func cleanTextWithWhitespaceTrimming(
 	content string,
 	trimWhitespace bool,
@@ -89,6 +83,110 @@ func isBlankText(content string) bool {
 	return strings.TrimSpace(content) == ""
 }
 
+func attachLeadingWhitespace(
+	pending string,
+	content string,
+	maxSize int,
+) (string, string) {
+	if pending == "" || maxSize <= 0 || isBlankText(content) {
+		return content, ""
+	}
+
+	contentRunes := []rune(content)
+	firstContent := 0
+	for firstContent < len(contentRunes) &&
+		unicode.IsSpace(contentRunes[firstContent]) {
+		firstContent++
+	}
+	if firstContent == len(contentRunes) {
+		return "", ""
+	}
+
+	leading := append([]rune(pending), contentRunes[:firstContent]...)
+	maxLeading := maxSize - 1
+	if len(leading) > maxLeading {
+		leading = leading[len(leading)-maxLeading:]
+	}
+
+	contentCapacity := maxSize - len(leading)
+	contentEnd := min(len(contentRunes), firstContent+contentCapacity)
+	attached := string(leading) + string(contentRunes[firstContent:contentEnd])
+	return attached, string(contentRunes[contentEnd:])
+}
+
+func attachTrailingWhitespace(content string, pending string, maxSize int) string {
+	available := maxSize - encoding.RuneCount(content)
+	if available <= 0 || pending == "" {
+		return content
+	}
+	pendingRunes := []rune(pending)
+	return content + string(pendingRunes[:min(available, len(pendingRunes))])
+}
+
+func coalesceWhitespaceChunks(
+	chunks []string,
+	firstChunkSize int,
+	nextChunkSize int,
+) []string {
+	if nextChunkSize <= 0 {
+		nextChunkSize = firstChunkSize
+	}
+	queue := append([]string(nil), chunks...)
+	result := make([]string, 0, len(chunks))
+	var pending strings.Builder
+
+	for len(queue) > 0 {
+		content := queue[0]
+		queue = queue[1:]
+		if content == "" {
+			continue
+		}
+		if isBlankText(content) {
+			pending.WriteString(content)
+			continue
+		}
+
+		chunkSize := nextChunkSize
+		if len(result) == 0 {
+			chunkSize = firstChunkSize
+		}
+		if encoding.RuneCount(content) > chunkSize {
+			pieces := encoding.SafeSplitBySize(content, chunkSize)
+			queue = append(pieces, queue...)
+			continue
+		}
+
+		if pending.Len() > 0 {
+			attached, remaining := attachLeadingWhitespace(
+				pending.String(),
+				content,
+				chunkSize,
+			)
+			pending.Reset()
+			result = append(result, attached)
+			if remaining != "" {
+				queue = append([]string{remaining}, queue...)
+			}
+			continue
+		}
+		result = append(result, content)
+	}
+
+	if pending.Len() > 0 && len(result) > 0 {
+		last := len(result) - 1
+		chunkSize := nextChunkSize
+		if last == 0 {
+			chunkSize = firstChunkSize
+		}
+		result[last] = attachTrailingWhitespace(
+			result[last],
+			pending.String(),
+			chunkSize,
+		)
+	}
+	return result
+}
+
 // createChunk creates a new document chunk with appropriate metadata.
 func createChunk(originalDoc *document.Document, content string, chunkNumber int) *document.Document {
 	// Create a copy of the original metadata.
@@ -121,23 +219,6 @@ func createChunk(originalDoc *document.Document, content string, chunkNumber int
 	}
 }
 
-func joinWithOverlap(
-	previous string,
-	current string,
-	maxOverlap int,
-	maxSize int,
-	separator string,
-) (string, int) {
-	return joinWithOverlapMode(
-		previous,
-		current,
-		maxOverlap,
-		maxSize,
-		separator,
-		false,
-	)
-}
-
 func joinWithOverlapMode(
 	previous string,
 	current string,
@@ -154,25 +235,6 @@ func joinWithOverlapMode(
 		separator,
 		false,
 		trimWhitespace,
-	)
-}
-
-func joinWithOverlapSeparator(
-	previous string,
-	current string,
-	maxOverlap int,
-	maxSize int,
-	separator string,
-	preserveSeparator bool,
-) (string, int) {
-	return joinWithOverlapSeparatorMode(
-		previous,
-		current,
-		maxOverlap,
-		maxSize,
-		separator,
-		preserveSeparator,
-		false,
 	)
 }
 
@@ -282,18 +344,6 @@ func sourceGapSeparator(gap string, fallback string) string {
 	return " "
 }
 
-// splitTextAtNaturalBoundary splits one prefix from content without exceeding
-// maxSize. It prefers line, sentence, punctuation, and whitespace boundaries,
-// falling back to an exact rune boundary only when the text has no suitable
-// natural boundary.
-func splitTextAtNaturalBoundary(content string, maxSize int) (string, string) {
-	return splitTextAtNaturalBoundaryWithWhitespaceTrimming(
-		content,
-		maxSize,
-		false,
-	)
-}
-
 func splitTextAtNaturalBoundaryWithWhitespaceTrimming(
 	content string,
 	maxSize int,
@@ -316,23 +366,6 @@ func splitTextAtNaturalBoundaryWithWhitespaceTrimming(
 		remaining = strings.TrimSpace(remaining)
 	}
 	return prefix, remaining
-}
-
-// splitTextWithBalancedTail avoids leaving a very small final piece when one
-// logical block needs multiple chunks. It first keeps the splitter's normal
-// boundary choice. Only when that choice would leave less than half a chunk
-// does it move the boundary earlier, without crossing the size budget.
-func splitTextWithBalancedTail(
-	content string,
-	maxSize int,
-	split func(string, int) (string, string),
-) (string, string) {
-	return splitTextWithBalancedTailAndWhitespaceTrimming(
-		content,
-		maxSize,
-		split,
-		false,
-	)
 }
 
 func splitTextWithBalancedTailAndWhitespaceTrimming(
@@ -478,13 +511,6 @@ func safeTextSplitPosition(content []rune, position int) int {
 		return originalPosition
 	}
 	return position
-}
-
-// naturalTextSuffix returns at most maxSize trailing runes. When the exact
-// start would cut through a word, it advances to the next natural boundary.
-// An unbroken token still uses an exact rune suffix so overlap remains useful.
-func naturalTextSuffix(content string, maxSize int) (string, bool) {
-	return naturalTextSuffixWithWhitespaceTrimming(content, maxSize, false)
 }
 
 func naturalTextSuffixWithWhitespaceTrimming(

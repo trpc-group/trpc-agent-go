@@ -112,15 +112,21 @@ func (m *MarkdownChunking) Chunk(doc *document.Document) ([]*document.Document, 
 
 	// Parse Markdown structure, then pack adjacent semantic units.
 	rawChunks := m.splitRecursively(content)
+	if !m.trimWhitespace {
+		rawChunks = m.coalesceWhitespaceChunks(rawChunks)
+	}
 	rawChunks = m.mergeAdjacentChunks(content, rawChunks)
-	chunks := make([]*document.Document, len(rawChunks))
-	for i, chunk := range rawChunks {
-		chunks[i] = m.createMarkdownChunkWithPath(
+	chunks := make([]*document.Document, 0, len(rawChunks))
+	for _, chunk := range rawChunks {
+		if isBlankText(chunk.content) {
+			continue
+		}
+		chunks = append(chunks, m.createMarkdownChunkWithPath(
 			doc,
 			chunk.content,
-			i+1,
+			len(chunks)+1,
 			chunk.headerPath,
-		)
+		))
 	}
 
 	// Apply overlap if specified.
@@ -650,10 +656,6 @@ func findLineContentStartPos(source []byte, lineStart int) int {
 	return pos
 }
 
-func splitMarkdownParagraphs(content string) []string {
-	return splitMarkdownParagraphsWithWhitespaceTrimming(content, false)
-}
-
 type markdownParagraph struct {
 	content   string
 	separator string
@@ -886,10 +888,6 @@ func (m *MarkdownChunking) nextChunkSize(counter *chunkCounter) int {
 	return m.chunkSize
 }
 
-func splitMarkdownText(content string, chunkSize int) (string, string) {
-	return splitTextAtNaturalBoundary(content, chunkSize)
-}
-
 func (m *MarkdownChunking) splitMarkdownText(
 	content string,
 	chunkSize int,
@@ -898,17 +896,6 @@ func (m *MarkdownChunking) splitMarkdownText(
 		content,
 		chunkSize,
 		m.trimWhitespace,
-	)
-}
-
-func splitMarkdownTextWithBalancedTail(
-	content string,
-	chunkSize int,
-) (string, string) {
-	return splitTextWithBalancedTail(
-		content,
-		chunkSize,
-		splitMarkdownText,
 	)
 }
 
@@ -974,6 +961,84 @@ func newMarkdownChunk(content string, headerPath []string) markdownChunk {
 		content:    content,
 		headerPath: append([]string(nil), headerPath...),
 	}
+}
+
+func (m *MarkdownChunking) coalesceWhitespaceChunks(
+	chunks []markdownChunk,
+) []markdownChunk {
+	coreSize := m.chunkSize
+	if m.overlap > 0 {
+		coreSize = m.chunkSize - m.overlap
+	}
+	queue := append([]markdownChunk(nil), chunks...)
+	result := make([]markdownChunk, 0, len(chunks))
+	var pending strings.Builder
+
+	for len(queue) > 0 {
+		chunk := queue[0]
+		queue = queue[1:]
+		if chunk.content == "" {
+			continue
+		}
+		if isBlankText(chunk.content) {
+			pending.WriteString(chunk.content)
+			continue
+		}
+
+		chunkSize := coreSize
+		if len(result) == 0 {
+			chunkSize = m.chunkSize
+		}
+		if encoding.RuneCount(chunk.content) > chunkSize {
+			pieces := encoding.SafeSplitBySize(chunk.content, chunkSize)
+			replacement := make([]markdownChunk, 0, len(pieces)+len(queue))
+			for _, piece := range pieces {
+				replacement = append(
+					replacement,
+					newMarkdownChunk(piece, chunk.headerPath),
+				)
+			}
+			queue = append(replacement, queue...)
+			continue
+		}
+
+		if pending.Len() > 0 {
+			attached, remaining := attachLeadingWhitespace(
+				pending.String(),
+				chunk.content,
+				chunkSize,
+			)
+			pending.Reset()
+			result = append(
+				result,
+				newMarkdownChunk(attached, chunk.headerPath),
+			)
+			if remaining != "" {
+				queue = append(
+					[]markdownChunk{
+						newMarkdownChunk(remaining, chunk.headerPath),
+					},
+					queue...,
+				)
+			}
+			continue
+		}
+		result = append(result, chunk)
+	}
+
+	if pending.Len() > 0 && len(result) > 0 {
+		last := len(result) - 1
+		chunkSize := coreSize
+		if last == 0 {
+			chunkSize = m.chunkSize
+		}
+		result[last].content = attachTrailingWhitespace(
+			result[last].content,
+			pending.String(),
+			chunkSize,
+		)
+	}
+	return result
 }
 
 // mergeAdjacentChunks treats headings as preferred split points rather than

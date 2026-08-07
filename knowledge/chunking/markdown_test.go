@@ -272,6 +272,7 @@ func TestMarkdownChunking_DoesNotEmitStandaloneHeading(t *testing.T) {
 }
 
 func TestSplitMarkdownText_PrefersNaturalBoundary(t *testing.T) {
+	chunker := NewMarkdownChunking()
 	tests := []struct {
 		name          string
 		content       string
@@ -318,7 +319,10 @@ func TestSplitMarkdownText_PrefersNaturalBoundary(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			prefix, remaining := splitMarkdownText(tt.content, tt.chunkSize)
+			prefix, remaining := chunker.splitMarkdownText(
+				tt.content,
+				tt.chunkSize,
+			)
 			require.Equal(t, tt.wantPrefix, prefix)
 			require.Equal(t, tt.wantRemaining, remaining)
 		})
@@ -333,7 +337,8 @@ func TestSplitMarkdownTextWithBalancedTail(t *testing.T) {
 		strings.Repeat("d", 55),
 	}, "\n")
 
-	prefix, remaining := splitMarkdownTextWithBalancedTail(content, 240)
+	prefix, remaining := NewMarkdownChunking().
+		splitMarkdownTextWithBalancedTail(content, 240)
 
 	require.Equal(t, strings.Join([]string{
 		strings.Repeat("a", 75),
@@ -350,7 +355,8 @@ func TestSplitMarkdownTextWithBalancedTail(t *testing.T) {
 func TestSplitMarkdownTextWithBalancedTailPrefersNearbyLineBoundary(t *testing.T) {
 	content := strings.Repeat("a", 128) + "|\n" + strings.Repeat("b", 118)
 
-	prefix, remaining := splitMarkdownTextWithBalancedTail(content, 240)
+	prefix, remaining := NewMarkdownChunking().
+		splitMarkdownTextWithBalancedTail(content, 240)
 
 	require.Equal(t, strings.Repeat("a", 128)+"|\n", prefix)
 	require.Equal(t, strings.Repeat("b", 118), remaining)
@@ -397,7 +403,10 @@ func TestMarkdownChunkingBalancesLongBlockAfterHeading(t *testing.T) {
 func TestSplitMarkdownParagraphsKeepsFencedCodeTogether(t *testing.T) {
 	content := "before\n\n```python\ndef f():\n\treturn 1\n\nsecond()\n```\n\nafter"
 
-	paragraphs := splitMarkdownParagraphs(content)
+	paragraphs := splitMarkdownParagraphsWithWhitespaceTrimming(
+		content,
+		false,
+	)
 
 	require.Equal(t, []string{
 		"before",

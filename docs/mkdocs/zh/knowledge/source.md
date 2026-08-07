@@ -264,12 +264,15 @@ chunk 的头尾分别追加一段重叠内容。
 FixedSizeChunking、RecursiveChunking 和 MarkdownChunking 默认保留源文本
 每行首尾的空格与 Tab，避免破坏 Python、YAML、Makefile、Markdown 嵌套结构
 以及 fenced code 的缩进。策略仍会统一文本编码和 `CRLF`/`CR` 换行，并拒绝
-只包含空白字符的文档。
+只包含空白字符的文档。所有输出 chunk 都至少包含一个非空白字符，并且在计入
+配置的 overlap 后不超过 `chunkSize`。纯空白片段会在当前预算允许时附着到相邻
+有效内容；如果首尾空白或超长空白无法在不产生纯空白、超预算 chunk 的前提下
+附着，则会被丢弃。
 
-相较于逐行裁剪空白的旧版本，这项默认行为会改变 chunk 正文、边界、metadata
-大小和 embedding 输入。升级后应清理持久化向量数据并重新导入，不能混用两种
-行为生成的索引。如果应用必须保留旧的有损规范化结果，可使用对应的兼容选项
-构造自定义策略：
+这是项目明确采用的默认行为变更。相较于逐行裁剪空白的旧版本，它会改变 chunk
+正文、边界、metadata 大小和 embedding 输入。升级后应清理持久化向量数据并
+重新导入，不能混用两种行为生成的索引。对于必须保留旧有损规范化结果的应用，
+必要的 opt-in 兼容模式仍然保留，可使用对应选项构造自定义策略：
 
 ```go
 fixed := chunking.NewFixedSizeChunking(

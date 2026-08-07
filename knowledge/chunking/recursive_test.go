@@ -337,11 +337,11 @@ func TestRecursiveChunking_PreservesWhitespaceBoundaryFragments(t *testing.T) {
 		WithRecursiveSeparators([]string{" "}),
 	).Chunk(doc)
 	require.NoError(t, err)
-	require.Len(t, chunks, 3)
-	require.Equal(t, "   ", chunks[0].Content)
-	require.Equal(t, "aaa ", chunks[1].Content)
-	require.Equal(t, "  ", chunks[2].Content)
+	require.Len(t, chunks, 2)
+	require.Equal(t, "   a", chunks[0].Content)
+	require.Equal(t, "aa  ", chunks[1].Content)
 	for _, chunk := range chunks {
+		require.NotEmpty(t, strings.TrimSpace(chunk.Content))
 		require.LessOrEqual(t, utf8.RuneCountInString(chunk.Content), chunkSize)
 	}
 

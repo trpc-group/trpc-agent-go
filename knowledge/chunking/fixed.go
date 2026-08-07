@@ -128,11 +128,25 @@ func (f *FixedSizeChunking) Chunk(doc *document.Document) ([]*document.Document,
 			true,
 			f.trimWhitespace,
 		)
+		if !f.trimWhitespace {
+			splitChunks = coalesceWhitespaceChunks(
+				splitChunks,
+				f.chunkSize,
+				coreSize,
+			)
+		}
 		textChunks = make([]fixedTextChunk, 0, len(splitChunks))
 		for _, chunk := range splitChunks {
 			textChunks = append(textChunks, fixedTextChunk{content: chunk})
 		}
 	}
+	semanticChunks := textChunks[:0]
+	for _, textChunk := range textChunks {
+		if !isBlankText(textChunk.content) {
+			semanticChunks = append(semanticChunks, textChunk)
+		}
+	}
+	textChunks = semanticChunks
 	chunks := make([]*document.Document, 0, len(textChunks))
 	rawContents := make([]string, len(textChunks))
 	for i, textChunk := range textChunks {
@@ -209,7 +223,7 @@ func splitFixedLines(
 			hasCurrent = false
 			return
 		}
-		if trimWhitespace && strings.TrimSpace(current) == "" {
+		if strings.TrimSpace(current) == "" {
 			current = ""
 			hasCurrent = false
 			return

@@ -228,13 +228,19 @@ FixedSizeChunking, RecursiveChunking, and MarkdownChunking preserve leading and
 trailing spaces and tabs in source lines by default. This keeps indentation in
 Python, YAML, Makefiles, nested Markdown, and fenced code intact. The strategies
 still normalize text encoding and `CRLF`/`CR` line endings, and reject documents
-that contain only whitespace.
+that contain only whitespace. Every emitted chunk contains at least one
+non-whitespace character and stays within `chunkSize`, including configured
+overlap. Whitespace-only fragments are attached to adjacent semantic content
+when the active chunk budget permits. Leading, trailing, or unusually long
+whitespace that cannot be attached without producing an empty or oversized
+chunk is discarded.
 
-This default changes chunk content, boundaries, metadata sizes, and embedding
-inputs compared with releases that trimmed every line. Clear and re-ingest
-persistent vector data after upgrading; do not mix chunks produced by the two
-behaviors. Applications that must retain the previous lossy normalization can
-construct a custom strategy with the corresponding compatibility option:
+This is an intentional default behavior change. It changes chunk content,
+boundaries, metadata sizes, and embedding inputs compared with releases that
+trimmed every line. Clear and re-ingest persistent vector data after upgrading;
+do not mix chunks produced by the two behaviors. The opt-in compatibility mode
+remains available for applications that must retain the previous lossy
+normalization:
 
 ```go
 fixed := chunking.NewFixedSizeChunking(

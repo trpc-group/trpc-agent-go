@@ -108,9 +108,19 @@ func (r *RecursiveChunking) Chunk(doc *document.Document) ([]*document.Document,
 	}
 	fragments := r.recursiveSplit(content, r.separators, coreSize)
 	textChunks := r.mergeFragments(fragments, r.chunkSize, coreSize)
+	if !r.trimWhitespace {
+		textChunks = coalesceWhitespaceChunks(
+			textChunks,
+			r.chunkSize,
+			coreSize,
+		)
+	}
 	chunks := make([]*document.Document, 0, len(textChunks))
-	for i, chunkText := range textChunks {
-		chunks = append(chunks, createChunk(doc, chunkText, i+1))
+	for _, chunkText := range textChunks {
+		if isBlankText(chunkText) {
+			continue
+		}
+		chunks = append(chunks, createChunk(doc, chunkText, len(chunks)+1))
 	}
 
 	// Apply overlap if specified.
