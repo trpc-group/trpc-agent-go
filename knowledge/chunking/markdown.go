@@ -1003,6 +1003,25 @@ func (m *MarkdownChunking) coalesceWhitespaceChunks(
 		}
 
 		if pending.Len() > 0 {
+			if len(result) > 0 {
+				previous := len(result) - 1
+				previousSize := coreSize
+				if previous == 0 {
+					previousSize = m.chunkSize
+				}
+				updatedPrevious, remainingPending, remainingContent :=
+					preserveLeadingWhitespaceWithPrevious(
+						result[previous].content,
+						pending.String(),
+						chunk.content,
+						previousSize,
+						chunkSize,
+					)
+				result[previous].content = updatedPrevious
+				pending.Reset()
+				pending.WriteString(remainingPending)
+				chunk.content = remainingContent
+			}
 			attached, remaining := attachLeadingWhitespace(
 				pending.String(),
 				chunk.content,

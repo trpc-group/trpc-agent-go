@@ -119,6 +119,13 @@ func (f *FixedSizeChunking) Chunk(doc *document.Document) ([]*document.Document,
 			split,
 			f.trimWhitespace,
 		)
+		if !f.trimWhitespace {
+			textChunks = coalesceFixedWhitespaceChunks(
+				textChunks,
+				f.chunkSize,
+				coreSize,
+			)
+		}
 	} else {
 		splitChunks := splitFixedText(
 			content,
@@ -193,8 +200,9 @@ func (f *FixedSizeChunking) Chunk(doc *document.Document) ([]*document.Document,
 }
 
 type fixedTextChunk struct {
-	content       string
-	startsNewLine bool
+	content         string
+	startsNewLine   bool
+	separatorBefore string
 }
 
 func splitFixedLines(
@@ -209,6 +217,7 @@ func splitFixedLines(
 	}
 	var chunks []fixedTextChunk
 	var current string
+	var currentSeparator string
 	hasCurrent := false
 
 	chunkSize := func() int {
@@ -218,25 +227,33 @@ func splitFixedLines(
 		return nextChunkSize
 	}
 	flush := func() {
-		if !hasCurrent || current == "" {
+		if !hasCurrent {
 			current = ""
+			currentSeparator = ""
 			hasCurrent = false
 			return
 		}
-		if strings.TrimSpace(current) == "" {
+		if trimWhitespace && strings.TrimSpace(current) == "" {
 			current = ""
+			currentSeparator = ""
 			hasCurrent = false
 			return
 		}
 		chunks = append(chunks, fixedTextChunk{
-			content:       current,
-			startsNewLine: true,
+			content:         current,
+			startsNewLine:   true,
+			separatorBefore: currentSeparator,
 		})
 		current = ""
+		currentSeparator = ""
 		hasCurrent = false
 	}
 
-	for _, line := range strings.Split(content, "\n") {
+	for lineIndex, line := range strings.Split(content, "\n") {
+		lineSeparator := ""
+		if lineIndex > 0 {
+			lineSeparator = "\n"
+		}
 		if hasCurrent {
 			candidate := current + "\n" + line
 			if encoding.RuneCount(candidate) <= chunkSize() {
@@ -248,6 +265,7 @@ func splitFixedLines(
 
 		if encoding.RuneCount(line) <= chunkSize() {
 			current = line
+			currentSeparator = lineSeparator
 			hasCurrent = true
 			continue
 		}
@@ -261,14 +279,122 @@ func splitFixedLines(
 			trimWhitespace,
 		)
 		for i, piece := range pieces {
+			separatorBefore := ""
+			if i == 0 {
+				separatorBefore = lineSeparator
+			}
 			chunks = append(chunks, fixedTextChunk{
-				content:       piece,
-				startsNewLine: i == 0,
+				content:         piece,
+				startsNewLine:   i == 0,
+				separatorBefore: separatorBefore,
 			})
 		}
 	}
 	flush()
 	return chunks
+}
+
+func coalesceFixedWhitespaceChunks(
+	chunks []fixedTextChunk,
+	firstChunkSize int,
+	nextChunkSize int,
+) []fixedTextChunk {
+	if nextChunkSize <= 0 {
+		nextChunkSize = firstChunkSize
+	}
+	queue := append([]fixedTextChunk(nil), chunks...)
+	result := make([]fixedTextChunk, 0, len(chunks))
+	var pending strings.Builder
+	pendingActive := false
+
+	for len(queue) > 0 {
+		chunk := queue[0]
+		queue = queue[1:]
+		if isBlankText(chunk.content) {
+			pending.WriteString(chunk.separatorBefore)
+			pending.WriteString(chunk.content)
+			pendingActive = true
+			continue
+		}
+
+		chunkSize := nextChunkSize
+		if len(result) == 0 {
+			chunkSize = firstChunkSize
+		}
+		if encoding.RuneCount(chunk.content) > chunkSize {
+			pieces := encoding.SafeSplitBySize(chunk.content, chunkSize)
+			replacement := make([]fixedTextChunk, 0, len(pieces)+len(queue))
+			for i, piece := range pieces {
+				separatorBefore := ""
+				startsNewLine := false
+				if i == 0 {
+					separatorBefore = chunk.separatorBefore
+					startsNewLine = chunk.startsNewLine
+				}
+				replacement = append(replacement, fixedTextChunk{
+					content:         piece,
+					startsNewLine:   startsNewLine,
+					separatorBefore: separatorBefore,
+				})
+			}
+			queue = append(replacement, queue...)
+			continue
+		}
+
+		if pendingActive {
+			pending.WriteString(chunk.separatorBefore)
+			content := chunk.content
+			if len(result) > 0 {
+				previous := len(result) - 1
+				previousSize := nextChunkSize
+				if previous == 0 {
+					previousSize = firstChunkSize
+				}
+				updatedPrevious, remainingPending, remainingContent :=
+					preserveLeadingWhitespaceWithPrevious(
+						result[previous].content,
+						pending.String(),
+						content,
+						previousSize,
+						chunkSize,
+					)
+				result[previous].content = updatedPrevious
+				pending.Reset()
+				pending.WriteString(remainingPending)
+				content = remainingContent
+			}
+			attached, remaining := attachLeadingWhitespace(
+				pending.String(),
+				content,
+				chunkSize,
+			)
+			pending.Reset()
+			pendingActive = false
+			result = append(result, fixedTextChunk{
+				content:       attached,
+				startsNewLine: len(result) == 0 && chunk.startsNewLine,
+			})
+			if remaining != "" {
+				queue = append([]fixedTextChunk{{content: remaining}}, queue...)
+			}
+			continue
+		}
+		result = append(result, chunk)
+	}
+
+	if pendingActive && len(result) > 0 {
+		last := len(result) - 1
+		chunkSize := nextChunkSize
+		if last == 0 {
+			chunkSize = firstChunkSize
+		}
+		result[last].content = attachTrailingWhitespace(
+			result[last].content,
+			pending.String(),
+			chunkSize,
+		)
+	}
+	return result
 }
 
 func splitFixedText(

@@ -425,11 +425,18 @@ func TestCoalesceWhitespaceChunks(t *testing.T) {
 			expected:       []string{"   界", "ab  "},
 		},
 		{
+			name:           "preceding capacity avoids loss",
+			chunks:         []string{"A", "   ", "B"},
+			firstChunkSize: 4,
+			nextChunkSize:  3,
+			expected:       []string{"A ", "  B"},
+		},
+		{
 			name:           "long internal whitespace",
 			chunks:         []string{"A", "      ", "BC"},
 			firstChunkSize: 4,
 			nextChunkSize:  3,
-			expected:       []string{"A", "  B", "C"},
+			expected:       []string{"A   ", "  B", "C"},
 		},
 		{
 			name:           "one rune budget",

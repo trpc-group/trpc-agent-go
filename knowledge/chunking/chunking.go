@@ -123,6 +123,35 @@ func attachTrailingWhitespace(content string, pending string, maxSize int) strin
 	return content + string(pendingRunes[:min(available, len(pendingRunes))])
 }
 
+func preserveLeadingWhitespaceWithPrevious(
+	previous string,
+	pending string,
+	content string,
+	previousMaxSize int,
+	currentMaxSize int,
+) (string, string, string) {
+	previousCapacity := previousMaxSize - encoding.RuneCount(previous)
+	if previousCapacity <= 0 || pending == "" || currentMaxSize <= 0 {
+		return previous, pending, content
+	}
+
+	contentRunes := []rune(content)
+	firstContent := 0
+	for firstContent < len(contentRunes) &&
+		unicode.IsSpace(contentRunes[firstContent]) {
+		firstContent++
+	}
+	leading := append([]rune(pending), contentRunes[:firstContent]...)
+	overflow := len(leading) - (currentMaxSize - 1)
+	if overflow <= 0 {
+		return previous, pending, content
+	}
+
+	preserved := min(previousCapacity, overflow)
+	previous += string(leading[:preserved])
+	return previous, string(leading[preserved:]), string(contentRunes[firstContent:])
+}
+
 func coalesceWhitespaceChunks(
 	chunks []string,
 	firstChunkSize int,
@@ -157,6 +186,25 @@ func coalesceWhitespaceChunks(
 		}
 
 		if pending.Len() > 0 {
+			if len(result) > 0 {
+				previous := len(result) - 1
+				previousSize := nextChunkSize
+				if previous == 0 {
+					previousSize = firstChunkSize
+				}
+				updatedPrevious, remainingPending, remainingContent :=
+					preserveLeadingWhitespaceWithPrevious(
+						result[previous],
+						pending.String(),
+						content,
+						previousSize,
+						chunkSize,
+					)
+				result[previous] = updatedPrevious
+				pending.Reset()
+				pending.WriteString(remainingPending)
+				content = remainingContent
+			}
 			attached, remaining := attachLeadingWhitespace(
 				pending.String(),
 				content,
