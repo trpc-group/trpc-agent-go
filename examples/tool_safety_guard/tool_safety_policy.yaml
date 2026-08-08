@@ -1,0 +1,38 @@
+allowed_commands:
+  - go
+  - rm
+  - cat
+  - curl
+  - bash
+  - wc
+  - sleep
+  - yes
+  - echo
+denied_commands:
+  - dd
+  - mkfs
+  - sudo
+denied_paths:
+  - /
+  - /boot
+  - /dev
+  - /etc
+  - /proc
+  - /root
+  - /sys
+  - ~/.ssh
+  - .ssh
+  - .env
+  - credentials
+  - secrets
+network_allowlist:
+  - github.com
+env_allowlist:
+  - LANG
+  - TMPDIR
+review_commands:
+  - go install
+max_timeout_seconds: 30
+max_output_bytes: 2048
+parse_error_action: ask
+pipeline_action: needs_human_review
