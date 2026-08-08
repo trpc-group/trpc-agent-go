@@ -1,0 +1,110 @@
+{
+  "evalSetId": "train",
+  "name": "train",
+  "evalCases": [
+    {
+      "evalId": "train_01_response_completeness",
+      "conversation": [
+        {
+          "invocationId": "train_01_response_completeness-1",
+          "userContent": {
+            "role": "user",
+            "content": "帮我查一下订单 ORD-1001 的情况"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "订单查询结果：订单 ORD-1001 当前状态为已发货，订单金额 299.00 元，预计送达时间 2026-07-08。"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-app",
+        "userId": "regression-demo-user"
+      }
+    },
+    {
+      "evalId": "train_02_wrong_tool_choice",
+      "conversation": [
+        {
+          "invocationId": "train_02_wrong_tool_choice-1",
+          "userContent": {
+            "role": "user",
+            "content": "我的订单 ORD-1002 现在到哪一步了？帮我查下状态"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "订单查询结果：订单 ORD-1002 当前状态为待发货，订单金额 58.50 元，预计送达时间 2026-07-10。"
+          },
+          "tools": [
+            {
+              "name": "query_order",
+              "arguments": {
+                "order_id": "ORD-1002"
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-app",
+        "userId": "regression-demo-user"
+      }
+    },
+    {
+      "evalId": "train_03_stable_tool_pass",
+      "conversation": [
+        {
+          "invocationId": "train_03_stable_tool_pass-1",
+          "userContent": {
+            "role": "user",
+            "content": "订单 ORD-1003 麻烦查一下"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "订单查询结果：订单 ORD-1003 当前状态为已签收，订单金额 1299.00 元，预计送达时间 2026-07-03。"
+          },
+          "tools": [
+            {
+              "name": "query_order",
+              "arguments": {
+                "order_id": "ORD-1003"
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-app",
+        "userId": "regression-demo-user"
+      }
+    },
+    {
+      "evalId": "train_04_wrong_tool_argument",
+      "conversation": [
+        {
+          "invocationId": "train_04_wrong_tool_argument-1",
+          "userContent": {
+            "role": "user",
+            "content": "订单号是 ORD-1007，帮我查下订单进度"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "订单查询结果：订单 ORD-1007 当前状态为待发货，订单金额 129.00 元，预计送达时间 2026-07-14。"
+          },
+          "tools": [
+            {
+              "name": "query_order",
+              "arguments": {
+                "order_id": "ORD-1007"
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-app",
+        "userId": "regression-demo-user"
+      }
+    }
+  ]
+}
