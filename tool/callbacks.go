@@ -12,8 +12,11 @@ package tool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"runtime/debug"
+	"sync"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
 )
@@ -25,6 +28,7 @@ const (
 
 	beforeToolCallbackPanic         = "before tool callback panic"
 	afterToolCallbackPanic          = "after tool callback panic"
+	afterToolResultFinalizerPanic   = "after tool result finalizer panic"
 	toolResultMessagesCallbackPanic = "tool result messages callback panic"
 )
 
@@ -122,6 +126,402 @@ type AfterToolResult struct {
 	SkipSummarization bool
 }
 
+// AfterToolResultFinalizer transforms the final CustomResult returned by one
+// after-tool callback chain.
+type AfterToolResultFinalizer func(
+	ctx context.Context,
+	args *AfterToolArgs,
+	result *AfterToolResult,
+) (*AfterToolResult, error)
+
+const (
+	maxAfterToolResultFinalizers           = 1024
+	maxAfterToolResultFinalizerCalls       = 1024
+	afterToolResultFinalizerReservationTTL = 24 * time.Hour
+	afterToolResultFinalizerCompletionTTL  = time.Minute
+)
+
+type afterToolResultFinalizerEntry struct {
+	token     uint64
+	finalizer AfterToolResultFinalizer
+}
+
+type afterToolResultFinalizerCallKey struct {
+	toolCallID  string
+	declaration *Declaration
+}
+
+type afterToolResultFinalizerCallBinding struct {
+	entry      afterToolResultFinalizerEntry
+	generation uint64
+	timerEpoch uint64
+	completed  bool
+	timer      *time.Timer
+}
+
+var afterToolResultFinalizers = struct {
+	sync.Mutex
+	byDeclaration map[*Declaration]afterToolResultFinalizerEntry
+	byCall        map[afterToolResultFinalizerCallKey][]afterToolResultFinalizerCallBinding
+	callsByToken  map[uint64]map[afterToolResultFinalizerCallKey]struct{}
+	next          uint64
+	nextCall      uint64
+	nextTimer     uint64
+	callCount     int
+}{
+	byDeclaration: make(map[*Declaration]afterToolResultFinalizerEntry),
+	byCall:        make(map[afterToolResultFinalizerCallKey][]afterToolResultFinalizerCallBinding),
+	callsByToken:  make(map[uint64]map[afterToolResultFinalizerCallKey]struct{}),
+}
+
+// RegisterAfterToolResultFinalizer associates a finalizer with one tool
+// declaration by pointer identity. Declarations with equal fields or names are
+// distinct keys. The process-global registration set is concurrency-safe and
+// bounded.
+//
+// Registration fails when declaration already has a finalizer or the registry
+// is full. The returned cleanup removes the declaration and every pending call
+// binding created through BindAfterToolResultFinalizer.
+func RegisterAfterToolResultFinalizer(
+	declaration *Declaration,
+	finalizer AfterToolResultFinalizer,
+) (cleanup func(), err error) {
+	if declaration == nil || finalizer == nil {
+		return nil, errors.New(
+			"after-tool result finalizer declaration and function are required",
+		)
+	}
+	afterToolResultFinalizers.Lock()
+	defer afterToolResultFinalizers.Unlock()
+	if _, exists :=
+		afterToolResultFinalizers.byDeclaration[declaration]; exists {
+		return nil, errors.New(
+			"after-tool result finalizer is already registered for declaration",
+		)
+	}
+	if len(afterToolResultFinalizers.byDeclaration) >=
+		maxAfterToolResultFinalizers {
+		return nil, errors.New(
+			"after-tool result finalizer registry is full",
+		)
+	}
+	afterToolResultFinalizers.next++
+	entry := afterToolResultFinalizerEntry{
+		token:     afterToolResultFinalizers.next,
+		finalizer: finalizer,
+	}
+	afterToolResultFinalizers.byDeclaration[declaration] = entry
+	afterToolResultFinalizers.callsByToken[entry.token] =
+		make(map[afterToolResultFinalizerCallKey]struct{})
+	return func() {
+		afterToolResultFinalizers.Lock()
+		defer afterToolResultFinalizers.Unlock()
+		if current, exists :=
+			afterToolResultFinalizers.byDeclaration[declaration]; exists && current.token == entry.token {
+			delete(
+				afterToolResultFinalizers.byDeclaration,
+				declaration,
+			)
+		}
+		for key := range afterToolResultFinalizers.callsByToken[entry.token] {
+			removeAfterToolResultFinalizerCallLocked(
+				key,
+				entry.token,
+			)
+		}
+		delete(afterToolResultFinalizers.callsByToken, entry.token)
+	}, nil
+}
+
+type afterToolResultFinalizerContextKey struct{}
+
+type afterToolResultFinalizerContextValue struct {
+	toolCallID  string
+	declaration *Declaration
+	finalizer   AfterToolResultFinalizer
+}
+
+func afterToolResultFinalizerFor(
+	ctx context.Context,
+	args *AfterToolArgs,
+) (AfterToolResultFinalizer, bool) {
+	if args == nil || args.Declaration == nil {
+		return nil, false
+	}
+	if carried, ok := ctx.Value(
+		afterToolResultFinalizerContextKey{},
+	).(afterToolResultFinalizerContextValue); ok &&
+		carried.toolCallID == args.ToolCallID &&
+		carried.declaration == args.Declaration &&
+		carried.finalizer != nil {
+		return carried.finalizer, true
+	}
+	afterToolResultFinalizers.Lock()
+	defer afterToolResultFinalizers.Unlock()
+	key := afterToolResultFinalizerCallKey{
+		toolCallID:  args.ToolCallID,
+		declaration: args.Declaration,
+	}
+	if bindings := afterToolResultFinalizers.byCall[key]; len(bindings) > 0 {
+		index := completedAfterToolResultFinalizerCallBinding(
+			bindings,
+		)
+		if index >= 0 {
+			binding := bindings[index]
+			removeAfterToolResultFinalizerCallBindingLocked(
+				key,
+				binding.entry.token,
+				binding.generation,
+			)
+			return binding.entry.finalizer, true
+		}
+	}
+	entry, ok :=
+		afterToolResultFinalizers.byDeclaration[args.Declaration]
+	return entry.finalizer, ok
+}
+
+// BindAfterToolResultFinalizer reserves source's finalizer for one tool call
+// after all permission checks have allowed execution. The returned completion
+// function must be called after that execution attempt finishes; it starts the
+// expiry window for paths that do not run any after-tool callback. A retry may
+// bind the same source, target, and tool call id again, which refreshes the
+// reservation.
+//
+// A reservation is invisible to afterToolResultFinalizerFor until complete is
+// called. An abandoned reservation expires after a longer backstop TTL; complete
+// replaces that timer with the shorter post-execution TTL.
+//
+// The first after-tool callback chain consumes the binding and carries the
+// finalizer in its returned context, so later plugin or local callback chains
+// for the same call remain protected. Pending call bindings are process-global,
+// concurrency-safe, and bounded. Capacity exhaustion fails closed rather than
+// evicting a call whose callback may not have run yet.
+func BindAfterToolResultFinalizer(
+	source *Declaration,
+	target *Declaration,
+	toolCallID string,
+) (complete func(), err error) {
+	if source == nil || target == nil || toolCallID == "" {
+		return nil, errors.New(
+			"after-tool result finalizer declarations and tool call id are required",
+		)
+	}
+	afterToolResultFinalizers.Lock()
+	defer afterToolResultFinalizers.Unlock()
+	entry, ok := afterToolResultFinalizers.byDeclaration[source]
+	if !ok {
+		return nil, errors.New(
+			"source declaration has no after-tool result finalizer",
+		)
+	}
+	key := afterToolResultFinalizerCallKey{
+		toolCallID:  toolCallID,
+		declaration: target,
+	}
+	bindings := afterToolResultFinalizers.byCall[key]
+	if len(bindings) > 0 {
+		if bindings[0].entry.token != entry.token {
+			return nil, errors.New(
+				"tool call has a different after-tool result finalizer",
+			)
+		}
+	}
+	if afterToolResultFinalizers.callCount >=
+		maxAfterToolResultFinalizerCalls {
+		return nil, errors.New(
+			"after-tool result finalizer call registry is full",
+		)
+	}
+	afterToolResultFinalizers.nextCall++
+	generation := afterToolResultFinalizers.nextCall
+	afterToolResultFinalizers.nextTimer++
+	timerEpoch := afterToolResultFinalizers.nextTimer
+	binding := afterToolResultFinalizerCallBinding{
+		entry:      entry,
+		generation: generation,
+		timerEpoch: timerEpoch,
+	}
+	binding.timer = newAfterToolResultFinalizerCallTimer(
+		key,
+		entry.token,
+		generation,
+		timerEpoch,
+		afterToolResultFinalizerReservationTTL,
+	)
+	afterToolResultFinalizers.byCall[key] = append(
+		bindings,
+		binding,
+	)
+	afterToolResultFinalizers.callCount++
+	afterToolResultFinalizers.callsByToken[entry.token][key] =
+		struct{}{}
+	return afterToolResultFinalizerCompletion(
+		key,
+		entry.token,
+		generation,
+	), nil
+}
+
+func afterToolResultFinalizerCompletion(
+	key afterToolResultFinalizerCallKey,
+	token uint64,
+	generation uint64,
+) func() {
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			afterToolResultFinalizers.Lock()
+			defer afterToolResultFinalizers.Unlock()
+			index := afterToolResultFinalizerCallBindingIndex(
+				afterToolResultFinalizers.byCall[key],
+				token,
+				generation,
+			)
+			if index < 0 {
+				return
+			}
+			bindings := afterToolResultFinalizers.byCall[key]
+			if bindings[index].timer != nil {
+				bindings[index].timer.Stop()
+			}
+			afterToolResultFinalizers.nextTimer++
+			timerEpoch := afterToolResultFinalizers.nextTimer
+			bindings[index].completed = true
+			bindings[index].timerEpoch = timerEpoch
+			bindings[index].timer =
+				newAfterToolResultFinalizerCallTimer(
+					key,
+					token,
+					generation,
+					timerEpoch,
+					afterToolResultFinalizerCompletionTTL,
+				)
+			afterToolResultFinalizers.byCall[key] = bindings
+		})
+	}
+}
+
+func newAfterToolResultFinalizerCallTimer(
+	key afterToolResultFinalizerCallKey,
+	token uint64,
+	generation uint64,
+	timerEpoch uint64,
+	ttl time.Duration,
+) *time.Timer {
+	return time.AfterFunc(
+		ttl,
+		func() {
+			afterToolResultFinalizers.Lock()
+			defer afterToolResultFinalizers.Unlock()
+			expireAfterToolResultFinalizerCallBindingLocked(
+				key,
+				token,
+				generation,
+				timerEpoch,
+			)
+		},
+	)
+}
+
+func expireAfterToolResultFinalizerCallBindingLocked(
+	key afterToolResultFinalizerCallKey,
+	token uint64,
+	generation uint64,
+	timerEpoch uint64,
+) {
+	bindings := afterToolResultFinalizers.byCall[key]
+	index := afterToolResultFinalizerCallBindingIndex(
+		bindings,
+		token,
+		generation,
+	)
+	if index < 0 || bindings[index].timerEpoch != timerEpoch {
+		return
+	}
+	removeAfterToolResultFinalizerCallBindingLocked(
+		key,
+		token,
+		generation,
+	)
+}
+
+func removeAfterToolResultFinalizerCallLocked(
+	key afterToolResultFinalizerCallKey,
+	token uint64,
+) {
+	bindings := afterToolResultFinalizers.byCall[key]
+	kept := bindings[:0]
+	for _, binding := range bindings {
+		if binding.entry.token != token {
+			kept = append(kept, binding)
+			continue
+		}
+		if binding.timer != nil {
+			binding.timer.Stop()
+		}
+		afterToolResultFinalizers.callCount--
+	}
+	if len(kept) == 0 {
+		delete(afterToolResultFinalizers.byCall, key)
+		delete(afterToolResultFinalizers.callsByToken[token], key)
+		return
+	}
+	afterToolResultFinalizers.byCall[key] = kept
+}
+
+func removeAfterToolResultFinalizerCallBindingLocked(
+	key afterToolResultFinalizerCallKey,
+	token uint64,
+	generation uint64,
+) {
+	bindings := afterToolResultFinalizers.byCall[key]
+	index := afterToolResultFinalizerCallBindingIndex(
+		bindings,
+		token,
+		generation,
+	)
+	if index < 0 {
+		return
+	}
+	if bindings[index].timer != nil {
+		bindings[index].timer.Stop()
+	}
+	bindings = append(bindings[:index], bindings[index+1:]...)
+	afterToolResultFinalizers.callCount--
+	if len(bindings) == 0 {
+		delete(afterToolResultFinalizers.byCall, key)
+		delete(afterToolResultFinalizers.callsByToken[token], key)
+		return
+	}
+	afterToolResultFinalizers.byCall[key] = bindings
+}
+
+func afterToolResultFinalizerCallBindingIndex(
+	bindings []afterToolResultFinalizerCallBinding,
+	token uint64,
+	generation uint64,
+) int {
+	for i, binding := range bindings {
+		if binding.entry.token == token &&
+			binding.generation == generation {
+			return i
+		}
+	}
+	return -1
+}
+
+func completedAfterToolResultFinalizerCallBinding(
+	bindings []afterToolResultFinalizerCallBinding,
+) int {
+	for i := len(bindings) - 1; i >= 0; i-- {
+		if bindings[i].completed {
+			return i
+		}
+	}
+	return -1
+}
+
 // AfterToolCallbackStructured is called after a tool is executed.
 // Returns (result, error).
 // - result: contains optional custom result and context for subsequent operations.
@@ -136,7 +536,9 @@ type AfterToolCallbackStructured = func(
 	args *AfterToolArgs,
 ) (*AfterToolResult, error)
 
-// ToolResultMessagesInput contains all parameters for generating messages from a tool result.
+// ToolResultMessagesInput contains all parameters for generating messages from
+// a tool result. An input is single-use and must not be shared across
+// goroutines.
 type ToolResultMessagesInput struct {
 	// ToolName is the name of the tool.
 	ToolName string
@@ -144,7 +546,10 @@ type ToolResultMessagesInput struct {
 	Declaration *Declaration
 	// Arguments is the final tool arguments in JSON bytes (after before-tool callbacks).
 	Arguments []byte
-	// Result is the final tool execution result (after after-tool callbacks).
+	// Result is the final tool execution result after after-tool callbacks.
+	// When the result implements GetCallbackResult() any, ToolResultMessages
+	// receives that callback-facing projection and should type-assert against
+	// the projected type rather than the raw result type.
 	Result any
 	// ToolCallID is the ID of the tool call issued by the model.
 	ToolCallID string
@@ -244,8 +649,10 @@ func (c *Callbacks) RegisterToolResultMessages(cb ToolResultMessagesFunc) *Callb
 	return c
 }
 
-// RunToolResultMessages runs the ToolResultMessages callback (if set) with panic
-// recovery, returning an error when the callback panics.
+// RunToolResultMessages runs the ToolResultMessages callback, if set, with
+// panic recovery. When Result implements GetCallbackResult() any, the callback
+// observes that projection. The function temporarily mutates and restores in,
+// so the input is single-use and must not be shared across goroutines.
 func (c *Callbacks) RunToolResultMessages(
 	ctx context.Context,
 	in *ToolResultMessagesInput,
@@ -267,7 +674,29 @@ func (c *Callbacks) RunToolResultMessages(
 		toolName,
 		&err,
 	)
+	restore := normalizeToolResultMessagesInput(in)
+	defer restore()
 	return c.ToolResultMessages(ctx, in)
+}
+
+func normalizeToolResultMessagesInput(
+	in *ToolResultMessagesInput,
+) func() {
+	if in == nil {
+		return func() {}
+	}
+	type callbackResultGetter interface {
+		GetCallbackResult() any
+	}
+	getter, ok := in.Result.(callbackResultGetter)
+	if !ok {
+		return func() {}
+	}
+	original := in.Result
+	in.Result = getter.GetCallbackResult()
+	return func() {
+		in.Result = original
+	}
 }
 
 // RegisterBeforeTool registers a before tool callback.
@@ -549,6 +978,28 @@ func (c *Callbacks) runAfterToolCallback(
 	return cb(ctx, args)
 }
 
+func (c *Callbacks) runAfterToolResultFinalizer(
+	ctx context.Context,
+	finalizer AfterToolResultFinalizer,
+	args *AfterToolArgs,
+	result *AfterToolResult,
+) (finalized *AfterToolResult, err error) {
+	toolCallID := ""
+	toolName := ""
+	if args != nil {
+		toolCallID = args.ToolCallID
+		toolName = args.ToolName
+	}
+	defer recoverToolCallbackPanic(
+		ctx,
+		afterToolResultFinalizerPanic,
+		toolCallID,
+		toolName,
+		&err,
+	)
+	return finalizer(ctx, args, result)
+}
+
 // normalizeAfterToolArgsResult temporarily rewrites args.Result to the
 // callback-facing result shape and returns a restore function.
 func normalizeAfterToolArgsResult(args *AfterToolArgs) func() {
@@ -575,24 +1026,91 @@ func normalizeAfterToolArgsResult(args *AfterToolArgs) func() {
 func (c *Callbacks) RunAfterTool(
 	ctx context.Context,
 	args *AfterToolArgs,
-) (*AfterToolResult, error) {
+) (result *AfterToolResult, err error) {
+	var finalizer AfterToolResultFinalizer
+	var hasFinalizer bool
+	if args != nil {
+		finalizer, hasFinalizer =
+			afterToolResultFinalizerFor(ctx, args)
+	}
+	if hasFinalizer {
+		defer func() {
+			finalized, finalizerErr :=
+				c.runAfterToolResultFinalizer(
+					ctx,
+					finalizer,
+					args,
+					result,
+				)
+			if finalized != nil {
+				result = finalized
+			} else if finalizerErr != nil && result != nil {
+				safeResult := *result
+				safeResult.CustomResult = nil
+				result = &safeResult
+			}
+			if finalizerErr == nil {
+				result = carryAfterToolResultFinalizer(
+					ctx,
+					args,
+					result,
+					finalizer,
+				)
+			}
+			err = errors.Join(err, finalizerErr)
+		}()
+	}
 	var lastResult *AfterToolResult
 	var firstErr error
 
 	for _, cb := range c.AfterTool {
-		result, err := c.runAfterToolCallback(ctx, cb, args)
+		callbackResult, callbackErr :=
+			c.runAfterToolCallback(ctx, cb, args)
 
-		if c.handleCallbackError(err, &firstErr) {
-			return result, err
+		if c.handleCallbackError(callbackErr, &firstErr) {
+			return callbackResult, callbackErr
 		}
 
-		if c.processAfterToolResult(result, &ctx, &lastResult) {
+		if c.processAfterToolResult(
+			callbackResult,
+			&ctx,
+			&lastResult,
+		) {
 			if c.continueOnError && firstErr != nil {
-				return result, firstErr
+				return callbackResult, firstErr
 			}
-			return result, nil
+			return callbackResult, nil
 		}
 	}
 
 	return c.finalizeAfterToolResult(lastResult, firstErr, args)
+}
+
+func carryAfterToolResultFinalizer(
+	ctx context.Context,
+	args *AfterToolArgs,
+	result *AfterToolResult,
+	finalizer AfterToolResultFinalizer,
+) *AfterToolResult {
+	if args == nil || args.Declaration == nil || finalizer == nil {
+		return result
+	}
+	out := AfterToolResult{}
+	if result != nil {
+		out = *result
+	}
+	base := ctx
+	if out.Context != nil {
+		base = out.Context
+	}
+	out.Context = context.WithValue(
+		base,
+		afterToolResultFinalizerContextKey{},
+		afterToolResultFinalizerContextValue{
+			toolCallID:  args.ToolCallID,
+			declaration: args.Declaration,
+			finalizer:   finalizer,
+		},
+	)
+	return &out
 }

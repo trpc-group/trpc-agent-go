@@ -13,6 +13,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -24,6 +27,22 @@ const (
 	afterToolCallbackPanic          = "after tool callback panic"
 	toolResultMessagesCallbackPanic = "tool result messages callback panic"
 )
+
+func requireFinalizerBinding(
+	t *testing.T,
+	source *tool.Declaration,
+	target *tool.Declaration,
+	toolCallID string,
+) {
+	t.Helper()
+	complete, err := tool.BindAfterToolResultFinalizer(
+		source,
+		target,
+		toolCallID,
+	)
+	require.NoError(t, err)
+	complete()
+}
 
 // ToolError represents an error that occurred during tool execution.
 type ToolError struct {
@@ -143,6 +162,27 @@ func TestRunToolResultMessages_PanicRecovery(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), toolResultMessagesCallbackPanic)
+}
+
+func TestRunToolResultMessages_UsesCallbackFacingResult(t *testing.T) {
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterToolResultMessages(func(
+		_ context.Context,
+		in *tool.ToolResultMessagesInput,
+	) (any, error) {
+		return in.Result, nil
+	})
+	carrier := &callbackCompatibleResult{
+		callbackResult: map[string]any{"safe": true},
+	}
+	in := &tool.ToolResultMessagesInput{Result: carrier}
+	result, err := callbacks.RunToolResultMessages(
+		context.Background(),
+		in,
+	)
+	require.NoError(t, err)
+	require.Equal(t, carrier.callbackResult, result)
+	require.Same(t, carrier, in.Result)
 }
 
 func TestRegisterBeforeTool(t *testing.T) {
@@ -555,6 +595,624 @@ func TestRunAfterTool_Override(t *testing.T) {
 	customResult, ok := result.CustomResult.(map[string]string)
 	require.True(t, ok)
 	require.Equal(t, "overridden", customResult["result"])
+}
+
+func TestRunAfterTool_FinalizerRunsAfterShortCircuit(t *testing.T) {
+	callbacks := tool.NewCallbacks()
+	finalizerCalls := 0
+	declaration := &tool.Declaration{Name: "finalizer"}
+	cleanup, err := tool.RegisterAfterToolResultFinalizer(
+		declaration,
+		func(
+			_ context.Context,
+			_ *tool.AfterToolArgs,
+			result *tool.AfterToolResult,
+		) (*tool.AfterToolResult, error) {
+			finalizerCalls++
+			out := *result
+			out.CustomResult = "safe"
+			return &out, nil
+		},
+	)
+	require.NoError(t, err)
+	defer cleanup()
+	callbacks.RegisterAfterTool(func(
+		_ context.Context,
+		_ *tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		return &tool.AfterToolResult{
+			CustomResult: "unsafe",
+		}, nil
+	})
+	result, err := callbacks.RunAfterTool(
+		context.Background(),
+		&tool.AfterToolArgs{
+			ToolCallID:  "call-finalizer",
+			Declaration: declaration,
+			Result:      "original",
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "safe", result.CustomResult)
+	require.Equal(t, 1, finalizerCalls)
+}
+
+func TestRunAfterTool_FinalizerPanicSuppressesCustomResult(t *testing.T) {
+	callbacks := tool.NewCallbacks()
+	declaration := &tool.Declaration{Name: "finalizer-panic"}
+	cleanup, err := tool.RegisterAfterToolResultFinalizer(
+		declaration,
+		func(
+			context.Context,
+			*tool.AfterToolArgs,
+			*tool.AfterToolResult,
+		) (*tool.AfterToolResult, error) {
+			panic("boom")
+		},
+	)
+	require.NoError(t, err)
+	defer cleanup()
+	callbacks.RegisterAfterTool(func(
+		_ context.Context,
+		_ *tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		return &tool.AfterToolResult{
+			CustomResult: "unsafe",
+		}, nil
+	})
+	result, err := callbacks.RunAfterTool(
+		context.Background(),
+		&tool.AfterToolArgs{
+			ToolCallID:  "call-finalizer-panic",
+			Declaration: declaration,
+			Result:      "original",
+		},
+	)
+	require.ErrorContains(t, err, "after tool result finalizer panic")
+	require.NotNil(t, result)
+	require.Nil(t, result.CustomResult)
+}
+
+func TestRunAfterTool_FinalizerScopedByDeclaration(t *testing.T) {
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterAfterTool(func(
+		_ context.Context,
+		_ *tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		return &tool.AfterToolResult{CustomResult: "unsafe"}, nil
+	})
+	declarationA := &tool.Declaration{
+		Name:        "same-name",
+		InputSchema: &tool.Schema{Type: "object"},
+	}
+	declarationB := &tool.Declaration{
+		Name:        "same-name",
+		InputSchema: &tool.Schema{Type: "object"},
+	}
+	register := func(
+		declaration *tool.Declaration,
+		final string,
+	) func() {
+		cleanup, err := tool.RegisterAfterToolResultFinalizer(
+			declaration,
+			func(
+				_ context.Context,
+				_ *tool.AfterToolArgs,
+				result *tool.AfterToolResult,
+			) (*tool.AfterToolResult, error) {
+				out := *result
+				out.CustomResult = final
+				return &out, nil
+			},
+		)
+		require.NoError(t, err)
+		return cleanup
+	}
+	cleanupA := register(declarationA, "safe-a")
+	defer cleanupA()
+	cleanupB := register(declarationB, "safe-b")
+	defer cleanupB()
+
+	result, err := callbacks.RunAfterTool(
+		context.Background(),
+		&tool.AfterToolArgs{
+			Declaration: declarationA,
+			ToolCallID:  "same-id",
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "safe-a", result.CustomResult)
+	result, err = callbacks.RunAfterTool(
+		context.Background(),
+		&tool.AfterToolArgs{
+			Declaration: declarationB,
+			ToolCallID:  "same-id",
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "safe-b", result.CustomResult)
+
+	schemaCopy := *declarationA.InputSchema
+	wrappedDeclaration := &tool.Declaration{
+		Name:        "prefix_same-name",
+		InputSchema: &schemaCopy,
+	}
+	requireFinalizerBinding(
+		t,
+		declarationA,
+		wrappedDeclaration,
+		"wrapped",
+	)
+	result, err = callbacks.RunAfterTool(
+		context.Background(),
+		&tool.AfterToolArgs{
+			Declaration: wrappedDeclaration,
+			ToolCallID:  "wrapped",
+			ToolName:    wrappedDeclaration.Name,
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "safe-a", result.CustomResult)
+
+	overlayDeclaration := &tool.Declaration{
+		Name:        "overlay",
+		InputSchema: &tool.Schema{Type: "object"},
+	}
+	requireFinalizerBinding(
+		t,
+		declarationA,
+		overlayDeclaration,
+		"overlay",
+	)
+	result, err = callbacks.RunAfterTool(
+		context.Background(),
+		&tool.AfterToolArgs{
+			Declaration: overlayDeclaration,
+			ToolCallID:  "overlay",
+			ToolName:    overlayDeclaration.Name,
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "safe-a", result.CustomResult)
+
+	_, err = tool.RegisterAfterToolResultFinalizer(
+		declarationA,
+		func(
+			context.Context,
+			*tool.AfterToolArgs,
+			*tool.AfterToolResult,
+		) (*tool.AfterToolResult, error) {
+			return nil, nil
+		},
+	)
+	require.ErrorContains(t, err, "already registered")
+}
+
+func TestRunAfterTool_BoundFinalizerCarriesAcrossCallbackChains(
+	t *testing.T,
+) {
+	callbacks := tool.NewCallbacks()
+	source := &tool.Declaration{Name: "source"}
+	finalizerCalls := 0
+	cleanup, err := tool.RegisterAfterToolResultFinalizer(
+		source,
+		func(
+			_ context.Context,
+			_ *tool.AfterToolArgs,
+			result *tool.AfterToolResult,
+		) (*tool.AfterToolResult, error) {
+			finalizerCalls++
+			return result, nil
+		},
+	)
+	require.NoError(t, err)
+	defer cleanup()
+
+	overlay := &tool.Declaration{Name: "overlay"}
+	requireFinalizerBinding(
+		t,
+		source,
+		overlay,
+		"shared-call",
+	)
+	first, err := callbacks.RunAfterTool(
+		context.Background(),
+		&tool.AfterToolArgs{
+			ToolCallID:  "shared-call",
+			ToolName:    overlay.Name,
+			Declaration: overlay,
+			Result:      "first",
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, first)
+	require.NotNil(t, first.Context)
+
+	pending := make([]*tool.Declaration, 0, 1024)
+	for i := 0; i < 1024; i++ {
+		target := &tool.Declaration{Name: "pending"}
+		pending = append(pending, target)
+		requireFinalizerBinding(
+			t,
+			source,
+			target,
+			fmt.Sprintf("pending-%d", i),
+		)
+	}
+	_, err = tool.BindAfterToolResultFinalizer(
+		source,
+		&tool.Declaration{Name: "overflow"},
+		"overflow",
+	)
+	require.ErrorContains(t, err, "call registry is full")
+
+	_, err = callbacks.RunAfterTool(
+		first.Context,
+		&tool.AfterToolArgs{
+			ToolCallID:  "shared-call",
+			ToolName:    overlay.Name,
+			Declaration: overlay,
+			Result:      "second",
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, 2, finalizerCalls)
+	require.Len(t, pending, 1024)
+}
+
+func TestRunAfterTool_BoundFinalizerSupportsConcurrentCalls(
+	t *testing.T,
+) {
+	callbacks := tool.NewCallbacks()
+	source := &tool.Declaration{Name: "source"}
+	var finalizerCalls atomic.Int64
+	cleanup, err := tool.RegisterAfterToolResultFinalizer(
+		source,
+		func(
+			_ context.Context,
+			_ *tool.AfterToolArgs,
+			result *tool.AfterToolResult,
+		) (*tool.AfterToolResult, error) {
+			finalizerCalls.Add(1)
+			return result, nil
+		},
+	)
+	require.NoError(t, err)
+	defer cleanup()
+
+	overlay := &tool.Declaration{Name: "shared-overlay"}
+	requireFinalizerBinding(
+		t,
+		source,
+		overlay,
+		"call-a",
+	)
+	requireFinalizerBinding(
+		t,
+		source,
+		overlay,
+		"call-b",
+	)
+
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	for _, callID := range []string{"call-a", "call-b"} {
+		callID := callID
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, runErr := callbacks.RunAfterTool(
+				context.Background(),
+				&tool.AfterToolArgs{
+					ToolCallID:  callID,
+					ToolName:    overlay.Name,
+					Declaration: overlay,
+					Result:      "ok",
+				},
+			)
+			errs <- runErr
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for runErr := range errs {
+		require.NoError(t, runErr)
+	}
+	require.Equal(t, int64(2), finalizerCalls.Load())
+
+	_, err = callbacks.RunAfterTool(
+		context.Background(),
+		&tool.AfterToolArgs{
+			ToolCallID:  "unleased",
+			ToolName:    overlay.Name,
+			Declaration: overlay,
+			Result:      "ok",
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, int64(2), finalizerCalls.Load())
+}
+
+func TestRunAfterTool_BoundFinalizerSupportsDuplicateActiveKey(
+	t *testing.T,
+) {
+	callbacks := tool.NewCallbacks()
+	source := &tool.Declaration{Name: "source"}
+	target := &tool.Declaration{Name: "target"}
+	var finalizerCalls atomic.Int64
+	cleanup, err := tool.RegisterAfterToolResultFinalizer(
+		source,
+		func(
+			_ context.Context,
+			_ *tool.AfterToolArgs,
+			result *tool.AfterToolResult,
+		) (*tool.AfterToolResult, error) {
+			finalizerCalls.Add(1)
+			return result, nil
+		},
+	)
+	require.NoError(t, err)
+	defer cleanup()
+	requireFinalizerBinding(t, source, target, "auto_call_0")
+	requireFinalizerBinding(t, source, target, "auto_call_0")
+
+	for i := 0; i < 2; i++ {
+		_, err := callbacks.RunAfterTool(
+			context.Background(),
+			&tool.AfterToolArgs{
+				ToolCallID:  "auto_call_0",
+				ToolName:    target.Name,
+				Declaration: target,
+				Result:      "ok",
+			},
+		)
+		require.NoError(t, err)
+	}
+	require.Equal(t, int64(2), finalizerCalls.Load())
+}
+
+func TestRunAfterTool_DoesNotConsumeActiveDuplicateLease(
+	t *testing.T,
+) {
+	callbacks := tool.NewCallbacks()
+	source := &tool.Declaration{Name: "source"}
+	target := &tool.Declaration{Name: "target"}
+	var finalizerCalls atomic.Int64
+	cleanup, err := tool.RegisterAfterToolResultFinalizer(
+		source,
+		func(
+			_ context.Context,
+			_ *tool.AfterToolArgs,
+			result *tool.AfterToolResult,
+		) (*tool.AfterToolResult, error) {
+			finalizerCalls.Add(1)
+			return result, nil
+		},
+	)
+	require.NoError(t, err)
+	defer cleanup()
+	completeFirst, err := tool.BindAfterToolResultFinalizer(
+		source,
+		target,
+		"auto_call_0",
+	)
+	require.NoError(t, err)
+	completeSecond, err := tool.BindAfterToolResultFinalizer(
+		source,
+		target,
+		"auto_call_0",
+	)
+	require.NoError(t, err)
+
+	completeFirst()
+	_, err = callbacks.RunAfterTool(
+		context.Background(),
+		&tool.AfterToolArgs{
+			ToolCallID:  "auto_call_0",
+			ToolName:    target.Name,
+			Declaration: target,
+			Result:      "first",
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), finalizerCalls.Load())
+
+	completeSecond()
+	_, err = callbacks.RunAfterTool(
+		context.Background(),
+		&tool.AfterToolArgs{
+			ToolCallID:  "auto_call_0",
+			ToolName:    target.Name,
+			Declaration: target,
+			Result:      "second",
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, int64(2), finalizerCalls.Load())
+}
+
+func TestRunAfterTool_PendingBindingFallsBackToRegisteredDeclaration(
+	t *testing.T,
+) {
+	callbacks := tool.NewCallbacks()
+	source := &tool.Declaration{Name: "source"}
+	target := &tool.Declaration{Name: "target"}
+	register := func(
+		declaration *tool.Declaration,
+		value string,
+	) func() {
+		cleanup, err := tool.RegisterAfterToolResultFinalizer(
+			declaration,
+			func(
+				_ context.Context,
+				_ *tool.AfterToolArgs,
+				result *tool.AfterToolResult,
+			) (*tool.AfterToolResult, error) {
+				out := *result
+				out.CustomResult = value
+				return &out, nil
+			},
+		)
+		require.NoError(t, err)
+		return cleanup
+	}
+	cleanupSource := register(source, "source-finalizer")
+	defer cleanupSource()
+	cleanupTarget := register(target, "target-finalizer")
+	defer cleanupTarget()
+	_, err := tool.BindAfterToolResultFinalizer(
+		source,
+		target,
+		"call-1",
+	)
+	require.NoError(t, err)
+
+	result, err := callbacks.RunAfterTool(
+		context.Background(),
+		&tool.AfterToolArgs{
+			ToolCallID:  "call-1",
+			ToolName:    target.Name,
+			Declaration: target,
+			Result:      "original",
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "target-finalizer", result.CustomResult)
+}
+
+func TestRunAfterTool_BoundFinalizersIsolateDuplicateCallIDs(
+	t *testing.T,
+) {
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterAfterTool(func(
+		context.Context,
+		*tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		return &tool.AfterToolResult{CustomResult: "unsafe"}, nil
+	})
+	sourceA := &tool.Declaration{Name: "same-name"}
+	sourceB := &tool.Declaration{Name: "same-name"}
+	targetA := &tool.Declaration{Name: "same-name"}
+	targetB := &tool.Declaration{Name: "same-name"}
+	register := func(
+		source *tool.Declaration,
+		value string,
+	) func() {
+		cleanup, err := tool.RegisterAfterToolResultFinalizer(
+			source,
+			func(
+				_ context.Context,
+				_ *tool.AfterToolArgs,
+				result *tool.AfterToolResult,
+			) (*tool.AfterToolResult, error) {
+				out := *result
+				out.CustomResult = value
+				return &out, nil
+			},
+		)
+		require.NoError(t, err)
+		return cleanup
+	}
+	cleanupA := register(sourceA, "safe-a")
+	defer cleanupA()
+	cleanupB := register(sourceB, "safe-b")
+	defer cleanupB()
+	requireFinalizerBinding(
+		t,
+		sourceA,
+		targetA,
+		"auto_call_0",
+	)
+	requireFinalizerBinding(
+		t,
+		sourceB,
+		targetB,
+		"auto_call_0",
+	)
+
+	resultA, err := callbacks.RunAfterTool(
+		context.Background(),
+		&tool.AfterToolArgs{
+			ToolCallID:  "auto_call_0",
+			ToolName:    "same-name",
+			Declaration: targetA,
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "safe-a", resultA.CustomResult)
+	resultB, err := callbacks.RunAfterTool(
+		context.Background(),
+		&tool.AfterToolArgs{
+			ToolCallID:  "auto_call_0",
+			ToolName:    "same-name",
+			Declaration: targetB,
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "safe-b", resultB.CustomResult)
+}
+
+func TestRegisterAfterToolResultFinalizer_ReleasesBoundCalls(
+	t *testing.T,
+) {
+	source := &tool.Declaration{Name: "source"}
+	finalizerCalls := 0
+	cleanup, err := tool.RegisterAfterToolResultFinalizer(
+		source,
+		func(
+			_ context.Context,
+			_ *tool.AfterToolArgs,
+			result *tool.AfterToolResult,
+		) (*tool.AfterToolResult, error) {
+			finalizerCalls++
+			return result, nil
+		},
+	)
+	require.NoError(t, err)
+	defer cleanup()
+	callbacks := tool.NewCallbacks()
+	overlay := &tool.Declaration{Name: "target"}
+	for i := 0; i < 2048; i++ {
+		callID := fmt.Sprintf("call-%d", i)
+		requireFinalizerBinding(
+			t,
+			source,
+			overlay,
+			callID,
+		)
+		_, err := callbacks.RunAfterTool(
+			context.Background(),
+			&tool.AfterToolArgs{
+				ToolCallID:  callID,
+				ToolName:    overlay.Name,
+				Declaration: overlay,
+				Result:      "ok",
+			},
+		)
+		require.NoError(t, err)
+	}
+	require.Equal(t, 2048, finalizerCalls)
+
+	cleanup()
+	_, err = tool.BindAfterToolResultFinalizer(
+		source,
+		overlay,
+		"after-cleanup",
+	)
+	require.ErrorContains(t, err, "no after-tool result finalizer")
+	replacementCleanup, err :=
+		tool.RegisterAfterToolResultFinalizer(
+			overlay,
+			func(
+				_ context.Context,
+				_ *tool.AfterToolArgs,
+				result *tool.AfterToolResult,
+			) (*tool.AfterToolResult, error) {
+				return result, nil
+			},
+		)
+	require.NoError(t, err)
+	replacementCleanup()
 }
 
 func TestRunAfterTool_WithError(t *testing.T) {
