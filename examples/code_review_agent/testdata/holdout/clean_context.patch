@@ -1,0 +1,24 @@
+diff --git a/request/request.go b/request/request.go
+new file mode 100644
+--- /dev/null
++++ b/request/request.go
+@@ -0,0 +1,9 @@
++package request
++
++import "context"
++
++func Scope(parent context.Context) context.Context {
++	ctx, cancel := context.WithCancel(parent)
++	defer cancel()
++	return ctx
++}
+diff --git a/request/request_test.go b/request/request_test.go
+new file mode 100644
+--- /dev/null
++++ b/request/request_test.go
+@@ -0,0 +1,5 @@
++package request
++
++import "testing"
++
++func TestScope(t *testing.T) {}

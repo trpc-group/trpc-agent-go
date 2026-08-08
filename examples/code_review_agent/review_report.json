@@ -1,0 +1,145 @@
+{
+  "schema_version": "review/v1",
+  "task": {
+    "schema_version": "review/v1",
+    "id": "sample-review",
+    "status": "completed",
+    "phase": "completed",
+    "mode": "fake-model",
+    "created_at": "2026-07-29T11:51:27.29289Z",
+    "updated_at": "2026-07-29T11:51:27.349555Z"
+  },
+  "input": {
+    "schema_version": "review/v1",
+    "task_id": "sample-review",
+    "source": "fixture",
+    "digest": "ebacc8f52a846906b85b7bab9206ce76d3f6451659035b793ba99111a3a14dbf",
+    "changed_files": [
+      "config/config.go",
+      "config/config_test.go"
+    ]
+  },
+  "sandbox_runs": [
+    {
+      "schema_version": "review/v1",
+      "task_id": "sample-review",
+      "command": "go test ./...",
+      "status": "failed",
+      "duration": 958,
+      "exit_code": -1,
+      "timed_out": false,
+      "truncated": false
+    },
+    {
+      "schema_version": "review/v1",
+      "task_id": "sample-review",
+      "command": "go vet ./...",
+      "status": "failed",
+      "duration": 45583,
+      "exit_code": -1,
+      "timed_out": false,
+      "truncated": false
+    }
+  ],
+  "governance_decisions": [
+    {
+      "schema_version": "review/v1",
+      "task_id": "sample-review",
+      "decision_id": "filter:3efd2f4e8e41d7b9",
+      "kind": "filter",
+      "tool": "workspace_exec",
+      "action": "allow",
+      "reason": "tool is visible to the review model",
+      "rule": "filter-review-tools"
+    },
+    {
+      "schema_version": "review/v1",
+      "task_id": "sample-review",
+      "decision_id": "filter:a4239f5521d155f2",
+      "kind": "filter",
+      "tool": "skill_load",
+      "action": "allow",
+      "reason": "tool is visible to the review model",
+      "rule": "filter-review-tools"
+    },
+    {
+      "schema_version": "review/v1",
+      "task_id": "sample-review",
+      "decision_id": "filter:1cb777fcfa6a9c10",
+      "kind": "filter",
+      "tool": "skill_select_docs",
+      "action": "allow",
+      "reason": "tool is visible to the review model",
+      "rule": "filter-review-tools"
+    },
+    {
+      "schema_version": "review/v1",
+      "task_id": "sample-review",
+      "decision_id": "filter:da9d765381b0e6a8",
+      "kind": "filter",
+      "tool": "skill_list_docs",
+      "action": "allow",
+      "reason": "tool is visible to the review model",
+      "rule": "filter-review-tools"
+    },
+    {
+      "schema_version": "review/v1",
+      "task_id": "sample-review",
+      "decision_id": "permission:a32747958428a811",
+      "kind": "permission",
+      "tool": "skill_load",
+      "action": "allow",
+      "reason": "fixed review policy decision",
+      "rule": "allow-skill-read"
+    },
+    {
+      "schema_version": "review/v1",
+      "task_id": "sample-review",
+      "decision_id": "permission:82850527584468c9",
+      "kind": "permission",
+      "tool": "workspace_exec",
+      "action": "allow",
+      "reason": "fixed review policy decision",
+      "rule": "allow-go-vet"
+    }
+  ],
+  "findings": [
+    {
+      "schema_version": "review/v1",
+      "task_id": "sample-review",
+      "severity": "high",
+      "category": "security",
+      "layer": "unified",
+      "file": "config/config.go",
+      "line": 3,
+      "semantic_anchor": "lit:a5baf6451a4e526f",
+      "title": "Hard-coded credential in changed code",
+      "evidence": "An added string or byte-slice literal is assigned to a sensitive identifier; the value is omitted from evidence.",
+      "recommendation": "Load the credential from an approved secret provider and rotate the exposed value.",
+      "confidence": "high",
+      "source": "rule",
+      "rule_id": "go/hardcoded-secret/v1",
+      "fingerprint": "60ccbd9cca56bddfd1ee8208bfba2ea67ce0c2c171355bb814c1479f9d82ac73",
+      "disposition": "finding"
+    }
+  ],
+  "artifacts": null,
+  "metrics": {
+    "schema_version": "review/v1",
+    "total_duration": 56665000,
+    "sandbox_duration": 46541,
+    "tool_invocations": 2,
+    "permission_blocks": 0,
+    "finding_total": 1,
+    "severity_counts": {
+      "high": 1
+    },
+    "warning_count": 0,
+    "human_review_count": 0,
+    "error_type_counts": {
+      "model_error": 1,
+      "sandbox_failed": 2
+    }
+  },
+  "conclusion": "review completed: 1 findings, 0 warnings, 0 human review items, 0 governance blocks, model degraded=true"
+}

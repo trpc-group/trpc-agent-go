@@ -1,0 +1,24 @@
+diff --git a/files/files.go b/files/files.go
+new file mode 100644
+--- /dev/null
++++ b/files/files.go
+@@ -0,0 +1,9 @@
++package files
++
++import "os"
++
++func Read() error {
++	file, err := os.Open("input.txt")
++	if err != nil { return err }
++	return nil
++}
+diff --git a/files/files_test.go b/files/files_test.go
+new file mode 100644
+--- /dev/null
++++ b/files/files_test.go
+@@ -0,0 +1,5 @@
++package files
++
++import "testing"
++
++func TestRead(t *testing.T) {}

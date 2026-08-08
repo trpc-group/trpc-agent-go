@@ -1,0 +1,10 @@
+diff --git a/math/math.go b/math/math.go
+new file mode 100644
+--- /dev/null
++++ b/math/math.go
+@@ -0,0 +1,5 @@
++package math
++
++func Multiply(left, right int) int {
++	return left * right
++}

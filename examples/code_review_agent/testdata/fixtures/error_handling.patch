@@ -1,0 +1,22 @@
+diff --git a/cleanup/cleanup.go b/cleanup/cleanup.go
+new file mode 100644
+--- /dev/null
++++ b/cleanup/cleanup.go
+@@ -0,0 +1,7 @@
++package cleanup
++
++import "os"
++
++func Remove() {
++	os.ReadFile("temporary.txt")
++}
+diff --git a/cleanup/cleanup_test.go b/cleanup/cleanup_test.go
+new file mode 100644
+--- /dev/null
++++ b/cleanup/cleanup_test.go
+@@ -0,0 +1,5 @@
++package cleanup
++
++import "testing"
++
++func TestRemove(t *testing.T) {}

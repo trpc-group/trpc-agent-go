@@ -1,0 +1,26 @@
+diff --git a/data/data.go b/data/data.go
+new file mode 100644
+--- /dev/null
++++ b/data/data.go
+@@ -0,0 +1,11 @@
++package data
++
++import (
++	"context"
++	"database/sql"
++)
++
++func Save(ctx context.Context, db *sql.DB) error {
++	_, err := db.BeginTx(ctx, nil)
++	return err
++}
+diff --git a/data/data_test.go b/data/data_test.go
+new file mode 100644
+--- /dev/null
++++ b/data/data_test.go
+@@ -0,0 +1,5 @@
++package data
++
++import "testing"
++
++func TestSave(t *testing.T) {}

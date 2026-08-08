@@ -1,0 +1,20 @@
+diff --git a/check/check.go b/check/check.go
+new file mode 100644
+--- /dev/null
++++ b/check/check.go
+@@ -0,0 +1,5 @@
++package check
++
++func Ready() bool {
++	return true
++}
+diff --git a/check/check_test.go b/check/check_test.go
+new file mode 100644
+--- /dev/null
++++ b/check/check_test.go
+@@ -0,0 +1,5 @@
++package check
++
++import "testing"
++
++func TestReady(t *testing.T) {}

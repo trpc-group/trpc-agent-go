@@ -1,0 +1,73 @@
+package clean
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"net/http"
+	"os"
+	"os/exec"
+)
+
+func start(ctx context.Context, ch chan int) {
+	go func() {
+		select {
+		case ch <- 1:
+		case <-ctx.Done():
+			return
+		}
+	}()
+}
+
+func child(parent context.Context) context.Context {
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+	return ctx
+}
+
+func get() error {
+	resp, err := http.Get("https://example.com")
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return nil
+}
+
+func query(db *sql.DB) error {
+	rows, err := db.Query("select 1")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	return rows.Err()
+}
+
+func read() error {
+	f, err := os.Open("input.txt")
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return nil
+}
+
+func encode(v any) ([]byte, error) {
+	return json.Marshal(v)
+}
+
+func write(ctx context.Context, db *sql.DB) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	return tx.Commit()
+}
+
+func run(input string) error {
+	return exec.Command("go", "test", input).Run()
+}
+
+const tokenCount = 10
+const passwordPolicy = "strict"

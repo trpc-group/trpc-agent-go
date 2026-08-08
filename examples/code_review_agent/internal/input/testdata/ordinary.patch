@@ -1,0 +1,22 @@
+diff --git a/alpha.go b/alpha.go
+index 1111111..2222222 100644
+--- a/alpha.go
++++ b/alpha.go
+@@ -1,4 +1,5 @@
+ package alpha
+-old
++new
+ context
+ tail
++added
+@@ -10,2 +11,2 @@ func example() {
+-removed
++replacement
+ unchanged
+diff --git a/beta.go b/beta.go
+index 3333333..4444444 100644
+--- a/beta.go
++++ b/beta.go
+@@ -3 +3 @@
+-before
++after
