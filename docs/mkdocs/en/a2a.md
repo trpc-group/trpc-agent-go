@@ -164,6 +164,10 @@ persist session state itself.
 Browser clients should complete one initial request before starting concurrent
 anonymous message sends, or provide a trusted user identity instead.
 
+`NewAnonymousA2AClient` releases its initialization gate only after it observes a valid anonymous cookie from a response or custom HTTP handler and the configured cookie jar accepts the same value for the agent URL. A preloaded anonymous cookie is sent, but does not by itself confirm initialization; custom servers must reissue the accepted cookie, or return a replacement, with `Set-Cookie` before later requests can proceed concurrently. The built-in A2A server already does this.
+
+Anonymous browser continuity requires a same-site deployment. The server cookie uses `SameSite=Lax`, so browsers do not send it on cross-site JSON-RPC POST requests. When the browser UI and A2A endpoint are same-site but cross-origin, Fetch requests must use `credentials: "include"`, and the deployment must allow credentialed CORS by setting `Access-Control-Allow-Origin` to the UI's explicit origin and `Access-Control-Allow-Credentials` to `true`. Cross-site deployments should provide a trusted user identity instead; cross-site anonymous cookie continuity is not supported.
+
 #### Anonymous Principal Behavior
 
 When a request does not provide a non-empty UserID through the configured
