@@ -457,6 +457,13 @@ func TestTryEmitReadyEvent(t *testing.T) {
 		require.False(t, handled)
 		require.NoError(t, err)
 	})
+	t.Run("closed channel panic recovery", func(t *testing.T) {
+		ch := make(chan *Event, 1)
+		close(ch)
+		handled, err := tryEmitReadyEvent(context.Background(), ch, evt)
+		require.True(t, handled)
+		require.ErrorIs(t, err, ErrClosedChannelSend)
+	})
 }
 
 func TestEmitEventTimeoutError_Error_And_As(t *testing.T) {
@@ -564,6 +571,68 @@ func TestEmitEventWithTimeout_NoTimeout_ContextCancelledDuringSend(
 
 	err := <-errCh
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestEmitEventWithTimeout_ClosedChannelPanicRecovery(t *testing.T) {
+	ch := make(chan *Event)
+	close(ch)
+	e := New("inv", "author")
+
+	err := EmitEventWithTimeout(context.Background(), ch, e, EmitWithoutTimeout)
+	require.ErrorIs(t, err, ErrClosedChannelSend)
+}
+
+func TestTrySendReady_ClosedChannelPanicRecovery(t *testing.T) {
+	ch := make(chan *Event, 1)
+	ch <- New("fill", "author")
+	close(ch)
+	e := New("inv", "author")
+
+	sent, err := trySendReady(ch, e)
+	require.False(t, sent)
+	require.ErrorIs(t, err, ErrClosedChannelSend)
+}
+
+func TestSendBlocking_ClosedChannelPanicRecovery_NoTimeout(t *testing.T) {
+	ch := make(chan *Event, 1)
+	ch <- New("fill", "author")
+	close(ch)
+	e := New("inv", "author")
+
+	sent, err := sendBlocking(context.Background(), ch, e, EmitWithoutTimeout)
+	require.False(t, sent)
+	require.ErrorIs(t, err, ErrClosedChannelSend)
+}
+
+func TestSendBlocking_ClosedChannelPanicRecovery_WithTimeout(t *testing.T) {
+	ch := make(chan *Event, 1)
+	ch <- New("fill", "author")
+	close(ch)
+	e := New("inv", "author")
+
+	sent, err := sendBlocking(context.Background(), ch, e, time.Second)
+	require.False(t, sent)
+	require.ErrorIs(t, err, ErrClosedChannelSend)
+}
+
+func TestSendBlocking_ContextCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	ch := make(chan *Event)
+	e := New("inv", "author")
+
+	sent, err := sendBlocking(ctx, ch, e, EmitWithoutTimeout)
+	require.False(t, sent)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestSendBlocking_Timeout(t *testing.T) {
+	ch := make(chan *Event)
+	e := New("inv", "author")
+
+	sent, err := sendBlocking(context.Background(), ch, e, 1*time.Millisecond)
+	require.False(t, sent)
+	require.ErrorIs(t, err, DefaultEmitTimeoutErr)
 }
 
 func TestEmitEventWithTimeout_WithTimeout_ContextCancelledDuringSend(
