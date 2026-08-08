@@ -251,7 +251,9 @@ COMMENT 'User states table';
 
 ## 注意事项
 
-1. **ClickHouse 版本**：需要 ClickHouse 22.3+ 以支持 JSON 类型
+1. **ClickHouse 版本**：需要 ClickHouse 22.3+ 以支持 JSON 类型。如果服务端仍通过
+   experimental setting 控制 JSON 类型，自动初始化会使用服务端错误中给出的 setting
+   名称重试。使用 `WithSkipDBInit(true)` 时，需要在手工建表时启用对应 setting。
 2. **ReplacingMergeTree**：数据更新通过插入新记录实现，后台自动合并去重
 3. **FINAL 查询**：读取时使用 FINAL 确保一致性，但可能影响性能
 4. **软删除清理**：`WithDeletedRetention` 使用 `ALTER TABLE DELETE`，对大数据集可能有性能影响，建议使用 ClickHouse Native TTL

@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"strings"
 
+	clickhousego "github.com/ClickHouse/clickhouse-go/v2"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 )
@@ -156,12 +157,22 @@ var tableDefs = []tableDefinition{
 func (s *Service) initDB(ctx context.Context) error {
 	log.Info("initializing clickhouse session database schema...")
 
+	schemaCtx := ctx
+
 	// Create tables
 	for _, tableDef := range tableDefs {
 		fullTableName := sqldb.BuildTableName(s.opts.tablePrefix, tableDef.name)
 		sql := strings.ReplaceAll(tableDef.template, "{{TABLE_NAME}}", fullTableName)
 
-		if err := s.chClient.Exec(ctx, sql); err != nil {
+		err := s.chClient.Exec(schemaCtx, sql)
+		if setting := requiredJSONTypeSetting(err); setting != "" {
+			schemaCtx = clickhousego.Context(
+				ctx,
+				clickhousego.WithSettings(clickhousego.Settings{setting: 1}),
+			)
+			err = s.chClient.Exec(schemaCtx, sql)
+		}
+		if err != nil {
 			return fmt.Errorf("create table %s failed: %w", fullTableName, err)
 		}
 		log.Infof("created table: %s", fullTableName)
@@ -169,4 +180,20 @@ func (s *Service) initDB(ctx context.Context) error {
 
 	log.Info("clickhouse session database schema initialized successfully")
 	return nil
+}
+
+func requiredJSONTypeSetting(err error) string {
+	if err == nil {
+		return ""
+	}
+	message := err.Error()
+	for _, setting := range []string{
+		"allow_experimental_json_type",
+		"allow_experimental_object_type",
+	} {
+		if strings.Contains(message, setting) {
+			return setting
+		}
+	}
+	return ""
 }

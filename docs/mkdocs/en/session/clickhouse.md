@@ -253,7 +253,11 @@ COMMENT 'User states table';
 
 ## Notes
 
-1. **ClickHouse version**: Requires ClickHouse 22.3+ for JSON type support
+1. **ClickHouse version**: Requires ClickHouse 22.3+ for JSON type support. If
+   the server keeps its JSON type behind an experimental setting, automatic
+   initialization retries with the setting name advertised by that server.
+   When using `WithSkipDBInit(true)`, enable the corresponding setting while
+   provisioning the schema.
 2. **ReplacingMergeTree**: Data updates are implemented by inserting new records; background auto-merge handles deduplication
 3. **FINAL queries**: Using FINAL at read time ensures consistency but may impact performance
 4. **Soft delete cleanup**: `WithDeletedRetention` uses `ALTER TABLE DELETE`, which may have performance impact on large datasets; prefer ClickHouse Native TTL

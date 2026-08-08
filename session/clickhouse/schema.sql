@@ -5,6 +5,8 @@
 -- Requirements:
 --   - ClickHouse 22.3+ (for JSON type support)
 --   - Database must be created before running these statements
+--   - If the server keeps JSON behind an experimental setting, enable the
+--     setting named by the server while executing this schema
 
 -- ============================================================================
 -- Table: session_states

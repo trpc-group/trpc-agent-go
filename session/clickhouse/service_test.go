@@ -12,15 +12,59 @@ package clickhouse
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/clickhouse"
 )
+
+func TestInitDBRetriesRequiredJSONTypeSetting(t *testing.T) {
+	for _, setting := range []string{
+		"allow_experimental_json_type",
+		"allow_experimental_object_type",
+	} {
+		t.Run(setting, func(t *testing.T) {
+			calls := 0
+			client := &mockClient{execFunc: func(
+				context.Context,
+				string,
+				...any,
+			) error {
+				calls++
+				if calls == 1 {
+					return fmt.Errorf("set setting %s = 1", setting)
+				}
+				return nil
+			}}
+			s := &Service{chClient: client}
+			require.NoError(t, s.initDB(context.Background()))
+			assert.Equal(t, len(tableDefs)+1, calls)
+		})
+	}
+}
+
+func TestInitDBDoesNotRetryUnrelatedFailure(t *testing.T) {
+	calls := 0
+	client := &mockClient{execFunc: func(
+		context.Context,
+		string,
+		...any,
+	) error {
+		calls++
+		return errors.New("permission denied")
+	}}
+	s := &Service{chClient: client}
+	err := s.initDB(context.Background())
+	require.ErrorContains(t, err, "permission denied")
+	assert.Equal(t, 1, calls)
+}
 
 func TestNewService(t *testing.T) {
 	// Register a mock instance

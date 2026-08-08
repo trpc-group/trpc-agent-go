@@ -481,7 +481,12 @@ func (c *multiTurnChat) processResponse(eventChan <-chan *event.Event) error {
 		// final assistant response).
 		if event.IsFinalResponse() {
 			fmt.Printf("\n")
-			break
+			// Runner cleanup completes before the channel closes. Keep draining
+			// after displaying the final response so a following command can
+			// safely operate on the completed run.
+			for range eventChan {
+			}
+			return nil
 		}
 	}
 
