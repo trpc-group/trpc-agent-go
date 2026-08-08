@@ -95,6 +95,15 @@ const (
 	MetaRepoURL    = codeast.TrpcAstMetaPrefix + "repo_url"
 	MetaBranch     = codeast.TrpcAstMetaPrefix + "branch"
 	MetaRepoPath   = MetaPrefix + "repo_path"
+
+	// MetaSourceID identifies the persisted source that owns a chunk.
+	MetaSourceID = MetaPrefix + "source_id"
+	// MetaResourcePath is the persisted resource path relative to its source root.
+	MetaResourcePath = MetaPrefix + "resource_path"
+	// MetaResourceStartLine is the first one-based resource line covered by a chunk.
+	MetaResourceStartLine = MetaPrefix + "resource_start_line"
+	// MetaResourceEndLine is the last one-based resource line covered by a chunk.
+	MetaResourceEndLine = MetaPrefix + "resource_end_line"
 )
 
 // Source represents a knowledge source that can provide documents.

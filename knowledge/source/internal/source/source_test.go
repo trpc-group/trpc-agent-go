@@ -83,6 +83,19 @@ func TestWithTransformers(t *testing.T) {
 	require.Len(t, config.transformers, 2)
 }
 
+func TestWithChunkOverridesChunkSizing(t *testing.T) {
+	config := &ReaderConfig{}
+	WithChunkSize(128)(config)
+	WithChunk(false)(config)
+
+	readerConfig := &reader.Config{}
+	for _, option := range buildReaderOptions(config) {
+		option(readerConfig)
+	}
+	require.False(t, readerConfig.Chunk)
+	require.Equal(t, 128, readerConfig.ChunkSize)
+}
+
 func (m *mockChunkingStrategy) Chunk(doc *document.Document) ([]*document.Document, error) {
 	return []*document.Document{doc}, nil
 }

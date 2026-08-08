@@ -11,6 +11,8 @@ package auto
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -69,6 +71,122 @@ func (m *mockContentExtractor) SupportedFormats() []string {
 
 func (m *mockContentExtractor) Close() error {
 	return nil
+}
+
+func TestReadResourcesForTextUsesStableHashPath(t *testing.T) {
+	input := strings.Repeat("resource text ", 10)
+	src := New([]string{input}, WithChunkSize(20), WithName("auto-resources"))
+	resources, err := src.ReadResources(context.Background())
+	if err != nil {
+		t.Fatalf("ReadResources() error = %v", err)
+	}
+	if len(resources) != 1 {
+		t.Fatalf("ReadResources() returned %d resources, want 1", len(resources))
+	}
+
+	hash := sha256.Sum256([]byte(input))
+	wantPath := "text/" + hex.EncodeToString(hash[:]) + ".txt"
+	resource := resources[0]
+	if resource.Path != wantPath {
+		t.Fatalf("resource path = %q, want %q", resource.Path, wantPath)
+	}
+	if resource.Content != input {
+		t.Fatalf("resource content = %q, want original input", resource.Content)
+	}
+	if len(resource.Documents) <= 1 {
+		t.Fatalf("resource documents = %d, want multiple chunks", len(resource.Documents))
+	}
+	for _, doc := range resource.Documents {
+		if got := doc.Metadata[source.MetaResourcePath]; got != wantPath {
+			t.Fatalf("document resource path = %v, want %q", got, wantPath)
+		}
+		if got := doc.Metadata[source.MetaSourceName]; got != "auto-resources" {
+			t.Fatalf("document source name = %v, want auto-resources", got)
+		}
+	}
+
+	again, err := New([]string{input}).ReadResources(context.Background())
+	if err != nil {
+		t.Fatalf("second ReadResources() error = %v", err)
+	}
+	if len(again) != 1 || again[0].Path != wantPath {
+		t.Fatalf("second resource path = %+v, want %q", again, wantPath)
+	}
+}
+
+func TestReadResourcesDelegatesBuiltInSources(t *testing.T) {
+	fileDir := t.TempDir()
+	filePath := filepath.Join(fileDir, "single.txt")
+	if err := os.WriteFile(filePath, []byte("file content"), 0600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	dirPath := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dirPath, "nested.txt"), []byte("directory content"), 0600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requestCount++
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write([]byte("URL content"))
+	}))
+	defer server.Close()
+
+	src := New([]string{filePath, dirPath, server.URL + "/remote.txt"}, WithName("combined"))
+	resources, err := src.ReadResources(context.Background())
+	if err != nil {
+		t.Fatalf("ReadResources() error = %v", err)
+	}
+	if len(resources) != 3 {
+		t.Fatalf("ReadResources() returned %d resources, want 3", len(resources))
+	}
+	if requestCount != 1 {
+		t.Fatalf("HTTP request count = %d, want 1", requestCount)
+	}
+
+	seenContent := make(map[string]bool)
+	for _, resource := range resources {
+		seenContent[resource.Content] = true
+		if resource.Path == "" {
+			t.Fatal("delegated resource has an empty path")
+		}
+		for _, doc := range resource.Documents {
+			if got := doc.Metadata[source.MetaResourcePath]; got != resource.Path {
+				t.Fatalf("document resource path = %v, want %q", got, resource.Path)
+			}
+			if got := doc.Metadata[source.MetaSourceName]; got != "combined" {
+				t.Fatalf("document source name = %v, want combined", got)
+			}
+		}
+	}
+	for _, content := range []string{"file content", "directory content", "URL content"} {
+		if !seenContent[content] {
+			t.Fatalf("delegated resource content %q not found", content)
+		}
+	}
+}
+
+func TestReadResourcesRejectsInputPathCollisions(t *testing.T) {
+	input := "same text input"
+	_, err := New([]string{input, input}).ReadResources(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "duplicate resource path") {
+		t.Fatalf("ReadResources() error = %v, want duplicate resource path", err)
+	}
+}
+
+func TestReadResourcesPreservesEmptyTextInput(t *testing.T) {
+	resources, err := New([]string{""}).ReadResources(context.Background())
+	if err != nil {
+		t.Fatalf("ReadResources() error = %v", err)
+	}
+	if len(resources) != 1 || resources[0].Content != "" || len(resources[0].Documents) != 0 {
+		t.Fatalf("empty text resource = %+v", resources)
+	}
+	if !strings.HasPrefix(resources[0].Path, "text/") {
+		t.Fatalf("empty text resource path = %q", resources[0].Path)
+	}
 }
 
 func TestWithTransformers(t *testing.T) {

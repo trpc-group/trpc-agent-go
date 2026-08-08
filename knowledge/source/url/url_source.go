@@ -11,19 +11,23 @@
 package url
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/extractor"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/internal/encoding"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	isource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/internal/source"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
@@ -42,6 +46,7 @@ type Source struct {
 	name                   string
 	metadata               map[string]any
 	readers                map[string]reader.Reader
+	resourceReaders        map[string]reader.Reader
 	httpClient             *http.Client
 	chunkSize              int
 	chunkOverlap           int
@@ -50,6 +55,8 @@ type Source struct {
 	fileReaderType         source.FileReaderType
 	contentExtractor       extractor.Extractor
 }
+
+var _ source.ResourceSource = (*Source)(nil)
 
 // New creates a new URL knowledge source.
 func New(urls []string, opts ...Option) *Source {
@@ -84,6 +91,12 @@ func New(urls []string, opts ...Option) *Source {
 
 	// Initialize readers with configuration
 	s.readers = isource.GetReaders(readerOpts...)
+
+	resourceReaderOpts := []isource.ReaderOption{isource.WithChunk(false)}
+	if len(s.transformers) > 0 {
+		resourceReaderOpts = append(resourceReaderOpts, isource.WithTransformers(s.transformers...))
+	}
+	s.resourceReaders = isource.GetReaders(resourceReaderOpts...)
 	return s
 }
 
@@ -112,6 +125,240 @@ func (s *Source) ReadDocuments(ctx context.Context) ([]*document.Document, error
 	}
 
 	return allDocuments, nil
+}
+
+// ReadResources downloads each URL once and returns its complete normalized
+// text together with the documents derived from the same response snapshot.
+func (s *Source) ReadResources(ctx context.Context) ([]*source.Resource, error) {
+	if len(s.identifierURLs) == 0 {
+		return nil, nil
+	}
+	if len(s.fetchURLs) > 0 && len(s.identifierURLs) != len(s.fetchURLs) {
+		return nil, fmt.Errorf("fetchURLs and urls must have the same count")
+	}
+
+	resources := make([]*source.Resource, 0, len(s.identifierURLs))
+	seenPaths := make(map[string]struct{}, len(s.identifierURLs))
+	for i, identifierURL := range s.identifierURLs {
+		fetchingURL := identifierURL
+		if len(s.fetchURLs) > 0 {
+			fetchingURL = s.fetchURLs[i]
+		}
+		resource, err := s.processURLResource(ctx, fetchingURL, identifierURL)
+		if err != nil {
+			return nil, fmt.Errorf("failed to process URL %s: %w", identifierURL, err)
+		}
+		if _, exists := seenPaths[resource.Path]; exists {
+			return nil, fmt.Errorf("duplicate resource path %q", resource.Path)
+		}
+		seenPaths[resource.Path] = struct{}{}
+		resources = append(resources, resource)
+	}
+	return resources, nil
+}
+
+func (s *Source) processURLResource(
+	ctx context.Context,
+	fetchingURL string,
+	identifierURL string,
+) (*source.Resource, error) {
+	if _, err := url.Parse(fetchingURL); err != nil {
+		return nil, fmt.Errorf("failed to parse fetching URL: %w", err)
+	}
+	parsedIdentifierURL, err := url.Parse(identifierURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse identifier URL: %w", err)
+	}
+
+	fileName := s.getFileName(parsedIdentifierURL, "")
+	documents, content, fileName, modifiedAt, err := s.fetchAndReadResource(
+		ctx,
+		fetchingURL,
+		parsedIdentifierURL,
+		fileName,
+	)
+	if err != nil {
+		return nil, err
+	}
+	resourcePath, err := buildURLResourcePath(parsedIdentifierURL, fileName)
+	if err != nil {
+		return nil, err
+	}
+
+	metadata := make(map[string]any, len(s.metadata)+8)
+	for k, v := range s.metadata {
+		metadata[k] = v
+	}
+	metadata[source.MetaSource] = source.TypeURL
+	metadata[source.MetaURL] = identifierURL
+	metadata[source.MetaURLHost] = parsedIdentifierURL.Host
+	metadata[source.MetaURLPath] = parsedIdentifierURL.Path
+	metadata[source.MetaURLScheme] = parsedIdentifierURL.Scheme
+	metadata[source.MetaURI] = identifierURL
+	metadata[source.MetaSourceName] = s.name
+	metadata[source.MetaResourcePath] = resourcePath
+	for _, doc := range documents {
+		if doc == nil {
+			return nil, fmt.Errorf("reader returned a nil document")
+		}
+		if doc.Metadata == nil {
+			doc.Metadata = make(map[string]any)
+		}
+		for k, v := range metadata {
+			doc.Metadata[k] = v
+		}
+	}
+
+	return &source.Resource{
+		Path:       resourcePath,
+		Content:    content,
+		ModifiedAt: modifiedAt,
+		Documents:  documents,
+	}, nil
+}
+
+func (s *Source) fetchAndReadResource(
+	ctx context.Context,
+	fetchingURL string,
+	parsedIdentifierURL *url.URL,
+	fileName string,
+) ([]*document.Document, string, string, time.Time, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fetchingURL, nil)
+	if err != nil {
+		return nil, "", fileName, time.Time{}, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; KnowledgeSource/1.0)")
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, "", fileName, time.Time{}, fmt.Errorf("failed to download URL: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, "", fileName, time.Time{}, fmt.Errorf("HTTP error: %d", resp.StatusCode)
+	}
+
+	contentType := resp.Header.Get("Content-Type")
+	fileName = s.getFileName(parsedIdentifierURL, contentType)
+	fileType := isource.ResolveFileType(
+		string(s.fileReaderType),
+		isource.GetFileTypeFromContentType(contentType, fileName),
+	)
+
+	var payload []byte
+	ext := strings.ToLower(filepath.Ext(fileName))
+	if s.contentExtractor != nil && !extractor.Supports(s.contentExtractor, ext) {
+		if inferredExt := extractorExtFromContentType(contentType); inferredExt != "" {
+			ext = inferredExt
+		}
+	}
+	if s.contentExtractor != nil && extractor.Supports(s.contentExtractor, ext) {
+		result, extractErr := s.contentExtractor.ExtractFromReader(ctx, resp.Body)
+		if extractErr != nil {
+			return nil, "", fileName, time.Time{}, fmt.Errorf("content extraction failed: %w", extractErr)
+		}
+		if result == nil || result.Reader == nil {
+			return nil, "", fileName, time.Time{}, fmt.Errorf("content extractor returned no content")
+		}
+		fileType = result.Format
+		payload, err = io.ReadAll(result.Reader)
+	} else {
+		payload, err = io.ReadAll(resp.Body)
+	}
+	if err != nil {
+		return nil, "", fileName, time.Time{}, fmt.Errorf("failed to read URL content: %w", err)
+	}
+	var modifiedAt time.Time
+	if value := resp.Header.Get("Last-Modified"); value != "" {
+		modifiedAt, _ = http.ParseTime(value)
+	}
+	if len(payload) == 0 {
+		return nil, "", fileName, modifiedAt, nil
+	}
+
+	resourceReader, exists := s.resourceReaders[fileType]
+	if !exists {
+		return nil, "", fileName, time.Time{}, fmt.Errorf("no reader available for resource type: %s", fileType)
+	}
+	resourceDocuments, err := resourceReader.ReadFromReader(fileName, bytes.NewReader(payload))
+	if err != nil {
+		return nil, "", fileName, time.Time{}, fmt.Errorf("failed to read complete resource content: %w", err)
+	}
+	if len(resourceDocuments) != 1 || resourceDocuments[0] == nil {
+		return nil, "", fileName, time.Time{}, fmt.Errorf(
+			"resource reader returned %d documents, want exactly one",
+			len(resourceDocuments),
+		)
+	}
+
+	documentReader, exists := s.readers[fileType]
+	if !exists {
+		return nil, "", fileName, time.Time{}, fmt.Errorf("no reader available for file type: %s", fileType)
+	}
+	documents, err := documentReader.ReadFromReader(fileName, bytes.NewReader(payload))
+	if err != nil {
+		return nil, "", fileName, time.Time{}, fmt.Errorf("failed to read content with reader: %w", err)
+	}
+
+	content, _ := encoding.SmartProcessText(resourceDocuments[0].Content)
+	if !utf8.ValidString(content) {
+		content = strings.ToValidUTF8(content, "\uFFFD")
+	}
+	return documents, content, fileName, modifiedAt, nil
+}
+
+func buildURLResourcePath(parsedURL *url.URL, fileName string) (string, error) {
+	host := strings.ToLower(parsedURL.Hostname())
+	if host == "" {
+		return "", fmt.Errorf("identifier URL host cannot be empty")
+	}
+	if port := parsedURL.Port(); port != "" {
+		host += ":" + port
+	}
+
+	parts := []string{escapeURLResourceSegment(host)}
+	escapedPath := strings.Trim(parsedURL.EscapedPath(), "/")
+	if escapedPath != "" {
+		for _, rawSegment := range strings.Split(escapedPath, "/") {
+			segment, err := url.PathUnescape(rawSegment)
+			if err != nil {
+				return "", fmt.Errorf("failed to decode identifier URL path: %w", err)
+			}
+			if segment == "" {
+				continue
+			}
+			parts = append(parts, escapeURLResourceSegment(segment))
+		}
+	}
+	if escapedPath == "" || strings.HasSuffix(parsedURL.EscapedPath(), "/") {
+		parts = append(parts, escapeURLResourceSegment(fileName))
+	}
+	return path.Join(parts...), nil
+}
+
+func escapeURLResourceSegment(value string) string {
+	if value == "" {
+		return "_"
+	}
+	forceEscapeDots := value == "." || value == ".."
+	const hexDigits = "0123456789ABCDEF"
+	var escaped strings.Builder
+	for i := 0; i < len(value); i++ {
+		character := value[i]
+		allowed := (character >= 'a' && character <= 'z') ||
+			(character >= 'A' && character <= 'Z') ||
+			(character >= '0' && character <= '9') ||
+			character == '-' || character == '_' || character == '~' ||
+			(character == '.' && !forceEscapeDots)
+		if allowed {
+			escaped.WriteByte(character)
+			continue
+		}
+		escaped.WriteByte('%')
+		escaped.WriteByte(hexDigits[character>>4])
+		escaped.WriteByte(hexDigits[character&0x0f])
+	}
+	return escaped.String()
 }
 
 // Name returns the name of this source.

@@ -88,6 +88,147 @@ func (m *pngContentExtractor) Close() error {
 	return nil
 }
 
+type countingResourceExtractor struct {
+	calls int
+}
+
+func (e *countingResourceExtractor) Extract(
+	ctx context.Context,
+	data []byte,
+	opts ...extractor.Option,
+) (*extractor.Result, error) {
+	return e.ExtractFromReader(ctx, strings.NewReader(string(data)), opts...)
+}
+
+func (e *countingResourceExtractor) ExtractFromReader(
+	context.Context,
+	io.Reader,
+	...extractor.Option,
+) (*extractor.Result, error) {
+	e.calls++
+	return &extractor.Result{
+		Reader: strings.NewReader("# Extracted\n\ncomplete resource content"),
+		Format: extractor.FormatMarkdown,
+	}, nil
+}
+
+func (*countingResourceExtractor) SupportedFormats() []string {
+	return []string{".pdf"}
+}
+
+func (*countingResourceExtractor) Close() error {
+	return nil
+}
+
+func TestReadResourcesUsesOneFetchAndExtraction(t *testing.T) {
+	requestCount := 0
+	lastModified := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requestCount++
+		w.Header().Set("Content-Type", "application/pdf")
+		w.Header().Set("Last-Modified", lastModified.Format(http.TimeFormat))
+		_, _ = w.Write([]byte("%PDF-source"))
+	}))
+	defer server.Close()
+
+	extractor := &countingResourceExtractor{}
+	identifierURL := "https://user:secret@Example.com/docs/manual.pdf?token=hidden"
+	src := New(
+		[]string{identifierURL},
+		WithContentFetchingURL([]string{server.URL}),
+		WithExtractor(extractor),
+		WithChunkSize(12),
+	)
+	resources, err := src.ReadResources(context.Background())
+	if err != nil {
+		t.Fatalf("ReadResources() error = %v", err)
+	}
+	if requestCount != 1 {
+		t.Fatalf("HTTP request count = %d, want 1", requestCount)
+	}
+	if extractor.calls != 1 {
+		t.Fatalf("extractor call count = %d, want 1", extractor.calls)
+	}
+	if len(resources) != 1 {
+		t.Fatalf("ReadResources() returned %d resources, want 1", len(resources))
+	}
+	resource := resources[0]
+	if resource.Path != "example.com/docs/manual.pdf" {
+		t.Fatalf("resource path = %q, want %q", resource.Path, "example.com/docs/manual.pdf")
+	}
+	if strings.Contains(resource.Path, "user") || strings.Contains(resource.Path, "secret") ||
+		strings.Contains(resource.Path, "token") || strings.Contains(resource.Path, "?") {
+		t.Fatalf("resource path exposes URL credentials or query: %q", resource.Path)
+	}
+	if resource.Content != "# Extracted\n\ncomplete resource content" {
+		t.Fatalf("resource content = %q", resource.Content)
+	}
+	if !resource.ModifiedAt.Equal(lastModified) {
+		t.Fatalf("resource modified time = %v, want %v", resource.ModifiedAt, lastModified)
+	}
+	if len(resource.Documents) == 0 {
+		t.Fatal("resource documents are empty")
+	}
+	for _, doc := range resource.Documents {
+		if got := doc.Metadata[source.MetaResourcePath]; got != resource.Path {
+			t.Fatalf("document resource path = %v, want %q", got, resource.Path)
+		}
+	}
+}
+
+func TestReadResourcesRejectsDuplicateSafePaths(t *testing.T) {
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requestCount++
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write([]byte("content"))
+	}))
+	defer server.Close()
+
+	src := New([]string{
+		server.URL + "/guide.txt?version=1",
+		server.URL + "/guide.txt?version=2",
+	})
+	_, err := src.ReadResources(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "duplicate resource path") {
+		t.Fatalf("ReadResources() error = %v, want duplicate resource path", err)
+	}
+	if requestCount != 2 {
+		t.Fatalf("HTTP request count = %d, want one per URL", requestCount)
+	}
+}
+
+func TestReadResourcesPreservesEmptyResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	resources, err := New([]string{server.URL + "/empty.txt"}).ReadResources(context.Background())
+	if err != nil {
+		t.Fatalf("ReadResources() error = %v", err)
+	}
+	if len(resources) != 1 || resources[0].Content != "" || len(resources[0].Documents) != 0 {
+		t.Fatalf("empty resource = %+v", resources)
+	}
+}
+
+func TestBuildURLResourcePathEscapesUnsafeSegments(t *testing.T) {
+	parsed, err := neturl.Parse("https://user:secret@example.com:8443/a%2Fb/%2E%2E/?token=hidden")
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	got, err := buildURLResourcePath(parsed, "index.html")
+	if err != nil {
+		t.Fatalf("buildURLResourcePath() error = %v", err)
+	}
+	want := "example.com%3A8443/a%2Fb/%2E%2E/index.html"
+	if got != want {
+		t.Fatalf("buildURLResourcePath() = %q, want %q", got, want)
+	}
+}
+
 // TestReadDocuments verifies URL Source with and without custom chunk
 // configuration.
 func TestReadDocuments(t *testing.T) {

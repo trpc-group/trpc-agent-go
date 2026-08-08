@@ -61,6 +61,14 @@ func TestDefaultRetriever(t *testing.T) {
 	}
 }
 
+func TestDefaultRetrieverWithoutVectorStore(t *testing.T) {
+	d := New()
+	_, err := d.Retrieve(context.Background(), &Query{Text: "test"})
+	if err == nil || err.Error() != "vector store not configured" {
+		t.Fatalf("Retrieve() error = %v, want vector store not configured", err)
+	}
+}
+
 // TestDefaultRetriever_WithNilFilter tests retrieving with nil query filter.
 func TestDefaultRetriever_WithNilFilter(t *testing.T) {
 	vs := inmemory.New()

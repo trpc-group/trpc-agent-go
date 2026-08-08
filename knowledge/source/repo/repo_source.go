@@ -20,9 +20,12 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
+	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/internal/encoding"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	isource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/internal/source"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
@@ -36,6 +39,7 @@ type Source struct {
 	name             string
 	metadata         map[string]any
 	readers          map[string]reader.Reader
+	resourceReaders  map[string]reader.Reader
 	fileExtensions   []string
 	recursive        bool
 	transformers     []transform.Transformer
@@ -44,6 +48,8 @@ type Source struct {
 	docExtensions    []string
 	parseConcurrency int
 }
+
+var _ source.ResourceSource = (*Source)(nil)
 
 // Repository describes one repository input and its version/scope configuration.
 type Repository struct {
@@ -79,6 +85,9 @@ func (s *Source) initializeReaders() {
 		readerOpts = append(readerOpts, isource.WithTransformers(s.transformers...))
 	}
 	s.readers = isource.GetReaders(readerOpts...)
+	resourceReaderOpts := append([]isource.ReaderOption(nil), readerOpts...)
+	resourceReaderOpts = append(resourceReaderOpts, isource.WithChunk(false))
+	s.resourceReaders = isource.GetReaders(resourceReaderOpts...)
 }
 
 // ReadDocuments reads all repository inputs and returns documents.
@@ -107,6 +116,228 @@ func (s *Source) ReadDocuments(ctx context.Context) ([]*document.Document, error
 	if err != nil {
 		return nil, err
 	}
+	return s.readClassifiedDocuments(rootToScan, repoRoot, repoInfo, fc)
+}
+
+// ReadResources reads one repository snapshot as complete, source-relative
+// resources together with the documents derived from those resources.
+func (s *Source) ReadResources(ctx context.Context) ([]*source.Resource, error) {
+	repository := s.repository
+	repoRoot, repoInfo, cleanup, err := s.resolveRepository(ctx, repository)
+	if err != nil {
+		return nil, err
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+
+	rootToScan, err := resolveScanRoot(repoRoot, repository.Subdir)
+	if err != nil {
+		return nil, err
+	}
+	filePaths, err := s.getFilePaths(rootToScan)
+	if err != nil {
+		return nil, err
+	}
+	contextFilePaths, err := s.getSnapshotFilePaths(repoRoot)
+	if err != nil {
+		return nil, err
+	}
+	identityRepoRoot := repoRoot
+	if cleanup == nil {
+		var snapshotCleanup func()
+		repoRoot, rootToScan, filePaths, contextFilePaths, snapshotCleanup, err = snapshotLocalRepository(
+			ctx,
+			repoRoot,
+			rootToScan,
+			filePaths,
+			contextFilePaths,
+		)
+		if err != nil {
+			return nil, err
+		}
+		defer snapshotCleanup()
+	}
+	documentContextPaths, restoreEmptyFiles, err := detachEmptyRepositoryFiles(contextFilePaths)
+	if err != nil {
+		return nil, err
+	}
+	documentContextSet := make(map[string]struct{}, len(documentContextPaths))
+	for _, filePath := range documentContextPaths {
+		documentContextSet[filePath] = struct{}{}
+	}
+	documentFilePaths := make([]string, 0, len(filePaths))
+	for _, filePath := range filePaths {
+		if _, ok := documentContextSet[filePath]; ok {
+			documentFilePaths = append(documentFilePaths, filePath)
+		}
+	}
+	fc, err := s.classifyFiles(repoRoot, documentFilePaths)
+	if err != nil {
+		return nil, err
+	}
+	documents, err := s.readClassifiedDocuments(rootToScan, repoRoot, repoInfo, fc)
+	if err != nil {
+		return nil, err
+	}
+	if err := restoreEmptyFiles(); err != nil {
+		return nil, err
+	}
+	if repoRoot != identityRepoRoot {
+		restoreLocalRepositoryIdentity(documents, repoRoot, identityRepoRoot)
+	}
+	return s.buildResources(repoRoot, filePaths, documents)
+}
+
+type emptyRepositoryFile struct {
+	path       string
+	mode       os.FileMode
+	modifiedAt time.Time
+}
+
+func detachEmptyRepositoryFiles(filePaths []string) ([]string, func() error, error) {
+	documentFilePaths := make([]string, 0, len(filePaths))
+	var emptyFiles []emptyRepositoryFile
+	restore := func() error {
+		for _, file := range emptyFiles {
+			if err := os.WriteFile(file.path, nil, file.mode.Perm()); err != nil {
+				return fmt.Errorf("failed to restore empty repository file: %w", err)
+			}
+			if err := os.Chtimes(file.path, file.modifiedAt, file.modifiedAt); err != nil {
+				return fmt.Errorf("failed to restore empty repository file time: %w", err)
+			}
+		}
+		emptyFiles = nil
+		return nil
+	}
+	for _, filePath := range filePaths {
+		fileInfo, err := os.Stat(filePath)
+		if err != nil {
+			_ = restore()
+			return nil, nil, fmt.Errorf("failed to stat repository file: %w", err)
+		}
+		if fileInfo.Size() != 0 {
+			documentFilePaths = append(documentFilePaths, filePath)
+			continue
+		}
+		emptyFiles = append(emptyFiles, emptyRepositoryFile{
+			path:       filePath,
+			mode:       fileInfo.Mode(),
+			modifiedAt: fileInfo.ModTime(),
+		})
+		if err := os.Remove(filePath); err != nil {
+			_ = restore()
+			return nil, nil, fmt.Errorf("failed to detach empty repository file: %w", err)
+		}
+	}
+	return documentFilePaths, restore, nil
+}
+
+func snapshotLocalRepository(
+	ctx context.Context,
+	repoRoot string,
+	rootToScan string,
+	resourceFilePaths []string,
+	contextFilePaths []string,
+) (string, string, []string, []string, func(), error) {
+	snapshotRoot, err := os.MkdirTemp("", "trpc-agent-go-repo-snapshot-*")
+	if err != nil {
+		return "", "", nil, nil, nil, fmt.Errorf("failed to create repository snapshot: %w", err)
+	}
+	cleanup := func() { _ = os.RemoveAll(snapshotRoot) }
+
+	scanRelativePath, err := filepath.Rel(repoRoot, rootToScan)
+	if err != nil {
+		cleanup()
+		return "", "", nil, nil, nil, fmt.Errorf("failed to locate repository scan root: %w", err)
+	}
+	snapshotScanRoot := filepath.Join(snapshotRoot, scanRelativePath)
+	if err := os.MkdirAll(snapshotScanRoot, 0o755); err != nil {
+		cleanup()
+		return "", "", nil, nil, nil, fmt.Errorf("failed to create snapshot scan root: %w", err)
+	}
+
+	snapshotContextFiles := make([]string, 0, len(contextFilePaths))
+	snapshotByRelativePath := make(map[string]string, len(contextFilePaths))
+	for _, filePath := range contextFilePaths {
+		if err := ctx.Err(); err != nil {
+			cleanup()
+			return "", "", nil, nil, nil, err
+		}
+		relativePath, err := filepath.Rel(repoRoot, filePath)
+		if err != nil || relativePath == "." || relativePath == ".." ||
+			strings.HasPrefix(relativePath, ".."+string(os.PathSeparator)) {
+			cleanup()
+			return "", "", nil, nil, nil, fmt.Errorf("file escapes repository root: %s", filePath)
+		}
+		fileInfo, err := os.Stat(filePath)
+		if err != nil {
+			cleanup()
+			return "", "", nil, nil, nil, fmt.Errorf("failed to stat repository file: %w", err)
+		}
+		content, err := os.ReadFile(filePath)
+		if err != nil {
+			cleanup()
+			return "", "", nil, nil, nil, fmt.Errorf("failed to read repository file: %w", err)
+		}
+		snapshotPath := filepath.Join(snapshotRoot, relativePath)
+		if err := os.MkdirAll(filepath.Dir(snapshotPath), 0o755); err != nil {
+			cleanup()
+			return "", "", nil, nil, nil, fmt.Errorf("failed to create snapshot directory: %w", err)
+		}
+		if err := os.WriteFile(snapshotPath, content, fileInfo.Mode().Perm()); err != nil {
+			cleanup()
+			return "", "", nil, nil, nil, fmt.Errorf("failed to write repository snapshot: %w", err)
+		}
+		if err := os.Chtimes(snapshotPath, fileInfo.ModTime(), fileInfo.ModTime()); err != nil {
+			cleanup()
+			return "", "", nil, nil, nil, fmt.Errorf("failed to preserve repository file time: %w", err)
+		}
+		snapshotContextFiles = append(snapshotContextFiles, snapshotPath)
+		snapshotByRelativePath[filepath.Clean(relativePath)] = snapshotPath
+	}
+	snapshotResourceFiles := make([]string, 0, len(resourceFilePaths))
+	for _, filePath := range resourceFilePaths {
+		relativePath, err := filepath.Rel(repoRoot, filePath)
+		if err != nil {
+			cleanup()
+			return "", "", nil, nil, nil, fmt.Errorf("failed to locate resource file in snapshot: %w", err)
+		}
+		snapshotPath, ok := snapshotByRelativePath[filepath.Clean(relativePath)]
+		if !ok {
+			cleanup()
+			return "", "", nil, nil, nil, fmt.Errorf("resource file missing from repository snapshot: %s", filePath)
+		}
+		snapshotResourceFiles = append(snapshotResourceFiles, snapshotPath)
+	}
+	return snapshotRoot, snapshotScanRoot, snapshotResourceFiles, snapshotContextFiles, cleanup, nil
+}
+
+func restoreLocalRepositoryIdentity(
+	documents []*document.Document,
+	snapshotRoot string,
+	identityRoot string,
+) {
+	for _, doc := range documents {
+		if doc == nil || doc.Metadata == nil {
+			continue
+		}
+		relativePath := repositoryDocumentPath(snapshotRoot, doc)
+		doc.Metadata[source.MetaRepoPath] = identityRoot
+		if relativePath == "" {
+			continue
+		}
+		identityPath := filepath.Join(identityRoot, filepath.FromSlash(relativePath))
+		doc.Metadata[source.MetaURI] = (&url.URL{Scheme: "file", Path: identityPath}).String()
+	}
+}
+
+func (s *Source) readClassifiedDocuments(
+	rootToScan string,
+	repoRoot string,
+	repoInfo *repoInfo,
+	fc *fileClassification,
+) ([]*document.Document, error) {
 
 	var allDocuments []*document.Document
 
@@ -138,6 +369,103 @@ func (s *Source) ReadDocuments(ctx context.Context) ([]*document.Document, error
 	}
 
 	return allDocuments, nil
+}
+
+func (s *Source) buildResources(
+	repoRoot string,
+	filePaths []string,
+	documents []*document.Document,
+) ([]*source.Resource, error) {
+	filesByPath := make(map[string]string, len(filePaths))
+	for _, filePath := range filePaths {
+		relPath, err := filepath.Rel(repoRoot, filePath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to build repo-relative resource path: %w", err)
+		}
+		relPath = filepath.ToSlash(filepath.Clean(relPath))
+		if relPath == "." || relPath == ".." || strings.HasPrefix(relPath, "../") {
+			return nil, fmt.Errorf("resource path escapes repository root: %s", filePath)
+		}
+		if _, exists := filesByPath[relPath]; exists {
+			return nil, fmt.Errorf("duplicate repository resource path: %s", relPath)
+		}
+		filesByPath[relPath] = filePath
+	}
+
+	documentsByPath := make(map[string][]*document.Document, len(filesByPath))
+	for _, doc := range documents {
+		if doc == nil {
+			return nil, fmt.Errorf("repository document cannot be nil")
+		}
+		relPath := repositoryDocumentPath(repoRoot, doc)
+		if relPath == "" {
+			return nil, fmt.Errorf("repository document %q has no resource path", doc.Name)
+		}
+		if _, exists := filesByPath[relPath]; !exists {
+			return nil, fmt.Errorf("repository document %q references unknown resource %q", doc.Name, relPath)
+		}
+		documentsByPath[relPath] = append(documentsByPath[relPath], doc)
+	}
+
+	resourcePaths := make([]string, 0, len(filesByPath))
+	for relPath := range filesByPath {
+		resourcePaths = append(resourcePaths, relPath)
+	}
+	slices.Sort(resourcePaths)
+
+	resources := make([]*source.Resource, 0, len(resourcePaths))
+	for _, relPath := range resourcePaths {
+		filePath := filesByPath[relPath]
+		content, modifiedAt, err := s.readResourceRepresentation(filePath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read resource %s: %w", relPath, err)
+		}
+		resources = append(resources, &source.Resource{
+			Path:       relPath,
+			Content:    content,
+			ModifiedAt: modifiedAt,
+			Documents:  documentsByPath[relPath],
+		})
+	}
+	return resources, nil
+}
+
+func repositoryDocumentPath(repoRoot string, doc *document.Document) string {
+	if doc.Metadata == nil {
+		return ""
+	}
+	relPath := toRelativeRepoPath(repoRoot, doc.Metadata[source.MetaFilePath])
+	if relPath == "" {
+		relPath = toRelativeRepoPath(repoRoot, doc.Metadata["trpc_ast_file_path"])
+	}
+	return relPath
+}
+
+func (s *Source) readResourceRepresentation(filePath string) (string, time.Time, error) {
+	fileInfo, err := os.Stat(filePath)
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("failed to stat file: %w", err)
+	}
+	if fileInfo.Size() == 0 {
+		return "", fileInfo.ModTime().UTC(), nil
+	}
+	fileType := isource.GetFileType(filePath)
+	r, exists := s.resourceReaders[fileType]
+	if !exists {
+		return "", time.Time{}, missingReaderError(fileType)
+	}
+	docs, err := r.ReadFromFile(filePath)
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("failed to read file with unchunked reader: %w", err)
+	}
+	if len(docs) != 1 || docs[0] == nil {
+		return "", time.Time{}, fmt.Errorf("unchunked reader returned %d documents, want exactly one", len(docs))
+	}
+	content, _ := encoding.SmartProcessText(docs[0].Content)
+	if !utf8.ValidString(content) {
+		content = strings.ToValidUTF8(content, "\uFFFD")
+	}
+	return content, fileInfo.ModTime().UTC(), nil
 }
 
 // fileClassification groups file paths by processing priority, matching trpc-ast-rag order:
@@ -370,6 +698,31 @@ func cloneRemoteRepository(ctx context.Context, repository Repository, tmpDir st
 }
 
 func (s *Source) getFilePaths(dirPath string) ([]string, error) {
+	return s.collectFilePaths(dirPath, true)
+}
+
+func (s *Source) getSnapshotFilePaths(dirPath string) ([]string, error) {
+	var filePaths []string
+	err := filepath.Walk(dirPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			if path != dirPath && info.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !info.Mode().IsRegular() || info.Name() == ".git" {
+			return nil
+		}
+		filePaths = append(filePaths, path)
+		return nil
+	})
+	return filePaths, err
+}
+
+func (s *Source) collectFilePaths(dirPath string, filterExtensions bool) ([]string, error) {
 	var filePaths []string
 	err := filepath.Walk(dirPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -392,7 +745,7 @@ func (s *Source) getFilePaths(dirPath string) ([]string, error) {
 		if !info.Mode().IsRegular() || s.shouldSkipFile(info.Name()) {
 			return nil
 		}
-		if len(s.fileExtensions) > 0 {
+		if filterExtensions && len(s.fileExtensions) > 0 {
 			ext := strings.ToLower(filepath.Ext(path))
 			if !slices.Contains(s.fileExtensions, ext) {
 				return nil
