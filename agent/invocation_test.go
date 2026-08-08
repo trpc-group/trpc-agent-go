@@ -1673,3 +1673,13 @@ func TestWithUserMessageRewriter(t *testing.T) {
 		model.NewUserMessage("rewritten"),
 	}, msgs)
 }
+
+func TestWithLatestTurnReplacement(t *testing.T) {
+	opts := &RunOptions{}
+	WithLatestTurnReplacement("old-request", "new-request")(opts)
+
+	require.Equal(t, &LatestTurnReplacement{
+		ExpectedRequestID: "old-request",
+		RequestID:         "new-request",
+	}, opts.LatestTurnReplacement)
+}

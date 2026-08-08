@@ -453,6 +453,33 @@ _ = ok
 managed.Cancel(requestID)
 ```
 
+#### Edit and Resend the Latest Persisted Turn
+
+Editing a user message remains a normal `Runner.Run` call. Pass the request ID
+of the turn being replaced and a distinct ID for the new run through one
+option:
+
+```go
+events, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    model.NewUserMessage("edited message"),
+    agent.WithLatestTurnReplacement(oldRequestID, newRequestID),
+)
+```
+
+`WithLatestTurnReplacement` supplies the new request ID, so do not add
+`WithRequestID` unless it carries the same value. Consume `events` exactly as
+for an ordinary run. The session backend restores the complete checkpoint
+before `oldRequestID` before the new Agent execution starts. Both completed and
+interrupted latest turns are supported; an execution that is still active in
+this Runner must first be cancelled and its event channel drained.
+
+See [Replacing the Latest Turn](session/index.md#replacing-the-latest-turn) for
+backend support, failure semantics, persistence requirements, and rollback
+boundaries.
+
 #### Queue a New User Message into the Same Run
 
 Sometimes you do not want to start a second run. You want to keep the current

@@ -436,6 +436,9 @@ func TestNewService_AsyncSummaryWorkerHonorsDispatchPolicy(
 		WithSummaryFilterAllowlist("tool-usage"),
 	)
 	require.NoError(t, err)
+	// This test isolates summary dispatch. Its recording client intentionally
+	// does not execute transaction callbacks.
+	svc.tableSessionRevisions = ""
 
 	sess := session.NewSession("app", "user", "sess")
 	sess.Events = []event.Event{

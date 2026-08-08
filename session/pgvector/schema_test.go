@@ -68,14 +68,14 @@ func TestBuildCreateIndexSQL_WithSchemaPrefix(
 // --- Tests for tableDefs and indexDefs ---
 
 func TestTableDefs_Count(t *testing.T) {
-	// Should have 6 tables.
-	const expectedTableCount = 6
+	// Active projections plus private revision metadata.
+	const expectedTableCount = 8
 	assert.Len(t, tableDefs, expectedTableCount)
 }
 
 func TestIndexDefs_Count(t *testing.T) {
-	// Should have 12 indexes.
-	const expectedIndexCount = 12
+	// Active projections plus revision-retention indexes.
+	const expectedIndexCount = 14
 	assert.Len(t, indexDefs, expectedIndexCount)
 }
 

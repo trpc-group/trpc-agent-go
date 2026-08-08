@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -264,6 +265,15 @@ func (s *Service) listSessions(
 }
 
 func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Event) error {
+	return s.addEventWithRevision(ctx, key, event, sessionrevision.Write{})
+}
+
+func (s *Service) addEventWithRevision(
+	ctx context.Context,
+	key session.Key,
+	event *event.Event,
+	write sessionrevision.Write,
+) error {
 	eventBytes, err := json.Marshal(event)
 	if err != nil {
 		return fmt.Errorf("marshal event failed: %w", err)
@@ -307,6 +317,13 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 			t := now.Add(s.opts.sessionTTL)
 			expiresAt = &t
 		}
+		persisted := event != nil && event.Response != nil &&
+			!event.IsPartial && event.IsValidContent()
+		if err := s.revisionStore().ApplyEventWrite(
+			ctx, tx, key, write, event, persisted, expiresAt,
+		); err != nil {
+			return err
+		}
 
 		// Update session state
 		_, err = tx.ExecContext(ctx,
@@ -338,6 +355,15 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 }
 
 func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent *session.TrackEvent) error {
+	return s.addTrackEventWithRevision(ctx, key, trackEvent, sessionrevision.Write{})
+}
+
+func (s *Service) addTrackEventWithRevision(
+	ctx context.Context,
+	key session.Key,
+	trackEvent *session.TrackEvent,
+	write sessionrevision.Write,
+) error {
 	eventBytes, err := json.Marshal(trackEvent)
 	if err != nil {
 		return fmt.Errorf("marshal track event failed: %w", err)
@@ -394,6 +420,11 @@ func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent
 		if trackTTL := s.opts.effectiveTrackEventTTL(); trackTTL > 0 {
 			t := now.Add(trackTTL)
 			trackExpires = &t
+		}
+		if err := s.revisionStore().ApplyTrackWrite(
+			ctx, tx, key, write, trackEvent, sessionExpires,
+		); err != nil {
+			return err
 		}
 
 		// Update session state.
@@ -536,7 +567,7 @@ func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error
 			}
 		}
 
-		return nil
+		return s.revisionStore().Delete(ctx, tx, key)
 	})
 
 	if err != nil {
@@ -559,7 +590,13 @@ func (s *Service) startAsyncPersistWorker() {
 	for _, eventPairChan := range s.eventPairChans {
 		go func(eventPairChan chan *sessionEventPair) {
 			defer s.persistWg.Done()
+			var pendingErr error
 			for pair := range eventPairChan {
+				if pair.done != nil {
+					pair.done <- pendingErr
+					pendingErr = nil
+					continue
+				}
 				ctx := context.Background()
 				ctx, cancel := context.WithTimeout(
 					ctx,
@@ -576,7 +613,8 @@ func (s *Service) startAsyncPersistWorker() {
 					pair.key.UserID,
 					pair.key.SessionID,
 				)
-				if err := s.addEvent(ctx, pair.key, pair.event); err != nil {
+				if err := s.addEventWithRevision(ctx, pair.key, pair.event, pair.write); err != nil {
+					pendingErr = err
 					log.ErrorfContext(
 						ctx,
 						"postgres session service async persist "+
@@ -592,7 +630,13 @@ func (s *Service) startAsyncPersistWorker() {
 	for _, trackPairChan := range s.trackEventChans {
 		go func(trackPairChan chan *trackEventPair) {
 			defer s.persistWg.Done()
+			var pendingErr error
 			for pair := range trackPairChan {
+				if pair.done != nil {
+					pair.done <- pendingErr
+					pendingErr = nil
+					continue
+				}
 				ctx := context.Background()
 				ctx, cancel := context.WithTimeout(
 					ctx,
@@ -610,7 +654,8 @@ func (s *Service) startAsyncPersistWorker() {
 					pair.key.UserID,
 					pair.key.SessionID,
 				)
-				if err := s.addTrackEvent(ctx, pair.key, pair.event); err != nil {
+				if err := s.addTrackEventWithRevision(ctx, pair.key, pair.event, pair.write); err != nil {
+					pendingErr = err
 					log.ErrorfContext(
 						ctx,
 						"postgres session service async persist track "+

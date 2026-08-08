@@ -121,6 +121,19 @@ sessionService, err := clickhouse.NewService(
 )
 ```
 
+## 替换最新一轮
+
+ClickHouse 支持通过 `Runner.Run` 和 `agent.WithLatestTurnReplacement` 编辑并重发
+最新一个已持久化 turn。由于 ClickHouse 不具备与 SQL backend 相同的行事务模型，服务
+会先归档废弃投影，再发布一份带版本的 canonical head。读取只认
+`session_revisions` 中的 canonical head，不会把暂存 archive 当作活跃投影。
+
+`NewService` 会自动创建 `session_revisions` 与 `session_revision_archives`。使用
+`WithSkipDBInit(true)` 的部署必须先按
+[`session/clickhouse/schema.sql`](https://github.com/trpc-group/trpc-agent-go/blob/main/session/clickhouse/schema.sql)
+创建这两个表。Replacement 会 drain 目标 Session 的异步 event 写入，并保留剩余 TTL。
+Runner API 与回滚边界见[替换最新一轮](index.md#replace-latest-turn)。
+
 ## 存储结构
 
 ClickHouse 实现使用了 `ReplacingMergeTree` 引擎来处理数据更新和去重。
@@ -238,7 +251,9 @@ COMMENT 'User states table';
 
 ## 注意事项
 
-1. **ClickHouse 版本**：需要 ClickHouse 22.3+ 以支持 JSON 类型
+1. **ClickHouse 版本**：需要 ClickHouse 22.3+ 以支持 JSON 类型。如果服务端仍通过
+   experimental setting 控制 JSON 类型，自动初始化会使用服务端错误中给出的 setting
+   名称重试。使用 `WithSkipDBInit(true)` 时，需要在手工建表时启用对应 setting。
 2. **ReplacingMergeTree**：数据更新通过插入新记录实现，后台自动合并去重
 3. **FINAL 查询**：读取时使用 FINAL 确保一致性，但可能影响性能
 4. **软删除清理**：`WithDeletedRetention` 使用 `ALTER TABLE DELETE`，对大数据集可能有性能影响，建议使用 ClickHouse Native TTL

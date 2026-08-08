@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"strings"
 
+	clickhousego "github.com/ClickHouse/clickhouse-go/v2"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 )
@@ -75,6 +76,38 @@ const (
 		ORDER BY (app_name, user_id, session_id, filter_key)
 		SETTINGS allow_nullable_key = 1`
 
+	sqlCreateSessionRevisionsTable = `
+		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
+			app_name    String,
+			user_id     String,
+			session_id  String,
+			generation  UInt64,
+			head        UInt64,
+			version     UInt64,
+			record      String,
+			snapshot    String,
+			updated_at  DateTime64(6),
+			expires_at  Nullable(DateTime64(6)),
+			deleted_at  Nullable(DateTime64(6))
+		) ENGINE = ReplacingMergeTree(version)
+		PARTITION BY (app_name, cityHash64(user_id) % 64)
+		ORDER BY (app_name, user_id, session_id)
+		SETTINGS allow_nullable_key = 1`
+
+	sqlCreateSessionRevisionArchivesTable = `
+		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
+			app_name    String,
+			user_id     String,
+			session_id  String,
+			generation  UInt64,
+			snapshot    String,
+			created_at  DateTime64(6),
+			expires_at  Nullable(DateTime64(6))
+		) ENGINE = ReplacingMergeTree(created_at)
+		PARTITION BY (app_name, cityHash64(user_id) % 64)
+		ORDER BY (app_name, user_id, session_id, generation)
+		SETTINGS allow_nullable_key = 1`
+
 	sqlCreateAppStatesTable = `
 		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
 			app_name    String,
@@ -114,6 +147,8 @@ var tableDefs = []tableDefinition{
 	{sqldb.TableNameSessionStates, sqlCreateSessionStatesTable},
 	{sqldb.TableNameSessionEvents, sqlCreateSessionEventsTable},
 	{sqldb.TableNameSessionSummaries, sqlCreateSessionSummariesTable},
+	{sqldb.TableNameSessionRevisions, sqlCreateSessionRevisionsTable},
+	{sqldb.TableNameSessionRevisionArchives, sqlCreateSessionRevisionArchivesTable},
 	{sqldb.TableNameAppStates, sqlCreateAppStatesTable},
 	{sqldb.TableNameUserStates, sqlCreateUserStatesTable},
 }
@@ -122,12 +157,22 @@ var tableDefs = []tableDefinition{
 func (s *Service) initDB(ctx context.Context) error {
 	log.Info("initializing clickhouse session database schema...")
 
+	schemaCtx := ctx
+
 	// Create tables
 	for _, tableDef := range tableDefs {
 		fullTableName := sqldb.BuildTableName(s.opts.tablePrefix, tableDef.name)
 		sql := strings.ReplaceAll(tableDef.template, "{{TABLE_NAME}}", fullTableName)
 
-		if err := s.chClient.Exec(ctx, sql); err != nil {
+		err := s.chClient.Exec(schemaCtx, sql)
+		if setting := requiredJSONTypeSetting(err); setting != "" {
+			schemaCtx = clickhousego.Context(
+				ctx,
+				clickhousego.WithSettings(clickhousego.Settings{setting: 1}),
+			)
+			err = s.chClient.Exec(schemaCtx, sql)
+		}
+		if err != nil {
 			return fmt.Errorf("create table %s failed: %w", fullTableName, err)
 		}
 		log.Infof("created table: %s", fullTableName)
@@ -135,4 +180,20 @@ func (s *Service) initDB(ctx context.Context) error {
 
 	log.Info("clickhouse session database schema initialized successfully")
 	return nil
+}
+
+func requiredJSONTypeSetting(err error) string {
+	if err == nil {
+		return ""
+	}
+	message := err.Error()
+	for _, setting := range []string{
+		"allow_experimental_json_type",
+		"allow_experimental_object_type",
+	} {
+		if strings.Contains(message, setting) {
+			return setting
+		}
+	}
+	return ""
 }

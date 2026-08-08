@@ -81,6 +81,16 @@ func (b *keyBuilder) SummaryKey(key session.Key) string {
 	return fmt.Sprintf("%s:sesssum:%s:%s:%s", b.fullPrefix(), key.AppName, b.hashTag(key.UserID), key.SessionID)
 }
 
+// RevisionKey returns the private latest-turn revision metadata key.
+func (b *keyBuilder) RevisionKey(key session.Key) string {
+	return fmt.Sprintf("%s:revision:%s:%s:%s", b.fullPrefix(), key.AppName, b.hashTag(key.UserID), key.SessionID)
+}
+
+// RevisionArchiveKey returns the private discarded-revision archive hash.
+func (b *keyBuilder) RevisionArchiveKey(key session.Key) string {
+	return fmt.Sprintf("%s:revision-archive:%s:%s:%s", b.fullPrefix(), key.AppName, b.hashTag(key.UserID), key.SessionID)
+}
+
 // TrackDataKey returns the key for track event data (Hash: field=eventID, value=TrackEvent JSON).
 // Format: [userPrefix:]hashidx:trkdata:appName:{userID}:sessionID:trackName
 func (b *keyBuilder) TrackDataKey(key session.Key, track session.Track) string {
@@ -115,6 +125,8 @@ func (b *keyBuilder) SessionKeys(key session.Key) []string {
 		b.EventDataKey(key),
 		b.EventTimeIndexKey(key),
 		b.SummaryKey(key),
+		b.RevisionKey(key),
+		b.RevisionArchiveKey(key),
 	}
 }
 

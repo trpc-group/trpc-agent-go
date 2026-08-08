@@ -42,29 +42,60 @@ return 1
 `)
 
 // luaUpdateSessionState atomically merges a session state patch into session meta.
-// KEYS[1] = sessionMeta key
-// ARGV[1] = statePatchJSON, ARGV[2] = nilKeysJSON, ARGV[3] = updatedAt RFC3339 string, ARGV[4] = TTL (seconds)
-// Returns: 1 on success, 0 if session not found
+// KEYS[1] = sessionMeta key, KEYS[2] = private revision metadata key,
+// KEYS[3] = private revision archive key
+// ARGV[1] = statePatchJSON, ARGV[2] = nilKeysJSON,
+// ARGV[3] = updatedAt RFC3339 string, ARGV[4] = TTL (seconds),
+// ARGV[5] = has expected generation, ARGV[6] = expected generation,
+// ARGV[7] = explicit turn hazard.
+// Returns: 1 on success, 0 if session not found, -1 if stale.
 var luaUpdateSessionState = redis.NewScript(`
 local sessionMetaKey = KEYS[1]
+local revisionKey = KEYS[2]
+local revisionArchiveKey = KEYS[3]
 local statePatchJSON = ARGV[1]
 local nilKeysJSON = ARGV[2]
 local updatedAt = ARGV[3]
 local ttl = tonumber(ARGV[4])
+local hasExpectedGeneration = tonumber(ARGV[5]) == 1
+local expectedGeneration = tonumber(ARGV[6])
+local explicitHazard = tonumber(ARGV[7]) == 1
 -- Use a simple placeholder string, then replace its quoted JSON form with null after encoding.
 local nilSentinel = "__TRPC_AGENT_GO_NULL__"
 
 local function setPreserveTTL(key, value)
     local ttlMs = redis.call('PTTL', key)
     redis.call('SET', key, value)
-    if ttlMs > 0 then
+    if ttlMs >= 0 then
         redis.call('PEXPIRE', key, ttlMs)
+    end
+end
+
+local function syncExistingTTL(key, sourceKey)
+    if redis.call('EXISTS', key) == 0 then return end
+    local ttlMs = redis.call('PTTL', sourceKey)
+    if ttlMs >= 0 then
+        redis.call('PEXPIRE', key, ttlMs)
+    elseif ttlMs == -1 then
+        redis.call('PERSIST', key)
     end
 end
 
 local metaJSON = redis.call('GET', sessionMetaKey)
 if not metaJSON then
     return 0
+end
+local revisionJSON = redis.call('GET', revisionKey)
+local revision = {generation = 0}
+if revisionJSON then
+    revision = cjson.decode(revisionJSON)
+end
+if hasExpectedGeneration and tonumber(revision.generation or 0) ~= expectedGeneration then
+    return -1
+end
+revision.head = tonumber(revision.head or 0) + 1
+if revision.checkpoint and (not hasExpectedGeneration or explicitHazard) then
+    revision.checkpoint.hazard = true
 end
 
 local meta = cjson.decode(metaJSON)
@@ -96,30 +127,64 @@ if ttl > 0 then
 else
     setPreserveTTL(sessionMetaKey, encodedMeta)
 end
+if ttl > 0 then
+    redis.call('SET', revisionKey, cjson.encode(revision), 'EX', ttl)
+else
+    setPreserveTTL(revisionKey, cjson.encode(revision))
+end
+syncExistingTTL(revisionArchiveKey, sessionMetaKey)
 
 return 1
 `)
 
 // luaAppendEvent appends an event atomically and applies StateDelta to session state.
-// KEYS[1] = sessionMeta key, KEYS[2] = evtdata key, KEYS[3] = evtidx:time key
-// ARGV[1] = eventID, ARGV[2] = eventJSON, ARGV[3] = timestamp, ARGV[4] = TTL (seconds), ARGV[5] = shouldStoreEvent (1 or 0)
-// Returns: 1 on success, 0 if session not found
+// KEYS[1] = sessionMeta key, KEYS[2] = evtdata key, KEYS[3] = evtidx:time key,
+// KEYS[4] = private revision metadata key,
+// KEYS[5] = private revision archive key.
+// ARGV[1] = eventID, ARGV[2] = eventJSON, ARGV[3] = timestamp,
+// ARGV[4] = TTL (seconds), ARGV[5] = shouldStoreEvent (1 or 0),
+// ARGV[6] = has expected generation, ARGV[7] = expected generation,
+// ARGV[8] = turn-start request ID, ARGV[9] = turn-start invocation ID,
+// ARGV[10] = pre-turn session snapshot, ARGV[11] = runner completion,
+// ARGV[12] = has expected head, ARGV[13] = expected head.
+// Returns: 1 on success, 0 if session not found, -1 for a stale generation,
+// -2 for a stale turn-start projection.
 var luaAppendEvent = redis.NewScript(`
 local sessionMetaKey = KEYS[1]
 local evtDataKey = KEYS[2]
 local evtTimeKey = KEYS[3]
+local revisionKey = KEYS[4]
+local revisionArchiveKey = KEYS[5]
 
 local eventID = ARGV[1]
 local eventJSON = ARGV[2]
 local timestamp = tonumber(ARGV[3])
 local ttl = tonumber(ARGV[4])
 local shouldStoreEvent = tonumber(ARGV[5]) == 1
+local hasExpectedGeneration = tonumber(ARGV[6]) == 1
+local expectedGeneration = tonumber(ARGV[7])
+local startRequestID = ARGV[8]
+local startInvocationID = ARGV[9]
+local snapshotBase64 = ARGV[10]
+local runnerCompletion = tonumber(ARGV[11]) == 1
+local hasExpectedHead = tonumber(ARGV[12]) == 1
+local expectedHead = tonumber(ARGV[13])
 
 local function setPreserveTTL(key, value)
     local ttlMs = redis.call('PTTL', key)
     redis.call('SET', key, value)
-    if ttlMs > 0 then
+    if ttlMs >= 0 then
         redis.call('PEXPIRE', key, ttlMs)
+    end
+end
+
+local function syncExistingTTL(key, sourceKey)
+    if redis.call('EXISTS', key) == 0 then return end
+    local ttlMs = redis.call('PTTL', sourceKey)
+    if ttlMs >= 0 then
+        redis.call('PEXPIRE', key, ttlMs)
+    elseif ttlMs == -1 then
+        redis.call('PERSIST', key)
     end
 end
 
@@ -129,6 +194,67 @@ if not metaJSON then
     return 0
 end
 
+local revisionJSON = redis.call('GET', revisionKey)
+local revision = {generation = 0}
+if revisionJSON then
+    revision = cjson.decode(revisionJSON)
+end
+local generation = tonumber(revision.generation or 0)
+if hasExpectedGeneration and generation ~= expectedGeneration then
+    return -1
+end
+local head = tonumber(revision.head or 0)
+if hasExpectedHead and head ~= expectedHead then
+    return -2
+end
+local revisionChanged = false
+revision.head = head + 1
+revisionChanged = true
+if not hasExpectedGeneration and revision.checkpoint then
+    revision.checkpoint.hazard = true
+    revisionChanged = true
+end
+local evt = cjson.decode(eventJSON)
+local evtRequestID = evt.requestID or ''
+local evtInvocationID = evt.invocationId or ''
+local validStart = startRequestID ~= '' and shouldStoreEvent and
+    startRequestID == evtRequestID and startInvocationID == evtInvocationID and
+    snapshotBase64 ~= ''
+if validStart then
+    local checkpoint = revision.checkpoint
+    if not checkpoint or checkpoint.terminal then
+        revision.checkpoint = {
+            requestID = startRequestID,
+            invocationID = startInvocationID,
+            snapshot = snapshotBase64,
+            terminal = false
+        }
+        revisionChanged = true
+    elseif checkpoint.requestID ~= startRequestID or checkpoint.invocationID ~= startInvocationID then
+        checkpoint.hazard = true
+        revisionChanged = true
+    end
+end
+
+local checkpoint = revision.checkpoint
+if checkpoint then
+    if not validStart and checkpoint.terminal then
+        checkpoint.hazard = true
+    end
+    if evtRequestID ~= checkpoint.requestID then
+        checkpoint.hazard = true
+    end
+    local stateDelta = evt.stateDelta
+    if stateDelta then
+        for key, _ in pairs(stateDelta) do
+            if string.sub(key, 1, 4) == 'app:' or string.sub(key, 1, 5) == 'user:' then
+                checkpoint.hazard = true
+            end
+        end
+    end
+    revisionChanged = true
+end
+
 -- 2. Store event data only if shouldStoreEvent is true
 if shouldStoreEvent then
     redis.call('HSET', evtDataKey, eventID, eventJSON)
@@ -136,7 +262,6 @@ if shouldStoreEvent then
 end
 
 -- 3. Apply StateDelta to session meta's state (always, regardless of shouldStoreEvent)
-local evt = cjson.decode(eventJSON)
 local stateDelta = evt.stateDelta
 if stateDelta and next(stateDelta) ~= nil then
     local meta = cjson.decode(metaJSON)
@@ -153,12 +278,31 @@ if stateDelta and next(stateDelta) ~= nil then
     end
 end
 
+if runnerCompletion and revision.checkpoint then
+    checkpoint = revision.checkpoint
+    if checkpoint.requestID == evtRequestID and checkpoint.invocationID == evtInvocationID then
+        checkpoint.terminal = true
+    else
+        checkpoint.hazard = true
+    end
+    revisionChanged = true
+end
+
+if revisionChanged or hasExpectedGeneration then
+    if ttl > 0 then
+        redis.call('SET', revisionKey, cjson.encode(revision), 'EX', ttl)
+    else
+        setPreserveTTL(revisionKey, cjson.encode(revision))
+    end
+end
+
 -- 4. Refresh TTL on event data keys
 if ttl > 0 then
     redis.call('EXPIRE', sessionMetaKey, ttl)
     redis.call('EXPIRE', evtDataKey, ttl)
     redis.call('EXPIRE', evtTimeKey, ttl)
 end
+syncExistingTTL(revisionArchiveKey, sessionMetaKey)
 
 return 1
 `)
@@ -196,23 +340,69 @@ return result
 // JSON map (String key) only if the incoming UpdatedAt is newer-or-equal.
 //
 // KEYS[1] = summaryKey (String containing JSON map of all filterKey summaries)
+// KEYS[2] = private revision metadata key
+// KEYS[3] = session metadata key
+// KEYS[4] = private revision archive key
 // ARGV[1] = filterKey
 // ARGV[2] = newSummaryJSON (single Summary, e.g. {"summary":"...","updated_at":"..."})
 // ARGV[3] = TTL (seconds, 0 = no TTL)
 //
-// Returns 1 if updated, 0 if skipped (existing is newer).
+// Returns 1 if updated, 0 if skipped (existing is newer), and -1 if stale.
 var luaSummarySetIfNewer = redis.NewScript(`
 local sumKey = KEYS[1]
+local revisionKey = KEYS[2]
+local sessionMetaKey = KEYS[3]
+local revisionArchiveKey = KEYS[4]
 local fk = ARGV[1]
 local newSum = cjson.decode(ARGV[2])
 local ttl = tonumber(ARGV[3])
+local hasExpectedGeneration = tonumber(ARGV[4]) == 1
+local expectedGeneration = tonumber(ARGV[5])
 
 local function setPreserveTTL(key, value)
     local ttlMs = redis.call('PTTL', key)
     redis.call('SET', key, value)
-    if ttlMs > 0 then
+    if ttlMs >= 0 then
         redis.call('PEXPIRE', key, ttlMs)
     end
+end
+
+local function setFromSessionTTL(key, value)
+    local ttlMs = redis.call('PTTL', sessionMetaKey)
+    redis.call('SET', key, value)
+    if ttlMs >= 0 then
+        redis.call('PEXPIRE', key, ttlMs)
+    elseif ttlMs == -1 then
+        redis.call('PERSIST', key)
+    end
+end
+
+local function syncArchiveTTL()
+    if redis.call('EXISTS', revisionArchiveKey) == 0 then return end
+    local ttlMs = redis.call('PTTL', sessionMetaKey)
+    if ttlMs >= 0 then
+        redis.call('PEXPIRE', revisionArchiveKey, ttlMs)
+    elseif ttlMs == -1 then
+        redis.call('PERSIST', revisionArchiveKey)
+    end
+end
+
+local sessionExists = redis.call('EXISTS', sessionMetaKey) == 1
+if not sessionExists and hasExpectedGeneration then return -1 end
+
+local revisionJSON = redis.call('GET', revisionKey)
+local revision = {generation = 0}
+if revisionJSON then revision = cjson.decode(revisionJSON) end
+if hasExpectedGeneration and tonumber(revision.generation or 0) ~= expectedGeneration then
+    return -1
+end
+if not hasExpectedGeneration and revision.checkpoint then
+    revision.checkpoint.hazard = true
+end
+local function touchRevision()
+    if not sessionExists then return end
+    setFromSessionTTL(revisionKey, cjson.encode(revision))
+    syncArchiveTTL()
 end
 
 local cur = redis.call('GET', sumKey)
@@ -224,6 +414,8 @@ if not cur or cur == '' then
     else
         redis.call('SET', sumKey, cjson.encode(m))
     end
+    revision.head = tonumber(revision.head or 0) + 1
+    touchRevision()
     return 1
 end
 
@@ -236,8 +428,11 @@ local new_ts = newSum and newSum['updated_at'] or nil
 if not old or (old_ts and new_ts and old_ts <= new_ts) then
     map[fk] = newSum
     setPreserveTTL(sumKey, cjson.encode(map))
+    revision.head = tonumber(revision.head or 0) + 1
+    touchRevision()
     return 1
 end
+touchRevision()
 return 0
 `)
 
@@ -313,11 +508,16 @@ return 1
 `)
 
 // luaTrimConversations trims the most recent N conversations (by RequestID).
-// KEYS[1] = evtdata key, KEYS[2] = evtidx:time key
+// KEYS[1] = evtdata key, KEYS[2] = evtidx:time key,
+// KEYS[3] = session metadata key, KEYS[4] = private revision metadata key,
+// KEYS[5] = private revision archive key
 // ARGV[1] = count
 var luaTrimConversations = redis.NewScript(`
 local evtDataKey = KEYS[1]
 local evtTimeKey = KEYS[2]
+local sessionMetaKey = KEYS[3]
+local revisionKey = KEYS[4]
+local revisionArchiveKey = KEYS[5]
 local count = tonumber(ARGV[1])
 
 local targetReqIDs = {}
@@ -355,6 +555,28 @@ for _, eid in ipairs(toDelete) do
     table.insert(result, data)
     redis.call('HDEL', evtDataKey, eid)
     redis.call('ZREM', evtTimeKey, eid)
+end
+
+if #toDelete > 0 and redis.call('EXISTS', sessionMetaKey) == 1 then
+    local revisionJSON = redis.call('GET', revisionKey)
+    local revision = {generation = 0}
+    if revisionJSON then revision = cjson.decode(revisionJSON) end
+    revision.head = tonumber(revision.head or 0) + 1
+    if revision.checkpoint then revision.checkpoint.hazard = true end
+    local ttlMs = redis.call('PTTL', sessionMetaKey)
+    redis.call('SET', revisionKey, cjson.encode(revision))
+    if ttlMs >= 0 then
+        redis.call('PEXPIRE', revisionKey, ttlMs)
+    elseif ttlMs == -1 then
+        redis.call('PERSIST', revisionKey)
+    end
+    if redis.call('EXISTS', revisionArchiveKey) == 1 then
+        if ttlMs >= 0 then
+            redis.call('PEXPIRE', revisionArchiveKey, ttlMs)
+        elseif ttlMs == -1 then
+            redis.call('PERSIST', revisionArchiveKey)
+        end
+    end
 end
 
 local reversed = {}
@@ -405,18 +627,23 @@ return 1
 // KEYS[2] = trkidx:time key (ZSet, member=eventID, score=timestamp)
 // KEYS[3] = sessionMeta key (String, for existence check and track registration)
 // KEYS[4] = trkidx:names key (Set, member=trackName)
+// KEYS[5] = private revision metadata key
+// KEYS[6] = private revision archive key
 // ARGV[1] = TrackEvent JSON
 // ARGV[2] = timestamp (UnixNano)
 // ARGV[3] = TTL (seconds, 0 = no TTL)
 // ARGV[4] = track TTL override set (1 or 0)
 // ARGV[5] = updated tracks value (base64-encoded JSON array, to set as state.tracks)
 // ARGV[6] = track name
-// Returns: generated eventID (integer) on success, 0 if session not found.
+// ARGV[7] = has expected generation, ARGV[8] = expected generation
+// Returns: generated eventID on success, 0 if session not found, -1 if stale.
 var luaAppendTrackEvent = redis.NewScript(`
 local dataKey = KEYS[1]
 local idxKey = KEYS[2]
 local metaKey = KEYS[3]
 local trackNamesKey = KEYS[4]
+local revisionKey = KEYS[5]
+local revisionArchiveKey = KEYS[6]
 
 local payload = ARGV[1]
 local ts = tonumber(ARGV[2])
@@ -424,11 +651,13 @@ local ttl = tonumber(ARGV[3])
 local trackTTLSet = tonumber(ARGV[4]) == 1
 local tracksVal = ARGV[5]
 local trackName = ARGV[6]
+local hasExpectedGeneration = tonumber(ARGV[7]) == 1
+local expectedGeneration = tonumber(ARGV[8])
 
 local function setPreserveTTL(key, value)
     local ttlMs = redis.call('PTTL', key)
     redis.call('SET', key, value)
-    if ttlMs > 0 then
+    if ttlMs >= 0 then
         redis.call('PEXPIRE', key, ttlMs)
     end
 end
@@ -437,6 +666,28 @@ end
 local metaJSON = redis.call('GET', metaKey)
 if not metaJSON then
     return 0
+end
+local sessionTTLms = redis.call('PTTL', metaKey)
+
+local revisionJSON = redis.call('GET', revisionKey)
+local revision = {generation = 0}
+if revisionJSON then
+    revision = cjson.decode(revisionJSON)
+end
+if hasExpectedGeneration and tonumber(revision.generation or 0) ~= expectedGeneration then
+    return -1
+end
+revision.head = tonumber(revision.head or 0) + 1
+if not hasExpectedGeneration and revision.checkpoint then
+    revision.checkpoint.hazard = true
+end
+local trackEvent = cjson.decode(payload)
+if revision.checkpoint then
+    local trackRequestID = trackEvent.requestID or ''
+    if revision.checkpoint.terminal or trackRequestID == '' or
+        trackRequestID ~= revision.checkpoint.requestID then
+        revision.checkpoint.hazard = true
+    end
 end
 
 -- Generate auto-increment ID via reserved "_seq" field in the data Hash
@@ -454,6 +705,19 @@ if not meta.state or type(meta.state) ~= 'table' then
 end
 meta.state['tracks'] = tracksVal
 setPreserveTTL(metaKey, cjson.encode(meta))
+redis.call('SET', revisionKey, cjson.encode(revision))
+if sessionTTLms >= 0 then
+    redis.call('PEXPIRE', revisionKey, sessionTTLms)
+elseif sessionTTLms == -1 then
+    redis.call('PERSIST', revisionKey)
+end
+if redis.call('EXISTS', revisionArchiveKey) == 1 then
+    if sessionTTLms >= 0 then
+        redis.call('PEXPIRE', revisionArchiveKey, sessionTTLms)
+    elseif sessionTTLms == -1 then
+        redis.call('PERSIST', revisionArchiveKey)
+    end
+end
 
 -- Refresh TTL for track data keys
 if ttl > 0 then

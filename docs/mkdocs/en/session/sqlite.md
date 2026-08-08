@@ -59,6 +59,26 @@ defer sessionService.Close()
 - **Schema/DDL**: `WithSkipDBInit`, `WithTablePrefix`
 - **Hooks**: `WithAppendEventHook`, `WithGetSessionHook`
 
+## Latest-turn Replacement Schema
+
+Latest-turn replacement through `Runner.Run` uses two backend-private tables in
+addition to the normal session projection:
+
+- `<prefix>session_revisions`: current generation, checkpoint, write fence,
+  and idempotency metadata
+- `<prefix>session_revision_archives`: discarded projections keyed by session
+  generation
+
+`NewService` creates both tables automatically. Deployments using
+`WithSkipDBInit(true)` must apply the corresponding definitions from
+`session/sqlite/init.go` before enabling latest-turn replacement. If the tables
+are absent, existing Session operations remain compatible, while replacement
+runs return `runner.ErrLatestTurnReplacementUnsupported`.
+
+Revision rows and archives use the source session's expiration timestamp and
+are removed by the normal cleanup loop. A replacement preserves that timestamp
+rather than refreshing the Session TTL.
+
 ## Use Cases
 
 | Scenario | Recommended Configuration |

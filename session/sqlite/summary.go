@@ -12,10 +12,13 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
 )
@@ -82,7 +85,44 @@ ON CONFLICT(app_name, user_id, session_id, filter_key) DO UPDATE SET
   expires_at = excluded.expires_at,
   deleted_at = NULL`
 
-	_, err = s.db.ExecContext(
+	s.stateWriteMu.Lock()
+	defer s.stateWriteMu.Unlock()
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin upsert summary: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	var expiresAt sql.NullInt64
+	err = tx.QueryRowContext(
+		ctx,
+		fmt.Sprintf(
+			`SELECT expires_at FROM %s
+WHERE app_name = ? AND user_id = ? AND session_id = ?
+AND deleted_at IS NULL`,
+			s.tableSessionStates,
+		),
+		key.AppName,
+		key.UserID,
+		key.SessionID,
+	).Scan(&expiresAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("session not found")
+	}
+	if err != nil {
+		return fmt.Errorf("get session state for summary: %w", err)
+	}
+	write := sessionrevision.NewWrite(ctx, sess)
+	record, revisionSupported, err := s.readRevisionForWrite(ctx, tx, key)
+	if err != nil {
+		return err
+	}
+	if err := checkRevisionGeneration(record, write); err != nil {
+		return err
+	}
+	revisionChanged := sessionrevision.ApplyWrite(record, write)
+
+	_, err = tx.ExecContext(
 		ctx,
 		fmt.Sprintf(insertSQL, s.tableSessionSummaries),
 		key.AppName,
@@ -91,10 +131,24 @@ ON CONFLICT(app_name, user_id, session_id, filter_key) DO UPDATE SET
 		filterKey,
 		summaryBytes,
 		sum.UpdatedAt.UTC().UnixNano(),
-		nil,
+		nullInt64Arg(expiresAt),
 	)
 	if err != nil {
 		return fmt.Errorf("upsert summary: %w", err)
+	}
+	if revisionSupported && (revisionChanged || write.HasExpectedGeneration) {
+		if err := s.writeRevisionTx(
+			ctx,
+			tx,
+			key,
+			record,
+			nullInt64Arg(expiresAt),
+		); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit summary: %w", err)
 	}
 	return nil
 }

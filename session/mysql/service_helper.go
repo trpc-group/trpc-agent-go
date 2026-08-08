@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/summaryrestore"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -329,6 +330,15 @@ func (s *Service) listSessions(
 
 // addEvent adds an event to a session (MySQL syntax).
 func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Event) error {
+	return s.addEventWithRevision(ctx, key, event, sessionrevision.Write{})
+}
+
+func (s *Service) addEventWithRevision(
+	ctx context.Context,
+	key session.Key,
+	event *event.Event,
+	write sessionrevision.Write,
+) error {
 	shouldPersistEvent := event != nil &&
 		event.Response != nil &&
 		!event.IsPartial &&
@@ -378,6 +388,11 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 			return fmt.Errorf("marshal session state failed: %w", err)
 		}
 		expiresAt := calculateExpiresAt(s.opts.sessionTTL)
+		if err := s.revisionStore().ApplyEventWrite(
+			ctx, tx, key, write, event, shouldPersistEvent, expiresAt,
+		); err != nil {
+			return err
+		}
 
 		// Update session state
 		_, err = tx.ExecContext(ctx,
@@ -422,6 +437,15 @@ func validateEventRawMessages(event *event.Event) error {
 
 // addTrackEvent adds a track event to a session (MySQL syntax).
 func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent *session.TrackEvent) error {
+	return s.addTrackEventWithRevision(ctx, key, trackEvent, sessionrevision.Write{})
+}
+
+func (s *Service) addTrackEventWithRevision(
+	ctx context.Context,
+	key session.Key,
+	trackEvent *session.TrackEvent,
+	write sessionrevision.Write,
+) error {
 	eventBytes, err := json.Marshal(trackEvent)
 	if err != nil {
 		return fmt.Errorf("marshal track event failed: %w", err)
@@ -465,6 +489,11 @@ func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent
 		}
 		sessionExpires := calculateExpiresAt(s.opts.sessionTTL)
 		trackExpires := calculateExpiresAt(s.opts.effectiveTrackEventTTL())
+		if err := s.revisionStore().ApplyTrackWrite(
+			ctx, tx, key, write, trackEvent, sessionExpires,
+		); err != nil {
+			return err
+		}
 
 		// Update session state.
 		_, err = tx.ExecContext(ctx,
@@ -604,7 +633,7 @@ func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error
 				return err
 			}
 		}
-		return nil
+		return s.revisionStore().Delete(ctx, tx, key)
 	})
 
 	if err != nil {

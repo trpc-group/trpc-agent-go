@@ -42,6 +42,25 @@ type trackEventReader interface {
 	GetTrackEvents(ctx context.Context, key session.Key, track session.Track, opts ...session.Option) (*session.TrackEvents, error)
 }
 
+type requestIDContextKey struct{}
+
+// ContextWithRequestID associates tracked AG-UI events with the effective
+// core Runner request without changing their protocol RunID.
+func ContextWithRequestID(ctx context.Context, requestID string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, requestIDContextKey{}, requestID)
+}
+
+func requestIDFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	requestID, _ := ctx.Value(requestIDContextKey{}).(string)
+	return requestID
+}
+
 // tracker is the implementation of the Tracker interface.
 type tracker struct {
 	sessionService    session.Service               // sessionService handles session lifecycle.
@@ -160,14 +179,20 @@ func (t *tracker) persistEvents(ctx context.Context, key session.Key, state *ses
 		return fmt.Errorf("ensure session exists: %w", err)
 	}
 	var overallErr error
+	requestID := requestIDFromContext(ctx)
 	for _, e := range events {
 		payload, err := e.ToJSON()
 		if err != nil {
 			multierr.AppendInto(&overallErr, fmt.Errorf("marshal event %v: %w", e, err))
 			continue
 		}
+		eventRequestID := requestID
+		if eventRequestID == "" {
+			eventRequestID = e.RunID()
+		}
 		trackEvent := &session.TrackEvent{
 			Track:     TrackAGUI,
+			RequestID: eventRequestID,
 			Payload:   json.RawMessage(append([]byte(nil), payload...)),
 			Timestamp: time.Now(),
 		}

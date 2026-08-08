@@ -32,7 +32,9 @@ type Track string
 
 // TrackEvent represents a track event.
 type TrackEvent struct {
-	Track     Track           `json:"track"`
+	Track Track `json:"track"`
+	// RequestID associates the track event with its originating runner request.
+	RequestID string          `json:"requestID,omitempty"`
 	Payload   json.RawMessage `json:"payload"`
 	Timestamp time.Time       `json:"timestamp"`
 }

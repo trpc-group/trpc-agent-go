@@ -27,8 +27,8 @@ func TestCreateTables_Success(t *testing.T) {
 
 	client := &mockPostgresClient{db: db}
 
-	// Mock table creation (6 tables).
-	for i := 0; i < 6; i++ {
+	// Mock all table creation statements.
+	for range tableDefs {
 		mock.ExpectExec("CREATE TABLE IF NOT EXISTS").
 			WillReturnResult(sqlmock.NewResult(0, 0))
 	}
@@ -49,7 +49,7 @@ func TestCreateTables_WithPrefix(t *testing.T) {
 	prefix := "myapp_"
 
 	// Mock table creation with prefix.
-	for i := 0; i < 6; i++ {
+	for range tableDefs {
 		mock.ExpectExec("CREATE TABLE IF NOT EXISTS myapp_").
 			WillReturnResult(sqlmock.NewResult(0, 0))
 	}
@@ -68,8 +68,8 @@ func TestCreateIndexes_Success(t *testing.T) {
 
 	client := &mockPostgresClient{db: db}
 
-	// Mock index creation (12 indexes).
-	for i := 0; i < 12; i++ {
+	// Mock all index creation statements.
+	for range indexDefs {
 		mock.ExpectExec("CREATE.*INDEX IF NOT EXISTS").
 			WillReturnResult(sqlmock.NewResult(0, 0))
 	}
@@ -254,8 +254,8 @@ func TestInitDB_Success(t *testing.T) {
 		return mockClient, nil
 	})
 
-	// Mock all CREATE operations (6 tables + 12 indexes = 18 total).
-	for i := 0; i < 18; i++ {
+	// Mock all CREATE operations.
+	for i := 0; i < len(tableDefs)+len(indexDefs); i++ {
 		mock.ExpectExec("CREATE").WillReturnResult(sqlmock.NewResult(0, 0))
 	}
 
@@ -286,8 +286,8 @@ func TestInitDB_WithTablePrefix(t *testing.T) {
 		return mockClient, nil
 	})
 
-	// Mock all CREATE operations (6 tables + ~12 indexes).
-	for i := 0; i < 18; i++ {
+	// Mock all CREATE operations.
+	for i := 0; i < len(tableDefs)+len(indexDefs); i++ {
 		mock.ExpectExec("CREATE").WillReturnResult(sqlmock.NewResult(0, 0))
 	}
 
@@ -345,8 +345,8 @@ func TestInitDB_CreateIndexesFails(t *testing.T) {
 		return mockClient, nil
 	})
 
-	// Mock create tables succeed (6 tables).
-	for i := 0; i < 6; i++ {
+	// Mock create tables succeed.
+	for range tableDefs {
 		mock.ExpectExec("CREATE").WillReturnResult(sqlmock.NewResult(0, 0))
 	}
 
@@ -383,8 +383,8 @@ func TestInitDB_WithInstanceName(t *testing.T) {
 		return mockClient, nil
 	})
 
-	// Mock all CREATE operations (6 tables + ~12 indexes).
-	for i := 0; i < 18; i++ {
+	// Mock all CREATE operations.
+	for i := 0; i < len(tableDefs)+len(indexDefs); i++ {
 		mock.ExpectExec("CREATE").WillReturnResult(sqlmock.NewResult(0, 0))
 	}
 
@@ -424,7 +424,7 @@ func TestCreateTables(t *testing.T) {
 	mockClient := &mockPostgresClient{db: db}
 
 	// Mock create tables.
-	for i := 0; i < 6; i++ {
+	for range tableDefs {
 		mock.ExpectExec("CREATE TABLE IF NOT EXISTS").
 			WillReturnResult(sqlmock.NewResult(0, 0))
 	}
@@ -443,7 +443,7 @@ func TestCreateTables_WithPrefixMock(t *testing.T) {
 	mockClient := &mockPostgresClient{db: db}
 
 	// Mock create tables with prefix.
-	for i := 0; i < 6; i++ {
+	for range tableDefs {
 		mock.ExpectExec("CREATE TABLE IF NOT EXISTS myapp_").
 			WillReturnResult(sqlmock.NewResult(0, 0))
 	}
@@ -461,8 +461,8 @@ func TestCreateIndexes(t *testing.T) {
 
 	mockClient := &mockPostgresClient{db: db}
 
-	// Mock create indexes (~12 indexes).
-	for i := 0; i < 12; i++ {
+	// Mock all index creation statements.
+	for range indexDefs {
 		mock.ExpectExec("CREATE").WillReturnResult(sqlmock.NewResult(0, 0))
 	}
 
@@ -479,8 +479,8 @@ func TestCreateIndexes_WithPrefix(t *testing.T) {
 
 	mockClient := &mockPostgresClient{db: db}
 
-	// Mock create indexes with prefix (~12 indexes).
-	for i := 0; i < 12; i++ {
+	// Mock all index creation statements.
+	for range indexDefs {
 		mock.ExpectExec("CREATE").WillReturnResult(sqlmock.NewResult(0, 0))
 	}
 

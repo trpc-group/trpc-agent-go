@@ -33,16 +33,8 @@ func datetimePrecisionForType(dataType string) any {
 
 // mockVerifySchemaQueries adds mock expectations for verifySchema queries
 func mockVerifySchemaQueries(mock sqlmock.Sqlmock, tablePrefix string) {
-	tableNames := []string{
-		sqldb.TableNameSessionStates,
-		sqldb.TableNameSessionEvents,
-		sqldb.TableNameSessionTrackEvents,
-		sqldb.TableNameSessionSummaries,
-		sqldb.TableNameAppStates,
-		sqldb.TableNameUserStates,
-	}
-
-	for _, tableName := range tableNames {
+	for _, tableDef := range tableDefs {
+		tableName := tableDef.name
 		fullTableName := sqldb.BuildTableName(tablePrefix, tableName)
 		schema := expectedSchema[tableName]
 

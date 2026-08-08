@@ -16,6 +16,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/hook"
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -38,7 +39,6 @@ func (s *Service) AppendEvent(
 	if err := key.CheckSessionKey(); err != nil {
 		return err
 	}
-
 	hctx := &session.AppendEventContext{
 		Context: ctx,
 		Session: sess,
@@ -64,13 +64,29 @@ func (s *Service) appendEventInternal(
 	key session.Key,
 	opts ...session.Option,
 ) error {
+	write := sessionrevision.NewWrite(ctx, sess)
+	if s.opts.enableAsyncPersist && write.Start != nil {
+		if err := s.flushRevisionPersistence(ctx, key); err != nil {
+			return fmt.Errorf("flush persistence before runner turn: %w", err)
+		}
+	} else if s.opts.enableAsyncPersist && e != nil && e.IsRunnerCompletion() {
+		if err := s.flushTrackPersistence(ctx, sess.Hash); err != nil {
+			return fmt.Errorf("flush track persistence before runner completion: %w", err)
+		}
+	}
 	sess.UpdateUserSession(e, opts...)
 
 	if s.opts.enableAsyncPersist {
-		return s.enqueueEventPersist(ctx, sess, key, e)
+		if write.Start != nil {
+			if err := s.addEventWithRevision(ctx, key, e, write); err != nil {
+				return fmt.Errorf("persist runner turn boundary: %w", err)
+			}
+			return nil
+		}
+		return s.enqueueEventPersistWithRevision(ctx, sess, key, e, write)
 	}
 
-	if err := s.addEvent(ctx, key, e); err != nil {
+	if err := s.addEventWithRevision(ctx, key, e, write); err != nil {
 		return fmt.Errorf("append event: %w", err)
 	}
 	return nil
@@ -81,6 +97,16 @@ func (s *Service) enqueueEventPersist(
 	sess *session.Session,
 	key session.Key,
 	e *event.Event,
+) (err error) {
+	return s.enqueueEventPersistWithRevision(ctx, sess, key, e, sessionrevision.Write{})
+}
+
+func (s *Service) enqueueEventPersistWithRevision(
+	ctx context.Context,
+	sess *session.Session,
+	key session.Key,
+	e *event.Event,
+	write sessionrevision.Write,
 ) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -100,7 +126,7 @@ func (s *Service) enqueueEventPersist(
 
 	index := sess.Hash % len(s.eventPairChans)
 	select {
-	case s.eventPairChans[index] <- &sessionEventPair{key: key, event: e}:
+	case s.eventPairChans[index] <- &sessionEventPair{key: key, event: e, write: write}:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -125,16 +151,17 @@ func (s *Service) AppendTrackEvent(
 	if err := key.CheckSessionKey(); err != nil {
 		return err
 	}
+	write := sessionrevision.NewWrite(ctx, sess)
 
 	if err := sess.AppendTrackEvent(trackEvent, opts...); err != nil {
 		return fmt.Errorf("append track event: %w", err)
 	}
 
 	if s.opts.enableAsyncPersist {
-		return s.enqueueTrackPersist(ctx, sess, key, trackEvent)
+		return s.enqueueTrackPersistWithRevision(ctx, sess, key, trackEvent, write)
 	}
 
-	if err := s.addTrackEvent(ctx, key, trackEvent); err != nil {
+	if err := s.addTrackEventWithRevision(ctx, key, trackEvent, write); err != nil {
 		return fmt.Errorf("append track event: %w", err)
 	}
 	return nil
@@ -170,6 +197,16 @@ func (s *Service) enqueueTrackPersist(
 	key session.Key,
 	e *session.TrackEvent,
 ) (err error) {
+	return s.enqueueTrackPersistWithRevision(ctx, sess, key, e, sessionrevision.Write{})
+}
+
+func (s *Service) enqueueTrackPersistWithRevision(
+	ctx context.Context,
+	sess *session.Session,
+	key session.Key,
+	e *session.TrackEvent,
+	write sessionrevision.Write,
+) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			if e, ok := r.(error); ok &&
@@ -188,7 +225,7 @@ func (s *Service) enqueueTrackPersist(
 
 	index := sess.Hash % len(s.trackEventChans)
 	select {
-	case s.trackEventChans[index] <- &trackEventPair{key: key, event: e}:
+	case s.trackEventChans[index] <- &trackEventPair{key: key, event: e, write: write}:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -216,13 +253,20 @@ func (s *Service) startAsyncPersistWorker() {
 	for _, ch := range s.eventPairChans {
 		go func(ch chan *sessionEventPair) {
 			defer s.persistWg.Done()
+			var pendingErr error
 			for pair := range ch {
+				if pair.done != nil {
+					pair.done <- pendingErr
+					pendingErr = nil
+					continue
+				}
 				ctx := context.Background()
 				ctx, cancel := context.WithTimeout(
 					ctx,
 					defaultAsyncPersistTimeout,
 				)
-				if err := s.addEvent(ctx, pair.key, pair.event); err != nil {
+				if err := s.addEventWithRevision(ctx, pair.key, pair.event, pair.write); err != nil {
+					pendingErr = err
 					log.ErrorfContext(
 						ctx,
 						"async persist event: %v",
@@ -237,17 +281,25 @@ func (s *Service) startAsyncPersistWorker() {
 	for _, ch := range s.trackEventChans {
 		go func(ch chan *trackEventPair) {
 			defer s.persistWg.Done()
+			var pendingErr error
 			for pair := range ch {
+				if pair.done != nil {
+					pair.done <- pendingErr
+					pendingErr = nil
+					continue
+				}
 				ctx := context.Background()
 				ctx, cancel := context.WithTimeout(
 					ctx,
 					defaultAsyncPersistTimeout,
 				)
-				if err := s.addTrackEvent(
+				if err := s.addTrackEventWithRevision(
 					ctx,
 					pair.key,
 					pair.event,
+					pair.write,
 				); err != nil {
+					pendingErr = err
 					log.ErrorfContext(
 						ctx,
 						"async persist track event: %v",

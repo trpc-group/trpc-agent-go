@@ -117,6 +117,7 @@ type sessionStateDoc struct {
 	UpdatedAt time.Time  `bson:"updated_at"`
 	ExpiresAt *time.Time `bson:"expires_at,omitempty"`
 	DeletedAt *time.Time `bson:"deleted_at,omitempty"`
+	Revision  []byte     `bson:"revision,omitempty"`
 }
 
 // stateKVDoc is the shared BSON shape of app_states and user_states. UserID is
@@ -320,13 +321,21 @@ func (s *Service) startAsyncPersistWorker() {
 	for _, persistChan := range s.persistChans {
 		go func(persistChan chan *persistJob) {
 			defer s.persistWg.Done()
+			var pendingErr error
 			for job := range persistChan {
+				if job.done != nil {
+					job.done <- pendingErr
+					pendingErr = nil
+					continue
+				}
 				ctx, cancel := context.WithTimeout(context.Background(), defaultAsyncPersistTimeout)
 				if job.trackEvent != nil {
-					if err := s.persistTrackEvent(ctx, job.key, job.trackEvent); err != nil {
+					if err := s.persistTrackEventWithRevision(ctx, job.key, job.trackEvent, job.write); err != nil {
+						pendingErr = err
 						log.ErrorfContext(ctx, "mongodb session async persist track event failed: %v", err)
 					}
-				} else if err := s.persistEvent(ctx, job.key, job.event); err != nil {
+				} else if err := s.persistEventWithRevision(ctx, job.key, job.event, job.write); err != nil {
+					pendingErr = err
 					log.ErrorfContext(ctx, "mongodb session async persist failed: %v", err)
 				}
 				cancel()

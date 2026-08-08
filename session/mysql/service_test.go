@@ -3639,16 +3639,8 @@ func mockDBInitWithPrefix(mock sqlmock.Sqlmock, tablePrefix string) {
 	mockCreateMissingTables(mock, tablePrefix)
 
 	// Mock: verifySchema queries for each table
-	tableNames := []string{
-		sqldb.TableNameSessionStates,
-		sqldb.TableNameSessionEvents,
-		sqldb.TableNameSessionTrackEvents,
-		sqldb.TableNameSessionSummaries,
-		sqldb.TableNameAppStates,
-		sqldb.TableNameUserStates,
-	}
-
-	for _, tableName := range tableNames {
+	for _, tableDef := range tableDefs {
+		tableName := tableDef.name
 		fullTableName := sqldb.BuildTableName(tablePrefix, tableName)
 		schema := expectedSchema[tableName]
 

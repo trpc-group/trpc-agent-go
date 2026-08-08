@@ -66,6 +66,17 @@ Since all Session read/write paths naturally carry `user_id`, it is used directl
 
 `app_states` stores app-level configuration — small dataset, infrequent writes. As a broadcast table, it can be read locally on any node without cross-shard queries.
 
+## Latest-turn Replacement
+
+TDSQL mode supports the same `Runner.Run` latest-turn replacement capability as
+MySQL. Revision metadata and discarded projections use the sharded
+`session_revisions` and `session_revision_archives` tables, with `user_id` as
+the shard key. Deployments using `WithSkipDBInit(true)` must provision the
+definitions from
+[`session/mysql/schema_tdsql.sql`](https://github.com/trpc-group/trpc-agent-go/blob/main/session/mysql/schema_tdsql.sql).
+See [Replacing the Latest Turn](index.md#replacing-the-latest-turn) for the API
+and behavioral contract.
+
 ## Table Schema
 
 - **TDSQL schema**: [`session/mysql/schema_tdsql.sql`](https://github.com/trpc-group/trpc-agent-go/blob/main/session/mysql/schema_tdsql.sql)

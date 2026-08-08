@@ -377,6 +377,13 @@ func TestDeleteSession(t *testing.T) {
 
 	evt := makeTestEvent("e1", time.Now(), "hello")
 	require.NoError(t, c.AppendEvent(ctx, key, evt))
+	require.NoError(t, rdb.Set(ctx, c.revisionKey(key), `{}`, 0).Err())
+	require.NoError(t, rdb.HSet(
+		ctx,
+		c.revisionArchiveKey(key),
+		"0",
+		`{}`,
+	).Err())
 
 	exists, _ := c.Exists(ctx, key)
 	assert.True(t, exists)
@@ -389,6 +396,14 @@ func TestDeleteSession(t *testing.T) {
 	sess, err := c.GetSession(ctx, key, 0, time.Time{})
 	require.NoError(t, err)
 	assert.Nil(t, sess)
+	for _, revisionKey := range []string{
+		c.revisionKey(key),
+		c.revisionArchiveKey(key),
+	} {
+		exists, err := rdb.Exists(ctx, revisionKey).Result()
+		require.NoError(t, err)
+		assert.Zero(t, exists)
+	}
 }
 
 func TestDeleteSession_WithTracks(t *testing.T) {
