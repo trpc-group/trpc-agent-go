@@ -1,0 +1,49 @@
+# Tool Safety Guard example policy
+#
+# Overlay on DefaultPolicy: omitted deny lists keep the package defaults.
+# Runtime demo writes under output/ so committed fixtures can stay put.
+
+allowed_commands: []
+
+# Listed for readability; same names exist in DefaultPolicy.
+denied_commands:
+  - rm
+  - rmdir
+  - dd
+  - mkfs
+  - chmod
+  - chown
+
+denied_paths:
+  - /.ssh
+  - /.aws
+  - .env
+  - id_rsa
+  - /etc/shadow
+
+allowed_hosts:
+  - api.github.com
+  - proxy.golang.org
+  - sum.golang.org
+
+# Locale/terminal only. Do not put PATH/HOME/GOROOT here — tool args could
+# retarget which binary runs after Guard allows a scanned command name.
+allowed_env_vars:
+  - LANG
+  - LC_ALL
+  - TERM
+
+ask_commands:
+  - npm
+  - pip
+  - pip3
+  - apt
+  - apt-get
+  - go
+
+# Pre-exec scan hints only (long sleep / huge args → ask).
+# They do not kill processes or cap live stdout; set those on the executor.
+max_timeout_seconds: 60
+max_output_bytes: 1048576
+
+host_exec_requires_ask: true
