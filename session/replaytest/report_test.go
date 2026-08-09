@@ -69,6 +69,41 @@ func TestReportEncodingPropagatesUnsupportedValues(t *testing.T) {
 	}
 }
 
+func TestMarshalReportPreservesExplicitNullDifferenceValues(t *testing.T) {
+	report := Report{Differences: []Difference{
+		{
+			Case: "case", Backend: "sqlite", Path: "$.sessions[0].events[0].extensions.value",
+			Baseline: nil, Actual: "value",
+		},
+		{
+			Case: "case", Backend: "sqlite", Path: "$.sessions[0].state.missing",
+			Baseline: missingValue, Actual: nil,
+		},
+	}}
+	encoded, err := MarshalReport(report)
+	if err != nil {
+		t.Fatalf("MarshalReport() error = %v", err)
+	}
+	var decoded struct {
+		Differences []map[string]json.RawMessage `json:"differences"`
+	}
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("unmarshal report: %v", err)
+	}
+	if got, ok := decoded.Differences[0]["baseline"]; !ok || string(got) != "null" {
+		t.Fatalf("explicit null baseline encoded as %q, present=%v", got, ok)
+	}
+	if got := decoded.Differences[0]["actual"]; string(got) != `"value"` {
+		t.Fatalf("actual encoded as %q", got)
+	}
+	if got := decoded.Differences[1]["baseline"]; string(got) != `"`+missingValue+`"` {
+		t.Fatalf("missing baseline encoded as %q", got)
+	}
+	if got, ok := decoded.Differences[1]["actual"]; !ok || string(got) != "null" {
+		t.Fatalf("explicit null actual encoded as %q, present=%v", got, ok)
+	}
+}
+
 func TestReportSortHelpersUseAllTieBreakers(t *testing.T) {
 	probes := cloneAndSortProbeResults([]CapabilityProbeResult{
 		{Probe: "probe", Backend: "z", Capability: CapabilityTTL},

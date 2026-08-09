@@ -412,13 +412,42 @@ func scoreValuesEqual(path string, baseline, actual any, tolerance float64) bool
 }
 
 func durationValuesEqual(path string, baseline, actual any, tolerance time.Duration) bool {
-	if !strings.HasSuffix(path, ".duration") || !strings.Contains(path, ".tracks[") ||
-		!strings.Contains(path, "].events[") {
+	if !isTrackEventDurationPath(path) {
 		return false
 	}
 	baselineDuration, baselineOK := numericFloat64(baseline)
 	actualDuration, actualOK := numericFloat64(actual)
 	return baselineOK && actualOK && math.Abs(baselineDuration-actualDuration) <= float64(tolerance)
+}
+
+func isTrackEventDurationPath(path string) bool {
+	const suffix = ".duration"
+	itemPath := strings.TrimSuffix(path, suffix)
+	if itemPath == path {
+		return false
+	}
+	return isTrackEventItemPath(itemPath)
+}
+
+func isTrackEventItemPath(path string) bool {
+	const eventMarker = ".events["
+	eventPosition := strings.LastIndex(path, eventMarker)
+	if eventPosition < 0 || !strings.HasSuffix(path, "]") {
+		return false
+	}
+	if _, err := strconv.Atoi(path[eventPosition+len(eventMarker) : len(path)-1]); err != nil {
+		return false
+	}
+	trackPath := path[:eventPosition]
+	if !isCollectionItem(trackPath, "tracks") {
+		return false
+	}
+	const trackMarker = ".tracks["
+	trackPosition := strings.LastIndex(trackPath, trackMarker)
+	if trackPosition < 0 {
+		return false
+	}
+	return isCollectionItem(trackPath[:trackPosition], "sessions")
 }
 
 func numericFloat64(value any) (float64, bool) {

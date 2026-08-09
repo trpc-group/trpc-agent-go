@@ -389,14 +389,14 @@ func normalizeTimes(values []*time.Time, precision time.Duration) {
 	}
 	sort.Slice(ordered, func(i, j int) bool { return ordered[i].Before(ordered[j]) })
 	ranks := make(map[time.Time]int, len(ordered))
-	var clusterStart time.Time
+	var previous time.Time
 	rank := 0
 	for _, value := range ordered {
-		if rank == 0 || value.Sub(clusterStart) > precision {
+		if rank == 0 || value.Sub(previous) > precision {
 			rank++
-			clusterStart = value
 		}
 		ranks[value] = rank
+		previous = value
 	}
 	for _, value := range values {
 		if value == nil || value.IsZero() {

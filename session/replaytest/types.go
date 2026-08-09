@@ -231,8 +231,8 @@ type Difference struct {
 	Backend     string  `json:"backend"`
 	Path        string  `json:"path"`
 	Locator     Locator `json:"locator,omitempty"`
-	Baseline    any     `json:"baseline,omitempty"`
-	Actual      any     `json:"actual,omitempty"`
+	Baseline    any     `json:"baseline"`
+	Actual      any     `json:"actual"`
 	AllowedDiff bool    `json:"allowed_diff"`
 	Explanation string  `json:"explanation,omitempty"`
 }

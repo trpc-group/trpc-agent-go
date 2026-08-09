@@ -381,6 +381,21 @@ func TestCompareSnapshotsUsesAbsoluteDurationTolerance(t *testing.T) {
 		t.Fatalf("zero duration differences within tolerance = %#v", differences)
 	}
 
+	baseline = Snapshot{Sessions: []SessionSnapshot{{Tracks: []TrackSnapshot{{
+		Events: []TrackEventSnapshot{{Payload: map[string]any{"duration": int64(1)}}},
+	}}}}}
+	actual = Snapshot{Sessions: []SessionSnapshot{{Tracks: []TrackSnapshot{{
+		Events: []TrackEventSnapshot{{Payload: map[string]any{"duration": int64(time.Millisecond)}}},
+	}}}}}
+	differences, err = CompareSnapshots(CompareInput{
+		Case: "payload-duration", Backend: "sqlite", Baseline: baseline, Actual: actual,
+		Options: options,
+	})
+	if err != nil {
+		t.Fatalf("CompareSnapshots() payload duration error = %v", err)
+	}
+	differenceAt(t, differences, "$.sessions[0].tracks[0].events[0].payload.duration")
+
 	baseline.Sessions[0].Tracks[0].Events[0].Duration = 1900 * time.Microsecond
 	actual.Sessions[0].Tracks[0].Events[0].Duration = 3 * time.Millisecond
 	differences, err = CompareSnapshots(CompareInput{

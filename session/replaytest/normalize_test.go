@@ -449,6 +449,42 @@ func TestNormalizeSnapshotToleratesBackendTimePrecision(t *testing.T) {
 	}
 }
 
+func TestNormalizeSnapshotToleratesPrecisionTruncatedBursts(t *testing.T) {
+	base := time.Unix(100, 0)
+	baseline := Snapshot{Sessions: []SessionSnapshot{{
+		Events: []EventSnapshot{
+			{Timestamp: base},
+			{Timestamp: base.Add(600 * time.Microsecond)},
+			{Timestamp: base.Add(1200 * time.Microsecond)},
+		},
+	}}}
+	actual := Snapshot{Sessions: []SessionSnapshot{{
+		Events: []EventSnapshot{
+			{Timestamp: base},
+			{Timestamp: base},
+			{Timestamp: base.Add(time.Millisecond)},
+		},
+	}}}
+	gotBaseline := NormalizeSnapshot(baseline, DefaultNormalizeOptions())
+	gotActual := NormalizeSnapshot(actual, DefaultNormalizeOptions())
+	if !reflect.DeepEqual(gotBaseline, gotActual) {
+		t.Fatalf("precision-truncated burst differs:\nbaseline: %#v\nactual: %#v", gotBaseline, gotActual)
+	}
+}
+
+func TestNormalizeTimesStartsNewRankAfterPrecisionGap(t *testing.T) {
+	first := time.Unix(100, 0)
+	second := first.Add(time.Millisecond + time.Nanosecond)
+	third := second.Add(500 * time.Microsecond)
+	normalizeTimes([]*time.Time{&first, &second, &third}, time.Millisecond)
+	if first.Equal(second) {
+		t.Fatalf("gap larger than precision used same rank: %v, %v", first, second)
+	}
+	if !second.Equal(third) {
+		t.Fatalf("adjacent values within precision got different ranks: %v, %v", second, third)
+	}
+}
+
 func TestNormalizeSnapshotAssignsInvocationIDsAfterTrackSorting(t *testing.T) {
 	baseline := Snapshot{Sessions: []SessionSnapshot{{Tracks: []TrackSnapshot{
 		{Name: "b", Events: []TrackEventSnapshot{{InvocationID: "baseline-b"}}},
