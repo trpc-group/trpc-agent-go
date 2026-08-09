@@ -39,3 +39,7 @@ rin = "rin"
 dify = "dify"
 countr = "countr"
 daa = "daa"
+# require_human_reveiw is deliberately misspelled in
+# policy_strict_yaml_test.go to verify that unknown YAML fields are
+# rejected by KnownFields(true). Do not "fix" that spelling.
+reveiw = "reveiw"

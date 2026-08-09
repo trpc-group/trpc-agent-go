@@ -164,3 +164,31 @@ func TestHostExecRisk_BackgroundTrue_AllowBackgroundAllows(t *testing.T) {
 			dec.Action, tool.PermissionActionAllow)
 	}
 }
+
+// TestHostExecRisk_BackgroundTrue_DeniedUnderReviewRequiredPolicy is the
+// regression for a review finding on issue 07: hostExecRiskRule checked
+// RequireHumanReview before the structured background flag, so under the
+// default policy (HostExec.RequireHumanReview=true) a background:true
+// request with a clean command text was only asked for review, never
+// denied.  allow_background: false was therefore unenforceable out of the
+// box.  The background deny must take precedence over the softer ask.
+func TestHostExecRisk_BackgroundTrue_DeniedUnderReviewRequiredPolicy(t *testing.T) {
+	// The default policy keeps HostExec.RequireHumanReview=true and
+	// AllowBackground=false, which is the configuration in which the
+	// ordering bug surfaced.
+	pp := NewPermissionPolicyFromScanner(mustScanner(t, DefaultPolicy()), nil)
+
+	req := &tool.PermissionRequest{
+		Tool:      &fakeBackendTool{declared: BackendHostExec, name: "exec_command"},
+		ToolName:  "exec_command",
+		Arguments: []byte(`{"command":"echo hello","background":true}`),
+	}
+	dec, err := pp.CheckToolPermission(context.Background(), req)
+	if err != nil {
+		t.Fatalf("CheckToolPermission: %v", err)
+	}
+	if dec.Action != tool.PermissionActionDeny {
+		t.Errorf("hostexec background:true under default policy: got action %q want %q",
+			dec.Action, tool.PermissionActionDeny)
+	}
+}

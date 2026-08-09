@@ -286,12 +286,12 @@ func hostTargetIndex(args []string) int {
 }
 
 // hostFromTarget extracts a hostname from a target argument, handling
-// both scheme-ful URLs and scheme-less hosts.  It returns "" when the
+// both scheme-full URLs and scheme-less hosts.  It returns "" when the
 // target does not carry a recognizable host, so ordinary package names
 // and local arguments are not treated as egress targets.
 func hostFromTarget(arg string) string {
 	arg = strings.ToLower(arg)
-	// Scheme-ful URL: delegate to the existing host extractor.
+	// Scheme-full URL: delegate to the existing host extractor.
 	if strings.HasPrefix(arg, "http://") || strings.HasPrefix(arg, "https://") {
 		return extractHost(arg)
 	}
@@ -369,6 +369,10 @@ func (r *shellBypassRule) Check(_ context.Context, req *ScanRequest) *Risk {
 // slipped past allow_background: false.  The textual markers ("&",
 // "nohup", "disown", "setsid") remain a fallback for the direct
 // ScanCommand path, where no structured argument is available.
+//
+// Background denies take precedence over the require_human_review ask, so
+// allow_background: false remains enforceable under the default policy,
+// where hostexec defaults to require_human_review: true.
 // ----------------------------------------------------------------
 
 type hostExecRiskRule struct {
@@ -395,7 +399,50 @@ func (r *hostExecRiskRule) Check(_ context.Context, req *ScanRequest) *Risk {
 	}
 	policy := r.policyFor(req)
 
-	// If the backend requires human review, flag as ask.
+	// Background risks are hard denies and take precedence over the
+	// softer ask from RequireHumanReview, so allow_background: false
+	// stays enforceable even when the backend policy also requires
+	// human review.  Checking RequireHumanReview first would mask the
+	// background deny under the default policy (hostexec defaults to
+	// require_human_review: true).
+	if !policy.AllowBackground {
+		// Structured "background" flag: authoritative.  The adapter
+		// reads it from the tool's JSON arguments, so a
+		// background:true request with a clean command string is
+		// still caught here.
+		if req.Background {
+			return &Risk{
+				RuleID:      r.ID(),
+				RuleName:    r.Name(),
+				Level:       RiskHigh,
+				Evidence:    "background process requested via 'background': true",
+				Suggestion:  "avoid background processes or enable allow_background",
+				ShouldBlock: true,
+			}
+		}
+
+		// Textual fallback for the direct ScanCommand path (no
+		// structured argument): a command that textually requests
+		// background execution is still a background risk.
+		lower := strings.ToLower(req.Command)
+		bgMarkers := []string{" &", "nohup ", "disown ", "setsid "}
+		for _, marker := range bgMarkers {
+			if strings.Contains(lower, marker) {
+				return &Risk{
+					RuleID:      r.ID(),
+					RuleName:    r.Name(),
+					Level:       RiskHigh,
+					Evidence:    fmt.Sprintf("background process marker %q detected", strings.TrimSpace(marker)),
+					Suggestion:  "avoid background processes or enable allow_background",
+					ShouldBlock: true,
+				}
+			}
+		}
+	}
+
+	// If the backend requires human review, flag as ask.  This is
+	// checked after the background denies so a deny is never downgraded
+	// to an ask when both policies apply.
 	if policy.RequireHumanReview {
 		return &Risk{
 			RuleID:      r.ID(),
@@ -404,42 +451,6 @@ func (r *hostExecRiskRule) Check(_ context.Context, req *ScanRequest) *Risk {
 			Evidence:    "hostexec backend requires human review for all commands",
 			Suggestion:  "review the command before approving execution",
 			ShouldBlock: false,
-		}
-	}
-
-	if policy.AllowBackground {
-		return nil
-	}
-
-	// Structured "background" flag: authoritative.  The adapter reads it
-	// from the tool's JSON arguments, so a background:true request with a
-	// clean command string is still caught here.
-	if req.Background {
-		return &Risk{
-			RuleID:      r.ID(),
-			RuleName:    r.Name(),
-			Level:       RiskHigh,
-			Evidence:    "background process requested via 'background': true",
-			Suggestion:  "avoid background processes or enable allow_background",
-			ShouldBlock: true,
-		}
-	}
-
-	// Textual fallback for the direct ScanCommand path (no structured
-	// argument): a command that textually requests background execution is
-	// still a background risk.
-	lower := strings.ToLower(req.Command)
-	bgMarkers := []string{" &", "nohup ", "disown ", "setsid "}
-	for _, marker := range bgMarkers {
-		if strings.Contains(lower, marker) {
-			return &Risk{
-				RuleID:      r.ID(),
-				RuleName:    r.Name(),
-				Level:       RiskHigh,
-				Evidence:    fmt.Sprintf("background process marker %q detected", strings.TrimSpace(marker)),
-				Suggestion:  "avoid background processes or enable allow_background",
-				ShouldBlock: true,
-			}
 		}
 	}
 
