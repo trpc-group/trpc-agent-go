@@ -59,6 +59,16 @@ const (
 type Backend string
 
 const (
+	// BackendNone marks a tool that is not an execution tool and therefore
+	// is not subject to command/code safety scanning.  When the resolved
+	// backend is BackendNone, the permission policy short-circuits to an
+	// allow decision instead of assuming the tool carries a "command"
+	// argument and producing an ask for a missing field.
+	//
+	// Tools that execute commands or code must declare a concrete backend
+	// via BackendProvider; BackendNone is the value used when no execution
+	// backend applies (e.g. file, search, or MCP tools).
+	BackendNone Backend = "none"
 	// BackendWorkspaceExec is the workspaceexec backend.
 	BackendWorkspaceExec Backend = "workspaceexec"
 	// BackendHostExec is the hostexec backend.
@@ -93,6 +103,12 @@ type ScanRequest struct {
 	Backend Backend
 	// Language is the code language (only for codeexec).
 	Language string
+	// Background reports whether the caller asked the command to run as a
+	// background process.  It is taken from the structured "background"
+	// boolean of the hostexec / workspaceexec argument shape, not inferred
+	// from the command text, so a background request with a clean command
+	// string is still classified correctly by the hostexec_risk rule.
+	Background bool
 }
 
 // ScanReport is the complete result of a safety scan.

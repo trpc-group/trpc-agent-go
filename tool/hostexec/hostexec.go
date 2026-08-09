@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/safety"
 )
 
 const (
@@ -256,6 +257,14 @@ func (t *execCommandTool) Declaration() *tool.Declaration {
 			},
 		},
 	}
+}
+
+// SafetyBackend declares that this tool executes commands on the host
+// backend, so the safety scanner selects the hostexec rule set without
+// relying on tool-name substring matching.  The method implements
+// safety.BackendProvider.
+func (t *execCommandTool) SafetyBackend() safety.Backend {
+	return safety.BackendHostExec
 }
 
 type execInput struct {
@@ -639,3 +648,4 @@ var _ tool.ToolSet = (*toolSet)(nil)
 var _ tool.CallableTool = (*execCommandTool)(nil)
 var _ tool.CallableTool = (*writeStdinTool)(nil)
 var _ tool.CallableTool = (*killSessionTool)(nil)
+var _ safety.BackendProvider = (*execCommandTool)(nil)

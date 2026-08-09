@@ -64,6 +64,16 @@ func NewPermissionPolicyFromScanner(scanner *Scanner, auditLogger *AuditLogger) 
 
 // CheckToolPermission implements tool.PermissionPolicy.
 func (p *PermissionPolicy) CheckToolPermission(ctx context.Context, req *tool.PermissionRequest) (tool.PermissionDecision, error) {
+	// Non-execution tools (file, search, MCP, ordinary tools) are not
+	// subject to command/code safety scanning.  When the resolved backend
+	// is BackendNone, short-circuit to allow instead of assuming the tool
+	// carries a "command" argument and producing an ask for a missing
+	// field.  Execution tools declare a concrete backend via
+	// BackendProvider, so they never reach this branch.
+	if inferBackend(req) == BackendNone {
+		return tool.AllowPermission(), nil
+	}
+
 	start := time.Now()
 
 	scanReq, err := p.extractScanRequest(req)
@@ -106,14 +116,35 @@ func (p *PermissionPolicy) extractScanRequest(req *tool.PermissionRequest) (*Sca
 
 	switch backend {
 	case BackendCodeExec:
-		code, _ := args["code"].(string)
-		language, _ := args["language"].(string)
-		if code == "" {
-			return nil, fmt.Errorf("missing 'code' argument for tool %q", req.ToolName)
+		// The model-visible execute_code tool carries source as a
+		// code_blocks array of {language, code} objects (see
+		// tool/codeexec/codeexec.go Declaration).  Parse that real
+		// shape instead of the legacy top-level "code" field, which
+		// the tool never actually sends.  Each block's source is
+		// included in the scan input so the code-execution rules
+		// inspect every block; a missing code_blocks argument fails
+		// safe to ask (handled by the caller) rather than allowing or
+		// denying blind.
+		blocks, err := parseCodeBlocks(args["code_blocks"])
+		if err != nil {
+			return nil, fmt.Errorf("tool %q: %w", req.ToolName, err)
+		}
+		var b strings.Builder
+		var language string
+		for i, blk := range blocks {
+			if i > 0 {
+				// Newline separator keeps blocks distinct and
+				// avoids spurious cross-block pattern matches.
+				b.WriteByte('\n')
+			}
+			b.WriteString(blk.Code)
+			if language == "" {
+				language = blk.Language
+			}
 		}
 		return &ScanRequest{
 			ToolName: req.ToolName,
-			Command:  code,
+			Command:  b.String(),
 			Backend:  backend,
 			Language: language,
 		}, nil
@@ -122,26 +153,130 @@ func (p *PermissionPolicy) extractScanRequest(req *tool.PermissionRequest) (*Sca
 		if command == "" {
 			return nil, fmt.Errorf("missing 'command' argument for tool %q", req.ToolName)
 		}
+		// The hostexec and workspaceexec argument shapes expose
+		// background as a separate JSON boolean.  Read it so the
+		// hostexec_risk rule can enforce allow_background on the
+		// structured flag rather than guessing from the command text.
+		background, _ := args["background"].(bool)
 		return &ScanRequest{
-			ToolName: req.ToolName,
-			Command:  command,
-			Backend:  backend,
+			ToolName:   req.ToolName,
+			Command:    command,
+			Backend:    backend,
+			Background: background,
 		}, nil
 	}
+}
+
+// codeBlock is the parsed form of one entry in the code_blocks argument.
+type codeBlock struct {
+	Language string
+	Code     string
+}
+
+// parseCodeBlocks extracts code blocks from the code_blocks argument of an
+// execute_code call.  It tolerates the same LLM quirks that
+// tool/codeexec.unmarshalCodeBlocks handles so the safety scanner sees the
+// same source the tool would execute: a normal array of {language, code}
+// objects, a single object in place of the array, or a double-encoded
+// JSON string containing either of those.
+//
+// A nil or empty code_blocks value yields an error so the caller fails safe
+// (asks for review) instead of scanning empty input.
+func parseCodeBlocks(raw any) ([]codeBlock, error) {
+	if raw == nil {
+		return nil, fmt.Errorf("missing 'code_blocks' argument")
+	}
+
+	// Unwrap a double-encoded JSON string the LLM emitted in place of
+	// the array.
+	if s, ok := raw.(string); ok {
+		var unwrapped any
+		if err := json.Unmarshal([]byte(s), &unwrapped); err != nil {
+			return nil, fmt.Errorf("decode code_blocks string: %w", err)
+		}
+		raw = unwrapped
+	}
+
+	switch v := raw.(type) {
+	case []any:
+		if len(v) == 0 {
+			return nil, fmt.Errorf("'code_blocks' is empty")
+		}
+		blocks := make([]codeBlock, 0, len(v))
+		for i, item := range v {
+			blk, err := decodeCodeBlock(item)
+			if err != nil {
+				return nil, fmt.Errorf("code_blocks[%d]: %w", i, err)
+			}
+			blocks = append(blocks, blk)
+		}
+		return blocks, nil
+	case map[string]any:
+		// Single object in place of the array — tolerate the shape.
+		blk, err := decodeCodeBlock(v)
+		if err != nil {
+			return nil, fmt.Errorf("code_blocks: %w", err)
+		}
+		return []codeBlock{blk}, nil
+	default:
+		return nil, fmt.Errorf("code_blocks: expected array, object, or string, got %T", raw)
+	}
+}
+
+// decodeCodeBlock decodes one {language, code} object.  An empty code field
+// is rejected so a malformed block fails safe rather than scanning nothing.
+func decodeCodeBlock(item any) (codeBlock, error) {
+	m, ok := item.(map[string]any)
+	if !ok {
+		return codeBlock{}, fmt.Errorf("expected object, got %T", item)
+	}
+	language, _ := m["language"].(string)
+	code, _ := m["code"].(string)
+	if code == "" {
+		return codeBlock{}, fmt.Errorf("missing 'code' field")
+	}
+	return codeBlock{Language: language, Code: code}, nil
 }
 
 // BackendProvider is an optional interface that tools can implement to
 // explicitly declare their safety backend category.  When a tool
 // implements this interface, the scanner uses the declared backend
 // instead of inferring it from the tool name.
+//
+// The known execution tools declare their backend via this interface:
+//
+//   - tool/hostexec's exec_command tool   -> BackendHostExec
+//   - tool/workspaceexec's workspace_exec  -> BackendWorkspaceExec
+//   - tool/codeexec's execute_code tool    -> BackendCodeExec
+//
+// Tools that do not implement BackendProvider fall back to the
+// name-based heuristic in inferBackend, which is a last-resort path
+// and must not be relied on for tools that can declare a backend.
 type BackendProvider interface {
 	SafetyBackend() Backend
 }
 
 // inferBackend determines the safety Backend for a permission request.
-// It first checks whether the tool explicitly declares a backend via
-// the BackendProvider interface.  If not, it falls back to a
-// conservative name-based heuristic.
+//
+// When the tool implements BackendProvider, the declared backend is
+// used and the tool name is not consulted.  This is the only path used
+// by the known execution tools (hostexec, workspaceexec, codeexec),
+// which each declare their backend; the name-based heuristic below is
+// unreachable for them.
+//
+// For tools that do not declare a backend, a conservative name-based
+// heuristic is used as a last resort.  It maps tool names that clearly
+// reference an execution surface ("host", "code", "execute") to the
+// corresponding exec backend.  Any name that does not match an exec
+// signal resolves to BackendNone, marking the tool as a non-execution
+// tool; CheckToolPermission short-circuits such tools to allow instead
+// of demanding a "command" argument they do not carry.  This keeps file,
+// search, MCP, and other ordinary tools from being intercepted by the
+// command/code safety scanner.
+//
+// The heuristic is retained for backward compatibility with ad-hoc tools
+// that predate BackendProvider; new execution tools should implement
+// BackendProvider instead of relying on this heuristic.
 func inferBackend(req *tool.PermissionRequest) Backend {
 	if bp, ok := req.Tool.(BackendProvider); ok {
 		return bp.SafetyBackend()
@@ -153,7 +288,7 @@ func inferBackend(req *tool.PermissionRequest) Backend {
 	case strings.Contains(lower, "code") || strings.Contains(lower, "execute"):
 		return BackendCodeExec
 	default:
-		return BackendWorkspaceExec
+		return BackendNone
 	}
 }
 

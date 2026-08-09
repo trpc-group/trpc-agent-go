@@ -37,7 +37,9 @@ func LoadPolicy(path string) (*Policy, error) {
 			return nil, fmt.Errorf("safety: parse JSON policy: %w", err)
 		}
 	default: // .yaml, .yml, or anything else
-		if err := yaml.Unmarshal(data, policy); err != nil {
+		d := yaml.NewDecoder(bytes.NewReader(data))
+		d.KnownFields(true)
+		if err := d.Decode(policy); err != nil {
 			return nil, fmt.Errorf("safety: parse YAML policy: %w", err)
 		}
 	}

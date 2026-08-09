@@ -34,6 +34,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/safety"
 )
 
 const (
@@ -414,6 +415,14 @@ func toInternalBootstrapSpec(
 		})
 	}
 	return out
+}
+
+// SafetyBackend declares that ExecTool executes commands in the shared
+// workspace backend, so the safety scanner selects the workspaceexec
+// rule set without relying on tool-name substring matching.  The method
+// implements safety.BackendProvider.
+func (t *ExecTool) SafetyBackend() safety.Backend {
+	return safety.BackendWorkspaceExec
 }
 
 // Declaration returns the schema for workspace_exec.
@@ -1207,6 +1216,7 @@ func isAllowedWorkspacePath(rel string) bool {
 
 var _ tool.Tool = (*ExecTool)(nil)
 var _ tool.CallableTool = (*ExecTool)(nil)
+var _ safety.BackendProvider = (*ExecTool)(nil)
 var _ tool.Tool = (*WriteStdinTool)(nil)
 var _ tool.CallableTool = (*WriteStdinTool)(nil)
 var _ tool.Tool = (*KillSessionTool)(nil)

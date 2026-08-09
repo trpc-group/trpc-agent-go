@@ -9,6 +9,7 @@
 package safety
 
 import (
+	"fmt"
 	"regexp"
 )
 
@@ -19,14 +20,16 @@ type Redactor struct {
 }
 
 // NewRedactor compiles the given regex patterns and returns a
-// Redactor that replaces matches with "[REDACTED]".
-func NewRedactor(patterns []string) *Redactor {
+// Redactor that replaces matches with "[REDACTED]".  If any pattern
+// fails to compile, NewRedactor returns a non-nil error and a nil
+// Redactor: a broken redaction pattern must not silently degrade
+// into a no-op that would persist secrets in clear text.
+func NewRedactor(patterns []string) (*Redactor, error) {
 	compiled, err := compilePatterns(patterns)
 	if err != nil {
-		// Fall back to a no-op redactor if patterns are invalid.
-		return &Redactor{}
+		return nil, fmt.Errorf("safety: redactor: %w", err)
 	}
-	return &Redactor{patterns: compiled}
+	return &Redactor{patterns: compiled}, nil
 }
 
 // Redact returns a copy of s with all sensitive matches replaced by

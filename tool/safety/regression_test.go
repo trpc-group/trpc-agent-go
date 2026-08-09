@@ -16,15 +16,15 @@ import (
 	"testing"
 )
 
-// This file contains red tests that reproduce the P0 issues called out
-// in the code review.  Each test must FAIL on the current implementation
-// and PASS after the corresponding fix.  They double as regression
-// tests once the bugs are fixed.
+// This file contains regression tests for scanner/audit defects found
+// during code review.  Each test FAILS on the pre-fix implementation and
+// PASSES after the corresponding fix, and stays in the tree to guard
+// against regressions of the fixed behavior.
 //
-// P0-3 (Blocked field redundant with Decision) is a design issue rather
-// than a behavioral bug, so it is not covered here; a behavioural test
-// for it would be tautological.  Resolved by the Decision→Verdict
-// rename and removal of the Blocked field.
+// The Blocked field redundant with Verdict was a design issue rather
+// than a behavioral bug, so it is not covered here; a behavioral test
+// for it would be tautological.  It was resolved by the
+// Decision→Verdict rename and removal of the Blocked field.
 
 func countRisksByRuleID(risks []Risk, ruleID string) int {
 	n := 0
@@ -37,7 +37,7 @@ func countRisksByRuleID(risks []Risk, ruleID string) int {
 }
 
 // ----------------------------------------------------------------------
-// P0-1: policy.DefaultVerdict must be honored when no rule fires.
+// policy.DefaultVerdict must be honored when no rule fires.
 //
 // Currently scanner.computeVerdict() always returns VerdictAllow when
 // no rule fires, ignoring policy.DefaultVerdict.  A user who sets
@@ -46,7 +46,7 @@ func countRisksByRuleID(risks []Risk, ruleID string) int {
 // deny variants of this bug.
 // ----------------------------------------------------------------------
 
-func TestP0_DefaultVerdictAsk_HonoredForSafeCommand(t *testing.T) {
+func TestDefaultVerdictAsk_HonoredForSafeCommand(t *testing.T) {
 	policy := DefaultPolicy()
 	policy.DefaultVerdict = VerdictAsk
 	s, err := NewScanner(policy)
@@ -65,7 +65,7 @@ func TestP0_DefaultVerdictAsk_HonoredForSafeCommand(t *testing.T) {
 	}
 }
 
-func TestP0_DefaultVerdictDeny_HonoredForSafeCommand(t *testing.T) {
+func TestDefaultVerdictDeny_HonoredForSafeCommand(t *testing.T) {
 	policy := DefaultPolicy()
 	policy.DefaultVerdict = VerdictDeny
 	s, err := NewScanner(policy)
@@ -82,7 +82,7 @@ func TestP0_DefaultVerdictDeny_HonoredForSafeCommand(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------
-// P0-2: each RuleID must appear at most once in a report.
+// each RuleID must appear at most once in a report.
 //
 // When shellsafe rejects a command via the user-configured deny list,
 // scanner.go manually appends a Risk with RuleID="dangerous_command".
@@ -92,7 +92,7 @@ func TestP0_DefaultVerdictDeny_HonoredForSafeCommand(t *testing.T) {
 // produces duplicate OTel span attributes.
 // ----------------------------------------------------------------------
 
-func TestP0_NoDuplicateDangerousCommandRisk(t *testing.T) {
+func TestNoDuplicateDangerousCommandRisk(t *testing.T) {
 	s := newTestScanner(t)
 
 	// "rm -rf /" hits both the shellsafe deny list and the
@@ -107,7 +107,7 @@ func TestP0_NoDuplicateDangerousCommandRisk(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------
-// P0-4: DependencyPolicy.DeniedPackages must be enforced.
+// DependencyPolicy.DeniedPackages must be enforced.
 //
 // dependencyRule.Check currently only inspects AllowedManagers and
 // emits a medium risk for any install from an allowed manager.  The
@@ -116,7 +116,7 @@ func TestP0_NoDuplicateDangerousCommandRisk(t *testing.T) {
 // expects the install to be denied, not merely reviewed.
 // ----------------------------------------------------------------------
 
-func TestP0_DeniedPackage_BlocksInstall(t *testing.T) {
+func TestDeniedPackage_BlocksInstall(t *testing.T) {
 	policy := DefaultPolicy()
 	// Make shellsafe accept "pip" so the command reaches the rules.
 	policy.Commands.Allowed = []string{"pip"}
@@ -141,7 +141,7 @@ func TestP0_DeniedPackage_BlocksInstall(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------
-// P0-4: ResourceLimits.AllowedSleepSeconds must be enforced.
+// ResourceLimits.AllowedSleepSeconds must be enforced.
 //
 // resourceAbuseRule stores maxSleep in its struct but never reads it
 // in Check().  A user setting allowed_sleep_seconds: 5 expects
@@ -150,7 +150,7 @@ func TestP0_DeniedPackage_BlocksInstall(t *testing.T) {
 // list check is inactive).
 // ----------------------------------------------------------------------
 
-func TestP0_AllowedSleepSeconds_BlocksLongSleep(t *testing.T) {
+func TestAllowedSleepSeconds_BlocksLongSleep(t *testing.T) {
 	policy := DefaultPolicy()
 	// Disable shellsafe's allow/deny list so the command reaches the
 	// rules.  This isolates the resourceAbuseRule behaviour.
@@ -172,7 +172,7 @@ func TestP0_AllowedSleepSeconds_BlocksLongSleep(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------
-// P0-5: AuditLogger must use the policy's SensitivePatterns, not the
+// AuditLogger must use the policy's SensitivePatterns, not the
 // defaults.
 //
 // NewAuditLogger currently hardcodes
@@ -183,7 +183,7 @@ func TestP0_AllowedSleepSeconds_BlocksLongSleep(t *testing.T) {
 // persisted to disk in cleartext.
 // ----------------------------------------------------------------------
 
-func TestP0_CustomSensitivePatterns_RedactedInAuditLog(t *testing.T) {
+func TestCustomSensitivePatterns_RedactedInAuditLog(t *testing.T) {
 	tmpDir := t.TempDir()
 	policyPath := filepath.Join(tmpDir, "policy.yaml")
 	auditPath := filepath.Join(tmpDir, "audit.jsonl")

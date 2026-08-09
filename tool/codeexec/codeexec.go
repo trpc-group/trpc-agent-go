@@ -17,6 +17,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/safety"
 )
 
 // Option configures the code execution tool.
@@ -77,6 +78,14 @@ func NewTool(exec codeexecutor.CodeExecutor, opts ...Option) tool.CallableTool {
 type executeCodeTool struct {
 	executor codeexecutor.CodeExecutor
 	cfg      config
+}
+
+// SafetyBackend declares that this tool executes code in the codeexec
+// backend, so the safety scanner selects the codeexec rule set without
+// relying on tool-name substring matching.  The method implements
+// safety.BackendProvider.
+func (t *executeCodeTool) SafetyBackend() safety.Backend {
+	return safety.BackendCodeExec
 }
 
 // Declaration returns the tool's declaration.
@@ -230,3 +239,5 @@ func (t *executeCodeTool) Call(ctx context.Context, args []byte) (any, error) {
 func (t *executeCodeTool) isSupportedLanguage(language string) bool {
 	return slices.Contains(t.cfg.languages, language)
 }
+
+var _ safety.BackendProvider = (*executeCodeTool)(nil)

@@ -12,9 +12,12 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"trpc.group/trpc-go/trpc-agent-go/internal/shellsafe"
 )
 
 // defaultRules returns the rule set covering all seven risk categories.
@@ -24,14 +27,17 @@ func defaultRules(p *Policy) ([]Rule, error) {
 		return nil, fmt.Errorf("compile sensitive patterns: %w", err)
 	}
 
-	forbiddenPaths := expandPaths(p.ForbiddenPaths)
+	forbiddenPaths, err := buildForbiddenPaths(p.ForbiddenPaths)
+	if err != nil {
+		return nil, fmt.Errorf("build forbidden paths: %w", err)
+	}
 	networkWhitelist := toLowerSlice(p.NetworkWhitelist)
 
 	return []Rule{
 		&dangerousCommandRule{forbiddenPaths: forbiddenPaths},
 		&networkEgressRule{whitelist: networkWhitelist},
 		&shellBypassRule{},
-		&hostExecRiskRule{policy: p.BackendPolicies.HostExec},
+		&hostExecRiskRule{policies: p.BackendPolicies},
 		&dependencyRule{allowed: p.DependencyPolicy.AllowedManagers, denied: p.DependencyPolicy.DeniedPackages},
 		&resourceAbuseRule{maxSleep: p.ResourceLimits.AllowedSleepSeconds},
 		&sensitiveLeakRule{patterns: sensitivePatterns, forbiddenPaths: forbiddenPaths},
@@ -50,7 +56,7 @@ func defaultRules(p *Policy) ([]Rule, error) {
 // ----------------------------------------------------------------
 
 type dangerousCommandRule struct {
-	forbiddenPaths []string
+	forbiddenPaths []forbiddenPath
 }
 
 func (r *dangerousCommandRule) ID() string   { return "dangerous_command" }
@@ -72,19 +78,19 @@ func (r *dangerousCommandRule) Check(_ context.Context, req *ScanRequest) *Risk 
 		}
 	}
 
-	// Forbidden path access.  Check both the expanded path (e.g.
-	// /Users/x/.ssh) and the raw tilde form (~/.ssh) so commands
-	// using the tilde shorthand are caught too.
-	for _, fp := range r.forbiddenPaths {
-		if pathMatches(cmd, fp) || pathMatches(cmd, rawTildePath(fp)) {
-			return &Risk{
-				RuleID:      r.ID(),
-				RuleName:    r.Name(),
-				Level:       RiskCritical,
-				Evidence:    fmt.Sprintf("access to forbidden path %q detected", fp),
-				Suggestion:  "do not read or write credential, secret, or system files",
-				ShouldBlock: true,
-			}
+	// Forbidden path access.  Matching operates on the parsed argv with
+	// each path argument normalized (quote-stripping, filepath.Clean and
+	// tilde expansion), never on raw substrings of the command text, so
+	// shell-equivalent spellings like /etc/"shadow", /etc//shadow and
+	// /etc/../etc/shadow are all caught by a configured /etc/shadow.
+	if fp := matchForbidden(req, r.forbiddenPaths); fp != "" {
+		return &Risk{
+			RuleID:      r.ID(),
+			RuleName:    r.Name(),
+			Level:       RiskCritical,
+			Evidence:    fmt.Sprintf("access to forbidden path %q detected", fp),
+			Suggestion:  "do not read or write credential, secret, or system files",
+			ShouldBlock: true,
 		}
 	}
 
@@ -101,28 +107,6 @@ func (r *dangerousCommandRule) Check(_ context.Context, req *ScanRequest) *Risk 
 	}
 
 	return nil
-}
-
-// rawTildePath converts an expanded path back to its tilde form so
-// commands using ~/.ssh are matched even when the forbidden path was
-// expanded to /Users/x/.ssh.
-func rawTildePath(expanded string) string {
-	home := getHomeDir()
-	if home != "" && strings.HasPrefix(expanded, home) {
-		return "~" + expanded[len(home):]
-	}
-	return expanded
-}
-
-// pathMatches checks whether cmd references a forbidden path. The
-// forbidden path may be a glob pattern (* is treated as wildcard).
-func pathMatches(cmd, forbidden string) bool {
-	// Expand wildcards: "*.env" → check if cmd contains ".env".
-	if strings.Contains(forbidden, "*") {
-		stripped := strings.ReplaceAll(forbidden, "*", "")
-		return strings.Contains(strings.ToLower(cmd), strings.ToLower(stripped))
-	}
-	return strings.Contains(strings.ToLower(cmd), strings.ToLower(forbidden))
 }
 
 // ----------------------------------------------------------------
@@ -146,7 +130,8 @@ func (r *networkEgressRule) Check(_ context.Context, req *ScanRequest) *Risk {
 	cmd := req.Command
 	lower := strings.ToLower(cmd)
 
-	// Extract URLs from the command.
+	// Extract URLs from the command.  This covers any command, including
+	// interpreters that embed a URL in an argument (python, ruby, ...).
 	urls := extractURLs(lower)
 	for _, u := range urls {
 		host := extractHost(u)
@@ -154,14 +139,18 @@ func (r *networkEgressRule) Check(_ context.Context, req *ScanRequest) *Risk {
 			continue
 		}
 		if !isWhitelisted(host, r.whitelist) {
-			return &Risk{
-				RuleID:      r.ID(),
-				RuleName:    r.Name(),
-				Level:       RiskCritical,
-				Evidence:    fmt.Sprintf("network egress to non-whitelisted host %q", host),
-				Suggestion:  fmt.Sprintf("add %q to network_whitelist or use a whitelisted host", host),
-				ShouldBlock: true,
-			}
+			return egressRisk(r, host)
+		}
+	}
+
+	// Extract scheme-less host arguments from known network-capable
+	// commands (curl, wget) and package managers (go get / go install,
+	// pip install, npm install).  A scheme-less host is matched against
+	// the whitelist just like a URL host, so an explicitly whitelisted
+	// host passes here instead of falling through to the policy default.
+	for _, host := range extractSchemelessHosts(cmd, req.Backend) {
+		if !isWhitelisted(host, r.whitelist) {
+			return egressRisk(r, host)
 		}
 	}
 
@@ -220,6 +209,117 @@ func isWhitelisted(host string, whitelist []string) bool {
 	return false
 }
 
+// egressRisk is the risk returned when a command targets a host that is
+// not in the network whitelist.
+func egressRisk(r *networkEgressRule, host string) *Risk {
+	return &Risk{
+		RuleID:      r.ID(),
+		RuleName:    r.Name(),
+		Level:       RiskCritical,
+		Evidence:    fmt.Sprintf("network egress to non-whitelisted host %q", host),
+		Suggestion:  fmt.Sprintf("add %q to network_whitelist or use a whitelisted host", host),
+		ShouldBlock: true,
+	}
+}
+
+// extractSchemelessHosts returns the lower-cased hosts that cmd targets
+// through a network-capable command without a URL scheme.  It inspects
+// the parsed argv so quote-stripping matches the rest of the rule set.
+//
+// Only commands that consume a host / package target positionally are
+// inspected, so an arbitrary command's ordinary arguments (file names,
+// local paths) are never mistaken for a host.  A target is treated as a
+// host only when its first path segment looks like a domain (contains a
+// dot), which prevents a bare package name such as "pip install requests"
+// from being flagged as egress.
+func extractSchemelessHosts(cmd string, backend Backend) []string {
+	args := commandArgs(cmd, backend)
+	if len(args) == 0 {
+		return nil
+	}
+	targetIdx := hostTargetIndex(args)
+	if targetIdx < 0 {
+		return nil
+	}
+	var hosts []string
+	for _, arg := range args[targetIdx:] {
+		if arg == "" || strings.HasPrefix(arg, "-") {
+			continue
+		}
+		if h := hostFromTarget(arg); h != "" {
+			hosts = append(hosts, h)
+		}
+	}
+	return hosts
+}
+
+// hostTargetIndex returns the argv index at which host-bearing targets
+// begin for the leading command, or -1 when the command is not a
+// recognized network client or package manager.  The leading command is
+// matched on its basename so "/usr/bin/curl ..." is recognized the same
+// as "curl ...".
+func hostTargetIndex(args []string) int {
+	cmd := basename(strings.ToLower(args[0]))
+	switch cmd {
+	case "curl", "wget":
+		return 1
+	case "go":
+		if len(args) >= 2 {
+			switch strings.ToLower(args[1]) {
+			case "get", "install":
+				return 2
+			}
+		}
+	case "pip", "pip3", "pipenv":
+		if len(args) >= 2 && strings.ToLower(args[1]) == "install" {
+			return 2
+		}
+	case "npm", "pnpm", "yarn":
+		if len(args) >= 2 {
+			switch strings.ToLower(args[1]) {
+			case "install", "i", "add":
+				return 2
+			}
+		}
+	}
+	return -1
+}
+
+// hostFromTarget extracts a hostname from a target argument, handling
+// both scheme-ful URLs and scheme-less hosts.  It returns "" when the
+// target does not carry a recognizable host, so ordinary package names
+// and local arguments are not treated as egress targets.
+func hostFromTarget(arg string) string {
+	arg = strings.ToLower(arg)
+	// Scheme-ful URL: delegate to the existing host extractor.
+	if strings.HasPrefix(arg, "http://") || strings.HasPrefix(arg, "https://") {
+		return extractHost(arg)
+	}
+	// Scheme-less: take the first path segment, dropping any version
+	// specifier (@v1.0), userinfo, or port that follows.
+	host := arg
+	if i := strings.IndexAny(host, "/:@"); i >= 0 {
+		host = host[:i]
+	}
+	if host == "" {
+		return ""
+	}
+	// Only a segment that looks like a domain is a host candidate; a
+	// bare word such as "requests" is not.
+	if !strings.Contains(host, ".") {
+		return ""
+	}
+	return host
+}
+
+// basename returns the final path element of name, lower-cased.
+func basename(name string) string {
+	if i := strings.LastIndexAny(name, "/\\"); i >= 0 {
+		return name[i+1:]
+	}
+	return name
+}
+
 // ----------------------------------------------------------------
 // Rule 3: Shell bypass
 //
@@ -257,26 +357,46 @@ func (r *shellBypassRule) Check(_ context.Context, req *ScanRequest) *Risk {
 // ----------------------------------------------------------------
 // Rule 4: Hostexec risk
 //
-// Detects risks specific to hostexec: privilege escalation (sudo/su
-// are in shellsafe implicit deny, but we double-check), background
-// processes, and long sessions.  Also enforces the
+// Detects risks specific to the hostexec and workspaceexec backends:
+// background processes and long-running sessions.  Also enforces the
 // RequireHumanReview policy for hostexec.
+//
+// Background detection is driven by the structured "background" boolean
+// that both backends expose in their argument shape.  A request carrying
+// background: true is denied when allow_background is false, regardless of
+// whether the command text contains a background marker.  This closes the
+// bypass where background: true plus a command with no textual marker
+// slipped past allow_background: false.  The textual markers ("&",
+// "nohup", "disown", "setsid") remain a fallback for the direct
+// ScanCommand path, where no structured argument is available.
 // ----------------------------------------------------------------
 
 type hostExecRiskRule struct {
-	policy BackendPolicy
+	policies BackendPolicies
 }
 
 func (r *hostExecRiskRule) ID() string   { return "hostexec_risk" }
 func (r *hostExecRiskRule) Name() string { return "HostExec Session Risk" }
 
+// policyFor returns the per-backend policy that applies to req.Backend.
+// Both hostexec and workspaceexec are governed by their own BackendPolicy;
+// the rule selects the matching one so allow_background and
+// require_human_review are honored per backend.
+func (r *hostExecRiskRule) policyFor(req *ScanRequest) BackendPolicy {
+	if req.Backend == BackendWorkspaceExec {
+		return r.policies.WorkspaceExec
+	}
+	return r.policies.HostExec
+}
+
 func (r *hostExecRiskRule) Check(_ context.Context, req *ScanRequest) *Risk {
-	if req.Backend != BackendHostExec {
+	if req.Backend != BackendHostExec && req.Backend != BackendWorkspaceExec {
 		return nil
 	}
+	policy := r.policyFor(req)
 
-	// If hostexec requires human review, flag as ask.
-	if r.policy.RequireHumanReview {
+	// If the backend requires human review, flag as ask.
+	if policy.RequireHumanReview {
 		return &Risk{
 			RuleID:      r.ID(),
 			RuleName:    r.Name(),
@@ -287,17 +407,37 @@ func (r *hostExecRiskRule) Check(_ context.Context, req *ScanRequest) *Risk {
 		}
 	}
 
-	// Background process detection.
+	if policy.AllowBackground {
+		return nil
+	}
+
+	// Structured "background" flag: authoritative.  The adapter reads it
+	// from the tool's JSON arguments, so a background:true request with a
+	// clean command string is still caught here.
+	if req.Background {
+		return &Risk{
+			RuleID:      r.ID(),
+			RuleName:    r.Name(),
+			Level:       RiskHigh,
+			Evidence:    "background process requested via 'background': true",
+			Suggestion:  "avoid background processes or enable allow_background",
+			ShouldBlock: true,
+		}
+	}
+
+	// Textual fallback for the direct ScanCommand path (no structured
+	// argument): a command that textually requests background execution is
+	// still a background risk.
 	lower := strings.ToLower(req.Command)
 	bgMarkers := []string{" &", "nohup ", "disown ", "setsid "}
 	for _, marker := range bgMarkers {
-		if strings.Contains(lower, marker) && !r.policy.AllowBackground {
+		if strings.Contains(lower, marker) {
 			return &Risk{
 				RuleID:      r.ID(),
 				RuleName:    r.Name(),
 				Level:       RiskHigh,
 				Evidence:    fmt.Sprintf("background process marker %q detected", strings.TrimSpace(marker)),
-				Suggestion:  "avoid background processes on hostexec or enable allow_background",
+				Suggestion:  "avoid background processes or enable allow_background",
 				ShouldBlock: true,
 			}
 		}
@@ -322,63 +462,59 @@ func (r *dependencyRule) ID() string   { return "dependency_install" }
 func (r *dependencyRule) Name() string { return "Dependency Installation" }
 
 func (r *dependencyRule) Check(_ context.Context, req *ScanRequest) *Risk {
-	lower := strings.ToLower(req.Command)
-
-	installPatterns := []string{
-		"go install ", "go get ",
-		"npm install ", "npm i ", "npm add ",
-		"pip install ", "pip3 install ",
-		"apt install ", "apt-get install ",
-		"yum install ", "dnf install ",
-		"brew install ",
+	// Match on the parsed argv (executable basename + subcommand) rather
+	// than a raw single-space substring of the command text, so
+	// shell-equivalent spellings like "pip  install" (double space) and
+	// "pip\tinstall" (tab) are detected the same as "pip install".  This
+	// also guards against over-broad detection: "echo pip install ..."
+	// has echo as its executable and is not an install.
+	args := commandArgs(req.Command, req.Backend)
+	if len(args) < 2 {
+		return nil
+	}
+	manager := basename(strings.ToLower(args[0]))
+	if !isInstallSubcommand(manager, strings.ToLower(args[1])) {
+		return nil
 	}
 
-	for _, pat := range installPatterns {
-		if strings.Contains(lower, pat) {
-			// Check if the package manager is allowed.
-			manager := strings.Fields(pat)[0]
-			if !contains(r.allowed, manager) {
-				return &Risk{
-					RuleID:      r.ID(),
-					RuleName:    r.Name(),
-					Level:       RiskHigh,
-					Evidence:    fmt.Sprintf("dependency installation via %q (not in allowed_managers)", manager),
-					Suggestion:  fmt.Sprintf("add %q to allowed_managers or install manually", manager),
-					ShouldBlock: true,
-				}
-			}
-			// Manager is allowed — check denied packages before
-			// returning the medium-risk "needs review" result.
-			if len(r.denied) > 0 {
-				pkgs := extractInstallPackages(lower, pat)
-				for _, pkg := range pkgs {
-					for _, denied := range r.denied {
-						if strings.EqualFold(pkg, strings.ToLower(denied)) {
-							return &Risk{
-								RuleID:      r.ID(),
-								RuleName:    r.Name(),
-								Level:       RiskHigh,
-								Evidence:    fmt.Sprintf("installation of denied package %q detected", denied),
-								Suggestion:  fmt.Sprintf("remove %q from the install command or allow it explicitly", denied),
-								ShouldBlock: true,
-							}
-						}
+	// Check if the package manager is allowed.
+	if !contains(r.allowed, manager) {
+		return &Risk{
+			RuleID:      r.ID(),
+			RuleName:    r.Name(),
+			Level:       RiskHigh,
+			Evidence:    fmt.Sprintf("dependency installation via %q (not in allowed_managers)", manager),
+			Suggestion:  fmt.Sprintf("add %q to allowed_managers or install manually", manager),
+			ShouldBlock: true,
+		}
+	}
+	// Manager is allowed — check denied packages before returning the
+	// medium-risk "needs review" result.
+	if len(r.denied) > 0 {
+		for _, pkg := range installPackages(args[2:]) {
+			for _, denied := range r.denied {
+				if strings.EqualFold(pkg, strings.ToLower(denied)) {
+					return &Risk{
+						RuleID:      r.ID(),
+						RuleName:    r.Name(),
+						Level:       RiskHigh,
+						Evidence:    fmt.Sprintf("installation of denied package %q detected", denied),
+						Suggestion:  fmt.Sprintf("remove %q from the install command or allow it explicitly", denied),
+						ShouldBlock: true,
 					}
 				}
 			}
-			// Manager is allowed but still needs review.
-			return &Risk{
-				RuleID:      r.ID(),
-				RuleName:    r.Name(),
-				Level:       RiskMedium,
-				Evidence:    fmt.Sprintf("dependency installation detected: %s", truncate(req.Command, 80)),
-				Suggestion:  "review the package name and source before approving",
-				ShouldBlock: false,
-			}
 		}
 	}
-
-	return nil
+	// Manager is allowed but still needs review.
+	return &Risk{
+		RuleID:      r.ID(),
+		RuleName:    r.Name(),
+		Level:       RiskMedium,
+		Evidence:    fmt.Sprintf("dependency installation detected: %s", truncate(req.Command, 80)),
+		Suggestion:  "review the package name and source before approving",
+		ShouldBlock: false,
+	}
 }
 
 // ----------------------------------------------------------------
@@ -449,21 +585,25 @@ func (r *resourceAbuseRule) Check(_ context.Context, req *ScanRequest) *Risk {
 
 type sensitiveLeakRule struct {
 	patterns       []*regexp.Regexp
-	forbiddenPaths []string
+	forbiddenPaths []forbiddenPath
 }
 
 func (r *sensitiveLeakRule) ID() string   { return "sensitive_leak" }
 func (r *sensitiveLeakRule) Name() string { return "Sensitive Information Leak" }
 
 func (r *sensitiveLeakRule) Check(_ context.Context, req *ScanRequest) *Risk {
-	// Check command against sensitive patterns.
+	// Check command against sensitive patterns.  The evidence is a
+	// generic description rather than the matched bytes so the secret
+	// itself is never echoed into the report, the recommendation, or the
+	// model-visible permission decision.  We only need to know a secret
+	// was present, not what it was.
 	for _, re := range r.patterns {
-		if match := re.FindString(req.Command); match != "" {
+		if re.MatchString(req.Command) {
 			return &Risk{
 				RuleID:      r.ID(),
 				RuleName:    r.Name(),
 				Level:       RiskHigh,
-				Evidence:    fmt.Sprintf("sensitive pattern matched: %s", truncate(match, 40)),
+				Evidence:    "matched sensitive pattern (e.g. API key, token, or password)",
 				Suggestion:  "do not embed secrets in commands; use environment variables or config files",
 				ShouldBlock: true,
 			}
@@ -472,17 +612,16 @@ func (r *sensitiveLeakRule) Check(_ context.Context, req *ScanRequest) *Risk {
 
 	// Check for credential file access (for codeexec where shellsafe
 	// is not applied, and as a secondary check for shell backends).
-	lower := strings.ToLower(req.Command)
-	for _, fp := range r.forbiddenPaths {
-		if pathMatches(lower, fp) || pathMatches(lower, rawTildePath(fp)) {
-			return &Risk{
-				RuleID:      r.ID(),
-				RuleName:    r.Name(),
-				Level:       RiskCritical,
-				Evidence:    fmt.Sprintf("access to sensitive path %q", fp),
-				Suggestion:  "do not read credential or secret files",
-				ShouldBlock: true,
-			}
+	// Matching uses the same normalized-argv semantics as the
+	// dangerous_command rule.
+	if fp := matchForbidden(req, r.forbiddenPaths); fp != "" {
+		return &Risk{
+			RuleID:      r.ID(),
+			RuleName:    r.Name(),
+			Level:       RiskCritical,
+			Evidence:    fmt.Sprintf("access to sensitive path %q", fp),
+			Suggestion:  "do not read credential or secret files",
+			ShouldBlock: true,
 		}
 	}
 
@@ -562,12 +701,127 @@ func compilePatterns(patterns []string) ([]*regexp.Regexp, error) {
 	return compiled, nil
 }
 
-func expandPaths(paths []string) []string {
-	out := make([]string, 0, len(paths))
+// forbiddenPath is a compiled forbidden-path entry.  Non-glob entries are
+// compared against normalized command arguments as exact paths or as a
+// parent directory; glob entries (those containing '*') are matched against
+// the whole normalized argument, where '*' spans path separators so
+// "*.env" matches "config/app.env" and "/secret/*/key" matches
+// "/secret/user/key".
+type forbiddenPath struct {
+	pattern string         // normalized path or glob pattern
+	glob    *regexp.Regexp // compiled glob matcher, nil when pattern has no '*'
+}
+
+// buildForbiddenPaths expands "~" and cleans each configured forbidden path,
+// compiling any glob patterns up front so the per-request scan only performs
+// cheap regexp matches.
+func buildForbiddenPaths(paths []string) ([]forbiddenPath, error) {
+	fps := make([]forbiddenPath, 0, len(paths))
 	for _, p := range paths {
-		out = append(out, expandTilde(p))
+		norm := normalizePath(p)
+		fp := forbiddenPath{pattern: norm}
+		if strings.Contains(norm, "*") {
+			re, err := globToRegexp(norm)
+			if err != nil {
+				return nil, fmt.Errorf("compile forbidden path %q: %w", p, err)
+			}
+			fp.glob = re
+		}
+		fps = append(fps, fp)
 	}
-	return out
+	return fps, nil
+}
+
+// matchForbidden returns the pattern of the first forbidden path that the
+// request's command references, or "" if none.  Matching operates on the
+// parsed argv (quotes stripped by shellsafe) with each path argument
+// normalized via normalizePath, never on raw substrings of the command text.
+func matchForbidden(req *ScanRequest, forbidden []forbiddenPath) string {
+	args := commandArgs(req.Command, req.Backend)
+	for _, fp := range forbidden {
+		for _, arg := range args {
+			if matchForbiddenArg(normalizePath(arg), fp) {
+				return fp.pattern
+			}
+		}
+	}
+	return ""
+}
+
+// matchForbiddenArg reports whether the normalized argument references the
+// forbidden path entry.  Non-glob entries match the argument itself or any
+// path beneath it at a directory boundary; glob entries match the whole
+// argument.
+func matchForbiddenArg(arg string, fp forbiddenPath) bool {
+	if fp.glob != nil {
+		return fp.glob.MatchString(arg)
+	}
+	return arg == fp.pattern || isUnderPath(arg, fp.pattern)
+}
+
+// isUnderPath reports whether path equals dir or sits beneath it at a
+// directory boundary (dir itself, dir/sub, dir/sub/file, ...).  A sibling
+// like "/etc/shadow.safe" is deliberately not beneath "/etc/shadow".
+func isUnderPath(path, dir string) bool {
+	if path == dir {
+		return true
+	}
+	return strings.HasPrefix(path, dir+string(filepath.Separator))
+}
+
+// globToRegexp converts a glob pattern to an anchored regexp in which '*'
+// matches any sequence of characters, including path separators.
+func globToRegexp(pattern string) (*regexp.Regexp, error) {
+	var b strings.Builder
+	b.WriteByte('^')
+	for _, r := range pattern {
+		switch r {
+		case '*':
+			b.WriteString(".*")
+		case '.', '+', '(', ')', '[', ']', '{', '}', '^', '$', '|', '\\', '?':
+			b.WriteByte('\\')
+			b.WriteRune(r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('$')
+	return regexp.Compile(b.String())
+}
+
+// commandArgs returns the path-relevant argument tokens of a command.  For
+// shell backends it uses shellsafe's argv, which already strips quotes; for
+// codeexec it falls back to tokenizing the source text so string literals
+// referencing a forbidden path are still inspected.
+func commandArgs(command string, backend Backend) []string {
+	if backend == BackendCodeExec {
+		return tokenizeCode(command)
+	}
+	pipe, err := shellsafe.Parse(command)
+	if err != nil {
+		return nil
+	}
+	var args []string
+	for _, seg := range pipe.Commands {
+		args = append(args, seg...)
+	}
+	return args
+}
+
+// tokenizeCode splits source text into tokens on whitespace and the
+// characters that commonly delimit string literals and call arguments, so a
+// reference like open('/etc/passwd') yields the "/etc/passwd" token.
+func tokenizeCode(src string) []string {
+	return strings.FieldsFunc(src, func(r rune) bool {
+		return r == ' ' || r == '\t' || r == '\n' || r == '\r' ||
+			r == '\'' || r == '"' || r == '(' || r == ')' || r == ','
+	})
+}
+
+// normalizePath expands a leading "~" and cleans the path so
+// "/etc//shadow" and "/etc/../etc/shadow" both normalize to "/etc/shadow".
+func normalizePath(p string) string {
+	return filepath.Clean(expandTilde(p))
 }
 
 func expandTilde(p string) string {
@@ -606,22 +860,42 @@ func truncate(s string, n int) string {
 	return s[:n] + "..."
 }
 
-// extractInstallPackages returns the package name tokens found in cmd
-// after the install pattern, stripping version specifiers (==, >=, @,
-// etc.) and skipping flags (tokens starting with -).
-func extractInstallPackages(cmd, pattern string) []string {
-	idx := strings.Index(cmd, pattern)
-	if idx < 0 {
-		return nil
+// installSubcommands maps each package manager to the subcommands that
+// trigger a dependency installation.  Matching is done on the parsed
+// argv so non-canonical whitespace does not defeat detection.
+var installSubcommands = map[string][]string{
+	"go":      {"get", "install"},
+	"npm":     {"install", "i", "add"},
+	"pip":     {"install"},
+	"pip3":    {"install"},
+	"apt":     {"install"},
+	"apt-get": {"install"},
+	"yum":     {"install"},
+	"dnf":     {"install"},
+	"brew":    {"install"},
+}
+
+// isInstallSubcommand reports whether sub is an install subcommand of
+// the given package manager.
+func isInstallSubcommand(manager, sub string) bool {
+	for _, s := range installSubcommands[manager] {
+		if s == sub {
+			return true
+		}
 	}
-	rest := cmd[idx+len(pattern):]
+	return false
+}
+
+// installPackages returns the package name tokens found in args (the
+// argv after the manager subcommand), stripping version specifiers
+// (==, >=, @, etc.) and skipping flags (tokens starting with -).
+func installPackages(args []string) []string {
 	var pkgs []string
-	for _, tok := range strings.Fields(rest) {
-		if strings.HasPrefix(tok, "-") {
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "-") {
 			continue
 		}
-		pkg := stripVersionSpecifier(tok)
-		if pkg != "" {
+		if pkg := stripVersionSpecifier(arg); pkg != "" {
 			pkgs = append(pkgs, pkg)
 		}
 	}

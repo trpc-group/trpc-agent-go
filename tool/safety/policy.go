@@ -43,6 +43,12 @@ type Policy struct {
 	SensitivePatterns []string `yaml:"sensitive_patterns" json:"sensitive_patterns"`
 	// BackendPolicies holds per-backend overrides.
 	BackendPolicies BackendPolicies `yaml:"backend_policies" json:"backend_policies"`
+
+	// Deprecated: EnvWhitelist was present in an earlier schema but is
+	// no longer enforced.  The field is retained so that old policy
+	// files containing it load under KnownFields(true) without error.
+	// It has no effect on scanning and is excluded from JSON output.
+	EnvWhitelist []string `yaml:"env_whitelist,omitempty" json:"-"`
 }
 
 // CommandPolicy holds the allow/deny lists for executable names.
@@ -58,6 +64,15 @@ type ResourceLimits struct {
 	// AllowedSleepSeconds is the maximum allowed sleep duration.
 	// A value of 0 disables the sleep-duration check.
 	AllowedSleepSeconds int `yaml:"allowed_sleep_seconds" json:"allowed_sleep_seconds"`
+
+	// Deprecated: the following fields were present in an earlier
+	// schema but are no longer enforced.  They are retained so that
+	// old policy files containing them load under KnownFields(true)
+	// without error.  They have no effect on scanning and are
+	// excluded from JSON output.
+	MaxTimeoutSeconds      int `yaml:"max_timeout_seconds,omitempty" json:"-"`
+	MaxOutputBytes         int `yaml:"max_output_bytes,omitempty" json:"-"`
+	MaxConcurrentProcesses int `yaml:"max_concurrent_processes,omitempty" json:"-"`
 }
 
 // DependencyPolicy controls package manager usage.
@@ -82,6 +97,12 @@ type BackendPolicy struct {
 	AllowBackground bool `yaml:"allow_background" json:"allow_background"`
 	// RequireHumanReview controls whether all commands need review.
 	RequireHumanReview bool `yaml:"require_human_review" json:"require_human_review"`
+
+	// Deprecated: AllowPty was present in an earlier schema but is no
+	// longer enforced.  The field is retained so that old policy files
+	// containing it load under KnownFields(true) without error.  It
+	// has no effect on scanning and is excluded from JSON output.
+	AllowPty bool `yaml:"allow_pty,omitempty" json:"-"`
 }
 
 // DefaultPolicy returns a policy with sensible defaults that fail

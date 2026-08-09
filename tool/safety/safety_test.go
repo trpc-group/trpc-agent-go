@@ -378,7 +378,10 @@ func TestScan_Performance(t *testing.T) {
 // --- Test 20: redactor ---
 
 func TestRedactor(t *testing.T) {
-	r := NewRedactor(DefaultPolicy().SensitivePatterns)
+	r, err := NewRedactor(DefaultPolicy().SensitivePatterns)
+	if err != nil {
+		t.Fatalf("NewRedactor: %v", err)
+	}
 	cases := []struct {
 		name  string
 		input string

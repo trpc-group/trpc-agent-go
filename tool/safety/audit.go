@@ -44,15 +44,29 @@ type AuditLogger struct {
 // NewAuditLogger opens path for appending (creating it if needed)
 // and returns a ready-to-use AuditLogger.  The file is opened with
 // 0600 permissions to protect potentially sensitive audit data.
+//
+// If any of the redaction patterns fail to compile, NewAuditLogger
+// returns a non-nil error and a nil *AuditLogger rather than
+// succeeding with a redactor that would persist secrets in clear
+// text.  The opened file is closed on this error path.
 func NewAuditLogger(path string, patterns []string) (*AuditLogger, error) {
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
 		return nil, fmt.Errorf("safety: open audit log: %w", err)
 	}
+	redactor, err := NewRedactor(patterns)
+	if err != nil {
+		// A redactor that cannot honor the configured secret patterns
+		// must not be allowed to stand, otherwise sensitive commands
+		// would be persisted in clear text.  Close the file we just
+		// opened and surface the error.
+		_ = file.Close()
+		return nil, err
+	}
 	return &AuditLogger{
 		file:     file,
 		encoder:  json.NewEncoder(file),
-		redactor: NewRedactor(patterns),
+		redactor: redactor,
 	}, nil
 }
 
