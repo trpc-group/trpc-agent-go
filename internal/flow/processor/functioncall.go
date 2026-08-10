@@ -1580,7 +1580,7 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequentialResult(
 	// The pollution marker means the session consumed external context. When
 	// rendering the result fails, the session records the error message rather
 	// than the tool output, so nothing external entered the conversation.
-	if err == nil {
+	if err == nil && !shouldSkipToolStateDelta(ctx) {
 		markSessionAutoMemoryPolluted(
 			invocation,
 			toolEvent,
@@ -2008,12 +2008,14 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 			agentName = invocation.AgentName
 		}
 	}
-	markSessionAutoMemoryPolluted(
-		invocation,
-		toolCallResponseEvent,
-		tools[tc.Function.Name],
-		tc.Function.Name,
-	)
+	if !shouldSkipToolStateDelta(ctx) {
+		markSessionAutoMemoryPolluted(
+			invocation,
+			toolCallResponseEvent,
+			tools[tc.Function.Name],
+			tc.Function.Name,
+		)
+	}
 	stateDelta := p.buildToolEventStateDelta(
 		ctx,
 		invocation,
@@ -3266,6 +3268,9 @@ func (p *FunctionCallResponseProcessor) runBeforeToolPluginCallbacks(
 		ctx = result.Context
 	}
 	if result != nil && result.CustomResult != nil {
+		if result.SkipStateDelta {
+			ctx = withSkippedToolStateDelta(ctx)
+		}
 		return ctx, toolCall, result.CustomResult, nil
 	}
 	if result != nil && result.ModifiedArguments != nil {
@@ -3305,6 +3310,9 @@ func (p *FunctionCallResponseProcessor) runBeforeToolCallbacks(
 		ctx = result.Context
 	}
 	if result != nil && result.CustomResult != nil {
+		if result.SkipStateDelta {
+			ctx = withSkippedToolStateDelta(ctx)
+		}
 		return ctx, toolCall, result.CustomResult, nil
 	}
 	if result != nil && result.ModifiedArguments != nil {
@@ -3356,6 +3364,15 @@ func (p *FunctionCallResponseProcessor) runAfterToolPluginCallbacks(
 	skipSummarization := afterResult != nil &&
 		afterResult.SkipSummarization
 	if afterResult != nil && afterResult.CustomResult != nil {
+		if afterResult.SkipResultFormatter {
+			ctx = withUndeclaredToolResult(
+				ctx,
+				undeclaredReasonAfterToolFormatterBypass,
+			)
+		}
+		if afterResult.SkipStateDelta {
+			ctx = withSkippedToolStateDelta(ctx)
+		}
 		return ctx, afterResult.CustomResult, true, skipSummarization, nil
 	}
 	return ctx, toolResult, false, skipSummarization, nil
@@ -3399,6 +3416,15 @@ func (p *FunctionCallResponseProcessor) runAfterToolCallbacks(
 	skipSummarization := afterResult != nil &&
 		afterResult.SkipSummarization
 	if afterResult != nil && afterResult.CustomResult != nil {
+		if afterResult.SkipResultFormatter {
+			ctx = withUndeclaredToolResult(
+				ctx,
+				undeclaredReasonAfterToolFormatterBypass,
+			)
+		}
+		if afterResult.SkipStateDelta {
+			ctx = withSkippedToolStateDelta(ctx)
+		}
 		toolResult = afterResult.CustomResult
 	}
 	return ctx, toolResult, skipSummarization, nil
@@ -3966,6 +3992,10 @@ const (
 	// callback or plugin substituted for the call. The tool never ran, so
 	// the value is whatever the callback layer chose to report.
 	undeclaredReasonBeforeToolShortCircuit
+	// undeclaredReasonAfterToolFormatterBypass marks a result an after-tool
+	// callback or plugin explicitly requested to serialize without the tool's
+	// configured result formatter.
+	undeclaredReasonAfterToolFormatterBypass
 )
 
 // withUndeclaredToolResult records why the final result of the tool call in
