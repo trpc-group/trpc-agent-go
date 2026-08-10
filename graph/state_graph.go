@@ -5806,19 +5806,48 @@ type singleToolCallConfig struct {
 // executeSingleToolCall executes a single tool call with event emission.
 func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (model.Message, error) {
 	id, name := config.ToolCall.ID, config.ToolCall.Function.Name
+	originalInvocation, traceStepID := graphToolTraceContext(ctx, config.State)
 	t := config.Tools[name]
 	if t == nil {
-		config.Span.SetAttributes(attribute.String("trpc.go.agent.error", fmt.Sprintf("tool %s not found", name)))
-		return model.Message{}, fmt.Errorf("tool %s not found", name)
+		err := fmt.Errorf("tool %s not found", name)
+		config.Span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
+		recordGraphToolExecutionTrace(
+			ctx,
+			originalInvocation,
+			traceStepID,
+			config.TraceRecorder,
+			config.ToolCallIndex,
+			name,
+			id,
+			config.ToolCall.Function.Arguments,
+			nil,
+			nil,
+			err,
+		)
+		return model.Message{}, err
 	}
 	if config.Concurrency != nil {
 		release, err := config.Concurrency.Acquire(ctx, name)
 		if err != nil {
-			return model.Message{}, fmt.Errorf(
+			traceErr := fmt.Errorf(
 				"wait for tool %s concurrency: %w",
 				name,
 				err,
 			)
+			recordGraphToolExecutionTrace(
+				ctx,
+				originalInvocation,
+				traceStepID,
+				config.TraceRecorder,
+				config.ToolCallIndex,
+				name,
+				id,
+				config.ToolCall.Function.Arguments,
+				nil,
+				nil,
+				traceErr,
+			)
+			return model.Message{}, traceErr
 		}
 		defer release()
 	}
@@ -5828,7 +5857,6 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 	// Extract current node ID from state for event authoring.
 	var nodeID string
 	var responseID string
-	var traceStepID string
 	sessInfo := &session.Session{}
 	if state := config.State; state != nil {
 		if nodeIDData, exists := state[StateKeyCurrentNodeID]; exists {
@@ -5838,9 +5866,6 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		}
 		if rid, ok := state[StateKeyLastResponseID].(string); ok {
 			responseID = rid
-		}
-		if stepID, ok := state[currentTraceStepIDStateKey].(string); ok {
-			traceStepID = stepID
 		}
 		if sess, ok := state[StateKeySession]; ok {
 			if s, ok := sess.(*session.Session); ok && s != nil {
@@ -5852,7 +5877,6 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 	}
 
 	// Keep the original invocation as a fallback when callbacks return a bare context.
-	originalInvocation, _ := agent.InvocationFromContext(ctx)
 	ctx, span, startedSpan := startNodeSpan(ctx, itelemetry.NewExecuteToolSpanName(config.ToolCall.Function.Name))
 	_, startEventInvocation, finalCtx, completeEventInvocation, result, modifiedArgs, err := runToolWithEventContexts(
 		ctx,
@@ -5999,6 +6023,18 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		nil,
 	)
 	return model.NewToolMessage(id, name, string(content)), nil
+}
+
+func graphToolTraceContext(ctx context.Context, state State) (*agent.Invocation, string) {
+	var invocation *agent.Invocation
+	if ctx != nil {
+		invocation, _ = agent.InvocationFromContext(ctx)
+	}
+	if state == nil {
+		return invocation, ""
+	}
+	stepID, _ := state[currentTraceStepIDStateKey].(string)
+	return invocation, stepID
 }
 
 func setAgentToolInterruptStateFromError(state State, err error) {

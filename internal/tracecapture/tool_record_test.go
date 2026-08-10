@@ -57,3 +57,48 @@ func TestNewToolRecordParsesArgumentsResultAndLoadedSkill(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, atrace.Skill{Name: "research"}, skill)
 }
+
+func TestNewToolRecordHandlesPlainArgumentsAndResultFallbacks(t *testing.T) {
+	plainArgumentsTool := tracecapture.NewToolRecord(tracecapture.ToolRecordInput{
+		ID:        "call-plain",
+		Name:      "echo",
+		Arguments: []byte("plain args"),
+		Result:    map[string]any{"ok": true},
+	})
+	require.Equal(t, "plain args", plainArgumentsTool.Arguments)
+	require.Equal(t, map[string]any{"ok": true}, plainArgumentsTool.Result)
+	emptyResultTool := tracecapture.NewToolRecord(tracecapture.ToolRecordInput{
+		ID:   "call-empty",
+		Name: "empty",
+	})
+	require.Equal(t, map[string]any{}, emptyResultTool.Arguments)
+	require.Nil(t, emptyResultTool.Result)
+	unmarshalable := make(chan int)
+	unmarshalableTool := tracecapture.NewToolRecord(tracecapture.ToolRecordInput{
+		ID:     "call-channel",
+		Name:   "bad",
+		Result: unmarshalable,
+	})
+	result, ok := unmarshalableTool.Result.(chan int)
+	require.True(t, ok)
+	require.Equal(t, unmarshalable, result)
+}
+
+func TestLoadedSkillFromToolRecordHandlesMissingAndTypedArguments(t *testing.T) {
+	_, ok := tracecapture.LoadedSkillFromToolRecord(atrace.Tool{
+		Name:      "skill_load",
+		Arguments: map[string]any{"other": "research"},
+	})
+	require.False(t, ok)
+	skill, ok := tracecapture.LoadedSkillFromToolRecord(atrace.Tool{
+		Name:      "skill_load",
+		Arguments: map[string]string{"skill": "research"},
+	})
+	require.True(t, ok)
+	require.Equal(t, atrace.Skill{Name: "research"}, skill)
+	_, ok = tracecapture.LoadedSkillFromToolRecord(atrace.Tool{
+		Name:      "skill_load",
+		Arguments: "plain args",
+	})
+	require.False(t, ok)
+}

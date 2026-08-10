@@ -459,6 +459,42 @@ func TestCloneEvalCase_DeepCopy(t *testing.T) {
 	assert.Equal(t, time.Unix(1, 0).UTC(), src.CreationTimestamp.Time)
 }
 
+func TestCloneEvalCase_ErrorFromExecutionTraceToolArguments(t *testing.T) {
+	unsupported := func() {}
+	src := &evalset.EvalCase{
+		Conversation: []*evalset.Invocation{{
+			ExecutionTrace: &agenttrace.Trace{
+				Steps: []agenttrace.Step{{
+					Tools: []agenttrace.Tool{{
+						ID:        "call-1",
+						Name:      "bad",
+						Arguments: unsupported,
+					}},
+				}},
+			},
+		}},
+	}
+	got, err := CloneEvalCase(src)
+	require.Error(t, err)
+	assert.Nil(t, got)
+	assert.Contains(t, err.Error(), "unsupported value type")
+}
+
+func TestCloneTraceToolsHandlesNilAndResultErrors(t *testing.T) {
+	got, err := cloneTraceTools(nil)
+	require.NoError(t, err)
+	assert.Nil(t, got)
+	unsupported := func() {}
+	got, err = cloneTraceTools([]agenttrace.Tool{{
+		ID:     "call-1",
+		Name:   "bad",
+		Result: unsupported,
+	}})
+	require.Error(t, err)
+	assert.Nil(t, got)
+	assert.Contains(t, err.Error(), "unsupported value type")
+}
+
 func TestCloneEvalSet_DeepCopy(t *testing.T) {
 	src := &evalset.EvalSet{
 		EvalSetID:         "set-1",

@@ -307,6 +307,43 @@ func TestConstructMessagesRendersEmptyTraceStepToolsAndSkills(t *testing.T) {
 	assert.Contains(t, messages[0].Content, "Skills: []")
 }
 
+func TestConstructMessagesReturnsErrorForUnmarshalableTraceStepTools(t *testing.T) {
+	constructor := New()
+	actual := &evalset.Invocation{
+		ExecutionTrace: &agenttrace.Trace{
+			Steps: []agenttrace.Step{{
+				NodeID: "fetch_match",
+				Tools: []agenttrace.Tool{{
+					ID:        "call-1",
+					Name:      "bad",
+					Arguments: func() {},
+				}},
+			}},
+		},
+	}
+	messages, err := constructor.ConstructMessages(
+		context.Background(),
+		[]*evalset.Invocation{actual},
+		[]*evalset.Invocation{{FinalResponse: &model.Message{Content: "reference"}}},
+		buildTemplateEvalMetric(
+			"Tools: {{tools}}",
+			&criterionllm.TemplateVariableBinding{
+				TemplateVariable: "tools",
+				Source: &criterionllm.TemplateVariableSource{
+					Scope: criterionllm.TemplateVariableScopeActual,
+					Field: criterionllm.TemplateVariableFieldTraceStepTools,
+					Selector: &criterionllm.TemplateVariableSelector{
+						NodeID: "fetch_match",
+					},
+				},
+			},
+		),
+	)
+	require.Error(t, err)
+	assert.Nil(t, messages)
+	assert.Contains(t, err.Error(), "marshal trace step tools")
+}
+
 func TestConstructMessagesRendersMetricRubrics(t *testing.T) {
 	constructor := New()
 	evalMetric := buildTemplateEvalMetric(
@@ -673,6 +710,24 @@ func TestResolveTraceStepErrors(t *testing.T) {
 			source: &criterionllm.TemplateVariableSource{
 				Scope: criterionllm.TemplateVariableScopeActual,
 				Field: criterionllm.TemplateVariableFieldTraceStepOutput,
+			},
+			wantErr: "trace selector nodeID is required",
+		},
+		{
+			name:    "missing selector for tools",
+			actuals: []*evalset.Invocation{{ExecutionTrace: &agenttrace.Trace{}}},
+			source: &criterionllm.TemplateVariableSource{
+				Scope: criterionllm.TemplateVariableScopeActual,
+				Field: criterionllm.TemplateVariableFieldTraceStepTools,
+			},
+			wantErr: "trace selector nodeID is required",
+		},
+		{
+			name:    "missing selector for skills",
+			actuals: []*evalset.Invocation{{ExecutionTrace: &agenttrace.Trace{}}},
+			source: &criterionllm.TemplateVariableSource{
+				Scope: criterionllm.TemplateVariableScopeActual,
+				Field: criterionllm.TemplateVariableFieldTraceStepSkills,
 			},
 			wantErr: "trace selector nodeID is required",
 		},

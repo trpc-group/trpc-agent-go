@@ -113,6 +113,11 @@ func TestEvent_Clone_DeepCopiesExecutionTrace(t *testing.T) {
 						Name:      "lookup",
 						Arguments: map[string]any{"city": "Paris"},
 						Result:    []any{"ok"},
+					}, {
+						ID:        "call-2",
+						Name:      "raw",
+						Arguments: []byte("raw-args"),
+						Result:    []byte("raw-result"),
 					}},
 					Skills: []trace.Skill{{Name: "research"}},
 				},
@@ -134,6 +139,8 @@ func TestEvent_Clone_DeepCopiesExecutionTrace(t *testing.T) {
 	clone.ExecutionTrace.Steps[0].Usage.TimingInfo.ReasoningDuration = 2 * time.Second
 	clone.ExecutionTrace.Steps[0].Tools[0].Arguments.(map[string]any)["city"] = "changed"
 	clone.ExecutionTrace.Steps[0].Tools[0].Result.([]any)[0] = "changed"
+	clone.ExecutionTrace.Steps[0].Tools[1].Arguments.([]byte)[0] = 'x'
+	clone.ExecutionTrace.Steps[0].Tools[1].Result.([]byte)[0] = 'x'
 	clone.ExecutionTrace.Steps[0].Skills[0].Name = "changed"
 	clone.ExecutionTrace.Usage.TotalTokens = 88
 	clone.ExecutionTrace.Usage.TimingInfo.FirstTokenDuration = 3 * time.Second
@@ -145,6 +152,8 @@ func TestEvent_Clone_DeepCopiesExecutionTrace(t *testing.T) {
 	require.Equal(t, time.Second, e.ExecutionTrace.Steps[0].Usage.TimingInfo.ReasoningDuration)
 	require.Equal(t, "Paris", e.ExecutionTrace.Steps[0].Tools[0].Arguments.(map[string]any)["city"])
 	require.Equal(t, "ok", e.ExecutionTrace.Steps[0].Tools[0].Result.([]any)[0])
+	require.Equal(t, []byte("raw-args"), e.ExecutionTrace.Steps[0].Tools[1].Arguments)
+	require.Equal(t, []byte("raw-result"), e.ExecutionTrace.Steps[0].Tools[1].Result)
 	require.Equal(t, "research", e.ExecutionTrace.Steps[0].Skills[0].Name)
 	require.Equal(t, 3, e.ExecutionTrace.Usage.TotalTokens)
 	require.Equal(t, time.Second, e.ExecutionTrace.Usage.TimingInfo.FirstTokenDuration)

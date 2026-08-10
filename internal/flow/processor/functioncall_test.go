@@ -283,6 +283,77 @@ func TestFunctionCallResponseProcessor_RecordsParallelTerminalToolErrors(t *test
 	require.Empty(t, stopTool.Result)
 }
 
+func TestRecordExecutionTraceToolResults_HandlesEmptyResultsAndNilContext(t *testing.T) {
+	inv, ctx := newExecutionTraceProcessorInvocation(t)
+	recordExecutionTraceToolResults(ctx, inv, []toolResult{{}}, nil)
+	recordExecutionTraceToolResults(nil, inv, []toolResult{{
+		event: &event.Event{Response: &model.Response{Choices: []model.Choice{{
+			Message: model.Message{
+				ToolID:   "call-skill",
+				ToolName: "skill_load",
+				Content:  "loaded",
+			},
+		}}}},
+		toolArgs: []byte(`{"skill":"research"}`),
+	}}, nil)
+	executionTrace := agent.BuildExecutionTrace(inv, atrace.TraceStatusCompleted)
+	require.NotNil(t, executionTrace)
+	require.Len(t, executionTrace.Steps, 1)
+	require.Equal(t, []atrace.Tool{{
+		ID:        "call-skill",
+		Name:      "skill_load",
+		Arguments: map[string]any{"skill": "research"},
+		Result:    "loaded",
+	}}, executionTrace.Steps[0].Tools)
+	require.Equal(t, []atrace.Skill{{Name: "research"}}, executionTrace.Steps[0].Skills)
+}
+
+func TestExecutionTraceToolResultHelpersHandleFallbacks(t *testing.T) {
+	_, ok := executionTraceToolFromResult(toolResult{}, nil)
+	require.False(t, ok)
+	recordedTool, ok := executionTraceToolFromResult(toolResult{
+		event: &event.Event{Response: &model.Response{Choices: []model.Choice{{
+			Message: model.Message{
+				ToolID:   "call-1",
+				ToolName: "original",
+				Content:  `{"old":true}`,
+			},
+		}}}},
+		toolArgs: []byte(`{"q":"docs"}`),
+	}, map[string]executionTraceToolMessage{
+		"call-1": {id: "call-1", content: `{"final":true}`},
+	})
+	require.True(t, ok)
+	require.Equal(t, "original", recordedTool.Name)
+	require.Equal(t, map[string]any{"final": true}, recordedTool.Result)
+	recordedTool, ok = executionTraceToolFromResult(toolResult{
+		event: &event.Event{Response: &model.Response{Choices: []model.Choice{{
+			Message: model.Message{
+				ToolID:  "call-2",
+				Content: `"ok"`,
+			},
+		}}}},
+		toolName: "fallback",
+	}, nil)
+	require.True(t, ok)
+	require.Equal(t, "fallback", recordedTool.Name)
+	message, ok := executionTraceToolMessageFromChoice(model.Choice{
+		Delta: model.Message{
+			ToolID:   "call-delta",
+			ToolName: "delta",
+			Content:  "chunk",
+		},
+	})
+	require.True(t, ok)
+	require.Equal(t, executionTraceToolMessage{id: "call-delta", name: "delta", content: "chunk"}, message)
+	_, ok = executionTraceFirstToolMessage(nil)
+	require.False(t, ok)
+	_, ok = executionTraceFirstToolMessage(&event.Event{Response: &model.Response{Choices: []model.Choice{{}}}})
+	require.False(t, ok)
+	_, ok = executionTraceToolMessageFromChoice(model.Choice{})
+	require.False(t, ok)
+}
+
 func newExecutionTraceProcessorInvocation(t *testing.T) (*agent.Invocation, context.Context) {
 	t.Helper()
 	inv := agent.NewInvocation(
