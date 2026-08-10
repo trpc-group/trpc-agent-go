@@ -162,10 +162,12 @@ func TestReplacementPreservesEarlierSoftDeletedProjection(t *testing.T) {
 	var oldEvents int
 	require.NoError(t, service.db.QueryRowContext(ctx, fmt.Sprintf(
 		`SELECT COUNT(*) FROM %s
-WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NOT NULL`,
+WHERE app_name = ? AND user_id = ? AND session_id = ?
+AND json_extract(CAST(event AS TEXT), '$.id') = ?
+AND deleted_at IS NOT NULL`,
 		service.tableSessionEvents,
-	), key.AppName, key.UserID, key.SessionID).Scan(&oldEvents))
-	assert.Positive(t, oldEvents)
+	), key.AppName, key.UserID, key.SessionID, "old-event").Scan(&oldEvents))
+	assert.Equal(t, 1, oldEvents)
 
 	var oldSummaries int
 	require.NoError(t, service.db.QueryRowContext(ctx, fmt.Sprintf(
