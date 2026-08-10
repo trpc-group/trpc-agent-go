@@ -4230,6 +4230,12 @@ func runAfterToolPluginCallbacks(
 	if afterResult != nil && afterResult.Context != nil {
 		ctx = afterResult.Context
 	}
+	// A graph interrupt is resumable control flow, not an execution failure
+	// that an after-tool callback may replace with an ordinary result.
+	var interruptErr *InterruptError
+	if errors.As(runErr, &interruptErr) {
+		return ctx, nil, runErr
+	}
 	if afterResult != nil && afterResult.CustomResult != nil {
 		if err != nil {
 			return ctx, afterResult.CustomResult,
