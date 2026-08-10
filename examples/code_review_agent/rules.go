@@ -38,15 +38,21 @@ const (
 	confidenceLifecycle = 0.85
 	confidenceWarning   = 0.70
 	confidenceBoundary  = 0.65
+
+	hardcodedSecretQuotedValueMin = 8
+	redactedSecretQuotedValueMin  = 6
 )
 
 var (
-	secretAssignmentPattern = regexp.MustCompile(`(?i)(api[_-]?key|secret|token|password|passwd|private[_-]?key)\s*[:=]\s*["'][^"']{8,}["']`)
-	awsAccessKeyPattern     = regexp.MustCompile(`AKIA[0-9A-Z]{16}`)
-	githubTokenPattern      = regexp.MustCompile(`gh[pousr]_[A-Za-z0-9_]{20,}`)
-	openAITokenPattern      = regexp.MustCompile(`\bsk-[A-Za-z0-9_-]{20,}\b`)
-	bearerTokenPattern      = regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{16,}\b`)
-	insecureTLSPattern      = regexp.MustCompile(`\bInsecureSkipVerify\s*(?::|=)\s*true\b`)
+	secretAssignmentPattern = regexp.MustCompile(
+		`(?i)(api[_-]?key|secret|token|password|passwd|private[_-]?key)\s*[:=]\s*` +
+			quotedSensitiveValuePattern(hardcodedSecretQuotedValueMin),
+	)
+	awsAccessKeyPattern = regexp.MustCompile(`AKIA[0-9A-Z]{16}`)
+	githubTokenPattern  = regexp.MustCompile(`gh[pousr]_[A-Za-z0-9_]{20,}`)
+	openAITokenPattern  = regexp.MustCompile(`\bsk-[A-Za-z0-9_-]{20,}\b`)
+	bearerTokenPattern  = regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{16,}\b`)
+	insecureTLSPattern  = regexp.MustCompile(`\bInsecureSkipVerify\s*(?::|=)\s*true\b`)
 
 	fileOpenPattern   = regexp.MustCompile(`^\s*(\w+)\s*(?:,\s*\w+)?\s*:=\s*os\.(Open|Create|OpenFile)\(`)
 	httpGetPattern    = regexp.MustCompile(`^\s*(\w+)\s*,\s*\w+\s*:=\s*http\.(Get|Head|Post|PostForm)\(`)
@@ -55,6 +61,19 @@ var (
 	sqlOpenPattern    = regexp.MustCompile(`^\s*(\w+)\s*,\s*\w+\s*:=\s*sql\.Open\(`)
 	exportedFuncRegex = regexp.MustCompile(`^func\s+(?:\([^)]*\)\s*)?([A-Z][A-Za-z0-9_]*)\s*\(`)
 )
+
+func quotedSensitiveValuePattern(minLength int) string {
+	repetition := "{" + strconv.Itoa(minLength) + ",}"
+	// Backslash escapes are consumed before ordinary characters so quote
+	// termination follows the parity of consecutive backslashes.
+	return `(?:"(?:\\[^\r\n]|[^"\\\r\n])` + repetition +
+		`"|'(?:\\[^\r\n]|[^'\\\r\n])` + repetition + `')`
+}
+
+func assignmentSensitiveValuePattern(quotedMin int, unquotedMin int) string {
+	return `(?:` + quotedSensitiveValuePattern(quotedMin) +
+		`|[^"'\s,;]{` + strconv.Itoa(unquotedMin) + `,})`
+}
 
 type ruleMatch struct {
 	Severity       string

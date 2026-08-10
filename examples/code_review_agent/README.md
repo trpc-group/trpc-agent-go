@@ -195,6 +195,11 @@ and actual copied content. A timeout or limit failure skips
 repository-dependent checks and produces a human-review warning. All evidence,
 sandbox output, governance
 reasons, reports, and stored fields pass through redaction before persistence.
+Closed single- or double-quoted values assigned to sensitive names are redacted
+as a whole, including spaces, punctuation, and escaped characters. This is an
+intentional fail-closed boundary: phrase-like quoted values of six or more
+lexical units may be conservatively hidden, while unquoted values retain their
+existing token boundaries.
 When explicitly enabled, `go test` stdout and stderr are controlled by reviewed
 tests, package initializers, and `TestMain`, so they remain only in the redacted
 sandbox run record and never become high-confidence findings. Every failed or

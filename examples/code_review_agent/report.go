@@ -68,7 +68,11 @@ var redactionRules = []redactionRule{
 		redactedType: "private-key",
 	},
 	{
-		pattern: regexp.MustCompile(`(?i)\b[A-Za-z0-9_]*(?:api[_-]?key|token|password|passwd|secret|private[_-]?key)[A-Za-z0-9_]*\s*(?::=|[:=])\s*["']?[^"'\s,;]{6,}["']?`),
+		pattern: regexp.MustCompile(
+			`(?i)\b[A-Za-z0-9_]*(?:api[_-]?key|token|password|passwd|secret|private[_-]?key)` +
+				`[A-Za-z0-9_]*\s*(?::=|[:=])\s*` +
+				assignmentSensitiveValuePattern(redactedSecretQuotedValueMin, 6),
+		),
 		classify: func(match string) string {
 			lower := strings.ToLower(match)
 			switch {
@@ -94,11 +98,18 @@ var redactionRules = []redactionRule{
 		},
 	},
 	{
-		pattern:      regexp.MustCompile(`(?i)\bAuthorization\s*[:=]\s*(?:Bearer|Basic|Token)?\s*[A-Za-z0-9._~+/=-]{8,}`),
+		pattern: regexp.MustCompile(
+			`(?i)\bAuthorization\s*[:=]\s*(?:` +
+				quotedSensitiveValuePattern(redactedSecretQuotedValueMin) +
+				`|(?:Bearer|Basic|Token)?\s*[A-Za-z0-9._~+/=-]{8,})`,
+		),
 		redactedType: "authorization",
 	},
 	{
-		pattern:      regexp.MustCompile(`(?i)\bX-API-Key\s*[:=]\s*["']?[^"'\s,;]{8,}["']?`),
+		pattern: regexp.MustCompile(
+			`(?i)\bX-API-Key\s*[:=]\s*` +
+				assignmentSensitiveValuePattern(redactedSecretQuotedValueMin, 8),
+		),
 		redactedType: "api-key",
 	},
 	{
@@ -128,24 +139,6 @@ var redactionRules = []redactionRule{
 	{
 		pattern:      regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{16,}\b`),
 		redactedType: "bearer-token",
-	},
-	{
-		pattern: regexp.MustCompile(`(?i)\b[A-Za-z0-9_]*(?:api[_-]?key|token|password|passwd|secret|private[_-]?key)[A-Za-z0-9_]*\s*(?::=|[:=])\s*["']?[^"'\s,;]{6,}["']?`),
-		classify: func(match string) string {
-			lower := strings.ToLower(match)
-			switch {
-			case strings.Contains(lower, "password"), strings.Contains(lower, "passwd"):
-				return "password"
-			case strings.Contains(lower, "api"):
-				return "api-key"
-			case strings.Contains(lower, "token"):
-				return "token"
-			case strings.Contains(lower, "private"):
-				return "private-key"
-			default:
-				return "secret"
-			}
-		},
 	},
 }
 
