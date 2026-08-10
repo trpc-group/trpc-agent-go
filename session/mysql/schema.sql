@@ -23,6 +23,24 @@ CREATE TABLE IF NOT EXISTS `{{PREFIX}}session_states` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================================================
+-- Table: state_initialization_leases
+-- Description: Coordinates fenced session-state initialization across instances
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS `{{PREFIX}}state_initialization_leases` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT,
+    `coordination_key` BINARY(32) NOT NULL,
+    `user_id` VARCHAR(255) NOT NULL,
+    `owner_token` CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    `session_row_id` BIGINT NOT NULL,
+    `session_created_at` TIMESTAMP(6) NOT NULL,
+    `expires_at` TIMESTAMP(6) NOT NULL,
+    `updated_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `idx_{{PREFIX}}state_initialization_leases_uniq` (`coordination_key`,`user_id`),
+    KEY `idx_{{PREFIX}}state_initialization_leases_exp` (`expires_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================================
 -- Table: session_events
 -- Description: Stores session events/messages
 -- ============================================================================

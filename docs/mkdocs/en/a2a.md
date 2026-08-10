@@ -1001,8 +1001,11 @@ agent automatically uses `session.StateInitializationService` when the
 configured `SessionService` provides it. The capability coordinates the first
 anonymous cookie across agent instances that share the same backing store.
 The in-memory session service coordinates callers sharing the same service
-instance; the Redis session service coordinates callers across service
-instances.
+instance. Redis, MySQL, and TDSQL coordinate callers across service instances
+that share the same backing store.
+Deployments using `WithSkipDBInit(true)` must provision the
+`state_initialization_leases` table and indexes from the current MySQL or TDSQL
+schema before relying on this capability.
 
 When the capability is unavailable, the agent keeps the existing per-agent
 initialization lock and persistence behavior. Enable fail-closed behavior when
@@ -1020,8 +1023,8 @@ before contacting the remote agent if there is no stable persistent session key
 or the session service does not implement the coordination capability. This
 capability check cannot determine whether separate service instances actually
 share coordination state. Deployments requiring cross-process coordination
-must configure a shared backend such as Redis instead of separate in-memory
-services.
+must configure a shared backend such as Redis, MySQL, or TDSQL instead of
+separate in-memory services.
 
 The canonical `.record.v1` value and its legacy projection are committed
 together on the coordinated paths, so a new writer remains readable by a

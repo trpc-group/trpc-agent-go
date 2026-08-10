@@ -2,7 +2,7 @@
 -- Replace {{PREFIX}} with the configured table prefix.
 --
 -- Sharding strategy:
---   - 5 session/user scoped tables: shardkey = user_id
+--   - 6 session/user scoped tables: shardkey = user_id
 --   - app_states: broadcast table (noshardkey_allset), full copy on every node.
 --     Small dataset, infrequently updated, no need to shard.
 --
@@ -38,6 +38,23 @@ CREATE TABLE IF NOT EXISTS `{{PREFIX}}session_states` (
     UNIQUE KEY `idx_{{PREFIX}}session_states_unique_active` (`app_name`,`user_id`,`session_id`,`deleted_at`),
     KEY `idx_{{PREFIX}}session_states_list` (`app_name`,`user_id`,`updated_at`),
     KEY `idx_{{PREFIX}}session_states_expires` (`expires_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci shardkey=user_id;
+
+-- ============================================================================
+-- Table: state_initialization_leases
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS `{{PREFIX}}state_initialization_leases` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT,
+    `coordination_key` BINARY(32) NOT NULL,
+    `user_id` VARCHAR(255) NOT NULL,
+    `owner_token` CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    `session_row_id` BIGINT NOT NULL,
+    `session_created_at` TIMESTAMP(6) NOT NULL,
+    `expires_at` TIMESTAMP(6) NOT NULL,
+    `updated_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (`id`, `user_id`),
+    UNIQUE KEY `idx_{{PREFIX}}state_initialization_leases_uniq` (`coordination_key`,`user_id`),
+    KEY `idx_{{PREFIX}}state_initialization_leases_exp` (`expires_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci shardkey=user_id;
 
 -- ============================================================================

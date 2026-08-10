@@ -967,7 +967,9 @@ subAgent, _ := a2aagent.New(
 `SessionService` 实现了 `session.StateInitializationService`，agent 会自动
 使用该能力。它会在共享同一后端的多个 agent 实例之间协调首次匿名 Cookie
 初始化。in-memory session service 只协调共享同一个 service 实例的调用方；
-Redis session service 可以跨 service 实例协调。
+Redis、MySQL 和 TDSQL session service 可以在共享同一后端时跨 service 实例协调。
+使用 `WithSkipDBInit(true)` 的部署必须先按当前 MySQL 或 TDSQL schema 创建
+`state_initialization_leases` 表及其索引，再依赖该协调能力。
 
 如果后端不支持该能力，agent 会保留现有的单 agent 初始化锁和持久化行为。
 如果业务必须保证跨实例协调，可以开启 fail-closed 模式：
@@ -982,7 +984,7 @@ a2aAgent, err := a2aagent.New(
 该选项默认为 `false`。启用后，strict 模式在缺少稳定持久化 session key，或
 `SessionService` 不支持协调能力时，会在联系远端 agent 前使调用失败。该能力检查
 无法判断不同 service 实例是否实际共享协调状态。需要跨进程协调的部署必须使用
-Redis 等共享后端，而不能使用相互独立的 in-memory service。
+Redis、MySQL 或 TDSQL 等共享后端，而不能使用相互独立的 in-memory service。
 
 在支持协调的路径中，规范 `.record.v1` 值和 legacy 投影会一起提交，因此新版本
 写入的状态仍可被变更前的旧版本读取。这种兼容性是有意设计为单向的：规范记录

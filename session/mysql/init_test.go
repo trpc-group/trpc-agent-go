@@ -35,6 +35,7 @@ func datetimePrecisionForType(dataType string) any {
 func mockVerifySchemaQueries(mock sqlmock.Sqlmock, tablePrefix string) {
 	tableNames := []string{
 		sqldb.TableNameSessionStates,
+		tableNameStateInitializationLeases,
 		sqldb.TableNameSessionEvents,
 		sqldb.TableNameSessionTrackEvents,
 		sqldb.TableNameSessionSummaries,
@@ -230,14 +231,15 @@ func TestInitDB_WithTablePrefix(t *testing.T) {
 	}
 
 	s := &Service{
-		opts:                  serviceOpts,
-		mysqlClient:           &mockMySQLClient{db: db},
-		tableSessionStates:    "trpc_session_states",
-		tableSessionEvents:    "trpc_session_events",
-		tableSessionTracks:    "trpc_session_track_events",
-		tableSessionSummaries: "trpc_session_summaries",
-		tableAppStates:        "trpc_app_states",
-		tableUserStates:       "trpc_user_states",
+		opts:                           serviceOpts,
+		mysqlClient:                    &mockMySQLClient{db: db},
+		tableSessionStates:             "trpc_session_states",
+		tableSessionEvents:             "trpc_session_events",
+		tableSessionTracks:             "trpc_session_track_events",
+		tableSessionSummaries:          "trpc_session_summaries",
+		tableAppStates:                 "trpc_app_states",
+		tableUserStates:                "trpc_user_states",
+		tableStateInitializationLeases: "trpc_state_initialization_leases",
 	}
 	ctx := context.Background()
 
@@ -248,6 +250,7 @@ func TestInitDB_WithTablePrefix(t *testing.T) {
 	assert.Equal(t, "trpc_session_summaries", s.tableSessionSummaries)
 	assert.Equal(t, "trpc_app_states", s.tableAppStates)
 	assert.Equal(t, "trpc_user_states", s.tableUserStates)
+	assert.Equal(t, "trpc_state_initialization_leases", s.tableStateInitializationLeases)
 
 	// Mock: create each (missing) prefixed table together with its indexes,
 	// then verify the schema.

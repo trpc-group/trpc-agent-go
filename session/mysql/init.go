@@ -36,6 +36,18 @@ const (
 			deleted_at TIMESTAMP(6) NULL DEFAULT NULL
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
 
+	sqlCreateStateInitializationLeasesTable = `
+		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
+			id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+			coordination_key BINARY(32) NOT NULL,
+			user_id VARCHAR(255) NOT NULL,
+			owner_token CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+			session_row_id BIGINT NOT NULL,
+			session_created_at TIMESTAMP(6) NOT NULL,
+			expires_at TIMESTAMP(6) NOT NULL,
+			updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+
 	sqlCreateSessionEventsTable = `
 		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
 			id BIGINT AUTO_INCREMENT PRIMARY KEY, -- row identity only; not used for ordering or cursor logic
@@ -113,6 +125,14 @@ const (
 
 	// session_states: TTL index on (expires_at)
 	sqlCreateSessionStatesExpiresIndex = `
+		CREATE INDEX {{INDEX_NAME}}
+		ON {{TABLE_NAME}}(expires_at)`
+
+	sqlCreateStateInitializationLeasesUniqueIndex = `
+		CREATE UNIQUE INDEX {{INDEX_NAME}}
+		ON {{TABLE_NAME}}(coordination_key, user_id)`
+
+	sqlCreateStateInitializationLeasesExpiresIndex = `
 		CREATE INDEX {{INDEX_NAME}}
 		ON {{TABLE_NAME}}(expires_at)`
 
@@ -243,6 +263,22 @@ var expectedSchema = map[string]tableSchema{
 			{sqldb.TableNameSessionStates, sqldb.IndexSuffixExpires, []string{"expires_at"}, false},
 		},
 	},
+	tableNameStateInitializationLeases: {
+		columns: []tableColumn{
+			{"id", "bigint", false},
+			{"coordination_key", "binary", false},
+			{"user_id", "varchar", false},
+			{"owner_token", "char", false},
+			{"session_row_id", "bigint", false},
+			{"session_created_at", "timestamp", false},
+			{"expires_at", "timestamp", false},
+			{"updated_at", "timestamp", false},
+		},
+		indexes: []tableIndex{
+			{tableNameStateInitializationLeases, stateInitializationLeaseIndexUniq, []string{"coordination_key", "user_id"}, true},
+			{tableNameStateInitializationLeases, stateInitializationLeaseIndexExp, []string{"expires_at"}, false},
+		},
+	},
 	sqldb.TableNameSessionEvents: {
 		columns: []tableColumn{
 			{"id", "bigint", false},
@@ -353,6 +389,7 @@ var tdsqlExpectedSchema = func() map[string]tableSchema {
 // Global table definitions
 var tableDefs = []tableDefinition{
 	{sqldb.TableNameSessionStates, sqlCreateSessionStatesTable},
+	{tableNameStateInitializationLeases, sqlCreateStateInitializationLeasesTable},
 	{sqldb.TableNameSessionEvents, sqlCreateSessionEventsTable},
 	{sqldb.TableNameSessionTrackEvents, sqlCreateSessionTrackEventsTable},
 	{sqldb.TableNameSessionSummaries, sqlCreateSessionSummariesTable},
@@ -364,6 +401,7 @@ var tableDefs = []tableDefinition{
 var indexDefs = []indexDefinition{
 	// Unique indexes
 	{sqldb.TableNameSessionStates, sqldb.IndexSuffixUniqueActive, sqlCreateSessionStatesUniqueIndex},
+	{tableNameStateInitializationLeases, stateInitializationLeaseIndexUniq, sqlCreateStateInitializationLeasesUniqueIndex},
 	{sqldb.TableNameSessionSummaries, sqldb.IndexSuffixUniqueActive, sqlCreateSessionSummariesUniqueIndex},
 	{sqldb.TableNameAppStates, sqldb.IndexSuffixUniqueActive, sqlCreateAppStatesUniqueIndex},
 	{sqldb.TableNameUserStates, sqldb.IndexSuffixUniqueActive, sqlCreateUserStatesUniqueIndex},
@@ -374,6 +412,7 @@ var indexDefs = []indexDefinition{
 
 	// TTL indexes
 	{sqldb.TableNameSessionStates, sqldb.IndexSuffixExpires, sqlCreateSessionStatesExpiresIndex},
+	{tableNameStateInitializationLeases, stateInitializationLeaseIndexExp, sqlCreateStateInitializationLeasesExpiresIndex},
 	{sqldb.TableNameSessionEvents, sqldb.IndexSuffixExpires, sqlCreateSessionEventsExpiresIndex},
 	{sqldb.TableNameSessionTrackEvents, sqldb.IndexSuffixExpires, sqlCreateSessionTracksExpiresIndex},
 	{sqldb.TableNameSessionSummaries, sqldb.IndexSuffixExpires, sqlCreateSessionSummariesExpiresIndex},
@@ -394,6 +433,19 @@ const (
 			updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
 			expires_at TIMESTAMP(6) NULL DEFAULT NULL,
 			deleted_at TIMESTAMP(6) NULL DEFAULT NULL,
+			PRIMARY KEY (id, user_id)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci shardkey=user_id`
+
+	tdsqlCreateStateInitializationLeasesTable = `
+		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
+			id BIGINT NOT NULL AUTO_INCREMENT,
+			coordination_key BINARY(32) NOT NULL,
+			user_id VARCHAR(255) NOT NULL,
+			owner_token CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+			session_row_id BIGINT NOT NULL,
+			session_created_at TIMESTAMP(6) NOT NULL,
+			expires_at TIMESTAMP(6) NOT NULL,
+			updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
 			PRIMARY KEY (id, user_id)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci shardkey=user_id`
 
@@ -482,6 +534,7 @@ const (
 
 var tdsqlTableDefs = []tableDefinition{
 	{sqldb.TableNameSessionStates, tdsqlCreateSessionStatesTable},
+	{tableNameStateInitializationLeases, tdsqlCreateStateInitializationLeasesTable},
 	{sqldb.TableNameSessionEvents, tdsqlCreateSessionEventsTable},
 	{sqldb.TableNameSessionTrackEvents, tdsqlCreateSessionTrackEventsTable},
 	{sqldb.TableNameSessionSummaries, tdsqlCreateSessionSummariesTable},
@@ -492,6 +545,7 @@ var tdsqlTableDefs = []tableDefinition{
 var tdsqlIndexDefs = []indexDefinition{
 	// Unique indexes (same as MySQL, shardkey already in UNIQUE KEYs)
 	{sqldb.TableNameSessionStates, sqldb.IndexSuffixUniqueActive, sqlCreateSessionStatesUniqueIndex},
+	{tableNameStateInitializationLeases, stateInitializationLeaseIndexUniq, sqlCreateStateInitializationLeasesUniqueIndex},
 	{sqldb.TableNameSessionSummaries, sqldb.IndexSuffixUniqueActive, tdsqlCreateSessionSummariesUniqueIndex},
 	{sqldb.TableNameAppStates, sqldb.IndexSuffixUniqueActive, sqlCreateAppStatesUniqueIndex},
 	{sqldb.TableNameUserStates, sqldb.IndexSuffixUniqueActive, sqlCreateUserStatesUniqueIndex},
@@ -505,6 +559,7 @@ var tdsqlIndexDefs = []indexDefinition{
 
 	// TTL indexes (same as MySQL)
 	{sqldb.TableNameSessionStates, sqldb.IndexSuffixExpires, sqlCreateSessionStatesExpiresIndex},
+	{tableNameStateInitializationLeases, stateInitializationLeaseIndexExp, sqlCreateStateInitializationLeasesExpiresIndex},
 	{sqldb.TableNameSessionEvents, sqldb.IndexSuffixExpires, sqlCreateSessionEventsExpiresIndex},
 	{sqldb.TableNameSessionTrackEvents, sqldb.IndexSuffixExpires, sqlCreateSessionTracksExpiresIndex},
 	{sqldb.TableNameSessionSummaries, sqldb.IndexSuffixExpires, sqlCreateSessionSummariesExpiresIndex},

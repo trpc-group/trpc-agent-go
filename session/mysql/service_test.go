@@ -104,14 +104,19 @@ func createTestService(t *testing.T, db *sql.DB, opts ...ServiceOpt) *Service {
 	}
 
 	return &Service{
-		opts:                  serviceOpts,
-		mysqlClient:           &mockMySQLClient{db: db},
-		tableSessionStates:    "session_states",
-		tableSessionEvents:    "session_events",
-		tableSessionTracks:    "session_track_events",
-		tableSessionSummaries: "session_summaries",
-		tableAppStates:        "app_states",
-		tableUserStates:       "user_states",
+		opts:                             serviceOpts,
+		mysqlClient:                      &mockMySQLClient{db: db},
+		stateInitializationLeaseTTL:      defaultStateInitializationLeaseTTL,
+		stateInitializationRenewInterval: defaultStateInitializationRenewInterval,
+		stateInitializationPollMin:       defaultStateInitializationPollMin,
+		stateInitializationPollMax:       defaultStateInitializationPollMax,
+		tableSessionStates:               "session_states",
+		tableSessionEvents:               "session_events",
+		tableSessionTracks:               "session_track_events",
+		tableSessionSummaries:            "session_summaries",
+		tableAppStates:                   "app_states",
+		tableUserStates:                  "user_states",
+		tableStateInitializationLeases:   "state_initialization_leases",
 	}
 }
 
@@ -3183,6 +3188,7 @@ func TestNewService_WithDSN_Success(t *testing.T) {
 	assert.Equal(t, "session_summaries", svc.tableSessionSummaries)
 	assert.Equal(t, "app_states", svc.tableAppStates)
 	assert.Equal(t, "user_states", svc.tableUserStates)
+	assert.Equal(t, "state_initialization_leases", svc.tableStateInitializationLeases)
 
 	// Clean up
 	err = svc.Close()
@@ -3217,6 +3223,7 @@ func TestNewService_WithTablePrefix(t *testing.T) {
 	assert.Equal(t, "test_session_summaries", svc.tableSessionSummaries)
 	assert.Equal(t, "test_app_states", svc.tableAppStates)
 	assert.Equal(t, "test_user_states", svc.tableUserStates)
+	assert.Equal(t, "test_state_initialization_leases", svc.tableStateInitializationLeases)
 
 	err = svc.Close()
 	assert.NoError(t, err)
@@ -3524,6 +3531,7 @@ func TestConcurrentSessionStateUpdates_PreserveEventDeltaAndTrack(t *testing.T) 
 			svc.tableSessionTracks,
 			svc.tableSessionEvents,
 			svc.tableSessionSummaries,
+			svc.tableStateInitializationLeases,
 			svc.tableSessionStates,
 			svc.tableAppStates,
 			svc.tableUserStates,
@@ -3641,6 +3649,7 @@ func mockDBInitWithPrefix(mock sqlmock.Sqlmock, tablePrefix string) {
 	// Mock: verifySchema queries for each table
 	tableNames := []string{
 		sqldb.TableNameSessionStates,
+		tableNameStateInitializationLeases,
 		sqldb.TableNameSessionEvents,
 		sqldb.TableNameSessionTrackEvents,
 		sqldb.TableNameSessionSummaries,

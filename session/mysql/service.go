@@ -32,6 +32,7 @@ import (
 
 var _ session.Service = (*Service)(nil)
 var _ session.TrackService = (*Service)(nil)
+var _ session.StateInitializationService = (*Service)(nil)
 
 var errSessionNotFound = errors.New("session not found")
 
@@ -56,13 +57,19 @@ type Service struct {
 	persistWg       sync.WaitGroup               // wait group for persist workers
 	once            sync.Once
 
+	stateInitializationLeaseTTL      time.Duration
+	stateInitializationRenewInterval time.Duration
+	stateInitializationPollMin       time.Duration
+	stateInitializationPollMax       time.Duration
+
 	// Table names with prefix applied
-	tableSessionStates    string
-	tableSessionEvents    string
-	tableSessionTracks    string
-	tableSessionSummaries string
-	tableAppStates        string
-	tableUserStates       string
+	tableSessionStates             string
+	tableSessionEvents             string
+	tableSessionTracks             string
+	tableSessionSummaries          string
+	tableAppStates                 string
+	tableUserStates                string
+	tableStateInitializationLeases string
 }
 
 type sessionEventPair struct {
@@ -109,17 +116,26 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	tableSessionSummaries := sqldb.BuildTableName(opts.tablePrefix, sqldb.TableNameSessionSummaries)
 	tableAppStates := sqldb.BuildTableName(opts.tablePrefix, sqldb.TableNameAppStates)
 	tableUserStates := sqldb.BuildTableName(opts.tablePrefix, sqldb.TableNameUserStates)
+	tableStateInitializationLeases := sqldb.BuildTableName(
+		opts.tablePrefix,
+		tableNameStateInitializationLeases,
+	)
 
 	// Create service
 	s := &Service{
-		opts:                  opts,
-		mysqlClient:           mysqlClient,
-		tableSessionStates:    tableSessionStates,
-		tableSessionEvents:    tableSessionEvents,
-		tableSessionTracks:    tableSessionTracks,
-		tableSessionSummaries: tableSessionSummaries,
-		tableAppStates:        tableAppStates,
-		tableUserStates:       tableUserStates,
+		opts:                             opts,
+		mysqlClient:                      mysqlClient,
+		stateInitializationLeaseTTL:      defaultStateInitializationLeaseTTL,
+		stateInitializationRenewInterval: defaultStateInitializationRenewInterval,
+		stateInitializationPollMin:       defaultStateInitializationPollMin,
+		stateInitializationPollMax:       defaultStateInitializationPollMax,
+		tableSessionStates:               tableSessionStates,
+		tableSessionEvents:               tableSessionEvents,
+		tableSessionTracks:               tableSessionTracks,
+		tableSessionSummaries:            tableSessionSummaries,
+		tableAppStates:                   tableAppStates,
+		tableUserStates:                  tableUserStates,
+		tableStateInitializationLeases:   tableStateInitializationLeases,
 	}
 
 	// Initialize database if needed
