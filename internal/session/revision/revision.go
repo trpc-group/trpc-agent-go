@@ -31,6 +31,8 @@ const stableProjectionReadAttempts = 3
 
 const maxPersistedReplays = 64
 
+const maxPendingErrorKeys = 1024
+
 type latestTurnReplacementSupportReporter interface {
 	SupportsLatestTurnReplacement() bool
 }
@@ -364,10 +366,13 @@ func replayPrecedes(a PersistedReplay, aKey string, b PersistedReplay, bKey stri
 // It is intended to be owned by one persistence worker and is not safe for
 // concurrent use.
 type PendingErrors struct {
-	byKey map[session.Key]error
+	byKey    map[session.Key]error
+	overflow error
 }
 
-// Add retains err for the next barrier belonging to key.
+// Add retains the first representative error for the next barrier belonging
+// to key. Once the bounded key set is full, a worker-wide poison error keeps
+// later barriers from incorrectly reporting successful persistence.
 func (p *PendingErrors) Add(key session.Key, err error) {
 	if err == nil {
 		return
@@ -375,17 +380,44 @@ func (p *PendingErrors) Add(key session.Key, err error) {
 	if p.byKey == nil {
 		p.byKey = make(map[session.Key]error)
 	}
-	p.byKey[key] = errors.Join(p.byKey[key], err)
+	if _, ok := p.byKey[key]; ok {
+		return
+	}
+	if len(p.byKey) >= maxPendingErrorKeys {
+		if p.overflow == nil {
+			p.overflow = errors.New(
+				"asynchronous persistence error retention capacity exceeded",
+			)
+		}
+		return
+	}
+	p.byKey[key] = err
 }
 
-// Take returns and clears failures accumulated for key.
-func (p *PendingErrors) Take(key session.Key) error {
-	if p.byKey == nil {
-		return nil
+// Deliver sends the failure retained for key to an unbuffered barrier. A keyed
+// error is cleared only after the waiter has received it. Cancellation before
+// delivery leaves the error available to a later barrier. A worker-wide
+// overflow poison is intentionally retained for the worker lifetime because
+// the individual failed keys were not retained.
+func (p *PendingErrors) Deliver(
+	ctx context.Context,
+	key session.Key,
+	done chan<- error,
+) {
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	err := p.byKey[key]
-	delete(p.byKey, key)
-	return err
+	err, keyed := p.byKey[key]
+	if err == nil {
+		err = p.overflow
+	}
+	select {
+	case done <- err:
+		if keyed {
+			delete(p.byKey, key)
+		}
+	case <-ctx.Done():
+	}
 }
 
 // LatestTurnReplacementReplay returns a matching idempotent replacement

@@ -325,7 +325,9 @@ func (s *Service) startAsyncPersistWorker() {
 			var pendingErrors sessionrevision.PendingErrors
 			for job := range persistChan {
 				if job.done != nil {
-					job.done <- pendingErrors.Take(job.key)
+					pendingErrors.Deliver(
+						job.barrierCtx, job.key, job.done,
+					)
 					continue
 				}
 				ctx, cancel := context.WithTimeout(context.Background(), defaultAsyncPersistTimeout)

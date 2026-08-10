@@ -88,7 +88,9 @@ func (s *Service) flushRevisionPersistence(
 	if len(s.persistChans) == 0 {
 		return fmt.Errorf("async persist workers are not initialized")
 	}
-	barrier := &persistJob{key: key, done: make(chan error, 1)}
+	barrier := &persistJob{
+		key: key, done: make(chan error), barrierCtx: ctx,
+	}
 	ch := s.persistChans[sessionPersistIndex(key, len(s.persistChans))]
 	select {
 	case ch <- barrier:

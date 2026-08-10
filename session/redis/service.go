@@ -56,11 +56,12 @@ type Service struct {
 }
 
 type sessionEventPair struct {
-	key     session.Key
-	event   *event.Event
-	version string
-	write   sessionrevision.Write
-	done    chan error
+	key        session.Key
+	event      *event.Event
+	version    string
+	write      sessionrevision.Write
+	done       chan error
+	barrierCtx context.Context
 }
 
 type trackEventPair struct {
@@ -70,6 +71,7 @@ type trackEventPair struct {
 	tracksState []byte // serialized tracks state from session.State["tracks"]
 	done        chan error
 	write       sessionrevision.Write
+	barrierCtx  context.Context
 }
 
 // compatEnabled returns true if zset storage awareness is needed.
@@ -730,6 +732,16 @@ func (s *Service) appendEventInternal(
 		case <-ctx.Done():
 			return ctx.Err()
 		}
+		if e != nil && e.IsRunnerCompletion() {
+			if err := flushPairChannel(
+				ctx, s.eventPairChans, key, &sessionEventPair{},
+			); err != nil {
+				return fmt.Errorf(
+					"flush event persistence after runner completion: %w",
+					err,
+				)
+			}
+		}
 		return nil
 	}
 
@@ -898,7 +910,9 @@ func (s *Service) startAsyncPersistWorker() {
 			var pendingErrors sessionrevision.PendingErrors
 			for eventPair := range eventPairChan {
 				if eventPair.done != nil {
-					eventPair.done <- pendingErrors.Take(eventPair.key)
+					pendingErrors.Deliver(
+						eventPair.barrierCtx, eventPair.key, eventPair.done,
+					)
 					continue
 				}
 				ctx, cancel := context.WithTimeout(context.Background(), defaultAsyncPersistTimeout)
@@ -919,7 +933,9 @@ func (s *Service) startAsyncPersistWorker() {
 			var pendingErrors sessionrevision.PendingErrors
 			for trackPair := range trackEventChan {
 				if trackPair.done != nil {
-					trackPair.done <- pendingErrors.Take(trackPair.key)
+					pendingErrors.Deliver(
+						trackPair.barrierCtx, trackPair.key, trackPair.done,
+					)
 					continue
 				}
 				ctx, cancel := context.WithTimeout(context.Background(), defaultAsyncPersistTimeout)

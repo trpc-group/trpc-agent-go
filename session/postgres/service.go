@@ -69,17 +69,19 @@ type Service struct {
 }
 
 type sessionEventPair struct {
-	key   session.Key
-	event *event.Event
-	write sessionrevision.Write
-	done  chan error
+	key        session.Key
+	event      *event.Event
+	write      sessionrevision.Write
+	done       chan error
+	barrierCtx context.Context
 }
 
 type trackEventPair struct {
-	key   session.Key
-	event *session.TrackEvent
-	write sessionrevision.Write
-	done  chan error
+	key        session.Key
+	event      *session.TrackEvent
+	write      sessionrevision.Write
+	done       chan error
+	barrierCtx context.Context
 }
 
 // buildConnString builds a PostgreSQL connection string from options.
@@ -791,6 +793,14 @@ func (s *Service) appendEventInternal(
 		case s.eventPairChans[index] <- &sessionEventPair{key: key, event: e, write: write}:
 		case <-ctx.Done():
 			return ctx.Err()
+		}
+		if e != nil && e.IsRunnerCompletion() {
+			if err := s.flushEventPersistence(ctx, key); err != nil {
+				return fmt.Errorf(
+					"flush event persistence after runner completion: %w",
+					err,
+				)
+			}
 		}
 		return nil
 	}

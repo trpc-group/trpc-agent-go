@@ -338,7 +338,7 @@ func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error
 	// Use INSERT INTO ... SELECT ... for batch soft delete
 	err = s.chClient.Exec(ctx,
 		fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, event_id, event, extra_data, created_at, updated_at, expires_at, deleted_at)
-			SELECT app_name, user_id, session_id, event_id, event, extra_data, created_at, ? AS updated_at, expires_at, ? AS deleted_at
+			SELECT app_name, user_id, session_id, event_id, event, extra_data, created_at, ?, expires_at, ?
 			FROM %s FINAL
 			WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
 			s.tableSessionEvents, s.tableSessionEvents),
@@ -347,15 +347,15 @@ func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error
 		return fmt.Errorf("soft delete session events failed: %w", err)
 	}
 
-	// Soft delete session summaries
-	// Use INSERT INTO ... SELECT ... for batch soft delete
+	// Soft delete session summaries. version_at is the replacement ordering
+	// column and must be newer than the active row selected by FINAL.
 	err = s.chClient.Exec(ctx,
-		fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, filter_key, summary, created_at, updated_at, expires_at, deleted_at)
-			SELECT app_name, user_id, session_id, filter_key, summary, created_at, ? AS updated_at, expires_at, ? AS deleted_at
+		fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, filter_key, summary, created_at, updated_at, version_at, expires_at, deleted_at)
+			SELECT app_name, user_id, session_id, filter_key, summary, created_at, now64(6), now64(9), expires_at, now64(6)
 			FROM %s FINAL
 			WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
 			s.tableSessionSummaries, s.tableSessionSummaries),
-		now, now, key.AppName, key.UserID, key.SessionID)
+		key.AppName, key.UserID, key.SessionID)
 	if err != nil {
 		return fmt.Errorf("soft delete session summaries failed: %w", err)
 	}

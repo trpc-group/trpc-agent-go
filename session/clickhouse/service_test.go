@@ -529,12 +529,27 @@ func TestService_DeleteSession(t *testing.T) {
 		return newMockRows([][]any{}), nil
 	}
 
+	var summaryDeleteQuery string
+	var summaryDeleteArgs []any
+	var eventDeleteQuery string
 	mockCli.execFunc = func(ctx context.Context, query string, args ...any) error {
+		if strings.Contains(query, "INSERT INTO session_events") {
+			eventDeleteQuery = query
+		}
+		if strings.Contains(query, "INSERT INTO session_summaries") {
+			summaryDeleteQuery = query
+			summaryDeleteArgs = append([]any(nil), args...)
+		}
 		return nil
 	}
 
 	err := s.DeleteSession(ctx, key)
 	assert.NoError(t, err)
+	assert.NotContains(t, eventDeleteQuery, "AS deleted_at")
+	assert.Contains(t, summaryDeleteQuery, "version_at")
+	assert.Contains(t, summaryDeleteQuery, "now64(9)")
+	assert.NotContains(t, summaryDeleteQuery, "AS deleted_at")
+	assert.Equal(t, []any{key.AppName, key.UserID, key.SessionID}, summaryDeleteArgs)
 }
 
 func TestService_Options(t *testing.T) {

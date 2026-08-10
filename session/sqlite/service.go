@@ -76,17 +76,19 @@ type Service struct {
 }
 
 type sessionEventPair struct {
-	key   session.Key
-	event *event.Event
-	write sessionrevision.Write
-	done  chan error
+	key        session.Key
+	event      *event.Event
+	write      sessionrevision.Write
+	done       chan error
+	barrierCtx context.Context
 }
 
 type trackEventPair struct {
-	key   session.Key
-	event *session.TrackEvent
-	write sessionrevision.Write
-	done  chan error
+	key        session.Key
+	event      *session.TrackEvent
+	write      sessionrevision.Write
+	done       chan error
+	barrierCtx context.Context
 }
 
 // NewService creates a new sqlite session service.

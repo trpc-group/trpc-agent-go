@@ -69,17 +69,19 @@ type Service struct {
 }
 
 type sessionEventPair struct {
-	key   session.Key
-	event *event.Event
-	write sessionrevision.Write
-	done  chan error
+	key        session.Key
+	event      *event.Event
+	write      sessionrevision.Write
+	done       chan error
+	barrierCtx context.Context
 }
 
 type trackEventPair struct {
-	key   session.Key
-	event *session.TrackEvent
-	write sessionrevision.Write
-	done  chan error
+	key        session.Key
+	event      *session.TrackEvent
+	write      sessionrevision.Write
+	done       chan error
+	barrierCtx context.Context
 }
 
 // NewService creates a new MySQL session service.
@@ -877,6 +879,14 @@ func (s *Service) appendEventInternal(
 		case <-ctx.Done():
 			return ctx.Err()
 		}
+		if e != nil && e.IsRunnerCompletion() {
+			if err := s.flushEventPersistence(ctx, key); err != nil {
+				return fmt.Errorf(
+					"flush event persistence after runner completion: %w",
+					err,
+				)
+			}
+		}
 		return nil
 	}
 
@@ -975,7 +985,9 @@ func (s *Service) startAsyncPersistWorker() {
 			var pendingErrors sessionrevision.PendingErrors
 			for eventPair := range eventPairChan {
 				if eventPair.done != nil {
-					eventPair.done <- pendingErrors.Take(eventPair.key)
+					pendingErrors.Deliver(
+						eventPair.barrierCtx, eventPair.key, eventPair.done,
+					)
 					continue
 				}
 				ctx := context.Background()
@@ -1015,7 +1027,11 @@ func (s *Service) startAsyncPersistWorker() {
 			var pendingErrors sessionrevision.PendingErrors
 			for trackEventPair := range trackPairChan {
 				if trackEventPair.done != nil {
-					trackEventPair.done <- pendingErrors.Take(trackEventPair.key)
+					pendingErrors.Deliver(
+						trackEventPair.barrierCtx,
+						trackEventPair.key,
+						trackEventPair.done,
+					)
 					continue
 				}
 				ctx := context.Background()

@@ -83,7 +83,18 @@ func (s *Service) appendEventInternal(
 			}
 			return nil
 		}
-		return s.enqueueEventPersistWithRevision(ctx, sess, key, e, write)
+		if err := s.enqueueEventPersistWithRevision(ctx, sess, key, e, write); err != nil {
+			return err
+		}
+		if e != nil && e.IsRunnerCompletion() {
+			if err := s.flushEventPersistence(ctx, key); err != nil {
+				return fmt.Errorf(
+					"flush event persistence after runner completion: %w",
+					err,
+				)
+			}
+		}
+		return nil
 	}
 
 	if err := s.addEventWithRevision(ctx, key, e, write); err != nil {
@@ -256,7 +267,7 @@ func (s *Service) startAsyncPersistWorker() {
 			var pendingErrors sessionrevision.PendingErrors
 			for pair := range ch {
 				if pair.done != nil {
-					pair.done <- pendingErrors.Take(pair.key)
+					pendingErrors.Deliver(pair.barrierCtx, pair.key, pair.done)
 					continue
 				}
 				ctx := context.Background()
@@ -283,7 +294,7 @@ func (s *Service) startAsyncPersistWorker() {
 			var pendingErrors sessionrevision.PendingErrors
 			for pair := range ch {
 				if pair.done != nil {
-					pair.done <- pendingErrors.Take(pair.key)
+					pendingErrors.Deliver(pair.barrierCtx, pair.key, pair.done)
 					continue
 				}
 				ctx := context.Background()

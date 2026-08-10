@@ -112,6 +112,71 @@ func TestDeleteSessionRemovesRevisionMetadata(t *testing.T) {
 	}
 }
 
+func TestReplacementPreservesEarlierSoftDeletedProjection(t *testing.T) {
+	db, _, cleanup := openTempSQLiteDB(t)
+	t.Cleanup(cleanup)
+	service, err := NewService(db, WithSoftDelete(true))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, service.Close()) })
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "reused"}
+	oldSession, err := service.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	require.NoError(t, service.AppendEvent(ctx, oldSession,
+		sqliteTestMessageEvent("old-event", "old-request", "old-invocation", "old"),
+	))
+	oldSummary, err := json.Marshal(&session.Summary{
+		Summary: "old summary", UpdatedAt: time.Now(),
+	})
+	require.NoError(t, err)
+	_, err = service.db.ExecContext(ctx, fmt.Sprintf(
+		`INSERT INTO %s (
+  app_name, user_id, session_id, filter_key, summary, updated_at, deleted_at
+) VALUES (?, ?, ?, ?, ?, ?, NULL)`,
+		service.tableSessionSummaries,
+	), key.AppName, key.UserID, key.SessionID, "old-filter", oldSummary,
+		time.Now().UTC().UnixNano())
+	require.NoError(t, err)
+	require.NoError(t, service.DeleteSession(ctx, key))
+
+	active, err := service.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	require.NoError(t, service.AppendEvent(ctx, active,
+		sqliteTestMessageEvent("baseline", "baseline-request", "baseline-invocation", "baseline"),
+	))
+	turnCtx := sessionrevision.ContextWithTurnStart(ctx, sessionrevision.TurnStart{
+		RequestID: "latest-request", InvocationID: "latest-invocation",
+	})
+	require.NoError(t, service.AppendEvent(turnCtx, active,
+		sqliteTestMessageEvent("latest", "latest-request", "latest-invocation", "latest"),
+	))
+	require.NoError(t, service.AppendEvent(ctx, active,
+		sqliteTestCompletionEvent("latest-request", "latest-invocation"),
+	))
+	_, err = service.ReplaceLatestTurn(ctx, sessionrevision.LatestTurnReplacementRequest{
+		Key: key, ExpectedRequestID: "latest-request", IdempotencyKey: "replacement",
+	})
+	require.NoError(t, err)
+
+	var oldEvents int
+	require.NoError(t, service.db.QueryRowContext(ctx, fmt.Sprintf(
+		`SELECT COUNT(*) FROM %s
+WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NOT NULL`,
+		service.tableSessionEvents,
+	), key.AppName, key.UserID, key.SessionID).Scan(&oldEvents))
+	assert.Positive(t, oldEvents)
+
+	var oldSummaries int
+	require.NoError(t, service.db.QueryRowContext(ctx, fmt.Sprintf(
+		`SELECT COUNT(*) FROM %s
+WHERE app_name = ? AND user_id = ? AND session_id = ?
+AND filter_key = ? AND deleted_at IS NOT NULL`,
+		service.tableSessionSummaries,
+	), key.AppName, key.UserID, key.SessionID, "old-filter").Scan(&oldSummaries))
+	assert.Equal(t, 1, oldSummaries)
+}
+
 func TestReplacementPreservesAndLaterWritesRefreshArchiveExpiration(t *testing.T) {
 	db, _, cleanup := openTempSQLiteDB(t)
 	t.Cleanup(cleanup)

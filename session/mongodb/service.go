@@ -82,6 +82,7 @@ type persistJob struct {
 	trackEvent *session.TrackEvent
 	write      sessionrevision.Write
 	done       chan error
+	barrierCtx context.Context
 }
 
 // buildClientOpts assembles the storage.ClientBuilderOpt list from serviceOpts,
@@ -941,6 +942,14 @@ func (s *Service) appendEventInternal(
 		case s.persistChans[index] <- &persistJob{key: key, event: e, write: write}:
 		case <-ctx.Done():
 			return ctx.Err()
+		}
+		if e != nil && e.IsRunnerCompletion() {
+			if err := s.flushRevisionPersistence(ctx, key); err != nil {
+				return fmt.Errorf(
+					"flush persistence after runner completion: %w",
+					err,
+				)
+			}
 		}
 		return nil
 	}

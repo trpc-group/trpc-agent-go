@@ -137,7 +137,8 @@ func flushPairChannel(
 		return nil
 	}
 	barrier.key = key
-	barrier.done = make(chan error, 1)
+	barrier.done = make(chan error)
+	barrier.barrierCtx = ctx
 	hash := session.NewSession(key.AppName, key.UserID, key.SessionID).Hash
 	select {
 	case channels[hash%len(channels)] <- barrier:
@@ -160,7 +161,9 @@ func flushTrackPairChannel(
 	if len(channels) == 0 {
 		return nil
 	}
-	barrier := &trackEventPair{key: key, done: make(chan error, 1)}
+	barrier := &trackEventPair{
+		key: key, done: make(chan error), barrierCtx: ctx,
+	}
 	hash := session.NewSession(key.AppName, key.UserID, key.SessionID).Hash
 	select {
 	case channels[hash%len(channels)] <- barrier:

@@ -85,21 +85,34 @@ func (s *Service) flushRevisionPersistence(
 	if !s.opts.enableAsyncPersist {
 		return nil
 	}
+	return errors.Join(
+		s.flushEventPersistence(ctx, key),
+		s.flushTrackPersistence(ctx, key),
+	)
+}
+
+func (s *Service) flushEventPersistence(
+	ctx context.Context,
+	key session.Key,
+) error {
+	if !s.opts.enableAsyncPersist {
+		return nil
+	}
 	hash := session.NewSession(key.AppName, key.UserID, key.SessionID).Hash
-	eventBarrier := &sessionEventPair{key: key, done: make(chan error, 1)}
+	eventBarrier := &sessionEventPair{
+		key: key, done: make(chan error), barrierCtx: ctx,
+	}
 	select {
 	case s.eventPairChans[hash%len(s.eventPairChans)] <- eventBarrier:
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-	var flushErr error
 	select {
 	case err := <-eventBarrier.done:
-		flushErr = err
+		return err
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-	return errors.Join(flushErr, s.flushTrackPersistence(ctx, key))
 }
 
 func (s *Service) flushTrackPersistence(ctx context.Context, key session.Key) error {
@@ -108,7 +121,9 @@ func (s *Service) flushTrackPersistence(ctx context.Context, key session.Key) er
 	}
 	var flushErr error
 	for _, ch := range s.trackEventChans {
-		barrier := &trackEventPair{key: key, done: make(chan error, 1)}
+		barrier := &trackEventPair{
+			key: key, done: make(chan error), barrierCtx: ctx,
+		}
 		select {
 		case ch <- barrier:
 		case <-ctx.Done():

@@ -786,7 +786,9 @@ func (s *Service) startAsyncPersistWorker() {
 			var pendingErrors sessionrevision.PendingErrors
 			for pair := range eventCh {
 				if pair.done != nil {
-					pair.done <- pendingErrors.Take(pair.key)
+					pendingErrors.Deliver(
+						pair.barrierCtx, pair.key, pair.done,
+					)
 					continue
 				}
 				ctx, cancel := context.WithTimeout(
@@ -834,7 +836,9 @@ func (s *Service) startAsyncPersistWorker() {
 			var pendingErrors sessionrevision.PendingErrors
 			for pair := range trackCh {
 				if pair.done != nil {
-					pair.done <- pendingErrors.Take(pair.key)
+					pendingErrors.Deliver(
+						pair.barrierCtx, pair.key, pair.done,
+					)
 					continue
 				}
 				ctx, cancel := context.WithTimeout(

@@ -715,14 +715,84 @@ func TestPendingErrorsAreIsolatedBySession(t *testing.T) {
 	pending.Add(keyB, errB)
 	pending.Add(keyB, nil)
 
-	gotB := pending.Take(keyB)
+	gotB := deliverPendingError(context.Background(), t, &pending, keyB)
 	assert.ErrorIs(t, gotB, errB)
 	assert.NotErrorIs(t, gotB, errA1)
-	gotA := pending.Take(keyA)
+	gotA := deliverPendingError(context.Background(), t, &pending, keyA)
 	assert.ErrorIs(t, gotA, errA1)
-	assert.ErrorIs(t, gotA, errA2)
-	assert.NoError(t, pending.Take(keyA))
-	assert.NoError(t, (&PendingErrors{}).Take(keyA))
+	assert.NotErrorIs(t, gotA, errA2)
+	assert.NoError(t, deliverPendingError(
+		context.Background(), t, &pending, keyA,
+	))
+	assert.NoError(t, deliverPendingError(
+		context.Background(), t, &PendingErrors{}, keyA,
+	))
+}
+
+func TestPendingErrorsRetainCancelledBarrierAndBoundCapacity(t *testing.T) {
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "cancelled"}
+	persistErr := errors.New("persist failed")
+	var pending PendingErrors
+	pending.Add(key, persistErr)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	done := make(chan error)
+	delivered := make(chan struct{})
+	go func() {
+		pending.Deliver(ctx, key, done)
+		close(delivered)
+	}()
+	select {
+	case <-delivered:
+	case <-time.After(time.Second):
+		t.Fatal("cancelled barrier did not return")
+	}
+	assert.ErrorIs(t, deliverPendingError(
+		context.Background(), t, &pending, key,
+	), persistErr)
+
+	for i := 0; i < maxPendingErrorKeys+100; i++ {
+		pending.Add(session.Key{
+			AppName: "app", UserID: "user", SessionID: fmt.Sprintf("session-%d", i),
+		}, persistErr)
+	}
+	assert.Len(t, pending.byKey, maxPendingErrorKeys)
+	assert.Error(t, pending.overflow)
+	unknown := session.Key{AppName: "app", UserID: "user", SessionID: "overflow"}
+	assert.Error(t, deliverPendingError(
+		context.Background(), t, &pending, unknown,
+	))
+	assert.Error(t, deliverPendingError(
+		context.Background(), t, &pending, unknown,
+	))
+}
+
+func deliverPendingError(
+	ctx context.Context,
+	t *testing.T,
+	pending *PendingErrors,
+	key session.Key,
+) error {
+	t.Helper()
+	done := make(chan error)
+	delivered := make(chan struct{})
+	go func() {
+		pending.Deliver(ctx, key, done)
+		close(delivered)
+	}()
+	select {
+	case err := <-done:
+		select {
+		case <-delivered:
+		case <-time.After(time.Second):
+			t.Fatal("barrier delivery did not complete")
+		}
+		return err
+	case <-time.After(time.Second):
+		t.Fatal("barrier result was not delivered")
+		return nil
+	}
 }
 
 func TestRecordLatestTurnReplacementReplayIsBounded(t *testing.T) {

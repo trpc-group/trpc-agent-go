@@ -211,21 +211,34 @@ func (s *Service) flushRevisionPersistence(
 	if !s.opts.enableAsyncPersist {
 		return nil
 	}
+	return errors.Join(
+		s.flushEventPersistence(ctx, key),
+		s.flushTrackPersistence(ctx, key),
+	)
+}
+
+func (s *Service) flushEventPersistence(
+	ctx context.Context,
+	key session.Key,
+) error {
+	if !s.opts.enableAsyncPersist || len(s.eventPairChans) == 0 {
+		return nil
+	}
 	hash := session.NewSession(key.AppName, key.UserID, key.SessionID).Hash
-	eventBarrier := &sessionEventPair{key: key, done: make(chan error, 1)}
+	eventBarrier := &sessionEventPair{
+		key: key, done: make(chan error), barrierCtx: ctx,
+	}
 	select {
 	case s.eventPairChans[hash%len(s.eventPairChans)] <- eventBarrier:
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-	var flushErr error
 	select {
 	case err := <-eventBarrier.done:
-		flushErr = err
+		return err
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-	return errors.Join(flushErr, s.flushTrackPersistence(ctx, key))
 }
 
 func (s *Service) flushTrackPersistence(ctx context.Context, key session.Key) error {
@@ -233,7 +246,9 @@ func (s *Service) flushTrackPersistence(ctx context.Context, key session.Key) er
 		return nil
 	}
 	hash := session.NewSession(key.AppName, key.UserID, key.SessionID).Hash
-	trackBarrier := &trackEventPair{key: key, done: make(chan error, 1)}
+	trackBarrier := &trackEventPair{
+		key: key, done: make(chan error), barrierCtx: ctx,
+	}
 	select {
 	case s.trackEventChans[hash%len(s.trackEventChans)] <- trackBarrier:
 	case <-ctx.Done():
@@ -615,19 +630,31 @@ WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
 	if err != nil {
 		return fmt.Errorf("restore session state: %w", err)
 	}
-	for _, table := range []string{
-		s.tableSessionEvents,
-		s.tableSessionSummaries,
-	} {
+	for _, table := range []string{s.tableSessionEvents, s.tableSessionSummaries} {
+		// Table names are derived from validated service configuration.
+		statement := fmt.Sprintf( //nolint:gosec
+			`DELETE FROM %s WHERE app_name = ? AND user_id = ? AND session_id = ?`,
+			table,
+		)
+		args := []any{key.AppName, key.UserID, key.SessionID}
+		if s.opts.softDelete {
+			// Summary rows have a key-wide unique index, so active rows must be
+			// replaced rather than retained as tombstones. Rows deleted by an
+			// earlier Session instance remain untouched.
+			statement += " AND deleted_at IS NULL"
+			if table == s.tableSessionEvents {
+				statement = fmt.Sprintf(
+					`UPDATE %s SET deleted_at = ?
+WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
+					table,
+				)
+				args = append([]any{time.Now().UTC().UnixNano()}, args...)
+			}
+		}
 		if _, err := tx.ExecContext(
 			ctx,
-			fmt.Sprintf(
-				`DELETE FROM %s WHERE app_name = ? AND user_id = ? AND session_id = ?`,
-				table,
-			),
-			key.AppName,
-			key.UserID,
-			key.SessionID,
+			statement,
+			args...,
 		); err != nil {
 			return fmt.Errorf("clear active session projection: %w", err)
 		}

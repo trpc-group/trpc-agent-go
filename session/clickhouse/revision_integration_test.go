@@ -1,0 +1,139 @@
+//
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
+package clickhouse
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/session"
+)
+
+func TestDeleteSessionProjectionTombstonesIntegration(t *testing.T) {
+	dsn := os.Getenv("TRPC_AGENT_GO_CLICKHOUSE_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set TRPC_AGENT_GO_CLICKHOUSE_TEST_DSN to run ClickHouse integration test")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	prefix := fmt.Sprintf("r%x", time.Now().UnixNano())
+	svc, err := NewService(
+		WithClickHouseDSN(dsn),
+		WithTablePrefix(prefix),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(
+			context.Background(),
+			10*time.Second,
+		)
+		defer cleanupCancel()
+		for _, table := range []string{
+			svc.tableSessionStates,
+			svc.tableSessionEvents,
+			svc.tableSessionSummaries,
+			svc.tableAppStates,
+			svc.tableUserStates,
+		} {
+			_ = svc.chClient.Exec(cleanupCtx, "DROP TABLE IF EXISTS "+table)
+		}
+		_ = svc.Close()
+	})
+
+	key := session.Key{
+		AppName: "app", UserID: "user", SessionID: "session",
+	}
+	_, err = svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	createdAt := time.Now().UTC().Add(-time.Second)
+	require.NoError(t, svc.chClient.Exec(
+		ctx,
+		fmt.Sprintf(`INSERT INTO %s
+(app_name, user_id, session_id, event_id, event, extra_data, created_at, updated_at, expires_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, svc.tableSessionEvents),
+		key.AppName,
+		key.UserID,
+		key.SessionID,
+		"event",
+		`{}`,
+		`{}`,
+		createdAt,
+		createdAt,
+		nil,
+	))
+	require.NoError(t, svc.chClient.Exec(
+		ctx,
+		fmt.Sprintf(`INSERT INTO %s
+(app_name, user_id, session_id, filter_key, summary, created_at, updated_at, version_at, expires_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, svc.tableSessionSummaries),
+		key.AppName,
+		key.UserID,
+		key.SessionID,
+		"",
+		`{"summary":"active"}`,
+		createdAt,
+		createdAt,
+		createdAt,
+		nil,
+	))
+	var activeBefore uint64
+	require.NoError(t, svc.chClient.QueryRow(
+		ctx,
+		[]any{&activeBefore},
+		fmt.Sprintf(`SELECT count() FROM %s FINAL
+WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
+			svc.tableSessionSummaries,
+		),
+		key.AppName,
+		key.UserID,
+		key.SessionID,
+	))
+	require.Equal(t, uint64(1), activeBefore)
+
+	require.NoError(t, svc.DeleteSession(ctx, key))
+	var active, deleted uint64
+	require.NoError(t, svc.chClient.QueryRow(
+		ctx,
+		[]any{&active, &deleted},
+		fmt.Sprintf(`SELECT
+	countIf(deleted_at IS NULL), countIf(deleted_at IS NOT NULL)
+FROM %s FINAL
+WHERE app_name = ? AND user_id = ? AND session_id = ? AND filter_key = ?`,
+			svc.tableSessionSummaries,
+		),
+		key.AppName,
+		key.UserID,
+		key.SessionID,
+		"",
+	))
+	require.Zero(t, active)
+	require.Equal(t, uint64(1), deleted)
+	require.NoError(t, svc.chClient.QueryRow(
+		ctx,
+		[]any{&active, &deleted},
+		fmt.Sprintf(`SELECT
+	countIf(deleted_at IS NULL), countIf(deleted_at IS NOT NULL)
+FROM %s FINAL
+WHERE app_name = ? AND user_id = ? AND session_id = ? AND event_id = ?`,
+			svc.tableSessionEvents,
+		),
+		key.AppName,
+		key.UserID,
+		key.SessionID,
+		"event",
+	))
+	require.Zero(t, active)
+	require.Equal(t, uint64(1), deleted)
+}

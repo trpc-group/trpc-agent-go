@@ -593,7 +593,9 @@ func (s *Service) startAsyncPersistWorker() {
 			var pendingErrors sessionrevision.PendingErrors
 			for pair := range eventPairChan {
 				if pair.done != nil {
-					pair.done <- pendingErrors.Take(pair.key)
+					pendingErrors.Deliver(
+						pair.barrierCtx, pair.key, pair.done,
+					)
 					continue
 				}
 				ctx := context.Background()
@@ -632,7 +634,9 @@ func (s *Service) startAsyncPersistWorker() {
 			var pendingErrors sessionrevision.PendingErrors
 			for pair := range trackPairChan {
 				if pair.done != nil {
-					pair.done <- pendingErrors.Take(pair.key)
+					pendingErrors.Deliver(
+						pair.barrierCtx, pair.key, pair.done,
+					)
 					continue
 				}
 				ctx := context.Background()

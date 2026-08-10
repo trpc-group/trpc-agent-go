@@ -50,19 +50,21 @@ type SessionState struct {
 // sessionEventPair holds a session key and event for
 // async persistence.
 type sessionEventPair struct {
-	key   session.Key
-	event *event.Event
-	write sessionrevision.Write
-	done  chan error
+	key        session.Key
+	event      *event.Event
+	write      sessionrevision.Write
+	done       chan error
+	barrierCtx context.Context
 }
 
 // trackEventPair holds a session key and track event
 // for async persistence.
 type trackEventPair struct {
-	key   session.Key
-	event *session.TrackEvent
-	write sessionrevision.Write
-	done  chan error
+	key        session.Key
+	event      *session.TrackEvent
+	write      sessionrevision.Write
+	done       chan error
+	barrierCtx context.Context
 }
 
 // Service is the pgvector session service with built-in
@@ -1080,6 +1082,14 @@ func (s *Service) appendEventInternal(
 		}:
 		case <-ctx.Done():
 			return ctx.Err()
+		}
+		if e != nil && e.IsRunnerCompletion() {
+			if err := s.flushEventPersistence(ctx, key); err != nil {
+				return fmt.Errorf(
+					"flush event persistence after runner completion: %w",
+					err,
+				)
+			}
 		}
 		return nil
 	}
