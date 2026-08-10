@@ -156,9 +156,56 @@ review = await agent(
 常用选项只有几个：
 
 - `instruction`：这次子 Agent 的临时角色说明。
+- `model`：宿主通过 `WithAgentModelProfile` 注册 profile 后可选的模型别名；
+  省略则继承模板模型。
 - `tools` / `skills`：省略表示继承基础 Agent；`[]` 表示这次禁用；非空列表表示在基础 Agent 已有能力上收窄。
 - `structured_output` / `schema`：要求这次子 Agent 返回结构化 JSON。
 - `instance_id`：同一个 workflow 内多次调用复用同一个子 Agent 历史。
+
+### 宿主授权的模型 profile
+
+默认情况下，每次子 Agent 调用使用模板 Agent 已注册的模型。若要让 workflow
+在少数宿主持有模型之间选择，可注册 profile 别名：
+
+```go
+fast := openai.New("gpt-5-mini")
+deep := openai.New("gpt-5")
+
+workflow, err := dynamicworkflow.NewTool(
+    dynamicworkflow.LocalRunner{},
+    []agent.Agent{general},
+    dynamicworkflow.WithAgentModelProfile(
+        "fast",
+        "Low-latency drafting and simple extraction.",
+        fast,
+    ),
+    dynamicworkflow.WithAgentModelProfile(
+        "deep",
+        "Careful review and multi-step reasoning.",
+        deep,
+    ),
+)
+```
+
+workflow 可在单次子 Agent 调用中选择 profile：
+
+```python
+draft = await agent(
+    "Write a short draft.",
+    instruction="Draft quickly.",
+    model="fast",
+)
+review = await agent(
+    {"draft": draft["text"]},
+    instruction="Review carefully.",
+    model="deep",
+)
+```
+
+profile 是白名单。每个 `model.Model` 实例由宿主持有；workflow 代码不能传入
+提供商模型标识符，也不能自行构造模型。省略 `model` 会完整保留模板模型。只有
+在有明确任务原因时才应选择覆盖。选中的 profile 对 `LLMAgent` 模板，以及会遵守
+invocation surface patch 的自定义 Agent 生效；其他 Agent 仍使用各自已配置的模型。
 
 默认不传 `instance_id` 时，每次 `agent(...)` 调用都会创建独立的子 Agent
 历史，适合并发分支。对于 `LLMAgent` 模板，如果临时角色不应继承根分支对话，
@@ -169,8 +216,9 @@ review = await agent(
 复用的历史包含子 Agent 的输入和产生的事件。动态 `instruction` 只配置当前这次
 调用，不会作为对话消息持久化；后续调用必须记住的事实应放在 `input` 中。
 
-这些选项只影响当前这次子 Agent 调用。workflow 不能借它改变模型、权限策略，
-也不能新增基础 Agent 本来没有的宿主能力。
+这些选项只影响当前这次子 Agent 调用。workflow 不能借它改变权限策略、发明模型
+接入点，也不能新增基础 Agent 本来没有的宿主能力。模型选择仅限于宿主通过
+`WithAgentModelProfile` 注册的别名。
 
 `agent(...)` 返回的 envelope 包含 `text`、可选的 `structured` 结果和执行元数据。
 下游需要普通文本时应传 `result["text"]`，需要稳定字段时传

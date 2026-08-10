@@ -75,6 +75,32 @@ return {"review": review["text"]}
 	require.JSONEq(t, `{"review":"approved"}`, string(result.Value))
 }
 
+func TestSandboxRunnerRoutesAgentModelOption(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 is not installed")
+	}
+	runner := NewSandboxRunner(
+		sandbox.WithPermissionProfile(sandbox.DangerFullAccessProfile()),
+	)
+	handler := callHandlerFunc(func(_ context.Context, call Call) (json.RawMessage, error) {
+		require.Equal(t, CallKindAgent, call.Kind)
+		require.JSONEq(t, `{
+			"input": "review it",
+			"options": {
+				"instruction": "Be strict.",
+				"model": "fast"
+			}
+		}`, string(call.Args))
+		return json.RawMessage(`{"text":"approved"}`), nil
+	})
+
+	result, err := Execute(context.Background(), runner, handler, `
+return await agent("review it", instruction="Be strict.", model="fast")
+`)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"text":"approved"}`, string(result.Value))
+}
+
 func TestSandboxRunnerUsesCleanEnvironment(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell wrapper is Unix-specific")
