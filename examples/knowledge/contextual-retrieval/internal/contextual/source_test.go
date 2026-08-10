@@ -194,8 +194,12 @@ func TestSourceRejectsCumulativePromptCostBeforeGeneration(t *testing.T) {
 	) (string, error) {
 		return "must not be generated", nil
 	}}
-	docs := testDocuments()
+	docs := append(testDocuments(), testDocument("third chunk", 2))
 	limit := contextRequestBytes("parent", docs[0].Content)
+	requiredPromptBytes := int64(0)
+	for _, doc := range docs {
+		requiredPromptBytes += contextRequestBytes("parent", doc.Content)
+	}
 	src := newTestSourceWithMaxPromptBytes(
 		t,
 		&fakeSource{docs: docs},
@@ -209,9 +213,9 @@ func TestSourceRejectsCumulativePromptCostBeforeGeneration(t *testing.T) {
 		t.Fatal("ReadDocuments unexpectedly succeeded")
 	}
 	for _, want := range []string{
-		"prompt bytes",
+		fmt.Sprintf("requires %d prompt bytes", requiredPromptBytes),
 		"6-byte parent",
-		"2 unique cache misses",
+		"3 unique cache misses",
 		fmt.Sprintf("%d-byte limit", limit),
 	} {
 		if !strings.Contains(err.Error(), want) {

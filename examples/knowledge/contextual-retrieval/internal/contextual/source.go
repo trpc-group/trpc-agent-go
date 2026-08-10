@@ -163,20 +163,18 @@ func (s *contextualSource) ReadDocuments(ctx context.Context) ([]*document.Docum
 			continue
 		}
 		uncachedKeys[cacheKey] = struct{}{}
-		promptBytes := contextRequestBytes(s.parentText, clone.Content)
-		estimatedPromptBytes := totalPromptBytes + promptBytes
-		if estimatedPromptBytes > s.maxPromptBytes {
-			return nil, fmt.Errorf(
-				"context generation requires at least %d prompt bytes for a %d-byte parent and "+
-					"%d unique cache misses, exceeding the %d-byte limit; reduce the input or "+
-					"raise the contextual prompt budget after reviewing provider cost",
-				estimatedPromptBytes,
-				len(s.parentText),
-				len(uncachedKeys),
-				s.maxPromptBytes,
-			)
-		}
-		totalPromptBytes = estimatedPromptBytes
+		totalPromptBytes += contextRequestBytes(s.parentText, clone.Content)
+	}
+	if totalPromptBytes > s.maxPromptBytes {
+		return nil, fmt.Errorf(
+			"context generation requires %d prompt bytes for a %d-byte parent and "+
+				"%d unique cache misses, exceeding the %d-byte limit; reduce the input or "+
+				"raise the contextual prompt budget after reviewing provider cost",
+			totalPromptBytes,
+			len(s.parentText),
+			len(uncachedKeys),
+			s.maxPromptBytes,
+		)
 	}
 
 	contextualized := make([]*document.Document, len(prepared))
