@@ -167,8 +167,8 @@ type variantConfig struct {
 	// defaultReasoningContentBackfill controls replay-time empty
 	// reasoning_content backfill for assistant messages.
 	defaultReasoningContentBackfill bool
-	// reasoningContentAsContentFallback copies reasoning_content into
-	// content only when content is empty and the response has no tool calls.
+	// reasoningContentAsContentFallback copies reasoning_content into content
+	// only for normally completed responses with empty content and no tool calls.
 	reasoningContentAsContentFallback bool
 }
 type fileDeletionBodyConvertor func(
@@ -2623,6 +2623,7 @@ func (m *Model) emitStreamingFinalResponse(
 							Content: m.contentWithReasoningFallback(
 								"",
 								aggregatedReasoning,
+								"",
 								false,
 							),
 							ReasoningContent: aggregatedReasoning,
@@ -2736,6 +2737,7 @@ func (m *Model) createFinalResponse(
 		content := m.contentWithReasoningFallback(
 			choice.Message.Content,
 			reasoningContent,
+			choice.FinishReason,
 			choiceHasToolCalls,
 		)
 
@@ -2825,6 +2827,7 @@ func (m *Model) createResponseFromCompletion(chatCompletion *openai.ChatCompleti
 			content := m.contentWithReasoningFallback(
 				choice.Message.Content,
 				reasoningContent,
+				choice.FinishReason,
 				len(choice.Message.ToolCalls) > 0,
 			)
 
@@ -2885,9 +2888,11 @@ func (m *Model) createResponseFromCompletion(chatCompletion *openai.ChatCompleti
 func (m *Model) contentWithReasoningFallback(
 	content string,
 	reasoningContent string,
+	finishReason string,
 	hasToolCall bool,
 ) string {
-	if content != "" || reasoningContent == "" || hasToolCall {
+	if content != "" || reasoningContent == "" ||
+		finishReason != "stop" || hasToolCall {
 		return content
 	}
 	if m == nil || !m.variantConfig.reasoningContentAsContentFallback {
