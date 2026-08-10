@@ -1930,7 +1930,7 @@ Variant 机制是 Model 模块的重要优化，用于处理不同 OpenAI 兼容
 
 - GLM OpenAI-compatible 接口适配
 - 使用 GLM 的 `thinking` 对象格式序列化思考开关
-- 当部分 GLM 网关把最终答案放在 `reasoning_content`、`content` 为空且正常结束（`finish_reason=stop`）时，框架会将其回退为可见内容
+- 当部分 GLM 网关把最终答案放在 `reasoning_content`，且 `content` 为空、没有工具调用并正常结束（`finish_reason=stop`）时，框架会将其回退为可见内容
 
 **6. VariantKimi**
 
