@@ -1580,7 +1580,7 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequentialResult(
 	// The pollution marker means the session consumed external context. When
 	// rendering the result fails, the session records the error message rather
 	// than the tool output, so nothing external entered the conversation.
-	if err == nil {
+	if err == nil && !shouldSkipToolStateDelta(ctx) {
 		markSessionAutoMemoryPolluted(
 			invocation,
 			toolEvent,
@@ -2008,12 +2008,14 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 			agentName = invocation.AgentName
 		}
 	}
-	markSessionAutoMemoryPolluted(
-		invocation,
-		toolCallResponseEvent,
-		tools[tc.Function.Name],
-		tc.Function.Name,
-	)
+	if !shouldSkipToolStateDelta(ctx) {
+		markSessionAutoMemoryPolluted(
+			invocation,
+			toolCallResponseEvent,
+			tools[tc.Function.Name],
+			tc.Function.Name,
+		)
+	}
 	stateDelta := p.buildToolEventStateDelta(
 		ctx,
 		invocation,

@@ -112,8 +112,7 @@ func (p *toolErrorPlugin) afterToolMessages(
 	args *pluginbase.AfterToolMessagesArgs,
 ) (*pluginbase.AfterToolMessagesResult, error) {
 	if p == nil || args == nil || args.Request == nil ||
-		args.Request.Tools == nil || len(args.ToolCalls) == 0 ||
-		len(args.ToolResultMessages) == 0 {
+		len(args.ToolCalls) == 0 || len(args.ToolResultMessages) == 0 {
 		return nil, nil
 	}
 	callsByID := make(map[string]model.ToolCall, len(args.ToolCalls))
