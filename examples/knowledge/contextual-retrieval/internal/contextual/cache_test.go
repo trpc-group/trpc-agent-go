@@ -114,9 +114,8 @@ func TestContextCacheRejectsConflictingValue(t *testing.T) {
 	}
 }
 
-func TestContextCacheRejectsSymlink(t *testing.T) {
-	directory := t.TempDir()
-	target := filepath.Join(directory, "target.json")
+func TestContextCacheDoesNotChangeExistingFileMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "contexts.json")
 	data, err := json.Marshal(contextCacheFile{
 		Version:  contextCacheVersion,
 		Contexts: map[string]string{},
@@ -124,28 +123,59 @@ func TestContextCacheRejectsSymlink(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal cache: %v", err)
 	}
-	if err := os.WriteFile(target, data, 0o600); err != nil {
-		t.Fatalf("write target: %v", err)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write cache: %v", err)
 	}
-	link := filepath.Join(directory, "link.json")
-	if err := os.Symlink(target, link); err != nil {
-		t.Skipf("symlink unavailable: %v", err)
+	if err := os.Chmod(path, 0o640); err != nil {
+		t.Fatalf("set cache mode: %v", err)
 	}
-	if _, err := openContextCache(link); err == nil || !strings.Contains(err.Error(), "symbolic link") {
-		t.Fatalf("open symlink error = %v", err)
+	if _, err := openContextCache(path); err != nil {
+		t.Fatalf("open cache: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat cache: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o640 {
+		t.Fatalf("cache mode = %o, want 640", got)
 	}
 }
 
 func TestContextCacheKeyTracksGenerationInputs(t *testing.T) {
-	base := contextCacheKey("model-a", "parent", "chunk", "embedding")
+	identity, err := contextGenerationIdentity("model-a", "https://provider.example/v1/")
+	if err != nil {
+		t.Fatalf("generation identity: %v", err)
+	}
+	sameIdentity, err := contextGenerationIdentity("model-a", " https://provider.example/v1 ")
+	if err != nil {
+		t.Fatalf("normalized generation identity: %v", err)
+	}
+	if sameIdentity != identity {
+		t.Fatal("equivalent endpoint spellings produced different identities")
+	}
+	if strings.Contains(identity, "provider.example") {
+		t.Fatal("generation identity exposed the provider endpoint")
+	}
+
+	differentModel, err := contextGenerationIdentity("model-b", "https://provider.example/v1")
+	if err != nil {
+		t.Fatalf("model generation identity: %v", err)
+	}
+	differentEndpoint, err := contextGenerationIdentity("model-a", "https://other.example/v1")
+	if err != nil {
+		t.Fatalf("endpoint generation identity: %v", err)
+	}
+
+	base := contextCacheKey(identity, "parent", "chunk", "embedding")
 	tests := []struct {
 		name string
 		key  string
 	}{
-		{"model", contextCacheKey("model-b", "parent", "chunk", "embedding")},
-		{"parent", contextCacheKey("model-a", "different parent", "chunk", "embedding")},
-		{"chunk", contextCacheKey("model-a", "parent", "different chunk", "embedding")},
-		{"embedding", contextCacheKey("model-a", "parent", "chunk", "different embedding")},
+		{"model", contextCacheKey(differentModel, "parent", "chunk", "embedding")},
+		{"endpoint", contextCacheKey(differentEndpoint, "parent", "chunk", "embedding")},
+		{"parent", contextCacheKey(identity, "different parent", "chunk", "embedding")},
+		{"chunk", contextCacheKey(identity, "parent", "different chunk", "embedding")},
+		{"embedding", contextCacheKey(identity, "parent", "chunk", "different embedding")},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

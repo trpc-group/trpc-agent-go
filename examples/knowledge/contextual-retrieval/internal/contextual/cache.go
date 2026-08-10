@@ -14,8 +14,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -50,24 +52,26 @@ func openContextCache(path string) (*contextCache, error) {
 }
 
 func (c *contextCache) load() error {
-	info, err := os.Lstat(c.path)
+	cacheFile, err := os.Open(c.path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("inspect context cache: %w", err)
+		return fmt.Errorf("open context cache: %w", err)
 	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return errors.New("context cache must not be a symbolic link")
+	defer func() {
+		_ = cacheFile.Close()
+	}()
+
+	info, err := cacheFile.Stat()
+	if err != nil {
+		return fmt.Errorf("inspect context cache: %w", err)
 	}
 	if !info.Mode().IsRegular() {
 		return errors.New("context cache must be a regular file")
 	}
-	if err := os.Chmod(c.path, 0o600); err != nil {
-		return fmt.Errorf("secure context cache permissions: %w", err)
-	}
 
-	data, err := os.ReadFile(c.path)
+	data, err := io.ReadAll(cacheFile)
 	if err != nil {
 		return fmt.Errorf("read context cache: %w", err)
 	}
@@ -169,10 +173,27 @@ func (c *contextCache) write(contexts map[string]string) error {
 	return nil
 }
 
-func contextCacheKey(modelName, parentText, chunkText, baseText string) string {
+func contextGenerationIdentity(modelName, modelEndpoint string) (string, error) {
+	modelName = strings.TrimSpace(modelName)
+	if modelName == "" {
+		return "", errors.New("context model name is required")
+	}
+	modelEndpoint = strings.TrimRight(strings.TrimSpace(modelEndpoint), "/")
 	return hashParts(
+		"context-generation/v1",
 		contextPromptVersion,
-		strings.TrimSpace(modelName),
+		contextSystemPrompt,
+		modelName,
+		modelEndpoint,
+		strconv.Itoa(contextMaxTokens),
+		strconv.FormatFloat(contextTemperature, 'g', -1, 64),
+		contextFinishReasonPolicy,
+	), nil
+}
+
+func contextCacheKey(generationIdentity, parentText, chunkText, baseText string) string {
+	return hashParts(
+		generationIdentity,
 		parentText,
 		chunkText,
 		baseText,

@@ -20,9 +20,11 @@ import (
 	"testing"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	filesource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
 )
 
 type fakeSource struct {
@@ -48,6 +50,34 @@ type fakeGenerator struct {
 
 	mu    sync.Mutex
 	calls int
+}
+
+type recordingEmbedder struct {
+	mu    sync.Mutex
+	texts []string
+}
+
+func (e *recordingEmbedder) GetEmbedding(_ context.Context, text string) ([]float64, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.texts = append(e.texts, text)
+	return []float64{1}, nil
+}
+
+func (e *recordingEmbedder) GetEmbeddingWithUsage(
+	ctx context.Context,
+	text string,
+) ([]float64, map[string]any, error) {
+	embedding, err := e.GetEmbedding(ctx, text)
+	return embedding, nil, err
+}
+
+func (*recordingEmbedder) GetDimensions() int { return 1 }
+
+func (e *recordingEmbedder) capturedTexts() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]string(nil), e.texts...)
 }
 
 func (g *fakeGenerator) Generate(
@@ -143,6 +173,7 @@ func TestSourceCacheHitSkipsGenerator(t *testing.T) {
 		return "", errors.New("generator must not run on a cache hit")
 	}}
 	second := newTestSourceAtPath(t, &fakeSource{docs: docs}, secondGenerator, "parent", cachePath)
+	second.maxPromptBytes = 1
 	got, err := second.ReadDocuments(context.Background())
 	if err != nil {
 		t.Fatalf("read cached documents: %v", err)
@@ -152,6 +183,30 @@ func TestSourceCacheHitSkipsGenerator(t *testing.T) {
 	}
 	if !strings.Contains(got[0].EmbeddingText, "cached context") {
 		t.Fatalf("EmbeddingText = %q, want cached context", got[0].EmbeddingText)
+	}
+}
+
+func TestSourceRejectsCumulativePromptCostBeforeGeneration(t *testing.T) {
+	generator := &fakeGenerator{generate: func(
+		context.Context,
+		string,
+		string,
+	) (string, error) {
+		return "must not be generated", nil
+	}}
+	docs := testDocuments()
+	src := newTestSource(t, &fakeSource{docs: docs}, generator, "parent")
+	src.maxPromptBytes = contextRequestBytes("parent", docs[0].Content)
+
+	_, err := src.ReadDocuments(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "safety limit") {
+		t.Fatalf("ReadDocuments error = %v, want safety limit", err)
+	}
+	if generator.callCount() != 0 {
+		t.Fatalf("generator calls = %d, want 0", generator.callCount())
+	}
+	if len(src.cache.contexts) != 0 {
+		t.Fatalf("cache entries = %d, want 0", len(src.cache.contexts))
 	}
 }
 
@@ -237,6 +292,7 @@ func TestSourceReusesContextForDuplicateChunks(t *testing.T) {
 		testDocument("duplicate chunk", 0),
 		testDocument("duplicate chunk", 1),
 	}
+	docs[1].Metadata[source.MetaChunkIndex] = 0
 	generator := &fakeGenerator{generate: func(
 		context.Context,
 		string,
@@ -255,6 +311,101 @@ func TestSourceReusesContextForDuplicateChunks(t *testing.T) {
 	for i, doc := range got {
 		if !strings.Contains(doc.EmbeddingText, "shared context") {
 			t.Errorf("document %d is missing shared context", i)
+		}
+	}
+}
+
+func TestSourceEmbeddingTextMatchesKnowledgeBaseline(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "parent.md")
+	content := "# Retrieval\n\nA parent document gives meaning to each smaller chunk. " +
+		"The original chunk should still be returned to the Agent."
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write parent: %v", err)
+	}
+	newFileSource := func() source.Source {
+		return filesource.New(
+			[]string{path},
+			filesource.WithChunkSize(60),
+			filesource.WithChunkOverlap(10),
+		)
+	}
+
+	baselineEmbedder := &recordingEmbedder{}
+	baselineKnowledge := knowledge.New(
+		knowledge.WithVectorStore(inmemory.New()),
+		knowledge.WithEmbedder(baselineEmbedder),
+		knowledge.WithSources([]source.Source{newFileSource()}),
+	)
+	loadOptions := []knowledge.LoadOption{
+		knowledge.WithSourceConcurrency(1),
+		knowledge.WithDocConcurrency(1),
+		knowledge.WithShowProgress(false),
+		knowledge.WithShowStats(false),
+	}
+	if err := baselineKnowledge.Load(context.Background(), loadOptions...); err != nil {
+		t.Fatalf("load baseline knowledge: %v", err)
+	}
+	baselineTexts := baselineEmbedder.capturedTexts()
+	if len(baselineTexts) < 2 {
+		t.Fatalf("baseline embedding calls = %d, want multiple chunks", len(baselineTexts))
+	}
+	baselineHasStructuralText := false
+	for _, text := range baselineTexts {
+		if strings.Contains(text, "file: parent.md") &&
+			strings.Contains(text, "chunk: 1") &&
+			strings.Contains(text, "section: Retrieval") {
+			baselineHasStructuralText = true
+			break
+		}
+	}
+	if !baselineHasStructuralText {
+		t.Fatalf("baseline embedding texts do not include file/chunk/section metadata: %q", baselineTexts)
+	}
+
+	generatedContext := "This chunk is from the retrieval section."
+	generator := &fakeGenerator{generate: func(
+		context.Context,
+		string,
+		string,
+	) (string, error) {
+		return generatedContext, nil
+	}}
+	cache, err := openContextCache(filepath.Join(directory, "contexts.json"))
+	if err != nil {
+		t.Fatalf("open cache: %v", err)
+	}
+	contextualSource, err := newContextualSource(
+		newFileSource(),
+		content,
+		generator,
+		"test-generation-identity",
+		cache,
+	)
+	if err != nil {
+		t.Fatalf("new contextual source: %v", err)
+	}
+	contextualEmbedder := &recordingEmbedder{}
+	contextualKnowledge := knowledge.New(
+		knowledge.WithVectorStore(inmemory.New()),
+		knowledge.WithEmbedder(contextualEmbedder),
+		knowledge.WithSources([]source.Source{contextualSource}),
+	)
+	if err := contextualKnowledge.Load(context.Background(), loadOptions...); err != nil {
+		t.Fatalf("load contextual knowledge: %v", err)
+	}
+	contextualTexts := contextualEmbedder.capturedTexts()
+	if len(contextualTexts) != len(baselineTexts) {
+		t.Fatalf(
+			"contextual embedding calls = %d, want %d",
+			len(contextualTexts),
+			len(baselineTexts),
+		)
+	}
+	for i := range contextualTexts {
+		want := contextualEmbeddingText(generatedContext, baselineTexts[i])
+		if contextualTexts[i] != want {
+			t.Fatalf("contextual embedding text %d = %q, want %q", i, contextualTexts[i], want)
 		}
 	}
 }
@@ -322,13 +473,13 @@ func TestNewContextualSourceValidatesRequiredInputs(t *testing.T) {
 		delegate  source.Source
 		parent    string
 		generator contextGenerator
-		modelName string
+		identity  string
 		cache     *contextCache
 	}{
 		{"delegate", nil, "parent", generator, "model", cache},
 		{"parent", &fakeSource{}, " ", generator, "model", cache},
 		{"generator", &fakeSource{}, "parent", nil, "model", cache},
-		{"model name", &fakeSource{}, "parent", generator, " ", cache},
+		{"generation identity", &fakeSource{}, "parent", generator, " ", cache},
 		{"cache", &fakeSource{}, "parent", generator, "model", nil},
 	}
 	for _, tt := range tests {
@@ -337,7 +488,7 @@ func TestNewContextualSourceValidatesRequiredInputs(t *testing.T) {
 				tt.delegate,
 				tt.parent,
 				tt.generator,
-				tt.modelName,
+				tt.identity,
 				tt.cache,
 			); err == nil {
 				t.Fatal("newContextualSource unexpectedly succeeded")

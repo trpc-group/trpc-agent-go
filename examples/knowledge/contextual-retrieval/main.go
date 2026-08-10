@@ -54,10 +54,14 @@ var (
 	inputPath    = flag.String(
 		"input",
 		knowledgeutil.ExampleDataPath("file/llm.md"),
-		"Local .md or .txt file to index",
+		"One local UTF-8 text file to index",
 	)
 	query = flag.String("query", defaultQuery, "Question to ask the knowledge Agent")
-	cache = flag.String("context-cache", defaultContextCache, "Local cache for generated contexts")
+	cache = flag.String(
+		"context-cache",
+		defaultContextCache,
+		"Local cache used only by the contextual index variant",
+	)
 )
 
 type config struct {
@@ -108,10 +112,11 @@ func run(ctx context.Context, cfg config) error {
 			knowledgeutil.GetEnvOrDefault("MODEL_NAME", defaultAnswerModel),
 		)
 		indexSource, err = contextual.NewSource(baseSource, contextual.SourceConfig{
-			ParentText: parentText,
-			Model:      openaimodel.New(contextModelName),
-			ModelName:  contextModelName,
-			CachePath:  cfg.cachePath,
+			ParentText:    parentText,
+			Model:         openaimodel.New(contextModelName),
+			ModelName:     contextModelName,
+			ModelEndpoint: os.Getenv("OPENAI_BASE_URL"),
+			CachePath:     cfg.cachePath,
 		})
 		if err != nil {
 			return fmt.Errorf("configure contextual source: %w", err)

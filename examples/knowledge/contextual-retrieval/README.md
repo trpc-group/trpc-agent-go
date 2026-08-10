@@ -10,8 +10,8 @@ their parent document, then evaluate both variants with representative queries.
 
 ## What Changes
 
-The example uses the standard file source to split one local Markdown or text
-file. The two index variants are:
+The example uses the standard file source to split one local UTF-8 text file;
+the file extension selects the registered reader. The two index variants are:
 
 - `baseline`: embed the normal chunk text.
 - `contextual`: ask a model for a short context, then embed:
@@ -24,7 +24,10 @@ file. The two index variants are:
   <normal chunk embedding text>
   ```
 
-Only `Document.EmbeddingText` changes. `Document.Content`, IDs, metadata, and
+Only `Document.EmbeddingText` changes. The normal framework embedding text
+includes structural metadata such as file name, positive chunk index, and
+Markdown section when available; the contextual variant retains that exact
+base text after the generated context. `Document.Content`, IDs, metadata, and
 chunk order stay unchanged, so the Agent receives the original chunk.
 
 ```text
@@ -35,6 +38,15 @@ local file -> file.Source -> optional contextual source -> Knowledge.Load
 
 Retrieval is fixed to vector-only mode. This keeps a paired comparison focused
 on the dense embedding text rather than silently adding keyword/BM25 behavior.
+
+### Relationship to the benchmark experiment
+
+This example uses the same core A/B topology as the contextual-retrieval work
+in [trpc-agent-go-benchmark#20](https://github.com/trpc-group/trpc-agent-go-benchmark/pull/20):
+baseline embeds the framework's normal text, while contextual embeds generated
+context plus that same base text. It is not a reproduction of that benchmark.
+The prompt, models, corpus, cache, retrieval setup, and evaluation protocol may
+differ, so results from the example and benchmark are not directly comparable.
 
 ## Environment
 
@@ -78,15 +90,36 @@ evaluation protocol fixed when comparing the variants.
 
 ## Local Context Cache
 
-Context generation adds one model call per unique chunk. The contextual variant
-stores successful contexts in a local JSON file and reuses them on later runs.
-The cache key includes the fixed prompt version, context model name, parent
-document, chunk content, and normal embedding text.
+On a cold cache, context generation is sequential and adds one model call per
+unique cache miss. Every call sends the full parent document again with one
+chunk, so total input grows approximately with `parent bytes × chunk count`, in
+addition to the chunk and prompt bytes. Before making any calls, the example
+estimates the cumulative prompt bytes for unique cache misses and fails closed
+above an internal 4 MiB limit. This byte guard is a bounded-example safeguard,
+not a provider token or price estimate. With the current bundled 8,966-byte
+input and 500/50 chunk settings, a cold run produces 29 calls and roughly 30×
+raw input amplification before provider framing.
 
-The cache is written atomically with file mode `0600`. It contains text derived
-from the source document, so treat it as sensitive and do not commit it. Delete
-the cache after changing provider deployments or generation behavior not
-represented by the model name.
+The contextual variant stores only successful contexts that ended with the
+model finish reason `stop` in a local JSON file and reuses them on later runs.
+The cache key covers the prompt and finish policy, context model name, a hashed
+normalized endpoint identity, fixed generation parameters, parent document,
+chunk content, and normal framework embedding text. The baseline variant does
+not read or write this cache.
+
+New cache snapshots are written atomically through a temporary file with mode
+`0600`. Opening an existing cache does not change its permissions. The cache
+contains text derived from the source document, so treat it as sensitive and do
+not commit it. The caller is responsible for ownership and permissions of an
+existing cache path and its directory; this example does not defend against a
+local actor that can replace them.
+
+Each successful cache miss rewrites and syncs the snapshot immediately, so an
+expensive context already generated survives a later provider error or canceled
+run. This favors recoverability over write throughput for the bounded example.
+An unsupported cache schema version is rejected; move or delete that cache
+explicitly before regenerating rather than letting the example overwrite an
+unknown format.
 
 This cache is intentionally a small, single-process example. A production
 integration should choose its own persistence, concurrency, retention, and
@@ -96,15 +129,21 @@ monitoring policies.
 
 - Context generation sends the full parent document and each chunk to the
   configured model provider. Confirm that this is permitted by your data policy.
-- Context generation adds indexing latency and model cost.
+- Parent and chunk strings are JSON-encoded to avoid ambiguous delimiter syntax.
+  JSON is not a prompt-injection security boundary; model-visible document text
+  can still influence generation.
+- Context generation adds indexing latency and model cost. Cold generation is
+  intentionally sequential in this bounded example.
 - Generated context can be inaccurate; indexing fails rather than silently
-  falling back when generation returns an error or empty text.
+  falling back when generation returns an error, empty text, missing finish
+  reason, or any finish reason other than `stop`.
 - Evaluate retrieval quality and downstream answer quality on representative
   business traffic before adoption.
 
 The implementation lives under `internal/contextual` to keep `main.go` focused
 on integration. It is example code to copy and adapt, not a public framework API
-or a production-ready component.
+or a production-ready component. Its scope is deliberately one local file, an
+in-memory vector store, one process, and sequential context generation.
 
 ## Tests
 

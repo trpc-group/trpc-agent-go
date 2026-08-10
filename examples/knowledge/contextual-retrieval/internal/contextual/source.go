@@ -12,14 +12,19 @@ package contextual
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
+	"strconv"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
+
+const maxContextPromptBytes int64 = 4 << 20
 
 // SourceConfig configures index-time contextualization for a source.
 type SourceConfig struct {
@@ -29,6 +34,9 @@ type SourceConfig struct {
 	Model model.Model
 	// ModelName participates in cache identity.
 	ModelName string
+	// ModelEndpoint participates in cache identity without being persisted in
+	// clear text. Leave it empty when the model adapter uses its default.
+	ModelEndpoint string
 	// CachePath stores generated contexts between runs.
 	CachePath string
 }
@@ -38,11 +46,12 @@ type contextGenerator interface {
 }
 
 type contextualSource struct {
-	delegate   source.Source
-	parentText string
-	generator  contextGenerator
-	modelName  string
-	cache      *contextCache
+	delegate           source.Source
+	parentText         string
+	generator          contextGenerator
+	generationIdentity string
+	cache              *contextCache
+	maxPromptBytes     int64
 }
 
 // NewSource wraps delegate and prepends generated context only to each
@@ -56,11 +65,15 @@ func NewSource(delegate source.Source, cfg SourceConfig) (source.Source, error) 
 	if err != nil {
 		return nil, fmt.Errorf("open context cache: %w", err)
 	}
+	generationIdentity, err := contextGenerationIdentity(cfg.ModelName, cfg.ModelEndpoint)
+	if err != nil {
+		return nil, err
+	}
 	return newContextualSource(
 		delegate,
 		cfg.ParentText,
 		newModelContextGenerator(cfg.Model),
-		cfg.ModelName,
+		generationIdentity,
 		cache,
 	)
 }
@@ -69,7 +82,7 @@ func newContextualSource(
 	delegate source.Source,
 	parentText string,
 	generator contextGenerator,
-	modelName string,
+	generationIdentity string,
 	cache *contextCache,
 ) (*contextualSource, error) {
 	if delegate == nil {
@@ -81,20 +94,27 @@ func newContextualSource(
 	if generator == nil {
 		return nil, errors.New("context generator is required")
 	}
-	modelName = strings.TrimSpace(modelName)
-	if modelName == "" {
-		return nil, errors.New("context model name is required")
+	generationIdentity = strings.TrimSpace(generationIdentity)
+	if generationIdentity == "" {
+		return nil, errors.New("context generation identity is required")
 	}
 	if cache == nil {
 		return nil, errors.New("context cache is required")
 	}
 	return &contextualSource{
-		delegate:   delegate,
-		parentText: parentText,
-		generator:  generator,
-		modelName:  modelName,
-		cache:      cache,
+		delegate:           delegate,
+		parentText:         parentText,
+		generator:          generator,
+		generationIdentity: generationIdentity,
+		cache:              cache,
+		maxPromptBytes:     maxContextPromptBytes,
 	}, nil
+}
+
+type preparedDocument struct {
+	document *document.Document
+	baseText string
+	cacheKey string
 }
 
 func (s *contextualSource) ReadDocuments(ctx context.Context) ([]*document.Document, error) {
@@ -103,7 +123,9 @@ func (s *contextualSource) ReadDocuments(ctx context.Context) ([]*document.Docum
 		return nil, fmt.Errorf("read delegate documents: %w", err)
 	}
 
-	contextualized := make([]*document.Document, len(docs))
+	prepared := make([]preparedDocument, len(docs))
+	uncachedKeys := make(map[string]struct{})
+	var totalPromptBytes int64
 	for i, doc := range docs {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -114,7 +136,39 @@ func (s *contextualSource) ReadDocuments(ctx context.Context) ([]*document.Docum
 
 		clone := doc.Clone()
 		baseText := embeddingText(clone)
-		cacheKey := contextCacheKey(s.modelName, s.parentText, clone.Content, baseText)
+		cacheKey := contextCacheKey(
+			s.generationIdentity,
+			s.parentText,
+			clone.Content,
+			baseText,
+		)
+		prepared[i] = preparedDocument{document: clone, baseText: baseText, cacheKey: cacheKey}
+		if _, ok := s.cache.get(cacheKey); ok {
+			continue
+		}
+		if _, ok := uncachedKeys[cacheKey]; ok {
+			continue
+		}
+		uncachedKeys[cacheKey] = struct{}{}
+		promptBytes := contextRequestBytes(s.parentText, clone.Content)
+		estimatedPromptBytes := totalPromptBytes + promptBytes
+		if estimatedPromptBytes > s.maxPromptBytes {
+			return nil, fmt.Errorf(
+				"context generation input is at least %d bytes, exceeding the %d-byte safety limit",
+				estimatedPromptBytes,
+				s.maxPromptBytes,
+			)
+		}
+		totalPromptBytes = estimatedPromptBytes
+	}
+
+	contextualized := make([]*document.Document, len(prepared))
+	for i, item := range prepared {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		clone := item.document
+		cacheKey := item.cacheKey
 		contextText, ok := s.cache.get(cacheKey)
 		if !ok {
 			contextText, err = s.generator.Generate(ctx, s.parentText, clone.Content)
@@ -130,7 +184,7 @@ func (s *contextualSource) ReadDocuments(ctx context.Context) ([]*document.Docum
 			}
 		}
 
-		clone.EmbeddingText = contextualEmbeddingText(contextText, baseText)
+		clone.EmbeddingText = contextualEmbeddingText(contextText, item.baseText)
 		contextualized[i] = clone
 	}
 	return contextualized, nil
@@ -148,11 +202,75 @@ func (s *contextualSource) GetMetadata() map[string]any {
 	return s.delegate.GetMetadata()
 }
 
+// embeddingText mirrors knowledge.Load's baseline embedding-text construction.
+// Keep the behavioral test against a real Knowledge.Load when this changes.
 func embeddingText(doc *document.Document) string {
 	if doc.EmbeddingText != "" {
 		return doc.EmbeddingText
 	}
-	return doc.Content
+	if doc.Metadata == nil {
+		return doc.Content
+	}
+
+	var prefix strings.Builder
+	if fileName, ok := doc.Metadata[source.MetaFileName].(string); ok && fileName != "" {
+		prefix.WriteString("file: ")
+		prefix.WriteString(fileName)
+	}
+	if chunkIndex, ok := embeddingChunkIndex(doc.Metadata[source.MetaChunkIndex]); ok && chunkIndex > 0 {
+		if prefix.Len() > 0 {
+			prefix.WriteString(" | ")
+		}
+		prefix.WriteString("chunk: ")
+		prefix.WriteString(strconv.Itoa(chunkIndex))
+	}
+	if headerPath, ok := doc.Metadata[source.MetaMarkdownHeaderPath].(string); ok && headerPath != "" {
+		if prefix.Len() > 0 {
+			prefix.WriteString(" | ")
+		}
+		prefix.WriteString("section: ")
+		prefix.WriteString(headerPath)
+	}
+	if prefix.Len() == 0 {
+		return doc.Content
+	}
+	return prefix.String() + "\n" + doc.Content
+}
+
+// embeddingChunkIndex mirrors the conversion accepted by knowledge.Load when
+// it builds baseline embedding text. The behavioral test using Knowledge.Load
+// protects this example from silently drifting from that framework contract.
+func embeddingChunkIndex(value any) (int, bool) {
+	if value == nil {
+		return 0, false
+	}
+	rv := reflect.ValueOf(value)
+	switch rv.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		if rv.IsNil() {
+			return 0, false
+		}
+	}
+	switch value := value.(type) {
+	case int:
+		return value, true
+	case float64:
+		return int(value), true
+	case float32:
+		return int(value), true
+	case string:
+		if value == "" || value == "<nil>" {
+			return 0, false
+		}
+		converted, err := strconv.Atoi(value)
+		return converted, err == nil
+	case json.Number:
+		converted, err := value.Int64()
+		return int(converted), err == nil
+	default:
+		converted, err := strconv.Atoi(fmt.Sprintf("%v", value))
+		return converted, err == nil
+	}
 }
 
 func contextualEmbeddingText(contextText, baseText string) string {
