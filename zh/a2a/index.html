@@ -2735,6 +2735,15 @@
           <li class="md-nav__item">
   <a href="#a2aagent_1" class="md-nav__link">
     <span class="md-ellipsis">
+      A2AAgent 匿名身份协调
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a2aagent_2" class="md-nav__link">
+    <span class="md-ellipsis">
       A2AAgent 完整配置项一览
     </span>
   </a>
@@ -3711,6 +3720,15 @@
         
           <li class="md-nav__item">
   <a href="#a2aagent_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      A2AAgent 匿名身份协调
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a2aagent_2" class="md-nav__link">
     <span class="md-ellipsis">
       A2AAgent 完整配置项一览
     </span>
@@ -5185,7 +5203,44 @@ A2A server 会自动把这段 path 作为自己的 <strong>base path</strong> �
 </tr>
 </tbody>
 </table>
-<h3 id="a2aagent_1">A2AAgent 完整配置项一览</h3>
+<h3 id="a2aagent_1">A2AAgent 匿名身份协调</h3>
+<p>对于使用持久化 session 的匿名 <code>A2AAgent</code> 调用，如果配置的
+<code>SessionService</code> 实现了 <code>session.StateInitializationService</code>，agent 会自动
+使用该能力。它会在共享同一后端的多个 agent 实例之间协调首次匿名 Cookie
+初始化。in-memory session service 只协调共享同一个 service 实例的调用方；
+Redis session service 可以跨 service 实例协调。</p>
+<p>如果后端不支持该能力，agent 会保留现有的单 agent 初始化锁和持久化行为。
+如果业务必须保证跨实例协调，可以开启 fail-closed 模式：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-27-1">1</a></span>
+<span class="normal"><a href="#__codelineno-27-2">2</a></span>
+<span class="normal"><a href="#__codelineno-27-3">3</a></span>
+<span class="normal"><a href="#__codelineno-27-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-27-1"><a id="__codelineno-27-1" name="__codelineno-27-1"></a><span class="nx">a2aAgent</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-27-2"><a id="__codelineno-27-2" name="__codelineno-27-2"></a><span class="w">    </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">WithAgentCardURL</span><span class="p">(</span><span class="s">&quot;http://remote:8888&quot;</span><span class="p">),</span>
+</span><span id="__span-27-3"><a id="__codelineno-27-3" name="__codelineno-27-3"></a><span class="w">    </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">WithRequireAnonymousIdentityCoordination</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-27-4"><a id="__codelineno-27-4" name="__codelineno-27-4"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>该选项默认为 <code>false</code>。启用后，strict 模式在缺少稳定持久化 session key，或
+<code>SessionService</code> 不支持协调能力时，会在联系远端 agent 前使调用失败。该能力检查
+无法判断不同 service 实例是否实际共享协调状态。需要跨进程协调的部署必须使用
+Redis 等共享后端，而不能使用相互独立的 in-memory service。</p>
+<p>在支持协调的路径中，规范 <code>.record.v1</code> 值和 legacy 投影会一起提交，因此新版本
+写入的状态仍可被变更前的旧版本读取。这种兼容性是有意设计为单向的：规范记录
+存在后，旧版本只能更新或删除 legacy key，而新版本仍会把规范记录视为权威值。
+因此，对于同一个可能被两个版本写入的逻辑 session，不支持混合版本滚动部署；
+应先排空旧版本的写入流量并完成升级，再继续复用这些 session。</p>
+<p>启用 Runner candidate selector 时，每个 speculative attempt 都使用隔离的
+attempt-scoped session state，不会暴露 <code>session.StateInitializationService</code>。首次使用
+匿名 Cookie 时，lenient 模式可能让每个 attempt 独立初始化并创建多个远端 principal；
+strict 模式则会在联系远端 agent 前让每个 attempt 失败，即使底层后端支持协调。
+已经存在的有效 Cookie 不受此限制。在 candidate-aware 集成完成前，不要将 candidate
+selector 与首次匿名 Cookie 协调初始化组合使用；可以先预热并持久化 Cookie，或等待
+后续的专门集成。</p>
+<p>Cookie record 仍然是私有 session state，不会出现在 event state delta 中。
+lease fencing 可以阻止过期 owner 覆盖新的 owner，但如果进程在远端返回后、
+持久化前退出，远端 principal 仍可能成为孤儿。</p>
+<p>这条基于 session 的路径与 <code>NewAnonymousA2AClient</code> 相互独立；后者没有框架级
+session service，只在自身 client 和 Cookie Jar 范围内生效。</p>
+<h3 id="a2aagent_2">A2AAgent 完整配置项一览</h3>
 <table>
 <thead>
 <tr>
@@ -5226,6 +5281,10 @@ A2A server 会自动把这段 path 作为自己的 <strong>base path</strong> �
 <td><code>WithCustomEventConverter(conv)</code></td>
 <td>自定义 A2A Response→Event 转换</td>
 </tr>
+<tr>
+<td><code>WithRequireAnonymousIdentityCoordination(enabled)</code></td>
+<td>要求持久化 session 的匿名身份初始化必须经过协调</td>
+</tr>
 </tbody>
 </table>
 
@@ -5250,7 +5309,7 @@ A2A server 会自动把这段 path 作为自己的 <strong>base path</strong> �
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年8月3日 08:39:01 UTC">2026-08-03 08:39:01</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年8月10日 09:41:27 UTC">2026-08-10 09:41:27</span>
   </span>
 
     

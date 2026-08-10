@@ -2733,6 +2733,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#a2aagent-anonymous-identity-coordination" class="md-nav__link">
+    <span class="md-ellipsis">
+      A2AAgent Anonymous Identity Coordination
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#a2aagent-configuration-reference" class="md-nav__link">
     <span class="md-ellipsis">
       A2AAgent Configuration Reference
@@ -3704,6 +3713,15 @@
   <a href="#a2a-server-configuration-reference" class="md-nav__link">
     <span class="md-ellipsis">
       A2A Server Configuration Reference
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a2aagent-anonymous-identity-coordination" class="md-nav__link">
+    <span class="md-ellipsis">
+      A2AAgent Anonymous Identity Coordination
     </span>
   </a>
   
@@ -5228,6 +5246,55 @@ If the client explicitly sets <code>agent.WithStream(...)</code> or <code>a2aage
 </tr>
 </tbody>
 </table>
+<h3 id="a2aagent-anonymous-identity-coordination">A2AAgent Anonymous Identity Coordination</h3>
+<p>For anonymous <code>A2AAgent</code> invocations that run with a persistent session, the
+agent automatically uses <code>session.StateInitializationService</code> when the
+configured <code>SessionService</code> provides it. The capability coordinates the first
+anonymous cookie across agent instances that share the same backing store.
+The in-memory session service coordinates callers sharing the same service
+instance; the Redis session service coordinates callers across service
+instances.</p>
+<p>When the capability is unavailable, the agent keeps the existing per-agent
+initialization lock and persistence behavior. Enable fail-closed behavior when
+cross-instance coordination is required:</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-27-1">1</a></span>
+<span class="normal"><a href="#__codelineno-27-2">2</a></span>
+<span class="normal"><a href="#__codelineno-27-3">3</a></span>
+<span class="normal"><a href="#__codelineno-27-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-27-1"><a id="__codelineno-27-1" name="__codelineno-27-1"></a><span class="nx">a2aAgent</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-27-2"><a id="__codelineno-27-2" name="__codelineno-27-2"></a><span class="w">    </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">WithAgentCardURL</span><span class="p">(</span><span class="s">&quot;http://remote:8888&quot;</span><span class="p">),</span>
+</span><span id="__span-27-3"><a id="__codelineno-27-3" name="__codelineno-27-3"></a><span class="w">    </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">WithRequireAnonymousIdentityCoordination</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-27-4"><a id="__codelineno-27-4" name="__codelineno-27-4"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>The option defaults to <code>false</code>. When enabled, strict mode fails the invocation
+before contacting the remote agent if there is no stable persistent session key
+or the session service does not implement the coordination capability. This
+capability check cannot determine whether separate service instances actually
+share coordination state. Deployments requiring cross-process coordination
+must configure a shared backend such as Redis instead of separate in-memory
+services.</p>
+<p>The canonical <code>.record.v1</code> value and its legacy projection are committed
+together on the coordinated paths, so a new writer remains readable by a
+pre-change reader. This compatibility is intentionally one-way. Once a
+canonical record exists, a pre-change writer can update or delete only the
+legacy keys, while a new reader continues to treat the canonical record as
+authoritative. Mixed-version rolling deployment is therefore unsupported for a
+logical session that can be written by both versions; drain old writers and
+complete the upgrade before reusing those sessions.</p>
+<p>When Runner candidate selection is enabled, each speculative attempt uses an
+isolated attempt-scoped session state and does not expose
+<code>session.StateInitializationService</code>. On first anonymous-cookie use, lenient
+mode may initialize independently in each attempt and create multiple remote
+principals; strict mode fails each attempt before contacting the remote agent,
+even when the underlying backend supports coordination. Existing valid cookie
+state is unaffected. Do not combine candidate selection with first-use
+coordinated anonymous initialization unless the cookie has been prewarmed or a
+candidate-aware integration is provided by a follow-up.</p>
+<p>The cookie record remains private session state and is not emitted in event
+state deltas. Lease fencing prevents an expired owner from committing over a
+newer owner, but a remote principal can still be orphaned if a process dies
+after the remote response and before persistence.</p>
+<p>This session-backed path is separate from <code>NewAnonymousA2AClient</code>, which has no
+framework session service and remains scoped to its own client and cookie jar.</p>
 <h3 id="a2aagent-configuration-reference">A2AAgent Configuration Reference</h3>
 <table>
 <thead>
@@ -5269,6 +5336,10 @@ If the client explicitly sets <code>agent.WithStream(...)</code> or <code>a2aage
 <td><code>WithCustomEventConverter(conv)</code></td>
 <td>Custom A2A Response→Event converter</td>
 </tr>
+<tr>
+<td><code>WithRequireAnonymousIdentityCoordination(enabled)</code></td>
+<td>Require coordinated anonymous identity initialization for persistent sessions</td>
+</tr>
 </tbody>
 </table>
 
@@ -5293,7 +5364,7 @@ If the client explicitly sets <code>agent.WithStream(...)</code> or <code>a2aage
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="August 3, 2026 08:39:01 UTC">2026-08-03 08:39:01</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="August 10, 2026 09:41:27 UTC">2026-08-10 09:41:27</span>
   </span>
 
     
