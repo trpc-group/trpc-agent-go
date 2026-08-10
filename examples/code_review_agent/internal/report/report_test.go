@@ -52,8 +52,8 @@ func TestRenderReportsRedactSecrets(t *testing.T) {
 	}
 }
 
-func TestJSONRedactsQuotedSecretsBeforeEscaping(t *testing.T) {
-	secrets := []string{"quoted-password-value", "quoted-token-value", "quoted-secret-value", "quoted-api-key-value", "json-password-value", "json-token-value", "json-secret-value", "json-api-key-value", "source-password!", "source-token:!"}
+func TestWriteRedactsSecretsWithPunctuation(t *testing.T) {
+	secrets := []string{"quoted-password-value", "quoted-token-value", "quoted-secret-value", "quoted-api-key-value", "json-password-value", "json-token-value", "json-secret-value", "json-api-key-value", "source-password!", "source-token:!", "p@ssword123!", "abc:defgh", "key/@:value!"}
 	r := review.Report{
 		Task: review.ReviewTask{
 			ID:       "task-quoted",
@@ -62,7 +62,8 @@ func TestJSONRedactsQuotedSecretsBeforeEscaping(t *testing.T) {
 		},
 		Summary: `password="quoted-password-value" token="quoted-token-value" api_key="quoted-api-key-value"
 source := "password=\"source-password!\" token=\'source-token:!\'"
-json={"password":"json-password-value", "token":"json-token-value", "secret":"json-secret-value", "api_key":"json-api-key-value"}`,
+json={"password":"json-password-value", "token":"json-token-value", "secret":"json-secret-value", "api_key":"json-api-key-value"}
+password: p@ssword123! token=abc:defgh api_key=key/@:value!`,
 		Findings: []review.Finding{{
 			File:           "pkg/config.go",
 			Evidence:       `password="quoted-password-value"`,
@@ -93,13 +94,15 @@ json={"password":"json-password-value", "token":"json-token-value", "secret":"js
 	if err != nil {
 		t.Fatalf("Write() error = %v", err)
 	}
-	raw, err := os.ReadFile(artifacts[0].Path)
-	if err != nil {
-		t.Fatalf("ReadFile(JSON artifact) error = %v", err)
-	}
-	for _, secret := range secrets {
-		if strings.Contains(string(raw), secret) {
-			t.Fatalf("JSON artifact leaked quoted secret %q: %s", secret, raw)
+	for _, artifact := range artifacts {
+		raw, err := os.ReadFile(artifact.Path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s) error = %v", artifact.Path, err)
+		}
+		for _, secret := range secrets {
+			if strings.Contains(string(raw), secret) {
+				t.Fatalf("%s artifact leaked secret %q: %s", artifact.Kind, secret, raw)
+			}
 		}
 	}
 }

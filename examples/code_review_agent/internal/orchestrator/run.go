@@ -582,14 +582,14 @@ func Run(ctx context.Context, opts Options) (result Result, err error) {
 	}); err != nil {
 		return Result{}, failTask(err)
 	}
+	findings := rules.Evaluate(files)
+	if err := st.SaveFindings(ctx, task.ID, findings); err != nil {
+		return Result{}, failTask(err)
+	}
 	if err := validateRuntimePolicy(opts.Runtime, opts.AllowTrustedLocal); err != nil {
 		return Result{}, failTask(err)
 	}
 	if err := validateRemoteRuntimePolicy(opts.Runtime, opts.AllowTrustedRemote); err != nil {
-		return Result{}, failTask(err)
-	}
-	findings := rules.Evaluate(files)
-	if err := st.SaveFindings(ctx, task.ID, findings); err != nil {
 		return Result{}, failTask(err)
 	}
 	if err := validateContainerRuntimePolicy(opts.Runtime); err != nil {

@@ -733,11 +733,12 @@ func TestValidateRemoteRuntimePolicyRejectsUntrustedE2B(t *testing.T) {
 
 func TestRunRejectsE2BWithoutTrustedRemoteOptIn(t *testing.T) {
 	outDir := t.TempDir()
+	dbPath := filepath.Join(outDir, "review_agent.db")
 	calledPlanner := false
 	_, err := Run(context.Background(), Options{
 		FixtureDir: filepath.Join("..", "..", "testdata", "fixtures"),
 		OutDir:     outDir,
-		DBPath:     filepath.Join(outDir, "review_agent.db"),
+		DBPath:     dbPath,
 		Runtime:    "e2b",
 		Now:        fixedTestTime(),
 		Planner: plannerFunc(func(ctx context.Context, req PlanRequest) (review.ReviewPlan, error) {
@@ -754,15 +755,24 @@ func TestRunRejectsE2BWithoutTrustedRemoteOptIn(t *testing.T) {
 	if calledPlanner {
 		t.Fatal("planner was called before E2B policy rejection")
 	}
+	assertStoredTask(t, dbPath, fixedTestTime(), func(report store.TaskReport) {
+		if report.Task.Status != review.TaskStatusFailed {
+			t.Fatalf("stored task status = %q, want failed", report.Task.Status)
+		}
+		if len(report.Findings) == 0 {
+			t.Fatal("stored findings = 0, want deterministic findings after E2B policy rejection")
+		}
+	})
 }
 
 func TestRunRejectsLocalRuntimeWithoutTrustedOptIn(t *testing.T) {
 	outDir := t.TempDir()
+	dbPath := filepath.Join(outDir, "review_agent.db")
 	calledPlanner := false
 	_, err := Run(context.Background(), Options{
 		FixtureDir: filepath.Join("..", "..", "testdata", "fixtures"),
 		OutDir:     outDir,
-		DBPath:     filepath.Join(outDir, "review_agent.db"),
+		DBPath:     dbPath,
 		Runtime:    "local",
 		Now:        fixedTestTime(),
 		Planner: plannerFunc(func(ctx context.Context, req PlanRequest) (review.ReviewPlan, error) {
@@ -779,6 +789,14 @@ func TestRunRejectsLocalRuntimeWithoutTrustedOptIn(t *testing.T) {
 	if calledPlanner {
 		t.Fatal("planner was called for rejected local runtime")
 	}
+	assertStoredTask(t, dbPath, fixedTestTime(), func(report store.TaskReport) {
+		if report.Task.Status != review.TaskStatusFailed {
+			t.Fatalf("stored task status = %q, want failed", report.Task.Status)
+		}
+		if len(report.Findings) == 0 {
+			t.Fatal("stored findings = 0, want deterministic findings after local policy rejection")
+		}
+	})
 }
 
 func TestRunFinishesFailedTaskAfterCancellation(t *testing.T) {

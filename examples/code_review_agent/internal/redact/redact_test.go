@@ -83,6 +83,22 @@ func TestTextRedactsQuotedSecretsWithPunctuation(t *testing.T) {
 	}
 }
 
+func TestTextRedactsUnquotedSecretsWithPunctuation(t *testing.T) {
+	input := "password: p@ssword123! token=abc:defgh api_key=key/@:value!"
+	got := Text(input)
+	if got.Count != 3 {
+		t.Fatalf("Count = %d, want 3", got.Count)
+	}
+	for _, secret := range []string{"p@ssword123!", "abc:defgh", "key/@:value!"} {
+		if strings.Contains(got.Text, secret) {
+			t.Fatalf("redacted text leaked %q: %s", secret, got.Text)
+		}
+	}
+	if strings.Count(got.Text, Placeholder) != 3 {
+		t.Fatalf("redacted text = %q, want three placeholders", got.Text)
+	}
+}
+
 func TestTextRedactsQuotedAssignmentKeys(t *testing.T) {
 	input := `{"password":"quoted-password-value", "token":"quoted-token-value", "secret":"quoted-secret-value", "api_key":"quoted-api-key-value"}`
 	got := Text(input)

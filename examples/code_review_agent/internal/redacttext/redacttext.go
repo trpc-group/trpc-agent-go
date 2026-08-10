@@ -24,7 +24,10 @@ var escapedQuotedAssignmentPattern = regexp.MustCompile(`(?i)` + assignmentKeyPa
 
 var quotedAssignmentPattern = regexp.MustCompile(`(?i)` + assignmentKeyPattern + `\s*[:=]\s*(?:"[^"\r\n]*"|'[^'\r\n]*')`)
 
-var unquotedAssignmentPattern = regexp.MustCompile(`(?i)` + assignmentKeyPattern + `\s*[:=]\s*[A-Za-z0-9_\-./+=]{8,}`)
+// Unquoted values end at whitespace or common structural delimiters. Keeping
+// punctuation inside the value prevents a redacted prefix from leaving a secret
+// suffix in YAML, environment-style, or code-derived text.
+var unquotedAssignmentPattern = regexp.MustCompile(`(?i)` + assignmentKeyPattern + `\s*[:=]\s*[^[:space:],;)}\]"']{8,}`)
 
 var patterns = []*regexp.Regexp{
 	escapedQuotedAssignmentPattern,

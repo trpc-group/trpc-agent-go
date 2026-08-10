@@ -295,7 +295,7 @@ func TestDurableStoreRedactsPathBearingRecords(t *testing.T) {
 	}
 }
 
-func TestDurableStoreRedactsQuotedChangedFilesBeforeMarshal(t *testing.T) {
+func TestDurableStoreRedactsChangedFilesWithPunctuationBeforeMarshal(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "review_agent.db")
 	s, err := NewSQLite(ctx, path)
@@ -315,6 +315,7 @@ func TestDurableStoreRedactsQuotedChangedFilesBeforeMarshal(t *testing.T) {
 			{Kind: "+", Content: `api_key="quoted-api-key-value"`},
 			{Kind: "+", Content: `{"password":"json-password-value", "token":"json-token-value", "secret":"json-secret-value", "api_key":"json-api-key-value"}`},
 			{Kind: "+", Content: `source := "password=\"source-password!\" token=\'source-token:!\'"`},
+			{Kind: "+", Content: `password: p@ssword123! token=abc:defgh api_key=key/@:value!`},
 		}}},
 	}})
 	if err != nil {
@@ -327,7 +328,7 @@ func TestDurableStoreRedactsQuotedChangedFilesBeforeMarshal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile(store) error = %v", err)
 	}
-	for _, secret := range []string{"quoted-password-value", "quoted-token-value", "quoted-api-key-value", "json-password-value", "json-token-value", "json-secret-value", "json-api-key-value", "source-password!", "source-token:!"} {
+	for _, secret := range []string{"quoted-password-value", "quoted-token-value", "quoted-api-key-value", "json-password-value", "json-token-value", "json-secret-value", "json-api-key-value", "source-password!", "source-token:!", "p@ssword123!", "abc:defgh", "key/@:value!"} {
 		if strings.Contains(string(raw), secret) {
 			t.Fatalf("store leaked quoted secret %q: %s", secret, raw)
 		}
