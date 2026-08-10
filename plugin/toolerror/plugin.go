@@ -96,7 +96,7 @@ func (p *toolErrorPlugin) afterTool(
 			}, nil
 		}
 	}
-	details, ok := classifyExecutionError(args.Error)
+	details, ok := classifyExecutionError(ctx, args.Error)
 	if !ok {
 		return nil, nil
 	}

@@ -10,6 +10,7 @@ package toolerror
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/santhosh-tekuri/jsonschema/v6/kind"
@@ -257,6 +259,34 @@ func TestBeforeToolAcceptsLocalSchemaReferencesConcurrently(t *testing.T) {
 	require.Equal(t, "/filter/query", details.Param)
 }
 
+func TestSchemaCacheEvictsOldestEntryAtCapacity(t *testing.T) {
+	t.Parallel()
+	cache := newSchemaCache()
+	var firstKey, lastKey [sha256.Size]byte
+	for i := 0; i <= defaultSchemaCacheCapacity; i++ {
+		schema := &tool.Schema{
+			Type:        "object",
+			Description: fmt.Sprintf("schema-%d", i),
+		}
+		raw, err := json.Marshal(schema)
+		require.NoError(t, err)
+		key := sha256.Sum256(raw)
+		if i == 0 {
+			firstKey = key
+		}
+		lastKey = key
+		_, err = cache.compile(schema)
+		require.NoError(t, err)
+	}
+
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	require.Len(t, cache.entries, defaultSchemaCacheCapacity)
+	require.Len(t, cache.order, defaultSchemaCacheCapacity)
+	require.NotContains(t, cache.entries, firstKey)
+	require.Contains(t, cache.entries, lastKey)
+}
+
 func TestBeforeToolNormalizesOmittedArgumentsForZeroParameterTool(t *testing.T) {
 	t.Parallel()
 	manager := newManager(t)
@@ -430,8 +460,19 @@ func TestAfterToolClassifiesExecutionErrors(t *testing.T) {
 	t.Parallel()
 	syntaxErr := json.Unmarshal([]byte("{"), &struct{}{})
 	require.Error(t, syntaxErr)
+	deadlineCtx, cancelDeadline := context.WithDeadline(
+		context.Background(),
+		time.Time{},
+	)
+	defer cancelDeadline()
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	causeErr := errors.New("runner stopped")
+	causeCtx, cancelCause := context.WithCancelCause(context.Background())
+	cancelCause(causeErr)
 	tests := []struct {
 		name      string
+		ctx       context.Context
 		err       error
 		source    Source
 		kind      Kind
@@ -479,7 +520,22 @@ func TestAfterToolClassifiesExecutionErrors(t *testing.T) {
 			code:   "tool_execution",
 		},
 		{
-			name:      "deadline",
+			name:   "tool deadline with healthy context",
+			err:    fmt.Errorf("call timed out: %w", context.DeadlineExceeded),
+			source: SourceTool,
+			kind:   KindExecution,
+			code:   "tool_execution",
+		},
+		{
+			name:   "tool cancellation with healthy context",
+			err:    context.Canceled,
+			source: SourceTool,
+			kind:   KindExecution,
+			code:   "tool_execution",
+		},
+		{
+			name:      "invocation deadline",
+			ctx:       deadlineCtx,
 			err:       fmt.Errorf("call timed out: %w", context.DeadlineExceeded),
 			source:    SourceFramework,
 			kind:      KindExecution,
@@ -487,8 +543,17 @@ func TestAfterToolClassifiesExecutionErrors(t *testing.T) {
 			retryable: true,
 		},
 		{
-			name:   "canceled",
+			name:   "invocation canceled",
+			ctx:    canceledCtx,
 			err:    context.Canceled,
+			source: SourceFramework,
+			kind:   KindExecution,
+			code:   "canceled",
+		},
+		{
+			name:   "invocation matching cancellation cause",
+			ctx:    causeCtx,
+			err:    fmt.Errorf("call stopped: %w", causeErr),
 			source: SourceFramework,
 			kind:   KindExecution,
 			code:   "canceled",
@@ -499,8 +564,12 @@ func TestAfterToolClassifiesExecutionErrors(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			manager := newManager(t)
+			ctx := test.ctx
+			if ctx == nil {
+				ctx = context.Background()
+			}
 			result, err := manager.ToolCallbacks().RunAfterTool(
-				context.Background(),
+				ctx,
 				&tool.AfterToolArgs{Error: test.err},
 			)
 			require.NoError(t, err)

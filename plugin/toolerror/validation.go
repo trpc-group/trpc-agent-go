@@ -26,7 +26,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-const schemaResourcePrefix = "https://tool-error.invalid/schema/"
+const (
+	schemaResourcePrefix = "https://tool-error.invalid/schema/"
+	// defaultSchemaCacheCapacity bounds compiled schemas retained by a
+	// runner-scoped plugin while leaving room for large dynamic tool surfaces.
+	defaultSchemaCacheCapacity = 256
+)
 
 type compiledSchema struct {
 	schema *jsonschema.Schema
@@ -36,11 +41,17 @@ type compiledSchema struct {
 type schemaCache struct {
 	mu      sync.Mutex
 	entries map[[sha256.Size]byte]compiledSchema
+	// order records insertion order for deterministic FIFO eviction.
+	order [][sha256.Size]byte
 }
 
 func newSchemaCache() schemaCache {
 	return schemaCache{
-		entries: make(map[[sha256.Size]byte]compiledSchema),
+		entries: make(
+			map[[sha256.Size]byte]compiledSchema,
+			defaultSchemaCacheCapacity,
+		),
+		order: make([][sha256.Size]byte, 0, defaultSchemaCacheCapacity),
 	}
 }
 
@@ -88,7 +99,14 @@ func (c *schemaCache) compile(schema *tool.Schema) (*jsonschema.Schema, error) {
 		return entry.schema, entry.err
 	}
 	compiled, err := compileSchema(raw, key)
+	if len(c.entries) >= defaultSchemaCacheCapacity {
+		oldest := c.order[0]
+		delete(c.entries, oldest)
+		copy(c.order, c.order[1:])
+		c.order = c.order[:len(c.order)-1]
+	}
 	c.entries[key] = compiledSchema{schema: compiled, err: err}
+	c.order = append(c.order, key)
 	return compiled, err
 }
 
@@ -206,11 +224,12 @@ func jsonPointer(tokens []string) string {
 	return b.String()
 }
 
-func classifyExecutionError(err error) (Details, bool) {
+func classifyExecutionError(ctx context.Context, err error) (Details, bool) {
 	if err == nil {
 		return Details{}, false
 	}
-	if errors.Is(err, context.DeadlineExceeded) {
+	ctxErr := matchingContextError(ctx, err)
+	if errors.Is(ctxErr, context.DeadlineExceeded) {
 		return Details{
 			Source:    SourceFramework,
 			Kind:      KindExecution,
@@ -219,7 +238,7 @@ func classifyExecutionError(err error) (Details, bool) {
 			Retryable: true,
 		}, true
 	}
-	if errors.Is(err, context.Canceled) {
+	if errors.Is(ctxErr, context.Canceled) {
 		return Details{
 			Source:  SourceFramework,
 			Kind:    KindExecution,
@@ -238,6 +257,21 @@ func classifyExecutionError(err error) (Details, bool) {
 		Code:    code,
 		Message: err.Error(),
 	}, true
+}
+
+func matchingContextError(ctx context.Context, err error) error {
+	if ctx == nil || err == nil || ctx.Err() == nil {
+		return nil
+	}
+	ctxErr := ctx.Err()
+	if errors.Is(err, ctxErr) {
+		return ctxErr
+	}
+	cause := context.Cause(ctx)
+	if cause != nil && errors.Is(err, cause) {
+		return ctxErr
+	}
+	return nil
 }
 
 func normalizeDetails(details Details, fallback error) Details {

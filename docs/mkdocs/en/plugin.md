@@ -693,13 +693,15 @@ defer runnerInstance.Close()
 The plugin validates `Declaration.InputSchema` in `BeforeTool`, after optional
 tool argument JSON repair has run. Invalid JSON and schema constraints such as
 `required`, `type`, `enum`, `pattern`, and `additionalProperties` short-circuit
-the call, so the tool is not executed. Non-nil errors returned by a tool are
-classified in `AfterTool`. Framework-generated unknown-tool responses are
-normalized before their tool result event is emitted. Failure envelopes bypass
-the tool's configured result formatter, because they replace the tool's
-declared output rather than represent a successful value of that output type.
-They also skip the tool's state-delta provider, so rejected or failed calls do
-not persist state as if the tool had succeeded.
+the call, so the tool is not executed. Local `$defs` references are supported;
+external `$ref` references are rejected as `invalid_schema`. Non-nil errors
+returned by a tool are classified in `AfterTool`. Framework-generated
+unknown-tool responses are normalized before their tool result event is
+emitted. Failure envelopes bypass the tool's configured result formatter,
+because they replace the tool's declared output rather than represent a
+successful value of that output type. They also skip the tool's state-delta
+provider, so rejected or failed calls do not persist state as if the tool had
+succeeded.
 
 Handled failures use this envelope while successful tool results remain
 unchanged:
