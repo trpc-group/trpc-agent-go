@@ -11,6 +11,7 @@
 package a2aagent
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -36,6 +37,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
+	"trpc.group/trpc-go/trpc-agent-go/internal/session/privatestate"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -78,14 +80,15 @@ type A2AAgent struct {
 	userIDHeader         string                 // HTTP header name to send UserID to A2A server
 	enableStreaming      *bool                  // Explicitly set streaming mode; nil means use agent card capability
 
+	requireAnonymousIdentityCoordination bool
+
 	a2aClient    *client.A2AClient
 	a2aClientURL string
 
 	// anonymousCookieInitLocks serializes first anonymous-cookie acquisition
-	// only within this A2AAgent instance. It does not coordinate separate
-	// A2AAgent instances or processes that share the same SessionService; those
-	// callers may still race during first-cookie initialization until
-	// persistence-backed lease/CAS coordination is added.
+	// within this A2AAgent instance. Session services that implement
+	// session.StateInitializationService additionally coordinate separate agent
+	// instances or processes that share the same backing store.
 	anonymousCookieInitMu       sync.Mutex
 	anonymousCookieInitLocks    map[anonymousCookieInitScope]*anonymousCookieInitLock
 	anonymousCookieInitWaitHook func(anonymousCookieInitScope)
@@ -198,16 +201,52 @@ func (r *A2AAgent) clientForInvocation(
 	if !needsAnonymousClient(invocation) || r.a2aClientURL == "" {
 		return &invocationA2AClient{client: r.a2aClient}, nil
 	}
-	anonymousCookie := newAnonymousCookieState(
+	invocationSession, persistentSession := isolateCoordinatedAnonymousCookieSessions(
 		anonymousSessionFromInvocation(invocation),
 		anonymousPersistentSessionFromInvocation(invocation),
 		anonymousSessionServiceFromInvocation(invocation),
+	)
+	anonymousCookie := newAnonymousCookieState(
+		invocationSession,
+		persistentSession,
+		anonymousSessionServiceFromInvocation(invocation),
 		anonymousCookieStateKey(r.a2aClientURL),
+		anonymousCookieURLScopeFromAgentURL(r.a2aClientURL),
 	)
 	return &invocationA2AClient{
 		client:          r.a2aClient,
 		anonymousCookie: anonymousCookie,
 	}, nil
+}
+
+func isolateCoordinatedAnonymousCookieSessions(
+	invocationSession *session.Session,
+	persistentSession *session.Session,
+	service session.Service,
+) (*session.Session, *session.Session) {
+	if _, ok := service.(session.StateInitializationService); !ok ||
+		!hasPersistentSessionKey(persistentSession) {
+		// Without a stable persistent key, coordination cannot be used and the
+		// existing fallback must keep sharing transient session state.
+		return invocationSession, persistentSession
+	}
+	// HTTP callbacks may outlive runner reads of the invocation session. Keep
+	// cookie mutations in request-owned snapshots; persistence goes through the
+	// coordinated service.
+	if invocationSession == persistentSession {
+		if invocationSession == nil {
+			return nil, nil
+		}
+		cloned := invocationSession.Clone()
+		return cloned, cloned
+	}
+	if invocationSession != nil {
+		invocationSession = invocationSession.Clone()
+	}
+	if persistentSession != nil {
+		persistentSession = persistentSession.Clone()
+	}
+	return invocationSession, persistentSession
 }
 
 func needsAnonymousClient(invocation *agent.Invocation) bool {
@@ -263,6 +302,7 @@ func (r *A2AAgent) newConfiguredA2AClient(
 				next:                  next,
 				scope:                 anonymousCookieURLScopeFromAgentURL(agentURL),
 				acquireInitialization: r.acquireAnonymousCookieInitialization,
+				requireCoordination:   r.requireAnonymousIdentityCoordination,
 			}
 		},
 	)))
@@ -341,6 +381,7 @@ type anonymousCookieState struct {
 	persistSession *session.Session
 	sessionService session.Service
 	key            string
+	scope          anonymousCookieURLScope
 }
 
 type anonymousCookieRecord struct {
@@ -376,13 +417,18 @@ func newAnonymousCookieState(
 	persistSession *session.Session,
 	sessionService session.Service,
 	key string,
+	scopes ...anonymousCookieURLScope,
 ) *anonymousCookieState {
-	return &anonymousCookieState{
+	state := &anonymousCookieState{
 		session:        sess,
 		persistSession: persistSession,
 		sessionService: sessionService,
 		key:            key,
 	}
+	if len(scopes) > 0 {
+		state.scope = scopes[0]
+	}
+	return state
 }
 
 func (s *anonymousCookieState) persistentSessionKey() (session.Key, bool) {
@@ -430,6 +476,16 @@ func (s *anonymousCookieState) loadWithSecurity() (string, bool, bool) {
 }
 
 func (s *anonymousCookieState) loadRecord() (anonymousCookieRecord, bool) {
+	if s == nil {
+		return anonymousCookieRecord{}, false
+	}
+	if record, ok, present := s.loadCanonicalRecord(); present {
+		return record, ok
+	}
+	return s.loadLegacyRecord()
+}
+
+func (s *anonymousCookieState) loadLegacyRecord() (anonymousCookieRecord, bool) {
 	if s == nil {
 		return anonymousCookieRecord{}, false
 	}
@@ -565,12 +621,7 @@ func (s *anonymousCookieState) reload(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("reload anonymous A2A cookie state: %w", err)
 	}
-	record, ok := loadAnonymousCookieStateFromSession(persistedSession, s.key)
-	if !ok {
-		return nil
-	}
-	storeAnonymousCookieRecord(s.session, s.key, record)
-	storeAnonymousCookieRecord(s.persistSession, s.key, record)
+	s.syncFromPersistedSession(persistedSession)
 	return nil
 }
 
@@ -606,14 +657,14 @@ func (s *anonymousCookieState) captureRecord(
 	if current, ok := s.loadRecord(); ok && current.value == record.value {
 		record.secure = record.secure || current.secure
 		if current.equal(record) {
-			storeAnonymousCookieRecord(s.session, s.key, current)
+			s.storeRecordLocally(current)
 			return nil
 		}
 	}
 	if err := s.persist(ctx, record); err != nil {
 		return err
 	}
-	storeAnonymousCookieRecord(s.session, s.key, record)
+	s.storeRecordLocally(record)
 	return nil
 }
 
@@ -631,16 +682,76 @@ func (s *anonymousCookieState) persist(
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if s.usesCanonicalRecord() {
+		canonicalValue, err := encodeAnonymousCookieRecord(record)
+		if err != nil {
+			return fmt.Errorf("encode anonymous A2A cookie state: %w", err)
+		}
+		if err := s.persistCanonicalValue(ctx, canonicalValue); err != nil {
+			return err
+		}
+		s.persistSession.SetState(s.canonicalStateKey(), canonicalValue)
+		storeAnonymousCookieRecord(s.persistSession, s.key, record)
+		return nil
+	}
 	state := anonymousCookieRecordStateMap(s.key, record)
 	key := session.Key{
 		AppName:   s.persistSession.AppName,
 		UserID:    s.persistSession.UserID,
 		SessionID: s.persistSession.ID,
 	}
-	if err := s.sessionService.UpdateSessionState(ctx, key, state); err != nil {
+	if err := privatestate.Update(ctx, s.sessionService, key, state); err != nil {
 		return fmt.Errorf("persist anonymous A2A cookie state: %w", err)
 	}
 	storeAnonymousCookieRecord(s.persistSession, s.key, record)
+	return nil
+}
+
+func (s *anonymousCookieState) persistCanonicalValue(
+	ctx context.Context,
+	value []byte,
+) error {
+	initializer, key, coordinated := s.stateInitializer()
+	if !coordinated {
+		persistentKey, ok := s.persistentSessionKey()
+		if !ok {
+			return errors.New("persist anonymous A2A cookie state: persistent session key is unavailable")
+		}
+		return s.persistCanonicalValueDirectly(ctx, persistentKey, value)
+	}
+	committed, _, err := initializer.LoadOrInitializeSessionState(
+		ctx,
+		key,
+		s.canonicalStateKey(),
+		func(existing []byte) bool { return bytes.Equal(existing, value) },
+		func(context.Context) ([]byte, error) { return value, nil },
+		s.legacyStateProjections()...,
+	)
+	if err != nil {
+		return fmt.Errorf("persist anonymous A2A cookie state: %w", err)
+	}
+	if !bytes.Equal(committed, value) {
+		return errors.New("persist anonymous A2A cookie state: committed value differs")
+	}
+	return nil
+}
+
+func (s *anonymousCookieState) persistCanonicalValueDirectly(
+	ctx context.Context,
+	key session.Key,
+	value []byte,
+) error {
+	if s == nil || s.sessionService == nil {
+		return nil
+	}
+	state, err := s.legacyStateProjection(value)
+	if err != nil {
+		return fmt.Errorf("persist anonymous A2A cookie state: %w", err)
+	}
+	state[s.canonicalStateKey()] = append([]byte(nil), value...)
+	if err := privatestate.Update(ctx, s.sessionService, key, state); err != nil {
+		return fmt.Errorf("persist anonymous A2A cookie state: %w", err)
+	}
 	return nil
 }
 
@@ -648,6 +759,7 @@ func (s *anonymousCookieState) clear(ctx context.Context) error {
 	if s == nil || s.key == "" {
 		return nil
 	}
+	canonical := s.usesCanonicalRecord()
 	if hasPersistentSessionKey(s.persistSession) && s.sessionService != nil {
 		if ctx == nil {
 			ctx = context.Background()
@@ -657,9 +769,26 @@ func (s *anonymousCookieState) clear(ctx context.Context) error {
 			UserID:    s.persistSession.UserID,
 			SessionID: s.persistSession.ID,
 		}
-		if err := s.sessionService.UpdateSessionState(ctx, key, anonymousCookieClearedStateMap(s.key)); err != nil {
-			return fmt.Errorf("clear anonymous A2A cookie state: %w", err)
+		if canonical {
+			if err := s.persistCanonicalValue(
+				ctx,
+				anonymousCookieTombstoneValue(),
+			); err != nil {
+				return fmt.Errorf("clear anonymous A2A cookie state: %w", err)
+			}
+		} else {
+			if err := privatestate.Update(
+				ctx,
+				s.sessionService,
+				key,
+				anonymousCookieClearedStateMap(s.key),
+			); err != nil {
+				return fmt.Errorf("clear anonymous A2A cookie state: %w", err)
+			}
 		}
+	}
+	if canonical {
+		s.storeCanonicalTombstoneLocally()
 	}
 	clearAnonymousCookieState(s.session, s.key)
 	clearAnonymousCookieState(s.persistSession, s.key)
@@ -745,6 +874,7 @@ type anonymousCookieHTTPReqHandler struct {
 	cookie                *anonymousCookieState
 	scope                 anonymousCookieURLScope
 	acquireInitialization func(context.Context, *anonymousCookieState) (func(), error)
+	requireCoordination   bool
 }
 
 type anonymousCookieCaptureResult struct {
@@ -1007,37 +1137,24 @@ func (h *anonymousCookieHTTPReqHandler) Handle(
 	if release != nil {
 		defer release()
 	}
-	captureResult := &anonymousCookieCaptureResult{}
-	// Session state owns anonymous identity; a shared user-supplied Jar must
-	// not replay another local session's remote principal.
-	requestClient := *httpClient
-	requestClient.Jar = &anonymousCookieJar{
-		ctx:    ctx,
-		base:   httpClient.Jar,
-		cookie: cookie,
-		scope:  h.scope,
-		result: captureResult,
-	}
-	requestClient.Transport = &anonymousCookieRoundTripper{
-		base:   httpClient.Transport,
-		cookie: cookie,
-		scope:  h.scope,
-		result: captureResult,
-	}
-	request := req.Clone(ctx)
-	setAnonymousCookieHeader(request, cookie, h.scope)
-	resp, err := h.next.Handle(ctx, &requestClient, request)
-	h.captureResponseCookie(ctx, request, resp, cookie, captureResult)
-	if captureErr := captureResult.error(); captureErr != nil {
-		if resp != nil && resp.Body != nil {
-			_ = resp.Body.Close()
+	if h.scope.matches(req.URL) && h.cookieInitializationNeeded(cookie) {
+		if initializer, key, ok := cookie.stateInitializer(); ok {
+			return h.handleCoordinatedInitialization(
+				ctx,
+				httpClient,
+				req,
+				cookie,
+				initializer,
+				key,
+			)
 		}
-		if err != nil {
-			return nil, errors.Join(err, captureErr)
+		if h.requireCoordination {
+			return nil, errors.New(
+				"anonymous A2A identity coordination is required but the session service or persistent session key does not support it",
+			)
 		}
-		return nil, captureErr
 	}
-	return resp, err
+	return h.sendRequest(ctx, httpClient, req, cookie)
 }
 
 func (h *anonymousCookieHTTPReqHandler) captureResponseCookie(
@@ -1162,7 +1279,7 @@ func (h *anonymousCookieHTTPReqHandler) acquireInitializationIfNeeded(
 		!h.scope.matches(u) {
 		return nil, nil
 	}
-	if _, ok := cookie.load(); ok {
+	if !h.cookieInitializationNeeded(cookie) {
 		return nil, nil
 	}
 	release, err := h.acquireInitialization(ctx, cookie)
@@ -1172,7 +1289,7 @@ func (h *anonymousCookieHTTPReqHandler) acquireInitializationIfNeeded(
 	if release == nil {
 		return nil, nil
 	}
-	if _, ok := cookie.load(); ok {
+	if !h.cookieInitializationNeeded(cookie) {
 		release()
 		return nil, nil
 	}
@@ -1180,7 +1297,7 @@ func (h *anonymousCookieHTTPReqHandler) acquireInitializationIfNeeded(
 		release()
 		return nil, err
 	}
-	if _, ok := cookie.load(); ok {
+	if !h.cookieInitializationNeeded(cookie) {
 		release()
 		return nil, nil
 	}
