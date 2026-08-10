@@ -176,6 +176,59 @@ func TestSessionSummarizer_CacheSafeForkOptions(t *testing.T) {
 	require.False(t, disabled.Metadata()[metadataKeyCacheSafeForking].(bool))
 }
 
+func TestSessionSummarizer_CacheSafeStandaloneFallbackEndsWithForkPrompt(
+	t *testing.T,
+) {
+	s := NewSummarizer(
+		&fakeModel{},
+		WithPrompt("{conversation_text}"),
+		WithSystemPrompt("Summarize the source conversation within "+
+			"{max_summary_words} words."),
+		WithMaxSummaryWords(2000),
+		WithCacheSafeForking(true),
+		WithCacheSafeForkPrompt("Return only the requested summary within "+
+			"{max_summary_words} words."),
+	).(*sessionSummarizer)
+
+	request, mode, err := s.buildSummaryRequest(
+		context.Background(),
+		summaryPromptInput{conversationText: "assistant: unfinished work"},
+	)
+	require.NoError(t, err)
+	require.Equal(t, callModeStandalone, mode)
+	require.Len(t, request.Messages, 2)
+	require.Equal(t, model.RoleSystem, request.Messages[0].Role)
+	require.Equal(t, "Summarize the source conversation within 2000 words.",
+		request.Messages[0].Content)
+	require.Equal(t, model.RoleUser, request.Messages[1].Role)
+	require.Equal(
+		t,
+		"assistant: unfinished work\n\n"+
+			standaloneSummarySourceBoundary+"\n\n"+
+			"Return only the requested summary within 2000 words.",
+		request.Messages[1].Content,
+	)
+}
+
+func TestSessionSummarizer_CacheSafeStandaloneFallbackRejectsInvalidForkPrompt(
+	t *testing.T,
+) {
+	s := NewSummarizer(
+		&fakeModel{},
+		WithPrompt("{conversation_text}"),
+		WithCacheSafeForking(true),
+		WithCacheSafeForkPrompt("Summarize: {previous_summary}"),
+	).(*sessionSummarizer)
+
+	request, mode, err := s.buildSummaryRequest(
+		context.Background(),
+		summaryPromptInput{conversationText: "assistant: unfinished work"},
+	)
+	require.ErrorContains(t, err, "render cache-safe fork prompt")
+	require.Equal(t, callModeStandalone, mode)
+	require.Nil(t, request)
+}
+
 func TestSessionSummarizer_CacheSafeForkingDisabledUsesStandaloneRequest(t *testing.T) {
 	capture := &cacheSafeCaptureModel{response: "summary"}
 	s := NewSummarizer(
