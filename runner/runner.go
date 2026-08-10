@@ -2626,10 +2626,11 @@ func (r *runner) handleEventPersistence(
 		summaryfork.AppendResponse(invocation, agentEvent.Response)
 	}
 
-	// Skip user messages, tool call events, and invalid content.
+	// Skip user messages, tool call events, error events, and invalid content.
 	// These should not trigger summarization.
 	if agentEvent.IsUserMessage() ||
 		agentEvent.IsToolCallResponse() ||
+		agentEvent.IsError() ||
 		!agentEvent.IsValidContent() {
 		return true
 	}

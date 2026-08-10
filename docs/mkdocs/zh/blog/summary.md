@@ -502,13 +502,15 @@ summary.WithCacheSafeForking(true)
 
 开启后，如果框架当前能拿到父会话的模型请求，summarizer 会克隆这份父请求，并只在末尾追加一条 compaction user message，让 summary 请求尽量复用父请求已经缓存的前缀。父请求不可用时，会自动回退到默认的独立 summary 请求。
 
+开启 cache-safe forking 后，独立请求的 user message 末尾也会追加固定的 source-data boundary 和同一条 `WithCacheSafeForkPrompt(...)` 指令，避免模型把源对话误判成需要继续执行的任务。这条指令的完整渲染结果在 fork 和 standalone 两种请求里都会计入摘要模型的输入预算。
+
 这个模式有几个边界要说清楚。
 
 **第一，它优化的是“生成 summary 的那次请求”**，不改变 summary 的存储方式，也不改变 boundary 和 events 的语义。
 
 **第二，它依赖父请求前缀稳定。** system prompt、tools、模型、上下文顺序如果频繁变化，prompt cache 仍然会被打散。
 
-**第三，追加的 compaction prompt 和普通 `WithPrompt(...)` 不一样。** cache-safe fork 模式下，父请求本身已经包含对话前缀和已注入的摘要，所以自定义 `WithCacheSafeForkPrompt(...)` 时不应该再塞 `{conversation_text}` 或 `{previous_summary}`，只需要告诉模型“把上面的对话压成后续可继续工作的 summary”。
+**第三，追加的 compaction prompt 和普通 `WithPrompt(...)` 不一样。** cache-safe fork 模式下，父请求本身已经包含对话前缀和已注入的摘要；standalone fallback 中，`WithPrompt(...)` 的渲染结果和 source boundary 也已经位于 fork prompt 之前。因此自定义 `WithCacheSafeForkPrompt(...)` 时，两种请求结构都不应该再塞 `{conversation_text}` 或 `{previous_summary}`，只需要告诉模型“把上面的对话压成后续可继续工作的 summary”。
 
 **第四，summary 已经生成以后**，下一轮普通对话请求如果也希望更利于 prompt cache，仍然要回到前面说的注入策略：频繁变化的内容尽量放在 message 侧，避免总是改 system 前缀。也因此，超长会话里 user injection mode 和 cache-safe forking 是可以互相配合的。
 
@@ -617,7 +619,7 @@ summarizer := summary.NewSummarizer(
 )
 ```
 
-这条配置仍然是 opt-in。框架能拿到父请求时，会克隆父请求并追加压缩提示词；拿不到父请求时，仍按默认独立摘要请求执行。需要自定义追加提示词时，可以用 `summary.WithCacheSafeForkPrompt(...)`，但这条 prompt 不再包含 `{conversation_text}`，因为对话前缀已经在父请求里。
+这条配置仍然是 opt-in。框架能拿到父请求时，会克隆父请求并追加压缩提示词；拿不到父请求时，会使用独立摘要请求，并在 source-data boundary 后追加同一条压缩提示词。需要自定义这条提示词时，可以用 `summary.WithCacheSafeForkPrompt(...)`，但不能包含 `{conversation_text}` 或 `{previous_summary}`：fork 请求的父前缀已包含源对话，standalone fallback 则已在该提示词之前放入渲染后的独立 prompt。完整渲染结果在两种请求中都会计入输入预算。
 
 第二步，把 summarizer 挂到 session service。生产环境建议开启异步 worker，避免摘要 LLM 调用阻塞主链路：
 
