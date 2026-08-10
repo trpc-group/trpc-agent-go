@@ -244,10 +244,15 @@ func TestExtractor_AssistantResultExtractionOption(t *testing.T) {
 		"supports a trip to Italy and an interest in Milan day trips")
 	assert.Contains(t, normalizedPrompt,
 		"requested extraction, classification, or transformation")
+	assert.Contains(t, normalizedPrompt,
+		"directly answers a general factual or analytical question")
+	assert.Contains(t, normalizedPrompt,
+		"is a result, not background prose")
 	assert.Contains(t, prompt, "rationale, disclaimer, opinion, analysis")
 	assert.Contains(t, prompt, "Plan B best balances")
 	assert.Contains(t, prompt, "reliability and cost")
-	assert.Contains(t, prompt, "Do not store general definitions")
+	assert.Contains(t, normalizedPrompt,
+		"Do not store general definitions or tutorial/background prose")
 	assert.Contains(t, prompt, `must begin with "Assistant result:"`)
 	assert.Contains(t, prompt, assistantResultAddToolName)
 	assert.Contains(t, assistantResultAddTool.Declaration().Description,

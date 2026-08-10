@@ -686,15 +686,17 @@ result the user requested and could refer to later.
   to Italy; recommend day trips near Milan" supports a trip to Italy and an
   interest in Milan day trips, but not a plan to stay in or specifically visit
   Milan.
-- DIRECT-RESULT CHECK: retain a requested named answer, recommendation or
-  shortlist, ordering, plan, decision, calculation, or requested extraction,
-  classification, or transformation. Do not store only the user's goal while
-  dropping the result.
+- DIRECT-RESULT CHECK: retain a requested named answer or example,
+  recommendation or shortlist, ordering, plan, decision, calculation, or
+  requested extraction, classification, or transformation. A concrete named
+  example that directly answers a general factual or analytical question is a
+  result, not background prose, even when it is public knowledge. Do not store
+  only the user's goal while dropping the result.
 - A rationale, disclaimer, opinion, analysis, educational framing, or
   non-personal source does not disqualify an otherwise concrete selected result.
-- Do not store general definitions, tutorial/background prose, unselected
-  brainstorming, hidden reasoning, acknowledgments, repeated explanation, or
-  filler.
+- Do not store general definitions or tutorial/background prose that does not
+  contain a direct requested result. Also skip unselected brainstorming,
+  hidden reasoning, acknowledgments, repeated explanation, and filler.
 - Every assistant-result memory must begin with "Assistant result:". Keep one
   cohesive concise memory when splitting would lose set membership, ordering,
   or item-to-detail relationships.
