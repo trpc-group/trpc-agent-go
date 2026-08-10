@@ -400,6 +400,28 @@ func TestRevisionEventFastPath(t *testing.T) {
 		))
 		assert.Equal(t, 2, attempts)
 	})
+
+	t.Run("falls back after bounded retries", func(t *testing.T) {
+		s, mc := revisionTestService(t, doc)
+		attempts := 0
+		transactions := 0
+		mc.updateOneFn = func(any, any, []*options.UpdateOptions) (*mongo.UpdateResult, error) {
+			attempts++
+			if attempts <= 8 {
+				return &mongo.UpdateResult{}, nil
+			}
+			return &mongo.UpdateResult{MatchedCount: 1}, nil
+		}
+		mc.transactionFn = func(fn func(mongo.SessionContext) error) error {
+			transactions++
+			return fn(mongo.NewSessionContext(context.Background(), nil))
+		}
+		require.NoError(t, s.persistEventWithRevision(
+			context.Background(), key, partial, sessionrevision.Write{},
+		))
+		assert.Equal(t, 9, attempts)
+		assert.Equal(t, 1, transactions)
+	})
 }
 
 func TestLoadActiveRevisionSessionErrors(t *testing.T) {

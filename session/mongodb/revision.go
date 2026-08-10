@@ -132,7 +132,8 @@ func (s *Service) persistRevisionEventFast(
 	write sessionrevision.Write,
 	mutation revisionEventMutation,
 ) error {
-	for {
+	const maxAttempts = 8
+	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -180,6 +181,9 @@ func (s *Service) persistRevisionEventFast(
 			return nil
 		}
 	}
+	return s.client.Transaction(ctx, func(sc mongo.SessionContext) error {
+		return s.persistRevisionEvent(sc, key, e, write, mutation)
+	}, nil)
 }
 
 type revisionEventMutation struct {
