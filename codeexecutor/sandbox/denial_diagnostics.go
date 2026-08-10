@@ -141,10 +141,13 @@ type DiagnosticsCapability struct {
 	// diagnostics at all.
 	Supported bool
 	// EventStreamAvailable reports whether the backend diagnostic event stream
-	// can be used to collect sandbox denial events on this host.
+	// can deliver sandbox denial events on this host. It does not by itself
+	// mean a production monitor is running or that denials can be tied to a
+	// specific RunProgram call; see StrongCorrelation.
 	EventStreamAvailable bool
 	// StrongCorrelation reports whether collected denials can be strongly tied
-	// to the RunProgram call that requested diagnostics.
+	// to the RunProgram call that requested diagnostics. When false after a
+	// completed probe, the runtime does not start production collection.
 	StrongCorrelation bool
 	// ProbeCompleted reports whether runtime capability probing completed
 	// reliably. When false, precision fields should be treated as unknown.

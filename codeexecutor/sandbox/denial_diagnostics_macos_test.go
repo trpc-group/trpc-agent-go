@@ -515,6 +515,77 @@ func TestInitDenialMonitorHonorsCachedCapsWithoutEventStream(t *testing.T) {
 	}
 }
 
+func TestInitDenialMonitorSkipsCollectionWhenNeitherFormTaggable(t *testing.T) {
+	resetDiagnosticsCapsCacheForTest()
+	t.Cleanup(resetDiagnosticsCapsCacheForTest)
+	storeCachedDiagnosticsCaps(context.Background(), DiagnosticsCapability{
+		Supported:            true,
+		ProbeCompleted:       true,
+		EventStreamAvailable: true,
+		StrongCorrelation:    false,
+		DefaultDenyTaggable:  false,
+		ExplicitDenyTaggable: false,
+	})
+
+	startCalls := 0
+	oldStart := startMacOSLogStreamMonitorFn
+	startMacOSLogStreamMonitorFn = func(
+		ctx context.Context,
+		suffix string,
+	) (*macosLogStreamMonitor, error) {
+		startCalls++
+		return nil, errors.New("production monitor must not start for false/false caps")
+	}
+	t.Cleanup(func() { startMacOSLogStreamMonitorFn = oldStart })
+
+	rt := NewRuntime()
+	if err := rt.ensureDenialMonitor(context.Background()); err != nil {
+		t.Fatalf("ensureDenialMonitor: %v", err)
+	}
+	if startCalls != 0 {
+		t.Fatalf("production monitor start calls = %d, want 0", startCalls)
+	}
+	if rt.sandboxDenialCollectingReady() {
+		t.Fatal("sandboxDenialCollectingReady = true, want false when neither form is taggable")
+	}
+	run := rt.sandboxDenialRunForCollecting(WorkspaceWriteProfile())
+	if run.enabled || run.runTag != "" || run.collectGeneration != nil {
+		t.Fatalf("collecting run = %#v, want disabled", run)
+	}
+	caps := rt.DiagnosticsCapability()
+	if !caps.Supported || !caps.ProbeCompleted || !caps.EventStreamAvailable {
+		t.Fatalf("caps = %#v, want preserved stream-available false/false report", caps)
+	}
+	if caps.StrongCorrelation || caps.DefaultDenyTaggable || caps.ExplicitDenyTaggable {
+		t.Fatalf("caps = %#v, want StrongCorrelation and both taggable false", caps)
+	}
+	d := rt.macosDenialDiagnostics()
+	d.mu.RLock()
+	state := d.state
+	prod := d.prodMonitor
+	d.mu.RUnlock()
+	if state != macosDenialDegraded {
+		t.Fatalf("diagnostics state = %v, want degraded", state)
+	}
+	if prod != nil {
+		t.Fatal("prodMonitor started for non-correlatable caps")
+	}
+
+	start := time.Now()
+	got := rt.collectRunDiagnostics(
+		context.Background(),
+		run,
+		"/bin/cat",
+		false,
+	)
+	if elapsed := time.Since(start); elapsed > 50*time.Millisecond {
+		t.Fatalf("disabled collection took %s, want no settle wait", elapsed)
+	}
+	if len(got.Denials) != 0 || got.Truncated {
+		t.Fatalf("diagnostics = %#v, want zero value without collection", got)
+	}
+}
+
 func TestActivateDenialMonitorKeepsIncompleteProbeRetryable(t *testing.T) {
 	rt := NewRuntime()
 	d := rt.macosDenialDiagnostics()
@@ -1167,6 +1238,7 @@ func TestCollectSandboxDenialsReportsTruncated(t *testing.T) {
 	d.prodMonitor = monitor
 	d.caps = DiagnosticsCapability{
 		EventStreamAvailable: true,
+		StrongCorrelation:    true,
 		ProbeCompleted:       true,
 	}
 	d.mu.Unlock()
@@ -1499,6 +1571,7 @@ func TestCollectSandboxDenialsUsesRunStartMonitorAfterRestart(t *testing.T) {
 	d.mu.Lock()
 	d.prodMonitor = newMonitor
 	d.caps.EventStreamAvailable = true
+	d.caps.StrongCorrelation = true
 	d.state = macosDenialRunning
 	d.mu.Unlock()
 
@@ -1606,6 +1679,9 @@ func TestCollectSandboxDenialsSettlesWithFreshContextAfterCancel(t *testing.T) {
 }
 
 func TestDiagnosticsCapabilityFromProbeAllowsNeitherTaggable(t *testing.T) {
+	// Completed false/false is a valid cached probe result. Activation must
+	// preserve the report without starting production collection; see
+	// TestInitDenialMonitorSkipsCollectionWhenNeitherFormTaggable.
 	caps := diagnosticsCapabilityFromProbe(true, false, false)
 	if !caps.Supported || !caps.EventStreamAvailable || !caps.ProbeCompleted {
 		t.Fatalf("caps=%+v, want completed stream-available probe", caps)

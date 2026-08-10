@@ -115,9 +115,11 @@ namespace.
 
 macOS can expose Seatbelt deny events through the unified log. When sandbox
 denial diagnostics are requested through `WithDiagnostics`, the runtime lazily
-probes host capability, starts a persistent `/usr/bin/log stream --style ndjson`
-monitor scoped to a runtime `sessionSuffix`, and returns strongly correlated
-events in `Diagnostics.Denials`.
+probes host capability. When strong correlation is available it starts a
+persistent `/usr/bin/log stream --style ndjson` monitor scoped to a runtime
+`sessionSuffix`, and returns strongly correlated events in `Diagnostics.Denials`.
+When the probe finds an event stream but neither deny form is taggable, the
+capability report still exposes that result and production collection stays off.
 
 Sandbox denial diagnostics are exposed only as structured runtime data. The
 runtime does not append diagnostics to child-process stderr; callers that need
@@ -126,10 +128,10 @@ agent layer.
 
 `Runtime.DiagnosticsCapability()` reports whether log streaming and deny-message
 tagging were detected at runtime. Capabilities are cached per macOS version for
-the process lifetime. The production unified-log monitor belongs to the
-`Runtime` and remains active until `Runtime.Close()` (or the owning
-`CodeExecutor.Close()`) stops it. Callers must close the owner when it is no
-longer needed.
+the process lifetime. When strong correlation is available, the production
+unified-log monitor belongs to the `Runtime` and remains active until
+`Runtime.Close()` (or the owning `CodeExecutor.Close()`) stops it. Callers must
+close the owner when it is no longer needed.
 
 See [`SANDBOX_DENIAL_DIAGNOSTICS.md`](SANDBOX_DENIAL_DIAGNOSTICS.md) for the
 caller lifecycle responsibilities, data flow, filtering model, and limitations.

@@ -33,7 +33,8 @@ for that runtime; later runs cannot restart the monitor.
 
 When diagnostics are first requested through `WithDiagnostics`, the runtime
 performs a capability probe (unless a completed probe is already cached for the
-current macOS version) and starts a persistent
+current macOS version). When the probe confirms strong correlation is possible
+(`StrongCorrelation=true`), it starts a persistent
 `/usr/bin/log stream --style ndjson` monitor for the lifetime of the `Runtime`
 until `Close`. The monitor uses an `ENDSWITH` predicate on a per-runtime
 `sessionSuffix` (`_END_<hex>_SBX`). Each diagnostics run injects a unique
@@ -48,21 +49,26 @@ context remains valid but monitoring is unavailable, the command still runs and
 diagnostics are omitted.
 
 A completed probe that finds no usable event stream is treated as a confirmed
-host limitation for that runtime and is not retried. Incomplete probes and
-transient production-monitor startup failures remain retryable on later
-diagnostics-enabled runs. `Close` still permanently disables diagnostics for
-the runtime.
+host limitation for that runtime and is not retried. A completed probe that
+finds an event stream but neither default-deny nor explicit-deny tagging
+(`StrongCorrelation=false`) is likewise treated as a confirmed limitation:
+capability fields still report `EventStreamAvailable=true` with both taggable
+flags false, but the runtime does not start a production monitor, does not
+enable per-run collection, and does not incur the settle wait. Incomplete
+probes and transient production-monitor startup failures remain retryable on
+later diagnostics-enabled runs. `Close` still permanently disables diagnostics
+for the runtime.
 
 The first diagnostics-enabled `RunProgram` may spend a short time probing when
-the process cache is cold. Later runs reuse the cached capability result and the
-already-running monitor. If the monitor process exits, capability reporting and
-collection readiness become unavailable and a later `ensureDenialMonitor` may
-start a new monitor, unless `Close` has been called. Each diagnostics-enabled
-run captures a read-only generation handle for the ring active at start and
-collects from that ring even if the log process later exits and another run
-installs a replacement monitor. Generation handles do not own cancel/stop for
-the underlying monitor; `Runtime.Close()` / `CodeExecutor.Close()` remain the
-sole shutdown owners.
+the process cache is cold. Later runs reuse the cached capability result and,
+when correlation is available, the already-running monitor. If the monitor
+process exits, capability reporting and collection readiness become unavailable
+and a later `ensureDenialMonitor` may start a new monitor, unless `Close` has
+been called. Each collecting diagnostics-enabled run captures a read-only
+generation handle for the ring active at start and collects from that ring even
+if the log process later exits and another run installs a replacement monitor.
+Generation handles do not own cancel/stop for the underlying monitor;
+`Runtime.Close()` / `CodeExecutor.Close()` remain the sole shutdown owners.
 
 When a run hits its deadline, denial collection uses a separate bounded context
 so settle waits are not cut short by the already-canceled run context. Normal
@@ -102,7 +108,7 @@ adds dedicated default-deny and explicit-deny messages for the probe paths.
 ```go
 type DiagnosticsCapability struct {
     Supported            bool // macOS managed backend
-    EventStreamAvailable bool // production monitor started successfully
+    EventStreamAvailable bool // host can deliver denial log events
     StrongCorrelation    bool // denials can be tied to this run
     ProbeCompleted       bool // probe finished reliably
     ExplicitDenyTaggable bool // explicit deny rules can carry runTag
@@ -115,6 +121,8 @@ version within the process after a completed probe. `ProbeCompleted=false`
 means the probe itself did not finish reliably. `ProbeCompleted=true` with
 `DefaultDenyTaggable=false` or `ExplicitDenyTaggable=false` means probing
 finished and that specific deny-message form was not observed on this host.
+When both tag forms are false, `StrongCorrelation` is false:
+`EventStreamAvailable` may still be true, but production collection stays off.
 
 ## Outputs
 

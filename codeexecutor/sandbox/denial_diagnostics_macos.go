@@ -172,7 +172,10 @@ func (r *Runtime) diagnosticsCapabilityForPlatform() DiagnosticsCapability {
 	defer d.mu.Unlock()
 	caps := d.caps
 	caps.Supported = true
-	if r.liveProdMonitorLocked(d) == nil {
+	// Strong correlation requires a live production monitor. When the probe
+	// found a usable stream but neither deny form is taggable, caps keep
+	// EventStreamAvailable without starting that monitor.
+	if caps.StrongCorrelation && r.liveProdMonitorLocked(d) == nil {
 		caps.EventStreamAvailable = false
 		caps.StrongCorrelation = false
 	}
@@ -189,6 +192,9 @@ func (r *Runtime) newSandboxDenialRun(
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.state == macosDenialClosed {
+		return sandboxDenialRun{}
+	}
+	if !d.caps.StrongCorrelation {
 		return sandboxDenialRun{}
 	}
 	monitor := r.liveProdMonitorLocked(d)
@@ -226,7 +232,7 @@ func (r *Runtime) sandboxDenialCollectingReady() bool {
 	d := r.macosDenialDiagnostics()
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return r.liveProdMonitorLocked(d) != nil
+	return d.caps.StrongCorrelation && r.liveProdMonitorLocked(d) != nil
 }
 
 func (r *Runtime) liveProdMonitorLocked(
@@ -460,6 +466,22 @@ func (r *Runtime) activateDenialMonitor(
 				d.state = macosDenialDegraded
 			} else {
 				// Incomplete probes stay retryable on later diagnostics runs.
+				d.state = macosDenialIdle
+			}
+		}
+		d.mu.Unlock()
+		return nil
+	}
+	if !caps.StrongCorrelation {
+		// Stream events exist, but neither deny form can carry runTag, so
+		// production collection cannot strongly correlate. Keep the capability
+		// report and skip the persistent monitor / settle path.
+		d.mu.Lock()
+		if d.state != macosDenialClosed {
+			d.caps = caps
+			if caps.ProbeCompleted {
+				d.state = macosDenialDegraded
+			} else {
 				d.state = macosDenialIdle
 			}
 		}
