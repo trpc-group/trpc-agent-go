@@ -2569,13 +2569,34 @@ execute tools instead. You can interrupt tool execution with
 
 **Key idea:**
 
-- `agent.WithToolFilter(...)` controls **tool visibility** (what the model can
-  see and call).
-- `agent.WithToolExecutionFilter(...)` controls **tool execution** (what the
-  framework will auto-run after the model requests it).
-- `agent.WithAdditionalTools(...)` appends temporary tools for one run.
-- `agent.WithExternalTools(...)` appends temporary tools and marks them as
-  caller-executed.
+| Option | Model visibility | Adds a tool for this run | Execution owner |
+| --- | --- | --- | --- |
+| `WithToolFilter` | Filters user tools; framework tools remain visible | No | Does not change execution ownership |
+| `WithToolExecutionFilter` | Does not change visibility | No | The framework when the filter returns `true`; the caller when it returns `false` |
+| `WithAdditionalTools` | Visible unless hidden by `WithToolFilter` | Yes | The framework by default |
+| `WithExternalTools` | Visible unless hidden by `WithToolFilter` | Yes | Always the caller |
+
+Choose the option based on where the tool declaration comes from and who owns
+execution:
+
+- Use `WithToolExecutionFilter` when the tool is already registered on the
+  Agent, or was added with `WithAdditionalTools`, and only its execution policy
+  should change for this run.
+- Use `WithExternalTools` when the caller dynamically supplies a tool
+  declaration that is not already present on the Agent.
+- Use `WithToolFilter` when the model must not see a user tool at all.
+- Use `WithAdditionalTools` for a temporary tool that the framework should
+  execute by default.
+
+For example, the following keeps `client_search` visible but leaves its tool
+calls for the caller. `NewExcludeToolNamesFilter` returns `false` for the named
+tool, and `WithToolExecutionFilter` interprets `false` as "do not execute":
+
+```go
+agent.WithToolExecutionFilter(
+    tool.NewExcludeToolNamesFilter("client_search"),
+)
+```
 
 #### Basic Flow
 
@@ -2636,6 +2657,41 @@ messages. If an external tool has the same name as an existing tool, the
 existing tool wins; the external declaration does not override or intercept it.
 This includes tools registered on the Agent and tools added with
 `WithAdditionalTools`.
+
+#### Frequently Asked Questions
+
+**Does `WithToolExecutionFilter` hide tools from the model?**
+
+No. It is evaluated only after the model requests a visible tool. A `false`
+result prevents framework execution and ends the current invocation after the
+assistant `tool_calls` response. The caller then executes the tool and starts a
+continuation with a matching `role=tool` message. Use `WithToolFilter` to
+control visibility.
+
+**Can `WithToolExecutionFilter` and `WithExternalTools` be used together?**
+
+Yes, for different tools in the same run. External tools are always
+caller-executed. The execution filter is evaluated only for non-external tools.
+In a mixed tool-call response, the framework can execute allowed tools, but the
+invocation still ends when any call is external or deferred so the caller can
+complete the remaining calls.
+
+**Can `WithExternalTools` make an already registered tool caller-executed?**
+
+No. Existing Agent tools and `WithAdditionalTools` take precedence by name. An
+external declaration with the same name neither replaces the existing tool nor
+marks it external. Use `WithToolExecutionFilter` to defer an existing tool.
+
+**Is this interruption the same as `graph.Interrupt`?**
+
+No. Caller-executed tool handling ends the current invocation after emitting
+the assistant tool call; no framework tool execution is suspended. The caller
+executes the tool and continues with `model.NewToolMessage(...)` in another
+`Run`. `graph.Interrupt` is a graph checkpoint and resume mechanism.
+
+These options route tool execution; they are not authorization boundaries.
+Framework-executed tools must enforce permissions in their implementations,
+and caller-executed tools must do so in the caller's tool runtime.
 
 The `server/openai` adapter only implements `tool_choice: "none"` (skip
 exposing tools to the model) and `tool_choice: "auto"` or an omitted value
