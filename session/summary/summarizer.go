@@ -179,8 +179,8 @@ func validateSystemPrompt(template string) error {
 	return nil
 }
 
-// validateCacheSafeForkPrompt validates that the cache-safe fork instruction
-// does not duplicate payload already present in the cloned parent request.
+// validateCacheSafeForkPrompt validates that the cache-safe instruction does
+// not duplicate source payload already present earlier in the request.
 func validateCacheSafeForkPrompt(template string) error {
 	textPrompt := prompt.Text{Template: template}
 	for _, item := range []struct {
@@ -245,8 +245,8 @@ func getDefaultSummarizerPrompt(maxWords int) string {
 		"Summary:"
 }
 
-// getDefaultCacheSafeForkPrompt returns the user prompt appended to the parent
-// request when cache-safe forking is enabled.
+// getDefaultCacheSafeForkPrompt returns the final instruction appended to a
+// fork request or after the source boundary in a standalone fallback.
 func getDefaultCacheSafeForkPrompt(maxWords int) string {
 	basePrompt := "Summarize the user, assistant, and tool conversation above " +
 		"for future continuation. Preserve user goals, decisions, constraints, " +
