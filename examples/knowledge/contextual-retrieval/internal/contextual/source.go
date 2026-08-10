@@ -24,7 +24,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-const maxContextPromptBytes int64 = 4 << 20
+// DefaultMaxPromptBytes is the default cumulative context-generation prompt
+// budget for unique cache misses.
+const DefaultMaxPromptBytes int64 = 4 << 20
 
 // SourceConfig configures index-time contextualization for a source.
 type SourceConfig struct {
@@ -39,6 +41,9 @@ type SourceConfig struct {
 	ModelEndpoint string
 	// CachePath stores generated contexts between runs.
 	CachePath string
+	// MaxPromptBytes limits cumulative context-generation prompt bytes for
+	// unique cache misses. Zero uses DefaultMaxPromptBytes.
+	MaxPromptBytes int64
 }
 
 type contextGenerator interface {
@@ -75,6 +80,7 @@ func NewSource(delegate source.Source, cfg SourceConfig) (source.Source, error) 
 		newModelContextGenerator(cfg.Model),
 		generationIdentity,
 		cache,
+		cfg.MaxPromptBytes,
 	)
 }
 
@@ -84,6 +90,7 @@ func newContextualSource(
 	generator contextGenerator,
 	generationIdentity string,
 	cache *contextCache,
+	maxPromptBytes int64,
 ) (*contextualSource, error) {
 	if delegate == nil {
 		return nil, errors.New("delegate source is required")
@@ -101,13 +108,19 @@ func newContextualSource(
 	if cache == nil {
 		return nil, errors.New("context cache is required")
 	}
+	if maxPromptBytes < 0 {
+		return nil, errors.New("maximum context prompt bytes must not be negative")
+	}
+	if maxPromptBytes == 0 {
+		maxPromptBytes = DefaultMaxPromptBytes
+	}
 	return &contextualSource{
 		delegate:           delegate,
 		parentText:         parentText,
 		generator:          generator,
 		generationIdentity: generationIdentity,
 		cache:              cache,
-		maxPromptBytes:     maxContextPromptBytes,
+		maxPromptBytes:     maxPromptBytes,
 	}, nil
 }
 
@@ -154,8 +167,12 @@ func (s *contextualSource) ReadDocuments(ctx context.Context) ([]*document.Docum
 		estimatedPromptBytes := totalPromptBytes + promptBytes
 		if estimatedPromptBytes > s.maxPromptBytes {
 			return nil, fmt.Errorf(
-				"context generation input is at least %d bytes, exceeding the %d-byte safety limit",
+				"context generation requires at least %d prompt bytes for a %d-byte parent and "+
+					"%d unique cache misses, exceeding the %d-byte limit; reduce the input or "+
+					"raise the contextual prompt budget after reviewing provider cost",
 				estimatedPromptBytes,
+				len(s.parentText),
+				len(uncachedKeys),
 				s.maxPromptBytes,
 			)
 		}

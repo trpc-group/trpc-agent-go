@@ -195,18 +195,75 @@ func TestSourceRejectsCumulativePromptCostBeforeGeneration(t *testing.T) {
 		return "must not be generated", nil
 	}}
 	docs := testDocuments()
-	src := newTestSource(t, &fakeSource{docs: docs}, generator, "parent")
-	src.maxPromptBytes = contextRequestBytes("parent", docs[0].Content)
+	limit := contextRequestBytes("parent", docs[0].Content)
+	src := newTestSourceWithMaxPromptBytes(
+		t,
+		&fakeSource{docs: docs},
+		generator,
+		"parent",
+		limit,
+	)
 
 	_, err := src.ReadDocuments(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "safety limit") {
-		t.Fatalf("ReadDocuments error = %v, want safety limit", err)
+	if err == nil {
+		t.Fatal("ReadDocuments unexpectedly succeeded")
+	}
+	for _, want := range []string{
+		"prompt bytes",
+		"6-byte parent",
+		"2 unique cache misses",
+		fmt.Sprintf("%d-byte limit", limit),
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("ReadDocuments error = %v, want containing %q", err, want)
+		}
 	}
 	if generator.callCount() != 0 {
 		t.Fatalf("generator calls = %d, want 0", generator.callCount())
 	}
 	if len(src.cache.contexts) != 0 {
 		t.Fatalf("cache entries = %d, want 0", len(src.cache.contexts))
+	}
+}
+
+func TestSourceUsesConfiguredPromptBudget(t *testing.T) {
+	docs := testDocuments()
+	generator := &fakeGenerator{generate: func(
+		context.Context,
+		string,
+		string,
+	) (string, error) {
+		return "generated context", nil
+	}}
+	limit := contextRequestBytes("parent", docs[0].Content) +
+		contextRequestBytes("parent", docs[1].Content)
+	src := newTestSourceWithMaxPromptBytes(
+		t,
+		&fakeSource{docs: docs},
+		generator,
+		"parent",
+		limit,
+	)
+
+	if _, err := src.ReadDocuments(context.Background()); err != nil {
+		t.Fatalf("ReadDocuments: %v", err)
+	}
+	if generator.callCount() != len(docs) {
+		t.Fatalf("generator calls = %d, want %d", generator.callCount(), len(docs))
+	}
+}
+
+func TestSourceUsesDefaultPromptBudget(t *testing.T) {
+	src := newTestSource(
+		t,
+		&fakeSource{},
+		&fakeGenerator{generate: func(context.Context, string, string) (string, error) {
+			return "context", nil
+		}},
+		"parent",
+	)
+	if src.maxPromptBytes != DefaultMaxPromptBytes {
+		t.Fatalf("maxPromptBytes = %d, want %d", src.maxPromptBytes, DefaultMaxPromptBytes)
 	}
 }
 
@@ -381,6 +438,7 @@ func TestSourceEmbeddingTextMatchesKnowledgeBaseline(t *testing.T) {
 		generator,
 		"test-generation-identity",
 		cache,
+		0,
 	)
 	if err != nil {
 		t.Fatalf("new contextual source: %v", err)
@@ -439,6 +497,7 @@ func TestSourceWrapsPublicFileSource(t *testing.T) {
 		generator,
 		"test-model",
 		cache,
+		0,
 	)
 	if err != nil {
 		t.Fatalf("new source: %v", err)
@@ -469,18 +528,20 @@ func TestNewContextualSourceValidatesRequiredInputs(t *testing.T) {
 		return "context", nil
 	}}
 	tests := []struct {
-		name      string
-		delegate  source.Source
-		parent    string
-		generator contextGenerator
-		identity  string
-		cache     *contextCache
+		name           string
+		delegate       source.Source
+		parent         string
+		generator      contextGenerator
+		identity       string
+		cache          *contextCache
+		maxPromptBytes int64
 	}{
-		{"delegate", nil, "parent", generator, "model", cache},
-		{"parent", &fakeSource{}, " ", generator, "model", cache},
-		{"generator", &fakeSource{}, "parent", nil, "model", cache},
-		{"generation identity", &fakeSource{}, "parent", generator, " ", cache},
-		{"cache", &fakeSource{}, "parent", generator, "model", nil},
+		{"delegate", nil, "parent", generator, "model", cache, 0},
+		{"parent", &fakeSource{}, " ", generator, "model", cache, 0},
+		{"generator", &fakeSource{}, "parent", nil, "model", cache, 0},
+		{"generation identity", &fakeSource{}, "parent", generator, " ", cache, 0},
+		{"cache", &fakeSource{}, "parent", generator, "model", nil, 0},
+		{"maximum prompt bytes", &fakeSource{}, "parent", generator, "model", cache, -1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -490,6 +551,7 @@ func TestNewContextualSourceValidatesRequiredInputs(t *testing.T) {
 				tt.generator,
 				tt.identity,
 				tt.cache,
+				tt.maxPromptBytes,
 			); err == nil {
 				t.Fatal("newContextualSource unexpectedly succeeded")
 			}
@@ -513,6 +575,24 @@ func newTestSource(
 	)
 }
 
+func newTestSourceWithMaxPromptBytes(
+	t *testing.T,
+	delegate source.Source,
+	generator contextGenerator,
+	parent string,
+	maxPromptBytes int64,
+) *contextualSource {
+	t.Helper()
+	return newTestSourceAtPathWithMaxPromptBytes(
+		t,
+		delegate,
+		generator,
+		parent,
+		filepath.Join(t.TempDir(), "contexts.json"),
+		maxPromptBytes,
+	)
+}
+
 func newTestSourceAtPath(
 	t *testing.T,
 	delegate source.Source,
@@ -521,11 +601,37 @@ func newTestSourceAtPath(
 	cachePath string,
 ) *contextualSource {
 	t.Helper()
+	return newTestSourceAtPathWithMaxPromptBytes(
+		t,
+		delegate,
+		generator,
+		parent,
+		cachePath,
+		0,
+	)
+}
+
+func newTestSourceAtPathWithMaxPromptBytes(
+	t *testing.T,
+	delegate source.Source,
+	generator contextGenerator,
+	parent string,
+	cachePath string,
+	maxPromptBytes int64,
+) *contextualSource {
+	t.Helper()
 	cache, err := openContextCache(cachePath)
 	if err != nil {
 		t.Fatalf("open cache: %v", err)
 	}
-	src, err := newContextualSource(delegate, parent, generator, "test-model", cache)
+	src, err := newContextualSource(
+		delegate,
+		parent,
+		generator,
+		"test-model",
+		cache,
+		maxPromptBytes,
+	)
 	if err != nil {
 		t.Fatalf("new source: %v", err)
 	}

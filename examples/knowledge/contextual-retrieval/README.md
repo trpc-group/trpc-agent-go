@@ -61,6 +61,10 @@ export EMBEDDING_MODEL_NAME=text-embedding-3-small
 ```
 
 `CONTEXT_MODEL_NAME` falls back to `MODEL_NAME`.
+The Agent, context generator, and embedder use the same `OPENAI_API_KEY` and
+`OPENAI_BASE_URL`; the selected compatible gateway must expose all configured
+model names. Copy the wiring in `main.go` when a business needs separate
+providers, endpoints, or credentials.
 
 ## Run a Paired Trial
 
@@ -95,17 +99,33 @@ unique cache miss. Every call sends the full parent document again with one
 chunk, so total input grows approximately with `parent bytes × chunk count`, in
 addition to the chunk and prompt bytes. Before making any calls, the example
 estimates the cumulative prompt bytes for unique cache misses and fails closed
-above an internal 4 MiB limit. This byte guard is a bounded-example safeguard,
-not a provider token or price estimate. With the current bundled 8,966-byte
-input and 500/50 chunk settings, a cold run produces 29 calls and roughly 30×
+above a 4 MiB default limit. This byte guard is a safeguard, not a provider
+token or price estimate. With a cold cache and the current 500/50 chunk
+settings, its effective input-file ceiling is typically about 40–45 KiB; the
+exact boundary depends on content structure, JSON escaping, chunking, and cache
+hits. The current bundled 8,966-byte input produces 29 calls and roughly 30×
 raw input amplification before provider framing.
 
-The contextual variant stores only successful contexts that ended with the
-model finish reason `stop` in a local JSON file and reuses them on later runs.
-The cache key covers the prompt and finish policy, context model name, a hashed
-normalized endpoint identity, fixed generation parameters, parent document,
-chunk content, and normal framework embedding text. The baseline variant does
-not read or write this cache.
+Businesses can raise the cumulative limit explicitly after reviewing provider
+cost, for example:
+
+```bash
+go run . \
+  -index-variant contextual \
+  -input /path/to/document.md \
+  -context-max-prompt-bytes 16777216 \
+  -query "Your representative question"
+```
+
+The contextual variant stores only successful, non-empty contexts. A finish
+reason of `stop` or an omitted finish reason is accepted; an explicit non-stop
+reason such as `length` or `content_filter` is rejected. Some compatible
+gateways omit finish reasons, so accepting an omitted reason improves
+interoperability but cannot independently prove that the response was not
+truncated. The cache key covers the prompt and finish policy, context model
+name, a hashed normalized endpoint identity, fixed generation parameters,
+parent document, chunk content, and normal framework embedding text. The
+baseline variant does not read or write this cache.
 
 New cache snapshots are written atomically through a temporary file with mode
 `0600`. Opening an existing cache does not change its permissions. The cache
@@ -135,15 +155,18 @@ monitoring policies.
 - Context generation adds indexing latency and model cost. Cold generation is
   intentionally sequential in this bounded example.
 - Generated context can be inaccurate; indexing fails rather than silently
-  falling back when generation returns an error, empty text, missing finish
-  reason, or any finish reason other than `stop`.
+  falling back when generation returns an error, empty text, or an explicit
+  finish reason other than `stop`. A provider that omits the finish reason
+  cannot provide the same truncation signal.
 - Evaluate retrieval quality and downstream answer quality on representative
   business traffic before adoption.
 
 The implementation lives under `internal/contextual` to keep `main.go` focused
-on integration. It is example code to copy and adapt, not a public framework API
-or a production-ready component. Its scope is deliberately one local file, an
-in-memory vector store, one process, and sequential context generation.
+on integration. It can be run directly and copied into a business repository
+for adaptation, but external modules cannot import it as a stable framework
+API. Its scope is deliberately one local file, an in-memory vector store, one
+process, and sequential context generation; production copies should replace
+those boundaries as needed.
 
 ## Tests
 

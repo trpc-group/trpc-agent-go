@@ -62,22 +62,29 @@ var (
 		defaultContextCache,
 		"Local cache used only by the contextual index variant",
 	)
+	contextMaxPromptBytes = flag.Int64(
+		"context-max-prompt-bytes",
+		contextual.DefaultMaxPromptBytes,
+		"Maximum cumulative prompt bytes for uncached contextual chunks",
+	)
 )
 
 type config struct {
-	variant   string
-	inputPath string
-	query     string
-	cachePath string
+	variant               string
+	inputPath             string
+	query                 string
+	cachePath             string
+	contextMaxPromptBytes int64
 }
 
 func main() {
 	flag.Parse()
 	if err := run(context.Background(), config{
-		variant:   *indexVariant,
-		inputPath: *inputPath,
-		query:     *query,
-		cachePath: *cache,
+		variant:               *indexVariant,
+		inputPath:             *inputPath,
+		query:                 *query,
+		cachePath:             *cache,
+		contextMaxPromptBytes: *contextMaxPromptBytes,
 	}); err != nil {
 		log.Fatal(err)
 	}
@@ -112,11 +119,12 @@ func run(ctx context.Context, cfg config) error {
 			knowledgeutil.GetEnvOrDefault("MODEL_NAME", defaultAnswerModel),
 		)
 		indexSource, err = contextual.NewSource(baseSource, contextual.SourceConfig{
-			ParentText:    parentText,
-			Model:         openaimodel.New(contextModelName),
-			ModelName:     contextModelName,
-			ModelEndpoint: os.Getenv("OPENAI_BASE_URL"),
-			CachePath:     cfg.cachePath,
+			ParentText:     parentText,
+			Model:          openaimodel.New(contextModelName),
+			ModelName:      contextModelName,
+			ModelEndpoint:  os.Getenv("OPENAI_BASE_URL"),
+			CachePath:      cfg.cachePath,
+			MaxPromptBytes: cfg.contextMaxPromptBytes,
 		})
 		if err != nil {
 			return fmt.Errorf("configure contextual source: %w", err)

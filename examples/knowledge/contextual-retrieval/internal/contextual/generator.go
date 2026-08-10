@@ -22,7 +22,7 @@ const (
 	contextPromptVersion      = "context-prompt/v2"
 	contextMaxTokens          = 256
 	contextTemperature        = 0.0
-	contextFinishReasonPolicy = "stop-only/v1"
+	contextFinishReasonPolicy = "stop-or-omitted/v1"
 	contextSystemPrompt       = "You create concise retrieval context for document chunks. " +
 		"Use the parent document only to situate the chunk. Return only a short factual context, " +
 		"normally one to three sentences. Do not answer questions, add unsupported facts, or repeat " +
@@ -73,16 +73,12 @@ func (g *modelContextGenerator) Generate(
 
 	var deltas strings.Builder
 	var finalContent string
-	sawStop := false
 	for {
 		select {
 		case <-ctx.Done():
 			return "", ctx.Err()
 		case response, ok := <-responses:
 			if !ok {
-				if !sawStop {
-					return "", errors.New("context model response is missing finish reason stop")
-				}
 				contextText := strings.TrimSpace(deltas.String())
 				if contextText == "" {
 					contextText = strings.TrimSpace(finalContent)
@@ -104,12 +100,11 @@ func (g *modelContextGenerator) Generate(
 			choice := response.Choices[0]
 			if choice.FinishReason != nil {
 				finishReason := strings.ToLower(strings.TrimSpace(*choice.FinishReason))
-				if finishReason != "stop" {
+				if finishReason != "" && finishReason != "stop" {
 					return "", fmt.Errorf(
 						"context model stopped with finish reason %q", finishReason,
 					)
 				}
-				sawStop = true
 			}
 			if choice.Delta.Content != "" {
 				deltas.WriteString(choice.Delta.Content)

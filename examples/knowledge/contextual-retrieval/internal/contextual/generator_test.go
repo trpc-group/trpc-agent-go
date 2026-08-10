@@ -99,6 +99,56 @@ func TestModelContextGeneratorUsesFinalMessage(t *testing.T) {
 	}
 }
 
+func TestModelContextGeneratorAcceptsOmittedFinishReason(t *testing.T) {
+	tests := []struct {
+		name      string
+		responses []*model.Response
+		want      string
+	}{
+		{
+			name: "final message",
+			responses: []*model.Response{{
+				Choices: []model.Choice{{Message: model.Message{Content: "final context"}}},
+			}},
+			want: "final context",
+		},
+		{
+			name: "deltas",
+			responses: []*model.Response{
+				{Choices: []model.Choice{{Delta: model.Message{Content: "short "}}}},
+				{Choices: []model.Choice{{Delta: model.Message{Content: "context"}}}},
+			},
+			want: "short context",
+		},
+		{
+			name: "empty finish reason",
+			responses: []*model.Response{{
+				Choices: []model.Choice{{
+					Message:      model.Message{Content: "compatible context"},
+					FinishReason: stringPointer(""),
+				}},
+			}},
+			want: "compatible context",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := newModelContextGenerator(&fakeModel{responses: tt.responses}).Generate(
+				context.Background(),
+				"parent",
+				"chunk",
+			)
+			if err != nil {
+				t.Fatalf("Generate: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("Generate = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestModelContextGeneratorFailsClosed(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -123,13 +173,6 @@ func TestModelContextGeneratorFailsClosed(t *testing.T) {
 				Choices: []model.Choice{{FinishReason: stringPointer("stop")}},
 			}}},
 			wantError: "empty context",
-		},
-		{
-			name: "missing finish reason",
-			model: &fakeModel{responses: []*model.Response{{
-				Choices: []model.Choice{{Message: model.Message{Content: "partial context"}}},
-			}}},
-			wantError: "missing finish reason stop",
 		},
 		{
 			name: "length finish reason",
