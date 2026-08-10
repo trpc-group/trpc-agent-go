@@ -1043,6 +1043,70 @@ type WindowService interface {
 	) (*EventWindow, error)
 }
 
+// StateInitializationProjection derives one related session-state value that
+// must be committed atomically with a newly initialized primary value.
+// Projections are evaluated before the commit only for a valid initialize
+// callback result; they are not evaluated when an existing value is returned.
+type StateInitializationProjection struct {
+	// StateKey is the static session-scoped key receiving the projected value.
+	// It must be non-empty, differ from the primary and other projection keys,
+	// and not use the app: or user: prefixes.
+	StateKey string
+	// Project derives the value stored at StateKey. Its input is caller-owned
+	// and its result is copied before persistence. A nil result persists an
+	// explicit null state value. Project must not perform blocking or externally
+	// visible work.
+	Project func(value []byte) ([]byte, error)
+}
+
+// StateInitializationService extends Service with coordinated initialization
+// of individual session-state values and their atomic projections.
+//
+// Implementations coordinate callers that share the same backing service. The
+// coordination mechanism and its lifecycle are owned by the implementation;
+// callers provide only value validation and initialization behavior.
+type StateInitializationService interface {
+	// LoadOrInitializeSessionState returns a valid persisted value for stateKey.
+	//
+	// If the current value is absent or validate rejects it, only the current
+	// owner invokes initialize. Other callers wait for a committed value or
+	// compete for ownership after the owner fails. initialize runs outside
+	// physical storage locks and is invoked at most once by each method call.
+	//
+	// validate may be called more than once with caller-owned copies and must not
+	// retain or mutate its argument. initialize receives a context that is
+	// canceled when ctx is canceled or the backend confirms that ownership was
+	// lost. A callback panic may propagate, but implementations must release
+	// their gate or lease before doing so.
+	//
+	// A successful return guarantees that value was observed in, or atomically
+	// committed to, the session generation first observed by this method call.
+	// When initialize produces the committed value, every projection is evaluated
+	// before the commit and all returned state is committed atomically with value.
+	// Projection failures abort the commit and remain inspectable with errors.Is.
+	// The call must not cross a deletion and recreation of the same key while
+	// waiting for or holding ownership. A recreated session is a different
+	// generation and must not accept the old call's callback result.
+	// didInitialize reports whether this call committed its callback result.
+	// Returned bytes are caller-owned. An invalid callback result, an ownership
+	// loss, an ambiguous commit, or a session-generation change returns an error
+	// and must not report didInitialize=true. Callback errors remain inspectable
+	// with errors.Is.
+	//
+	// A nil ctx is treated as context.Background. The session must already exist.
+	// stateKey must be non-empty and must not use the app: or user: prefixes.
+	// Projection keys must satisfy the same restrictions and be unique. validate,
+	// initialize, and every projection function must be non-nil.
+	LoadOrInitializeSessionState(
+		ctx context.Context,
+		key Key,
+		stateKey string,
+		validate func([]byte) bool,
+		initialize func(context.Context) ([]byte, error),
+		projections ...StateInitializationProjection,
+	) (value []byte, didInitialize bool, err error)
+}
+
 // Service is the interface that all session services must implement.
 type Service interface {
 	// CreateSession creates a new session.

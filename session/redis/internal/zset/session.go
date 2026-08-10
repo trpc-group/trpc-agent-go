@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -80,10 +81,13 @@ func (c *Client) runScript(
 
 // SessionState is the state of a session (ZSet structure).
 type SessionState struct {
-	ID        string           `json:"id"`
-	State     session.StateMap `json:"state"`
-	CreatedAt time.Time        `json:"createdAt"`
-	UpdatedAt time.Time        `json:"updatedAt"`
+	ID    string           `json:"id"`
+	State session.StateMap `json:"state"`
+	// Generation fences coordinated state initialization across session recreation.
+	// An empty value identifies a legacy record and is populated on first use.
+	Generation string    `json:"generation,omitempty"`
+	CreatedAt  time.Time `json:"createdAt"`
+	UpdatedAt  time.Time `json:"updatedAt"`
 }
 
 func buildListedSession(
@@ -122,10 +126,11 @@ func (c *Client) CreateSession(
 	}
 
 	sessState := &SessionState{
-		ID:        key.SessionID,
-		State:     make(session.StateMap),
-		UpdatedAt: time.Now(),
-		CreatedAt: time.Now(),
+		ID:         key.SessionID,
+		State:      make(session.StateMap),
+		Generation: uuid.NewString(),
+		UpdatedAt:  time.Now(),
+		CreatedAt:  time.Now(),
 	}
 	for k, v := range state {
 		if v == nil {
