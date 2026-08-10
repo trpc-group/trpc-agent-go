@@ -29,6 +29,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	ds "github.com/bmatcuk/doublestar/v4"
 )
 
 const (
@@ -1322,7 +1324,10 @@ func macosDenialTargetMatches(target string, matchers []DenialTargetMatcher) boo
 			return true
 		}
 		if matcher.Glob != "" {
-			ok, err := filepath.Match(matcher.Glob, target)
+			ok, err := ds.Match(
+				filepath.ToSlash(matcher.Glob),
+				filepath.ToSlash(target),
+			)
 			if err == nil && ok {
 				return true
 			}

@@ -203,6 +203,11 @@ rt := sandbox.NewRuntime(
 intentionally not supported. Empty `RawContains` entries are ignored; a list
 containing only empty strings is treated as unset.
 
+`DenialTargetMatcher.Glob` uses the same doublestar dialect as sandbox
+filesystem Glob rules such as `WithNoAccessGlobs`, including `**` across path
+separators. Malformed Glob patterns do not match and therefore do not suppress
+denials.
+
 Zero-value `DenialFilter` keeps automatic filters enabled. Rules in `Ignore` are
 disjunctive (any matching rule suppresses a denial). Within a rule, configured
 constraints are conjunctive. Within one `DenialTargetMatcher`, non-empty fields

@@ -72,6 +72,11 @@ type Diagnostics struct {
 // Within a single matcher, Exact/Prefix/Suffix/Glob are alternatives: any
 // non-empty field that matches the denial target is enough for that matcher to
 // hit. Empty fields are ignored. A zero-value matcher never matches.
+//
+// Glob uses the same doublestar dialect as sandbox filesystem Glob rules
+// (for example WithNoAccessGlobs), including ** across path separators.
+// Paths are compared with slash-normalized forms. A malformed Glob pattern
+// does not match.
 type DenialTargetMatcher struct {
 	Exact  string
 	Prefix string

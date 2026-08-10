@@ -238,6 +238,36 @@ func TestSandboxDenialInvalidGlobDoesNotMatch(t *testing.T) {
 	}
 }
 
+func TestSandboxDenialDoublestarGlobMatchesNestedTarget(t *testing.T) {
+	target := "/private/tmp/nested/cache.sock"
+	if !macosDenialTargetMatches(target, []DenialTargetMatcher{
+		{Glob: "/private/**/cache.sock"},
+	}) {
+		t.Fatalf("doublestar glob did not match nested target %q", target)
+	}
+	filtered := applyMacOSSandboxDenialFilters(
+		[]Denial{{
+			Operation: "file-read-data",
+			Target:    target,
+			Raw:       "Sandbox: cat deny(1) file-read-data " + target,
+		}},
+		"/bin/cat",
+		DenialFilter{
+			Ignore: []DenialIgnoreRule{{
+				Targets: []DenialTargetMatcher{{Glob: "/private/**/*.sock"}},
+			}},
+		},
+	)
+	if filtered != nil {
+		t.Fatalf("nested doublestar ignore = %#v, want nil", filtered)
+	}
+	if macosDenialTargetMatches(target, []DenialTargetMatcher{
+		{Glob: "/private/*/cache.sock"},
+	}) {
+		t.Fatal("single-star glob unexpectedly matched nested path")
+	}
+}
+
 func TestCloneSandboxDenialFilterWithoutIgnoreRules(t *testing.T) {
 	filter := DenialFilter{DisableAutomatic: true}
 	clone := cloneDenialFilter(filter)
