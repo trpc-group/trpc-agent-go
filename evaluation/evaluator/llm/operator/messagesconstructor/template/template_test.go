@@ -139,6 +139,112 @@ func TestConstructMessagesRendersTraceStepInput(t *testing.T) {
 	assert.Contains(t, messages[0].Content, "Tool input: match query")
 }
 
+func TestConstructMessagesRendersTraceStepToolsAndSkills(t *testing.T) {
+	constructor := New()
+	actual := &evalset.Invocation{
+		ExecutionTrace: &agenttrace.Trace{
+			Steps: []agenttrace.Step{
+				{
+					NodeID: "fetch_match",
+					Tools: []agenttrace.Tool{{
+						ID:        "call-1",
+						Name:      "lookup",
+						Arguments: map[string]any{"city": "Paris"},
+						Result:    map[string]any{"temperature": 18},
+					}},
+					Skills: []agenttrace.Skill{{Name: "research"}},
+				},
+			},
+		},
+	}
+	messages, err := constructor.ConstructMessages(
+		context.Background(),
+		[]*evalset.Invocation{actual},
+		[]*evalset.Invocation{{FinalResponse: &model.Message{Content: "reference"}}},
+		buildTemplateEvalMetric(
+			"Tools: {{tools}}\nTool name: {{tool_name}}\nSkills: {{skills}}",
+			&criterionllm.TemplateVariableBinding{
+				TemplateVariable: "tools",
+				Source: &criterionllm.TemplateVariableSource{
+					Scope: criterionllm.TemplateVariableScopeActual,
+					Field: criterionllm.TemplateVariableFieldTraceStepTools,
+					Selector: &criterionllm.TemplateVariableSelector{
+						NodeID: "fetch_match",
+					},
+				},
+			},
+			&criterionllm.TemplateVariableBinding{
+				TemplateVariable: "tool_name",
+				Source: &criterionllm.TemplateVariableSource{
+					Scope: criterionllm.TemplateVariableScopeActual,
+					Field: criterionllm.TemplateVariableFieldTraceStepTools,
+					Selector: &criterionllm.TemplateVariableSelector{
+						NodeID: "fetch_match",
+					},
+					Path: "$[0].name",
+				},
+			},
+			&criterionllm.TemplateVariableBinding{
+				TemplateVariable: "skills",
+				Source: &criterionllm.TemplateVariableSource{
+					Scope: criterionllm.TemplateVariableScopeActual,
+					Field: criterionllm.TemplateVariableFieldTraceStepSkills,
+					Selector: &criterionllm.TemplateVariableSelector{
+						NodeID: "fetch_match",
+					},
+				},
+			},
+		),
+	)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Contains(t, messages[0].Content, `"name":"lookup"`)
+	assert.Contains(t, messages[0].Content, `"arguments":{"city":"Paris"}`)
+	assert.Contains(t, messages[0].Content, "Tool name: lookup")
+	assert.Contains(t, messages[0].Content, `"name":"research"`)
+}
+
+func TestConstructMessagesRendersEmptyTraceStepToolsAndSkills(t *testing.T) {
+	constructor := New()
+	actual := &evalset.Invocation{
+		ExecutionTrace: &agenttrace.Trace{
+			Steps: []agenttrace.Step{{NodeID: "fetch_match"}},
+		},
+	}
+	messages, err := constructor.ConstructMessages(
+		context.Background(),
+		[]*evalset.Invocation{actual},
+		[]*evalset.Invocation{{FinalResponse: &model.Message{Content: "reference"}}},
+		buildTemplateEvalMetric(
+			"Tools: {{tools}}\nSkills: {{skills}}",
+			&criterionllm.TemplateVariableBinding{
+				TemplateVariable: "tools",
+				Source: &criterionllm.TemplateVariableSource{
+					Scope: criterionllm.TemplateVariableScopeActual,
+					Field: criterionllm.TemplateVariableFieldTraceStepTools,
+					Selector: &criterionllm.TemplateVariableSelector{
+						NodeID: "fetch_match",
+					},
+				},
+			},
+			&criterionllm.TemplateVariableBinding{
+				TemplateVariable: "skills",
+				Source: &criterionllm.TemplateVariableSource{
+					Scope: criterionllm.TemplateVariableScopeActual,
+					Field: criterionllm.TemplateVariableFieldTraceStepSkills,
+					Selector: &criterionllm.TemplateVariableSelector{
+						NodeID: "fetch_match",
+					},
+				},
+			},
+		),
+	)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Contains(t, messages[0].Content, "Tools: []")
+	assert.Contains(t, messages[0].Content, "Skills: []")
+}
+
 func TestConstructMessagesRendersMetricRubrics(t *testing.T) {
 	constructor := New()
 	evalMetric := buildTemplateEvalMetric(

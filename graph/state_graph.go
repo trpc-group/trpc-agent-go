@@ -5824,6 +5824,7 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 	// Extract current node ID from state for event authoring.
 	var nodeID string
 	var responseID string
+	var traceStepID string
 	sessInfo := &session.Session{}
 	if state := config.State; state != nil {
 		if nodeIDData, exists := state[StateKeyCurrentNodeID]; exists {
@@ -5833,6 +5834,9 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		}
 		if rid, ok := state[StateKeyLastResponseID].(string); ok {
 			responseID = rid
+		}
+		if stepID, ok := state[currentTraceStepIDStateKey].(string); ok {
+			traceStepID = stepID
 		}
 		if sess, ok := state[StateKeySession]; ok {
 			if s, ok := sess.(*session.Session); ok && s != nil {
@@ -5920,12 +5924,35 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		span.End()
 	}
 
+	traceInvocation := invocationOrFallback(originalInvocation, eventInvocation)
 	if err != nil {
 		if interruptErr != nil {
+			recordGraphToolExecutionTrace(
+				finalCtx,
+				traceInvocation,
+				traceStepID,
+				name,
+				id,
+				modifiedArgs,
+				result,
+				nil,
+				nil,
+			)
 			return model.Message{}, err
 		}
 		config.Span.RecordError(err)
 		config.Span.SetStatus(codes.Error, err.Error())
+		recordGraphToolExecutionTrace(
+			finalCtx,
+			traceInvocation,
+			traceStepID,
+			name,
+			id,
+			modifiedArgs,
+			nil,
+			nil,
+			err,
+		)
 		return model.Message{}, fmt.Errorf("tool %s call failed: %w", name, err)
 	}
 
@@ -5934,9 +5961,31 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 	if err != nil {
 		config.Span.RecordError(err)
 		config.Span.SetStatus(codes.Error, err.Error())
-		return model.Message{}, fmt.Errorf("failed to marshal tool result: %w", err)
+		traceErr := fmt.Errorf("failed to marshal tool result: %w", err)
+		recordGraphToolExecutionTrace(
+			finalCtx,
+			traceInvocation,
+			traceStepID,
+			name,
+			id,
+			modifiedArgs,
+			nil,
+			nil,
+			traceErr,
+		)
+		return model.Message{}, traceErr
 	}
-
+	recordGraphToolExecutionTrace(
+		finalCtx,
+		traceInvocation,
+		traceStepID,
+		name,
+		id,
+		modifiedArgs,
+		nil,
+		content,
+		nil,
+	)
 	return model.NewToolMessage(id, name, string(content)), nil
 }
 

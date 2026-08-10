@@ -25,6 +25,7 @@ import (
 	oteltrace "go.opentelemetry.io/otel/trace"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	ichannel "trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
 	"trpc.group/trpc-go/trpc-agent-go/internal/agenttoolgraph"
@@ -228,6 +229,87 @@ func (b *blockingTool) Call(ctx context.Context, _ []byte) (any, error) {
 		}
 	}
 	return b.result, nil
+}
+
+func TestExecuteSingleToolCall_RecordsExecutionTraceToolAndSkill(t *testing.T) {
+	inv, ctx, stepID := newGraphExecutionTraceInvocation(t)
+	ctx, span := trace.Tracer.Start(ctx, "tool")
+	defer span.End()
+	msg, err := executeSingleToolCall(ctx, singleToolCallConfig{
+		ToolCall: model.ToolCall{
+			ID: "call-skill",
+			Function: model.FunctionDefinitionParam{
+				Name:      "skill_load",
+				Arguments: []byte(`{"skill":"research"}`),
+			},
+		},
+		Tools: map[string]tool.Tool{
+			"skill_load": &blockingTool{name: "skill_load", result: "loaded: research"},
+		},
+		InvocationID: "inv-1",
+		Span:         span,
+		State:        State{currentTraceStepIDStateKey: stepID},
+	})
+	require.NoError(t, err)
+	require.Equal(t, model.RoleTool, msg.Role)
+	executionTrace := agent.BuildExecutionTrace(inv, atrace.TraceStatusCompleted)
+	require.NotNil(t, executionTrace)
+	require.Len(t, executionTrace.Steps, 1)
+	require.Equal(t, []atrace.Tool{{
+		ID:        "call-skill",
+		Name:      "skill_load",
+		Arguments: map[string]any{"skill": "research"},
+		Result:    "loaded: research",
+	}}, executionTrace.Steps[0].Tools)
+	require.Equal(t, []atrace.Skill{{Name: "research"}}, executionTrace.Steps[0].Skills)
+}
+
+func TestExecuteSingleToolCall_RecordsExecutionTraceToolError(t *testing.T) {
+	inv, ctx, stepID := newGraphExecutionTraceInvocation(t)
+	ctx, span := trace.Tracer.Start(ctx, "tool")
+	defer span.End()
+	_, err := executeSingleToolCall(ctx, singleToolCallConfig{
+		ToolCall: model.ToolCall{
+			ID: "call-error",
+			Function: model.FunctionDefinitionParam{
+				Name:      "unstable",
+				Arguments: []byte(`{"attempt":1}`),
+			},
+		},
+		Tools: map[string]tool.Tool{
+			"unstable": &blockingTool{name: "unstable", returnErr: errors.New("boom")},
+		},
+		InvocationID: "inv-1",
+		Span:         span,
+		State:        State{currentTraceStepIDStateKey: stepID},
+	})
+	require.Error(t, err)
+	executionTrace := agent.BuildExecutionTrace(inv, atrace.TraceStatusCompleted)
+	require.NotNil(t, executionTrace)
+	require.Len(t, executionTrace.Steps, 1)
+	require.Len(t, executionTrace.Steps[0].Tools, 1)
+	recordedTool := executionTrace.Steps[0].Tools[0]
+	require.Equal(t, "call-error", recordedTool.ID)
+	require.Equal(t, "unstable", recordedTool.Name)
+	require.Equal(t, map[string]any{"attempt": float64(1)}, recordedTool.Arguments)
+	require.Empty(t, recordedTool.Result)
+	require.Contains(t, recordedTool.Error, "boom")
+	require.Empty(t, executionTrace.Steps[0].Skills)
+}
+
+func newGraphExecutionTraceInvocation(t *testing.T) (*agent.Invocation, context.Context, string) {
+	t.Helper()
+	inv := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.RunOptions{ExecutionTraceEnabled: true}),
+	)
+	stepID := agent.StartExecutionTraceStep(
+		inv,
+		"tools",
+		&atrace.Snapshot{Text: "input"},
+		nil,
+	)
+	require.NotEmpty(t, stepID)
+	return inv, agent.NewInvocationContext(context.Background(), inv), stepID
 }
 
 type resultWithErrorTool struct {

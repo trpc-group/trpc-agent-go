@@ -104,17 +104,31 @@ func TestCapture_BuildReturnsDetachedCopies(t *testing.T) {
 	})
 	capture.FinishStep(stepID, &atrace.Snapshot{Text: "output"}, "", startedAt.Add(time.Second))
 	capture.SetStepUsage(stepID, &model.Usage{TotalTokens: 3})
+	capture.addStepTools(stepID, []atrace.Tool{{
+		ID:        "call-1",
+		Name:      "lookup",
+		Arguments: map[string]any{"city": "Paris"},
+		Result:    map[string]any{"temperature": float64(18)},
+	}})
+	capture.addStepSkill(stepID, atrace.Skill{Name: "weather"})
 	trace := capture.Build(atrace.TraceStatusCompleted, startedAt.Add(2*time.Second))
 	require.Len(t, trace.Steps, 1)
 	trace.Steps[0].Input.Text = "mutated input"
 	trace.Steps[0].Output.Text = "mutated output"
 	trace.Steps[0].Usage.TotalTokens = 99
+	trace.Steps[0].Tools[0].Arguments.(map[string]any)["city"] = "mutated"
+	trace.Steps[0].Tools[0].Result.(map[string]any)["temperature"] = float64(99)
+	trace.Steps[0].Skills[0].Name = "mutated"
 	second := capture.Build(atrace.TraceStatusCompleted, startedAt.Add(3*time.Second))
 	require.Len(t, second.Steps, 1)
 	assert.Equal(t, "input", second.Steps[0].Input.Text)
 	assert.Equal(t, "output", second.Steps[0].Output.Text)
 	assert.Equal(t, "llm", second.Steps[0].NodeType)
 	assert.Equal(t, 3, second.Steps[0].Usage.TotalTokens)
+	require.Len(t, second.Steps[0].Tools, 1)
+	assert.Equal(t, map[string]any{"city": "Paris"}, second.Steps[0].Tools[0].Arguments)
+	assert.Equal(t, map[string]any{"temperature": float64(18)}, second.Steps[0].Tools[0].Result)
+	assert.Equal(t, []atrace.Skill{{Name: "weather"}}, second.Steps[0].Skills)
 }
 
 func TestCapture_SetStepInputCopiesAndReplacesSnapshot(t *testing.T) {

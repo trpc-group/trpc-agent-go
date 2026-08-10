@@ -328,6 +328,13 @@ func TestCloneEvalCase_DeepCopy(t *testing.T) {
 									ReasoningDuration: time.Second,
 								},
 							},
+							Tools: []agenttrace.Tool{{
+								ID:        "call-1",
+								Name:      "lookup",
+								Arguments: map[string]any{"city": "Paris"},
+								Result:    []any{"ok"},
+							}},
+							Skills: []agenttrace.Skill{{Name: "research"}},
 						},
 					},
 				},
@@ -423,6 +430,15 @@ func TestCloneEvalCase_DeepCopy(t *testing.T) {
 
 	dst.Conversation[0].ExecutionTrace.Steps[0].Usage.TimingInfo.ReasoningDuration = 2 * time.Second
 	assert.Equal(t, time.Second, src.Conversation[0].ExecutionTrace.Steps[0].Usage.TimingInfo.ReasoningDuration)
+
+	dst.Conversation[0].ExecutionTrace.Steps[0].Tools[0].Arguments.(map[string]any)["city"] = "changed"
+	assert.Equal(t, "Paris", src.Conversation[0].ExecutionTrace.Steps[0].Tools[0].Arguments.(map[string]any)["city"])
+
+	dst.Conversation[0].ExecutionTrace.Steps[0].Tools[0].Result.([]any)[0] = "changed"
+	assert.Equal(t, "ok", src.Conversation[0].ExecutionTrace.Steps[0].Tools[0].Result.([]any)[0])
+
+	dst.Conversation[0].ExecutionTrace.Steps[0].Skills[0].Name = "changed"
+	assert.Equal(t, "research", src.Conversation[0].ExecutionTrace.Steps[0].Skills[0].Name)
 
 	dst.Conversation[0].ExecutionTrace.Input.Text = "changed"
 	assert.Equal(t, "trace input", src.Conversation[0].ExecutionTrace.Input.Text)

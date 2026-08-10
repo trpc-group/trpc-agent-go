@@ -28,6 +28,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/calllimit"
@@ -36,6 +37,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/toolresultround"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
+	"trpc.group/trpc-go/trpc-agent-go/internal/tracecapture"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	knowledgedoc "trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	knowledgegraph "trpc.group/trpc-go/trpc-agent-go/knowledge/graph"
@@ -112,6 +114,141 @@ type mockCallableTool struct {
 func (m *mockCallableTool) Declaration() *tool.Declaration { return m.declaration }
 func (m *mockCallableTool) Call(ctx context.Context, args []byte) (any, error) {
 	return m.callFn(ctx, args)
+}
+
+func TestFunctionCallResponseProcessor_RecordsExecutionTraceToolsAndSkills(t *testing.T) {
+	inv, ctx := newExecutionTraceProcessorInvocation(t)
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterBeforeTool(func(
+		_ context.Context,
+		args *tool.BeforeToolArgs,
+	) (*tool.BeforeToolResult, error) {
+		if args.ToolName != "lookup" {
+			return nil, nil
+		}
+		return &tool.BeforeToolResult{
+			ModifiedArguments: []byte(`{"city":"Berlin"}`),
+		}, nil
+	})
+	tools := map[string]tool.Tool{
+		"lookup": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "lookup"},
+			callFn: func(_ context.Context, args []byte) (any, error) {
+				assert.JSONEq(t, `{"city":"Berlin"}`, string(args))
+				return map[string]any{"temperature": 18}, nil
+			},
+		},
+		"skill_load": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "skill_load"},
+			callFn: func(_ context.Context, _ []byte) (any, error) {
+				return "loaded: research", nil
+			},
+		},
+	}
+	rsp := &model.Response{Choices: []model.Choice{{Message: model.Message{ToolCalls: []model.ToolCall{
+		{ID: "call-lookup", Function: model.FunctionDefinitionParam{Name: "lookup", Arguments: []byte(`{"city":"Paris"}`)}},
+		{ID: "call-skill", Function: model.FunctionDefinitionParam{Name: "skill_load", Arguments: []byte(`{"skill":"research"}`)}},
+	}}}}}
+	ch := make(chan *event.Event, 1)
+	NewFunctionCallResponseProcessor(false, callbacks).ProcessResponse(ctx, inv, &model.Request{Tools: tools}, rsp, ch)
+	executionTrace := agent.BuildExecutionTrace(inv, atrace.TraceStatusCompleted)
+	require.NotNil(t, executionTrace)
+	require.Len(t, executionTrace.Steps, 1)
+	step := executionTrace.Steps[0]
+	require.Len(t, step.Tools, 2)
+	require.Equal(t, atrace.Tool{
+		ID:        "call-lookup",
+		Name:      "lookup",
+		Arguments: map[string]any{"city": "Berlin"},
+		Result:    map[string]any{"temperature": float64(18)},
+	}, step.Tools[0])
+	require.Equal(t, atrace.Tool{
+		ID:        "call-skill",
+		Name:      "skill_load",
+		Arguments: map[string]any{"skill": "research"},
+		Result:    "loaded: research",
+	}, step.Tools[1])
+	require.Equal(t, []atrace.Skill{{Name: "research"}}, step.Skills)
+}
+
+func TestFunctionCallResponseProcessor_RecordsExecutionTraceToolErrors(t *testing.T) {
+	inv, ctx := newExecutionTraceProcessorInvocation(t)
+	tools := map[string]tool.Tool{
+		"unstable": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "unstable"},
+			callFn: func(context.Context, []byte) (any, error) {
+				return nil, errors.New("boom")
+			},
+		},
+	}
+	rsp := &model.Response{Choices: []model.Choice{{Message: model.Message{ToolCalls: []model.ToolCall{
+		{ID: "call-error", Function: model.FunctionDefinitionParam{Name: "unstable", Arguments: []byte(`{"attempt":1}`)}},
+	}}}}}
+	ch := make(chan *event.Event, 1)
+	NewFunctionCallResponseProcessor(false, nil).ProcessResponse(ctx, inv, &model.Request{Tools: tools}, rsp, ch)
+	executionTrace := agent.BuildExecutionTrace(inv, atrace.TraceStatusCompleted)
+	require.NotNil(t, executionTrace)
+	require.Len(t, executionTrace.Steps, 1)
+	require.Len(t, executionTrace.Steps[0].Tools, 1)
+	recordedTool := executionTrace.Steps[0].Tools[0]
+	require.Equal(t, "call-error", recordedTool.ID)
+	require.Equal(t, "unstable", recordedTool.Name)
+	require.Equal(t, map[string]any{"attempt": float64(1)}, recordedTool.Arguments)
+	require.Empty(t, recordedTool.Result)
+	require.Contains(t, recordedTool.Error, "boom")
+	require.Empty(t, executionTrace.Steps[0].Skills)
+}
+
+func TestFunctionCallResponseProcessor_RecordsParallelPerCallTraceToolsInCallOrder(t *testing.T) {
+	inv, ctx := newExecutionTraceProcessorInvocation(t)
+	inv.RunOptions.ToolResultEventPerCallEnabled = true
+	tools := map[string]tool.Tool{
+		"slow": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "slow"},
+			callFn: func(context.Context, []byte) (any, error) {
+				time.Sleep(20 * time.Millisecond)
+				return "slow result", nil
+			},
+		},
+		"fast": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "fast"},
+			callFn: func(context.Context, []byte) (any, error) {
+				return "fast result", nil
+			},
+		},
+	}
+	rsp := &model.Response{Choices: []model.Choice{{Message: model.Message{ToolCalls: []model.ToolCall{
+		{ID: "call-slow", Function: model.FunctionDefinitionParam{Name: "slow", Arguments: []byte(`{"index":0}`)}},
+		{ID: "call-fast", Function: model.FunctionDefinitionParam{Name: "fast", Arguments: []byte(`{"index":1}`)}},
+	}}}}}
+	ch := make(chan *event.Event, 2)
+	NewFunctionCallResponseProcessor(true, nil).ProcessResponse(ctx, inv, &model.Request{Tools: tools}, rsp, ch)
+	executionTrace := agent.BuildExecutionTrace(inv, atrace.TraceStatusCompleted)
+	require.NotNil(t, executionTrace)
+	require.Len(t, executionTrace.Steps, 1)
+	require.Len(t, executionTrace.Steps[0].Tools, 2)
+	require.Equal(t, "slow", executionTrace.Steps[0].Tools[0].Name)
+	require.Equal(t, "fast", executionTrace.Steps[0].Tools[1].Name)
+	require.Equal(t, "slow result", executionTrace.Steps[0].Tools[0].Result)
+	require.Equal(t, "fast result", executionTrace.Steps[0].Tools[1].Result)
+}
+
+func newExecutionTraceProcessorInvocation(t *testing.T) (*agent.Invocation, context.Context) {
+	t.Helper()
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(&mockAgentWithTools{name: "assistant"}),
+		agent.WithInvocationRunOptions(agent.RunOptions{ExecutionTraceEnabled: true}),
+	)
+	stepID := agent.StartExecutionTraceStep(
+		inv,
+		"assistant",
+		&atrace.Snapshot{Text: "input"},
+		nil,
+	)
+	require.NotEmpty(t, stepID)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	tracecapture.BindInvocationStep(ctx, stepID)
+	return inv, ctx
 }
 
 type recordingSessionService struct {
@@ -533,7 +670,7 @@ func TestExecuteToolCallsInParallel_DisableTracingSkipsSpanCreation(t *testing.T
 		},
 	}
 	eventChan := make(chan *event.Event, 2)
-	mergedEvent, err := p.executeToolCallsInParallel(context.Background(), invocation, response, toolCalls, tools, eventChan)
+	mergedEvent, _, err := p.executeToolCallsInParallel(context.Background(), invocation, response, toolCalls, tools, eventChan)
 	require.NoError(t, err)
 	require.NotNil(t, mergedEvent)
 	require.Empty(t, recorder.Ended())
@@ -3940,7 +4077,7 @@ func TestExecuteToolCallsInParallel(t *testing.T) {
 		},
 	}
 	ctx := context.Background()
-	evt, err := NewFunctionCallResponseProcessor(true, nil).executeToolCallsInParallel(ctx, inv, response,
+	evt, _, err := NewFunctionCallResponseProcessor(true, nil).executeToolCallsInParallel(ctx, inv, response,
 		toolCalls, tools, nil)
 	require.NoError(t, err)
 	require.NotNil(t, evt.Choices)
@@ -6905,7 +7042,7 @@ func TestExecuteToolCallsInParallel_StateOnlyPlaceholderSkipsStateDeltaProvider(
 		},
 	}
 	ch := make(chan *event.Event, 4)
-	ev, err := p.executeToolCallsInParallel(
+	ev, _, err := p.executeToolCallsInParallel(
 		context.Background(),
 		inv,
 		rsp,
@@ -9412,7 +9549,7 @@ func TestExecuteToolCallsInParallel_ErrgroupCancelsSiblings(t *testing.T) {
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err := p.executeToolCallsInParallel(ctx, inv, llmResp, toolCalls, tools, eventChan)
+	_, _, err := p.executeToolCallsInParallel(ctx, inv, llmResp, toolCalls, tools, eventChan)
 	elapsed := time.Since(start)
 	close(eventChan)
 	<-doneDrain

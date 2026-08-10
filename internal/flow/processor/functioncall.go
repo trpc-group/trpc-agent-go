@@ -134,6 +134,8 @@ type toolResult struct {
 	err        error
 	stateDelta *toolEventStateDelta
 	toolArgs   []byte
+	toolName   string
+	traceError string
 }
 
 type toolRoundFinalization struct {
@@ -820,7 +822,7 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsWithRequest(
 
 	// If parallel tools are enabled AND multiple tool calls, execute concurrently
 	if p.enableParallelTools && len(toolCalls) > 1 {
-		mergedEvent, err := p.executeToolCallsInParallel(
+		mergedEvent, toolResults, err := p.executeToolCallsInParallel(
 			ctx,
 			invocation,
 			llmResponse,
@@ -840,6 +842,7 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsWithRequest(
 		); err != nil {
 			return nil, err
 		}
+		recordExecutionTraceToolResults(ctx, invocation, toolResults, mergedEvent)
 		return mergedEvent, nil
 	}
 
@@ -881,6 +884,7 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsWithRequest(
 	); err != nil {
 		return nil, err
 	}
+	recordExecutionTraceToolResults(ctx, invocation, toolResults, mergedEvent)
 	return mergedEvent, nil
 }
 
@@ -947,7 +951,7 @@ func (p *FunctionCallResponseProcessor) executeToolCallsSequentiallyAndEmitPerCa
 			req,
 			llmResponse,
 			eventChan,
-			result.event,
+			result,
 			i < len(toolCalls)-1,
 		)
 		if err != nil {
@@ -959,6 +963,7 @@ func (p *FunctionCallResponseProcessor) executeToolCallsSequentiallyAndEmitPerCa
 				err,
 			)
 		}
+		recordExecutionTraceToolResults(ctx, invocation, []toolResult{result}, result.event)
 	}
 	return lastEvent, nil
 }
@@ -985,6 +990,7 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallelAndEmitPerCall
 	)
 
 	stateResults := make([]toolResult, len(toolCalls))
+	traceResults := make([]toolResult, len(toolCalls))
 	received := 0
 	var (
 		lastEvent     *event.Event
@@ -1039,13 +1045,15 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallelAndEmitPerCall
 			req,
 			llmResponse,
 			eventChan,
-			result.event,
+			result,
 			received < len(toolCalls) || toolErr != nil,
 		)
 		if err != nil {
 			processingErr = err
 			cancel()
+			continue
 		}
+		traceResults[result.index] = result
 	}
 	if err := firstNonNilErr(toolErr, processingErr, wait()); err != nil {
 		return lastEvent, p.finalizeToolRoundError(
@@ -1070,6 +1078,12 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallelAndEmitPerCall
 			err,
 		)
 	}
+	recordExecutionTraceToolResults(
+		ctx,
+		invocation,
+		p.compactToolResults(traceResults),
+		nil,
+	)
 	return lastEvent, nil
 }
 
@@ -1249,9 +1263,10 @@ func (p *FunctionCallResponseProcessor) applyAfterToolMessagesAndEmit(
 	req *model.Request,
 	llmResponse *model.Response,
 	eventChan chan<- *event.Event,
-	toolResultEvent *event.Event,
+	result toolResult,
 	toolResultRoundIncomplete bool,
 ) (*event.Event, error) {
+	toolResultEvent := result.event
 	if err := p.applyAfterToolMessagesHooks(
 		ctx,
 		invocation,
@@ -1552,9 +1567,11 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequentialResult(
 	ctx = execution.ctx
 	choices := execution.choices
 	modifiedArgs := execution.modifiedArgs
+	traceError := ""
 	if err != nil {
 		if execution.shouldIgnoreError {
 			// Create error choice for ignorable errors
+			traceError = err.Error()
 			choice := p.createErrorChoice(index, toolCall.ID, err.Error())
 			choices = []model.Choice{*choice}
 		} else {
@@ -1574,7 +1591,12 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequentialResult(
 		execution.skipSummarization,
 	)
 	if toolEvent == nil {
-		return toolResult{index: index, toolArgs: modifiedArgs}, nil
+		return toolResult{
+			index:      index,
+			toolArgs:   modifiedArgs,
+			toolName:   toolCall.Function.Name,
+			traceError: traceError,
+		}, nil
 	}
 	decl := p.lookupDeclaration(tools, toolCall.Function.Name)
 	// The pollution marker means the session consumed external context. When
@@ -1636,6 +1658,8 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequentialResult(
 		event:      toolEvent,
 		stateDelta: stateDelta,
 		toolArgs:   modifiedArgs,
+		toolName:   toolCall.Function.Name,
+		traceError: traceError,
 	}, nil
 }
 
@@ -1715,7 +1739,7 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 	toolCalls []model.ToolCall,
 	tools map[string]tool.Tool,
 	eventChan chan<- *event.Event,
-) (*event.Event, error) {
+) (*event.Event, []toolResult, error) {
 	resultChan, wait := p.startParallelToolCalls(
 		ctx,
 		invocation,
@@ -1750,7 +1774,7 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 		for _, tc := range toolCalls {
 			tl, ok := tools[tc.Function.Name]
 			if ok && !invocation.RunOptions.ShouldExecuteTool(ctx, tl) {
-				return nil, nil
+				return nil, toolResults, nil
 			}
 		}
 	}
@@ -1758,7 +1782,7 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 		ctx, invocation, llmResponse, tools, toolCalls, toolResults,
 		toolCallResponsesEvents,
 	)
-	return mergedEvent, err
+	return mergedEvent, toolResults, err
 }
 
 // startParallelToolCalls dispatches one worker per call and closes the result
@@ -1871,9 +1895,8 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 				invocation.AgentName,
 				r,
 			)
-			errorChoice := p.createErrorChoice(
-				index, tc.ID, fmt.Sprintf("tool execution panic: %v", r),
-			)
+			traceError := fmt.Sprintf("tool execution panic: %v", r)
+			errorChoice := p.createErrorChoice(index, tc.ID, traceError)
 			errorChoice.Message.ToolName = tc.Function.Name
 			errorEvent := newToolCallResponseEvent(
 				invocation, llmResponse, []model.Choice{*errorChoice},
@@ -1883,9 +1906,11 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 				errorEvent.Tag = event.TransferTag
 			}
 			sendResult(toolResult{
-				index:    index,
-				event:    errorEvent,
-				toolArgs: toolArgs,
+				index:      index,
+				event:      errorEvent,
+				toolArgs:   toolArgs,
+				toolName:   tc.Function.Name,
+				traceError: traceError,
 			})
 			// Recovered panic — do NOT cancel siblings.
 			rerr = nil
@@ -1964,6 +1989,8 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 			err:        returnErr,
 			stateDelta: stateDelta,
 			toolArgs:   modifiedArgs,
+			toolName:   tc.Function.Name,
+			traceError: err.Error(),
 		})
 		// Return the critical error so the errgroup cancels siblings.
 		// Ignorable errors return nil here and travel only via toolResult.err.
@@ -1986,6 +2013,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 		sendResult(toolResult{
 			index:    index,
 			toolArgs: modifiedArgs,
+			toolName: tc.Function.Name,
 		})
 		return nil
 	}
@@ -2039,6 +2067,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 		event:      toolCallResponseEvent,
 		stateDelta: stateDelta,
 		toolArgs:   modifiedArgs,
+		toolName:   tc.Function.Name,
 	})
 	return nil
 }

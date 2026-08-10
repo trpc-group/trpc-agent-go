@@ -93,6 +93,21 @@ func TestInvocationStepUpdatesCurrentCaptureStep(t *testing.T) {
 	tracecapture.SetStepNodeType(ctx, stepID, "llm")
 	tracecapture.MergeInvocationStepAppliedSurfaceIDs(ctx, []string{"surface-b", "surface-a", "surface-b"})
 	tracecapture.MergeInvocationStepAppliedSurfaceIDs(ctx, []string{"surface-a", "surface-c"})
+	tracecapture.AddInvocationStepTools(ctx, []atrace.Tool{{
+		ID:        "call-1",
+		Name:      "lookup",
+		Arguments: map[string]any{"city": "Paris"},
+		Result:    map[string]any{"ok": true},
+	}})
+	tracecapture.AddStepTools(ctx, stepID, []atrace.Tool{{
+		ID:        "call-2",
+		Name:      "summarize",
+		Arguments: "plain text",
+		Result:    "done",
+	}})
+	tracecapture.AddInvocationStepSkill(ctx, atrace.Skill{Name: "weather"})
+	tracecapture.AddStepSkill(ctx, stepID, atrace.Skill{Name: "weather"})
+	tracecapture.AddStepSkill(ctx, stepID, atrace.Skill{Name: "reasoning"})
 	tracecapture.AddInvocationStepUsage(ctx, &model.Usage{
 		PromptTokens:     2,
 		CompletionTokens: 3,
@@ -112,6 +127,21 @@ func TestInvocationStepUpdatesCurrentCaptureStep(t *testing.T) {
 	require.Equal(t, "last request", step.Input.Text)
 	require.Equal(t, "llm", step.NodeType)
 	require.Equal(t, []string{"surface-b", "surface-a", "surface-c"}, step.AppliedSurfaceIDs)
+	require.Equal(t, []atrace.Tool{
+		{
+			ID:        "call-1",
+			Name:      "lookup",
+			Arguments: map[string]any{"city": "Paris"},
+			Result:    map[string]any{"ok": true},
+		},
+		{
+			ID:        "call-2",
+			Name:      "summarize",
+			Arguments: "plain text",
+			Result:    "done",
+		},
+	}, step.Tools)
+	require.Equal(t, []atrace.Skill{{Name: "weather"}, {Name: "reasoning"}}, step.Skills)
 	require.Equal(t, &model.Usage{
 		PromptTokens:     9,
 		CompletionTokens: 14,
@@ -152,10 +182,14 @@ func TestInvocationStepHelpersIgnoreMissingRuntimeAndStep(t *testing.T) {
 	tracecapture.SetInvocationStepInput(plainCtx, &atrace.Snapshot{Text: "ignored"})
 	tracecapture.SetStepNodeType(plainCtx, "missing", "llm")
 	tracecapture.MergeInvocationStepAppliedSurfaceIDs(plainCtx, []string{"ignored"})
+	tracecapture.AddInvocationStepTools(plainCtx, []atrace.Tool{{Name: "ignored"}})
+	tracecapture.AddInvocationStepSkill(plainCtx, atrace.Skill{Name: "ignored"})
 	tracecapture.AddInvocationStepUsage(plainCtx, &model.Usage{TotalTokens: 1})
 	capture := tracecapture.New("root", "inv", "session", time.Now())
 	ctxWithoutBinding := tracecapture.AttachInvocationRuntime(context.Background(), nil, capture)
 	tracecapture.BindInvocationStep(ctxWithoutBinding, "missing")
+	tracecapture.AddStepTools(ctxWithoutBinding, "missing", []atrace.Tool{{Name: "ignored"}})
+	tracecapture.AddStepSkill(ctxWithoutBinding, "missing", atrace.Skill{Name: "ignored"})
 	stepID := capture.StartStep(tracecapture.StartStepInput{
 		InvocationID: "inv",
 		AgentName:    "root",
@@ -177,4 +211,6 @@ func TestInvocationStepHelpersIgnoreMissingRuntimeAndStep(t *testing.T) {
 	require.Equal(t, "agent", result.Steps[0].NodeType)
 	require.Nil(t, result.Steps[0].Usage)
 	require.Empty(t, result.Steps[0].AppliedSurfaceIDs)
+	require.Empty(t, result.Steps[0].Tools)
+	require.Empty(t, result.Steps[0].Skills)
 }
