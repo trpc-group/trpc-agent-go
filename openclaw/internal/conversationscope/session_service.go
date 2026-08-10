@@ -38,6 +38,30 @@ type searchWindowSessionService struct {
 	searchable session.SearchableService
 }
 
+type stateInitializationForwarder struct {
+	initializer session.StateInitializationService
+}
+
+type stateInitializingSessionService struct {
+	*sessionService
+	*stateInitializationForwarder
+}
+
+type stateInitializingWindowSessionService struct {
+	*windowSessionService
+	*stateInitializationForwarder
+}
+
+type stateInitializingSearchableSessionService struct {
+	*searchableSessionService
+	*stateInitializationForwarder
+}
+
+type stateInitializingSearchWindowSessionService struct {
+	*searchWindowSessionService
+	*stateInitializationForwarder
+}
+
 // WrapSessionService rewrites persisted session keys using any explicit
 // per-request storage user scope carried on the context.
 func WrapSessionService(next session.Service) session.Service {
@@ -47,26 +71,74 @@ func WrapSessionService(next session.Service) session.Service {
 	base := &sessionService{next: next}
 	window, hasWindow := next.(session.WindowService)
 	searchable, hasSearch := next.(session.SearchableService)
+	initializer, hasInitializer := next.(session.StateInitializationService)
+	var wrapped session.Service
 	switch {
 	case hasWindow && hasSearch:
-		return &searchWindowSessionService{
+		wrapped = &searchWindowSessionService{
 			sessionService: base,
 			window:         window,
 			searchable:     searchable,
 		}
 	case hasWindow:
-		return &windowSessionService{
+		wrapped = &windowSessionService{
 			sessionService: base,
 			window:         window,
 		}
 	case hasSearch:
-		return &searchableSessionService{
+		wrapped = &searchableSessionService{
 			sessionService: base,
 			searchable:     searchable,
 		}
 	default:
-		return base
+		wrapped = base
 	}
+	if !hasInitializer {
+		return wrapped
+	}
+	forwarder := &stateInitializationForwarder{
+		initializer: initializer,
+	}
+	switch service := wrapped.(type) {
+	case *searchWindowSessionService:
+		return &stateInitializingSearchWindowSessionService{
+			searchWindowSessionService:   service,
+			stateInitializationForwarder: forwarder,
+		}
+	case *windowSessionService:
+		return &stateInitializingWindowSessionService{
+			windowSessionService:         service,
+			stateInitializationForwarder: forwarder,
+		}
+	case *searchableSessionService:
+		return &stateInitializingSearchableSessionService{
+			searchableSessionService:     service,
+			stateInitializationForwarder: forwarder,
+		}
+	default:
+		return &stateInitializingSessionService{
+			sessionService:               base,
+			stateInitializationForwarder: forwarder,
+		}
+	}
+}
+
+func (s *stateInitializationForwarder) LoadOrInitializeSessionState(
+	ctx context.Context,
+	key session.Key,
+	stateKey string,
+	validate func([]byte) bool,
+	initialize func(context.Context) ([]byte, error),
+	projections ...session.StateInitializationProjection,
+) ([]byte, bool, error) {
+	return s.initializer.LoadOrInitializeSessionState(
+		ctx,
+		rewriteKeyForStorage(ctx, key),
+		stateKey,
+		validate,
+		initialize,
+		projections...,
+	)
 }
 
 func (s *sessionService) CreateSession(

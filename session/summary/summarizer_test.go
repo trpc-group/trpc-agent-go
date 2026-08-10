@@ -625,7 +625,12 @@ func TestSessionSummarizer_CacheSafeForking(t *testing.T) {
 			contextWindow: 1000,
 			inputBudget:   220,
 		}
-		s := NewSummarizer(capture, WithCacheSafeForking(true))
+		s := NewSummarizer(
+			capture,
+			WithPrompt("Conversation:\n{conversation_text}\n\nSummary:"),
+			WithCacheSafeForking(true),
+			WithCacheSafeForkPrompt("Summarize the conversation above."),
+		)
 		oversizedParent := strings.Repeat("provider-budget-content ", 200)
 		parent := &model.Request{Messages: []model.Message{
 			model.NewSystemMessage("stable system"),
@@ -762,7 +767,12 @@ func TestSessionSummarizer_RetriesCacheSafeFailureWithStandaloneSource(t *testin
 			require.Len(t, capture.requests[0].Messages, 3)
 			require.Len(t, capture.requests[1].Messages, 1)
 			require.Contains(t, capture.requests[1].Messages[0].Content, "event text")
-			require.NotContains(t, capture.requests[1].Messages[0].Content, "Summarize the user, assistant")
+			require.Contains(t, capture.requests[1].Messages[0].Content,
+				standaloneSummarySourceBoundary)
+			require.Contains(t, capture.requests[1].Messages[0].Content,
+				"Summarize the user, assistant")
+			require.NotContains(t, capture.requests[1].Messages[0].Content,
+				"stable system")
 		})
 	}
 }

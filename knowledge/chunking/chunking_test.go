@@ -10,6 +10,7 @@
 package chunking
 
 import (
+	"strings"
 	"testing"
 	"unicode/utf8"
 
@@ -44,12 +45,12 @@ func TestCleanText(t *testing.T) {
 		{
 			name:     "text_with_leading_trailing_spaces",
 			input:    "  Hello World  ",
-			expected: "Hello World",
+			expected: "  Hello World  ",
 		},
 		{
 			name:     "text_with_extra_spaces_in_lines",
 			input:    "Line1  \n  Line2  \n  Line3  ",
-			expected: "Line1\nLine2\nLine3",
+			expected: "Line1  \n  Line2  \n  Line3  ",
 		},
 		{
 			name:     "empty_string",
@@ -70,10 +71,20 @@ func TestCleanText(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := cleanText(tt.input)
+			result := cleanTextWithWhitespaceTrimming(tt.input, false)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestCleanTextWithWhitespaceTrimming(t *testing.T) {
+	input := "  def f():  \r\n\treturn 1\t\r\n"
+
+	require.Equal(
+		t,
+		"def f():\nreturn 1",
+		cleanTextWithWhitespaceTrimming(input, true),
+	)
 }
 
 // TestCreateChunk tests the createChunk function
@@ -263,12 +274,13 @@ func TestJoinWithOverlap(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			content, overlapSize := joinWithOverlap(
+			content, overlapSize := joinWithOverlapMode(
 				tt.previous,
 				tt.current,
 				tt.maxOverlap,
 				tt.maxSize,
 				tt.separator,
+				false,
 			)
 			assert.Equal(t, tt.wantContent, content)
 			assert.Equal(t, tt.wantOverlapSize, overlapSize)
@@ -290,21 +302,21 @@ func TestSplitTextAtNaturalBoundaryPreservesSentenceAtoms(t *testing.T) {
 			content:       "prefix 12.6 suffix",
 			maxSize:       10,
 			wantPrefix:    "prefix",
-			wantRemaining: "12.6 suffix",
+			wantRemaining: " 12.6 suffix",
 		},
 		{
 			name:          "dotted section",
 			content:       "prefix 2.8.12 suffix",
 			maxSize:       11,
 			wantPrefix:    "prefix",
-			wantRemaining: "2.8.12 suffix",
+			wantRemaining: " 2.8.12 suffix",
 		},
 		{
 			name:          "semantic version",
 			content:       "prefix v1.2.3 suffix",
 			maxSize:       11,
 			wantPrefix:    "prefix",
-			wantRemaining: "v1.2.3 suffix",
+			wantRemaining: " v1.2.3 suffix",
 		},
 		{
 			name:          "CJK punctuation cluster",
@@ -317,13 +329,262 @@ func TestSplitTextAtNaturalBoundaryPreservesSentenceAtoms(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			prefix, remaining := splitTextAtNaturalBoundary(
+			prefix, remaining := splitTextAtNaturalBoundaryWithWhitespaceTrimming(
 				tt.content,
 				tt.maxSize,
+				false,
 			)
 			require.Equal(t, tt.wantPrefix, prefix)
 			require.Equal(t, tt.wantRemaining, remaining)
 		})
+	}
+}
+
+func TestSplitTextAtNaturalBoundaryPreservesIndentation(t *testing.T) {
+	prefix, remaining := splitTextAtNaturalBoundaryWithWhitespaceTrimming(
+		"header line\n\treturn value",
+		12,
+		false,
+	)
+
+	require.Equal(t, "header line\n", prefix)
+	require.Equal(t, "\treturn value", remaining)
+}
+
+func TestNaturalTextSuffixPreservesIndentation(t *testing.T) {
+	suffix, natural := naturalTextSuffixWithWhitespaceTrimming(
+		"header\n\treturn 1",
+		9,
+		false,
+	)
+	require.True(t, natural)
+	require.Equal(t, "\treturn 1", suffix)
+
+	legacySuffix, natural := naturalTextSuffixWithWhitespaceTrimming(
+		"header\n\treturn 1",
+		9,
+		true,
+	)
+	require.True(t, natural)
+	require.Equal(t, "return 1", legacySuffix)
+}
+
+func TestJoinWithOverlapPreservesIndentedSuffix(t *testing.T) {
+	content, overlapSize := joinWithOverlapMode(
+		"header\n\treturn 1",
+		"next",
+		9,
+		14,
+		"\n",
+		false,
+	)
+	require.Equal(t, "\treturn 1\nnext", content)
+	require.Equal(t, 9, overlapSize)
+
+	legacyContent, legacyOverlapSize := joinWithOverlapMode(
+		"header\n\treturn 1",
+		"next",
+		9,
+		14,
+		"\n",
+		true,
+	)
+	require.Equal(t, "return 1\nnext", legacyContent)
+	require.Equal(t, 8, legacyOverlapSize)
+}
+
+func TestSourceChunkSeparatorsWhitespaceModes(t *testing.T) {
+	content := "before\n \t\nafter"
+	chunks := []string{"before", "after"}
+
+	separators := sourceChunkSeparators(content, chunks, "\n\n", false)
+	require.Equal(t, []string{"", "\n \t\n"}, separators)
+
+	legacySeparators := sourceChunkSeparators(
+		content,
+		chunks,
+		"\n\n",
+		true,
+	)
+	require.Equal(t, []string{"", "\n"}, legacySeparators)
+}
+
+func TestCoalesceWhitespaceChunks(t *testing.T) {
+	tests := []struct {
+		name           string
+		chunks         []string
+		firstChunkSize int
+		nextChunkSize  int
+		expected       []string
+	}{
+		{
+			name:           "long boundary whitespace",
+			chunks:         []string{"      ", "界ab", "   "},
+			firstChunkSize: 4,
+			nextChunkSize:  4,
+			expected:       []string{"   界", "ab  "},
+		},
+		{
+			name:           "preceding capacity avoids loss",
+			chunks:         []string{"A", "   ", "B"},
+			firstChunkSize: 4,
+			nextChunkSize:  3,
+			expected:       []string{"A ", "  B"},
+		},
+		{
+			name:           "long internal whitespace",
+			chunks:         []string{"A", "      ", "BC"},
+			firstChunkSize: 4,
+			nextChunkSize:  3,
+			expected:       []string{"A   ", "  B", "C"},
+		},
+		{
+			name:           "one rune budget",
+			chunks:         []string{"  ", "界", " \t"},
+			firstChunkSize: 1,
+			nextChunkSize:  1,
+			expected:       []string{"界"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			actual := coalesceWhitespaceChunks(
+				tt.chunks,
+				tt.firstChunkSize,
+				tt.nextChunkSize,
+			)
+			require.Equal(t, tt.expected, actual)
+			for i, content := range actual {
+				require.NotEmpty(t, strings.TrimSpace(content))
+				maxSize := tt.nextChunkSize
+				if i == 0 {
+					maxSize = tt.firstChunkSize
+				}
+				require.LessOrEqual(
+					t,
+					utf8.RuneCountInString(content),
+					maxSize,
+				)
+			}
+		})
+	}
+}
+
+func TestChunkingStrategiesNeverEmitWhitespaceOnlyChunks(t *testing.T) {
+	const (
+		chunkSize = 6
+		overlap   = 2
+	)
+	type chunker interface {
+		Chunk(*document.Document) ([]*document.Document, error)
+	}
+	type strategy struct {
+		name string
+		new  func(trimWhitespace bool, withOverlap bool) chunker
+	}
+	strategies := []strategy{
+		{
+			name: "fixed",
+			new: func(trimWhitespace bool, withOverlap bool) chunker {
+				options := []Option{WithChunkSize(chunkSize)}
+				if trimWhitespace {
+					options = append(options, WithWhitespaceTrimming())
+				}
+				if withOverlap {
+					options = append(options, WithOverlap(overlap))
+				}
+				return NewFixedSizeChunking(options...)
+			},
+		},
+		{
+			name: "recursive",
+			new: func(trimWhitespace bool, withOverlap bool) chunker {
+				options := []RecursiveOption{
+					WithRecursiveChunkSize(chunkSize),
+					WithRecursiveSeparators([]string{" ", ""}),
+				}
+				if trimWhitespace {
+					options = append(
+						options,
+						WithRecursiveWhitespaceTrimming(),
+					)
+				}
+				if withOverlap {
+					options = append(
+						options,
+						WithRecursiveOverlap(overlap),
+					)
+				}
+				return NewRecursiveChunking(options...)
+			},
+		},
+		{
+			name: "markdown",
+			new: func(trimWhitespace bool, withOverlap bool) chunker {
+				options := []MarkdownOption{
+					WithMarkdownChunkSize(chunkSize),
+				}
+				if trimWhitespace {
+					options = append(
+						options,
+						WithMarkdownWhitespaceTrimming(),
+					)
+				}
+				if withOverlap {
+					options = append(
+						options,
+						WithMarkdownOverlap(overlap),
+					)
+				}
+				return NewMarkdownChunking(options...)
+			},
+		},
+	}
+	contents := []string{
+		"          A          B          ",
+		"\t\t界\t\tA\t\t",
+		"     a",
+		"a     ",
+	}
+
+	for _, strategy := range strategies {
+		for _, trimWhitespace := range []bool{false, true} {
+			for _, withOverlap := range []bool{false, true} {
+				name := strategy.name
+				if trimWhitespace {
+					name += "/legacy"
+				} else {
+					name += "/preserve"
+				}
+				if withOverlap {
+					name += "/overlap"
+				} else {
+					name += "/no-overlap"
+				}
+				t.Run(name, func(t *testing.T) {
+					for _, content := range contents {
+						chunks, err := strategy.new(
+							trimWhitespace,
+							withOverlap,
+						).Chunk(&document.Document{Content: content})
+						require.NoError(t, err)
+						require.NotEmpty(t, chunks)
+						for _, chunk := range chunks {
+							require.NotEmpty(
+								t,
+								strings.TrimSpace(chunk.Content),
+							)
+							require.LessOrEqual(
+								t,
+								utf8.RuneCountInString(chunk.Content),
+								chunkSize,
+							)
+						}
+					}
+				})
+			}
+		}
 	}
 }
 

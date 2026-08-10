@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
@@ -86,12 +87,15 @@ func (c *Client) runScript(
 
 // sessionMeta is the session metadata structure for HashIdx.
 type sessionMeta struct {
-	ID        string           `json:"id"`
-	AppName   string           `json:"appName"`
-	UserID    string           `json:"userID"`
-	State     session.StateMap `json:"state"`
-	CreatedAt time.Time        `json:"createdAt"`
-	UpdatedAt time.Time        `json:"updatedAt"`
+	ID      string           `json:"id"`
+	AppName string           `json:"appName"`
+	UserID  string           `json:"userID"`
+	State   session.StateMap `json:"state"`
+	// Generation fences coordinated state initialization across session recreation.
+	// An empty value identifies a legacy record and is populated on first use.
+	Generation string    `json:"generation,omitempty"`
+	CreatedAt  time.Time `json:"createdAt"`
+	UpdatedAt  time.Time `json:"updatedAt"`
 }
 
 // CreateSession creates a new session using HashIdx logic.
@@ -111,12 +115,13 @@ func (c *Client) CreateSession(
 
 	now := time.Now()
 	meta := sessionMeta{
-		ID:        key.SessionID,
-		AppName:   key.AppName,
-		UserID:    key.UserID,
-		State:     copiedState,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:         key.SessionID,
+		AppName:    key.AppName,
+		UserID:     key.UserID,
+		State:      copiedState,
+		Generation: uuid.NewString(),
+		CreatedAt:  now,
+		UpdatedAt:  now,
 	}
 
 	metaJSON, err := json.Marshal(meta)
