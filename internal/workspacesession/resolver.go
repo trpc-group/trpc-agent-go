@@ -13,7 +13,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"sync/atomic"
+
+	"github.com/google/uuid"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
@@ -21,8 +22,6 @@ import (
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 )
-
-var ephemeralSessionSeq uint64
 
 // Resolver owns shared engine and session-workspace resolution for tools
 // that should operate on the same invocation workspace.
@@ -95,10 +94,13 @@ func (r *Resolver) CreateWorkspaceHandle(
 	sid := workspaceKey(ctx, name)
 	if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil && inv.Session != nil {
 		if strings.TrimSpace(inv.Session.ID) == "" {
-			sid = fmt.Sprintf(
-				"ephemeral-empty-session-%d",
-				atomic.AddUint64(&ephemeralSessionSeq, 1),
-			)
+			// Invalid (empty-ID) sessions must not share a workspace
+			// via the tool/skill name key. Use a random UUID suffix
+			// so each invalid session gets a unique workspace that is
+			// stable neither across processes nor across restarts —
+			// this prevents collisions with stale entries left by a
+			// previous process generation.
+			sid = fmt.Sprintf("ephemeral-empty-session-%s", uuid.NewString())
 		}
 	}
 	return reg.AcquireHandle(ctx, eng.Manager(), sid)

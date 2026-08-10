@@ -112,7 +112,7 @@ func (r *workspaceRuntime) RunProgram(
 		Cwd:     "", // cwd is already handled by `cd` in the command
 		Timeout: int64(timeout / time.Millisecond),
 	}
-	return r.executeRunCommand(ctx, sb, req)
+	return r.executeRunCommand(ctx, sb, req, spec.Timeout > 0)
 }
 
 // resolveRunTimeout normalizes and validates spec.Timeout against the
@@ -216,10 +216,14 @@ func buildRunCommand(
 
 // executeRunCommand runs a prepared RunCommandRequest with capped
 // stdout/stderr handlers and maps timeout/exit semantics.
+// timeoutRequested reports whether the caller explicitly set
+// RunProgramSpec.Timeout (> 0); when false, SIGKILL errors are not
+// classified as timeouts (they may be OOM kills, manual kills, etc.).
 func (r *workspaceRuntime) executeRunCommand(
 	ctx context.Context,
 	sb *osb.Sandbox,
 	req osb.RunCommandRequest,
+	timeoutRequested bool,
 ) (codeexecutor.RunResult, error) {
 	start := time.Now()
 	// Use ExecutionHandlers with SkipAccumulation to prevent the SDK
@@ -260,7 +264,13 @@ func (r *workspaceRuntime) executeRunCommand(
 		// for this path, so isTimeoutErr (which checks APIError) does
 		// not catch it. Detect the SIGKILL signature here so the
 		// RunProgramSpec.Timeout / RunResult.TimedOut contract holds.
-		if isExecdTimeoutError(exec.Error) {
+		//
+		// SIGKILL is not unique to timeouts (OOM killer, manual kill,
+		// etc. emit the same signal). Only classify as timeout when a
+		// per-command timeout was explicitly requested by the caller
+		// (spec.Timeout > 0); otherwise the kill is infrastructure,
+		// not a program timeout.
+		if timeoutRequested && isExecdTimeoutError(exec.Error) {
 			res.TimedOut = true
 		}
 		res.Stderr = formatExecutionError(exec.Error, res.Stderr)
@@ -634,16 +644,21 @@ func isTimeoutErr(err error) bool {
 	return false
 }
 
-// isExecdTimeoutError detects whether an SSE ExecutionError represents
-// a server-side command timeout. Real execd (v1.0.18+) kills the
+// isExecdTimeoutError detects whether an SSE ExecutionError is consistent
+// with a server-side command timeout. Real execd (v1.0.18+) kills the
 // process with SIGKILL when the timeout expires, reported as an SSE
 // error event with traceback containing "signal: killed". The v1.0.3
 // Go SDK returns a nil Go error for this path (only populating
 // exec.Error/exec.ExitCode), so isTimeoutErr (which checks APIError)
 // does not catch it.
 //
+// SIGKILL alone is not sufficient to classify as a timeout: the OOM
+// killer, manual kills, and sandbox teardowns produce the same signal.
+// Callers MUST gate on timeoutRequested (spec.Timeout > 0) before
+// treating a positive result as a timeout.
+//
 // Minimum compatible execd version: v1.0.18 (execd:v1.0.3 ignores the
-// SDK's timeout field entirely).
+// SDK's timeout field entirely; see WithExecutionTimeout docs).
 func isExecdTimeoutError(e *osb.ExecutionError) bool {
 	if e == nil {
 		return false

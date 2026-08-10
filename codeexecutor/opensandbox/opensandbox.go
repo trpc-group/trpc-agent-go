@@ -112,6 +112,13 @@ func WithRequestTimeout(t time.Duration) Option {
 // timeout (NewWithContext clamps requestTimeout to at least
 // executionTimeout + requestTimeoutBuffer) so streaming /command
 // calls can run for the full execution timeout.
+//
+// Compatibility: per-command timeout enforcement requires execd
+// v1.0.18 or later. Older execd versions (including v1.0.3) ignore
+// the SDK's timeout field, so RunResult.TimedOut may never be set
+// even when WithExecutionTimeout is configured. Ensure the deployed
+// OpenSandbox server meets this minimum version before relying on
+// timeout semantics.
 func WithExecutionTimeout(t time.Duration) Option {
 	return func(c *CodeExecutor) { c.executionTimeout = t }
 }

@@ -1176,6 +1176,32 @@ func TestRunProgram_ExecdSSETimeout_SetsTimedOut(t *testing.T) {
 	assert.Equal(t, -1, res.ExitCode)
 }
 
+// TestRunProgram_ExecdSIGKILL_NoTimeout_NotClassifiedAsTimeout verifies
+// that a SIGKILL SSE error is NOT classified as TimedOut when no
+// per-command timeout was requested (req.Timeout == 0). SIGKILL is not
+// unique to timeouts — the OOM killer, manual kills, and sandbox
+// teardowns produce the same signal.
+func TestRunProgram_ExecdSIGKILL_NoTimeout_NotClassifiedAsTimeout(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	ex := newTestExecutor(t, m)
+	defer ex.Close()
+
+	ws, err := ex.CreateWorkspace(context.Background(), "exec-sigkill-no-timeout", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	m.setExecutionError("CommandExecError", "-1", []string{"signal: killed"})
+
+	res, err := ex.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{
+		Cmd:  "sleep",
+		Args: []string{"2"},
+		// No Timeout: SIGKILL is infrastructure, not a program timeout.
+	})
+	require.NoError(t, err, "SSE error path returns nil Go error")
+	assert.False(t, res.TimedOut, "SIGKILL without req.Timeout must not be classified as timeout")
+	assert.Equal(t, -1, res.ExitCode)
+}
+
 func TestWorkspace_CreateWorkspace_RunBashError(t *testing.T) {
 	m := newMockServer(t)
 	defer m.close()

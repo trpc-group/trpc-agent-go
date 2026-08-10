@@ -328,13 +328,14 @@ func (r *WorkspaceRegistry) Release(
 			if _, err := waitWorkspaceCreate(ctx, call); err != nil {
 				// Creation runs with WithoutCancel, so a canceled
 				// wait does not mean creation failed. A live entry
-				// may still be installed later; do not report nil.
+				// may still be installed later. If creation has
+				// finished, re-loop to clean up the installed entry
+				// (do not report success — the workspace may leak).
+				// If creation is still in flight, return ctx.Err().
 				select {
 				case <-call.done:
-					// Creation finished (with error): nothing to release.
-					return nil
+					continue
 				default:
-					// Creation still in flight; release did not complete.
 					return ctx.Err()
 				}
 			}
@@ -400,13 +401,14 @@ func (r *WorkspaceRegistry) ReleaseHandle(
 			if _, err := waitWorkspaceCreate(ctx, call); err != nil {
 				// Creation runs with WithoutCancel, so a canceled
 				// wait does not mean creation failed. A live entry
-				// may still be installed later; do not report nil.
+				// may still be installed later. If creation has
+				// finished, re-loop to clean up the installed entry
+				// (do not report success — the workspace may leak).
+				// If creation is still in flight, return ctx.Err().
 				select {
 				case <-call.done:
-					// Creation finished (with error): nothing to release.
-					return nil
+					continue
 				default:
-					// Creation still in flight; release did not complete.
 					return ctx.Err()
 				}
 			}

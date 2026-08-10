@@ -13,6 +13,7 @@ package skill
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -227,7 +228,14 @@ func TestRunTool_Call_DeniedCommandRejectedBeforeMutation(t *testing.T) {
 	writeSkill(t, root, testSkillName)
 	repo, err := skill.NewFSRepository(root)
 	require.NoError(t, err)
-	rt := NewRunTool(repo, localexec.New())
+
+	tracker := &mutationTrackerEngine{
+		Engine: localexec.New().Engine(),
+	}
+	rt := NewRunTool(
+		repo,
+		&engineProviderExecutor{engine: tracker},
+	)
 	rt.deniedCmds = map[string]struct{}{"rm": {}}
 
 	args := runInput{
@@ -241,6 +249,142 @@ func TestRunTool_Call_DeniedCommandRejectedBeforeMutation(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "denied",
 		"denied command must be rejected before workspace staging")
+
+	// Assert no workspace mutation methods were called after denial.
+	tracker.assertNoMutations(t)
+}
+
+// mutationTrackerEngine wraps an Engine and records whether any
+// mutating operations (CreateWorkspace, PutFiles, StageInputs,
+// StageDirectory) were invoked.
+type mutationTrackerEngine struct {
+	codeexecutor.Engine
+	mgr       *mutationTrackerManager
+	fsTracker *mutationTrackerFS
+	mu        sync.Mutex
+}
+
+func (e *mutationTrackerEngine) Manager() codeexecutor.WorkspaceManager {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.mgr == nil {
+		e.mgr = &mutationTrackerManager{
+			WorkspaceManager: e.Engine.Manager(),
+		}
+	}
+	return e.mgr
+}
+
+func (e *mutationTrackerEngine) FS() codeexecutor.WorkspaceFS {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.fsTracker == nil {
+		e.fsTracker = &mutationTrackerFS{WorkspaceFS: e.Engine.FS()}
+	}
+	return e.fsTracker
+}
+
+func (e *mutationTrackerEngine) assertNoMutations(t *testing.T) {
+	t.Helper()
+	e.mu.Lock()
+	mgr := e.mgr
+	fs := e.fsTracker
+	e.mu.Unlock()
+	if mgr != nil {
+		mgr.assertNoCreate(t)
+	}
+	if fs != nil {
+		fs.assertNoFileMutations(t)
+	}
+}
+
+// mutationTrackerManager records CreateWorkspace calls.
+type mutationTrackerManager struct {
+	codeexecutor.WorkspaceManager
+	createCount int
+	mu          sync.Mutex
+}
+
+func (m *mutationTrackerManager) CreateWorkspace(
+	ctx context.Context, execID string, pol codeexecutor.WorkspacePolicy,
+) (codeexecutor.Workspace, error) {
+	m.mu.Lock()
+	m.createCount++
+	m.mu.Unlock()
+	return m.WorkspaceManager.CreateWorkspace(ctx, execID, pol)
+}
+
+func (m *mutationTrackerManager) assertNoCreate(t *testing.T) {
+	t.Helper()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	require.Zero(t, m.createCount,
+		"CreateWorkspace must not be called for a denied command")
+}
+
+// mutationTrackerFS records PutFiles, StageInputs, StageDirectory calls.
+type mutationTrackerFS struct {
+	codeexecutor.WorkspaceFS
+	putFilesCount    int
+	stageInputsCount int
+	stageDirCount    int
+	mu               sync.Mutex
+}
+
+func (f *mutationTrackerFS) PutFiles(
+	ctx context.Context, ws codeexecutor.Workspace, files []codeexecutor.PutFile,
+) error {
+	f.mu.Lock()
+	f.putFilesCount++
+	f.mu.Unlock()
+	return f.WorkspaceFS.PutFiles(ctx, ws, files)
+}
+
+func (f *mutationTrackerFS) StageInputs(
+	ctx context.Context, ws codeexecutor.Workspace, specs []codeexecutor.InputSpec,
+) error {
+	f.mu.Lock()
+	f.stageInputsCount++
+	f.mu.Unlock()
+	return f.WorkspaceFS.StageInputs(ctx, ws, specs)
+}
+
+func (f *mutationTrackerFS) StageDirectory(
+	ctx context.Context, ws codeexecutor.Workspace, src, to string, opt codeexecutor.StageOptions,
+) error {
+	f.mu.Lock()
+	f.stageDirCount++
+	f.mu.Unlock()
+	return f.WorkspaceFS.StageDirectory(ctx, ws, src, to, opt)
+}
+
+func (f *mutationTrackerFS) assertNoFileMutations(t *testing.T) {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	require.Zero(t, f.putFilesCount, "PutFiles must not be called for a denied command")
+	require.Zero(t, f.stageInputsCount, "StageInputs must not be called for a denied command")
+	require.Zero(t, f.stageDirCount, "StageDirectory must not be called for a denied command")
+}
+
+// engineProviderExecutor wraps an Engine so it satisfies
+// codeexecutor.CodeExecutor + EngineProvider for RunTool construction.
+// ExecuteCode is not used in preflight tests; it returns ErrNotSupported.
+type engineProviderExecutor struct {
+	engine codeexecutor.Engine
+}
+
+func (e *engineProviderExecutor) Engine() codeexecutor.Engine { return e.engine }
+
+func (e *engineProviderExecutor) ExecuteCode(
+	_ context.Context, _ codeexecutor.CodeExecutionInput,
+) (codeexecutor.CodeExecutionResult, error) {
+	return codeexecutor.CodeExecutionResult{}, errors.New(
+		"engineProviderExecutor: ExecuteCode not implemented")
+}
+
+func (e *engineProviderExecutor) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
+	return codeexecutor.CodeBlockDelimiter{}
 }
 
 func TestPreauthorizeSkillCommand_NilAndEdgeCases(t *testing.T) {

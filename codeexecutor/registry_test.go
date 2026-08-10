@@ -949,6 +949,54 @@ func TestWorkspaceRegistry_ReleaseHandle_ReturnsCanceledWhenCreateInFlight(t *te
 	require.NoError(t, <-acqDone)
 }
 
+// Regression: Release must not report success (nil) when the caller's
+// context is already canceled but creation has finished and installed
+// an entry. Previously, the select on call.done returned nil, leaking
+// the workspace. The fix re-loops to clean up the installed entry.
+func TestWorkspaceRegistry_Release_CanceledCtxCreateDone_CleansEntry(t *testing.T) {
+	r := NewWorkspaceRegistry()
+	wm := &secondCallBlocksWM{
+		secondEntered: make(chan struct{}),
+		releaseSecond: make(chan struct{}),
+	}
+	ctx := context.Background()
+
+	// First acquire succeeds; invalidate to force a second create.
+	h1, err := r.AcquireHandle(ctx, wm, "race-cancel")
+	require.NoError(t, err)
+	require.True(t, r.Invalidate(h1))
+
+	// Start a second acquire that blocks in CreateWorkspace.
+	acqDone := make(chan error, 1)
+	go func() {
+		_, err := r.AcquireHandle(ctx, wm, "race-cancel")
+		acqDone <- err
+	}()
+	<-wm.secondEntered
+
+	// Let creation finish so call.done is closed.
+	close(wm.releaseSecond)
+	require.NoError(t, <-acqDone)
+
+	// Now call Release with an already-canceled context. The old code
+	// returned nil (call.done was closed), leaking the entry. The fix
+	// re-loops and cleans up.
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err = r.Release(canceledCtx, "race-cancel")
+	// Release should clean up the entry despite the canceled context.
+	// It may return ctx.Err() if cleanup hasn't started yet, or nil if
+	// cleanup completed. Either way, the entry must not be leaked.
+	_ = err
+
+	// Give the detached cleanup goroutine time to run.
+	require.Eventually(t, func() bool {
+		_, ok := r.Get("race-cancel")
+		return !ok
+	}, 2*time.Second, 10*time.Millisecond,
+		"entry must be cleaned up, not leaked after canceled Release")
+}
+
 // TestWorkspaceRegistry_Acquire_RejectsNilManager verifies that Acquire and
 // AcquireHandle reject a nil WorkspaceManager. Without this, createWorkspace
 // would panic when calling m.CreateWorkspace, and Release would silently skip
