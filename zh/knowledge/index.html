@@ -1761,6 +1761,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#contextual-retrieval" class="md-nav__link">
+    <span class="md-ellipsis">
+      面向特定语料的 Contextual Retrieval 试验
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -3359,6 +3368,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#contextual-retrieval" class="md-nav__link">
+    <span class="md-ellipsis">
+      面向特定语料的 Contextual Retrieval 试验
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -4096,6 +4114,9 @@
 </tr>
 </tbody>
 </table>
+<h3 id="contextual-retrieval">面向特定语料的 Contextual Retrieval 试验</h3>
+<p><a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/contextual-retrieval">Contextual Retrieval 示例</a>基于现有公开的 <code>source.Source</code> 和 <code>document.Document.EmbeddingText</code> 契约，对比原始索引文本与加入上下文后的索引文本，同时仍向 Agent 返回原始 chunk 内容。</p>
+<p>这是按语料选择启用的评估方案，不是 Knowledge 的默认行为，也不代表对所有任务均有收益。配对试验需保持模型、Embedder、分块方式、向量存储、检索设置、查询集和评测协议一致；在将父文档发送给配置的上下文模型前，请先阅读示例中的数据处理和成本说明。</p>
 <h2 id="_18">更多内容</h2>
 <ul>
 <li><a href="vectorstore/">向量存储</a> - 配置各种向量数据库后端</li>
@@ -4131,7 +4152,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年8月3日 02:17:02 UTC">2026-08-03 02:17:02</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年8月10日 09:58:31 UTC">2026-08-10 09:58:31</span>
   </span>
 
     
