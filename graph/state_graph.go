@@ -5587,6 +5587,7 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 		return out, nil
 	}
 	results := make(chan result, len(pendingCalls))
+	traceRecorder := &graphToolTraceRecorder{}
 	var wg sync.WaitGroup
 	wg.Add(len(pendingCalls))
 
@@ -5606,6 +5607,7 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 				State:         config.State,
 				RetryPolicy:   config.RetryPolicy,
 				Concurrency:   config.Concurrency,
+				TraceRecorder: traceRecorder,
 			})
 			// On error, cancel siblings but still report result so collector can exit cleanly.
 			if err != nil {
@@ -5639,6 +5641,7 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 			completedThisRun[completedKey] = r.msg
 		}
 	}
+	traceRecorder.flush(ctx)
 	cancelCause, _ := context.Cause(ctx).(*parallelToolCallCancelCause)
 	var causalError error
 	if cancelCause != nil && cancelCause.owner == cancelOwner {
@@ -5797,6 +5800,7 @@ type singleToolCallConfig struct {
 	State         State
 	RetryPolicy   *tool.RetryPolicy
 	Concurrency   *toolcall.Limiter
+	TraceRecorder *graphToolTraceRecorder
 }
 
 // executeSingleToolCall executes a single tool call with event emission.
@@ -5931,6 +5935,8 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 				finalCtx,
 				traceInvocation,
 				traceStepID,
+				config.TraceRecorder,
+				config.ToolCallIndex,
 				name,
 				id,
 				modifiedArgs,
@@ -5946,6 +5952,8 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 			finalCtx,
 			traceInvocation,
 			traceStepID,
+			config.TraceRecorder,
+			config.ToolCallIndex,
 			name,
 			id,
 			modifiedArgs,
@@ -5966,6 +5974,8 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 			finalCtx,
 			traceInvocation,
 			traceStepID,
+			config.TraceRecorder,
+			config.ToolCallIndex,
 			name,
 			id,
 			modifiedArgs,
@@ -5979,6 +5989,8 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		finalCtx,
 		traceInvocation,
 		traceStepID,
+		config.TraceRecorder,
+		config.ToolCallIndex,
 		name,
 		id,
 		modifiedArgs,

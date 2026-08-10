@@ -831,6 +831,7 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsWithRequest(
 			eventChan,
 		)
 		if err != nil {
+			recordExecutionTraceToolResults(ctx, invocation, toolResults, mergedEvent)
 			return mergedEvent, err
 		}
 		if err := p.applyAfterToolMessagesHooks(
@@ -1001,6 +1002,9 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallelAndEmitPerCall
 	for result := range resultChan {
 		received++
 		if result.err != nil {
+			if result.event != nil {
+				traceResults[result.index] = result
+			}
 			if _, isStop := agent.AsStopError(result.err); isStop {
 				if _, alreadyStop := agent.AsStopError(toolErr); !alreadyStop {
 					toolErr = result.err
@@ -1056,6 +1060,12 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallelAndEmitPerCall
 		traceResults[result.index] = result
 	}
 	if err := firstNonNilErr(toolErr, processingErr, wait()); err != nil {
+		recordExecutionTraceToolResults(
+			ctx,
+			invocation,
+			p.compactToolResults(traceResults),
+			nil,
+		)
 		return lastEvent, p.finalizeToolRoundError(
 			ctx,
 			invocation,

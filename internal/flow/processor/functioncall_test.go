@@ -202,17 +202,23 @@ func TestFunctionCallResponseProcessor_RecordsExecutionTraceToolErrors(t *testin
 func TestFunctionCallResponseProcessor_RecordsParallelPerCallTraceToolsInCallOrder(t *testing.T) {
 	inv, ctx := newExecutionTraceProcessorInvocation(t)
 	inv.RunOptions.ToolResultEventPerCallEnabled = true
+	fastDone := make(chan struct{})
 	tools := map[string]tool.Tool{
 		"slow": &mockCallableTool{
 			declaration: &tool.Declaration{Name: "slow"},
-			callFn: func(context.Context, []byte) (any, error) {
-				time.Sleep(20 * time.Millisecond)
+			callFn: func(ctx context.Context, _ []byte) (any, error) {
+				select {
+				case <-fastDone:
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
 				return "slow result", nil
 			},
 		},
 		"fast": &mockCallableTool{
 			declaration: &tool.Declaration{Name: "fast"},
 			callFn: func(context.Context, []byte) (any, error) {
+				close(fastDone)
 				return "fast result", nil
 			},
 		},
@@ -231,6 +237,50 @@ func TestFunctionCallResponseProcessor_RecordsParallelPerCallTraceToolsInCallOrd
 	require.Equal(t, "fast", executionTrace.Steps[0].Tools[1].Name)
 	require.Equal(t, "slow result", executionTrace.Steps[0].Tools[0].Result)
 	require.Equal(t, "fast result", executionTrace.Steps[0].Tools[1].Result)
+}
+
+func TestFunctionCallResponseProcessor_RecordsParallelTerminalToolErrors(t *testing.T) {
+	inv, ctx := newExecutionTraceProcessorInvocation(t)
+	tools := map[string]tool.Tool{
+		"stop": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "stop"},
+			callFn: func(context.Context, []byte) (any, error) {
+				return nil, agent.NewStopError("stop now")
+			},
+		},
+		"ok": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "ok"},
+			callFn: func(context.Context, []byte) (any, error) {
+				return "ok", nil
+			},
+		},
+	}
+	rsp := &model.Response{Choices: []model.Choice{{Message: model.Message{ToolCalls: []model.ToolCall{
+		{ID: "call-stop", Function: model.FunctionDefinitionParam{Name: "stop", Arguments: []byte(`{"index":0}`)}},
+		{ID: "call-ok", Function: model.FunctionDefinitionParam{Name: "ok", Arguments: []byte(`{"index":1}`)}},
+	}}}}}
+	_, err := NewFunctionCallResponseProcessor(true, nil).handleFunctionCalls(
+		ctx,
+		inv,
+		rsp,
+		tools,
+		nil,
+	)
+	require.Error(t, err)
+	executionTrace := agent.BuildExecutionTrace(inv, atrace.TraceStatusFailed)
+	require.NotNil(t, executionTrace)
+	require.Len(t, executionTrace.Steps, 1)
+	var stopTool atrace.Tool
+	for _, recordedTool := range executionTrace.Steps[0].Tools {
+		if recordedTool.ID == "call-stop" {
+			stopTool = recordedTool
+			break
+		}
+	}
+	require.Equal(t, "stop", stopTool.Name)
+	require.Equal(t, map[string]any{"index": float64(0)}, stopTool.Arguments)
+	require.Contains(t, stopTool.Error, "stop now")
+	require.Empty(t, stopTool.Result)
 }
 
 func newExecutionTraceProcessorInvocation(t *testing.T) (*agent.Invocation, context.Context) {

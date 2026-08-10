@@ -297,6 +297,58 @@ func TestExecuteSingleToolCall_RecordsExecutionTraceToolError(t *testing.T) {
 	require.Empty(t, executionTrace.Steps[0].Skills)
 }
 
+func TestProcessToolCalls_RecordsParallelExecutionTraceToolsInCallOrder(t *testing.T) {
+	inv, ctx, stepID := newGraphExecutionTraceInvocation(t)
+	fastDone := make(chan struct{})
+	tools := map[string]tool.Tool{
+		"slow": &retryTool{
+			name: "slow",
+			callFn: func(ctx context.Context, _ []byte) (any, error) {
+				select {
+				case <-fastDone:
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+				return "slow result", nil
+			},
+		},
+		"fast": &retryTool{
+			name: "fast",
+			callFn: func(context.Context, []byte) (any, error) {
+				close(fastDone)
+				return "fast result", nil
+			},
+		},
+	}
+	msgs, err := processToolCalls(ctx, toolCallsConfig{
+		ToolCalls:      makeToolCalls("slow", "fast"),
+		Tools:          tools,
+		InvocationID:   "inv-1",
+		Span:           oteltrace.SpanFromContext(ctx),
+		State:          State{currentTraceStepIDStateKey: stepID},
+		EnableParallel: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	executionTrace := agent.BuildExecutionTrace(inv, atrace.TraceStatusCompleted)
+	require.NotNil(t, executionTrace)
+	require.Len(t, executionTrace.Steps, 1)
+	require.Equal(t, []atrace.Tool{
+		{
+			ID:        "call_slow",
+			Name:      "slow",
+			Arguments: map[string]any{},
+			Result:    "slow result",
+		},
+		{
+			ID:        "call_fast",
+			Name:      "fast",
+			Arguments: map[string]any{},
+			Result:    "fast result",
+		},
+	}, executionTrace.Steps[0].Tools)
+}
+
 func newGraphExecutionTraceInvocation(t *testing.T) (*agent.Invocation, context.Context, string) {
 	t.Helper()
 	inv := agent.NewInvocation(
