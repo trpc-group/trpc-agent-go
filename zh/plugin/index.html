@@ -1352,6 +1352,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#toolerror" class="md-nav__link">
+    <span class="md-ellipsis">
+      ToolError（工具错误标准化）
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#guardrail" class="md-nav__link">
     <span class="md-ellipsis">
       Guardrail（护栏）
@@ -3652,6 +3661,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#toolerror" class="md-nav__link">
+    <span class="md-ellipsis">
+      ToolError（工具错误标准化）
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#guardrail" class="md-nav__link">
     <span class="md-ellipsis">
       Guardrail（护栏）
@@ -4580,6 +4598,103 @@ message。适合用来实现全局策略或统一行为（例如安全约束、�
 <p>该插件挂载在 <code>AfterModel</code>，会在最终可用的 tool call ID 上做统一改写。改写完成后，框架后续处理会继续使用该 ID。</p>
 <p>如果其他插件也在 <code>AfterModel</code> 阶段依赖最终 <code>ToolCall.ID</code>，应把 <code>toolcallid.New()</code> 放在它们前面。</p>
 <p>完整示例见 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/toolcallid">examples/toolcallid</a>。</p>
+<h3 id="toolerror">ToolError（工具错误标准化）</h3>
+<p><code>plugin/toolerror</code> 下的 <code>toolerror.New(opts...)</code> 会校验模型生成的工具参数，并把可恢复的
+工具调用失败转换成稳定的 JSON 工具结果。该插件默认不启用，只有通过 Runner 显式注册
+后才会改变工具调用行为。</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-15-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-15-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-15-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-15-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-15-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-15-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-15-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-15-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-15-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-15-10">10</a></span>
+<span class="normal"><a href="#__codelineno-15-11">11</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/plugin/toolerror&quot;</span>
+</span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
+</span><span id="__span-15-4"><a id="__codelineno-15-4" name="__codelineno-15-4"></a><span class="p">)</span>
+</span><span id="__span-15-5"><a id="__codelineno-15-5" name="__codelineno-15-5"></a>
+</span><span id="__span-15-6"><a id="__codelineno-15-6" name="__codelineno-15-6"></a><span class="nx">runnerInstance</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span>
+</span><span id="__span-15-7"><a id="__codelineno-15-7" name="__codelineno-15-7"></a><span class="w">    </span><span class="s">&quot;my-app&quot;</span><span class="p">,</span>
+</span><span id="__span-15-8"><a id="__codelineno-15-8" name="__codelineno-15-8"></a><span class="w">    </span><span class="nx">agentInstance</span><span class="p">,</span>
+</span><span id="__span-15-9"><a id="__codelineno-15-9" name="__codelineno-15-9"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithPlugins</span><span class="p">(</span><span class="nx">toolerror</span><span class="p">.</span><span class="nx">New</span><span class="p">()),</span>
+</span><span id="__span-15-10"><a id="__codelineno-15-10" name="__codelineno-15-10"></a><span class="p">)</span>
+</span><span id="__span-15-11"><a id="__codelineno-15-11" name="__codelineno-15-11"></a><span class="k">defer</span><span class="w"> </span><span class="nx">runnerInstance</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
+</span></code></pre></div></td></tr></table></div>
+<p>插件通过 <code>BeforeTool</code> 校验 <code>Declaration.InputSchema</code>；如果当前 Invocation 开启了工具参数
+JSON repair，校验发生在 repair 之后。无效 JSON，以及 <code>required</code>、<code>type</code>、<code>enum</code>、
+<code>pattern</code>、<code>additionalProperties</code> 等 Schema 约束失败会直接短路调用，不再执行工具。
+插件支持本地 <code>$defs</code> 引用；外部 <code>$ref</code> 引用会被拒绝并归类为 <code>invalid_schema</code>。工具返回
+的非 <code>nil error</code> 会在 <code>AfterTool</code> 中分类；框架生成的未知工具名消息则会在工具
+结果事件发出前完成标准化。错误 envelope 会跳过工具配置的 result formatter，因为它
+替换的是工具声明的成功输出，而不是该输出类型的一个成功值。错误 envelope 也会跳过
+工具的 state-delta provider，避免把被拒绝或执行失败的调用按成功结果持久化。</p>
+<p>插件处理的失败采用以下 envelope；成功的工具结果保持原样：</p>
+<div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-16-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-16-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-16-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-16-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-16-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-16-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-16-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-16-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-16-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-16-10">10</a></span>
+<span class="normal"><a href="#__codelineno-16-11">11</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1"></a><span class="p">{</span>
+</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2"></a><span class="w">  </span><span class="nt">&quot;ok&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+</span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3"></a><span class="w">  </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-16-4"><a id="__codelineno-16-4" name="__codelineno-16-4"></a><span class="w">    </span><span class="nt">&quot;source&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;model&quot;</span><span class="p">,</span>
+</span><span id="__span-16-5"><a id="__codelineno-16-5" name="__codelineno-16-5"></a><span class="w">    </span><span class="nt">&quot;kind&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;invalid_arguments&quot;</span><span class="p">,</span>
+</span><span id="__span-16-6"><a id="__codelineno-16-6" name="__codelineno-16-6"></a><span class="w">    </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;required&quot;</span><span class="p">,</span>
+</span><span id="__span-16-7"><a id="__codelineno-16-7" name="__codelineno-16-7"></a><span class="w">    </span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;at &#39;&#39;: missing property &#39;query&#39;&quot;</span><span class="p">,</span>
+</span><span id="__span-16-8"><a id="__codelineno-16-8" name="__codelineno-16-8"></a><span class="w">    </span><span class="nt">&quot;param&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/query&quot;</span><span class="p">,</span>
+</span><span id="__span-16-9"><a id="__codelineno-16-9" name="__codelineno-16-9"></a><span class="w">    </span><span class="nt">&quot;retryable&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-16-10"><a id="__codelineno-16-10" name="__codelineno-16-10"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span-16-11"><a id="__codelineno-16-11" name="__codelineno-16-11"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p><code>error.source</code> 用于区分 <code>model</code>、<code>tool</code> 和 <code>framework</code>；<code>error.kind</code> 是稳定的一级分类，
+<code>error.code</code> 是更具体的原因，JSON Schema 关键字统一使用 snake_case；<code>error.param</code>
+如果存在，使用 JSON Pointer 指向出错参数。每个失败仍作为对应 Tool Call 自己的结果
+返回，不会上升为整轮 Run 的 <code>Response.Error</code>，因此并行调用时可以保留其他工具的成功
+结果。</p>
+<p>默认执行错误分类器只处理非 <code>nil</code> 的 Go error。error 通过 <code>ErrorCode()</code> 或 <code>Code()</code>
+携带的错误码会保留在 envelope 中。如果一个工具通过普通 result 表达业务失败、同时
+返回 <code>nil error</code>，应优先让工具返回 typed error，或者配置 Resolver：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-17-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-17-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-17-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-17-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-17-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-17-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-17-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-17-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-17-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-17-10">10</a></span>
+<span class="normal"><a href="#__codelineno-17-11">11</a></span>
+<span class="normal"><a href="#__codelineno-17-12">12</a></span>
+<span class="normal"><a href="#__codelineno-17-13">13</a></span>
+<span class="normal"><a href="#__codelineno-17-14">14</a></span>
+<span class="normal"><a href="#__codelineno-17-15">15</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1"></a><span class="nx">normalizer</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">toolerror</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">toolerror</span><span class="p">.</span><span class="nx">WithResolver</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span>
+</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2"></a><span class="w">    </span><span class="nx">_</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span>
+</span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3"></a><span class="w">    </span><span class="nx">args</span><span class="w"> </span><span class="o">*</span><span class="nx">tool</span><span class="p">.</span><span class="nx">AfterToolArgs</span><span class="p">,</span>
+</span><span id="__span-17-4"><a id="__codelineno-17-4" name="__codelineno-17-4"></a><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">toolerror</span><span class="p">.</span><span class="nx">Details</span><span class="p">,</span><span class="w"> </span><span class="kt">bool</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-17-5"><a id="__codelineno-17-5" name="__codelineno-17-5"></a><span class="w">    </span><span class="nx">result</span><span class="p">,</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">args</span><span class="p">.</span><span class="nx">Result</span><span class="p">.(</span><span class="nx">SearchResult</span><span class="p">)</span>
+</span><span id="__span-17-6"><a id="__codelineno-17-6" name="__codelineno-17-6"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">!</span><span class="nx">ok</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nx">result</span><span class="p">.</span><span class="nx">Status</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="s">&quot;error&quot;</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-17-7"><a id="__codelineno-17-7" name="__codelineno-17-7"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">toolerror</span><span class="p">.</span><span class="nx">Details</span><span class="p">{},</span><span class="w"> </span><span class="kc">false</span>
+</span><span id="__span-17-8"><a id="__codelineno-17-8" name="__codelineno-17-8"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-17-9"><a id="__codelineno-17-9" name="__codelineno-17-9"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">toolerror</span><span class="p">.</span><span class="nx">Details</span><span class="p">{</span>
+</span><span id="__span-17-10"><a id="__codelineno-17-10" name="__codelineno-17-10"></a><span class="w">        </span><span class="nx">Source</span><span class="p">:</span><span class="w">  </span><span class="nx">toolerror</span><span class="p">.</span><span class="nx">SourceTool</span><span class="p">,</span>
+</span><span id="__span-17-11"><a id="__codelineno-17-11" name="__codelineno-17-11"></a><span class="w">        </span><span class="nx">Kind</span><span class="p">:</span><span class="w">    </span><span class="nx">toolerror</span><span class="p">.</span><span class="nx">KindExecution</span><span class="p">,</span>
+</span><span id="__span-17-12"><a id="__codelineno-17-12" name="__codelineno-17-12"></a><span class="w">        </span><span class="nx">Code</span><span class="p">:</span><span class="w">    </span><span class="nx">result</span><span class="p">.</span><span class="nx">Code</span><span class="p">,</span>
+</span><span id="__span-17-13"><a id="__codelineno-17-13" name="__codelineno-17-13"></a><span class="w">        </span><span class="nx">Message</span><span class="p">:</span><span class="w"> </span><span class="nx">result</span><span class="p">.</span><span class="nx">Message</span><span class="p">,</span>
+</span><span id="__span-17-14"><a id="__codelineno-17-14" name="__codelineno-17-14"></a><span class="w">    </span><span class="p">},</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-17-15"><a id="__codelineno-17-15" name="__codelineno-17-15"></a><span class="p">}))</span>
+</span></code></pre></div></td></tr></table></div>
+<p>如果还有其他插件会改写模型可见的工具结果消息，请把 ToolError 插件注册在前面，让后续
+插件读取已经标准化的 envelope。</p>
 <h3 id="guardrail">Guardrail（护栏）</h3>
 <p><code>plugin/guardrail</code> 下的 <code>guardrail.New(...)</code> 是顶层插件入口，用来把一个或多个护栏能力接到 Runner 上。</p>
 <p>当前内置的 capability 包括：</p>
@@ -4614,21 +4729,21 @@ message。适合用来实现全局策略或统一行为（例如安全约束、�
 </tbody>
 </table>
 <p>一个典型的顶层组合方式如下：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-15-1">1</a></span>
-<span class="normal"><a href="#__codelineno-15-2">2</a></span>
-<span class="normal"><a href="#__codelineno-15-3">3</a></span>
-<span class="normal"><a href="#__codelineno-15-4">4</a></span>
-<span class="normal"><a href="#__codelineno-15-5">5</a></span>
-<span class="normal"><a href="#__codelineno-15-6">6</a></span>
-<span class="normal"><a href="#__codelineno-15-7">7</a></span>
-<span class="normal"><a href="#__codelineno-15-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1"></a><span class="nx">guardrailPlugin</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">guardrail</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2"></a><span class="w">    </span><span class="nx">guardrail</span><span class="p">.</span><span class="nx">WithApproval</span><span class="p">(</span><span class="nx">approvalPlugin</span><span class="p">),</span>
-</span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3"></a><span class="w">    </span><span class="nx">guardrail</span><span class="p">.</span><span class="nx">WithPromptInjection</span><span class="p">(</span><span class="nx">promptInjectionPlugin</span><span class="p">),</span>
-</span><span id="__span-15-4"><a id="__codelineno-15-4" name="__codelineno-15-4"></a><span class="w">    </span><span class="nx">guardrail</span><span class="p">.</span><span class="nx">WithUnsafeIntent</span><span class="p">(</span><span class="nx">unsafeIntentPlugin</span><span class="p">),</span>
-</span><span id="__span-15-5"><a id="__codelineno-15-5" name="__codelineno-15-5"></a><span class="p">)</span>
-</span><span id="__span-15-6"><a id="__codelineno-15-6" name="__codelineno-15-6"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-15-7"><a id="__codelineno-15-7" name="__codelineno-15-7"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
-</span><span id="__span-15-8"><a id="__codelineno-15-8" name="__codelineno-15-8"></a><span class="p">}</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-18-1">1</a></span>
+<span class="normal"><a href="#__codelineno-18-2">2</a></span>
+<span class="normal"><a href="#__codelineno-18-3">3</a></span>
+<span class="normal"><a href="#__codelineno-18-4">4</a></span>
+<span class="normal"><a href="#__codelineno-18-5">5</a></span>
+<span class="normal"><a href="#__codelineno-18-6">6</a></span>
+<span class="normal"><a href="#__codelineno-18-7">7</a></span>
+<span class="normal"><a href="#__codelineno-18-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1"></a><span class="nx">guardrailPlugin</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">guardrail</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2"></a><span class="w">    </span><span class="nx">guardrail</span><span class="p">.</span><span class="nx">WithApproval</span><span class="p">(</span><span class="nx">approvalPlugin</span><span class="p">),</span>
+</span><span id="__span-18-3"><a id="__codelineno-18-3" name="__codelineno-18-3"></a><span class="w">    </span><span class="nx">guardrail</span><span class="p">.</span><span class="nx">WithPromptInjection</span><span class="p">(</span><span class="nx">promptInjectionPlugin</span><span class="p">),</span>
+</span><span id="__span-18-4"><a id="__codelineno-18-4" name="__codelineno-18-4"></a><span class="w">    </span><span class="nx">guardrail</span><span class="p">.</span><span class="nx">WithUnsafeIntent</span><span class="p">(</span><span class="nx">unsafeIntentPlugin</span><span class="p">),</span>
+</span><span id="__span-18-5"><a id="__codelineno-18-5" name="__codelineno-18-5"></a><span class="p">)</span>
+</span><span id="__span-18-6"><a id="__codelineno-18-6" name="__codelineno-18-6"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-18-7"><a id="__codelineno-18-7" name="__codelineno-18-7"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-18-8"><a id="__codelineno-18-8" name="__codelineno-18-8"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>你可以只挂载其中任意一部分能力。<code>guardrail.New(...)</code> 也允许空构造，适合先把顶层插件挂好，再按需补 capability。</p>
 <h4 id="approval">Approval（审批）</h4>
@@ -4640,97 +4755,97 @@ message。适合用来实现全局策略或统一行为（例如安全约束、�
 <li>进入 reviewer 审批</li>
 </ul>
 <p>典型接法如下：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-16-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-16-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-16-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-16-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-16-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-16-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-16-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-16-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-16-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-16-10">10</a></span>
-<span class="normal"><a href="#__codelineno-16-11">11</a></span>
-<span class="normal"><a href="#__codelineno-16-12">12</a></span>
-<span class="normal"><a href="#__codelineno-16-13">13</a></span>
-<span class="normal"><a href="#__codelineno-16-14">14</a></span>
-<span class="normal"><a href="#__codelineno-16-15">15</a></span>
-<span class="normal"><a href="#__codelineno-16-16">16</a></span>
-<span class="normal"><a href="#__codelineno-16-17">17</a></span>
-<span class="normal"><a href="#__codelineno-16-18">18</a></span>
-<span class="normal"><a href="#__codelineno-16-19">19</a></span>
-<span class="normal"><a href="#__codelineno-16-20">20</a></span>
-<span class="normal"><a href="#__codelineno-16-21">21</a></span>
-<span class="normal"><a href="#__codelineno-16-22">22</a></span>
-<span class="normal"><a href="#__codelineno-16-23">23</a></span>
-<span class="normal"><a href="#__codelineno-16-24">24</a></span>
-<span class="normal"><a href="#__codelineno-16-25">25</a></span>
-<span class="normal"><a href="#__codelineno-16-26">26</a></span>
-<span class="normal"><a href="#__codelineno-16-27">27</a></span>
-<span class="normal"><a href="#__codelineno-16-28">28</a></span>
-<span class="normal"><a href="#__codelineno-16-29">29</a></span>
-<span class="normal"><a href="#__codelineno-16-30">30</a></span>
-<span class="normal"><a href="#__codelineno-16-31">31</a></span>
-<span class="normal"><a href="#__codelineno-16-32">32</a></span>
-<span class="normal"><a href="#__codelineno-16-33">33</a></span>
-<span class="normal"><a href="#__codelineno-16-34">34</a></span>
-<span class="normal"><a href="#__codelineno-16-35">35</a></span>
-<span class="normal"><a href="#__codelineno-16-36">36</a></span>
-<span class="normal"><a href="#__codelineno-16-37">37</a></span>
-<span class="normal"><a href="#__codelineno-16-38">38</a></span>
-<span class="normal"><a href="#__codelineno-16-39">39</a></span>
-<span class="normal"><a href="#__codelineno-16-40">40</a></span>
-<span class="normal"><a href="#__codelineno-16-41">41</a></span>
-<span class="normal"><a href="#__codelineno-16-42">42</a></span>
-<span class="normal"><a href="#__codelineno-16-43">43</a></span>
-<span class="normal"><a href="#__codelineno-16-44">44</a></span>
-<span class="normal"><a href="#__codelineno-16-45">45</a></span>
-<span class="normal"><a href="#__codelineno-16-46">46</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1"></a><span class="nx">modelInstance</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;gpt-5.4&quot;</span><span class="p">)</span>
-</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2"></a>
-</span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3"></a><span class="nx">reviewerRunner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span>
-</span><span id="__span-16-4"><a id="__codelineno-16-4" name="__codelineno-16-4"></a><span class="w">    </span><span class="s">&quot;guardrail-approval-reviewer-runner&quot;</span><span class="p">,</span>
-</span><span id="__span-16-5"><a id="__codelineno-16-5" name="__codelineno-16-5"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-16-6"><a id="__codelineno-16-6" name="__codelineno-16-6"></a><span class="w">        </span><span class="s">&quot;guardrail-approval-reviewer&quot;</span><span class="p">,</span>
-</span><span id="__span-16-7"><a id="__codelineno-16-7" name="__codelineno-16-7"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">modelInstance</span><span class="p">),</span>
-</span><span id="__span-16-8"><a id="__codelineno-16-8" name="__codelineno-16-8"></a><span class="w">    </span><span class="p">),</span>
-</span><span id="__span-16-9"><a id="__codelineno-16-9" name="__codelineno-16-9"></a><span class="p">)</span>
-</span><span id="__span-16-10"><a id="__codelineno-16-10" name="__codelineno-16-10"></a>
-</span><span id="__span-16-11"><a id="__codelineno-16-11" name="__codelineno-16-11"></a><span class="nx">reviewerInstance</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">review</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-16-12"><a id="__codelineno-16-12" name="__codelineno-16-12"></a><span class="w">    </span><span class="nx">reviewerRunner</span><span class="p">,</span>
-</span><span id="__span-16-13"><a id="__codelineno-16-13" name="__codelineno-16-13"></a><span class="w">    </span><span class="nx">review</span><span class="p">.</span><span class="nx">WithRiskThreshold</span><span class="p">(</span><span class="mi">80</span><span class="p">),</span>
-</span><span id="__span-16-14"><a id="__codelineno-16-14" name="__codelineno-16-14"></a><span class="p">)</span>
-</span><span id="__span-16-15"><a id="__codelineno-16-15" name="__codelineno-16-15"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-16-16"><a id="__codelineno-16-16" name="__codelineno-16-16"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
-</span><span id="__span-16-17"><a id="__codelineno-16-17" name="__codelineno-16-17"></a><span class="p">}</span>
-</span><span id="__span-16-18"><a id="__codelineno-16-18" name="__codelineno-16-18"></a>
-</span><span id="__span-16-19"><a id="__codelineno-16-19" name="__codelineno-16-19"></a><span class="nx">approvalPlugin</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">approval</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-16-20"><a id="__codelineno-16-20" name="__codelineno-16-20"></a><span class="w">    </span><span class="nx">approval</span><span class="p">.</span><span class="nx">WithReviewer</span><span class="p">(</span><span class="nx">reviewerInstance</span><span class="p">),</span>
-</span><span id="__span-16-21"><a id="__codelineno-16-21" name="__codelineno-16-21"></a><span class="w">    </span><span class="nx">approval</span><span class="p">.</span><span class="nx">WithToolPolicy</span><span class="p">(</span>
-</span><span id="__span-16-22"><a id="__codelineno-16-22" name="__codelineno-16-22"></a><span class="w">        </span><span class="s">&quot;hostexec_write_stdin&quot;</span><span class="p">,</span>
-</span><span id="__span-16-23"><a id="__codelineno-16-23" name="__codelineno-16-23"></a><span class="w">        </span><span class="nx">approval</span><span class="p">.</span><span class="nx">ToolPolicySkipApproval</span><span class="p">,</span>
-</span><span id="__span-16-24"><a id="__codelineno-16-24" name="__codelineno-16-24"></a><span class="w">    </span><span class="p">),</span>
-</span><span id="__span-16-25"><a id="__codelineno-16-25" name="__codelineno-16-25"></a><span class="w">    </span><span class="nx">approval</span><span class="p">.</span><span class="nx">WithToolPolicy</span><span class="p">(</span>
-</span><span id="__span-16-26"><a id="__codelineno-16-26" name="__codelineno-16-26"></a><span class="w">        </span><span class="s">&quot;hostexec_kill_session&quot;</span><span class="p">,</span>
-</span><span id="__span-16-27"><a id="__codelineno-16-27" name="__codelineno-16-27"></a><span class="w">        </span><span class="nx">approval</span><span class="p">.</span><span class="nx">ToolPolicyDenied</span><span class="p">,</span>
-</span><span id="__span-16-28"><a id="__codelineno-16-28" name="__codelineno-16-28"></a><span class="w">    </span><span class="p">),</span>
-</span><span id="__span-16-29"><a id="__codelineno-16-29" name="__codelineno-16-29"></a><span class="p">)</span>
-</span><span id="__span-16-30"><a id="__codelineno-16-30" name="__codelineno-16-30"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-16-31"><a id="__codelineno-16-31" name="__codelineno-16-31"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
-</span><span id="__span-16-32"><a id="__codelineno-16-32" name="__codelineno-16-32"></a><span class="p">}</span>
-</span><span id="__span-16-33"><a id="__codelineno-16-33" name="__codelineno-16-33"></a>
-</span><span id="__span-16-34"><a id="__codelineno-16-34" name="__codelineno-16-34"></a><span class="nx">guardrailPlugin</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">guardrail</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-16-35"><a id="__codelineno-16-35" name="__codelineno-16-35"></a><span class="w">    </span><span class="nx">guardrail</span><span class="p">.</span><span class="nx">WithApproval</span><span class="p">(</span><span class="nx">approvalPlugin</span><span class="p">),</span>
-</span><span id="__span-16-36"><a id="__codelineno-16-36" name="__codelineno-16-36"></a><span class="p">)</span>
-</span><span id="__span-16-37"><a id="__codelineno-16-37" name="__codelineno-16-37"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-16-38"><a id="__codelineno-16-38" name="__codelineno-16-38"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
-</span><span id="__span-16-39"><a id="__codelineno-16-39" name="__codelineno-16-39"></a><span class="p">}</span>
-</span><span id="__span-16-40"><a id="__codelineno-16-40" name="__codelineno-16-40"></a>
-</span><span id="__span-16-41"><a id="__codelineno-16-41" name="__codelineno-16-41"></a><span class="nx">runnerInstance</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span>
-</span><span id="__span-16-42"><a id="__codelineno-16-42" name="__codelineno-16-42"></a><span class="w">    </span><span class="s">&quot;guardrail-approval-demo&quot;</span><span class="p">,</span>
-</span><span id="__span-16-43"><a id="__codelineno-16-43" name="__codelineno-16-43"></a><span class="w">    </span><span class="nx">agentInstance</span><span class="p">,</span>
-</span><span id="__span-16-44"><a id="__codelineno-16-44" name="__codelineno-16-44"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithPlugins</span><span class="p">(</span><span class="nx">guardrailPlugin</span><span class="p">),</span>
-</span><span id="__span-16-45"><a id="__codelineno-16-45" name="__codelineno-16-45"></a><span class="p">)</span>
-</span><span id="__span-16-46"><a id="__codelineno-16-46" name="__codelineno-16-46"></a><span class="k">defer</span><span class="w"> </span><span class="nx">runnerInstance</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-19-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-19-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-19-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-19-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-19-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-19-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-19-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-19-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-19-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-19-10">10</a></span>
+<span class="normal"><a href="#__codelineno-19-11">11</a></span>
+<span class="normal"><a href="#__codelineno-19-12">12</a></span>
+<span class="normal"><a href="#__codelineno-19-13">13</a></span>
+<span class="normal"><a href="#__codelineno-19-14">14</a></span>
+<span class="normal"><a href="#__codelineno-19-15">15</a></span>
+<span class="normal"><a href="#__codelineno-19-16">16</a></span>
+<span class="normal"><a href="#__codelineno-19-17">17</a></span>
+<span class="normal"><a href="#__codelineno-19-18">18</a></span>
+<span class="normal"><a href="#__codelineno-19-19">19</a></span>
+<span class="normal"><a href="#__codelineno-19-20">20</a></span>
+<span class="normal"><a href="#__codelineno-19-21">21</a></span>
+<span class="normal"><a href="#__codelineno-19-22">22</a></span>
+<span class="normal"><a href="#__codelineno-19-23">23</a></span>
+<span class="normal"><a href="#__codelineno-19-24">24</a></span>
+<span class="normal"><a href="#__codelineno-19-25">25</a></span>
+<span class="normal"><a href="#__codelineno-19-26">26</a></span>
+<span class="normal"><a href="#__codelineno-19-27">27</a></span>
+<span class="normal"><a href="#__codelineno-19-28">28</a></span>
+<span class="normal"><a href="#__codelineno-19-29">29</a></span>
+<span class="normal"><a href="#__codelineno-19-30">30</a></span>
+<span class="normal"><a href="#__codelineno-19-31">31</a></span>
+<span class="normal"><a href="#__codelineno-19-32">32</a></span>
+<span class="normal"><a href="#__codelineno-19-33">33</a></span>
+<span class="normal"><a href="#__codelineno-19-34">34</a></span>
+<span class="normal"><a href="#__codelineno-19-35">35</a></span>
+<span class="normal"><a href="#__codelineno-19-36">36</a></span>
+<span class="normal"><a href="#__codelineno-19-37">37</a></span>
+<span class="normal"><a href="#__codelineno-19-38">38</a></span>
+<span class="normal"><a href="#__codelineno-19-39">39</a></span>
+<span class="normal"><a href="#__codelineno-19-40">40</a></span>
+<span class="normal"><a href="#__codelineno-19-41">41</a></span>
+<span class="normal"><a href="#__codelineno-19-42">42</a></span>
+<span class="normal"><a href="#__codelineno-19-43">43</a></span>
+<span class="normal"><a href="#__codelineno-19-44">44</a></span>
+<span class="normal"><a href="#__codelineno-19-45">45</a></span>
+<span class="normal"><a href="#__codelineno-19-46">46</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1"></a><span class="nx">modelInstance</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;gpt-5.4&quot;</span><span class="p">)</span>
+</span><span id="__span-19-2"><a id="__codelineno-19-2" name="__codelineno-19-2"></a>
+</span><span id="__span-19-3"><a id="__codelineno-19-3" name="__codelineno-19-3"></a><span class="nx">reviewerRunner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span>
+</span><span id="__span-19-4"><a id="__codelineno-19-4" name="__codelineno-19-4"></a><span class="w">    </span><span class="s">&quot;guardrail-approval-reviewer-runner&quot;</span><span class="p">,</span>
+</span><span id="__span-19-5"><a id="__codelineno-19-5" name="__codelineno-19-5"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-19-6"><a id="__codelineno-19-6" name="__codelineno-19-6"></a><span class="w">        </span><span class="s">&quot;guardrail-approval-reviewer&quot;</span><span class="p">,</span>
+</span><span id="__span-19-7"><a id="__codelineno-19-7" name="__codelineno-19-7"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">modelInstance</span><span class="p">),</span>
+</span><span id="__span-19-8"><a id="__codelineno-19-8" name="__codelineno-19-8"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-19-9"><a id="__codelineno-19-9" name="__codelineno-19-9"></a><span class="p">)</span>
+</span><span id="__span-19-10"><a id="__codelineno-19-10" name="__codelineno-19-10"></a>
+</span><span id="__span-19-11"><a id="__codelineno-19-11" name="__codelineno-19-11"></a><span class="nx">reviewerInstance</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">review</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-19-12"><a id="__codelineno-19-12" name="__codelineno-19-12"></a><span class="w">    </span><span class="nx">reviewerRunner</span><span class="p">,</span>
+</span><span id="__span-19-13"><a id="__codelineno-19-13" name="__codelineno-19-13"></a><span class="w">    </span><span class="nx">review</span><span class="p">.</span><span class="nx">WithRiskThreshold</span><span class="p">(</span><span class="mi">80</span><span class="p">),</span>
+</span><span id="__span-19-14"><a id="__codelineno-19-14" name="__codelineno-19-14"></a><span class="p">)</span>
+</span><span id="__span-19-15"><a id="__codelineno-19-15" name="__codelineno-19-15"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-19-16"><a id="__codelineno-19-16" name="__codelineno-19-16"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-19-17"><a id="__codelineno-19-17" name="__codelineno-19-17"></a><span class="p">}</span>
+</span><span id="__span-19-18"><a id="__codelineno-19-18" name="__codelineno-19-18"></a>
+</span><span id="__span-19-19"><a id="__codelineno-19-19" name="__codelineno-19-19"></a><span class="nx">approvalPlugin</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">approval</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-19-20"><a id="__codelineno-19-20" name="__codelineno-19-20"></a><span class="w">    </span><span class="nx">approval</span><span class="p">.</span><span class="nx">WithReviewer</span><span class="p">(</span><span class="nx">reviewerInstance</span><span class="p">),</span>
+</span><span id="__span-19-21"><a id="__codelineno-19-21" name="__codelineno-19-21"></a><span class="w">    </span><span class="nx">approval</span><span class="p">.</span><span class="nx">WithToolPolicy</span><span class="p">(</span>
+</span><span id="__span-19-22"><a id="__codelineno-19-22" name="__codelineno-19-22"></a><span class="w">        </span><span class="s">&quot;hostexec_write_stdin&quot;</span><span class="p">,</span>
+</span><span id="__span-19-23"><a id="__codelineno-19-23" name="__codelineno-19-23"></a><span class="w">        </span><span class="nx">approval</span><span class="p">.</span><span class="nx">ToolPolicySkipApproval</span><span class="p">,</span>
+</span><span id="__span-19-24"><a id="__codelineno-19-24" name="__codelineno-19-24"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-19-25"><a id="__codelineno-19-25" name="__codelineno-19-25"></a><span class="w">    </span><span class="nx">approval</span><span class="p">.</span><span class="nx">WithToolPolicy</span><span class="p">(</span>
+</span><span id="__span-19-26"><a id="__codelineno-19-26" name="__codelineno-19-26"></a><span class="w">        </span><span class="s">&quot;hostexec_kill_session&quot;</span><span class="p">,</span>
+</span><span id="__span-19-27"><a id="__codelineno-19-27" name="__codelineno-19-27"></a><span class="w">        </span><span class="nx">approval</span><span class="p">.</span><span class="nx">ToolPolicyDenied</span><span class="p">,</span>
+</span><span id="__span-19-28"><a id="__codelineno-19-28" name="__codelineno-19-28"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-19-29"><a id="__codelineno-19-29" name="__codelineno-19-29"></a><span class="p">)</span>
+</span><span id="__span-19-30"><a id="__codelineno-19-30" name="__codelineno-19-30"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-19-31"><a id="__codelineno-19-31" name="__codelineno-19-31"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-19-32"><a id="__codelineno-19-32" name="__codelineno-19-32"></a><span class="p">}</span>
+</span><span id="__span-19-33"><a id="__codelineno-19-33" name="__codelineno-19-33"></a>
+</span><span id="__span-19-34"><a id="__codelineno-19-34" name="__codelineno-19-34"></a><span class="nx">guardrailPlugin</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">guardrail</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-19-35"><a id="__codelineno-19-35" name="__codelineno-19-35"></a><span class="w">    </span><span class="nx">guardrail</span><span class="p">.</span><span class="nx">WithApproval</span><span class="p">(</span><span class="nx">approvalPlugin</span><span class="p">),</span>
+</span><span id="__span-19-36"><a id="__codelineno-19-36" name="__codelineno-19-36"></a><span class="p">)</span>
+</span><span id="__span-19-37"><a id="__codelineno-19-37" name="__codelineno-19-37"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-19-38"><a id="__codelineno-19-38" name="__codelineno-19-38"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-19-39"><a id="__codelineno-19-39" name="__codelineno-19-39"></a><span class="p">}</span>
+</span><span id="__span-19-40"><a id="__codelineno-19-40" name="__codelineno-19-40"></a>
+</span><span id="__span-19-41"><a id="__codelineno-19-41" name="__codelineno-19-41"></a><span class="nx">runnerInstance</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span>
+</span><span id="__span-19-42"><a id="__codelineno-19-42" name="__codelineno-19-42"></a><span class="w">    </span><span class="s">&quot;guardrail-approval-demo&quot;</span><span class="p">,</span>
+</span><span id="__span-19-43"><a id="__codelineno-19-43" name="__codelineno-19-43"></a><span class="w">    </span><span class="nx">agentInstance</span><span class="p">,</span>
+</span><span id="__span-19-44"><a id="__codelineno-19-44" name="__codelineno-19-44"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithPlugins</span><span class="p">(</span><span class="nx">guardrailPlugin</span><span class="p">),</span>
+</span><span id="__span-19-45"><a id="__codelineno-19-45" name="__codelineno-19-45"></a><span class="p">)</span>
+</span><span id="__span-19-46"><a id="__codelineno-19-46" name="__codelineno-19-46"></a><span class="k">defer</span><span class="w"> </span><span class="nx">runnerInstance</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
 </span></code></pre></div></td></tr></table></div>
 <p>上面这段配置表达的是：</p>
 <ul>
@@ -4772,15 +4887,15 @@ message。适合用来实现全局策略或统一行为（例如安全约束、�
 <li>这个阈值会被注入到内置 reviewer 的 system prompt 中，而不是由插件层再做一次分数比较。</li>
 <li>reviewer 会返回一份结构化结果，至少包含以下字段：</li>
 </ul>
-<div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-17-1">1</a></span>
-<span class="normal"><a href="#__codelineno-17-2">2</a></span>
-<span class="normal"><a href="#__codelineno-17-3">3</a></span>
-<span class="normal"><a href="#__codelineno-17-4">4</a></span>
-<span class="normal"><a href="#__codelineno-17-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1"></a><span class="p">{</span>
-</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2"></a><span class="w">  </span><span class="nt">&quot;risk_score&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">23</span><span class="p">,</span>
-</span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3"></a><span class="w">  </span><span class="nt">&quot;risk_level&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;low&quot;</span><span class="p">,</span>
-</span><span id="__span-17-4"><a id="__codelineno-17-4" name="__codelineno-17-4"></a><span class="w">  </span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span>
-</span><span id="__span-17-5"><a id="__codelineno-17-5" name="__codelineno-17-5"></a><span class="p">}</span>
+<div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-20-1">1</a></span>
+<span class="normal"><a href="#__codelineno-20-2">2</a></span>
+<span class="normal"><a href="#__codelineno-20-3">3</a></span>
+<span class="normal"><a href="#__codelineno-20-4">4</a></span>
+<span class="normal"><a href="#__codelineno-20-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1"></a><span class="p">{</span>
+</span><span id="__span-20-2"><a id="__codelineno-20-2" name="__codelineno-20-2"></a><span class="w">  </span><span class="nt">&quot;risk_score&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">23</span><span class="p">,</span>
+</span><span id="__span-20-3"><a id="__codelineno-20-3" name="__codelineno-20-3"></a><span class="w">  </span><span class="nt">&quot;risk_level&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;low&quot;</span><span class="p">,</span>
+</span><span id="__span-20-4"><a id="__codelineno-20-4" name="__codelineno-20-4"></a><span class="w">  </span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span>
+</span><span id="__span-20-5"><a id="__codelineno-20-5" name="__codelineno-20-5"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <ul>
 <li><code>risk_score</code> 是 reviewer 模型给出的 <code>0-100</code> 风险分数。</li>
@@ -4796,9 +4911,9 @@ message。适合用来实现全局策略或统一行为（例如安全约束、�
 <li>如果上下文不完整或授权不明确，reviewer 会提高风险分数。</li>
 </ul>
 <p>当工具调用进入 reviewer 审批时，插件会打印固定格式的审批日志：</p>
-<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-18-1">1</a></span>
-<span class="normal"><a href="#__codelineno-18-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1"></a>Automatic approval review approved (risk: low): ...
-</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2"></a>Automatic approval review denied (risk: high): ...
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-21-1">1</a></span>
+<span class="normal"><a href="#__codelineno-21-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1"></a>Automatic approval review approved (risk: low): ...
+</span><span id="__span-21-2"><a id="__codelineno-21-2" name="__codelineno-21-2"></a>Automatic approval review denied (risk: high): ...
 </span></code></pre></div></td></tr></table></div>
 <p>如果 reviewer 自己报错，或没有返回合法决策，插件会按 fail-closed 处理：不执行工具，并返回失败结果给主流程。</p>
 <p>仓库里提供了一个可直接运行的完整示例：<code>examples/guardrail/approval</code>。它使用真实的 <code>hostexec</code>
@@ -4821,61 +4936,61 @@ message。适合用来实现全局策略或统一行为（例如安全约束、�
 <li>reviewer 报错或返回非法结果时，插件按 fail-closed 处理，返回通用阻断响应。</li>
 </ul>
 <p>典型接法如下：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-19-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-19-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-19-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-19-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-19-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-19-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-19-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-19-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-19-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-19-10">10</a></span>
-<span class="normal"><a href="#__codelineno-19-11">11</a></span>
-<span class="normal"><a href="#__codelineno-19-12">12</a></span>
-<span class="normal"><a href="#__codelineno-19-13">13</a></span>
-<span class="normal"><a href="#__codelineno-19-14">14</a></span>
-<span class="normal"><a href="#__codelineno-19-15">15</a></span>
-<span class="normal"><a href="#__codelineno-19-16">16</a></span>
-<span class="normal"><a href="#__codelineno-19-17">17</a></span>
-<span class="normal"><a href="#__codelineno-19-18">18</a></span>
-<span class="normal"><a href="#__codelineno-19-19">19</a></span>
-<span class="normal"><a href="#__codelineno-19-20">20</a></span>
-<span class="normal"><a href="#__codelineno-19-21">21</a></span>
-<span class="normal"><a href="#__codelineno-19-22">22</a></span>
-<span class="normal"><a href="#__codelineno-19-23">23</a></span>
-<span class="normal"><a href="#__codelineno-19-24">24</a></span>
-<span class="normal"><a href="#__codelineno-19-25">25</a></span>
-<span class="normal"><a href="#__codelineno-19-26">26</a></span>
-<span class="normal"><a href="#__codelineno-19-27">27</a></span>
-<span class="normal"><a href="#__codelineno-19-28">28</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1"></a><span class="nx">modelInstance</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;gpt-5.4&quot;</span><span class="p">)</span>
-</span><span id="__span-19-2"><a id="__codelineno-19-2" name="__codelineno-19-2"></a>
-</span><span id="__span-19-3"><a id="__codelineno-19-3" name="__codelineno-19-3"></a><span class="nx">reviewerRunner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span>
-</span><span id="__span-19-4"><a id="__codelineno-19-4" name="__codelineno-19-4"></a><span class="w">    </span><span class="s">&quot;guardrail-promptinjection-reviewer-runner&quot;</span><span class="p">,</span>
-</span><span id="__span-19-5"><a id="__codelineno-19-5" name="__codelineno-19-5"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-19-6"><a id="__codelineno-19-6" name="__codelineno-19-6"></a><span class="w">        </span><span class="s">&quot;guardrail-promptinjection-reviewer&quot;</span><span class="p">,</span>
-</span><span id="__span-19-7"><a id="__codelineno-19-7" name="__codelineno-19-7"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">modelInstance</span><span class="p">),</span>
-</span><span id="__span-19-8"><a id="__codelineno-19-8" name="__codelineno-19-8"></a><span class="w">    </span><span class="p">),</span>
-</span><span id="__span-19-9"><a id="__codelineno-19-9" name="__codelineno-19-9"></a><span class="p">)</span>
-</span><span id="__span-19-10"><a id="__codelineno-19-10" name="__codelineno-19-10"></a>
-</span><span id="__span-19-11"><a id="__codelineno-19-11" name="__codelineno-19-11"></a><span class="nx">reviewerInstance</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">promptreview</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">reviewerRunner</span><span class="p">)</span>
-</span><span id="__span-19-12"><a id="__codelineno-19-12" name="__codelineno-19-12"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-19-13"><a id="__codelineno-19-13" name="__codelineno-19-13"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
-</span><span id="__span-19-14"><a id="__codelineno-19-14" name="__codelineno-19-14"></a><span class="p">}</span>
-</span><span id="__span-19-15"><a id="__codelineno-19-15" name="__codelineno-19-15"></a>
-</span><span id="__span-19-16"><a id="__codelineno-19-16" name="__codelineno-19-16"></a><span class="nx">promptInjectionPlugin</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">promptinjection</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-19-17"><a id="__codelineno-19-17" name="__codelineno-19-17"></a><span class="w">    </span><span class="nx">promptinjection</span><span class="p">.</span><span class="nx">WithReviewer</span><span class="p">(</span><span class="nx">reviewerInstance</span><span class="p">),</span>
-</span><span id="__span-19-18"><a id="__codelineno-19-18" name="__codelineno-19-18"></a><span class="p">)</span>
-</span><span id="__span-19-19"><a id="__codelineno-19-19" name="__codelineno-19-19"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-19-20"><a id="__codelineno-19-20" name="__codelineno-19-20"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
-</span><span id="__span-19-21"><a id="__codelineno-19-21" name="__codelineno-19-21"></a><span class="p">}</span>
-</span><span id="__span-19-22"><a id="__codelineno-19-22" name="__codelineno-19-22"></a>
-</span><span id="__span-19-23"><a id="__codelineno-19-23" name="__codelineno-19-23"></a><span class="nx">guardrailPlugin</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">guardrail</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-19-24"><a id="__codelineno-19-24" name="__codelineno-19-24"></a><span class="w">    </span><span class="nx">guardrail</span><span class="p">.</span><span class="nx">WithPromptInjection</span><span class="p">(</span><span class="nx">promptInjectionPlugin</span><span class="p">),</span>
-</span><span id="__span-19-25"><a id="__codelineno-19-25" name="__codelineno-19-25"></a><span class="p">)</span>
-</span><span id="__span-19-26"><a id="__codelineno-19-26" name="__codelineno-19-26"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-19-27"><a id="__codelineno-19-27" name="__codelineno-19-27"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
-</span><span id="__span-19-28"><a id="__codelineno-19-28" name="__codelineno-19-28"></a><span class="p">}</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-22-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-22-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-22-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-22-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-22-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-22-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-22-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-22-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-22-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-22-10">10</a></span>
+<span class="normal"><a href="#__codelineno-22-11">11</a></span>
+<span class="normal"><a href="#__codelineno-22-12">12</a></span>
+<span class="normal"><a href="#__codelineno-22-13">13</a></span>
+<span class="normal"><a href="#__codelineno-22-14">14</a></span>
+<span class="normal"><a href="#__codelineno-22-15">15</a></span>
+<span class="normal"><a href="#__codelineno-22-16">16</a></span>
+<span class="normal"><a href="#__codelineno-22-17">17</a></span>
+<span class="normal"><a href="#__codelineno-22-18">18</a></span>
+<span class="normal"><a href="#__codelineno-22-19">19</a></span>
+<span class="normal"><a href="#__codelineno-22-20">20</a></span>
+<span class="normal"><a href="#__codelineno-22-21">21</a></span>
+<span class="normal"><a href="#__codelineno-22-22">22</a></span>
+<span class="normal"><a href="#__codelineno-22-23">23</a></span>
+<span class="normal"><a href="#__codelineno-22-24">24</a></span>
+<span class="normal"><a href="#__codelineno-22-25">25</a></span>
+<span class="normal"><a href="#__codelineno-22-26">26</a></span>
+<span class="normal"><a href="#__codelineno-22-27">27</a></span>
+<span class="normal"><a href="#__codelineno-22-28">28</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1"></a><span class="nx">modelInstance</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;gpt-5.4&quot;</span><span class="p">)</span>
+</span><span id="__span-22-2"><a id="__codelineno-22-2" name="__codelineno-22-2"></a>
+</span><span id="__span-22-3"><a id="__codelineno-22-3" name="__codelineno-22-3"></a><span class="nx">reviewerRunner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span>
+</span><span id="__span-22-4"><a id="__codelineno-22-4" name="__codelineno-22-4"></a><span class="w">    </span><span class="s">&quot;guardrail-promptinjection-reviewer-runner&quot;</span><span class="p">,</span>
+</span><span id="__span-22-5"><a id="__codelineno-22-5" name="__codelineno-22-5"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-22-6"><a id="__codelineno-22-6" name="__codelineno-22-6"></a><span class="w">        </span><span class="s">&quot;guardrail-promptinjection-reviewer&quot;</span><span class="p">,</span>
+</span><span id="__span-22-7"><a id="__codelineno-22-7" name="__codelineno-22-7"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">modelInstance</span><span class="p">),</span>
+</span><span id="__span-22-8"><a id="__codelineno-22-8" name="__codelineno-22-8"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-22-9"><a id="__codelineno-22-9" name="__codelineno-22-9"></a><span class="p">)</span>
+</span><span id="__span-22-10"><a id="__codelineno-22-10" name="__codelineno-22-10"></a>
+</span><span id="__span-22-11"><a id="__codelineno-22-11" name="__codelineno-22-11"></a><span class="nx">reviewerInstance</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">promptreview</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">reviewerRunner</span><span class="p">)</span>
+</span><span id="__span-22-12"><a id="__codelineno-22-12" name="__codelineno-22-12"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-22-13"><a id="__codelineno-22-13" name="__codelineno-22-13"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-22-14"><a id="__codelineno-22-14" name="__codelineno-22-14"></a><span class="p">}</span>
+</span><span id="__span-22-15"><a id="__codelineno-22-15" name="__codelineno-22-15"></a>
+</span><span id="__span-22-16"><a id="__codelineno-22-16" name="__codelineno-22-16"></a><span class="nx">promptInjectionPlugin</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">promptinjection</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-22-17"><a id="__codelineno-22-17" name="__codelineno-22-17"></a><span class="w">    </span><span class="nx">promptinjection</span><span class="p">.</span><span class="nx">WithReviewer</span><span class="p">(</span><span class="nx">reviewerInstance</span><span class="p">),</span>
+</span><span id="__span-22-18"><a id="__codelineno-22-18" name="__codelineno-22-18"></a><span class="p">)</span>
+</span><span id="__span-22-19"><a id="__codelineno-22-19" name="__codelineno-22-19"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-22-20"><a id="__codelineno-22-20" name="__codelineno-22-20"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-22-21"><a id="__codelineno-22-21" name="__codelineno-22-21"></a><span class="p">}</span>
+</span><span id="__span-22-22"><a id="__codelineno-22-22" name="__codelineno-22-22"></a>
+</span><span id="__span-22-23"><a id="__codelineno-22-23" name="__codelineno-22-23"></a><span class="nx">guardrailPlugin</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">guardrail</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-22-24"><a id="__codelineno-22-24" name="__codelineno-22-24"></a><span class="w">    </span><span class="nx">guardrail</span><span class="p">.</span><span class="nx">WithPromptInjection</span><span class="p">(</span><span class="nx">promptInjectionPlugin</span><span class="p">),</span>
+</span><span id="__span-22-25"><a id="__codelineno-22-25" name="__codelineno-22-25"></a><span class="p">)</span>
+</span><span id="__span-22-26"><a id="__codelineno-22-26" name="__codelineno-22-26"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-22-27"><a id="__codelineno-22-27" name="__codelineno-22-27"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-22-28"><a id="__codelineno-22-28" name="__codelineno-22-28"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>内置 reviewer 在阻断时目前会返回以下分类之一：</p>
 <ul>
@@ -4904,61 +5019,61 @@ message。适合用来实现全局策略或统一行为（例如安全约束、�
 <li>reviewer 报错或返回非法结果时，插件按 fail-closed 处理，返回通用阻断响应。</li>
 </ul>
 <p>典型接法如下：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-20-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-20-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-20-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-20-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-20-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-20-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-20-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-20-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-20-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-20-10">10</a></span>
-<span class="normal"><a href="#__codelineno-20-11">11</a></span>
-<span class="normal"><a href="#__codelineno-20-12">12</a></span>
-<span class="normal"><a href="#__codelineno-20-13">13</a></span>
-<span class="normal"><a href="#__codelineno-20-14">14</a></span>
-<span class="normal"><a href="#__codelineno-20-15">15</a></span>
-<span class="normal"><a href="#__codelineno-20-16">16</a></span>
-<span class="normal"><a href="#__codelineno-20-17">17</a></span>
-<span class="normal"><a href="#__codelineno-20-18">18</a></span>
-<span class="normal"><a href="#__codelineno-20-19">19</a></span>
-<span class="normal"><a href="#__codelineno-20-20">20</a></span>
-<span class="normal"><a href="#__codelineno-20-21">21</a></span>
-<span class="normal"><a href="#__codelineno-20-22">22</a></span>
-<span class="normal"><a href="#__codelineno-20-23">23</a></span>
-<span class="normal"><a href="#__codelineno-20-24">24</a></span>
-<span class="normal"><a href="#__codelineno-20-25">25</a></span>
-<span class="normal"><a href="#__codelineno-20-26">26</a></span>
-<span class="normal"><a href="#__codelineno-20-27">27</a></span>
-<span class="normal"><a href="#__codelineno-20-28">28</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1"></a><span class="nx">modelInstance</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;gpt-5.4&quot;</span><span class="p">)</span>
-</span><span id="__span-20-2"><a id="__codelineno-20-2" name="__codelineno-20-2"></a>
-</span><span id="__span-20-3"><a id="__codelineno-20-3" name="__codelineno-20-3"></a><span class="nx">reviewerRunner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span>
-</span><span id="__span-20-4"><a id="__codelineno-20-4" name="__codelineno-20-4"></a><span class="w">    </span><span class="s">&quot;guardrail-unsafeintent-reviewer-runner&quot;</span><span class="p">,</span>
-</span><span id="__span-20-5"><a id="__codelineno-20-5" name="__codelineno-20-5"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-20-6"><a id="__codelineno-20-6" name="__codelineno-20-6"></a><span class="w">        </span><span class="s">&quot;guardrail-unsafeintent-reviewer&quot;</span><span class="p">,</span>
-</span><span id="__span-20-7"><a id="__codelineno-20-7" name="__codelineno-20-7"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">modelInstance</span><span class="p">),</span>
-</span><span id="__span-20-8"><a id="__codelineno-20-8" name="__codelineno-20-8"></a><span class="w">    </span><span class="p">),</span>
-</span><span id="__span-20-9"><a id="__codelineno-20-9" name="__codelineno-20-9"></a><span class="p">)</span>
-</span><span id="__span-20-10"><a id="__codelineno-20-10" name="__codelineno-20-10"></a>
-</span><span id="__span-20-11"><a id="__codelineno-20-11" name="__codelineno-20-11"></a><span class="nx">reviewerInstance</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">unsafereview</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">reviewerRunner</span><span class="p">)</span>
-</span><span id="__span-20-12"><a id="__codelineno-20-12" name="__codelineno-20-12"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-20-13"><a id="__codelineno-20-13" name="__codelineno-20-13"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
-</span><span id="__span-20-14"><a id="__codelineno-20-14" name="__codelineno-20-14"></a><span class="p">}</span>
-</span><span id="__span-20-15"><a id="__codelineno-20-15" name="__codelineno-20-15"></a>
-</span><span id="__span-20-16"><a id="__codelineno-20-16" name="__codelineno-20-16"></a><span class="nx">unsafeIntentPlugin</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">unsafeintent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-20-17"><a id="__codelineno-20-17" name="__codelineno-20-17"></a><span class="w">    </span><span class="nx">unsafeintent</span><span class="p">.</span><span class="nx">WithReviewer</span><span class="p">(</span><span class="nx">reviewerInstance</span><span class="p">),</span>
-</span><span id="__span-20-18"><a id="__codelineno-20-18" name="__codelineno-20-18"></a><span class="p">)</span>
-</span><span id="__span-20-19"><a id="__codelineno-20-19" name="__codelineno-20-19"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-20-20"><a id="__codelineno-20-20" name="__codelineno-20-20"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
-</span><span id="__span-20-21"><a id="__codelineno-20-21" name="__codelineno-20-21"></a><span class="p">}</span>
-</span><span id="__span-20-22"><a id="__codelineno-20-22" name="__codelineno-20-22"></a>
-</span><span id="__span-20-23"><a id="__codelineno-20-23" name="__codelineno-20-23"></a><span class="nx">guardrailPlugin</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">guardrail</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-20-24"><a id="__codelineno-20-24" name="__codelineno-20-24"></a><span class="w">    </span><span class="nx">guardrail</span><span class="p">.</span><span class="nx">WithUnsafeIntent</span><span class="p">(</span><span class="nx">unsafeIntentPlugin</span><span class="p">),</span>
-</span><span id="__span-20-25"><a id="__codelineno-20-25" name="__codelineno-20-25"></a><span class="p">)</span>
-</span><span id="__span-20-26"><a id="__codelineno-20-26" name="__codelineno-20-26"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-20-27"><a id="__codelineno-20-27" name="__codelineno-20-27"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
-</span><span id="__span-20-28"><a id="__codelineno-20-28" name="__codelineno-20-28"></a><span class="p">}</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-23-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-23-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-23-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-23-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-23-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-23-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-23-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-23-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-23-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-23-10">10</a></span>
+<span class="normal"><a href="#__codelineno-23-11">11</a></span>
+<span class="normal"><a href="#__codelineno-23-12">12</a></span>
+<span class="normal"><a href="#__codelineno-23-13">13</a></span>
+<span class="normal"><a href="#__codelineno-23-14">14</a></span>
+<span class="normal"><a href="#__codelineno-23-15">15</a></span>
+<span class="normal"><a href="#__codelineno-23-16">16</a></span>
+<span class="normal"><a href="#__codelineno-23-17">17</a></span>
+<span class="normal"><a href="#__codelineno-23-18">18</a></span>
+<span class="normal"><a href="#__codelineno-23-19">19</a></span>
+<span class="normal"><a href="#__codelineno-23-20">20</a></span>
+<span class="normal"><a href="#__codelineno-23-21">21</a></span>
+<span class="normal"><a href="#__codelineno-23-22">22</a></span>
+<span class="normal"><a href="#__codelineno-23-23">23</a></span>
+<span class="normal"><a href="#__codelineno-23-24">24</a></span>
+<span class="normal"><a href="#__codelineno-23-25">25</a></span>
+<span class="normal"><a href="#__codelineno-23-26">26</a></span>
+<span class="normal"><a href="#__codelineno-23-27">27</a></span>
+<span class="normal"><a href="#__codelineno-23-28">28</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1"></a><span class="nx">modelInstance</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;gpt-5.4&quot;</span><span class="p">)</span>
+</span><span id="__span-23-2"><a id="__codelineno-23-2" name="__codelineno-23-2"></a>
+</span><span id="__span-23-3"><a id="__codelineno-23-3" name="__codelineno-23-3"></a><span class="nx">reviewerRunner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span>
+</span><span id="__span-23-4"><a id="__codelineno-23-4" name="__codelineno-23-4"></a><span class="w">    </span><span class="s">&quot;guardrail-unsafeintent-reviewer-runner&quot;</span><span class="p">,</span>
+</span><span id="__span-23-5"><a id="__codelineno-23-5" name="__codelineno-23-5"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-23-6"><a id="__codelineno-23-6" name="__codelineno-23-6"></a><span class="w">        </span><span class="s">&quot;guardrail-unsafeintent-reviewer&quot;</span><span class="p">,</span>
+</span><span id="__span-23-7"><a id="__codelineno-23-7" name="__codelineno-23-7"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">modelInstance</span><span class="p">),</span>
+</span><span id="__span-23-8"><a id="__codelineno-23-8" name="__codelineno-23-8"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-23-9"><a id="__codelineno-23-9" name="__codelineno-23-9"></a><span class="p">)</span>
+</span><span id="__span-23-10"><a id="__codelineno-23-10" name="__codelineno-23-10"></a>
+</span><span id="__span-23-11"><a id="__codelineno-23-11" name="__codelineno-23-11"></a><span class="nx">reviewerInstance</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">unsafereview</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">reviewerRunner</span><span class="p">)</span>
+</span><span id="__span-23-12"><a id="__codelineno-23-12" name="__codelineno-23-12"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-23-13"><a id="__codelineno-23-13" name="__codelineno-23-13"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-23-14"><a id="__codelineno-23-14" name="__codelineno-23-14"></a><span class="p">}</span>
+</span><span id="__span-23-15"><a id="__codelineno-23-15" name="__codelineno-23-15"></a>
+</span><span id="__span-23-16"><a id="__codelineno-23-16" name="__codelineno-23-16"></a><span class="nx">unsafeIntentPlugin</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">unsafeintent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-23-17"><a id="__codelineno-23-17" name="__codelineno-23-17"></a><span class="w">    </span><span class="nx">unsafeintent</span><span class="p">.</span><span class="nx">WithReviewer</span><span class="p">(</span><span class="nx">reviewerInstance</span><span class="p">),</span>
+</span><span id="__span-23-18"><a id="__codelineno-23-18" name="__codelineno-23-18"></a><span class="p">)</span>
+</span><span id="__span-23-19"><a id="__codelineno-23-19" name="__codelineno-23-19"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-23-20"><a id="__codelineno-23-20" name="__codelineno-23-20"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-23-21"><a id="__codelineno-23-21" name="__codelineno-23-21"></a><span class="p">}</span>
+</span><span id="__span-23-22"><a id="__codelineno-23-22" name="__codelineno-23-22"></a>
+</span><span id="__span-23-23"><a id="__codelineno-23-23" name="__codelineno-23-23"></a><span class="nx">guardrailPlugin</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">guardrail</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-23-24"><a id="__codelineno-23-24" name="__codelineno-23-24"></a><span class="w">    </span><span class="nx">guardrail</span><span class="p">.</span><span class="nx">WithUnsafeIntent</span><span class="p">(</span><span class="nx">unsafeIntentPlugin</span><span class="p">),</span>
+</span><span id="__span-23-25"><a id="__codelineno-23-25" name="__codelineno-23-25"></a><span class="p">)</span>
+</span><span id="__span-23-26"><a id="__codelineno-23-26" name="__codelineno-23-26"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-23-27"><a id="__codelineno-23-27" name="__codelineno-23-27"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-23-28"><a id="__codelineno-23-28" name="__codelineno-23-28"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>内置 reviewer 在阻断时目前会返回以下分类之一：</p>
 <ul>
@@ -4983,19 +5098,19 @@ message。适合用来实现全局策略或统一行为（例如安全约束、�
 <p><code>plugin/messagemerger</code> 下的 <code>messagemerger.New(opts...)</code> 会在每一次模型请求前，把连续的 <code>system</code>、<code>user</code>、<code>assistant</code> 消息合并成一条。这适用于某些第三方模型平台要求消息严格交替、不能出现连续同 role 消息的场景，例如调用方传入的历史里出现 <code>user,user</code> 或 <code>assistant,assistant</code>。</p>
 <p>这个插件<strong>不会</strong>合并 <code>tool</code> 消息，以保留 <code>tool_id</code>、<code>tool_name</code> 等逐次调用语义。文本合并时插入的分隔符可通过 <code>messagemerger.WithSeparator(...)</code> 配置。</p>
 <p>代码示例如下：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-21-1">1</a></span>
-<span class="normal"><a href="#__codelineno-21-2">2</a></span>
-<span class="normal"><a href="#__codelineno-21-3">3</a></span>
-<span class="normal"><a href="#__codelineno-21-4">4</a></span>
-<span class="normal"><a href="#__codelineno-21-5">5</a></span>
-<span class="normal"><a href="#__codelineno-21-6">6</a></span>
-<span class="normal"><a href="#__codelineno-21-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1"></a><span class="nx">merger</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">messagemerger</span><span class="p">.</span><span class="nx">New</span><span class="p">()</span>
-</span><span id="__span-21-2"><a id="__codelineno-21-2" name="__codelineno-21-2"></a><span class="nx">runnerInstance</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span>
-</span><span id="__span-21-3"><a id="__codelineno-21-3" name="__codelineno-21-3"></a><span class="w">    </span><span class="s">&quot;my-app&quot;</span><span class="p">,</span>
-</span><span id="__span-21-4"><a id="__codelineno-21-4" name="__codelineno-21-4"></a><span class="w">    </span><span class="nx">agentInstance</span><span class="p">,</span>
-</span><span id="__span-21-5"><a id="__codelineno-21-5" name="__codelineno-21-5"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithPlugins</span><span class="p">(</span><span class="nx">merger</span><span class="p">),</span>
-</span><span id="__span-21-6"><a id="__codelineno-21-6" name="__codelineno-21-6"></a><span class="p">)</span>
-</span><span id="__span-21-7"><a id="__codelineno-21-7" name="__codelineno-21-7"></a><span class="k">defer</span><span class="w"> </span><span class="nx">runnerInstance</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-24-1">1</a></span>
+<span class="normal"><a href="#__codelineno-24-2">2</a></span>
+<span class="normal"><a href="#__codelineno-24-3">3</a></span>
+<span class="normal"><a href="#__codelineno-24-4">4</a></span>
+<span class="normal"><a href="#__codelineno-24-5">5</a></span>
+<span class="normal"><a href="#__codelineno-24-6">6</a></span>
+<span class="normal"><a href="#__codelineno-24-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-24-1"><a id="__codelineno-24-1" name="__codelineno-24-1"></a><span class="nx">merger</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">messagemerger</span><span class="p">.</span><span class="nx">New</span><span class="p">()</span>
+</span><span id="__span-24-2"><a id="__codelineno-24-2" name="__codelineno-24-2"></a><span class="nx">runnerInstance</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span>
+</span><span id="__span-24-3"><a id="__codelineno-24-3" name="__codelineno-24-3"></a><span class="w">    </span><span class="s">&quot;my-app&quot;</span><span class="p">,</span>
+</span><span id="__span-24-4"><a id="__codelineno-24-4" name="__codelineno-24-4"></a><span class="w">    </span><span class="nx">agentInstance</span><span class="p">,</span>
+</span><span id="__span-24-5"><a id="__codelineno-24-5" name="__codelineno-24-5"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithPlugins</span><span class="p">(</span><span class="nx">merger</span><span class="p">),</span>
+</span><span id="__span-24-6"><a id="__codelineno-24-6" name="__codelineno-24-6"></a><span class="p">)</span>
+</span><span id="__span-24-7"><a id="__codelineno-24-7" name="__codelineno-24-7"></a><span class="k">defer</span><span class="w"> </span><span class="nx">runnerInstance</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
 </span></code></pre></div></td></tr></table></div>
 <p>完整示例见 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/plugin/messagemerger">examples/plugin/messagemerger</a>。</p>
 <h3 id="errormessage">ErrorMessage（错误消息改写）</h3>
@@ -5003,54 +5118,54 @@ message。适合用来实现全局策略或统一行为（例如安全约束、�
 <p>当一个 event 带有 <code>Response.Error</code> 但还没有 <code>Choices[].Message.Content</code> 时（例如 <code>llmflow</code> 把 <code>agent.StopError</code> 转成的 <code>stop_agent_error</code> 事件、或者任何直接 <code>event.NewErrorEvent(...)</code> 产出的事件），Runner 会用一句固定的英文兜底文案 <code>"An error occurred during execution. Please contact the service provider."</code> 补齐。这个插件在 <code>OnEvent</code> 中先一步把 content 填好，方便业务侧展示更友好、本地化或按租户定制的提示信息。结构化的 <code>Response.Error</code> 不会被修改，调试和下游消费方仍能看到原始原因。</p>
 <p>插件只会改写尚未带有有效 content 的错误事件，所以失败前已经产出的流式助手消息不会被覆盖。</p>
 <p>静态文案：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-22-1">1</a></span>
-<span class="normal"><a href="#__codelineno-22-2">2</a></span>
-<span class="normal"><a href="#__codelineno-22-3">3</a></span>
-<span class="normal"><a href="#__codelineno-22-4">4</a></span>
-<span class="normal"><a href="#__codelineno-22-5">5</a></span>
-<span class="normal"><a href="#__codelineno-22-6">6</a></span>
-<span class="normal"><a href="#__codelineno-22-7">7</a></span>
-<span class="normal"><a href="#__codelineno-22-8">8</a></span>
-<span class="normal"><a href="#__codelineno-22-9">9</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1"></a><span class="nx">rewriter</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">errormessage</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-22-2"><a id="__codelineno-22-2" name="__codelineno-22-2"></a><span class="w">    </span><span class="nx">errormessage</span><span class="p">.</span><span class="nx">WithContent</span><span class="p">(</span><span class="s">&quot;本次执行已停止，请稍后再试。&quot;</span><span class="p">),</span>
-</span><span id="__span-22-3"><a id="__codelineno-22-3" name="__codelineno-22-3"></a><span class="p">)</span>
-</span><span id="__span-22-4"><a id="__codelineno-22-4" name="__codelineno-22-4"></a><span class="nx">runnerInstance</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span>
-</span><span id="__span-22-5"><a id="__codelineno-22-5" name="__codelineno-22-5"></a><span class="w">    </span><span class="s">&quot;my-app&quot;</span><span class="p">,</span>
-</span><span id="__span-22-6"><a id="__codelineno-22-6" name="__codelineno-22-6"></a><span class="w">    </span><span class="nx">agentInstance</span><span class="p">,</span>
-</span><span id="__span-22-7"><a id="__codelineno-22-7" name="__codelineno-22-7"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithPlugins</span><span class="p">(</span><span class="nx">rewriter</span><span class="p">),</span>
-</span><span id="__span-22-8"><a id="__codelineno-22-8" name="__codelineno-22-8"></a><span class="p">)</span>
-</span><span id="__span-22-9"><a id="__codelineno-22-9" name="__codelineno-22-9"></a><span class="k">defer</span><span class="w"> </span><span class="nx">runnerInstance</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-25-1">1</a></span>
+<span class="normal"><a href="#__codelineno-25-2">2</a></span>
+<span class="normal"><a href="#__codelineno-25-3">3</a></span>
+<span class="normal"><a href="#__codelineno-25-4">4</a></span>
+<span class="normal"><a href="#__codelineno-25-5">5</a></span>
+<span class="normal"><a href="#__codelineno-25-6">6</a></span>
+<span class="normal"><a href="#__codelineno-25-7">7</a></span>
+<span class="normal"><a href="#__codelineno-25-8">8</a></span>
+<span class="normal"><a href="#__codelineno-25-9">9</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1"></a><span class="nx">rewriter</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">errormessage</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-25-2"><a id="__codelineno-25-2" name="__codelineno-25-2"></a><span class="w">    </span><span class="nx">errormessage</span><span class="p">.</span><span class="nx">WithContent</span><span class="p">(</span><span class="s">&quot;本次执行已停止，请稍后再试。&quot;</span><span class="p">),</span>
+</span><span id="__span-25-3"><a id="__codelineno-25-3" name="__codelineno-25-3"></a><span class="p">)</span>
+</span><span id="__span-25-4"><a id="__codelineno-25-4" name="__codelineno-25-4"></a><span class="nx">runnerInstance</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span>
+</span><span id="__span-25-5"><a id="__codelineno-25-5" name="__codelineno-25-5"></a><span class="w">    </span><span class="s">&quot;my-app&quot;</span><span class="p">,</span>
+</span><span id="__span-25-6"><a id="__codelineno-25-6" name="__codelineno-25-6"></a><span class="w">    </span><span class="nx">agentInstance</span><span class="p">,</span>
+</span><span id="__span-25-7"><a id="__codelineno-25-7" name="__codelineno-25-7"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithPlugins</span><span class="p">(</span><span class="nx">rewriter</span><span class="p">),</span>
+</span><span id="__span-25-8"><a id="__codelineno-25-8" name="__codelineno-25-8"></a><span class="p">)</span>
+</span><span id="__span-25-9"><a id="__codelineno-25-9" name="__codelineno-25-9"></a><span class="k">defer</span><span class="w"> </span><span class="nx">runnerInstance</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
 </span></code></pre></div></td></tr></table></div>
 <p>动态 resolver（例如对 <code>stop_agent_error</code> 使用更友好的话术）：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-23-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-23-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-23-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-23-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-23-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-23-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-23-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-23-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-23-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-23-10">10</a></span>
-<span class="normal"><a href="#__codelineno-23-11">11</a></span>
-<span class="normal"><a href="#__codelineno-23-12">12</a></span>
-<span class="normal"><a href="#__codelineno-23-13">13</a></span>
-<span class="normal"><a href="#__codelineno-23-14">14</a></span>
-<span class="normal"><a href="#__codelineno-23-15">15</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1"></a><span class="nx">rewriter</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">errormessage</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-23-2"><a id="__codelineno-23-2" name="__codelineno-23-2"></a><span class="w">    </span><span class="nx">errormessage</span><span class="p">.</span><span class="nx">WithResolver</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span>
-</span><span id="__span-23-3"><a id="__codelineno-23-3" name="__codelineno-23-3"></a><span class="w">        </span><span class="nx">_</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span>
-</span><span id="__span-23-4"><a id="__codelineno-23-4" name="__codelineno-23-4"></a><span class="w">        </span><span class="nx">_</span><span class="w"> </span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Invocation</span><span class="p">,</span>
-</span><span id="__span-23-5"><a id="__codelineno-23-5" name="__codelineno-23-5"></a><span class="w">        </span><span class="nx">e</span><span class="w"> </span><span class="o">*</span><span class="nx">event</span><span class="p">.</span><span class="nx">Event</span><span class="p">,</span>
-</span><span id="__span-23-6"><a id="__codelineno-23-6" name="__codelineno-23-6"></a><span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="kt">bool</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-23-7"><a id="__codelineno-23-7" name="__codelineno-23-7"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">e</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nx">e</span><span class="p">.</span><span class="nx">Response</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nx">e</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Error</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-23-8"><a id="__codelineno-23-8" name="__codelineno-23-8"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="p">,</span><span class="w"> </span><span class="kc">false</span>
-</span><span id="__span-23-9"><a id="__codelineno-23-9" name="__codelineno-23-9"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-23-10"><a id="__codelineno-23-10" name="__codelineno-23-10"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">e</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Error</span><span class="p">.</span><span class="nx">Type</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">ErrorTypeStopAgentError</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-23-11"><a id="__codelineno-23-11" name="__codelineno-23-11"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="s">&quot;本次执行已按策略停止，请稍后再试。&quot;</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span>
-</span><span id="__span-23-12"><a id="__codelineno-23-12" name="__codelineno-23-12"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-23-13"><a id="__codelineno-23-13" name="__codelineno-23-13"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="s">&quot;执行失败，请稍后重试。&quot;</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span>
-</span><span id="__span-23-14"><a id="__codelineno-23-14" name="__codelineno-23-14"></a><span class="w">    </span><span class="p">}),</span>
-</span><span id="__span-23-15"><a id="__codelineno-23-15" name="__codelineno-23-15"></a><span class="p">)</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-26-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-26-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-26-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-26-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-26-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-26-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-26-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-26-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-26-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-26-10">10</a></span>
+<span class="normal"><a href="#__codelineno-26-11">11</a></span>
+<span class="normal"><a href="#__codelineno-26-12">12</a></span>
+<span class="normal"><a href="#__codelineno-26-13">13</a></span>
+<span class="normal"><a href="#__codelineno-26-14">14</a></span>
+<span class="normal"><a href="#__codelineno-26-15">15</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-26-1"><a id="__codelineno-26-1" name="__codelineno-26-1"></a><span class="nx">rewriter</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">errormessage</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-26-2"><a id="__codelineno-26-2" name="__codelineno-26-2"></a><span class="w">    </span><span class="nx">errormessage</span><span class="p">.</span><span class="nx">WithResolver</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span>
+</span><span id="__span-26-3"><a id="__codelineno-26-3" name="__codelineno-26-3"></a><span class="w">        </span><span class="nx">_</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span>
+</span><span id="__span-26-4"><a id="__codelineno-26-4" name="__codelineno-26-4"></a><span class="w">        </span><span class="nx">_</span><span class="w"> </span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Invocation</span><span class="p">,</span>
+</span><span id="__span-26-5"><a id="__codelineno-26-5" name="__codelineno-26-5"></a><span class="w">        </span><span class="nx">e</span><span class="w"> </span><span class="o">*</span><span class="nx">event</span><span class="p">.</span><span class="nx">Event</span><span class="p">,</span>
+</span><span id="__span-26-6"><a id="__codelineno-26-6" name="__codelineno-26-6"></a><span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="kt">bool</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-26-7"><a id="__codelineno-26-7" name="__codelineno-26-7"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">e</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nx">e</span><span class="p">.</span><span class="nx">Response</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nx">e</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Error</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-26-8"><a id="__codelineno-26-8" name="__codelineno-26-8"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="p">,</span><span class="w"> </span><span class="kc">false</span>
+</span><span id="__span-26-9"><a id="__codelineno-26-9" name="__codelineno-26-9"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-26-10"><a id="__codelineno-26-10" name="__codelineno-26-10"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">e</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Error</span><span class="p">.</span><span class="nx">Type</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">ErrorTypeStopAgentError</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-26-11"><a id="__codelineno-26-11" name="__codelineno-26-11"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="s">&quot;本次执行已按策略停止，请稍后再试。&quot;</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-26-12"><a id="__codelineno-26-12" name="__codelineno-26-12"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-26-13"><a id="__codelineno-26-13" name="__codelineno-26-13"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="s">&quot;执行失败，请稍后重试。&quot;</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-26-14"><a id="__codelineno-26-14" name="__codelineno-26-14"></a><span class="w">    </span><span class="p">}),</span>
+</span><span id="__span-26-15"><a id="__codelineno-26-15" name="__codelineno-26-15"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p>resolver 返回 <code>ok=false</code> 或空字符串时，事件保持不变，Runner 内置的兜底文案仍然生效。</p>
 <p>FinishReason：</p>
@@ -5058,7 +5173,7 @@ message。适合用来实现全局策略或统一行为（例如安全约束、�
 <p>适用范围：</p>
 <p>插件通过 <code>runner.WithPlugins(...)</code> 注册，会在 Runner 处理每一条事件时触发，因此能覆盖 agent 从事件通道发出的错误事件（比如 <code>llmflow</code> 针对 <code>agent.StopError</code> 产出的 <code>stop_agent_error</code> 事件，以及任何 <code>event.NewErrorEvent(...)</code> 产出的事件）。但对于 <code>agent.Run</code> 同步返回 error（尚未建立事件通道）这一路径，Runner 会直接用内置兜底文案写入 session，此时本插件无法改写持久化内容。</p>
 <p>完整示例见 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/plugin/errormessage">examples/plugin/errormessage</a>。</p>
-<p>说明：目前仓库内置了 Logging、DebugLog、GlobalInstruction、ToolCallID、MessageMerger、ErrorMessage、Guardrail 七类插件。其中 Guardrail 插件当前提供的内置 capability 包括工具审批、Prompt Injection 和 Unsafe Intent。更多插件可通过自定义插件实现。</p>
+<p>说明：目前仓库内置了 Logging、DebugLog、GlobalInstruction、ToolCallID、ToolError、MessageMerger、ErrorMessage、Guardrail 八类插件。其中 Guardrail 插件当前提供的内置 capability 包括工具审批、Prompt Injection 和 Unsafe Intent。更多插件可通过自定义插件实现。</p>
 <h2 id="_14">如何扩展：写一个自己的插件</h2>
 <h3 id="1_1">1) 实现接口</h3>
 <p>自定义一个类型，实现：</p>
@@ -5075,42 +5190,42 @@ message。适合用来实现全局策略或统一行为（例如安全约束、�
 <li><code>OnEvent</code></li>
 </ul>
 <p>注册回调的方式就是：在 <code>Register(reg *plugin.Registry)</code> 中调用这些方法。例如：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-24-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-24-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-24-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-24-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-24-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-24-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-24-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-24-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-24-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-24-10">10</a></span>
-<span class="normal"><a href="#__codelineno-24-11">11</a></span>
-<span class="normal"><a href="#__codelineno-24-12">12</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-24-1"><a id="__codelineno-24-1" name="__codelineno-24-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">MyPlugin</span><span class="w"> </span><span class="kd">struct</span><span class="p">{}</span>
-</span><span id="__span-24-2"><a id="__codelineno-24-2" name="__codelineno-24-2"></a>
-</span><span id="__span-24-3"><a id="__codelineno-24-3" name="__codelineno-24-3"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">p</span><span class="w"> </span><span class="o">*</span><span class="nx">MyPlugin</span><span class="p">)</span><span class="w"> </span><span class="nx">Name</span><span class="p">()</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="s">&quot;my_plugin&quot;</span><span class="w"> </span><span class="p">}</span>
-</span><span id="__span-24-4"><a id="__codelineno-24-4" name="__codelineno-24-4"></a>
-</span><span id="__span-24-5"><a id="__codelineno-24-5" name="__codelineno-24-5"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">p</span><span class="w"> </span><span class="o">*</span><span class="nx">MyPlugin</span><span class="p">)</span><span class="w"> </span><span class="nx">Register</span><span class="p">(</span><span class="nx">reg</span><span class="w"> </span><span class="o">*</span><span class="nx">plugin</span><span class="p">.</span><span class="nx">Registry</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-24-6"><a id="__codelineno-24-6" name="__codelineno-24-6"></a><span class="w">    </span><span class="nx">reg</span><span class="p">.</span><span class="nx">BeforeModel</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span>
-</span><span id="__span-24-7"><a id="__codelineno-24-7" name="__codelineno-24-7"></a><span class="w">        </span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span>
-</span><span id="__span-24-8"><a id="__codelineno-24-8" name="__codelineno-24-8"></a><span class="w">        </span><span class="nx">args</span><span class="w"> </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">BeforeModelArgs</span><span class="p">,</span>
-</span><span id="__span-24-9"><a id="__codelineno-24-9" name="__codelineno-24-9"></a><span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">BeforeModelResult</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-24-10"><a id="__codelineno-24-10" name="__codelineno-24-10"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-24-11"><a id="__codelineno-24-11" name="__codelineno-24-11"></a><span class="w">    </span><span class="p">})</span>
-</span><span id="__span-24-12"><a id="__codelineno-24-12" name="__codelineno-24-12"></a><span class="p">}</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-27-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-27-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-27-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-27-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-27-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-27-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-27-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-27-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-27-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-27-10">10</a></span>
+<span class="normal"><a href="#__codelineno-27-11">11</a></span>
+<span class="normal"><a href="#__codelineno-27-12">12</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-27-1"><a id="__codelineno-27-1" name="__codelineno-27-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">MyPlugin</span><span class="w"> </span><span class="kd">struct</span><span class="p">{}</span>
+</span><span id="__span-27-2"><a id="__codelineno-27-2" name="__codelineno-27-2"></a>
+</span><span id="__span-27-3"><a id="__codelineno-27-3" name="__codelineno-27-3"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">p</span><span class="w"> </span><span class="o">*</span><span class="nx">MyPlugin</span><span class="p">)</span><span class="w"> </span><span class="nx">Name</span><span class="p">()</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="s">&quot;my_plugin&quot;</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-27-4"><a id="__codelineno-27-4" name="__codelineno-27-4"></a>
+</span><span id="__span-27-5"><a id="__codelineno-27-5" name="__codelineno-27-5"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">p</span><span class="w"> </span><span class="o">*</span><span class="nx">MyPlugin</span><span class="p">)</span><span class="w"> </span><span class="nx">Register</span><span class="p">(</span><span class="nx">reg</span><span class="w"> </span><span class="o">*</span><span class="nx">plugin</span><span class="p">.</span><span class="nx">Registry</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-27-6"><a id="__codelineno-27-6" name="__codelineno-27-6"></a><span class="w">    </span><span class="nx">reg</span><span class="p">.</span><span class="nx">BeforeModel</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span>
+</span><span id="__span-27-7"><a id="__codelineno-27-7" name="__codelineno-27-7"></a><span class="w">        </span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span>
+</span><span id="__span-27-8"><a id="__codelineno-27-8" name="__codelineno-27-8"></a><span class="w">        </span><span class="nx">args</span><span class="w"> </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">BeforeModelArgs</span><span class="p">,</span>
+</span><span id="__span-27-9"><a id="__codelineno-27-9" name="__codelineno-27-9"></a><span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">BeforeModelResult</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-27-10"><a id="__codelineno-27-10" name="__codelineno-27-10"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-27-11"><a id="__codelineno-27-11" name="__codelineno-27-11"></a><span class="w">    </span><span class="p">})</span>
+</span><span id="__span-27-12"><a id="__codelineno-27-12" name="__codelineno-27-12"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>注册完插件后，需要在创建 Runner 时启用它：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-25-1">1</a></span>
-<span class="normal"><a href="#__codelineno-25-2">2</a></span>
-<span class="normal"><a href="#__codelineno-25-3">3</a></span>
-<span class="normal"><a href="#__codelineno-25-4">4</a></span>
-<span class="normal"><a href="#__codelineno-25-5">5</a></span>
-<span class="normal"><a href="#__codelineno-25-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1"></a><span class="nx">runnerInstance</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span>
-</span><span id="__span-25-2"><a id="__codelineno-25-2" name="__codelineno-25-2"></a><span class="w">    </span><span class="s">&quot;my-app&quot;</span><span class="p">,</span>
-</span><span id="__span-25-3"><a id="__codelineno-25-3" name="__codelineno-25-3"></a><span class="w">    </span><span class="nx">agentInstance</span><span class="p">,</span>
-</span><span id="__span-25-4"><a id="__codelineno-25-4" name="__codelineno-25-4"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithPlugins</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">MyPlugin</span><span class="p">{}),</span>
-</span><span id="__span-25-5"><a id="__codelineno-25-5" name="__codelineno-25-5"></a><span class="p">)</span>
-</span><span id="__span-25-6"><a id="__codelineno-25-6" name="__codelineno-25-6"></a><span class="k">defer</span><span class="w"> </span><span class="nx">runnerInstance</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-28-1">1</a></span>
+<span class="normal"><a href="#__codelineno-28-2">2</a></span>
+<span class="normal"><a href="#__codelineno-28-3">3</a></span>
+<span class="normal"><a href="#__codelineno-28-4">4</a></span>
+<span class="normal"><a href="#__codelineno-28-5">5</a></span>
+<span class="normal"><a href="#__codelineno-28-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1"></a><span class="nx">runnerInstance</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span>
+</span><span id="__span-28-2"><a id="__codelineno-28-2" name="__codelineno-28-2"></a><span class="w">    </span><span class="s">&quot;my-app&quot;</span><span class="p">,</span>
+</span><span id="__span-28-3"><a id="__codelineno-28-3" name="__codelineno-28-3"></a><span class="w">    </span><span class="nx">agentInstance</span><span class="p">,</span>
+</span><span id="__span-28-4"><a id="__codelineno-28-4" name="__codelineno-28-4"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithPlugins</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">MyPlugin</span><span class="p">{}),</span>
+</span><span id="__span-28-5"><a id="__codelineno-28-5" name="__codelineno-28-5"></a><span class="p">)</span>
+</span><span id="__span-28-6"><a id="__codelineno-28-6" name="__codelineno-28-6"></a><span class="k">defer</span><span class="w"> </span><span class="nx">runnerInstance</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
 </span></code></pre></div></td></tr></table></div>
 <h3 id="3-plugincloser">3)（可选）实现 <code>plugin.Closer</code></h3>
 <p>如果插件需要释放资源（文件、后台 goroutine、缓冲区等），实现 <code>Close(ctx)</code> 让 Runner
@@ -5142,7 +5257,7 @@ message。适合用来实现全局策略或统一行为（例如安全约束、�
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年6月17日 04:55:34 UTC">2026-06-17 04:55:34</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年8月10日 15:11:31 UTC">2026-08-10 15:11:31</span>
   </span>
 
     

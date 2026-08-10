@@ -3650,7 +3650,10 @@
 <span class="normal"><a href="#__codelineno-5-24">24</a></span>
 <span class="normal"><a href="#__codelineno-5-25">25</a></span>
 <span class="normal"><a href="#__codelineno-5-26">26</a></span>
-<span class="normal"><a href="#__codelineno-5-27">27</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">BeforeToolArgs</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+<span class="normal"><a href="#__codelineno-5-27">27</a></span>
+<span class="normal"><a href="#__codelineno-5-28">28</a></span>
+<span class="normal"><a href="#__codelineno-5-29">29</a></span>
+<span class="normal"><a href="#__codelineno-5-30">30</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">BeforeToolArgs</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2"></a><span class="w">    </span><span class="nx">ToolCallID</span><span class="w">   </span><span class="kt">string</span><span class="w">               </span><span class="c1">// 模型发出的工具调用 ID</span>
 </span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3"></a><span class="w">    </span><span class="nx">ToolName</span><span class="w">     </span><span class="kt">string</span><span class="w">               </span><span class="c1">// 工具名称</span>
 </span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4"></a><span class="w">    </span><span class="nx">Declaration</span><span class="w">  </span><span class="o">*</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Declaration</span><span class="w">    </span><span class="c1">// 工具声明元数据</span>
@@ -3660,23 +3663,26 @@
 </span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8"></a><span class="kd">type</span><span class="w"> </span><span class="nx">BeforeToolResult</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9"></a><span class="w">    </span><span class="nx">Context</span><span class="w">           </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="w">  </span><span class="c1">// 可选，用于后续操作的上下文</span>
 </span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10"></a><span class="w">    </span><span class="nx">CustomResult</span><span class="w">      </span><span class="kt">any</span><span class="w">              </span><span class="c1">// 非空时跳过工具执行并返回此结果</span>
-</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11"></a><span class="w">    </span><span class="nx">ModifiedArguments</span><span class="w"> </span><span class="p">[]</span><span class="kt">byte</span><span class="w">           </span><span class="c1">// 可选，修改后的参数用于工具执行</span>
-</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12"></a><span class="p">}</span>
-</span><span id="__span-5-13"><a id="__codelineno-5-13" name="__codelineno-5-13"></a>
-</span><span id="__span-5-14"><a id="__codelineno-5-14" name="__codelineno-5-14"></a><span class="kd">type</span><span class="w"> </span><span class="nx">AfterToolArgs</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-5-15"><a id="__codelineno-5-15" name="__codelineno-5-15"></a><span class="w">    </span><span class="nx">ToolCallID</span><span class="w">   </span><span class="kt">string</span><span class="w">               </span><span class="c1">// 模型发出的工具调用 ID</span>
-</span><span id="__span-5-16"><a id="__codelineno-5-16" name="__codelineno-5-16"></a><span class="w">    </span><span class="nx">ToolName</span><span class="w">     </span><span class="kt">string</span><span class="w">               </span><span class="c1">// 工具名称</span>
-</span><span id="__span-5-17"><a id="__codelineno-5-17" name="__codelineno-5-17"></a><span class="w">    </span><span class="nx">Declaration</span><span class="w">  </span><span class="o">*</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Declaration</span><span class="w">    </span><span class="c1">// 工具声明元数据</span>
-</span><span id="__span-5-18"><a id="__codelineno-5-18" name="__codelineno-5-18"></a><span class="w">    </span><span class="nx">Arguments</span><span class="w">    </span><span class="p">[]</span><span class="kt">byte</span><span class="w">               </span><span class="c1">// before-tool 回调后的最终 JSON 参数</span>
-</span><span id="__span-5-19"><a id="__codelineno-5-19" name="__codelineno-5-19"></a><span class="w">    </span><span class="nx">Result</span><span class="w">       </span><span class="kt">any</span><span class="w">                  </span><span class="c1">// 工具执行结果（可能为 nil）</span>
-</span><span id="__span-5-20"><a id="__codelineno-5-20" name="__codelineno-5-20"></a><span class="w">    </span><span class="nx">Error</span><span class="w">        </span><span class="kt">error</span><span class="w">                </span><span class="c1">// 工具执行过程中发生的错误</span>
-</span><span id="__span-5-21"><a id="__codelineno-5-21" name="__codelineno-5-21"></a><span class="p">}</span>
-</span><span id="__span-5-22"><a id="__codelineno-5-22" name="__codelineno-5-22"></a>
-</span><span id="__span-5-23"><a id="__codelineno-5-23" name="__codelineno-5-23"></a><span class="kd">type</span><span class="w"> </span><span class="nx">AfterToolResult</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-5-24"><a id="__codelineno-5-24" name="__codelineno-5-24"></a><span class="w">    </span><span class="nx">Context</span><span class="w">      </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="w">  </span><span class="c1">// 可选，用于后续操作的上下文</span>
-</span><span id="__span-5-25"><a id="__codelineno-5-25" name="__codelineno-5-25"></a><span class="w">    </span><span class="nx">CustomResult</span><span class="w"> </span><span class="kt">any</span><span class="w">              </span><span class="c1">// 非空时替换原始结果</span>
-</span><span id="__span-5-26"><a id="__codelineno-5-26" name="__codelineno-5-26"></a><span class="w">    </span><span class="nx">SkipSummarization</span><span class="w"> </span><span class="kt">bool</span><span class="w">        </span><span class="c1">// 为 true 时在 tool.response 后结束本轮</span>
-</span><span id="__span-5-27"><a id="__codelineno-5-27" name="__codelineno-5-27"></a><span class="p">}</span>
+</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11"></a><span class="w">    </span><span class="nx">SkipStateDelta</span><span class="w">    </span><span class="kt">bool</span><span class="w">             </span><span class="c1">// 跳过 CustomResult 的 state-delta provider</span>
+</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12"></a><span class="w">    </span><span class="nx">ModifiedArguments</span><span class="w"> </span><span class="p">[]</span><span class="kt">byte</span><span class="w">           </span><span class="c1">// 可选，修改后的参数用于工具执行</span>
+</span><span id="__span-5-13"><a id="__codelineno-5-13" name="__codelineno-5-13"></a><span class="p">}</span>
+</span><span id="__span-5-14"><a id="__codelineno-5-14" name="__codelineno-5-14"></a>
+</span><span id="__span-5-15"><a id="__codelineno-5-15" name="__codelineno-5-15"></a><span class="kd">type</span><span class="w"> </span><span class="nx">AfterToolArgs</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-5-16"><a id="__codelineno-5-16" name="__codelineno-5-16"></a><span class="w">    </span><span class="nx">ToolCallID</span><span class="w">   </span><span class="kt">string</span><span class="w">               </span><span class="c1">// 模型发出的工具调用 ID</span>
+</span><span id="__span-5-17"><a id="__codelineno-5-17" name="__codelineno-5-17"></a><span class="w">    </span><span class="nx">ToolName</span><span class="w">     </span><span class="kt">string</span><span class="w">               </span><span class="c1">// 工具名称</span>
+</span><span id="__span-5-18"><a id="__codelineno-5-18" name="__codelineno-5-18"></a><span class="w">    </span><span class="nx">Declaration</span><span class="w">  </span><span class="o">*</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Declaration</span><span class="w">    </span><span class="c1">// 工具声明元数据</span>
+</span><span id="__span-5-19"><a id="__codelineno-5-19" name="__codelineno-5-19"></a><span class="w">    </span><span class="nx">Arguments</span><span class="w">    </span><span class="p">[]</span><span class="kt">byte</span><span class="w">               </span><span class="c1">// before-tool 回调后的最终 JSON 参数</span>
+</span><span id="__span-5-20"><a id="__codelineno-5-20" name="__codelineno-5-20"></a><span class="w">    </span><span class="nx">Result</span><span class="w">       </span><span class="kt">any</span><span class="w">                  </span><span class="c1">// 工具执行结果（可能为 nil）</span>
+</span><span id="__span-5-21"><a id="__codelineno-5-21" name="__codelineno-5-21"></a><span class="w">    </span><span class="nx">Error</span><span class="w">        </span><span class="kt">error</span><span class="w">                </span><span class="c1">// 工具执行过程中发生的错误</span>
+</span><span id="__span-5-22"><a id="__codelineno-5-22" name="__codelineno-5-22"></a><span class="p">}</span>
+</span><span id="__span-5-23"><a id="__codelineno-5-23" name="__codelineno-5-23"></a>
+</span><span id="__span-5-24"><a id="__codelineno-5-24" name="__codelineno-5-24"></a><span class="kd">type</span><span class="w"> </span><span class="nx">AfterToolResult</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-5-25"><a id="__codelineno-5-25" name="__codelineno-5-25"></a><span class="w">    </span><span class="nx">Context</span><span class="w">             </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="w">  </span><span class="c1">// 可选，用于后续操作的上下文</span>
+</span><span id="__span-5-26"><a id="__codelineno-5-26" name="__codelineno-5-26"></a><span class="w">    </span><span class="nx">CustomResult</span><span class="w">        </span><span class="kt">any</span><span class="w">              </span><span class="c1">// 非空时替换原始结果</span>
+</span><span id="__span-5-27"><a id="__codelineno-5-27" name="__codelineno-5-27"></a><span class="w">    </span><span class="nx">SkipResultFormatter</span><span class="w"> </span><span class="kt">bool</span><span class="w">             </span><span class="c1">// 对 CustomResult 使用默认 JSON 序列化</span>
+</span><span id="__span-5-28"><a id="__codelineno-5-28" name="__codelineno-5-28"></a><span class="w">    </span><span class="nx">SkipStateDelta</span><span class="w">      </span><span class="kt">bool</span><span class="w">             </span><span class="c1">// 跳过 CustomResult 的 state-delta provider</span>
+</span><span id="__span-5-29"><a id="__codelineno-5-29" name="__codelineno-5-29"></a><span class="w">    </span><span class="nx">SkipSummarization</span><span class="w">   </span><span class="kt">bool</span><span class="w">             </span><span class="c1">// 为 true 时在 tool.response 后结束本轮</span>
+</span><span id="__span-5-30"><a id="__codelineno-5-30" name="__codelineno-5-30"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>签名：</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-6-1">1</a></span>
@@ -3692,6 +3698,11 @@
   只给 <code>args.Arguments</code> 重新赋值，只会影响当前回调链中后续读取该字段的逻辑</li>
 <li>BeforeToolCallbackStructured 返回非空自定义结果时，会跳过工具执行并直接使用该结果</li>
 <li><code>BeforeToolArgs</code> 和 <code>AfterToolArgs</code> 中提供了 <code>ToolCallID</code></li>
+<li><code>AfterToolResult.SkipResultFormatter</code> 会让非空 <code>CustomResult</code> 跳过工具配置的 result
+  formatter，并使用默认 JSON 序列化。适用于替换结果是协议或错误 envelope、而不是工具
+  声明输出类型的正常值时</li>
+<li><code>BeforeToolResult.SkipStateDelta</code> 和 <code>AfterToolResult.SkipStateDelta</code> 会阻止非空
+  <code>CustomResult</code> 触发工具的 state-delta provider，适用于替换结果并非工具成功输出的场景</li>
 <li><code>AfterToolResult.SkipSummarization</code> 允许回调在判断工具结果后，让本轮在
   <code>tool.response</code> 后直接结束</li>
 <li><code>SkipSummarization</code> 只会跳过额外的总结型 LLM 调用；真正的结束信号仍然是
@@ -4652,7 +4663,7 @@ assistant 响应。若消费侧需要真正的终止标记，仍应持续读取�
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年5月7日 09:51:41 UTC">2026-05-07 09:51:41</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年8月10日 15:11:31 UTC">2026-08-10 15:11:31</span>
   </span>
 
     
