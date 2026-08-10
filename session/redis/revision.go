@@ -10,6 +10,7 @@ package redis
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
@@ -121,23 +122,23 @@ func (s *Service) flushRevisionPersistence(
 	if !s.opts.enableAsyncPersist {
 		return nil
 	}
-	sess := session.NewSession(key.AppName, key.UserID, key.SessionID)
-	if err := flushPairChannel(ctx, s.eventPairChans, sess.Hash, &sessionEventPair{}); err != nil {
-		return err
-	}
-	return flushTrackPairChannel(ctx, s.trackEventChans, sess.Hash)
+	eventErr := flushPairChannel(ctx, s.eventPairChans, key, &sessionEventPair{})
+	trackErr := flushTrackPairChannel(ctx, s.trackEventChans, key)
+	return errors.Join(eventErr, trackErr)
 }
 
 func flushPairChannel(
 	ctx context.Context,
 	channels []chan *sessionEventPair,
-	hash int,
+	key session.Key,
 	barrier *sessionEventPair,
 ) error {
 	if len(channels) == 0 {
 		return nil
 	}
+	barrier.key = key
 	barrier.done = make(chan error, 1)
+	hash := session.NewSession(key.AppName, key.UserID, key.SessionID).Hash
 	select {
 	case channels[hash%len(channels)] <- barrier:
 	case <-ctx.Done():
@@ -154,12 +155,13 @@ func flushPairChannel(
 func flushTrackPairChannel(
 	ctx context.Context,
 	channels []chan *trackEventPair,
-	hash int,
+	key session.Key,
 ) error {
 	if len(channels) == 0 {
 		return nil
 	}
-	barrier := &trackEventPair{done: make(chan error, 1)}
+	barrier := &trackEventPair{key: key, done: make(chan error, 1)}
+	hash := session.NewSession(key.AppName, key.UserID, key.SessionID).Hash
 	select {
 	case channels[hash%len(channels)] <- barrier:
 	case <-ctx.Done():

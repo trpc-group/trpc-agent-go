@@ -19,8 +19,7 @@ import (
 )
 
 type latestTurnRevision struct {
-	record   sessionrevision.PersistedRecord
-	archives map[uint64]*session.Session
+	record sessionrevision.PersistedRecord
 }
 
 func (s *sessionWithTTL) revisionGeneration() uint64 {
@@ -147,10 +146,6 @@ func (s *SessionService) ReplaceLatestTurn(
 	if rev.record.Generation == math.MaxUint64 {
 		return nil, fmt.Errorf("session revision generation exhausted: %w", sessionrevision.ErrLatestTurnReplacementUnavailable)
 	}
-	if rev.archives == nil {
-		rev.archives = make(map[uint64]*session.Session)
-	}
-	rev.archives[rev.record.Generation] = stored.session.Clone()
 	restored, err := sessionrevision.DecodeSnapshot(checkpoint.Snapshot)
 	if err != nil {
 		return nil, fmt.Errorf("decode latest-turn checkpoint: %w", err)
@@ -160,14 +155,15 @@ func (s *SessionService) ReplaceLatestTurn(
 	sessionrevision.SetGeneration(restored, rev.record.Generation)
 	stored.session = restored
 	rev.record.Checkpoint = nil
-	if rev.record.Replays == nil {
-		rev.record.Replays = make(map[string]sessionrevision.PersistedReplay)
-	}
-	rev.record.Replays[req.IdempotencyKey] = sessionrevision.PersistedReplay{
-		RequestID:  req.ExpectedRequestID,
-		Generation: rev.record.Generation,
-		Head:       rev.record.Head,
-	}
+	sessionrevision.RecordLatestTurnReplacementReplay(
+		&rev.record,
+		req.IdempotencyKey,
+		sessionrevision.PersistedReplay{
+			RequestID:  req.ExpectedRequestID,
+			Generation: rev.record.Generation,
+			Head:       rev.record.Head,
+		},
+	)
 	active := restored.Clone()
 	return &sessionrevision.LatestTurnReplacementResult{
 		ActiveSession: s.mergeScopedStateLocked(app, req.Key.UserID, active),

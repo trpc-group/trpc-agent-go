@@ -358,6 +358,50 @@ func TestRevisionMutationErrors(t *testing.T) {
 	assert.ErrorContains(t, err, "update failed")
 }
 
+func TestRevisionEventFastPath(t *testing.T) {
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	recordRaw, err := encodeRevision(&sessionrevision.PersistedRecord{Generation: 2})
+	require.NoError(t, err)
+	doc := sessionStateDoc{
+		AppName: key.AppName, UserID: key.UserID, SessionID: key.SessionID,
+		Revision: recordRaw,
+	}
+	partial := nonPartialResponseEvent(t)
+	partial.IsPartial = true
+
+	t.Run("avoids transaction", func(t *testing.T) {
+		s, mc := revisionTestService(t, doc)
+		mc.transactionFn = func(func(mongo.SessionContext) error) error {
+			t.Fatal("fast path should not open a transaction")
+			return nil
+		}
+		require.NoError(t, s.persistEventWithRevision(
+			context.Background(), key, partial,
+			sessionrevision.Write{HasExpectedGeneration: true, ExpectedGeneration: 2},
+		))
+		ops := mc.recorded()
+		assert.Equal(t, []string{"FindOne", "UpdateOne"}, []string{ops[0].name, ops[1].name})
+		filter := ops[1].filter.(bson.M)
+		assert.Equal(t, recordRaw, filter["revision"])
+	})
+
+	t.Run("retries compare and swap", func(t *testing.T) {
+		s, mc := revisionTestService(t, doc)
+		attempts := 0
+		mc.updateOneFn = func(any, any, []*options.UpdateOptions) (*mongo.UpdateResult, error) {
+			attempts++
+			if attempts == 1 {
+				return &mongo.UpdateResult{}, nil
+			}
+			return &mongo.UpdateResult{MatchedCount: 1}, nil
+		}
+		require.NoError(t, s.persistEventWithRevision(
+			context.Background(), key, partial, sessionrevision.Write{},
+		))
+		assert.Equal(t, 2, attempts)
+	})
+}
+
 func TestLoadActiveRevisionSessionErrors(t *testing.T) {
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
 	doc := sessionStateDoc{}
@@ -464,12 +508,47 @@ func TestRestoreRevisionProjectionErrors(t *testing.T) {
 	record := &sessionrevision.PersistedRecord{}
 
 	t.Run("clear projection", func(t *testing.T) {
-		mc := &mockClient{deleteManyFn: func(any) (*mongo.DeleteResult, error) {
+		mc := &mockClient{updateManyFn: func(any, any, []*options.UpdateOptions) (*mongo.UpdateResult, error) {
 			return nil, errors.New("delete failed")
 		}}
 		s := newServiceForTest(t, mc)
 		err := s.restoreRevisionProjection(context.Background(), key, restored, sessionStateDoc{}, record)
 		assert.ErrorContains(t, err, "clear discarded session projection")
+	})
+
+	t.Run("soft delete projection", func(t *testing.T) {
+		var filters []bson.M
+		mc := &mockClient{updateManyFn: func(filter, update any, _ []*options.UpdateOptions) (*mongo.UpdateResult, error) {
+			filters = append(filters, filter.(bson.M))
+			set := update.(bson.M)["$set"].(bson.M)
+			assert.NotNil(t, set["deleted_at"])
+			return &mongo.UpdateResult{}, nil
+		}}
+		s := newServiceForTest(t, mc)
+		require.NoError(t, s.restoreRevisionProjection(
+			context.Background(), key, restored, sessionStateDoc{}, record,
+		))
+		require.Len(t, filters, 2)
+		for _, filter := range filters {
+			assert.Equal(t, nil, filter["deleted_at"])
+		}
+	})
+
+	t.Run("hard delete projection", func(t *testing.T) {
+		mc := &mockClient{}
+		s := newServiceForTest(t, mc, func(opts *serviceOpts) {
+			opts.softDelete = false
+		})
+		require.NoError(t, s.restoreRevisionProjection(
+			context.Background(), key, restored, sessionStateDoc{}, record,
+		))
+		var deletes int
+		for _, op := range mc.recorded() {
+			if op.name == "DeleteMany" {
+				deletes++
+			}
+		}
+		assert.Equal(t, 2, deletes)
 	})
 
 	t.Run("missing state", func(t *testing.T) {
@@ -541,13 +620,13 @@ func TestRestoreRevisionProjectionErrors(t *testing.T) {
 				}, nil, nil)
 			},
 		}
-		deleteCalls := 0
-		mc.deleteManyFn = func(any) (*mongo.DeleteResult, error) {
-			deleteCalls++
-			if deleteCalls == 3 {
+		updateCalls := 0
+		mc.updateManyFn = func(any, any, []*options.UpdateOptions) (*mongo.UpdateResult, error) {
+			updateCalls++
+			if updateCalls == 3 {
 				return nil, errors.New("delete failed")
 			}
-			return &mongo.DeleteResult{}, nil
+			return &mongo.UpdateResult{}, nil
 		}
 		s := newServiceForTest(t, mc)
 		err = s.restoreRevisionProjection(
@@ -953,7 +1032,7 @@ func TestReplaceLatestTurnProtocolFailures(t *testing.T) {
 		raw, encodeErr := encodeRevision(record)
 		require.NoError(t, encodeErr)
 		s, mc := revisionTestService(t, sessionStateDoc{Revision: raw})
-		mc.deleteManyFn = func(any) (*mongo.DeleteResult, error) {
+		mc.updateManyFn = func(any, any, []*options.UpdateOptions) (*mongo.UpdateResult, error) {
 			return nil, errors.New("restore failed")
 		}
 		_, err := s.ReplaceLatestTurn(context.Background(), req)

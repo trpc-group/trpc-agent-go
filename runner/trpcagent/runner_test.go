@@ -927,9 +927,6 @@ func (r *fakeServerRunner) Run(
 ) (<-chan *event.Event, error) {
 	r.message = message
 	options := agent.NewRunOptions(runOpts...)
-	if replacement := options.LatestTurnReplacement; replacement != nil {
-		options.RequestID = replacement.RequestID
-	}
 	r.runOptions = append(r.runOptions, options)
 	ch := make(chan *event.Event, len(r.events))
 	for _, evt := range r.events {

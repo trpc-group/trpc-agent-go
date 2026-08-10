@@ -79,9 +79,9 @@ const (
 
 	sqlCreateSessionRevisionsTable = `
 		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
-			app_name VARCHAR(191) NOT NULL,
-			user_id VARCHAR(191) NOT NULL,
-			session_id VARCHAR(191) NOT NULL,
+			app_name VARCHAR(255) NOT NULL,
+			user_id VARCHAR(255) NOT NULL,
+			session_id VARCHAR(255) NOT NULL,
 			record JSON NOT NULL,
 			updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
 			expires_at TIMESTAMP(6) NULL DEFAULT NULL,
@@ -90,9 +90,9 @@ const (
 
 	sqlCreateSessionRevisionArchivesTable = `
 		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
-			app_name VARCHAR(191) NOT NULL,
-			user_id VARCHAR(191) NOT NULL,
-			session_id VARCHAR(191) NOT NULL,
+			app_name VARCHAR(255) NOT NULL,
+			user_id VARCHAR(255) NOT NULL,
+			session_id VARCHAR(255) NOT NULL,
 			generation BIGINT UNSIGNED NOT NULL,
 			snapshot JSON NOT NULL,
 			created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
@@ -507,9 +507,9 @@ const (
 
 	tdsqlCreateSessionRevisionsTable = `
 		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
-			app_name VARCHAR(191) NOT NULL,
-			user_id VARCHAR(191) NOT NULL,
-			session_id VARCHAR(191) NOT NULL,
+			app_name VARCHAR(255) NOT NULL,
+			user_id VARCHAR(255) NOT NULL,
+			session_id VARCHAR(255) NOT NULL,
 			record JSON NOT NULL,
 			updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
 			expires_at TIMESTAMP(6) NULL DEFAULT NULL,
@@ -518,9 +518,9 @@ const (
 
 	tdsqlCreateSessionRevisionArchivesTable = `
 		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
-			app_name VARCHAR(191) NOT NULL,
-			user_id VARCHAR(191) NOT NULL,
-			session_id VARCHAR(191) NOT NULL,
+			app_name VARCHAR(255) NOT NULL,
+			user_id VARCHAR(255) NOT NULL,
+			session_id VARCHAR(255) NOT NULL,
 			generation BIGINT UNSIGNED NOT NULL,
 			snapshot JSON NOT NULL,
 			created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),

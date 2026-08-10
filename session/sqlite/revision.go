@@ -212,28 +212,28 @@ func (s *Service) flushRevisionPersistence(
 		return nil
 	}
 	hash := session.NewSession(key.AppName, key.UserID, key.SessionID).Hash
-	eventBarrier := &sessionEventPair{done: make(chan error, 1)}
+	eventBarrier := &sessionEventPair{key: key, done: make(chan error, 1)}
 	select {
 	case s.eventPairChans[hash%len(s.eventPairChans)] <- eventBarrier:
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+	var flushErr error
 	select {
 	case err := <-eventBarrier.done:
-		if err != nil {
-			return err
-		}
+		flushErr = err
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-	return s.flushTrackPersistence(ctx, hash)
+	return errors.Join(flushErr, s.flushTrackPersistence(ctx, key))
 }
 
-func (s *Service) flushTrackPersistence(ctx context.Context, hash int) error {
+func (s *Service) flushTrackPersistence(ctx context.Context, key session.Key) error {
 	if !s.opts.enableAsyncPersist || len(s.trackEventChans) == 0 {
 		return nil
 	}
-	trackBarrier := &trackEventPair{done: make(chan error, 1)}
+	hash := session.NewSession(key.AppName, key.UserID, key.SessionID).Hash
+	trackBarrier := &trackEventPair{key: key, done: make(chan error, 1)}
 	select {
 	case s.trackEventChans[hash%len(s.trackEventChans)] <- trackBarrier:
 	case <-ctx.Done():
@@ -334,14 +334,15 @@ func (s *Service) ReplaceLatestTurn(
 	record.Generation++
 	record.Head++
 	record.Checkpoint = nil
-	if record.Replays == nil {
-		record.Replays = make(map[string]sessionrevision.PersistedReplay)
-	}
-	record.Replays[req.IdempotencyKey] = sessionrevision.PersistedReplay{
-		RequestID:  req.ExpectedRequestID,
-		Generation: record.Generation,
-		Head:       record.Head,
-	}
+	sessionrevision.RecordLatestTurnReplacementReplay(
+		record,
+		req.IdempotencyKey,
+		sessionrevision.PersistedReplay{
+			RequestID:  req.ExpectedRequestID,
+			Generation: record.Generation,
+			Head:       record.Head,
+		},
+	)
 	if err := s.writeRevisionTx(ctx, tx, req.Key, record, nullInt64Arg(expiresAt)); err != nil {
 		return nil, err
 	}
@@ -468,6 +469,10 @@ ORDER BY created_at ASC, id ASC`,
 		}
 		active.Events = append(active.Events, evt)
 	}
+	if err := eventRows.Err(); err != nil {
+		_ = eventRows.Close()
+		return fmt.Errorf("load active events: %w", err)
+	}
 	if err := eventRows.Close(); err != nil {
 		return err
 	}
@@ -517,6 +522,10 @@ ORDER BY created_at ASC, id ASC`,
 		}
 		active.Tracks[track].Events = append(active.Tracks[track].Events, trackEvent)
 	}
+	if err := trackRows.Err(); err != nil {
+		_ = trackRows.Close()
+		return fmt.Errorf("load active tracks: %w", err)
+	}
 	if err := trackRows.Close(); err != nil {
 		return err
 	}
@@ -561,6 +570,10 @@ WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
 			active.Summaries = make(map[string]*session.Summary)
 		}
 		active.Summaries[filterKey] = &summary
+	}
+	if err := summaryRows.Err(); err != nil {
+		_ = summaryRows.Close()
+		return fmt.Errorf("load active summaries: %w", err)
 	}
 	if err := summaryRows.Close(); err != nil {
 		return err
@@ -727,6 +740,10 @@ AND deleted_at IS NULL ORDER BY created_at, id`,
 			return err
 		}
 		active[track] = append(active[track], trackRow{id: id, event: trackEvent})
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("iterate active tracks: %w", err)
 	}
 	if err := rows.Close(); err != nil {
 		return err

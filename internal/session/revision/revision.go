@@ -29,6 +29,8 @@ const generationServiceMetaKey = "trpc-agent-go.session.revision-generation"
 
 const stableProjectionReadAttempts = 3
 
+const maxPersistedReplays = 64
+
 type latestTurnReplacementSupportReporter interface {
 	SupportsLatestTurnReplacement() bool
 }
@@ -150,6 +152,24 @@ func LoadStableListedProjection(
 	generation, err := readGeneration(ctx)
 	if err != nil {
 		return nil, err
+	}
+	return LoadStableListedProjectionAtGeneration(
+		ctx, listed, metadataOnly, generation, readGeneration, readProjection,
+	)
+}
+
+// LoadStableListedProjectionAtGeneration validates a listed projection using
+// a generation obtained by a caller's batched read.
+func LoadStableListedProjectionAtGeneration(
+	ctx context.Context,
+	listed *session.Session,
+	metadataOnly bool,
+	generation uint64,
+	readGeneration func(context.Context) (uint64, error),
+	readProjection func(context.Context) (*session.Session, error),
+) (*session.Session, error) {
+	if listed == nil {
+		return nil, nil
 	}
 	if generation == 0 {
 		SetGeneration(listed, 0)
@@ -299,6 +319,73 @@ type PersistedRecord struct {
 	Head       uint64                     `json:"head"`
 	Checkpoint *PersistedCheckpoint       `json:"checkpoint,omitempty"`
 	Replays    map[string]PersistedReplay `json:"replays,omitempty"`
+}
+
+// RecordLatestTurnReplacementReplay retains a bounded window of replacement
+// identities. Entries outside the window no longer participate in reuse
+// detection; callers should retry ambiguous transitions promptly.
+func RecordLatestTurnReplacementReplay(
+	record *PersistedRecord,
+	idempotencyKey string,
+	replay PersistedReplay,
+) {
+	if record == nil || idempotencyKey == "" {
+		return
+	}
+	if record.Replays == nil {
+		record.Replays = make(map[string]PersistedReplay)
+	}
+	record.Replays[idempotencyKey] = replay
+	if len(record.Replays) <= maxPersistedReplays {
+		return
+	}
+	var oldestKey string
+	var oldest PersistedReplay
+	for key, candidate := range record.Replays {
+		if oldestKey == "" || replayPrecedes(candidate, key, oldest, oldestKey) {
+			oldestKey = key
+			oldest = candidate
+		}
+	}
+	delete(record.Replays, oldestKey)
+}
+
+func replayPrecedes(a PersistedReplay, aKey string, b PersistedReplay, bKey string) bool {
+	if a.Generation != b.Generation {
+		return a.Generation < b.Generation
+	}
+	if a.Head != b.Head {
+		return a.Head < b.Head
+	}
+	return aKey < bKey
+}
+
+// PendingErrors accumulates asynchronous persistence failures by session.
+// It is intended to be owned by one persistence worker and is not safe for
+// concurrent use.
+type PendingErrors struct {
+	byKey map[session.Key]error
+}
+
+// Add retains err for the next barrier belonging to key.
+func (p *PendingErrors) Add(key session.Key, err error) {
+	if err == nil {
+		return
+	}
+	if p.byKey == nil {
+		p.byKey = make(map[session.Key]error)
+	}
+	p.byKey[key] = errors.Join(p.byKey[key], err)
+}
+
+// Take returns and clears failures accumulated for key.
+func (p *PendingErrors) Take(key session.Key) error {
+	if p.byKey == nil {
+		return nil
+	}
+	err := p.byKey[key]
+	delete(p.byKey, key)
+	return err
 }
 
 // LatestTurnReplacementReplay returns a matching idempotent replacement

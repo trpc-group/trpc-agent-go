@@ -88,7 +88,7 @@ func (s *Service) flushRevisionPersistence(
 	if len(s.persistChans) == 0 {
 		return fmt.Errorf("async persist workers are not initialized")
 	}
-	barrier := &persistJob{done: make(chan error, 1)}
+	barrier := &persistJob{key: key, done: make(chan error, 1)}
 	ch := s.persistChans[sessionPersistIndex(key, len(s.persistChans))]
 	select {
 	case ch <- barrier:
@@ -116,9 +116,70 @@ func (s *Service) persistEventWithRevision(
 	if err != nil {
 		return err
 	}
+	if write.Start == nil && mutation.eventDoc == nil &&
+		len(mutation.appState) == 0 && len(mutation.userState) == 0 {
+		return s.persistRevisionEventFast(ctx, key, e, write, mutation)
+	}
 	return s.client.Transaction(ctx, func(sc mongo.SessionContext) error {
 		return s.persistRevisionEvent(sc, key, e, write, mutation)
 	}, nil)
+}
+
+func (s *Service) persistRevisionEventFast(
+	ctx context.Context,
+	key session.Key,
+	e *event.Event,
+	write sessionrevision.Write,
+	mutation revisionEventMutation,
+) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		var doc sessionStateDoc
+		if err := s.client.FindOne(
+			ctx,
+			s.database,
+			s.collSessionStates,
+			activeFilterNoExpiry(sessionKeyFilter(key)),
+		).Decode(&doc); err != nil {
+			if errors.Is(err, mongo.ErrNoDocuments) {
+				return errSessionNotFound
+			}
+			return fmt.Errorf("get session state: %w", err)
+		}
+		record, err := decodeRevision(doc.Revision)
+		if err != nil {
+			return err
+		}
+		if err := checkRevisionGeneration(record, write); err != nil {
+			return err
+		}
+		sessionrevision.ApplyEventWrite(record, write, e, false)
+		revisionRaw, err := encodeRevision(record)
+		if err != nil {
+			return err
+		}
+		now := time.Now()
+		mutation.stateSet["updated_at"] = now
+		mutation.stateSet["revision"] = revisionRaw
+		mutation.expiresAt = expiresAtPtr(now, s.opts.sessionTTL)
+		filter := activeFilterNoExpiry(sessionKeyFilter(key))
+		filter["revision"] = doc.Revision
+		res, err := s.client.UpdateOne(
+			ctx,
+			s.database,
+			s.collSessionStates,
+			filter,
+			sessionStateUpdate(mutation.stateSet, mutation.expiresAt),
+		)
+		if err != nil {
+			return fmt.Errorf("update session state: %w", err)
+		}
+		if res.MatchedCount > 0 {
+			return nil
+		}
+	}
 }
 
 type revisionEventMutation struct {
@@ -463,13 +524,14 @@ func (s *Service) ReplaceLatestTurn(
 		record.Generation++
 		record.Head++
 		record.Checkpoint = nil
-		if record.Replays == nil {
-			record.Replays = make(map[string]sessionrevision.PersistedReplay)
-		}
-		record.Replays[req.IdempotencyKey] = sessionrevision.PersistedReplay{
-			RequestID: req.ExpectedRequestID, Generation: record.Generation,
-			Head: record.Head,
-		}
+		sessionrevision.RecordLatestTurnReplacementReplay(
+			record,
+			req.IdempotencyKey,
+			sessionrevision.PersistedReplay{
+				RequestID: req.ExpectedRequestID, Generation: record.Generation,
+				Head: record.Head,
+			},
+		)
 		if err := s.restoreRevisionProjection(sc, req.Key, restored, doc, record); err != nil {
 			return err
 		}
@@ -590,10 +652,11 @@ func (s *Service) restoreRevisionProjection(
 	record *sessionrevision.PersistedRecord,
 ) error {
 	filter := sessionKeyFilter(key)
+	now := time.Now()
 	for _, coll := range []string{
 		s.collSessionEvents, s.collSessionSummaries,
 	} {
-		if _, err := s.client.DeleteMany(ctx, s.database, coll, filter); err != nil {
+		if err := s.discardRevisionDocuments(ctx, coll, filter, now); err != nil {
 			return fmt.Errorf("clear discarded session projection: %w", err)
 		}
 	}
@@ -743,13 +806,30 @@ func (s *Service) trimRevisionTrackTails(
 	}
 	filter := sessionKeyFilter(key)
 	filter["_id"] = bson.M{"$in": tail}
-	if _, err := s.client.DeleteMany(
-		ctx,
-		s.database,
-		s.collSessionTracks,
-		filter,
+	if err := s.discardRevisionDocuments(
+		ctx, s.collSessionTracks, filter, time.Now(),
 	); err != nil {
 		return fmt.Errorf("remove discarded track tail: %w", err)
 	}
 	return nil
+}
+
+func (s *Service) discardRevisionDocuments(
+	ctx context.Context,
+	collection string,
+	filter bson.M,
+	now time.Time,
+) error {
+	if s.opts.softDelete {
+		_, err := s.client.UpdateMany(
+			ctx,
+			s.database,
+			collection,
+			activeFilterNoExpiry(filter),
+			bson.M{"$set": bson.M{"deleted_at": now}},
+		)
+		return err
+	}
+	_, err := s.client.DeleteMany(ctx, s.database, collection, filter)
+	return err
 }

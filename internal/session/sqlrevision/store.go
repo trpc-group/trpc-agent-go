@@ -188,6 +188,64 @@ func (s Store) Generation(
 	return record.Generation, nil
 }
 
+// Generations loads revision generations for keys in one query. Missing rows
+// and missing additive schema are reported as generation zero.
+func (s Store) Generations(
+	ctx context.Context,
+	query rowsQuerier,
+	keys []session.Key,
+) (map[session.Key]uint64, error) {
+	generations := make(map[session.Key]uint64, len(keys))
+	for _, key := range keys {
+		generations[key] = 0
+	}
+	if len(keys) == 0 || s.Tables.Revisions == "" {
+		return generations, nil
+	}
+	clauses := make([]string, len(keys))
+	args := make([]any, 0, len(keys)*3)
+	for i, key := range keys {
+		position := i*3 + 1
+		clauses[i] = fmt.Sprintf(
+			"(app_name = %s AND user_id = %s AND session_id = %s)",
+			s.bind(position), s.bind(position+1), s.bind(position+2),
+		)
+		args = append(args, key.AppName, key.UserID, key.SessionID)
+	}
+	rows, err := query.QueryContext(
+		ctx,
+		fmt.Sprintf(
+			"SELECT app_name, user_id, session_id, record FROM %s WHERE %s",
+			s.Tables.Revisions,
+			strings.Join(clauses, " OR "),
+		),
+		args...,
+	)
+	if IsSchemaMissing(err) {
+		return generations, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read session revisions: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var key session.Key
+		var raw []byte
+		if err := rows.Scan(&key.AppName, &key.UserID, &key.SessionID, &raw); err != nil {
+			return nil, fmt.Errorf("scan session revision: %w", err)
+		}
+		var record sessionrevision.PersistedRecord
+		if err := json.Unmarshal(raw, &record); err != nil {
+			return nil, fmt.Errorf("decode session revision: %w", err)
+		}
+		generations[key] = record.Generation
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate session revisions: %w", err)
+	}
+	return generations, nil
+}
+
 // Write stores the active revision record in the caller's transaction.
 func (s Store) Write(
 	ctx context.Context,
@@ -657,14 +715,15 @@ func (s Store) ReplaceLatestTurn(
 	record.Generation++
 	record.Head++
 	record.Checkpoint = nil
-	if record.Replays == nil {
-		record.Replays = make(map[string]sessionrevision.PersistedReplay)
-	}
-	record.Replays[req.IdempotencyKey] = sessionrevision.PersistedReplay{
-		RequestID:  req.ExpectedRequestID,
-		Generation: record.Generation,
-		Head:       record.Head,
-	}
+	sessionrevision.RecordLatestTurnReplacementReplay(
+		record,
+		req.IdempotencyKey,
+		sessionrevision.PersistedReplay{
+			RequestID:  req.ExpectedRequestID,
+			Generation: record.Generation,
+			Head:       record.Head,
+		},
+	)
 	if err := s.Write(ctx, tx, req.Key, record, expiresAt); err != nil {
 		return nil, err
 	}
@@ -793,6 +852,10 @@ func (s Store) trimEventTail(
 		}
 		ids = append(ids, id)
 	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("iterate active events: %w", err)
+	}
 	if err := rows.Close(); err != nil {
 		return err
 	}
@@ -869,6 +932,10 @@ AND deleted_at IS NULL ORDER BY created_at, id FOR UPDATE`,
 			return err
 		}
 		active[track] = append(active[track], trackRow{id: id, event: trackEvent})
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("iterate active tracks: %w", err)
 	}
 	if err := rows.Close(); err != nil {
 		return err

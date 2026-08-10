@@ -689,7 +689,7 @@ func (s *Service) appendEventInternal(
 		if err := flushTrackPairChannel(
 			ctx,
 			s.trackEventChans,
-			sess.Hash,
+			key,
 		); err != nil {
 			return fmt.Errorf("flush track persistence before runner completion: %w", err)
 		}
@@ -895,16 +895,15 @@ func (s *Service) startAsyncPersistWorker() {
 	for _, eventPairChan := range s.eventPairChans {
 		go func(eventPairChan chan *sessionEventPair) {
 			defer s.persistWg.Done()
-			var pendingErr error
+			var pendingErrors sessionrevision.PendingErrors
 			for eventPair := range eventPairChan {
 				if eventPair.done != nil {
-					eventPair.done <- pendingErr
-					pendingErr = nil
+					eventPair.done <- pendingErrors.Take(eventPair.key)
 					continue
 				}
 				ctx, cancel := context.WithTimeout(context.Background(), defaultAsyncPersistTimeout)
 				if err := s.persistEventWithRevision(ctx, eventPair.version, eventPair.event, eventPair.key, eventPair.write); err != nil {
-					pendingErr = err
+					pendingErrors.Add(eventPair.key, err)
 					log.ErrorfContext(ctx, "async persist event failed: %v", err)
 				}
 				cancel()
@@ -917,16 +916,15 @@ func (s *Service) startAsyncPersistWorker() {
 	for _, trackEventChan := range s.trackEventChans {
 		go func(trackEventChan chan *trackEventPair) {
 			defer s.persistWg.Done()
-			var pendingErr error
+			var pendingErrors sessionrevision.PendingErrors
 			for trackPair := range trackEventChan {
 				if trackPair.done != nil {
-					trackPair.done <- pendingErr
-					pendingErr = nil
+					trackPair.done <- pendingErrors.Take(trackPair.key)
 					continue
 				}
 				ctx, cancel := context.WithTimeout(context.Background(), defaultAsyncPersistTimeout)
 				if err := s.persistTrackEventWithRevision(ctx, trackPair.version, trackPair.key, trackPair.event, trackPair.tracksState, trackPair.write); err != nil {
-					pendingErr = err
+					pendingErrors.Add(trackPair.key, err)
 					log.ErrorfContext(ctx, "async persist track event failed: %v", err)
 				}
 				cancel()

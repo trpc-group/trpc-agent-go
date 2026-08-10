@@ -163,13 +163,12 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 		s.respondError(w, r, http.StatusBadRequest, fmt.Sprintf("compile profile: %v", err))
 		return
 	}
+	runOptions = append(runOptions, agent.WithRequestID(req.RunOptions.RequestID))
 	if replacement := req.RunOptions.LatestTurnReplacement; replacement != nil {
 		runOptions = append(runOptions, agent.WithLatestTurnReplacement(
 			replacement.ExpectedRequestID,
 			replacement.RequestID,
 		))
-	} else {
-		runOptions = append(runOptions, agent.WithRequestID(req.RunOptions.RequestID))
 	}
 	runOptions = append(runOptions, agent.MergeRuntimeState(req.RunOptions.RuntimeState))
 	runOptions = append(runOptions, agent.WithAppName(s.appName))

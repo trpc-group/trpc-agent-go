@@ -354,6 +354,7 @@ func (s *Service) addEventWithRevision(
 		t := now.Add(s.opts.sessionTTL)
 		expiresAt = &t
 	}
+	persisted := shouldPersistEvent(evt)
 
 	err = s.pgClient.Transaction(ctx,
 		func(tx *sql.Tx) error {
@@ -393,7 +394,7 @@ func (s *Service) addEventWithRevision(
 				)
 			}
 			if err := s.revisionStore().ApplyEventWrite(
-				ctx, tx, key, write, evt, shouldPersistEvent(evt), expiresAt,
+				ctx, tx, key, write, evt, persisted, expiresAt,
 			); err != nil {
 				return err
 			}
@@ -444,8 +445,7 @@ func (s *Service) addEventWithRevision(
 				)
 			}
 
-			if evt.Response != nil && !evt.IsPartial &&
-				evt.IsValidContent() {
+			if persisted {
 				_, err = tx.ExecContext(ctx,
 					fmt.Sprintf(
 						`INSERT INTO %s
@@ -783,11 +783,10 @@ func (s *Service) startAsyncPersistWorker() {
 	for _, ch := range s.eventPairChans {
 		go func(eventCh chan *sessionEventPair) {
 			defer s.persistWg.Done()
-			var pendingErr error
+			var pendingErrors sessionrevision.PendingErrors
 			for pair := range eventCh {
 				if pair.done != nil {
-					pair.done <- pendingErr
-					pendingErr = nil
+					pair.done <- pendingErrors.Take(pair.key)
 					continue
 				}
 				ctx, cancel := context.WithTimeout(
@@ -808,7 +807,7 @@ func (s *Service) startAsyncPersistWorker() {
 				if err := s.addEventWithRevision(
 					ctx, pair.key, pair.event, pair.write,
 				); err != nil {
-					pendingErr = err
+					pendingErrors.Add(pair.key, err)
 					log.ErrorfContext(ctx,
 						"pgvector session service "+
 							"async persist event "+
@@ -832,11 +831,10 @@ func (s *Service) startAsyncPersistWorker() {
 	for _, ch := range s.trackEventChans {
 		go func(trackCh chan *trackEventPair) {
 			defer s.persistWg.Done()
-			var pendingErr error
+			var pendingErrors sessionrevision.PendingErrors
 			for pair := range trackCh {
 				if pair.done != nil {
-					pair.done <- pendingErr
-					pendingErr = nil
+					pair.done <- pendingErrors.Take(pair.key)
 					continue
 				}
 				ctx, cancel := context.WithTimeout(
@@ -858,7 +856,7 @@ func (s *Service) startAsyncPersistWorker() {
 				if err := s.addTrackEventWithRevision(
 					ctx, pair.key, pair.event, pair.write,
 				); err != nil {
-					pendingErr = err
+					pendingErrors.Add(pair.key, err)
 					log.ErrorfContext(ctx,
 						"pgvector session service "+
 							"async persist track "+

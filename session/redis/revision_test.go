@@ -209,23 +209,25 @@ func TestReplaceLatestTurnValidatesRequest(t *testing.T) {
 
 func TestRevisionFlushHandlesEmptyChannelSets(t *testing.T) {
 	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
 	require.NoError(t, flushPairChannel(
 		ctx,
 		nil,
-		0,
+		key,
 		&sessionEventPair{},
 	))
-	require.NoError(t, flushTrackPairChannel(ctx, nil, 0))
+	require.NoError(t, flushTrackPairChannel(ctx, nil, key))
 }
 
 func TestRevisionFlushHonorsCancellation(t *testing.T) {
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
 	t.Run("before event barrier is accepted", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		err := flushPairChannel(
 			ctx,
 			[]chan *sessionEventPair{make(chan *sessionEventPair)},
-			0,
+			key,
 			&sessionEventPair{},
 		)
 		assert.ErrorIs(t, err, context.Canceled)
@@ -241,7 +243,7 @@ func TestRevisionFlushHonorsCancellation(t *testing.T) {
 		err := flushPairChannel(
 			ctx,
 			[]chan *sessionEventPair{ch},
-			0,
+			key,
 			&sessionEventPair{},
 		)
 		assert.ErrorIs(t, err, context.Canceled)
@@ -253,7 +255,7 @@ func TestRevisionFlushHonorsCancellation(t *testing.T) {
 		err := flushTrackPairChannel(
 			ctx,
 			[]chan *trackEventPair{make(chan *trackEventPair)},
-			0,
+			key,
 		)
 		assert.ErrorIs(t, err, context.Canceled)
 	})
@@ -268,7 +270,7 @@ func TestRevisionFlushHonorsCancellation(t *testing.T) {
 		err := flushTrackPairChannel(
 			ctx,
 			[]chan *trackEventPair{ch},
-			0,
+			key,
 		)
 		assert.ErrorIs(t, err, context.Canceled)
 	})

@@ -459,9 +459,10 @@ turn 都可以替换；如果旧 run 在当前 Runner 中仍处于执行状态�
 event channel 直至关闭。
 
 在 `Run` 返回 event channel 之前，应保留旧、新两个 RequestID。如果 `Run` 返回错误，
-持久化 backend 可能已经提交转换、但在后续读取阶段失败；此时必须用完全相同的消息和
-ID 组合重试，不能生成另一个新 RequestID。一旦 `Run` 已返回 channel，新 turn 就已成为
-canonical；之后从事件流收到错误也不应再次执行 replacement。
+持久化 backend 可能已经提交转换、但在后续读取阶段失败；只有这种结果不确定的情况才应
+使用完全相同的消息和 ID 组合重试，不能生成另一个新 RequestID。参数校验、冲突、不支持
+和不可用错误都有明确结果，应直接按其语义处理。一旦 `Run` 已返回 channel，新 turn 就已
+成为 canonical；之后从事件流收到错误也不应再次执行 replacement。
 
 后端支持范围、错误语义、持久化要求与回滚边界见
 [替换最新一轮](session/index.md#replace-latest-turn)。

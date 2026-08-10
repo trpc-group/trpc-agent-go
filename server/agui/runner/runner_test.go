@@ -2657,6 +2657,7 @@ func TestRunPropagatesLatestTurnReplacement(t *testing.T) {
 	)
 	input := &adapter.RunAgentInput{
 		ThreadID: "thread",
+		RunID:    "transport-run",
 		Messages: []types.Message{{
 			ID: "user-msg-1", Role: types.RoleUser, Content: "edited",
 		}},
@@ -2670,6 +2671,42 @@ func TestRunPropagatesLatestTurnReplacement(t *testing.T) {
 	require.NotNil(t, gotOptions.LatestTurnReplacement)
 	assert.Equal(t, "old-run", gotOptions.LatestTurnReplacement.ExpectedRequestID)
 	assert.Equal(t, "new-run", gotOptions.LatestTurnReplacement.RequestID)
+}
+
+func TestRunPreservesExplicitReplacementRequestIDConflict(t *testing.T) {
+	underlying := &fakeRunner{
+		run: func(ctx context.Context, userID, sessionID string, message model.Message,
+			opts ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			got := agent.NewRunOptions(opts...)
+			assert.Equal(t, "explicit-run", got.RequestID)
+			ch := make(chan *agentevent.Event)
+			close(ch)
+			return ch, nil
+		},
+	}
+	r := New(
+		underlying,
+		WithRunOptionResolver(func(
+			context.Context,
+			*adapter.RunAgentInput,
+		) ([]agent.RunOption, error) {
+			return []agent.RunOption{
+				agent.WithRequestID("explicit-run"),
+				agent.WithLatestTurnReplacement("old-run", "new-run"),
+			}, nil
+		}),
+	)
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "transport-run",
+		Messages: []types.Message{{
+			ID: "user-msg-1", Role: types.RoleUser, Content: "edited",
+		}},
+	}
+
+	ch, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	collectEvents(t, ch)
 }
 
 func TestRunLatestTurnReplacementPrecedesTrackPersistence(t *testing.T) {
@@ -3703,7 +3740,7 @@ func TestRunRunOptionResolverOptions(t *testing.T) {
 		message model.Message,
 		opts ...agent.RunOption) (<-chan *agentevent.Event, error) {
 		assert.Equal(t, "user-123", userID)
-		assert.Len(t, opts, 2)
+		assert.Len(t, opts, 1)
 		var runOpts agent.RunOptions
 		for _, opt := range opts {
 			opt(&runOpts)
@@ -4664,6 +4701,28 @@ func TestRunTrackingErrorsAreIgnored(t *testing.T) {
 	evts := collectEvents(t, eventsCh)
 	assert.Len(t, evts, 1)
 	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), evts[0])
+}
+
+func TestWriteEventEmitsTerminalWhenTrackFlushFails(t *testing.T) {
+	events := make(chan aguievents.Event, 1)
+	input := &runInput{
+		threadID:    "thread",
+		runID:       "run",
+		requestID:   "request",
+		enableTrack: true,
+		key: session.Key{
+			AppName: "app", UserID: "user", SessionID: "session",
+		},
+		consumerDone: make(chan struct{}),
+	}
+	r := &runner{tracker: &errorTracker{flushErr: errors.New("flush failed")}}
+	terminal := aguievents.NewRunFinishedEvent("thread", "run")
+
+	written := r.writeEvent(context.Background(), events, terminal, input)
+
+	assert.True(t, written)
+	assert.True(t, input.terminalEmitted)
+	assert.Same(t, terminal, <-events)
 }
 
 func TestRunUsesCanonicalToolCallIDFromInstalledPlugin(t *testing.T) {

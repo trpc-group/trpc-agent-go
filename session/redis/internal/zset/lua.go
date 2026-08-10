@@ -95,9 +95,18 @@ local revisionArchiveKey = KEYS[4]
 local sessionID = ARGV[1]
 
 if #ARGV <= 1 then return 0 end
-local members = {}
-for i = 2, #ARGV do table.insert(members, ARGV[i]) end
-local removed = redis.call('ZREM', eventKey, unpack(members))
+local removed = 0
+local chunk = {}
+for i = 2, #ARGV do
+    table.insert(chunk, ARGV[i])
+    if #chunk == 512 then
+        removed = removed + redis.call('ZREM', eventKey, unpack(chunk))
+        chunk = {}
+    end
+end
+if #chunk > 0 then
+    removed = removed + redis.call('ZREM', eventKey, unpack(chunk))
+end
 if removed == 0 or redis.call('HEXISTS', sessionStateKey, sessionID) == 0 then
     return removed
 end

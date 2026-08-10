@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -200,7 +201,108 @@ func TestLoadStableProjectionRejectsPersistentChange(t *testing.T) {
 	assert.ErrorIs(t, err, ErrStaleProjection)
 }
 
+func TestLoadStableProjectionReadFailures(t *testing.T) {
+	t.Run("generation before projection", func(t *testing.T) {
+		wantErr := errors.New("read generation before projection")
+		projection, err := LoadStableProjection(
+			context.Background(),
+			func(context.Context) (uint64, error) { return 0, wantErr },
+			func(context.Context) (*session.Session, error) {
+				t.Fatal("projection read should not run")
+				return nil, nil
+			},
+		)
+		assert.Nil(t, projection)
+		assert.ErrorIs(t, err, wantErr)
+	})
+
+	t.Run("projection", func(t *testing.T) {
+		wantErr := errors.New("read projection")
+		projection, err := LoadStableProjection(
+			context.Background(),
+			func(context.Context) (uint64, error) { return 0, nil },
+			func(context.Context) (*session.Session, error) {
+				return nil, wantErr
+			},
+		)
+		assert.Nil(t, projection)
+		assert.ErrorIs(t, err, wantErr)
+	})
+
+	t.Run("missing projection", func(t *testing.T) {
+		projection, err := LoadStableProjection(
+			context.Background(),
+			func(context.Context) (uint64, error) { return 0, nil },
+			func(context.Context) (*session.Session, error) { return nil, nil },
+		)
+		assert.Nil(t, projection)
+		require.NoError(t, err)
+	})
+
+	t.Run("generation after projection", func(t *testing.T) {
+		wantErr := errors.New("read generation after projection")
+		reads := 0
+		projection, err := LoadStableProjection(
+			context.Background(),
+			func(context.Context) (uint64, error) {
+				reads++
+				if reads == 2 {
+					return 0, wantErr
+				}
+				return 0, nil
+			},
+			func(context.Context) (*session.Session, error) {
+				return session.NewSession("app", "user", "session"), nil
+			},
+		)
+		assert.Nil(t, projection)
+		assert.ErrorIs(t, err, wantErr)
+	})
+}
+
 func TestLoadStableListedProjection(t *testing.T) {
+	t.Run("nil batched projection", func(t *testing.T) {
+		got, err := LoadStableListedProjectionAtGeneration(
+			context.Background(), nil, false, 1, nil, nil,
+		)
+		assert.Nil(t, got)
+		require.NoError(t, err)
+	})
+
+	t.Run("nil projection", func(t *testing.T) {
+		got, err := LoadStableListedProjection(
+			context.Background(),
+			nil,
+			false,
+			func(context.Context) (uint64, error) {
+				t.Fatal("generation read should not run")
+				return 0, nil
+			},
+			func(context.Context) (*session.Session, error) {
+				t.Fatal("projection read should not run")
+				return nil, nil
+			},
+		)
+		assert.Nil(t, got)
+		require.NoError(t, err)
+	})
+
+	t.Run("generation error", func(t *testing.T) {
+		wantErr := errors.New("read generation")
+		got, err := LoadStableListedProjection(
+			context.Background(),
+			session.NewSession("app", "user", "session"),
+			false,
+			func(context.Context) (uint64, error) { return 0, wantErr },
+			func(context.Context) (*session.Session, error) {
+				t.Fatal("projection read should not run")
+				return nil, nil
+			},
+		)
+		assert.Nil(t, got)
+		assert.ErrorIs(t, err, wantErr)
+	})
+
 	t.Run("generation zero keeps listed projection", func(t *testing.T) {
 		listed := session.NewSession("app", "user", "session")
 		projectionReads := 0
@@ -247,6 +349,50 @@ func TestLoadStableListedProjection(t *testing.T) {
 		assert.Nil(t, got.Tracks)
 		assert.Nil(t, got.Summaries)
 	})
+
+	t.Run("non-metadata projection is preserved", func(t *testing.T) {
+		refreshed := session.NewSession("app", "user", "session")
+		refreshed.Events = append(refreshed.Events, event.Event{})
+		got, err := LoadStableListedProjection(
+			context.Background(),
+			session.NewSession("app", "user", "session"),
+			false,
+			func(context.Context) (uint64, error) { return 2, nil },
+			func(context.Context) (*session.Session, error) {
+				return refreshed, nil
+			},
+		)
+		require.NoError(t, err)
+		assert.Same(t, refreshed, got)
+		assert.Len(t, got.Events, 1)
+	})
+
+	t.Run("refresh error", func(t *testing.T) {
+		wantErr := errors.New("refresh projection")
+		got, err := LoadStableListedProjection(
+			context.Background(),
+			session.NewSession("app", "user", "session"),
+			false,
+			func(context.Context) (uint64, error) { return 2, nil },
+			func(context.Context) (*session.Session, error) {
+				return nil, wantErr
+			},
+		)
+		assert.Nil(t, got)
+		assert.ErrorIs(t, err, wantErr)
+	})
+
+	t.Run("missing refresh", func(t *testing.T) {
+		got, err := LoadStableListedProjection(
+			context.Background(),
+			session.NewSession("app", "user", "session"),
+			false,
+			func(context.Context) (uint64, error) { return 2, nil },
+			func(context.Context) (*session.Session, error) { return nil, nil },
+		)
+		assert.Nil(t, got)
+		require.NoError(t, err)
+	})
 }
 
 func TestTrackEventsEqualIgnoresJSONStorageNormalization(t *testing.T) {
@@ -263,6 +409,10 @@ func TestTrackEventsEqualIgnoresJSONStorageNormalization(t *testing.T) {
 	assert.True(t, TrackEventsEqual(a, b))
 	b.RequestID = "other"
 	assert.False(t, TrackEventsEqual(a, b))
+
+	assert.True(t, rawJSONEqual([]byte("invalid"), []byte("invalid")))
+	assert.False(t, rawJSONEqual([]byte("{"), []byte("[")))
+	assert.False(t, rawJSONEqual([]byte("{}"), []byte("[")))
 }
 
 func TestLatestTurnReplacementReplay(t *testing.T) {
@@ -540,6 +690,67 @@ func TestApplyWriteWithExplicitHazardTaintsCheckpoint(t *testing.T) {
 	record := runningRevisionRecord(t)
 	ApplyWrite(record, Write{HasExpectedGeneration: true, Hazard: true})
 	assert.True(t, record.Checkpoint.Hazard)
+}
+
+func TestApplyRevisionWritesHandleMissingMetadata(t *testing.T) {
+	assert.False(t, ApplyWrite(nil, Write{}))
+	assert.False(t, ApplyEventWrite(nil, Write{}, nil, false))
+	assert.False(t, ApplyTrackWrite(nil, Write{}, nil))
+
+	record := &PersistedRecord{}
+	assert.True(t, ApplyTrackWrite(record, Write{}, nil))
+	assert.Equal(t, uint64(1), record.Head)
+}
+
+func TestPendingErrorsAreIsolatedBySession(t *testing.T) {
+	keyA := session.Key{AppName: "app", UserID: "user", SessionID: "a"}
+	keyB := session.Key{AppName: "app", UserID: "user", SessionID: "b"}
+	errA1 := errors.New("a1")
+	errA2 := errors.New("a2")
+	errB := errors.New("b")
+	var pending PendingErrors
+
+	pending.Add(keyA, errA1)
+	pending.Add(keyA, errA2)
+	pending.Add(keyB, errB)
+	pending.Add(keyB, nil)
+
+	gotB := pending.Take(keyB)
+	assert.ErrorIs(t, gotB, errB)
+	assert.NotErrorIs(t, gotB, errA1)
+	gotA := pending.Take(keyA)
+	assert.ErrorIs(t, gotA, errA1)
+	assert.ErrorIs(t, gotA, errA2)
+	assert.NoError(t, pending.Take(keyA))
+	assert.NoError(t, (&PendingErrors{}).Take(keyA))
+}
+
+func TestRecordLatestTurnReplacementReplayIsBounded(t *testing.T) {
+	record := &PersistedRecord{}
+	RecordLatestTurnReplacementReplay(nil, "ignored", PersistedReplay{})
+	RecordLatestTurnReplacementReplay(record, "", PersistedReplay{})
+	for i := 0; i <= maxPersistedReplays; i++ {
+		key := fmt.Sprintf("replacement-%02d", i)
+		RecordLatestTurnReplacementReplay(record, key, PersistedReplay{
+			RequestID: key, Generation: uint64(i), Head: uint64(i),
+		})
+	}
+
+	assert.Len(t, record.Replays, maxPersistedReplays)
+	assert.NotContains(t, record.Replays, "replacement-00")
+	assert.Contains(t, record.Replays, fmt.Sprintf("replacement-%02d", maxPersistedReplays))
+	assert.True(t, replayPrecedes(
+		PersistedReplay{Generation: 1, Head: 1}, "b",
+		PersistedReplay{Generation: 1, Head: 2}, "a",
+	))
+	assert.True(t, replayPrecedes(
+		PersistedReplay{Generation: 1, Head: 1}, "a",
+		PersistedReplay{Generation: 1, Head: 1}, "b",
+	))
+	assert.False(t, replayPrecedes(
+		PersistedReplay{Generation: 2, Head: 1}, "a",
+		PersistedReplay{Generation: 1, Head: 2}, "b",
+	))
 }
 
 func TestChildCompletionCannotCloseRootTurn(t *testing.T) {

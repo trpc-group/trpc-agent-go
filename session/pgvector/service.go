@@ -501,6 +501,18 @@ func (s *Service) ListSessions(
 				"failed: %w", err,
 		)
 	}
+	keys := make([]session.Key, 0, len(sessList))
+	for _, listed := range sessList {
+		if listed != nil {
+			keys = append(keys, session.Key{
+				AppName: listed.AppName, UserID: listed.UserID, SessionID: listed.ID,
+			})
+		}
+	}
+	generations, err := s.revisionGenerations(ctx, keys)
+	if err != nil {
+		return nil, err
+	}
 	for i, listed := range sessList {
 		if listed == nil {
 			continue
@@ -508,10 +520,11 @@ func (s *Service) ListSessions(
 		key := session.Key{
 			AppName: listed.AppName, UserID: listed.UserID, SessionID: listed.ID,
 		}
-		stable, err := sessionrevision.LoadStableListedProjection(
+		stable, err := sessionrevision.LoadStableListedProjectionAtGeneration(
 			ctx,
 			listed,
 			opt.ListSessionOnlyMeta,
+			generations[key],
 			func(ctx context.Context) (uint64, error) {
 				return s.revisionGeneration(ctx, key)
 			},
@@ -1033,7 +1046,7 @@ func (s *Service) appendEventInternal(
 			return fmt.Errorf("flush persistence before runner turn: %w", err)
 		}
 	} else if s.opts.enableAsyncPersist && e != nil && e.IsRunnerCompletion() {
-		if err := s.flushTrackPersistence(ctx); err != nil {
+		if err := s.flushTrackPersistence(ctx, key); err != nil {
 			return fmt.Errorf("flush track persistence before runner completion: %w", err)
 		}
 	}

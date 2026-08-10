@@ -376,9 +376,6 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 		return nil, fmt.Errorf("resolve user ID: %w", err)
 	}
 	runOption := make([]agent.RunOption, 0, 1)
-	if runID != "" {
-		runOption = append(runOption, agent.WithRequestID(runID))
-	}
 	resolvedRunOption, err := r.runOptionResolver(ctx, runAgentInput)
 	if err != nil {
 		return nil, fmt.Errorf("resolve run option: %w", err)
@@ -1271,7 +1268,6 @@ func (r *runner) writeEvent(ctx context.Context, events chan<- aguievents.Event,
 				input.runID,
 				err,
 			)
-			return false
 		}
 	}
 	select {

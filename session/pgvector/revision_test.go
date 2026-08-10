@@ -46,8 +46,55 @@ func TestRevisionStoreAndAttachGeneration(t *testing.T) {
 	assert.Equal(t, uint64(7), generation)
 	require.NoError(t, mock.ExpectationsWereMet())
 
+	missing := session.Key{AppName: "app", UserID: "user", SessionID: "missing"}
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT app_name, user_id, session_id, record FROM session_revisions").
+		WithArgs(
+			key.AppName, key.UserID, key.SessionID,
+			missing.AppName, missing.UserID, missing.SessionID,
+		).
+		WillReturnRows(sqlmock.NewRows(
+			[]string{"app_name", "user_id", "session_id", "record"},
+		).AddRow(key.AppName, key.UserID, key.SessionID, []byte(`{"generation":7}`)))
+	mock.ExpectCommit()
+	generations, err := s.revisionGenerations(
+		context.Background(), []session.Key{key, missing},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(7), generations[key])
+	assert.Zero(t, generations[missing])
+	require.NoError(t, mock.ExpectationsWereMet())
+
 	s.tableSessionRevisions = ""
 	require.NoError(t, s.attachRevisionGeneration(context.Background(), key, sess))
+	generations, err = s.revisionGenerations(context.Background(), nil)
+	require.NoError(t, err)
+	assert.Empty(t, generations)
+}
+
+func TestAddNilEventWithRevision(t *testing.T) {
+	s, mock, db := newTestService(t, nil)
+	defer db.Close()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	stateRaw, err := json.Marshal(SessionState{
+		ID: key.SessionID, State: session.StateMap{},
+		CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	})
+	require.NoError(t, err)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT state, expires_at FROM session_states").
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnRows(sqlmock.NewRows([]string{"state", "expires_at"}).AddRow(stateRaw, nil))
+	mock.ExpectExec("UPDATE session_states SET state").
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), nil, key.AppName, key.UserID, key.SessionID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	require.NoError(t, s.addEventWithRevision(
+		context.Background(), key, nil, sessionrevision.Write{},
+	))
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestRevisionFlushBarriers(t *testing.T) {
@@ -68,6 +115,7 @@ func TestRevisionFlushBarriers(t *testing.T) {
 	require.NoError(t, s.flushRevisionPersistence(context.Background(), key))
 
 	s.eventPairChans = []chan *sessionEventPair{make(chan *sessionEventPair)}
+	s.trackEventChans = nil
 	go func() {
 		pair := <-s.eventPairChans[0]
 		pair.done <- errors.New("persist failed")
@@ -80,7 +128,7 @@ func TestRevisionFlushBarriers(t *testing.T) {
 
 	s.opts.enableAsyncPersist = false
 	require.NoError(t, s.flushRevisionPersistence(context.Background(), key))
-	require.NoError(t, s.flushTrackPersistence(context.Background()))
+	require.NoError(t, s.flushTrackPersistence(context.Background(), key))
 	s.opts.enableAsyncPersist = true
 
 	eventWaitCtx, cancelEventWait := context.WithCancel(context.Background())
@@ -99,7 +147,7 @@ func TestRevisionFlushBarriers(t *testing.T) {
 		pair.done <- errors.New("track persist failed")
 	}()
 	assert.ErrorContains(
-		t, s.flushTrackPersistence(context.Background()), "track persist failed",
+		t, s.flushTrackPersistence(context.Background(), key), "track persist failed",
 	)
 
 	trackWaitCtx, cancelTrackWait := context.WithCancel(context.Background())
@@ -109,14 +157,14 @@ func TestRevisionFlushBarriers(t *testing.T) {
 		cancelTrackWait()
 	}()
 	assert.ErrorIs(
-		t, s.flushTrackPersistence(trackWaitCtx), context.Canceled,
+		t, s.flushTrackPersistence(trackWaitCtx, key), context.Canceled,
 	)
 
 	trackSendCtx, cancelTrackSend := context.WithCancel(context.Background())
 	cancelTrackSend()
 	s.trackEventChans = []chan *trackEventPair{make(chan *trackEventPair)}
 	assert.ErrorIs(
-		t, s.flushTrackPersistence(trackSendCtx), context.Canceled,
+		t, s.flushTrackPersistence(trackSendCtx, key), context.Canceled,
 	)
 }
 

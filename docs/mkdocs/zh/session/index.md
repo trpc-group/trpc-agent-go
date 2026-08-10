@@ -259,9 +259,10 @@ resume 或 `RunOptions.Messages` 历史 seed 同时使用，并且替换消息�
 
 在 `Run` 返回 event channel 前，应保留完全相同的旧、新 ID。持久化转换可能已经提交，
 但后续 hydrate 或连接读取仍可能失败，因此 `Run` 直接返回的错误可能处于结果不确定状态。
-重试时必须复用同一条编辑消息和同一组 ID；生成另一个新 ID 会把可幂等确认的操作变成
-冲突。一旦 `Run` 返回 channel，replacement 与新 user-turn 边界就已经提交；之后事件流
-中的错误不应触发再次 replacement。
+只有持久化转换可能已提交、随后才失败时，才应复用同一条编辑消息和同一组 ID 重试。
+参数校验、冲突、不支持和不可用错误都有明确结果，应直接按其语义处理，而不是盲目重试。
+一旦 `Run` 返回 channel，replacement 与新 user-turn 边界就已经提交；之后事件流中的
+错误不应触发再次 replacement。
 
 如果重试发现新的 user-turn 边界已在上一次错误前持久化，Runner 会返回
 `runner.ErrLatestTurnReplacementConflict`，而不会把编辑后的消息追加两次。此时可以确认
@@ -287,12 +288,15 @@ revision 存储中。app state、user state、模型/工具调用、artifact 写
 - 成功替换前加载的 Session 投影已经过期，后续 event、state、summary 和 Track 写入
   会被支持该能力的 backend 拒绝。
 - 自定义 Track producer 应填写 `TrackEvent.RequestID`。AG-UI tracker 会自动填写，
-  并在 terminal Runner event 对外可见前 flush Track 持久化。
+  并在 terminal Runner event 对外可见前同步尝试 flush Track 持久化。flush 失败会记录
+  日志，但不会吞掉协议 terminal event。
 - 把 routed output 持久化到其他 Session 的 turn 无法通过单 Session 投影原子恢复，
   因此不可替换。
 - Replacement 保留源 Session 的剩余 TTL，不会延长 Session 生命周期。
 - 每次 replacement 会保留一份完整废弃投影，系统不会隐式限制 revision 数量或字节数；
   删除 Session 或 Session 到期时会一并清理。
+- Backend 会保留最近 64 个 replacement 幂等身份用于检测复用。结果不确定时应及时使用
+  原始 ID 组合重试。
 
 该能力不会给 `session.Service` 增加方法，也不会引入第二个业务入口。由于 generation
 fencing 与 checkpoint metadata 必须作为同一份协议演进，存储协议保持为框架内部能力；

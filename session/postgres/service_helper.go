@@ -336,7 +336,7 @@ func (s *Service) addEventWithRevision(
 		}
 
 		// Insert event if it has response and is not partial
-		if event.Response != nil && !event.IsPartial && event.IsValidContent() {
+		if persisted {
 			_, err = tx.ExecContext(ctx,
 				fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, event, created_at, updated_at)
 				 VALUES ($1, $2, $3, $4, $5, $6)`, s.tableSessionEvents),
@@ -590,11 +590,10 @@ func (s *Service) startAsyncPersistWorker() {
 	for _, eventPairChan := range s.eventPairChans {
 		go func(eventPairChan chan *sessionEventPair) {
 			defer s.persistWg.Done()
-			var pendingErr error
+			var pendingErrors sessionrevision.PendingErrors
 			for pair := range eventPairChan {
 				if pair.done != nil {
-					pair.done <- pendingErr
-					pendingErr = nil
+					pair.done <- pendingErrors.Take(pair.key)
 					continue
 				}
 				ctx := context.Background()
@@ -614,7 +613,7 @@ func (s *Service) startAsyncPersistWorker() {
 					pair.key.SessionID,
 				)
 				if err := s.addEventWithRevision(ctx, pair.key, pair.event, pair.write); err != nil {
-					pendingErr = err
+					pendingErrors.Add(pair.key, err)
 					log.ErrorfContext(
 						ctx,
 						"postgres session service async persist "+
@@ -630,11 +629,10 @@ func (s *Service) startAsyncPersistWorker() {
 	for _, trackPairChan := range s.trackEventChans {
 		go func(trackPairChan chan *trackEventPair) {
 			defer s.persistWg.Done()
-			var pendingErr error
+			var pendingErrors sessionrevision.PendingErrors
 			for pair := range trackPairChan {
 				if pair.done != nil {
-					pair.done <- pendingErr
-					pendingErr = nil
+					pair.done <- pendingErrors.Take(pair.key)
 					continue
 				}
 				ctx := context.Background()
@@ -655,7 +653,7 @@ func (s *Service) startAsyncPersistWorker() {
 					pair.key.SessionID,
 				)
 				if err := s.addTrackEventWithRevision(ctx, pair.key, pair.event, pair.write); err != nil {
-					pendingErr = err
+					pendingErrors.Add(pair.key, err)
 					log.ErrorfContext(
 						ctx,
 						"postgres session service async persist track "+

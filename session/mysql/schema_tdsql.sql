@@ -102,9 +102,9 @@ CREATE TABLE IF NOT EXISTS `{{PREFIX}}session_summaries` (
 -- Table: session_revisions
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS `{{PREFIX}}session_revisions` (
-    `app_name` VARCHAR(191) NOT NULL,
-    `user_id` VARCHAR(191) NOT NULL,
-    `session_id` VARCHAR(191) NOT NULL,
+    `app_name` VARCHAR(255) NOT NULL,
+    `user_id` VARCHAR(255) NOT NULL,
+    `session_id` VARCHAR(255) NOT NULL,
     `record` JSON NOT NULL,
     `updated_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
     `expires_at` TIMESTAMP(6) NULL DEFAULT NULL,
@@ -116,9 +116,9 @@ CREATE TABLE IF NOT EXISTS `{{PREFIX}}session_revisions` (
 -- Table: session_revision_archives
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS `{{PREFIX}}session_revision_archives` (
-    `app_name` VARCHAR(191) NOT NULL,
-    `user_id` VARCHAR(191) NOT NULL,
-    `session_id` VARCHAR(191) NOT NULL,
+    `app_name` VARCHAR(255) NOT NULL,
+    `user_id` VARCHAR(255) NOT NULL,
+    `session_id` VARCHAR(255) NOT NULL,
     `generation` BIGINT UNSIGNED NOT NULL,
     `snapshot` JSON NOT NULL,
     `created_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),

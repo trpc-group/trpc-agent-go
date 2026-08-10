@@ -21,6 +21,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -321,21 +322,20 @@ func (s *Service) startAsyncPersistWorker() {
 	for _, persistChan := range s.persistChans {
 		go func(persistChan chan *persistJob) {
 			defer s.persistWg.Done()
-			var pendingErr error
+			var pendingErrors sessionrevision.PendingErrors
 			for job := range persistChan {
 				if job.done != nil {
-					job.done <- pendingErr
-					pendingErr = nil
+					job.done <- pendingErrors.Take(job.key)
 					continue
 				}
 				ctx, cancel := context.WithTimeout(context.Background(), defaultAsyncPersistTimeout)
 				if job.trackEvent != nil {
 					if err := s.persistTrackEventWithRevision(ctx, job.key, job.trackEvent, job.write); err != nil {
-						pendingErr = err
+						pendingErrors.Add(job.key, err)
 						log.ErrorfContext(ctx, "mongodb session async persist track event failed: %v", err)
 					}
 				} else if err := s.persistEventWithRevision(ctx, job.key, job.event, job.write); err != nil {
-					pendingErr = err
+					pendingErrors.Add(job.key, err)
 					log.ErrorfContext(ctx, "mongodb session async persist failed: %v", err)
 				}
 				cancel()

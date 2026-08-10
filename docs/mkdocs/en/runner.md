@@ -478,10 +478,12 @@ this Runner must first be cancelled and its event channel drained.
 
 Keep the old and new request IDs until `Run` returns an event channel. If
 `Run` returns an error, a durable backend transition may have committed before
-a later read failed, so retry with the exact same message and ID pair. Do not
-allocate another new request ID. Once `Run` returns the channel, the new turn
-is canonical; an error received from that channel is not a reason to repeat
-the replacement.
+a later read failed. Retry with the exact same message and ID pair only for
+that outcome-unknown case. Validation, conflict, unsupported, and unavailable
+errors have known outcomes and should be handled directly. Do not allocate
+another new request ID for an ambiguous retry. Once `Run` returns the channel,
+the new turn is canonical; an error received from that channel is not a reason
+to repeat the replacement.
 
 See [Replacing the Latest Turn](session/index.md#replacing-the-latest-turn) for
 backend support, failure semantics, persistence requirements, and rollback

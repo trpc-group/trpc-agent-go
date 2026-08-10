@@ -424,7 +424,7 @@ func TestRevisionFlushHonorsCancellation(t *testing.T) {
 		}
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		err := service.flushTrackPersistence(ctx, 0)
+		err := service.flushTrackPersistence(ctx, key)
 		require.ErrorIs(t, err, context.Canceled)
 	})
 
@@ -439,9 +439,42 @@ func TestRevisionFlushHonorsCancellation(t *testing.T) {
 			<-trackCh
 			cancel()
 		}()
-		err := service.flushTrackPersistence(ctx, 0)
+		err := service.flushTrackPersistence(ctx, key)
 		require.ErrorIs(t, err, context.Canceled)
 	})
+}
+
+func TestRevisionFlushDoesNotMixSessionErrors(t *testing.T) {
+	db, _, cleanup := openTempSQLiteDB(t)
+	t.Cleanup(cleanup)
+	service, err := NewService(
+		db,
+		WithEnableAsyncPersist(true),
+		WithAsyncPersisterNum(1),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, service.Close()) })
+
+	ctx := context.Background()
+	keyA := session.Key{AppName: "app", UserID: "user", SessionID: "a"}
+	keyB := session.Key{AppName: "app", UserID: "user", SessionID: "b"}
+	sessA, err := service.CreateSession(ctx, keyA, nil)
+	require.NoError(t, err)
+	_, err = service.CreateSession(ctx, keyB, nil)
+	require.NoError(t, err)
+	_, err = service.db.ExecContext(
+		ctx,
+		fmt.Sprintf("DROP TABLE %s", service.tableSessionEvents),
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, service.AppendEvent(
+		ctx,
+		sessA,
+		sqliteTestMessageEvent("event", "request", "invocation", "content"),
+	))
+	require.NoError(t, service.flushRevisionPersistence(ctx, keyB))
+	assert.ErrorContains(t, service.flushRevisionPersistence(ctx, keyA), "no such table")
 }
 
 func TestReadRevisionHonorsCancellation(t *testing.T) {
@@ -471,7 +504,7 @@ func TestRevisionReadBoundaries(t *testing.T) {
 	ctx := context.Background()
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "missing"}
 	require.NoError(t, service.attachRevisionGeneration(ctx, key, nil))
-	require.NoError(t, service.flushTrackPersistence(ctx, 0))
+	require.NoError(t, service.flushTrackPersistence(ctx, key))
 
 	tx, err := service.db.BeginTx(ctx, nil)
 	require.NoError(t, err)
@@ -677,6 +710,92 @@ BEGIN SELECT RAISE(ABORT, 'fail'); END`, service.tableSessionTracks,
 			"trace": {Track: "trace", Events: []session.TrackEvent{prefix}},
 		}
 		assert.ErrorContains(t, restore(t, service, restored), "remove discarded track tail")
+	})
+
+	t.Run("track checkpoint longer than active projection", func(t *testing.T) {
+		service := newService(t)
+		prefix := session.TrackEvent{
+			Track: "trace", Payload: json.RawMessage(`{"step":1}`),
+			Timestamp: time.Now(),
+		}
+		raw, err := json.Marshal(prefix)
+		require.NoError(t, err)
+		_, err = service.db.ExecContext(
+			context.Background(),
+			fmt.Sprintf(
+				`INSERT INTO %s (
+  app_name, user_id, session_id, track, event, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				service.tableSessionTracks,
+			),
+			key.AppName, key.UserID, key.SessionID, prefix.Track, raw,
+			prefix.Timestamp.UTC().UnixNano(),
+			prefix.Timestamp.UTC().UnixNano(),
+		)
+		require.NoError(t, err)
+		restored := newProjection()
+		restored.Tracks = map[session.Track]*session.TrackEvents{
+			"trace": {Track: "trace", Events: []session.TrackEvent{
+				prefix,
+				{
+					Track: "trace", Payload: json.RawMessage(`{"step":2}`),
+					Timestamp: prefix.Timestamp.Add(time.Second),
+				},
+			}},
+		}
+		err = restore(t, service, restored)
+		assert.ErrorIs(t, err, sessionrevision.ErrLatestTurnReplacementUnavailable)
+		assert.ErrorContains(t, err, "checkpoint prefix has 2 events")
+	})
+
+	t.Run("track checkpoint differs from active projection", func(t *testing.T) {
+		service := newService(t)
+		active := session.TrackEvent{
+			Track: "trace", Payload: json.RawMessage(`{"step":1}`),
+			Timestamp: time.Now(),
+		}
+		raw, err := json.Marshal(active)
+		require.NoError(t, err)
+		_, err = service.db.ExecContext(
+			context.Background(),
+			fmt.Sprintf(
+				`INSERT INTO %s (
+  app_name, user_id, session_id, track, event, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				service.tableSessionTracks,
+			),
+			key.AppName, key.UserID, key.SessionID, active.Track, raw,
+			active.Timestamp.UTC().UnixNano(),
+			active.Timestamp.UTC().UnixNano(),
+		)
+		require.NoError(t, err)
+		restored := newProjection()
+		restored.Tracks = map[session.Track]*session.TrackEvents{
+			"trace": {Track: "trace", Events: []session.TrackEvent{{
+				Track: "trace", Payload: json.RawMessage(`{"step":"different"}`),
+				Timestamp: active.Timestamp,
+			}}},
+		}
+		err = restore(t, service, restored)
+		assert.ErrorIs(t, err, sessionrevision.ErrLatestTurnReplacementUnavailable)
+		assert.ErrorContains(t, err, "checkpoint prefix differs at event 0")
+	})
+
+	t.Run("track projection contains invalid event", func(t *testing.T) {
+		service := newService(t)
+		now := time.Now().UTC().UnixNano()
+		_, err := service.db.ExecContext(
+			context.Background(),
+			fmt.Sprintf(
+				`INSERT INTO %s (
+  app_name, user_id, session_id, track, event, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				service.tableSessionTracks,
+			),
+			key.AppName, key.UserID, key.SessionID, "trace", []byte("{"), now, now,
+		)
+		require.NoError(t, err)
+		assert.Error(t, restore(t, service, newProjection()))
 	})
 
 	t.Run("summary insert", func(t *testing.T) {

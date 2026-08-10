@@ -11,6 +11,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
@@ -61,6 +62,22 @@ func (s *Service) revisionGeneration(
 	return generation, err
 }
 
+func (s *Service) revisionGenerations(
+	ctx context.Context,
+	keys []session.Key,
+) (map[session.Key]uint64, error) {
+	if s.tableSessionRevisions == "" || len(keys) == 0 {
+		return make(map[session.Key]uint64), nil
+	}
+	var generations map[session.Key]uint64
+	err := s.pgClient.Transaction(ctx, func(tx *sql.Tx) error {
+		var err error
+		generations, err = s.revisionStore().Generations(ctx, tx, keys)
+		return err
+	})
+	return generations, err
+}
+
 func (s *Service) flushRevisionPersistence(
 	ctx context.Context,
 	key session.Key,
@@ -69,44 +86,42 @@ func (s *Service) flushRevisionPersistence(
 		return nil
 	}
 	hash := session.NewSession(key.AppName, key.UserID, key.SessionID).Hash
-	eventBarrier := &sessionEventPair{done: make(chan error, 1)}
+	eventBarrier := &sessionEventPair{key: key, done: make(chan error, 1)}
 	select {
 	case s.eventPairChans[hash%len(s.eventPairChans)] <- eventBarrier:
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+	var flushErr error
 	select {
 	case err := <-eventBarrier.done:
-		if err != nil {
-			return err
-		}
+		flushErr = err
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-	return s.flushTrackPersistence(ctx)
+	return errors.Join(flushErr, s.flushTrackPersistence(ctx, key))
 }
 
-func (s *Service) flushTrackPersistence(ctx context.Context) error {
+func (s *Service) flushTrackPersistence(ctx context.Context, key session.Key) error {
 	if !s.opts.enableAsyncPersist {
 		return nil
 	}
+	var flushErr error
 	for _, ch := range s.trackEventChans {
-		barrier := &trackEventPair{done: make(chan error, 1)}
+		barrier := &trackEventPair{key: key, done: make(chan error, 1)}
 		select {
 		case ch <- barrier:
 		case <-ctx.Done():
-			return ctx.Err()
+			return errors.Join(flushErr, ctx.Err())
 		}
 		select {
 		case err := <-barrier.done:
-			if err != nil {
-				return err
-			}
+			flushErr = errors.Join(flushErr, err)
 		case <-ctx.Done():
-			return ctx.Err()
+			return errors.Join(flushErr, ctx.Err())
 		}
 	}
-	return nil
+	return flushErr
 }
 
 // ReplaceLatestTurn atomically restores the projection immediately before the

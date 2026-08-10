@@ -127,14 +127,15 @@ func (c *Client) ReplaceLatestTurn(
 			record.Generation++
 			record.Head++
 			record.Checkpoint = nil
-			if record.Replays == nil {
-				record.Replays = make(map[string]sessionrevision.PersistedReplay)
-			}
-			record.Replays[idempotencyKey] = sessionrevision.PersistedReplay{
-				RequestID:  expectedRequestID,
-				Generation: record.Generation,
-				Head:       record.Head,
-			}
+			sessionrevision.RecordLatestTurnReplacementReplay(
+				record,
+				idempotencyKey,
+				sessionrevision.PersistedReplay{
+					RequestID:  expectedRequestID,
+					Generation: record.Generation,
+					Head:       record.Head,
+				},
+			)
 			recordJSON, err := json.Marshal(record)
 			if err != nil {
 				return fmt.Errorf("encode revision metadata: %w", err)

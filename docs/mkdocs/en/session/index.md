@@ -261,11 +261,13 @@ carry a payload.
 
 Retain the exact old/new ID pair until `Run` returns an event channel. A durable
 transition can commit before a later hydration or connection read fails, so an
-error returned directly by `Run` can have an unknown outcome. Retry that error
-with the same edited message and the same ID pair; generating another new ID
-turns a safe idempotent confirmation into a conflict. Once `Run` returns the
-channel, the replacement and new user-turn boundary are committed. Do not retry
-the replacement because of a later event-stream error.
+error returned directly by `Run` can have an unknown outcome. Retry only when
+the durable transition may have committed before that later failure, using the
+same edited message and ID pair. Validation, conflict, unsupported, and
+unavailable errors have known outcomes and should be handled directly instead
+of blindly retried. Once `Run` returns the channel, the replacement and new
+user-turn boundary are committed. Do not retry the replacement because of a
+later event-stream error.
 
 If a retry finds that the new user-turn boundary was already persisted before
 the earlier error, Runner returns `runner.ErrLatestTurnReplacementConflict`
@@ -296,8 +298,9 @@ Safety rules:
 - Session projections loaded before a successful replacement are stale.
   Supporting backends fence their later event, state, summary, and Track writes.
 - Custom Track producers should populate `TrackEvent.RequestID`. The AG-UI
-  tracker does this automatically and flushes Track persistence before a
-  terminal Runner event becomes visible.
+  tracker does this automatically and attempts a synchronous Track flush before
+  a terminal Runner event becomes visible. A flush failure is logged but does
+  not suppress the protocol terminal event.
 - A turn that persists routed output into another session is unavailable for
   replacement because a single-session projection cannot restore it atomically.
 - Replacement preserves the source session's remaining TTL; it does not extend
@@ -305,6 +308,9 @@ Safety rules:
 - Each replacement retains one complete discarded projection. There is no
   implicit revision-count or byte-size cap. Session deletion and expiry remove
   private revisions.
+- Backends retain the 64 most recent replacement idempotency identities for
+  reuse detection. Retry an ambiguous transition promptly with its original
+  ID pair.
 
 The capability does not add a method to `session.Service` or a second
 application entry point. Its storage protocol is private because generation
