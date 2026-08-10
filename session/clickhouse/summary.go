@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	sessionrevision "trpc.group/trpc-go/trpc-agent-go/internal/session/revision"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
 )
@@ -45,8 +44,6 @@ func (s *Service) CreateSessionSummary(
 	).AllowsFilterKey(filterKey) {
 		return nil
 	}
-	write := sessionrevision.NewWrite(ctx, sess)
-
 	updated, err := isummary.SummarizeSession(ctx, s.opts.summarizer, sess, filterKey, force)
 	if err != nil {
 		return fmt.Errorf("summarize and persist failed: %w", err)
@@ -90,14 +87,6 @@ func (s *Service) CreateSessionSummary(
 	if err != nil {
 		return fmt.Errorf("upsert summary failed: %w", err)
 	}
-	if s.tableSessionRevisions != "" {
-		if err := s.publishSummaryRevision(
-			ctx, key, filterKey, summary, write,
-		); err != nil {
-			return fmt.Errorf("publish summary revision failed: %w", err)
-		}
-	}
-
 	return nil
 }
 

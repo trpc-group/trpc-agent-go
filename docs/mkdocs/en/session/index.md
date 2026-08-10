@@ -259,6 +259,20 @@ are supplied, the IDs must match. Replacement cannot be combined with resume or
 history seeding through `RunOptions.Messages`, and the replacement message must
 carry a payload.
 
+Retain the exact old/new ID pair until `Run` returns an event channel. A durable
+transition can commit before a later hydration or connection read fails, so an
+error returned directly by `Run` can have an unknown outcome. Retry that error
+with the same edited message and the same ID pair; generating another new ID
+turns a safe idempotent confirmation into a conflict. Once `Run` returns the
+channel, the replacement and new user-turn boundary are committed. Do not retry
+the replacement because of a later event-stream error.
+
+If a retry finds that the new user-turn boundary was already persisted before
+the earlier error, Runner returns `runner.ErrLatestTurnReplacementConflict`
+instead of appending the edited message twice. The replacement is then known to
+be canonical, but Runner does not automatically repeat an Agent start whose
+outcome may also have been ambiguous.
+
 Before starting the new run, Runner atomically restores session-scoped events,
 state, summaries, and Track events to the complete checkpoint before the old
 request. The discarded projection is retained in backend-private revision
@@ -293,20 +307,19 @@ Safety rules:
   private revisions.
 
 The capability does not add a method to `session.Service` or a second
-application entry point. Custom storage implementations can opt in through the
-`session.LatestTurnReplacer` SPI; applications continue to call `Runner.Run`.
-Memory, SQLite, Redis HashIdx/ZSet, PostgreSQL, PGVector, MySQL/TDSQL,
-ClickHouse, and MongoDB support replacement. The externalization wrapper
-forwards support from its wrapped service. Noop returns unsupported.
+application entry point. Its storage protocol is private because generation
+fencing and checkpoint metadata must evolve as one contract; applications and
+custom session services continue to call `Runner.Run`. Memory, SQLite, Redis
+HashIdx/ZSet, PostgreSQL, PGVector, MySQL/TDSQL, and MongoDB support
+replacement. The externalization wrapper forwards support from its wrapped
+service. ClickHouse, custom services, and Noop return unsupported.
 
 Durable backends create private revision storage during normal database
 initialization. PostgreSQL, PGVector, MySQL/TDSQL, and SQLite use
 `session_revisions` plus `session_revision_archives`; MongoDB stores the active
-revision in the session-state document and uses a revision-archive collection;
-ClickHouse stores one versioned canonical projection in `session_revisions`
-and discarded projections in `session_revision_archives`. Deployments that use
-`WithSkipDBInit(true)` must provision the definitions from the corresponding
-backend package before enabling replacement.
+revision in the session-state document and uses a revision-archive collection.
+Deployments that use `WithSkipDBInit(true)` must provision the definitions from
+the corresponding backend package before enabling replacement.
 
 ## Core Concepts
 

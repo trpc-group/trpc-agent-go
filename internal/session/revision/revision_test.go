@@ -10,8 +10,10 @@ package revision
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -156,6 +158,111 @@ func TestLatestTurnReplacementCapability(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLoadStableProjectionRetriesGenerationChange(t *testing.T) {
+	generations := []uint64{0, 1, 1, 1}
+	reads := 0
+	projectionReads := 0
+	projection, err := LoadStableProjection(
+		context.Background(),
+		func(context.Context) (uint64, error) {
+			generation := generations[reads]
+			reads++
+			return generation, nil
+		},
+		func(context.Context) (*session.Session, error) {
+			projectionReads++
+			return session.NewSession("app", "user", "session"), nil
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, projection)
+	assert.Equal(t, 2, projectionReads)
+	generation, ok := Generation(projection)
+	require.True(t, ok)
+	assert.Equal(t, uint64(1), generation)
+}
+
+func TestLoadStableProjectionRejectsPersistentChange(t *testing.T) {
+	var generation uint64
+	projection, err := LoadStableProjection(
+		context.Background(),
+		func(context.Context) (uint64, error) {
+			generation++
+			return generation, nil
+		},
+		func(context.Context) (*session.Session, error) {
+			return session.NewSession("app", "user", "session"), nil
+		},
+	)
+	assert.Nil(t, projection)
+	assert.ErrorIs(t, err, ErrStaleProjection)
+}
+
+func TestLoadStableListedProjection(t *testing.T) {
+	t.Run("generation zero keeps listed projection", func(t *testing.T) {
+		listed := session.NewSession("app", "user", "session")
+		projectionReads := 0
+		got, err := LoadStableListedProjection(
+			context.Background(),
+			listed,
+			false,
+			func(context.Context) (uint64, error) { return 0, nil },
+			func(context.Context) (*session.Session, error) {
+				projectionReads++
+				return nil, nil
+			},
+		)
+		require.NoError(t, err)
+		assert.Same(t, listed, got)
+		assert.Zero(t, projectionReads)
+	})
+
+	t.Run("nonzero generation refreshes projection", func(t *testing.T) {
+		listed := session.NewSession("app", "user", "session")
+		refreshed := session.NewSession("app", "user", "session")
+		refreshed.Events = append(refreshed.Events, event.Event{})
+		refreshed.Tracks = map[session.Track]*session.TrackEvents{
+			"trace": {Track: "trace"},
+		}
+		refreshed.Summaries = map[string]*session.Summary{
+			"all": {Summary: "summary"},
+		}
+		got, err := LoadStableListedProjection(
+			context.Background(),
+			listed,
+			true,
+			func(context.Context) (uint64, error) { return 2, nil },
+			func(context.Context) (*session.Session, error) {
+				return refreshed, nil
+			},
+		)
+		require.NoError(t, err)
+		assert.Same(t, refreshed, got)
+		generation, ok := Generation(got)
+		require.True(t, ok)
+		assert.Equal(t, uint64(2), generation)
+		assert.Nil(t, got.Events)
+		assert.Nil(t, got.Tracks)
+		assert.Nil(t, got.Summaries)
+	})
+}
+
+func TestTrackEventsEqualIgnoresJSONStorageNormalization(t *testing.T) {
+	timestamp := time.Now()
+	a := session.TrackEvent{
+		Track: "trace", RequestID: "request",
+		Payload: json.RawMessage(`{"a":1,"b":2}`), Timestamp: timestamp,
+	}
+	b := session.TrackEvent{
+		Track: "trace", RequestID: "request",
+		Payload:   json.RawMessage(`{ "b": 2, "a": 1 }`),
+		Timestamp: timestamp.In(time.FixedZone("offset", 8*60*60)),
+	}
+	assert.True(t, TrackEventsEqual(a, b))
+	b.RequestID = "other"
+	assert.False(t, TrackEventsEqual(a, b))
 }
 
 func TestLatestTurnReplacementReplay(t *testing.T) {

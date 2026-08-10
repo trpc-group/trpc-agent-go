@@ -482,11 +482,19 @@ func (s *Service) GetSession(
 		c *session.GetSessionContext,
 		next func() (*session.Session, error),
 	) (*session.Session, error) {
-		sess, err := s.getSession(
+		sess, err := sessionrevision.LoadStableProjection(
 			c.Context,
-			c.Key,
-			c.Options.EventNum,
-			c.Options.EventTime,
+			func(ctx context.Context) (uint64, error) {
+				return s.revisionGeneration(ctx, c.Key)
+			},
+			func(ctx context.Context) (*session.Session, error) {
+				return s.getSession(
+					ctx,
+					c.Key,
+					c.Options.EventNum,
+					c.Options.EventTime,
+				)
+			},
 		)
 		if err != nil {
 			return nil, err
@@ -512,7 +520,7 @@ func (s *Service) ListSessions(
 	if err := session.ValidateListSessionsOptions(opt); err != nil {
 		return nil, err
 	}
-	return s.listSessions(
+	sessList, err := s.listSessions(
 		ctx,
 		userKey,
 		opt.EventNum,
@@ -520,6 +528,33 @@ func (s *Service) ListSessions(
 		opt.ListSessionOnlyMeta,
 		opt.ListSessionPage,
 	)
+	if err != nil {
+		return nil, err
+	}
+	for i, listed := range sessList {
+		if listed == nil {
+			continue
+		}
+		key := session.Key{
+			AppName: listed.AppName, UserID: listed.UserID, SessionID: listed.ID,
+		}
+		stable, err := sessionrevision.LoadStableListedProjection(
+			ctx,
+			listed,
+			opt.ListSessionOnlyMeta,
+			func(ctx context.Context) (uint64, error) {
+				return s.revisionGeneration(ctx, key)
+			},
+			func(ctx context.Context) (*session.Session, error) {
+				return s.getSession(ctx, key, opt.EventNum, opt.EventTime)
+			},
+		)
+		if err != nil {
+			return nil, err
+		}
+		sessList[i] = stable
+	}
+	return sessList, nil
 }
 
 // DeleteSession deletes a session.

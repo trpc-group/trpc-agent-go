@@ -640,20 +640,43 @@ BEGIN SELECT RAISE(ABORT, 'fail'); END`, service.tableSessionEvents,
 		assert.ErrorContains(t, restore(t, service, restored), "restore active event")
 	})
 
-	t.Run("track insert", func(t *testing.T) {
+	t.Run("track tail delete", func(t *testing.T) {
 		service := newService(t)
+		prefix := session.TrackEvent{
+			Track: "trace", Payload: json.RawMessage(`{"step":1}`),
+			Timestamp: time.Now(),
+		}
+		tail := session.TrackEvent{
+			Track: "trace", Payload: json.RawMessage(`{"step":2}`),
+			Timestamp: prefix.Timestamp.Add(time.Second),
+		}
+		for _, trackEvent := range []session.TrackEvent{prefix, tail} {
+			raw, err := json.Marshal(trackEvent)
+			require.NoError(t, err)
+			_, err = service.db.ExecContext(
+				context.Background(),
+				fmt.Sprintf(
+					`INSERT INTO %s (
+  app_name, user_id, session_id, track, event, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+					service.tableSessionTracks,
+				),
+				key.AppName, key.UserID, key.SessionID, trackEvent.Track, raw,
+				trackEvent.Timestamp.UTC().UnixNano(),
+				trackEvent.Timestamp.UTC().UnixNano(),
+			)
+			require.NoError(t, err)
+		}
 		_, err := service.db.ExecContext(context.Background(), fmt.Sprintf(
-			`CREATE TRIGGER fail_track BEFORE INSERT ON %s
+			`CREATE TRIGGER fail_track BEFORE DELETE ON %s
 BEGIN SELECT RAISE(ABORT, 'fail'); END`, service.tableSessionTracks,
 		))
 		require.NoError(t, err)
 		restored := newProjection()
 		restored.Tracks = map[session.Track]*session.TrackEvents{
-			"trace": {Track: "trace", Events: []session.TrackEvent{{
-				Track: "trace", Payload: json.RawMessage(`{}`), Timestamp: time.Now(),
-			}}},
+			"trace": {Track: "trace", Events: []session.TrackEvent{prefix}},
 		}
-		assert.ErrorContains(t, restore(t, service, restored), "restore active track event")
+		assert.ErrorContains(t, restore(t, service, restored), "remove discarded track tail")
 	})
 
 	t.Run("summary insert", func(t *testing.T) {
@@ -708,7 +731,7 @@ BEGIN SELECT RAISE(ABORT, 'fail'); END`, service.tableSessionSummaries,
 
 func TestReplaceLatestTurnDatabaseFailures(t *testing.T) {
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
-	req := session.LatestTurnReplacementRequest{
+	req := sessionrevision.LatestTurnReplacementRequest{
 		Key: key, ExpectedRequestID: "request", IdempotencyKey: "replacement",
 	}
 	newService := func(t *testing.T) *Service {

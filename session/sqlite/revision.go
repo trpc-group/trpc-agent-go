@@ -149,6 +149,20 @@ func (s *Service) attachRevisionGeneration(
 	return nil
 }
 
+func (s *Service) revisionGeneration(
+	ctx context.Context,
+	key session.Key,
+) (uint64, error) {
+	record, err := s.readRevision(ctx, s.db, key)
+	if errors.Is(err, sessionrevision.ErrLatestTurnReplacementUnsupported) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return record.Generation, nil
+}
+
 func (s *Service) readRevisionForWrite(
 	ctx context.Context,
 	query revisionRowQuerier,
@@ -590,7 +604,6 @@ WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
 	}
 	for _, table := range []string{
 		s.tableSessionEvents,
-		s.tableSessionTracks,
 		s.tableSessionSummaries,
 	} {
 		if _, err := tx.ExecContext(
@@ -605,6 +618,9 @@ WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
 		); err != nil {
 			return fmt.Errorf("clear active session projection: %w", err)
 		}
+	}
+	if err := s.trimActiveTrackTailsTx(ctx, tx, key, restored); err != nil {
+		return err
 	}
 	for i := range restored.Events {
 		evt := restored.Events[i]
@@ -637,40 +653,6 @@ WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
 			return fmt.Errorf("restore active event: %w", err)
 		}
 	}
-	for track, history := range restored.Tracks {
-		if history == nil {
-			continue
-		}
-		for i := range history.Events {
-			trackEvent := history.Events[i]
-			raw, err := json.Marshal(&trackEvent)
-			if err != nil {
-				return err
-			}
-			created := trackEvent.Timestamp.UTC().UnixNano()
-			_, err = tx.ExecContext(
-				ctx,
-				fmt.Sprintf(
-					`INSERT INTO %s (
-  app_name, user_id, session_id, track, event, created_at, updated_at,
-  expires_at, deleted_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
-					s.tableSessionTracks,
-				),
-				key.AppName,
-				key.UserID,
-				key.SessionID,
-				track,
-				raw,
-				created,
-				created,
-				nullInt64Arg(expiresAt),
-			)
-			if err != nil {
-				return fmt.Errorf("restore active track event: %w", err)
-			}
-		}
-	}
 	for filterKey, summary := range restored.Summaries {
 		if summary == nil {
 			continue
@@ -699,6 +681,118 @@ WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
 		if err != nil {
 			return fmt.Errorf("restore active summary: %w", err)
 		}
+	}
+	return nil
+}
+
+func (s *Service) trimActiveTrackTailsTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	key session.Key,
+	restored *session.Session,
+) error {
+	rows, err := tx.QueryContext(
+		ctx,
+		fmt.Sprintf(
+			`SELECT id, track, event FROM %s
+WHERE app_name = ? AND user_id = ? AND session_id = ?
+AND deleted_at IS NULL ORDER BY created_at, id`,
+			s.tableSessionTracks,
+		),
+		key.AppName,
+		key.UserID,
+		key.SessionID,
+	)
+	if err != nil {
+		return fmt.Errorf("lock active tracks: %w", err)
+	}
+	type trackRow struct {
+		id    int64
+		event session.TrackEvent
+	}
+	active := make(map[session.Track][]trackRow)
+	for rows.Next() {
+		var (
+			id    int64
+			track session.Track
+			raw   []byte
+		)
+		if err := rows.Scan(&id, &track, &raw); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		var trackEvent session.TrackEvent
+		if err := json.Unmarshal(raw, &trackEvent); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		active[track] = append(active[track], trackRow{id: id, event: trackEvent})
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	var tail []int64
+	for track, activeRows := range active {
+		history := restored.Tracks[track]
+		prefixLength := 0
+		if history != nil {
+			prefixLength = len(history.Events)
+		}
+		if len(activeRows) < prefixLength {
+			return fmt.Errorf(
+				"track %q checkpoint prefix has %d events, active projection has %d: %w",
+				track,
+				prefixLength,
+				len(activeRows),
+				sessionrevision.ErrLatestTurnReplacementUnavailable,
+			)
+		}
+		for i := 0; i < prefixLength; i++ {
+			if !sessionrevision.TrackEventsEqual(
+				activeRows[i].event,
+				history.Events[i],
+			) {
+				return fmt.Errorf(
+					"track %q checkpoint prefix differs at event %d: %w",
+					track,
+					i,
+					sessionrevision.ErrLatestTurnReplacementUnavailable,
+				)
+			}
+		}
+		for _, row := range activeRows[prefixLength:] {
+			tail = append(tail, row.id)
+		}
+	}
+	for track, history := range restored.Tracks {
+		if history != nil && len(history.Events) > 0 && len(active[track]) == 0 {
+			return fmt.Errorf(
+				"track %q checkpoint prefix is missing: %w",
+				track,
+				sessionrevision.ErrLatestTurnReplacementUnavailable,
+			)
+		}
+	}
+	if len(tail) == 0 {
+		return nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(tail)), ",")
+	args := make([]any, len(tail), len(tail)+3)
+	for i, id := range tail {
+		args[i] = id
+	}
+	args = append(args, key.AppName, key.UserID, key.SessionID)
+	if _, err := tx.ExecContext(
+		ctx,
+		fmt.Sprintf(
+			`DELETE FROM %s WHERE id IN (%s)
+AND app_name = ? AND user_id = ? AND session_id = ?`,
+			s.tableSessionTracks,
+			placeholders,
+		),
+		args...,
+	); err != nil {
+		return fmt.Errorf("remove discarded track tail: %w", err)
 	}
 	return nil
 }

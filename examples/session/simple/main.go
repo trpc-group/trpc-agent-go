@@ -66,6 +66,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -194,7 +195,14 @@ type multiTurnChat struct {
 	userID         string
 	sessionID      string
 	requestIDs     map[string]string
+	pendingEdits   map[string]pendingEdit
 	debugPersisted bool
+}
+
+type pendingEdit struct {
+	expectedRequestID string
+	requestID         string
+	message           string
 }
 
 // run starts the interactive chat session.
@@ -260,6 +268,7 @@ func (c *multiTurnChat) setup(_ context.Context) error {
 	c.userID = "user"
 	c.sessionID = fmt.Sprintf("session-%d", time.Now().Unix())
 	c.requestIDs = make(map[string]string)
+	c.pendingEdits = make(map[string]pendingEdit)
 
 	fmt.Printf("Chat ready! Session: %s\n\n", c.sessionID)
 	return nil
@@ -384,17 +393,38 @@ func (c *multiTurnChat) replaceLatestMessage(
 	ctx context.Context,
 	userMessage string,
 ) error {
-	expectedRequestID, err := c.latestRequestID(ctx)
-	if err != nil {
-		return err
+	pending, ok := c.pendingEdits[c.sessionID]
+	if !ok {
+		expectedRequestID, err := c.latestRequestID(ctx)
+		if err != nil {
+			return err
+		}
+		pending = pendingEdit{
+			expectedRequestID: expectedRequestID,
+			requestID:         uuid.New().String(),
+			message:           userMessage,
+		}
+		c.pendingEdits[c.sessionID] = pending
+	} else if userMessage != pending.message {
+		return fmt.Errorf(
+			"pending edit outcome is unknown; retry the same message %q",
+			pending.message,
+		)
 	}
-	requestID := uuid.New().String()
-	return c.runMessage(
+	started, err := c.runMessageAttempt(
 		ctx,
 		userMessage,
-		requestID,
-		agent.WithLatestTurnReplacement(expectedRequestID, requestID),
+		pending.requestID,
+		agent.WithLatestTurnReplacement(
+			pending.expectedRequestID,
+			pending.requestID,
+		),
 	)
+	if started || errors.Is(err, runner.ErrLatestTurnReplacementConflict) ||
+		errors.Is(err, runner.ErrLatestTurnReplacementUnsupported) {
+		delete(c.pendingEdits, c.sessionID)
+	}
+	return err
 }
 
 func (c *multiTurnChat) runMessage(
@@ -403,6 +433,16 @@ func (c *multiTurnChat) runMessage(
 	requestID string,
 	runOpts ...agent.RunOption,
 ) error {
+	_, err := c.runMessageAttempt(ctx, userMessage, requestID, runOpts...)
+	return err
+}
+
+func (c *multiTurnChat) runMessageAttempt(
+	ctx context.Context,
+	userMessage string,
+	requestID string,
+	runOpts ...agent.RunOption,
+) (bool, error) {
 	message := model.NewUserMessage(userMessage)
 
 	// Inject requestID into context for logging.
@@ -426,12 +466,12 @@ func (c *multiTurnChat) runMessage(
 		runOpts...,
 	)
 	if err != nil {
-		return fmt.Errorf("failed to run agent: %w", err)
+		return false, fmt.Errorf("failed to run agent: %w", err)
 	}
 	c.requestIDs[c.sessionID] = requestID
 
 	// Process response.
-	return c.processResponse(eventChan)
+	return true, c.processResponse(eventChan)
 }
 
 func (c *multiTurnChat) latestRequestID(ctx context.Context) (string, error) {

@@ -179,23 +179,6 @@ func TestReplaceLatestTurnUnsupportedWrappedService(t *testing.T) {
 	if !errors.Is(err, revision.ErrLatestTurnReplacementUnsupported) {
 		t.Fatalf("ReplaceLatestTurn() error = %v", err)
 	}
-	replacer, ok := svc.(session.LatestTurnReplacer)
-	if !ok {
-		t.Fatal("wrapped service does not expose replacement method")
-	}
-	_, err = replacer.ReplaceLatestTurn(
-		context.Background(),
-		revision.LatestTurnReplacementRequest{
-			Key: session.Key{
-				AppName: "app", UserID: "user", SessionID: "session",
-			},
-			ExpectedRequestID: "request",
-			IdempotencyKey:    "replacement",
-		},
-	)
-	if !errors.Is(err, revision.ErrLatestTurnReplacementUnsupported) {
-		t.Fatalf("Service.ReplaceLatestTurn() error = %v", err)
-	}
 }
 
 type unsupportedReplacementService struct {

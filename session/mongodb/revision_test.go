@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
@@ -199,8 +200,23 @@ func TestReplaceLatestTurnRestoresCompleteProjection(t *testing.T) {
 		UpdatedAt: time.Now(), Revision: recordRaw,
 	}
 	s, mc := revisionTestService(t, doc)
+	trackRaw, err := json.Marshal(restored.Tracks["trace"].Events[0])
+	require.NoError(t, err)
+	trackDoc := sessionTrackDoc{
+		ID: primitive.NewObjectID(), AppName: key.AppName, UserID: key.UserID,
+		SessionID: key.SessionID, Track: "trace", Event: trackRaw,
+		CreatedAt: createdAt, UpdatedAt: createdAt,
+	}
+	findCalls := 0
+	mc.findFn = func(any) (*mongo.Cursor, error) {
+		findCalls++
+		if findCalls == 2 || findCalls == 4 {
+			return mongo.NewCursorFromDocuments([]any{trackDoc}, nil, nil)
+		}
+		return emptyCursor()
+	}
 
-	result, err := s.ReplaceLatestTurn(context.Background(), session.LatestTurnReplacementRequest{
+	result, err := s.ReplaceLatestTurn(context.Background(), sessionrevision.LatestTurnReplacementRequest{
 		Key: key, ExpectedRequestID: "old-request", IdempotencyKey: "new-request",
 	})
 	require.NoError(t, err)
@@ -275,7 +291,7 @@ func TestReplaceLatestTurnReplayAndGenerationLimit(t *testing.T) {
 	doc.Revision, err = encodeRevision(replayRecord)
 	require.NoError(t, err)
 	s, _ := revisionTestService(t, doc)
-	result, err := s.ReplaceLatestTurn(context.Background(), session.LatestTurnReplacementRequest{
+	result, err := s.ReplaceLatestTurn(context.Background(), sessionrevision.LatestTurnReplacementRequest{
 		Key: key, ExpectedRequestID: "old-request", IdempotencyKey: "new-request",
 	})
 	require.NoError(t, err)
@@ -293,10 +309,10 @@ func TestReplaceLatestTurnReplayAndGenerationLimit(t *testing.T) {
 	doc.Revision, err = encodeRevision(limited)
 	require.NoError(t, err)
 	s, _ = revisionTestService(t, doc)
-	_, err = s.ReplaceLatestTurn(context.Background(), session.LatestTurnReplacementRequest{
+	_, err = s.ReplaceLatestTurn(context.Background(), sessionrevision.LatestTurnReplacementRequest{
 		Key: key, ExpectedRequestID: "old-request", IdempotencyKey: "another-request",
 	})
-	assert.ErrorIs(t, err, session.ErrLatestTurnReplacementUnavailable)
+	assert.ErrorIs(t, err, sessionrevision.ErrLatestTurnReplacementUnavailable)
 }
 
 func TestFlushRevisionPersistence(t *testing.T) {
@@ -462,7 +478,7 @@ func TestRestoreRevisionProjectionErrors(t *testing.T) {
 		}}
 		s := newServiceForTest(t, mc)
 		err := s.restoreRevisionProjection(context.Background(), key, restored, sessionStateDoc{}, record)
-		assert.ErrorIs(t, err, session.ErrLatestTurnReplacementUnavailable)
+		assert.ErrorIs(t, err, sessionrevision.ErrLatestTurnReplacementUnavailable)
 	})
 
 	t.Run("restore event", func(t *testing.T) {
@@ -502,21 +518,42 @@ func TestRestoreRevisionProjectionErrors(t *testing.T) {
 		assert.Error(t, err)
 	})
 
-	t.Run("restore track event", func(t *testing.T) {
+	t.Run("remove track tail", func(t *testing.T) {
 		withTrack := restored.Clone()
-		withTrack.Tracks = map[session.Track]*session.TrackEvents{
-			"trace": {Track: "trace", Events: []session.TrackEvent{{
-				Track: "trace", Payload: json.RawMessage(`{}`),
-			}}},
+		prefix := session.TrackEvent{
+			Track: "trace", Payload: json.RawMessage(`{"step":1}`),
 		}
-		mc := &mockClient{insertOneFn: func(any) (*mongo.InsertOneResult, error) {
-			return nil, errors.New("insert failed")
-		}}
+		tail := session.TrackEvent{
+			Track: "trace", Payload: json.RawMessage(`{"step":2}`),
+		}
+		withTrack.Tracks = map[session.Track]*session.TrackEvents{
+			"trace": {Track: "trace", Events: []session.TrackEvent{prefix}},
+		}
+		prefixRaw, err := json.Marshal(prefix)
+		require.NoError(t, err)
+		tailRaw, err := json.Marshal(tail)
+		require.NoError(t, err)
+		mc := &mockClient{
+			findFn: func(any) (*mongo.Cursor, error) {
+				return mongo.NewCursorFromDocuments([]any{
+					sessionTrackDoc{ID: primitive.NewObjectID(), Track: "trace", Event: prefixRaw},
+					sessionTrackDoc{ID: primitive.NewObjectID(), Track: "trace", Event: tailRaw},
+				}, nil, nil)
+			},
+		}
+		deleteCalls := 0
+		mc.deleteManyFn = func(any) (*mongo.DeleteResult, error) {
+			deleteCalls++
+			if deleteCalls == 3 {
+				return nil, errors.New("delete failed")
+			}
+			return &mongo.DeleteResult{}, nil
+		}
 		s := newServiceForTest(t, mc)
-		err := s.restoreRevisionProjection(
+		err = s.restoreRevisionProjection(
 			context.Background(), key, withTrack, sessionStateDoc{}, record,
 		)
-		assert.ErrorContains(t, err, "restore track event")
+		assert.ErrorContains(t, err, "remove discarded track tail")
 	})
 
 	t.Run("restore summary", func(t *testing.T) {
@@ -625,7 +662,7 @@ func TestRevisionWriteFailurePaths(t *testing.T) {
 		mc.transactionFn = func(func(mongo.SessionContext) error) error {
 			return errors.New("transaction failed")
 		}
-		_, err := s.ReplaceLatestTurn(context.Background(), session.LatestTurnReplacementRequest{
+		_, err := s.ReplaceLatestTurn(context.Background(), sessionrevision.LatestTurnReplacementRequest{
 			Key: key, ExpectedRequestID: "old-request", IdempotencyKey: "new-request",
 		})
 		assert.ErrorContains(t, err, "replace latest turn: transaction failed")
@@ -811,7 +848,7 @@ func TestPublicRevisionMutationPaths(t *testing.T) {
 
 func TestReplaceLatestTurnProtocolFailures(t *testing.T) {
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
-	req := session.LatestTurnReplacementRequest{
+	req := sessionrevision.LatestTurnReplacementRequest{
 		Key: key, ExpectedRequestID: "old-request", IdempotencyKey: "new-request",
 	}
 	active := session.NewSession(key.AppName, key.UserID, key.SessionID)
@@ -822,11 +859,11 @@ func TestReplaceLatestTurnProtocolFailures(t *testing.T) {
 	}
 
 	s, _ := revisionTestService(t, sessionStateDoc{})
-	_, err = s.ReplaceLatestTurn(context.Background(), session.LatestTurnReplacementRequest{})
+	_, err = s.ReplaceLatestTurn(context.Background(), sessionrevision.LatestTurnReplacementRequest{})
 	assert.Error(t, err)
 	s.collRevisionArchives = ""
 	_, err = s.ReplaceLatestTurn(context.Background(), req)
-	assert.ErrorIs(t, err, session.ErrLatestTurnReplacementUnsupported)
+	assert.ErrorIs(t, err, sessionrevision.ErrLatestTurnReplacementUnsupported)
 
 	t.Run("flush", func(t *testing.T) {
 		s, _ := revisionTestService(t, sessionStateDoc{})
@@ -871,7 +908,7 @@ func TestReplaceLatestTurnProtocolFailures(t *testing.T) {
 		require.NoError(t, encodeErr)
 		s, _ := revisionTestService(t, sessionStateDoc{Revision: raw})
 		_, err := s.ReplaceLatestTurn(context.Background(), req)
-		assert.ErrorIs(t, err, session.ErrLatestTurnReplacementUnavailable)
+		assert.ErrorIs(t, err, sessionrevision.ErrLatestTurnReplacementUnavailable)
 	})
 
 	t.Run("replay conflict", func(t *testing.T) {
@@ -885,7 +922,7 @@ func TestReplaceLatestTurnProtocolFailures(t *testing.T) {
 		require.NoError(t, encodeErr)
 		s, _ := revisionTestService(t, sessionStateDoc{Revision: raw})
 		_, err := s.ReplaceLatestTurn(context.Background(), req)
-		assert.ErrorIs(t, err, session.ErrLatestTurnReplacementConflict)
+		assert.ErrorIs(t, err, sessionrevision.ErrLatestTurnReplacementConflict)
 	})
 
 	t.Run("checkpoint decode", func(t *testing.T) {

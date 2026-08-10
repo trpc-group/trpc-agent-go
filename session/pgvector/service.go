@@ -439,9 +439,17 @@ func (s *Service) GetSession(
 		c *session.GetSessionContext,
 		_ func() (*session.Session, error),
 	) (*session.Session, error) {
-		sess, err := s.getSession(
-			c.Context, c.Key,
-			c.Options.EventNum, c.Options.EventTime,
+		sess, err := sessionrevision.LoadStableProjection(
+			c.Context,
+			func(ctx context.Context) (uint64, error) {
+				return s.revisionGeneration(ctx, c.Key)
+			},
+			func(ctx context.Context) (*session.Session, error) {
+				return s.getSession(
+					ctx, c.Key,
+					c.Options.EventNum, c.Options.EventTime,
+				)
+			},
 		)
 		if err != nil {
 			return nil, fmt.Errorf(
@@ -458,9 +466,6 @@ func (s *Service) GetSession(
 					err,
 				)
 			}
-		}
-		if err := s.attachRevisionGeneration(c.Context, c.Key, sess); err != nil {
-			return nil, err
 		}
 		return sess, nil
 	}
@@ -496,15 +501,28 @@ func (s *Service) ListSessions(
 				"failed: %w", err,
 		)
 	}
-	for _, sess := range sessList {
-		if sess == nil {
+	for i, listed := range sessList {
+		if listed == nil {
 			continue
 		}
-		if err := s.attachRevisionGeneration(ctx, session.Key{
-			AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID,
-		}, sess); err != nil {
+		key := session.Key{
+			AppName: listed.AppName, UserID: listed.UserID, SessionID: listed.ID,
+		}
+		stable, err := sessionrevision.LoadStableListedProjection(
+			ctx,
+			listed,
+			opt.ListSessionOnlyMeta,
+			func(ctx context.Context) (uint64, error) {
+				return s.revisionGeneration(ctx, key)
+			},
+			func(ctx context.Context) (*session.Session, error) {
+				return s.getSession(ctx, key, opt.EventNum, opt.EventTime)
+			},
+		)
+		if err != nil {
 			return nil, err
 		}
+		sessList[i] = stable
 	}
 	return sessList, nil
 }

@@ -359,6 +359,13 @@ session loaded from persistent storage, it recovers the latest request ID from
 that session's events. The no-op backend returns an unsupported error because
 it does not persist a replaceable turn.
 
+If `Runner.Run` returns an error before yielding an event stream, the example
+keeps the pending ID pair and reuses it on the next `/edit`. This confirms an
+outcome-unknown durable transition idempotently. After an event stream is
+returned, the pending pair is cleared even if streaming later reports an error.
+ClickHouse and custom session services return unsupported; use Memory, SQLite,
+Redis, PostgreSQL, PGVector, MySQL/TDSQL, or MongoDB for this command.
+
 ## Session Storage Backends
 
 ### In-Memory (Default)

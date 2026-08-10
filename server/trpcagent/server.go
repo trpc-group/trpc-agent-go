@@ -163,7 +163,14 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 		s.respondError(w, r, http.StatusBadRequest, fmt.Sprintf("compile profile: %v", err))
 		return
 	}
-	runOptions = append(runOptions, agent.WithRequestID(req.RunOptions.RequestID))
+	if replacement := req.RunOptions.LatestTurnReplacement; replacement != nil {
+		runOptions = append(runOptions, agent.WithLatestTurnReplacement(
+			replacement.ExpectedRequestID,
+			replacement.RequestID,
+		))
+	} else {
+		runOptions = append(runOptions, agent.WithRequestID(req.RunOptions.RequestID))
+	}
 	runOptions = append(runOptions, agent.MergeRuntimeState(req.RunOptions.RuntimeState))
 	runOptions = append(runOptions, agent.WithAppName(s.appName))
 	eventCh, err := s.runner.Run(ctx, req.Session.UserID, req.Session.SessionID, req.Input, runOptions...)
@@ -226,6 +233,30 @@ func validateRunRequest(req *runRequest) error {
 	}
 	if !model.HasPayload(req.Input) && len(req.Input.ToolCalls) == 0 && req.Input.ToolID == "" {
 		return errors.New("input payload is required")
+	}
+	if replacement := req.RunOptions.LatestTurnReplacement; replacement != nil {
+		if replacement.ExpectedRequestID == "" {
+			return errors.New(
+				"runOptions.latestTurnReplacement.expectedRequestID is required",
+			)
+		}
+		if replacement.RequestID == "" {
+			return errors.New(
+				"runOptions.latestTurnReplacement.requestID is required",
+			)
+		}
+		if replacement.ExpectedRequestID == replacement.RequestID {
+			return errors.New(
+				"runOptions.latestTurnReplacement request IDs must differ",
+			)
+		}
+		if req.RunOptions.RequestID != "" &&
+			req.RunOptions.RequestID != replacement.RequestID {
+			return errors.New(
+				"runOptions.requestID conflicts with latest-turn replacement",
+			)
+		}
+		req.RunOptions.RequestID = replacement.RequestID
 	}
 	return nil
 }

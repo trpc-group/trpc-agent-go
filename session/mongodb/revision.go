@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
@@ -396,24 +397,24 @@ func (s *Service) persistSummaryWithRevision(
 // latest persisted runner turn.
 func (s *Service) ReplaceLatestTurn(
 	ctx context.Context,
-	req session.LatestTurnReplacementRequest,
-) (*session.LatestTurnReplacementResult, error) {
+	req sessionrevision.LatestTurnReplacementRequest,
+) (*sessionrevision.LatestTurnReplacementResult, error) {
 	if err := sessionrevision.ValidateLatestTurnReplacementRequest(req); err != nil {
 		return nil, err
 	}
 	if s.collRevisionArchives == "" {
-		return nil, session.ErrLatestTurnReplacementUnsupported
+		return nil, sessionrevision.ErrLatestTurnReplacementUnsupported
 	}
 	if err := s.flushRevisionPersistence(ctx, req.Key); err != nil {
 		return nil, err
 	}
-	var result *session.LatestTurnReplacementResult
+	var result *sessionrevision.LatestTurnReplacementResult
 	err := s.client.Transaction(ctx, func(sc mongo.SessionContext) error {
 		var doc sessionStateDoc
 		if err := s.client.FindOne(sc, s.database, s.collSessionStates,
 			activeFilterNoExpiry(sessionKeyFilter(req.Key))).Decode(&doc); err != nil {
 			if errors.Is(err, mongo.ErrNoDocuments) {
-				return session.ErrLatestTurnReplacementUnavailable
+				return sessionrevision.ErrLatestTurnReplacementUnavailable
 			}
 			return err
 		}
@@ -431,7 +432,7 @@ func (s *Service) ReplaceLatestTurn(
 			return err
 		} else if replayed {
 			sessionrevision.SetGeneration(current, record.Generation)
-			result = &session.LatestTurnReplacementResult{ActiveSession: current}
+			result = &sessionrevision.LatestTurnReplacementResult{ActiveSession: current}
 			return nil
 		}
 		checkpoint, err := sessionrevision.LatestTurnReplacementCheckpoint(
@@ -441,7 +442,7 @@ func (s *Service) ReplaceLatestTurn(
 			return err
 		}
 		if record.Generation == math.MaxUint64 {
-			return session.ErrLatestTurnReplacementUnavailable
+			return sessionrevision.ErrLatestTurnReplacementUnavailable
 		}
 		restored, err := sessionrevision.DecodeSnapshot(checkpoint.Snapshot)
 		if err != nil {
@@ -473,7 +474,7 @@ func (s *Service) ReplaceLatestTurn(
 			return err
 		}
 		sessionrevision.SetGeneration(restored, record.Generation)
-		result = &session.LatestTurnReplacementResult{
+		result = &sessionrevision.LatestTurnReplacementResult{
 			ActiveSession: restored,
 			Applied:       true,
 		}
@@ -590,11 +591,14 @@ func (s *Service) restoreRevisionProjection(
 ) error {
 	filter := sessionKeyFilter(key)
 	for _, coll := range []string{
-		s.collSessionEvents, s.collSessionTracks, s.collSessionSummaries,
+		s.collSessionEvents, s.collSessionSummaries,
 	} {
 		if _, err := s.client.DeleteMany(ctx, s.database, coll, filter); err != nil {
 			return fmt.Errorf("clear discarded session projection: %w", err)
 		}
+	}
+	if err := s.trimRevisionTrackTails(ctx, key, restored); err != nil {
+		return err
 	}
 	revisionRaw, err := encodeRevision(record)
 	if err != nil {
@@ -611,7 +615,7 @@ func (s *Service) restoreRevisionProjection(
 		return fmt.Errorf("restore session state: %w", err)
 	}
 	if res.MatchedCount == 0 {
-		return session.ErrLatestTurnReplacementUnavailable
+		return sessionrevision.ErrLatestTurnReplacementUnavailable
 	}
 	for i := range restored.Events {
 		evt := &restored.Events[i]
@@ -632,30 +636,6 @@ func (s *Service) restoreRevisionProjection(
 			return fmt.Errorf("restore event: %w", err)
 		}
 	}
-	for track, history := range restored.Tracks {
-		if history == nil {
-			continue
-		}
-		for i := range history.Events {
-			trackEvent := &history.Events[i]
-			raw, err := json.Marshal(trackEvent)
-			if err != nil {
-				return err
-			}
-			createdAt := trackEvent.Timestamp
-			if createdAt.IsZero() {
-				createdAt = restored.CreatedAt
-			}
-			if _, err := s.client.InsertOne(ctx, s.database, s.collSessionTracks,
-				sessionTrackDoc{
-					AppName: key.AppName, UserID: key.UserID, SessionID: key.SessionID,
-					Track: track, Event: raw, CreatedAt: createdAt,
-					UpdatedAt: createdAt, ExpiresAt: doc.ExpiresAt,
-				}); err != nil {
-				return fmt.Errorf("restore track event: %w", err)
-			}
-		}
-	}
 	for filterKey, summary := range restored.Summaries {
 		if summary == nil {
 			continue
@@ -672,6 +652,104 @@ func (s *Service) restoreRevisionProjection(
 			}); err != nil {
 			return fmt.Errorf("restore summary: %w", err)
 		}
+	}
+	return nil
+}
+
+func (s *Service) trimRevisionTrackTails(
+	ctx context.Context,
+	key session.Key,
+	restored *session.Session,
+) error {
+	cursor, err := s.client.Find(
+		ctx,
+		s.database,
+		s.collSessionTracks,
+		activeFilterNoExpiry(sessionKeyFilter(key)),
+		options.Find().SetSort(bson.D{
+			{Key: "created_at", Value: 1},
+			{Key: "_id", Value: 1},
+		}),
+	)
+	if err != nil {
+		return fmt.Errorf("lock active tracks: %w", err)
+	}
+	defer cursor.Close(ctx)
+	type trackRow struct {
+		id    primitive.ObjectID
+		event session.TrackEvent
+	}
+	active := make(map[session.Track][]trackRow)
+	for cursor.Next(ctx) {
+		var doc sessionTrackDoc
+		if err := cursor.Decode(&doc); err != nil {
+			return err
+		}
+		var trackEvent session.TrackEvent
+		if err := json.Unmarshal(doc.Event, &trackEvent); err != nil {
+			return err
+		}
+		active[doc.Track] = append(active[doc.Track], trackRow{
+			id: doc.ID, event: trackEvent,
+		})
+	}
+	if err := cursor.Err(); err != nil {
+		return err
+	}
+	var tail []primitive.ObjectID
+	for track, activeRows := range active {
+		history := restored.Tracks[track]
+		prefixLength := 0
+		if history != nil {
+			prefixLength = len(history.Events)
+		}
+		if len(activeRows) < prefixLength {
+			return fmt.Errorf(
+				"track %q checkpoint prefix has %d events, active projection has %d: %w",
+				track,
+				prefixLength,
+				len(activeRows),
+				sessionrevision.ErrLatestTurnReplacementUnavailable,
+			)
+		}
+		for i := 0; i < prefixLength; i++ {
+			if !sessionrevision.TrackEventsEqual(
+				activeRows[i].event,
+				history.Events[i],
+			) {
+				return fmt.Errorf(
+					"track %q checkpoint prefix differs at event %d: %w",
+					track,
+					i,
+					sessionrevision.ErrLatestTurnReplacementUnavailable,
+				)
+			}
+		}
+		for _, row := range activeRows[prefixLength:] {
+			tail = append(tail, row.id)
+		}
+	}
+	for track, history := range restored.Tracks {
+		if history != nil && len(history.Events) > 0 && len(active[track]) == 0 {
+			return fmt.Errorf(
+				"track %q checkpoint prefix is missing: %w",
+				track,
+				sessionrevision.ErrLatestTurnReplacementUnavailable,
+			)
+		}
+	}
+	if len(tail) == 0 {
+		return nil
+	}
+	filter := sessionKeyFilter(key)
+	filter["_id"] = bson.M{"$in": tail}
+	if _, err := s.client.DeleteMany(
+		ctx,
+		s.database,
+		s.collSessionTracks,
+		filter,
+	); err != nil {
+		return fmt.Errorf("remove discarded track tail: %w", err)
 	}
 	return nil
 }

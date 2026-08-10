@@ -132,7 +132,7 @@ func TestReplacementResultWithScopedState(t *testing.T) {
 		WithArgs(key.AppName, key.UserID, sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}).AddRow("private", []byte("user")))
 	result, err := s.replacementResultWithScopedState(context.Background(), key,
-		&session.LatestTurnReplacementResult{ActiveSession: session.NewSession(
+		&sessionrevision.LatestTurnReplacementResult{ActiveSession: session.NewSession(
 			key.AppName, key.UserID, key.SessionID,
 		)})
 	require.NoError(t, err)
@@ -160,17 +160,17 @@ func TestReplaceLatestTurnValidationAndUnsupportedStore(t *testing.T) {
 	s, mock, db := newTestService(t, nil)
 	defer db.Close()
 
-	_, err := s.ReplaceLatestTurn(context.Background(), session.LatestTurnReplacementRequest{})
+	_, err := s.ReplaceLatestTurn(context.Background(), sessionrevision.LatestTurnReplacementRequest{})
 	assert.Error(t, err)
 
 	s.tableSessionRevisions = "session_revisions"
 	mock.ExpectBegin()
 	mock.ExpectRollback()
-	_, err = s.ReplaceLatestTurn(context.Background(), session.LatestTurnReplacementRequest{
+	_, err = s.ReplaceLatestTurn(context.Background(), sessionrevision.LatestTurnReplacementRequest{
 		Key:               session.Key{AppName: "app", UserID: "user", SessionID: "session"},
 		ExpectedRequestID: "old-request", IdempotencyKey: "new-request",
 	})
-	assert.ErrorIs(t, err, session.ErrLatestTurnReplacementUnsupported)
+	assert.ErrorIs(t, err, sessionrevision.ErrLatestTurnReplacementUnsupported)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

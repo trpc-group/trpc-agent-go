@@ -257,6 +257,17 @@ for event := range events {
 无需再传 `agent.WithRequestID`；如果两者同时出现，ID 必须一致。Replacement 不能与
 resume 或 `RunOptions.Messages` 历史 seed 同时使用，并且替换消息必须包含有效 payload。
 
+在 `Run` 返回 event channel 前，应保留完全相同的旧、新 ID。持久化转换可能已经提交，
+但后续 hydrate 或连接读取仍可能失败，因此 `Run` 直接返回的错误可能处于结果不确定状态。
+重试时必须复用同一条编辑消息和同一组 ID；生成另一个新 ID 会把可幂等确认的操作变成
+冲突。一旦 `Run` 返回 channel，replacement 与新 user-turn 边界就已经提交；之后事件流
+中的错误不应触发再次 replacement。
+
+如果重试发现新的 user-turn 边界已在上一次错误前持久化，Runner 会返回
+`runner.ErrLatestTurnReplacementConflict`，而不会把编辑后的消息追加两次。此时可以确认
+replacement 已成为 canonical，但 Runner 不会自动重复一次执行结果同样可能不确定的
+Agent 启动。
+
 新 Run 开始前，Runner 会把 Session 级 events、state、summaries 和 Track events
 原子恢复到旧 Request 之前的完整 checkpoint，并把被丢弃的投影保存在 backend 私有
 revision 存储中。app state、user state、模型/工具调用、artifact 写入和其他外部副作用
@@ -283,18 +294,18 @@ revision 存储中。app state、user state、模型/工具调用、artifact 写
 - 每次 replacement 会保留一份完整废弃投影，系统不会隐式限制 revision 数量或字节数；
   删除 Session 或 Session 到期时会一并清理。
 
-该能力不会给 `session.Service` 增加方法，也不会引入第二个业务入口。自定义存储可以通过
-`session.LatestTurnReplacer` SPI 选择性接入；业务仍只调用 `Runner.Run`。Memory、
-SQLite、Redis HashIdx/ZSet、PostgreSQL、PGVector、MySQL/TDSQL、ClickHouse 和
-MongoDB 均支持 replacement；Externalization wrapper 会透传底层能力；Noop 返回
+该能力不会给 `session.Service` 增加方法，也不会引入第二个业务入口。由于 generation
+fencing 与 checkpoint metadata 必须作为同一份协议演进，存储协议保持为框架内部能力；
+业务与自定义 Session service 仍只调用 `Runner.Run`。Memory、SQLite、Redis
+HashIdx/ZSet、PostgreSQL、PGVector、MySQL/TDSQL 和 MongoDB 支持 replacement；
+Externalization wrapper 会透传底层能力；ClickHouse、自定义 service 与 Noop 返回
 unsupported。
 
 持久化后端会在正常数据库初始化时创建私有 revision 存储。PostgreSQL、PGVector、
 MySQL/TDSQL 和 SQLite 使用 `session_revisions` 与 `session_revision_archives`；MongoDB
-把当前 revision 保存在 session-state 文档中，并使用 revision archive collection；
-ClickHouse 在 `session_revisions` 中保存单条带版本的权威投影，在
-`session_revision_archives` 中保存废弃投影。使用 `WithSkipDBInit(true)` 的部署必须先按
-对应 backend package 中的定义完成建表或建 collection，再启用 replacement。
+把当前 revision 保存在 session-state 文档中，并使用 revision archive collection。
+使用 `WithSkipDBInit(true)` 的部署必须先按对应 backend package 中的定义完成建表或建
+collection，再启用 replacement。
 
 ## 核心概念
 

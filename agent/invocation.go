@@ -663,7 +663,8 @@ func WithRequestID(requestID string) RunOption {
 }
 
 // LatestTurnReplacement identifies one run that replaces the latest persisted
-// request of a session.
+// request of a session. Both IDs are required and must differ. RequestID is
+// also the effective RunOptions.RequestID for the replacement run.
 type LatestTurnReplacement struct {
 	// ExpectedRequestID identifies the latest request to replace.
 	ExpectedRequestID string
@@ -675,7 +676,11 @@ type LatestTurnReplacement struct {
 // expectedRequestID identifies the request to replace, while requestID
 // identifies the new run. The replaced turn may be completed or unfinished.
 // Callers must stop any active execution and wait for its event stream to close
-// before replacing it. Both IDs are required and must differ.
+// before replacing it. Both IDs are required and must differ. If Runner.Run
+// returns an error before an event channel, callers must confirm an
+// outcome-unknown durable transition by retrying the same message with the
+// exact same ID pair. Once Runner.Run returns an event channel, callers must
+// not repeat the replacement because of a later stream error.
 func WithLatestTurnReplacement(expectedRequestID, requestID string) RunOption {
 	return func(opts *RunOptions) {
 		opts.LatestTurnReplacement = &LatestTurnReplacement{

@@ -574,6 +574,70 @@ func TestRunInteroperatesWithServerTRPCAgent(t *testing.T) {
 	assert.Equal(t, "input", serverRunner.message.Content)
 }
 
+func TestRunForwardsLatestTurnReplacementToServerTRPCAgent(t *testing.T) {
+	completion := event.NewResponseEvent("inv-1", "sports-agent", &model.Response{
+		Object: model.ObjectTypeRunnerCompletion,
+		Done:   true,
+	})
+	serverRunner := &fakeServerRunner{events: []*event.Event{completion}}
+	server, err := servertrpcagent.New(
+		servertrpcagent.WithAppName("sports-agent"),
+		servertrpcagent.WithRunner(serverRunner),
+	)
+	require.NoError(t, err)
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	apiRunner, err := New("sports-agent", WithTarget(httpServer.URL))
+	require.NoError(t, err)
+	events, err := apiRunner.Run(
+		context.Background(),
+		"user-1",
+		"session-1",
+		model.NewUserMessage("edited input"),
+		agent.WithLatestTurnReplacement("request-old", "request-new"),
+	)
+	require.NoError(t, err)
+	require.Len(t, collectEvents(events), 1)
+	require.Len(t, serverRunner.runOptions, 1)
+	options := serverRunner.runOptions[0]
+	require.NotNil(t, options.LatestTurnReplacement)
+	assert.Equal(t, "request-old", options.LatestTurnReplacement.ExpectedRequestID)
+	assert.Equal(t, "request-new", options.LatestTurnReplacement.RequestID)
+	assert.Equal(t, "request-new", options.RequestID)
+}
+
+func TestNormalizeRunIdentityRejectsInvalidLatestTurnReplacement(t *testing.T) {
+	tests := []struct {
+		name    string
+		options agent.RunOptions
+		want    string
+	}{
+		{
+			name: "empty expected request id",
+			options: agent.NewRunOptions(
+				agent.WithLatestTurnReplacement("", "request-new"),
+			),
+			want: "expected request id is empty",
+		},
+		{
+			name: "conflicting request id",
+			options: agent.NewRunOptions(
+				agent.WithRequestID("other"),
+				agent.WithLatestTurnReplacement("request-old", "request-new"),
+			),
+			want: "request id conflicts",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := normalizeRunIdentity(&tt.options)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.want)
+		})
+	}
+}
+
 func TestDescribeFetchesStructure(t *testing.T) {
 	want := testStructureSnapshot()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -863,6 +927,9 @@ func (r *fakeServerRunner) Run(
 ) (<-chan *event.Event, error) {
 	r.message = message
 	options := agent.NewRunOptions(runOpts...)
+	if replacement := options.LatestTurnReplacement; replacement != nil {
+		options.RequestID = replacement.RequestID
+	}
 	r.runOptions = append(r.runOptions, options)
 	ch := make(chan *event.Event, len(r.events))
 	for _, evt := range r.events {

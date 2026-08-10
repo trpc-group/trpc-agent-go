@@ -711,6 +711,17 @@ func TestValidateRunRequestErrors(t *testing.T) {
 			req:  &runRequest{Session: session{UserID: "user-1", SessionID: "session-1"}, Input: model.Message{Role: model.RoleUser}},
 			want: "input payload is required",
 		},
+		{
+			name: "empty replacement expected request id",
+			req: &runRequest{
+				Session: session{UserID: "user-1", SessionID: "session-1"},
+				Input:   model.NewUserMessage("input"),
+				RunOptions: runOptions{LatestTurnReplacement: &latestTurnReplacement{
+					RequestID: "request-new",
+				}},
+			},
+			want: "runOptions.latestTurnReplacement.expectedRequestID is required",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

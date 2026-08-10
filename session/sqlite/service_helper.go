@@ -133,10 +133,6 @@ AND deleted_at IS NULL`
 			}
 		}
 	}
-	if err := s.attachRevisionGeneration(ctx, key, sess); err != nil {
-		return nil, err
-	}
-
 	return mergeState(appState, userState, sess), nil
 }
 
@@ -214,13 +210,6 @@ ORDER BY updated_at DESC, session_id DESC`, s.tableSessionStates)
 				session.WithSessionCreatedAt(st.CreatedAt),
 				session.WithSessionUpdatedAt(st.UpdatedAt),
 			)
-			if err := s.attachRevisionGeneration(ctx, session.Key{
-				AppName:   key.AppName,
-				UserID:    key.UserID,
-				SessionID: st.ID,
-			}, sess); err != nil {
-				return nil, err
-			}
 			out = append(out, mergeState(appState, userState, sess))
 		}
 		return out, nil
@@ -302,9 +291,6 @@ ORDER BY updated_at DESC, session_id DESC`, s.tableSessionStates)
 					Events: history,
 				}
 			}
-		}
-		if err := s.attachRevisionGeneration(ctx, sessionKeys[i], sess); err != nil {
-			return nil, err
 		}
 		out = append(out, mergeState(appState, userState, sess))
 	}

@@ -422,18 +422,32 @@ func (s *Service) getSessionInternal(
 	eventLimit := s.getEffectiveEventLimit(opts.EventNum)
 
 	if s.compatEnabled() && zsetExists {
-		sess, err := s.zsetClient.GetSession(ctx, key, eventLimit, opts.EventTime)
-		if err == nil {
-			err = s.attachRevisionGeneration(ctx, key, sess, util.StorageTypeZset)
-		}
+		sess, err := sessionrevision.LoadStableProjection(
+			ctx,
+			func(ctx context.Context) (uint64, error) {
+				return s.revisionGeneration(ctx, key, util.StorageTypeZset)
+			},
+			func(ctx context.Context) (*session.Session, error) {
+				return s.zsetClient.GetSession(
+					ctx, key, eventLimit, opts.EventTime,
+				)
+			},
+		)
 		return sess, util.StorageTypeZset, err
 	}
 
 	if hashidxExists {
-		sess, err := s.hashidxClient.GetSession(ctx, key, eventLimit, opts.EventTime)
-		if err == nil {
-			err = s.attachRevisionGeneration(ctx, key, sess, util.StorageTypeHashIdx)
-		}
+		sess, err := sessionrevision.LoadStableProjection(
+			ctx,
+			func(ctx context.Context) (uint64, error) {
+				return s.revisionGeneration(ctx, key, util.StorageTypeHashIdx)
+			},
+			func(ctx context.Context) (*session.Session, error) {
+				return s.hashidxClient.GetSession(
+					ctx, key, eventLimit, opts.EventTime,
+				)
+			},
+		)
 		return sess, util.StorageTypeHashIdx, err
 	}
 
@@ -449,6 +463,19 @@ func (s *Service) attachRevisionGeneration(
 	if sess == nil {
 		return nil
 	}
+	generation, err := s.revisionGeneration(ctx, key, storageType)
+	if err != nil {
+		return err
+	}
+	sessionrevision.SetGeneration(sess, generation)
+	return nil
+}
+
+func (s *Service) revisionGeneration(
+	ctx context.Context,
+	key session.Key,
+	storageType string,
+) (uint64, error) {
 	var (
 		record *sessionrevision.PersistedRecord
 		err    error
@@ -459,10 +486,9 @@ func (s *Service) attachRevisionGeneration(
 		record, err = s.hashidxClient.Revision(ctx, key)
 	}
 	if err != nil {
-		return err
+		return 0, err
 	}
-	sessionrevision.SetGeneration(sess, record.Generation)
-	return nil
+	return record.Generation, nil
 }
 
 // getEffectiveEventLimit returns the effective event limit.
@@ -496,17 +522,10 @@ func (s *Service) ListSessions(
 	if err != nil {
 		return nil, fmt.Errorf("list sessions (hashidx): %w", err)
 	}
-	for _, sess := range hashidxSessions {
-		if err := s.attachRevisionGeneration(
-			ctx,
-			session.Key{
-				AppName: userKey.AppName, UserID: userKey.UserID, SessionID: sess.ID,
-			},
-			sess,
-			util.StorageTypeHashIdx,
-		); err != nil {
-			return nil, fmt.Errorf("attach hashidx session revision: %w", err)
-		}
+	if err := s.stabilizeListedSessions(
+		ctx, hashidxSessions, eventLimit, opt, util.StorageTypeHashIdx,
+	); err != nil {
+		return nil, fmt.Errorf("attach hashidx session revision: %w", err)
 	}
 
 	// List zset (if zset awareness is enabled: transition or legacy)
@@ -519,17 +538,10 @@ func (s *Service) ListSessions(
 	if err != nil {
 		return nil, fmt.Errorf("list sessions (zset): %w", err)
 	}
-	for _, sess := range zsetSessions {
-		if err := s.attachRevisionGeneration(
-			ctx,
-			session.Key{
-				AppName: userKey.AppName, UserID: userKey.UserID, SessionID: sess.ID,
-			},
-			sess,
-			util.StorageTypeZset,
-		); err != nil {
-			return nil, fmt.Errorf("attach zset session revision: %w", err)
-		}
+	if err := s.stabilizeListedSessions(
+		ctx, zsetSessions, eventLimit, opt, util.StorageTypeZset,
+	); err != nil {
+		return nil, fmt.Errorf("attach zset session revision: %w", err)
 	}
 
 	// Merge: zset priority for duplicates (zset data is more complete during migration)
@@ -555,6 +567,46 @@ func (s *Service) ListSessions(
 	sessionopt.SortByUpdatedDesc(sessions)
 
 	return sessionopt.ApplyListPage(sessions, opt), nil
+}
+
+func (s *Service) stabilizeListedSessions(
+	ctx context.Context,
+	sessions []*session.Session,
+	eventLimit int,
+	opt *session.Options,
+	storageType string,
+) error {
+	for i, listed := range sessions {
+		if listed == nil {
+			continue
+		}
+		key := session.Key{
+			AppName: listed.AppName, UserID: listed.UserID, SessionID: listed.ID,
+		}
+		stable, err := sessionrevision.LoadStableListedProjection(
+			ctx,
+			listed,
+			opt.ListSessionOnlyMeta,
+			func(ctx context.Context) (uint64, error) {
+				return s.revisionGeneration(ctx, key, storageType)
+			},
+			func(ctx context.Context) (*session.Session, error) {
+				if storageType == util.StorageTypeZset {
+					return s.zsetClient.GetSession(
+						ctx, key, eventLimit, opt.EventTime,
+					)
+				}
+				return s.hashidxClient.GetSession(
+					ctx, key, eventLimit, opt.EventTime,
+				)
+			},
+		)
+		if err != nil {
+			return err
+		}
+		sessions[i] = stable
+	}
+	return nil
 }
 
 // DeleteSession deletes a session.

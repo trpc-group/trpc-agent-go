@@ -120,21 +120,12 @@ sessionService, err := clickhouse.NewService(
 
 ## Latest-turn Replacement
 
-ClickHouse supports editing and resending the latest persisted turn through
-`Runner.Run` and `agent.WithLatestTurnReplacement`. Because ClickHouse does not
-provide the same row-transaction model as the SQL backends, the service first
-archives the discarded projection and then publishes one versioned canonical
-head. Readers use the canonical `session_revisions` head and never treat a
-staged archive as active.
-
-`NewService` creates `session_revisions` and `session_revision_archives`
-automatically. Deployments using `WithSkipDBInit(true)` must provision both
-tables from
-[`session/clickhouse/schema.sql`](https://github.com/trpc-group/trpc-agent-go/blob/main/session/clickhouse/schema.sql).
-Replacement drains the target Session's asynchronous event writes and preserves
-its remaining TTL. See
-[Replacing the Latest Turn](index.md#replacing-the-latest-turn) for the Runner
-API and rollback boundaries.
+ClickHouse returns `runner.ErrLatestTurnReplacementUnsupported`. Its
+ReplacingMergeTree version selection does not provide a cross-node
+compare-and-swap primitive, so concurrent writers cannot safely publish one
+canonical replacement head. The framework does not emulate that guarantee
+with a process-local lock. Use a supported transactional backend when latest-
+turn replacement is required.
 
 ## Storage Structure
 

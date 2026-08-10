@@ -11,10 +11,12 @@
 package revision
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,20 +27,28 @@ import (
 
 const generationServiceMetaKey = "trpc-agent-go.session.revision-generation"
 
+const stableProjectionReadAttempts = 3
+
 type latestTurnReplacementSupportReporter interface {
 	SupportsLatestTurnReplacement() bool
 }
 
 var (
-	// ErrLatestTurnReplacementUnsupported is kept as an internal alias for the
-	// public optional session capability contract.
-	ErrLatestTurnReplacementUnsupported = session.ErrLatestTurnReplacementUnsupported
-	// ErrLatestTurnReplacementConflict is kept as an internal alias for the
-	// public optional session capability contract.
-	ErrLatestTurnReplacementConflict = session.ErrLatestTurnReplacementConflict
-	// ErrLatestTurnReplacementUnavailable is kept as an internal alias for the
-	// public optional session capability contract.
-	ErrLatestTurnReplacementUnavailable = session.ErrLatestTurnReplacementUnavailable
+	// ErrLatestTurnReplacementUnsupported indicates that a session service
+	// cannot replace the latest persisted turn.
+	ErrLatestTurnReplacementUnsupported = errors.New(
+		"latest-turn replacement is unsupported",
+	)
+	// ErrLatestTurnReplacementConflict indicates that the active latest turn
+	// no longer matches the turn observed by the caller.
+	ErrLatestTurnReplacementConflict = errors.New(
+		"latest-turn replacement conflict",
+	)
+	// ErrLatestTurnReplacementUnavailable indicates that the latest turn cannot
+	// be replaced without risking an inconsistent session projection.
+	ErrLatestTurnReplacementUnavailable = errors.New(
+		"latest-turn replacement is unavailable",
+	)
 	// ErrStaleGeneration indicates that a write belongs to a session projection
 	// which has already been superseded by a replacement.
 	ErrStaleGeneration = errors.New("stale session revision generation")
@@ -47,13 +57,113 @@ var (
 	ErrStaleProjection = errors.New("stale session revision projection")
 )
 
-// LatestTurnReplacementRequest aliases the public backend SPI request while
-// the checkpoint state machine remains private.
-type LatestTurnReplacementRequest = session.LatestTurnReplacementRequest
+// LatestTurnReplacementRequest describes the private storage transition
+// requested by Runner.
+type LatestTurnReplacementRequest struct {
+	Key               session.Key
+	ExpectedRequestID string
+	IdempotencyKey    string
+}
 
-// LatestTurnReplacementResult aliases the public backend SPI result while the
-// checkpoint state machine remains private.
-type LatestTurnReplacementResult = session.LatestTurnReplacementResult
+// LatestTurnReplacementResult describes the authoritative active projection
+// after a private storage transition.
+type LatestTurnReplacementResult struct {
+	ActiveSession *session.Session
+	Applied       bool
+}
+
+type latestTurnReplacer interface {
+	ReplaceLatestTurn(
+		context.Context,
+		LatestTurnReplacementRequest,
+	) (*LatestTurnReplacementResult, error)
+}
+
+// TrackEventsEqual compares persisted Track event semantics while ignoring
+// time.Location representation differences introduced by serialization.
+func TrackEventsEqual(a, b session.TrackEvent) bool {
+	return a.Track == b.Track &&
+		a.RequestID == b.RequestID &&
+		rawJSONEqual(a.Payload, b.Payload) &&
+		a.Timestamp.Equal(b.Timestamp)
+}
+
+func rawJSONEqual(a, b []byte) bool {
+	if bytes.Equal(a, b) {
+		return true
+	}
+	var decodedA, decodedB any
+	if json.Unmarshal(a, &decodedA) != nil || json.Unmarshal(b, &decodedB) != nil {
+		return false
+	}
+	return reflect.DeepEqual(decodedA, decodedB)
+}
+
+// LoadStableProjection reads a projection bracketed by its replacement
+// generation. A generation change means the projection may contain data from
+// both sides of a replacement, so the read is retried instead of attaching a
+// newer generation to stale data.
+func LoadStableProjection(
+	ctx context.Context,
+	readGeneration func(context.Context) (uint64, error),
+	readProjection func(context.Context) (*session.Session, error),
+) (*session.Session, error) {
+	for attempt := 0; attempt < stableProjectionReadAttempts; attempt++ {
+		before, err := readGeneration(ctx)
+		if err != nil {
+			return nil, err
+		}
+		projection, err := readProjection(ctx)
+		if err != nil || projection == nil {
+			return projection, err
+		}
+		after, err := readGeneration(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if before == after {
+			SetGeneration(projection, before)
+			return projection, nil
+		}
+	}
+	return nil, fmt.Errorf(
+		"read stable session projection: %w",
+		ErrStaleProjection,
+	)
+}
+
+// LoadStableListedProjection prevents a generation read taken after a list
+// projection from blessing stale data. Generation zero can be attached to the
+// listed projection safely: a later first replacement will fence it. Once a
+// session has been replaced, the projection is reread with generation
+// bracketing before it is returned for further use.
+func LoadStableListedProjection(
+	ctx context.Context,
+	listed *session.Session,
+	metadataOnly bool,
+	readGeneration func(context.Context) (uint64, error),
+	readProjection func(context.Context) (*session.Session, error),
+) (*session.Session, error) {
+	if listed == nil {
+		return nil, nil
+	}
+	generation, err := readGeneration(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if generation == 0 {
+		SetGeneration(listed, 0)
+		return listed, nil
+	}
+	projection, err := LoadStableProjection(ctx, readGeneration, readProjection)
+	if err != nil || projection == nil || !metadataOnly {
+		return projection, err
+	}
+	projection.Events = nil
+	projection.Tracks = nil
+	projection.Summaries = nil
+	return projection, nil
+}
 
 // SupportsLatestTurnReplacement reports whether service implements the
 // private backend capability required by Runner latest-turn replacement.
@@ -64,7 +174,7 @@ func SupportsLatestTurnReplacement(service session.Service) bool {
 	if reporter, ok := service.(latestTurnReplacementSupportReporter); ok {
 		return reporter.SupportsLatestTurnReplacement()
 	}
-	_, ok := service.(session.LatestTurnReplacer)
+	_, ok := service.(latestTurnReplacer)
 	return ok
 }
 
@@ -78,7 +188,7 @@ func ReplaceLatestTurn(
 	if err := ValidateLatestTurnReplacementRequest(req); err != nil {
 		return nil, err
 	}
-	replacer, ok := service.(session.LatestTurnReplacer)
+	replacer, ok := service.(latestTurnReplacer)
 	if !ok || !SupportsLatestTurnReplacement(service) {
 		return nil, ErrLatestTurnReplacementUnsupported
 	}

@@ -22,7 +22,7 @@ import (
 )
 
 // getSession retrieves a single session with its events and summaries.
-func (s *Service) getLegacySession(
+func (s *Service) getSession(
 	ctx context.Context,
 	key session.Key,
 	limit int,

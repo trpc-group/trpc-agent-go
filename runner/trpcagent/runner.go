@@ -70,8 +70,8 @@ func (r *runner) Run(
 	runOpts ...agent.RunOption,
 ) (<-chan *event.Event, error) {
 	options := agent.NewRunOptions(runOpts...)
-	if options.RequestID == "" {
-		options.RequestID = uuid.NewString()
+	if err := normalizeRunIdentity(&options); err != nil {
+		return nil, err
 	}
 	request := r.newRunRequest(userID, sessionID, message, options)
 	response, err := r.postRun(ctx, request, options)
@@ -138,10 +138,51 @@ func (r *runner) newRunRequest(
 			RuntimeState:          options.RuntimeState,
 		},
 	}
+	if replacement := options.LatestTurnReplacement; replacement != nil {
+		request.RunOptions.LatestTurnReplacement = &latestTurnReplacement{
+			ExpectedRequestID: replacement.ExpectedRequestID,
+			RequestID:         replacement.RequestID,
+		}
+	}
 	if profile := profilecompiler.ProfileFromRunOptions(options); profile != nil {
 		request.Profile = profile
 	}
 	return request
+}
+
+func normalizeRunIdentity(options *agent.RunOptions) error {
+	if options == nil {
+		return errors.New("trpcagent runner: run options are nil")
+	}
+	replacement := options.LatestTurnReplacement
+	if replacement == nil {
+		if options.RequestID == "" {
+			options.RequestID = uuid.NewString()
+		}
+		return nil
+	}
+	if replacement.ExpectedRequestID == "" {
+		return errors.New(
+			"trpcagent runner: latest-turn replacement expected request id is empty",
+		)
+	}
+	if replacement.RequestID == "" {
+		return errors.New(
+			"trpcagent runner: latest-turn replacement request id is empty",
+		)
+	}
+	if replacement.ExpectedRequestID == replacement.RequestID {
+		return errors.New(
+			"trpcagent runner: latest-turn replacement request ids must differ",
+		)
+	}
+	if options.RequestID != "" && options.RequestID != replacement.RequestID {
+		return errors.New(
+			"trpcagent runner: request id conflicts with latest-turn replacement",
+		)
+	}
+	options.RequestID = replacement.RequestID
+	return nil
 }
 
 func (r *runner) postRun(

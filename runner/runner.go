@@ -590,6 +590,62 @@ func (r *runner) Run(
 		UserID:    userID,
 		SessionID: sessionID,
 	}
+	queuedUserMessages := steer.NewQueue()
+	registerCtx, registerSpan, registerStarted := startRunnerRunOptionsLatencySpan(
+		execCtx,
+		ro,
+		runnerLatencySpanRegisterRun,
+		runnerSessionAttrs(sessionKey, nil)...,
+	)
+	handle, err := r.registerRun(
+		ro.RequestID,
+		RunStatus{
+			RequestID:  ro.RequestID,
+			SessionKey: sessionKey,
+			StartedAt:  time.Now(),
+		},
+		execCancel,
+		queuedUserMessages,
+	)
+	finishRunnerLatencySpan(registerSpan, registerStarted, err)
+	_ = registerCtx
+	if err != nil {
+		execCancel()
+		return nil, err
+	}
+	runRegistered := true
+	defer func() {
+		if runRegistered {
+			r.unregisterRun(ro.RequestID)
+		}
+	}()
+
+	resolveCtx, resolveSpan, resolveStarted := startRunnerRunOptionsLatencySpan(
+		execCtx,
+		ro,
+		runnerLatencySpanResolveMessages,
+	)
+	invocationMessage, persistedCurrentTurnMessages, err := r.resolveCurrentTurnMessages(
+		resolveCtx,
+		effectiveAppName,
+		userID,
+		sessionID,
+		message,
+		ro,
+	)
+	if resolveStarted {
+		resolveSpan.SetAttributes(
+			attribute.Int(
+				"runner.messages.persisted_current_turn",
+				len(persistedCurrentTurnMessages),
+			),
+		)
+	}
+	finishRunnerLatencySpan(resolveSpan, resolveStarted, err)
+	if err != nil {
+		execCancel()
+		return nil, err
+	}
 
 	sessionCtx, sessionSpan, sessionStarted := startRunnerRunOptionsLatencySpan(
 		execCtx,
@@ -646,33 +702,6 @@ func (r *runner) Run(
 		execCancel()
 		return nil, err
 	}
-	resolveCtx, resolveSpan, resolveStarted := startRunnerRunOptionsLatencySpan(
-		execCtx,
-		ro,
-		runnerLatencySpanResolveMessages,
-	)
-	invocationMessage, persistedCurrentTurnMessages, err := r.resolveCurrentTurnMessages(
-		resolveCtx,
-		effectiveAppName,
-		userID,
-		sessionID,
-		message,
-		ro,
-	)
-	if resolveStarted {
-		resolveSpan.SetAttributes(
-			attribute.Int(
-				"runner.messages.persisted_current_turn",
-				len(persistedCurrentTurnMessages),
-			),
-		)
-	}
-	finishRunnerLatencySpan(resolveSpan, resolveStarted, err)
-	if err != nil {
-		execCancel()
-		return nil, err
-	}
-
 	invocation := r.newRunInvocation(
 		sess,
 		invocationMessage,
@@ -693,33 +722,8 @@ func (r *runner) Run(
 		return nil, err
 	}
 
-	queuedUserMessages := steer.NewQueue()
 	steer.Attach(invocation, queuedUserMessages)
-
-	registerCtx, registerSpan, registerStarted := startRunnerLatencySpan(
-		execCtx,
-		invocation,
-		runnerLatencySpanRegisterRun,
-		runnerInvocationAttrs(invocation)...,
-	)
-	handle, err := r.registerRun(
-		ro.RequestID,
-		RunStatus{
-			RequestID:    ro.RequestID,
-			InvocationID: invocation.InvocationID,
-			AgentName:    ag.Info().Name,
-			SessionKey:   sessionKey,
-			StartedAt:    time.Now(),
-		},
-		execCancel,
-		queuedUserMessages,
-	)
-	finishRunnerLatencySpan(registerSpan, registerStarted, err)
-	_ = registerCtx
-	if err != nil {
-		execCancel()
-		return nil, err
-	}
+	initializeRunHandle(handle, invocation.InvocationID, ag.Info().Name)
 
 	persistCtx, persistSpan, persistStarted := startRunnerLatencySpan(
 		execCtx,
@@ -782,6 +786,7 @@ func (r *runner) Run(
 	executionTraceInput = resolveExecutionTraceInvocationInputSnapshot(invocation, executionTraceInput)
 
 	// Process the agent events and emit them to the output channel.
+	runRegistered = false
 	return r.processAgentEvents(
 		execCtx,
 		sess,
@@ -791,6 +796,16 @@ func (r *runner) Run(
 		handle,
 		executionTraceInput,
 	), nil
+}
+
+func initializeRunHandle(handle *runHandle, invocationID, agentName string) {
+	if handle == nil {
+		return
+	}
+	handle.mu.Lock()
+	defer handle.mu.Unlock()
+	handle.status.InvocationID = invocationID
+	handle.status.AgentName = agentName
 }
 
 func completePendingRunPreparation(

@@ -304,16 +304,12 @@ func (s *Service) CreateSession(
 	)
 
 	// Insert or update session state
-	// If expired session exists, overwrite it; events/summaries will be filtered by created_at when reading
+	// Reusing an expired logical ID starts a new incarnation. Clear the old
+	// projection and revision fence in the same transaction as the state reset.
 	if sessionExists {
-		_, err = s.mysqlClient.Exec(ctx,
-			fmt.Sprintf(
-				`UPDATE %s SET state = ?, created_at = ?, updated_at = ?, expires_at = ?, deleted_at = NULL
-				WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
-				s.tableSessionStates,
-			),
-			string(sessBytes), sessState.CreatedAt, sessState.UpdatedAt, expiresAt,
-			key.AppName, key.UserID, key.SessionID,
+		err = s.resetExpiredSession(
+			ctx, key, string(sessBytes), sessState.CreatedAt,
+			sessState.UpdatedAt, expiresAt,
 		)
 	} else {
 		_, err = s.mysqlClient.Exec(ctx,
@@ -351,6 +347,59 @@ func (s *Service) CreateSession(
 	return mergeState(appState, userState, sess), nil
 }
 
+func (s *Service) resetExpiredSession(
+	ctx context.Context,
+	key session.Key,
+	state string,
+	createdAt time.Time,
+	updatedAt time.Time,
+	expiresAt *time.Time,
+) error {
+	return s.mysqlClient.Transaction(ctx, func(tx *sql.Tx) error {
+		for _, table := range []string{
+			s.tableSessionEvents,
+			s.tableSessionTracks,
+			s.tableSessionSummaries,
+		} {
+			if _, err := tx.ExecContext(
+				ctx,
+				fmt.Sprintf(
+					`DELETE FROM %s
+WHERE app_name = ? AND user_id = ? AND session_id = ?`,
+					table,
+				),
+				key.AppName,
+				key.UserID,
+				key.SessionID,
+			); err != nil {
+				return fmt.Errorf("clear expired session projection: %w", err)
+			}
+		}
+		if err := s.revisionStore().Delete(ctx, tx, key); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(
+			ctx,
+			fmt.Sprintf(
+				`UPDATE %s SET state = ?, created_at = ?, updated_at = ?,
+expires_at = ?, deleted_at = NULL
+WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
+				s.tableSessionStates,
+			),
+			state,
+			createdAt,
+			updatedAt,
+			expiresAt,
+			key.AppName,
+			key.UserID,
+			key.SessionID,
+		); err != nil {
+			return fmt.Errorf("reset expired session state: %w", err)
+		}
+		return nil
+	})
+}
+
 // GetSession gets a session.
 func (s *Service) GetSession(
 	ctx context.Context,
@@ -373,21 +422,26 @@ func (s *Service) GetSession(
 		c *session.GetSessionContext,
 		next func() (*session.Session, error),
 	) (*session.Session, error) {
-		sess, err := s.getSession(
+		sess, err := sessionrevision.LoadStableProjection(
 			c.Context,
-			c.Key,
-			c.Options.EventNum,
-			c.Options.EventTime,
-			c.Options.EventPage,
+			func(ctx context.Context) (uint64, error) {
+				return s.revisionGeneration(ctx, c.Key)
+			},
+			func(ctx context.Context) (*session.Session, error) {
+				return s.getSession(
+					ctx,
+					c.Key,
+					c.Options.EventNum,
+					c.Options.EventTime,
+					c.Options.EventPage,
+				)
+			},
 		)
 		if err != nil {
 			return nil, fmt.Errorf(
 				"mysql session service get session state failed: %w",
 				err,
 			)
-		}
-		if err := s.attachRevisionGeneration(c.Context, c.Key, sess); err != nil {
-			return nil, err
 		}
 		return sess, nil
 	}
@@ -418,15 +472,28 @@ func (s *Service) ListSessions(
 	if err != nil {
 		return nil, fmt.Errorf("mysql session service get session list failed: %w", err)
 	}
-	for _, sess := range sessList {
-		if sess == nil {
+	for i, listed := range sessList {
+		if listed == nil {
 			continue
 		}
-		if err := s.attachRevisionGeneration(ctx, session.Key{
-			AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID,
-		}, sess); err != nil {
+		key := session.Key{
+			AppName: listed.AppName, UserID: listed.UserID, SessionID: listed.ID,
+		}
+		stable, err := sessionrevision.LoadStableListedProjection(
+			ctx,
+			listed,
+			opt.ListSessionOnlyMeta,
+			func(ctx context.Context) (uint64, error) {
+				return s.revisionGeneration(ctx, key)
+			},
+			func(ctx context.Context) (*session.Session, error) {
+				return s.getSession(ctx, key, opt.EventNum, opt.EventTime, nil)
+			},
+		)
+		if err != nil {
 			return nil, err
 		}
+		sessList[i] = stable
 	}
 	return sessList, nil
 }

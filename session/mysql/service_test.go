@@ -2515,6 +2515,8 @@ func TestCreateSession_ExistingExpired(t *testing.T) {
 	defer db.Close()
 
 	s := createTestService(t, db, WithSessionTTL(1*time.Hour))
+	s.tableSessionRevisions = "session_revisions"
+	s.tableRevisionArchives = "session_revision_archives"
 	ctx := context.Background()
 
 	key := session.Key{
@@ -2531,8 +2533,20 @@ func TestCreateSession_ExistingExpired(t *testing.T) {
 		WithArgs(key.AppName, key.UserID, key.SessionID).
 		WillReturnRows(sqlmock.NewRows([]string{"expires_at"}).AddRow(expiredTime))
 
-	// Mock: Update (overwrite) expired session
-	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET state = ?, created_at = ?, updated_at = ?, expires_at = ?, deleted_at = NULL WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL")).
+	// Mock: Reset the complete expired incarnation in one transaction.
+	mock.ExpectBegin()
+	for _, table := range []string{
+		"session_events",
+		"session_track_events",
+		"session_summaries",
+		"session_revision_archives",
+		"session_revisions",
+	} {
+		mock.ExpectExec("DELETE FROM "+table).
+			WithArgs(key.AppName, key.UserID, key.SessionID).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+	}
+	mock.ExpectExec("UPDATE session_states SET state").
 		WithArgs(
 			sqlmock.AnyArg(),
 			sqlmock.AnyArg(),
@@ -2543,6 +2557,7 @@ func TestCreateSession_ExistingExpired(t *testing.T) {
 			key.SessionID,
 		).
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
 
 	// Mock: List app states
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT `key`, value FROM app_states")).

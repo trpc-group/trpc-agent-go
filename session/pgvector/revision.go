@@ -45,6 +45,22 @@ func (s *Service) attachRevisionGeneration(
 	})
 }
 
+func (s *Service) revisionGeneration(
+	ctx context.Context,
+	key session.Key,
+) (uint64, error) {
+	if s.tableSessionRevisions == "" {
+		return 0, nil
+	}
+	var generation uint64
+	err := s.pgClient.Transaction(ctx, func(tx *sql.Tx) error {
+		var err error
+		generation, err = s.revisionStore().Generation(ctx, tx, key)
+		return err
+	})
+	return generation, err
+}
+
 func (s *Service) flushRevisionPersistence(
 	ctx context.Context,
 	key session.Key,
@@ -97,15 +113,15 @@ func (s *Service) flushTrackPersistence(ctx context.Context) error {
 // latest persisted runner turn while preserving embeddings for prefix events.
 func (s *Service) ReplaceLatestTurn(
 	ctx context.Context,
-	req session.LatestTurnReplacementRequest,
-) (*session.LatestTurnReplacementResult, error) {
+	req sessionrevision.LatestTurnReplacementRequest,
+) (*sessionrevision.LatestTurnReplacementResult, error) {
 	if err := sessionrevision.ValidateLatestTurnReplacementRequest(req); err != nil {
 		return nil, err
 	}
 	if err := s.flushRevisionPersistence(ctx, req.Key); err != nil {
 		return nil, err
 	}
-	var result *session.LatestTurnReplacementResult
+	var result *sessionrevision.LatestTurnReplacementResult
 	err := s.pgClient.Transaction(ctx, func(tx *sql.Tx) error {
 		var err error
 		result, err = s.revisionStore().ReplaceLatestTurn(ctx, tx, req)
@@ -120,8 +136,8 @@ func (s *Service) ReplaceLatestTurn(
 func (s *Service) replacementResultWithScopedState(
 	ctx context.Context,
 	key session.Key,
-	result *session.LatestTurnReplacementResult,
-) (*session.LatestTurnReplacementResult, error) {
+	result *sessionrevision.LatestTurnReplacementResult,
+) (*sessionrevision.LatestTurnReplacementResult, error) {
 	appState, err := s.ListAppStates(ctx, key.AppName)
 	if err != nil {
 		return nil, err

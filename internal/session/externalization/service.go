@@ -83,11 +83,7 @@ func (s *Service) ReplaceLatestTurn(
 	ctx context.Context,
 	req sessionrevision.LatestTurnReplacementRequest,
 ) (*sessionrevision.LatestTurnReplacementResult, error) {
-	replacer, ok := s.Service.(session.LatestTurnReplacer)
-	if !ok {
-		return nil, sessionrevision.ErrLatestTurnReplacementUnsupported
-	}
-	result, err := replacer.ReplaceLatestTurn(ctx, req)
+	result, err := sessionrevision.ReplaceLatestTurn(ctx, s.Service, req)
 	if err != nil || result == nil || result.ActiveSession == nil || !s.cfg.Enabled {
 		return result, err
 	}

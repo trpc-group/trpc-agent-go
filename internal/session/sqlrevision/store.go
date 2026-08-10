@@ -168,6 +168,26 @@ func (s Store) AttachGeneration(
 	return nil
 }
 
+// Generation loads the active revision generation. Missing additive schema is
+// treated as generation zero for backward-compatible reads.
+func (s Store) Generation(
+	ctx context.Context,
+	query rowQuerier,
+	key session.Key,
+) (uint64, error) {
+	if s.Tables.Revisions == "" {
+		return 0, nil
+	}
+	record, err := s.Read(ctx, query, key, false)
+	if IsSchemaMissing(err) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return record.Generation, nil
+}
+
 // Write stores the active revision record in the caller's transaction.
 func (s Store) Write(
 	ctx context.Context,
@@ -574,10 +594,10 @@ func (s Store) loadSummaries(
 func (s Store) ReplaceLatestTurn(
 	ctx context.Context,
 	tx *sql.Tx,
-	req session.LatestTurnReplacementRequest,
-) (*session.LatestTurnReplacementResult, error) {
+	req sessionrevision.LatestTurnReplacementRequest,
+) (*sessionrevision.LatestTurnReplacementResult, error) {
 	if s.Tables.Revisions == "" || s.Tables.Archives == "" {
-		return nil, session.ErrLatestTurnReplacementUnsupported
+		return nil, sessionrevision.ErrLatestTurnReplacementUnsupported
 	}
 	current, expiresAt, err := s.LoadActive(ctx, tx, req.Key, true)
 	if err != nil {
@@ -585,7 +605,7 @@ func (s Store) ReplaceLatestTurn(
 	}
 	record, err := s.Read(ctx, tx, req.Key, true)
 	if IsSchemaMissing(err) {
-		return nil, session.ErrLatestTurnReplacementUnsupported
+		return nil, sessionrevision.ErrLatestTurnReplacementUnsupported
 	}
 	if err != nil {
 		return nil, err
@@ -598,7 +618,7 @@ func (s Store) ReplaceLatestTurn(
 		return nil, err
 	} else if replayed {
 		sessionrevision.SetGeneration(current, record.Generation)
-		return &session.LatestTurnReplacementResult{
+		return &sessionrevision.LatestTurnReplacementResult{
 			ActiveSession: current,
 			Applied:       false,
 		}, nil
@@ -611,7 +631,7 @@ func (s Store) ReplaceLatestTurn(
 		return nil, err
 	}
 	if record.Generation >= math.MaxInt64 {
-		return nil, session.ErrLatestTurnReplacementUnavailable
+		return nil, sessionrevision.ErrLatestTurnReplacementUnavailable
 	}
 	restored, err := sessionrevision.DecodeSnapshot(checkpoint.Snapshot)
 	if err != nil {
@@ -649,7 +669,7 @@ func (s Store) ReplaceLatestTurn(
 		return nil, err
 	}
 	sessionrevision.SetGeneration(restored, record.Generation)
-	return &session.LatestTurnReplacementResult{
+	return &sessionrevision.LatestTurnReplacementResult{
 		ActiveSession: restored,
 		Applied:       true,
 	}, nil
@@ -735,7 +755,7 @@ WHERE app_name = %s AND user_id = %s AND session_id = %s AND deleted_at IS NULL`
 		return fmt.Errorf("restore session state: %w", err)
 	}
 	if s.Tables.Tracks != "" {
-		if err := s.replaceTracks(ctx, tx, key, restored, expiresAt); err != nil {
+		if err := s.trimTrackTails(ctx, tx, key, restored); err != nil {
 			return err
 		}
 	}
@@ -777,7 +797,7 @@ func (s Store) trimEventTail(
 		return err
 	}
 	if len(ids) <= prefixLength {
-		return session.ErrLatestTurnReplacementUnavailable
+		return sessionrevision.ErrLatestTurnReplacementUnavailable
 	}
 	tail := ids[prefixLength:]
 	placeholders := make([]string, len(tail))
@@ -789,28 +809,33 @@ func (s Store) trimEventTail(
 	if _, err := tx.ExecContext(
 		ctx,
 		fmt.Sprintf(
-			"DELETE FROM %s WHERE id IN (%s)",
+			"DELETE FROM %s WHERE id IN (%s) "+
+				"AND app_name = %s AND user_id = %s AND session_id = %s",
 			s.Tables.Events,
 			strings.Join(placeholders, ", "),
+			s.bind(len(tail)+1),
+			s.bind(len(tail)+2),
+			s.bind(len(tail)+3),
 		),
-		args...,
+		append(args, key.AppName, key.UserID, key.SessionID)...,
 	); err != nil {
 		return fmt.Errorf("remove discarded event tail: %w", err)
 	}
 	return nil
 }
 
-func (s Store) replaceTracks(
+func (s Store) trimTrackTails(
 	ctx context.Context,
 	tx *sql.Tx,
 	key session.Key,
 	restored *session.Session,
-	expiresAt *time.Time,
 ) error {
-	if _, err := tx.ExecContext(
+	rows, err := tx.QueryContext(
 		ctx,
 		fmt.Sprintf(
-			`DELETE FROM %s WHERE app_name = %s AND user_id = %s AND session_id = %s`,
+			`SELECT id, track, event FROM %s
+WHERE app_name = %s AND user_id = %s AND session_id = %s
+AND deleted_at IS NULL ORDER BY created_at, id FOR UPDATE`,
 			s.Tables.Tracks,
 			s.bind(1),
 			s.bind(2),
@@ -819,46 +844,101 @@ func (s Store) replaceTracks(
 		key.AppName,
 		key.UserID,
 		key.SessionID,
-	); err != nil {
-		return fmt.Errorf("clear active tracks: %w", err)
+	)
+	if err != nil {
+		return fmt.Errorf("lock active tracks: %w", err)
+	}
+	type trackRow struct {
+		id    int64
+		event session.TrackEvent
+	}
+	active := make(map[session.Track][]trackRow)
+	for rows.Next() {
+		var (
+			id    int64
+			track session.Track
+			raw   []byte
+		)
+		if err := rows.Scan(&id, &track, &raw); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		var trackEvent session.TrackEvent
+		if err := json.Unmarshal(raw, &trackEvent); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		active[track] = append(active[track], trackRow{id: id, event: trackEvent})
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	var tail []int64
+	for track, activeRows := range active {
+		history := restored.Tracks[track]
+		prefixLength := 0
+		if history != nil {
+			prefixLength = len(history.Events)
+		}
+		if len(activeRows) < prefixLength {
+			return fmt.Errorf(
+				"track %q checkpoint prefix has %d events, active projection has %d: %w",
+				track,
+				prefixLength,
+				len(activeRows),
+				sessionrevision.ErrLatestTurnReplacementUnavailable,
+			)
+		}
+		for i := 0; i < prefixLength; i++ {
+			if !sessionrevision.TrackEventsEqual(
+				activeRows[i].event,
+				history.Events[i],
+			) {
+				return fmt.Errorf(
+					"track %q checkpoint prefix differs at event %d: %w",
+					track,
+					i,
+					sessionrevision.ErrLatestTurnReplacementUnavailable,
+				)
+			}
+		}
+		for _, row := range activeRows[prefixLength:] {
+			tail = append(tail, row.id)
+		}
 	}
 	for track, history := range restored.Tracks {
-		if history == nil {
-			continue
-		}
-		for i := range history.Events {
-			trackEvent := history.Events[i]
-			raw, err := json.Marshal(&trackEvent)
-			if err != nil {
-				return err
-			}
-			createdAt := trackEvent.Timestamp
-			if createdAt.IsZero() {
-				createdAt = restored.CreatedAt
-			}
-			// #nosec G201 -- table names are assembled from validated service prefixes.
-			statement := fmt.Sprintf(
-				`INSERT INTO %s (app_name, user_id, session_id, track, event, created_at, updated_at, expires_at, deleted_at)
-VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NULL)`,
-				s.Tables.Tracks,
-				s.bind(1), s.bind(2), s.bind(3), s.bind(4),
-				s.bind(5), s.bind(6), s.bind(7), s.bind(8),
-			)
-			if _, err := tx.ExecContext(
-				ctx,
-				statement,
-				key.AppName,
-				key.UserID,
-				key.SessionID,
+		if history != nil && len(history.Events) > 0 && len(active[track]) == 0 {
+			return fmt.Errorf(
+				"track %q checkpoint prefix is missing: %w",
 				track,
-				s.jsonArg(raw),
-				createdAt,
-				createdAt,
-				expiresAt,
-			); err != nil {
-				return fmt.Errorf("restore active track: %w", err)
-			}
+				sessionrevision.ErrLatestTurnReplacementUnavailable,
+			)
 		}
+	}
+	if len(tail) == 0 {
+		return nil
+	}
+	placeholders := make([]string, len(tail))
+	args := make([]any, len(tail), len(tail)+3)
+	for i, id := range tail {
+		placeholders[i] = s.bind(i + 1)
+		args[i] = id
+	}
+	args = append(args, key.AppName, key.UserID, key.SessionID)
+	if _, err := tx.ExecContext(
+		ctx,
+		fmt.Sprintf(
+			"DELETE FROM %s WHERE id IN (%s) "+
+				"AND app_name = %s AND user_id = %s AND session_id = %s",
+			s.Tables.Tracks,
+			strings.Join(placeholders, ", "),
+			s.bind(len(tail)+1),
+			s.bind(len(tail)+2),
+			s.bind(len(tail)+3),
+		),
+		args...,
+	); err != nil {
+		return fmt.Errorf("remove discarded track tail: %w", err)
 	}
 	return nil
 }
