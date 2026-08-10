@@ -245,6 +245,22 @@ func TestFixedSizeChunking_PrefersNearbyWordBoundary(t *testing.T) {
 
 	chunks, err := fsc.Chunk(doc)
 	require.NoError(t, err)
+	require.Equal(t, []string{"alpha beta", " gamma delta"}, []string{
+		chunks[0].Content,
+		chunks[1].Content,
+	})
+}
+
+func TestFixedSizeChunking_WhitespaceTrimmingRestoresBoundaries(t *testing.T) {
+	chunks, err := NewFixedSizeChunking(
+		WithChunkSize(12),
+		WithWhitespaceTrimming(),
+	).Chunk(&document.Document{
+		ID:      "legacy-boundary",
+		Content: "alpha beta gamma delta",
+	})
+
+	require.NoError(t, err)
 	require.Equal(t, []string{"alpha beta", "gamma delta"}, []string{
 		chunks[0].Content,
 		chunks[1].Content,
@@ -268,7 +284,155 @@ func TestFixedSizeChunking_PrefersSentenceBoundary(t *testing.T) {
 	for _, chunk := range chunks {
 		contents = append(contents, chunk.Content)
 	}
-	require.Equal(t, content, strings.Join(contents, " "))
+	require.Equal(t, content, strings.Join(contents, ""))
+}
+
+func TestFixedSizeChunking_WhitespaceModes(t *testing.T) {
+	content := "def f():  \n\tif enabled:\n\t\treturn 1  "
+	doc := &document.Document{ID: "python", Content: content}
+
+	chunks, err := NewFixedSizeChunking(
+		WithChunkSize(128),
+	).Chunk(doc)
+	require.NoError(t, err)
+	require.Len(t, chunks, 1)
+	require.Equal(t, content, chunks[0].Content)
+
+	legacyChunks, err := NewFixedSizeChunking(
+		WithChunkSize(128),
+		WithWhitespaceTrimming(),
+	).Chunk(doc)
+	require.NoError(t, err)
+	require.Len(t, legacyChunks, 1)
+	require.Equal(
+		t,
+		"def f():\nif enabled:\nreturn 1",
+		legacyChunks[0].Content,
+	)
+}
+
+func TestFixedSizeChunking_WhitespaceOnlyDocument(t *testing.T) {
+	chunks, err := NewFixedSizeChunking().Chunk(
+		&document.Document{Content: " \n\t "},
+	)
+	require.ErrorIs(t, err, ErrEmptyDocument)
+	require.Nil(t, chunks)
+}
+
+func TestFixedSizeChunking_PreserveLinesDropsWhitespaceOnlyChunks(t *testing.T) {
+	const chunkSize = 5
+	content := " \t\naaaaa\n\t "
+	doc := &document.Document{ID: "blank-lines", Content: content}
+
+	chunks, err := NewFixedSizeChunking(
+		WithChunkSize(chunkSize),
+		WithPreserveLines(),
+	).Chunk(doc)
+	require.NoError(t, err)
+	require.Len(t, chunks, 2)
+	require.Equal(t, []string{" \t\naa", "aaa\n\t"}, []string{
+		chunks[0].Content,
+		chunks[1].Content,
+	})
+	for _, chunk := range chunks {
+		require.NotEmpty(t, strings.TrimSpace(chunk.Content))
+		require.LessOrEqual(t, utf8.RuneCountInString(chunk.Content), chunkSize)
+	}
+
+	legacyChunks, err := NewFixedSizeChunking(
+		WithChunkSize(chunkSize),
+		WithPreserveLines(),
+		WithWhitespaceTrimming(),
+	).Chunk(doc)
+	require.NoError(t, err)
+	require.Len(t, legacyChunks, 1)
+	require.Equal(t, "aaaaa", legacyChunks[0].Content)
+}
+
+func TestFixedSizeChunking_PreserveLinesAttachesWhitespaceWhenItFits(t *testing.T) {
+	const chunkSize = 5
+	chunks, err := NewFixedSizeChunking(
+		WithChunkSize(chunkSize),
+		WithPreserveLines(),
+	).Chunk(&document.Document{Content: " \nAA\nBBBB"})
+
+	require.NoError(t, err)
+	require.Len(t, chunks, 2)
+	require.Equal(t, " \nAA", chunks[0].Content)
+	require.Equal(t, "BBBB", chunks[1].Content)
+	for _, chunk := range chunks {
+		require.NotEmpty(t, strings.TrimSpace(chunk.Content))
+		require.LessOrEqual(t, utf8.RuneCountInString(chunk.Content), chunkSize)
+	}
+}
+
+func TestFixedSizeChunking_PreserveLinesRebalancesWhitespaceOnlyLine(t *testing.T) {
+	const chunkSize = 5
+	content := " \nAAAAAA"
+	chunks, err := NewFixedSizeChunking(
+		WithChunkSize(chunkSize),
+		WithPreserveLines(),
+	).Chunk(&document.Document{Content: content})
+
+	require.NoError(t, err)
+	var rebuilt strings.Builder
+	for _, chunk := range chunks {
+		require.NotEmpty(t, strings.TrimSpace(chunk.Content))
+		require.LessOrEqual(t, utf8.RuneCountInString(chunk.Content), chunkSize)
+		rebuilt.WriteString(chunk.Content)
+	}
+	require.Equal(t, content, rebuilt.String())
+}
+
+func TestFixedSizeChunking_PreserveLinesSkipsEmptyChunks(t *testing.T) {
+	const chunkSize = 5
+	doc := &document.Document{
+		ID:      "empty-line-boundary",
+		Content: "aaaaa\n\nbbbbb",
+	}
+
+	chunks, err := NewFixedSizeChunking(
+		WithChunkSize(chunkSize),
+		WithPreserveLines(),
+	).Chunk(doc)
+
+	require.NoError(t, err)
+	require.Len(t, chunks, 3)
+	require.Equal(t, []string{"aaaaa", "\n\nbbb", "bb"}, []string{
+		chunks[0].Content,
+		chunks[1].Content,
+		chunks[2].Content,
+	})
+	for _, chunk := range chunks {
+		require.NotEmpty(t, chunk.Content)
+		require.NotZero(t, chunk.Metadata[source.MetaChunkSize])
+		require.LessOrEqual(t, utf8.RuneCountInString(chunk.Content), chunkSize)
+	}
+}
+
+func TestFixedSizeChunking_PreserveLinesOverlapSkipsEmptyChunks(t *testing.T) {
+	const (
+		chunkSize = 5
+		overlap   = 2
+	)
+	doc := &document.Document{
+		ID:      "empty-line-overlap",
+		Content: "aaaaa\n\nbbbbb",
+	}
+
+	chunks, err := NewFixedSizeChunking(
+		WithChunkSize(chunkSize),
+		WithOverlap(overlap),
+		WithPreserveLines(),
+	).Chunk(doc)
+
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(chunks), 2)
+	for _, chunk := range chunks {
+		require.NotEmpty(t, chunk.Content)
+		require.NotZero(t, chunk.Metadata[source.MetaChunkSize])
+		require.LessOrEqual(t, utf8.RuneCountInString(chunk.Content), chunkSize)
+	}
 }
 
 func TestFixedSizeChunking_PreservesCompleteLines(t *testing.T) {
