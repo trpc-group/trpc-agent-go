@@ -153,14 +153,7 @@ func (w *AsyncSummaryWorker) EnqueueJob(
 	// Fall back to synchronous processing using the same detached context that
 	// async workers would consume.
 	log.DebugfContext(ctx, "summary job queue full, processing synchronously")
-	return CreateSessionSummaryWithCascade(
-		job.ctx,
-		sess,
-		filterKey,
-		force,
-		w.config.SummaryDispatchPolicy,
-		w.config.CreateSummaryFunc,
-	)
+	return w.runJob(job)
 }
 
 // tryEnqueueJob attempts to enqueue a summary job.
@@ -196,6 +189,16 @@ func (w *AsyncSummaryWorker) processJob(job *summaryJob) {
 		}
 	}()
 
+	if err := w.runJob(job); err != nil {
+		logCtx := job.ctx
+		if logCtx == nil {
+			logCtx = context.Background()
+		}
+		log.WarnfContext(logCtx, "summary worker failed to create session summary: %v", err)
+	}
+}
+
+func (w *AsyncSummaryWorker) runJob(job *summaryJob) error {
 	ctx := job.ctx
 	if ctx == nil {
 		ctx = context.Background()
@@ -207,8 +210,6 @@ func (w *AsyncSummaryWorker) processJob(job *summaryJob) {
 		defer cancel()
 	}
 
-	if err := CreateSessionSummaryWithCascade(ctx, job.session, job.filterKey,
-		job.force, w.config.SummaryDispatchPolicy, w.config.CreateSummaryFunc); err != nil {
-		log.WarnfContext(ctx, "summary worker failed to create session summary: %v", err)
-	}
+	return CreateSessionSummaryWithCascade(ctx, job.session, job.filterKey,
+		job.force, w.config.SummaryDispatchPolicy, w.config.CreateSummaryFunc)
 }
