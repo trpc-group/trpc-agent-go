@@ -549,6 +549,10 @@ func installDenialMonitor(
 	return nil
 }
 
+// collectSandboxDenials waits the full settleTimeout (default 300ms) on the
+// run-start ring generation, then snapshots tagged denials for this run.
+// Context cancellation ends the settle wait early and still returns whatever
+// events are already buffered.
 func (r *Runtime) collectSandboxDenials(
 	ctx context.Context,
 	run sandboxDenialRun,
@@ -1075,18 +1079,6 @@ func (ring *macosDenialRing) count() int {
 	return len(ring.events)
 }
 
-func (ring *macosDenialRing) countMatchingRunTag(runTag string) int {
-	ring.mu.Lock()
-	defer ring.mu.Unlock()
-	count := 0
-	for _, event := range ring.events {
-		if event.tagged && containsExactSandboxTag(event.denial.Raw, runTag) {
-			count++
-		}
-	}
-	return count
-}
-
 func (ring *macosDenialRing) snapshot() ([]macosSandboxDenialEvent, bool) {
 	return ring.snapshotSince(0)
 }
@@ -1109,35 +1101,24 @@ func (ring *macosDenialRing) dropCount() uint64 {
 	return ring.dropped
 }
 
+// waitForSettle keeps the collection window open for the full bounded timeout.
+// Production collection has no stronger completion signal than the timeout, so
+// a short idle gap after the first event must not finalize the wait while later
+// correlated denials may still arrive.
 func (ring *macosDenialRing) waitForSettle(
 	ctx context.Context,
 	timeout time.Duration,
 ) error {
+	_ = ring
 	if timeout <= 0 {
 		timeout = sandboxDenialSettleTimeout
 	}
-	deadline := time.Now().Add(timeout)
-	idleStart := time.Now()
-	lastCount := -1
-	for time.Now().Before(deadline) {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		count := ring.count()
-		if count != lastCount {
-			lastCount = count
-			idleStart = time.Now()
-		}
-		if count > 0 && time.Since(idleStart) >= 50*time.Millisecond {
-			return nil
-		}
-		if err := waitCtx(ctx, 10*time.Millisecond); err != nil {
-			return err
-		}
-	}
-	return nil
+	return waitCtx(ctx, timeout)
 }
 
+// waitForRunTagSettle waits the full settle window for tagged production
+// collection. Unlike probe form waits, there is no known completion signal other
+// than the bounded timeout, so the wait never returns early after a short idle.
 func (ring *macosDenialRing) waitForRunTagSettle(
 	ctx context.Context,
 	runTag string,
@@ -1149,26 +1130,7 @@ func (ring *macosDenialRing) waitForRunTagSettle(
 	if timeout <= 0 {
 		timeout = sandboxDenialSettleTimeout
 	}
-	deadline := time.Now().Add(timeout)
-	idleStart := time.Now()
-	lastCount := -1
-	for time.Now().Before(deadline) {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		count := ring.countMatchingRunTag(runTag)
-		if count != lastCount {
-			lastCount = count
-			idleStart = time.Now()
-		}
-		if count > 0 && time.Since(idleStart) >= 50*time.Millisecond {
-			return nil
-		}
-		if err := waitCtx(ctx, 10*time.Millisecond); err != nil {
-			return err
-		}
-	}
-	return nil
+	return waitCtx(ctx, timeout)
 }
 
 // waitForProbeForm waits until the expected tag matches or the full timeout

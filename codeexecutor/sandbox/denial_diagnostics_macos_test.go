@@ -759,6 +759,56 @@ func TestMacOSDenialRingWaitForRunTagSettleUsesDefaultTimeout(t *testing.T) {
 	}
 }
 
+func TestCollectSandboxDenialsKeepsFullSettleWindowForDelayedSecondEvent(t *testing.T) {
+	runTag := "TRPC_RUN_delayed2_END_0123456789abcdef_SBX"
+	rt := NewRuntime()
+	ring := &macosDenialRing{}
+	monitor := &macosLogStreamMonitor{ring: ring}
+	d := rt.macosDenialDiagnostics()
+	d.mu.Lock()
+	d.prodMonitor = monitor
+	d.caps = DiagnosticsCapability{
+		EventStreamAvailable: true,
+		StrongCorrelation:    true,
+		ProbeCompleted:       true,
+	}
+	d.mu.Unlock()
+
+	ring.addLine([]byte(
+		`{"eventMessage":"Sandbox: cat deny(1) file-read-data /private/tmp/first\n`+
+			runTag+`"}`,
+	), runTag)
+	go func() {
+		time.Sleep(80 * time.Millisecond)
+		ring.addLine([]byte(
+			`{"eventMessage":"Sandbox: cat deny(1) file-read-data /private/tmp/second\n`+
+				runTag+`"}`,
+		), runTag)
+	}()
+
+	start := time.Now()
+	denials, truncated := rt.collectSandboxDenials(
+		context.Background(),
+		denialRunForMonitor(runTag, monitor, 0),
+		"/bin/cat",
+		300*time.Millisecond,
+	)
+	elapsed := time.Since(start)
+	if elapsed < 250*time.Millisecond {
+		t.Fatalf("collection returned after %s, want full settle window", elapsed)
+	}
+	if truncated {
+		t.Fatal("Truncated = true, want false")
+	}
+	if len(denials) != 2 {
+		t.Fatalf("denials=%#v, want first and delayed second event", denials)
+	}
+	targets := []string{denials[0].Target, denials[1].Target}
+	if targets[0] != "/private/tmp/first" || targets[1] != "/private/tmp/second" {
+		t.Fatalf("targets=%v, want [/private/tmp/first /private/tmp/second]", targets)
+	}
+}
+
 func TestParseMacOSSandboxDenialLogLineInvalidJSON(t *testing.T) {
 	_, _, ok := parseMacOSSandboxDenialLogLine([]byte("{"), "")
 	if ok {

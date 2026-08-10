@@ -67,6 +67,9 @@ sole shutdown owners.
 When a run hits its deadline, denial collection uses a separate bounded context
 so settle waits are not cut short by the already-canceled run context. Normal
 completion and caller cancellation continue to inherit the run context.
+Production settle waits keep the full bounded window open (default 300ms) so a
+short idle gap after the first tagged denial cannot omit later correlated
+events; `Truncated` still only reflects ring drops, not early settle.
 
 Probe events use a separate temporary monitor so they never pollute the
 production ring buffer. The probe monitor predicate is scoped to the probe
@@ -213,8 +216,11 @@ Set `DisableAutomatic: true` to make the three default daemon denials visible.
 - Diagnostics do not change the sandbox policy and do not ask for permission.
 - If `/usr/bin/log` is unavailable or restricted, commands still run and
   diagnostics are omitted.
-- macOS unified log delivery is asynchronous, so the runtime waits briefly
-  after command exit for trailing denial entries.
+- macOS unified log delivery is asynchronous, so after command exit the runtime
+  keeps the production settle window open for the full bounded timeout (default
+  300ms, or until the collection context is canceled) before snapshotting
+  tagged denials. Events that arrive after that window are not guaranteed to
+  appear in `Diagnostics.Denials`.
 - Default-deny events are strongly correlated only when the runtime probe
   confirms `(deny default (with message "..."))` works on the current host.
 - Explicit glob and regex denies are correlated when explicit-deny tagging is
