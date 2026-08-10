@@ -488,8 +488,11 @@ func TestDefaultScanner_DetectsCodeResourceAbuse(t *testing.T) {
 		{name: "python infinite loop", language: "python", code: "while True:\n    pass", decision: DecisionDeny},
 		{name: "go infinite loop", language: "go", code: "for {}", decision: DecisionDeny},
 		{name: "javascript infinite loop", language: "javascript", code: "while (true) {}", decision: DecisionDeny},
+		{name: "javascript loop after division", language: "javascript", code: "const half = total / count;\nwhile (true) {}", decision: DecisionDeny},
 		{name: "python long sleep", language: "python", code: "import time\ntime.sleep(3600)", decision: DecisionDeny},
 		{name: "go long sleep", language: "go", code: "time.Sleep(1 * time.Hour)", decision: DecisionDeny},
+		{name: "go named long sleep", language: "go", code: "time.Sleep(time.Hour)", decision: DecisionDeny},
+		{name: "go unparsed sleep", language: "go", code: "time.Sleep(delay)", decision: DecisionAsk},
 		{name: "javascript long sleep", language: "javascript", code: "setTimeout(resolve, 3600000)", decision: DecisionDeny},
 	}
 	for _, tc := range cases {
@@ -2010,6 +2013,7 @@ func TestDefaultScanner_DoesNotTreatLoopTextInCommentsOrStringsAsExecutable(t *t
 		{name: "python comment", language: "python", code: "# while True:\nprint(1)"},
 		{name: "go comment", language: "go", code: "// for {\npackage main"},
 		{name: "javascript string", language: "javascript", code: `console.log("while (true)")`},
+		{name: "javascript regex literal", language: "javascript", code: `const pattern = /while (true)/; pattern.test(text)`},
 		{name: "javascript template text", language: "javascript", code: "const text = `while (true)`"},
 		{
 			name:     "javascript template interpolation string",

@@ -73,6 +73,9 @@ var (
 	jsInfiniteLoopPattern     = regexp.MustCompile(`(?mi)\bwhile\s*\(\s*(?:true|1)\s*\)|\bfor\s*\(\s*;\s*;\s*\)`)
 	codeSleepPattern          = regexp.MustCompile(`(?i)(?:time\.)?sleep\s*\(\s*([0-9]+)\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|d)?\s*\)`)
 	goSleepPattern            = regexp.MustCompile(`(?i)time\.sleep\s*\(\s*([0-9]+)\s*\*\s*time\.(second|minute|hour|day)s?\s*\)`)
+	goSleepConstantPattern    = regexp.MustCompile(`(?i)time\.sleep\s*\(\s*time\.(nanosecond|microsecond|millisecond|second|minute|hour)\s*\)`)
+	goSleepCallPattern        = regexp.MustCompile(`(?i)\btime\.sleep\s*\(`)
+	goSleepDurationPattern    = regexp.MustCompile(`(?is)^\s*(?:[0-9]+\s*\*\s*time\.(?:second|minute|hour|day)s?|time\.(?:nanosecond|microsecond|millisecond|second|minute|hour)|[0-9]+)\s*$`)
 	jsSleepPattern            = regexp.MustCompile(`(?i)settimeout\s*\([^,]+,\s*([0-9]+)\s*\)`)
 )
 
@@ -87,7 +90,19 @@ func (s *DefaultScanner) scanCodeResourceAbuse(lang, code string) []Finding {
 		}}
 	}
 	seconds, ok := codeSleepSeconds(lang, code)
-	if !ok || s.policy.MaxTimeoutSec <= 0 || seconds <= s.policy.MaxTimeoutSec {
+	if s.policy.MaxTimeoutSec <= 0 {
+		return nil
+	}
+	if !ok || seconds <= s.policy.MaxTimeoutSec {
+		if lang == "go" && hasUnparsedGoSleepCall(code) {
+			return []Finding{{
+				RuleID:         "resource.long_running",
+				RiskLevel:      RiskHigh,
+				Decision:       DecisionAsk,
+				Evidence:       "go code contains an unparsed time.Sleep duration",
+				Recommendation: "use a bounded constant duration or require approval",
+			}}
+		}
 		return nil
 	}
 	decision := DecisionAsk
@@ -130,6 +145,8 @@ func maskNonExecutableSource(lang, code string) string {
 			i = maskSourceComment(code, &out, i)
 		case isJavaScriptLanguage(lang) && code[i] == '`':
 			i = maskJavaScriptTemplateLiteral(code, &out, i)
+		case isJavaScriptLanguage(lang) && isJavaScriptRegexLiteralStart(code, i):
+			i = maskJavaScriptRegexLiteral(code, &out, i)
 		case sourceQuoteStart(lang, code[i]):
 			i = maskSourceString(lang, code, &out, i)
 		default:
@@ -149,9 +166,86 @@ func isJavaScriptLanguage(lang string) bool {
 	}
 }
 
+func isJavaScriptRegexLiteralStart(code string, index int) bool {
+	if code[index] != '/' || sourceCommentStart("javascript", code, index) {
+		return false
+	}
+	index--
+	for index >= 0 && (code[index] == ' ' || code[index] == '\t' ||
+		code[index] == '\r' || code[index] == '\n') {
+		index--
+	}
+	if index < 0 {
+		return true
+	}
+	switch code[index] {
+	case '(', '[', '{', ',', ';', ':', '=', '!', '?', '&', '|', '+', '-', '*', '%', '~', '^', '<', '>':
+		return true
+	default:
+		return javaScriptRegexKeywordBefore(code, index)
+	}
+}
+
+func javaScriptRegexKeywordBefore(code string, index int) bool {
+	if !isJavaScriptIdentifierPart(code[index]) {
+		return false
+	}
+	start := index
+	for start > 0 && isJavaScriptIdentifierPart(code[start-1]) {
+		start--
+	}
+	switch code[start : index+1] {
+	case "return", "throw", "case", "delete", "typeof", "void", "new", "in", "of", "yield", "await", "else", "do", "instanceof":
+		return true
+	default:
+		return false
+	}
+}
+
+func isJavaScriptIdentifierPart(ch byte) bool {
+	return ch == '_' || ch == '$' ||
+		(ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+		(ch >= '0' && ch <= '9')
+}
+
 func maskJavaScriptTemplateLiteral(code string, out *strings.Builder, index int) int {
 	out.WriteByte(' ')
 	return maskJavaScriptTemplateLiteralBody(code, out, index+1)
+}
+
+func maskJavaScriptRegexLiteral(code string, out *strings.Builder, index int) int {
+	out.WriteByte(' ')
+	index++
+	inCharacterClass := false
+	for index < len(code) {
+		switch {
+		case code[index] == '\n':
+			out.WriteByte('\n')
+			return index + 1
+		case code[index] == '\\':
+			index = maskEscapedSourceCharacter(code, out, index)
+		case code[index] == '[':
+			inCharacterClass = true
+			out.WriteByte(' ')
+			index++
+		case code[index] == ']':
+			inCharacterClass = false
+			out.WriteByte(' ')
+			index++
+		case code[index] == '/' && !inCharacterClass:
+			out.WriteByte(' ')
+			index++
+			for index < len(code) && isJavaScriptIdentifierPart(code[index]) {
+				out.WriteByte(' ')
+				index++
+			}
+			return index
+		default:
+			out.WriteByte(' ')
+			index++
+		}
+	}
+	return index
 }
 
 func maskJavaScriptTemplateLiteralBody(
@@ -366,7 +460,59 @@ func maxGoSleepSeconds(code string) (int, bool) {
 			found = true
 		}
 	}
+	for _, match := range goSleepConstantPattern.FindAllStringSubmatch(code, -1) {
+		if len(match) != 2 {
+			continue
+		}
+		seconds := goSleepConstantSeconds(strings.ToLower(match[1]))
+		if !found || seconds > maxSeconds {
+			maxSeconds = seconds
+			found = true
+		}
+	}
 	return maxSeconds, found
+}
+
+func goSleepConstantSeconds(unit string) int {
+	switch unit {
+	case "second":
+		return 1
+	case "minute":
+		return 60
+	case "hour":
+		return 60 * 60
+	default:
+		return 0
+	}
+}
+
+func hasUnparsedGoSleepCall(code string) bool {
+	code = maskNonExecutableSource("go", code)
+	for _, match := range goSleepCallPattern.FindAllStringIndex(code, -1) {
+		argument, ok := sourceCallArgument(code, match[1])
+		if !ok || !goSleepDurationPattern.MatchString(argument) {
+			return true
+		}
+	}
+	return false
+}
+
+func sourceCallArgument(code string, index int) (string, bool) {
+	start := index
+	depth := 1
+	for index < len(code) {
+		switch code[index] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return code[start:index], true
+			}
+		}
+		index++
+	}
+	return "", false
 }
 
 func maxJavaScriptSleepSeconds(code string) (int, bool) {
