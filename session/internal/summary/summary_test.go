@@ -896,7 +896,13 @@ func TestSummarizeSession_CanceledDuringSummarizationDoesNotPersist(t *testing.T
 		started: make(chan struct{}),
 		release: make(chan struct{}),
 	}
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() { close(s.release) })
+	}
+	defer release()
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	done := make(chan struct {
 		updated bool
 		err     error
@@ -909,11 +915,23 @@ func TestSummarizeSession_CanceledDuringSummarizationDoesNotPersist(t *testing.T
 			err     error
 		}{updated: updated, err: err}
 	}()
-	<-s.started
+	select {
+	case <-s.started:
+	case <-time.After(time.Second):
+		t.Fatal("summarizer did not start")
+	}
 	cancel()
-	close(s.release)
+	release()
 
-	got := <-done
+	var got struct {
+		updated bool
+		err     error
+	}
+	select {
+	case got = <-done:
+	case <-time.After(time.Second):
+		t.Fatal("canceled summary did not return")
+	}
 	require.ErrorIs(t, got.err, context.Canceled)
 	require.False(t, got.updated)
 	require.Empty(t, base.Summaries)
