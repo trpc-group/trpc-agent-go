@@ -128,10 +128,12 @@ const (
 		CREATE INDEX {{INDEX_NAME}}
 		ON {{TABLE_NAME}}(expires_at)`
 
+	// state_initialization_leases: unique index on (coordination_key, user_id)
 	sqlCreateStateInitializationLeasesUniqueIndex = `
 		CREATE UNIQUE INDEX {{INDEX_NAME}}
 		ON {{TABLE_NAME}}(coordination_key, user_id)`
 
+	// state_initialization_leases: TTL index on (expires_at)
 	sqlCreateStateInitializationLeasesExpiresIndex = `
 		CREATE INDEX {{INDEX_NAME}}
 		ON {{TABLE_NAME}}(expires_at)`
