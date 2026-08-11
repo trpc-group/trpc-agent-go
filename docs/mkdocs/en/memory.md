@@ -301,9 +301,11 @@ memExtractor := extractor.NewExtractor(
 
 The policy is a built-in extractor capability captured when the Auto memory
 worker is constructed. `Metadata()` remains descriptive and does not control
-runtime behavior. A custom extractor or a decorator around the built-in
-extractor uses Merge Similar unless it is replaced with a directly configured
-built-in extractor.
+runtime behavior. A transparent decorator can preserve built-in capabilities
+by implementing `UnwrapMemoryExtractor() extractor.MemoryExtractor`; nested
+cooperating decorators are supported. A custom extractor or non-cooperating
+decorator uses Merge Similar. Nil unwrap results and unwrap cycles also fall
+back to Merge Similar.
 
 The update policies affect only operations produced by background Auto
 extraction. An agent or application explicitly calling `memory_update` keeps
@@ -347,10 +349,9 @@ an older forget request is never applied to writes from a later user turn.
 
 The update policy does not change `memory.Service`, `MemoryExtractor`, the stored
 JSON representation, memory IDs, or database schemas. It does not rewrite
-existing entries. Merge Similar retains its historical best-effort persistence
-behavior. With Preserve History or Append Only, a persistence failure is
-returned and does not advance the session extraction watermark, so a later job
-can retry the same events.
+existing entries. All policies retain Auto memory's historical best-effort
+persistence behavior: an individual write failure is logged, later operations
+continue, and the extraction watermark advances after the batch is processed.
 
 To roll back, remove the option or set it to `UpdatePolicyMergeSimilar`. No data
 migration is required.

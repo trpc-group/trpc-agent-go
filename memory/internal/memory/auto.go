@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"maps"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +32,7 @@ const (
 	DefaultAsyncMemoryNum   = 1
 	DefaultMemoryQueueSize  = 10
 	DefaultMemoryJobTimeout = 30 * time.Second
+	maxExtractorUnwrapDepth = 64
 
 	memoryNotFoundErrSubstr = "memory with id"
 	memoryNotFoundErrMarker = "not found"
@@ -160,6 +162,10 @@ type EnabledToolsConfigurer interface {
 	SetEnabledTools(enabled map[string]struct{})
 }
 
+type memoryExtractorUnwrapper interface {
+	UnwrapMemoryExtractor() extractor.MemoryExtractor
+}
+
 // ConfigureExtractorEnabledTools passes enabled tool flags to the
 // extractor if it implements EnabledToolsConfigurer.
 func ConfigureExtractorEnabledTools(
@@ -168,6 +174,49 @@ func ConfigureExtractorEnabledTools(
 ) {
 	if c, ok := ext.(EnabledToolsConfigurer); ok {
 		c.SetEnabledTools(enabledTools)
+	}
+}
+
+// unwrapMemoryExtractor follows cooperating decorators to the extractor that
+// owns built-in capabilities. Non-cooperating decorators remain opaque. A
+// bounded traversal and comparable-value tracking make malformed cycles fall
+// back safely without requiring every decorator value to be comparable.
+func unwrapMemoryExtractor(
+	ext extractor.MemoryExtractor,
+) extractor.MemoryExtractor {
+	seen := make(map[any]struct{})
+	current := ext
+	for depth := 0; depth < maxExtractorUnwrapDepth; depth++ {
+		if isNilMemoryExtractor(current) {
+			return nil
+		}
+		typeOfCurrent := reflect.TypeOf(current)
+		if typeOfCurrent.Comparable() {
+			if _, ok := seen[current]; ok {
+				return nil
+			}
+			seen[current] = struct{}{}
+		}
+		unwrapper, ok := current.(memoryExtractorUnwrapper)
+		if !ok {
+			return current
+		}
+		current = unwrapper.UnwrapMemoryExtractor()
+	}
+	return nil
+}
+
+func isNilMemoryExtractor(ext extractor.MemoryExtractor) bool {
+	if ext == nil {
+		return true
+	}
+	value := reflect.ValueOf(ext)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map,
+		reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
 	}
 }
 
@@ -214,7 +263,7 @@ func NewAutoMemoryWorker(
 	return &AutoMemoryWorker{
 		config:       config,
 		operator:     operator,
-		updatePolicy: updatePolicyFor(config.Extractor),
+		updatePolicy: updatePolicyFor(unwrapMemoryExtractor(config.Extractor)),
 	}
 }
 
@@ -420,7 +469,8 @@ func (w *AutoMemoryWorker) createAutoMemory(
 	if err != nil {
 		return err
 	}
-	return w.executeAutoMemoryOperations(ctx, userKey, ops)
+	w.executeAutoMemoryOperations(ctx, userKey, ops)
+	return nil
 }
 
 func (w *AutoMemoryWorker) prepareAutoMemoryOperations(
@@ -463,20 +513,15 @@ func (w *AutoMemoryWorker) executeAutoMemoryOperations(
 	ctx context.Context,
 	userKey memory.UserKey,
 	ops []*extractor.Operation,
-) error {
+) {
 	for _, op := range ops {
 		if err := w.executeOperation(ctx, userKey, op); err != nil {
-			if w.updatePolicy == extractor.UpdatePolicyMergeSimilar {
-				log.WarnfContext(ctx,
-					"auto_memory: operation failed for user %s/%s: %v",
-					userKey.AppName, userKey.UserID, err,
-				)
-				continue
-			}
-			return err
+			log.WarnfContext(ctx,
+				"auto_memory: operation failed for user %s/%s: %v",
+				userKey.AppName, userKey.UserID, err,
+			)
 		}
 	}
-	return nil
 }
 
 // searchRelevantMemories builds a query from the conversation messages

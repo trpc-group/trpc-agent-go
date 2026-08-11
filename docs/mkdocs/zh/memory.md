@@ -282,9 +282,10 @@ memExtractor := extractor.NewExtractor(
 ```
 
 Policy 是内置 extractor 的能力，Auto memory worker 在构造时读取并固定该配置。
-`Metadata()` 只提供描述信息，不参与运行时控制。自定义 extractor 或包装内置
-extractor 的 decorator 使用 Merge Similar；如需其他策略，应直接配置并传入内置
-extractor。
+`Metadata()` 只提供描述信息，不参与运行时控制。透明 decorator 可以实现
+`UnwrapMemoryExtractor() extractor.MemoryExtractor`，让 worker 读取被包装的内置
+extractor 能力；支持多层合作式 decorator。自定义 extractor、不合作的 decorator、
+返回 nil 或形成循环的 unwrap 均安全回退到 Merge Similar。
 
 Update policy 只约束后台 Auto extraction 产生的操作。Agent 或应用显式调用
 `memory_update` 时，工具语义保持不变。
@@ -317,9 +318,9 @@ clear 必须来自用户明确且不包含范围或例外条件的“遗忘全�
 Delete 或 Clear；更早的遗忘请求不会应用到后续用户轮次产生的写入。
 
 该 update policy 不会修改 `memory.Service`、`MemoryExtractor`、持久化 JSON、memory ID
-或数据库 schema，也不会重写存量记忆。Merge Similar 继续保持原有的 best-effort
-持久化行为。Preserve History 或 Append Only 的持久化失败会返回给调用方，并且不会
-推进 session extraction watermark，因此后续任务可以重试同一批事件。
+或数据库 schema，也不会重写存量记忆。所有 policy 都保持 Auto memory 原有的
+best-effort 持久化行为：单个写入失败会记录日志，后续 operation 继续执行；批次处理
+完成后推进 session extraction watermark。
 
 回退时删除该 option，或将其设置为 `UpdatePolicyMergeSimilar` 即可，不需要数据迁移。
 

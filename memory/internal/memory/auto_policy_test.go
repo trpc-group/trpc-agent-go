@@ -48,6 +48,26 @@ type decoratedExtractor struct {
 	extractor.MemoryExtractor
 }
 
+type unwrappingExtractor struct {
+	extractor.MemoryExtractor
+}
+
+func (e *unwrappingExtractor) UnwrapMemoryExtractor() extractor.MemoryExtractor {
+	if e == nil {
+		return nil
+	}
+	return e.MemoryExtractor
+}
+
+type nonComparableUnwrappingExtractor struct {
+	extractor.MemoryExtractor
+	values []string
+}
+
+func (e nonComparableUnwrappingExtractor) UnwrapMemoryExtractor() extractor.MemoryExtractor {
+	return e
+}
+
 type requestRecordingModel struct {
 	*mockModel
 	requests []*model.Request
@@ -177,7 +197,26 @@ func TestUpdatePolicyFor_RecognizesOnlyBuiltInExtractor(t *testing.T) {
 	))
 }
 
-func TestDecoratedExtractorFallsBackConsistentlyToMergeSimilar(t *testing.T) {
+func TestUnwrapMemoryExtractor(t *testing.T) {
+	builtin := extractor.NewExtractor(nil)
+	inner := &unwrappingExtractor{MemoryExtractor: builtin}
+	outer := &unwrappingExtractor{MemoryExtractor: inner}
+	assert.Same(t, builtin, unwrapMemoryExtractor(outer))
+
+	assert.Nil(t, unwrapMemoryExtractor(nil))
+	var typedNil *unwrappingExtractor
+	assert.Nil(t, unwrapMemoryExtractor(typedNil))
+
+	first := &unwrappingExtractor{}
+	second := &unwrappingExtractor{MemoryExtractor: first}
+	first.MemoryExtractor = second
+	assert.Nil(t, unwrapMemoryExtractor(first))
+
+	nonComparable := nonComparableUnwrappingExtractor{values: []string{"cycle"}}
+	assert.Nil(t, unwrapMemoryExtractor(nonComparable))
+}
+
+func TestNonCooperatingDecoratorFallsBackConsistentlyToMergeSimilar(t *testing.T) {
 	for _, policy := range []extractor.UpdatePolicy{
 		extractor.UpdatePolicyMergeSimilar,
 		extractor.UpdatePolicyPreserveHistory,
@@ -213,53 +252,110 @@ func TestDecoratedExtractorFallsBackConsistentlyToMergeSimilar(t *testing.T) {
 	}
 }
 
-func TestUpdatePolicyMergeSimilar_KeepsOperationFailuresBestEffort(t *testing.T) {
-	ext := &customUpdatePolicyExtractor{
-		mockExtractor: &mockExtractor{ops: []*extractor.Operation{
-			{Type: extractor.OperationAdd, Memory: "User likes tea."},
-			{Type: extractor.OperationAdd, Memory: "User likes coffee."},
-		}},
-		metadata: map[string]any{},
+func TestCooperatingDecoratorPreservesUpdatePolicy(t *testing.T) {
+	for _, policy := range []extractor.UpdatePolicy{
+		extractor.UpdatePolicyMergeSimilar,
+		extractor.UpdatePolicyPreserveHistory,
+		extractor.UpdatePolicyAppendOnly,
+	} {
+		t.Run(string(policy), func(t *testing.T) {
+			args, err := json.Marshal(map[string]any{"memory": "User likes green tea."})
+			require.NoError(t, err)
+			recording := &requestRecordingModel{mockModel: newMockModelWithToolCalls([]model.ToolCall{{
+				Type: "function",
+				Function: model.FunctionDefinitionParam{
+					Name:      memory.AddToolName,
+					Arguments: args,
+				},
+			}})}
+			builtin := extractor.NewExtractor(recording, extractor.WithUpdatePolicy(policy))
+			inner := &unwrappingExtractor{MemoryExtractor: builtin}
+			outer := &unwrappingExtractor{MemoryExtractor: inner}
+			worker := NewAutoMemoryWorker(
+				AutoMemoryConfig{Extractor: outer},
+				newMockOperator(),
+			)
+
+			require.NoError(t, worker.createAutoMemory(
+				context.Background(),
+				reconcileUserKey(),
+				[]model.Message{model.NewUserMessage("I like green tea.")},
+			))
+			assert.Equal(t, policy, worker.updatePolicy)
+			require.Len(t, recording.requests, 1)
+			request := recording.requests[0]
+			switch policy {
+			case extractor.UpdatePolicyAppendOnly:
+				assert.Len(t, request.Tools, 1)
+				assert.Contains(t, request.Tools, memory.AddToolName)
+				assert.Contains(t, request.Messages[0].Content, "Use only memory_add")
+			case extractor.UpdatePolicyPreserveHistory:
+				assert.Contains(t, request.Tools, memory.UpdateToolName)
+				assert.Contains(t, request.Messages[0].Content, "Preserve long-term history")
+			default:
+				assert.Contains(t, request.Tools, memory.UpdateToolName)
+				assert.NotContains(t, request.Messages[0].Content, "<update_policy>")
+			}
+		})
 	}
-	operator := &failFirstAddOperator{mockOperator: newMockOperator()}
-	worker := NewAutoMemoryWorker(AutoMemoryConfig{Extractor: ext}, operator)
-
-	err := worker.createAutoMemory(
-		context.Background(),
-		reconcileUserKey(),
-		[]model.Message{model.NewUserMessage("I like tea and coffee.")},
-	)
-
-	require.NoError(t, err)
-	assert.Equal(t, 2, operator.attempts)
-	assert.Equal(t, 1, operator.addCalls)
 }
 
-func TestUpdatePolicies_PersistenceFailureRetriesSameEvents(t *testing.T) {
+func TestUpdatePolicies_KeepOperationFailuresBestEffort(t *testing.T) {
 	for _, policy := range []extractor.UpdatePolicy{
+		extractor.UpdatePolicyMergeSimilar,
 		extractor.UpdatePolicyPreserveHistory,
 		extractor.UpdatePolicyAppendOnly,
 	} {
 		t.Run(string(policy), func(t *testing.T) {
 			ext := &customUpdatePolicyExtractor{
-				mockExtractor: &mockExtractor{ops: []*extractor.Operation{{
-					Type: extractor.OperationAdd, Memory: "User likes tea.",
-				}}},
+				mockExtractor: &mockExtractor{ops: []*extractor.Operation{
+					{Type: extractor.OperationAdd, Memory: "User likes tea."},
+					{Type: extractor.OperationAdd, Memory: "User likes coffee."},
+				}},
 			}
 			operator := &failFirstAddOperator{mockOperator: newMockOperator()}
-			worker := NewAutoMemoryWorker(
-				AutoMemoryConfig{Extractor: ext}, operator,
+			worker := NewAutoMemoryWorker(AutoMemoryConfig{Extractor: ext}, operator)
+			worker.updatePolicy = policy
+
+			err := worker.createAutoMemory(
+				context.Background(),
+				reconcileUserKey(),
+				[]model.Message{model.NewUserMessage("I like tea and coffee.")},
 			)
+
+			require.NoError(t, err)
+			assert.Equal(t, 2, operator.attempts)
+			assert.Equal(t, 1, operator.addCalls)
+		})
+	}
+}
+
+func TestUpdatePolicies_PersistenceFailureAdvancesWatermark(t *testing.T) {
+	for _, policy := range []extractor.UpdatePolicy{
+		extractor.UpdatePolicyMergeSimilar,
+		extractor.UpdatePolicyPreserveHistory,
+		extractor.UpdatePolicyAppendOnly,
+	} {
+		t.Run(string(policy), func(t *testing.T) {
+			ext := &customUpdatePolicyExtractor{
+				mockExtractor: &mockExtractor{ops: []*extractor.Operation{
+					{Type: extractor.OperationAdd, Memory: "User likes tea."},
+					{Type: extractor.OperationAdd, Memory: "User likes coffee."},
+				}},
+			}
+			operator := &failFirstAddOperator{mockOperator: newMockOperator()}
+			worker := NewAutoMemoryWorker(AutoMemoryConfig{Extractor: ext}, operator)
 			worker.updatePolicy = policy
 			sess := newTestSession("app", "user")
 			first := time.Date(2026, 8, 5, 10, 0, 0, 0, time.UTC)
-			appendSessionMessage(sess, first, model.NewUserMessage("I like tea."))
-
-			require.Error(t, worker.EnqueueJob(context.Background(), sess))
-			assert.True(t, readLastExtractAt(sess).IsZero())
+			appendSessionMessage(sess, first, model.NewUserMessage("I like tea and coffee."))
 
 			require.NoError(t, worker.EnqueueJob(context.Background(), sess))
 			assert.True(t, readLastExtractAt(sess).Equal(first))
+			assert.Equal(t, 2, operator.attempts)
+			assert.Equal(t, 1, operator.addCalls)
+
+			require.NoError(t, worker.EnqueueJob(context.Background(), sess))
 			assert.Equal(t, 2, operator.attempts)
 			assert.Equal(t, 1, operator.addCalls)
 		})
