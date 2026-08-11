@@ -194,7 +194,7 @@ func TestFunctionCallResponseProcessor_RecordsExecutionTraceToolErrors(t *testin
 	require.Equal(t, "call-error", recordedTool.ID)
 	require.Equal(t, "unstable", recordedTool.Name)
 	require.Equal(t, map[string]any{"attempt": float64(1)}, recordedTool.Arguments)
-	require.Empty(t, recordedTool.Result)
+	require.Nil(t, recordedTool.Result)
 	require.Contains(t, recordedTool.Error, "boom")
 	require.Empty(t, executionTrace.Steps[0].Skills)
 }
@@ -280,7 +280,78 @@ func TestFunctionCallResponseProcessor_RecordsParallelTerminalToolErrors(t *test
 	require.Equal(t, "stop", stopTool.Name)
 	require.Equal(t, map[string]any{"index": float64(0)}, stopTool.Arguments)
 	require.Contains(t, stopTool.Error, "stop now")
-	require.Empty(t, stopTool.Result)
+	require.Nil(t, stopTool.Result)
+}
+
+func TestFunctionCallResponseProcessor_RecordsSequentialTerminalToolErrors(t *testing.T) {
+	inv, ctx := newExecutionTraceProcessorInvocation(t)
+	tools := map[string]tool.Tool{
+		"stop": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "stop"},
+			callFn: func(context.Context, []byte) (any, error) {
+				return nil, agent.NewStopError("stop now")
+			},
+		},
+	}
+	rsp := &model.Response{Choices: []model.Choice{{Message: model.Message{ToolCalls: []model.ToolCall{
+		{ID: "call-stop", Function: model.FunctionDefinitionParam{Name: "stop", Arguments: []byte(`{"index":0}`)}},
+	}}}}}
+	_, err := NewFunctionCallResponseProcessor(false, nil).handleFunctionCalls(
+		ctx,
+		inv,
+		rsp,
+		tools,
+		nil,
+	)
+	require.Error(t, err)
+	_, ok := agent.AsStopError(err)
+	require.True(t, ok)
+	executionTrace := agent.BuildExecutionTrace(inv, atrace.TraceStatusFailed)
+	require.NotNil(t, executionTrace)
+	require.Len(t, executionTrace.Steps, 1)
+	require.Len(t, executionTrace.Steps[0].Tools, 1)
+	recordedTool := executionTrace.Steps[0].Tools[0]
+	require.Equal(t, "call-stop", recordedTool.ID)
+	require.Equal(t, "stop", recordedTool.Name)
+	require.Equal(t, map[string]any{"index": float64(0)}, recordedTool.Arguments)
+	require.Contains(t, recordedTool.Error, "stop now")
+	require.Nil(t, recordedTool.Result)
+}
+
+func TestFunctionCallResponseProcessor_RecordsSequentialPerCallTerminalToolErrors(t *testing.T) {
+	inv, ctx := newExecutionTraceProcessorInvocation(t)
+	inv.RunOptions.ToolResultEventPerCallEnabled = true
+	tools := map[string]tool.Tool{
+		"stop": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "stop"},
+			callFn: func(context.Context, []byte) (any, error) {
+				return nil, agent.NewStopError("stop now")
+			},
+		},
+	}
+	rsp := &model.Response{Choices: []model.Choice{{Message: model.Message{ToolCalls: []model.ToolCall{
+		{ID: "call-stop", Function: model.FunctionDefinitionParam{Name: "stop", Arguments: []byte(`{"index":0}`)}},
+	}}}}}
+	_, err := NewFunctionCallResponseProcessor(false, nil).handleFunctionCallsAndSendEventWithRequest(
+		ctx,
+		inv,
+		&model.Request{Tools: tools},
+		rsp,
+		make(chan *event.Event, 1),
+	)
+	require.Error(t, err)
+	_, ok := agent.AsStopError(err)
+	require.True(t, ok)
+	executionTrace := agent.BuildExecutionTrace(inv, atrace.TraceStatusFailed)
+	require.NotNil(t, executionTrace)
+	require.Len(t, executionTrace.Steps, 1)
+	require.Len(t, executionTrace.Steps[0].Tools, 1)
+	recordedTool := executionTrace.Steps[0].Tools[0]
+	require.Equal(t, "call-stop", recordedTool.ID)
+	require.Equal(t, "stop", recordedTool.Name)
+	require.Equal(t, map[string]any{"index": float64(0)}, recordedTool.Arguments)
+	require.Contains(t, recordedTool.Error, "stop now")
+	require.Nil(t, recordedTool.Result)
 }
 
 func TestRecordExecutionTraceToolResults_HandlesEmptyResultsAndNilContext(t *testing.T) {

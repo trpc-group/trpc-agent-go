@@ -10,6 +10,7 @@ package tracecapture
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/trace"
@@ -81,7 +82,7 @@ func parseToolRecordResult(result any, content []byte) any {
 		}
 		marshaled, err := json.Marshal(result)
 		if err != nil {
-			return result
+			return fmt.Sprint(result)
 		}
 		content = marshaled
 	}

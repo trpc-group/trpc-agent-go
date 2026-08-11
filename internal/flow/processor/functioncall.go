@@ -853,6 +853,7 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsWithRequest(
 			ctx, invocation, llmResponse, tools, eventChan, i, tc,
 		)
 		if err != nil {
+			recordExecutionTraceToolResult(ctx, invocation, result)
 			return nil, err
 		}
 		toolResults = append(toolResults, result)
@@ -914,6 +915,7 @@ func (p *FunctionCallResponseProcessor) executeToolCallsSequentiallyAndEmitPerCa
 			toolCall,
 		)
 		if err != nil {
+			recordExecutionTraceToolResult(ctx, invocation, result)
 			return lastEvent, p.finalizeToolRoundError(
 				ctx,
 				invocation,
@@ -1578,15 +1580,13 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequentialResult(
 	choices := execution.choices
 	modifiedArgs := execution.modifiedArgs
 	traceError := ""
+	var returnErr error
 	if err != nil {
-		if execution.shouldIgnoreError {
-			// Create error choice for ignorable errors
-			traceError = err.Error()
-			choice := p.createErrorChoice(index, toolCall.ID, err.Error())
-			choices = []model.Choice{*choice}
-		} else {
-			// Return critical errors (e.g., stop errors) immediately
-			return toolResult{}, err
+		traceError = err.Error()
+		choice := p.createErrorChoice(index, toolCall.ID, err.Error())
+		choices = []model.Choice{*choice}
+		if !execution.shouldIgnoreError {
+			returnErr = err
 		}
 	}
 	toolEvent := p.buildToolCallResponseEvent(
@@ -1670,7 +1670,7 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequentialResult(
 		toolArgs:   modifiedArgs,
 		toolName:   toolCall.Function.Name,
 		traceError: traceError,
-	}, nil
+	}, returnErr
 }
 
 func markSessionAutoMemoryPolluted(

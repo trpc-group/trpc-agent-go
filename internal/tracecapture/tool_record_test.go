@@ -9,12 +9,25 @@
 package tracecapture_test
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/internal/tracecapture"
 )
+
+var errUnmarshalableTraceResult = errors.New("no json")
+
+type unmarshalableTraceResult struct{}
+
+func (unmarshalableTraceResult) MarshalJSON() ([]byte, error) {
+	return nil, errUnmarshalableTraceResult
+}
+
+func (unmarshalableTraceResult) String() string {
+	return "fallback-result"
+}
 
 func TestNewToolRecordParsesArgumentsResultAndLoadedSkill(t *testing.T) {
 	recordedTool := tracecapture.NewToolRecord(tracecapture.ToolRecordInput{
@@ -73,15 +86,12 @@ func TestNewToolRecordHandlesPlainArgumentsAndResultFallbacks(t *testing.T) {
 	})
 	require.Equal(t, map[string]any{}, emptyResultTool.Arguments)
 	require.Nil(t, emptyResultTool.Result)
-	unmarshalable := make(chan int)
 	unmarshalableTool := tracecapture.NewToolRecord(tracecapture.ToolRecordInput{
 		ID:     "call-channel",
 		Name:   "bad",
-		Result: unmarshalable,
+		Result: unmarshalableTraceResult{},
 	})
-	result, ok := unmarshalableTool.Result.(chan int)
-	require.True(t, ok)
-	require.Equal(t, unmarshalable, result)
+	require.Equal(t, "fallback-result", unmarshalableTool.Result)
 }
 
 func TestLoadedSkillFromToolRecordHandlesMissingAndTypedArguments(t *testing.T) {

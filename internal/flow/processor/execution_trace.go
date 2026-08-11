@@ -50,6 +50,14 @@ func recordExecutionTraceToolResults(
 	}
 }
 
+func recordExecutionTraceToolResult(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	result toolResult,
+) {
+	recordExecutionTraceToolResults(ctx, invocation, []toolResult{result}, result.event)
+}
+
 func executionTraceToolsFromResults(
 	results []toolResult,
 	finalEvent *event.Event,

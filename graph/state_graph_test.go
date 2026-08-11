@@ -326,7 +326,7 @@ func TestExecuteSingleToolCall_RecordsExecutionTraceToolMarshalError(t *testing.
 	require.Equal(t, "call-bad", recordedTool.ID)
 	require.Equal(t, "bad", recordedTool.Name)
 	require.Equal(t, map[string]any{"attempt": float64(1)}, recordedTool.Arguments)
-	require.Empty(t, recordedTool.Result)
+	require.Nil(t, recordedTool.Result)
 	require.Contains(t, recordedTool.Error, "failed to marshal tool result")
 }
 
@@ -358,6 +358,7 @@ func TestExecuteSingleToolCall_RecordsPreExecutionTraceToolErrors(t *testing.T) 
 		require.Equal(t, "call-missing", recordedTool.ID)
 		require.Equal(t, "missing", recordedTool.Name)
 		require.Equal(t, map[string]any{"q": "docs"}, recordedTool.Arguments)
+		require.Nil(t, recordedTool.Result)
 		require.Contains(t, recordedTool.Error, "tool missing not found")
 	})
 	t.Run("concurrency acquire", func(t *testing.T) {
@@ -396,6 +397,7 @@ func TestExecuteSingleToolCall_RecordsPreExecutionTraceToolErrors(t *testing.T) 
 		require.Equal(t, "call-limited", recordedTool.ID)
 		require.Equal(t, "limited", recordedTool.Name)
 		require.Equal(t, map[string]any{"q": "docs"}, recordedTool.Arguments)
+		require.Nil(t, recordedTool.Result)
 		require.Contains(t, recordedTool.Error, "wait for tool limited concurrency")
 	})
 }
