@@ -265,6 +265,34 @@ func (c *Capture) SetStepUsage(stepID string, usage *model.Usage) {
 	c.steps[idx].Usage = usage
 }
 
+// addStepTools appends tool records to one recorded step.
+func (c *Capture) addStepTools(stepID string, tools []trace.Tool) {
+	if c == nil || stepID == "" || len(tools) == 0 {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	idx, ok := c.stepIndexByID[stepID]
+	if !ok {
+		return
+	}
+	c.steps[idx].Tools = append(c.steps[idx].Tools, cloneTools(tools)...)
+}
+
+// addStepSkill appends a loaded skill to one recorded step.
+func (c *Capture) addStepSkill(stepID string, skill trace.Skill) {
+	if c == nil || stepID == "" || skill.Name == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	idx, ok := c.stepIndexByID[stepID]
+	if !ok || stepHasSkill(c.steps[idx], skill.Name) {
+		return
+	}
+	c.steps[idx].Skills = append(c.steps[idx].Skills, skill)
+}
+
 // addStepUsage accumulates token usage for one recorded step.
 func (c *Capture) addStepUsage(stepID string, usage *model.Usage) {
 	usage = traceStepUsage(usage)
@@ -414,7 +442,52 @@ func cloneStep(step trace.Step) trace.Step {
 		Input:              cloneSnapshot(step.Input),
 		Output:             cloneSnapshot(step.Output),
 		Usage:              cloneUsage(step.Usage),
+		Tools:              cloneTools(step.Tools),
+		Skills:             slices.Clone(step.Skills),
 		Error:              step.Error,
+	}
+}
+
+func stepHasSkill(step trace.Step, name string) bool {
+	for _, skill := range step.Skills {
+		if skill.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func cloneTools(tools []trace.Tool) []trace.Tool {
+	if tools == nil {
+		return nil
+	}
+	cloned := make([]trace.Tool, len(tools))
+	for i, tool := range tools {
+		cloned[i] = tool
+		cloned[i].Arguments = cloneTraceValue(tool.Arguments)
+		cloned[i].Result = cloneTraceValue(tool.Result)
+	}
+	return cloned
+}
+
+func cloneTraceValue(value any) any {
+	switch v := value.(type) {
+	case map[string]any:
+		cloned := make(map[string]any, len(v))
+		for key, item := range v {
+			cloned[key] = cloneTraceValue(item)
+		}
+		return cloned
+	case []any:
+		cloned := make([]any, len(v))
+		for i, item := range v {
+			cloned[i] = cloneTraceValue(item)
+		}
+		return cloned
+	case []byte:
+		return append([]byte(nil), v...)
+	default:
+		return value
 	}
 }
 
