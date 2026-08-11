@@ -48,6 +48,19 @@ type decoratedExtractor struct {
 	extractor.MemoryExtractor
 }
 
+type requestRecordingModel struct {
+	*mockModel
+	requests []*model.Request
+}
+
+func (m *requestRecordingModel) GenerateContent(
+	ctx context.Context,
+	request *model.Request,
+) (<-chan *model.Response, error) {
+	m.requests = append(m.requests, request)
+	return m.mockModel.GenerateContent(ctx, request)
+}
+
 func (o *countingOperator) SearchMemories(
 	ctx context.Context,
 	userKey memory.UserKey,
@@ -164,6 +177,42 @@ func TestUpdatePolicyFor_RecognizesOnlyBuiltInExtractor(t *testing.T) {
 	))
 }
 
+func TestDecoratedExtractorFallsBackConsistentlyToMergeSimilar(t *testing.T) {
+	for _, policy := range []extractor.UpdatePolicy{
+		extractor.UpdatePolicyMergeSimilar,
+		extractor.UpdatePolicyPreserveHistory,
+		extractor.UpdatePolicyAppendOnly,
+	} {
+		t.Run(string(policy), func(t *testing.T) {
+			args, err := json.Marshal(map[string]any{"memory": "User likes green tea."})
+			require.NoError(t, err)
+			recording := &requestRecordingModel{mockModel: newMockModelWithToolCalls([]model.ToolCall{{
+				Type: "function",
+				Function: model.FunctionDefinitionParam{
+					Name:      memory.AddToolName,
+					Arguments: args,
+				},
+			}})}
+			builtin := extractor.NewExtractor(recording, extractor.WithUpdatePolicy(policy))
+			worker := NewAutoMemoryWorker(
+				AutoMemoryConfig{Extractor: &decoratedExtractor{MemoryExtractor: builtin}},
+				newMockOperator(),
+			)
+
+			require.NoError(t, worker.createAutoMemory(
+				context.Background(),
+				reconcileUserKey(),
+				[]model.Message{model.NewUserMessage("I like green tea.")},
+			))
+			require.Len(t, recording.requests, 1)
+			assert.Contains(t, recording.requests[0].Tools, memory.UpdateToolName)
+			assert.Contains(t, recording.requests[0].Tools, memory.DeleteToolName)
+			assert.Contains(t, recording.requests[0].Tools, memory.ClearToolName)
+			assert.NotContains(t, recording.requests[0].Messages[0].Content, "Use only memory_add")
+		})
+	}
+}
+
 func TestUpdatePolicyMergeSimilar_KeepsOperationFailuresBestEffort(t *testing.T) {
 	ext := &customUpdatePolicyExtractor{
 		mockExtractor: &mockExtractor{ops: []*extractor.Operation{
@@ -244,6 +293,78 @@ func TestPreserveHistoryPolicy_AliceTimeEnrichmentUpdates(t *testing.T) {
 	assert.Equal(t, extractor.OperationUpdate, out[0].Type)
 	assert.Equal(t, "alice-visit", out[0].MemoryID)
 	assert.Equal(t, &newTime, out[0].EventTime)
+}
+
+func TestPreserveHistoryPolicy_RelationDirectionIsNotEnrichment(t *testing.T) {
+	existing := []*memory.Entry{{
+		ID: "manager",
+		Memory: &memory.Memory{
+			Memory: "Alice manages Bob.",
+			Kind:   memory.KindFact,
+		},
+	}}
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
+
+	reversed := worker.reconcilePreserveHistoryOps(
+		context.Background(),
+		reconcileUserKey(),
+		[]*extractor.Operation{{
+			Type:       extractor.OperationAdd,
+			Memory:     "Bob manages Alice.",
+			MemoryKind: memory.KindFact,
+		}},
+		existing,
+		nil,
+	)
+	require.Len(t, reversed, 1)
+	assert.Equal(t, extractor.OperationAdd, reversed[0].Type)
+
+	reversedUpdate := worker.reconcilePreserveHistoryOps(
+		context.Background(),
+		reconcileUserKey(),
+		[]*extractor.Operation{{
+			Type:       extractor.OperationUpdate,
+			MemoryID:   "manager",
+			Memory:     "Bob manages Alice.",
+			MemoryKind: memory.KindFact,
+		}},
+		existing,
+		nil,
+	)
+	require.Len(t, reversedUpdate, 1)
+	assert.Equal(t, extractor.OperationAdd, reversedUpdate[0].Type)
+	assert.Empty(t, reversedUpdate[0].MemoryID)
+
+	enriched := worker.reconcilePreserveHistoryOps(
+		context.Background(),
+		reconcileUserKey(),
+		[]*extractor.Operation{{
+			Type:       extractor.OperationAdd,
+			Memory:     "Alice manages Bob on Team X.",
+			MemoryKind: memory.KindFact,
+		}},
+		existing,
+		nil,
+	)
+	require.Len(t, enriched, 1)
+	assert.Equal(t, extractor.OperationUpdate, enriched[0].Type)
+	assert.Equal(t, "manager", enriched[0].MemoryID)
+
+	enrichedUpdate := worker.reconcilePreserveHistoryOps(
+		context.Background(),
+		reconcileUserKey(),
+		[]*extractor.Operation{{
+			Type:       extractor.OperationUpdate,
+			MemoryID:   "manager",
+			Memory:     "Alice manages Bob on Team X.",
+			MemoryKind: memory.KindFact,
+		}},
+		existing,
+		nil,
+	)
+	require.Len(t, enrichedUpdate, 1)
+	assert.Equal(t, extractor.OperationUpdate, enrichedUpdate[0].Type)
+	assert.Equal(t, "manager", enrichedUpdate[0].MemoryID)
 }
 
 func TestPreserveHistoryPolicy_ExactDuplicateIgnoresTopicDrift(t *testing.T) {
@@ -1317,6 +1438,44 @@ func TestPreserveHistoryPolicy_ForgetRequestFiltersWrites(t *testing.T) {
 		require.Len(t, out, 1)
 		assert.Equal(t, extractor.OperationDelete, out[0].Type)
 		assert.Equal(t, coffee.ID, out[0].MemoryID)
+	})
+
+	t.Run("multi fact target add is filtered", func(t *testing.T) {
+		out := worker.reconcilePreserveHistoryOps(
+			context.Background(),
+			reconcileUserKey(),
+			[]*extractor.Operation{
+				{
+					Type:   extractor.OperationAdd,
+					Memory: "User likes coffee and enjoys hiking.",
+				},
+				{Type: extractor.OperationDelete, MemoryID: coffee.ID},
+			},
+			[]*memory.Entry{coffee},
+			[]model.Message{model.NewUserMessage("Please delete coffee.")},
+		)
+		require.Len(t, out, 1)
+		assert.Equal(t, extractor.OperationDelete, out[0].Type)
+	})
+
+	t.Run("earlier clear does not filter later user fact", func(t *testing.T) {
+		out := worker.reconcilePreserveHistoryOps(
+			context.Background(),
+			reconcileUserKey(),
+			[]*extractor.Operation{
+				{Type: extractor.OperationClear},
+				{Type: extractor.OperationAdd, Memory: "User's name is Alice."},
+			},
+			nil,
+			[]model.Message{
+				model.NewUserMessage("Please clear all my memories."),
+				model.NewAssistantMessage("Understood."),
+				model.NewUserMessage("My name is Alice."),
+			},
+		)
+		require.Len(t, out, 1)
+		assert.Equal(t, extractor.OperationAdd, out[0].Type)
+		assert.Equal(t, "User's name is Alice.", out[0].Memory)
 	})
 
 	t.Run("unrelated add remains", func(t *testing.T) {

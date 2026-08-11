@@ -341,6 +341,9 @@ target. Writes in the same extraction batch cannot recreate information covered
 by an authorized forget request. A tolerated inflection must match the target
 inside one fact segment; tokens from separate facts cannot jointly authorize
 deletion. A later explicit cancellation revokes the earlier authorization.
+Because extracted operations do not carry source-turn provenance, only the
+latest user instruction in an extraction batch can authorize Delete or Clear;
+an older forget request is never applied to writes from a later user turn.
 
 The update policy does not change `memory.Service`, `MemoryExtractor`, the stored
 JSON representation, memory IDs, or database schemas. It does not rewrite

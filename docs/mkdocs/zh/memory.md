@@ -313,6 +313,8 @@ clear 必须来自用户明确且不包含范围或例外条件的“遗忘全�
 遗忘请求只能授权删除内容与目标匹配的记忆；容许的词形变化必须与目标位于同一事实片段，
 不能由不同事实中的 token 共同授权删除。同一轮提取中的写操作不能重新创建已获授权的
 遗忘请求所覆盖的信息。用户后续明确撤销时，旧请求不再授权删除。
+由于提取 operation 不携带来源轮次，只有 extraction batch 中最新的用户指令可以授权
+Delete 或 Clear；更早的遗忘请求不会应用到后续用户轮次产生的写入。
 
 该 update policy 不会修改 `memory.Service`、`MemoryExtractor`、持久化 JSON、memory ID
 或数据库 schema，也不会重写存量记忆。Merge Similar 继续保持原有的 best-effort

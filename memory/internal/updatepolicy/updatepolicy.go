@@ -11,6 +11,7 @@
 package updatepolicy
 
 import (
+	"context"
 	"regexp"
 	"strings"
 
@@ -76,11 +77,14 @@ type DestructiveRequest struct {
 	Explicit bool
 	ClearAll bool
 	Partial  bool
+	Index    int
 }
 
 type provider interface {
 	ConfiguredUpdatePolicy() Value
 }
+
+type workerConfigurationKey struct{}
 
 // From returns the policy carried by a built-in extractor.
 func From(value any) Value {
@@ -91,44 +95,68 @@ func From(value any) Value {
 	return provider.ConfiguredUpdatePolicy()
 }
 
-// LatestDestructiveRequest returns the latest explicit, non-negated user
-// request to remove memory. A later cancellation supersedes an earlier request.
+// WithWorkerConfiguration records the policy selected by an Auto memory
+// worker for one extraction call.
+func WithWorkerConfiguration(ctx context.Context, policy Value) context.Context {
+	return context.WithValue(ctx, workerConfigurationKey{}, policy)
+}
+
+// WorkerConfiguration returns the policy supplied by an Auto memory worker.
+// The second result is false for direct extractor calls outside a worker.
+func WorkerConfiguration(ctx context.Context) (Value, bool) {
+	policy, ok := ctx.Value(workerConfigurationKey{}).(Value)
+	return policy, ok
+}
+
+// LatestDestructiveRequest returns the latest active destructive request and
+// its message index. A later cancellation supersedes an earlier request.
 func LatestDestructiveRequest(messages []model.Message) DestructiveRequest {
 	for index := len(messages) - 1; index >= 0; index-- {
 		message := messages[index]
 		if message.Role != model.RoleUser {
 			continue
 		}
-		text := messageText(message)
-		if matchesAnyPattern(text, destructiveRequestCancellationPatterns) {
-			return DestructiveRequest{}
-		}
-		negated := false
-		for _, pattern := range negatedDestructiveRequestPatterns {
-			negated = negated || pattern.MatchString(text)
-			text = pattern.ReplaceAllString(text, "")
-		}
-		explicit := matchesAnyPattern(text, explicitDestructiveRequestPatterns)
-		if !explicit && !negated {
-			continue
-		}
-		if !explicit {
-			return DestructiveRequest{}
-		}
-		return DestructiveRequest{
-			Text:     text,
-			Explicit: true,
-			ClearAll: matchesAnyPattern(text, explicitClearAllRequestPatterns),
-			Partial:  matchesAnyPattern(text, partialClearRequestPatterns),
+		request, terminal := classifyDestructiveRequest(messageText(message), index)
+		if terminal {
+			return request
 		}
 	}
 	return DestructiveRequest{}
 }
 
-// HasExplicitDestructiveRequest reports whether the latest relevant user
-// instruction explicitly requests removal of memory.
-func HasExplicitDestructiveRequest(messages []model.Message) bool {
-	return LatestDestructiveRequest(messages).Explicit
+// LatestUserDestructiveRequest classifies only the latest user instruction.
+// It is used when operations lack source-turn provenance, so an earlier request
+// cannot authorize destructive operations for a later user turn.
+func LatestUserDestructiveRequest(messages []model.Message) DestructiveRequest {
+	for index := len(messages) - 1; index >= 0; index-- {
+		if messages[index].Role != model.RoleUser {
+			continue
+		}
+		request, _ := classifyDestructiveRequest(messageText(messages[index]), index)
+		return request
+	}
+	return DestructiveRequest{}
+}
+
+func classifyDestructiveRequest(text string, index int) (DestructiveRequest, bool) {
+	if matchesAnyPattern(text, destructiveRequestCancellationPatterns) {
+		return DestructiveRequest{}, true
+	}
+	for _, pattern := range negatedDestructiveRequestPatterns {
+		if pattern.MatchString(text) {
+			return DestructiveRequest{}, true
+		}
+	}
+	if !matchesAnyPattern(text, explicitDestructiveRequestPatterns) {
+		return DestructiveRequest{}, false
+	}
+	return DestructiveRequest{
+		Text:     text,
+		Explicit: true,
+		ClearAll: matchesAnyPattern(text, explicitClearAllRequestPatterns),
+		Partial:  matchesAnyPattern(text, partialClearRequestPatterns),
+		Index:    index,
+	}, true
 }
 
 func messageText(message model.Message) string {

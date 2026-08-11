@@ -9,6 +9,7 @@
 package updatepolicy
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -33,7 +34,26 @@ func TestFrom(t *testing.T) {
 	assert.Empty(t, From(nil))
 }
 
-func TestLatestDestructiveRequest(t *testing.T) {
+func TestWorkerConfiguration(t *testing.T) {
+	_, ok := WorkerConfiguration(context.Background())
+	assert.False(t, ok)
+
+	ctx := WithWorkerConfiguration(context.Background(), Value("append_only"))
+	policy, ok := WorkerConfiguration(ctx)
+	assert.True(t, ok)
+	assert.Equal(t, Value("append_only"), policy)
+}
+
+func TestLatestUserDestructiveRequest(t *testing.T) {
+	textPartMessage := func(text string) model.Message {
+		return model.Message{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{{
+				Type: model.ContentTypeText,
+				Text: &text,
+			}},
+		}
+	}
 	tests := []struct {
 		name     string
 		messages []model.Message
@@ -65,6 +85,33 @@ func TestLatestDestructiveRequest(t *testing.T) {
 			},
 		},
 		{
+			name: "later ordinary instruction",
+			messages: []model.Message{
+				model.NewUserMessage("Please clear all my memories."),
+				model.NewAssistantMessage("Understood."),
+				model.NewUserMessage("My name is Alice."),
+			},
+		},
+		{
+			name:     "partial clear",
+			messages: []model.Message{model.NewUserMessage("Forget everything except my coffee preference.")},
+			want: DestructiveRequest{
+				Text:     "Forget everything except my coffee preference.",
+				Explicit: true,
+				ClearAll: true,
+				Partial:  true,
+			},
+		},
+		{
+			name:     "text content part",
+			messages: []model.Message{textPartMessage("Please forget all stored information.")},
+			want: DestructiveRequest{
+				Text:     "Please forget all stored information.",
+				Explicit: true,
+				ClearAll: true,
+			},
+		},
+		{
 			name:     "negated request",
 			messages: []model.Message{model.NewUserMessage("Do not forget my coffee preference.")},
 		},
@@ -80,8 +127,19 @@ func TestLatestDestructiveRequest(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			assert.Equal(t, test.want, LatestDestructiveRequest(test.messages))
-			assert.Equal(t, test.want.Explicit, HasExplicitDestructiveRequest(test.messages))
+			assert.Equal(t, test.want, LatestUserDestructiveRequest(test.messages))
 		})
 	}
+}
+
+func TestLatestDestructiveRequestTracksEarlierBoundary(t *testing.T) {
+	messages := []model.Message{
+		model.NewUserMessage("Please clear all my memories."),
+		model.NewAssistantMessage("Understood."),
+		model.NewUserMessage("My name is Alice."),
+	}
+	request := LatestDestructiveRequest(messages)
+	assert.True(t, request.Explicit)
+	assert.True(t, request.ClearAll)
+	assert.Equal(t, 0, request.Index)
 }

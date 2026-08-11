@@ -19,6 +19,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/internal/updatepolicy"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/prompt"
 )
@@ -121,20 +122,29 @@ func (e *memoryExtractor) Extract(
 	if len(messages) == 0 {
 		return nil, nil
 	}
+	effective := e
+	if policy, managed := updatepolicy.WorkerConfiguration(ctx); managed {
+		configured := normalizeUpdatePolicy(UpdatePolicy(policy))
+		if configured != e.configuredUpdatePolicy() {
+			copy := *e
+			copy.updatePolicy = configured
+			effective = &copy
+		}
+	}
 
 	// Build request with tool declarations.
 	req := &model.Request{
-		Messages: e.buildMessages(ctx, messages, existing),
-		Tools:    e.extractionTools(),
+		Messages: effective.buildMessages(ctx, messages, existing),
+		Tools:    effective.extractionTools(),
 	}
 
 	// Call model.
-	ctx, rspChan, err := e.runBeforeModelCallbacks(ctx, req)
+	ctx, rspChan, err := effective.runBeforeModelCallbacks(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 	if rspChan == nil {
-		rspChan, err = e.model.GenerateContent(ctx, req)
+		rspChan, err = effective.model.GenerateContent(ctx, req)
 		if err != nil {
 			log.WarnfContext(ctx, "extractor: model call failed: %v", err)
 			return nil, fmt.Errorf("model call failed: %w", err)
@@ -154,7 +164,7 @@ func (e *memoryExtractor) Extract(
 			if !ok {
 				return ops, nil
 			}
-			ctx, rsp, err = e.runAfterModelCallbacks(ctx, req, rsp)
+			ctx, rsp, err = effective.runAfterModelCallbacks(ctx, req, rsp)
 			if err != nil {
 				return nil, err
 			}
@@ -171,7 +181,7 @@ func (e *memoryExtractor) Extract(
 			// tool-call batches, so only the selected primary choice
 			// should be converted into operations.
 			for _, call := range rsp.Choices[0].Message.ToolCalls {
-				op := e.parseToolCall(ctx, call)
+				op := effective.parseToolCall(ctx, call)
 				if op != nil {
 					ops = append(ops, op)
 				}

@@ -223,7 +223,10 @@ func preserveHistoryWriteCoveredByForget(
 	if op.Type == extractor.OperationUpdate && request.authorizesDelete(existingByID[op.MemoryID]) {
 		return true
 	}
-	return request.authorizesDelete(&memory.Entry{Memory: operationMemory(op)})
+	candidate := operationMemory(op)
+	return destructiveTargetMatchesAnyEvidence(
+		destructiveTargetTokens(request.text), candidate.Memory, candidate.Topics,
+	)
 }
 
 func hasExactMemoryDuplicate(
@@ -256,7 +259,7 @@ func operationMemory(op *extractor.Operation) *memory.Memory {
 }
 
 func latestExplicitDestructiveRequest(messages []model.Message) destructiveRequest {
-	request := updatepolicy.LatestDestructiveRequest(messages)
+	request := updatepolicy.LatestUserDestructiveRequest(messages)
 	return destructiveRequest{
 		text:     request.Text,
 		explicit: request.Explicit,
@@ -323,11 +326,19 @@ func destructiveTargetBoundToEvidence(
 	if len(facts) > 1 {
 		return false
 	}
-	if len(facts) == 1 && destructiveTokensMatch(
-		targetTokens,
-		stringSet(BuildSearchTokens(facts[0])),
-	) {
-		return true
+	return destructiveTargetMatchesAnyEvidence(targetTokens, memoryText, topics)
+}
+
+func destructiveTargetMatchesAnyEvidence(
+	targetTokens map[string]struct{},
+	memoryText string,
+	topics []string,
+) bool {
+	for _, fact := range destructiveFactBoundaryPattern.Split(memoryText, -1) {
+		factTokens := stringSet(BuildSearchTokens(fact))
+		if len(factTokens) > 0 && destructiveTokensMatch(targetTokens, factTokens) {
+			return true
+		}
 	}
 	// Topics are independent evidence segments. Never combine topics with one
 	// another or with body text to authorize a destructive operation.
@@ -505,11 +516,33 @@ func classifyPreserveHistoryCandidate(
 	if changeMarkerPattern.MatchString(op.Memory) && !changeMarkerPattern.MatchString(entry.Memory.Memory) {
 		return nil
 	}
+	if !preservesMaterialTokenOrder(entry.Memory.Memory, op.Memory) {
+		return nil
+	}
 	return &preserveHistoryCandidate{
 		entry:       entry,
 		oldCoverage: oldCoverage,
 		newCoverage: newCoverage,
 	}
+}
+
+func preservesMaterialTokenOrder(oldText, newText string) bool {
+	oldTokens := BuildSearchTokens(oldText)
+	newTokens := BuildSearchTokens(newText)
+	if len(oldTokens) == 0 || len(newTokens) == 0 {
+		return false
+	}
+	oldIndex := 0
+	for _, token := range newTokens {
+		if token != oldTokens[oldIndex] {
+			continue
+		}
+		oldIndex++
+		if oldIndex == len(oldTokens) {
+			return true
+		}
+	}
+	return false
 }
 
 func materialTokensPreserved(oldText, newText string) bool {

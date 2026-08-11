@@ -21,6 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
+	"trpc.group/trpc-go/trpc-agent-go/memory/internal/updatepolicy"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -443,7 +444,11 @@ func (w *AutoMemoryWorker) prepareAutoMemoryOperations(
 	}
 
 	// Extract memory operations.
-	ops, err := w.config.Extractor.Extract(ctx, messages, existing)
+	extractionCtx := updatepolicy.WithWorkerConfiguration(
+		ctx,
+		updatepolicy.Value(w.updatePolicy),
+	)
+	ops, err := w.config.Extractor.Extract(extractionCtx, messages, existing)
 	if err != nil {
 		log.WarnfContext(ctx, "auto_memory: extraction failed for user %s/%s: %v",
 			userKey.AppName, userKey.UserID, err)
