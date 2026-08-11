@@ -142,6 +142,10 @@ const (
 	TemplateVariableFieldTraceStepInput TemplateVariableField = "traceStepInput"
 	// TemplateVariableFieldTraceStepOutput extracts the selected trace step output text.
 	TemplateVariableFieldTraceStepOutput TemplateVariableField = "traceStepOutput"
+	// TemplateVariableFieldTraceStepTools extracts the selected trace step tool records.
+	TemplateVariableFieldTraceStepTools TemplateVariableField = "traceStepTools"
+	// TemplateVariableFieldTraceStepSkills extracts the selected trace step skill records.
+	TemplateVariableFieldTraceStepSkills TemplateVariableField = "traceStepSkills"
 	// TemplateVariableFieldRubrics extracts the metric rubrics.
 	TemplateVariableFieldRubrics TemplateVariableField = "rubrics"
 )
