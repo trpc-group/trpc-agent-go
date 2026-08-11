@@ -886,6 +886,39 @@ func TestSummarizeSession_CanceledWhileWaitingForSameKey(t *testing.T) {
 	require.NoError(t, <-firstDone)
 }
 
+func TestSummarizeSession_CanceledDuringSummarizationDoesNotPersist(t *testing.T) {
+	now := time.Now()
+	base := &session.Session{ID: "s1", AppName: "a", UserID: "u"}
+	base.Events = []event.Event{
+		makeEvent("e1", now.Add(-1*time.Minute), "b1"),
+	}
+	s := &blockingSummarizer{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct {
+		updated bool
+		err     error
+	}, 1)
+
+	go func() {
+		updated, err := SummarizeSession(ctx, s, base, "b1", false)
+		done <- struct {
+			updated bool
+			err     error
+		}{updated: updated, err: err}
+	}()
+	<-s.started
+	cancel()
+	close(s.release)
+
+	got := <-done
+	require.ErrorIs(t, got.err, context.Canceled)
+	require.False(t, got.updated)
+	require.Empty(t, base.Summaries)
+}
+
 func TestSummarizeSession_EmptyDelta_WithForce(t *testing.T) {
 	now := time.Now()
 	base := &session.Session{ID: "s1", AppName: "a", UserID: "u"}
