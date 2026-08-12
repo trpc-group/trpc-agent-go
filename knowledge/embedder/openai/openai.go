@@ -269,26 +269,19 @@ func (e *Embedder) GetEmbeddingWithUsage(ctx context.Context, text string) ([]fl
 
 // GetEmbeddings implements the embedder.BatchEmbedder interface.
 //
-// It sends every text in a single OpenAI-compatible embeddings request and
-// returns the vectors in input order, so embeddings[i] corresponds to
-// texts[i]. The batch is never split to satisfy provider limits: the caller
-// chooses a size that fits the model's per-request input, token, and payload
-// limits.
+// It sends every text as the input array of one OpenAI-compatible embeddings
+// request per attempt and returns the vectors in input order, so embeddings[i]
+// corresponds to texts[i]. The batch is never split, so the caller chooses a
+// size that fits the model's per-request input, token, and payload limits.
 //
 // It returns an error when the response cannot be mapped back to the input,
 // which includes a vector count differing from the request and a missing,
 // duplicate, or out-of-range response index.
 func (e *Embedder) GetEmbeddings(ctx context.Context, texts []string) ([][]float64, error) {
-	response, err := e.batchResponseWithRetry(ctx, texts)
+	embeddings, err := e.batchEmbeddingsWithRetry(ctx, texts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create embeddings: %w", err)
 	}
-
-	embeddings, err := embeddingsFromResponse(response, len(texts))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create embeddings: %w", err)
-	}
-
 	return embeddings, nil
 }
 
@@ -308,26 +301,38 @@ func (e *Embedder) responseWithRetry(ctx context.Context, text string) (*openai.
 		})
 }
 
-// batchResponseWithRetry wraps batchResponse with the same retry policy as the
-// single-text path. A batch is retried as a whole and is never split into
-// per-text requests, which would multiply the request count and could mask a
-// provider protocol error.
-func (e *Embedder) batchResponseWithRetry(
+// batchEmbeddingsWithRetry runs batchResponse under the same retry policy as
+// the single-text path and returns the vectors of the attempt that succeeded.
+// A batch is retried as a whole and is never split into per-text requests,
+// which would multiply the request count and could mask a provider protocol
+// error.
+//
+// Unlike the single-text path, which returns the response so that
+// GetEmbeddingWithUsage can read its usage, nothing here needs the response
+// itself, so the mapping validated during the attempt is the result.
+func (e *Embedder) batchEmbeddingsWithRetry(
 	ctx context.Context,
 	texts []string,
-) (*openai.CreateEmbeddingResponse, error) {
-	return e.withRetry(ctx, "embedding batch request",
+) ([][]float64, error) {
+	var embeddings [][]float64
+	_, err := e.withRetry(ctx, "embedding batch request",
 		func() string { return fmt.Sprintf("inputs=%d input_len=%d", len(texts), totalRuneCount(texts)) },
 		func() (*openai.CreateEmbeddingResponse, error) {
 			rsp, err := e.batchResponse(ctx, texts)
 			if err != nil {
 				return nil, err
 			}
-			if _, err := embeddingsFromResponse(rsp, len(texts)); err != nil {
+			mapped, err := embeddingsFromResponse(rsp, len(texts))
+			if err != nil {
 				return nil, err
 			}
+			embeddings = mapped
 			return rsp, nil
 		})
+	if err != nil {
+		return nil, err
+	}
+	return embeddings, nil
 }
 
 // withRetry runs attempt until it succeeds or the retry budget is exhausted,
