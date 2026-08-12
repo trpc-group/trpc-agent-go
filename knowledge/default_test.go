@@ -3438,6 +3438,78 @@ func TestLoad_EmbeddingBatch_ProgressReportsEveryStepBoundary(t *testing.T) {
 	}
 }
 
+// TestLoad_EmbeddingBatch_ErrorProgressCountsPartialWrites pins that a store
+// failure inside a batch reports the documents that batch already wrote. A
+// batch writes one document at a time and keeps the completed writes, so an
+// event reporting the batch start would disagree with what is persisted.
+func TestLoad_EmbeddingBatch_ErrorProgressCountsPartialWrites(t *testing.T) {
+	tests := []struct {
+		name           string
+		docCount       int
+		batchSize      int
+		docConcurrency int
+		failAfter      int
+		want           int
+	}{
+		// The first batch stores three documents, then the second document of
+		// the second batch fails, leaving four documents persisted.
+		{name: "sequential", docCount: 6, batchSize: 3, docConcurrency: 1, failAfter: 4, want: 4},
+		// One batch keeps the failing write deterministic under concurrency:
+		// the second write of the only batch fails after one document.
+		{name: "concurrent", docCount: 3, batchSize: 3, docConcurrency: 2, failAfter: 1, want: 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &batchRecordingVectorStore{failAfter: tt.failAfter}
+			kb := New(WithSources([]source.Source{&mockSource{name: "test", docCount: tt.docCount}}))
+			kb.vectorStore = store
+			kb.embedder = &recordingBatchEmbedder{}
+
+			var mu sync.Mutex
+			var reported []int
+
+			err := kb.Load(context.Background(),
+				WithSourceConcurrency(1),
+				WithDocConcurrency(tt.docConcurrency),
+				WithEmbeddingBatchSize(tt.batchSize),
+				WithShowProgress(false),
+				WithShowStats(false),
+				WithLoadProgressCallback(func(_ context.Context, ev LoadProgressEvent) {
+					if ev.Err == nil {
+						return
+					}
+					mu.Lock()
+					reported = append(reported, ev.SourceProcessed)
+					mu.Unlock()
+				}),
+			)
+			if err == nil {
+				t.Fatal("Load() error = nil, want the simulated store failure")
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+			// The concurrent path reports the failing unit of work and then
+			// the failing source, so every error event must agree.
+			if len(reported) == 0 {
+				t.Fatal("no error event was reported")
+			}
+			for _, got := range reported {
+				if got != tt.want {
+					t.Errorf("SourceProcessed on failure = %v, want every error event to report %d",
+						reported, tt.want)
+					break
+				}
+			}
+			if got := store.storedCount(); got != tt.want {
+				t.Errorf("documents persisted = %d, want %d, so the event disagrees with the store",
+					got, tt.want)
+			}
+		})
+	}
+}
+
 // TestLoad_EmbeddingBatch_DoesNotBatchAcrossSources pins the documented
 // per-source request count: a batch never spans sources, so k sources issue
 // the sum of ceil(Ni/B) requests rather than ceil(N/B).

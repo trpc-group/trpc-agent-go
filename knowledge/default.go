@@ -526,12 +526,15 @@ func (dk *BuiltinKnowledge) loadSequential(
 			end := min(start+step, len(docs))
 			batch := docs[start:end]
 
-			if err := dk.processBatch(ctx, plan, batch, src); err != nil {
+			stored, err := dk.processBatch(ctx, plan, batch, src)
+			if err != nil {
 				log.ErrorfContext(ctx, "Failed to add document from source %s: %v",
 					sourceName, err)
+				// A batch keeps the writes it completed before the failure, so
+				// the event counts them rather than the batch start.
 				reporter.Error(ctx, LoadProgressEvent{
 					SourceName:      sourceName,
-					SourceProcessed: start,
+					SourceProcessed: start + stored,
 					SourceTotal:     len(docs),
 					SourceElapsed:   time.Since(srcStartTime),
 				}, err)
@@ -683,10 +686,16 @@ func (dk *BuiltinKnowledge) processDocuments(
 	processTask := func(batch []*document.Document) func() {
 		return func() {
 			defer wgDoc.Done()
-			if err := dk.processBatch(ctx, plan, batch, src); err != nil {
+			stored, err := dk.processBatch(ctx, plan, batch, src)
+			if err != nil {
+				// A batch keeps the writes it completed before the failure, so
+				// they count towards the source and global totals before the
+				// event is reported.
+				processed := int(completedCount.Add(int64(stored)))
+				globalProcessed.Add(int64(stored))
 				reporter.Error(ctx, LoadProgressEvent{
 					SourceName:      src.Name(),
-					SourceProcessed: int(completedCount.Load()),
+					SourceProcessed: processed,
 					SourceTotal:     len(docs),
 					SourceElapsed:   time.Since(startTime),
 				}, err)
@@ -881,62 +890,74 @@ func (dk *BuiltinKnowledge) resolveBatchPlan(ctx context.Context, config *loadCo
 	return batchPlan{embedder: batchEmbedder, size: config.embeddingBatchSize}
 }
 
-// processBatch ingests one unit of work. When batching is inactive the batch
-// holds exactly one document and the unchanged per-document path runs,
-// including source sync bookkeeping.
+// processBatch ingests one unit of work and reports how many of its documents
+// reached the vector store. When batching is inactive the batch holds exactly
+// one document and the unchanged per-document path runs, including source sync
+// bookkeeping.
+//
+// An error can come with a positive count, because a batch writes its
+// documents one at a time and keeps the writes that already succeeded. Callers
+// use the count so that progress reported for a failed unit of work matches
+// what is persisted.
 func (dk *BuiltinKnowledge) processBatch(
 	ctx context.Context,
 	plan batchPlan,
 	batch []*document.Document,
 	src source.Source,
-) error {
+) (int, error) {
 	if plan.size <= 1 {
-		return dk.addDocumentWithSync(ctx, batch[0], src)
+		if err := dk.addDocumentWithSync(ctx, batch[0], src); err != nil {
+			return 0, err
+		}
+		return 1, nil
 	}
 	return dk.embedAndStoreBatch(ctx, plan.embedder, batch)
 }
 
 // embedAndStoreBatch embeds every document of the batch with a single provider
 // request, validates the complete response, and only then writes the vectors
-// to the store.
+// to the store. It reports how many documents reached the store.
 //
 // A rejected request or response stores no document of the batch. A store
-// failure part-way through keeps the documents already written and returns the
-// error, matching the non-transactional semantics of the per-document path.
+// failure part-way through keeps the documents already written and returns
+// their count with the error, matching the non-transactional semantics of the
+// per-document path.
 func (dk *BuiltinKnowledge) embedAndStoreBatch(
 	ctx context.Context,
 	batchEmbedder embedder.BatchEmbedder,
 	docs []*document.Document,
-) error {
+) (int, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return 0, err
 	}
 	if dk.vectorStore == nil {
-		return fmt.Errorf("vector store is not configured")
+		return 0, fmt.Errorf("vector store is not configured")
 	}
 	texts := make([]string, len(docs))
 	for i, doc := range docs {
 		if doc == nil {
-			return fmt.Errorf("document at index %d is nil", i)
+			return 0, fmt.Errorf("document at index %d is nil", i)
 		}
 		texts[i] = buildEmbeddingText(doc)
 	}
 	embeddings, err := batchEmbedder.GetEmbeddings(ctx, texts)
 	if err != nil {
-		return fmt.Errorf("failed to generate embedding batch: %w", err)
+		return 0, fmt.Errorf("failed to generate embedding batch: %w", err)
 	}
 	if err := validateEmbeddingBatch(ctx, embeddings, len(docs), batchEmbedder.GetDimensions()); err != nil {
-		return err
+		return 0, err
 	}
+	stored := 0
 	for i, doc := range docs {
 		if err := ctx.Err(); err != nil {
-			return err
+			return stored, err
 		}
 		if err := dk.vectorStore.Add(ctx, doc, embeddings[i]); err != nil {
-			return fmt.Errorf("failed to store embedding for document %s: %w", doc.ID, err)
+			return stored, fmt.Errorf("failed to store embedding for document %s: %w", doc.ID, err)
 		}
+		stored++
 	}
-	return nil
+	return stored, nil
 }
 
 // validateEmbeddingBatch verifies a batch response before any vector store
