@@ -54,7 +54,7 @@ var (
 	input = flag.String("input", util.ExampleDataPath("file/llm.md"),
 		"Local file to index")
 	showFallback = flag.Bool("show-fallback", false,
-		"Add a load with an embedder that has no batch support, which costs one more request per document")
+		"Add a load with an embedder that has no batch support, which issues one request per document")
 )
 
 // runResult records what one load reported.
