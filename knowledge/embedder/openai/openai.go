@@ -424,10 +424,12 @@ func embeddingsFromResponse(
 		if !item.JSON.Index.Valid() {
 			return nil, fmt.Errorf("embedding response item %d is missing its index", i)
 		}
-		index := int(item.Index)
-		if index < 0 || index >= expected {
+		// Compare the response value before narrowing it: int is 32 bits on
+		// some targets, where a larger index would wrap into a valid slot.
+		if item.Index < 0 || item.Index >= int64(expected) {
 			return nil, fmt.Errorf("embedding response index out of range: %d", item.Index)
 		}
+		index := int(item.Index)
 		if embeddings[index] != nil {
 			return nil, fmt.Errorf("embedding response contains duplicate index: %d", item.Index)
 		}

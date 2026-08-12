@@ -495,6 +495,19 @@ func TestEmbedder_GetEmbeddings_RejectsUnmappableResponse(t *testing.T) {
 			},
 		},
 		{
+			// Where int is 32 bits, narrowing this index before the range
+			// check wraps it to the valid slot 0, so the check compares the
+			// response value itself. The literal is typed to keep the test
+			// buildable on those targets.
+			name: "index beyond the 32-bit range",
+			data: func(inputs []string) []map[string]any {
+				return []map[string]any{
+					{"object": "embedding", "index": int64(1) << 32, "embedding": []float64{1}},
+					embeddingItem(1, []float64{2}),
+				}
+			},
+		},
+		{
 			name: "empty vector",
 			data: func(inputs []string) []map[string]any {
 				return []map[string]any{
