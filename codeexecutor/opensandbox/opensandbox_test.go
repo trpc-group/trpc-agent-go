@@ -1439,6 +1439,21 @@ func TestInvariant_Lifecycle_PublicCleanupExplicitLabel(t *testing.T) {
 	require.Equal(t, "ws_"+stableWorkspaceHash(key), path.Base(ws.Path))
 
 	require.NoError(t, exec.CleanupExecution(ctx, label))
+
+	// Verify rm -rf was actually sent for the resolved workspace path,
+	// not just that CleanupExecution returned nil. Without this assertion
+	// a no-op implementation would pass the test.
+	m.mu.Lock()
+	cmds := append([]string(nil), m.commands...)
+	m.mu.Unlock()
+	sawRm := false
+	for _, c := range cmds {
+		if strings.Contains(c, "rm -rf") && strings.Contains(c, ws.Path) {
+			sawRm = true
+			break
+		}
+	}
+	assert.True(t, sawRm, "CleanupExecution must issue rm -rf on the resolved path")
 }
 
 // TestInvariant_Output_MultiEventNewlines locks SDK Execution.Text() join
@@ -1624,18 +1639,28 @@ func TestInvariant_Lifecycle_CleanupSessionRetainsOnFailure(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Cancelled ctx: CleanupSession must still attempt cleanup via detached
-	// context, and if we force failure by closing sandbox first...
-	// Use cancelled ctx; cleanupContext detaches so rm should still run.
-	canceled, cancel := context.WithCancel(ctx)
-	cancel()
-	// Even with canceled parent, cleanupContext uses WithoutCancel so success expected.
-	err = exec.CleanupSession(canceled)
-	// Should succeed because cleanupContext detaches cancellation.
-	require.NoError(t, err)
+	// Inject cleanup failure: force infra commands (rm -rf) to exit
+	// non-zero so Cleanup returns an error. Tracking must be retained
+	// so a later retry can succeed.
+	m.mu.Lock()
+	nonZero := 1
+	m.exitCode = &nonZero
+	m.forceInfraExit = true
+	m.mu.Unlock()
 
-	// After success, tracking should be gone; second cleanup is still safe.
-	require.NoError(t, exec.CleanupSession(ctx))
+	err = exec.CleanupSession(ctx)
+	require.Error(t, err, "CleanupSession must fail when rm -rf fails")
+
+	// Tracking must be retained: clear the failure and retry.
+	m.mu.Lock()
+	m.exitCode = nil
+	m.forceInfraExit = false
+	m.mu.Unlock()
+
+	// Second CleanupSession must succeed — proving the tracking entry
+	// was retained across the failed first attempt.
+	require.NoError(t, exec.CleanupSession(ctx),
+		"CleanupSession retry must succeed after clearing injected failure")
 }
 
 // TestInvariant_Isolation_SkillRegistryKeyMatchesSessionKey ensures that when

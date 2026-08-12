@@ -3573,6 +3573,31 @@ func TestRunProgram_RejectsUnsupportedLimits(t *testing.T) {
 	assert.Equal(t, 0, res.ExitCode)
 }
 
+func TestRunProgram_RejectsEmptyCmd(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	zero := 0
+	m.setExitCode(zero)
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-empty-cmd", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	_, err = exec.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{
+		Cmd: "",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Cmd must not be empty")
+
+	// Whitespace-only Cmd is also rejected.
+	_, err = exec.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{
+		Cmd: "   ",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Cmd must not be empty")
+}
+
 func TestValidateWorkspacePolicy_ZeroOK(t *testing.T) {
 	require.NoError(t, validateWorkspacePolicy(codeexecutor.WorkspacePolicy{}))
 	require.NoError(t, validateWorkspacePolicy(codeexecutor.WorkspacePolicy{Isolated: true}))

@@ -54,6 +54,11 @@ func (r *workspaceRuntime) RunProgram(
 	if err := r.validateWorkspace(ws); err != nil {
 		return codeexecutor.RunResult{}, err
 	}
+	if strings.TrimSpace(spec.Cmd) == "" {
+		return codeexecutor.RunResult{}, errors.New(
+			"opensandbox: RunProgramSpec.Cmd must not be empty",
+		)
+	}
 	// Fail closed on per-run ResourceLimits: OpenSandbox only accepts
 	// resource caps at sandbox create time (WithResourceLimits). Silently
 	// ignoring non-zero Limits would look like a cgroup policy was applied.
