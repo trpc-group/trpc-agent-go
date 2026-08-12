@@ -20,6 +20,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 )
@@ -611,6 +612,7 @@ func TestLinuxPreflightUnsupportedBackendAndProbeError(t *testing.T) {
 		ws.Path,
 		nil,
 		codeexecutor.RunProgramSpec{Cmd: "true"},
+		sandboxDenialRun{},
 	)
 	if backend != string(BackendLinuxBubblewrap) || !isKind(err, ErrUnsupportedBackend) {
 		t.Fatalf("osSandboxCommand backend=%q err=%v, want bubblewrap unsupported", backend, err)
@@ -703,6 +705,38 @@ exit 1
 	}
 }
 
+func TestLinuxCommandForProfileManagedUsesOSSandboxCommand(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	rt.preflightOnce.Do(func() {
+		rt.bwrapPath = "/bin/true"
+	})
+	ws, err := rt.CreateWorkspace(context.Background(), "linux/command-for-managed", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd, backend, cleanup, err := rt.commandForProfile(
+		context.Background(),
+		WorkspaceWriteProfile(),
+		ws,
+		filepath.Join(ws.Path, "work"),
+		[]string{"SANDBOX_TEST=1"},
+		codeexecutor.RunProgramSpec{Cmd: "/bin/echo", Args: []string{"ok"}},
+		sandboxDenialRun{enabled: true, runTag: "TRPC_RUN_test_END_0123456789abcdef_SBX"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if backend != string(BackendLinuxBubblewrap) {
+		t.Fatalf("backend = %q, want %q", backend, BackendLinuxBubblewrap)
+	}
+	if cmd == nil || cmd.Path != "/bin/true" {
+		t.Fatalf("cmd = %#v, want fake bwrap command", cmd)
+	}
+}
+
 func TestLinuxSandboxCommandBindsDenyReadDataFDAndCleansSyntheticTargets(t *testing.T) {
 	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
 	rt.preflightOnce.Do(func() {
@@ -722,6 +756,7 @@ func TestLinuxSandboxCommandBindsDenyReadDataFDAndCleansSyntheticTargets(t *test
 		filepath.Join(ws.Path, "work"),
 		[]string{"SANDBOX_TEST=1"},
 		codeexecutor.RunProgramSpec{Cmd: "/bin/echo", Args: []string{"ok"}},
+		sandboxDenialRun{},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -774,6 +809,7 @@ func TestLinuxSandboxCommandPropagatesSetupError(t *testing.T) {
 		filepath.Join(ws.Path, "work"),
 		nil,
 		codeexecutor.RunProgramSpec{Cmd: "true"},
+		sandboxDenialRun{},
 	)
 	if backend != string(BackendLinuxBubblewrap) || err == nil || cleanup != nil {
 		t.Fatalf("osSandboxCommand backend=%q cleanup=%v err=%v, want setup error", backend, cleanup, err)
@@ -798,6 +834,7 @@ func TestLinuxSandboxCommandPrepareAndArgsErrors(t *testing.T) {
 		ws.Path,
 		nil,
 		codeexecutor.RunProgramSpec{Cmd: "true"},
+		sandboxDenialRun{},
 	)
 	if backend != string(BackendLinuxBubblewrap) || err == nil {
 		t.Fatalf("osSandboxCommand backend=%q err=%v, want prepare error", backend, err)
@@ -922,6 +959,81 @@ func TestLinuxWorkspaceMountTargetBranches(t *testing.T) {
 	if err != nil || ok || target != "" {
 		t.Fatalf("unknown target=%q ok=%v err=%v, want skipped", target, ok, err)
 	}
+}
+
+func TestLinuxManagedRunWithDiagnosticsCoversNoopBackend(t *testing.T) {
+	rt, ws := newLinuxDiagnosticsTestRuntime(t, "success")
+	ctx, diagnosticsCh := WithDiagnostics(context.Background())
+	result, err := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+		Cmd: "/bin/echo",
+	})
+	if err != nil {
+		t.Fatalf("RunProgram: %v", err)
+	}
+	if result.ExitCode != 0 {
+		t.Fatalf("ExitCode = %d, want 0", result.ExitCode)
+	}
+	if diagnostics := readDiagnostics(t, diagnosticsCh); len(diagnostics.Denials) != 0 ||
+		diagnostics.Truncated {
+		t.Fatalf("diagnostics = %#v, want zero value", diagnostics)
+	}
+}
+
+func TestLinuxManagedRunWithDiagnosticsCanceledContext(t *testing.T) {
+	rt, ws := newLinuxDiagnosticsTestRuntime(t, "canceled")
+	base, diagnosticsCh := WithDiagnostics(context.Background())
+	ctx, cancel := context.WithCancel(base)
+	cancel()
+	result, err := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+		Cmd: "/bin/echo",
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("RunProgram error = %v, want context.Canceled", err)
+	}
+	if result.TimedOut {
+		t.Fatalf("TimedOut = true for cancellation: %#v", result)
+	}
+	_ = readDiagnostics(t, diagnosticsCh)
+}
+
+func TestLinuxManagedRunWithDiagnosticsExpiredDeadline(t *testing.T) {
+	rt, ws := newLinuxDiagnosticsTestRuntime(t, "deadline")
+	base, diagnosticsCh := WithDiagnostics(context.Background())
+	ctx, cancel := context.WithDeadline(base, time.Now().Add(-time.Second))
+	defer cancel()
+	result, err := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+		Cmd: "/bin/echo",
+	})
+	if !isKind(err, ErrTimeout) {
+		t.Fatalf("RunProgram error = %v, want ErrTimeout", err)
+	}
+	if !result.TimedOut || result.ExitCode != -1 {
+		t.Fatalf("result = %#v, want timed out exit -1", result)
+	}
+	_ = readDiagnostics(t, diagnosticsCh)
+}
+
+func newLinuxDiagnosticsTestRuntime(
+	t *testing.T,
+	name string,
+) (*Runtime, codeexecutor.Workspace) {
+	t.Helper()
+	rt := NewRuntime(
+		WithWorkspaceRoot(t.TempDir()),
+		WithPermissionProfile(WorkspaceWriteProfile()),
+	)
+	rt.preflightOnce.Do(func() {
+		rt.bwrapPath = "/bin/true"
+	})
+	ws, err := rt.CreateWorkspace(
+		context.Background(),
+		"linux/diagnostics-"+name,
+		codeexecutor.WorkspacePolicy{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rt, ws
 }
 
 func hasArgPair(args []string, first, second string) bool {

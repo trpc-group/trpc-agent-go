@@ -160,7 +160,7 @@ func (r *Runtime) prepareProcess(
 	}
 	env := r.buildProcessEnvironment(ws, spec)
 	cmd, backendName, backendCleanup, err := r.commandForProfile(
-		runCtx, prep.profile, ws, prep.cwd, env, runSpec,
+		runCtx, prep.profile, ws, prep.cwd, env, runSpec, sandboxDenialRun{},
 	)
 	if err != nil {
 		cancel()
