@@ -101,10 +101,10 @@ func (lr *loadReporter) Progress(ctx context.Context, prevProcessed int, ev Load
 //
 // An update that advances the count by one document crosses a boundary
 // exactly when the new count is a multiple of the step size, so the
-// per-document path keeps reporting the same updates as before. An update
-// that advances the count by a whole batch reports the first update past each
-// boundary, carrying the real document count, instead of skipping boundaries
-// the batch stepped over.
+// per-document path keeps reporting the same updates as before. An update that
+// advances the count by a whole batch is reported when it moves the count into
+// a later step, so one batch yields at most one update however many boundaries
+// it crossed, and that update carries the real document count.
 func (lr *loadReporter) shouldReport(prevProcessed int, ev LoadProgressEvent) bool {
 	if ev.SourceProcessed == ev.SourceTotal {
 		return true

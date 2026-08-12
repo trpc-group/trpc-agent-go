@@ -150,10 +150,10 @@ func WithShowProgress(show bool) LoadOption {
 // <= 0 reports every update.
 //
 // When embedding batching is active (see WithEmbeddingBatchSize) a single
-// update can advance the count by a whole batch. The first update past a
-// boundary is then reported with the number of documents actually processed,
-// so a batch larger than stepSize does not skip the boundaries it stepped
-// over.
+// update can advance the count by a whole batch. A batch that crosses one or
+// more boundaries then triggers at most one update, carrying the number of
+// documents actually processed rather than a multiple of stepSize, so an
+// update is not dropped for landing between boundaries.
 func WithProgressStepSize(stepSize int) LoadOption {
 	return func(lc *loadConfig) {
 		lc.progressStepSize = stepSize
