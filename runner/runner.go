@@ -2644,24 +2644,9 @@ func (r *runner) handleFlushRequest(
 	}
 }
 
-// handleEventPersistence appends qualifying events to the session and triggers
-// asynchronous summarization.
-func (r *runner) handleEventPersistence(
-	ctx context.Context,
-	invocation *agent.Invocation,
-	sess *session.Session,
-	persistSession *session.Session,
-	agentEvent *event.Event,
-) bool {
-	return r.handleEventPersistenceCore(
-		ctx,
-		invocation,
-		sess,
-		persistSession,
-		agentEvent,
-	)
-}
-
+// handleEventPersistenceOnce coordinates persistence by event ID. Successful
+// persistence is not repeated within the deduper's lifetime, while failed
+// attempts remain retryable.
 func (r *runner) handleEventPersistenceOnce(
 	ctx context.Context,
 	invocation *agent.Invocation,
@@ -2681,7 +2666,7 @@ func (r *runner) handleEventPersistenceOnce(
 	defer func() {
 		complete(persisted)
 	}()
-	return r.handleEventPersistenceCore(
+	return r.handleEventPersistence(
 		ctx,
 		invocation,
 		sess,
@@ -2690,7 +2675,9 @@ func (r *runner) handleEventPersistenceOnce(
 	)
 }
 
-func (r *runner) handleEventPersistenceCore(
+// handleEventPersistence appends qualifying events to the session and triggers
+// asynchronous summarization.
+func (r *runner) handleEventPersistence(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	sess *session.Session,
