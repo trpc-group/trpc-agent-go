@@ -3062,18 +3062,18 @@ func TestLoad_EmbeddingBatch_BindsVectorsToDocuments(t *testing.T) {
 	}
 }
 
-// countingEmbedder implements only embedder.Embedder, so ingestion cannot use
+// recordingEmbedder implements only embedder.Embedder, so ingestion cannot use
 // the batch path with it.
-type countingEmbedder struct {
+type recordingEmbedder struct {
 	calls atomic.Int64
 }
 
-func (e *countingEmbedder) GetEmbedding(_ context.Context, text string) ([]float64, error) {
+func (e *recordingEmbedder) GetEmbedding(_ context.Context, text string) ([]float64, error) {
 	e.calls.Add(1)
 	return embeddingForText(text), nil
 }
 
-func (e *countingEmbedder) GetEmbeddingWithUsage(
+func (e *recordingEmbedder) GetEmbeddingWithUsage(
 	ctx context.Context,
 	text string,
 ) ([]float64, map[string]any, error) {
@@ -3081,7 +3081,7 @@ func (e *countingEmbedder) GetEmbeddingWithUsage(
 	return embedding, nil, err
 }
 
-func (*countingEmbedder) GetDimensions() int { return 3 }
+func (*recordingEmbedder) GetDimensions() int { return 3 }
 
 // TestLoad_EmbeddingBatch_FallsBackToSingleRequests verifies that the
 // per-document path stays in effect whenever batching cannot be applied, still
@@ -3105,7 +3105,7 @@ func TestLoad_EmbeddingBatch_FallsBackToSingleRequests(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			batchCapable := &recordingBatchEmbedder{}
-			plain := &countingEmbedder{}
+			plain := &recordingEmbedder{}
 			kb := New(
 				WithSources([]source.Source{&mockSource{name: "test", docCount: docCount}}),
 				WithEnableSourceSync(tt.sourceSync),
