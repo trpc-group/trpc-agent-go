@@ -16,8 +16,8 @@ import (
 	"database/sql"
 	"testing"
 
-	"github.com/stretchr/testify/require"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	memSQLite "trpc.group/trpc-go/trpc-agent-go/memory/sqlite"
