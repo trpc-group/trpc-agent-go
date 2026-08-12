@@ -42,6 +42,7 @@ func (s *resolverStubExec) Engine() codeexecutor.Engine { return s.eng }
 
 type resolverStubMgr struct {
 	created []string
+	cleans  []string
 }
 
 func (m *resolverStubMgr) CreateWorkspace(
@@ -53,7 +54,8 @@ func (m *resolverStubMgr) CreateWorkspace(
 	return codeexecutor.Workspace{ID: id, Path: "/tmp/" + id}, nil
 }
 
-func (*resolverStubMgr) Cleanup(context.Context, codeexecutor.Workspace) error {
+func (m *resolverStubMgr) Cleanup(_ context.Context, ws codeexecutor.Workspace) error {
+	m.cleans = append(m.cleans, ws.ID)
 	return nil
 }
 
@@ -347,20 +349,31 @@ func TestResolver_CreateWorkspace_EmptySessionIDUsesEphemeralKey(t *testing.T) {
 	ws1, err := r.CreateWorkspace(ctx, eng, "skill-name")
 	require.NoError(t, err)
 	require.NotEqual(t, "skill-name", ws1.ID)
-	require.True(t, strings.HasPrefix(ws1.ID, "ephemeral-empty-session-"))
+	require.True(t, strings.HasPrefix(ws1.ID, "ephemeral-invocation-"),
+		"ephemeral key must be derived from InvocationID")
+	require.Contains(t, ws1.ID, inv.InvocationID,
+		"ephemeral key must embed the InvocationID for per-invocation stability")
+
+	// Same invocation reuses the same workspace (cached by stable key).
+	ws1b, err := r.CreateWorkspace(ctx, eng, "skill-name")
+	require.NoError(t, err)
+	require.Equal(t, ws1, ws1b, "same invocation must reuse the ephemeral workspace")
+	require.Len(t, mgr.created, 1, "second call must hit cache, not create a new workspace")
+
+	// Different invocation gets a different workspace.
 	inv2 := agent.NewInvocation()
 	inv2.Session = &session.Session{}
 	ctx2 := agent.NewInvocationContext(context.Background(), inv2)
 	ws2, err := r.CreateWorkspace(ctx2, eng, "skill-name")
 	require.NoError(t, err)
-	require.NotEqual(t, ws1.ID, ws2.ID)
+	require.NotEqual(t, ws1.ID, ws2.ID, "different invocations must get different ephemeral keys")
 	require.NotContains(t, mgr.created, "skill-name")
 }
 
 // TestResolver_ReleaseWorkspaceHandle_CleansEphemeralWorkspace verifies
-// that the public ReleaseWorkspaceHandle method cleans up ephemeral
-// workspaces created for invalid sessions, addressing the lifecycle
-// concern that ephemeral workspaces had no cleanup path.
+// that the public ReleaseWorkspaceHandle method actually invokes Cleanup
+// on the manager — not just returning nil. This guards against regressions
+// where the release path silently becomes a no-op.
 func TestResolver_ReleaseWorkspaceHandle_CleansEphemeralWorkspace(t *testing.T) {
 	mgr := &resolverStubMgr{}
 	eng := newResolverStubEngine(mgr)
@@ -372,9 +385,15 @@ func TestResolver_ReleaseWorkspaceHandle_CleansEphemeralWorkspace(t *testing.T) 
 	handle, err := r.CreateWorkspaceHandle(ctx, eng, "skill-name")
 	require.NoError(t, err)
 	require.NotEqual(t, "", handle.Workspace.ID, "handle must reference a workspace")
+	require.Len(t, mgr.cleans, 0, "no cleanup before Release")
 
-	// ReleaseWorkspaceHandle must clean up the ephemeral workspace
-	// without error — this is the public cleanup path that was
-	// previously missing.
+	// ReleaseWorkspaceHandle must actually call Cleanup on the manager.
 	require.NoError(t, r.ReleaseWorkspaceHandle(ctx, handle))
+	require.Len(t, mgr.cleans, 1, "Release must invoke Cleanup exactly once")
+	require.Equal(t, handle.Workspace.ID, mgr.cleans[0],
+		"Cleanup must be called for the released workspace")
+
+	// After release, the workspace must no longer be in the registry cache.
+	_, ok := r.reg.Get(handle.Workspace.ID)
+	require.False(t, ok, "released workspace must not remain in registry cache")
 }

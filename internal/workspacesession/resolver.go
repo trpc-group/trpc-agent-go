@@ -76,10 +76,15 @@ func (r *Resolver) CreateWorkspace(
 // the registry token required for ABA-safe conditional invalidation.
 //
 // If the invocation carries a Session without a stable ID, an ephemeral
-// workspace key (UUID-based) is used so placeholder sessions cannot share
-// a durable tool/skill name key. The returned WorkspaceHandle exposes
-// the entryToken required for cleanup via InvalidateWorkspaceHandle or
-// ReleaseWorkspaceHandle.
+// workspace key derived from InvocationID is used so placeholder sessions
+// cannot share a durable tool/skill name key, while still allowing multiple
+// tool calls within the same invocation to reuse one workspace. The returned
+// WorkspaceHandle exposes the entryToken required for cleanup via
+// InvalidateWorkspaceHandle or ReleaseWorkspaceHandle.
+//
+// Callers that acquire an ephemeral handle are responsible for calling
+// ReleaseWorkspaceHandle when the workspace is no longer needed, since
+// ephemeral workspaces are not tracked by any session-level lifecycle.
 func (r *Resolver) CreateWorkspaceHandle(
 	ctx context.Context,
 	eng codeexecutor.Engine,
@@ -97,20 +102,31 @@ func (r *Resolver) CreateWorkspaceHandle(
 	if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil && inv.Session != nil {
 		if strings.TrimSpace(inv.Session.ID) == "" {
 			// Invalid (empty-ID) sessions must not share a workspace
-			// via the tool/skill name key. Use a random UUID suffix
-			// so each invalid session gets a unique workspace. The
-			// returned WorkspaceHandle carries the entryToken needed
-			// for explicit cleanup via ReleaseWorkspaceHandle.
-			sid = fmt.Sprintf("ephemeral-empty-session-%s", uuid.NewString())
+			// via the tool/skill name key. Derive the key from
+			// InvocationID so all tool calls within the same
+			// invocation reuse one workspace (bounded leak of 1 per
+			// invocation, not 1 per call). Fall back to a random UUID
+			// only when InvocationID is also empty.
+			suffix := strings.TrimSpace(inv.InvocationID)
+			if suffix == "" {
+				suffix = uuid.NewString()
+			}
+			sid = fmt.Sprintf("ephemeral-invocation-%s", suffix)
 		}
 	}
 	return reg.AcquireHandle(ctx, eng.Manager(), sid)
 }
 
 // ReleaseWorkspaceHandle releases the registry entry identified by
-// handle, cleaning up the underlying workspace. This is the public
-// cleanup path for workspaces acquired via CreateWorkspaceHandle,
-// including ephemeral workspaces created for invalid sessions.
+// handle, cleaning up the underlying workspace via the manager that
+// created it. This is the public cleanup path for workspaces acquired
+// via CreateWorkspaceHandle, including ephemeral workspaces created for
+// invalid sessions.
+//
+// Callers that acquire an ephemeral handle (empty session ID) SHOULD call
+// this when done to avoid leaking the backend workspace. For non-ephemeral
+// (session-scoped) workspaces, the handle is cached for reuse and should
+// NOT be released until the session ends.
 func (r *Resolver) ReleaseWorkspaceHandle(
 	ctx context.Context,
 	handle codeexecutor.WorkspaceHandle,
