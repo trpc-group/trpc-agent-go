@@ -531,7 +531,9 @@ func (dk *BuiltinKnowledge) loadSequential(
 				log.ErrorfContext(ctx, "Failed to add document from source %s: %v",
 					sourceName, err)
 				// A batch keeps the writes it completed before the failure, so
-				// the event counts them rather than the batch start.
+				// they count towards the load total, and the event counts them
+				// rather than reporting the batch start.
+				processedDocs += stored
 				reporter.Error(ctx, LoadProgressEvent{
 					SourceName:      sourceName,
 					SourceProcessed: start + stored,

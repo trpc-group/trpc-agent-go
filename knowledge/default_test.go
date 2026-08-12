@@ -3468,6 +3468,7 @@ func TestLoad_EmbeddingBatch_ErrorProgressCountsPartialWrites(t *testing.T) {
 
 			var mu sync.Mutex
 			var reported []int
+			var reportedTotals []int
 
 			err := kb.Load(context.Background(),
 				WithSourceConcurrency(1),
@@ -3481,6 +3482,7 @@ func TestLoad_EmbeddingBatch_ErrorProgressCountsPartialWrites(t *testing.T) {
 					}
 					mu.Lock()
 					reported = append(reported, ev.SourceProcessed)
+					reportedTotals = append(reportedTotals, ev.Total)
 					mu.Unlock()
 				}),
 			)
@@ -3499,6 +3501,15 @@ func TestLoad_EmbeddingBatch_ErrorProgressCountsPartialWrites(t *testing.T) {
 				if got != tt.want {
 					t.Errorf("SourceProcessed on failure = %v, want every error event to report %d",
 						reported, tt.want)
+					break
+				}
+			}
+			// The single source of this load holds every document, so the
+			// load total must not lag behind the source count.
+			for _, got := range reportedTotals {
+				if got != tt.want {
+					t.Errorf("Total on failure = %v, want every error event to report %d",
+						reportedTotals, tt.want)
 					break
 				}
 			}
