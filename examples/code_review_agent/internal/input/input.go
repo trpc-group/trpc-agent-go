@@ -578,15 +578,22 @@ func normalizeMaxInputBytes(n int64) int64 {
 }
 
 func readFileWithLimit(path string, maxBytes int64, label string) ([]byte, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s %q is not a regular file", label, path)
+	}
+	if info.Size() > maxBytes {
+		return nil, sizeLimitError(label, maxBytes)
+	}
+
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer file.Close()
-
-	if info, err := file.Stat(); err == nil && info.Mode().IsRegular() && info.Size() > maxBytes {
-		return nil, sizeLimitError(label, maxBytes)
-	}
 
 	buf := newLimitedBuffer(maxBytes, label)
 	if _, err := io.Copy(buf, io.LimitReader(file, maxBytes+1)); err != nil && !errors.Is(err, errInputTooLarge) {

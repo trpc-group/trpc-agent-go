@@ -18,7 +18,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
 )
 
 type finding struct {
@@ -196,13 +195,6 @@ func main() {
 
 	out, _ := json.Marshal(map[string]any{"findings": findings, "warnings": warnings})
 	fmt.Println(string(out))
-	fullText := string(data)
-	if strings.Contains(fullText, "sandbox-timeout fixture") {
-		time.Sleep(3 * time.Second)
-	}
-	if strings.Contains(fullText, "sandbox-fail fixture") {
-		os.Exit(2)
-	}
 }
 
 func redact(text string) string {

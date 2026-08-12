@@ -651,14 +651,18 @@ func terminalTaskStatus(ctx context.Context, err error) string {
 
 // recordReviewStartTelemetry 记录审查入口边界。
 func recordReviewStartTelemetry(span oteltrace.Span, cfg Config, req Request, plan executionPlan) {
+	refs := llm.SanitizeInputMetadata(review.InputMetadata{
+		BaseRef: req.BaseRef,
+		HeadRef: req.HeadRef,
+	})
 	span.SetAttributes(
 		attribute.String("cr_agent.runtime", cfg.Runtime),
 		attribute.String("cr_agent.mode", plan.Mode),
 		attribute.Bool("cr_agent.sandbox_requested", plan.SandboxRequested),
 		attribute.Bool("cr_agent.model_requested", plan.ModelRequested),
 		attribute.String("cr_agent.input_type", requestInputKind(req)),
-		attribute.String("cr_agent.base_ref", req.BaseRef),
-		attribute.String("cr_agent.head_ref", req.HeadRef),
+		attribute.String("cr_agent.base_ref", refs.BaseRef),
+		attribute.String("cr_agent.head_ref", refs.HeadRef),
 		attribute.Bool("cr_agent.staticcheck_enabled", cfg.EnableStaticcheck),
 	)
 }

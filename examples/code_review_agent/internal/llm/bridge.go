@@ -25,6 +25,10 @@ import (
 
 const DefaultModelAdapterName = "cr-agent-review-provider"
 
+// ErrOfficialModelResponseTooLarge distinguishes a bounded model stream from
+// malformed model output so callers can record a provider exception safely.
+var ErrOfficialModelResponseTooLarge = errors.New("official model response exceeds size limit")
+
 // ProviderModelAdapter wraps a Provider as the official model.Model interface.
 type ProviderModelAdapter struct {
 	Name     string
@@ -85,7 +89,9 @@ func (p OfficialProvider) Review(ctx context.Context, input Input) (Output, erro
 	if p.Model == nil {
 		return Output{}, errors.New("official model is required")
 	}
-	responses, err := p.Model.GenerateContent(ctx, InputRequest(input))
+	modelCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	responses, err := p.Model.GenerateContent(modelCtx, InputRequest(input))
 	if err != nil {
 		return Output{}, err
 	}
@@ -99,9 +105,17 @@ func (p OfficialProvider) Review(ctx context.Context, input Input) (Output, erro
 		}
 		for _, choice := range response.Choices {
 			if strings.TrimSpace(choice.Message.Content) != "" {
+				if len(choice.Message.Content) > defaultModelResponseLimitBytes {
+					cancel()
+					return Output{}, fmt.Errorf("%w: limit is %d bytes", ErrOfficialModelResponseTooLarge, defaultModelResponseLimitBytes)
+				}
 				content = choice.Message.Content
 			}
 			if strings.TrimSpace(choice.Delta.Content) != "" {
+				if len(content)+len(choice.Delta.Content) > defaultModelResponseLimitBytes {
+					cancel()
+					return Output{}, fmt.Errorf("%w: limit is %d bytes", ErrOfficialModelResponseTooLarge, defaultModelResponseLimitBytes)
+				}
 				content += choice.Delta.Content
 			}
 		}

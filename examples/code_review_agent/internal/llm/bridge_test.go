@@ -13,12 +13,15 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/review"
+	agentmodel "trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 func TestDecodeLLMOutputAcceptsPlainJSON(t *testing.T) {
@@ -69,6 +72,66 @@ func TestDecodeLLMOutputRedactsInvalidJSONError(t *testing.T) {
 	if strings.Contains(err.Error(), "sk-invalidjson-1234567890abcdef") {
 		t.Fatalf("decode error leaked secret: %v", err)
 	}
+}
+
+func TestOfficialProviderBoundsStreamingResponse(t *testing.T) {
+	model := &streamingModel{chunks: make([]string, 66), canceled: make(chan struct{})}
+	for i := range model.chunks {
+		model.chunks[i] = strings.Repeat("x", 1024)
+	}
+	provider := OfficialProvider{Model: model}
+
+	_, err := provider.Review(context.Background(), Input{})
+	if !errors.Is(err, ErrOfficialModelResponseTooLarge) {
+		t.Fatalf("Review error = %v, want bounded-response error", err)
+	}
+	if strings.Contains(err.Error(), model.chunks[0]) {
+		t.Fatalf("bounded-response error retained model payload: %v", err)
+	}
+	select {
+	case <-model.canceled:
+	case <-time.After(time.Second):
+		t.Fatal("expected provider to cancel oversized model stream")
+	}
+
+	result, summary := RunReview(context.Background(), "task-oversized-model", provider, Audit{}, review.Result{}, []byte("diff --git a/main.go b/main.go\n+++ b/main.go\n@@ -0,0 +1 @@\n+package main\n"), review.InputMetadata{})
+	if summary.ExceptionCount != 1 || !hasRuleID(result.Warnings, "model-provider-failed") {
+		t.Fatalf("oversized provider result was not recorded as model exception: result=%+v summary=%+v", result, summary)
+	}
+	for _, item := range result.Warnings {
+		if strings.Contains(item.Evidence, model.chunks[0]) {
+			t.Fatalf("model exception retained oversized payload: %+v", item)
+		}
+	}
+}
+
+type streamingModel struct {
+	chunks   []string
+	canceled chan struct{}
+}
+
+func (m *streamingModel) GenerateContent(ctx context.Context, _ *agentmodel.Request) (<-chan *agentmodel.Response, error) {
+	responses := make(chan *agentmodel.Response)
+	go func() {
+		defer close(responses)
+		for _, chunk := range m.chunks {
+			select {
+			case responses <- &agentmodel.Response{Choices: []agentmodel.Choice{{Delta: agentmodel.Message{Content: chunk}}}}:
+			case <-ctx.Done():
+				select {
+				case <-m.canceled:
+				default:
+					close(m.canceled)
+				}
+				return
+			}
+		}
+	}()
+	return responses, nil
+}
+
+func (*streamingModel) Info() agentmodel.Info {
+	return agentmodel.Info{Name: "streaming-test-model"}
 }
 
 func TestModelReviewSystemPromptDefinesStrictContract(t *testing.T) {

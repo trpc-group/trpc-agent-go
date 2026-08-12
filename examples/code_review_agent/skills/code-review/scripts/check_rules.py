@@ -2,7 +2,6 @@
 import json
 import re
 import sys
-import time
 
 
 path = sys.argv[1]
@@ -416,7 +415,3 @@ with open(path, "r", encoding="utf-8", errors="replace") as f:
             new_remaining -= 1
 
 print(json.dumps({"findings": findings, "warnings": warnings}, separators=(",", ":")))
-if "sandbox-timeout fixture" in full_text:
-    time.sleep(3)
-if "sandbox-fail fixture" in full_text:
-    sys.exit(2)

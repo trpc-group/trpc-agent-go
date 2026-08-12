@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -127,6 +128,20 @@ func TestSkillCheckScriptDetectsSecretShapes(t *testing.T) {
 	} {
 		if strings.Contains(string(out), raw) {
 			t.Fatalf("check.sh output leaked or overreported raw value %q: %s", raw, out)
+		}
+	}
+}
+
+func TestSkillCheckScriptDoesNotTreatFixtureMarkersSpecial(t *testing.T) {
+	skillRoot, err := SkillRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline := "diff --git a/main.go b/main.go\n--- a/main.go\n+++ b/main.go\n@@ -0,0 +1 @@\n+// ordinary comment\n"
+	marked := "diff --git a/main.go b/main.go\n--- a/main.go\n+++ b/main.go\n@@ -0,0 +1 @@\n+// sandbox-timeout fixture sandbox-fail fixture\n"
+	for _, env := range [][]string{nil, fallbackScriptEnv(t)} {
+		if got, want := runSkillCheck(t, skillRoot, marked, env), runSkillCheck(t, skillRoot, baseline, env); !reflect.DeepEqual(got, want) {
+			t.Fatalf("fixture markers changed skill output: got %+v want %+v", got, want)
 		}
 	}
 }

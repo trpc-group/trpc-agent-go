@@ -25,7 +25,7 @@ import (
 )
 
 const defaultHTTPTimeout = 30 * time.Second
-const defaultHTTPOutputLimitBytes = 64 * 1024
+const defaultModelResponseLimitBytes = 64 * 1024
 
 // HTTPConfig controls the opt-in generic HTTP provider.
 type HTTPConfig struct {
@@ -106,7 +106,7 @@ func (p *httpProvider) Review(ctx context.Context, input Input) (Output, error) 
 	}
 	defer resp.Body.Close()
 
-	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, int64(defaultHTTPOutputLimitBytes)))
+	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, int64(defaultModelResponseLimitBytes)))
 	if err != nil {
 		return Output{}, fmt.Errorf("read model response: %w", err)
 	}
@@ -126,14 +126,14 @@ func (p *httpProvider) Review(ctx context.Context, input Input) (Output, error) 
 // SanitizeInput redacts provider input.
 func SanitizeInput(input Input) Input {
 	input.DiffSummary = review.RedactSecrets(input.DiffSummary)
-	input.InputMetadata = sanitizeInputMetadata(input.InputMetadata)
+	input.InputMetadata = SanitizeInputMetadata(input.InputMetadata)
 	input.ExistingFindings = SanitizedFindingSnapshot(input.ExistingFindings, nil)
 	return input
 }
 
-// sanitizeInputMetadata keeps repository-controlled metadata out of provider
+// SanitizeInputMetadata keeps repository-controlled metadata out of provider
 // requests unless it has passed the same redaction and size limits as findings.
-func sanitizeInputMetadata(metadata review.InputMetadata) review.InputMetadata {
+func SanitizeInputMetadata(metadata review.InputMetadata) review.InputMetadata {
 	metadata.ChangedGoFiles = sanitizeInputStrings(metadata.ChangedGoFiles)
 	metadata.PackageNames = sanitizeInputStrings(metadata.PackageNames)
 	metadata.TouchedTestFiles = sanitizeInputStrings(metadata.TouchedTestFiles)

@@ -82,6 +82,23 @@ func TestReadFileListRejectsRepoEscape(t *testing.T) {
 	}
 }
 
+func TestReadFileListRejectsFIFO(t *testing.T) {
+	repo := t.TempDir()
+	fifo := filepath.Join(repo, "blocked.go")
+	if err := exec.Command("mkfifo", fifo).Run(); err != nil {
+		t.Skipf("mkfifo is unavailable: %v", err)
+	}
+	listPath := filepath.Join(repo, "files.txt")
+	if err := os.WriteFile(listPath, []byte("blocked.go\n"), 0o644); err != nil {
+		t.Fatalf("write file list: %v", err)
+	}
+
+	_, _, err := Read(Config{}, Request{FileList: listPath, RepoPath: repo})
+	if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("Read error = %v, want non-regular file rejection", err)
+	}
+}
+
 func TestReadFileListRejectsSymlinkEscapingRepo(t *testing.T) {
 	t.Parallel()
 

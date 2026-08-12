@@ -1182,6 +1182,33 @@ func TestAgentRunRecordsTelemetryAttributes(t *testing.T) {
 	}
 }
 
+func TestAgentRunRedactsInvalidRefsBeforeTelemetry(t *testing.T) {
+	recorder := useAgentTelemetrySpanRecorder(t)
+	root := repoRoot(t)
+	const secret = "sk-telemetry-ref-1234567890abcdef"
+	ag, err := New(Config{
+		SkillsRoot: filepath.Join(root, "skills"),
+		Runtime:    RuntimeLocalFallback,
+		OutputDir:  t.TempDir(),
+		Timeout:    testReviewTimeout,
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	defer ag.Close()
+
+	_, err = ag.Run(context.Background(), Request{
+		DiffFile: filepath.Join(root, "testdata", "fixtures", "secret.diff"),
+		BaseRef:  "-" + secret,
+		HeadRef:  "main",
+		Mode:     ModeRuleOnly,
+	})
+	if err == nil || !strings.Contains(err.Error(), "must not start with") {
+		t.Fatalf("Run error = %v, want invalid ref rejection", err)
+	}
+	assertNoRawSecretsInSpanAttributes(t, findAgentReviewSpan(t, recorder), secret)
+}
+
 // TestAgentRunWritesGoInputMetadataToDiagnostics 固定 Go 输入元数据进入诊断产物。
 func TestAgentRunWritesGoInputMetadataToDiagnostics(t *testing.T) {
 
@@ -1263,9 +1290,12 @@ func TestAgentRunRecordsSandboxFailureWithoutCrashing(t *testing.T) {
 		t.Fatalf("New returned error: %v", err)
 	}
 	defer ag.Close()
+	ag.runTool = &recordingTool{name: "skill_run", call: func(context.Context, []byte) (any, error) {
+		return skillRunOutput{Stdout: `{"findings":[],"warnings":[]}`, ExitCode: 2}, nil
+	}}
 
 	result, err := ag.Run(context.Background(), Request{
-		Fixture: "sandbox-fail.diff",
+		Fixture: "secret.diff",
 		Mode:    ModeRuleOnly,
 	})
 	if err != nil {
@@ -1326,9 +1356,12 @@ func TestAgentRunRecordsSandboxTimeoutWithoutCrashing(t *testing.T) {
 		t.Fatalf("New returned error: %v", err)
 	}
 	defer ag.Close()
+	ag.runTool = &recordingTool{name: "skill_run", call: func(context.Context, []byte) (any, error) {
+		return skillRunOutput{Stdout: `{"findings":[],"warnings":[]}`, TimedOut: true}, nil
+	}}
 
 	result, err := ag.Run(context.Background(), Request{
-		Fixture: "sandbox-timeout.diff",
+		Fixture: "secret.diff",
 		Mode:    ModeRuleOnly,
 	})
 	if err != nil {
