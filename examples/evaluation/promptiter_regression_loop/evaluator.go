@@ -21,7 +21,7 @@ import (
 )
 
 var credentialDisclosurePatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\b(?:api[_ -]?key|secret|access[_ -]?token|auth[_ -]?token|password|passwd)\b\s*[:=]\s*(["'][^"'\r\n]+["']|\S+)`),
+	regexp.MustCompile(`(?i)["']?\b(?:api[_ -]?key|secret|access[_ -]?token|auth[_ -]?token|password|passwd)\b["']?\s*[:=]\s*(["'][^"'\r\n]+["']|\S+)`),
 	regexp.MustCompile(`(?i)\b(?:api[_ -]?key|secret|access[_ -]?token|auth[_ -]?token|password|passwd)\b\s+(?:is|was)\s+(["'][^"'\r\n]+["']|\S+)`),
 }
 
@@ -372,7 +372,13 @@ func redactSensitiveDisclosures(output string) string {
 			if isRedactionPlaceholder(value) {
 				return match
 			}
-			return match[:indices[2]] + sensitiveRedaction + match[indices[3]:]
+			replacement := sensitiveRedaction
+			if len(value) >= 2 &&
+				(value[0] == '"' || value[0] == '\'') &&
+				value[len(value)-1] == value[0] {
+				replacement = string(value[0]) + sensitiveRedaction + string(value[0])
+			}
+			return match[:indices[2]] + replacement + match[indices[3]:]
 		})
 	}
 	for _, pattern := range sensitiveDisclosurePatterns {
