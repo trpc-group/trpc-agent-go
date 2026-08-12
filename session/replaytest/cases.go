@@ -99,13 +99,6 @@ func mkToolResponseEvent(toolID, toolName, content string) *event.Event {
 	}
 }
 
-func mkEventWithState(author, content string, delta session.StateMap) *event.Event {
-	e := mkAssistantEvent(content)
-	e.Author = author
-	e.StateDelta = delta
-	return e
-}
-
 func mkTrackEvent(track, payload string) *session.TrackEvent {
 	return &session.TrackEvent{
 		Track:     session.Track(track),
