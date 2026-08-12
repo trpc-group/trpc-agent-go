@@ -10,6 +10,7 @@ package extractor
 
 import (
 	"encoding/json"
+	"slices"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	memorytool "trpc.group/trpc-go/trpc-agent-go/memory/tool"
@@ -46,8 +47,8 @@ func filterTools(
 }
 
 // assistantEpisodeOrdinaryTools adds request-local source provenance to
-// destructive tools. The extra argument is visible only to the opt-in
-// extraction request and is ignored by normal operation parsing.
+// destructive tools. The extra arguments are visible only to the opt-in
+// extraction request and are ignored by normal operation parsing.
 func assistantEpisodeOrdinaryTools(
 	tools map[string]tool.Tool,
 	userCount int,
@@ -72,16 +73,32 @@ func assistantEpisodeOrdinaryTools(
 		for propertyName, property := range declaration.InputSchema.Properties {
 			schema.Properties[propertyName] = property
 		}
-		schema.Properties[assistantEpisodeSourceIndexKey] = &tool.Schema{
-			Type: "integer",
-			Description: "The source_user_index label of the user message " +
-				"that requests this destructive operation.",
-			Enum: sourceIndexes,
+		schema.Required = append([]string(nil), schema.Required...)
+		if name == memory.ClearToolName {
+			schema.Properties[assistantEpisodeSourceIndexKey] = &tool.Schema{
+				Type: "integer",
+				Description: "The 1-based position among user messages of the " +
+					"message that requests this clear operation.",
+				Enum: sourceIndexes,
+			}
+			schema.Required = append(
+				schema.Required,
+				assistantEpisodeSourceIndexKey,
+			)
+		} else {
+			schema.Properties[assistantEpisodeAffectedSourceIndexesKey] = &tool.Schema{
+				Type: "array",
+				Description: "The 1-based positions among user messages whose " +
+					"paired assistant results are covered by this deletion. Use " +
+					"an empty array when no assistant result in this request is " +
+					"covered.",
+				Items: &tool.Schema{Type: "integer", Enum: sourceIndexes},
+			}
+			schema.Required = append(
+				schema.Required,
+				assistantEpisodeAffectedSourceIndexesKey,
+			)
 		}
-		schema.Required = append(
-			append([]string(nil), schema.Required...),
-			assistantEpisodeSourceIndexKey,
-		)
 		declaration.InputSchema = &schema
 		result[name] = &declarationOnlyTool{decl: &declaration}
 	}
@@ -102,6 +119,43 @@ func assistantEpisodeOperationSourceIndex(
 		return 0, false
 	}
 	return args.SourceUserIndex, true
+}
+
+func assistantEpisodeDeleteSourceIndexes(
+	call model.ToolCall,
+	userCount int,
+) ([]int, bool) {
+	var args map[string]json.RawMessage
+	if err := json.Unmarshal(call.Function.Arguments, &args); err != nil {
+		return nil, false
+	}
+	raw, ok := args[assistantEpisodeAffectedSourceIndexesKey]
+	if !ok {
+		return nil, false
+	}
+	var indexes []int
+	if err := json.Unmarshal(raw, &indexes); err != nil {
+		return nil, false
+	}
+	if indexes == nil {
+		return nil, false
+	}
+	seen := make(map[int]struct{}, len(indexes))
+	for _, index := range indexes {
+		if index <= 0 || index > userCount {
+			return nil, false
+		}
+		if _, ok := seen[index]; ok {
+			continue
+		}
+		seen[index] = struct{}{}
+	}
+	result := make([]int, 0, len(seen))
+	for index := range seen {
+		result = append(result, index)
+	}
+	slices.Sort(result)
+	return result, true
 }
 
 // backgroundTools is the pre-built map of background tools for model request.

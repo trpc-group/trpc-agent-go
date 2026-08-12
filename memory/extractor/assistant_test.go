@@ -181,6 +181,26 @@ func TestAssistantEpisodeOrdinaryStagePreservesContentWithoutDestructiveTools(t 
 	}
 }
 
+func TestAssistantEpisodeOrdinaryStagePreservesContentWithDestructiveTools(t *testing.T) {
+	m := &assistantTestModel{steps: []assistantModelStep{{}}}
+	ext := NewExtractor(m, WithAssistantEpisodeExtraction())
+	const content = "Remember that I like coffee."
+	if _, err := ext.Extract(context.Background(), []model.Message{
+		model.NewUserMessage(content),
+		model.NewAssistantMessage("Understood."),
+	}, nil); err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	if !requestContainsRoleContent(m.requests[0], model.RoleUser, content) {
+		t.Fatalf("ordinary request changed user content: %#v", m.requests[0].Messages)
+	}
+	for _, message := range m.requests[0].Messages {
+		if strings.Contains(message.Content, "[source_user_index=") {
+			t.Fatalf("ordinary request leaked source label: %q", message.Content)
+		}
+	}
+}
+
 func TestAssistantEpisodeExtractionIncludesStoredEpisodesInOrdinaryStage(t *testing.T) {
 	m := &assistantTestModel{steps: []assistantModelStep{{}}}
 	ext := NewExtractor(m, WithAssistantEpisodeExtraction())
@@ -847,6 +867,61 @@ func TestAssistantEpisodeExtractionSkipsAfterDeleteWithoutSource(t *testing.T) {
 	}
 }
 
+func TestAssistantEpisodeExtractionKeepsPairUnrelatedToDelete(t *testing.T) {
+	m := &assistantTestModel{steps: []assistantModelStep{
+		{calls: []model.ToolCall{makeToolCall(memory.DeleteToolName, []byte(`{
+			"memory_id":"birthday",
+			"affected_source_user_indexes":[]
+		}`))}},
+		{calls: []model.ToolCall{assistantEpisodeToolCall(`{
+			"pair_id":"pair-1",
+			"memory":"The assistant recommended Alpha and Beta."
+		}`)}},
+	}}
+	ext := NewExtractor(m, WithAssistantEpisodeExtraction())
+	operations, err := ext.Extract(context.Background(), []model.Message{
+		model.NewUserMessage("Recommend two products."),
+		model.NewAssistantMessage("1. Alpha\n2. Beta"),
+		model.NewUserMessage("Forget my birthday."),
+		model.NewAssistantMessage("Done."),
+	}, nil)
+	if err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	if len(m.requests) != 2 {
+		t.Fatalf("model calls = %d, want 2", len(m.requests))
+	}
+	if len(operations) != 2 || operations[0].Type != OperationDelete ||
+		operations[1].Type != OperationAdd {
+		t.Fatalf("operations = %#v", operations)
+	}
+}
+
+func TestAssistantEpisodeExtractionSkipsPairCoveredByDelete(t *testing.T) {
+	m := &assistantTestModel{steps: []assistantModelStep{{
+		calls: []model.ToolCall{makeToolCall(memory.DeleteToolName, []byte(`{
+			"memory_id":"recommendation",
+			"affected_source_user_indexes":[1]
+		}`))},
+	}}}
+	ext := NewExtractor(m, WithAssistantEpisodeExtraction())
+	operations, err := ext.Extract(context.Background(), []model.Message{
+		model.NewUserMessage("Recommend two products."),
+		model.NewAssistantMessage("1. Alpha\n2. Beta"),
+		model.NewUserMessage("Forget that recommendation."),
+		model.NewAssistantMessage("Done."),
+	}, nil)
+	if err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	if len(m.requests) != 1 {
+		t.Fatalf("model calls = %d, want 1", len(m.requests))
+	}
+	if len(operations) != 1 || operations[0].Type != OperationDelete {
+		t.Fatalf("operations = %#v", operations)
+	}
+}
+
 func TestAssistantEpisodeExtractionContinuesAfterEarlierClear(t *testing.T) {
 	m := &assistantTestModel{steps: []assistantModelStep{
 		{calls: []model.ToolCall{makeToolCall(
@@ -942,24 +1017,69 @@ func TestAssistantEpisodeOperationSourceIndex(t *testing.T) {
 	}
 }
 
+func TestAssistantEpisodeDeleteSourceIndexes(t *testing.T) {
+	tests := []struct {
+		name      string
+		arguments string
+		userCount int
+		want      []int
+		wantOK    bool
+	}{
+		{"empty", `{"affected_source_user_indexes":[]}`, 3, []int{}, true},
+		{"sorted unique", `{"affected_source_user_indexes":[2,1,2]}`, 3, []int{1, 2}, true},
+		{"missing", `{}`, 3, nil, false},
+		{"null", `{"affected_source_user_indexes":null}`, 3, nil, false},
+		{"out of range", `{"affected_source_user_indexes":[4]}`, 3, nil, false},
+		{"wrong type", `{"affected_source_user_indexes":1}`, 3, nil, false},
+		{"malformed", `{`, 3, nil, false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			call := makeToolCall(memory.DeleteToolName, []byte(test.arguments))
+			got, ok := assistantEpisodeDeleteSourceIndexes(call, test.userCount)
+			if !reflect.DeepEqual(got, test.want) || ok != test.wantOK {
+				t.Fatalf("source indexes = (%v, %v), want (%v, %v)",
+					got, ok, test.want, test.wantOK)
+			}
+		})
+	}
+}
+
 func TestAssistantEpisodeOrdinaryDestructiveToolsRequireSource(t *testing.T) {
 	tools := assistantEpisodeOrdinaryTools(backgroundTools, 2)
-	for _, name := range []string{memory.DeleteToolName, memory.ClearToolName} {
-		declaration := tools[name].Declaration()
-		property := declaration.InputSchema.Properties[assistantEpisodeSourceIndexKey]
-		if property == nil {
-			t.Fatalf("%s omitted %s", name, assistantEpisodeSourceIndexKey)
-		}
-		if !slices.Contains(declaration.InputSchema.Required, assistantEpisodeSourceIndexKey) {
-			t.Fatalf("%s does not require %s", name, assistantEpisodeSourceIndexKey)
-		}
-		if got, want := property.Enum, []any{1, 2}; !reflect.DeepEqual(got, want) {
-			t.Fatalf("%s source enum = %#v, want %#v", name, got, want)
-		}
+	clearDeclaration := tools[memory.ClearToolName].Declaration()
+	clearProperty := clearDeclaration.InputSchema.Properties[assistantEpisodeSourceIndexKey]
+	if clearProperty == nil ||
+		!slices.Contains(clearDeclaration.InputSchema.Required, assistantEpisodeSourceIndexKey) {
+		t.Fatal("memory_clear does not require its source user index")
 	}
-	if _, ok := backgroundTools[memory.ClearToolName].Declaration().
-		InputSchema.Properties[assistantEpisodeSourceIndexKey]; ok {
-		t.Fatal("request-local source property mutated the shared tool")
+	if got, want := clearProperty.Enum, []any{1, 2}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("memory_clear source enum = %#v, want %#v", got, want)
+	}
+
+	deleteDeclaration := tools[memory.DeleteToolName].Declaration()
+	deleteProperty := deleteDeclaration.InputSchema.Properties[assistantEpisodeAffectedSourceIndexesKey]
+	if deleteProperty == nil || !slices.Contains(
+		deleteDeclaration.InputSchema.Required,
+		assistantEpisodeAffectedSourceIndexesKey,
+	) {
+		t.Fatal("memory_delete does not require affected source indexes")
+	}
+	if deleteProperty.Type != "array" || deleteProperty.Items == nil {
+		t.Fatalf("memory_delete source schema = %#v", deleteProperty)
+	}
+	if got, want := deleteProperty.Items.Enum, []any{1, 2}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("memory_delete source enum = %#v, want %#v", got, want)
+	}
+	for _, name := range []string{memory.DeleteToolName, memory.ClearToolName} {
+		for _, key := range []string{
+			assistantEpisodeSourceIndexKey,
+			assistantEpisodeAffectedSourceIndexesKey,
+		} {
+			if _, ok := backgroundTools[name].Declaration().InputSchema.Properties[key]; ok {
+				t.Fatalf("request-local property %s mutated shared %s", key, name)
+			}
+		}
 	}
 }
 

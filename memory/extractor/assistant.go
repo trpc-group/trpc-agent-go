@@ -27,11 +27,12 @@ import (
 )
 
 const (
-	assistantEpisodeToolName       = "memory_assistant_episode"
-	assistantEpisodePairIDKey      = "pair_id"
-	assistantEpisodeSourceIndexKey = "source_user_index"
-	assistantEpisodeMaxBytes       = 4096
-	assistantEpisodeSourceMaxBytes = 8192
+	assistantEpisodeToolName                 = "memory_assistant_episode"
+	assistantEpisodePairIDKey                = "pair_id"
+	assistantEpisodeSourceIndexKey           = "source_user_index"
+	assistantEpisodeAffectedSourceIndexesKey = "affected_source_user_indexes"
+	assistantEpisodeMaxBytes                 = 4096
+	assistantEpisodeSourceMaxBytes           = 8192
 	// These private limits bound the optional request; overflow is best effort.
 	assistantEpisodeRequestMaxPairs       = 32
 	assistantEpisodeRequestMaxSourceBytes = 64 * 1024
@@ -116,9 +117,10 @@ type assistantEpisodePair struct {
 }
 
 type assistantEpisodeOrdinaryResult struct {
-	operations               []*Operation
-	destructiveSourceIndex   int
-	destructiveSourceUnknown bool
+	operations              []*Operation
+	clearSourceIndex        int
+	deletedSourceIndexes    map[int]struct{}
+	destructiveScopeUnknown bool
 }
 
 type assistantEpisodeSource struct {
@@ -169,12 +171,13 @@ func (e *memoryExtractor) extractWithAssistantEpisodes(
 	if !e.assistantEpisodeAddEnabled() {
 		return ordinary.operations, nil
 	}
-	if ordinary.destructiveSourceUnknown {
+	if ordinary.destructiveScopeUnknown {
 		return ordinary.operations, nil
 	}
 	candidates := selectAssistantEpisodeCandidates(
 		messages,
-		ordinary.destructiveSourceIndex,
+		ordinary.clearSourceIndex,
+		ordinary.deletedSourceIndexes,
 	)
 	if len(candidates) == 0 {
 		return ordinary.operations, nil
@@ -221,10 +224,7 @@ func (e *memoryExtractor) extractAssistantEpisodeOrdinaryStage(
 	_, deleteEnabled := ordinaryTools[memory.DeleteToolName]
 	_, clearEnabled := ordinaryTools[memory.ClearToolName]
 	trackDestructiveSource := deleteEnabled || clearEnabled
-	ordinaryMessages := assistantEpisodeUserMessages(
-		messages,
-		trackDestructiveSource,
-	)
+	ordinaryMessages := assistantEpisodeUserMessages(messages)
 	nextCtx := ctx
 	if len(ordinaryMessages) > 0 {
 		if trackDestructiveSource {
@@ -248,14 +248,29 @@ func (e *memoryExtractor) extractAssistantEpisodeOrdinaryStage(
 			func(callCtx context.Context, call model.ToolCall) {
 				if op := ordinaryExtractor.parseToolCall(callCtx, call); op != nil {
 					result.operations = append(result.operations, op)
-					if op.Type == OperationDelete || op.Type == OperationClear {
+					switch op.Type {
+					case OperationClear:
 						sourceIndex, ok := assistantEpisodeOperationSourceIndex(
 							call, len(ordinaryMessages),
 						)
 						if !ok {
-							result.destructiveSourceUnknown = true
-						} else if sourceIndex > result.destructiveSourceIndex {
-							result.destructiveSourceIndex = sourceIndex
+							result.destructiveScopeUnknown = true
+						} else if sourceIndex > result.clearSourceIndex {
+							result.clearSourceIndex = sourceIndex
+						}
+					case OperationDelete:
+						indexes, ok := assistantEpisodeDeleteSourceIndexes(
+							call, len(ordinaryMessages),
+						)
+						if !ok {
+							result.destructiveScopeUnknown = true
+							break
+						}
+						if result.deletedSourceIndexes == nil {
+							result.deletedSourceIndexes = make(map[int]struct{})
+						}
+						for _, index := range indexes {
+							result.deletedSourceIndexes[index] = struct{}{}
 						}
 					}
 				}
@@ -270,12 +285,16 @@ func (e *memoryExtractor) extractAssistantEpisodeOrdinaryStage(
 
 func selectAssistantEpisodeCandidates(
 	messages []model.Message,
-	destructiveSourceIndex int,
+	clearSourceIndex int,
+	deletedSourceIndexes map[int]struct{},
 ) []assistantEpisodePair {
 	pairs := selectAssistantEpisodePairs(messages)
 	candidates := make([]assistantEpisodePair, 0, len(pairs))
 	for _, pair := range pairs {
-		if pair.userIndex <= destructiveSourceIndex {
+		if pair.userIndex <= clearSourceIndex {
+			continue
+		}
+		if _, deleted := deletedSourceIndexes[pair.userIndex]; deleted {
 			continue
 		}
 		if !strongAssistantEpisodeCandidate(
@@ -504,21 +523,10 @@ func eligibleAssistantEpisodeMessage(message model.Message, role model.Role) boo
 		len(message.ToolCalls) == 0 && assistantEpisodeMessageText(message) != ""
 }
 
-func assistantEpisodeUserMessages(
-	messages []model.Message,
-	includeSourceIndex bool,
-) []model.Message {
+func assistantEpisodeUserMessages(messages []model.Message) []model.Message {
 	result := make([]model.Message, 0, len(messages))
 	for _, message := range messages {
 		if eligibleAssistantEpisodeMessage(message, model.RoleUser) {
-			if includeSourceIndex {
-				message.Content = fmt.Sprintf(
-					"[%s=%d]\n%s",
-					assistantEpisodeSourceIndexKey,
-					len(result)+1,
-					message.Content,
-				)
-			}
 			result = append(result, message)
 		}
 	}
