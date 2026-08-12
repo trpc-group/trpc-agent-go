@@ -1362,3 +1362,134 @@ func TestRunBwrapSeccompPreflightProbeRejectsInvalidBinary(t *testing.T) {
 	}
 	_ = stderr
 }
+
+func TestLinuxRestrictedPreflightFailClosedBranches(t *testing.T) {
+	restore := func(
+		native func() (seccompArchPolicy, error),
+		kernel func() (string, error),
+		openMemfd func() (*os.File, error),
+		probe func(string, bool, *os.File) (string, error),
+	) {
+		linuxNativeSeccompPolicy = native
+		linuxKernelRelease = kernel
+		linuxOpenSeccompMemfd = openMemfd
+		linuxSeccompProbe = probe
+	}
+	defer restore(
+		nativeSeccompPolicy,
+		currentKernelRelease,
+		openSeccompFilterMemfd,
+		runBwrapSeccompPreflightProbe,
+	)
+
+	t.Run("unsupportedArch", func(t *testing.T) {
+		linuxNativeSeccompPolicy = func() (seccompArchPolicy, error) {
+			return seccompArchPolicy{}, errors.New("forced unsupported arch")
+		}
+		linuxKernelRelease = currentKernelRelease
+		linuxOpenSeccompMemfd = openSeccompFilterMemfd
+		linuxSeccompProbe = runBwrapSeccompPreflightProbe
+		rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+		err := rt.linuxRestrictedPreflight("/bin/true", true)
+		if err == nil || !isKind(err, ErrUnsupportedBackend) {
+			t.Fatalf("err=%v, want ErrUnsupportedBackend", err)
+		}
+	})
+
+	t.Run("kernelReleaseError", func(t *testing.T) {
+		linuxNativeSeccompPolicy = nativeSeccompPolicy
+		linuxKernelRelease = func() (string, error) {
+			return "", errors.New("forced uname failure")
+		}
+		linuxOpenSeccompMemfd = openSeccompFilterMemfd
+		linuxSeccompProbe = runBwrapSeccompPreflightProbe
+		rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+		err := rt.linuxRestrictedPreflight("/bin/true", true)
+		if err == nil || !isKind(err, ErrSetupFailed) || !strings.Contains(err.Error(), "read kernel release") {
+			t.Fatalf("err=%v, want kernel release setup failure", err)
+		}
+	})
+
+	t.Run("kernelTooOld", func(t *testing.T) {
+		linuxNativeSeccompPolicy = nativeSeccompPolicy
+		linuxKernelRelease = func() (string, error) { return "4.7.0", nil }
+		linuxOpenSeccompMemfd = openSeccompFilterMemfd
+		linuxSeccompProbe = runBwrapSeccompPreflightProbe
+		rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+		err := rt.linuxRestrictedPreflight("/bin/true", true)
+		if err == nil || !isKind(err, ErrSetupFailed) || !strings.Contains(err.Error(), "below required") {
+			t.Fatalf("err=%v, want old-kernel setup failure", err)
+		}
+	})
+
+	t.Run("memfdOpenError", func(t *testing.T) {
+		linuxNativeSeccompPolicy = nativeSeccompPolicy
+		linuxKernelRelease = currentKernelRelease
+		linuxOpenSeccompMemfd = func() (*os.File, error) {
+			return nil, errors.New("forced memfd failure")
+		}
+		linuxSeccompProbe = runBwrapSeccompPreflightProbe
+		rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+		err := rt.linuxRestrictedPreflight("/bin/true", true)
+		if err == nil || !isKind(err, ErrSetupFailed) || !strings.Contains(err.Error(), "forced memfd failure") {
+			t.Fatalf("err=%v, want memfd setup failure", err)
+		}
+	})
+}
+
+func TestOsSandboxCommandFailsWhenExtraFilesOpenFails(t *testing.T) {
+	requireLinuxBwrap(t)
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(context.Background(), "extrafiles-fail", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	origExtra := linuxOpenExtraFiles
+	linuxOpenExtraFiles = func(linuxSandboxSetup) ([]*os.File, commandCleanup, error) {
+		return nil, nil, backendError(ErrSetupFailed, string(BackendLinuxBubblewrap), errors.New("forced extra files failure"))
+	}
+	defer func() { linuxOpenExtraFiles = origExtra }()
+
+	profile := WorkspaceWriteProfile().WithNetworkPolicy(NetworkPolicy{Mode: NetworkEnabled})
+	_, _, _, err = rt.osSandboxCommand(
+		context.Background(),
+		profile,
+		ws,
+		filepath.Join(ws.Path, "work"),
+		nil,
+		codeexecutor.RunProgramSpec{Cmd: "/bin/true"},
+	)
+	if err == nil || !isKind(err, ErrSetupFailed) || !strings.Contains(err.Error(), "forced extra files failure") {
+		t.Fatalf("err=%v, want forced ExtraFiles setup failure", err)
+	}
+}
+
+func TestRunBwrapSeccompPreflightProbeTimeout(t *testing.T) {
+	if _, err := nativeSeccompPolicy(); err != nil {
+		t.Skip(err)
+	}
+	filter, err := openSeccompFilterMemfd()
+	if err != nil {
+		t.Skip(err)
+	}
+	defer filter.Close()
+
+	script := filepath.Join(t.TempDir(), "slow-bwrap.sh")
+	// exec so CommandContext cancellation kills the sleeper directly.
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nexec sleep 30\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	orig := bwrapSeccompPreflightTimeout
+	bwrapSeccompPreflightTimeout = 50 * time.Millisecond
+	defer func() { bwrapSeccompPreflightTimeout = orig }()
+
+	_, err = runBwrapSeccompPreflightProbe(script, false, filter)
+	if err == nil {
+		t.Fatal("expected timeout failure")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) && !strings.Contains(strings.ToLower(err.Error()), "kill") {
+		t.Fatalf("err=%v, want deadline/kill from CommandContext", err)
+	}
+}

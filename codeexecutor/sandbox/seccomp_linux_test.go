@@ -471,6 +471,149 @@ func TestValidateCompiledFilterEdges(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("RetA-only filter should be valid: %v", err)
 	}
+	// Unreachable trailing insn exercises the reachable-bitmap continue path.
+	if err := validateCompiledFilter([]bpf.Instruction{
+		bpf.RetConstant{Val: seccompRetAllow},
+		bpf.LoadAbsolute{Off: 0, Size: 4},
+	}); err != nil {
+		t.Fatalf("filter with unreachable tail should be valid: %v", err)
+	}
+}
+
+func TestBuildAndAssembleSeccompFilterRejectInvalidPolicy(t *testing.T) {
+	t.Parallel()
+	if _, err := buildAFUNIXBlockFilter(seccompArchPolicy{}); err == nil {
+		t.Fatal("expected buildAFUNIXBlockFilter invalid policy error")
+	}
+	if _, err := assembleSeccompFilter(seccompArchPolicy{}); err == nil {
+		t.Fatal("expected assembleSeccompFilter invalid policy error")
+	}
+}
+
+func TestRulesForPolicyRejectsDuplicateSyscallNumbers(t *testing.T) {
+	t.Parallel()
+	policy := seccompPolicyAMD64
+	policy.socketpair = policy.socket
+	if _, err := rulesForPolicy(policy); err == nil {
+		t.Fatal("expected duplicate syscall number error")
+	}
+}
+
+func TestBuildAFUNIXBlockFilterCompileAndValidateErrors(t *testing.T) {
+	origCompile := linuxCompileSeccompFilter
+	origValidate := linuxValidateCompiledFilter
+	defer func() {
+		linuxCompileSeccompFilter = origCompile
+		linuxValidateCompiledFilter = origValidate
+	}()
+
+	linuxCompileSeccompFilter = func(seccompArchPolicy, []seccompRule) ([]bpf.Instruction, error) {
+		return nil, errors.New("forced compile failure")
+	}
+	if _, err := buildAFUNIXBlockFilter(seccompPolicyAMD64); err == nil || !strings.Contains(err.Error(), "forced compile failure") {
+		t.Fatalf("err=%v, want compile failure", err)
+	}
+
+	linuxCompileSeccompFilter = compileSeccompFilter
+	linuxValidateCompiledFilter = func([]bpf.Instruction) error {
+		return errors.New("forced validate failure")
+	}
+	if _, err := buildAFUNIXBlockFilter(seccompPolicyAMD64); err == nil || !strings.Contains(err.Error(), "forced validate failure") {
+		t.Fatalf("err=%v, want validate failure", err)
+	}
+}
+
+func TestOpenSeccompFilterMemfdFailClosedHooks(t *testing.T) {
+	if _, err := nativeSeccompPolicy(); err != nil {
+		t.Skip(err)
+	}
+	t.Run("nativePolicyFails", func(t *testing.T) {
+		orig := linuxNativeSeccompPolicy
+		linuxNativeSeccompPolicy = func() (seccompArchPolicy, error) {
+			return seccompArchPolicy{}, errors.New("forced native policy failure")
+		}
+		defer func() { linuxNativeSeccompPolicy = orig }()
+		if _, err := openSeccompFilterMemfd(); err == nil || !strings.Contains(err.Error(), "forced native policy failure") {
+			t.Fatalf("err=%v, want native policy failure", err)
+		}
+	})
+	t.Run("assembleFails", func(t *testing.T) {
+		orig := linuxAssembleSeccompFilter
+		linuxAssembleSeccompFilter = func(seccompArchPolicy) ([]bpf.RawInstruction, error) {
+			return nil, errors.New("forced assemble failure")
+		}
+		defer func() { linuxAssembleSeccompFilter = orig }()
+		if _, err := openSeccompFilterMemfd(); err == nil || !strings.Contains(err.Error(), "forced assemble failure") {
+			t.Fatalf("err=%v, want assemble failure", err)
+		}
+	})
+	t.Run("sealFails", func(t *testing.T) {
+		orig := linuxWriteAndSealSeccomp
+		linuxWriteAndSealSeccomp = func(*os.File, []byte) error {
+			return errors.New("forced seal failure")
+		}
+		defer func() { linuxWriteAndSealSeccomp = orig }()
+		if _, err := openSeccompFilterMemfd(); err == nil || !strings.Contains(err.Error(), "forced seal failure") {
+			t.Fatalf("err=%v, want seal failure", err)
+		}
+	})
+}
+
+func TestWriteAndSealSeccompMemfdSealVerificationErrors(t *testing.T) {
+	payload := []byte{0x20, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00}
+
+	t.Run("getSealsFails", func(t *testing.T) {
+		orig := linuxFcntlInt
+		linuxFcntlInt = func(fd uintptr, cmd, arg int) (int, error) {
+			if cmd == unix.F_GET_SEALS {
+				return 0, errors.New("forced get seals failure")
+			}
+			return orig(fd, cmd, arg)
+		}
+		defer func() { linuxFcntlInt = orig }()
+		fd2, err := unix.MemfdCreate("trpc-agent-seccomp-get", unix.MFD_CLOEXEC|unix.MFD_ALLOW_SEALING)
+		if err != nil {
+			t.Skip(err)
+		}
+		f2 := os.NewFile(uintptr(fd2), "trpc-agent-seccomp-get")
+		defer f2.Close()
+		err = writeAndSealSeccompMemfd(f2, payload)
+		if err == nil || !strings.Contains(err.Error(), "read seccomp memfd seals") {
+			t.Fatalf("err=%v, want get-seals failure", err)
+		}
+	})
+
+	t.Run("sealsMismatch", func(t *testing.T) {
+		origFn := linuxFcntlInt
+		linuxFcntlInt = func(fd uintptr, cmd, arg int) (int, error) {
+			if cmd == unix.F_GET_SEALS {
+				return 0, nil // pretend no seals stuck
+			}
+			return origFn(fd, cmd, arg)
+		}
+		defer func() { linuxFcntlInt = origFn }()
+		fd2, err := unix.MemfdCreate("trpc-agent-seccomp-mismatch", unix.MFD_CLOEXEC|unix.MFD_ALLOW_SEALING)
+		if err != nil {
+			t.Skip(err)
+		}
+		f2 := os.NewFile(uintptr(fd2), "trpc-agent-seccomp-mismatch")
+		defer f2.Close()
+		err = writeAndSealSeccompMemfd(f2, payload)
+		if err == nil || !strings.Contains(err.Error(), "seccomp memfd seals") {
+			t.Fatalf("err=%v, want seals mismatch", err)
+		}
+	})
+}
+
+func TestCurrentKernelReleaseUnameError(t *testing.T) {
+	orig := linuxUname
+	linuxUname = func(*unix.Utsname) error {
+		return errors.New("forced uname failure")
+	}
+	defer func() { linuxUname = orig }()
+	if _, err := currentKernelRelease(); err == nil || !strings.Contains(err.Error(), "forced uname failure") {
+		t.Fatalf("err=%v, want uname failure", err)
+	}
 }
 
 func TestCompileSeccompFilterRejectsUnknownMatch(t *testing.T) {

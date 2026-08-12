@@ -74,7 +74,7 @@ func (r *Runtime) osSandboxCommand(
 		return nil, string(BackendLinuxBubblewrap), nil, err
 	}
 	cmd := exec.CommandContext(ctx, bwrap, setup.args...)
-	extraFiles, cleanup, err := openLinuxSandboxExtraFiles(setup)
+	extraFiles, cleanup, err := linuxOpenExtraFiles(setup)
 	if err != nil {
 		cleanupSyntheticDenyReadMaskTargets(setup.syntheticDenyReadTargets)
 		return nil, string(BackendLinuxBubblewrap), nil, err
@@ -82,6 +82,16 @@ func (r *Runtime) osSandboxCommand(
 	cmd.ExtraFiles = extraFiles
 	return cmd, string(BackendLinuxBubblewrap), cleanup, nil
 }
+
+// Dependencies for restricted seccomp setup. Tests override these to exercise
+// fail-closed branches without mocking the kernel or bubblewrap binary.
+var (
+	linuxNativeSeccompPolicy = nativeSeccompPolicy
+	linuxKernelRelease       = currentKernelRelease
+	linuxOpenSeccompMemfd    = openSeccompFilterMemfd
+	linuxSeccompProbe        = runBwrapSeccompPreflightProbe
+	linuxOpenExtraFiles      = openLinuxSandboxExtraFiles
+)
 
 type linuxSandboxSetup struct {
 	args                     []string
@@ -94,10 +104,12 @@ type linuxSandboxSetup struct {
 func openLinuxSandboxExtraFiles(setup linuxSandboxSetup) ([]*os.File, commandCleanup, error) {
 	var files []*os.File
 	closeAll := func() {
-		for _, f := range files {
-			if f != nil {
-				_ = f.Close()
+		for i, f := range files {
+			if f == nil {
+				continue
 			}
+			_ = f.Close()
+			files[i] = nil
 		}
 	}
 	// Append order must match linuxSandboxSetup descriptor numbering: ExtraFiles[i]
@@ -274,7 +286,7 @@ func (r *Runtime) linuxPreflight() (string, bool, error) {
 // cached error. The bwrap and mountProc arguments apply only to the first call.
 func (r *Runtime) linuxRestrictedPreflight(bwrap string, mountProc bool) error {
 	r.restrictedPreflightOnce.Do(func() {
-		if _, err := nativeSeccompPolicy(); err != nil {
+		if _, err := linuxNativeSeccompPolicy(); err != nil {
 			r.restrictedPreflightErr = backendError(
 				ErrUnsupportedBackend,
 				string(BackendLinuxBubblewrap),
@@ -282,7 +294,7 @@ func (r *Runtime) linuxRestrictedPreflight(bwrap string, mountProc bool) error {
 			)
 			return
 		}
-		release, err := currentKernelRelease()
+		release, err := linuxKernelRelease()
 		if err != nil {
 			r.restrictedPreflightErr = backendError(
 				ErrSetupFailed,
@@ -299,7 +311,7 @@ func (r *Runtime) linuxRestrictedPreflight(bwrap string, mountProc bool) error {
 			)
 			return
 		}
-		seccompFile, err := openSeccompFilterMemfd()
+		seccompFile, err := linuxOpenSeccompMemfd()
 		if err != nil {
 			r.restrictedPreflightErr = backendError(
 				ErrSetupFailed,
@@ -309,7 +321,7 @@ func (r *Runtime) linuxRestrictedPreflight(bwrap string, mountProc bool) error {
 			return
 		}
 		defer seccompFile.Close()
-		stderr, err := runBwrapSeccompPreflightProbe(bwrap, mountProc, seccompFile)
+		stderr, err := linuxSeccompProbe(bwrap, mountProc, seccompFile)
 		if err != nil {
 			r.restrictedPreflightErr = backendError(
 				ErrSetupFailed,
@@ -329,7 +341,7 @@ func (r *Runtime) linuxRestrictedPreflight(bwrap string, mountProc bool) error {
 // runBwrapSeccompPreflightProbe verifies bubblewrap can load the AF_UNIX
 // seccomp filter before a restricted sandbox command starts.
 func runBwrapSeccompPreflightProbe(bwrap string, mountProc bool, seccompFile *os.File) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), bwrapSeccompPreflightTimeout)
 	defer cancel()
 	args := buildBwrapPreflightArgs(mountProc)
 	// Insert --seccomp 3 before the final "--" /bin/true pair.
@@ -344,6 +356,10 @@ func runBwrapSeccompPreflightProbe(bwrap string, mountProc bool, seccompFile *os
 	}
 	return stderr.String(), err
 }
+
+// bwrapSeccompPreflightTimeout bounds the restricted seccomp bubblewrap probe.
+// Tests may lower it to exercise the context-deadline fail-closed path.
+var bwrapSeccompPreflightTimeout = 5 * time.Second
 
 // runBwrapPreflightProbe runs a short-lived bubblewrap probe and captures stderr.
 //

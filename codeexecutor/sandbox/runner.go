@@ -124,6 +124,8 @@ func (r *Runtime) runProgram(
 		}
 		return codeexecutor.RunResult{}, backendError(ErrSetupFailed, backendName, err)
 	}
+	// Parent ExtraFiles are no longer needed once the child has inherited them.
+	releaseCmdExtraFiles(cmd)
 	waitErr := cmd.Wait()
 	duration := time.Since(start)
 	timedOut := runCtx.Err() == context.DeadlineExceeded

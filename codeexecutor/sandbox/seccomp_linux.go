@@ -371,15 +371,20 @@ func buildAFUNIXBlockFilter(policy seccompArchPolicy) ([]bpf.Instruction, error)
 	if err != nil {
 		return nil, err
 	}
-	insns, err := compileSeccompFilter(policy, rules)
+	insns, err := linuxCompileSeccompFilter(policy, rules)
 	if err != nil {
 		return nil, err
 	}
-	if err := validateCompiledFilter(insns); err != nil {
+	if err := linuxValidateCompiledFilter(insns); err != nil {
 		return nil, err
 	}
 	return insns, nil
 }
+
+var (
+	linuxCompileSeccompFilter  = compileSeccompFilter
+	linuxValidateCompiledFilter = validateCompiledFilter
+)
 
 func compileSeccompFilter(policy seccompArchPolicy, rules []seccompRule) ([]bpf.Instruction, error) {
 	if err := validateSeccompRules(rules); err != nil {
@@ -544,12 +549,18 @@ func serializeSeccompFilterLE(raw []bpf.RawInstruction) []byte {
 	return buf
 }
 
+// Overridable assemble/seal hooks so memfd setup fail-closed paths are testable.
+var (
+	linuxAssembleSeccompFilter = assembleSeccompFilter
+	linuxWriteAndSealSeccomp   = writeAndSealSeccompMemfd
+)
+
 func openSeccompFilterMemfd() (*os.File, error) {
-	policy, err := nativeSeccompPolicy()
+	policy, err := linuxNativeSeccompPolicy()
 	if err != nil {
 		return nil, err
 	}
-	raw, err := assembleSeccompFilter(policy)
+	raw, err := linuxAssembleSeccompFilter(policy)
 	if err != nil {
 		return nil, err
 	}
@@ -559,7 +570,7 @@ func openSeccompFilterMemfd() (*os.File, error) {
 		return nil, fmt.Errorf("create seccomp memfd: %w", err)
 	}
 	f := os.NewFile(uintptr(fd), "trpc-agent-seccomp")
-	if err := writeAndSealSeccompMemfd(f, payload); err != nil {
+	if err := linuxWriteAndSealSeccomp(f, payload); err != nil {
 		_ = f.Close()
 		return nil, err
 	}
@@ -578,19 +589,27 @@ func writeAndSealSeccompMemfd(f *os.File, payload []byte) error {
 		}
 		return fmt.Errorf("rewind seccomp memfd: %w", err)
 	}
-	seals := unix.F_SEAL_WRITE | unix.F_SEAL_GROW | unix.F_SEAL_SHRINK | unix.F_SEAL_SEAL
-	if _, err := unix.FcntlInt(f.Fd(), unix.F_ADD_SEALS, seals); err != nil {
+	seals := seccompMemfdSeals
+	fd := f.Fd()
+	if _, err := linuxFcntlInt(fd, unix.F_ADD_SEALS, seals); err != nil {
 		return fmt.Errorf("seal seccomp memfd: %w", err)
 	}
-	got, err := unix.FcntlInt(f.Fd(), unix.F_GET_SEALS, 0)
+	got, err := linuxFcntlInt(fd, unix.F_GET_SEALS, 0)
 	if err != nil {
 		return fmt.Errorf("read seccomp memfd seals: %w", err)
 	}
 	if got&seals != seals {
 		return fmt.Errorf("seccomp memfd seals = %#x, want %#x", got, seals)
 	}
+	runtime.KeepAlive(f)
 	return nil
 }
+
+// seccompMemfdSeals / linuxFcntlInt are overridable for seal verification tests.
+var (
+	seccompMemfdSeals = unix.F_SEAL_WRITE | unix.F_SEAL_GROW | unix.F_SEAL_SHRINK | unix.F_SEAL_SEAL
+	linuxFcntlInt     = unix.FcntlInt
+)
 
 func parseKernelRelease(release string) (major, minor int, err error) {
 	release = strings.TrimSpace(release)
@@ -640,8 +659,10 @@ func kernelSupportsRestrictedSeccomp(release string) error {
 
 func currentKernelRelease() (string, error) {
 	var uts unix.Utsname
-	if err := unix.Uname(&uts); err != nil {
+	if err := linuxUname(&uts); err != nil {
 		return "", err
 	}
 	return unix.ByteSliceToString(uts.Release[:]), nil
 }
+
+var linuxUname = unix.Uname
