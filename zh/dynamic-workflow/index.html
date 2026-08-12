@@ -685,6 +685,21 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="当前 Python workflow 里的 agent(...)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#profile" class="md-nav__link">
+    <span class="md-ellipsis">
+      宿主授权的模型 profile
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -2963,6 +2978,21 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="当前 Python workflow 里的 agent(...)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#profile" class="md-nav__link">
+    <span class="md-ellipsis">
+      宿主授权的模型 profile
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -3254,10 +3284,74 @@ workflow。这样可以避免 workflow 意外获得写操作、凭证、shell �
 <p>常用选项只有几个：</p>
 <ul>
 <li><code>instruction</code>：这次子 Agent 的临时角色说明。</li>
+<li><code>model</code>：宿主通过 <code>WithAgentModelProfile</code> 注册 profile 后可选的模型别名；
+  省略则继承模板模型。</li>
 <li><code>tools</code> / <code>skills</code>：省略表示继承基础 Agent；<code>[]</code> 表示这次禁用；非空列表表示在基础 Agent 已有能力上收窄。</li>
 <li><code>structured_output</code> / <code>schema</code>：要求这次子 Agent 返回结构化 JSON。</li>
 <li><code>instance_id</code>：同一个 workflow 内多次调用复用同一个子 Agent 历史。</li>
 </ul>
+<h3 id="profile">宿主授权的模型 profile</h3>
+<p>默认情况下，每次子 Agent 调用使用模板 Agent 已注册的模型。若要让 workflow
+在少数宿主持有模型之间选择，可注册 profile 别名：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-6-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-6-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-6-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-6-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-6-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-6-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-6-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-6-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-6-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-6-10">10</a></span>
+<span class="normal"><a href="#__codelineno-6-11">11</a></span>
+<span class="normal"><a href="#__codelineno-6-12">12</a></span>
+<span class="normal"><a href="#__codelineno-6-13">13</a></span>
+<span class="normal"><a href="#__codelineno-6-14">14</a></span>
+<span class="normal"><a href="#__codelineno-6-15">15</a></span>
+<span class="normal"><a href="#__codelineno-6-16">16</a></span>
+<span class="normal"><a href="#__codelineno-6-17">17</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1"></a><span class="nx">fast</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;gpt-5-mini&quot;</span><span class="p">)</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2"></a><span class="nx">deep</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;gpt-5&quot;</span><span class="p">)</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3"></a>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4"></a><span class="nx">workflow</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">dynamicworkflow</span><span class="p">.</span><span class="nx">NewTool</span><span class="p">(</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5"></a><span class="w">    </span><span class="nx">dynamicworkflow</span><span class="p">.</span><span class="nx">LocalRunner</span><span class="p">{},</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6"></a><span class="w">    </span><span class="p">[]</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Agent</span><span class="p">{</span><span class="nx">general</span><span class="p">},</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7"></a><span class="w">    </span><span class="nx">dynamicworkflow</span><span class="p">.</span><span class="nx">WithAgentModelProfile</span><span class="p">(</span>
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8"></a><span class="w">        </span><span class="s">&quot;fast&quot;</span><span class="p">,</span>
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9"></a><span class="w">        </span><span class="s">&quot;Low-latency drafting and simple extraction.&quot;</span><span class="p">,</span>
+</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10"></a><span class="w">        </span><span class="nx">fast</span><span class="p">,</span>
+</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12"></a><span class="w">    </span><span class="nx">dynamicworkflow</span><span class="p">.</span><span class="nx">WithAgentModelProfile</span><span class="p">(</span>
+</span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13"></a><span class="w">        </span><span class="s">&quot;deep&quot;</span><span class="p">,</span>
+</span><span id="__span-6-14"><a id="__codelineno-6-14" name="__codelineno-6-14"></a><span class="w">        </span><span class="s">&quot;Careful review and multi-step reasoning.&quot;</span><span class="p">,</span>
+</span><span id="__span-6-15"><a id="__codelineno-6-15" name="__codelineno-6-15"></a><span class="w">        </span><span class="nx">deep</span><span class="p">,</span>
+</span><span id="__span-6-16"><a id="__codelineno-6-16" name="__codelineno-6-16"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-6-17"><a id="__codelineno-6-17" name="__codelineno-6-17"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>workflow 可在单次子 Agent 调用中选择 profile：</p>
+<div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-7-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-7-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-7-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-7-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-7-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-7-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-7-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-7-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-7-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-7-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1"></a><span class="n">draft</span> <span class="o">=</span> <span class="k">await</span> <span class="n">agent</span><span class="p">(</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2"></a>    <span class="s2">&quot;Write a short draft.&quot;</span><span class="p">,</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3"></a>    <span class="n">instruction</span><span class="o">=</span><span class="s2">&quot;Draft quickly.&quot;</span><span class="p">,</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4"></a>    <span class="n">model</span><span class="o">=</span><span class="s2">&quot;fast&quot;</span><span class="p">,</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5"></a><span class="p">)</span>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6"></a><span class="n">review</span> <span class="o">=</span> <span class="k">await</span> <span class="n">agent</span><span class="p">(</span>
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7"></a>    <span class="p">{</span><span class="s2">&quot;draft&quot;</span><span class="p">:</span> <span class="n">draft</span><span class="p">[</span><span class="s2">&quot;text&quot;</span><span class="p">]},</span>
+</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8"></a>    <span class="n">instruction</span><span class="o">=</span><span class="s2">&quot;Review carefully.&quot;</span><span class="p">,</span>
+</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9"></a>    <span class="n">model</span><span class="o">=</span><span class="s2">&quot;deep&quot;</span><span class="p">,</span>
+</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>profile 是白名单。每个 <code>model.Model</code> 实例由宿主持有；workflow 代码不能传入
+提供商模型标识符，也不能自行构造模型。省略 <code>model</code> 会完整保留模板模型。只有
+在有明确任务原因时才应选择覆盖。选中的 profile 对 <code>LLMAgent</code> 模板，以及会遵守
+invocation surface patch 的自定义 Agent 生效；其他 Agent 仍使用各自已配置的模型。</p>
 <p>默认不传 <code>instance_id</code> 时，每次 <code>agent(...)</code> 调用都会创建独立的子 Agent
 历史，适合并发分支。对于 <code>LLMAgent</code> 模板，如果临时角色不应继承根分支对话，
 请像上例一样配置 <code>llmagent.IsolatedRequest</code>。显式传相同 <code>instance_id</code> 表示
@@ -3265,8 +3359,9 @@ workflow。这样可以避免 workflow 意外获得写操作、凭证、shell �
 同一段会话历史。</p>
 <p>复用的历史包含子 Agent 的输入和产生的事件。动态 <code>instruction</code> 只配置当前这次
 调用，不会作为对话消息持久化；后续调用必须记住的事实应放在 <code>input</code> 中。</p>
-<p>这些选项只影响当前这次子 Agent 调用。workflow 不能借它改变模型、权限策略，
-也不能新增基础 Agent 本来没有的宿主能力。</p>
+<p>这些选项只影响当前这次子 Agent 调用。workflow 不能借它改变权限策略、发明模型
+接入点，也不能新增基础 Agent 本来没有的宿主能力。模型选择仅限于宿主通过
+<code>WithAgentModelProfile</code> 注册的别名。</p>
 <p><code>agent(...)</code> 返回的 envelope 包含 <code>text</code>、可选的 <code>structured</code> 结果和执行元数据。
 下游需要普通文本时应传 <code>result["text"]</code>，需要稳定字段时传
 <code>result["structured"]</code>；除非确实需要元数据，否则不要继续传递完整 envelope。
@@ -3283,104 +3378,104 @@ Agent 返回 JSON 文本后再在 workflow 中解析。</p>
 first analyze risk and rationale, then make an approval decision.</p>
 </blockquote>
 <p>根 Agent 可以调用 <code>run_workflow</code>。模型可能生成并执行下面这段 workflow 代码：</p>
-<div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-6-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-6-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-6-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-6-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-6-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-6-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-6-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-6-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-6-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-6-10">10</a></span>
-<span class="normal"><a href="#__codelineno-6-11">11</a></span>
-<span class="normal"><a href="#__codelineno-6-12">12</a></span>
-<span class="normal"><a href="#__codelineno-6-13">13</a></span>
-<span class="normal"><a href="#__codelineno-6-14">14</a></span>
-<span class="normal"><a href="#__codelineno-6-15">15</a></span>
-<span class="normal"><a href="#__codelineno-6-16">16</a></span>
-<span class="normal"><a href="#__codelineno-6-17">17</a></span>
-<span class="normal"><a href="#__codelineno-6-18">18</a></span>
-<span class="normal"><a href="#__codelineno-6-19">19</a></span>
-<span class="normal"><a href="#__codelineno-6-20">20</a></span>
-<span class="normal"><a href="#__codelineno-6-21">21</a></span>
-<span class="normal"><a href="#__codelineno-6-22">22</a></span>
-<span class="normal"><a href="#__codelineno-6-23">23</a></span>
-<span class="normal"><a href="#__codelineno-6-24">24</a></span>
-<span class="normal"><a href="#__codelineno-6-25">25</a></span>
-<span class="normal"><a href="#__codelineno-6-26">26</a></span>
-<span class="normal"><a href="#__codelineno-6-27">27</a></span>
-<span class="normal"><a href="#__codelineno-6-28">28</a></span>
-<span class="normal"><a href="#__codelineno-6-29">29</a></span>
-<span class="normal"><a href="#__codelineno-6-30">30</a></span>
-<span class="normal"><a href="#__codelineno-6-31">31</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1"></a><span class="n">analysis</span> <span class="o">=</span> <span class="k">await</span> <span class="n">agent</span><span class="p">(</span>
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2"></a>    <span class="s2">&quot;Analyze the production change: Enable a new cache for the product catalog.&quot;</span><span class="p">,</span>
-</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3"></a>    <span class="n">instruction</span><span class="o">=</span><span class="s2">&quot;You are a technical analyst reviewing a production change.&quot;</span><span class="p">,</span>
-</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4"></a>    <span class="n">structured_output</span><span class="o">=</span><span class="p">{</span>
-</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5"></a>        <span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;object&quot;</span><span class="p">,</span>
-</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6"></a>        <span class="s2">&quot;properties&quot;</span><span class="p">:</span> <span class="p">{</span>
-</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7"></a>            <span class="s2">&quot;risks&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;array&quot;</span><span class="p">,</span> <span class="s2">&quot;items&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;string&quot;</span><span class="p">}},</span>
-</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8"></a>            <span class="s2">&quot;rationale&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;string&quot;</span><span class="p">},</span>
-</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9"></a>        <span class="p">},</span>
-</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10"></a>    <span class="p">},</span>
-</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11"></a><span class="p">)</span>
-</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12"></a>
-</span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13"></a><span class="n">review</span> <span class="o">=</span> <span class="k">await</span> <span class="n">agent</span><span class="p">(</span>
-</span><span id="__span-6-14"><a id="__codelineno-6-14" name="__codelineno-6-14"></a>    <span class="p">{</span>
-</span><span id="__span-6-15"><a id="__codelineno-6-15" name="__codelineno-6-15"></a>        <span class="s2">&quot;change&quot;</span><span class="p">:</span> <span class="s2">&quot;Enable a new cache for the product catalog&quot;</span><span class="p">,</span>
-</span><span id="__span-6-16"><a id="__codelineno-6-16" name="__codelineno-6-16"></a>        <span class="s2">&quot;analysis&quot;</span><span class="p">:</span> <span class="n">analysis</span><span class="p">[</span><span class="s2">&quot;structured&quot;</span><span class="p">],</span>
-</span><span id="__span-6-17"><a id="__codelineno-6-17" name="__codelineno-6-17"></a>    <span class="p">},</span>
-</span><span id="__span-6-18"><a id="__codelineno-6-18" name="__codelineno-6-18"></a>    <span class="n">instruction</span><span class="o">=</span><span class="s2">&quot;You are a senior engineering reviewer for production changes.&quot;</span><span class="p">,</span>
-</span><span id="__span-6-19"><a id="__codelineno-6-19" name="__codelineno-6-19"></a>    <span class="n">structured_output</span><span class="o">=</span><span class="p">{</span>
-</span><span id="__span-6-20"><a id="__codelineno-6-20" name="__codelineno-6-20"></a>        <span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;object&quot;</span><span class="p">,</span>
-</span><span id="__span-6-21"><a id="__codelineno-6-21" name="__codelineno-6-21"></a>        <span class="s2">&quot;properties&quot;</span><span class="p">:</span> <span class="p">{</span>
-</span><span id="__span-6-22"><a id="__codelineno-6-22" name="__codelineno-6-22"></a>            <span class="s2">&quot;approved&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;boolean&quot;</span><span class="p">},</span>
-</span><span id="__span-6-23"><a id="__codelineno-6-23" name="__codelineno-6-23"></a>            <span class="s2">&quot;next_steps&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;array&quot;</span><span class="p">,</span> <span class="s2">&quot;items&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;string&quot;</span><span class="p">}},</span>
-</span><span id="__span-6-24"><a id="__codelineno-6-24" name="__codelineno-6-24"></a>        <span class="p">},</span>
-</span><span id="__span-6-25"><a id="__codelineno-6-25" name="__codelineno-6-25"></a>    <span class="p">},</span>
-</span><span id="__span-6-26"><a id="__codelineno-6-26" name="__codelineno-6-26"></a><span class="p">)</span>
-</span><span id="__span-6-27"><a id="__codelineno-6-27" name="__codelineno-6-27"></a>
-</span><span id="__span-6-28"><a id="__codelineno-6-28" name="__codelineno-6-28"></a><span class="k">return</span> <span class="p">{</span>
-</span><span id="__span-6-29"><a id="__codelineno-6-29" name="__codelineno-6-29"></a>    <span class="s2">&quot;analysis&quot;</span><span class="p">:</span> <span class="n">analysis</span><span class="p">[</span><span class="s2">&quot;structured&quot;</span><span class="p">],</span>
-</span><span id="__span-6-30"><a id="__codelineno-6-30" name="__codelineno-6-30"></a>    <span class="s2">&quot;decision&quot;</span><span class="p">:</span> <span class="n">review</span><span class="p">[</span><span class="s2">&quot;structured&quot;</span><span class="p">],</span>
-</span><span id="__span-6-31"><a id="__codelineno-6-31" name="__codelineno-6-31"></a><span class="p">}</span>
+<div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-8-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-8-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-8-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-8-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-8-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-8-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-8-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-8-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-8-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-8-10">10</a></span>
+<span class="normal"><a href="#__codelineno-8-11">11</a></span>
+<span class="normal"><a href="#__codelineno-8-12">12</a></span>
+<span class="normal"><a href="#__codelineno-8-13">13</a></span>
+<span class="normal"><a href="#__codelineno-8-14">14</a></span>
+<span class="normal"><a href="#__codelineno-8-15">15</a></span>
+<span class="normal"><a href="#__codelineno-8-16">16</a></span>
+<span class="normal"><a href="#__codelineno-8-17">17</a></span>
+<span class="normal"><a href="#__codelineno-8-18">18</a></span>
+<span class="normal"><a href="#__codelineno-8-19">19</a></span>
+<span class="normal"><a href="#__codelineno-8-20">20</a></span>
+<span class="normal"><a href="#__codelineno-8-21">21</a></span>
+<span class="normal"><a href="#__codelineno-8-22">22</a></span>
+<span class="normal"><a href="#__codelineno-8-23">23</a></span>
+<span class="normal"><a href="#__codelineno-8-24">24</a></span>
+<span class="normal"><a href="#__codelineno-8-25">25</a></span>
+<span class="normal"><a href="#__codelineno-8-26">26</a></span>
+<span class="normal"><a href="#__codelineno-8-27">27</a></span>
+<span class="normal"><a href="#__codelineno-8-28">28</a></span>
+<span class="normal"><a href="#__codelineno-8-29">29</a></span>
+<span class="normal"><a href="#__codelineno-8-30">30</a></span>
+<span class="normal"><a href="#__codelineno-8-31">31</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1"></a><span class="n">analysis</span> <span class="o">=</span> <span class="k">await</span> <span class="n">agent</span><span class="p">(</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2"></a>    <span class="s2">&quot;Analyze the production change: Enable a new cache for the product catalog.&quot;</span><span class="p">,</span>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3"></a>    <span class="n">instruction</span><span class="o">=</span><span class="s2">&quot;You are a technical analyst reviewing a production change.&quot;</span><span class="p">,</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4"></a>    <span class="n">structured_output</span><span class="o">=</span><span class="p">{</span>
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5"></a>        <span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;object&quot;</span><span class="p">,</span>
+</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6"></a>        <span class="s2">&quot;properties&quot;</span><span class="p">:</span> <span class="p">{</span>
+</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7"></a>            <span class="s2">&quot;risks&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;array&quot;</span><span class="p">,</span> <span class="s2">&quot;items&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;string&quot;</span><span class="p">}},</span>
+</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8"></a>            <span class="s2">&quot;rationale&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;string&quot;</span><span class="p">},</span>
+</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9"></a>        <span class="p">},</span>
+</span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10"></a>    <span class="p">},</span>
+</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11"></a><span class="p">)</span>
+</span><span id="__span-8-12"><a id="__codelineno-8-12" name="__codelineno-8-12"></a>
+</span><span id="__span-8-13"><a id="__codelineno-8-13" name="__codelineno-8-13"></a><span class="n">review</span> <span class="o">=</span> <span class="k">await</span> <span class="n">agent</span><span class="p">(</span>
+</span><span id="__span-8-14"><a id="__codelineno-8-14" name="__codelineno-8-14"></a>    <span class="p">{</span>
+</span><span id="__span-8-15"><a id="__codelineno-8-15" name="__codelineno-8-15"></a>        <span class="s2">&quot;change&quot;</span><span class="p">:</span> <span class="s2">&quot;Enable a new cache for the product catalog&quot;</span><span class="p">,</span>
+</span><span id="__span-8-16"><a id="__codelineno-8-16" name="__codelineno-8-16"></a>        <span class="s2">&quot;analysis&quot;</span><span class="p">:</span> <span class="n">analysis</span><span class="p">[</span><span class="s2">&quot;structured&quot;</span><span class="p">],</span>
+</span><span id="__span-8-17"><a id="__codelineno-8-17" name="__codelineno-8-17"></a>    <span class="p">},</span>
+</span><span id="__span-8-18"><a id="__codelineno-8-18" name="__codelineno-8-18"></a>    <span class="n">instruction</span><span class="o">=</span><span class="s2">&quot;You are a senior engineering reviewer for production changes.&quot;</span><span class="p">,</span>
+</span><span id="__span-8-19"><a id="__codelineno-8-19" name="__codelineno-8-19"></a>    <span class="n">structured_output</span><span class="o">=</span><span class="p">{</span>
+</span><span id="__span-8-20"><a id="__codelineno-8-20" name="__codelineno-8-20"></a>        <span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;object&quot;</span><span class="p">,</span>
+</span><span id="__span-8-21"><a id="__codelineno-8-21" name="__codelineno-8-21"></a>        <span class="s2">&quot;properties&quot;</span><span class="p">:</span> <span class="p">{</span>
+</span><span id="__span-8-22"><a id="__codelineno-8-22" name="__codelineno-8-22"></a>            <span class="s2">&quot;approved&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;boolean&quot;</span><span class="p">},</span>
+</span><span id="__span-8-23"><a id="__codelineno-8-23" name="__codelineno-8-23"></a>            <span class="s2">&quot;next_steps&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;array&quot;</span><span class="p">,</span> <span class="s2">&quot;items&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;string&quot;</span><span class="p">}},</span>
+</span><span id="__span-8-24"><a id="__codelineno-8-24" name="__codelineno-8-24"></a>        <span class="p">},</span>
+</span><span id="__span-8-25"><a id="__codelineno-8-25" name="__codelineno-8-25"></a>    <span class="p">},</span>
+</span><span id="__span-8-26"><a id="__codelineno-8-26" name="__codelineno-8-26"></a><span class="p">)</span>
+</span><span id="__span-8-27"><a id="__codelineno-8-27" name="__codelineno-8-27"></a>
+</span><span id="__span-8-28"><a id="__codelineno-8-28" name="__codelineno-8-28"></a><span class="k">return</span> <span class="p">{</span>
+</span><span id="__span-8-29"><a id="__codelineno-8-29" name="__codelineno-8-29"></a>    <span class="s2">&quot;analysis&quot;</span><span class="p">:</span> <span class="n">analysis</span><span class="p">[</span><span class="s2">&quot;structured&quot;</span><span class="p">],</span>
+</span><span id="__span-8-30"><a id="__codelineno-8-30" name="__codelineno-8-30"></a>    <span class="s2">&quot;decision&quot;</span><span class="p">:</span> <span class="n">review</span><span class="p">[</span><span class="s2">&quot;structured&quot;</span><span class="p">],</span>
+</span><span id="__span-8-31"><a id="__codelineno-8-31" name="__codelineno-8-31"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>注意：这段 workflow 代码通常是模型临时生成的；当前示例使用 Python。它不是业务预先
 写死在 Go 里的代码。</p>
 <p>第一次 <code>agent(...)</code> 让基础 Agent 临时扮演“技术分析员”，返回结构化风险分析。
 第二次 <code>agent(...)</code> 把第一步的结构化结果作为输入，让同一个基础 Agent 临时扮演
 “资深 reviewer”。最终返回值类似：</p>
-<div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-7-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-7-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-7-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-7-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-7-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-7-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-7-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-7-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-7-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-7-10">10</a></span>
-<span class="normal"><a href="#__codelineno-7-11">11</a></span>
-<span class="normal"><a href="#__codelineno-7-12">12</a></span>
-<span class="normal"><a href="#__codelineno-7-13">13</a></span>
-<span class="normal"><a href="#__codelineno-7-14">14</a></span>
-<span class="normal"><a href="#__codelineno-7-15">15</a></span>
-<span class="normal"><a href="#__codelineno-7-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1"></a><span class="p">{</span>
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2"></a><span class="w">  </span><span class="nt">&quot;analysis&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3"></a><span class="w">    </span><span class="nt">&quot;risks&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4"></a><span class="w">      </span><span class="s2">&quot;Cache invalidation can expose stale product information.&quot;</span><span class="p">,</span>
-</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5"></a><span class="w">      </span><span class="s2">&quot;Concurrent updates can introduce data-consistency issues.&quot;</span>
-</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6"></a><span class="w">    </span><span class="p">],</span>
-</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7"></a><span class="w">    </span><span class="nt">&quot;rationale&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Caching reduces database load for a read-heavy catalog.&quot;</span>
-</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8"></a><span class="w">  </span><span class="p">},</span>
-</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9"></a><span class="w">  </span><span class="nt">&quot;decision&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10"></a><span class="w">    </span><span class="nt">&quot;approved&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11"></a><span class="w">    </span><span class="nt">&quot;next_steps&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-</span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12"></a><span class="w">      </span><span class="s2">&quot;Define cache invalidation and TTL policies.&quot;</span><span class="p">,</span>
-</span><span id="__span-7-13"><a id="__codelineno-7-13" name="__codelineno-7-13"></a><span class="w">      </span><span class="s2">&quot;Add cache metrics and run a phased rollout.&quot;</span>
-</span><span id="__span-7-14"><a id="__codelineno-7-14" name="__codelineno-7-14"></a><span class="w">    </span><span class="p">]</span>
-</span><span id="__span-7-15"><a id="__codelineno-7-15" name="__codelineno-7-15"></a><span class="w">  </span><span class="p">}</span>
-</span><span id="__span-7-16"><a id="__codelineno-7-16" name="__codelineno-7-16"></a><span class="p">}</span>
+<div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-9-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-9-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-9-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-9-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-9-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-9-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-9-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-9-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-9-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-9-10">10</a></span>
+<span class="normal"><a href="#__codelineno-9-11">11</a></span>
+<span class="normal"><a href="#__codelineno-9-12">12</a></span>
+<span class="normal"><a href="#__codelineno-9-13">13</a></span>
+<span class="normal"><a href="#__codelineno-9-14">14</a></span>
+<span class="normal"><a href="#__codelineno-9-15">15</a></span>
+<span class="normal"><a href="#__codelineno-9-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1"></a><span class="p">{</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2"></a><span class="w">  </span><span class="nt">&quot;analysis&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3"></a><span class="w">    </span><span class="nt">&quot;risks&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4"></a><span class="w">      </span><span class="s2">&quot;Cache invalidation can expose stale product information.&quot;</span><span class="p">,</span>
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5"></a><span class="w">      </span><span class="s2">&quot;Concurrent updates can introduce data-consistency issues.&quot;</span>
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6"></a><span class="w">    </span><span class="p">],</span>
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7"></a><span class="w">    </span><span class="nt">&quot;rationale&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Caching reduces database load for a read-heavy catalog.&quot;</span>
+</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8"></a><span class="w">  </span><span class="p">},</span>
+</span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9"></a><span class="w">  </span><span class="nt">&quot;decision&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-9-10"><a id="__codelineno-9-10" name="__codelineno-9-10"></a><span class="w">    </span><span class="nt">&quot;approved&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+</span><span id="__span-9-11"><a id="__codelineno-9-11" name="__codelineno-9-11"></a><span class="w">    </span><span class="nt">&quot;next_steps&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-9-12"><a id="__codelineno-9-12" name="__codelineno-9-12"></a><span class="w">      </span><span class="s2">&quot;Define cache invalidation and TTL policies.&quot;</span><span class="p">,</span>
+</span><span id="__span-9-13"><a id="__codelineno-9-13" name="__codelineno-9-13"></a><span class="w">      </span><span class="s2">&quot;Add cache metrics and run a phased rollout.&quot;</span>
+</span><span id="__span-9-14"><a id="__codelineno-9-14" name="__codelineno-9-14"></a><span class="w">    </span><span class="p">]</span>
+</span><span id="__span-9-15"><a id="__codelineno-9-15" name="__codelineno-9-15"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span-9-16"><a id="__codelineno-9-16" name="__codelineno-9-16"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>如果后续代码要稳定读取字段，应优先使用 <code>result["structured"]</code>。框架不会从自然语言
 里猜字段、单位或业务含义。如果模型服务不支持 JSON Schema 响应格式，这次结构化
@@ -3388,13 +3483,13 @@ first analyze risk and rationale, then make an approval decision.</p>
 <h2 id="_4">并发与批处理</h2>
 <p><code>parallel</code> 用于同时执行互不依赖的分支，并按输入顺序返回结果；失败的独立分支返回
 <code>None</code>：</p>
-<div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-8-1">1</a></span>
-<span class="normal"><a href="#__codelineno-8-2">2</a></span>
-<span class="normal"><a href="#__codelineno-8-3">3</a></span>
-<span class="normal"><a href="#__codelineno-8-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1"></a><span class="n">reviews</span> <span class="o">=</span> <span class="k">await</span> <span class="n">parallel</span><span class="p">([</span>
-</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2"></a>    <span class="k">lambda</span><span class="p">:</span> <span class="n">agent</span><span class="p">({</span><span class="s2">&quot;plan&quot;</span><span class="p">:</span> <span class="n">plan</span><span class="p">},</span> <span class="n">instruction</span><span class="o">=</span><span class="s2">&quot;Review security risk.&quot;</span><span class="p">),</span>
-</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3"></a>    <span class="k">lambda</span><span class="p">:</span> <span class="n">agent</span><span class="p">({</span><span class="s2">&quot;plan&quot;</span><span class="p">:</span> <span class="n">plan</span><span class="p">},</span> <span class="n">instruction</span><span class="o">=</span><span class="s2">&quot;Review operational risk.&quot;</span><span class="p">),</span>
-</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4"></a><span class="p">])</span>
+<div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-10-1">1</a></span>
+<span class="normal"><a href="#__codelineno-10-2">2</a></span>
+<span class="normal"><a href="#__codelineno-10-3">3</a></span>
+<span class="normal"><a href="#__codelineno-10-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1"></a><span class="n">reviews</span> <span class="o">=</span> <span class="k">await</span> <span class="n">parallel</span><span class="p">([</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2"></a>    <span class="k">lambda</span><span class="p">:</span> <span class="n">agent</span><span class="p">({</span><span class="s2">&quot;plan&quot;</span><span class="p">:</span> <span class="n">plan</span><span class="p">},</span> <span class="n">instruction</span><span class="o">=</span><span class="s2">&quot;Review security risk.&quot;</span><span class="p">),</span>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3"></a>    <span class="k">lambda</span><span class="p">:</span> <span class="n">agent</span><span class="p">({</span><span class="s2">&quot;plan&quot;</span><span class="p">:</span> <span class="n">plan</span><span class="p">},</span> <span class="n">instruction</span><span class="o">=</span><span class="s2">&quot;Review operational risk.&quot;</span><span class="p">),</span>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4"></a><span class="p">])</span>
 </span></code></pre></div></td></tr></table></div>
 <p>注意，<code>parallel</code> 的返回值按输入顺序排列，但 event stream 是实时完成顺序。
 两个并发子 Agent 的 partial、tool call 和 final 事件可能交错出现。前端或
@@ -3412,42 +3507,42 @@ first analyze risk and rationale, then make an approval decision.</p>
 <p>第一阶段的 <code>previous</code> 就是原始 item。简单阶段可以只写一个参数；后续阶段仍可按需
 读取原始 item 和 index。所有 stage 的签名会在任何 item 启动前完成校验。如果某个
 stage 失败或返回 <code>None</code>，该 item 的最终结果就是 <code>None</code>，后续 stage 不再执行。</p>
-<div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-9-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-9-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-9-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-9-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-9-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-9-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-9-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-9-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-9-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-9-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1"></a><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">analyze</span><span class="p">(</span><span class="n">previous</span><span class="p">,</span> <span class="n">original</span><span class="p">,</span> <span class="n">index</span><span class="p">):</span>
-</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2"></a>    <span class="k">return</span> <span class="k">await</span> <span class="n">agent</span><span class="p">({</span><span class="s2">&quot;file&quot;</span><span class="p">:</span> <span class="n">original</span><span class="p">},</span> <span class="n">instruction</span><span class="o">=</span><span class="s2">&quot;Analyze this file.&quot;</span><span class="p">)</span>
-</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3"></a>
-</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4"></a><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">verify</span><span class="p">(</span><span class="n">analysis</span><span class="p">,</span> <span class="n">original</span><span class="p">,</span> <span class="n">index</span><span class="p">):</span>
-</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5"></a>    <span class="k">return</span> <span class="k">await</span> <span class="n">agent</span><span class="p">(</span>
-</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6"></a>        <span class="p">{</span><span class="s2">&quot;file&quot;</span><span class="p">:</span> <span class="n">original</span><span class="p">,</span> <span class="s2">&quot;analysis&quot;</span><span class="p">:</span> <span class="n">analysis</span><span class="p">[</span><span class="s2">&quot;structured&quot;</span><span class="p">]},</span>
-</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7"></a>        <span class="n">instruction</span><span class="o">=</span><span class="s2">&quot;Verify the analysis.&quot;</span><span class="p">,</span>
-</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8"></a>    <span class="p">)</span>
-</span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9"></a>
-</span><span id="__span-9-10"><a id="__codelineno-9-10" name="__codelineno-9-10"></a><span class="n">results</span> <span class="o">=</span> <span class="k">await</span> <span class="n">pipeline</span><span class="p">(</span><span class="n">files</span><span class="p">,</span> <span class="n">analyze</span><span class="p">,</span> <span class="n">verify</span><span class="p">)</span>
+<div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-11-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-11-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-11-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-11-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-11-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-11-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-11-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-11-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-11-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-11-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1"></a><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">analyze</span><span class="p">(</span><span class="n">previous</span><span class="p">,</span> <span class="n">original</span><span class="p">,</span> <span class="n">index</span><span class="p">):</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2"></a>    <span class="k">return</span> <span class="k">await</span> <span class="n">agent</span><span class="p">({</span><span class="s2">&quot;file&quot;</span><span class="p">:</span> <span class="n">original</span><span class="p">},</span> <span class="n">instruction</span><span class="o">=</span><span class="s2">&quot;Analyze this file.&quot;</span><span class="p">)</span>
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3"></a>
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4"></a><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">verify</span><span class="p">(</span><span class="n">analysis</span><span class="p">,</span> <span class="n">original</span><span class="p">,</span> <span class="n">index</span><span class="p">):</span>
+</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5"></a>    <span class="k">return</span> <span class="k">await</span> <span class="n">agent</span><span class="p">(</span>
+</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6"></a>        <span class="p">{</span><span class="s2">&quot;file&quot;</span><span class="p">:</span> <span class="n">original</span><span class="p">,</span> <span class="s2">&quot;analysis&quot;</span><span class="p">:</span> <span class="n">analysis</span><span class="p">[</span><span class="s2">&quot;structured&quot;</span><span class="p">]},</span>
+</span><span id="__span-11-7"><a id="__codelineno-11-7" name="__codelineno-11-7"></a>        <span class="n">instruction</span><span class="o">=</span><span class="s2">&quot;Verify the analysis.&quot;</span><span class="p">,</span>
+</span><span id="__span-11-8"><a id="__codelineno-11-8" name="__codelineno-11-8"></a>    <span class="p">)</span>
+</span><span id="__span-11-9"><a id="__codelineno-11-9" name="__codelineno-11-9"></a>
+</span><span id="__span-11-10"><a id="__codelineno-11-10" name="__codelineno-11-10"></a><span class="n">results</span> <span class="o">=</span> <span class="k">await</span> <span class="n">pipeline</span><span class="p">(</span><span class="n">files</span><span class="p">,</span> <span class="n">analyze</span><span class="p">,</span> <span class="n">verify</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <h2 id="workflow-withcodecallabletools-call_tool">在 workflow 代码里调用工具：<code>WithCodeCallableTools</code> 与 <code>call_tool</code></h2>
 <p>最小接入不需要 <code>dynamicworkflow.WithCodeCallableTools</code>。此时 workflow 代码主要通过
 <code>agent(...)</code> 编排子 Agent。</p>
 <p>如果确实需要让 workflow 代码直接调用普通业务工具，可以在创建工具时显式传入：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-10-1">1</a></span>
-<span class="normal"><a href="#__codelineno-10-2">2</a></span>
-<span class="normal"><a href="#__codelineno-10-3">3</a></span>
-<span class="normal"><a href="#__codelineno-10-4">4</a></span>
-<span class="normal"><a href="#__codelineno-10-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1"></a><span class="nx">workflow</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">dynamicworkflow</span><span class="p">.</span><span class="nx">NewTool</span><span class="p">(</span>
-</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2"></a><span class="w">    </span><span class="nx">dynamicworkflow</span><span class="p">.</span><span class="nx">LocalRunner</span><span class="p">{},</span>
-</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3"></a><span class="w">    </span><span class="p">[]</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Agent</span><span class="p">{</span><span class="nx">general</span><span class="p">},</span>
-</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4"></a><span class="w">    </span><span class="nx">dynamicworkflow</span><span class="p">.</span><span class="nx">WithCodeCallableTools</span><span class="p">(</span><span class="nx">searchCatalog</span><span class="p">,</span><span class="w"> </span><span class="nx">createQuote</span><span class="p">),</span>
-</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5"></a><span class="p">)</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-12-1">1</a></span>
+<span class="normal"><a href="#__codelineno-12-2">2</a></span>
+<span class="normal"><a href="#__codelineno-12-3">3</a></span>
+<span class="normal"><a href="#__codelineno-12-4">4</a></span>
+<span class="normal"><a href="#__codelineno-12-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1"></a><span class="nx">workflow</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">dynamicworkflow</span><span class="p">.</span><span class="nx">NewTool</span><span class="p">(</span>
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2"></a><span class="w">    </span><span class="nx">dynamicworkflow</span><span class="p">.</span><span class="nx">LocalRunner</span><span class="p">{},</span>
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3"></a><span class="w">    </span><span class="p">[]</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Agent</span><span class="p">{</span><span class="nx">general</span><span class="p">},</span>
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4"></a><span class="w">    </span><span class="nx">dynamicworkflow</span><span class="p">.</span><span class="nx">WithCodeCallableTools</span><span class="p">(</span><span class="nx">searchCatalog</span><span class="p">,</span><span class="w"> </span><span class="nx">createQuote</span><span class="p">),</span>
+</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p>然后 workflow 代码可以调用：</p>
-<div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-11-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1"></a><span class="n">facts</span> <span class="o">=</span> <span class="k">await</span> <span class="n">call_tool</span><span class="p">(</span><span class="s2">&quot;search_catalog&quot;</span><span class="p">,</span> <span class="n">query</span><span class="o">=</span><span class="s2">&quot;trail backpack&quot;</span><span class="p">)</span>
+<div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-13-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1"></a><span class="n">facts</span> <span class="o">=</span> <span class="k">await</span> <span class="n">call_tool</span><span class="p">(</span><span class="s2">&quot;search_catalog&quot;</span><span class="p">,</span> <span class="n">query</span><span class="o">=</span><span class="s2">&quot;trail backpack&quot;</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p><code>call_tool</code> 只能调用 <code>WithCodeCallableTools</code> 显式传入的工具。它不会自动看到根 Agent 的工具。</p>
 <p><code>agent(..., tools=[...])</code> 只是授权子 Agent 使用这些工具，并不保证模型一定调用；
@@ -3492,13 +3587,13 @@ workflow 只有一个可选 docstring 和一个无参数的 <code>async def run(
 目录，会拒绝超过 64 KiB 的生成源码（除非显式调整限制），并执行文档声明的受限
 Python 子集。这些是有意的行为变化，但不会构成安全 sandbox 边界。</p>
 <p>需要本地 OS 隔离时，可以直接使用内置 sandbox runner：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-12-1">1</a></span>
-<span class="normal"><a href="#__codelineno-12-2">2</a></span>
-<span class="normal"><a href="#__codelineno-12-3">3</a></span>
-<span class="normal"><a href="#__codelineno-12-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1"></a><span class="nx">workflow</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">dynamicworkflow</span><span class="p">.</span><span class="nx">NewTool</span><span class="p">(</span>
-</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2"></a><span class="w">    </span><span class="nx">dynamicworkflow</span><span class="p">.</span><span class="nx">NewSandboxRunner</span><span class="p">(),</span>
-</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3"></a><span class="w">    </span><span class="nx">childAgents</span><span class="p">,</span>
-</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4"></a><span class="p">)</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-14-1">1</a></span>
+<span class="normal"><a href="#__codelineno-14-2">2</a></span>
+<span class="normal"><a href="#__codelineno-14-3">3</a></span>
+<span class="normal"><a href="#__codelineno-14-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1"></a><span class="nx">workflow</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">dynamicworkflow</span><span class="p">.</span><span class="nx">NewTool</span><span class="p">(</span>
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2"></a><span class="w">    </span><span class="nx">dynamicworkflow</span><span class="p">.</span><span class="nx">NewSandboxRunner</span><span class="p">(),</span>
+</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3"></a><span class="w">    </span><span class="nx">childAgents</span><span class="p">,</span>
+</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p>使用上面不带 option 的构造方式时，每次 workflow 都会使用一次性 workspace 和
 clean process environment。该 runner 复用 <code>codeexecutor/sandbox</code>，默认限制网络；
@@ -3577,7 +3672,7 @@ profile，并将其传给 <code>sandbox.WithPermissionProfile(...)</code>。</p>
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年7月28日 06:18:42 UTC">2026-07-28 06:18:42</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年8月12日 02:54:43 UTC">2026-08-12 02:54:43</span>
   </span>
 
     
