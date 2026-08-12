@@ -267,6 +267,65 @@ func TestNormalizeSnapshotAssignsSummaryBoundaryIDsAfterSorting(t *testing.T) {
 	}
 }
 
+func TestNormalizeSnapshotScopesEventIDsBySession(t *testing.T) {
+	baseline := Snapshot{Sessions: []SessionSnapshot{
+		scopedEventSession("session-1", "baseline-event-a", "first"),
+		scopedEventSession("session-2", "baseline-event-b", "second"),
+	}}
+	actual := Snapshot{Sessions: []SessionSnapshot{
+		scopedEventSession("session-1", "1", "first"),
+		scopedEventSession("session-2", "1", "second"),
+	}}
+
+	gotBaseline := NormalizeSnapshot(baseline, DefaultNormalizeOptions())
+	gotActual := NormalizeSnapshot(actual, DefaultNormalizeOptions())
+	if !reflect.DeepEqual(gotBaseline, gotActual) {
+		t.Fatalf("event IDs are not scoped per session:\nbaseline: %#v\nactual: %#v", gotBaseline, gotActual)
+	}
+	for _, session := range gotActual.Sessions {
+		if session.Events[0].ID != "event-0001" ||
+			session.Summaries[0].Boundary["last_event_id"] != "event-0001" {
+			t.Fatalf("session summary did not share event ID scope: %#v", session)
+		}
+	}
+}
+
+func TestNormalizeSnapshotScopesMemoryIDsByMemoryScopeAndSearchResults(t *testing.T) {
+	firstScope := MemoryScope{AppName: "replay", UserID: "user-1"}
+	secondScope := MemoryScope{AppName: "replay", UserID: "user-2"}
+	baseline := Snapshot{
+		Memories: []MemorySnapshot{
+			scopedMemory("baseline-memory-a", firstScope, "prefers concise replies"),
+			scopedMemory("baseline-memory-b", secondScope, "prefers detailed replies"),
+		},
+		MemorySearches: []MemorySearchSnapshot{
+			scopedMemorySearch(firstScope, scopedMemory("baseline-memory-a", firstScope, "prefers concise replies")),
+			scopedMemorySearch(secondScope, scopedMemory("baseline-memory-b", secondScope, "prefers detailed replies")),
+		},
+	}
+	actual := Snapshot{
+		Memories: []MemorySnapshot{
+			scopedMemory("1", firstScope, "prefers concise replies"),
+			scopedMemory("1", secondScope, "prefers detailed replies"),
+		},
+		MemorySearches: []MemorySearchSnapshot{
+			scopedMemorySearch(firstScope, scopedMemory("1", firstScope, "prefers concise replies")),
+			scopedMemorySearch(secondScope, scopedMemory("1", secondScope, "prefers detailed replies")),
+		},
+	}
+
+	gotBaseline := NormalizeSnapshot(baseline, DefaultNormalizeOptions())
+	gotActual := NormalizeSnapshot(actual, DefaultNormalizeOptions())
+	if !reflect.DeepEqual(gotBaseline, gotActual) {
+		t.Fatalf("memory IDs are not scoped per MemoryScope:\nbaseline: %#v\nactual: %#v", gotBaseline, gotActual)
+	}
+	for _, search := range gotActual.MemorySearches {
+		if len(search.Results) != 1 || search.Results[0].ID != "memory-0001" {
+			t.Fatalf("memory search did not share scoped memory ID map: %#v", search)
+		}
+	}
+}
+
 func TestNormalizeSnapshotSupportsExplicitIDAndOrderingPolicies(t *testing.T) {
 	snapshot := normalizationFixture(
 		"event-z", "memory-z", "invocation-z",
@@ -699,6 +758,45 @@ func TestNormalizeSnapshotAssignsInvocationIDsAfterTrackSorting(t *testing.T) {
 	options.NormalizeInvocationIDs = true
 	if got, want := NormalizeSnapshot(actual, options), NormalizeSnapshot(baseline, options); !reflect.DeepEqual(got, want) {
 		t.Fatalf("sorted tracks have unstable invocation IDs:\ngot:  %#v\nwant: %#v", got, want)
+	}
+}
+
+func scopedEventSession(sessionID, eventID, content string) SessionSnapshot {
+	return SessionSnapshot{
+		ID:      sessionID,
+		AppName: "replay",
+		UserID:  "user-1",
+		Events: []EventSnapshot{{
+			ID:      eventID,
+			Author:  "user",
+			Role:    "user",
+			Content: content,
+		}},
+		Summaries: []SummarySnapshot{{
+			SessionID: sessionID,
+			FilterKey: "branch/main",
+			Text:      "summary " + content,
+			Boundary:  map[string]any{"last_event_id": eventID},
+		}},
+	}
+}
+
+func scopedMemory(id string, scope MemoryScope, content string) MemorySnapshot {
+	return MemorySnapshot{
+		ID:      id,
+		AppName: scope.AppName,
+		UserID:  scope.UserID,
+		Scope:   scope,
+		Content: content,
+	}
+}
+
+func scopedMemorySearch(scope MemoryScope, result MemorySnapshot) MemorySearchSnapshot {
+	return MemorySearchSnapshot{
+		AppName: scope.AppName,
+		UserID:  scope.UserID,
+		Query:   result.Content,
+		Results: []MemorySnapshot{result},
 	}
 }
 

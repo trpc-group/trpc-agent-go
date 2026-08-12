@@ -81,10 +81,8 @@ func NormalizeSnapshot(snapshot Snapshot, options NormalizeOptions) Snapshot {
 		return left < right
 	})
 
-	eventIDs := newLogicalIDMap("event")
-	memoryIDs := newLogicalIDMap("memory")
+	memoryIDs := newScopedLogicalIDMaps("memory")
 	ids := normalizationIDs{
-		events:      eventIDs,
 		invocations: newLogicalIDMap("invocation"),
 		toolCalls:   newLogicalIDMap("tool-call"),
 	}
@@ -100,11 +98,20 @@ func NormalizeSnapshot(snapshot Snapshot, options NormalizeOptions) Snapshot {
 		})
 	}
 	for i := range normalized.Memories {
-		normalizeMemoryID(&normalized.Memories[i], options, memoryIDs)
+		normalizeMemoryID(&normalized.Memories[i], options, memoryIDs, MemoryScope{})
 	}
 	for i := range normalized.MemorySearches {
+		searchScope := MemoryScope{
+			AppName: normalized.MemorySearches[i].AppName,
+			UserID:  normalized.MemorySearches[i].UserID,
+		}
 		for j := range normalized.MemorySearches[i].Results {
-			normalizeMemory(&normalized.MemorySearches[i].Results[j], options, memoryIDs)
+			normalizeMemory(
+				&normalized.MemorySearches[i].Results[j],
+				options,
+				memoryIDs,
+				searchScope,
+			)
 		}
 	}
 	return normalized
@@ -115,6 +122,7 @@ func normalizeSession(
 	options NormalizeOptions,
 	ids normalizationIDs,
 ) {
+	ids.events = newLogicalIDMap("event")
 	normalizeSessionTimes(snapshot, options.TimePrecision)
 	snapshot.State = normalizeStateMap(snapshot.State, options)
 	for i := range snapshot.Events {
@@ -170,10 +178,11 @@ func normalizeSession(
 func normalizeMemory(
 	snapshot *MemorySnapshot,
 	options NormalizeOptions,
-	memoryIDs *logicalIDMap,
+	memoryIDs *scopedLogicalIDMaps,
+	fallbackScope MemoryScope,
 ) {
 	normalizeMemoryValues(snapshot, options)
-	normalizeMemoryID(snapshot, options, memoryIDs)
+	normalizeMemoryID(snapshot, options, memoryIDs, fallbackScope)
 }
 
 func normalizeMemoryValues(
@@ -189,10 +198,11 @@ func normalizeMemoryValues(
 func normalizeMemoryID(
 	snapshot *MemorySnapshot,
 	options NormalizeOptions,
-	memoryIDs *logicalIDMap,
+	memoryIDs *scopedLogicalIDMaps,
+	fallbackScope MemoryScope,
 ) {
 	if !options.PreserveMemoryIDs {
-		snapshot.ID = memoryIDs.value(snapshot.ID)
+		snapshot.ID = memoryIDs.value(memoryIDScope(*snapshot, fallbackScope), snapshot.ID)
 	}
 }
 
@@ -958,8 +968,39 @@ type logicalIDMap struct {
 	values map[string]string
 }
 
+type scopedLogicalIDMaps struct {
+	prefix string
+	values map[MemoryScope]*logicalIDMap
+}
+
 func newLogicalIDMap(prefix string) *logicalIDMap {
 	return &logicalIDMap{prefix: prefix, values: make(map[string]string)}
+}
+
+func newScopedLogicalIDMaps(prefix string) *scopedLogicalIDMaps {
+	return &scopedLogicalIDMaps{
+		prefix: prefix,
+		values: make(map[MemoryScope]*logicalIDMap),
+	}
+}
+
+func (mappings *scopedLogicalIDMaps) value(scope MemoryScope, id string) string {
+	mapping, ok := mappings.values[scope]
+	if !ok {
+		mapping = newLogicalIDMap(mappings.prefix)
+		mappings.values[scope] = mapping
+	}
+	return mapping.value(id)
+}
+
+func memoryIDScope(snapshot MemorySnapshot, fallback MemoryScope) MemoryScope {
+	if snapshot.Scope != (MemoryScope{}) {
+		return snapshot.Scope
+	}
+	if snapshot.AppName != "" || snapshot.UserID != "" {
+		return MemoryScope{AppName: snapshot.AppName, UserID: snapshot.UserID}
+	}
+	return fallback
 }
 
 func (mapping *logicalIDMap) value(id string) string {
