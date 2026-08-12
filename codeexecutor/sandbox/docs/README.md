@@ -37,9 +37,9 @@ profiles default to restricted networking unless the caller explicitly enables
 host network access:
 
 - `NetworkRestricted` asks the backend to block outbound networking when it can
-  enforce that boundary. On Linux this also denies creating new AF_UNIX sockets
-  through seccomp, so host and guest-local Unix domain socket IPC are blocked
-  unless the caller selects `NetworkEnabled`.
+  enforce that boundary. On Linux this also denies pathname and abstract AF_UNIX
+  sockets through seccomp; anonymous stream socketpairs remain available.
+  Pathname or abstract Unix IPC requires `NetworkEnabled`.
 - `NetworkEnabled` allows the command to use the host network. On Linux this
   means the command is launched without network namespace isolation and without
   the AF_UNIX seccomp filter. On macOS this means the generated Seatbelt

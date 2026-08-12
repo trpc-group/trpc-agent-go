@@ -100,6 +100,8 @@ func openLinuxSandboxExtraFiles(setup linuxSandboxSetup) ([]*os.File, commandCle
 			}
 		}
 	}
+	// Append order must match linuxSandboxSetup descriptor numbering: ExtraFiles[i]
+	// becomes child FD 3+i (seccomp then deny-read /dev/null when both are needed).
 	if setup.needsSeccompFD {
 		seccompFile, err := openSeccompFilterMemfd()
 		if err != nil {
@@ -177,6 +179,8 @@ func (r *Runtime) linuxSandboxSetup(
 		args = appendInaccessibleDirMaskArgs(args, "/proc")
 	}
 	needsSeccomp := profile.network.Mode == NetworkRestricted
+	// ExtraFiles descriptors start at 3 and must match the append order in
+	// openLinuxSandboxExtraFiles: seccomp memfd first, then deny-read /dev/null.
 	nextExtraFD := 3
 	if needsSeccomp {
 		args = append(args, "--unshare-net", "--seccomp", strconv.Itoa(nextExtraFD))
@@ -264,6 +268,10 @@ func (r *Runtime) linuxPreflight() (string, bool, error) {
 	return r.bwrapPath, r.bwrapMountProc, r.preflightErr
 }
 
+// linuxRestrictedPreflight verifies that this Runtime can enforce restricted
+// AF_UNIX seccomp. restrictedPreflightOnce caches the result for the Runtime
+// lifetime, so a failure is permanent and later calls fail closed with the
+// cached error. The bwrap and mountProc arguments apply only to the first call.
 func (r *Runtime) linuxRestrictedPreflight(bwrap string, mountProc bool) error {
 	r.restrictedPreflightOnce.Do(func() {
 		if _, err := nativeSeccompPolicy(); err != nil {

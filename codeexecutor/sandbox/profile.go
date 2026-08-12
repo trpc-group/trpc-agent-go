@@ -67,9 +67,9 @@ func (p PermissionProfile) enforcement() enforcement {
 }
 
 // ReadOnlyProfile returns a managed profile with read-only host visibility and
-// restricted networking. On Linux, restricted networking also denies creating
-// new AF_UNIX sockets, so local pathname or abstract Unix IPC requires
-// NetworkEnabled.
+// restricted networking. On Linux, restricted networking denies pathname and
+// abstract AF_UNIX sockets while leaving anonymous stream socketpairs available;
+// use NetworkEnabled when the command needs pathname or abstract Unix IPC.
 func ReadOnlyProfile() PermissionProfile {
 	return PermissionProfile{
 		typ: profileManaged,
@@ -87,8 +87,9 @@ func ReadOnlyProfile() PermissionProfile {
 
 // WorkspaceWriteProfile returns the default managed profile: read-only host
 // root, writable session workspace, protected metadata, restricted networking.
-// On Linux, that restricted default also denies creating new AF_UNIX sockets;
-// use NetworkEnabled when the command needs Unix domain socket IPC.
+// On Linux, that restricted default denies pathname and abstract AF_UNIX
+// sockets while leaving anonymous stream socketpairs available; use
+// NetworkEnabled when the command needs pathname or abstract Unix IPC.
 func WorkspaceWriteProfile() PermissionProfile {
 	p := ReadOnlyProfile()
 	p.fileSystem.Rules = append(p.fileSystem.Rules,

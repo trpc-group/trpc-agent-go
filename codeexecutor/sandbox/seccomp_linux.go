@@ -112,116 +112,399 @@ func nativeSeccompPolicy() (seccompArchPolicy, error) {
 	return seccompPolicyForGOARCH(runtime.GOARCH)
 }
 
-func buildAFUNIXBlockFilter(policy seccompArchPolicy) ([]bpf.Instruction, error) {
-	if policy.auditArch == 0 || policy.socket == 0 || policy.socketpair == 0 {
-		return nil, errors.New("invalid seccomp architecture policy")
-	}
+// seccompArgMatchKind selects how a syscall argument is compared.
+type seccompArgMatchKind int
 
-	// Program layout (classic BPF, little-endian seccomp_data):
-	//  0: ld arch
-	//  1: jeq expectedArch -> +1 else +0
-	//  2: kill
-	//  [optional x32 reject]
-	//  n: ld nr
-	//  n+1: jeq socket -> socket_domain_check else continue
-	//  n+2: jeq socketpair -> socketpair_domain_check else continue
-	//  ... io_uring denials ...
-	//  allow
-	//  socket_domain_check: ld arg0_low32; jeq AF_UNIX -> deny else allow
-	//  socketpair_domain_check: ld arg0_low32; non-AF_UNIX -> allow
-	//  socketpair_type_check: ld arg1_low32; mask flags; SOCK_DGRAM -> deny
-	//  deny: errno(EPERM)
-	insns := []bpf.Instruction{
-		bpf.LoadAbsolute{Off: seccompDataOffArch, Size: 4},
-		bpf.JumpIf{
-			Cond:      bpf.JumpEqual,
-			Val:       policy.auditArch,
-			SkipTrue:  1,
-			SkipFalse: 0,
-		},
-		bpf.RetConstant{Val: seccompRetKillProcess},
+const (
+	// seccompArgEqual compares the low 32 bits of argN to Value.
+	seccompArgEqual seccompArgMatchKind = iota
+	// seccompArgMaskedEqual compares (argN_low32 & Mask) to Value.
+	seccompArgMaskedEqual
+)
+
+// seccompArgMatch is one AND-ed argument constraint for a rule.
+type seccompArgMatch struct {
+	Arg   int
+	Kind  seccompArgMatchKind
+	Mask  uint32
+	Value uint32
+}
+
+// seccompRule denies one syscall number with EPERM when every match succeeds.
+// Match is an AND chain. An empty Match means unconditional EPERM.
+// Only one rule per syscall number is allowed; OR of alternate parameter
+// combinations is intentionally unsupported.
+type seccompRule struct {
+	NR    uint32
+	Match []seccompArgMatch
+}
+
+const (
+	labelAfterArchKill seccompLabel = "after_arch_kill"
+	labelAfterX32Kill  seccompLabel = "after_x32_kill"
+	labelDenyEPERM     seccompLabel = "deny_eperm"
+	bpfMaxInsns                     = 4096
+)
+
+type seccompLabel string
+
+type labelFixup struct {
+	insnIdx    int
+	trueLabel  seccompLabel
+	setTrue    bool
+	falseLabel seccompLabel
+	setFalse   bool
+}
+
+type filterBuilder struct {
+	insns  []bpf.Instruction
+	labels map[seccompLabel]int
+	fixups []labelFixup
+}
+
+func newFilterBuilder() *filterBuilder {
+	return &filterBuilder{
+		labels: make(map[seccompLabel]int),
 	}
-	if policy.rejectX32 {
-		insns = append(insns,
-			bpf.LoadAbsolute{Off: seccompDataOffNR, Size: 4},
-			bpf.JumpIf{
-				Cond:      bpf.JumpBitsSet,
-				Val:       x32SyscallBit,
-				SkipTrue:  0,
-				SkipFalse: 1,
+}
+
+func (b *filterBuilder) emit(insn bpf.Instruction) int {
+	idx := len(b.insns)
+	b.insns = append(b.insns, insn)
+	return idx
+}
+
+func (b *filterBuilder) define(label seccompLabel) error {
+	if _, exists := b.labels[label]; exists {
+		return fmt.Errorf("duplicate seccomp label %q", label)
+	}
+	b.labels[label] = len(b.insns)
+	return nil
+}
+
+func (b *filterBuilder) jumpIf(
+	cond bpf.JumpTest,
+	val uint32,
+	trueLabel *seccompLabel,
+	falseLabel *seccompLabel,
+) {
+	idx := b.emit(bpf.JumpIf{Cond: cond, Val: val})
+	fix := labelFixup{insnIdx: idx}
+	if trueLabel != nil {
+		fix.trueLabel = *trueLabel
+		fix.setTrue = true
+	}
+	if falseLabel != nil {
+		fix.falseLabel = *falseLabel
+		fix.setFalse = true
+	}
+	b.fixups = append(b.fixups, fix)
+}
+
+func (b *filterBuilder) skipTo(from int, label seccompLabel) (uint8, error) {
+	target, ok := b.labels[label]
+	if !ok {
+		return 0, fmt.Errorf("undefined seccomp label %q", label)
+	}
+	if target <= from {
+		return 0, fmt.Errorf("backward seccomp jump to %q", label)
+	}
+	skip := target - from - 1
+	if skip < 0 || skip > 255 {
+		return 0, fmt.Errorf("seccomp jump to %q exceeds uint8 skip (%d)", label, skip)
+	}
+	// skip is validated into [0,255] above.
+	return uint8(skip), nil //nolint:gosec // G115: bounded by the check above
+}
+
+func (b *filterBuilder) resolve() error {
+	for _, fix := range b.fixups {
+		jump, ok := b.insns[fix.insnIdx].(bpf.JumpIf)
+		if !ok {
+			return fmt.Errorf("seccomp fixup at %d is not JumpIf", fix.insnIdx)
+		}
+		if fix.setTrue {
+			skip, err := b.skipTo(fix.insnIdx, fix.trueLabel)
+			if err != nil {
+				return err
+			}
+			jump.SkipTrue = skip
+		}
+		if fix.setFalse {
+			skip, err := b.skipTo(fix.insnIdx, fix.falseLabel)
+			if err != nil {
+				return err
+			}
+			jump.SkipFalse = skip
+		}
+		b.insns[fix.insnIdx] = jump
+	}
+	return nil
+}
+
+func validateSeccompPolicy(policy seccompArchPolicy) error {
+	if policy.auditArch == 0 ||
+		policy.socket == 0 ||
+		policy.socketpair == 0 ||
+		policy.ioUringSetup == 0 ||
+		policy.ioUringEnter == 0 ||
+		policy.ioUringRegister == 0 {
+		return errors.New("invalid seccomp architecture policy")
+	}
+	return nil
+}
+
+func rulesForPolicy(policy seccompArchPolicy) ([]seccompRule, error) {
+	if err := validateSeccompPolicy(policy); err != nil {
+		return nil, err
+	}
+	// One rule per syscall; Match is AND. Do not encode OR by stacking
+	// alternate parameter shapes into a single rule.
+	rules := []seccompRule{
+		{
+			NR: policy.socket,
+			Match: []seccompArgMatch{{
+				Arg:   0,
+				Kind:  seccompArgEqual,
+				Value: afUNIX,
+			}},
+		},
+		{
+			NR: policy.socketpair,
+			Match: []seccompArgMatch{
+				{
+					Arg:   0,
+					Kind:  seccompArgEqual,
+					Value: afUNIX,
+				},
+				{
+					Arg:   1,
+					Kind:  seccompArgMaskedEqual,
+					Mask:  sockTypeMask,
+					Value: sockDGRAM,
+				},
 			},
-			bpf.RetConstant{Val: seccompRetKillProcess},
-		)
+		},
+		{NR: policy.ioUringSetup},
+		{NR: policy.ioUringEnter},
+		{NR: policy.ioUringRegister},
+	}
+	if err := validateSeccompRules(rules); err != nil {
+		return nil, err
+	}
+	return rules, nil
+}
+
+func validateSeccompRules(rules []seccompRule) error {
+	if len(rules) == 0 {
+		return errors.New("seccomp rule table is empty")
+	}
+	seen := make(map[uint32]struct{}, len(rules))
+	for i, rule := range rules {
+		if rule.NR == 0 {
+			return fmt.Errorf("seccomp rule %d has zero syscall number", i)
+		}
+		if _, dup := seen[rule.NR]; dup {
+			return fmt.Errorf("duplicate seccomp syscall number %d", rule.NR)
+		}
+		seen[rule.NR] = struct{}{}
+		for j, match := range rule.Match {
+			if match.Arg != 0 && match.Arg != 1 {
+				return fmt.Errorf("seccomp rule %d match %d: unsupported arg index %d", i, j, match.Arg)
+			}
+			switch match.Kind {
+			case seccompArgEqual:
+				if match.Mask != 0 {
+					return fmt.Errorf("seccomp rule %d match %d: equal match must not set mask", i, j)
+				}
+			case seccompArgMaskedEqual:
+				if match.Mask == 0 {
+					return fmt.Errorf("seccomp rule %d match %d: masked equal requires non-zero mask", i, j)
+				}
+			default:
+				return fmt.Errorf("seccomp rule %d match %d: unknown match kind %d", i, j, match.Kind)
+			}
+		}
+	}
+	return nil
+}
+
+func argOffset(arg int) (uint32, error) {
+	switch arg {
+	case 0:
+		return seccompDataOffArg0, nil
+	case 1:
+		return seccompDataOffArg1, nil
+	default:
+		return 0, fmt.Errorf("unsupported seccomp arg index %d", arg)
+	}
+}
+
+func ruleLabel(i int) seccompLabel {
+	return seccompLabel(fmt.Sprintf("rule_%d", i))
+}
+
+func ruleAllowLabel(i int) seccompLabel {
+	return seccompLabel(fmt.Sprintf("rule_%d_allow", i))
+}
+
+func emitArgMatch(b *filterBuilder, match seccompArgMatch, nextTrue, onFail seccompLabel) error {
+	off, err := argOffset(match.Arg)
+	if err != nil {
+		return err
+	}
+	b.emit(bpf.LoadAbsolute{Off: off, Size: 4})
+	switch match.Kind {
+	case seccompArgEqual:
+		b.jumpIf(bpf.JumpEqual, match.Value, &nextTrue, &onFail)
+	case seccompArgMaskedEqual:
+		b.emit(bpf.ALUOpConstant{Op: bpf.ALUOpAnd, Val: match.Mask})
+		b.jumpIf(bpf.JumpEqual, match.Value, &nextTrue, &onFail)
+	default:
+		return fmt.Errorf("unknown seccomp match kind %d", match.Kind)
+	}
+	return nil
+}
+
+func buildAFUNIXBlockFilter(policy seccompArchPolicy) ([]bpf.Instruction, error) {
+	rules, err := rulesForPolicy(policy)
+	if err != nil {
+		return nil, err
+	}
+	insns, err := compileSeccompFilter(policy, rules)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateCompiledFilter(insns); err != nil {
+		return nil, err
+	}
+	return insns, nil
+}
+
+func compileSeccompFilter(policy seccompArchPolicy, rules []seccompRule) ([]bpf.Instruction, error) {
+	if err := validateSeccompRules(rules); err != nil {
+		return nil, err
+	}
+	b := newFilterBuilder()
+
+	b.emit(bpf.LoadAbsolute{Off: seccompDataOffArch, Size: 4})
+	afterArch := labelAfterArchKill
+	b.jumpIf(bpf.JumpEqual, policy.auditArch, &afterArch, nil)
+	b.emit(bpf.RetConstant{Val: seccompRetKillProcess})
+	if err := b.define(labelAfterArchKill); err != nil {
+		return nil, err
 	}
 
-	// From jeq SOCKET the next instructions are:
-	//  0 jeq SOCKETPAIR, 1 jeq SETUP, 2 jeq ENTER, 3 jeq REGISTER,
-	//  4 ret ALLOW, 5 ret EPERM, 6 ld socket arg0, ...
-	// Socket and socketpair jump to their forward-only argument checks.
-	// io_uring matches jump to the shared ret EPERM. Other syscalls allow.
-	insns = append(insns,
-		bpf.LoadAbsolute{Off: seccompDataOffNR, Size: 4},
-		bpf.JumpIf{
-			Cond:      bpf.JumpEqual,
-			Val:       policy.socket,
-			SkipTrue:  6,
-			SkipFalse: 0,
-		},
-		bpf.JumpIf{
-			Cond:      bpf.JumpEqual,
-			Val:       policy.socketpair,
-			SkipTrue:  9,
-			SkipFalse: 0,
-		},
-		bpf.JumpIf{
-			Cond:      bpf.JumpEqual,
-			Val:       policy.ioUringSetup,
-			SkipTrue:  3,
-			SkipFalse: 0,
-		},
-		bpf.JumpIf{
-			Cond:      bpf.JumpEqual,
-			Val:       policy.ioUringEnter,
-			SkipTrue:  2,
-			SkipFalse: 0,
-		},
-		bpf.JumpIf{
-			Cond:      bpf.JumpEqual,
-			Val:       policy.ioUringRegister,
-			SkipTrue:  1,
-			SkipFalse: 0,
-		},
-		bpf.RetConstant{Val: seccompRetAllow},
-		bpf.RetConstant{Val: seccompRetEPERM},
-		bpf.LoadAbsolute{Off: seccompDataOffArg0, Size: 4},
-		bpf.JumpIf{
-			Cond:      bpf.JumpEqual,
-			Val:       afUNIX,
-			SkipTrue:  0,
-			SkipFalse: 1,
-		},
-		bpf.RetConstant{Val: seccompRetEPERM},
-		bpf.RetConstant{Val: seccompRetAllow},
-		bpf.LoadAbsolute{Off: seccompDataOffArg0, Size: 4},
-		bpf.JumpIf{
-			Cond:      bpf.JumpEqual,
-			Val:       afUNIX,
-			SkipTrue:  1,
-			SkipFalse: 0,
-		},
-		bpf.RetConstant{Val: seccompRetAllow},
-		bpf.LoadAbsolute{Off: seccompDataOffArg1, Size: 4},
-		bpf.ALUOpConstant{Op: bpf.ALUOpAnd, Val: sockTypeMask},
-		bpf.JumpIf{
-			Cond:      bpf.JumpEqual,
-			Val:       sockDGRAM,
-			SkipTrue:  0,
-			SkipFalse: 1,
-		},
-		bpf.RetConstant{Val: seccompRetEPERM},
-		bpf.RetConstant{Val: seccompRetAllow},
-	)
-	return insns, nil
+	if policy.rejectX32 {
+		b.emit(bpf.LoadAbsolute{Off: seccompDataOffNR, Size: 4})
+		afterX32 := labelAfterX32Kill
+		b.jumpIf(bpf.JumpBitsSet, x32SyscallBit, nil, &afterX32)
+		b.emit(bpf.RetConstant{Val: seccompRetKillProcess})
+		if err := b.define(labelAfterX32Kill); err != nil {
+			return nil, err
+		}
+	}
+
+	b.emit(bpf.LoadAbsolute{Off: seccompDataOffNR, Size: 4})
+	for i := range rules {
+		target := ruleLabel(i)
+		b.jumpIf(bpf.JumpEqual, rules[i].NR, &target, nil)
+	}
+	b.emit(bpf.RetConstant{Val: seccompRetAllow})
+
+	for i, rule := range rules {
+		if err := b.define(ruleLabel(i)); err != nil {
+			return nil, err
+		}
+		allow := ruleAllowLabel(i)
+		if len(rule.Match) == 0 {
+			b.emit(bpf.RetConstant{Val: seccompRetEPERM})
+			continue
+		}
+		for j, match := range rule.Match {
+			var nextTrue seccompLabel
+			if j+1 < len(rule.Match) {
+				nextTrue = seccompLabel(fmt.Sprintf("rule_%d_m%d", i, j+1))
+			} else {
+				nextTrue = labelDenyEPERM
+			}
+			if j > 0 {
+				if err := b.define(seccompLabel(fmt.Sprintf("rule_%d_m%d", i, j))); err != nil {
+					return nil, err
+				}
+			}
+			if err := emitArgMatch(b, match, nextTrue, allow); err != nil {
+				return nil, err
+			}
+		}
+		if err := b.define(allow); err != nil {
+			return nil, err
+		}
+		b.emit(bpf.RetConstant{Val: seccompRetAllow})
+	}
+
+	if err := b.define(labelDenyEPERM); err != nil {
+		return nil, err
+	}
+	b.emit(bpf.RetConstant{Val: seccompRetEPERM})
+
+	if err := b.resolve(); err != nil {
+		return nil, err
+	}
+	return b.insns, nil
+}
+
+func validateCompiledFilter(insns []bpf.Instruction) error {
+	if len(insns) == 0 {
+		return errors.New("compiled AF_UNIX seccomp filter is empty")
+	}
+	if len(insns) > bpfMaxInsns {
+		return fmt.Errorf("compiled AF_UNIX seccomp filter has %d insns, max %d", len(insns), bpfMaxInsns)
+	}
+	reachable := make([]bool, len(insns))
+	var walk func(pc int)
+	walk = func(pc int) {
+		for pc >= 0 && pc < len(insns) {
+			if reachable[pc] {
+				return
+			}
+			reachable[pc] = true
+			switch insn := insns[pc].(type) {
+			case bpf.RetConstant, bpf.RetA:
+				return
+			case bpf.JumpIf:
+				walk(pc + 1 + int(insn.SkipTrue))
+				walk(pc + 1 + int(insn.SkipFalse))
+				return
+			case bpf.Jump:
+				pc = pc + 1 + int(insn.Skip)
+			default:
+				pc++
+			}
+		}
+	}
+	walk(0)
+
+	hasRet := false
+	for pc, ok := range reachable {
+		if !ok {
+			continue
+		}
+		switch insns[pc].(type) {
+		case bpf.RetConstant, bpf.RetA:
+			hasRet = true
+		case bpf.JumpIf, bpf.Jump:
+			// Terminal control-flow instructions; targets already walked.
+		default:
+			if pc+1 >= len(insns) {
+				return fmt.Errorf("seccomp filter falls off end at insn %d", pc)
+			}
+		}
+	}
+	if !hasRet {
+		return errors.New("seccomp filter has no reachable return")
+	}
+	return nil
 }
 
 func assembleSeccompFilter(policy seccompArchPolicy) ([]bpf.RawInstruction, error) {
@@ -346,105 +629,4 @@ func currentKernelRelease() (string, error) {
 		return "", err
 	}
 	return unix.ByteSliceToString(uts.Release[:]), nil
-}
-
-// evaluateSeccompFilterLE evaluates a little-endian seccomp filter against a
-// native little-endian seccomp_data image. It exists for tests and must not be
-// confused with bpf.NewVM, which reads absolute loads as network endian.
-func evaluateSeccompFilterLE(raw []bpf.RawInstruction, data []byte) (uint32, error) {
-	if len(data) < seccompDataOffArg0+8 {
-		return 0, errors.New("seccomp_data too short")
-	}
-	regA := uint32(0)
-	regX := uint32(0)
-	for pc := 0; pc < len(raw); pc++ {
-		insn := raw[pc]
-		opClass := insn.Op & 0x07
-		switch opClass {
-		case 0x00: // BPF_LD
-			size := insn.Op & 0x18
-			mode := insn.Op & 0xe0
-			if mode != 0x20 { // BPF_ABS
-				return 0, fmt.Errorf("unsupported LD mode %#x at %d", mode, pc)
-			}
-			var width int
-			switch size {
-			case 0x00:
-				width = 4
-			case 0x08:
-				width = 2
-			case 0x10:
-				width = 1
-			default:
-				return 0, fmt.Errorf("unsupported LD size %#x at %d", size, pc)
-			}
-			off := int(insn.K)
-			if off < 0 || off+width > len(data) {
-				return 0, fmt.Errorf("LD out of bounds at %d", pc)
-			}
-			switch width {
-			case 4:
-				regA = binary.LittleEndian.Uint32(data[off : off+4])
-			case 2:
-				regA = uint32(binary.LittleEndian.Uint16(data[off : off+2]))
-			case 1:
-				regA = uint32(data[off])
-			}
-		case 0x05: // BPF_JMP
-			cond := insn.Op & 0xf0
-			src := insn.Op & 0x08
-			k := insn.K
-			if src != 0 {
-				k = regX
-			}
-			match := false
-			switch cond {
-			case 0x10: // JEQ
-				match = regA == k
-			case 0x40: // JSET
-				match = regA&k != 0
-			case 0x00: // JA
-				pc += int(insn.K)
-				continue
-			default:
-				return 0, fmt.Errorf("unsupported JMP cond %#x at %d", cond, pc)
-			}
-			if match {
-				pc += int(insn.Jt)
-			} else {
-				pc += int(insn.Jf)
-			}
-		case 0x04: // BPF_ALU
-			src := insn.Op & 0x08
-			k := insn.K
-			if src != 0 {
-				k = regX
-			}
-			switch op := insn.Op & 0xf0; op {
-			case 0x50: // BPF_AND
-				regA &= k
-			default:
-				return 0, fmt.Errorf("unsupported ALU op %#x at %d", op, pc)
-			}
-		case 0x06: // BPF_RET
-			return insn.K, nil
-		default:
-			return 0, fmt.Errorf("unsupported op class %#x at %d", opClass, pc)
-		}
-	}
-	return 0, errors.New("filter fell off the end")
-}
-
-func packSeccompDataLE(nr int32, arch uint32, args ...uint64) []byte {
-	buf := make([]byte, 64)
-	binary.LittleEndian.PutUint32(buf[seccompDataOffNR:], uint32(nr))
-	binary.LittleEndian.PutUint32(buf[seccompDataOffArch:], arch)
-	for i, arg := range args {
-		off := seccompDataOffArg0 + i*8
-		if off+8 > len(buf) {
-			break
-		}
-		binary.LittleEndian.PutUint64(buf[off:], arg)
-	}
-	return buf
 }

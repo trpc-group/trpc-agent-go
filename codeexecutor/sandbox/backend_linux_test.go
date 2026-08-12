@@ -1142,8 +1142,18 @@ func TestOpenLinuxSandboxExtraFilesEmptySetup(t *testing.T) {
 }
 
 func TestLinuxRestrictedPreflightFailsClosedOnBadBwrap(t *testing.T) {
+	if _, err := nativeSeccompPolicy(); err != nil {
+		t.Skip(err)
+	}
+	release, err := currentKernelRelease()
+	if err != nil {
+		t.Skip(err)
+	}
+	if err := kernelSupportsRestrictedSeccomp(release); err != nil {
+		t.Skip(err)
+	}
 	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
-	err := rt.linuxRestrictedPreflight("/bin/false", true)
+	err = rt.linuxRestrictedPreflight("/bin/false", true)
 	if err == nil {
 		t.Fatal("expected restricted preflight failure")
 	}
@@ -1190,9 +1200,12 @@ func TestLinuxSandboxCommandFailsClosedWhenRestrictedPreflightCached(t *testing.
 }
 
 func TestRunBwrapSeccompPreflightProbeRejectsInvalidBinary(t *testing.T) {
+	if _, err := nativeSeccompPolicy(); err != nil {
+		t.Skip(err)
+	}
 	filter, err := openSeccompFilterMemfd()
 	if err != nil {
-		t.Fatal(err)
+		t.Skipf("open seccomp memfd unavailable: %v", err)
 	}
 	defer filter.Close()
 	stderr, err := runBwrapSeccompPreflightProbe("/bin/false", true, filter)

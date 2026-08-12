@@ -14,6 +14,7 @@ package sandbox
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -31,6 +32,83 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 )
 
+func TestUnixSocketpairReconnectClass(t *testing.T) {
+	t.Parallel()
+	// STREAM/SEQPACKET socketpair endpoints are already connected and cannot be
+	// retargeted to a pathname socket. DGRAM can, which is why the filter denies
+	// only AF_UNIX datagram socketpair.
+	if ok, err := probeUnixSocketpairReconnect(unix.SOCK_STREAM); ok || !strings.Contains(err, "already connected") {
+		t.Fatalf("STREAM reconnect = ok=%v err=%q, want already connected", ok, err)
+	}
+	if ok, err := probeUnixSocketpairReconnect(unix.SOCK_SEQPACKET); ok || !strings.Contains(err, "already connected") {
+		t.Fatalf("SEQPACKET reconnect = ok=%v err=%q, want already connected", ok, err)
+	}
+	if ok, err := probeUnixSocketpairReconnect(unix.SOCK_DGRAM); !ok {
+		t.Fatalf("DGRAM reconnect failed: %q", err)
+	}
+}
+
+func probeUnixSocketpairReconnect(sockType int) (ok bool, errStr string) {
+	dir, err := os.MkdirTemp("", "seccomp-reconnect-*")
+	if err != nil {
+		return false, err.Error()
+	}
+	defer os.RemoveAll(dir)
+	path := filepath.Join(dir, "host.sock")
+
+	switch sockType {
+	case unix.SOCK_DGRAM:
+		listener, err := net.ListenUnixgram("unixgram", &net.UnixAddr{Name: path, Net: "unixgram"})
+		if err != nil {
+			return false, "listen: " + err.Error()
+		}
+		defer listener.Close()
+	case unix.SOCK_STREAM:
+		ln, err := net.Listen("unix", path)
+		if err != nil {
+			return false, "listen: " + err.Error()
+		}
+		defer ln.Close()
+	case unix.SOCK_SEQPACKET:
+		fd, err := unix.Socket(unix.AF_UNIX, sockType, 0)
+		if err != nil {
+			return false, "socket listen: " + err.Error()
+		}
+		_ = os.Remove(path)
+		if err = unix.Bind(fd, &unix.SockaddrUnix{Name: path}); err != nil {
+			_ = unix.Close(fd)
+			return false, "bind: " + err.Error()
+		}
+		if err = unix.Listen(fd, 1); err != nil {
+			_ = unix.Close(fd)
+			return false, "listen: " + err.Error()
+		}
+		ln, err := net.FileListener(os.NewFile(uintptr(fd), path))
+		if err != nil {
+			_ = unix.Close(fd)
+			return false, "filelistener: " + err.Error()
+		}
+		defer ln.Close()
+	default:
+		return false, "unsupported type"
+	}
+
+	fds, err := unix.Socketpair(unix.AF_UNIX, sockType|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		return false, "socketpair: " + err.Error()
+	}
+	defer unix.Close(fds[0])
+	defer unix.Close(fds[1])
+
+	if err := unix.Connect(fds[0], &unix.SockaddrUnix{Name: path}); err != nil {
+		return false, "connect: " + err.Error()
+	}
+	if _, err := unix.Write(fds[0], []byte("probe")); err != nil {
+		return false, "write: " + err.Error()
+	}
+	return true, ""
+}
+
 func TestAssembleSeccompFilterSemantics(t *testing.T) {
 	t.Parallel()
 	for _, policy := range []seccompArchPolicy{seccompPolicyAMD64, seccompPolicyARM64} {
@@ -44,70 +122,335 @@ func TestAssembleSeccompFilterSemantics(t *testing.T) {
 			if len(raw) == 0 {
 				t.Fatal("empty filter")
 			}
-
-			assertFilter := func(name string, nr int32, arch uint32, arg0 uint64, want uint32, extraArgs ...uint64) {
-				t.Helper()
-				args := append([]uint64{arg0}, extraArgs...)
-				got, err := evaluateSeccompFilterLE(raw, packSeccompDataLE(nr, arch, args...))
-				if err != nil {
-					t.Fatalf("%s: evaluate: %v", name, err)
-				}
-				if got != want {
-					t.Fatalf("%s: got %#x, want %#x", name, got, want)
-				}
+			if _, err := bpf.NewVM(mustBuildFilter(t, policy)); err != nil {
+				t.Fatalf("bpf.NewVM rejected program: %v", err)
 			}
 
-			assertFilter("allow AF_INET socket", int32(policy.socket), policy.auditArch, 2, seccompRetAllow)
-			assertFilter("deny AF_UNIX socket", int32(policy.socket), policy.auditArch, afUNIX, seccompRetEPERM)
-			assertFilter("deny AF_UNIX with high bits", int32(policy.socket), policy.auditArch, afUNIX|uint64(0xffffffff)<<32, seccompRetEPERM)
-			assertFilter(
-				"allow AF_UNIX stream socketpair",
-				int32(policy.socketpair),
-				policy.auditArch,
-				afUNIX,
-				seccompRetAllow,
-				uint64(unix.SOCK_STREAM),
-			)
-			assertFilter(
-				"deny AF_UNIX datagram socketpair",
-				int32(policy.socketpair),
-				policy.auditArch,
-				afUNIX,
-				seccompRetEPERM,
-				uint64(unix.SOCK_DGRAM),
-			)
-			assertFilter(
-				"deny flagged AF_UNIX datagram socketpair",
-				int32(policy.socketpair),
-				policy.auditArch,
-				afUNIX,
-				seccompRetEPERM,
-				uint64(unix.SOCK_DGRAM|unix.SOCK_CLOEXEC|unix.SOCK_NONBLOCK),
-			)
-			assertFilter(
-				"allow non-AF_UNIX datagram socketpair",
-				int32(policy.socketpair),
-				policy.auditArch,
-				uint64(unix.AF_INET),
-				seccompRetAllow,
-				uint64(unix.SOCK_DGRAM),
-			)
-			assertFilter("deny io_uring_setup", int32(policy.ioUringSetup), policy.auditArch, 0, seccompRetEPERM)
-			assertFilter("deny io_uring_enter", int32(policy.ioUringEnter), policy.auditArch, 0, seccompRetEPERM)
-			assertFilter("deny io_uring_register", int32(policy.ioUringRegister), policy.auditArch, 0, seccompRetEPERM)
-			assertFilter("allow unrelated syscall", 1, policy.auditArch, 0, seccompRetAllow)
-			assertFilter("kill wrong arch", int32(policy.socket), policy.auditArch^0xff, afUNIX, seccompRetKillProcess)
-
+			type caseSpec struct {
+				name string
+				nr   uint32
+				arch uint32
+				args []uint64
+				want uint32
+			}
+			cases := []caseSpec{
+				{
+					name: "allow AF_INET socket",
+					nr:   policy.socket,
+					arch: policy.auditArch,
+					args: []uint64{uint64(unix.AF_INET)},
+					want: seccompRetAllow,
+				},
+				{
+					name: "deny AF_UNIX socket",
+					nr:   policy.socket,
+					arch: policy.auditArch,
+					args: []uint64{afUNIX},
+					want: seccompRetEPERM,
+				},
+				{
+					name: "deny AF_LOCAL socket",
+					nr:   policy.socket,
+					arch: policy.auditArch,
+					args: []uint64{uint64(unix.AF_LOCAL)},
+					want: seccompRetEPERM,
+				},
+				{
+					name: "deny AF_UNIX socket with high arg0 bits",
+					nr:   policy.socket,
+					arch: policy.auditArch,
+					args: []uint64{afUNIX | uint64(0xffffffff)<<32},
+					want: seccompRetEPERM,
+				},
+				{
+					name: "allow AF_UNIX stream socketpair",
+					nr:   policy.socketpair,
+					arch: policy.auditArch,
+					args: []uint64{afUNIX, uint64(unix.SOCK_STREAM)},
+					want: seccompRetAllow,
+				},
+				{
+					name: "allow AF_UNIX seqpacket socketpair",
+					nr:   policy.socketpair,
+					arch: policy.auditArch,
+					args: []uint64{afUNIX, uint64(unix.SOCK_SEQPACKET)},
+					want: seccompRetAllow,
+				},
+				{
+					name: "deny AF_UNIX datagram socketpair",
+					nr:   policy.socketpair,
+					arch: policy.auditArch,
+					args: []uint64{afUNIX, uint64(unix.SOCK_DGRAM)},
+					want: seccompRetEPERM,
+				},
+				{
+					name: "deny flagged AF_UNIX datagram socketpair",
+					nr:   policy.socketpair,
+					arch: policy.auditArch,
+					args: []uint64{afUNIX, uint64(unix.SOCK_DGRAM | unix.SOCK_CLOEXEC | unix.SOCK_NONBLOCK)},
+					want: seccompRetEPERM,
+				},
+				{
+					name: "deny AF_UNIX datagram socketpair with high arg1 bits",
+					nr:   policy.socketpair,
+					arch: policy.auditArch,
+					args: []uint64{afUNIX, uint64(unix.SOCK_DGRAM) | uint64(0xffffffff)<<32},
+					want: seccompRetEPERM,
+				},
+				{
+					name: "allow non-AF_UNIX datagram socketpair",
+					nr:   policy.socketpair,
+					arch: policy.auditArch,
+					args: []uint64{uint64(unix.AF_INET), uint64(unix.SOCK_DGRAM)},
+					want: seccompRetAllow,
+				},
+				{
+					name: "deny io_uring_setup",
+					nr:   policy.ioUringSetup,
+					arch: policy.auditArch,
+					args: []uint64{0},
+					want: seccompRetEPERM,
+				},
+				{
+					name: "deny io_uring_enter",
+					nr:   policy.ioUringEnter,
+					arch: policy.auditArch,
+					args: []uint64{0},
+					want: seccompRetEPERM,
+				},
+				{
+					name: "deny io_uring_register",
+					nr:   policy.ioUringRegister,
+					arch: policy.auditArch,
+					args: []uint64{0},
+					want: seccompRetEPERM,
+				},
+				{
+					name: "allow unrelated syscall",
+					nr:   1,
+					arch: policy.auditArch,
+					args: []uint64{0},
+					want: seccompRetAllow,
+				},
+				{
+					name: "allow runtime syscall number zero",
+					nr:   0,
+					arch: policy.auditArch,
+					args: []uint64{0},
+					want: seccompRetAllow,
+				},
+				{
+					name: "kill wrong arch",
+					nr:   policy.socket,
+					arch: policy.auditArch ^ 0xff,
+					args: []uint64{afUNIX},
+					want: seccompRetKillProcess,
+				},
+			}
 			if policy.rejectX32 {
-				assertFilter(
-					"kill x32 socket",
-					int32(uint32(policy.socket)|x32SyscallBit),
-					policy.auditArch,
-					afUNIX,
-					seccompRetKillProcess,
-				)
+				cases = append(cases, caseSpec{
+					name: "kill x32 socket",
+					nr:   uint32(policy.socket) | x32SyscallBit,
+					arch: policy.auditArch,
+					args: []uint64{afUNIX},
+					want: seccompRetKillProcess,
+				})
+			}
+
+			for _, tc := range cases {
+				tc := tc
+				t.Run(tc.name, func(t *testing.T) {
+					t.Parallel()
+					got, err := evaluateSeccompFilterLE(raw, packSeccompDataLE(tc.nr, tc.arch, tc.args...))
+					if err != nil {
+						t.Fatalf("evaluate: %v", err)
+					}
+					if got != tc.want {
+						t.Fatalf("got %#x, want %#x", got, tc.want)
+					}
+				})
 			}
 		})
+	}
+}
+
+func mustBuildFilter(t *testing.T, policy seccompArchPolicy) []bpf.Instruction {
+	t.Helper()
+	insns, err := buildAFUNIXBlockFilter(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return insns
+}
+
+func TestBuildAFUNIXBlockFilterRejectsInvalidPolicy(t *testing.T) {
+	t.Parallel()
+	if _, err := buildAFUNIXBlockFilter(seccompArchPolicy{}); err == nil {
+		t.Fatal("expected invalid policy error")
+	}
+	if _, err := assembleSeccompFilter(seccompArchPolicy{auditArch: 1}); err == nil {
+		t.Fatal("expected assemble to fail for incomplete policy")
+	}
+	half := seccompPolicyAMD64
+	half.ioUringRegister = 0
+	if _, err := buildAFUNIXBlockFilter(half); err == nil {
+		t.Fatal("expected incomplete io_uring policy error")
+	}
+}
+
+func TestValidateSeccompRulesErrors(t *testing.T) {
+	t.Parallel()
+	if err := validateSeccompRules(nil); err == nil {
+		t.Fatal("expected empty rules error")
+	}
+	if err := validateSeccompRules([]seccompRule{{NR: 0}}); err == nil {
+		t.Fatal("expected zero syscall error")
+	}
+	if err := validateSeccompRules([]seccompRule{{NR: 1}, {NR: 1}}); err == nil {
+		t.Fatal("expected duplicate syscall error")
+	}
+	if err := validateSeccompRules([]seccompRule{{
+		NR: 1,
+		Match: []seccompArgMatch{{
+			Arg:  2,
+			Kind: seccompArgEqual,
+		}},
+	}}); err == nil {
+		t.Fatal("expected bad arg index error")
+	}
+	if err := validateSeccompRules([]seccompRule{{
+		NR: 1,
+		Match: []seccompArgMatch{{
+			Arg:  0,
+			Kind: seccompArgEqual,
+			Mask: 1,
+		}},
+	}}); err == nil {
+		t.Fatal("expected equal+mask error")
+	}
+	if err := validateSeccompRules([]seccompRule{{
+		NR: 1,
+		Match: []seccompArgMatch{{
+			Arg:  0,
+			Kind: seccompArgMaskedEqual,
+		}},
+	}}); err == nil {
+		t.Fatal("expected masked-equal zero mask error")
+	}
+	if err := validateSeccompRules([]seccompRule{{
+		NR: 1,
+		Match: []seccompArgMatch{{
+			Arg:  0,
+			Kind: seccompArgMatchKind(99),
+		}},
+	}}); err == nil {
+		t.Fatal("expected unknown match kind error")
+	}
+}
+
+func TestFilterBuilderLabelErrors(t *testing.T) {
+	t.Parallel()
+	b := newFilterBuilder()
+	if err := b.define("a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.define("a"); err == nil {
+		t.Fatal("expected duplicate label error")
+	}
+
+	b = newFilterBuilder()
+	missing := seccompLabel("missing")
+	b.jumpIf(bpf.JumpEqual, 1, &missing, nil)
+	if err := b.resolve(); err == nil {
+		t.Fatal("expected undefined label error")
+	}
+
+	b = newFilterBuilder()
+	back := seccompLabel("back")
+	if err := b.define(back); err != nil {
+		t.Fatal(err)
+	}
+	b.jumpIf(bpf.JumpEqual, 1, &back, nil)
+	if err := b.resolve(); err == nil {
+		t.Fatal("expected backward jump error")
+	}
+
+	b = newFilterBuilder()
+	far := seccompLabel("far")
+	b.emit(bpf.LoadAbsolute{Off: 0, Size: 4})
+	b.jumpIf(bpf.JumpEqual, 1, &far, nil)
+	for i := 0; i < 256; i++ {
+		b.emit(bpf.ALUOpConstant{Op: bpf.ALUOpAnd, Val: 0xffffffff})
+	}
+	if err := b.define(far); err != nil {
+		t.Fatal(err)
+	}
+	b.emit(bpf.RetConstant{Val: seccompRetAllow})
+	if err := b.resolve(); err == nil {
+		t.Fatal("expected jump overflow error")
+	}
+}
+
+func TestCompileSeccompFilterRejectsUnknownMatch(t *testing.T) {
+	t.Parallel()
+	_, err := compileSeccompFilter(seccompPolicyAMD64, []seccompRule{{
+		NR: 1,
+		Match: []seccompArgMatch{{
+			Arg:  0,
+			Kind: seccompArgMatchKind(99),
+		}},
+	}})
+	if err == nil {
+		t.Fatal("expected unknown match kind compile error")
+	}
+}
+
+func TestSeccompFilterGolden(t *testing.T) {
+	t.Parallel()
+	for _, policy := range []seccompArchPolicy{seccompPolicyAMD64, seccompPolicyARM64} {
+		policy := policy
+		t.Run(policy.name, func(t *testing.T) {
+			t.Parallel()
+			raw, err := assembleSeccompFilter(policy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := formatSeccompFilterGolden(policy.name, raw)
+			path := filepath.Join("testdata", "seccomp_filter_"+policy.name+".golden")
+			want, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read golden %s: %v", path, err)
+			}
+			if string(want) != got {
+				t.Fatalf("golden mismatch for %s\n--- got ---\n%s\n--- want ---\n%s", policy.name, got, want)
+			}
+		})
+	}
+}
+
+func formatSeccompFilterGolden(name string, raw []bpf.RawInstruction) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "policy %s\n", name)
+	fmt.Fprintf(&b, "insns %d\n", len(raw))
+	for i, insn := range raw {
+		fmt.Fprintf(&b, "%d op=%#04x jt=%d jf=%d k=%#x\n", i, insn.Op, insn.Jt, insn.Jf, insn.K)
+	}
+	return b.String()
+}
+
+func TestRulesForPolicySupportedGOARCH(t *testing.T) {
+	t.Parallel()
+	for _, goarch := range []string{"amd64", "arm64"} {
+		policy, err := seccompPolicyForGOARCH(goarch)
+		if err != nil {
+			t.Fatalf("%s: %v", goarch, err)
+		}
+		if _, err := rulesForPolicy(policy); err != nil {
+			t.Fatalf("%s rules: %v", goarch, err)
+		}
+		if _, err := assembleSeccompFilter(policy); err != nil {
+			t.Fatalf("%s assemble: %v", goarch, err)
+		}
 	}
 }
 
@@ -159,16 +502,6 @@ func TestParseKernelReleaseAndSupport(t *testing.T) {
 	}
 }
 
-func TestBuildAFUNIXBlockFilterRejectsInvalidPolicy(t *testing.T) {
-	t.Parallel()
-	if _, err := buildAFUNIXBlockFilter(seccompArchPolicy{}); err == nil {
-		t.Fatal("expected invalid policy error")
-	}
-	if _, err := assembleSeccompFilter(seccompArchPolicy{auditArch: 1}); err == nil {
-		t.Fatal("expected assemble to fail for incomplete policy")
-	}
-}
-
 func TestEvaluateSeccompFilterLEErrorPaths(t *testing.T) {
 	t.Parallel()
 	if _, err := evaluateSeccompFilterLE(nil, make([]byte, 8)); err == nil {
@@ -182,8 +515,10 @@ func TestEvaluateSeccompFilterLEErrorPaths(t *testing.T) {
 	if _, err := evaluateSeccompFilterLE([]bpf.RawInstruction{{Op: 0x20 | 0x18}}, data); err == nil {
 		t.Fatal("expected unsupported LD size error")
 	}
-	if _, err := evaluateSeccompFilterLE([]bpf.RawInstruction{{Op: 0x20, K: 60}}, data); err == nil {
+	if _, err := evaluateSeccompFilterLE([]bpf.RawInstruction{{Op: 0x20, K: 61}}, data); err == nil {
 		t.Fatal("expected LD out-of-bounds error")
+	} else if !strings.Contains(err.Error(), "LD out of bounds") {
+		t.Fatalf("err = %v, want LD out of bounds", err)
 	}
 	if _, err := evaluateSeccompFilterLE([]bpf.RawInstruction{{Op: 0x05 | 0x20}}, data); err == nil {
 		t.Fatal("expected unsupported JMP condition error")
@@ -832,4 +1167,107 @@ func TestLinuxRestrictedDenyReadFDsConsumedAndCleanedAfterWait(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(ws.Path, "work", "missing.txt")); !os.IsNotExist(err) {
 		t.Fatalf("synthetic deny-read target was not cleaned after Wait: %v", err)
 	}
+}
+
+// evaluateSeccompFilterLE evaluates a little-endian seccomp filter against a
+// native little-endian seccomp_data image. It exists for tests and must not be
+// confused with bpf.NewVM, which reads absolute loads as network endian.
+//
+//nolint:gocyclo // Compact classic-BPF interpreter kept in one function for test readability.
+func evaluateSeccompFilterLE(raw []bpf.RawInstruction, data []byte) (uint32, error) {
+	if len(data) < seccompDataOffArg0+8 {
+		return 0, errors.New("seccomp_data too short")
+	}
+	regA := uint32(0)
+	regX := uint32(0)
+	for pc := 0; pc < len(raw); pc++ {
+		insn := raw[pc]
+		opClass := insn.Op & 0x07
+		switch opClass {
+		case 0x00: // BPF_LD
+			size := insn.Op & 0x18
+			mode := insn.Op & 0xe0
+			if mode != 0x20 { // BPF_ABS
+				return 0, fmt.Errorf("unsupported LD mode %#x at %d", mode, pc)
+			}
+			var width int
+			switch size {
+			case 0x00:
+				width = 4
+			case 0x08:
+				width = 2
+			case 0x10:
+				width = 1
+			default:
+				return 0, fmt.Errorf("unsupported LD size %#x at %d", size, pc)
+			}
+			off := int(insn.K)
+			if off < 0 || off+width > len(data) {
+				return 0, fmt.Errorf("LD out of bounds at %d", pc)
+			}
+			switch width {
+			case 4:
+				regA = binary.LittleEndian.Uint32(data[off : off+4])
+			case 2:
+				regA = uint32(binary.LittleEndian.Uint16(data[off : off+2]))
+			case 1:
+				regA = uint32(data[off])
+			}
+		case 0x05: // BPF_JMP
+			cond := insn.Op & 0xf0
+			src := insn.Op & 0x08
+			k := insn.K
+			if src != 0 {
+				k = regX
+			}
+			match := false
+			switch cond {
+			case 0x10: // JEQ
+				match = regA == k
+			case 0x40: // JSET
+				match = regA&k != 0
+			case 0x00: // JA
+				pc += int(insn.K)
+				continue
+			default:
+				return 0, fmt.Errorf("unsupported JMP cond %#x at %d", cond, pc)
+			}
+			if match {
+				pc += int(insn.Jt)
+			} else {
+				pc += int(insn.Jf)
+			}
+		case 0x04: // BPF_ALU
+			src := insn.Op & 0x08
+			k := insn.K
+			if src != 0 {
+				k = regX
+			}
+			switch op := insn.Op & 0xf0; op {
+			case 0x50: // BPF_AND
+				regA &= k
+			default:
+				return 0, fmt.Errorf("unsupported ALU op %#x at %d", op, pc)
+			}
+		case 0x06: // BPF_RET
+			return insn.K, nil
+		default:
+			return 0, fmt.Errorf("unsupported op class %#x at %d", opClass, pc)
+		}
+	}
+	return 0, errors.New("filter fell off the end")
+}
+
+func packSeccompDataLE(nr uint32, arch uint32, args ...uint64) []byte {
+	buf := make([]byte, 64)
+	binary.LittleEndian.PutUint32(buf[seccompDataOffNR:], nr)
+	binary.LittleEndian.PutUint32(buf[seccompDataOffArch:], arch)
+	for i, arg := range args {
+		off := seccompDataOffArg0 + i*8
+		if off+8 > len(buf) {
+			break
+		}
+		binary.LittleEndian.PutUint64(buf[off:], arg)
+	}
+	return buf
 }

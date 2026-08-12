@@ -45,14 +45,21 @@ Because the managed Linux profile still uses `--ro-bind / /`, host socket paths
 such as `docker.sock` remain visible in the mount namespace. The seccomp filter
 is what makes them unusable: the guest cannot create a new AF_UNIX file
 descriptor to `connect(2)` them. The same rule also blocks guest-local pathname
-and abstract Unix sockets. Callers that need Unix domain socket IPC must choose
-`NetworkEnabled`, including through temporary `WithAdditionalPermissions`.
+and abstract Unix sockets. Callers that need pathname or abstract Unix socket IPC must
+choose `NetworkEnabled` (including through temporary `WithAdditionalPermissions`);
+anonymous stream socketpairs remain available in `NetworkRestricted`.
 
 Restricted Linux runs fail closed when:
 
 - the GOARCH is not `amd64` or `arm64`;
 - the kernel is older than 4.8 (historical seccomp/ptrace bypass);
 - bubblewrap or the kernel cannot load the filter.
+
+On Linux 4.8–4.13, seccomp may degrade `SECCOMP_RET_KILL_PROCESS` to
+kill-thread for the wrong-architecture and amd64 x32 reject paths. The denied
+syscall still does not execute, and the AF_UNIX / `io_uring` `EPERM` returns are
+unchanged. The minimum kernel remains 4.8; this is a compatibility note, not a
+fail-open path.
 
 When `NetworkEnabled` is selected, the backend omits `--unshare-net` and the
 seccomp filter. The command then shares the host network namespace and may use
