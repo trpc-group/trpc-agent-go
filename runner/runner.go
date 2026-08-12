@@ -1308,6 +1308,7 @@ type eventLoopContext struct {
 	emittedAssistantChoiceSignatures   map[string]struct{}
 	visibleCompletionResponseIDs       map[string]struct{}
 	visibleCompletionChoiceSignatures  map[string]struct{}
+	persistedEvents                    eventPersistenceDeduper
 	sawTerminalError                   bool
 	streamFilter                       graph.StreamModeFilter
 	interruptedAssistants              map[string]*interruptedAssistantAccumulator
@@ -1325,6 +1326,73 @@ type eventLoopContext struct {
 	errorEventCount     int
 	emittedEventCount   int
 	detailSpanCount     int
+}
+
+// eventPersistenceDeduper coordinates event persistence within one runner
+// event loop. Successful IDs remain recorded for the loop lifetime, while a
+// failed append releases the ID so another delivery can retry it.
+type eventPersistenceDeduper struct {
+	mu      sync.Mutex
+	records map[string]*eventPersistenceRecord
+}
+
+type eventPersistenceRecord struct {
+	done      chan struct{}
+	persisted bool
+}
+
+func (d *eventPersistenceDeduper) start(
+	ctx context.Context,
+	eventID string,
+) (complete func(bool), proceed bool) {
+	if d == nil || eventID == "" {
+		return func(bool) {}, true
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for {
+		d.mu.Lock()
+		if d.records == nil {
+			d.records = make(map[string]*eventPersistenceRecord)
+		}
+		record, ok := d.records[eventID]
+		if !ok {
+			record = &eventPersistenceRecord{done: make(chan struct{})}
+			d.records[eventID] = record
+			d.mu.Unlock()
+			return func(persisted bool) {
+				d.finish(eventID, record, persisted)
+			}, true
+		}
+		d.mu.Unlock()
+
+		select {
+		case <-record.done:
+			if record.persisted {
+				return nil, false
+			}
+		case <-ctx.Done():
+			return nil, false
+		}
+	}
+}
+
+func (d *eventPersistenceDeduper) finish(
+	eventID string,
+	record *eventPersistenceRecord,
+	persisted bool,
+) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.records[eventID] != record {
+		return
+	}
+	record.persisted = persisted
+	if !persisted {
+		delete(d.records, eventID)
+	}
+	close(record.done)
 }
 
 type interruptedAssistantAccumulator struct {
@@ -1551,12 +1619,13 @@ func (r *runner) processSingleAgentEvent(
 	shouldForwardEvent := loop.streamFilter.Allows(agentEvent)
 
 	// Append qualifying events to session and trigger summarization.
-	persisted := r.handleEventPersistence(
+	persisted := r.handleEventPersistenceOnce(
 		ctx,
 		loop.invocation,
 		loop.sess,
 		persistSession,
 		agentEvent,
+		&loop.persistedEvents,
 	)
 	if !excludeRootCompletion {
 		r.recordPersistedAssistantEvent(
@@ -2357,12 +2426,13 @@ func (r *runner) persistInterruptedAssistant(ctx context.Context, loop *eventLoo
 			) {
 			continue
 		}
-		if !r.handleEventPersistence(
+		if !r.handleEventPersistenceOnce(
 			persistCtx,
 			loop.invocation,
 			loop.sess,
 			persistSession,
 			interruptedEvent,
+			&loop.persistedEvents,
 		) {
 			continue
 		}
@@ -2577,6 +2647,50 @@ func (r *runner) handleFlushRequest(
 // handleEventPersistence appends qualifying events to the session and triggers
 // asynchronous summarization.
 func (r *runner) handleEventPersistence(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	sess *session.Session,
+	persistSession *session.Session,
+	agentEvent *event.Event,
+) bool {
+	return r.handleEventPersistenceCore(
+		ctx,
+		invocation,
+		sess,
+		persistSession,
+		agentEvent,
+	)
+}
+
+func (r *runner) handleEventPersistenceOnce(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	sess *session.Session,
+	persistSession *session.Session,
+	agentEvent *event.Event,
+	deduper *eventPersistenceDeduper,
+) (persisted bool) {
+	eventID := ""
+	if agentEvent != nil {
+		eventID = agentEvent.ID
+	}
+	complete, proceed := deduper.start(ctx, eventID)
+	if !proceed {
+		return false
+	}
+	defer func() {
+		complete(persisted)
+	}()
+	return r.handleEventPersistenceCore(
+		ctx,
+		invocation,
+		sess,
+		persistSession,
+		agentEvent,
+	)
+}
+
+func (r *runner) handleEventPersistenceCore(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	sess *session.Session,
