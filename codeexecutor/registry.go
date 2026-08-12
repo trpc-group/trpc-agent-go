@@ -164,7 +164,13 @@ func (r *WorkspaceRegistry) acquire(
 			return waitWorkspaceCreate(ctx, call)
 		}
 		latest, ok := r.byID[id]
-		if !ok || latest != entry {
+		// Compare only scalar fields — entry contains a WorkspaceManager
+		// interface whose dynamic type may be non-comparable (e.g.
+		// structs with slices/maps), so a full struct comparison would
+		// panic. entryToken uniquely identifies the registry entry
+		// and is sufficient to detect a stale cache entry replaced
+		// between unlock and re-lock.
+		if !ok || latest.entryToken != entry.entryToken {
 			r.mu.Unlock()
 			continue
 		}

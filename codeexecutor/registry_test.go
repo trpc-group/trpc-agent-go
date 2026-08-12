@@ -1031,3 +1031,41 @@ func TestWorkspaceRegistry_Release_UsesStoredManager(t *testing.T) {
 	require.Equal(t, 1, wm.cleans, "Release must clean up through the stored manager")
 	wm.mu.Unlock()
 }
+
+// nonComparableWM is a value-type WorkspaceManager that contains a slice
+// field, making it non-comparable. Regression: workspaceRegistryEntry
+// stored such a manager must not panic during cache revalidation
+// (acquire compares entryToken scalars, not the whole struct).
+type nonComparableWM struct {
+	tags []string // makes the value non-comparable
+}
+
+func (n nonComparableWM) CreateWorkspace(
+	_ context.Context, id string, _ WorkspacePolicy,
+) (Workspace, error) {
+	return Workspace{ID: id, Path: "/tmp/" + id}, nil
+}
+
+func (n nonComparableWM) Cleanup(_ context.Context, _ Workspace) error {
+	return nil
+}
+
+// TestWorkspaceRegistry_Acquire_NonComparableManagerDoesNotPanic verifies
+// that a WorkspaceManager implemented as a value type with non-comparable
+// fields (slices, maps) does not cause a panic during cache revalidation.
+func TestWorkspaceRegistry_Acquire_NonComparableManagerDoesNotPanic(t *testing.T) {
+	r := NewWorkspaceRegistry()
+	wm := nonComparableWM{tags: []string{"a", "b"}}
+	ctx := context.Background()
+
+	// First Acquire creates the workspace.
+	_, err := r.Acquire(ctx, wm, "non-comparable")
+	require.NoError(t, err)
+
+	// Second Acquire revalidates the cache entry via != comparison.
+	// This would panic if the registry compared the whole entry struct.
+	require.NotPanics(t, func() {
+		_, err = r.Acquire(ctx, wm, "non-comparable")
+		require.NoError(t, err)
+	})
+}

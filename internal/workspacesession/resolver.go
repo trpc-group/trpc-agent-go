@@ -11,10 +11,9 @@ package workspacesession
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
-
-	"github.com/google/uuid"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
@@ -72,12 +71,20 @@ func (r *Resolver) CreateWorkspace(
 	return handle.Workspace, err
 }
 
+// ErrInvalidSession is returned when CreateWorkspaceHandle is called
+// with an invocation whose Session has an empty ID. Such sessions
+// cannot be tracked for lifecycle cleanup, so we fail closed instead
+// of creating an untrackable ephemeral workspace.
+var ErrInvalidSession = errors.New(
+	"workspacesession: invocation session ID is empty; " +
+		"a valid session ID is required for workspace lifecycle tracking")
+
 // CreateWorkspaceHandle acquires the invocation-scoped workspace together with
 // the registry token required for ABA-safe conditional invalidation.
 //
-// If the invocation carries a Session without a stable ID, an ephemeral
-// workspace key is used so placeholder sessions cannot share a durable
-// tool/skill name key.
+// If the invocation carries a Session with an empty ID, the call fails
+// closed with ErrInvalidSession. An untrackable ephemeral workspace
+// would leak because no handle/session-key is exposed for later cleanup.
 func (r *Resolver) CreateWorkspaceHandle(
 	ctx context.Context,
 	eng codeexecutor.Engine,
@@ -88,21 +95,13 @@ func (r *Resolver) CreateWorkspaceHandle(
 		reg = codeexecutor.NewWorkspaceRegistry()
 		r.reg = reg
 	}
-	if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
+	if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil && inv.Session != nil {
+		if strings.TrimSpace(inv.Session.ID) == "" {
+			return codeexecutor.WorkspaceHandle{}, ErrInvalidSession
+		}
 		ctx = withWorkspaceArtifactContext(ctx, inv)
 	}
 	sid := workspaceKey(ctx, name)
-	if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil && inv.Session != nil {
-		if strings.TrimSpace(inv.Session.ID) == "" {
-			// Invalid (empty-ID) sessions must not share a workspace
-			// via the tool/skill name key. Use a random UUID suffix
-			// so each invalid session gets a unique workspace that is
-			// stable neither across processes nor across restarts —
-			// this prevents collisions with stale entries left by a
-			// previous process generation.
-			sid = fmt.Sprintf("ephemeral-empty-session-%s", uuid.NewString())
-		}
-	}
 	return reg.AcquireHandle(ctx, eng.Manager(), sid)
 }
 
