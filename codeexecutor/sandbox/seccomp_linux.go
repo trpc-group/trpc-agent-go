@@ -462,28 +462,38 @@ func validateCompiledFilter(insns []bpf.Instruction) error {
 		return fmt.Errorf("compiled AF_UNIX seccomp filter has %d insns, max %d", len(insns), bpfMaxInsns)
 	}
 	reachable := make([]bool, len(insns))
+	var walkErr error
 	var walk func(pc int)
 	walk = func(pc int) {
-		for pc >= 0 && pc < len(insns) {
-			if reachable[pc] {
-				return
-			}
-			reachable[pc] = true
-			switch insn := insns[pc].(type) {
-			case bpf.RetConstant, bpf.RetA:
-				return
-			case bpf.JumpIf:
-				walk(pc + 1 + int(insn.SkipTrue))
-				walk(pc + 1 + int(insn.SkipFalse))
-				return
-			case bpf.Jump:
-				pc = pc + 1 + int(insn.Skip)
-			default:
-				pc++
-			}
+		if walkErr != nil {
+			return
+		}
+		if pc < 0 || pc >= len(insns) {
+			walkErr = fmt.Errorf("seccomp jump target %d out of range [0,%d)", pc, len(insns))
+			return
+		}
+		if reachable[pc] {
+			return
+		}
+		reachable[pc] = true
+		switch insn := insns[pc].(type) {
+		case bpf.RetConstant, bpf.RetA:
+			return
+		case bpf.JumpIf:
+			walk(pc + 1 + int(insn.SkipTrue))
+			walk(pc + 1 + int(insn.SkipFalse))
+			return
+		case bpf.Jump:
+			walk(pc + 1 + int(insn.Skip))
+			return
+		default:
+			walk(pc + 1)
 		}
 	}
 	walk(0)
+	if walkErr != nil {
+		return walkErr
+	}
 
 	hasRet := false
 	for pc, ok := range reachable {

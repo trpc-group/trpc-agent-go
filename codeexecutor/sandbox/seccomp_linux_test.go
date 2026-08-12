@@ -83,9 +83,11 @@ func probeUnixSocketpairReconnect(sockType int) (ok bool, errStr string) {
 			_ = unix.Close(fd)
 			return false, "listen: " + err.Error()
 		}
-		ln, err := net.FileListener(os.NewFile(uintptr(fd), path))
+		// FileListener duplicates the FD; close the original wrapper after.
+		file := os.NewFile(uintptr(fd), path)
+		ln, err := net.FileListener(file)
+		_ = file.Close()
 		if err != nil {
-			_ = unix.Close(fd)
 			return false, "filelistener: " + err.Error()
 		}
 		defer ln.Close()
@@ -388,6 +390,86 @@ func TestFilterBuilderLabelErrors(t *testing.T) {
 	b.emit(bpf.RetConstant{Val: seccompRetAllow})
 	if err := b.resolve(); err == nil {
 		t.Fatal("expected jump overflow error")
+	}
+
+	b = newFilterBuilder()
+	b.emit(bpf.RetConstant{Val: seccompRetAllow})
+	b.fixups = append(b.fixups, labelFixup{
+		insnIdx:   0,
+		setTrue:   true,
+		trueLabel: "anywhere",
+	})
+	if err := b.resolve(); err == nil {
+		t.Fatal("expected non-JumpIf fixup error")
+	}
+
+	b = newFilterBuilder()
+	missFalse := seccompLabel("miss_false")
+	b.jumpIf(bpf.JumpEqual, 1, nil, &missFalse)
+	if err := b.resolve(); err == nil {
+		t.Fatal("expected undefined false-label error")
+	}
+}
+
+func TestArgOffsetAndEmitArgMatchErrors(t *testing.T) {
+	t.Parallel()
+	if _, err := argOffset(2); err == nil {
+		t.Fatal("expected unsupported arg index")
+	}
+	b := newFilterBuilder()
+	if err := emitArgMatch(b, seccompArgMatch{Arg: 3, Kind: seccompArgEqual}, "t", "f"); err == nil {
+		t.Fatal("expected emitArgMatch arg error")
+	}
+	if err := emitArgMatch(b, seccompArgMatch{
+		Arg:  0,
+		Kind: seccompArgMatchKind(99),
+	}, "t", "f"); err == nil {
+		t.Fatal("expected emitArgMatch kind error")
+	}
+}
+
+func TestValidateCompiledFilterEdges(t *testing.T) {
+	t.Parallel()
+	if err := validateCompiledFilter(nil); err == nil {
+		t.Fatal("expected empty filter error")
+	}
+	tooMany := make([]bpf.Instruction, bpfMaxInsns+1)
+	for i := range tooMany {
+		tooMany[i] = bpf.RetConstant{Val: seccompRetAllow}
+	}
+	if err := validateCompiledFilter(tooMany); err == nil {
+		t.Fatal("expected max-insns error")
+	}
+	if err := validateCompiledFilter([]bpf.Instruction{
+		bpf.JumpIf{Cond: bpf.JumpEqual, Val: 1, SkipTrue: 10, SkipFalse: 10},
+	}); err == nil || !strings.Contains(err.Error(), "out of range") {
+		t.Fatalf("expected out-of-range jump error, got %v", err)
+	}
+	if err := validateCompiledFilter([]bpf.Instruction{
+		bpf.Jump{Skip: 5},
+		bpf.RetConstant{Val: seccompRetAllow},
+	}); err == nil || !strings.Contains(err.Error(), "out of range") {
+		t.Fatalf("expected Jump out-of-range error, got %v", err)
+	}
+	if err := validateCompiledFilter([]bpf.Instruction{
+		bpf.LoadAbsolute{Off: 0, Size: 4},
+	}); err == nil {
+		t.Fatal("expected fall-off/out-of-range error")
+	}
+	if err := validateCompiledFilter([]bpf.Instruction{
+		bpf.Jump{Skip: 0},
+	}); err == nil || !strings.Contains(err.Error(), "out of range") {
+		t.Fatalf("expected Jump fall-off out-of-range, got %v", err)
+	}
+	if err := validateCompiledFilter([]bpf.Instruction{
+		bpf.JumpIf{Cond: bpf.JumpEqual, Val: 0, SkipTrue: 0, SkipFalse: 0},
+	}); err == nil || !strings.Contains(err.Error(), "out of range") {
+		t.Fatalf("expected JumpIf fall-off out-of-range, got %v", err)
+	}
+	if err := validateCompiledFilter([]bpf.Instruction{
+		bpf.RetA{},
+	}); err != nil {
+		t.Fatalf("RetA-only filter should be valid: %v", err)
 	}
 }
 

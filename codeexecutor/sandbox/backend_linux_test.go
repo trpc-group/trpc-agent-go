@@ -22,6 +22,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 )
 
@@ -1139,6 +1141,146 @@ func TestOpenLinuxSandboxExtraFilesEmptySetup(t *testing.T) {
 	if files != nil || cleanup != nil {
 		t.Fatalf("files=%v cleanup=%v, want both nil", files, cleanup)
 	}
+}
+
+func TestOpenLinuxSandboxExtraFilesSeccompAndDenyRead(t *testing.T) {
+	if _, err := nativeSeccompPolicy(); err != nil {
+		t.Skip(err)
+	}
+	files, cleanup, err := openLinuxSandboxExtraFiles(linuxSandboxSetup{
+		needsSeccompFD:      true,
+		needsDenyReadDataFD: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 2 {
+		t.Fatalf("files=%d, want 2", len(files))
+	}
+	if cleanup == nil {
+		t.Fatal("expected cleanup")
+	}
+	cleanup()
+	cleanup()
+	for i, f := range files {
+		if err := f.Close(); err == nil {
+			t.Fatalf("file %d still closable after cleanup", i)
+		}
+	}
+}
+
+func TestOpenLinuxSandboxExtraFilesSeccompFailsClosed(t *testing.T) {
+	if _, err := nativeSeccompPolicy(); err != nil {
+		t.Skip(err)
+	}
+	target := filepath.Join(t.TempDir(), "synthetic")
+	if err := os.WriteFile(target, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	withExhaustedFileDescriptors(t, func() {
+		files, cleanup, err := openLinuxSandboxExtraFiles(linuxSandboxSetup{
+			needsSeccompFD:           true,
+			syntheticDenyReadTargets: []string{target},
+		})
+		if err == nil || files != nil || cleanup != nil {
+			t.Fatalf("files=%v cleanup=%v err=%v, want seccomp open failure", files, cleanup, err)
+		}
+	})
+}
+
+func TestOpenLinuxSandboxExtraFilesDenyReadFailsClosesSeccomp(t *testing.T) {
+	if _, err := nativeSeccompPolicy(); err != nil {
+		t.Skip(err)
+	}
+	var lim unix.Rlimit
+	if err := unix.Getrlimit(unix.RLIMIT_NOFILE, &lim); err != nil {
+		t.Skip(err)
+	}
+	old := lim
+	lim.Cur = 64
+	if lim.Cur > lim.Max {
+		lim.Cur = lim.Max
+	}
+	if err := unix.Setrlimit(unix.RLIMIT_NOFILE, &lim); err != nil {
+		t.Skip(err)
+	}
+	defer func() { _ = unix.Setrlimit(unix.RLIMIT_NOFILE, &old) }()
+
+	held := make([]*os.File, 0, 64)
+	defer func() {
+		for _, f := range held {
+			_ = f.Close()
+		}
+	}()
+	for {
+		f, err := os.Open("/dev/null")
+		if err != nil {
+			break
+		}
+		held = append(held, f)
+	}
+	if len(held) == 0 {
+		t.Skip("could not exhaust file descriptors")
+	}
+	// Free a single slot for seccomp memfd; deny-read /dev/null should then fail.
+	_ = held[len(held)-1].Close()
+	held = held[:len(held)-1]
+
+	files, cleanup, err := openLinuxSandboxExtraFiles(linuxSandboxSetup{
+		needsSeccompFD:      true,
+		needsDenyReadDataFD: true,
+	})
+	if err == nil || files != nil || cleanup != nil {
+		t.Fatalf("files=%v cleanup=%v err=%v, want deny-read open failure after seccomp", files, cleanup, err)
+	}
+}
+
+func TestOpenSeccompFilterMemfdFailsClosedOnEMFILE(t *testing.T) {
+	if _, err := nativeSeccompPolicy(); err != nil {
+		t.Skip(err)
+	}
+	withExhaustedFileDescriptors(t, func() {
+		if _, err := openSeccompFilterMemfd(); err == nil {
+			t.Fatal("expected memfd create failure under exhausted FD table")
+		}
+	})
+}
+
+func withExhaustedFileDescriptors(t *testing.T, fn func()) {
+	t.Helper()
+	var lim unix.Rlimit
+	if err := unix.Getrlimit(unix.RLIMIT_NOFILE, &lim); err != nil {
+		t.Skip(err)
+	}
+	old := lim
+	// Keep the ceiling low so exhausting FDs is cheap and reliable.
+	const soft = 64
+	lim.Cur = soft
+	if lim.Cur > lim.Max {
+		lim.Cur = lim.Max
+	}
+	if err := unix.Setrlimit(unix.RLIMIT_NOFILE, &lim); err != nil {
+		t.Skip(err)
+	}
+	defer func() { _ = unix.Setrlimit(unix.RLIMIT_NOFILE, &old) }()
+
+	held := make([]*os.File, 0, soft)
+	defer func() {
+		for _, f := range held {
+			_ = f.Close()
+		}
+	}()
+	for {
+		f, err := os.Open("/dev/null")
+		if err != nil {
+			break
+		}
+		held = append(held, f)
+	}
+	if len(held) == 0 {
+		t.Skip("could not exhaust file descriptors")
+	}
+	fn()
 }
 
 func TestLinuxRestrictedPreflightFailsClosedOnBadBwrap(t *testing.T) {
