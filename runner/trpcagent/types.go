@@ -47,6 +47,7 @@ type runResponse struct {
 	Events             []event.Event                    `json:"events,omitempty"`
 	ExecutionTrace     *atrace.Trace                    `json:"executionTrace,omitempty"`
 	ErrorMessage       string                           `json:"errorMessage,omitempty"`
+	DirectRunError     bool                             `json:"directRunError,omitempty"`
 	DirectRunErrorKind trpcagentwire.DirectRunErrorKind `json:"directRunErrorKind,omitempty"`
 }
 

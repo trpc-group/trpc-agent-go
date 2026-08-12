@@ -210,6 +210,7 @@ func runErrorResponse(input model.Message, appName string, requestID string, err
 		Status:             status,
 		Messages:           []model.Message{input},
 		ErrorMessage:       err.Error(),
+		DirectRunError:     true,
 		DirectRunErrorKind: trpcagentwire.DirectRunErrorKindOf(err),
 	}
 	appendRunTerminalEvents(&response, appName, requestID, err)

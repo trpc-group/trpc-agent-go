@@ -53,6 +53,7 @@ type runResponse struct {
 	Messages           []model.Message                  `json:"messages,omitempty"`
 	ExecutionTrace     *atrace.Trace                    `json:"executionTrace,omitempty"`
 	ErrorMessage       string                           `json:"errorMessage,omitempty"`
+	DirectRunError     bool                             `json:"directRunError,omitempty"`
 	DirectRunErrorKind trpcagentwire.DirectRunErrorKind `json:"directRunErrorKind,omitempty"`
 }
 

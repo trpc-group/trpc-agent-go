@@ -78,7 +78,10 @@ func (r *runner) Run(
 	if err != nil {
 		return nil, err
 	}
-	if err := directRunError(response); err != nil {
+	if err := directRunError(
+		response,
+		options.LatestTurnReplacement != nil,
+	); err != nil {
 		return nil, err
 	}
 	if err := validateRunResponse(options, response); err != nil {
@@ -109,9 +112,21 @@ func (e *remoteDirectRunError) Unwrap() error {
 	return e.sentinel
 }
 
-func directRunError(response *runResponse) error {
-	if response == nil || response.DirectRunErrorKind == "" {
+func directRunError(response *runResponse, replacement bool) error {
+	if response == nil {
 		return nil
+	}
+	if response.DirectRunErrorKind == "" {
+		if !replacement || !response.DirectRunError {
+			return nil
+		}
+		if response.ErrorMessage == "" {
+			return errors.New("trpcagent runner: remote run failed")
+		}
+		return fmt.Errorf(
+			"trpcagent runner: remote run failed: %s",
+			response.ErrorMessage,
+		)
 	}
 	sentinel := response.DirectRunErrorKind.Sentinel()
 	if sentinel == nil {

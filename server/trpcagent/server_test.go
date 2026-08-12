@@ -371,6 +371,7 @@ func TestServerRunReturnsFailedRunResponseWhenRunnerReturnsError(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response))
 	assert.Equal(t, atrace.TraceStatusFailed, response.Status)
 	assert.Equal(t, "agent run failed directly", response.ErrorMessage)
+	assert.True(t, response.DirectRunError)
 	assert.Empty(t, response.DirectRunErrorKind)
 	assert.Equal(t, []model.Message{input}, response.Messages)
 	require.Len(t, response.Events, 2)
@@ -446,6 +447,7 @@ func TestServerRunClassifiesLatestTurnReplacementErrors(t *testing.T) {
 				"request-new",
 				fmt.Errorf("backend: %w", tt.err),
 			)
+			assert.True(t, response.DirectRunError)
 			assert.Equal(t, tt.kind, string(response.DirectRunErrorKind))
 		})
 	}

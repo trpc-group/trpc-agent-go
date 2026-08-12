@@ -645,12 +645,53 @@ func TestRunPreservesLatestTurnReplacementErrorsFromServerTRPCAgent(t *testing.T
 	}
 }
 
+func TestRunReturnsGenericDirectLatestTurnReplacementError(t *testing.T) {
+	serverRunner := &fakeServerRunner{err: errors.New("backend rejected edit")}
+	server, err := servertrpcagent.New(
+		servertrpcagent.WithAppName("sports-agent"),
+		servertrpcagent.WithRunner(serverRunner),
+	)
+	require.NoError(t, err)
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	apiRunner, err := New("sports-agent", WithTarget(httpServer.URL))
+	require.NoError(t, err)
+	events, err := apiRunner.Run(
+		context.Background(),
+		"user-1",
+		"session-1",
+		model.NewUserMessage("edited input"),
+		agent.WithLatestTurnReplacement("request-old", "request-new"),
+	)
+	assert.Nil(t, events)
+	require.EqualError(
+		t,
+		err,
+		"trpcagent runner: remote run failed: backend rejected edit",
+	)
+}
+
 func TestDirectRunErrorRejectsUnknownWireKind(t *testing.T) {
-	assert.NoError(t, directRunError(nil))
-	assert.NoError(t, directRunError(&runResponse{}))
+	assert.NoError(t, directRunError(nil, true))
+	assert.NoError(t, directRunError(&runResponse{}, true))
+	assert.NoError(t, directRunError(&runResponse{DirectRunError: true}, false))
+	require.EqualError(
+		t,
+		directRunError(&runResponse{DirectRunError: true}, true),
+		"trpcagent runner: remote run failed",
+	)
+	require.EqualError(
+		t,
+		directRunError(&runResponse{
+			DirectRunError: true,
+			ErrorMessage:   "backend rejected edit",
+		}, true),
+		"trpcagent runner: remote run failed: backend rejected edit",
+	)
 	err := directRunError(&runResponse{
 		DirectRunErrorKind: "latest_turn_replacement_conflict",
-	})
+	}, true)
 	require.EqualError(
 		t,
 		err,
@@ -661,7 +702,7 @@ func TestDirectRunErrorRejectsUnknownWireKind(t *testing.T) {
 	err = directRunError(&runResponse{
 		DirectRunErrorKind: "future_kind",
 		ErrorMessage:       "remote rejected run",
-	})
+	}, true)
 	require.EqualError(
 		t,
 		err,
