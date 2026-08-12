@@ -77,6 +77,13 @@ func TestRunnerDeduplicatesEventWhileAppendIsInFlight(t *testing.T) {
 	deduper := &eventPersistenceDeduper{}
 	firstDone := make(chan bool, 1)
 	secondDone := make(chan bool, 1)
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() {
+			close(service.appendRelease)
+		})
+	}
+	defer release()
 
 	go func() {
 		firstDone <- r.handleEventPersistenceOnce(
@@ -99,10 +106,55 @@ func TestRunnerDeduplicatesEventWhileAppendIsInFlight(t *testing.T) {
 		t.Fatal("duplicate persistence completed before the in-flight append")
 	case <-time.After(50 * time.Millisecond):
 	}
-	close(service.appendRelease)
+	release()
 
 	require.True(t, receivePersistenceResult(t, firstDone))
 	require.False(t, receivePersistenceResult(t, secondDone))
+	require.EqualValues(t, 1, service.appendCalls.Load())
+	require.EqualValues(t, 1, service.enqueueCalls.Load())
+}
+
+func TestRunnerDuplicateWaiterHonorsCancellation(t *testing.T) {
+	service := &blockingPersistenceSessionService{
+		mockSessionService: &mockSessionService{},
+		appendStarted:      make(chan struct{}),
+		appendRelease:      make(chan struct{}),
+	}
+	r := &runner{sessionService: service}
+	sess, invocation, evt := newPersistenceDedupTestInput()
+	deduper := &eventPersistenceDeduper{}
+	ownerDone := make(chan bool, 1)
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() {
+			close(service.appendRelease)
+		})
+	}
+	defer release()
+
+	go func() {
+		ownerDone <- r.handleEventPersistenceOnce(
+			context.Background(), invocation, sess, sess, evt, deduper,
+		)
+	}()
+	select {
+	case <-service.appendStarted:
+	case <-time.After(time.Second):
+		t.Fatal("owner append did not start")
+	}
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	duplicateDone := make(chan bool, 1)
+	go func() {
+		duplicateDone <- r.handleEventPersistenceOnce(
+			canceledCtx, invocation, sess, sess, evt, deduper,
+		)
+	}()
+
+	require.False(t, receivePersistenceResult(t, duplicateDone))
+	require.EqualValues(t, 1, service.appendCalls.Load())
+	release()
+	require.True(t, receivePersistenceResult(t, ownerDone))
 	require.EqualValues(t, 1, service.appendCalls.Load())
 	require.EqualValues(t, 1, service.enqueueCalls.Load())
 }
