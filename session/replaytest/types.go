@@ -28,17 +28,29 @@ import (
 // OpType identifies the kind of replay operation.
 type OpType string
 
+// Operation type identifiers for replay steps.
 const (
-	OpCreateSession      OpType = "create_session"
-	OpAppendEvent        OpType = "append_event"
+	// OpCreateSession creates a new session before replaying operations.
+	OpCreateSession OpType = "create_session"
+	// OpAppendEvent appends one event to the session.
+	OpAppendEvent OpType = "append_event"
+	// OpUpdateSessionState writes or overwrites session state keys.
 	OpUpdateSessionState OpType = "update_session_state"
+	// OpDeleteSessionState deletes one session state key.
 	OpDeleteSessionState OpType = "delete_session_state"
-	OpAppendTrackEvent   OpType = "append_track_event"
-	OpCreateSummary      OpType = "create_summary"
-	OpAddMemory          OpType = "add_memory"
-	OpUpdateMemory       OpType = "update_memory"
-	OpDeleteMemory       OpType = "delete_memory"
-	OpClearMemories      OpType = "clear_memories"
+	// OpAppendTrackEvent appends one track event to the session.
+	OpAppendTrackEvent OpType = "append_track_event"
+	// OpCreateSummary triggers session summary generation.
+	OpCreateSummary OpType = "create_summary"
+	// OpAddMemory adds one memory entry.
+	OpAddMemory OpType = "add_memory"
+	// OpUpdateMemory updates one memory entry.
+	OpUpdateMemory OpType = "update_memory"
+	// OpDeleteMemory deletes one memory entry.
+	OpDeleteMemory OpType = "delete_memory"
+	// OpClearMemories clears all memory entries for the user.
+	OpClearMemories OpType = "clear_memories"
+	// OpSimulateWriteError marks the next write as failed-then-retried.
 	OpSimulateWriteError OpType = "simulate_write_error"
 )
 

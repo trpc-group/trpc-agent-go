@@ -163,6 +163,22 @@ func (h *Harness) runCase(ctx context.Context, tc ReplayCase) (*CaseResult, erro
 	return cr, nil
 }
 
+// opContext carries the per-backend services used while executing
+// replay operations on one backend.
+type opContext struct {
+	sessSvc  session.Service
+	trackSvc session.TrackService
+	memSvc   memory.Service
+	sess     *session.Session
+	key      session.Key
+	// ownsTrack reports whether trackSvc was created separately from
+	// sessSvc and therefore needs its own Close call.
+	ownsTrack bool
+	// simulateError is set by an OpSimulateWriteError step and consumed
+	// by the next write operation to model a failed-then-retried write.
+	simulateError bool
+}
+
 // executeOnBackend runs the replay operations on a single backend.
 func (h *Harness) executeOnBackend(
 	ctx context.Context,
@@ -171,7 +187,29 @@ func (h *Harness) executeOnBackend(
 	userKey session.UserKey,
 	tc ReplayCase,
 ) (*BackendSnapshot, error) {
-	// Create session service.
+	oc, err := h.setupBackend(ctx, bf, key, tc)
+	if err != nil {
+		return nil, err
+	}
+	defer h.closeBackend(oc)
+
+	for _, op := range tc.Operations {
+		if err := h.applyOperation(ctx, oc, op); err != nil {
+			return nil, err
+		}
+	}
+
+	return h.readSnapshot(ctx, oc, bf.Name, tc.SkipMemories)
+}
+
+// setupBackend creates the session, track, and memory services for one
+// backend factory and initializes the replay session.
+func (h *Harness) setupBackend(
+	ctx context.Context,
+	bf BackendFactory,
+	key session.Key,
+	tc ReplayCase,
+) (*opContext, error) {
 	if bf.CreateSession == nil {
 		return nil, fmt.Errorf("backend %q: CreateSession is nil", bf.Name)
 	}
@@ -179,142 +217,235 @@ func (h *Harness) executeOnBackend(
 	if err != nil {
 		return nil, fmt.Errorf("create session service: %w", err)
 	}
-	defer sessSvc.Close()
+	oc := &opContext{sessSvc: sessSvc, key: key}
 
-	// Create track service (may be nil or same as session service).
-	var trackSvc session.TrackService
+	// Track service: reuse the session service when it implements
+	// TrackService, otherwise create a dedicated one.
 	if ts, ok := sessSvc.(session.TrackService); ok {
-		trackSvc = ts
+		oc.trackSvc = ts
 	} else if bf.CreateTrack != nil {
 		raw, err := bf.CreateTrack()
 		if err != nil {
 			return nil, fmt.Errorf("create track service: %w", err)
 		}
-		trackSvc = raw
-		// If the track service is a different instance, close it separately.
-		if c, ok := raw.(interface{ Close() error }); ok {
-			defer c.Close()
-		}
+		oc.trackSvc = raw
+		oc.ownsTrack = true
 	}
 
-	// Create memory service.
-	var memSvc memory.Service
 	if bf.CreateMemory != nil && !tc.SkipMemories {
 		raw, err := bf.CreateMemory()
 		if err != nil {
 			return nil, fmt.Errorf("create memory service: %w", err)
 		}
-		memSvc = raw
-		defer memSvc.Close()
+		oc.memSvc = raw
 	}
 
-	// Create the session.
 	sess, err := sessSvc.CreateSession(ctx, key, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create session: %w", err)
 	}
+	oc.sess = sess
+	return oc, nil
+}
 
-	// Track simulate-write-error state.
-	simulateError := false
-
-	// Execute operations.
-	for _, op := range tc.Operations {
-		if op.SimulateWriteError {
-			simulateError = true
-			continue
-		}
-		switch op.Type {
-		case OpAppendEvent:
-			if op.Event == nil {
-				return nil, fmt.Errorf("append_event: event is nil")
-			}
-			e := op.Event
-			if e.ID == "" {
-				e.ID = uuid.NewString()
-			}
-			if e.Timestamp.IsZero() {
-				e.Timestamp = time.Now()
-			}
-			if simulateError {
-				// Skip this write to simulate failure, then retry.
-				simulateError = false
-				// Retry the write.
-				if err := sessSvc.AppendEvent(ctx, sess, e); err != nil {
-					return nil, fmt.Errorf("append_event (retry): %w", err)
-				}
-				continue
-			}
-			if err := sessSvc.AppendEvent(ctx, sess, e); err != nil {
-				return nil, fmt.Errorf("append_event: %w", err)
-			}
-
-		case OpUpdateSessionState:
-			if err := sessSvc.UpdateSessionState(ctx, key, op.StateMap); err != nil {
-				return nil, fmt.Errorf("update_session_state: %w", err)
-			}
-
-		case OpDeleteSessionState:
-			delState := session.StateMap{op.StateKey: nil}
-			if err := sessSvc.UpdateSessionState(ctx, key, delState); err != nil {
-				return nil, fmt.Errorf("delete_session_state: %w", err)
-			}
-
-		case OpAppendTrackEvent:
-			if trackSvc == nil {
-				continue // unsupported
-			}
-			if op.TrackEvent == nil {
-				return nil, fmt.Errorf("append_track_event: event is nil")
-			}
-			if err := trackSvc.AppendTrackEvent(ctx, sess, op.TrackEvent); err != nil {
-				return nil, fmt.Errorf("append_track_event: %w", err)
-			}
-
-		case OpCreateSummary:
-			if err := sessSvc.CreateSessionSummary(ctx, sess, op.SummaryFilterKey, op.SummaryForce); err != nil {
-				return nil, fmt.Errorf("create_summary: %w", err)
-			}
-
-		case OpAddMemory:
-			if memSvc == nil {
-				continue
-			}
-			memKey := memory.UserKey{AppName: key.AppName, UserID: key.UserID}
-			if err := memSvc.AddMemory(ctx, memKey, op.MemoryContent, op.MemoryTopics); err != nil {
-				return nil, fmt.Errorf("add_memory: %w", err)
-			}
-
-		case OpUpdateMemory:
-			if memSvc == nil {
-				continue
-			}
-			mk := memory.Key{AppName: key.AppName, UserID: key.UserID, MemoryID: op.MemoryID}
-			if err := memSvc.UpdateMemory(ctx, mk, op.MemoryContent, op.MemoryTopics); err != nil {
-				return nil, fmt.Errorf("update_memory: %w", err)
-			}
-
-		case OpDeleteMemory:
-			if memSvc == nil {
-				continue
-			}
-			mk := memory.Key{AppName: key.AppName, UserID: key.UserID, MemoryID: op.MemoryID}
-			if err := memSvc.DeleteMemory(ctx, mk); err != nil {
-				return nil, fmt.Errorf("delete_memory: %w", err)
-			}
-
-		case OpClearMemories:
-			if memSvc == nil {
-				continue
-			}
-			memKey := memory.UserKey{AppName: key.AppName, UserID: key.UserID}
-			if err := memSvc.ClearMemories(ctx, memKey); err != nil {
-				return nil, fmt.Errorf("clear_memories: %w", err)
-			}
+// closeBackend releases backend services that own their resources.
+func (h *Harness) closeBackend(oc *opContext) {
+	if oc.sessSvc != nil {
+		oc.sessSvc.Close()
+	}
+	if oc.ownsTrack {
+		if c, ok := oc.trackSvc.(interface{ Close() error }); ok {
+			c.Close()
 		}
 	}
+	if oc.memSvc != nil {
+		oc.memSvc.Close()
+	}
+}
 
-	// Read back the final state from the backend.
-	got, err := sessSvc.GetSession(ctx, key)
+// applyOperation executes one replay operation against the backend.
+func (h *Harness) applyOperation(
+	ctx context.Context,
+	oc *opContext,
+	op ReplayOperation,
+) error {
+	if op.SimulateWriteError {
+		oc.simulateError = true
+		return nil
+	}
+	switch op.Type {
+	case OpAppendEvent:
+		return h.appendEventOp(ctx, oc, op)
+	case OpUpdateSessionState:
+		return h.updateSessionStateOp(ctx, oc, op)
+	case OpDeleteSessionState:
+		return h.deleteSessionStateOp(ctx, oc, op)
+	case OpAppendTrackEvent:
+		return h.appendTrackEventOp(ctx, oc, op)
+	case OpCreateSummary:
+		return h.createSummaryOp(ctx, oc, op)
+	case OpAddMemory:
+		return h.addMemoryOp(ctx, oc, op)
+	case OpUpdateMemory:
+		return h.updateMemoryOp(ctx, oc, op)
+	case OpDeleteMemory:
+		return h.deleteMemoryOp(ctx, oc, op)
+	case OpClearMemories:
+		return h.clearMemoriesOp(ctx, oc, op)
+	default:
+		return nil
+	}
+}
+
+func (h *Harness) appendEventOp(
+	ctx context.Context,
+	oc *opContext,
+	op ReplayOperation,
+) error {
+	if op.Event == nil {
+		return fmt.Errorf("append_event: event is nil")
+	}
+	e := op.Event
+	if e.ID == "" {
+		e.ID = uuid.NewString()
+	}
+	if e.Timestamp.IsZero() {
+		e.Timestamp = time.Now()
+	}
+	// A simulated write error drops the first attempt and retries once,
+	// modeling a backend recovering from a transient failure.
+	if oc.simulateError {
+		oc.simulateError = false
+		if err := oc.sessSvc.AppendEvent(ctx, oc.sess, e); err != nil {
+			return fmt.Errorf("append_event (retry): %w", err)
+		}
+		return nil
+	}
+	if err := oc.sessSvc.AppendEvent(ctx, oc.sess, e); err != nil {
+		return fmt.Errorf("append_event: %w", err)
+	}
+	return nil
+}
+
+func (h *Harness) updateSessionStateOp(
+	ctx context.Context,
+	oc *opContext,
+	op ReplayOperation,
+) error {
+	if err := oc.sessSvc.UpdateSessionState(ctx, oc.key, op.StateMap); err != nil {
+		return fmt.Errorf("update_session_state: %w", err)
+	}
+	return nil
+}
+
+func (h *Harness) deleteSessionStateOp(
+	ctx context.Context,
+	oc *opContext,
+	op ReplayOperation,
+) error {
+	delState := session.StateMap{op.StateKey: nil}
+	if err := oc.sessSvc.UpdateSessionState(ctx, oc.key, delState); err != nil {
+		return fmt.Errorf("delete_session_state: %w", err)
+	}
+	return nil
+}
+
+func (h *Harness) appendTrackEventOp(
+	ctx context.Context,
+	oc *opContext,
+	op ReplayOperation,
+) error {
+	if oc.trackSvc == nil {
+		return nil // unsupported by this backend
+	}
+	if op.TrackEvent == nil {
+		return fmt.Errorf("append_track_event: event is nil")
+	}
+	if err := oc.trackSvc.AppendTrackEvent(ctx, oc.sess, op.TrackEvent); err != nil {
+		return fmt.Errorf("append_track_event: %w", err)
+	}
+	return nil
+}
+
+func (h *Harness) createSummaryOp(
+	ctx context.Context,
+	oc *opContext,
+	op ReplayOperation,
+) error {
+	if err := oc.sessSvc.CreateSessionSummary(ctx, oc.sess, op.SummaryFilterKey, op.SummaryForce); err != nil {
+		return fmt.Errorf("create_summary: %w", err)
+	}
+	return nil
+}
+
+func (h *Harness) addMemoryOp(
+	ctx context.Context,
+	oc *opContext,
+	op ReplayOperation,
+) error {
+	if oc.memSvc == nil {
+		return nil
+	}
+	memKey := memory.UserKey{AppName: oc.key.AppName, UserID: oc.key.UserID}
+	if err := oc.memSvc.AddMemory(ctx, memKey, op.MemoryContent, op.MemoryTopics); err != nil {
+		return fmt.Errorf("add_memory: %w", err)
+	}
+	return nil
+}
+
+func (h *Harness) updateMemoryOp(
+	ctx context.Context,
+	oc *opContext,
+	op ReplayOperation,
+) error {
+	if oc.memSvc == nil {
+		return nil
+	}
+	mk := memory.Key{AppName: oc.key.AppName, UserID: oc.key.UserID, MemoryID: op.MemoryID}
+	if err := oc.memSvc.UpdateMemory(ctx, mk, op.MemoryContent, op.MemoryTopics); err != nil {
+		return fmt.Errorf("update_memory: %w", err)
+	}
+	return nil
+}
+
+func (h *Harness) deleteMemoryOp(
+	ctx context.Context,
+	oc *opContext,
+	op ReplayOperation,
+) error {
+	if oc.memSvc == nil {
+		return nil
+	}
+	mk := memory.Key{AppName: oc.key.AppName, UserID: oc.key.UserID, MemoryID: op.MemoryID}
+	if err := oc.memSvc.DeleteMemory(ctx, mk); err != nil {
+		return fmt.Errorf("delete_memory: %w", err)
+	}
+	return nil
+}
+
+func (h *Harness) clearMemoriesOp(
+	ctx context.Context,
+	oc *opContext,
+	op ReplayOperation,
+) error {
+	if oc.memSvc == nil {
+		return nil
+	}
+	memKey := memory.UserKey{AppName: oc.key.AppName, UserID: oc.key.UserID}
+	if err := oc.memSvc.ClearMemories(ctx, memKey); err != nil {
+		return fmt.Errorf("clear_memories: %w", err)
+	}
+	return nil
+}
+
+// readSnapshot reads the final observable state back from the backend.
+func (h *Harness) readSnapshot(
+	ctx context.Context,
+	oc *opContext,
+	backendName string,
+	skipMemories bool,
+) (*BackendSnapshot, error) {
+	got, err := oc.sessSvc.GetSession(ctx, oc.key)
 	if err != nil {
 		return nil, fmt.Errorf("get_session: %w", err)
 	}
@@ -323,18 +454,17 @@ func (h *Harness) executeOnBackend(
 	}
 
 	snap := &BackendSnapshot{
-		BackendName: bf.Name,
-		SessionID:   key.SessionID,
+		BackendName: backendName,
+		SessionID:   oc.key.SessionID,
 		Events:      got.Events,
 		State:       got.State,
 		Summaries:   got.Summaries,
 		Tracks:      got.Tracks,
 	}
 
-	// Read memories.
-	if memSvc != nil && !tc.SkipMemories {
-		memKey := memory.UserKey{AppName: key.AppName, UserID: key.UserID}
-		memories, err := memSvc.ReadMemories(ctx, memKey, 100)
+	if oc.memSvc != nil && !skipMemories {
+		memKey := memory.UserKey{AppName: oc.key.AppName, UserID: oc.key.UserID}
+		memories, err := oc.memSvc.ReadMemories(ctx, memKey, 100)
 		if err != nil {
 			return nil, fmt.Errorf("read_memories: %w", err)
 		}

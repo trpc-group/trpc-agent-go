@@ -42,7 +42,7 @@ func WriteReport(path string, report *ReplayReport) error {
 	if err != nil {
 		return fmt.Errorf("marshal report: %w", err)
 	}
-	return os.WriteFile(path, data, 0644)
+	return os.WriteFile(path, data, 0600)
 }
 
 // HasFailures returns true if any case has non-allowed differences.

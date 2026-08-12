@@ -10,17 +10,17 @@ replace trpc.group/trpc-go/trpc-agent-go/memory/sqlite => ../../../memory/sqlite
 
 require (
 	github.com/mattn/go-sqlite3 v1.14.32
-	github.com/stretchr/testify v1.10.0
+	github.com/stretchr/testify v1.11.1
 	trpc.group/trpc-go/trpc-agent-go v1.6.1-0.20260311094958-7b74ee59e339
-	trpc.group/trpc-go/trpc-agent-go/memory/sqlite v0.0.0-00010101000000-000000000000
-	trpc.group/trpc-go/trpc-agent-go/session/sqlite v0.0.0-00010101000000-000000000000
+	trpc.group/trpc-go/trpc-agent-go/memory/sqlite v1.11.0
+	trpc.group/trpc-go/trpc-agent-go/session/sqlite v1.11.0
 )
 
 require (
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/go-ego/gse v1.0.0 // indirect
-	github.com/go-logr/logr v1.4.2 // indirect
+	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.22.0 // indirect
@@ -44,5 +44,5 @@ require (
 	google.golang.org/grpc v1.65.0 // indirect
 	google.golang.org/protobuf v1.34.2 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	trpc.group/trpc-go/trpc-a2a-go v0.2.5 // indirect
+	trpc.group/trpc-go/trpc-a2a-go v0.2.6-0.20260721084546-18c8244d0acb // indirect
 )
