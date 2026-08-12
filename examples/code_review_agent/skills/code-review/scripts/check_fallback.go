@@ -49,6 +49,8 @@ func main() {
 	currentFile := ""
 	currentHunk := make([]string, 0)
 	newLine := 0
+	oldRemaining := 0
+	newRemaining := 0
 	hunkStart := regexp.MustCompile(`\+(\d+)`)
 	hunkTexts := buildHunkTexts(string(data))
 
@@ -60,10 +62,10 @@ func main() {
 		lineIndex++
 		line := scanner.Text()
 		switch {
-		case strings.HasPrefix(line, "+++ "):
+		case oldRemaining <= 0 && newRemaining <= 0 && strings.HasPrefix(line, "+++ "):
 			currentFile = normalizeDiffPath(strings.TrimPrefix(line, "+++ "))
 			continue
-		case strings.HasPrefix(line, "@@"):
+		case parseHunkCounts(line, &oldRemaining, &newRemaining):
 			match := hunkStart.FindStringSubmatch(line)
 			newLine = 0
 			if len(match) == 2 {
@@ -72,8 +74,9 @@ func main() {
 			}
 			currentHunk = currentHunk[:0]
 			continue
-		case strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++"):
+		case newRemaining > 0 && strings.HasPrefix(line, "+"):
 			newLine++
+			newRemaining--
 			text := strings.TrimSpace(strings.TrimPrefix(line, "+"))
 			hunkBefore := strings.Join(currentHunk, "\n")
 			currentHunk = append(currentHunk, text)
@@ -181,7 +184,11 @@ func main() {
 				addFinding("high", "database", "Database handle or transaction has no cleanup path",
 					"Defer Close() for handles and Rollback() for transactions in the same scope.", "db-lifecycle")
 			}
-		case strings.HasPrefix(line, " ") && newLine > 0:
+		case oldRemaining > 0 && strings.HasPrefix(line, "-"):
+			oldRemaining--
+		case oldRemaining > 0 && newRemaining > 0 && strings.HasPrefix(line, " "):
+			oldRemaining--
+			newRemaining--
 			newLine++
 			currentHunk = append(currentHunk, strings.TrimPrefix(line, " "))
 		}
@@ -276,6 +283,8 @@ func buildHunkTexts(data string) map[int]string {
 	lines := strings.Split(strings.ReplaceAll(data, "\r\n", "\n"), "\n")
 	hunkLines := make([]string, 0)
 	hunkIndexes := make([]int, 0)
+	oldRemaining := 0
+	newRemaining := 0
 	flush := func() {
 		if len(hunkIndexes) == 0 {
 			return
@@ -288,21 +297,44 @@ func buildHunkTexts(data string) map[int]string {
 
 	for index, line := range lines {
 		switch {
-		case strings.HasPrefix(line, "@@"):
+		case parseHunkCounts(line, &oldRemaining, &newRemaining):
 			flush()
 			hunkLines = hunkLines[:0]
 			hunkIndexes = hunkIndexes[:0]
-		case strings.HasPrefix(line, "diff --git ") || strings.HasPrefix(line, "+++ "):
+		case oldRemaining <= 0 && newRemaining <= 0 && (strings.HasPrefix(line, "diff --git ") || strings.HasPrefix(line, "+++ ")):
 			continue
-		case strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++"):
+		case newRemaining > 0 && strings.HasPrefix(line, "+"):
 			hunkLines = append(hunkLines, strings.TrimSpace(strings.TrimPrefix(line, "+")))
 			hunkIndexes = append(hunkIndexes, index)
-		case strings.HasPrefix(line, " "):
+			newRemaining--
+		case oldRemaining > 0 && newRemaining > 0 && strings.HasPrefix(line, " "):
 			hunkLines = append(hunkLines, strings.TrimPrefix(line, " "))
+			oldRemaining--
+			newRemaining--
+		case oldRemaining > 0 && strings.HasPrefix(line, "-"):
+			oldRemaining--
 		}
 	}
 	flush()
 	return out
+}
+
+func parseHunkCounts(line string, oldRemaining, newRemaining *int) bool {
+	match := regexp.MustCompile(`^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@`).FindStringSubmatch(line)
+	if len(match) != 3 {
+		return false
+	}
+	*oldRemaining = hunkCount(match[1])
+	*newRemaining = hunkCount(match[2])
+	return true
+}
+
+func hunkCount(raw string) int {
+	if raw == "" {
+		return 1
+	}
+	count, _ := strconv.Atoi(raw)
+	return count
 }
 
 func reportsHTTPBodyLeak(text string, hunkText string) bool {

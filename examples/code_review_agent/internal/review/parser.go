@@ -32,6 +32,8 @@ func ParseUnifiedDiff(input string) (ParsedDiff, error) {
 	hasTargetFileHeader := false
 	oldLine := 0
 	newLine := 0
+	oldRemaining := 0
+	newRemaining := 0
 
 	flushHunk := func() {
 		// 切换文件或 hunk 前先保存当前 hunk。
@@ -52,18 +54,23 @@ func ParseUnifiedDiff(input string) (ParsedDiff, error) {
 		}
 		line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
 		switch {
-		case strings.HasPrefix(line, "diff --git "):
+		case currentHunk == nil && strings.HasPrefix(line, "diff --git "):
 			flushHunk()
 			if current != nil {
 				parsed.Files = append(parsed.Files, *current)
 			}
 			current = &ParsedFile{}
 			hasTargetFileHeader = false
-		case strings.HasPrefix(line, "--- "):
+		case currentHunk == nil && strings.HasPrefix(line, "--- "):
+			if current != nil && hasTargetFileHeader {
+				parsed.Files = append(parsed.Files, *current)
+				current = &ParsedFile{}
+				hasTargetFileHeader = false
+			}
 			if current == nil {
 				current = &ParsedFile{}
 			}
-		case strings.HasPrefix(line, "+++ "):
+		case currentHunk == nil && strings.HasPrefix(line, "+++ "):
 			if current == nil {
 				current = &ParsedFile{}
 			}
@@ -74,7 +81,7 @@ func ParseUnifiedDiff(input string) (ParsedDiff, error) {
 				current.Language = languageForPath(path)
 				current.IsTestFile = strings.HasSuffix(path, "_test.go")
 			}
-		case strings.HasPrefix(line, "@@ "):
+		case currentHunk == nil && strings.HasPrefix(line, "@@ "):
 			flushHunk()
 			if current == nil || !hasTargetFileHeader {
 				return ParsedDiff{}, fmt.Errorf("hunk header without target file header: %q", line)
@@ -85,6 +92,8 @@ func ParseUnifiedDiff(input string) (ParsedDiff, error) {
 			}
 			oldLine, _ = strconv.Atoi(m[1])
 			newLine, _ = strconv.Atoi(m[3])
+			oldRemaining = hunkLineCount(m[2])
+			newRemaining = hunkLineCount(m[4])
 			currentHunk = &Hunk{
 				File:     current.Path,
 				OldStart: oldLine,
@@ -100,14 +109,21 @@ func ParseUnifiedDiff(input string) (ParsedDiff, error) {
 				currentHunk.Lines = append(currentHunk.Lines, Line{NewLine: newLine, Kind: "add", Text: strings.TrimPrefix(line, "+")})
 				currentHunk.CandidateLines = append(currentHunk.CandidateLines, newLine)
 				newLine++
+				newRemaining--
 			case strings.HasPrefix(line, "-"):
 				currentHunk.Lines = append(currentHunk.Lines, Line{OldLine: oldLine, Kind: "del", Text: strings.TrimPrefix(line, "-")})
 				oldLine++
+				oldRemaining--
 			default:
 				currentHunk.Lines = append(currentHunk.Lines, Line{OldLine: oldLine, NewLine: newLine, Kind: "context", Text: line})
 				currentHunk.Context = append(currentHunk.Context, line)
 				oldLine++
 				newLine++
+				oldRemaining--
+				newRemaining--
+			}
+			if oldRemaining <= 0 && newRemaining <= 0 {
+				flushHunk()
 			}
 		}
 		if err == io.EOF {

@@ -12,6 +12,9 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -148,6 +151,55 @@ func TestRunReviewAndFindingSanitizationRedactShortDeclarationSecrets(t *testing
 	finding := SanitizeFinding(review.Finding{Evidence: "apiKey := \"" + secret + "\""})
 	if strings.Contains(finding.Evidence, secret) {
 		t.Fatalf("report evidence leaked short-declaration secret: %s", finding.Evidence)
+	}
+}
+
+func TestSanitizeInputRedactsAndBoundsMetadata(t *testing.T) {
+	const secret = "sk-metadata-redaction-1234567890"
+	input := Input{InputMetadata: review.InputMetadata{
+		ChangedGoFiles:   []string{"\"config-" + secret + ".go\""},
+		PackageNames:     []string{"pkg-" + secret},
+		ModulePath:       "example.com/" + secret,
+		BaseRef:          "base-" + secret,
+		HeadRef:          "head-" + secret,
+		TouchedTestFiles: []string{"test-" + secret + ".go"},
+	}}
+	encoded, err := json.Marshal(SanitizeInput(input))
+	if err != nil {
+		t.Fatalf("marshal sanitized input: %v", err)
+	}
+	if strings.Contains(string(encoded), secret) {
+		t.Fatalf("input metadata leaked secret: %s", encoded)
+	}
+	if !strings.Contains(string(encoded), "[REDACTED]") {
+		t.Fatalf("input metadata missing redaction marker: %s", encoded)
+	}
+
+	// The generic HTTP provider must serialize only the sanitized request body.
+	var httpRequestBody string
+	client := &http.Client{Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		body, readErr := io.ReadAll(r.Body)
+		if readErr != nil {
+			t.Errorf("read request body: %v", readErr)
+		}
+		httpRequestBody = string(body)
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"findings":[]}`)), Header: make(http.Header)}, nil
+	})}
+	provider, err := NewHTTPProvider(HTTPConfig{Enabled: true, Endpoint: "https://provider.example.test/review", Client: client})
+	if err != nil {
+		t.Fatalf("NewHTTPProvider: %v", err)
+	}
+	if _, err := provider.Review(context.Background(), input); err != nil {
+		t.Fatalf("generic HTTP review: %v", err)
+	}
+	if strings.Contains(httpRequestBody, secret) || !strings.Contains(httpRequestBody, "[REDACTED]") {
+		t.Fatalf("generic HTTP request did not sanitize metadata: %s", httpRequestBody)
+	}
+
+	// Official model requests use the same sanitized JSON payload in the user message.
+	officialRequest := InputRequest(input)
+	if len(officialRequest.Messages) < 2 || strings.Contains(officialRequest.Messages[1].Content, secret) || !strings.Contains(officialRequest.Messages[1].Content, "[REDACTED]") {
+		t.Fatalf("official model request did not sanitize metadata: %+v", officialRequest.Messages)
 	}
 }
 

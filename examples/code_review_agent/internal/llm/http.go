@@ -126,6 +126,30 @@ func (p *httpProvider) Review(ctx context.Context, input Input) (Output, error) 
 // SanitizeInput redacts provider input.
 func SanitizeInput(input Input) Input {
 	input.DiffSummary = review.RedactSecrets(input.DiffSummary)
+	input.InputMetadata = sanitizeInputMetadata(input.InputMetadata)
 	input.ExistingFindings = SanitizedFindingSnapshot(input.ExistingFindings, nil)
 	return input
+}
+
+// sanitizeInputMetadata keeps repository-controlled metadata out of provider
+// requests unless it has passed the same redaction and size limits as findings.
+func sanitizeInputMetadata(metadata review.InputMetadata) review.InputMetadata {
+	metadata.ChangedGoFiles = sanitizeInputStrings(metadata.ChangedGoFiles)
+	metadata.PackageNames = sanitizeInputStrings(metadata.PackageNames)
+	metadata.TouchedTestFiles = sanitizeInputStrings(metadata.TouchedTestFiles)
+	metadata.ModulePath = sanitizeProviderString(metadata.ModulePath, maxFindingFileLen)
+	metadata.BaseRef = sanitizeProviderString(metadata.BaseRef, maxFindingFileLen)
+	metadata.HeadRef = sanitizeProviderString(metadata.HeadRef, maxFindingFileLen)
+	return metadata
+}
+
+func sanitizeInputStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		out = append(out, sanitizeProviderString(value, maxFindingFileLen))
+	}
+	return out
 }

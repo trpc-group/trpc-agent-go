@@ -173,3 +173,51 @@ func TestParseUnifiedDiffParsesOmittedAndZeroHunkLineCounts(t *testing.T) {
 		t.Fatalf("hunk line counts = old:%d new:%d, want old:1 new:0", hunk.OldLines, hunk.NewLines)
 	}
 }
+
+func TestParseUnifiedDiffSeparatesHeaderOnlyMultiFileDiff(t *testing.T) {
+	diff := "--- a/first.go\n" +
+		"+++ b/first.go\n" +
+		"@@ -1 +1 @@\n" +
+		"-old\n" +
+		"+first\n" +
+		"--- a/second.go\n" +
+		"+++ b/second.go\n" +
+		"@@ -5 +5 @@\n" +
+		"-old\n" +
+		"+second\n"
+	parsed, err := ParseUnifiedDiff(diff)
+	if err != nil {
+		t.Fatalf("ParseUnifiedDiff returned error: %v", err)
+	}
+	if len(parsed.Files) != 2 {
+		t.Fatalf("files = %+v, want two files", parsed.Files)
+	}
+	for index, want := range []struct {
+		path string
+		line int
+	}{{"first.go", 1}, {"second.go", 5}} {
+		file := parsed.Files[index]
+		if file.Path != want.path || len(file.Hunks) != 1 || len(file.Hunks[0].CandidateLines) != 1 || file.Hunks[0].CandidateLines[0] != want.line {
+			t.Fatalf("file %d = %+v, want path %q candidate line %d", index, file, want.path, want.line)
+		}
+	}
+}
+
+func TestParseUnifiedDiffTreatsHeaderLikeContentAsAddedLines(t *testing.T) {
+	diff := "--- a/notes.md\n" +
+		"+++ b/notes.md\n" +
+		"@@ -0,0 +1,2 @@\n" +
+		"+++ not-a-file-header\n" +
+		"+TODO(follow-up): retain line numbers\n"
+	parsed, err := ParseUnifiedDiff(diff)
+	if err != nil {
+		t.Fatalf("ParseUnifiedDiff returned error: %v", err)
+	}
+	hunk := parsed.Files[0].Hunks[0]
+	if got := hunk.CandidateLines; len(got) != 2 || got[0] != 1 || got[1] != 2 {
+		t.Fatalf("candidate lines = %v, want [1 2]", got)
+	}
+	if hunk.Lines[0].Text != "++ not-a-file-header" {
+		t.Fatalf("header-like added content = %q", hunk.Lines[0].Text)
+	}
+}

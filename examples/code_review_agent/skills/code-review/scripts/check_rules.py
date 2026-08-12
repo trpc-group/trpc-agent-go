@@ -16,10 +16,21 @@ current_hunk = []
 new_line = 0
 
 
+def hunk_counts(line: str):
+    match = re.match(r"^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@", line)
+    if not match:
+        return None
+    old_count = int(match.group(1)) if match.group(1) is not None else 1
+    new_count = int(match.group(2)) if match.group(2) is not None else 1
+    return old_count, new_count
+
+
 def build_hunk_texts(lines):
     hunk_texts = {}
     hunk_lines = []
     hunk_indexes = []
+    old_remaining = 0
+    new_remaining = 0
 
     def flush_hunk():
         if not hunk_indexes:
@@ -30,19 +41,27 @@ def build_hunk_texts(lines):
 
     for index, raw in enumerate(lines):
         line = raw.rstrip("\n")
-        if line.startswith("@@"):
+        counts = hunk_counts(line)
+        if counts is not None:
             flush_hunk()
             hunk_lines = []
             hunk_indexes = []
+            old_remaining, new_remaining = counts
             continue
-        if line.startswith("diff --git ") or line.startswith("+++ "):
+        if old_remaining <= 0 and new_remaining <= 0 and (line.startswith("diff --git ") or line.startswith("+++ ")):
             continue
-        if line.startswith("+") and not line.startswith("+++"):
+        if new_remaining > 0 and line.startswith("+"):
             hunk_lines.append(line[1:].strip())
             hunk_indexes.append(index)
+            new_remaining -= 1
             continue
-        if line.startswith(" "):
+        if old_remaining > 0 and new_remaining > 0 and line.startswith(" "):
             hunk_lines.append(line[1:])
+            old_remaining -= 1
+            new_remaining -= 1
+            continue
+        if old_remaining > 0 and line.startswith("-"):
+            old_remaining -= 1
 
     flush_hunk()
     return hunk_texts
@@ -286,18 +305,23 @@ with open(path, "r", encoding="utf-8", errors="replace") as f:
     full_text = f.read()
     lines = full_text.splitlines()
     hunk_texts = build_hunk_texts(lines)
+    old_remaining = 0
+    new_remaining = 0
     for index, raw in enumerate(lines):
         line = raw.rstrip("\n")
-        if line.startswith("+++ "):
+        counts = hunk_counts(line)
+        if old_remaining <= 0 and new_remaining <= 0 and line.startswith("+++ "):
             current_file = decode_git_path(line[len("+++ "):])
             continue
-        if line.startswith("@@"):
+        if counts is not None:
             match = re.search(r"\+(\d+)", line)
             new_line = int(match.group(1)) - 1 if match else 0
+            old_remaining, new_remaining = counts
             current_hunk = []
             continue
-        if line.startswith("+") and not line.startswith("+++"):
+        if new_remaining > 0 and line.startswith("+"):
             new_line += 1
+            new_remaining -= 1
             text = line[1:].strip()
             hunk_before = "\n".join(current_hunk)
             current_hunk.append(text)
@@ -383,9 +407,13 @@ with open(path, "r", encoding="utf-8", errors="replace") as f:
                             "Database handle or transaction has no cleanup path", text,
                             "Defer Close() for handles and Rollback() for transactions in the same scope.",
                             "db-lifecycle")
-        elif line.startswith(" ") and new_line > 0:
+        elif old_remaining > 0 and line.startswith("-"):
+            old_remaining -= 1
+        elif old_remaining > 0 and new_remaining > 0 and line.startswith(" "):
             new_line += 1
             current_hunk.append(line[1:])
+            old_remaining -= 1
+            new_remaining -= 1
 
 print(json.dumps({"findings": findings, "warnings": warnings}, separators=(",", ":")))
 if "sandbox-timeout fixture" in full_text:

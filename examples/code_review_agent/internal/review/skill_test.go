@@ -159,6 +159,29 @@ func TestSkillCheckScriptRedactsShortDeclarationSecretsInBothEngines(t *testing.
 	}
 }
 
+func TestSkillCheckScriptTreatsHeaderLikeHunkContentAsAddedLines(t *testing.T) {
+	skillRoot, err := SkillRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	diff := "--- a/notes.md\n" +
+		"+++ b/notes.md\n" +
+		"@@ -0,0 +1,2 @@\n" +
+		"+++ not-a-file-header\n" +
+		"+TODO(follow-up): retain line numbers\n"
+	for _, env := range [][]string{nil, fallbackScriptEnv(t)} {
+		payload := runSkillCheck(t, skillRoot, diff, env)
+		if got := countSkillRule(payload.Findings, "todo-marker"); got != 1 {
+			t.Fatalf("expected TODO after header-like content, got %d findings: %+v", got, payload.Findings)
+		}
+		for _, finding := range payload.Findings {
+			if finding.RuleID == "todo-marker" && (finding.File != "notes.md" || finding.Line != 2) {
+				t.Fatalf("todo finding anchor = %+v, want notes.md:2", finding)
+			}
+		}
+	}
+}
+
 func TestSkillCheckScriptReportsMissingTestHintForAnyGoFile(t *testing.T) {
 	t.Parallel()
 

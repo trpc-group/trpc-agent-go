@@ -100,6 +100,41 @@ func TestFastArtifactLimitsRejectUnknownCountAndTotal(t *testing.T) {
 	}
 }
 
+func TestWriteReportsCreatesPrivateArtifactsWithoutChangingExistingDirectory(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "reports")
+	if err := writeReports(dir, []byte("{}"), []byte("markdown"), []byte("zh"), []byte("diagnostics")); err != nil {
+		t.Fatalf("writeReports: %v", err)
+	}
+	dirInfo, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("stat directory: %v", err)
+	}
+	if got := dirInfo.Mode().Perm(); got != 0o700 {
+		t.Fatalf("new directory mode = %o, want 700", got)
+	}
+	for _, name := range []string{"review_report.json", "review_report.md", "review_report.zh.md", "review_diagnostics.json"} {
+		info, err := os.Stat(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatalf("stat %s: %v", name, err)
+		}
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Fatalf("new report %s mode = %o, want 600", name, got)
+		}
+	}
+
+	existing := filepath.Join(t.TempDir(), "existing")
+	if err := os.Mkdir(existing, 0o755); err != nil {
+		t.Fatalf("create existing directory: %v", err)
+	}
+	if err := writeReports(existing, []byte("{}"), nil, nil, nil); err != nil {
+		t.Fatalf("write reports to existing directory: %v", err)
+	}
+	info, err := os.Stat(existing)
+	if err != nil || info.Mode().Perm() != 0o755 {
+		t.Fatalf("existing directory permissions changed: info=%+v err=%v", info, err)
+	}
+}
+
 func TestFastFinalizeReviewResultIsIdempotentForSandboxFailures(t *testing.T) {
 	ctx := reviewResultContext{
 		TaskID:    "task-fast",

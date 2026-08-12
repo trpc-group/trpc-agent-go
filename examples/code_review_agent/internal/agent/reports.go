@@ -140,19 +140,29 @@ func (b reportBundle) payloads() []artifactPayload {
 
 // writeReports 写入报告文件。
 func writeReports(dir string, jsonReport, markdownReport, markdownChineseReport, diagnosticsReport []byte) error {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(dir, "review_report.json"), jsonReport, 0o644); err != nil {
+	if err := writePrivateReport(filepath.Join(dir, "review_report.json"), jsonReport); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(dir, "review_report.md"), markdownReport, 0o644); err != nil {
+	if err := writePrivateReport(filepath.Join(dir, "review_report.md"), markdownReport); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(dir, "review_report.zh.md"), markdownChineseReport, 0o644); err != nil {
+	if err := writePrivateReport(filepath.Join(dir, "review_report.zh.md"), markdownChineseReport); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, "review_diagnostics.json"), diagnosticsReport, 0o644)
+	return writePrivateReport(filepath.Join(dir, "review_diagnostics.json"), diagnosticsReport)
+}
+
+func writePrivateReport(path string, data []byte) error {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	_, err = file.Write(data)
+	return err
 }
 
 // reportPayloads 返回待写入产物。
