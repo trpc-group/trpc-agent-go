@@ -29,6 +29,24 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session/replaytest"
 )
 
+func TestFixtureJSONDecodingPreservesExactNumbers(t *testing.T) {
+	const number = "1234567890.1234567890123456789"
+	decoded := decodeRawMap(map[string]json.RawMessage{
+		"number": json.RawMessage(number),
+	})
+	if got, ok := decoded["number"].(json.Number); !ok || got.String() != number {
+		t.Fatalf("decodeRawMap() number = %#v", decoded["number"])
+	}
+	var payload trackPayload
+	data := []byte(`{"payload":{"number":` + number + `}}`)
+	if err := decodeJSONUseNumber(data, &payload); err != nil {
+		t.Fatalf("decodeJSONUseNumber() error = %v", err)
+	}
+	if got, ok := payload.Payload["number"].(json.Number); !ok || got.String() != number {
+		t.Fatalf("track payload number = %#v", payload.Payload["number"])
+	}
+}
+
 const (
 	overlapOperationCount = 2
 	overlapTestTimeout    = 2 * time.Second

@@ -10,6 +10,7 @@
 package replayconsistency
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -22,8 +23,7 @@ import (
 )
 
 const (
-	lightweightReplayTimeout      = 30 * time.Second
-	minimumExampleDifferenceCount = 7
+	lightweightReplayTimeout = 30 * time.Second
 )
 
 func standardNormalizeOptions() replaytest.NormalizeOptions {
@@ -222,14 +222,182 @@ func TestExampleReportIsValid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read example report: %v", err)
 	}
-	var report replaytest.Report
-	if err := json.Unmarshal(data, &report); err != nil {
+	var decoded replaytest.Report
+	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("unmarshal example report: %v", err)
 	}
-	if report.Baseline == "" || len(report.Differences) < minimumExampleDifferenceCount {
-		t.Fatalf("example report is incomplete: %#v", report)
-	}
-	if _, err := replaytest.MarshalReport(report); err != nil {
+	report := exampleReport(t)
+	encoded, err := replaytest.MarshalReport(report)
+	if err != nil {
 		t.Fatalf("MarshalReport() error = %v", err)
 	}
+	if !bytes.Equal(data, encoded) {
+		t.Fatalf("example report is stale:\ngot:\n%s\nwant:\n%s", data, encoded)
+	}
+	state := exampleDifferenceAt(t, report.Differences, "$.sessions[0].state.theme.value")
+	if state.Locator.StateKey != "theme" {
+		t.Fatalf("state locator = %#v", state.Locator)
+	}
+}
+
+func exampleReport(t *testing.T) replaytest.Report {
+	t.Helper()
+	differences := make([]replaytest.Difference, 0, 6)
+
+	singleBaseline := replaytest.Snapshot{Sessions: []replaytest.SessionSnapshot{{
+		ID:     "session-1",
+		Events: []replaytest.EventSnapshot{{Content: "same"}, {Content: "hi"}},
+	}}}
+	singleActual := singleBaseline
+	singleActual.Sessions = append([]replaytest.SessionSnapshot(nil), singleBaseline.Sessions...)
+	singleActual.Sessions[0].Events = append(
+		[]replaytest.EventSnapshot(nil), singleBaseline.Sessions[0].Events...,
+	)
+	singleActual.Sessions[0].Events[1].Content = "hello"
+	differences = append(differences, exampleComparedDifference(
+		t, "single-turn", "sqlite", singleBaseline, singleActual,
+		"$.sessions[0].events[1].content", "assistant content differs after replay", nil,
+	))
+
+	stateBaseline := replaytest.Snapshot{Sessions: []replaytest.SessionSnapshot{{
+		ID: "session-1",
+		State: map[string]replaytest.StateValueSnapshot{
+			"theme": replaytest.TextStateValue("dark"),
+		},
+	}}}
+	stateActual := replaytest.Snapshot{Sessions: []replaytest.SessionSnapshot{{
+		ID: "session-1",
+		State: map[string]replaytest.StateValueSnapshot{
+			"theme": replaytest.TextStateValue("light"),
+		},
+	}}}
+	differences = append(differences, exampleComparedDifference(
+		t, "state-update", "sqlite", stateBaseline, stateActual,
+		"$.sessions[0].state.theme.value", "final state value differs after overwrite", nil,
+	))
+
+	memoryBaseline := exampleMemorySearchSnapshot("prefers concise answers", 0.91)
+	memoryContentActual := exampleMemorySearchSnapshot("verify tests before delivery", 0.91)
+	differences = append(differences, exampleComparedDifference(
+		t, "memory-read-write", "postgres", memoryBaseline, memoryContentActual,
+		"$.memory_searches[0].results[0].content",
+		"memory retrieval returned different content at rank 0", nil,
+	))
+	memoryScoreActual := exampleMemorySearchSnapshot("prefers concise answers", 0.9)
+	scoreRule := replaytest.AllowedDiffRule{
+		Case: "memory-read-write", Backend: "vector-memory",
+		Path:        "$.memory_searches[0].results[0].score",
+		Explanation: "vector backend uses a documented score tolerance",
+	}
+	differences = append(differences, exampleComparedDifference(
+		t, "memory-read-write", "vector-memory", memoryBaseline, memoryScoreActual,
+		scoreRule.Path, scoreRule.Explanation, []replaytest.AllowedDiffRule{scoreRule},
+	))
+
+	summaryBaseline := replaytest.Snapshot{Sessions: []replaytest.SessionSnapshot{{
+		ID: "session-1", Summaries: []replaytest.SummarySnapshot{{
+			SessionID: "session-1", FilterKey: "branch/main", Text: "updated summary",
+		}},
+	}}}
+	summaryActual := replaytest.Snapshot{Sessions: []replaytest.SessionSnapshot{{
+		ID: "session-1", Summaries: []replaytest.SummarySnapshot{{
+			SessionID: "session-1", FilterKey: "branch/main", Text: "initial summary",
+		}},
+	}}}
+	differences = append(differences, exampleComparedDifference(
+		t, "summary-update", "mysql", summaryBaseline, summaryActual,
+		"$.sessions[0].summaries[0].text", "summary overwrite kept the stale text", nil,
+	))
+
+	trackBaseline := exampleTrackSnapshot("timeout")
+	trackActual := exampleTrackSnapshot("")
+	differences = append(differences, exampleComparedDifference(
+		t, "track-events", "sqlite", trackBaseline, trackActual,
+		"$.sessions[0].tracks[0].events[2].error", "track error payload was lost", nil,
+	))
+	report := replaytest.NewMatrixReport("inmemory", []replaytest.CaseResult{
+		{
+			Case: "track-events", Status: replaytest.ResultPass,
+			Backends: []replaytest.CaseBackendResult{
+				{Backend: "postgres", Status: replaytest.ResultPass},
+				{Backend: "clickhouse", Status: replaytest.ResultUnsupported,
+					Unsupported: []replaytest.Capability{replaytest.CapabilityTrack}},
+			},
+		},
+		{
+			Case: "summary-update", Status: replaytest.ResultFail,
+			Backends: []replaytest.CaseBackendResult{
+				{Backend: "mysql", Status: replaytest.ResultFail},
+				{Backend: "clickhouse", Status: replaytest.ResultUnsupported,
+					Unsupported: []replaytest.Capability{replaytest.CapabilitySummary}},
+			},
+		},
+	}, differences)
+	report.GeneratedAt = time.Date(2026, time.August, 12, 0, 0, 0, 0, time.UTC)
+	report.Probes = []replaytest.CapabilityProbeResult{{
+		Probe: "session-ttl-expiry", Backend: "clickhouse", Capability: replaytest.CapabilityTTL,
+		Status: replaytest.ResultUnsupported, AllowedDiff: true,
+		Explanation: "ClickHouse 25.3 session did not expire within the deterministic probe deadline",
+	}}
+	return report
+}
+
+func exampleComparedDifference(
+	t *testing.T,
+	caseName string,
+	backend string,
+	baseline replaytest.Snapshot,
+	actual replaytest.Snapshot,
+	path string,
+	explanation string,
+	rules []replaytest.AllowedDiffRule,
+) replaytest.Difference {
+	t.Helper()
+	differences, err := replaytest.CompareSnapshots(replaytest.CompareInput{
+		Case: caseName, Backend: backend, Baseline: baseline, Actual: actual,
+		Options: replaytest.CompareOptions{AllowedDiffRules: rules},
+	})
+	if err != nil {
+		t.Fatalf("CompareSnapshots(%s/%s) error = %v", caseName, backend, err)
+	}
+	if len(differences) != 1 || differences[0].Path != path {
+		t.Fatalf("CompareSnapshots(%s/%s) = %#v, want path %s", caseName, backend, differences, path)
+	}
+	difference := differences[0]
+	difference.Explanation = explanation
+	return difference
+}
+
+func exampleMemorySearchSnapshot(content string, score float64) replaytest.Snapshot {
+	return replaytest.Snapshot{MemorySearches: []replaytest.MemorySearchSnapshot{{
+		AppName: "replaytest", UserID: "user-1", Query: "preferences",
+		Results: []replaytest.MemorySnapshot{{
+			ID: "memory-0001", AppName: "replaytest", UserID: "user-1",
+			Scope:   replaytest.MemoryScope{AppName: "replaytest", UserID: "user-1"},
+			Content: content, Score: score,
+		}},
+	}}}
+}
+
+func exampleTrackSnapshot(eventError string) replaytest.Snapshot {
+	return replaytest.Snapshot{Sessions: []replaytest.SessionSnapshot{{
+		ID: "session-1", Tracks: []replaytest.TrackSnapshot{{
+			Name: "tools", Events: []replaytest.TrackEventSnapshot{{}, {}, {Error: eventError}},
+		}},
+	}}}
+}
+
+func exampleDifferenceAt(
+	t *testing.T,
+	differences []replaytest.Difference,
+	path string,
+) replaytest.Difference {
+	t.Helper()
+	for _, difference := range differences {
+		if difference.Path == path {
+			return difference
+		}
+	}
+	t.Fatalf("difference %q not found in %#v", path, differences)
+	return replaytest.Difference{}
 }

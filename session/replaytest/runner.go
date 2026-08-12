@@ -479,6 +479,7 @@ func unsupportedDifferences(
 			Case:        caseName,
 			Backend:     backend,
 			Path:        "$.unsupported." + string(capability),
+			Baseline:    missingValueMarker,
 			Actual:      string(capability),
 			AllowedDiff: allowed,
 			Explanation: explanation,

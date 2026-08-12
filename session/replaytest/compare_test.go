@@ -10,6 +10,7 @@
 package replaytest
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -123,8 +124,47 @@ func TestCompareSnapshotsReportsAdditionalCollectionItems(t *testing.T) {
 	}
 	differenceAt(t, differences, "$.memories.length")
 	additional := differenceAt(t, differences, "$.memories[0]")
-	if additional.Locator.MemoryID != "memory-1" || additional.Baseline != missingValue {
+	if additional.Locator.MemoryID != "memory-1" || !isMissingValue(additional.Baseline) {
 		t.Fatalf("additional memory difference = %#v", additional)
+	}
+}
+
+func TestCompareSnapshotsDistinguishesMissingFromLiteralMissingText(t *testing.T) {
+	tests := []struct {
+		name     string
+		baseline map[string]any
+		actual   map[string]any
+	}{
+		{
+			name:     "baseline missing",
+			baseline: map[string]any{},
+			actual:   map[string]any{"value": missingValue},
+		},
+		{
+			name:     "actual missing",
+			baseline: map[string]any{"value": missingValue},
+			actual:   map[string]any{},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			differences, err := CompareSnapshots(CompareInput{
+				Case: "missing", Backend: "candidate",
+				Baseline: Snapshot{Sessions: []SessionSnapshot{{Events: []EventSnapshot{{
+					Extensions: test.baseline,
+				}}}}},
+				Actual: Snapshot{Sessions: []SessionSnapshot{{Events: []EventSnapshot{{
+					Extensions: test.actual,
+				}}}}},
+			})
+			if err != nil {
+				t.Fatalf("CompareSnapshots() error = %v", err)
+			}
+			if len(differences) != 1 ||
+				isMissingValue(differences[0].Baseline) == isMissingValue(differences[0].Actual) {
+				t.Fatalf("missing difference = %#v", differences)
+			}
+		})
 	}
 }
 
@@ -457,6 +497,49 @@ func TestComparisonNumericAndMemoryHelpers(t *testing.T) {
 	appName, userID := memoryScope(map[string]any{"app_name": "app", "user_id": "user"})
 	if appName != "app" || userID != "user" {
 		t.Fatalf("memoryScope() = %q, %q", appName, userID)
+	}
+}
+
+func TestCompareSnapshotsPreservesExactJSONNumbers(t *testing.T) {
+	tests := []struct {
+		name     string
+		baseline any
+		actual   any
+		wantDiff bool
+	}{
+		{
+			name:     "high precision decimal",
+			baseline: json.Number("1.0000000000000000001"),
+			actual:   json.Number("1.0000000000000000002"),
+			wantDiff: true,
+		},
+		{
+			name: "equivalent exponent", baseline: json.Number("1.0"),
+			actual: json.Number("10e-1"),
+		},
+		{
+			name: "number versus string", baseline: json.Number("18446744073709551616"),
+			actual: "18446744073709551616", wantDiff: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			baseline := NormalizeSnapshot(Snapshot{Sessions: []SessionSnapshot{{
+				State: map[string]StateValueSnapshot{"number": JSONStateValue(test.baseline)},
+			}}}, DefaultNormalizeOptions())
+			actual := NormalizeSnapshot(Snapshot{Sessions: []SessionSnapshot{{
+				State: map[string]StateValueSnapshot{"number": JSONStateValue(test.actual)},
+			}}}, DefaultNormalizeOptions())
+			differences, err := CompareSnapshots(CompareInput{
+				Case: "numbers", Backend: "candidate", Baseline: baseline, Actual: actual,
+			})
+			if err != nil {
+				t.Fatalf("CompareSnapshots() error = %v", err)
+			}
+			if got := len(differences) > 0; got != test.wantDiff {
+				t.Fatalf("differences = %#v, wantDiff = %v", differences, test.wantDiff)
+			}
+		})
 	}
 }
 

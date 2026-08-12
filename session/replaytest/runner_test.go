@@ -323,7 +323,13 @@ func TestRunnerContinuesAfterExpectedFailure(t *testing.T) {
 
 func TestExecuteOperationIsolatesFixtureInput(t *testing.T) {
 	normal := appendEvent("event-1", "user", "original", 1)
-	normal.Event.Extensions = map[string]any{"nested": map[string]any{"value": "original"}}
+	normal.Event.Extensions = map[string]any{
+		"nested": map[string]any{"value": "original"},
+		"typed": &typedClonePayload{
+			Labels: map[string]string{"value": "original"},
+			Items:  []string{"original"},
+		},
+	}
 	fault := normal
 	fault.InjectedFailure = "expected"
 	fault.FailurePoint = FailureBeforeWrite
@@ -360,7 +366,13 @@ func TestExecuteOperationIsolatesFixtureInput(t *testing.T) {
 
 func TestRunnerIsolatesOperationsBetweenBackends(t *testing.T) {
 	operation := appendEvent("event-1", "user", "original", 1)
-	operation.Event.Extensions = map[string]any{"nested": map[string]any{"value": "original"}}
+	operation.Event.Extensions = map[string]any{
+		"nested": map[string]any{"value": "original"},
+		"typed": &typedClonePayload{
+			Labels: map[string]string{"value": "original"},
+			Items:  []string{"original"},
+		},
+	}
 	baseline := &fakeFixture{
 		name: "baseline", capabilities: allCapabilities(), mutateOperation: mutateEventOperation,
 	}
@@ -375,8 +387,10 @@ func TestRunnerIsolatesOperationsBetweenBackends(t *testing.T) {
 		t.Fatalf("Runner.Run() error = %v", err)
 	}
 	got := candidate.operation(0)
+	typed := got.Event.Extensions["typed"].(*typedClonePayload)
 	if got.Event.Content != "original" ||
-		got.Event.Extensions["nested"].(map[string]any)["value"] != "original" {
+		got.Event.Extensions["nested"].(map[string]any)["value"] != "original" ||
+		typed.Labels["value"] != "original" || typed.Items[0] != "original" {
 		t.Fatalf("candidate received mutated operation: %#v", got)
 	}
 }
@@ -388,6 +402,10 @@ func mutateEventOperation(operation *Operation) {
 	operation.Event.Content = "mutated"
 	if nested, ok := operation.Event.Extensions["nested"].(map[string]any); ok {
 		nested["value"] = "mutated"
+	}
+	if typed, ok := operation.Event.Extensions["typed"].(*typedClonePayload); ok {
+		typed.Labels["value"] = "mutated"
+		typed.Items[0] = "mutated"
 	}
 }
 

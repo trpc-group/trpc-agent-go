@@ -23,6 +23,19 @@ import (
 
 const missingValue = "<missing>"
 
+type missingValueType string
+
+const missingValueMarker = missingValueType(missingValue)
+
+func (value missingValueType) String() string {
+	return string(value)
+}
+
+func isMissingValue(value any) bool {
+	_, ok := value.(missingValueType)
+	return ok
+}
+
 const defaultScoreTolerance = 1e-6
 
 // CompareInput describes one normalized snapshot comparison.
@@ -130,6 +143,9 @@ func (comparator *snapshotComparator) compareValues(
 	if reflect.DeepEqual(baseline, actual) {
 		return
 	}
+	if exactJSONNumbersEqual(baseline, actual) {
+		return
+	}
 	if scoreValuesEqual(path, baseline, actual, comparator.scoreTolerance) {
 		return
 	}
@@ -140,6 +156,17 @@ func (comparator *snapshotComparator) compareValues(
 		comparator.differences,
 		comparator.newDifference(path, locator, baseline, actual),
 	)
+}
+
+func exactJSONNumbersEqual(baseline, actual any) bool {
+	baselineNumber, baselineOK := baseline.(json.Number)
+	actualNumber, actualOK := actual.(json.Number)
+	if !baselineOK || !actualOK {
+		return false
+	}
+	baselineCanonical, baselineOK := canonicalJSONNumber(baselineNumber.String())
+	actualCanonical, actualOK := canonicalJSONNumber(actualNumber.String())
+	return baselineOK && actualOK && baselineCanonical == actualCanonical
 }
 
 func (comparator *snapshotComparator) compareMaps(
@@ -175,14 +202,14 @@ func (comparator *snapshotComparator) compareMaps(
 				continue
 			}
 			comparator.differences = append(comparator.differences,
-				comparator.newDifference(childPath, childLocator, missingValue, actualValue))
+				comparator.newDifference(childPath, childLocator, missingValueMarker, actualValue))
 		case !actualOK:
 			if _, ok := baselineValue.([]any); ok {
 				comparator.compareValues(childPath, baselineValue, []any{}, childLocator)
 				continue
 			}
 			comparator.differences = append(comparator.differences,
-				comparator.newDifference(childPath, childLocator, baselineValue, missingValue))
+				comparator.newDifference(childPath, childLocator, baselineValue, missingValueMarker))
 		default:
 			comparator.compareValues(childPath, baselineValue, actualValue, childLocator)
 		}
@@ -230,13 +257,13 @@ func (comparator *snapshotComparator) compareSlices(
 		itemPath := path + "[" + strconv.Itoa(i) + "]"
 		itemLocator := locatorForValue(itemPath, baseline[i], nil, locator)
 		comparator.differences = append(comparator.differences,
-			comparator.newDifference(itemPath, itemLocator, baseline[i], missingValue))
+			comparator.newDifference(itemPath, itemLocator, baseline[i], missingValueMarker))
 	}
 	for i := length; i < len(actual); i++ {
 		itemPath := path + "[" + strconv.Itoa(i) + "]"
 		itemLocator := locatorForValue(itemPath, nil, actual[i], locator)
 		comparator.differences = append(comparator.differences,
-			comparator.newDifference(itemPath, itemLocator, missingValue, actual[i]))
+			comparator.newDifference(itemPath, itemLocator, missingValueMarker, actual[i]))
 	}
 }
 

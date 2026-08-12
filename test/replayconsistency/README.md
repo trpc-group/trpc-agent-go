@@ -80,7 +80,7 @@ go test ./replayconsistency -run TestOptionalIntegrationTTLProbes -count=1
 
 ## 差异报告
 
-报告按 case、backend 和字段路径稳定排序，并通过 locator 定位 Session ID、Event index、Memory ID/scope、Summary filter-key 或 Track name。每条差异均包含 baseline、actual、`allowed_diff` 状态和非空 explanation。
+报告按 case、backend 和字段路径稳定排序，并通过 locator 定位 Session ID、Event index、Memory ID/scope、Summary filter-key 或 Track name。每条差异均包含 `allowed_diff` 状态和非空 explanation。缺失值保留 baseline/actual 中旧的 `"<missing>"`，并使用 `baseline_missing` / `actual_missing` 消除与合法同名字符串的歧义。
 
 示例见 [`testdata/session_memory_summary_track_diff_report.json`](testdata/session_memory_summary_track_diff_report.json)。
 

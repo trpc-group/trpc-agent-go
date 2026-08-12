@@ -77,7 +77,7 @@ func TestMarshalReportPreservesExplicitNullDifferenceValues(t *testing.T) {
 		},
 		{
 			Case: "case", Backend: "sqlite", Path: "$.sessions[0].state.missing",
-			Baseline: missingValue, Actual: nil,
+			Baseline: missingValueMarker, Actual: nil,
 		},
 	}}
 	encoded, err := MarshalReport(report)
@@ -96,11 +96,75 @@ func TestMarshalReportPreservesExplicitNullDifferenceValues(t *testing.T) {
 	if got := decoded.Differences[0]["actual"]; string(got) != `"value"` {
 		t.Fatalf("actual encoded as %q", got)
 	}
-	if got := decoded.Differences[1]["baseline"]; string(got) != `"`+missingValue+`"` {
-		t.Fatalf("missing baseline encoded as %q", got)
+	if got := decoded.Differences[1]["baseline"]; string(got) != `"<missing>"` {
+		t.Fatalf("legacy missing baseline encoded as %q", got)
+	}
+	if got := decoded.Differences[1]["baseline_missing"]; string(got) != "true" {
+		t.Fatalf("missing baseline marker encoded as %q", got)
 	}
 	if got, ok := decoded.Differences[1]["actual"]; !ok || string(got) != "null" {
 		t.Fatalf("explicit null actual encoded as %q, present=%v", got, ok)
+	}
+}
+
+func TestMarshalReportDistinguishesMissingFromLiteralMissingText(t *testing.T) {
+	report := Report{Differences: []Difference{
+		{
+			Case: "case", Backend: "sqlite", Path: "$.baseline",
+			Baseline: missingValueMarker, Actual: missingValue,
+		},
+		{
+			Case: "case", Backend: "sqlite", Path: "$.actual",
+			Baseline: missingValue, Actual: missingValueMarker,
+		},
+	}}
+	encoded, err := MarshalReport(report)
+	if err != nil {
+		t.Fatalf("MarshalReport() error = %v", err)
+	}
+	var decoded struct {
+		Differences []map[string]json.RawMessage `json:"differences"`
+	}
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("unmarshal report: %v", err)
+	}
+	byPath := make(map[string]map[string]json.RawMessage, len(decoded.Differences))
+	for _, difference := range decoded.Differences {
+		var path string
+		if err := json.Unmarshal(difference["path"], &path); err != nil {
+			t.Fatalf("unmarshal difference path: %v", err)
+		}
+		byPath[path] = difference
+	}
+	baselineMissing := byPath["$.baseline"]
+	actualMissing := byPath["$.actual"]
+	if string(baselineMissing["baseline"]) != `"<missing>"` ||
+		string(baselineMissing["baseline_missing"]) != "true" ||
+		string(baselineMissing["actual"]) != `"<missing>"` {
+		t.Fatalf("baseline missing wire = %s", encoded)
+	}
+	if string(actualMissing["baseline"]) != `"<missing>"` ||
+		string(actualMissing["actual"]) != `"<missing>"` ||
+		string(actualMissing["actual_missing"]) != "true" {
+		t.Fatalf("actual missing wire = %s", encoded)
+	}
+}
+
+func TestDirectReportEncodingKeepsLegacyMissingText(t *testing.T) {
+	report := Report{Differences: []Difference{{
+		Case: "case", Backend: "sqlite", Path: "$.missing",
+		Baseline: missingValueMarker, Actual: "value",
+	}}}
+	encoded, err := json.Marshal(report)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	var decoded Report
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if got := decoded.Differences[0].Baseline; got != missingValue {
+		t.Fatalf("direct report encoding changed legacy marker: %s", encoded)
 	}
 }
 

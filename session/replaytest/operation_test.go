@@ -313,6 +313,10 @@ func TestCloneOperationDeeplyIsolatesPayloads(t *testing.T) {
 				"labels":   map[string]string{"key": "value"},
 				"typed":    []map[string]any{{"bytes": []byte("bytes")}},
 				"byte_map": map[string][]byte{"bytes": []byte("bytes")},
+				"struct": &typedClonePayload{
+					Labels: map[string]string{"key": "value"},
+					Items:  []string{"item"},
+				},
 			},
 		},
 		Memory: &MemorySnapshot{
@@ -350,6 +354,9 @@ func mutateClonedOperation(operation *Operation) {
 	operation.Event.Extensions["labels"].(map[string]string)["key"] = "changed"
 	operation.Event.Extensions["typed"].([]map[string]any)[0]["bytes"].([]byte)[0] = 'X'
 	operation.Event.Extensions["byte_map"].(map[string][]byte)["bytes"][0] = 'X'
+	structured := operation.Event.Extensions["struct"].(*typedClonePayload)
+	structured.Labels["key"] = "changed"
+	structured.Items[0] = "changed"
 	operation.Memory.Topics[0] = "changed"
 	operation.Memory.Metadata["nested"].(map[string]any)["key"] = "changed"
 	*operation.Memory.Metadata["event_time"].(*time.Time) = time.Time{}
@@ -374,5 +381,46 @@ func TestCloneOperationPreservesNonNilEmptyPayloads(t *testing.T) {
 		cloned.Event.Extensions["raw"].(json.RawMessage) == nil || cloned.Memory.Topics == nil ||
 		cloned.Parallel == nil {
 		t.Fatalf("clone changed non-nil empty payloads: %#v", cloned)
+	}
+}
+
+func TestCloneOperationPreservesSharedAndCyclicReferences(t *testing.T) {
+	shared := map[string]any{}
+	shared["self"] = shared
+	original := Operation{
+		StateUpdates: shared,
+		Event:        &EventSnapshot{Extensions: shared},
+	}
+	cloned := cloneOperation(original)
+	clonedState := cloned.StateUpdates
+	clonedEvent := cloned.Event.Extensions
+	clonedSelf := clonedState["self"].(map[string]any)
+	if reflect.ValueOf(clonedState).Pointer() == reflect.ValueOf(shared).Pointer() {
+		t.Fatal("clone retained original map")
+	}
+	if reflect.ValueOf(clonedState).Pointer() != reflect.ValueOf(clonedEvent).Pointer() ||
+		reflect.ValueOf(clonedState).Pointer() != reflect.ValueOf(clonedSelf).Pointer() {
+		t.Fatal("clone did not preserve shared/cyclic topology")
+	}
+}
+
+type opaqueClonePayload struct {
+	values map[string]string
+}
+
+func (payload opaqueClonePayload) MarshalJSON() ([]byte, error) {
+	return json.Marshal(payload.values)
+}
+
+func TestOperationRejectsOpaqueMutablePayloads(t *testing.T) {
+	operation := Operation{
+		Kind: OperationUpdateState, SessionID: "session",
+		StateUpdates: map[string]any{
+			"opaque": opaqueClonePayload{values: map[string]string{"key": "value"}},
+		},
+	}
+	if err := operation.Validate(); err == nil ||
+		!strings.Contains(err.Error(), "unexported mutable field") {
+		t.Fatalf("Operation.Validate() error = %v", err)
 	}
 }

@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"time"
 )
 
 // NewReport builds a deterministically ordered report.
@@ -46,6 +47,9 @@ func NewCapabilityProbeReport(results []CapabilityProbeResult) Report {
 }
 
 // MarshalReport encodes an indented, deterministic JSON report.
+// MarshalReport represents missing comparison values with baseline_missing or
+// actual_missing while retaining the legacy "<missing>" baseline or actual value
+// for compatibility.
 func MarshalReport(report Report) ([]byte, error) {
 	report.Differences = append([]Difference(nil), report.Differences...)
 	sortDifferences(report.Differences)
@@ -55,10 +59,80 @@ func MarshalReport(report Report) ([]byte, error) {
 	encoder := json.NewEncoder(&output)
 	encoder.SetEscapeHTML(false)
 	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(report); err != nil {
+	wired, err := reportForWire(report)
+	if err != nil {
+		return nil, fmt.Errorf("marshal replay report: %w", err)
+	}
+	if err := encoder.Encode(wired); err != nil {
 		return nil, fmt.Errorf("marshal replay report: %w", err)
 	}
 	return output.Bytes(), nil
+}
+
+type reportWire struct {
+	Baseline    string                  `json:"baseline"`
+	GeneratedAt time.Time               `json:"generated_at,omitempty"`
+	Cases       []CaseResult            `json:"cases,omitempty"`
+	Probes      []CapabilityProbeResult `json:"probes,omitempty"`
+	Differences []differenceWire        `json:"differences"`
+}
+
+type differenceWire struct {
+	Case            string          `json:"case"`
+	Backend         string          `json:"backend"`
+	Path            string          `json:"path"`
+	Locator         Locator         `json:"locator,omitempty"`
+	Baseline        json.RawMessage `json:"baseline"`
+	Actual          json.RawMessage `json:"actual"`
+	BaselineMissing bool            `json:"baseline_missing,omitempty"`
+	ActualMissing   bool            `json:"actual_missing,omitempty"`
+	AllowedDiff     bool            `json:"allowed_diff"`
+	Explanation     string          `json:"explanation,omitempty"`
+}
+
+func reportForWire(report Report) (reportWire, error) {
+	wired := reportWire{
+		Baseline: report.Baseline, GeneratedAt: report.GeneratedAt,
+		Cases: report.Cases, Probes: report.Probes,
+		Differences: make([]differenceWire, len(report.Differences)),
+	}
+	for i, difference := range report.Differences {
+		baselineMissing := isMissingValue(difference.Baseline)
+		actualMissing := isMissingValue(difference.Actual)
+		baselineValue := difference.Baseline
+		if baselineMissing {
+			baselineValue = missingValue
+		}
+		actualValue := difference.Actual
+		if actualMissing {
+			actualValue = missingValue
+		}
+		baseline, err := marshalReportValue(baselineValue)
+		if err != nil {
+			return reportWire{}, err
+		}
+		actual, err := marshalReportValue(actualValue)
+		if err != nil {
+			return reportWire{}, err
+		}
+		wired.Differences[i] = differenceWire{
+			Case: difference.Case, Backend: difference.Backend, Path: difference.Path,
+			Locator: difference.Locator, Baseline: baseline, Actual: actual,
+			BaselineMissing: baselineMissing, ActualMissing: actualMissing,
+			AllowedDiff: difference.AllowedDiff, Explanation: difference.Explanation,
+		}
+	}
+	return wired, nil
+}
+
+func marshalReportValue(value any) (json.RawMessage, error) {
+	var output bytes.Buffer
+	encoder := json.NewEncoder(&output)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return nil, err
+	}
+	return json.RawMessage(bytes.TrimSuffix(output.Bytes(), []byte{'\n'})), nil
 }
 
 func cloneAndSortProbeResults(results []CapabilityProbeResult) []CapabilityProbeResult {

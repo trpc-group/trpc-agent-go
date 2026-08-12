@@ -727,7 +727,7 @@ func toSessionSnapshot(
 		if events != nil {
 			for _, trackEvent := range events.Events {
 				var payload trackPayload
-				if err := json.Unmarshal(trackEvent.Payload, &payload); err != nil {
+				if err := decodeJSONUseNumber(trackEvent.Payload, &payload); err != nil {
 					sess.TracksMu.RUnlock()
 					return replaytest.SessionSnapshot{}, fmt.Errorf("decode track payload: %w", err)
 				}
@@ -867,7 +867,7 @@ func decodeRawMap[T ~[]byte](values map[string]T) map[string]any {
 			continue
 		}
 		var item any
-		if err := json.Unmarshal(value, &item); err != nil {
+		if err := decodeJSONUseNumber(value, &item); err != nil {
 			item = string(value)
 		}
 		decoded[key] = item
@@ -905,16 +905,26 @@ func decodeStateValue[T ~[]byte](value T) replaytest.StateValueSnapshot {
 }
 
 func decodeJSONState(data []byte) (any, bool) {
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.UseNumber()
 	var decoded any
-	if err := decoder.Decode(&decoded); err != nil {
-		return nil, false
-	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+	if err := decodeJSONUseNumber(data, &decoded); err != nil {
 		return nil, false
 	}
 	return decoded, true
+}
+
+func decodeJSONUseNumber(data []byte, target any) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("multiple JSON values")
+		}
+		return err
+	}
+	return nil
 }
 
 func toMemorySnapshot(entry *memory.Entry) replaytest.MemorySnapshot {

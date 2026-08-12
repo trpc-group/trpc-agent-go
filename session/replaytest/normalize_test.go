@@ -11,6 +11,7 @@ package replaytest
 
 import (
 	"encoding/json"
+	"math"
 	"reflect"
 	"testing"
 	"time"
@@ -77,6 +78,67 @@ func TestNormalizeJSONLikePreservesLargeIntegerPrecision(t *testing.T) {
 	}
 	if _, converted := got.(float64); converted {
 		t.Fatalf("large integer was converted to float64: %#v", got)
+	}
+}
+
+func TestNormalizeJSONLikePreservesArbitraryPrecisionNumbers(t *testing.T) {
+	const (
+		firstDecimal  = "1.0000000000000000001"
+		secondDecimal = "1.0000000000000000002"
+		largeInteger  = "18446744073709551616"
+	)
+	first := normalizeJSONLike(json.Number(firstDecimal), DefaultNormalizeOptions())
+	second := normalizeJSONLike(json.Number(secondDecimal), DefaultNormalizeOptions())
+	if reflect.DeepEqual(first, second) {
+		t.Fatalf("high-precision decimals collapsed: %#v", first)
+	}
+	if got, ok := first.(json.Number); !ok || got.String() != firstDecimal {
+		t.Fatalf("first decimal = %#v", first)
+	}
+	large := normalizeJSONLike(json.Number(largeInteger), DefaultNormalizeOptions())
+	if got, ok := large.(json.Number); !ok || got.String() != largeInteger {
+		t.Fatalf("large integer = %#v", large)
+	}
+	for _, input := range []any{
+		json.RawMessage(`{"value":1.0000000000000000001}`),
+		[]byte(`{"value":1.0000000000000000001}`),
+	} {
+		got := normalizeJSONLike(input, DefaultNormalizeOptions()).(map[string]any)["value"]
+		if number, ok := got.(json.Number); !ok || number.String() != firstDecimal {
+			t.Fatalf("normalizeJSONLike(%T) precision = %#v", input, got)
+		}
+	}
+}
+
+func TestNormalizeJSONLikeCanonicalizesEquivalentNumbers(t *testing.T) {
+	options := DefaultNormalizeOptions()
+	values := []any{
+		json.Number("1"), json.Number("1.0"), json.Number("10e-1"),
+		float64(1), uint64(1),
+	}
+	want := normalizeJSONLike(values[0], options)
+	for _, value := range values[1:] {
+		if got := normalizeJSONLike(value, options); !reflect.DeepEqual(got, want) {
+			t.Fatalf("normalizeJSONLike(%#v) = %#v, want %#v", value, got, want)
+		}
+	}
+	for _, value := range []json.Number{"-0", "0.0", "0e100000"} {
+		if got := normalizeJSONLike(value, options); !reflect.DeepEqual(got, int64(0)) {
+			t.Fatalf("normalizeJSONLike(%q) = %#v, want zero", value, got)
+		}
+	}
+}
+
+func TestNormalizeSnapshotCanonicalizesNumericSortKeys(t *testing.T) {
+	baseline := Snapshot{Memories: []MemorySnapshot{{
+		Content: "same", Metadata: map[string]any{"rank": json.Number("1e0")},
+	}}}
+	actual := Snapshot{Memories: []MemorySnapshot{{
+		Content: "same", Metadata: map[string]any{"rank": float64(1)},
+	}}}
+	if got, want := NormalizeSnapshot(actual, DefaultNormalizeOptions()),
+		NormalizeSnapshot(baseline, DefaultNormalizeOptions()); !reflect.DeepEqual(got, want) {
+		t.Fatalf("numeric representations normalize differently:\ngot:  %#v\nwant: %#v", got, want)
 	}
 }
 
@@ -322,12 +384,21 @@ func TestNormalizeJSONLikeHandlesFallbackRepresentations(t *testing.T) {
 		value any
 		want  any
 	}{
-		{value: uint64(42), want: uint64(42)},
-		{value: float32(1.5), want: float64(1.5)},
+		{value: uint64(42), want: int64(42)},
+		{value: float32(1.5), want: json.Number("1.5")},
 	}
 	for _, scalar := range scalars {
 		if got := normalizeJSONLike(scalar.value, options); !reflect.DeepEqual(got, scalar.want) {
 			t.Fatalf("normalizeJSONLike(%T) = %#v, want %#v", scalar.value, got, scalar.want)
+		}
+	}
+}
+
+func TestNormalizeJSONLikePreservesInvalidJSONFloatsForEncodingErrors(t *testing.T) {
+	for _, value := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		got := normalizeJSONLike(value, DefaultNormalizeOptions())
+		if _, err := json.Marshal(got); err == nil {
+			t.Fatalf("normalizeJSONLike(%v) became JSON encodable: %#v", value, got)
 		}
 	}
 }
@@ -356,6 +427,33 @@ func TestCloneJSONLikeCopiesReferenceValues(t *testing.T) {
 	if string(raw) != `{"value":1}` || string(bytesValue) != "bytes" ||
 		input[2].([]any)[0].(map[string]any)["key"] != "value" {
 		t.Fatalf("cloneJSONLike() mutated input: %#v", input)
+	}
+}
+
+type typedClonePayload struct {
+	Labels map[string]string
+	Items  []string
+	Nested *typedClonePayload
+}
+
+func TestCloneJSONLikeCopiesTypedStructsAndPreservesReferences(t *testing.T) {
+	shared := &typedClonePayload{
+		Labels: map[string]string{"key": "value"},
+		Items:  []string{"item"},
+	}
+	shared.Nested = shared
+	input := []any{shared, shared}
+
+	cloned := cloneJSONLike(input).([]any)
+	first := cloned[0].(*typedClonePayload)
+	second := cloned[1].(*typedClonePayload)
+	if first == shared || second != first || first.Nested != first {
+		t.Fatalf("clone topology = %#v, %#v", first, second)
+	}
+	first.Labels["key"] = "changed"
+	first.Items[0] = "changed"
+	if shared.Labels["key"] != "value" || shared.Items[0] != "item" {
+		t.Fatalf("typed clone retained input aliases: %#v", shared)
 	}
 }
 
@@ -482,6 +580,73 @@ func TestNormalizeTimesStartsNewRankAfterPrecisionGap(t *testing.T) {
 	}
 	if !second.Equal(third) {
 		t.Fatalf("adjacent values within precision got different ranks: %v, %v", second, third)
+	}
+}
+
+func TestNormalizeTimesBoundsChainedTolerance(t *testing.T) {
+	base := time.Unix(100, 0)
+	values := []time.Time{
+		base,
+		base.Add(900 * time.Microsecond),
+		base.Add(1800 * time.Microsecond),
+		base.Add(2700 * time.Microsecond),
+	}
+	pointers := make([]*time.Time, len(values))
+	for i := range values {
+		pointers[i] = &values[i]
+	}
+	normalizeTimes(pointers, time.Millisecond)
+	if !values[0].Equal(values[1]) || !values[2].Equal(values[3]) ||
+		values[0].Equal(values[2]) {
+		t.Fatalf("chained ranks are unbounded: %v", values)
+	}
+}
+
+func TestNormalizeTimesUsesInclusiveClusterBoundary(t *testing.T) {
+	base := time.Unix(100, 0)
+	first := base.Add(2 * time.Millisecond)
+	second := base
+	third := base.Add(time.Millisecond)
+	normalizeTimes([]*time.Time{&first, &second, &third}, time.Millisecond)
+	if got := []int64{first.UnixNano(), second.UnixNano(), third.UnixNano()}; !reflect.DeepEqual(got, []int64{3, 1, 2}) {
+		t.Fatalf("inclusive ranks = %v, want [3 1 2]", got)
+	}
+}
+
+func TestNormalizeSnapshotBoundsAllTimestampCollections(t *testing.T) {
+	base := time.Unix(100, 0)
+	snapshot := Snapshot{
+		Sessions: []SessionSnapshot{{
+			Events: []EventSnapshot{
+				{Timestamp: base},
+				{Timestamp: base.Add(900 * time.Microsecond)},
+			},
+			Summaries: []SummarySnapshot{{
+				UpdatedAt: base.Add(1800 * time.Microsecond),
+			}},
+			Tracks: []TrackSnapshot{{Events: []TrackEventSnapshot{
+				{Timestamp: base},
+				{Timestamp: base.Add(900 * time.Microsecond)},
+				{Timestamp: base.Add(1800 * time.Microsecond)},
+			}}},
+		}},
+		Memories: []MemorySnapshot{{
+			CreatedAt: base, UpdatedAt: base.Add(time.Millisecond),
+		}},
+	}
+	got := NormalizeSnapshot(snapshot, DefaultNormalizeOptions())
+	events := got.Sessions[0].Events
+	if !events[0].Timestamp.Equal(events[1].Timestamp) ||
+		events[0].Timestamp.Equal(got.Sessions[0].Summaries[0].UpdatedAt) {
+		t.Fatalf("conversation ranks = %#v", got.Sessions[0])
+	}
+	trackEvents := got.Sessions[0].Tracks[0].Events
+	if !trackEvents[0].Timestamp.Equal(trackEvents[1].Timestamp) ||
+		trackEvents[0].Timestamp.Equal(trackEvents[2].Timestamp) {
+		t.Fatalf("track ranks = %#v", trackEvents)
+	}
+	if got.Memories[0].CreatedAt.Equal(got.Memories[0].UpdatedAt) {
+		t.Fatalf("memory boundary shared one rank: %#v", got.Memories[0])
 	}
 }
 

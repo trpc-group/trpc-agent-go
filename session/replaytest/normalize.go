@@ -14,8 +14,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
+	"math/big"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -283,11 +286,16 @@ func normalizeScalar(value any) (any, bool) {
 	case reflect.String:
 		return reflected.String(), true
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		return reflected.Int(), true
+		return normalizeJSONNumbers(json.Number(strconv.FormatInt(reflected.Int(), 10))), true
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		return reflected.Uint(), true
+		return normalizeJSONNumbers(json.Number(strconv.FormatUint(reflected.Uint(), 10))), true
 	case reflect.Float32, reflect.Float64:
-		return reflected.Float(), true
+		if math.IsNaN(reflected.Float()) || math.IsInf(reflected.Float(), 0) {
+			return reflected.Float(), true
+		}
+		return normalizeJSONNumbers(json.Number(strconv.FormatFloat(
+			reflected.Float(), 'g', -1, reflected.Type().Bits(),
+		))), true
 	default:
 		return nil, false
 	}
@@ -318,17 +326,16 @@ func decodeJSON(data []byte) (any, bool) {
 func normalizeJSONNumbers(value any) any {
 	switch typed := value.(type) {
 	case json.Number:
-		if integer, err := typed.Int64(); err == nil {
-			return integer
+		canonical, ok := canonicalJSONNumber(typed.String())
+		if !ok {
+			return typed.String()
 		}
-		if strings.ContainsAny(typed.String(), ".eE") {
-			decimal, err := typed.Float64()
-			if err != nil {
-				return typed.String()
+		if !strings.ContainsAny(canonical, ".eE") {
+			if integer, err := strconv.ParseInt(canonical, 10, 64); err == nil {
+				return integer
 			}
-			return decimal
 		}
-		return typed.String()
+		return json.Number(canonical)
 	case map[string]any:
 		for key, item := range typed {
 			typed[key] = normalizeJSONNumbers(item)
@@ -339,6 +346,77 @@ func normalizeJSONNumbers(value any) any {
 		}
 	}
 	return value
+}
+
+const maxPlainJSONNumberLength = 4096
+
+func canonicalJSONNumber(value string) (string, bool) {
+	if _, err := json.Marshal(json.Number(value)); err != nil {
+		return "", false
+	}
+	negative := strings.HasPrefix(value, "-")
+	if negative {
+		value = value[1:]
+	}
+	mantissa := value
+	exponent := new(big.Int)
+	if index := strings.IndexAny(value, "eE"); index >= 0 {
+		mantissa = value[:index]
+		if _, ok := exponent.SetString(value[index+1:], 10); !ok {
+			return "", false
+		}
+	}
+	integer := mantissa
+	fraction := ""
+	if index := strings.IndexByte(mantissa, '.'); index >= 0 {
+		integer = mantissa[:index]
+		fraction = mantissa[index+1:]
+	}
+	digits := strings.TrimLeft(integer+fraction, "0")
+	if digits == "" {
+		return "0", true
+	}
+	scale := new(big.Int).Set(exponent)
+	scale.Sub(scale, big.NewInt(int64(len(fraction))))
+	trimmed := strings.TrimRight(digits, "0")
+	scale.Add(scale, big.NewInt(int64(len(digits)-len(trimmed))))
+	digits = trimmed
+	sign := ""
+	if negative {
+		sign = "-"
+	}
+	if scale.IsInt64() {
+		if plain, ok := plainJSONNumber(digits, scale.Int64()); ok {
+			return sign + plain, true
+		}
+	}
+	scientificExponent := new(big.Int).Add(
+		scale, big.NewInt(int64(len(digits)-1)),
+	)
+	coefficient := digits[:1]
+	if len(digits) > 1 {
+		coefficient += "." + digits[1:]
+	}
+	return sign + coefficient + "e" + scientificExponent.String(), true
+}
+
+func plainJSONNumber(digits string, scale int64) (string, bool) {
+	digitCount := int64(len(digits))
+	if scale >= 0 {
+		if scale > maxPlainJSONNumberLength-digitCount {
+			return "", false
+		}
+		return digits + strings.Repeat("0", int(scale)), true
+	}
+	decimalPosition := digitCount + scale
+	if decimalPosition > 0 {
+		return digits[:decimalPosition] + "." + digits[decimalPosition:], true
+	}
+	zeroCount := -decimalPosition
+	if zeroCount > maxPlainJSONNumberLength-digitCount-2 {
+		return "", false
+	}
+	return "0." + strings.Repeat("0", int(zeroCount)) + digits, true
 }
 
 func sessionSortKey(snapshot SessionSnapshot) string {
@@ -381,6 +459,9 @@ func normalizeSessionMetadataTimes(createdAt, updatedAt *time.Time) {
 }
 
 func normalizeTimes(values []*time.Time, precision time.Duration) {
+	if precision <= 0 {
+		precision = time.Millisecond
+	}
 	ordered := make([]time.Time, 0, len(values))
 	for _, value := range values {
 		if value != nil && !value.IsZero() {
@@ -389,14 +470,14 @@ func normalizeTimes(values []*time.Time, precision time.Duration) {
 	}
 	sort.Slice(ordered, func(i, j int) bool { return ordered[i].Before(ordered[j]) })
 	ranks := make(map[time.Time]int, len(ordered))
-	var previous time.Time
+	var anchor time.Time
 	rank := 0
 	for _, value := range ordered {
-		if rank == 0 || value.Sub(previous) > precision {
+		if rank == 0 || value.Sub(anchor) >= precision {
 			rank++
+			anchor = value
 		}
 		ranks[value] = rank
-		previous = value
 	}
 	for _, value := range values {
 		if value == nil || value.IsZero() {
@@ -488,56 +569,327 @@ func cloneJSONLike(value any) any {
 	if value == nil {
 		return nil
 	}
-	return cloneJSONLikeValue(reflect.ValueOf(value)).Interface()
+	cloner := jsonLikeCloner{visited: make(map[cloneReference]reflect.Value)}
+	return cloner.clone(reflect.ValueOf(value)).Interface()
 }
 
-func cloneJSONLikeValue(value reflect.Value) reflect.Value {
+type cloneReference struct {
+	typeOf   reflect.Type
+	kind     reflect.Kind
+	pointer  uintptr
+	length   int
+	capacity int
+}
+
+type jsonLikeCloner struct {
+	visited map[cloneReference]reflect.Value
+}
+
+func validateCloneableJSONLike(value any) error {
+	if value == nil {
+		return nil
+	}
+	return validateCloneableJSONLikeValue(
+		reflect.ValueOf(value), make(map[cloneReference]struct{}),
+	)
+}
+
+func validateCloneableJSONLikeValue(
+	value reflect.Value,
+	visited map[cloneReference]struct{},
+) error {
+	if !value.IsValid() {
+		return nil
+	}
+	switch value.Kind() {
+	case reflect.Interface:
+		return validateCloneableInterface(value, visited)
+	case reflect.Map:
+		return validateCloneableMap(value, visited)
+	case reflect.Pointer:
+		return validateCloneablePointer(value, visited)
+	case reflect.Slice:
+		return validateCloneableSlice(value, visited)
+	case reflect.Array:
+		return validateCloneableArray(value, visited)
+	case reflect.Struct:
+		return validateCloneableStruct(value, visited)
+	case reflect.Chan, reflect.Func, reflect.UnsafePointer:
+		return fmt.Errorf("value type %s cannot be safely cloned", value.Type())
+	}
+	return nil
+}
+
+func validateCloneableInterface(
+	value reflect.Value,
+	visited map[cloneReference]struct{},
+) error {
+	if value.IsNil() {
+		return nil
+	}
+	return validateCloneableJSONLikeValue(value.Elem(), visited)
+}
+
+func validateCloneableMap(
+	value reflect.Value,
+	visited map[cloneReference]struct{},
+) error {
+	if value.IsNil() {
+		return nil
+	}
+	if cloneReferenceVisited(visited, mapCloneReference(value)) {
+		return nil
+	}
+	iterator := value.MapRange()
+	for iterator.Next() {
+		if !isSafeJSONMapKey(iterator.Key()) {
+			return fmt.Errorf("map key type %s cannot be safely cloned", iterator.Key().Type())
+		}
+		if err := validateCloneableJSONLikeValue(iterator.Value(), visited); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateCloneablePointer(
+	value reflect.Value,
+	visited map[cloneReference]struct{},
+) error {
+	if value.IsNil() {
+		return nil
+	}
+	if cloneReferenceVisited(visited, pointerCloneReference(value)) {
+		return nil
+	}
+	return validateCloneableJSONLikeValue(value.Elem(), visited)
+}
+
+func validateCloneableSlice(
+	value reflect.Value,
+	visited map[cloneReference]struct{},
+) error {
+	if value.IsNil() {
+		return nil
+	}
+	if cloneReferenceVisited(visited, sliceCloneReference(value)) {
+		return nil
+	}
+	for i := 0; i < value.Len(); i++ {
+		if err := validateCloneableJSONLikeValue(value.Index(i), visited); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateCloneableArray(
+	value reflect.Value,
+	visited map[cloneReference]struct{},
+) error {
+	for i := 0; i < value.Len(); i++ {
+		if err := validateCloneableJSONLikeValue(value.Index(i), visited); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateCloneableStruct(
+	value reflect.Value,
+	visited map[cloneReference]struct{},
+) error {
+	if value.Type() == reflect.TypeOf(time.Time{}) {
+		return nil
+	}
+	for i := 0; i < value.NumField(); i++ {
+		field := value.Type().Field(i)
+		if field.PkgPath != "" {
+			if typeContainsMutableReference(field.Type, make(map[reflect.Type]bool)) {
+				return fmt.Errorf(
+					"struct %s has unexported mutable field %s",
+					value.Type(), field.Name,
+				)
+			}
+			continue
+		}
+		if err := validateCloneableJSONLikeValue(value.Field(i), visited); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func cloneReferenceVisited(
+	visited map[cloneReference]struct{},
+	reference cloneReference,
+) bool {
+	if _, ok := visited[reference]; ok {
+		return true
+	}
+	visited[reference] = struct{}{}
+	return false
+}
+
+func isSafeJSONMapKey(value reflect.Value) bool {
+	for value.Kind() == reflect.Interface {
+		if value.IsNil() {
+			return false
+		}
+		value = value.Elem()
+	}
+	switch value.Kind() {
+	case reflect.String,
+		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return true
+	default:
+		return false
+	}
+}
+
+func typeContainsMutableReference(value reflect.Type, visiting map[reflect.Type]bool) bool {
+	if value == reflect.TypeOf(time.Time{}) {
+		return false
+	}
+	if visiting[value] {
+		return false
+	}
+	visiting[value] = true
+	defer delete(visiting, value)
+	switch value.Kind() {
+	case reflect.Map, reflect.Pointer, reflect.Slice, reflect.Interface,
+		reflect.Chan, reflect.Func, reflect.UnsafePointer:
+		return true
+	case reflect.Array:
+		return typeContainsMutableReference(value.Elem(), visiting)
+	case reflect.Struct:
+		for i := 0; i < value.NumField(); i++ {
+			if typeContainsMutableReference(value.Field(i).Type, visiting) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (cloner *jsonLikeCloner) clone(value reflect.Value) reflect.Value {
 	if !value.IsValid() {
 		return value
 	}
 	switch value.Kind() {
 	case reflect.Interface:
-		if value.IsNil() {
-			return reflect.Zero(value.Type())
-		}
-		cloned := reflect.New(value.Type()).Elem()
-		cloned.Set(cloneJSONLikeValue(value.Elem()))
-		return cloned
+		return cloner.cloneInterface(value)
 	case reflect.Map:
-		if value.IsNil() {
-			return reflect.Zero(value.Type())
-		}
-		cloned := reflect.MakeMapWithSize(value.Type(), value.Len())
-		iterator := value.MapRange()
-		for iterator.Next() {
-			cloned.SetMapIndex(iterator.Key(), cloneJSONLikeValue(iterator.Value()))
-		}
-		return cloned
+		return cloner.cloneMap(value)
 	case reflect.Pointer:
-		if value.IsNil() {
-			return reflect.Zero(value.Type())
-		}
-		cloned := reflect.New(value.Type().Elem())
-		cloned.Elem().Set(cloneJSONLikeValue(value.Elem()))
-		return cloned
+		return cloner.clonePointer(value)
 	case reflect.Slice:
-		if value.IsNil() {
-			return reflect.Zero(value.Type())
-		}
-		cloned := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
-		for i := 0; i < value.Len(); i++ {
-			cloned.Index(i).Set(cloneJSONLikeValue(value.Index(i)))
-		}
-		return cloned
+		return cloner.cloneSlice(value)
 	case reflect.Array:
-		cloned := reflect.New(value.Type()).Elem()
-		for i := 0; i < value.Len(); i++ {
-			cloned.Index(i).Set(cloneJSONLikeValue(value.Index(i)))
-		}
-		return cloned
+		return cloner.cloneArray(value)
+	case reflect.Struct:
+		return cloner.cloneStruct(value)
 	default:
 		return value
 	}
+}
+
+func mapCloneReference(value reflect.Value) cloneReference {
+	return cloneReference{
+		typeOf: value.Type(), kind: value.Kind(), pointer: value.Pointer(),
+	}
+}
+
+func pointerCloneReference(value reflect.Value) cloneReference {
+	return cloneReference{
+		typeOf: value.Type(), kind: value.Kind(), pointer: value.Pointer(),
+	}
+}
+
+func sliceCloneReference(value reflect.Value) cloneReference {
+	return cloneReference{
+		typeOf: value.Type(), kind: value.Kind(), pointer: value.Pointer(),
+		length: value.Len(), capacity: value.Cap(),
+	}
+}
+
+func (cloner *jsonLikeCloner) cloneInterface(value reflect.Value) reflect.Value {
+	if value.IsNil() {
+		return reflect.Zero(value.Type())
+	}
+	cloned := reflect.New(value.Type()).Elem()
+	cloned.Set(cloner.clone(value.Elem()))
+	return cloned
+}
+
+func (cloner *jsonLikeCloner) cloneMap(value reflect.Value) reflect.Value {
+	if value.IsNil() {
+		return reflect.Zero(value.Type())
+	}
+	reference := mapCloneReference(value)
+	if cloned, ok := cloner.visited[reference]; ok {
+		return cloned
+	}
+	cloned := reflect.MakeMapWithSize(value.Type(), value.Len())
+	cloner.visited[reference] = cloned
+	iterator := value.MapRange()
+	for iterator.Next() {
+		cloned.SetMapIndex(iterator.Key(), cloner.clone(iterator.Value()))
+	}
+	return cloned
+}
+
+func (cloner *jsonLikeCloner) clonePointer(value reflect.Value) reflect.Value {
+	if value.IsNil() {
+		return reflect.Zero(value.Type())
+	}
+	reference := pointerCloneReference(value)
+	if cloned, ok := cloner.visited[reference]; ok {
+		return cloned
+	}
+	cloned := reflect.New(value.Type().Elem())
+	cloner.visited[reference] = cloned
+	cloned.Elem().Set(cloner.clone(value.Elem()))
+	return cloned
+}
+
+func (cloner *jsonLikeCloner) cloneSlice(value reflect.Value) reflect.Value {
+	if value.IsNil() {
+		return reflect.Zero(value.Type())
+	}
+	reference := sliceCloneReference(value)
+	if cloned, ok := cloner.visited[reference]; ok {
+		return cloned
+	}
+	cloned := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
+	cloner.visited[reference] = cloned
+	for i := 0; i < value.Len(); i++ {
+		cloned.Index(i).Set(cloner.clone(value.Index(i)))
+	}
+	return cloned
+}
+
+func (cloner *jsonLikeCloner) cloneArray(value reflect.Value) reflect.Value {
+	cloned := reflect.New(value.Type()).Elem()
+	for i := 0; i < value.Len(); i++ {
+		cloned.Index(i).Set(cloner.clone(value.Index(i)))
+	}
+	return cloned
+}
+
+func (cloner *jsonLikeCloner) cloneStruct(value reflect.Value) reflect.Value {
+	cloned := reflect.New(value.Type()).Elem()
+	cloned.Set(value)
+	for i := 0; i < value.NumField(); i++ {
+		target := cloned.Field(i)
+		source := value.Field(i)
+		if !target.CanSet() || !source.CanInterface() {
+			continue
+		}
+		target.Set(cloner.clone(source))
+	}
+	return cloned
 }
 
 func memorySortKey(snapshot MemorySnapshot) string {
