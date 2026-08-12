@@ -45,7 +45,8 @@ var (
 	destructiveFactBoundaryPattern = regexp.MustCompile(
 		`(?i)[,.!?;，。！？；\r\n]+|\s+(?:and|but|or|while|whereas)\s+|(?:并且|但是|但|而且|同时|然后)`,
 	)
-	destructiveRequestGenericTokens = stringSet([]string{
+	destructiveTargetBoundaryPattern = regexp.MustCompile(`(?i)\s+(?:and|or)\s+|[、]|\s+(?:和|与|以及)\s+`)
+	destructiveRequestGenericTokens  = stringSet([]string{
 		"a", "absolutely", "about", "all", "an", "and", "any", "anything", "can", "clear", "completely",
 		"could", "data", "delete", "detail", "details", "entirely", "erase", "ever", "everything",
 		"fact", "facts", "forget", "from", "have", "i", "information", "know", "memory", "memories",
@@ -186,11 +187,8 @@ func (w *AutoMemoryWorker) reconcilePreserveHistoryOps(
 }
 
 func filterPreserveHistoryForgetWrites(
-	ctx context.Context,
-	userKey memory.UserKey,
-	ops []*extractor.Operation,
-	existingByID map[string]*memory.Entry,
-	request destructiveRequest,
+	ctx context.Context, userKey memory.UserKey,
+	ops []*extractor.Operation, existingByID map[string]*memory.Entry, request destructiveRequest,
 ) []*extractor.Operation {
 	if !request.explicit || request.partial {
 		return ops
@@ -210,9 +208,7 @@ func filterPreserveHistoryForgetWrites(
 }
 
 func preserveHistoryWriteCoveredByForget(
-	op *extractor.Operation,
-	existingByID map[string]*memory.Entry,
-	request destructiveRequest,
+	op *extractor.Operation, existingByID map[string]*memory.Entry, request destructiveRequest,
 ) bool {
 	if op == nil || (op.Type != extractor.OperationAdd && op.Type != extractor.OperationUpdate) {
 		return false
@@ -224,9 +220,7 @@ func preserveHistoryWriteCoveredByForget(
 		return true
 	}
 	candidate := operationMemory(op)
-	return destructiveTargetMatchesAnyEvidence(
-		destructiveTargetTokens(request.text), candidate.Memory, candidate.Topics,
-	)
+	return destructiveTargetsMatchMemory(destructiveTargetTokenSets(request.text), candidate)
 }
 
 func hasExactMemoryDuplicate(
@@ -263,7 +257,7 @@ func latestExplicitDestructiveRequest(messages []model.Message) destructiveReque
 	return destructiveRequest{
 		text:     request.Text,
 		explicit: request.Explicit,
-		clearAll: request.ClearAll && len(destructiveTargetTokens(request.Text)) == 0,
+		clearAll: request.ClearAll && len(destructiveTargetTokenSets(request.Text)) == 0,
 		partial:  request.Partial,
 	}
 }
@@ -278,21 +272,14 @@ func (r destructiveRequest) authorizesDelete(entry *memory.Entry) bool {
 	if entry == nil || entry.Memory == nil {
 		return false
 	}
-	targetTokens := destructiveTargetTokens(r.text)
-	if len(targetTokens) == 0 {
+	targets := destructiveTargetTokenSets(r.text)
+	if len(targets) == 0 {
 		return false
 	}
-	return destructiveTargetBoundToEvidence(
-		targetTokens,
-		entry.Memory.Memory,
-		entry.Memory.Topics,
-	)
+	return destructiveTargetsBoundToMemory(targets, entry.Memory)
 }
 
-func destructiveTokensMatch(
-	targetTokens map[string]struct{},
-	candidateTokens map[string]struct{},
-) bool {
+func destructiveTokensMatch(targetTokens, candidateTokens map[string]struct{}) bool {
 	exactAnchor := false
 	for token := range targetTokens {
 		if _, ok := candidateTokens[token]; ok {
@@ -308,13 +295,12 @@ func destructiveTokensMatch(
 	return exactAnchor
 }
 
-func destructiveTargetBoundToEvidence(
-	targetTokens map[string]struct{},
-	memoryText string,
-	topics []string,
-) bool {
+func destructiveTargetsBoundToMemory(targets []map[string]struct{}, mem *memory.Memory) bool {
+	if mem == nil {
+		return false
+	}
 	facts := make([]string, 0, 1)
-	for _, fact := range destructiveFactBoundaryPattern.Split(memoryText, -1) {
+	for _, fact := range destructiveFactBoundaryPattern.Split(mem.Memory, -1) {
 		factTokens := stringSet(BuildSearchTokens(fact))
 		if len(factTokens) > 0 {
 			facts = append(facts, fact)
@@ -326,29 +312,38 @@ func destructiveTargetBoundToEvidence(
 	if len(facts) > 1 {
 		return false
 	}
-	return destructiveTargetMatchesAnyEvidence(targetTokens, memoryText, topics)
+	return destructiveTargetsMatchMemory(targets, mem)
 }
 
-func destructiveTargetMatchesAnyEvidence(
-	targetTokens map[string]struct{},
-	memoryText string,
-	topics []string,
-) bool {
-	for _, fact := range destructiveFactBoundaryPattern.Split(memoryText, -1) {
-		factTokens := stringSet(BuildSearchTokens(fact))
-		if len(factTokens) > 0 && destructiveTokensMatch(targetTokens, factTokens) {
-			return true
-		}
-	}
-	// Topics are independent evidence segments. Never combine topics with one
-	// another or with body text to authorize a destructive operation.
-	for _, topic := range topics {
-		topicTokens := stringSet(BuildSearchTokens(topic))
-		if destructiveTokensMatch(targetTokens, topicTokens) {
-			return true
+func destructiveTargetsMatchMemory(targets []map[string]struct{}, mem *memory.Memory) bool {
+	for _, target := range targets {
+		for _, evidence := range destructiveEvidenceSegments(mem) {
+			evidenceTokens := stringSet(BuildSearchTokens(evidence))
+			if len(evidenceTokens) > 0 && destructiveTokensMatch(target, evidenceTokens) {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+func destructiveEvidenceSegments(mem *memory.Memory) []string {
+	if mem == nil {
+		return nil
+	}
+	// Keep facts and identity fields separate so unrelated segments cannot
+	// jointly authorize a destructive operation.
+	segments := destructiveFactBoundaryPattern.Split(mem.Memory, -1)
+	segments = append(segments, mem.Topics...)
+	segments = append(segments, mem.Participants...)
+	if location := strings.TrimSpace(mem.Location); location != "" {
+		segments = append(segments, location)
+	}
+	if mem.EventTime != nil {
+		eventTime := mem.EventTime.UTC()
+		segments = append(segments, eventTime.Format("2006-01-02"), eventTime.Format(time.RFC3339Nano))
+	}
+	return segments
 }
 
 func matchesInflectedToken(target string, candidates map[string]struct{}) bool {
@@ -375,12 +370,19 @@ func isASCIIWord(value string) bool {
 	return value != ""
 }
 
-func destructiveTargetTokens(text string) map[string]struct{} {
-	tokens := stringSet(BuildSearchTokens(text))
-	for token := range destructiveRequestGenericTokens {
-		delete(tokens, token)
+func destructiveTargetTokenSets(text string) []map[string]struct{} {
+	parts := destructiveTargetBoundaryPattern.Split(text, -1)
+	targets := make([]map[string]struct{}, 0, len(parts))
+	for _, part := range parts {
+		tokens := stringSet(BuildSearchTokens(part))
+		for token := range destructiveRequestGenericTokens {
+			delete(tokens, token)
+		}
+		if len(tokens) > 0 {
+			targets = append(targets, tokens)
+		}
 	}
-	return tokens
+	return targets
 }
 
 func logPreserveHistoryDestructiveRejection(
