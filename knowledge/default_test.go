@@ -30,6 +30,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
 func TestConvertToIntIgnoresNilValues(t *testing.T) {
@@ -3371,14 +3372,13 @@ func TestLoad_EmbeddingBatch_ProgressCountsEveryDocument(t *testing.T) {
 	}
 }
 
-// TestLoad_EmbeddingBatch_ProgressReportsEveryStepBoundary verifies that
-// batches whose counts do not land on the progress step boundaries still
-// report every boundary they step over, and that a batch spanning several
-// boundaries reports once with the number of documents actually processed.
-// Reporting only counts that are an exact multiple of the step size would
-// drop those updates, because a batch advances the count by its own size
-// rather than by one document.
-func TestLoad_EmbeddingBatch_ProgressReportsEveryStepBoundary(t *testing.T) {
+// TestLoad_EmbeddingBatch_ProgressReportsAtMostOneUpdatePerBatch verifies that
+// a batch whose count does not land on a progress step boundary is still
+// reported, and that a batch crossing several boundaries is reported once with
+// the number of documents actually processed. Reporting only counts that are an
+// exact multiple of the step size would drop those updates, because a batch
+// advances the count by its own size rather than by one document.
+func TestLoad_EmbeddingBatch_ProgressReportsAtMostOneUpdatePerBatch(t *testing.T) {
 	const docCount = 24
 
 	tests := []struct {
@@ -3392,9 +3392,9 @@ func TestLoad_EmbeddingBatch_ProgressReportsEveryStepBoundary(t *testing.T) {
 		// 10 and 20, so only the update at 20 is an exact multiple.
 		{name: "unaligned batch sequential", docConcurrency: 1, batchSize: 4, stepSize: 10, want: []int{12, 20, docCount}},
 		{name: "unaligned batch concurrent", docConcurrency: 2, batchSize: 4, stepSize: 10, want: []int{12, 20, docCount}},
-		// A batch of twelve steps over the boundaries at 5 and 10 at once and
-		// reports the twelve documents it really processed, not one update
-		// per boundary.
+		// A batch of twelve crosses the boundaries at 5 and 10 at once and is
+		// reported by a single update carrying the twelve documents it really
+		// processed, not one update per boundary.
 		{name: "batch larger than step sequential", docConcurrency: 1, batchSize: 12, stepSize: 5, want: []int{12, docCount}},
 		{name: "batch larger than step concurrent", docConcurrency: 2, batchSize: 12, stepSize: 5, want: []int{12, docCount}},
 	}
@@ -3575,13 +3575,47 @@ func TestLoad_EmbeddingBatch_DoesNotBatchAcrossSources(t *testing.T) {
 	}
 }
 
-// TestValidateEmbeddingBatch_AllowsDeclaredDimensionMismatch documents that a
-// batch whose dimension differs from the embedder's declared dimension is
-// accepted. Embedders may report a configured default that the model does not
-// honour, and the per-document path stores those vectors today.
-func TestValidateEmbeddingBatch_AllowsDeclaredDimensionMismatch(t *testing.T) {
-	embeddings := [][]float64{{1, 2}, {3, 4}}
-	if err := validateEmbeddingBatch(context.Background(), embeddings, 2, 1536); err != nil {
-		t.Fatalf("validateEmbeddingBatch() error = %v, want nil", err)
+// TestLoad_EmbeddingBatch_AllowsDeclaredDimensionMismatch documents that
+// batches whose dimension differs from the embedder's declared dimension are
+// stored rather than rejected. An embedder may report a configured default that
+// the selected model does not honour, and the per-document path stores those
+// vectors today. Every batch of the load meets the same mismatch, which is why
+// the warning is emitted once per load rather than once per batch.
+func TestLoad_EmbeddingBatch_AllowsDeclaredDimensionMismatch(t *testing.T) {
+	const docCount = 4
+	const batchSize = 2
+
+	var warnings atomic.Int64
+	originalWarnf := log.WarnfContext
+	log.WarnfContext = func(_ context.Context, format string, _ ...any) {
+		if strings.Contains(format, "declared by the embedder") {
+			warnings.Add(1)
+		}
+	}
+	defer func() { log.WarnfContext = originalWarnf }()
+
+	store := &batchRecordingVectorStore{}
+	kb := New(WithSources([]source.Source{&mockSource{name: "test", docCount: docCount}}))
+	kb.vectorStore = store
+	// embeddingForText returns three components, so the declared dimension
+	// below is the one the model does not honour.
+	kb.embedder = &recordingBatchEmbedder{dimensions: 1536}
+
+	if err := kb.Load(context.Background(),
+		WithSourceConcurrency(1),
+		WithDocConcurrency(1),
+		WithEmbeddingBatchSize(batchSize),
+		WithShowProgress(false),
+		WithShowStats(false),
+	); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if got := store.storedCount(); got != docCount {
+		t.Errorf("documents persisted = %d, want %d", got, docCount)
+	}
+	// The load embeds docCount/batchSize batches, each meeting the mismatch.
+	if got := warnings.Load(); got != 1 {
+		t.Errorf("dimension warnings = %d, want 1 for the whole load", got)
 	}
 }

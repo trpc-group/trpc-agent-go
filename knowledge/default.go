@@ -865,6 +865,11 @@ func (dk *BuiltinKnowledge) addDocument(ctx context.Context, doc *document.Docum
 type batchPlan struct {
 	embedder embedder.BatchEmbedder
 	size     int
+
+	// dimensionWarning guards the declared dimension warning. The mismatch it
+	// reports comes from the embedder and model of one load, so every batch of
+	// that load would otherwise repeat the same warning.
+	dimensionWarning *sync.Once
 }
 
 // batching reports whether the plan groups several documents into a single
@@ -872,6 +877,23 @@ type batchPlan struct {
 // the per-document path.
 func (p batchPlan) batching() bool {
 	return p.size > 1
+}
+
+// warnDeclaredDimension logs at most one warning per load when the vectors of
+// a batch do not have the dimension the embedder declares.
+//
+// The mismatch is accepted rather than rejected: an embedder may report a
+// configured default that the selected model does not honour, and the
+// per-document path stores those vectors today.
+func (p batchPlan) warnDeclaredDimension(ctx context.Context, dimensions, declared int) {
+	if declared <= 0 || dimensions == declared || p.dimensionWarning == nil {
+		return
+	}
+	p.dimensionWarning.Do(func() {
+		log.WarnfContext(ctx,
+			"Embedding batch dimension %d differs from the dimension %d declared by the embedder",
+			dimensions, declared)
+	})
 }
 
 // resolveBatchPlan builds the plan a single load follows, applying the
@@ -898,7 +920,11 @@ func (dk *BuiltinKnowledge) resolveBatchPlan(ctx context.Context, config *loadCo
 			config.embeddingBatchSize)
 		return batchPlan{size: 1}
 	}
-	return batchPlan{embedder: batchEmbedder, size: config.embeddingBatchSize}
+	return batchPlan{
+		embedder:         batchEmbedder,
+		size:             config.embeddingBatchSize,
+		dimensionWarning: &sync.Once{},
+	}
 }
 
 // processBatch ingests one unit of work and reports how many of its documents
@@ -922,7 +948,7 @@ func (dk *BuiltinKnowledge) processBatch(
 		}
 		return 1, nil
 	}
-	return dk.embedAndStoreBatch(ctx, plan.embedder, batch)
+	return dk.embedAndStoreBatch(ctx, plan, batch)
 }
 
 // embedAndStoreBatch embeds every document of the batch with a single provider
@@ -935,7 +961,7 @@ func (dk *BuiltinKnowledge) processBatch(
 // per-document path.
 func (dk *BuiltinKnowledge) embedAndStoreBatch(
 	ctx context.Context,
-	batchEmbedder embedder.BatchEmbedder,
+	plan batchPlan,
 	docs []*document.Document,
 ) (int, error) {
 	if err := ctx.Err(); err != nil {
@@ -951,13 +977,15 @@ func (dk *BuiltinKnowledge) embedAndStoreBatch(
 		}
 		texts[i] = buildEmbeddingText(doc)
 	}
-	embeddings, err := batchEmbedder.GetEmbeddings(ctx, texts)
+	embeddings, err := plan.embedder.GetEmbeddings(ctx, texts)
 	if err != nil {
 		return 0, fmt.Errorf("failed to generate embedding batch: %w", err)
 	}
-	if err := validateEmbeddingBatch(ctx, embeddings, len(docs), batchEmbedder.GetDimensions()); err != nil {
+	if err := validateEmbeddingBatch(embeddings, len(docs)); err != nil {
 		return 0, err
 	}
+	// Validation established that every vector shares one dimension.
+	plan.warnDeclaredDimension(ctx, len(embeddings[0]), plan.embedder.GetDimensions())
 	stored := 0
 	for i, doc := range docs {
 		if err := ctx.Err(); err != nil {
@@ -977,10 +1005,9 @@ func (dk *BuiltinKnowledge) embedAndStoreBatch(
 //
 // A vector count differing from the request, an empty vector, a vector whose
 // dimension differs from the rest of the batch, and non-finite components are
-// rejected. A batch dimension differing from declaredDims is only logged:
-// embedders may report a configured default the model does not honour, and the
-// per-document path accepts those vectors today.
-func validateEmbeddingBatch(ctx context.Context, embeddings [][]float64, expected, declaredDims int) error {
+// rejected. A batch whose dimension differs from the one the embedder declares
+// is accepted; see batchPlan.warnDeclaredDimension.
+func validateEmbeddingBatch(embeddings [][]float64, expected int) error {
 	if len(embeddings) != expected {
 		return fmt.Errorf("embedding batch count mismatch: expected %d, got %d", expected, len(embeddings))
 	}
@@ -1000,11 +1027,6 @@ func validateEmbeddingBatch(ctx context.Context, embeddings [][]float64, expecte
 				return fmt.Errorf("embedding batch contains a non-finite value at index %d position %d", i, j)
 			}
 		}
-	}
-	if declaredDims > 0 && dimensions != declaredDims {
-		log.WarnfContext(ctx,
-			"Embedding batch dimension %d differs from the dimension %d declared by the embedder",
-			dimensions, declaredDims)
 	}
 	return nil
 }
