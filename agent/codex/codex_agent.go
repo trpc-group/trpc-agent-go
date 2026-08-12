@@ -26,15 +26,17 @@ import (
 
 // codexAgent invokes a locally installed Codex CLI and maps its JSONL events into trpc-agent-go events.
 type codexAgent struct {
-	name          string
-	description   string
-	bin           string
-	globalArgs    []string
-	args          []string
-	env           []string
-	workDir       string
-	commandRunner commandRunner
-	rawOutputHook RawOutputHook
+	name           string
+	description    string
+	bin            string
+	globalArgs     []string
+	args           []string
+	env            []string
+	workDir        string
+	commandRunner  commandRunner
+	rawOutputHook  RawOutputHook
+	messageBuilder MessageBuilder
+	resumeEnabled  bool
 }
 
 // New creates a Codex CLI agent with the provided options.
@@ -44,15 +46,17 @@ func New(opt ...Option) (agent.Agent, error) {
 		return nil, err
 	}
 	return &codexAgent{
-		name:          opts.name,
-		description:   opts.description,
-		bin:           opts.bin,
-		globalArgs:    opts.globalArgs,
-		args:          opts.args,
-		env:           opts.env,
-		workDir:       opts.workDir,
-		commandRunner: opts.commandRunner,
-		rawOutputHook: opts.rawOutputHook,
+		name:           opts.name,
+		description:    opts.description,
+		bin:            opts.bin,
+		globalArgs:     opts.globalArgs,
+		args:           opts.args,
+		env:            opts.env,
+		workDir:        opts.workDir,
+		commandRunner:  opts.commandRunner,
+		rawOutputHook:  opts.rawOutputHook,
+		messageBuilder: opts.messageBuilder,
+		resumeEnabled:  opts.resumeEnabled,
 	}, nil
 }
 
@@ -84,28 +88,56 @@ func (a *codexAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-c
 	if invocation.Session.ID == "" {
 		return nil, errors.New("invocation session id is empty")
 	}
-	if invocation.Message.Content == "" {
-		return nil, errors.New("invocation prompt is empty")
+	prompt, err := a.buildPrompt(ctx, invocation)
+	if err != nil {
+		return nil, err
 	}
 	out := make(chan *event.Event)
 	runCtx := agent.CloneContext(ctx)
-	go a.runInvocation(runCtx, invocation, out)
+	go a.runInvocation(runCtx, invocation, prompt, out)
 	return out, nil
 }
 
+func (a *codexAgent) buildPrompt(ctx context.Context, invocation *agent.Invocation) (string, error) {
+	if a.messageBuilder == nil {
+		if invocation.Message.Content == "" {
+			return "", errors.New("invocation prompt is empty")
+		}
+		return invocation.Message.Content, nil
+	}
+	prompt, err := a.messageBuilder(ctx, &MessageBuilderArgs{
+		InvocationID: invocation.InvocationID,
+		AppName:      invocation.Session.AppName,
+		UserID:       invocation.Session.UserID,
+		SessionID:    invocation.Session.ID,
+		Message:      invocation.Message,
+		Events:       invocation.Session.GetEvents(),
+	})
+	if err != nil {
+		return "", fmt.Errorf("build message: %w", err)
+	}
+	if prompt == "" {
+		return "", errors.New("built prompt is empty")
+	}
+	return prompt, nil
+}
+
 // runInvocation executes the CLI invocation and emits tool events and the final response event.
-func (a *codexAgent) runInvocation(ctx context.Context, invocation *agent.Invocation, out chan<- *event.Event) {
+func (a *codexAgent) runInvocation(ctx context.Context, invocation *agent.Invocation, prompt string, out chan<- *event.Event) {
 	defer close(out)
-	resumeThreadID := sessionThreadID(invocation.Session)
+	var resumeThreadID string
+	if a.resumeEnabled {
+		resumeThreadID = sessionThreadID(invocation.Session)
+	}
 	streamer := newCodexStreamEmitter(ctx, a, invocation, out)
-	cmdResult := a.runWithSession(ctx, resumeThreadID, invocation.Message.Content, streamer)
+	cmdResult := a.runWithSession(ctx, resumeThreadID, prompt, streamer)
 	combined := bytes.TrimSpace(combineOutput(cmdResult.stdout, cmdResult.stderr))
 	result := streamer.Result()
 	observedThreadID := result.ThreadID
 	if observedThreadID == "" {
 		observedThreadID = extractThreadID(cmdResult.stdout)
 	}
-	if hookErr := a.handleRawOutputHook(ctx, invocation, resumeThreadID, observedThreadID, cmdResult.stdout, cmdResult.stderr, cmdResult.err()); hookErr != nil {
+	if hookErr := a.handleRawOutputHook(ctx, invocation, resumeThreadID, observedThreadID, prompt, cmdResult.stdout, cmdResult.stderr, cmdResult.err()); hookErr != nil {
 		err := fmt.Errorf("raw output hook: %w", hookErr)
 		if cmdErr := cmdResult.err(); cmdErr != nil {
 			err = errors.Join(err, fmt.Errorf("command error: %w", cmdErr))
@@ -129,7 +161,7 @@ func (a *codexAgent) runInvocation(ctx context.Context, invocation *agent.Invoca
 		a.emitCodexError(ctx, invocation, out, result.Error)
 		return
 	}
-	a.emitFinalResponse(ctx, invocation, out, combined, result, observedThreadID, resumeThreadID)
+	a.emitFinalResponse(ctx, invocation, out, combined, result, observedThreadID, resumeThreadID, a.resumeEnabled)
 }
 
 // combineOutput joins stdout and stderr with the same display rules as the previous buffered path.
@@ -151,6 +183,7 @@ func (a *codexAgent) emitFinalResponse(
 	result *transcriptResult,
 	threadID string,
 	resumeThreadID string,
+	persistThreadID bool,
 ) {
 	finalContent := string(combined)
 	if strings.TrimSpace(result.FinalMessage) != "" {
@@ -172,7 +205,7 @@ func (a *codexAgent) emitFinalResponse(
 		},
 	}
 	evt := event.NewResponseEvent(invocation.InvocationID, a.name, rsp)
-	if threadID != "" && threadID != resumeThreadID {
+	if persistThreadID && threadID != "" && threadID != resumeThreadID {
 		evt.StateDelta = map[string][]byte{StateKeyThreadID: []byte(threadID)}
 	}
 	a.emitEvent(ctx, invocation, out, evt)
@@ -238,6 +271,7 @@ func (a *codexAgent) handleRawOutputHook(
 	invocation *agent.Invocation,
 	resumeThreadID string,
 	threadID string,
+	prompt string,
 	stdout []byte,
 	stderr []byte,
 	runErr error,
@@ -250,7 +284,7 @@ func (a *codexAgent) handleRawOutputHook(
 		SessionID:      invocation.Session.ID,
 		ResumeThreadID: resumeThreadID,
 		ThreadID:       threadID,
-		Prompt:         invocation.Message.Content,
+		Prompt:         prompt,
 		Stdout:         stdout,
 		Stderr:         stderr,
 		Error:          runErr,

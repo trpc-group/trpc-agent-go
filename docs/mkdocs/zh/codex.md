@@ -81,7 +81,7 @@ ag, err := codex.New(
 
 | Codex JSONL 输出 | 框架事件 |
 | --- | --- |
-| `type == "thread.started"` | 持久化到 session state key `codex.StateKeyThreadID` |
+| `type == "thread.started"` | 默认持久化到 session state key `codex.StateKeyThreadID` |
 | `item.type == "command_execution"` | tool-call 与 tool-result response 事件 |
 | `item.type == "mcp_tool_call"` | tool-call 与 tool-result response 事件 |
 | `web_search`、`file_change`、`image_view`、`image_generation` 等内置工具 item | tool-call 与 tool-result response 事件 |
@@ -95,14 +95,58 @@ MCP 工具调用会尽量归一化为与 Claude Code 兼容的工具名：`mcp__
 
 ## 多轮会话
 
-Codex 会自行创建 thread id。该 Agent 会把这个 id 存入 session state 的 `codex.StateKeyThreadID`，并在后续轮次使用：
+### 默认方式：使用 Codex thread
 
-1. 首轮：把 prompt 写入 `codex exec --json` 的 stdin
-2. 后续轮次：把 prompt 写入 `codex exec resume --json <thread-id>` 的 stdin
+默认情况下，该 Agent 使用 Codex CLI 原生 thread 历史：
+
+1. 首轮把 prompt 写入 `codex exec --json` 的 stdin。
+2. Codex 返回 `thread.started` 后，Agent 把 thread id 存入 session state 的 `codex.StateKeyThreadID`。
+3. 后续轮次如果 session state 中有 thread id，Agent 把 prompt 写入 `codex exec resume --json <thread-id>` 的 stdin。
 
 如果 resume 在发出任何 transcript 事件前失败，该 Agent 会重新发起一次新的 `codex exec`；如果新执行返回了 thread id，则更新已保存的 thread id。如果 resume 已经发出过框架事件，或 stdout 解析失败，则不会再启动新的执行，以避免重复暴露进度或重复执行工具副作用，而是直接返回本次失败。如果 resume 与新建执行都失败，本次调用会返回 run error。
 
-如需保持上下文，请在 `runner` 中持续使用相同的 app name、user ID、session ID。
+这种方式适合单实例服务，或请求总是固定路由到同一台机器、同一个用户目录和同一套 Codex 配置环境的场景。此时如需保持上下文，请在 `runner` 中持续使用相同的 app name、user ID、session ID。
+
+使用 `WithResumeEnabled(false)` 可以关闭 Codex CLI 原生 resume。关闭后，该 Agent 不读取已有 `codex.StateKeyThreadID`，不调用 `codex exec resume`，也不会把新观察到的 thread id 写回 session state；每次调用都会执行新的 `codex exec`。
+
+### 使用框架 session events 构造上下文
+
+如果服务部署了多个实例、容器会重建，或者请求不会固定路由到同一台机器，Codex CLI 本地 thread 就不能作为可靠的多轮上下文来源。此时应把上下文放在框架 session service 中，例如 Redis 或数据库。所有服务实例通过相同的 app name、user ID、session ID 读取同一份 session events，再由 `WithMessageBuilder` 把这些 events 拼成传给 Codex CLI 的完整 prompt。
+
+推荐配置方式：
+
+1. 给 `runner` 配置共享 session service。
+2. 使用 `WithMessageBuilder` 从 `args.Events` 构造完整 prompt。
+3. 使用 `WithResumeEnabled(false)` 关闭 Codex CLI 本地 thread resume，避免同一段历史同时来自 prompt 和本地 thread。
+
+`MessageBuilderArgs.Events` 是只读浅快照，不应修改其中的 event、response、state delta 或 extensions。通过 `runner.Run` 调用时，runner 会先持久化当前 turn 的 user message，再调用 Agent；因此 builder 看到的 events 已经包含当前 turn user message，不要默认再追加一遍。
+
+下面示例省略 `context`、`strings` 等标准库 import，只展示 Agent 相关配置。示例只拼接非 partial 的 message 文本；生产环境可以按业务需要选择是否加入工具调用和工具结果。
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/agent/codex"
+
+ag, err := codex.New(
+  codex.WithMessageBuilder(func(ctx context.Context, args *codex.MessageBuilderArgs) (string, error) {
+    var prompt strings.Builder
+    for _, evt := range args.Events {
+      if evt.Response == nil || len(evt.Choices) == 0 || evt.IsPartial {
+        continue
+      }
+      msg := evt.Choices[0].Message
+      if msg.Content == "" {
+        continue
+      }
+      prompt.WriteString(string(msg.Role))
+      prompt.WriteString(": ")
+      prompt.WriteString(msg.Content)
+      prompt.WriteString("\n")
+    }
+    return prompt.String(), nil
+  }),
+  codex.WithResumeEnabled(false),
+)
+```
 
 ## 原始日志落盘
 
@@ -130,3 +174,5 @@ ag, err := codex.New(
 | `WithEnv(env...)` | 追加 CLI 环境变量。格式为 `KEY=VALUE`。 |
 | `WithWorkDir(dir)` | 设置 CLI 进程工作目录。 |
 | `WithRawOutputHook(hook)` | 观测 raw stdout/stderr。回调会在 CLI 结束后、流式事件发出后调用；如果返回错误，会追加错误事件并跳过最终 assistant response。 |
+| `WithMessageBuilder(builder)` | 自定义传给 Codex CLI 的完整 prompt。 |
+| `WithResumeEnabled(enabled)` | 控制是否使用 Codex CLI thread resume；默认 `true`。 |

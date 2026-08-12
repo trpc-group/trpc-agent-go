@@ -27,14 +27,16 @@ import (
 
 // claudeCodeAgent invokes a locally installed Claude Code CLI and maps its transcript into trpc-agent-go events.
 type claudeCodeAgent struct {
-	name          string
-	description   string
-	bin           string
-	args          []string
-	env           []string
-	workDir       string
-	commandRunner commandRunner
-	rawOutputHook RawOutputHook
+	name           string
+	description    string
+	bin            string
+	args           []string
+	env            []string
+	workDir        string
+	commandRunner  commandRunner
+	rawOutputHook  RawOutputHook
+	messageBuilder MessageBuilder
+	resumeEnabled  bool
 }
 
 // New creates a Claude Code CLI agent with the provided options.
@@ -44,14 +46,16 @@ func New(opt ...Option) (agent.Agent, error) {
 		return nil, err
 	}
 	return &claudeCodeAgent{
-		name:          opts.name,
-		description:   opts.description,
-		bin:           opts.bin,
-		args:          opts.args,
-		env:           opts.env,
-		workDir:       opts.workDir,
-		commandRunner: opts.commandRunner,
-		rawOutputHook: opts.rawOutputHook,
+		name:           opts.name,
+		description:    opts.description,
+		bin:            opts.bin,
+		args:           opts.args,
+		env:            opts.env,
+		workDir:        opts.workDir,
+		commandRunner:  opts.commandRunner,
+		rawOutputHook:  opts.rawOutputHook,
+		messageBuilder: opts.messageBuilder,
+		resumeEnabled:  opts.resumeEnabled,
 	}, nil
 }
 
@@ -83,26 +87,54 @@ func (a *claudeCodeAgent) Run(ctx context.Context, invocation *agent.Invocation)
 	if invocation.Session.ID == "" {
 		return nil, errors.New("invocation session id is empty")
 	}
-	if invocation.Message.Content == "" {
-		return nil, errors.New("invocation prompt is empty")
+	prompt, err := a.buildPrompt(ctx, invocation)
+	if err != nil {
+		return nil, err
 	}
 	out := make(chan *event.Event)
 	runCtx := agent.CloneContext(ctx)
-	go a.runInvocation(runCtx, invocation, out)
+	go a.runInvocation(runCtx, invocation, prompt, out)
 	return out, nil
 }
 
-// runInvocation executes the CLI invocation and emits tool events and the final response event.
-func (a *claudeCodeAgent) runInvocation(ctx context.Context, invocation *agent.Invocation, out chan<- *event.Event) {
-	defer close(out)
-	cliSessID := cliSessionID(invocation.Session)
-	if cliSessID == "" {
-		a.emitFlowError(ctx, invocation, out, nil, errors.New("claude cli session id is empty"))
-		return
+func (a *claudeCodeAgent) buildPrompt(ctx context.Context, invocation *agent.Invocation) (string, error) {
+	if a.messageBuilder == nil {
+		if invocation.Message.Content == "" {
+			return "", errors.New("invocation prompt is empty")
+		}
+		return invocation.Message.Content, nil
 	}
-	stdout, stderr, runErr := a.runWithSession(ctx, cliSessID, invocation.Message.Content)
+	prompt, err := a.messageBuilder(ctx, &MessageBuilderArgs{
+		InvocationID: invocation.InvocationID,
+		AppName:      invocation.Session.AppName,
+		UserID:       invocation.Session.UserID,
+		SessionID:    invocation.Session.ID,
+		Message:      invocation.Message,
+		Events:       invocation.Session.GetEvents(),
+	})
+	if err != nil {
+		return "", fmt.Errorf("build message: %w", err)
+	}
+	if prompt == "" {
+		return "", errors.New("built prompt is empty")
+	}
+	return prompt, nil
+}
+
+// runInvocation executes the CLI invocation and emits tool events and the final response event.
+func (a *claudeCodeAgent) runInvocation(ctx context.Context, invocation *agent.Invocation, prompt string, out chan<- *event.Event) {
+	defer close(out)
+	var cliSessID string
+	if a.resumeEnabled {
+		cliSessID = cliSessionID(invocation.Session)
+		if cliSessID == "" {
+			a.emitFlowError(ctx, invocation, out, nil, errors.New("claude cli session id is empty"))
+			return
+		}
+	}
+	stdout, stderr, runErr := a.runWithSession(ctx, cliSessID, prompt)
 	combined := bytes.TrimSpace(append(append([]byte(nil), stdout...), stderr...))
-	if hookErr := a.handleRawOutputHook(ctx, invocation, cliSessID, stdout, stderr, runErr); hookErr != nil {
+	if hookErr := a.handleRawOutputHook(ctx, invocation, cliSessID, prompt, stdout, stderr, runErr); hookErr != nil {
 		err := fmt.Errorf("raw output hook: %w", hookErr)
 		if runErr != nil {
 			err = errors.Join(err, fmt.Errorf("command error: %w", runErr))
@@ -174,6 +206,7 @@ func (a *claudeCodeAgent) handleRawOutputHook(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	cliSessionID string,
+	prompt string,
 	stdout []byte,
 	stderr []byte,
 	runErr error,
@@ -185,7 +218,7 @@ func (a *claudeCodeAgent) handleRawOutputHook(
 		InvocationID: invocation.InvocationID,
 		SessionID:    invocation.Session.ID,
 		CLISessionID: cliSessionID,
-		Prompt:       invocation.Message.Content,
+		Prompt:       prompt,
 		Stdout:       stdout,
 		Stderr:       stderr,
 		Error:        runErr,
@@ -220,9 +253,20 @@ func (a *claudeCodeAgent) emitFlowError(
 	a.emitEvent(ctx, invocation, out, event.NewResponseEvent(invocation.InvocationID, a.name, rsp))
 }
 
-// runWithSession executes the CLI with resume-first semantics and returns stdout/stderr.
+// runWithSession executes the CLI and returns stdout/stderr.
 func (a *claudeCodeAgent) runWithSession(ctx context.Context, sessionID, prompt string) ([]byte, []byte, error) {
 	// Copy base args to avoid mutating shared backing arrays across concurrent invocations.
+	if !a.resumeEnabled {
+		args := make([]string, 0, len(a.args)+2)
+		args = append(args, a.args...)
+		args = append(args, "--no-session-persistence", prompt)
+		return a.commandRunner.Run(ctx, command{
+			bin:  a.bin,
+			args: args,
+			env:  a.env,
+			dir:  a.workDir,
+		})
+	}
 	resumeArgs := make([]string, 0, len(a.args)+3)
 	resumeArgs = append(resumeArgs, a.args...)
 	resumeArgs = append(resumeArgs, "--resume", sessionID, prompt)

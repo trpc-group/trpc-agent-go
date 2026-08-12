@@ -68,6 +68,18 @@ func drainEvents(ch <-chan *event.Event) []*event.Event {
 	return events
 }
 
+// newTestInvocation creates a test invocation with a user prompt.
+func newTestInvocation(invocationID string, sess *session.Session, prompt string) *agent.Invocation {
+	return &agent.Invocation{
+		InvocationID: invocationID,
+		Session:      sess,
+		Message: model.Message{
+			Role:    model.RoleUser,
+			Content: prompt,
+		},
+	}
+}
+
 // TestClaudeCodeAgent_Run_ResumeThenCreate verifies the agent retries with --session-id when --resume has no conversation.
 func TestClaudeCodeAgent_Run_ResumeThenCreate(t *testing.T) {
 	ctx := context.Background()
@@ -138,6 +150,7 @@ func TestClaudeCodeAgent_RunWithSession_DoesNotMutateArgsOnFallback(t *testing.T
 		bin:           "claude",
 		args:          baseArgs,
 		commandRunner: runner,
+		resumeEnabled: true,
 	}
 
 	_, _, err := ag.runWithSession(ctx, "session-1", "Hi.")
@@ -187,6 +200,128 @@ func TestClaudeCodeAgent_Run_ResumeSuccess(t *testing.T) {
 	calls := runner.Calls()
 	require.Len(t, calls, 1)
 	require.Contains(t, strings.Join(calls[0].args, " "), "--resume")
+}
+
+func TestClaudeCodeAgent_Run_MessageBuilderBuildsPromptAndRawHook(t *testing.T) {
+	ctx := context.Background()
+	sess := session.NewSession("app", "user", "sess-builder-1")
+	sess.Events = []event.Event{{InvocationID: "history-event"}}
+	inv := newTestInvocation("inv-builder-1", sess, "current prompt")
+	runner := &scriptedRunner{
+		run: func(cmd command) ([]byte, []byte, error) {
+			return []byte(`[{"type":"result","result":"built ok"}]`), nil, nil
+		},
+	}
+	var gotBuilder *MessageBuilderArgs
+	var gotHook RawOutputHookArgs
+	ag, err := New(
+		WithBin("claude"),
+		withCommandRunner(runner),
+		WithMessageBuilder(func(_ context.Context, args *MessageBuilderArgs) (string, error) {
+			got := *args
+			gotBuilder = &got
+			return "built prompt", nil
+		}),
+		WithRawOutputHook(func(_ context.Context, args *RawOutputHookArgs) error {
+			gotHook = *args
+			return nil
+		}),
+	)
+	require.NoError(t, err)
+	ch, err := ag.Run(ctx, inv)
+	require.NoError(t, err)
+	events := drainEvents(ch)
+	require.Len(t, events, 1)
+	require.Equal(t, "built ok", events[0].Choices[0].Message.Content)
+	require.NotNil(t, gotBuilder)
+	require.Equal(t, "inv-builder-1", gotBuilder.InvocationID)
+	require.Equal(t, "app", gotBuilder.AppName)
+	require.Equal(t, "user", gotBuilder.UserID)
+	require.Equal(t, "sess-builder-1", gotBuilder.SessionID)
+	require.Equal(t, "current prompt", gotBuilder.Message.Content)
+	require.Len(t, gotBuilder.Events, 1)
+	require.Equal(t, "history-event", gotBuilder.Events[0].InvocationID)
+	require.Equal(t, "built prompt", gotHook.Prompt)
+	require.Equal(t, cliSessionID(sess), gotHook.CLISessionID)
+	calls := runner.Calls()
+	require.Len(t, calls, 1)
+	require.Contains(t, calls[0].args, "--resume")
+	require.Contains(t, calls[0].args, cliSessionID(sess))
+	require.Equal(t, "built prompt", calls[0].args[len(calls[0].args)-1])
+}
+
+func TestClaudeCodeAgent_Run_MessageBuilderError(t *testing.T) {
+	ctx := context.Background()
+	sess := session.NewSession("app", "user", "sess-builder-error")
+	inv := newTestInvocation("inv-builder-error", sess, "current prompt")
+	runner := &scriptedRunner{}
+	builderErr := errors.New("builder failed")
+	ag, err := New(
+		withCommandRunner(runner),
+		WithMessageBuilder(func(context.Context, *MessageBuilderArgs) (string, error) {
+			return "", builderErr
+		}),
+	)
+	require.NoError(t, err)
+	ch, err := ag.Run(ctx, inv)
+	require.ErrorIs(t, err, builderErr)
+	require.ErrorContains(t, err, "build message")
+	require.Nil(t, ch)
+	require.Empty(t, runner.Calls())
+}
+
+func TestClaudeCodeAgent_Run_MessageBuilderEmpty(t *testing.T) {
+	ctx := context.Background()
+	sess := session.NewSession("app", "user", "sess-builder-empty")
+	inv := newTestInvocation("inv-builder-empty", sess, "current prompt")
+	runner := &scriptedRunner{}
+	ag, err := New(
+		withCommandRunner(runner),
+		WithMessageBuilder(func(context.Context, *MessageBuilderArgs) (string, error) {
+			return "", nil
+		}),
+	)
+	require.NoError(t, err)
+	ch, err := ag.Run(ctx, inv)
+	require.ErrorContains(t, err, "built prompt is empty")
+	require.Nil(t, ch)
+	require.Empty(t, runner.Calls())
+}
+
+func TestClaudeCodeAgent_Run_ResumeDisabledUsesNoSessionPersistence(t *testing.T) {
+	ctx := context.Background()
+	sess := session.NewSession("app", "user", "sess-resume-disabled")
+	inv := newTestInvocation("inv-resume-disabled", sess, "Hi.")
+	runner := &scriptedRunner{
+		run: func(cmd command) ([]byte, []byte, error) {
+			return []byte(`[{"type":"result","result":"fresh"}]`), nil, nil
+		},
+	}
+	var gotHook RawOutputHookArgs
+	ag, err := New(
+		WithBin("claude"),
+		withCommandRunner(runner),
+		WithResumeEnabled(false),
+		WithRawOutputHook(func(_ context.Context, args *RawOutputHookArgs) error {
+			gotHook = *args
+			return nil
+		}),
+	)
+	require.NoError(t, err)
+	ch, err := ag.Run(ctx, inv)
+	require.NoError(t, err)
+	events := drainEvents(ch)
+	require.Len(t, events, 1)
+	require.True(t, events[0].IsFinalResponse())
+	require.Equal(t, "fresh", events[0].Choices[0].Message.Content)
+	calls := runner.Calls()
+	require.Len(t, calls, 1)
+	require.Contains(t, calls[0].args, "--no-session-persistence")
+	require.NotContains(t, calls[0].args, "--resume")
+	require.NotContains(t, calls[0].args, "--session-id")
+	require.Equal(t, "Hi.", calls[0].args[len(calls[0].args)-1])
+	require.Empty(t, gotHook.CLISessionID)
+	require.Equal(t, "Hi.", gotHook.Prompt)
 }
 
 // TestClaudeCodeAgent_Run_CommandError verifies CLI failures are surfaced via Response.Error.
