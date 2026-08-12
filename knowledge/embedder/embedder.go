@@ -41,6 +41,12 @@ import (
 //	    return fmt.Errorf("received empty embedding from API")
 //	}
 //	// Process successful embedding...
+//
+// Concurrency:
+// Implementations must be safe for concurrent use by multiple goroutines. A
+// single embedder instance is shared across the texts of a load and is called
+// from several goroutines at once by default, so an implementation that reuses
+// request buffers or other mutable state must guard it.
 type Embedder interface {
 	// GetEmbedding generates an embedding vector for the given text.
 	//
@@ -76,6 +82,10 @@ type Embedder interface {
 // more vectors than requested, implementations must return an error rather
 // than a reordered, padded, or truncated result. This prevents callers from
 // silently attaching a vector to the wrong input.
+//
+// The concurrency requirement of Embedder applies to GetEmbeddings as well:
+// batches are embedded concurrently by default, so one instance can receive
+// several calls at the same time.
 type BatchEmbedder interface {
 	Embedder
 
