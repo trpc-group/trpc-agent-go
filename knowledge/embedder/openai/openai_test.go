@@ -366,6 +366,12 @@ func embeddingItem(index int, vector []float64) map[string]any {
 	return map[string]any{"object": "embedding", "index": index, "embedding": vector}
 }
 
+// embeddingItemWithoutIndex builds a data item that omits the required index
+// field, as a non-conforming gateway may do.
+func embeddingItemWithoutIndex(vector []float64) map[string]any {
+	return map[string]any{"object": "embedding", "embedding": vector}
+}
+
 // newBatchServer serves the given data items for every embeddings request and
 // records the decoded request bodies.
 func newBatchServer(t *testing.T, data func(inputs []string) []map[string]any) (*httptest.Server, *[][]string) {
@@ -494,6 +500,27 @@ func TestEmbedder_GetEmbeddings_RejectsUnmappableResponse(t *testing.T) {
 				return []map[string]any{
 					embeddingItem(0, []float64{1}),
 					embeddingItem(1, []float64{}),
+				}
+			},
+		},
+		{
+			// An omitted index decodes to zero, which the remaining checks
+			// cannot tell apart from a supplied zero. The mapping is then
+			// inferred rather than provided, so the response is rejected.
+			name: "missing index",
+			data: func(inputs []string) []map[string]any {
+				return []map[string]any{
+					embeddingItemWithoutIndex([]float64{1}),
+					embeddingItem(1, []float64{2}),
+				}
+			},
+		},
+		{
+			name: "null index",
+			data: func(inputs []string) []map[string]any {
+				return []map[string]any{
+					{"object": "embedding", "index": nil, "embedding": []float64{1}},
+					embeddingItem(1, []float64{2}),
 				}
 			},
 		},

@@ -393,9 +393,13 @@ func embeddingFromResponse(response *openai.CreateEmbeddingResponse) ([]float64,
 //
 // The OpenAI-compatible protocol allows data items to arrive in any order and
 // identifies each one by its index into the request input, so the mapping is
-// rebuilt from those indices. A count mismatch, an out-of-range index, a
-// duplicate index, or an empty vector makes the mapping unreliable and is
-// reported as an error rather than guessed.
+// rebuilt from those indices. A missing index, a count mismatch, an
+// out-of-range index, a duplicate index, or an empty vector makes the mapping
+// unreliable and is reported as an error rather than guessed.
+//
+// The index is a required field whose absence decodes to zero, which is
+// indistinguishable from a supplied zero, so its presence is checked rather
+// than inferred from the remaining indices.
 func embeddingsFromResponse(
 	response *openai.CreateEmbeddingResponse,
 	expected int,
@@ -411,7 +415,10 @@ func embeddingsFromResponse(
 			expected, len(response.Data))
 	}
 	embeddings := make([][]float64, expected)
-	for _, item := range response.Data {
+	for i, item := range response.Data {
+		if !item.JSON.Index.Valid() {
+			return nil, fmt.Errorf("embedding response item %d is missing its index", i)
+		}
 		index := int(item.Index)
 		if index < 0 || index >= expected {
 			return nil, fmt.Errorf("embedding response index out of range: %d", item.Index)
