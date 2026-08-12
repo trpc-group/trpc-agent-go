@@ -382,7 +382,7 @@ func buildAFUNIXBlockFilter(policy seccompArchPolicy) ([]bpf.Instruction, error)
 }
 
 var (
-	linuxCompileSeccompFilter  = compileSeccompFilter
+	linuxCompileSeccompFilter   = compileSeccompFilter
 	linuxValidateCompiledFilter = validateCompiledFilter
 )
 

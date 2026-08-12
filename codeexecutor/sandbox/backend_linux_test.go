@@ -1382,13 +1382,30 @@ func TestLinuxRestrictedPreflightFailClosedBranches(t *testing.T) {
 		runBwrapSeccompPreflightProbe,
 	)
 
+	// Fixed successes so each subtest only exercises its intended fail-closed
+	// branch, independent of GOARCH and host kernel version.
+	fixedPolicy := func() (seccompArchPolicy, error) {
+		return seccompPolicyAMD64, nil
+	}
+	supportedKernel := func() (string, error) {
+		return "5.15.0", nil
+	}
+	unusedMemfd := func() (*os.File, error) {
+		t.Fatal("openSeccompFilterMemfd should not run in this branch")
+		return nil, nil
+	}
+	unusedProbe := func(string, bool, *os.File) (string, error) {
+		t.Fatal("seccomp probe should not run in this branch")
+		return "", nil
+	}
+
 	t.Run("unsupportedArch", func(t *testing.T) {
 		linuxNativeSeccompPolicy = func() (seccompArchPolicy, error) {
 			return seccompArchPolicy{}, errors.New("forced unsupported arch")
 		}
-		linuxKernelRelease = currentKernelRelease
-		linuxOpenSeccompMemfd = openSeccompFilterMemfd
-		linuxSeccompProbe = runBwrapSeccompPreflightProbe
+		linuxKernelRelease = supportedKernel
+		linuxOpenSeccompMemfd = unusedMemfd
+		linuxSeccompProbe = unusedProbe
 		rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
 		err := rt.linuxRestrictedPreflight("/bin/true", true)
 		if err == nil || !isKind(err, ErrUnsupportedBackend) {
@@ -1397,12 +1414,12 @@ func TestLinuxRestrictedPreflightFailClosedBranches(t *testing.T) {
 	})
 
 	t.Run("kernelReleaseError", func(t *testing.T) {
-		linuxNativeSeccompPolicy = nativeSeccompPolicy
+		linuxNativeSeccompPolicy = fixedPolicy
 		linuxKernelRelease = func() (string, error) {
 			return "", errors.New("forced uname failure")
 		}
-		linuxOpenSeccompMemfd = openSeccompFilterMemfd
-		linuxSeccompProbe = runBwrapSeccompPreflightProbe
+		linuxOpenSeccompMemfd = unusedMemfd
+		linuxSeccompProbe = unusedProbe
 		rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
 		err := rt.linuxRestrictedPreflight("/bin/true", true)
 		if err == nil || !isKind(err, ErrSetupFailed) || !strings.Contains(err.Error(), "read kernel release") {
@@ -1411,10 +1428,10 @@ func TestLinuxRestrictedPreflightFailClosedBranches(t *testing.T) {
 	})
 
 	t.Run("kernelTooOld", func(t *testing.T) {
-		linuxNativeSeccompPolicy = nativeSeccompPolicy
+		linuxNativeSeccompPolicy = fixedPolicy
 		linuxKernelRelease = func() (string, error) { return "4.7.0", nil }
-		linuxOpenSeccompMemfd = openSeccompFilterMemfd
-		linuxSeccompProbe = runBwrapSeccompPreflightProbe
+		linuxOpenSeccompMemfd = unusedMemfd
+		linuxSeccompProbe = unusedProbe
 		rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
 		err := rt.linuxRestrictedPreflight("/bin/true", true)
 		if err == nil || !isKind(err, ErrSetupFailed) || !strings.Contains(err.Error(), "below required") {
@@ -1423,12 +1440,12 @@ func TestLinuxRestrictedPreflightFailClosedBranches(t *testing.T) {
 	})
 
 	t.Run("memfdOpenError", func(t *testing.T) {
-		linuxNativeSeccompPolicy = nativeSeccompPolicy
-		linuxKernelRelease = currentKernelRelease
+		linuxNativeSeccompPolicy = fixedPolicy
+		linuxKernelRelease = supportedKernel
 		linuxOpenSeccompMemfd = func() (*os.File, error) {
 			return nil, errors.New("forced memfd failure")
 		}
-		linuxSeccompProbe = runBwrapSeccompPreflightProbe
+		linuxSeccompProbe = unusedProbe
 		rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
 		err := rt.linuxRestrictedPreflight("/bin/true", true)
 		if err == nil || !isKind(err, ErrSetupFailed) || !strings.Contains(err.Error(), "forced memfd failure") {
