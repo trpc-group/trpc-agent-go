@@ -3096,10 +3096,14 @@ func TestLoad_EmbeddingBatch_FallsBackToSingleRequests(t *testing.T) {
 		batchSize  int
 		// plainEmbedder selects an embedder without batch support.
 		plainEmbedder bool
+		// noEmbedder leaves the knowledge base without an embedder, as
+		// configured for a vector store that embeds remotely.
+		noEmbedder bool
 	}{
 		{name: "option not set", batchSize: 0},
 		{name: "batch size one", batchSize: 1},
 		{name: "embedder without batch support", batchSize: 4, plainEmbedder: true},
+		{name: "no embedder configured", batchSize: 4, noEmbedder: true},
 		{name: "source sync enabled", batchSize: 4, sourceSync: true},
 	}
 
@@ -3107,14 +3111,17 @@ func TestLoad_EmbeddingBatch_FallsBackToSingleRequests(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			batchCapable := &recordingBatchEmbedder{}
 			plain := &recordingEmbedder{}
+			store := &batchRecordingVectorStore{}
 			kb := New(
 				WithSources([]source.Source{&mockSource{name: "test", docCount: docCount}}),
 				WithEnableSourceSync(tt.sourceSync),
 			)
-			kb.vectorStore = &batchRecordingVectorStore{}
-			if tt.plainEmbedder {
+			kb.vectorStore = store
+			switch {
+			case tt.noEmbedder:
+			case tt.plainEmbedder:
 				kb.embedder = plain
-			} else {
+			default:
 				kb.embedder = batchCapable
 			}
 
@@ -3130,6 +3137,14 @@ func TestLoad_EmbeddingBatch_FallsBackToSingleRequests(t *testing.T) {
 
 			if got := batchCapable.requestCount(); got != 0 {
 				t.Errorf("batch requests = %d, want 0", got)
+			}
+			if tt.noEmbedder {
+				// The store receives the documents without an embedding, so
+				// there is no embedding request of either shape to count.
+				if got := store.storedCount(); got != docCount {
+					t.Errorf("stored documents = %d, want %d", got, docCount)
+				}
+				return
 			}
 			singleCalls := batchCapable.singleCallCount()
 			if tt.plainEmbedder {

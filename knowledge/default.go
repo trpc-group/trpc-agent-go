@@ -907,6 +907,12 @@ func (dk *BuiltinKnowledge) resolveBatchPlan(ctx context.Context, config *loadCo
 	if config.embeddingBatchSize <= 1 {
 		return batchPlan{size: 1}
 	}
+	if dk.embedder == nil {
+		log.InfofContext(ctx,
+			"Embedding batch size %d ignored: no embedder is configured",
+			config.embeddingBatchSize)
+		return batchPlan{size: 1}
+	}
 	batchEmbedder, ok := dk.embedder.(embedder.BatchEmbedder)
 	if !ok {
 		log.InfofContext(ctx,
