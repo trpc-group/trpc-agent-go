@@ -15,6 +15,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"math"
 	"reflect"
 	"runtime"
 	"slices"
@@ -335,11 +336,12 @@ func (dk *BuiltinKnowledge) loadSourceInternal(ctx context.Context, sources []so
 		dk.processingDocIDs = sync.Map{}
 	}()
 
+	plan := dk.resolveBatchPlan(ctx, config)
 	if config.srcParallelism > 1 || config.docParallelism > 1 {
-		_, err := dk.loadConcurrent(ctx, config, sources)
+		_, err := dk.loadConcurrent(ctx, config, plan, sources)
 		return err
 	}
-	_, err := dk.loadSequential(ctx, config, sources)
+	_, err := dk.loadSequential(ctx, config, plan, sources)
 	return err
 }
 
@@ -460,6 +462,7 @@ func (dk *BuiltinKnowledge) load(ctx context.Context, config *loadConfig) error 
 func (dk *BuiltinKnowledge) loadSequential(
 	ctx context.Context,
 	config *loadConfig,
+	plan batchPlan,
 	sources []source.Source) ([]string, error) {
 	// Timing variables.
 	startTime := time.Now()
@@ -516,23 +519,31 @@ func (dk *BuiltinKnowledge) loadSequential(
 		// including the (often slow) ReadDocuments I/O time.
 		srcStartTime := time.Now()
 
-		for j, doc := range docs {
-			if err := dk.addDocumentWithSync(ctx, doc, src); err != nil {
+		// step is 1 unless embedding batching is active, in which case each
+		// iteration embeds and stores a whole batch.
+		step := plan.size
+		for start := 0; start < len(docs); start += step {
+			end := min(start+step, len(docs))
+			batch := docs[start:end]
+
+			if err := dk.processBatch(ctx, plan, batch, src); err != nil {
 				log.ErrorfContext(ctx, "Failed to add document from source %s: %v",
 					sourceName, err)
 				reporter.Error(ctx, LoadProgressEvent{
 					SourceName:      sourceName,
-					SourceProcessed: j,
+					SourceProcessed: start,
 					SourceTotal:     len(docs),
 					SourceElapsed:   time.Since(srcStartTime),
 				}, err)
 				return nil, fmt.Errorf("failed to add document from source %s: %w", sourceName, err)
 			}
 
-			allAddedIDs = append(allAddedIDs, doc.ID)
-			processedDocs++
+			for _, doc := range batch {
+				allAddedIDs = append(allAddedIDs, doc.ID)
+				processedDocs++
+			}
 
-			srcProcessed := j + 1
+			srcProcessed := end
 			totalSrc := len(docs)
 			etaSrc := calcETA(srcStartTime, srcProcessed, totalSrc)
 			elapsedSrc := time.Since(srcStartTime)
@@ -559,6 +570,7 @@ func (dk *BuiltinKnowledge) loadSequential(
 func (dk *BuiltinKnowledge) loadConcurrent(
 	ctx context.Context,
 	config *loadConfig,
+	plan batchPlan,
 	sources []source.Source) ([]string, error) {
 	// Create worker pool for source processing
 	srcPool, err := ants.NewPool(config.srcParallelism)
@@ -609,7 +621,7 @@ func (dk *BuiltinKnowledge) loadConcurrent(
 				return
 			}
 			log.InfofContext(ctx, "Fetched %d document(s) from source %s", len(docs), sourceName)
-			processed, err := dk.processDocuments(ctx, docs, docPool, source, &globalProcessed, reporter)
+			processed, err := dk.processDocuments(ctx, docs, docPool, source, plan, &globalProcessed, reporter)
 			if err != nil {
 				reporter.Error(ctx, LoadProgressEvent{
 					SourceName:      sourceName,
@@ -650,13 +662,16 @@ func (dk *BuiltinKnowledge) loadConcurrent(
 }
 
 // processDocuments embeds and stores all documents from a single source using
-// document-level parallelism. It returns the number of documents successfully
-// processed and the first error encountered, if any.
+// document-level parallelism. When embedding batching is active the unit of
+// work is a batch of up to plan.size documents rather than a single document.
+// It returns the number of documents successfully processed and the first
+// error encountered, if any.
 func (dk *BuiltinKnowledge) processDocuments(
 	ctx context.Context,
 	docs []*document.Document,
 	pool *ants.Pool,
 	src source.Source,
+	plan batchPlan,
 	globalProcessed *atomic.Int64,
 	reporter *loadReporter,
 ) (int, error) {
@@ -665,24 +680,30 @@ func (dk *BuiltinKnowledge) processDocuments(
 	var completedCount atomic.Int64
 	startTime := time.Now()
 
-	processDoc := func(doc *document.Document, docIndex int) func() {
+	processTask := func(batch []*document.Document) func() {
 		return func() {
 			defer wgDoc.Done()
-			if err := dk.addDocumentWithSync(ctx, doc, src); err != nil {
+			if err := dk.processBatch(ctx, plan, batch, src); err != nil {
 				reporter.Error(ctx, LoadProgressEvent{
 					SourceName:      src.Name(),
 					SourceProcessed: int(completedCount.Load()),
 					SourceTotal:     len(docs),
 					SourceElapsed:   time.Since(startTime),
 				}, err)
-				errCh <- fmt.Errorf("add document: %w", err)
+				if plan.size > 1 {
+					errCh <- fmt.Errorf("add document batch: %w", err)
+				} else {
+					errCh <- fmt.Errorf("add document: %w", err)
+				}
 				return
 			}
 
-			completed := int(completedCount.Add(1))
+			completed := int(completedCount.Add(int64(len(batch))))
 			total := len(docs)
-			globalProcessed.Add(1)
-			reporter.RecordStat(len(doc.Content))
+			globalProcessed.Add(int64(len(batch)))
+			for _, doc := range batch {
+				reporter.RecordStat(len(doc.Content))
+			}
 
 			elapsed := time.Since(startTime)
 			var eta time.Duration
@@ -699,9 +720,22 @@ func (dk *BuiltinKnowledge) processDocuments(
 		}
 	}
 
-	for i, doc := range docs {
+	// step is 1 unless embedding batching is active, in which case each pool
+	// task embeds and stores a whole batch.
+	step := plan.size
+	for start := 0; start < len(docs); start += step {
+		// Stop submitting further batches once the caller cancels. The
+		// per-document path keeps its previous behaviour of submitting every
+		// task regardless of cancellation.
+		if step > 1 {
+			if err := ctx.Err(); err != nil {
+				errCh <- err
+				break
+			}
+		}
+		end := min(start+step, len(docs))
 		wgDoc.Add(1)
-		task := processDoc(doc, i)
+		task := processTask(docs[start:end])
 		if pool != nil {
 			if err := pool.Submit(task); err != nil {
 				wgDoc.Done()
@@ -805,6 +839,136 @@ func (dk *BuiltinKnowledge) addDocument(ctx context.Context, doc *document.Docum
 
 	if err := dk.vectorStore.Add(ctx, doc, embedding); err != nil {
 		return fmt.Errorf("failed to store embedding: %w", err)
+	}
+	return nil
+}
+
+// batchPlan describes how a single Load call groups documents into embedding
+// requests. A size of 1 selects the per-document path and leaves embedder
+// nil.
+type batchPlan struct {
+	embedder embedder.BatchEmbedder
+	size     int
+}
+
+// resolveBatchPlan reports whether the requested embedding batch size can be
+// applied to this knowledge base. Batching requires an embedder implementing
+// embedder.BatchEmbedder, and is limited to loads without source sync because
+// the incremental bookkeeping resets IDs and decides skips per document. Any
+// unmet prerequisite falls back to the unchanged per-document path and is
+// logged so an ineffective configuration is visible.
+func (dk *BuiltinKnowledge) resolveBatchPlan(ctx context.Context, config *loadConfig) batchPlan {
+	if config.embeddingBatchSize <= 1 {
+		return batchPlan{size: 1}
+	}
+	batchEmbedder, ok := dk.embedder.(embedder.BatchEmbedder)
+	if !ok {
+		log.InfofContext(ctx,
+			"Embedding batch size %d ignored: embedder does not implement BatchEmbedder",
+			config.embeddingBatchSize)
+		return batchPlan{size: 1}
+	}
+	if dk.enableSourceSync {
+		log.InfofContext(ctx,
+			"Embedding batch size %d ignored: batching is not supported when source sync is enabled",
+			config.embeddingBatchSize)
+		return batchPlan{size: 1}
+	}
+	return batchPlan{embedder: batchEmbedder, size: config.embeddingBatchSize}
+}
+
+// processBatch ingests one unit of work. When batching is inactive the batch
+// holds exactly one document and the unchanged per-document path runs,
+// including source sync bookkeeping.
+func (dk *BuiltinKnowledge) processBatch(
+	ctx context.Context,
+	plan batchPlan,
+	batch []*document.Document,
+	src source.Source,
+) error {
+	if plan.size <= 1 {
+		return dk.addDocumentWithSync(ctx, batch[0], src)
+	}
+	return dk.embedAndStoreBatch(ctx, plan.embedder, batch)
+}
+
+// embedAndStoreBatch embeds every document of the batch with a single provider
+// request, validates the complete response, and only then writes the vectors
+// to the store.
+//
+// A rejected request or response stores no document of the batch. A store
+// failure part-way through keeps the documents already written and returns the
+// error, matching the non-transactional semantics of the per-document path.
+func (dk *BuiltinKnowledge) embedAndStoreBatch(
+	ctx context.Context,
+	batchEmbedder embedder.BatchEmbedder,
+	docs []*document.Document,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if dk.vectorStore == nil {
+		return fmt.Errorf("vector store is not configured")
+	}
+	texts := make([]string, len(docs))
+	for i, doc := range docs {
+		if doc == nil {
+			return fmt.Errorf("document at index %d is nil", i)
+		}
+		texts[i] = buildEmbeddingText(doc)
+	}
+	embeddings, err := batchEmbedder.GetEmbeddings(ctx, texts)
+	if err != nil {
+		return fmt.Errorf("failed to generate embedding batch: %w", err)
+	}
+	if err := validateEmbeddingBatch(ctx, embeddings, len(docs), batchEmbedder.GetDimensions()); err != nil {
+		return err
+	}
+	for i, doc := range docs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := dk.vectorStore.Add(ctx, doc, embeddings[i]); err != nil {
+			return fmt.Errorf("failed to store embedding for document %s: %w", doc.ID, err)
+		}
+	}
+	return nil
+}
+
+// validateEmbeddingBatch verifies a batch response before any vector store
+// write, so that a malformed response cannot bind a vector to the wrong
+// document or persist part of an invalid batch.
+//
+// A vector count differing from the request, an empty vector, a vector whose
+// dimension differs from the rest of the batch, and non-finite components are
+// rejected. A batch dimension differing from declaredDims is only logged:
+// embedders may report a configured default the model does not honour, and the
+// per-document path accepts those vectors today.
+func validateEmbeddingBatch(ctx context.Context, embeddings [][]float64, expected, declaredDims int) error {
+	if len(embeddings) != expected {
+		return fmt.Errorf("embedding batch count mismatch: expected %d, got %d", expected, len(embeddings))
+	}
+	dimensions := 0
+	for i, vector := range embeddings {
+		if len(vector) == 0 {
+			return fmt.Errorf("embedding batch contains an empty vector at index %d", i)
+		}
+		if i == 0 {
+			dimensions = len(vector)
+		} else if len(vector) != dimensions {
+			return fmt.Errorf("embedding batch dimension mismatch at index %d: expected %d, got %d",
+				i, dimensions, len(vector))
+		}
+		for j, value := range vector {
+			if math.IsNaN(value) || math.IsInf(value, 0) {
+				return fmt.Errorf("embedding batch contains a non-finite value at index %d position %d", i, j)
+			}
+		}
+	}
+	if declaredDims > 0 && dimensions != declaredDims {
+		log.WarnfContext(ctx,
+			"Embedding batch dimension %d differs from the dimension %d declared by the embedder",
+			dimensions, declaredDims)
 	}
 	return nil
 }

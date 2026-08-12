@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -26,8 +27,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 )
 
-// Verify that Embedder implements the embedder.Embedder interface.
-var _ embedder.Embedder = (*Embedder)(nil)
+// Verify that Embedder implements the embedder interfaces.
+var (
+	_ embedder.Embedder      = (*Embedder)(nil)
+	_ embedder.BatchEmbedder = (*Embedder)(nil)
+)
 
 const (
 	// DefaultModel is the default OpenAI embedding model.
@@ -263,43 +267,110 @@ func (e *Embedder) GetEmbeddingWithUsage(ctx context.Context, text string) ([]fl
 	return embedding, usage, nil
 }
 
+// GetEmbeddings implements the embedder.BatchEmbedder interface.
+//
+// It sends every text in a single OpenAI-compatible embeddings request and
+// returns the vectors in input order, so embeddings[i] corresponds to
+// texts[i]. The batch is never split to satisfy provider limits: the caller
+// chooses a size that fits the model's per-request input, token, and payload
+// limits.
+//
+// It returns an error when the response cannot be mapped back to the input,
+// which includes a vector count differing from the request and a missing,
+// duplicate, or out-of-range response index.
+func (e *Embedder) GetEmbeddings(ctx context.Context, texts []string) ([][]float64, error) {
+	response, err := e.batchResponseWithRetry(ctx, texts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create embeddings: %w", err)
+	}
+
+	embeddings, err := embeddingsFromResponse(response, len(texts))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create embeddings: %w", err)
+	}
+
+	return embeddings, nil
+}
+
 // responseWithRetry wraps response with retry logic for errors.
 func (e *Embedder) responseWithRetry(ctx context.Context, text string) (*openai.CreateEmbeddingResponse, error) {
-	var lastErr error
-	for attempt := 0; attempt <= e.maxRetries; attempt++ {
-		rsp, err := e.response(ctx, text)
-		if err == nil {
-			if _, validateErr := embeddingFromResponse(rsp); validateErr == nil {
-				return rsp, nil
-			} else {
-				err = validateErr
+	return e.withRetry(ctx, "embedding request",
+		func() string { return fmt.Sprintf("input_len=%d", len([]rune(text))) },
+		func() (*openai.CreateEmbeddingResponse, error) {
+			rsp, err := e.response(ctx, text)
+			if err != nil {
+				return nil, err
 			}
+			if _, err := embeddingFromResponse(rsp); err != nil {
+				return nil, err
+			}
+			return rsp, nil
+		})
+}
+
+// batchResponseWithRetry wraps batchResponse with the same retry policy as the
+// single-text path. A batch is retried as a whole and is never split into
+// per-text requests, which would multiply the request count and could mask a
+// provider protocol error.
+func (e *Embedder) batchResponseWithRetry(
+	ctx context.Context,
+	texts []string,
+) (*openai.CreateEmbeddingResponse, error) {
+	return e.withRetry(ctx, "embedding batch request",
+		func() string { return fmt.Sprintf("inputs=%d input_len=%d", len(texts), totalRuneCount(texts)) },
+		func() (*openai.CreateEmbeddingResponse, error) {
+			rsp, err := e.batchResponse(ctx, texts)
+			if err != nil {
+				return nil, err
+			}
+			if _, err := embeddingsFromResponse(rsp, len(texts)); err != nil {
+				return nil, err
+			}
+			return rsp, nil
+		})
+}
+
+// withRetry runs attempt until it succeeds or the retry budget is exhausted,
+// waiting for the configured backoff between attempts. label names the
+// operation in retry logs and inputDetail describes the request payload in the
+// final failure log; it is only evaluated when all attempts failed.
+func (e *Embedder) withRetry(
+	ctx context.Context,
+	label string,
+	inputDetail func() string,
+	attempt func() (*openai.CreateEmbeddingResponse, error),
+) (*openai.CreateEmbeddingResponse, error) {
+	var lastErr error
+	for i := 0; i <= e.maxRetries; i++ {
+		rsp, err := attempt()
+		if err == nil {
+			return rsp, nil
 		}
 
 		lastErr = err
 
 		// No more retries
-		if attempt >= e.maxRetries {
+		if i >= e.maxRetries {
 			break
 		}
 
 		// Get backoff duration for this attempt and log retry
-		backoff := e.getBackoffDuration(attempt)
+		backoff := e.getBackoffDuration(i)
 		if backoff > 0 {
-			log.InfoContext(ctx, fmt.Sprintf("embedding request failed, retrying in %v (attempt %d/%d): %v", backoff, attempt+1, e.maxRetries, err))
+			log.InfoContext(ctx, fmt.Sprintf("%s failed, retrying in %v (attempt %d/%d): %v", label, backoff, i+1, e.maxRetries, err))
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
 			case <-time.After(backoff):
 			}
 		} else {
-			log.InfoContext(ctx, fmt.Sprintf("embedding request failed, retrying immediately (attempt %d/%d): %v", attempt+1, e.maxRetries, err))
+			log.InfoContext(ctx, fmt.Sprintf("%s failed, retrying immediately (attempt %d/%d): %v", label, i+1, e.maxRetries, err))
 		}
 	}
 
 	if lastErr != nil {
-		log.ErrorfContext(ctx, "embedding request failed after %d attempt(s): %v; input_len=%d",
-			e.maxRetries+1, lastErr, len([]rune(text)))
+		log.ErrorfContext(ctx, "%s failed after %d attempt(s): %v; %s",
+			label, e.maxRetries+1, lastErr, inputDetail())
 	}
 	return nil, lastErr
 }
@@ -316,6 +387,54 @@ func embeddingFromResponse(response *openai.CreateEmbeddingResponse) ([]float64,
 		return nil, errors.New("received empty embedding vector from OpenAI API")
 	}
 	return embedding, nil
+}
+
+// embeddingsFromResponse restores the input order of a batch response.
+//
+// The OpenAI-compatible protocol allows data items to arrive in any order and
+// identifies each one by its index into the request input, so the mapping is
+// rebuilt from those indices. A count mismatch, an out-of-range index, a
+// duplicate index, or an empty vector makes the mapping unreliable and is
+// reported as an error rather than guessed.
+func embeddingsFromResponse(
+	response *openai.CreateEmbeddingResponse,
+	expected int,
+) ([][]float64, error) {
+	if response == nil {
+		return nil, errors.New("received nil embedding response from OpenAI API")
+	}
+	if expected <= 0 {
+		return nil, errors.New("embedding input cannot be empty")
+	}
+	if len(response.Data) != expected {
+		return nil, fmt.Errorf("embedding response count mismatch: expected %d, got %d",
+			expected, len(response.Data))
+	}
+	embeddings := make([][]float64, expected)
+	for _, item := range response.Data {
+		index := int(item.Index)
+		if index < 0 || index >= expected {
+			return nil, fmt.Errorf("embedding response index out of range: %d", item.Index)
+		}
+		if embeddings[index] != nil {
+			return nil, fmt.Errorf("embedding response contains duplicate index: %d", item.Index)
+		}
+		if len(item.Embedding) == 0 {
+			return nil, fmt.Errorf("received empty embedding vector at index %d", item.Index)
+		}
+		embeddings[index] = item.Embedding
+	}
+	return embeddings, nil
+}
+
+// totalRuneCount reports the combined rune count of texts, used to describe a
+// failed batch request without logging its content.
+func totalRuneCount(texts []string) int {
+	total := 0
+	for _, text := range texts {
+		total += len([]rune(text))
+	}
+	return total
 }
 
 // getBackoffDuration returns the backoff duration for the given attempt.
@@ -366,6 +485,62 @@ func (e *Embedder) response(ctx context.Context, text string) (rsp *openai.Creat
 	// the historical default. For other models we omit the parameter so
 	// the server-side default applies and gateways/models that reject
 	// the field keep working.
+	if e.dimensionsSet || isTextEmbedding3Model(e.model) {
+		request.Dimensions = openai.Int(int64(e.dimensions))
+	}
+
+	// Combine request options.
+	requestOpts := make([]option.RequestOption, len(e.requestOptions))
+	copy(requestOpts, e.requestOptions)
+
+	// Call OpenAI embeddings API.
+	return e.client.Embeddings.New(ctx, request, requestOpts...)
+}
+
+// batchResponse issues one embeddings request carrying all texts as an input
+// array. It mirrors response, including the model, encoding format, user,
+// dimensions forwarding rules, request options, and tracing.
+func (e *Embedder) batchResponse(
+	ctx context.Context,
+	texts []string,
+) (rsp *openai.CreateEmbeddingResponse, err error) {
+	if len(texts) == 0 {
+		return nil, fmt.Errorf("texts cannot be empty")
+	}
+	for i, text := range texts {
+		if text == "" {
+			return nil, fmt.Errorf("text at index %d cannot be empty", i)
+		}
+	}
+	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationEmbeddings, e.model))
+	embeddingAttributes := &itelemetry.EmbeddingAttributes{
+		RequestEncodingFormat: &e.encodingFormat,
+		RequestModel:          e.model,
+		Dimensions:            e.dimensions,
+	}
+	defer func() {
+		embeddingAttributes.Error = err
+		if rsp != nil {
+			embeddingAttributes.InputToken = &rsp.Usage.PromptTokens
+		}
+		itelemetry.TraceEmbedding(span, embeddingAttributes)
+		span.End()
+	}()
+
+	// Create embedding request with an array input so the provider computes
+	// every vector in a single call.
+	request := openai.EmbeddingNewParams{
+		Input:          openai.EmbeddingNewParamsInputUnion{OfArrayOfStrings: slices.Clone(texts)},
+		Model:          e.model,
+		EncodingFormat: openai.EmbeddingNewParamsEncodingFormat(e.encodingFormat),
+	}
+
+	// Set optional parameters.
+	if e.user != "" {
+		request.User = openai.String(e.user)
+	}
+
+	// Forward dimensions using the same rules as the single-text path.
 	if e.dimensionsSet || isTextEmbedding3Model(e.model) {
 		request.Dimensions = openai.Int(int64(e.dimensions))
 	}

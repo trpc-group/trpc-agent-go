@@ -125,13 +125,14 @@ type LoadProgressCallback func(ctx context.Context, event LoadProgressEvent)
 
 // loadConfig holds the configuration for load behavior.
 type loadConfig struct {
-	showProgress     bool
-	progressStepSize int
-	showStats        bool
-	srcParallelism   int
-	docParallelism   int
-	recreate         bool
-	progressCallback LoadProgressCallback
+	showProgress       bool
+	progressStepSize   int
+	showStats          bool
+	srcParallelism     int
+	docParallelism     int
+	embeddingBatchSize int
+	recreate           bool
+	progressCallback   LoadProgressCallback
 }
 
 // LoadOption represents a functional option for configuring load behavior.
@@ -172,9 +173,38 @@ func WithSourceConcurrency(n int) LoadOption {
 // concurrently.
 // A value = 1 means sequential processing.
 // The default is runtime.NumCPU() when value is not specified (=0).
+//
+// When embedding batching is active (see WithEmbeddingBatchSize), the unit of
+// work is a batch rather than a single document, so this value bounds the
+// number of concurrent batches and up to n*batchSize documents may be in
+// flight at once.
 func WithDocConcurrency(n int) LoadOption {
 	return func(lc *loadConfig) {
 		lc.docParallelism = n
+	}
+}
+
+// WithEmbeddingBatchSize sets the maximum number of documents whose embeddings
+// are requested in a single call to a BatchEmbedder, reducing the number of
+// embedding requests for N documents from N to ceil(N/n).
+//
+// Batching is off by default. Values <= 1 keep the per-document request path.
+// It also stays off, without an error, when the configured embedder does not
+// implement embedder.BatchEmbedder, when no embedder is configured (remote
+// embedding vector stores), or when source sync is enabled via
+// WithEnableSourceSync; in those cases loading behaves exactly as before.
+//
+// A batch is embedded and validated as a whole before any vector is written,
+// so an invalid response stores no documents from that batch. A failed batch
+// is not retried as individual requests. The caller is responsible for
+// choosing a value within the provider's per-request input, token, and payload
+// limits.
+//
+// This option controls embedding request grouping only; it is independent of
+// WithSourceConcurrency and WithDocConcurrency.
+func WithEmbeddingBatchSize(n int) LoadOption {
+	return func(lc *loadConfig) {
+		lc.embeddingBatchSize = n
 	}
 }
 

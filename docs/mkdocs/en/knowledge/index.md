@@ -327,6 +327,29 @@ err := kb.Load(ctx,
 > - Adjust `WithSourceConcurrency()` and `WithDocConcurrency()` according to throughput, cost, and rate limits.
 > - Default values are balanced for most scenarios; increase for speed if needed, decrease if rate limiting occurs.
 
+### Batch Embedding
+
+By default each document is embedded with its own request, so loading `N` documents issues `N` embedding requests. `WithEmbeddingBatchSize(B)` groups documents into a single multi-input request, reducing the request count to `ceil(N/B)`:
+
+```go
+err := kb.Load(ctx,
+    knowledge.WithDocConcurrency(4),       // Up to 4 batches in flight
+    knowledge.WithEmbeddingBatchSize(32),  // Up to 32 documents per request
+)
+```
+
+Batching is off by default and only applies when the configured embedder implements `embedder.BatchEmbedder`. The built-in OpenAI-compatible embedder (`knowledge/embedder/openai`) implements it and sends the texts as an input array. When the embedder does not support batching, when no embedder is configured (vector stores that embed remotely), or when source sync is enabled via `WithEnableSourceSync(true)`, loading silently keeps the unchanged per-document path.
+
+The two options compose: `WithDocConcurrency(n)` bounds the number of concurrent batches, so up to `n * B` documents may be in flight at once.
+
+> **About Correctness and Limits**:
+>
+> - A batch is embedded and validated as a whole. If the provider returns the wrong number of vectors, an empty vector, an inconsistent dimension, or a non-finite value, the whole batch fails and none of its documents are written.
+> - A failed batch is not retried as individual requests, so it never silently multiplies the request count.
+> - If a vector store write fails part-way through a batch, the documents already written are kept and `Load` returns the error, matching the existing non-transactional behavior.
+> - Choose `B` within the provider's per-request limits on input count, total tokens, and payload size. The framework does not split a batch to satisfy those limits.
+> - Batching reduces the number of embedding requests. It does not change the input text, the model, or the resulting vectors, and it does not reduce the number of vector store writes; measure your own workload before assuming an end-to-end throughput gain.
+
 ### Load Progress Callback
 
 Use `WithLoadProgressCallback` to register a structured progress callback for driving custom UIs, metrics collection, or other observability integrations without parsing log output:

@@ -348,6 +348,29 @@ err := kb.Load(ctx,
 > - 请根据吞吐、成本与限流情况调节 `WithSourceConcurrency()`、`WithDocConcurrency()`
 > - 默认值在多数场景下较为均衡；需要更快速度可适当上调，遇到限流则下调
 
+### 批量 Embedding
+
+默认情况下每个文档单独发起一次 embedding 请求，加载 `N` 个文档就会产生 `N` 次请求。`WithEmbeddingBatchSize(B)` 会把多个文档合并为一次多输入请求，将请求数降为 `ceil(N/B)`：
+
+```go
+err := kb.Load(ctx,
+    knowledge.WithDocConcurrency(4),       // 最多 4 个批次同时在途
+    knowledge.WithEmbeddingBatchSize(32),  // 每次请求最多 32 个文档
+)
+```
+
+批量默认关闭，且仅在所配置的 embedder 实现了 `embedder.BatchEmbedder` 时生效。内置的 OpenAI 兼容 embedder（`knowledge/embedder/openai`）已实现该接口，会以字符串数组的形式发送输入。当 embedder 不支持批量、未配置 embedder（由向量库远程生成 embedding），或通过 `WithEnableSourceSync(true)` 开启了 source sync 时，加载会继续走原有的逐文档路径，行为不变。
+
+两个选项可以组合使用：`WithDocConcurrency(n)` 限制并发批次数，因此在途文档数最多为 `n * B`。
+
+> **关于正确性与限制**：
+>
+> - 一个批次会被整体校验。若 provider 返回的向量数量不符、存在空向量、批内维度不一致或包含非有限值，整个批次失败，其中的文档一个都不会写入
+> - 失败的批次不会自动拆成多次单条请求，因此不会意外放大请求量
+> - 若批次写入向量库时中途失败，此前已成功写入的文档会保留，`Load` 返回错误，与现有的非事务语义一致
+> - 请在 provider 的单请求输入数、总 token 数和 payload 大小限制内选择 `B`，框架不会为满足这些限制而自动切分批次
+> - 批量的确定收益是减少 embedding 请求数。它不改变输入文本、模型和生成的向量，也不减少向量库的写入次数；端到端吞吐是否提升需要在自己的负载上实测
+
 ### 加载进度回调
 
 通过 `WithLoadProgressCallback` 可以注册一个结构化的进度回调函数，用于驱动自定义 UI、指标采集或其他可观测性集成，无需解析日志输出：
