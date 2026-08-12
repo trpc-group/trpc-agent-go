@@ -7294,7 +7294,8 @@ func TestCreateFinalResponseGLMReasoningContentFallbackSkipsToolCall(
 			ID:    "acc-id",
 			Model: "glm50",
 			Choices: []openai.ChatCompletionChoice{{
-				Index: 0,
+				Index:        0,
+				FinishReason: "stop",
 				Message: openai.ChatCompletionMessage{
 					Content: "",
 				},
@@ -7332,7 +7333,8 @@ func TestCreateFinalResponseReasoningContentNoFallbackForOpenAI(
 			ID:    "acc-id",
 			Model: "gpt-5",
 			Choices: []openai.ChatCompletionChoice{{
-				Index: 0,
+				Index:        0,
+				FinishReason: "stop",
 				Message: openai.ChatCompletionMessage{
 					Content: "",
 				},
@@ -7437,7 +7439,7 @@ func TestCreateResponseFromCompletionGLMReasoningContentSkipsToolCall(
 					}
 				}]
 			},
-			"finish_reason": "tool_calls"
+			"finish_reason": "stop"
 		}]
 	}`), &completion))
 
