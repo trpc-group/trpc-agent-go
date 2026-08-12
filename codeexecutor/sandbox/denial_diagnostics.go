@@ -86,18 +86,21 @@ type DenialTargetMatcher struct {
 
 // DenialIgnoreRule ignores matching sandbox denials from diagnostic output.
 //
-// Matching is conjunctive across configured constraints: a non-empty Command
-// must be a substring of RunProgramSpec.Cmd, Operations must contain the denial
-// operation when set, Targets must match via any listed matcher when set, and
-// RawContains must find at least one non-empty substring in Denial.Raw when set.
-// Empty RawContains entries are ignored, and an all-empty list is treated as
-// unset. A rule with every effective constraint empty is ignored.
+// Matching is conjunctive across configured constraints. A rule with every
+// effective constraint empty is ignored.
 type DenialIgnoreRule struct {
-	// Command, when non-empty, must be a substring of RunProgramSpec.Cmd. It
-	// intentionally does not match Args because arguments may contain secrets.
-	Command     string
-	Operations  []string
-	Targets     []DenialTargetMatcher
+	// CommandContains, when non-empty, must be a substring of
+	// RunProgramSpec.Cmd. It intentionally does not match Args because
+	// arguments may contain secrets.
+	CommandContains string
+	// Operations, when non-empty, matches when it contains Denial.Operation
+	// exactly. Operation values are backend-native and may evolve.
+	Operations []string
+	// Targets, when non-empty, matches when any matcher accepts Denial.Target.
+	Targets []DenialTargetMatcher
+	// RawContains, when effectively non-empty, matches when Denial.Raw contains
+	// any non-empty entry. Empty entries are ignored; an all-empty list is
+	// treated as unset.
 	RawContains []string
 }
 
@@ -152,10 +155,14 @@ type DiagnosticsCapability struct {
 	// ProbeCompleted reports whether runtime capability probing completed
 	// reliably. When false, precision fields should be treated as unknown.
 	ProbeCompleted bool
-	// ExplicitDenyTaggable reports whether explicit deny rules can carry runTag.
-	ExplicitDenyTaggable bool
-	// DefaultDenyTaggable reports whether default-deny events can carry runTag.
-	DefaultDenyTaggable bool
+	// ExplicitDenialsCollectible reports whether explicit-deny events can be
+	// strongly correlated and collected when the event stream is available.
+	// Backends may use different correlation mechanisms.
+	ExplicitDenialsCollectible bool
+	// DefaultDenialsCollectible reports whether default-deny events can be
+	// strongly correlated and collected when the event stream is available.
+	// Backends may use different correlation mechanisms.
+	DefaultDenialsCollectible bool
 }
 
 // DiagnosticsCapability reports runtime-detected sandbox denial diagnostic

@@ -88,28 +88,28 @@ func TestSandboxDenialConfiguredFilters(t *testing.T) {
 	}
 }
 
-func TestSandboxDenialCommandPatternFilter(t *testing.T) {
+func TestSandboxDenialCommandContainsFilter(t *testing.T) {
 	denials := []Denial{{
 		Operation: "file-read-data",
 		Target:    "/private/tmp/foo",
 	}}
-	filtered := applyMacOSSandboxDenialFilters(denials, "/bin/gh", DenialFilter{
+	filtered := applyMacOSSandboxDenialFilters(denials, "/bin/bash", DenialFilter{
 		Ignore: []DenialIgnoreRule{{
-			Command: "gh",
-			Targets: []DenialTargetMatcher{{Exact: "/private/tmp/foo"}},
+			CommandContains: "sh",
+			Targets:         []DenialTargetMatcher{{Exact: "/private/tmp/foo"}},
 		}},
 	})
 	if len(filtered) != 0 {
-		t.Fatalf("command-pattern filter = %#v, want empty", filtered)
+		t.Fatalf("command-contains filter = %#v, want empty", filtered)
 	}
 	kept := applyMacOSSandboxDenialFilters(denials, "/bin/cat", DenialFilter{
 		Ignore: []DenialIgnoreRule{{
-			Command: "gh",
-			Targets: []DenialTargetMatcher{{Exact: "/private/tmp/foo"}},
+			CommandContains: "sh",
+			Targets:         []DenialTargetMatcher{{Exact: "/private/tmp/foo"}},
 		}},
 	})
 	if len(kept) != 1 {
-		t.Fatalf("command-pattern kept = %#v, want one denial", kept)
+		t.Fatalf("command-contains kept = %#v, want one denial", kept)
 	}
 }
 
@@ -515,16 +515,16 @@ func TestInitDenialMonitorHonorsCachedCapsWithoutEventStream(t *testing.T) {
 	}
 }
 
-func TestInitDenialMonitorSkipsCollectionWhenNeitherFormTaggable(t *testing.T) {
+func TestInitDenialMonitorSkipsCollectionWhenNeitherFormCollectible(t *testing.T) {
 	resetDiagnosticsCapsCacheForTest()
 	t.Cleanup(resetDiagnosticsCapsCacheForTest)
 	storeCachedDiagnosticsCaps(context.Background(), DiagnosticsCapability{
-		Supported:            true,
-		ProbeCompleted:       true,
-		EventStreamAvailable: true,
-		StrongCorrelation:    false,
-		DefaultDenyTaggable:  false,
-		ExplicitDenyTaggable: false,
+		Supported:                  true,
+		ProbeCompleted:             true,
+		EventStreamAvailable:       true,
+		StrongCorrelation:          false,
+		DefaultDenialsCollectible:  false,
+		ExplicitDenialsCollectible: false,
 	})
 
 	startCalls := 0
@@ -556,8 +556,9 @@ func TestInitDenialMonitorSkipsCollectionWhenNeitherFormTaggable(t *testing.T) {
 	if !caps.Supported || !caps.ProbeCompleted || !caps.EventStreamAvailable {
 		t.Fatalf("caps = %#v, want preserved stream-available false/false report", caps)
 	}
-	if caps.StrongCorrelation || caps.DefaultDenyTaggable || caps.ExplicitDenyTaggable {
-		t.Fatalf("caps = %#v, want StrongCorrelation and both taggable false", caps)
+	if caps.StrongCorrelation || caps.DefaultDenialsCollectible ||
+		caps.ExplicitDenialsCollectible {
+		t.Fatalf("caps = %#v, want correlation and both form capabilities false", caps)
 	}
 	d := rt.macosDenialDiagnostics()
 	d.mu.RLock()
@@ -1681,17 +1682,19 @@ func TestCollectSandboxDenialsSettlesWithFreshContextAfterCancel(t *testing.T) {
 func TestDiagnosticsCapabilityFromProbeAllowsNeitherTaggable(t *testing.T) {
 	// Completed false/false is a valid cached probe result. Activation must
 	// preserve the report without starting production collection; see
-	// TestInitDenialMonitorSkipsCollectionWhenNeitherFormTaggable.
+	// TestInitDenialMonitorSkipsCollectionWhenNeitherFormCollectible.
 	caps := diagnosticsCapabilityFromProbe(true, false, false)
 	if !caps.Supported || !caps.EventStreamAvailable || !caps.ProbeCompleted {
 		t.Fatalf("caps=%+v, want completed stream-available probe", caps)
 	}
-	if caps.DefaultDenyTaggable || caps.ExplicitDenyTaggable || caps.StrongCorrelation {
-		t.Fatalf("caps=%+v, want both tag forms false", caps)
+	if caps.DefaultDenialsCollectible || caps.ExplicitDenialsCollectible ||
+		caps.StrongCorrelation {
+		t.Fatalf("caps=%+v, want both form capabilities false", caps)
 	}
 	incomplete := diagnosticsCapabilityFromProbe(false, true, true)
 	if incomplete.EventStreamAvailable || incomplete.ProbeCompleted ||
-		incomplete.DefaultDenyTaggable || incomplete.ExplicitDenyTaggable {
+		incomplete.DefaultDenialsCollectible ||
+		incomplete.ExplicitDenialsCollectible {
 		t.Fatalf("incomplete caps=%+v, want only Supported", incomplete)
 	}
 }
@@ -1813,7 +1816,8 @@ func TestWaitForProbeFormReportsUntaggedTargetAsNotTaggable(t *testing.T) {
 		defaultRes.tagMatched,
 		explicitRes.tagMatched,
 	)
-	if !caps.ProbeCompleted || caps.DefaultDenyTaggable || caps.ExplicitDenyTaggable {
+	if !caps.ProbeCompleted || caps.DefaultDenialsCollectible ||
+		caps.ExplicitDenialsCollectible {
 		t.Fatalf("caps=%+v, want completed false/false", caps)
 	}
 }

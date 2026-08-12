@@ -174,7 +174,8 @@ func TestDiagnosticsCapabilityReturnsZeroValueOnNonManagedProfile(t *testing.T) 
 	)
 	caps := rt.DiagnosticsCapability()
 	if caps.Supported || caps.EventStreamAvailable || caps.StrongCorrelation ||
-		caps.ProbeCompleted || caps.ExplicitDenyTaggable || caps.DefaultDenyTaggable {
+		caps.ProbeCompleted || caps.ExplicitDenialsCollectible ||
+		caps.DefaultDenialsCollectible {
 		t.Fatalf("disabled profile caps = %#v, want zero value", caps)
 	}
 }

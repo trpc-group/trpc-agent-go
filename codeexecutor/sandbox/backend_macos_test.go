@@ -636,7 +636,10 @@ func TestDiagnosticsCapabilityProbe(t *testing.T) {
 	if !caps.EventStreamAvailable {
 		t.Skip("log stream unavailable on this host")
 	}
-	wantStrong := caps.ExplicitDenyTaggable || caps.DefaultDenyTaggable
+	// The macOS backend establishes per-form collectibility through Seatbelt
+	// message tagging. Other backends may establish correlation differently.
+	wantStrong := caps.ExplicitDenialsCollectible ||
+		caps.DefaultDenialsCollectible
 	if caps.StrongCorrelation != wantStrong {
 		t.Fatalf(
 			"StrongCorrelation=%v, want %v for caps=%+v",
@@ -646,7 +649,7 @@ func TestDiagnosticsCapabilityProbe(t *testing.T) {
 		)
 	}
 	if !wantStrong {
-		t.Skip("neither default-deny nor explicit-deny tagging is supported on this host")
+		t.Skip("neither default-deny nor explicit-deny diagnostics are collectible on this host")
 	}
 }
 
@@ -668,8 +671,8 @@ func TestMacOSSandboxExecCollectsExplicitDenyDiagnostics(t *testing.T) {
 	}
 	_ = rt.ensureDenialMonitor(context.Background())
 	caps := rt.DiagnosticsCapability()
-	if !caps.ExplicitDenyTaggable {
-		t.Skip("explicit-deny messages are not supported on this host")
+	if !caps.ExplicitDenialsCollectible {
+		t.Skip("explicit-deny diagnostics are not collectible on this host")
 	}
 	ws, err := rt.CreateWorkspace(context.Background(), "macos/glob-denial-diagnostics", codeexecutor.WorkspacePolicy{})
 	if err != nil {
@@ -719,8 +722,8 @@ func TestMacOSSandboxExecTimeoutStillDeliversDenialDiagnostics(t *testing.T) {
 	}
 	_ = rt.ensureDenialMonitor(context.Background())
 	caps := rt.DiagnosticsCapability()
-	if !caps.ExplicitDenyTaggable {
-		t.Skip("explicit-deny messages are not supported on this host")
+	if !caps.ExplicitDenialsCollectible {
+		t.Skip("explicit-deny diagnostics are not collectible on this host")
 	}
 	if !rt.sandboxDenialCollectingReady() {
 		t.Skip("log stream unavailable on this host")
@@ -773,8 +776,8 @@ func TestMacOSSandboxExecCollectsDefaultDenyDiagnosticsWhenSupported(t *testing.
 	}
 	_ = rt.ensureDenialMonitor(context.Background())
 	caps := rt.DiagnosticsCapability()
-	if !caps.DefaultDenyTaggable {
-		t.Skip("default-deny messages are not supported on this host")
+	if !caps.DefaultDenialsCollectible {
+		t.Skip("default-deny diagnostics are not collectible on this host")
 	}
 	hostTemp := filepath.Join(os.TempDir(), "trpc-agent-sandbox-default-deny-diagnostics")
 	if err := os.WriteFile(hostTemp, []byte("host-secret"), 0o600); err != nil {

@@ -206,11 +206,13 @@ func (r *Runtime) newSandboxDenialRun(
 		done = monitor.done
 	}
 	return sandboxDenialRun{
-		enabled:              true,
-		runTag:               newMacOSSandboxDenialRunTag(d.sessionSuffix),
-		droppedAtStart:       monitor.ring.dropCount(),
-		defaultDenyTaggable:  d.caps.DefaultDenyTaggable,
-		explicitDenyTaggable: d.caps.ExplicitDenyTaggable,
+		enabled:        true,
+		runTag:         newMacOSSandboxDenialRunTag(d.sessionSuffix),
+		droppedAtStart: monitor.ring.dropCount(),
+		// On macOS, per-form collectibility is established by proving that
+		// Seatbelt can attach the run tag to that deny form.
+		defaultDenyTaggable:  d.caps.DefaultDenialsCollectible,
+		explicitDenyTaggable: d.caps.ExplicitDenialsCollectible,
 		collectGeneration: &macosDenialCollectGeneration{
 			ring: monitor.ring,
 			done: done,
@@ -844,8 +846,10 @@ func diagnosticsCapabilityFromProbe(
 	}
 	caps.EventStreamAvailable = true
 	caps.ProbeCompleted = true
-	caps.DefaultDenyTaggable = defaultMatched
-	caps.ExplicitDenyTaggable = explicitMatched
+	// On macOS, a deny form is collectible when the probe proves that
+	// Seatbelt can attach the correlation tag to that form.
+	caps.DefaultDenialsCollectible = defaultMatched
+	caps.ExplicitDenialsCollectible = explicitMatched
 	caps.StrongCorrelation = defaultMatched || explicitMatched
 	return caps
 }
@@ -1294,10 +1298,10 @@ func cloneDenialFilter(filter DenialFilter) DenialFilter {
 	}
 	for i, rule := range filter.Ignore {
 		clone.Ignore[i] = DenialIgnoreRule{
-			Command:     rule.Command,
-			Operations:  append([]string(nil), rule.Operations...),
-			Targets:     append([]DenialTargetMatcher(nil), rule.Targets...),
-			RawContains: append([]string(nil), rule.RawContains...),
+			CommandContains: rule.CommandContains,
+			Operations:      append([]string(nil), rule.Operations...),
+			Targets:         append([]DenialTargetMatcher(nil), rule.Targets...),
+			RawContains:     append([]string(nil), rule.RawContains...),
 		}
 	}
 	return clone
@@ -1313,7 +1317,8 @@ func shouldFilterMacOSSandboxDenial(
 	}
 	for _, rule := range filter.Ignore {
 		hasRawContains := stringSliceHasNonEmpty(rule.RawContains)
-		if rule.Command != "" && !strings.Contains(cmd, rule.Command) {
+		if rule.CommandContains != "" &&
+			!strings.Contains(cmd, rule.CommandContains) {
 			continue
 		}
 		if len(rule.Operations) > 0 && !stringSliceContains(rule.Operations, denial.Operation) {
@@ -1325,7 +1330,7 @@ func shouldFilterMacOSSandboxDenial(
 		if hasRawContains && !stringSliceContainsSubstring(rule.RawContains, denial.Raw) {
 			continue
 		}
-		if rule.Command == "" && len(rule.Operations) == 0 &&
+		if rule.CommandContains == "" && len(rule.Operations) == 0 &&
 			len(rule.Targets) == 0 && !hasRawContains {
 			continue
 		}

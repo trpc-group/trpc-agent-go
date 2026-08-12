@@ -52,12 +52,12 @@ A completed probe that finds no usable event stream is treated as a confirmed
 host limitation for that runtime and is not retried. A completed probe that
 finds an event stream but neither default-deny nor explicit-deny tagging
 (`StrongCorrelation=false`) is likewise treated as a confirmed limitation:
-capability fields still report `EventStreamAvailable=true` with both taggable
-flags false, but the runtime does not start a production monitor, does not
-enable per-run collection, and does not incur the settle wait. Incomplete
-probes and transient production-monitor startup failures remain retryable on
-later diagnostics-enabled runs. `Close` still permanently disables diagnostics
-for the runtime.
+capability fields still report `EventStreamAvailable=true` with both per-form
+collectibility flags false, but the runtime does not start a production monitor,
+does not enable per-run collection, and does not incur the settle wait.
+Incomplete probes and transient production-monitor startup failures remain
+retryable on later diagnostics-enabled runs. `Close` still permanently disables
+diagnostics for the runtime.
 
 The first diagnostics-enabled `RunProgram` may spend a short time probing when
 the process cache is cold. Later runs reuse the cached capability result and,
@@ -107,22 +107,25 @@ adds dedicated default-deny and explicit-deny messages for the probe paths.
 
 ```go
 type DiagnosticsCapability struct {
-    Supported            bool // macOS managed backend
-    EventStreamAvailable bool // host can deliver denial log events
-    StrongCorrelation    bool // denials can be tied to this run
-    ProbeCompleted       bool // probe finished reliably
-    ExplicitDenyTaggable bool // explicit deny rules can carry runTag
-    DefaultDenyTaggable  bool // default-deny events can carry runTag
+    Supported                    bool // active backend supports diagnostics
+    EventStreamAvailable         bool // host can deliver denial log events
+    StrongCorrelation            bool // denials can be tied to this run
+    ProbeCompleted               bool // probe finished reliably
+    ExplicitDenialsCollectible   bool // explicit denials have correlation coverage
+    DefaultDenialsCollectible    bool // default denials have correlation coverage
 }
 ```
 
 Capabilities are probed end-to-end with `sandbox-exec` and cached per macOS
 version within the process after a completed probe. `ProbeCompleted=false`
 means the probe itself did not finish reliably. `ProbeCompleted=true` with
-`DefaultDenyTaggable=false` or `ExplicitDenyTaggable=false` means probing
-finished and that specific deny-message form was not observed on this host.
-When both tag forms are false, `StrongCorrelation` is false:
-`EventStreamAvailable` may still be true, but production collection stays off.
+`DefaultDenialsCollectible=false` or `ExplicitDenialsCollectible=false` means
+probing finished but that denial form does not have strong-correlation coverage
+on this host. On macOS, Seatbelt message tagging establishes this coverage, so
+`StrongCorrelation` is true when either form is collectible. Other backends may
+use different correlation mechanisms. When neither form is collectible on
+macOS, `EventStreamAvailable` may still be true, but production collection stays
+off.
 
 ## Outputs
 
@@ -205,8 +208,9 @@ rt := sandbox.NewRuntime(
 )
 ```
 
-`DenialIgnoreRule` supports optional `Command` substring matching against
-`RunProgramSpec.Cmd` only, `Operations`, structured `Targets`
+`DenialIgnoreRule` supports optional `CommandContains` substring matching
+against `RunProgramSpec.Cmd` only, exact backend-native `Operations`, structured
+`Targets`
 (`Exact`, `Prefix`, `Suffix`, `Glob`), and `RawContains`. `RawRegex` is
 intentionally not supported. Empty `RawContains` entries are ignored; a list
 containing only empty strings is treated as unset.

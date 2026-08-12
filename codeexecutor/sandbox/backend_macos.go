@@ -29,17 +29,16 @@ func backendCapabilities(backend BackendType, profile PermissionProfile) backend
 	supported := backend == BackendAuto || backend == BackendMacOSSandboxExec
 	managed := supported && profile.enforcement() == enforcementManaged
 	return backendCapabilitiesInfo{
-		OSSandbox:                managed,
-		PTY:                      false,
-		Stdin:                    true,
-		NetworkIsolation:         managed,
-		DenyReadGlob:             managed,
-		Snapshot:                 false,
-		Ports:                    false,
-		ExternalPathGrants:       managed,
-		ProtectedPathMasks:       managed,
-		PerCommandGrants:         true,
-		RuntimeDenialDiagnostics: managed,
+		OSSandbox:          managed,
+		PTY:                false,
+		Stdin:              true,
+		NetworkIsolation:   managed,
+		DenyReadGlob:       managed,
+		Snapshot:           false,
+		Ports:              false,
+		ExternalPathGrants: managed,
+		ProtectedPathMasks: managed,
+		PerCommandGrants:   true,
 	}
 }
 
