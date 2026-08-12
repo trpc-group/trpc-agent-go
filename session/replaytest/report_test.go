@@ -96,11 +96,11 @@ func TestMarshalReportPreservesExplicitNullDifferenceValues(t *testing.T) {
 	if got := decoded.Differences[0]["actual"]; string(got) != `"value"` {
 		t.Fatalf("actual encoded as %q", got)
 	}
-	if got := decoded.Differences[1]["baseline"]; string(got) != `"<missing>"` {
-		t.Fatalf("legacy missing baseline encoded as %q", got)
-	}
 	if got := decoded.Differences[1]["baseline_missing"]; string(got) != "true" {
 		t.Fatalf("missing baseline marker encoded as %q", got)
+	}
+	if got, ok := decoded.Differences[1]["baseline"]; ok {
+		t.Fatalf("missing baseline encoded as value %q", got)
 	}
 	if got, ok := decoded.Differences[1]["actual"]; !ok || string(got) != "null" {
 		t.Fatalf("explicit null actual encoded as %q, present=%v", got, ok)
@@ -138,33 +138,15 @@ func TestMarshalReportDistinguishesMissingFromLiteralMissingText(t *testing.T) {
 	}
 	baselineMissing := byPath["$.baseline"]
 	actualMissing := byPath["$.actual"]
-	if string(baselineMissing["baseline"]) != `"<missing>"` ||
+	if _, ok := baselineMissing["baseline"]; ok ||
 		string(baselineMissing["baseline_missing"]) != "true" ||
 		string(baselineMissing["actual"]) != `"<missing>"` {
 		t.Fatalf("baseline missing wire = %s", encoded)
 	}
 	if string(actualMissing["baseline"]) != `"<missing>"` ||
-		string(actualMissing["actual"]) != `"<missing>"` ||
+		actualMissing["actual"] != nil ||
 		string(actualMissing["actual_missing"]) != "true" {
 		t.Fatalf("actual missing wire = %s", encoded)
-	}
-}
-
-func TestDirectReportEncodingKeepsLegacyMissingText(t *testing.T) {
-	report := Report{Differences: []Difference{{
-		Case: "case", Backend: "sqlite", Path: "$.missing",
-		Baseline: missingValueMarker, Actual: "value",
-	}}}
-	encoded, err := json.Marshal(report)
-	if err != nil {
-		t.Fatalf("json.Marshal() error = %v", err)
-	}
-	var decoded Report
-	if err := json.Unmarshal(encoded, &decoded); err != nil {
-		t.Fatalf("json.Unmarshal() error = %v", err)
-	}
-	if got := decoded.Differences[0].Baseline; got != missingValue {
-		t.Fatalf("direct report encoding changed legacy marker: %s", encoded)
 	}
 }
 

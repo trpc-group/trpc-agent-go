@@ -650,6 +650,42 @@ func TestNormalizeSnapshotBoundsAllTimestampCollections(t *testing.T) {
 	}
 }
 
+func TestNormalizeSnapshotNormalizesSummaryBoundaryCutoffPrecision(t *testing.T) {
+	base := time.Unix(100, 0)
+	baseline := Snapshot{Sessions: []SessionSnapshot{{
+		Events: []EventSnapshot{{Timestamp: base}},
+		Summaries: []SummarySnapshot{{
+			FilterKey: "branch/main",
+			UpdatedAt: base.Add(2 * time.Millisecond),
+			Boundary: map[string]any{
+				"cutoff_at":     base.Add(500 * time.Microsecond),
+				"last_event_id": "event-1",
+			},
+		}},
+	}}}
+	actual := Snapshot{Sessions: []SessionSnapshot{{
+		Events: []EventSnapshot{{Timestamp: base}},
+		Summaries: []SummarySnapshot{{
+			FilterKey: "branch/main",
+			UpdatedAt: base.Add(2 * time.Millisecond),
+			Boundary: map[string]any{
+				"cutoff_at":     base,
+				"last_event_id": "event-1",
+			},
+		}},
+	}}}
+	if got, want := NormalizeSnapshot(actual, DefaultNormalizeOptions()),
+		NormalizeSnapshot(baseline, DefaultNormalizeOptions()); !reflect.DeepEqual(got, want) {
+		t.Fatalf("precision-truncated cutoff differs:\ngot:  %#v\nwant: %#v", got, want)
+	}
+
+	actual.Sessions[0].Summaries[0].Boundary["cutoff_at"] = base.Add(2 * time.Millisecond)
+	if got, want := NormalizeSnapshot(actual, DefaultNormalizeOptions()),
+		NormalizeSnapshot(baseline, DefaultNormalizeOptions()); reflect.DeepEqual(got, want) {
+		t.Fatalf("material cutoff shift was normalized away:\ngot:  %#v\nwant: %#v", got, want)
+	}
+}
+
 func TestNormalizeSnapshotAssignsInvocationIDsAfterTrackSorting(t *testing.T) {
 	baseline := Snapshot{Sessions: []SessionSnapshot{{Tracks: []TrackSnapshot{
 		{Name: "b", Events: []TrackEventSnapshot{{InvocationID: "baseline-b"}}},

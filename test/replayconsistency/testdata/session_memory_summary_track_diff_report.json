@@ -124,7 +124,6 @@
         "track_name": "tools"
       },
       "baseline": "timeout",
-      "actual": "<missing>",
       "actual_missing": true,
       "allowed_diff": false,
       "explanation": "track error payload was lost"

@@ -48,8 +48,7 @@ func NewCapabilityProbeReport(results []CapabilityProbeResult) Report {
 
 // MarshalReport encodes an indented, deterministic JSON report.
 // MarshalReport represents missing comparison values with baseline_missing or
-// actual_missing while retaining the legacy "<missing>" baseline or actual value
-// for compatibility.
+// actual_missing instead of encoding a colliding baseline or actual value.
 func MarshalReport(report Report) ([]byte, error) {
 	report.Differences = append([]Difference(nil), report.Differences...)
 	sortDifferences(report.Differences)
@@ -82,8 +81,8 @@ type differenceWire struct {
 	Backend         string          `json:"backend"`
 	Path            string          `json:"path"`
 	Locator         Locator         `json:"locator,omitempty"`
-	Baseline        json.RawMessage `json:"baseline"`
-	Actual          json.RawMessage `json:"actual"`
+	Baseline        json.RawMessage `json:"baseline,omitempty"`
+	Actual          json.RawMessage `json:"actual,omitempty"`
 	BaselineMissing bool            `json:"baseline_missing,omitempty"`
 	ActualMissing   bool            `json:"actual_missing,omitempty"`
 	AllowedDiff     bool            `json:"allowed_diff"`
@@ -99,21 +98,21 @@ func reportForWire(report Report) (reportWire, error) {
 	for i, difference := range report.Differences {
 		baselineMissing := isMissingValue(difference.Baseline)
 		actualMissing := isMissingValue(difference.Actual)
-		baselineValue := difference.Baseline
-		if baselineMissing {
-			baselineValue = missingValue
+		var baseline json.RawMessage
+		if !baselineMissing {
+			encoded, err := marshalReportValue(difference.Baseline)
+			if err != nil {
+				return reportWire{}, err
+			}
+			baseline = encoded
 		}
-		actualValue := difference.Actual
-		if actualMissing {
-			actualValue = missingValue
-		}
-		baseline, err := marshalReportValue(baselineValue)
-		if err != nil {
-			return reportWire{}, err
-		}
-		actual, err := marshalReportValue(actualValue)
-		if err != nil {
-			return reportWire{}, err
+		var actual json.RawMessage
+		if !actualMissing {
+			encoded, err := marshalReportValue(difference.Actual)
+			if err != nil {
+				return reportWire{}, err
+			}
+			actual = encoded
 		}
 		wired.Differences[i] = differenceWire{
 			Case: difference.Case, Backend: difference.Backend, Path: difference.Path,

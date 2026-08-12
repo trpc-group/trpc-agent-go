@@ -40,6 +40,12 @@ type normalizationIDs struct {
 	toolCalls   *logicalIDMap
 }
 
+type mapTimeReference struct {
+	values map[string]any
+	key    string
+	value  *time.Time
+}
+
 // DefaultNormalizeOptions returns conservative cross-backend defaults.
 func DefaultNormalizeOptions() NormalizeOptions {
 	return NormalizeOptions{
@@ -426,13 +432,26 @@ func sessionSortKey(snapshot SessionSnapshot) string {
 func normalizeSessionTimes(snapshot *SessionSnapshot, precision time.Duration) {
 	normalizeSessionMetadataTimes(&snapshot.CreatedAt, &snapshot.UpdatedAt)
 	conversationTimes := make([]*time.Time, 0, len(snapshot.Events)+len(snapshot.Summaries))
+	var boundaryTimes []mapTimeReference
 	for i := range snapshot.Events {
 		conversationTimes = append(conversationTimes, &snapshot.Events[i].Timestamp)
 	}
 	for i := range snapshot.Summaries {
 		conversationTimes = append(conversationTimes, &snapshot.Summaries[i].UpdatedAt)
+		if cutoff, ok := summaryBoundaryCutoffTime(snapshot.Summaries[i].Boundary); ok {
+			value := cutoff
+			boundaryTimes = append(boundaryTimes, mapTimeReference{
+				values: snapshot.Summaries[i].Boundary,
+				key:    "cutoff_at",
+				value:  &value,
+			})
+			conversationTimes = append(conversationTimes, &value)
+		}
 	}
 	normalizeTimes(conversationTimes, precision)
+	for _, boundaryTime := range boundaryTimes {
+		boundaryTime.values[boundaryTime.key] = *boundaryTime.value
+	}
 	trackTimes := make([]*time.Time, 0)
 	for i := range snapshot.Tracks {
 		for j := range snapshot.Tracks[i].Events {
@@ -440,6 +459,17 @@ func normalizeSessionTimes(snapshot *SessionSnapshot, precision time.Duration) {
 		}
 	}
 	normalizeTimes(trackTimes, precision)
+}
+
+func summaryBoundaryCutoffTime(boundary map[string]any) (time.Time, bool) {
+	if boundary == nil {
+		return time.Time{}, false
+	}
+	value, ok := boundary["cutoff_at"].(time.Time)
+	if !ok || value.IsZero() {
+		return time.Time{}, false
+	}
+	return value, true
 }
 
 func normalizeSessionMetadataTimes(createdAt, updatedAt *time.Time) {
