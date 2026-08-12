@@ -279,6 +279,78 @@ Agent: Nice to meet you, Alice! It's great to connect with someone from TechCorp
 (Background: Extractor analyzes conversation and creates memory automatically)
 ```
 
+### Opt-in Auto Update Policy
+
+The built-in extractor keeps its historical behavior unless a policy is
+explicitly configured. Existing applications therefore require no migration:
+
+```go
+// Merge Similar is the default and preserves the historical behavior.
+memExtractor := extractor.NewExtractor(extractorModel)
+```
+
+For applications that prefer preserving long-term history, enable the update
+policy explicitly:
+
+```go
+memExtractor := extractor.NewExtractor(
+    extractorModel,
+    extractor.WithUpdatePolicy(extractor.UpdatePolicyPreserveHistory),
+)
+```
+
+The policy is a built-in extractor capability captured when the Auto memory
+worker is constructed. `Metadata()` remains descriptive and does not control
+runtime behavior. A transparent decorator can preserve built-in capabilities
+by implementing `UnwrapMemoryExtractor() extractor.MemoryExtractor`; nested
+cooperating decorators are supported. A custom extractor or non-cooperating
+decorator uses Merge Similar. Nil unwrap results and unwrap cycles also fall
+back to Merge Similar.
+
+The update policies affect only operations produced by background Auto
+extraction. An agent or application explicitly calling `memory_update` keeps
+the existing tool semantics.
+
+| Update policy | Auto extraction behavior |
+| --- | --- |
+| `UpdatePolicyMergeSimilar` | Uses the existing similarity-based reconciliation. This is the default. |
+| `UpdatePolicyPreserveHistory` | Drops exact duplicates, updates only for non-conflicting enrichment, and keeps changes as separate entries. Its extractor prompt reserves delete/clear for explicit user requests. |
+| `UpdatePolicyAppendOnly` | Emits only non-duplicate adds: updates become adds, while delete and clear operations are filtered. |
+
+Merge Similar retains the historical user-only query when retrieving existing
+memories. Preserve History and Append Only use user and assistant conversation
+text, excluding tool protocol messages, to retrieve the entries evaluated by
+their policy rules. This query is bounded to 7 KiB with UTF-8-safe truncation.
+
+Preserve History candidate reconciliation compares only the existing entries
+already supplied to the extractor. Exact duplicate checks also consider earlier
+operations from the same extraction batch, but distinct operations are not
+merged. Retrieval scores rank candidates but cannot by themselves authorize an
+update or drop. Event identity, meaningful old tokens, numbers, dates, negation,
+participants, and locations must remain compatible. Topics are merged only
+after an update has passed these checks.
+The directional token-coverage bounds (`0.95` for the existing memory and
+`0.70` for the candidate) are conservative implementation heuristics, not
+values selected by benchmark tuning. When the checks cannot establish a safe
+enrichment, the policy keeps the candidate as a separate memory.
+For example, adding a time to the same dated visit may update that visit;
+changing an employer or describing a visit on another date creates a new
+entry. Preserve History uses the same runtime handling for Delete and Clear as
+Merge Similar: operations selected by the extractor pass through unchanged.
+The policy-specific extractor prompt instructs the model to use Delete only for
+an explicit scoped forget request and Clear only for an explicit request to
+forget all stored information. The worker does not attempt to reinterpret
+natural-language deletion intent with regular expressions.
+
+The update policy does not change `memory.Service`, `MemoryExtractor`, the stored
+JSON representation, memory IDs, or database schemas. It does not rewrite
+existing entries. All policies retain Auto memory's historical best-effort
+persistence behavior: an individual write failure is logged, later operations
+continue, and the extraction watermark advances after the batch is processed.
+
+To roll back, remove the option or set it to `UpdatePolicyMergeSimilar`. No data
+migration is required.
+
 ### Configuration Comparison
 
 | Step                | Agentic Mode                        | Auto Mode                              |
