@@ -456,28 +456,36 @@ func (e *Embedder) getBackoffDuration(attempt int) time.Duration {
 	return e.retryBackoff[len(e.retryBackoff)-1]
 }
 
-func (e *Embedder) response(ctx context.Context, text string) (rsp *openai.CreateEmbeddingResponse, err error) {
+func (e *Embedder) response(ctx context.Context, text string) (*openai.CreateEmbeddingResponse, error) {
 	if text == "" {
 		return nil, fmt.Errorf("text cannot be empty")
 	}
-	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationEmbeddings, e.model))
-	embeddingAttributes := &itelemetry.EmbeddingAttributes{
-		RequestEncodingFormat: &e.encodingFormat,
-		RequestModel:          e.model,
-		Dimensions:            e.dimensions,
-	}
-	defer func() {
-		embeddingAttributes.Error = err
-		if rsp != nil {
-			embeddingAttributes.InputToken = &rsp.Usage.PromptTokens
-		}
-		itelemetry.TraceEmbedding(span, embeddingAttributes)
-		span.End()
-	}()
+	return e.send(ctx, e.newRequest(openai.EmbeddingNewParamsInputUnion{OfString: openai.String(text)}))
+}
 
-	// Create embedding request.
+// batchResponse issues one embeddings request carrying all texts as an input
+// array, so the provider computes every vector in a single call.
+func (e *Embedder) batchResponse(
+	ctx context.Context,
+	texts []string,
+) (*openai.CreateEmbeddingResponse, error) {
+	if len(texts) == 0 {
+		return nil, fmt.Errorf("texts cannot be empty")
+	}
+	for i, text := range texts {
+		if text == "" {
+			return nil, fmt.Errorf("text at index %d cannot be empty", i)
+		}
+	}
+	return e.send(ctx, e.newRequest(openai.EmbeddingNewParamsInputUnion{OfArrayOfStrings: slices.Clone(texts)}))
+}
+
+// newRequest builds an embeddings request for input, applying the model,
+// encoding format, user, and dimensions settings that every request of this
+// embedder shares whatever the shape of its input.
+func (e *Embedder) newRequest(input openai.EmbeddingNewParamsInputUnion) openai.EmbeddingNewParams {
 	request := openai.EmbeddingNewParams{
-		Input:          openai.EmbeddingNewParamsInputUnion{OfString: openai.String(text)},
+		Input:          input,
 		Model:          e.model,
 		EncodingFormat: openai.EmbeddingNewParamsEncodingFormat(e.encodingFormat),
 	}
@@ -495,30 +503,15 @@ func (e *Embedder) response(ctx context.Context, text string) (rsp *openai.Creat
 	if e.dimensionsSet || isTextEmbedding3Model(e.model) {
 		request.Dimensions = openai.Int(int64(e.dimensions))
 	}
-
-	// Combine request options.
-	requestOpts := make([]option.RequestOption, len(e.requestOptions))
-	copy(requestOpts, e.requestOptions)
-
-	// Call OpenAI embeddings API.
-	return e.client.Embeddings.New(ctx, request, requestOpts...)
+	return request
 }
 
-// batchResponse issues one embeddings request carrying all texts as an input
-// array. It mirrors response, including the model, encoding format, user,
-// dimensions forwarding rules, request options, and tracing.
-func (e *Embedder) batchResponse(
+// send calls the embeddings API within an embedding span that records the
+// request attributes, the prompt tokens the provider reported, and the error.
+func (e *Embedder) send(
 	ctx context.Context,
-	texts []string,
+	request openai.EmbeddingNewParams,
 ) (rsp *openai.CreateEmbeddingResponse, err error) {
-	if len(texts) == 0 {
-		return nil, fmt.Errorf("texts cannot be empty")
-	}
-	for i, text := range texts {
-		if text == "" {
-			return nil, fmt.Errorf("text at index %d cannot be empty", i)
-		}
-	}
 	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationEmbeddings, e.model))
 	embeddingAttributes := &itelemetry.EmbeddingAttributes{
 		RequestEncodingFormat: &e.encodingFormat,
@@ -533,24 +526,6 @@ func (e *Embedder) batchResponse(
 		itelemetry.TraceEmbedding(span, embeddingAttributes)
 		span.End()
 	}()
-
-	// Create embedding request with an array input so the provider computes
-	// every vector in a single call.
-	request := openai.EmbeddingNewParams{
-		Input:          openai.EmbeddingNewParamsInputUnion{OfArrayOfStrings: slices.Clone(texts)},
-		Model:          e.model,
-		EncodingFormat: openai.EmbeddingNewParamsEncodingFormat(e.encodingFormat),
-	}
-
-	// Set optional parameters.
-	if e.user != "" {
-		request.User = openai.String(e.user)
-	}
-
-	// Forward dimensions using the same rules as the single-text path.
-	if e.dimensionsSet || isTextEmbedding3Model(e.model) {
-		request.Dimensions = openai.Int(int64(e.dimensions))
-	}
 
 	// Combine request options.
 	requestOpts := make([]option.RequestOption, len(e.requestOptions))
