@@ -209,9 +209,11 @@ func WithDocConcurrency(n int) LoadOption {
 //
 // A batch is embedded and validated as a whole before any vector is written,
 // so an invalid response stores no documents from that batch. A failed batch
-// is not retried as individual requests. The caller is responsible for
-// choosing a value within the provider's per-request input, token, and payload
-// limits.
+// is not retried as individual requests, although an embedder may retry the
+// batch as a whole exactly as it may retry a per-document request, so the
+// counts above are the requests loading issues rather than the attempts that
+// reach the provider. The caller is responsible for choosing a value within
+// the provider's per-request input, token, and payload limits.
 //
 // This option controls embedding request grouping only; it is independent of
 // WithSourceConcurrency and WithDocConcurrency.

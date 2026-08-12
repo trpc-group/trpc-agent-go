@@ -346,10 +346,11 @@ The two options compose: `WithDocConcurrency(n)` bounds the number of concurrent
 >
 > - A batch never spans sources, because each source is loaded as an independent unit of work. Loading `k` sources issues the sum of `ceil(Ni/B)` requests over all sources, so splitting the same documents across many small sources reduces the benefit; `k` sources of one document each still issue `k` requests.
 > - A batch is embedded and validated as a whole. If the provider returns the wrong number of vectors, an empty vector, an inconsistent dimension, or a non-finite value, the whole batch fails and none of its documents are written.
-> - A failed batch is not retried as individual requests, so it never silently multiplies the request count.
+> - A failed batch is not retried as individual requests, so it never silently multiplies the request count. An embedder may still retry the batch as a whole, exactly as it may retry a per-document request, so `N` and `ceil(N/B)` count the requests loading issues rather than the attempts that reach the provider.
 > - If a vector store write fails part-way through a batch, the documents already written are kept and `Load` returns the error, matching the existing non-transactional behavior.
 > - Choose `B` within the provider's per-request limits on input count, total tokens, and payload size. The framework does not split a batch to satisfy those limits.
-> - Batching reduces the number of embedding requests. It does not change the input text, the model, or the resulting vectors, and it does not reduce the number of vector store writes; measure your own workload before assuming an end-to-end throughput gain.
+> - Each input still receives exactly one vector, matched back to it by response index. Whether a provider returns identical vectors for a text embedded alone and in a batch is a property of that provider, not a framework guarantee.
+> - Batching reduces the number of embedding requests. It does not change the input text or the model, and it does not reduce the number of vector store writes; measure your own workload before assuming an end-to-end throughput gain.
 
 The [batch embedding example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/features/batch-embedding) loads the same file with and without a batch size and prints how many embedding requests each load issued.
 
