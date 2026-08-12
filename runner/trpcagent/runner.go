@@ -78,6 +78,9 @@ func (r *runner) Run(
 	if err != nil {
 		return nil, err
 	}
+	if err := directRunError(response); err != nil {
+		return nil, err
+	}
 	if err := validateRunResponse(options, response); err != nil {
 		return nil, err
 	}
@@ -88,6 +91,40 @@ func (r *runner) Run(
 	}
 	close(ch)
 	return ch, nil
+}
+
+type remoteDirectRunError struct {
+	message  string
+	sentinel error
+}
+
+func (e *remoteDirectRunError) Error() string {
+	if e.message == "" {
+		return "trpcagent runner: remote run failed: " + e.sentinel.Error()
+	}
+	return "trpcagent runner: remote run failed: " + e.message
+}
+
+func (e *remoteDirectRunError) Unwrap() error {
+	return e.sentinel
+}
+
+func directRunError(response *runResponse) error {
+	if response == nil || response.DirectRunErrorKind == "" {
+		return nil
+	}
+	sentinel := response.DirectRunErrorKind.Sentinel()
+	if sentinel == nil {
+		return fmt.Errorf(
+			"trpcagent runner: remote run failed with unknown error kind %q: %s",
+			response.DirectRunErrorKind,
+			response.ErrorMessage,
+		)
+	}
+	return &remoteDirectRunError{
+		message:  response.ErrorMessage,
+		sentinel: sentinel,
+	}
 }
 
 // Describe fetches the remote app structure.

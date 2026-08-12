@@ -26,6 +26,7 @@ import (
 	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/profilecompiler"
+	"trpc.group/trpc-go/trpc-agent-go/internal/trpcagentwire"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -206,9 +207,10 @@ func runErrorResponse(input model.Message, appName string, requestID string, err
 		status = atrace.TraceStatusIncomplete
 	}
 	response := runResponse{
-		Status:       status,
-		Messages:     []model.Message{input},
-		ErrorMessage: err.Error(),
+		Status:             status,
+		Messages:           []model.Message{input},
+		ErrorMessage:       err.Error(),
+		DirectRunErrorKind: trpcagentwire.DirectRunErrorKindOf(err),
 	}
 	appendRunTerminalEvents(&response, appName, requestID, err)
 	return response

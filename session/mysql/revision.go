@@ -21,7 +21,8 @@ import (
 
 func (s *Service) revisionStore() sqlrevision.Store {
 	return sqlrevision.Store{
-		Dialect: sqlrevision.MySQL,
+		Dialect:    sqlrevision.MySQL,
+		SoftDelete: s.opts.softDelete,
 		Tables: sqlrevision.Tables{
 			States:    s.tableSessionStates,
 			Events:    s.tableSessionEvents,

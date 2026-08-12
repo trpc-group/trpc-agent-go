@@ -125,6 +125,72 @@ func RunAsync(t *testing.T, service session.Service) {
 	}
 }
 
+// RunSoftDeletedSummaryHistory verifies that replacement restores the active
+// summary projection without removing summaries retained by an earlier
+// soft-deleted session with the same key. The service must have an active
+// summarizer, and countDeletedSummaries must count tombstoned summary rows for
+// the supplied key.
+func RunSoftDeletedSummaryHistory(
+	t *testing.T,
+	service session.Service,
+	countDeletedSummaries func(session.Key) (int, error),
+) {
+	t.Helper()
+	ctx := context.Background()
+	key := contractKey(t, "soft-deleted-summary-history")
+
+	oldSession, err := service.CreateSession(ctx, key, nil)
+	requireNoError(t, err)
+	requireNoError(t, service.AppendEvent(ctx, oldSession, messageEvent(
+		"old-baseline", "old-baseline", "old-baseline-invocation", model.RoleUser,
+	)))
+	requireNoError(t, service.CreateSessionSummary(
+		ctx, oldSession, session.SummaryFilterKeyAllContents, true,
+	))
+	requireNoError(t, service.DeleteSession(ctx, key))
+	deleted, err := countDeletedSummaries(key)
+	requireNoError(t, err)
+	if deleted != 1 {
+		t.Fatalf("soft-deleted summaries before recreation = %d, want 1", deleted)
+	}
+
+	active, err := service.CreateSession(ctx, key, nil)
+	requireNoError(t, err)
+	requireNoError(t, service.AppendEvent(ctx, active, messageEvent(
+		"new-baseline", "new-baseline", "new-baseline-invocation", model.RoleUser,
+	)))
+	requireNoError(t, service.CreateSessionSummary(
+		ctx, active, session.SummaryFilterKeyAllContents, true,
+	))
+	turnCtx := revision.ContextWithTurnStart(ctx, revision.TurnStart{
+		RequestID:    "latest",
+		InvocationID: "latest-invocation",
+	})
+	requireNoError(t, service.AppendEvent(
+		turnCtx,
+		active,
+		messageEvent("latest", "latest", "latest-invocation", model.RoleUser),
+	))
+	result, err := revision.ReplaceLatestTurn(
+		ctx,
+		service,
+		revision.LatestTurnReplacementRequest{
+			Key:               key,
+			ExpectedRequestID: "latest",
+			IdempotencyKey:    "replacement",
+		},
+	)
+	requireNoError(t, err)
+	if result.ActiveSession.Summaries[session.SummaryFilterKeyAllContents] == nil {
+		t.Fatal("restored active summary is missing")
+	}
+	deleted, err = countDeletedSummaries(key)
+	requireNoError(t, err)
+	if deleted != 1 {
+		t.Fatalf("soft-deleted summaries after replacement = %d, want 1", deleted)
+	}
+}
+
 func testUnfinishedRestoreAndFencing(t *testing.T, service session.Service) {
 	ctx := context.Background()
 	key := contractKey(t, "unfinished")

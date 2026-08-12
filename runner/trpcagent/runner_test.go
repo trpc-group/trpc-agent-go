@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -607,7 +608,69 @@ func TestRunForwardsLatestTurnReplacementToServerTRPCAgent(t *testing.T) {
 	assert.Equal(t, "request-new", options.RequestID)
 }
 
+func TestRunPreservesLatestTurnReplacementErrorsFromServerTRPCAgent(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{name: "unsupported", err: rootrunner.ErrLatestTurnReplacementUnsupported},
+		{name: "conflict", err: rootrunner.ErrLatestTurnReplacementConflict},
+		{name: "unavailable", err: rootrunner.ErrLatestTurnReplacementUnavailable},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			serverRunner := &fakeServerRunner{err: fmt.Errorf("backend rejected edit: %w", tt.err)}
+			server, err := servertrpcagent.New(
+				servertrpcagent.WithAppName("sports-agent"),
+				servertrpcagent.WithRunner(serverRunner),
+			)
+			require.NoError(t, err)
+			httpServer := httptest.NewServer(server.Handler())
+			defer httpServer.Close()
+
+			apiRunner, err := New("sports-agent", WithTarget(httpServer.URL))
+			require.NoError(t, err)
+			events, err := apiRunner.Run(
+				context.Background(),
+				"user-1",
+				"session-1",
+				model.NewUserMessage("edited input"),
+				agent.WithLatestTurnReplacement("request-old", "request-new"),
+			)
+			assert.Nil(t, events)
+			require.Error(t, err)
+			assert.ErrorIs(t, err, tt.err)
+			assert.ErrorContains(t, err, "backend rejected edit")
+		})
+	}
+}
+
+func TestDirectRunErrorRejectsUnknownWireKind(t *testing.T) {
+	assert.NoError(t, directRunError(nil))
+	assert.NoError(t, directRunError(&runResponse{}))
+	err := directRunError(&runResponse{
+		DirectRunErrorKind: "latest_turn_replacement_conflict",
+	})
+	require.EqualError(
+		t,
+		err,
+		"trpcagent runner: remote run failed: "+
+			rootrunner.ErrLatestTurnReplacementConflict.Error(),
+	)
+	assert.ErrorIs(t, err, rootrunner.ErrLatestTurnReplacementConflict)
+	err = directRunError(&runResponse{
+		DirectRunErrorKind: "future_kind",
+		ErrorMessage:       "remote rejected run",
+	})
+	require.EqualError(
+		t,
+		err,
+		`trpcagent runner: remote run failed with unknown error kind "future_kind": remote rejected run`,
+	)
+}
+
 func TestNormalizeRunIdentityRejectsInvalidLatestTurnReplacement(t *testing.T) {
+	require.EqualError(t, normalizeRunIdentity(nil), "trpcagent runner: run options are nil")
 	tests := []struct {
 		name    string
 		options agent.RunOptions
@@ -619,6 +682,20 @@ func TestNormalizeRunIdentityRejectsInvalidLatestTurnReplacement(t *testing.T) {
 				agent.WithLatestTurnReplacement("", "request-new"),
 			),
 			want: "expected request id is empty",
+		},
+		{
+			name: "empty replacement request id",
+			options: agent.NewRunOptions(
+				agent.WithLatestTurnReplacement("request-old", ""),
+			),
+			want: "replacement request id is empty",
+		},
+		{
+			name: "matching request ids",
+			options: agent.NewRunOptions(
+				agent.WithLatestTurnReplacement("request-same", "request-same"),
+			),
+			want: "replacement request ids must differ",
 		},
 		{
 			name: "conflicting request id",
@@ -916,6 +993,7 @@ type fakeServerRunner struct {
 	message    model.Message
 	runOptions []agent.RunOptions
 	events     []*event.Event
+	err        error
 }
 
 func (r *fakeServerRunner) Run(
@@ -928,6 +1006,9 @@ func (r *fakeServerRunner) Run(
 	r.message = message
 	options := agent.NewRunOptions(runOpts...)
 	r.runOptions = append(r.runOptions, options)
+	if r.err != nil {
+		return nil, r.err
+	}
 	ch := make(chan *event.Event, len(r.events))
 	for _, evt := range r.events {
 		eventValue := *evt

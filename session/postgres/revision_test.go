@@ -30,10 +30,14 @@ func TestRevisionStoreAndAttachGeneration(t *testing.T) {
 	s := createTestService(t, db)
 	s.tableSessionRevisions = "session_revisions"
 	s.tableRevisionArchives = "session_revision_archives"
+	s.opts.softDelete = true
 
 	store := s.revisionStore()
 	assert.Equal(t, "session_states", store.Tables.States)
 	assert.Equal(t, "session_revision_archives", store.Tables.Archives)
+	assert.True(t, store.SoftDelete)
+	s.opts.softDelete = false
+	assert.False(t, s.revisionStore().SoftDelete)
 
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
 	sess := session.NewSession(key.AppName, key.UserID, key.SessionID)
@@ -46,6 +50,16 @@ func TestRevisionStoreAndAttachGeneration(t *testing.T) {
 	generation, ok := sessionrevision.Generation(sess)
 	assert.True(t, ok)
 	assert.Equal(t, uint64(7), generation)
+	require.NoError(t, mock.ExpectationsWereMet())
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT record FROM session_revisions").
+		WithArgs(key.AppName, key.UserID, key.SessionID).
+		WillReturnRows(sqlmock.NewRows([]string{"record"}).AddRow([]byte(`{"generation":8}`)))
+	mock.ExpectCommit()
+	generation, err = s.revisionGeneration(context.Background(), key)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(8), generation)
 	require.NoError(t, mock.ExpectationsWereMet())
 
 	missing := session.Key{AppName: "app", UserID: "user", SessionID: "missing"}
@@ -132,6 +146,7 @@ func TestRevisionFlushBarriers(t *testing.T) {
 
 	s.opts.enableAsyncPersist = false
 	require.NoError(t, s.flushRevisionPersistence(context.Background(), key))
+	require.NoError(t, s.flushEventPersistence(context.Background(), key))
 	require.NoError(t, s.flushTrackPersistence(context.Background(), key))
 	s.opts.enableAsyncPersist = true
 

@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -98,17 +99,19 @@ func (f *fakeStructureAgent) Export(context.Context, astructure.ChildExporter) (
 }
 
 type scriptedRunner struct {
-	events <-chan *event.Event
-	err    error
+	events     <-chan *event.Event
+	err        error
+	runOptions []agent.RunOptions
 }
 
 func (r *scriptedRunner) Run(
-	context.Context,
-	string,
-	string,
-	model.Message,
-	...agent.RunOption,
+	_ context.Context,
+	_ string,
+	_ string,
+	_ model.Message,
+	runOpts ...agent.RunOption,
 ) (<-chan *event.Event, error) {
+	r.runOptions = append(r.runOptions, agent.NewRunOptions(runOpts...))
 	return r.events, r.err
 }
 
@@ -368,12 +371,84 @@ func TestServerRunReturnsFailedRunResponseWhenRunnerReturnsError(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response))
 	assert.Equal(t, atrace.TraceStatusFailed, response.Status)
 	assert.Equal(t, "agent run failed directly", response.ErrorMessage)
+	assert.Empty(t, response.DirectRunErrorKind)
 	assert.Equal(t, []model.Message{input}, response.Messages)
 	require.Len(t, response.Events, 2)
 	assert.True(t, response.Events[0].IsTerminalError())
 	assert.True(t, response.Events[1].IsRunnerCompletion())
 	assert.Equal(t, "agent run failed directly", response.Events[1].Error.Message)
 	assert.NotEmpty(t, response.Events[1].RequestID)
+}
+
+func TestServerRunForwardsLatestTurnReplacement(t *testing.T) {
+	completion := event.NewResponseEvent("invocation", "sports-agent", &model.Response{
+		Object: model.ObjectTypeRunnerCompletion,
+		Done:   true,
+	})
+	completion.RequestID = "request-new"
+	eventCh := make(chan *event.Event, 1)
+	eventCh <- completion
+	close(eventCh)
+	backend := &scriptedRunner{events: eventCh}
+	srv, err := New(WithAppName("sports-agent"), WithRunner(backend))
+	require.NoError(t, err)
+	body := encodeJSON(t, runRequest{
+		Session: session{UserID: "user-1", SessionID: "session-1"},
+		Input:   model.NewUserMessage("edited input"),
+		RunOptions: runOptions{LatestTurnReplacement: &latestTurnReplacement{
+			ExpectedRequestID: "request-old",
+			RequestID:         "request-new",
+		}},
+	})
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/trpc-agent/v1/apps/sports-agent/runs",
+		body,
+	)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Len(t, backend.runOptions, 1)
+	replacement := backend.runOptions[0].LatestTurnReplacement
+	require.NotNil(t, replacement)
+	assert.Equal(t, "request-old", replacement.ExpectedRequestID)
+	assert.Equal(t, "request-new", replacement.RequestID)
+	assert.Equal(t, "request-new", backend.runOptions[0].RequestID)
+}
+
+func TestServerRunClassifiesLatestTurnReplacementErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		kind string
+	}{
+		{
+			name: "unsupported",
+			err:  runner.ErrLatestTurnReplacementUnsupported,
+			kind: "latest_turn_replacement_unsupported",
+		},
+		{
+			name: "conflict",
+			err:  runner.ErrLatestTurnReplacementConflict,
+			kind: "latest_turn_replacement_conflict",
+		},
+		{
+			name: "unavailable",
+			err:  runner.ErrLatestTurnReplacementUnavailable,
+			kind: "latest_turn_replacement_unavailable",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			response := runErrorResponse(
+				model.NewUserMessage("edited input"),
+				"sports-agent",
+				"request-new",
+				fmt.Errorf("backend: %w", tt.err),
+			)
+			assert.Equal(t, tt.kind, string(response.DirectRunErrorKind))
+		})
+	}
 }
 
 func TestServerRunReturnsIncompleteRunResponseForContextError(t *testing.T) {
@@ -721,6 +796,44 @@ func TestValidateRunRequestErrors(t *testing.T) {
 				}},
 			},
 			want: "runOptions.latestTurnReplacement.expectedRequestID is required",
+		},
+		{
+			name: "empty replacement request id",
+			req: &runRequest{
+				Session: session{UserID: "user-1", SessionID: "session-1"},
+				Input:   model.NewUserMessage("input"),
+				RunOptions: runOptions{LatestTurnReplacement: &latestTurnReplacement{
+					ExpectedRequestID: "request-old",
+				}},
+			},
+			want: "runOptions.latestTurnReplacement.requestID is required",
+		},
+		{
+			name: "matching replacement request ids",
+			req: &runRequest{
+				Session: session{UserID: "user-1", SessionID: "session-1"},
+				Input:   model.NewUserMessage("input"),
+				RunOptions: runOptions{LatestTurnReplacement: &latestTurnReplacement{
+					ExpectedRequestID: "request-same",
+					RequestID:         "request-same",
+				}},
+			},
+			want: "runOptions.latestTurnReplacement request IDs must differ",
+		},
+		{
+			name: "conflicting request id",
+			req: &runRequest{
+				Session: session{UserID: "user-1", SessionID: "session-1"},
+				Input:   model.NewUserMessage("input"),
+				RunOptions: runOptions{
+					RequestID: "request-other",
+					LatestTurnReplacement: &latestTurnReplacement{
+						ExpectedRequestID: "request-old",
+						RequestID:         "request-new",
+					},
+				},
+			},
+			want: "runOptions.requestID conflicts with latest-turn replacement",
 		},
 	}
 	for _, tt := range tests {

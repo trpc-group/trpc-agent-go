@@ -49,6 +49,8 @@ type Tables struct {
 type Store struct {
 	Dialect Dialect
 	Tables  Tables
+	// SoftDelete preserves tombstoned projection rows during restoration.
+	SoftDelete bool
 }
 
 type rowQuerier interface {
@@ -1017,15 +1019,20 @@ func (s Store) replaceSummaries(
 	restored *session.Session,
 	expiresAt *time.Time,
 ) error {
+	// #nosec G201 -- table names are assembled from validated service prefixes.
+	statement := fmt.Sprintf(
+		`DELETE FROM %s WHERE app_name = %s AND user_id = %s AND session_id = %s`,
+		s.Tables.Summaries,
+		s.bind(1),
+		s.bind(2),
+		s.bind(3),
+	)
+	if s.SoftDelete {
+		statement += " AND deleted_at IS NULL"
+	}
 	if _, err := tx.ExecContext(
 		ctx,
-		fmt.Sprintf(
-			`DELETE FROM %s WHERE app_name = %s AND user_id = %s AND session_id = %s`,
-			s.Tables.Summaries,
-			s.bind(1),
-			s.bind(2),
-			s.bind(3),
-		),
+		statement,
 		key.AppName,
 		key.UserID,
 		key.SessionID,
