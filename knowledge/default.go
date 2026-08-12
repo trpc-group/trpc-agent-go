@@ -683,6 +683,11 @@ func (dk *BuiltinKnowledge) processDocuments(
 	var completedCount atomic.Int64
 	startTime := time.Now()
 
+	failPrefix := "add document"
+	if plan.batching() {
+		failPrefix = "add document batch"
+	}
+
 	processTask := func(batch []*document.Document) func() {
 		return func() {
 			defer wgDoc.Done()
@@ -699,11 +704,7 @@ func (dk *BuiltinKnowledge) processDocuments(
 					SourceTotal:     len(docs),
 					SourceElapsed:   time.Since(startTime),
 				}, err)
-				if plan.size > 1 {
-					errCh <- fmt.Errorf("add document batch: %w", err)
-				} else {
-					errCh <- fmt.Errorf("add document: %w", err)
-				}
+				errCh <- fmt.Errorf("%s: %w", failPrefix, err)
 				return
 			}
 
@@ -736,7 +737,7 @@ func (dk *BuiltinKnowledge) processDocuments(
 		// Stop submitting further batches once the caller cancels. The
 		// per-document path keeps its previous behaviour of submitting every
 		// task regardless of cancellation.
-		if step > 1 {
+		if plan.batching() {
 			if err := ctx.Err(); err != nil {
 				errCh <- err
 				break
@@ -864,12 +865,20 @@ type batchPlan struct {
 	size     int
 }
 
-// resolveBatchPlan reports whether the requested embedding batch size can be
-// applied to this knowledge base. Batching requires an embedder implementing
-// embedder.BatchEmbedder, and is limited to loads without source sync because
-// the incremental bookkeeping resets IDs and decides skips per document. Any
-// unmet prerequisite falls back to the unchanged per-document path and is
-// logged so an ineffective configuration is visible.
+// batching reports whether the plan groups several documents into a single
+// embedding request. A plan that does not batch carries no embedder and runs
+// the per-document path.
+func (p batchPlan) batching() bool {
+	return p.size > 1
+}
+
+// resolveBatchPlan builds the plan a single load follows, applying the
+// requested embedding batch size only when this knowledge base supports it.
+// Batching requires an embedder implementing embedder.BatchEmbedder, and is
+// limited to loads without source sync because the incremental bookkeeping
+// resets IDs and decides skips per document. Any unmet prerequisite falls back
+// to the unchanged per-document path and is logged so an ineffective
+// configuration is visible.
 func (dk *BuiltinKnowledge) resolveBatchPlan(ctx context.Context, config *loadConfig) batchPlan {
 	if config.embeddingBatchSize <= 1 {
 		return batchPlan{size: 1}
@@ -905,7 +914,7 @@ func (dk *BuiltinKnowledge) processBatch(
 	batch []*document.Document,
 	src source.Source,
 ) (int, error) {
-	if plan.size <= 1 {
+	if !plan.batching() {
 		if err := dk.addDocumentWithSync(ctx, batch[0], src); err != nil {
 			return 0, err
 		}
