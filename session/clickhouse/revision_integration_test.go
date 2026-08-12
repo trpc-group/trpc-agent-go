@@ -17,8 +17,66 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	storage "trpc.group/trpc-go/trpc-agent-go/storage/clickhouse"
 )
+
+func TestInitDBRejectsLegacySummarySchemaIntegration(t *testing.T) {
+	dsn := os.Getenv("TRPC_AGENT_GO_CLICKHOUSE_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set TRPC_AGENT_GO_CLICKHOUSE_TEST_DSN to run ClickHouse integration test")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	prefix := fmt.Sprintf("r%x", time.Now().UnixNano())
+	client, err := storage.GetClientBuilder()(
+		storage.WithClientBuilderDSN(dsn),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(
+			context.Background(),
+			10*time.Second,
+		)
+		defer cleanupCancel()
+		for _, tableDef := range tableDefs {
+			table := sqldb.BuildTableName(prefix, tableDef.name)
+			_ = client.Exec(cleanupCtx, "DROP TABLE IF EXISTS "+table)
+		}
+		_ = client.Close()
+	})
+
+	summaryTable := sqldb.BuildTableName(
+		prefix,
+		sqldb.TableNameSessionSummaries,
+	)
+	require.NoError(t, client.Exec(ctx, fmt.Sprintf(`
+CREATE TABLE %s (
+	app_name String,
+	user_id String,
+	session_id String,
+	filter_key String,
+	summary JSON,
+	created_at DateTime64(6),
+	updated_at DateTime64(6),
+	expires_at Nullable(DateTime64(6)),
+	deleted_at Nullable(DateTime64(6))
+) ENGINE = ReplacingMergeTree(updated_at)
+PARTITION BY (app_name, cityHash64(user_id) %% 64)
+ORDER BY (app_name, user_id, session_id, filter_key)
+SETTINGS allow_nullable_key = 1`, summaryTable)))
+
+	svc := &Service{
+		opts:                  ServiceOpts{tablePrefix: prefix},
+		chClient:              client,
+		tableSessionSummaries: summaryTable,
+	}
+	err = svc.initDB(ctx)
+	require.ErrorContains(t, err, "has incompatible schema")
+	require.ErrorContains(t, err, "ReplacingMergeTree(version_at)")
+}
 
 func TestDeleteSessionProjectionTombstonesIntegration(t *testing.T) {
 	dsn := os.Getenv("TRPC_AGENT_GO_CLICKHOUSE_TEST_DSN")

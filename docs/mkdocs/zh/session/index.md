@@ -270,9 +270,9 @@ replacement 已成为 canonical，但 Runner 不会自动重复一次执行结�
 Agent 启动。
 
 新 Run 开始前，Runner 会把 Session 级 events、state、summaries 和 Track events
-原子恢复到旧 Request 之前的完整 checkpoint，并把被丢弃的投影保存在 backend 私有
-revision 存储中。app state、user state、模型/工具调用、artifact 写入和其他外部副作用
-不会被回滚。
+原子恢复到旧 Request 之前的完整 checkpoint。持久化 backend 会把被丢弃的投影保存在
+私有 revision 存储中；InMemory 在恢复 checkpoint 后会丢弃该投影。app state、user
+state、模型/工具调用、artifact 写入和其他外部副作用不会被回滚。
 
 安全规则：
 
@@ -293,8 +293,9 @@ revision 存储中。app state、user state、模型/工具调用、artifact 写
 - 把 routed output 持久化到其他 Session 的 turn 无法通过单 Session 投影原子恢复，
   因此不可替换。
 - Replacement 保留源 Session 的剩余 TTL，不会延长 Session 生命周期。
-- 每次 replacement 会保留一份完整废弃投影，系统不会隐式限制 revision 数量或字节数；
-  删除 Session 或 Session 到期时会一并清理。
+- 持久化 backend 的每次 replacement 会保留一份完整废弃投影，系统不会隐式限制
+  revision 数量或字节数；删除 Session 或 Session 到期时会一并清理。InMemory 不保留
+  revision archive，会直接丢弃被替换的投影。
 - Backend 会保留最近 64 个 replacement 幂等身份用于检测复用。结果不确定时应及时使用
   原始 ID 组合重试。
 

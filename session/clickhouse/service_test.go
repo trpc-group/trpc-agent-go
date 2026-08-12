@@ -42,8 +42,14 @@ func TestInitDBRetriesRequiredJSONTypeSetting(t *testing.T) {
 					return fmt.Errorf("set setting %s = 1", setting)
 				}
 				return nil
-			}}
-			s := &Service{chClient: client}
+			}, queryRowFunc: summarySchemaQueryRow(
+				1,
+				"ReplacingMergeTree(version_at) ORDER BY tuple()",
+			)}
+			s := &Service{
+				chClient:              client,
+				tableSessionSummaries: "session_summaries",
+			}
 			require.NoError(t, s.initDB(context.Background()))
 			assert.Equal(t, len(tableDefs)+1, calls)
 		})
@@ -64,6 +70,104 @@ func TestInitDBDoesNotRetryUnrelatedFailure(t *testing.T) {
 	err := s.initDB(context.Background())
 	require.ErrorContains(t, err, "permission denied")
 	assert.Equal(t, 1, calls)
+}
+
+func TestInitDBRejectsLegacySummarySchema(t *testing.T) {
+	client := &mockClient{
+		queryRowFunc: summarySchemaQueryRow(
+			0,
+			"ReplacingMergeTree(updated_at)",
+		),
+	}
+	s := &Service{
+		chClient:              client,
+		tableSessionSummaries: "session_summaries",
+	}
+	err := s.initDB(context.Background())
+	require.ErrorContains(t, err, "has incompatible schema")
+	require.ErrorContains(t, err, "ReplacingMergeTree(version_at)")
+}
+
+func TestValidateSessionSummariesTableRejectsLegacyEngine(t *testing.T) {
+	s := &Service{
+		chClient: &mockClient{queryRowFunc: summarySchemaQueryRow(
+			1,
+			"ReplacingMergeTree(updated_at)",
+		)},
+		tableSessionSummaries: "session_summaries",
+	}
+	require.ErrorContains(
+		t,
+		s.validateSessionSummariesTable(context.Background()),
+		"has incompatible schema",
+	)
+}
+
+func TestValidateSessionSummariesTableInspectionErrors(t *testing.T) {
+	tests := []struct {
+		name      string
+		queryRows func(context.Context, []any, string, ...any) error
+		want      string
+	}{
+		{
+			name: "columns",
+			queryRows: func(
+				context.Context, []any, string, ...any,
+			) error {
+				return assert.AnError
+			},
+			want: "inspect clickhouse session summaries columns failed",
+		},
+		{
+			name: "engine",
+			queryRows: func(
+				_ context.Context,
+				dest []any,
+				query string,
+				_ ...any,
+			) error {
+				if strings.Contains(query, "system.columns") {
+					*dest[0].(*uint64) = 1
+					return nil
+				}
+				return assert.AnError
+			},
+			want: "inspect clickhouse session summaries engine failed",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &Service{
+				chClient:              &mockClient{queryRowFunc: tt.queryRows},
+				tableSessionSummaries: "session_summaries",
+			}
+			require.ErrorContains(
+				t,
+				s.validateSessionSummariesTable(context.Background()),
+				tt.want,
+			)
+		})
+	}
+}
+
+func summarySchemaQueryRow(
+	versionAtColumns uint64,
+	engineFull string,
+) func(context.Context, []any, string, ...any) error {
+	return func(
+		_ context.Context,
+		dest []any,
+		query string,
+		_ ...any,
+	) error {
+		switch {
+		case strings.Contains(query, "system.columns"):
+			*dest[0].(*uint64) = versionAtColumns
+		case strings.Contains(query, "system.tables"):
+			*dest[0].(*string) = engineFull
+		}
+		return nil
+	}
 }
 
 func TestNewService(t *testing.T) {

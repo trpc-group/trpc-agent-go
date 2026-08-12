@@ -277,9 +277,10 @@ outcome may also have been ambiguous.
 
 Before starting the new run, Runner atomically restores session-scoped events,
 state, summaries, and Track events to the complete checkpoint before the old
-request. The discarded projection is retained in backend-private revision
-storage. App state, user state, model/tool calls, artifact writes, and other
-external side effects are intentionally not rolled back.
+request. Durable backends retain the discarded projection in backend-private
+revision storage; InMemory discards it after restoring the checkpoint. App
+state, user state, model/tool calls, artifact writes, and other external side
+effects are intentionally not rolled back.
 
 Safety rules:
 
@@ -305,9 +306,10 @@ Safety rules:
   replacement because a single-session projection cannot restore it atomically.
 - Replacement preserves the source session's remaining TTL; it does not extend
   the session lifetime.
-- Each replacement retains one complete discarded projection. There is no
-  implicit revision-count or byte-size cap. Session deletion and expiry remove
-  private revisions.
+- Each replacement on a durable backend retains one complete discarded
+  projection. There is no implicit revision-count or byte-size cap. Session
+  deletion and expiry remove private revisions. InMemory keeps no revision
+  archive and discards the replaced projection.
 - Backends retain the 64 most recent replacement idempotency identities for
   reuse detection. Retry an ambiguous transition promptly with its original
   ID pair.

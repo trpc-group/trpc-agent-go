@@ -134,7 +134,7 @@ ClickHouse 实现使用了 `ReplacingMergeTree` 引擎来处理数据更新和�
 
 **关键特性：**
 
-1. **ReplacingMergeTree**：利用 `updated_at` 字段，ClickHouse 会在后台自动合并相同主键的记录，保留最新版本
+1. **ReplacingMergeTree**：大多数表使用 `updated_at` 作为替换版本；Session 摘要单独使用写入时间 `version_at`，因此 `updated_at` 可以继续表示摘要的语义 cutoff。
 2. **FINAL 查询**：所有读取操作都使用 `FINAL` 关键字（如 `SELECT ... FINAL`），确保在查询时合并所有数据部分，保证读取一致性
 3. **Soft Delete**：删除操作通过插入一条带有 `deleted_at` 时间戳的新记录实现，查询时过滤 `deleted_at IS NULL`
 
@@ -190,14 +190,64 @@ CREATE TABLE IF NOT EXISTS session_summaries (
     summary     JSON COMMENT 'Summary data in JSON format',
     created_at  DateTime64(6),
     updated_at  DateTime64(6),
+    version_at  DateTime64(9),
     expires_at  Nullable(DateTime64(6)) COMMENT 'Reserved for future use',
     deleted_at  Nullable(DateTime64(6)) COMMENT 'Soft delete timestamp'
-) ENGINE = ReplacingMergeTree(updated_at)
+) ENGINE = ReplacingMergeTree(version_at)
 PARTITION BY (app_name, cityHash64(user_id) % 64)
 ORDER BY (app_name, user_id, session_id, filter_key)
 SETTINGS allow_nullable_key = 1
 COMMENT 'Session summaries table';
 ```
+
+#### 升级已有摘要表
+
+旧版本使用 `ReplacingMergeTree(updated_at)`，并且没有 `version_at` 列。自动初始化现在会
+检测这种旧结构并在启动时返回错误，避免服务启动后才在摘要写入时失败；框架不会自动重建
+已有数据的表。
+
+迁移前应停止所有向 `session_summaries` 写入的服务，并确认临时磁盘空间足以保存完整副本。
+执行以下 SQL；如果配置了 `WithTablePrefix`，需要一致替换其中的两个表名。
+
+```sql
+CREATE TABLE session_summaries_version_at_migration (
+    app_name    String,
+    user_id     String,
+    session_id  String,
+    filter_key  String,
+    summary     JSON,
+    created_at  DateTime64(6),
+    updated_at  DateTime64(6),
+    version_at  DateTime64(9),
+    expires_at  Nullable(DateTime64(6)),
+    deleted_at  Nullable(DateTime64(6))
+) ENGINE = ReplacingMergeTree(version_at)
+PARTITION BY (app_name, cityHash64(user_id) % 64)
+ORDER BY (app_name, user_id, session_id, filter_key)
+SETTINGS allow_nullable_key = 1;
+
+INSERT INTO session_summaries_version_at_migration
+    (app_name, user_id, session_id, filter_key, summary, created_at,
+     updated_at, version_at, expires_at, deleted_at)
+SELECT app_name, user_id, session_id, filter_key, summary, created_at,
+       updated_at, now64(9), expires_at, deleted_at
+FROM session_summaries FINAL;
+
+EXCHANGE TABLES session_summaries
+AND session_summaries_version_at_migration;
+```
+
+对于 `Atomic` database，`EXCHANGE TABLES` 是原子操作。验证行数和摘要读取结果后，再删除
+`session_summaries_version_at_migration`（此时它是旧表）。如果使用其他 database engine，
+应继续保持停写，并把 exchange 替换成一次维护操作：
+
+```sql
+RENAME TABLE session_summaries TO session_summaries_updated_at_backup,
+             session_summaries_version_at_migration TO session_summaries;
+```
+
+验证新表后再删除备份。使用 `WithSkipDBInit(true)` 的部署会同时跳过兼容性检查与建表，
+因此必须在启动新版服务前完成该迁移。
 
 ### app_states
 

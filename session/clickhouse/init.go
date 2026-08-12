@@ -143,8 +143,46 @@ func (s *Service) initDB(ctx context.Context) error {
 		}
 		log.Infof("created table: %s", fullTableName)
 	}
+	if err := s.validateSessionSummariesTable(schemaCtx); err != nil {
+		return err
+	}
 
 	log.Info("clickhouse session database schema initialized successfully")
+	return nil
+}
+
+func (s *Service) validateSessionSummariesTable(ctx context.Context) error {
+	var versionAtColumns uint64
+	if err := s.chClient.QueryRow(
+		ctx,
+		[]any{&versionAtColumns},
+		`SELECT count() FROM system.columns
+			WHERE database = currentDatabase() AND table = ?
+			AND name = 'version_at' AND type = 'DateTime64(9)'`,
+		s.tableSessionSummaries,
+	); err != nil {
+		return fmt.Errorf("inspect clickhouse session summaries columns failed: %w", err)
+	}
+
+	var engineFull string
+	if err := s.chClient.QueryRow(
+		ctx,
+		[]any{&engineFull},
+		`SELECT engine_full FROM system.tables
+			WHERE database = currentDatabase() AND name = ?`,
+		s.tableSessionSummaries,
+	); err != nil {
+		return fmt.Errorf("inspect clickhouse session summaries engine failed: %w", err)
+	}
+	if versionAtColumns != 1 ||
+		!strings.HasPrefix(engineFull, "ReplacingMergeTree(version_at)") {
+		return fmt.Errorf(
+			"clickhouse session summaries table %s has incompatible schema; "+
+				"migrate it to version_at DateTime64(9) with "+
+				"ReplacingMergeTree(version_at) before startup",
+			s.tableSessionSummaries,
+		)
+	}
 	return nil
 }
 

@@ -7,6 +7,9 @@
 --   - Database must be created before running these statements
 --   - If the server keeps JSON behind an experimental setting, enable the
 --     setting named by the server while executing this schema
+--   - Existing session_summaries tables that use
+--     ReplacingMergeTree(updated_at) must be rebuilt before upgrading; see the
+--     ClickHouse session documentation for the data-preserving migration
 
 -- ============================================================================
 -- Table: session_states

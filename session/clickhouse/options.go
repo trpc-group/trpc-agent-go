@@ -279,7 +279,7 @@ func WithCascadeFullSessionSummary(enable bool) ServiceOpt {
 	}
 }
 
-// WithSkipDBInit skips database initialization (table and index creation).
+// WithSkipDBInit skips database initialization and schema compatibility checks.
 // Useful when:
 // - User doesn't have DDL permissions
 // - Tables are managed by migration tools

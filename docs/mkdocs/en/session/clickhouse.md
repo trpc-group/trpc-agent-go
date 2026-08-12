@@ -133,7 +133,7 @@ The ClickHouse implementation uses the `ReplacingMergeTree` engine for data upda
 
 **Key characteristics:**
 
-1. **ReplacingMergeTree**: Using the `updated_at` field, ClickHouse automatically merges records with the same primary key in the background, keeping the latest version
+1. **ReplacingMergeTree**: Most tables use `updated_at` as their replacement version. Session summaries use the separate `version_at` write timestamp so their semantic summary cutoff remains in `updated_at`.
 2. **FINAL queries**: All read operations use the `FINAL` keyword (e.g., `SELECT ... FINAL`) to ensure data parts are merged at query time for read consistency
 3. **Soft Delete**: Delete operations are implemented by inserting a new record with a `deleted_at` timestamp; queries filter by `deleted_at IS NULL`
 
@@ -189,14 +189,68 @@ CREATE TABLE IF NOT EXISTS session_summaries (
     summary     JSON COMMENT 'Summary data in JSON format',
     created_at  DateTime64(6),
     updated_at  DateTime64(6),
+    version_at  DateTime64(9),
     expires_at  Nullable(DateTime64(6)) COMMENT 'Reserved for future use',
     deleted_at  Nullable(DateTime64(6)) COMMENT 'Soft delete timestamp'
-) ENGINE = ReplacingMergeTree(updated_at)
+) ENGINE = ReplacingMergeTree(version_at)
 PARTITION BY (app_name, cityHash64(user_id) % 64)
 ORDER BY (app_name, user_id, session_id, filter_key)
 SETTINGS allow_nullable_key = 1
 COMMENT 'Session summaries table';
 ```
+
+#### Upgrading an existing summary table
+
+Earlier releases used `ReplacingMergeTree(updated_at)` and had no
+`version_at` column. Automatic initialization now detects that layout and
+fails at startup instead of allowing later summary writes to fail. It does not
+rebuild a populated table automatically.
+
+Pause all writers to `session_summaries`, make sure enough temporary disk space
+is available for a full copy, and run the following migration. Replace both
+table names consistently when `WithTablePrefix` is configured.
+
+```sql
+CREATE TABLE session_summaries_version_at_migration (
+    app_name    String,
+    user_id     String,
+    session_id  String,
+    filter_key  String,
+    summary     JSON,
+    created_at  DateTime64(6),
+    updated_at  DateTime64(6),
+    version_at  DateTime64(9),
+    expires_at  Nullable(DateTime64(6)),
+    deleted_at  Nullable(DateTime64(6))
+) ENGINE = ReplacingMergeTree(version_at)
+PARTITION BY (app_name, cityHash64(user_id) % 64)
+ORDER BY (app_name, user_id, session_id, filter_key)
+SETTINGS allow_nullable_key = 1;
+
+INSERT INTO session_summaries_version_at_migration
+    (app_name, user_id, session_id, filter_key, summary, created_at,
+     updated_at, version_at, expires_at, deleted_at)
+SELECT app_name, user_id, session_id, filter_key, summary, created_at,
+       updated_at, now64(9), expires_at, deleted_at
+FROM session_summaries FINAL;
+
+EXCHANGE TABLES session_summaries
+AND session_summaries_version_at_migration;
+```
+
+`EXCHANGE TABLES` is atomic for `Atomic` databases. Verify row counts and
+summary reads before dropping `session_summaries_version_at_migration`, which
+now contains the old table. For another database engine, keep writers paused
+and replace the exchange with one maintenance operation:
+
+```sql
+RENAME TABLE session_summaries TO session_summaries_updated_at_backup,
+             session_summaries_version_at_migration TO session_summaries;
+```
+
+Verify the new table before dropping the backup. Deployments using
+`WithSkipDBInit(true)` skip the compatibility check as well as table creation,
+so they must complete this migration before starting the new service version.
 
 ### app_states
 
