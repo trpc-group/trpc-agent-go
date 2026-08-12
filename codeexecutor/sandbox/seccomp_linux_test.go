@@ -252,11 +252,65 @@ func TestAssembleSeccompFilterSemantics(t *testing.T) {
 			if policy.rejectX32 {
 				cases = append(cases, caseSpec{
 					name: "kill x32 socket",
-					nr:   uint32(policy.socket) | x32SyscallBit,
+					nr:   policy.socket | x32SyscallBit,
 					arch: policy.auditArch,
 					args: []uint64{afUNIX},
 					want: seccompRetKillProcess,
 				})
+			}
+			if policy.compat != nil {
+				compat := policy.compat
+				cases = append(cases,
+					caseSpec{
+						name: "compat allow unrelated syscall",
+						nr:   1,
+						arch: compat.auditArch,
+						want: seccompRetAllow,
+					},
+					caseSpec{
+						name: "compat deny AF_UNIX socket",
+						nr:   compat.socket,
+						arch: compat.auditArch,
+						args: []uint64{afUNIX},
+						want: seccompRetEPERM,
+					},
+					caseSpec{
+						name: "compat allow AF_INET socket",
+						nr:   compat.socket,
+						arch: compat.auditArch,
+						args: []uint64{uint64(unix.AF_INET)},
+						want: seccompRetAllow,
+					},
+					caseSpec{
+						name: "compat deny AF_UNIX datagram socketpair",
+						nr:   compat.socketpair,
+						arch: compat.auditArch,
+						args: []uint64{afUNIX, uint64(unix.SOCK_DGRAM)},
+						want: seccompRetEPERM,
+					},
+					caseSpec{
+						name: "compat allow AF_UNIX stream socketpair",
+						nr:   compat.socketpair,
+						arch: compat.auditArch,
+						args: []uint64{afUNIX, uint64(unix.SOCK_STREAM)},
+						want: seccompRetAllow,
+					},
+					caseSpec{
+						name: "compat deny io_uring_setup",
+						nr:   compat.ioUringSetup,
+						arch: compat.auditArch,
+						want: seccompRetEPERM,
+					},
+				)
+				if compat.socketcall != 0 {
+					cases = append(cases, caseSpec{
+						name: "compat deny legacy socketcall",
+						nr:   compat.socketcall,
+						arch: compat.auditArch,
+						args: []uint64{1},
+						want: seccompRetEPERM,
+					})
+				}
 			}
 
 			for _, tc := range cases {
@@ -297,6 +351,13 @@ func TestBuildAFUNIXBlockFilterRejectsInvalidPolicy(t *testing.T) {
 	half.ioUringRegister = 0
 	if _, err := buildAFUNIXBlockFilter(half); err == nil {
 		t.Fatal("expected incomplete io_uring policy error")
+	}
+	badCompat := seccompPolicyAMD64
+	badCompatPolicy := *badCompat.compat
+	badCompatPolicy.socket = 0
+	badCompat.compat = &badCompatPolicy
+	if _, err := buildAFUNIXBlockFilter(badCompat); err == nil {
+		t.Fatal("expected incomplete compat policy error")
 	}
 }
 
@@ -1043,7 +1104,11 @@ func newLinuxSeccompRuntime(t *testing.T, profile PermissionProfile) (*Runtime, 
 		t.Skipf("bubblewrap preflight unavailable: %v", err)
 	}
 	if profile.network.Mode == NetworkRestricted {
-		if err := rt.linuxRestrictedPreflight(rt.bwrapPath, rt.bwrapMountProc); err != nil {
+		if err := rt.linuxRestrictedPreflight(
+			context.Background(),
+			rt.bwrapPath,
+			rt.bwrapMountProc,
+		); err != nil {
 			t.Skipf("restricted seccomp preflight unavailable: %v", err)
 		}
 	}
@@ -1347,6 +1412,7 @@ func TestLinuxRestrictedPreflightIndependentFromEnabled(t *testing.T) {
 		filepath.Join(ws.Path, "work"),
 		nil,
 		codeexecutor.RunProgramSpec{Cmd: "/bin/true"},
+		sandboxDenialRun{},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -1358,7 +1424,11 @@ func TestLinuxRestrictedPreflightIndependentFromEnabled(t *testing.T) {
 		t.Fatalf("enabled run set restricted preflight err unexpectedly: %v", rt.restrictedPreflightErr)
 	}
 
-	if err := rt.linuxRestrictedPreflight(bwrap, mountProc); err != nil {
+	if err := rt.linuxRestrictedPreflight(
+		context.Background(),
+		bwrap,
+		mountProc,
+	); err != nil {
 		t.Fatalf("restricted preflight after enabled run: %v", err)
 	}
 
@@ -1368,7 +1438,11 @@ func TestLinuxRestrictedPreflightIndependentFromEnabled(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errs <- rt.linuxRestrictedPreflight(bwrap, mountProc)
+			errs <- rt.linuxRestrictedPreflight(
+				context.Background(),
+				bwrap,
+				mountProc,
+			)
 		}()
 	}
 	wg.Wait()

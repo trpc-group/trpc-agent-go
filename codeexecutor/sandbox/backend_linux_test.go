@@ -715,9 +715,8 @@ exit 1
 
 func TestLinuxCommandForProfileManagedUsesOSSandboxCommand(t *testing.T) {
 	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
-	rt.preflightOnce.Do(func() {
-		rt.bwrapPath = "/bin/true"
-	})
+	setCachedLinuxPreflight(rt, "/bin/true", false, nil)
+	setCachedLinuxRestrictedPreflight(rt, nil)
 	ws, err := rt.CreateWorkspace(context.Background(), "linux/command-for-managed", codeexecutor.WorkspacePolicy{})
 	if err != nil {
 		t.Fatal(err)
@@ -745,12 +744,66 @@ func TestLinuxCommandForProfileManagedUsesOSSandboxCommand(t *testing.T) {
 	}
 }
 
+func TestLinuxPreflightTransientFailureIsRetried(t *testing.T) {
+	binDir := t.TempDir()
+	bwrap := filepath.Join(binDir, "bwrap")
+	if err := os.WriteFile(bwrap, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+
+	previousProbe := linuxBasePreflightProbe
+	t.Cleanup(func() {
+		linuxBasePreflightProbe = previousProbe
+	})
+	probeCalls := 0
+	linuxBasePreflightProbe = func(string, bool) (string, error) {
+		probeCalls++
+		if probeCalls == 1 {
+			return "", unix.EMFILE
+		}
+		return "", nil
+	}
+
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	if _, _, err := rt.linuxPreflight(); !errors.Is(err, unix.EMFILE) {
+		t.Fatalf("first linuxPreflight error = %v, want EMFILE", err)
+	}
+	path, mountProc, err := rt.linuxPreflight()
+	if err != nil {
+		t.Fatalf("second linuxPreflight error = %v, want retry success", err)
+	}
+	if path != bwrap || !mountProc || probeCalls != 2 {
+		t.Fatalf(
+			"second linuxPreflight path=%q mountProc=%v calls=%d, want %q true 2",
+			path,
+			mountProc,
+			probeCalls,
+			bwrap,
+		)
+	}
+}
+
+func setCachedLinuxRestrictedPreflight(rt *Runtime, err error) {
+	rt.restrictedPreflightMu.Lock()
+	defer rt.restrictedPreflightMu.Unlock()
+	rt.restrictedPreflightReady = true
+	rt.restrictedPreflightErr = err
+}
+
+func setCachedLinuxPreflight(rt *Runtime, bwrap string, mountProc bool, err error) {
+	rt.preflightMu.Lock()
+	defer rt.preflightMu.Unlock()
+	rt.preflightReady = true
+	rt.preflightErr = err
+	rt.bwrapPath = bwrap
+	rt.bwrapMountProc = mountProc
+}
+
 func TestLinuxSandboxCommandBindsDenyReadDataFDAndCleansSyntheticTargets(t *testing.T) {
 	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
-	rt.preflightOnce.Do(func() {
-		rt.bwrapPath = "/bin/true"
-	})
-	rt.restrictedPreflightOnce.Do(func() {})
+	setCachedLinuxPreflight(rt, "/bin/true", false, nil)
+	setCachedLinuxRestrictedPreflight(rt, nil)
 	ws, err := rt.CreateWorkspace(context.Background(), "linux/sandbox-command-cleanup", codeexecutor.WorkspacePolicy{})
 	if err != nil {
 		t.Fatal(err)
@@ -808,10 +861,8 @@ func TestLinuxSandboxCommandBindsDenyReadDataFDAndCleansSyntheticTargets(t *test
 
 func TestLinuxSandboxCommandPropagatesSetupError(t *testing.T) {
 	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
-	rt.preflightOnce.Do(func() {
-		rt.bwrapPath = "/bin/true"
-	})
-	rt.restrictedPreflightOnce.Do(func() {})
+	setCachedLinuxPreflight(rt, "/bin/true", false, nil)
+	setCachedLinuxRestrictedPreflight(rt, nil)
 	ws, err := rt.CreateWorkspace(context.Background(), "linux/sandbox-command-setup-error", codeexecutor.WorkspacePolicy{})
 	if err != nil {
 		t.Fatal(err)
@@ -833,10 +884,8 @@ func TestLinuxSandboxCommandPropagatesSetupError(t *testing.T) {
 
 func TestLinuxSandboxCommandPrepareAndArgsErrors(t *testing.T) {
 	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
-	rt.preflightOnce.Do(func() {
-		rt.bwrapPath = "/bin/true"
-	})
-	rt.restrictedPreflightOnce.Do(func() {})
+	setCachedLinuxPreflight(rt, "/bin/true", false, nil)
+	setCachedLinuxRestrictedPreflight(rt, nil)
 
 	wsPath := filepath.Join(t.TempDir(), "workspace-file")
 	if err := os.WriteFile(wsPath, []byte("not a directory"), 0o600); err != nil {
@@ -1038,9 +1087,8 @@ func newLinuxDiagnosticsTestRuntime(
 		WithWorkspaceRoot(t.TempDir()),
 		WithPermissionProfile(WorkspaceWriteProfile()),
 	)
-	rt.preflightOnce.Do(func() {
-		rt.bwrapPath = "/bin/true"
-	})
+	setCachedLinuxPreflight(rt, "/bin/true", false, nil)
+	setCachedLinuxRestrictedPreflight(rt, nil)
 	ws, err := rt.CreateWorkspace(
 		context.Background(),
 		"linux/diagnostics-"+name,
@@ -1301,7 +1349,7 @@ func TestLinuxRestrictedPreflightFailsClosedOnBadBwrap(t *testing.T) {
 		t.Skip(err)
 	}
 	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
-	err = rt.linuxRestrictedPreflight("/bin/false", true)
+	err = rt.linuxRestrictedPreflight(context.Background(), "/bin/false", true)
 	if err == nil {
 		t.Fatal("expected restricted preflight failure")
 	}
@@ -1312,21 +1360,20 @@ func TestLinuxRestrictedPreflightFailsClosedOnBadBwrap(t *testing.T) {
 		t.Fatalf("err = %v, want seccomp preflight hint", err)
 	}
 	// Cached failure remains fail-closed.
-	if err2 := rt.linuxRestrictedPreflight("/usr/local/bin/bwrap", true); err2 == nil {
+	if err2 := rt.linuxRestrictedPreflight(
+		context.Background(),
+		"/usr/local/bin/bwrap",
+		true,
+	); err2 == nil {
 		t.Fatal("expected cached restricted preflight failure")
 	}
 }
 
 func TestLinuxSandboxCommandFailsClosedWhenRestrictedPreflightCached(t *testing.T) {
 	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
-	rt.preflightOnce.Do(func() {
-		rt.bwrapPath = "/bin/true"
-		rt.bwrapMountProc = true
-	})
+	setCachedLinuxPreflight(rt, "/bin/true", true, nil)
 	forced := backendError(ErrSetupFailed, string(BackendLinuxBubblewrap), errors.New("forced restricted preflight failure"))
-	rt.restrictedPreflightOnce.Do(func() {
-		rt.restrictedPreflightErr = forced
-	})
+	setCachedLinuxRestrictedPreflight(rt, forced)
 	ws, err := rt.CreateWorkspace(context.Background(), "restricted-preflight-cached", codeexecutor.WorkspacePolicy{})
 	if err != nil {
 		t.Fatal(err)
@@ -1338,6 +1385,7 @@ func TestLinuxSandboxCommandFailsClosedWhenRestrictedPreflightCached(t *testing.
 		filepath.Join(ws.Path, "work"),
 		nil,
 		codeexecutor.RunProgramSpec{Cmd: "/bin/true"},
+		sandboxDenialRun{},
 	)
 	if err == nil {
 		t.Fatal("expected osSandboxCommand to fail closed")
@@ -1356,7 +1404,12 @@ func TestRunBwrapSeccompPreflightProbeRejectsInvalidBinary(t *testing.T) {
 		t.Skipf("open seccomp memfd unavailable: %v", err)
 	}
 	defer filter.Close()
-	stderr, err := runBwrapSeccompPreflightProbe("/bin/false", true, filter)
+	stderr, err := runBwrapSeccompPreflightProbe(
+		context.Background(),
+		"/bin/false",
+		true,
+		filter,
+	)
 	if err == nil {
 		t.Fatal("expected probe failure")
 	}
@@ -1368,7 +1421,7 @@ func TestLinuxRestrictedPreflightFailClosedBranches(t *testing.T) {
 		native func() (seccompArchPolicy, error),
 		kernel func() (string, error),
 		openMemfd func() (*os.File, error),
-		probe func(string, bool, *os.File) (string, error),
+		probe func(context.Context, string, bool, *os.File) (string, error),
 	) {
 		linuxNativeSeccompPolicy = native
 		linuxKernelRelease = kernel
@@ -1394,7 +1447,7 @@ func TestLinuxRestrictedPreflightFailClosedBranches(t *testing.T) {
 		t.Fatal("openSeccompFilterMemfd should not run in this branch")
 		return nil, nil
 	}
-	unusedProbe := func(string, bool, *os.File) (string, error) {
+	unusedProbe := func(context.Context, string, bool, *os.File) (string, error) {
 		t.Fatal("seccomp probe should not run in this branch")
 		return "", nil
 	}
@@ -1407,7 +1460,7 @@ func TestLinuxRestrictedPreflightFailClosedBranches(t *testing.T) {
 		linuxOpenSeccompMemfd = unusedMemfd
 		linuxSeccompProbe = unusedProbe
 		rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
-		err := rt.linuxRestrictedPreflight("/bin/true", true)
+		err := rt.linuxRestrictedPreflight(context.Background(), "/bin/true", true)
 		if err == nil || !isKind(err, ErrUnsupportedBackend) {
 			t.Fatalf("err=%v, want ErrUnsupportedBackend", err)
 		}
@@ -1421,7 +1474,7 @@ func TestLinuxRestrictedPreflightFailClosedBranches(t *testing.T) {
 		linuxOpenSeccompMemfd = unusedMemfd
 		linuxSeccompProbe = unusedProbe
 		rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
-		err := rt.linuxRestrictedPreflight("/bin/true", true)
+		err := rt.linuxRestrictedPreflight(context.Background(), "/bin/true", true)
 		if err == nil || !isKind(err, ErrSetupFailed) || !strings.Contains(err.Error(), "read kernel release") {
 			t.Fatalf("err=%v, want kernel release setup failure", err)
 		}
@@ -1433,7 +1486,7 @@ func TestLinuxRestrictedPreflightFailClosedBranches(t *testing.T) {
 		linuxOpenSeccompMemfd = unusedMemfd
 		linuxSeccompProbe = unusedProbe
 		rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
-		err := rt.linuxRestrictedPreflight("/bin/true", true)
+		err := rt.linuxRestrictedPreflight(context.Background(), "/bin/true", true)
 		if err == nil || !isKind(err, ErrSetupFailed) || !strings.Contains(err.Error(), "below required") {
 			t.Fatalf("err=%v, want old-kernel setup failure", err)
 		}
@@ -1447,11 +1500,159 @@ func TestLinuxRestrictedPreflightFailClosedBranches(t *testing.T) {
 		}
 		linuxSeccompProbe = unusedProbe
 		rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
-		err := rt.linuxRestrictedPreflight("/bin/true", true)
+		err := rt.linuxRestrictedPreflight(context.Background(), "/bin/true", true)
 		if err == nil || !isKind(err, ErrSetupFailed) || !strings.Contains(err.Error(), "forced memfd failure") {
 			t.Fatalf("err=%v, want memfd setup failure", err)
 		}
 	})
+}
+
+func TestLinuxRestrictedPreflightCancellationAndTimeoutAreNotCached(t *testing.T) {
+	origNative := linuxNativeSeccompPolicy
+	origKernel := linuxKernelRelease
+	origOpen := linuxOpenSeccompMemfd
+	origProbe := linuxSeccompProbe
+	defer func() {
+		linuxNativeSeccompPolicy = origNative
+		linuxKernelRelease = origKernel
+		linuxOpenSeccompMemfd = origOpen
+		linuxSeccompProbe = origProbe
+	}()
+
+	linuxNativeSeccompPolicy = func() (seccompArchPolicy, error) {
+		return seccompPolicyAMD64, nil
+	}
+	linuxKernelRelease = func() (string, error) {
+		return "5.15.0", nil
+	}
+	linuxOpenSeccompMemfd = func() (*os.File, error) {
+		return os.CreateTemp(t.TempDir(), "seccomp-preflight")
+	}
+
+	t.Run("callerCancellation", func(t *testing.T) {
+		rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+		ctx, cancel := context.WithCancel(context.Background())
+		calls := 0
+		linuxSeccompProbe = func(
+			context.Context,
+			string,
+			bool,
+			*os.File,
+		) (string, error) {
+			calls++
+			if calls == 1 {
+				cancel()
+				return "", context.Canceled
+			}
+			return "", nil
+		}
+
+		if err := rt.linuxRestrictedPreflight(ctx, "/bin/true", true); !errors.Is(err, context.Canceled) {
+			t.Fatalf("first error = %v, want context.Canceled", err)
+		}
+		if err := rt.linuxRestrictedPreflight(
+			context.Background(),
+			"/bin/true",
+			true,
+		); err != nil {
+			t.Fatalf("retry after cancellation: %v", err)
+		}
+		if calls != 2 {
+			t.Fatalf("probe calls = %d, want retry after cancellation", calls)
+		}
+	})
+
+	t.Run("probeDeadline", func(t *testing.T) {
+		rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+		calls := 0
+		linuxSeccompProbe = func(
+			context.Context,
+			string,
+			bool,
+			*os.File,
+		) (string, error) {
+			calls++
+			if calls == 1 {
+				return "", context.DeadlineExceeded
+			}
+			return "", nil
+		}
+
+		err := rt.linuxRestrictedPreflight(
+			context.Background(),
+			"/bin/true",
+			true,
+		)
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("first error = %v, want deadline exceeded", err)
+		}
+		if err := rt.linuxRestrictedPreflight(
+			context.Background(),
+			"/bin/true",
+			true,
+		); err != nil {
+			t.Fatalf("retry after probe timeout: %v", err)
+		}
+		if calls != 2 {
+			t.Fatalf("probe calls = %d, want retry after timeout", calls)
+		}
+	})
+}
+
+func TestLinuxRestrictedPreflightEMFILEIsRetried(t *testing.T) {
+	origNative := linuxNativeSeccompPolicy
+	origKernel := linuxKernelRelease
+	origOpen := linuxOpenSeccompMemfd
+	origProbe := linuxSeccompProbe
+	defer func() {
+		linuxNativeSeccompPolicy = origNative
+		linuxKernelRelease = origKernel
+		linuxOpenSeccompMemfd = origOpen
+		linuxSeccompProbe = origProbe
+	}()
+
+	linuxNativeSeccompPolicy = func() (seccompArchPolicy, error) {
+		return seccompPolicyAMD64, nil
+	}
+	linuxKernelRelease = func() (string, error) {
+		return "5.15.0", nil
+	}
+	openCalls := 0
+	linuxOpenSeccompMemfd = func() (*os.File, error) {
+		openCalls++
+		if openCalls == 1 {
+			return nil, unix.EMFILE
+		}
+		return os.CreateTemp(t.TempDir(), "seccomp-preflight-retry")
+	}
+	linuxSeccompProbe = func(
+		context.Context,
+		string,
+		bool,
+		*os.File,
+	) (string, error) {
+		return "", nil
+	}
+
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	err := rt.linuxRestrictedPreflight(
+		context.Background(),
+		"/bin/true",
+		true,
+	)
+	if !errors.Is(err, unix.EMFILE) {
+		t.Fatalf("first error = %v, want EMFILE", err)
+	}
+	if err := rt.linuxRestrictedPreflight(
+		context.Background(),
+		"/bin/true",
+		true,
+	); err != nil {
+		t.Fatalf("retry after EMFILE = %v, want success", err)
+	}
+	if openCalls != 2 {
+		t.Fatalf("memfd open calls = %d, want retry", openCalls)
+	}
 }
 
 func TestOsSandboxCommandFailsWhenExtraFilesOpenFails(t *testing.T) {
@@ -1476,6 +1677,7 @@ func TestOsSandboxCommandFailsWhenExtraFilesOpenFails(t *testing.T) {
 		filepath.Join(ws.Path, "work"),
 		nil,
 		codeexecutor.RunProgramSpec{Cmd: "/bin/true"},
+		sandboxDenialRun{},
 	)
 	if err == nil || !isKind(err, ErrSetupFailed) || !strings.Contains(err.Error(), "forced extra files failure") {
 		t.Fatalf("err=%v, want forced ExtraFiles setup failure", err)
@@ -1502,7 +1704,12 @@ func TestRunBwrapSeccompPreflightProbeTimeout(t *testing.T) {
 	bwrapSeccompPreflightTimeout = 50 * time.Millisecond
 	defer func() { bwrapSeccompPreflightTimeout = orig }()
 
-	_, err = runBwrapSeccompPreflightProbe(script, false, filter)
+	_, err = runBwrapSeccompPreflightProbe(
+		context.Background(),
+		script,
+		false,
+		filter,
+	)
 	if err == nil {
 		t.Fatal("expected timeout failure")
 	}

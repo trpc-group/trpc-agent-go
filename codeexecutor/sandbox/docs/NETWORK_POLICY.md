@@ -41,6 +41,15 @@ interfaces.
   `socketpair(AF_UNIX, SOCK_SEQPACKET, ...)` available for anonymous local IPC;
 - does not provide a path-level Unix socket allowlist.
 
+On `amd64`, the same filter also accepts the i386 compat audit architecture;
+on `arm64`, it accepts AArch32. Direct compat socket syscalls receive the same
+AF_UNIX checks as native syscalls, and compat `io_uring_*` calls are denied.
+The legacy i386 `socketcall` multiplexor is denied in full because classic
+seccomp BPF cannot safely dereference its userspace argument array. As a result,
+i386 programs using modern direct socket syscalls retain anonymous stream and
+seqpacket socketpairs, while programs using legacy `socketcall` cannot use
+socket operations under `NetworkRestricted`.
+
 Because the managed Linux profile still uses `--ro-bind / /`, host socket paths
 such as `docker.sock` remain visible in the mount namespace. The seccomp filter
 is what makes them unusable: the guest cannot create a new AF_UNIX file
@@ -54,6 +63,9 @@ Restricted Linux runs fail closed when:
 - the GOARCH is not `amd64` or `arm64`;
 - the kernel is older than 4.8 (historical seccomp/ptrace bypass);
 - bubblewrap or the kernel cannot load the filter.
+
+Executables using an audit architecture other than the host's native ABI or
+the compat ABI listed above are terminated before their syscall executes.
 
 On Linux 4.8–4.13, seccomp may degrade `SECCOMP_RET_KILL_PROCESS` to
 kill-thread for the wrong-architecture and amd64 x32 reject paths. The denied

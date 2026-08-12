@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
@@ -55,14 +56,13 @@ func (r *Runtime) osSandboxCommand(
 	spec codeexecutor.RunProgramSpec,
 	diagnostics sandboxDenialRun,
 ) (*exec.Cmd, string, commandCleanup, error) {
-	_ = ctx
 	_ = diagnostics
 	bwrap, mountProc, err := r.linuxPreflight()
 	if err != nil {
 		return nil, string(BackendLinuxBubblewrap), nil, err
 	}
-	if profile.network.Mode == NetworkRestricted {
-		if err := r.linuxRestrictedPreflight(bwrap, mountProc); err != nil {
+	if profile.network.Mode != NetworkEnabled {
+		if err := r.linuxRestrictedPreflight(ctx, bwrap, mountProc); err != nil {
 			return nil, string(BackendLinuxBubblewrap), nil, err
 		}
 	}
@@ -91,6 +91,7 @@ var (
 	linuxOpenSeccompMemfd    = openSeccompFilterMemfd
 	linuxSeccompProbe        = runBwrapSeccompPreflightProbe
 	linuxOpenExtraFiles      = openLinuxSandboxExtraFiles
+	linuxBasePreflightProbe  = runBwrapPreflightProbe
 )
 
 type linuxSandboxSetup struct {
@@ -190,7 +191,7 @@ func (r *Runtime) linuxSandboxSetup(
 	} else {
 		args = appendInaccessibleDirMaskArgs(args, "/proc")
 	}
-	needsSeccomp := profile.network.Mode == NetworkRestricted
+	needsSeccomp := profile.network.Mode != NetworkEnabled
 	// ExtraFiles descriptors start at 3 and must match the append order in
 	// openLinuxSandboxExtraFiles: seccomp memfd first, then deny-read /dev/null.
 	nextExtraFD := 3
@@ -244,104 +245,199 @@ func (r *Runtime) linuxSandboxSetup(
 }
 
 func (r *Runtime) linuxPreflight() (string, bool, error) {
-	r.preflightOnce.Do(func() {
-		if r.backend != BackendAuto && r.backend != BackendLinuxBubblewrap {
-			r.preflightErr = backendError(ErrUnsupportedBackend, string(r.backend), errors.New("unsupported backend on linux"))
-			return
+	for {
+		r.preflightMu.Lock()
+		if r.preflightReady {
+			break
 		}
-		bwrap, err := exec.LookPath("bwrap")
+		if r.preflightWait != nil {
+			done := r.preflightWait
+			r.preflightMu.Unlock()
+			<-done
+			continue
+		}
+		done := make(chan struct{})
+		r.preflightWait = done
+		r.preflightMu.Unlock()
+
+		bwrap, mountProc, err := r.runLinuxPreflight()
+
+		r.preflightMu.Lock()
+		r.bwrapPath = bwrap
+		r.bwrapMountProc = mountProc
+		r.preflightErr = err
+		if !isTransientRestrictedPreflightError(err) {
+			r.preflightReady = true
+		}
+		close(done)
+		r.preflightWait = nil
+		break
+	}
+	bwrap, mountProc, err := r.bwrapPath, r.bwrapMountProc, r.preflightErr
+	r.preflightMu.Unlock()
+	return bwrap, mountProc, err
+}
+
+func (r *Runtime) runLinuxPreflight() (string, bool, error) {
+	if r.backend != BackendAuto && r.backend != BackendLinuxBubblewrap {
+		return "", false, backendError(
+			ErrUnsupportedBackend,
+			string(r.backend),
+			errors.New("unsupported backend on linux"),
+		)
+	}
+	bwrap, err := exec.LookPath("bwrap")
+	if err != nil {
+		return "", false, backendError(
+			ErrSetupFailed,
+			string(BackendLinuxBubblewrap),
+			errors.New("bubblewrap executable not found in PATH"),
+		)
+	}
+	stderr, err := linuxBasePreflightProbe(bwrap, true)
+	if err == nil {
+		return bwrap, true, nil
+	}
+	if isProcMountFailure(stderr) {
+		stderr, err = linuxBasePreflightProbe(bwrap, false)
 		if err != nil {
-			r.preflightErr = backendError(ErrSetupFailed, string(BackendLinuxBubblewrap),
-				errors.New("bubblewrap executable not found in PATH"))
-			return
+			return "", false, backendError(
+				ErrSetupFailed,
+				string(BackendLinuxBubblewrap),
+				bwrapProbeError{err: err, stderr: stderr},
+			)
 		}
-		stderr, err := runBwrapPreflightProbe(bwrap, true)
-		if err == nil {
-			r.bwrapPath = bwrap
-			r.bwrapMountProc = true
-			return
-		}
-		if isProcMountFailure(stderr) {
-			stderr, err = runBwrapPreflightProbe(bwrap, false)
-			if err == nil {
-				r.bwrapPath = bwrap
-				r.bwrapMountProc = false
-				return
-			}
-		}
-		if err != nil {
-			r.preflightErr = backendError(ErrSetupFailed, string(BackendLinuxBubblewrap), bwrapProbeError{
-				err:    err,
-				stderr: stderr,
-			})
-			return
-		}
-	})
-	return r.bwrapPath, r.bwrapMountProc, r.preflightErr
+		return bwrap, false, nil
+	}
+	return "", false, backendError(
+		ErrSetupFailed,
+		string(BackendLinuxBubblewrap),
+		bwrapProbeError{err: err, stderr: stderr},
+	)
 }
 
 // linuxRestrictedPreflight verifies that this Runtime can enforce restricted
-// AF_UNIX seccomp. restrictedPreflightOnce caches the result for the Runtime
-// lifetime, so a failure is permanent and later calls fail closed with the
-// cached error. The bwrap and mountProc arguments apply only to the first call.
-func (r *Runtime) linuxRestrictedPreflight(bwrap string, mountProc bool) error {
-	r.restrictedPreflightOnce.Do(func() {
-		if _, err := linuxNativeSeccompPolicy(); err != nil {
-			r.restrictedPreflightErr = backendError(
-				ErrUnsupportedBackend,
-				string(BackendLinuxBubblewrap),
-				err,
-			)
-			return
+// AF_UNIX seccomp. Durable capability results are cached for the Runtime
+// lifetime. Caller cancellation and probe deadlines are not cached, so one
+// transient request cannot permanently poison later restricted runs.
+func (r *Runtime) linuxRestrictedPreflight(
+	ctx context.Context,
+	bwrap string,
+	mountProc bool,
+) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
 		}
-		release, err := linuxKernelRelease()
-		if err != nil {
-			r.restrictedPreflightErr = backendError(
-				ErrSetupFailed,
-				string(BackendLinuxBubblewrap),
-				fmt.Errorf("read kernel release: %w", err),
-			)
-			return
+
+		r.restrictedPreflightMu.Lock()
+		if r.restrictedPreflightReady {
+			err := r.restrictedPreflightErr
+			r.restrictedPreflightMu.Unlock()
+			return err
 		}
-		if err := kernelSupportsRestrictedSeccomp(release); err != nil {
-			r.restrictedPreflightErr = backendError(
-				ErrSetupFailed,
-				string(BackendLinuxBubblewrap),
-				err,
-			)
-			return
+		if r.restrictedPreflightDone != nil {
+			done := r.restrictedPreflightDone
+			r.restrictedPreflightMu.Unlock()
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-done:
+				continue
+			}
 		}
-		seccompFile, err := linuxOpenSeccompMemfd()
-		if err != nil {
-			r.restrictedPreflightErr = backendError(
-				ErrSetupFailed,
-				string(BackendLinuxBubblewrap),
-				err,
-			)
-			return
+		done := make(chan struct{})
+		r.restrictedPreflightDone = done
+		r.restrictedPreflightMu.Unlock()
+
+		err := runLinuxRestrictedPreflight(ctx, bwrap, mountProc)
+		cache := !isTransientRestrictedPreflightError(err)
+
+		r.restrictedPreflightMu.Lock()
+		if cache {
+			r.restrictedPreflightReady = true
+			r.restrictedPreflightErr = err
 		}
-		defer seccompFile.Close()
-		stderr, err := linuxSeccompProbe(bwrap, mountProc, seccompFile)
-		if err != nil {
-			r.restrictedPreflightErr = backendError(
-				ErrSetupFailed,
-				string(BackendLinuxBubblewrap),
-				bwrapProbeError{
-					err:    err,
-					stderr: stderr,
-					hint:   "restricted AF_UNIX seccomp preflight failed",
-				},
-			)
-			return
+		close(done)
+		r.restrictedPreflightDone = nil
+		r.restrictedPreflightMu.Unlock()
+		return err
+	}
+}
+
+func isTransientRestrictedPreflightError(err error) bool {
+	return errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, syscall.EINTR) ||
+		errors.Is(err, syscall.EAGAIN) ||
+		errors.Is(err, syscall.EMFILE) ||
+		errors.Is(err, syscall.ENFILE) ||
+		errors.Is(err, syscall.ENOMEM)
+}
+
+func runLinuxRestrictedPreflight(
+	ctx context.Context,
+	bwrap string,
+	mountProc bool,
+) error {
+	if _, err := linuxNativeSeccompPolicy(); err != nil {
+		return backendError(
+			ErrUnsupportedBackend,
+			string(BackendLinuxBubblewrap),
+			err,
+		)
+	}
+	release, err := linuxKernelRelease()
+	if err != nil {
+		return backendError(
+			ErrSetupFailed,
+			string(BackendLinuxBubblewrap),
+			fmt.Errorf("read kernel release: %w", err),
+		)
+	}
+	if err := kernelSupportsRestrictedSeccomp(release); err != nil {
+		return backendError(
+			ErrSetupFailed,
+			string(BackendLinuxBubblewrap),
+			err,
+		)
+	}
+	seccompFile, err := linuxOpenSeccompMemfd()
+	if err != nil {
+		return backendError(
+			ErrSetupFailed,
+			string(BackendLinuxBubblewrap),
+			err,
+		)
+	}
+	defer seccompFile.Close()
+	stderr, err := linuxSeccompProbe(ctx, bwrap, mountProc, seccompFile)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
 		}
-	})
-	return r.restrictedPreflightErr
+		return backendError(
+			ErrSetupFailed,
+			string(BackendLinuxBubblewrap),
+			bwrapProbeError{
+				err:    err,
+				stderr: stderr,
+				hint:   "restricted AF_UNIX seccomp preflight failed",
+			},
+		)
+	}
+	return nil
 }
 
 // runBwrapSeccompPreflightProbe verifies bubblewrap can load the AF_UNIX
 // seccomp filter before a restricted sandbox command starts.
-func runBwrapSeccompPreflightProbe(bwrap string, mountProc bool, seccompFile *os.File) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), bwrapSeccompPreflightTimeout)
+func runBwrapSeccompPreflightProbe(
+	ctx context.Context,
+	bwrap string,
+	mountProc bool,
+	seccompFile *os.File,
+) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, bwrapSeccompPreflightTimeout)
 	defer cancel()
 	args := buildBwrapPreflightArgs(mountProc)
 	// Insert --seccomp 3 before the final "--" /bin/true pair.

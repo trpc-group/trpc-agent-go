@@ -31,3 +31,35 @@ const (
 type NetworkPolicy struct {
 	Mode NetworkMode
 }
+
+func validateNetworkPolicy(policy NetworkPolicy) error {
+	switch policy.Mode {
+	case NetworkRestricted, NetworkEnabled:
+		return nil
+	default:
+		return deniedf(
+			ErrPolicyViolation,
+			"network-mode",
+			"",
+			"unsupported network mode %q",
+			policy.Mode,
+		)
+	}
+}
+
+func validateProfileNetworkPolicy(profile PermissionProfile) error {
+	if err := validateNetworkPolicy(profile.network); err != nil {
+		return err
+	}
+	if profile.enforcement() == enforcementDisabled &&
+		profile.network.Mode != NetworkEnabled {
+		return deniedf(
+			ErrPolicyViolation,
+			"network-mode",
+			"",
+			"disabled sandbox requires explicit network mode %q",
+			NetworkEnabled,
+		)
+	}
+	return nil
+}

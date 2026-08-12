@@ -141,8 +141,8 @@ func (p PermissionProfile) WithMacOSWeakerNetworkIsolation() PermissionProfile {
 }
 
 // WithMacOSUnixSocketPaths allows macOS Seatbelt access to exact AF_UNIX socket
-// paths. Linux keeps the existing namespace-level network model and does not
-// claim support for these macOS-specific paths.
+// paths. Linux NetworkRestricted combines network-namespace isolation with
+// AF_UNIX/io_uring seccomp and does not use these macOS-specific path grants.
 func (p PermissionProfile) WithMacOSUnixSocketPaths(paths ...string) PermissionProfile {
 	var filtered []string
 	for _, path := range paths {

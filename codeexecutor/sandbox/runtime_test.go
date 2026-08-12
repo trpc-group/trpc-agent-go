@@ -342,6 +342,32 @@ func TestNormalizeRunProgramResultErrorPrecedence(t *testing.T) {
 	}
 }
 
+func TestRuntimeRejectsUnknownNetworkMode(t *testing.T) {
+	rt := NewRuntime(
+		WithWorkspaceRoot(t.TempDir()),
+		WithPermissionProfile(
+			DangerFullAccessProfile().WithNetworkPolicy(
+				NetworkPolicy{Mode: NetworkMode("typo")},
+			),
+		),
+	)
+	ws, err := rt.CreateWorkspace(
+		context.Background(),
+		"run/invalid-network-mode",
+		codeexecutor.WorkspacePolicy{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = rt.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{
+		Cmd: "/bin/true",
+	})
+	if !isKind(err, ErrPolicyViolation) ||
+		!strings.Contains(err.Error(), `unsupported network mode "typo"`) {
+		t.Fatalf("error = %v, want stable invalid network mode policy error", err)
+	}
+}
+
 func TestRuntimeRunProgramSerialTimeoutStartsAfterLock(t *testing.T) {
 	rt := NewRuntime(
 		WithWorkspaceRoot(t.TempDir()),
