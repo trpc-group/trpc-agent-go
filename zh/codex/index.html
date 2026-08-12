@@ -906,6 +906,30 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="多轮会话">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#codex-thread" class="md-nav__link">
+    <span class="md-ellipsis">
+      默认方式：使用 Codex thread
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#session-events" class="md-nav__link">
+    <span class="md-ellipsis">
+      使用框架 session events 构造上下文
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -3047,6 +3071,30 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="多轮会话">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#codex-thread" class="md-nav__link">
+    <span class="md-ellipsis">
+      默认方式：使用 Codex thread
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#session-events" class="md-nav__link">
+    <span class="md-ellipsis">
+      使用框架 session events 构造上下文
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -3193,7 +3241,7 @@
 <tbody>
 <tr>
 <td><code>type == "thread.started"</code></td>
-<td>持久化到 session state key <code>codex.StateKeyThreadID</code></td>
+<td>默认持久化到 session state key <code>codex.StateKeyThreadID</code></td>
 </tr>
 <tr>
 <td><code>item.type == "command_execution"</code></td>
@@ -3225,26 +3273,83 @@
 内置工具调用会保留 Codex 工具名。
 当前 Codex CLI 的真实 skill 使用常作为 prompt context 注入，或通过 shell <code>command_execution</code> item 体现。该 Agent 会保留这些真实 item 类型，不会合成 <code>skill_run</code> 事件。</p>
 <h2 id="_7">多轮会话</h2>
-<p>Codex 会自行创建 thread id。该 Agent 会把这个 id 存入 session state 的 <code>codex.StateKeyThreadID</code>，并在后续轮次使用：</p>
+<h3 id="codex-thread">默认方式：使用 Codex thread</h3>
+<p>默认情况下，该 Agent 使用 Codex CLI 原生 thread 历史：</p>
 <ol>
-<li>首轮：把 prompt 写入 <code>codex exec --json</code> 的 stdin</li>
-<li>后续轮次：把 prompt 写入 <code>codex exec resume --json &lt;thread-id&gt;</code> 的 stdin</li>
+<li>首轮把 prompt 写入 <code>codex exec --json</code> 的 stdin。</li>
+<li>Codex 返回 <code>thread.started</code> 后，Agent 把 thread id 存入 session state 的 <code>codex.StateKeyThreadID</code>。</li>
+<li>后续轮次如果 session state 中有 thread id，Agent 把 prompt 写入 <code>codex exec resume --json &lt;thread-id&gt;</code> 的 stdin。</li>
 </ol>
 <p>如果 resume 在发出任何 transcript 事件前失败，该 Agent 会重新发起一次新的 <code>codex exec</code>；如果新执行返回了 thread id，则更新已保存的 thread id。如果 resume 已经发出过框架事件，或 stdout 解析失败，则不会再启动新的执行，以避免重复暴露进度或重复执行工具副作用，而是直接返回本次失败。如果 resume 与新建执行都失败，本次调用会返回 run error。</p>
-<p>如需保持上下文，请在 <code>runner</code> 中持续使用相同的 app name、user ID、session ID。</p>
+<p>这种方式适合单实例服务，或请求总是固定路由到同一台机器、同一个用户目录和同一套 Codex 配置环境的场景。此时如需保持上下文，请在 <code>runner</code> 中持续使用相同的 app name、user ID、session ID。</p>
+<p>使用 <code>WithResumeEnabled(false)</code> 可以关闭 Codex CLI 原生 resume。关闭后，该 Agent 不读取已有 <code>codex.StateKeyThreadID</code>，不调用 <code>codex exec resume</code>，也不会把新观察到的 thread id 写回 session state；每次调用都会执行新的 <code>codex exec</code>。</p>
+<h3 id="session-events">使用框架 session events 构造上下文</h3>
+<p>如果服务部署了多个实例、容器会重建，或者请求不会固定路由到同一台机器，Codex CLI 本地 thread 就不能作为可靠的多轮上下文来源。此时应把上下文放在框架 session service 中，例如 Redis 或数据库。所有服务实例通过相同的 app name、user ID、session ID 读取同一份 session events，再由 <code>WithMessageBuilder</code> 把这些 events 拼成传给 Codex CLI 的完整 prompt。</p>
+<p>推荐配置方式：</p>
+<ol>
+<li>给 <code>runner</code> 配置共享 session service。</li>
+<li>使用 <code>WithMessageBuilder</code> 从 <code>args.Events</code> 构造完整 prompt。</li>
+<li>使用 <code>WithResumeEnabled(false)</code> 关闭 Codex CLI 本地 thread resume，避免同一段历史同时来自 prompt 和本地 thread。</li>
+</ol>
+<p><code>MessageBuilderArgs.Events</code> 是只读浅快照，不应修改其中的 event、response、state delta 或 extensions。通过 <code>runner.Run</code> 调用时，runner 会先持久化当前 turn 的 user message，再调用 Agent；因此 builder 看到的 events 已经包含当前 turn user message，不要默认再追加一遍。</p>
+<p>下面示例省略 <code>context</code>、<code>strings</code> 等标准库 import，只展示 Agent 相关配置。示例只拼接非 partial 的 message 文本；生产环境可以按业务需要选择是否加入工具调用和工具结果。</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-2-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-2-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-2-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-2-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-2-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-2-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-2-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-2-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-2-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-2-10">10</a></span>
+<span class="normal"><a href="#__codelineno-2-11">11</a></span>
+<span class="normal"><a href="#__codelineno-2-12">12</a></span>
+<span class="normal"><a href="#__codelineno-2-13">13</a></span>
+<span class="normal"><a href="#__codelineno-2-14">14</a></span>
+<span class="normal"><a href="#__codelineno-2-15">15</a></span>
+<span class="normal"><a href="#__codelineno-2-16">16</a></span>
+<span class="normal"><a href="#__codelineno-2-17">17</a></span>
+<span class="normal"><a href="#__codelineno-2-18">18</a></span>
+<span class="normal"><a href="#__codelineno-2-19">19</a></span>
+<span class="normal"><a href="#__codelineno-2-20">20</a></span>
+<span class="normal"><a href="#__codelineno-2-21">21</a></span>
+<span class="normal"><a href="#__codelineno-2-22">22</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/codex&quot;</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2"></a>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3"></a><span class="nx">ag</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">codex</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4"></a><span class="w">  </span><span class="nx">codex</span><span class="p">.</span><span class="nx">WithMessageBuilder</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">args</span><span class="w"> </span><span class="o">*</span><span class="nx">codex</span><span class="p">.</span><span class="nx">MessageBuilderArgs</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5"></a><span class="w">    </span><span class="kd">var</span><span class="w"> </span><span class="nx">prompt</span><span class="w"> </span><span class="nx">strings</span><span class="p">.</span><span class="nx">Builder</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">evt</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">args</span><span class="p">.</span><span class="nx">Events</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7"></a><span class="w">      </span><span class="k">if</span><span class="w"> </span><span class="nx">evt</span><span class="p">.</span><span class="nx">Response</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">evt</span><span class="p">.</span><span class="nx">Choices</span><span class="p">)</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nx">evt</span><span class="p">.</span><span class="nx">IsPartial</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8"></a><span class="w">        </span><span class="k">continue</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9"></a><span class="w">      </span><span class="p">}</span>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10"></a><span class="w">      </span><span class="nx">msg</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evt</span><span class="p">.</span><span class="nx">Choices</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">Message</span>
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11"></a><span class="w">      </span><span class="k">if</span><span class="w"> </span><span class="nx">msg</span><span class="p">.</span><span class="nx">Content</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12"></a><span class="w">        </span><span class="k">continue</span>
+</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13"></a><span class="w">      </span><span class="p">}</span>
+</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14"></a><span class="w">      </span><span class="nx">prompt</span><span class="p">.</span><span class="nx">WriteString</span><span class="p">(</span><span class="nb">string</span><span class="p">(</span><span class="nx">msg</span><span class="p">.</span><span class="nx">Role</span><span class="p">))</span>
+</span><span id="__span-2-15"><a id="__codelineno-2-15" name="__codelineno-2-15"></a><span class="w">      </span><span class="nx">prompt</span><span class="p">.</span><span class="nx">WriteString</span><span class="p">(</span><span class="s">&quot;: &quot;</span><span class="p">)</span>
+</span><span id="__span-2-16"><a id="__codelineno-2-16" name="__codelineno-2-16"></a><span class="w">      </span><span class="nx">prompt</span><span class="p">.</span><span class="nx">WriteString</span><span class="p">(</span><span class="nx">msg</span><span class="p">.</span><span class="nx">Content</span><span class="p">)</span>
+</span><span id="__span-2-17"><a id="__codelineno-2-17" name="__codelineno-2-17"></a><span class="w">      </span><span class="nx">prompt</span><span class="p">.</span><span class="nx">WriteString</span><span class="p">(</span><span class="s">&quot;\n&quot;</span><span class="p">)</span>
+</span><span id="__span-2-18"><a id="__codelineno-2-18" name="__codelineno-2-18"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-2-19"><a id="__codelineno-2-19" name="__codelineno-2-19"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">prompt</span><span class="p">.</span><span class="nx">String</span><span class="p">(),</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-2-20"><a id="__codelineno-2-20" name="__codelineno-2-20"></a><span class="w">  </span><span class="p">}),</span>
+</span><span id="__span-2-21"><a id="__codelineno-2-21" name="__codelineno-2-21"></a><span class="w">  </span><span class="nx">codex</span><span class="p">.</span><span class="nx">WithResumeEnabled</span><span class="p">(</span><span class="kc">false</span><span class="p">),</span>
+</span><span id="__span-2-22"><a id="__codelineno-2-22" name="__codelineno-2-22"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
 <h2 id="_8">原始日志落盘</h2>
 <p>使用 <code>WithRawOutputHook</code> 获取每次执行的 stdout/stderr，建议写入评估/观测产物目录中：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-2-1">1</a></span>
-<span class="normal"><a href="#__codelineno-2-2">2</a></span>
-<span class="normal"><a href="#__codelineno-2-3">3</a></span>
-<span class="normal"><a href="#__codelineno-2-4">4</a></span>
-<span class="normal"><a href="#__codelineno-2-5">5</a></span>
-<span class="normal"><a href="#__codelineno-2-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a><span class="nx">ag</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">codex</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2"></a><span class="w">  </span><span class="nx">codex</span><span class="p">.</span><span class="nx">WithRawOutputHook</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">args</span><span class="w"> </span><span class="o">*</span><span class="nx">codex</span><span class="p">.</span><span class="nx">RawOutputHookArgs</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3"></a><span class="w">    </span><span class="c1">// Write args.Stdout / args.Stderr to your log storage.</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5"></a><span class="w">  </span><span class="p">}),</span>
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6"></a><span class="p">)</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1">1</a></span>
+<span class="normal"><a href="#__codelineno-3-2">2</a></span>
+<span class="normal"><a href="#__codelineno-3-3">3</a></span>
+<span class="normal"><a href="#__codelineno-3-4">4</a></span>
+<span class="normal"><a href="#__codelineno-3-5">5</a></span>
+<span class="normal"><a href="#__codelineno-3-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a><span class="nx">ag</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">codex</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a><span class="w">  </span><span class="nx">codex</span><span class="p">.</span><span class="nx">WithRawOutputHook</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">args</span><span class="w"> </span><span class="o">*</span><span class="nx">codex</span><span class="p">.</span><span class="nx">RawOutputHookArgs</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3"></a><span class="w">    </span><span class="c1">// Write args.Stdout / args.Stderr to your log storage.</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5"></a><span class="w">  </span><span class="p">}),</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p><code>RawOutputHookArgs</code> 包含框架侧 <code>SessionID</code> 与 Codex 侧 <code>ThreadID</code>，可用于按 session 聚合日志。</p>
 <h2 id="_9">配置选项说明</h2>
@@ -3284,6 +3389,14 @@
 <td><code>WithRawOutputHook(hook)</code></td>
 <td>观测 raw stdout/stderr。回调会在 CLI 结束后、流式事件发出后调用；如果返回错误，会追加错误事件并跳过最终 assistant response。</td>
 </tr>
+<tr>
+<td><code>WithMessageBuilder(builder)</code></td>
+<td>自定义传给 Codex CLI 的完整 prompt。</td>
+</tr>
+<tr>
+<td><code>WithResumeEnabled(enabled)</code></td>
+<td>控制是否使用 Codex CLI thread resume；默认 <code>true</code>。</td>
+</tr>
 </tbody>
 </table>
 
@@ -3308,7 +3421,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年7月22日 06:45:25 UTC">2026-07-22 06:45:25</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年8月12日 02:42:25 UTC">2026-08-12 02:42:25</span>
   </span>
 
     

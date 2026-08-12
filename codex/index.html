@@ -906,6 +906,30 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Multi-turn sessions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#default-mode-use-codex-threads" class="md-nav__link">
+    <span class="md-ellipsis">
+      Default mode: use Codex threads
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#use-framework-session-events-as-context" class="md-nav__link">
+    <span class="md-ellipsis">
+      Use framework session events as context
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -3047,6 +3071,30 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Multi-turn sessions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#default-mode-use-codex-threads" class="md-nav__link">
+    <span class="md-ellipsis">
+      Default mode: use Codex threads
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#use-framework-session-events-as-context" class="md-nav__link">
+    <span class="md-ellipsis">
+      Use framework session events as context
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -3193,7 +3241,7 @@
 <tbody>
 <tr>
 <td><code>type == "thread.started"</code></td>
-<td>Persisted into session state key <code>codex.StateKeyThreadID</code></td>
+<td>Persisted by default into session state key <code>codex.StateKeyThreadID</code></td>
 </tr>
 <tr>
 <td><code>item.type == "command_execution"</code></td>
@@ -3225,26 +3273,83 @@
 Built-in tool calls keep their Codex tool names.
 Current Codex CLI skill usage is often injected as prompt context or handled through shell <code>command_execution</code> items. This agent preserves those actual item types and does not emit a synthetic <code>skill_run</code> event.</p>
 <h2 id="multi-turn-sessions">Multi-turn sessions</h2>
-<p>Codex creates its own thread id. The agent persists that id in session state under <code>codex.StateKeyThreadID</code> and uses it on later turns:</p>
+<h3 id="default-mode-use-codex-threads">Default mode: use Codex threads</h3>
+<p>By default, the agent uses Codex CLI's native thread history:</p>
 <ol>
-<li>First turn: write the prompt to stdin of <code>codex exec --json</code></li>
-<li>Later turns: write the prompt to stdin of <code>codex exec resume --json &lt;thread-id&gt;</code></li>
+<li>On the first turn, the agent writes the prompt to stdin of <code>codex exec --json</code>.</li>
+<li>When Codex returns <code>thread.started</code>, the agent stores the thread id in session state under <code>codex.StateKeyThreadID</code>.</li>
+<li>On later turns, if session state has a thread id, the agent writes the prompt to stdin of <code>codex exec resume --json &lt;thread-id&gt;</code>.</li>
 </ol>
 <p>If resume fails before any transcript event is emitted, the agent starts a fresh <code>codex exec</code> run and updates the stored thread id when the new run reports one. If resume has already emitted framework events, or if stdout parsing fails, the agent surfaces that failure instead of starting a fresh run to avoid duplicating visible progress or tool side effects. If both resume and create fail, the invocation returns a run error.</p>
-<p>To keep context, use the same app name, user ID, and session ID in <code>runner</code>.</p>
+<p>This mode is best for single-instance services, or for deployments where requests are always routed to the same machine, user home, and Codex configuration environment. To keep context in this mode, use the same app name, user ID, and session ID in <code>runner</code>.</p>
+<p>Use <code>WithResumeEnabled(false)</code> to disable native Codex CLI resume. When disabled, the agent does not read <code>codex.StateKeyThreadID</code>, does not call <code>codex exec resume</code>, and does not write newly observed thread ids back to session state. Each invocation runs a fresh <code>codex exec</code>.</p>
+<h3 id="use-framework-session-events-as-context">Use framework session events as context</h3>
+<p>If your service runs multiple instances, rebuilds containers, or does not route each conversation to the same machine, Codex CLI's local thread history is not a reliable context source. In that case, keep context in a framework session service such as Redis or a database. All service instances can read the same session events by using the same app name, user ID, and session ID, and <code>WithMessageBuilder</code> can turn those events into the complete prompt passed to Codex CLI.</p>
+<p>Recommended configuration:</p>
+<ol>
+<li>Configure <code>runner</code> with a shared session service.</li>
+<li>Use <code>WithMessageBuilder</code> to build the complete prompt from <code>args.Events</code>.</li>
+<li>Use <code>WithResumeEnabled(false)</code> to disable local Codex thread resume, so the same history does not come from both the prompt and the local thread.</li>
+</ol>
+<p><code>MessageBuilderArgs.Events</code> is a read-only shallow snapshot. Do not mutate events, responses, state deltas, or extensions inside it. When the agent is called through <code>runner.Run</code>, the runner persists the current-turn user message before invoking the agent, so the events already include the current user message. Do not append it again by default.</p>
+<p>The example below omits standard-library imports such as <code>context</code> and <code>strings</code>, and shows only the agent-specific import. It joins non-partial message text only; production builders can choose whether to include tool calls and tool results.</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-2-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-2-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-2-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-2-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-2-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-2-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-2-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-2-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-2-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-2-10">10</a></span>
+<span class="normal"><a href="#__codelineno-2-11">11</a></span>
+<span class="normal"><a href="#__codelineno-2-12">12</a></span>
+<span class="normal"><a href="#__codelineno-2-13">13</a></span>
+<span class="normal"><a href="#__codelineno-2-14">14</a></span>
+<span class="normal"><a href="#__codelineno-2-15">15</a></span>
+<span class="normal"><a href="#__codelineno-2-16">16</a></span>
+<span class="normal"><a href="#__codelineno-2-17">17</a></span>
+<span class="normal"><a href="#__codelineno-2-18">18</a></span>
+<span class="normal"><a href="#__codelineno-2-19">19</a></span>
+<span class="normal"><a href="#__codelineno-2-20">20</a></span>
+<span class="normal"><a href="#__codelineno-2-21">21</a></span>
+<span class="normal"><a href="#__codelineno-2-22">22</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/codex&quot;</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2"></a>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3"></a><span class="nx">ag</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">codex</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4"></a><span class="w">  </span><span class="nx">codex</span><span class="p">.</span><span class="nx">WithMessageBuilder</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">args</span><span class="w"> </span><span class="o">*</span><span class="nx">codex</span><span class="p">.</span><span class="nx">MessageBuilderArgs</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5"></a><span class="w">    </span><span class="kd">var</span><span class="w"> </span><span class="nx">prompt</span><span class="w"> </span><span class="nx">strings</span><span class="p">.</span><span class="nx">Builder</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">evt</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">args</span><span class="p">.</span><span class="nx">Events</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7"></a><span class="w">      </span><span class="k">if</span><span class="w"> </span><span class="nx">evt</span><span class="p">.</span><span class="nx">Response</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">evt</span><span class="p">.</span><span class="nx">Choices</span><span class="p">)</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nx">evt</span><span class="p">.</span><span class="nx">IsPartial</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8"></a><span class="w">        </span><span class="k">continue</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9"></a><span class="w">      </span><span class="p">}</span>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10"></a><span class="w">      </span><span class="nx">msg</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evt</span><span class="p">.</span><span class="nx">Choices</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">Message</span>
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11"></a><span class="w">      </span><span class="k">if</span><span class="w"> </span><span class="nx">msg</span><span class="p">.</span><span class="nx">Content</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12"></a><span class="w">        </span><span class="k">continue</span>
+</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13"></a><span class="w">      </span><span class="p">}</span>
+</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14"></a><span class="w">      </span><span class="nx">prompt</span><span class="p">.</span><span class="nx">WriteString</span><span class="p">(</span><span class="nb">string</span><span class="p">(</span><span class="nx">msg</span><span class="p">.</span><span class="nx">Role</span><span class="p">))</span>
+</span><span id="__span-2-15"><a id="__codelineno-2-15" name="__codelineno-2-15"></a><span class="w">      </span><span class="nx">prompt</span><span class="p">.</span><span class="nx">WriteString</span><span class="p">(</span><span class="s">&quot;: &quot;</span><span class="p">)</span>
+</span><span id="__span-2-16"><a id="__codelineno-2-16" name="__codelineno-2-16"></a><span class="w">      </span><span class="nx">prompt</span><span class="p">.</span><span class="nx">WriteString</span><span class="p">(</span><span class="nx">msg</span><span class="p">.</span><span class="nx">Content</span><span class="p">)</span>
+</span><span id="__span-2-17"><a id="__codelineno-2-17" name="__codelineno-2-17"></a><span class="w">      </span><span class="nx">prompt</span><span class="p">.</span><span class="nx">WriteString</span><span class="p">(</span><span class="s">&quot;\n&quot;</span><span class="p">)</span>
+</span><span id="__span-2-18"><a id="__codelineno-2-18" name="__codelineno-2-18"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-2-19"><a id="__codelineno-2-19" name="__codelineno-2-19"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">prompt</span><span class="p">.</span><span class="nx">String</span><span class="p">(),</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-2-20"><a id="__codelineno-2-20" name="__codelineno-2-20"></a><span class="w">  </span><span class="p">}),</span>
+</span><span id="__span-2-21"><a id="__codelineno-2-21" name="__codelineno-2-21"></a><span class="w">  </span><span class="nx">codex</span><span class="p">.</span><span class="nx">WithResumeEnabled</span><span class="p">(</span><span class="kc">false</span><span class="p">),</span>
+</span><span id="__span-2-22"><a id="__codelineno-2-22" name="__codelineno-2-22"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
 <h2 id="persist-raw-cli-output">Persist raw CLI output</h2>
 <p>Use <code>WithRawOutputHook</code> to observe stdout/stderr for each invocation. It is recommended to write them into evaluation and observability artifacts:</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-2-1">1</a></span>
-<span class="normal"><a href="#__codelineno-2-2">2</a></span>
-<span class="normal"><a href="#__codelineno-2-3">3</a></span>
-<span class="normal"><a href="#__codelineno-2-4">4</a></span>
-<span class="normal"><a href="#__codelineno-2-5">5</a></span>
-<span class="normal"><a href="#__codelineno-2-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a><span class="nx">ag</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">codex</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2"></a><span class="w">  </span><span class="nx">codex</span><span class="p">.</span><span class="nx">WithRawOutputHook</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">args</span><span class="w"> </span><span class="o">*</span><span class="nx">codex</span><span class="p">.</span><span class="nx">RawOutputHookArgs</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3"></a><span class="w">    </span><span class="c1">// Write args.Stdout / args.Stderr to your log storage.</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5"></a><span class="w">  </span><span class="p">}),</span>
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6"></a><span class="p">)</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1">1</a></span>
+<span class="normal"><a href="#__codelineno-3-2">2</a></span>
+<span class="normal"><a href="#__codelineno-3-3">3</a></span>
+<span class="normal"><a href="#__codelineno-3-4">4</a></span>
+<span class="normal"><a href="#__codelineno-3-5">5</a></span>
+<span class="normal"><a href="#__codelineno-3-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a><span class="nx">ag</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">codex</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a><span class="w">  </span><span class="nx">codex</span><span class="p">.</span><span class="nx">WithRawOutputHook</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">args</span><span class="w"> </span><span class="o">*</span><span class="nx">codex</span><span class="p">.</span><span class="nx">RawOutputHookArgs</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3"></a><span class="w">    </span><span class="c1">// Write args.Stdout / args.Stderr to your log storage.</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5"></a><span class="w">  </span><span class="p">}),</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p><code>RawOutputHookArgs</code> carries both the framework <code>SessionID</code> and Codex <code>ThreadID</code>.</p>
 <h2 id="options-reference">Options reference</h2>
@@ -3284,6 +3389,14 @@ Current Codex CLI skill usage is often injected as prompt context or handled thr
 <td><code>WithRawOutputHook(hook)</code></td>
 <td>Observes raw stdout and stderr. The hook runs after the CLI finishes and after streamed transcript events are emitted; returning an error appends an error event and skips the final assistant response.</td>
 </tr>
+<tr>
+<td><code>WithMessageBuilder(builder)</code></td>
+<td>Customizes the complete prompt passed to Codex CLI.</td>
+</tr>
+<tr>
+<td><code>WithResumeEnabled(enabled)</code></td>
+<td>Controls whether the agent uses Codex CLI thread resume. Default is <code>true</code>.</td>
+</tr>
 </tbody>
 </table>
 
@@ -3308,7 +3421,7 @@ Current Codex CLI skill usage is often injected as prompt context or handled thr
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="July 22, 2026 06:45:25 UTC">2026-07-22 06:45:25</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="August 12, 2026 02:42:25 UTC">2026-08-12 02:42:25</span>
   </span>
 
     
