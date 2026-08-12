@@ -37,8 +37,8 @@ interfaces.
   sockets;
 - returns `EPERM` for `io_uring_setup`, `io_uring_enter`, and
   `io_uring_register`, which otherwise could create sockets without `socket(2)`;
-- leaves `socketpair(AF_UNIX, SOCK_STREAM, ...)` available for anonymous local
-  IPC;
+- leaves `socketpair(AF_UNIX, SOCK_STREAM, ...)` and
+  `socketpair(AF_UNIX, SOCK_SEQPACKET, ...)` available for anonymous local IPC;
 - does not provide a path-level Unix socket allowlist.
 
 Because the managed Linux profile still uses `--ro-bind / /`, host socket paths
@@ -47,7 +47,7 @@ is what makes them unusable: the guest cannot create a new AF_UNIX file
 descriptor to `connect(2)` them. The same rule also blocks guest-local pathname
 and abstract Unix sockets. Callers that need pathname or abstract Unix socket IPC must
 choose `NetworkEnabled` (including through temporary `WithAdditionalPermissions`);
-anonymous stream socketpairs remain available in `NetworkRestricted`.
+anonymous stream and seqpacket socketpairs remain available in `NetworkRestricted`.
 
 Restricted Linux runs fail closed when:
 

@@ -1233,6 +1233,12 @@ func TestOpenLinuxSandboxExtraFilesDenyReadFailsClosesSeccomp(t *testing.T) {
 	if err == nil || files != nil || cleanup != nil {
 		t.Fatalf("files=%v cleanup=%v err=%v, want deny-read open failure after seccomp", files, cleanup, err)
 	}
+	// closeAll() must have closed the seccomp memfd so this last FD slot works.
+	reopen, reopenErr := os.Open("/dev/null")
+	if reopenErr != nil {
+		t.Fatalf("expected /dev/null reopen after closeAll, got %v", reopenErr)
+	}
+	_ = reopen.Close()
 }
 
 func TestOpenSeccompFilterMemfdFailsClosedOnEMFILE(t *testing.T) {

@@ -559,32 +559,37 @@ func openSeccompFilterMemfd() (*os.File, error) {
 		return nil, fmt.Errorf("create seccomp memfd: %w", err)
 	}
 	f := os.NewFile(uintptr(fd), "trpc-agent-seccomp")
-	if _, err := f.Write(payload); err != nil {
+	if err := writeAndSealSeccompMemfd(f, payload); err != nil {
 		_ = f.Close()
-		return nil, fmt.Errorf("write seccomp memfd: %w", err)
+		return nil, err
+	}
+	return f, nil
+}
+
+// writeAndSealSeccompMemfd writes the classic BPF blob, rewinds, and applies
+// write/grow/shrink/seal seals so bubblewrap cannot observe a mutable filter.
+func writeAndSealSeccompMemfd(f *os.File, payload []byte) error {
+	if _, err := f.Write(payload); err != nil {
+		return fmt.Errorf("write seccomp memfd: %w", err)
 	}
 	if written, err := f.Seek(0, io.SeekStart); err != nil || written != 0 {
-		_ = f.Close()
 		if err == nil {
 			err = fmt.Errorf("seccomp memfd seek returned %d", written)
 		}
-		return nil, fmt.Errorf("rewind seccomp memfd: %w", err)
+		return fmt.Errorf("rewind seccomp memfd: %w", err)
 	}
 	seals := unix.F_SEAL_WRITE | unix.F_SEAL_GROW | unix.F_SEAL_SHRINK | unix.F_SEAL_SEAL
 	if _, err := unix.FcntlInt(f.Fd(), unix.F_ADD_SEALS, seals); err != nil {
-		_ = f.Close()
-		return nil, fmt.Errorf("seal seccomp memfd: %w", err)
+		return fmt.Errorf("seal seccomp memfd: %w", err)
 	}
 	got, err := unix.FcntlInt(f.Fd(), unix.F_GET_SEALS, 0)
 	if err != nil {
-		_ = f.Close()
-		return nil, fmt.Errorf("read seccomp memfd seals: %w", err)
+		return fmt.Errorf("read seccomp memfd seals: %w", err)
 	}
 	if got&seals != seals {
-		_ = f.Close()
-		return nil, fmt.Errorf("seccomp memfd seals = %#x, want %#x", got, seals)
+		return fmt.Errorf("seccomp memfd seals = %#x, want %#x", got, seals)
 	}
-	return f, nil
+	return nil
 }
 
 func parseKernelRelease(release string) (major, minor int, err error) {

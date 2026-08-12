@@ -685,6 +685,56 @@ func TestOpenSeccompFilterMemfdSealed(t *testing.T) {
 	}
 }
 
+func TestWriteAndSealSeccompMemfdErrors(t *testing.T) {
+	t.Parallel()
+	payload := []byte{0x20, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00}
+
+	t.Run("writeFails", func(t *testing.T) {
+		t.Parallel()
+		path := filepath.Join(t.TempDir(), "ro")
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		f, err := os.Open(path) // O_RDONLY
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+		err = writeAndSealSeccompMemfd(f, payload)
+		if err == nil || !strings.Contains(err.Error(), "write seccomp memfd") {
+			t.Fatalf("got %v, want write error", err)
+		}
+	})
+
+	t.Run("rewindFailsOnPipe", func(t *testing.T) {
+		t.Parallel()
+		r, w, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.Close()
+		defer w.Close()
+		err = writeAndSealSeccompMemfd(w, payload)
+		if err == nil || !strings.Contains(err.Error(), "rewind seccomp memfd") {
+			t.Fatalf("got %v, want rewind error", err)
+		}
+	})
+
+	t.Run("sealFailsOnRegularFile", func(t *testing.T) {
+		t.Parallel()
+		path := filepath.Join(t.TempDir(), "not-memfd")
+		f, err := os.Create(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+		err = writeAndSealSeccompMemfd(f, payload)
+		if err == nil || !strings.Contains(err.Error(), "seal seccomp memfd") {
+			t.Fatalf("got %v, want seal error", err)
+		}
+	})
+}
+
 func TestSerializeSeccompFilterLELayout(t *testing.T) {
 	t.Parallel()
 	raw, err := assembleSeccompFilter(seccompPolicyAMD64)
