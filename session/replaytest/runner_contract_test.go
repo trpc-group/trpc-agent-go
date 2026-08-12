@@ -161,6 +161,55 @@ func TestReplayPropagatesBackendOperationFailures(t *testing.T) {
 	}
 }
 
+func TestReplayPreservesLegacyEventFields(t *testing.T) {
+	replayCase := singleTurnCase()
+	replayCase.Name = "legacy-event-fields"
+	input := replayCase.Steps[0].Event.Event
+	input.ID = "legacy-physical-id"
+	input.Version = event.InitVersion
+	input.Branch = "legacy-branch"
+	input.FilterKey = "legacy-filter-key"
+
+	var gotID, gotBranch, gotFilterKey string
+	var gotVersion int
+	backend, sessionFaults, _ := backendWithReplayFaults(
+		InMemoryBackend(),
+		nil,
+		nil,
+		replayOperationTest{
+			sessionFaults: func(faults *replaySessionFaults) {
+				faults.observeEvent = func(evt *event.Event) bool {
+					if !logicalEventMatcher("single-user")(evt) {
+						return false
+					}
+					gotID = evt.ID
+					gotVersion = evt.Version
+					gotBranch = evt.Branch
+					gotFilterKey = evt.FilterKey
+					return true
+				}
+			},
+		},
+	)
+
+	if _, err := Replay(context.Background(), replayCase, backend); err != nil {
+		t.Fatalf("Replay() error = %v", err)
+	}
+	assertCalls(t, "legacy AppendEvent", sessionFaults.observedEventCalls.Load(), 1)
+	if gotVersion != input.Version {
+		t.Errorf("AppendEvent() Version = %d, want %d", gotVersion, input.Version)
+	}
+	if gotBranch != input.Branch {
+		t.Errorf("AppendEvent() Branch = %q, want %q", gotBranch, input.Branch)
+	}
+	if gotFilterKey != input.FilterKey {
+		t.Errorf("AppendEvent() FilterKey = %q, want %q", gotFilterKey, input.FilterKey)
+	}
+	if gotID == input.ID {
+		t.Errorf("AppendEvent() ID = %q, want a regenerated physical ID", gotID)
+	}
+}
+
 func TestReplayStopsImmediatelyAfterBackendCancellation(t *testing.T) {
 	tests := []replayOperationTest{
 		{

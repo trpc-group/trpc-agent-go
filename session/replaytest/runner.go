@@ -621,6 +621,8 @@ func (e *execution) prepareEvent(input *EventInput) (*event.Event, error) {
 
 func cloneReplayEvent(input *event.Event) (*event.Event, error) {
 	cloned := input.Clone()
+	cloned.Version = input.Version
+	cloned.FilterKey = input.FilterKey
 	cloned.StateDelta = cloneByteMap(input.StateDelta)
 	if input.ParentMetadata != nil {
 		metadata := *input.ParentMetadata
