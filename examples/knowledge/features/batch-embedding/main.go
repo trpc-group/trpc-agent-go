@@ -89,19 +89,17 @@ func run(ctx context.Context) error {
 	src := file.New([]string{*input}, file.WithName("Batch Embedding Example"))
 	sources := []source.Source{src}
 
-	results := make([]runResult, 0, 3)
-
 	fmt.Println("Loading with one request per document...")
 	perDocument := newCountingEmbedder(openai.New(openai.WithModel(modelName)))
 	elapsed, err := load(ctx, perDocument, sources)
 	if err != nil {
 		return fmt.Errorf("per-document load: %w", err)
 	}
-	results = append(results, runResult{
+	perDocumentRun := runResult{
 		name:    "per-document",
 		counter: &perDocument.requestCounter,
 		elapsed: elapsed,
-	})
+	}
 
 	fmt.Printf("Loading with up to %d documents per request...\n", *batchSize)
 	batched := newCountingEmbedder(openai.New(openai.WithModel(modelName)))
@@ -109,12 +107,13 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("batched load: %w", err)
 	}
-	results = append(results, runResult{
+	batchedRun := runResult{
 		name:    fmt.Sprintf("batched (size %d)", *batchSize),
 		counter: &batched.requestCounter,
 		elapsed: elapsed,
-	})
+	}
 
+	var extra []runResult
 	if *showFallback {
 		fmt.Println("Loading with an embedder that has no batch support...")
 		fallback := newPerDocumentEmbedder(openai.New(openai.WithModel(modelName)))
@@ -122,14 +121,14 @@ func run(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("fallback load: %w", err)
 		}
-		results = append(results, runResult{
+		extra = append(extra, runResult{
 			name:    "no batch support",
 			counter: &fallback.requestCounter,
 			elapsed: elapsed,
 		})
 	}
 
-	report(results, *batchSize)
+	report(perDocumentRun, batchedRun, extra, *batchSize)
 	return nil
 }
 
@@ -159,14 +158,16 @@ func load(
 	return time.Since(start), nil
 }
 
-// report prints the comparison table. It expects the per-document run first
-// and the batched run second, as produced by run.
-func report(results []runResult, batchSize int) {
+// report prints one row per load and then compares perDocument and batched,
+// the two loads that differ only in how their documents were grouped. Any
+// extra run is shown in the table but left out of that comparison.
+func report(perDocument, batched runResult, extra []runResult, batchSize int) {
 	fmt.Println()
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	_, _ = fmt.Fprintln(w,
 		"variant\tdocuments\tper-document requests\tbatch requests\ttotal requests\telapsed")
-	for _, r := range results {
+	rows := append([]runResult{perDocument, batched}, extra...)
+	for _, r := range rows {
 		_, _ = fmt.Fprintf(w, "%s\t%d\t%d\t%d\t%d\t%s\n",
 			r.name,
 			r.counter.embeddedTexts.Load(),
@@ -178,13 +179,13 @@ func report(results []runResult, batchSize int) {
 	}
 	_ = w.Flush()
 
-	documents := results[0].counter.embeddedTexts.Load()
+	documents := perDocument.counter.embeddedTexts.Load()
 	expected := (documents + int64(batchSize) - 1) / int64(batchSize)
 	fmt.Println()
 	fmt.Printf("Embedding requests for %d documents: %d without batching, %d with batching (ceil(%d/%d) = %d).\n",
 		documents,
-		results[0].counter.totalRequests(),
-		results[1].counter.totalRequests(),
+		perDocument.counter.totalRequests(),
+		batched.counter.totalRequests(),
 		documents, batchSize, expected,
 	)
 	fmt.Println("Elapsed is one sample from one run against one provider, not a benchmark.")
