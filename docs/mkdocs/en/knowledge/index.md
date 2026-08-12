@@ -351,6 +351,8 @@ The two options compose: `WithDocConcurrency(n)` bounds the number of concurrent
 > - Choose `B` within the provider's per-request limits on input count, total tokens, and payload size. The framework does not split a batch to satisfy those limits.
 > - Batching reduces the number of embedding requests. It does not change the input text, the model, or the resulting vectors, and it does not reduce the number of vector store writes; measure your own workload before assuming an end-to-end throughput gain.
 
+The [batch embedding example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/features/batch-embedding) loads the same file with and without a batch size and prints how many embedding requests each load issued.
+
 ### Load Progress Callback
 
 Use `WithLoadProgressCallback` to register a structured progress callback for driving custom UIs, metrics collection, or other observability integrations without parsing log output:

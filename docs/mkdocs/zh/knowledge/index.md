@@ -372,6 +372,8 @@ err := kb.Load(ctx,
 > - 请在 provider 的单请求输入数、总 token 数和 payload 大小限制内选择 `B`，框架不会为满足这些限制而自动切分批次
 > - 批量的确定收益是减少 embedding 请求数。它不改变输入文本、模型和生成的向量，也不减少向量库的写入次数；端到端吞吐是否提升需要在自己的负载上实测
 
+[批量 Embedding 示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/features/batch-embedding)会对同一个文件分别在不带和带批量大小的情况下各加载一次，并打印两次加载各自发出的 embedding 请求数。
+
 ### 加载进度回调
 
 通过 `WithLoadProgressCallback` 可以注册一个结构化的进度回调函数，用于驱动自定义 UI、指标采集或其他可观测性集成，无需解析日志输出：
