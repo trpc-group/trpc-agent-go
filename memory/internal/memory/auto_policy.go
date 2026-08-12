@@ -314,8 +314,8 @@ func classifyPreserveHistoryCandidate(
 }
 
 func preservesMaterialTokenOrder(oldText, newText string) bool {
-	oldTokens := BuildSearchTokens(oldText)
-	newTokens := BuildSearchTokens(newText)
+	oldTokens := buildOrderedSearchTokens(oldText)
+	newTokens := buildOrderedSearchTokens(newText)
 	if len(oldTokens) == 0 || len(newTokens) == 0 {
 		return false
 	}
@@ -330,6 +330,13 @@ func preservesMaterialTokenOrder(oldText, newText string) bool {
 		}
 	}
 	return false
+}
+
+func buildOrderedSearchTokens(text string) []string {
+	return tokenizePrimarySearchText(text, tokenOptions{
+		deduplicate:       false,
+		keepSingleCJKRune: shouldKeepSingleCJKToken(text),
+	})
 }
 
 func materialTokensPreserved(oldText, newText string) bool {

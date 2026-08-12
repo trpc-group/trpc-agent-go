@@ -1102,12 +1102,33 @@ func TestClassifyPreserveHistoryCandidate_RejectsSemanticConflicts(t *testing.T)
 			old:  "Alice stores the detailed family travel plans in the shared office cabinet for everyone to review before each meeting.",
 			new:  "Alice now stores the detailed family travel plans in the shared office cabinet for everyone to review before each meeting.",
 		},
+		{
+			name: "repeated entity relation changed",
+			old:  "Alice called Bob after Bob called Carol.",
+			new:  "Alice called Bob after Carol called Bob.",
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			assert.Nil(t, classifyPreserveHistoryCandidate(op(test.new), entry(test.old)))
 		})
 	}
+}
+
+func TestClassifyPreserveHistoryCandidate_PreservesRepeatedEntityOrder(t *testing.T) {
+	entry := &memory.Entry{
+		ID: "candidate",
+		Memory: &memory.Memory{
+			Memory: "Alice called Bob after Bob called Carol.",
+			Kind:   memory.KindFact,
+		},
+	}
+	op := &extractor.Operation{
+		Type:       extractor.OperationAdd,
+		Memory:     "Alice called Bob after Bob called Carol at 4pm.",
+		MemoryKind: memory.KindFact,
+	}
+	assert.NotNil(t, classifyPreserveHistoryCandidate(op, entry))
 }
 
 func TestPolicyComparisonHelpers(t *testing.T) {
