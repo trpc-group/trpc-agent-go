@@ -3371,22 +3371,32 @@ func TestLoad_EmbeddingBatch_ProgressCountsEveryDocument(t *testing.T) {
 	}
 }
 
-// TestLoad_EmbeddingBatch_ProgressReportsEveryStepBoundary verifies that a
-// batch larger than the progress step size still reports every boundary it
-// steps over. Reporting only counts that are an exact multiple of the step
-// size would drop most updates, because a batch advances the count by its own
-// size rather than by one document.
+// TestLoad_EmbeddingBatch_ProgressReportsEveryStepBoundary verifies that
+// batches whose counts do not land on the progress step boundaries still
+// report every boundary they step over, and that a batch spanning several
+// boundaries reports once with the number of documents actually processed.
+// Reporting only counts that are an exact multiple of the step size would
+// drop those updates, because a batch advances the count by its own size
+// rather than by one document.
 func TestLoad_EmbeddingBatch_ProgressReportsEveryStepBoundary(t *testing.T) {
 	const docCount = 24
-	const batchSize = 4
-	const stepSize = 10
 
 	tests := []struct {
 		name           string
 		docConcurrency int
+		batchSize      int
+		stepSize       int
+		want           []int
 	}{
-		{name: "sequential", docConcurrency: 1},
-		{name: "concurrent", docConcurrency: 2},
+		// Batches end at 4, 8, 12, 16, 20 and 24 while the boundaries are at
+		// 10 and 20, so only the update at 20 is an exact multiple.
+		{name: "unaligned batch sequential", docConcurrency: 1, batchSize: 4, stepSize: 10, want: []int{12, 20, docCount}},
+		{name: "unaligned batch concurrent", docConcurrency: 2, batchSize: 4, stepSize: 10, want: []int{12, 20, docCount}},
+		// A batch of twelve steps over the boundaries at 5 and 10 at once and
+		// reports the twelve documents it really processed, not one update
+		// per boundary.
+		{name: "batch larger than step sequential", docConcurrency: 1, batchSize: 12, stepSize: 5, want: []int{12, docCount}},
+		{name: "batch larger than step concurrent", docConcurrency: 2, batchSize: 12, stepSize: 5, want: []int{12, docCount}},
 	}
 
 	for _, tt := range tests {
@@ -3401,8 +3411,8 @@ func TestLoad_EmbeddingBatch_ProgressReportsEveryStepBoundary(t *testing.T) {
 			if err := kb.Load(context.Background(),
 				WithSourceConcurrency(1),
 				WithDocConcurrency(tt.docConcurrency),
-				WithEmbeddingBatchSize(batchSize),
-				WithProgressStepSize(stepSize),
+				WithEmbeddingBatchSize(tt.batchSize),
+				WithProgressStepSize(tt.stepSize),
 				WithShowProgress(false),
 				WithShowStats(false),
 				WithLoadProgressCallback(func(_ context.Context, ev LoadProgressEvent) {
@@ -3421,13 +3431,8 @@ func TestLoad_EmbeddingBatch_ProgressReportsEveryStepBoundary(t *testing.T) {
 			defer mu.Unlock()
 			sort.Ints(processed)
 
-			// The counter advances by four documents per batch, so the first
-			// update past the boundary at ten reports twelve and the first
-			// past twenty reports twenty. Completing the source always
-			// reports.
-			want := []int{12, 20, docCount}
-			if !slices.Equal(processed, want) {
-				t.Errorf("reported document counts = %v, want %v", processed, want)
+			if !slices.Equal(processed, tt.want) {
+				t.Errorf("reported document counts = %v, want %v", processed, tt.want)
 			}
 		})
 	}
