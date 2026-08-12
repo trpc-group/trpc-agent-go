@@ -547,7 +547,7 @@ func (dk *BuiltinKnowledge) loadSequential(
 			totalSrc := len(docs)
 			etaSrc := calcETA(srcStartTime, srcProcessed, totalSrc)
 			elapsedSrc := time.Since(srcStartTime)
-			reporter.Progress(ctx, LoadProgressEvent{
+			reporter.Progress(ctx, start, LoadProgressEvent{
 				SourceName:      sourceName,
 				SourceProcessed: srcProcessed,
 				SourceTotal:     totalSrc,
@@ -710,7 +710,7 @@ func (dk *BuiltinKnowledge) processDocuments(
 			if completed > 0 {
 				eta = time.Duration(float64(elapsed) / float64(completed) * float64(total-completed))
 			}
-			reporter.Progress(ctx, LoadProgressEvent{
+			reporter.Progress(ctx, completed-len(batch), LoadProgressEvent{
 				SourceName:      src.Name(),
 				SourceProcessed: completed,
 				SourceTotal:     total,
@@ -846,6 +846,10 @@ func (dk *BuiltinKnowledge) addDocument(ctx context.Context, doc *document.Docum
 // batchPlan describes how a single Load call groups documents into embedding
 // requests. A size of 1 selects the per-document path and leaves embedder
 // nil.
+//
+// A plan must be built by resolveBatchPlan, which guarantees a size of at
+// least 1. The load loops advance by size documents per iteration and would
+// not terminate for a zero value.
 type batchPlan struct {
 	embedder embedder.BatchEmbedder
 	size     int

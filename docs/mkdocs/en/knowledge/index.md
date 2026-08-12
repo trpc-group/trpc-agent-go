@@ -329,7 +329,7 @@ err := kb.Load(ctx,
 
 ### Batch Embedding
 
-By default each document is embedded with its own request, so loading `N` documents issues `N` embedding requests. `WithEmbeddingBatchSize(B)` groups documents into a single multi-input request, reducing the request count to `ceil(N/B)`:
+By default each document is embedded with its own request, so loading a source of `N` documents issues `N` embedding requests. `WithEmbeddingBatchSize(B)` groups documents into a single multi-input request, reducing the request count for that source to `ceil(N/B)`:
 
 ```go
 err := kb.Load(ctx,
@@ -338,12 +338,13 @@ err := kb.Load(ctx,
 )
 ```
 
-Batching is off by default and only applies when the configured embedder implements `embedder.BatchEmbedder`. The built-in OpenAI-compatible embedder (`knowledge/embedder/openai`) implements it and sends the texts as an input array. When the embedder does not support batching, when no embedder is configured (vector stores that embed remotely), or when source sync is enabled via `WithEnableSourceSync(true)`, loading silently keeps the unchanged per-document path.
+Batching is off by default and only applies when the configured embedder implements `embedder.BatchEmbedder`. The built-in OpenAI-compatible embedder (`knowledge/embedder/openai`) implements it and sends the texts as an input array. When the embedder does not support batching, when no embedder is configured (vector stores that embed remotely), or when source sync is enabled via `WithEnableSourceSync(true)`, loading keeps the unchanged per-document path and logs that the configured batch size was ignored, so an ineffective configuration is visible.
 
 The two options compose: `WithDocConcurrency(n)` bounds the number of concurrent batches, so up to `n * B` documents may be in flight at once.
 
 > **About Correctness and Limits**:
 >
+> - A batch never spans sources, because each source is loaded as an independent unit of work. Loading `k` sources issues the sum of `ceil(Ni/B)` requests over all sources, so splitting the same documents across many small sources reduces the benefit; `k` sources of one document each still issue `k` requests.
 > - A batch is embedded and validated as a whole. If the provider returns the wrong number of vectors, an empty vector, an inconsistent dimension, or a non-finite value, the whole batch fails and none of its documents are written.
 > - A failed batch is not retried as individual requests, so it never silently multiplies the request count.
 > - If a vector store write fails part-way through a batch, the documents already written are kept and `Load` returns the error, matching the existing non-transactional behavior.

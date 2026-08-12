@@ -350,7 +350,7 @@ err := kb.Load(ctx,
 
 ### 批量 Embedding
 
-默认情况下每个文档单独发起一次 embedding 请求，加载 `N` 个文档就会产生 `N` 次请求。`WithEmbeddingBatchSize(B)` 会把多个文档合并为一次多输入请求，将请求数降为 `ceil(N/B)`：
+默认情况下每个文档单独发起一次 embedding 请求，加载一个包含 `N` 个文档的 source 就会产生 `N` 次请求。`WithEmbeddingBatchSize(B)` 会把多个文档合并为一次多输入请求，把该 source 的请求数降为 `ceil(N/B)`：
 
 ```go
 err := kb.Load(ctx,
@@ -359,12 +359,13 @@ err := kb.Load(ctx,
 )
 ```
 
-批量默认关闭，且仅在所配置的 embedder 实现了 `embedder.BatchEmbedder` 时生效。内置的 OpenAI 兼容 embedder（`knowledge/embedder/openai`）已实现该接口，会以字符串数组的形式发送输入。当 embedder 不支持批量、未配置 embedder（由向量库远程生成 embedding），或通过 `WithEnableSourceSync(true)` 开启了 source sync 时，加载会继续走原有的逐文档路径，行为不变。
+批量默认关闭，且仅在所配置的 embedder 实现了 `embedder.BatchEmbedder` 时生效。内置的 OpenAI 兼容 embedder（`knowledge/embedder/openai`）已实现该接口，会以字符串数组的形式发送输入。当 embedder 不支持批量、未配置 embedder（由向量库远程生成 embedding），或通过 `WithEnableSourceSync(true)` 开启了 source sync 时，加载会继续走原有的逐文档路径，行为不变，并会打印日志说明所配置的批量大小被忽略，便于发现无效配置。
 
 两个选项可以组合使用：`WithDocConcurrency(n)` 限制并发批次数，因此在途文档数最多为 `n * B`。
 
 > **关于正确性与限制**：
 >
+> - 批次不会跨 source 合并，因为每个 source 是独立的处理单元。加载 `k` 个 source 时的总请求数是各 source `ceil(Ni/B)` 之和；把相同数量的文档拆成很多个小 source 会削弱收益，`k` 个各含 1 个文档的 source 仍然会发出 `k` 次请求
 > - 一个批次会被整体校验。若 provider 返回的向量数量不符、存在空向量、批内维度不一致或包含非有限值，整个批次失败，其中的文档一个都不会写入
 > - 失败的批次不会自动拆成多次单条请求，因此不会意外放大请求量
 > - 若批次写入向量库时中途失败，此前已成功写入的文档会保留，`Load` 返回错误，与现有的非事务语义一致

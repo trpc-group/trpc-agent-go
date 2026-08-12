@@ -516,6 +516,52 @@ func TestEmbedder_GetEmbeddings_RejectsUnmappableResponse(t *testing.T) {
 	}
 }
 
+// TestEmbedder_GetEmbeddings_RetriesWholeBatch verifies that a rejected batch
+// response is retried as one request carrying the complete input. Retrying a
+// failed batch as per-text requests would multiply the request count that
+// batching is meant to reduce.
+func TestEmbedder_GetEmbeddings_RetriesWholeBatch(t *testing.T) {
+	texts := []string{"first", "second", "third"}
+	attempts := 0
+	srv, requests := newBatchServer(t, func(inputs []string) []map[string]any {
+		attempts++
+		if attempts == 1 {
+			// Fewer vectors than inputs cannot be mapped back to the batch.
+			return []map[string]any{embeddingItem(0, []float64{1})}
+		}
+		items := make([]map[string]any, len(inputs))
+		for i := range inputs {
+			items[i] = embeddingItem(i, []float64{float64(i)})
+		}
+		return items
+	})
+
+	emb := New(
+		WithBaseURL(srv.URL),
+		WithAPIKey("dummy"),
+		WithModel("bge-m3"),
+		WithDimensions(1),
+		WithMaxRetries(1),
+		WithRetryBackoff([]time.Duration{time.Millisecond}),
+	)
+
+	vectors, err := emb.GetEmbeddings(context.Background(), texts)
+	if err != nil {
+		t.Fatalf("GetEmbeddings() error = %v", err)
+	}
+	if len(vectors) != len(texts) {
+		t.Fatalf("vectors = %d, want %d", len(vectors), len(texts))
+	}
+	if len(*requests) != 2 {
+		t.Fatalf("http requests = %d, want 2 (first attempt and retry)", len(*requests))
+	}
+	for i, inputs := range *requests {
+		if !slices.Equal(inputs, texts) {
+			t.Errorf("request %d input = %v, want the whole batch %v", i, inputs, texts)
+		}
+	}
+}
+
 // TestEmbedder_GetEmbeddings_RejectsEmptyInput verifies input validation before
 // any request is sent.
 func TestEmbedder_GetEmbeddings_RejectsEmptyInput(t *testing.T) {

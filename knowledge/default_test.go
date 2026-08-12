@@ -3371,6 +3371,122 @@ func TestLoad_EmbeddingBatch_ProgressCountsEveryDocument(t *testing.T) {
 	}
 }
 
+// TestLoad_EmbeddingBatch_ProgressReportsEveryStepBoundary verifies that a
+// batch larger than the progress step size still reports every boundary it
+// steps over. Reporting only counts that are an exact multiple of the step
+// size would drop most updates, because a batch advances the count by its own
+// size rather than by one document.
+func TestLoad_EmbeddingBatch_ProgressReportsEveryStepBoundary(t *testing.T) {
+	const docCount = 24
+	const batchSize = 4
+	const stepSize = 10
+
+	tests := []struct {
+		name           string
+		docConcurrency int
+	}{
+		{name: "sequential", docConcurrency: 1},
+		{name: "concurrent", docConcurrency: 2},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var mu sync.Mutex
+			var processed []int
+
+			kb := New(WithSources([]source.Source{&mockSource{name: "test", docCount: docCount}}))
+			kb.vectorStore = &batchRecordingVectorStore{}
+			kb.embedder = &recordingBatchEmbedder{}
+
+			if err := kb.Load(context.Background(),
+				WithSourceConcurrency(1),
+				WithDocConcurrency(tt.docConcurrency),
+				WithEmbeddingBatchSize(batchSize),
+				WithProgressStepSize(stepSize),
+				WithShowProgress(false),
+				WithShowStats(false),
+				WithLoadProgressCallback(func(_ context.Context, ev LoadProgressEvent) {
+					if ev.Done || ev.Err != nil {
+						return
+					}
+					mu.Lock()
+					processed = append(processed, ev.SourceProcessed)
+					mu.Unlock()
+				}),
+			); err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+			sort.Ints(processed)
+
+			// The counter advances by four documents per batch, so the first
+			// update past the boundary at ten reports twelve and the first
+			// past twenty reports twenty. Completing the source always
+			// reports.
+			want := []int{12, 20, docCount}
+			if !slices.Equal(processed, want) {
+				t.Errorf("reported document counts = %v, want %v", processed, want)
+			}
+		})
+	}
+}
+
+// TestLoad_EmbeddingBatch_DoesNotBatchAcrossSources pins the documented
+// per-source request count: a batch never spans sources, so k sources issue
+// the sum of ceil(Ni/B) requests rather than ceil(N/B).
+func TestLoad_EmbeddingBatch_DoesNotBatchAcrossSources(t *testing.T) {
+	const docsPerSource = 2
+	const batchSize = 4
+
+	tests := []struct {
+		name        string
+		concurrency []LoadOption
+	}{
+		{
+			name:        "sequential",
+			concurrency: []LoadOption{WithSourceConcurrency(1), WithDocConcurrency(1)},
+		},
+		{
+			name:        "concurrent",
+			concurrency: []LoadOption{WithSourceConcurrency(2), WithDocConcurrency(2)},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			emb := &recordingBatchEmbedder{}
+			kb := New(WithSources([]source.Source{
+				&mockSource{name: "src-a", docCount: docsPerSource},
+				&mockSource{name: "src-b", docCount: docsPerSource},
+				&mockSource{name: "src-c", docCount: docsPerSource},
+			}))
+			kb.vectorStore = &batchRecordingVectorStore{}
+			kb.embedder = emb
+
+			opts := append(tt.concurrency,
+				WithEmbeddingBatchSize(batchSize),
+				WithShowProgress(false),
+				WithShowStats(false),
+			)
+			if err := kb.Load(context.Background(), opts...); err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+
+			// Six documents would fit two requests of four if batches spanned
+			// sources; each source instead contributes its own request.
+			want := []int{docsPerSource, docsPerSource, docsPerSource}
+			if got := emb.requestSizes(); !slices.Equal(got, want) {
+				t.Errorf("batch sizes = %v, want %v", got, want)
+			}
+			if got := emb.singleCallCount(); got != 0 {
+				t.Errorf("per-document embedding calls = %d, want 0", got)
+			}
+		})
+	}
+}
+
 // TestValidateEmbeddingBatch_AllowsDeclaredDimensionMismatch documents that a
 // batch whose dimension differs from the embedder's declared dimension is
 // accepted. Embedders may report a configured default that the model does not

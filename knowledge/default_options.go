@@ -145,7 +145,15 @@ func WithShowProgress(show bool) LoadOption {
 	}
 }
 
-// WithProgressStepSize sets the granularity of progress updates.
+// WithProgressStepSize sets the granularity of progress updates: a source
+// reports an update every stepSize documents and when it completes. A value
+// <= 0 reports every update.
+//
+// When embedding batching is active (see WithEmbeddingBatchSize) a single
+// update can advance the count by a whole batch. The first update past a
+// boundary is then reported with the number of documents actually processed,
+// so a batch larger than stepSize does not skip the boundaries it stepped
+// over.
 func WithProgressStepSize(stepSize int) LoadOption {
 	return func(lc *loadConfig) {
 		lc.progressStepSize = stepSize
@@ -186,7 +194,12 @@ func WithDocConcurrency(n int) LoadOption {
 
 // WithEmbeddingBatchSize sets the maximum number of documents whose embeddings
 // are requested in a single call to a BatchEmbedder, reducing the number of
-// embedding requests for N documents from N to ceil(N/n).
+// embedding requests for a source of N documents from N to ceil(N/n).
+//
+// A batch never spans sources, because each source is loaded as an
+// independent unit of work. Loading sources of N1..Nk documents therefore
+// issues the sum of ceil(Ni/n) requests, which is ceil(N/n) for a single
+// source and stays at k requests for k sources of one document each.
 //
 // Batching is off by default. Values <= 1 keep the per-document request path.
 // It also stays off, without an error, when the configured embedder does not
