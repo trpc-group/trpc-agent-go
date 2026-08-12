@@ -862,6 +862,9 @@ func (at *Tool) wrapWithStreamSemantics(
 	src <-chan *event.Event,
 ) <-chan *event.Event {
 	if shouldDeferStreamCompletion(ctx, inv) {
+		if at.persistentHistory != nil && at.persistentHistory.enabled {
+			at.ensureUserMessageForCall(ctx, inv)
+		}
 		return src
 	}
 	return at.wrapWithCallSemantics(ctx, inv, src)
