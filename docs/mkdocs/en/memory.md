@@ -314,7 +314,7 @@ the existing tool semantics.
 | Update policy | Auto extraction behavior |
 | --- | --- |
 | `UpdatePolicyMergeSimilar` | Uses the existing similarity-based reconciliation. This is the default. |
-| `UpdatePolicyPreserveHistory` | Drops exact duplicates, updates only for non-conflicting enrichment, keeps changes as separate entries, and allows automatic delete/clear only after an explicit user request. |
+| `UpdatePolicyPreserveHistory` | Drops exact duplicates, updates only for non-conflicting enrichment, and keeps changes as separate entries. Its extractor prompt reserves delete/clear for explicit user requests. |
 | `UpdatePolicyAppendOnly` | Emits only non-duplicate adds: updates become adds, while delete and clear operations are filtered. |
 
 Merge Similar retains the historical user-only query when retrieving existing
@@ -335,17 +335,12 @@ values selected by benchmark tuning. When the checks cannot establish a safe
 enrichment, the policy keeps the candidate as a separate memory.
 For example, adding a time to the same dated visit may update that visit;
 changing an employer or describing a visit on another date creates a new
-entry. Destructive operations are never inferred from contradictions: delete
-requires an explicit user request, and clear requires an explicit request to
-forget all stored information without a scoped target or exception. A scoped
-forget request can authorize only deletes whose memory content matches that
-target. Writes in the same extraction batch cannot recreate information covered
-by an authorized forget request. A tolerated inflection must match the target
-inside one fact segment; tokens from separate facts cannot jointly authorize
-deletion. A later explicit cancellation revokes the earlier authorization.
-Because extracted operations do not carry source-turn provenance, only the
-latest user instruction in an extraction batch can authorize Delete or Clear;
-an older forget request is never applied to writes from a later user turn.
+entry. Preserve History uses the same runtime handling for Delete and Clear as
+Merge Similar: operations selected by the extractor pass through unchanged.
+The policy-specific extractor prompt instructs the model to use Delete only for
+an explicit scoped forget request and Clear only for an explicit request to
+forget all stored information. The worker does not attempt to reinterpret
+natural-language deletion intent with regular expressions.
 
 The update policy does not change `memory.Service`, `MemoryExtractor`, the stored
 JSON representation, memory IDs, or database schemas. It does not rewrite

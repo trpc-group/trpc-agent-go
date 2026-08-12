@@ -505,7 +505,7 @@ func (w *AutoMemoryWorker) prepareAutoMemoryOperations(
 		return nil, fmt.Errorf("auto_memory: extract failed: %w", err)
 	}
 
-	ops = w.applyUpdatePolicy(ctx, userKey, ops, existing, messages)
+	ops = w.applyUpdatePolicy(ctx, userKey, ops, existing)
 	return ops, nil
 }
 

@@ -293,7 +293,7 @@ Update policy 只约束后台 Auto extraction 产生的操作。Agent 或应用�
 | Update policy | Auto extraction 行为 |
 | --- | --- |
 | `UpdatePolicyMergeSimilar` | 使用现有的相似度 reconcile 逻辑；这是默认值。 |
-| `UpdatePolicyPreserveHistory` | 完全重复时不写入；只更新无冲突的增量信息；变化内容单独追加；只有用户明确请求时才允许自动 delete/clear。 |
+| `UpdatePolicyPreserveHistory` | 完全重复时不写入；只更新无冲突的增量信息；变化内容单独追加；extractor prompt 仅允许在用户明确请求时选择 delete/clear。 |
 | `UpdatePolicyAppendOnly` | 最终只产生非重复 add：update 转为 add，delete/clear 被过滤。 |
 
 Merge Similar 在检索 existing memories 时保持原有的 user-only query。
@@ -309,13 +309,10 @@ update 已通过检查后才合并。
 启发式，并非通过 benchmark 调参得到。无法确认属于安全补充时，该策略会将候选
 保留为独立记忆。
 例如，同一次且同一日期的访问补充具体时刻可以更新；更换雇主或另一个日期的访问
-会追加为新条目。矛盾信息不能授权破坏性操作：delete 必须来自用户明确的遗忘请求，
-clear 必须来自用户明确且不包含范围或例外条件的“遗忘全部存储信息”请求。带目标范围的
-遗忘请求只能授权删除内容与目标匹配的记忆；容许的词形变化必须与目标位于同一事实片段，
-不能由不同事实中的 token 共同授权删除。同一轮提取中的写操作不能重新创建已获授权的
-遗忘请求所覆盖的信息。用户后续明确撤销时，旧请求不再授权删除。
-由于提取 operation 不携带来源轮次，只有 extraction batch 中最新的用户指令可以授权
-Delete 或 Clear；更早的遗忘请求不会应用到后续用户轮次产生的写入。
+会追加为新条目。Preserve History 对 Delete 和 Clear 使用与 Merge Similar 相同的
+运行时处理：extractor 选中的 operation 会原样通过。策略专用 prompt 要求模型仅在
+用户明确提出有范围的遗忘请求时选择 Delete，并仅在用户明确要求遗忘全部存储信息时
+选择 Clear。worker 不再使用正则表达式重新解释自然语言中的删除意图。
 
 该 update policy 不会修改 `memory.Service`、`MemoryExtractor`、持久化 JSON、memory ID
 或数据库 schema，也不会重写存量记忆。所有 policy 都保持 Auto memory 原有的

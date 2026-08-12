@@ -383,7 +383,7 @@ func TestPreserveHistoryPolicy_AliceTimeEnrichmentUpdates(t *testing.T) {
 	}
 	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
 	out := worker.reconcilePreserveHistoryOps(
-		context.Background(), reconcileUserKey(), []*extractor.Operation{op}, existing, nil,
+		context.Background(), reconcileUserKey(), []*extractor.Operation{op}, existing,
 	)
 	require.Len(t, out, 1)
 	assert.Equal(t, extractor.OperationUpdate, out[0].Type)
@@ -410,7 +410,6 @@ func TestPreserveHistoryPolicy_RelationDirectionIsNotEnrichment(t *testing.T) {
 			MemoryKind: memory.KindFact,
 		}},
 		existing,
-		nil,
 	)
 	require.Len(t, reversed, 1)
 	assert.Equal(t, extractor.OperationAdd, reversed[0].Type)
@@ -425,7 +424,6 @@ func TestPreserveHistoryPolicy_RelationDirectionIsNotEnrichment(t *testing.T) {
 			MemoryKind: memory.KindFact,
 		}},
 		existing,
-		nil,
 	)
 	require.Len(t, reversedUpdate, 1)
 	assert.Equal(t, extractor.OperationAdd, reversedUpdate[0].Type)
@@ -440,7 +438,6 @@ func TestPreserveHistoryPolicy_RelationDirectionIsNotEnrichment(t *testing.T) {
 			MemoryKind: memory.KindFact,
 		}},
 		existing,
-		nil,
 	)
 	require.Len(t, enriched, 1)
 	assert.Equal(t, extractor.OperationUpdate, enriched[0].Type)
@@ -456,7 +453,6 @@ func TestPreserveHistoryPolicy_RelationDirectionIsNotEnrichment(t *testing.T) {
 			MemoryKind: memory.KindFact,
 		}},
 		existing,
-		nil,
 	)
 	require.Len(t, enrichedUpdate, 1)
 	assert.Equal(t, extractor.OperationUpdate, enrichedUpdate[0].Type)
@@ -480,7 +476,7 @@ func TestPreserveHistoryPolicy_ExactDuplicateIgnoresTopicDrift(t *testing.T) {
 	}
 	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
 	out := worker.reconcilePreserveHistoryOps(
-		context.Background(), reconcileUserKey(), []*extractor.Operation{op}, existing, nil,
+		context.Background(), reconcileUserKey(), []*extractor.Operation{op}, existing,
 	)
 	assert.Empty(t, out)
 }
@@ -501,7 +497,7 @@ func TestPreserveHistoryPolicy_FiltersExactBatchDuplicate(t *testing.T) {
 	}
 	out := worker.reconcilePreserveHistoryOps(
 		context.Background(), reconcileUserKey(),
-		[]*extractor.Operation{first, last}, nil, nil,
+		[]*extractor.Operation{first, last}, nil,
 	)
 	require.Len(t, out, 1)
 	assert.Same(t, first, out[0])
@@ -515,7 +511,7 @@ func TestPreserveHistoryPolicy_KeepsDistinctBatchAdds(t *testing.T) {
 		{Type: extractor.OperationAdd, Memory: "Alice likes dark roast coffee."},
 	}
 	out := worker.reconcilePreserveHistoryOps(
-		context.Background(), reconcileUserKey(), ops, nil, nil,
+		context.Background(), reconcileUserKey(), ops, nil,
 	)
 	require.Equal(t, ops, out)
 }
@@ -569,7 +565,7 @@ func TestPreserveHistoryPolicy_ChangesRemainAdditive(t *testing.T) {
 			}
 			worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
 			out := worker.reconcilePreserveHistoryOps(
-				context.Background(), reconcileUserKey(), []*extractor.Operation{op}, existing, nil,
+				context.Background(), reconcileUserKey(), []*extractor.Operation{op}, existing,
 			)
 			require.Len(t, out, 1)
 			assert.Equal(t, extractor.OperationAdd, out[0].Type)
@@ -596,7 +592,7 @@ func TestPreserveHistoryPolicy_DifferentEventDateRemainsAdditive(t *testing.T) {
 	}
 	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
 	out := worker.reconcilePreserveHistoryOps(
-		context.Background(), reconcileUserKey(), []*extractor.Operation{op}, existing, nil,
+		context.Background(), reconcileUserKey(), []*extractor.Operation{op}, existing,
 	)
 	require.Len(t, out, 1)
 	assert.Equal(t, extractor.OperationAdd, out[0].Type)
@@ -618,7 +614,7 @@ func TestPreserveHistoryPolicy_UnsafeModelUpdateBecomesAdd(t *testing.T) {
 	}
 	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
 	out := worker.reconcilePreserveHistoryOps(
-		context.Background(), reconcileUserKey(), []*extractor.Operation{op}, existing, nil,
+		context.Background(), reconcileUserKey(), []*extractor.Operation{op}, existing,
 	)
 	require.Len(t, out, 1)
 	assert.Equal(t, extractor.OperationAdd, out[0].Type)
@@ -649,7 +645,7 @@ func TestMergeSimilarPolicy_PreservesEveryOperationType(t *testing.T) {
 		{Type: extractor.OperationClear},
 	}
 	out := worker.applyUpdatePolicy(
-		context.Background(), reconcileUserKey(), ops, nil, nil,
+		context.Background(), reconcileUserKey(), ops, nil,
 	)
 	require.Len(t, out, len(ops))
 	for index, op := range ops {
@@ -667,19 +663,12 @@ func TestPreserveHistoryPolicy_OperationContract(t *testing.T) {
 	}
 	out := worker.applyUpdatePolicy(
 		context.Background(), reconcileUserKey(), ops, nil,
-		[]model.Message{model.NewUserMessage("I have changed my preferences.")},
 	)
-	require.Len(t, out, 2)
+	require.Len(t, out, 4)
 	assert.Equal(t, extractor.OperationAdd, out[0].Type)
 	assert.Equal(t, extractor.OperationAdd, out[1].Type)
-
-	out = worker.applyUpdatePolicy(
-		context.Background(), reconcileUserKey(), ops[2:], nil,
-		[]model.Message{model.NewUserMessage("Please forget everything about me.")},
-	)
-	require.Len(t, out, 2)
-	assert.Equal(t, extractor.OperationDelete, out[0].Type)
-	assert.Equal(t, extractor.OperationClear, out[1].Type)
+	assert.Same(t, ops[2], out[2])
+	assert.Same(t, ops[3], out[3])
 }
 
 func TestAppendOnlyPolicy_OperationContract(t *testing.T) {
@@ -703,7 +692,7 @@ func TestAppendOnlyPolicy_OperationContract(t *testing.T) {
 		{Type: extractor.OperationType("unknown")},
 	}
 	out := worker.applyUpdatePolicy(
-		context.Background(), reconcileUserKey(), ops, existing, nil,
+		context.Background(), reconcileUserKey(), ops, existing,
 	)
 	require.Len(t, out, 2)
 	assert.Equal(t, extractor.OperationAdd, out[0].Type)
@@ -885,7 +874,7 @@ func TestPreserveHistoryPolicy_ToolGatesAndUnknownOperations(t *testing.T) {
 	out = allDisabled.reconcilePreserveHistoryOps(
 		context.Background(), reconcileUserKey(),
 		[]*extractor.Operation{nil, unknown},
-		[]*memory.Entry{nil, {}, {ID: "missing-memory"}}, nil,
+		[]*memory.Entry{nil, {}, {ID: "missing-memory"}},
 	)
 	require.Equal(t, []*extractor.Operation{unknown}, out)
 }
@@ -1143,450 +1132,4 @@ func TestPolicyComparisonHelpers(t *testing.T) {
 	assert.False(t, criticalValuesPreserved("Meeting at 4:00 pm", "Meeting today"))
 	assert.Equal(t, "not|not", negationSignature("Not ready and NOT available"))
 
-}
-
-func TestExplicitDestructiveRequest(t *testing.T) {
-	tests := []struct {
-		name        string
-		messages    []model.Message
-		allowDelete bool
-		allowClear  bool
-	}{
-		{
-			name:        "explicit delete",
-			messages:    []model.Message{model.NewUserMessage("Please forget my coffee preference.")},
-			allowDelete: true,
-		},
-		{
-			name:        "explicit clear",
-			messages:    []model.Message{model.NewUserMessage("Could you please clear all my memories?")},
-			allowDelete: true,
-			allowClear:  true,
-		},
-		{
-			name:        "prompt clear wording",
-			messages:    []model.Message{model.NewUserMessage("Please forget all stored information.")},
-			allowDelete: true,
-			allowClear:  true,
-		},
-		{
-			name:        "specific delete cannot authorize clear",
-			messages:    []model.Message{model.NewUserMessage("Delete my coffee preference.")},
-			allowDelete: true,
-		},
-		{
-			name:     "negated request",
-			messages: []model.Message{model.NewUserMessage("Please do not delete my coffee preference.")},
-		},
-		{
-			name:     "assistant request is ignored",
-			messages: []model.Message{model.NewAssistantMessage("Please forget everything about the user.")},
-		},
-		{
-			name:        "explicit chinese delete",
-			messages:    []model.Message{model.NewUserMessage("请删除我的咖啡偏好。")},
-			allowDelete: true,
-		},
-		{
-			name:        "explicit chinese clear",
-			messages:    []model.Message{model.NewUserMessage("请清空所有记忆。")},
-			allowDelete: true,
-			allowClear:  true,
-		},
-		{
-			name:        "explicit chinese stored information clear",
-			messages:    []model.Message{model.NewUserMessage("请忘记所有已存储的信息。")},
-			allowDelete: true,
-			allowClear:  true,
-		},
-		{
-			name:     "negated chinese request",
-			messages: []model.Message{model.NewUserMessage("请不要删除我的咖啡偏好。")},
-		},
-		{
-			name: "latest negation wins",
-			messages: []model.Message{
-				model.NewUserMessage("Please clear all my memories."),
-				model.NewUserMessage("Do not clear my memories."),
-			},
-		},
-		{
-			name: "latest specific request narrows clear",
-			messages: []model.Message{
-				model.NewUserMessage("Please clear all my memories."),
-				model.NewUserMessage("Actually, please delete only my coffee preference."),
-			},
-			allowDelete: true,
-		},
-		{
-			name: "latest cancellation revokes delete",
-			messages: []model.Message{
-				model.NewUserMessage("Please delete my coffee preference."),
-				model.NewUserMessage("Actually, keep it."),
-			},
-		},
-		{
-			name: "latest chinese cancellation revokes delete",
-			messages: []model.Message{
-				model.NewUserMessage("请删除我的咖啡偏好。"),
-				model.NewUserMessage("算了，保留它。"),
-			},
-		},
-		{
-			name:        "scoped all information is not clear",
-			messages:    []model.Message{model.NewUserMessage("Please forget all stored information about coffee.")},
-			allowDelete: true,
-		},
-		{
-			name:        "scoped chinese clear is not global clear",
-			messages:    []model.Message{model.NewUserMessage("请清空关于咖啡的所有记忆。")},
-			allowDelete: true,
-		},
-		{
-			name:     "partial clear does not authorize clear",
-			messages: []model.Message{model.NewUserMessage("Clear everything except my coffee preference.")},
-		},
-		{
-			name:     "partial chinese clear does not authorize clear",
-			messages: []model.Message{model.NewUserMessage("请清空除了咖啡偏好以外的所有记忆。")},
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			request := latestExplicitDestructiveRequest(test.messages)
-			assert.Equal(t, test.allowDelete, request.explicit && !request.partial)
-			assert.Equal(t, test.allowClear, request.clearAll && !request.partial)
-		})
-	}
-}
-
-func TestPreserveHistoryPolicy_DeleteAuthorization(t *testing.T) {
-	entry := func(id, text string, topics ...string) *memory.Entry {
-		return &memory.Entry{
-			ID: id,
-			Memory: &memory.Memory{
-				Memory: text,
-				Topics: topics,
-			},
-		}
-	}
-	deleteOps := func(ids ...string) []*extractor.Operation {
-		operations := make([]*extractor.Operation, 0, len(ids))
-		for _, id := range ids {
-			operations = append(operations, &extractor.Operation{
-				Type:     extractor.OperationDelete,
-				MemoryID: id,
-			})
-		}
-		return operations
-	}
-
-	coffee := entry(
-		"coffee",
-		"User prefers dark roast coffee.",
-		"coffee preference",
-		"咖啡偏好",
-	)
-	address := entry("address", "User has a home address in Shenzhen.", "home", "address", "住址")
-	office := entry("office", "User converted a bedroom into a home office.", "home", "office")
-	employer := entry("employer", "User's former employer was Acme.", "former employer", "Acme")
-	hobby := entry("hobby", "User enjoys hiking.", "hiking")
-	parisHome := entry("paris-home", "User lives in Paris.", "Paris", "home")
-	parisTrip := entry("paris-trip", "User visited Paris last summer.", "Paris", "travel")
-	londonHome := entry("london-home", "User lives in London.", "London", "home")
-	mixedParis := entry(
-		"mixed-paris",
-		"User lives in London and visited Paris.",
-		"Paris",
-		"London",
-	)
-	crossFactExact := entry(
-		"cross-fact-exact",
-		"User visited London and lives in Paris.",
-	)
-	crossFactNewline := entry(
-		"cross-fact-newline",
-		"User visited London\nUser lives in Paris.",
-	)
-	crossFactComma := entry(
-		"cross-fact-comma",
-		"User visited London, lives in Paris.",
-	)
-	matchingCompound := entry(
-		"matching-compound",
-		"User visited Paris and lives in London.",
-	)
-	crossBodyTopic := entry(
-		"cross-body-topic",
-		"User visited London.",
-		"Paris",
-	)
-	crossTopics := entry(
-		"cross-topics",
-		"User enjoys hiking.",
-		"visited",
-		"Paris",
-	)
-	parisVisit := entry("paris-visit", "User visited Paris.")
-
-	tests := []struct {
-		name       string
-		request    string
-		existing   []*memory.Entry
-		operations []*extractor.Operation
-		wantIDs    []string
-	}{
-		{
-			name:       "target bound",
-			request:    "Please forget my coffee preference.",
-			existing:   []*memory.Entry{coffee, address},
-			operations: deleteOps("coffee", "address", "missing"),
-			wantIDs:    []string{"coffee"},
-		},
-		{
-			name:       "partial target match",
-			request:    "Please forget my home address.",
-			existing:   []*memory.Entry{address, office},
-			operations: deleteOps("address", "office"),
-			wantIDs:    []string{"address"},
-		},
-		{
-			name:       "chinese target",
-			request:    "请删除我的咖啡偏好。",
-			existing:   []*memory.Entry{coffee, address},
-			operations: deleteOps("coffee", "address"),
-			wantIDs:    []string{"coffee"},
-		},
-		{
-			name:       "target tolerates limited verb inflection",
-			request:    "Please forget that I live in Paris.",
-			existing:   []*memory.Entry{parisHome, parisTrip, londonHome, mixedParis},
-			operations: deleteOps("paris-home", "paris-trip", "london-home", "mixed-paris"),
-			wantIDs:    []string{"paris-home"},
-		},
-		{
-			name:    "exact target tokens must share one fact",
-			request: "Please forget that I visited Paris.",
-			existing: []*memory.Entry{
-				crossFactExact,
-				crossFactNewline,
-				crossFactComma,
-				matchingCompound,
-				crossBodyTopic,
-				crossTopics,
-				parisVisit,
-			},
-			operations: deleteOps(
-				"cross-fact-exact",
-				"cross-fact-newline",
-				"cross-fact-comma",
-				"matching-compound",
-				"cross-body-topic",
-				"cross-topics",
-				"paris-visit",
-			),
-			wantIDs: []string{"paris-visit"},
-		},
-		{
-			name:     "scoped everything",
-			request:  "Please forget everything about my former employer.",
-			existing: []*memory.Entry{employer, hobby},
-			operations: append(
-				deleteOps("employer", "hobby"),
-				&extractor.Operation{Type: extractor.OperationClear},
-			),
-			wantIDs: []string{"employer"},
-		},
-		{
-			name:       "global clear authorizes delete",
-			request:    "Please clear all my memories.",
-			existing:   []*memory.Entry{coffee},
-			operations: deleteOps("coffee"),
-			wantIDs:    []string{"coffee"},
-		},
-		{
-			name:     "qualified clear stays scoped",
-			request:  "Please forget everything I told you about coffee.",
-			existing: []*memory.Entry{coffee, address},
-			operations: append(
-				deleteOps("coffee", "address"),
-				&extractor.Operation{Type: extractor.OperationClear},
-			),
-			wantIDs: []string{"coffee"},
-		},
-		{
-			name:     "qualified chinese clear stays scoped",
-			request:  "请删除关于咖啡的所有记忆。",
-			existing: []*memory.Entry{coffee, address},
-			operations: append(
-				deleteOps("coffee", "address"),
-				&extractor.Operation{Type: extractor.OperationClear},
-			),
-			wantIDs: []string{"coffee"},
-		},
-	}
-
-	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			out := worker.reconcilePreserveHistoryOps(
-				context.Background(),
-				reconcileUserKey(),
-				test.operations,
-				test.existing,
-				[]model.Message{model.NewUserMessage(test.request)},
-			)
-			ids := make([]string, 0, len(out))
-			for _, operation := range out {
-				assert.Equal(t, extractor.OperationDelete, operation.Type)
-				ids = append(ids, operation.MemoryID)
-			}
-			assert.Equal(t, test.wantIDs, ids)
-		})
-	}
-}
-
-func TestPreserveHistoryPolicy_RevokedDeleteIsRejected(t *testing.T) {
-	coffee := &memory.Entry{
-		ID: "coffee",
-		Memory: &memory.Memory{
-			Memory: "User prefers dark roast coffee.",
-			Topics: []string{"coffee", "preference"},
-		},
-	}
-	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
-	out := worker.reconcilePreserveHistoryOps(
-		context.Background(),
-		reconcileUserKey(),
-		[]*extractor.Operation{{
-			Type:     extractor.OperationDelete,
-			MemoryID: coffee.ID,
-		}},
-		[]*memory.Entry{coffee},
-		[]model.Message{
-			model.NewUserMessage("Please delete my coffee preference."),
-			model.NewUserMessage("Actually, keep it."),
-		},
-	)
-	assert.Empty(t, out)
-}
-
-func TestPreserveHistoryPolicy_ForgetRequestFiltersWrites(t *testing.T) {
-	coffee := &memory.Entry{
-		ID: "coffee",
-		Memory: &memory.Memory{
-			Memory: "User prefers dark roast coffee.",
-			Topics: []string{"coffee preference"},
-		},
-	}
-	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
-	t.Run("clear followed by add", func(t *testing.T) {
-		out := worker.reconcilePreserveHistoryOps(
-			context.Background(),
-			reconcileUserKey(),
-			[]*extractor.Operation{
-				{Type: extractor.OperationClear},
-				{Type: extractor.OperationAdd, Memory: "User enjoys hiking."},
-			},
-			nil,
-			[]model.Message{model.NewUserMessage("Please clear all my memories.")},
-		)
-		require.Len(t, out, 1)
-		assert.Equal(t, extractor.OperationClear, out[0].Type)
-	})
-
-	t.Run("target update followed by delete", func(t *testing.T) {
-		out := worker.reconcilePreserveHistoryOps(
-			context.Background(),
-			reconcileUserKey(),
-			[]*extractor.Operation{
-				{
-					Type:     extractor.OperationUpdate,
-					MemoryID: coffee.ID,
-					Memory:   "User prefers dark roast coffee in the morning.",
-					Topics:   []string{"coffee preference"},
-				},
-				{Type: extractor.OperationDelete, MemoryID: coffee.ID},
-			},
-			[]*memory.Entry{coffee},
-			[]model.Message{model.NewUserMessage("Please delete my coffee preference.")},
-		)
-		require.Len(t, out, 1)
-		assert.Equal(t, extractor.OperationDelete, out[0].Type)
-		assert.Equal(t, coffee.ID, out[0].MemoryID)
-	})
-
-	t.Run("target add followed by delete", func(t *testing.T) {
-		out := worker.reconcilePreserveHistoryOps(
-			context.Background(),
-			reconcileUserKey(),
-			[]*extractor.Operation{
-				{
-					Type:   extractor.OperationAdd,
-					Memory: "User prefers coffee with oat milk.",
-					Topics: []string{"coffee preference"},
-				},
-				{Type: extractor.OperationDelete, MemoryID: coffee.ID},
-			},
-			[]*memory.Entry{coffee},
-			[]model.Message{model.NewUserMessage("Please delete my coffee preference.")},
-		)
-		require.Len(t, out, 1)
-		assert.Equal(t, extractor.OperationDelete, out[0].Type)
-		assert.Equal(t, coffee.ID, out[0].MemoryID)
-	})
-
-	t.Run("multi fact target add is filtered", func(t *testing.T) {
-		out := worker.reconcilePreserveHistoryOps(
-			context.Background(),
-			reconcileUserKey(),
-			[]*extractor.Operation{
-				{
-					Type:   extractor.OperationAdd,
-					Memory: "User likes coffee and enjoys hiking.",
-				},
-				{Type: extractor.OperationDelete, MemoryID: coffee.ID},
-			},
-			[]*memory.Entry{coffee},
-			[]model.Message{model.NewUserMessage("Please delete coffee.")},
-		)
-		require.Len(t, out, 1)
-		assert.Equal(t, extractor.OperationDelete, out[0].Type)
-	})
-
-	t.Run("earlier clear does not filter later user fact", func(t *testing.T) {
-		out := worker.reconcilePreserveHistoryOps(
-			context.Background(),
-			reconcileUserKey(),
-			[]*extractor.Operation{
-				{Type: extractor.OperationClear},
-				{Type: extractor.OperationAdd, Memory: "User's name is Alice."},
-			},
-			nil,
-			[]model.Message{
-				model.NewUserMessage("Please clear all my memories."),
-				model.NewAssistantMessage("Understood."),
-				model.NewUserMessage("My name is Alice."),
-			},
-		)
-		require.Len(t, out, 1)
-		assert.Equal(t, extractor.OperationAdd, out[0].Type)
-		assert.Equal(t, "User's name is Alice.", out[0].Memory)
-	})
-
-	t.Run("unrelated add remains", func(t *testing.T) {
-		out := worker.reconcilePreserveHistoryOps(
-			context.Background(),
-			reconcileUserKey(),
-			[]*extractor.Operation{
-				{Type: extractor.OperationAdd, Memory: "User enjoys hiking."},
-				{Type: extractor.OperationDelete, MemoryID: coffee.ID},
-			},
-			[]*memory.Entry{coffee},
-			[]model.Message{model.NewUserMessage("Please delete my coffee preference.")},
-		)
-		require.Len(t, out, 2)
-		assert.Equal(t, extractor.OperationAdd, out[0].Type)
-		assert.Equal(t, extractor.OperationDelete, out[1].Type)
-	})
 }

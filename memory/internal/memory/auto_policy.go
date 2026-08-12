@@ -41,20 +41,7 @@ var (
 	negationPattern = regexp.MustCompile(
 		`(?i)(?:\bnot\b|\bno\b|\bnever\b|\bwithout\b|n't|不再|不是|没有|从未|未|无)`,
 	)
-	capitalizedTokenPattern        = regexp.MustCompile(`\b[A-Z][A-Za-z0-9_-]*\b`)
-	destructiveFactBoundaryPattern = regexp.MustCompile(
-		`(?i)[,.!?;，。！？；\r\n]+|\s+(?:and|but|or|while|whereas)\s+|(?:并且|但是|但|而且|同时|然后)`,
-	)
-	destructiveTargetBoundaryPattern = regexp.MustCompile(`(?i)\s+(?:and|or)\s+|[、]|\s+(?:和|与|以及)\s+`)
-	destructiveRequestGenericTokens  = stringSet([]string{
-		"a", "absolutely", "about", "all", "an", "and", "any", "anything", "can", "clear", "completely",
-		"could", "data", "delete", "detail", "details", "entirely", "erase", "ever", "everything",
-		"fact", "facts", "forget", "from", "have", "i", "information", "know", "memory", "memories",
-		"me", "my", "need", "or", "please", "regarding", "related", "remove", "said", "shared",
-		"should", "stored", "the", "to", "told", "want", "will", "would", "you",
-		"全部", "关于", "记忆", "请", "清除", "清空", "删除", "数据", "所有", "忘记",
-		"保存", "存储", "已保存", "已存储", "帮我", "麻烦", "我的", "我", "希望", "信息", "移除", "细节",
-	})
+	capitalizedTokenPattern = regexp.MustCompile(`\b[A-Z][A-Za-z0-9_-]*\b`)
 )
 
 type preserveHistoryCandidate struct {
@@ -62,13 +49,6 @@ type preserveHistoryCandidate struct {
 	duplicate   bool
 	oldCoverage float64
 	newCoverage float64
-}
-
-type destructiveRequest struct {
-	text     string
-	explicit bool
-	clearAll bool
-	partial  bool
 }
 
 func updatePolicyFor(ext extractor.MemoryExtractor) extractor.UpdatePolicy {
@@ -87,11 +67,10 @@ func (w *AutoMemoryWorker) applyUpdatePolicy(
 	userKey memory.UserKey,
 	ops []*extractor.Operation,
 	existing []*memory.Entry,
-	messages []model.Message,
 ) []*extractor.Operation {
 	switch w.updatePolicy {
 	case extractor.UpdatePolicyPreserveHistory:
-		return w.reconcilePreserveHistoryOps(ctx, userKey, ops, existing, messages)
+		return w.reconcilePreserveHistoryOps(ctx, userKey, ops, existing)
 	case extractor.UpdatePolicyAppendOnly:
 		return w.applyAppendOnlyPolicy(ctx, userKey, ops, existing)
 	default:
@@ -147,16 +126,13 @@ func (w *AutoMemoryWorker) reconcilePreserveHistoryOps(
 	userKey memory.UserKey,
 	ops []*extractor.Operation,
 	existing []*memory.Entry,
-	messages []model.Message,
 ) []*extractor.Operation {
-	request := latestExplicitDestructiveRequest(messages)
 	byID := make(map[string]*memory.Entry, len(existing))
 	for _, entry := range existing {
 		if entry != nil && entry.Memory != nil && entry.ID != "" {
 			byID[entry.ID] = entry
 		}
 	}
-	ops = filterPreserveHistoryForgetWrites(ctx, userKey, ops, byID, request)
 	out := make([]*extractor.Operation, 0, len(ops))
 	for _, op := range ops {
 		if op == nil {
@@ -167,60 +143,13 @@ func (w *AutoMemoryWorker) reconcilePreserveHistoryOps(
 			out = appendPreserveHistoryAdd(ctx, w, userKey, out, op, existing)
 		case extractor.OperationUpdate:
 			out = appendPreserveHistoryUpdate(ctx, w, userKey, out, op, byID[op.MemoryID])
-		case extractor.OperationDelete:
-			if request.authorizesDelete(byID[op.MemoryID]) {
-				out = append(out, op)
-				continue
-			}
-			logPreserveHistoryDestructiveRejection(ctx, userKey, op)
-		case extractor.OperationClear:
-			if request.clearAll && !request.partial {
-				out = append(out, op)
-				continue
-			}
-			logPreserveHistoryDestructiveRejection(ctx, userKey, op)
 		default:
+			// Preserve the established handling for Delete, Clear, and
+			// implementation-specific operations.
 			out = append(out, op)
 		}
 	}
-	return filterPreserveHistoryForgetWrites(ctx, userKey, out, byID, request)
-}
-
-func filterPreserveHistoryForgetWrites(
-	ctx context.Context, userKey memory.UserKey,
-	ops []*extractor.Operation, existingByID map[string]*memory.Entry, request destructiveRequest,
-) []*extractor.Operation {
-	if !request.explicit || request.partial {
-		return ops
-	}
-	filtered := make([]*extractor.Operation, 0, len(ops))
-	for _, op := range ops {
-		if !preserveHistoryWriteCoveredByForget(op, existingByID, request) {
-			filtered = append(filtered, op)
-			continue
-		}
-		log.DebugfContext(ctx,
-			"auto_memory: preserve_history policy; filtering %s covered by an explicit forget request for user %s/%s",
-			op.Type, userKey.AppName, userKey.UserID,
-		)
-	}
-	return filtered
-}
-
-func preserveHistoryWriteCoveredByForget(
-	op *extractor.Operation, existingByID map[string]*memory.Entry, request destructiveRequest,
-) bool {
-	if op == nil || (op.Type != extractor.OperationAdd && op.Type != extractor.OperationUpdate) {
-		return false
-	}
-	if request.clearAll {
-		return true
-	}
-	if op.Type == extractor.OperationUpdate && request.authorizesDelete(existingByID[op.MemoryID]) {
-		return true
-	}
-	candidate := operationMemory(op)
-	return destructiveTargetsMatchMemory(destructiveTargetTokenSets(request.text), candidate)
+	return out
 }
 
 func hasExactMemoryDuplicate(
@@ -250,150 +179,6 @@ func operationMemory(op *extractor.Operation) *memory.Memory {
 		Participants: op.Participants,
 		Location:     op.Location,
 	}
-}
-
-func latestExplicitDestructiveRequest(messages []model.Message) destructiveRequest {
-	request := updatepolicy.LatestUserDestructiveRequest(messages)
-	return destructiveRequest{
-		text:     request.Text,
-		explicit: request.Explicit,
-		clearAll: request.ClearAll && len(destructiveTargetTokenSets(request.Text)) == 0,
-		partial:  request.Partial,
-	}
-}
-
-func (r destructiveRequest) authorizesDelete(entry *memory.Entry) bool {
-	if !r.explicit || r.partial {
-		return false
-	}
-	if r.clearAll {
-		return true
-	}
-	if entry == nil || entry.Memory == nil {
-		return false
-	}
-	targets := destructiveTargetTokenSets(r.text)
-	if len(targets) == 0 {
-		return false
-	}
-	return destructiveTargetsBoundToMemory(targets, entry.Memory)
-}
-
-func destructiveTokensMatch(targetTokens, candidateTokens map[string]struct{}) bool {
-	exactAnchor := false
-	for token := range targetTokens {
-		if _, ok := candidateTokens[token]; ok {
-			exactAnchor = true
-			continue
-		}
-		if !matchesInflectedToken(token, candidateTokens) {
-			return false
-		}
-	}
-	// Limited inflection matching may bridge live/lives, but it cannot
-	// authorize deletion without at least one exact target token.
-	return exactAnchor
-}
-
-func destructiveTargetsBoundToMemory(targets []map[string]struct{}, mem *memory.Memory) bool {
-	if mem == nil {
-		return false
-	}
-	facts := make([]string, 0, 1)
-	for _, fact := range destructiveFactBoundaryPattern.Split(mem.Memory, -1) {
-		factTokens := stringSet(BuildSearchTokens(fact))
-		if len(factTokens) > 0 {
-			facts = append(facts, fact)
-		}
-	}
-	// Delete removes the complete entry. Refuse automatic deletion when the
-	// entry contains multiple independent facts, even if one fact matches, so
-	// unrelated information cannot be removed with the requested target.
-	if len(facts) > 1 {
-		return false
-	}
-	return destructiveTargetsMatchMemory(targets, mem)
-}
-
-func destructiveTargetsMatchMemory(targets []map[string]struct{}, mem *memory.Memory) bool {
-	for _, target := range targets {
-		for _, evidence := range destructiveEvidenceSegments(mem) {
-			evidenceTokens := stringSet(BuildSearchTokens(evidence))
-			if len(evidenceTokens) > 0 && destructiveTokensMatch(target, evidenceTokens) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func destructiveEvidenceSegments(mem *memory.Memory) []string {
-	if mem == nil {
-		return nil
-	}
-	// Keep facts and identity fields separate so unrelated segments cannot
-	// jointly authorize a destructive operation.
-	segments := destructiveFactBoundaryPattern.Split(mem.Memory, -1)
-	segments = append(segments, mem.Topics...)
-	segments = append(segments, mem.Participants...)
-	if location := strings.TrimSpace(mem.Location); location != "" {
-		segments = append(segments, location)
-	}
-	if mem.EventTime != nil {
-		eventTime := mem.EventTime.UTC()
-		segments = append(segments, eventTime.Format("2006-01-02"), eventTime.Format(time.RFC3339Nano))
-	}
-	return segments
-}
-
-func matchesInflectedToken(target string, candidates map[string]struct{}) bool {
-	if !isASCIIWord(target) || len(target) < 4 {
-		return false
-	}
-	for candidate := range candidates {
-		if !isASCIIWord(candidate) || len(candidate) < 4 {
-			continue
-		}
-		if target+"s" == candidate || candidate+"s" == target {
-			return true
-		}
-	}
-	return false
-}
-
-func isASCIIWord(value string) bool {
-	for _, r := range value {
-		if r < 'a' || r > 'z' {
-			return false
-		}
-	}
-	return value != ""
-}
-
-func destructiveTargetTokenSets(text string) []map[string]struct{} {
-	parts := destructiveTargetBoundaryPattern.Split(text, -1)
-	targets := make([]map[string]struct{}, 0, len(parts))
-	for _, part := range parts {
-		tokens := stringSet(BuildSearchTokens(part))
-		for token := range destructiveRequestGenericTokens {
-			delete(tokens, token)
-		}
-		if len(tokens) > 0 {
-			targets = append(targets, tokens)
-		}
-	}
-	return targets
-}
-
-func logPreserveHistoryDestructiveRejection(
-	ctx context.Context,
-	userKey memory.UserKey,
-	op *extractor.Operation,
-) {
-	log.DebugfContext(ctx,
-		"auto_memory: preserve_history policy; filtering %s without a matching explicit user request for user %s/%s",
-		op.Type, userKey.AppName, userKey.UserID,
-	)
 }
 
 func appendPreserveHistoryAdd(
