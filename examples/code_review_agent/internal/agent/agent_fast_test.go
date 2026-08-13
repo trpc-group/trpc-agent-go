@@ -135,6 +135,29 @@ func TestWriteReportsCreatesPrivateArtifactsWithoutChangingExistingDirectory(t *
 	}
 }
 
+func TestWriteReportsRejectsReportSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target.json")
+	if err := os.WriteFile(target, []byte("keep-me"), 0o600); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	if err := os.Symlink(target, filepath.Join(dir, "review_report.json")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	err := writeReports(dir, []byte("{}"), []byte("markdown"), []byte("zh"), []byte("diagnostics"))
+	if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("writeReports error = %v, want symlink rejection", err)
+	}
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read symlink target: %v", err)
+	}
+	if string(data) != "keep-me" {
+		t.Fatalf("symlink target was modified: %q", data)
+	}
+}
+
 func TestFastFinalizeReviewResultIsIdempotentForSandboxFailures(t *testing.T) {
 	ctx := reviewResultContext{
 		TaskID:    "task-fast",

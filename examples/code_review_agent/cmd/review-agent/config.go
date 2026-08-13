@@ -11,7 +11,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -20,8 +19,6 @@ import (
 	"gopkg.in/yaml.v3"
 	cragent "trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/agent"
 )
-
-const defaultConfigFile = "cr-agent.yaml"
 
 // fileConfig 对应 cr-agent.yaml。字段名保持贴近 CLI flag，便于用户从长命令迁移到配置文件。
 type fileConfig struct {
@@ -71,15 +68,11 @@ func resolveOptions(cli Options) (Options, error) {
 }
 
 func optionsFromConfig(path string) (Options, error) {
-	explicit := strings.TrimSpace(path) != ""
-	if !explicit {
-		path = defaultConfigFile
+	if strings.TrimSpace(path) == "" {
+		return Options{}, nil
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) && !explicit {
-			return Options{}, nil
-		}
 		return Options{}, fmt.Errorf("read config %q: %w", path, err)
 	}
 	var cfg fileConfig
