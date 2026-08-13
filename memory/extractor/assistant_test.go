@@ -1336,7 +1336,7 @@ func TestSelectAssistantEpisodePairs(t *testing.T) {
 	}
 }
 
-func TestValidateAssistantEpisodeQuantities(t *testing.T) {
+func TestValidateAssistantEpisodeNumbers(t *testing.T) {
 	tests := []struct {
 		name       string
 		source     string
@@ -1344,9 +1344,9 @@ func TestValidateAssistantEpisodeQuantities(t *testing.T) {
 		wantError  bool
 	}{
 		{
-			name:       "equivalent normalized quantities",
-			source:     "The result was -5°C, cost $5, weighed 1,000.25 kg, measured 5 m, lasted 5 min, held 5 ml, and reached 20%.",
-			memoryText: "The result was -5 °C, cost USD 5, weighed 1000.25 kilograms, measured 5 meters, lasted 5 minutes, held 5 milliliters, and reached 20 percent.",
+			name:       "equivalent normalized numbers",
+			source:     "The result was -5, cost $5.00, weighed 1,000.25, and reached 20%.",
+			memoryText: "The result was -5, cost $5, weighed 1000.25, and reached 20%.",
 		},
 		{
 			name:       "ordinary count nouns are not units",
@@ -1376,9 +1376,9 @@ func TestValidateAssistantEpisodeQuantities(t *testing.T) {
 			memoryText: "The adjustment was $-5.",
 		},
 		{
-			name:       "equivalent decimal currency",
+			name:       "equivalent decimal with currency symbol",
 			source:     "The price was $5.00.",
-			memoryText: "The price was USD 5.",
+			memoryText: "The price was $5.",
 		},
 		{
 			name:       "changed currency",
@@ -1387,10 +1387,14 @@ func TestValidateAssistantEpisodeQuantities(t *testing.T) {
 			wantError:  true,
 		},
 		{
-			name:       "changed unit",
+			name:       "natural language units are delegated to prompt",
 			source:     "The package weighed 5 kg.",
 			memoryText: "The package weighed 5 lb.",
-			wantError:  true,
+		},
+		{
+			name:       "currency labels are delegated to prompt",
+			source:     "The price was USD 5.",
+			memoryText: "The price was EUR 5.",
 		},
 		{
 			name:       "removed percentage",
@@ -1399,39 +1403,24 @@ func TestValidateAssistantEpisodeQuantities(t *testing.T) {
 			wantError:  true,
 		},
 		{
-			name:       "changed time unit",
+			name:       "natural language durations are delegated to prompt",
 			source:     "The plan takes 5 days.",
 			memoryText: "The plan takes 5 weeks.",
-			wantError:  true,
 		},
 		{
-			name:       "changed prefix-sharing time unit",
-			source:     "The plan takes 5 minutes.",
-			memoryText: "The plan takes 5 months.",
-			wantError:  true,
-		},
-		{
-			name:       "removed time unit",
+			name:       "omitted natural language unit is delegated to prompt",
 			source:     "The plan takes 5 minutes.",
 			memoryText: "The plan takes 5.",
-			wantError:  true,
 		},
 		{
-			name:       "percentage followed by text",
+			name:       "percentage symbol remains grounded next to text",
 			source:     "The offer is 20%off.",
-			memoryText: "The offer is 20 off.",
-			wantError:  true,
+			memoryText: "The offer is 20% off.",
 		},
 		{
-			name:       "equivalent compound unit",
-			source:     "The speed was 5 km/h.",
-			memoryText: "The speed was 5 kilometers/hour.",
-		},
-		{
-			name:       "changed compound unit",
+			name:       "compound units are delegated to prompt",
 			source:     "The speed was 5 km/h.",
 			memoryText: "The speed was 5 km/s.",
-			wantError:  true,
 		},
 		{
 			name:       "attached identifier cannot hide a changed number",
@@ -1442,58 +1431,69 @@ func TestValidateAssistantEpisodeQuantities(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			err := validateAssistantEpisodeQuantities(test.memoryText, test.source)
+			err := validateAssistantEpisodeNumbers(test.memoryText, test.source)
 			if test.wantError && err == nil {
-				t.Fatal("quantity change was accepted")
+				t.Fatal("number change was accepted")
 			}
 			if !test.wantError && err != nil {
-				t.Fatalf("valid quantities were rejected: %v", err)
+				t.Fatalf("valid numbers were rejected: %v", err)
 			}
 		})
 	}
 }
 
-func TestParseAssistantEpisodeQuantityBoundariesAndCurrencies(t *testing.T) {
-	if _, ok := parseAssistantEpisodeQuantity("", nil); ok {
-		t.Fatal("invalid match indexes were accepted")
-	}
-
-	parse := func(text string) (assistantEpisodeQuantity, bool) {
-		t.Helper()
-		match := assistantEpisodeQuantityPattern.FindStringSubmatchIndex(text)
-		if match == nil {
-			t.Fatalf("quantity pattern did not match %q", text)
-		}
-		return parseAssistantEpisodeQuantity(text, match)
-	}
-	for _, text := range []string{"item5", "5items"} {
-		quantity, ok := parse(text)
-		if !ok || quantity.value != "5" {
-			t.Fatalf("identifier-embedded quantity %q was not grounded: %#v", text, quantity)
-		}
-	}
-
+func TestAssistantEpisodeNumbers(t *testing.T) {
 	tests := []struct {
 		text string
-		want assistantEpisodeQuantity
+		want []assistantEpisodeNumber
 	}{
 		{
-			text: "5 EUR",
-			want: assistantEpisodeQuantity{value: "5", currency: "eur"},
+			text: "The values are -5, +6, $7, € 8, 9%, and 1,000.25.",
+			want: []assistantEpisodeNumber{
+				{sign: "-", value: "5"},
+				{sign: "+", value: "6"},
+				{value: "7", currency: "$"},
+				{value: "8", currency: "€"},
+				{value: "9", percent: true},
+				{value: "1000.25"},
+			},
 		},
 		{
-			text: "$5 EUR",
-			want: assistantEpisodeQuantity{value: "5", currency: "usd/eur"},
+			text: "The dates are 2023-04-15 and the models are item5 and 5items.",
+			want: []assistantEpisodeNumber{
+				{value: "2023"},
+				{value: "04"},
+				{value: "15"},
+				{value: "5"},
+				{value: "5"},
+			},
+		},
+		{
+			text: "1. Alpha\n2) Beta\nThere are 3 choices.",
+			want: []assistantEpisodeNumber{{value: "3"}},
+		},
+		{
+			text: "The adjustment was -$5, $-6, and -$ 7.",
+			want: []assistantEpisodeNumber{
+				{sign: "-", value: "5", currency: "$"},
+				{sign: "-", value: "6", currency: "$"},
+				{sign: "-", value: "7", currency: "$"},
+			},
+		},
+		{
+			text: "$5€ must not become 5, and $\n6 must not bind across lines.",
+			want: []assistantEpisodeNumber{
+				{value: "5", currency: "$€"},
+				{value: "5"},
+				{value: "6"},
+			},
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.text, func(t *testing.T) {
-			got, ok := parse(test.text)
-			if !ok {
-				t.Fatalf("quantity %q was rejected", test.text)
-			}
-			if got != test.want {
-				t.Fatalf("quantity = %#v, want %#v", got, test.want)
+			got := assistantEpisodeNumbers(test.text)
+			if !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("numbers = %#v, want %#v", got, test.want)
 			}
 		})
 	}
@@ -1511,60 +1511,6 @@ func TestNormalizeAssistantEpisodeNumber(t *testing.T) {
 	}
 	for input, want := range tests {
 		if got := normalizeAssistantEpisodeNumber(input); got != want {
-			t.Fatalf("normalize %q = %q, want %q", input, got, want)
-		}
-	}
-}
-
-func TestNormalizeAssistantEpisodeCurrency(t *testing.T) {
-	tests := map[string]string{
-		"$":       "usd",
-		" usd ":   "usd",
-		"€":       "eur",
-		"GBP":     "gbp",
-		"¥":       "yen-yuan",
-		"JPY":     "jpy",
-		"RMB":     "cny",
-		"unknown": "",
-	}
-	for input, want := range tests {
-		if got := normalizeAssistantEpisodeCurrency(input); got != want {
-			t.Fatalf("normalize %q = %q, want %q", input, got, want)
-		}
-	}
-}
-
-func TestNormalizeAssistantEpisodeUnit(t *testing.T) {
-	tests := map[string]string{
-		"percentage":  "%",
-		"° C":         "°c",
-		"°F":          "°f",
-		"°K":          "°k",
-		"kilograms":   "kg",
-		"milligrams":  "mg",
-		"grams":       "g",
-		"pounds":      "lb",
-		"kilometres":  "km",
-		"miles":       "mi",
-		"centimetres": "cm",
-		"millimetres": "mm",
-		"metres":      "m",
-		"millilitres": "ml",
-		"litres":      "l",
-		"hours":       "h",
-		"minutes":     "min",
-		"seconds":     "s",
-		"days":        "day",
-		"weeks":       "week",
-		"months":      "month",
-		"years":       "year",
-		"km / hours":  "km/h",
-		"unknown":     "",
-		"km/unknown":  "",
-		"km/h/s":      "",
-	}
-	for input, want := range tests {
-		if got := normalizeAssistantEpisodeUnit(input); got != want {
 			t.Fatalf("normalize %q = %q, want %q", input, got, want)
 		}
 	}

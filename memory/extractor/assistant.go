@@ -39,60 +39,12 @@ const (
 	assistantEpisodeDeadlineReserve       = 5 * time.Second
 	assistantEpisodePrefix                = assistantmemory.Prefix
 	assistantEpisodeTruncationMarker      = "\n...[truncated]...\n"
-	assistantEpisodeCurrencyPattern       = `[$€£¥]|USD|EUR|GBP|JPY|CNY|RMB`
-	assistantEpisodeUnitPattern           = `percent(?:age)?|%|°[ \t]*(?:C|F|K)|` +
-		`kilograms?|milligrams?|grams?|pounds?|` +
-		`kilometers?|kilometres?|miles?|` +
-		`centimeters?|centimetres?|millimeters?|millimetres?|` +
-		`meters?|metres?|milliliters?|millilitres?|liters?|litres?|` +
-		`hours?|minutes?|seconds?|days?|weeks?|months?|years?|` +
-		`kgs?|mg|lbs?|km|cm|mm|ml|hrs?|mins?|min|secs?|mi|g|l|h|s|m`
 )
 
-var (
-	assistantEpisodeQuantityPattern = regexp.MustCompile(
-		`(?i)([+\-−]?)(?:((?:` + assistantEpisodeCurrencyPattern + `))[ \t]*)?` +
-			`([+\-−]?)([0-9]+(?:[.,][0-9]+)*)` +
-			`(?:[ \t]*((?:` + assistantEpisodeCurrencyPattern + `)|` +
-			`(?:` + assistantEpisodeUnitPattern + `)` +
-			`(?:[ \t]*/[ \t]*(?:` + assistantEpisodeUnitPattern + `))?))?`,
-	)
-	assistantEpisodeUnitAliases = buildAssistantEpisodeUnitAliases()
+var assistantEpisodeNumberPattern = regexp.MustCompile(
+	`([+\-−]?)(?:([$€£¥])[ \t]*)?([+\-−]?)([0-9]+(?:[.,][0-9]+)*)` +
+		`(?:[ \t]*([$€£¥]))?[ \t]*([%％]?)`,
 )
-
-func buildAssistantEpisodeUnitAliases() map[string]string {
-	groups := map[string][]string{
-		"%":     {"%", "percent", "percentage"},
-		"°c":    {"°c"},
-		"°f":    {"°f"},
-		"°k":    {"°k"},
-		"kg":    {"kg", "kgs", "kilogram", "kilograms"},
-		"mg":    {"mg", "milligram", "milligrams"},
-		"g":     {"g", "gram", "grams"},
-		"lb":    {"lb", "lbs", "pound", "pounds"},
-		"km":    {"km", "kilometer", "kilometers", "kilometre", "kilometres"},
-		"mi":    {"mi", "mile", "miles"},
-		"cm":    {"cm", "centimeter", "centimeters", "centimetre", "centimetres"},
-		"mm":    {"mm", "millimeter", "millimeters", "millimetre", "millimetres"},
-		"m":     {"m", "meter", "meters", "metre", "metres"},
-		"ml":    {"ml", "milliliter", "milliliters", "millilitre", "millilitres"},
-		"l":     {"l", "liter", "liters", "litre", "litres"},
-		"h":     {"h", "hr", "hrs", "hour", "hours"},
-		"min":   {"min", "mins", "minute", "minutes"},
-		"s":     {"s", "sec", "secs", "second", "seconds"},
-		"day":   {"day", "days"},
-		"week":  {"week", "weeks"},
-		"month": {"month", "months"},
-		"year":  {"year", "years"},
-	}
-	aliases := make(map[string]string)
-	for canonical, names := range groups {
-		for _, name := range names {
-			aliases[name] = canonical
-		}
-	}
-	return aliases
-}
 
 type assistantEpisodePair struct {
 	user      model.Message
@@ -113,11 +65,11 @@ type assistantEpisodeSource struct {
 	assistantText string
 }
 
-type assistantEpisodeQuantity struct {
+type assistantEpisodeNumber struct {
 	sign     string
 	value    string
-	unit     string
 	currency string
+	percent  bool
 }
 
 // WithAssistantEpisodeExtraction enables extraction of reusable assistant
@@ -443,7 +395,7 @@ func (e *memoryExtractor) parseAssistantEpisode(
 	if len(memoryText) > assistantEpisodeMaxBytes {
 		return nil, fmt.Errorf("assistant episode exceeds %d bytes", assistantEpisodeMaxBytes)
 	}
-	if err := validateAssistantEpisodeQuantities(memoryText, source); err != nil {
+	if err := validateAssistantEpisodeNumbers(memoryText, source); err != nil {
 		return nil, err
 	}
 	op := &Operation{
@@ -689,85 +641,72 @@ func assistantEpisodeNumberSeparator(value rune) bool {
 	}
 }
 
-func validateAssistantEpisodeQuantities(memoryText, source string) error {
-	sourceQuantities := make(map[assistantEpisodeQuantity]struct{})
-	for _, quantity := range assistantEpisodeQuantities(source) {
-		sourceQuantities[quantity] = struct{}{}
+func validateAssistantEpisodeNumbers(memoryText, source string) error {
+	sourceNumbers := make(map[assistantEpisodeNumber]struct{})
+	for _, number := range assistantEpisodeNumbers(source) {
+		sourceNumbers[number] = struct{}{}
 	}
-	for _, quantity := range assistantEpisodeQuantities(memoryText) {
-		if _, ok := sourceQuantities[quantity]; !ok {
+	for _, number := range assistantEpisodeNumbers(memoryText) {
+		if _, ok := sourceNumbers[number]; !ok {
 			return fmt.Errorf(
-				"assistant episode quantity %q is not present in the source",
-				formatAssistantEpisodeQuantity(quantity),
+				"assistant episode number %q is not present in the source",
+				formatAssistantEpisodeNumber(number),
 			)
 		}
 	}
 	return nil
 }
 
-func assistantEpisodeQuantities(text string) []assistantEpisodeQuantity {
-	matches := assistantEpisodeQuantityPattern.FindAllStringSubmatchIndex(text, -1)
-	quantities := make([]assistantEpisodeQuantity, 0, len(matches))
+func assistantEpisodeNumbers(text string) []assistantEpisodeNumber {
+	matches := assistantEpisodeNumberPattern.FindAllStringSubmatchIndex(text, -1)
+	numbers := make([]assistantEpisodeNumber, 0, len(matches))
 	for _, match := range matches {
-		quantity, ok := parseAssistantEpisodeQuantity(text, match)
+		number, ok := parseAssistantEpisodeNumber(text, match)
 		if ok {
-			quantities = append(quantities, quantity)
+			numbers = append(numbers, number)
 		}
 	}
-	return quantities
+	return numbers
 }
 
-func parseAssistantEpisodeQuantity(
+func parseAssistantEpisodeNumber(
 	text string,
 	match []int,
-) (assistantEpisodeQuantity, bool) {
-	if len(match) != 12 {
-		return assistantEpisodeQuantity{}, false
+) (assistantEpisodeNumber, bool) {
+	if len(match) != 14 {
+		return assistantEpisodeNumber{}, false
+	}
+	numberStart := match[8]
+	numberEnd := match[9]
+	if assistantEpisodeASCIIListMarker(text, numberStart, numberEnd) {
+		return assistantEpisodeNumber{}, false
 	}
 	sign := assistantEpisodeMatchGroup(text, match, 1) +
 		assistantEpisodeMatchGroup(text, match, 3)
-	prefix := assistantEpisodeMatchGroup(text, match, 2)
-	value := assistantEpisodeMatchGroup(text, match, 4)
-	suffix := assistantEpisodeMatchGroup(text, match, 5)
-	start := match[0]
-	end := match[1]
-	if suffix != "" && end < len(text) {
-		next, _ := utf8.DecodeRuneInString(text[end:])
-		last, _ := utf8.DecodeLastRuneInString(suffix)
-		if unicode.IsLetter(last) && assistantEpisodeIdentifierRune(next) {
-			// A short unit alternative can match the beginning of an ordinary
-			// word (for example, "m" in "meals"). Treat that case as an
-			// unqualified number instead of discarding the number entirely.
-			suffix = ""
-		}
+	currency := assistantEpisodeMatchGroup(text, match, 2)
+	suffixCurrency := assistantEpisodeMatchGroup(text, match, 5)
+	if suffixCurrency != "" && suffixCurrency != currency {
+		currency += suffixCurrency
 	}
-	if prefix == "" && sign != "" && start > 0 {
-		previous, _ := utf8.DecodeLastRuneInString(text[:start])
-		if unicode.IsDigit(previous) {
-			sign = ""
-		}
+	if currency == "" && sign != "" && match[0] > 0 &&
+		text[match[0]-1] >= '0' && text[match[0]-1] <= '9' {
+		sign = ""
 	}
-
-	prefixCurrency := normalizeAssistantEpisodeCurrency(prefix)
-	suffixCurrency := normalizeAssistantEpisodeCurrency(suffix)
-	currency := prefixCurrency
-	if suffixCurrency != "" {
-		if currency == "" {
-			currency = suffixCurrency
-		} else if currency != suffixCurrency {
-			currency += "/" + suffixCurrency
-		}
-	}
-	unit := ""
-	if suffixCurrency == "" {
-		unit = normalizeAssistantEpisodeUnit(suffix)
-	}
-	return assistantEpisodeQuantity{
+	return assistantEpisodeNumber{
 		sign:     strings.ReplaceAll(sign, "−", "-"),
-		value:    normalizeAssistantEpisodeNumber(value),
-		unit:     unit,
+		value:    normalizeAssistantEpisodeNumber(text[numberStart:numberEnd]),
 		currency: currency,
+		percent:  assistantEpisodeMatchGroup(text, match, 6) != "",
 	}, true
+}
+
+func assistantEpisodeASCIIListMarker(text string, start, end int) bool {
+	lineStart := strings.LastIndexByte(text[:start], '\n') + 1
+	if strings.TrimSpace(text[lineStart:start]) != "" || end+1 >= len(text) {
+		return false
+	}
+	return (text[end] == '.' || text[end] == ')') &&
+		(text[end+1] == ' ' || text[end+1] == '\t')
 }
 
 func assistantEpisodeMatchGroup(text string, match []int, group int) string {
@@ -777,10 +716,6 @@ func assistantEpisodeMatchGroup(text string, match []int, group int) string {
 		return ""
 	}
 	return text[start:end]
-}
-
-func assistantEpisodeIdentifierRune(value rune) bool {
-	return value == '_' || unicode.IsLetter(value) || unicode.IsDigit(value)
 }
 
 func normalizeAssistantEpisodeNumber(value string) string {
@@ -815,53 +750,17 @@ func normalizeAssistantEpisodeNumber(value string) string {
 	return integer + "." + fraction
 }
 
-func normalizeAssistantEpisodeCurrency(value string) string {
-	switch strings.ToUpper(strings.TrimSpace(value)) {
-	case "$", "USD":
-		return "usd"
-	case "€", "EUR":
-		return "eur"
-	case "£", "GBP":
-		return "gbp"
-	case "¥":
-		return "yen-yuan"
-	case "JPY":
-		return "jpy"
-	case "CNY", "RMB":
-		return "cny"
-	default:
-		return ""
-	}
-}
-
-func normalizeAssistantEpisodeUnit(value string) string {
-	normalized := strings.ToLower(strings.Join(strings.Fields(value), ""))
-	parts := strings.Split(normalized, "/")
-	if len(parts) == 1 {
-		return assistantEpisodeUnitAliases[normalized]
-	}
-	if len(parts) != 2 {
-		return ""
-	}
-	numerator := assistantEpisodeUnitAliases[parts[0]]
-	denominator := assistantEpisodeUnitAliases[parts[1]]
-	if numerator == "" || denominator == "" {
-		return ""
-	}
-	return numerator + "/" + denominator
-}
-
-func formatAssistantEpisodeQuantity(quantity assistantEpisodeQuantity) string {
+func formatAssistantEpisodeNumber(number assistantEpisodeNumber) string {
 	var builder strings.Builder
-	if quantity.currency != "" {
-		builder.WriteString(quantity.currency)
-		builder.WriteByte(' ')
+	if number.sign != "" {
+		builder.WriteString(number.sign)
 	}
-	builder.WriteString(quantity.sign)
-	builder.WriteString(quantity.value)
-	if quantity.unit != "" {
-		builder.WriteByte(' ')
-		builder.WriteString(quantity.unit)
+	if number.currency != "" {
+		builder.WriteString(number.currency)
+	}
+	builder.WriteString(number.value)
+	if number.percent {
+		builder.WriteByte('%')
 	}
 	return builder.String()
 }
@@ -918,6 +817,8 @@ provided by the assistant as attributed conversation episodes.
   contains a durable, reusable result.
 - Preserve the paired user request and the assistant's exact material result,
   including names, quantities, dates, durations, negation, and qualifications.
+- Preserve units and currency labels exactly as written. Do not translate,
+  expand, abbreviate, infer, or convert them.
 - Preserve item-to-detail relationships in lists and procedures.
 - Record attributed conversation history, not verified truth or a user fact.
 - Skip acknowledgments, refusals, follow-up questions, generic explanations,

@@ -346,6 +346,8 @@ user/assistant pair。确定性预筛选与语言无关，只检查响应形态�
 assistant 响应包含至少两个 Markdown 或编号列表项，或者引入了 user 请求中没有的
 数值 token 时，该 pair 会进入第二阶段。第二阶段 prompt 再对结果是否持久、可复用
 作最终语义判断。没有列表或新数值的单段 prose 结果目前不会触发第二阶段。
+写入生成的 episode 前，确定性护栏会将 ASCII 数字及其紧邻的正负号、货币符号和百分号
+与原始回答对照。自然语言单位和货币名称由第二阶段 prompt 负责，prompt 会要求按原文保留。
 Eligible pair 按时间顺序进入私有的单次请求 pair 数量和 source 体积预算；超出预算的候选会被忽略，因为
 assistant 结果提取采用 best-effort 语义。入选的 pair 会合并到一次第二阶段请求中，
 并且只暴露私有的 `memory_assistant_episode` 工具。该工具不会暴露给应用的 Agent。

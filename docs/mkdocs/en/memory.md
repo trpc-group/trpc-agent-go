@@ -380,7 +380,11 @@ Markdown or numbered list items, or one that introduces a numeric token not
 already present in the user request. The second-stage prompt makes the final
 semantic decision about whether the result is durable and reusable. A prose
 result without a list or a newly introduced number does not currently trigger
-the second stage. Eligible pairs are considered in chronological order within
+the second stage. Before storing a generated episode, a deterministic guard
+checks ASCII numbers and adjacent signs, currency symbols, and percent signs
+against the source response. Natural-language units and currency labels remain
+the responsibility of the second-stage prompt, which requires preserving them
+exactly. Eligible pairs are considered in chronological order within
 a private per-request pair and source-size budget. Candidates past that budget
 are omitted because assistant-result extraction is best effort.
 The selected pairs are combined into one second request that exposes only the
