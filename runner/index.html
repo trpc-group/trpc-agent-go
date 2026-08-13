@@ -2720,9 +2720,23 @@
   
   
   
-    <li class="md-nav__item">
-      <a href="../evaluation/" class="md-nav__link">
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
         
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_19" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_19" id="__nav_2_19_label" tabindex="0">
+            
   
   
   <span class="md-ellipsis">
@@ -2731,7 +2745,226 @@
   </span>
   
 
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_19_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_19">
+            <span class="md-nav__icon md-icon"></span>
+            Evaluation
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../evaluation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Overview
+    
+  </span>
+  
+
       </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../evaluation/evalset/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    EvalSet
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../evaluation/metric/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    EvalMetric
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../evaluation/evaluator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Evaluator
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../evaluation/evalresult/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    EvalResult
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../evaluation/service/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Evaluation Service
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../evaluation/agentevaluator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Evaluation Entry Point
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../evaluation/methods/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Evaluation Methods
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../evaluation/server/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Online Evaluation Service
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
     </li>
   
 
@@ -6686,9 +6919,9 @@ hard cutoffs.</p>
 </span><span id="__span-58-28"><a id="__codelineno-58-28" name="__codelineno-58-28"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <h2 id="online-best-of-n-candidate-selection">Online Best-of-N Candidate Selection</h2>
-<p>Best-of-N completes multiple generations, evaluation-based ranking, and best-result output within one <code>Runner.Run</code>. After Runner receives the same user message, it asks the same Agent to generate N candidate results based on the current session context, uses <a href="../evaluation/#evalmetric">EvalMetric</a> to judge candidate quality, and finally returns only the highest-quality candidate as the output for this turn.</p>
-<p><code>runner/bestofn</code> integrates with an existing Runner as a <code>runner.Option</code>. The business Agent generates candidates, <a href="../evaluation/">Evaluation</a> evaluates candidate results, and Runner manages sessions, event streams, and final result submission. Candidate selection is driven by the <a href="../evaluation/#evalmetric">EvalMetric</a> values injected through <code>WithEvalMetrics(...)</code>, which can be either static rule evaluators or LLM Judge evaluators.</p>
-<p>The example below uses <a href="../evaluation/#llm-rubric-response-evaluator">llm_rubric_response</a> as the candidate selection metric. This metric evaluates each candidate final answer independently against rubrics.</p>
+<p>Best-of-N completes multiple generations, evaluation-based ranking, and best-result output within one <code>Runner.Run</code>. After Runner receives the same user message, it asks the same Agent to generate N candidate results based on the current session context, uses <a href="../evaluation/metric/#evalmetric">EvalMetric</a> to judge candidate quality, and finally returns only the highest-quality candidate as the output for this turn.</p>
+<p><code>runner/bestofn</code> integrates with an existing Runner as a <code>runner.Option</code>. The business Agent generates candidates, <a href="../evaluation/">Evaluation</a> evaluates candidate results, and Runner manages sessions, event streams, and final result submission. Candidate selection is driven by the <a href="../evaluation/metric/#evalmetric">EvalMetric</a> values injected through <code>WithEvalMetrics(...)</code>, which can be either static rule evaluators or LLM Judge evaluators.</p>
+<p>The example below uses <a href="../evaluation/evaluator/#llm-rubric-response-evaluator">llm_rubric_response</a> as the candidate selection metric. This metric evaluates each candidate final answer independently against rubrics.</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-59-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-59-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-59-3"> 3</a></span>
@@ -6774,14 +7007,14 @@ hard cutoffs.</p>
 </span><span id="__span-59-42"><a id="__codelineno-59-42" name="__codelineno-59-42"></a><span class="k">defer</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
 </span></code></pre></div></td></tr></table></div>
 <p><code>WithAttempts(attempts)</code> sets how many candidates each <code>Runner.Run</code> generates. The default value is 2, and the value must be greater than or equal to 1. When set to 1, only one candidate is generated, and the underlying Runner follows the normal single-run flow without triggering candidate selection.</p>
-<p><code>WithEvalMetrics(metrics...)</code> sets the <a href="../evaluation/#evalmetric">EvalMetric</a> values used for candidate selection. At least one evaluation metric is required. Each metric produces a score and evaluation status, and Runner aggregates these results according to the candidate selection mode specified by <code>WithSelectionMode</code>. The default mode evaluates candidates independently, and it can also be switched to pairwise comparison.</p>
-<p><code>WithContextMessages(messages...)</code> attaches <a href="../evaluation/#context-injection">ContextMessages</a> to each candidate <a href="../evaluation/#evalset">EvalCase</a>. These messages enter the eval case and provide additional background for evaluators.</p>
+<p><code>WithEvalMetrics(metrics...)</code> sets the <a href="../evaluation/metric/#evalmetric">EvalMetric</a> values used for candidate selection. At least one evaluation metric is required. Each metric produces a score and evaluation status, and Runner aggregates these results according to the candidate selection mode specified by <code>WithSelectionMode</code>. The default mode evaluates candidates independently, and it can also be switched to pairwise comparison.</p>
+<p><code>WithContextMessages(messages...)</code> attaches <a href="../evaluation/evalset/#context-injection">ContextMessages</a> to each candidate <a href="../evaluation/evalset/#evalset">EvalCase</a>. These messages enter the eval case and provide additional background for evaluators.</p>
 <p><code>WithJudgeRunner(r)</code> sets the judge Runner used by LLM Judge metrics. After it is configured, judge model calls for LLM Judge metrics go through this Runner.</p>
 <p><code>WithJudgeRunnerNumSamples(n)</code> sets how many times an LLM Judge metric calls the judge Runner for the same evaluation input. The value must be greater than 0, <code>WithJudgeRunner</code> must be configured, and the metric must contain an LLM Judge criterion.</p>
-<p><code>WithSelectionMode(mode)</code> sets how candidate results are passed to <a href="../evaluation/#evalmetric">EvalMetric</a>, and how metric results are aggregated into the final selected candidate. The default value is <code>SelectionModePointwise</code>.</p>
+<p><code>WithSelectionMode(mode)</code> sets how candidate results are passed to <a href="../evaluation/metric/#evalmetric">EvalMetric</a>, and how metric results are aggregated into the final selected candidate. The default value is <code>SelectionModePointwise</code>.</p>
 <ul>
-<li><code>SelectionModePointwise</code> evaluates candidates independently. Each candidate generates an independent <a href="../evaluation/#evalset">EvalCase</a>, and metrics score that candidate. The candidate with the highest average score is selected. If scores are tied, candidates with passed evaluation status are preferred. If status is also tied, the candidate with the smaller index is preferred. This mode is suitable for <a href="../evaluation/#evalmetric">EvalMetric</a> values that can directly evaluate the quality of a single response.</li>
-<li><code>SelectionModePairwise</code> compares candidates pairwise. Each two candidates form one comparison. The earlier candidate is used as actual, and the later candidate is used as expected. They are passed to <a href="../evaluation/">Evaluation</a>, where the corresponding <a href="../evaluation/#evaluator">Evaluator</a> compares them according to the <a href="../evaluation/#evalmetric">EvalMetric</a> configuration and outputs a comparison score. A score greater than 0.5 means the earlier candidate has higher quality, a score less than 0.5 means the later candidate has higher quality, and a score equal to 0.5 means their quality is comparable. After all comparisons finish, candidates with more wins are preferred. If win counts are tied, candidates whose comparison scores deviate more from 0.5 are preferred. If still tied, the candidate with the smaller index is preferred. This mode only requires the evaluator to output a comparison score and is not tied to a specific evaluator.</li>
+<li><code>SelectionModePointwise</code> evaluates candidates independently. Each candidate generates an independent <a href="../evaluation/evalset/#evalset">EvalCase</a>, and metrics score that candidate. The candidate with the highest average score is selected. If scores are tied, candidates with passed evaluation status are preferred. If status is also tied, the candidate with the smaller index is preferred. This mode is suitable for <a href="../evaluation/metric/#evalmetric">EvalMetric</a> values that can directly evaluate the quality of a single response.</li>
+<li><code>SelectionModePairwise</code> compares candidates pairwise. Each two candidates form one comparison. The earlier candidate is used as actual, and the later candidate is used as expected. They are passed to <a href="../evaluation/">Evaluation</a>, where the corresponding <a href="../evaluation/evaluator/#evaluator">Evaluator</a> compares them according to the <a href="../evaluation/metric/#evalmetric">EvalMetric</a> configuration and outputs a comparison score. A score greater than 0.5 means the earlier candidate has higher quality, a score less than 0.5 means the later candidate has higher quality, and a score equal to 0.5 means their quality is comparable. After all comparisons finish, candidates with more wins are preferred. If win counts are tied, candidates whose comparison scores deviate more from 0.5 are preferred. If still tied, the candidate with the smaller index is preferred. This mode only requires the evaluator to output a comparison score and is not tied to a specific evaluator.</li>
 </ul>
 <p><code>WithRequirePassingCandidate(enabled)</code> requires the selected candidate in <code>SelectionModePointwise</code> to pass the metric threshold. When enabled, candidates that do not reach passed status are not selected. If all candidates fail, the event stream emits a selection error. This option only supports <code>SelectionModePointwise</code>; using it together with <code>SelectionModePairwise</code> makes <code>NewRunnerOption</code> return a configuration error.</p>
 <p>Candidate generation is serial by default. Use <code>WithAttemptParallelEnabled(enabled)</code> to enable concurrent candidate runs. The default value is <code>false</code>. <code>WithAttemptParallelism(parallelism)</code> sets the maximum concurrency for candidate runs. When concurrency is enabled and <code>parallelism &lt;= 0</code>, <code>runtime.GOMAXPROCS(0)</code> is used.</p>
@@ -6810,10 +7043,10 @@ hard cutoffs.</p>
 </span><span id="__span-60-11"><a id="__codelineno-60-11" name="__codelineno-60-11"></a><span class="w">    </span><span class="nx">bestofn</span><span class="p">.</span><span class="nx">WithJudgeRunner</span><span class="p">(</span><span class="nx">judgeRunner</span><span class="p">),</span>
 </span><span id="__span-60-12"><a id="__codelineno-60-12" name="__codelineno-60-12"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-<p><code>WithEvalSetManager(manager)</code> sets the <a href="../evaluation/#evalset-manager">EvalSet Manager</a> used during candidate evaluation. It manages <a href="../evaluation/#evalset">EvalSet</a> and <a href="../evaluation/#evalset">EvalCase</a>, and defaults to an in-memory manager implementation.</p>
-<p><code>WithRegistry(registry)</code> sets the <a href="../evaluation/#evaluator-registry">Evaluator Registry</a> used by <a href="../evaluation/#evaluation-service">Evaluation Service</a> to resolve <a href="../evaluation/#evaluator">Evaluator</a> names. It is usually configured only when integrating custom evaluators.</p>
-<p><code>WithMetricRegistry(registry)</code> sets the <a href="../evaluation/#metricregistry-extensions">MetricRegistry</a> used by <a href="../evaluation/#evaluation-service">Evaluation Service</a> to resolve <a href="../evaluation/#evalmetric">EvalMetric</a> extensions. It is usually configured only when integrating custom metric extensions.</p>
-<p>If you need to use <a href="../evaluation/#llm-pairwise-comparison-evaluator">llm_verifier_pairwise</a> to compare candidate final responses pairwise, switch the selection mode to <code>SelectionModePairwise</code>. This mode forms pairwise comparison cases from candidates and aggregates selection results based on comparison scores. The judge Agent must enable <code>logprobs</code> and <code>top_logprobs</code>; see <a href="../evaluation/#llm-verifier">LLM Verifier</a> for the full configuration.</p>
+<p><code>WithEvalSetManager(manager)</code> sets the <a href="../evaluation/evalset/#evalset-manager">EvalSet Manager</a> used during candidate evaluation. It manages <a href="../evaluation/evalset/#evalset">EvalSet</a> and <a href="../evaluation/evalset/#evalset">EvalCase</a>, and defaults to an in-memory manager implementation.</p>
+<p><code>WithRegistry(registry)</code> sets the <a href="../evaluation/evaluator/#evaluator-registry">Evaluator Registry</a> used by <a href="../evaluation/service/#evaluation-service">Evaluation Service</a> to resolve <a href="../evaluation/evaluator/#evaluator">Evaluator</a> names. It is usually configured only when integrating custom evaluators.</p>
+<p><code>WithMetricRegistry(registry)</code> sets the <a href="../evaluation/metric/#metricregistry-extensions">MetricRegistry</a> used by <a href="../evaluation/service/#evaluation-service">Evaluation Service</a> to resolve <a href="../evaluation/metric/#evalmetric">EvalMetric</a> extensions. It is usually configured only when integrating custom metric extensions.</p>
+<p>If you need to use <a href="../evaluation/evaluator/#llm-pairwise-comparison-evaluator">llm_verifier_pairwise</a> to compare candidate final responses pairwise, switch the selection mode to <code>SelectionModePairwise</code>. This mode forms pairwise comparison cases from candidates and aggregates selection results based on comparison scores. The judge Agent must enable <code>logprobs</code> and <code>top_logprobs</code>; see <a href="../evaluation/methods/#llm-verifier">LLM Verifier</a> for the full configuration.</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-61-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-61-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-61-3"> 3</a></span>
@@ -6860,8 +7093,8 @@ hard cutoffs.</p>
 </span><span id="__span-61-22"><a id="__codelineno-61-22" name="__codelineno-61-22"></a><span class="w">    </span><span class="nx">bestofn</span><span class="p">.</span><span class="nx">WithJudgeRunner</span><span class="p">(</span><span class="nx">judgeRunner</span><span class="p">),</span>
 </span><span id="__span-61-23"><a id="__codelineno-61-23" name="__codelineno-61-23"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-<p>For a complete example that uses <a href="../evaluation/#llm-pairwise-comparison-evaluator">llm_verifier_pairwise</a> as the candidate selection metric, see <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/llmverifier">examples/evaluation/llmverifier</a>.</p>
-<p>At runtime, Runner creates multiple candidate runs based on the current user message and Session. Each candidate run calls the same Agent, and candidate traces are then converted into <a href="../evaluation/#evalset">EvalCase</a> for evaluation. After selection completes, the outer Session commits only the selected candidate's run events. The caller receives the selected candidate events and the normal completion event. If the Agent enables streaming output, candidate events first enter an internal buffer, and the caller receives the selected candidate's streaming chunks after selection completes.</p>
+<p>For a complete example that uses <a href="../evaluation/evaluator/#llm-pairwise-comparison-evaluator">llm_verifier_pairwise</a> as the candidate selection metric, see <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/llmverifier">examples/evaluation/llmverifier</a>.</p>
+<p>At runtime, Runner creates multiple candidate runs based on the current user message and Session. Each candidate run calls the same Agent, and candidate traces are then converted into <a href="../evaluation/evalset/#evalset">EvalCase</a> for evaluation. After selection completes, the outer Session commits only the selected candidate's run events. The caller receives the selected candidate events and the normal completion event. If the Agent enables streaming output, candidate events first enter an internal buffer, and the caller receives the selected candidate's streaming chunks after selection completes.</p>
 <p>Tools, plugins, Skills, MCP ToolSets, and callbacks execute during candidate runs. The framework isolates Session commits and intercepts writes to framework-managed Memory and Artifact through read-only services. External requests actively initiated by business code remain under business control.</p>
 <p>When execution trace or Graph checkpoint resume is enabled, this turn bypasses Best-of-N candidate selection and follows the original Runner flow.</p>
 <h2 id="remote-trpc-agent-runner">Remote tRPC-Agent Runner</h2>
@@ -6985,7 +7218,7 @@ hard cutoffs.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="July 28, 2026 07:04:17 UTC">2026-07-28 07:04:17</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="August 13, 2026 09:44:15 UTC">2026-08-13 09:44:15</span>
   </span>
 
     
