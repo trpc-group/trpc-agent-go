@@ -696,8 +696,14 @@ func (dk *BuiltinKnowledge) processDocuments(
 			stored, err := dk.processBatch(ctx, plan, batch, src)
 			if err != nil {
 				// A batch keeps the writes it completed before the failure, so
-				// they count towards the source and global totals before the
-				// event is reported.
+				// they count towards the source and global totals, and towards
+				// the statistics, before the event is reported. Leaving them
+				// out of the statistics would report documents as processed
+				// that the summary does not describe, and would suppress the
+				// summary entirely when the first batch fails part-way.
+				for _, doc := range batch[:stored] {
+					reporter.RecordStat(len(doc.Content))
+				}
 				processed := int(completedCount.Add(int64(stored)))
 				globalProcessed.Add(int64(stored))
 				reporter.Error(ctx, LoadProgressEvent{

@@ -3465,17 +3465,28 @@ func TestLoad_EmbeddingBatch_ErrorProgressCountsPartialWrites(t *testing.T) {
 		docConcurrency int
 		failAfter      int
 		want           int
+		// wantStats is the document count of the statistics summary. The
+		// sequential path records the size of every document it read before
+		// storing any of them, so its summary counts the whole source. The
+		// concurrent path records each unit of work as it completes, so it
+		// must still describe the documents a failed batch left persisted.
+		wantStats int
 	}{
 		// The first batch stores three documents, then the second document of
 		// the second batch fails, leaving four documents persisted.
-		{name: "sequential", docCount: 6, batchSize: 3, docConcurrency: 1, failAfter: 4, want: 4},
+		{name: "sequential", docCount: 6, batchSize: 3, docConcurrency: 1, failAfter: 4, want: 4, wantStats: 6},
 		// One batch keeps the failing write deterministic under concurrency:
 		// the second write of the only batch fails after one document.
-		{name: "concurrent", docCount: 3, batchSize: 3, docConcurrency: 2, failAfter: 1, want: 1},
+		{name: "concurrent", docCount: 3, batchSize: 3, docConcurrency: 2, failAfter: 1, want: 1, wantStats: 1},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			logger := &statsCapturingLogger{Logger: log.Default}
+			originalLogger := log.Default
+			log.Default = logger
+			defer func() { log.Default = originalLogger }()
+
 			store := &batchRecordingVectorStore{failAfter: tt.failAfter}
 			kb := New(WithSources([]source.Source{&mockSource{name: "test", docCount: tt.docCount}}))
 			kb.vectorStore = store
@@ -3490,7 +3501,7 @@ func TestLoad_EmbeddingBatch_ErrorProgressCountsPartialWrites(t *testing.T) {
 				WithDocConcurrency(tt.docConcurrency),
 				WithEmbeddingBatchSize(tt.batchSize),
 				WithShowProgress(false),
-				WithShowStats(false),
+				WithShowStats(true),
 				WithLoadProgressCallback(func(_ context.Context, ev LoadProgressEvent) {
 					if ev.Err == nil {
 						return
@@ -3532,8 +3543,50 @@ func TestLoad_EmbeddingBatch_ErrorProgressCountsPartialWrites(t *testing.T) {
 				t.Errorf("documents persisted = %d, want %d, so the event disagrees with the store",
 					got, tt.want)
 			}
+			// The statistics are reported once the load closes, and only when
+			// at least one document was recorded, so dropping the partial
+			// writes of a failed first batch would remove the summary.
+			total, ok := logger.lastStatsTotal()
+			if !ok {
+				t.Fatalf("no statistics summary was logged, want one reporting %d document(s)",
+					tt.wantStats)
+			}
+			if total != tt.wantStats {
+				t.Errorf("statistics document count = %d, want %d", total, tt.wantStats)
+			}
 		})
 	}
+}
+
+// statsCapturingLogger records the document count of every statistics summary
+// the loader logs, so a test can assert what the summary describes.
+type statsCapturingLogger struct {
+	log.Logger
+
+	mu     sync.Mutex
+	totals []int
+}
+
+func (l *statsCapturingLogger) Infof(format string, args ...any) {
+	if strings.HasPrefix(format, "Document statistics - total:") && len(args) > 0 {
+		if total, ok := args[0].(int); ok {
+			l.mu.Lock()
+			l.totals = append(l.totals, total)
+			l.mu.Unlock()
+		}
+	}
+	l.Logger.Infof(format, args...)
+}
+
+// lastStatsTotal returns the document count of the most recent summary, which
+// is the one reported for the whole load.
+func (l *statsCapturingLogger) lastStatsTotal() (int, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.totals) == 0 {
+		return 0, false
+	}
+	return l.totals[len(l.totals)-1], true
 }
 
 // TestLoad_EmbeddingBatch_DoesNotBatchAcrossSources pins the documented
