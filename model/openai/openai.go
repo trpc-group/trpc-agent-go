@@ -71,6 +71,10 @@ const (
 	defaultKimiBaseURL string = "https://api.moonshot.ai/v1"
 	kimiAPIHost        string = "api.moonshot.ai"
 	kimiCNAPIHost      string = "api.moonshot.cn"
+
+	//nolint:gosec
+	litellmAPIKeyName     string = "LITELLM_API_KEY"
+	defaultLiteLLMBaseURL string = "http://localhost:4000/v1"
 )
 
 // Variant represents different model variants with specific behaviors.
@@ -95,6 +99,12 @@ const (
 	VariantMiniMax Variant = "minimax"
 	// VariantKimi is the Kimi OpenAI-compatible variant.
 	VariantKimi Variant = "kimi"
+	// VariantLiteLLM is the LiteLLM OpenAI-compatible variant. LiteLLM is an AI
+	// gateway that exposes 100+ LLM providers behind a single OpenAI-compatible
+	// API. It defaults to the local LiteLLM proxy endpoint and reads the
+	// LITELLM_API_KEY environment variable; override WithBaseURL to target a
+	// remote proxy.
+	VariantLiteLLM Variant = "litellm"
 )
 
 // thinkingValueConvertor converts ThinkingEnabled bool to the variant-specific value.
@@ -396,6 +406,21 @@ var variantConfigs = map[Variant]variantConfig{
 		defaultBaseURL:            defaultKimiBaseURL,
 		thinkingEnabledKey:        thinkingKey,
 		thinkingValueConvertor:    thinkingTypeValueConvertor,
+	},
+	// LiteLLM is an OpenAI-compatible gateway, so it reuses the default OpenAI
+	// request/response behavior and only overrides the credential env var and
+	// the default (local proxy) base URL.
+	VariantLiteLLM: {
+		fileUploadPath:            "/openapi/v1/files",
+		filePurpose:               openai.FilePurposeUserData,
+		fileDeletionMethod:        http.MethodDelete,
+		skipFileTypeInContent:     false,
+		fileDeletionBodyConvertor: defaultFileDeletionBodyConvertor,
+		apiKeyName:                litellmAPIKeyName,
+		defaultBaseURL:            defaultLiteLLMBaseURL,
+		thinkingEnabledKey:        model.ThinkingEnabledKey,
+		thinkingValueConvertor:    defaultThinkingValueConvertor,
+		defaultOptimizeForCache:   true,
 	},
 }
 

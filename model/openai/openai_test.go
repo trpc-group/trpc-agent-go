@@ -61,6 +61,7 @@ func TestNew(t *testing.T) {
 	t.Setenv(deepSeekAPIKeyName, testKey)
 	t.Setenv(miniMaxAPIKeyName, testKey)
 	t.Setenv(kimiAPIKeyName, testKey)
+	t.Setenv(litellmAPIKeyName, testKey)
 	tests := []struct {
 		name       string
 		modelName  string
@@ -137,6 +138,30 @@ func TestNew(t *testing.T) {
 				WithAPIKey(testKey),
 			},
 			expectOpts: nil,
+		},
+		{
+			name:      "variant litellm defaults to local proxy base url",
+			modelName: "gpt-4o",
+			opts: []Option{
+				WithVariant(VariantLiteLLM),
+			},
+			expectOpts: []Option{
+				WithAPIKey(testKey),
+				WithBaseURL(defaultLiteLLMBaseURL),
+			},
+		},
+		{
+			name:      "litellm variant preserves custom proxy base url",
+			modelName: "gpt-4o",
+			opts: []Option{
+				WithVariant(VariantLiteLLM),
+				WithBaseURL("https://litellm.example.com/v1"),
+			},
+			expectOpts: []Option{
+				WithAPIKey(testKey),
+				WithBaseURL("https://litellm.example.com/v1"),
+				WithVariant(VariantLiteLLM),
+			},
 		},
 		{
 			name:      "infers minimax from international api base url",
