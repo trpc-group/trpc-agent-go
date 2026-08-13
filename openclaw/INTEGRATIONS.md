@@ -514,6 +514,13 @@ Common config fields:
 - `skip_db_init`: set true if your DB schema is pre-created
 - `table_prefix`: optional prefix for table names
 
+MySQL also accepts `state_initialization`, which defaults to `true`. Set it to
+`false` only while staging the coordinated state-initialization schema
+migration. This temporarily avoids the lease table and keeps lenient anonymous
+A2A on its per-agent fallback; strict coordination remains fail-closed. Re-enable
+it after the lease table, indexes, and `session_states.created_at TIMESTAMP(6)`
+are available to every instance.
+
 MySQL example:
 
 ```yaml
@@ -522,6 +529,7 @@ session:
   config:
     dsn: "user:pass@tcp(127.0.0.1:3306)/openclaw"
     skip_db_init: false
+    state_initialization: true
     table_prefix: "oc_"
 ```
 

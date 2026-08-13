@@ -44,6 +44,28 @@ func TestNewMySQLSessionBackend_MissingConfigFails(t *testing.T) {
 	require.Contains(t, err.Error(), "requires dsn or instance")
 }
 
+func TestNewMySQLSessionBackend_StateInitializationDefaultsEnabled(
+	t *testing.T,
+) {
+	_, restore := stubMySQLBuilder(t)
+	defer restore()
+
+	cfg := yamlNode(t, `
+dsn: "mysql://demo"
+skip_db_init: true
+`)
+	svc, err := newMySQLSessionBackend(
+		registry.SessionDeps{},
+		registry.SessionBackendSpec{Config: cfg},
+	)
+	require.Nil(t, svc)
+	require.ErrorContains(
+		t,
+		err,
+		"verify state initialization schema failed",
+	)
+}
+
 func TestNewPostgresSessionBackend_MissingConfigFails(t *testing.T) {
 	t.Parallel()
 
@@ -211,6 +233,7 @@ func TestNewMySQLSessionBackend_WithDSNSucceeds(t *testing.T) {
 	cfg := yamlNode(t, `
 dsn: "mysql://demo"
 skip_db_init: true
+state_initialization: false
 table_prefix: "x_"
 `)
 	svc, err := newMySQLSessionBackend(
@@ -220,6 +243,9 @@ table_prefix: "x_"
 	require.NoError(t, err)
 	require.NotNil(t, svc)
 	require.Equal(t, "mysql://demo", gotDSN)
+	availability, ok := svc.(session.StateInitializationAvailability)
+	require.True(t, ok)
+	require.False(t, availability.StateInitializationAvailable())
 	require.NoError(t, svc.Close())
 }
 
@@ -250,6 +276,7 @@ func TestNewMySQLSessionBackend_WithInstanceSucceeds(t *testing.T) {
 	cfg := yamlNode(t, `
 instance: "`+instanceName+`"
 skip_db_init: true
+state_initialization: false
 `)
 	svc, err := newMySQLSessionBackend(
 		registry.SessionDeps{},
@@ -258,6 +285,9 @@ skip_db_init: true
 	require.NoError(t, err)
 	require.NotNil(t, svc)
 	require.Equal(t, instanceDSN, gotDSN)
+	availability, ok := svc.(session.StateInitializationAvailability)
+	require.True(t, ok)
+	require.False(t, availability.StateInitializationAvailable())
 	require.NoError(t, svc.Close())
 }
 
