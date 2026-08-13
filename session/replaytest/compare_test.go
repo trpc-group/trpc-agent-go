@@ -246,6 +246,150 @@ func TestCompareSnapshotsDoesNotTreatMissingMapKeyAsEmptySlice(t *testing.T) {
 	}
 }
 
+func TestCompareSnapshotsDoesNotTreatSchemaShapedPayloadAsSnapshotSchema(t *testing.T) {
+	tests := []struct {
+		name     string
+		baseline any
+		actual   any
+		path     string
+	}{
+		{
+			name: "session events",
+			baseline: map[string]any{
+				"sessions": []any{map[string]any{}},
+			},
+			actual: map[string]any{
+				"sessions": []any{map[string]any{"events": []any{}}},
+			},
+			path: "$.sessions[0].events[0].extensions.schema.sessions[0].events",
+		},
+		{
+			name: "session summaries",
+			baseline: map[string]any{
+				"sessions": []any{map[string]any{}},
+			},
+			actual: map[string]any{
+				"sessions": []any{map[string]any{"summaries": []any{}}},
+			},
+			path: "$.sessions[0].events[0].extensions.schema.sessions[0].summaries",
+		},
+		{
+			name: "session tracks",
+			baseline: map[string]any{
+				"sessions": []any{map[string]any{}},
+			},
+			actual: map[string]any{
+				"sessions": []any{map[string]any{"tracks": []any{}}},
+			},
+			path: "$.sessions[0].events[0].extensions.schema.sessions[0].tracks",
+		},
+		{
+			name: "event tool calls",
+			baseline: map[string]any{
+				"sessions": []any{map[string]any{
+					"events": []any{map[string]any{}},
+				}},
+			},
+			actual: map[string]any{
+				"sessions": []any{map[string]any{
+					"events": []any{map[string]any{"tool_calls": []any{}}},
+				}},
+			},
+			path: "$.sessions[0].events[0].extensions.schema.sessions[0].events[0].tool_calls",
+		},
+		{
+			name: "memory search results",
+			baseline: map[string]any{
+				"memory_searches": []any{map[string]any{}},
+			},
+			actual: map[string]any{
+				"memory_searches": []any{map[string]any{"results": []any{}}},
+			},
+			path: "$.sessions[0].events[0].extensions.schema.memory_searches[0].results",
+		},
+		{
+			name: "track events",
+			baseline: map[string]any{
+				"sessions": []any{map[string]any{
+					"tracks": []any{map[string]any{}},
+				}},
+			},
+			actual: map[string]any{
+				"sessions": []any{map[string]any{
+					"tracks": []any{map[string]any{"events": []any{}}},
+				}},
+			},
+			path: "$.sessions[0].events[0].extensions.schema.sessions[0].tracks[0].events",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			differences, err := CompareSnapshots(CompareInput{
+				Case:    "schema-shaped-payload",
+				Backend: "candidate",
+				Baseline: Snapshot{Sessions: []SessionSnapshot{{Events: []EventSnapshot{{
+					Extensions: map[string]any{"schema": test.baseline},
+				}}}}},
+				Actual: Snapshot{Sessions: []SessionSnapshot{{Events: []EventSnapshot{{
+					Extensions: map[string]any{"schema": test.actual},
+				}}}}},
+			})
+			if err != nil {
+				t.Fatalf("CompareSnapshots() error = %v", err)
+			}
+			difference := differenceAt(t, differences, test.path)
+			if !difference.BaselineMissing || difference.ActualMissing {
+				t.Fatalf("schema-shaped payload difference flags = %#v", difference)
+			}
+		})
+	}
+}
+
+func TestCompareSnapshotsDoesNotUseSchemaShapedPayloadLocators(t *testing.T) {
+	payload := func(content, state string) map[string]any {
+		return map[string]any{
+			"sessions": []any{map[string]any{
+				"id":      "payload-session",
+				"content": content,
+				"state": map[string]any{
+					"profile": map[string]any{"value": state},
+				},
+			}},
+		}
+	}
+	baseline := Snapshot{Sessions: []SessionSnapshot{{
+		ID: "session-1",
+		Events: []EventSnapshot{{
+			Extensions: map[string]any{"schema": payload("before", "before")},
+		}},
+	}}}
+	actual := Snapshot{Sessions: []SessionSnapshot{{
+		ID: "session-1",
+		Events: []EventSnapshot{{
+			Extensions: map[string]any{"schema": payload("after", "after")},
+		}},
+	}}}
+	differences, err := CompareSnapshots(CompareInput{
+		Case: "schema-shaped-locator", Backend: "candidate", Baseline: baseline, Actual: actual,
+	})
+	if err != nil {
+		t.Fatalf("CompareSnapshots() error = %v", err)
+	}
+	content := differenceAt(
+		t, differences, "$.sessions[0].events[0].extensions.schema.sessions[0].content",
+	)
+	if content.Locator.SessionID != "session-1" ||
+		content.Locator.EventIndex == nil || *content.Locator.EventIndex != 0 {
+		t.Fatalf("content locator = %#v", content.Locator)
+	}
+	state := differenceAt(
+		t, differences, "$.sessions[0].events[0].extensions.schema.sessions[0].state.profile.value",
+	)
+	if state.Locator.StateKey != "" {
+		t.Fatalf("schema-shaped state locator = %#v", state.Locator)
+	}
+}
+
 func TestCompareSnapshotsDistinguishesInvalidRawJSONFromLiteralValues(t *testing.T) {
 	baseline := NormalizeSnapshot(Snapshot{Sessions: []SessionSnapshot{{Events: []EventSnapshot{{
 		Extensions: map[string]any{"raw": json.RawMessage(`value`)},
@@ -549,6 +693,40 @@ func TestCompareSnapshotsUsesAbsoluteDurationTolerance(t *testing.T) {
 		t.Fatalf("CompareSnapshots() payload duration error = %v", err)
 	}
 	differenceAt(t, differences, "$.sessions[0].tracks[0].events[0].payload.duration")
+
+	baseline = Snapshot{Sessions: []SessionSnapshot{{Tracks: []TrackSnapshot{{
+		Events: []TrackEventSnapshot{{Payload: map[string]any{
+			"schema": map[string]any{
+				"sessions": []any{map[string]any{
+					"tracks": []any{map[string]any{
+						"events": []any{map[string]any{"duration": int64(1)}},
+					}},
+				}},
+			},
+		}}},
+	}}}}}
+	actual = Snapshot{Sessions: []SessionSnapshot{{Tracks: []TrackSnapshot{{
+		Events: []TrackEventSnapshot{{Payload: map[string]any{
+			"schema": map[string]any{
+				"sessions": []any{map[string]any{
+					"tracks": []any{map[string]any{
+						"events": []any{map[string]any{"duration": int64(time.Millisecond)}},
+					}},
+				}},
+			},
+		}}},
+	}}}}}
+	differences, err = CompareSnapshots(CompareInput{
+		Case: "schema-shaped-duration", Backend: "sqlite", Baseline: baseline, Actual: actual,
+		Options: options,
+	})
+	if err != nil {
+		t.Fatalf("CompareSnapshots() schema-shaped duration error = %v", err)
+	}
+	differenceAt(
+		t, differences,
+		"$.sessions[0].tracks[0].events[0].payload.schema.sessions[0].tracks[0].events[0].duration",
+	)
 
 	baseline.Sessions[0].Tracks[0].Events[0].Duration = 1900 * time.Microsecond
 	actual.Sessions[0].Tracks[0].Events[0].Duration = 3 * time.Millisecond

@@ -9,7 +9,10 @@
 
 package replaytest
 
-import "fmt"
+import (
+	"fmt"
+	"math"
+)
 
 // OperationKind identifies one replay action.
 type OperationKind string
@@ -188,7 +191,8 @@ func validateSearchMemory(operation Operation) error {
 		operation.SearchAppName == "" || operation.SearchUserID == "" {
 		return fmt.Errorf("search memory requires scope, query, and positive limit")
 	}
-	if operation.SearchMinScore < 0 || operation.SearchMinScore > 1 {
+	if math.IsNaN(operation.SearchMinScore) || math.IsInf(operation.SearchMinScore, 0) ||
+		operation.SearchMinScore < 0 || operation.SearchMinScore > 1 {
 		return fmt.Errorf("search memory score threshold must be between zero and one")
 	}
 	return nil

@@ -331,32 +331,13 @@ func isKnownSnapshotSlicePath(path string, value any) bool {
 	case "$.sessions", "$.memories", "$.memory_searches", "$.unsupported":
 		return true
 	}
-	for _, suffix := range []string{".events", ".summaries", ".tracks"} {
-		parent := strings.TrimSuffix(path, suffix)
-		if parent != path && isCollectionItem(parent, "sessions") {
-			return true
-		}
-	}
-	for _, suffix := range []string{".tool_calls"} {
-		parent := strings.TrimSuffix(path, suffix)
-		if parent != path && isSessionEventItem(parent) {
-			return true
-		}
-	}
-	for _, suffix := range []string{".results"} {
-		parent := strings.TrimSuffix(path, suffix)
-		if parent != path && isCollectionItem(parent, "memory_searches") {
-			return true
-		}
-	}
-	for _, suffix := range []string{".topics"} {
-		parent := strings.TrimSuffix(path, suffix)
-		if parent != path && isMemoryItemPath(parent) {
-			return true
-		}
-	}
-	parent := strings.TrimSuffix(path, ".events")
-	return parent != path && isCollectionItem(parent, "tracks")
+	return isSnapshotFieldPath(path, "events", isSessionItemPath) ||
+		isSnapshotFieldPath(path, "summaries", isSessionItemPath) ||
+		isSnapshotFieldPath(path, "tracks", isSessionItemPath) ||
+		isSnapshotFieldPath(path, "tool_calls", isSessionEventItem) ||
+		isSnapshotFieldPath(path, "results", isMemorySearchItemPath) ||
+		isSnapshotFieldPath(path, "topics", isMemoryItemPath) ||
+		isSnapshotFieldPath(path, "events", isTrackItemPath)
 }
 
 func appendMapPath(path, key string) string {
@@ -369,7 +350,7 @@ func appendMapPath(path, key string) string {
 
 func isStateMapPath(path string) bool {
 	if strings.HasSuffix(path, ".state") {
-		return isCollectionItem(strings.TrimSuffix(path, ".state"), "sessions")
+		return isSessionItemPath(strings.TrimSuffix(path, ".state"))
 	}
 	if strings.HasSuffix(path, ".state_delta") {
 		return isSessionEventItem(strings.TrimSuffix(path, ".state_delta"))
@@ -511,7 +492,7 @@ func locatorForValue(path string, baseline, actual any, locator Locator) Locator
 		return locator
 	}
 	switch {
-	case isCollectionItem(path, "sessions"):
+	case isSessionItemPath(path):
 		locator.SessionID = stringValue(value["id"])
 	case isSessionEventItem(path):
 		if index, ok := finalIndex(path); ok {
@@ -520,9 +501,9 @@ func locatorForValue(path string, baseline, actual any, locator Locator) Locator
 	case isMemoryItemPath(path):
 		locator.MemoryID = stringValue(value["id"])
 		locator.MemoryAppName, locator.MemoryUserID = memoryScope(value)
-	case isCollectionItem(path, "summaries"):
+	case isSummaryItemPath(path):
 		locator.SummaryFilterKey = stringValue(value["filter_key"])
-	case isCollectionItem(path, "tracks"):
+	case isTrackItemPath(path):
 		locator.TrackName = stringValue(value["name"])
 	}
 	return locator
@@ -609,24 +590,8 @@ func isTrackEventDurationPath(path string) bool {
 }
 
 func isTrackEventItemPath(path string) bool {
-	const eventMarker = ".events["
-	eventPosition := strings.LastIndex(path, eventMarker)
-	if eventPosition < 0 || !strings.HasSuffix(path, "]") {
-		return false
-	}
-	if _, err := strconv.Atoi(path[eventPosition+len(eventMarker) : len(path)-1]); err != nil {
-		return false
-	}
-	trackPath := path[:eventPosition]
-	if !isCollectionItem(trackPath, "tracks") {
-		return false
-	}
-	const trackMarker = ".tracks["
-	trackPosition := strings.LastIndex(trackPath, trackMarker)
-	if trackPosition < 0 {
-		return false
-	}
-	return isCollectionItem(trackPath[:trackPosition], "sessions")
+	trackPath, ok := parentForIndexedChild(path, "events")
+	return ok && isTrackItemPath(trackPath)
 }
 
 func numericFloat64(value any) (float64, bool) {
@@ -645,25 +610,7 @@ func isMemoryItemPath(path string) bool {
 	if isRootCollectionItem(path, "memories") {
 		return true
 	}
-	const prefix = "$.memory_searches["
-	if !strings.HasPrefix(path, prefix) || !strings.HasSuffix(path, "]") {
-		return false
-	}
-	searchEnd := strings.Index(path[len(prefix):], "]")
-	if searchEnd < 0 {
-		return false
-	}
-	searchEnd += len(prefix)
-	if _, err := strconv.Atoi(path[len(prefix):searchEnd]); err != nil {
-		return false
-	}
-	const resultsMarker = ".results["
-	if !strings.HasPrefix(path[searchEnd+1:], resultsMarker) {
-		return false
-	}
-	resultStart := searchEnd + 1 + len(resultsMarker)
-	_, err := strconv.Atoi(path[resultStart : len(path)-1])
-	return err == nil
+	return isMemorySearchResultItemPath(path)
 }
 
 func isRootCollectionItem(path, collection string) bool {
@@ -671,26 +618,66 @@ func isRootCollectionItem(path, collection string) bool {
 	if !strings.HasPrefix(path, prefix) || !strings.HasSuffix(path, "]") {
 		return false
 	}
-	_, err := strconv.Atoi(path[len(prefix) : len(path)-1])
-	return err == nil
+	return isPathIndex(path[len(prefix) : len(path)-1])
+}
+
+func isSessionItemPath(path string) bool {
+	return isRootCollectionItem(path, "sessions")
 }
 
 func isSessionEventItem(path string) bool {
-	const marker = ".events["
-	position := strings.LastIndex(path, marker)
-	if position < 0 || !strings.HasSuffix(path, "]") {
-		return false
-	}
-	return isCollectionItem(path[:position], "sessions")
+	sessionPath, ok := parentForIndexedChild(path, "events")
+	return ok && isSessionItemPath(sessionPath)
 }
 
-func isCollectionItem(path, collection string) bool {
+func isSummaryItemPath(path string) bool {
+	sessionPath, ok := parentForIndexedChild(path, "summaries")
+	return ok && isSessionItemPath(sessionPath)
+}
+
+func isTrackItemPath(path string) bool {
+	sessionPath, ok := parentForIndexedChild(path, "tracks")
+	return ok && isSessionItemPath(sessionPath)
+}
+
+func isMemorySearchItemPath(path string) bool {
+	return isRootCollectionItem(path, "memory_searches")
+}
+
+func isMemorySearchResultItemPath(path string) bool {
+	searchPath, ok := parentForIndexedChild(path, "results")
+	return ok && isMemorySearchItemPath(searchPath)
+}
+
+func isSnapshotFieldPath(path, field string, parentMatch func(string) bool) bool {
+	parent := strings.TrimSuffix(path, "."+field)
+	return parent != path && parentMatch(parent)
+}
+
+func parentForIndexedChild(path, collection string) (string, bool) {
 	marker := "." + collection + "["
 	position := strings.LastIndex(path, marker)
 	if position < 0 || !strings.HasSuffix(path, "]") {
+		return "", false
+	}
+	index := path[position+len(marker) : len(path)-1]
+	if !isPathIndex(index) {
+		return "", false
+	}
+	parent := path[:position]
+	return parent, parent != ""
+}
+
+func isPathIndex(index string) bool {
+	if index == "" {
 		return false
 	}
-	return !strings.Contains(path[position+len(marker):len(path)-1], ".")
+	for i := 0; i < len(index); i++ {
+		if index[i] < '0' || index[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func finalIndex(path string) (int, bool) {

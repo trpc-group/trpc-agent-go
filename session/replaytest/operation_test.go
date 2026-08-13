@@ -11,6 +11,7 @@ package replaytest
 
 import (
 	"encoding/json"
+	"math"
 	"reflect"
 	"strings"
 	"testing"
@@ -195,6 +196,22 @@ func TestOperationValidateRejectsInvalidConfigurations(t *testing.T) {
 			operation: Operation{
 				Kind: OperationSearchMemory, SearchQuery: "query", SearchLimit: 1,
 				SearchAppName: "app", SearchUserID: "user", SearchMinScore: 1.1,
+			},
+			want: "score threshold",
+		},
+		{
+			name: "search score NaN",
+			operation: Operation{
+				Kind: OperationSearchMemory, SearchQuery: "query", SearchLimit: 1,
+				SearchAppName: "app", SearchUserID: "user", SearchMinScore: math.NaN(),
+			},
+			want: "score threshold",
+		},
+		{
+			name: "search score infinity",
+			operation: Operation{
+				Kind: OperationSearchMemory, SearchQuery: "query", SearchLimit: 1,
+				SearchAppName: "app", SearchUserID: "user", SearchMinScore: math.Inf(1),
 			},
 			want: "score threshold",
 		},
