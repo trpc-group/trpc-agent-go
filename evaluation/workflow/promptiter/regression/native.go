@@ -322,6 +322,20 @@ func (e *ProfileEvaluator) loadAndVerifyInputs(
 		if evalCase == nil {
 			return nil, nil, fmt.Errorf("eval set %q contains a nil case", dataset.EvalSetID)
 		}
+		if evalCase.EvalMode == evalset.EvalModeTrace {
+			return nil, nil, fmt.Errorf(
+				"eval set %q case %q uses trace mode; prompt regression requires candidate execution",
+				dataset.EvalSetID,
+				evalCase.EvalID,
+			)
+		}
+		if evalCase.ExpectedRunnerEnabled {
+			return nil, nil, fmt.Errorf(
+				"eval set %q case %q enables the expected runner; prompt regression requires fixed expected outputs",
+				dataset.EvalSetID,
+				evalCase.EvalID,
+			)
+		}
 		sourceCaseIDs = append(sourceCaseIDs, evalCase.EvalID)
 	}
 	if err := verifyInventory("case", dataset.CaseIDs, sourceCaseIDs); err != nil {

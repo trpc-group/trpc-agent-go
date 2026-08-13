@@ -125,9 +125,8 @@ func TestManifestResourceProjectionPreservesKnownZeroAndUnavailable(t *testing.T
 
 func TestRenderMarkdownUsesDynamicFence(t *testing.T) {
 	report := testReport(t)
-	report.Status = PipelineRunFailed
-	report.StopReason = StopNecessaryRunFailed
-	report.InitialProfile.Prompt = "Explain this:\n```json\n{}\n```"
+	profile := testProfileRecord(t, ProfileCandidate, "Explain this:\n```json\n{}\n```")
+	replaceTestCandidateProfile(t, report, profile)
 	markdown, err := RenderMarkdown(report)
 	require.NoError(t, err)
 	require.Contains(t, string(markdown), "````")
@@ -149,29 +148,38 @@ func TestRenderMarkdownIncludesRejectedIntermediateCandidatePrompt(t *testing.T)
 		require.NotEqual(t, intermediate.Hash, lifecycle.Hash)
 	}
 
-	rejected := report.Candidates[0]
-	rejected.Round = 2
+	rejected := &report.Candidates[0]
 	rejected.ID = "rejected-intermediate"
-	rejected.Profile = &intermediate
+	replaceTestCandidateProfile(t, report, intermediate)
+	rejected = &report.Candidates[0]
 	rejected.Patches = []PatchRecord{{
 		SurfaceID: intermediate.TargetSurfaceID,
 		Value:     intermediate.Prompt,
 		Reason:    "candidate rejected by both policies",
 	}}
+	rejected.OptimizationReason = "candidate rejected by both policies"
 	rejected.SearchDecision = Decision{
 		Status:  DecisionRejected,
 		Reasons: []string{"search rejected"},
 	}
 	rejected.ReleaseDecision = Decision{
-		Status:  DecisionRejected,
-		Reasons: []string{"release rejected"},
+		Status:     DecisionRejected,
+		Reasons:    []string{"release rejected"},
+		ScoreDelta: &rejected.Deltas.VsReleased.ScoreDelta,
 	}
-	report.Candidates = append(report.Candidates, rejected)
+	rejected.Transition = unchangedTransition(
+		rejected.SearchParentHash,
+		rejected.ReleasedParentHash,
+		"candidate rejected by both policies",
+	)
+	report.SearchProfile = withProfileRole(report.InitialProfile, ProfileSearch)
+	report.ReleasedProfile = withProfileRole(report.InitialProfile, ProfileReleased)
+	report.FinalDecision = rejected.ReleaseDecision
 
 	markdown, err := RenderMarkdown(report)
 	require.NoError(t, err)
 	text := string(markdown)
-	start := strings.Index(text, "### Round 2 — rejected-intermediate")
+	start := strings.Index(text, "### Round 1 — rejected-intermediate")
 	require.NotEqual(t, -1, start)
 	endOffset := strings.Index(text[start:], "\n## Configuration and Provenance")
 	require.NotEqual(t, -1, endOffset)
@@ -508,54 +516,27 @@ func TestRenderJSONBoundsEvidenceCollectionsAndNestedArguments(t *testing.T) {
 
 func TestRenderJSONDoesNotTruncateCoreCollectionsAt1024(t *testing.T) {
 	const collectionSize = 1025
-	report := testReport(t)
-	// A failed report can legitimately contain partial snapshots. Use one here
-	// so this test isolates persistence loss from successful-run completeness.
-	report.Status = PipelineRunFailed
-	report.StopReason = StopNecessaryRunFailed
-	report.Candidates = make([]CandidateReport, collectionSize)
-	for i := range report.Candidates {
-		report.Candidates[i] = CandidateReport{
-			Round:  i + 1,
-			ID:     fmt.Sprintf("candidate-%04d", i),
-			Status: EvaluationNotEvaluable,
-			SearchDecision: Decision{
-				Status:  DecisionNotEvaluable,
-				Reasons: []string{"not evaluated"},
-			},
-			ReleaseDecision: Decision{
-				Status:  DecisionNotEvaluable,
-				Reasons: []string{"not evaluated"},
-			},
-		}
+	values := make([]any, collectionSize)
+	for i := range values {
+		values[i] = map[string]any{"id": fmt.Sprintf("item-%04d", i)}
 	}
-	report.BaselineTrain.Cases = make([]CaseResult, collectionSize)
-	for i := 0; i < collectionSize; i++ {
-		report.BaselineTrain.Cases[i] = CaseResult{
-			EvalSetID: "train-set",
-			CaseID:    fmt.Sprintf("case-%04d", i),
-			Metrics: []MetricResult{{
-				MetricName: "quality",
-			}},
-		}
-	}
-	report.BaselineTrain.Cases[0].Metrics = make([]MetricResult, collectionSize)
-	for i := range report.BaselineTrain.Cases[0].Metrics {
-		report.BaselineTrain.Cases[0].Metrics[i].MetricName = fmt.Sprintf("metric-%04d", i)
+	value := map[string]any{
+		"candidates": values,
+		"cases": []any{map[string]any{
+			"metrics": values,
+		}},
 	}
 
-	data, err := RenderJSON(report)
-	require.NoError(t, err)
-	decoded := decodeReportManifest(t, data)
-	baselineTrain := manifestSnapshot(
-		t,
-		decoded,
-		decoded.BaselineSnapshotRefs.Train,
-	)
-	require.Len(t, decoded.Candidates, collectionSize)
-	require.Len(t, baselineTrain.Cases, collectionSize)
-	require.Len(t, baselineTrain.Cases[0].Metrics, collectionSize)
-	require.NotContains(t, string(data), "__report_truncated__")
+	sanitized := sanitizeJSONValue("", value, defaultEvidenceLimit, 0)
+	root, ok := sanitized.(map[string]any)
+	require.True(t, ok)
+	require.Len(t, root["candidates"], collectionSize)
+	cases, ok := root["cases"].([]any)
+	require.True(t, ok)
+	require.Len(t, cases, 1)
+	firstCase, ok := cases[0].(map[string]any)
+	require.True(t, ok)
+	require.Len(t, firstCase["metrics"], collectionSize)
 }
 
 func TestRenderedProfileHashRetainsPreSanitizationEvaluationIdentity(t *testing.T) {
@@ -1356,6 +1337,70 @@ func manifestSnapshot(
 	snapshot, ok := manifest.Snapshots[ref]
 	require.Truef(t, ok, "snapshot ref %q is absent", ref)
 	return snapshot
+}
+
+func TestValidateReportRejectsTamperedNonSuccessAuditReports(t *testing.T) {
+	for _, status := range []PipelineStatus{
+		PipelineRunFailed,
+		PipelineModelCallThresholdStopped,
+	} {
+		t.Run(string(status), func(t *testing.T) {
+			for _, test := range []struct {
+				name   string
+				mutate func(*Report)
+			}{
+				{
+					name: "input provenance",
+					mutate: func(report *Report) {
+						report.InputHashes["validationEvalSet"] = "tampered"
+					},
+				},
+				{
+					name: "snapshot provenance",
+					mutate: func(report *Report) {
+						report.Candidates[0].Validation.Provenance.ProfileHash = "tampered"
+					},
+				},
+				{
+					name: "candidate lineage",
+					mutate: func(report *Report) {
+						report.Candidates[0].Transition.ReleasedAfter = report.InitialProfile.Hash
+					},
+				},
+			} {
+				t.Run(test.name, func(t *testing.T) {
+					report := testReport(t)
+					report.Status = status
+					if status == PipelineRunFailed {
+						report.StopReason = StopNecessaryRunFailed
+					} else {
+						report.StopReason = StopModelCallThresholdReached
+					}
+					test.mutate(report)
+					require.Error(t, validateReport(report))
+				})
+			}
+		})
+	}
+}
+
+func TestValidateReportAllowsEarlyFailureWithoutSnapshots(t *testing.T) {
+	report := testReport(t)
+	report.Status = PipelineRunFailed
+	report.StopReason = StopNecessaryRunFailed
+	report.BaselineTrain = nil
+	report.BaselineValidation = nil
+	report.Candidates = nil
+	report.InitialProfile.EvaluationRunID = ""
+	report.SearchProfile = withProfileRole(report.InitialProfile, ProfileSearch)
+	report.ReleasedProfile = withProfileRole(report.InitialProfile, ProfileReleased)
+	report.FinalDecision = Decision{
+		Status:  DecisionNotEvaluable,
+		Reasons: []string{"baseline evaluation failed before producing a snapshot"},
+	}
+	report.Resources = ResourceLedger{}
+
+	require.NoError(t, validateReport(report))
 }
 
 func testReport(t *testing.T) *Report {

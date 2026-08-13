@@ -2114,6 +2114,70 @@ func TestNativeProfileEvaluatorCoversRequestInputCompileAndExecutionFailures(t *
 	require.NotNil(t, sourceSet)
 	require.Contains(t, metricIndex, "quality")
 
+	for _, test := range []struct {
+		name   string
+		mutate func(*evalset.EvalCase)
+		match  string
+	}{
+		{
+			name: "trace mode",
+			mutate: func(evalCase *evalset.EvalCase) {
+				evalCase.EvalMode = evalset.EvalModeTrace
+			},
+			match: "requires candidate execution",
+		},
+		{
+			name: "dynamic expected output",
+			mutate: func(evalCase *evalset.EvalCase) {
+				evalCase.ExpectedRunnerEnabled = true
+			},
+			match: "requires fixed expected outputs",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			native := &pipelineNativeResultEvaluator{}
+			inputEvaluator, createErr := NewProfileEvaluator(ProfileEvaluatorConfig{
+				AppName:        "pipeline-native",
+				AgentEvaluator: native,
+				EvalSetManager: evalSetManager,
+				MetricManager:  metricManager,
+				Structure:      pipelineTestStructure(),
+			})
+			require.NoError(t, createErr)
+			evalCase, getErr := evalSetManager.GetCase(
+				ctx,
+				"pipeline-native",
+				config.Train.EvalSetID,
+				"train-a",
+			)
+			require.NoError(t, getErr)
+			test.mutate(evalCase)
+			require.NoError(t, evalSetManager.UpdateCase(
+				ctx,
+				"pipeline-native",
+				config.Train.EvalSetID,
+				evalCase,
+			))
+			t.Cleanup(func() {
+				evalCase.EvalMode = evalset.EvalModeDefault
+				evalCase.ExpectedRunnerEnabled = false
+				require.NoError(t, evalSetManager.UpdateCase(
+					ctx,
+					"pipeline-native",
+					config.Train.EvalSetID,
+					evalCase,
+				))
+			})
+
+			_, _, loadErr := evaluator.loadAndVerifyInputs(ctx, config.Train)
+			require.ErrorContains(t, loadErr, test.match)
+			snapshot, evaluateErr := inputEvaluator.Evaluate(ctx, request)
+			require.ErrorContains(t, evaluateErr, test.match)
+			require.NotNil(t, snapshot)
+			require.Zero(t, native.calls)
+		})
+	}
+
 	invalidProfile := pipelineProfile("prompt")
 	invalidProfile.Overrides[0].SurfaceID = "missing"
 	invalidHash, err := ProfileFingerprint(invalidProfile)

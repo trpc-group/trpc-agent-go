@@ -602,6 +602,9 @@ func validateReport(report *Report) error {
 	if err := validateReportResourceLedgers(report); err != nil {
 		return err
 	}
+	if err := validateReportInvariants(report); err != nil {
+		return err
+	}
 	if report.Status == PipelineSucceeded {
 		if err := validateSuccessfulReport(report); err != nil {
 			return err
@@ -621,6 +624,224 @@ type reportValidationState struct {
 	initialValidation *EvaluationSnapshot
 	searchValidation  *EvaluationSnapshot
 	releaseValidation *EvaluationSnapshot
+}
+
+// validateReportInvariants checks every audit object that exists, independent
+// of whether the pipeline reached the successful terminal state.
+func validateReportInvariants(report *Report) error {
+	binding, err := validateSuccessfulReportConfig(report)
+	if err != nil {
+		return err
+	}
+	if err := validateDecisionReasons("final", report.FinalDecision); err != nil {
+		return err
+	}
+	if _, offset := report.GeneratedAt.Zone(); offset != 0 {
+		return errors.New("generated time must use UTC")
+	}
+	targetSurfaceID := report.ResolvedConfig.PromptIter.TargetSurfaceID
+	structureID := report.InitialProfile.StructureID
+	for _, item := range []struct {
+		label   string
+		role    ProfileRole
+		profile *ProfileRecord
+	}{
+		{label: "initial", role: ProfileInitial, profile: &report.InitialProfile},
+		{label: "search", role: ProfileSearch, profile: &report.SearchProfile},
+		{label: "released", role: ProfileReleased, profile: &report.ReleasedProfile},
+	} {
+		if err := validateProfileRecord(item.label, item.role, item.profile); err != nil {
+			return err
+		}
+		if err := validateProfileConfigBinding(
+			item.label,
+			item.profile,
+			structureID,
+			targetSurfaceID,
+		); err != nil {
+			return err
+		}
+	}
+
+	if report.BaselineTrain != nil {
+		if err := validatePresentSnapshotBinding(
+			"baseline train",
+			report.BaselineTrain,
+			report.InitialProfile.Hash,
+			report.ResolvedConfig.Train,
+			"train",
+			report.RunID+"/baseline_train",
+			report.ResolvedConfig.Seed,
+			binding,
+			report.ResolvedConfig.Gate,
+		); err != nil {
+			return err
+		}
+	}
+	if report.BaselineValidation != nil {
+		if err := validatePresentSnapshotBinding(
+			"baseline validation",
+			report.BaselineValidation,
+			report.InitialProfile.Hash,
+			report.ResolvedConfig.Validation,
+			"heldout_validation",
+			report.RunID+"/baseline_validation",
+			report.ResolvedConfig.Seed,
+			binding,
+			report.ResolvedConfig.Gate,
+		); err != nil {
+			return err
+		}
+	}
+
+	if !snapshotCompleted(report.BaselineValidation) {
+		if len(report.Candidates) > 0 {
+			return errors.New("candidates exist without completed baseline validation")
+		}
+		if report.BaselineValidation == nil &&
+			(report.InitialProfile.EvaluationRunID != "" ||
+				report.SearchProfile.EvaluationRunID != "" ||
+				report.ReleasedProfile.EvaluationRunID != "") {
+			return errors.New("profile evaluation run id exists without completed baseline validation")
+		}
+		if report.BaselineValidation != nil {
+			runID := report.BaselineValidation.Provenance.RunID
+			if report.InitialProfile.EvaluationRunID != runID ||
+				report.SearchProfile.EvaluationRunID != runID ||
+				report.ReleasedProfile.EvaluationRunID != runID {
+				return errors.New("profile evaluation run id does not match partial baseline validation")
+			}
+		}
+		return nil
+	}
+	if report.InitialProfile.EvaluationRunID != report.BaselineValidation.Provenance.RunID {
+		return errors.New("initial profile evaluation run id does not match baseline validation")
+	}
+	state := reportValidationState{
+		searchHash:        report.InitialProfile.Hash,
+		releasedHash:      report.InitialProfile.Hash,
+		initialValidation: report.BaselineValidation,
+		searchValidation:  report.BaselineValidation,
+		releaseValidation: report.BaselineValidation,
+	}
+	for i := range report.Candidates {
+		candidate := &report.Candidates[i]
+		if candidate.Status == EvaluationCompleted {
+			if err := validateSuccessfulCandidate(
+				report,
+				candidate,
+				i,
+				&state,
+				structureID,
+				targetSurfaceID,
+				binding,
+			); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := validateIncompleteCandidate(
+			report,
+			candidate,
+			i,
+			&state,
+			structureID,
+			targetSurfaceID,
+			binding,
+		); err != nil {
+			return err
+		}
+	}
+	if report.SearchProfile.Hash != state.searchHash {
+		return errors.New("final search profile does not match candidate transition lineage")
+	}
+	if report.ReleasedProfile.Hash != state.releasedHash {
+		return errors.New("final released profile does not match candidate transition lineage")
+	}
+	if state.searchValidation == nil ||
+		report.SearchProfile.EvaluationRunID != state.searchValidation.Provenance.RunID {
+		return errors.New("final search profile evaluation run id does not match transition lineage")
+	}
+	if state.releaseValidation == nil ||
+		report.ReleasedProfile.EvaluationRunID != state.releaseValidation.Provenance.RunID {
+		return errors.New("final released profile evaluation run id does not match transition lineage")
+	}
+	return nil
+}
+
+func validateIncompleteCandidate(
+	report *Report,
+	candidate *CandidateReport,
+	index int,
+	state *reportValidationState,
+	structureID string,
+	targetSurfaceID string,
+	binding reportProvenanceBinding,
+) error {
+	label := fmt.Sprintf("candidate %q", candidate.ID)
+	if candidate.Round != index+1 {
+		return fmt.Errorf("%s round is %d, want %d", label, candidate.Round, index+1)
+	}
+	if candidate.SearchParentHash != state.searchHash ||
+		candidate.ReleasedParentHash != state.releasedHash {
+		return fmt.Errorf("%s parent hashes do not match transition lineage", label)
+	}
+	if candidate.PromptIterRunID != fmt.Sprintf("%s/promptiter/%d", report.RunID, candidate.Round) {
+		return fmt.Errorf("%s PromptIter run id does not match invocation", label)
+	}
+	if err := validateDecisionReasons(label+" search", candidate.SearchDecision); err != nil {
+		return err
+	}
+	if err := validateDecisionReasons(label+" release", candidate.ReleaseDecision); err != nil {
+		return err
+	}
+	if candidate.Profile != nil {
+		if err := validateProfileConfigBinding(
+			label,
+			candidate.Profile,
+			structureID,
+			targetSurfaceID,
+		); err != nil {
+			return err
+		}
+	}
+	for _, snapshot := range []struct {
+		label   string
+		value   *EvaluationSnapshot
+		dataset DatasetSpec
+		split   string
+		runID   string
+	}{
+		{label: label + " train", value: candidate.Train, dataset: report.ResolvedConfig.Train, split: "train", runID: fmt.Sprintf("%s/candidate_train/%d", report.RunID, candidate.Round)},
+		{label: label + " validation", value: candidate.Validation, dataset: report.ResolvedConfig.Validation, split: "heldout_validation", runID: fmt.Sprintf("%s/candidate_validation/%d", report.RunID, candidate.Round)},
+	} {
+		if snapshot.value == nil {
+			continue
+		}
+		if candidate.Profile == nil {
+			return fmt.Errorf("%s snapshot exists without a candidate profile", snapshot.label)
+		}
+		if err := validatePresentSnapshotBinding(
+			snapshot.label,
+			snapshot.value,
+			candidate.Profile.Hash,
+			snapshot.dataset,
+			snapshot.split,
+			snapshot.runID,
+			report.ResolvedConfig.Seed,
+			binding,
+			report.ResolvedConfig.Gate,
+		); err != nil {
+			return err
+		}
+	}
+	if candidate.Profile == nil &&
+		(candidate.SearchDecision.Status != DecisionNotEvaluable ||
+			candidate.ReleaseDecision.Status != DecisionNotEvaluable) {
+		return fmt.Errorf("%s has an evaluable decision without a profile", label)
+	}
+	_, _, err := validateCandidateTransition(label, candidate)
+	return err
 }
 
 //nolint:gocyclo // Successful-report invariants are explicit audit-contract checks.
@@ -1193,6 +1414,64 @@ func validateProfileConfigBinding(
 		)
 	}
 	return nil
+}
+
+func validatePresentSnapshotBinding(
+	label string,
+	snapshot *EvaluationSnapshot,
+	profileHash string,
+	dataset DatasetSpec,
+	split string,
+	runID string,
+	seed int64,
+	binding reportProvenanceBinding,
+	gate GatePolicy,
+) error {
+	if snapshot == nil {
+		return fmt.Errorf("%s snapshot is nil", label)
+	}
+	if !validEvaluationStatus(snapshot.Status) {
+		return fmt.Errorf("%s snapshot has invalid status %q", label, snapshot.Status)
+	}
+	provenance := snapshot.Provenance
+	switch {
+	case provenance.RunID != runID:
+		return fmt.Errorf("%s snapshot run id does not match invocation", label)
+	case provenance.ProfileHash != profileHash:
+		return fmt.Errorf("%s snapshot profile hash does not match profile", label)
+	case provenance.EvalSetID != dataset.EvalSetID:
+		return fmt.Errorf("%s snapshot eval set id does not match resolved dataset", label)
+	case provenance.EvalSetHash != dataset.EvalSetHash:
+		return fmt.Errorf("%s snapshot eval set hash does not match resolved dataset", label)
+	case provenance.MetricsHash != dataset.MetricsHash:
+		return fmt.Errorf("%s snapshot metrics hash does not match resolved dataset", label)
+	case provenance.Split != split:
+		return fmt.Errorf("%s snapshot split does not match invocation", label)
+	case provenance.Seed != seed:
+		return fmt.Errorf("%s snapshot seed does not match resolved seed", label)
+	case provenance.EvaluatorConfigHash != binding.evaluatorConfigHash:
+		return fmt.Errorf("%s snapshot evaluator config hash does not match runtime binding", label)
+	case provenance.MetricPolicyHash != binding.metricPolicyHash:
+		return fmt.Errorf("%s snapshot metric policy hash does not match resolved policy", label)
+	case !reflect.DeepEqual(snapshot.Inventory.CaseIDs, dataset.CaseIDs):
+		return fmt.Errorf("%s snapshot case inventory does not match resolved dataset", label)
+	case !reflect.DeepEqual(snapshot.Inventory.MetricNames, dataset.MetricNames):
+		return fmt.Errorf("%s snapshot metric inventory does not match resolved dataset", label)
+	}
+	if snapshot.Status != EvaluationCompleted {
+		return nil
+	}
+	return validateSnapshotBinding(
+		label,
+		snapshot,
+		profileHash,
+		dataset,
+		split,
+		runID,
+		seed,
+		binding,
+		gate,
+	)
 }
 
 func validateSnapshotBinding(
