@@ -1332,21 +1332,22 @@ type eventLoopContext struct {
 // event loop. Successful IDs remain recorded for the loop lifetime, while a
 // failed append releases the ID so another delivery can retry it.
 type eventPersistenceDeduper struct {
-	mu      sync.Mutex
+	mu sync.Mutex
+	// records tracks in-flight and completed persistence by event ID. A nil
+	// record marks an event that was persisted successfully.
 	records map[string]*eventPersistenceRecord
 }
 
 type eventPersistenceRecord struct {
-	done      chan struct{}
-	persisted bool
+	done chan struct{}
 }
 
 func (d *eventPersistenceDeduper) start(
 	ctx context.Context,
 	eventID string,
-) (complete func(bool), proceed bool) {
+) (record *eventPersistenceRecord, proceed bool) {
 	if d == nil || eventID == "" {
-		return func(bool) {}, true
+		return nil, true
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -1358,20 +1359,23 @@ func (d *eventPersistenceDeduper) start(
 		}
 		record, ok := d.records[eventID]
 		if !ok {
-			record = &eventPersistenceRecord{done: make(chan struct{})}
+			record = &eventPersistenceRecord{}
 			d.records[eventID] = record
 			d.mu.Unlock()
-			return func(persisted bool) {
-				d.finish(eventID, record, persisted)
-			}, true
+			return record, true
 		}
+		if record == nil {
+			d.mu.Unlock()
+			return nil, false
+		}
+		if record.done == nil {
+			record.done = make(chan struct{})
+		}
+		done := record.done
 		d.mu.Unlock()
 
 		select {
-		case <-record.done:
-			if record.persisted {
-				return nil, false
-			}
+		case <-done:
 		case <-ctx.Done():
 			return nil, false
 		}
@@ -1388,11 +1392,14 @@ func (d *eventPersistenceDeduper) finish(
 	if d.records[eventID] != record {
 		return
 	}
-	record.persisted = persisted
-	if !persisted {
+	if persisted {
+		d.records[eventID] = nil
+	} else {
 		delete(d.records, eventID)
 	}
-	close(record.done)
+	if record.done != nil {
+		close(record.done)
+	}
 }
 
 type interruptedAssistantAccumulator struct {
@@ -2659,13 +2666,15 @@ func (r *runner) handleEventPersistenceOnce(
 	if agentEvent != nil {
 		eventID = agentEvent.ID
 	}
-	complete, proceed := deduper.start(ctx, eventID)
+	record, proceed := deduper.start(ctx, eventID)
 	if !proceed {
 		return false
 	}
-	defer func() {
-		complete(persisted)
-	}()
+	if record != nil {
+		defer func() {
+			deduper.finish(eventID, record, persisted)
+		}()
+	}
 	return r.handleEventPersistence(
 		ctx,
 		invocation,

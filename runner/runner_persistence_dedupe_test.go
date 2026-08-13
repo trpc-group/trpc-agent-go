@@ -66,6 +66,22 @@ func TestRunnerDoesNotDeduplicateAcrossEventLoops(t *testing.T) {
 	require.Len(t, service.enqueueSummaryJobCalls, 2)
 }
 
+func TestRunnerReleasesCompletedEventPersistenceRecord(t *testing.T) {
+	service := &mockSessionService{}
+	r := &runner{sessionService: service}
+	sess, invocation, evt := newPersistenceDedupTestInput()
+	deduper := &eventPersistenceDeduper{}
+
+	require.True(t, r.handleEventPersistenceOnce(
+		context.Background(), invocation, sess, sess, evt, deduper,
+	))
+	deduper.mu.Lock()
+	record, ok := deduper.records[evt.ID]
+	deduper.mu.Unlock()
+	require.True(t, ok)
+	require.Nil(t, record)
+}
+
 func TestRunnerDeduplicatesEventWhileAppendIsInFlight(t *testing.T) {
 	service := &blockingPersistenceSessionService{
 		mockSessionService: &mockSessionService{},
