@@ -28,7 +28,7 @@ const TrackAGUI session.Track = "agui"
 
 // Tracker is the interface for tracking AG-UI events.
 type Tracker interface {
-	// AppendEvent appends an AG-UI event to the session track.
+	// AppendEvent queues an AG-UI event for the next persistence flush.
 	AppendEvent(ctx context.Context, key session.Key, event aguievents.Event) error
 	// GetEvents retrieves the AG-UI track events from the session.
 	GetEvents(ctx context.Context, key session.Key, opts ...session.Option) (*session.TrackEvents, error)
@@ -54,9 +54,12 @@ type tracker struct {
 
 // sessionState stores the state of a session.
 type sessionState struct {
-	mu         sync.Mutex            // mu guards the aggregator and cached session.
+	mu         sync.Mutex            // mu guards the aggregator and pending events.
+	persistMu  sync.Mutex            // persistMu serializes storage writes for the session.
 	aggregator aggregator.Aggregator // aggregator aggregates events.
+	pending    []aguievents.Event    // pending stores events waiting for the next persistence flush.
 	session    *session.Session      // session caches the ensured session to avoid repeated lookups.
+	closing    bool                  // closing rejects appends while Close is draining the final batch.
 }
 
 // New creates a new tracker.
@@ -75,7 +78,7 @@ func New(service session.Service, opt ...Option) (Tracker, error) {
 	}, nil
 }
 
-// AppendEvent appends an AG-UI event to the session track.
+// AppendEvent queues an AG-UI event for the next persistence flush.
 func (t *tracker) AppendEvent(ctx context.Context, key session.Key, event aguievents.Event) error {
 	if event == nil {
 		return fmt.Errorf("event is nil")
@@ -86,11 +89,15 @@ func (t *tracker) AppendEvent(ctx context.Context, key session.Key, event aguiev
 	state := t.getSessionState(ctx, key)
 	state.mu.Lock()
 	defer state.mu.Unlock()
+	if state.closing {
+		return fmt.Errorf("session state is closing: %v", key)
+	}
 	aggregated, err := state.aggregator.Append(ctx, event)
 	if err != nil {
 		return fmt.Errorf("aggregate event: %w", err)
 	}
-	return t.persistEvents(ctx, key, state, aggregated)
+	state.pending = append(state.pending, aggregated...)
+	return nil
 }
 
 // GetEvents retrieves the AG-UI track events from the session.
@@ -143,27 +150,34 @@ func (t *tracker) Close(ctx context.Context, key session.Key) error {
 	if state == nil {
 		return nil
 	}
-	defer t.deleteSessionState(key)
-	if err := t.flush(ctx, key, state); err != nil {
+	if err := t.closeState(ctx, key, state); err != nil {
 		return fmt.Errorf("flush: %w", err)
 	}
+	t.deleteSessionState(key, state)
 	return nil
 }
 
 // persistEvents ensures the session exists and appends track events to storage.
-func (t *tracker) persistEvents(ctx context.Context, key session.Key, state *sessionState, events []aguievents.Event) error {
+func (t *tracker) persistEvents(
+	ctx context.Context,
+	key session.Key,
+	state *sessionState,
+	events []aguievents.Event,
+) (int, error) {
 	if len(events) == 0 {
-		return nil
+		return 0, nil
 	}
 	sess, err := t.ensureSessionExists(ctx, key, state)
 	if err != nil {
-		return fmt.Errorf("ensure session exists: %w", err)
+		return 0, fmt.Errorf("ensure session exists: %w", err)
 	}
 	var overallErr error
+	processed := 0
 	for _, e := range events {
 		payload, err := e.ToJSON()
 		if err != nil {
 			multierr.AppendInto(&overallErr, fmt.Errorf("marshal event %v: %w", e, err))
+			processed++
 			continue
 		}
 		trackEvent := &session.TrackEvent{
@@ -180,11 +194,12 @@ func (t *tracker) persistEvents(ctx context.Context, key session.Key, state *ses
 			multierr.AppendInto(&overallErr, fmt.Errorf("append track event %v: %w", trackEvent, err))
 			break
 		}
+		processed++
 	}
 	if overallErr != nil {
-		return fmt.Errorf("persist events: %v", overallErr)
+		return processed, fmt.Errorf("persist events: %v", overallErr)
 	}
-	return nil
+	return processed, nil
 }
 
 // ensureSessionExists fetches the session or creates one when absent.
@@ -229,20 +244,89 @@ func (t *tracker) getExistingSessionState(key session.Key) *sessionState {
 	return t.sessionStates[key]
 }
 
-// deleteSessionState removes the cached session state for the session key.
-func (t *tracker) deleteSessionState(key session.Key) {
+// deleteSessionState removes the cached session state when it still matches state.
+func (t *tracker) deleteSessionState(key session.Key, state *sessionState) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	delete(t.sessionStates, key)
+	if t.sessionStates[key] == state {
+		delete(t.sessionStates, key)
+	}
 }
 
 // flush flushes the session state.
 func (t *tracker) flush(ctx context.Context, key session.Key, state *sessionState) error {
+	state.persistMu.Lock()
+	defer state.persistMu.Unlock()
+	batch, err := t.drainPending(ctx, state)
+	if err != nil {
+		return err
+	}
+	processed, persistErr := t.persistEvents(ctx, key, state, batch)
+	if persistErr != nil {
+		state.mu.Lock()
+		t.prependPending(state, batch[processed:])
+		state.mu.Unlock()
+		return persistErr
+	}
+	return nil
+}
+
+func (t *tracker) closeState(ctx context.Context, key session.Key, state *sessionState) error {
+	state.persistMu.Lock()
+	defer state.persistMu.Unlock()
+	batch, err := t.drainPendingForClose(ctx, state)
+	if err != nil {
+		t.reopenState(state)
+		return err
+	}
+	processed, persistErr := t.persistEvents(ctx, key, state, batch)
+	if persistErr != nil {
+		state.mu.Lock()
+		t.prependPending(state, batch[processed:])
+		state.closing = false
+		state.mu.Unlock()
+		return persistErr
+	}
+	return nil
+}
+
+func (t *tracker) drainPending(ctx context.Context, state *sessionState) ([]aguievents.Event, error) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
+	return t.drainPendingLocked(ctx, state)
+}
+
+func (t *tracker) drainPendingForClose(ctx context.Context, state *sessionState) ([]aguievents.Event, error) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	state.closing = true
+	return t.drainPendingLocked(ctx, state)
+}
+
+func (t *tracker) drainPendingLocked(ctx context.Context, state *sessionState) ([]aguievents.Event, error) {
 	events, err := state.aggregator.Flush(ctx)
 	if err != nil {
-		return fmt.Errorf("aggregator flush: %w", err)
+		return nil, fmt.Errorf("aggregator flush: %w", err)
 	}
-	return t.persistEvents(ctx, key, state, events)
+	batch := make([]aguievents.Event, 0, len(state.pending)+len(events))
+	batch = append(batch, state.pending...)
+	batch = append(batch, events...)
+	state.pending = nil
+	return batch, nil
+}
+
+func (t *tracker) reopenState(state *sessionState) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	state.closing = false
+}
+
+func (t *tracker) prependPending(state *sessionState, events []aguievents.Event) {
+	if len(events) == 0 {
+		return
+	}
+	pending := make([]aguievents.Event, 0, len(events)+len(state.pending))
+	pending = append(pending, events...)
+	pending = append(pending, state.pending...)
+	state.pending = pending
 }

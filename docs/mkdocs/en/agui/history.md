@@ -90,16 +90,18 @@ For the complete example, see [examples/agui/messagessnapshot](https://github.co
 
 In multi-instance deployments, different instances must share the same `SessionService`; otherwise, the messages snapshot route cannot read historical events written by other instances.
 
-Streaming responses usually produce multiple incremental text events or reasoning events. To reduce pressure on session storage, the framework aggregates consecutive `TEXT_MESSAGE_CONTENT` and `REASONING_MESSAGE_CONTENT` events with the same `messageId` before writing them to session storage by default.
+Real-time streaming output is split into many small events. Writing every small chunk to `SessionService` immediately can put high pressure on MySQL, Redis, or other session storage backends, especially during long text output, reasoning output, or streaming tool arguments. By default, the framework briefly buffers history events and writes them to session storage on a flush interval.
 
-Aggregated results are flushed once per second by default. When a run finishes normally, is canceled, or fails, the framework also performs post-run finalization. This fills in protocol stream closing events that are still open and tries to write the aggregation cache to session storage.
+Within one flush interval, the framework merges text chunks from the same assistant message, reasoning chunks from the same assistant message, and argument chunks from the same tool call. Other events are still stored in their original order; when such an event appears, chunks before and after it are not merged across that event. `TOOL_CALL_RESULT` represents the complete result of one tool call and is not merged.
+
+Real-time SSE output does not wait for history persistence to finish, so the frontend still receives model output immediately. `/history` reads only the content that has already been written to session storage. When a conversation is still running, a messages snapshot may therefore show the state from the last successful flush. When follow mode is enabled, later successfully flushed events are pushed to the client.
 
 Related configuration:
 
-- `aggregator.WithEnabled(true)` controls whether event aggregation is enabled. It is enabled by default.
-- `agui.WithFlushInterval(time.Second)` controls the periodic flush interval for aggregation results. The default is `1s`. Setting it to `0` disables periodic flushing.
-- `agui.WithTrackPersistenceTimeout(5*time.Second)` limits the maximum duration for event history persistence. The default is `5s`. Setting it to `0` means no timeout is applied.
-- `agui.WithPostRunFinalizationTimeout(5*time.Second)` limits the maximum duration of post-run finalization. The default is `5s`. Finalization needs to fill in protocol closing events and write the aggregation cache to `SessionService`; if session storage becomes slow or fails, the timeout prevents the request from blocking for too long. Setting it to `0` means no timeout is applied.
+- `aggregator.WithEnabled(true)` controls whether streaming chunks are merged. It is enabled by default.
+- `agui.WithFlushInterval(time.Second)` controls how often history events are written to session storage. The default is `1s`. Setting it to `0` disables periodic writes while a run is active. This is usually appropriate when you do not need `/history` follow during an active run; history events are mainly written during post-run finalization.
+- `agui.WithTrackPersistenceTimeout(5*time.Second)` limits how long one history persistence attempt can wait for session storage. The default is `5s`. Setting it to `0` means no timeout is applied.
+- `agui.WithPostRunFinalizationTimeout(5*time.Second)` limits the maximum duration of post-run finalization. The default is `5s`. Finalization fills in protocol closing events that are still open and tries to write remaining history events to `SessionService`. If session storage becomes slow or fails, the timeout prevents the request from blocking for too long. Setting it to `0` means no timeout is applied.
 
 ```go
 import (
@@ -125,7 +127,7 @@ server, err := agui.New(
 )
 ```
 
-For more complex aggregation strategies, implement `aggregator.Aggregator` and inject it through a custom factory. Although each session gets its own aggregator, so cross-session state management and concurrency handling are not needed, aggregation methods themselves may still be called concurrently and must handle concurrency properly.
+Most applications do not need a custom aggregation strategy. If you need to change which events can be merged, implement `aggregator.Aggregator` and inject it through a custom factory. Custom aggregators must handle concurrent calls.
 
 ## Historical Run Lifecycle Events
 

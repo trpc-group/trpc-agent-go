@@ -735,6 +735,11 @@ func TestMessagesSnapshotFollowReceivesPeriodicFlushedContent(t *testing.T) {
 	case <-time.After(time.Second):
 		require.FailNow(t, "timeout waiting for runner start")
 	}
+	require.NoError(t, r.flushTrack(context.Background(), session.Key{
+		AppName:   "demo",
+		UserID:    "user",
+		SessionID: "thread",
+	}))
 	runDone := make(chan struct{})
 	go func() {
 		for range runStream {
@@ -1357,6 +1362,87 @@ func TestMessagesSnapshotFollowSkipsWhenInitialTrackEmpty(t *testing.T) {
 	require.Empty(t, snapshot.Messages)
 	require.IsType(t, (*aguievents.RunFinishedEvent)(nil), collected[2])
 
+	tr.mu.Lock()
+	calls := tr.calls
+	tr.mu.Unlock()
+	require.Equal(t, 1, calls)
+}
+
+func TestMessagesSnapshotFollowStartsFromEmptyTrackWhenRunIsActive(t *testing.T) {
+	base := time.Now().Add(-time.Second)
+	key := session.Key{AppName: "demo", UserID: "user", SessionID: "thread"}
+	initial := &session.TrackEvents{Track: track.TrackAGUI}
+	follow := &session.TrackEvents{
+		Track: track.TrackAGUI,
+		Events: []session.TrackEvent{
+			newTrackEventAt(t, aguievents.NewCustomEvent("node.progress", aguievents.WithValue(map[string]any{"p": 1})), base),
+			newTrackEventAt(t, aguievents.NewRunFinishedEvent("thread", "real-run"), base.Add(time.Millisecond)),
+		},
+	}
+	tr := &sequenceTracker{first: initial, second: follow}
+	r := &runner{
+		runner:                            noopBaseRunner{},
+		userIDResolver:                    NewOptions().UserIDResolver,
+		runAgentInputHook:                 NewOptions().RunAgentInputHook,
+		appName:                           "demo",
+		tracker:                           tr,
+		running:                           map[session.Key]*sessionContext{key: {}},
+		flushInterval:                     time.Millisecond,
+		timeout:                           50 * time.Millisecond,
+		messagesSnapshotFollowEnabled:     true,
+		messagesSnapshotFollowMaxDuration: 50 * time.Millisecond,
+	}
+	stream, err := r.MessagesSnapshot(context.Background(), &adapter.RunAgentInput{ThreadID: "thread", RunID: "req-run"})
+	require.NoError(t, err)
+	collected := collectAGUIEvents(t, stream)
+	require.Len(t, collected, 4)
+	require.IsType(t, (*aguievents.RunStartedEvent)(nil), collected[0])
+	snapshot, ok := collected[1].(*aguievents.MessagesSnapshotEvent)
+	require.True(t, ok)
+	require.Empty(t, snapshot.Messages)
+	require.IsType(t, (*aguievents.CustomEvent)(nil), collected[2])
+	finished, ok := collected[3].(*aguievents.RunFinishedEvent)
+	require.True(t, ok)
+	require.Equal(t, "req-run", finished.RunID())
+	tr.mu.Lock()
+	calls := tr.calls
+	tr.mu.Unlock()
+	require.Equal(t, 2, calls)
+}
+
+func TestMessagesSnapshotFollowSkipsEmptyActiveRunWhenFlushDisabled(t *testing.T) {
+	base := time.Now().Add(-time.Second)
+	key := session.Key{AppName: "demo", UserID: "user", SessionID: "thread"}
+	initial := &session.TrackEvents{Track: track.TrackAGUI}
+	follow := &session.TrackEvents{
+		Track: track.TrackAGUI,
+		Events: []session.TrackEvent{
+			newTrackEventAt(t, aguievents.NewCustomEvent("node.progress", aguievents.WithValue(map[string]any{"p": 1})), base),
+			newTrackEventAt(t, aguievents.NewRunFinishedEvent("thread", "real-run"), base.Add(time.Millisecond)),
+		},
+	}
+	tr := &sequenceTracker{first: initial, second: follow}
+	r := &runner{
+		runner:                            noopBaseRunner{},
+		userIDResolver:                    NewOptions().UserIDResolver,
+		runAgentInputHook:                 NewOptions().RunAgentInputHook,
+		appName:                           "demo",
+		tracker:                           tr,
+		running:                           map[session.Key]*sessionContext{key: {}},
+		flushInterval:                     0,
+		timeout:                           50 * time.Millisecond,
+		messagesSnapshotFollowEnabled:     true,
+		messagesSnapshotFollowMaxDuration: 50 * time.Millisecond,
+	}
+	stream, err := r.MessagesSnapshot(context.Background(), &adapter.RunAgentInput{ThreadID: "thread", RunID: "req-run"})
+	require.NoError(t, err)
+	collected := collectAGUIEvents(t, stream)
+	require.Len(t, collected, 3)
+	require.IsType(t, (*aguievents.RunStartedEvent)(nil), collected[0])
+	snapshot, ok := collected[1].(*aguievents.MessagesSnapshotEvent)
+	require.True(t, ok)
+	require.Empty(t, snapshot.Messages)
+	require.IsType(t, (*aguievents.RunFinishedEvent)(nil), collected[2])
 	tr.mu.Lock()
 	calls := tr.calls
 	tr.mu.Unlock()

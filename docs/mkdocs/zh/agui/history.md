@@ -90,16 +90,18 @@ curl -N -X POST http://localhost:8080/history \
 
 多实例部署时，不同实例需要共享同一个 `SessionService`，否则消息快照路由无法读取其他实例写入的历史事件。
 
-流式响应通常会产生多条增量文本事件或 reasoning 事件。为减少会话存储压力，框架默认会先聚合连续且具有相同 `messageId` 的 `TEXT_MESSAGE_CONTENT` 与 `REASONING_MESSAGE_CONTENT` 事件，再写入会话存储。
+实时对话通常会产生大量流式事件。如果每个事件都立即写入 `SessionService`，在长文本、reasoning 内容或工具参数流式输出较多时，会给 MySQL、Redis 等会话存储带来较高写入压力。框架默认会先对部分流式事件做事件聚合，再按刷新间隔写入会话存储。
 
-聚合结果默认每秒刷新一次。运行正常结束、被取消或发生错误时，框架还会执行运行结束后的收尾流程，用于补发仍然打开的协议流结束事件，并将聚合缓存尽量写入会话存储。
+在一次刷新间隔内，框架会聚合同一条助手消息的文本内容事件、reasoning 内容事件，以及同一个工具调用的参数事件。其他事件仍按原始顺序保存；遇到这些事件时，前后的流式事件不会跨事件边界合并。工具结果 `TOOL_CALL_RESULT` 表示一次工具调用的完整结果，也不会被合并。
+
+实时对话的 SSE 输出不会等待历史事件写入完成，前端仍会即时收到模型输出。`/history` 读取的是已经成功写入会话存储的内容，因此在对话仍在运行时，请求消息快照可能只能看到上一次刷新成功时的状态。开启消息快照续传后，服务端会持续追踪历史事件，后续刷新成功的事件会继续推送给客户端。
 
 相关配置如下：
 
-- `aggregator.WithEnabled(true)` 用于控制是否开启事件聚合，默认开启。
-- `agui.WithFlushInterval(time.Second)` 用于控制聚合结果的定时刷新间隔，默认 `1s`。设置为 `0` 表示不开启定时刷新。
-- `agui.WithTrackPersistenceTimeout(5*time.Second)` 用于限制事件历史记录持久化的最长执行时间，默认 `5s`。设置为 `0` 表示不设置超时。
-- `agui.WithPostRunFinalizationTimeout(5*time.Second)` 用于限制运行结束后收尾流程的最长执行时间，默认 `5s`。收尾流程需要补齐协议结束事件，并将聚合缓存写入 `SessionService`；如果会话存储变慢或异常，超时可以避免请求长时间阻塞。设置为 `0` 表示不设置超时事件。
+- `aggregator.WithEnabled(true)` 用于控制是否启用事件聚合，默认开启。
+- `agui.WithFlushInterval(time.Second)` 用于控制历史事件写入会话存储的刷新间隔，默认 `1s`。设置为 `0` 表示不进行运行中的定时写入；这种配置通常适合不需要在运行中通过 `/history` 续传事件的场景，历史事件主要会在运行结束收尾时写入。
+- `agui.WithTrackPersistenceTimeout(5*time.Second)` 用于限制单次历史事件写入会话存储的最长等待时间，默认 `5s`。设置为 `0` 表示不设置超时。
+- `agui.WithPostRunFinalizationTimeout(5*time.Second)` 用于限制运行结束后收尾流程的最长执行时间，默认 `5s`。收尾流程会补齐仍然打开的协议结束事件，并尽量把剩余历史事件写入 `SessionService`。如果会话存储变慢或异常，超时可以避免请求长时间阻塞。设置为 `0` 表示不设置超时。
 
 ```go
 import (
@@ -125,7 +127,7 @@ server, err := agui.New(
 )
 ```
 
-如果需要更复杂的聚合策略，可以实现 `aggregator.Aggregator` 并通过自定义工厂注入。需要注意的是，虽然每个会话都会单独创建一个聚合器，省去了跨会话的状态维护和并发处理，但聚合方法本身仍有可能被并发调用，因此仍需妥善处理并发。
+大多数场景不需要自定义聚合策略。如果确实需要改变哪些事件可以被合并，可以实现 `aggregator.Aggregator` 并通过自定义工厂注入。自定义聚合器需要能够处理并发调用。
 
 ## 历史运行生命周期事件
 
@@ -249,7 +251,7 @@ server, err := agui.New(
 
 - `agui.WithMessagesSnapshotFollowEnabled(true)` 用于启用消息快照续传。
 - `agui.WithMessagesSnapshotFollowMaxDuration(time.Duration)` 用于限制续传最长时间，避免一直等待正在运行的对话结束。
-- `agui.WithFlushInterval(time.Duration)` 用于控制历史事件落库频率，续传轮询间隔会复用该值。
+- `agui.WithFlushInterval(time.Duration)` 用于控制历史事件写入会话存储的频率，续传轮询间隔会复用该值。
 
 代码示例如下。
 

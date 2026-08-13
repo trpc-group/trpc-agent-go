@@ -3404,6 +3404,60 @@ func TestRecordTrackEventTimeoutBoundsDetachedPersistence(t *testing.T) {
 	assert.Less(t, time.Since(start), time.Second)
 }
 
+func TestRunSSEDoesNotWaitForInFlightTrackFlushPersistence(t *testing.T) {
+	agentEvents := make(chan *agentevent.Event, 1)
+	underlying := &fakeRunner{
+		run: func(context.Context, string, string, model.Message, ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			return agentEvents, nil
+		},
+	}
+	appendStarted := make(chan struct{})
+	releaseAppend := make(chan struct{})
+	var appendOnce sync.Once
+	svc := &testSessionService{
+		appendTrackFn: func(context.Context, *session.Session, *session.TrackEvent, ...session.Option) error {
+			appendOnce.Do(func() {
+				close(appendStarted)
+			})
+			<-releaseAppend
+			return nil
+		},
+	}
+	r := New(
+		underlying,
+		WithAppName("demo"),
+		WithSessionService(svc),
+		WithFlushInterval(time.Millisecond),
+		WithTrackPersistenceTimeout(time.Second),
+	).(*runner)
+	eventsCh, err := r.Run(context.Background(), &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	})
+	require.NoError(t, err)
+	waitForAGUIEventType(t, eventsCh, (*aguievents.RunStartedEvent)(nil))
+	select {
+	case <-appendStarted:
+	case <-time.After(time.Second):
+		require.FailNow(t, "timeout waiting for track flush persistence")
+	}
+	agentEvents <- &agentevent.Event{Response: &model.Response{
+		ID:        "assistant-1",
+		Object:    model.ObjectTypeChatCompletionChunk,
+		IsPartial: true,
+		Choices: []model.Choice{{
+			Delta: model.Message{Role: model.RoleAssistant, Content: "hello"},
+		}},
+	}}
+	content := waitForTextMessageContent(t, eventsCh)
+	assert.Equal(t, "assistant-1", content.MessageID)
+	assert.Equal(t, "hello", content.Delta)
+	close(releaseAppend)
+	close(agentEvents)
+	collectEvents(t, eventsCh)
+}
+
 func TestNewWithSessionServiceEnablesTracker(t *testing.T) {
 	underlying := &fakeRunner{
 		run: func(context.Context, string, string, model.Message, ...agent.RunOption) (<-chan *agentevent.Event, error) {

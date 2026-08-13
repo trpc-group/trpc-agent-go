@@ -1345,6 +1345,13 @@ func (r *runner) distributedCancelSnapshot(key session.Key) (bool, context.Cance
 	return false, nil
 }
 
+func (r *runner) isRunning(key session.Key) bool {
+	r.runningMu.Lock()
+	defer r.runningMu.Unlock()
+	_, ok := r.running[key]
+	return ok
+}
+
 func (r *runner) unregister(key session.Key) {
 	r.runningMu.Lock()
 	defer r.runningMu.Unlock()
