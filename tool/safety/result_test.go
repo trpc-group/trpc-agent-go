@@ -12,9 +12,11 @@ package safety
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -28,6 +30,24 @@ const (
 	resultSecret = "sk-result-secret-value"
 	errorSecret  = "ghp_abcdefghijklmnopqrstuvwxyz123456"
 )
+
+type customByteResult struct {
+	payload []byte
+}
+
+func (r customByteResult) MarshalJSON() ([]byte, error) {
+	return json.Marshal(map[string]string{
+		"payload": base64.StdEncoding.EncodeToString(r.payload),
+	})
+}
+
+type encodedResultKey struct {
+	value string
+}
+
+func (k encodedResultKey) MarshalText() ([]byte, error) {
+	return []byte(base64.StdEncoding.EncodeToString([]byte(k.value))), nil
+}
 
 func TestResultProcessorRedactsStructuredValuesWithoutMutation(t *testing.T) {
 	type credentials struct {
@@ -306,6 +326,168 @@ func TestResultProcessorRedactsCodeExecutorFiles(t *testing.T) {
 	require.NotContains(t, string(encoded), ".env")
 	require.NotContains(t, string(encoded), "BEGIN PRIVATE KEY")
 	require.Contains(t, string(encoded), "text/plain")
+}
+
+func TestResultProcessorSanitizesByteSlicesBeforeJSONEncoding(t *testing.T) {
+	secretBytes := []byte("token=" + errorSecret)
+	privateKeyBytes := []byte(
+		"-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----",
+	)
+	binaryBytes := []byte{0, 1, 2, 0xff}
+	type nestedResult struct {
+		Payload []byte `json:"payload"`
+	}
+	input := map[string]any{
+		"top":    secretBytes,
+		"nested": []any{nestedResult{Payload: secretBytes}},
+		"key":    privateKeyBytes,
+		"binary": binaryBytes,
+	}
+	processor := mustResultProcessor(t, 4096, nil)
+	topLevel, err := processor.Process(
+		context.Background(), validResultPreflight(), secretBytes, nil,
+	)
+	require.NoError(t, err)
+	require.True(t, topLevel.Redacted)
+	topLevelJSON, err := json.Marshal(topLevel)
+	require.NoError(t, err)
+	require.NotContains(
+		t, string(topLevelJSON), base64.StdEncoding.EncodeToString(secretBytes),
+	)
+
+	processed, err := processor.Process(
+		context.Background(), validResultPreflight(), input, nil,
+	)
+
+	require.NoError(t, err)
+	require.True(t, processed.Redacted)
+	encoded, err := json.Marshal(processed)
+	require.NoError(t, err)
+	require.NotContains(t, string(encoded), errorSecret)
+	require.NotContains(t, string(encoded), "BEGIN PRIVATE KEY")
+	require.NotContains(
+		t, string(encoded), base64.StdEncoding.EncodeToString(privateKeyBytes),
+	)
+	require.NotContains(t, string(encoded), base64.StdEncoding.EncodeToString(secretBytes))
+	require.NotContains(t, string(encoded), base64.StdEncoding.EncodeToString(binaryBytes))
+	require.Contains(t, string(encoded), binaryResultOmitted)
+	require.Equal(t, secretBytes, input["top"])
+}
+
+func TestResultProcessorRedactsRecoverableEncodedByteRepresentations(t *testing.T) {
+	encodedSecret := base64.StdEncoding.EncodeToString(
+		[]byte("token=" + errorSecret),
+	)
+	input := map[string]any{
+		"raw": json.RawMessage(strconv.Quote(encodedSecret)),
+		"custom": customByteResult{
+			payload: []byte("token=" + errorSecret),
+		},
+		"array": [36]byte([]byte(errorSecret)),
+	}
+	processor := mustResultProcessor(t, 4096, nil)
+
+	processed, err := processor.Process(
+		context.Background(), validResultPreflight(), input, nil,
+	)
+
+	require.NoError(t, err)
+	require.True(t, processed.Redacted)
+	encoded, marshalErr := json.Marshal(processed)
+	require.NoError(t, marshalErr)
+	require.NotContains(t, string(encoded), errorSecret)
+	require.NotContains(t, string(encoded), encodedSecret)
+}
+
+func TestResultProcessorOmitsRecoverableBinaryBase64(t *testing.T) {
+	binarySecret := append([]byte("token="+errorSecret), 0)
+	encodedSecret := base64.StdEncoding.EncodeToString(binarySecret)
+	processor := mustResultProcessor(t, 4096, nil)
+
+	processed, err := processor.Process(
+		context.Background(), validResultPreflight(),
+		json.RawMessage(strconv.Quote(encodedSecret)), nil,
+	)
+
+	require.NoError(t, err)
+	require.True(t, processed.Redacted)
+	encoded, marshalErr := json.Marshal(processed)
+	require.NoError(t, marshalErr)
+	require.NotContains(t, string(encoded), encodedSecret)
+	require.Contains(t, string(encoded), binaryResultOmitted)
+}
+
+func TestResultProcessorRedactsRecoverableEncodedMapKeys(t *testing.T) {
+	encodedKey := base64.StdEncoding.EncodeToString([]byte(errorSecret))
+	input := map[encodedResultKey]string{{value: errorSecret}: "value"}
+	raw, rawErr := json.Marshal(input)
+	require.NoError(t, rawErr)
+	require.Contains(t, string(raw), encodedKey)
+	processor := mustResultProcessor(t, 4096, nil)
+
+	processed, err := processor.Process(
+		context.Background(), validResultPreflight(),
+		input, nil,
+	)
+
+	require.NoError(t, err)
+	require.True(t, processed.Redacted)
+	encoded, marshalErr := json.Marshal(processed)
+	require.NoError(t, marshalErr)
+	require.NotContains(t, string(encoded), encodedKey)
+	require.NotContains(t, string(encoded), errorSecret)
+}
+
+func TestResultProcessorFailsSafelyForAmbiguousByteEncoding(t *testing.T) {
+	binaryBytes := []byte{0, 1, 2, 0xff}
+	encodedBytes := base64.StdEncoding.EncodeToString(binaryBytes)
+	processor := mustResultProcessor(t, 4096, nil)
+
+	processed, err := processor.Process(
+		context.Background(), validResultPreflight(), map[string]any{
+			"binary":  binaryBytes,
+			"literal": encodedBytes,
+		}, nil,
+	)
+
+	require.Error(t, err)
+	encoded, marshalErr := json.Marshal(processed)
+	require.NoError(t, marshalErr)
+	require.NotContains(t, string(encoded), encodedBytes)
+}
+
+func TestResultProcessorFailsSafelyBeyondByteScanDepth(t *testing.T) {
+	secretBytes := []byte("token=" + errorSecret)
+	var input any = secretBytes
+	for depth := 0; depth <= maxResultByteDepth; depth++ {
+		input = map[string]any{"child": input}
+	}
+	processor := mustResultProcessor(t, 4096, nil)
+
+	processed, err := processor.Process(
+		context.Background(), validResultPreflight(), input, nil,
+	)
+
+	require.Error(t, err)
+	encoded, marshalErr := json.Marshal(processed)
+	require.NoError(t, marshalErr)
+	require.NotContains(t, string(encoded), errorSecret)
+	require.NotContains(
+		t, string(encoded), base64.StdEncoding.EncodeToString(secretBytes),
+	)
+}
+
+func TestResultProcessorFailsSafelyForDeepRawMessage(t *testing.T) {
+	raw := strings.Repeat("[", maxResultByteDepth+2) + "0" +
+		strings.Repeat("]", maxResultByteDepth+2)
+	processor := mustResultProcessor(t, 4096, nil)
+
+	processed, err := processor.Process(
+		context.Background(), validResultPreflight(), json.RawMessage(raw), nil,
+	)
+
+	require.Error(t, err)
+	require.Equal(t, minimalProcessedResult(), processed)
 }
 
 func TestResultProcessorExecutionErrorIsSingleLineAndRedacted(t *testing.T) {

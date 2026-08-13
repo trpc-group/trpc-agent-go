@@ -54,6 +54,16 @@ func TestDecodeWorkspaceExec(t *testing.T) {
 		}, req.Request)
 	})
 
+	t.Run("case folded execution field", func(t *testing.T) {
+		req, ok, err := requestFromPermissionRequest(&tool.PermissionRequest{
+			Tool: execTool, Arguments: []byte(`{"Command":"go test"}`),
+		})
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Equal(t, "go test", req.Command)
+		require.Empty(t, req.additionalArgs)
+	})
+
 	for _, tc := range []struct {
 		name string
 		args string
@@ -471,7 +481,7 @@ func TestDecodeCodeExec(t *testing.T) {
 		args []byte
 		want []codeexecutor.CodeBlock
 	}{
-		{name: "direct array", args: []byte(`{"code_blocks":[{"language":"python","code":"print(1)"},{"language":"bash","code":"printf hi"}]}`), want: wantMany},
+		{name: "direct array", args: []byte(`{"execution_id":"run-1","code_blocks":[{"language":"python","code":"print(1)"},{"language":"bash","code":"printf hi"}]}`), want: wantMany},
 		{name: "single object", args: []byte(`{"code_blocks":{"language":"python","code":"print(1)"}}`), want: wantMany[:1]},
 		{name: "encoded array", args: mustJSON(t, map[string]any{"code_blocks": string(encodedMany)}), want: wantMany},
 		{name: "encoded object", args: mustJSON(t, map[string]any{"code_blocks": string(encodedOne)}), want: wantMany[:1]},
@@ -484,6 +494,7 @@ func TestDecodeCodeExec(t *testing.T) {
 			require.True(t, ok)
 			require.Equal(t, BackendCodeExec, req.Backend)
 			require.Equal(t, tc.want, req.CodeBlocks)
+			require.Empty(t, req.additionalArgs)
 		})
 	}
 
@@ -509,8 +520,10 @@ func TestDecodeSkillExecution(t *testing.T) {
 
 	t.Run("skill_run", func(t *testing.T) {
 		req, ok, err := requestFromPermissionRequest(&tool.PermissionRequest{
-			Tool:      runTool,
-			Arguments: []byte(`{"skill":"demo","command":"go test","cwd":"scripts","env":{"LANG":"C"}}`),
+			Tool: runTool,
+			Arguments: []byte(`{"skill":"demo","command":"go test","cwd":"scripts",` +
+				`"env":{"LANG":"C"},"save_as_artifacts":true,` +
+				`"omit_inline_content":true,"artifact_prefix":"reports"}`),
 		})
 		require.NoError(t, err)
 		require.True(t, ok)
@@ -519,6 +532,7 @@ func TestDecodeSkillExecution(t *testing.T) {
 		require.Equal(t, "scripts", req.Cwd)
 		require.Equal(t, map[string]string{"LANG": "C"}, req.Env)
 		require.Equal(t, 300, req.TimeoutSeconds)
+		require.Empty(t, req.additionalArgs)
 	})
 
 	t.Run("skill input source", func(t *testing.T) {
@@ -563,8 +577,9 @@ func TestDecodeSkillExecution(t *testing.T) {
 
 	t.Run("skill_exec", func(t *testing.T) {
 		req, ok, err := requestFromPermissionRequest(&tool.PermissionRequest{
-			Tool:      execTool,
-			Arguments: []byte(`{"skill":"demo","command":"python app.py","timeout":19,"tty":true}`),
+			Tool: execTool,
+			Arguments: []byte(`{"skill":"demo","command":"python app.py",` +
+				`"timeout":19,"tty":true,"poll_lines":25}`),
 		})
 		require.NoError(t, err)
 		require.True(t, ok)
@@ -572,6 +587,7 @@ func TestDecodeSkillExecution(t *testing.T) {
 		require.Equal(t, "python app.py", req.Command)
 		require.Equal(t, 19, req.TimeoutSeconds)
 		require.True(t, req.TTY)
+		require.Empty(t, req.additionalArgs)
 		report := scanDecodedPermissionRequest(mustGuard(t), req)
 		require.Equal(t, DecisionNeedsHumanReview, report.Decision)
 		require.Equal(t, "skill.tty", report.RuleID)
@@ -728,6 +744,72 @@ func TestDecodeUnknownOpenWorldRequest(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.False(t, ok)
+}
+
+func TestDecodeBuiltInNameCollisionScansAdditionalArguments(t *testing.T) {
+	decoded, ok, err := requestFromPermissionRequest(&tool.PermissionRequest{
+		Tool: declarationOnlyTool("workspace_exec", "command", "url"),
+		Arguments: []byte(
+			`{"command":"go test ./...","url":"https://evil.example/payload"}`,
+		),
+		Metadata: tool.ToolMetadata{OpenWorld: true},
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Empty(t, decoded.RawArguments)
+
+	policy := DefaultPolicy()
+	policy.NetworkAllowlist = []string{"github.com"}
+	guard, err := NewGuard(policy)
+	require.NoError(t, err)
+	report := scanDecodedPermissionRequest(guard, decoded)
+	require.Equal(t, DecisionDeny, report.Decision)
+	require.Equal(t, "network.destination", report.RuleID)
+
+	decoded, ok, err = requestFromPermissionRequest(&tool.PermissionRequest{
+		Tool: declarationOnlyTool("workspace_exec", "command", "payload"),
+		Arguments: []byte(
+			`{"command":"go test ./...","Payload":"run an external action"}`,
+		),
+		Metadata: tool.ToolMetadata{OpenWorld: true},
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	report = scanDecodedPermissionRequest(mustGuard(t), decoded)
+	require.Equal(t, DecisionNeedsHumanReview, report.Decision)
+	require.Equal(t, "arguments.additional_fields", report.RuleID)
+
+	openTool := declarationOnlyTool("workspace_exec", "command")
+	openTool.Declaration().InputSchema.AdditionalProperties = true
+	decoded, ok, err = requestFromPermissionRequest(&tool.PermissionRequest{
+		Tool: openTool,
+		Arguments: []byte(
+			`{"command":"go test ./...","url":"https://evil.example/payload"}`,
+		),
+		Metadata: tool.ToolMetadata{OpenWorld: true},
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	report = scanDecodedPermissionRequest(guard, decoded)
+	require.Equal(t, DecisionDeny, report.Decision)
+	require.Equal(t, "network.destination", report.RuleID)
+
+	schemaTool := declarationOnlyTool("workspace_exec", "command")
+	schemaTool.Declaration().InputSchema.AdditionalProperties = &tool.Schema{
+		Type: "string",
+	}
+	decoded, ok, err = requestFromPermissionRequest(&tool.PermissionRequest{
+		Tool: schemaTool,
+		Arguments: []byte(
+			`{"command":"go test ./...","url":"https://evil.example/payload"}`,
+		),
+		Metadata: tool.ToolMetadata{OpenWorld: true},
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	report = scanDecodedPermissionRequest(guard, decoded)
+	require.Equal(t, DecisionDeny, report.Decision)
+	require.Equal(t, "network.destination", report.RuleID)
 }
 
 func TestDecodeNilAndClosedWorldRequests(t *testing.T) {

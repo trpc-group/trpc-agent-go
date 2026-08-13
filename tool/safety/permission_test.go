@@ -167,9 +167,30 @@ func TestPermissionPolicyScansExecutableStdin(t *testing.T) {
 			want: tool.PermissionActionDeny, wantRule: "code.process_bridge",
 		},
 		{
+			name: "unknown executable stdin",
+			request: workspacePermissionRequest(
+				`{"command":"lua -","stdin":"os.execute('rm -rf /')"}`,
+			),
+			want: tool.PermissionActionAsk, wantRule: "code.stdin_program",
+		},
+		{
+			name: "unknown implicit executable stdin",
+			request: workspacePermissionRequest(
+				`{"command":"lua","stdin":"os.execute('rm -rf /')"}`,
+			),
+			want: tool.PermissionActionAsk, wantRule: "code.stdin_program",
+		},
+		{
 			name: "ordinary data stdin",
 			request: workspacePermissionRequest(
 				`{"command":"cat","stdin":"ordinary input"}`,
+			),
+			want: tool.PermissionActionAllow,
+		},
+		{
+			name: "explicit ordinary data stdin",
+			request: workspacePermissionRequest(
+				`{"command":"cat -","stdin":"ordinary input"}`,
 			),
 			want: tool.PermissionActionAllow,
 		},
@@ -252,6 +273,47 @@ func TestPermissionPolicySkillWriteStdinSemantics(t *testing.T) {
 			require.NoError(t, encodeErr)
 			require.NotContains(t, string(encoded), "session-secret")
 			require.NotContains(t, string(encoded), "token-secret")
+		})
+	}
+}
+
+func TestPermissionPolicySkillSessionYieldDuration(t *testing.T) {
+	execTool := skilltool.NewExecTool(skilltool.NewRunTool(nil, nil))
+	policy := NewPermissionPolicy(mustPermissionGuard(t, DefaultPolicy()))
+	t.Run("exec", func(t *testing.T) {
+		decision, err := policy.CheckToolPermission(
+			context.Background(),
+			&tool.PermissionRequest{
+				Tool: execTool,
+				Arguments: []byte(
+					`{"skill":"demo","command":"go test","yield_ms":300001}`,
+				),
+			},
+		)
+		require.NoError(t, err)
+		require.Equal(t, tool.PermissionActionDeny, decision.Action)
+		require.Contains(t, decision.Reason, "resource.timeout")
+	})
+	for _, tc := range []struct {
+		name string
+		tool tool.Tool
+	}{
+		{"write stdin", skilltool.NewWriteStdinTool(execTool)},
+		{"poll session", skilltool.NewPollSessionTool(execTool)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			decision, err := policy.CheckToolPermission(
+				context.Background(),
+				&tool.PermissionRequest{
+					Tool: tc.tool,
+					Arguments: []byte(
+						`{"session_id":"session","yield_ms":300001}`,
+					),
+				},
+			)
+			require.NoError(t, err)
+			require.Equal(t, tool.PermissionActionDeny, decision.Action)
+			require.Contains(t, decision.Reason, "resource.timeout")
 		})
 	}
 }

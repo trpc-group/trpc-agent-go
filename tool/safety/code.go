@@ -45,6 +45,12 @@ var (
 	jsImportedBridgePattern = regexp.MustCompile(
 		`(?i)(?:require\s*\(\s*["']child_process["']\s*\)|from\s+["']child_process["'])(?s:.*?)\b(?:exec|execSync|spawn|spawnSync)\s*\(`,
 	)
+	stdinDataCommands = map[string]struct{}{
+		"base64": {}, "cat": {}, "cmp": {}, "cut": {}, "diff": {},
+		"go": {}, "grep": {}, "head": {}, "hexdump": {}, "jq": {}, "od": {},
+		"rg": {}, "sort": {}, "tail": {}, "tee": {}, "tr": {},
+		"uniq": {}, "wc": {}, "xxd": {}, "yq": {},
+	}
 )
 
 func scanCodeBlocks(policy Policy, blocks []codeexecutor.CodeBlock) []Finding {
@@ -183,7 +189,10 @@ func stdinProgram(argv []string) (string, bool) {
 	case base == "sed":
 		return "", optionReadsStdin(argv[1:], "-f", "--file")
 	default:
-		return "", false
+		if _, dataOnly := stdinDataCommands[base]; dataOnly {
+			return "", false
+		}
+		return "", true
 	}
 }
 

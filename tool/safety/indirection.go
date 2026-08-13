@@ -11,11 +11,21 @@ package safety
 
 import "strings"
 
-func scanCommandIndirection(
+const maxCommandIndirectionDepth = 16
+
+func scanCommandIndirectionAtDepth(
 	policy Policy,
 	req Request,
 	segments [][]string,
+	depth int,
 ) []Finding {
+	if depth >= maxCommandIndirectionDepth {
+		return []Finding{newFinding(
+			DecisionNeedsHumanReview, RiskHigh, "command.indirect_execution",
+			"nested command execution exceeds the conservative scan depth",
+			"reduce command indirection or review the complete execution chain",
+		)}
+	}
 	var findings []Finding
 	for _, argv := range segments {
 		if len(argv) == 0 {
@@ -24,10 +34,19 @@ func scanCommandIndirection(
 		switch commandBase(argv[0]) {
 		case "git":
 			findings = append(findings, scanGitExecutionConfigs(
+				policy, req.Env, argv[1:], depth+1,
+			)...)
+			findings = append(findings, scanGitProxyConfigs(
 				policy, req.Env, argv[1:],
 			)...)
 		case "tar":
-			findings = append(findings, scanTarExecutionOptions(policy, argv[1:])...)
+			findings = append(findings, scanTarExecutionOptions(
+				policy, argv[1:], depth+1,
+			)...)
+		case "find":
+			findings = append(findings, scanFindExecutionActions(
+				policy, argv[1:], depth+1,
+			)...)
 		}
 	}
 	return findings
@@ -37,10 +56,13 @@ func scanGitExecutionConfigs(
 	policy Policy,
 	environment map[string]string,
 	args []string,
+	depth int,
 ) []Finding {
 	var findings []Finding
 	for _, config := range gitConfigValues(args) {
-		findings = append(findings, scanGitExecutionConfig(policy, config)...)
+		findings = append(findings, scanGitExecutionConfig(
+			policy, config, depth,
+		)...)
 	}
 	for _, config := range gitConfigEnvironmentValues(args) {
 		key, envName, ok := strings.Cut(config, "=")
@@ -50,7 +72,7 @@ func scanGitExecutionConfigs(
 		value, exists := environment[envName]
 		if exists {
 			findings = append(findings, scanGitExecutionConfig(
-				policy, key+"="+value,
+				policy, key+"="+value, depth,
 			)...)
 			continue
 		}
@@ -61,7 +83,11 @@ func scanGitExecutionConfigs(
 	return findings
 }
 
-func scanGitExecutionConfig(policy Policy, config string) []Finding {
+func scanGitExecutionConfig(
+	policy Policy,
+	config string,
+	depth int,
+) []Finding {
 	key, value, ok := strings.Cut(config, "=")
 	if !ok {
 		return nil
@@ -80,7 +106,9 @@ func scanGitExecutionConfig(policy Policy, config string) []Finding {
 			"Git shell alias executes an embedded shell command",
 			"remove the shell alias and invoke an auditable command directly",
 		)}
-		return append(findings, scanNestedCommand(policy, payload)...)
+		return append(findings, scanNestedCommandAtDepth(
+			policy, payload, depth,
+		)...)
 	}
 	if !gitExecutionConfigKey(key) {
 		return nil
@@ -95,7 +123,9 @@ func scanGitExecutionConfig(policy Policy, config string) []Finding {
 	}
 	if gitConfigValueIsCommand(key, value) {
 		value = strings.TrimSpace(strings.TrimPrefix(value, "!"))
-		findings = append(findings, scanNestedCommand(policy, value)...)
+		findings = append(findings, scanNestedCommandAtDepth(
+			policy, value, depth,
+		)...)
 	}
 	return findings
 }
@@ -137,7 +167,7 @@ func gitExecutionExactKey(key string) bool {
 	switch key {
 	case "core.sshcommand", "core.fsmonitor", "core.hookspath",
 		"diff.external", "credential.helper", "gpg.program",
-		"core.editor", "sequence.editor", "core.pager":
+		"core.editor", "sequence.editor", "core.pager", "core.gitproxy":
 		return true
 	default:
 		return false
@@ -187,7 +217,73 @@ func gitConfigEnvironmentValues(args []string) []string {
 	return configs
 }
 
-func scanTarExecutionOptions(policy Policy, args []string) []Finding {
+func scanGitProxyConfigs(
+	policy Policy,
+	environment map[string]string,
+	args []string,
+) []Finding {
+	var findings []Finding
+	for _, config := range gitConfigValues(args) {
+		findings = append(findings, scanGitProxyConfig(policy, config)...)
+	}
+	for _, config := range gitConfigEnvironmentValues(args) {
+		key, envName, ok := strings.Cut(config, "=")
+		if !ok || !gitProxyConfigKey(key) {
+			continue
+		}
+		value, exists := environment[envName]
+		if !exists {
+			findings = append(findings, gitProxyConfigReview())
+			continue
+		}
+		findings = append(findings, scanGitProxyConfig(
+			policy, key+"="+value,
+		)...)
+	}
+	return findings
+}
+
+func scanGitProxyConfig(policy Policy, config string) []Finding {
+	key, value, ok := strings.Cut(config, "=")
+	if !ok || !gitProxyConfigKey(key) {
+		return nil
+	}
+	key = strings.ToLower(strings.TrimSpace(key))
+	value = strings.TrimSpace(value)
+	if value == "" || strings.HasPrefix(key, "remote.") &&
+		strings.EqualFold(value, "none") {
+		return nil
+	}
+	host, parsed := knownDestinationHost(value)
+	if !parsed {
+		return []Finding{gitProxyConfigReview()}
+	}
+	if finding, denied := networkDestinationFinding(policy, host); denied {
+		return []Finding{finding}
+	}
+	return nil
+}
+
+func gitProxyConfigKey(key string) bool {
+	key = strings.ToLower(strings.TrimSpace(key))
+	return key == "http.proxy" ||
+		strings.HasPrefix(key, "http.") && strings.HasSuffix(key, ".proxy") ||
+		strings.HasPrefix(key, "remote.") && strings.HasSuffix(key, ".proxy")
+}
+
+func gitProxyConfigReview() Finding {
+	return newFinding(
+		DecisionNeedsHumanReview, RiskHigh, "network.destination_unparsed",
+		"Git proxy destination could not be resolved conservatively",
+		"use an explicit allowlisted proxy or remove the proxy configuration",
+	)
+}
+
+func scanTarExecutionOptions(
+	policy Policy,
+	args []string,
+	depth int,
+) []Finding {
 	var findings []Finding
 	for index := 0; index < len(args); index++ {
 		value := ""
@@ -222,14 +318,78 @@ func scanTarExecutionOptions(policy Policy, args []string) []Finding {
 			"tar checkpoint action executes an embedded command",
 			"remove the checkpoint exec action or review its command",
 		))
-		findings = append(findings, scanNestedCommand(policy, payload)...)
+		findings = append(findings, scanNestedCommandAtDepth(
+			policy, payload, depth,
+		)...)
 	}
 	return findings
 }
 
-func scanNestedCommand(policy Policy, command string) []Finding {
+func scanFindExecutionActions(
+	policy Policy,
+	args []string,
+	depth int,
+) []Finding {
+	var findings []Finding
+	for index := 0; index < len(args); index++ {
+		action := strings.ToLower(args[index])
+		if action != "-exec" && action != "-execdir" &&
+			action != "-ok" && action != "-okdir" {
+			continue
+		}
+		end := index + 1
+		for end < len(args) && !findActionTerminator(args[end]) {
+			end++
+		}
+		if end == len(args) || end == index+1 {
+			findings = append(findings, newFinding(
+				DecisionNeedsHumanReview, RiskHigh, "command.indirect_execution",
+				"find execution action could not be parsed conservatively",
+				"use a complete terminated action or review its embedded command",
+			))
+			continue
+		}
+		findings = append(findings, newFinding(
+			DecisionNeedsHumanReview, RiskHigh, "command.indirect_execution",
+			"find action executes an embedded command",
+			"remove the execution action or review its complete command",
+		))
+		findings = append(findings, scanNestedArgsAtDepth(
+			policy, args[index+1:end], depth,
+		)...)
+		index = end
+	}
+	return findings
+}
+
+func findActionTerminator(value string) bool {
+	return value == ";" || value == `\;` || value == "+"
+}
+
+func scanNestedCommandAtDepth(
+	policy Policy,
+	command string,
+	depth int,
+) []Finding {
 	if strings.TrimSpace(command) == "" {
 		return nil
 	}
-	return scanExecutionBase(policy, Request{Backend: BackendUnknown, Command: command})
+	return scanExecutionMode(policy, Request{
+		Backend: BackendUnknown,
+		Command: command,
+	}, depth)
+}
+
+func scanNestedArgsAtDepth(
+	policy Policy,
+	args []string,
+	depth int,
+) []Finding {
+	if len(args) == 0 {
+		return nil
+	}
+	return scanExecutionMode(policy, Request{
+		Backend: BackendUnknown,
+		Args:    append([]string(nil), args...),
+	}, depth)
 }

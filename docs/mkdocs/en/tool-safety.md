@@ -171,8 +171,11 @@ Keep attribute values low-cardinality; do not add commands, paths or secrets.
 direct wrapper that retains the `Report`, execute the tool and its normal
 callbacks first, then call `ResultProcessor.Process(ctx, report, result, err)`.
 It copies through JSON, recursively redacts sensitive names and values,
-single-lines and redacts the execution error, and enforces `max_output_bytes`
-over the complete serialized `ProcessedResult`. It then emits a correlated
+inspects byte slices before JSON base64 encoding, replaces binary byte content
+with an omission marker, single-lines and redacts the execution error, and
+enforces `max_output_bytes` over the complete serialized `ProcessedResult`. It
+fails safely when a byte representation cannot be correlated without changing
+an unrelated value. Successful processing then emits a correlated
 `post_execute` event.
 
 The framework permission adapter returns a permission decision rather than its

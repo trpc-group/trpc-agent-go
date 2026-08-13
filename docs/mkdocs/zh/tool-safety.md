@@ -143,9 +143,11 @@ attributes：
 `ResultProcessor` 是显式组件，不会自动注入 callbacks。对于能保留 `Report`
 的直接执行 wrapper，应先完成 Tool 的正常执行与正常 callbacks，再调用
 `ResultProcessor.Process(ctx, report, result, err)`。它会通过 JSON 复制结果，
-递归脱敏字段名和值，把执行错误变成单行并脱敏，再按完整序列化后的
-`ProcessedResult` 执行 `max_output_bytes` 上限，最后写入关联的
-`post_execute` 事件。
+递归脱敏字段名和值，并在 JSON 将字节切片编码为 Base64 前检查其内容；文本中的
+敏感信息会被脱敏，二进制内容会替换为省略标记。随后它会把执行错误变成单行并
+脱敏，再按完整序列化后的 `ProcessedResult` 执行 `max_output_bytes` 上限。若字节
+表示无法在不误改无关值的前提下可靠关联，它会安全失败；处理成功后才会写入
+关联的 `post_execute` 事件。
 
 框架 Permission 适配器只返回权限决策，不会暴露内部报告。需要关联执行后处理
 时，应用必须在自己的直接执行 wrapper 中保留对应报告，不能声称 callbacks 会

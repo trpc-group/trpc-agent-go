@@ -10,9 +10,11 @@
 package safety
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 
@@ -37,6 +39,7 @@ type decodedPermissionRequest struct {
 	executableStdin  string
 	sensitiveContent []string
 	paths            []string
+	additionalArgs   json.RawMessage
 }
 
 // requestFromPermissionRequest translates framework tool arguments into the
@@ -59,30 +62,162 @@ func requestFromPermissionRequest(
 		ToolName: permissionToolName(req),
 		Metadata: req.Metadata,
 	}
+	frameworkOwned := frameworkOwnedExecutionTool(req.Tool)
 	if isCodeExecutionDeclaration(name, declaration) {
-		return wrapDecodedPermissionRequest(decodeCodeExecution(base, req.Arguments))
+		decoded, ok, err := wrapDecodedPermissionRequest(
+			decodeCodeExecution(base, req.Arguments),
+		)
+		return attachAdditionalArguments(
+			decoded, ok, err, req.Arguments, codeExecutionArguments{}, declaration,
+			frameworkOwned,
+		)
 	}
 
+	var (
+		decoded decodedPermissionRequest
+		ok      bool
+		err     error
+		known   any
+	)
 	switch name {
 	case "workspace_exec":
-		return decodeWorkspaceExecution(base, req.Arguments)
+		decoded, ok, err = decodeWorkspaceExecution(base, req.Arguments)
+		known = workspaceExecutionArguments{}
 	case "exec_command":
-		return decodeHostExecution(base, req.Arguments)
+		decoded, ok, err = decodeHostExecution(base, req.Arguments)
+		known = hostExecutionArguments{}
 	case "write_stdin":
-		return decodeSessionWrite(base, req.Arguments, BackendHostExec)
+		decoded, ok, err = decodeSessionWrite(base, req.Arguments, BackendHostExec)
+		known = sessionWriteArguments{}
 	case "workspace_write_stdin":
-		return decodeSessionWrite(base, req.Arguments, BackendWorkspaceExec)
+		decoded, ok, err = decodeSessionWrite(
+			base, req.Arguments, BackendWorkspaceExec,
+		)
+		known = sessionWriteArguments{}
 	case "skill_run":
-		return decodeSkillExecution(base, req.Arguments, false)
+		decoded, ok, err = decodeSkillExecution(base, req.Arguments, false)
+		known = skillExecutionArguments{}
 	case "skill_exec":
-		return decodeSkillExecution(base, req.Arguments, true)
+		decoded, ok, err = decodeSkillExecution(base, req.Arguments, true)
+		known = skillExecutionArguments{}
 	case "skill_write_stdin":
-		return decodeSkillWrite(base, req.Arguments)
+		decoded, ok, err = decodeSkillWrite(base, req.Arguments)
+		known = skillWriteArguments{}
+	case "skill_poll_session":
+		decoded, ok, err = decodeSkillPoll(base, req.Arguments)
+		known = skillPollArguments{}
 	default:
 		return wrapDecodedPermissionRequest(
 			decodeUnknownExecution(base, declaration, req.Arguments),
 		)
 	}
+	return attachAdditionalArguments(
+		decoded, ok, err, req.Arguments, known, declaration, frameworkOwned,
+	)
+}
+
+func frameworkOwnedExecutionTool(candidate tool.Tool) bool {
+	semantic := internaltool.ResolveSemantic(candidate)
+	if semantic == nil {
+		return false
+	}
+	typeOf := reflect.TypeOf(semantic)
+	for typeOf.Kind() == reflect.Pointer {
+		typeOf = typeOf.Elem()
+	}
+	switch typeOf.PkgPath() {
+	case "trpc.group/trpc-go/trpc-agent-go/tool/codeexec",
+		"trpc.group/trpc-go/trpc-agent-go/tool/hostexec",
+		"trpc.group/trpc-go/trpc-agent-go/tool/skill",
+		"trpc.group/trpc-go/trpc-agent-go/tool/workspaceexec":
+		return true
+	default:
+		return false
+	}
+}
+
+func attachAdditionalArguments(
+	decoded decodedPermissionRequest,
+	ok bool,
+	err error,
+	raw []byte,
+	known any,
+	declaration *tool.Declaration,
+	frameworkOwned bool,
+) (decodedPermissionRequest, bool, error) {
+	if err != nil || !ok {
+		return decoded, ok, err
+	}
+	remaining, err := remainingArguments(
+		raw, known, declaration, frameworkOwned,
+	)
+	if err != nil {
+		return decodedPermissionRequest{}, false,
+			fmt.Errorf("decode additional tool arguments: %w", err)
+	}
+	decoded.additionalArgs = remaining
+	return decoded, true, nil
+}
+
+// remainingArguments prevents a specialized decoder from silently discarding
+// declared open-world fields while keeping the raw payload out of public
+// reports. Undeclared fields are ignored consistently with the owning tool's
+// schema and JSON decoder.
+func remainingArguments(
+	raw []byte,
+	known any,
+	declaration *tool.Declaration,
+	frameworkOwned bool,
+) (json.RawMessage, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return nil, err
+	}
+	typeOf := reflect.TypeOf(known)
+	for typeOf.Kind() == reflect.Pointer {
+		typeOf = typeOf.Elem()
+	}
+	for index := 0; index < typeOf.NumField(); index++ {
+		name := strings.SplitN(typeOf.Field(index).Tag.Get("json"), ",", 2)[0]
+		if name != "" && name != "-" {
+			deleteFoldedJSONFields(fields, name)
+		}
+	}
+	if declaration != nil && declaration.InputSchema != nil {
+		allowsAdditional, configured := declaration.InputSchema.
+			AdditionalProperties.(bool)
+		if frameworkOwned || configured && !allowsAdditional {
+			for name := range fields {
+				if !schemaDeclaresJSONField(declaration.InputSchema, name) {
+					delete(fields, name)
+				}
+			}
+		}
+	}
+	if len(fields) == 0 {
+		return nil, nil
+	}
+	return json.Marshal(fields)
+}
+
+func deleteFoldedJSONFields(fields map[string]json.RawMessage, name string) {
+	for candidate := range fields {
+		if strings.EqualFold(candidate, name) {
+			delete(fields, candidate)
+		}
+	}
+}
+
+func schemaDeclaresJSONField(schema *tool.Schema, name string) bool {
+	if _, exact := schema.Properties[name]; exact {
+		return true
+	}
+	for declared := range schema.Properties {
+		if strings.EqualFold(declared, name) {
+			return true
+		}
+	}
+	return false
 }
 
 func wrapDecodedPermissionRequest(
@@ -230,10 +365,13 @@ func isCodeExecutionDeclaration(name string, declaration *tool.Declaration) bool
 		declaration.InputSchema.Properties["code_blocks"] != nil
 }
 
+type codeExecutionArguments struct {
+	CodeBlocks  json.RawMessage `json:"code_blocks"`
+	ExecutionID string          `json:"execution_id,omitempty"`
+}
+
 func decodeCodeExecution(base Request, raw []byte) (Request, bool, error) {
-	var outer struct {
-		CodeBlocks json.RawMessage `json:"code_blocks"`
-	}
+	var outer codeExecutionArguments
 	if err := json.Unmarshal(raw, &outer); err != nil {
 		return Request{}, false, fmt.Errorf("decode code execution arguments: %w", err)
 	}
@@ -284,17 +422,22 @@ func decodeCodeBlocks(raw json.RawMessage) ([]codeexecutor.CodeBlock, error) {
 }
 
 type skillExecutionArguments struct {
-	Skill       string                   `json:"skill"`
-	Command     string                   `json:"command"`
-	Cwd         string                   `json:"cwd,omitempty"`
-	Env         map[string]string        `json:"env,omitempty"`
-	Stdin       string                   `json:"stdin,omitempty"`
-	EditorText  string                   `json:"editor_text,omitempty"`
-	Inputs      []codeexecutor.InputSpec `json:"inputs,omitempty"`
-	OutputFiles []string                 `json:"output_files,omitempty"`
-	Outputs     *codeexecutor.OutputSpec `json:"outputs,omitempty"`
-	Timeout     int                      `json:"timeout,omitempty"`
-	TTY         bool                     `json:"tty,omitempty"`
+	Skill          string                   `json:"skill"`
+	Command        string                   `json:"command"`
+	Cwd            string                   `json:"cwd,omitempty"`
+	Env            map[string]string        `json:"env,omitempty"`
+	Stdin          string                   `json:"stdin,omitempty"`
+	EditorText     string                   `json:"editor_text,omitempty"`
+	Inputs         []codeexecutor.InputSpec `json:"inputs,omitempty"`
+	OutputFiles    []string                 `json:"output_files,omitempty"`
+	Outputs        *codeexecutor.OutputSpec `json:"outputs,omitempty"`
+	Timeout        int                      `json:"timeout,omitempty"`
+	TTY            bool                     `json:"tty,omitempty"`
+	YieldMS        json.RawMessage          `json:"yield_ms,omitempty"`
+	PollLines      int                      `json:"poll_lines,omitempty"`
+	SaveArtifacts  bool                     `json:"save_as_artifacts,omitempty"`
+	OmitInline     bool                     `json:"omit_inline_content,omitempty"`
+	ArtifactPrefix string                   `json:"artifact_prefix,omitempty"`
 }
 
 func decodeSkillExecution(
@@ -314,6 +457,14 @@ func decodeSkillExecution(
 	timeout := in.Timeout
 	if timeout <= 0 {
 		timeout = skillExecutionDefaultTimeoutSeconds
+	}
+	yieldTimeout, err := sessionWriteTimeoutSeconds(in.YieldMS)
+	if err != nil {
+		return decodedPermissionRequest{}, false,
+			fmt.Errorf("decode skill execution duration: %w", err)
+	}
+	if yieldTimeout > timeout {
+		timeout = yieldTimeout
 	}
 	base.Backend = BackendWorkspaceExec
 	base.Command = in.Command
@@ -358,9 +509,11 @@ func skillInputPath(value string) string {
 }
 
 type skillWriteArguments struct {
-	SessionID string `json:"session_id"`
-	Chars     string `json:"chars,omitempty"`
-	Submit    bool   `json:"submit,omitempty"`
+	SessionID string          `json:"session_id"`
+	Chars     string          `json:"chars,omitempty"`
+	Submit    bool            `json:"submit,omitempty"`
+	YieldMS   json.RawMessage `json:"yield_ms,omitempty"`
+	PollLines int             `json:"poll_lines,omitempty"`
 }
 
 func decodeSkillWrite(
@@ -377,6 +530,12 @@ func decodeSkillWrite(
 			errors.New("decode skill write arguments: session_id is required")
 	}
 	base.Backend = BackendWorkspaceExec
+	timeoutSeconds, err := sessionWriteTimeoutSeconds(in.YieldMS)
+	if err != nil {
+		return decodedPermissionRequest{}, false,
+			fmt.Errorf("decode skill write duration: %w", err)
+	}
+	base.TimeoutSeconds = timeoutSeconds
 	if in.Chars == "" && !in.Submit {
 		return decodedPermissionRequest{Request: base}, true, nil
 	}
@@ -385,6 +544,35 @@ func decodeSkillWrite(
 		needsHumanReview: true,
 		sensitiveContent: []string{in.Chars},
 	}, true, nil
+}
+
+type skillPollArguments struct {
+	SessionID string          `json:"session_id"`
+	YieldMS   json.RawMessage `json:"yield_ms,omitempty"`
+	PollLines int             `json:"poll_lines,omitempty"`
+}
+
+func decodeSkillPoll(
+	base Request,
+	raw []byte,
+) (decodedPermissionRequest, bool, error) {
+	var in skillPollArguments
+	if err := json.Unmarshal(raw, &in); err != nil {
+		return decodedPermissionRequest{}, false,
+			fmt.Errorf("decode skill poll arguments: %w", err)
+	}
+	if strings.TrimSpace(in.SessionID) == "" {
+		return decodedPermissionRequest{}, false,
+			errors.New("decode skill poll arguments: session_id is required")
+	}
+	base.Backend = BackendWorkspaceExec
+	timeoutSeconds, err := sessionWriteTimeoutSeconds(in.YieldMS)
+	if err != nil {
+		return decodedPermissionRequest{}, false,
+			fmt.Errorf("decode skill poll duration: %w", err)
+	}
+	base.TimeoutSeconds = timeoutSeconds
+	return decodedPermissionRequest{Request: base}, true, nil
 }
 
 type sessionWriteArguments struct {
@@ -462,6 +650,20 @@ func scanDecodedPermissionRequest(
 	req decodedPermissionRequest,
 ) Report {
 	report := guard.Scan(req.Request)
+	additionalFindings := scanRawArguments(guard.policy, req.additionalArgs)
+	for _, finding := range additionalFindings {
+		report = appendDecodedFinding(report, finding)
+	}
+	if len(bytes.TrimSpace(req.additionalArgs)) > 0 &&
+		len(additionalFindings) == 0 {
+		report = appendDecodedFinding(report, newFinding(
+			DecisionNeedsHumanReview,
+			RiskHigh,
+			"arguments.additional_fields",
+			"tool arguments contain fields outside the selected execution schema",
+			"review the complete tool schema and all execution-affecting fields",
+		))
+	}
 	for _, finding := range scanExecutableStdin(
 		guard.policy, req.Command, req.executableStdin,
 	) {

